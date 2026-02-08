@@ -1,0 +1,7 @@
+{
+  "name": "AssetCutter AI Pro",
+  "description": "Background-processed, intelligent 3D asset pipeline for professional game developers.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
