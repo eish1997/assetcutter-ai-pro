@@ -4,6 +4,16 @@
 
 ---
 
+## 已帮你完成（可直接从「第一步」的推送开始）
+
+- [x] **Git 仓库已初始化**，并做了首次提交（提交说明：准备部署到 Vercel）。
+- [x] **确认 .env.local 不会被提交**（已由 .gitignore 忽略）。
+- [x] **本地构建已跑通**：`npm run build` 成功，生成 `dist/`。
+
+**请你接下来做：** 在 Cursor 里把代码推到 GitHub，再到 Vercel 导入并部署（见下面第一步、第二步）。
+
+---
+
 ## 你需要提前准备的
 
 - [ ] **Node.js**：你已经在 Cursor 里跑过项目，说明已安装。
@@ -16,22 +26,19 @@
 
 这样 Vercel 才能「从网上拉你的代码并帮你构建」。
 
-### 1.1 在 Cursor 里初始化 Git（如果还没做过）
+### 1.1 在 Cursor 里打开 Source Control
 
 1. 左侧点 **Source Control**（分支图标）或按 `Ctrl+Shift+G`。
-2. 若提示「Initialize Repository」，点 **Initialize Repository**。
-3. 若没有提示，看下面 1.2。
+2. 若之前已让 Agent 执行过：仓库已初始化、已有一次提交，**直接做下面的 1.3 推送即可**。若没有，再按 1.2 做一次提交。
 
 ### 1.2 确认不要提交密钥文件
 
 你的 `.env.local` 里有 API 密钥，**不能**传到 GitHub。  
 项目里已用 `.gitignore` 忽略了 `*.local`，所以 `.env.local` 不会被提交，只要你别手动添加它即可。
 
-### 1.3 提交并推送
+### 1.3 推送到 GitHub
 
-1. 在 Source Control 里，在「Message」框输入：`准备部署到 Vercel`。
-2. 点 **Commit**（或先点 **+** 把改动的文件暂存，再 Commit）。
-3. 点 **Publish Branch**（或 **Push**）：
+1. 在 Source Control 里点 **Publish Branch**（或 **Push**）：
    - 若让你选「Publish to GitHub」，选 **Public**，仓库名可以保持 `assetcutter-ai-pro`（或你喜欢的名字）。
    - 用 GitHub 账号登录/授权后，代码就会出现在你的 GitHub 仓库里。
 
