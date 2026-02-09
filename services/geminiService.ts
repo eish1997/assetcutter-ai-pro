@@ -1,7 +1,11 @@
-
 import { GoogleGenAI, Type } from "@google/genai";
+import { getApiKey } from "./settingsStore";
 
-const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
+const getAI = () => {
+  const apiKey = getApiKey();
+  if (!apiKey) throw new Error("未配置 API 密钥，请在设置页填写 Gemini API Key");
+  return new GoogleGenAI({ apiKey });
+};
 
 export const DEFAULT_PROMPTS = {
   /** 对话生图：按指令修改图片时的系统提示（占位符 {instruction}） */
@@ -374,6 +378,60 @@ export async function getDialogTextResponse(
     if (text == null) throw new Error('Empty text response');
     return text;
   });
+}
+
+const SITE_ASSISTANT_SYSTEM = `You are the in-app assistant for AssetCutter AI Pro, a web app for intelligent asset production. You help users with:
+- How to use features: 对话 (upload image + describe → AI generates image), 贴图 (pattern extract / seam repair / PBR texture generation), 生成3D (Tencent Hunyuan 3D, not yet launched), 仓库 (asset library), 工作流, 能力, 提示词效果 / 提示词擂台.
+- Troubleshooting: e.g. "贴图修缝" needs Python backend or Pyodide; 对话/提取花纹/生成贴图 need GEMINI_API_KEY in .env.local.
+- Other questions about the product. Reply in the same language as the user. Be concise and helpful.`;
+
+/** 网站助手：根据用户提问 + 可选历史对话，返回助手回复（带系统角色） */
+export async function getSiteAssistantResponse(
+  userMessage: string,
+  history: Array<{ role: 'user' | 'model'; text: string }> = [],
+  model = 'gemini-3-flash-preview'
+): Promise<string> {
+  return callWithRetry(async () => {
+    const ai = getAI();
+    const contents = [
+      ...history.map((m) => ({ role: m.role as 'user' | 'model', parts: [{ text: m.text }] as { text: string }[] })),
+      { role: 'user' as const, parts: [{ text: (userMessage || '').trim() || '(empty)' }] }
+    ];
+    const response = await ai.models.generateContent({
+      model,
+      contents,
+      config: { systemInstruction: SITE_ASSISTANT_SYSTEM }
+    });
+    const text = response.text?.trim();
+    if (text == null) throw new Error('助手未返回内容');
+    return text;
+  });
+}
+
+/** 网站助手流式：每收到一段文本就调用 onChunk(当前完整文本)，返回最终完整文本 */
+export async function getSiteAssistantResponseStream(
+  userMessage: string,
+  history: Array<{ role: 'user' | 'model'; text: string }>,
+  onChunk: (fullText: string) => void,
+  model = 'gemini-3-flash-preview'
+): Promise<string> {
+  const ai = getAI();
+  const contents = [
+    ...history.map((m) => ({ role: m.role as 'user' | 'model', parts: [{ text: m.text }] as { text: string }[] })),
+    { role: 'user' as const, parts: [{ text: (userMessage || '').trim() || '(empty)' }] }
+  ];
+  const stream = await ai.models.generateContentStream({
+    model,
+    contents,
+    config: { systemInstruction: SITE_ASSISTANT_SYSTEM }
+  });
+  let full = '';
+  for await (const chunk of stream) {
+    const t = chunk.text;
+    if (t != null && typeof t === 'string') full += t;
+    onChunk(full);
+  }
+  return full.trim();
 }
 
 /** 擂台 V2：根据自然语言描述生成两条生图用英文提示词 A/B，并返回推理过程。见 docs/PROMPT_OPTIMIZATION_AB_DESIGN.md §9 */

@@ -1,5 +1,7 @@
 
 export const AppMode = {
+  /** 欢迎页 / 主页 */
+  HOME: 'HOME',
   LAB: 'LAB',
   TEXTURE: 'TEXTURE',
   LIBRARY: 'LIBRARY',
@@ -16,6 +18,8 @@ export const AppMode = {
   SEAM_REPAIR: 'SEAM_REPAIR',
   /** 生成贴图：功能贴图 + 描述 → AI 生成 PBR Base Color / Roughness / Metallic */
   PBR_TEXTURE: 'PBR_TEXTURE',
+  /** 设置：API 密钥等 */
+  SETTINGS: 'SETTINGS',
 } as const;
 
 /** 对比选择记录（ac_ab_choices），仅通过 abChoiceStore 读写 */
