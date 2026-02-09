@@ -107,7 +107,7 @@ export function getEditPrompt(instruction: string, customTemplate?: string): str
   return template.replace(/\{instruction\}/g, instruction);
 }
 
-/** 贴图工坊：收口函数，返回实际使用的完整 prompt；业务代码不直接拼字符串。 */
+/** 提取花纹：收口函数，返回实际使用的完整 prompt；业务代码不直接拼字符串。 */
 export function getTexturePrompt(
   type: 'pattern' | 'tileable' | 'pbr',
   mapType = '',
@@ -590,4 +590,75 @@ export async function parsePromptStructured(
   } catch (e) {
     throw new Error('Failed to parse structured prompt: ' + String(e));
   }
+}
+
+/** 生成贴图模块：根据功能贴图 + 描述生成 PBR 贴图（Base Color / Roughness / Metallic） */
+export interface PbrTextureMapInput {
+  type: string;
+  base64: string | null;
+}
+export async function generatePBRTexture(
+  functionalMaps: PbrTextureMapInput[],
+  prompt: string,
+  targetType: 'BASE_COLOR' | 'ROUGHNESS' | 'METALLIC',
+  baseColorMap?: { base64: string }
+): Promise<string> {
+  const ai = getAI();
+  const MODEL_NAME = 'gemini-2.5-flash-image';
+  const parts: { inlineData?: { mimeType: string; data: string }; text?: string }[] = [];
+
+  functionalMaps.forEach((map) => {
+    if (map.base64) {
+      parts.push({
+        inlineData: {
+          mimeType: 'image/png',
+          data: map.base64.split(',')[1] ?? map.base64
+        }
+      });
+      parts.push({ text: `This is the ${map.type} map context.` });
+    }
+  });
+
+  if (baseColorMap?.base64) {
+    parts.push({
+      inlineData: {
+        mimeType: 'image/png',
+        data: baseColorMap.base64.split(',')[1] ?? baseColorMap.base64
+      }
+    });
+    parts.push({ text: `This is the generated Base Color map to use as reference for ${targetType}.` });
+  }
+
+  const systemInstruction =
+    targetType === 'BASE_COLOR'
+      ? `You are a world-class 3D texture artist expert in PBR (Physically Based Rendering) workflows.
+Based on the provided functional maps (AO, Curvature, WS Normal, Position), generate a high-quality, hyper-realistic BASE COLOR (Albedo) map.
+Requirements:
+1. MUST follow the user requirement: ${prompt}.
+2. MUST be flat lighting: No baked-in shadows, no 3D lighting, no directional light.
+3. MUST be PBR compliant (Albedo should represent surface color only).
+4. High detail and resolution suitable for modern game engines.
+5. Output ONLY the image.`
+      : `You are a world-class 3D texture artist.
+Generate a ${targetType} map for a PBR workflow based on the provided Base Color and functional maps.
+If generating Roughness: Darker values are smooth/shiny, lighter are rough/matte.
+If generating Metallic: Grayscale where white is metal, black is non-metal.
+Output ONLY the image.`;
+
+  parts.push({ text: systemInstruction });
+
+  const response = await ai.models.generateContent({
+    model: MODEL_NAME,
+    contents: { parts },
+    config: {
+      imageConfig: { aspectRatio: '1:1' }
+    }
+  });
+
+  for (const part of response.candidates?.[0]?.content?.parts ?? []) {
+    if (part.inlineData?.data) {
+      return `data:image/png;base64,${part.inlineData.data}`;
+    }
+  }
+  throw new Error('No image data returned from AI');
 }

@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>WebSeamRepair（OBJ seam-aware 修复）</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="header">
+        <div class="title">WebSeamRepair</div>
+        <div class="subtitle">OBJ + 贴图 +（可选）SP seam mask → seam-aware 同步修复</div>
+      </header>
+
+      <section class="panel">
+        <div class="grid">
+          <div class="card">
+            <div class="cardTitle">输入</div>
+            <label class="field">
+              <span>OBJ（含 vt UV）</span>
+              <input id="objFile" type="file" accept=".obj" />
+            </label>
+            <label class="field">
+              <span>贴图（BaseColor 等）</span>
+              <input id="texFile" type="file" accept="image/*" />
+            </label>
+            <label class="field">
+              <span>Seam Mask（可选，黑白图）</span>
+              <input id="maskFile" type="file" accept="image/*" />
+            </label>
+          </div>
+
+          <div class="card">
+            <div class="cardTitle">参数</div>
+            <label class="field">
+              <span>贴图类型</span>
+              <select id="textureKind">
+                <option value="basecolor" selected>BaseColor（sRGB）</option>
+                <option value="data">数据贴图（线性：Roughness/Metal/AO 等）</option>
+                <option value="normal">Normal（向量法线）</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>带宽（px）</span>
+              <input id="bandPx" type="number" min="1" max="64" step="1" value="8" />
+            </label>
+            <label class="field">
+              <span>过渡（px）</span>
+              <input id="featherPx" type="number" min="0" max="64" step="1" value="6" />
+            </label>
+            <label class="field">
+              <span>沿边采样步长（px）</span>
+              <input id="stepPx" type="number" min="0.5" max="16" step="0.5" value="2" />
+            </label>
+            <label class="field">
+              <span>模式</span>
+              <select id="mode">
+                <option value="average" selected>双向平均（推荐）</option>
+                <option value="a_to_b">A → B（用一侧覆盖另一侧）</option>
+                <option value="b_to_a">B → A（反向覆盖）</option>
+              </select>
+            </label>
+            <label class="field checkbox">
+              <input id="onlyMasked" type="checkbox" checked />
+              <span>只修复 Mask 覆盖到的 seam（推荐）</span>
+            </label>
+            <label class="field">
+              <span>Alpha 方式</span>
+              <select id="alphaMethod">
+                <option value="distance" selected>距离场（推荐）</option>
+                <option value="wacc">采样权重（旧）</option>
+              </select>
+            </label>
+            <label class="field checkbox">
+              <input id="alphaEdgeAware" type="checkbox" checked />
+              <span>边缘保持（引导滤波 alpha，推荐）</span>
+            </label>
+            <label class="field">
+              <span>颜色匹配</span>
+              <select id="colorMatch">
+                <option value="meanvar" selected>均值/方差匹配（推荐）</option>
+                <option value="meanvar_edge">均值/方差匹配（按边：可能出色块）</option>
+                <option value="none">关闭</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Poisson 迭代</span>
+              <input id="poissonIters" type="number" min="0" max="600" step="25" value="0" />
+            </label>
+
+            <div class="divider"></div>
+            <div class="cardTitle">3D 预览贴图校正（仅影响预览）</div>
+            <label class="field checkbox">
+              <input id="previewFlipX" type="checkbox" />
+              <span>左右翻转（Flip X）</span>
+            </label>
+            <label class="field checkbox">
+              <input id="previewFlipY" type="checkbox" />
+              <span>上下翻转（Flip Y）</span>
+            </label>
+            <label class="field">
+              <span>旋转</span>
+              <select id="previewRotate">
+                <option value="0" selected>0°</option>
+                <option value="90">90°</option>
+                <option value="180">180°</option>
+                <option value="270">270°</option>
+              </select>
+            </label>
+
+            <div class="actions">
+              <button id="btnRepair" class="primary">开始修复</button>
+              <button id="btnToggleTex" class="secondary" disabled>3D 预览切换：原图</button>
+              <a id="downloadLink" class="linkBtn" download="repaired.png" style="display:none">下载修复图</a>
+            </div>
+
+            <div id="status" class="status">等待输入文件…</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="grid2">
+          <div class="card">
+            <div class="cardTitle">2D 对比</div>
+            <div class="imgRow">
+              <div class="imgCol">
+                <div class="imgLabel">原图</div>
+                <img id="imgBefore" class="img" alt="before" />
+              </div>
+              <div class="imgCol">
+                <div class="imgLabel">修复后</div>
+                <img id="imgAfter" class="img" alt="after" />
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="cardTitle">3D 预览（OBJ）</div>
+            <div class="hint">
+              鼠标左键旋转、滚轮缩放。先上传 OBJ + 贴图后会自动加载。修复后可用按钮切换贴图。
+            </div>
+            <canvas id="view3d" class="canvas"></canvas>
+          </div>
+        </div>
+      </section>
+
+      <footer class="footer">
+        提示：如果你的接缝是<strong>法线/切线空间</strong>导致的“光照裂”，单纯修 BaseColor 不会治本；这工具主要解决“贴图跨缝不一致”。
+      </footer>
+    </div>
+
+    <script type="module" src="/static/app.js"></script>
+  </body>
+</html>
+

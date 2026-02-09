@@ -9,7 +9,7 @@
 
 ### 1.1 目标
 
-- 每次图片生成（对话生图、贴图工坊）写入一条**生成记录**，包含：使用的提示词、输入/输出引用、可选用户评分。
+- 每次图片生成（对话生图、提取花纹）写入一条**生成记录**，包含：使用的提示词、输入/输出引用、可选用户评分。
 - 基于记录做**只读统计与导出**，用于人工分析高分样本、优化 `DEFAULT_PROMPTS` 与 config。
 - 一期不强制用户评分、不实现产品内 A/B、不实现模型评分；**结构与抽象为二期预留扩展**。
 
@@ -17,7 +17,7 @@
 
 | 阶段   | 包含                           | 不包含                         |
 |--------|--------------------------------|--------------------------------|
-| 一期   | 对话生图、贴图工坊的记录与评分 | 后端、A/B、模型评分、存缩略图  |
+| 一期   | 对话生图、提取花纹的记录与评分 | 后端、A/B、模型评分、存缩略图  |
 | 二期   | 后端存储、A/B、模型评分、存图  | （依「升级触发条件」推进）     |
 
 ### 1.3 存储与容量
@@ -36,7 +36,7 @@ type GenerationSource = 'dialog' | 'texture';
 ```
 
 - `dialog`：对话生图（`dialogGenerateImage`）。
-- `texture`：贴图工坊（`processTexture`：pattern / tileable / pbr）。
+- `texture`：提取花纹（`processTexture`：pattern / tileable / pbr）。
 
 ### 2.2 单条生成记录（GenerationRecord）
 
@@ -72,7 +72,7 @@ type GenerationSource = 'dialog' | 'texture';
 - 一期：可约定为 `{ type: 'libraryId', value: string }` 或直接存 `libraryItemId` 字符串（文档注明「将来可扩展」）。
 - 二期：可增加 `type: 'url'`、`type: 'thumbnail'` 等；**不在实现上焊死「仅 libraryId」**。
 
-贴图工坊若无 `sessionId`/`messageId`/`versionIndex`，可用空字符串或 0，但**须在文档说明**「贴图记录用 source + timestamp + textureType 等定位」。
+提取花纹若无 `sessionId`/`messageId`/`versionIndex`，可用空字符串或 0，但**须在文档说明**「贴图记录用 source + timestamp + textureType 等定位」。
 
 ### 2.3 会话侧可选关联
 
@@ -111,7 +111,7 @@ type GenerationSource = 'dialog' | 'texture';
   - 构造一条 GenerationRecord（source: `'dialog'`，fullPrompt 用当前 `config.prompts.edit` 填 instruction，instruction/userPrompt 从上下文取，sessionId/messageId/versionIndex 必填，outputImageRef 按约定）。
   - 调用 `recordStore.addRecord()`，将返回的 `record.id` 写入 `newVersion.generationRecordId`（可选但推荐）。
 
-### 4.2 贴图工坊
+### 4.2 提取花纹
 
 - 在 **`processTexture` 成功** 且 **`addToLibrary` 已拿到新项** 后：
   - 构造一条 GenerationRecord（source: `'texture'`，fullPrompt 为本次实际使用的 prompt，textureType/textureMapType、model、outputImageRef 用新 libraryItemId；sessionId/messageId/versionIndex 按约定填空或占位）。
@@ -122,7 +122,7 @@ type GenerationSource = 'dialog' | 'texture';
 **判官 C 要求：prompt 来源收口，业务代码不直接拼字符串。**
 
 - 对话生图：建议 `getEditPrompt(instruction: string): string`，内部使用 `config.prompts.edit` 或 `DEFAULT_PROMPTS.edit`，replace `{instruction}`。
-- 贴图工坊：建议 `getTexturePrompt(type: 'pattern'|'tileable'|'pbr', mapType?: string): string`，内部使用 config 或 `DEFAULT_PROMPTS.texture_*`。
+- 提取花纹：建议 `getTexturePrompt(type: 'pattern'|'tileable'|'pbr', mapType?: string): string`，内部使用 config 或 `DEFAULT_PROMPTS.texture_*`。
 - 写入记录时，`fullPrompt` 一律来自上述收口函数的返回值，保证可追溯、二期可替换为实验/配置服务。
 
 ---
@@ -138,7 +138,7 @@ type GenerationSource = 'dialog' | 'texture';
 
 - 对**当前展示的 version** 评分；若该 version 有 `generationRecordId`，则用该 id 调用 `recordStore.updateScore(id, score)`；若无，可用 sessionId + messageId + versionIndex 在 loadRecords() 中查找对应 record 再更新（不推荐散落查找逻辑，可封装在 recordStore 或 helper 内）。
 
-### 5.3 贴图工坊
+### 5.3 提取花纹
 
 - 本次生成完成后，在结果区域提供「本次结果评分」；将本次 `addRecord` 返回的 `record.id` 存于 state（如 `lastTextureRecordId`），评分时用该 id 更新。
 

@@ -16,6 +16,13 @@ export default defineConfig(({ mode }) => {
       server: {
         port: 3000,
         host: '0.0.0.0',
+        proxy: {
+          '/seam-repair-api': {
+            target: 'http://127.0.0.1:8008',
+            changeOrigin: true,
+            rewrite: (path) => path.replace(/^\/seam-repair-api/, ''),
+          },
+        },
       },
       plugins: [react()],
       define: {

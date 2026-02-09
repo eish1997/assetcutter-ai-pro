@@ -12,6 +12,10 @@ export const AppMode = {
   WORKFLOW: 'WORKFLOW',
   /** 能力：功能预设管理，工作流功能区调用此处配置 */
   CAPABILITY: 'CAPABILITY',
+  /** 贴图修缝：OBJ + 贴图 + 可选 seam mask → seam-aware 修复 */
+  SEAM_REPAIR: 'SEAM_REPAIR',
+  /** 生成贴图：功能贴图 + 描述 → AI 生成 PBR Base Color / Roughness / Metallic */
+  PBR_TEXTURE: 'PBR_TEXTURE',
 } as const;
 
 /** 对比选择记录（ac_ab_choices），仅通过 abChoiceStore 读写 */
@@ -142,7 +146,7 @@ export type SystemConfig = {
 };
 
 // ---------- 生成记录与评分（ac_generation_records，仅通过 recordStore 读写） ----------
-/** 生成来源：对话生图 / 贴图工坊 */
+/** 生成来源：对话生图 / 提取花纹 */
 export type GenerationSource = 'dialog' | 'texture';
 
 /** 输出图引用，可扩展（一期：libraryId 或 dialogRef；二期可增加 url、thumbnail 等） */
