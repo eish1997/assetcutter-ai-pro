@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# Cursor 本地配置（规则、skills），可不提交
+.cursor
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
