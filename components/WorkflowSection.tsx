@@ -4,11 +4,15 @@ import type { CustomAppModule, LibraryItem, WorkflowCutGroupItem } from '../type
 import type { BoundingBox } from '../types';
 import { WORKFLOW_ACTION_TYPES, CAPABILITY_CATEGORIES } from '../types';
 import { detectObjectsInImage, dialogGenerateImage, DEFAULT_PROMPTS } from '../services/geminiService';
+import { executeCapability, getCapabilityEngine } from '../services/capabilityExecutor';
 
 const uuid = () => Math.random().toString(36).slice(2, 11);
+const RESULT_VER_SEP = '__v__';
+const baseActionId = (k: string) => (k.includes(RESULT_VER_SEP) ? k.split(RESULT_VER_SEP)[0] : k);
+const makeVersionKey = (baseId: string) => `${baseId}${RESULT_VER_SEP}${Date.now().toString(36)}`;
 
 /** 裁剪图片：根据框选裁剪出多张图 */
-function cropBoxes(inputImage: string, boxes: BoundingBox[], selectedIndexes: number[]): string[] {
+function cropBoxes(inputImage: string, boxes: BoundingBox[], selectedIndexes: number[]): Promise<string[]> {
   const results: string[] = [];
   const img = new Image();
   img.src = inputImage;
@@ -33,7 +37,7 @@ function cropBoxes(inputImage: string, boxes: BoundingBox[], selectedIndexes: nu
       resolve(results);
     };
     img.onerror = () => resolve([]);
-  }).then((r) => r);
+  });
 }
 
 // ---------- 切割图片：识别物体后选择要保存的区域 ----------
@@ -90,46 +94,179 @@ const CutSelectModal: React.FC<{
 // ---------- 归档详情弹窗：流程图 + 单张/整张下载 ----------
 const ArchivedDetailModal: React.FC<{
   asset: WorkflowAsset;
+  assets: WorkflowAsset[];
   modules: WorkflowActionModule[];
   onClose: () => void;
-}> = ({ asset, modules, onClose }) => {
-  const steps = useMemo(() => {
-    const list: { label: string; image: string; executedAt?: number }[] = [
-      { label: '原始', image: asset.original },
+}> = ({ asset, assets, modules, onClose }) => {
+  const resolveGroupImages = useCallback(
+    (a: WorkflowAsset, visited: Set<string> = new Set()): string[] => {
+      if (visited.has(a.id)) return [];
+      visited.add(a.id);
+      const out: string[] = [];
+      for (const item of a.cutImageGroup ?? []) {
+        if (typeof item === 'string') out.push(item);
+        else {
+          const child = assets.find((x) => x.id === item.assetId);
+          if (!child) continue;
+          if (child.cutImageGroup?.length) out.push(...resolveGroupImages(child, visited));
+          else out.push(child.results[child.displayKey] ?? child.original);
+        }
+      }
+      return out;
+    },
+    [assets]
+  );
+
+  const cutImages = useMemo(() => {
+    if (!asset.cutImageGroup?.length) return [];
+    return resolveGroupImages(asset);
+  }, [asset, resolveGroupImages]);
+
+  const [cutContactSheetUrl, setCutContactSheetUrl] = useState<string | null>(null);
+  React.useEffect(() => {
+    let cancelled = false;
+    const buildContactSheet = async () => {
+      if (cutImages.length === 0) {
+        setCutContactSheetUrl(null);
+        return;
+      }
+      // 生成一张“切割组拼贴图”，供流程图展示（避免只取第一张）
+      const maxW = 1200;
+      const maxH = 700;
+      const pad = 12;
+      const gap = 8;
+      const count = Math.min(cutImages.length, 12);
+      const cols = Math.min(4, count);
+      const rows = Math.ceil(count / cols);
+      const sheetW = maxW;
+      const sheetH = Math.min(maxH, Math.max(220, rows * 200 + pad * 2 + gap * (rows - 1)));
+
+      const canvas = document.createElement('canvas');
+      canvas.width = sheetW;
+      canvas.height = sheetH;
+      const ctx = canvas.getContext('2d')!;
+      ctx.fillStyle = '#111';
+      ctx.fillRect(0, 0, sheetW, sheetH);
+
+      const cellW = Math.floor((sheetW - pad * 2 - gap * (cols - 1)) / cols);
+      const cellH = Math.floor((sheetH - pad * 2 - gap * (rows - 1)) / rows);
+
+      const loadOne = (src: string) =>
+        new Promise<HTMLImageElement>((resolve) => {
+          const img = new Image();
+          img.onload = () => resolve(img);
+          img.onerror = () => resolve(img);
+          img.src = src;
+        });
+      const imgs = await Promise.all(cutImages.slice(0, count).map(loadOne));
+
+      imgs.forEach((img, i) => {
+        const r = Math.floor(i / cols);
+        const c = i % cols;
+        const x0 = pad + c * (cellW + gap);
+        const y0 = pad + r * (cellH + gap);
+
+        // cell background
+        ctx.fillStyle = '#0b0b0b';
+        ctx.fillRect(x0, y0, cellW, cellH);
+
+        if (!img.naturalWidth || !img.naturalHeight) return;
+        const scale = Math.min(cellW / img.naturalWidth, cellH / img.naturalHeight);
+        const dw = img.naturalWidth * scale;
+        const dh = img.naturalHeight * scale;
+        const dx = x0 + (cellW - dw) / 2;
+        const dy = y0 + (cellH - dh) / 2;
+        ctx.drawImage(img, dx, dy, dw, dh);
+
+        // index badge
+        ctx.fillStyle = 'rgba(0,0,0,0.55)';
+        ctx.fillRect(x0 + 6, y0 + 6, 28, 18);
+        ctx.fillStyle = '#cbd5e1';
+        ctx.font = 'bold 12px sans-serif';
+        ctx.fillText(String(i + 1), x0 + 12, y0 + 19);
+      });
+
+      const url = canvas.toDataURL('image/png');
+      if (!cancelled) setCutContactSheetUrl(url);
+    };
+    void buildContactSheet();
+    return () => {
+      cancelled = true;
+    };
+  }, [cutImages]);
+
+  const [cutLightboxIndex, setCutLightboxIndex] = useState<number | null>(null);
+  const cutLightboxImage = cutLightboxIndex != null ? cutImages[cutLightboxIndex] : null;
+
+  const stepsForComposite = useMemo(() => {
+    const list: { id: string; label: string; image: string; executedAt?: number }[] = [
+      { id: 'original', label: '原始', image: asset.original },
     ];
     for (const id of asset.resultOrder) {
-      const img = asset.results[id];
+      const baseId = baseActionId(id);
+      // cut_image 的结果存在 cutImageGroup，不在 results 里；用组内首张作代表
+      const img =
+        baseId === 'cut_image'
+          ? (cutContactSheetUrl ?? cutImages[0] ?? null)
+          : (asset.results[id] ?? null);
       if (!img) continue;
-      const mod = modules.find((m) => m.id === id);
+      const mod = modules.find((m) => m.id === baseId);
       list.push({
-        label: mod?.label ?? id,
+        id,
+        label: mod?.label ?? baseId,
         image: img,
         executedAt: asset.resultMeta?.[id]?.executedAt,
       });
     }
     return list;
-  }, [asset, modules]);
+  }, [asset, modules, cutImages, cutContactSheetUrl]);
+
+  // UI 上不再重复展示 cut_image 步骤卡片（已有“切割图片组”）
+  const stepsForCards = useMemo(() => {
+    return stepsForComposite.filter((s) => s.id !== 'cut_image');
+  }, [stepsForComposite]);
 
   const [compositeUrl, setCompositeUrl] = useState<string | null>(null);
   const containerRef = React.useRef<HTMLDivElement>(null);
 
+  const downloadOne = (image: string, label: string) => {
+    const a = document.createElement('a');
+    a.href = image;
+    a.download = `workflow-${label}-${asset.id.slice(0, 6)}.png`;
+    a.click();
+  };
+
+  const downloadMany = (images: string[], labelPrefix: string) => {
+    // 浏览器可能会限制短时间内的多次下载触发：加一点间隔更稳定
+    const intervalMs = 140;
+    images.forEach((img, idx) => {
+      const label = `${labelPrefix}-${String(idx + 1).padStart(2, '0')}`;
+      window.setTimeout(() => downloadOne(img, label), idx * intervalMs);
+    });
+  };
+
   const buildComposite = useCallback(() => {
-    if (steps.length === 0) return;
-    const maxW = 800;
+    if (stepsForComposite.length === 0) return;
+    // 提升清晰度：更大的目标宽度 + DPR 缩放
+    const maxW = 1200;
+    const maxH = 700;
     const lineHeight = 24;
-    const gap = 8;
-    const loadAll = (): Promise<{ img: HTMLImageElement; drawH: number; scale: number }[]> => {
+    const gap = 10;
+    const dpr = Math.min(2, typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1);
+    const loadAll = (): Promise<{ img: HTMLImageElement; drawH: number; drawW: number }[]> => {
       return Promise.all(
-        steps.map(
+        stepsForComposite.map(
           (s) =>
-            new Promise<{ img: HTMLImageElement; drawH: number; scale: number }>((resolve) => {
+            new Promise<{ img: HTMLImageElement; drawH: number; drawW: number }>((resolve) => {
               const img = new Image();
               img.onload = () => {
-                const scale = maxW / img.naturalWidth;
-                const drawH = Math.min(400, img.naturalHeight * scale);
-                resolve({ img, drawH, scale });
+                // 等比缩放：同时约束最大宽/高，避免“压缩/拉伸”
+                const scale = Math.min(maxW / img.naturalWidth, maxH / img.naturalHeight);
+                const drawW = img.naturalWidth * scale;
+                const drawH = img.naturalHeight * scale;
+                resolve({ img, drawH, drawW });
               };
-              img.onerror = () => resolve({ img, drawH: 200, scale: 1 });
+              img.onerror = () => resolve({ img, drawH: 200, drawW: 300 });
               img.src = s.image;
             })
         )
@@ -142,21 +279,21 @@ const ArchivedDetailModal: React.FC<{
         height += lineHeight + gap + l.drawH + gap;
       });
       const canvas = document.createElement('canvas');
-      canvas.width = maxW + 40;
-      canvas.height = height;
+      canvas.width = Math.ceil((maxW + 40) * dpr);
+      canvas.height = Math.ceil(height * dpr);
       const ctx = canvas.getContext('2d')!;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.fillStyle = '#1a1a1a';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillRect(0, 0, maxW + 40, height);
       let y = 20;
-      steps.forEach((s, i) => {
+      stepsForComposite.forEach((s, i) => {
         ctx.fillStyle = '#94a3b8';
         ctx.font = 'bold 14px sans-serif';
         ctx.fillText(s.label + (s.executedAt ? ` · ${new Date(s.executedAt).toLocaleString()}` : ''), 20, y + 16);
         y += lineHeight + gap;
-        const { img, drawH, scale } = loaded[i];
+        const { img, drawH, drawW } = loaded[i];
         if (img && img.complete && img.naturalWidth) {
-          const w = img.naturalWidth * scale;
-          ctx.drawImage(img, 20, y, w, drawH);
+          ctx.drawImage(img, 20, y, drawW, drawH);
           y += drawH + gap;
         } else {
           y += 200 + gap;
@@ -164,18 +301,11 @@ const ArchivedDetailModal: React.FC<{
       });
       setCompositeUrl(canvas.toDataURL('image/png'));
     });
-  }, [steps]);
+  }, [stepsForComposite]);
 
   React.useEffect(() => {
     buildComposite();
   }, [buildComposite]);
-
-  const downloadOne = (image: string, label: string) => {
-    const a = document.createElement('a');
-    a.href = image;
-    a.download = `workflow-${label}-${asset.id.slice(0, 6)}.png`;
-    a.click();
-  };
 
   const downloadComposite = () => {
     if (!compositeUrl) return;
@@ -186,14 +316,55 @@ const ArchivedDetailModal: React.FC<{
   };
 
   return (
-    <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/90 backdrop-blur-xl p-4 overflow-y-auto" onClick={onClose}>
-      <div ref={containerRef} className="relative max-w-4xl w-full bg-black/60 rounded-2xl border border-white/10 p-6" onClick={(e) => e.stopPropagation()}>
+    <div
+      className="fixed inset-0 z-[2000] flex items-start justify-center bg-black/90 backdrop-blur-xl p-4 py-10 overflow-y-auto"
+      onClick={onClose}
+    >
+      <div
+        ref={containerRef}
+        className="relative max-w-4xl w-full max-h-[90vh] overflow-y-auto no-scrollbar bg-black/60 rounded-2xl border border-white/10 p-6"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-[10px] font-black uppercase text-blue-400">归档详情 · 生成流程图</h3>
           <button onClick={onClose} className="w-10 h-10 flex items-center justify-center text-white/60 hover:text-white">✕</button>
         </div>
+
+        {/* 切割图片组（像资产库一样可逐张打开） */}
+        {cutImages.length > 0 && (
+          <div className="mb-4 rounded-xl border border-white/10 bg-black/40 p-3">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[9px] font-black uppercase text-gray-300">切割图片组（{cutImages.length}）</span>
+              <div className="flex items-center gap-2">
+                <span className="text-[8px] text-gray-500">点击缩略图可单张查看</span>
+                <button
+                  type="button"
+                  onClick={() => downloadMany(cutImages, 'cut')}
+                  className="px-2 py-1 rounded-lg bg-white/10 text-[8px] font-black uppercase hover:bg-white/20"
+                  title="逐张触发下载（浏览器可能会拦截过多下载）"
+                >
+                  批量下载
+                </button>
+              </div>
+            </div>
+            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2">
+              {cutImages.map((img, idx) => (
+                <button
+                  key={idx}
+                  type="button"
+                  onClick={() => setCutLightboxIndex(idx)}
+                  className="rounded-lg border border-white/10 bg-black/30 overflow-hidden hover:border-blue-500/40 transition-colors"
+                  title={`第 ${idx + 1} 张`}
+                >
+                  <img src={img} alt={`cut-${idx}`} className="w-full h-20 object-cover block" />
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div className="space-y-4">
-          {steps.map((s, i) => (
+          {stepsForCards.map((s, i) => (
             <div key={i} className="rounded-xl border border-white/10 overflow-hidden bg-black/40">
               <div className="px-3 py-2 flex items-center justify-between border-b border-white/5">
                 <span className="text-[9px] font-black uppercase text-gray-300">{s.label}</span>
@@ -226,6 +397,62 @@ const ArchivedDetailModal: React.FC<{
           )}
         </div>
       </div>
+
+      {/* 切割组：单张查看（轻量 lightbox，类似资产库单图查看） */}
+      {cutLightboxImage && cutLightboxIndex != null && (
+        <div
+          className="fixed inset-0 z-[2200] flex items-center justify-center bg-black/90 backdrop-blur-xl p-4"
+          onClick={() => setCutLightboxIndex(null)}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') setCutLightboxIndex(null);
+            if (e.key === 'ArrowLeft') setCutLightboxIndex((i) => (i == null ? i : (i - 1 + cutImages.length) % cutImages.length));
+            if (e.key === 'ArrowRight') setCutLightboxIndex((i) => (i == null ? i : (i + 1) % cutImages.length));
+          }}
+          aria-label="查看切割图片"
+        >
+          <div className="relative max-w-5xl w-full" onClick={(e) => e.stopPropagation()}>
+            <button
+              type="button"
+              onClick={() => setCutLightboxIndex(null)}
+              className="absolute -top-12 right-0 w-10 h-10 flex items-center justify-center text-white/60 hover:text-white"
+              aria-label="关闭"
+            >
+              ✕
+            </button>
+            <img src={cutLightboxImage} alt="" className="w-full max-h-[80vh] object-contain rounded-2xl border border-white/10 bg-black/40" />
+            {cutImages.length > 1 && (
+              <div className="flex justify-center gap-2 mt-3">
+                <button
+                  type="button"
+                  onClick={() => setCutLightboxIndex((i) => (i == null ? i : (i - 1 + cutImages.length) % cutImages.length))}
+                  className="px-3 py-1 rounded-lg bg-white/10 text-[9px] font-black"
+                >
+                  上一张
+                </button>
+                <span className="text-[9px] text-gray-500 self-center">
+                  {cutLightboxIndex + 1} / {cutImages.length}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setCutLightboxIndex((i) => (i == null ? i : (i + 1) % cutImages.length))}
+                  className="px-3 py-1 rounded-lg bg-white/10 text-[9px] font-black"
+                >
+                  下一张
+                </button>
+                <button
+                  type="button"
+                  onClick={() => downloadOne(cutLightboxImage, `cut-${cutLightboxIndex + 1}`)}
+                  className="px-3 py-1 rounded-lg bg-blue-600/60 hover:bg-blue-500 text-[9px] font-black"
+                >
+                  下载此张
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -248,7 +475,14 @@ const WorkflowSection: React.FC<{
   pendingRef.current = pending;
   const assetsRef = React.useRef(assets);
   assetsRef.current = assets;
-  const presets = Array.isArray(capabilityPresets) ? capabilityPresets : [];
+  const presets = useMemo(() => {
+    const list = Array.isArray(capabilityPresets) ? capabilityPresets : [];
+    return list
+      .map((p, idx) => ({ p, idx }))
+      .filter(({ p }) => p.enabled !== false)
+      .sort((a, b) => (a.p.order ?? a.idx) - (b.p.order ?? b.idx))
+      .map(({ p }) => p);
+  }, [capabilityPresets]);
   const actionModules: WorkflowActionModule[] = presets;
   const byCategory = useMemo(() => {
     const knownIds = new Set(CAPABILITY_CATEGORIES.map((c) => c.id));
@@ -269,6 +503,7 @@ const WorkflowSection: React.FC<{
   }, [presets]);
   const [columnCount, setColumnCount] = useState(4);
   const [showArchived, setShowArchived] = useState(false);
+  const [archiveHint, setArchiveHint] = useState<{ assetId: string; ts: number } | null>(null);
   const [lightboxAssetId, setLightboxAssetId] = useState<string | null>(null);
   const [archivedDetailAssetId, setArchivedDetailAssetId] = useState<string | null>(null);
   const [executing, setExecuting] = useState(false);
@@ -286,6 +521,7 @@ const WorkflowSection: React.FC<{
   const [draggingGroupItem, setDraggingGroupItem] = useState<{ image: string; groupAssetId: string; itemIndex: number } | null>(null);
 
   const getModule = (id: string) => actionModules.find((m) => m.id === id);
+  const getEngine = (m: CustomAppModule): 'gen_image' | 'builtin' => getCapabilityEngine(m);
 
   const getAssetDisplayImage = (a: WorkflowAsset, assetsList: WorkflowAsset[] = assets, visited: Set<string> = new Set()): string => {
     if (a.displayKey === 'original') return a.original;
@@ -323,50 +559,15 @@ const WorkflowSection: React.FC<{
       onLog?.('warn', '生成3D 请拖图到能力框提交，不进入执行队列');
       return null;
     }
-    const instruction = module?.instruction ?? '';
     const actionLabel = module?.label ?? actionType;
     try {
-      if (actionType === 'split_component') {
-        onLog?.('info', `[${actionLabel}] 识别物体中…`);
-        const boxes = await detectObjectsInImage(inputImage);
-        if (boxes.length === 0) {
-          onLog?.('warn', `[${actionLabel}] 未识别到区域`);
+      if (module) {
+        const out = await executeCapability(module, inputImage, { onLog });
+        if (!out.ok) {
+          onLog?.('warn', `[${actionLabel}] ${out.error}`);
           return null;
         }
-        const b = boxes[0];
-        const img = new Image();
-        img.src = inputImage;
-        await new Promise<void>((res, rej) => {
-          img.onload = () => res();
-          img.onerror = rej;
-        });
-        const scaleX = img.naturalWidth / 1000;
-        const scaleY = img.naturalHeight / 1000;
-        const x = Math.max(0, b.xmin * scaleX);
-        const y = Math.max(0, b.ymin * scaleY);
-        const w = Math.min(img.naturalWidth - x, (b.xmax - b.xmin) * scaleX);
-        const h = Math.min(img.naturalHeight - y, (b.ymax - b.ymin) * scaleY);
-        const canvas = document.createElement('canvas');
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext('2d')!;
-        ctx.drawImage(img, x, y, w, h, 0, 0, w, h);
-        const cropped = canvas.toDataURL('image/png');
-        if (instruction.trim()) {
-          onLog?.('info', `[${actionLabel}] 按能力提示词生成中…`);
-          const result = await dialogGenerateImage(cropped, instruction.trim(), 'gemini-2.5-flash-image');
-          if (result) onLog?.('info', `[${actionLabel}] 完成`);
-          return result ?? cropped;
-        }
-        onLog?.('info', `[${actionLabel}] 完成（裁剪首区）`);
-        return cropped;
-      }
-      if (actionType === 'style_transfer' || actionType === 'multi_view' || (module && !WORKFLOW_ACTION_TYPES.find((t) => t.id === actionType))) {
-        const prompt = instruction.trim() || 'Apply the requested transformation to this image. Keep the same composition.';
-        onLog?.('info', `[${actionLabel}] 生图中…`);
-        const result = await dialogGenerateImage(inputImage, prompt, 'gemini-2.5-flash-image');
-        if (result) onLog?.('info', `[${actionLabel}] 完成`);
-        return result ?? null;
+        return out.image;
       }
       if (actionType === 'cut_image') {
         return null;
@@ -382,12 +583,12 @@ const WorkflowSection: React.FC<{
   const executePending = useCallback(
     async (overridePending?: WorkflowPendingTask[]) => {
       const toProcess = overridePending ?? [...pendingRef.current];
-      if (toProcess.length === 0 || executing) return;
+      // 允许在 cut_image 弹窗确认后用 overridePending 继续执行剩余任务
+      if (toProcess.length === 0 || (executing && !overridePending)) return;
       if (!overridePending) setPending([]);
       setExecuting(true);
       setExecutingQueue({ total: toProcess.length, current: 0, tasks: toProcess });
       onLog?.('info', `开始执行队列（${toProcess.length} 项）`);
-      const now = Date.now();
       for (let i = 0; i < toProcess.length; i++) {
         setExecutingQueue((prev) => (prev ? { ...prev, current: i + 1 } : null));
         const task = toProcess[i];
@@ -411,6 +612,7 @@ const WorkflowSection: React.FC<{
           if (!boxes.length) {
             boxes = [{ id: 'full', label: '整图', xmin: 0, ymin: 0, xmax: 1000, ymax: 1000 }];
           }
+          // 全自动：默认全选切割，便于批量处理；后续可在组内筛选/删除不需要的
           const allIndexes = boxes.map((_, j) => j);
           const cropped = await cropBoxes(inputImage, boxes, allIndexes);
           const group: WorkflowCutGroupItem[] = cropped;
@@ -440,15 +642,21 @@ const WorkflowSection: React.FC<{
         setAssets((prev) =>
           prev.map((a) => {
             if (a.id !== task.assetId) return a;
-            const nextResults = { ...a.results, [task.actionType]: result ?? a.original };
-            const nextOrder = result ? [...(a.resultOrder || []), task.actionType] : (a.resultOrder || []);
-            const nextMeta = { ...(a.resultMeta || {}), [task.actionType]: { executedAt: now } };
+            const baseId = task.actionType;
+            // 多次执行同一能力：保留多版本，不覆盖上一次
+            const hasAnyVersion =
+              Object.keys(a.results || {}).some((k) => baseActionId(k) === baseId) ||
+              (a.resultOrder || []).some((k) => baseActionId(k) === baseId);
+            const key = result ? (hasAnyVersion ? makeVersionKey(baseId) : baseId) : baseId;
+            const nextResults = result ? { ...a.results, [key]: result } : a.results;
+            const nextOrder = result ? [...(a.resultOrder || []), key] : (a.resultOrder || []);
+            const nextMeta = { ...(a.resultMeta || {}), [key]: { executedAt: Date.now() } };
             return {
               ...a,
               results: nextResults,
               resultOrder: nextOrder,
               resultMeta: nextMeta,
-              displayKey: result ? task.actionType : a.displayKey,
+              displayKey: result ? key : a.displayKey,
               hiddenInGrid: false,
             };
           })
@@ -577,6 +785,7 @@ const WorkflowSection: React.FC<{
   };
 
   const discardResult = (assetId: string, actionType: string) => {
+    const baseId = baseActionId(actionType);
     setAssets((prev) =>
       prev.map((a) => {
         if (a.id !== assetId) return a;
@@ -586,7 +795,7 @@ const WorkflowSection: React.FC<{
         const nextMeta = { ...a.resultMeta };
         delete nextMeta[actionType];
         const displayKey = a.displayKey === actionType ? 'original' : a.displayKey;
-        const cutImageGroup = actionType === 'cut_image' ? undefined : a.cutImageGroup;
+        const cutImageGroup = baseId === 'cut_image' ? undefined : a.cutImageGroup;
         return { ...a, results: nextResults, resultOrder: nextOrder, resultMeta: nextMeta, displayKey, cutImageGroup };
       })
     );
@@ -594,6 +803,9 @@ const WorkflowSection: React.FC<{
 
   const markArchived = (assetId: string) => {
     setAssets((prev) => prev.map((a) => (a.id === assetId ? { ...a, archived: true, hiddenInGrid: false } : a)));
+    setArchiveHint({ assetId, ts: Date.now() });
+    // 提示条自动消失
+    setTimeout(() => setArchiveHint((h) => (h?.assetId === assetId ? null : h)), 4000);
   };
 
   const archivedDetailAsset = archivedDetailAssetId ? assets.find((a) => a.id === archivedDetailAssetId) : null;
@@ -677,6 +889,23 @@ const WorkflowSection: React.FC<{
             已完成
           </button>
         </div>
+        {archiveHint && !showArchived && (
+          <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-emerald-600/10 border border-emerald-500/30 text-[9px] text-emerald-300">
+            <span className="font-black uppercase">已归档</span>
+            <span className="text-emerald-200/80">在「已完成」里查看</span>
+            <button
+              type="button"
+              onClick={() => {
+                setShowArchived(true);
+                setArchivedDetailAssetId(archiveHint.assetId);
+                setArchiveHint(null);
+              }}
+              className="px-2 py-1 rounded-lg bg-emerald-600/30 hover:bg-emerald-600/40 text-[8px] font-black uppercase"
+            >
+              去查看
+            </button>
+          </div>
+        )}
         <label className="px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-[9px] font-black uppercase cursor-pointer hover:bg-white/10">
           多选上传
           <input type="file" className="hidden" accept="image/*" multiple onChange={handleBatchUploadCorrect} />
@@ -814,7 +1043,6 @@ const WorkflowSection: React.FC<{
                       className="relative cursor-pointer"
                       onClick={() => {
                         if (showArchived) setArchivedDetailAssetId(a.id);
-                        else if (a.cutImageGroup?.length) setViewStack([{ assetId: a.id }]);
                         else setLightboxAssetId(a.id);
                       }}
                     >
@@ -837,16 +1065,21 @@ const WorkflowSection: React.FC<{
                           </button>
                           {a.cutImageGroup?.length && (
                             <button
-                              onClick={(e) => { e.stopPropagation(); setDisplayKey(a.id, 'cut_image'); }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                // 点击“切割”才进入组内（批量筛选/删除在组内完成）
+                                setDisplayKey(a.id, 'cut_image');
+                                setViewStack([{ assetId: a.id }]);
+                              }}
                               className={`px-2 py-1 rounded text-[8px] font-black uppercase ${a.displayKey === 'cut_image' ? 'bg-blue-600' : 'bg-white/20 hover:bg-white/30'}`}
                             >
                               切割
                             </button>
                           )}
                           {(a.resultOrder || []).map((k) => {
-                            if (k === 'cut_image') return null;
-                            const mod = getModule(k);
-                            const label = mod?.label ?? k;
+                            if (baseActionId(k) === 'cut_image') return null;
+                            const mod = getModule(baseActionId(k));
+                            const label = mod?.label ?? baseActionId(k);
                             if (!a.results[k]) return null;
                             return (
                               <button
@@ -1050,6 +1283,7 @@ const WorkflowSection: React.FC<{
       {archivedDetailAsset && (
         <ArchivedDetailModal
           asset={archivedDetailAsset}
+          assets={assets}
           modules={actionModules}
           onClose={() => setArchivedDetailAssetId(null)}
         />

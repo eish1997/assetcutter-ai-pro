@@ -10,6 +10,8 @@ export const AppMode = {
   ADMIN: 'ADMIN',
   /** 提示词擂台：快速 A/B 对比测试 + 获胜片段库 */
   ARENA: 'ARENA',
+  /** 商店：远程模板包（GitHub Pages）安装/更新/回滚 */
+  STORE: 'STORE',
   /** 工作流：多图筛选 → 拖拽/点选到功能框 → 待处理 → 一键执行 → 版本切换 → 归档 */
   WORKFLOW: 'WORKFLOW',
   /** 能力：功能预设管理，工作流功能区调用此处配置 */
@@ -43,6 +45,37 @@ export type WinningSnippet = {
 };
 
 export type AppMode = keyof typeof AppMode;
+
+// ---------- 提示词模板（商店/本地模板库） ----------
+export type PromptTemplate = {
+  /** 模板唯一 id（用于合并覆盖） */
+  id: string;
+  /** 展示名 */
+  name: string;
+  /** 标签（可选） */
+  tags?: string[];
+  /** 模板正文（通常为英文生图 prompt 或可参数化文本） */
+  text: string;
+  /** 备注/说明（可选） */
+  note?: string;
+  /** 更新时间（可选） */
+  updatedAt?: number;
+};
+
+export type StoreItemType = 'capability_presets';
+
+export type StoreCatalogItem = {
+  id: string;
+  type: StoreItemType;
+  name: string;
+  desc?: string;
+  version: string;
+  url: string;
+  sha256?: string;
+  updatedAt?: string;
+  tags?: string[];
+  minAppVersion?: string;
+};
 
 export const AppStep = {
   T_PATTERN: 'T_PATTERN',
@@ -335,6 +368,9 @@ export const CAPABILITY_CATEGORIES = [
 ] as const;
 export type CapabilityCategory = (typeof CAPABILITY_CATEGORIES)[number]['id'];
 
+/** 能力执行引擎：gen_image=调用生图模型；builtin=仅走内置图像处理逻辑 */
+export type CapabilityEngine = 'gen_image' | 'builtin';
+
 /** 生成3D 能力预设：在工作流中拖图即用此配置提交 */
 export type Generate3DPreset = {
   /** 专业版 | 极速版 */
@@ -355,6 +391,19 @@ export type CustomAppModule = {
   label: string;
   /** 分类：生图 | 图像处理 | 生成3D */
   category: CapabilityCategory;
+  /**
+   * 执行引擎（可选）：
+   * - image_gen 默认 gen_image
+   * - image_process 默认 builtin（如需走生图，需要显式改为 gen_image）
+   * - generate_3d 不使用此字段
+   */
+  engine?: CapabilityEngine;
+  /** 生图档位（可选），仅在 engine === 'gen_image' 时生效 */
+  imageGear?: DialogImageGear;
+  /** 是否启用（默认启用）；禁用后工作流功能区不展示 */
+  enabled?: boolean;
+  /** 排序（数字越小越靠前）；缺省时按数组顺序 */
+  order?: number;
   /** 预设提示词/指令，生图类传给模型；图像处理类部分能力有内置逻辑可留空；生成3D 时可作补充描述 */
   instruction: string;
   /** 仅当 category === 'generate_3d' 时使用 */

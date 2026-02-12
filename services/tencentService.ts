@@ -4,6 +4,8 @@
  * 接口：SubmitHunyuanTo3DProJob / QueryHunyuanTo3DProJob
  */
 
+import { getTencentCreds } from './settingsStore';
+
 export interface TencentCredentials {
   secretId: string;
   secretKey: string;
@@ -666,15 +668,12 @@ export async function startProfileTo3DJob(
   throw new Error('任务超时');
 }
 
-/** 从环境或参数获取凭证；环境变量由 Vite 注入：TENCENT_SECRET_ID, TENCENT_SECRET_KEY, VITE_TENCENT_PROXY */
+/** 从设置页或环境获取凭证；优先使用设置页保存的混元 SecretId/SecretKey，否则用 Vite 注入的环境变量；VITE_TENCENT_PROXY 仅来自环境 */
 export function getTencentCredsFromEnv(): TencentCredentials | null {
+  const { secretId, secretKey } = getTencentCreds();
   const env = typeof process !== 'undefined' && process.env ? process.env : {};
-  const secretId = (env.TENCENT_SECRET_ID as string)?.trim();
-  const secretKey = (env.TENCENT_SECRET_KEY as string)?.trim();
   const proxyUrl = (env.VITE_TENCENT_PROXY as string)?.trim();
-  if (proxyUrl) {
-    return { secretId: secretId || '', secretKey: secretKey || '', proxyUrl };
-  }
+  if (proxyUrl) return { secretId: secretId || '', secretKey: secretKey || '', proxyUrl };
   if (secretId && secretKey) return { secretId, secretKey };
   return null;
 }

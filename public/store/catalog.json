@@ -1,0 +1,13 @@
+[
+  {
+    "id": "capability_pack_basic",
+    "type": "capability_presets",
+    "name": "基础能力包（生图模板）",
+    "desc": "安装后会把这些生图能力添加到「能力」里（同 id 会覆盖）。",
+    "version": "1.0.0",
+    "url": "./capability_pack_basic.json",
+    "updatedAt": "2026-02-12",
+    "tags": ["basic", "image"]
+  }
+]
+

@@ -19,7 +19,9 @@ import GenerateTextureSection from './components/GenerateTextureSection';
 import HomeSection from './components/HomeSection';
 import SiteAssistant from './components/SiteAssistant';
 import SettingsSection from './components/SettingsSection';
+import StoreSection from './components/StoreSection';
 import { runCapabilityTest } from './services/capabilityTestRunner';
+import { loadCapabilityPresets, saveCapabilityPresets } from './services/capabilityPresetStore';
 
 class WorkflowErrorBoundary extends Component<{ children: React.ReactNode }, { error: Error | null }> {
   state = { error: null as Error | null };
@@ -60,8 +62,6 @@ class WorkflowErrorBoundary extends Component<{ children: React.ReactNode }, { e
 }
 import { PRO_VIEW_IDS } from './services/tencentService';
 
-const CAPABILITY_PRESETS_KEY = 'ac_capability_presets';
-
 /** 主内容区滚动容器 ref，用于全局回到顶部 */
 function useMainScrollBackToTop() {
   const [mainScrollEl, setMainScrollEl] = useState<HTMLDivElement | null>(null);
@@ -75,39 +75,6 @@ function useMainScrollBackToTop() {
   }, [mainScrollEl]);
   return { mainScrollRef: setMainScrollEl, showBackToTop, scrollToTop: () => mainScrollEl?.scrollTo({ top: 0, behavior: 'smooth' }) };
 }
-const DEFAULT_PRESETS: CustomAppModule[] = [
-  { id: 'split_component', label: '拆分组件', category: 'image_process', instruction: '' },
-  { id: 'style_transfer', label: '转风格', category: 'image_gen', instruction: 'Convert this image to a consistent artistic style: stylized digital art, clean lines, modern flat design. Keep the same composition and main subjects.' },
-  { id: 'multi_view', label: '生成多视角', category: 'image_gen', instruction: 'Generate a clean front view of the main object in this image, centered on white or neutral background, orthographic style, suitable as a reference sheet view.' },
-  { id: 'cut_image', label: '切割图片', category: 'image_process', instruction: '' },
-];
-const loadCapabilityPresets = (): CustomAppModule[] => {
-  try {
-    let raw = localStorage.getItem(CAPABILITY_PRESETS_KEY);
-    if (!raw) {
-      raw = localStorage.getItem('ac_custom_modules');
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          const withCategory = parsed.map((p: CustomAppModule) => ({ ...p, category: p.category ?? (p.instruction ? 'image_gen' : 'image_process') }));
-          saveCapabilityPresets(withCategory);
-          localStorage.removeItem('ac_custom_modules');
-          return withCategory;
-        }
-      }
-      return DEFAULT_PRESETS;
-    }
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed) || parsed.length === 0) return DEFAULT_PRESETS;
-    return parsed.map((p: CustomAppModule) => ({
-      ...p,
-      category: p.category ?? (p.instruction ? 'image_gen' : 'image_process'),
-    }));
-  } catch { return DEFAULT_PRESETS; }
-};
-const saveCapabilityPresets = (list: CustomAppModule[]) => {
-  localStorage.setItem(CAPABILITY_PRESETS_KEY, JSON.stringify(list));
-};
 
 /** 生成3D 左侧可选模块（与已上线 API 对应） */
 export type Generate3DModule =
@@ -994,13 +961,36 @@ const App: React.FC = () => {
   const handleAddGenerate3DJobFromWorkflow = (preset: CustomAppModule, imageBase64: string) => {
     if (preset.category !== 'generate_3d' || !preset.generate3D || !creds3D) return;
     const raw = imageBase64.replace(/^data:image\/\w+;base64,/, '');
-    const g = preset.generate3D;
+    const normalize3D = (input: NonNullable<CustomAppModule['generate3D']>) => {
+      const g = { ...input };
+      // module
+      if (g.module !== 'pro' && g.module !== 'rapid') g.module = 'pro';
+      // resultFormat whitelist（避免无效参数）
+      const allowed = new Set(['STL', 'USDZ', 'FBX']);
+      if (g.resultFormat && !allowed.has(g.resultFormat)) g.resultFormat = undefined;
+      // pro-only fields
+      if (g.module === 'pro') {
+        if (g.model !== '3.0' && g.model !== '3.1') g.model = '3.0';
+        if (typeof g.faceCount === 'number' && !Number.isNaN(g.faceCount)) {
+          const n = Math.floor(g.faceCount);
+          g.faceCount = Math.max(10000, Math.min(1500000, n));
+        } else {
+          g.faceCount = undefined;
+        }
+      } else {
+        g.model = undefined;
+        g.faceCount = undefined;
+        g.generateType = undefined;
+      }
+      return g;
+    };
+    const g = normalize3D(preset.generate3D);
     const id = Math.random().toString(36).slice(2, 11);
     const taskId = addTask('GENERATE_3D', preset.label);
     if (g.module === 'pro') {
       const input: Submit3DProInput = {
         imageBase64: raw,
-        prompt: (preset.instruction?.trim() || g.prompt) || undefined,
+        prompt: (preset.instruction?.trim() || g.prompt?.trim()) || undefined,
         model: g.model ?? '3.0',
         enablePBR: g.enablePBR,
         faceCount: g.faceCount,
@@ -2307,6 +2297,7 @@ const App: React.FC = () => {
               <div className="px-2 py-0.5 text-[8px] font-black uppercase tracking-wider text-gray-500">提示词</div>
               <button onClick={() => { setMode(AppMode.ADMIN); setIsSidebarOpen(false); }} className={`w-full py-2.5 rounded-lg text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.ADMIN ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="提示词效果">{sidebarCollapsed ? '📊' : '提示词效果'}</button>
               <button onClick={() => { setMode(AppMode.ARENA); setIsSidebarOpen(false); }} className={`w-full py-2.5 rounded-lg text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.ARENA ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="提示词擂台">{sidebarCollapsed ? '⚔' : '提示词擂台'}</button>
+              <button onClick={() => { setMode(AppMode.STORE); setIsSidebarOpen(false); }} className={`w-full py-2.5 rounded-lg text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.STORE ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="商店（远程模板包）">{sidebarCollapsed ? '🛒' : '商店'}</button>
             </div>
             <button onClick={() => { setMode(AppMode.LIBRARY); setIsSidebarOpen(false); }} className={`w-full py-3 rounded-xl text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.LIBRARY ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="仓库">{sidebarCollapsed ? '📁' : '仓库'}</button>
             <button onClick={() => { setMode(AppMode.SETTINGS); setIsSidebarOpen(false); }} className={`w-full py-3 rounded-xl text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.SETTINGS ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="设置">{sidebarCollapsed ? '⚙' : '设置'}</button>
@@ -2318,7 +2309,7 @@ const App: React.FC = () => {
               <div className="px-2 py-1.5 border-b border-white/5 text-[9px] font-black uppercase text-gray-500">日志</div>
               <div className="min-h-[min(28vh,240px)] max-h-[min(42vh,360px)] overflow-y-auto no-scrollbar space-y-1 p-2">
                 {(() => {
-                  const moduleForMode = mode === AppMode.HOME ? null : mode === AppMode.DIALOG ? '对话' : mode === AppMode.TEXTURE ? '提取花纹' : mode === AppMode.GENERATE_3D ? '生成3D' : mode === AppMode.WORKFLOW ? '工作流' : mode === AppMode.CAPABILITY ? '能力' : mode === AppMode.ADMIN ? '提示词效果' : mode === AppMode.ARENA ? '提示词擂台' : mode === AppMode.SEAM_REPAIR ? '贴图修缝' : mode === AppMode.PBR_TEXTURE ? '生成贴图' : mode === AppMode.LIBRARY ? '仓库' : mode === AppMode.SETTINGS ? '设置' : null;
+                  const moduleForMode = mode === AppMode.HOME ? null : mode === AppMode.DIALOG ? '对话' : mode === AppMode.TEXTURE ? '提取花纹' : mode === AppMode.GENERATE_3D ? '生成3D' : mode === AppMode.WORKFLOW ? '工作流' : mode === AppMode.CAPABILITY ? '能力' : mode === AppMode.ADMIN ? '提示词效果' : mode === AppMode.ARENA ? '提示词擂台' : mode === AppMode.STORE ? '商店' : mode === AppMode.SEAM_REPAIR ? '贴图修缝' : mode === AppMode.PBR_TEXTURE ? '生成贴图' : mode === AppMode.LIBRARY ? '仓库' : mode === AppMode.SETTINGS ? '设置' : null;
                   const filtered = moduleForMode ? globalLogs.filter(l => l.module === moduleForMode) : [];
                   if (filtered.length === 0) return <div className="text-[9px] text-gray-600 py-2 text-center">暂无日志</div>;
                   return [...filtered].reverse().slice(0, 60).map(log => (
@@ -2455,6 +2446,16 @@ const App: React.FC = () => {
                 modelText={config.modelText}
                 promptEdit={config.prompts.edit}
                 dialogModel={dialogModel}
+              />
+            )}
+
+            {mode === AppMode.STORE && (
+              <StoreSection
+                onLog={(level, message, detail) => addGlobalLog('商店', level, message, detail)}
+                onPresetsApplied={(next) => {
+                  setCapabilityPresets(next);
+                  saveCapabilityPresets(next);
+                }}
               />
             )}
 

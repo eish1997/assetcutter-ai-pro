@@ -1,0 +1,33 @@
+[
+  {
+    "id": "edit_style_modern_flat",
+    "label": "改图：现代扁平插画风",
+    "category": "image_gen",
+    "engine": "gen_image",
+    "imageGear": "fast",
+    "enabled": true,
+    "order": 0,
+    "instruction": "Convert this image to a consistent artistic style: stylized digital art, clean lines, modern flat design. Keep the same composition and main subjects."
+  },
+  {
+    "id": "edit_product_white_bg",
+    "label": "改图：电商白底主图",
+    "category": "image_gen",
+    "engine": "gen_image",
+    "imageGear": "fast",
+    "enabled": true,
+    "order": 1,
+    "instruction": "Transform this image into a clean e-commerce product photo on a pure white background. Keep the product shape accurate. Remove the entire background. Soft studio lighting. High resolution."
+  },
+  {
+    "id": "edit_multi_view_front",
+    "label": "改图：生成正面视图参考",
+    "category": "image_gen",
+    "engine": "gen_image",
+    "imageGear": "fast",
+    "enabled": true,
+    "order": 2,
+    "instruction": "Generate a clean front view of the main object in this image, centered on a neutral background, orthographic style, suitable as a reference sheet view."
+  }
+]
+

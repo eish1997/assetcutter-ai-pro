@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
-import type { CustomAppModule, CapabilityCategory, Generate3DPreset } from '../types';
-import { CAPABILITY_CATEGORIES } from '../types';
+import type { CustomAppModule, CapabilityCategory, CapabilityEngine, DialogImageGear, Generate3DPreset } from '../types';
+import { CAPABILITY_CATEGORIES, DIALOG_IMAGE_GEARS } from '../types';
 import type { CapabilityTestResult } from '../services/capabilityTestRunner';
 
 const DEFAULT_GENERATE_3D: Generate3DPreset = { module: 'pro', model: '3.0', enablePBR: false };
@@ -11,13 +11,39 @@ const CapabilityPresetSection: React.FC<{
   onRunTest?: (preset: CustomAppModule, imageBase64: string) => Promise<CapabilityTestResult>;
   onLog?: (level: 'info' | 'warn' | 'error', message: string, detail?: string) => void;
 }> = ({ presets, onUpdate, onRunTest, onLog }) => {
+  const reindex = (list: CustomAppModule[]) => list.map((p, i) => ({ ...p, order: i }));
+  const update = (list: CustomAppModule[]) => onUpdate(reindex(list));
+  const getEngine = (p: CustomAppModule): CapabilityEngine => {
+    if (p.engine) return p.engine;
+    if (p.category === 'image_gen') return 'gen_image';
+    return 'builtin';
+  };
+  const getGear = (p: CustomAppModule): DialogImageGear => {
+    const g = (p.imageGear as DialogImageGear) || 'fast';
+    return g === 'pro' ? 'pro' : 'fast';
+  };
+  const genId = () => {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const c: any = typeof crypto !== 'undefined' ? crypto : null;
+      if (c && typeof c.randomUUID === 'function') return String(c.randomUUID()).replace(/-/g, '').slice(0, 10);
+    } catch {}
+    return Math.random().toString(36).slice(2, 11);
+  };
+
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editLabel, setEditLabel] = useState('');
   const [editCategory, setEditCategory] = useState<CapabilityCategory>('image_gen');
+  const [editEngine, setEditEngine] = useState<CapabilityEngine>('gen_image');
+  const [editEnabled, setEditEnabled] = useState(true);
+  const [editImageGear, setEditImageGear] = useState<DialogImageGear>('fast');
   const [editInstruction, setEditInstruction] = useState('');
   const [isAdding, setIsAdding] = useState(false);
   const [newLabel, setNewLabel] = useState('');
   const [newCategory, setNewCategory] = useState<CapabilityCategory>('image_gen');
+  const [newEngine, setNewEngine] = useState<CapabilityEngine>('gen_image');
+  const [newEnabled, setNewEnabled] = useState(true);
+  const [newImageGear, setNewImageGear] = useState<DialogImageGear>('fast');
   const [newInstruction, setNewInstruction] = useState('');
   const [testImage, setTestImage] = useState<Record<string, string>>({});
   const [testResult, setTestResult] = useState<Record<string, CapabilityTestResult | null>>({});
@@ -26,15 +52,55 @@ const CapabilityPresetSection: React.FC<{
   const [newGenerate3D, setNewGenerate3D] = useState<Generate3DPreset>({ ...DEFAULT_GENERATE_3D });
   const [editGenerate3D, setEditGenerate3D] = useState<Generate3DPreset>({ ...DEFAULT_GENERATE_3D });
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
+  const [showImportExport, setShowImportExport] = useState(false);
+  const [importText, setImportText] = useState('');
+
+  const movePreset = (id: string, delta: -1 | 1) => {
+    const idx = presets.findIndex((p) => p.id === id);
+    const to = idx + delta;
+    if (idx < 0 || to < 0 || to >= presets.length) return;
+    const next = [...presets];
+    const tmp = next[idx];
+    next[idx] = next[to];
+    next[to] = tmp;
+    update(next);
+  };
+
+  const toggleEnabled = (id: string) => {
+    update(
+      presets.map((p) => {
+        if (p.id !== id) return p;
+        const cur = p.enabled !== false;
+        return { ...p, enabled: !cur };
+      })
+    );
+  };
 
   const saveEdit = () => {
     if (!editingId) return;
-    onUpdate(
+    update(
       presets.map((p) => {
         if (p.id !== editingId) return p;
-        const next: CustomAppModule = { ...p, label: editLabel, category: editCategory, instruction: editInstruction };
-        if (editCategory === 'generate_3d') next.generate3D = { ...editGenerate3D };
-        else delete (next as CustomAppModule & { generate3D?: Generate3DPreset }).generate3D;
+        const next: CustomAppModule = {
+          ...p,
+          label: editLabel,
+          category: editCategory,
+          instruction: editInstruction,
+          enabled: editEnabled,
+          imageGear: editEngine === 'gen_image' || editCategory === 'image_gen' ? editImageGear : undefined,
+          engine:
+            editCategory === 'generate_3d'
+              ? undefined
+              : editCategory === 'image_gen'
+                ? 'gen_image'
+                : editEngine,
+        };
+        if (editCategory === 'generate_3d') {
+          next.generate3D = { ...editGenerate3D };
+          delete (next as CustomAppModule & { engine?: CapabilityEngine }).engine;
+        } else {
+          delete (next as CustomAppModule & { generate3D?: Generate3DPreset }).generate3D;
+        }
         return next;
       })
     );
@@ -43,20 +109,66 @@ const CapabilityPresetSection: React.FC<{
 
   const addPreset = () => {
     const label = newLabel.trim() || '新功能';
-    const id = Math.random().toString(36).slice(2, 11);
-    const preset: CustomAppModule = { id, label, category: newCategory, instruction: newInstruction };
+    const id = genId();
+    const preset: CustomAppModule = {
+      id,
+      label,
+      category: newCategory,
+      instruction: newInstruction,
+      enabled: newEnabled,
+      order: presets.length,
+      imageGear: (newCategory === 'image_gen' || newEngine === 'gen_image') ? newImageGear : undefined,
+      engine:
+        newCategory === 'generate_3d'
+          ? undefined
+          : newCategory === 'image_gen'
+            ? 'gen_image'
+            : newEngine,
+    };
     if (newCategory === 'generate_3d') preset.generate3D = { ...newGenerate3D };
-    onUpdate([...presets, preset]);
+    update([...presets, preset]);
     setNewLabel('');
     setNewCategory('image_gen');
+    setNewEngine('gen_image');
+    setNewEnabled(true);
+    setNewImageGear('fast');
     setNewInstruction('');
     setNewGenerate3D({ ...DEFAULT_GENERATE_3D });
     setIsAdding(false);
   };
 
   const removePreset = (id: string) => {
-    onUpdate(presets.filter((p) => p.id !== id));
+    update(presets.filter((p) => p.id !== id));
     if (editingId === id) setEditingId(null);
+  };
+
+  const exportJson = () => {
+    try {
+      const text = JSON.stringify(presets, null, 2);
+      setImportText(text);
+      setShowImportExport(true);
+      void navigator.clipboard?.writeText(text).catch(() => {});
+      onLog?.('info', '已生成预设 JSON（并尝试复制到剪贴板）', undefined);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      onLog?.('error', '导出失败', msg);
+    }
+  };
+
+  const importJson = () => {
+    try {
+      const raw = (importText || '').trim();
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) throw new Error('JSON 必须为数组（CustomAppModule[]）');
+      // 轻量校验 + 直接交给 App 层 normalize/迁移
+      const list = parsed.filter((x) => x && typeof x === 'object') as CustomAppModule[];
+      update(list);
+      onLog?.('info', `已导入 ${list.length} 条能力预设`, undefined);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      onLog?.('error', '导入失败', msg);
+    }
   };
 
   const runTest = async (p: CustomAppModule) => {
@@ -97,13 +209,50 @@ const CapabilityPresetSection: React.FC<{
         <p className="text-[9px] text-gray-500">
           在此管理功能预设，工作流中的「功能区」将调用此处配置的项，拖拽图片到对应框即可执行。
         </p>
-        <button
-          onClick={() => setIsAdding(true)}
-          className="px-4 py-2 rounded-xl bg-blue-600 text-[10px] font-black uppercase hover:bg-blue-500"
-        >
-          新增功能预设
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setShowImportExport((v) => !v)}
+            className="px-4 py-2 rounded-xl bg-white/10 border border-white/10 text-[10px] font-black uppercase hover:bg-white/20"
+          >
+            导入/导出
+          </button>
+          <button
+            onClick={() => setIsAdding(true)}
+            className="px-4 py-2 rounded-xl bg-blue-600 text-[10px] font-black uppercase hover:bg-blue-500"
+          >
+            新增功能预设
+          </button>
+        </div>
       </div>
+
+      {showImportExport && (
+        <div className="rounded-2xl border border-white/10 bg-black/40 p-4 space-y-3">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="text-[9px] font-black text-gray-300 uppercase">导入 / 导出（JSON）</div>
+            <div className="flex gap-2">
+              <button onClick={exportJson} className="px-3 py-1.5 rounded-lg bg-white/10 text-[9px] font-black uppercase hover:bg-white/20">
+                导出到文本框
+              </button>
+              <button onClick={importJson} className="px-3 py-1.5 rounded-lg bg-blue-600/80 text-[9px] font-black uppercase hover:bg-blue-500">
+                从文本框导入
+              </button>
+              <button onClick={() => setShowImportExport(false)} className="px-3 py-1.5 rounded-lg bg-white/10 text-[9px] font-black uppercase hover:bg-white/20">
+                关闭
+              </button>
+            </div>
+          </div>
+          <p className="text-[8px] text-gray-500">
+            提示：导出会尝试复制到剪贴板；导入需要 JSON 为数组格式。导入后会覆盖当前预设列表。
+          </p>
+          <textarea
+            value={importText}
+            onChange={(e) => setImportText(e.target.value)}
+            rows={8}
+            className="w-full bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500 resize-none font-mono"
+            placeholder="在此粘贴或查看 JSON（CustomAppModule[]）"
+          />
+        </div>
+      )}
 
       {isAdding && (
         <div className="rounded-2xl border border-blue-500/40 bg-black/40 p-4 space-y-3">
@@ -112,10 +261,60 @@ const CapabilityPresetSection: React.FC<{
             <span className="text-[8px] font-black text-gray-500 uppercase">分类</span>
             <div className="flex gap-2 mt-1">
               {CAPABILITY_CATEGORIES.map((c) => (
-                <button key={c.id} type="button" onClick={() => setNewCategory(c.id)} className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${newCategory === c.id ? 'bg-blue-600/20 border-blue-500/50 text-blue-300' : 'bg-white/5 border-white/10 text-gray-500 hover:bg-white/10'}`} title={c.desc}>{c.label}</button>
+                <button
+                  key={c.id}
+                  type="button"
+                  onClick={() => {
+                    setNewCategory(c.id);
+                    if (c.id === 'image_gen') setNewEngine('gen_image');
+                    if (c.id === 'image_process') setNewEngine('builtin');
+                  }}
+                  className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${newCategory === c.id ? 'bg-blue-600/20 border-blue-500/50 text-blue-300' : 'bg-white/5 border-white/10 text-gray-500 hover:bg-white/10'}`}
+                  title={c.desc}
+                >
+                  {c.label}
+                </button>
               ))}
             </div>
             <p className="text-[8px] text-gray-600 mt-0.5">{CAPABILITY_CATEGORIES.find((c) => c.id === newCategory)?.desc}</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-4">
+            <label className="flex items-center gap-2 text-[9px] text-gray-400">
+              <input type="checkbox" checked={newEnabled} onChange={(e) => setNewEnabled(e.target.checked)} />
+              <span className="font-black uppercase">启用</span>
+            </label>
+            {(newCategory === 'image_gen' || newEngine === 'gen_image') && (
+              <label className="flex items-center gap-2 text-[9px] text-gray-400">
+                <span className="font-black uppercase">生图档位</span>
+                <select
+                  value={newImageGear}
+                  onChange={(e) => setNewImageGear(e.target.value as DialogImageGear)}
+                  className="bg-white/10 border border-white/10 rounded px-2 py-1 text-[9px]"
+                >
+                  {DIALOG_IMAGE_GEARS.map((g) => (
+                    <option key={g.id} value={g.id}>
+                      {g.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {newCategory === 'image_process' && (
+              <label className="flex items-center gap-2 text-[9px] text-gray-400">
+                <span className="font-black uppercase">执行方式</span>
+                <select
+                  value={newEngine}
+                  onChange={(e) => setNewEngine(e.target.value as CapabilityEngine)}
+                  className="bg-white/10 border border-white/10 rounded px-2 py-1 text-[9px]"
+                >
+                  <option value="builtin">图像处理（内置）</option>
+                  <option value="gen_image">生图（提示词）</option>
+                </select>
+              </label>
+            )}
+            {newCategory === 'image_gen' && (
+              <span className="text-[8px] text-gray-500">执行方式：生图（提示词）</span>
+            )}
           </div>
           <div>
             <span className="text-[8px] font-black text-gray-500 uppercase">功能名称</span>
@@ -252,6 +451,8 @@ const CapabilityPresetSection: React.FC<{
                         type="button"
                         onClick={() => {
                           setEditCategory(c.id);
+                          if (c.id === 'image_gen') setEditEngine('gen_image');
+                          if (c.id === 'image_process') setEditEngine('builtin');
                           if (c.id === 'generate_3d') setEditGenerate3D(p.category === 'generate_3d' && p.generate3D ? { ...p.generate3D } : { ...DEFAULT_GENERATE_3D });
                         }}
                         className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${editCategory === c.id ? 'bg-blue-600/20 border-blue-500/50 text-blue-300' : 'bg-white/5 border-white/10 text-gray-500'}`}
@@ -260,6 +461,44 @@ const CapabilityPresetSection: React.FC<{
                       </button>
                       ))}
                     </div>
+                  </div>
+                  <div className="mb-2 flex flex-wrap items-center gap-4">
+                    <label className="flex items-center gap-2 text-[9px] text-gray-400">
+                      <input type="checkbox" checked={editEnabled} onChange={(e) => setEditEnabled(e.target.checked)} />
+                      <span className="font-black uppercase">启用</span>
+                    </label>
+                    {(editCategory === 'image_gen' || editEngine === 'gen_image') && (
+                      <label className="flex items-center gap-2 text-[9px] text-gray-400">
+                        <span className="font-black uppercase">生图档位</span>
+                        <select
+                          value={editImageGear}
+                          onChange={(e) => setEditImageGear(e.target.value as DialogImageGear)}
+                          className="bg-white/10 border border-white/10 rounded px-2 py-1 text-[9px]"
+                        >
+                          {DIALOG_IMAGE_GEARS.map((g) => (
+                            <option key={g.id} value={g.id}>
+                              {g.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+                    {editCategory === 'image_process' && (
+                      <label className="flex items-center gap-2 text-[9px] text-gray-400">
+                        <span className="font-black uppercase">执行方式</span>
+                        <select
+                          value={editEngine}
+                          onChange={(e) => setEditEngine(e.target.value as CapabilityEngine)}
+                          className="bg-white/10 border border-white/10 rounded px-2 py-1 text-[9px]"
+                        >
+                          <option value="builtin">图像处理（内置）</option>
+                          <option value="gen_image">生图（提示词）</option>
+                        </select>
+                      </label>
+                    )}
+                    {editCategory === 'image_gen' && (
+                      <span className="text-[8px] text-gray-500">执行方式：生图（提示词）</span>
+                    )}
                   </div>
                   <div className="mb-2">
                     <span className="text-[8px] font-black text-gray-500 uppercase">功能名称</span>
@@ -371,12 +610,59 @@ const CapabilityPresetSection: React.FC<{
               ) : (
                 <>
                   <div className="flex items-center justify-between gap-2 flex-wrap">
-                    <span className="text-[10px] font-black uppercase">{p.label}</span>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-[10px] font-black uppercase">{p.label}</span>
+                      {p.enabled === false && (
+                        <span className="px-2 py-0.5 rounded text-[8px] font-black uppercase bg-red-500/20 text-red-400">
+                          已禁用
+                        </span>
+                      )}
+                      {p.category === 'image_process' && getEngine(p) === 'gen_image' && (
+                        <span className="px-2 py-0.5 rounded text-[8px] font-black uppercase bg-amber-500/20 text-amber-300">
+                          生图执行
+                        </span>
+                      )}
+                    </div>
                     <span className="px-2 py-0.5 rounded text-[8px] font-black uppercase bg-white/10 text-gray-400">
                       {CAPABILITY_CATEGORIES.find((c) => c.id === p.category)?.label ?? p.category}
                     </span>
                     <div className="flex gap-1">
-                      <button onClick={() => { setEditingId(p.id); setEditLabel(p.label); setEditCategory(p.category); setEditInstruction(p.instruction); setEditGenerate3D(p.category === 'generate_3d' && p.generate3D ? { ...p.generate3D } : { ...DEFAULT_GENERATE_3D }); }} className="px-2 py-1 rounded-lg bg-white/10 text-[8px] font-black uppercase hover:bg-white/20">编辑</button>
+                      <button
+                        onClick={() => movePreset(p.id, -1)}
+                        className="px-2 py-1 rounded-lg bg-white/10 text-[8px] font-black uppercase hover:bg-white/20"
+                        title="上移"
+                      >
+                        ↑
+                      </button>
+                      <button
+                        onClick={() => movePreset(p.id, 1)}
+                        className="px-2 py-1 rounded-lg bg-white/10 text-[8px] font-black uppercase hover:bg-white/20"
+                        title="下移"
+                      >
+                        ↓
+                      </button>
+                      <button
+                        onClick={() => toggleEnabled(p.id)}
+                        className={`px-2 py-1 rounded-lg text-[8px] font-black uppercase hover:bg-white/20 ${p.enabled === false ? 'bg-emerald-500/20 text-emerald-300' : 'bg-white/10 text-gray-200'}`}
+                        title={p.enabled === false ? '启用' : '禁用'}
+                      >
+                        {p.enabled === false ? '启用' : '禁用'}
+                      </button>
+                      <button
+                        onClick={() => {
+                          setEditingId(p.id);
+                          setEditLabel(p.label);
+                          setEditCategory(p.category);
+                          setEditEngine(getEngine(p));
+                          setEditEnabled(p.enabled !== false);
+                          setEditImageGear(getGear(p));
+                          setEditInstruction(p.instruction);
+                          setEditGenerate3D(p.category === 'generate_3d' && p.generate3D ? { ...p.generate3D } : { ...DEFAULT_GENERATE_3D });
+                        }}
+                        className="px-2 py-1 rounded-lg bg-white/10 text-[8px] font-black uppercase hover:bg-white/20"
+                      >
+                        编辑
+                      </button>
                       <button onClick={() => removePreset(p.id)} className="px-2 py-1 rounded-lg bg-red-500/20 text-red-400 text-[8px] font-black uppercase hover:bg-red-500/30">删除</button>
                     </div>
                   </div>

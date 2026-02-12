@@ -2,7 +2,8 @@
  * 能力单次测试：供能力模块「测试区域」调用，与工作流 runTask 逻辑一致。
  */
 import type { CustomAppModule, BoundingBox } from '../types';
-import { detectObjectsInImage, dialogGenerateImage, DEFAULT_PROMPTS } from './geminiService';
+import { DEFAULT_PROMPTS, detectObjectsInImage } from './geminiService';
+import { executeCapability } from './capabilityExecutor';
 
 function cropOneBox(inputImage: string, b: BoundingBox): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -72,17 +73,6 @@ export async function runCapabilityTest(
     if (preset.category === 'generate_3d') {
       return { ok: false, error: '生成3D 请在工作流中拖图到能力框提交', durationMs: Date.now() - start };
     }
-    if (preset.id === 'split_component') {
-      const boxes = await detectObjectsInImage(imageBase64);
-      if (boxes.length === 0)
-        return { ok: false, error: '未识别到区域', durationMs: Date.now() - start };
-      const cropped = await cropOneBox(imageBase64, boxes[0]);
-      if (preset.instruction?.trim()) {
-        const result = await dialogGenerateImage(cropped, preset.instruction.trim(), 'gemini-2.5-flash-image');
-        return { ok: !!result, resultImage: result ?? cropped, durationMs: Date.now() - start };
-      }
-      return { ok: true, resultImage: cropped, durationMs: Date.now() - start };
-    }
     if (preset.id === 'cut_image') {
       const boxes = await Promise.race([
         detectObjectsInImage(imageBase64, 'gemini-3-flash-preview', DEFAULT_PROMPTS.detect_blocks),
@@ -97,9 +87,9 @@ export async function runCapabilityTest(
         cutCount: cropped.length,
       };
     }
-    const prompt = preset.instruction?.trim() || 'Apply the requested transformation to this image.';
-    const result = await dialogGenerateImage(imageBase64, prompt, 'gemini-2.5-flash-image');
-    return { ok: !!result, resultImage: result ?? undefined, durationMs: Date.now() - start };
+    const out = await executeCapability(preset, imageBase64);
+    if (!out.ok) return { ok: false, error: out.error, durationMs: out.durationMs };
+    return { ok: true, resultImage: out.image, durationMs: out.durationMs };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return { ok: false, error: msg, durationMs: Date.now() - start };
