@@ -1,4 +1,115 @@
 {
   "version": 1,
-  "sets": []
+  "sets": [
+    {
+      "id": "set-c1xz2c3m9",
+      "label": "资产风格",
+      "nodes": [
+        {
+          "id": "input-1",
+          "type": "input",
+          "position": {
+            "x": 250,
+            "y": 25
+          },
+          "data": {
+            "label": "原始图片"
+          }
+        },
+        {
+          "id": "output-1",
+          "type": "output",
+          "position": {
+            "x": 438.3989547038327,
+            "y": 375.20034843205576
+          },
+          "data": {
+            "label": "生图模型"
+          }
+        },
+        {
+          "id": "textGen-92ohxptuu",
+          "type": "textGen",
+          "position": {
+            "x": 155.2132678296571,
+            "y": 251.6334716461996
+          },
+          "data": {
+            "label": "文本生成",
+            "text": "识别图片中的主体，不管是什么风格的图片，转成超写实照片级别的quixel资产库效果资产，灰色背景。"
+          }
+        },
+        {
+          "id": "preset-83f822d9c4-z0y3ib3dq",
+          "type": "preset",
+          "position": {
+            "x": 379.8266430366331,
+            "y": 116.1480828727164
+          },
+          "data": {
+            "label": "线稿",
+            "presetId": "83f822d9c4"
+          }
+        },
+        {
+          "id": "preset-2406c96c0e-wqwepvpvb",
+          "type": "preset",
+          "position": {
+            "x": 376.2830890296644,
+            "y": 197.64982503299515
+          },
+          "data": {
+            "label": "色块",
+            "presetId": "2406c96c0e"
+          }
+        }
+      ],
+      "edges": [
+        {
+          "id": "xy-edge__input-1-textGen-92ohxptuu",
+          "source": "input-1",
+          "target": "textGen-92ohxptuu",
+          "sourceHandle": null,
+          "targetHandle": null
+        },
+        {
+          "id": "xy-edge__textGen-92ohxptuu-output-1",
+          "source": "textGen-92ohxptuu",
+          "target": "output-1",
+          "sourceHandle": null,
+          "targetHandle": null
+        },
+        {
+          "id": "xy-edge__input-1-preset-83f822d9c4-z0y3ib3dq",
+          "source": "input-1",
+          "target": "preset-83f822d9c4-z0y3ib3dq",
+          "sourceHandle": null,
+          "targetHandle": null
+        },
+        {
+          "id": "xy-edge__input-1-preset-2406c96c0e-wqwepvpvb",
+          "source": "input-1",
+          "target": "preset-2406c96c0e-wqwepvpvb",
+          "sourceHandle": null,
+          "targetHandle": null
+        },
+        {
+          "id": "xy-edge__preset-83f822d9c4-z0y3ib3dq-output-1",
+          "source": "preset-83f822d9c4-z0y3ib3dq",
+          "target": "output-1",
+          "sourceHandle": null,
+          "targetHandle": null
+        },
+        {
+          "id": "xy-edge__preset-2406c96c0e-wqwepvpvb-output-1",
+          "source": "preset-2406c96c0e-wqwepvpvb",
+          "target": "output-1",
+          "sourceHandle": null,
+          "targetHandle": null
+        }
+      ],
+      "createdAt": 1772780721036,
+      "updatedAt": 1772780788223
+    }
+  ]
 }
