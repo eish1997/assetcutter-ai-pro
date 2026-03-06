@@ -64,7 +64,7 @@ const CapabilityPresetSection: React.FC<{
   const [editGenerate3D, setEditGenerate3D] = useState<Generate3DPreset>({ ...DEFAULT_GENERATE_3D });
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
   const [showImportExport, setShowImportExport] = useState(false);
-  const [importText, setImportText] = useState('');
+  const [seedDropActive, setSeedDropActive] = useState(false);
 
   const movePreset = (id: string, delta: -1 | 1) => {
     const idx = presets.findIndex((p) => p.id === id);
@@ -153,33 +153,73 @@ const CapabilityPresetSection: React.FC<{
     if (editingId === id) setEditingId(null);
   };
 
-  const exportJson = () => {
-    try {
-      const text = JSON.stringify(presets, null, 2);
-      setImportText(text);
-      setShowImportExport(true);
-      void navigator.clipboard?.writeText(text).catch(() => {});
-      onLog?.('info', '已生成预设 JSON（并尝试复制到剪贴板）', undefined);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      onLog?.('error', '导出失败', msg);
+  /** 应用种子格式的预设/集合数据（支持 { version, presets }、{ version, sets } 或旧版纯数组） */
+  const applySeedFile = (data: unknown) => {
+    if (!data) return;
+    if (Array.isArray(data)) {
+      const list = data.filter((x) => x && typeof x === 'object') as CustomAppModule[];
+      update(list);
+      onLog?.('info', `已导入 ${list.length} 条能力预设（数组格式）`, undefined);
+      return;
+    }
+    if (typeof data !== 'object') return;
+    const obj = data as Record<string, unknown>;
+    if (Array.isArray(obj.presets)) {
+      const list = obj.presets.filter((x) => x && typeof x === 'object') as CustomAppModule[];
+      update(list);
+      onLog?.('info', `已导入 ${list.length} 条能力预设`, undefined);
+    }
+    if (Array.isArray(obj.sets) && obj.version === 1) {
+      onUpdateSets?.(obj.sets as CapabilitySet[]);
+      onLog?.('info', `已导入 ${(obj.sets as CapabilitySet[]).length} 个能力集合`, undefined);
     }
   };
 
-  const importJson = () => {
-    try {
-      const raw = (importText || '').trim();
-      if (!raw) return;
-      const parsed = JSON.parse(raw);
-      if (!Array.isArray(parsed)) throw new Error('JSON 必须为数组（CustomAppModule[]）');
-      // 轻量校验 + 直接交给 App 层 normalize/迁移
-      const list = parsed.filter((x) => x && typeof x === 'object') as CustomAppModule[];
-      update(list);
-      onLog?.('info', `已导入 ${list.length} 条能力预设`, undefined);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      onLog?.('error', '导入失败', msg);
-    }
+  const loadSeedFromRepo = () => {
+    Promise.all([
+      fetch('/capability-seed/capability-presets.json').then((r) => (r.ok ? r.json() : null)),
+      fetch('/capability-seed/capability-sets.json').then((r) => (r.ok ? r.json() : null)),
+    ])
+      .then(([presetsData, setsData]) => {
+        if (presetsData?.presets?.length) {
+          update(presetsData.presets as CustomAppModule[]);
+          onLog?.('info', `已从仓库加载 ${presetsData.presets.length} 条能力预设`, undefined);
+        }
+        if (setsData?.sets && setsData.version === 1) {
+          onUpdateSets?.(setsData.sets as CapabilitySet[]);
+          onLog?.('info', `已从仓库加载 ${(setsData.sets as CapabilitySet[]).length} 个能力集合`, undefined);
+        }
+        if (!presetsData?.presets?.length && !setsData?.sets?.length) {
+          onLog?.('warn', '仓库种子为空或请求失败', undefined);
+        }
+      })
+      .catch((e) => onLog?.('error', '从仓库加载失败', e instanceof Error ? e.message : String(e)));
+  };
+
+  const handleSeedDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setSeedDropActive(false);
+    const files = e.dataTransfer?.files;
+    if (!files?.length) return;
+    const read = (file: File) => {
+      return new Promise<void>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          try {
+            const data = JSON.parse(reader.result as string);
+            applySeedFile(data);
+            resolve();
+          } catch (err) {
+            reject(err);
+          }
+        };
+        reader.onerror = () => reject(new Error('读取失败'));
+        reader.readAsText(file);
+      });
+    };
+    Promise.all(Array.from(files).filter((f) => f.name.endsWith('.json')).map(read)).catch((err) => {
+      onLog?.('error', '解析 JSON 失败', err instanceof Error ? err.message : String(err));
+    });
   };
 
   /** 下载当前能力预设/集合为仓库种子文件，可放入 public/capability-seed/ 后提交到 GitHub */
@@ -402,13 +442,10 @@ const CapabilityPresetSection: React.FC<{
       {showImportExport && (
         <div className="rounded-2xl border border-white/10 bg-black/40 p-4 space-y-3">
           <div className="flex items-center justify-between gap-2 flex-wrap">
-            <div className="text-[9px] font-black text-gray-300 uppercase">导入 / 导出（JSON）</div>
+            <div className="text-[9px] font-black text-gray-300 uppercase">导入仓库种子</div>
             <div className="flex gap-2 flex-wrap">
-              <button onClick={exportJson} className="px-3 py-1.5 rounded-lg bg-white/10 text-[9px] font-black uppercase hover:bg-white/20">
-                导出到文本框
-              </button>
-              <button onClick={importJson} className="px-3 py-1.5 rounded-lg bg-blue-600/80 text-[9px] font-black uppercase hover:bg-blue-500">
-                从文本框导入
+              <button onClick={loadSeedFromRepo} className="px-3 py-1.5 rounded-lg bg-blue-600/80 text-[9px] font-black uppercase hover:bg-blue-500">
+                从仓库加载
               </button>
               <button onClick={() => exportSeedForRepo('both')} className="px-3 py-1.5 rounded-lg bg-amber-600/60 text-[9px] font-black uppercase hover:bg-amber-500/70" title="下载后放入 public/capability-seed/ 再提交到 GitHub">
                 导出为仓库种子
@@ -419,15 +456,16 @@ const CapabilityPresetSection: React.FC<{
             </div>
           </div>
           <p className="text-[8px] text-gray-500">
-            提示：导出会尝试复制到剪贴板；导入需要 JSON 为数组格式。导入后会覆盖当前预设列表。
+            从仓库加载：使用当前站点 public/capability-seed/ 中的种子。或将 capability-presets.json / capability-sets.json 拖入下方区域导入。
           </p>
-          <textarea
-            value={importText}
-            onChange={(e) => setImportText(e.target.value)}
-            rows={8}
-            className="w-full bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500 resize-none font-mono"
-            placeholder="在此粘贴或查看 JSON（CustomAppModule[]）"
-          />
+          <div
+            className={`min-h-[120px] rounded-xl border-2 border-dashed flex items-center justify-center transition-colors ${seedDropActive ? 'border-blue-500 bg-blue-500/10' : 'border-white/20 bg-black/40'}`}
+            onDragOver={(e) => { e.preventDefault(); setSeedDropActive(true); }}
+            onDragLeave={() => setSeedDropActive(false)}
+            onDrop={handleSeedDrop}
+          >
+            <span className="text-[10px] text-gray-400">将 JSON 文件拖入此处（capability-presets.json 或 capability-sets.json）</span>
+          </div>
         </div>
       )}
 
