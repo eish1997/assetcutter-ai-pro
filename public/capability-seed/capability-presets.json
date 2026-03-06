@@ -1,0 +1,43 @@
+{
+  "version": 3,
+  "presets": [
+    {
+      "id": "split_component",
+      "label": "拆分组件",
+      "category": "image_process",
+      "engine": "builtin",
+      "enabled": true,
+      "order": 0,
+      "instruction": ""
+    },
+    {
+      "id": "style_transfer",
+      "label": "转风格",
+      "category": "image_gen",
+      "engine": "gen_image",
+      "imageGear": "fast",
+      "enabled": true,
+      "order": 1,
+      "instruction": "Convert this image to a consistent artistic style: stylized digital art, clean lines, modern flat design. Keep the same composition and main subjects."
+    },
+    {
+      "id": "multi_view",
+      "label": "生成多视角",
+      "category": "image_gen",
+      "engine": "gen_image",
+      "imageGear": "fast",
+      "enabled": true,
+      "order": 2,
+      "instruction": "Generate a clean front view of the main object in this image, centered on white or neutral background, orthographic style, suitable as a reference sheet view."
+    },
+    {
+      "id": "cut_image",
+      "label": "切割图片",
+      "category": "image_process",
+      "engine": "builtin",
+      "enabled": true,
+      "order": 3,
+      "instruction": ""
+    }
+  ]
+}

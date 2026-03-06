@@ -2,7 +2,10 @@ import React, { useState, useRef } from 'react';
 import type { CustomAppModule, CapabilityCategory, CapabilityEngine, DialogImageGear, Generate3DPreset, CapabilitySet } from '../types';
 import { CAPABILITY_CATEGORIES, DIALOG_IMAGE_GEARS } from '../types';
 import type { CapabilityTestResult } from '../services/capabilityTestRunner';
+import { CAPABILITY_PRESETS_VERSION } from '../services/capabilityPresetStore';
 import CapabilitySetCanvas from './CapabilitySetCanvas';
+
+const CAPABILITY_SETS_VERSION = 1;
 
 const DEFAULT_GENERATE_3D: Generate3DPreset = { module: 'pro', model: '3.0', enablePBR: false };
 
@@ -176,6 +179,31 @@ const CapabilityPresetSection: React.FC<{
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       onLog?.('error', '导入失败', msg);
+    }
+  };
+
+  /** 下载当前能力预设/集合为仓库种子文件，可放入 public/capability-seed/ 后提交到 GitHub */
+  const exportSeedForRepo = (which: 'presets' | 'sets' | 'both') => {
+    try {
+      const download = (filename: string, json: object) => {
+        const blob = new Blob([JSON.stringify(json, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
+      };
+      if (which === 'presets' || which === 'both') {
+        download('capability-presets.json', { version: CAPABILITY_PRESETS_VERSION, presets });
+      }
+      if (which === 'sets' || which === 'both') {
+        download('capability-sets.json', { version: CAPABILITY_SETS_VERSION, sets });
+      }
+      onLog?.('info', '已下载仓库种子文件，请放入 public/capability-seed/ 后提交', undefined);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      onLog?.('error', '导出种子失败', msg);
     }
   };
 
@@ -375,12 +403,15 @@ const CapabilityPresetSection: React.FC<{
         <div className="rounded-2xl border border-white/10 bg-black/40 p-4 space-y-3">
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <div className="text-[9px] font-black text-gray-300 uppercase">导入 / 导出（JSON）</div>
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap">
               <button onClick={exportJson} className="px-3 py-1.5 rounded-lg bg-white/10 text-[9px] font-black uppercase hover:bg-white/20">
                 导出到文本框
               </button>
               <button onClick={importJson} className="px-3 py-1.5 rounded-lg bg-blue-600/80 text-[9px] font-black uppercase hover:bg-blue-500">
                 从文本框导入
+              </button>
+              <button onClick={() => exportSeedForRepo('both')} className="px-3 py-1.5 rounded-lg bg-amber-600/60 text-[9px] font-black uppercase hover:bg-amber-500/70" title="下载后放入 public/capability-seed/ 再提交到 GitHub">
+                导出为仓库种子
               </button>
               <button onClick={() => setShowImportExport(false)} className="px-3 py-1.5 rounded-lg bg-white/10 text-[9px] font-black uppercase hover:bg-white/20">
                 关闭

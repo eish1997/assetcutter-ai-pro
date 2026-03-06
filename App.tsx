@@ -21,8 +21,8 @@ import SiteAssistant from './components/SiteAssistant';
 import SettingsSection from './components/SettingsSection';
 import StoreSection from './components/StoreSection';
 import { runCapabilityTest } from './services/capabilityTestRunner';
-import { loadCapabilityPresets, saveCapabilityPresets } from './services/capabilityPresetStore';
-import { loadCapabilitySets, saveCapabilitySets } from './services/capabilitySetStore';
+import { loadCapabilityPresets, saveCapabilityPresets, CAPABILITY_PRESETS_KEY } from './services/capabilityPresetStore';
+import { loadCapabilitySets, saveCapabilitySets, CAPABILITY_SETS_KEY } from './services/capabilitySetStore';
 
 class WorkflowErrorBoundary extends Component<{ children: React.ReactNode }, { error: Error | null }> {
   state = { error: null as Error | null };
@@ -412,6 +412,33 @@ const App: React.FC = () => {
       setCapabilitySets(loadCapabilitySets());
     }
   }, [mode]);
+
+  // 当本地无数据时，从仓库种子 public/capability-seed 加载并写入 localStorage
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (!localStorage.getItem(CAPABILITY_PRESETS_KEY)) {
+      fetch('/capability-seed/capability-presets.json')
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data: { version?: number; presets?: CustomAppModule[] } | null) => {
+          if (data?.presets?.length) {
+            saveCapabilityPresets(data.presets);
+            setCapabilityPresets(data.presets);
+          }
+        })
+        .catch(() => {});
+    }
+    if (!localStorage.getItem(CAPABILITY_SETS_KEY)) {
+      fetch('/capability-seed/capability-sets.json')
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data: { version?: number; sets?: CapabilitySet[] } | null) => {
+          if (data?.sets && data.version === 1) {
+            saveCapabilitySets(data.sets);
+            setCapabilitySets(data.sets);
+          }
+        })
+        .catch(() => {});
+    }
+  }, []);
   const [workflowAssets, setWorkflowAssets] = useState<WorkflowAsset[]>([]);
   const [workflowPending, setWorkflowPending] = useState<WorkflowPendingTask[]>([]);
   const [step, setStep] = useState<AppStep>(AppStep.T_PATTERN);
