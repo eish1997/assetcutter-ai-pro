@@ -1,16 +1,24 @@
 import React, { useState, useRef } from 'react';
-import type { CustomAppModule, CapabilityCategory, CapabilityEngine, DialogImageGear, Generate3DPreset } from '../types';
+import type { CustomAppModule, CapabilityCategory, CapabilityEngine, DialogImageGear, Generate3DPreset, CapabilitySet } from '../types';
 import { CAPABILITY_CATEGORIES, DIALOG_IMAGE_GEARS } from '../types';
 import type { CapabilityTestResult } from '../services/capabilityTestRunner';
+import CapabilitySetCanvas from './CapabilitySetCanvas';
 
 const DEFAULT_GENERATE_3D: Generate3DPreset = { module: 'pro', model: '3.0', enablePBR: false };
+
+type ViewMode = 'presets' | 'sets' | 'canvas';
 
 const CapabilityPresetSection: React.FC<{
   presets: CustomAppModule[];
   onUpdate: (next: CustomAppModule[]) => void;
+  sets?: CapabilitySet[];
+  onUpdateSets?: (next: CapabilitySet[]) => void;
   onRunTest?: (preset: CustomAppModule, imageBase64: string) => Promise<CapabilityTestResult>;
   onLog?: (level: 'info' | 'warn' | 'error', message: string, detail?: string) => void;
-}> = ({ presets, onUpdate, onRunTest, onLog }) => {
+}> = ({ presets, onUpdate, sets = [], onUpdateSets, onRunTest, onLog }) => {
+  const [viewMode, setViewMode] = useState<ViewMode>('presets');
+  const [canvasSet, setCanvasSet] = useState<CapabilitySet | null>(null);
+  const [setLabel, setSetLabel] = useState('');
   const reindex = (list: CustomAppModule[]) => list.map((p, i) => ({ ...p, order: i }));
   const update = (list: CustomAppModule[]) => onUpdate(reindex(list));
   const getEngine = (p: CustomAppModule): CapabilityEngine => {
@@ -203,8 +211,146 @@ const CapabilityPresetSection: React.FC<{
     e.target.value = '';
   };
 
+  const openNewSet = () => {
+    setCanvasSet(null);
+    setSetLabel('新能力集合');
+    setViewMode('canvas');
+  };
+
+  const openEditSet = (set: CapabilitySet) => {
+    setCanvasSet(set);
+    setSetLabel(set.label);
+    setViewMode('canvas');
+  };
+
+  const closeCanvas = () => {
+    setViewMode(viewMode === 'canvas' ? 'sets' : viewMode);
+    setCanvasSet(null);
+  };
+
+  const handleSaveSet = (set: CapabilitySet) => {
+    const next = sets.some((s) => s.id === set.id)
+      ? sets.map((s) => (s.id === set.id ? set : s))
+      : [...sets, set];
+    onUpdateSets?.(next);
+    onLog?.('info', `已保存能力集合：${set.label}`, undefined);
+    closeCanvas();
+  };
+
+  const removeSet = (id: string) => {
+    onUpdateSets?.(sets.filter((s) => s.id !== id));
+  };
+
+  // 顶部：仅展示已有能力（基础能力 + 复合能力）分两行，不拖动
+  const presetStrip = (
+    <div className="shrink-0 flex flex-col gap-2 p-3 rounded-xl border border-white/10 bg-black/30">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[9px] font-black text-blue-400/90 uppercase mr-1">基础能力</span>
+        {presets.filter((p) => p.enabled !== false).map((p) => (
+          <span
+            key={p.id}
+            className="px-3 py-1.5 rounded-lg bg-blue-600/20 border border-blue-500/40 text-[10px] font-semibold text-blue-200/90"
+          >
+            {p.label}
+          </span>
+        ))}
+        {presets.filter((p) => p.enabled !== false).length === 0 && (
+          <span className="text-[9px] text-gray-500">暂无</span>
+        )}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[9px] font-black text-amber-400/90 uppercase mr-1">复合能力</span>
+        {sets.map((s) => (
+          <span
+            key={s.id}
+            className="px-3 py-1.5 rounded-lg bg-amber-600/20 border border-amber-500/40 text-[10px] font-semibold text-amber-200/90"
+          >
+            {s.label}
+          </span>
+        ))}
+        {sets.length === 0 && (
+          <span className="text-[9px] text-gray-500">暂无</span>
+        )}
+      </div>
+    </div>
+  );
+
+  if (viewMode === 'canvas') {
+    return (
+      <div className="flex flex-col h-[calc(100dvh-8rem)] min-h-[400px] animate-in fade-in">
+        <div className="flex-1 min-h-0 rounded-2xl border border-white/10 overflow-hidden bg-white">
+          <CapabilitySetCanvas
+            presets={presets}
+            initialSet={canvasSet}
+            setLabel={setLabel}
+            onSetLabelChange={setSetLabel}
+            onSave={handleSaveSet}
+            onClose={closeCanvas}
+          />
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex flex-col gap-6 animate-in fade-in max-w-3xl">
+    <div className="flex flex-col gap-6 animate-in fade-in max-w-4xl">
+      {presetStrip}
+
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={() => setViewMode('presets')}
+          className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase border ${viewMode === 'presets' ? 'bg-blue-600/20 border-blue-500/50 text-blue-300' : 'bg-white/5 border-white/10 text-gray-500 hover:bg-white/10'}`}
+        >
+          基础能力预设
+        </button>
+        <button
+          type="button"
+          onClick={() => setViewMode('sets')}
+          className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase border ${viewMode === 'sets' ? 'bg-blue-600/20 border-blue-500/50 text-blue-300' : 'bg-white/5 border-white/10 text-gray-500 hover:bg-white/10'}`}
+        >
+          能力集合
+        </button>
+      </div>
+
+      {viewMode === 'sets' && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <p className="text-[9px] text-gray-500">在画布中组合多个能力并连线，工作流中可整体使用。</p>
+            <button
+              type="button"
+              onClick={openNewSet}
+              className="px-4 py-2 rounded-xl bg-amber-600 text-[10px] font-black uppercase hover:bg-amber-500"
+            >
+              添加能力集合
+            </button>
+          </div>
+          {sets.length === 0 ? (
+            <div className="rounded-2xl border border-white/10 bg-black/40 p-8 text-center text-gray-500 text-[10px]">
+              暂无能力集合，点击「添加能力集合」进入画布拖拽连线。
+            </div>
+          ) : (
+            <div className="grid gap-3">
+              {sets.map((s) => (
+                <div key={s.id} className="rounded-2xl border border-white/10 bg-black/40 p-4 flex items-center justify-between">
+                  <span className="text-[11px] font-black uppercase">{s.label}</span>
+                  <div className="flex gap-2">
+                    <button type="button" onClick={() => openEditSet(s)} className="px-3 py-1.5 rounded-lg bg-white/10 text-[9px] font-black uppercase hover:bg-white/20">
+                      编辑
+                    </button>
+                    <button type="button" onClick={() => removeSet(s.id)} className="px-3 py-1.5 rounded-lg bg-red-500/20 text-red-400 text-[9px] font-black uppercase hover:bg-red-500/30">
+                      删除
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {viewMode === 'presets' && (
+        <>
       <div className="flex items-center justify-between">
         <p className="text-[9px] text-gray-500">
           在此管理功能预设，工作流中的「功能区」将调用此处配置的项，拖拽图片到对应框即可执行。
@@ -333,27 +479,29 @@ const CapabilityPresetSection: React.FC<{
           </div>
           {newCategory === 'image_gen' && (
             <div>
-              <span className="text-[8px] font-black text-blue-400/90 uppercase">预设提示词（必填，传给生图模型）</span>
+              <span className="text-[8px] font-black text-blue-400/90 uppercase">预设提示词（必填）</span>
+              <p className="text-[8px] text-gray-500 mt-0.5">工作流执行时：先将此处内容交给文字模型理解，再根据理解结果生成生图用提示词发给生图模型（与对话模式一致）。</p>
               <textarea
                 value={newInstruction}
                 onChange={(e) => setNewInstruction(e.target.value)}
-                placeholder="描述希望的效果，如：将图片转为赛博朋克风格，霓虹灯与机械细节；或：生成该物体的多视角线稿图"
+                placeholder="如：将图片转为赛博朋克风格，霓虹灯与机械细节；或：生成该物体的多视角线稿"
                 rows={4}
                 className="mt-1 w-full bg-white/5 border border-blue-500/30 rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none"
               />
             </div>
           )}
-          {newCategory === 'image_process' && (
+          {newCategory === 'image_process' && newEngine === 'gen_image' && (
+            <div>
+              <span className="text-[8px] font-black text-blue-400/90 uppercase">预设提示词（必填）</span>
+              <p className="text-[8px] text-gray-500 mt-0.5">工作流执行时先由文字模型理解，再生成生图用提示词。</p>
+              <textarea value={newInstruction} onChange={(e) => setNewInstruction(e.target.value)} placeholder="如：将图片转为赛博朋克风格" rows={3} className="mt-1 w-full bg-white/5 border border-blue-500/30 rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none" />
+            </div>
+          )}
+          {newCategory === 'image_process' && newEngine === 'builtin' && (
             <div>
               <span className="text-[8px] font-black text-gray-500 uppercase">可选：补充说明或约束</span>
               <p className="text-[8px] text-gray-600 mt-0.5">多数能力有内置逻辑（如切割按版面分块），可留空；需要时可填写额外说明。</p>
-              <textarea
-                value={newInstruction}
-                onChange={(e) => setNewInstruction(e.target.value)}
-                placeholder="留空即使用内置逻辑；或填写如：只保留上半部分、排除背景"
-                rows={2}
-                className="mt-1 w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none"
-              />
+              <textarea value={newInstruction} onChange={(e) => setNewInstruction(e.target.value)} placeholder="留空即使用内置逻辑；或填写如：只保留上半部分、排除背景" rows={2} className="mt-1 w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none" />
             </div>
           )}
           {newCategory === 'generate_3d' && (
@@ -517,17 +665,31 @@ const CapabilityPresetSection: React.FC<{
                   </div>
                   {editCategory === 'image_gen' && (
                     <div className="mb-2">
-                      <span className="text-[8px] font-black text-blue-400/90 uppercase">预设提示词（传给生图模型）</span>
+                      <span className="text-[8px] font-black text-blue-400/90 uppercase">预设提示词（必填）</span>
+                      <p className="text-[8px] text-gray-500 mt-0.5">工作流执行时先由文字模型理解，再生成生图用提示词（与对话模式一致）。</p>
                       <textarea
                         value={editInstruction}
                         onChange={(e) => setEditInstruction(e.target.value)}
                         rows={4}
                         className="mt-1 w-full bg-white/5 border border-blue-500/30 rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none"
-                        placeholder="描述希望的效果"
+                        placeholder="如：将图片转为赛博朋克风格"
                       />
                     </div>
                   )}
-                  {editCategory === 'image_process' && (
+                  {editCategory === 'image_process' && editEngine === 'gen_image' && (
+                    <div className="mb-2">
+                      <span className="text-[8px] font-black text-blue-400/90 uppercase">预设提示词（必填）</span>
+                      <p className="text-[8px] text-gray-500 mt-0.5">工作流执行时先由文字模型理解，再生成生图用提示词。</p>
+                      <textarea
+                        value={editInstruction}
+                        onChange={(e) => setEditInstruction(e.target.value)}
+                        rows={3}
+                        className="mt-1 w-full bg-white/5 border border-blue-500/30 rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none"
+                        placeholder="如：将图片转为赛博朋克风格"
+                      />
+                    </div>
+                  )}
+                  {editCategory === 'image_process' && editEngine === 'builtin' && (
                     <div className="mb-2">
                       <span className="text-[8px] font-black text-gray-500 uppercase">可选：补充说明或约束</span>
                       <textarea
@@ -656,7 +818,7 @@ const CapabilityPresetSection: React.FC<{
                           setEditEngine(getEngine(p));
                           setEditEnabled(p.enabled !== false);
                           setEditImageGear(getGear(p));
-                          setEditInstruction(p.instruction);
+                          setEditInstruction(((p as { instructionFixed?: string }).instructionFixed ?? p.instruction) || '');
                           setEditGenerate3D(p.category === 'generate_3d' && p.generate3D ? { ...p.generate3D } : { ...DEFAULT_GENERATE_3D });
                         }}
                         className="px-2 py-1 rounded-lg bg-white/10 text-[8px] font-black uppercase hover:bg-white/20"
@@ -669,13 +831,13 @@ const CapabilityPresetSection: React.FC<{
                   <div className="mt-2 text-[8px] text-gray-500 space-x-3">
                     <span>id: {p.id}</span>
                     <span>分类: {p.category}</span>
-                    <span>指令: {p.instruction?.length ?? 0} 字</span>
+                    <span>预设: {p.instruction?.length ?? 0} 字</span>
                     {p.instruction ? <span className="text-gray-600 truncate max-w-[200px] inline-block align-bottom" title={p.instruction}>{p.instruction.slice(0, 30)}…</span> : null}
                   </div>
                   {p.instruction ? (
                     <p className="mt-1 text-[9px] text-gray-500 break-words line-clamp-2">{p.instruction}</p>
                   ) : (
-                    <p className="mt-1 text-[9px] text-gray-600">（使用内置逻辑或未设置指令）</p>
+                    <p className="mt-1 text-[9px] text-gray-600">（使用内置逻辑或未设置预设提示词）</p>
                   )}
                   {p.category === 'generate_3d' && p.generate3D && (
                     <p className="mt-1 text-[8px] text-amber-500/90">
@@ -760,6 +922,8 @@ const CapabilityPresetSection: React.FC<{
           <button type="button" onClick={() => setLightboxImage(null)} className="absolute top-4 right-4 w-10 h-10 flex items-center justify-center text-white/70 hover:text-white rounded-full bg-white/10">✕</button>
           <img src={lightboxImage} alt="结果大图" className="max-h-[90vh] max-w-full object-contain rounded-lg shadow-2xl" onClick={(e) => e.stopPropagation()} />
         </div>
+      )}
+        </>
       )}
     </div>
   );

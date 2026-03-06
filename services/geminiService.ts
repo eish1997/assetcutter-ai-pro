@@ -102,7 +102,9 @@ No markdown, no code fence, no other text.`,
 - "style": artistic or technical style (e.g. concept art, cinematic, PBR, photorealistic, orthographic, game asset, model sheet, in the style of X).
 - "modifiers": camera/lighting/quality terms (e.g. close-up, 4k, HDR, sharp, detailed).
 
-Use empty string "" for any part that is absent. Preserve original wording; do not translate. Output ONLY the JSON object with keys subject, scene, style, modifiers.`
+Use empty string "" for any part that is absent. Preserve original wording; do not translate. Output ONLY the JSON object with keys subject, scene, style, modifiers.`,
+  /** 工作流能力：根据图片识别主体描述（变量部分），用于与固定提示词拼接后生图 */
+  describe_subject: `Look at this image. Output ONLY a short English phrase describing the main subject or object in the image (what the image shows as the primary focus: object type, shape, posture, key visual traits). Do NOT include style, background, lighting, or quality terms. One line only, no period at the end. Example: "a ceramic vase with floral pattern" or "a character in armor holding a sword".`
 };
 
 /** 对话生图：收口函数，返回实际发给模型的完整 prompt；业务代码不直接拼字符串。 */
@@ -211,6 +213,33 @@ export async function detectObjectsInImage(base64Image: string, model = 'gemini-
       xmax: r.box_2d[3]
     }));
   });
+}
+
+/**
+ * 识别图片中的主体，输出一句英文描述（用于工作流能力「变量部分」与固定提示词拼接后生图）。
+ */
+export async function describeImageSubject(
+  base64Image: string,
+  model = 'gemini-3-flash-preview',
+  customPrompt?: string
+): Promise<string> {
+  const text = await callWithRetry(async () => {
+    const ai = getAI();
+    const prompt = customPrompt || DEFAULT_PROMPTS.describe_subject;
+    const response = await ai.models.generateContent({
+      model,
+      contents: {
+        parts: [
+          { inlineData: { mimeType: 'image/jpeg', data: base64Image.split(',')[1] || base64Image } },
+          { text: prompt }
+        ]
+      }
+    });
+    const raw = (response.text || '').trim();
+    if (!raw) throw new Error('Empty subject description');
+    return raw.replace(/\n+/g, ' ').trim();
+  });
+  return text;
 }
 
 export async function processTexture(base64Image, type: 'pattern' | 'tileable' | 'pbr', mapType = '', model = 'gemini-2.5-flash-image', customPrompt?: string) {
@@ -325,6 +354,49 @@ export async function dialogGenerateImage(
     }
     const textPart = response.candidates?.[0]?.content?.parts?.find((p: { text?: string }) => p.text);
     const hint = textPart?.text?.slice(0, 120) ? `（模型返回了文字: ${String(textPart.text).slice(0, 120)}…）` : '（当前模型可能不支持图像输出，请换用「快速」或「Pro」挡位）';
+    throw new Error(`生图未返回图片${hint}`);
+  });
+}
+
+/**
+ * 多图 + 提示词生图：将多张参考图与一条指令一起发给模型，生成最终图（用于能力集合中多分支汇聚到生图模型）。
+ */
+export async function dialogGenerateImageMulti(
+  imagesBase64: string[],
+  instruction: string,
+  model = 'gemini-2.5-flash-image',
+  options?: { aspectRatio?: string; imageSize?: string },
+  abortSignal?: AbortSignal
+): Promise<string> {
+  if (imagesBase64.length === 0) throw new Error('多图生图至少需要一张图片');
+  return callWithRetry(async () => {
+    const ai = getAI();
+    const systemInstruction = (DEFAULT_PROMPTS.edit || '').replace('{instruction}', instruction);
+    const config: { systemInstruction: string; imageConfig?: { aspectRatio?: string; imageSize?: string }; abortSignal?: AbortSignal } = {
+      systemInstruction
+    };
+    if (options?.aspectRatio || options?.imageSize) {
+      config.imageConfig = {};
+      if (options?.aspectRatio) config.imageConfig.aspectRatio = options.aspectRatio;
+      if (options?.imageSize) config.imageConfig.imageSize = options.imageSize;
+    }
+    if (abortSignal) config.abortSignal = abortSignal;
+    const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [];
+    for (const img of imagesBase64) {
+      const data = img.split(',')[1] || img;
+      parts.push({ inlineData: { mimeType: 'image/jpeg', data } });
+    }
+    parts.push({ text: instruction });
+    const response = await ai.models.generateContent({
+      model,
+      contents: { parts },
+      config
+    });
+    for (const part of response.candidates?.[0]?.content?.parts || []) {
+      if (part.inlineData) return `data:image/png;base64,${part.inlineData.data}`;
+    }
+    const textPart = response.candidates?.[0]?.content?.parts?.find((p: { text?: string }) => p.text);
+    const hint = textPart?.text?.slice(0, 120) ? `（模型返回了文字: ${String(textPart.text).slice(0, 120)}…）` : '（当前模型可能不支持图像输出）';
     throw new Error(`生图未返回图片${hint}`);
   });
 }

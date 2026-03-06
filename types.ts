@@ -404,8 +404,41 @@ export type CustomAppModule = {
   enabled?: boolean;
   /** 排序（数字越小越靠前）；缺省时按数组顺序 */
   order?: number;
-  /** 预设提示词/指令，生图类传给模型；图像处理类部分能力有内置逻辑可留空；生成3D 时可作补充描述 */
+  /** 预设提示词。生图类：工作流执行时先交给文字模型理解，再拿理解结果调用生图模型（与对话模式一致）；图像处理类部分能力有内置逻辑可留空；生成3D 时可作补充描述。 */
   instruction: string;
   /** 仅当 category === 'generate_3d' 时使用 */
   generate3D?: Generate3DPreset;
+};
+
+/** 能力集合画布节点（与 React Flow 序列化兼容） */
+export type CapabilitySetNode = {
+  id: string;
+  type: 'input' | 'preset' | 'output' | 'textGen';
+  position: { x: number; y: number };
+  data: {
+    label: string;
+    /** type===preset 时关联的基础预设 id */
+    presetId?: string;
+    /** type===textGen 时用户输入的文本，用于生成提示词 */
+    text?: string;
+  };
+};
+
+/** 能力集合画布连线 */
+export type CapabilitySetEdge = {
+  id: string;
+  source: string;
+  target: string;
+  sourceHandle?: string | null;
+  targetHandle?: string | null;
+};
+
+/** 能力集合：由多个基础预设组合、在画布中连线形成的流程 */
+export type CapabilitySet = {
+  id: string;
+  label: string;
+  nodes: CapabilitySetNode[];
+  edges: CapabilitySetEdge[];
+  createdAt?: number;
+  updatedAt?: number;
 };

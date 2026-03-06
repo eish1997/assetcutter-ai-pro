@@ -50,6 +50,9 @@
 
 若要把项目发布成线上可访问的网站，按 **[DEPLOY_GUIDE.md](DEPLOY_GUIDE.md)** 操作即可（GitHub → Vercel，全程点选 + 填几处配置）。
 
+**可选：入站密码**  
+在环境变量、`.env` 或本地开发时的 `.env.local` 中设置 `VITE_SITE_PASSWORD` 后，打开网站会先要求输入密码，正确后才进入应用；同一标签页内刷新无需重输，关闭标签页后需重新输入。不设置则无密码门控。
+
 ---
 
 ## 本地开发
@@ -78,6 +81,7 @@
 - `GEMINI_API_KEY`：对话生图、提取花纹、生成贴图等 AI 能力必填
 - `VITE_SEAM_REPAIR_API`：生产环境贴图修缝后端地址（可选，开发时用代理即可）
 - 腾讯混元生 3D：运行 `npm run proxy` 时需在 `.env.local` 或环境中设置 `TENCENT_SECRET_ID`、`TENCENT_SECRET_KEY`；前端用代理时需设置 `VITE_TENCENT_PROXY`（如 `http://localhost:9001`）。部署说明见 [DEPLOY_GUIDE.md](DEPLOY_GUIDE.md)
+- `VITE_SITE_PASSWORD`：可选，入站密码；本地开发可写在 `.env.local`，与上述变量一起管理。
 
 **首次使用贴图修缝时**，需在 `WebSeamRepair/backend` 安装 Python 依赖一次：
 

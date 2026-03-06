@@ -1,10 +1,10 @@
 import React, { useState, useCallback, useMemo } from 'react';
-import type { WorkflowAsset, WorkflowPendingTask, WorkflowActionModule } from '../types';
+import type { WorkflowAsset, WorkflowPendingTask, WorkflowActionModule, CapabilitySet } from '../types';
 import type { CustomAppModule, LibraryItem, WorkflowCutGroupItem } from '../types';
 import type { BoundingBox } from '../types';
 import { WORKFLOW_ACTION_TYPES, CAPABILITY_CATEGORIES } from '../types';
 import { detectObjectsInImage, dialogGenerateImage, DEFAULT_PROMPTS } from '../services/geminiService';
-import { executeCapability, getCapabilityEngine } from '../services/capabilityExecutor';
+import { executeCapability, executeCapabilitySet, getCapabilityEngine } from '../services/capabilityExecutor';
 
 const uuid = () => Math.random().toString(36).slice(2, 11);
 const RESULT_VER_SEP = '__v__';
@@ -458,8 +458,11 @@ const ArchivedDetailModal: React.FC<{
 };
 
 // ---------- 主组件 ----------
+const SET_ACTION_PREFIX = 'set:';
+
 const WorkflowSection: React.FC<{
   capabilityPresets: CustomAppModule[];
+  capabilitySets?: CapabilitySet[];
   assets: WorkflowAsset[];
   onAssetsChange: (value: React.SetStateAction<WorkflowAsset[]>) => void;
   pending: WorkflowPendingTask[];
@@ -468,9 +471,10 @@ const WorkflowSection: React.FC<{
   onLog?: (level: 'info' | 'warn' | 'error', message: string, detail?: string) => void;
   /** 拖图到「生成3D」能力时调用，不进入执行队列，直接提交 3D 任务 */
   onAddGenerate3DJob?: (preset: CustomAppModule, imageBase64: string) => void;
-}> = ({ capabilityPresets, assets: assetsProp, onAssetsChange: setAssets, pending: pendingProp, onPendingChange: setPending, onOpenLibraryPicker, onLog, onAddGenerate3DJob }) => {
+}> = ({ capabilityPresets, capabilitySets: capabilitySetsProp = [], assets: assetsProp, onAssetsChange: setAssets, pending: pendingProp, onPendingChange: setPending, onOpenLibraryPicker, onLog, onAddGenerate3DJob }) => {
   const assets = Array.isArray(assetsProp) ? assetsProp : [];
   const pending = Array.isArray(pendingProp) ? pendingProp : [];
+  const capabilitySets = Array.isArray(capabilitySetsProp) ? capabilitySetsProp : [];
   const pendingRef = React.useRef(pending);
   pendingRef.current = pending;
   const assetsRef = React.useRef(assets);
@@ -508,6 +512,7 @@ const WorkflowSection: React.FC<{
   const [archivedDetailAssetId, setArchivedDetailAssetId] = useState<string | null>(null);
   const [executing, setExecuting] = useState(false);
   const [executingQueue, setExecutingQueue] = useState<{ total: number; current: number; tasks: WorkflowPendingTask[] } | null>(null);
+  const [completedTaskIds, setCompletedTaskIds] = useState<Set<string>>(new Set());
   const [draggingAssetId, setDraggingAssetId] = useState<string | null>(null);
   const [dragOverAction, setDragOverAction] = useState<string | null>(null);
   const [cutSelectState, setCutSelectState] = useState<{
@@ -521,6 +526,14 @@ const WorkflowSection: React.FC<{
   const [draggingGroupItem, setDraggingGroupItem] = useState<{ image: string; groupAssetId: string; itemIndex: number } | null>(null);
 
   const getModule = (id: string) => actionModules.find((m) => m.id === id);
+  const getSet = (id: string) => capabilitySets.find((s) => s.id === id);
+  const getActionLabel = (actionType: string) => {
+    if (actionType.startsWith(SET_ACTION_PREFIX)) {
+      const set = getSet(actionType.slice(SET_ACTION_PREFIX.length));
+      return set?.label ?? actionType;
+    }
+    return getModule(actionType)?.label ?? actionType;
+  };
   const getEngine = (m: CustomAppModule): 'gen_image' | 'builtin' => getCapabilityEngine(m);
 
   const getAssetDisplayImage = (a: WorkflowAsset, assetsList: WorkflowAsset[] = assets, visited: Set<string> = new Set()): string => {
@@ -540,9 +553,10 @@ const WorkflowSection: React.FC<{
     const asset = assets.find((x) => x.id === assetId);
     if (!asset) return;
     const inputImage = getAssetDisplayImage(asset);
+    // 加入执行队列时暂时从网格隐藏，避免与未处理图片混在一起
     setPending((prev) => [...prev, { id: uuid(), assetId, actionType, inputImage, addedAt: Date.now() }]);
     setAssets((prev) => prev.map((x) => (x.id === assetId ? { ...x, hiddenInGrid: true } : x)));
-  }, [assets]);
+  }, [assets, getAssetDisplayImage, setAssets]);
 
   const removeFromPending = useCallback((taskId: string) => {
     const task = pending.find((t) => t.id === taskId);
@@ -554,12 +568,28 @@ const WorkflowSection: React.FC<{
 
   const runTask = async (task: WorkflowPendingTask): Promise<string | null> => {
     const { actionType, inputImage } = task;
+    if (actionType.startsWith(SET_ACTION_PREFIX)) {
+      const set = getSet(actionType.slice(SET_ACTION_PREFIX.length));
+      if (!set) {
+        onLog?.('warn', `[${getActionLabel(actionType)}] 能力集合不存在`);
+        return null;
+      }
+      const result = await executeCapabilitySet(set, inputImage ?? '', {
+        presets: actionModules,
+        onLog,
+      });
+      if (!result.ok) {
+        onLog?.('warn', `[${getActionLabel(actionType)}] ${result.error}`);
+        return null;
+      }
+      return result.kind === 'image' ? result.image : null;
+    }
     const module = getModule(actionType);
     if (module?.category === 'generate_3d') {
       onLog?.('warn', '生成3D 请拖图到能力框提交，不进入执行队列');
       return null;
     }
-    const actionLabel = module?.label ?? actionType;
+    const actionLabel = getActionLabel(actionType);
     try {
       if (module) {
         const out = await executeCapability(module, inputImage, { onLog });
@@ -580,39 +610,63 @@ const WorkflowSection: React.FC<{
     return null;
   };
 
+  const replaceGroupItemWithSubAsset = useCallback((groupAssetId: string, itemIndex: number, subAssetId: string) => {
+    setAssets((prev) =>
+      prev.map((a) => {
+        if (a.id !== groupAssetId || !a.cutImageGroup) return a;
+        const next = [...a.cutImageGroup];
+        if (itemIndex >= 0 && itemIndex < next.length) next[itemIndex] = { assetId: subAssetId };
+        return { ...a, cutImageGroup: next };
+      })
+    );
+  }, []);
+
+  const MAX_CONCURRENCY = 3;
+
   const executePending = useCallback(
     async (overridePending?: WorkflowPendingTask[]) => {
-      const toProcess = overridePending ?? [...pendingRef.current];
+      const queue = overridePending ? [...overridePending] : [...pendingRef.current];
       // 允许在 cut_image 弹窗确认后用 overridePending 继续执行剩余任务
-      if (toProcess.length === 0 || (executing && !overridePending)) return;
+      if (queue.length === 0 || (executing && !overridePending)) return;
+      // 新一轮批处理前清空已完成任务标记
+      setCompletedTaskIds(new Set());
       if (!overridePending) setPending([]);
       setExecuting(true);
-      setExecutingQueue({ total: toProcess.length, current: 0, tasks: toProcess });
-      onLog?.('info', `开始执行队列（${toProcess.length} 项）`);
-      for (let i = 0; i < toProcess.length; i++) {
-        setExecutingQueue((prev) => (prev ? { ...prev, current: i + 1 } : null));
-        const task = toProcess[i];
-        const taskLabel = getModule(task.actionType)?.label ?? task.actionType;
+      setExecutingQueue({ total: queue.length, current: 0, tasks: queue });
+      onLog?.('info', `开始执行队列（${queue.length} 项，最大并发 ${MAX_CONCURRENCY}）`);
+
+      let completed = 0;
+      const total = queue.length;
+
+      const processTask = async (task: WorkflowPendingTask) => {
+        const index = ++completed;
+        const taskLabel = getActionLabel(task.actionType);
+        setExecutingQueue((prev) => (prev ? { ...prev, current: index } : null));
+
         if (task.actionType === 'cut_image') {
-          onLog?.('info', `[${i + 1}/${toProcess.length}] ${taskLabel} 识别并切割中…`);
-          const inputImage = task.inputImage || assetsRef.current.find((a) => a.id === task.assetId)?.original;
+          onLog?.('info', `[${index}/${total}] ${taskLabel} 识别并切割中…`);
+          const inputImage =
+            task.inputImage || assetsRef.current.find((a) => a.id === task.assetId)?.original;
           if (!inputImage) {
-            setExecuting(false);
-            setExecutingQueue(null);
-            setPending(toProcess.slice(i));
+            onLog?.('warn', `[${taskLabel}] 找不到输入图片，已跳过此任务`);
             return;
           }
           let boxes: BoundingBox[] = [];
           try {
             boxes = await Promise.race([
-              detectObjectsInImage(inputImage, 'gemini-3-flash-preview', DEFAULT_PROMPTS.detect_blocks),
-              new Promise<BoundingBox[]>((_, reject) => setTimeout(() => reject(new Error('timeout')), 10000)),
+              detectObjectsInImage(
+                inputImage,
+                'gemini-3-flash-preview',
+                DEFAULT_PROMPTS.detect_blocks
+              ),
+              new Promise<BoundingBox[]>((_, reject) =>
+                setTimeout(() => reject(new Error('timeout')), 10000)
+              ),
             ]);
           } catch (_) {}
           if (!boxes.length) {
             boxes = [{ id: 'full', label: '整图', xmin: 0, ymin: 0, xmax: 1000, ymax: 1000 }];
           }
-          // 全自动：默认全选切割，便于批量处理；后续可在组内筛选/删除不需要的
           const allIndexes = boxes.map((_, j) => j);
           const cropped = await cropBoxes(inputImage, boxes, allIndexes);
           const group: WorkflowCutGroupItem[] = cropped;
@@ -620,7 +674,10 @@ const WorkflowSection: React.FC<{
             prev.map((a) => {
               if (a.id !== task.assetId) return a;
               const nextOrder = [...(a.resultOrder || []), task.actionType];
-              const nextMeta = { ...(a.resultMeta || {}), [task.actionType]: { executedAt: Date.now() } };
+              const nextMeta = {
+                ...(a.resultMeta || {}),
+                [task.actionType]: { executedAt: Date.now() },
+              };
               return {
                 ...a,
                 cutImageGroup: group,
@@ -632,24 +689,33 @@ const WorkflowSection: React.FC<{
             })
           );
           if (task.sourceGroupAssetId != null && task.sourceItemIndex != null) {
-            replaceGroupItemWithSubAsset(task.sourceGroupAssetId, task.sourceItemIndex, task.assetId);
+            replaceGroupItemWithSubAsset(
+              task.sourceGroupAssetId,
+              task.sourceItemIndex,
+              task.assetId
+            );
           }
-          onLog?.('info', `[${i + 1}/${toProcess.length}] ${taskLabel} 完成（${cropped.length} 张入组）`);
-          continue;
+          onLog?.('info', `[${index}/${total}] ${taskLabel} 完成（${cropped.length} 张入组）`);
+          setCompletedTaskIds((prev) => {
+            const next = new Set(prev);
+            next.add(task.id);
+            return next;
+          });
+          return;
         }
-        onLog?.('info', `[${i + 1}/${toProcess.length}] ${taskLabel} 执行中…`);
+
+        onLog?.('info', `[${index}/${total}] ${taskLabel} 执行中…`);
         const result = await runTask(task);
         setAssets((prev) =>
           prev.map((a) => {
             if (a.id !== task.assetId) return a;
             const baseId = task.actionType;
-            // 多次执行同一能力：保留多版本，不覆盖上一次
             const hasAnyVersion =
               Object.keys(a.results || {}).some((k) => baseActionId(k) === baseId) ||
               (a.resultOrder || []).some((k) => baseActionId(k) === baseId);
             const key = result ? (hasAnyVersion ? makeVersionKey(baseId) : baseId) : baseId;
             const nextResults = result ? { ...a.results, [key]: result } : a.results;
-            const nextOrder = result ? [...(a.resultOrder || []), key] : (a.resultOrder || []);
+            const nextOrder = result ? [...(a.resultOrder || []), key] : a.resultOrder || [];
             const nextMeta = { ...(a.resultMeta || {}), [key]: { executedAt: Date.now() } };
             return {
               ...a,
@@ -661,24 +727,41 @@ const WorkflowSection: React.FC<{
             };
           })
         );
-      }
+        setCompletedTaskIds((prev) => {
+          const next = new Set(prev);
+          next.add(task.id);
+          return next;
+        });
+      };
+
+      const worker = async () => {
+        while (true) {
+          const task = queue.shift();
+          if (!task) break;
+          // 为安全起见，轻微错开启动时间，避免瞬间打爆 QPS
+          await processTask(task);
+        }
+      };
+
+      const concurrency = Math.min(MAX_CONCURRENCY, queue.length);
+      await Promise.all(Array.from({ length: concurrency }, () => worker()));
+
       onLog?.('info', '队列执行完成');
       setExecuting(false);
       setExecutingQueue(null);
-    },
-    [executing, onLog]
-  );
 
-  const replaceGroupItemWithSubAsset = useCallback((groupAssetId: string, itemIndex: number, subAssetId: string) => {
-    setAssets((prev) =>
-      prev.map((a) => {
-        if (a.id !== groupAssetId || !a.cutImageGroup) return a;
-        const next = [...a.cutImageGroup];
-        if (itemIndex >= 0 && itemIndex < next.length) next[itemIndex] = { assetId: subAssetId };
-        return { ...a, cutImageGroup: next };
-      })
-    );
-  }, []);
+      // 若在本批执行期间又新增了任务（pending），自动继续下一批
+      if (!overridePending) {
+        const next = [...pendingRef.current];
+        if (next.length > 0) {
+          onLog?.('info', `检测到新加入的任务 ${next.length} 项，继续执行下一批…`);
+          // 传 overridePending，避免 executing 标志阻止递归调用
+          void executePending(next);
+        }
+      }
+    },
+    [executing, onLog, setPending, setAssets, getActionLabel, replaceGroupItemWithSubAsset, runTask]
+  );
 
   const onCutConfirm = useCallback(
     async (selectedIndexes: number[]) => {
@@ -804,9 +887,16 @@ const WorkflowSection: React.FC<{
   const markArchived = (assetId: string) => {
     setAssets((prev) => prev.map((a) => (a.id === assetId ? { ...a, archived: true, hiddenInGrid: false } : a)));
     setArchiveHint({ assetId, ts: Date.now() });
-    // 提示条自动消失
     setTimeout(() => setArchiveHint((h) => (h?.assetId === assetId ? null : h)), 4000);
   };
+
+  const removeAsset = useCallback((assetId: string) => {
+    setAssets((prev) => prev.filter((a) => a.id !== assetId));
+    setPending((prev) => prev.filter((t) => t.assetId !== assetId));
+    if (lightboxAssetId === assetId) setLightboxAssetId(null);
+    if (archivedDetailAssetId === assetId) setArchivedDetailAssetId(null);
+    setViewStack((s) => s.filter((x) => x.assetId !== assetId));
+  }, [lightboxAssetId, archivedDetailAssetId]);
 
   const archivedDetailAsset = archivedDetailAssetId ? assets.find((a) => a.id === archivedDetailAssetId) : null;
 
@@ -1097,7 +1187,7 @@ const WorkflowSection: React.FC<{
                     {!showArchived && (
                       <div className="p-2 flex items-center justify-between border-t border-white/5">
                         <span className="text-[8px] text-gray-500">拖到功能区 或 点击大图选操作 · 组可进入</span>
-                        <div className="flex gap-1">
+                        <div className="flex gap-1 flex-wrap items-center">
                           {(a.resultOrder || []).map((k) => (
                             <button
                               key={k}
@@ -1113,6 +1203,13 @@ const WorkflowSection: React.FC<{
                             className="px-2 py-1 rounded-lg bg-emerald-600/20 border border-emerald-500/40 text-[8px] font-black uppercase text-emerald-400 hover:bg-emerald-600/40"
                           >
                             完成归档
+                          </button>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); removeAsset(a.id); }}
+                            className="px-2 py-1 rounded-lg border border-red-500/40 text-[8px] font-black uppercase text-red-400 hover:bg-red-500/20"
+                            title="从工作流中移除此图片"
+                          >
+                            删除
                           </button>
                         </div>
                       </div>
@@ -1134,13 +1231,16 @@ const WorkflowSection: React.FC<{
         {/* 功能区：全部来自「能力」，随能力内增删自动更新 */}
         <div className="w-80 shrink-0 flex flex-col gap-4 overflow-y-auto no-scrollbar">
           <div className="text-[9px] font-black text-blue-400 uppercase">功能区</div>
-          <p className="text-[8px] text-gray-500">全部调用能力内功能 · 能力中增删会同步到此</p>
-          {presets.length === 0 ? (
+          <p className="text-[8px] text-gray-500">基础能力与复合能力 · 能力中增删会同步到此</p>
+          {presets.length === 0 && capabilitySets.length === 0 && (
             <div className="rounded-xl border border-dashed border-white/20 p-4 text-center text-[9px] text-gray-500">
-              暂无功能预设，请先在「能力」界面添加
+              暂无能力预设，请先在「能力」界面添加
             </div>
-          ) : byCategory.length > 0 ? (
+          )}
+          {presets.length > 0 && (
             <div className="space-y-4">
+              {byCategory.length > 0 ? (
+                <>
               {byCategory.map(({ category, list }) => (
                 <div key={category.id}>
                   <div className="text-[8px] font-black text-gray-500 uppercase mb-1.5">{category.label}</div>
@@ -1171,8 +1271,8 @@ const WorkflowSection: React.FC<{
                   </div>
                 </div>
               ))}
-            </div>
-          ) : (
+                </>
+              ) : (
             <div className="grid grid-cols-2 gap-2">
               {presets.map((mod) => (
                 <div
@@ -1198,6 +1298,37 @@ const WorkflowSection: React.FC<{
                 </div>
               ))}
             </div>
+              )}
+            </div>
+          )}
+
+          {capabilitySets.length > 0 && (
+            <div className="space-y-2">
+              <div className="text-[8px] font-black text-amber-400/90 uppercase">复合能力</div>
+              <div className="grid grid-cols-2 gap-2">
+                {capabilitySets.map((set) => {
+                  const setActionId = SET_ACTION_PREFIX + set.id;
+                  return (
+                    <div
+                      key={set.id}
+                      onDragOver={(e) => { e.preventDefault(); setDragOverAction(setActionId); }}
+                      onDragLeave={() => setDragOverAction(null)}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        setDragOverAction(null);
+                        if (draggingGroupItem) {
+                          addImageToPending(draggingGroupItem.image, setActionId, { parentAssetId: currentGroupAsset?.id });
+                        } else if (draggingAssetId) addToPending(draggingAssetId, setActionId);
+                      }}
+                      className={`rounded-xl border-2 border-dashed p-3 min-h-[72px] flex flex-col items-center justify-center text-center transition-colors ${dragOverAction === setActionId ? 'border-amber-500 bg-amber-500/10' : 'border-amber-500/30 bg-amber-600/10 hover:border-amber-400/50'}`}
+                    >
+                      <span className="text-[9px] font-black uppercase text-amber-200/90">{set.label}</span>
+                      <span className="text-[8px] text-amber-400/70 mt-0.5">拖拽图片到此处</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           )}
 
           <div className="border-t border-white/10 pt-4">
@@ -1208,9 +1339,11 @@ const WorkflowSection: React.FC<{
               )}
             </div>
             <div className="flex flex-wrap gap-2 min-h-[60px] p-2 rounded-xl bg-black/40 border border-white/10">
-              {(executingQueue?.tasks ?? pending).map((t, idx) => {
-                const actionLabel = getModule(t.actionType)?.label ?? t.actionType;
+              {(executingQueue ? [...executingQueue.tasks, ...pending] : pending).map((t, idx) => {
+                if (completedTaskIds.has(t.id)) return null;
+                const actionLabel = getActionLabel(t.actionType);
                 const isCurrent = executingQueue && idx + 1 === executingQueue.current;
+                const isCancelable = !executing || pending.some((p) => p.id === t.id);
                 return (
                   <div
                     key={t.id}
@@ -1219,7 +1352,7 @@ const WorkflowSection: React.FC<{
                     <img src={t.inputImage} alt="" className="w-14 h-14 object-cover rounded-md" />
                     <span className="absolute -top-1 left-0 px-1 rounded text-[7px] font-black bg-gray-800 text-gray-300">{idx + 1}</span>
                     <span className="absolute -top-1 -right-1 px-1 rounded text-[7px] font-black bg-blue-600 text-white">{actionLabel.slice(0, 2)}</span>
-                    {!executing && (
+                    {isCancelable && (
                       <button
                         onClick={() => removeFromPending(t.id)}
                         className="absolute inset-0 rounded-lg bg-black/60 opacity-0 group-hover/thumb:opacity-100 flex items-center justify-center text-red-400 text-[10px] font-black"

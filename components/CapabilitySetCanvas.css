@@ -1,0 +1,223 @@
+/* 完全复刻 React Flow 官方 Drag and Drop 示例布局与样式 */
+
+.dndflow {
+  display: flex;
+  flex-direction: row;
+  height: 100%;
+  width: 100%;
+  background: #050505;
+}
+
+.dndflow .reactflow-wrapper {
+  flex-grow: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* ========== 与网站整体深色风格一致 ========== */
+
+/* 侧边栏：与主站左侧导航一致的 glass 深色，避免透出白色 */
+.dndflow .sidebar {
+  width: 240px;
+  flex-shrink: 0;
+  padding: 16px;
+  border-right: 1px solid rgba(255, 255, 255, 0.05);
+  background: #0a0a0c;
+  background: linear-gradient(180deg, #0c0c0f 0%, #08080a 100%);
+  backdrop-filter: blur(24px);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dndflow .sidebar-header {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: rgba(255, 255, 255, 0.5);
+  margin-bottom: 4px;
+}
+
+.dndflow .sidebar-nodes {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* 侧边栏可拖拽项：深色玻璃块 */
+.dndflow .dndnode {
+  padding: 12px 16px;
+  border-radius: 8px;
+  margin-bottom: 10px;
+  cursor: grab;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.05);
+  color: #e5e7eb;
+}
+
+.dndflow .dndnode:active {
+  cursor: grabbing;
+}
+
+.dndflow .dndnode:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+/* 画布区域：深色背景与主站一致 */
+.dndflow .reactflow-wrapper .react-flow {
+  background: #050505;
+}
+
+.dndflow .reactflow-wrapper.svelteflow-style {
+  background: radial-gradient(ellipse 100% 80% at 50% 0%, rgba(37, 99, 235, 0.08), transparent),
+    radial-gradient(ellipse 80% 60% at 80% 60%, rgba(168, 85, 247, 0.05), transparent),
+    #050505;
+}
+
+.dndflow .reactflow-wrapper.svelteflow-style .react-flow {
+  background: transparent;
+}
+
+/* 节点：玻璃态深色，与主站卡片一致 */
+.dndflow .svelteflow-style .react-flow__node {
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  border-radius: 12px !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3) !important;
+  background: rgba(255, 255, 255, 0.04) !important;
+  backdrop-filter: blur(12px);
+}
+
+/* 框选/点选后：节点高亮（蓝框+光晕） */
+.dndflow .svelteflow-style .react-flow__node.selected {
+  border-color: rgba(37, 99, 235, 0.8) !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3), 0 0 0 2px rgba(37, 99, 235, 0.5) !important;
+}
+
+/* 自定义节点内部也高亮，避免被内层样式盖住 */
+.dndflow .svelteflow-style .react-flow__node.selected .svelteflow-node,
+.dndflow .svelteflow-style .react-flow__node.selected .preset-node,
+.dndflow .svelteflow-style .react-flow__node.selected .textgen-node {
+  border-color: rgba(37, 99, 235, 0.7) !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3), 0 0 0 2px rgba(37, 99, 235, 0.5) !important;
+}
+
+.dndflow .svelteflow-style .react-flow__selection {
+  background: rgba(37, 99, 235, 0.08);
+  border: 1px dashed rgba(37, 99, 235, 0.4);
+}
+
+.dndflow .svelteflow-style .react-flow__node-input .react-flow__handle,
+.dndflow .svelteflow-style .react-flow__node-output .react-flow__handle {
+  width: 12px !important;
+  height: 12px !important;
+  background: rgba(255, 255, 255, 0.35) !important;
+  border: 2px solid rgba(0, 0, 0, 0.3) !important;
+}
+
+.svelteflow-node.preset-node {
+  min-width: 140px;
+  padding: 14px 18px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.svelteflow-node__label {
+  text-align: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: #e5e7eb;
+}
+
+/* 把手：深色背景下浅色 */
+.svelteflow-handle {
+  width: 12px !important;
+  height: 12px !important;
+  min-width: 12px !important;
+  min-height: 12px !important;
+  background: rgba(255, 255, 255, 0.35) !important;
+  border: 2px solid rgba(0, 0, 0, 0.3) !important;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.2);
+}
+
+.svelteflow-handle.react-flow__handle-left {
+  left: -6px !important;
+}
+
+.svelteflow-handle.react-flow__handle-right {
+  right: -6px !important;
+}
+
+/* 边：曲线 + 深色主题下的浅色线 */
+.dndflow .svelteflow-style .react-flow__edge-path {
+  stroke-dasharray: 8 4;
+  stroke: rgba(255, 255, 255, 0.35);
+  stroke-width: 2;
+}
+
+/* 文本生成节点 */
+.svelteflow-node.textgen-node {
+  min-width: 200px;
+  padding: 12px 14px 14px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.textgen-node__input {
+  width: 100%;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.25);
+  color: #e5e7eb;
+  font-size: 12px;
+  resize: vertical;
+  min-height: 56px;
+  outline: none;
+}
+
+.textgen-node__input::placeholder {
+  color: rgba(255, 255, 255, 0.35);
+}
+
+.textgen-node__input:focus {
+  border-color: rgba(37, 99, 235, 0.6);
+  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.3);
+}
+
+/* 控件与 minimap：深色玻璃 */
+.dndflow .svelteflow-style .svelteflow-controls button {
+  background: rgba(255, 255, 255, 0.06) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: 8px !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3) !important;
+  color: #e5e7eb !important;
+}
+
+.dndflow .svelteflow-style .svelteflow-controls button:hover {
+  background: rgba(255, 255, 255, 0.1) !important;
+}
+
+/* MiniMap：深色背景与画布一致 */
+.dndflow .svelteflow-style .svelteflow-minimap {
+  border-radius: 12px !important;
+  overflow: hidden;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: #0a0a0c !important;
+}
+
+.dndflow .svelteflow-style .svelteflow-minimap .react-flow__minimap {
+  background: #0a0a0c !important;
+}

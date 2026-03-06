@@ -5,7 +5,7 @@ import { loadRecords, addRecord as addGenerationRecord, updateScore as updateGen
 import { addChoice } from './services/abChoiceStore';
 import { loadSnippets, addSnippet, removeSnippet } from './services/snippetStore';
 import { startTencent3DProJob, startTencent3DRapidJob, convert3DFormat, getTencentCredsFromEnv, startReduceFaceJob, startTextureTo3DJob, startUVJob, startPartJob, startProfileTo3DJob, type File3D, type TencentCredentials, type Submit3DProInput, type Submit3DRapidInput } from './services/tencentService';
-import { AppStep, AppMode, LibraryItem, SystemConfig, AppTask, BoundingBox, AssetCategory, DialogMessage, DialogMessageVersion, DialogSession, DialogImageSizeMode, DialogTempItem, DialogImageGear, SUPPORTED_ASPECT_RATIOS, SUPPORTED_IMAGE_SIZES, DIALOG_IMAGE_MODELS, DIALOG_IMAGE_GEARS, type GenerationRecord, type CustomAppModule, CAPABILITY_CATEGORIES, type CapabilityCategory, type WorkflowAsset, type WorkflowPendingTask, type ArenaCurrentStep, type ArenaStepEntry, type ArenaTimelineBlock } from './types';
+import { AppStep, AppMode, LibraryItem, SystemConfig, AppTask, BoundingBox, AssetCategory, DialogMessage, DialogMessageVersion, DialogSession, DialogImageSizeMode, DialogTempItem, DialogImageGear, SUPPORTED_ASPECT_RATIOS, SUPPORTED_IMAGE_SIZES, DIALOG_IMAGE_MODELS, DIALOG_IMAGE_GEARS, type GenerationRecord, type CustomAppModule, type CapabilitySet, CAPABILITY_CATEGORIES, type CapabilityCategory, type WorkflowAsset, type WorkflowPendingTask, type ArenaCurrentStep, type ArenaStepEntry, type ArenaTimelineBlock } from './types';
 import ModelViewer3D from './components/ModelViewer3D';
 import UnifiedModelViewer3D from './components/UnifiedModelViewer3D';
 import DropdownSelect from './components/DropdownSelect';
@@ -22,6 +22,7 @@ import SettingsSection from './components/SettingsSection';
 import StoreSection from './components/StoreSection';
 import { runCapabilityTest } from './services/capabilityTestRunner';
 import { loadCapabilityPresets, saveCapabilityPresets } from './services/capabilityPresetStore';
+import { loadCapabilitySets, saveCapabilitySets } from './services/capabilitySetStore';
 
 class WorkflowErrorBoundary extends Component<{ children: React.ReactNode }, { error: Error | null }> {
   state = { error: null as Error | null };
@@ -318,33 +319,7 @@ const RegionSelector: React.FC<{
 };
 
 // ==========================================
-// 3. 任务监控组件
-// ==========================================
-const TaskCenter: React.FC<{ tasks: AppTask[]; onRemove: (id: string) => void }> = ({ tasks, onRemove }) => {
-  if (tasks.length === 0) return null;
-  return (
-    <div className="fixed bottom-6 right-6 z-[1002] w-[calc(100%-3rem)] max-w-80 flex flex-col gap-3 pointer-events-none">
-      {tasks.map(task => (
-        <div key={task.id} className="glass p-4 rounded-2xl border-white/10 bg-black/80 backdrop-blur-md pointer-events-auto animate-in slide-in-from-right-4 duration-300 shadow-2xl">
-          <div className="flex justify-between items-start mb-2">
-            <div>
-              <div className="text-[10px] font-black uppercase tracking-widest text-blue-400">{task.label}</div>
-            </div>
-            <button onClick={() => onRemove(task.id)} className="text-gray-500 hover:text-white transition-colors">✕</button>
-          </div>
-          <div className="space-y-2">
-            <div className="h-1 w-full bg-white/5 rounded-full overflow-hidden">
-              <div className={`h-full transition-all duration-500 ${task.status === 'FAILED' ? 'bg-red-500' : 'bg-blue-600'}`} style={{ width: `${task.progress}%` }} />
-            </div>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-};
-
-// ==========================================
-// 4. 资产库导入弹窗（支持多选）
+// 3. 资产库导入弹窗（支持多选）
 // ==========================================
 const LibraryPickerModal: React.FC<{
   library: LibraryItem[];
@@ -430,8 +405,12 @@ const LibraryPickerModal: React.FC<{
 const App: React.FC = () => {
   const [mode, setMode] = useState<AppMode>(AppMode.HOME);
   const [capabilityPresets, setCapabilityPresets] = useState<CustomAppModule[]>(loadCapabilityPresets);
+  const [capabilitySets, setCapabilitySets] = useState<CapabilitySet[]>(loadCapabilitySets);
   useEffect(() => {
-    if (mode === AppMode.WORKFLOW) setCapabilityPresets(loadCapabilityPresets());
+    if (mode === AppMode.WORKFLOW) {
+      setCapabilityPresets(loadCapabilityPresets());
+      setCapabilitySets(loadCapabilitySets());
+    }
   }, [mode]);
   const [workflowAssets, setWorkflowAssets] = useState<WorkflowAsset[]>([]);
   const [workflowPending, setWorkflowPending] = useState<WorkflowPendingTask[]>([]);
@@ -2325,8 +2304,7 @@ const App: React.FC = () => {
         )}
       </aside>
 
-      <TaskCenter tasks={tasks} onRemove={id => setTasks(p => p.filter(t => t.id !== id))} />
-      <SiteAssistant />
+      <SiteAssistant tasks={tasks} onRemoveTask={id => setTasks(p => p.filter(t => t.id !== id))} />
 
       <main className="flex-1 flex flex-col h-[100dvh] overflow-hidden">
         {!isSidebarOpen && (
@@ -2347,7 +2325,7 @@ const App: React.FC = () => {
 
             {mode === AppMode.WORKFLOW && (
               <WorkflowErrorBoundary>
-                <WorkflowSection capabilityPresets={capabilityPresets} assets={workflowAssets} onAssetsChange={setWorkflowAssets} pending={workflowPending} onPendingChange={setWorkflowPending} onOpenLibraryPicker={(cb) => openPicker(undefined, cb, true)} onLog={(level, message, detail) => addGlobalLog('工作流', level, message, detail)} onAddGenerate3DJob={handleAddGenerate3DJobFromWorkflow} />
+                <WorkflowSection capabilityPresets={capabilityPresets} capabilitySets={capabilitySets} assets={workflowAssets} onAssetsChange={setWorkflowAssets} pending={workflowPending} onPendingChange={setWorkflowPending} onOpenLibraryPicker={(cb) => openPicker(undefined, cb, true)} onLog={(level, message, detail) => addGlobalLog('工作流', level, message, detail)} onAddGenerate3DJob={handleAddGenerate3DJobFromWorkflow} />
               </WorkflowErrorBoundary>
             )}
 
@@ -2363,6 +2341,8 @@ const App: React.FC = () => {
               <CapabilityPresetSection
                 presets={capabilityPresets}
                 onUpdate={(next) => { setCapabilityPresets(next); saveCapabilityPresets(next); }}
+                sets={capabilitySets}
+                onUpdateSets={(next) => { setCapabilitySets(next); saveCapabilitySets(next); }}
                 onRunTest={runCapabilityTest}
                 onLog={(level, message, detail) => addGlobalLog('能力', level, message, detail)}
               />

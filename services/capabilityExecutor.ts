@@ -1,6 +1,6 @@
-import type { CustomAppModule, DialogImageGear } from '../types';
+import type { CustomAppModule, DialogImageGear, CapabilitySet, CapabilitySetNode } from '../types';
 import { DIALOG_IMAGE_GEARS } from '../types';
-import { detectObjectsInImage, dialogGenerateImage } from './geminiService';
+import { detectObjectsInImage, understandImageEditIntent, dialogGenerateImage, dialogGenerateImageMulti } from './geminiService';
 
 export type CapabilityExecuteContext = {
   /** 用于日志输出（可选） */
@@ -20,6 +20,27 @@ export function getCapabilityEngine(preset: CustomAppModule): 'gen_image' | 'bui
 export function resolveImageModelId(gear?: DialogImageGear): string {
   const g = gear || 'fast';
   return DIALOG_IMAGE_GEARS.find((x) => x.id === g)?.modelId || 'gemini-2.5-flash-image';
+}
+
+/**
+ * 工作流生图：先将预设提示词交给文字模型理解（与对话模式一致），再拿理解结果调用生图模型。
+ */
+async function resolveCapabilityPrompt(
+  preset: CustomAppModule,
+  inputImageBase64: string,
+  ctx: CapabilityExecuteContext
+): Promise<string | null> {
+  const presetPrompt = (preset.instruction || '').trim();
+  if (!presetPrompt) return null;
+  ctx.onLog?.('info', `[${preset.label || preset.id}] 理解预设提示词中…`, undefined);
+  const { instruction } = await understandImageEditIntent(
+    inputImageBase64,
+    presetPrompt,
+    'gemini-3-flash-preview',
+    undefined
+  );
+  const understood = (instruction || '').trim();
+  return understood.length > 0 ? understood : null;
 }
 
 /**
@@ -67,9 +88,9 @@ export async function executeCapability(
       const cropped = canvas.toDataURL('image/png');
 
       if (engine === 'gen_image') {
-        const prompt = (preset.instruction || '').trim();
-        if (!prompt) return { ok: false, kind: 'none', error: '该能力为生图执行方式，但未填写提示词', durationMs: Date.now() - start };
-        ctx.onLog?.('info', `[${actionLabel}] 按能力提示词生成中…`, undefined);
+        const prompt = await resolveCapabilityPrompt(preset, cropped, ctx);
+        if (!prompt) return { ok: false, kind: 'none', error: '该能力为生图执行方式，但未填写预设提示词或理解未返回有效指令', durationMs: Date.now() - start };
+        ctx.onLog?.('info', `[${actionLabel}] 生图中…`, undefined);
         const modelId = resolveImageModelId(preset.imageGear);
         const result = await dialogGenerateImage(cropped, prompt, modelId);
         return { ok: true, kind: 'image', image: result || cropped, durationMs: Date.now() - start };
@@ -86,8 +107,8 @@ export async function executeCapability(
       return { ok: false, kind: 'none', error: '该能力为图像处理执行方式，但没有内置实现', durationMs: Date.now() - start };
     }
 
-    const prompt = (preset.instruction || '').trim();
-    if (!prompt) return { ok: false, kind: 'none', error: '该能力为生图执行方式，但未填写提示词', durationMs: Date.now() - start };
+    const prompt = await resolveCapabilityPrompt(preset, inputImageBase64, ctx);
+    if (!prompt) return { ok: false, kind: 'none', error: '该能力为生图执行方式，但未填写预设提示词或理解未返回有效指令', durationMs: Date.now() - start };
     ctx.onLog?.('info', `[${actionLabel}] 生图中…`, undefined);
     const modelId = resolveImageModelId(preset.imageGear);
     const result = await dialogGenerateImage(inputImageBase64, prompt, modelId);
@@ -96,5 +117,102 @@ export async function executeCapability(
     const msg = e instanceof Error ? e.message : String(e);
     return { ok: false, kind: 'none', error: msg, durationMs: Date.now() - start };
   }
+}
+
+export type CapabilitySetExecuteContext = CapabilityExecuteContext & {
+  presets: CustomAppModule[];
+};
+
+/**
+ * 执行能力集合：按图的拓扑顺序执行。支持多分支汇聚到生图模型（线稿+色块+文本生成 -> 生图模型）。
+ */
+export async function executeCapabilitySet(
+  set: CapabilitySet,
+  inputImage: string,
+  ctx: CapabilitySetExecuteContext
+): Promise<CapabilityExecuteResult> {
+  const start = Date.now();
+  const { presets, onLog } = ctx;
+  const nodeMap = new Map<string, CapabilitySetNode>(set.nodes.map((n) => [n.id, n]));
+  const inEdges = new Map<string, string[]>();
+  for (const e of set.edges) {
+    if (!inEdges.has(e.target)) inEdges.set(e.target, []);
+    inEdges.get(e.target)!.push(e.source);
+  }
+  const outputs = new Map<string, string>();
+  const inputNode = set.nodes.find((n) => n.type === 'input');
+  if (inputNode) outputs.set(inputNode.id, inputImage);
+
+  const done = new Set<string>(inputNode ? [inputNode.id] : []);
+  let lastImage: string = inputImage;
+
+  while (done.size < set.nodes.length) {
+    let progressed = false;
+    for (const n of set.nodes) {
+      if (done.has(n.id)) continue;
+      const sources = inEdges.get(n.id) ?? [];
+      if (sources.some((s) => !done.has(s))) continue;
+
+      if (n.type === 'preset' && n.data.presetId) {
+        const preset = presets.find((p) => p.id === n.data.presetId);
+        if (!preset) {
+          onLog?.('warn', `[能力集合] 未找到预设 ${n.data.presetId}，跳过节点 ${n.data.label}`);
+          done.add(n.id);
+          progressed = true;
+          continue;
+        }
+        const imageSourceIds = sources.filter((s) => {
+          const node = nodeMap.get(s);
+          return node && (node.type === 'input' || node.type === 'preset');
+        });
+        const textGenSourceId = sources.find((s) => nodeMap.get(s)?.type === 'textGen');
+        const imagesFromSources = imageSourceIds.map((id) => outputs.get(id)).filter(Boolean) as string[];
+        const promptFromTextGen = textGenSourceId ? (nodeMap.get(textGenSourceId)?.data?.text ?? '').trim() : '';
+
+        const isMultiInput = imagesFromSources.length > 1 || (imagesFromSources.length >= 1 && promptFromTextGen.length > 0);
+
+        if (isMultiInput && getCapabilityEngine(preset) === 'gen_image') {
+          const images = imagesFromSources.length > 0 ? imagesFromSources : [inputImage];
+          const instruction = promptFromTextGen || (preset.instruction ?? '').trim() || '根据以上参考图生成最终效果。';
+          onLog?.('info', `[${set.label}] ${n.data.label} 执行中（${images.length} 张图 + 提示词）…`, undefined);
+          const modelId = resolveImageModelId(preset.imageGear);
+          try {
+            const result = await dialogGenerateImageMulti(images, instruction, modelId);
+            outputs.set(n.id, result);
+            lastImage = result;
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            return { ok: false, kind: 'none', error: `[${n.data.label}] ${msg}`, durationMs: Date.now() - start };
+          }
+        } else {
+          const srcId = sources.find((s) => outputs.has(s)) ?? sources[0];
+          const srcImage = outputs.get(srcId) ?? inputImage;
+          onLog?.('info', `[${set.label}] ${n.data.label} 执行中…`, undefined);
+          const out = await executeCapability(preset, srcImage, { onLog });
+          if (!out.ok) {
+            return { ok: false, kind: 'none', error: `[${n.data.label}] ${out.error}`, durationMs: Date.now() - start };
+          }
+          outputs.set(n.id, out.image);
+          lastImage = out.image;
+        }
+      } else if (n.type === 'input') {
+        outputs.set(n.id, inputImage);
+        lastImage = inputImage;
+      } else if (n.type === 'output') {
+        const srcId = sources.find((s) => outputs.has(s)) ?? sources[0];
+        lastImage = outputs.get(srcId) ?? lastImage;
+        outputs.set(n.id, lastImage);
+      } else if (n.type === 'textGen') {
+        done.add(n.id);
+        progressed = true;
+        continue;
+      }
+      done.add(n.id);
+      progressed = true;
+    }
+    if (!progressed) break;
+  }
+
+  return { ok: true, kind: 'image', image: lastImage, durationMs: Date.now() - start };
 }
 
