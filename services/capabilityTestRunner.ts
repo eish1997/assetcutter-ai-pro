@@ -5,28 +5,6 @@ import type { CustomAppModule, BoundingBox } from '../types';
 import { DEFAULT_PROMPTS, detectObjectsInImage } from './geminiService';
 import { executeCapability } from './capabilityExecutor';
 
-function cropOneBox(inputImage: string, b: BoundingBox): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.src = inputImage;
-    img.onload = () => {
-      const scaleX = img.naturalWidth / 1000;
-      const scaleY = img.naturalHeight / 1000;
-      const x = Math.max(0, b.xmin * scaleX);
-      const y = Math.max(0, b.ymin * scaleY);
-      const w = Math.min(img.naturalWidth - x, (b.xmax - b.xmin) * scaleX);
-      const h = Math.min(img.naturalHeight - y, (b.ymax - b.ymin) * scaleY);
-      const canvas = document.createElement('canvas');
-      canvas.width = w;
-      canvas.height = h;
-      const ctx = canvas.getContext('2d')!;
-      ctx.drawImage(img, x, y, w, h, 0, 0, w, h);
-      resolve(canvas.toDataURL('image/png'));
-    };
-    img.onerror = () => reject(new Error('图片加载失败'));
-  });
-}
-
 function cropBoxes(inputImage: string, boxes: BoundingBox[], indexes: number[]): Promise<string[]> {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -88,7 +66,7 @@ export async function runCapabilityTest(
       };
     }
     const out = await executeCapability(preset, imageBase64);
-    if (!out.ok) return { ok: false, error: out.error, durationMs: out.durationMs };
+    if (out.ok === false) return { ok: false, error: out.error, durationMs: out.durationMs };
     return { ok: true, resultImage: out.image, durationMs: out.durationMs };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

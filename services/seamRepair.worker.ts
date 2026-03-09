@@ -1,6 +1,8 @@
 /**
  * Web Worker：在浏览器内用 Pyodide 跑 seam_repair.py，无需后端
  */
+declare const self: Worker;
+
 const PYODIDE_INDEX = 'https://cdn.jsdelivr.net/pyodide/v0.24.1/full';
 
 export interface WorkerParams {
@@ -112,7 +114,7 @@ with open("/tmp/out.png", "wb") as f:
     const outData = pyodide.FS.readFile('/tmp/out.png');
     pyodide.FS.unlink('/tmp/obj.obj');
     pyodide.FS.unlink('/tmp/tex.png');
-    try { pyodide.FS.unlink('/tmp/mask.png'); } catch {}
+    try { pyodide.FS.unlink('/tmp/mask.png'); } catch { /* ignore missing temp file */ }
     pyodide.FS.unlink('/tmp/out.png');
 
     const buf = outData.buffer as ArrayBuffer;

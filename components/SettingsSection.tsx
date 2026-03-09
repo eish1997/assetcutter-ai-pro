@@ -104,7 +104,7 @@ const SettingsSection: React.FC = () => {
                 {/* 混元（腾讯云） */}
                 <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-6">
                   <h2 className="text-xs font-black uppercase tracking-wider text-blue-400/90 mb-1">混元（腾讯云）</h2>
-                  <p className="text-[11px] text-gray-500 mb-4">用于混元生3D（专业版/极速版）。需填写腾讯云 API 密钥 SecretId、SecretKey，在 <a href="https://console.cloud.tencent.com/cam/capi" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">腾讯云控制台</a> 创建。仅保存在本机。</p>
+                  <p className="text-[11px] text-gray-500 mb-4">用于混元生3D。默认建议通过本地代理配合 <code className="bg-white/10 px-1 rounded">.env.local</code> 使用，避免把云密钥长期留在浏览器。这里填写的 SecretId / SecretKey 仅保存在当前标签页会话中，关闭标签页后即失效。</p>
                   <div className="space-y-3">
                     <div className="flex flex-col sm:flex-row gap-3">
                       <input
@@ -131,10 +131,10 @@ const SettingsSection: React.FC = () => {
                       onClick={handleSaveTencent}
                       className="px-5 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-black uppercase tracking-wider transition-colors"
                     >
-                      {tencentSaved ? '已保存' : '保存'}
+                      {tencentSaved ? '已临时保存' : '临时保存'}
                     </button>
                   </div>
-                  {tencentSaved && <p className="mt-2 text-[10px] text-green-400/90">已保存到本机</p>}
+                  {tencentSaved && <p className="mt-2 text-[10px] text-green-400/90">已保存到当前标签页会话</p>}
                 </section>
               </div>
             )}

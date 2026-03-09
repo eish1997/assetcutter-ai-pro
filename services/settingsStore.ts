@@ -1,8 +1,16 @@
 /** 用户设置的 API 密钥存 localStorage，键名与读写逻辑集中在此 */
 
 const STORAGE_KEY_GEMINI = 'ac_gemini_api_key';
-const STORAGE_KEY_TENCENT_SECRET_ID = 'ac_tencent_secret_id';
-const STORAGE_KEY_TENCENT_SECRET_KEY = 'ac_tencent_secret_key';
+const SESSION_KEY_TENCENT_SECRET_ID = 'ac_tencent_secret_id';
+const SESSION_KEY_TENCENT_SECRET_KEY = 'ac_tencent_secret_key';
+
+function getSessionStorage(): Storage | null {
+  try {
+    return typeof sessionStorage === 'undefined' ? null : sessionStorage;
+  } catch {
+    return null;
+  }
+}
 
 // ----- Gemini -----
 export function getUserApiKey(): string | null {
@@ -27,20 +35,19 @@ export function setUserApiKey(value: string | null): void {
 }
 
 /**
- * 供 geminiService 使用：优先返回用户设置的密钥，否则返回环境变量（构建时注入）
+ * 供 geminiService 使用：仅返回用户在当前浏览器中保存的 Gemini API Key。
+ * 不再回退到构建时注入的环境变量，避免把站点运营密钥暴露到前端产物。
  */
 export function getApiKey(): string | undefined {
   const user = getUserApiKey();
   if (user) return user;
-  return typeof process !== 'undefined' && process.env && process.env.API_KEY
-    ? process.env.API_KEY
-    : undefined;
+  return undefined;
 }
 
 // ----- 混元（腾讯云） -----
 export function getTencentSecretId(): string | null {
   try {
-    const v = localStorage.getItem(STORAGE_KEY_TENCENT_SECRET_ID);
+    const v = getSessionStorage()?.getItem(SESSION_KEY_TENCENT_SECRET_ID);
     return v && v.trim() ? v.trim() : null;
   } catch {
     return null;
@@ -49,10 +56,12 @@ export function getTencentSecretId(): string | null {
 
 export function setTencentSecretId(value: string | null): void {
   try {
+    const storage = getSessionStorage();
+    if (!storage) return;
     if (value == null || !value.trim()) {
-      localStorage.removeItem(STORAGE_KEY_TENCENT_SECRET_ID);
+      storage.removeItem(SESSION_KEY_TENCENT_SECRET_ID);
     } else {
-      localStorage.setItem(STORAGE_KEY_TENCENT_SECRET_ID, value.trim());
+      storage.setItem(SESSION_KEY_TENCENT_SECRET_ID, value.trim());
     }
   } catch {
     // ignore
@@ -61,7 +70,7 @@ export function setTencentSecretId(value: string | null): void {
 
 export function getTencentSecretKey(): string | null {
   try {
-    const v = localStorage.getItem(STORAGE_KEY_TENCENT_SECRET_KEY);
+    const v = getSessionStorage()?.getItem(SESSION_KEY_TENCENT_SECRET_KEY);
     return v && v.trim() ? v.trim() : null;
   } catch {
     return null;
@@ -70,10 +79,12 @@ export function getTencentSecretKey(): string | null {
 
 export function setTencentSecretKey(value: string | null): void {
   try {
+    const storage = getSessionStorage();
+    if (!storage) return;
     if (value == null || !value.trim()) {
-      localStorage.removeItem(STORAGE_KEY_TENCENT_SECRET_KEY);
+      storage.removeItem(SESSION_KEY_TENCENT_SECRET_KEY);
     } else {
-      localStorage.setItem(STORAGE_KEY_TENCENT_SECRET_KEY, value.trim());
+      storage.setItem(SESSION_KEY_TENCENT_SECRET_KEY, value.trim());
     }
   } catch {
     // ignore
@@ -81,13 +92,13 @@ export function setTencentSecretKey(value: string | null): void {
 }
 
 /**
- * 供 tencentService 使用：优先返回用户设置的混元凭证，否则返回环境变量
+ * 供 tencentService 使用：仅返回当前浏览器会话中的临时混元凭证。
+ * 默认不再把腾讯云密钥持久化到 localStorage，避免长期滞留在浏览器。
  */
 export function getTencentCreds(): { secretId: string; secretKey: string } {
-  const env = typeof process !== 'undefined' && process.env ? process.env : {};
   const userSecretId = getTencentSecretId();
   const userSecretKey = getTencentSecretKey();
-  const secretId = (userSecretId || (env.TENCENT_SECRET_ID as string) || '').trim();
-  const secretKey = (userSecretKey || (env.TENCENT_SECRET_KEY as string) || '').trim();
+  const secretId = (userSecretId || '').trim();
+  const secretKey = (userSecretKey || '').trim();
   return { secretId, secretKey };
 }

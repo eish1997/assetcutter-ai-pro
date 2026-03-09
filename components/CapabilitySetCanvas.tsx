@@ -11,7 +11,6 @@ import {
   getBezierPath,
   type Node,
   type Edge,
-  type OnConnect,
   type NodeTypes,
   type EdgeTypes,
   type Connection,
@@ -302,7 +301,6 @@ function CanvasInner({ presets, initialSet, setLabel, onSetLabelChange, onSave, 
       if (inInput) return;
       if (target.closest?.('.sidebar')) return;
       const currentNodes = getNodes();
-      const currentEdges = getEdges();
       const selectedIds = new Set(
         currentNodes.filter((n) => n.selected && !FIXED_NODE_IDS.has(n.id)).map((n) => n.id)
       );

@@ -114,8 +114,9 @@
 ### 凭证与代理
 
 - 浏览器直连腾讯 API 会因 CORS 报错，需通过**本地代理**转发。
-- 在 `.env.local` 中设置 `TENCENT_SECRET_ID`、`TENCENT_SECRET_KEY`，以及 `VITE_TENCENT_PROXY=http://localhost:3001`。
+- 在 `.env.local` 中为代理进程设置 `TENCENT_SECRET_ID`、`TENCENT_SECRET_KEY`，前端只设置 `VITE_TENCENT_PROXY=http://localhost:3001`。
 - **先启动代理**：项目根目录执行 `npm run proxy`（需 Node 20+），再运行 `npm run dev`。
+- 浏览器默认不再直接持有腾讯云密钥；仅在显式设置 `VITE_ALLOW_UNSAFE_TENCENT_BROWSER_CREDS=true` 时，才允许临时直连调试。
 - 密钥在 [腾讯云 API 密钥](https://console.cloud.tencent.com/cam/capi) 创建，混元生3D 需在 [产品页](https://cloud.tencent.com/document/product/1804) 开通。代理实现见 `server/ai3d-proxy.js`。
 
 ### 8 个模块与流程
@@ -135,7 +136,7 @@
 
 ### 服务层（tencentService.ts）
 
-- **通用**：`ai3d.tencentcloudapi.com`，Version `2025-05-13`，签名服务名 `ai3d`。`getTencentCredsFromEnv()` 从环境变量读凭证；若设 `VITE_TENCENT_PROXY` 则经代理请求。
+- **通用**：`ai3d.tencentcloudapi.com`，Version `2025-05-13`，签名服务名 `ai3d`。`getTencentCredsFromEnv()` 默认只返回代理地址；仅在显式开启不安全模式时才允许浏览器直持密钥。
 - **专业版**：`submitHunyuanTo3DProJob` / `queryHunyuanTo3DProJob` / `startTencent3DProJob`（支持单图/多视图/文生）。
 - **极速版**：`submitHunyuanTo3DRapidJob` / `queryHunyuanTo3DRapidJob` / `startTencent3DRapidJob`。
 - **格式转换**：`convert3DFormat(input: { fileUrl, format }, creds)`，同步返回 `resultUrl`。
@@ -186,7 +187,7 @@ assetcutter-ai-pro/
 ├── App.tsx              # 主应用：模式/步骤状态、贴图/对话/生成3D/仓库 UI、所有业务逻辑
 ├── types.ts             # 全局类型：AppMode、AppStep、LibraryItem、AppTask、SystemConfig 等
 ├── index.css            # 入口样式（当前仅占位）
-├── vite.config.ts       # Vite 配置：端口 3000、loadEnv 读 .env、define 注入 GEMINI_API_KEY → process.env.API_KEY
+├── vite.config.ts       # Vite 配置：端口 3000、loadEnv 读 .env；仅注入前端允许暴露的 VITE_* 变量
 ├── components/
 │   ├── ProcessingFeedback.tsx  # 占位组件（return null）
 │   └── StepIndicator.tsx    # 占位组件（return null）
@@ -195,7 +196,7 @@ assetcutter-ai-pro/
 │   └── tencentService.ts    # 腾讯混元生3D（ai3d）API：Submit/Query 专业版任务、轮询、TC3 签名；生成3D 模块调用
 ├── server/
 │   └── ai3d-proxy.js     # 混元生3D 本地代理（解决 CORS），npm run proxy 启动
-└── .env.local           # 本地环境变量：GEMINI_API_KEY、TENCENT_SECRET_ID、TENCENT_SECRET_KEY、VITE_TENCENT_PROXY（Vite 会读并注入）
+└── .env.local           # 本地环境变量：VITE_TENCENT_PROXY，以及仅供代理进程使用的 TENCENT_SECRET_ID / TENCENT_SECRET_KEY
 ```
 
 ---
@@ -216,7 +217,7 @@ assetcutter-ai-pro/
 
 ## 十、AI 服务（geminiService.ts）
 
-- **鉴权**：`getAI()` 使用 `process.env.API_KEY`（由 Vite 从 `GEMINI_API_KEY` 注入）。
+- **鉴权**：`getAI()` 使用用户在设置页填写并保存在浏览器本机的 Gemini API Key。
 - **重试**：`callWithRetry(apiFn, 3, 2000)` 对 503/429/overloaded/UNAVAILABLE 自动重试，间隔递增。
 - **接口一览**：
 
@@ -299,7 +300,7 @@ assetcutter-ai-pro/
 
 ## 十二、环境与运行
 
-- **环境变量**：项目根目录 `.env.local` 中设置 `GEMINI_API_KEY`，Vite 会在构建/开发时通过 `loadEnv` 读取并 `define` 为 `process.env.API_KEY`。
+- **Gemini 密钥**：改为在设置页由当前用户填写并保存在浏览器本机，不再通过构建环境变量注入前端产物。
 - **开发**：`npm run dev`，默认 http://localhost:3000。
 - **构建**：`npm run build`；预览构建结果：`npm run preview`。
 

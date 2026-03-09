@@ -264,6 +264,8 @@ export type DialogMessage = {
   role: 'user' | 'assistant';
   text: string;
   imageBase64?: string;
+  /** 当前用户消息附带的多张输入图，首图仍兼容写入 imageBase64 */
+  inputImages?: string[];
   /** @deprecated 使用 versions 最后一版；兼容旧数据 */
   resultImageBase64?: string;
   /** @deprecated 使用 versions 最后一版；兼容旧数据 */

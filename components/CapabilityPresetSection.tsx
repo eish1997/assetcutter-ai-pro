@@ -35,10 +35,11 @@ const CapabilityPresetSection: React.FC<{
   };
   const genId = () => {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const c: any = typeof crypto !== 'undefined' ? crypto : null;
+      const c: { randomUUID?: () => string } | null = typeof crypto !== 'undefined' ? crypto : null;
       if (c && typeof c.randomUUID === 'function') return String(c.randomUUID()).replace(/-/g, '').slice(0, 10);
-    } catch {}
+    } catch {
+      /* ignore crypto fallback failure */
+    }
     return Math.random().toString(36).slice(2, 11);
   };
 
@@ -217,7 +218,7 @@ const CapabilityPresetSection: React.FC<{
         reader.readAsText(file);
       });
     };
-    Promise.all(Array.from(files).filter((f) => f.name.endsWith('.json')).map(read)).catch((err) => {
+    Promise.all(Array.from(files as FileList).filter((f) => f.name.endsWith('.json')).map(read)).catch((err) => {
       onLog?.('error', '解析 JSON 失败', err instanceof Error ? err.message : String(err));
     });
   };

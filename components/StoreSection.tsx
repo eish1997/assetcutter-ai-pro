@@ -87,7 +87,9 @@ export default function StoreSection(props: {
     setError(null);
     try {
       localStorage.setItem(STORAGE_KEY_CATALOG_URL, catalogUrl);
-    } catch {}
+    } catch {
+      /* ignore localStorage persistence failure */
+    }
     try {
       const raw = await fetchJson<any[]>(catalogUrl);
       const list = (Array.isArray(raw) ? raw : [])

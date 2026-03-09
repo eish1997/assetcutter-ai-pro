@@ -7,10 +7,9 @@ export default defineConfig(({ mode }) => {
     const fromFile = loadEnv(mode, '.', '');
     const env = {
         ...fromFile,
-        GEMINI_API_KEY: process.env.GEMINI_API_KEY ?? fromFile.GEMINI_API_KEY,
-        TENCENT_SECRET_ID: process.env.TENCENT_SECRET_ID ?? fromFile.TENCENT_SECRET_ID,
-        TENCENT_SECRET_KEY: process.env.TENCENT_SECRET_KEY ?? fromFile.TENCENT_SECRET_KEY,
         VITE_TENCENT_PROXY: process.env.VITE_TENCENT_PROXY ?? fromFile.VITE_TENCENT_PROXY,
+        VITE_ALLOW_UNSAFE_TENCENT_BROWSER_CREDS:
+          process.env.VITE_ALLOW_UNSAFE_TENCENT_BROWSER_CREDS ?? fromFile.VITE_ALLOW_UNSAFE_TENCENT_BROWSER_CREDS,
     };
     return {
       server: {
@@ -26,16 +25,28 @@ export default defineConfig(({ mode }) => {
       },
       plugins: [react()],
       define: {
-        'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-        'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-        'process.env.TENCENT_SECRET_ID': JSON.stringify(env.TENCENT_SECRET_ID),
-        'process.env.TENCENT_SECRET_KEY': JSON.stringify(env.TENCENT_SECRET_KEY),
         'process.env.VITE_TENCENT_PROXY': JSON.stringify(env.VITE_TENCENT_PROXY),
+        'process.env.VITE_ALLOW_UNSAFE_TENCENT_BROWSER_CREDS': JSON.stringify(env.VITE_ALLOW_UNSAFE_TENCENT_BROWSER_CREDS),
       },
       resolve: {
         alias: {
           '@': path.resolve(__dirname, '.'),
         }
+      },
+      build: {
+        rollupOptions: {
+          output: {
+            manualChunks(id) {
+              if (!id.includes('node_modules')) return undefined;
+              if (id.includes('node_modules/three/examples')) return 'three-examples';
+              if (id.includes('node_modules/three')) return 'three-core';
+              if (id.includes('node_modules/@google/genai')) return 'genai-vendor';
+              if (id.includes('node_modules/@xyflow/react')) return 'xyflow-vendor';
+              if (id.includes('node_modules/react') || id.includes('node_modules/scheduler')) return 'react-vendor';
+              return undefined;
+            },
+          },
+        },
       }
     };
 });

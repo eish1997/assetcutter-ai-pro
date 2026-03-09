@@ -67,16 +67,14 @@ Vercel 一般能自动识别 Vite 项目，你只需确认：
 
 若某一项是空的，就按上表手动填。
 
-### 2.3 添加环境变量（重要）
+### 2.3 添加环境变量（按需）
 
 在 **Environment Variables** 区域：
 
-1. **Name** 填：`GEMINI_API_KEY`
-2. **Value** 填：你在本机 `.env.local` 里用的那个 Gemini API Key（整串复制过来）。
-3. 环境选 **Production**（默认即可）。
-4. 点 **Add**。
+1. 默认**不要**再添加 `GEMINI_API_KEY`。Gemini Key 改为由每个使用者在网站「设置」页自行填写，仅保存在自己的浏览器本机。
+2. 如果以后要用腾讯 3D，再在这里加 `VITE_TENCENT_PROXY`（那时再部署代理并填代理地址）。
 
-如果以后要用腾讯 3D，再在这里加 `VITE_TENCENT_PROXY`（那时再部署代理并填代理地址）。**第一次部署可以不加**，网站一样能打开，只是 3D 相关功能可能不可用。
+第一次部署可以不加任何 AI 相关环境变量，网站一样能打开；只是 Gemini / 3D 相关功能会在用户未填写密钥或未配置代理时不可用。
 
 ### 2.4 部署
 
@@ -106,8 +104,7 @@ Vercel 一般能自动识别 Vite 项目，你只需确认：
 3. 构建设置：
    - **Build command**：`npm run build`
    - **Publish directory**：`dist`
-4. **Advanced** → **New variable**：  
-   Key：`GEMINI_API_KEY`，Value：你的密钥。
+4. 若需要腾讯 3D，再添加 `VITE_TENCENT_PROXY`；Gemini 不建议作为站点环境变量注入前端。
 5. 点 **Deploy site**，等完成后会给你一个 `xxx.netlify.app` 的网址。
 
 ---
@@ -115,7 +112,7 @@ Vercel 一般能自动识别 Vite 项目，你只需确认：
 ## 常见问题
 
 **Q：打开网站后，对话/生图没反应？**  
-检查 Vercel 里是否填了 `GEMINI_API_KEY`，且没有多余空格。改完后在 Vercel 的 Deployments 里点 **Redeploy** 再试。
+先到网站「设置」页填写 Gemini API Key；如刚填写过，重新触发一次操作即可，无需重新部署。
 
 **Q：腾讯 3D 相关功能用不了？**  
 当前部署只包含前端；腾讯 3D 需要单独部署 `server/ai3d-proxy.js` 并在环境变量里配置 `VITE_TENCENT_PROXY`。可以先把网站跑起来，需要时再按项目 DOCS 或单独问「如何部署 ai3d 代理」。

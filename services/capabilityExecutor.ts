@@ -67,7 +67,11 @@ export async function executeCapability(
       if (!boxes.length) {
         return { ok: false, kind: 'none', error: '未识别到区域', durationMs: Date.now() - start };
       }
-      const b = boxes[0];
+      const b = boxes.reduce((best, current) => {
+        const bestArea = Math.max(0, best.xmax - best.xmin) * Math.max(0, best.ymax - best.ymin);
+        const currentArea = Math.max(0, current.xmax - current.xmin) * Math.max(0, current.ymax - current.ymin);
+        return currentArea > bestArea ? current : best;
+      });
       const img = new Image();
       img.src = inputImageBase64;
       await new Promise<void>((res, rej) => {
@@ -123,6 +127,23 @@ export type CapabilitySetExecuteContext = CapabilityExecuteContext & {
   presets: CustomAppModule[];
 };
 
+export function validateCapabilitySetGraph(set: CapabilitySet, presets: CustomAppModule[]): string | null {
+  const inputNodes = set.nodes.filter((n) => n.type === 'input');
+  const outputNodes = set.nodes.filter((n) => n.type === 'output');
+  if (inputNodes.length !== 1) return '能力集合必须且只能有 1 个输入节点';
+  if (outputNodes.length < 1) return '能力集合至少需要 1 个输出节点';
+
+  for (const node of set.nodes) {
+    if (node.type !== 'preset') continue;
+    if (!node.data.presetId) return `节点「${node.data.label || node.id}」缺少预设绑定`;
+    if (!presets.some((preset) => preset.id === node.data.presetId)) {
+      return `节点「${node.data.label || node.id}」引用了不存在的预设`;
+    }
+  }
+
+  return null;
+}
+
 /**
  * 执行能力集合：按图的拓扑顺序执行。支持多分支汇聚到生图模型（线稿+色块+文本生成 -> 生图模型）。
  */
@@ -133,6 +154,10 @@ export async function executeCapabilitySet(
 ): Promise<CapabilityExecuteResult> {
   const start = Date.now();
   const { presets, onLog } = ctx;
+  const validationError = validateCapabilitySetGraph(set, presets);
+  if (validationError) {
+    return { ok: false, kind: 'none', error: validationError, durationMs: Date.now() - start };
+  }
   const nodeMap = new Map<string, CapabilitySetNode>(set.nodes.map((n) => [n.id, n]));
   const inEdges = new Map<string, string[]>();
   for (const e of set.edges) {
@@ -189,7 +214,7 @@ export async function executeCapabilitySet(
           const srcImage = outputs.get(srcId) ?? inputImage;
           onLog?.('info', `[${set.label}] ${n.data.label} 执行中…`, undefined);
           const out = await executeCapability(preset, srcImage, { onLog });
-          if (!out.ok) {
+          if (out.ok === false) {
             return { ok: false, kind: 'none', error: `[${n.data.label}] ${out.error}`, durationMs: Date.now() - start };
           }
           outputs.set(n.id, out.image);
@@ -199,9 +224,29 @@ export async function executeCapabilitySet(
         outputs.set(n.id, inputImage);
         lastImage = inputImage;
       } else if (n.type === 'output') {
-        const srcId = sources.find((s) => outputs.has(s)) ?? sources[0];
-        lastImage = outputs.get(srcId) ?? lastImage;
-        outputs.set(n.id, lastImage);
+        if (!sources.length) {
+          return { ok: false, kind: 'none', error: `输出节点「${n.data.label || n.id}」缺少输入`, durationMs: Date.now() - start };
+        }
+        const srcId = sources.find((s) => outputs.has(s));
+        if (!srcId) {
+          return {
+            ok: false,
+            kind: 'none',
+            error: `输出节点「${n.data.label || n.id}」未收到有效图像输入`,
+            durationMs: Date.now() - start,
+          };
+        }
+        const outputImage = outputs.get(srcId);
+        if (!outputImage) {
+          return {
+            ok: false,
+            kind: 'none',
+            error: `输出节点「${n.data.label || n.id}」未收到有效图像输入`,
+            durationMs: Date.now() - start,
+          };
+        }
+        lastImage = outputImage;
+        outputs.set(n.id, outputImage);
       } else if (n.type === 'textGen') {
         done.add(n.id);
         progressed = true;
@@ -210,7 +255,18 @@ export async function executeCapabilitySet(
       done.add(n.id);
       progressed = true;
     }
-    if (!progressed) break;
+    if (!progressed) {
+      const blocked = set.nodes
+        .filter((n) => !done.has(n.id))
+        .map((n) => n.data.label || n.id)
+        .join('、');
+      return {
+        ok: false,
+        kind: 'none',
+        error: `能力集合无法继续执行，可能存在环路或缺少上游输入：${blocked}`,
+        durationMs: Date.now() - start,
+      };
+    }
   }
 
   return { ok: true, kind: 'image', image: lastImage, durationMs: Date.now() - start };

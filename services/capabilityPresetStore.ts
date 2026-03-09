@@ -32,13 +32,10 @@ export function normalizeCapabilityPreset(input: CustomAppModule, index: number)
   };
   if (category === 'generate_3d') {
     // 3D 不使用 engine / imageGear
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     delete (base as any).engine;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     delete (base as any).imageGear;
   } else {
     // 非 3D 不应带 generate3D
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     delete (base as any).generate3D;
   }
   return base;

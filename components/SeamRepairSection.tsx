@@ -25,9 +25,10 @@ const ObjTextureViewer: React.FC<{
   const animIdRef = useRef<number>(0);
 
   useEffect(() => {
-    if (!containerRef.current) return;
-    const width = containerRef.current.clientWidth || 400;
-    const height = containerRef.current.clientHeight || 320;
+    const container = containerRef.current;
+    if (!container) return;
+    const width = container.clientWidth || 400;
+    const height = container.clientHeight || 320;
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x0a0a12);
     const camera = new THREE.PerspectiveCamera(45, width / height, 0.01, 1000);
@@ -47,8 +48,8 @@ const ObjTextureViewer: React.FC<{
     (grid.material as THREE.Material).opacity = 0.25;
     (grid.material as THREE.Material).transparent = true;
     scene.add(grid);
-    containerRef.current.innerHTML = '';
-    containerRef.current.appendChild(renderer.domElement);
+    container.innerHTML = '';
+    container.appendChild(renderer.domElement);
     sceneRef.current = scene;
     cameraRef.current = camera;
     controlsRef.current = controls;
@@ -61,9 +62,8 @@ const ObjTextureViewer: React.FC<{
     animate();
 
     const onResize = () => {
-      if (!containerRef.current) return;
-      const w = containerRef.current.clientWidth;
-      const h = containerRef.current.clientHeight || 320;
+      const w = container.clientWidth;
+      const h = container.clientHeight || 320;
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
       renderer.setSize(w, h);
@@ -75,7 +75,7 @@ const ObjTextureViewer: React.FC<{
       cancelAnimationFrame(animIdRef.current);
       renderer.dispose();
       controls.dispose();
-      if (containerRef.current?.contains(renderer.domElement)) containerRef.current.removeChild(renderer.domElement);
+      if (container.contains(renderer.domElement)) container.removeChild(renderer.domElement);
       sceneRef.current = null;
       cameraRef.current = null;
       controlsRef.current = null;
@@ -116,7 +116,7 @@ const ObjTextureViewer: React.FC<{
         camera.updateProjectionMatrix();
       }
       controls.target.set(0, 0, 0);
-    } catch (_) {
+    } catch {
       if (rootRef.current) scene.remove(rootRef.current);
       rootRef.current = null;
     }
@@ -194,6 +194,7 @@ const SeamRepairSection: React.FC<{ onLog?: (level: 'info' | 'warn' | 'error', m
   const [useResultTex, setUseResultTex] = useState(true);
   const [backendAvailable, setBackendAvailable] = useState<boolean | null>(null);
   const resultUrlRef = useRef<string | null>(null);
+  const repairAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     seamRepairHealth()
@@ -209,7 +210,10 @@ const SeamRepairSection: React.FC<{ onLog?: (level: 'info' | 'warn' | 'error', m
   }, []);
 
   useEffect(() => {
-    return () => revokeResult();
+    return () => {
+      repairAbortRef.current?.abort();
+      revokeResult();
+    };
   }, [revokeResult]);
 
   const onObjChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -243,11 +247,14 @@ const SeamRepairSection: React.FC<{ onLog?: (level: 'info' | 'warn' | 'error', m
       onLog?.('warn', '请先选择 OBJ 与贴图');
       return;
     }
+    repairAbortRef.current?.abort();
+    const controller = new AbortController();
+    repairAbortRef.current = controller;
     setStatus('修复中…（首次将加载约 10MB 运行环境，仅此一次）');
     setRepairing(true);
     onLog?.('info', '贴图修缝：开始修复（浏览器内计算）');
     try {
-      const { blob, mode } = await seamRepairWithFallback(objFile, texFile, maskFile, params);
+      const { blob, mode } = await seamRepairWithFallback(objFile, texFile, maskFile, params, { signal: controller.signal });
       revokeResult();
       const url = URL.createObjectURL(blob);
       resultUrlRef.current = url;
@@ -257,12 +264,24 @@ const SeamRepairSection: React.FC<{ onLog?: (level: 'info' | 'warn' | 'error', m
       onLog?.('info', `贴图修缝：修复完成（${mode === 'pyodide' ? '浏览器内' : '后端'}）`);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      setStatus(`修复失败：${msg}`);
-      onLog?.('error', '贴图修缝失败', msg);
+      if (e instanceof Error && e.name === 'AbortError') {
+        setStatus(msg);
+        onLog?.('warn', '贴图修缝已取消', msg);
+      } else {
+        setStatus(`修复失败：${msg}`);
+        onLog?.('error', '贴图修缝失败', msg);
+      }
     } finally {
+      if (repairAbortRef.current === controller) {
+        repairAbortRef.current = null;
+      }
       setRepairing(false);
     }
   };
+
+  const handleCancelRepair = useCallback(() => {
+    repairAbortRef.current?.abort();
+  }, []);
 
   const currentTexUrl = (useResultTex && resultUrl) ? resultUrl : texPreviewUrl;
 
@@ -308,12 +327,12 @@ const SeamRepairSection: React.FC<{ onLog?: (level: 'info' | 'warn' | 'error', m
               </div>
               <div>
                 <span className="text-[9px] text-gray-500">过渡(px)</span>
-                <input type="number" min={0} max={64} value={params.feather_px} onChange={(e) => setParams((p) => ({ ...p, feather_px: Number(e.target.value) ?? 6 }))} className="w-full mt-0.5 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-[10px] outline-none focus:border-blue-500" />
+                <input type="number" min={0} max={64} value={params.feather_px} onChange={(e) => setParams((p) => { const nextValue = Number(e.target.value); return { ...p, feather_px: Number.isFinite(nextValue) ? nextValue : 6 }; })} className="w-full mt-0.5 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-[10px] outline-none focus:border-blue-500" />
               </div>
             </div>
             <div>
               <span className="text-[9px] text-gray-500">沿边步长(px)</span>
-              <input type="number" min={0.5} max={16} step={0.5} value={params.sample_step_px} onChange={(e) => setParams((p) => ({ ...p, sample_step_px: Number(e.target.value) || 2 }))} className="w-full mt-0.5 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-[10px] outline-none focus:border-blue-500" />
+                <input type="number" min={0.25} max={16} step={0.25} value={params.sample_step_px} onChange={(e) => setParams((p) => ({ ...p, sample_step_px: Number(e.target.value) || 2 }))} className="w-full mt-0.5 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-[10px] outline-none focus:border-blue-500" />
             </div>
             <div>
               <span className="text-[9px] text-gray-500">模式</span>
@@ -348,7 +367,7 @@ const SeamRepairSection: React.FC<{ onLog?: (level: 'info' | 'warn' | 'error', m
             </div>
             <div>
               <span className="text-[9px] text-gray-500">Poisson 迭代</span>
-              <input type="number" min={0} max={600} step={25} value={params.poisson_iters} onChange={(e) => setParams((p) => ({ ...p, poisson_iters: Number(e.target.value) || 0 }))} className="w-full mt-0.5 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-[10px] outline-none focus:border-blue-500" />
+                <input type="number" min={0} max={200} step={25} value={params.poisson_iters} onChange={(e) => setParams((p) => ({ ...p, poisson_iters: Number(e.target.value) || 0 }))} className="w-full mt-0.5 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-[10px] outline-none focus:border-blue-500" />
             </div>
           </div>
 
@@ -370,9 +389,16 @@ const SeamRepairSection: React.FC<{ onLog?: (level: 'info' | 'warn' | 'error', m
             </select>
           </div>
 
-          <button onClick={handleRepair} disabled={repairing || !objFile || !texFile} className="w-full py-2.5 bg-blue-600 rounded-xl text-[10px] font-black uppercase electric-glow disabled:opacity-40">
-            {repairing ? '修复中…' : '开始修复'}
-          </button>
+          <div className="flex gap-2">
+            <button onClick={handleRepair} disabled={repairing || !objFile || !texFile} className="flex-1 py-2.5 bg-blue-600 rounded-xl text-[10px] font-black uppercase electric-glow disabled:opacity-40">
+              {repairing ? '修复中…' : '开始修复'}
+            </button>
+            {repairing && (
+              <button type="button" onClick={handleCancelRepair} className="px-4 py-2.5 border border-white/15 rounded-xl text-[10px] font-black uppercase text-gray-300 hover:bg-white/5">
+                取消
+              </button>
+            )}
+          </div>
           {resultUrl && (
             <a href={resultUrl} download="repaired.png" className="mt-3 w-full py-2 border border-blue-500/50 rounded-xl text-[10px] font-black uppercase text-blue-300 text-center inline-block hover:bg-blue-600/20">
               下载修复图

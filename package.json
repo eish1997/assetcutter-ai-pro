@@ -8,6 +8,9 @@
     "dev:seam-backend": "node scripts/start-seam-backend.js",
     "dev:all": "concurrently -n main,seam -c blue,green \"npm run dev\" \"npm run dev:seam-backend\"",
     "build": "vite build",
+    "typecheck": "tsc -p tsconfig.quality.json --noEmit",
+    "lint": "eslint App.tsx types.ts components hooks services server scripts tests vite.config.ts",
+    "test": "vitest run",
     "preview": "vite preview",
     "proxy": "node --env-file=.env.local server/ai3d-proxy.js"
   },
@@ -21,10 +24,16 @@
     "three": "^0.182.0"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.4",
     "@types/node": "^22.14.0",
     "@vitejs/plugin-react": "^5.0.0",
     "concurrently": "^9.1.0",
+    "eslint": "^9.39.4",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "globals": "^17.4.0",
     "typescript": "~5.8.2",
-    "vite": "^6.2.0"
+    "typescript-eslint": "^8.56.1",
+    "vite": "^6.2.0",
+    "vitest": "^4.0.18"
   }
 }

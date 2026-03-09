@@ -1,30 +1,41 @@
 
-import React, { useState, useEffect, useMemo, useRef, Component } from 'react';
-import { processTexture, understandImageEditIntent, dialogGenerateImage, detectObjectsInImage, getDialogTextResponse, generateSessionTitle, DEFAULT_PROMPTS, normalizeApiErrorMessage, getEditPrompt, getTexturePrompt, generateArenaABPrompts, optimizeLoserPrompt, parsePromptStructured } from './services/geminiService';
+import React, { Suspense, useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { processTexture, DEFAULT_PROMPTS, normalizeApiErrorMessage, getTexturePrompt, parsePromptStructured } from './services/geminiService';
 import { loadRecords, addRecord as addGenerationRecord, updateScore as updateGenerationScore } from './services/recordStore';
-import { addChoice } from './services/abChoiceStore';
-import { loadSnippets, addSnippet, removeSnippet } from './services/snippetStore';
-import { startTencent3DProJob, startTencent3DRapidJob, convert3DFormat, getTencentCredsFromEnv, startReduceFaceJob, startTextureTo3DJob, startUVJob, startPartJob, startProfileTo3DJob, type File3D, type TencentCredentials, type Submit3DProInput, type Submit3DRapidInput } from './services/tencentService';
-import { AppStep, AppMode, LibraryItem, SystemConfig, AppTask, BoundingBox, AssetCategory, DialogMessage, DialogMessageVersion, DialogSession, DialogImageSizeMode, DialogTempItem, DialogImageGear, SUPPORTED_ASPECT_RATIOS, SUPPORTED_IMAGE_SIZES, DIALOG_IMAGE_MODELS, DIALOG_IMAGE_GEARS, type GenerationRecord, type CustomAppModule, type CapabilitySet, CAPABILITY_CATEGORIES, type CapabilityCategory, type WorkflowAsset, type WorkflowPendingTask, type ArenaCurrentStep, type ArenaStepEntry, type ArenaTimelineBlock } from './types';
-import ModelViewer3D from './components/ModelViewer3D';
-import UnifiedModelViewer3D from './components/UnifiedModelViewer3D';
+import { loadSnippets } from './services/snippetStore';
+import { PRO_VIEW_IDS, type Submit3DProInput, type Submit3DRapidInput } from './services/tencentService';
+import { AppStep, AppMode, LibraryItem, SystemConfig, AppTask, AssetCategory, DialogMessage, DialogSession, DialogImageSizeMode, DialogTempItem, DialogImageGear, SUPPORTED_ASPECT_RATIOS, SUPPORTED_IMAGE_SIZES, DIALOG_IMAGE_MODELS, DIALOG_IMAGE_GEARS, type GenerationRecord, type CustomAppModule, type CapabilitySet, type WorkflowAsset, type WorkflowPendingTask, type ArenaCurrentStep, type ArenaStepEntry, type ArenaTimelineBlock } from './types';
 import DropdownSelect from './components/DropdownSelect';
 import MultiViewUpload from './components/MultiViewUpload';
 import type { ViewId } from './components/MultiViewUpload';
-import WorkflowSection from './components/WorkflowSection';
-import CapabilityPresetSection from './components/CapabilityPresetSection';
-import PromptArenaSection from './components/PromptArenaSection';
-import SeamRepairSection from './components/SeamRepairSection';
-import GenerateTextureSection from './components/GenerateTextureSection';
-import HomeSection from './components/HomeSection';
-import SiteAssistant from './components/SiteAssistant';
-import SettingsSection from './components/SettingsSection';
-import StoreSection from './components/StoreSection';
 import { runCapabilityTest } from './services/capabilityTestRunner';
 import { loadCapabilityPresets, saveCapabilityPresets, CAPABILITY_PRESETS_KEY } from './services/capabilityPresetStore';
 import { loadCapabilitySets, saveCapabilitySets, CAPABILITY_SETS_KEY } from './services/capabilitySetStore';
+import { useGenerate3DManager, type Temp3DItem } from './hooks/useGenerate3DManager';
+import { useDialogWorkspace } from './hooks/useDialogWorkspace';
+import { useDialogGeneration } from './hooks/useDialogGeneration';
+import { useDialogPostProcessing } from './hooks/useDialogPostProcessing';
 
-class WorkflowErrorBoundary extends Component<{ children: React.ReactNode }, { error: Error | null }> {
+const UnifiedModelViewer3D = React.lazy(() => import('./components/UnifiedModelViewer3D'));
+const WorkflowSection = React.lazy(() => import('./components/WorkflowSection'));
+const CapabilityPresetSection = React.lazy(() => import('./components/CapabilityPresetSection'));
+const PromptArenaSection = React.lazy(() => import('./components/PromptArenaSection'));
+const SeamRepairSection = React.lazy(() => import('./components/SeamRepairSection'));
+const GenerateTextureSection = React.lazy(() => import('./components/GenerateTextureSection'));
+const HomeSection = React.lazy(() => import('./components/HomeSection'));
+const SiteAssistant = React.lazy(() => import('./components/SiteAssistant'));
+const SettingsSection = React.lazy(() => import('./components/SettingsSection'));
+const StoreSection = React.lazy(() => import('./components/StoreSection'));
+
+type SourceAggregate = {
+  count: number;
+  rated: number;
+  sumScore: number;
+  samples: { fullPrompt: string; instruction?: string; userScore: number }[];
+};
+
+class WorkflowErrorBoundary extends React.Component<{ children: React.ReactNode }, { error: Error | null }> {
+  declare props: Readonly<{ children: React.ReactNode }>;
   state = { error: null as Error | null };
   static getDerivedStateFromError(error: Error) { return { error }; }
   componentDidCatch(error: Error) {
@@ -61,7 +72,12 @@ class WorkflowErrorBoundary extends Component<{ children: React.ReactNode }, { e
     return this.props.children;
   }
 }
-import { PRO_VIEW_IDS } from './services/tencentService';
+
+const LazySectionFallback: React.FC<{ label?: string }> = ({ label = '模块' }) => (
+  <div className="min-h-[240px] w-full rounded-2xl border border-white/10 bg-black/20 flex items-center justify-center text-[11px] text-gray-500">
+    加载{label}中…
+  </div>
+);
 
 /** 主内容区滚动容器 ref，用于全局回到顶部 */
 function useMainScrollBackToTop() {
@@ -87,29 +103,6 @@ export type Generate3DModule =
   | 'uv'       // UV展开
   | 'profile'  // 3D人物生成
   | 'convert'; // 模型格式转换
-
-/** 生成3D 临时库单项（生成的资产先入临时库，可切换预览、保存到资产库） */
-export interface Temp3DItem {
-  id: string;
-  label: string;
-  previewImageUrl?: string;
-  files: File3D[];
-  timestamp: number;
-  source: 'pro' | 'rapid' | 'convert' | 'topology' | 'texture' | 'component' | 'uv' | 'profile';
-}
-
-/** 生成队列单项（可多任务排队，最多 2 个并发） */
-export interface Generate3DQueueItem {
-  id: string;
-  type: 'pro' | 'rapid' | 'convert' | 'topology' | 'texture' | 'component' | 'uv' | 'profile';
-  status: 'pending' | 'running' | 'done' | 'fail';
-  progress?: number;
-  input?: unknown;
-  result?: File3D[] | { resultUrl: string };
-  error?: string;
-  taskId?: string;
-  label?: string;
-}
 
 /** 8 个模块的展示名称与简介（按已上线 API 分模块） */
 export const GENERATE_3D_MODULES: { id: Generate3DModule; name: string; desc: string }[] = [
@@ -450,21 +443,20 @@ const App: React.FC = () => {
   const [activeAssetId, setActiveAssetId] = useState<LibraryItem | null>(null);
   const [libFilter, setLibFilter] = useState<AssetCategory | 'ALL'>('ALL');
   const [libSelectedGroupIds, setLibSelectedGroupIds] = useState<Set<string>>(new Set());
-  const [isManualAddOpen, setIsManualAddOpen] = useState(false);
   const [isLibraryPickerOpen, setIsLibraryPickerOpen] = useState(false);
   const [pickerFilter, setPickerFilter] = useState<AssetCategory | undefined>();
   const [pickerMultiSelect, setPickerMultiSelect] = useState(false);
   const [pickerCallback, setPickerCallback] = useState<(items: LibraryItem[]) => void>(() => {});
   const [globalLogs, setGlobalLogs] = useState<Array<{ id: string; time: number; module: string; level: 'info' | 'warn' | 'error'; message: string; detail?: string }>>([]);
-  const addGlobalLog = (module: string, level: 'info' | 'warn' | 'error', message: string, detail?: string) => {
+  const addGlobalLog = useCallback((module: string, level: 'info' | 'warn' | 'error', message: string, detail?: string) => {
     setGlobalLogs(prev => [...prev.slice(-199), { id: Math.random().toString(36).slice(2, 11), time: Date.now(), module, level, message, detail }]);
-  };
+  }, []);
 
   // 提取花纹状态
   const [textureSource, setTextureSource] = useState<string>('');
   const [textureResult, setTextureResult] = useState<string>('');
   const [tilingScale, setTilingScale] = useState(2);
-  const [pbrMaps, setPbrMaps] = useState<{ normal?: string; roughness?: string }>({});
+  const [, setPbrMaps] = useState<{ normal?: string; roughness?: string }>({});
   const [isTextureProcessing, setIsTextureProcessing] = useState(false);
   /** 最近一次贴图生成的记录 id，用于结果区评分 */
   const [lastTextureRecordId, setLastTextureRecordId] = useState<string | null>(null);
@@ -525,42 +517,38 @@ const App: React.FC = () => {
   const [dialogSizeMode, setDialogSizeMode] = useState<DialogImageSizeMode>('adaptive');
   const [dialogAspectRatio, setDialogAspectRatio] = useState<string>(SUPPORTED_ASPECT_RATIOS[0].value);
   const [dialogImageSize, setDialogImageSize] = useState<string>(SUPPORTED_IMAGE_SIZES[1].value);
-  /** 正在发送的会话 ID 列表，允许多会话同时生成 */
-  const [dialogSendingSessionIds, setDialogSendingSessionIds] = useState<string[]>([]);
   const [dialogEditingMessageId, setDialogEditingMessageId] = useState<string | null>(null);
   const [dialogEditingText, setDialogEditingText] = useState('');
-  const [dialogRegeneratingId, setDialogRegeneratingId] = useState<string | null>(null);
-  const [dialogGeneratingFromUnderstoodId, setDialogGeneratingFromUnderstoodId] = useState<string | null>(null);
-  const [dialogDetectMessageId, setDialogDetectMessageId] = useState<string | null>(null);
-  const [dialogDetectingId, setDialogDetectingId] = useState<string | null>(null);
-  const [dialogVersionIndex, setDialogVersionIndex] = useState<Record<string, number>>({});
-  const [dialogSessions, setDialogSessions] = useState<DialogSession[]>(() => {
-    const id = Math.random().toString(36).slice(2, 11);
-    return [{ id, messages: [], createdAt: Date.now(), updatedAt: Date.now() }];
-  });
-  const [dialogActiveSessionId, setDialogActiveSessionId] = useState<string>('');
-  const dialogActiveSessionIdResolved = dialogActiveSessionId || dialogSessions[0]?.id;
-  const activeSession = dialogSessions.find(s => s.id === dialogActiveSessionIdResolved);
-  const dialogMessages = activeSession?.messages ?? [];
-  const [dialogTempLibrary, setDialogTempLibrary] = useState<DialogTempItem[]>([]);
-  const [dialogTempLibraryFilter, setDialogTempLibraryFilter] = useState<'all' | 'current'>('all');
-  const [dialogOlderCollapsed, setDialogOlderCollapsed] = useState(true);
-  const [dialogArchivedCollapsed, setDialogArchivedCollapsed] = useState(true);
-  const [dialogTempPreviewId, setDialogTempPreviewId] = useState<string | null>(null);
-  const [dialogTempSelectedIds, setDialogTempSelectedIds] = useState<Set<string>>(new Set());
-  const setDialogMessages = (updater: React.SetStateAction<DialogMessage[]>) => {
-    setDialogSessions(prev => prev.map(s => s.id !== dialogActiveSessionIdResolved ? s : { ...s, messages: typeof updater === 'function' ? updater(s.messages) : updater, updatedAt: Date.now() }));
-  };
+  const {
+    dialogSessions,
+    setDialogActiveSessionId,
+    dialogActiveSessionIdResolved,
+    activeSession,
+    dialogMessages,
+    setDialogMessages,
+    dialogTempLibrary,
+    dialogTempLibraryFilter,
+    setDialogTempLibraryFilter,
+    dialogOlderCollapsed,
+    setDialogOlderCollapsed,
+    dialogArchivedCollapsed,
+    setDialogArchivedCollapsed,
+    dialogTempPreviewId,
+    setDialogTempPreviewId,
+    dialogTempSelectedIds,
+    dialogTempFiltered,
+    addToDialogTempLibrary,
+    createNewDialogSession,
+    updateDialogSession,
+    archiveDialogSession,
+    removeDialogSession,
+    handleDialogTempToggleSelect,
+    handleDialogTempSelectAll,
+    handleDialogTempInvertSelect,
+    handleDialogTempBatchDownload,
+  } = useDialogWorkspace();
   const DIALOG_BOX_LABELS = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'];
   const dialogEndRef = useRef<HTMLDivElement>(null);
-  const dialogCancelRequestedRef = useRef(false);
-  const dialogAbortControllerRef = useRef<AbortController | null>(null);
-  const [dialogCropState, setDialogCropState] = useState<{ messageId: string; imageBase64: string } | null>(null);
-  const dialogCropContainerRef = useRef<HTMLDivElement>(null);
-  const dialogCropImgRef = useRef<HTMLImageElement>(null);
-  const [dialogCropStart, setDialogCropStart] = useState<{ x: number; y: number } | null>(null);
-  const [dialogCropCurrent, setDialogCropCurrent] = useState<{ x: number; y: number } | null>(null);
-  const [dialogCropSelecting, setDialogCropSelecting] = useState(false);
   const [dialogValidationError, setDialogValidationError] = useState<string | null>(null);
   const [atSuggestionsOpen, setAtSuggestionsOpen] = useState(false);
   const [atSuggestionsCursor, setAtSuggestionsCursor] = useState(0);
@@ -593,33 +581,7 @@ const App: React.FC = () => {
   const [componentFileUrl, setComponentFileUrl] = useState('');
   const [uvFileUrl, setUvFileUrl] = useState('');
   const [profileImage, setProfileImage] = useState<string | null>(null);
-  // 临时库与队列（生成3D 新布局）
-  const [temp3DLibrary, setTemp3DLibrary] = useState<Temp3DItem[]>([]);
-  const [selectedTemp3DId, setSelectedTemp3DId] = useState<string | null>(null);
-  const [generate3DQueue, setGenerate3DQueue] = useState<Generate3DQueueItem[]>([]);
   const [generate3DModule, setGenerate3DModule] = useState<Generate3DModule>('pro');
-
-  /** 预览用：优先 GLB，其次 OBJ，与 UnifiedModelViewer3D 默认支持一致 */
-  const generate3DPreview = useMemo(() => {
-    const item = selectedTemp3DId ? temp3DLibrary.find(i => i.id === selectedTemp3DId) : temp3DLibrary[0];
-    if (!item?.files?.length) return null;
-    const type = (t: string) => (t || '').toUpperCase();
-    const glb = item.files.find(f => type(f.Type) === 'GLB');
-    if (glb?.Url) return { url: glb.Url, format: 'glb' as const };
-    const obj = item.files.find(f => type(f.Type) === 'OBJ');
-    if (obj?.Url) return { url: obj.Url, format: 'obj' as const };
-    const first = item.files[0];
-    if (first?.Url) return { url: first.Url, format: (/\.obj$/i.test(first.Url) ? 'obj' : 'glb') as 'glb' | 'obj' };
-    return null;
-  }, [temp3DLibrary, selectedTemp3DId]);
-
-  const addToDialogTempLibrary = (item: Omit<DialogTempItem, 'id' | 'timestamp'>) => {
-    setDialogTempLibrary(prev => [...prev, { ...item, id: Math.random().toString(36).slice(2, 11), timestamp: Date.now() }]);
-  };
-  const dialogTempFiltered = useMemo(() => {
-    if (dialogTempLibraryFilter === 'current') return dialogTempLibrary.filter(x => x.sourceSessionId === dialogActiveSessionIdResolved);
-    return dialogTempLibrary;
-  }, [dialogTempLibrary, dialogTempLibraryFilter, dialogActiveSessionIdResolved]);
 
   const handleDialogTempLocateMessage = (item: DialogTempItem) => {
     if (item.sourceSessionId) setDialogActiveSessionId(item.sourceSessionId);
@@ -635,40 +597,9 @@ const App: React.FC = () => {
     addToLibrary([{ data: item.data, category: 'PREVIEW_STRIP', label: item.label || '临时库', type: 'STRIP' }]);
   };
   const dialogTempSourceTypeLabel = (t: DialogTempItem['sourceType']) => t === 'user_input' ? '用户上传' : t === 'object_crop' ? '识别物体' : '生图';
-  const handleDialogTempToggleSelect = (id: string) => setDialogTempSelectedIds(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
-  const handleDialogTempSelectAll = () => setDialogTempSelectedIds(new Set(dialogTempFiltered.map(x => x.id)));
-  const handleDialogTempInvertSelect = () => setDialogTempSelectedIds(new Set(dialogTempFiltered.filter(x => !dialogTempSelectedIds.has(x.id)).map(x => x.id)));
-  const handleDialogTempBatchDownload = async () => {
-    const list = dialogTempFiltered.filter(x => dialogTempSelectedIds.has(x.id));
-    for (let i = 0; i < list.length; i++) {
-      const a = document.createElement('a'); a.href = list[i].data; a.download = `临时库_${list[i].label || list[i].id}.png`; a.click();
-      if (i < list.length - 1) await new Promise(r => setTimeout(r, 300));
-    }
-  };
-
-  const getImageDimensions = (base64: string): Promise<{ width: number; height: number }> => {
-    return new Promise((resolve, reject) => {
-      const img = new Image();
-      img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
-      img.onerror = () => reject(new Error('Image load failed'));
-      img.src = base64;
-    });
-  };
-
-  const getDisplayVersion = (msg: DialogMessage): DialogMessageVersion | null => {
-    if (msg.versions && msg.versions.length > 0) {
-      const idx = dialogVersionIndex[msg.id] ?? msg.versions.length - 1;
-      const clamped = Math.max(0, Math.min(idx, msg.versions.length - 1));
-      return msg.versions[clamped];
-    }
-    if (msg.resultImageBase64) {
-      return { resultImageBase64: msg.resultImageBase64, understoodPrompt: msg.understoodPrompt, timestamp: msg.timestamp };
-    }
-    return null;
-  };
 
   const [library, setLibrary] = useState<LibraryItem[]>([]);
-  const [config, setConfig] = useState<SystemConfig>(() => {
+  const [config] = useState<SystemConfig>(() => {
     const saved = localStorage.getItem('ac_config');
     if (saved) return JSON.parse(saved);
     return { 
@@ -680,37 +611,13 @@ const App: React.FC = () => {
     };
   });
 
-  const [hasKey, setHasKey] = useState<boolean | null>(null);
-
   useEffect(() => {
     const savedLib = localStorage.getItem('ac_library'); if (savedLib) setLibrary(JSON.parse(savedLib));
-    const checkKey = async () => { setHasKey(true); };
-    checkKey();
   }, []);
 
   useEffect(() => {
     dialogEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [dialogMessages]);
-
-  useEffect(() => {
-    if (!dialogCropState) return;
-    setDialogCropStart(null);
-    setDialogCropCurrent(null);
-    setDialogCropSelecting(false);
-  }, [dialogCropState?.messageId, dialogCropState?.imageBase64]);
-
-  useEffect(() => {
-    if (!dialogCropSelecting) return;
-    const onMove = (e: MouseEvent) => setDialogCropCurrent({ x: e.clientX, y: e.clientY });
-    const onUp = () => setDialogCropSelecting(false);
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
-  }, [dialogCropSelecting]);
-
-  useEffect(() => {
-    if (!dialogActiveSessionId && dialogSessions.length > 0) setDialogActiveSessionId(dialogSessions[0].id);
-  }, [dialogSessions.length]);
 
   useEffect(() => {
     if (!atSuggestionsOpen) return;
@@ -734,7 +641,7 @@ const App: React.FC = () => {
     return id;
   };
   const updateTask = (id: string, patch: Partial<AppTask>) => setTasks(p => p.map(t => t.id === id ? { ...t, ...patch } : t));
-  
+
   const addToLibrary = (items: Partial<LibraryItem>[]): LibraryItem[] => {
     const newItems: LibraryItem[] = items.map(item => ({ 
       id: Math.random().toString(36).substr(2, 9), 
@@ -751,6 +658,87 @@ const App: React.FC = () => {
     const nextLib = [...newItems, ...library]; setLibrary(nextLib); localStorage.setItem('ac_library', JSON.stringify(nextLib.slice(0, 500)));
     return newItems;
   };
+
+  const {
+    setDialogVersionIndex,
+    dialogDetectMessageId,
+    dialogDetectingId,
+    dialogCropState,
+    dialogCropStart,
+    dialogCropCurrent,
+    dialogCropImgRef,
+    getDisplayVersion,
+    getDialogVersions,
+    getDialogVersionPosition,
+    showPreviousDialogVersion,
+    showNextDialogVersion,
+    openDialogCrop,
+    handleDialogCropMouseDown,
+    handleDialogCropExecute,
+    handleDialogCropCancel,
+    handleDialogSaveToLibrary,
+    handleDialogUseAsInput,
+    handleDialogDetectObjects,
+    handleDialogDetectClose,
+    handleDialogDownloadCropByIndex,
+    handleDialogDownloadAllCrops,
+    handleDialogTempAddCropByIndex,
+    handleDialogTempAddAllCrops,
+  } = useDialogPostProcessing({
+    dialogMessages,
+    setDialogMessages,
+    dialogActiveSessionIdResolved,
+    activeSessionTitle: activeSession?.title,
+    modelText: config.modelText,
+    addTask,
+    updateTask,
+    addToDialogTempLibrary,
+    addToLibrary,
+    setDialogInputImages,
+    dialogEndRef,
+    dialogBoxLabels: DIALOG_BOX_LABELS,
+  });
+
+  const {
+    dialogSendingSessionIds,
+    dialogRegeneratingId,
+    dialogGeneratingFromUnderstoodId,
+    handleDialogSend,
+    handleDialogCancelGen,
+    handleDialogGenerateFromUnderstood,
+    handleDialogRegenerate,
+    handleDialogEditThenRegenerate,
+  } = useDialogGeneration({
+    dialogSessionIds: dialogSessions.map((session) => session.id),
+    dialogInputText,
+    setDialogInputText,
+    dialogInputImages,
+    setDialogInputImages,
+    dialogMessages,
+    setDialogMessages,
+    dialogAutoGenerateImage,
+    dialogModel,
+    dialogSizeMode,
+    dialogAspectRatio,
+    dialogImageSize,
+    dialogActiveSessionIdResolved,
+    activeSessionTitle: activeSession?.title,
+    config,
+    updateDialogSession,
+    addToDialogTempLibrary,
+    setDialogValidationError,
+    setDialogVersionIndex,
+    setDialogEditingMessageId,
+    addTask,
+    updateTask,
+    addGlobalLog,
+    addGenerationRecord,
+  });
+
+  const handleRemoveDialogSession = useCallback((sessionId: string) => {
+    handleDialogCancelGen(sessionId);
+    removeDialogSession(sessionId);
+  }, [handleDialogCancelGen, removeDialogSession]);
 
   const runTextureProcessing = async (sourceImage: string, type: 'pattern' | 'tileable' | 'pbr', mapType = '') => {
     if (isTextureProcessing) return;
@@ -788,17 +776,28 @@ const App: React.FC = () => {
     finally { setIsTextureProcessing(false); }
   };
 
-  const creds3D: TencentCredentials | null = (() => {
-    const fromEnv = getTencentCredsFromEnv();
-    if (fromEnv?.secretId && fromEnv?.secretKey) return fromEnv;
-    if (generate3DCredsOverride?.secretId?.trim() && generate3DCredsOverride?.secretKey) return { secretId: generate3DCredsOverride.secretId.trim(), secretKey: generate3DCredsOverride.secretKey };
-    return null;
-  })();
-
-  const addGenerate3DLog = (level: 'info' | 'warn' | 'error', message: string, detail?: unknown) => {
+  const addGenerate3DLog = useCallback((level: 'info' | 'warn' | 'error', message: string, detail?: unknown) => {
     const detailStr = detail !== undefined ? (typeof detail === 'string' ? detail : JSON.stringify(detail, null, 2)) : undefined;
     addGlobalLog('生成3D', level, message, detailStr);
-  };
+  }, [addGlobalLog]);
+
+  const {
+    creds3D,
+    unsafeTencentBrowserCredsEnabled,
+    temp3DLibrary,
+    selectedTemp3DId,
+    setSelectedTemp3DId,
+    generate3DQueue,
+    generate3DPreview,
+    appendQueueItem,
+    cancelQueueItem,
+    retryQueueItem,
+    clearInactiveQueueItems,
+  } = useGenerate3DManager({
+    credsOverride: generate3DCredsOverride,
+    onLog: addGenerate3DLog,
+    updateTask,
+  });
 
   const handleGenerate3D = () => {
     if (!creds3D) return;
@@ -829,101 +828,9 @@ const App: React.FC = () => {
           };
     const id = Math.random().toString(36).slice(2, 11);
     const taskId = addTask('GENERATE_3D', '混元生3D');
-    setGenerate3DQueue(prev => [...prev, { id, type: 'pro', status: 'pending', input, taskId, label: (input.prompt || '').trim().slice(0, 20) || '图生3D' }]);
+    appendQueueItem({ id, type: 'pro', input, taskId, label: (input.prompt || '').trim().slice(0, 20) || '图生3D' });
     addGenerate3DLog('info', '[本地] 已加入生成队列', { id });
   };
-
-  /** 队列任务成功后统一写入临时库、选中、更新队列与任务（异步任务返回 File3D[] 时使用） */
-  const complete3DJobWithFiles = (jobId: string, taskId: string | undefined, files: File3D[], label: string, source: Temp3DItem['source']) => {
-    const newItem: Temp3DItem = { id: jobId, label, previewImageUrl: files[0]?.PreviewImageUrl, files, timestamp: Date.now(), source };
-    setTemp3DLibrary(prev => [...prev, newItem]);
-    setSelectedTemp3DId(jobId);
-    setGenerate3DQueue(prev => prev.map(q => q.id === jobId ? { ...q, status: 'done', result: files } : q));
-    if (taskId) updateTask(taskId, { status: 'SUCCESS', progress: 100, result: files });
-    addGenerate3DLog('info', `[队列] ${label} 完成`, { fileCount: files.length });
-  };
-
-  const onProgress3D = (taskId: string | undefined) => (task: { status: string; progress: number }) => {
-    if (!taskId) return;
-    const status = task.status === 'DONE' ? 'SUCCESS' : task.status === 'FAIL' ? 'FAILED' : 'RUNNING';
-    updateTask(taskId, { status, progress: task.progress });
-  };
-
-  // 队列处理：最多 2 个并发，pending 时自动开始
-  useEffect(() => {
-    if (!creds3D) return;
-    const running = generate3DQueue.filter(q => q.status === 'running').length;
-    if (running >= 2) return;
-    const pending = generate3DQueue.find(q => q.status === 'pending');
-    if (!pending) return;
-
-    const jobId = pending.id;
-    const taskId = pending.taskId;
-    setGenerate3DQueue(prev => prev.map(q => q.id === jobId ? { ...q, status: 'running' as const } : q));
-
-    const run = async () => {
-      try {
-        if (pending.type === 'pro') {
-          const input = pending.input as Submit3DProInput;
-          addGenerate3DLog('info', '[队列] 开始专业版任务', { jobId });
-          const files = await startTencent3DProJob(input, creds3D!, onProgress3D(taskId), (msg, d) => addGenerate3DLog('info', msg, d));
-          const label = (input.prompt || '').trim().slice(0, 20) || (input.imageBase64 ? '图生3D' : '3D');
-          complete3DJobWithFiles(jobId, taskId, files, label, 'pro');
-        } else if (pending.type === 'rapid') {
-          const input = pending.input as Submit3DRapidInput;
-          addGenerate3DLog('info', '[队列] 开始极速版任务', { jobId });
-          const files = await startTencent3DRapidJob(input, creds3D!, onProgress3D(taskId), (msg, d) => addGenerate3DLog('info', msg, d));
-          const label = (input.prompt || '').trim().slice(0, 20) || '极速3D';
-          complete3DJobWithFiles(jobId, taskId, files, label, 'rapid');
-        } else if (pending.type === 'convert') {
-          const input = pending.input as { fileUrl: string; format: string };
-          addGenerate3DLog('info', '[队列] 开始格式转换', { jobId });
-          const { resultUrl } = await convert3DFormat(input, creds3D!);
-          const newItem: Temp3DItem = { id: jobId, label: `转换 ${input.format}`, files: [{ Type: input.format, Url: resultUrl }], timestamp: Date.now(), source: 'convert' };
-          setTemp3DLibrary(prev => [...prev, newItem]);
-          setSelectedTemp3DId(jobId);
-          setGenerate3DQueue(prev => prev.map(q => q.id === jobId ? { ...q, status: 'done', result: { resultUrl } } : q));
-          if (taskId) updateTask(taskId, { status: 'SUCCESS', progress: 100 });
-          addGenerate3DLog('info', '[队列] 格式转换完成');
-        } else if (pending.type === 'topology') {
-          const input = pending.input as { fileUrl: string };
-          addGenerate3DLog('info', '[队列] 开始智能拓扑', { jobId });
-          const files = await startReduceFaceJob({ fileUrl: input.fileUrl }, creds3D!, onProgress3D(taskId), (msg, d) => addGenerate3DLog('info', msg, d));
-          complete3DJobWithFiles(jobId, taskId, files, '智能拓扑', 'topology');
-        } else if (pending.type === 'texture') {
-          const input = pending.input as { modelUrl: string; prompt: string; imageBase64?: string };
-          addGenerate3DLog('info', '[队列] 开始纹理生成', { jobId });
-          const files = await startTextureTo3DJob({ modelUrl: input.modelUrl, prompt: input.prompt?.trim() || undefined, imageBase64: input.imageBase64 }, creds3D!, onProgress3D(taskId), (msg, d) => addGenerate3DLog('info', msg, d));
-          complete3DJobWithFiles(jobId, taskId, files, '纹理生成', 'texture');
-        } else if (pending.type === 'component') {
-          const input = pending.input as { fileUrl: string };
-          addGenerate3DLog('info', '[队列] 开始组件生成', { jobId });
-          const files = await startPartJob({ fileUrl: input.fileUrl }, creds3D!, onProgress3D(taskId), (msg, d) => addGenerate3DLog('info', msg, d));
-          complete3DJobWithFiles(jobId, taskId, files, '组件生成', 'component');
-        } else if (pending.type === 'uv') {
-          const input = pending.input as { fileUrl: string };
-          addGenerate3DLog('info', '[队列] 开始 UV 展开', { jobId });
-          const files = await startUVJob(input.fileUrl, creds3D!, onProgress3D(taskId), (msg, d) => addGenerate3DLog('info', msg, d));
-          complete3DJobWithFiles(jobId, taskId, files, 'UV展开', 'uv');
-        } else if (pending.type === 'profile') {
-          const input = pending.input as { imageBase64: string };
-          addGenerate3DLog('info', '[队列] 开始 3D 人物生成', { jobId });
-          const files = await startProfileTo3DJob({ imageBase64: input.imageBase64 }, creds3D!, onProgress3D(taskId), (msg, d) => addGenerate3DLog('info', msg, d));
-          complete3DJobWithFiles(jobId, taskId, files, '3D人物', 'profile');
-        } else {
-          addGenerate3DLog('warn', `[队列] ${pending.type} 未知类型`, { jobId });
-          setGenerate3DQueue(prev => prev.map(q => q.id === jobId ? { ...q, status: 'fail', error: '未知任务类型' } : q));
-          if (taskId) updateTask(taskId, { status: 'FAILED', error: '未知任务类型' });
-        }
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        addGenerate3DLog('error', `[队列] ${pending.type} 失败`, msg);
-        setGenerate3DQueue(prev => prev.map(q => q.id === jobId ? { ...q, status: 'fail', error: msg } : q));
-        if (taskId) updateTask(taskId, { status: 'FAILED', error: msg });
-      }
-    };
-    run();
-  }, [generate3DQueue, creds3D]);
 
   const handleSave3DToLibrary = async (item?: Temp3DItem | null) => {
     const target = item ?? (selectedTemp3DId ? temp3DLibrary.find(i => i.id === selectedTemp3DId) : null) ?? (temp3DLibrary[0] ?? null);
@@ -959,7 +866,7 @@ const App: React.FC = () => {
       : { imageBase64: rapidImage!.replace(/^data:image\/\w+;base64,/, ''), resultFormat: rapidResultFormat, enablePBR: rapidEnablePBR };
     const id = Math.random().toString(36).slice(2, 11);
     const taskId = addTask('GENERATE_3D', '极速版3D');
-    setGenerate3DQueue(prev => [...prev, { id, type: 'rapid', status: 'pending', input, taskId, label: (input.prompt || '').trim().slice(0, 20) || '极速3D' }]);
+    appendQueueItem({ id, type: 'rapid', input, taskId, label: (input.prompt || '').trim().slice(0, 20) || '极速3D' });
     addGenerate3DLog('info', '[极速版3D] 已加入队列', { id });
   };
 
@@ -1003,14 +910,14 @@ const App: React.FC = () => {
         generateType: g.generateType,
         resultFormat: g.resultFormat,
       };
-      setGenerate3DQueue(prev => [...prev, { id, type: 'pro', status: 'pending', input, taskId, label: preset.label }]);
+      appendQueueItem({ id, type: 'pro', input, taskId, label: preset.label });
     } else {
       const input: Submit3DRapidInput = {
         imageBase64: raw,
         resultFormat: g.resultFormat,
         enablePBR: g.enablePBR,
       };
-      setGenerate3DQueue(prev => [...prev, { id, type: 'rapid', status: 'pending', input, taskId, label: preset.label }]);
+      appendQueueItem({ id, type: 'rapid', input, taskId, label: preset.label });
     }
     addGenerate3DLog('info', `[工作流] 已加入 3D 队列：${preset.label}`, { id });
   };
@@ -1020,7 +927,7 @@ const App: React.FC = () => {
     const input = { fileUrl: convertFileUrl.trim(), format: convertFormat };
     const id = Math.random().toString(36).slice(2, 11);
     const taskId = addTask('GENERATE_3D', '格式转换');
-    setGenerate3DQueue(prev => [...prev, { id, type: 'convert', status: 'pending', input, taskId }]);
+    appendQueueItem({ id, type: 'convert', input, taskId, label: `转换 ${convertFormat}` });
     addGenerate3DLog('info', '[格式转换] 已加入队列', { id });
   };
 
@@ -1029,7 +936,7 @@ const App: React.FC = () => {
     const input = { fileUrl: topologyFileUrl.trim() };
     const id = Math.random().toString(36).slice(2, 11);
     const taskId = addTask('GENERATE_3D', '智能拓扑');
-    setGenerate3DQueue(prev => [...prev, { id, type: 'topology', status: 'pending', input, taskId, label: '智能拓扑' }]);
+    appendQueueItem({ id, type: 'topology', input, taskId, label: '智能拓扑' });
     addGenerate3DLog('info', '[智能拓扑] 已加入队列', { id });
   };
 
@@ -1039,7 +946,7 @@ const App: React.FC = () => {
     const input = { modelUrl: textureModelUrl.trim(), prompt: texturePrompt.trim(), imageBase64: textureRefImage?.replace(/^data:image\/\w+;base64,/, '') };
     const id = Math.random().toString(36).slice(2, 11);
     const taskId = addTask('GENERATE_3D', '纹理生成');
-    setGenerate3DQueue(prev => [...prev, { id, type: 'texture', status: 'pending', input, taskId, label: '纹理生成' }]);
+    appendQueueItem({ id, type: 'texture', input, taskId, label: '纹理生成' });
     addGenerate3DLog('info', '[纹理生成] 已加入队列', { id });
   };
 
@@ -1048,7 +955,7 @@ const App: React.FC = () => {
     const input = { fileUrl: componentFileUrl.trim() };
     const id = Math.random().toString(36).slice(2, 11);
     const taskId = addTask('GENERATE_3D', '组件生成');
-    setGenerate3DQueue(prev => [...prev, { id, type: 'component', status: 'pending', input, taskId, label: '组件生成' }]);
+    appendQueueItem({ id, type: 'component', input, taskId, label: '组件生成' });
     addGenerate3DLog('info', '[组件生成] 已加入队列', { id });
   };
 
@@ -1057,7 +964,7 @@ const App: React.FC = () => {
     const input = { fileUrl: uvFileUrl.trim() };
     const id = Math.random().toString(36).slice(2, 11);
     const taskId = addTask('GENERATE_3D', 'UV展开');
-    setGenerate3DQueue(prev => [...prev, { id, type: 'uv', status: 'pending', input, taskId, label: 'UV展开' }]);
+    appendQueueItem({ id, type: 'uv', input, taskId, label: 'UV展开' });
     addGenerate3DLog('info', '[UV展开] 已加入队列', { id });
   };
 
@@ -1066,7 +973,7 @@ const App: React.FC = () => {
     const input = { imageBase64: profileImage.replace(/^data:image\/\w+;base64,/, '') };
     const id = Math.random().toString(36).slice(2, 11);
     const taskId = addTask('GENERATE_3D', '3D人物生成');
-    setGenerate3DQueue(prev => [...prev, { id, type: 'profile', status: 'pending', input, taskId, label: '3D人物' }]);
+    appendQueueItem({ id, type: 'profile', input, taskId, label: '3D人物' });
     addGenerate3DLog('info', '[3D人物生成] 已加入队列', { id });
   };
 
@@ -1075,546 +982,6 @@ const App: React.FC = () => {
     setPickerMultiSelect(!!multiSelect);
     if (callback) setPickerCallback(() => callback);
     setIsLibraryPickerOpen(true);
-  };
-
-  const handleDialogSend = async () => {
-    const text = dialogInputText.trim();
-    setDialogValidationError(null);
-    if (!text) return;
-    if (dialogInputImages.length === 0) {
-      setDialogValidationError(null);
-    }
-    const sid = dialogActiveSessionIdResolved;
-    if (!sid || dialogSendingSessionIds.includes(sid)) return;
-    setDialogSendingSessionIds(prev => [...prev, sid]);
-    const firstImage = dialogInputImages[0]?.data;
-    const userMsg: DialogMessage = {
-      id: Math.random().toString(36).substr(2, 9),
-      role: 'user',
-      text,
-      imageBase64: firstImage ?? undefined,
-      timestamp: Date.now()
-    };
-    setDialogMessages(prev => [...prev, userMsg]);
-    if (userMsg.imageBase64) addToDialogTempLibrary({ data: userMsg.imageBase64, sourceSessionId: sid, sourceMessageId: userMsg.id, sourceType: 'user_input', userPrompt: text });
-    setDialogInputText('');
-    setDialogInputImages([]);
-    // 首条用户消息时根据内容（优先结合图片物体）自动生成简短会话标题
-    if (!activeSession?.title) {
-      generateSessionTitle(text, config.modelText, undefined, firstImage ?? undefined).then(title => {
-        const t = (title || '').trim().slice(0, 8);
-        if (t) setDialogSessions(prev => prev.map(s => s.id === sid ? { ...s, title: s.title || t } : s));
-      }).catch(() => {});
-    }
-
-    if (!firstImage) {
-      dialogCancelRequestedRef.current = false;
-      const taskId = addTask('DIALOG_GEN', '对话');
-      try {
-        updateTask(taskId, { status: 'RUNNING', progress: 20 });
-        const { instruction: understood, shouldGenerateImage } = await understandImageEditIntent(
-          null,
-          text,
-          config.modelText,
-          config.prompts.dialog_understand
-        );
-        addGlobalLog('对话', 'info', '理解完成', shouldGenerateImage ? '需要生图' : '仅文字对话');
-        if (dialogCancelRequestedRef.current) {
-          updateTask(taskId, { status: 'FAILED', error: '已取消' });
-          setDialogMessages(prev => [...prev, { id: Math.random().toString(36).substr(2, 9), role: 'assistant', text: '生成已取消。', timestamp: Date.now() }]);
-          return;
-        }
-        if (!shouldGenerateImage) {
-          updateTask(taskId, { status: 'RUNNING', progress: 40 });
-          const contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> }> = [];
-          for (const m of dialogMessages) {
-            const role = m.role === 'assistant' ? 'model' : 'user';
-            const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [];
-            if (m.role === 'user' && m.imageBase64) {
-              const data = m.imageBase64.split(',')[1] || m.imageBase64;
-              parts.push({ inlineData: { mimeType: 'image/jpeg', data } });
-            }
-            parts.push({ text: m.text });
-            contents.push({ role, parts });
-          }
-          contents.push({ role: 'user', parts: [{ text }] });
-          const reply = await getDialogTextResponse(contents, config.modelText);
-          updateTask(taskId, { status: 'SUCCESS', progress: 100 });
-          const assistantMsg: DialogMessage = {
-            id: Math.random().toString(36).substr(2, 9),
-            role: 'assistant',
-            text: reply,
-            timestamp: Date.now()
-          };
-          setDialogMessages(prev => [...prev, assistantMsg]);
-        } else {
-          if (!dialogAutoGenerateImage) {
-            updateTask(taskId, { status: 'SUCCESS', progress: 100 });
-            setDialogMessages(prev => [...prev, {
-              id: Math.random().toString(36).substr(2, 9),
-              role: 'assistant',
-              text: `理解结果：${understood}`,
-              understoodPrompt: understood,
-              timestamp: Date.now()
-            }]);
-          } else {
-            updateTask(taskId, { progress: 50 });
-            const imageOptions = dialogSizeMode === 'manual'
-              ? { aspectRatio: dialogAspectRatio, imageSize: dialogImageSize }
-              : undefined;
-            const genController = new AbortController();
-            dialogAbortControllerRef.current = genController;
-            const resultImage = await dialogGenerateImage(
-              null,
-              understood,
-              dialogModel,
-              imageOptions,
-              undefined,
-              genController.signal
-            );
-            dialogAbortControllerRef.current = null;
-            if (dialogCancelRequestedRef.current) {
-              updateTask(taskId, { status: 'FAILED', error: '已取消' });
-              setDialogMessages(prev => [...prev, { id: Math.random().toString(36).substr(2, 9), role: 'assistant', text: '生成已取消。', timestamp: Date.now() }]);
-            } else {
-              updateTask(taskId, { status: 'SUCCESS', progress: 100 });
-              let width: number | undefined; let height: number | undefined;
-              try { const d = await getImageDimensions(resultImage); width = d.width; height = d.height; } catch (_) {}
-              const assistantMsg: DialogMessage = {
-                id: Math.random().toString(36).substr(2, 9),
-                role: 'assistant',
-                text: '已根据你的描述生成图片。',
-                timestamp: Date.now(),
-                versions: [{ resultImageBase64: resultImage, understoodPrompt: understood, timestamp: Date.now(), width, height }]
-              };
-              const fullPrompt = getEditPrompt(understood, DEFAULT_PROMPTS.dialog_text_to_image);
-              const genRecord = addGenerationRecord({
-                source: 'dialog',
-                timestamp: Date.now(),
-                fullPrompt,
-                instruction: understood,
-                userPrompt: text,
-                outputImageRef: { type: 'dialogRef', value: `${sid}:${assistantMsg.id}:0` },
-                sessionId: sid,
-                messageId: assistantMsg.id,
-                versionIndex: 0,
-                model: dialogModel,
-                options: imageOptions ? { aspectRatio: imageOptions.aspectRatio ?? '', imageSize: imageOptions.imageSize ?? '' } : undefined
-              });
-              assistantMsg.versions![0].generationRecordId = genRecord.id;
-              setDialogMessages(prev => [...prev, assistantMsg]);
-              addToDialogTempLibrary({ data: resultImage, sourceSessionId: sid, sourceMessageId: assistantMsg.id, sourceType: 'generated', userPrompt: text, understoodPrompt: understood });
-            }
-          }
-        }
-      } catch (err: any) {
-        dialogAbortControllerRef.current = null;
-        const isAbort = err?.name === 'AbortError' || dialogCancelRequestedRef.current;
-        if (isAbort) {
-          updateTask(taskId, { status: 'FAILED', error: '已取消' });
-          setDialogMessages(prev => [...prev, { id: Math.random().toString(36).substr(2, 9), role: 'assistant', text: '生成已取消。', timestamp: Date.now() }]);
-        } else if (!dialogCancelRequestedRef.current) {
-          const errMsg = normalizeApiErrorMessage(err);
-          updateTask(taskId, { status: 'FAILED', error: errMsg });
-          setDialogMessages(prev => [...prev, { id: Math.random().toString(36).substr(2, 9), role: 'assistant', text: `生成失败: ${errMsg}`, timestamp: Date.now() }]);
-        }
-      } finally {
-        setDialogSendingSessionIds(prev => prev.filter(id => id !== sid));
-      }
-      return;
-    }
-
-    dialogCancelRequestedRef.current = false;
-    const taskId = addTask('DIALOG_GEN', '对话');
-    try {
-      updateTask(taskId, { status: 'RUNNING', progress: 20 });
-      const { instruction: understood, shouldGenerateImage } = await understandImageEditIntent(
-        firstImage ?? null,
-        text,
-        config.modelText,
-        config.prompts.dialog_understand
-      );
-      addGlobalLog('对话', 'info', '理解完成', shouldGenerateImage ? '需要生图' : '仅描述/问答');
-      if (dialogCancelRequestedRef.current) {
-        updateTask(taskId, { status: 'FAILED', error: '已取消' });
-        setDialogMessages(prev => [...prev, { id: Math.random().toString(36).substr(2, 9), role: 'assistant', text: '生成已取消。', timestamp: Date.now() }]);
-        return;
-      }
-      if (!shouldGenerateImage) {
-        updateTask(taskId, { status: 'RUNNING', progress: 40 });
-        const contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> }> = [];
-        for (const m of dialogMessages) {
-          const role = m.role === 'assistant' ? 'model' : 'user';
-          const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [];
-          if (m.role === 'user' && m.imageBase64) {
-            const data = m.imageBase64.split(',')[1] || m.imageBase64;
-            parts.push({ inlineData: { mimeType: 'image/jpeg', data } });
-          }
-          parts.push({ text: m.text });
-          contents.push({ role, parts });
-        }
-        const lastUserParts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [{ text }];
-        if (firstImage) {
-          const data = firstImage.split(',')[1] || firstImage;
-          lastUserParts.unshift({ inlineData: { mimeType: 'image/jpeg', data } });
-        }
-        contents.push({ role: 'user', parts: lastUserParts });
-        const reply = await getDialogTextResponse(contents, config.modelText);
-        updateTask(taskId, { status: 'SUCCESS', progress: 100 });
-        addGlobalLog('对话', 'info', '图文问答回复完成', undefined);
-        const assistantMsg: DialogMessage = {
-          id: Math.random().toString(36).substr(2, 9),
-          role: 'assistant',
-          text: reply,
-          timestamp: Date.now()
-        };
-        setDialogMessages(prev => [...prev, assistantMsg]);
-        return;
-      }
-      if (!dialogAutoGenerateImage) {
-        updateTask(taskId, { status: 'SUCCESS', progress: 100 });
-        const assistantMsg: DialogMessage = {
-          id: Math.random().toString(36).substr(2, 9),
-          role: 'assistant',
-          text: `理解结果：${understood}`,
-          understoodPrompt: understood,
-          timestamp: Date.now()
-        };
-        setDialogMessages(prev => [...prev, assistantMsg]);
-        return;
-      }
-      updateTask(taskId, { progress: 50 });
-      addGlobalLog('对话', 'info', '调用生图模型', dialogModel);
-      const imageOptions = dialogSizeMode === 'manual'
-        ? { aspectRatio: dialogAspectRatio, imageSize: dialogImageSize }
-        : undefined;
-      const genController = new AbortController();
-      dialogAbortControllerRef.current = genController;
-      const resultImage = await dialogGenerateImage(
-        firstImage!,
-        understood,
-        dialogModel,
-        imageOptions,
-        config.prompts.edit,
-        genController.signal
-      );
-      dialogAbortControllerRef.current = null;
-      if (dialogCancelRequestedRef.current) {
-        updateTask(taskId, { status: 'FAILED', error: '已取消' });
-        setDialogMessages(prev => [...prev, { id: Math.random().toString(36).substr(2, 9), role: 'assistant', text: '生成已取消。', timestamp: Date.now() }]);
-        return;
-      }
-      updateTask(taskId, { status: 'SUCCESS', progress: 100 });
-      let width: number | undefined; let height: number | undefined;
-      try { const d = await getImageDimensions(resultImage); width = d.width; height = d.height; } catch (_) {}
-      const assistantMsg: DialogMessage = {
-        id: Math.random().toString(36).substr(2, 9),
-        role: 'assistant',
-        text: '已根据你的需求生成图片。',
-        timestamp: Date.now(),
-        versions: [{ resultImageBase64: resultImage, understoodPrompt: understood, timestamp: Date.now(), width, height }]
-      };
-      const fullPrompt = getEditPrompt(understood, config.prompts.edit);
-      const genRecord = addGenerationRecord({
-        source: 'dialog',
-        timestamp: Date.now(),
-        fullPrompt,
-        instruction: understood,
-        userPrompt: text,
-        outputImageRef: { type: 'dialogRef', value: `${sid}:${assistantMsg.id}:0` },
-        sessionId: sid,
-        messageId: assistantMsg.id,
-        versionIndex: 0,
-        model: dialogModel,
-        options: imageOptions ? { aspectRatio: imageOptions.aspectRatio ?? '', imageSize: imageOptions.imageSize ?? '' } : undefined
-      });
-      assistantMsg.versions![0].generationRecordId = genRecord.id;
-      setDialogMessages(prev => [...prev, assistantMsg]);
-      addToDialogTempLibrary({ data: resultImage, sourceSessionId: sid, sourceMessageId: assistantMsg.id, sourceType: 'generated', userPrompt: text, understoodPrompt: understood });
-    } catch (err: any) {
-      dialogAbortControllerRef.current = null;
-      const isAbort = err?.name === 'AbortError' || dialogCancelRequestedRef.current;
-      if (isAbort) {
-        updateTask(taskId, { status: 'FAILED', error: '已取消' });
-        setDialogMessages(prev => [...prev, { id: Math.random().toString(36).substr(2, 9), role: 'assistant', text: '生成已取消。', timestamp: Date.now() }]);
-      } else if (!dialogCancelRequestedRef.current) {
-        const errMsg = normalizeApiErrorMessage(err);
-        updateTask(taskId, { status: 'FAILED', error: errMsg });
-        setDialogMessages(prev => [...prev, { id: Math.random().toString(36).substr(2, 9), role: 'assistant', text: `生成失败: ${errMsg}`, timestamp: Date.now() }]);
-      }
-    } finally {
-      setDialogSendingSessionIds(prev => prev.filter(id => id !== sid));
-    }
-  };
-
-  const runDialogRegenerate = async (userMsg: DialogMessage, instructionText: string, assistantMsgId: string) => {
-    dialogCancelRequestedRef.current = false;
-    setDialogRegeneratingId(assistantMsgId);
-    const taskId = addTask('DIALOG_GEN', '对话');
-    const sourceImage = userMsg.imageBase64 ?? null;
-    try {
-      updateTask(taskId, { status: 'RUNNING', progress: 20 });
-      const { instruction: understood } = await understandImageEditIntent(
-        sourceImage,
-        instructionText,
-        config.modelText,
-        config.prompts.dialog_understand
-      );
-      if (dialogCancelRequestedRef.current) {
-        updateTask(taskId, { status: 'FAILED', error: '已取消' });
-        setDialogMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, text: '已取消。' } : m));
-        return;
-      }
-      updateTask(taskId, { progress: 50 });
-      const imageOptions = dialogSizeMode === 'manual'
-        ? { aspectRatio: dialogAspectRatio, imageSize: dialogImageSize }
-        : undefined;
-      const genController = new AbortController();
-      dialogAbortControllerRef.current = genController;
-      const resultImage = await dialogGenerateImage(
-        sourceImage,
-        understood,
-        dialogModel,
-        imageOptions,
-        sourceImage ? config.prompts.edit : undefined,
-        genController.signal
-      );
-      dialogAbortControllerRef.current = null;
-      if (dialogCancelRequestedRef.current) {
-        updateTask(taskId, { status: 'FAILED', error: '已取消' });
-        setDialogMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, text: '已取消。' } : m));
-        return;
-      }
-      updateTask(taskId, { status: 'SUCCESS', progress: 100 });
-      let width: number | undefined; let height: number | undefined;
-      try { const d = await getImageDimensions(resultImage); width = d.width; height = d.height; } catch (_) {}
-      const currentMsg = dialogMessages.find(m => m.id === assistantMsgId);
-      const prevVersionsForIndex = currentMsg?.versions ?? (currentMsg?.resultImageBase64 ? [{ resultImageBase64: currentMsg.resultImageBase64, understoodPrompt: currentMsg.understoodPrompt, timestamp: currentMsg.timestamp }] : []);
-      const newVersionIndex = prevVersionsForIndex.length;
-      const fullPrompt = getEditPrompt(understood, sourceImage ? config.prompts.edit : DEFAULT_PROMPTS.dialog_text_to_image);
-      const genRecord = addGenerationRecord({
-        source: 'dialog',
-        timestamp: Date.now(),
-        fullPrompt,
-        instruction: understood,
-        userPrompt: instructionText,
-        outputImageRef: { type: 'dialogRef', value: `${dialogActiveSessionIdResolved}:${assistantMsgId}:${newVersionIndex}` },
-        sessionId: dialogActiveSessionIdResolved,
-        messageId: assistantMsgId,
-        versionIndex: newVersionIndex,
-        model: dialogModel,
-        options: imageOptions ? { aspectRatio: imageOptions.aspectRatio ?? '', imageSize: imageOptions.imageSize ?? '' } : undefined
-      });
-      const newVersion: DialogMessageVersion = { resultImageBase64: resultImage, understoodPrompt: understood, timestamp: Date.now(), width, height, generationRecordId: genRecord.id };
-      setDialogMessages(prev => prev.map(m => {
-        if (m.id !== assistantMsgId) return m;
-        const prevVersions = m.versions ?? (m.resultImageBase64 ? [{ resultImageBase64: m.resultImageBase64, understoodPrompt: m.understoodPrompt, timestamp: m.timestamp }] : []);
-        return { ...m, text: '已根据你的需求生成图片。', versions: [...prevVersions, newVersion] };
-      }));
-      setDialogVersionIndex(prev => ({ ...prev, [assistantMsgId]: newVersionIndex }));
-      addToDialogTempLibrary({ data: resultImage, sourceSessionId: dialogActiveSessionIdResolved, sourceMessageId: assistantMsgId, sourceType: 'generated', userPrompt: instructionText, understoodPrompt: understood });
-    } catch (err: any) {
-      dialogAbortControllerRef.current = null;
-      const isAbort = err?.name === 'AbortError' || dialogCancelRequestedRef.current;
-      if (isAbort) {
-        updateTask(taskId, { status: 'FAILED', error: '已取消' });
-        setDialogMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, text: '已取消。' } : m));
-      } else if (!dialogCancelRequestedRef.current) {
-        const errMsg = normalizeApiErrorMessage(err);
-        updateTask(taskId, { status: 'FAILED', error: errMsg });
-        setDialogMessages(prev => prev.map(m =>
-          m.id === assistantMsgId ? { ...m, text: `重新生成失败: ${errMsg}` } : m
-        ));
-      }
-    } finally {
-      setDialogRegeneratingId(null);
-      setDialogEditingMessageId(null);
-    }
-  };
-
-  const handleDialogCancelGen = () => {
-    dialogCancelRequestedRef.current = true;
-    if (dialogAbortControllerRef.current) {
-      dialogAbortControllerRef.current.abort();
-      dialogAbortControllerRef.current = null;
-    }
-  };
-
-  /** 仅理解未生图时，点击「生成图片」调用生图并更新该条消息 */
-  const handleDialogGenerateFromUnderstood = async (assistantMsgId: string) => {
-    const idx = dialogMessages.findIndex(m => m.id === assistantMsgId);
-    if (idx <= 0) return;
-    const assistantMsg = dialogMessages[idx];
-    const userMsg = dialogMessages[idx - 1];
-    if (assistantMsg.role !== 'assistant' || !assistantMsg.understoodPrompt || userMsg.role !== 'user' || !userMsg.imageBase64) return;
-    setDialogGeneratingFromUnderstoodId(assistantMsgId);
-    const taskId = addTask('DIALOG_GEN', '对话');
-    try {
-      updateTask(taskId, { status: 'RUNNING', progress: 50 });
-      const imageOptions = dialogSizeMode === 'manual'
-        ? { aspectRatio: dialogAspectRatio, imageSize: dialogImageSize }
-        : undefined;
-      const genController = new AbortController();
-      dialogAbortControllerRef.current = genController;
-      const resultImage = await dialogGenerateImage(
-        userMsg.imageBase64,
-        assistantMsg.understoodPrompt,
-        dialogModel,
-        imageOptions,
-        config.prompts.edit,
-        genController.signal
-      );
-      dialogAbortControllerRef.current = null;
-      updateTask(taskId, { status: 'SUCCESS', progress: 100 });
-      let width: number | undefined; let height: number | undefined;
-      try { const d = await getImageDimensions(resultImage); width = d.width; height = d.height; } catch (_) {}
-      const fullPrompt = getEditPrompt(assistantMsg.understoodPrompt!, config.prompts.edit);
-      const genRecord = addGenerationRecord({
-        source: 'dialog',
-        timestamp: Date.now(),
-        fullPrompt,
-        instruction: assistantMsg.understoodPrompt,
-        userPrompt: userMsg.text,
-        outputImageRef: { type: 'dialogRef', value: `${dialogActiveSessionIdResolved}:${assistantMsgId}:0` },
-        sessionId: dialogActiveSessionIdResolved,
-        messageId: assistantMsgId,
-        versionIndex: 0,
-        model: dialogModel,
-        options: imageOptions ? { aspectRatio: imageOptions.aspectRatio ?? '', imageSize: imageOptions.imageSize ?? '' } : undefined
-      });
-      const newVersion: DialogMessageVersion = { resultImageBase64: resultImage, understoodPrompt: assistantMsg.understoodPrompt, timestamp: Date.now(), width, height, generationRecordId: genRecord.id };
-      setDialogMessages(prev => prev.map(m =>
-        m.id !== assistantMsgId ? m : { ...m, text: '已根据你的需求生成图片。', versions: [newVersion] }
-      ));
-      addToDialogTempLibrary({ data: resultImage, sourceSessionId: dialogActiveSessionIdResolved, sourceMessageId: assistantMsgId, sourceType: 'generated', userPrompt: userMsg.text, understoodPrompt: assistantMsg.understoodPrompt });
-    } catch (err: any) {
-      dialogAbortControllerRef.current = null;
-      const isAbort = err?.name === 'AbortError' || dialogCancelRequestedRef.current;
-      if (isAbort) {
-        updateTask(taskId, { status: 'FAILED', error: '已取消' });
-        setDialogMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, text: '已取消。' } : m));
-      } else {
-        const errMsg = normalizeApiErrorMessage(err);
-        updateTask(taskId, { status: 'FAILED', error: errMsg });
-        setDialogMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, text: `生成失败: ${errMsg}` } : m));
-      }
-    } finally {
-      setDialogGeneratingFromUnderstoodId(null);
-    }
-  };
-
-  const handleDialogCropConfirm = (croppedBase64: string) => {
-    if (!dialogCropState) return;
-    const { messageId } = dialogCropState;
-    const msg = dialogMessages.find(m => m.id === messageId);
-    if (!msg) { setDialogCropState(null); setDialogCropStart(null); setDialogCropCurrent(null); return; }
-    const displayVersion = getDisplayVersion(msg);
-    const img = new Image();
-    img.onload = () => {
-      const newVersion: DialogMessageVersion = {
-        resultImageBase64: croppedBase64,
-        understoodPrompt: displayVersion?.understoodPrompt ?? '裁切',
-        timestamp: Date.now(),
-        width: img.naturalWidth,
-        height: img.naturalHeight
-      };
-      setDialogMessages(prev => prev.map(m => {
-        if (m.id !== messageId) return m;
-        const v = m.versions ?? (m.resultImageBase64 ? [{ resultImageBase64: m.resultImageBase64, understoodPrompt: m.understoodPrompt, timestamp: m.timestamp }] : []);
-        return { ...m, versions: [...v, newVersion] };
-      }));
-      const prevLen = (msg.versions ?? (msg.resultImageBase64 ? [{ resultImageBase64: msg.resultImageBase64, understoodPrompt: msg.understoodPrompt, timestamp: msg.timestamp }] : [])).length;
-      setDialogVersionIndex(prev => ({ ...prev, [messageId]: prevLen }));
-      addToDialogTempLibrary({
-        data: croppedBase64,
-        sourceSessionId: dialogActiveSessionIdResolved,
-        sourceMessageId: messageId,
-        sourceType: 'generated',
-        understoodPrompt: displayVersion?.understoodPrompt ?? '裁切',
-        timestamp: Date.now()
-      });
-      setDialogCropState(null);
-      setDialogCropStart(null);
-      setDialogCropCurrent(null);
-    };
-    img.src = croppedBase64;
-  };
-
-  const handleDialogCropCancel = () => {
-    setDialogCropState(null);
-    setDialogCropStart(null);
-    setDialogCropCurrent(null);
-  };
-
-  const handleDialogCropExecute = () => {
-    if (!dialogCropState || !dialogCropImgRef.current) return;
-    const start = dialogCropStart;
-    const current = dialogCropCurrent;
-    if (!start || !current) {
-      alert('请先在图片上拖拽选择裁切区域。');
-      return;
-    }
-    const img = dialogCropImgRef.current;
-    const rect = img.getBoundingClientRect();
-    const scaleX = img.naturalWidth / rect.width;
-    const scaleY = img.naturalHeight / rect.height;
-    const x = Math.max(0, (Math.min(start.x, current.x) - rect.left) * scaleX);
-    const y = Math.max(0, (Math.min(start.y, current.y) - rect.top) * scaleY);
-    const w = Math.min(img.naturalWidth - x, Math.abs(current.x - start.x) * scaleX);
-    const h = Math.min(img.naturalHeight - y, Math.abs(current.y - start.y) * scaleY);
-    if (w < 5 || h < 5) {
-      alert('请选择一个稍大的有效区域。');
-      return;
-    }
-    const srcImg = new Image();
-    srcImg.onload = () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = w;
-      canvas.height = h;
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.drawImage(srcImg, x, y, w, h, 0, 0, w, h);
-        handleDialogCropConfirm(canvas.toDataURL('image/png'));
-      }
-    };
-    srcImg.src = dialogCropState.imageBase64;
-  };
-
-  const handleDialogRegenerate = (assistantMsgId: string) => {
-    const idx = dialogMessages.findIndex(m => m.id === assistantMsgId);
-    if (idx <= 0) return;
-    const userMsg = dialogMessages[idx - 1];
-    if (userMsg.role !== 'user') return;
-    runDialogRegenerate(userMsg, userMsg.text, assistantMsgId);
-  };
-
-  const handleDialogEditThenRegenerate = (assistantMsgId: string, editedText: string) => {
-    const trimmed = editedText.trim();
-    if (!trimmed) return;
-    const idx = dialogMessages.findIndex(m => m.id === assistantMsgId);
-    if (idx <= 0) return;
-    const userMsg = dialogMessages[idx - 1];
-    if (userMsg.role !== 'user' || !userMsg.imageBase64) return;
-    runDialogRegenerate(userMsg, trimmed, assistantMsgId);
-  };
-
-  const handleDialogSaveToLibrary = (msg: DialogMessage) => {
-    const v = getDisplayVersion(msg);
-    if (!v?.resultImageBase64) return;
-    addToLibrary([{
-      data: v.resultImageBase64,
-      type: 'STRIP',
-      category: 'PREVIEW_STRIP',
-      label: `对话_${msg.id.slice(0, 4)}`,
-      sourceId: 'app'
-    }]);
-  };
-
-  const handleDialogUseAsInput = (msg: DialogMessage) => {
-    const v = getDisplayVersion(msg);
-    if (!v?.resultImageBase64) return;
-    setDialogInputImages([{ id: Math.random().toString(36).slice(2, 11), data: v.resultImageBase64 }]);
-    dialogEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
   const handleDialogDownload = (msg: DialogMessage) => {
@@ -1631,7 +998,7 @@ const App: React.FC = () => {
       const res = await fetch(base64);
       const blob = await res.blob();
       await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
-    } catch (_) {}
+    } catch { /* ignore clipboard failure */ }
   };
 
   const handleDialogPaste = (e: React.ClipboardEvent) => {
@@ -1648,107 +1015,6 @@ const App: React.FC = () => {
         }
         return;
       }
-    }
-  };
-
-  const cropImageByBox = (imageBase64: string, box: BoundingBox, paddingRatio = 0.08): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const img = new Image();
-      img.src = imageBase64;
-      img.onload = () => {
-        const boxW = (box.xmax - box.xmin) / 1000;
-        const boxH = (box.ymax - box.ymin) / 1000;
-        const pad = Math.min(paddingRatio, 0.2);
-        const sX = Math.max(0, (box.xmin / 1000) * img.width - img.width * boxW * pad);
-        const sY = Math.max(0, (box.ymin / 1000) * img.height - img.height * boxH * pad);
-        const sW = Math.min(img.width - sX, ((box.xmax - box.xmin) / 1000) * img.width + 2 * img.width * boxW * pad);
-        const sH = Math.min(img.height - sY, ((box.ymax - box.ymin) / 1000) * img.height + 2 * img.height * boxH * pad);
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.max(1, sW);
-        canvas.height = Math.max(1, sH);
-        const ctx = canvas.getContext('2d');
-        if (!ctx) { reject(new Error('No canvas context')); return; }
-        ctx.drawImage(img, sX, sY, sW, sH, 0, 0, sW, sH);
-        resolve(canvas.toDataURL('image/png'));
-      };
-      img.onerror = () => reject(new Error('Image load failed'));
-    });
-  };
-
-  const handleDialogDetectObjects = async (msg: DialogMessage, forceReDetect = false) => {
-    const v = getDisplayVersion(msg);
-    if (!v?.resultImageBase64) return;
-    if (!forceReDetect && v.detectedBoxes && v.detectedBoxes.length > 0) {
-      setDialogDetectMessageId(msg.id);
-      return;
-    }
-    setDialogDetectingId(msg.id);
-    const taskId = addTask('DIALOG_GEN', '识别图中物体');
-    try {
-      updateTask(taskId, { status: 'RUNNING', progress: 50 });
-      const boxes = await detectObjectsInImage(v.resultImageBase64, config.modelText);
-      const versionIndex = dialogVersionIndex[msg.id] ?? (msg.versions?.length ?? 1) - 1;
-      setDialogSessions(prev => prev.map(s => {
-        if (s.id !== dialogActiveSessionIdResolved) return s;
-        return { ...s, messages: s.messages.map(m => {
-          if (m.id !== msg.id || !m.versions?.length) return m;
-          const versions = [...m.versions];
-          if (versions[versionIndex]) versions[versionIndex] = { ...versions[versionIndex], detectedBoxes: boxes };
-          return { ...m, versions };
-        }), updatedAt: Date.now() };
-      }));
-      setDialogDetectMessageId(msg.id);
-      updateTask(taskId, { status: 'SUCCESS', progress: 100 });
-    } catch (err: any) {
-      updateTask(taskId, { status: 'FAILED', error: err.message });
-    } finally {
-      setDialogDetectingId(null);
-    }
-  };
-
-  const handleDialogDetectClose = () => setDialogDetectMessageId(null);
-
-  const handleDialogDownloadCropByIndex = async (msg: DialogMessage, index: number) => {
-    const v = getDisplayVersion(msg);
-    if (!v?.resultImageBase64 || !v.detectedBoxes?.[index]) return;
-    try {
-      const dataUrl = await cropImageByBox(v.resultImageBase64, v.detectedBoxes[index]);
-      const a = document.createElement('a');
-      a.href = dataUrl;
-      const label = DIALOG_BOX_LABELS[index] ?? `${index + 1}`;
-      const title = (activeSession?.title || '对话').replace(/[/\\?*:|"]/g, '_');
-      const d = new Date(msg.timestamp);
-      const timeStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}_${String(d.getHours()).padStart(2, '0')}-${String(d.getMinutes()).padStart(2, '0')}-${String(d.getSeconds()).padStart(2, '0')}`;
-      a.download = `${title}_${label}_${timeStr}.png`;
-      a.click();
-    } catch (_) {}
-  };
-
-  const handleDialogDownloadAllCrops = async (msg: DialogMessage) => {
-    const v = getDisplayVersion(msg);
-    if (!v?.resultImageBase64 || !v.detectedBoxes?.length) return;
-    for (let i = 0; i < v.detectedBoxes.length; i++) {
-      await handleDialogDownloadCropByIndex(msg, i);
-      await new Promise(r => setTimeout(r, 200));
-    }
-  };
-
-  const handleDialogTempAddCropByIndex = async (msg: DialogMessage, index: number) => {
-    const v = getDisplayVersion(msg);
-    if (!v?.resultImageBase64 || !v.detectedBoxes?.[index]) return;
-    try {
-      const dataUrl = await cropImageByBox(v.resultImageBase64, v.detectedBoxes[index]);
-      const label = DIALOG_BOX_LABELS[index] ?? `${index + 1}`;
-      addToDialogTempLibrary({ data: dataUrl, sourceSessionId: dialogActiveSessionIdResolved, sourceMessageId: msg.id, sourceType: 'object_crop', label });
-    } catch (_) {}
-  };
-
-  const handleDialogTempAddAllCrops = async (msg: DialogMessage) => {
-    const v = getDisplayVersion(msg);
-    if (!v?.resultImageBase64 || !v.detectedBoxes?.length) return;
-    for (let i = 0; i < v.detectedBoxes.length; i++) {
-      await handleDialogTempAddCropByIndex(msg, i);
-      await new Promise(r => setTimeout(r, 100));
     }
   };
 
@@ -2099,8 +1365,8 @@ const App: React.FC = () => {
     if (filterRated === 'yes') filtered = filtered.filter(r => r.userScore != null);
     if (filterRated === 'no') filtered = filtered.filter(r => r.userScore == null);
 
-    const bySource = React.useMemo(() => {
-      const map: Record<string, { count: number; rated: number; sumScore: number; samples: { fullPrompt: string; instruction?: string; userScore: number }[] }> = {};
+    const bySource = React.useMemo<Record<string, SourceAggregate>>(() => {
+      const map: Record<string, SourceAggregate> = {};
       for (const r of records) {
         const key = r.source === 'texture' && r.textureType ? `${r.source}:${r.textureType}` : r.source;
         if (!map[key]) map[key] = { count: 0, rated: 0, sumScore: 0, samples: [] };
@@ -2160,7 +1426,7 @@ const App: React.FC = () => {
         <section className="glass p-6 rounded-[2.5rem] border-white/5">
           <h3 className="text-[10px] font-black text-blue-400 uppercase mb-4">按来源聚合</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {Object.entries(bySource).map(([key, agg]) => (
+            {(Object.entries(bySource) as [string, SourceAggregate][]).map(([key, agg]) => (
               <div key={key} className="bg-black/40 rounded-xl p-4 border border-white/10">
                 <div className="text-[10px] font-black uppercase text-blue-400 mb-2">{key}</div>
                 <div className="text-[9px] text-gray-400 space-y-1">条数 {agg.count} · 已评 {agg.rated} · 平均分 {agg.rated ? (agg.sumScore / agg.rated).toFixed(1) : '-'}</div>
@@ -2331,7 +1597,9 @@ const App: React.FC = () => {
         )}
       </aside>
 
-      <SiteAssistant tasks={tasks} onRemoveTask={id => setTasks(p => p.filter(t => t.id !== id))} />
+      <Suspense fallback={null}>
+        <SiteAssistant tasks={tasks} onRemoveTask={id => setTasks(p => p.filter(t => t.id !== id))} />
+      </Suspense>
 
       <main className="flex-1 flex flex-col h-[100dvh] overflow-hidden">
         {!isSidebarOpen && (
@@ -2342,128 +1610,146 @@ const App: React.FC = () => {
             <div className="relative min-h-full -mx-4 -my-4 lg:-mx-10 lg:-my-10">
               <div className="absolute inset-0 home-bg-mesh pointer-events-none" aria-hidden />
               <div className="relative max-w-6xl mx-auto w-full px-4 py-4 lg:px-10 lg:py-10 min-h-[80vh]">
-                <HomeSection onNavigate={(m) => { setMode(m); if (m === AppMode.TEXTURE) setStep(AppStep.T_PATTERN); setIsSidebarOpen(false); }} library={library} onOpenAsset={(item) => setActiveAssetId(item)} />
+                <Suspense fallback={<LazySectionFallback label="主页" />}>
+                  <HomeSection onNavigate={(m) => { setMode(m); if (m === AppMode.TEXTURE) setStep(AppStep.T_PATTERN); setIsSidebarOpen(false); }} library={library} onOpenAsset={(item) => setActiveAssetId(item)} />
+                </Suspense>
               </div>
             </div>
           ) : (
           <div className="max-w-6xl mx-auto w-full">
-            {mode === AppMode.SETTINGS && <SettingsSection />}
+            {mode === AppMode.SETTINGS && (
+              <Suspense fallback={<LazySectionFallback label="设置" />}>
+                <SettingsSection />
+              </Suspense>
+            )}
             {mode === AppMode.TEXTURE && <TextureEngineSection />}
 
             {mode === AppMode.WORKFLOW && (
               <WorkflowErrorBoundary>
-                <WorkflowSection capabilityPresets={capabilityPresets} capabilitySets={capabilitySets} assets={workflowAssets} onAssetsChange={setWorkflowAssets} pending={workflowPending} onPendingChange={setWorkflowPending} onOpenLibraryPicker={(cb) => openPicker(undefined, cb, true)} onLog={(level, message, detail) => addGlobalLog('工作流', level, message, detail)} onAddGenerate3DJob={handleAddGenerate3DJobFromWorkflow} />
+                <Suspense fallback={<LazySectionFallback label="工作流" />}>
+                  <WorkflowSection capabilityPresets={capabilityPresets} capabilitySets={capabilitySets} assets={workflowAssets} onAssetsChange={setWorkflowAssets} pending={workflowPending} onPendingChange={setWorkflowPending} onOpenLibraryPicker={(cb) => openPicker(undefined, cb, true)} onLog={(level, message, detail) => addGlobalLog('工作流', level, message, detail)} onAddGenerate3DJob={handleAddGenerate3DJobFromWorkflow} />
+                </Suspense>
               </WorkflowErrorBoundary>
             )}
 
             {mode === AppMode.SEAM_REPAIR && (
-              <SeamRepairSection onLog={(level, message, detail) => addGlobalLog('贴图修缝', level, message, detail)} />
+              <Suspense fallback={<LazySectionFallback label="贴图修缝" />}>
+                <SeamRepairSection onLog={(level, message, detail) => addGlobalLog('贴图修缝', level, message, detail)} />
+              </Suspense>
             )}
 
             {mode === AppMode.PBR_TEXTURE && (
-              <GenerateTextureSection onLog={(level, message, detail) => addGlobalLog('生成贴图', level, message, detail)} />
+              <Suspense fallback={<LazySectionFallback label="生成贴图" />}>
+                <GenerateTextureSection onLog={(level, message, detail) => addGlobalLog('生成贴图', level, message, detail)} />
+              </Suspense>
             )}
 
             {mode === AppMode.CAPABILITY && (
-              <CapabilityPresetSection
-                presets={capabilityPresets}
-                onUpdate={(next) => { setCapabilityPresets(next); saveCapabilityPresets(next); }}
-                sets={capabilitySets}
-                onUpdateSets={(next) => { setCapabilitySets(next); saveCapabilitySets(next); }}
-                onRunTest={runCapabilityTest}
-                onLog={(level, message, detail) => addGlobalLog('能力', level, message, detail)}
-              />
+              <Suspense fallback={<LazySectionFallback label="能力" />}>
+                <CapabilityPresetSection
+                  presets={capabilityPresets}
+                  onUpdate={(next) => { setCapabilityPresets(next); saveCapabilityPresets(next); }}
+                  sets={capabilitySets}
+                  onUpdateSets={(next) => { setCapabilitySets(next); saveCapabilitySets(next); }}
+                  onRunTest={runCapabilityTest}
+                  onLog={(level, message, detail) => addGlobalLog('能力', level, message, detail)}
+                />
+              </Suspense>
             )}
 
             {mode === AppMode.ADMIN && <GenerationRecordsAnalysis />}
 
             {mode === AppMode.ARENA && (
-              <PromptArenaSection
-                arenaUserDescription={arenaUserDescription}
-                setArenaUserDescription={setArenaUserDescription}
-                arenaImage={arenaImage}
-                setArenaImage={setArenaImage}
-                arenaRound={arenaRound}
-                setArenaRound={setArenaRound}
-                arenaInitialCount={arenaInitialCount}
-                setArenaInitialCount={setArenaInitialCount}
-                arenaReasoning={arenaReasoning}
-                setArenaReasoning={setArenaReasoning}
-                arenaOptimizeReasoning={arenaOptimizeReasoning}
-                setArenaOptimizeReasoning={setArenaOptimizeReasoning}
-                arenaPromptA={arenaPromptA}
-                setArenaPromptA={setArenaPromptA}
-                arenaImageA={arenaImageA}
-                setArenaImageA={setArenaImageA}
-                arenaPromptB={arenaPromptB}
-                setArenaPromptB={setArenaPromptB}
-                arenaImageB={arenaImageB}
-                setArenaImageB={setArenaImageB}
-                arenaPromptC={arenaPromptC}
-                setArenaPromptC={setArenaPromptC}
-                arenaImageC={arenaImageC}
-                setArenaImageC={setArenaImageC}
-                arenaPromptD={arenaPromptD}
-                setArenaPromptD={setArenaPromptD}
-                arenaImageD={arenaImageD}
-                setArenaImageD={setArenaImageD}
-                arenaChampionPrompt={arenaChampionPrompt}
-                setArenaChampionPrompt={setArenaChampionPrompt}
-                arenaChampionImage={arenaChampionImage}
-                setArenaChampionImage={setArenaChampionImage}
-                arenaChallengerPrompt={arenaChallengerPrompt}
-                setArenaChallengerPrompt={setArenaChallengerPrompt}
-                arenaChallengerImage={arenaChallengerImage}
-                setArenaChallengerImage={setArenaChallengerImage}
-                arenaChallenger2Prompt={arenaChallenger2Prompt}
-                setArenaChallenger2Prompt={setArenaChallenger2Prompt}
-                arenaChallenger2Image={arenaChallenger2Image}
-                setArenaChallenger2Image={setArenaChallenger2Image}
-                arenaIsGenerating={arenaIsGenerating}
-                setArenaIsGenerating={setArenaIsGenerating}
-                arenaIsOptimizing={arenaIsOptimizing}
-                setArenaIsOptimizing={setArenaIsOptimizing}
-                arenaCompareModalOpen={arenaCompareModalOpen}
-                setArenaCompareModalOpen={setArenaCompareModalOpen}
-                arenaReportedGaps={arenaReportedGaps}
-                setArenaReportedGaps={setArenaReportedGaps}
-                arenaWinnerStrength={arenaWinnerStrength}
-                setArenaWinnerStrength={setArenaWinnerStrength}
-                arenaLoserRemark={arenaLoserRemark}
-                setArenaLoserRemark={setArenaLoserRemark}
-                arenaImageModel={arenaImageModel}
-                setArenaImageModel={setArenaImageModel}
-                arenaCurrentStep={arenaCurrentStep}
-                setArenaCurrentStep={setArenaCurrentStep}
-                arenaStepLog={arenaStepLog}
-                setArenaStepLog={setArenaStepLog}
-                arenaTimeline={arenaTimeline}
-                setArenaTimeline={setArenaTimeline}
-                arenaSaveSnippetConfirm={arenaSaveSnippetConfirm}
-                setArenaSaveSnippetConfirm={setArenaSaveSnippetConfirm}
-                arenaSnippets={arenaSnippets}
-                setArenaSnippets={setArenaSnippets}
-                arenaFirstVisit={arenaFirstVisit}
-                setArenaFirstVisit={setArenaFirstVisit}
-                setMode={setMode}
-                addTask={addTask}
-                updateTask={updateTask}
-                addGlobalLog={addGlobalLog}
-                onFileUpload={handleFileUpload}
-                modelText={config.modelText}
-                promptEdit={config.prompts.edit}
-                dialogModel={dialogModel}
-              />
+              <Suspense fallback={<LazySectionFallback label="提示词擂台" />}>
+                <PromptArenaSection
+                  arenaUserDescription={arenaUserDescription}
+                  setArenaUserDescription={setArenaUserDescription}
+                  arenaImage={arenaImage}
+                  setArenaImage={setArenaImage}
+                  arenaRound={arenaRound}
+                  setArenaRound={setArenaRound}
+                  arenaInitialCount={arenaInitialCount}
+                  setArenaInitialCount={setArenaInitialCount}
+                  arenaReasoning={arenaReasoning}
+                  setArenaReasoning={setArenaReasoning}
+                  arenaOptimizeReasoning={arenaOptimizeReasoning}
+                  setArenaOptimizeReasoning={setArenaOptimizeReasoning}
+                  arenaPromptA={arenaPromptA}
+                  setArenaPromptA={setArenaPromptA}
+                  arenaImageA={arenaImageA}
+                  setArenaImageA={setArenaImageA}
+                  arenaPromptB={arenaPromptB}
+                  setArenaPromptB={setArenaPromptB}
+                  arenaImageB={arenaImageB}
+                  setArenaImageB={setArenaImageB}
+                  arenaPromptC={arenaPromptC}
+                  setArenaPromptC={setArenaPromptC}
+                  arenaImageC={arenaImageC}
+                  setArenaImageC={setArenaImageC}
+                  arenaPromptD={arenaPromptD}
+                  setArenaPromptD={setArenaPromptD}
+                  arenaImageD={arenaImageD}
+                  setArenaImageD={setArenaImageD}
+                  arenaChampionPrompt={arenaChampionPrompt}
+                  setArenaChampionPrompt={setArenaChampionPrompt}
+                  arenaChampionImage={arenaChampionImage}
+                  setArenaChampionImage={setArenaChampionImage}
+                  arenaChallengerPrompt={arenaChallengerPrompt}
+                  setArenaChallengerPrompt={setArenaChallengerPrompt}
+                  arenaChallengerImage={arenaChallengerImage}
+                  setArenaChallengerImage={setArenaChallengerImage}
+                  arenaChallenger2Prompt={arenaChallenger2Prompt}
+                  setArenaChallenger2Prompt={setArenaChallenger2Prompt}
+                  arenaChallenger2Image={arenaChallenger2Image}
+                  setArenaChallenger2Image={setArenaChallenger2Image}
+                  arenaIsGenerating={arenaIsGenerating}
+                  setArenaIsGenerating={setArenaIsGenerating}
+                  arenaIsOptimizing={arenaIsOptimizing}
+                  setArenaIsOptimizing={setArenaIsOptimizing}
+                  arenaCompareModalOpen={arenaCompareModalOpen}
+                  setArenaCompareModalOpen={setArenaCompareModalOpen}
+                  arenaReportedGaps={arenaReportedGaps}
+                  setArenaReportedGaps={setArenaReportedGaps}
+                  arenaWinnerStrength={arenaWinnerStrength}
+                  setArenaWinnerStrength={setArenaWinnerStrength}
+                  arenaLoserRemark={arenaLoserRemark}
+                  setArenaLoserRemark={setArenaLoserRemark}
+                  arenaImageModel={arenaImageModel}
+                  setArenaImageModel={setArenaImageModel}
+                  arenaCurrentStep={arenaCurrentStep}
+                  setArenaCurrentStep={setArenaCurrentStep}
+                  arenaStepLog={arenaStepLog}
+                  setArenaStepLog={setArenaStepLog}
+                  arenaTimeline={arenaTimeline}
+                  setArenaTimeline={setArenaTimeline}
+                  arenaSaveSnippetConfirm={arenaSaveSnippetConfirm}
+                  setArenaSaveSnippetConfirm={setArenaSaveSnippetConfirm}
+                  arenaSnippets={arenaSnippets}
+                  setArenaSnippets={setArenaSnippets}
+                  arenaFirstVisit={arenaFirstVisit}
+                  setArenaFirstVisit={setArenaFirstVisit}
+                  setMode={setMode}
+                  addTask={addTask}
+                  updateTask={updateTask}
+                  addGlobalLog={addGlobalLog}
+                  onFileUpload={handleFileUpload}
+                  modelText={config.modelText}
+                  promptEdit={config.prompts.edit}
+                  dialogModel={dialogModel}
+                />
+              </Suspense>
             )}
 
             {mode === AppMode.STORE && (
-              <StoreSection
-                onLog={(level, message, detail) => addGlobalLog('商店', level, message, detail)}
-                onPresetsApplied={(next) => {
-                  setCapabilityPresets(next);
-                  saveCapabilityPresets(next);
-                }}
-              />
+              <Suspense fallback={<LazySectionFallback label="商店" />}>
+                <StoreSection
+                  onLog={(level, message, detail) => addGlobalLog('商店', level, message, detail)}
+                  onPresetsApplied={(next) => {
+                    setCapabilityPresets(next);
+                    saveCapabilityPresets(next);
+                  }}
+                />
+              </Suspense>
             )}
 
             {mode === AppMode.GENERATE_3D && (
@@ -2474,11 +1760,20 @@ const App: React.FC = () => {
                   {!creds3D ? (
                     <div className="space-y-4 py-8">
                       <h3 className="text-[10px] font-black text-amber-400 uppercase">配置腾讯云凭证</h3>
-                      <p className="text-[11px] text-gray-400">混元生3D 需要 SecretId / SecretKey。请在项目根目录 <code className="bg-white/10 px-1 rounded">.env.local</code> 中配置 <code className="bg-white/10 px-1 rounded">TENCENT_SECRET_ID</code> 与 <code className="bg-white/10 px-1 rounded">TENCENT_SECRET_KEY</code>，或在下表填写（仅当次有效）：</p>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <input value={generate3DCredsOverride?.secretId ?? ''} onChange={e => setGenerate3DCredsOverride(p => ({ secretId: e.target.value.trim(), secretKey: p?.secretKey ?? '' }))} placeholder="SecretId" className="bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-[11px] outline-none focus:border-blue-500" />
-                        <input type="password" value={generate3DCredsOverride?.secretKey ?? ''} onChange={e => setGenerate3DCredsOverride(p => ({ secretId: p?.secretId ?? '', secretKey: e.target.value }))} placeholder="SecretKey" className="bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-[11px] outline-none focus:border-blue-500" />
-                      </div>
+                      <p className="text-[11px] text-gray-400">混元生3D 默认仅支持通过本地代理调用。请在项目根目录 <code className="bg-white/10 px-1 rounded">.env.local</code> 中配置 <code className="bg-white/10 px-1 rounded">TENCENT_SECRET_ID</code>、<code className="bg-white/10 px-1 rounded">TENCENT_SECRET_KEY</code>，启动 <code className="bg-white/10 px-1 rounded">npm run proxy</code>，并设置 <code className="bg-white/10 px-1 rounded">VITE_TENCENT_PROXY</code>。</p>
+                      {unsafeTencentBrowserCredsEnabled ? (
+                        <>
+                          <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[9px] text-amber-300">当前已显式开启不安全模式：浏览器可临时直持腾讯云密钥。仅建议本地排障使用，勿用于生产环境。</div>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <input value={generate3DCredsOverride?.secretId ?? ''} onChange={e => setGenerate3DCredsOverride(p => ({ secretId: e.target.value.trim(), secretKey: p?.secretKey ?? '' }))} placeholder="SecretId" className="bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-[11px] outline-none focus:border-blue-500" />
+                            <input type="password" value={generate3DCredsOverride?.secretKey ?? ''} onChange={e => setGenerate3DCredsOverride(p => ({ secretId: p?.secretId ?? '', secretKey: e.target.value }))} placeholder="SecretKey" className="bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-[11px] outline-none focus:border-blue-500" />
+                          </div>
+                        </>
+                      ) : (
+                        <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-[9px] text-gray-400">
+                          如确需在浏览器直接调试，可在本地临时设置 <code className="bg-white/10 px-1 rounded">VITE_ALLOW_UNSAFE_TENCENT_BROWSER_CREDS=true</code> 后刷新页面，再手动输入凭证。
+                        </div>
+                      )}
                       <p className="text-[9px] text-gray-500">密钥在 <a href="https://console.cloud.tencent.com/cam/capi" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">腾讯云 API 密钥</a> 创建；混元生3D 需开通 <a href="https://cloud.tencent.com/document/product/1804" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">产品页</a>。</p>
                     </div>
                   ) : (
@@ -2622,7 +1917,9 @@ const App: React.FC = () => {
                   <div className="px-3 py-2 text-[9px] font-black uppercase text-gray-500 border-b border-white/10">3D 预览 · 支持 OBJ/GLB，生成后自动显示，可点击右侧临时库切换</div>
                   <div className="flex-1 min-h-[280px] relative">
                     {generate3DPreview ? (
+                    <Suspense fallback={<LazySectionFallback label="3D预览" />}>
                       <UnifiedModelViewer3D url={generate3DPreview.url} format={generate3DPreview.format} />
+                    </Suspense>
                     ) : (
                       <div className="absolute inset-0 flex items-center justify-center text-gray-500 text-[11px]">暂无预览，生成后将自动显示；或从右侧临时库选择</div>
                     )}
@@ -2636,6 +1933,85 @@ const App: React.FC = () => {
                     <span className="text-[9px] text-gray-500">队列 {generate3DQueue.length}（{generate3DQueue.filter(q => q.status === 'running').length} 运行中）</span>
                   </div>
                   <div className="flex-1 overflow-y-auto no-scrollbar p-2 space-y-2">
+                    {generate3DQueue.length > 0 && (
+                      <div className="rounded-xl border border-white/10 bg-white/5 p-2 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[8px] font-black uppercase text-gray-400">任务队列</span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[8px] text-gray-500">{generate3DQueue.filter(q => q.status === 'pending' || q.status === 'running').length} 活跃</span>
+                            {generate3DQueue.some(q => q.status !== 'pending' && q.status !== 'running') && (
+                              <button
+                                onClick={clearInactiveQueueItems}
+                                className="px-1.5 py-1 rounded-md border border-white/10 text-[8px] font-black uppercase text-gray-400 hover:bg-white/10"
+                              >
+                                清理
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                        <div className="space-y-2">
+                          {[...generate3DQueue].reverse().slice(0, 8).map((item) => {
+                            const statusText = item.status === 'pending'
+                              ? '等待中'
+                              : item.status === 'running'
+                                ? '运行中'
+                                : item.status === 'done'
+                                  ? '已完成'
+                                  : item.status === 'cancelled'
+                                    ? '已取消'
+                                    : '失败';
+                            const statusClass = item.status === 'running'
+                              ? 'bg-blue-500/15 text-blue-300 border-blue-500/30'
+                              : item.status === 'pending'
+                                ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                                : item.status === 'done'
+                                  ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                                  : item.status === 'cancelled'
+                                    ? 'bg-gray-500/15 text-gray-300 border-gray-500/30'
+                                    : 'bg-red-500/15 text-red-300 border-red-500/30';
+                            return (
+                              <div key={item.id} className="rounded-xl border border-white/10 bg-black/30 p-2">
+                                <div className="flex items-start justify-between gap-2">
+                                  <div className="min-w-0">
+                                    <div className="text-[10px] font-black truncate">{item.label || item.type}</div>
+                                    <div className="text-[8px] text-gray-500 uppercase mt-1">{item.type}</div>
+                                  </div>
+                                  <span className={`shrink-0 px-1.5 py-0.5 rounded-md border text-[8px] font-black uppercase ${statusClass}`}>{statusText}</span>
+                                </div>
+                                {typeof item.progress === 'number' && item.status === 'running' && (
+                                  <div className="mt-2">
+                                    <div className="h-1.5 rounded-full bg-white/10 overflow-hidden">
+                                      <div className="h-full bg-blue-500" style={{ width: `${Math.max(0, Math.min(100, item.progress))}%` }} />
+                                    </div>
+                                  </div>
+                                )}
+                                {item.error && (
+                                  <div className="mt-2 text-[8px] text-gray-400 line-clamp-2">{item.error}</div>
+                                )}
+                                <div className="mt-2 flex gap-2">
+                                  {(item.status === 'pending' || item.status === 'running') && (
+                                    <button
+                                      onClick={() => cancelQueueItem(item.id)}
+                                      className="flex-1 py-1.5 rounded-lg border border-red-500/30 bg-red-500/10 text-[9px] font-black uppercase text-red-300 hover:bg-red-500/15"
+                                    >
+                                      取消任务
+                                    </button>
+                                  )}
+                                  {(item.status === 'fail' || item.status === 'cancelled') && (
+                                    <button
+                                      onClick={() => retryQueueItem(item.id)}
+                                      className="flex-1 py-1.5 rounded-lg border border-blue-500/30 bg-blue-500/10 text-[9px] font-black uppercase text-blue-300 hover:bg-blue-500/15"
+                                    >
+                                      重试
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                     {temp3DLibrary.length === 0 ? (
                       <div className="text-[10px] text-gray-500 py-6 text-center">生成的 3D 资产会出现在这里<br />点击项切换预览，可保存到资产库</div>
                     ) : (
@@ -2672,11 +2048,7 @@ const App: React.FC = () => {
                   <div className="flex items-center justify-between px-2">
                     <div className="text-[9px] font-black text-gray-500 uppercase tracking-widest">会话</div>
                     <button
-                      onClick={() => {
-                        const id = Math.random().toString(36).slice(2, 11);
-                        setDialogSessions(prev => [...prev, { id, messages: [], createdAt: Date.now(), updatedAt: Date.now() }]);
-                        setDialogActiveSessionId(id);
-                      }}
+                      onClick={createNewDialogSession}
                       className="w-9 h-9 shrink-0 rounded-xl bg-white/10 border border-white/10 flex items-center justify-center text-lg font-bold text-white/80 hover:bg-white/20 transition-colors"
                       title="新对话"
                     >
@@ -2715,7 +2087,7 @@ const App: React.FC = () => {
                             <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-0.5">
                               {showArchive && (
                                 <button
-                                  onClick={(e) => { e.stopPropagation(); setDialogSessions(prev => prev.map(x => x.id === s.id ? { ...x, archived: true } : x)); }}
+                                  onClick={(e) => { e.stopPropagation(); archiveDialogSession(s.id); }}
                                   className="w-6 h-6 rounded-lg flex items-center justify-center text-[10px] text-gray-500 hover:text-amber-400 hover:bg-white/10 transition-colors"
                                   title="归档"
                                 >
@@ -2725,10 +2097,7 @@ const App: React.FC = () => {
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  const next = dialogSessions.filter(x => x.id !== s.id);
-                                  setDialogSessions(next.length ? next : [{ id: Math.random().toString(36).slice(2, 11), messages: [], createdAt: Date.now(), updatedAt: Date.now() }]);
-                                  setDialogTempLibrary(prev => prev.filter(x => x.sourceSessionId !== s.id));
-                                  if (s.id === dialogActiveSessionIdResolved) setDialogActiveSessionId(next[0]?.id ?? '');
+                                  handleRemoveDialogSession(s.id);
                                 }}
                                 className="w-7 h-7 rounded-xl flex items-center justify-center text-gray-500 hover:text-white hover:bg-white/10 transition-colors"
                                 title="关闭会话"
@@ -2787,23 +2156,27 @@ const App: React.FC = () => {
                     const isEditingThis = dialogEditingMessageId === msg.id;
                     const isRegeneratingThis = dialogRegeneratingId === msg.id;
                     const displayVersion = getDisplayVersion(msg);
-                    const versions = msg.versions ?? (msg.resultImageBase64 ? [{ resultImageBase64: msg.resultImageBase64, understoodPrompt: msg.understoodPrompt, timestamp: msg.timestamp }] : []);
-                    const versionIndex = displayVersion && versions.length > 0 ? (dialogVersionIndex[msg.id] ?? versions.length - 1) : 0;
+                    const versions = getDialogVersions(msg);
+                    const versionIndex = displayVersion && versions.length > 0 ? getDialogVersionPosition(msg) : 0;
                     const gcd = (a: number, b: number) => (b ? gcd(b, a % b) : a);
                     const aspectRatioLabel = displayVersion?.width != null && displayVersion?.height != null ? (() => { const g = gcd(displayVersion.width, displayVersion.height); return `${displayVersion.width / g}:${displayVersion.height / g}`; })() : null;
                     return (
                       <div key={msg.id} id={`msg-${msg.id}`} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                         <div className={`max-w-[85%] lg:max-w-[75%] rounded-2xl overflow-hidden ${msg.role === 'user' ? 'bg-blue-600/20 border border-blue-500/30' : 'bg-white/5 border border-white/10'}`}>
-                          {msg.role === 'user' && msg.imageBase64 && (
+                          {msg.role === 'user' && (msg.inputImages?.length || msg.imageBase64) && (
                             <div className="p-2 border-b border-white/10">
-                              <img src={msg.imageBase64} className="max-h-48 rounded-xl object-contain mx-auto" alt="上传" />
+                              <div className={`grid gap-2 ${msg.inputImages && msg.inputImages.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}>
+                                {(msg.inputImages && msg.inputImages.length > 0 ? msg.inputImages : msg.imageBase64 ? [msg.imageBase64] : []).map((image, imageIndex) => (
+                                  <img key={`${msg.id}-${imageIndex}`} src={image} className="max-h-48 rounded-xl object-contain mx-auto" alt="上传" />
+                                ))}
+                              </div>
                             </div>
                           )}
                           <div className="px-4 py-3 text-[11px] leading-relaxed">{msg.text}</div>
                           {msg.role === 'assistant' && msg.understoodPrompt && !displayVersion && !msg.versions?.length && !msg.resultImageBase64 && !isEditingThis && (
                             <div className="px-4 pb-4 space-y-3">
                               <div className="text-[9px] text-blue-400/80">理解指令: {msg.understoodPrompt}</div>
-                              <button onClick={() => handleDialogGenerateFromUnderstood(msg.id)} disabled={dialogGeneratingFromUnderstoodId === msg.id || !(idx > 0 && dialogMessages[idx - 1].role === 'user' && dialogMessages[idx - 1].imageBase64)} className="px-4 py-2 rounded-xl bg-blue-600 text-[10px] font-black uppercase text-white hover:bg-blue-500 disabled:opacity-50 transition-colors">
+                              <button onClick={() => handleDialogGenerateFromUnderstood(msg.id)} disabled={dialogGeneratingFromUnderstoodId === msg.id || !(idx > 0 && dialogMessages[idx - 1].role === 'user')} className="px-4 py-2 rounded-xl bg-blue-600 text-[10px] font-black uppercase text-white hover:bg-blue-500 disabled:opacity-50 transition-colors">
                                 {dialogGeneratingFromUnderstoodId === msg.id ? '生成中...' : '生成图片'}
                               </button>
                             </div>
@@ -2816,9 +2189,9 @@ const App: React.FC = () => {
                               {versions.length > 1 && (
                                 <div className="px-4 py-2 flex items-center gap-2 border-b border-white/5">
                                   <span className="text-[9px] font-black text-gray-500 uppercase">历史版本</span>
-                                  <button onClick={() => setDialogVersionIndex(p => ({ ...p, [msg.id]: Math.max(0, (p[msg.id] ?? versions.length - 1) - 1) }))} disabled={versionIndex <= 0} className="px-2 py-1 rounded-lg bg-white/5 text-[9px] font-black disabled:opacity-30">上一版</button>
+                                  <button onClick={() => showPreviousDialogVersion(msg)} disabled={versionIndex <= 0} className="px-2 py-1 rounded-lg bg-white/5 text-[9px] font-black disabled:opacity-30">上一版</button>
                                   <span className="text-[9px] text-gray-400">{(versionIndex + 1)} / {versions.length}</span>
-                                  <button onClick={() => setDialogVersionIndex(p => ({ ...p, [msg.id]: Math.min(versions.length - 1, (p[msg.id] ?? versions.length - 1) + 1) }))} disabled={versionIndex >= versions.length - 1} className="px-2 py-1 rounded-lg bg-white/5 text-[9px] font-black disabled:opacity-30">下一版</button>
+                                  <button onClick={() => showNextDialogVersion(msg)} disabled={versionIndex >= versions.length - 1} className="px-2 py-1 rounded-lg bg-white/5 text-[9px] font-black disabled:opacity-30">下一版</button>
                                 </div>
                               )}
                               {(displayVersion.width != null || displayVersion.height != null) && (
@@ -2872,7 +2245,7 @@ const App: React.FC = () => {
                               <div className="px-4 pb-4 flex flex-wrap gap-2">
                                 <button onClick={() => handleDialogDownload(msg)} className="px-3 py-2 bg-blue-600/20 border border-blue-500/30 rounded-xl text-[9px] font-black uppercase text-blue-400 hover:bg-blue-600/30 transition-all">下载图片</button>
                                 <button onClick={() => displayVersion?.resultImageBase64 && handleCopyDialogImage(displayVersion.resultImageBase64)} className="px-3 py-2 bg-white/10 border border-white/10 rounded-xl text-[9px] font-black uppercase hover:bg-white/20 transition-all">复制图片</button>
-                                <button onClick={() => displayVersion?.resultImageBase64 && setDialogCropState({ messageId: msg.id, imageBase64: displayVersion.resultImageBase64 })} className="px-3 py-2 bg-white/10 border border-white/10 rounded-xl text-[9px] font-black uppercase hover:bg-white/20 transition-all">裁切</button>
+                                <button onClick={() => displayVersion?.resultImageBase64 && openDialogCrop(msg.id, displayVersion.resultImageBase64)} className="px-3 py-2 bg-white/10 border border-white/10 rounded-xl text-[9px] font-black uppercase hover:bg-white/20 transition-all">裁切</button>
                                 <button onClick={() => handleDialogUseAsInput(msg)} className="px-3 py-2 bg-green-600/20 border border-green-500/30 rounded-xl text-[9px] font-black uppercase text-green-400 hover:bg-green-600/30 transition-all">以此图继续</button>
                                 <button onClick={() => handleDialogDetectObjects(msg)} disabled={dialogDetectingId === msg.id} className="px-3 py-2 bg-white/5 border border-white/10 rounded-xl text-[9px] font-black uppercase hover:bg-white/10 transition-all disabled:opacity-50">{dialogDetectingId === msg.id ? '识别中...' : '识别图中物体'}</button>
                                 <button onClick={() => handleDialogSaveToLibrary(msg)} className="px-3 py-2 bg-blue-600/20 border border-blue-500/30 rounded-xl text-[9px] font-black uppercase text-blue-400 hover:bg-blue-600/30 transition-all">保存到库</button>
@@ -3037,12 +2410,15 @@ const App: React.FC = () => {
                           {dialogInputImages.length > 0 && (
                             <div className="px-2 py-1 text-[8px] font-black text-gray-500 uppercase">输入框图片</div>
                           )}
-                          {dialogInputImages.map((img, i) => (
-                            <button key={img.id} type="button" onClick={() => { const n = i + 1; const newText = dialogInputText.slice(0, atSuggestionsCursor) + `@图${n} ` + dialogInputText.slice(atSuggestionsCursor + 1); setDialogInputText(newText); setAtSuggestionsOpen(false); dialogInputRef.current?.focus(); }} className="w-full flex items-center gap-2 px-3 py-2 text-left text-[11px] hover:bg-white/10 rounded-lg">
+                          {dialogInputImages.map((img, i) => {
+                            const imageNumber = i + 1;
+                            return (
+                            <button key={img.id} type="button" onClick={() => { const newText = dialogInputText.slice(0, atSuggestionsCursor) + `@图${imageNumber} ` + dialogInputText.slice(atSuggestionsCursor + 1); setDialogInputText(newText); setAtSuggestionsOpen(false); dialogInputRef.current?.focus(); }} className="w-full flex items-center gap-2 px-3 py-2 text-left text-[11px] hover:bg-white/10 rounded-lg">
                               <img src={img.data} className="w-8 h-8 rounded object-cover shrink-0" alt="" />
-                              <span>图{n}</span>
+                              <span>图{imageNumber}</span>
                             </button>
-                          ))}
+                            );
+                          })}
                           {dialogTempFiltered.length > 0 && (
                             <div className="px-2 py-1 text-[8px] font-black text-gray-500 uppercase mt-1 border-t border-white/5">临时库（点击加入输入框并插入 @）</div>
                           )}
@@ -3151,14 +2527,8 @@ const App: React.FC = () => {
               <div className="fixed inset-0 z-[2000] flex flex-col items-center justify-center bg-black/90 p-4">
                 <div className="text-[10px] text-gray-400 mb-3">拖拽选择裁切区域，然后点击「确认裁切」</div>
                 <div
-                  ref={dialogCropContainerRef}
                   className="inline-block max-w-full max-h-[70vh] relative cursor-crosshair select-none rounded-xl overflow-hidden border border-white/10"
-                  onMouseDown={(e) => {
-                    if (e.button !== 0) return;
-                    setDialogCropStart({ x: e.clientX, y: e.clientY });
-                    setDialogCropCurrent({ x: e.clientX, y: e.clientY });
-                    setDialogCropSelecting(true);
-                  }}
+                  onMouseDown={handleDialogCropMouseDown}
                 >
                   <img
                     ref={dialogCropImgRef}
@@ -3199,7 +2569,7 @@ const App: React.FC = () => {
                    <p className="text-[9px] text-gray-500 uppercase tracking-widest">共 {groupedLibrary.length} 组</p>
                    <label className="px-4 py-2.5 rounded-xl bg-blue-600/20 border border-blue-500/40 text-[9px] font-black uppercase text-blue-300 cursor-pointer hover:bg-blue-600/30 text-center">
                      上传图片
-                     <input type="file" className="hidden" accept="image/*" multiple onChange={e => { const files = Array.from(e.target.files ?? []).filter(f => f.type.startsWith('image/')).slice(0, 50); files.forEach(f => { const r = new FileReader(); r.onload = () => addToLibrary([{ data: r.result as string, type: 'SLICE', category: 'SCENE_OBJECT', label: f.name.replace(/\.[^.]+$/, '') || '上传图片' }]); r.readAsDataURL(f); }); e.target.value = ''; }} />
+                    <input type="file" className="hidden" accept="image/*" multiple onChange={(e: React.ChangeEvent<HTMLInputElement>) => { const input = e.currentTarget; const files: File[] = input.files ? Array.from(input.files) : []; files.filter((f) => f.type.startsWith('image/')).slice(0, 50).forEach((f) => { const r = new FileReader(); r.onload = () => addToLibrary([{ data: r.result as string, type: 'SLICE', category: 'SCENE_OBJECT', label: f.name.replace(/\.[^.]+$/, '') || '上传图片' }]); r.readAsDataURL(f); }); input.value = ''; }} />
                    </label>
                  </div>
                  <div className="flex-1 flex flex-col gap-4">

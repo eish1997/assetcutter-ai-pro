@@ -7,6 +7,91 @@ const getAI = () => {
   return new GoogleGenAI({ apiKey });
 };
 
+export interface GeminiRequestOptions {
+  abortSignal?: AbortSignal;
+  timeoutMs?: number;
+  retries?: number;
+  retryDelayMs?: number;
+}
+
+const GEMINI_REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_REQUEST_TIMEOUT_MS) || 45_000;
+
+function createAbortError(message: string): Error {
+  const error = new Error(message);
+  error.name = 'AbortError';
+  return error;
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError';
+}
+
+function sleepWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(createAbortError('请求已取消'));
+      return;
+    }
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      cleanup();
+      reject(createAbortError('请求已取消'));
+    };
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+export async function withGeminiRequestControl<T>(
+  runner: (signal: AbortSignal) => Promise<T>,
+  options?: GeminiRequestOptions
+): Promise<T> {
+  const timeoutMs = options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS;
+  const controller = new AbortController();
+  let timedOut = false;
+  let externalAbortHandler: (() => void) | null = null;
+
+  if (options?.abortSignal) {
+    if (options.abortSignal.aborted) {
+      throw createAbortError('请求已取消');
+    }
+    externalAbortHandler = () => controller.abort(createAbortError('请求已取消'));
+    options.abortSignal.addEventListener('abort', externalAbortHandler, { once: true });
+  }
+
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort(createAbortError(`请求超时（>${timeoutMs}ms）`));
+  }, timeoutMs);
+
+  try {
+    return await Promise.race([
+      runner(controller.signal),
+      new Promise<T>((_, reject) => {
+        controller.signal.addEventListener('abort', () => {
+          reject(controller.signal.reason ?? createAbortError('请求已取消'));
+        }, { once: true });
+      })
+    ]);
+  } catch (error) {
+    if (options?.abortSignal?.aborted) throw createAbortError('请求已取消');
+    if (timedOut) throw new Error(`请求超时（>${timeoutMs}ms）`);
+    if (isAbortError(error)) throw createAbortError('请求已取消');
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    if (options?.abortSignal && externalAbortHandler) {
+      options.abortSignal.removeEventListener('abort', externalAbortHandler);
+    }
+  }
+}
+
 export const DEFAULT_PROMPTS = {
   /** 对话生图：按指令修改图片时的系统提示（占位符 {instruction}） */
   edit: `[HIGH PRECISION EDITING PROTOCOL]
@@ -140,15 +225,20 @@ function isRetryableError(err: unknown): boolean {
   );
 }
 
-async function callWithRetry(apiFn, retries = 3, delay = 2000) {
+async function callWithRetry<T>(
+  apiFn: (signal: AbortSignal) => Promise<T>,
+  options?: GeminiRequestOptions
+): Promise<T> {
+  const retries = options?.retries ?? 3;
+  const delay = options?.retryDelayMs ?? 2000;
   try {
-    return await apiFn();
+    return await withGeminiRequestControl(apiFn, options);
   } catch (err) {
-    if (err != null && (err as { name?: string }).name === 'AbortError') throw err;
+    if (isAbortError(err)) throw err;
     if (isRetryableError(err) && retries > 0) {
       console.warn(`Gemini API 暂时异常，${delay}ms 后重试... (剩余 ${retries} 次)`);
-      await new Promise(resolve => setTimeout(resolve, delay));
-      return callWithRetry(apiFn, retries - 1, delay * 2);
+      await sleepWithAbort(delay, options?.abortSignal);
+      return callWithRetry(apiFn, { ...options, retries: retries - 1, retryDelayMs: delay * 2 });
     }
     throw err;
   }
@@ -175,8 +265,8 @@ export function normalizeApiErrorMessage(err: unknown): string {
 }
 
 /** 单图物体检测，返回边界框（归一化 0-1000） */
-export async function detectObjectsInImage(base64Image: string, model = 'gemini-3-flash-preview', customPrompt?: string) {
-  return callWithRetry(async () => {
+export async function detectObjectsInImage(base64Image: string, model = 'gemini-3-flash-preview', customPrompt?: string, options?: GeminiRequestOptions) {
+  return callWithRetry(async (signal) => {
     const ai = getAI();
     const prompt = customPrompt || DEFAULT_PROMPTS.detect_single;
     const response = await ai.models.generateContent({
@@ -188,6 +278,7 @@ export async function detectObjectsInImage(base64Image: string, model = 'gemini-
         ]
       },
       config: {
+        abortSignal: signal,
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.ARRAY,
@@ -212,7 +303,7 @@ export async function detectObjectsInImage(base64Image: string, model = 'gemini-
       ymax: r.box_2d[2],
       xmax: r.box_2d[3]
     }));
-  });
+  }, options);
 }
 
 /**
@@ -221,9 +312,10 @@ export async function detectObjectsInImage(base64Image: string, model = 'gemini-
 export async function describeImageSubject(
   base64Image: string,
   model = 'gemini-3-flash-preview',
-  customPrompt?: string
+  customPrompt?: string,
+  options?: GeminiRequestOptions
 ): Promise<string> {
-  const text = await callWithRetry(async () => {
+  const text = await callWithRetry(async (signal) => {
     const ai = getAI();
     const prompt = customPrompt || DEFAULT_PROMPTS.describe_subject;
     const response = await ai.models.generateContent({
@@ -233,17 +325,19 @@ export async function describeImageSubject(
           { inlineData: { mimeType: 'image/jpeg', data: base64Image.split(',')[1] || base64Image } },
           { text: prompt }
         ]
-      }
+      },
+      config: { abortSignal: signal }
     });
     const raw = (response.text || '').trim();
     if (!raw) throw new Error('Empty subject description');
     return raw.replace(/\n+/g, ' ').trim();
-  });
+  }, options);
   return text;
 }
 
-export async function processTexture(base64Image, type: 'pattern' | 'tileable' | 'pbr', mapType = '', model = 'gemini-2.5-flash-image', customPrompt?: string) {
-  return callWithRetry(async () => {
+export async function processTexture(base64Image, type: 'pattern' | 'tileable' | 'pbr', mapType = '', model = 'gemini-2.5-flash-image', customPrompt?: string, options?: GeminiRequestOptions) {
+  // 贴图生成属于高成本/可能计费请求，失败后不自动重放，避免重复生成。
+  return callWithRetry(async (signal) => {
     const ai = getAI();
     let prompt = customPrompt || '';
     
@@ -258,14 +352,15 @@ export async function processTexture(base64Image, type: 'pattern' | 'tileable' |
           { inlineData: { mimeType: 'image/jpeg', data: base64Image.split(',')[1] || base64Image } },
           { text: prompt }
         ]
-      }
+      },
+      config: { abortSignal: signal }
     });
 
     for (const part of response.candidates?.[0]?.content?.parts || []) {
       if (part.inlineData) return `data:image/png;base64,${part.inlineData.data}`;
     }
     throw new Error(`Texture processing (${type}) failed`);
-  });
+  }, { ...options, retries: 0 });
 }
 
 // ---------- 对话式生图模块 ----------
@@ -275,37 +370,39 @@ export async function processTexture(base64Image, type: 'pattern' | 'tileable' |
  * @returns 解析后的对象，至少含 instruction 字符串；解析失败时返回 { instruction: rawText }
  */
 export async function understandImageEditIntent(
-  imageBase64: string | null,
+  imageBase64: string | string[] | null,
   userPrompt: string,
   model = 'gemini-3-flash-preview',
-  customPrompt?: string
+  customPrompt?: string,
+  options?: GeminiRequestOptions
 ): Promise<{ instruction: string; summary?: string; shouldGenerateImage?: boolean }> {
-  const raw = await callWithRetry(async () => {
+  const raw = await callWithRetry(async (signal) => {
     const ai = getAI();
     const systemPrompt = customPrompt || DEFAULT_PROMPTS.dialog_understand;
     const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [
       { text: `User request: ${userPrompt}\n\nOutput only a valid JSON object with "instruction" (required), optional "summary", and "shouldGenerateImage" (required, true only when user wants to edit/generate a new image):` }
     ];
-    if (imageBase64) {
-      const data = imageBase64.split(',')[1] || imageBase64;
+    const images = Array.isArray(imageBase64) ? imageBase64.filter(Boolean) : (imageBase64 ? [imageBase64] : []);
+    for (let i = images.length - 1; i >= 0; i--) {
+      const data = images[i].split(',')[1] || images[i];
       parts.unshift({ inlineData: { mimeType: 'image/jpeg', data } });
     }
     const response = await ai.models.generateContent({
       model,
       contents: { parts },
-      config: { systemInstruction: systemPrompt }
+      config: { systemInstruction: systemPrompt, abortSignal: signal }
     });
     const text = response.text?.trim();
     if (!text) throw new Error('Empty understanding response');
     return text;
-  });
+  }, options);
   try {
     const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
     const obj = JSON.parse(cleaned);
     const instruction = typeof obj.instruction === 'string' ? obj.instruction : raw;
     const shouldGenerateImage = obj.shouldGenerateImage === true;
     return { instruction, summary: obj.summary, shouldGenerateImage };
-  } catch (_) {
+  } catch {
     return { instruction: raw, shouldGenerateImage: false };
   }
 }
@@ -323,9 +420,11 @@ export async function dialogGenerateImage(
   model = 'gemini-2.5-flash-image',
   options?: { aspectRatio?: string; imageSize?: string },
   customSystemPrompt?: string,
-  abortSignal?: AbortSignal
+  abortSignal?: AbortSignal,
+  requestOptions?: Omit<GeminiRequestOptions, 'abortSignal'>
 ): Promise<string> {
-  return callWithRetry(async () => {
+  // 生图请求失败后不自动重试，避免重复扣费或生成多份结果。
+  return callWithRetry(async (signal) => {
     const ai = getAI();
     const isTextToImage = !imageBase64;
     const systemInstruction = (customSystemPrompt || (isTextToImage ? DEFAULT_PROMPTS.dialog_text_to_image : DEFAULT_PROMPTS.edit)).replace('{instruction}', instruction);
@@ -337,7 +436,7 @@ export async function dialogGenerateImage(
       if (options.aspectRatio) config.imageConfig.aspectRatio = options.aspectRatio;
       if (options.imageSize) config.imageConfig.imageSize = options.imageSize;
     }
-    if (abortSignal) config.abortSignal = abortSignal;
+    config.abortSignal = signal;
     const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = isTextToImage
       ? [{ text: instruction }]
       : [
@@ -355,7 +454,7 @@ export async function dialogGenerateImage(
     const textPart = response.candidates?.[0]?.content?.parts?.find((p: { text?: string }) => p.text);
     const hint = textPart?.text?.slice(0, 120) ? `（模型返回了文字: ${String(textPart.text).slice(0, 120)}…）` : '（当前模型可能不支持图像输出，请换用「快速」或「Pro」挡位）';
     throw new Error(`生图未返回图片${hint}`);
-  });
+  }, { ...requestOptions, abortSignal, retries: 0 });
 }
 
 /**
@@ -366,10 +465,12 @@ export async function dialogGenerateImageMulti(
   instruction: string,
   model = 'gemini-2.5-flash-image',
   options?: { aspectRatio?: string; imageSize?: string },
-  abortSignal?: AbortSignal
+  abortSignal?: AbortSignal,
+  requestOptions?: Omit<GeminiRequestOptions, 'abortSignal'>
 ): Promise<string> {
   if (imagesBase64.length === 0) throw new Error('多图生图至少需要一张图片');
-  return callWithRetry(async () => {
+  // 多图生图同样属于高成本请求，失败后交由上层显式决定是否重试。
+  return callWithRetry(async (signal) => {
     const ai = getAI();
     const systemInstruction = (DEFAULT_PROMPTS.edit || '').replace('{instruction}', instruction);
     const config: { systemInstruction: string; imageConfig?: { aspectRatio?: string; imageSize?: string }; abortSignal?: AbortSignal } = {
@@ -380,7 +481,7 @@ export async function dialogGenerateImageMulti(
       if (options?.aspectRatio) config.imageConfig.aspectRatio = options.aspectRatio;
       if (options?.imageSize) config.imageConfig.imageSize = options.imageSize;
     }
-    if (abortSignal) config.abortSignal = abortSignal;
+    config.abortSignal = signal;
     const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [];
     for (const img of imagesBase64) {
       const data = img.split(',')[1] || img;
@@ -398,7 +499,7 @@ export async function dialogGenerateImageMulti(
     const textPart = response.candidates?.[0]?.content?.parts?.find((p: { text?: string }) => p.text);
     const hint = textPart?.text?.slice(0, 120) ? `（模型返回了文字: ${String(textPart.text).slice(0, 120)}…）` : '（当前模型可能不支持图像输出）';
     throw new Error(`生图未返回图片${hint}`);
-  });
+  }, { ...requestOptions, abortSignal, retries: 0 });
 }
 
 /**
@@ -409,7 +510,8 @@ export async function generateSessionTitle(
   userText: string,
   model = 'gemini-3-flash-preview',
   customPrompt?: string,
-  imageBase64?: string | null
+  imageBase64?: string | null,
+  options?: GeminiRequestOptions
 ): Promise<string> {
   const text = (userText || '').trim().slice(0, 200);
   if (!text && !imageBase64) return '';
@@ -419,51 +521,55 @@ export async function generateSessionTitle(
     const data = imageBase64.split(',')[1] || imageBase64;
     parts.unshift({ inlineData: { mimeType: 'image/jpeg', data } });
   }
-  const raw = await callWithRetry(async () => {
+  const raw = await callWithRetry(async (signal) => {
     const ai = getAI();
     const response = await ai.models.generateContent({
       model,
-      contents: { parts }
+      contents: { parts },
+      config: { abortSignal: signal }
     });
     const out = response.text?.trim();
     if (!out) throw new Error('Empty title response');
     return out;
-  });
+  }, options);
   return (raw || '').replace(/["""'']/g, '').trim().slice(0, 8);
 }
 
 /** 纯文字对话：根据历史消息 + 新用户消息，返回助手文本回复 */
 export async function getDialogTextResponse(
   contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> }>,
-  model = 'gemini-3-flash-preview'
+  model = 'gemini-3-flash-preview',
+  options?: GeminiRequestOptions
 ): Promise<string> {
-  return callWithRetry(async () => {
+  return callWithRetry(async (signal) => {
     const ai = getAI();
     const response = await ai.models.generateContent({
       model,
       contents: contents.map((c) => ({
         role: c.role === 'model' ? 'model' : 'user',
         parts: c.parts
-      }))
+      })),
+      config: { abortSignal: signal }
     });
     const text = response.text?.trim();
     if (text == null) throw new Error('Empty text response');
     return text;
-  });
+  }, options);
 }
 
 const SITE_ASSISTANT_SYSTEM = `You are the in-app assistant for AssetCutter AI Pro, a web app for intelligent asset production. You help users with:
 - How to use features: 对话 (upload image + describe → AI generates image), 贴图 (pattern extract / seam repair / PBR texture generation), 生成3D (Tencent Hunyuan 3D, not yet launched), 仓库 (asset library), 工作流, 能力, 提示词效果 / 提示词擂台.
-- Troubleshooting: e.g. "贴图修缝" needs Python backend or Pyodide; 对话/提取花纹/生成贴图 need GEMINI_API_KEY in .env.local.
+- Troubleshooting: e.g. "贴图修缝" needs Python backend or Pyodide; 对话/提取花纹/生成贴图 need Gemini API Key saved in Settings.
 - Other questions about the product. Reply in the same language as the user. Be concise and helpful.`;
 
 /** 网站助手：根据用户提问 + 可选历史对话，返回助手回复（带系统角色） */
 export async function getSiteAssistantResponse(
   userMessage: string,
   history: Array<{ role: 'user' | 'model'; text: string }> = [],
-  model = 'gemini-3-flash-preview'
+  model = 'gemini-3-flash-preview',
+  options?: GeminiRequestOptions
 ): Promise<string> {
-  return callWithRetry(async () => {
+  return callWithRetry(async (signal) => {
     const ai = getAI();
     const contents = [
       ...history.map((m) => ({ role: m.role as 'user' | 'model', parts: [{ text: m.text }] as { text: string }[] })),
@@ -472,12 +578,12 @@ export async function getSiteAssistantResponse(
     const response = await ai.models.generateContent({
       model,
       contents,
-      config: { systemInstruction: SITE_ASSISTANT_SYSTEM }
+      config: { systemInstruction: SITE_ASSISTANT_SYSTEM, abortSignal: signal }
     });
     const text = response.text?.trim();
     if (text == null) throw new Error('助手未返回内容');
     return text;
-  });
+  }, options);
 }
 
 /** 网站助手流式：每收到一段文本就调用 onChunk(当前完整文本)，返回最终完整文本 */
@@ -485,33 +591,38 @@ export async function getSiteAssistantResponseStream(
   userMessage: string,
   history: Array<{ role: 'user' | 'model'; text: string }>,
   onChunk: (fullText: string) => void,
-  model = 'gemini-3-flash-preview'
+  model = 'gemini-3-flash-preview',
+  options?: GeminiRequestOptions
 ): Promise<string> {
-  const ai = getAI();
-  const contents = [
-    ...history.map((m) => ({ role: m.role as 'user' | 'model', parts: [{ text: m.text }] as { text: string }[] })),
-    { role: 'user' as const, parts: [{ text: (userMessage || '').trim() || '(empty)' }] }
-  ];
-  const stream = await ai.models.generateContentStream({
-    model,
-    contents,
-    config: { systemInstruction: SITE_ASSISTANT_SYSTEM }
-  });
-  let full = '';
-  for await (const chunk of stream) {
-    const t = chunk.text;
-    if (t != null && typeof t === 'string') full += t;
-    onChunk(full);
-  }
-  return full.trim();
+  return callWithRetry(async (signal) => {
+    const ai = getAI();
+    const contents = [
+      ...history.map((m) => ({ role: m.role as 'user' | 'model', parts: [{ text: m.text }] as { text: string }[] })),
+      { role: 'user' as const, parts: [{ text: (userMessage || '').trim() || '(empty)' }] }
+    ];
+    const stream = await ai.models.generateContentStream({
+      model,
+      contents,
+      config: { systemInstruction: SITE_ASSISTANT_SYSTEM, abortSignal: signal }
+    });
+    let full = '';
+    for await (const chunk of stream) {
+      if (signal.aborted) throw createAbortError('请求已取消');
+      const t = chunk.text;
+      if (t != null && typeof t === 'string') full += t;
+      onChunk(full);
+    }
+    return full.trim();
+  }, options);
 }
 
 /** 擂台 V2：根据自然语言描述生成两条生图用英文提示词 A/B，并返回推理过程。见 docs/PROMPT_OPTIMIZATION_AB_DESIGN.md §9 */
 export async function generateArenaABPrompts(
   userDescription: string,
-  model = 'gemini-3-flash-preview'
+  model = 'gemini-3-flash-preview',
+  options?: GeminiRequestOptions
 ): Promise<{ reasoning?: string; promptA: string; promptB: string; rawResponse?: string }> {
-  const raw = await callWithRetry(async () => {
+  const raw = await callWithRetry(async (signal) => {
     const ai = getAI();
     const response = await ai.models.generateContent({
       model,
@@ -521,12 +632,12 @@ export async function generateArenaABPrompts(
           { text: `User description: ${(userDescription || '').trim().slice(0, 500)}\n\nImportant: These prompts will be sent to the image model together with the user's uploaded image. Ensure each prompt is an instruction to modify or transform that image (not a standalone description of a new scene).` }
         ]
       },
-      config: { responseMimeType: 'application/json' }
+      config: { responseMimeType: 'application/json', abortSignal: signal }
     });
     const text = response.text?.trim();
     if (!text) throw new Error('Empty arena A/B response');
     return text;
-  });
+  }, options);
   try {
     const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
     const obj = JSON.parse(cleaned);
@@ -551,9 +662,10 @@ export async function optimizeLoserPrompt(
   allPreviousPrompts?: string[],
   userReportedGaps?: string[],
   winnerStrength?: string,
-  loserRemark?: string
+  loserRemark?: string,
+  options?: GeminiRequestOptions
 ): Promise<{ reasoning?: string; prompt: string; rawResponse?: string }> {
-  const raw = await callWithRetry(async () => {
+  const raw = await callWithRetry(async (signal) => {
     const ai = getAI();
     const userText = [
       `Winner prompt (user preferred): ${winnerPrompt}`,
@@ -580,12 +692,12 @@ export async function optimizeLoserPrompt(
           { text: userText }
         ]
       },
-      config: { responseMimeType: 'application/json' }
+      config: { responseMimeType: 'application/json', abortSignal: signal }
     });
     const text = response.text?.trim();
     if (!text) throw new Error('Empty optimize loser response');
     return text;
-  });
+  }, options);
   try {
     const cleaned = (raw || '').replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
     const obj = JSON.parse(cleaned);
@@ -603,13 +715,14 @@ export async function optimizeLoserPrompt(
 export async function generateArenaPrompts(
   userDescription: string,
   count: 2 | 3 | 4,
-  model = 'gemini-3-flash-preview'
+  model = 'gemini-3-flash-preview',
+  options?: GeminiRequestOptions
 ): Promise<{ reasoning?: string; prompts: string[]; rawResponse?: string }> {
   if (count === 2) {
-    const out = await generateArenaABPrompts(userDescription, model);
+    const out = await generateArenaABPrompts(userDescription, model, options);
     return { reasoning: out.reasoning, prompts: [out.promptA, out.promptB], rawResponse: out.rawResponse };
   }
-  const raw = await callWithRetry(async () => {
+  const raw = await callWithRetry(async (signal) => {
     const ai = getAI();
     const response = await ai.models.generateContent({
       model,
@@ -619,12 +732,12 @@ export async function generateArenaPrompts(
           { text: `User description: ${(userDescription || '').trim().slice(0, 500)}\n\nN = ${count}. Output exactly ${count} prompts (promptA, promptB${count >= 3 ? ', promptC' : ''}${count >= 4 ? ', promptD' : ''}). Important: These prompts will be sent to the image model together with the user's uploaded image; ensure each prompt is an instruction to modify or transform that image (not a standalone description of a new scene).` }
         ]
       },
-      config: { responseMimeType: 'application/json' }
+      config: { responseMimeType: 'application/json', abortSignal: signal }
     });
     const text = response.text?.trim();
     if (!text) throw new Error('Empty arena N response');
     return text;
-  });
+  }, options);
   try {
     const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
     const obj = JSON.parse(cleaned);
@@ -649,9 +762,10 @@ export async function generateNewChallenger(
   userIntent: string,
   championPrompt: string,
   allPreviousPrompts: string[],
-  model = 'gemini-3-flash-preview'
+  model = 'gemini-3-flash-preview',
+  options?: GeminiRequestOptions
 ): Promise<{ reasoning?: string; prompt: string; rawResponse?: string }> {
-  const raw = await callWithRetry(async () => {
+  const raw = await callWithRetry(async (signal) => {
     const ai = getAI();
     const userText = [
       `Original user intent: ${userIntent}`,
@@ -668,12 +782,12 @@ export async function generateNewChallenger(
           { text: userText }
         ]
       },
-      config: { responseMimeType: 'application/json' }
+      config: { responseMimeType: 'application/json', abortSignal: signal }
     });
     const text = response.text?.trim();
     if (!text) throw new Error('Empty new challenger response');
     return text;
-  });
+  }, options);
   try {
     const cleaned = (raw || '').replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
     const obj = JSON.parse(cleaned);
@@ -690,9 +804,10 @@ export async function generateNewChallenger(
 /** 结构化复现：用 LLM 将生图提示词解析为主体/场景/风格/修饰。见 PROMPT_SCORING_DESIGN §6.1 */
 export async function parsePromptStructured(
   prompt: string,
-  model = 'gemini-3-flash-preview'
+  model = 'gemini-3-flash-preview',
+  options?: GeminiRequestOptions
 ): Promise<{ subject: string; scene: string; style: string; modifiers: string }> {
-  const raw = await callWithRetry(async () => {
+  const raw = await callWithRetry(async (signal) => {
     const ai = getAI();
     const response = await ai.models.generateContent({
       model,
@@ -702,12 +817,12 @@ export async function parsePromptStructured(
           { text: `Prompt to analyze:\n${(prompt || '').trim().slice(0, 3000)}` }
         ]
       },
-      config: { responseMimeType: 'application/json' }
+      config: { responseMimeType: 'application/json', abortSignal: signal }
     });
     const text = response.text?.trim();
     if (!text) throw new Error('Empty parse structured response');
     return text;
-  });
+  }, options);
   try {
     const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
     const obj = JSON.parse(cleaned);
@@ -731,37 +846,39 @@ export async function generatePBRTexture(
   functionalMaps: PbrTextureMapInput[],
   prompt: string,
   targetType: 'BASE_COLOR' | 'ROUGHNESS' | 'METALLIC',
-  baseColorMap?: { base64: string }
+  baseColorMap?: { base64: string },
+  options?: GeminiRequestOptions
 ): Promise<string> {
-  const ai = getAI();
-  const MODEL_NAME = 'gemini-2.5-flash-image';
-  const parts: { inlineData?: { mimeType: string; data: string }; text?: string }[] = [];
+  return callWithRetry(async (signal) => {
+    const ai = getAI();
+    const MODEL_NAME = 'gemini-2.5-flash-image';
+    const parts: { inlineData?: { mimeType: string; data: string }; text?: string }[] = [];
 
-  functionalMaps.forEach((map) => {
-    if (map.base64) {
+    functionalMaps.forEach((map) => {
+      if (map.base64) {
+        parts.push({
+          inlineData: {
+            mimeType: 'image/png',
+            data: map.base64.split(',')[1] ?? map.base64
+          }
+        });
+        parts.push({ text: `This is the ${map.type} map context.` });
+      }
+    });
+
+    if (baseColorMap?.base64) {
       parts.push({
         inlineData: {
           mimeType: 'image/png',
-          data: map.base64.split(',')[1] ?? map.base64
+          data: baseColorMap.base64.split(',')[1] ?? baseColorMap.base64
         }
       });
-      parts.push({ text: `This is the ${map.type} map context.` });
+      parts.push({ text: `This is the generated Base Color map to use as reference for ${targetType}.` });
     }
-  });
 
-  if (baseColorMap?.base64) {
-    parts.push({
-      inlineData: {
-        mimeType: 'image/png',
-        data: baseColorMap.base64.split(',')[1] ?? baseColorMap.base64
-      }
-    });
-    parts.push({ text: `This is the generated Base Color map to use as reference for ${targetType}.` });
-  }
-
-  const systemInstruction =
-    targetType === 'BASE_COLOR'
-      ? `You are a world-class 3D texture artist expert in PBR (Physically Based Rendering) workflows.
+    const systemInstruction =
+      targetType === 'BASE_COLOR'
+        ? `You are a world-class 3D texture artist expert in PBR (Physically Based Rendering) workflows.
 Based on the provided functional maps (AO, Curvature, WS Normal, Position), generate a high-quality, hyper-realistic BASE COLOR (Albedo) map.
 Requirements:
 1. MUST follow the user requirement: ${prompt}.
@@ -769,26 +886,28 @@ Requirements:
 3. MUST be PBR compliant (Albedo should represent surface color only).
 4. High detail and resolution suitable for modern game engines.
 5. Output ONLY the image.`
-      : `You are a world-class 3D texture artist.
+        : `You are a world-class 3D texture artist.
 Generate a ${targetType} map for a PBR workflow based on the provided Base Color and functional maps.
 If generating Roughness: Darker values are smooth/shiny, lighter are rough/matte.
 If generating Metallic: Grayscale where white is metal, black is non-metal.
 Output ONLY the image.`;
 
-  parts.push({ text: systemInstruction });
+    parts.push({ text: systemInstruction });
 
-  const response = await ai.models.generateContent({
-    model: MODEL_NAME,
-    contents: { parts },
-    config: {
-      imageConfig: { aspectRatio: '1:1' }
-    }
-  });
+    const response = await ai.models.generateContent({
+      model: MODEL_NAME,
+      contents: { parts },
+      config: {
+        abortSignal: signal,
+        imageConfig: { aspectRatio: '1:1' }
+      }
+    });
 
-  for (const part of response.candidates?.[0]?.content?.parts ?? []) {
-    if (part.inlineData?.data) {
-      return `data:image/png;base64,${part.inlineData.data}`;
+    for (const part of response.candidates?.[0]?.content?.parts ?? []) {
+      if (part.inlineData?.data) {
+        return `data:image/png;base64,${part.inlineData.data}`;
+      }
     }
-  }
-  throw new Error('No image data returned from AI');
+    throw new Error('No image data returned from AI');
+  }, { ...options, retries: 0 });
 }

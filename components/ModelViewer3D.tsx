@@ -23,10 +23,11 @@ const ModelViewer3D: React.FC<ModelViewer3DProps> = ({ url, onClose, inline = fa
   const [errorMsg, setErrorMsg] = useState<string>('');
 
   useEffect(() => {
-    if (!containerRef.current || !url) return;
+    const container = containerRef.current;
+    if (!container || !url) return;
 
-    const width = containerRef.current.clientWidth;
-    const height = containerRef.current.clientHeight || 400;
+    const width = container.clientWidth;
+    const height = container.clientHeight || 400;
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x0f0f1a);
     scene.environment = null;
@@ -60,8 +61,8 @@ const ModelViewer3D: React.FC<ModelViewer3DProps> = ({ url, onClose, inline = fa
     controls.minDistance = 0.5;
     controls.maxDistance = 20;
 
-    containerRef.current.innerHTML = '';
-    containerRef.current.appendChild(renderer.domElement);
+    container.innerHTML = '';
+    container.appendChild(renderer.domElement);
 
     const loader = new GLTFLoader();
     let animationId: number;
@@ -84,8 +85,8 @@ const ModelViewer3D: React.FC<ModelViewer3DProps> = ({ url, onClose, inline = fa
           setStatus('ready');
         },
         undefined,
-        (err) => {
-          setErrorMsg(err?.message || '加载失败');
+        (err: unknown) => {
+          setErrorMsg(err instanceof Error ? err.message : '加载失败');
           setStatus('error');
         }
       );
@@ -140,9 +141,8 @@ const ModelViewer3D: React.FC<ModelViewer3DProps> = ({ url, onClose, inline = fa
     animate();
 
     const onResize = () => {
-      if (!containerRef.current) return;
-      const w = containerRef.current.clientWidth;
-      const h = containerRef.current.clientHeight || 400;
+      const w = container.clientWidth;
+      const h = container.clientHeight || 400;
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
       renderer.setSize(w, h);
@@ -152,10 +152,13 @@ const ModelViewer3D: React.FC<ModelViewer3DProps> = ({ url, onClose, inline = fa
     return () => {
       window.removeEventListener('resize', onResize);
       cancelAnimationFrame(animationId);
-      if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+      if (objectUrlRef.current) {
+        URL.revokeObjectURL(objectUrlRef.current);
+        objectUrlRef.current = null;
+      }
       renderer.dispose();
       controls.dispose();
-      if (containerRef.current?.contains(renderer.domElement)) containerRef.current.removeChild(renderer.domElement);
+      if (container.contains(renderer.domElement)) container.removeChild(renderer.domElement);
     };
   }, [url]);
 

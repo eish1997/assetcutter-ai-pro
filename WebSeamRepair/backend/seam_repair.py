@@ -6,6 +6,12 @@ from typing import BinaryIO
 import numpy as np
 from PIL import Image
 
+MAX_OBJ_BYTES = 24 * 1024 * 1024
+MAX_TRIANGLES = 300_000
+MAX_SEAMS = 80_000
+MAX_TEXTURE_EDGE = 4096
+MAX_TEXTURE_PIXELS = 4096 * 4096
+
 
 @dataclass(frozen=True)
 class Tri:
@@ -122,7 +128,10 @@ def _parse_obj(file: BinaryIO) -> tuple[list[np.ndarray], list[np.ndarray], list
         vt_idx0 = vt_i - 1 if vt_i != 0 else -1
         return v_idx0, vt_idx0
 
-    for raw in file.read().decode("utf-8", errors="ignore").splitlines():
+    raw_bytes = file.read()
+    if len(raw_bytes) > MAX_OBJ_BYTES:
+        raise ValueError(f"OBJ 文件过大，最大支持 {MAX_OBJ_BYTES // (1024 * 1024)}MB")
+    for raw in raw_bytes.decode("utf-8", errors="ignore").splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
@@ -146,6 +155,8 @@ def _parse_obj(file: BinaryIO) -> tuple[list[np.ndarray], list[np.ndarray], list
                 v1, vt1 = vv[i]
                 v2, vt2 = vv[i + 1]
                 tris.append(Tri(v=(v0, v1, v2), vt=(vt0, vt1, vt2)))
+                if len(tris) > MAX_TRIANGLES:
+                    raise ValueError(f"OBJ 三角面数量过多，最大支持 {MAX_TRIANGLES}")
 
     if not uvs:
         raise ValueError("OBJ 缺少 vt（UV）数据，无法进行 seam-aware 修复。")
@@ -526,6 +537,14 @@ def repair_texture_seams(
 
     tex = texture_img.convert("RGBA")
     w, h = tex.size
+    if w < 2 or h < 2:
+        raise ValueError("贴图尺寸至少为 2x2")
+    if w > MAX_TEXTURE_EDGE or h > MAX_TEXTURE_EDGE or (w * h) > MAX_TEXTURE_PIXELS:
+        raise ValueError(f"贴图尺寸过大，最大支持 {MAX_TEXTURE_EDGE}px 且总像素不超过 {MAX_TEXTURE_PIXELS}")
+    if len(seams) > MAX_SEAMS:
+        raise ValueError(f"检测到的 UV seam 数量过多，最大支持 {MAX_SEAMS}")
+    if sample_step_px <= 0:
+        raise ValueError("sample_step_px 必须大于 0")
     tex_arr = np.asarray(tex, dtype=np.uint8)
     src_rgba = tex_arr.astype(np.float32) / 255.0
     src_rgb = src_rgba[..., :3].astype(np.float32)

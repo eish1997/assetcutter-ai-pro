@@ -3,10 +3,13 @@
  * 启动贴图修缝 Python 后端（WebSeamRepair）
  * 用法：npm run dev:seam-backend 或由 dev:all 一并启动
  */
-const { spawn } = require('child_process');
-const path = require('path');
-const fs = require('fs');
+import { spawn } from 'child_process';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 const backendDir = path.join(__dirname, '..', 'WebSeamRepair', 'backend');
 if (!fs.existsSync(path.join(backendDir, 'main.py'))) {
   console.error('[seam-backend] 未找到 WebSeamRepair/backend，请确认仓库结构。');

@@ -10,12 +10,33 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
 const proxyBase = (typeof import.meta !== 'undefined' && (import.meta as { env?: Record<string, string> }).env?.VITE_TENCENT_PROXY as string)?.trim?.() || '';
 
-function resolveFetchUrl(url: string, asBlob: boolean): string {
+function resolveFetchUrl(url: string): string {
   const isExternal = /^https?:\/\//i.test(url);
   if (proxyBase && isExternal) {
     return `${proxyBase.replace(/\/$/, '')}/model?url=${encodeURIComponent(url)}`;
   }
   return url;
+}
+
+function disposeMaterial(material: THREE.Material | THREE.Material[] | undefined): void {
+  if (!material) return;
+  const materials = Array.isArray(material) ? material : [material];
+  for (const item of materials) {
+    for (const value of Object.values(item)) {
+      if (value instanceof THREE.Texture) value.dispose();
+    }
+    item.dispose();
+  }
+}
+
+function disposeObject3D(root: THREE.Object3D | null): void {
+  if (!root) return;
+  root.traverse((object) => {
+    if (object instanceof THREE.Mesh) {
+      object.geometry?.dispose();
+      disposeMaterial(object.material);
+    }
+  });
 }
 
 export interface UnifiedModelViewer3DProps {
@@ -26,7 +47,7 @@ export interface UnifiedModelViewer3DProps {
   inline?: boolean;
 }
 
-const UnifiedModelViewer3D: React.FC<UnifiedModelViewer3DProps> = ({ url, format, inline = true }) => {
+const UnifiedModelViewer3D: React.FC<UnifiedModelViewer3DProps> = ({ url, format, inline: _inline = true }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const objectUrlRef = useRef<string | null>(null);
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
@@ -35,10 +56,13 @@ const UnifiedModelViewer3D: React.FC<UnifiedModelViewer3DProps> = ({ url, format
   const inferredFormat: 'glb' | 'obj' = format ?? (/\.obj$/i.test(url) ? 'obj' : 'glb');
 
   useEffect(() => {
-    if (!containerRef.current || !url) return;
+    const container = containerRef.current;
+    if (!container || !url) return;
+    setStatus('loading');
+    setErrorMsg('');
 
-    const width = containerRef.current.clientWidth || 400;
-    const height = containerRef.current.clientHeight || 320;
+    const width = container.clientWidth || 400;
+    const height = container.clientHeight || 320;
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x0a0a12);
     scene.environment = null;
@@ -68,13 +92,16 @@ const UnifiedModelViewer3D: React.FC<UnifiedModelViewer3DProps> = ({ url, format
     (grid.material as THREE.Material).transparent = true;
     scene.add(grid);
 
-    containerRef.current.innerHTML = '';
-    containerRef.current.appendChild(renderer.domElement);
+    container.innerHTML = '';
+    container.appendChild(renderer.domElement);
 
     let loadedRoot: THREE.Group | null = null;
     let animationId: number;
+    let disposed = false;
+    const abortController = new AbortController();
 
     function centerAndFrame(root: THREE.Group) {
+      if (disposed) return;
       const box = new THREE.Box3().setFromObject(root);
       const center = box.getCenter(new THREE.Vector3());
       const size = box.getSize(new THREE.Vector3());
@@ -92,18 +119,20 @@ const UnifiedModelViewer3D: React.FC<UnifiedModelViewer3DProps> = ({ url, format
     }
 
     function onError(err: unknown) {
+      if (disposed) return;
       setErrorMsg(err instanceof Error ? err.message : String(err));
       setStatus('error');
     }
 
     const isExternal = /^https?:\/\//i.test(url);
     const useProxy = !!proxyBase && isExternal;
-    const fetchUrl = useProxy ? resolveFetchUrl(url, true) : url;
+    const fetchUrl = useProxy ? resolveFetchUrl(url) : url;
 
     if (inferredFormat === 'obj') {
-      fetch(fetchUrl, { mode: 'cors', credentials: 'omit' })
+      fetch(fetchUrl, { mode: 'cors', credentials: 'omit', signal: abortController.signal })
         .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.text(); })
         .then((text) => {
+          if (disposed) return;
           const loader = new OBJLoader();
           const root = loader.parse(text);
           root.traverse((o) => {
@@ -113,40 +142,57 @@ const UnifiedModelViewer3D: React.FC<UnifiedModelViewer3DProps> = ({ url, format
           scene.add(root);
           centerAndFrame(root);
         })
-        .catch(onError);
+        .catch((err) => {
+          if ((err as { name?: string })?.name === 'AbortError') return;
+          onError(err);
+        });
     } else {
       const doLoad = (src: string) => {
         const loader = new GLTFLoader();
         loader.load(
           src,
           (gltf) => {
+            if (disposed) {
+              disposeObject3D(gltf.scene);
+              return;
+            }
             if (loadedRoot) scene.remove(loadedRoot);
             loadedRoot = gltf.scene;
             scene.add(loadedRoot);
             centerAndFrame(loadedRoot);
           },
           undefined,
-          (err) => onError(err?.message || 'GLB/GLTF 加载失败')
+          (err) => onError(err instanceof Error ? err.message : 'GLB/GLTF 加载失败')
         );
       };
       if (useProxy) {
-        fetch(fetchUrl, { mode: 'cors', credentials: 'omit' })
+        fetch(fetchUrl, { mode: 'cors', credentials: 'omit', signal: abortController.signal })
           .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.blob(); })
           .then((blob) => {
+            if (disposed) return;
             const u = URL.createObjectURL(blob);
+            if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
             objectUrlRef.current = u;
             doLoad(u);
           })
-          .catch(onError);
+          .catch((err) => {
+            if ((err as { name?: string })?.name === 'AbortError') return;
+            onError(err);
+          });
       } else if (isExternal) {
-        fetch(url, { mode: 'cors', credentials: 'omit' })
+        fetch(url, { mode: 'cors', credentials: 'omit', signal: abortController.signal })
           .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.blob(); })
           .then((blob) => {
+            if (disposed) return;
             const u = URL.createObjectURL(blob);
+            if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
             objectUrlRef.current = u;
             doLoad(u);
           })
-          .catch(() => doLoad(url));
+          .catch((err) => {
+            if ((err as { name?: string })?.name === 'AbortError') return;
+            doLoad(url);
+          });
       } else {
         doLoad(url);
       }
@@ -160,9 +206,8 @@ const UnifiedModelViewer3D: React.FC<UnifiedModelViewer3DProps> = ({ url, format
     animate();
 
     const onResize = () => {
-      if (!containerRef.current) return;
-      const w = containerRef.current.clientWidth;
-      const h = containerRef.current.clientHeight || 320;
+      const w = container.clientWidth;
+      const h = container.clientHeight || 320;
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
       renderer.setSize(w, h);
@@ -170,12 +215,25 @@ const UnifiedModelViewer3D: React.FC<UnifiedModelViewer3DProps> = ({ url, format
     window.addEventListener('resize', onResize);
 
     return () => {
+      disposed = true;
+      abortController.abort();
       window.removeEventListener('resize', onResize);
       cancelAnimationFrame(animationId);
-      if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+      if (loadedRoot) {
+        scene.remove(loadedRoot);
+        disposeObject3D(loadedRoot);
+        loadedRoot = null;
+      }
+      if (objectUrlRef.current) {
+        URL.revokeObjectURL(objectUrlRef.current);
+        objectUrlRef.current = null;
+      }
+      grid.geometry.dispose();
+      disposeMaterial(grid.material);
+      renderer.forceContextLoss();
       renderer.dispose();
       controls.dispose();
-      if (containerRef.current?.contains(renderer.domElement)) containerRef.current.removeChild(renderer.domElement);
+      if (container.contains(renderer.domElement)) container.removeChild(renderer.domElement);
     };
   }, [url, inferredFormat]);
 

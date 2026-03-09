@@ -62,7 +62,7 @@
 | 步骤 | 命令 | 说明 |
 |------|------|------|
 | 1. 安装依赖 | `npm install` | 首次或 `package.json` 变更后执行 |
-| 2. 配置环境变量 | 在 [.env.local](.env.local) 中设置 `GEMINI_API_KEY` 等 | 见下方「环境变量」 |
+| 2. 配置环境变量 | 在 [.env.local](.env.local) 中设置腾讯 3D / 修缝等运行参数 | Gemini Key 改为在设置页填写 |
 | 3. 启动主站（必选） | `npm run dev` | 打开 http://localhost:3000 使用整站 |
 | 4. 贴图修缝后端（可选） | `npm run dev:seam-backend` | 仅在使用「贴图修缝」时需要，端口 8008 |
 | 5. 腾讯 3D 代理（可选） | `npm run proxy` | 仅在使用「生成3D」时需要，端口 9001，需配置腾讯云密钥 |
@@ -74,13 +74,13 @@
 
 - 主站：`http://localhost:3000`（Vite）
 - 贴图修缝 API：开发时由 Vite 代理 `/seam-repair-api` → `http://127.0.0.1:8008`；生产环境可设置 `VITE_SEAM_REPAIR_API` 为后端地址
-- 腾讯 3D：开发时需单独运行 `npm run proxy`，前端设置 `VITE_TENCENT_PROXY=http://localhost:9001`；生产部署见 [DEPLOY_GUIDE.md](DEPLOY_GUIDE.md)
+- 腾讯 3D：开发时需单独运行 `npm run proxy`，前端只设置 `VITE_TENCENT_PROXY=http://localhost:9001`；真正的 `TENCENT_SECRET_ID` / `TENCENT_SECRET_KEY` 仅供代理进程使用。生产部署见 [DEPLOY_GUIDE.md](DEPLOY_GUIDE.md)
 
 **环境变量（.env.local）：**
 
-- `GEMINI_API_KEY`：对话生图、提取花纹、生成贴图等 AI 能力必填
+- `Gemini API Key`：对话生图、提取花纹、生成贴图等 AI 能力必填；请在网站「设置」页填写，仅保存在当前浏览器本机
 - `VITE_SEAM_REPAIR_API`：生产环境贴图修缝后端地址（可选，开发时用代理即可）
-- 腾讯混元生 3D：运行 `npm run proxy` 时需在 `.env.local` 或环境中设置 `TENCENT_SECRET_ID`、`TENCENT_SECRET_KEY`；前端用代理时需设置 `VITE_TENCENT_PROXY`（如 `http://localhost:9001`）。部署说明见 [DEPLOY_GUIDE.md](DEPLOY_GUIDE.md)
+- 腾讯混元生 3D：运行 `npm run proxy` 时需在 `.env.local` 或环境中设置 `TENCENT_SECRET_ID`、`TENCENT_SECRET_KEY`；前端仅需设置 `VITE_TENCENT_PROXY`（如 `http://localhost:9001`）。如确需浏览器直持密钥调试，必须显式设置 `VITE_ALLOW_UNSAFE_TENCENT_BROWSER_CREDS=true`，默认关闭。部署说明见 [DEPLOY_GUIDE.md](DEPLOY_GUIDE.md)
 - `VITE_SITE_PASSWORD`：可选，入站密码；本地开发可写在 `.env.local`，与上述变量一起管理。
 
 **首次使用贴图修缝时**，需在 `WebSeamRepair/backend` 安装 Python 依赖一次：
@@ -96,7 +96,7 @@ pip install -r requirements.txt
 
 - **主站打不开 / 白屏**：确认已执行 `npm install`，且端口 3000 未被占用。
 - **贴图修缝点「开始修复」报错**：说明修缝后端未启动。执行 `npm run dev:seam-backend` 或 `npm run dev:all`；若提示找不到 `python`，请安装 Python 并先执行上文的 `pip install -r requirements.txt`。
-- **生成 3D 报错 / CORS**：本地开发需运行 `npm run proxy` 并设置 `VITE_TENCENT_PROXY=http://localhost:9001`，且 `.env.local` 中配置好 `TENCENT_SECRET_ID`、`TENCENT_SECRET_KEY`。
+- **生成 3D 报错 / CORS**：本地开发需运行 `npm run proxy` 并设置 `VITE_TENCENT_PROXY=http://localhost:9001`，同时在代理环境中配置好 `TENCENT_SECRET_ID`、`TENCENT_SECRET_KEY`。
 - **生产部署**：见 [DEPLOY_GUIDE.md](DEPLOY_GUIDE.md)。贴图修缝若需上线，需单独部署 8008 后端并设置 `VITE_SEAM_REPAIR_API`；腾讯 3D 需单独部署代理并配置 `VITE_TENCENT_PROXY`。
 
 ---

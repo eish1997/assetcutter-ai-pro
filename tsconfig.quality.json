@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "App.tsx",
+    "types.ts",
+    "vite-env.d.ts",
+    "vite.config.ts",
+    "components/**/*.ts",
+    "components/**/*.tsx",
+    "hooks/**/*.ts",
+    "hooks/**/*.tsx",
+    "services/**/*.ts",
+    "tests/**/*.tsx",
+    "tests/**/*.ts",
+    "server/**/*.js",
+    "scripts/**/*.js"
+  ]
+}

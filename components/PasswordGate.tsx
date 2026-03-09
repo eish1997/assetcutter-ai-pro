@@ -11,7 +11,9 @@ function getExpectedPassword(): string {
     if (typeof window !== 'undefined' && (window as unknown as { __SITE_PASSWORD?: string }).__SITE_PASSWORD != null) {
       return String((window as unknown as { __SITE_PASSWORD: string }).__SITE_PASSWORD);
     }
-  } catch {}
+  } catch {
+    /* ignore unavailable runtime env access */
+  }
   return '';
 }
 
@@ -28,7 +30,9 @@ const PasswordGate: React.FC<{ children: React.ReactNode }> = ({ children }) => 
     }
     try {
       if (sessionStorage.getItem(STORAGE_KEY) === '1') setUnlocked(true);
-    } catch {}
+    } catch {
+      /* ignore sessionStorage access failure */
+    }
   }, [expected]);
 
   const submit = (e: React.FormEvent) => {
@@ -37,7 +41,9 @@ const PasswordGate: React.FC<{ children: React.ReactNode }> = ({ children }) => 
     if (password === expected) {
       try {
         sessionStorage.setItem(STORAGE_KEY, '1');
-      } catch {}
+      } catch {
+        /* ignore sessionStorage write failure */
+      }
       setUnlocked(true);
     } else {
       setError('密码错误');

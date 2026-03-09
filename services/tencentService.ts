@@ -12,6 +12,26 @@ export interface TencentCredentials {
   proxyUrl?: string;
 }
 
+export interface TencentRequestOptions {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+}
+
+function getRuntimeEnv(): Record<string, string | undefined> {
+  const processEnv = typeof process !== 'undefined' && process.env ? process.env as Record<string, string | undefined> : {};
+  const viteEnv = typeof import.meta !== 'undefined' && (import.meta as { env?: Record<string, string | undefined> }).env
+    ? (import.meta as { env?: Record<string, string | undefined> }).env!
+    : {};
+  return { ...viteEnv, ...processEnv };
+}
+
+export function isUnsafeTencentBrowserModeEnabled(): boolean {
+  const env = getRuntimeEnv();
+  return String(env.VITE_ALLOW_UNSAFE_TENCENT_BROWSER_CREDS ?? '')
+    .trim()
+    .toLowerCase() === 'true';
+}
+
 /** 3D 生成任务进度回调 */
 export interface TaskResponse {
   jobId: string;
@@ -130,17 +150,89 @@ const AI3D_HOST = 'ai3d.tencentcloudapi.com';
 const AI3D_SERVICE = 'ai3d';
 const AI3D_VERSION = '2025-05-13';
 const AI3D_REGION = 'ap-guangzhou';
+const AI3D_REQUEST_TIMEOUT_MS = Number(process.env.TENCENT_REQUEST_TIMEOUT_MS) || 45_000;
 
-async function callAi3d(action: string, payload: Record<string, unknown>, creds: TencentCredentials): Promise<Record<string, unknown> & { _isError?: boolean; code?: string; message?: string }> {
+function createAbortError(message: string): Error {
+  const error = new Error(message);
+  error.name = 'AbortError';
+  return error;
+}
+
+async function withTencentRequestControl<T>(
+  runner: (signal: AbortSignal) => Promise<T>,
+  options?: TencentRequestOptions
+): Promise<T> {
+  const timeoutMs = options?.timeoutMs ?? AI3D_REQUEST_TIMEOUT_MS;
+  const controller = new AbortController();
+  let timedOut = false;
+  let externalAbortHandler: (() => void) | null = null;
+
+  if (options?.signal) {
+    if (options.signal.aborted) {
+      throw createAbortError('请求已取消');
+    }
+    externalAbortHandler = () => controller.abort(createAbortError('请求已取消'));
+    options.signal.addEventListener('abort', externalAbortHandler, { once: true });
+  }
+
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort(createAbortError(`请求超时（>${timeoutMs}ms）`));
+  }, timeoutMs);
+
+  try {
+    return await runner(controller.signal);
+  } catch (error) {
+    if (options?.signal?.aborted) throw createAbortError('请求已取消');
+    if (timedOut) throw new Error(`请求超时（>${timeoutMs}ms）`);
+    if (error instanceof Error && error.name === 'AbortError') throw createAbortError('请求已取消');
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    if (options?.signal && externalAbortHandler) {
+      options.signal.removeEventListener('abort', externalAbortHandler);
+    }
+  }
+}
+
+function sleepWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(createAbortError('请求已取消'));
+      return;
+    }
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      cleanup();
+      reject(createAbortError('请求已取消'));
+    };
+    const cleanup = () => {
+      clearTimeout(timer);
+      if (signal) signal.removeEventListener('abort', onAbort);
+    };
+    if (signal) signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+async function callAi3d(
+  action: string,
+  payload: Record<string, unknown>,
+  creds: TencentCredentials,
+  options?: TencentRequestOptions
+): Promise<Record<string, unknown> & { _isError?: boolean; code?: string; message?: string }> {
   const proxyUrl = creds.proxyUrl?.replace(/\/$/, '');
 
   if (proxyUrl) {
     try {
-      const response = await fetch(`${proxyUrl}/`, {
+      const response = await withTencentRequestControl((signal) => fetch(`${proxyUrl}/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action, payload }),
-      });
+        signal,
+      }), options);
       const data = await response.json();
       if (data.error) {
         const code = data.code || 'PROXY_ERROR';
@@ -156,7 +248,10 @@ async function callAi3d(action: string, payload: Record<string, unknown>, creds:
       return resp;
     } catch (e) {
       const err = e as Error;
-      return { _isError: true, code: 'NETWORK_ERROR', message: err.message, _raw: err.message };
+      const code = err.name === 'AbortError'
+        ? (options?.signal?.aborted ? 'ABORTED' : 'TIMEOUT')
+        : 'NETWORK_ERROR';
+      return { _isError: true, code, message: err.message, _raw: err.message };
     }
   }
 
@@ -175,12 +270,12 @@ async function callAi3d(action: string, payload: Record<string, unknown>, creds:
   };
 
   try {
-    const response = await fetch(`https://${host}/`, {
+    const response = await withTencentRequestControl((signal) => fetch(`https://${host}/`, {
       method: 'POST',
       headers,
       body: JSON.stringify(payload),
-    });
-
+      signal,
+    }), options);
     const data = await response.json();
     const resp = data.Response ?? data;
     if (resp.Error) {
@@ -191,14 +286,21 @@ async function callAi3d(action: string, payload: Record<string, unknown>, creds:
     return resp;
   } catch (e) {
     const err = e as Error;
-    return { _isError: true, code: 'NETWORK_ERROR', message: err.message, _raw: err.message };
+    const code = err.name === 'AbortError'
+      ? (options?.signal?.aborted ? 'ABORTED' : 'TIMEOUT')
+      : 'NETWORK_ERROR';
+    return { _isError: true, code, message: err.message, _raw: err.message };
   }
 }
 
 /**
  * 提交混元生3D专业版任务（支持单图或多视图 2–8 张，3.1 支持八视图）
  */
-export async function submitHunyuanTo3DProJob(input: Submit3DProInput, creds: TencentCredentials): Promise<string> {
+export async function submitHunyuanTo3DProJob(
+  input: Submit3DProInput,
+  creds: TencentCredentials,
+  options?: TencentRequestOptions
+): Promise<string> {
   const hasPrompt = !!input.prompt?.trim();
   const hasSingle = !!(input.imageBase64 || input.imageUrl);
   const multi = input.multiViewImageBase64?.filter(Boolean) ?? [];
@@ -233,7 +335,7 @@ export async function submitHunyuanTo3DProJob(input: Submit3DProInput, creds: Te
   if (input.polygonType) body.PolygonType = input.polygonType;
   if (input.resultFormat) body.ResultFormat = input.resultFormat;
 
-  const res = await callAi3d('SubmitHunyuanTo3DProJob', body, creds);
+  const res = await callAi3d('SubmitHunyuanTo3DProJob', body, creds, options);
   if (res._isError) {
     throw new Error(`[TencentError] ${res.code}: ${res.message}`);
   }
@@ -245,8 +347,12 @@ export async function submitHunyuanTo3DProJob(input: Submit3DProInput, creds: Te
 /**
  * 查询混元生3D专业版任务
  */
-export async function queryHunyuanTo3DProJob(jobId: string, creds: TencentCredentials): Promise<ProJobResult> {
-  const res = await callAi3d('QueryHunyuanTo3DProJob', { JobId: jobId }, creds);
+export async function queryHunyuanTo3DProJob(
+  jobId: string,
+  creds: TencentCredentials,
+  options?: TencentRequestOptions
+): Promise<ProJobResult> {
+  const res = await callAi3d('QueryHunyuanTo3DProJob', { JobId: jobId }, creds, options);
   if (res._isError) {
     throw new Error(`[TencentError] ${res.code}: ${res.message}`);
   }
@@ -271,14 +377,15 @@ export async function startTencent3DProJob(
   input: Submit3DProInput,
   creds: TencentCredentials,
   onProgress: (task: TaskResponse) => void,
-  onLog?: (message: string, detail?: unknown) => void
+  onLog?: (message: string, detail?: unknown) => void,
+  options?: TencentRequestOptions
 ): Promise<File3D[]> {
   const log = (msg: string, d?: unknown) => { onLog?.(msg, d); };
 
   log('[混元生3D] 开始提交任务', { input: { ...input, imageBase64: input.imageBase64 ? '(已省略)' : undefined, imageUrl: input.imageUrl } });
   let jobId: string;
   try {
-    jobId = await submitHunyuanTo3DProJob(input, creds);
+    jobId = await submitHunyuanTo3DProJob(input, creds, options);
   } catch (e) {
     const err = e instanceof Error ? e.message : String(e);
     log('[混元生3D] 提交失败', { error: err, hint: '若为 CORS/Network 错误，请通过后端代理调用 API' });
@@ -289,12 +396,12 @@ export async function startTencent3DProJob(
 
   let attempts = 0;
   while (attempts < POLL_MAX_ATTEMPTS) {
-    await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
+    await sleepWithAbort(POLL_INTERVAL_MS, options?.signal);
     attempts++;
     log(`[混元生3D] 轮询 #${attempts} 查询任务状态`, { jobId });
     let result: ProJobResult;
     try {
-      result = await queryHunyuanTo3DProJob(jobId, creds);
+      result = await queryHunyuanTo3DProJob(jobId, creds, options);
     } catch (e) {
       const err = e instanceof Error ? e.message : String(e);
       log(`[混元生3D] 查询失败 #${attempts}`, { error: err });
@@ -331,7 +438,11 @@ export interface Submit3DRapidInput {
 }
 
 /** 提交极速版任务 */
-export async function submitHunyuanTo3DRapidJob(input: Submit3DRapidInput, creds: TencentCredentials): Promise<string> {
+export async function submitHunyuanTo3DRapidJob(
+  input: Submit3DRapidInput,
+  creds: TencentCredentials,
+  options?: TencentRequestOptions
+): Promise<string> {
   const hasPrompt = !!input.prompt?.trim();
   const hasImage = !!(input.imageBase64 || input.imageUrl);
   if (!hasPrompt && !hasImage) throw new Error('请提供文本描述或图片之一');
@@ -344,7 +455,7 @@ export async function submitHunyuanTo3DRapidJob(input: Submit3DRapidInput, creds
   if (input.resultFormat) body.ResultFormat = input.resultFormat;
   if (input.enablePBR != null) body.EnablePBR = input.enablePBR;
 
-  const res = await callAi3d('SubmitHunyuanTo3DRapidJob', body, creds);
+  const res = await callAi3d('SubmitHunyuanTo3DRapidJob', body, creds, options);
   if (res._isError) throw new Error(`[TencentError] ${res.code}: ${res.message}`);
   const jobId = res.JobId as string;
   if (!jobId) throw new Error('未返回 JobId');
@@ -352,8 +463,12 @@ export async function submitHunyuanTo3DRapidJob(input: Submit3DRapidInput, creds
 }
 
 /** 查询极速版任务 */
-export async function queryHunyuanTo3DRapidJob(jobId: string, creds: TencentCredentials): Promise<ProJobResult> {
-  const res = await callAi3d('QueryHunyuanTo3DRapidJob', { JobId: jobId }, creds);
+export async function queryHunyuanTo3DRapidJob(
+  jobId: string,
+  creds: TencentCredentials,
+  options?: TencentRequestOptions
+): Promise<ProJobResult> {
+  const res = await callAi3d('QueryHunyuanTo3DRapidJob', { JobId: jobId }, creds, options);
   if (res._isError) throw new Error(`[TencentError] ${res.code}: ${res.message}`);
   const status = ((res.Status as string) || 'WAIT') as ProJobResult['status'];
   const resultFile3Ds = (res.ResultFile3Ds as File3D[]) || [];
@@ -371,19 +486,20 @@ export async function startTencent3DRapidJob(
   input: Submit3DRapidInput,
   creds: TencentCredentials,
   onProgress: (task: TaskResponse) => void,
-  onLog?: (message: string, detail?: unknown) => void
+  onLog?: (message: string, detail?: unknown) => void,
+  options?: TencentRequestOptions
 ): Promise<File3D[]> {
   const log = (msg: string, d?: unknown) => { onLog?.(msg, d); };
   log('[极速版3D] 开始提交', input.prompt ? { prompt: input.prompt.slice(0, 50) } : { image: true });
-  const jobId = await submitHunyuanTo3DRapidJob(input, creds);
+  const jobId = await submitHunyuanTo3DRapidJob(input, creds, options);
   log('[极速版3D] 提交成功', { jobId });
   onProgress({ jobId, status: 'PENDING', progress: 5 });
 
   let attempts = 0;
   while (attempts < POLL_MAX_ATTEMPTS) {
-    await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
+    await sleepWithAbort(POLL_INTERVAL_MS, options?.signal);
     attempts++;
-    const result = await queryHunyuanTo3DRapidJob(jobId, creds);
+    const result = await queryHunyuanTo3DRapidJob(jobId, creds, options);
     log(`[极速版3D] 轮询 #${attempts}`, { status: result.status });
     const progress = result.status === 'DONE' ? 100 : result.status === 'FAIL' ? 0 : Math.min(20 + attempts * 2, 90);
     onProgress({ jobId, status: result.status as TaskResponse['status'], progress });
@@ -397,9 +513,10 @@ export async function startTencent3DRapidJob(
 /** 模型格式转换：输入 fbx/obj/glb URL，输出 STL/USDZ/FBX/MP4/GIF */
 export async function convert3DFormat(
   input: { fileUrl: string; format: string },
-  creds: TencentCredentials
+  creds: TencentCredentials,
+  options?: TencentRequestOptions
 ): Promise<{ resultUrl: string }> {
-  const res = await callAi3d('Convert3DFormat', { File3D: input.fileUrl, Format: input.format }, creds);
+  const res = await callAi3d('Convert3DFormat', { File3D: input.fileUrl, Format: input.format }, creds, options);
   if (res._isError) throw new Error(`[TencentError] ${res.code}: ${res.message}`);
   const resultUrl = res.ResultFile3D as string;
   if (!resultUrl) throw new Error('未返回转换结果地址');
@@ -422,21 +539,29 @@ export interface SubmitReduceFaceInput {
   faceLevel?: 'high' | 'medium' | 'low';
 }
 
-export async function submitReduceFaceJob(input: SubmitReduceFaceInput, creds: TencentCredentials): Promise<string> {
+export async function submitReduceFaceJob(
+  input: SubmitReduceFaceInput,
+  creds: TencentCredentials,
+  options?: TencentRequestOptions
+): Promise<string> {
   const body: Record<string, unknown> = {
     File3D: { Type: inferFileTypeFromUrl(input.fileUrl), Url: input.fileUrl.trim() },
   };
   if (input.polygonType) body.PolygonType = input.polygonType;
   if (input.faceLevel) body.FaceLevel = input.faceLevel;
-  const res = await callAi3d('SubmitReduceFaceJob', body, creds);
+  const res = await callAi3d('SubmitReduceFaceJob', body, creds, options);
   if (res._isError) throw new Error(`[TencentError] ${res.code}: ${res.message}`);
   const jobId = res.JobId as string;
   if (!jobId) throw new Error('未返回 JobId');
   return jobId;
 }
 
-export async function describeReduceFaceJob(jobId: string, creds: TencentCredentials): Promise<ProJobResult> {
-  const res = await callAi3d('DescribeReduceFaceJob', { JobId: jobId }, creds);
+export async function describeReduceFaceJob(
+  jobId: string,
+  creds: TencentCredentials,
+  options?: TencentRequestOptions
+): Promise<ProJobResult> {
+  const res = await callAi3d('DescribeReduceFaceJob', { JobId: jobId }, creds, options);
   if (res._isError) throw new Error(`[TencentError] ${res.code}: ${res.message}`);
   const status = ((res.Status as string) || 'WAIT') as ProJobResult['status'];
   const resultFile3Ds = (res.ResultFile3Ds as File3D[]) || [];
@@ -447,17 +572,18 @@ export async function startReduceFaceJob(
   input: SubmitReduceFaceInput,
   creds: TencentCredentials,
   onProgress: (task: TaskResponse) => void,
-  onLog?: (message: string, detail?: unknown) => void
+  onLog?: (message: string, detail?: unknown) => void,
+  options?: TencentRequestOptions
 ): Promise<File3D[]> {
   const log = (msg: string, d?: unknown) => { onLog?.(msg, d); };
   log('[智能拓扑] 提交任务', { fileUrl: input.fileUrl });
-  const jobId = await submitReduceFaceJob(input, creds);
+  const jobId = await submitReduceFaceJob(input, creds, options);
   onProgress({ jobId, status: 'PENDING', progress: 5 });
   let attempts = 0;
   while (attempts < POLL_MAX_ATTEMPTS) {
-    await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
+    await sleepWithAbort(POLL_INTERVAL_MS, options?.signal);
     attempts++;
-    const result = await describeReduceFaceJob(jobId, creds);
+    const result = await describeReduceFaceJob(jobId, creds, options);
     const progress = result.status === 'DONE' ? 100 : result.status === 'FAIL' ? 0 : Math.min(20 + attempts * 2, 90);
     onProgress({ jobId, status: result.status as TaskResponse['status'], progress });
     if (result.status === 'DONE') return result.resultFile3Ds;
@@ -475,7 +601,11 @@ export interface SubmitTextureTo3DInput {
   enablePBR?: boolean;
 }
 
-export async function submitTextureTo3DJob(input: SubmitTextureTo3DInput, creds: TencentCredentials): Promise<string> {
+export async function submitTextureTo3DJob(
+  input: SubmitTextureTo3DInput,
+  creds: TencentCredentials,
+  options?: TencentRequestOptions
+): Promise<string> {
   if (!input.modelUrl?.trim()) throw new Error('请提供几何模型 URL');
   const hasPrompt = !!input.prompt?.trim();
   const hasImage = !!input.imageBase64?.trim();
@@ -487,15 +617,19 @@ export async function submitTextureTo3DJob(input: SubmitTextureTo3DInput, creds:
   if (hasPrompt) body.Prompt = input.prompt!.trim();
   if (hasImage) body.Image = { Base64: input.imageBase64!.replace(/^data:image\/\w+;base64,/, '') };
   if (input.enablePBR != null) body.EnablePBR = input.enablePBR;
-  const res = await callAi3d('SubmitTextureTo3DJob', body, creds);
+  const res = await callAi3d('SubmitTextureTo3DJob', body, creds, options);
   if (res._isError) throw new Error(`[TencentError] ${res.code}: ${res.message}`);
   const jobId = res.JobId as string;
   if (!jobId) throw new Error('未返回 JobId');
   return jobId;
 }
 
-export async function describeTextureTo3DJob(jobId: string, creds: TencentCredentials): Promise<ProJobResult> {
-  const res = await callAi3d('DescribeTextureTo3DJob', { JobId: jobId }, creds);
+export async function describeTextureTo3DJob(
+  jobId: string,
+  creds: TencentCredentials,
+  options?: TencentRequestOptions
+): Promise<ProJobResult> {
+  const res = await callAi3d('DescribeTextureTo3DJob', { JobId: jobId }, creds, options);
   if (res._isError) throw new Error(`[TencentError] ${res.code}: ${res.message}`);
   const status = ((res.Status as string) || 'WAIT') as ProJobResult['status'];
   const resultFile3Ds = (res.ResultFile3Ds as File3D[]) || [];
@@ -506,17 +640,18 @@ export async function startTextureTo3DJob(
   input: SubmitTextureTo3DInput,
   creds: TencentCredentials,
   onProgress: (task: TaskResponse) => void,
-  onLog?: (message: string, detail?: unknown) => void
+  onLog?: (message: string, detail?: unknown) => void,
+  options?: TencentRequestOptions
 ): Promise<File3D[]> {
   const log = (msg: string, d?: unknown) => { onLog?.(msg, d); };
   log('[纹理生成] 提交任务', { modelUrl: input.modelUrl });
-  const jobId = await submitTextureTo3DJob(input, creds);
+  const jobId = await submitTextureTo3DJob(input, creds, options);
   onProgress({ jobId, status: 'PENDING', progress: 5 });
   let attempts = 0;
   while (attempts < POLL_MAX_ATTEMPTS) {
-    await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
+    await sleepWithAbort(POLL_INTERVAL_MS, options?.signal);
     attempts++;
-    const result = await describeTextureTo3DJob(jobId, creds);
+    const result = await describeTextureTo3DJob(jobId, creds, options);
     const progress = result.status === 'DONE' ? 100 : result.status === 'FAIL' ? 0 : Math.min(20 + attempts * 2, 90);
     onProgress({ jobId, status: result.status as TaskResponse['status'], progress });
     if (result.status === 'DONE') return result.resultFile3Ds;
@@ -526,17 +661,25 @@ export async function startTextureTo3DJob(
 }
 
 // ---------- UV 展开 ----------
-export async function submitHunyuanTo3DUVJob(fileUrl: string, creds: TencentCredentials): Promise<string> {
+export async function submitHunyuanTo3DUVJob(
+  fileUrl: string,
+  creds: TencentCredentials,
+  options?: TencentRequestOptions
+): Promise<string> {
   const body = { File: { Type: inferFileTypeFromUrl(fileUrl), Url: fileUrl.trim() } };
-  const res = await callAi3d('SubmitHunyuanTo3DUVJob', body, creds);
+  const res = await callAi3d('SubmitHunyuanTo3DUVJob', body, creds, options);
   if (res._isError) throw new Error(`[TencentError] ${res.code}: ${res.message}`);
   const jobId = res.JobId as string;
   if (!jobId) throw new Error('未返回 JobId');
   return jobId;
 }
 
-export async function describeHunyuanTo3DUVJob(jobId: string, creds: TencentCredentials): Promise<ProJobResult> {
-  const res = await callAi3d('DescribeHunyuanTo3DUVJob', { JobId: jobId }, creds);
+export async function describeHunyuanTo3DUVJob(
+  jobId: string,
+  creds: TencentCredentials,
+  options?: TencentRequestOptions
+): Promise<ProJobResult> {
+  const res = await callAi3d('DescribeHunyuanTo3DUVJob', { JobId: jobId }, creds, options);
   if (res._isError) throw new Error(`[TencentError] ${res.code}: ${res.message}`);
   const status = ((res.Status as string) || 'WAIT') as ProJobResult['status'];
   const resultFile3Ds = (res.ResultFile3Ds as File3D[]) || [];
@@ -547,17 +690,18 @@ export async function startUVJob(
   fileUrl: string,
   creds: TencentCredentials,
   onProgress: (task: TaskResponse) => void,
-  onLog?: (message: string, detail?: unknown) => void
+  onLog?: (message: string, detail?: unknown) => void,
+  options?: TencentRequestOptions
 ): Promise<File3D[]> {
   const log = (msg: string, d?: unknown) => { onLog?.(msg, d); };
   log('[UV展开] 提交任务', { fileUrl });
-  const jobId = await submitHunyuanTo3DUVJob(fileUrl, creds);
+  const jobId = await submitHunyuanTo3DUVJob(fileUrl, creds, options);
   onProgress({ jobId, status: 'PENDING', progress: 5 });
   let attempts = 0;
   while (attempts < POLL_MAX_ATTEMPTS) {
-    await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
+    await sleepWithAbort(POLL_INTERVAL_MS, options?.signal);
     attempts++;
-    const result = await describeHunyuanTo3DUVJob(jobId, creds);
+    const result = await describeHunyuanTo3DUVJob(jobId, creds, options);
     const progress = result.status === 'DONE' ? 100 : result.status === 'FAIL' ? 0 : Math.min(20 + attempts * 2, 90);
     onProgress({ jobId, status: result.status as TaskResponse['status'], progress });
     if (result.status === 'DONE') return result.resultFile3Ds;
@@ -573,18 +717,26 @@ export interface SubmitPartInput {
   model?: '1.0' | '1.5';
 }
 
-export async function submitHunyuan3DPartJob(input: SubmitPartInput, creds: TencentCredentials): Promise<string> {
+export async function submitHunyuan3DPartJob(
+  input: SubmitPartInput,
+  creds: TencentCredentials,
+  options?: TencentRequestOptions
+): Promise<string> {
   const body: Record<string, unknown> = { File: { Type: 'FBX', Url: input.fileUrl.trim() } };
   if (input.model) body.Model = input.model;
-  const res = await callAi3d('SubmitHunyuan3DPartJob', body, creds);
+  const res = await callAi3d('SubmitHunyuan3DPartJob', body, creds, options);
   if (res._isError) throw new Error(`[TencentError] ${res.code}: ${res.message}`);
   const jobId = res.JobId as string;
   if (!jobId) throw new Error('未返回 JobId');
   return jobId;
 }
 
-export async function queryHunyuan3DPartJob(jobId: string, creds: TencentCredentials): Promise<ProJobResult> {
-  const res = await callAi3d('QueryHunyuan3DPartJob', { JobId: jobId }, creds);
+export async function queryHunyuan3DPartJob(
+  jobId: string,
+  creds: TencentCredentials,
+  options?: TencentRequestOptions
+): Promise<ProJobResult> {
+  const res = await callAi3d('QueryHunyuan3DPartJob', { JobId: jobId }, creds, options);
   if (res._isError) throw new Error(`[TencentError] ${res.code}: ${res.message}`);
   const status = ((res.Status as string) || 'WAIT') as ProJobResult['status'];
   const resultFile3Ds = (res.ResultFile3Ds as File3D[]) || [];
@@ -595,17 +747,18 @@ export async function startPartJob(
   input: SubmitPartInput,
   creds: TencentCredentials,
   onProgress: (task: TaskResponse) => void,
-  onLog?: (message: string, detail?: unknown) => void
+  onLog?: (message: string, detail?: unknown) => void,
+  options?: TencentRequestOptions
 ): Promise<File3D[]> {
   const log = (msg: string, d?: unknown) => { onLog?.(msg, d); };
   log('[组件生成] 提交任务', { fileUrl: input.fileUrl });
-  const jobId = await submitHunyuan3DPartJob(input, creds);
+  const jobId = await submitHunyuan3DPartJob(input, creds, options);
   onProgress({ jobId, status: 'PENDING', progress: 5 });
   let attempts = 0;
   while (attempts < POLL_MAX_ATTEMPTS) {
-    await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
+    await sleepWithAbort(POLL_INTERVAL_MS, options?.signal);
     attempts++;
-    const result = await queryHunyuan3DPartJob(jobId, creds);
+    const result = await queryHunyuan3DPartJob(jobId, creds, options);
     const progress = result.status === 'DONE' ? 100 : result.status === 'FAIL' ? 0 : Math.min(20 + attempts * 2, 90);
     onProgress({ jobId, status: result.status as TaskResponse['status'], progress });
     if (result.status === 'DONE') return result.resultFile3Ds;
@@ -622,7 +775,11 @@ export interface SubmitProfileTo3DInput {
   template?: string;
 }
 
-export async function submitProfileTo3DJob(input: SubmitProfileTo3DInput, creds: TencentCredentials): Promise<string> {
+export async function submitProfileTo3DJob(
+  input: SubmitProfileTo3DInput,
+  creds: TencentCredentials,
+  options?: TencentRequestOptions
+): Promise<string> {
   const hasBase64 = !!input.imageBase64?.trim();
   const hasUrl = !!input.imageUrl?.trim();
   if (!hasBase64 && !hasUrl) throw new Error('请提供头像图片（Base64 或 URL）');
@@ -630,15 +787,19 @@ export async function submitProfileTo3DJob(input: SubmitProfileTo3DInput, creds:
   if (hasBase64) body.Profile = { Base64: input.imageBase64!.replace(/^data:image\/\w+;base64,/, '') };
   if (hasUrl) body.Profile = { Url: input.imageUrl!.trim() };
   if (input.template) body.Template = input.template;
-  const res = await callAi3d('SubmitProfileTo3DJob', body, creds);
+  const res = await callAi3d('SubmitProfileTo3DJob', body, creds, options);
   if (res._isError) throw new Error(`[TencentError] ${res.code}: ${res.message}`);
   const jobId = res.JobId as string;
   if (!jobId) throw new Error('未返回 JobId');
   return jobId;
 }
 
-export async function describeProfileTo3DJob(jobId: string, creds: TencentCredentials): Promise<ProJobResult> {
-  const res = await callAi3d('DescribeProfileTo3DJob', { JobId: jobId }, creds);
+export async function describeProfileTo3DJob(
+  jobId: string,
+  creds: TencentCredentials,
+  options?: TencentRequestOptions
+): Promise<ProJobResult> {
+  const res = await callAi3d('DescribeProfileTo3DJob', { JobId: jobId }, creds, options);
   if (res._isError) throw new Error(`[TencentError] ${res.code}: ${res.message}`);
   const status = ((res.Status as string) || 'WAIT') as ProJobResult['status'];
   const resultFile3Ds = (res.ResultFile3Ds as File3D[]) || [];
@@ -649,17 +810,18 @@ export async function startProfileTo3DJob(
   input: SubmitProfileTo3DInput,
   creds: TencentCredentials,
   onProgress: (task: TaskResponse) => void,
-  onLog?: (message: string, detail?: unknown) => void
+  onLog?: (message: string, detail?: unknown) => void,
+  options?: TencentRequestOptions
 ): Promise<File3D[]> {
   const log = (msg: string, d?: unknown) => { onLog?.(msg, d); };
   log('[3D人物] 提交任务');
-  const jobId = await submitProfileTo3DJob(input, creds);
+  const jobId = await submitProfileTo3DJob(input, creds, options);
   onProgress({ jobId, status: 'PENDING', progress: 5 });
   let attempts = 0;
   while (attempts < POLL_MAX_ATTEMPTS) {
-    await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
+    await sleepWithAbort(POLL_INTERVAL_MS, options?.signal);
     attempts++;
-    const result = await describeProfileTo3DJob(jobId, creds);
+    const result = await describeProfileTo3DJob(jobId, creds, options);
     const progress = result.status === 'DONE' ? 100 : result.status === 'FAIL' ? 0 : Math.min(20 + attempts * 2, 90);
     onProgress({ jobId, status: result.status as TaskResponse['status'], progress });
     if (result.status === 'DONE') return result.resultFile3Ds;
@@ -668,12 +830,14 @@ export async function startProfileTo3DJob(
   throw new Error('任务超时');
 }
 
-/** 从设置页或环境获取凭证；优先使用设置页保存的混元 SecretId/SecretKey，否则用 Vite 注入的环境变量；VITE_TENCENT_PROXY 仅来自环境 */
+/** 获取混元调用配置：默认只走代理；仅在显式开启不安全模式时才允许浏览器直持密钥。 */
 export function getTencentCredsFromEnv(): TencentCredentials | null {
   const { secretId, secretKey } = getTencentCreds();
-  const env = typeof process !== 'undefined' && process.env ? process.env : {};
+  const env = getRuntimeEnv();
   const proxyUrl = (env.VITE_TENCENT_PROXY as string)?.trim();
-  if (proxyUrl) return { secretId: secretId || '', secretKey: secretKey || '', proxyUrl };
-  if (secretId && secretKey) return { secretId, secretKey };
+  if (proxyUrl) return { secretId: '', secretKey: '', proxyUrl };
+  if (isUnsafeTencentBrowserModeEnabled() && secretId && secretKey) {
+    return { secretId, secretKey };
+  }
   return null;
 }

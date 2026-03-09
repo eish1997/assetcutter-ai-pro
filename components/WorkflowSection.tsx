@@ -1,10 +1,10 @@
 import React, { useState, useCallback, useMemo } from 'react';
-import type { WorkflowAsset, WorkflowPendingTask, WorkflowActionModule, CapabilitySet } from '../types';
+import type { WorkflowAsset, WorkflowPendingTask, CapabilitySet } from '../types';
 import type { CustomAppModule, LibraryItem, WorkflowCutGroupItem } from '../types';
 import type { BoundingBox } from '../types';
-import { WORKFLOW_ACTION_TYPES, CAPABILITY_CATEGORIES } from '../types';
-import { detectObjectsInImage, dialogGenerateImage, DEFAULT_PROMPTS } from '../services/geminiService';
-import { executeCapability, executeCapabilitySet, getCapabilityEngine } from '../services/capabilityExecutor';
+import { CAPABILITY_CATEGORIES } from '../types';
+import { detectObjectsInImage, DEFAULT_PROMPTS } from '../services/geminiService';
+import { executeCapability, executeCapabilitySet } from '../services/capabilityExecutor';
 
 const uuid = () => Math.random().toString(36).slice(2, 11);
 const RESULT_VER_SEP = '__v__';
@@ -95,7 +95,7 @@ const CutSelectModal: React.FC<{
 const ArchivedDetailModal: React.FC<{
   asset: WorkflowAsset;
   assets: WorkflowAsset[];
-  modules: WorkflowActionModule[];
+  modules: CustomAppModule[];
   onClose: () => void;
 }> = ({ asset, assets, modules, onClose }) => {
   const resolveGroupImages = useCallback(
@@ -487,8 +487,8 @@ const WorkflowSection: React.FC<{
       .sort((a, b) => (a.p.order ?? a.idx) - (b.p.order ?? b.idx))
       .map(({ p }) => p);
   }, [capabilityPresets]);
-  const actionModules: WorkflowActionModule[] = presets;
-  const byCategory = useMemo(() => {
+  const actionModules: CustomAppModule[] = presets;
+  const byCategory = useMemo<Array<{ category: { id: string; label: string; desc: string }; list: CustomAppModule[] }>>(() => {
     const knownIds = new Set(CAPABILITY_CATEGORIES.map((c) => c.id));
     const map: Record<string, CustomAppModule[]> = {};
     CAPABILITY_CATEGORIES.forEach((c) => { map[c.id] = []; });
@@ -501,7 +501,8 @@ const WorkflowSection: React.FC<{
         other.push(p);
       }
     });
-    const groups = CAPABILITY_CATEGORIES.map((c) => ({ category: c, list: map[c.id] ?? [] })).filter((g) => g.list.length > 0);
+    const groups: Array<{ category: { id: string; label: string; desc: string }; list: CustomAppModule[] }> =
+      CAPABILITY_CATEGORIES.map((c) => ({ category: c, list: map[c.id] ?? [] })).filter((g) => g.list.length > 0);
     if (other.length > 0) groups.push({ category: { id: 'other', label: '其他', desc: '' }, list: other });
     return groups;
   }, [presets]);
@@ -534,8 +535,6 @@ const WorkflowSection: React.FC<{
     }
     return getModule(actionType)?.label ?? actionType;
   };
-  const getEngine = (m: CustomAppModule): 'gen_image' | 'builtin' => getCapabilityEngine(m);
-
   const getAssetDisplayImage = (a: WorkflowAsset, assetsList: WorkflowAsset[] = assets, visited: Set<string> = new Set()): string => {
     if (a.displayKey === 'original') return a.original;
     if (a.displayKey === 'cut_image' && a.cutImageGroup?.length) {
@@ -578,7 +577,7 @@ const WorkflowSection: React.FC<{
         presets: actionModules,
         onLog,
       });
-      if (!result.ok) {
+      if (result.ok === false) {
         onLog?.('warn', `[${getActionLabel(actionType)}] ${result.error}`);
         return null;
       }
@@ -593,7 +592,7 @@ const WorkflowSection: React.FC<{
     try {
       if (module) {
         const out = await executeCapability(module, inputImage, { onLog });
-        if (!out.ok) {
+        if (out.ok === false) {
           onLog?.('warn', `[${actionLabel}] ${out.error}`);
           return null;
         }
@@ -663,7 +662,7 @@ const WorkflowSection: React.FC<{
                 setTimeout(() => reject(new Error('timeout')), 10000)
               ),
             ]);
-          } catch (_) {}
+          } catch { /* ignore cleanup failure */ }
           if (!boxes.length) {
             boxes = [{ id: 'full', label: '整图', xmin: 0, ymin: 0, xmax: 1000, ymax: 1000 }];
           }
