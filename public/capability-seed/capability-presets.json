@@ -19,7 +19,9 @@
       "enabled": true,
       "order": 1,
       "instruction": "识别图片中的物体，quixel资产库效果，灰色背景。",
-      "imageGear": "pro"
+      "imageGear": "pro",
+      "imageAspectRatio": "1:1",
+      "imageSize": "2K"
     },
     {
       "id": "multi_view",

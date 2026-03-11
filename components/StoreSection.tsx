@@ -9,14 +9,7 @@ import {
   type StorePackVersionSnapshot,
 } from '../services/storePackHistory';
 import { loadCapabilityPresets, mergeCapabilityPresets, saveCapabilityPresets } from '../services/capabilityPresetStore';
-
-/** 默认商店 Catalog（可被 VITE_STORE_CATALOG_URL 覆盖） */
-const FALLBACK_CATALOG_URL = 'https://cdn.jsdelivr.net/gh/eish1997/assetcutter-ai-pro-store@main/store/catalog.json';
-const DEFAULT_CATALOG_URL =
-  (import.meta as unknown as { env?: Record<string, string> })?.env?.VITE_STORE_CATALOG_URL ||
-  FALLBACK_CATALOG_URL;
-
-const STORAGE_KEY_CATALOG_URL = 'ac_store_catalog_url';
+import { getCapabilityStoreCatalogUrl } from '../services/settingsStore';
 
 async function fetchJson<T>(url: string): Promise<T> {
   const res = await fetch(url, { cache: 'no-store' });
@@ -63,35 +56,34 @@ export default function StoreSection(props: {
   onLog?: (level: 'info' | 'warn' | 'error', message: string, detail?: string) => void;
   /** 安装/回滚后同步更新 App 内存态（让「能力」立即刷新） */
   onPresetsApplied?: (presets: CustomAppModule[]) => void;
+  /** 嵌入能力页时：不显示标题与 URL 输入框，自动使用设置中的 GitHub 地址并拉取 */
+  embed?: boolean;
 }) {
   const onLog = props.onLog;
   const onPresetsApplied = props.onPresetsApplied;
-  const [catalogUrl, setCatalogUrl] = useState<string>(() => {
-    try {
-      return localStorage.getItem(STORAGE_KEY_CATALOG_URL) || DEFAULT_CATALOG_URL;
-    } catch {
-      return DEFAULT_CATALOG_URL;
-    }
-  });
+  const embed = props.embed ?? false;
+  const catalogUrlFromSettings = getCapabilityStoreCatalogUrl();
+  const [catalogUrl, setCatalogUrl] = useState<string>(catalogUrlFromSettings);
   const [loading, setLoading] = useState(false);
   const [catalog, setCatalog] = useState<StoreCatalogItem[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const [installed, setInstalled] = useState<InstalledStorePack[]>(() => loadInstalledPacks());
   const installedMap = useMemo(() => new Map(installed.map((p) => [p.id, p])), [installed]);
+  const [showUninstalled, setShowUninstalled] = useState(true);
+  const [installingAll, setInstallingAll] = useState(false);
 
   const [presetsCount, setPresetsCount] = useState<number>(() => loadCapabilityPresets().length);
+  const uninstalledItems = useMemo(() => catalog.filter((item) => !installedMap.get(item.id)), [catalog, installedMap]);
+
+  const urlToFetch = embed ? catalogUrlFromSettings : catalogUrl;
 
   const refresh = async () => {
+    const toFetch = embed ? getCapabilityStoreCatalogUrl() : catalogUrl;
     setLoading(true);
     setError(null);
     try {
-      localStorage.setItem(STORAGE_KEY_CATALOG_URL, catalogUrl);
-    } catch {
-      /* ignore localStorage persistence failure */
-    }
-    try {
-      const raw = await fetchJson<any[]>(catalogUrl);
+      const raw = await fetchJson<any[]>(toFetch);
       const list = (Array.isArray(raw) ? raw : [])
         .map(normalizeCatalogItem)
         .filter(Boolean) as StoreCatalogItem[];
@@ -107,19 +99,23 @@ export default function StoreSection(props: {
   };
 
   useEffect(() => {
+    if (embed) setCatalogUrl(getCapabilityStoreCatalogUrl());
+  }, [embed]);
+
+  useEffect(() => {
     void refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [embed ? urlToFetch : catalogUrl]);
 
   const installOrUpdate = async (item: StoreCatalogItem) => {
     setLoading(true);
     setError(null);
     try {
       onLog?.('info', `开始下载：${item.name} v${item.version}`, item.url);
-      // 支持 catalog 内使用相对路径（相对 catalogUrl）
+      const baseUrl = embed ? getCapabilityStoreCatalogUrl() : catalogUrl;
       const packUrl = (() => {
         try {
-          return new URL(item.url, catalogUrl).toString();
+          return new URL(item.url, baseUrl).toString();
         } catch {
           return item.url;
         }
@@ -170,6 +166,21 @@ export default function StoreSection(props: {
     }
   };
 
+  const installAllUninstalled = async () => {
+    if (uninstalledItems.length === 0) return;
+    setInstallingAll(true);
+    setError(null);
+    for (const item of uninstalledItems) {
+      try {
+        await installOrUpdate(item);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        onLog?.('error', `安装失败：${item.name}`, msg);
+      }
+    }
+    setInstallingAll(false);
+  };
+
   const rollbackTo = (packId: string, v: StorePackVersionSnapshot) => {
     try {
       const merged = mergeCapabilityPresets(loadCapabilityPresets(), v.presets);
@@ -185,39 +196,78 @@ export default function StoreSection(props: {
 
   return (
     <div className="flex flex-col gap-6 animate-in fade-in max-w-4xl">
-      <header className="shrink-0 h-14 flex items-center px-4 lg:px-6 border-b border-white/10 bg-black/20 rounded-2xl">
-        <h1 className="text-sm font-black uppercase tracking-widest text-white/90">商店</h1>
-        <span className="ml-3 text-[10px] text-gray-500">远程能力包（配置）· 可安装/更新/回滚</span>
-      </header>
+      {!embed && (
+        <header className="shrink-0 h-14 flex items-center px-4 lg:px-6 border-b border-white/10 bg-black/20 rounded-2xl">
+          <h1 className="text-sm font-black uppercase tracking-widest text-white/90">商店</h1>
+          <span className="ml-3 text-[10px] text-gray-500">远程能力包（配置）· 可安装/更新/回滚</span>
+        </header>
+      )}
 
-      <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 space-y-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-[9px] font-black uppercase text-gray-500">Catalog URL</span>
-          <input
-            value={catalogUrl}
-            onChange={(e) => setCatalogUrl(e.target.value)}
-            placeholder="https://xxx.github.io/yyy/catalog.json"
-            className="flex-1 min-w-[280px] px-3 py-2 rounded-xl bg-black/40 border border-white/10 text-[11px] text-white placeholder-gray-600 focus:border-blue-500/50 focus:outline-none"
-          />
-          <button
-            type="button"
-            onClick={() => void refresh()}
-            disabled={loading}
-            className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-[10px] font-black uppercase"
-          >
-            {loading ? '加载中…' : '刷新'}
-          </button>
-        </div>
-        {error && <div className="text-[10px] text-red-400 break-all">{error}</div>}
-        <p className="text-[9px] text-gray-600">
-          说明：你把 <code className="text-gray-400">catalog.json</code> 和能力包 JSON 放到 GitHub / CDN，上线后这里就能远程拉取并更新（安装后会合并到「能力」）。
-        </p>
-      </section>
+      {!embed && (
+        <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[9px] font-black uppercase text-gray-500">Catalog URL</span>
+            <input
+              value={catalogUrl}
+              onChange={(e) => setCatalogUrl(e.target.value)}
+              placeholder="https://xxx.github.io/yyy/catalog.json"
+              className="flex-1 min-w-[280px] px-3 py-2 rounded-xl bg-black/40 border border-white/10 text-[11px] text-white placeholder-gray-600 focus:border-blue-500/50 focus:outline-none"
+            />
+            <button
+              type="button"
+              onClick={() => void refresh()}
+              disabled={loading}
+              className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-[10px] font-black uppercase"
+            >
+              {loading ? '加载中…' : '刷新'}
+            </button>
+          </div>
+          {error && <div className="text-[10px] text-red-400 break-all">{error}</div>}
+          <p className="text-[9px] text-gray-600">
+            说明：GitHub 地址可在「设置 → 通用」中配置；此处可临时覆盖。
+          </p>
+        </section>
+      )}
+
+      {embed && (
+        <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 space-y-2">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <span className="text-[9px] font-black uppercase text-gray-500">远程目录</span>
+            <button
+              type="button"
+              onClick={() => void refresh()}
+              disabled={loading}
+              className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-[9px] font-black uppercase"
+            >
+              {loading ? '加载中…' : '刷新'}
+            </button>
+          </div>
+          {error && <div className="text-[10px] text-red-400 break-all">{error}</div>}
+        </section>
+      )}
 
       <section className="space-y-3">
-        <div className="flex items-center justify-between">
-          <div className="text-[10px] font-black uppercase text-blue-400">能力包</div>
-          <div className="text-[9px] text-gray-500">当前能力总数：{presetsCount}</div>
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div className="text-[10px] font-black uppercase text-blue-400">{embed ? '可安装的远程能力包' : '能力包'}</div>
+          {!embed && <div className="text-[9px] text-gray-500">当前能力总数：{presetsCount}</div>}
+          {embed && (
+            <>
+              <label className="flex items-center gap-2 text-[9px] text-gray-400 cursor-pointer">
+                <input type="checkbox" checked={showUninstalled} onChange={(e) => setShowUninstalled(e.target.checked)} className="rounded" />
+                <span>显示未安装的能力</span>
+              </label>
+              {uninstalledItems.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => void installAllUninstalled()}
+                  disabled={loading || installingAll}
+                  className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-500 disabled:opacity-40 text-white text-[9px] font-black uppercase"
+                >
+                  {installingAll ? '安装中…' : `一键安装全部（${uninstalledItems.length}）`}
+                </button>
+              )}
+            </>
+          )}
         </div>
 
         {catalog.length === 0 ? (
@@ -226,7 +276,7 @@ export default function StoreSection(props: {
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {catalog.map((item) => {
+            {(embed ? (showUninstalled ? catalog : catalog.filter((item) => installedMap.get(item.id))) : catalog).map((item) => {
               const ins = installedMap.get(item.id);
               const hasUpdate = ins && ins.version !== item.version;
               const history = loadPackHistory(item.id);

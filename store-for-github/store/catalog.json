@@ -1,0 +1,22 @@
+[
+  {
+    "id": "prompt_pack_starter",
+    "type": "capability_presets",
+    "name": "Starter Capability Pack",
+    "desc": "A starter capability pack (CustomAppModule[]) for AssetCutter AI Pro. Install it to add abilities into the Capability page.",
+    "version": "1.0.1",
+    "url": "./capability_pack_starter.json",
+    "updatedAt": "2026-02-12",
+    "tags": ["starter", "edit", "image"]
+  },
+  {
+    "id": "assetcutter_ai_pro_official",
+    "type": "capability_presets",
+    "name": "AssetCutter AI Pro 官方预设",
+    "desc": "当前项目内置能力预设（拆分组件、转风格、多视角、切割图片、线稿、色块、白模、线稿色块）。安装后合并到「能力」列表，同 id 会覆盖。",
+    "version": "1.0.0",
+    "url": "./assetcutter_ai_pro_official.json",
+    "updatedAt": "2026-03-09",
+    "tags": ["official", "image", "workflow"]
+  }
+]

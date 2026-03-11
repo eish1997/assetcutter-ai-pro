@@ -25,8 +25,6 @@ const GenerateTextureSection = React.lazy(() => import('./components/GenerateTex
 const HomeSection = React.lazy(() => import('./components/HomeSection'));
 const SiteAssistant = React.lazy(() => import('./components/SiteAssistant'));
 const SettingsSection = React.lazy(() => import('./components/SettingsSection'));
-const StoreSection = React.lazy(() => import('./components/StoreSection'));
-
 type SourceAggregate = {
   count: number;
   rated: number;
@@ -415,7 +413,7 @@ const App: React.FC = () => {
         .then((data: { version?: number; presets?: CustomAppModule[] } | null) => {
           if (data?.presets?.length) {
             saveCapabilityPresets(data.presets);
-            setCapabilityPresets(data.presets);
+            setCapabilityPresets(loadCapabilityPresets());
           }
         })
         .catch(() => {});
@@ -1403,13 +1401,13 @@ const App: React.FC = () => {
           <div className="flex flex-wrap items-center gap-4 mb-4">
             <button type="button" onClick={() => setMode(AppMode.ARENA)} className="px-4 py-2 rounded-xl bg-amber-600/20 border border-amber-500/30 text-[9px] font-black uppercase text-amber-400 hover:bg-amber-600/30 transition-all">去对比测试</button>
             <span className="text-[9px] font-black text-gray-500 uppercase">来源</span>
-            <select value={filterSource} onChange={e => setFilterSource(e.target.value as any)} className="bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[10px]">
+            <select value={filterSource} onChange={e => setFilterSource(e.target.value as any)} className="bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500 transition-colors">
               <option value="all">全部</option>
               <option value="dialog">对话</option>
               <option value="texture">提取花纹</option>
             </select>
             <span className="text-[9px] font-black text-gray-500 uppercase ml-4">评分</span>
-            <select value={filterRated} onChange={e => setFilterRated(e.target.value as any)} className="bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[10px]">
+            <select value={filterRated} onChange={e => setFilterRated(e.target.value as any)} className="bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500 transition-colors">
               <option value="all">全部</option>
               <option value="yes">已评分</option>
               <option value="no">未评分</option>
@@ -1569,7 +1567,6 @@ const App: React.FC = () => {
               <div className="px-2 py-0.5 text-[8px] font-black uppercase tracking-wider text-gray-500">提示词</div>
               <button onClick={() => { setMode(AppMode.ADMIN); setIsSidebarOpen(false); }} className={`w-full py-2.5 rounded-lg text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.ADMIN ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="提示词效果">{sidebarCollapsed ? '📊' : '提示词效果'}</button>
               <button onClick={() => { setMode(AppMode.ARENA); setIsSidebarOpen(false); }} className={`w-full py-2.5 rounded-lg text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.ARENA ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="提示词擂台">{sidebarCollapsed ? '⚔' : '提示词擂台'}</button>
-              <button onClick={() => { setMode(AppMode.STORE); setIsSidebarOpen(false); }} className={`w-full py-2.5 rounded-lg text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.STORE ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="商店（远程模板包）">{sidebarCollapsed ? '🛒' : '商店'}</button>
             </div>
             <button onClick={() => { setMode(AppMode.LIBRARY); setIsSidebarOpen(false); }} className={`w-full py-3 rounded-xl text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.LIBRARY ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="仓库">{sidebarCollapsed ? '📁' : '仓库'}</button>
             <button onClick={() => { setMode(AppMode.SETTINGS); setIsSidebarOpen(false); }} className={`w-full py-3 rounded-xl text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.SETTINGS ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="设置">{sidebarCollapsed ? '⚙' : '设置'}</button>
@@ -1581,7 +1578,7 @@ const App: React.FC = () => {
               <div className="px-2 py-1.5 border-b border-white/5 text-[9px] font-black uppercase text-gray-500">日志</div>
               <div className="min-h-[min(28vh,240px)] max-h-[min(42vh,360px)] overflow-y-auto no-scrollbar space-y-1 p-2">
                 {(() => {
-                  const moduleForMode = mode === AppMode.HOME ? null : mode === AppMode.DIALOG ? '对话' : mode === AppMode.TEXTURE ? '提取花纹' : mode === AppMode.GENERATE_3D ? '生成3D' : mode === AppMode.WORKFLOW ? '工作流' : mode === AppMode.CAPABILITY ? '能力' : mode === AppMode.ADMIN ? '提示词效果' : mode === AppMode.ARENA ? '提示词擂台' : mode === AppMode.STORE ? '商店' : mode === AppMode.SEAM_REPAIR ? '贴图修缝' : mode === AppMode.PBR_TEXTURE ? '生成贴图' : mode === AppMode.LIBRARY ? '仓库' : mode === AppMode.SETTINGS ? '设置' : null;
+                  const moduleForMode = mode === AppMode.HOME ? null : mode === AppMode.DIALOG ? '对话' : mode === AppMode.TEXTURE ? '提取花纹' : mode === AppMode.GENERATE_3D ? '生成3D' : mode === AppMode.WORKFLOW ? '工作流' : mode === AppMode.CAPABILITY ? '能力' : mode === AppMode.ADMIN ? '提示词效果' : mode === AppMode.ARENA ? '提示词擂台' : mode === AppMode.SEAM_REPAIR ? '贴图修缝' : mode === AppMode.PBR_TEXTURE ? '生成贴图' : mode === AppMode.LIBRARY ? '仓库' : mode === AppMode.SETTINGS ? '设置' : null;
                   const filtered = moduleForMode ? globalLogs.filter(l => l.module === moduleForMode) : [];
                   if (filtered.length === 0) return <div className="text-[9px] text-gray-600 py-2 text-center">暂无日志</div>;
                   return [...filtered].reverse().slice(0, 60).map(log => (
@@ -1736,18 +1733,6 @@ const App: React.FC = () => {
                   modelText={config.modelText}
                   promptEdit={config.prompts.edit}
                   dialogModel={dialogModel}
-                />
-              </Suspense>
-            )}
-
-            {mode === AppMode.STORE && (
-              <Suspense fallback={<LazySectionFallback label="商店" />}>
-                <StoreSection
-                  onLog={(level, message, detail) => addGlobalLog('商店', level, message, detail)}
-                  onPresetsApplied={(next) => {
-                    setCapabilityPresets(next);
-                    saveCapabilityPresets(next);
-                  }}
                 />
               </Suspense>
             )}
@@ -2364,10 +2349,10 @@ const App: React.FC = () => {
                           </div>
                           {dialogSizeMode === 'manual' && (
                             <div className="flex gap-2 mt-2">
-                              <select value={dialogAspectRatio} onChange={e => setDialogAspectRatio(e.target.value)} className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500">
+                              <select value={dialogAspectRatio} onChange={e => setDialogAspectRatio(e.target.value)} className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500 transition-colors">
                                 {SUPPORTED_ASPECT_RATIOS.map(r => (<option key={r.value} value={r.value}>{r.label}</option>))}
                               </select>
-                              <select value={dialogImageSize} onChange={e => setDialogImageSize(e.target.value)} className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500">
+                              <select value={dialogImageSize} onChange={e => setDialogImageSize(e.target.value)} className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500 transition-colors">
                                 {SUPPORTED_IMAGE_SIZES.map(s => (<option key={s.value} value={s.value}>{s.label}</option>))}
                               </select>
                             </div>

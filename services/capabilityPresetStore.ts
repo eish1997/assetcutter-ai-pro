@@ -48,6 +48,15 @@ const DEFAULT_PRESETS: CustomAppModule[] = [
   { id: 'cut_image', label: '切割图片', category: 'image_process', engine: 'builtin', enabled: true, order: 3, instruction: '' },
 ];
 
+/** 工作流依赖的内置能力：若列表中缺失则自动补上，保证切割等功能始终可用 */
+const REQUIRED_BUILTIN_IDS = ['cut_image'] as const;
+function ensureRequiredBuiltins(list: CustomAppModule[]): CustomAppModule[] {
+  const ids = new Set(list.map((p) => p.id));
+  const toAdd = DEFAULT_PRESETS.filter((p) => REQUIRED_BUILTIN_IDS.includes(p.id as typeof REQUIRED_BUILTIN_IDS[number]) && !ids.has(p.id));
+  if (toAdd.length === 0) return list;
+  return mergeCapabilityPresets(list, toAdd);
+}
+
 export function loadCapabilityPresets(): CustomAppModule[] {
   try {
     let raw = localStorage.getItem(CAPABILITY_PRESETS_KEY);
@@ -70,14 +79,16 @@ export function loadCapabilityPresets(): CustomAppModule[] {
     // v1: 直接数组
     if (Array.isArray(parsed)) {
       if (parsed.length === 0) return DEFAULT_PRESETS;
-      const normalized = parsed.map((p: CustomAppModule, i: number) => normalizeCapabilityPreset(p, i));
+      let normalized = parsed.map((p: CustomAppModule, i: number) => normalizeCapabilityPreset(p, i));
+      normalized = ensureRequiredBuiltins(normalized);
       saveCapabilityPresets(normalized);
       return normalized;
     }
     // v2+: payload
     if (parsed && typeof parsed === 'object' && Array.isArray((parsed as CapabilityPresetsPayload).presets)) {
       const list = (parsed as CapabilityPresetsPayload).presets;
-      const normalized = list.map((p: CustomAppModule, i: number) => normalizeCapabilityPreset(p, i));
+      let normalized = list.map((p: CustomAppModule, i: number) => normalizeCapabilityPreset(p, i));
+      normalized = ensureRequiredBuiltins(normalized);
       // 版本不一致或字段缺失时回写一次
       if ((parsed as CapabilityPresetsPayload).version !== CAPABILITY_PRESETS_VERSION) {
         saveCapabilityPresets(normalized);

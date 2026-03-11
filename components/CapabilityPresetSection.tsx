@@ -1,13 +1,98 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useLayoutEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import type { CustomAppModule, CapabilityCategory, CapabilityEngine, DialogImageGear, Generate3DPreset, CapabilitySet } from '../types';
-import { CAPABILITY_CATEGORIES, DIALOG_IMAGE_GEARS } from '../types';
+import { CAPABILITY_CATEGORIES, DIALOG_IMAGE_GEARS, SUPPORTED_ASPECT_RATIOS, SUPPORTED_IMAGE_SIZES } from '../types';
 import type { CapabilityTestResult } from '../services/capabilityTestRunner';
 import { CAPABILITY_PRESETS_VERSION } from '../services/capabilityPresetStore';
+import { loadInstalledPacks, loadPackHistory } from '../services/storePackHistory';
+import { useStoreCatalog } from '../services/storeCatalogHook';
 import CapabilitySetCanvas from './CapabilitySetCanvas';
 
 const CAPABILITY_SETS_VERSION = 1;
 
 const DEFAULT_GENERATE_3D: Generate3DPreset = { module: 'pro', model: '3.0', enablePBR: false };
+
+/** 与对话页一致的自定义下拉：深色触发器 + 深色列表 + 选中项蓝色高亮。遮罩与列表通过 Portal 挂到 body，避免父级 overflow/transform 导致点击外部无法关闭。 */
+function CustomDropdown({
+  options,
+  value,
+  onChange,
+  placeholder = '默认',
+  triggerClassName = 'bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-[11px] text-left flex items-center justify-between outline-none focus:border-blue-500 hover:bg-white/10 transition-colors',
+}: {
+  options: Array<{ value: string; label: string }>;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  triggerClassName?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [listPosition, setListPosition] = useState<{ top: number; left: number; width: number } | null>(null);
+  const triggerRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    if (!open || typeof document === 'undefined') return;
+    const el = triggerRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    setListPosition({ top: rect.bottom + 4, left: rect.left, width: Math.max(rect.width, 96) });
+  }, [open]);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const close = () => setOpen(false);
+    const onKeyDown = (e: KeyboardEvent) => e.key === 'Escape' && close();
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('resize', close);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [open]);
+
+  const label = value ? (options.find((o) => o.value === value)?.label ?? value) : placeholder;
+  const portalContent =
+    open && typeof document !== 'undefined' ? (
+      <>
+        <div className="fixed inset-0 z-[1002]" aria-hidden onClick={() => setOpen(false)} />
+        {listPosition && (
+          <ul
+            className="fixed z-[1003] max-h-56 overflow-y-auto rounded-xl border border-white/10 bg-[#0f0f0f] shadow-xl py-1 text-white"
+            style={{ top: listPosition.top, left: listPosition.left, width: listPosition.width, minWidth: '6rem' }}
+          >
+            {options.map((opt) => (
+              <li key={opt.value === '' ? '__empty__' : opt.value}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onChange(opt.value);
+                    setOpen(false);
+                  }}
+                  className={`w-full px-3 py-2 text-left text-[10px] transition-colors ${value === opt.value ? 'bg-blue-600/30 text-blue-300' : 'text-white hover:bg-white/10'}`}
+                >
+                  {opt.label}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </>
+    ) : null;
+
+  return (
+    <div className="relative" ref={triggerRef}>
+      <button type="button" onClick={() => setOpen((p) => !p)} className={triggerClassName}>
+        <span>{label}</span>
+        <span className="text-gray-500 shrink-0 ml-1">{open ? '▲' : '▼'}</span>
+      </button>
+      {portalContent && createPortal(portalContent, document.body)}
+    </div>
+  );
+}
+
+const DROPDOWN_TRIGGER_COMPACT = 'bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[10px] text-left flex items-center justify-between outline-none focus:border-blue-500 hover:bg-white/10 transition-colors min-w-[5rem]';
 
 type ViewMode = 'presets' | 'sets' | 'canvas';
 
@@ -49,6 +134,8 @@ const CapabilityPresetSection: React.FC<{
   const [editEngine, setEditEngine] = useState<CapabilityEngine>('gen_image');
   const [editEnabled, setEditEnabled] = useState(true);
   const [editImageGear, setEditImageGear] = useState<DialogImageGear>('fast');
+  const [editImageAspectRatio, setEditImageAspectRatio] = useState('');
+  const [editImageSize, setEditImageSize] = useState('');
   const [editInstruction, setEditInstruction] = useState('');
   const [isAdding, setIsAdding] = useState(false);
   const [newLabel, setNewLabel] = useState('');
@@ -56,6 +143,8 @@ const CapabilityPresetSection: React.FC<{
   const [newEngine, setNewEngine] = useState<CapabilityEngine>('gen_image');
   const [newEnabled, setNewEnabled] = useState(true);
   const [newImageGear, setNewImageGear] = useState<DialogImageGear>('fast');
+  const [newImageAspectRatio, setNewImageAspectRatio] = useState('');
+  const [newImageSize, setNewImageSize] = useState('');
   const [newInstruction, setNewInstruction] = useState('');
   const [testImage, setTestImage] = useState<Record<string, string>>({});
   const [testResult, setTestResult] = useState<Record<string, CapabilityTestResult | null>>({});
@@ -66,6 +155,23 @@ const CapabilityPresetSection: React.FC<{
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
   const [showImportExport, setShowImportExport] = useState(false);
   const [seedDropActive, setSeedDropActive] = useState(false);
+
+  const {
+    loading: catalogLoading,
+    error: catalogError,
+    refresh: refreshCatalog,
+    installSinglePreset,
+    installPresets,
+    installingAll,
+    packContentsLoading,
+    remotePresetItems,
+  } = useStoreCatalog({ onPresetsApplied: (next) => onUpdate(next), onLog });
+
+  /** 远程能力中尚未出现在当前列表的（按能力展示为卡片，每张卡片可点安装） */
+  const effectiveUninstalledPresetItems = useMemo(
+    () => remotePresetItems.filter((rp) => !presets.some((p) => p.id === rp.preset.id)),
+    [remotePresetItems, presets]
+  );
 
   const movePreset = (id: string, delta: -1 | 1) => {
     const idx = presets.findIndex((p) => p.id === id);
@@ -100,6 +206,8 @@ const CapabilityPresetSection: React.FC<{
           instruction: editInstruction,
           enabled: editEnabled,
           imageGear: editEngine === 'gen_image' || editCategory === 'image_gen' ? editImageGear : undefined,
+          imageAspectRatio: editEngine === 'gen_image' || editCategory === 'image_gen' ? (editImageAspectRatio || undefined) : undefined,
+          imageSize: editEngine === 'gen_image' || editCategory === 'image_gen' ? (editImageSize || undefined) : undefined,
           engine:
             editCategory === 'generate_3d'
               ? undefined
@@ -130,6 +238,8 @@ const CapabilityPresetSection: React.FC<{
       enabled: newEnabled,
       order: presets.length,
       imageGear: (newCategory === 'image_gen' || newEngine === 'gen_image') ? newImageGear : undefined,
+      imageAspectRatio: (newCategory === 'image_gen' || newEngine === 'gen_image') ? (newImageAspectRatio || undefined) : undefined,
+      imageSize: (newCategory === 'image_gen' || newEngine === 'gen_image') ? (newImageSize || undefined) : undefined,
       engine:
         newCategory === 'generate_3d'
           ? undefined
@@ -144,6 +254,8 @@ const CapabilityPresetSection: React.FC<{
     setNewEngine('gen_image');
     setNewEnabled(true);
     setNewImageGear('fast');
+    setNewImageAspectRatio('');
+    setNewImageSize('');
     setNewInstruction('');
     setNewGenerate3D({ ...DEFAULT_GENERATE_3D });
     setIsAdding(false);
@@ -310,6 +422,22 @@ const CapabilityPresetSection: React.FC<{
     onUpdateSets?.(sets.filter((s) => s.id !== id));
   };
 
+  /** 预设来源：presetId -> 包名（来自已安装包的为包名，否则为本地） */
+  const presetSourceMap = useMemo(() => {
+    const map = new Map<string, string>();
+    const installed = loadInstalledPacks();
+    for (const pack of installed) {
+      const history = loadPackHistory(pack.id);
+      const latest = history[0];
+      if (latest?.presets) {
+        for (const p of latest.presets) {
+          map.set(p.id, pack.name);
+        }
+      }
+    }
+    return map;
+  }, [presets]);
+
   // 顶部：仅展示已有能力（基础能力 + 复合能力）分两行，不拖动
   const presetStrip = (
     <div className="shrink-0 flex flex-col gap-2 p-3 rounded-xl border border-white/10 bg-black/30">
@@ -365,7 +493,7 @@ const CapabilityPresetSection: React.FC<{
     <div className="flex flex-col gap-6 animate-in fade-in max-w-4xl">
       {presetStrip}
 
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 flex-wrap">
         <button
           type="button"
           onClick={() => setViewMode('presets')}
@@ -420,11 +548,11 @@ const CapabilityPresetSection: React.FC<{
 
       {viewMode === 'presets' && (
         <>
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <p className="text-[9px] text-gray-500">
           在此管理功能预设，工作流中的「功能区」将调用此处配置的项，拖拽图片到对应框即可执行。
         </p>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           <button
             onClick={() => setShowImportExport((v) => !v)}
             className="px-4 py-2 rounded-xl bg-white/10 border border-white/10 text-[10px] font-black uppercase hover:bg-white/20"
@@ -437,8 +565,28 @@ const CapabilityPresetSection: React.FC<{
           >
             新增功能预设
           </button>
+          <button
+            type="button"
+            onClick={() => void refreshCatalog()}
+            disabled={catalogLoading}
+            className="px-4 py-2 rounded-xl bg-white/10 border border-white/10 text-[10px] font-black uppercase hover:bg-white/20 disabled:opacity-50"
+          >
+            {catalogLoading ? '加载中…' : '刷新远程'}
+          </button>
+          {effectiveUninstalledPresetItems.length > 0 && (
+            <button
+              type="button"
+              onClick={() => installPresets(effectiveUninstalledPresetItems.map((rp) => rp.preset))}
+              disabled={catalogLoading || packContentsLoading || installingAll}
+              className="px-4 py-2 rounded-xl bg-amber-600 text-[10px] font-black uppercase hover:bg-amber-500 disabled:opacity-50"
+            >
+              {installingAll ? '安装中…' : `一键安装全部（${effectiveUninstalledPresetItems.length}）`}
+            </button>
+          )}
         </div>
       </div>
+      {catalogError && <div className="text-[10px] text-red-400 break-all">{catalogError}</div>}
+      {packContentsLoading && <div className="text-[10px] text-gray-500">正在加载远程能力列表…</div>}
 
       {showImportExport && (
         <div className="rounded-2xl border border-white/10 bg-black/40 p-4 space-y-3">
@@ -500,32 +648,50 @@ const CapabilityPresetSection: React.FC<{
               <span className="font-black uppercase">启用</span>
             </label>
             {(newCategory === 'image_gen' || newEngine === 'gen_image') && (
-              <label className="flex items-center gap-2 text-[9px] text-gray-400">
-                <span className="font-black uppercase">生图档位</span>
-                <select
-                  value={newImageGear}
-                  onChange={(e) => setNewImageGear(e.target.value as DialogImageGear)}
-                  className="bg-white/10 border border-white/10 rounded px-2 py-1 text-[9px]"
-                >
-                  {DIALOG_IMAGE_GEARS.map((g) => (
-                    <option key={g.id} value={g.id}>
-                      {g.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <>
+                <label className="flex items-center gap-2 text-[9px] text-gray-400">
+                  <span className="font-black uppercase">生图档位</span>
+                  <CustomDropdown
+                    options={DIALOG_IMAGE_GEARS.map((g) => ({ value: g.id, label: g.label }))}
+                    value={newImageGear}
+                    onChange={(v) => setNewImageGear(v as DialogImageGear)}
+                    triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                  />
+                </label>
+                <label className="flex items-center gap-2 text-[9px] text-gray-400">
+                  <span className="font-black uppercase">贴图比例</span>
+                  <CustomDropdown
+                    options={[{ value: '', label: '默认' }, ...SUPPORTED_ASPECT_RATIOS.map((r) => ({ value: r.value, label: r.label }))]}
+                    value={newImageAspectRatio}
+                    onChange={setNewImageAspectRatio}
+                    placeholder="默认"
+                    triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                  />
+                </label>
+                <label className="flex items-center gap-2 text-[9px] text-gray-400">
+                  <span className="font-black uppercase">贴图尺寸</span>
+                  <CustomDropdown
+                    options={[{ value: '', label: '默认' }, ...SUPPORTED_IMAGE_SIZES.map((s) => ({ value: s.value, label: s.label }))]}
+                    value={newImageSize}
+                    onChange={setNewImageSize}
+                    placeholder="默认"
+                    triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                  />
+                </label>
+              </>
             )}
             {newCategory === 'image_process' && (
               <label className="flex items-center gap-2 text-[9px] text-gray-400">
                 <span className="font-black uppercase">执行方式</span>
-                <select
+                <CustomDropdown
+                  options={[
+                    { value: 'builtin', label: '图像处理（内置）' },
+                    { value: 'gen_image', label: '生图（提示词）' },
+                  ]}
                   value={newEngine}
-                  onChange={(e) => setNewEngine(e.target.value as CapabilityEngine)}
-                  className="bg-white/10 border border-white/10 rounded px-2 py-1 text-[9px]"
-                >
-                  <option value="builtin">图像处理（内置）</option>
-                  <option value="gen_image">生图（提示词）</option>
-                </select>
+                  onChange={(v) => setNewEngine(v as CapabilityEngine)}
+                  triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                />
               </label>
             )}
             {newCategory === 'image_gen' && (
@@ -579,22 +745,26 @@ const CapabilityPresetSection: React.FC<{
               <div className="rounded-xl border border-amber-500/40 bg-amber-500/5 p-3 space-y-2">
                 <div className="text-[8px] font-black text-amber-400 uppercase">生成3D 预设（工作流拖图即按此配置提交）</div>
                 <div className="flex gap-2 flex-wrap">
-                  <label className="flex items-center gap-1.5 text-[9px]">
-                    <span>模块</span>
-                    <select value={newGenerate3D.module} onChange={(e) => setNewGenerate3D((g) => ({ ...g, module: e.target.value as 'pro' | 'rapid' }))} className="bg-white/10 border border-white/10 rounded px-2 py-1 text-[9px]">
-                      <option value="pro">专业版</option>
-                      <option value="rapid">极速版</option>
-                    </select>
-                  </label>
-                  {newGenerate3D.module === 'pro' && (
-                    <label className="flex items-center gap-1.5 text-[9px]">
-                      <span>模型</span>
-                      <select value={newGenerate3D.model ?? '3.0'} onChange={(e) => setNewGenerate3D((g) => ({ ...g, model: e.target.value as '3.0' | '3.1' }))} className="bg-white/10 border border-white/10 rounded px-2 py-1 text-[9px]">
-                        <option value="3.0">3.0</option>
-                        <option value="3.1">3.1</option>
-                      </select>
-                    </label>
-                  )}
+                          <label className="flex items-center gap-1.5 text-[9px]">
+                            <span>模块</span>
+                            <CustomDropdown
+                              options={[{ value: 'pro', label: '专业版' }, { value: 'rapid', label: '极速版' }]}
+                              value={newGenerate3D.module}
+                              onChange={(v) => setNewGenerate3D((g) => ({ ...g, module: v as 'pro' | 'rapid' }))}
+                              triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                            />
+                          </label>
+                          {newGenerate3D.module === 'pro' && (
+                            <label className="flex items-center gap-1.5 text-[9px]">
+                              <span>模型</span>
+                              <CustomDropdown
+                                options={[{ value: '3.0', label: '3.0' }, { value: '3.1', label: '3.1' }]}
+                                value={newGenerate3D.model ?? '3.0'}
+                                onChange={(v) => setNewGenerate3D((g) => ({ ...g, model: v as '3.0' | '3.1' }))}
+                                triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                              />
+                            </label>
+                          )}
                   <label className="flex items-center gap-1.5 text-[9px]">
                     <input type="checkbox" checked={newGenerate3D.enablePBR ?? false} onChange={(e) => setNewGenerate3D((g) => ({ ...g, enablePBR: e.target.checked }))} />
                     <span>PBR</span>
@@ -607,21 +777,27 @@ const CapabilityPresetSection: React.FC<{
                       </label>
                       <label className="flex items-center gap-1.5 text-[9px]">
                         <span>类型</span>
-                        <select value={newGenerate3D.generateType ?? 'Normal'} onChange={(e) => setNewGenerate3D((g) => ({ ...g, generateType: e.target.value as Generate3DPreset['generateType'] }))} className="bg-white/10 border border-white/10 rounded px-2 py-1 text-[9px]">
-                          <option value="Normal">Normal</option>
-                          <option value="LowPoly">LowPoly</option>
-                          <option value="Geometry">Geometry</option>
-                          <option value="Sketch">Sketch</option>
-                        </select>
+                        <CustomDropdown
+                          options={[
+                            { value: 'Normal', label: 'Normal' },
+                            { value: 'LowPoly', label: 'LowPoly' },
+                            { value: 'Geometry', label: 'Geometry' },
+                            { value: 'Sketch', label: 'Sketch' },
+                          ]}
+                          value={newGenerate3D.generateType ?? 'Normal'}
+                          onChange={(v) => setNewGenerate3D((g) => ({ ...g, generateType: v as Generate3DPreset['generateType'] }))}
+                          triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                        />
                       </label>
                       <label className="flex items-center gap-1.5 text-[9px]">
                         <span>格式</span>
-                        <select value={newGenerate3D.resultFormat ?? ''} onChange={(e) => setNewGenerate3D((g) => ({ ...g, resultFormat: e.target.value || undefined }))} className="bg-white/10 border border-white/10 rounded px-2 py-1 text-[9px]">
-                          <option value="">默认</option>
-                          <option value="STL">STL</option>
-                          <option value="USDZ">USDZ</option>
-                          <option value="FBX">FBX</option>
-                        </select>
+                        <CustomDropdown
+                          options={[{ value: '', label: '默认' }, { value: 'STL', label: 'STL' }, { value: 'USDZ', label: 'USDZ' }, { value: 'FBX', label: 'FBX' }]}
+                          value={newGenerate3D.resultFormat ?? ''}
+                          onChange={(v) => setNewGenerate3D((g) => ({ ...g, resultFormat: v || undefined }))}
+                          placeholder="默认"
+                          triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                        />
                       </label>
                     </>
                   )}
@@ -651,12 +827,13 @@ const CapabilityPresetSection: React.FC<{
       )}
 
       <div className="space-y-3">
-        {presets.length === 0 ? (
+        {presets.length === 0 && effectiveUninstalledPresetItems.length === 0 ? (
           <div className="rounded-2xl border border-white/10 bg-black/40 p-8 text-center text-gray-500 text-[10px]">
-            暂无功能预设，点击「新增功能预设」添加。添加后会在工作流的功能区显示对应框。
+            暂无功能预设，点击「新增功能预设」添加；远程能力加载后将显示在下方。
           </div>
         ) : (
-          presets.map((p) => (
+          <>
+          {presets.map((p) => (
             <div key={p.id} className="rounded-2xl border border-white/10 bg-black/40 p-4">
               {editingId === p.id ? (
                 <>
@@ -686,32 +863,50 @@ const CapabilityPresetSection: React.FC<{
                       <span className="font-black uppercase">启用</span>
                     </label>
                     {(editCategory === 'image_gen' || editEngine === 'gen_image') && (
-                      <label className="flex items-center gap-2 text-[9px] text-gray-400">
-                        <span className="font-black uppercase">生图档位</span>
-                        <select
-                          value={editImageGear}
-                          onChange={(e) => setEditImageGear(e.target.value as DialogImageGear)}
-                          className="bg-white/10 border border-white/10 rounded px-2 py-1 text-[9px]"
-                        >
-                          {DIALOG_IMAGE_GEARS.map((g) => (
-                            <option key={g.id} value={g.id}>
-                              {g.label}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
+                      <>
+                        <label className="flex items-center gap-2 text-[9px] text-gray-400">
+                          <span className="font-black uppercase">生图档位</span>
+                          <CustomDropdown
+                            options={DIALOG_IMAGE_GEARS.map((g) => ({ value: g.id, label: g.label }))}
+                            value={editImageGear}
+                            onChange={(v) => setEditImageGear(v as DialogImageGear)}
+                            triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                          />
+                        </label>
+                        <label className="flex items-center gap-2 text-[9px] text-gray-400">
+                          <span className="font-black uppercase">贴图比例</span>
+                          <CustomDropdown
+                            options={[{ value: '', label: '默认' }, ...SUPPORTED_ASPECT_RATIOS.map((r) => ({ value: r.value, label: r.label }))]}
+                            value={editImageAspectRatio}
+                            onChange={setEditImageAspectRatio}
+                            placeholder="默认"
+                            triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                          />
+                        </label>
+                        <label className="flex items-center gap-2 text-[9px] text-gray-400">
+                          <span className="font-black uppercase">贴图尺寸</span>
+                          <CustomDropdown
+                            options={[{ value: '', label: '默认' }, ...SUPPORTED_IMAGE_SIZES.map((s) => ({ value: s.value, label: s.label }))]}
+                            value={editImageSize}
+                            onChange={setEditImageSize}
+                            placeholder="默认"
+                            triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                          />
+                        </label>
+                      </>
                     )}
                     {editCategory === 'image_process' && (
                       <label className="flex items-center gap-2 text-[9px] text-gray-400">
                         <span className="font-black uppercase">执行方式</span>
-                        <select
+                        <CustomDropdown
+                          options={[
+                            { value: 'builtin', label: '图像处理（内置）' },
+                            { value: 'gen_image', label: '生图（提示词）' },
+                          ]}
                           value={editEngine}
-                          onChange={(e) => setEditEngine(e.target.value as CapabilityEngine)}
-                          className="bg-white/10 border border-white/10 rounded px-2 py-1 text-[9px]"
-                        >
-                          <option value="builtin">图像处理（内置）</option>
-                          <option value="gen_image">生图（提示词）</option>
-                        </select>
+                          onChange={(v) => setEditEngine(v as CapabilityEngine)}
+                          triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                        />
                       </label>
                     )}
                     {editCategory === 'image_gen' && (
@@ -778,19 +973,23 @@ const CapabilityPresetSection: React.FC<{
                         <div className="flex gap-2 flex-wrap">
                           <label className="flex items-center gap-1.5 text-[9px]">
                             <span>模块</span>
-                            <select value={editGenerate3D.module} onChange={(e) => setEditGenerate3D((g) => ({ ...g, module: e.target.value as 'pro' | 'rapid' }))} className="bg-white/10 border border-white/10 rounded px-2 py-1 text-[9px]">
-                              <option value="pro">专业版</option>
-                              <option value="rapid">极速版</option>
-                            </select>
+                            <CustomDropdown
+                              options={[{ value: 'pro', label: '专业版' }, { value: 'rapid', label: '极速版' }]}
+                              value={editGenerate3D.module}
+                              onChange={(v) => setEditGenerate3D((g) => ({ ...g, module: v as 'pro' | 'rapid' }))}
+                              triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                            />
                           </label>
                           {editGenerate3D.module === 'pro' && (
                             <>
                               <label className="flex items-center gap-1.5 text-[9px]">
                                 <span>模型</span>
-                                <select value={editGenerate3D.model ?? '3.0'} onChange={(e) => setEditGenerate3D((g) => ({ ...g, model: e.target.value as '3.0' | '3.1' }))} className="bg-white/10 border border-white/10 rounded px-2 py-1 text-[9px]">
-                                  <option value="3.0">3.0</option>
-                                  <option value="3.1">3.1</option>
-                                </select>
+                                <CustomDropdown
+                                  options={[{ value: '3.0', label: '3.0' }, { value: '3.1', label: '3.1' }]}
+                                  value={editGenerate3D.model ?? '3.0'}
+                                  onChange={(v) => setEditGenerate3D((g) => ({ ...g, model: v as '3.0' | '3.1' }))}
+                                  triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                                />
                               </label>
                               <label className="flex items-center gap-1.5 text-[9px]">
                                 <span>面数</span>
@@ -798,21 +997,27 @@ const CapabilityPresetSection: React.FC<{
                               </label>
                               <label className="flex items-center gap-1.5 text-[9px]">
                                 <span>类型</span>
-                                <select value={editGenerate3D.generateType ?? 'Normal'} onChange={(e) => setEditGenerate3D((g) => ({ ...g, generateType: e.target.value as Generate3DPreset['generateType'] }))} className="bg-white/10 border border-white/10 rounded px-2 py-1 text-[9px]">
-                                  <option value="Normal">Normal</option>
-                                  <option value="LowPoly">LowPoly</option>
-                                  <option value="Geometry">Geometry</option>
-                                  <option value="Sketch">Sketch</option>
-                                </select>
+                                <CustomDropdown
+                                  options={[
+                                    { value: 'Normal', label: 'Normal' },
+                                    { value: 'LowPoly', label: 'LowPoly' },
+                                    { value: 'Geometry', label: 'Geometry' },
+                                    { value: 'Sketch', label: 'Sketch' },
+                                  ]}
+                                  value={editGenerate3D.generateType ?? 'Normal'}
+                                  onChange={(v) => setEditGenerate3D((g) => ({ ...g, generateType: v as Generate3DPreset['generateType'] }))}
+                                  triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                                />
                               </label>
                               <label className="flex items-center gap-1.5 text-[9px]">
                                 <span>格式</span>
-                                <select value={editGenerate3D.resultFormat ?? ''} onChange={(e) => setEditGenerate3D((g) => ({ ...g, resultFormat: e.target.value || undefined }))} className="bg-white/10 border border-white/10 rounded px-2 py-1 text-[9px]">
-                                  <option value="">默认</option>
-                                  <option value="STL">STL</option>
-                                  <option value="USDZ">USDZ</option>
-                                  <option value="FBX">FBX</option>
-                                </select>
+                                <CustomDropdown
+                                  options={[{ value: '', label: '默认' }, { value: 'STL', label: 'STL' }, { value: 'USDZ', label: 'USDZ' }, { value: 'FBX', label: 'FBX' }]}
+                                  value={editGenerate3D.resultFormat ?? ''}
+                                  onChange={(v) => setEditGenerate3D((g) => ({ ...g, resultFormat: v || undefined }))}
+                                  placeholder="默认"
+                                  triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                                />
                               </label>
                             </>
                           )}
@@ -844,11 +1049,9 @@ const CapabilityPresetSection: React.FC<{
                   <div className="flex items-center justify-between gap-2 flex-wrap">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-[10px] font-black uppercase">{p.label}</span>
-                      {p.enabled === false && (
-                        <span className="px-2 py-0.5 rounded text-[8px] font-black uppercase bg-red-500/20 text-red-400">
-                          已禁用
-                        </span>
-                      )}
+                      <span className={`px-2 py-0.5 rounded text-[8px] font-black uppercase ${p.enabled === false ? 'bg-red-500/20 text-red-400' : 'bg-green-500/20 text-green-400'}`}>
+                        {p.enabled === false ? '禁用' : '启用'}
+                      </span>
                       {p.category === 'image_process' && getEngine(p) === 'gen_image' && (
                         <span className="px-2 py-0.5 rounded text-[8px] font-black uppercase bg-amber-500/20 text-amber-300">
                           生图执行
@@ -888,6 +1091,8 @@ const CapabilityPresetSection: React.FC<{
                           setEditEngine(getEngine(p));
                           setEditEnabled(p.enabled !== false);
                           setEditImageGear(getGear(p));
+                          setEditImageAspectRatio(p.imageAspectRatio ?? '');
+                          setEditImageSize(p.imageSize ?? '');
                           setEditInstruction(((p as { instructionFixed?: string }).instructionFixed ?? p.instruction) || '');
                           setEditGenerate3D(p.category === 'generate_3d' && p.generate3D ? { ...p.generate3D } : { ...DEFAULT_GENERATE_3D });
                         }}
@@ -898,10 +1103,18 @@ const CapabilityPresetSection: React.FC<{
                       <button onClick={() => removePreset(p.id)} className="px-2 py-1 rounded-lg bg-red-500/20 text-red-400 text-[8px] font-black uppercase hover:bg-red-500/30">删除</button>
                     </div>
                   </div>
-                  <div className="mt-2 text-[8px] text-gray-500 space-x-3">
+                  <div className="mt-2 text-[8px] text-gray-500 space-x-3 flex flex-wrap items-center gap-x-3 gap-y-1">
                     <span>id: {p.id}</span>
                     <span>分类: {p.category}</span>
                     <span>预设: {p.instruction?.length ?? 0} 字</span>
+                    {(p.category === 'image_gen' || getEngine(p) === 'gen_image') && (p.imageAspectRatio || p.imageSize) && (
+                      <span>比例/尺寸: {p.imageAspectRatio || '—'} / {p.imageSize || '—'}</span>
+                    )}
+                    {presetSourceMap.get(p.id) ? (
+                      <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300/90" title="来自远程能力包">来自「{presetSourceMap.get(p.id)}」</span>
+                    ) : (
+                      <span className="px-1.5 py-0.5 rounded bg-white/10 text-gray-400" title="本地添加">本地</span>
+                    )}
                     {p.instruction ? <span className="text-gray-600 truncate max-w-[200px] inline-block align-bottom" title={p.instruction}>{p.instruction.slice(0, 30)}…</span> : null}
                   </div>
                   {p.instruction ? (
@@ -976,7 +1189,51 @@ const CapabilityPresetSection: React.FC<{
                 </>
               )}
             </div>
-          ))
+          ))}
+
+          {effectiveUninstalledPresetItems.map((rp) => (
+            <div key={`remote-${rp.pack.id}-${rp.preset.id}`} className="rounded-2xl border border-white/10 bg-black/40 p-4">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-[10px] font-black uppercase">{rp.preset.label}</span>
+                  <span className="px-2 py-0.5 rounded text-[8px] font-black uppercase bg-gray-500/20 text-gray-400">
+                    未安装
+                  </span>
+                  {rp.preset.category === 'image_process' && getEngine(rp.preset) === 'gen_image' && (
+                    <span className="px-2 py-0.5 rounded text-[8px] font-black uppercase bg-amber-500/20 text-amber-300">
+                      生图执行
+                    </span>
+                  )}
+                </div>
+                <span className="px-2 py-0.5 rounded text-[8px] font-black uppercase bg-white/10 text-gray-400">
+                  {CAPABILITY_CATEGORIES.find((c) => c.id === rp.preset.category)?.label ?? rp.preset.category}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => installSinglePreset(rp.preset)}
+                  disabled={catalogLoading || packContentsLoading}
+                  className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-[9px] font-black uppercase"
+                >
+                  安装
+                </button>
+              </div>
+              <div className="mt-2 text-[8px] text-gray-500 space-x-3 flex flex-wrap items-center gap-x-3 gap-y-1">
+                <span>id: {rp.preset.id}</span>
+                <span>分类: {rp.preset.category}</span>
+                {rp.preset.instruction && (
+                  <span className="text-gray-600 truncate max-w-[200px] inline-block" title={rp.preset.instruction}>
+                    {rp.preset.instruction.slice(0, 30)}…
+                  </span>
+                )}
+              </div>
+              {rp.preset.instruction ? (
+                <p className="mt-1 text-[9px] text-gray-500 break-words line-clamp-2">{rp.preset.instruction}</p>
+              ) : (
+                <p className="mt-1 text-[9px] text-gray-600">（使用内置逻辑或未设置预设提示词）</p>
+              )}
+            </div>
+          ))}
+          </>
         )}
       </div>
 

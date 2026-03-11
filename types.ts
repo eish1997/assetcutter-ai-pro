@@ -336,9 +336,11 @@ export type WorkflowAsset = {
   displayKey: string;
   /** 各类型生成结果图 base64（key 为能力模块 id）；切割图片也可用 cutImageGroup */
   results: Record<string, string>;
-  /** 切割图片结果：多图成组，可含子资产引用（套娃） */
+  /** 切割图片结果：多图成组，可含子资产引用（套娃）；用户拖到「组」建的组也用此字段 */
   cutImageGroup?: WorkflowCutGroupItem[];
-  /** 若本资产来自某资产的切割组内，记录父资产 id（用于 显示全部） */
+  /** 组类型：切割=切割能力生成；manual=用户拖到「组」创建 */
+  groupKind?: 'cut' | 'manual';
+  /** 若本资产来自某资产的组内，记录父资产 id（用于 显示全部） */
   parentAssetId?: string;
   /** 生成顺序，用于拼合流程图 */
   resultOrder: string[];
@@ -402,6 +404,10 @@ export type CustomAppModule = {
   engine?: CapabilityEngine;
   /** 生图档位（可选），仅在 engine === 'gen_image' 时生效 */
   imageGear?: DialogImageGear;
+  /** 生图输出比例（可选），如 1:1、16:9，仅 engine === 'gen_image' 时生效，对应 Gemini imageConfig.aspectRatio */
+  imageAspectRatio?: string;
+  /** 生图输出尺寸（可选），如 1K、2K、4K，仅 engine === 'gen_image' 时生效，对应 Gemini imageConfig.imageSize */
+  imageSize?: string;
   /** 是否启用（默认启用）；禁用后工作流功能区不展示 */
   enabled?: boolean;
   /** 排序（数字越小越靠前）；缺省时按数组顺序 */

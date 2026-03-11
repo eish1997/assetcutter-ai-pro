@@ -314,7 +314,7 @@ const SeamRepairSection: React.FC<{ onLog?: (level: 'info' | 'warn' | 'error', m
           <div className="space-y-2 mb-4">
             <div>
               <span className="text-[9px] text-gray-500">贴图类型</span>
-              <select value={params.texture_kind} onChange={(e) => setParams((p) => ({ ...p, texture_kind: e.target.value }))} className="w-full mt-0.5 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-[10px] outline-none focus:border-blue-500">
+              <select value={params.texture_kind} onChange={(e) => setParams((p) => ({ ...p, texture_kind: e.target.value }))} className="w-full mt-0.5 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500 transition-colors">
                 <option value="basecolor">BaseColor（sRGB）</option>
                 <option value="data">数据贴图（线性）</option>
                 <option value="normal">Normal（向量法线）</option>
@@ -323,20 +323,20 @@ const SeamRepairSection: React.FC<{ onLog?: (level: 'info' | 'warn' | 'error', m
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <span className="text-[9px] text-gray-500">带宽(px)</span>
-                <input type="number" min={1} max={64} value={params.band_px} onChange={(e) => setParams((p) => ({ ...p, band_px: Number(e.target.value) || 8 }))} className="w-full mt-0.5 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-[10px] outline-none focus:border-blue-500" />
+                <input type="number" min={1} max={64} value={params.band_px} onChange={(e) => setParams((p) => ({ ...p, band_px: Number(e.target.value) || 8 }))} className="w-full mt-0.5 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500 transition-colors" />
               </div>
               <div>
                 <span className="text-[9px] text-gray-500">过渡(px)</span>
-                <input type="number" min={0} max={64} value={params.feather_px} onChange={(e) => setParams((p) => { const nextValue = Number(e.target.value); return { ...p, feather_px: Number.isFinite(nextValue) ? nextValue : 6 }; })} className="w-full mt-0.5 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-[10px] outline-none focus:border-blue-500" />
+                <input type="number" min={0} max={64} value={params.feather_px} onChange={(e) => setParams((p) => { const nextValue = Number(e.target.value); return { ...p, feather_px: Number.isFinite(nextValue) ? nextValue : 6 }; })} className="w-full mt-0.5 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500 transition-colors" />
               </div>
             </div>
             <div>
               <span className="text-[9px] text-gray-500">沿边步长(px)</span>
-                <input type="number" min={0.25} max={16} step={0.25} value={params.sample_step_px} onChange={(e) => setParams((p) => ({ ...p, sample_step_px: Number(e.target.value) || 2 }))} className="w-full mt-0.5 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-[10px] outline-none focus:border-blue-500" />
+                <input type="number" min={0.25} max={16} step={0.25} value={params.sample_step_px} onChange={(e) => setParams((p) => ({ ...p, sample_step_px: Number(e.target.value) || 2 }))} className="w-full mt-0.5 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500 transition-colors" />
             </div>
             <div>
               <span className="text-[9px] text-gray-500">模式</span>
-              <select value={params.mode} onChange={(e) => setParams((p) => ({ ...p, mode: e.target.value }))} className="w-full mt-0.5 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-[10px] outline-none focus:border-blue-500">
+              <select value={params.mode} onChange={(e) => setParams((p) => ({ ...p, mode: e.target.value }))} className="w-full mt-0.5 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500 transition-colors">
                 <option value="average">双向平均（推荐）</option>
                 <option value="a_to_b">A → B</option>
                 <option value="b_to_a">B → A</option>
@@ -348,7 +348,7 @@ const SeamRepairSection: React.FC<{ onLog?: (level: 'info' | 'warn' | 'error', m
             </label>
             <div>
               <span className="text-[9px] text-gray-500">Alpha 方式</span>
-              <select value={params.alpha_method} onChange={(e) => setParams((p) => ({ ...p, alpha_method: e.target.value }))} className="w-full mt-0.5 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-[10px] outline-none focus:border-blue-500">
+              <select value={params.alpha_method} onChange={(e) => setParams((p) => ({ ...p, alpha_method: e.target.value }))} className="w-full mt-0.5 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500 transition-colors">
                 <option value="distance">距离场（推荐）</option>
                 <option value="wacc">采样权重</option>
               </select>
@@ -359,7 +359,7 @@ const SeamRepairSection: React.FC<{ onLog?: (level: 'info' | 'warn' | 'error', m
             </label>
             <div>
               <span className="text-[9px] text-gray-500">颜色匹配</span>
-              <select value={params.color_match} onChange={(e) => setParams((p) => ({ ...p, color_match: e.target.value }))} className="w-full mt-0.5 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-[10px] outline-none focus:border-blue-500">
+              <select value={params.color_match} onChange={(e) => setParams((p) => ({ ...p, color_match: e.target.value }))} className="w-full mt-0.5 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500 transition-colors">
                 <option value="meanvar">均值/方差（推荐）</option>
                 <option value="meanvar_edge">按边（可能出色块）</option>
                 <option value="none">关闭</option>
@@ -367,7 +367,7 @@ const SeamRepairSection: React.FC<{ onLog?: (level: 'info' | 'warn' | 'error', m
             </div>
             <div>
               <span className="text-[9px] text-gray-500">Poisson 迭代</span>
-                <input type="number" min={0} max={200} step={25} value={params.poisson_iters} onChange={(e) => setParams((p) => ({ ...p, poisson_iters: Number(e.target.value) || 0 }))} className="w-full mt-0.5 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-[10px] outline-none focus:border-blue-500" />
+                <input type="number" min={0} max={200} step={25} value={params.poisson_iters} onChange={(e) => setParams((p) => ({ ...p, poisson_iters: Number(e.target.value) || 0 }))} className="w-full mt-0.5 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500 transition-colors" />
             </div>
           </div>
 
@@ -381,7 +381,7 @@ const SeamRepairSection: React.FC<{ onLog?: (level: 'info' | 'warn' | 'error', m
               <input type="checkbox" checked={previewFlipY} onChange={(e) => setPreviewFlipY(e.target.checked)} className="rounded" />
               <span>上下翻转</span>
             </label>
-            <select value={previewRotate} onChange={(e) => setPreviewRotate(Number(e.target.value))} className="bg-white/5 border border-white/10 rounded-lg px-2 py-1 text-[10px] outline-none focus:border-blue-500">
+            <select value={previewRotate} onChange={(e) => setPreviewRotate(Number(e.target.value))} className="bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500 transition-colors">
               <option value={0}>0°</option>
               <option value={90}>90°</option>
               <option value={180}>180°</option>

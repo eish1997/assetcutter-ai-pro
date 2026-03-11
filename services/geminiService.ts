@@ -15,6 +15,7 @@ export interface GeminiRequestOptions {
 }
 
 const GEMINI_REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_REQUEST_TIMEOUT_MS) || 45_000;
+const GEMINI_IMAGE_REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_IMAGE_REQUEST_TIMEOUT_MS) || 120_000;
 
 function createAbortError(message: string): Error {
   const error = new Error(message);
@@ -24,6 +25,18 @@ function createAbortError(message: string): Error {
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
+}
+
+function buildGeminiConfig<T extends Record<string, unknown>>(config: T, signal: AbortSignal, timeoutMs: number): T {
+  const nextHttpOptions = {
+    ...((config.httpOptions as Record<string, unknown> | undefined) ?? {}),
+    timeout: timeoutMs,
+  };
+  return {
+    ...config,
+    abortSignal: signal,
+    httpOptions: nextHttpOptions,
+  };
 }
 
 function sleepWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
@@ -247,6 +260,9 @@ async function callWithRetry<T>(
 /** 将 API 返回的原始错误转为用户可读的简短说明（用于界面展示） */
 export function normalizeApiErrorMessage(err: unknown): string {
   const raw = String((err as any)?.message ?? err);
+  if (raw.includes('Failed to fetch sending request') || raw.includes('TypeError: Failed to fetch')) {
+    return '请求发送失败：请检查网络、代理或稍后重试';
+  }
   try {
     const parsed = JSON.parse(raw);
     const code = parsed?.error?.code ?? parsed?.code;
@@ -277,8 +293,7 @@ export async function detectObjectsInImage(base64Image: string, model = 'gemini-
           { inlineData: { mimeType: 'image/jpeg', data: base64Image.split(',')[1] || base64Image } }
         ]
       },
-      config: {
-        abortSignal: signal,
+      config: buildGeminiConfig({
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.ARRAY,
@@ -292,7 +307,7 @@ export async function detectObjectsInImage(base64Image: string, model = 'gemini-
             required: ["id", "label", "box_2d"]
           }
         }
-      }
+      }, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)
     });
     const results = JSON.parse(response.text || "[]");
     return results.map((r) => ({
@@ -326,7 +341,7 @@ export async function describeImageSubject(
           { text: prompt }
         ]
       },
-      config: { abortSignal: signal }
+      config: buildGeminiConfig({}, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)
     });
     const raw = (response.text || '').trim();
     if (!raw) throw new Error('Empty subject description');
@@ -345,6 +360,7 @@ export async function processTexture(base64Image, type: 'pattern' | 'tileable' |
     if (type === 'tileable') prompt = prompt || DEFAULT_PROMPTS.texture_tileable;
     if (type === 'pbr') prompt = (prompt || DEFAULT_PROMPTS.texture_pbr).replace('{mapType}', mapType);
 
+    const timeoutMs = options?.timeoutMs ?? GEMINI_IMAGE_REQUEST_TIMEOUT_MS;
     const response = await ai.models.generateContent({
       model: model,
       contents: {
@@ -353,14 +369,14 @@ export async function processTexture(base64Image, type: 'pattern' | 'tileable' |
           { text: prompt }
         ]
       },
-      config: { abortSignal: signal }
+      config: buildGeminiConfig({}, signal, timeoutMs)
     });
 
     for (const part of response.candidates?.[0]?.content?.parts || []) {
       if (part.inlineData) return `data:image/png;base64,${part.inlineData.data}`;
     }
     throw new Error(`Texture processing (${type}) failed`);
-  }, { ...options, retries: 0 });
+  }, { ...options, timeoutMs: options?.timeoutMs ?? GEMINI_IMAGE_REQUEST_TIMEOUT_MS, retries: 0 });
 }
 
 // ---------- 对话式生图模块 ----------
@@ -390,7 +406,7 @@ export async function understandImageEditIntent(
     const response = await ai.models.generateContent({
       model,
       contents: { parts },
-      config: { systemInstruction: systemPrompt, abortSignal: signal }
+      config: buildGeminiConfig({ systemInstruction: systemPrompt }, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)
     });
     const text = response.text?.trim();
     if (!text) throw new Error('Empty understanding response');
@@ -428,7 +444,8 @@ export async function dialogGenerateImage(
     const ai = getAI();
     const isTextToImage = !imageBase64;
     const systemInstruction = (customSystemPrompt || (isTextToImage ? DEFAULT_PROMPTS.dialog_text_to_image : DEFAULT_PROMPTS.edit)).replace('{instruction}', instruction);
-    const config: { systemInstruction: string; imageConfig?: { aspectRatio?: string; imageSize?: string }; abortSignal?: AbortSignal } = {
+    const timeoutMs = requestOptions?.timeoutMs ?? GEMINI_IMAGE_REQUEST_TIMEOUT_MS;
+    const config: { systemInstruction: string; imageConfig?: { aspectRatio?: string; imageSize?: string } } = {
       systemInstruction
     };
     if (options?.aspectRatio || options?.imageSize) {
@@ -436,7 +453,6 @@ export async function dialogGenerateImage(
       if (options.aspectRatio) config.imageConfig.aspectRatio = options.aspectRatio;
       if (options.imageSize) config.imageConfig.imageSize = options.imageSize;
     }
-    config.abortSignal = signal;
     const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = isTextToImage
       ? [{ text: instruction }]
       : [
@@ -446,7 +462,7 @@ export async function dialogGenerateImage(
     const response = await ai.models.generateContent({
       model,
       contents: { parts },
-      config
+      config: buildGeminiConfig(config, signal, timeoutMs)
     });
     for (const part of response.candidates?.[0]?.content?.parts || []) {
       if (part.inlineData) return `data:image/png;base64,${part.inlineData.data}`;
@@ -454,7 +470,7 @@ export async function dialogGenerateImage(
     const textPart = response.candidates?.[0]?.content?.parts?.find((p: { text?: string }) => p.text);
     const hint = textPart?.text?.slice(0, 120) ? `（模型返回了文字: ${String(textPart.text).slice(0, 120)}…）` : '（当前模型可能不支持图像输出，请换用「快速」或「Pro」挡位）';
     throw new Error(`生图未返回图片${hint}`);
-  }, { ...requestOptions, abortSignal, retries: 0 });
+  }, { ...requestOptions, abortSignal, timeoutMs: requestOptions?.timeoutMs ?? GEMINI_IMAGE_REQUEST_TIMEOUT_MS, retries: 0 });
 }
 
 /**
@@ -473,7 +489,8 @@ export async function dialogGenerateImageMulti(
   return callWithRetry(async (signal) => {
     const ai = getAI();
     const systemInstruction = (DEFAULT_PROMPTS.edit || '').replace('{instruction}', instruction);
-    const config: { systemInstruction: string; imageConfig?: { aspectRatio?: string; imageSize?: string }; abortSignal?: AbortSignal } = {
+    const timeoutMs = requestOptions?.timeoutMs ?? GEMINI_IMAGE_REQUEST_TIMEOUT_MS;
+    const config: { systemInstruction: string; imageConfig?: { aspectRatio?: string; imageSize?: string } } = {
       systemInstruction
     };
     if (options?.aspectRatio || options?.imageSize) {
@@ -481,7 +498,6 @@ export async function dialogGenerateImageMulti(
       if (options?.aspectRatio) config.imageConfig.aspectRatio = options.aspectRatio;
       if (options?.imageSize) config.imageConfig.imageSize = options.imageSize;
     }
-    config.abortSignal = signal;
     const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [];
     for (const img of imagesBase64) {
       const data = img.split(',')[1] || img;
@@ -491,7 +507,7 @@ export async function dialogGenerateImageMulti(
     const response = await ai.models.generateContent({
       model,
       contents: { parts },
-      config
+      config: buildGeminiConfig(config, signal, timeoutMs)
     });
     for (const part of response.candidates?.[0]?.content?.parts || []) {
       if (part.inlineData) return `data:image/png;base64,${part.inlineData.data}`;
@@ -499,7 +515,7 @@ export async function dialogGenerateImageMulti(
     const textPart = response.candidates?.[0]?.content?.parts?.find((p: { text?: string }) => p.text);
     const hint = textPart?.text?.slice(0, 120) ? `（模型返回了文字: ${String(textPart.text).slice(0, 120)}…）` : '（当前模型可能不支持图像输出）';
     throw new Error(`生图未返回图片${hint}`);
-  }, { ...requestOptions, abortSignal, retries: 0 });
+  }, { ...requestOptions, abortSignal, timeoutMs: requestOptions?.timeoutMs ?? GEMINI_IMAGE_REQUEST_TIMEOUT_MS, retries: 0 });
 }
 
 /**
@@ -526,7 +542,7 @@ export async function generateSessionTitle(
     const response = await ai.models.generateContent({
       model,
       contents: { parts },
-      config: { abortSignal: signal }
+      config: buildGeminiConfig({}, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)
     });
     const out = response.text?.trim();
     if (!out) throw new Error('Empty title response');
@@ -549,7 +565,7 @@ export async function getDialogTextResponse(
         role: c.role === 'model' ? 'model' : 'user',
         parts: c.parts
       })),
-      config: { abortSignal: signal }
+      config: buildGeminiConfig({}, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)
     });
     const text = response.text?.trim();
     if (text == null) throw new Error('Empty text response');
@@ -578,7 +594,7 @@ export async function getSiteAssistantResponse(
     const response = await ai.models.generateContent({
       model,
       contents,
-      config: { systemInstruction: SITE_ASSISTANT_SYSTEM, abortSignal: signal }
+      config: buildGeminiConfig({ systemInstruction: SITE_ASSISTANT_SYSTEM }, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)
     });
     const text = response.text?.trim();
     if (text == null) throw new Error('助手未返回内容');
@@ -603,7 +619,7 @@ export async function getSiteAssistantResponseStream(
     const stream = await ai.models.generateContentStream({
       model,
       contents,
-      config: { systemInstruction: SITE_ASSISTANT_SYSTEM, abortSignal: signal }
+      config: buildGeminiConfig({ systemInstruction: SITE_ASSISTANT_SYSTEM }, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)
     });
     let full = '';
     for await (const chunk of stream) {
@@ -632,7 +648,7 @@ export async function generateArenaABPrompts(
           { text: `User description: ${(userDescription || '').trim().slice(0, 500)}\n\nImportant: These prompts will be sent to the image model together with the user's uploaded image. Ensure each prompt is an instruction to modify or transform that image (not a standalone description of a new scene).` }
         ]
       },
-      config: { responseMimeType: 'application/json', abortSignal: signal }
+      config: buildGeminiConfig({ responseMimeType: 'application/json' }, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)
     });
     const text = response.text?.trim();
     if (!text) throw new Error('Empty arena A/B response');
@@ -692,7 +708,7 @@ export async function optimizeLoserPrompt(
           { text: userText }
         ]
       },
-      config: { responseMimeType: 'application/json', abortSignal: signal }
+      config: buildGeminiConfig({ responseMimeType: 'application/json' }, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)
     });
     const text = response.text?.trim();
     if (!text) throw new Error('Empty optimize loser response');
@@ -732,7 +748,7 @@ export async function generateArenaPrompts(
           { text: `User description: ${(userDescription || '').trim().slice(0, 500)}\n\nN = ${count}. Output exactly ${count} prompts (promptA, promptB${count >= 3 ? ', promptC' : ''}${count >= 4 ? ', promptD' : ''}). Important: These prompts will be sent to the image model together with the user's uploaded image; ensure each prompt is an instruction to modify or transform that image (not a standalone description of a new scene).` }
         ]
       },
-      config: { responseMimeType: 'application/json', abortSignal: signal }
+      config: buildGeminiConfig({ responseMimeType: 'application/json' }, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)
     });
     const text = response.text?.trim();
     if (!text) throw new Error('Empty arena N response');
@@ -782,7 +798,7 @@ export async function generateNewChallenger(
           { text: userText }
         ]
       },
-      config: { responseMimeType: 'application/json', abortSignal: signal }
+      config: buildGeminiConfig({ responseMimeType: 'application/json' }, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)
     });
     const text = response.text?.trim();
     if (!text) throw new Error('Empty new challenger response');
@@ -817,7 +833,7 @@ export async function parsePromptStructured(
           { text: `Prompt to analyze:\n${(prompt || '').trim().slice(0, 3000)}` }
         ]
       },
-      config: { responseMimeType: 'application/json', abortSignal: signal }
+      config: buildGeminiConfig({ responseMimeType: 'application/json' }, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)
     });
     const text = response.text?.trim();
     if (!text) throw new Error('Empty parse structured response');
@@ -894,13 +910,13 @@ Output ONLY the image.`;
 
     parts.push({ text: systemInstruction });
 
+    const timeoutMs = options?.timeoutMs ?? GEMINI_IMAGE_REQUEST_TIMEOUT_MS;
     const response = await ai.models.generateContent({
       model: MODEL_NAME,
       contents: { parts },
-      config: {
-        abortSignal: signal,
+      config: buildGeminiConfig({
         imageConfig: { aspectRatio: '1:1' }
-      }
+      }, signal, timeoutMs)
     });
 
     for (const part of response.candidates?.[0]?.content?.parts ?? []) {
@@ -909,5 +925,5 @@ Output ONLY the image.`;
       }
     }
     throw new Error('No image data returned from AI');
-  }, { ...options, retries: 0 });
+  }, { ...options, timeoutMs: options?.timeoutMs ?? GEMINI_IMAGE_REQUEST_TIMEOUT_MS, retries: 0 });
 }

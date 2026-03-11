@@ -1,0 +1,84 @@
+[
+  {
+    "id": "split_component",
+    "label": "拆分组件",
+    "category": "image_gen",
+    "engine": "gen_image",
+    "enabled": true,
+    "order": 0,
+    "instruction": "识别图片中的物体，根据物体拆分成组件，排列成网格，类似quixel资产库效果，灰色背景。",
+    "imageGear": "pro"
+  },
+  {
+    "id": "style_transfer",
+    "label": "转风格",
+    "category": "image_gen",
+    "engine": "gen_image",
+    "enabled": true,
+    "order": 1,
+    "instruction": "识别图片中的物体，quixel资产库效果，灰色背景。",
+    "imageGear": "pro",
+    "imageAspectRatio": "1:1",
+    "imageSize": "2K"
+  },
+  {
+    "id": "multi_view",
+    "label": "生成多视角",
+    "category": "image_gen",
+    "engine": "gen_image",
+    "enabled": true,
+    "order": 2,
+    "instruction": "识别图片中的物体，生成游戏影视流程中的五个视图资产效果，理解其物体的不同面的结构确保符合逻辑，包括45度透视和其它几个正交视图（正面，背面，侧面，上面），物体保持原始的比例不变，风格不变，不需要文字，灰色背景。",
+    "imageGear": "pro"
+  },
+  {
+    "id": "cut_image",
+    "label": "切割图片",
+    "category": "image_process",
+    "engine": "builtin",
+    "enabled": true,
+    "order": 3,
+    "instruction": "",
+    "imageGear": "fast"
+  },
+  {
+    "id": "83f822d9c4",
+    "label": "线稿",
+    "category": "image_gen",
+    "instruction": "将图片转成黑白线描效果图，干净背景。",
+    "enabled": true,
+    "order": 4,
+    "imageGear": "pro",
+    "engine": "gen_image"
+  },
+  {
+    "id": "2406c96c0e",
+    "label": "色块",
+    "category": "image_gen",
+    "instruction": "将图片转成纯平色块效果图，干净背景。",
+    "enabled": true,
+    "order": 5,
+    "imageGear": "pro",
+    "engine": "gen_image"
+  },
+  {
+    "id": "842d3d6e19",
+    "label": "白模",
+    "category": "image_gen",
+    "instruction": "将图片转成传统3D游戏影视流程中的白模效果图，灰色背景。",
+    "enabled": true,
+    "order": 6,
+    "imageGear": "pro",
+    "engine": "gen_image"
+  },
+  {
+    "id": "7f352bf0f7",
+    "label": "线稿色块",
+    "category": "image_gen",
+    "instruction": "将图片转成线稿色块图，干净背景。",
+    "enabled": true,
+    "order": 7,
+    "imageGear": "pro",
+    "engine": "gen_image"
+  }
+]

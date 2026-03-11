@@ -102,3 +102,40 @@ export function getTencentCreds(): { secretId: string; secretKey: string } {
   const secretKey = (userSecretKey || '').trim();
   return { secretId, secretKey };
 }
+
+// ----- 能力商店（远程预设 Catalog URL）-----
+const STORAGE_KEY_CAPABILITY_STORE_URL = 'ac_store_catalog_url';
+
+/** 默认能力预设商店目录（GitHub raw 避免 CDN 强缓存，保证能看到最新包列表） */
+export const DEFAULT_CAPABILITY_STORE_CATALOG_URL =
+  (typeof import.meta !== 'undefined' && (import.meta as unknown as { env?: Record<string, string> })?.env?.VITE_STORE_CATALOG_URL) ||
+  'https://raw.githubusercontent.com/eish1997/assetcutter-ai-pro-store/main/store/catalog.json';
+
+/** 已废弃的 jsDelivr 默认地址（强缓存导致只看到 1 个包），迁移到 raw 地址 */
+const DEPRECATED_JSDELIVR_CATALOG_URL = 'https://cdn.jsdelivr.net/gh/eish1997/assetcutter-ai-pro-store@main/store/catalog.json';
+
+export function getCapabilityStoreCatalogUrl(): string {
+  try {
+    let v = localStorage.getItem(STORAGE_KEY_CAPABILITY_STORE_URL);
+    v = v && v.trim() ? v.trim() : '';
+    if (v === DEPRECATED_JSDELIVR_CATALOG_URL) {
+      localStorage.removeItem(STORAGE_KEY_CAPABILITY_STORE_URL);
+      return DEFAULT_CAPABILITY_STORE_CATALOG_URL;
+    }
+    return v || DEFAULT_CAPABILITY_STORE_CATALOG_URL;
+  } catch {
+    return DEFAULT_CAPABILITY_STORE_CATALOG_URL;
+  }
+}
+
+export function setCapabilityStoreCatalogUrl(value: string | null): void {
+  try {
+    if (value == null || !value.trim()) {
+      localStorage.removeItem(STORAGE_KEY_CAPABILITY_STORE_URL);
+    } else {
+      localStorage.setItem(STORAGE_KEY_CAPABILITY_STORE_URL, value.trim());
+    }
+  } catch {
+    // ignore
+  }
+}

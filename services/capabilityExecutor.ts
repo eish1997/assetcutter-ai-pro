@@ -96,7 +96,8 @@ export async function executeCapability(
         if (!prompt) return { ok: false, kind: 'none', error: '该能力为生图执行方式，但未填写预设提示词或理解未返回有效指令', durationMs: Date.now() - start };
         ctx.onLog?.('info', `[${actionLabel}] 生图中…`, undefined);
         const modelId = resolveImageModelId(preset.imageGear);
-        const result = await dialogGenerateImage(cropped, prompt, modelId);
+        const imageOptions = (preset.imageAspectRatio || preset.imageSize) ? { aspectRatio: preset.imageAspectRatio, imageSize: preset.imageSize } : undefined;
+        const result = await dialogGenerateImage(cropped, prompt, modelId, imageOptions);
         return { ok: true, kind: 'image', image: result || cropped, durationMs: Date.now() - start };
       }
 
@@ -115,7 +116,8 @@ export async function executeCapability(
     if (!prompt) return { ok: false, kind: 'none', error: '该能力为生图执行方式，但未填写预设提示词或理解未返回有效指令', durationMs: Date.now() - start };
     ctx.onLog?.('info', `[${actionLabel}] 生图中…`, undefined);
     const modelId = resolveImageModelId(preset.imageGear);
-    const result = await dialogGenerateImage(inputImageBase64, prompt, modelId);
+    const imageOptions = (preset.imageAspectRatio || preset.imageSize) ? { aspectRatio: preset.imageAspectRatio, imageSize: preset.imageSize } : undefined;
+    const result = await dialogGenerateImage(inputImageBase64, prompt, modelId, imageOptions);
     return { ok: true, kind: 'image', image: result, durationMs: Date.now() - start };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -201,8 +203,9 @@ export async function executeCapabilitySet(
           const instruction = promptFromTextGen || (preset.instruction ?? '').trim() || '根据以上参考图生成最终效果。';
           onLog?.('info', `[${set.label}] ${n.data.label} 执行中（${images.length} 张图 + 提示词）…`, undefined);
           const modelId = resolveImageModelId(preset.imageGear);
+          const imageOptions = (preset.imageAspectRatio || preset.imageSize) ? { aspectRatio: preset.imageAspectRatio, imageSize: preset.imageSize } : undefined;
           try {
-            const result = await dialogGenerateImageMulti(images, instruction, modelId);
+            const result = await dialogGenerateImageMulti(images, instruction, modelId, imageOptions);
             outputs.set(n.id, result);
             lastImage = result;
           } catch (e) {
