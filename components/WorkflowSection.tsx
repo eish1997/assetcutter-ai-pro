@@ -534,6 +534,8 @@ const WorkflowSection: React.FC<{
   const cardRefs = useRef<Map<string, HTMLElement>>(new Map());
   const [dragOverAssetId, setDragOverAssetId] = useState<string | null>(null);
   const [assetErrors, setAssetErrors] = useState<Map<string, string>>(new Map());
+  const [groupPreviewIndexById, setGroupPreviewIndexById] = useState<Record<string, number>>({});
+  const [groupBounceStateById, setGroupBounceStateById] = useState<Record<string, 'idle' | 'up' | 'down'>>({});
 
   const setAssetError = useCallback((assetId: string, message: string | null) => {
     setAssetErrors((prev) => {
@@ -933,23 +935,40 @@ const WorkflowSection: React.FC<{
     imageFiles.forEach((file) => {
       const reader = new FileReader();
       reader.onload = () => {
-        setAssets((prev) => [
-          ...prev,
-          {
-            id: uuid(),
-            original: reader.result as string,
+        const base64 = reader.result as string;
+        setAssets((prev) => {
+          const groupCtx =
+            viewStack.length > 0
+              ? prev.find((a) => a.id === viewStack[viewStack.length - 1].assetId)
+              : null;
+          const newId = uuid();
+          const newAsset: WorkflowAsset = {
+            id: newId,
+            original: base64,
             displayKey: 'original',
             results: {},
             resultOrder: [],
             archived: false,
             hiddenInGrid: false,
             createdAt: Date.now(),
-          },
-        ]);
+            ...(groupCtx ? { parentAssetId: groupCtx.id } : {}),
+          };
+          if (!groupCtx) {
+            return [...prev, newAsset];
+          }
+          return prev.map((a) => {
+            if (a.id === groupCtx.id) {
+              const items = [...(a.cutImageGroup ?? [])];
+              items.push({ assetId: newId });
+              return { ...a, cutImageGroup: items };
+            }
+            return a;
+          }).concat(newAsset);
+        });
       };
       reader.readAsDataURL(file);
     });
-  }, []);
+  }, [viewStack, setAssets]);
 
   const handleBatchUploadCorrect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -997,6 +1016,61 @@ const WorkflowSection: React.FC<{
   const setDisplayKey = (assetId: string, key: string) => {
     setAssets((prev) => prev.map((a) => (a.id === assetId ? { ...a, displayKey: key } : a)));
   };
+
+  const getDisplayKeysForAsset = (a: WorkflowAsset): string[] => {
+    const keys: string[] = ['original'];
+    if (a.cutImageGroup?.length && a.groupKind !== 'manual') keys.push('cut_image');
+    (a.resultOrder || []).forEach((k) => {
+      if (baseActionId(k) !== 'cut_image') keys.push(k);
+    });
+    return keys;
+  };
+
+  const cycleDisplayKey = (assetId: string, delta: number) => {
+    const a = assets.find((x) => x.id === assetId);
+    if (!a) return;
+    const keys = getDisplayKeysForAsset(a);
+    if (keys.length <= 1) return;
+    const idx = keys.indexOf(a.displayKey);
+    const current = idx >= 0 ? idx : 0;
+    const next = (current + (delta > 0 ? 1 : -1) + keys.length) % keys.length;
+    setDisplayKey(assetId, keys[next]);
+  };
+
+  const duplicateAssetInPlace = useCallback(
+    (sourceIds: string[], parentGroupId: string | null) => {
+      setAssets((prev) => {
+        const copies: WorkflowAsset[] = [];
+        const newIds: string[] = [];
+        sourceIds.forEach((id) => {
+          const src = prev.find((a) => a.id === id);
+          if (!src) return;
+          const newId = uuid();
+          newIds.push(newId);
+          copies.push({
+            ...src,
+            id: newId,
+            parentAssetId: parentGroupId ?? undefined,
+            archived: false,
+            hiddenInGrid: false,
+            createdAt: Date.now(),
+          });
+        });
+        if (copies.length === 0) return prev;
+        let next = [...prev, ...copies];
+        if (parentGroupId) {
+          const gi = next.findIndex((a) => a.id === parentGroupId);
+          if (gi !== -1) {
+            const g = next[gi];
+            const items = [...(g.cutImageGroup ?? []), ...newIds.map((id) => ({ assetId: id }))];
+            next = next.map((a, i) => (i === gi ? { ...a, cutImageGroup: items } : a));
+          }
+        }
+        return next;
+      });
+    },
+    [setAssets]
+  );
 
   useEffect(() => {
     if (!marqueeRect) return;
@@ -1079,7 +1153,22 @@ const WorkflowSection: React.FC<{
   };
 
   const markArchived = (assetId: string) => {
-    setAssets((prev) => prev.map((a) => (a.id === assetId ? { ...a, archived: true, hiddenInGrid: false } : a)));
+    setAssets((prev) =>
+      prev.map((a) => {
+        if (a.id === assetId) {
+          return { ...a, archived: true, hiddenInGrid: false, parentAssetId: undefined };
+        }
+        if (a.cutImageGroup?.length) {
+          const filtered = a.cutImageGroup.filter(
+            (item) => !(typeof item === 'object' && item && 'assetId' in item && item.assetId === assetId)
+          );
+          if (filtered.length !== a.cutImageGroup.length) {
+            return { ...a, cutImageGroup: filtered.length ? filtered : undefined };
+          }
+        }
+        return a;
+      })
+    );
     setArchiveHint({ assetId, ts: Date.now() });
     setTimeout(() => setArchiveHint((h) => (h?.assetId === assetId ? null : h)), 4000);
   };
@@ -1173,6 +1262,39 @@ const WorkflowSection: React.FC<{
         nextAssets = nextAssets.map((a, i) => (i === groupIdx ? { ...a, cutImageGroup: newGroupItems } : a));
       }
       return { nextAssets, assetIds };
+    },
+    []
+  );
+
+  /** 从组中移除指定下标的格；若组变空则移除组并清理父组引用。返回新 assets。 */
+  const removeGroupItems = useCallback(
+    (prev: WorkflowAsset[], groupAssetId: string, itemIndexes: number[]): WorkflowAsset[] => {
+      const groupIdx = prev.findIndex((a) => a.id === groupAssetId);
+      if (groupIdx === -1 || !prev[groupIdx].cutImageGroup?.length) return prev;
+      const group = prev[groupIdx];
+      const sorted = [...itemIndexes].filter((i) => i >= 0 && i < group.cutImageGroup!.length).sort((a, b) => b - a);
+      if (sorted.length === 0) return prev;
+      const nextGroupItems = [...group.cutImageGroup!];
+      for (const i of sorted) nextGroupItems.splice(i, 1);
+      let next = prev.map((a, i) =>
+        i === groupIdx ? { ...a, cutImageGroup: nextGroupItems.length ? nextGroupItems : undefined } : a
+      );
+      if (nextGroupItems.length === 0) {
+        next = next.filter((a) => a.id !== groupAssetId);
+        if (group.parentAssetId) {
+          const parentIdx = next.findIndex((a) => a.id === group.parentAssetId);
+          if (parentIdx !== -1) {
+            const parent = next[parentIdx];
+            const filtered = (parent.cutImageGroup ?? []).filter(
+              (x) => typeof x !== 'object' || (x as { assetId: string }).assetId !== groupAssetId
+            );
+            next = next.map((a, i) =>
+              i === parentIdx ? { ...a, cutImageGroup: filtered.length ? filtered : undefined } : a
+            );
+          }
+        }
+      }
+      return next;
     },
     []
   );
@@ -1345,13 +1467,19 @@ const WorkflowSection: React.FC<{
         <div className="flex items-center gap-2">
           <span className="text-[9px] font-black text-gray-500 uppercase">显示</span>
           <button
-            onClick={() => setShowArchived(false)}
+            onClick={() => {
+              setShowArchived(false);
+            }}
             className={`px-4 py-2 rounded-xl text-[9px] font-black uppercase border ${!showArchived ? 'bg-blue-600 border-blue-500 text-white' : 'bg-white/5 border-white/10 text-gray-500 hover:bg-white/10'}`}
           >
             进行中
           </button>
           <button
-            onClick={() => setShowArchived(true)}
+            onClick={() => {
+              setShowArchived(true);
+              setViewStack([]);
+              setSelectedGroupItemKeys(new Set());
+            }}
             className={`px-4 py-2 rounded-xl text-[9px] font-black uppercase border ${showArchived ? 'bg-blue-600 border-blue-500 text-white' : 'bg-white/5 border-white/10 text-gray-500 hover:bg-white/10'}`}
           >
             已完成
@@ -1381,23 +1509,41 @@ const WorkflowSection: React.FC<{
         {onOpenLibraryPicker && (
           <button
             type="button"
-            onClick={() => onOpenLibraryPicker((items) => {
-              const valid = items.filter((item) => item?.data);
-              if (!valid.length) return;
-              setAssets((prev) => [
-                ...prev,
-                ...valid.map((item) => ({
-                  id: uuid(),
-                  original: item.data,
-                  displayKey: 'original' as const,
-                  results: {} as Record<string, string>,
-                  resultOrder: [] as string[],
-                  archived: false,
-                  hiddenInGrid: false,
-                  createdAt: Date.now(),
-                })),
-              ]);
-            })}
+            onClick={() =>
+              onOpenLibraryPicker((items) => {
+                const valid = items.filter((item) => item?.data);
+                if (!valid.length) return;
+                setAssets((prev) => {
+                  const groupCtx =
+                    viewStack.length > 0
+                      ? prev.find((a) => a.id === viewStack[viewStack.length - 1].assetId)
+                      : null;
+                  const created: WorkflowAsset[] = valid.map((item) => ({
+                    id: uuid(),
+                    original: item.data,
+                    displayKey: 'original' as const,
+                    results: {} as Record<string, string>,
+                    resultOrder: [] as string[],
+                    archived: false,
+                    hiddenInGrid: false,
+                    createdAt: Date.now(),
+                    ...(groupCtx ? { parentAssetId: groupCtx.id } : {}),
+                  }));
+                  if (!groupCtx) {
+                    return [...prev, ...created];
+                  }
+                  const next = prev.map((a) => {
+                    if (a.id === groupCtx.id) {
+                      const items = [...(a.cutImageGroup ?? [])];
+                      created.forEach((c) => items.push({ assetId: c.id }));
+                      return { ...a, cutImageGroup: items };
+                    }
+                    return a;
+                  });
+                  return next.concat(created);
+                });
+              })
+            }
             className="px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-[9px] font-black uppercase hover:bg-white/10"
           >
             从仓库导入
@@ -1589,106 +1735,179 @@ const WorkflowSection: React.FC<{
 
                       if (isRef && childAsset) {
                         return (
-                          <div
-                            key={idx}
-                            data-workflow-card
-                            ref={(el) => {
-                              if (!currentGroupAsset) return;
-                              if (el) cardRefs.current.set(groupKey, el);
-                              else cardRefs.current.delete(groupKey);
-                            }}
-                            className={`break-inside-avoid mb-4 group relative rounded-2xl border bg-black/40 overflow-hidden ${
-                              selectedGroupItemKeys.has(groupKey)
-                                ? 'border-blue-500 ring-2 ring-blue-500/50'
-                                : 'border-white/10'
-                            }`}
-                            draggable
-                            onDragStart={() => {
-                              if (!currentGroupAsset) return;
-                              const keys = selectedGroupItemKeys.has(groupKey)
-                                ? Array.from(selectedGroupItemKeys)
-                                : [groupKey];
-                              const itemIndexes = keys
-                                .filter((k) => k.startsWith(`${currentGroupAsset.id}::`))
-                                .map((k) => Number(k.split('::')[1]))
-                                .filter((n) => !Number.isNaN(n));
-                              if (itemIndexes.length === 0) return;
-                              setDraggingGroupItems({ groupAssetId: currentGroupAsset.id, itemIndexes });
-                            }}
-                            onDragEnd={() => {
-                              setDraggingGroupItems(null);
-                              setDragOverAction(null);
-                            }}
-                          >
-                            <div
-                              className="relative cursor-pointer"
-                              onClick={() => {
-                                if (childAsset.cutImageGroup?.length) {
-                                  setViewStack((s) => [...s, { assetId: childAsset.id }]);
-                                } else {
-                                  setLightboxAssetId(childAsset.id);
-                                }
-                              }}
-                            >
-                              <img src={img} alt="" className="w-full h-auto object-cover block" style={{ maxHeight: 360 }} />
-                              {assetErrors.has(childAsset.id) && (
-                                <span className="absolute top-2 left-2 px-2 py-0.5 rounded-lg bg-red-600/90 text-[8px] font-black text-white">
-                                  执行出错
-                                </span>
-                              )}
-                              {childAsset.cutImageGroup?.length && (
-                                <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg text-[8px] font-black bg-blue-600/90">
-                                  {childAsset.groupKind === 'manual' ? '组' : '切割'} {childAsset.cutImageGroup.length}
-                                </span>
-                              )}
-                              <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-end justify-center gap-1 p-2">
-                                <button
-                                  onClick={(e) => { e.stopPropagation(); setDisplayKey(childAsset.id, 'original'); }}
-                                  className={`px-2 py-1 rounded text-[8px] font-black uppercase ${childAsset.displayKey === 'original' ? 'bg-blue-600' : 'bg-white/20 hover:bg-white/30'}`}
+                          <div key={idx} className="break-inside-avoid mb-6 relative">
+                            {childAsset.cutImageGroup?.length && (
+                              <>
+                                <div className="absolute inset-0 rounded-2xl bg-black/40 border border-blue-500/40 translate-x-[16px] translate-y-[16px] -rotate-3 opacity-70 shadow-xl shadow-black/60 pointer-events-none" />
+                                <div className="absolute inset-0 rounded-2xl bg-black/60 border border-blue-400/70 translate-x-[8px] translate-y-[8px] rotate-1 opacity-90 shadow-xl shadow-black/80 pointer-events-none" />
+                              </>
+                            )}
+                            {(() => {
+                              const bounce = groupBounceStateById[childAsset.id] ?? 'idle';
+                              const motionClass =
+                                bounce === 'up'
+                                  ? '-translate-y-0.5 -rotate-[0.6deg] scale-[0.985]'
+                                  : bounce === 'down'
+                                  ? 'translate-y-0.5 rotate-[0.6deg] scale-[0.985]'
+                                  : '';
+                              return (
+                                <div
+                                  data-workflow-card
+                                  ref={(el) => {
+                                    if (!currentGroupAsset) return;
+                                    if (el) cardRefs.current.set(groupKey, el);
+                                    else cardRefs.current.delete(groupKey);
+                                  }}
+                                  className={`group relative rounded-2xl border bg-black/40 overflow-hidden ${
+                                    selectedGroupItemKeys.has(groupKey)
+                                      ? 'border-blue-500 ring-2 ring-blue-500/50'
+                                      : childAsset.cutImageGroup?.length
+                                      ? 'border-blue-400'
+                                      : 'border-white/10'
+                                  } transition-transform duration-150 ease-out will-change-transform ${motionClass}`}
+                                  draggable
+                                  onDragStart={() => {
+                                    if (!currentGroupAsset) return;
+                                    const keys = selectedGroupItemKeys.has(groupKey)
+                                      ? Array.from(selectedGroupItemKeys)
+                                      : [groupKey];
+                                    const itemIndexes = keys
+                                      .filter((k) => k.startsWith(`${currentGroupAsset.id}::`))
+                                      .map((k) => Number(k.split('::')[1]))
+                                      .filter((n) => !Number.isNaN(n));
+                                    if (itemIndexes.length === 0) return;
+                                    setDraggingGroupItems({ groupAssetId: currentGroupAsset.id, itemIndexes });
+                                  }}
+                                  onDragEnd={() => {
+                                    setDraggingGroupItems(null);
+                                    setDragOverAction(null);
+                                  }}
                                 >
-                                  原始
-                                </button>
-                                {childAsset.cutImageGroup?.length && childAsset.groupKind !== 'manual' && (
-                                  <button
-                                    onClick={(e) => { e.stopPropagation(); setDisplayKey(childAsset.id, 'cut_image'); }}
-                                    className={`px-2 py-1 rounded text-[8px] font-black uppercase ${childAsset.displayKey === 'cut_image' ? 'bg-blue-600' : 'bg-white/20 hover:bg-white/30'}`}
+                                  <div
+                                    className="relative cursor-pointer"
+                                    onClick={() => {
+                                      if (childAsset.cutImageGroup?.length) {
+                                        setViewStack((s) => [...s, { assetId: childAsset.id }]);
+                                      } else {
+                                        setLightboxAssetId(childAsset.id);
+                                      }
+                                    }}
+                                    onWheel={(e) => {
+                                      if (childAsset.cutImageGroup?.length) {
+                                        if (!childAsset.cutImageGroup.length) return;
+                                        e.preventDefault();
+                                        const delta = e.deltaY > 0 ? 1 : -1;
+                                        setGroupPreviewIndexById((prev) => {
+                                          const current = prev[childAsset.id] ?? 0;
+                                          const len = childAsset.cutImageGroup ? childAsset.cutImageGroup.length : 1;
+                                          const next = ((current + delta) % len + len) % len;
+                                          return { ...prev, [childAsset.id]: next };
+                                        });
+                                        const direction: 'up' | 'down' = e.deltaY > 0 ? 'down' : 'up';
+                                        const assetId = childAsset.id;
+                                        setGroupBounceStateById((prev) => ({ ...prev, [assetId]: direction }));
+                                        window.setTimeout(() => {
+                                          setGroupBounceStateById((prev) => ({ ...prev, [assetId]: 'idle' }));
+                                        }, 180);
+                                        return;
+                                      }
+                                      if (getDisplayKeysForAsset(childAsset).length <= 1) return;
+                                      e.preventDefault();
+                                      cycleDisplayKey(childAsset.id, e.deltaY);
+                                    }}
                                   >
-                                    {childAsset.groupKind === 'manual' ? '组' : '切割'}
-                                  </button>
-                                )}
-                                {(childAsset.resultOrder || []).map((k) => {
-                                  if (baseActionId(k) === 'cut_image') return null;
-                                  const mod = getModule(baseActionId(k));
-                                  const label = mod?.label ?? baseActionId(k);
-                                  if (!childAsset.results[k]) return null;
-                                  return (
-                                    <button
-                                      key={k}
-                                      onClick={(e) => { e.stopPropagation(); setDisplayKey(childAsset.id, k); }}
-                                      className={`px-2 py-1 rounded text-[8px] font-black uppercase ${childAsset.displayKey === k ? 'bg-blue-600' : 'bg-white/20 hover:bg-white/30'}`}
-                                    >
-                                      {label}
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                            <div className="p-2 flex flex-col gap-1.5 border-t border-white/5">
-                              <span className="text-[7px] text-gray-500 leading-snug line-clamp-2 max-w-full">
-                                拖到功能区 或 点击大图选操作 · 有切割组时先点「切割」再点预览进入组内
-                              </span>
-                              <div className="flex gap-1 flex-wrap items-center justify-end">
-                                {childAsset.displayKey !== 'original' && (
-                                  <button
-                                    onClick={() => discardResult(childAsset.id, childAsset.displayKey)}
-                                    className="px-1.5 py-0.5 rounded text-[7px] text-red-400 hover:bg-red-500/20"
-                                    title="丢弃当前显示的版本"
-                                  >
-                                    丢弃当前版本
-                                  </button>
-                                )}
-                              </div>
-                            </div>
+                                    <img
+                                      src={(() => {
+                                        if (!childAsset.cutImageGroup?.length) return img;
+                                        const groupItems = childAsset.cutImageGroup;
+                                        const len = groupItems.length;
+                                        const rawIndex = groupPreviewIndexById[childAsset.id] ?? 0;
+                                        const safeIndex = len ? ((rawIndex % len) + len) % len : 0;
+                                        const itemInGroup = groupItems[safeIndex] ?? groupItems[0];
+                                        if (typeof itemInGroup === 'string') return itemInGroup;
+                                        const nestedChild = assets.find((x) => x.id === itemInGroup.assetId);
+                                        return nestedChild ? getAssetDisplayImage(nestedChild) : img;
+                                      })()}
+                                      alt=""
+                                      className="w-full h-auto object-cover block"
+                                      style={{ maxHeight: 360 }}
+                                    />
+                                    {assetErrors.has(childAsset.id) && (
+                                      <span className="absolute top-2 left-2 px-2 py-0.5 rounded-lg bg-red-600/90 text-[8px] font-black text-white">
+                                        执行出错
+                                      </span>
+                                    )}
+                                    {childAsset.cutImageGroup?.length && (
+                                      <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg text-[8px] font-black bg-blue-600/90">
+                                        {childAsset.groupKind === 'manual' ? '组' : '切割'} {childAsset.cutImageGroup.length}
+                                      </span>
+                                    )}
+                                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-end justify-center gap-1 p-2">
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setDisplayKey(childAsset.id, 'original');
+                                        }}
+                                        className={`px-2 py-1 rounded text-[8px] font-black uppercase ${
+                                          childAsset.displayKey === 'original' ? 'bg-blue-600' : 'bg-white/20 hover:bg-white/30'
+                                        }`}
+                                      >
+                                        原始
+                                      </button>
+                                      {childAsset.cutImageGroup?.length && childAsset.groupKind !== 'manual' && (
+                                        <button
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setDisplayKey(childAsset.id, 'cut_image');
+                                          }}
+                                          className={`px-2 py-1 rounded text-[8px] font-black uppercase ${
+                                            childAsset.displayKey === 'cut_image' ? 'bg-blue-600' : 'bg-white/20 hover:bg-white/30'
+                                          }`}
+                                        >
+                                          {childAsset.groupKind === 'manual' ? '组' : '切割'}
+                                        </button>
+                                      )}
+                                      {(childAsset.resultOrder || []).map((k) => {
+                                        if (baseActionId(k) === 'cut_image') return null;
+                                        const mod = getModule(baseActionId(k));
+                                        const label = mod?.label ?? baseActionId(k);
+                                        if (!childAsset.results[k]) return null;
+                                        return (
+                                          <button
+                                            key={k}
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              setDisplayKey(childAsset.id, k);
+                                            }}
+                                            className={`px-2 py-1 rounded text-[8px] font-black uppercase ${
+                                              childAsset.displayKey === k ? 'bg-blue-600' : 'bg-white/20 hover:bg-white/30'
+                                            }`}
+                                          >
+                                            {label}
+                                          </button>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                  <div className="p-2 flex flex-col gap-1.5 border-t border-white/5">
+                                    <span className="text-[7px] text-gray-500 leading-snug line-clamp-2 max-w-full">
+                                      拖到功能区 或 点击大图选操作 · 有切割组时先点「切割」再点预览进入组内
+                                    </span>
+                                    <div className="flex gap-1 flex-wrap items-center justify-end">
+                                      {childAsset.displayKey !== 'original' && (
+                                        <button
+                                          onClick={() => discardResult(childAsset.id, childAsset.displayKey)}
+                                          className="px-1.5 py-0.5 rounded text-[7px] text-red-400 hover:bg-red-500/20"
+                                          title="丢弃当前显示的版本"
+                                        >
+                                          丢弃当前版本
+                                        </button>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })()}
                           </div>
                         );
                       }
@@ -1747,22 +1966,39 @@ const WorkflowSection: React.FC<{
                 style={{ columnCount, columnFill: 'balance' as const }}
               >
                 {visibleAssets.map((a) => (
+                  <div key={a.id} className="break-inside-avoid mb-6 relative">
+                    {a.cutImageGroup?.length && (
+                      <>
+                        <div className="absolute inset-0 rounded-2xl bg-black/40 border border-blue-500/40 translate-x-[16px] translate-y-[16px] -rotate-3 opacity-70 shadow-xl shadow-black/60 pointer-events-none" />
+                        <div className="absolute inset-0 rounded-2xl bg-black/60 border border-blue-400/70 translate-x-[8px] translate-y-[8px] rotate-1 opacity-90 shadow-xl shadow-black/80 pointer-events-none" />
+                      </>
+                    )}
+                    {(() => {
+                      const bounce = groupBounceStateById[a.id] ?? 'idle';
+                      const motionClass =
+                        bounce === 'up'
+                          ? '-translate-y-0.5 -rotate-[0.6deg] scale-[0.985]'
+                          : bounce === 'down'
+                          ? 'translate-y-0.5 rotate-[0.6deg] scale-[0.985]'
+                          : '';
+                      return (
                   <div
-                    key={a.id}
                     data-workflow-card
                     ref={(el) => {
                       if (el) cardRefs.current.set(a.id, el);
                       else cardRefs.current.delete(a.id);
                     }}
-                    className={`break-inside-avoid mb-4 group relative rounded-2xl border overflow-hidden bg-black/40 ${
+                    className={`group relative rounded-2xl border overflow-hidden bg-black/40 ${
                       selectedAssetIds.has(a.id)
                         ? 'border-blue-500 ring-2 ring-blue-500/50'
                         : dragOverAssetId === a.id
                         ? a.cutImageGroup?.length
-                          ? 'border-violet-500 ring-2 ring-violet-500/50'
+                          ? 'border-blue-400 ring-2 ring-blue-400/60'
                           : 'border-blue-500 ring-2 ring-blue-500/50'
+                        : a.cutImageGroup?.length
+                        ? 'border-blue-400'
                         : 'border-white/10'
-                    }`}
+                    } transition-transform duration-150 ease-out will-change-transform ${motionClass}`}
                     draggable={!showArchived}
                     onDragStart={() => {
                       if (showArchived) return;
@@ -1844,13 +2080,47 @@ const WorkflowSection: React.FC<{
                           setLightboxAssetId(a.id);
                         }
                       }}
-                      >
-                        <img
-                          src={getAssetDisplayImage(a)}
-                          alt=""
-                          className="w-full h-auto object-cover block"
-                          style={{ maxHeight: 360 }}
-                        />
+                      onWheel={(e) => {
+                        if (showArchived) return;
+                        if (a.cutImageGroup?.length) {
+                          if (!a.cutImageGroup.length) return;
+                          e.preventDefault();
+                          const delta = e.deltaY > 0 ? 1 : -1;
+                          setGroupPreviewIndexById((prev) => {
+                            const current = prev[a.id] ?? 0;
+                            const len = a.cutImageGroup ? a.cutImageGroup.length : 1;
+                            const next = ((current + delta) % len + len) % len;
+                            return { ...prev, [a.id]: next };
+                          });
+                          const direction: 'up' | 'down' = e.deltaY > 0 ? 'down' : 'up';
+                          const assetId = a.id;
+                          setGroupBounceStateById((prev) => ({ ...prev, [assetId]: direction }));
+                          window.setTimeout(() => {
+                            setGroupBounceStateById((prev) => ({ ...prev, [assetId]: 'idle' }));
+                          }, 180);
+                          return;
+                        }
+                        if (getDisplayKeysForAsset(a).length <= 1) return;
+                        e.preventDefault();
+                        cycleDisplayKey(a.id, e.deltaY);
+                      }}
+                    >
+                    <img
+                      src={(() => {
+                        if (!a.cutImageGroup?.length) return getAssetDisplayImage(a);
+                        const groupItems = a.cutImageGroup;
+                        const len = groupItems.length;
+                        const rawIndex = groupPreviewIndexById[a.id] ?? 0;
+                        const safeIndex = len ? ((rawIndex % len) + len) % len : 0;
+                        const item = groupItems[safeIndex] ?? groupItems[0];
+                        if (typeof item === 'string') return item;
+                        const child = assets.find((x) => x.id === item.assetId);
+                        return child ? getAssetDisplayImage(child) : getAssetDisplayImage(a);
+                      })()}
+                      alt=""
+                      className="w-full h-auto object-cover block"
+                      style={{ maxHeight: 360 }}
+                    />
                         {assetErrors.has(a.id) && (
                           <span className="absolute top-2 left-2 px-2 py-0.5 rounded-lg bg-red-600/90 text-[8px] font-black text-white">
                             执行出错
@@ -1899,7 +2169,7 @@ const WorkflowSection: React.FC<{
                       )}
                     </div>
                     {!showArchived && (
-                      <div className="p-2 flex flex-col gap-1.5 border-t border-white/5">
+                      <div className="p-2 flex flex-col gap-1.5 border-t border-white/5 bg-black/90">
                         <span className="text-[7px] text-gray-500 leading-snug line-clamp-2 max-w-full">
                           拖到功能区 或 点击大图选操作 · 有切割组时先点「切割」再点预览进入组内
                         </span>
@@ -1916,6 +2186,9 @@ const WorkflowSection: React.FC<{
                         </div>
                       </div>
                     )}
+                  </div>
+                      );
+                    })()}
                   </div>
                 ))}
               </div>
@@ -1945,9 +2218,10 @@ const WorkflowSection: React.FC<{
         )}
 
         {/* 功能区：全部来自「能力」，随能力内增删自动更新 */}
-        <div className="w-80 shrink-0 flex flex-col gap-4 overflow-y-auto no-scrollbar">
+        <div className="w-80 shrink-0 flex flex-col gap-3 overflow-y-auto no-scrollbar">
           <div className="text-[9px] font-black text-blue-400 uppercase">功能区</div>
           <p className="text-[8px] text-gray-500">基础能力与复合能力 · 能力中增删会同步到此</p>
+          <div className="grid grid-cols-2 gap-3">
           <div
             onDragOver={(e) => {
               if (!viewStack.length || !draggingGroupItems) return;
@@ -1967,7 +2241,7 @@ const WorkflowSection: React.FC<{
               setDragOverAction(null);
               setDraggingGroupItems(null);
             }}
-            className={`rounded-xl border-2 border-dashed p-4 min-h-[60px] flex flex-col items-center justify-center text-center transition-colors ${
+            className={`rounded-xl border-2 border-dashed p-3 min-h-[64px] flex flex-col items-center justify-center text-center transition-colors ${
               dragOverAction === '__ungroup__'
                 ? 'border-amber-500 bg-amber-500/10'
                 : 'border-amber-400/40 bg-amber-500/5 hover:border-amber-400/60'
@@ -1975,6 +2249,52 @@ const WorkflowSection: React.FC<{
           >
             <span className="text-[9px] font-black uppercase text-amber-300">移出组</span>
             <span className="text-[8px] text-amber-400/80 mt-0.5">将组内子卡片拖到此处，移到上一级</span>
+          </div>
+          <div
+            onDragOver={(e) => {
+              const fromRoot = draggingAssetIds?.length && !showArchived;
+              const fromGroup = !!draggingGroupItems?.itemIndexes?.length && !showArchived;
+              if (!fromRoot && !fromGroup) return;
+              e.preventDefault();
+              setDragOverAction('__copy__');
+            }}
+            onDragLeave={() => {
+              if (dragOverAction === '__copy__') setDragOverAction(null);
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              if (dragOverAction !== '__copy__') {
+                setDragOverAction(null);
+                setDraggingAssetIds(null);
+                setDraggingGroupItems(null);
+                return;
+              }
+              if (draggingAssetIds?.length) {
+                duplicateAssetInPlace(draggingAssetIds, null);
+              } else if (draggingGroupItems && currentGroupAsset) {
+                const { nextAssets, assetIds } = ensureGroupItemsAsAssets(
+                  assets,
+                  draggingGroupItems.groupAssetId,
+                  draggingGroupItems.itemIndexes
+                );
+                if (assetIds.length > 0) {
+                  setAssets(nextAssets);
+                  duplicateAssetInPlace(assetIds, currentGroupAsset.id);
+                  setSelectedGroupItemKeys(new Set());
+                }
+              }
+              setDragOverAction(null);
+              setDraggingAssetIds(null);
+              setDraggingGroupItems(null);
+            }}
+            className={`rounded-xl border-2 border-dashed p-3 min-h-[64px] flex flex-col items-center justify-center text-center transition-colors ${
+              dragOverAction === '__copy__'
+                ? 'border-sky-500 bg-sky-500/10'
+                : 'border-sky-400/40 bg-sky-500/5 hover:border-sky-400/60'
+            }`}
+          >
+            <span className="text-[9px] font-black uppercase text-sky-300">复制</span>
+            <span className="text-[8px] text-sky-400/80 mt-0.5">拖入后在当前位置复制一份</span>
           </div>
           <div
             onDragOver={(e) => {
@@ -2004,7 +2324,12 @@ const WorkflowSection: React.FC<{
                   draggingGroupItems.itemIndexes
                 );
                 if (assetIds.length > 0) {
-                  setAssets(nextAssets);
+                  const afterRemove = removeGroupItems(
+                    nextAssets,
+                    draggingGroupItems.groupAssetId,
+                    draggingGroupItems.itemIndexes
+                  );
+                  setAssets(afterRemove);
                   assetIds.forEach((id) => markArchived(id));
                   setSelectedGroupItemKeys(new Set());
                 }
@@ -2013,7 +2338,7 @@ const WorkflowSection: React.FC<{
               setDraggingAssetIds(null);
               setDraggingGroupItems(null);
             }}
-            className={`rounded-xl border-2 border-dashed p-3 min-h-[60px] flex flex-col items-center justify-center text-center transition-colors ${
+            className={`rounded-xl border-2 border-dashed p-3 min-h-[64px] flex flex-col items-center justify-center text-center transition-colors ${
               dragOverAction === '__archive__'
                 ? 'border-emerald-500 bg-emerald-500/10'
                 : 'border-emerald-400/40 bg-emerald-500/5 hover:border-emerald-400/60'
@@ -2050,7 +2375,12 @@ const WorkflowSection: React.FC<{
                   draggingGroupItems.itemIndexes
                 );
                 if (assetIds.length > 0) {
-                  setAssets(nextAssets);
+                  const afterRemove = removeGroupItems(
+                    nextAssets,
+                    draggingGroupItems.groupAssetId,
+                    draggingGroupItems.itemIndexes
+                  );
+                  setAssets(afterRemove);
                   assetIds.forEach((id) => removeAsset(id));
                   setSelectedGroupItemKeys(new Set());
                 }
@@ -2059,7 +2389,7 @@ const WorkflowSection: React.FC<{
               setDraggingAssetIds(null);
               setDraggingGroupItems(null);
             }}
-            className={`rounded-xl border-2 border-dashed p-3 min-h-[60px] flex flex-col items-center justify-center text-center transition-colors ${
+            className={`rounded-xl border-2 border-dashed p-3 min-h-[64px] flex flex-col items-center justify-center text-center transition-colors ${
               dragOverAction === '__delete__'
                 ? 'border-red-500 bg-red-500/10'
                 : 'border-red-400/40 bg-red-500/5 hover:border-red-400/60'
@@ -2087,8 +2417,44 @@ const WorkflowSection: React.FC<{
                 } else if (itemIndexes.length > 1) {
                   const { nextAssets, assetIds } = ensureGroupItemsAsAssets(assets, groupAssetId, itemIndexes);
                   if (assetIds.length > 0) {
-                    setAssets(nextAssets);
-                    createGroupFromAssets(assetIds);
+                    const firstAsset = nextAssets.find((a) => a.id === assetIds[0]);
+                    const coverImage = firstAsset ? getAssetDisplayImage(firstAsset, nextAssets) : '';
+                    const newGroupId = uuid();
+                    let updated = nextAssets.map((a) =>
+                      assetIds.includes(a.id) ? { ...a, parentAssetId: newGroupId } : a
+                    );
+                    const groupIdx = updated.findIndex((a) => a.id === groupAssetId);
+                    if (groupIdx !== -1) {
+                      const g = updated[groupIdx];
+                      const items = [...(g.cutImageGroup ?? [])];
+                      const sorted = [...itemIndexes]
+                        .filter((i) => i >= 0 && i < items.length)
+                        .sort((a, b) => a - b);
+                      const keep: typeof items = [];
+                      items.forEach((it, idx) => {
+                        if (!sorted.includes(idx)) keep.push(it);
+                      });
+                      const insertPos = sorted.length ? sorted[0] : keep.length;
+                      const withGroup = [...keep];
+                      withGroup.splice(insertPos, 0, { assetId: newGroupId });
+                      updated = updated.map((a, idx) =>
+                        idx === groupIdx ? { ...a, cutImageGroup: withGroup } : a
+                      );
+                    }
+                    const newGroup: WorkflowAsset = {
+                      id: newGroupId,
+                      original: coverImage,
+                      displayKey: 'original',
+                      results: {},
+                      resultOrder: [],
+                      cutImageGroup: assetIds.map((id) => ({ assetId: id })),
+                      groupKind: 'manual',
+                      archived: false,
+                      hiddenInGrid: false,
+                      createdAt: Date.now(),
+                      parentAssetId: groupAssetId,
+                    };
+                    setAssets([...updated, newGroup]);
                     setSelectedGroupItemKeys(new Set());
                   }
                 }
@@ -2097,7 +2463,7 @@ const WorkflowSection: React.FC<{
               setDraggingAssetIds(null);
               setDraggingGroupItems(null);
             }}
-            className={`rounded-xl border-2 border-dashed p-4 min-h-[72px] flex flex-col items-center justify-center text-center transition-colors ${
+            className={`rounded-xl border-2 border-dashed p-3 min-h-[64px] flex flex-col items-center justify-center text-center transition-colors ${
               dragOverAction === '__group__'
                 ? 'border-violet-500 bg-violet-500/10'
                 : 'border-violet-400/40 bg-violet-500/5 hover:border-violet-400/60'
@@ -2105,6 +2471,8 @@ const WorkflowSection: React.FC<{
           >
             <span className="text-[9px] font-black uppercase text-violet-300">组</span>
             <span className="text-[8px] text-violet-400/80 mt-0.5">将选中图片拖入建组（组内同效）</span>
+          </div>
+          <div />
           </div>
           {presets.length === 0 && capabilitySets.length === 0 && (
             <div className="rounded-xl border border-dashed border-white/20 p-4 text-center text-[9px] text-gray-500">
@@ -2172,7 +2540,20 @@ const WorkflowSection: React.FC<{
                                   sourceItemIndex: itemIndex,
                                 });
                               } else {
-                                addToPending(item.assetId, mod.id);
+                                const child = assets.find((x) => x.id === (item as { assetId: string }).assetId);
+                                const inputImage = child ? getAssetDisplayImage(child) : '';
+                                setPending((prev) => [
+                                  ...prev,
+                                  {
+                                    id: uuid(),
+                                    assetId: (item as { assetId: string }).assetId,
+                                    actionType: mod.id,
+                                    inputImage,
+                                    addedAt: Date.now(),
+                                    sourceGroupAssetId: currentGroupAsset.id,
+                                    sourceItemIndex: itemIndex,
+                                  },
+                                ]);
                               }
                             });
                           }
@@ -2242,7 +2623,20 @@ const WorkflowSection: React.FC<{
                             sourceItemIndex: itemIndex,
                           });
                         } else {
-                          addToPending(item.assetId, mod.id);
+                          const child = assets.find((x) => x.id === (item as { assetId: string }).assetId);
+                          const inputImage = child ? getAssetDisplayImage(child) : '';
+                          setPending((prev) => [
+                            ...prev,
+                            {
+                              id: uuid(),
+                              assetId: (item as { assetId: string }).assetId,
+                              actionType: mod.id,
+                              inputImage,
+                              addedAt: Date.now(),
+                              sourceGroupAssetId: currentGroupAsset.id,
+                              sourceItemIndex: itemIndex,
+                            },
+                          ]);
                         }
                       });
                     }
@@ -2295,7 +2689,20 @@ const WorkflowSection: React.FC<{
                                 sourceItemIndex: itemIndex,
                               });
                             } else {
-                              addToPending(item.assetId, setActionId);
+                              const child = assets.find((x) => x.id === (item as { assetId: string }).assetId);
+                              const inputImage = child ? getAssetDisplayImage(child) : '';
+                              setPending((prev) => [
+                                ...prev,
+                                {
+                                  id: uuid(),
+                                  assetId: (item as { assetId: string }).assetId,
+                                  actionType: setActionId,
+                                  inputImage,
+                                  addedAt: Date.now(),
+                                  sourceGroupAssetId: currentGroupAsset.id,
+                                  sourceItemIndex: itemIndex,
+                                },
+                              ]);
                             }
                           });
                         }
@@ -2366,7 +2773,15 @@ const WorkflowSection: React.FC<{
       {/* 进行中：大图弹窗 */}
       {lightboxAsset && !showArchived && (
         <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/90 backdrop-blur-xl p-4" onClick={() => setLightboxAssetId(null)}>
-          <div className="relative max-w-4xl w-full" onClick={(e) => e.stopPropagation()}>
+          <div
+            className="relative max-w-4xl w-full"
+            onClick={(e) => e.stopPropagation()}
+            onWheel={(e) => {
+              if (getDisplayKeysForAsset(lightboxAsset).length <= 1) return;
+              e.preventDefault();
+              cycleDisplayKey(lightboxAsset.id, e.deltaY);
+            }}
+          >
             <button onClick={() => setLightboxAssetId(null)} className="absolute -top-12 right-0 w-10 h-10 flex items-center justify-center text-white/60 hover:text-white">✕</button>
             <img src={getAssetDisplayImage(lightboxAsset)} alt="" className="w-full max-h-[80vh] object-contain rounded-2xl border border-white/10" />
             <div className="mt-3 flex flex-wrap gap-1.5 justify-center items-center">
