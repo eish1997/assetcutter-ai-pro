@@ -210,7 +210,12 @@ async function proxyGenerateContent(model, contents, config) {
     contents,
     config: mergedConfig,
   });
-  return response;
+  // 将 Node SDK 的响应压缩成前端常用的轻量结构，保持与浏览器 SDK 近似：
+  // - text: 聚合文本
+  // - candidates: 原始 candidates（包含 content.parts 等）
+  const text = typeof response.text === 'string' ? response.text : '';
+  const candidates = response.candidates || response.response?.candidates || [];
+  return { text, candidates };
 }
 
 function isRetryable(e) {
