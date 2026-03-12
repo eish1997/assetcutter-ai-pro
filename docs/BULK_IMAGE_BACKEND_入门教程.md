@@ -141,14 +141,28 @@ VITE_BULK_IMAGE_API=http://localhost:9002
 
 适合没有自己的服务器、希望「注册账号就能用」的情况。常见选择：
 
-- **Railway**（[railway.app](https://railway.app)）：连 GitHub 部署，在后台设置环境变量 `GEMINI_API_KEY`，会给你一个 `https://xxx.railway.app` 的地址。  
-- **Render**（[render.com](https://render.com)）：类似，新建 Web Service，选 Node，把项目（或只把 `server` 目录 + package.json）部署上去，填好 `GEMINI_API_KEY`，用生成的 URL。  
-- **Fly.io**（[fly.io](https://fly.io)）：命令行部署，也会得到一个公网 URL。
+- **Render**（[`render.com`](https://render.com)）：新建 **Web Service**，选 Node，把整个仓库连上去。  
+  - **Start command**：`node server/bulk-image-api.js`  
+  - **环境变量示例**（只在 Render 上配）：  
+
+    ```bash
+    GEMINI_API_KEY=你的Gemini密钥
+    BULK_IMAGE_PORT=$PORT
+    BULK_IMAGE_BIND_HOST=0.0.0.0
+    BULK_IMAGE_RPD_DAILY_LIMIT=900
+    BULK_IMAGE_MAX_CONCURRENT=2
+    # 可选：持久化目录
+    # BULK_IMAGE_DATA_DIR=/data/bulk-image
+    ```
+
+  - 部署成功后会得到一个类似 `https://your-bulk-api.onrender.com` 的地址，前端就填这个。  
+  - Render 会按 `$PORT` 分配端口，我们通过 `BULK_IMAGE_PORT=$PORT` + `BULK_IMAGE_BIND_HOST=0.0.0.0` 让服务在云环境上对外可见。
+
+- 其它云服务（如 Railway、Fly.io）也类似：保证启动命令是 `node server/bulk-image-api.js`，环境变量里有 `GEMINI_API_KEY`，并监听它们提供的端口和 host。
 
 **注意**：  
-- 部署时要把 **启动命令** 设为运行 `node server/bulk-image-api.js`（或 `npm run dev:bulk-api`，看你在云上怎么装依赖）。  
-- 在云服务的「环境变量」里设 `GEMINI_API_KEY`，**不要**把 Key 写进代码或公开仓库。  
-- 云服务给的 URL 一般是 HTTPS，例如 `https://your-app.onrender.com`，前端就填这个。
+- **Gemini Key 只放在后端云服务（如 Render）的环境变量里**，不要写进前端代码或公开仓库。  
+- Vercel 等前端平台不再需要任何 `GEMINI_*` 环境变量，只需要一个 `VITE_BULK_IMAGE_API` 指向后端地址。
 
 ### 方式 C：和前端同一台服务器（同一域名不同路径）
 

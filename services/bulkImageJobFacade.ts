@@ -118,6 +118,10 @@ const REMOTE_MAX_IMAGES_PER_JOB = 30;
 // ---------- 门面导出：有 BASE 时用远程，否则用本地；异步接口统一为 Promise ----------
 import * as local from './imageJobExecutor';
 
+export function getBulkImageMode(): 'backend' | 'local' {
+  return BASE ? 'backend' : 'local';
+}
+
 export function getBulkImageMaxImagesPerJob(): number {
   return REMOTE_MAX_IMAGES_PER_JOB;
 }

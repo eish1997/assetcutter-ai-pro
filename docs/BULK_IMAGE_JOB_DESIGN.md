@@ -101,8 +101,14 @@
 
 ## 7. 后端部署与 Key 策略
 
-- **部署**：运行 `node server/bulk-image-api.js`（或 `npm run dev:bulk-api`）。环境变量：`GEMINI_API_KEY`（公司统一 Key，前端未传时使用）、`BULK_IMAGE_PORT`（默认 9002）、`BULK_IMAGE_RPD_DAILY_LIMIT`（900）、`BULK_IMAGE_MAX_CONCURRENT`（2）、`BULK_IMAGE_DATA_DIR`（可选，持久化目录，写入 jobs.json 与 rpd.json）。
-- **前端**：设置 `VITE_BULK_IMAGE_API=http://localhost:9002`（或生产后端地址）后，批量出图请求发往后端，进度通过轮询 GET /jobs 更新。
+- **部署**：运行 `node server/bulk-image-api.js`（或 `npm run dev:bulk-api`）。环境变量：`GEMINI_API_KEY`（公司统一 Key，前端未传时使用）、`BULK_IMAGE_PORT`（默认 9002 或云平台提供的 `PORT`）、`BULK_IMAGE_RPD_DAILY_LIMIT`（900）、`BULK_IMAGE_MAX_CONCURRENT`（2）、`BULK_IMAGE_DATA_DIR`（可选，持久化目录，写入 jobs.json 与 rpd.json）、`BULK_IMAGE_BIND_HOST`（本地默认 `127.0.0.1`，云平台如 Render 建议设为 `0.0.0.0`）。
+- **Vercel + Render 实际落地**：  
+  - Render Web Service：  
+    - Start command：`node server/bulk-image-api.js`  
+    - 环境变量：`GEMINI_API_KEY=xxx`、`BULK_IMAGE_PORT=$PORT`、`BULK_IMAGE_BIND_HOST=0.0.0.0` 等。  
+  - Vercel 前端：  
+    - 仅配置 `VITE_BULK_IMAGE_API=https://your-bulk-api.onrender.com`，**不再配置任何 `GEMINI_*` 环境变量**。  
+  - 这样前端所有批量出图请求都会走公司统一后端，由后端负责 RPD 与并发控制。
 - **Key 策略**：公司 Key 存后端 env；前端可在设置页填写 Gemini Key，门面在 POST /jobs 时若存在则传 `apiKey`，**后端优先使用请求体中的 apiKey**，为空时使用 `GEMINI_API_KEY`。
 
 ---

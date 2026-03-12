@@ -12,7 +12,9 @@ import { GoogleGenAI } from '@google/genai';
 const PORT = Number(process.env.BULK_IMAGE_PORT || process.env.PORT) || 9002;
 const DATA_DIR = (process.env.BULK_IMAGE_DATA_DIR || '').trim();
 const PERSIST_DEBOUNCE_MS = 2000;
-const BIND_HOST = (process.env.BULK_IMAGE_BIND_HOST || '127.0.0.1').trim() || '127.0.0.1';
+// Render / Railway 等云平台要求 Web 服务监听在 0.0.0.0 才能被端口扫描到；
+// 本地开发若未显式设置，监听 0.0.0.0 也能正常访问（通过 localhost）。
+const BIND_HOST = (process.env.BULK_IMAGE_BIND_HOST || '0.0.0.0').trim() || '0.0.0.0';
 const RPD_DAILY_LIMIT = Number(process.env.BULK_IMAGE_RPD_DAILY_LIMIT) || 900;
 const MAX_CONCURRENT = Number(process.env.BULK_IMAGE_MAX_CONCURRENT) || 2;
 const IMAGES_PER_REQUEST = 4;
@@ -260,7 +262,15 @@ function processQueue() {
             errorSummary: undefined,
           };
         });
-        if (applied) incrementTodayRPD();
+        if (applied) {
+          incrementTodayRPD();
+          const j = jobs.get(step.jobId);
+          if (j && j.status === 'completed') {
+            console.log(
+              `[job] completed id=${step.jobId} totalImages=${j.totalImages} results=${Array.isArray(j.results) ? j.results.length : 0}`
+            );
+          }
+        }
       })
       .catch((err) => {
         const j = jobs.get(step.jobId);
@@ -273,6 +283,9 @@ function processQueue() {
             errorSummary: message.length > 80 ? message.slice(0, 80) + '…' : message,
           };
         });
+        console.error(
+          `[job] failed id=${step.jobId} message="${message.replace(/\s+/g, ' ').slice(0, 160)}"`
+        );
       })
       .finally(() => {
         inFlight--;
@@ -288,6 +301,14 @@ function hasAnyPendingOrRunning() {
   return false;
 }
 
+function getPendingOrRunningCount() {
+  let n = 0;
+  for (const j of jobs.values()) {
+    if (j.status === 'pending' || j.status === 'running') n++;
+  }
+  return n;
+}
+
 function createJob(body) {
   const instruction = typeof body.instruction === 'string' ? body.instruction.trim() : '';
   if (!instruction) throw new Error('生图指令不能为空');
@@ -297,9 +318,19 @@ function createJob(body) {
   }
   const requestCount = Math.ceil(totalImages / IMAGES_PER_REQUEST);
   const today = getTodayRPD();
-  if (today >= RPD_DAILY_LIMIT) throw new Error('今日生图额度已用尽，请明日再试');
+  if (today >= RPD_DAILY_LIMIT) {
+    console.warn(
+      `[quota] rpd_exceeded today=${today} limit=${RPD_DAILY_LIMIT} requestedSteps=${requestCount} reason=limit_reached`
+    );
+    throw new Error('今日生图额度已用尽，请明日再试');
+  }
   const remaining = RPD_DAILY_LIMIT - today;
-  if (requestCount > remaining) throw new Error(`今日剩余额度 ${remaining} 次请求，无法完成约 ${requestCount} 次请求`);
+  if (requestCount > remaining) {
+    console.warn(
+      `[quota] rpd_exceeded today=${today} limit=${RPD_DAILY_LIMIT} requestedSteps=${requestCount} remaining=${remaining} reason=insufficient_remaining`
+    );
+    throw new Error(`今日剩余额度 ${remaining} 次请求，无法完成约 ${requestCount} 次请求`);
+  }
   const apiKey = typeof body.apiKey === 'string' ? normalizeSecret(body.apiKey) : undefined;
   const id = `imgjob-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
   const now = Date.now();
@@ -317,6 +348,7 @@ function createJob(body) {
     imageSize: body.imageSize,
   };
   jobs.set(id, job);
+  console.log(`[job] created id=${id} totalImages=${totalImages} requestCount=${requestCount}`);
   const model = job.model;
   for (let i = 0; i < requestCount; i++) {
     const batchSize = Math.min(IMAGES_PER_REQUEST, totalImages - i * IMAGES_PER_REQUEST);
@@ -331,6 +363,11 @@ function createJob(body) {
       apiKey: apiKey || undefined,
     });
   }
+  if (inFlight >= MAX_CONCURRENT && pendingSteps.length > 0) {
+    console.log(
+      `[quota] concurrency_queued jobId=${id} inFlight=${inFlight} queueLength=${pendingSteps.length} maxConcurrent=${MAX_CONCURRENT}`
+    );
+  }
   processQueue();
   schedulePersist();
   return job;
@@ -344,6 +381,7 @@ function cancelJob(id) {
     if (pendingSteps[i].jobId === id) pendingSteps.splice(i, 1);
   }
   updateJob(id, { status: 'cancelled' });
+  console.log(`[job] cancelled id=${id}`);
   return true;
 }
 
@@ -415,6 +453,21 @@ function handleGetRpd(res) {
   sendJson(res, 200, { today: getTodayRPD(), limit: RPD_DAILY_LIMIT });
 }
 
+function handleGetHealth(res) {
+  const today = getTodayRPD();
+  const pendingOrRunning = getPendingOrRunningCount();
+  const payload = {
+    ok: true,
+    rpdToday: today,
+    rpdLimit: RPD_DAILY_LIMIT,
+    jobsTotal: jobs.size,
+    jobsPendingOrRunning: pendingOrRunning,
+    inFlight,
+    queueLength: pendingSteps.length,
+  };
+  sendJson(res, 200, payload);
+}
+
 // ---------- Server ----------
 const server = http.createServer(async (req, res) => {
   const corsOk = applyCors(req, res);
@@ -437,6 +490,11 @@ const server = http.createServer(async (req, res) => {
 
   const path = (req.url || '/').split('?')[0];
   const pathParts = path.slice(1).split('/').filter(Boolean); // ['jobs'] or ['jobs', ':id']
+
+  if (path === '/healthz' && req.method === 'GET') {
+    handleGetHealth(res);
+    return;
+  }
 
   if (path === '/rpd' && req.method === 'GET') {
     handleGetRpd(res);

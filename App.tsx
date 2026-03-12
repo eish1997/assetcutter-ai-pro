@@ -10,6 +10,7 @@ import {
   getBulkImageTodayRPD,
   getBulkImageRPDLimit,
   getBulkImageMaxImagesPerJob,
+  getBulkImageMode,
 } from './services/bulkImageJobFacade';
 import { loadRecords, addRecord as addGenerationRecord, updateScore as updateGenerationScore } from './services/recordStore';
 import { loadSnippets } from './services/snippetStore';
@@ -2476,6 +2477,9 @@ const App: React.FC = () => {
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-[9px] font-black text-gray-500 uppercase">批量出图</span>
                       <span className="text-[9px] text-gray-600">今日 {getBulkImageTodayRPD()} / {getBulkImageRPDLimit()} 次</span>
+                      <span className="text-[9px] text-gray-600">
+                        {getBulkImageMode() === 'backend' ? '模式：公司后端（统一配额）' : '模式：本机（每台设备各自配额）'}
+                      </span>
                       <input type="number" min={1} max={getBulkImageMaxImagesPerJob()} value={bulkImageCount} onChange={e => setBulkImageCount(Math.min(getBulkImageMaxImagesPerJob(), Math.max(1, parseInt(e.target.value, 10) || 1)))} className="w-14 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-[10px] text-center outline-none focus:border-blue-500" />
                       <span className="text-[9px] text-gray-500">张</span>
                       <button onClick={handleStartBulkImageJob} disabled={bulkImageSubmitting || !dialogInputText.trim()} className="px-3 py-1.5 rounded-lg bg-blue-600/60 text-[9px] font-black text-white hover:bg-blue-600 disabled:opacity-40 transition-colors">批量生成</button>
