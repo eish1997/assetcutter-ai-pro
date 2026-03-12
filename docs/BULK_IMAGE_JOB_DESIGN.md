@@ -113,7 +113,24 @@
 
 ---
 
-## 8. 参考
+## 8. 监控与告警（轻量版）
+
+- **日志前缀**：
+  - `[quota] rpd_exceeded ...`：新建任务时发现当日 RPD 已达上限或剩余额度不足；
+  - `[quota] concurrency_queued ...`：队列中还有任务但并发槽已用满，新任务被排队；
+  - `[quota] queue_high ...`：`pendingSteps` 长度持续高于 `BULK_IMAGE_QUEUE_HIGH_WATERMARK`（默认 10），每分钟最多记录一次；
+  - `[job] created|completed|failed|cancelled ...`：任务生命周期关键节点，用于排查与统计。
+- **/healthz**：返回 JSON，包括 `rpdToday`、`rpdLimit`、`jobsTotal`、`jobsPendingOrRunning`、`inFlight`、`queueLength` 等，用于快速查看整体状态。
+- **/metrics**（可选）：
+  - 文本接口，方便人工 `curl` 或未来接 Prometheus：  
+    `bulk_image_rpd_today`、`bulk_image_rpd_limit`、`bulk_image_jobs_total`、`bulk_image_jobs_pending`、`bulk_image_jobs_running`、`bulk_image_queue_length`、`bulk_image_inflight`。
+- **使用方式**：
+  - Render 上可直接访问 `/healthz` 与 `/metrics` 查看当前 RPD、队列、并发等是否异常；
+  - 日志里通过搜索 `[quota]` 或 `[job]` 关键字即可快速定位配额、队列与任务相关问题。
+
+---
+
+## 9. 参考
 
 - 配额与规划讨论：Google AI Studio Tier 1，公司整体 RPD 1,000，每分钟随机峰谷，以「同时 2 请求 + 每日 900」为护栏。
 - 协作流程：参见 `.cursor/rules/user-ai-workflow.mdc`（需求整理 → 选项 → 确认 → 再改代码）。

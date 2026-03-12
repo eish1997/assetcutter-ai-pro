@@ -785,8 +785,16 @@ const App: React.FC = () => {
         imageSize: dialogSizeMode === 'manual' ? dialogImageSize : undefined,
       });
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setDialogValidationError(msg.length > 120 ? msg.slice(0, 120) + '…' : msg);
+      const raw = e instanceof Error ? e.message : String(e);
+      let friendly = raw;
+      if (/额度|剩余额度|已用尽/.test(raw)) {
+        friendly = '今日批量额度不足以完成本次任务，请减少张数或明日再试（管理员可在后端查看 RPD/队列情况）。';
+      } else if (/API key|api key|密钥|Unauthorized|PERMISSION_DENIED/i.test(raw)) {
+        friendly = '批量出图使用的 Gemini Key 似乎失效或无权限，请联系管理员检查后端配置。';
+      } else {
+        friendly = '批量出图失败，请稍后重试或联系管理员查看后端日志。';
+      }
+      setDialogValidationError(friendly);
     } finally {
       setBulkImageSubmitting(false);
     }

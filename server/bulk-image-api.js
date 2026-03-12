@@ -23,6 +23,8 @@ const STEP_RETRIES = 2;
 const STEP_RETRY_DELAY_MS = 2000;
 const IMAGE_REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_IMAGE_REQUEST_TIMEOUT_MS) || 120_000;
 const ONE_BULK_JOB_AT_A_TIME = true;
+const QUEUE_HIGH_WATERMARK = Number(process.env.BULK_IMAGE_QUEUE_HIGH_WATERMARK) || 10;
+const QUEUE_HIGH_LOG_INTERVAL_MS = 60_000;
 
 const DEFAULT_PROMPTS = {
   edit: `[HIGH PRECISION EDITING PROTOCOL]
@@ -202,6 +204,28 @@ const jobs = new Map();
 const pendingSteps = [];
 let inFlight = 0;
 const jobAbortControllers = new Map();
+let lastQueueHighLogAt = 0;
+const perUserDailyRequests = new Map();
+
+const PER_USER_DAILY_LIMIT = Number(process.env.BULK_IMAGE_PER_USER_DAILY_LIMIT) || 0;
+
+function getTodayUserKey(userId) {
+  if (!userId) return null;
+  return `${getTodayKey()}|${userId}`;
+}
+
+function getTodayUserRequests(userId) {
+  const key = getTodayUserKey(userId);
+  if (!key) return 0;
+  return perUserDailyRequests.get(key) || 0;
+}
+
+function addTodayUserRequests(userId, n) {
+  const key = getTodayUserKey(userId);
+  if (!key) return;
+  const prev = perUserDailyRequests.get(key) || 0;
+  perUserDailyRequests.set(key, prev + n);
+}
 
 function updateJob(id, patchOrUpdater) {
   const job = jobs.get(id);
@@ -292,6 +316,15 @@ function processQueue() {
         processQueue();
       });
   }
+  if (pendingSteps.length >= QUEUE_HIGH_WATERMARK) {
+    const now = Date.now();
+    if (now - lastQueueHighLogAt >= QUEUE_HIGH_LOG_INTERVAL_MS) {
+      lastQueueHighLogAt = now;
+      console.warn(
+        `[quota] queue_high queueLength=${pendingSteps.length} inFlight=${inFlight} maxConcurrent=${MAX_CONCURRENT} watermark=${QUEUE_HIGH_WATERMARK}`
+      );
+    }
+  }
 }
 
 function hasAnyPendingOrRunning() {
@@ -330,6 +363,20 @@ function createJob(body) {
       `[quota] rpd_exceeded today=${today} limit=${RPD_DAILY_LIMIT} requestedSteps=${requestCount} remaining=${remaining} reason=insufficient_remaining`
     );
     throw new Error(`今日剩余额度 ${remaining} 次请求，无法完成约 ${requestCount} 次请求`);
+  }
+  const userId = typeof body.userId === 'string' ? body.userId.trim() : '';
+  if (PER_USER_DAILY_LIMIT > 0 && userId) {
+    const userToday = getTodayUserRequests(userId);
+    const userRemaining = PER_USER_DAILY_LIMIT - userToday;
+    if (requestCount > userRemaining) {
+      console.warn(
+        `[quota] per_user_exceeded userId=${JSON.stringify(
+          userId
+        )} todaySteps=${userToday} limit=${PER_USER_DAILY_LIMIT} requestedSteps=${requestCount}`
+      );
+      throw new Error('今日单用户批量额度已用尽，请明日再试（全公司总额度不受影响）');
+    }
+    addTodayUserRequests(userId, requestCount);
   }
   const apiKey = typeof body.apiKey === 'string' ? normalizeSecret(body.apiKey) : undefined;
   const id = `imgjob-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
@@ -468,6 +515,27 @@ function handleGetHealth(res) {
   sendJson(res, 200, payload);
 }
 
+function handleGetMetrics(res) {
+  const today = getTodayRPD();
+  let pending = 0;
+  let running = 0;
+  for (const j of jobs.values()) {
+    if (j.status === 'pending') pending++;
+    else if (j.status === 'running') running++;
+  }
+  const lines = [
+    `bulk_image_rpd_today ${today}`,
+    `bulk_image_rpd_limit ${RPD_DAILY_LIMIT}`,
+    `bulk_image_jobs_total ${jobs.size}`,
+    `bulk_image_jobs_pending ${pending}`,
+    `bulk_image_jobs_running ${running}`,
+    `bulk_image_queue_length ${pendingSteps.length}`,
+    `bulk_image_inflight ${inFlight}`,
+  ];
+  res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+  res.end(lines.join('\n'));
+}
+
 // ---------- Server ----------
 const server = http.createServer(async (req, res) => {
   const corsOk = applyCors(req, res);
@@ -493,6 +561,11 @@ const server = http.createServer(async (req, res) => {
 
   if (path === '/healthz' && req.method === 'GET') {
     handleGetHealth(res);
+    return;
+  }
+
+  if (path === '/metrics' && req.method === 'GET') {
+    handleGetMetrics(res);
     return;
   }
 

@@ -2,7 +2,7 @@
  * 批量出图门面：根据 VITE_BULK_IMAGE_API 切换后端 API 或本地执行器。
  * 有后端时：全公司 RPD 900 + 并发 2、Job 持久化；优先使用前端传入的 Gemini Key。
  */
-import { getApiKey } from './settingsStore';
+import { getApiKey, getBulkUserId } from './settingsStore';
 import type { ImageJob } from '../types';
 
 const BASE = typeof import.meta !== 'undefined' && import.meta.env && String(import.meta.env.VITE_BULK_IMAGE_API || '').trim();
@@ -29,9 +29,10 @@ async function fetchJson<T>(path: string, options?: RequestInit): Promise<T> {
 async function createImageJobRemote(
   instruction: string,
   totalImages: number,
-  options: { imageBase64?: string | null; model?: string; aspectRatio?: string; imageSize?: string } = {}
+  options: { imageBase64?: string | null; model?: string; aspectRatio?: string; imageSize?: string; userId?: string } = {}
 ): Promise<ImageJob> {
   const apiKey = getApiKey() || undefined;
+  const userId = options.userId || getBulkUserId();
   const body: Record<string, unknown> = {
     instruction,
     totalImages,
@@ -40,6 +41,8 @@ async function createImageJobRemote(
     aspectRatio: options.aspectRatio,
     imageSize: options.imageSize,
   };
+  if (userId) body.userId = userId;
+  if (options.userId) body.userId = options.userId;
   if (apiKey) body.apiKey = apiKey;
   return fetchJson<ImageJob>('/jobs', {
     method: 'POST',
