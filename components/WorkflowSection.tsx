@@ -536,6 +536,7 @@ const WorkflowSection: React.FC<{
   const [assetErrors, setAssetErrors] = useState<Map<string, string>>(new Map());
   const [groupPreviewIndexById, setGroupPreviewIndexById] = useState<Record<string, number>>({});
   const [groupBounceStateById, setGroupBounceStateById] = useState<Record<string, 'idle' | 'up' | 'down'>>({});
+  const [assetAspectById, setAssetAspectById] = useState<Record<string, number>>({});
 
   const setAssetError = useCallback((assetId: string, message: string | null) => {
     setAssetErrors((prev) => {
@@ -791,7 +792,6 @@ const WorkflowSection: React.FC<{
             setAssetError(task.assetId, msg);
             cropped = await cropBoxes(inputImage, [{ id: 'full', label: '整图', xmin: 0, ymin: 0, xmax: 1000, ymax: 1000 }], [0]);
           }
-          const group: WorkflowCutGroupItem[] = cropped;
           if (cropped.length === 0) {
             const msg = `[${taskLabel}] 未能生成裁剪图（请检查图片格式或重试）`;
             onLog?.('warn', msg);
@@ -802,6 +802,8 @@ const WorkflowSection: React.FC<{
           setAssets((prev) =>
             prev.map((a) => {
               if (a.id !== task.assetId) return a;
+              const base = a.original;
+              const group: WorkflowCutGroupItem[] = base ? [base, ...cropped] : cropped;
               const nextOrder = [...(a.resultOrder || []), task.actionType];
               const nextMeta = {
                 ...(a.resultMeta || {}),
@@ -904,10 +906,11 @@ const WorkflowSection: React.FC<{
         setExecuting(false);
         return;
       }
-      const group: WorkflowCutGroupItem[] = cropped;
       setAssets((prev) =>
         prev.map((a) => {
           if (a.id !== task.assetId) return a;
+          const base = a.original;
+          const group: WorkflowCutGroupItem[] = base ? [base, ...cropped] : cropped;
           const nextOrder = [...(a.resultOrder || []), task.actionType];
           const nextMeta = { ...(a.resultMeta || {}), [task.actionType]: { executedAt: Date.now() } };
           return {
@@ -1891,7 +1894,7 @@ const WorkflowSection: React.FC<{
                                   </div>
                                   <div className="p-2 flex flex-col gap-1.5 border-t border-white/5">
                                     <span className="text-[7px] text-gray-500 leading-snug line-clamp-2 max-w-full">
-                                      拖到功能区 或 点击大图选操作 · 有切割组时先点「切割」再点预览进入组内
+                                      拖到功能区 或 点击大图选操作 · 有切割组时点击大图进入组内
                                     </span>
                                     <div className="flex gap-1 flex-wrap items-center justify-end">
                                       {childAsset.displayKey !== 'original' && (
@@ -2105,22 +2108,36 @@ const WorkflowSection: React.FC<{
                         cycleDisplayKey(a.id, e.deltaY);
                       }}
                     >
-                    <img
-                      src={(() => {
-                        if (!a.cutImageGroup?.length) return getAssetDisplayImage(a);
-                        const groupItems = a.cutImageGroup;
-                        const len = groupItems.length;
-                        const rawIndex = groupPreviewIndexById[a.id] ?? 0;
-                        const safeIndex = len ? ((rawIndex % len) + len) % len : 0;
-                        const item = groupItems[safeIndex] ?? groupItems[0];
-                        if (typeof item === 'string') return item;
-                        const child = assets.find((x) => x.id === item.assetId);
-                        return child ? getAssetDisplayImage(child) : getAssetDisplayImage(a);
-                      })()}
-                      alt=""
-                      className="w-full h-auto object-cover block"
-                      style={{ maxHeight: 360 }}
-                    />
+                      <div className="relative w-full max-h-[360px] overflow-hidden">
+                        <div
+                          className="w-full"
+                          style={{ paddingBottom: `${(assetAspectById[a.id] ?? 1) * 100}%` }}
+                        />
+                        <img
+                          src={(() => {
+                            if (!a.cutImageGroup?.length) return getAssetDisplayImage(a);
+                            const groupItems = a.cutImageGroup;
+                            const len = groupItems.length;
+                            const rawIndex = groupPreviewIndexById[a.id] ?? 0;
+                            const safeIndex = len ? ((rawIndex % len) + len) % len : 0;
+                            const item = groupItems[safeIndex] ?? groupItems[0];
+                            if (typeof item === 'string') return item;
+                            const child = assets.find((x) => x.id === item.assetId);
+                            return child ? getAssetDisplayImage(child) : getAssetDisplayImage(a);
+                          })()}
+                          alt=""
+                          className="absolute inset-0 w-full h-full object-cover block"
+                          onLoad={(e) => {
+                            setAssetAspectById((prev) => {
+                              if (prev[a.id]) return prev;
+                              const img = e.currentTarget as HTMLImageElement | null;
+                              if (!img || !img.naturalWidth || !img.naturalHeight) return prev;
+                              const ratio = img.naturalHeight / img.naturalWidth;
+                              return { ...prev, [a.id]: ratio };
+                            });
+                          }}
+                        />
+                      </div>
                         {assetErrors.has(a.id) && (
                           <span className="absolute top-2 left-2 px-2 py-0.5 rounded-lg bg-red-600/90 text-[8px] font-black text-white">
                             执行出错
@@ -2139,17 +2156,6 @@ const WorkflowSection: React.FC<{
                           >
                             原始
                           </button>
-                          {a.cutImageGroup?.length && a.groupKind !== 'manual' && (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setDisplayKey(a.id, 'cut_image');
-                              }}
-                              className={`px-2 py-1 rounded text-[8px] font-black uppercase ${a.displayKey === 'cut_image' ? 'bg-blue-600' : 'bg-white/20 hover:bg-white/30'}`}
-                            >
-                              切割
-                            </button>
-                          )}
                           {(a.resultOrder || []).map((k) => {
                             if (baseActionId(k) === 'cut_image') return null;
                             const mod = getModule(baseActionId(k));
@@ -2171,7 +2177,7 @@ const WorkflowSection: React.FC<{
                     {!showArchived && (
                       <div className="p-2 flex flex-col gap-1.5 border-t border-white/5 bg-black/90">
                         <span className="text-[7px] text-gray-500 leading-snug line-clamp-2 max-w-full">
-                          拖到功能区 或 点击大图选操作 · 有切割组时先点「切割」再点预览进入组内
+                          拖到功能区 或 点击大图选操作 · 有切割组时点击大图进入组内
                         </span>
                         <div className="flex gap-1 flex-wrap items-center justify-end">
                           {a.displayKey !== 'original' && (

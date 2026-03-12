@@ -36,6 +36,10 @@ const GenerateTextureSection = React.lazy(() => import('./components/GenerateTex
 const HomeSection = React.lazy(() => import('./components/HomeSection'));
 const SiteAssistant = React.lazy(() => import('./components/SiteAssistant'));
 const SettingsSection = React.lazy(() => import('./components/SettingsSection'));
+const AdminLayout = React.lazy(() => import('./components/admin/AdminLayout.js'));
+const AdminDashboard = React.lazy(() => import('./components/admin/AdminDashboard.js'));
+const AdminJobList = React.lazy(() => import('./components/admin/AdminJobList.js'));
+const AdminJobDetail = React.lazy(() => import('./components/admin/AdminJobDetail.js'));
 type SourceAggregate = {
   count: number;
   rated: number;
@@ -185,6 +189,72 @@ const AssetViewer: React.FC<{ item: LibraryItem | null; onClose: () => void }> =
         </div>
       </div>
     </div>
+  );
+};
+
+// ==========================================
+// Admin 路由分流
+// ==========================================
+
+function usePathname() {
+  const [path, setPath] = useState(() => window.location.pathname + window.location.search + window.location.hash);
+  useEffect(() => {
+    const onPop = () =>
+      setPath(window.location.pathname + window.location.search + window.location.hash);
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+  return path;
+}
+
+function navigateTo(path: string) {
+  if (window.location.pathname === path) return;
+  window.history.pushState({}, '', path);
+  window.dispatchEvent(new PopStateEvent('popstate'));
+}
+
+const AdminAppShell: React.FC = () => {
+  const fullPath = usePathname();
+  const pathname = fullPath.split('?')[0];
+  const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (pathname.startsWith('/admin/jobs/') && pathname.length > '/admin/jobs/'.length) {
+      const id = pathname.slice('/admin/jobs/'.length);
+      setSelectedJobId(id || null);
+    } else {
+      setSelectedJobId(null);
+    }
+  }, [pathname]);
+
+  const handleNavigate = useCallback((path: string) => {
+    navigateTo(path);
+  }, []);
+
+  const openJob = useCallback(
+    (id: string) => {
+      navigateTo(`/admin/jobs/${id}`);
+    },
+    []
+  );
+
+  let content: React.ReactNode;
+  if (pathname === '/admin') {
+    content = <AdminDashboard onOpenJob={openJob} />;
+  } else if (pathname === '/admin/jobs') {
+    content = <AdminJobList onOpenJob={openJob} />;
+  } else if (pathname.startsWith('/admin/jobs/') && selectedJobId) {
+    content = <AdminJobDetail jobId={selectedJobId} onBack={() => navigateTo('/admin/jobs')} />;
+  } else {
+    content = <AdminDashboard onOpenJob={openJob} />;
+  }
+
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-black text-white flex items-center justify-center text-[11px]">加载管理后台…</div>}>
+      <AdminLayout currentPath={pathname} onNavigate={handleNavigate}>
+        {content}
+      </AdminLayout>
+    </Suspense>
   );
 };
 
@@ -405,6 +475,11 @@ const LibraryPickerModal: React.FC<{
 // 5. 主应用程序
 // ==========================================
 const App: React.FC = () => {
+  const pathname = typeof window !== 'undefined' ? window.location.pathname : '/';
+  if (pathname.startsWith('/admin')) {
+    return <AdminAppShell />;
+  }
+
   const [mode, setMode] = useState<AppMode>(AppMode.HOME);
   const [capabilityPresets, setCapabilityPresets] = useState<CustomAppModule[]>(loadCapabilityPresets);
   const [capabilitySets, setCapabilitySets] = useState<CapabilitySet[]>(loadCapabilitySets);
