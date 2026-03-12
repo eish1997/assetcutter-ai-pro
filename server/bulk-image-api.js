@@ -74,6 +74,10 @@ function sendJson(res, status, obj) {
   res.end(s);
 }
 
+function sendError(res, status, message) {
+  sendJson(res, status, { error: message });
+}
+
 function normalizeSecret(v) {
   if (typeof v !== 'string') return '';
   return v.replace(/\uFEFF/g, '').replace(/\r\n?/g, '').trim();
@@ -188,6 +192,25 @@ async function generateImages(apiKey, imageBase64, instruction, numImages, model
     throw new Error(`生图未返回图片${hint}`);
   }
   return out;
+}
+
+async function proxyGenerateContent(model, contents, config) {
+  const key = normalizeSecret(process.env.GEMINI_API_KEY || '');
+  if (!key) throw new Error('No Gemini API key (env GEMINI_API_KEY)');
+  const ai = new GoogleGenAI({ apiKey: key });
+  const safeConfig = { ...(config || {}) };
+  if (safeConfig.abortSignal) delete safeConfig.abortSignal;
+  const timeout = Number(safeConfig?.httpOptions?.timeout) || IMAGE_REQUEST_TIMEOUT_MS;
+  const mergedConfig = {
+    ...safeConfig,
+    httpOptions: { ...(safeConfig.httpOptions || {}), timeout },
+  };
+  const response = await ai.models.generateContent({
+    model: model || 'gemini-2.5-flash',
+    contents,
+    config: mergedConfig,
+  });
+  return response;
 }
 
 function isRetryable(e) {
@@ -558,6 +581,35 @@ const server = http.createServer(async (req, res) => {
 
   const path = (req.url || '/').split('?')[0];
   const pathParts = path.slice(1).split('/').filter(Boolean); // ['jobs'] or ['jobs', ':id']
+
+  if (path === '/proxy/gemini/generate-content' && req.method === 'POST') {
+    try {
+      const body = await readBody(req, MAX_JOBS_BODY_BYTES);
+      let parsed;
+      try {
+        parsed = JSON.parse(body);
+      } catch {
+        sendError(res, 400, 'Invalid JSON body');
+        return;
+      }
+      const { model, contents, config } = parsed || {};
+      if (!model || !contents) {
+        sendError(res, 400, 'Missing model or contents');
+        return;
+      }
+      try {
+        const response = await proxyGenerateContent(model, contents, config);
+        sendJson(res, 200, response);
+      } catch (e) {
+        const msg = e?.message ?? String(e);
+        console.error('[proxy] gemini generate-content error:', msg);
+        sendError(res, 500, msg);
+      }
+    } catch {
+      sendError(res, 500, 'Request error');
+    }
+    return;
+  }
 
   if (path === '/healthz' && req.method === 'GET') {
     handleGetHealth(res);

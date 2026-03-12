@@ -47,34 +47,10 @@ export function getBulkUserId(): string {
   }
 }
 
-/**
- * 供 geminiService 等使用：返回「优先用户，其次公司统一」的 Gemini API Key。
- * 规则：
- * 1. 若当前浏览器设置页里保存了用户自己的 Key，则优先使用该 Key。
- * 2. 若用户未填写，则回退到构建时注入的环境变量（公司统一 Key）。
- *
- * 注意：回退到环境变量意味着公司统一 Key 会以某种形式出现在前端产物中，
- * 仅适用于「内网/可信环境部署」或你已接受相关风险的场景。
- */
 export function getApiKey(): string | undefined {
   const user = getUserApiKey();
   if (user) return user;
-
-  try {
-    // Vite 前端构建时注入的环境变量（推荐放这里，如 VITE_GEMINI_API_KEY）
-    const maybeImportMetaEnv =
-      typeof import.meta !== 'undefined'
-        ? (import.meta as unknown as { env?: Record<string, string | undefined> }).env
-        : undefined;
-    const envKey =
-      (maybeImportMetaEnv?.VITE_GEMINI_API_KEY ||
-        // 兼容少数在构建工具里直接注入 process.env 的场景
-        (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : '')) || '';
-    const trimmed = envKey.trim();
-    return trimmed ? trimmed : undefined;
-  } catch {
-    return undefined;
-  }
+  return undefined;
 }
 
 // ----- 混元（腾讯云） -----

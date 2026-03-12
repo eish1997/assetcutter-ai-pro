@@ -1,10 +1,68 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { getApiKey } from "./settingsStore";
 
-const getAI = () => {
+const BULK_BASE =
+  typeof import.meta !== "undefined" && (import.meta as unknown as { env?: Record<string, string | undefined> })?.env
+    ? String(
+        ((import.meta as unknown as { env?: Record<string, string | undefined> }).env?.VITE_BULK_IMAGE_API || "").trim()
+      )
+    : "";
+
+function bulkApiUrl(path: string): string {
+  if (!BULK_BASE) return path;
+  const base = BULK_BASE.replace(/\/$/, "");
+  return `${base}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
+type GeminiClientLike = {
+  models: {
+    generateContent: (args: { model: string; contents: unknown; config?: Record<string, unknown> }) => Promise<any>;
+    generateContentStream?: (args: {
+      model: string;
+      contents: unknown;
+      config?: Record<string, unknown>;
+    }) => AsyncIterable<any>;
+  };
+};
+
+const getAI = (): GeminiClientLike => {
   const apiKey = getApiKey();
-  if (!apiKey) throw new Error("未配置 API 密钥，请在设置页填写 Gemini API Key");
-  return new GoogleGenAI({ apiKey });
+  if (apiKey) {
+    return new GoogleGenAI({ apiKey }) as unknown as GeminiClientLike;
+  }
+  if (BULK_BASE) {
+    const proxyClient: GeminiClientLike = {
+      models: {
+        async generateContent(args) {
+          const config = (args.config || {}) as Record<string, unknown>;
+          const abortSignal = (config.abortSignal as AbortSignal | undefined) ?? undefined;
+          const safeConfig = { ...config };
+          delete (safeConfig as any).abortSignal;
+          const res = await fetch(bulkApiUrl("/proxy/gemini/generate-content"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              model: args.model,
+              contents: args.contents,
+              config: safeConfig,
+            }),
+            signal: abortSignal,
+          });
+          const text = await res.text();
+          if (!res.ok) {
+            throw new Error(text || `Gemini proxy request failed (${res.status})`);
+          }
+          try {
+            return JSON.parse(text);
+          } catch {
+            return text;
+          }
+        },
+      },
+    };
+    return proxyClient;
+  }
+  throw new Error("未配置 API 密钥，请在设置页填写 Gemini API Key，或联系管理员配置批量后端地址");
 };
 
 export interface GeminiRequestOptions {
@@ -662,6 +720,12 @@ export async function getSiteAssistantResponseStream(
   model = 'gemini-3-flash-preview',
   options?: GeminiRequestOptions
 ): Promise<string> {
+  const apiKey = getApiKey();
+  if (!apiKey && BULK_BASE) {
+    const full = await getSiteAssistantResponse(userMessage, history, model, options);
+    onChunk(full);
+    return full;
+  }
   return callWithRetry(async (signal) => {
     const ai = getAI();
     const contents = [
