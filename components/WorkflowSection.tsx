@@ -1795,29 +1795,6 @@ const WorkflowSection: React.FC<{
                                         setLightboxAssetId(childAsset.id);
                                       }
                                     }}
-                                    onWheel={(e) => {
-                                      if (childAsset.cutImageGroup?.length) {
-                                        if (!childAsset.cutImageGroup.length) return;
-                                        e.preventDefault();
-                                        const delta = e.deltaY > 0 ? 1 : -1;
-                                        setGroupPreviewIndexById((prev) => {
-                                          const current = prev[childAsset.id] ?? 0;
-                                          const len = childAsset.cutImageGroup ? childAsset.cutImageGroup.length : 1;
-                                          const next = ((current + delta) % len + len) % len;
-                                          return { ...prev, [childAsset.id]: next };
-                                        });
-                                        const direction: 'up' | 'down' = e.deltaY > 0 ? 'down' : 'up';
-                                        const assetId = childAsset.id;
-                                        setGroupBounceStateById((prev) => ({ ...prev, [assetId]: direction }));
-                                        window.setTimeout(() => {
-                                          setGroupBounceStateById((prev) => ({ ...prev, [assetId]: 'idle' }));
-                                        }, 180);
-                                        return;
-                                      }
-                                      if (getDisplayKeysForAsset(childAsset).length <= 1) return;
-                                      e.preventDefault();
-                                      cycleDisplayKey(childAsset.id, e.deltaY);
-                                    }}
                                   >
                                     <img
                                       src={(() => {
@@ -2084,10 +2061,11 @@ const WorkflowSection: React.FC<{
                         }
                       }}
                       onWheel={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
                         if (showArchived) return;
                         if (a.cutImageGroup?.length) {
                           if (!a.cutImageGroup.length) return;
-                          e.preventDefault();
                           const delta = e.deltaY > 0 ? 1 : -1;
                           setGroupPreviewIndexById((prev) => {
                             const current = prev[a.id] ?? 0;
@@ -2104,7 +2082,6 @@ const WorkflowSection: React.FC<{
                           return;
                         }
                         if (getDisplayKeysForAsset(a).length <= 1) return;
-                        e.preventDefault();
                         cycleDisplayKey(a.id, e.deltaY);
                       }}
                     >
@@ -2783,8 +2760,9 @@ const WorkflowSection: React.FC<{
             className="relative max-w-4xl w-full"
             onClick={(e) => e.stopPropagation()}
             onWheel={(e) => {
-              if (getDisplayKeysForAsset(lightboxAsset).length <= 1) return;
               e.preventDefault();
+              e.stopPropagation();
+              if (getDisplayKeysForAsset(lightboxAsset).length <= 1) return;
               cycleDisplayKey(lightboxAsset.id, e.deltaY);
             }}
           >

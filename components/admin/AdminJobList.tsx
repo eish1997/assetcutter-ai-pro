@@ -1,18 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import type { BulkImageJob, BulkImageJobStatus } from '../../types-admin';
+import { BULK_STATUS_BADGE_CLASSNAMES, BULK_STATUS_LABELS } from '../../types-admin';
 import { fetchJobs } from '../../services/adminBulkImageApi';
+import { CustomDropdown, DROPDOWN_TRIGGER_COMPACT } from '../ui/CustomDropdown';
 
 type AdminJobListProps = {
   onOpenJob: (id: string) => void;
-};
-
-const STATUS_LABELS: Record<BulkImageJobStatus, string> = {
-  pending: '排队中',
-  running: '进行中',
-  completed: '已完成',
-  failed: '失败',
-  partial: '部分完成',
-  cancelled: '已取消',
 };
 
 const AdminJobList: React.FC<AdminJobListProps> = ({ onOpenJob }) => {
@@ -71,19 +64,21 @@ const AdminJobList: React.FC<AdminJobListProps> = ({ onOpenJob }) => {
       <div className="flex flex-wrap gap-3 items-center">
         <div className="flex items-center gap-2 text-[11px]">
           <span className="text-gray-400">状态：</span>
-          <select
+          <CustomDropdown
             value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as BulkImageJobStatus | 'all')}
-            className="bg-white/5 border border-white/10 rounded-xl px-3 py-1 text-[11px] outline-none focus:border-blue-500"
-          >
-            <option value="all">全部</option>
-            <option value="pending">排队中</option>
-            <option value="running">进行中</option>
-            <option value="completed">已完成</option>
-            <option value="failed">失败</option>
-            <option value="partial">部分完成</option>
-            <option value="cancelled">已取消</option>
-          </select>
+            onChange={(v) => setStatusFilter((v || 'all') as BulkImageJobStatus | 'all')}
+            options={[
+              { value: 'all', label: '全部' },
+              { value: 'pending', label: BULK_STATUS_LABELS.pending },
+              { value: 'running', label: BULK_STATUS_LABELS.running },
+              { value: 'completed', label: BULK_STATUS_LABELS.completed },
+              { value: 'failed', label: BULK_STATUS_LABELS.failed },
+              { value: 'partial', label: BULK_STATUS_LABELS.partial },
+              { value: 'cancelled', label: BULK_STATUS_LABELS.cancelled },
+            ]}
+            placeholder="全部"
+            triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+          />
         </div>
         <div className="flex items-center gap-2 text-[11px]">
           <span className="text-gray-400">搜索：</span>
@@ -106,6 +101,7 @@ const AdminJobList: React.FC<AdminJobListProps> = ({ onOpenJob }) => {
                 <th className="py-2 pr-4 font-normal">状态</th>
                 <th className="py-2 pr-4 font-normal">张数</th>
                 <th className="py-2 pr-4 font-normal">完成</th>
+                <th className="py-2 pr-4 font-normal">耗时</th>
                 <th className="py-2 pr-4 font-normal">错误</th>
                 <th className="py-2 pr-4 font-normal">创建时间</th>
                 <th className="py-2 pr-4 font-normal">更新时间</th>
@@ -115,18 +111,36 @@ const AdminJobList: React.FC<AdminJobListProps> = ({ onOpenJob }) => {
               {filtered.map((job) => (
                 <tr
                   key={job.id}
-                  className="border-b border-white/5 hover:bg-white/5 cursor-pointer"
+                  className={`border-b border-white/5 hover:bg-white/5 cursor-pointer ${
+                    job.status === 'failed'
+                      ? 'bg-red-950/20'
+                      : job.status === 'partial'
+                      ? 'bg-amber-950/10'
+                      : job.status === 'cancelled'
+                        ? 'bg-gray-900/40'
+                        : ''
+                  }`}
                   onClick={() => onOpenJob(job.id)}
                 >
                   <td className="py-2 pr-4 font-mono text-[10px] text-blue-200">{job.id}</td>
                   <td className="py-2 pr-4">
-                    <span className="px-2 py-0.5 rounded-full text-[10px] border border-white/10 bg-white/5">
-                      {STATUS_LABELS[job.status]}
+                    <span
+                      className={`px-2 py-0.5 rounded-full text-[10px] border ${BULK_STATUS_BADGE_CLASSNAMES[job.status]} `}
+                    >
+                      {BULK_STATUS_LABELS[job.status]}
                     </span>
                   </td>
                   <td className="py-2 pr-4">{job.totalImages}</td>
                   <td className="py-2 pr-4">{job.results?.length ?? 0}</td>
-                  <td className="py-2 pr-4 text-red-300 truncate max-w-xs">
+                  <td className="py-2 pr-4 text-gray-300">
+                    {job.updatedAt && job.createdAt
+                      ? `${Math.max(0, Math.round((job.updatedAt - job.createdAt) / 1000))}s`
+                      : '—'}
+                  </td>
+                  <td
+                    className="py-2 pr-4 text-red-300 truncate max-w-xs"
+                    title={job.errorSummary ? job.errorSummary : undefined}
+                  >
                     {job.errorSummary ? job.errorSummary : ''}
                   </td>
                   <td className="py-2 pr-4 text-gray-400">

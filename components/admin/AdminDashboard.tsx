@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import type { BulkImageHealth, BulkImageJob } from '../../types-admin';
+import { BULK_STATUS_BADGE_CLASSNAMES, BULK_STATUS_LABELS } from '../../types-admin';
 import { fetchHealth, fetchJobs } from '../../services/adminBulkImageApi';
 
 type AdminDashboardProps = {
@@ -38,6 +39,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ onOpenJob }) => {
   }, []);
 
   const latestJobs = jobs.slice(0, 20);
+  const rpdUsage =
+    health && health.rpdLimit > 0 ? Math.min(1, health.rpdToday / health.rpdLimit) : 0;
+  const queueHigh = !!health && health.queueLength >= 10;
+  const systemUnhealthy = !!health && !health.ok;
 
   return (
     <div className="space-y-6">
@@ -47,7 +52,15 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ onOpenJob }) => {
         </div>
       )}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+        <div
+          className={`rounded-2xl px-4 py-3 border ${
+            rpdUsage >= 0.9
+              ? 'border-red-500/70 bg-red-900/30'
+              : rpdUsage >= 0.75
+              ? 'border-amber-500/60 bg-amber-900/20'
+              : 'border-white/10 bg-white/5'
+          }`}
+        >
           <p className="text-[10px] text-gray-400 uppercase tracking-[0.18em]">今日 RPD</p>
           <p className="mt-2 text-lg font-semibold">
             {health ? `${health.rpdToday} / ${health.rpdLimit}` : '—'}
@@ -63,7 +76,15 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ onOpenJob }) => {
             {health ? health.jobsPendingOrRunning : '—'}
           </p>
         </div>
-        <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+        <div
+          className={`rounded-2xl px-4 py-3 border ${
+            systemUnhealthy
+              ? 'border-red-500/70 bg-red-900/30'
+              : queueHigh
+                ? 'border-amber-500/70 bg-amber-900/25'
+                : 'border-white/10 bg-white/5'
+          }`}
+        >
           <p className="text-[10px] text-gray-400 uppercase tracking-[0.18em]">队列 / 并发</p>
           <p className="mt-2 text-lg font-semibold">
             {health ? `${health.queueLength} / ${health.inFlight}` : '—'}
@@ -84,6 +105,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ onOpenJob }) => {
                 <th className="py-2 pr-4 font-normal">状态</th>
                 <th className="py-2 pr-4 font-normal">张数</th>
                 <th className="py-2 pr-4 font-normal">完成</th>
+                <th className="py-2 pr-4 font-normal">耗时</th>
                 <th className="py-2 pr-4 font-normal">错误</th>
                 <th className="py-2 pr-4 font-normal">创建时间</th>
               </tr>
@@ -92,18 +114,36 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ onOpenJob }) => {
               {latestJobs.map((job) => (
                 <tr
                   key={job.id}
-                  className="border-b border-white/5 hover:bg-white/5 cursor-pointer"
+                  className={`border-b border-white/5 hover:bg-white/5 cursor-pointer ${
+                    job.status === 'failed'
+                      ? 'bg-red-950/20'
+                      : job.status === 'partial'
+                        ? 'bg-amber-950/10'
+                        : job.status === 'cancelled'
+                          ? 'bg-gray-900/40'
+                          : ''
+                  }`}
                   onClick={() => onOpenJob(job.id)}
                 >
                   <td className="py-2 pr-4 font-mono text-[10px] text-blue-200">{job.id}</td>
                   <td className="py-2 pr-4">
-                    <span className="px-2 py-0.5 rounded-full text-[10px] border border-white/10 bg-white/5">
-                      {job.status}
+                    <span
+                      className={`px-2 py-0.5 rounded-full text-[10px] border ${BULK_STATUS_BADGE_CLASSNAMES[job.status]} `}
+                    >
+                      {BULK_STATUS_LABELS[job.status]}
                     </span>
                   </td>
                   <td className="py-2 pr-4">{job.totalImages}</td>
                   <td className="py-2 pr-4">{job.results?.length ?? 0}</td>
-                  <td className="py-2 pr-4 text-red-300 truncate max-w-xs">
+                  <td className="py-2 pr-4 text-gray-300">
+                    {job.updatedAt && job.createdAt
+                      ? `${Math.max(0, Math.round((job.updatedAt - job.createdAt) / 1000))}s`
+                      : '—'}
+                  </td>
+                  <td
+                    className="py-2 pr-4 text-red-300 truncate max-w-xs"
+                    title={job.errorSummary ? job.errorSummary : undefined}
+                  >
                     {job.errorSummary ? job.errorSummary : ''}
                   </td>
                   <td className="py-2 pr-4 text-gray-400">

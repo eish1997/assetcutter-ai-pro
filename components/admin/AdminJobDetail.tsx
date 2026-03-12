@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import type { BulkImageJob } from '../../types-admin';
+import { BULK_STATUS_BADGE_CLASSNAMES, BULK_STATUS_LABELS } from '../../types-admin';
 import { cancelJobById, fetchJob } from '../../services/adminBulkImageApi';
 
 type AdminJobDetailProps = {
@@ -55,6 +56,10 @@ const AdminJobDetail: React.FC<AdminJobDetailProps> = ({ jobId, onBack }) => {
 
   const completed = job?.results?.length ?? 0;
   const total = job?.totalImages ?? 0;
+  const durationSec =
+    job && job.updatedAt && job.createdAt
+      ? Math.max(0, Math.round((job.updatedAt - job.createdAt) / 1000))
+      : null;
 
   return (
     <div className="space-y-4">
@@ -80,8 +85,12 @@ const AdminJobDetail: React.FC<AdminJobDetailProps> = ({ jobId, onBack }) => {
                 <p className="mt-1 font-mono text-[10px] text-blue-200 break-all">{job.id}</p>
               </div>
               <div className="flex flex-wrap items-center gap-3">
-                <span className="px-3 py-1 rounded-full text-[10px] border border-white/15 bg-black/40">
-                  {job.status}
+                <span
+                  className={`px-3 py-1 rounded-full text-[10px] border ${BULK_STATUS_BADGE_CLASSNAMES[job.status]}`}
+                >
+                  <span className="text-[10px]">
+                    {BULK_STATUS_LABELS[job.status]}
+                  </span>
                 </span>
                 {['pending', 'running'].includes(job.status) && (
                   <button
@@ -107,6 +116,10 @@ const AdminJobDetail: React.FC<AdminJobDetailProps> = ({ jobId, onBack }) => {
                 </p>
               </div>
               <div>
+                <p className="text-[10px] text-gray-400">耗时</p>
+                <p className="mt-1 text-gray-300">{durationSec != null ? `${durationSec}s` : '—'}</p>
+              </div>
+              <div>
                 <p className="text-[10px] text-gray-400">创建时间</p>
                 <p className="mt-1 text-gray-300">{new Date(job.createdAt).toLocaleString()}</p>
               </div>
@@ -116,9 +129,32 @@ const AdminJobDetail: React.FC<AdminJobDetailProps> = ({ jobId, onBack }) => {
               </div>
             </div>
             {job.errorSummary && (
-              <div className="text-[11px] text-red-200">
-                <p className="text-[10px] text-red-300 mb-1">错误摘要</p>
-                <p>{job.errorSummary}</p>
+              <div className="text-[11px] text-red-200 space-y-2">
+                <div>
+                  <p className="text-[10px] text-red-300 mb-1">错误摘要</p>
+                  <p>{job.errorSummary}</p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="text-[10px] text-gray-400">日志搜索建议：</p>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      navigator.clipboard.writeText(`[job] failed id=${job.id}`)
+                    }
+                    className="px-2 py-1 rounded-lg border border-white/20 bg-black/40 text-[9px] text-gray-200 hover:bg-white/10"
+                  >
+                    复制「[job] failed id=...」
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      navigator.clipboard.writeText(`[job] created id=${job.id}`)
+                    }
+                    className="px-2 py-1 rounded-lg border border-white/20 bg-black/40 text-[9px] text-gray-200 hover:bg-white/10"
+                  >
+                    复制「[job] created id=...」
+                  </button>
+                </div>
               </div>
             )}
             <details className="text-[11px] text-gray-300">
