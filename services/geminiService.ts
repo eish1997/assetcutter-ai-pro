@@ -474,6 +474,58 @@ export async function dialogGenerateImage(
 }
 
 /**
+ * 单次请求多图：与 dialogGenerateImage 同一请求体，但解析响应中所有 inlineData 返回 string[]。
+ * 当 API 支持单次多图时一次可返回多张；否则通常为 1 张。用于批量出图执行器按批请求。
+ * @param numImages 期望张数（≤10），仅作提示；实际返回数以 API 为准
+ */
+export async function dialogGenerateImages(
+  imageBase64: string | null,
+  instruction: string,
+  numImages = 1,
+  model = 'gemini-2.5-flash-image',
+  options?: { aspectRatio?: string; imageSize?: string },
+  customSystemPrompt?: string,
+  abortSignal?: AbortSignal,
+  requestOptions?: Omit<GeminiRequestOptions, 'abortSignal'>
+): Promise<string[]> {
+  return callWithRetry(async (signal) => {
+    const ai = getAI();
+    const isTextToImage = !imageBase64;
+    const systemInstruction = (customSystemPrompt || (isTextToImage ? DEFAULT_PROMPTS.dialog_text_to_image : DEFAULT_PROMPTS.edit)).replace('{instruction}', instruction);
+    const timeoutMs = requestOptions?.timeoutMs ?? GEMINI_IMAGE_REQUEST_TIMEOUT_MS;
+    const config: { systemInstruction: string; imageConfig?: { aspectRatio?: string; imageSize?: string } } = {
+      systemInstruction
+    };
+    if (options?.aspectRatio || options?.imageSize) {
+      config.imageConfig = {};
+      if (options.aspectRatio) config.imageConfig.aspectRatio = options.aspectRatio;
+      if (options.imageSize) config.imageConfig.imageSize = options.imageSize;
+    }
+    const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = isTextToImage
+      ? [{ text: instruction }]
+      : [
+          { inlineData: { mimeType: 'image/jpeg', data: imageBase64.split(',')[1] || imageBase64 } },
+          { text: instruction }
+        ];
+    const response = await ai.models.generateContent({
+      model,
+      contents: { parts },
+      config: buildGeminiConfig(config, signal, timeoutMs)
+    });
+    const out: string[] = [];
+    for (const part of response.candidates?.[0]?.content?.parts || []) {
+      if (part.inlineData) out.push(`data:image/png;base64,${part.inlineData.data}`);
+    }
+    if (out.length === 0) {
+      const textPart = response.candidates?.[0]?.content?.parts?.find((p: { text?: string }) => p.text);
+      const hint = textPart?.text?.slice(0, 120) ? `（模型返回了文字: ${String(textPart.text).slice(0, 120)}…）` : '（当前模型可能不支持图像输出）';
+      throw new Error(`生图未返回图片${hint}`);
+    }
+    return out;
+  }, { ...requestOptions, abortSignal, timeoutMs: requestOptions?.timeoutMs ?? GEMINI_IMAGE_REQUEST_TIMEOUT_MS, retries: 0 });
+}
+
+/**
  * 多图 + 提示词生图：将多张参考图与一条指令一起发给模型，生成最终图（用于能力集合中多分支汇聚到生图模型）。
  */
 export async function dialogGenerateImageMulti(

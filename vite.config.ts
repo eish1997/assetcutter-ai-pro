@@ -12,6 +12,7 @@ export default defineConfig(({ mode }) => {
           process.env.VITE_ALLOW_UNSAFE_TENCENT_BROWSER_CREDS ?? fromFile.VITE_ALLOW_UNSAFE_TENCENT_BROWSER_CREDS,
     };
     return {
+      root: path.resolve(__dirname),
       server: {
         port: 3000,
         host: '0.0.0.0',
