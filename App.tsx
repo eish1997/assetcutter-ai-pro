@@ -2562,41 +2562,6 @@ const App: React.FC = () => {
                     </div>
                     <button onClick={handleDialogSend} disabled={dialogSendingSessionIds.includes(dialogActiveSessionIdResolved) || !dialogInputText.trim()} className="px-8 py-3 bg-blue-600 rounded-xl text-[10px] font-black uppercase electric-glow disabled:opacity-20 transition-all shrink-0">发送</button>
                   </div>
-                  {/* 批量出图：同一描述/图+描述，生成多张 */}
-                  <div className="mt-3 pt-3 border-t border-white/10 space-y-3">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-[9px] font-black text-gray-500 uppercase">批量出图</span>
-                      <span className="text-[9px] text-gray-600">今日 {getBulkImageTodayRPD()} / {getBulkImageRPDLimit()} 次</span>
-                      <span className="text-[9px] text-gray-600">
-                        {getBulkImageMode() === 'backend' ? '模式：公司后端（统一配额）' : '模式：本机（每台设备各自配额）'}
-                      </span>
-                      <input type="number" min={1} max={getBulkImageMaxImagesPerJob()} value={bulkImageCount} onChange={e => setBulkImageCount(Math.min(getBulkImageMaxImagesPerJob(), Math.max(1, parseInt(e.target.value, 10) || 1)))} className="w-14 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-[10px] text-center outline-none focus:border-blue-500" />
-                      <span className="text-[9px] text-gray-500">张</span>
-                      <button onClick={handleStartBulkImageJob} disabled={bulkImageSubmitting || !dialogInputText.trim()} className="px-3 py-1.5 rounded-lg bg-blue-600/60 text-[9px] font-black text-white hover:bg-blue-600 disabled:opacity-40 transition-colors">批量生成</button>
-                    </div>
-                    {imageJobsSnapshot.length > 0 && (
-                      <div className="space-y-2 max-h-40 overflow-y-auto">
-                        {imageJobsSnapshot.map((job) => (
-                          <div key={job.id} className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-[10px]">
-                            <div className="flex items-center justify-between gap-2 mb-1">
-                              <span className="text-gray-400 truncate flex-1">{job.results.length}/{job.totalImages}</span>
-                              <span className={`shrink-0 ${job.status === 'pending' ? 'text-gray-400' : job.status === 'running' ? 'text-blue-400' : job.status === 'completed' ? 'text-green-400' : job.status === 'partial' ? 'text-amber-400' : job.status === 'cancelled' ? 'text-gray-500' : 'text-red-400'}`}>{job.status === 'pending' ? '排队中' : job.status === 'running' ? '运行中' : job.status === 'completed' ? '完成' : job.status === 'partial' ? '部分完成' : job.status === 'cancelled' ? '已取消' : '失败'}</span>
-                              {(job.status === 'running' || job.status === 'pending') && (
-                                <button type="button" onClick={() => cancelImageJob(job.id)} className="shrink-0 px-2 py-0.5 rounded bg-red-500/20 text-red-300 text-[9px] font-black hover:bg-red-500/30">取消</button>
-                              )}
-                              {job.status === 'partial' && job.totalImages - job.results.length > 0 && (
-                                <button type="button" onClick={async () => { try { await createImageJobContinue(job); } catch (e) { setDialogValidationError(e instanceof Error ? e.message : String(e)); } }} className="shrink-0 px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 text-[9px] font-black hover:bg-amber-500/30">继续生成剩余 {job.totalImages - job.results.length} 张</button>
-                              )}
-                            </div>
-                            <div className="h-1.5 rounded-full bg-white/10 overflow-hidden">
-                              <div className="h-full bg-blue-500 transition-all duration-300" style={{ width: `${(job.results.length / job.totalImages) * 100}%` }} />
-                            </div>
-                            {job.errorSummary && <p className="mt-1 text-amber-400/90 truncate" title={job.errorSummary}>{job.errorSummary}</p>}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
                 </div>
                 </div>
 
