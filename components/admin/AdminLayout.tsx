@@ -46,30 +46,27 @@ const AdminLayout: React.FC<AdminLayoutProps> = ({ children, currentPath, onNavi
           <NavButton label="概览" path="/admin" currentPath={currentPath} onNavigate={onNavigate} />
           <NavButton label="任务列表" path="/admin/jobs" currentPath={currentPath} onNavigate={onNavigate} />
         </nav>
-        <div className="px-4 py-3 border-t border-white/10 text-[10px] text-gray-500 space-y-2">
+        <div className="px-3 py-3 border-t border-white/10 space-y-2">
+          <a
+            href="/"
+            className="flex items-center justify-center gap-2 w-full py-2.5 rounded-xl border border-white/10 bg-white/5 text-[9px] font-black uppercase tracking-widest text-gray-300 hover:bg-white/10 hover:border-white/20 transition-all"
+          >
+            返回主界面
+          </a>
           <button
             type="button"
-            onClick={() => onNavigate('/')}
-            className="block w-full text-left text-gray-400 hover:text-gray-100 transition-colors"
+            onClick={() => {
+              try {
+                sessionStorage.removeItem('ac_admin_unlocked');
+              } catch {
+                /* ignore */
+              }
+              window.location.href = '/';
+            }}
+            className="flex items-center justify-center gap-2 w-full py-2.5 rounded-xl border border-white/10 bg-white/5 text-[9px] font-black uppercase tracking-widest text-gray-400 hover:bg-amber-500/10 hover:border-amber-500/30 hover:text-amber-200 transition-all"
           >
-            ← 返回主界面
+            退出管理员
           </button>
-          {typeof sessionStorage !== 'undefined' && sessionStorage.getItem('ac_admin_unlocked') === '1' && (
-            <button
-              type="button"
-              onClick={() => {
-                try {
-                  sessionStorage.removeItem('ac_admin_unlocked');
-                } catch {
-                  /* ignore */
-                }
-                onNavigate('/');
-              }}
-              className="block w-full text-left text-gray-500 hover:text-amber-300 transition-colors"
-            >
-              退出管理员
-            </button>
-          )}
         </div>
       </aside>
       <main className="flex-1 flex flex-col">

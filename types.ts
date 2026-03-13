@@ -388,6 +388,8 @@ export type WorkflowPendingTask = {
   /** 从组内拖到切割时：父组 id 与项下标，用于套娃替换 */
   sourceGroupAssetId?: string;
   sourceItemIndex?: number;
+  /** 临时微调提示词：从功能区「微调」入口拖入时填写，执行时覆盖预设的 instruction */
+  promptOverride?: string;
 };
 
 /** 能力分类：生图=提示词相关；图像处理=切割/裁剪等；生成3D=混元生3D 预设 */

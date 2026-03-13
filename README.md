@@ -1,16 +1,17 @@
 # AssetCutter AI Pro
 
-基于 **Google Gemini** 与 **腾讯混元生3D** 的智能资产生产 Web 应用：提取花纹、贴图修缝、生成贴图、对话生图、生成3D、工作流与能力预设、资产仓库、提示词效果与擂台。
+基于 **Google Gemini** 与 **腾讯混元生3D** 的智能资产生产 Web 应用：提取花纹、贴图修缝、生成贴图、对话生图（含批量出图）、生成3D、工作流与能力预设、资产仓库、提示词效果与擂台；另提供**管理后台**用于批量出图任务的可观测与运维。
 
 **技术栈：** React 19 + Vite 6 + TypeScript + @google/genai，样式为 Tailwind + 内联 CSS。
 
-**项目形态：** 纯静态前端（SPA），部署后为静态站点；无服务端用户系统，设置与生成记录存于浏览器本地（localStorage）。详见 [DOCS.md](DOCS.md)。
+**项目形态：** 主站为纯静态前端（SPA），部署后为静态站点；无服务端用户系统，设置与生成记录存于浏览器本地（localStorage）。批量出图、贴图修缝、腾讯 3D 等可选能力依赖对应后端或代理。详见 [DOCS.md](DOCS.md)。
 
 ---
 
 ## 目录
 
 - [网站功能概览（侧栏结构）](#网站功能概览侧栏结构)
+- [管理后台](#管理后台)
 - [商店（能力包）](#商店能力包)
 - [部署成网站](#部署成网站)
 - [本地开发](#本地开发)
@@ -24,24 +25,35 @@
 
 | 入口 | 说明 |
 |------|------|
+| **主页** | 欢迎页与快捷入口，可跳转到各功能模块 |
+| **对话生图** | 上传图片 + 描述需求 → AI 理解 → 生图模型出图（可选模型/尺寸、多会话、临时库）；支持**批量出图任务**（总张数、队列与 RPD 限制，可选后端） |
 | **工作流** | 多图筛选 → 拖拽/点选到功能框 → 待处理 → 一键执行 → 版本切换与归档 |
-| **能力** | 功能预设管理（拆分组件、转风格、生成多视角等），工作流功能区调用此处配置 |
-| **商店** | 远程「能力包」安装：从 JSON Catalog 拉取能力预设包，安装后合并到「能力」（同 id 覆盖），支持回滚历史版本 |
+| **能力** | 功能预设管理（生图、转风格、生成多视角、生成3D 等），工作流功能区调用此处配置；内嵌**商店**：从 Catalog 拉取远程能力包并安装/回滚 |
 | **生成3D** | 腾讯混元生3D：文生/图生、智能拓扑、纹理生成、组件、UV、人物、格式转换（当前未上线） |
 | **贴图**（组） | **提取花纹**：图案提取、无缝循环贴图；**贴图修缝**：OBJ + 贴图 + 可选 seam mask → 修缝；**生成贴图**：功能贴图 + 描述 → AI 生成 PBR Base Color / Roughness / Metallic |
-| **对话生图** | 上传图片 + 描述需求 → AI 理解 → 生图模型出图（可选模型/尺寸、多会话、临时库） |
-| **资产仓库** | 按类型筛选、查看/下载、多选批量下载、删除 |
 | **提示词**（组） | **提示词效果**：生成记录与评分、结构化复现与导出；**提示词擂台**：A/B 对比测试 + 获胜片段库 |
+| **资产仓库** | 按类型筛选、查看/下载、多选批量下载、删除 |
+| **设置** | API 密钥（Gemini 等）、能力商店地址、入站密码等 |
 
 详细功能与类型说明见 [DOCS.md](DOCS.md)。
 
 ---
 
+## 管理后台
+
+路径 **`/admin`** 为独立的**批量出图管理后台**，用于查看任务状态、队列与 RPD、取消任务等。访问任意 `/admin` 路径时，若已设置 `VITE_ADMIN_PASSWORD`，会先要求输入管理员密码（会话内有效）。
+
+- **路由**：`/admin` 概览（Dashboard）、`/admin/jobs` 任务列表、`/admin/jobs/:id` 任务详情
+- **依赖**：后端 `server/bulk-image-api.js`，需配置 `VITE_BULK_IMAGE_API`（如 `http://localhost:9002`）；可选 `VITE_ADMIN_PASSWORD` 作为管理后台入口密码
+- **本地启动后端**：`npm run dev:bulk-api`（端口默认 9002，见 [docs/ADMIN_CONSOLE_DESIGN.md](docs/ADMIN_CONSOLE_DESIGN.md)）
+
+---
+
 ## 商店（能力包）
 
-「商店」用于**远程分发与更新能力预设（`CustomAppModule[]`）**。它会从一个 **Catalog JSON** 拉取“能力包”，安装后把包内能力**合并到本地「能力」列表（同 `id` 覆盖）**，并为每次安装保留**历史快照**以便回滚。
+「商店」用于**远程分发与更新能力预设（`CustomAppModule[]`）**，入口在**「能力」页内**。从 **Catalog JSON** 拉取能力包，安装后合并到本地「能力」列表（同 `id` 覆盖），并为每次安装保留**历史快照**以便回滚。
 
-- **默认 Catalog 地址**：`https://cdn.jsdelivr.net/gh/eish1997/assetcutter-ai-pro-store@main/store/catalog.json`（也可在商店页面手动改成你自己的 Catalog）
+- **Catalog 地址**：在「设置」页配置「能力商店（GitHub 地址）」；默认可为 `https://cdn.jsdelivr.net/gh/eish1997/assetcutter-ai-pro-store@main/store/catalog.json`
 - **本地示例（可选）**：`public/store/catalog.json` 与 `public/store/capability_pack_basic.json` 可用于离线演示/调试
 
 ---
@@ -62,10 +74,11 @@
 | 步骤 | 命令 | 说明 |
 |------|------|------|
 | 1. 安装依赖 | `npm install` | 首次或 `package.json` 变更后执行 |
-| 2. 配置环境变量 | 在 [.env.local](.env.local) 中设置腾讯 3D / 修缝等运行参数 | Gemini Key 改为在设置页填写 |
+| 2. 配置环境变量 | 在 [.env.local](.env.local) 中设置腾讯 3D / 修缝 / 批量出图等 | Gemini Key 在设置页填写 |
 | 3. 启动主站（必选） | `npm run dev` | 打开 http://localhost:3000 使用整站 |
 | 4. 贴图修缝后端（可选） | `npm run dev:seam-backend` | 仅在使用「贴图修缝」时需要，端口 8008 |
-| 5. 腾讯 3D 代理（可选） | `npm run proxy` | 仅在使用「生成3D」时需要，端口 9001，需配置腾讯云密钥 |
+| 5. 批量出图后端（可选） | `npm run dev:bulk-api` | 批量出图任务与管理后台需要，端口默认 9002 |
+| 6. 腾讯 3D 代理（可选） | `npm run proxy` | 仅在使用「生成3D」时需要，端口 9001，需配置腾讯云密钥 |
 | 一键启动主站 + 修缝 | `npm run dev:all` | 同时跑主站与贴图修缝后端（两个进程） |
 
 **构建与预览：** `npm run build` 生成 `dist/`；`npm run preview` 本地预览构建结果。
@@ -74,14 +87,18 @@
 
 - 主站：`http://localhost:3000`（Vite）
 - 贴图修缝 API：开发时由 Vite 代理 `/seam-repair-api` → `http://127.0.0.1:8008`；生产环境可设置 `VITE_SEAM_REPAIR_API` 为后端地址
+- 批量出图 API：`BULK_IMAGE_PORT`（默认 9002）由 `server/bulk-image-api.js` 使用；前端设置 `VITE_BULK_IMAGE_API=http://localhost:9002` 以使用批量出图与管理后台
 - 腾讯 3D：开发时需单独运行 `npm run proxy`，前端只设置 `VITE_TENCENT_PROXY=http://localhost:9001`；真正的 `TENCENT_SECRET_ID` / `TENCENT_SECRET_KEY` 仅供代理进程使用。生产部署见 [DEPLOY_GUIDE.md](DEPLOY_GUIDE.md)
 
 **环境变量（.env.local）：**
 
 - `Gemini API Key`：对话生图、提取花纹、生成贴图等 AI 能力必填；请在网站「设置」页填写，仅保存在当前浏览器本机
 - `VITE_SEAM_REPAIR_API`：生产环境贴图修缝后端地址（可选，开发时用代理即可）
+- `VITE_BULK_IMAGE_API`：批量出图后端地址（如 `http://localhost:9002`）；不设置时批量出图仅用前端本地队列与 RPD 近似
+- `BULK_IMAGE_PORT`：批量出图后端监听端口（默认 9002），避免与 `PORT=9001` 的 ai3d 代理冲突
+- `VITE_ADMIN_PASSWORD`：可选，管理后台（/admin）入口密码；设置后访问 /admin 需先输入此密码
 - 腾讯混元生 3D：运行 `npm run proxy` 时需在 `.env.local` 或环境中设置 `TENCENT_SECRET_ID`、`TENCENT_SECRET_KEY`；前端仅需设置 `VITE_TENCENT_PROXY`（如 `http://localhost:9001`）。如确需浏览器直持密钥调试，必须显式设置 `VITE_ALLOW_UNSAFE_TENCENT_BROWSER_CREDS=true`，默认关闭。部署说明见 [DEPLOY_GUIDE.md](DEPLOY_GUIDE.md)
-- `VITE_SITE_PASSWORD`：可选，入站密码；本地开发可写在 `.env.local`，与上述变量一起管理。
+- `VITE_SITE_PASSWORD`：可选，整站入站密码；本地开发可写在 `.env.local`，与上述变量一起管理。
 
 **首次使用贴图修缝时**，需在 `WebSeamRepair/backend` 安装 Python 依赖一次：
 
@@ -96,8 +113,9 @@ pip install -r requirements.txt
 
 - **主站打不开 / 白屏**：确认已执行 `npm install`，且端口 3000 未被占用。
 - **贴图修缝点「开始修复」报错**：说明修缝后端未启动。执行 `npm run dev:seam-backend` 或 `npm run dev:all`；若提示找不到 `python`，请安装 Python 并先执行上文的 `pip install -r requirements.txt`。
+- **批量出图 / 管理后台无法用**：需启动 `npm run dev:bulk-api` 并设置 `VITE_BULK_IMAGE_API=http://localhost:9002`；管理后台访问 `/admin` 若设了 `VITE_ADMIN_PASSWORD` 需先输入密码。
 - **生成 3D 报错 / CORS**：本地开发需运行 `npm run proxy` 并设置 `VITE_TENCENT_PROXY=http://localhost:9001`，同时在代理环境中配置好 `TENCENT_SECRET_ID`、`TENCENT_SECRET_KEY`。
-- **生产部署**：见 [DEPLOY_GUIDE.md](DEPLOY_GUIDE.md)。贴图修缝若需上线，需单独部署 8008 后端并设置 `VITE_SEAM_REPAIR_API`；腾讯 3D 需单独部署代理并配置 `VITE_TENCENT_PROXY`。
+- **生产部署**：见 [DEPLOY_GUIDE.md](DEPLOY_GUIDE.md)。贴图修缝若需上线，需单独部署 8008 后端并设置 `VITE_SEAM_REPAIR_API`；批量出图与管理后台需部署 `bulk-image-api` 并设置 `VITE_BULK_IMAGE_API`；腾讯 3D 需单独部署代理并配置 `VITE_TENCENT_PROXY`。
 
 ---
 

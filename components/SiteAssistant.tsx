@@ -7,7 +7,6 @@ const SiteAssistant: React.FC<{
   onRemoveTask?: (id: string) => void;
 }> = ({ tasks = [], onRemoveTask }) => {
   const [open, setOpen] = useState(false);
-  const [queueOpen, setQueueOpen] = useState(false);
   const [messages, setMessages] = useState<Array<{ role: 'user' | 'model'; text: string }>>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -61,26 +60,10 @@ const SiteAssistant: React.FC<{
     }
   };
 
-  const runningCount = tasks.filter((t) => t.status === 'PENDING' || t.status === 'RUNNING').length;
-
   return (
     <>
-      {/* 悬浮按钮组：任务队列 + 网站助手 */}
-      <div className="fixed bottom-6 right-6 z-[1999] flex items-center gap-3">
-        <button
-          type="button"
-          onClick={() => setQueueOpen((o) => !o)}
-          className="w-12 h-12 rounded-full glass border border-white/15 shadow-lg flex items-center justify-center text-xl hover:border-amber-500/40 hover:bg-amber-500/10 transition-all focus:outline-none focus:ring-2 focus:ring-amber-500/50 relative"
-          title="任务队列"
-          aria-label="查看任务队列"
-        >
-          📋
-          {runningCount > 0 && (
-            <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 rounded-full bg-amber-500 text-[10px] font-black text-black flex items-center justify-center">
-              {runningCount}
-            </span>
-          )}
-        </button>
+      {/* 悬浮按钮：网站助手 */}
+      <div className="fixed bottom-6 right-6 z-[1999] flex items-center justify-center">
         <button
           type="button"
           onClick={() => setOpen((o) => !o)}
@@ -91,70 +74,6 @@ const SiteAssistant: React.FC<{
           💬
         </button>
       </div>
-
-      {/* 任务队列面板 */}
-      {queueOpen && (
-        <div
-          className="fixed bottom-20 right-6 z-[1998] w-[min(320px,calc(100vw-3rem))] max-h-[min(50vh,360px)] flex flex-col glass rounded-2xl border border-white/15 shadow-2xl overflow-hidden animate-in slide-in-from-bottom-4 duration-200"
-          role="dialog"
-          aria-label="任务队列"
-        >
-          <div className="flex items-center justify-between px-4 py-3 border-b border-white/10 bg-black/30 shrink-0">
-            <span className="text-[11px] font-black uppercase tracking-wider text-white">任务队列</span>
-            <button
-              type="button"
-              onClick={() => setQueueOpen(false)}
-              className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-400 hover:text-white hover:bg-white/10 transition-colors"
-              aria-label="关闭"
-            >
-              ×
-            </button>
-          </div>
-          <div className="flex-1 overflow-y-auto p-3 space-y-2 min-h-[120px] no-scrollbar">
-            {tasks.length === 0 ? (
-              <p className="text-[11px] text-gray-500 text-center py-8">暂无任务</p>
-            ) : (
-              tasks.map((task) => (
-                <div
-                  key={task.id}
-                  className="rounded-xl border border-white/10 bg-black/40 p-3 flex flex-col gap-2"
-                >
-                  <div className="flex justify-between items-start gap-2">
-                    <span className="text-[10px] font-black uppercase text-blue-400 truncate">{task.label}</span>
-                    {onRemoveTask && (
-                      <button
-                        type="button"
-                        onClick={() => onRemoveTask(task.id)}
-                        className="shrink-0 w-6 h-6 rounded flex items-center justify-center text-gray-500 hover:text-white hover:bg-white/10 text-xs"
-                        aria-label="移除"
-                      >
-                        ✕
-                      </button>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="flex-1 h-1.5 bg-white/10 rounded-full overflow-hidden">
-                      <div
-                        className={`h-full transition-all duration-300 ${
-                          task.status === 'FAILED' ? 'bg-red-500' : task.status === 'SUCCESS' ? 'bg-green-500' : 'bg-blue-500'
-                        }`}
-                        style={{ width: `${task.progress}%` }}
-                      />
-                    </div>
-                    <span className="text-[9px] font-mono text-gray-500 shrink-0">{task.progress}%</span>
-                  </div>
-                  {task.status === 'RUNNING' && task.message && (
-                    <p className="text-[9px] text-gray-400 truncate">{task.message}</p>
-                  )}
-                  {task.status === 'FAILED' && task.error && (
-                    <p className="text-[9px] text-red-400 truncate" title={task.error}>{task.error}</p>
-                  )}
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-      )}
 
       {/* 对话面板 */}
       {open && (

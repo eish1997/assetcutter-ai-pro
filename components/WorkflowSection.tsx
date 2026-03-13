@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import type { WorkflowAsset, WorkflowPendingTask, CapabilitySet } from '../types';
 import type { CustomAppModule, LibraryItem, WorkflowCutGroupItem } from '../types';
 import type { BoundingBox } from '../types';
@@ -88,6 +89,57 @@ const CutSelectModal: React.FC<{
         </div>
       </div>
     </div>
+  );
+};
+
+/** 微调提示词弹窗：预设 instruction 预填，可编辑，确定后以 promptOverride 加入执行队列 */
+const PromptTweakModal: React.FC<{
+  preset: CustomAppModule;
+  targets: Array<
+    | { assetId: string; inputImage: string; sourceGroupAssetId?: string; sourceItemIndex?: number }
+    | { imageBase64: string; parentAssetId: string; sourceGroupAssetId: string; sourceItemIndex: number }
+  >;
+  onConfirm: (editedPrompt: string) => void;
+  onCancel: () => void;
+}> = ({ preset, targets, onConfirm, onCancel }) => {
+  const [text, setText] = useState(preset.instruction || '');
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    setText(preset.instruction || '');
+  }, [preset.id, preset.instruction]);
+  return createPortal(
+    <div className="fixed inset-0 z-[2100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" onClick={onCancel}>
+      <div
+        className="relative w-full max-w-lg rounded-2xl border border-white/10 bg-[#0f0f0f] shadow-xl p-4"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between mb-3">
+          <span className="text-[10px] font-black uppercase text-blue-400">微调提示词 · {preset.label}</span>
+          <button type="button" onClick={onCancel} className="w-8 h-8 flex items-center justify-center text-white/50 hover:text-white rounded">✕</button>
+        </div>
+        <p className="text-[9px] text-gray-500 mb-2">可修改下方提示词后加入执行队列（{targets.length} 项）</p>
+        <textarea
+          ref={textareaRef}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          className="w-full min-h-[120px] rounded-xl bg-white/5 border border-white/10 px-3 py-2 text-[11px] text-white placeholder-white/40 focus:border-blue-500 outline-none resize-y"
+          placeholder="预设提示词"
+        />
+        <div className="flex gap-2 mt-4">
+          <button
+            type="button"
+            onClick={() => onConfirm(text)}
+            className="px-4 py-2 rounded-xl bg-blue-600 text-[10px] font-black uppercase hover:bg-blue-500"
+          >
+            确定并加入队列
+          </button>
+          <button type="button" onClick={onCancel} className="px-4 py-2 rounded-xl bg-white/10 text-[10px] font-black uppercase hover:bg-white/20">
+            取消
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
   );
 };
 
@@ -523,6 +575,13 @@ const WorkflowSection: React.FC<{
     boxes: BoundingBox[];
     remaining: WorkflowPendingTask[];
   } | null>(null);
+  const [promptTweakModal, setPromptTweakModal] = useState<{
+    preset: CustomAppModule;
+    targets: Array<
+      | { assetId: string; inputImage: string; sourceGroupAssetId?: string; sourceItemIndex?: number }
+      | { imageBase64: string; parentAssetId: string; sourceGroupAssetId: string; sourceItemIndex: number }
+    >;
+  } | null>(null);
   const [viewStack, setViewStack] = useState<{ assetId: string }[]>([]);
   const [showAllInGroup, setShowAllInGroup] = useState(false);
   const [draggingGroupItems, setDraggingGroupItems] = useState<{ groupAssetId: string; itemIndexes: number[] } | null>(null);
@@ -572,14 +631,28 @@ const WorkflowSection: React.FC<{
     return a.results[a.displayKey] ?? a.original;
   };
 
-  const addToPending = useCallback((assetId: string, actionType: string) => {
-    const asset = assets.find((x) => x.id === assetId);
-    if (!asset) return;
-    const inputImage = getAssetDisplayImage(asset);
-    // 加入执行队列时暂时从网格隐藏，避免与未处理图片混在一起
-    setPending((prev) => [...prev, { id: uuid(), assetId, actionType, inputImage, addedAt: Date.now() }]);
-    setAssets((prev) => prev.map((x) => (x.id === assetId ? { ...x, hiddenInGrid: true } : x)));
-  }, [assets, getAssetDisplayImage, setAssets]);
+  const addToPending = useCallback(
+    (assetId: string, actionType: string, options?: { promptOverride?: string }) => {
+      const asset = assets.find((x) => x.id === assetId);
+      if (!asset) return;
+      const inputImage = getAssetDisplayImage(asset);
+      const task: WorkflowPendingTask = {
+        id: uuid(),
+        assetId,
+        actionType,
+        inputImage,
+        addedAt: Date.now(),
+        ...(options?.promptOverride != null ? { promptOverride: options.promptOverride } : {}),
+      };
+      setPending((prev) => [...prev, task]);
+    },
+    [assets, getAssetDisplayImage]
+  );
+
+  const addTasksToPending = useCallback((tasks: WorkflowPendingTask[]) => {
+    if (tasks.length === 0) return;
+    setPending((prev) => [...prev, ...tasks]);
+  }, []);
 
   const removeFromPending = useCallback((taskId: string) => {
     const task = pending.find((t) => t.id === taskId);
@@ -622,7 +695,10 @@ const WorkflowSection: React.FC<{
     const actionLabel = getActionLabel(actionType);
     try {
       if (module) {
-        const out = await executeCapability(module, inputImage, { onLog });
+        const preset = task.promptOverride != null && task.promptOverride.trim() !== ''
+          ? { ...module, instruction: task.promptOverride.trim() }
+          : module;
+        const out = await executeCapability(preset, inputImage, { onLog });
         if (out.ok === false) {
           const msg = `[${actionLabel}] ${out.error}`;
           onLog?.('warn', msg);
@@ -1007,6 +1083,17 @@ const WorkflowSection: React.FC<{
     );
   }, [assets, showArchived]);
 
+  const busyAssetIds = useMemo(() => {
+    const busy = new Set<string>();
+    pending.forEach((t) => busy.add(t.assetId));
+    if (executingQueue) {
+      executingQueue.tasks.forEach((t) => {
+        if (!completedTaskIds.has(t.id)) busy.add(t.assetId);
+      });
+    }
+    return busy;
+  }, [pending, executingQueue, completedTaskIds]);
+
   const lightboxAsset = lightboxAssetId ? assets.find((a) => a.id === lightboxAssetId) : null;
   const lightboxList = assets.filter((a) => !a.archived && !a.hiddenInGrid && !a.parentAssetId);
   const lightboxIndex = lightboxAssetId ? lightboxList.findIndex((a) => a.id === lightboxAssetId) : -1;
@@ -1137,6 +1224,17 @@ const WorkflowSection: React.FC<{
       window.removeEventListener('mouseup', onUp);
     };
   }, [marqueeRect, viewStack.length]);
+
+  useEffect(() => {
+    const handler = (e: WheelEvent) => {
+      const el = e.target instanceof Element ? e.target : null;
+      if (el?.closest('[data-prevent-wheel-scroll]')) {
+        e.preventDefault();
+      }
+    };
+    document.addEventListener('wheel', handler, { passive: false, capture: true });
+    return () => document.removeEventListener('wheel', handler, { capture: true });
+  }, []);
 
   const discardResult = (assetId: string, actionType: string) => {
     const baseId = baseActionId(actionType);
@@ -1306,7 +1404,12 @@ const WorkflowSection: React.FC<{
     (
       imageBase64: string,
       actionType: string,
-      opts?: { parentAssetId?: string; sourceGroupAssetId?: string; sourceItemIndex?: number }
+      opts?: {
+        parentAssetId?: string;
+        sourceGroupAssetId?: string;
+        sourceItemIndex?: number;
+        promptOverride?: string;
+      }
     ) => {
       const newAsset: WorkflowAsset = {
         id: uuid(),
@@ -1349,6 +1452,7 @@ const WorkflowSection: React.FC<{
           actionType,
           inputImage: imageBase64,
           addedAt: Date.now(),
+          ...(opts?.promptOverride != null ? { promptOverride: opts.promptOverride } : {}),
           ...(fromGroup
             ? { sourceGroupAssetId: opts!.sourceGroupAssetId, sourceItemIndex: opts!.sourceItemIndex }
             : {}),
@@ -1945,235 +2049,281 @@ const WorkflowSection: React.FC<{
                 className="gap-4 relative min-h-full"
                 style={{ columnCount, columnFill: 'balance' as const }}
               >
-                {visibleAssets.map((a) => (
-                  <div key={a.id} className="break-inside-avoid mb-6 relative">
-                    {a.cutImageGroup?.length && (
-                      <>
-                        <div className="absolute inset-0 rounded-2xl bg-black/40 border border-blue-500/40 translate-x-[16px] translate-y-[16px] -rotate-3 opacity-70 shadow-xl shadow-black/60 pointer-events-none" />
-                        <div className="absolute inset-0 rounded-2xl bg-black/60 border border-blue-400/70 translate-x-[8px] translate-y-[8px] rotate-1 opacity-90 shadow-xl shadow-black/80 pointer-events-none" />
-                      </>
-                    )}
-                    {(() => {
-                      const bounce = groupBounceStateById[a.id] ?? 'idle';
-                      const motionClass =
-                        bounce === 'up'
-                          ? '-translate-y-0.5 -rotate-[0.6deg] scale-[0.985]'
-                          : bounce === 'down'
-                          ? 'translate-y-0.5 rotate-[0.6deg] scale-[0.985]'
-                          : '';
-                      return (
-                  <div
-                    data-workflow-card
-                    ref={(el) => {
-                      if (el) cardRefs.current.set(a.id, el);
-                      else cardRefs.current.delete(a.id);
-                    }}
-                    className={`group relative rounded-2xl border overflow-hidden bg-black/40 ${
-                      selectedAssetIds.has(a.id)
-                        ? 'border-blue-500 ring-2 ring-blue-500/50'
-                        : dragOverAssetId === a.id
-                        ? a.cutImageGroup?.length
-                          ? 'border-blue-400 ring-2 ring-blue-400/60'
-                          : 'border-blue-500 ring-2 ring-blue-500/50'
-                        : a.cutImageGroup?.length
-                        ? 'border-blue-400'
-                        : 'border-white/10'
-                    } transition-transform duration-150 ease-out will-change-transform ${motionClass}`}
-                    draggable={!showArchived}
-                    onDragStart={() => {
-                      if (showArchived) return;
-                      const ids = selectedAssetIds.has(a.id) && selectedAssetIds.size > 0 ? Array.from(selectedAssetIds) : [a.id];
-                      setDraggingAssetIds(ids);
-                    }}
-                    onDragEnd={() => {
-                      setDraggingAssetIds(null);
-                      setDragOverAction(null);
-                      setDragOverAssetId(null);
-                    }}
-                    onDragOver={(e) => {
-                      if (!draggingAssetIds?.length) return;
-                      e.preventDefault();
-                      setDragOverAssetId(a.id);
-                    }}
-                    onDragLeave={(e) => {
-                      e.preventDefault();
-                      if (dragOverAssetId === a.id) setDragOverAssetId(null);
-                    }}
-                    onDrop={(e) => {
-                      e.preventDefault();
-                      if (!draggingAssetIds?.length) {
-                        setDragOverAssetId(null);
-                        return;
-                      }
-                      const dragIds = Array.from(new Set(draggingAssetIds.filter((id) => id !== a.id)));
-                      if (dragIds.length > 0) {
-                        if (a.cutImageGroup?.length) {
-                          setAssets((prev) => {
-                            const next = prev.map((asset) => {
-                              if (asset.id === a.id) {
-                                const groupItems = [...(asset.cutImageGroup ?? [])];
-                                dragIds.forEach((id) => {
-                                  groupItems.push({ assetId: id });
-                                });
-                                return { ...asset, cutImageGroup: groupItems };
-                              }
-                              if (dragIds.includes(asset.id)) {
-                                return { ...asset, parentAssetId: a.id };
-                              }
-                              if (asset.cutImageGroup?.length) {
-                                const filtered = asset.cutImageGroup.filter(
-                                  (x) =>
-                                    !(
-                                      typeof x === 'object' &&
-                                      x &&
-                                      'assetId' in x &&
-                                      dragIds.includes((x as { assetId: string }).assetId)
-                                    )
-                                );
-                                if (filtered.length !== asset.cutImageGroup.length) {
-                                  return { ...asset, cutImageGroup: filtered.length ? filtered : undefined };
-                                }
-                              }
-                              return asset;
-                            });
-                            return next;
-                          });
-                        } else {
-                          const members = Array.from(new Set([...dragIds, a.id]));
-                          if (members.length > 1) {
-                            createGroupFromAssets(members);
-                          }
-                        }
-                      }
-                      setDragOverAssetId(null);
-                      setDraggingAssetIds(null);
-                    }}
-                  >
-                    <div
-                      className="relative cursor-pointer"
-                      onClick={() => {
-                        if (showArchived) {
-                          setArchivedDetailAssetId(a.id);
-                        } else if (a.cutImageGroup?.length) {
-                          setViewStack([{ assetId: a.id }]);
-                        } else {
-                          setLightboxAssetId(a.id);
-                        }
-                      }}
-                      onWheel={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        if (showArchived) return;
-                        if (a.cutImageGroup?.length) {
-                          if (!a.cutImageGroup.length) return;
-                          const delta = e.deltaY > 0 ? 1 : -1;
-                          setGroupPreviewIndexById((prev) => {
-                            const current = prev[a.id] ?? 0;
-                            const len = a.cutImageGroup ? a.cutImageGroup.length : 1;
-                            const next = ((current + delta) % len + len) % len;
-                            return { ...prev, [a.id]: next };
-                          });
-                          const direction: 'up' | 'down' = e.deltaY > 0 ? 'down' : 'up';
-                          const assetId = a.id;
-                          setGroupBounceStateById((prev) => ({ ...prev, [assetId]: direction }));
-                          window.setTimeout(() => {
-                            setGroupBounceStateById((prev) => ({ ...prev, [assetId]: 'idle' }));
-                          }, 180);
-                          return;
-                        }
-                        if (getDisplayKeysForAsset(a).length <= 1) return;
-                        cycleDisplayKey(a.id, e.deltaY);
-                      }}
-                    >
-                      <div className="relative w-full max-h-[360px] overflow-hidden">
-                        <div
-                          className="w-full"
-                          style={{ paddingBottom: `${(assetAspectById[a.id] ?? 1) * 100}%` }}
-                        />
-                        <img
-                          src={(() => {
-                            if (!a.cutImageGroup?.length) return getAssetDisplayImage(a);
-                            const groupItems = a.cutImageGroup;
-                            const len = groupItems.length;
-                            const rawIndex = groupPreviewIndexById[a.id] ?? 0;
-                            const safeIndex = len ? ((rawIndex % len) + len) % len : 0;
-                            const item = groupItems[safeIndex] ?? groupItems[0];
-                            if (typeof item === 'string') return item;
-                            const child = assets.find((x) => x.id === item.assetId);
-                            return child ? getAssetDisplayImage(child) : getAssetDisplayImage(a);
-                          })()}
-                          alt=""
-                          className="absolute inset-0 w-full h-full object-cover block"
-                          onLoad={(e) => {
-                            setAssetAspectById((prev) => {
-                              if (prev[a.id]) return prev;
-                              const img = e.currentTarget as HTMLImageElement | null;
-                              if (!img || !img.naturalWidth || !img.naturalHeight) return prev;
-                              const ratio = img.naturalHeight / img.naturalWidth;
-                              return { ...prev, [a.id]: ratio };
-                            });
-                          }}
-                        />
-                      </div>
-                        {assetErrors.has(a.id) && (
-                          <span className="absolute top-2 left-2 px-2 py-0.5 rounded-lg bg-red-600/90 text-[8px] font-black text-white">
-                            执行出错
-                          </span>
-                        )}
+                {visibleAssets.map((a) => {
+                  const isBusy = busyAssetIds.has(a.id);
+                  const currentTask =
+                    executingQueue && executingQueue.current > 0
+                      ? executingQueue.tasks[executingQueue.current - 1]
+                      : null;
+                  const isExecutingCurrent =
+                    !!currentTask &&
+                    !completedTaskIds.has(currentTask.id) &&
+                    currentTask.assetId === a.id;
+                  const bounce = groupBounceStateById[a.id] ?? 'idle';
+                  const motionClass =
+                    bounce === 'up'
+                      ? '-translate-y-0.5 -rotate-[0.6deg] scale-[0.985]'
+                      : bounce === 'down'
+                      ? 'translate-y-0.5 rotate-[0.6deg] scale-[0.985]'
+                      : '';
+                  const busyClass = isBusy ? 'pointer-events-none' : '';
+
+                  return (
+                    <div key={a.id} className="break-inside-avoid mb-6 relative">
                       {a.cutImageGroup?.length && (
-                        <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg text-[8px] font-black bg-blue-600/90">
-                          {a.groupKind === 'manual' ? '组' : '切割'} {a.cutImageGroup.length}
-                        </span>
+                        <>
+                          <div className="absolute inset-0 rounded-2xl bg-black/40 border border-blue-500/40 translate-x-[16px] translate-y-[16px] -rotate-3 opacity-70 shadow-xl shadow-black/60 pointer-events-none" />
+                          <div className="absolute inset-0 rounded-2xl bg-black/60 border border-blue-400/70 translate-x-[8px] translate-y-[8px] rotate-1 opacity-90 shadow-xl shadow-black/80 pointer-events-none" />
+                        </>
                       )}
-                      {!showArchived && (
-                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-end justify-center gap-1 p-2">
-                          <button
-                            onClick={(e) => { e.stopPropagation(); setDisplayKey(a.id, 'original'); }}
-                            className={`px-2 py-1 rounded text-[8px] font-black uppercase ${a.displayKey === 'original' ? 'bg-blue-600' : 'bg-white/20 hover:bg-white/30'}`}
-                          >
-                            原始
-                          </button>
-                          {(a.resultOrder || []).map((k) => {
-                            if (baseActionId(k) === 'cut_image') return null;
-                            const mod = getModule(baseActionId(k));
-                            const label = mod?.label ?? baseActionId(k);
-                            if (!a.results[k]) return null;
-                            return (
+                      <div
+                        data-workflow-card
+                        ref={(el) => {
+                          if (el) cardRefs.current.set(a.id, el);
+                          else cardRefs.current.delete(a.id);
+                        }}
+                        className={`group relative rounded-2xl border overflow-hidden bg-black/40 ${
+                          selectedAssetIds.has(a.id)
+                            ? 'border-blue-500 ring-2 ring-blue-500/50'
+                            : dragOverAssetId === a.id
+                            ? a.cutImageGroup?.length
+                              ? 'border-blue-400 ring-2 ring-blue-400/60'
+                              : 'border-blue-500 ring-2 ring-blue-500/50'
+                            : a.cutImageGroup?.length
+                            ? 'border-blue-400'
+                            : 'border-white/10'
+                        } ${busyClass} transition-transform duration-150 ease-out will-change-transform ${motionClass}`}
+                        draggable={!showArchived && !isBusy}
+                        onDragStart={() => {
+                          if (showArchived || isBusy) return;
+                          const ids =
+                            selectedAssetIds.has(a.id) && selectedAssetIds.size > 0
+                              ? Array.from(selectedAssetIds)
+                              : [a.id];
+                          setDraggingAssetIds(ids);
+                        }}
+                        onDragEnd={() => {
+                          setDraggingAssetIds(null);
+                          setDragOverAction(null);
+                          setDragOverAssetId(null);
+                        }}
+                        onDragOver={(e) => {
+                          if (!draggingAssetIds?.length || isBusy) return;
+                          e.preventDefault();
+                          setDragOverAssetId(a.id);
+                        }}
+                        onDragLeave={(e) => {
+                          e.preventDefault();
+                          if (dragOverAssetId === a.id) setDragOverAssetId(null);
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          if (!draggingAssetIds?.length || isBusy) {
+                            setDragOverAssetId(null);
+                            return;
+                          }
+                          const dragIds = Array.from(
+                            new Set(draggingAssetIds.filter((id) => id !== a.id))
+                          );
+                          if (dragIds.length > 0) {
+                            if (a.cutImageGroup?.length) {
+                              setAssets((prev) => {
+                                const next = prev.map((asset) => {
+                                  if (asset.id === a.id) {
+                                    const groupItems = [...(asset.cutImageGroup ?? [])];
+                                    dragIds.forEach((id) => {
+                                      groupItems.push({ assetId: id });
+                                    });
+                                    return { ...asset, cutImageGroup: groupItems };
+                                  }
+                                  if (dragIds.includes(asset.id)) {
+                                    return { ...asset, parentAssetId: a.id };
+                                  }
+                                  if (asset.cutImageGroup?.length) {
+                                    const filtered = asset.cutImageGroup.filter(
+                                      (x) =>
+                                        !(
+                                          typeof x === 'object' &&
+                                          x &&
+                                          'assetId' in x &&
+                                          dragIds.includes((x as { assetId: string }).assetId)
+                                        )
+                                    );
+                                    if (filtered.length !== asset.cutImageGroup.length) {
+                                      return {
+                                        ...asset,
+                                        cutImageGroup: filtered.length ? filtered : undefined,
+                                      };
+                                    }
+                                  }
+                                  return asset;
+                                });
+                                return next;
+                              });
+                            } else {
+                              const members = Array.from(new Set([...dragIds, a.id]));
+                              if (members.length > 1) {
+                                createGroupFromAssets(members);
+                              }
+                            }
+                          }
+                          setDragOverAssetId(null);
+                          setDraggingAssetIds(null);
+                        }}
+                      >
+                        <div
+                          className="relative cursor-pointer"
+                          {...((!isBusy && !showArchived && (getDisplayKeysForAsset(a).length > 1 || (a.cutImageGroup?.length ?? 0) > 1))
+                            ? { 'data-prevent-wheel-scroll': '' }
+                            : {})}
+                          onClick={() => {
+                            if (showArchived) {
+                              setArchivedDetailAssetId(a.id);
+                            } else if (a.cutImageGroup?.length) {
+                              setViewStack([{ assetId: a.id }]);
+                            } else {
+                              setLightboxAssetId(a.id);
+                            }
+                          }}
+                          onWheel={(e) => {
+                            if (isBusy) return;
+                            e.preventDefault();
+                            e.stopPropagation();
+                            if (showArchived) return;
+                            if (a.cutImageGroup?.length) {
+                              if (!a.cutImageGroup.length) return;
+                              const delta = e.deltaY > 0 ? 1 : -1;
+                              setGroupPreviewIndexById((prev) => {
+                                const current = prev[a.id] ?? 0;
+                                const len = a.cutImageGroup ? a.cutImageGroup.length : 1;
+                                const next = ((current + delta) % len + len) % len;
+                                return { ...prev, [a.id]: next };
+                              });
+                              const direction: 'up' | 'down' = e.deltaY > 0 ? 'down' : 'up';
+                              const assetId = a.id;
+                              setGroupBounceStateById((prev) => ({ ...prev, [assetId]: direction }));
+                              window.setTimeout(() => {
+                                setGroupBounceStateById((prev) => ({ ...prev, [assetId]: 'idle' }));
+                              }, 180);
+                              return;
+                            }
+                            if (getDisplayKeysForAsset(a).length <= 1) return;
+                            cycleDisplayKey(a.id, e.deltaY);
+                          }}
+                        >
+                          <div className="relative w-full max-h-[360px] overflow-hidden">
+                            <div
+                              className="w-full"
+                              style={{ paddingBottom: `${(assetAspectById[a.id] ?? 1) * 100}%` }}
+                            />
+                            <img
+                              src={(() => {
+                                if (!a.cutImageGroup?.length) return getAssetDisplayImage(a);
+                                const groupItems = a.cutImageGroup;
+                                const len = groupItems.length;
+                                const rawIndex = groupPreviewIndexById[a.id] ?? 0;
+                                const safeIndex = len ? ((rawIndex % len) + len) % len : 0;
+                                const item = groupItems[safeIndex] ?? groupItems[0];
+                                if (typeof item === 'string') return item;
+                                const child = assets.find((x) => x.id === item.assetId);
+                                return child ? getAssetDisplayImage(child) : getAssetDisplayImage(a);
+                              })()}
+                              alt=""
+                              className="absolute inset-0 w-full h-full object-cover block"
+                              onLoad={(e) => {
+                                setAssetAspectById((prev) => {
+                                  if (prev[a.id]) return prev;
+                                  const img = e.currentTarget as HTMLImageElement | null;
+                                  if (!img || !img.naturalWidth || !img.naturalHeight) return prev;
+                                  const ratio = img.naturalHeight / img.naturalWidth;
+                                  return { ...prev, [a.id]: ratio };
+                                });
+                              }}
+                            />
+                          </div>
+                          {isBusy && (
+                            <div className="absolute inset-0 z-10 bg-black/40 flex items-center justify-center pointer-events-none">
+                              <div
+                                className={`h-7 w-7 rounded-full border-[3px] ${
+                                  isExecutingCurrent
+                                    ? 'border-blue-400 border-t-transparent animate-spin'
+                                    : 'border-white/30 border-t-transparent'
+                                }`}
+                              />
+                            </div>
+                          )}
+                          {assetErrors.has(a.id) && (
+                            <span className="absolute top-2 left-2 px-2 py-0.5 rounded-lg bg-red-600/90 text-[8px] font-black text-white">
+                              执行出错
+                            </span>
+                          )}
+                          {a.cutImageGroup?.length && (
+                            <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg text-[8px] font-black bg-blue-600/90">
+                              {a.groupKind === 'manual' ? '组' : '切割'} {a.cutImageGroup.length}
+                            </span>
+                          )}
+                          {!showArchived && (
+                            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-end justify-center gap-1 p-2">
                               <button
-                                key={k}
-                                onClick={(e) => { e.stopPropagation(); setDisplayKey(a.id, k); }}
-                                className={`px-2 py-1 rounded text-[8px] font-black uppercase ${a.displayKey === k ? 'bg-blue-600' : 'bg-white/20 hover:bg-white/30'}`}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setDisplayKey(a.id, 'original');
+                                }}
+                                className={`px-2 py-1 rounded text-[8px] font-black uppercase ${
+                                  a.displayKey === 'original'
+                                    ? 'bg-blue-600'
+                                    : 'bg-white/20 hover:bg-white/30'
+                                }`}
                               >
-                                {label}
+                                原始
                               </button>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-                    {!showArchived && (
-                      <div className="p-2 flex flex-col gap-1.5 border-t border-white/5 bg-black/90">
-                        <span className="text-[7px] text-gray-500 leading-snug line-clamp-2 max-w-full">
-                          拖到功能区 或 点击大图选操作 · 有切割组时点击大图进入组内
-                        </span>
-                        <div className="flex gap-1 flex-wrap items-center justify-end">
-                          {a.displayKey !== 'original' && (
-                            <button
-                              onClick={() => discardResult(a.id, a.displayKey)}
-                              className="px-1.5 py-0.5 rounded text-[7px] text-red-400 hover:bg-red-500/20"
-                              title="丢弃当前显示的版本"
-                            >
-                              丢弃当前版本
-                            </button>
+                              {(a.resultOrder || []).map((k) => {
+                                if (baseActionId(k) === 'cut_image') return null;
+                                const mod = getModule(baseActionId(k));
+                                const label = mod?.label ?? baseActionId(k);
+                                if (!a.results[k]) return null;
+                                return (
+                                  <button
+                                    key={k}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setDisplayKey(a.id, k);
+                                    }}
+                                    className={`px-2 py-1 rounded text-[8px] font-black uppercase ${
+                                      a.displayKey === k
+                                        ? 'bg-blue-600'
+                                        : 'bg-white/20 hover:bg-white/30'
+                                    }`}
+                                  >
+                                    {label}
+                                  </button>
+                                );
+                              })}
+                            </div>
                           )}
                         </div>
+                        {!showArchived && (
+                          <div className="p-2 flex flex-col gap-1.5 border-t border-white/5 bg-black/90">
+                            <span className="text-[7px] text-gray-500 leading-snug line-clamp-2 max-w-full">
+                              拖到功能区 或 点击大图选操作 · 有切割组时点击大图进入组内
+                            </span>
+                            <div className="flex gap-1 flex-wrap items-center justify-end">
+                              {a.displayKey !== 'original' && (
+                                <button
+                                  onClick={() => discardResult(a.id, a.displayKey)}
+                                  className="px-1.5 py-0.5 rounded text-[7px] text-red-400 hover:bg-red-500/20"
+                                  title="丢弃当前显示的版本"
+                                >
+                                  丢弃当前版本
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
-                      );
-                    })()}
-                  </div>
-                ))}
+                    </div>
+                  );
+                })}
               </div>
               {/* 根级视图下的提示与空状态 */}
               {visibleAssets.length === 0 && (
@@ -2202,9 +2352,96 @@ const WorkflowSection: React.FC<{
 
         {/* 功能区：全部来自「能力」，随能力内增删自动更新 */}
         <div className="w-80 shrink-0 flex flex-col gap-3 overflow-y-auto no-scrollbar">
-          <div className="text-[9px] font-black text-blue-400 uppercase">功能区</div>
-          <p className="text-[8px] text-gray-500">基础能力与复合能力 · 能力中增删会同步到此</p>
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <div className="text-[9px] font-black text-blue-400 uppercase">功能区</div>
+              <p className="text-[8px] text-gray-500">基础能力与复合能力 · 能力中增删会同步到此</p>
+            </div>
+            <button
+              onClick={() => executePending()}
+              disabled={pending.length === 0 || executing}
+              className="px-3 py-1.5 rounded-xl bg-blue-600 text-[9px] font-black uppercase whitespace-nowrap electric-glow disabled:opacity-40"
+            >
+              {executing
+                ? `执行中 ${executingQueue?.current ?? 0}/${executingQueue?.total ?? 0}`
+                : `一键执行（${pending.length}）`}
+            </button>
+          </div>
           <div className="grid grid-cols-2 gap-3">
+          <div
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragOverAction('__group__');
+            }}
+            onDragLeave={() => {
+              if (dragOverAction === '__group__') setDragOverAction(null);
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              if (draggingAssetIds?.length) {
+                createGroupFromAssets(draggingAssetIds);
+              } else if (draggingGroupItems) {
+                const { itemIndexes, groupAssetId } = draggingGroupItems;
+                if (itemIndexes.length === 1) {
+                  createNestedGroupFromGroupItem(groupAssetId, itemIndexes[0]);
+                } else if (itemIndexes.length > 1) {
+                  const { nextAssets, assetIds } = ensureGroupItemsAsAssets(assets, groupAssetId, itemIndexes);
+                  if (assetIds.length > 0) {
+                    const firstAsset = nextAssets.find((a) => a.id === assetIds[0]);
+                    const coverImage = firstAsset ? getAssetDisplayImage(firstAsset, nextAssets) : '';
+                    const newGroupId = uuid();
+                    let updated = nextAssets.map((a) =>
+                      assetIds.includes(a.id) ? { ...a, parentAssetId: newGroupId } : a
+                    );
+                    const groupIdx = updated.findIndex((a) => a.id === groupAssetId);
+                    if (groupIdx !== -1) {
+                      const g = updated[groupIdx];
+                      const items = [...(g.cutImageGroup ?? [])];
+                      const sorted = [...itemIndexes]
+                        .filter((i) => i >= 0 && i < items.length)
+                        .sort((a, b) => a - b);
+                      const keep: typeof items = [];
+                      items.forEach((it, idx) => {
+                        if (!sorted.includes(idx)) keep.push(it);
+                      });
+                      const insertPos = sorted.length ? sorted[0] : keep.length;
+                      const withGroup = [...keep];
+                      withGroup.splice(insertPos, 0, { assetId: newGroupId });
+                      updated = updated.map((a, idx) =>
+                        idx === groupIdx ? { ...a, cutImageGroup: withGroup } : a
+                      );
+                    }
+                    const newGroup: WorkflowAsset = {
+                      id: newGroupId,
+                      original: coverImage,
+                      displayKey: 'original',
+                      results: {},
+                      resultOrder: [],
+                      cutImageGroup: assetIds.map((id) => ({ assetId: id })),
+                      groupKind: 'manual',
+                      archived: false,
+                      hiddenInGrid: false,
+                      createdAt: Date.now(),
+                      parentAssetId: groupAssetId,
+                    };
+                    setAssets([...updated, newGroup]);
+                    setSelectedGroupItemKeys(new Set());
+                  }
+                }
+              }
+              setDragOverAction(null);
+              setDraggingAssetIds(null);
+              setDraggingGroupItems(null);
+            }}
+            className={`rounded-xl border-2 border-dashed p-3 min-h-[64px] flex flex-col items-center justify-center text-center transition-colors ${
+              dragOverAction === '__group__'
+                ? 'border-violet-500 bg-violet-500/10'
+                : 'border-violet-400/40 bg-violet-500/5 hover:border-violet-400/60'
+            }`}
+          >
+            <span className="text-[9px] font-black uppercase text-violet-300">组</span>
+            <span className="text-[8px] text-violet-400/80 mt-0.5">将选中图片拖入建组（组内同效）</span>
+          </div>
           <div
             onDragOver={(e) => {
               if (!viewStack.length || !draggingGroupItems) return;
@@ -2285,57 +2522,6 @@ const WorkflowSection: React.FC<{
               const fromGroup = !!draggingGroupItems?.itemIndexes?.length && !showArchived;
               if (!fromRoot && !fromGroup) return;
               e.preventDefault();
-              setDragOverAction('__archive__');
-            }}
-            onDragLeave={() => {
-              if (dragOverAction === '__archive__') setDragOverAction(null);
-            }}
-            onDrop={(e) => {
-              e.preventDefault();
-              if (dragOverAction !== '__archive__') {
-                setDragOverAction(null);
-                setDraggingAssetIds(null);
-                setDraggingGroupItems(null);
-                return;
-              }
-              if (draggingAssetIds?.length) {
-                draggingAssetIds.forEach((id) => markArchived(id));
-              } else if (draggingGroupItems) {
-                const { nextAssets, assetIds } = ensureGroupItemsAsAssets(
-                  assets,
-                  draggingGroupItems.groupAssetId,
-                  draggingGroupItems.itemIndexes
-                );
-                if (assetIds.length > 0) {
-                  const afterRemove = removeGroupItems(
-                    nextAssets,
-                    draggingGroupItems.groupAssetId,
-                    draggingGroupItems.itemIndexes
-                  );
-                  setAssets(afterRemove);
-                  assetIds.forEach((id) => markArchived(id));
-                  setSelectedGroupItemKeys(new Set());
-                }
-              }
-              setDragOverAction(null);
-              setDraggingAssetIds(null);
-              setDraggingGroupItems(null);
-            }}
-            className={`rounded-xl border-2 border-dashed p-3 min-h-[64px] flex flex-col items-center justify-center text-center transition-colors ${
-              dragOverAction === '__archive__'
-                ? 'border-emerald-500 bg-emerald-500/10'
-                : 'border-emerald-400/40 bg-emerald-500/5 hover:border-emerald-400/60'
-            }`}
-          >
-            <span className="text-[9px] font-black uppercase text-emerald-300">归档</span>
-            <span className="text-[8px] text-emerald-400/80 mt-0.5">将图片拖到此处标记为已完成（组内同效）</span>
-          </div>
-          <div
-            onDragOver={(e) => {
-              const fromRoot = draggingAssetIds?.length && !showArchived;
-              const fromGroup = !!draggingGroupItems?.itemIndexes?.length && !showArchived;
-              if (!fromRoot && !fromGroup) return;
-              e.preventDefault();
               setDragOverAction('__delete__');
             }}
             onDragLeave={() => {
@@ -2383,79 +2569,55 @@ const WorkflowSection: React.FC<{
           </div>
           <div
             onDragOver={(e) => {
+              const fromRoot = draggingAssetIds?.length && !showArchived;
+              const fromGroup = !!draggingGroupItems?.itemIndexes?.length && !showArchived;
+              if (!fromRoot && !fromGroup) return;
               e.preventDefault();
-              setDragOverAction('__group__');
+              setDragOverAction('__archive__');
             }}
             onDragLeave={() => {
-              if (dragOverAction === '__group__') setDragOverAction(null);
+              if (dragOverAction === '__archive__') setDragOverAction(null);
             }}
             onDrop={(e) => {
               e.preventDefault();
+              if (dragOverAction !== '__archive__') {
+                setDragOverAction(null);
+                setDraggingAssetIds(null);
+                setDraggingGroupItems(null);
+                return;
+              }
               if (draggingAssetIds?.length) {
-                createGroupFromAssets(draggingAssetIds);
+                draggingAssetIds.forEach((id) => markArchived(id));
               } else if (draggingGroupItems) {
-                const { itemIndexes, groupAssetId } = draggingGroupItems;
-                if (itemIndexes.length === 1) {
-                  createNestedGroupFromGroupItem(groupAssetId, itemIndexes[0]);
-                } else if (itemIndexes.length > 1) {
-                  const { nextAssets, assetIds } = ensureGroupItemsAsAssets(assets, groupAssetId, itemIndexes);
-                  if (assetIds.length > 0) {
-                    const firstAsset = nextAssets.find((a) => a.id === assetIds[0]);
-                    const coverImage = firstAsset ? getAssetDisplayImage(firstAsset, nextAssets) : '';
-                    const newGroupId = uuid();
-                    let updated = nextAssets.map((a) =>
-                      assetIds.includes(a.id) ? { ...a, parentAssetId: newGroupId } : a
-                    );
-                    const groupIdx = updated.findIndex((a) => a.id === groupAssetId);
-                    if (groupIdx !== -1) {
-                      const g = updated[groupIdx];
-                      const items = [...(g.cutImageGroup ?? [])];
-                      const sorted = [...itemIndexes]
-                        .filter((i) => i >= 0 && i < items.length)
-                        .sort((a, b) => a - b);
-                      const keep: typeof items = [];
-                      items.forEach((it, idx) => {
-                        if (!sorted.includes(idx)) keep.push(it);
-                      });
-                      const insertPos = sorted.length ? sorted[0] : keep.length;
-                      const withGroup = [...keep];
-                      withGroup.splice(insertPos, 0, { assetId: newGroupId });
-                      updated = updated.map((a, idx) =>
-                        idx === groupIdx ? { ...a, cutImageGroup: withGroup } : a
-                      );
-                    }
-                    const newGroup: WorkflowAsset = {
-                      id: newGroupId,
-                      original: coverImage,
-                      displayKey: 'original',
-                      results: {},
-                      resultOrder: [],
-                      cutImageGroup: assetIds.map((id) => ({ assetId: id })),
-                      groupKind: 'manual',
-                      archived: false,
-                      hiddenInGrid: false,
-                      createdAt: Date.now(),
-                      parentAssetId: groupAssetId,
-                    };
-                    setAssets([...updated, newGroup]);
-                    setSelectedGroupItemKeys(new Set());
-                  }
+                const { nextAssets, assetIds } = ensureGroupItemsAsAssets(
+                  assets,
+                  draggingGroupItems.groupAssetId,
+                  draggingGroupItems.itemIndexes
+                );
+                if (assetIds.length > 0) {
+                  const afterRemove = removeGroupItems(
+                    nextAssets,
+                    draggingGroupItems.groupAssetId,
+                    draggingGroupItems.itemIndexes
+                  );
+                  setAssets(afterRemove);
+                  assetIds.forEach((id) => markArchived(id));
+                  setSelectedGroupItemKeys(new Set());
                 }
               }
               setDragOverAction(null);
               setDraggingAssetIds(null);
               setDraggingGroupItems(null);
             }}
-            className={`rounded-xl border-2 border-dashed p-3 min-h-[64px] flex flex-col items-center justify-center text-center transition-colors ${
-              dragOverAction === '__group__'
-                ? 'border-violet-500 bg-violet-500/10'
-                : 'border-violet-400/40 bg-violet-500/5 hover:border-violet-400/60'
+            className={`rounded-xl border-2 border-dashed p-3 min-h-[64px] flex flex-col items-center justify-center text-center transition-colors col-span-2 ${
+              dragOverAction === '__archive__'
+                ? 'border-emerald-500 bg-emerald-500/10'
+                : 'border-emerald-400/40 bg-emerald-500/5 hover:border-emerald-400/60'
             }`}
           >
-            <span className="text-[9px] font-black uppercase text-violet-300">组</span>
-            <span className="text-[8px] text-violet-400/80 mt-0.5">将选中图片拖入建组（组内同效）</span>
+            <span className="text-[9px] font-black uppercase text-emerald-300">归档</span>
+            <span className="text-[8px] text-emerald-400/80 mt-0.5">将图片拖到此处标记为已完成（组内同效）</span>
           </div>
-          <div />
           </div>
           {presets.length === 0 && capabilitySets.length === 0 && (
             <div className="rounded-xl border border-dashed border-white/20 p-4 text-center text-[9px] text-gray-500">
@@ -2473,80 +2635,131 @@ const WorkflowSection: React.FC<{
                     {list.map((mod) => (
                       <div
                         key={mod.id}
-                        onDragOver={(e) => {
-                          e.preventDefault();
-                          setDragOverAction(mod.id);
-                        }}
-                        onDragLeave={() => setDragOverAction(null)}
-                        onDrop={(e) => {
-                          e.preventDefault();
-                          setDragOverAction(null);
-
-                          // 从根级拖拽资产
-                          if (draggingAssetIds?.length) {
-                            const effectiveIds = getEffectiveAssetIdsForAction(draggingAssetIds);
-                            if (mod.category === 'generate_3d' && onAddGenerate3DJob && draggingAssetId) {
-                              const a = assets.find((x) => x.id === draggingAssetId);
-                              const img = a ? getAssetDisplayImage(a) : null;
-                              if (img) onAddGenerate3DJob(mod, img);
-                              return;
-                            }
-                            effectiveIds.forEach((id) => addToPending(id, mod.id));
-                            return;
-                          }
-
-                          // 从组内拖拽子卡片
-                          if (draggingGroupItems && currentGroupAsset) {
-                            if (mod.category === 'generate_3d' && onAddGenerate3DJob) {
-                              const firstIndex = draggingGroupItems.itemIndexes[0];
-                              const item = currentGroupItems[firstIndex];
-                              let img: string | null = null;
-                              if (typeof item === 'string') {
-                                img = item;
-                              } else {
-                                const child = assets.find((x) => x.id === item.assetId);
-                                if (child) img = getAssetDisplayImage(child);
-                              }
-                              if (img) {
-                                onAddGenerate3DJob(mod, img);
-                              }
-                              return;
-                            }
-
-                            draggingGroupItems.itemIndexes.forEach((itemIndex) => {
-                              const item = currentGroupItems[itemIndex];
-                              if (!item) return;
-                              if (typeof item === 'string') {
-                                addImageToPending(item, mod.id, {
-                                  parentAssetId: currentGroupAsset.id,
-                                  sourceGroupAssetId: currentGroupAsset.id,
-                                  sourceItemIndex: itemIndex,
-                                });
-                              } else {
-                                const child = assets.find((x) => x.id === (item as { assetId: string }).assetId);
-                                const inputImage = child ? getAssetDisplayImage(child) : '';
-                                setPending((prev) => [
-                                  ...prev,
-                                  {
-                                    id: uuid(),
-                                    assetId: (item as { assetId: string }).assetId,
-                                    actionType: mod.id,
-                                    inputImage,
-                                    addedAt: Date.now(),
-                                    sourceGroupAssetId: currentGroupAsset.id,
-                                    sourceItemIndex: itemIndex,
-                                  },
-                                ]);
-                              }
-                            });
-                          }
-                        }}
-                        className={`rounded-xl border-2 border-dashed p-3 min-h-[72px] flex flex-col items-center justify-center text-center transition-colors ${
-                          dragOverAction === mod.id ? 'border-blue-500 bg-blue-500/10' : 'border-white/20 bg-white/5 hover:border-white/30'
+                        className={`rounded-xl border-2 border-dashed min-h-[72px] flex transition-colors ${
+                          dragOverAction === mod.id || dragOverAction === mod.id + '__tweak'
+                            ? 'border-blue-500 bg-blue-500/10'
+                            : 'border-white/20 bg-white/5 hover:border-white/30'
                         }`}
                       >
-                        <span className="text-[9px] font-black uppercase">{mod.label}</span>
-                        <span className="text-[8px] text-gray-500 mt-0.5">拖拽图片到此处</span>
+                        <div
+                          className="flex-1 p-3 flex flex-col items-center justify-center text-center min-w-0"
+                          onDragOver={(e) => {
+                            e.preventDefault();
+                            setDragOverAction(mod.id);
+                          }}
+                          onDragLeave={() => setDragOverAction(null)}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            setDragOverAction(null);
+                            if (draggingAssetIds?.length) {
+                              const effectiveIds = getEffectiveAssetIdsForAction(draggingAssetIds);
+                              if (mod.category === 'generate_3d' && onAddGenerate3DJob && draggingAssetId) {
+                                const a = assets.find((x) => x.id === draggingAssetId);
+                                const img = a ? getAssetDisplayImage(a) : null;
+                                if (img) onAddGenerate3DJob(mod, img);
+                                return;
+                              }
+                              effectiveIds.forEach((id) => addToPending(id, mod.id));
+                              return;
+                            }
+                            if (draggingGroupItems && currentGroupAsset) {
+                              if (mod.category === 'generate_3d' && onAddGenerate3DJob) {
+                                const firstIndex = draggingGroupItems.itemIndexes[0];
+                                const item = currentGroupItems[firstIndex];
+                                let img: string | null = null;
+                                if (typeof item === 'string') img = item;
+                                else {
+                                  const child = assets.find((x) => x.id === item.assetId);
+                                  if (child) img = getAssetDisplayImage(child);
+                                }
+                                if (img) onAddGenerate3DJob(mod, img);
+                                return;
+                              }
+                              draggingGroupItems.itemIndexes.forEach((itemIndex) => {
+                                const item = currentGroupItems[itemIndex];
+                                if (!item) return;
+                                if (typeof item === 'string') {
+                                  addImageToPending(item, mod.id, {
+                                    parentAssetId: currentGroupAsset.id,
+                                    sourceGroupAssetId: currentGroupAsset.id,
+                                    sourceItemIndex: itemIndex,
+                                  });
+                                } else {
+                                  const child = assets.find((x) => x.id === (item as { assetId: string }).assetId);
+                                  const inputImage = child ? getAssetDisplayImage(child) : '';
+                                  setPending((prev) => [
+                                    ...prev,
+                                    {
+                                      id: uuid(),
+                                      assetId: (item as { assetId: string }).assetId,
+                                      actionType: mod.id,
+                                      inputImage,
+                                      addedAt: Date.now(),
+                                      sourceGroupAssetId: currentGroupAsset.id,
+                                      sourceItemIndex: itemIndex,
+                                    },
+                                  ]);
+                                }
+                              });
+                            }
+                          }}
+                        >
+                          <span className="text-[9px] font-black uppercase">{mod.label}</span>
+                          <span className="text-[8px] text-gray-500 mt-0.5">拖拽图片到此处</span>
+                        </div>
+                        {mod.category === 'image_gen' && (
+                          <div
+                            className="w-8 shrink-0 flex flex-col items-center justify-center border-l border-white/10 rounded-r-lg bg-white/5 hover:bg-white/10 transition-colors cursor-default"
+                            title="拖到此处可微调提示词后加入队列"
+                            onDragOver={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setDragOverAction(mod.id + '__tweak');
+                            }}
+                            onDragLeave={() => setDragOverAction(null)}
+                            onDrop={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setDragOverAction(null);
+                              const targets: Array<
+                                | { assetId: string; inputImage: string; sourceGroupAssetId?: string; sourceItemIndex?: number }
+                                | { imageBase64: string; parentAssetId: string; sourceGroupAssetId: string; sourceItemIndex: number }
+                              > = [];
+                              if (draggingAssetIds?.length) {
+                                const effectiveIds = getEffectiveAssetIdsForAction(draggingAssetIds);
+                                effectiveIds.forEach((id) => {
+                                  const a = assets.find((x) => x.id === id);
+                                  if (a) targets.push({ assetId: id, inputImage: getAssetDisplayImage(a) });
+                                });
+                              } else if (draggingGroupItems && currentGroupAsset) {
+                                draggingGroupItems.itemIndexes.forEach((itemIndex) => {
+                                  const item = currentGroupItems[itemIndex];
+                                  if (!item) return;
+                                  if (typeof item === 'string') {
+                                    targets.push({
+                                      imageBase64: item,
+                                      parentAssetId: currentGroupAsset.id,
+                                      sourceGroupAssetId: currentGroupAsset.id,
+                                      sourceItemIndex: itemIndex,
+                                    });
+                                  } else {
+                                    const child = assets.find((x) => x.id === (item as { assetId: string }).assetId);
+                                    if (child)
+                                      targets.push({
+                                        assetId: (item as { assetId: string }).assetId,
+                                        inputImage: getAssetDisplayImage(child),
+                                        sourceGroupAssetId: currentGroupAsset.id,
+                                        sourceItemIndex: itemIndex,
+                                      });
+                                  }
+                                });
+                              }
+                              if (targets.length > 0) setPromptTweakModal({ preset: mod, targets });
+                            }}
+                          >
+                            <span className="text-[10px] text-blue-400 font-bold" title="微调提示词">调</span>
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -2558,78 +2771,131 @@ const WorkflowSection: React.FC<{
               {presets.map((mod) => (
                 <div
                   key={mod.id}
-                  onDragOver={(e) => {
-                    e.preventDefault();
-                    setDragOverAction(mod.id);
-                  }}
-                  onDragLeave={() => setDragOverAction(null)}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    setDragOverAction(null);
-
-                    if (draggingAssetIds?.length) {
-                      const effectiveIds = getEffectiveAssetIdsForAction(draggingAssetIds);
-                      if (mod.category === 'generate_3d' && onAddGenerate3DJob && draggingAssetId) {
-                        const a = assets.find((x) => x.id === draggingAssetId);
-                        const img = a ? getAssetDisplayImage(a) : null;
-                        if (img) onAddGenerate3DJob(mod, img);
-                        return;
-                      }
-                      effectiveIds.forEach((id) => addToPending(id, mod.id));
-                      return;
-                    }
-
-                    if (draggingGroupItems && currentGroupAsset) {
-                      if (mod.category === 'generate_3d' && onAddGenerate3DJob) {
-                        const firstIndex = draggingGroupItems.itemIndexes[0];
-                        const item = currentGroupItems[firstIndex];
-                        let img: string | null = null;
-                        if (typeof item === 'string') {
-                          img = item;
-                        } else {
-                          const child = assets.find((x) => x.id === item.assetId);
-                          if (child) img = getAssetDisplayImage(child);
-                        }
-                        if (img) {
-                          onAddGenerate3DJob(mod, img);
-                        }
-                        return;
-                      }
-
-                      draggingGroupItems.itemIndexes.forEach((itemIndex) => {
-                        const item = currentGroupItems[itemIndex];
-                        if (!item) return;
-                        if (typeof item === 'string') {
-                          addImageToPending(item, mod.id, {
-                            parentAssetId: currentGroupAsset.id,
-                            sourceGroupAssetId: currentGroupAsset.id,
-                            sourceItemIndex: itemIndex,
-                          });
-                        } else {
-                          const child = assets.find((x) => x.id === (item as { assetId: string }).assetId);
-                          const inputImage = child ? getAssetDisplayImage(child) : '';
-                          setPending((prev) => [
-                            ...prev,
-                            {
-                              id: uuid(),
-                              assetId: (item as { assetId: string }).assetId,
-                              actionType: mod.id,
-                              inputImage,
-                              addedAt: Date.now(),
-                              sourceGroupAssetId: currentGroupAsset.id,
-                              sourceItemIndex: itemIndex,
-                            },
-                          ]);
-                        }
-                      });
-                    }
-                  }}
-                  className={`rounded-xl border-2 border-dashed p-3 min-h-[72px] flex flex-col items-center justify-center text-center transition-colors ${
-                    dragOverAction === mod.id ? 'border-blue-500 bg-blue-500/10' : 'border-white/20 bg-white/5 hover:border-white/30'
+                  className={`rounded-xl border-2 border-dashed min-h-[72px] flex transition-colors ${
+                    dragOverAction === mod.id || dragOverAction === mod.id + '__tweak'
+                      ? 'border-blue-500 bg-blue-500/10'
+                      : 'border-white/20 bg-white/5 hover:border-white/30'
                   }`}
                 >
-                  <span className="text-[9px] font-black uppercase">{mod.label}</span>
-                  <span className="text-[8px] text-gray-500 mt-0.5">拖拽图片到此处</span>
+                  <div
+                    className="flex-1 p-3 flex flex-col items-center justify-center text-center min-w-0"
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      setDragOverAction(mod.id);
+                    }}
+                    onDragLeave={() => setDragOverAction(null)}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      setDragOverAction(null);
+                      if (draggingAssetIds?.length) {
+                        const effectiveIds = getEffectiveAssetIdsForAction(draggingAssetIds);
+                        if (mod.category === 'generate_3d' && onAddGenerate3DJob && draggingAssetId) {
+                          const a = assets.find((x) => x.id === draggingAssetId);
+                          const img = a ? getAssetDisplayImage(a) : null;
+                          if (img) onAddGenerate3DJob(mod, img);
+                          return;
+                        }
+                        effectiveIds.forEach((id) => addToPending(id, mod.id));
+                        return;
+                      }
+                      if (draggingGroupItems && currentGroupAsset) {
+                        if (mod.category === 'generate_3d' && onAddGenerate3DJob) {
+                          const firstIndex = draggingGroupItems.itemIndexes[0];
+                          const item = currentGroupItems[firstIndex];
+                          let img: string | null = null;
+                          if (typeof item === 'string') img = item;
+                          else {
+                            const child = assets.find((x) => x.id === item.assetId);
+                            if (child) img = getAssetDisplayImage(child);
+                          }
+                          if (img) onAddGenerate3DJob(mod, img);
+                          return;
+                        }
+                        draggingGroupItems.itemIndexes.forEach((itemIndex) => {
+                          const item = currentGroupItems[itemIndex];
+                          if (!item) return;
+                          if (typeof item === 'string') {
+                            addImageToPending(item, mod.id, {
+                              parentAssetId: currentGroupAsset.id,
+                              sourceGroupAssetId: currentGroupAsset.id,
+                              sourceItemIndex: itemIndex,
+                            });
+                          } else {
+                            const child = assets.find((x) => x.id === (item as { assetId: string }).assetId);
+                            const inputImage = child ? getAssetDisplayImage(child) : '';
+                            setPending((prev) => [
+                              ...prev,
+                              {
+                                id: uuid(),
+                                assetId: (item as { assetId: string }).assetId,
+                                actionType: mod.id,
+                                inputImage,
+                                addedAt: Date.now(),
+                                sourceGroupAssetId: currentGroupAsset.id,
+                                sourceItemIndex: itemIndex,
+                              },
+                            ]);
+                          }
+                        });
+                      }
+                    }}
+                  >
+                    <span className="text-[9px] font-black uppercase">{mod.label}</span>
+                    <span className="text-[8px] text-gray-500 mt-0.5">拖拽图片到此处</span>
+                  </div>
+                  {mod.category === 'image_gen' && (
+                    <div
+                      className="w-8 shrink-0 flex flex-col items-center justify-center border-l border-white/10 rounded-r-lg bg-white/5 hover:bg-white/10 transition-colors cursor-default"
+                      title="拖到此处可微调提示词后加入队列"
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setDragOverAction(mod.id + '__tweak');
+                      }}
+                      onDragLeave={() => setDragOverAction(null)}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setDragOverAction(null);
+                        const targets: Array<
+                          | { assetId: string; inputImage: string; sourceGroupAssetId?: string; sourceItemIndex?: number }
+                          | { imageBase64: string; parentAssetId: string; sourceGroupAssetId: string; sourceItemIndex: number }
+                        > = [];
+                        if (draggingAssetIds?.length) {
+                          const effectiveIds = getEffectiveAssetIdsForAction(draggingAssetIds);
+                          effectiveIds.forEach((id) => {
+                            const a = assets.find((x) => x.id === id);
+                            if (a) targets.push({ assetId: id, inputImage: getAssetDisplayImage(a) });
+                          });
+                        } else if (draggingGroupItems && currentGroupAsset) {
+                          draggingGroupItems.itemIndexes.forEach((itemIndex) => {
+                            const item = currentGroupItems[itemIndex];
+                            if (!item) return;
+                            if (typeof item === 'string') {
+                              targets.push({
+                                imageBase64: item,
+                                parentAssetId: currentGroupAsset.id,
+                                sourceGroupAssetId: currentGroupAsset.id,
+                                sourceItemIndex: itemIndex,
+                              });
+                            } else {
+                              const child = assets.find((x) => x.id === (item as { assetId: string }).assetId);
+                              if (child)
+                                targets.push({
+                                  assetId: (item as { assetId: string }).assetId,
+                                  inputImage: getAssetDisplayImage(child),
+                                  sourceGroupAssetId: currentGroupAsset.id,
+                                  sourceItemIndex: itemIndex,
+                                });
+                            }
+                          });
+                        }
+                        if (targets.length > 0) setPromptTweakModal({ preset: mod, targets });
+                      }}
+                    >
+                      <span className="text-[10px] text-blue-400 font-bold" title="微调提示词">调</span>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -2705,51 +2971,6 @@ const WorkflowSection: React.FC<{
             </div>
           )}
 
-          <div className="border-t border-white/10 pt-4">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-[9px] font-black text-gray-500 uppercase">执行队列</span>
-              {executingQueue && (
-                <span className="text-[8px] font-black text-blue-400 uppercase">执行中 {executingQueue.current}/{executingQueue.total}</span>
-              )}
-            </div>
-            <div className="flex flex-wrap gap-2 min-h-[60px] p-2 rounded-xl bg-black/40 border border-white/10">
-              {(executingQueue ? [...executingQueue.tasks, ...pending] : pending).map((t, idx) => {
-                const actionLabel = getActionLabel(t.actionType);
-                const isCompleted = completedTaskIds.has(t.id);
-                const isCurrent = executingQueue && !isCompleted && executingQueue.tasks[executingQueue.current - 1]?.id === t.id;
-                const isCancelable = !executing || pending.some((p) => p.id === t.id);
-                const displayIndex = executingQueue ? executingQueue.tasks.indexOf(t) + 1 : idx + 1;
-                return (
-                  <div
-                    key={t.id}
-                    className={`relative group/thumb rounded-lg border-2 transition-colors ${isCurrent ? 'border-blue-500 ring-2 ring-blue-500/30' : isCompleted ? 'border-white/5 opacity-60' : 'border-white/10'}`}
-                  >
-                    <img src={t.inputImage} alt="" className="w-14 h-14 object-cover rounded-md" />
-                    <span className="absolute -top-1 left-0 px-1 rounded text-[7px] font-black bg-gray-800 text-gray-300">{executingQueue ? displayIndex : idx + 1}</span>
-                    <span className="absolute -top-1 -right-1 px-1 rounded text-[7px] font-black bg-blue-600 text-white">{actionLabel.slice(0, 2)}</span>
-                    {isCompleted && (
-                      <span className="absolute bottom-0 right-0 w-5 h-5 flex items-center justify-center rounded-bl-md bg-emerald-600/90 text-white text-[10px]" aria-hidden>✓</span>
-                    )}
-                    {isCancelable && (
-                      <button
-                        onClick={() => removeFromPending(t.id)}
-                        className="absolute inset-0 rounded-lg bg-black/60 opacity-0 group-hover/thumb:opacity-100 flex items-center justify-center text-red-400 text-[10px] font-black"
-                      >
-                        移除
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-            <button
-              onClick={() => executePending()}
-              disabled={pending.length === 0 || executing}
-              className="mt-2 w-full py-2.5 rounded-xl bg-blue-600 text-[10px] font-black uppercase electric-glow disabled:opacity-40"
-            >
-              {executing ? `执行中 ${executingQueue?.current ?? 0}/${executingQueue?.total ?? 0}` : `一键执行（${pending.length}）`}
-            </button>
-          </div>
         </div>
       </div>
 
@@ -2853,6 +3074,45 @@ const WorkflowSection: React.FC<{
             setPending(cutSelectState.remaining);
             setAssets((prev) => prev.map((a) => (a.id === task.assetId ? { ...a, hiddenInGrid: false } : a)));
             setExecuting(false);
+          }}
+        />
+      )}
+      {promptTweakModal && (
+        <PromptTweakModal
+          preset={promptTweakModal.preset}
+          targets={promptTweakModal.targets}
+          onConfirm={(editedPrompt) => {
+            const trimmed = editedPrompt.trim();
+            const tasks: WorkflowPendingTask[] = [];
+            for (const t of promptTweakModal.targets) {
+              if ('assetId' in t) {
+                tasks.push({
+                  id: uuid(),
+                  assetId: t.assetId,
+                  actionType: promptTweakModal.preset.id,
+                  inputImage: t.inputImage,
+                  addedAt: Date.now(),
+                  ...(trimmed ? { promptOverride: trimmed } : {}),
+                  ...(t.sourceGroupAssetId != null ? { sourceGroupAssetId: t.sourceGroupAssetId, sourceItemIndex: t.sourceItemIndex } : {}),
+                });
+              } else {
+                addImageToPending(t.imageBase64, promptTweakModal.preset.id, {
+                  parentAssetId: t.parentAssetId,
+                  sourceGroupAssetId: t.sourceGroupAssetId,
+                  sourceItemIndex: t.sourceItemIndex,
+                  ...(trimmed ? { promptOverride: trimmed } : {}),
+                });
+              }
+            }
+            if (tasks.length > 0) addTasksToPending(tasks);
+            setPromptTweakModal(null);
+            setDraggingAssetIds(null);
+            setDraggingGroupItems(null);
+          }}
+          onCancel={() => {
+            setPromptTweakModal(null);
+            setDraggingAssetIds(null);
+            setDraggingGroupItems(null);
           }}
         />
       )}
