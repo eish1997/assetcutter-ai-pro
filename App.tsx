@@ -36,6 +36,7 @@ const GenerateTextureSection = React.lazy(() => import('./components/GenerateTex
 const HomeSection = React.lazy(() => import('./components/HomeSection'));
 const SiteAssistant = React.lazy(() => import('./components/SiteAssistant'));
 const SettingsSection = React.lazy(() => import('./components/SettingsSection'));
+const AdminPasswordGate = React.lazy(() => import('./components/admin/AdminPasswordGate.js'));
 const AdminLayout = React.lazy(() => import('./components/admin/AdminLayout.js'));
 const AdminDashboard = React.lazy(() => import('./components/admin/AdminDashboard.js'));
 const AdminJobList = React.lazy(() => import('./components/admin/AdminJobList.js'));
@@ -477,7 +478,13 @@ const LibraryPickerModal: React.FC<{
 const App: React.FC = () => {
   const pathname = typeof window !== 'undefined' ? window.location.pathname : '/';
   if (pathname.startsWith('/admin')) {
-    return <AdminAppShell />;
+    return (
+      <Suspense fallback={<div className="min-h-screen bg-[#050505] flex items-center justify-center text-[11px] text-gray-500">加载中…</div>}>
+        <AdminPasswordGate>
+          <AdminAppShell />
+        </AdminPasswordGate>
+      </Suspense>
+    );
   }
 
   const [mode, setMode] = useState<AppMode>(AppMode.HOME);
