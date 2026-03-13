@@ -1,8 +1,5 @@
 {
-  "//": "Vercel SPA 路由：所有非静态文件路径回落到 index.html，保证 /admin 等前端路由可用",
-  "routes": [
-    { "handle": "filesystem" },
-    { "src": "/.*", "dest": "/" }
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/index.html" }
   ]
 }
-
