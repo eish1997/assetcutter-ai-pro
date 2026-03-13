@@ -351,6 +351,7 @@ export type WorkflowActionModule = {
 };
 
 /** 切割图片组内一项：直接图片 或 引用子资产（套娃） */
+/** 组内一项：应为资产引用；string 仅兼容旧数据，新逻辑一律使用 { assetId } */
 export type WorkflowCutGroupItem = string | { assetId: string };
 
 /** 单个资产：原始图 + 各类型结果图，当前展示版本，是否已归档；归档后可按生成顺序拼流程图 */
@@ -366,6 +367,8 @@ export type WorkflowAsset = {
   cutImageGroup?: WorkflowCutGroupItem[];
   /** 组类型：切割=切割能力生成；manual=用户拖到「组」创建 */
   groupKind?: 'cut' | 'manual';
+  /** 组显示名称，角标显示为「groupLabel + 组内数量」；不设则用 groupKind 的默认名（组/切割） */
+  groupLabel?: string;
   /** 若本资产来自某资产的组内，记录父资产 id（用于 显示全部） */
   parentAssetId?: string;
   /** 生成顺序，用于拼合流程图 */

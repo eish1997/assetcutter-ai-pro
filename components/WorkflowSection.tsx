@@ -1,9 +1,10 @@
-import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useMemo, useRef, useEffect, startTransition } from 'react';
 import { createPortal } from 'react-dom';
 import type { WorkflowAsset, WorkflowPendingTask, CapabilitySet } from '../types';
 import type { CustomAppModule, LibraryItem, WorkflowCutGroupItem } from '../types';
 import type { BoundingBox } from '../types';
 import { CAPABILITY_CATEGORIES } from '../types';
+import { getRandomGroupCodeName } from '../data/groupCodeNames';
 import { detectObjectsInImage, DEFAULT_PROMPTS } from '../services/geminiService';
 import { executeCapability, executeCapabilitySet } from '../services/capabilityExecutor';
 
@@ -584,6 +585,7 @@ const WorkflowSection: React.FC<{
   } | null>(null);
   const [viewStack, setViewStack] = useState<{ assetId: string }[]>([]);
   const [showAllInGroup, setShowAllInGroup] = useState(false);
+  const [groupStringLightboxIndex, setGroupStringLightboxIndex] = useState<number | null>(null);
   const [draggingGroupItems, setDraggingGroupItems] = useState<{ groupAssetId: string; itemIndexes: number[] } | null>(null);
   const [selectedAssetIds, setSelectedAssetIds] = useState<Set<string>>(new Set());
   const [selectedGroupItemKeys, setSelectedGroupItemKeys] = useState<Set<string>>(new Set());
@@ -592,6 +594,7 @@ const WorkflowSection: React.FC<{
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const cardRefs = useRef<Map<string, HTMLElement>>(new Map());
   const [dragOverAssetId, setDragOverAssetId] = useState<string | null>(null);
+  const [dragOverGroupItemKey, setDragOverGroupItemKey] = useState<string | null>(null);
   const [assetErrors, setAssetErrors] = useState<Map<string, string>>(new Map());
   const [groupPreviewIndexById, setGroupPreviewIndexById] = useState<Record<string, number>>({});
   const [groupBounceStateById, setGroupBounceStateById] = useState<Record<string, 'idle' | 'up' | 'down'>>({});
@@ -734,21 +737,27 @@ const WorkflowSection: React.FC<{
     );
   }, []);
 
-  const moveGroupItemToUpperLevel = useCallback(
-    (groupAssetId: string, itemIndex: number) => {
+  /** 一次性将组内多个槽位移出到上一级，避免多次 setAssets 导致下标错位 */
+  const moveGroupItemsToUpperLevel = useCallback(
+    (groupAssetId: string, itemIndexes: number[]) => {
+      if (itemIndexes.length === 0) return;
       setAssets((prev) => {
         const list = [...prev];
         const groupIdx = list.findIndex((a) => a.id === groupAssetId);
         if (groupIdx === -1) return prev;
         const group = list[groupIdx];
         const items = group.cutImageGroup ?? [];
-        if (itemIndex < 0 || itemIndex >= items.length) return prev;
-        const item = items[itemIndex];
-        const childId =
-          typeof item === 'object' && item && 'assetId' in item ? (item as { assetId: string }).assetId : null;
-        const nextItems = items.filter((_, i) => i !== itemIndex);
-
+        const indexSet = new Set(itemIndexes);
+        const nextItems = items.filter((_, i) => !indexSet.has(i));
         const parentId = group.parentAssetId;
+
+        const childIds: string[] = [];
+        items.forEach((item, i) => {
+          if (!indexSet.has(i)) return;
+          const childId =
+            typeof item === 'object' && item && 'assetId' in item ? (item as { assetId: string }).assetId : null;
+          if (childId) childIds.push(childId);
+        });
 
         if (nextItems.length === 0) {
           list.splice(groupIdx, 1);
@@ -756,37 +765,43 @@ const WorkflowSection: React.FC<{
           list[groupIdx] = { ...group, cutImageGroup: nextItems };
         }
 
-        if (childId) {
+        childIds.forEach((childId) => {
           const childIdx = list.findIndex((a) => a.id === childId);
-          if (childIdx !== -1) {
-            const child = list[childIdx];
-            if (parentId) {
-              const parentIdx = list.findIndex((a) => a.id === parentId);
-              if (parentIdx !== -1) {
-                const parent = list[parentIdx];
-                const parentItems = [...(parent.cutImageGroup ?? []), { assetId: childId }];
-                list[parentIdx] = { ...parent, cutImageGroup: parentItems };
-                list[childIdx] = { ...child, parentAssetId: parent.id };
-              } else {
-                list[childIdx] = { ...child, parentAssetId: undefined };
-              }
+          if (childIdx === -1) return;
+          const child = list[childIdx];
+          if (parentId) {
+            const parentIdx = list.findIndex((a) => a.id === parentId);
+            if (parentIdx !== -1) {
+              const parent = list[parentIdx];
+              const parentItems = [...(parent.cutImageGroup ?? []), { assetId: childId }];
+              list[parentIdx] = { ...parent, cutImageGroup: parentItems };
+              list[childIdx] = { ...child, parentAssetId: parent.id };
             } else {
               list[childIdx] = { ...child, parentAssetId: undefined };
             }
+          } else {
+            list[childIdx] = { ...child, parentAssetId: undefined };
           }
-        }
+        });
         return list;
       });
       setViewStack((s) => s.filter((x) => x.assetId !== groupAssetId));
       setSelectedGroupItemKeys((prev) => {
         const next = new Set(prev);
         next.forEach((key) => {
-          if (key.startsWith(`${groupAssetId}::`)) next.delete(key);
+          if (String(key).startsWith(`${groupAssetId}::`)) next.delete(key);
         });
         return next;
       });
     },
     [setAssets]
+  );
+
+  const moveGroupItemToUpperLevel = useCallback(
+    (groupAssetId: string, itemIndex: number) => {
+      moveGroupItemsToUpperLevel(groupAssetId, [itemIndex]);
+    },
+    [moveGroupItemsToUpperLevel]
   );
 
   const removeFromGroup = useCallback(
@@ -875,27 +890,44 @@ const WorkflowSection: React.FC<{
           } else {
             setAssetError(task.assetId, null);
           }
-          setAssets((prev) =>
-            prev.map((a) => {
-              if (a.id !== task.assetId) return a;
-              const base = a.original;
-              const group: WorkflowCutGroupItem[] = base ? [base, ...cropped] : cropped;
-              const nextOrder = [...(a.resultOrder || []), task.actionType];
-              const nextMeta = {
-                ...(a.resultMeta || {}),
-                [task.actionType]: { executedAt: Date.now() },
-              };
-            return {
-              ...a,
-              cutImageGroup: group,
-              groupKind: 'cut',
-              resultOrder: nextOrder,
-              resultMeta: nextMeta,
-              displayKey: 'cut_image',
-              hiddenInGrid: a.parentAssetId ? a.hiddenInGrid : false,
+          setAssets((prev) => {
+            const taskAsset = prev.find((x) => x.id === task.assetId);
+            if (!taskAsset) return prev;
+            const base = taskAsset.original;
+            const imagesToAdd: string[] = base ? [base, ...cropped] : cropped;
+            const newAssets: WorkflowAsset[] = imagesToAdd.map((original) => ({
+              id: uuid(),
+              original,
+              displayKey: 'original',
+              results: {},
+              resultOrder: [],
+              archived: false,
+              hiddenInGrid: false,
+              createdAt: Date.now(),
+              parentAssetId: task.assetId,
+            }));
+            const cutImageGroup = newAssets.map((x) => ({ assetId: x.id }));
+            const nextOrder = [...(taskAsset.resultOrder || []), task.actionType];
+            const nextMeta = {
+              ...(taskAsset.resultMeta || {}),
+              [task.actionType]: { executedAt: Date.now() },
             };
-            })
-          );
+            const next = [...prev, ...newAssets];
+            const usedLabels = new Set<string>(prev.map((a) => a.groupLabel).filter((x): x is string => !!x));
+            return next.map((a) => {
+              if (a.id !== task.assetId) return a;
+              return {
+                ...a,
+                cutImageGroup,
+                groupKind: 'cut',
+                groupLabel: getRandomGroupCodeName(usedLabels),
+                resultOrder: nextOrder,
+                resultMeta: nextMeta,
+                displayKey: 'cut_image',
+                hiddenInGrid: a.parentAssetId ? a.hiddenInGrid : false,
+              };
+            });
+          });
           if (task.sourceGroupAssetId != null && task.sourceItemIndex != null) {
             replaceGroupItemWithSubAsset(
               task.sourceGroupAssetId,
@@ -982,23 +1014,38 @@ const WorkflowSection: React.FC<{
         setExecuting(false);
         return;
       }
-      setAssets((prev) =>
-        prev.map((a) => {
+      setAssets((prev) => {
+        const taskAsset = prev.find((x) => x.id === task.assetId);
+        if (!taskAsset) return prev;
+        const base = taskAsset.original;
+        const imagesToAdd: string[] = base ? [base, ...cropped] : cropped;
+        const newAssets: WorkflowAsset[] = imagesToAdd.map((original) => ({
+          id: uuid(),
+          original,
+          displayKey: 'original',
+          results: {},
+          resultOrder: [],
+          archived: false,
+          hiddenInGrid: false,
+          createdAt: Date.now(),
+          parentAssetId: task.assetId,
+        }));
+        const cutImageGroup = newAssets.map((x) => ({ assetId: x.id }));
+        const nextOrder = [...(taskAsset.resultOrder || []), task.actionType];
+        const nextMeta = { ...(taskAsset.resultMeta || {}), [task.actionType]: { executedAt: Date.now() } };
+        const next = [...prev, ...newAssets];
+        return next.map((a) => {
           if (a.id !== task.assetId) return a;
-          const base = a.original;
-          const group: WorkflowCutGroupItem[] = base ? [base, ...cropped] : cropped;
-          const nextOrder = [...(a.resultOrder || []), task.actionType];
-          const nextMeta = { ...(a.resultMeta || {}), [task.actionType]: { executedAt: Date.now() } };
           return {
             ...a,
-            cutImageGroup: group,
+            cutImageGroup,
             resultOrder: nextOrder,
             resultMeta: nextMeta,
             displayKey: 'cut_image',
             hiddenInGrid: false,
           };
-        })
-      );
+        });
+      });
       if (task.sourceGroupAssetId != null && task.sourceItemIndex != null) {
         replaceGroupItemWithSubAsset(task.sourceGroupAssetId, task.sourceItemIndex, task.assetId);
       }
@@ -1193,23 +1240,32 @@ const WorkflowSection: React.FC<{
         });
         if (ids.length) {
           if (viewStack.length === 0) {
+            const toAdd = e.altKey ? [] : ids.filter((id) => !pending.some((t) => t.assetId === id));
+            const toRemove = e.altKey ? ids : [];
             setSelectedAssetIds((s) => {
               const next = new Set(s);
-              if (e.altKey) {
-                ids.forEach((id) => next.delete(id));
-              } else {
-                ids.forEach((id) => next.add(id));
-              }
+              toRemove.forEach((id) => next.delete(id));
+              toAdd.forEach((id) => next.add(id));
               return next;
             });
           } else {
+            const currentGroupId = viewStack[viewStack.length - 1]?.assetId;
+            const toAdd = e.altKey
+              ? []
+              : ids.filter((key) => {
+                  const parts = String(key).split('::');
+                  if (parts.length !== 2) return true;
+                  const idx = parseInt(parts[1], 10);
+                  if (Number.isNaN(idx)) return true;
+                  return !pending.some(
+                    (t) => t.sourceGroupAssetId === currentGroupId && t.sourceItemIndex === idx
+                  );
+                });
+            const toRemove = e.altKey ? ids : [];
             setSelectedGroupItemKeys((s) => {
               const next = new Set(s);
-              if (e.altKey) {
-                ids.forEach((id) => next.delete(id));
-              } else {
-                ids.forEach((id) => next.add(id));
-              }
+              toRemove.forEach((key) => next.delete(key));
+              toAdd.forEach((key) => next.add(key));
               return next;
             });
           }
@@ -1223,7 +1279,39 @@ const WorkflowSection: React.FC<{
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
     };
-  }, [marqueeRect, viewStack.length]);
+  }, [marqueeRect, viewStack, pending]);
+
+  useEffect(() => {
+    const pendingAssetIds = new Set(pending.map((t) => t.assetId));
+    const pendingGroupKeys = new Set(
+      pending
+        .filter((t) => t.sourceGroupAssetId != null && t.sourceItemIndex != null)
+        .map((t) => `${t.sourceGroupAssetId}::${t.sourceItemIndex}`)
+    );
+    if (pendingAssetIds.size === 0 && pendingGroupKeys.size === 0) return;
+    setSelectedAssetIds((prev) => {
+      let changed = false;
+      const next = new Set(prev);
+      prev.forEach((id) => {
+        if (pendingAssetIds.has(id)) {
+          next.delete(id);
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+    setSelectedGroupItemKeys((prev) => {
+      let changed = false;
+      const next = new Set(prev);
+      prev.forEach((key) => {
+        if (pendingGroupKeys.has(key)) {
+          next.delete(key);
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, [pending]);
 
   useEffect(() => {
     const handler = (e: WheelEvent) => {
@@ -1316,7 +1404,7 @@ const WorkflowSection: React.FC<{
       .filter((a): a is WorkflowAsset => !!a)
       .map((a, idx) => ({
         id: a.id,
-        label: `组 ${idx + 1}`,
+        label: a.groupLabel ?? (a.groupKind === 'manual' ? `组 ${idx + 1}` : `切割 ${idx + 1}`),
       }));
   }, [viewStack, assets]);
 
@@ -1468,6 +1556,7 @@ const WorkflowSection: React.FC<{
       const first = assets.find((a) => a.id === assetIds[0]);
       const coverImage = first ? getAssetDisplayImage(first) : '';
       const groupId = uuid();
+      const usedLabels = new Set<string>(assets.map((a) => a.groupLabel).filter((x): x is string => !!x));
       const newGroup: WorkflowAsset = {
         id: groupId,
         original: coverImage,
@@ -1476,14 +1565,13 @@ const WorkflowSection: React.FC<{
         resultOrder: [],
         cutImageGroup: assetIds.map((id) => ({ assetId: id })),
         groupKind: 'manual',
+        groupLabel: getRandomGroupCodeName(usedLabels),
         archived: false,
         hiddenInGrid: false,
         createdAt: Date.now(),
       };
       setAssets((prev) => {
-        const next = [...prev, newGroup];
-        return next.map((a) => {
-          // 新建的组本身不参与“从其它组移除”逻辑
+        const mapped = prev.map((a) => {
           if (a.id === groupId) return a;
           if (assetIds.includes(a.id)) return { ...a, parentAssetId: groupId };
           if (a.cutImageGroup?.length) {
@@ -1494,6 +1582,9 @@ const WorkflowSection: React.FC<{
           }
           return a;
         });
+        const insertIndex = prev.findIndex((a) => !a.parentAssetId && assetIds.includes(a.id));
+        const idx = insertIndex >= 0 ? insertIndex : prev.length;
+        return [...mapped.slice(0, idx), newGroup, ...mapped.slice(idx)];
       });
       setSelectedAssetIds(new Set());
     },
@@ -1511,6 +1602,7 @@ const WorkflowSection: React.FC<{
         const child = prev.find((a) => a.id === childId);
         const coverImage = child ? getAssetDisplayImage(child) : '';
         const newGroupId = uuid();
+        const usedLabels = new Set<string>(prev.map((a) => a.groupLabel).filter((x): x is string => !!x));
         const newGroup: WorkflowAsset = {
           id: newGroupId,
           original: coverImage,
@@ -1519,6 +1611,7 @@ const WorkflowSection: React.FC<{
           resultOrder: [],
           cutImageGroup: [{ assetId: childId }],
           groupKind: 'manual',
+          groupLabel: getRandomGroupCodeName(usedLabels),
           archived: false,
           hiddenInGrid: false,
           createdAt: Date.now(),
@@ -1681,6 +1774,13 @@ const WorkflowSection: React.FC<{
               <>
                 <span className="text-[8px] font-black uppercase text-amber-300">待处理</span>
                 <span className="text-[8px] text-gray-300">{pending.length} 项等待执行</span>
+                <button
+                  type="button"
+                  onClick={() => setPending([])}
+                  className="text-[8px] text-amber-400 hover:text-amber-300 font-medium ml-1"
+                >
+                  清空
+                </button>
               </>
             )}
           </div>
@@ -1689,16 +1789,23 @@ const WorkflowSection: React.FC<{
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() =>
-                setSelectedAssetIds((prev) => {
-                  const all = new Set(visibleAssets.map((a) => a.id));
-                  if (prev.size === all.size) return new Set();
-                  return all;
-                })
-              }
+              onClick={() => {
+                const selectableIds = visibleAssets
+                  .filter((a) => !pending.some((t) => t.assetId === a.id))
+                  .map((a) => a.id);
+                const all = new Set(selectableIds);
+                setSelectedAssetIds((prev) => (prev.size === all.size ? new Set() : all));
+              }}
               className="px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border bg-white/5 border-white/10 hover:bg-white/10"
             >
-              {selectedAssetIds.size === visibleAssets.length ? '取消全选' : '全选'}
+              {(() => {
+                const selectableCount = visibleAssets.filter(
+                  (a) => !pending.some((t) => t.assetId === a.id)
+                ).length;
+                return selectedAssetIds.size === selectableCount && selectableCount > 0
+                  ? '取消全选'
+                  : '全选';
+              })()}
             </button>
             {selectedAssetIds.size > 0 && (
               <>
@@ -1729,6 +1836,7 @@ const WorkflowSection: React.FC<{
             if (showArchived) return;
             if (!scrollAreaRef.current?.contains(e.target as Node)) return;
             if ((e.target as Element).closest('[data-workflow-card]')) return;
+            if ((e.target as Element).closest('button, [role="button"], a, input, select, textarea')) return;
             e.preventDefault();
             e.stopPropagation();
             setMarqueeRect({ startX: e.clientX, startY: e.clientY, endX: e.clientX, endY: e.clientY });
@@ -1739,7 +1847,7 @@ const WorkflowSection: React.FC<{
               <div className="flex items-center gap-2 shrink-0 px-2">
                 <button
                   type="button"
-                  onClick={() => setViewStack((s) => s.slice(0, -1))}
+                  onClick={() => startTransition(() => setViewStack((s) => s.slice(0, -1)))}
                   className="px-3 py-1.5 rounded-lg bg-white/10 text-[9px] font-black uppercase hover:bg-white/20"
                 >
                   ← 返回
@@ -1769,7 +1877,11 @@ const WorkflowSection: React.FC<{
                   <span className="text-[9px] text-amber-400">组不存在</span>
                 ) : (
                   <>
-                    <span className="text-[9px] text-gray-500">组内 ({currentGroupItems.length})</span>
+                    <span className="text-[9px] text-gray-500">
+                      {currentGroupAsset.groupLabel ??
+                        (currentGroupAsset.groupKind === 'manual' ? '组' : '切割')}{' '}
+                      组内 ({currentGroupItems.length})
+                    </span>
                     <button
                       type="button"
                       onClick={() => setShowAllInGroup((v) => !v)}
@@ -1782,16 +1894,37 @@ const WorkflowSection: React.FC<{
                         <button
                           type="button"
                           onClick={() => {
-                            const allKeys = new Set(
-                              currentGroupItems.map((_, i) => `${currentGroupAsset.id}::${i}`)
-                            );
+                            const selectableKeys = currentGroupItems
+                              .map((_, i) => `${currentGroupAsset.id}::${i}`)
+                              .filter(
+                                (_, i) =>
+                                  !pending.some(
+                                    (t) =>
+                                      t.sourceGroupAssetId === currentGroupAsset.id &&
+                                      t.sourceItemIndex === i
+                                  )
+                              );
+                            const allKeys = new Set(selectableKeys);
                             setSelectedGroupItemKeys((prev) =>
                               prev.size === allKeys.size ? new Set() : allKeys
                             );
                           }}
                           className="px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border bg-white/5 border-white/10 hover:bg-white/10"
                         >
-                          {selectedGroupItemKeys.size === currentGroupItems.length ? '取消全选' : '全选'}
+                          {(() => {
+                            const selectableCount = currentGroupItems.filter(
+                              (_, i) =>
+                                !pending.some(
+                                  (t) =>
+                                    t.sourceGroupAssetId === currentGroupAsset.id &&
+                                    t.sourceItemIndex === i
+                                )
+                            ).length;
+                            return selectedGroupItemKeys.size === selectableCount &&
+                              selectableCount > 0
+                              ? '取消全选'
+                              : '全选';
+                          })()}
                         </button>
                         {selectedGroupItemKeys.size > 0 && (
                           <>
@@ -1838,7 +1971,19 @@ const WorkflowSection: React.FC<{
                             t.sourceItemIndex === idx &&
                             !completedTaskIds.has(t.id)
                         );
-                      if (isPendingItem) return null;
+                      const isPendingOnly =
+                        !!pending.find(
+                          (t) => t.sourceGroupAssetId === currentGroupAsset.id && t.sourceItemIndex === idx
+                        ) && !executingQueue;
+                      const currentTask =
+                        executingQueue && executingQueue.current > 0
+                          ? executingQueue.tasks[executingQueue.current - 1]
+                          : null;
+                      const isExecutingCurrentItem =
+                        !!currentTask &&
+                        !completedTaskIds.has(currentTask.id) &&
+                        currentTask.sourceGroupAssetId === currentGroupAsset?.id &&
+                        currentTask.sourceItemIndex === idx;
 
                       if (isRef && childAsset) {
                         return (
@@ -1868,6 +2013,8 @@ const WorkflowSection: React.FC<{
                                   className={`group relative rounded-2xl border bg-black/40 overflow-hidden ${
                                     selectedGroupItemKeys.has(groupKey)
                                       ? 'border-blue-500 ring-2 ring-blue-500/50'
+                                      : dragOverGroupItemKey === groupKey
+                                      ? 'border-blue-500 ring-2 ring-blue-500/50'
                                       : childAsset.cutImageGroup?.length
                                       ? 'border-blue-400'
                                       : 'border-white/10'
@@ -1879,8 +2026,8 @@ const WorkflowSection: React.FC<{
                                       ? Array.from(selectedGroupItemKeys)
                                       : [groupKey];
                                     const itemIndexes = keys
-                                      .filter((k) => k.startsWith(`${currentGroupAsset.id}::`))
-                                      .map((k) => Number(k.split('::')[1]))
+                                      .filter((k) => String(k).startsWith(`${currentGroupAsset.id}::`))
+                                      .map((k) => Number(String(k).split('::')[1]))
                                       .filter((n) => !Number.isNaN(n));
                                     if (itemIndexes.length === 0) return;
                                     setDraggingGroupItems({ groupAssetId: currentGroupAsset.id, itemIndexes });
@@ -1888,6 +2035,102 @@ const WorkflowSection: React.FC<{
                                   onDragEnd={() => {
                                     setDraggingGroupItems(null);
                                     setDragOverAction(null);
+                                    setDragOverGroupItemKey(null);
+                                  }}
+                                  onDragOver={(e) => {
+                                    if (!draggingGroupItems?.itemIndexes?.length || currentGroupAsset?.id !== draggingGroupItems.groupAssetId) return;
+                                    e.preventDefault();
+                                    if (!draggingGroupItems.itemIndexes.includes(idx)) setDragOverGroupItemKey(groupKey);
+                                  }}
+                                  onDragLeave={() => {
+                                    if (dragOverGroupItemKey === groupKey) setDragOverGroupItemKey(null);
+                                  }}
+                                  onDrop={(e) => {
+                                    e.preventDefault();
+                                    setDragOverGroupItemKey(null);
+                                    if (!draggingGroupItems?.itemIndexes?.length || !currentGroupAsset) {
+                                      setDraggingGroupItems(null);
+                                      return;
+                                    }
+                                    const targetIdx = idx;
+                                    const allIndexes = [...new Set([...draggingGroupItems.itemIndexes, targetIdx])].sort((a, b) => a - b);
+                                    if (allIndexes.length < 2) {
+                                      setDraggingGroupItems(null);
+                                      return;
+                                    }
+                                    const groupAssetId = currentGroupAsset.id;
+                                    const { nextAssets, assetIds } = ensureGroupItemsAsAssets(assets, groupAssetId, allIndexes);
+                                    if (assetIds.length === 0) {
+                                      setDraggingGroupItems(null);
+                                      return;
+                                    }
+                                    const firstAsset = nextAssets.find((x) => x.id === assetIds[0]);
+                                    const coverImage = firstAsset ? getAssetDisplayImage(firstAsset, nextAssets) : '';
+                                    const newGroupId = uuid();
+                                    let updated = nextAssets.map((a) =>
+                                      assetIds.includes(a.id) ? { ...a, parentAssetId: newGroupId } : a
+                                    );
+                                    const groupIdx = updated.findIndex((a) => a.id === groupAssetId);
+                                    if (groupIdx !== -1) {
+                                      const g = updated[groupIdx];
+                                      const items = [...(g.cutImageGroup ?? [])];
+                                      const sorted = allIndexes.filter((i) => i >= 0 && i < items.length).sort((a, b) => a - b);
+                                      const keep: typeof items = [];
+                                      items.forEach((it, i) => {
+                                        if (!sorted.includes(i)) keep.push(it);
+                                      });
+                                      const insertPos = sorted.length ? sorted[0] : keep.length;
+                                      const withGroup = [...keep];
+                                      withGroup.splice(insertPos, 0, { assetId: newGroupId });
+                                      updated = updated.map((a, i) =>
+                                        i === groupIdx ? { ...a, cutImageGroup: withGroup } : a
+                                      );
+                                    }
+                                    const usedLabels = new Set<string>(
+                                      updated.map((a) => a.groupLabel).filter((x): x is string => !!x)
+                                    );
+                                    const newGroup: WorkflowAsset = {
+                                      id: newGroupId,
+                                      original: coverImage,
+                                      displayKey: 'original',
+                                      results: {},
+                                      resultOrder: [],
+                                      cutImageGroup: assetIds.map((id) => ({ assetId: id })),
+                                      groupKind: 'manual',
+                                      groupLabel: getRandomGroupCodeName(usedLabels),
+                                      archived: false,
+                                      hiddenInGrid: false,
+                                      createdAt: Date.now(),
+                                      parentAssetId: groupAssetId,
+                                    };
+                                    setAssets([...updated, newGroup]);
+                                    setSelectedGroupItemKeys(new Set());
+                                    setDraggingGroupItems(null);
+                                  }}
+                                  {...((getDisplayKeysForAsset(childAsset).length > 1 || (childAsset.cutImageGroup?.length ?? 0) > 1)
+                                    ? { 'data-prevent-wheel-scroll': '' }
+                                    : {})}
+                                  onWheel={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    if (childAsset.cutImageGroup?.length) {
+                                      if (childAsset.cutImageGroup.length <= 1) return;
+                                      const delta = e.deltaY > 0 ? 1 : -1;
+                                      setGroupPreviewIndexById((prev) => {
+                                        const current = prev[childAsset.id] ?? 0;
+                                        const len = childAsset.cutImageGroup?.length ?? 1;
+                                        const next = ((current + delta) % len + len) % len;
+                                        return { ...prev, [childAsset.id]: next };
+                                      });
+                                      const direction: 'up' | 'down' = e.deltaY > 0 ? 'down' : 'up';
+                                      setGroupBounceStateById((prev) => ({ ...prev, [childAsset.id]: direction }));
+                                      window.setTimeout(() => {
+                                        setGroupBounceStateById((prev) => ({ ...prev, [childAsset.id]: 'idle' }));
+                                      }, 180);
+                                      return;
+                                    }
+                                    if (getDisplayKeysForAsset(childAsset).length <= 1) return;
+                                    cycleDisplayKey(childAsset.id, e.deltaY);
                                   }}
                                 >
                                   <div
@@ -1916,6 +2159,42 @@ const WorkflowSection: React.FC<{
                                       className="w-full h-auto object-cover block"
                                       style={{ maxHeight: 360 }}
                                     />
+                                    {isPendingOnly && (
+                                      <div
+                                        className="absolute inset-0 z-10 bg-black/40 flex items-center justify-center"
+                                        onClick={(e) => e.stopPropagation()}
+                                      >
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            setPending((prev) =>
+                                              prev.filter(
+                                                (t) =>
+                                                  !(
+                                                    t.sourceGroupAssetId === currentGroupAsset?.id &&
+                                                    t.sourceItemIndex === idx
+                                                  )
+                                              )
+                                            )
+                                          }
+                                          className="w-8 h-8 rounded-full flex items-center justify-center bg-white/10 border border-white/20 text-gray-400 hover:bg-red-500/20 hover:border-red-400/30 hover:text-red-300 text-base font-medium leading-none"
+                                          title="从队列移除"
+                                        >
+                                          ×
+                                        </button>
+                                      </div>
+                                    )}
+                                    {isPendingItem && !isPendingOnly && (
+                                      <div className="absolute inset-0 z-10 bg-black/40 flex items-center justify-center pointer-events-none">
+                                        <div
+                                          className={`h-7 w-7 rounded-full border-[3px] ${
+                                            isExecutingCurrentItem
+                                              ? 'border-blue-400 border-t-transparent animate-spin'
+                                              : 'border-white/30 border-t-transparent'
+                                          }`}
+                                        />
+                                      </div>
+                                    )}
                                     {assetErrors.has(childAsset.id) && (
                                       <span className="absolute top-2 left-2 px-2 py-0.5 rounded-lg bg-red-600/90 text-[8px] font-black text-white">
                                         执行出错
@@ -1923,7 +2202,7 @@ const WorkflowSection: React.FC<{
                                     )}
                                     {childAsset.cutImageGroup?.length && (
                                       <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg text-[8px] font-black bg-blue-600/90">
-                                        {childAsset.groupKind === 'manual' ? '组' : '切割'} {childAsset.cutImageGroup.length}
+                                        {(childAsset.groupLabel ?? (childAsset.groupKind === 'manual' ? '组' : '切割'))} {childAsset.cutImageGroup.length}
                                       </span>
                                     )}
                                     <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-end justify-center gap-1 p-2">
@@ -2017,8 +2296,8 @@ const WorkflowSection: React.FC<{
                               ? Array.from(selectedGroupItemKeys)
                               : [groupKey];
                             const itemIndexes = keys
-                              .filter((k) => k.startsWith(`${currentGroupAsset.id}::`))
-                              .map((k) => Number(k.split('::')[1]))
+                              .filter((k) => String(k).startsWith(`${currentGroupAsset.id}::`))
+                              .map((k) => Number(String(k).split('::')[1]))
                               .filter((n) => !Number.isNaN(n));
                             if (itemIndexes.length === 0) return;
                             setDraggingGroupItems({ groupAssetId: currentGroupAsset.id, itemIndexes });
@@ -2028,8 +2307,44 @@ const WorkflowSection: React.FC<{
                             setDragOverAction(null);
                           }}
                         >
-                          <div className="relative cursor-pointer" onClick={() => setCutLightboxIndex(idx)}>
+                          <div className="relative cursor-pointer" onClick={() => setGroupStringLightboxIndex(idx)}>
                             <img src={img} alt="" className="w-full h-auto object-cover block" style={{ maxHeight: 280 }} />
+                            {isPendingOnly && (
+                              <div
+                                className="absolute inset-0 z-10 bg-black/40 flex items-center justify-center"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setPending((prev) =>
+                                      prev.filter(
+                                        (t) =>
+                                          !(
+                                            t.sourceGroupAssetId === currentGroupAsset?.id &&
+                                            t.sourceItemIndex === idx
+                                          )
+                                      )
+                                    )
+                                  }
+                                  className="w-8 h-8 rounded-full flex items-center justify-center bg-white/10 border border-white/20 text-gray-400 hover:bg-red-500/20 hover:border-red-400/30 hover:text-red-300 text-base font-medium leading-none"
+                                  title="从队列移除"
+                                >
+                                  ×
+                                </button>
+                              </div>
+                            )}
+                            {isPendingItem && !isPendingOnly && (
+                              <div className="absolute inset-0 z-10 bg-black/40 flex items-center justify-center pointer-events-none">
+                                <div
+                                  className={`h-7 w-7 rounded-full border-[3px] ${
+                                    isExecutingCurrentItem
+                                      ? 'border-blue-400 border-t-transparent animate-spin'
+                                      : 'border-white/30 border-t-transparent'
+                                  }`}
+                                />
+                              </div>
+                            )}
                           </div>
                           <div className="p-1.5 border-t border-white/5 text-[8px] text-gray-500">
                             拖到功能区操作 · 点击预览大图
@@ -2038,6 +2353,26 @@ const WorkflowSection: React.FC<{
                       );
                     })}
               </div>
+              {groupStringLightboxIndex != null && typeof currentGroupItems[groupStringLightboxIndex] === 'string' && (
+                <div
+                  className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/90 p-4"
+                  onClick={() => setGroupStringLightboxIndex(null)}
+                >
+                  <img
+                    src={currentGroupItems[groupStringLightboxIndex] as string}
+                    alt=""
+                    className="max-w-full max-h-[90vh] object-contain rounded-lg"
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                  <button
+                    type="button"
+                    className="absolute top-4 right-4 w-10 h-10 flex items-center justify-center text-white/60 hover:text-white rounded-full bg-black/40"
+                    onClick={() => setGroupStringLightboxIndex(null)}
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
               {currentGroupAsset && currentGroupItems.length === 0 && !showAllImages && (
                 <div className="flex flex-col items-center justify-center py-12 text-gray-500 text-[9px]">此组暂无内容</div>
               )}
@@ -2051,6 +2386,8 @@ const WorkflowSection: React.FC<{
               >
                 {visibleAssets.map((a) => {
                   const isBusy = busyAssetIds.has(a.id);
+                  const isPendingOnly =
+                    pending.some((t) => t.assetId === a.id) && !executingQueue;
                   const currentTask =
                     executingQueue && executingQueue.current > 0
                       ? executingQueue.tasks[executingQueue.current - 1]
@@ -2066,7 +2403,8 @@ const WorkflowSection: React.FC<{
                       : bounce === 'down'
                       ? 'translate-y-0.5 rotate-[0.6deg] scale-[0.985]'
                       : '';
-                  const busyClass = isBusy ? 'pointer-events-none' : '';
+                  const busyClass =
+                    isBusy && !isPendingOnly ? 'pointer-events-none' : '';
 
                   return (
                     <div key={a.id} className="break-inside-avoid mb-6 relative">
@@ -2170,12 +2508,37 @@ const WorkflowSection: React.FC<{
                           setDragOverAssetId(null);
                           setDraggingAssetIds(null);
                         }}
+                        {...((!isBusy && !showArchived && (getDisplayKeysForAsset(a).length > 1 || (a.cutImageGroup?.length ?? 0) > 1))
+                          ? { 'data-prevent-wheel-scroll': '' }
+                          : {})}
+                        onWheel={(e) => {
+                          if (isBusy) return;
+                          e.preventDefault();
+                          e.stopPropagation();
+                          if (showArchived) return;
+                          if (a.cutImageGroup?.length) {
+                            if (!a.cutImageGroup.length) return;
+                            const delta = e.deltaY > 0 ? 1 : -1;
+                            setGroupPreviewIndexById((prev) => {
+                              const current = prev[a.id] ?? 0;
+                              const len = a.cutImageGroup ? a.cutImageGroup.length : 1;
+                              const next = ((current + delta) % len + len) % len;
+                              return { ...prev, [a.id]: next };
+                            });
+                            const direction: 'up' | 'down' = e.deltaY > 0 ? 'down' : 'up';
+                            const assetId = a.id;
+                            setGroupBounceStateById((prev) => ({ ...prev, [assetId]: direction }));
+                            window.setTimeout(() => {
+                              setGroupBounceStateById((prev) => ({ ...prev, [assetId]: 'idle' }));
+                            }, 180);
+                            return;
+                          }
+                          if (getDisplayKeysForAsset(a).length <= 1) return;
+                          cycleDisplayKey(a.id, e.deltaY);
+                        }}
                       >
                         <div
                           className="relative cursor-pointer"
-                          {...((!isBusy && !showArchived && (getDisplayKeysForAsset(a).length > 1 || (a.cutImageGroup?.length ?? 0) > 1))
-                            ? { 'data-prevent-wheel-scroll': '' }
-                            : {})}
                           onClick={() => {
                             if (showArchived) {
                               setArchivedDetailAssetId(a.id);
@@ -2184,31 +2547,6 @@ const WorkflowSection: React.FC<{
                             } else {
                               setLightboxAssetId(a.id);
                             }
-                          }}
-                          onWheel={(e) => {
-                            if (isBusy) return;
-                            e.preventDefault();
-                            e.stopPropagation();
-                            if (showArchived) return;
-                            if (a.cutImageGroup?.length) {
-                              if (!a.cutImageGroup.length) return;
-                              const delta = e.deltaY > 0 ? 1 : -1;
-                              setGroupPreviewIndexById((prev) => {
-                                const current = prev[a.id] ?? 0;
-                                const len = a.cutImageGroup ? a.cutImageGroup.length : 1;
-                                const next = ((current + delta) % len + len) % len;
-                                return { ...prev, [a.id]: next };
-                              });
-                              const direction: 'up' | 'down' = e.deltaY > 0 ? 'down' : 'up';
-                              const assetId = a.id;
-                              setGroupBounceStateById((prev) => ({ ...prev, [assetId]: direction }));
-                              window.setTimeout(() => {
-                                setGroupBounceStateById((prev) => ({ ...prev, [assetId]: 'idle' }));
-                              }, 180);
-                              return;
-                            }
-                            if (getDisplayKeysForAsset(a).length <= 1) return;
-                            cycleDisplayKey(a.id, e.deltaY);
                           }}
                         >
                           <div className="relative w-full max-h-[360px] overflow-hidden">
@@ -2241,7 +2579,26 @@ const WorkflowSection: React.FC<{
                               }}
                             />
                           </div>
-                          {isBusy && (
+                          {isPendingOnly && (
+                            <div
+                              className="absolute inset-0 z-10 bg-black/40 flex items-center justify-center"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setPending((prev) =>
+                                    prev.filter((t) => t.assetId !== a.id)
+                                  )
+                                }
+                                className="w-8 h-8 rounded-full flex items-center justify-center bg-white/10 border border-white/20 text-gray-400 hover:bg-red-500/20 hover:border-red-400/30 hover:text-red-300 text-base font-medium leading-none"
+                                title="从队列移除"
+                              >
+                                ×
+                              </button>
+                            </div>
+                          )}
+                          {isBusy && !isPendingOnly && (
                             <div className="absolute inset-0 z-10 bg-black/40 flex items-center justify-center pointer-events-none">
                               <div
                                 className={`h-7 w-7 rounded-full border-[3px] ${
@@ -2259,7 +2616,7 @@ const WorkflowSection: React.FC<{
                           )}
                           {a.cutImageGroup?.length && (
                             <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg text-[8px] font-black bg-blue-600/90">
-                              {a.groupKind === 'manual' ? '组' : '切割'} {a.cutImageGroup.length}
+                              {(a.groupLabel ?? (a.groupKind === 'manual' ? '组' : '切割'))} {a.cutImageGroup.length}
                             </span>
                           )}
                           {!showArchived && (
@@ -2357,15 +2714,26 @@ const WorkflowSection: React.FC<{
               <div className="text-[9px] font-black text-blue-400 uppercase">功能区</div>
               <p className="text-[8px] text-gray-500">基础能力与复合能力 · 能力中增删会同步到此</p>
             </div>
-            <button
-              onClick={() => executePending()}
-              disabled={pending.length === 0 || executing}
-              className="px-3 py-1.5 rounded-xl bg-blue-600 text-[9px] font-black uppercase whitespace-nowrap electric-glow disabled:opacity-40"
-            >
-              {executing
-                ? `执行中 ${executingQueue?.current ?? 0}/${executingQueue?.total ?? 0}`
-                : `一键执行（${pending.length}）`}
-            </button>
+            <div className="flex items-center gap-2 shrink-0">
+              {pending.length > 0 && !executing && (
+                <button
+                  type="button"
+                  onClick={() => setPending([])}
+                  className="px-2.5 py-1.5 rounded-xl border border-amber-500/60 bg-amber-500/10 text-[9px] font-black uppercase text-amber-300 hover:bg-amber-500/20"
+                >
+                  清空队列
+                </button>
+              )}
+              <button
+                onClick={() => executePending()}
+                disabled={pending.length === 0 || executing}
+                className="px-3 py-1.5 rounded-xl bg-blue-600 text-[9px] font-black uppercase whitespace-nowrap electric-glow disabled:opacity-40"
+              >
+                {executing
+                  ? `执行中 ${executingQueue?.current ?? 0}/${executingQueue?.total ?? 0}`
+                  : `一键执行（${pending.length}）`}
+              </button>
+            </div>
           </div>
           <div className="grid grid-cols-2 gap-3">
           <div
@@ -2411,6 +2779,9 @@ const WorkflowSection: React.FC<{
                         idx === groupIdx ? { ...a, cutImageGroup: withGroup } : a
                       );
                     }
+                    const usedLabels = new Set<string>(
+                      updated.map((a) => a.groupLabel).filter((x): x is string => !!x)
+                    );
                     const newGroup: WorkflowAsset = {
                       id: newGroupId,
                       original: coverImage,
@@ -2419,6 +2790,7 @@ const WorkflowSection: React.FC<{
                       resultOrder: [],
                       cutImageGroup: assetIds.map((id) => ({ assetId: id })),
                       groupKind: 'manual',
+                      groupLabel: getRandomGroupCodeName(usedLabels),
                       archived: false,
                       hiddenInGrid: false,
                       createdAt: Date.now(),
@@ -2454,9 +2826,8 @@ const WorkflowSection: React.FC<{
             onDrop={(e) => {
               e.preventDefault();
               if (dragOverAction === '__ungroup__' && draggingGroupItems) {
-                draggingGroupItems.itemIndexes.forEach((idx) =>
-                  moveGroupItemToUpperLevel(draggingGroupItems.groupAssetId, idx)
-                );
+                const { groupAssetId, itemIndexes } = draggingGroupItems;
+                moveGroupItemsToUpperLevel(groupAssetId, itemIndexes);
               }
               setDragOverAction(null);
               setDraggingGroupItems(null);
@@ -2492,16 +2863,41 @@ const WorkflowSection: React.FC<{
               if (draggingAssetIds?.length) {
                 duplicateAssetInPlace(draggingAssetIds, null);
               } else if (draggingGroupItems && currentGroupAsset) {
-                const { nextAssets, assetIds } = ensureGroupItemsAsAssets(
-                  assets,
-                  draggingGroupItems.groupAssetId,
-                  draggingGroupItems.itemIndexes
-                );
-                if (assetIds.length > 0) {
-                  setAssets(nextAssets);
-                  duplicateAssetInPlace(assetIds, currentGroupAsset.id);
-                  setSelectedGroupItemKeys(new Set());
-                }
+                const groupId = currentGroupAsset.id;
+                setAssets((prev) => {
+                  const { nextAssets, assetIds } = ensureGroupItemsAsAssets(
+                    prev,
+                    draggingGroupItems.groupAssetId,
+                    draggingGroupItems.itemIndexes
+                  );
+                  if (assetIds.length === 0) return prev;
+                  const copies: WorkflowAsset[] = [];
+                  const newIds: string[] = [];
+                  assetIds.forEach((id) => {
+                    const src = nextAssets.find((a) => a.id === id);
+                    if (!src) return;
+                    const newId = uuid();
+                    newIds.push(newId);
+                    copies.push({
+                      ...src,
+                      id: newId,
+                      parentAssetId: groupId,
+                      archived: false,
+                      hiddenInGrid: false,
+                      createdAt: Date.now(),
+                    });
+                  });
+                  if (copies.length === 0) return nextAssets;
+                  let next = [...nextAssets, ...copies];
+                  const gi = next.findIndex((a) => a.id === groupId);
+                  if (gi !== -1) {
+                    const g = next[gi];
+                    const items = [...(g.cutImageGroup ?? []), ...newIds.map((id) => ({ assetId: id }))];
+                    next = next.map((a, i) => (i === gi ? { ...a, cutImageGroup: items } : a));
+                  }
+                  return next;
+                });
+                setSelectedGroupItemKeys(new Set());
               }
               setDragOverAction(null);
               setDraggingAssetIds(null);
@@ -2549,9 +2945,13 @@ const WorkflowSection: React.FC<{
                     draggingGroupItems.groupAssetId,
                     draggingGroupItems.itemIndexes
                   );
+                  const groupRemoved = !afterRemove.some((a) => a.id === draggingGroupItems.groupAssetId);
                   setAssets(afterRemove);
                   assetIds.forEach((id) => removeAsset(id));
                   setSelectedGroupItemKeys(new Set());
+                  if (groupRemoved) {
+                    setViewStack((s) => s.filter((x) => x.assetId !== draggingGroupItems.groupAssetId));
+                  }
                 }
               }
               setDragOverAction(null);
@@ -2600,9 +3000,13 @@ const WorkflowSection: React.FC<{
                     draggingGroupItems.groupAssetId,
                     draggingGroupItems.itemIndexes
                   );
+                  const groupRemoved = !afterRemove.some((a) => a.id === draggingGroupItems.groupAssetId);
                   setAssets(afterRemove);
                   assetIds.forEach((id) => markArchived(id));
                   setSelectedGroupItemKeys(new Set());
+                  if (groupRemoved) {
+                    setViewStack((s) => s.filter((x) => x.assetId !== draggingGroupItems.groupAssetId));
+                  }
                 }
               }
               setDragOverAction(null);
