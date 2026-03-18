@@ -62,6 +62,9 @@
 
 若要把项目发布成线上可访问的网站，按 **[DEPLOY_GUIDE.md](DEPLOY_GUIDE.md)** 操作即可（GitHub → Vercel，全程点选 + 填几处配置）。
 
+**前端（如 Vercel）+ 批量后端（如 Render）**  
+构建时设置 `VITE_BULK_IMAGE_API` 指向 `server/bulk-image-api.js` 的公网地址；`GEMINI_API_KEY` 仅配置在后端。对话/网站助手等经该后端的 Gemini 调用使用 **`POST /proxy/gemini/async` + 轮询 `GET /proxy/gemini/async/:jobId`**，避免云平台对单次长 HTTP 请求约 10～15 秒超时导致 503/504。详见 `docs/BULK_IMAGE_BACKEND_入门教程.md`。
+
 **可选：入站密码**  
 在环境变量、`.env` 或本地开发时的 `.env.local` 中设置 `VITE_SITE_PASSWORD` 后，打开网站会先要求输入密码，正确后才进入应用；同一标签页内刷新无需重输，关闭标签页后需重新输入。不设置则无密码门控。
 
@@ -114,6 +117,7 @@ pip install -r requirements.txt
 - **主站打不开 / 白屏**：确认已执行 `npm install`，且端口 3000 未被占用。
 - **贴图修缝点「开始修复」报错**：说明修缝后端未启动。执行 `npm run dev:seam-backend` 或 `npm run dev:all`；若提示找不到 `python`，请安装 Python 并先执行上文的 `pip install -r requirements.txt`。
 - **批量出图 / 管理后台无法用**：需启动 `npm run dev:bulk-api` 并设置 `VITE_BULK_IMAGE_API=http://localhost:9002`；管理后台访问 `/admin` 若设了 `VITE_ADMIN_PASSWORD` 需先输入密码。
+- **线上对话生图 503/504 或短超时**：若前端已配 `VITE_BULK_IMAGE_API`，请确认后端已部署含异步 Gemini 代理的版本，并重新构建前端；仍失败时检查 Render 等服务日志与 `PROXY_ALLOWED_ORIGINS`（需包含 Vercel 站点 Origin）。
 - **生成 3D 报错 / CORS**：本地开发需运行 `npm run proxy` 并设置 `VITE_TENCENT_PROXY=http://localhost:9001`，同时在代理环境中配置好 `TENCENT_SECRET_ID`、`TENCENT_SECRET_KEY`。
 - **生产部署**：见 [DEPLOY_GUIDE.md](DEPLOY_GUIDE.md)。贴图修缝若需上线，需单独部署 8008 后端并设置 `VITE_SEAM_REPAIR_API`；批量出图与管理后台需部署 `bulk-image-api` 并设置 `VITE_BULK_IMAGE_API`；腾讯 3D 需单独部署代理并配置 `VITE_TENCENT_PROXY`。
 

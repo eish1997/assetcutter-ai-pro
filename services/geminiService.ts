@@ -14,6 +14,73 @@ function bulkApiUrl(path: string): string {
   return `${base}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
+/** Render 等对长连接常限 10～15s：走后端异步 job + 轮询，避免 503/504 */
+const GEMINI_ASYNC_POLL_MS = 1500;
+
+async function bulkProxyGenerateContentAsync(args: {
+  model: string;
+  contents: unknown;
+  config?: Record<string, unknown>;
+}): Promise<{ text?: string; candidates?: unknown[] }> {
+  const config = (args.config || {}) as Record<string, unknown>;
+  const abortSignal = config.abortSignal as AbortSignal | undefined;
+  const safeConfig = { ...config };
+  delete (safeConfig as { abortSignal?: AbortSignal }).abortSignal;
+  const httpTimeout =
+    Number((safeConfig.httpOptions as Record<string, unknown> | undefined)?.timeout) ||
+    GEMINI_IMAGE_REQUEST_TIMEOUT_MS;
+  const maxPollMs = Math.min(300_000, httpTimeout + 120_000);
+
+  const createRes = await fetch(bulkApiUrl("/proxy/gemini/async"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: args.model,
+      contents: args.contents,
+      config: safeConfig,
+    }),
+    signal: abortSignal,
+  });
+  const createText = await createRes.text();
+  if (!createRes.ok) {
+    throw new Error(createText || `Gemini 异步任务创建失败（${createRes.status}）`);
+  }
+  let jobId: string;
+  try {
+    const parsed = JSON.parse(createText) as { jobId?: string };
+    jobId = String(parsed.jobId || "");
+  } catch {
+    throw new Error("异步任务响应无效");
+  }
+  if (!jobId) throw new Error("未返回 jobId");
+
+  const deadline = Date.now() + maxPollMs;
+  while (Date.now() < deadline) {
+    if (abortSignal?.aborted) throw createAbortError("请求已取消");
+    const pollRes = await fetch(bulkApiUrl(`/proxy/gemini/async/${encodeURIComponent(jobId)}`), {
+      signal: abortSignal,
+    });
+    const pollText = await pollRes.text();
+    if (!pollRes.ok) {
+      throw new Error(pollText || `轮询失败（${pollRes.status}）`);
+    }
+    let j: { status?: string; result?: { text?: string; candidates?: unknown[] }; error?: string };
+    try {
+      j = JSON.parse(pollText) as typeof j;
+    } catch {
+      throw new Error("轮询响应无效");
+    }
+    if (j.status === "completed" && j.result != null) {
+      return j.result;
+    }
+    if (j.status === "failed") {
+      throw new Error(j.error || "Gemini 任务失败");
+    }
+    await sleepWithAbort(GEMINI_ASYNC_POLL_MS, abortSignal);
+  }
+  throw new Error(`等待 Gemini 结果超时（>${maxPollMs}ms），请稍后重试`);
+}
+
 type GeminiClientLike = {
   models: {
     generateContent: (args: { model: string; contents: unknown; config?: Record<string, unknown> }) => Promise<any>;
@@ -34,29 +101,11 @@ const getAI = (): GeminiClientLike => {
     const proxyClient: GeminiClientLike = {
       models: {
         async generateContent(args) {
-          const config = (args.config || {}) as Record<string, unknown>;
-          const abortSignal = (config.abortSignal as AbortSignal | undefined) ?? undefined;
-          const safeConfig = { ...config };
-          delete (safeConfig as any).abortSignal;
-          const res = await fetch(bulkApiUrl("/proxy/gemini/generate-content"), {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              model: args.model,
-              contents: args.contents,
-              config: safeConfig,
-            }),
-            signal: abortSignal,
+          return bulkProxyGenerateContentAsync({
+            model: args.model,
+            contents: args.contents,
+            config: (args.config || {}) as Record<string, unknown>,
           });
-          const text = await res.text();
-          if (!res.ok) {
-            throw new Error(text || `Gemini proxy request failed (${res.status})`);
-          }
-          try {
-            return JSON.parse(text);
-          } catch {
-            return text;
-          }
         },
       },
     };

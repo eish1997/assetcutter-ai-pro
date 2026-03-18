@@ -218,6 +218,51 @@ async function proxyGenerateContent(model, contents, config) {
   return { text, candidates };
 }
 
+// ---------- Gemini 代理异步任务（避免网关/平台对长连接 10～15s 超时导致 503/504）----------
+const GEMINI_ASYNC_JOB_TTL_MS = Number(process.env.GEMINI_ASYNC_JOB_TTL_MS) || 60 * 60 * 1000;
+const geminiAsyncJobs = new Map();
+
+function sweepGeminiAsyncJobs() {
+  const now = Date.now();
+  for (const [id, job] of geminiAsyncJobs) {
+    if (now - job.createdAt > GEMINI_ASYNC_JOB_TTL_MS) geminiAsyncJobs.delete(id);
+  }
+}
+
+function createGeminiAsyncJob(model, contents, config) {
+  sweepGeminiAsyncJobs();
+  const id = `gasync-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  geminiAsyncJobs.set(id, {
+    id,
+    status: 'pending',
+    createdAt: Date.now(),
+    result: null,
+    error: null,
+  });
+  setImmediate(() => {
+    const job = geminiAsyncJobs.get(id);
+    if (!job) return;
+    job.status = 'running';
+    proxyGenerateContent(model, contents, config)
+      .then((result) => {
+        const j = geminiAsyncJobs.get(id);
+        if (!j) return;
+        j.status = 'completed';
+        j.result = result;
+        j.updatedAt = Date.now();
+      })
+      .catch((e) => {
+        const j = geminiAsyncJobs.get(id);
+        if (!j) return;
+        j.status = 'failed';
+        j.error = e?.message ?? String(e);
+        j.updatedAt = Date.now();
+        console.error('[proxy] gemini async job failed:', id, j.error);
+      });
+  });
+  return id;
+}
+
 function isRetryable(e) {
   const msg = String((e && e.message) || e);
   return /429|503|overloaded|UNAVAILABLE|500|INTERNAL|Internal error/i.test(msg);
@@ -587,6 +632,57 @@ const server = http.createServer(async (req, res) => {
   const path = (req.url || '/').split('?')[0];
   const pathParts = path.slice(1).split('/').filter(Boolean); // ['jobs'] or ['jobs', ':id']
 
+  const GEMINI_ASYNC_PATH = '/proxy/gemini/async';
+  if (path === GEMINI_ASYNC_PATH && req.method === 'POST') {
+    try {
+      const body = await readBody(req, MAX_JOBS_BODY_BYTES);
+      let parsed;
+      try {
+        parsed = JSON.parse(body);
+      } catch {
+        sendError(res, 400, 'Invalid JSON body');
+        return;
+      }
+      const { model, contents, config } = parsed || {};
+      if (!model || !contents) {
+        sendError(res, 400, 'Missing model or contents');
+        return;
+      }
+      const key = normalizeSecret(process.env.GEMINI_API_KEY || '');
+      if (!key) {
+        sendError(res, 500, 'No Gemini API key (env GEMINI_API_KEY)');
+        return;
+      }
+      const jobId = createGeminiAsyncJob(model, contents, config);
+      sendJson(res, 202, { jobId, status: 'pending' });
+    } catch {
+      sendError(res, 500, 'Request error');
+    }
+    return;
+  }
+  if (path.startsWith(`${GEMINI_ASYNC_PATH}/`) && req.method === 'GET') {
+    const jobId = decodeURIComponent(path.slice(GEMINI_ASYNC_PATH.length + 1)).split('/')[0];
+    if (!jobId || jobId.includes('..')) {
+      sendError(res, 400, 'Invalid job id');
+      return;
+    }
+    const job = geminiAsyncJobs.get(jobId);
+    if (!job) {
+      sendJson(res, 404, { error: 'Job not found or expired' });
+      return;
+    }
+    if (job.status === 'completed') {
+      sendJson(res, 200, { status: 'completed', result: job.result });
+      return;
+    }
+    if (job.status === 'failed') {
+      sendJson(res, 200, { status: 'failed', error: job.error || 'Unknown error' });
+      return;
+    }
+    sendJson(res, 200, { status: job.status });
+    return;
+  }
+
   if (path === '/proxy/gemini/generate-content' && req.method === 'POST') {
     try {
       const body = await readBody(req, MAX_JOBS_BODY_BYTES);
@@ -659,7 +755,10 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  sendJson(res, 404, { error: 'Not found. Use POST /jobs, GET /jobs, GET /jobs/:id, POST /jobs/:id/cancel, GET /rpd' });
+  sendJson(res, 404, {
+    error:
+      'Not found. POST /jobs, GET /jobs, GET /jobs/:id, POST /jobs/:id/cancel, GET /rpd; Gemini: POST /proxy/gemini/async + GET /proxy/gemini/async/:jobId (recommended on Render), or sync POST /proxy/gemini/generate-content',
+  });
 });
 
 loadPersisted().then(() => {

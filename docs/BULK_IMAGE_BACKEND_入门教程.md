@@ -162,7 +162,8 @@ VITE_BULK_IMAGE_API=http://localhost:9002
 
 **注意**：  
 - **Gemini Key 只放在后端云服务（如 Render）的环境变量里**，不要写进前端代码或公开仓库。  
-- Vercel 等前端平台不再需要任何 `GEMINI_*` 环境变量，只需要一个 `VITE_BULK_IMAGE_API` 指向后端地址。
+- Vercel 等前端平台不再需要任何 `GEMINI_*` 环境变量，只需要一个 `VITE_BULK_IMAGE_API` 指向后端地址。  
+- **对话 / 网站助手等经后端代理的 Gemini**：前端使用 `POST /proxy/gemini/async` + 轮询 `GET /proxy/gemini/async/:jobId`，避免单次长请求被网关 10～15 秒掐断导致 503/504。升级本仓库后请 **重新部署 Render 后端并重新构建 Vercel 前端**。
 
 ### 方式 C：和前端同一台服务器（同一域名不同路径）
 
