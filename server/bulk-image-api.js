@@ -239,26 +239,36 @@ function createGeminiAsyncJob(model, contents, config) {
     result: null,
     error: null,
   });
-  setImmediate(() => {
+  const GEMINI_PROXY_MAX_ATTEMPTS = Number(process.env.GEMINI_PROXY_RETRIES) || 7;
+  setImmediate(async () => {
     const job = geminiAsyncJobs.get(id);
     if (!job) return;
     job.status = 'running';
-    proxyGenerateContent(model, contents, config)
-      .then((result) => {
+    let lastErr;
+    for (let attempt = 0; attempt < GEMINI_PROXY_MAX_ATTEMPTS; attempt++) {
+      try {
+        const result = await proxyGenerateContent(model, contents, config);
         const j = geminiAsyncJobs.get(id);
         if (!j) return;
         j.status = 'completed';
         j.result = result;
         j.updatedAt = Date.now();
-      })
-      .catch((e) => {
-        const j = geminiAsyncJobs.get(id);
-        if (!j) return;
-        j.status = 'failed';
-        j.error = e?.message ?? String(e);
-        j.updatedAt = Date.now();
-        console.error('[proxy] gemini async job failed:', id, j.error);
-      });
+        return;
+      } catch (e) {
+        lastErr = e;
+        if (attempt < GEMINI_PROXY_MAX_ATTEMPTS - 1 && isRetryable(e)) {
+          const delay = Math.min(90_000, 5000 * Math.pow(2, attempt));
+          console.warn('[proxy] gemini async retry', id, attempt + 1, 'after', delay, 'ms');
+          await sleep(delay);
+        }
+      }
+    }
+    const j = geminiAsyncJobs.get(id);
+    if (!j) return;
+    j.status = 'failed';
+    j.error = lastErr?.message ?? String(lastErr);
+    j.updatedAt = Date.now();
+    console.error('[proxy] gemini async job failed:', id, j.error);
   });
   return id;
 }

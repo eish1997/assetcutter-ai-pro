@@ -29,7 +29,8 @@ async function bulkProxyGenerateContentAsync(args: {
   const httpTimeout =
     Number((safeConfig.httpOptions as Record<string, unknown> | undefined)?.timeout) ||
     GEMINI_IMAGE_REQUEST_TIMEOUT_MS;
-  const maxPollMs = Math.min(300_000, httpTimeout + 120_000);
+  /** 服务端可对 503 多次退避，轮询上限需覆盖 */
+  const maxPollMs = Math.min(600_000, Math.max(httpTimeout + 240_000, 540_000));
 
   const createRes = await fetch(bulkApiUrl("/proxy/gemini/async"), {
     method: "POST",
@@ -331,19 +332,37 @@ export function getTexturePrompt(
   return t;
 }
 
+function errorStringForRetry(err: unknown): string {
+  if (err == null) return "";
+  const m = (err as { message?: string })?.message;
+  if (typeof m === "string" && m.length) return m;
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return String(err);
+  }
+}
+
 /** 判断是否为可重试的 API 错误（限流、过载、服务内部错误等） */
 function isRetryableError(err: unknown): boolean {
-  const msg = String((err as any)?.message ?? err);
+  const msg = errorStringForRetry(err);
   return (
     msg.includes("503") ||
     msg.includes("overloaded") ||
     msg.includes("429") ||
     msg.includes("UNAVAILABLE") ||
+    msg.includes("high demand") ||
     msg.includes("500") ||
     msg.includes("INTERNAL") ||
     msg.includes("Internal error")
   );
 }
+
+/** 生图：503/过载时重试；仅在未成功出图前重试，不重复计费成功结果 */
+const IMAGE_GEN_RETRIES_ON_OVERLOAD = 4;
+const IMAGE_GEN_RETRY_DELAY_MS = 6000;
+/** 走 bulk 异步代理时含轮询+服务端退避，总等待需长于单次 SDK 超时 */
+const BULK_PROXY_IMAGE_TIMEOUT_MS = 600_000;
 
 async function callWithRetry<T>(
   apiFn: (signal: AbortSignal) => Promise<T>,
@@ -376,6 +395,9 @@ export function normalizeApiErrorMessage(err: unknown): string {
     const message = parsed?.error?.message ?? parsed?.message ?? raw;
     if (code === 500 || parsed?.error?.status === "INTERNAL") {
       return "服务暂时异常 (500)，请稍后重试";
+    }
+    if (code === 503 || parsed?.error?.status === "UNAVAILABLE") {
+      return "生图模型当前繁忙（503），请稍后重试或换时段再试";
     }
     if (typeof message === "string" && message.length < 120) return message;
     return raw.slice(0, 100) + (raw.length > 100 ? "…" : "");
@@ -546,12 +568,14 @@ export async function dialogGenerateImage(
   abortSignal?: AbortSignal,
   requestOptions?: Omit<GeminiRequestOptions, 'abortSignal'>
 ): Promise<string> {
-  // 生图请求失败后不自动重试，避免重复扣费或生成多份结果。
+  const baseTimeout = requestOptions?.timeoutMs ?? GEMINI_IMAGE_REQUEST_TIMEOUT_MS;
+  const controlTimeoutMs = BULK_BASE ? Math.max(baseTimeout, BULK_PROXY_IMAGE_TIMEOUT_MS) : baseTimeout;
+  // 429/503/UNAVAILABLE 等自动退避重试；成功返回图片后不会再次请求。
   return callWithRetry(async (signal) => {
     const ai = getAI();
     const isTextToImage = !imageBase64;
     const systemInstruction = (customSystemPrompt || (isTextToImage ? DEFAULT_PROMPTS.dialog_text_to_image : DEFAULT_PROMPTS.edit)).replace('{instruction}', instruction);
-    const timeoutMs = requestOptions?.timeoutMs ?? GEMINI_IMAGE_REQUEST_TIMEOUT_MS;
+    const timeoutMs = baseTimeout;
     const config: { systemInstruction: string; imageConfig?: { aspectRatio?: string; imageSize?: string } } = {
       systemInstruction
     };
@@ -577,7 +601,13 @@ export async function dialogGenerateImage(
     const textPart = response.candidates?.[0]?.content?.parts?.find((p: { text?: string }) => p.text);
     const hint = textPart?.text?.slice(0, 120) ? `（模型返回了文字: ${String(textPart.text).slice(0, 120)}…）` : '（当前模型可能不支持图像输出，请换用「快速」或「Pro」挡位）';
     throw new Error(`生图未返回图片${hint}`);
-  }, { ...requestOptions, abortSignal, timeoutMs: requestOptions?.timeoutMs ?? GEMINI_IMAGE_REQUEST_TIMEOUT_MS, retries: 0 });
+  }, {
+    ...requestOptions,
+    abortSignal,
+    timeoutMs: controlTimeoutMs,
+    retries: requestOptions?.retries ?? IMAGE_GEN_RETRIES_ON_OVERLOAD,
+    retryDelayMs: requestOptions?.retryDelayMs ?? IMAGE_GEN_RETRY_DELAY_MS,
+  });
 }
 
 /**
@@ -595,11 +625,13 @@ export async function dialogGenerateImages(
   abortSignal?: AbortSignal,
   requestOptions?: Omit<GeminiRequestOptions, 'abortSignal'>
 ): Promise<string[]> {
+  const baseTimeout = requestOptions?.timeoutMs ?? GEMINI_IMAGE_REQUEST_TIMEOUT_MS;
+  const controlTimeoutMs = BULK_BASE ? Math.max(baseTimeout, BULK_PROXY_IMAGE_TIMEOUT_MS) : baseTimeout;
   return callWithRetry(async (signal) => {
     const ai = getAI();
     const isTextToImage = !imageBase64;
     const systemInstruction = (customSystemPrompt || (isTextToImage ? DEFAULT_PROMPTS.dialog_text_to_image : DEFAULT_PROMPTS.edit)).replace('{instruction}', instruction);
-    const timeoutMs = requestOptions?.timeoutMs ?? GEMINI_IMAGE_REQUEST_TIMEOUT_MS;
+    const timeoutMs = baseTimeout;
     const config: { systemInstruction: string; imageConfig?: { aspectRatio?: string; imageSize?: string } } = {
       systemInstruction
     };
@@ -629,7 +661,13 @@ export async function dialogGenerateImages(
       throw new Error(`生图未返回图片${hint}`);
     }
     return out;
-  }, { ...requestOptions, abortSignal, timeoutMs: requestOptions?.timeoutMs ?? GEMINI_IMAGE_REQUEST_TIMEOUT_MS, retries: 0 });
+  }, {
+    ...requestOptions,
+    abortSignal,
+    timeoutMs: controlTimeoutMs,
+    retries: requestOptions?.retries ?? IMAGE_GEN_RETRIES_ON_OVERLOAD,
+    retryDelayMs: requestOptions?.retryDelayMs ?? IMAGE_GEN_RETRY_DELAY_MS,
+  });
 }
 
 /**
@@ -644,11 +682,12 @@ export async function dialogGenerateImageMulti(
   requestOptions?: Omit<GeminiRequestOptions, 'abortSignal'>
 ): Promise<string> {
   if (imagesBase64.length === 0) throw new Error('多图生图至少需要一张图片');
-  // 多图生图同样属于高成本请求，失败后交由上层显式决定是否重试。
+  const baseTimeout = requestOptions?.timeoutMs ?? GEMINI_IMAGE_REQUEST_TIMEOUT_MS;
+  const controlTimeoutMs = BULK_BASE ? Math.max(baseTimeout, BULK_PROXY_IMAGE_TIMEOUT_MS) : baseTimeout;
   return callWithRetry(async (signal) => {
     const ai = getAI();
     const systemInstruction = (DEFAULT_PROMPTS.edit || '').replace('{instruction}', instruction);
-    const timeoutMs = requestOptions?.timeoutMs ?? GEMINI_IMAGE_REQUEST_TIMEOUT_MS;
+    const timeoutMs = baseTimeout;
     const config: { systemInstruction: string; imageConfig?: { aspectRatio?: string; imageSize?: string } } = {
       systemInstruction
     };
@@ -674,7 +713,13 @@ export async function dialogGenerateImageMulti(
     const textPart = response.candidates?.[0]?.content?.parts?.find((p: { text?: string }) => p.text);
     const hint = textPart?.text?.slice(0, 120) ? `（模型返回了文字: ${String(textPart.text).slice(0, 120)}…）` : '（当前模型可能不支持图像输出）';
     throw new Error(`生图未返回图片${hint}`);
-  }, { ...requestOptions, abortSignal, timeoutMs: requestOptions?.timeoutMs ?? GEMINI_IMAGE_REQUEST_TIMEOUT_MS, retries: 0 });
+  }, {
+    ...requestOptions,
+    abortSignal,
+    timeoutMs: controlTimeoutMs,
+    retries: requestOptions?.retries ?? IMAGE_GEN_RETRIES_ON_OVERLOAD,
+    retryDelayMs: requestOptions?.retryDelayMs ?? IMAGE_GEN_RETRY_DELAY_MS,
+  });
 }
 
 /**
