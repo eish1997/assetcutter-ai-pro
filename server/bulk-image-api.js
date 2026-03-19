@@ -83,6 +83,109 @@ function normalizeSecret(v) {
   return v.replace(/\uFEFF/g, '').replace(/\r\n?/g, '').trim();
 }
 
+// -------- Gemini API Key Pool（key 矩阵分摊）--------
+// 通过多个 Gemini 项目/Key 来分摊并发压力。
+// 配额/限流在 Google 侧通常按 Project（而非单个 API key）共享；但多 Project + 多 Key 往往能提升可用并发。
+//
+// 环境变量（Render 建议配置）：
+// GEMINI_API_KEYS=key1,key2,key3
+// GEMINI_KEY_POOL_MAX_IN_FLIGHT_PER_KEY=3
+const GEMINI_API_KEYS_RAW = (process.env.GEMINI_API_KEYS || '').trim();
+const GEMINI_API_KEY_POOL = Array.from(
+  new Set(
+    GEMINI_API_KEYS_RAW
+      ? GEMINI_API_KEYS_RAW
+          .split(',')
+          .map((s) => normalizeSecret(s))
+          .filter(Boolean)
+      : []
+  )
+);
+const GEMINI_KEY_POOL_MAX_IN_FLIGHT_PER_KEY = Number(process.env.GEMINI_KEY_POOL_MAX_IN_FLIGHT_PER_KEY) || 3;
+
+const geminiKeyPoolInFlight = new Map(); // key -> inFlight
+let geminiKeyPoolRoundRobin = 0;
+const geminiKeyPoolWaiters = [];
+
+function getKeyInFlight(key) {
+  return geminiKeyPoolInFlight.get(key) || 0;
+}
+
+function acquireGeminiKeySlotSync() {
+  if (!GEMINI_API_KEY_POOL.length) return null;
+  const len = GEMINI_API_KEY_POOL.length;
+  for (let i = 0; i < len; i++) {
+    const idx = (geminiKeyPoolRoundRobin + i) % len;
+    const key = GEMINI_API_KEY_POOL[idx];
+    if (getKeyInFlight(key) < GEMINI_KEY_POOL_MAX_IN_FLIGHT_PER_KEY) {
+      geminiKeyPoolRoundRobin = (idx + 1) % len;
+      geminiKeyPoolInFlight.set(key, getKeyInFlight(key) + 1);
+      return key;
+    }
+  }
+  return null;
+}
+
+async function acquireGeminiKeySlot() {
+  // 没配 key 池：使用单 key（旧行为）
+  if (!GEMINI_API_KEY_POOL.length) {
+    const single = normalizeSecret(process.env.GEMINI_API_KEY || '');
+    if (!single) return { key: '', release: () => {} };
+    return { key: single, release: () => {} };
+  }
+
+  while (true) {
+    const key = acquireGeminiKeySlotSync();
+    if (key) {
+      return {
+        key,
+        release: () => {
+          geminiKeyPoolInFlight.set(key, Math.max(0, getKeyInFlight(key) - 1));
+          const next = geminiKeyPoolWaiters.shift();
+          if (next) next();
+        },
+      };
+    }
+    await new Promise((resolve) => geminiKeyPoolWaiters.push(resolve));
+  }
+}
+
+function buildDiagMessage(code, message, detail) {
+  const d = detail ? `｜详情：${detail}` : '';
+  return `【${code}】${message}${d}`;
+}
+
+function parseInlineImageData(input) {
+  const raw = String(input || '').trim();
+  const matched = raw.match(/^data:([^;,]+);base64,(.+)$/i);
+  if (matched) {
+    return {
+      mimeType: matched[1] || 'image/jpeg',
+      data: matched[2] || '',
+    };
+  }
+  return { mimeType: 'image/jpeg', data: raw };
+}
+
+function collectInlineImagesFromResponse(response) {
+  const out = [];
+  const candidates = Array.isArray(response?.candidates)
+    ? response.candidates
+    : Array.isArray(response?.response?.candidates)
+      ? response.response.candidates
+      : [];
+  for (const c of candidates) {
+    const parts = Array.isArray(c?.content?.parts) ? c.content.parts : [];
+    for (const part of parts) {
+      if (part?.inlineData?.data) {
+        const mimeType = String(part.inlineData.mimeType || 'image/png');
+        out.push(`data:${mimeType};base64,${part.inlineData.data}`);
+      }
+    }
+  }
+  return out;
+}
+
 // ---------- RPD (in-memory, keyed by date) ----------
 const rpdByDate = new Map();
 
@@ -160,8 +263,12 @@ async function loadPersisted() {
 
 // ---------- Gemini: single request, return all images ----------
 async function generateImages(apiKey, imageBase64, instruction, numImages, model, options) {
-  const key = normalizeSecret(apiKey || process.env.GEMINI_API_KEY || '');
-  if (!key) throw new Error('No Gemini API key (env GEMINI_API_KEY or request apiKey)');
+  const explicitKey = apiKey != null ? normalizeSecret(apiKey) : '';
+  const keySlot = explicitKey
+    ? { key: explicitKey, release: () => {} }
+    : await acquireGeminiKeySlot();
+  const key = keySlot.key;
+  if (!key) throw new Error(buildDiagMessage('MISSING_API_KEY', '未配置 Gemini API Key（环境变量 GEMINI_API_KEY 或 GEMINI_API_KEYS）'));
   const ai = new GoogleGenAI({ apiKey: key });
   const isTextToImage = !imageBase64;
   const systemInstruction = (isTextToImage ? DEFAULT_PROMPTS.dialog_text_to_image : DEFAULT_PROMPTS.edit).replace('{instruction}', instruction);
@@ -174,30 +281,34 @@ async function generateImages(apiKey, imageBase64, instruction, numImages, model
   const parts = isTextToImage
     ? [{ text: instruction }]
     : [
-        { inlineData: { mimeType: 'image/jpeg', data: (imageBase64 || '').split(',')[1] || imageBase64 || '' } },
+        { inlineData: parseInlineImageData(imageBase64 || '') },
         { text: instruction },
       ];
-  const response = await ai.models.generateContent({
-    model: model || 'gemini-2.5-flash-image',
-    contents: { parts },
-    config: { ...config, httpOptions: { timeout: IMAGE_REQUEST_TIMEOUT_MS } },
-  });
-  const out = [];
-  for (const part of response.candidates?.[0]?.content?.parts || []) {
-    if (part.inlineData) out.push(`data:image/png;base64,${part.inlineData.data}`);
+  if (!isTextToImage && !parts[0]?.inlineData?.data) {
+    throw new Error(buildDiagMessage('INPUT_IMAGE_EMPTY', '输入图片为空或 base64 无效'));
   }
-  if (out.length === 0) {
-    const textPart = response.candidates?.[0]?.content?.parts?.find((p) => p.text);
-    const hint = textPart?.text?.slice(0, 120) ? `（模型返回了文字: ${String(textPart.text).slice(0, 120)}…）` : '（当前模型可能不支持图像输出）';
-    throw new Error(`生图未返回图片${hint}`);
+  try {
+    const response = await ai.models.generateContent({
+      model: model || 'gemini-2.5-flash-image',
+      contents: { parts },
+      config: { ...config, httpOptions: { timeout: IMAGE_REQUEST_TIMEOUT_MS } },
+    });
+    const out = collectInlineImagesFromResponse(response);
+    if (out.length === 0) {
+      const textPart = response.candidates?.[0]?.content?.parts?.find((p) => p.text);
+      const hint = textPart?.text?.slice(0, 120) ? `（模型返回了文字: ${String(textPart.text).slice(0, 120)}…）` : '（当前模型可能不支持图像输出）';
+      throw new Error(buildDiagMessage('NO_INLINE_IMAGE_FOUND', `生图未返回图片${hint}`));
+    }
+    return out;
+  } finally {
+    keySlot.release?.();
   }
-  return out;
 }
 
 async function proxyGenerateContent(model, contents, config) {
-  const key = normalizeSecret(process.env.GEMINI_API_KEY || '');
-  if (!key) throw new Error('No Gemini API key (env GEMINI_API_KEY)');
-  const ai = new GoogleGenAI({ apiKey: key });
+  const keySlot = await acquireGeminiKeySlot();
+  const key = keySlot.key;
+  if (!key) throw new Error('No Gemini API key (env GEMINI_API_KEY or GEMINI_API_KEYS)');
   const safeConfig = { ...(config || {}) };
   if (safeConfig.abortSignal) delete safeConfig.abortSignal;
   const timeout = Number(safeConfig?.httpOptions?.timeout) || IMAGE_REQUEST_TIMEOUT_MS;
@@ -205,22 +316,62 @@ async function proxyGenerateContent(model, contents, config) {
     ...safeConfig,
     httpOptions: { ...(safeConfig.httpOptions || {}), timeout },
   };
-  const response = await ai.models.generateContent({
-    model: model || 'gemini-2.5-flash',
-    contents,
-    config: mergedConfig,
-  });
-  // 将 Node SDK 的响应压缩成前端常用的轻量结构，保持与浏览器 SDK 近似：
-  // - text: 聚合文本
-  // - candidates: 原始 candidates（包含 content.parts 等）
-  const text = typeof response.text === 'string' ? response.text : '';
-  const candidates = response.candidates || response.response?.candidates || [];
-  return { text, candidates };
+  let ai;
+  try {
+    ai = new GoogleGenAI({ apiKey: key });
+    const response = await ai.models.generateContent({
+      model: model || 'gemini-2.5-flash',
+      contents,
+      config: mergedConfig,
+    });
+    // 将 Node SDK 的响应压缩成前端常用的轻量结构，保持与浏览器 SDK 近似：
+    // - text: 聚合文本
+    // - candidates: 原始 candidates（包含 content.parts 等）
+    const text = typeof response.text === 'string' ? response.text : '';
+    const candidates = response.candidates || response.response?.candidates || [];
+    return { text, candidates };
+  } finally {
+    keySlot.release?.();
+  }
 }
 
 // ---------- Gemini 代理异步任务（避免网关/平台对长连接 10～15s 超时导致 503/504）----------
 const GEMINI_ASYNC_JOB_TTL_MS = Number(process.env.GEMINI_ASYNC_JOB_TTL_MS) || 60 * 60 * 1000;
 const geminiAsyncJobs = new Map();
+
+// 多人同时使用时，/proxy/gemini/async 会产生大量异步任务。
+// 为避免并发失控导致 Google 返回 429/503，需要对“真实调用 generateContent 的并发”做全局限流。
+const GEMINI_ASYNC_PROXY_MAX_CONCURRENT = Number(process.env.GEMINI_ASYNC_PROXY_MAX_CONCURRENT) || 4;
+let geminiProxyInFlight = 0;
+const geminiProxyWaiters = [];
+function acquireGeminiProxySlot() {
+  if (geminiProxyInFlight < GEMINI_ASYNC_PROXY_MAX_CONCURRENT) {
+    geminiProxyInFlight++;
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    geminiProxyWaiters.push(resolve);
+  }).then(() => {
+    geminiProxyInFlight++;
+  });
+}
+function releaseGeminiProxySlot() {
+  geminiProxyInFlight = Math.max(0, geminiProxyInFlight - 1);
+  const next = geminiProxyWaiters.shift();
+  if (next) next();
+}
+async function withGeminiProxySlot(fn) {
+  await acquireGeminiProxySlot();
+  try {
+    return await fn();
+  } finally {
+    releaseGeminiProxySlot();
+  }
+}
+
+// 给任务一个“最大总等待预算”（确保尽量在前端轮询窗口前完成）。
+// 前端轮询上限大约在 540000~600000ms，因此默认值取靠近上限但仍略小于最大值。
+const GEMINI_ASYNC_JOB_MAX_WAIT_MS = Number(process.env.GEMINI_ASYNC_JOB_MAX_WAIT_MS) || 590_000; // 9m50s
 
 function sweepGeminiAsyncJobs() {
   const now = Date.now();
@@ -244,10 +395,16 @@ function createGeminiAsyncJob(model, contents, config) {
     const job = geminiAsyncJobs.get(id);
     if (!job) return;
     job.status = 'running';
+    const startedAt = Date.now();
     let lastErr;
     for (let attempt = 0; attempt < GEMINI_PROXY_MAX_ATTEMPTS; attempt++) {
       try {
-        const result = await proxyGenerateContent(model, contents, config);
+        // 真实调用 generateContent 仍受全局并发限流保护（semaphore）。
+        // 不做“动态缩短超时”，避免影响成功率；让它尽量自然完成，再由最大等待预算兜底。
+        if (Date.now() - startedAt > GEMINI_ASYNC_JOB_MAX_WAIT_MS) {
+          throw new Error(`Gemini 异步任务最大等待超时（>${GEMINI_ASYNC_JOB_MAX_WAIT_MS}ms）`);
+        }
+        const result = await withGeminiProxySlot(() => proxyGenerateContent(model, contents, config));
         const j = geminiAsyncJobs.get(id);
         if (!j) return;
         j.status = 'completed';
@@ -256,11 +413,12 @@ function createGeminiAsyncJob(model, contents, config) {
         return;
       } catch (e) {
         lastErr = e;
-        if (attempt < GEMINI_PROXY_MAX_ATTEMPTS - 1 && isRetryable(e)) {
-          const delay = Math.min(90_000, 5000 * Math.pow(2, attempt));
-          console.warn('[proxy] gemini async retry', id, attempt + 1, 'after', delay, 'ms');
-          await sleep(delay);
-        }
+        const shouldRetry = attempt < GEMINI_PROXY_MAX_ATTEMPTS - 1 && isRetryable(e);
+        if (!shouldRetry) break;
+        // 降低重试退避上限：避免单次任务总耗时被 delay 放大到前端轮询超时窗口之外
+        const delay = Math.min(30_000, 5000 * Math.pow(2, attempt));
+        console.warn(`[代理] Gemini 异步任务重试 id=${id} 第${attempt + 1}次失败，${delay}ms 后继续`);
+        await sleep(delay);
       }
     }
     const j = geminiAsyncJobs.get(id);
@@ -268,7 +426,7 @@ function createGeminiAsyncJob(model, contents, config) {
     j.status = 'failed';
     j.error = lastErr?.message ?? String(lastErr);
     j.updatedAt = Date.now();
-    console.error('[proxy] gemini async job failed:', id, j.error);
+    console.error(`[代理] Gemini 异步任务失败 id=${id} error=${j.error}`);
   });
   return id;
 }
@@ -399,7 +557,7 @@ function processQueue() {
           };
         });
         console.error(
-          `[job] failed id=${step.jobId} message="${message.replace(/\s+/g, ' ').slice(0, 160)}"`
+          `[任务] 执行失败 id=${step.jobId} message="${message.replace(/\s+/g, ' ').slice(0, 160)}"`
         );
       })
       .finally(() => {
@@ -673,8 +831,9 @@ const server = http.createServer(async (req, res) => {
       }
       const jobId = createGeminiAsyncJob(model, contents, config);
       sendJson(res, 202, { jobId, status: 'pending' });
-    } catch {
-      sendError(res, 500, 'Request error');
+    } catch (e) {
+      const msg = e?.message ?? String(e);
+      sendError(res, 500, msg);
     }
     return;
   }
@@ -721,7 +880,7 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 200, response);
       } catch (e) {
         const msg = e?.message ?? String(e);
-        console.error('[proxy] gemini generate-content error:', msg);
+        console.error('[代理] Gemini generate-content 调用失败:', msg);
         sendError(res, 500, msg);
       }
     } catch {

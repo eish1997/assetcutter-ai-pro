@@ -125,6 +125,56 @@ export interface GeminiRequestOptions {
 const GEMINI_REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_REQUEST_TIMEOUT_MS) || 45_000;
 const GEMINI_IMAGE_REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_IMAGE_REQUEST_TIMEOUT_MS) || 120_000;
 
+type GeminiDiagCode =
+  | "INPUT_IMAGE_EMPTY"
+  | "NO_INLINE_IMAGE_FOUND"
+  | "GEMINI_TIMEOUT"
+  | "GEMINI_NETWORK"
+  | "GEMINI_OVERLOADED"
+  | "GEMINI_INTERNAL"
+  | "GEMINI_UNKNOWN";
+
+function buildDiagMessage(code: GeminiDiagCode, message: string, detail?: string): string {
+  const d = detail ? `｜详情：${detail}` : "";
+  return `【${code}】${message}${d}`;
+}
+
+function extractDiagCode(raw: string): GeminiDiagCode | null {
+  const m = String(raw || "").match(/【(INPUT_IMAGE_EMPTY|NO_INLINE_IMAGE_FOUND|GEMINI_TIMEOUT|GEMINI_NETWORK|GEMINI_OVERLOADED|GEMINI_INTERNAL|GEMINI_UNKNOWN)】/);
+  return (m?.[1] as GeminiDiagCode) || null;
+}
+
+function parseInlineImageData(input: string): { mimeType: string; data: string } {
+  const raw = (input || "").trim();
+  const matched = raw.match(/^data:([^;,]+);base64,(.+)$/i);
+  if (matched) {
+    return {
+      mimeType: matched[1] || "image/jpeg",
+      data: matched[2] || "",
+    };
+  }
+  return { mimeType: "image/jpeg", data: raw };
+}
+
+function collectInlineImagesFromGeminiResponse(response: any): string[] {
+  const out: string[] = [];
+  const candidates = Array.isArray(response?.candidates)
+    ? response.candidates
+    : Array.isArray(response?.response?.candidates)
+      ? response.response.candidates
+      : [];
+  for (const c of candidates) {
+    const parts = Array.isArray(c?.content?.parts) ? c.content.parts : [];
+    for (const part of parts) {
+      if (part?.inlineData?.data) {
+        const mimeType = String(part.inlineData.mimeType || "image/png");
+        out.push(`data:${mimeType};base64,${part.inlineData.data}`);
+      }
+    }
+  }
+  return out;
+}
+
 function createAbortError(message: string): Error {
   const error = new Error(message);
   error.name = 'AbortError';
@@ -202,7 +252,7 @@ export async function withGeminiRequestControl<T>(
     ]);
   } catch (error) {
     if (options?.abortSignal?.aborted) throw createAbortError('请求已取消');
-    if (timedOut) throw new Error(`请求超时（>${timeoutMs}ms）`);
+    if (timedOut) throw new Error(buildDiagMessage("GEMINI_TIMEOUT", `请求超时（>${timeoutMs}ms）`));
     if (isAbortError(error)) throw createAbortError('请求已取消');
     throw error;
   } finally {
@@ -393,12 +443,30 @@ async function callWithRetry<T>(
 ): Promise<T> {
   const retries = options?.retries ?? 3;
   const delay = options?.retryDelayMs ?? 2000;
+  const maxAttempts = retries + 1;
+  const currentAttempt = Math.max(1, maxAttempts - retries);
   try {
     return await withGeminiRequestControl(apiFn, options);
   } catch (err) {
     if (isAbortError(err)) throw err;
     if (isRetryableError(err) && retries > 0) {
-      console.warn(`Gemini API 暂时异常，${delay}ms 后重试... (剩余 ${retries} 次)`);
+      const raw = String((err as Error)?.message ?? err);
+      const code =
+        extractDiagCode(raw) ||
+        (/429|503|504|UNAVAILABLE|DEADLINE_EXCEEDED|RESOURCE_EXHAUSTED|overloaded|high demand/i.test(raw)
+          ? "GEMINI_OVERLOADED"
+          : /500|INTERNAL|Internal error/i.test(raw)
+            ? "GEMINI_INTERNAL"
+            : /Failed to fetch|NetworkError|ECONNRESET|ETIMEDOUT/i.test(raw)
+              ? "GEMINI_NETWORK"
+              : "GEMINI_UNKNOWN");
+      console.warn(
+        buildDiagMessage(
+          code,
+          `Gemini 请求异常，准备重试（第 ${currentAttempt}/${maxAttempts} 次失败）`,
+          `剩余重试 ${retries} 次，${delay}ms 后重试`
+        )
+      );
       await sleepWithAbort(delay, options?.abortSignal);
       return callWithRetry(apiFn, { ...options, retries: retries - 1, retryDelayMs: delay * 2 });
     }
@@ -409,6 +477,11 @@ async function callWithRetry<T>(
 /** 将 API 返回的原始错误转为用户可读的简短说明（用于界面展示） */
 export function normalizeApiErrorMessage(err: unknown): string {
   const raw = String((err as any)?.message ?? err);
+  const diagCode = extractDiagCode(raw);
+  if (diagCode) {
+    const compact = raw.replace(/【[^】]+】/g, '').trim();
+    return compact.length > 140 ? compact.slice(0, 140) + "…" : compact;
+  }
   if (raw.includes('Failed to fetch sending request') || raw.includes('TypeError: Failed to fetch')) {
     return '请求发送失败：请检查网络、代理或稍后重试';
   }
@@ -563,8 +636,8 @@ export async function understandImageEditIntent(
       ];
       const images = Array.isArray(imageBase64) ? imageBase64.filter(Boolean) : imageBase64 ? [imageBase64] : [];
       for (let i = images.length - 1; i >= 0; i--) {
-        const data = images[i].split(',')[1] || images[i];
-        parts.unshift({ inlineData: { mimeType: "image/jpeg", data } });
+        const parsed = parseInlineImageData(images[i]);
+        parts.unshift({ inlineData: { mimeType: parsed.mimeType, data: parsed.data } });
       }
       const response = await ai.models.generateContent({
         model,
@@ -630,20 +703,27 @@ export async function dialogGenerateImage(
     const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = isTextToImage
       ? [{ text: instruction }]
       : [
-          { inlineData: { mimeType: 'image/jpeg', data: imageBase64.split(',')[1] || imageBase64 } },
+          { inlineData: parseInlineImageData(imageBase64) },
           { text: instruction }
         ];
+    if (!isTextToImage) {
+      const first = parts[0] as { inlineData?: { mimeType: string; data: string } };
+      if (!first.inlineData?.data) {
+        throw new Error(buildDiagMessage("INPUT_IMAGE_EMPTY", "输入图片为空或 base64 无效"));
+      }
+    }
     const response = await ai.models.generateContent({
       model,
       contents: { parts },
       config: buildGeminiConfig(config, signal, timeoutMs)
     });
-    for (const part of response.candidates?.[0]?.content?.parts || []) {
-      if (part.inlineData) return `data:image/png;base64,${part.inlineData.data}`;
+    const images = collectInlineImagesFromGeminiResponse(response);
+    if (images.length > 0) {
+      return images[0];
     }
     const textPart = response.candidates?.[0]?.content?.parts?.find((p: { text?: string }) => p.text);
     const hint = textPart?.text?.slice(0, 120) ? `（模型返回了文字: ${String(textPart.text).slice(0, 120)}…）` : '（当前模型可能不支持图像输出，请换用「快速」或「Pro」挡位）';
-    throw new Error(`生图未返回图片${hint}`);
+    throw new Error(buildDiagMessage("NO_INLINE_IMAGE_FOUND", `生图未返回图片${hint}`));
   }, {
     ...requestOptions,
     abortSignal,
@@ -686,22 +766,25 @@ export async function dialogGenerateImages(
     const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = isTextToImage
       ? [{ text: instruction }]
       : [
-          { inlineData: { mimeType: 'image/jpeg', data: imageBase64.split(',')[1] || imageBase64 } },
+          { inlineData: parseInlineImageData(imageBase64) },
           { text: instruction }
         ];
+    if (!isTextToImage) {
+      const first = parts[0] as { inlineData?: { mimeType: string; data: string } };
+      if (!first.inlineData?.data) {
+        throw new Error(buildDiagMessage("INPUT_IMAGE_EMPTY", "输入图片为空或 base64 无效"));
+      }
+    }
     const response = await ai.models.generateContent({
       model,
       contents: { parts },
       config: buildGeminiConfig(config, signal, timeoutMs)
     });
-    const out: string[] = [];
-    for (const part of response.candidates?.[0]?.content?.parts || []) {
-      if (part.inlineData) out.push(`data:image/png;base64,${part.inlineData.data}`);
-    }
+    const out = collectInlineImagesFromGeminiResponse(response);
     if (out.length === 0) {
       const textPart = response.candidates?.[0]?.content?.parts?.find((p: { text?: string }) => p.text);
       const hint = textPart?.text?.slice(0, 120) ? `（模型返回了文字: ${String(textPart.text).slice(0, 120)}…）` : '（当前模型可能不支持图像输出）';
-      throw new Error(`生图未返回图片${hint}`);
+      throw new Error(buildDiagMessage("NO_INLINE_IMAGE_FOUND", `生图未返回图片${hint}`));
     }
     return out;
   }, {
@@ -741,8 +824,10 @@ export async function dialogGenerateImageMulti(
     }
     const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [];
     for (const img of imagesBase64) {
-      const data = img.split(',')[1] || img;
-      parts.push({ inlineData: { mimeType: 'image/jpeg', data } });
+      parts.push({ inlineData: parseInlineImageData(img) });
+    }
+    if (parts.some((p) => "inlineData" in p && !p.inlineData?.data)) {
+      throw new Error(buildDiagMessage("INPUT_IMAGE_EMPTY", "多图输入中存在空图片或无效 base64"));
     }
     parts.push({ text: instruction });
     const response = await ai.models.generateContent({
@@ -750,12 +835,13 @@ export async function dialogGenerateImageMulti(
       contents: { parts },
       config: buildGeminiConfig(config, signal, timeoutMs)
     });
-    for (const part of response.candidates?.[0]?.content?.parts || []) {
-      if (part.inlineData) return `data:image/png;base64,${part.inlineData.data}`;
+    const images = collectInlineImagesFromGeminiResponse(response);
+    if (images.length > 0) {
+      return images[0];
     }
     const textPart = response.candidates?.[0]?.content?.parts?.find((p: { text?: string }) => p.text);
     const hint = textPart?.text?.slice(0, 120) ? `（模型返回了文字: ${String(textPart.text).slice(0, 120)}…）` : '（当前模型可能不支持图像输出）';
-    throw new Error(`生图未返回图片${hint}`);
+    throw new Error(buildDiagMessage("NO_INLINE_IMAGE_FOUND", `生图未返回图片${hint}`));
   }, {
     ...requestOptions,
     abortSignal,

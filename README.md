@@ -63,7 +63,8 @@
 若要把项目发布成线上可访问的网站，按 **[DEPLOY_GUIDE.md](DEPLOY_GUIDE.md)** 操作即可（GitHub → Vercel，全程点选 + 填几处配置）。
 
 **前端（如 Vercel）+ 批量后端（如 Render）**  
-构建时设置 `VITE_BULK_IMAGE_API` 指向 `server/bulk-image-api.js` 的公网地址；`GEMINI_API_KEY` 仅配置在后端。对话/网站助手等经该后端的 Gemini 调用使用 **`POST /proxy/gemini/async` + 轮询 `GET /proxy/gemini/async/:jobId`**，避免云平台对单次长 HTTP 请求约 10～15 秒超时导致 503/504。详见 `docs/BULK_IMAGE_BACKEND_入门教程.md`。
+构建时设置 `VITE_BULK_IMAGE_API` 指向 `server/bulk-image-api.js` 的公网地址；Gemini key 仅配置在后端（`GEMINI_API_KEY` 或 `GEMINI_API_KEYS`）。对话/网站助手等经该后端的 Gemini 调用使用 **`POST /proxy/gemini/async` + 轮询 `GET /proxy/gemini/async/:jobId`**，避免云平台对单次长 HTTP 请求约 10～15 秒超时导致 503/504。详见 `docs/BULK_IMAGE_BACKEND_入门教程.md`。
+批量出图后端的异步任务并发/重试可通过 `GEMINI_ASYNC_PROXY_MAX_CONCURRENT`、`GEMINI_PROXY_RETRIES`、`GEMINI_ASYNC_JOB_TTL_MS`、`GEMINI_ASYNC_JOB_MAX_WAIT_MS` 调整；跨域允许源通过 `PROXY_ALLOWED_ORIGINS` 配置（如需支持 Vercel Origin）。
 
 **可选：入站密码**  
 在环境变量、`.env` 或本地开发时的 `.env.local` 中设置 `VITE_SITE_PASSWORD` 后，打开网站会先要求输入密码，正确后才进入应用；同一标签页内刷新无需重输，关闭标签页后需重新输入。不设置则无密码门控。
@@ -99,6 +100,11 @@
 - `VITE_SEAM_REPAIR_API`：生产环境贴图修缝后端地址（可选，开发时用代理即可）
 - `VITE_BULK_IMAGE_API`：批量出图后端地址（如 `http://localhost:9002`）；不设置时批量出图仅用前端本地队列与 RPD 近似
 - `BULK_IMAGE_PORT`：批量出图后端监听端口（默认 9002），避免与 `PORT=9001` 的 ai3d 代理冲突
+- （批量出图后端）`GEMINI_API_KEY` / `GEMINI_API_KEYS`：Gemini 服务端密钥（支持多个 key，按 key 池分摊并发压力）
+- （批量出图后端）`GEMINI_KEY_POOL_MAX_IN_FLIGHT_PER_KEY`：单个 key 允许的并发 in-flight 请求数
+- （批量出图后端）`GEMINI_ASYNC_PROXY_MAX_CONCURRENT`：异步代理全局并发上限（避免 429/503）
+- （批量出图后端）`GEMINI_ASYNC_JOB_TTL_MS` / `GEMINI_ASYNC_JOB_MAX_WAIT_MS` / `GEMINI_PROXY_RETRIES`：异步 job 生命周期、最大等待与失败重试策略
+- （批量出图后端）`PROXY_ALLOWED_ORIGINS`：CORS 允许源列表；以及 `BULK_IMAGE_BIND_HOST`（云平台端口扫描需监听 `0.0.0.0`，默认已是 `0.0.0.0`）
 - `VITE_ADMIN_PASSWORD`：可选，管理后台（/admin）入口密码；设置后访问 /admin 需先输入此密码
 - 腾讯混元生 3D：运行 `npm run proxy` 时需在 `.env.local` 或环境中设置 `TENCENT_SECRET_ID`、`TENCENT_SECRET_KEY`；前端仅需设置 `VITE_TENCENT_PROXY`（如 `http://localhost:9001`）。如确需浏览器直持密钥调试，必须显式设置 `VITE_ALLOW_UNSAFE_TENCENT_BROWSER_CREDS=true`，默认关闭。部署说明见 [DEPLOY_GUIDE.md](DEPLOY_GUIDE.md)
 - `VITE_SITE_PASSWORD`：可选，整站入站密码；本地开发可写在 `.env.local`，与上述变量一起管理。
