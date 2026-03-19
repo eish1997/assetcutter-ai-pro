@@ -343,10 +343,26 @@ function errorStringForRetry(err: unknown): string {
   }
 }
 
-/** 判断是否为可重试的 API 错误（限流、过载、服务内部错误等） */
+/** SDK 常以 code/status 抛出，不一定带 503 字符串 */
 function isRetryableError(err: unknown): boolean {
+  if (err != null && typeof err === "object") {
+    const e = err as Record<string, unknown>;
+    const code = e.code;
+    const status = e.status;
+    if (code === 504 || code === 503 || code === 429 || code === 500) return true;
+    if (status === "DEADLINE_EXCEEDED" || status === "UNAVAILABLE" || status === "RESOURCE_EXHAUSTED" || status === "INTERNAL") return true;
+    if (typeof code === "string" && /UNAVAILABLE|RESOURCE_EXHAUSTED|DEADLINE_EXCEEDED/i.test(code)) return true;
+    const nested = e.error;
+    if (nested && typeof nested === "object") {
+      const n = nested as Record<string, unknown>;
+      if (n.code === 504 || n.code === 503 || n.code === 429 || n.status === "DEADLINE_EXCEEDED" || n.status === "UNAVAILABLE") return true;
+    }
+  }
   const msg = errorStringForRetry(err);
   return (
+    msg.includes("504") ||
+    msg.includes("DEADLINE_EXCEEDED") ||
+    msg.includes("Deadline expired") ||
     msg.includes("503") ||
     msg.includes("overloaded") ||
     msg.includes("429") ||
@@ -359,7 +375,14 @@ function isRetryableError(err: unknown): boolean {
 }
 
 /** 生图：503/过载时重试；仅在未成功出图前重试，不重复计费成功结果 */
-const IMAGE_GEN_RETRIES_ON_OVERLOAD = 4;
+const IMAGE_GEN_RETRIES_ON_OVERLOAD = 8;
+/** 工作流「理解→生图」：理解阶段在 bulk 代理下需等服务端多次 503 退避，外层超时不能太短 */
+/** 工作流/能力（如转风格）调用 understand 时传入，不跳过理解、专抗 503 高峰 */
+export const CAPABILITY_UNDERSTAND_RETRY_OPTIONS: GeminiRequestOptions = {
+  retries: 16,
+  retryDelayMs: 7000,
+};
+const BULK_PROXY_UNDERSTAND_TIMEOUT_MS = 600_000;
 const IMAGE_GEN_RETRY_DELAY_MS = 6000;
 /** 走 bulk 异步代理时含轮询+服务端退避，总等待需长于单次 SDK 超时 */
 const BULK_PROXY_IMAGE_TIMEOUT_MS = 600_000;
@@ -396,8 +419,11 @@ export function normalizeApiErrorMessage(err: unknown): string {
     if (code === 500 || parsed?.error?.status === "INTERNAL") {
       return "服务暂时异常 (500)，请稍后重试";
     }
+    if (code === 504 || parsed?.error?.status === "DEADLINE_EXCEEDED") {
+      return "生图请求超时（504），系统已自动重试；请稍后再试";
+    }
     if (code === 503 || parsed?.error?.status === "UNAVAILABLE") {
-      return "生图模型当前繁忙（503），请稍后重试或换时段再试";
+      return "生图模型当前繁忙（503），系统已自动重试；请稍后再试";
     }
     if (typeof message === "string" && message.length < 120) return message;
     return raw.slice(0, 100) + (raw.length > 100 ? "…" : "");
@@ -521,26 +547,43 @@ export async function understandImageEditIntent(
   customPrompt?: string,
   options?: GeminiRequestOptions
 ): Promise<{ instruction: string; summary?: string; shouldGenerateImage?: boolean }> {
-  const raw = await callWithRetry(async (signal) => {
-    const ai = getAI();
-    const systemPrompt = customPrompt || DEFAULT_PROMPTS.dialog_understand;
-    const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [
-      { text: `User request: ${userPrompt}\n\nOutput only a valid JSON object with "instruction" (required), optional "summary", and "shouldGenerateImage" (required, true only when user wants to edit/generate a new image):` }
-    ];
-    const images = Array.isArray(imageBase64) ? imageBase64.filter(Boolean) : (imageBase64 ? [imageBase64] : []);
-    for (let i = images.length - 1; i >= 0; i--) {
-      const data = images[i].split(',')[1] || images[i];
-      parts.unshift({ inlineData: { mimeType: 'image/jpeg', data } });
+  const innerTimeout = options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS;
+  const capabilityScale = (options?.retries != null && options.retries > 6) || BULK_BASE;
+  const controlTimeout = capabilityScale
+    ? Math.max(innerTimeout, BULK_PROXY_UNDERSTAND_TIMEOUT_MS)
+    : innerTimeout;
+  const raw = await callWithRetry(
+    async (signal) => {
+      const ai = getAI();
+      const systemPrompt = customPrompt || DEFAULT_PROMPTS.dialog_understand;
+      const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [
+        {
+          text: `User request: ${userPrompt}\n\nOutput only a valid JSON object with "instruction" (required), optional "summary", and "shouldGenerateImage" (required, true only when user wants to edit/generate a new image):`,
+        },
+      ];
+      const images = Array.isArray(imageBase64) ? imageBase64.filter(Boolean) : imageBase64 ? [imageBase64] : [];
+      for (let i = images.length - 1; i >= 0; i--) {
+        const data = images[i].split(',')[1] || images[i];
+        parts.unshift({ inlineData: { mimeType: "image/jpeg", data } });
+      }
+      const response = await ai.models.generateContent({
+        model,
+        contents: { parts },
+        config: buildGeminiConfig({ systemInstruction: systemPrompt }, signal, innerTimeout),
+      });
+      const text = response.text?.trim();
+      if (!text) throw new Error("Empty understanding response");
+      return text;
+    },
+    {
+      ...options,
+      timeoutMs: controlTimeout,
+      retries:
+        options?.retries ??
+        (BULK_BASE ? 10 : 3),
+      retryDelayMs: options?.retryDelayMs ?? (BULK_BASE ? 6000 : 2000),
     }
-    const response = await ai.models.generateContent({
-      model,
-      contents: { parts },
-      config: buildGeminiConfig({ systemInstruction: systemPrompt }, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)
-    });
-    const text = response.text?.trim();
-    if (!text) throw new Error('Empty understanding response');
-    return text;
-  }, options);
+  );
   try {
     const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
     const obj = JSON.parse(cleaned);

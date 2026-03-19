@@ -239,7 +239,7 @@ function createGeminiAsyncJob(model, contents, config) {
     result: null,
     error: null,
   });
-  const GEMINI_PROXY_MAX_ATTEMPTS = Number(process.env.GEMINI_PROXY_RETRIES) || 7;
+  const GEMINI_PROXY_MAX_ATTEMPTS = Number(process.env.GEMINI_PROXY_RETRIES) || 15;
   setImmediate(async () => {
     const job = geminiAsyncJobs.get(id);
     if (!job) return;
@@ -275,7 +275,15 @@ function createGeminiAsyncJob(model, contents, config) {
 
 function isRetryable(e) {
   const msg = String((e && e.message) || e);
-  return /429|503|overloaded|UNAVAILABLE|500|INTERNAL|Internal error/i.test(msg);
+  if (/429|503|504|overloaded|UNAVAILABLE|DEADLINE_EXCEEDED|Deadline expired|500|INTERNAL|Internal error|high demand|try again later/i.test(msg)) return true;
+  const code = e && e.code;
+  const status = e && e.status;
+  if (code === 504 || code === 503 || code === 429 || status === 'DEADLINE_EXCEEDED' || status === 'UNAVAILABLE') return true;
+  try {
+    const j = typeof msg === 'string' && msg.startsWith('{') ? JSON.parse(msg) : null;
+    if (j?.error?.code === 504 || j?.error?.code === 503 || j?.error?.status === 'DEADLINE_EXCEEDED' || j?.error?.status === 'UNAVAILABLE') return true;
+  } catch (_) { /* ignore */ }
+  return false;
 }
 
 function sleep(ms) {

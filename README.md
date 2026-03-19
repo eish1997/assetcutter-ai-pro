@@ -119,6 +119,7 @@ pip install -r requirements.txt
 - **批量出图 / 管理后台无法用**：需启动 `npm run dev:bulk-api` 并设置 `VITE_BULK_IMAGE_API=http://localhost:9002`；管理后台访问 `/admin` 若设了 `VITE_ADMIN_PASSWORD` 需先输入密码。
 - **线上对话生图 503/504 或短超时**：若前端已配 `VITE_BULK_IMAGE_API`，请确认后端已部署含异步 Gemini 代理的版本，并重新构建前端；仍失败时检查 Render 等服务日志与 `PROXY_ALLOWED_ORIGINS`（需包含 Vercel 站点 Origin）。
 - **生图报 503 / UNAVAILABLE（模型繁忙）**：前端会对生图请求做有限次退避重试；后端异步代理可对同一任务多次重试（可选 `GEMINI_PROXY_RETRIES`）。高峰仍失败时请隔段时间再试或换模型挡位。
+- **生图报 504 / DEADLINE_EXCEEDED（处理超时）**：系统会按可重试错误自动退避重试；若仍失败，通常是模型侧高峰导致处理窗口不足，可稍后重试。
 - **生成 3D 报错 / CORS**：本地开发需运行 `npm run proxy` 并设置 `VITE_TENCENT_PROXY=http://localhost:9001`，同时在代理环境中配置好 `TENCENT_SECRET_ID`、`TENCENT_SECRET_KEY`。
 - **生产部署**：见 [DEPLOY_GUIDE.md](DEPLOY_GUIDE.md)。贴图修缝若需上线，需单独部署 8008 后端并设置 `VITE_SEAM_REPAIR_API`；批量出图与管理后台需部署 `bulk-image-api` 并设置 `VITE_BULK_IMAGE_API`；腾讯 3D 需单独部署代理并配置 `VITE_TENCENT_PROXY`。
 

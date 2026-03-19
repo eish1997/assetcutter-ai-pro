@@ -1,6 +1,12 @@
 import type { CustomAppModule, DialogImageGear, CapabilitySet, CapabilitySetNode } from '../types';
 import { DIALOG_IMAGE_GEARS } from '../types';
-import { detectObjectsInImage, understandImageEditIntent, dialogGenerateImage, dialogGenerateImageMulti } from './geminiService';
+import {
+  detectObjectsInImage,
+  understandImageEditIntent,
+  dialogGenerateImage,
+  dialogGenerateImageMulti,
+  CAPABILITY_UNDERSTAND_RETRY_OPTIONS,
+} from './geminiService';
 
 export type CapabilityExecuteContext = {
   /** 用于日志输出（可选） */
@@ -37,7 +43,8 @@ async function resolveCapabilityPrompt(
     inputImageBase64,
     presetPrompt,
     'gemini-3-flash-preview',
-    undefined
+    undefined,
+    CAPABILITY_UNDERSTAND_RETRY_OPTIONS
   );
   const understood = (instruction || '').trim();
   return understood.length > 0 ? understood : null;
