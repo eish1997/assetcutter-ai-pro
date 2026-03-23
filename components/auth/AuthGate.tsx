@@ -14,6 +14,17 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [success, setSuccess] = React.useState('');
   const [submitting, setSubmitting] = React.useState(false);
 
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const token = new URLSearchParams(window.location.search).get('resetToken') || '';
+    if (token) {
+      setResetToken(token);
+      setMode('reset');
+      setSuccess('已读取重置码，请输入新密码后提交');
+      setError('');
+    }
+  }, []);
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');

@@ -117,6 +117,8 @@
 - `AUTH_RESET_RATE_LIMIT_MAX`：找回密码接口限流阈值
 - `AUTH_COOKIE_SAMESITE` / `AUTH_COOKIE_SECURE`：跨域会话 Cookie 策略（Vercel + Render 需 `none` + `true`）
 - `AUTH_PASSWORD_RESET_DEBUG`：密码找回调试模式，开启后 forgot-password 返回重置码（生产建议关闭）
+- `RESEND_API_KEY` / `AUTH_MAIL_FROM` / `AUTH_MAIL_REPLY_TO`：密码找回邮件发送配置（Resend）
+- `AUTH_RESET_PAGE_URL`：重置密码页面地址（邮件按钮跳转地址，通常填你的前端站点根域名）
 - `AUTH_ADMIN_EMAIL` / `AUTH_ADMIN_PASSWORD`：管理员初始化账号（用于 `npm run seed:admin`）
 - `AUTH_ADMIN_USERNAME`：可选，管理员用户名（不填则由邮箱前缀自动生成）
 - `DATABASE_URL`：设置后 `auth-api` 自动改用 Postgres 存储用户与会话；可配合 `npm run migrate:auth-to-postgres` 从本地 JSON 迁移历史数据

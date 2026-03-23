@@ -17,6 +17,7 @@ import {
   updateUserById,
   verifyPassword,
 } from './auth-store.js';
+import { sendPasswordResetMail } from './mailer.js';
 
 const PORT = Number(process.env.PORT || process.env.AUTH_PORT || 9100);
 const BIND_HOST = String(process.env.AUTH_BIND_HOST || '0.0.0.0').trim() || '0.0.0.0';
@@ -327,6 +328,20 @@ const server = http.createServer(async (req, res) => {
       }
       const row = await createPasswordReset(identifier, 15 * 60 * 1000);
       await createAuditLog({ actorIdentifier: identifier, action: 'auth.forgot_password', targetUserId: row?.userId || null, ip: getClientIp(req), userAgent: req.headers['user-agent'] });
+      if (row?.email) {
+        try {
+          await sendPasswordResetMail({ to: row.email, token: row.token });
+        } catch (error) {
+          await createAuditLog({
+            actorIdentifier: identifier,
+            action: 'auth.forgot_password_mail_failed',
+            targetUserId: row.userId,
+            meta: { message: error instanceof Error ? error.message : String(error) },
+            ip: getClientIp(req),
+            userAgent: req.headers['user-agent'],
+          });
+        }
+      }
       json(res, 200, AUTH_PASSWORD_RESET_DEBUG && row ? { ok: true, resetToken: row.token } : { ok: true });
       return;
     }

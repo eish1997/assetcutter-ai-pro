@@ -582,22 +582,23 @@ export async function createPasswordReset(identifier, ttlMs = 15 * 60 * 1000) {
   if (USE_POSTGRES) {
     await ensurePostgres();
     const p = getPool();
-    const userRes = await p.query('SELECT id FROM users WHERE email = $1 OR username = $1 LIMIT 1', [keyword]);
+    const userRes = await p.query('SELECT id, email FROM users WHERE email = $1 OR username = $1 LIMIT 1', [keyword]);
     const userId = userRes.rows[0]?.id;
+    const userEmail = userRes.rows[0]?.email;
     if (!userId) return null;
     await p.query(
       `INSERT INTO password_resets (id, user_id, token_hash, expires_at, used_at, created_at)
        VALUES ($1,$2,$3,$4,$5,$6)`,
       [id, userId, tokenHash, expiresAt, null, createdAt]
     );
-    return { token: rawToken, userId, expiresAt };
+    return { token: rawToken, userId, email: userEmail, expiresAt };
   }
   const db = readDb();
   const user = db.users.find((u) => u.email === keyword || u.username === keyword);
   if (!user) return null;
   db.passwordResets.push({ id, userId: user.id, tokenHash, expiresAt, usedAt: null, createdAt });
   writeDb(db);
-  return { token: rawToken, userId: user.id, expiresAt };
+  return { token: rawToken, userId: user.id, email: user.email, expiresAt };
 }
 
 export async function consumePasswordResetToken(token, newPassword) {
