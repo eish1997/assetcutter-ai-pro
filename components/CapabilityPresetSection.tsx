@@ -33,8 +33,8 @@ const CapabilityPresetSection: React.FC<{
     return 'builtin';
   };
   const getGear = (p: CustomAppModule): DialogImageGear => {
-    const g = (p.imageGear as DialogImageGear) || 'fast';
-    return g === 'pro' ? 'pro' : 'fast';
+    const g = (p.imageGear as DialogImageGear) || 'standard';
+    return DIALOG_IMAGE_GEARS.some((x) => x.id === g) ? g : 'standard';
   };
   const genId = () => {
     try {
@@ -51,7 +51,7 @@ const CapabilityPresetSection: React.FC<{
   const [editCategory, setEditCategory] = useState<CapabilityCategory>('image_gen');
   const [editEngine, setEditEngine] = useState<CapabilityEngine>('gen_image');
   const [editEnabled, setEditEnabled] = useState(true);
-  const [editImageGear, setEditImageGear] = useState<DialogImageGear>('fast');
+  const [editImageGear, setEditImageGear] = useState<DialogImageGear>('standard');
   const [editImageAspectRatio, setEditImageAspectRatio] = useState('');
   const [editImageSize, setEditImageSize] = useState('');
   const [editInstruction, setEditInstruction] = useState('');
@@ -60,7 +60,7 @@ const CapabilityPresetSection: React.FC<{
   const [newCategory, setNewCategory] = useState<CapabilityCategory>('image_gen');
   const [newEngine, setNewEngine] = useState<CapabilityEngine>('gen_image');
   const [newEnabled, setNewEnabled] = useState(true);
-  const [newImageGear, setNewImageGear] = useState<DialogImageGear>('fast');
+  const [newImageGear, setNewImageGear] = useState<DialogImageGear>('standard');
   const [newImageAspectRatio, setNewImageAspectRatio] = useState('');
   const [newImageSize, setNewImageSize] = useState('');
   const [newInstruction, setNewInstruction] = useState('');
@@ -171,7 +171,7 @@ const CapabilityPresetSection: React.FC<{
     setNewCategory('image_gen');
     setNewEngine('gen_image');
     setNewEnabled(true);
-    setNewImageGear('fast');
+    setNewImageGear('standard');
     setNewImageAspectRatio('');
     setNewImageSize('');
     setNewInstruction('');

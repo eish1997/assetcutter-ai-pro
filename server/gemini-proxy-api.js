@@ -12,6 +12,11 @@ const PORT = Number(process.env.PORT || process.env.BULK_IMAGE_PORT || process.e
 const BIND_HOST = (process.env.BULK_IMAGE_BIND_HOST || '0.0.0.0').trim() || '0.0.0.0';
 const MAX_BODY_BYTES = 10 * 1024 * 1024;
 const IMAGE_REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_IMAGE_REQUEST_TIMEOUT_MS) || 120_000;
+const TOAPIS_BASE_URL = String(process.env.TOAPIS_BASE_URL || 'https://toapis.com/v1').trim().replace(/\/+$/, '');
+const TOAPIS_API_KEY = normalizeSecret(process.env.TOAPIS_API_KEY || '');
+const ENABLE_TOAPIS_FALLBACK = String(process.env.ENABLE_TOAPIS_FALLBACK || '').trim().toLowerCase() === 'true';
+const TOAPIS_IMAGE_POLL_MS = Number(process.env.TOAPIS_IMAGE_POLL_MS) || 3000;
+const TOAPIS_IMAGE_MAX_WAIT_MS = Number(process.env.TOAPIS_IMAGE_MAX_WAIT_MS) || 600_000;
 
 const DEFAULT_ALLOWED_ORIGINS = ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:5173', 'http://127.0.0.1:5173'];
 
@@ -55,9 +60,192 @@ function sendError(res, status, message) {
   sendJson(res, status, { error: message });
 }
 
+function formatErrorDetail(err) {
+  const e = err || {};
+  const msg = (e && e.message) ? String(e.message) : String(e);
+  const parts = [msg];
+  const cause = e && e.cause;
+  if (cause) {
+    const cObj = typeof cause === 'object' ? cause : null;
+    const cMsg = cObj && cObj.message ? String(cObj.message) : String(cause);
+    if (cMsg && cMsg !== msg) parts.push(`cause=${cMsg}`);
+    if (cObj && cObj.code) parts.push(`causeCode=${String(cObj.code)}`);
+    if (cObj && cObj.errno) parts.push(`causeErrno=${String(cObj.errno)}`);
+  }
+  if (e && e.code) parts.push(`code=${String(e.code)}`);
+  return parts.join(' ');
+}
+
 function normalizeSecret(v) {
   if (typeof v !== 'string') return '';
   return v.replace(/\uFEFF/g, '').replace(/\r\n?/g, '').trim();
+}
+
+function isGeminiNetworkError(detail) {
+  return /fetch failed|UND_ERR_CONNECT_TIMEOUT|connect timeout|ENETUNREACH|ECONNRESET|ETIMEDOUT/i.test(detail);
+}
+
+function isImageGenerationModel(model) {
+  const m = String(model || '').toLowerCase();
+  if (m.includes('flash-image') || m.includes('pro-image')) return true;
+  return /-image$/.test(m) && !m.includes('flash-preview') && !m.includes('pro-preview');
+}
+
+function parseContents(contents) {
+  if (Array.isArray(contents)) return contents;
+  if (contents && typeof contents === 'object' && Array.isArray(contents.parts)) {
+    return [{ role: 'user', parts: contents.parts }];
+  }
+  return [{ role: 'user', parts: [{ text: String(contents ?? '') }] }];
+}
+
+function partToOpenAIContent(p) {
+  if (p?.inlineData?.data) {
+    const mime = p.inlineData.mimeType || 'image/jpeg';
+    return { type: 'image_url', image_url: { url: `data:${mime};base64,${p.inlineData.data}` } };
+  }
+  return { type: 'text', text: String(p?.text ?? '') };
+}
+
+function buildOpenAIMessages(contents, systemInstruction) {
+  const turns = parseContents(contents);
+  const messages = [];
+  if (systemInstruction && String(systemInstruction).trim()) {
+    messages.push({ role: 'system', content: String(systemInstruction).trim() });
+  }
+  for (const t of turns) {
+    const role = t.role === 'model' ? 'assistant' : 'user';
+    const parts = Array.isArray(t.parts) ? t.parts : [];
+    const openaiParts = parts
+      .map(partToOpenAIContent)
+      .filter((x) => (x.type === 'text' ? x.text !== '' : true));
+    if (!openaiParts.length) continue;
+    const content = openaiParts.length === 1 && openaiParts[0].type === 'text' ? openaiParts[0].text : openaiParts;
+    messages.push({ role, content });
+  }
+  return messages;
+}
+
+async function uploadDataUrlToToapis(dataUrl, signal) {
+  const m = String(dataUrl || '').match(/^data:([^;,]+);base64,(.+)$/i);
+  if (!m) throw new Error('ToAPIs 上传失败：无效 data URL');
+  const mime = m[1] || 'image/jpeg';
+  const b64 = m[2] || '';
+  const bytes = Buffer.from(b64, 'base64');
+  const blob = new Blob([bytes], { type: mime });
+  const ext = mime.includes('png') ? 'png' : mime.includes('webp') ? 'webp' : mime.includes('gif') ? 'gif' : 'jpg';
+  const form = new FormData();
+  form.append('file', blob, `upload.${ext}`);
+  const res = await fetch(`${TOAPIS_BASE_URL}/uploads/images`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${TOAPIS_API_KEY}` },
+    body: form,
+    signal,
+  });
+  const json = await res.json().catch(() => ({}));
+  const url = json?.data?.url;
+  if (!res.ok || !url) throw new Error(json?.message || `ToAPIs 上传失败（${res.status}）`);
+  return String(url);
+}
+
+async function pollToapisImageTask(taskId, signal) {
+  const deadline = Date.now() + TOAPIS_IMAGE_MAX_WAIT_MS;
+  while (Date.now() < deadline) {
+    const res = await fetch(`${TOAPIS_BASE_URL}/images/generations/${encodeURIComponent(taskId)}`, {
+      headers: { Authorization: `Bearer ${TOAPIS_API_KEY}` },
+      signal,
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(json?.error?.message || `ToAPIs 查询任务失败（${res.status}）`);
+    if (json?.status === 'completed') {
+      const url = json?.result?.data?.[0]?.url;
+      if (!url) throw new Error('ToAPIs 任务完成但未返回图片 URL');
+      return String(url);
+    }
+    if (json?.status === 'failed') throw new Error(json?.error?.message || 'ToAPIs 图像生成失败');
+    await sleep(TOAPIS_IMAGE_POLL_MS);
+  }
+  throw new Error('ToAPIs 图像生成超时');
+}
+
+async function fetchImageAsBase64(imageUrl, signal) {
+  const res = await fetch(imageUrl, { signal });
+  if (!res.ok) throw new Error(`ToAPIs 拉取图片失败（${res.status}）`);
+  const mime = res.headers.get('content-type') || 'image/png';
+  const ab = await res.arrayBuffer();
+  return { mimeType: mime, data: Buffer.from(ab).toString('base64') };
+}
+
+async function proxyViaToapis(model, contents, config) {
+  if (!TOAPIS_API_KEY) {
+    throw new Error('代理后端到 Google Gemini 网络不通，且未配置 TOAPIS_API_KEY');
+  }
+  const safeConfig = { ...(config || {}) };
+  if (safeConfig.abortSignal) delete safeConfig.abortSignal;
+  const signal = config?.abortSignal;
+  if (isImageGenerationModel(model)) {
+    const turns = parseContents(contents);
+    const parts = turns.find((t) => t.role === 'user')?.parts || turns[0]?.parts || [];
+    const texts = [];
+    const dataUrls = [];
+    for (const p of parts) {
+      if (p?.text) texts.push(String(p.text));
+      if (p?.inlineData?.data) {
+        const mime = p.inlineData.mimeType || 'image/jpeg';
+        dataUrls.push(`data:${mime};base64,${p.inlineData.data}`);
+      }
+    }
+    const prompt = [String(safeConfig.systemInstruction || '').trim(), texts.join('\n').trim()]
+      .filter(Boolean)
+      .join('\n\n')
+      .slice(0, 1000);
+    if (!prompt) throw new Error('ToAPIs 生图提示词为空');
+    const image_urls = [];
+    for (const d of dataUrls) image_urls.push(await uploadDataUrlToToapis(d, signal));
+    const body = {
+      model,
+      prompt,
+      size: String(safeConfig?.imageConfig?.aspectRatio || '1:1'),
+      n: 1,
+      ...(image_urls.length ? { image_urls } : {}),
+    };
+    const createRes = await fetch(`${TOAPIS_BASE_URL}/images/generations`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOAPIS_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal,
+    });
+    const createJson = await createRes.json().catch(() => ({}));
+    if (!createRes.ok) throw new Error(createJson?.error || createJson?.message || `ToAPIs 创建任务失败（${createRes.status}）`);
+    const taskId = createJson?.id;
+    if (!taskId) throw new Error('ToAPIs 未返回任务 ID');
+    const outUrl = await pollToapisImageTask(taskId, signal);
+    const image = await fetchImageAsBase64(outUrl, signal);
+    return { text: '', candidates: [{ content: { parts: [{ inlineData: image }] } }] };
+  }
+
+  const messages = buildOpenAIMessages(contents, safeConfig.systemInstruction);
+  const body = {
+    model,
+    messages,
+    ...(safeConfig.responseMimeType === 'application/json' ? { response_format: { type: 'json_object' } } : {}),
+  };
+  const res = await fetch(`${TOAPIS_BASE_URL}/chat/completions`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${TOAPIS_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal,
+  });
+  const raw = await res.text();
+  if (!res.ok) throw new Error(raw || `ToAPIs Chat 失败（${res.status}）`);
+  let parsed = {};
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error('ToAPIs Chat 响应不是合法 JSON');
+  }
+  const text = parsed?.choices?.[0]?.message?.content || '';
+  return { text: String(text), candidates: [{ content: { parts: [{ text: String(text) }] } }] };
 }
 
 const GEMINI_API_KEYS_RAW = (process.env.GEMINI_API_KEYS || '').trim();
@@ -137,6 +325,16 @@ async function proxyGenerateContent(model, contents, config) {
     const text = typeof response.text === 'string' ? response.text : '';
     const candidates = response.candidates || response.response?.candidates || [];
     return { text, candidates };
+  } catch (e) {
+    const detail = formatErrorDetail(e);
+    if (isGeminiNetworkError(detail)) {
+      if (ENABLE_TOAPIS_FALLBACK && TOAPIS_API_KEY) {
+        console.warn('[gemini-proxy] Gemini 网络不可达，自动回退 ToAPIs');
+        return proxyViaToapis(model, contents, { ...mergedConfig, abortSignal: config?.abortSignal });
+      }
+      throw new Error(`${detail}（代理后端到 Google Gemini 网络不通。请为该进程配置 HTTPS_PROXY/HTTP_PROXY。若确需兜底，可设置 ENABLE_TOAPIS_FALLBACK=true 并配置 TOAPIS_API_KEY）`);
+    }
+    throw e;
   } finally {
     keySlot.release?.();
   }
@@ -225,7 +423,7 @@ function createGeminiAsyncJob(model, contents, config) {
     const j = geminiAsyncJobs.get(id);
     if (!j) return;
     j.status = 'failed';
-    j.error = lastErr?.message ?? String(lastErr);
+    j.error = formatErrorDetail(lastErr);
     j.updatedAt = Date.now();
     console.error(`[gemini-proxy] async failed id=${id} error=${j.error}`);
   });
@@ -311,8 +509,8 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       const key = normalizeSecret(process.env.GEMINI_API_KEY || '');
-      if (!GEMINI_API_KEY_POOL.length && !key) {
-        sendError(res, 500, 'No Gemini API key (env GEMINI_API_KEY)');
+      if (!GEMINI_API_KEY_POOL.length && !key && !(ENABLE_TOAPIS_FALLBACK && TOAPIS_API_KEY)) {
+        sendError(res, 500, 'No backend key. Set GEMINI_API_KEY/GEMINI_API_KEYS');
         return;
       }
       const jobId = createGeminiAsyncJob(model, contents, config);
@@ -365,7 +563,7 @@ const server = http.createServer(async (req, res) => {
         const response = await proxyGenerateContent(model, contents, config);
         sendJson(res, 200, response);
       } catch (e) {
-        const msg = e?.message ?? String(e);
+        const msg = formatErrorDetail(e);
         console.error('[gemini-proxy] generate-content error:', msg);
         sendError(res, 500, msg);
       }

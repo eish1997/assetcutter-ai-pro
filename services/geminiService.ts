@@ -54,7 +54,17 @@ async function bulkProxyGenerateContentAsync(args: {
   });
   const createText = await createRes.text();
   if (!createRes.ok) {
-    throw new Error(createText || `Gemini 异步任务创建失败（${createRes.status}）`);
+    const raw = (createText || "").trim();
+    if (/Use POST \/jobs/i.test(raw)) {
+      throw new Error(
+        [
+          raw,
+          `当前后端代理地址不是 Gemini 代理：VITE_BULK_IMAGE_API=${BULK_BASE || "(empty)"}`,
+          "请改为部署了 server/gemini-proxy-api.js 的根地址（应支持 POST /proxy/gemini/async）。",
+        ].join(" ")
+      );
+    }
+    throw new Error(raw || `Gemini 异步任务创建失败（${createRes.status}）`);
   }
   let jobId: string;
   try {
@@ -104,19 +114,18 @@ type GeminiClientLike = {
 };
 
 const getAI = (): GeminiClientLike => {
-  if (getAiProvider() === "toapis") {
+  const provider = getAiProvider();
+  if (provider === "toapis") {
     const k = getToapisApiKey();
-    if (!k) {
-      throw new Error("未配置 ToAPIs API Key：请在设置中选择「ToAPIs 网关」并填写密钥");
+    if (k) {
+      return createToapisGeminiClient(getToapisBaseUrl(), k) as unknown as GeminiClientLike;
     }
-    return createToapisGeminiClient(getToapisBaseUrl(), k) as unknown as GeminiClientLike;
   }
-  if (getAiProvider() === "vectorengine") {
+  if (provider === "vectorengine") {
     const k = getVectorengineApiKey();
-    if (!k) {
-      throw new Error("未配置 VectorEngine API Key：请在设置中选择「向量引擎 VectorEngine」并填写密钥");
+    if (k) {
+      return createVectorengineGeminiClient(getVectorengineBaseUrl(), k) as unknown as GeminiClientLike;
     }
-    return createVectorengineGeminiClient(getVectorengineBaseUrl(), k) as unknown as GeminiClientLike;
   }
   const apiKey = getUserApiKey();
   if (apiKey) {
@@ -136,7 +145,13 @@ const getAI = (): GeminiClientLike => {
     };
     return proxyClient;
   }
-  throw new Error("未配置 API 密钥，请在设置页填写 Gemini API Key，或联系管理员配置批量后端地址");
+  if (provider === "toapis") {
+    throw new Error("未配置 ToAPIs API Key，且未配置后端代理地址：请填写 ToAPIs Key，或联系管理员配置 VITE_BULK_IMAGE_API");
+  }
+  if (provider === "vectorengine") {
+    throw new Error("未配置 VectorEngine API Key，且未配置后端代理地址：请填写 VectorEngine Key，或联系管理员配置 VITE_BULK_IMAGE_API");
+  }
+  throw new Error("未配置 API 密钥，请在设置页填写 Gemini API Key，或联系管理员配置后端代理地址（VITE_BULK_IMAGE_API）");
 };
 
 export interface GeminiRequestOptions {

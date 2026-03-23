@@ -24,8 +24,8 @@ export function getCapabilityEngine(preset: CustomAppModule): 'gen_image' | 'bui
 }
 
 export function resolveImageModelId(gear?: DialogImageGear): string {
-  const g = gear || 'fast';
-  return DIALOG_IMAGE_GEARS.find((x) => x.id === g)?.modelId || 'gemini-2.5-flash-image';
+  const g = gear || 'standard';
+  return DIALOG_IMAGE_GEARS.find((x) => x.id === g)?.modelId || 'gemini-3.1-flash-image-preview';
 }
 
 /**

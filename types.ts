@@ -290,16 +290,15 @@ export type DialogTempItem = {
 
 /** 可选生图模型（展示名 -> 模型 id） */
 export const DIALOG_IMAGE_MODELS = [
-  { id: 'gemini-2.5-flash-preview-05-20', label: 'Gemini 2.5 Flash' },
   { id: 'gemini-2.5-flash-image', label: 'Gemini 2.5 Flash Image' },
-  { id: 'gemini-2.0-flash-exp-image-generation', label: 'Gemini 2.0 Flash Exp' },
+  { id: 'gemini-3.1-flash-image-preview', label: 'Gemini 3.1 Flash Image' },
   { id: 'gemini-3-pro-image-preview', label: 'Gemini 3 Pro Image' },
-  { id: 'gemini-3-flash-preview', label: 'Gemini 3 Flash' },
 ] as const;
 
-/** 生图挡位（快速 / Pro），对应支持图像输出的模型 */
+/** 生图挡位（快速 / 标准 / Pro），对应支持图像输出的模型 */
 export const DIALOG_IMAGE_GEARS = [
   { id: 'fast', label: '快速', modelId: 'gemini-2.5-flash-image' },
+  { id: 'standard', label: '标准', modelId: 'gemini-3.1-flash-image-preview' },
   { id: 'pro', label: 'Pro', modelId: 'gemini-3-pro-image-preview' },
 ] as const;
 export type DialogImageGear = (typeof DIALOG_IMAGE_GEARS)[number]['id'];

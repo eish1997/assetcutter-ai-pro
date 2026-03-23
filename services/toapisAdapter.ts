@@ -273,6 +273,13 @@ function parseToapisHttpErrorJson(json: unknown, status: number, fallback: strin
   if (!json || typeof json !== 'object') return fallback;
   const o = json as Record<string, unknown>;
   const err = o.error;
+  if (typeof err === 'string' && err.trim()) {
+    const msg = err.trim();
+    if (/Use POST \/jobs/i.test(msg)) {
+      return `${msg}（当前 ToAPIs Base URL 似乎指向了其他服务。请在设置中将 ToAPIs Base URL 改为包含 /v1 的网关地址，例如 https://toapis.com/v1）`;
+    }
+    return msg;
+  }
   if (err && typeof err === 'object') {
     const m = (err as { message?: string }).message;
     if (typeof m === 'string' && m.trim()) return m.trim();

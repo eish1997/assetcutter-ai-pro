@@ -558,7 +558,9 @@ const App: React.FC = () => {
   const [arenaReportedGaps, setArenaReportedGaps] = useState<string[]>([]);
   const [arenaWinnerStrength, setArenaWinnerStrength] = useState('');
   const [arenaLoserRemark, setArenaLoserRemark] = useState('');
-  const [arenaImageModel, setArenaImageModel] = useState<string>(() => DIALOG_IMAGE_GEARS[0].modelId);
+  const [arenaImageModel, setArenaImageModel] = useState<string>(
+    () => DIALOG_IMAGE_GEARS.find((g) => g.id === 'standard')?.modelId || DIALOG_IMAGE_GEARS[0].modelId
+  );
   const [arenaCurrentStep, setArenaCurrentStep] = useState<ArenaCurrentStep>('idle');
   const [arenaStepLog, setArenaStepLog] = useState<ArenaStepEntry[]>([]);
   const [arenaTimeline, setArenaTimeline] = useState<ArenaTimelineBlock[]>([]);
@@ -575,8 +577,10 @@ const App: React.FC = () => {
   const [dialogInputText, setDialogInputText] = useState('');
   const DIALOG_INPUT_IMAGES_MAX = 9;
   const [dialogInputImages, setDialogInputImages] = useState<Array<{ id: string; data: string }>>([]);
-  const [dialogImageGear, setDialogImageGear] = useState<DialogImageGear>('fast');
-  const [dialogModel, setDialogModel] = useState<string>(() => DIALOG_IMAGE_GEARS[0].modelId);
+  const [dialogImageGear, setDialogImageGear] = useState<DialogImageGear>('standard');
+  const [dialogModel, setDialogModel] = useState<string>(
+    () => DIALOG_IMAGE_GEARS.find((g) => g.id === 'standard')?.modelId || DIALOG_IMAGE_GEARS[0].modelId
+  );
   const [dialogAutoGenerateImage, setDialogAutoGenerateImage] = useState(true);
   const [dialogSizeMode, setDialogSizeMode] = useState<DialogImageSizeMode>('adaptive');
   const [dialogAspectRatio, setDialogAspectRatio] = useState<string>(SUPPORTED_ASPECT_RATIOS[0].value);
@@ -668,7 +672,7 @@ const App: React.FC = () => {
     if (saved) return JSON.parse(saved);
     return { 
       modelText: 'gemini-3-flash-preview', 
-      modelImage: 'gemini-2.5-flash-image', 
+      modelImage: 'gemini-3.1-flash-image-preview', 
       modelPro: 'gemini-3-pro-image-preview', 
       customPromptSuffix: '',
       prompts: { ...DEFAULT_PROMPTS }
