@@ -59,17 +59,6 @@ async function ensurePostgres() {
   await p.query(`CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);`);
   await p.query(`CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);`);
   await p.query(`
-    CREATE TABLE IF NOT EXISTS password_resets (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      token_hash TEXT NOT NULL UNIQUE,
-      expires_at TIMESTAMPTZ NOT NULL,
-      used_at TIMESTAMPTZ,
-      created_at TIMESTAMPTZ NOT NULL
-    );
-  `);
-  await p.query(`CREATE INDEX IF NOT EXISTS idx_password_resets_user_id ON password_resets(user_id);`);
-  await p.query(`
     CREATE TABLE IF NOT EXISTS audit_logs (
       id TEXT PRIMARY KEY,
       actor_user_id TEXT,
@@ -100,7 +89,6 @@ function readDb() {
   const parsed = JSON.parse(raw || '{}');
   if (!Array.isArray(parsed.users)) parsed.users = [];
   if (!Array.isArray(parsed.sessions)) parsed.sessions = [];
-  if (!Array.isArray(parsed.passwordResets)) parsed.passwordResets = [];
   if (!Array.isArray(parsed.auditLogs)) parsed.auditLogs = [];
   if (typeof parsed.version !== 'number') parsed.version = 1;
   let changed = false;
@@ -569,74 +557,6 @@ export async function getSessionWithUser(token) {
     user: publicUser(user),
     shouldRotate: Date.now() - new Date(row.createdAt).getTime() > DAY_MS,
   };
-}
-
-export async function createPasswordReset(identifier, ttlMs = 15 * 60 * 1000) {
-  const keyword = String(identifier || '').trim().toLowerCase();
-  if (!keyword) return null;
-  const rawToken = crypto.randomBytes(24).toString('base64url');
-  const tokenHash = hashToken(rawToken);
-  const expiresAt = new Date(Date.now() + ttlMs).toISOString();
-  const createdAt = nowIso();
-  const id = crypto.randomUUID();
-  if (USE_POSTGRES) {
-    await ensurePostgres();
-    const p = getPool();
-    const userRes = await p.query('SELECT id, email FROM users WHERE email = $1 OR username = $1 LIMIT 1', [keyword]);
-    const userId = userRes.rows[0]?.id;
-    const userEmail = userRes.rows[0]?.email;
-    if (!userId) return null;
-    await p.query(
-      `INSERT INTO password_resets (id, user_id, token_hash, expires_at, used_at, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6)`,
-      [id, userId, tokenHash, expiresAt, null, createdAt]
-    );
-    return { token: rawToken, userId, email: userEmail, expiresAt };
-  }
-  const db = readDb();
-  const user = db.users.find((u) => u.email === keyword || u.username === keyword);
-  if (!user) return null;
-  db.passwordResets.push({ id, userId: user.id, tokenHash, expiresAt, usedAt: null, createdAt });
-  writeDb(db);
-  return { token: rawToken, userId: user.id, email: user.email, expiresAt };
-}
-
-export async function consumePasswordResetToken(token, newPassword) {
-  if (!token) return null;
-  if (!newPassword || String(newPassword).length < 8) throw new Error('密码至少 8 位');
-  const tokenHash = hashToken(token);
-  if (USE_POSTGRES) {
-    await ensurePostgres();
-    const p = getPool();
-    const resetRes = await p.query(
-      `SELECT * FROM password_resets
-       WHERE token_hash = $1
-       ORDER BY created_at DESC
-       LIMIT 1`,
-      [tokenHash]
-    );
-    const row = resetRes.rows[0];
-    if (!row) return null;
-    if (row.used_at) return null;
-    if (new Date(row.expires_at).getTime() <= Date.now()) return null;
-    const passHash = createPasswordHash(newPassword);
-    await p.query('UPDATE users SET password_hash = $2, updated_at = NOW() WHERE id = $1', [row.user_id, passHash]);
-    await p.query('UPDATE password_resets SET used_at = NOW() WHERE id = $1', [row.id]);
-    const userRes = await p.query('SELECT * FROM users WHERE id = $1 LIMIT 1', [row.user_id]);
-    return userRes.rows[0] ? publicUser(mapUserRow(userRes.rows[0])) : null;
-  }
-  const db = readDb();
-  const row = db.passwordResets.find((r) => r.tokenHash === tokenHash);
-  if (!row) return null;
-  if (row.usedAt) return null;
-  if (new Date(row.expiresAt).getTime() <= Date.now()) return null;
-  const user = db.users.find((u) => u.id === row.userId);
-  if (!user) return null;
-  user.passwordHash = createPasswordHash(newPassword);
-  user.updatedAt = nowIso();
-  row.usedAt = nowIso();
-  writeDb(db);
-  return publicUser(user);
 }
 
 export async function createAuditLog({ actorUserId = null, actorIdentifier = '', action, targetUserId = null, meta = null, ip = '', userAgent = '' }) {

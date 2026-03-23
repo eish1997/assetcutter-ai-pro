@@ -1,9 +1,7 @@
 import http from 'http';
 import crypto from 'crypto';
 import {
-  consumePasswordResetToken,
   createAuditLog,
-  createPasswordReset,
   createUser,
   createSession,
   findUserByLogin,
@@ -17,7 +15,6 @@ import {
   updateUserById,
   verifyPassword,
 } from './auth-store.js';
-import { sendPasswordResetMail } from './mailer.js';
 
 const PORT = Number(process.env.PORT || process.env.AUTH_PORT || 9100);
 const BIND_HOST = String(process.env.AUTH_BIND_HOST || '0.0.0.0').trim() || '0.0.0.0';
@@ -31,9 +28,7 @@ const AUTH_ALLOWED_ORIGINS = String(process.env.AUTH_ALLOWED_ORIGINS || '').trim
 const RATE_LIMIT_WINDOW_MS = Number(process.env.AUTH_RATE_LIMIT_WINDOW_MS || 60_000);
 const LOGIN_RATE_LIMIT_MAX = Number(process.env.AUTH_LOGIN_RATE_LIMIT_MAX || 10);
 const REGISTER_RATE_LIMIT_MAX = Number(process.env.AUTH_REGISTER_RATE_LIMIT_MAX || 20);
-const RESET_RATE_LIMIT_MAX = Number(process.env.AUTH_RESET_RATE_LIMIT_MAX || 8);
 const CSRF_COOKIE_NAME = 'ac_csrf';
-const AUTH_PASSWORD_RESET_DEBUG = String(process.env.AUTH_PASSWORD_RESET_DEBUG || '').trim().toLowerCase() === 'true';
 
 const allowedOrigins = AUTH_ALLOWED_ORIGINS
   ? new Set(
@@ -43,6 +38,22 @@ const allowedOrigins = AUTH_ALLOWED_ORIGINS
     )
   : null;
 const rateLimitStore = new Map();
+
+function assertProductionConfig() {
+  if (!IS_PROD) return;
+  const missing = [];
+  if (!String(process.env.DATABASE_URL || '').trim()) missing.push('DATABASE_URL');
+  if (!AUTH_ALLOWED_ORIGINS) missing.push('AUTH_ALLOWED_ORIGINS');
+  if (COOKIE_SAME_SITE !== 'none') {
+    throw new Error('生产环境要求 AUTH_COOKIE_SAMESITE=none（跨域前后端会话）');
+  }
+  if (!COOKIE_SECURE) {
+    throw new Error('生产环境要求 AUTH_COOKIE_SECURE=true');
+  }
+  if (missing.length) {
+    throw new Error(`生产环境缺少必要配置：${missing.join(', ')}`);
+  }
+}
 
 function json(res, status, data) {
   const body = JSON.stringify(data);
@@ -82,9 +93,13 @@ function serializeCsrfCookie(token) {
 
 function applyCors(req, res) {
   const origin = req.headers.origin;
+  const strict = IS_PROD;
   if (!origin) {
-    if (allowedOrigins === null) res.setHeader('Access-Control-Allow-Origin', '*');
-  } else if (allowedOrigins === null || allowedOrigins.has(origin)) {
+    if (!strict && allowedOrigins === null) res.setHeader('Access-Control-Allow-Origin', '*');
+  } else if (allowedOrigins !== null && allowedOrigins.has(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+  } else if (!strict && allowedOrigins === null) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Vary', 'Origin');
   }
@@ -95,6 +110,7 @@ function applyCors(req, res) {
 
 function isAllowedOrigin(origin) {
   if (!origin) return false;
+  if (IS_PROD && allowedOrigins === null) return false;
   if (allowedOrigins === null) return true;
   return allowedOrigins.has(origin);
 }
@@ -135,8 +151,7 @@ function assertCsrf(req, res) {
   if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return true;
   if (method === 'POST' && (req.url || '').startsWith('/api/auth/login')) return true;
   if (method === 'POST' && (req.url || '').startsWith('/api/auth/register')) return true;
-  if (method === 'POST' && (req.url || '').startsWith('/api/auth/forgot-password')) return true;
-  if (method === 'POST' && (req.url || '').startsWith('/api/auth/reset-password')) return true;
+  if (method === 'POST' && (req.url || '').startsWith('/api/auth/logout')) return true;
   const cookieToken = readCsrfFromCookie(req);
   const headerToken = String(req.headers['x-csrf-token'] || '');
   if (cookieToken && headerToken && cookieToken === headerToken) return true;
@@ -318,48 +333,6 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (path === '/api/auth/forgot-password' && req.method === 'POST') {
-      const body = await readBody(req);
-      const identifier = String(body.identifier || body.email || '');
-      const rateKey = `forgot:${getClientIp(req)}:${identifier.toLowerCase()}`;
-      if (isRateLimited(rateKey, RESET_RATE_LIMIT_MAX)) {
-        json(res, 429, { error: '请求过于频繁，请稍后再试' });
-        return;
-      }
-      const row = await createPasswordReset(identifier, 15 * 60 * 1000);
-      await createAuditLog({ actorIdentifier: identifier, action: 'auth.forgot_password', targetUserId: row?.userId || null, ip: getClientIp(req), userAgent: req.headers['user-agent'] });
-      if (row?.email) {
-        try {
-          await sendPasswordResetMail({ to: row.email, token: row.token });
-        } catch (error) {
-          await createAuditLog({
-            actorIdentifier: identifier,
-            action: 'auth.forgot_password_mail_failed',
-            targetUserId: row.userId,
-            meta: { message: error instanceof Error ? error.message : String(error) },
-            ip: getClientIp(req),
-            userAgent: req.headers['user-agent'],
-          });
-        }
-      }
-      json(res, 200, AUTH_PASSWORD_RESET_DEBUG && row ? { ok: true, resetToken: row.token } : { ok: true });
-      return;
-    }
-
-    if (path === '/api/auth/reset-password' && req.method === 'POST') {
-      const body = await readBody(req);
-      const resetToken = String(body.token || '');
-      const newPassword = String(body.newPassword || '');
-      const updated = await consumePasswordResetToken(resetToken, newPassword);
-      if (!updated) {
-        json(res, 400, { error: '重置链接无效或已过期' });
-        return;
-      }
-      await createAuditLog({ actorUserId: updated.id, actorIdentifier: updated.username, action: 'auth.password_reset', targetUserId: updated.id, ip: getClientIp(req), userAgent: req.headers['user-agent'] });
-      json(res, 200, { ok: true });
-      return;
-    }
-
     if (path === '/api/auth/logout' && req.method === 'POST') {
       const token = parseCookie(req)[COOKIE_NAME];
       if (token) await revokeSessionByToken(token);
@@ -445,6 +418,7 @@ const server = http.createServer(async (req, res) => {
 
 initAuthStore()
   .then(async () => {
+    assertProductionConfig();
     const adminEmail = String(process.env.AUTH_ADMIN_EMAIL || '').trim().toLowerCase();
     const adminPassword = String(process.env.AUTH_ADMIN_PASSWORD || '');
     const adminUsername = String(process.env.AUTH_ADMIN_USERNAME || '').trim().toLowerCase();

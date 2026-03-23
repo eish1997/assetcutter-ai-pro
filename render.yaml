@@ -14,6 +14,12 @@ services:
         value: 0.0.0.0
       - key: AUTH_SESSION_TTL_MS
         value: 604800000
+      - key: AUTH_ALLOWED_ORIGINS
+        sync: false
+      - key: AUTH_COOKIE_SAMESITE
+        value: none
+      - key: AUTH_COOKIE_SECURE
+        value: "true"
       - key: AUTH_ADMIN_EMAIL
         sync: false
       - key: AUTH_ADMIN_PASSWORD
