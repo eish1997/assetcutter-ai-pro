@@ -1663,7 +1663,7 @@ const WorkflowSection: React.FC<{
   return (
     <div className="flex flex-col min-h-[400px] h-[calc(100dvh-6rem)] gap-4">
       <div className="flex flex-wrap items-center gap-4 shrink-0">
-        <span className="text-[10px] font-black text-blue-400 uppercase mr-2">工作流</span>
+        <span className="text-[10px] font-black text-blue-400 uppercase mr-2">工作区</span>
         <div className="flex items-center gap-2">
           <span className="text-[9px] font-black text-gray-500 uppercase">显示</span>
           <button

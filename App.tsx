@@ -1,21 +1,10 @@
 
 import React, { Suspense, useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { processTexture, DEFAULT_PROMPTS, normalizeApiErrorMessage, getTexturePrompt, parsePromptStructured, understandImageEditIntent } from './services/geminiService';
-import {
-  createImageJob,
-  createImageJobContinue,
-  cancelImageJob,
-  getAllImageJobs,
-  subscribeImageJobs,
-  getBulkImageTodayRPD,
-  getBulkImageRPDLimit,
-  getBulkImageMaxImagesPerJob,
-  getBulkImageMode,
-} from './services/bulkImageJobFacade';
 import { loadRecords, addRecord as addGenerationRecord, updateScore as updateGenerationScore } from './services/recordStore';
 import { loadSnippets } from './services/snippetStore';
 import { PRO_VIEW_IDS, type Submit3DProInput, type Submit3DRapidInput } from './services/tencentService';
-import { AppStep, AppMode, LibraryItem, SystemConfig, AppTask, AssetCategory, DialogMessage, DialogSession, DialogImageSizeMode, DialogTempItem, DialogImageGear, SUPPORTED_ASPECT_RATIOS, SUPPORTED_IMAGE_SIZES, DIALOG_IMAGE_MODELS, DIALOG_IMAGE_GEARS, type GenerationRecord, type CustomAppModule, type CapabilitySet, type WorkflowAsset, type WorkflowPendingTask, type ArenaCurrentStep, type ArenaStepEntry, type ArenaTimelineBlock, type ImageJob } from './types';
+import { AppStep, AppMode, LibraryItem, SystemConfig, AppTask, AssetCategory, DialogMessage, DialogSession, DialogImageSizeMode, DialogTempItem, DialogImageGear, SUPPORTED_ASPECT_RATIOS, SUPPORTED_IMAGE_SIZES, DIALOG_IMAGE_MODELS, DIALOG_IMAGE_GEARS, type GenerationRecord, type CustomAppModule, type CapabilitySet, type WorkflowAsset, type WorkflowPendingTask, type ArenaCurrentStep, type ArenaStepEntry, type ArenaTimelineBlock } from './types';
 import DropdownSelect from './components/DropdownSelect';
 import MultiViewUpload from './components/MultiViewUpload';
 import type { ViewId } from './components/MultiViewUpload';
@@ -33,14 +22,11 @@ const CapabilityPresetSection = React.lazy(() => import('./components/Capability
 const PromptArenaSection = React.lazy(() => import('./components/PromptArenaSection'));
 const SeamRepairSection = React.lazy(() => import('./components/SeamRepairSection'));
 const GenerateTextureSection = React.lazy(() => import('./components/GenerateTextureSection'));
-const HomeSection = React.lazy(() => import('./components/HomeSection'));
 const SiteAssistant = React.lazy(() => import('./components/SiteAssistant'));
 const SettingsSection = React.lazy(() => import('./components/SettingsSection'));
 const AdminPasswordGate = React.lazy(() => import('./components/admin/AdminPasswordGate.js'));
 const AdminLayout = React.lazy(() => import('./components/admin/AdminLayout.js'));
-const AdminDashboard = React.lazy(() => import('./components/admin/AdminDashboard.js'));
-const AdminJobList = React.lazy(() => import('./components/admin/AdminJobList.js'));
-const AdminJobDetail = React.lazy(() => import('./components/admin/AdminJobDetail.js'));
+const AdminPlaceholder = React.lazy(() => import('./components/admin/AdminPlaceholder.tsx'));
 type SourceAggregate = {
   count: number;
   rated: number;
@@ -217,43 +203,15 @@ function navigateTo(path: string) {
 const AdminAppShell: React.FC = () => {
   const fullPath = usePathname();
   const pathname = fullPath.split('?')[0];
-  const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (pathname.startsWith('/admin/jobs/') && pathname.length > '/admin/jobs/'.length) {
-      const id = pathname.slice('/admin/jobs/'.length);
-      setSelectedJobId(id || null);
-    } else {
-      setSelectedJobId(null);
-    }
-  }, [pathname]);
 
   const handleNavigate = useCallback((path: string) => {
     navigateTo(path);
   }, []);
 
-  const openJob = useCallback(
-    (id: string) => {
-      navigateTo(`/admin/jobs/${id}`);
-    },
-    []
-  );
-
-  let content: React.ReactNode;
-  if (pathname === '/admin') {
-    content = <AdminDashboard onOpenJob={openJob} />;
-  } else if (pathname === '/admin/jobs') {
-    content = <AdminJobList onOpenJob={openJob} />;
-  } else if (pathname.startsWith('/admin/jobs/') && selectedJobId) {
-    content = <AdminJobDetail jobId={selectedJobId} onBack={() => navigateTo('/admin/jobs')} />;
-  } else {
-    content = <AdminDashboard onOpenJob={openJob} />;
-  }
-
   return (
     <Suspense fallback={<div className="min-h-screen bg-black text-white flex items-center justify-center text-[11px]">加载管理后台…</div>}>
       <AdminLayout currentPath={pathname} onNavigate={handleNavigate}>
-        {content}
+        <AdminPlaceholder />
       </AdminLayout>
     </Suspense>
   );
@@ -487,7 +445,7 @@ const App: React.FC = () => {
     );
   }
 
-  const [mode, setMode] = useState<AppMode>(AppMode.HOME);
+  const [mode, setMode] = useState<AppMode>(AppMode.WORKFLOW);
   const [capabilityPresets, setCapabilityPresets] = useState<CustomAppModule[]>(loadCapabilityPresets);
   const [capabilitySets, setCapabilitySets] = useState<CapabilitySet[]>(loadCapabilitySets);
   useEffect(() => {
@@ -529,6 +487,21 @@ const App: React.FC = () => {
   const [tasks, setTasks] = useState<AppTask[]>([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  /** 侧栏「实验性功能」分组：展开侧栏时默认折叠；进入实验性模块时自动展开 */
+  const [experimentalNavExpanded, setExperimentalNavExpanded] = useState(false);
+
+  const isExperimentalMode = useCallback((m: AppMode) =>
+    m === AppMode.DIALOG ||
+    m === AppMode.GENERATE_3D ||
+    m === AppMode.TEXTURE ||
+    m === AppMode.SEAM_REPAIR ||
+    m === AppMode.PBR_TEXTURE ||
+    m === AppMode.ADMIN ||
+    m === AppMode.ARENA, []);
+
+  useEffect(() => {
+    if (isExperimentalMode(mode)) setExperimentalNavExpanded(true);
+  }, [mode, isExperimentalMode]);
   const [dialogOptionsExpanded, setDialogOptionsExpanded] = useState(false);
   const [dialogModelDropdownOpen, setDialogModelDropdownOpen] = useState(false);
   const [activeAssetId, setActiveAssetId] = useState<LibraryItem | null>(null);
@@ -610,13 +583,6 @@ const App: React.FC = () => {
   const [dialogImageSize, setDialogImageSize] = useState<string>(SUPPORTED_IMAGE_SIZES[1].value);
   const [dialogEditingMessageId, setDialogEditingMessageId] = useState<string | null>(null);
   const [dialogEditingText, setDialogEditingText] = useState('');
-  const [bulkImageCount, setBulkImageCount] = useState(8);
-  const [imageJobsSnapshot, setImageJobsSnapshot] = useState<ImageJob[]>([]);
-  useEffect(() => {
-    getAllImageJobs().then(setImageJobsSnapshot).catch(() => setImageJobsSnapshot([]));
-    const unsub = subscribeImageJobs(() => getAllImageJobs().then(setImageJobsSnapshot).catch(() => {}));
-    return unsub;
-  }, []);
   const {
     dialogSessions,
     setDialogActiveSessionId,
@@ -837,50 +803,6 @@ const App: React.FC = () => {
     handleDialogCancelGen(sessionId);
     removeDialogSession(sessionId);
   }, [handleDialogCancelGen, removeDialogSession]);
-
-  const [bulkImageSubmitting, setBulkImageSubmitting] = useState(false);
-  const handleStartBulkImageJob = useCallback(async () => {
-    const text = dialogInputText.trim();
-    setDialogValidationError(null);
-    if (!text) {
-      setDialogValidationError('请先输入生图描述');
-      return;
-    }
-    setBulkImageSubmitting(true);
-    try {
-      const sourceImages = dialogInputImages.map((i) => i.data).filter(Boolean);
-      const { instruction, shouldGenerateImage } = await understandImageEditIntent(
-        getDialogUnderstandImageInput(sourceImages),
-        text,
-        config.modelText,
-        config.prompts.dialog_understand
-      );
-      if (!shouldGenerateImage) {
-        setDialogValidationError('当前输入似乎不是生图需求，请描述要生成的画面或对图片的修改');
-        return;
-      }
-      const total = Math.min(Math.max(1, bulkImageCount), getBulkImageMaxImagesPerJob());
-      await createImageJob(instruction, total, {
-        imageBase64: sourceImages[0] ?? null,
-        model: dialogModel,
-        aspectRatio: dialogSizeMode === 'manual' ? dialogAspectRatio : undefined,
-        imageSize: dialogSizeMode === 'manual' ? dialogImageSize : undefined,
-      });
-    } catch (e: unknown) {
-      const raw = e instanceof Error ? e.message : String(e);
-      let friendly = raw;
-      if (/额度|剩余额度|已用尽/.test(raw)) {
-        friendly = '今日批量额度不足以完成本次任务，请减少张数或明日再试（管理员可在后端查看 RPD/队列情况）。';
-      } else if (/API key|api key|密钥|Unauthorized|PERMISSION_DENIED/i.test(raw)) {
-        friendly = '批量出图使用的 Gemini Key 似乎失效或无权限，请联系管理员检查后端配置。';
-      } else {
-        friendly = '批量出图失败，请稍后重试或联系管理员查看后端日志。';
-      }
-      setDialogValidationError(friendly);
-    } finally {
-      setBulkImageSubmitting(false);
-    }
-  }, [dialogInputText, dialogInputImages, bulkImageCount, config.modelText, config.prompts.dialog_understand, dialogModel, dialogSizeMode, dialogAspectRatio, dialogImageSize, setDialogValidationError]);
 
   const runTextureProcessing = async (sourceImage: string, type: 'pattern' | 'tileable' | 'pbr', mapType = '') => {
     if (isTextureProcessing) return;
@@ -1694,26 +1616,53 @@ const App: React.FC = () => {
 
       <aside className={`fixed lg:static inset-y-0 left-0 glass border-r border-white/5 flex flex-col items-center py-6 shrink-0 z-[1001] transition-all duration-300 ${sidebarCollapsed ? 'w-16' : 'w-64'} ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}>
         <button onClick={() => setSidebarCollapsed(p => !p)} className="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center font-black text-lg mb-8 shadow-lg hover:bg-blue-500 transition-colors" title={sidebarCollapsed ? '展开' : '收起'}>{sidebarCollapsed ? '›' : '‹'}</button>
-        <nav className="flex-1 w-full space-y-2 px-2 min-h-0 flex flex-col">
+        <nav className="flex-1 w-full space-y-2 px-2 min-h-0 flex flex-col overflow-y-auto no-scrollbar">
           <div className="space-y-2">
-            <button onClick={() => { setMode(AppMode.HOME); setIsSidebarOpen(false); }} className={`w-full py-3 rounded-xl text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.HOME ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="主页">{sidebarCollapsed ? '🏠' : '主页'}</button>
-            <button onClick={() => { setMode(AppMode.DIALOG); setIsSidebarOpen(false); }} className={`w-full py-3 rounded-xl text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.DIALOG ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="对话">{sidebarCollapsed ? '💬' : '对话'}</button>
-            <button onClick={() => { setMode(AppMode.WORKFLOW); setIsSidebarOpen(false); }} className={`w-full py-3 rounded-xl text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.WORKFLOW ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="工作流">{sidebarCollapsed ? '⚡' : '工作流'}</button>
+            <button onClick={() => { setMode(AppMode.WORKFLOW); setIsSidebarOpen(false); }} className={`w-full py-3 rounded-xl text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.WORKFLOW ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="工作区">{sidebarCollapsed ? '⚡' : '工作区'}</button>
             <button onClick={() => { setMode(AppMode.CAPABILITY); setIsSidebarOpen(false); }} className={`w-full py-3 rounded-xl text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.CAPABILITY ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="能力（功能预设）">{sidebarCollapsed ? '◇' : '能力'}</button>
-            <button onClick={() => { setMode(AppMode.GENERATE_3D); setIsSidebarOpen(false); }} className={`w-full py-3 rounded-xl text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.GENERATE_3D ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="生成3D资产（未上线）">{sidebarCollapsed ? '🧊' : <><span>生成3D</span><span className="text-[8px] font-normal normal-case text-amber-400/90">未上线</span></>}</button>
-            <div className="rounded-xl border border-white/10 bg-white/[0.02] p-2 space-y-1.5">
-              <div className="px-2 py-0.5 text-[8px] font-black uppercase tracking-wider text-gray-500">贴图</div>
-              <button onClick={() => { setMode(AppMode.TEXTURE); setStep(AppStep.T_PATTERN); setIsSidebarOpen(false); }} className={`w-full py-2.5 rounded-lg text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.TEXTURE ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="提取花纹">{sidebarCollapsed ? '🖼' : '提取花纹'}</button>
-              <button onClick={() => { setMode(AppMode.SEAM_REPAIR); setIsSidebarOpen(false); }} className={`w-full py-2.5 rounded-lg text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.SEAM_REPAIR ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="贴图修缝">{sidebarCollapsed ? '🔧' : '贴图修缝'}</button>
-              <button onClick={() => { setMode(AppMode.PBR_TEXTURE); setIsSidebarOpen(false); }} className={`w-full py-2.5 rounded-lg text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.PBR_TEXTURE ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="生成贴图">{sidebarCollapsed ? '🎨' : '生成贴图'}</button>
-            </div>
-            <div className="rounded-xl border border-white/10 bg-white/[0.02] p-2 space-y-1.5">
-              <div className="px-2 py-0.5 text-[8px] font-black uppercase tracking-wider text-gray-500">提示词</div>
-              <button onClick={() => { setMode(AppMode.ADMIN); setIsSidebarOpen(false); }} className={`w-full py-2.5 rounded-lg text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.ADMIN ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="提示词效果">{sidebarCollapsed ? '📊' : '提示词效果'}</button>
-              <button onClick={() => { setMode(AppMode.ARENA); setIsSidebarOpen(false); }} className={`w-full py-2.5 rounded-lg text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.ARENA ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="提示词擂台">{sidebarCollapsed ? '⚔' : '提示词擂台'}</button>
-            </div>
             <button onClick={() => { setMode(AppMode.LIBRARY); setIsSidebarOpen(false); }} className={`w-full py-3 rounded-xl text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.LIBRARY ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="仓库">{sidebarCollapsed ? '📁' : '仓库'}</button>
             <button onClick={() => { setMode(AppMode.SETTINGS); setIsSidebarOpen(false); }} className={`w-full py-3 rounded-xl text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.SETTINGS ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="设置">{sidebarCollapsed ? '⚙' : '设置'}</button>
+
+            {sidebarCollapsed ? (
+              <div className="space-y-2 pt-2 border-t border-white/10">
+                <button onClick={() => { setMode(AppMode.DIALOG); setIsSidebarOpen(false); }} className={`w-full py-3 rounded-xl text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.DIALOG ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="对话（实验性）">💬</button>
+                <button onClick={() => { setMode(AppMode.GENERATE_3D); setIsSidebarOpen(false); }} className={`w-full py-3 rounded-xl text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.GENERATE_3D ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="生成3D（实验性·未上线）">🧊</button>
+                <button onClick={() => { setMode(AppMode.TEXTURE); setStep(AppStep.T_PATTERN); setIsSidebarOpen(false); }} className={`w-full py-3 rounded-xl text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.TEXTURE ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="提取花纹（实验性）">🖼</button>
+                <button onClick={() => { setMode(AppMode.SEAM_REPAIR); setIsSidebarOpen(false); }} className={`w-full py-3 rounded-xl text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.SEAM_REPAIR ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="贴图修缝（实验性）">🔧</button>
+                <button onClick={() => { setMode(AppMode.PBR_TEXTURE); setIsSidebarOpen(false); }} className={`w-full py-3 rounded-xl text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.PBR_TEXTURE ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="生成贴图（实验性）">🎨</button>
+                <button onClick={() => { setMode(AppMode.ADMIN); setIsSidebarOpen(false); }} className={`w-full py-3 rounded-xl text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.ADMIN ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="提示词效果（实验性）">📊</button>
+                <button onClick={() => { setMode(AppMode.ARENA); setIsSidebarOpen(false); }} className={`w-full py-3 rounded-xl text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.ARENA ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="提示词擂台（实验性）">⚔</button>
+              </div>
+            ) : (
+              <div className={`rounded-xl border bg-white/[0.02] overflow-hidden ${isExperimentalMode(mode) && !experimentalNavExpanded ? 'border-blue-500/25' : 'border-white/10'}`}>
+                <button
+                  type="button"
+                  onClick={() => setExperimentalNavExpanded((e) => !e)}
+                  className={`w-full py-2.5 px-3 flex items-center justify-between text-[9px] font-black uppercase tracking-wider transition-colors ${isExperimentalMode(mode) && !experimentalNavExpanded ? 'text-blue-400/90 bg-blue-600/5 hover:bg-blue-600/10' : 'text-gray-500 hover:bg-white/5'}`}
+                  title="实验性功能（默认折叠）"
+                >
+                  <span>实验性功能</span>
+                  <span className="text-[10px] opacity-80" aria-hidden>{experimentalNavExpanded ? '▲' : '▼'}</span>
+                </button>
+                {experimentalNavExpanded && (
+                  <div className="p-2 space-y-2 border-t border-white/10">
+                    <button onClick={() => { setMode(AppMode.DIALOG); setIsSidebarOpen(false); }} className={`w-full py-2.5 rounded-xl text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.DIALOG ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="对话">对话</button>
+                    <button onClick={() => { setMode(AppMode.GENERATE_3D); setIsSidebarOpen(false); }} className={`w-full py-2.5 rounded-xl text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.GENERATE_3D ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="生成3D资产（未上线）"><span>生成3D</span><span className="text-[8px] font-normal normal-case text-amber-400/90">未上线</span></button>
+                    <div className="rounded-xl border border-white/10 bg-black/20 p-2 space-y-1.5">
+                      <div className="px-2 py-0.5 text-[8px] font-black uppercase tracking-wider text-gray-500">贴图</div>
+                      <button onClick={() => { setMode(AppMode.TEXTURE); setStep(AppStep.T_PATTERN); setIsSidebarOpen(false); }} className={`w-full py-2.5 rounded-lg text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.TEXTURE ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="提取花纹">提取花纹</button>
+                      <button onClick={() => { setMode(AppMode.SEAM_REPAIR); setIsSidebarOpen(false); }} className={`w-full py-2.5 rounded-lg text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.SEAM_REPAIR ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="贴图修缝">贴图修缝</button>
+                      <button onClick={() => { setMode(AppMode.PBR_TEXTURE); setIsSidebarOpen(false); }} className={`w-full py-2.5 rounded-lg text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.PBR_TEXTURE ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="生成贴图">生成贴图</button>
+                    </div>
+                    <div className="rounded-xl border border-white/10 bg-black/20 p-2 space-y-1.5">
+                      <div className="px-2 py-0.5 text-[8px] font-black uppercase tracking-wider text-gray-500">提示词</div>
+                      <button onClick={() => { setMode(AppMode.ADMIN); setIsSidebarOpen(false); }} className={`w-full py-2.5 rounded-lg text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.ADMIN ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="提示词效果">提示词效果</button>
+                      <button onClick={() => { setMode(AppMode.ARENA); setIsSidebarOpen(false); }} className={`w-full py-2.5 rounded-lg text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.ARENA ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="提示词擂台">提示词擂台</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </nav>
         {!sidebarCollapsed && (
@@ -1722,7 +1671,7 @@ const App: React.FC = () => {
               <div className="px-2 py-1.5 border-b border-white/5 text-[9px] font-black uppercase text-gray-500">日志</div>
               <div className="min-h-[min(28vh,240px)] max-h-[min(42vh,360px)] overflow-y-auto no-scrollbar space-y-1 p-2">
                 {(() => {
-                  const moduleForMode = mode === AppMode.HOME ? null : mode === AppMode.DIALOG ? '对话' : mode === AppMode.TEXTURE ? '提取花纹' : mode === AppMode.GENERATE_3D ? '生成3D' : mode === AppMode.WORKFLOW ? '工作流' : mode === AppMode.CAPABILITY ? '能力' : mode === AppMode.ADMIN ? '提示词效果' : mode === AppMode.ARENA ? '提示词擂台' : mode === AppMode.SEAM_REPAIR ? '贴图修缝' : mode === AppMode.PBR_TEXTURE ? '生成贴图' : mode === AppMode.LIBRARY ? '仓库' : mode === AppMode.SETTINGS ? '设置' : null;
+                  const moduleForMode = mode === AppMode.DIALOG ? '对话' : mode === AppMode.TEXTURE ? '提取花纹' : mode === AppMode.GENERATE_3D ? '生成3D' : mode === AppMode.WORKFLOW ? '工作区' : mode === AppMode.CAPABILITY ? '能力' : mode === AppMode.ADMIN ? '提示词效果' : mode === AppMode.ARENA ? '提示词擂台' : mode === AppMode.SEAM_REPAIR ? '贴图修缝' : mode === AppMode.PBR_TEXTURE ? '生成贴图' : mode === AppMode.LIBRARY ? '仓库' : mode === AppMode.SETTINGS ? '设置' : null;
                   const filtered = moduleForMode ? globalLogs.filter(l => l.module === moduleForMode) : [];
                   if (filtered.length === 0) return <div className="text-[9px] text-gray-600 py-2 text-center">暂无日志</div>;
                   return [...filtered].reverse().slice(0, 60).map(log => (
@@ -1747,16 +1696,6 @@ const App: React.FC = () => {
           <button type="button" onClick={() => setIsSidebarOpen(true)} className="lg:hidden fixed top-4 left-4 z-[1000] w-10 h-10 flex items-center justify-center bg-white/10 border border-white/20 rounded-xl hover:bg-white/20 transition-colors" title="打开菜单" aria-label="打开菜单">☰</button>
         )}
         <div ref={mainScrollRef} className="flex-1 overflow-y-auto p-4 lg:p-10 no-scrollbar touch-pan-y">
-          {mode === AppMode.HOME ? (
-            <div className="relative min-h-full -mx-4 -my-4 lg:-mx-10 lg:-my-10">
-              <div className="absolute inset-0 home-bg-mesh pointer-events-none" aria-hidden />
-              <div className="relative max-w-6xl mx-auto w-full px-4 py-4 lg:px-10 lg:py-10 min-h-[80vh]">
-                <Suspense fallback={<LazySectionFallback label="主页" />}>
-                  <HomeSection onNavigate={(m) => { setMode(m); if (m === AppMode.TEXTURE) setStep(AppStep.T_PATTERN); setIsSidebarOpen(false); }} library={library} onOpenAsset={(item) => setActiveAssetId(item)} />
-                </Suspense>
-              </div>
-            </div>
-          ) : (
           <div className="max-w-6xl mx-auto w-full">
             {mode === AppMode.SETTINGS && (
               <Suspense fallback={<LazySectionFallback label="设置" />}>
@@ -1767,8 +1706,8 @@ const App: React.FC = () => {
 
             {mode === AppMode.WORKFLOW && (
               <WorkflowErrorBoundary>
-                <Suspense fallback={<LazySectionFallback label="工作流" />}>
-                  <WorkflowSection capabilityPresets={capabilityPresets} capabilitySets={capabilitySets} assets={workflowAssets} onAssetsChange={setWorkflowAssets} pending={workflowPending} onPendingChange={setWorkflowPending} onOpenLibraryPicker={(cb) => openPicker(undefined, cb, true)} onLog={(level, message, detail) => addGlobalLog('工作流', level, message, detail)} onAddGenerate3DJob={handleAddGenerate3DJobFromWorkflow} />
+                <Suspense fallback={<LazySectionFallback label="工作区" />}>
+                  <WorkflowSection capabilityPresets={capabilityPresets} capabilitySets={capabilitySets} assets={workflowAssets} onAssetsChange={setWorkflowAssets} pending={workflowPending} onPendingChange={setWorkflowPending} onOpenLibraryPicker={(cb) => openPicker(undefined, cb, true)} onLog={(level, message, detail) => addGlobalLog('工作区', level, message, detail)} onAddGenerate3DJob={handleAddGenerate3DJobFromWorkflow} />
                 </Suspense>
               </WorkflowErrorBoundary>
             )}
@@ -2738,7 +2677,6 @@ const App: React.FC = () => {
               </div>
             )}
           </div>
-          )}
         </div>
       </main>
 

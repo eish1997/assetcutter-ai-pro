@@ -6,7 +6,6 @@ const STORAGE_KEY_TOAPIS_API_KEY = 'ac_toapis_api_key';
 const STORAGE_KEY_TOAPIS_BASE_URL = 'ac_toapis_base_url';
 const STORAGE_KEY_VECTORENGINE_API_KEY = 'ac_vectorengine_api_key';
 const STORAGE_KEY_VECTORENGINE_BASE_URL = 'ac_vectorengine_base_url';
-const STORAGE_KEY_BULK_USER_ID = 'ac_bulk_image_user_id';
 
 export type AiProvider = 'gemini' | 'toapis' | 'vectorengine';
 const SESSION_KEY_TENCENT_SECRET_ID = 'ac_tencent_secret_id';
@@ -39,18 +38,6 @@ export function setUserApiKey(value: string | null): void {
     }
   } catch {
     // ignore
-  }
-}
-
-export function getBulkUserId(): string {
-  try {
-    const existing = localStorage.getItem(STORAGE_KEY_BULK_USER_ID);
-    if (existing && existing.trim()) return existing.trim();
-    const id = `u_${Math.random().toString(36).slice(2, 10)}`;
-    localStorage.setItem(STORAGE_KEY_BULK_USER_ID, id);
-    return id;
-  } catch {
-    return 'anonymous';
   }
 }
 

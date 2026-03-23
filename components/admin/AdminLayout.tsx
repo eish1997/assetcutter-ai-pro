@@ -40,11 +40,10 @@ const AdminLayout: React.FC<AdminLayoutProps> = ({ children, currentPath, onNavi
       <aside className="w-60 border-r border-white/10 bg-black/40 flex flex-col">
         <div className="px-4 py-4 border-b border-white/10">
           <p className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400">AssetCutter</p>
-          <p className="text-[11px] text-gray-300 mt-1">批量出图 · 管理后台</p>
+          <p className="text-[11px] text-gray-300 mt-1">管理后台</p>
         </div>
         <nav className="flex-1 px-3 py-4 space-y-2">
-          <NavButton label="概览" path="/admin" currentPath={currentPath} onNavigate={onNavigate} />
-          <NavButton label="任务列表" path="/admin/jobs" currentPath={currentPath} onNavigate={onNavigate} />
+          <NavButton label="首页" path="/admin" currentPath={currentPath} onNavigate={onNavigate} />
         </nav>
         <div className="px-3 py-3 border-t border-white/10 space-y-2">
           <a

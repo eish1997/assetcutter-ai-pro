@@ -22,6 +22,13 @@ export default defineConfig(({ mode }) => {
             changeOrigin: true,
             rewrite: (path) => path.replace(/^\/seam-repair-api/, ''),
           },
+          /** VectorEngine：开发环境绕过浏览器 CORS（直连 api.vectorengine.ai 会 Failed to fetch） */
+          '/__vectorengine': {
+            target: 'https://api.vectorengine.ai',
+            changeOrigin: true,
+            secure: true,
+            rewrite: (path) => path.replace(/^\/__vectorengine/, '') || '/',
+          },
         },
       },
       plugins: [react()],

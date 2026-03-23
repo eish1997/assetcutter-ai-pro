@@ -32,8 +32,8 @@
  * 6) 浏览器与 CORS
  *    - 直连 ToAPIs 需对方允许站点来源；若失败表现为浏览器 Network 跨域，与适配逻辑无关。
  *
- * 7) 与批量后端（VITE_BULK_IMAGE_API）关系
- *    - 选择 ToAPIs 时走本适配层，不会自动改用 bulk 的 `/proxy/gemini/async`。
+ * 7) 与可选 Gemini 代理（VITE_BULK_IMAGE_API → server/gemini-proxy-api.js）关系
+ *    - 选择 ToAPIs 时走本适配层，不会自动改用代理的 `/proxy/gemini/async`。
  */
 
 const IMAGE_POLL_MS = 3000;

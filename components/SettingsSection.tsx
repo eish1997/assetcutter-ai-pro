@@ -140,30 +140,6 @@ const SettingsSection: React.FC = () => {
                 {/* AI 调用源 */}
                 <div className="rounded-xl border border-white/5 p-4 space-y-4">
                   <h3 className="text-[11px] font-black uppercase tracking-wider text-blue-400/90 mb-1">AI 调用源</h3>
-                  <p className="text-[11px] text-gray-500">
-                    默认使用 Google Gemini 官方接口。也可选用 ToAPIs（OpenAI 兼容：聊天{' '}
-                    <code className="bg-white/10 px-1 rounded">/v1/chat/completions</code>，生图异步{' '}
-                    <code className="bg-white/10 px-1 rounded">/v1/images/generations</code>，见{' '}
-                    <a
-                      href="https://docs.toapis.com/docs/cn"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-blue-400/90 hover:text-blue-300 underline underline-offset-2"
-                    >
-                      ToAPIs 文档
-                    </a>
-                    ）或向量引擎 VectorEngine（与 Gemini 相同的{' '}
-                    <code className="bg-white/10 px-1 rounded">/v1beta/models/...:generateContent</code>，见{' '}
-                    <a
-                      href="https://vectorengine.apifox.cn/"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-blue-400/90 hover:text-blue-300 underline underline-offset-2"
-                    >
-                      Apifox 文档
-                    </a>
-                    ）。
-                  </p>
                   <div className="flex flex-col sm:flex-row sm:items-center gap-3">
                     <span className="text-[10px] text-gray-500 shrink-0">供应商</span>
                     <CustomDropdown
@@ -177,7 +153,6 @@ const SettingsSection: React.FC = () => {
                   {aiProvider === 'gemini' ? (
                     <>
                       <h4 className="text-[10px] font-bold text-white/80 uppercase tracking-wider">Gemini API Key</h4>
-                      <p className="text-[11px] text-gray-500 mb-2">用于对话、提取花纹、生成贴图、网站助手等。密钥仅保存在本机。</p>
                       <div className="flex flex-col sm:flex-row gap-3">
                         <input
                           type="password"
@@ -200,60 +175,29 @@ const SettingsSection: React.FC = () => {
                   ) : aiProvider === 'toapis' ? (
                     <>
                       <h4 className="text-[10px] font-bold text-white/80 uppercase tracking-wider">ToAPIs</h4>
-                      <p className="text-[11px] text-gray-500 mb-2">
-                        在 ToAPIs 控制台创建 API Key。本站会将站内使用的模型名映射为网关侧模型（如对话{' '}
-                        <code className="bg-white/10 px-1 rounded">gemini-3-flash-preview</code> →{' '}
-                        <code className="bg-white/10 px-1 rounded">gemini-3-flash-preview-official</code>，生图{' '}
-                        <code className="bg-white/10 px-1 rounded">gemini-2.5-flash-image</code> →{' '}
-                        <code className="bg-white/10 px-1 rounded">gemini-2.5-flash-image-preview</code>）。
-                      </p>
-                      <div className="space-y-3">
+                      <div className="flex flex-col sm:flex-row gap-3">
                         <input
-                          type="url"
-                          value={toapisBaseUrl}
-                          onChange={(e) => setToapisBaseUrlState(e.target.value)}
+                          type="password"
+                          value={toapisApiKey}
+                          onChange={(e) => setToapisApiKeyState(e.target.value)}
                           onBlur={handleSaveToapis}
-                          placeholder="https://toapis.com/v1"
-                          className="w-full min-w-0 px-4 py-3 rounded-xl bg-black/40 border border-white/10 text-sm text-white placeholder-gray-500 focus:border-blue-500/50 focus:outline-none"
+                          placeholder="ToAPIs API Key"
+                          className="flex-1 min-w-0 px-4 py-3 rounded-xl bg-black/40 border border-white/10 text-sm text-white placeholder-gray-500 focus:border-blue-500/50 focus:outline-none"
+                          autoComplete="off"
                         />
-                        <div className="flex flex-col sm:flex-row gap-3">
-                          <input
-                            type="password"
-                            value={toapisApiKey}
-                            onChange={(e) => setToapisApiKeyState(e.target.value)}
-                            onBlur={handleSaveToapis}
-                            placeholder="ToAPIs API Key（Bearer）"
-                            className="flex-1 min-w-0 px-4 py-3 rounded-xl bg-black/40 border border-white/10 text-sm text-white placeholder-gray-500 focus:border-blue-500/50 focus:outline-none"
-                            autoComplete="off"
-                          />
-                          <button
-                            type="button"
-                            onClick={handleSaveToapis}
-                            className="shrink-0 px-5 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-black uppercase tracking-wider transition-colors"
-                          >
-                            {saved ? '已保存' : '保存'}
-                          </button>
-                        </div>
+                        <button
+                          type="button"
+                          onClick={handleSaveToapis}
+                          className="shrink-0 px-5 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-black uppercase tracking-wider transition-colors"
+                        >
+                          {saved ? '已保存' : '保存'}
+                        </button>
                       </div>
                     </>
                   ) : (
                     <>
                       <h4 className="text-[10px] font-bold text-white/80 uppercase tracking-wider">VectorEngine</h4>
-                      <p className="text-[11px] text-gray-500 mb-2">
-                        在向量引擎控制台创建 API Key。请求与 Google Gemini 官方 REST 一致（如{' '}
-                        <code className="bg-white/10 px-1 rounded">gemini-3-pro-image-preview:generateContent</code>
-                        ），站内模型名无需映射；默认根地址为{' '}
-                        <code className="bg-white/10 px-1 rounded">https://api.vectorengine.ai</code>。
-                      </p>
                       <div className="space-y-3">
-                        <input
-                          type="url"
-                          value={vectorengineBaseUrl}
-                          onChange={(e) => setVectorengineBaseUrlState(e.target.value)}
-                          onBlur={handleSaveVectorengine}
-                          placeholder="https://api.vectorengine.ai"
-                          className="w-full min-w-0 px-4 py-3 rounded-xl bg-black/40 border border-white/10 text-sm text-white placeholder-gray-500 focus:border-blue-500/50 focus:outline-none"
-                        />
                         <div className="flex flex-col sm:flex-row gap-3">
                           <input
                             type="password"
@@ -281,7 +225,6 @@ const SettingsSection: React.FC = () => {
                 {/* 混元（腾讯云） */}
                 <div className="rounded-xl border border-white/5 p-4">
                   <h3 className="text-[11px] font-black uppercase tracking-wider text-blue-400/90 mb-1">混元（腾讯云）</h3>
-                  <p className="text-[11px] text-gray-500 mb-4">用于混元生3D。默认建议通过本地代理配合 <code className="bg-white/10 px-1 rounded">.env.local</code> 使用，避免把云密钥长期留在浏览器。这里填写的 SecretId / SecretKey 仅保存在当前标签页会话中，关闭标签页后即失效。</p>
                   <div className="space-y-3">
                     <div className="flex flex-col sm:flex-row gap-3">
                       <input

@@ -1,7 +1,5 @@
 
 export const AppMode = {
-  /** 欢迎页 / 主页 */
-  HOME: 'HOME',
   LAB: 'LAB',
   TEXTURE: 'TEXTURE',
   LIBRARY: 'LIBRARY',
@@ -305,32 +303,6 @@ export const DIALOG_IMAGE_GEARS = [
   { id: 'pro', label: 'Pro', modelId: 'gemini-3-pro-image-preview' },
 ] as const;
 export type DialogImageGear = (typeof DIALOG_IMAGE_GEARS)[number]['id'];
-
-// ---------- 批量出图任务（见 docs/BULK_IMAGE_JOB_DESIGN.md） ----------
-/** 批量出图任务状态 */
-export type ImageJobStatus =
-  | 'pending'
-  | 'running'
-  | 'completed'
-  | 'failed'
-  | 'cancelled'
-  | 'partial';
-
-export type ImageJob = {
-  id: string;
-  instruction: string;
-  totalImages: number;
-  status: ImageJobStatus;
-  results: string[];
-  errorSummary?: string;
-  createdAt: number;
-  updatedAt: number;
-  /** 可选：图+指令编辑时的源图 */
-  imageBase64?: string | null;
-  model?: string;
-  aspectRatio?: string;
-  imageSize?: string;
-};
 
 // ---------- 工作流模块 ----------
 /** 工作流功能类型：拖拽到的目标框（默认 4 个，可扩展） */

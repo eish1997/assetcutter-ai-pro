@@ -20,13 +20,39 @@ export function normalizeVectorengineBaseUrl(raw: string): string {
 }
 
 /**
+ * 解析实际请求的 Base URL。
+ * - 浏览器直连多数第三方 Gemini 网关会触发 CORS，表现为 `Failed to fetch`。
+ * - 开发环境（Vite）默认走同源 `/__vectorengine`，由 vite.config 反代到 api.vectorengine.ai。
+ * - 可选 `VITE_VECTOR_ENGINE_PROXY`：显式指定代理根地址（生产可配 Nginx 同源路径）。
+ * - 可选 `VITE_VECTOR_ENGINE_DIRECT=true`：开发时仍使用设置页中的直连地址（用于验证代理商是否已放行 CORS）。
+ */
+export function resolveVectorengineBaseUrl(userStored: string): string {
+  const env = typeof import.meta !== 'undefined' ? (import.meta as { env?: Record<string, string> }).env : undefined;
+  const proxyFromEnv = (env?.VITE_VECTOR_ENGINE_PROXY || '').trim();
+  if (proxyFromEnv) {
+    if (proxyFromEnv.startsWith('/')) {
+      if (typeof window !== 'undefined' && window.location?.origin) {
+        return `${window.location.origin.replace(/\/+$/, '')}${proxyFromEnv}`.replace(/\/+$/, '');
+      }
+      return proxyFromEnv;
+    }
+    return proxyFromEnv.replace(/\/+$/, '');
+  }
+  const direct = env?.VITE_VECTOR_ENGINE_DIRECT === 'true';
+  if (env?.DEV && !direct && typeof window !== 'undefined' && window.location?.origin) {
+    return `${window.location.origin.replace(/\/+$/, '')}/__vectorengine`;
+  }
+  return normalizeVectorengineBaseUrl(userStored);
+}
+
+/**
  * 使用 VectorEngine 网关的 Gemini 兼容客户端（与站内 `GeminiClientLike` 用法一致）。
  */
 export function createVectorengineGeminiClient(baseUrl: string, apiKey: string) {
   return new GoogleGenAI({
     apiKey,
     httpOptions: {
-      baseUrl: normalizeVectorengineBaseUrl(baseUrl),
+      baseUrl: resolveVectorengineBaseUrl(baseUrl),
     },
   });
 }

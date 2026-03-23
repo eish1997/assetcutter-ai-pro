@@ -507,7 +507,7 @@ export function normalizeApiErrorMessage(err: unknown): string {
     return compact.length > 140 ? compact.slice(0, 140) + "…" : compact;
   }
   if (raw.includes('Failed to fetch sending request') || raw.includes('TypeError: Failed to fetch')) {
-    return '请求发送失败：请检查网络、代理或稍后重试';
+    return '请求发送失败：请检查网络或稍后重试。若使用 VectorEngine 等第三方网关，多为浏览器跨域（CORS）：本地开发请用 npm run dev；线上需在服务器做同源反代并配置 VITE_VECTOR_ENGINE_PROXY。';
   }
   try {
     const parsed = JSON.parse(raw);

@@ -41,11 +41,7 @@
 
 ## 管理后台
 
-路径 **`/admin`** 为独立的**批量出图管理后台**，用于查看任务状态、队列与 RPD、取消任务等。访问任意 `/admin` 路径时，若已设置 `VITE_ADMIN_PASSWORD`，会先要求输入管理员密码（会话内有效）。
-
-- **路由**：`/admin` 概览（Dashboard）、`/admin/jobs` 任务列表、`/admin/jobs/:id` 任务详情
-- **依赖**：后端 `server/bulk-image-api.js`，需配置 `VITE_BULK_IMAGE_API`（如 `http://localhost:9002`）；可选 `VITE_ADMIN_PASSWORD` 作为管理后台入口密码
-- **本地启动后端**：`npm run dev:bulk-api`（端口默认 9002，见 [docs/ADMIN_CONSOLE_DESIGN.md](docs/ADMIN_CONSOLE_DESIGN.md)）
+路径 **`/admin`** 为占位页（原「批量出图任务」管理已移除）。若已设置 `VITE_ADMIN_PASSWORD`，会先要求输入管理员密码（会话内有效）。
 
 ---
 
@@ -62,9 +58,8 @@
 
 若要把项目发布成线上可访问的网站，按 **[DEPLOY_GUIDE.md](DEPLOY_GUIDE.md)** 操作即可（GitHub → Vercel，全程点选 + 填几处配置）。
 
-**前端（如 Vercel）+ 批量后端（如 Render）**  
-构建时设置 `VITE_BULK_IMAGE_API` 指向 `server/bulk-image-api.js` 的公网地址；Gemini key 仅配置在后端（`GEMINI_API_KEY` 或 `GEMINI_API_KEYS`）。对话/网站助手等经该后端的 Gemini 调用使用 **`POST /proxy/gemini/async` + 轮询 `GET /proxy/gemini/async/:jobId`**，避免云平台对单次长 HTTP 请求约 10～15 秒超时导致 503/504。详见 `docs/BULK_IMAGE_BACKEND_入门教程.md`。
-批量出图后端的异步任务并发/重试可通过 `GEMINI_ASYNC_PROXY_MAX_CONCURRENT`、`GEMINI_PROXY_RETRIES`、`GEMINI_ASYNC_JOB_TTL_MS`、`GEMINI_ASYNC_JOB_MAX_WAIT_MS` 调整；跨域允许源通过 `PROXY_ALLOWED_ORIGINS` 配置（如需支持 Vercel Origin）。
+**前端（如 Vercel）+ 可选 Gemini 代理（如 Render）**  
+若浏览器未配置官方 Key，或需避免长请求被平台超时：构建时设置 `VITE_BULK_IMAGE_API` 指向 `server/gemini-proxy-api.js` 的公网地址；Gemini key 仅配置在后端（`GEMINI_API_KEY` 或 `GEMINI_API_KEYS`）。对话/网站助手等经 **`POST /proxy/gemini/async` + 轮询 `GET /proxy/gemini/async/:jobId`**。异步并发/重试可通过 `GEMINI_ASYNC_PROXY_MAX_CONCURRENT`、`GEMINI_PROXY_RETRIES`、`GEMINI_ASYNC_JOB_TTL_MS`、`GEMINI_ASYNC_JOB_MAX_WAIT_MS` 调整；跨域允许源通过 `PROXY_ALLOWED_ORIGINS` 配置。
 
 **可选：入站密码**  
 在环境变量、`.env` 或本地开发时的 `.env.local` 中设置 `VITE_SITE_PASSWORD` 后，打开网站会先要求输入密码，正确后才进入应用；同一标签页内刷新无需重输，关闭标签页后需重新输入。不设置则无密码门控。
@@ -78,10 +73,10 @@
 | 步骤 | 命令 | 说明 |
 |------|------|------|
 | 1. 安装依赖 | `npm install` | 首次或 `package.json` 变更后执行 |
-| 2. 配置环境变量 | 在 [.env.local](.env.local) 中设置腾讯 3D / 修缝 / 批量出图等 | Gemini Key 在设置页填写 |
+| 2. 配置环境变量 | 在 [.env.local](.env.local) 中设置腾讯 3D / 修缝 / 可选 Gemini 代理等 | Gemini Key 在设置页填写 |
 | 3. 启动主站（必选） | `npm run dev` | 打开 http://localhost:3000 使用整站 |
 | 4. 贴图修缝后端（可选） | `npm run dev:seam-backend` | 仅在使用「贴图修缝」时需要，端口 8008 |
-| 5. 批量出图后端（可选） | `npm run dev:bulk-api` | 批量出图任务与管理后台需要，端口默认 9002 |
+| 5. Gemini 代理（可选） | `npm run dev:gemini-proxy` | 无浏览器 Key 或需异步代理时，端口默认 9002 |
 | 6. 腾讯 3D 代理（可选） | `npm run proxy` | 仅在使用「生成3D」时需要，端口 9001，需配置腾讯云密钥 |
 | 一键启动主站 + 修缝 | `npm run dev:all` | 同时跑主站与贴图修缝后端（两个进程） |
 
@@ -91,20 +86,20 @@
 
 - 主站：`http://localhost:3000`（Vite）
 - 贴图修缝 API：开发时由 Vite 代理 `/seam-repair-api` → `http://127.0.0.1:8008`；生产环境可设置 `VITE_SEAM_REPAIR_API` 为后端地址
-- 批量出图 API：`BULK_IMAGE_PORT`（默认 9002）由 `server/bulk-image-api.js` 使用；前端设置 `VITE_BULK_IMAGE_API=http://localhost:9002` 以使用批量出图与管理后台
+- Gemini 代理：`BULK_IMAGE_PORT`（默认 9002）由 `server/gemini-proxy-api.js` 使用；前端设置 `VITE_BULK_IMAGE_API=http://localhost:9002` 以走后端代理
 - 腾讯 3D：开发时需单独运行 `npm run proxy`，前端只设置 `VITE_TENCENT_PROXY=http://localhost:9001`；真正的 `TENCENT_SECRET_ID` / `TENCENT_SECRET_KEY` 仅供代理进程使用。生产部署见 [DEPLOY_GUIDE.md](DEPLOY_GUIDE.md)
 
 **环境变量（.env.local）：**
 
 - `Gemini API Key`：对话生图、提取花纹、生成贴图等 AI 能力必填；请在网站「设置」页填写，仅保存在当前浏览器本机
 - `VITE_SEAM_REPAIR_API`：生产环境贴图修缝后端地址（可选，开发时用代理即可）
-- `VITE_BULK_IMAGE_API`：批量出图后端地址（如 `http://localhost:9002`）；不设置时批量出图仅用前端本地队列与 RPD 近似
-- `BULK_IMAGE_PORT`：批量出图后端监听端口（默认 9002），避免与 `PORT=9001` 的 ai3d 代理冲突
-- （批量出图后端）`GEMINI_API_KEY` / `GEMINI_API_KEYS`：Gemini 服务端密钥（支持多个 key，按 key 池分摊并发压力）
-- （批量出图后端）`GEMINI_KEY_POOL_MAX_IN_FLIGHT_PER_KEY`：单个 key 允许的并发 in-flight 请求数
-- （批量出图后端）`GEMINI_ASYNC_PROXY_MAX_CONCURRENT`：异步代理全局并发上限（避免 429/503）
-- （批量出图后端）`GEMINI_ASYNC_JOB_TTL_MS` / `GEMINI_ASYNC_JOB_MAX_WAIT_MS` / `GEMINI_PROXY_RETRIES`：异步 job 生命周期、最大等待与失败重试策略
-- （批量出图后端）`PROXY_ALLOWED_ORIGINS`：CORS 允许源列表；以及 `BULK_IMAGE_BIND_HOST`（云平台端口扫描需监听 `0.0.0.0`，默认已是 `0.0.0.0`）
+- `VITE_BULK_IMAGE_API`：Gemini 代理根地址（如 `http://localhost:9002`）；不设置时需在浏览器「设置」填写官方或第三方 Key
+- `BULK_IMAGE_PORT`：代理监听端口（默认 9002），避免与 `PORT=9001` 的 ai3d 代理冲突
+- （Gemini 代理）`GEMINI_API_KEY` / `GEMINI_API_KEYS`：服务端密钥（支持多个 key，按 key 池分摊并发压力）
+- （Gemini 代理）`GEMINI_KEY_POOL_MAX_IN_FLIGHT_PER_KEY`：单个 key 允许的并发 in-flight 请求数
+- （Gemini 代理）`GEMINI_ASYNC_PROXY_MAX_CONCURRENT`：异步代理全局并发上限（避免 429/503）
+- （Gemini 代理）`GEMINI_ASYNC_JOB_TTL_MS` / `GEMINI_ASYNC_JOB_MAX_WAIT_MS` / `GEMINI_PROXY_RETRIES`：异步 job 生命周期、最大等待与失败重试策略
+- （Gemini 代理）`PROXY_ALLOWED_ORIGINS`：CORS 允许源列表；以及 `BULK_IMAGE_BIND_HOST`（云平台端口扫描需监听 `0.0.0.0`，默认已是 `0.0.0.0`）
 - `VITE_ADMIN_PASSWORD`：可选，管理后台（/admin）入口密码；设置后访问 /admin 需先输入此密码
 - 腾讯混元生 3D：运行 `npm run proxy` 时需在 `.env.local` 或环境中设置 `TENCENT_SECRET_ID`、`TENCENT_SECRET_KEY`；前端仅需设置 `VITE_TENCENT_PROXY`（如 `http://localhost:9001`）。如确需浏览器直持密钥调试，必须显式设置 `VITE_ALLOW_UNSAFE_TENCENT_BROWSER_CREDS=true`，默认关闭。部署说明见 [DEPLOY_GUIDE.md](DEPLOY_GUIDE.md)
 - `VITE_SITE_PASSWORD`：可选，整站入站密码；本地开发可写在 `.env.local`，与上述变量一起管理。
@@ -122,12 +117,12 @@ pip install -r requirements.txt
 
 - **主站打不开 / 白屏**：确认已执行 `npm install`，且端口 3000 未被占用。
 - **贴图修缝点「开始修复」报错**：说明修缝后端未启动。执行 `npm run dev:seam-backend` 或 `npm run dev:all`；若提示找不到 `python`，请安装 Python 并先执行上文的 `pip install -r requirements.txt`。
-- **批量出图 / 管理后台无法用**：需启动 `npm run dev:bulk-api` 并设置 `VITE_BULK_IMAGE_API=http://localhost:9002`；管理后台访问 `/admin` 若设了 `VITE_ADMIN_PASSWORD` 需先输入密码。
+- **无浏览器 Key 且需代理**：启动 `npm run dev:gemini-proxy` 并设置 `VITE_BULK_IMAGE_API=http://localhost:9002`；管理后台 `/admin` 若设了 `VITE_ADMIN_PASSWORD` 需先输入密码。
 - **线上对话生图 503/504 或短超时**：若前端已配 `VITE_BULK_IMAGE_API`，请确认后端已部署含异步 Gemini 代理的版本，并重新构建前端；仍失败时检查 Render 等服务日志与 `PROXY_ALLOWED_ORIGINS`（需包含 Vercel 站点 Origin）。
 - **生图报 503 / UNAVAILABLE（模型繁忙）**：前端会对生图请求做有限次退避重试；后端异步代理可对同一任务多次重试（可选 `GEMINI_PROXY_RETRIES`）。高峰仍失败时请隔段时间再试或换模型挡位。
 - **生图报 504 / DEADLINE_EXCEEDED（处理超时）**：系统会按可重试错误自动退避重试；若仍失败，通常是模型侧高峰导致处理窗口不足，可稍后重试。
 - **生成 3D 报错 / CORS**：本地开发需运行 `npm run proxy` 并设置 `VITE_TENCENT_PROXY=http://localhost:9001`，同时在代理环境中配置好 `TENCENT_SECRET_ID`、`TENCENT_SECRET_KEY`。
-- **生产部署**：见 [DEPLOY_GUIDE.md](DEPLOY_GUIDE.md)。贴图修缝若需上线，需单独部署 8008 后端并设置 `VITE_SEAM_REPAIR_API`；批量出图与管理后台需部署 `bulk-image-api` 并设置 `VITE_BULK_IMAGE_API`；腾讯 3D 需单独部署代理并配置 `VITE_TENCENT_PROXY`。
+- **生产部署**：见 [DEPLOY_GUIDE.md](DEPLOY_GUIDE.md)。贴图修缝若需上线，需单独部署 8008 后端并设置 `VITE_SEAM_REPAIR_API`；可选部署 `gemini-proxy-api` 并设置 `VITE_BULK_IMAGE_API`；腾讯 3D 需单独部署代理并配置 `VITE_TENCENT_PROXY`。
 
 ---
 
