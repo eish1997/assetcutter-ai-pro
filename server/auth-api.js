@@ -19,6 +19,22 @@ const BIND_HOST = String(process.env.AUTH_BIND_HOST || '0.0.0.0').trim() || '0.0
 const COOKIE_NAME = 'ac_session';
 const SESSION_TTL_MS = Number(process.env.AUTH_SESSION_TTL_MS || 1000 * 60 * 60 * 24 * 7);
 const BODY_LIMIT = 1024 * 1024;
+const IS_PROD = String(process.env.NODE_ENV || '').toLowerCase() === 'production';
+const COOKIE_SAME_SITE = String(process.env.AUTH_COOKIE_SAMESITE || (IS_PROD ? 'none' : 'lax')).trim().toLowerCase();
+const COOKIE_SECURE = String(process.env.AUTH_COOKIE_SECURE || (IS_PROD ? 'true' : 'false')).trim().toLowerCase() === 'true';
+const AUTH_ALLOWED_ORIGINS = String(process.env.AUTH_ALLOWED_ORIGINS || '').trim();
+const RATE_LIMIT_WINDOW_MS = Number(process.env.AUTH_RATE_LIMIT_WINDOW_MS || 60_000);
+const LOGIN_RATE_LIMIT_MAX = Number(process.env.AUTH_LOGIN_RATE_LIMIT_MAX || 10);
+const REGISTER_RATE_LIMIT_MAX = Number(process.env.AUTH_REGISTER_RATE_LIMIT_MAX || 20);
+
+const allowedOrigins = AUTH_ALLOWED_ORIGINS
+  ? new Set(
+      AUTH_ALLOWED_ORIGINS.split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+    )
+  : null;
+const rateLimitStore = new Map();
 
 function json(res, status, data) {
   const body = JSON.stringify(data);
@@ -38,26 +54,44 @@ function parseCookie(req) {
 }
 
 function serializeSessionCookie(token, maxAgeMs) {
-  const secure = String(process.env.NODE_ENV || '').toLowerCase() === 'production' ? '; Secure' : '';
+  const sameSite = COOKIE_SAME_SITE === 'none' ? 'None' : COOKIE_SAME_SITE === 'strict' ? 'Strict' : 'Lax';
+  const secure = COOKIE_SECURE || sameSite === 'None' ? '; Secure' : '';
   const maxAgeSec = Math.max(1, Math.floor(maxAgeMs / 1000));
-  return `${COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSec}${secure}`;
+  return `${COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=${maxAgeSec}${secure}`;
 }
 
 function clearSessionCookie() {
-  return `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
+  const sameSite = COOKIE_SAME_SITE === 'none' ? 'None' : COOKIE_SAME_SITE === 'strict' ? 'Strict' : 'Lax';
+  const secure = COOKIE_SECURE || sameSite === 'None' ? '; Secure' : '';
+  return `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=0${secure}`;
 }
 
 function applyCors(req, res) {
   const origin = req.headers.origin;
   if (!origin) {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-  } else {
+    if (allowedOrigins === null) res.setHeader('Access-Control-Allow-Origin', '*');
+  } else if (allowedOrigins === null || allowedOrigins.has(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Vary', 'Origin');
   }
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+}
+
+function isAllowedOrigin(origin) {
+  if (!origin) return false;
+  if (allowedOrigins === null) return true;
+  return allowedOrigins.has(origin);
+}
+
+function assertWriteOrigin(req, res) {
+  const method = String(req.method || '').toUpperCase();
+  if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return true;
+  const origin = String(req.headers.origin || '');
+  if (isAllowedOrigin(origin)) return true;
+  json(res, 403, { error: 'Origin not allowed' });
+  return false;
 }
 
 function readBody(req) {
@@ -87,6 +121,19 @@ function readBody(req) {
 
 function getClientIp(req) {
   return String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '');
+}
+
+function isRateLimited(key, maxAttempts) {
+  const now = Date.now();
+  const row = rateLimitStore.get(key);
+  if (!row || now > row.resetAt) {
+    rateLimitStore.set(key, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+    return false;
+  }
+  row.count += 1;
+  rateLimitStore.set(key, row);
+  if (row.count > maxAttempts) return true;
+  return false;
 }
 
 function makeSessionToken() {
@@ -138,10 +185,15 @@ async function requireAdmin(req, res) {
 const server = http.createServer(async (req, res) => {
   applyCors(req, res);
   if (req.method === 'OPTIONS') {
-    res.writeHead(204);
-    res.end();
+    const origin = String(req.headers.origin || '');
+    if (origin && !isAllowedOrigin(origin)) json(res, 403, { error: 'Origin not allowed' });
+    else {
+      res.writeHead(204);
+      res.end();
+    }
     return;
   }
+  if (!assertWriteOrigin(req, res)) return;
 
   const path = (req.url || '/').split('?')[0];
   try {
@@ -155,6 +207,11 @@ const server = http.createServer(async (req, res) => {
       const username = String(body.username || '');
       const email = String(body.email || '');
       const password = String(body.password || '');
+      const rateKey = `register:${getClientIp(req)}`;
+      if (isRateLimited(rateKey, REGISTER_RATE_LIMIT_MAX)) {
+        json(res, 429, { error: '请求过于频繁，请稍后再试' });
+        return;
+      }
       const user = await createUser({ username, email, password, role: 'user' });
       const token = makeSessionToken();
       await createSession({
@@ -173,6 +230,11 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
       const identifier = String(body.identifier || body.email || '');
       const password = String(body.password || '');
+      const rateKey = `login:${getClientIp(req)}:${identifier.toLowerCase()}`;
+      if (isRateLimited(rateKey, LOGIN_RATE_LIMIT_MAX)) {
+        json(res, 429, { error: '登录尝试过多，请稍后再试' });
+        return;
+      }
       const row = await findUserByLogin(identifier);
       if (!row || !verifyPassword(password, row.passwordHash)) {
         json(res, 401, { error: '用户名/邮箱或密码错误' });

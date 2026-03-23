@@ -112,6 +112,9 @@
 - （Gemini 代理）`PROXY_ALLOWED_ORIGINS`：CORS 允许源列表；以及 `BULK_IMAGE_BIND_HOST`（云平台端口扫描需监听 `0.0.0.0`，默认已是 `0.0.0.0`）
 - `AUTH_PORT` / `AUTH_BIND_HOST`：认证后端监听地址（默认 `127.0.0.1:9100`）
 - `AUTH_SESSION_TTL_MS`：登录会话有效期（毫秒，默认 7 天）
+- `AUTH_ALLOWED_ORIGINS`：允许访问认证 API 的前端域名白名单（逗号分隔，建议生产必配）
+- `AUTH_RATE_LIMIT_WINDOW_MS` / `AUTH_LOGIN_RATE_LIMIT_MAX` / `AUTH_REGISTER_RATE_LIMIT_MAX`：认证接口限流窗口与阈值
+- `AUTH_COOKIE_SAMESITE` / `AUTH_COOKIE_SECURE`：跨域会话 Cookie 策略（Vercel + Render 需 `none` + `true`）
 - `AUTH_ADMIN_EMAIL` / `AUTH_ADMIN_PASSWORD`：管理员初始化账号（用于 `npm run seed:admin`）
 - `AUTH_ADMIN_USERNAME`：可选，管理员用户名（不填则由邮箱前缀自动生成）
 - `DATABASE_URL`：设置后 `auth-api` 自动改用 Postgres 存储用户与会话；可配合 `npm run migrate:auth-to-postgres` 从本地 JSON 迁移历史数据

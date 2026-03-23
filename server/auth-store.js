@@ -297,6 +297,17 @@ export async function updateUserById(id, patch) {
     if (!exists.rows[0]) return null;
     const nextRole = patch?.role != null ? safeRole(patch.role) : exists.rows[0].role;
     const nextStatus = patch?.status != null ? safeStatus(patch.status) : exists.rows[0].status;
+    const isDemotingLastAdmin =
+      exists.rows[0].role === 'admin' &&
+      exists.rows[0].status === 'active' &&
+      (nextRole !== 'admin' || nextStatus !== 'active');
+    if (isDemotingLastAdmin) {
+      const cnt = await p.query(`SELECT COUNT(*)::int AS c FROM users WHERE role = 'admin' AND status = 'active'`);
+      const activeAdminCount = Number(cnt.rows[0]?.c || 0);
+      if (activeAdminCount <= 1) {
+        throw new Error('不能降级或禁用最后一个管理员');
+      }
+    }
     await p.query('UPDATE users SET role = $2, status = $3, updated_at = NOW() WHERE id = $1', [id, nextRole, nextStatus]);
     const out = await p.query('SELECT * FROM users WHERE id = $1 LIMIT 1', [id]);
     return out.rows[0] ? publicUser(mapUserRow(out.rows[0])) : null;
@@ -304,6 +315,18 @@ export async function updateUserById(id, patch) {
   const db = readDb();
   const target = db.users.find((u) => u.id === id);
   if (!target) return null;
+  const nextRole = patch?.role != null ? safeRole(patch.role) : target.role;
+  const nextStatus = patch?.status != null ? safeStatus(patch.status) : target.status;
+  const isDemotingLastAdmin =
+    target.role === 'admin' &&
+    target.status === 'active' &&
+    (nextRole !== 'admin' || nextStatus !== 'active');
+  if (isDemotingLastAdmin) {
+    const activeAdminCount = db.users.filter((u) => u.role === 'admin' && u.status === 'active').length;
+    if (activeAdminCount <= 1) {
+      throw new Error('不能降级或禁用最后一个管理员');
+    }
+  }
   if (patch?.role != null) target.role = safeRole(patch.role);
   if (patch?.status != null) target.status = safeStatus(patch.status);
   target.updatedAt = nowIso();
