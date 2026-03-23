@@ -9,6 +9,7 @@ import {
   listUsers,
   revokeSessionByToken,
   rotateSession,
+  upsertAdminUser,
   updateUserById,
   verifyPassword,
 } from './auth-store.js';
@@ -260,7 +261,19 @@ const server = http.createServer(async (req, res) => {
 });
 
 initAuthStore()
-  .then(() => {
+  .then(async () => {
+    const adminEmail = String(process.env.AUTH_ADMIN_EMAIL || '').trim().toLowerCase();
+    const adminPassword = String(process.env.AUTH_ADMIN_PASSWORD || '');
+    const adminUsername = String(process.env.AUTH_ADMIN_USERNAME || '').trim().toLowerCase();
+    if (adminEmail && adminPassword) {
+      if (adminUsername) process.env.AUTH_ADMIN_USERNAME = adminUsername;
+      try {
+        const admin = await upsertAdminUser({ email: adminEmail, password: adminPassword });
+        console.log(`[auth-api] admin ensured: ${admin.username}/${admin.email}`);
+      } catch (error) {
+        console.error('[auth-api] ensure admin failed:', error instanceof Error ? error.message : String(error));
+      }
+    }
     server.listen(PORT, BIND_HOST, () => {
       console.log(`[auth-api] http://${BIND_HOST}:${PORT}`);
     });
