@@ -25,8 +25,9 @@ services:
           name: assetcutter-auth-db
           property: connectionString
 
-  - type: static
+  - type: web
     name: assetcutter-web
+    runtime: static
     plan: free
     rootDir: .
     buildCommand: npm ci && npm run build
