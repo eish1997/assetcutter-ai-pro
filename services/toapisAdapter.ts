@@ -38,8 +38,23 @@
 
 const IMAGE_POLL_MS = 3000;
 const IMAGE_MAX_WAIT_MS = 600_000;
-/** ToAPIs 图像生成接口对 prompt 的长度限制（见各模型文档） */
+/** ToAPIs 图像生成接口对 prompt 的长度限制（见各模型文档；过长时用 clampToapisImagePrompt 优先保留用户指令） */
 const TOAPIS_IMAGE_PROMPT_MAX_CHARS = 1000;
+
+/** 合并 system + user 提示词并压到上限：禁止仅用 slice(0,max) 从头部截断，否则会丢掉末尾的用户任务描述，易触发上游「无图」类错误 */
+function clampToapisImagePrompt(systemInstruction: string, userText: string, max: number): string {
+  const sys = systemInstruction.trim();
+  const usr = userText.trim();
+  const combined = [sys, usr].filter(Boolean).join('\n\n').trim();
+  if (!combined) return '';
+  if (combined.length <= max) return combined;
+  if (!usr) return sys.slice(0, max);
+  if (usr.length >= max) return usr.slice(0, max);
+  const sep = sys ? '\n\n' : '';
+  const budget = max - usr.length - sep.length;
+  if (budget <= 0) return usr;
+  return sys ? `${sys.slice(0, budget)}${sep}${usr}` : usr;
+}
 
 /** 本站内部模型 ID → ToAPIs Chat 模型（多模态/文本） */
 const DEFAULT_TEXT_MODEL_MAP: Record<string, string> = {
@@ -297,11 +312,8 @@ async function toapisImageGenerateContent(args: {
     }
   }
   const userText = textPieces.join('\n').trim();
-  let prompt = [systemInstruction.trim(), userText].filter(Boolean).join('\n\n').trim();
+  let prompt = clampToapisImagePrompt(systemInstruction, userText, TOAPIS_IMAGE_PROMPT_MAX_CHARS);
   if (!prompt) throw new Error('生图提示词为空');
-  if (prompt.length > TOAPIS_IMAGE_PROMPT_MAX_CHARS) {
-    prompt = prompt.slice(0, TOAPIS_IMAGE_PROMPT_MAX_CHARS);
-  }
 
   /** ToAPIs 文档示例为 URL 字符串数组，对象形式会导致 400 */
   const imageUrlStrings: string[] = [];
