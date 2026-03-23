@@ -44,6 +44,7 @@ const AdminLayout: React.FC<AdminLayoutProps> = ({ children, currentPath, onNavi
         </div>
         <nav className="flex-1 px-3 py-4 space-y-2">
           <NavButton label="首页" path="/admin" currentPath={currentPath} onNavigate={onNavigate} />
+          <NavButton label="用户管理" path="/admin/users" currentPath={currentPath} onNavigate={onNavigate} />
         </nav>
         <div className="px-3 py-3 border-t border-white/10 space-y-2">
           <a
@@ -55,11 +56,6 @@ const AdminLayout: React.FC<AdminLayoutProps> = ({ children, currentPath, onNavi
           <button
             type="button"
             onClick={() => {
-              try {
-                sessionStorage.removeItem('ac_admin_unlocked');
-              } catch {
-                /* ignore */
-              }
               window.location.href = '/';
             }}
             className="flex items-center justify-center gap-2 w-full py-2.5 rounded-xl border border-white/10 bg-white/5 text-[9px] font-black uppercase tracking-widest text-gray-400 hover:bg-amber-500/10 hover:border-amber-500/30 hover:text-amber-200 transition-all"

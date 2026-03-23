@@ -1,0 +1,81 @@
+{
+  "version": 1,
+  "users": [
+    {
+      "id": "8cd58de0-ba3c-4e1d-b9cb-06216a07d9c0",
+      "email": "1512861371@qq.com",
+      "passwordHash": "scrypt$7295589974df5081a6c4ecb7d7dc7598$a4dc7e6d3cbe60081db202568806a99a74d21a1e066b43780fb56917200a5d5760f67aa724eb113d7a6c9656288b2c07dd5c49275d382bd436a981ad272d0bc5",
+      "role": "user",
+      "status": "active",
+      "createdAt": "2026-03-23T10:16:20.397Z",
+      "updatedAt": "2026-03-23T10:16:20.398Z",
+      "username": "1512861371"
+    },
+    {
+      "id": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "email": "maoer",
+      "passwordHash": "scrypt$d004bb300fe055cac30514b9ded8b543$aff5a985ed49c66e7a48f7c5bf96dbbadb2f20137d4805f4e03dcbfa79b505e363c57eb47ca2bbdccfc8c73214210889bd326477f8d40f5cd0839b6b242211b2",
+      "role": "admin",
+      "status": "active",
+      "createdAt": "2026-03-23T10:18:36.313Z",
+      "updatedAt": "2026-03-23T10:18:36.313Z",
+      "username": "maoer"
+    },
+    {
+      "id": "d3588bd1-327a-426e-a555-b5772c23d3a9",
+      "email": "maoer@example.com",
+      "passwordHash": "scrypt$44b78ec586da92ba327180b26e23e899$b2ef9c0a29f784dfe059d728068760cb17ff796591c6528017c15b72a54d5b2b9f3597a3051848aab0cce37f5c8499605ca079f60d81377dc029277c6c7ebe37",
+      "role": "admin",
+      "status": "active",
+      "createdAt": "2026-03-23T10:21:11.803Z",
+      "updatedAt": "2026-03-23T10:21:11.804Z",
+      "username": "maoer"
+    }
+  ],
+  "sessions": [
+    {
+      "id": "f9b33da2-1ce1-402b-a713-58879b95c4b2",
+      "userId": "8cd58de0-ba3c-4e1d-b9cb-06216a07d9c0",
+      "tokenHash": "71199a5e59e7a746ed39fc64e58bd3986b1ae36c75d0e4226484922f01ccc207",
+      "expiresAt": "2026-03-30T10:16:20.399Z",
+      "createdAt": "2026-03-23T10:16:20.400Z",
+      "updatedAt": "2026-03-23T10:19:00.255Z",
+      "revokedAt": "2026-03-23T10:19:00.255Z",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
+      "ip": "127.0.0.1"
+    },
+    {
+      "id": "92952f82-a487-44e3-9c87-d993fbd4dbbd",
+      "userId": "8cd58de0-ba3c-4e1d-b9cb-06216a07d9c0",
+      "tokenHash": "9780f20e63c6d49ac00550806529073e44b73919a47814d99770d18964c4b4a7",
+      "expiresAt": "2026-03-30T10:19:38.487Z",
+      "createdAt": "2026-03-23T10:19:38.487Z",
+      "updatedAt": "2026-03-23T10:19:58.558Z",
+      "revokedAt": "2026-03-23T10:19:58.558Z",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
+      "ip": "127.0.0.1"
+    },
+    {
+      "id": "2d31cbdc-2d58-42f6-960f-f056f6ad5705",
+      "userId": "d3588bd1-327a-426e-a555-b5772c23d3a9",
+      "tokenHash": "2a6d28ed2479e3ddc27ff318f064a4f64013d84de192470a6a8e2a065a974335",
+      "expiresAt": "2026-03-30T10:21:18.231Z",
+      "createdAt": "2026-03-23T10:21:18.231Z",
+      "updatedAt": "2026-03-23T10:25:07.025Z",
+      "revokedAt": "2026-03-23T10:25:07.025Z",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
+      "ip": "127.0.0.1"
+    },
+    {
+      "id": "5e11ee65-a307-421c-ae68-fbc4c5e946b3",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "tokenHash": "02f5bb7d3b29f829b33c69455cd0d3286757baeddc39653fd26350f7ed78466f",
+      "expiresAt": "2026-03-30T10:25:19.625Z",
+      "createdAt": "2026-03-23T10:25:19.625Z",
+      "updatedAt": "2026-03-23T10:25:19.625Z",
+      "revokedAt": null,
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
+      "ip": "127.0.0.1"
+    }
+  ]
+}

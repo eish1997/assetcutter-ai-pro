@@ -24,9 +24,10 @@ const SeamRepairSection = React.lazy(() => import('./components/SeamRepairSectio
 const GenerateTextureSection = React.lazy(() => import('./components/GenerateTextureSection'));
 const SiteAssistant = React.lazy(() => import('./components/SiteAssistant'));
 const SettingsSection = React.lazy(() => import('./components/SettingsSection'));
-const AdminPasswordGate = React.lazy(() => import('./components/admin/AdminPasswordGate.js'));
+const RequireRole = React.lazy(() => import('./components/auth/RequireRole'));
 const AdminLayout = React.lazy(() => import('./components/admin/AdminLayout.js'));
 const AdminPlaceholder = React.lazy(() => import('./components/admin/AdminPlaceholder.tsx'));
+const AdminUsersPanel = React.lazy(() => import('./components/admin/AdminUsersPanel'));
 type SourceAggregate = {
   count: number;
   rated: number;
@@ -211,7 +212,7 @@ const AdminAppShell: React.FC = () => {
   return (
     <Suspense fallback={<div className="min-h-screen bg-black text-white flex items-center justify-center text-[11px]">加载管理后台…</div>}>
       <AdminLayout currentPath={pathname} onNavigate={handleNavigate}>
-        <AdminPlaceholder />
+        {pathname === '/admin/users' ? <AdminUsersPanel /> : <AdminPlaceholder />}
       </AdminLayout>
     </Suspense>
   );
@@ -438,9 +439,9 @@ const App: React.FC = () => {
   if (pathname.startsWith('/admin')) {
     return (
       <Suspense fallback={<div className="min-h-screen bg-[#050505] flex items-center justify-center text-[11px] text-gray-500">加载中…</div>}>
-        <AdminPasswordGate>
+        <RequireRole role="admin">
           <AdminAppShell />
-        </AdminPasswordGate>
+        </RequireRole>
       </Suspense>
     );
   }

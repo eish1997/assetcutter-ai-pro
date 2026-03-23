@@ -1,7 +1,9 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
-import PasswordGate from './components/PasswordGate';
+import AuthGate from './components/auth/AuthGate';
+import AuthShell from './components/auth/AuthShell';
+import { AuthProvider } from './components/auth/AuthContext';
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {
@@ -11,8 +13,12 @@ if (!rootElement) {
 const root = ReactDOM.createRoot(rootElement);
 root.render(
   <React.StrictMode>
-    <PasswordGate>
-      <App />
-    </PasswordGate>
+    <AuthProvider>
+      <AuthGate>
+        <AuthShell>
+          <App />
+        </AuthShell>
+      </AuthGate>
+    </AuthProvider>
   </React.StrictMode>
 );

@@ -17,6 +17,14 @@ export default defineConfig(({ mode }) => {
         port: 3000,
         host: '0.0.0.0',
         proxy: {
+          '/api/auth': {
+            target: 'http://127.0.0.1:9100',
+            changeOrigin: true,
+          },
+          '/api/admin': {
+            target: 'http://127.0.0.1:9100',
+            changeOrigin: true,
+          },
           '/seam-repair-api': {
             target: 'http://127.0.0.1:8008',
             changeOrigin: true,
