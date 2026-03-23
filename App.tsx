@@ -2691,14 +2691,6 @@ const App: React.FC = () => {
           ↑
         </button>
       )}
-
-      <a
-        href="/admin"
-        className="fixed bottom-6 left-6 z-[2000] inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full border border-white/15 bg-black/50 backdrop-blur-sm text-[10px] font-medium text-gray-300 hover:text-white hover:bg-white/10 hover:border-white/20 transition-colors shadow-lg"
-      >
-        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
-        管理后台
-      </a>
     </div>
   );
 };
