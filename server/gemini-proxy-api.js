@@ -8,7 +8,7 @@
 import http from 'http';
 import { GoogleGenAI } from '@google/genai';
 
-const PORT = Number(process.env.BULK_IMAGE_PORT || process.env.GEMINI_PROXY_PORT || process.env.PORT) || 9002;
+const PORT = Number(process.env.PORT || process.env.BULK_IMAGE_PORT || process.env.GEMINI_PROXY_PORT) || 9002;
 const BIND_HOST = (process.env.BULK_IMAGE_BIND_HOST || '0.0.0.0').trim() || '0.0.0.0';
 const MAX_BODY_BYTES = 10 * 1024 * 1024;
 const IMAGE_REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_IMAGE_REQUEST_TIMEOUT_MS) || 120_000;

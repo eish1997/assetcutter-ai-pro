@@ -11,8 +11,8 @@ import https from 'https';
 import dns from 'dns/promises';
 import { CommonClient } from 'tencentcloud-sdk-nodejs-common';
 
-const PORT = Number(process.env.PORT) || 9001;
-const BIND_HOST = (process.env.PROXY_BIND_HOST || '127.0.0.1').trim() || '127.0.0.1';
+const PORT = Number(process.env.PORT || process.env.PROXY_PORT) || 9001;
+const BIND_HOST = (process.env.PROXY_BIND_HOST || '0.0.0.0').trim() || '0.0.0.0';
 const AI3D_ENDPOINT = 'ai3d.tencentcloudapi.com';
 const AI3D_VERSION = '2025-05-13';
 const AI3D_REGION = 'ap-guangzhou';
