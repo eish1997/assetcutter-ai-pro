@@ -1,7 +1,14 @@
 /** 用户设置的 API 密钥存 localStorage，键名与读写逻辑集中在此 */
 
 const STORAGE_KEY_GEMINI = 'ac_gemini_api_key';
+const STORAGE_KEY_AI_PROVIDER = 'ac_ai_provider';
+const STORAGE_KEY_TOAPIS_API_KEY = 'ac_toapis_api_key';
+const STORAGE_KEY_TOAPIS_BASE_URL = 'ac_toapis_base_url';
+const STORAGE_KEY_VECTORENGINE_API_KEY = 'ac_vectorengine_api_key';
+const STORAGE_KEY_VECTORENGINE_BASE_URL = 'ac_vectorengine_base_url';
 const STORAGE_KEY_BULK_USER_ID = 'ac_bulk_image_user_id';
+
+export type AiProvider = 'gemini' | 'toapis' | 'vectorengine';
 const SESSION_KEY_TENCENT_SECRET_ID = 'ac_tencent_secret_id';
 const SESSION_KEY_TENCENT_SECRET_KEY = 'ac_tencent_secret_key';
 
@@ -47,7 +54,123 @@ export function getBulkUserId(): string {
   }
 }
 
+export function getAiProvider(): AiProvider {
+  try {
+    const v = localStorage.getItem(STORAGE_KEY_AI_PROVIDER);
+    if (v === 'toapis') return 'toapis';
+    if (v === 'vectorengine') return 'vectorengine';
+    return 'gemini';
+  } catch {
+    return 'gemini';
+  }
+}
+
+export function setAiProvider(value: AiProvider): void {
+  try {
+    localStorage.setItem(STORAGE_KEY_AI_PROVIDER, value);
+  } catch {
+    // ignore
+  }
+}
+
+export function getToapisApiKey(): string | null {
+  try {
+    const v = localStorage.getItem(STORAGE_KEY_TOAPIS_API_KEY);
+    return v && v.trim() ? v.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+export function setToapisApiKey(value: string | null): void {
+  try {
+    if (value == null || !value.trim()) {
+      localStorage.removeItem(STORAGE_KEY_TOAPIS_API_KEY);
+    } else {
+      localStorage.setItem(STORAGE_KEY_TOAPIS_API_KEY, value.trim());
+    }
+  } catch {
+    // ignore
+  }
+}
+
+/** ToAPIs 网关根路径，须含 /v1，如 https://toapis.com/v1 */
+export function getToapisBaseUrl(): string {
+  try {
+    const v = localStorage.getItem(STORAGE_KEY_TOAPIS_BASE_URL);
+    const t = v && v.trim() ? v.trim() : '';
+    return t || 'https://toapis.com/v1';
+  } catch {
+    return 'https://toapis.com/v1';
+  }
+}
+
+export function setToapisBaseUrl(value: string | null): void {
+  try {
+    if (value == null || !value.trim()) {
+      localStorage.removeItem(STORAGE_KEY_TOAPIS_BASE_URL);
+    } else {
+      localStorage.setItem(STORAGE_KEY_TOAPIS_BASE_URL, value.trim());
+    }
+  } catch {
+    // ignore
+  }
+}
+
+export function getVectorengineApiKey(): string | null {
+  try {
+    const v = localStorage.getItem(STORAGE_KEY_VECTORENGINE_API_KEY);
+    return v && v.trim() ? v.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+export function setVectorengineApiKey(value: string | null): void {
+  try {
+    if (value == null || !value.trim()) {
+      localStorage.removeItem(STORAGE_KEY_VECTORENGINE_API_KEY);
+    } else {
+      localStorage.setItem(STORAGE_KEY_VECTORENGINE_API_KEY, value.trim());
+    }
+  } catch {
+    // ignore
+  }
+}
+
+/** 向量引擎根地址（不含 /v1beta 路径），如 https://api.vectorengine.ai */
+export function getVectorengineBaseUrl(): string {
+  try {
+    const v = localStorage.getItem(STORAGE_KEY_VECTORENGINE_BASE_URL);
+    const t = v && v.trim() ? v.trim() : '';
+    return t || 'https://api.vectorengine.ai';
+  } catch {
+    return 'https://api.vectorengine.ai';
+  }
+}
+
+export function setVectorengineBaseUrl(value: string | null): void {
+  try {
+    if (value == null || !value.trim()) {
+      localStorage.removeItem(STORAGE_KEY_VECTORENGINE_BASE_URL);
+    } else {
+      localStorage.setItem(STORAGE_KEY_VECTORENGINE_BASE_URL, value.trim());
+    }
+  } catch {
+    // ignore
+  }
+}
+
+/** 当前选用供应商下的 API Key（Gemini 官方、ToAPIs 或 VectorEngine） */
 export function getApiKey(): string | undefined {
+  if (getAiProvider() === 'toapis') {
+    const k = getToapisApiKey();
+    return k ?? undefined;
+  }
+  if (getAiProvider() === 'vectorengine') {
+    const k = getVectorengineApiKey();
+    return k ?? undefined;
+  }
   const user = getUserApiKey();
   if (user) return user;
   return undefined;

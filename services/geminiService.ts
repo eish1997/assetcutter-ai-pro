@@ -1,5 +1,15 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import { getApiKey } from "./settingsStore";
+import { createToapisGeminiClient } from "./toapisAdapter";
+import { createVectorengineGeminiClient } from "./vectorengineAdapter";
+import {
+  getAiProvider,
+  getApiKey,
+  getToapisApiKey,
+  getToapisBaseUrl,
+  getUserApiKey,
+  getVectorengineApiKey,
+  getVectorengineBaseUrl,
+} from "./settingsStore";
 
 const BULK_BASE =
   typeof import.meta !== "undefined" && (import.meta as unknown as { env?: Record<string, string | undefined> })?.env
@@ -94,7 +104,21 @@ type GeminiClientLike = {
 };
 
 const getAI = (): GeminiClientLike => {
-  const apiKey = getApiKey();
+  if (getAiProvider() === "toapis") {
+    const k = getToapisApiKey();
+    if (!k) {
+      throw new Error("未配置 ToAPIs API Key：请在设置中选择「ToAPIs 网关」并填写密钥");
+    }
+    return createToapisGeminiClient(getToapisBaseUrl(), k) as unknown as GeminiClientLike;
+  }
+  if (getAiProvider() === "vectorengine") {
+    const k = getVectorengineApiKey();
+    if (!k) {
+      throw new Error("未配置 VectorEngine API Key：请在设置中选择「向量引擎 VectorEngine」并填写密钥");
+    }
+    return createVectorengineGeminiClient(getVectorengineBaseUrl(), k) as unknown as GeminiClientLike;
+  }
+  const apiKey = getUserApiKey();
   if (apiKey) {
     return new GoogleGenAI({ apiKey }) as unknown as GeminiClientLike;
   }
