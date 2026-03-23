@@ -58,6 +58,31 @@ async function ensurePostgres() {
   `);
   await p.query(`CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);`);
   await p.query(`CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);`);
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS password_resets (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      expires_at TIMESTAMPTZ NOT NULL,
+      used_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL
+    );
+  `);
+  await p.query(`CREATE INDEX IF NOT EXISTS idx_password_resets_user_id ON password_resets(user_id);`);
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id TEXT PRIMARY KEY,
+      actor_user_id TEXT,
+      actor_identifier TEXT,
+      action TEXT NOT NULL,
+      target_user_id TEXT,
+      meta_json TEXT,
+      ip TEXT,
+      user_agent TEXT,
+      created_at TIMESTAMPTZ NOT NULL
+    );
+  `);
+  await p.query(`CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at DESC);`);
   pgReady = true;
 }
 
@@ -75,6 +100,8 @@ function readDb() {
   const parsed = JSON.parse(raw || '{}');
   if (!Array.isArray(parsed.users)) parsed.users = [];
   if (!Array.isArray(parsed.sessions)) parsed.sessions = [];
+  if (!Array.isArray(parsed.passwordResets)) parsed.passwordResets = [];
+  if (!Array.isArray(parsed.auditLogs)) parsed.auditLogs = [];
   if (typeof parsed.version !== 'number') parsed.version = 1;
   let changed = false;
   for (const item of parsed.users) {
@@ -542,6 +569,138 @@ export async function getSessionWithUser(token) {
     user: publicUser(user),
     shouldRotate: Date.now() - new Date(row.createdAt).getTime() > DAY_MS,
   };
+}
+
+export async function createPasswordReset(identifier, ttlMs = 15 * 60 * 1000) {
+  const keyword = String(identifier || '').trim().toLowerCase();
+  if (!keyword) return null;
+  const rawToken = crypto.randomBytes(24).toString('base64url');
+  const tokenHash = hashToken(rawToken);
+  const expiresAt = new Date(Date.now() + ttlMs).toISOString();
+  const createdAt = nowIso();
+  const id = crypto.randomUUID();
+  if (USE_POSTGRES) {
+    await ensurePostgres();
+    const p = getPool();
+    const userRes = await p.query('SELECT id FROM users WHERE email = $1 OR username = $1 LIMIT 1', [keyword]);
+    const userId = userRes.rows[0]?.id;
+    if (!userId) return null;
+    await p.query(
+      `INSERT INTO password_resets (id, user_id, token_hash, expires_at, used_at, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [id, userId, tokenHash, expiresAt, null, createdAt]
+    );
+    return { token: rawToken, userId, expiresAt };
+  }
+  const db = readDb();
+  const user = db.users.find((u) => u.email === keyword || u.username === keyword);
+  if (!user) return null;
+  db.passwordResets.push({ id, userId: user.id, tokenHash, expiresAt, usedAt: null, createdAt });
+  writeDb(db);
+  return { token: rawToken, userId: user.id, expiresAt };
+}
+
+export async function consumePasswordResetToken(token, newPassword) {
+  if (!token) return null;
+  if (!newPassword || String(newPassword).length < 8) throw new Error('密码至少 8 位');
+  const tokenHash = hashToken(token);
+  if (USE_POSTGRES) {
+    await ensurePostgres();
+    const p = getPool();
+    const resetRes = await p.query(
+      `SELECT * FROM password_resets
+       WHERE token_hash = $1
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [tokenHash]
+    );
+    const row = resetRes.rows[0];
+    if (!row) return null;
+    if (row.used_at) return null;
+    if (new Date(row.expires_at).getTime() <= Date.now()) return null;
+    const passHash = createPasswordHash(newPassword);
+    await p.query('UPDATE users SET password_hash = $2, updated_at = NOW() WHERE id = $1', [row.user_id, passHash]);
+    await p.query('UPDATE password_resets SET used_at = NOW() WHERE id = $1', [row.id]);
+    const userRes = await p.query('SELECT * FROM users WHERE id = $1 LIMIT 1', [row.user_id]);
+    return userRes.rows[0] ? publicUser(mapUserRow(userRes.rows[0])) : null;
+  }
+  const db = readDb();
+  const row = db.passwordResets.find((r) => r.tokenHash === tokenHash);
+  if (!row) return null;
+  if (row.usedAt) return null;
+  if (new Date(row.expiresAt).getTime() <= Date.now()) return null;
+  const user = db.users.find((u) => u.id === row.userId);
+  if (!user) return null;
+  user.passwordHash = createPasswordHash(newPassword);
+  user.updatedAt = nowIso();
+  row.usedAt = nowIso();
+  writeDb(db);
+  return publicUser(user);
+}
+
+export async function createAuditLog({ actorUserId = null, actorIdentifier = '', action, targetUserId = null, meta = null, ip = '', userAgent = '' }) {
+  if (!action) return;
+  const entry = {
+    id: crypto.randomUUID(),
+    actorUserId: actorUserId || null,
+    actorIdentifier: String(actorIdentifier || ''),
+    action: String(action),
+    targetUserId: targetUserId || null,
+    metaJson: meta == null ? null : JSON.stringify(meta),
+    ip: String(ip || ''),
+    userAgent: String(userAgent || ''),
+    createdAt: nowIso(),
+  };
+  if (USE_POSTGRES) {
+    await ensurePostgres();
+    const p = getPool();
+    await p.query(
+      `INSERT INTO audit_logs (id, actor_user_id, actor_identifier, action, target_user_id, meta_json, ip, user_agent, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [entry.id, entry.actorUserId, entry.actorIdentifier, entry.action, entry.targetUserId, entry.metaJson, entry.ip, entry.userAgent, entry.createdAt]
+    );
+    return;
+  }
+  const db = readDb();
+  db.auditLogs.push(entry);
+  if (db.auditLogs.length > 2000) db.auditLogs.splice(0, db.auditLogs.length - 2000);
+  writeDb(db);
+}
+
+export async function listAuditLogs(limit = 200) {
+  const max = Math.max(1, Math.min(1000, Number(limit || 200)));
+  if (USE_POSTGRES) {
+    await ensurePostgres();
+    const p = getPool();
+    const res = await p.query('SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT $1', [max]);
+    return res.rows.map((r) => ({
+      id: r.id,
+      actorUserId: r.actor_user_id,
+      actorIdentifier: r.actor_identifier,
+      action: r.action,
+      targetUserId: r.target_user_id,
+      meta: r.meta_json ? JSON.parse(r.meta_json) : null,
+      ip: r.ip,
+      userAgent: r.user_agent,
+      createdAt: new Date(r.created_at).toISOString(),
+    }));
+  }
+  const db = readDb();
+  return db.auditLogs
+    .slice()
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    .slice(0, max)
+    .map((r) => ({
+      id: r.id,
+      actorUserId: r.actorUserId,
+      actorIdentifier: r.actorIdentifier,
+      action: r.action,
+      targetUserId: r.targetUserId,
+      meta: r.metaJson ? JSON.parse(r.metaJson) : null,
+      ip: r.ip,
+      userAgent: r.userAgent,
+      createdAt: r.createdAt,
+    }));
 }
 
 export async function initAuthStore() {

@@ -1,12 +1,16 @@
 import http from 'http';
 import crypto from 'crypto';
 import {
+  consumePasswordResetToken,
+  createAuditLog,
+  createPasswordReset,
   createUser,
   createSession,
   findUserByLogin,
   getSessionWithUser,
   initAuthStore,
   listUsers,
+  listAuditLogs,
   revokeSessionByToken,
   rotateSession,
   upsertAdminUser,
@@ -26,6 +30,9 @@ const AUTH_ALLOWED_ORIGINS = String(process.env.AUTH_ALLOWED_ORIGINS || '').trim
 const RATE_LIMIT_WINDOW_MS = Number(process.env.AUTH_RATE_LIMIT_WINDOW_MS || 60_000);
 const LOGIN_RATE_LIMIT_MAX = Number(process.env.AUTH_LOGIN_RATE_LIMIT_MAX || 10);
 const REGISTER_RATE_LIMIT_MAX = Number(process.env.AUTH_REGISTER_RATE_LIMIT_MAX || 20);
+const RESET_RATE_LIMIT_MAX = Number(process.env.AUTH_RESET_RATE_LIMIT_MAX || 8);
+const CSRF_COOKIE_NAME = 'ac_csrf';
+const AUTH_PASSWORD_RESET_DEBUG = String(process.env.AUTH_PASSWORD_RESET_DEBUG || '').trim().toLowerCase() === 'true';
 
 const allowedOrigins = AUTH_ALLOWED_ORIGINS
   ? new Set(
@@ -66,6 +73,12 @@ function clearSessionCookie() {
   return `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=0${secure}`;
 }
 
+function serializeCsrfCookie(token) {
+  const sameSite = COOKIE_SAME_SITE === 'none' ? 'None' : COOKIE_SAME_SITE === 'strict' ? 'Strict' : 'Lax';
+  const secure = COOKIE_SECURE || sameSite === 'None' ? '; Secure' : '';
+  return `${CSRF_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; SameSite=${sameSite}; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}${secure}`;
+}
+
 function applyCors(req, res) {
   const origin = req.headers.origin;
   if (!origin) {
@@ -91,6 +104,42 @@ function assertWriteOrigin(req, res) {
   const origin = String(req.headers.origin || '');
   if (isAllowedOrigin(origin)) return true;
   json(res, 403, { error: 'Origin not allowed' });
+  return false;
+}
+
+function readCsrfFromCookie(req) {
+  return parseCookie(req)[CSRF_COOKIE_NAME] || '';
+}
+
+function issueCsrfCookie(res) {
+  const token = crypto.randomBytes(18).toString('base64url');
+  return { token, cookie: serializeCsrfCookie(token) };
+}
+
+function addSetCookieHeader(res, cookieLine) {
+  const prev = res.getHeader('Set-Cookie');
+  if (!prev) {
+    res.setHeader('Set-Cookie', cookieLine);
+    return;
+  }
+  if (Array.isArray(prev)) {
+    res.setHeader('Set-Cookie', [...prev, cookieLine]);
+    return;
+  }
+  res.setHeader('Set-Cookie', [String(prev), cookieLine]);
+}
+
+function assertCsrf(req, res) {
+  const method = String(req.method || '').toUpperCase();
+  if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return true;
+  if (method === 'POST' && (req.url || '').startsWith('/api/auth/login')) return true;
+  if (method === 'POST' && (req.url || '').startsWith('/api/auth/register')) return true;
+  if (method === 'POST' && (req.url || '').startsWith('/api/auth/forgot-password')) return true;
+  if (method === 'POST' && (req.url || '').startsWith('/api/auth/reset-password')) return true;
+  const cookieToken = readCsrfFromCookie(req);
+  const headerToken = String(req.headers['x-csrf-token'] || '');
+  if (cookieToken && headerToken && cookieToken === headerToken) return true;
+  json(res, 403, { error: 'CSRF token invalid' });
   return false;
 }
 
@@ -194,6 +243,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   if (!assertWriteOrigin(req, res)) return;
+  if (!assertCsrf(req, res)) return;
 
   const path = (req.url || '/').split('?')[0];
   try {
@@ -221,7 +271,9 @@ const server = http.createServer(async (req, res) => {
         userAgent: req.headers['user-agent'],
         ip: getClientIp(req),
       });
-      res.setHeader('Set-Cookie', serializeSessionCookie(token, SESSION_TTL_MS));
+      const csrf = issueCsrfCookie(res);
+      res.setHeader('Set-Cookie', [serializeSessionCookie(token, SESSION_TTL_MS), csrf.cookie]);
+      await createAuditLog({ actorUserId: user.id, actorIdentifier: user.username, action: 'auth.register', targetUserId: user.id, ip: getClientIp(req), userAgent: req.headers['user-agent'] });
       sendAuthUser(res, user, 201);
       return;
     }
@@ -237,6 +289,7 @@ const server = http.createServer(async (req, res) => {
       }
       const row = await findUserByLogin(identifier);
       if (!row || !verifyPassword(password, row.passwordHash)) {
+        await createAuditLog({ actorIdentifier: identifier, action: 'auth.login_failed', ip: getClientIp(req), userAgent: req.headers['user-agent'] });
         json(res, 401, { error: '用户名/邮箱或密码错误' });
         return;
       }
@@ -257,15 +310,47 @@ const server = http.createServer(async (req, res) => {
         userAgent: req.headers['user-agent'],
         ip: getClientIp(req),
       });
-      res.setHeader('Set-Cookie', serializeSessionCookie(token, SESSION_TTL_MS));
+      const csrf = issueCsrfCookie(res);
+      res.setHeader('Set-Cookie', [serializeSessionCookie(token, SESSION_TTL_MS), csrf.cookie]);
+      await createAuditLog({ actorUserId: row.id, actorIdentifier: row.username, action: 'auth.login_success', targetUserId: row.id, ip: getClientIp(req), userAgent: req.headers['user-agent'] });
       sendAuthUser(res, user);
+      return;
+    }
+
+    if (path === '/api/auth/forgot-password' && req.method === 'POST') {
+      const body = await readBody(req);
+      const identifier = String(body.identifier || body.email || '');
+      const rateKey = `forgot:${getClientIp(req)}:${identifier.toLowerCase()}`;
+      if (isRateLimited(rateKey, RESET_RATE_LIMIT_MAX)) {
+        json(res, 429, { error: '请求过于频繁，请稍后再试' });
+        return;
+      }
+      const row = await createPasswordReset(identifier, 15 * 60 * 1000);
+      await createAuditLog({ actorIdentifier: identifier, action: 'auth.forgot_password', targetUserId: row?.userId || null, ip: getClientIp(req), userAgent: req.headers['user-agent'] });
+      json(res, 200, AUTH_PASSWORD_RESET_DEBUG && row ? { ok: true, resetToken: row.token } : { ok: true });
+      return;
+    }
+
+    if (path === '/api/auth/reset-password' && req.method === 'POST') {
+      const body = await readBody(req);
+      const resetToken = String(body.token || '');
+      const newPassword = String(body.newPassword || '');
+      const updated = await consumePasswordResetToken(resetToken, newPassword);
+      if (!updated) {
+        json(res, 400, { error: '重置链接无效或已过期' });
+        return;
+      }
+      await createAuditLog({ actorUserId: updated.id, actorIdentifier: updated.username, action: 'auth.password_reset', targetUserId: updated.id, ip: getClientIp(req), userAgent: req.headers['user-agent'] });
+      json(res, 200, { ok: true });
       return;
     }
 
     if (path === '/api/auth/logout' && req.method === 'POST') {
       const token = parseCookie(req)[COOKIE_NAME];
       if (token) await revokeSessionByToken(token);
-      res.setHeader('Set-Cookie', clearSessionCookie());
+      const cookieParts = [clearSessionCookie(), `${CSRF_COOKIE_NAME}=; Path=/; Max-Age=0`];
+      res.setHeader('Set-Cookie', cookieParts);
+      await createAuditLog({ action: 'auth.logout', ip: getClientIp(req), userAgent: req.headers['user-agent'] });
       json(res, 200, { ok: true });
       return;
     }
@@ -273,6 +358,10 @@ const server = http.createServer(async (req, res) => {
     if (path === '/api/auth/me' && req.method === 'GET') {
       const user = await requireAuth(req, res);
       if (!user) return;
+      if (!readCsrfFromCookie(req)) {
+        const csrf = issueCsrfCookie(res);
+        addSetCookieHeader(res, csrf.cookie);
+      }
       sendAuthUser(res, user);
       return;
     }
@@ -288,6 +377,14 @@ const server = http.createServer(async (req, res) => {
       const user = await requireAdmin(req, res);
       if (!user) return;
       json(res, 200, { users: await listUsers() });
+      return;
+    }
+
+    if (path === '/api/admin/audit-logs' && req.method === 'GET') {
+      const user = await requireAdmin(req, res);
+      if (!user) return;
+      const limit = Number(((req.url || '').split('?')[1] || '').match(/(?:^|&)limit=(\d+)/)?.[1] || '200');
+      json(res, 200, { logs: await listAuditLogs(limit) });
       return;
     }
 
@@ -311,6 +408,15 @@ const server = http.createServer(async (req, res) => {
         json(res, 404, { error: '用户不存在' });
         return;
       }
+      await createAuditLog({
+        actorUserId: user.id,
+        actorIdentifier: user.username,
+        action: 'admin.user_update',
+        targetUserId: next.id,
+        meta: { role: next.role, status: next.status },
+        ip: getClientIp(req),
+        userAgent: req.headers['user-agent'],
+      });
       json(res, 200, { user: next });
       return;
     }

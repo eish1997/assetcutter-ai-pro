@@ -28,6 +28,7 @@ const RequireRole = React.lazy(() => import('./components/auth/RequireRole'));
 const AdminLayout = React.lazy(() => import('./components/admin/AdminLayout.js'));
 const AdminPlaceholder = React.lazy(() => import('./components/admin/AdminPlaceholder.tsx'));
 const AdminUsersPanel = React.lazy(() => import('./components/admin/AdminUsersPanel'));
+const AdminAuditLogsPanel = React.lazy(() => import('./components/admin/AdminAuditLogsPanel'));
 type SourceAggregate = {
   count: number;
   rated: number;
@@ -212,7 +213,7 @@ const AdminAppShell: React.FC = () => {
   return (
     <Suspense fallback={<div className="min-h-screen bg-black text-white flex items-center justify-center text-[11px]">加载管理后台…</div>}>
       <AdminLayout currentPath={pathname} onNavigate={handleNavigate}>
-        {pathname === '/admin/users' ? <AdminUsersPanel /> : <AdminPlaceholder />}
+        {pathname === '/admin/users' ? <AdminUsersPanel /> : pathname === '/admin/audit-logs' ? <AdminAuditLogsPanel /> : <AdminPlaceholder />}
       </AdminLayout>
     </Suspense>
   );
