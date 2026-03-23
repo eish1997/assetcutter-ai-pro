@@ -9,6 +9,11 @@ type CustomDropdownProps = {
   onChange: (value: string) => void;
   placeholder?: string;
   triggerClassName?: string;
+  /**
+   * Portal 遮罩与列表的 z-index（内联样式，避免低于宿主弹窗时被挡住）。
+   * 默认 1002 / 1003；嵌在 z-[2100] 等弹窗内时请传入更大值，例如 { backdrop: 2200, list: 2201 }。
+   */
+  portalZIndex?: { backdrop: number; list: number };
 };
 
 /** 深色主题下拉组件：触发器 + Portal 到 body 的列表与遮罩，规范见 .cursor/rules/dropdown-ui-style.mdc */
@@ -18,6 +23,7 @@ export function CustomDropdown({
   onChange,
   placeholder = '默认',
   triggerClassName = 'bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-[11px] text-left flex items-center justify-between outline-none focus:border-blue-500 hover:bg-white/10 transition-colors',
+  portalZIndex = { backdrop: 1002, list: 1003 },
 }: CustomDropdownProps) {
   const [open, setOpen] = useState(false);
   const [listPosition, setListPosition] = useState<{ top: number; left: number; width: number } | null>(null);
@@ -35,7 +41,10 @@ export function CustomDropdown({
     if (!open) return;
     const close = () => setOpen(false);
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') close();
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        close();
+      }
     };
     window.addEventListener('scroll', close, true);
     window.addEventListener('resize', close);
@@ -52,11 +61,22 @@ export function CustomDropdown({
   const portalContent =
     open && typeof document !== 'undefined' ? (
       <>
-        <div className="fixed inset-0 z-[1002]" aria-hidden onClick={() => setOpen(false)} />
+        <div
+          className="fixed inset-0"
+          style={{ zIndex: portalZIndex.backdrop }}
+          aria-hidden
+          onClick={() => setOpen(false)}
+        />
         {listPosition && (
           <ul
-            className="fixed z-[1003] max-h-56 overflow-y-auto rounded-xl border border-white/10 bg-[#0f0f0f] shadow-xl py-1 text-white"
-            style={{ top: listPosition.top, left: listPosition.left, width: listPosition.width, minWidth: '6rem' }}
+            className="fixed max-h-56 overflow-y-auto rounded-xl border border-white/10 bg-[#0f0f0f] shadow-xl py-1 text-white"
+            style={{
+              top: listPosition.top,
+              left: listPosition.left,
+              width: listPosition.width,
+              minWidth: '6rem',
+              zIndex: portalZIndex.list,
+            }}
           >
             {options.map((opt) => (
               <li key={opt.value === '' ? '__empty__' : opt.value}>

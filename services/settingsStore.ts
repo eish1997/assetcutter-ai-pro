@@ -163,6 +163,25 @@ export function getApiKey(): string | undefined {
   return undefined;
 }
 
+/**
+ * 当前选用的 AI 供应商是否具备调用条件：
+ * - ToAPIs / VectorEngine：本机已填 Key
+ * - Gemini：本机 Key，或构建时配置了 VITE_BULK_IMAGE_API（走后端代理）
+ */
+export function isAiInvocationReady(): boolean {
+  const p = getAiProvider();
+  if (p === 'toapis') return Boolean(getToapisApiKey()?.trim());
+  if (p === 'vectorengine') return Boolean(getVectorengineApiKey()?.trim());
+  try {
+    const env = typeof import.meta !== 'undefined' ? (import.meta as { env?: Record<string, string | undefined> }).env : undefined;
+    const bulk = env?.VITE_BULK_IMAGE_API;
+    if (bulk && String(bulk).trim()) return true;
+  } catch {
+    /* ignore */
+  }
+  return Boolean(getUserApiKey()?.trim());
+}
+
 // ----- 混元（腾讯云） -----
 export function getTencentSecretId(): string | null {
   try {

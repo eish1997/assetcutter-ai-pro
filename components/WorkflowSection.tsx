@@ -7,6 +7,8 @@ import { CAPABILITY_CATEGORIES } from '../types';
 import { getRandomGroupCodeName } from '../data/groupCodeNames';
 import { detectObjectsInImage, DEFAULT_PROMPTS } from '../services/geminiService';
 import { executeCapability, executeCapabilitySet } from '../services/capabilityExecutor';
+import { WorkflowApiKeyModal } from './WorkflowApiKeyModal';
+import { isAiInvocationReady } from '../services/settingsStore';
 
 const uuid = () => Math.random().toString(36).slice(2, 11);
 const RESULT_VER_SEP = '__v__';
@@ -583,6 +585,9 @@ const WorkflowSection: React.FC<{
       | { imageBase64: string; parentAssetId: string; sourceGroupAssetId: string; sourceItemIndex: number }
     >;
   } | null>(null);
+  const [apiKeyModalOpen, setApiKeyModalOpen] = useState(false);
+  const [aiInvocationStatusRev, setAiInvocationStatusRev] = useState(0);
+  const aiInvocationReady = useMemo(() => isAiInvocationReady(), [aiInvocationStatusRev]);
   const [viewStack, setViewStack] = useState<{ assetId: string }[]>([]);
   const [showAllInGroup, setShowAllInGroup] = useState(false);
   const [groupStringLightboxIndex, setGroupStringLightboxIndex] = useState<number | null>(null);
@@ -1662,7 +1667,8 @@ const WorkflowSection: React.FC<{
 
   return (
     <div className="flex flex-col min-h-[400px] h-[calc(100dvh-6rem)] gap-4">
-      <div className="flex flex-wrap items-center gap-4 shrink-0">
+      <div className="flex flex-col gap-2 shrink-0 w-full sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+        <div className="flex flex-wrap items-center gap-4 min-w-0 flex-1">
         <span className="text-[10px] font-black text-blue-400 uppercase mr-2">工作区</span>
         <div className="flex items-center gap-2">
           <span className="text-[9px] font-black text-gray-500 uppercase">显示</span>
@@ -1815,7 +1821,42 @@ const WorkflowSection: React.FC<{
             )}
           </div>
         )}
+        </div>
+        <button
+          type="button"
+          onClick={() => setApiKeyModalOpen(true)}
+          className="shrink-0 inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-[9px] font-black uppercase hover:bg-white/10 hover:border-blue-500/40 self-end sm:self-center"
+          title={
+            aiInvocationReady
+              ? '当前调用源已就绪 · 点击配置 API 密钥'
+              : '当前供应商未配置 API Key（Gemini 也未配置批量代理）· 点击配置'
+          }
+          aria-label={
+            aiInvocationReady
+              ? 'API 密钥，当前调用源已就绪'
+              : 'API 密钥，当前调用源未就绪，请配置'
+          }
+        >
+          <span
+            role="status"
+            aria-hidden={true}
+            className={`h-2.5 w-2.5 shrink-0 rounded-full border border-white/20 ${
+              aiInvocationReady
+                ? 'bg-emerald-500 shadow-[0_0_10px_rgba(34,197,94,0.45)]'
+                : 'bg-amber-600/90 shadow-[0_0_8px_rgba(217,119,6,0.35)]'
+            }`}
+          />
+          <span>API 密钥</span>
+        </button>
       </div>
+
+      {apiKeyModalOpen && (
+        <WorkflowApiKeyModal
+          open={apiKeyModalOpen}
+          onClose={() => setApiKeyModalOpen(false)}
+          onSaved={() => setAiInvocationStatusRev((n) => n + 1)}
+        />
+      )}
 
       <div
         className={`shrink-0 rounded-xl border-2 border-dashed p-4 text-center transition-colors ${dropZoneActive ? 'border-blue-500 bg-blue-500/10' : 'border-white/20 bg-white/5'}`}
@@ -1831,7 +1872,7 @@ const WorkflowSection: React.FC<{
       <div className="flex-1 min-h-0 flex gap-6">
         <div
           ref={scrollAreaRef}
-          className="flex-1 min-w-0 overflow-y-auto no-scrollbar flex flex-col gap-3 min-h-full"
+          className="flex-1 min-w-0 min-h-0 overflow-y-auto no-scrollbar flex flex-col gap-3"
           onMouseDownCapture={(e) => {
             if (showArchived) return;
             if (!scrollAreaRef.current?.contains(e.target as Node)) return;
@@ -2377,11 +2418,19 @@ const WorkflowSection: React.FC<{
                 <div className="flex flex-col items-center justify-center py-12 text-gray-500 text-[9px]">此组暂无内容</div>
               )}
             </>
+          ) : visibleAssets.length === 0 ? (
+            <div className="flex flex-1 min-h-0 flex-col items-center justify-center px-6 py-10 text-gray-500">
+              <span className="text-4xl mb-2">📷</span>
+              <p className="text-[10px] font-black uppercase">暂无图片</p>
+              <p className="text-[9px] mt-1 text-center max-w-sm">
+                使用「多选上传」添加原始图片，或切换到「已完成」查看归档（可点击打开）
+              </p>
+            </div>
           ) : (
-            <div className="flex-1 min-h-full p-6 min-w-0">
+            <div className="flex-1 min-h-0 p-6 min-w-0">
               <div
                 ref={gridRef}
-                className="gap-4 relative min-h-full"
+                className="gap-4 relative"
                 style={{ columnCount, columnFill: 'balance' as const }}
               >
                 {visibleAssets.map((a) => {
@@ -2682,14 +2731,6 @@ const WorkflowSection: React.FC<{
                   );
                 })}
               </div>
-              {/* 根级视图下的提示与空状态 */}
-              {visibleAssets.length === 0 && (
-                <div className="flex flex-col items-center justify-center py-20 text-gray-500">
-                  <span className="text-4xl mb-2">📷</span>
-                  <p className="text-[10px] font-black uppercase">暂无图片</p>
-                  <p className="text-[9px] mt-1">使用「多选上传」添加原始图片，或切换到「已完成」查看归档（可点击打开）</p>
-                </div>
-              )}
             </div>
           )}
         </div>
@@ -2709,32 +2750,35 @@ const WorkflowSection: React.FC<{
 
         {/* 功能区：全部来自「能力」，随能力内增删自动更新 */}
         <div className="w-80 shrink-0 flex flex-col gap-3 overflow-y-auto no-scrollbar">
-          <div className="flex items-center justify-between gap-2">
-            <div>
-              <div className="text-[9px] font-black text-blue-400 uppercase">功能区</div>
-              <p className="text-[8px] text-gray-500">基础能力与复合能力 · 能力中增删会同步到此</p>
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              {pending.length > 0 && !executing && (
+          <div>
+            <div className="text-[9px] font-black text-blue-400 uppercase">功能区</div>
+            <p className="text-[8px] text-gray-500">基础能力与复合能力 · 能力中增删会同步到此</p>
+          </div>
+
+          <div className="flex flex-col gap-2 rounded-xl border border-blue-500/35 bg-gradient-to-b from-blue-600/15 to-blue-950/20 p-3 shadow-[0_0_24px_rgba(37,99,235,0.12)]">
+            {pending.length > 0 && !executing && (
+              <div className="flex items-center justify-end">
                 <button
                   type="button"
                   onClick={() => setPending([])}
-                  className="px-2.5 py-1.5 rounded-xl border border-amber-500/60 bg-amber-500/10 text-[9px] font-black uppercase text-amber-300 hover:bg-amber-500/20"
+                  className="px-2.5 py-1 rounded-lg border border-amber-500/50 bg-amber-500/10 text-[9px] font-black uppercase text-amber-300 hover:bg-amber-500/20"
                 >
                   清空队列
                 </button>
-              )}
-              <button
-                onClick={() => executePending()}
-                disabled={pending.length === 0 || executing}
-                className="px-3 py-1.5 rounded-xl bg-blue-600 text-[9px] font-black uppercase whitespace-nowrap electric-glow disabled:opacity-40"
-              >
-                {executing
-                  ? `执行中 ${executingQueue?.current ?? 0}/${executingQueue?.total ?? 0}`
-                  : `一键执行（${pending.length}）`}
-              </button>
-            </div>
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={() => executePending()}
+              disabled={pending.length === 0 || executing}
+              className="w-full py-3.5 px-4 rounded-xl bg-blue-600 hover:bg-blue-500 text-[12px] font-black uppercase tracking-wide electric-glow disabled:opacity-40 disabled:hover:bg-blue-600 border border-blue-400/50 shadow-md"
+            >
+              {executing
+                ? `执行中 ${executingQueue?.current ?? 0}/${executingQueue?.total ?? 0}`
+                : `一键执行（${pending.length}）`}
+            </button>
           </div>
+
           <div className="grid grid-cols-2 gap-3">
           <div
             onDragOver={(e) => {
