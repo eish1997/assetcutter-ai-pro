@@ -3084,13 +3084,23 @@ const WorkflowSection: React.FC<{
                       <div
                         key={mod.id}
                         className={`rounded-xl border-2 border-dashed min-h-[72px] flex transition-colors ${
-                          dragOverAction === mod.id || dragOverAction === mod.id + '__tweak'
+                          dragOverAction === mod.id
                             ? 'border-blue-500 bg-blue-500/10'
-                            : 'border-white/20 bg-white/5 hover:border-white/30'
+                            : dragOverAction === mod.id + '__tweak'
+                              ? 'border-indigo-400 bg-indigo-500/10 ring-1 ring-indigo-400/40'
+                              : 'border-white/20 bg-white/5 hover:border-white/30'
                         }`}
                       >
                         <div
-                          className="flex-1 p-3 flex flex-col items-center justify-center text-center min-w-0"
+                          className={`flex-1 p-3 flex flex-col items-center justify-center text-center min-w-0 transition-colors ${
+                            mod.category === 'image_gen' ? 'border-r border-white/10' : ''
+                          } ${
+                            dragOverAction === mod.id + '__tweak'
+                              ? 'bg-black/20'
+                              : dragOverAction === mod.id
+                                ? 'bg-blue-500/10'
+                                : ''
+                          }`}
                           onDragOver={(e) => {
                             e.preventDefault();
                             setDragOverAction(mod.id);
@@ -3153,11 +3163,14 @@ const WorkflowSection: React.FC<{
                           }}
                         >
                           <span className="text-[9px] font-black uppercase">{mod.label}</span>
-                          <span className="text-[8px] text-gray-500 mt-0.5">拖拽图片到此处</span>
                         </div>
                         {mod.category === 'image_gen' && (
                           <div
-                            className="w-8 shrink-0 flex flex-col items-center justify-center border-l border-white/10 rounded-r-lg bg-white/5 hover:bg-white/10 transition-colors cursor-default"
+                            className={`w-11 shrink-0 flex flex-col items-center justify-center rounded-r-lg transition-colors cursor-default ${
+                              dragOverAction === mod.id + '__tweak'
+                                ? 'bg-blue-600/25 border-l border-blue-400/40'
+                                : 'bg-white/5 border-l border-white/10 hover:bg-white/10'
+                            }`}
                             title="拖到此处可微调提示词后加入队列"
                             onDragOver={(e) => {
                               e.preventDefault();
@@ -3220,13 +3233,23 @@ const WorkflowSection: React.FC<{
                 <div
                   key={mod.id}
                   className={`rounded-xl border-2 border-dashed min-h-[72px] flex transition-colors ${
-                    dragOverAction === mod.id || dragOverAction === mod.id + '__tweak'
+                    dragOverAction === mod.id
                       ? 'border-blue-500 bg-blue-500/10'
-                      : 'border-white/20 bg-white/5 hover:border-white/30'
+                      : dragOverAction === mod.id + '__tweak'
+                        ? 'border-indigo-400 bg-indigo-500/10 ring-1 ring-indigo-400/40'
+                        : 'border-white/20 bg-white/5 hover:border-white/30'
                   }`}
                 >
                   <div
-                    className="flex-1 p-3 flex flex-col items-center justify-center text-center min-w-0"
+                    className={`flex-1 p-3 flex flex-col items-center justify-center text-center min-w-0 transition-colors ${
+                      mod.category === 'image_gen' ? 'border-r border-white/10' : ''
+                    } ${
+                      dragOverAction === mod.id + '__tweak'
+                        ? 'bg-black/20'
+                        : dragOverAction === mod.id
+                          ? 'bg-blue-500/10'
+                          : ''
+                    }`}
                     onDragOver={(e) => {
                       e.preventDefault();
                       setDragOverAction(mod.id);
@@ -3289,11 +3312,14 @@ const WorkflowSection: React.FC<{
                     }}
                   >
                     <span className="text-[9px] font-black uppercase">{mod.label}</span>
-                    <span className="text-[8px] text-gray-500 mt-0.5">拖拽图片到此处</span>
                   </div>
                   {mod.category === 'image_gen' && (
                     <div
-                      className="w-8 shrink-0 flex flex-col items-center justify-center border-l border-white/10 rounded-r-lg bg-white/5 hover:bg-white/10 transition-colors cursor-default"
+                      className={`w-11 shrink-0 flex flex-col items-center justify-center rounded-r-lg transition-colors cursor-default ${
+                        dragOverAction === mod.id + '__tweak'
+                          ? 'bg-blue-600/25 border-l border-blue-400/40'
+                          : 'bg-white/5 border-l border-white/10 hover:bg-white/10'
+                      }`}
                       title="拖到此处可微调提示词后加入队列"
                       onDragOver={(e) => {
                         e.preventDefault();
@@ -3411,7 +3437,6 @@ const WorkflowSection: React.FC<{
                       }`}
                     >
                       <span className="text-[9px] font-black uppercase text-amber-200/90">{set.label}</span>
-                      <span className="text-[8px] text-amber-400/70 mt-0.5">拖拽图片到此处</span>
                     </div>
                   );
                 })}
