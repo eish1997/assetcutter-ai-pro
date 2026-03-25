@@ -83,9 +83,10 @@
 | 4. 贴图修缝后端（可选） | `npm run dev:seam-backend` | 仅在使用「贴图修缝」时需要，端口 8008 |
 | 5. Gemini 代理（可选） | `npm run dev:gemini-proxy` | 无浏览器 Key 或需异步代理时，端口默认 9002 |
 | 6. 腾讯 3D 代理（可选） | `npm run proxy` | 仅在使用「生成3D」时需要，端口 9001，需配置腾讯云密钥 |
-| 7. 用户系统认证后端（可选） | `npm run dev:auth-backend` | 邮箱密码登录与 RBAC，端口默认 9100 |
-| 8. 初始化管理员（一次性） | `npm run seed:admin` | 需先设置 `AUTH_ADMIN_EMAIL` 与 `AUTH_ADMIN_PASSWORD` |
-| 9. 迁移用户数据到 Postgres（可选） | `npm run migrate:auth-to-postgres` | 需先设置 `DATABASE_URL`，把 `server/data/auth-db.json` 导入数据库 |
+| 7. 用户系统认证后端（可选） | `npm run dev:auth-backend` | 邮箱密码登录与 RBAC，端口默认 9100；配置 `R2_*` 后同源提供 `/api/r2` |
+| 8. R2 独立进程（可选） | `npm run dev:r2-api` | 仅高级场景，端口默认 9003；需改 Vite 代理 target 指向 9003 |
+| 9. 初始化管理员（一次性） | `npm run seed:admin` | 需先设置 `AUTH_ADMIN_EMAIL` 与 `AUTH_ADMIN_PASSWORD` |
+| 10. 迁移用户数据到 Postgres（可选） | `npm run migrate:auth-to-postgres` | 需先设置 `DATABASE_URL`，把 `server/data/auth-db.json` 导入数据库 |
 | 一键启动主站 + 修缝 | `npm run dev:all` | 同时跑主站与贴图修缝后端（两个进程） |
 
 **构建与预览：** `npm run build` 生成 `dist/`；`npm run preview` 本地预览构建结果。
@@ -95,6 +96,7 @@
 - 主站：`http://localhost:3000`（Vite）
 - 贴图修缝 API：开发时由 Vite 代理 `/seam-repair-api` → `http://127.0.0.1:8008`；生产环境可设置 `VITE_SEAM_REPAIR_API` 为后端地址
 - Gemini 代理：`BULK_IMAGE_PORT`（默认 9002）由 `server/gemini-proxy-api.js` 使用；前端设置 `VITE_BULK_IMAGE_API=http://localhost:9002` 以走后端代理
+- R2：推荐由 `auth-api` 挂载 `/api/r2/*`（与登录 Cookie 同源）；开发时 Vite 将 `/api/r2` 代理到 **9100**。独立进程见 `server/r2-storage-api.js`（`R2_API_PORT` 或 `PORT`，默认 9003）
 - 腾讯 3D：开发时需单独运行 `npm run proxy`，前端只设置 `VITE_TENCENT_PROXY=http://localhost:9001`；真正的 `TENCENT_SECRET_ID` / `TENCENT_SECRET_KEY` 仅供代理进程使用。生产部署见 [DEPLOY_GUIDE.md](DEPLOY_GUIDE.md)
 - 用户系统 API：开发时由 Vite 代理 `/api/auth/*` 与 `/api/admin/*` → `http://127.0.0.1:9100`
 
@@ -104,12 +106,18 @@
 - `VITE_SEAM_REPAIR_API`：生产环境贴图修缝后端地址（可选，开发时用代理即可）
 - `VITE_BULK_IMAGE_API`：Gemini 代理根地址（如 `http://localhost:9002`）；不设置时需在浏览器「设置」填写官方或第三方 Key
 - `VITE_AUTH_API_BASE_URL`：可选，用户系统认证 API 根地址（前后端分域部署时必填）
+- `VITE_R2_API_BASE_URL`：可选；未设时 R2 请求与 `VITE_AUTH_API_BASE_URL` 同源（推荐生产只配后者）
 - `BULK_IMAGE_PORT`：代理监听端口（默认 9002），避免与 `PORT=9001` 的 ai3d 代理冲突
 - （Gemini 代理）`GEMINI_API_KEY` / `GEMINI_API_KEYS`：服务端密钥（支持多个 key，按 key 池分摊并发压力）
 - （Gemini 代理）`GEMINI_KEY_POOL_MAX_IN_FLIGHT_PER_KEY`：单个 key 允许的并发 in-flight 请求数
 - （Gemini 代理）`GEMINI_ASYNC_PROXY_MAX_CONCURRENT`：异步代理全局并发上限（避免 429/503）
 - （Gemini 代理）`GEMINI_ASYNC_JOB_TTL_MS` / `GEMINI_ASYNC_JOB_MAX_WAIT_MS` / `GEMINI_PROXY_RETRIES`：异步 job 生命周期、最大等待与失败重试策略
 - （Gemini 代理）`PROXY_ALLOWED_ORIGINS`：CORS 允许源列表；以及 `BULK_IMAGE_BIND_HOST`（云平台端口扫描需监听 `0.0.0.0`，默认已是 `0.0.0.0`）
+- （R2 存储 API）`R2_ACCOUNT_ID` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` / `R2_BUCKET`：R2 S3 兼容访问必填项
+- （R2 存储 API）`R2_PUBLIC_BASE_URL`：可选。若 bucket 绑定了公网域名（如 `https://assets.example.com`），接口会返回可直接访问的 `publicUrl`
+- （R2 存储 API）`R2_API_PORT` / `R2_API_BIND_HOST`：R2 API 监听端口与地址（默认 `9003` / `0.0.0.0`）
+- （R2）挂在 auth 上时无需 `AUTH_ME_URL`；**独立** `r2-storage-api` 时需设置 `AUTH_ME_URL` 指向可访问的 `/api/auth/me`
+- （工作区云同步）`VITE_WORKSPACE_CLOUD`：设为 `false` 时关闭工作区与 R2 的同步，仅用本地 `localStorage`
 - `AUTH_PORT` / `AUTH_BIND_HOST`：认证后端监听地址（默认 `127.0.0.1:9100`）
 - `AUTH_SESSION_TTL_MS`：登录会话有效期（毫秒，默认 7 天）
 - `AUTH_ALLOWED_ORIGINS`：允许访问认证 API 的前端域名白名单（逗号分隔，建议生产必配）
@@ -159,3 +167,4 @@ pip install -r requirements.txt
 - **浏览器内计算**：首次点击「开始修复」会加载约 10MB 的 Pyodide（仅一次），之后修缝在本地完成。
 - **可选 Python 后端**：可启动 `npm run dev:seam-backend` 并配置 `VITE_SEAM_REPAIR_API`，前端会优先尝试 Pyodide，失败时回退到后端。
 - 算法与参数见 [WebSeamRepair/README.md](WebSeamRepair/README.md)。
+- Cloudflare R2 存储接入说明见 [docs/R2_SETUP.md](docs/R2_SETUP.md)。**已登录**用户可在开启云同步时把工作区项目同步到 R2；开发环境 Vite 将 `/api/r2` 代理到 **9100**（auth-api，需在 `.env.local` 配置 `R2_*`）。

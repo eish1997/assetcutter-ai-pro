@@ -25,6 +25,26 @@ export default defineConfig(({ mode }) => {
             target: 'http://127.0.0.1:9100',
             changeOrigin: true,
           },
+          '/api/r2': {
+            /** 生产与本地推荐：R2 路由挂在 auth-api（9100）同源 Cookie；独立 9003 仅用于 npm run dev:r2-api / start:r2-api */
+            target: 'http://127.0.0.1:9100',
+            changeOrigin: true,
+            configure(proxy) {
+              proxy.on('error', (err, _req, res) => {
+                const msg =
+                  '无法连接 /api/r2（已代理到 127.0.0.1:9100 的 auth-api）。请运行 npm run dev:auth-backend，并在 .env.local 配置 R2_*；若仅用独立 R2 进程，请把 vite.config 里 /api/r2 的 target 改回 9003 并运行 npm run dev:r2-api。';
+                if (res && typeof (res).writeHead === 'function' && !(res).headersSent) {
+                  (res).writeHead(503, { 'Content-Type': 'application/json; charset=utf-8' });
+                  (res).end(
+                    JSON.stringify({
+                      error: msg,
+                      detail: err instanceof Error ? err.message : String(err),
+                    })
+                  );
+                }
+              });
+            },
+          },
           '/seam-repair-api': {
             target: 'http://127.0.0.1:8008',
             changeOrigin: true,

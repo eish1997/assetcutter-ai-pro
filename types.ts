@@ -321,19 +321,22 @@ export type WorkflowActionModule = {
   instruction: string;
 };
 
-/** 切割图片组内一项：直接图片 或 引用子资产（套娃） */
-/** 组内一项：应为资产引用；string 仅兼容旧数据，新逻辑一律使用 { assetId } */
-export type WorkflowCutGroupItem = string | { assetId: string };
+/** 切割图片组内一项：直接图片 或 引用子资产（套娃）；{ r2Key } 为云端独立对象，hydrate 后通常会变回 string */
+export type WorkflowCutGroupItem = string | { assetId: string } | { r2Key: string };
 
 /** 单个资产：原始图 + 各类型结果图，当前展示版本，是否已归档；归档后可按生成顺序拼流程图 */
 export type WorkflowAsset = {
   id: string;
-  /** 原始输入图 base64 */
+  /** 原始输入图 base64 或外链；云端可仅保留 originalObjectKey 由 hydrate 填回 */
   original: string;
+  /** R2 对象键（users/.../assets/<id>/original.xxx），与 original 二选一存在云端 JSON */
+  originalObjectKey?: string;
   /** 当前展示的版本 key：'original' 或能力模块 id */
   displayKey: string;
   /** 各类型生成结果图 base64（key 为能力模块 id）；切割图片也可用 cutImageGroup */
   results: Record<string, string>;
+  /** 各步骤结果在 R2 的键，hydrate 后写回 results */
+  resultsObjectKeys?: Record<string, string>;
   /** 切割图片结果：多图成组，可含子资产引用（套娃）；用户拖到「组」建的组也用此字段 */
   cutImageGroup?: WorkflowCutGroupItem[];
   /** 组类型：切割=切割能力生成；manual=用户拖到「组」创建 */
@@ -358,6 +361,8 @@ export type WorkflowPendingTask = {
   /** 能力模块 id */
   actionType: string;
   inputImage: string;
+  /** 待处理缩略图在 R2 的键，hydrate 后写回 inputImage */
+  inputImageObjectKey?: string;
   addedAt: number;
   /** 从组内拖到切割时：父组 id 与项下标，用于套娃替换 */
   sourceGroupAssetId?: string;

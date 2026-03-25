@@ -15,6 +15,28 @@ import { useGenerate3DManager, type Temp3DItem } from './hooks/useGenerate3DMana
 import { useDialogWorkspace } from './hooks/useDialogWorkspace';
 import { useDialogGeneration, getDialogUnderstandImageInput } from './hooks/useDialogGeneration';
 import { useDialogPostProcessing } from './hooks/useDialogPostProcessing';
+import { useAuth } from './components/auth/AuthContext';
+import { CustomDropdown } from './components/ui/CustomDropdown';
+import WorkspaceProjectShell from './components/WorkspaceProjectShell';
+import {
+  loadWorkspaceProjects,
+  saveWorkspaceProjects,
+  createWorkspaceProject,
+  getLastOpenedWorkspaceProjectId,
+  loadWorkflowBundle,
+  trySaveWorkflowBundle,
+  removeWorkflowBundle,
+  setLastOpenedWorkspaceProjectId,
+} from './services/workspaceProjectStore';
+import {
+  deleteWorkspaceProjectObjects,
+  fetchWorkflowBundleFromCloud,
+  fetchWorkspaceCloudIndex,
+  isWorkspaceCloudEnabled,
+  migrateLocalWorkspaceToCloud,
+  pushWorkflowBundleToCloud,
+  pushWorkspaceIndex,
+} from './services/workspaceCloudSync';
 
 const UnifiedModelViewer3D = React.lazy(() => import('./components/UnifiedModelViewer3D'));
 const WorkflowSection = React.lazy(() => import('./components/WorkflowSection'));
@@ -435,17 +457,9 @@ const LibraryPickerModal: React.FC<{
 // ==========================================
 // 5. 主应用程序
 // ==========================================
-const App: React.FC = () => {
-  const pathname = typeof window !== 'undefined' ? window.location.pathname : '/';
-  if (pathname.startsWith('/admin')) {
-    return (
-      <Suspense fallback={<div className="min-h-screen bg-[#050505] flex items-center justify-center text-[11px] text-gray-500">加载中…</div>}>
-        <RequireRole role="admin">
-          <AdminAppShell />
-        </RequireRole>
-      </Suspense>
-    );
-  }
+/** 主站： hooks 必须始终在同一调用顺序下执行，不可与 /admin 分支混在同一个组件里 */
+const MainApp: React.FC = () => {
+  const { user, logout, loading: authLoading } = useAuth();
 
   const [mode, setMode] = useState<AppMode>(AppMode.WORKFLOW);
   const [capabilityPresets, setCapabilityPresets] = useState<CustomAppModule[]>(loadCapabilityPresets);
@@ -483,12 +497,34 @@ const App: React.FC = () => {
         .catch(() => {});
     }
   }, []);
-  const [workflowAssets, setWorkflowAssets] = useState<WorkflowAsset[]>([]);
-  const [workflowPending, setWorkflowPending] = useState<WorkflowPendingTask[]>([]);
+  const [workspaceProjects, setWorkspaceProjects] = useState(() => loadWorkspaceProjects());
+  const [activeWorkspaceProjectId, setActiveWorkspaceProjectId] = useState<string | null>(() => getLastOpenedWorkspaceProjectId());
+  const [workflowAssets, setWorkflowAssets] = useState<WorkflowAsset[]>(() => {
+    const id = getLastOpenedWorkspaceProjectId();
+    return id ? loadWorkflowBundle(id).assets : [];
+  });
+  const [workflowPending, setWorkflowPending] = useState<WorkflowPendingTask[]>(() => {
+    const id = getLastOpenedWorkspaceProjectId();
+    return id ? loadWorkflowBundle(id).pending : [];
+  });
+
+  const activeWorkspaceProjectIdRef = useRef<string | null>(activeWorkspaceProjectId);
+  const workspaceProjectsRef = useRef(workspaceProjects);
+  const userIdRef = useRef<string | undefined>(user?.id);
+  useEffect(() => {
+    activeWorkspaceProjectIdRef.current = activeWorkspaceProjectId;
+  }, [activeWorkspaceProjectId]);
+  useEffect(() => {
+    workspaceProjectsRef.current = workspaceProjects;
+  }, [workspaceProjects]);
+  useEffect(() => {
+    userIdRef.current = user?.id;
+  }, [user?.id]);
+
   const [step, setStep] = useState<AppStep>(AppStep.T_PATTERN);
   const [tasks, setTasks] = useState<AppTask[]>([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const sidebarCollapsed = false;
   /** 侧栏「实验性功能」分组：展开侧栏时默认折叠；进入实验性模块时自动展开 */
   const [experimentalNavExpanded, setExperimentalNavExpanded] = useState(false);
 
@@ -517,6 +553,228 @@ const App: React.FC = () => {
   const addGlobalLog = useCallback((module: string, level: 'info' | 'warn' | 'error', message: string, detail?: string) => {
     setGlobalLogs(prev => [...prev.slice(-199), { id: Math.random().toString(36).slice(2, 11), time: Date.now(), module, level, message, detail }]);
   }, []);
+
+  const workflowAssetsRef = useRef(workflowAssets);
+  const workflowPendingRef = useRef(workflowPending);
+  useEffect(() => {
+    workflowAssetsRef.current = workflowAssets;
+    workflowPendingRef.current = workflowPending;
+  }, [workflowAssets, workflowPending]);
+
+  const flushProjectPersistence = useCallback(() => {
+    const pid = activeWorkspaceProjectIdRef.current;
+    if (pid) {
+      trySaveWorkflowBundle(pid, {
+        assets: workflowAssetsRef.current,
+        pending: workflowPendingRef.current,
+      });
+    }
+    try {
+      saveWorkspaceProjects(workspaceProjectsRef.current);
+    } catch {
+      /* ignore */
+    }
+    const uid = userIdRef.current;
+    if (uid && isWorkspaceCloudEnabled()) {
+      const lastOpen = getLastOpenedWorkspaceProjectId();
+      void pushWorkspaceIndex(uid, workspaceProjectsRef.current, lastOpen).catch(() => {});
+      if (pid) {
+        void pushWorkflowBundleToCloud(uid, pid, {
+          assets: workflowAssetsRef.current,
+          pending: workflowPendingRef.current,
+        }).catch(() => {});
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    const onVis = () => {
+      if (document.visibilityState === 'hidden') flushProjectPersistence();
+    };
+    const onHide = () => flushProjectPersistence();
+    document.addEventListener('visibilitychange', onVis);
+    window.addEventListener('pagehide', onHide);
+    return () => {
+      document.removeEventListener('visibilitychange', onVis);
+      window.removeEventListener('pagehide', onHide);
+    };
+  }, [flushProjectPersistence]);
+
+  /** 未登录：工作区始终读回本地（与登录会话隔离） */
+  useEffect(() => {
+    if (authLoading) return;
+    if (user?.id) return;
+    setWorkspaceProjects(loadWorkspaceProjects());
+    const last = getLastOpenedWorkspaceProjectId();
+    setActiveWorkspaceProjectId(last);
+    if (last) {
+      const b = loadWorkflowBundle(last);
+      setWorkflowAssets(b.assets);
+      setWorkflowPending(b.pending);
+    } else {
+      setWorkflowAssets([]);
+      setWorkflowPending([]);
+    }
+  }, [authLoading, user?.id]);
+
+  /** 已登录且开启云同步：从 R2 拉取索引与工作流；无云端数据时把本地迁移上传 */
+  useEffect(() => {
+    if (authLoading || !user?.id || !isWorkspaceCloudEnabled()) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const index = await fetchWorkspaceCloudIndex(user.id);
+        if (cancelled) return;
+        if (index) {
+          const validLast =
+            index.lastOpenProjectId && index.projects.some((p) => p.id === index.lastOpenProjectId)
+              ? index.lastOpenProjectId
+              : null;
+          saveWorkspaceProjects(index.projects);
+          setWorkspaceProjects(index.projects);
+          setLastOpenedWorkspaceProjectId(validLast);
+          setActiveWorkspaceProjectId(validLast);
+          if (validLast) {
+            const remote = await fetchWorkflowBundleFromCloud(user.id, validLast);
+            if (cancelled) return;
+            const bundle = remote ?? loadWorkflowBundle(validLast);
+            setWorkflowAssets(bundle.assets);
+            setWorkflowPending(bundle.pending);
+            trySaveWorkflowBundle(validLast, bundle);
+          } else {
+            setWorkflowAssets([]);
+            setWorkflowPending([]);
+          }
+          return;
+        }
+        await migrateLocalWorkspaceToCloud(user.id);
+      } catch (e) {
+        console.warn('[workspace cloud] hydrate', e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [authLoading, user?.id]);
+
+  /** 防抖同步到 R2（项目列表 + 当前打开项目的工作流） */
+  useEffect(() => {
+    if (authLoading || !user?.id || !isWorkspaceCloudEnabled()) return;
+    const uid = user.id;
+    const t = window.setTimeout(() => {
+      const lastOpen = getLastOpenedWorkspaceProjectId();
+      void (async () => {
+        try {
+          await pushWorkspaceIndex(uid, workspaceProjects, lastOpen);
+          if (activeWorkspaceProjectId) {
+            await pushWorkflowBundleToCloud(uid, activeWorkspaceProjectId, {
+              assets: workflowAssetsRef.current,
+              pending: workflowPendingRef.current,
+            });
+          }
+        } catch (e) {
+          console.warn('[workspace cloud] sync', e);
+        }
+      })();
+    }, 800);
+    return () => window.clearTimeout(t);
+  }, [authLoading, user?.id, workspaceProjects, activeWorkspaceProjectId, workflowAssets, workflowPending]);
+
+  useEffect(() => {
+    if (!activeWorkspaceProjectId) return;
+    const t = window.setTimeout(() => {
+      trySaveWorkflowBundle(activeWorkspaceProjectId, { assets: workflowAssets, pending: workflowPending });
+    }, 350);
+    return () => window.clearTimeout(t);
+  }, [activeWorkspaceProjectId, workflowAssets, workflowPending]);
+
+  const openWorkspaceProject = useCallback(
+    (id: string) => {
+      if (activeWorkspaceProjectId) {
+        const prevBundle = {
+          assets: workflowAssetsRef.current,
+          pending: workflowPendingRef.current,
+        };
+        trySaveWorkflowBundle(activeWorkspaceProjectId, prevBundle);
+        if (user?.id && isWorkspaceCloudEnabled()) {
+          void pushWorkflowBundleToCloud(user.id, activeWorkspaceProjectId, prevBundle).catch((e) => console.warn('[workspace cloud]', e));
+        }
+      }
+      void (async () => {
+        let b = loadWorkflowBundle(id);
+        if (user?.id && isWorkspaceCloudEnabled()) {
+          const remote = await fetchWorkflowBundleFromCloud(user.id, id);
+          if (remote) b = remote;
+        }
+        setWorkflowAssets(b.assets);
+        setWorkflowPending(b.pending);
+        trySaveWorkflowBundle(id, b);
+        setActiveWorkspaceProjectId(id);
+        setLastOpenedWorkspaceProjectId(id);
+      })();
+    },
+    [activeWorkspaceProjectId, user?.id]
+  );
+
+  const backToWorkspaceProjectShell = useCallback(() => {
+    if (activeWorkspaceProjectId) {
+      const bundle = {
+        assets: workflowAssetsRef.current,
+        pending: workflowPendingRef.current,
+      };
+      trySaveWorkflowBundle(activeWorkspaceProjectId, bundle);
+      if (user?.id && isWorkspaceCloudEnabled()) {
+        void pushWorkflowBundleToCloud(user.id, activeWorkspaceProjectId, bundle).catch((e) => console.warn('[workspace cloud]', e));
+      }
+    }
+    setActiveWorkspaceProjectId(null);
+    setWorkflowAssets([]);
+    setWorkflowPending([]);
+  }, [activeWorkspaceProjectId, user?.id]);
+
+  const createWorkspaceProjectEntry = useCallback((name: string) => {
+    const p = createWorkspaceProject(name);
+    const next = [...workspaceProjects, p];
+    setWorkspaceProjects(next);
+    saveWorkspaceProjects(next);
+  }, [workspaceProjects]);
+
+  const deleteWorkspaceProjectEntry = useCallback(
+    (id: string) => {
+      if (!window.confirm('确定删除该项目？工作流画布数据将一并删除。')) return;
+      removeWorkflowBundle(id);
+      if (user?.id && isWorkspaceCloudEnabled()) {
+        void deleteWorkspaceProjectObjects(user.id, id).catch((e) => console.warn('[workspace cloud]', e));
+      }
+      const next = workspaceProjects.filter((q) => q.id !== id);
+      setWorkspaceProjects(next);
+      saveWorkspaceProjects(next);
+      if (activeWorkspaceProjectId === id) {
+        setLastOpenedWorkspaceProjectId(null);
+        setActiveWorkspaceProjectId(null);
+        setWorkflowAssets([]);
+        setWorkflowPending([]);
+      }
+    },
+    [workspaceProjects, activeWorkspaceProjectId, user?.id]
+  );
+
+  const activeWorkspaceProjectName = useMemo(
+    () => workspaceProjects.find((p) => p.id === activeWorkspaceProjectId)?.name ?? '',
+    [workspaceProjects, activeWorkspaceProjectId]
+  );
+
+  const handleUserMenuAction = useCallback(async (action: string) => {
+    if (!action) return;
+    if (action === 'manage') {
+      setMode(AppMode.SETTINGS);
+      setIsSidebarOpen(false);
+      return;
+    }
+    if (action === 'switch' || action === 'logout') {
+      await logout();
+    }
+  }, [logout]);
 
   // 提取花纹状态
   const [textureSource, setTextureSource] = useState<string>('');
@@ -1621,7 +1879,21 @@ const App: React.FC = () => {
       {isLibraryPickerOpen && <LibraryPickerModal library={library} filter={pickerFilter} multiSelect={pickerMultiSelect} onSelect={(items) => { pickerCallback(items); setIsLibraryPickerOpen(false); }} onClose={() => setIsLibraryPickerOpen(false)} />}
 
       <aside className={`fixed lg:static inset-y-0 left-0 glass border-r border-white/5 flex flex-col items-center py-6 shrink-0 z-[1001] transition-all duration-300 ${sidebarCollapsed ? 'w-16' : 'w-64'} ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}>
-        <button onClick={() => setSidebarCollapsed(p => !p)} className="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center font-black text-lg mb-8 shadow-lg hover:bg-blue-500 transition-colors" title={sidebarCollapsed ? '展开' : '收起'}>{sidebarCollapsed ? '›' : '‹'}</button>
+        {user ? (
+          <div className="w-full px-2 mb-3">
+            <CustomDropdown
+              options={[
+                { value: 'manage', label: '管理账户' },
+                { value: 'switch', label: '切换用户' },
+                { value: 'logout', label: '退出登录' },
+              ]}
+              value=""
+              placeholder={user.username}
+              onChange={(value) => { void handleUserMenuAction(value); }}
+              triggerClassName="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[10px] text-left flex items-center justify-between outline-none focus:border-blue-500 hover:bg-white/10 transition-colors"
+            />
+          </div>
+        ) : null}
         <nav className="flex-1 w-full space-y-2 px-2 min-h-0 flex flex-col overflow-y-auto no-scrollbar">
           <div className="space-y-2">
             <button onClick={() => { setMode(AppMode.WORKFLOW); setIsSidebarOpen(false); }} className={`w-full py-3 rounded-xl text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.WORKFLOW ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="工作区">{sidebarCollapsed ? '⚡' : '工作区'}</button>
@@ -1710,8 +1982,32 @@ const App: React.FC = () => {
             )}
             {mode === AppMode.TEXTURE && <TextureEngineSection />}
 
-            {mode === AppMode.WORKFLOW && (
+            {mode === AppMode.WORKFLOW && !activeWorkspaceProjectId && (
+              <WorkspaceProjectShell
+                projects={workspaceProjects}
+                onCreate={createWorkspaceProjectEntry}
+                onOpen={openWorkspaceProject}
+                onDelete={deleteWorkspaceProjectEntry}
+              />
+            )}
+            {mode === AppMode.WORKFLOW && activeWorkspaceProjectId && (
               <WorkflowErrorBoundary>
+                <div className="w-full max-w-6xl mx-auto mb-4 flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={backToWorkspaceProjectShell}
+                    className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-blue-600 text-white text-[10px] font-black uppercase tracking-wider hover:bg-blue-500 transition-colors shadow-lg shadow-blue-900/20"
+                    title="返回项目列表"
+                  >
+                    <span aria-hidden>←</span>
+                    项目
+                  </button>
+                  {activeWorkspaceProjectName ? (
+                    <span className="text-[11px] text-gray-400 font-mono truncate max-w-[min(100%,24rem)]" title={activeWorkspaceProjectName}>
+                      {activeWorkspaceProjectName}
+                    </span>
+                  ) : null}
+                </div>
                 <Suspense fallback={<LazySectionFallback label="工作区" />}>
                   <WorkflowSection capabilityPresets={capabilityPresets} capabilitySets={capabilitySets} assets={workflowAssets} onAssetsChange={setWorkflowAssets} pending={workflowPending} onPendingChange={setWorkflowPending} onOpenLibraryPicker={(cb) => openPicker(undefined, cb, true)} onLog={(level, message, detail) => addGlobalLog('工作区', level, message, detail)} onAddGenerate3DJob={handleAddGenerate3DJobFromWorkflow} />
                 </Suspense>
@@ -2699,6 +2995,20 @@ const App: React.FC = () => {
       )}
     </div>
   );
+};
+
+const App: React.FC = () => {
+  const pathname = typeof window !== 'undefined' ? window.location.pathname : '/';
+  if (pathname.startsWith('/admin')) {
+    return (
+      <Suspense fallback={<div className="min-h-screen bg-[#050505] flex items-center justify-center text-[11px] text-gray-500">加载中…</div>}>
+        <RequireRole role="admin">
+          <AdminAppShell />
+        </RequireRole>
+      </Suspense>
+    );
+  }
+  return <MainApp />;
 };
 
 export default App;

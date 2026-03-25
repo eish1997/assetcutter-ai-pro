@@ -15,6 +15,7 @@ import {
   updateUserById,
   verifyPassword,
 } from './auth-store.js';
+import { handleR2StorageRequest, isR2Configured } from './r2-storage-handlers.js';
 
 const PORT = Number(process.env.PORT || process.env.AUTH_PORT || 9100);
 const BIND_HOST = String(process.env.AUTH_BIND_HOST || '0.0.0.0').trim() || '0.0.0.0';
@@ -104,8 +105,8 @@ function applyCors(req, res) {
     res.setHeader('Vary', 'Origin');
   }
   res.setHeader('Access-Control-Allow-Credentials', 'true');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-CSRF-Token');
 }
 
 function isAllowedOrigin(origin) {
@@ -409,6 +410,24 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (path.startsWith('/api/r2')) {
+      if (!isR2Configured()) {
+        json(res, 503, { error: '工作区云存储未配置（需设置 R2_ACCOUNT_ID、R2_ACCESS_KEY_ID、R2_SECRET_ACCESS_KEY、R2_BUCKET）' });
+        return;
+      }
+      await handleR2StorageRequest(req, res, {
+        embedded: true,
+        async resolveSessionUserId(r) {
+          const token = parseCookie(r)[COOKIE_NAME];
+          if (!token) return null;
+          const row = await getSessionWithUser(token);
+          const id = row?.user?.id;
+          return typeof id === 'string' && id ? id : null;
+        },
+      });
+      return;
+    }
+
     json(res, 404, { error: 'Not found' });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -432,7 +451,7 @@ initAuthStore()
       }
     }
     server.listen(PORT, BIND_HOST, () => {
-      console.log(`[auth-api] http://${BIND_HOST}:${PORT}`);
+      console.log(`[auth-api] http://${BIND_HOST}:${PORT}${isR2Configured() ? ' (R2 /api/r2 enabled)' : ''}`);
     });
   })
   .catch((error) => {

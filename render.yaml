@@ -30,6 +30,19 @@ services:
         fromDatabase:
           name: assetcutter-auth-db
           property: connectionString
+      # 工作区云同步（R2）：与 auth 同源挂载 /api/r2，无需单独 R2 服务
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET
+        sync: false
+      - key: R2_PUBLIC_BASE_URL
+        sync: false
+      - key: PROXY_ALLOWED_ORIGINS
+        sync: false
 
   - type: web
     name: assetcutter-web
@@ -43,6 +56,9 @@ services:
         destination: /index.html
     envVars:
       - key: VITE_AUTH_API_BASE_URL
+        sync: false
+      # 与 auth 同源时可不填；仅当 R2 单独域名部署时再设
+      - key: VITE_R2_API_BASE_URL
         sync: false
 
 databases:

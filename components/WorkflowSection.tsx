@@ -160,7 +160,8 @@ const ArchivedDetailModal: React.FC<{
       const out: string[] = [];
       for (const item of a.cutImageGroup ?? []) {
         if (typeof item === 'string') out.push(item);
-        else {
+        else if (item && typeof item === 'object' && 'r2Key' in item) continue;
+        else if (item && typeof item === 'object' && 'assetId' in item) {
           const child = assets.find((x) => x.id === item.assetId);
           if (!child) continue;
           if (child.cutImageGroup?.length) out.push(...resolveGroupImages(child, visited));
@@ -631,9 +632,11 @@ const WorkflowSection: React.FC<{
     if (a.displayKey === 'cut_image' && a.cutImageGroup?.length) {
       const first = a.cutImageGroup[0];
       if (typeof first === 'string') return first;
+      if (first && typeof first === 'object' && 'r2Key' in first) return a.original;
       if (visited.has(a.id)) return a.original;
       visited.add(a.id);
-      const child = assetsList.find((x) => x.id === first.assetId);
+      const ref = first && typeof first === 'object' && 'assetId' in first ? (first as { assetId: string }).assetId : '';
+      const child = ref ? assetsList.find((x) => x.id === ref) : undefined;
       return child ? getAssetDisplayImage(child, assetsList, visited) : a.original;
     }
     return a.results[a.displayKey] ?? a.original;
@@ -1387,7 +1390,8 @@ const WorkflowSection: React.FC<{
       const out: string[] = [];
       for (const item of asset.cutImageGroup ?? []) {
         if (typeof item === 'string') out.push(item);
-        else {
+        else if (item && typeof item === 'object' && 'r2Key' in item) continue;
+        else if (item && typeof item === 'object' && 'assetId' in item) {
           const child = assets.find((x) => x.id === item.assetId);
           if (child?.cutImageGroup?.length) out.push(...flattenGroupImages(child, visited));
           else if (child) out.push(getAssetDisplayImage(child));
@@ -1998,9 +2002,14 @@ const WorkflowSection: React.FC<{
                       </div>
                     ))
                   : currentGroupItems.map((item, idx) => {
-                      const isRef = typeof item !== 'string';
-                      const childAsset = isRef ? assets.find((x) => x.id === (item as { assetId: string }).assetId) : null;
-                      const img = isRef && childAsset ? getAssetDisplayImage(childAsset) : (item as string);
+                      const isAssetRef = typeof item === 'object' && item && 'assetId' in item;
+                      const childAsset = isAssetRef ? assets.find((x) => x.id === (item as { assetId: string }).assetId) : null;
+                      const img =
+                        isAssetRef && childAsset
+                          ? getAssetDisplayImage(childAsset)
+                          : typeof item === 'string'
+                            ? item
+                            : currentGroupAsset?.original ?? '';
                       const groupKey = currentGroupAsset ? `${currentGroupAsset.id}::${idx}` : `${idx}`;
                       const isPendingItem =
                         !!pending.find(
@@ -2026,7 +2035,7 @@ const WorkflowSection: React.FC<{
                         currentTask.sourceGroupAssetId === currentGroupAsset?.id &&
                         currentTask.sourceItemIndex === idx;
 
-                      if (isRef && childAsset) {
+                      if (isAssetRef && childAsset) {
                         return (
                           <div key={idx} className="break-inside-avoid mb-6 relative">
                             {childAsset.cutImageGroup?.length && (
@@ -2193,7 +2202,13 @@ const WorkflowSection: React.FC<{
                                         const safeIndex = len ? ((rawIndex % len) + len) % len : 0;
                                         const itemInGroup = groupItems[safeIndex] ?? groupItems[0];
                                         if (typeof itemInGroup === 'string') return itemInGroup;
-                                        const nestedChild = assets.find((x) => x.id === itemInGroup.assetId);
+                                        if (itemInGroup && typeof itemInGroup === 'object' && 'r2Key' in itemInGroup)
+                                          return childAsset.original;
+                                        const nestedId =
+                                          itemInGroup && typeof itemInGroup === 'object' && 'assetId' in itemInGroup
+                                            ? (itemInGroup as { assetId: string }).assetId
+                                            : '';
+                                        const nestedChild = nestedId ? assets.find((x) => x.id === nestedId) : undefined;
                                         return nestedChild ? getAssetDisplayImage(nestedChild) : img;
                                       })()}
                                       alt=""
