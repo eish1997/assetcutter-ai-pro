@@ -80,7 +80,13 @@ async function ensurePostgres() {
   await p.query(`UPDATE users SET workspace_quota_bytes = $1 WHERE workspace_quota_bytes IS NULL`, [
     DEFAULT_WORKSPACE_QUOTA_BYTES,
   ]);
-  await p.query('ALTER TABLE users ALTER COLUMN workspace_quota_bytes SET DEFAULT $1', [DEFAULT_WORKSPACE_QUOTA_BYTES]);
+  /** ALTER … SET DEFAULT 勿用 $1：部分 PG/驱动会报 prepared statement 参数个数不匹配 */
+  const quotaDefault = Number(DEFAULT_WORKSPACE_QUOTA_BYTES);
+  if (Number.isFinite(quotaDefault) && quotaDefault >= 1) {
+    await p.query(
+      `ALTER TABLE users ALTER COLUMN workspace_quota_bytes SET DEFAULT ${Math.floor(quotaDefault)}`
+    );
+  }
   pgReady = true;
 }
 
