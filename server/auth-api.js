@@ -153,6 +153,9 @@ function assertCsrf(req, res) {
   if (method === 'POST' && (req.url || '').startsWith('/api/auth/login')) return true;
   if (method === 'POST' && (req.url || '').startsWith('/api/auth/register')) return true;
   if (method === 'POST' && (req.url || '').startsWith('/api/auth/logout')) return true;
+  /** 跨域 SPA（Vercel）无法读取 auth 域名上的 ac_csrf，无法带 X-CSRF-Token；R2 已由 assertWriteOrigin 校验 Origin + 会话 + 对象路径隔离 */
+  const pathOnly = (req.url || '/').split('?')[0];
+  if (pathOnly.startsWith('/api/r2')) return true;
   const cookieToken = readCsrfFromCookie(req);
   const headerToken = String(req.headers['x-csrf-token'] || '');
   if (cookieToken && headerToken && cookieToken === headerToken) return true;
