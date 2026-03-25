@@ -301,48 +301,118 @@ export async function packWorkflowBundleForCloud(
   return { version: 2, assets, pending };
 }
 
+/** 同一 objectKey 只拉一次；多资产引用同一键时共用结果 */
+const HYDRATE_DOWNLOAD_CONCURRENCY = 8;
+
+async function downloadUniqueKeysInParallel(
+  appliers: Map<string, Array<(dataUrl: string) => void>>,
+  afterEachKey?: () => void
+): Promise<void> {
+  const queue = [...appliers.keys()];
+  if (queue.length === 0) return;
+  const workers = Math.min(HYDRATE_DOWNLOAD_CONCURRENCY, queue.length);
+  await Promise.all(
+    Array.from({ length: workers }, async () => {
+      for (;;) {
+        const key = queue.shift();
+        if (!key) break;
+        const dataUrl = await downloadObjectAsDataUrl(key);
+        for (const fn of appliers.get(key) ?? []) fn(dataUrl);
+        afterEachKey?.();
+      }
+    })
+  );
+}
+
+function cloneWorkflowBundleDraft(assets: WorkflowAsset[], pending: WorkflowPendingTask[]) {
+  return {
+    assets: JSON.parse(JSON.stringify(assets)) as WorkflowAsset[],
+    pending: JSON.parse(JSON.stringify(pending)) as WorkflowPendingTask[],
+  };
+}
+
+export type HydrateWorkflowBundleOptions = {
+  /** 每完成一个 R2 键后触发（节流到下一帧），用于渐进刷新 UI */
+  onPartial?: (draft: { assets: WorkflowAsset[]; pending: WorkflowPendingTask[] }) => void;
+};
+
 /**
  * 将云端拉下的 v2 bundle 还原为可渲染的 data URL（去掉 *ObjectKey / r2Key 占位）
  */
-export async function hydrateWorkflowBundleFromCloud(bundle: {
-  assets: WorkflowAsset[];
-  pending: WorkflowPendingTask[];
-}): Promise<{ assets: WorkflowAsset[]; pending: WorkflowPendingTask[] }> {
+export async function hydrateWorkflowBundleFromCloud(
+  bundle: { assets: WorkflowAsset[]; pending: WorkflowPendingTask[] },
+  options?: HydrateWorkflowBundleOptions
+): Promise<{ assets: WorkflowAsset[]; pending: WorkflowPendingTask[] }> {
   const assets: WorkflowAsset[] = JSON.parse(JSON.stringify(bundle.assets)) as WorkflowAsset[];
   const pending: WorkflowPendingTask[] = JSON.parse(JSON.stringify(bundle.pending)) as WorkflowPendingTask[];
 
+  const appliers = new Map<string, Array<(dataUrl: string) => void>>();
+  function schedule(objectKey: string, apply: (dataUrl: string) => void) {
+    const k = objectKey.trim();
+    if (!k) return;
+    const list = appliers.get(k) ?? [];
+    list.push(apply);
+    appliers.set(k, list);
+  }
+
   for (const a of assets) {
     if (a.originalObjectKey?.trim() && (!a.original || !String(a.original).trim())) {
-      a.original = await downloadObjectAsDataUrl(a.originalObjectKey);
+      schedule(a.originalObjectKey, (u) => {
+        a.original = u;
+      });
     }
-    delete a.originalObjectKey;
-
     if (a.resultsObjectKeys) {
-      for (const [stepId, key] of Object.entries(a.resultsObjectKeys)) {
-        if (!a.results[stepId]?.trim()) {
-          a.results[stepId] = await downloadObjectAsDataUrl(key);
+      for (const [stepId, objectKey] of Object.entries(a.resultsObjectKeys)) {
+        if (!a.results[stepId]?.trim() && typeof objectKey === 'string' && objectKey.trim()) {
+          const sid = stepId;
+          schedule(objectKey, (u) => {
+            a.results[sid] = u;
+          });
         }
       }
-      delete a.resultsObjectKeys;
     }
-
     if (a.cutImageGroup?.length) {
-      const next: WorkflowCutGroupItem[] = [];
-      for (const item of a.cutImageGroup) {
+      for (let i = 0; i < a.cutImageGroup.length; i++) {
+        const item = a.cutImageGroup[i];
         if (item && typeof item === 'object' && 'r2Key' in item && (item as { r2Key: string }).r2Key) {
-          next.push(await downloadObjectAsDataUrl((item as { r2Key: string }).r2Key));
-        } else {
-          next.push(item);
+          const idx = i;
+          schedule((item as { r2Key: string }).r2Key, (u) => {
+            if (a.cutImageGroup) a.cutImageGroup[idx] = u;
+          });
         }
       }
-      a.cutImageGroup = next;
     }
   }
 
   for (const t of pending) {
     if (t.inputImageObjectKey?.trim() && (!t.inputImage || !String(t.inputImage).trim())) {
-      t.inputImage = await downloadObjectAsDataUrl(t.inputImageObjectKey);
+      schedule(t.inputImageObjectKey, (u) => {
+        t.inputImage = u;
+      });
     }
+  }
+
+  let partialRaf = 0;
+  const schedulePartial = () => {
+    if (!options?.onPartial) return;
+    if (partialRaf) return;
+    partialRaf = requestAnimationFrame(() => {
+      partialRaf = 0;
+      options.onPartial!(cloneWorkflowBundleDraft(assets, pending));
+    });
+  };
+
+  await downloadUniqueKeysInParallel(appliers, schedulePartial);
+  if (partialRaf) {
+    cancelAnimationFrame(partialRaf);
+    partialRaf = 0;
+  }
+
+  for (const a of assets) {
+    delete a.originalObjectKey;
+    delete a.resultsObjectKeys;
+  }
+  for (const t of pending) {
     delete t.inputImageObjectKey;
   }
 

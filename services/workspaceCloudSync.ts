@@ -135,10 +135,11 @@ export async function fetchWorkspaceCloudIndex(userId: string): Promise<Workspac
   }
 }
 
-export async function fetchWorkflowBundleFromCloud(
+/** 仅拉取并解析 workflow.json（含 v2 占位键），不下载 R2 图像 */
+export async function fetchWorkflowPackedFromCloud(
   userId: string,
   projectId: string
-): Promise<{ assets: WorkflowAsset[]; pending: WorkflowPendingTask[] } | null> {
+): Promise<{ version: number; assets: WorkflowAsset[]; pending: WorkflowPendingTask[] } | null> {
   let raw: string | null;
   try {
     raw = await downloadR2ObjectText(workspaceWorkflowKey(userId, projectId));
@@ -150,13 +151,23 @@ export async function fetchWorkflowBundleFromCloud(
     const data = JSON.parse(raw) as { version?: number; assets?: WorkflowAsset[]; pending?: WorkflowPendingTask[] };
     const assets = Array.isArray(data.assets) ? data.assets : [];
     const pending = Array.isArray(data.pending) ? data.pending : [];
-    if (data.version === 2) {
-      return await hydrateWorkflowBundleFromCloud({ assets, pending });
-    }
-    return { assets, pending };
+    const version = data.version === 2 ? 2 : 1;
+    return { version, assets, pending };
   } catch {
     return null;
   }
+}
+
+export async function fetchWorkflowBundleFromCloud(
+  userId: string,
+  projectId: string
+): Promise<{ assets: WorkflowAsset[]; pending: WorkflowPendingTask[] } | null> {
+  const packed = await fetchWorkflowPackedFromCloud(userId, projectId);
+  if (!packed) return null;
+  if (packed.version === 2) {
+    return hydrateWorkflowBundleFromCloud({ assets: packed.assets, pending: packed.pending });
+  }
+  return { assets: packed.assets, pending: packed.pending };
 }
 
 export async function pushWorkspaceIndex(userId: string, projects: WorkspaceProject[], lastOpenProjectId: string | null): Promise<void> {

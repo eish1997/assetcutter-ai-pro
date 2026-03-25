@@ -30,13 +30,14 @@ import {
 } from './services/workspaceProjectStore';
 import {
   deleteWorkspaceProjectObjects,
-  fetchWorkflowBundleFromCloud,
+  fetchWorkflowPackedFromCloud,
   fetchWorkspaceCloudIndex,
   isWorkspaceCloudEnabled,
   migrateLocalWorkspaceToCloud,
   pushWorkflowBundleToCloud,
   pushWorkspaceIndex,
 } from './services/workspaceCloudSync';
+import { hydrateWorkflowBundleFromCloud } from './services/workspaceR2ImageBundle';
 
 const UnifiedModelViewer3D = React.lazy(() => import('./components/UnifiedModelViewer3D'));
 const WorkflowSection = React.lazy(() => import('./components/WorkflowSection'));
@@ -511,6 +512,12 @@ const MainApp: React.FC = () => {
   const activeWorkspaceProjectIdRef = useRef<string | null>(activeWorkspaceProjectId);
   const workspaceProjectsRef = useRef(workspaceProjects);
   const userIdRef = useRef<string | undefined>(user?.id);
+  const cloudWorkflowSyncGenRef = useRef(0);
+  const [workspaceCloudHydratingProjectId, setWorkspaceCloudHydratingProjectId] = useState<string | null>(null);
+  const workspaceCloudHydratingProjectIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    workspaceCloudHydratingProjectIdRef.current = workspaceCloudHydratingProjectId;
+  }, [workspaceCloudHydratingProjectId]);
   useEffect(() => {
     activeWorkspaceProjectIdRef.current = activeWorkspaceProjectId;
   }, [activeWorkspaceProjectId]);
@@ -520,6 +527,52 @@ const MainApp: React.FC = () => {
   useEffect(() => {
     userIdRef.current = user?.id;
   }, [user?.id]);
+
+  const runCloudWorkflowPull = useCallback((userId: string, projectId: string) => {
+    cloudWorkflowSyncGenRef.current += 1;
+    const gen = cloudWorkflowSyncGenRef.current;
+    setWorkspaceCloudHydratingProjectId(projectId);
+    void (async () => {
+      try {
+        const packed = await fetchWorkflowPackedFromCloud(userId, projectId);
+        if (gen !== cloudWorkflowSyncGenRef.current) return;
+        if (activeWorkspaceProjectIdRef.current !== projectId) return;
+        if (!packed) {
+          setWorkspaceCloudHydratingProjectId((cur) => (cur === projectId ? null : cur));
+          return;
+        }
+        setWorkflowAssets(JSON.parse(JSON.stringify(packed.assets)) as WorkflowAsset[]);
+        setWorkflowPending(JSON.parse(JSON.stringify(packed.pending)) as WorkflowPendingTask[]);
+        if (packed.version === 2) {
+          const final = await hydrateWorkflowBundleFromCloud(
+            { assets: packed.assets, pending: packed.pending },
+            {
+              onPartial: (d) => {
+                if (gen !== cloudWorkflowSyncGenRef.current) return;
+                if (activeWorkspaceProjectIdRef.current !== projectId) return;
+                setWorkflowAssets(d.assets);
+                setWorkflowPending(d.pending);
+              },
+            }
+          );
+          if (gen !== cloudWorkflowSyncGenRef.current) return;
+          if (activeWorkspaceProjectIdRef.current !== projectId) return;
+          setWorkflowAssets(final.assets);
+          setWorkflowPending(final.pending);
+          trySaveWorkflowBundle(projectId, final);
+        } else {
+          const bundle = { assets: packed.assets, pending: packed.pending };
+          trySaveWorkflowBundle(projectId, bundle);
+        }
+      } catch (e) {
+        console.warn('[workspace cloud] pull', e);
+      } finally {
+        setWorkspaceCloudHydratingProjectId((cur) =>
+          cur === projectId && gen === cloudWorkflowSyncGenRef.current ? null : cur
+        );
+      }
+    })();
+  }, []);
 
   const [step, setStep] = useState<AppStep>(AppStep.T_PATTERN);
   const [tasks, setTasks] = useState<AppTask[]>([]);
@@ -578,7 +631,7 @@ const MainApp: React.FC = () => {
     if (uid && isWorkspaceCloudEnabled()) {
       const lastOpen = getLastOpenedWorkspaceProjectId();
       void pushWorkspaceIndex(uid, workspaceProjectsRef.current, lastOpen).catch(() => {});
-      if (pid) {
+      if (pid && workspaceCloudHydratingProjectIdRef.current !== pid) {
         void pushWorkflowBundleToCloud(uid, pid, {
           assets: workflowAssetsRef.current,
           pending: workflowPendingRef.current,
@@ -635,12 +688,11 @@ const MainApp: React.FC = () => {
           setLastOpenedWorkspaceProjectId(validLast);
           setActiveWorkspaceProjectId(validLast);
           if (validLast) {
-            const remote = await fetchWorkflowBundleFromCloud(user.id, validLast);
+            const local = loadWorkflowBundle(validLast);
             if (cancelled) return;
-            const bundle = remote ?? loadWorkflowBundle(validLast);
-            setWorkflowAssets(bundle.assets);
-            setWorkflowPending(bundle.pending);
-            trySaveWorkflowBundle(validLast, bundle);
+            setWorkflowAssets(local.assets);
+            setWorkflowPending(local.pending);
+            if (!cancelled) runCloudWorkflowPull(user.id, validLast);
           } else {
             setWorkflowAssets([]);
             setWorkflowPending([]);
@@ -655,7 +707,7 @@ const MainApp: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [authLoading, user?.id]);
+  }, [authLoading, user?.id, runCloudWorkflowPull]);
 
   /** 防抖同步到 R2（项目列表 + 当前打开项目的工作流） */
   useEffect(() => {
@@ -666,8 +718,10 @@ const MainApp: React.FC = () => {
       void (async () => {
         try {
           await pushWorkspaceIndex(uid, workspaceProjects, lastOpen);
-          if (activeWorkspaceProjectId) {
-            await pushWorkflowBundleToCloud(uid, activeWorkspaceProjectId, {
+          const pid = activeWorkspaceProjectId;
+          if (pid && workspaceCloudHydratingProjectId === pid) return;
+          if (pid) {
+            await pushWorkflowBundleToCloud(uid, pid, {
               assets: workflowAssetsRef.current,
               pending: workflowPendingRef.current,
             });
@@ -678,7 +732,15 @@ const MainApp: React.FC = () => {
       })();
     }, 800);
     return () => window.clearTimeout(t);
-  }, [authLoading, user?.id, workspaceProjects, activeWorkspaceProjectId, workflowAssets, workflowPending]);
+  }, [
+    authLoading,
+    user?.id,
+    workspaceProjects,
+    activeWorkspaceProjectId,
+    workspaceCloudHydratingProjectId,
+    workflowAssets,
+    workflowPending,
+  ]);
 
   useEffect(() => {
     if (!activeWorkspaceProjectId) return;
@@ -700,23 +762,21 @@ const MainApp: React.FC = () => {
           void pushWorkflowBundleToCloud(user.id, activeWorkspaceProjectId, prevBundle).catch((e) => console.warn('[workspace cloud]', e));
         }
       }
-      void (async () => {
-        let b = loadWorkflowBundle(id);
-        if (user?.id && isWorkspaceCloudEnabled()) {
-          const remote = await fetchWorkflowBundleFromCloud(user.id, id);
-          if (remote) b = remote;
-        }
-        setWorkflowAssets(b.assets);
-        setWorkflowPending(b.pending);
-        trySaveWorkflowBundle(id, b);
-        setActiveWorkspaceProjectId(id);
-        setLastOpenedWorkspaceProjectId(id);
-      })();
+      const local = loadWorkflowBundle(id);
+      setActiveWorkspaceProjectId(id);
+      setLastOpenedWorkspaceProjectId(id);
+      setWorkflowAssets(local.assets);
+      setWorkflowPending(local.pending);
+      if (user?.id && isWorkspaceCloudEnabled()) {
+        runCloudWorkflowPull(user.id, id);
+      }
     },
-    [activeWorkspaceProjectId, user?.id]
+    [activeWorkspaceProjectId, user?.id, runCloudWorkflowPull]
   );
 
   const backToWorkspaceProjectShell = useCallback(() => {
+    cloudWorkflowSyncGenRef.current += 1;
+    setWorkspaceCloudHydratingProjectId(null);
     if (activeWorkspaceProjectId) {
       const bundle = {
         assets: workflowAssetsRef.current,
@@ -750,6 +810,8 @@ const MainApp: React.FC = () => {
       setWorkspaceProjects(next);
       saveWorkspaceProjects(next);
       if (activeWorkspaceProjectId === id) {
+        cloudWorkflowSyncGenRef.current += 1;
+        setWorkspaceCloudHydratingProjectId(null);
         setLastOpenedWorkspaceProjectId(null);
         setActiveWorkspaceProjectId(null);
         setWorkflowAssets([]);
@@ -2005,6 +2067,11 @@ const MainApp: React.FC = () => {
                   {activeWorkspaceProjectName ? (
                     <span className="text-[11px] text-gray-400 font-mono truncate max-w-[min(100%,24rem)]" title={activeWorkspaceProjectName}>
                       {activeWorkspaceProjectName}
+                    </span>
+                  ) : null}
+                  {workspaceCloudHydratingProjectId === activeWorkspaceProjectId ? (
+                    <span className="text-[10px] text-amber-400/90 font-medium animate-pulse" title="正在从云端拉取图像">
+                      云端图像载入中…
                     </span>
                   ) : null}
                 </div>

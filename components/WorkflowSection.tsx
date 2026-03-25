@@ -10,6 +10,12 @@ import { executeCapability, executeCapabilitySet } from '../services/capabilityE
 import { WorkflowApiKeyModal } from './WorkflowApiKeyModal';
 import { isAiInvocationReady } from '../services/settingsStore';
 
+/** 云端 hydrate 前预览图为空时避免 img 的 src 为空字符串 */
+const WORKFLOW_IMG_EMPTY_PLACEHOLDER =
+  'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+const workflowSafeImgSrc = (s: string | undefined | null) =>
+  s != null && String(s).trim() !== '' ? s : WORKFLOW_IMG_EMPTY_PLACEHOLDER;
+
 const uuid = () => Math.random().toString(36).slice(2, 11);
 const RESULT_VER_SEP = '__v__';
 const baseActionId = (k: string) => (k.includes(RESULT_VER_SEP) ? k.split(RESULT_VER_SEP)[0] : k);
@@ -1998,7 +2004,7 @@ const WorkflowSection: React.FC<{
                         data-workflow-card
                         className="break-inside-avoid mb-4 rounded-2xl border border-white/10 bg-black/40 overflow-hidden"
                       >
-                        <img src={img} alt="" className="w-full h-auto object-cover block" style={{ maxHeight: 280 }} />
+                        <img src={workflowSafeImgSrc(img)} alt="" className="w-full h-auto object-cover block" style={{ maxHeight: 280 }} />
                       </div>
                     ))
                   : currentGroupItems.map((item, idx) => {
@@ -2364,7 +2370,7 @@ const WorkflowSection: React.FC<{
                           }}
                         >
                           <div className="relative cursor-pointer" onClick={() => setGroupStringLightboxIndex(idx)}>
-                            <img src={img} alt="" className="w-full h-auto object-cover block" style={{ maxHeight: 280 }} />
+                            <img src={workflowSafeImgSrc(img)} alt="" className="w-full h-auto object-cover block" style={{ maxHeight: 280 }} />
                             {isPendingOnly && (
                               <div
                                 className="absolute inset-0 z-10 bg-black/40 flex items-center justify-center"
@@ -2619,17 +2625,19 @@ const WorkflowSection: React.FC<{
                               style={{ paddingBottom: `${(assetAspectById[a.id] ?? 1) * 100}%` }}
                             />
                             <img
-                              src={(() => {
-                                if (!a.cutImageGroup?.length) return getAssetDisplayImage(a);
-                                const groupItems = a.cutImageGroup;
-                                const len = groupItems.length;
-                                const rawIndex = groupPreviewIndexById[a.id] ?? 0;
-                                const safeIndex = len ? ((rawIndex % len) + len) % len : 0;
-                                const item = groupItems[safeIndex] ?? groupItems[0];
-                                if (typeof item === 'string') return item;
-                                const child = assets.find((x) => x.id === item.assetId);
-                                return child ? getAssetDisplayImage(child) : getAssetDisplayImage(a);
-                              })()}
+                              src={workflowSafeImgSrc(
+                                (() => {
+                                  if (!a.cutImageGroup?.length) return getAssetDisplayImage(a);
+                                  const groupItems = a.cutImageGroup;
+                                  const len = groupItems.length;
+                                  const rawIndex = groupPreviewIndexById[a.id] ?? 0;
+                                  const safeIndex = len ? ((rawIndex % len) + len) % len : 0;
+                                  const item = groupItems[safeIndex] ?? groupItems[0];
+                                  if (typeof item === 'string') return item;
+                                  const child = assets.find((x) => x.id === item.assetId);
+                                  return child ? getAssetDisplayImage(child) : getAssetDisplayImage(a);
+                                })()
+                              )}
                               alt=""
                               className="absolute inset-0 w-full h-full object-cover block"
                               onLoad={(e) => {
@@ -3476,7 +3484,7 @@ const WorkflowSection: React.FC<{
             }}
           >
             <button onClick={() => setLightboxAssetId(null)} className="absolute -top-12 right-0 w-10 h-10 flex items-center justify-center text-white/60 hover:text-white">✕</button>
-            <img src={getAssetDisplayImage(lightboxAsset)} alt="" className="w-full max-h-[80vh] object-contain rounded-2xl border border-white/10" />
+            <img src={workflowSafeImgSrc(getAssetDisplayImage(lightboxAsset))} alt="" className="w-full max-h-[80vh] object-contain rounded-2xl border border-white/10" />
             <div className="mt-3 flex flex-wrap gap-1.5 justify-center items-center">
               <span className="text-[8px] font-black text-gray-500 uppercase mr-1">显示</span>
               <button
