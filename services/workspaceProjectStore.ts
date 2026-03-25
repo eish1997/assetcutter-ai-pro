@@ -6,40 +6,51 @@ export type WorkspaceProject = {
   createdAt: number;
 };
 
-const PROJECTS_KEY = 'ac_workspace_projects_v1';
-const LAST_OPEN_PROJECT_KEY = 'ac_workspace_last_open_v1';
+/** null = 未登录访客（站点级 legacy 键）；string = 已登录用户，与账号隔离 */
+export type WorkspacePersistUserId = string | null;
 
 const newId = () => (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2, 12));
+
+function projectsStorageKey(persistUserId: WorkspacePersistUserId): string {
+  return persistUserId ? `ac_workspace_projects_v1__u_${persistUserId}` : 'ac_workspace_projects_v1';
+}
+
+function lastOpenStorageKey(persistUserId: WorkspacePersistUserId): string {
+  return persistUserId ? `ac_workspace_last_open_v1__u_${persistUserId}` : 'ac_workspace_last_open_v1';
+}
+
+function workflowBundleStorageKey(projectId: string, persistUserId: WorkspacePersistUserId): string {
+  return persistUserId
+    ? `ac_workflow_bundle_v1__u_${persistUserId}_${projectId}`
+    : `ac_workflow_bundle_v1_${projectId}`;
+}
 
 export type WorkflowProjectBundle = {
   assets: WorkflowAsset[];
   pending: WorkflowPendingTask[];
 };
 
-function workflowBundleStorageKey(projectId: string) {
-  return `ac_workflow_bundle_v1_${projectId}`;
-}
-
-export function loadWorkspaceProjects(): WorkspaceProject[] {
+export function loadWorkspaceProjects(persistUserId: WorkspacePersistUserId = null): WorkspaceProject[] {
+  const pk = projectsStorageKey(persistUserId);
   try {
-    const raw = localStorage.getItem(PROJECTS_KEY);
+    const raw = localStorage.getItem(pk);
     let list: WorkspaceProject[] = raw ? JSON.parse(raw) : [];
     if (!Array.isArray(list)) list = [];
     if (list.length === 0) {
       const p: WorkspaceProject = { id: newId(), name: '默认项目', createdAt: Date.now() };
       list = [p];
-      localStorage.setItem(PROJECTS_KEY, JSON.stringify(list));
+      localStorage.setItem(pk, JSON.stringify(list));
     }
     return list;
   } catch {
     const p: WorkspaceProject = { id: newId(), name: '默认项目', createdAt: Date.now() };
-    localStorage.setItem(PROJECTS_KEY, JSON.stringify([p]));
+    localStorage.setItem(pk, JSON.stringify([p]));
     return [p];
   }
 }
 
-export function saveWorkspaceProjects(projects: WorkspaceProject[]): void {
-  localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects));
+export function saveWorkspaceProjects(projects: WorkspaceProject[], persistUserId: WorkspacePersistUserId = null): void {
+  localStorage.setItem(projectsStorageKey(persistUserId), JSON.stringify(projects));
 }
 
 export function createWorkspaceProject(name: string): WorkspaceProject {
@@ -51,11 +62,11 @@ export function createWorkspaceProject(name: string): WorkspaceProject {
   };
 }
 
-export function getLastOpenedWorkspaceProjectId(): string | null {
+export function getLastOpenedWorkspaceProjectId(persistUserId: WorkspacePersistUserId = null): string | null {
   try {
-    const id = localStorage.getItem(LAST_OPEN_PROJECT_KEY);
+    const id = localStorage.getItem(lastOpenStorageKey(persistUserId));
     if (!id) return null;
-    const projects = loadWorkspaceProjects();
+    const projects = loadWorkspaceProjects(persistUserId);
     return projects.some((p) => p.id === id) ? id : null;
   } catch {
     return null;
@@ -63,25 +74,26 @@ export function getLastOpenedWorkspaceProjectId(): string | null {
 }
 
 /** 首屏恢复：上次打开的项目及其工作流数据（需在 loadWorkspaceProjects 之后调用） */
-export function readInitialWorkflowProjectSession(): {
+export function readInitialWorkflowProjectSession(persistUserId: WorkspacePersistUserId = null): {
   activeProjectId: string | null;
   assets: WorkflowAsset[];
   pending: WorkflowPendingTask[];
 } {
-  const activeProjectId = getLastOpenedWorkspaceProjectId();
+  const activeProjectId = getLastOpenedWorkspaceProjectId(persistUserId);
   if (!activeProjectId) return { activeProjectId: null, assets: [], pending: [] };
-  const b = loadWorkflowBundle(activeProjectId);
+  const b = loadWorkflowBundle(activeProjectId, persistUserId);
   return { activeProjectId, assets: b.assets, pending: b.pending };
 }
 
-export function setLastOpenedWorkspaceProjectId(id: string | null): void {
-  if (id == null) localStorage.removeItem(LAST_OPEN_PROJECT_KEY);
-  else localStorage.setItem(LAST_OPEN_PROJECT_KEY, id);
+export function setLastOpenedWorkspaceProjectId(id: string | null, persistUserId: WorkspacePersistUserId = null): void {
+  const lk = lastOpenStorageKey(persistUserId);
+  if (id == null) localStorage.removeItem(lk);
+  else localStorage.setItem(lk, id);
 }
 
-export function loadWorkflowBundle(projectId: string): WorkflowProjectBundle {
+export function loadWorkflowBundle(projectId: string, persistUserId: WorkspacePersistUserId = null): WorkflowProjectBundle {
   try {
-    const raw = localStorage.getItem(workflowBundleStorageKey(projectId));
+    const raw = localStorage.getItem(workflowBundleStorageKey(projectId, persistUserId));
     if (!raw) return { assets: [], pending: [] };
     const data = JSON.parse(raw) as Partial<WorkflowProjectBundle>;
     return {
@@ -93,8 +105,12 @@ export function loadWorkflowBundle(projectId: string): WorkflowProjectBundle {
   }
 }
 
-export function saveWorkflowBundle(projectId: string, bundle: WorkflowProjectBundle): void {
-  const key = workflowBundleStorageKey(projectId);
+export function saveWorkflowBundle(
+  projectId: string,
+  bundle: WorkflowProjectBundle,
+  persistUserId: WorkspacePersistUserId = null
+): void {
+  const key = workflowBundleStorageKey(projectId, persistUserId);
   const payload = JSON.stringify(bundle);
   try {
     localStorage.setItem(key, payload);
@@ -112,15 +128,19 @@ export function saveWorkflowBundle(projectId: string, bundle: WorkflowProjectBun
 }
 
 /** 与 saveWorkflowBundle 相同，但配额等错误不抛，供 pagehide 等场景尽力持久化 */
-export function trySaveWorkflowBundle(projectId: string, bundle: WorkflowProjectBundle): boolean {
+export function trySaveWorkflowBundle(
+  projectId: string,
+  bundle: WorkflowProjectBundle,
+  persistUserId: WorkspacePersistUserId = null
+): boolean {
   try {
-    saveWorkflowBundle(projectId, bundle);
+    saveWorkflowBundle(projectId, bundle, persistUserId);
     return true;
   } catch {
     return false;
   }
 }
 
-export function removeWorkflowBundle(projectId: string): void {
-  localStorage.removeItem(workflowBundleStorageKey(projectId));
+export function removeWorkflowBundle(projectId: string, persistUserId: WorkspacePersistUserId = null): void {
+  localStorage.removeItem(workflowBundleStorageKey(projectId, persistUserId));
 }

@@ -31,9 +31,10 @@ export async function updateAdminUser(
   });
 }
 
-export async function reconcileAdminUserWorkspaceUsage(userId: string) {
-  return requestJson<{ ok: boolean; userId: string; workspaceUsedBytes: number }>(
-    apiUrl(`/api/admin/users/${encodeURIComponent(userId)}/workspace-usage/reconcile`),
+export async function reconcileAdminUserWorkspaceUsage(userId: string, opts?: { force?: boolean }) {
+  const q = opts?.force ? '?force=1' : '';
+  return requestJson<{ ok: boolean; userId: string; workspaceUsedBytes: number; scannedKeys?: number }>(
+    `${apiUrl(`/api/admin/users/${encodeURIComponent(userId)}/workspace-usage/reconcile`)}${q}`,
     { method: 'POST', body: '{}' }
   );
 }

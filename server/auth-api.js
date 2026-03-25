@@ -107,7 +107,8 @@ function applyCors(req, res) {
     res.setHeader('Vary', 'Origin');
   }
   res.setHeader('Access-Control-Allow-Credentials', 'true');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
+  /** 须含 PATCH：管理后台 updateAdminUser、部分客户端会发 PATCH */
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,PUT,DELETE,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-CSRF-Token');
 }
 
@@ -443,21 +444,30 @@ const server = http.createServer(async (req, res) => {
         json(res, 503, { error: 'R2 未配置，无法扫描' });
         return;
       }
+      let forceEmptyReset = false;
       try {
-        const { usedBytes } = await runWorkspaceUsageReconcileForUser(targetId);
+        const u = new URL(req.url || '/', 'http://localhost');
+        const fv = u.searchParams.get('force');
+        forceEmptyReset = fv === '1' || fv === 'true' || fv === 'yes';
+      } catch {
+        forceEmptyReset = false;
+      }
+      try {
+        const { usedBytes, scannedKeys } = await runWorkspaceUsageReconcileForUser(targetId, { forceEmptyReset });
         await createAuditLog({
           actorUserId: user.id,
           actorIdentifier: user.username,
           action: 'admin.workspace_usage_reconcile',
           targetUserId: targetId,
-          meta: { usedBytes },
+          meta: { usedBytes, scannedKeys, forceEmptyReset },
           ip: getClientIp(req),
           userAgent: req.headers['user-agent'],
         });
-        json(res, 200, { ok: true, userId: targetId, workspaceUsedBytes: usedBytes });
+        json(res, 200, { ok: true, userId: targetId, workspaceUsedBytes: usedBytes, scannedKeys });
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
-        json(res, 400, { error: message });
+        const code = e && typeof e === 'object' && 'code' in e && typeof e.code === 'string' ? e.code : undefined;
+        json(res, 400, code ? { error: message, code } : { error: message });
       }
       return;
     }

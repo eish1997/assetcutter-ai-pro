@@ -1,5 +1,6 @@
 import React from 'react';
 import type { AuthUser } from '../../services/authClient';
+import { HttpRequestError } from '../../services/httpClient';
 import { fetchAdminUsers, reconcileAdminUserWorkspaceUsage, updateAdminUser } from '../../services/adminClient';
 
 function fmtMb(bytes: number | undefined) {
@@ -70,16 +71,27 @@ const AdminUsersPanel: React.FC = () => {
     }
   };
 
-  const handleReconcile = async (userId: string) => {
+  const handleReconcile = async (userId: string, force?: boolean) => {
+    if (force) {
+      const ok = window.confirm(
+        '将按 R2 扫描结果覆盖用量账本。若扫描仍为空，会把已用量清零；仅在该用户桶里确实没有计费工作区文件时使用。'
+      );
+      if (!ok) return;
+    }
     setSavingId(userId);
     setError('');
     try {
-      const res = await reconcileAdminUserWorkspaceUsage(userId);
+      const res = await reconcileAdminUserWorkspaceUsage(userId, force ? { force: true } : undefined);
       setUsers((prev) =>
         prev.map((u) => (u.id === userId ? { ...u, workspaceUsedBytes: res.workspaceUsedBytes } : u))
       );
     } catch (err) {
-      setError(err instanceof Error ? err.message : '同步失败');
+      const msg = err instanceof Error ? err.message : '同步失败';
+      if (err instanceof HttpRequestError && err.code === 'RECONCILE_EMPTY_BLOCKED') {
+        setError(`${msg} 若已核对 R2 配置无误，可再点「强制同步」。`);
+      } else {
+        setError(msg);
+      }
     } finally {
       setSavingId('');
     }
@@ -98,7 +110,7 @@ const AdminUsersPanel: React.FC = () => {
           <div>
             <h2 className="text-[12px] font-black uppercase tracking-[0.2em] text-gray-300">用户管理</h2>
             <p className="mt-1 text-[10px] text-gray-500 max-w-xl leading-relaxed">
-              工作区云空间默认 200MB（仅统计工作流图片，不含 workflow.json / 索引）。修改配额后用户下次请求生效；「同步用量」从 R2 扫描重建已用量账本。
+              工作区云空间默认 200MB（仅统计工作流图片，不含 workflow.json / 索引）。修改配额后用户下次请求生效；「同步用量」从 R2 扫描重建用量账本（不会删除对象）。若 R2 列表异常返回空，会拒绝把大用量账本误清零，此时请先核对桶与权限，必要时再「强制同步」。
             </p>
           </div>
           <button
@@ -175,6 +187,17 @@ const AdminUsersPanel: React.FC = () => {
                         title="从 R2 扫描工作区图片并重建用量"
                       >
                         同步用量
+                      </button>
+                      <button
+                        type="button"
+                        disabled={savingId === u.id}
+                        onClick={() => {
+                          void handleReconcile(u.id, true);
+                        }}
+                        className="px-2 py-1 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-200/90 disabled:opacity-40 hover:bg-amber-500/20"
+                        title="即使扫描为空也覆盖账本（桶已空时使用）"
+                      >
+                        强制同步
                       </button>
                     </div>
                   </td>

@@ -533,7 +533,7 @@ export async function handleR2StorageRequest(req, res, inject = {}) {
 }
 
 /** 管理端：扫描 R2 用户工作区前缀，重建「工作流图片」用量账本 */
-export async function reconcileUserWorkspaceBillableUsage(userId, s3, bucket) {
+export async function reconcileUserWorkspaceBillableUsage(userId, s3, bucket, options = {}) {
   const uid = String(userId || '').trim();
   if (!uid) throw new Error('userId 无效');
   const prefix = `users/${uid}/workspace/`;
@@ -557,13 +557,13 @@ export async function reconcileUserWorkspaceBillableUsage(userId, s3, bucket) {
     if (result.IsTruncated && result.NextContinuationToken) token = result.NextContinuationToken;
     else break;
   }
-  return replaceUserUsageFromScan(uid, keyToSize);
+  return replaceUserUsageFromScan(uid, keyToSize, options);
 }
 
-export function runWorkspaceUsageReconcileForUser(userId) {
+export function runWorkspaceUsageReconcileForUser(userId, options = {}) {
   assertR2Config();
   const s3 = getS3();
   const bucket = R2_BUCKET();
   if (!s3 || !bucket) throw new Error('R2 未配置');
-  return reconcileUserWorkspaceBillableUsage(userId, s3, bucket);
+  return reconcileUserWorkspaceBillableUsage(userId, s3, bucket, options);
 }

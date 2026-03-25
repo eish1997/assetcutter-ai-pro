@@ -115,9 +115,15 @@ export function unregisterBillableObjectAfterDelete(userId, objectKey, headSize)
   return { usedBytes: row.usedBytes };
 }
 
-/** 管理端：用扫描结果整体替换某用户账单（与 R2 对齐） */
-export function replaceUserUsageFromScan(userId, keyToSize) {
-  const db = readUsage();
+const EMPTY_RECONCILE_BLOCK_PREV_BYTES = 1024 * 1024; // 原账本 ≥1MB 时，不允许被「空扫描」覆盖
+
+/**
+ * 管理端：用扫描结果整体替换某用户账单（与 R2 对齐）
+ * @param options.forceEmptyReset 为 true 时，即使扫描结果为空且原账本有用量也覆盖（仅确认桶已空时使用）
+ */
+export function replaceUserUsageFromScan(userId, keyToSize, options = {}) {
+  const forceEmptyReset = !!options.forceEmptyReset;
+  const prevUsed = getWorkspaceUsedBytes(userId);
   const keys = {};
   let used = 0;
   for (const [k, sz] of Object.entries(keyToSize)) {
@@ -126,7 +132,16 @@ export function replaceUserUsageFromScan(userId, keyToSize) {
     keys[k] = n;
     used += n;
   }
+  const scanKeyCount = Object.keys(keys).length;
+  if (scanKeyCount === 0 && used === 0 && prevUsed >= EMPTY_RECONCILE_BLOCK_PREV_BYTES && !forceEmptyReset) {
+    const err = new Error(
+      'R2 扫描未列出任何计费对象，但当前用量账本显示仍有数据。为避免误把账本清零导致配额与同步异常，已中止。请核对 R2_BUCKET、密钥、用户 ID 与对象前缀 users/<id>/workspace/；若确认桶中已无计费文件，可在管理端使用「强制同步」。'
+    );
+    err.code = 'RECONCILE_EMPTY_BLOCKED';
+    throw err;
+  }
+  const db = readUsage();
   db.users[userId] = { usedBytes: used, keys };
   writeUsage(db);
-  return { usedBytes: used };
+  return { usedBytes: used, scannedKeys: scanKeyCount };
 }

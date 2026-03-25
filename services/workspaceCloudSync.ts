@@ -10,6 +10,9 @@ import {
   getLastOpenedWorkspaceProjectId,
   loadWorkflowBundle,
   loadWorkspaceProjects,
+  saveWorkflowBundle,
+  saveWorkspaceProjects,
+  setLastOpenedWorkspaceProjectId,
   type WorkspaceProject,
 } from './workspaceProjectStore';
 
@@ -206,21 +209,33 @@ export async function deleteWorkspaceProjectObjects(userId: string, projectId: s
   for (const key of keys) await deleteWorkspaceObject(key);
 }
 
-/** 云端无索引时，把当前 localStorage 中的项目与工作流全部推到 R2 */
-export async function migrateLocalWorkspaceToCloud(userId: string): Promise<void> {
+/**
+ * 云端无索引时，仅把「访客站点级」localStorage 中的项目与工作流推到 R2（避免把上一登录账号的隔离数据误迁入）。
+ * 成功后写入当前用户的隔离 local 副本。
+ */
+export async function migrateLocalWorkspaceToCloud(
+  userId: string
+): Promise<{ projects: WorkspaceProject[]; lastOpenProjectId: string | null } | null> {
   let indexRaw: string | null;
   try {
     indexRaw = await downloadR2ObjectText(workspaceProjectsIndexKey(userId));
   } catch {
-    return;
+    return null;
   }
-  if (indexRaw != null) return;
-  const projects = loadWorkspaceProjects();
-  const lastOpen = getLastOpenedWorkspaceProjectId();
+  if (indexRaw != null) return null;
+  const projects = loadWorkspaceProjects(null);
+  const lastOpen = getLastOpenedWorkspaceProjectId(null);
   await pushWorkspaceIndex(userId, projects, lastOpen);
   for (const p of projects) {
-    const b = loadWorkflowBundle(p.id);
+    const b = loadWorkflowBundle(p.id, null);
     await pushWorkflowBundleToCloud(userId, p.id, b);
   }
+  saveWorkspaceProjects(projects, userId);
+  setLastOpenedWorkspaceProjectId(lastOpen, userId);
+  for (const p of projects) {
+    const b = loadWorkflowBundle(p.id, null);
+    saveWorkflowBundle(p.id, b, userId);
+  }
+  return { projects, lastOpenProjectId: lastOpen };
 }
 

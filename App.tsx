@@ -504,20 +504,24 @@ const MainApp: React.FC = () => {
         .catch(() => {});
     }
   }, []);
-  const [workspaceProjects, setWorkspaceProjects] = useState(() => loadWorkspaceProjects());
-  const [activeWorkspaceProjectId, setActiveWorkspaceProjectId] = useState<string | null>(() => getLastOpenedWorkspaceProjectId());
+  const [workspaceProjects, setWorkspaceProjects] = useState(() => loadWorkspaceProjects(null));
+  const [activeWorkspaceProjectId, setActiveWorkspaceProjectId] = useState<string | null>(() =>
+    getLastOpenedWorkspaceProjectId(null)
+  );
   const [workflowAssets, setWorkflowAssets] = useState<WorkflowAsset[]>(() => {
-    const id = getLastOpenedWorkspaceProjectId();
-    return id ? loadWorkflowBundle(id).assets : [];
+    const id = getLastOpenedWorkspaceProjectId(null);
+    return id ? loadWorkflowBundle(id, null).assets : [];
   });
   const [workflowPending, setWorkflowPending] = useState<WorkflowPendingTask[]>(() => {
-    const id = getLastOpenedWorkspaceProjectId();
-    return id ? loadWorkflowBundle(id).pending : [];
+    const id = getLastOpenedWorkspaceProjectId(null);
+    return id ? loadWorkflowBundle(id, null).pending : [];
   });
 
   const activeWorkspaceProjectIdRef = useRef<string | null>(activeWorkspaceProjectId);
   const workspaceProjectsRef = useRef(workspaceProjects);
   const userIdRef = useRef<string | undefined>(user?.id);
+  /** 仅在该用户完成云 hydrate / 迁移后允许 push，避免切换账号时用上一账号内存态覆盖云端 */
+  const workspaceCloudPushAllowedUserIdRef = useRef<string | null>(null);
   const cloudWorkflowSyncGenRef = useRef(0);
   const [workspaceCloudHydratingProjectId, setWorkspaceCloudHydratingProjectId] = useState<string | null>(null);
   const workspaceCloudHydratingProjectIdRef = useRef<string | null>(null);
@@ -538,6 +542,10 @@ const MainApp: React.FC = () => {
   }, [workspaceProjects]);
   useEffect(() => {
     userIdRef.current = user?.id;
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user?.id) workspaceCloudPushAllowedUserIdRef.current = null;
   }, [user?.id]);
 
   useEffect(() => {
@@ -611,10 +619,10 @@ const MainApp: React.FC = () => {
           if (activeWorkspaceProjectIdRef.current !== projectId) return;
           setWorkflowAssets(final.assets);
           setWorkflowPending(final.pending);
-          trySaveWorkflowBundle(projectId, final);
+          trySaveWorkflowBundle(projectId, final, userId);
         } else {
           const bundle = { assets: packed.assets, pending: packed.pending };
-          trySaveWorkflowBundle(projectId, bundle);
+          trySaveWorkflowBundle(projectId, bundle, userId);
         }
       } catch (e) {
         console.warn('[workspace cloud] pull', e);
@@ -668,20 +676,26 @@ const MainApp: React.FC = () => {
 
   const flushProjectPersistence = useCallback(() => {
     const pid = activeWorkspaceProjectIdRef.current;
+    const scope = userIdRef.current ?? null;
     if (pid) {
       trySaveWorkflowBundle(pid, {
         assets: workflowAssetsRef.current,
         pending: workflowPendingRef.current,
-      });
+      }, scope);
     }
     try {
-      saveWorkspaceProjects(workspaceProjectsRef.current);
+      saveWorkspaceProjects(workspaceProjectsRef.current, scope);
     } catch {
       /* ignore */
     }
     const uid = userIdRef.current;
-    if (uid && isWorkspaceCloudEnabled() && !workspaceCloudQuotaSuspendedRef.current) {
-      const lastOpen = getLastOpenedWorkspaceProjectId();
+    if (
+      uid &&
+      isWorkspaceCloudEnabled() &&
+      !workspaceCloudQuotaSuspendedRef.current &&
+      workspaceCloudPushAllowedUserIdRef.current === uid
+    ) {
+      const lastOpen = getLastOpenedWorkspaceProjectId(scope);
       void pushWorkspaceIndex(uid, workspaceProjectsRef.current, lastOpen).catch(() => {});
       if (pid && workspaceCloudHydratingProjectIdRef.current !== pid) {
         void pushWorkflowBundleToCloud(uid, pid, {
@@ -705,15 +719,15 @@ const MainApp: React.FC = () => {
     };
   }, [flushProjectPersistence]);
 
-  /** 未登录：工作区始终读回本地（与登录会话隔离） */
+  /** 未登录：工作区读回访客级 localStorage（与已登录账号隔离键） */
   useEffect(() => {
     if (authLoading) return;
     if (user?.id) return;
-    setWorkspaceProjects(loadWorkspaceProjects());
-    const last = getLastOpenedWorkspaceProjectId();
+    setWorkspaceProjects(loadWorkspaceProjects(null));
+    const last = getLastOpenedWorkspaceProjectId(null);
     setActiveWorkspaceProjectId(last);
     if (last) {
-      const b = loadWorkflowBundle(last);
+      const b = loadWorkflowBundle(last, null);
       setWorkflowAssets(b.assets);
       setWorkflowPending(b.pending);
     } else {
@@ -722,38 +736,121 @@ const MainApp: React.FC = () => {
     }
   }, [authLoading, user?.id]);
 
-  /** 已登录且开启云同步：从 R2 拉取索引与工作流；无云端数据时把本地迁移上传 */
+  /** 已登录且关闭云同步：仅使用当前用户隔离的 localStorage */
+  useEffect(() => {
+    if (authLoading || !user?.id || isWorkspaceCloudEnabled()) return;
+    const uid = user.id;
+    setWorkspaceProjects(loadWorkspaceProjects(uid));
+    const last = getLastOpenedWorkspaceProjectId(uid);
+    setActiveWorkspaceProjectId(last);
+    if (last) {
+      const b = loadWorkflowBundle(last, uid);
+      setWorkflowAssets(b.assets);
+      setWorkflowPending(b.pending);
+    } else {
+      setWorkflowAssets([]);
+      setWorkflowPending([]);
+    }
+  }, [authLoading, user?.id]);
+
+  /** 已登录且开启云同步：切换账号时先清空内存态，再从 R2 hydrate；访客数据仅在「云端无索引」时迁入 */
   useEffect(() => {
     if (authLoading || !user?.id || !isWorkspaceCloudEnabled()) return;
+    const uid = user.id;
+    workspaceCloudPushAllowedUserIdRef.current = null;
+    cloudWorkflowSyncGenRef.current += 1;
+    setWorkspaceCloudHydratingProjectId(null);
+    setWorkspaceProjects([]);
+    setActiveWorkspaceProjectId(null);
+    setWorkflowAssets([]);
+    setWorkflowPending([]);
     let cancelled = false;
+
+    const applyIndex = (index: NonNullable<Awaited<ReturnType<typeof fetchWorkspaceCloudIndex>>>) => {
+      const validLast =
+        index.lastOpenProjectId && index.projects.some((p) => p.id === index.lastOpenProjectId)
+          ? index.lastOpenProjectId
+          : null;
+      saveWorkspaceProjects(index.projects, uid);
+      setWorkspaceProjects(index.projects);
+      setLastOpenedWorkspaceProjectId(validLast, uid);
+      setActiveWorkspaceProjectId(validLast);
+      if (validLast) {
+        const local = loadWorkflowBundle(validLast, uid);
+        setWorkflowAssets(local.assets);
+        setWorkflowPending(local.pending);
+        runCloudWorkflowPull(uid, validLast);
+      } else {
+        setWorkflowAssets([]);
+        setWorkflowPending([]);
+      }
+      workspaceCloudPushAllowedUserIdRef.current = uid;
+    };
+
     void (async () => {
       try {
-        const index = await fetchWorkspaceCloudIndex(user.id);
+        const index = await fetchWorkspaceCloudIndex(uid);
         if (cancelled) return;
         if (index) {
+          applyIndex(index);
+          return;
+        }
+        const migrated = await migrateLocalWorkspaceToCloud(uid);
+        if (cancelled) return;
+        if (migrated) {
+          const { projects, lastOpenProjectId } = migrated;
           const validLast =
-            index.lastOpenProjectId && index.projects.some((p) => p.id === index.lastOpenProjectId)
-              ? index.lastOpenProjectId
-              : null;
-          saveWorkspaceProjects(index.projects);
-          setWorkspaceProjects(index.projects);
-          setLastOpenedWorkspaceProjectId(validLast);
+            lastOpenProjectId && projects.some((p) => p.id === lastOpenProjectId) ? lastOpenProjectId : null;
+          setWorkspaceProjects(projects);
+          setLastOpenedWorkspaceProjectId(validLast, uid);
           setActiveWorkspaceProjectId(validLast);
           if (validLast) {
-            const local = loadWorkflowBundle(validLast);
-            if (cancelled) return;
+            const local = loadWorkflowBundle(validLast, uid);
             setWorkflowAssets(local.assets);
             setWorkflowPending(local.pending);
-            if (!cancelled) runCloudWorkflowPull(user.id, validLast);
+            runCloudWorkflowPull(uid, validLast);
           } else {
             setWorkflowAssets([]);
             setWorkflowPending([]);
           }
+          workspaceCloudPushAllowedUserIdRef.current = uid;
           return;
         }
-        await migrateLocalWorkspaceToCloud(user.id);
+        const again = await fetchWorkspaceCloudIndex(uid);
+        if (cancelled) return;
+        if (again) {
+          applyIndex(again);
+          return;
+        }
+        const localOnly = loadWorkspaceProjects(uid);
+        const last = getLastOpenedWorkspaceProjectId(uid);
+        setWorkspaceProjects(localOnly);
+        setActiveWorkspaceProjectId(last);
+        if (last) {
+          const b = loadWorkflowBundle(last, uid);
+          setWorkflowAssets(b.assets);
+          setWorkflowPending(b.pending);
+        } else {
+          setWorkflowAssets([]);
+          setWorkflowPending([]);
+        }
+        workspaceCloudPushAllowedUserIdRef.current = uid;
       } catch (e) {
         console.warn('[workspace cloud] hydrate', e);
+        if (cancelled) return;
+        const localOnly = loadWorkspaceProjects(uid);
+        const last = getLastOpenedWorkspaceProjectId(uid);
+        setWorkspaceProjects(localOnly);
+        setActiveWorkspaceProjectId(last);
+        if (last) {
+          const b = loadWorkflowBundle(last, uid);
+          setWorkflowAssets(b.assets);
+          setWorkflowPending(b.pending);
+        } else {
+          setWorkflowAssets([]);
+          setWorkflowPending([]);
+        }
+        workspaceCloudPushAllowedUserIdRef.current = uid;
       }
     })();
     return () => {
@@ -766,10 +863,11 @@ const MainApp: React.FC = () => {
     if (authLoading || !user?.id || !isWorkspaceCloudEnabled()) return;
     const uid = user.id;
     const t = window.setTimeout(() => {
-      const lastOpen = getLastOpenedWorkspaceProjectId();
       void (async () => {
         try {
+          if (workspaceCloudPushAllowedUserIdRef.current !== uid) return;
           if (workspaceCloudQuotaSuspendedRef.current) return;
+          const lastOpen = getLastOpenedWorkspaceProjectId(uid);
           await pushWorkspaceIndex(uid, workspaceProjects, lastOpen);
           const pid = activeWorkspaceProjectId;
           if (pid && workspaceCloudHydratingProjectId === pid) return;
@@ -806,27 +904,36 @@ const MainApp: React.FC = () => {
 
   useEffect(() => {
     if (!activeWorkspaceProjectId) return;
+    const scope = user?.id ?? null;
     const t = window.setTimeout(() => {
-      trySaveWorkflowBundle(activeWorkspaceProjectId, { assets: workflowAssets, pending: workflowPending });
+      trySaveWorkflowBundle(activeWorkspaceProjectId, { assets: workflowAssets, pending: workflowPending }, scope);
     }, 350);
     return () => window.clearTimeout(t);
-  }, [activeWorkspaceProjectId, workflowAssets, workflowPending]);
+  }, [activeWorkspaceProjectId, workflowAssets, workflowPending, user?.id]);
 
   const openWorkspaceProject = useCallback(
     (id: string) => {
+      const scope = user?.id ?? null;
       if (activeWorkspaceProjectId) {
         const prevBundle = {
           assets: workflowAssetsRef.current,
           pending: workflowPendingRef.current,
         };
-        trySaveWorkflowBundle(activeWorkspaceProjectId, prevBundle);
-        if (user?.id && isWorkspaceCloudEnabled() && !workspaceCloudQuotaSuspendedRef.current) {
-          void pushWorkflowBundleToCloud(user.id, activeWorkspaceProjectId, prevBundle).catch((e) => console.warn('[workspace cloud]', e));
+        trySaveWorkflowBundle(activeWorkspaceProjectId, prevBundle, scope);
+        if (
+          user?.id &&
+          isWorkspaceCloudEnabled() &&
+          !workspaceCloudQuotaSuspendedRef.current &&
+          workspaceCloudPushAllowedUserIdRef.current === user.id
+        ) {
+          void pushWorkflowBundleToCloud(user.id, activeWorkspaceProjectId, prevBundle).catch((e) =>
+            console.warn('[workspace cloud]', e)
+          );
         }
       }
-      const local = loadWorkflowBundle(id);
+      const local = loadWorkflowBundle(id, scope);
       setActiveWorkspaceProjectId(id);
-      setLastOpenedWorkspaceProjectId(id);
+      setLastOpenedWorkspaceProjectId(id, scope);
       setWorkflowAssets(local.assets);
       setWorkflowPending(local.pending);
       if (user?.id && isWorkspaceCloudEnabled()) {
@@ -848,14 +955,22 @@ const MainApp: React.FC = () => {
     }
     cloudWorkflowSyncGenRef.current += 1;
     setWorkspaceCloudHydratingProjectId(null);
+    const scope = user?.id ?? null;
     if (activeWorkspaceProjectId) {
       const bundle = {
         assets: workflowAssetsRef.current,
         pending: workflowPendingRef.current,
       };
-      trySaveWorkflowBundle(activeWorkspaceProjectId, bundle);
-      if (user?.id && isWorkspaceCloudEnabled() && !workspaceCloudQuotaSuspendedRef.current) {
-        void pushWorkflowBundleToCloud(user.id, activeWorkspaceProjectId, bundle).catch((e) => console.warn('[workspace cloud]', e));
+      trySaveWorkflowBundle(activeWorkspaceProjectId, bundle, scope);
+      if (
+        user?.id &&
+        isWorkspaceCloudEnabled() &&
+        !workspaceCloudQuotaSuspendedRef.current &&
+        workspaceCloudPushAllowedUserIdRef.current === user.id
+      ) {
+        void pushWorkflowBundleToCloud(user.id, activeWorkspaceProjectId, bundle).catch((e) =>
+          console.warn('[workspace cloud]', e)
+        );
       }
     }
     setActiveWorkspaceProjectId(null);
@@ -863,27 +978,31 @@ const MainApp: React.FC = () => {
     setWorkflowPending([]);
   }, [activeWorkspaceProjectId, user?.id]);
 
-  const createWorkspaceProjectEntry = useCallback((name: string) => {
-    const p = createWorkspaceProject(name);
-    const next = [...workspaceProjects, p];
-    setWorkspaceProjects(next);
-    saveWorkspaceProjects(next);
-  }, [workspaceProjects]);
+  const createWorkspaceProjectEntry = useCallback(
+    (name: string) => {
+      const p = createWorkspaceProject(name);
+      const next = [...workspaceProjects, p];
+      setWorkspaceProjects(next);
+      saveWorkspaceProjects(next, user?.id ?? null);
+    },
+    [workspaceProjects, user?.id]
+  );
 
   const deleteWorkspaceProjectEntry = useCallback(
     (id: string) => {
       if (!window.confirm('确定删除该项目？工作流画布数据将一并删除。')) return;
-      removeWorkflowBundle(id);
+      const scope = user?.id ?? null;
+      removeWorkflowBundle(id, scope);
       if (user?.id && isWorkspaceCloudEnabled()) {
         void deleteWorkspaceProjectObjects(user.id, id).catch((e) => console.warn('[workspace cloud]', e));
       }
       const next = workspaceProjects.filter((q) => q.id !== id);
       setWorkspaceProjects(next);
-      saveWorkspaceProjects(next);
+      saveWorkspaceProjects(next, scope);
       if (activeWorkspaceProjectId === id) {
         cloudWorkflowSyncGenRef.current += 1;
         setWorkspaceCloudHydratingProjectId(null);
-        setLastOpenedWorkspaceProjectId(null);
+        setLastOpenedWorkspaceProjectId(null, scope);
         setActiveWorkspaceProjectId(null);
         setWorkflowAssets([]);
         setWorkflowPending([]);
