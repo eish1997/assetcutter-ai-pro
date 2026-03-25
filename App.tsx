@@ -36,8 +36,14 @@ import {
   migrateLocalWorkspaceToCloud,
   pushWorkflowBundleToCloud,
   pushWorkspaceIndex,
+  WORKSPACE_CLOUD_DEFAULT_QUOTA_BYTES,
 } from './services/workspaceCloudSync';
 import { hydrateWorkflowBundleFromCloud } from './services/workspaceR2ImageBundle';
+import { HttpRequestError } from './services/httpClient';
+
+function formatWorkspaceCloudMb(bytes: number) {
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 const UnifiedModelViewer3D = React.lazy(() => import('./components/UnifiedModelViewer3D'));
 const WorkflowSection = React.lazy(() => import('./components/WorkflowSection'));
@@ -460,7 +466,7 @@ const LibraryPickerModal: React.FC<{
 // ==========================================
 /** 主站： hooks 必须始终在同一调用顺序下执行，不可与 /admin 分支混在同一个组件里 */
 const MainApp: React.FC = () => {
-  const { user, logout, loading: authLoading } = useAuth();
+  const { user, logout, loading: authLoading, refresh: refreshAuthUser } = useAuth();
 
   const [mode, setMode] = useState<AppMode>(AppMode.WORKFLOW);
   const [capabilityPresets, setCapabilityPresets] = useState<CustomAppModule[]>(loadCapabilityPresets);
@@ -515,6 +521,12 @@ const MainApp: React.FC = () => {
   const cloudWorkflowSyncGenRef = useRef(0);
   const [workspaceCloudHydratingProjectId, setWorkspaceCloudHydratingProjectId] = useState<string | null>(null);
   const workspaceCloudHydratingProjectIdRef = useRef<string | null>(null);
+  const [workspaceCloudQuotaSuspended, setWorkspaceCloudQuotaSuspended] = useState(false);
+  const workspaceCloudQuotaSuspendedRef = useRef(false);
+  const editedWhileQuotaSuspendedRef = useRef(false);
+  useEffect(() => {
+    workspaceCloudQuotaSuspendedRef.current = workspaceCloudQuotaSuspended;
+  }, [workspaceCloudQuotaSuspended]);
   useEffect(() => {
     workspaceCloudHydratingProjectIdRef.current = workspaceCloudHydratingProjectId;
   }, [workspaceCloudHydratingProjectId]);
@@ -527,6 +539,46 @@ const MainApp: React.FC = () => {
   useEffect(() => {
     userIdRef.current = user?.id;
   }, [user?.id]);
+
+  useEffect(() => {
+    if (!user?.id) {
+      setWorkspaceCloudQuotaSuspended(false);
+      editedWhileQuotaSuspendedRef.current = false;
+    }
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    const used = Number(user.workspaceUsedBytes ?? 0);
+    const quota = Number(user.workspaceQuotaBytes ?? WORKSPACE_CLOUD_DEFAULT_QUOTA_BYTES);
+    if (used < quota) setWorkspaceCloudQuotaSuspended(false);
+  }, [user?.id, user?.workspaceUsedBytes, user?.workspaceQuotaBytes]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    const onFocus = () => {
+      void refreshAuthUser();
+    };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [user?.id, refreshAuthUser]);
+
+  useEffect(() => {
+    const onBeforeUnload = (ev: BeforeUnloadEvent) => {
+      if (workspaceCloudQuotaSuspended && editedWhileQuotaSuspendedRef.current) {
+        ev.preventDefault();
+        ev.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [workspaceCloudQuotaSuspended]);
+
+  useEffect(() => {
+    if (!workspaceCloudQuotaSuspended) return;
+    if (!user?.id || !isWorkspaceCloudEnabled() || !activeWorkspaceProjectId) return;
+    editedWhileQuotaSuspendedRef.current = true;
+  }, [workflowAssets, workflowPending, workspaceCloudQuotaSuspended, user?.id, activeWorkspaceProjectId]);
 
   const runCloudWorkflowPull = useCallback((userId: string, projectId: string) => {
     cloudWorkflowSyncGenRef.current += 1;
@@ -628,7 +680,7 @@ const MainApp: React.FC = () => {
       /* ignore */
     }
     const uid = userIdRef.current;
-    if (uid && isWorkspaceCloudEnabled()) {
+    if (uid && isWorkspaceCloudEnabled() && !workspaceCloudQuotaSuspendedRef.current) {
       const lastOpen = getLastOpenedWorkspaceProjectId();
       void pushWorkspaceIndex(uid, workspaceProjectsRef.current, lastOpen).catch(() => {});
       if (pid && workspaceCloudHydratingProjectIdRef.current !== pid) {
@@ -717,6 +769,7 @@ const MainApp: React.FC = () => {
       const lastOpen = getLastOpenedWorkspaceProjectId();
       void (async () => {
         try {
+          if (workspaceCloudQuotaSuspendedRef.current) return;
           await pushWorkspaceIndex(uid, workspaceProjects, lastOpen);
           const pid = activeWorkspaceProjectId;
           if (pid && workspaceCloudHydratingProjectId === pid) return;
@@ -726,8 +779,15 @@ const MainApp: React.FC = () => {
               pending: workflowPendingRef.current,
             });
           }
+          editedWhileQuotaSuspendedRef.current = false;
+          void refreshAuthUser();
         } catch (e) {
           console.warn('[workspace cloud] sync', e);
+          if (e instanceof HttpRequestError && e.code === 'STORAGE_QUOTA_EXCEEDED') {
+            setWorkspaceCloudQuotaSuspended(true);
+            editedWhileQuotaSuspendedRef.current = true;
+            void refreshAuthUser();
+          }
         }
       })();
     }, 800);
@@ -738,8 +798,10 @@ const MainApp: React.FC = () => {
     workspaceProjects,
     activeWorkspaceProjectId,
     workspaceCloudHydratingProjectId,
+    workspaceCloudQuotaSuspended,
     workflowAssets,
     workflowPending,
+    refreshAuthUser,
   ]);
 
   useEffect(() => {
@@ -758,7 +820,7 @@ const MainApp: React.FC = () => {
           pending: workflowPendingRef.current,
         };
         trySaveWorkflowBundle(activeWorkspaceProjectId, prevBundle);
-        if (user?.id && isWorkspaceCloudEnabled()) {
+        if (user?.id && isWorkspaceCloudEnabled() && !workspaceCloudQuotaSuspendedRef.current) {
           void pushWorkflowBundleToCloud(user.id, activeWorkspaceProjectId, prevBundle).catch((e) => console.warn('[workspace cloud]', e));
         }
       }
@@ -775,6 +837,15 @@ const MainApp: React.FC = () => {
   );
 
   const backToWorkspaceProjectShell = useCallback(() => {
+    if (workspaceCloudQuotaSuspendedRef.current && editedWhileQuotaSuspendedRef.current) {
+      if (
+        !window.confirm(
+          '云空间已满，近期修改可能未同步到云端，仅保存在本机。确定返回项目列表？'
+        )
+      ) {
+        return;
+      }
+    }
     cloudWorkflowSyncGenRef.current += 1;
     setWorkspaceCloudHydratingProjectId(null);
     if (activeWorkspaceProjectId) {
@@ -783,7 +854,7 @@ const MainApp: React.FC = () => {
         pending: workflowPendingRef.current,
       };
       trySaveWorkflowBundle(activeWorkspaceProjectId, bundle);
-      if (user?.id && isWorkspaceCloudEnabled()) {
+      if (user?.id && isWorkspaceCloudEnabled() && !workspaceCloudQuotaSuspendedRef.current) {
         void pushWorkflowBundleToCloud(user.id, activeWorkspaceProjectId, bundle).catch((e) => console.warn('[workspace cloud]', e));
       }
     }
@@ -2045,12 +2116,30 @@ const MainApp: React.FC = () => {
             {mode === AppMode.TEXTURE && <TextureEngineSection />}
 
             {mode === AppMode.WORKFLOW && !activeWorkspaceProjectId && (
-              <WorkspaceProjectShell
-                projects={workspaceProjects}
-                onCreate={createWorkspaceProjectEntry}
-                onOpen={openWorkspaceProject}
-                onDelete={deleteWorkspaceProjectEntry}
-              />
+              <>
+                {user?.id && isWorkspaceCloudEnabled() ? (
+                  <div className="max-w-6xl mx-auto w-full mb-5 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 flex flex-wrap items-center gap-x-4 gap-y-2">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-gray-500">工作区云存储</span>
+                    <span className="text-[11px] text-gray-200 font-mono tabular-nums" title="仅统计已同步到云端的流程图片">
+                      {formatWorkspaceCloudMb(Number(user.workspaceUsedBytes ?? 0))} /{' '}
+                      {formatWorkspaceCloudMb(Number(user.workspaceQuotaBytes ?? WORKSPACE_CLOUD_DEFAULT_QUOTA_BYTES))}
+                    </span>
+                    <span className="text-[10px] text-gray-600 max-w-md leading-relaxed">
+                      登录且运行 auth-api（9100）后显示用量；打开项目后画布顶部也会显示同一行。
+                    </span>
+                  </div>
+                ) : user?.id && !isWorkspaceCloudEnabled() ? (
+                  <div className="max-w-6xl mx-auto w-full mb-5 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-[10px] text-gray-500">
+                    工作区云同步已关闭（VITE_WORKSPACE_CLOUD=false），数据仅保存在本机。
+                  </div>
+                ) : null}
+                <WorkspaceProjectShell
+                  projects={workspaceProjects}
+                  onCreate={createWorkspaceProjectEntry}
+                  onOpen={openWorkspaceProject}
+                  onDelete={deleteWorkspaceProjectEntry}
+                />
+              </>
             )}
             {mode === AppMode.WORKFLOW && activeWorkspaceProjectId && (
               <WorkflowErrorBoundary>
@@ -2074,7 +2163,18 @@ const MainApp: React.FC = () => {
                       云端图像载入中…
                     </span>
                   ) : null}
+                  {user?.id && isWorkspaceCloudEnabled() ? (
+                    <span className="text-[10px] text-gray-500" title="仅统计工作流云图片，不含索引 JSON">
+                      云空间 {formatWorkspaceCloudMb(Number(user.workspaceUsedBytes ?? 0))} /{' '}
+                      {formatWorkspaceCloudMb(Number(user.workspaceQuotaBytes ?? WORKSPACE_CLOUD_DEFAULT_QUOTA_BYTES))}
+                    </span>
+                  ) : null}
                 </div>
+                {workspaceCloudQuotaSuspended ? (
+                  <div className="w-full max-w-6xl mx-auto mb-3 rounded-xl border border-amber-500/35 bg-amber-500/10 px-4 py-3 text-[11px] text-amber-100/95 leading-relaxed">
+                    工作区<strong className="font-semibold">云空间已满</strong>：新图片与同步已暂停上传，画布数据仍会保存在本机浏览器。删除云端项目中的图或请管理员调高配额后可恢复同步。关闭或刷新页面前请注意未上云的数据可能丢失。
+                  </div>
+                ) : null}
                 <Suspense fallback={<LazySectionFallback label="工作区" />}>
                   <WorkflowSection capabilityPresets={capabilityPresets} capabilitySets={capabilitySets} assets={workflowAssets} onAssetsChange={setWorkflowAssets} pending={workflowPending} onPendingChange={setWorkflowPending} onOpenLibraryPicker={(cb) => openPicker(undefined, cb, true)} onLog={(level, message, detail) => addGlobalLog('工作区', level, message, detail)} onAddGenerate3DJob={handleAddGenerate3DJobFromWorkflow} />
                 </Suspense>

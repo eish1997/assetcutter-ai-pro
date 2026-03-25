@@ -13,6 +13,9 @@ import {
   type WorkspaceProject,
 } from './workspaceProjectStore';
 
+/** 与后端默认一致：未返回 quota 时前端展示用 */
+export const WORKSPACE_CLOUD_DEFAULT_QUOTA_BYTES = 200 * 1024 * 1024;
+
 /** 设为 `false` 时关闭工作区云同步（仅本地 localStorage） */
 export function isWorkspaceCloudEnabled(): boolean {
   return import.meta.env.VITE_WORKSPACE_CLOUD !== 'false';
@@ -62,6 +65,10 @@ async function putObjectBytes(objectKey: string, contentType: string, body: stri
     body,
   });
   if (!put.ok) throw new Error(`R2 上传失败（${put.status}）`);
+  await requestJson<{ ok?: boolean }>(r2ApiUrl('/register-upload'), {
+    method: 'POST',
+    body: JSON.stringify({ objectKey }),
+  });
 }
 
 /** 云端无此对象时返回 null；鉴权/网络失败时抛错 */

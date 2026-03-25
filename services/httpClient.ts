@@ -1,3 +1,15 @@
+export class HttpRequestError extends Error {
+  status: number;
+  code?: string;
+
+  constructor(message: string, status: number, code?: string) {
+    super(message);
+    this.name = 'HttpRequestError';
+    this.status = status;
+    this.code = code;
+  }
+}
+
 function getCookie(name: string) {
   if (typeof document === 'undefined') return '';
   const cookies = document.cookie ? document.cookie.split(';') : [];
@@ -21,7 +33,10 @@ export async function requestJson<T>(url: string, init?: RequestInit): Promise<T
     headers,
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(String((data as { error?: string }).error || '请求失败'));
+  if (!res.ok) {
+    const d = data as { error?: string; code?: string };
+    throw new HttpRequestError(String(d.error || '请求失败'), res.status, typeof d.code === 'string' ? d.code : undefined);
+  }
   return data as T;
 }
 

@@ -14,8 +14,10 @@ import {
   upsertAdminUser,
   updateUserById,
   verifyPassword,
+  getWorkspaceQuotaBytesForUser,
 } from './auth-store.js';
-import { handleR2StorageRequest, isR2Configured } from './r2-storage-handlers.js';
+import { handleR2StorageRequest, isR2Configured, runWorkspaceUsageReconcileForUser } from './r2-storage-handlers.js';
+import { getWorkspaceUsedBytes } from './workspace-storage-usage.js';
 
 const PORT = Number(process.env.PORT || process.env.AUTH_PORT || 9100);
 const BIND_HOST = String(process.env.AUTH_BIND_HOST || '0.0.0.0').trim() || '0.0.0.0';
@@ -209,9 +211,9 @@ function makeSessionToken() {
   return crypto.randomBytes(32).toString('base64url');
 }
 
-function sendAuthUser(res, user, status = 200) {
+function sendAuthUser(res, user, status = 200, extras = {}) {
   json(res, status, {
-    user,
+    user: { ...user, ...extras },
   });
 }
 
@@ -294,7 +296,7 @@ const server = http.createServer(async (req, res) => {
       const csrf = issueCsrfCookie(res);
       res.setHeader('Set-Cookie', [serializeSessionCookie(token, SESSION_TTL_MS), csrf.cookie]);
       await createAuditLog({ actorUserId: user.id, actorIdentifier: user.username, action: 'auth.register', targetUserId: user.id, ip: getClientIp(req), userAgent: req.headers['user-agent'] });
-      sendAuthUser(res, user, 201);
+      sendAuthUser(res, user, 201, { workspaceUsedBytes: getWorkspaceUsedBytes(user.id) });
       return;
     }
 
@@ -321,6 +323,7 @@ const server = http.createServer(async (req, res) => {
         status: row.status,
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
+        workspaceQuotaBytes: getWorkspaceQuotaBytesForUser(row),
       };
       const token = makeSessionToken();
       await createSession({
@@ -333,7 +336,7 @@ const server = http.createServer(async (req, res) => {
       const csrf = issueCsrfCookie(res);
       res.setHeader('Set-Cookie', [serializeSessionCookie(token, SESSION_TTL_MS), csrf.cookie]);
       await createAuditLog({ actorUserId: row.id, actorIdentifier: row.username, action: 'auth.login_success', targetUserId: row.id, ip: getClientIp(req), userAgent: req.headers['user-agent'] });
-      sendAuthUser(res, user);
+      sendAuthUser(res, user, 200, { workspaceUsedBytes: getWorkspaceUsedBytes(user.id) });
       return;
     }
 
@@ -354,21 +357,24 @@ const server = http.createServer(async (req, res) => {
         const csrf = issueCsrfCookie(res);
         addSetCookieHeader(res, csrf.cookie);
       }
-      sendAuthUser(res, user);
+      sendAuthUser(res, user, 200, { workspaceUsedBytes: getWorkspaceUsedBytes(user.id) });
       return;
     }
 
     if (path === '/api/admin/me' && req.method === 'GET') {
       const user = await requireAdmin(req, res);
       if (!user) return;
-      sendAuthUser(res, user);
+      sendAuthUser(res, user, 200, { workspaceUsedBytes: getWorkspaceUsedBytes(user.id) });
       return;
     }
 
     if (path === '/api/admin/users' && req.method === 'GET') {
       const user = await requireAdmin(req, res);
       if (!user) return;
-      json(res, 200, { users: await listUsers() });
+      const users = await listUsers();
+      json(res, 200, {
+        users: users.map((u) => ({ ...u, workspaceUsedBytes: getWorkspaceUsedBytes(u.id) })),
+      });
       return;
     }
 
@@ -383,19 +389,25 @@ const server = http.createServer(async (req, res) => {
     if (path.startsWith('/api/admin/users/') && req.method === 'PATCH') {
       const user = await requireAdmin(req, res);
       if (!user) return;
-      const targetId = decodeURIComponent(path.slice('/api/admin/users/'.length));
-      if (!targetId || targetId.includes('/')) {
+      const rest = path.slice('/api/admin/users/'.length);
+      const targetId = decodeURIComponent(rest.split('/')[0] || '');
+      if (!targetId || targetId.includes('..')) {
         json(res, 400, { error: '无效用户 id' });
+        return;
+      }
+      if (rest === `${targetId}/workspace-usage/reconcile` || rest.endsWith('/workspace-usage/reconcile')) {
+        json(res, 400, { error: '请使用 POST 同步用量' });
         return;
       }
       const body = await readBody(req);
       const role = body.role != null ? String(body.role) : undefined;
       const status = body.status != null ? String(body.status) : undefined;
-      if (role == null && status == null) {
-        json(res, 400, { error: '至少提供 role 或 status' });
+      const workspaceQuotaBytes = body.workspaceQuotaBytes != null ? body.workspaceQuotaBytes : undefined;
+      if (role == null && status == null && workspaceQuotaBytes == null) {
+        json(res, 400, { error: '至少提供 role、status 或 workspaceQuotaBytes' });
         return;
       }
-      const next = await updateUserById(targetId, { role, status });
+      const next = await updateUserById(targetId, { role, status, workspaceQuotaBytes });
       if (!next) {
         json(res, 404, { error: '用户不存在' });
         return;
@@ -405,11 +417,44 @@ const server = http.createServer(async (req, res) => {
         actorIdentifier: user.username,
         action: 'admin.user_update',
         targetUserId: next.id,
-        meta: { role: next.role, status: next.status },
+        meta: { role: next.role, status: next.status, workspaceQuotaBytes: next.workspaceQuotaBytes },
         ip: getClientIp(req),
         userAgent: req.headers['user-agent'],
       });
-      json(res, 200, { user: next });
+      json(res, 200, { user: { ...next, workspaceUsedBytes: getWorkspaceUsedBytes(next.id) } });
+      return;
+    }
+
+    if (path.startsWith('/api/admin/users/') && req.method === 'POST') {
+      const user = await requireAdmin(req, res);
+      if (!user) return;
+      const suffix = path.slice('/api/admin/users/'.length);
+      const m = suffix.match(/^([^/]+)\/workspace-usage\/reconcile\/?$/);
+      if (!m) {
+        json(res, 404, { error: 'Not found' });
+        return;
+      }
+      const targetId = decodeURIComponent(m[1]);
+      if (!isR2Configured()) {
+        json(res, 503, { error: 'R2 未配置，无法扫描' });
+        return;
+      }
+      try {
+        const { usedBytes } = await runWorkspaceUsageReconcileForUser(targetId);
+        await createAuditLog({
+          actorUserId: user.id,
+          actorIdentifier: user.username,
+          action: 'admin.workspace_usage_reconcile',
+          targetUserId: targetId,
+          meta: { usedBytes },
+          ip: getClientIp(req),
+          userAgent: req.headers['user-agent'],
+        });
+        json(res, 200, { ok: true, userId: targetId, workspaceUsedBytes: usedBytes });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        json(res, 400, { error: message });
+      }
       return;
     }
 

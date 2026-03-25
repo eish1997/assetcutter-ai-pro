@@ -103,17 +103,29 @@ async function putBinaryToPresignedUrl(uploadUrl: string, contentType: string, b
   if (!put.ok) throw new Error(`R2 PUT 失败（${put.status}）`);
 }
 
-async function requestUploadUrl(objectKey: string, contentType: string): Promise<string> {
+async function requestUploadUrl(objectKey: string, contentType: string, contentLength?: number): Promise<string> {
+  const payload: Record<string, unknown> = { objectKey, contentType, expiresIn: 900 };
+  if (typeof contentLength === 'number' && contentLength > 0) {
+    payload.contentLength = Math.floor(contentLength);
+  }
   const { uploadUrl } = await requestJson<UploadUrlResponse>(r2ApiUrl('/upload-url'), {
     method: 'POST',
-    body: JSON.stringify({ objectKey, contentType, expiresIn: 900 }),
+    body: JSON.stringify(payload),
   });
   return uploadUrl;
 }
 
+async function commitRegisterUpload(objectKey: string): Promise<void> {
+  await requestJson<{ ok?: boolean }>(r2ApiUrl('/register-upload'), {
+    method: 'POST',
+    body: JSON.stringify({ objectKey }),
+  });
+}
+
 async function uploadBytes(objectKey: string, contentType: string, buffer: ArrayBuffer): Promise<void> {
-  const uploadUrl = await requestUploadUrl(objectKey, contentType);
+  const uploadUrl = await requestUploadUrl(objectKey, contentType, buffer.byteLength);
   await putBinaryToPresignedUrl(uploadUrl, contentType, buffer);
+  await commitRegisterUpload(objectKey);
 }
 
 async function sha256HexOfBuffer(buffer: ArrayBuffer): Promise<string | null> {

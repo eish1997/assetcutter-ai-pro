@@ -11,6 +11,10 @@ export type AuthUser = {
   status: string;
   createdAt: string;
   updatedAt: string;
+  /** 工作区云存储（图片等）配额，字节；默认 200MB */
+  workspaceQuotaBytes?: number;
+  /** 当前已用字节（登录/me 与管理员列表会带上） */
+  workspaceUsedBytes?: number;
 };
 
 type AuthResponse = { user: AuthUser };

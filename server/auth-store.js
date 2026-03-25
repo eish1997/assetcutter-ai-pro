@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import pg from 'pg';
+import { DEFAULT_WORKSPACE_QUOTA_BYTES } from './workspace-storage-usage.js';
 
 const DB_DIR = path.resolve(process.cwd(), 'server', 'data');
 const DB_FILE = path.join(DB_DIR, 'auth-db.json');
@@ -72,6 +73,14 @@ async function ensurePostgres() {
     );
   `);
   await p.query(`CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at DESC);`);
+  await p.query(`
+    ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS workspace_quota_bytes BIGINT;
+  `);
+  await p.query(`UPDATE users SET workspace_quota_bytes = $1 WHERE workspace_quota_bytes IS NULL`, [
+    DEFAULT_WORKSPACE_QUOTA_BYTES,
+  ]);
+  await p.query('ALTER TABLE users ALTER COLUMN workspace_quota_bytes SET DEFAULT $1', [DEFAULT_WORKSPACE_QUOTA_BYTES]);
   pgReady = true;
 }
 
@@ -160,6 +169,7 @@ function publicUser(user) {
     status: user.status,
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
+    workspaceQuotaBytes: getWorkspaceQuotaBytesForUser(user),
   };
 }
 
@@ -171,7 +181,25 @@ function safeStatus(status) {
   return status === 'disabled' ? 'disabled' : 'active';
 }
 
+export function getWorkspaceQuotaBytesForUser(row) {
+  if (!row) return DEFAULT_WORKSPACE_QUOTA_BYTES;
+  const q = row.workspaceQuotaBytes;
+  if (typeof q === 'number' && Number.isFinite(q) && q >= 1_000_000) return Math.floor(q);
+  return DEFAULT_WORKSPACE_QUOTA_BYTES;
+}
+
+function validateWorkspaceQuotaBytesInput(raw) {
+  const n = Math.floor(Number(raw));
+  if (!Number.isFinite(n) || n < 1 * 1024 * 1024) throw new Error('工作区云配额至少为 1MB');
+  if (n > 50 * 1024 * 1024 * 1024) throw new Error('工作区云配额过大（上限 50GB）');
+  return n;
+}
+
 function mapUserRow(row) {
+  const wqb =
+    row.workspace_quota_bytes != null && row.workspace_quota_bytes !== ''
+      ? Number(row.workspace_quota_bytes)
+      : undefined;
   return {
     id: row.id,
     username: row.username,
@@ -181,6 +209,8 @@ function mapUserRow(row) {
     status: row.status,
     createdAt: new Date(row.created_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString(),
+    workspaceQuotaBytes:
+      typeof wqb === 'number' && Number.isFinite(wqb) && wqb >= 1_000_000 ? Math.floor(wqb) : undefined,
   };
 }
 
@@ -324,6 +354,10 @@ export async function updateUserById(id, patch) {
       }
     }
     await p.query('UPDATE users SET role = $2, status = $3, updated_at = NOW() WHERE id = $1', [id, nextRole, nextStatus]);
+    if (patch?.workspaceQuotaBytes != null) {
+      const n = validateWorkspaceQuotaBytesInput(patch.workspaceQuotaBytes);
+      await p.query('UPDATE users SET workspace_quota_bytes = $2, updated_at = NOW() WHERE id = $1', [id, n]);
+    }
     const out = await p.query('SELECT * FROM users WHERE id = $1 LIMIT 1', [id]);
     return out.rows[0] ? publicUser(mapUserRow(out.rows[0])) : null;
   }
@@ -344,6 +378,9 @@ export async function updateUserById(id, patch) {
   }
   if (patch?.role != null) target.role = safeRole(patch.role);
   if (patch?.status != null) target.status = safeStatus(patch.status);
+  if (patch?.workspaceQuotaBytes != null) {
+    target.workspaceQuotaBytes = validateWorkspaceQuotaBytesInput(patch.workspaceQuotaBytes);
+  }
   target.updatedAt = nowIso();
   writeDb(db);
   return publicUser(target);
@@ -516,7 +553,8 @@ export async function getSessionWithUser(token) {
     const p = getPool();
     const tokenHash = hashToken(token);
     const res = await p.query(
-      `SELECT s.*, u.id AS u_id, u.username, u.email, u.role, u.status, u.created_at AS u_created_at, u.updated_at AS u_updated_at
+      `SELECT s.*, u.id AS u_id, u.username, u.email, u.role, u.status, u.created_at AS u_created_at, u.updated_at AS u_updated_at,
+              u.workspace_quota_bytes AS u_workspace_quota_bytes
        FROM sessions s
        JOIN users u ON u.id = s.user_id
        WHERE s.token_hash = $1
@@ -528,7 +566,7 @@ export async function getSessionWithUser(token) {
     const session = mapSessionRow(row);
     if (session.revokedAt) return null;
     if (new Date(session.expiresAt).getTime() <= Date.now()) return null;
-    const user = {
+    const rawUser = {
       id: row.u_id,
       username: row.username,
       email: row.email,
@@ -536,11 +574,13 @@ export async function getSessionWithUser(token) {
       status: row.status,
       createdAt: new Date(row.u_created_at).toISOString(),
       updatedAt: new Date(row.u_updated_at).toISOString(),
+      workspaceQuotaBytes:
+        row.u_workspace_quota_bytes != null ? Number(row.u_workspace_quota_bytes) : undefined,
     };
-    if (user.status !== 'active') return null;
+    if (rawUser.status !== 'active') return null;
     return {
       session,
-      user,
+      user: publicUser(rawUser),
       shouldRotate: Date.now() - new Date(session.createdAt).getTime() > DAY_MS,
     };
   }

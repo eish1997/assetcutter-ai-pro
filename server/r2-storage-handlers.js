@@ -1,5 +1,14 @@
 import { S3Client, ListObjectsV2Command, DeleteObjectCommand, HeadObjectCommand, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { findUserById, getWorkspaceQuotaBytesForUser } from './auth-store.js';
+import {
+  getTrackedBytesForKey,
+  getWorkspaceUsedBytes,
+  isBillableWorkspaceImageKey,
+  registerBillableObjectAfterPut,
+  replaceUserUsageFromScan,
+  unregisterBillableObjectAfterDelete,
+} from './workspace-storage-usage.js';
 
 const MAX_BODY_BYTES = 1024 * 1024;
 const DEFAULT_ALLOWED_ORIGINS = ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:5173', 'http://127.0.0.1:5173'];
@@ -188,6 +197,30 @@ async function handleCreateUploadUrl(req, res, sessionUserId, s3) {
     sendJson(res, msg === '未登录' ? 401 : 403, { error: msg });
     return;
   }
+  const billable = !!(sessionUserId && isBillableWorkspaceImageKey(sessionUserId, objectKey));
+  if (billable) {
+    const declared = Math.floor(Number(body.contentLength));
+    if (!Number.isFinite(declared) || declared < 1) {
+      sendJson(res, 400, { error: '上传工作区图片必须提供 contentLength（字节）', code: 'CONTENT_LENGTH_REQUIRED' });
+      return;
+    }
+    const dbUser = await findUserById(sessionUserId);
+    if (!dbUser) {
+      sendJson(res, 401, { error: '用户不存在' });
+      return;
+    }
+    const quota = getWorkspaceQuotaBytesForUser(dbUser);
+    const used = getWorkspaceUsedBytes(sessionUserId);
+    const oldTracked = getTrackedBytesForKey(sessionUserId, objectKey);
+    const projected = used - oldTracked + declared;
+    if (projected > quota) {
+      sendJson(res, 403, {
+        error: '工作区云空间已满，无法上传该图片。新内容将仅保存在本机；请删除云端资源或联系管理员扩容。',
+        code: 'STORAGE_QUOTA_EXCEEDED',
+      });
+      return;
+    }
+  }
   const contentType = String(body.contentType || 'application/octet-stream').trim() || 'application/octet-stream';
   const expiresIn = Math.min(parsePositiveInt(body.expiresIn, 600), 3600);
 
@@ -260,6 +293,77 @@ async function handleCreateDownloadUrl(req, res, sessionUserId, s3) {
   sendJson(res, 200, { objectKey, expiresIn, downloadUrl });
 }
 
+async function handleRegisterUpload(req, res, sessionUserId, s3) {
+  const bodyText = await readBody(req);
+  let body = {};
+  if (bodyText) {
+    try {
+      body = JSON.parse(bodyText);
+    } catch {
+      sendJson(res, 400, { error: 'Invalid JSON body' });
+      return;
+    }
+  }
+  const objectKey = safeObjectKey(body.objectKey);
+  try {
+    assertUserObjectKey(sessionUserId, objectKey);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    sendJson(res, msg === '未登录' ? 401 : 403, { error: msg });
+    return;
+  }
+  const bucket = R2_BUCKET();
+  let headSize = 0;
+  try {
+    const head = await s3.send(
+      new HeadObjectCommand({
+        Bucket: bucket,
+        Key: objectKey,
+      })
+    );
+    headSize = Number(head.ContentLength || 0);
+  } catch {
+    sendJson(res, 404, { error: '对象尚未写入或不存在，请稍后重试 register-upload' });
+    return;
+  }
+  if (!isBillableWorkspaceImageKey(sessionUserId, objectKey)) {
+    sendJson(res, 200, {
+      ok: true,
+      billable: false,
+      usedBytes: getWorkspaceUsedBytes(sessionUserId),
+    });
+    return;
+  }
+  const dbUser = await findUserById(sessionUserId);
+  if (!dbUser) {
+    sendJson(res, 401, { error: '用户不存在' });
+    return;
+  }
+  const quota = getWorkspaceQuotaBytesForUser(dbUser);
+  const used = getWorkspaceUsedBytes(sessionUserId);
+  const oldTracked = getTrackedBytesForKey(sessionUserId, objectKey);
+  if (used - oldTracked + headSize > quota) {
+    try {
+      await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: objectKey }));
+    } catch {
+      /* ignore */
+    }
+    sendJson(res, 403, {
+      error: '上传后超出工作区云配额，已丢弃该对象。',
+      code: 'STORAGE_QUOTA_EXCEEDED',
+      usedBytes: getWorkspaceUsedBytes(sessionUserId),
+      quotaBytes: quota,
+    });
+    return;
+  }
+  const { ok, usedBytes } = registerBillableObjectAfterPut(sessionUserId, objectKey, headSize);
+  if (!ok) {
+    sendJson(res, 400, { error: '登记用量失败' });
+    return;
+  }
+  sendJson(res, 200, { ok: true, billable: true, usedBytes, quotaBytes: quota });
+}
+
 async function handleListObjects(req, res, parsedUrl, sessionUserId, s3) {
   let prefix;
   try {
@@ -322,13 +426,22 @@ async function handleDeleteObject(req, res, objectKey, sessionUserId, s3) {
     sendJson(res, msg === '未登录' ? 401 : 403, { error: msg });
     return;
   }
+  const bucket = R2_BUCKET();
+  let headSize = 0;
+  try {
+    const head = await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: objectKey }));
+    headSize = Number(head.ContentLength || 0);
+  } catch {
+    headSize = 0;
+  }
   await s3.send(
     new DeleteObjectCommand({
-      Bucket: R2_BUCKET(),
+      Bucket: bucket,
       Key: objectKey,
     })
   );
-  sendJson(res, 200, { ok: true, objectKey });
+  const { usedBytes } = unregisterBillableObjectAfterDelete(sessionUserId, objectKey, headSize);
+  sendJson(res, 200, { ok: true, objectKey, usedBytes });
 }
 
 /** inject.embedded：挂在 auth 同源；inject.resolveSessionUserId：直接解析会话，避免再请求 AUTH_ME_URL */
@@ -383,6 +496,11 @@ export async function handleR2StorageRequest(req, res, inject = {}) {
       return;
     }
 
+    if (pathname === '/api/r2/register-upload' && req.method === 'POST') {
+      await handleRegisterUpload(req, res, sessionUserId, s3);
+      return;
+    }
+
     if (pathname === '/api/r2/download-url' && req.method === 'POST') {
       await handleCreateDownloadUrl(req, res, sessionUserId, s3);
       return;
@@ -412,4 +530,40 @@ export async function handleR2StorageRequest(req, res, inject = {}) {
     const message = error instanceof Error ? error.message : String(error);
     sendJson(res, 400, { error: message });
   }
+}
+
+/** 管理端：扫描 R2 用户工作区前缀，重建「工作流图片」用量账本 */
+export async function reconcileUserWorkspaceBillableUsage(userId, s3, bucket) {
+  const uid = String(userId || '').trim();
+  if (!uid) throw new Error('userId 无效');
+  const prefix = `users/${uid}/workspace/`;
+  const keyToSize = {};
+  let token;
+  for (;;) {
+    const result = await s3.send(
+      new ListObjectsV2Command({
+        Bucket: bucket,
+        Prefix: prefix,
+        MaxKeys: 1000,
+        ContinuationToken: token || undefined,
+      })
+    );
+    for (const item of result.Contents || []) {
+      const k = item.Key || '';
+      if (!k) continue;
+      if (!isBillableWorkspaceImageKey(uid, k)) continue;
+      keyToSize[k] = Number(item.Size || 0);
+    }
+    if (result.IsTruncated && result.NextContinuationToken) token = result.NextContinuationToken;
+    else break;
+  }
+  return replaceUserUsageFromScan(uid, keyToSize);
+}
+
+export function runWorkspaceUsageReconcileForUser(userId) {
+  assertR2Config();
+  const s3 = getS3();
+  const bucket = R2_BUCKET();
+  if (!s3 || !bucket) throw new Error('R2 未配置');
+  return reconcileUserWorkspaceBillableUsage(userId, s3, bucket);
 }
