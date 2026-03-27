@@ -1231,6 +1231,35 @@ export async function parsePromptStructured(
   }
 }
 
+/** 将英文/混合文本翻译为简体中文（保留原有结构与项目符号） */
+export async function translateToChinese(
+  text: string,
+  model = 'gemini-3-flash-preview',
+  options?: GeminiRequestOptions
+): Promise<string> {
+  const source = (text || '').trim();
+  if (!source) return '';
+  return callWithRetry(async (signal) => {
+    const ai = getAI();
+    const response = await ai.models.generateContent({
+      model,
+      contents: {
+        parts: [
+          {
+            text:
+              'Translate the following text into concise Simplified Chinese. Keep structure, bullet points, and code-like fragments when possible. Output ONLY the translated text.'
+          },
+          { text: source.slice(0, 12000) }
+        ]
+      },
+      config: buildGeminiConfig({}, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)
+    });
+    const out = response.text?.trim();
+    if (!out) throw new Error('Empty translation response');
+    return out;
+  }, options);
+}
+
 /** 生成贴图模块：根据功能贴图 + 描述生成 PBR 贴图（Base Color / Roughness / Metallic） */
 export interface PbrTextureMapInput {
   type: string;

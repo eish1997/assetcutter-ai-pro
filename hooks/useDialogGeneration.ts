@@ -12,7 +12,6 @@ import {
 } from '../services/geminiService';
 import type {
   AppTask,
-  DialogImageSizeMode,
   DialogMessage,
   DialogMessageVersion,
   DialogSession,
@@ -21,7 +20,7 @@ import type {
   SystemConfig,
 } from '../types';
 
-type DialogInputImage = { id: string; data: string };
+type DialogInputImage = { id: string; data: string; fromTemp?: boolean };
 
 type UseDialogGenerationParams = {
   dialogSessionIds: string[];
@@ -33,7 +32,6 @@ type UseDialogGenerationParams = {
   setDialogMessages: (updater: SetStateAction<DialogMessage[]>) => void;
   dialogAutoGenerateImage: boolean;
   dialogModel: string;
-  dialogSizeMode: DialogImageSizeMode;
   dialogAspectRatio: string;
   dialogImageSize: string;
   dialogActiveSessionIdResolved: string;
@@ -112,7 +110,6 @@ export function useDialogGeneration({
   setDialogMessages,
   dialogAutoGenerateImage,
   dialogModel,
-  dialogSizeMode,
   dialogAspectRatio,
   dialogImageSize,
   dialogActiveSessionIdResolved,
@@ -154,11 +151,12 @@ export function useDialogGeneration({
     dialogAbortControllersRef.current[sid] = controller;
   }, []);
 
-  const resolveImageOptions = useCallback(() => (
-    dialogSizeMode === 'manual'
-      ? { aspectRatio: dialogAspectRatio, imageSize: dialogImageSize }
-      : undefined
-  ), [dialogAspectRatio, dialogImageSize, dialogSizeMode]);
+  const resolveImageOptions = useCallback(() => {
+    if (dialogAspectRatio === 'adaptive') {
+      return { imageSize: dialogImageSize };
+    }
+    return { aspectRatio: dialogAspectRatio, imageSize: dialogImageSize };
+  }, [dialogAspectRatio, dialogImageSize]);
 
   const appendAssistantMessage = useCallback((message: DialogMessage) => {
     setDialogMessages((prev) => [...prev, message]);
@@ -353,9 +351,10 @@ export function useDialogGeneration({
       timestamp: Date.now(),
     };
     setDialogMessages((prev) => [...prev, userMsg]);
-    for (const image of sourceImages) {
+    for (const image of dialogInputImages) {
+      if (image.fromTemp) continue;
       addToDialogTempLibrary({
-        data: image,
+        data: image.data,
         sourceSessionId: sid,
         sourceMessageId: userMsg.id,
         sourceType: 'user_input',

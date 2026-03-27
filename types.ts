@@ -40,6 +40,12 @@ export type WinningSnippet = {
   text: string;
   timestamp: number;
   source?: string;
+  /** 擂主预览图（可选） */
+  previewImage?: string;
+  /** 回顾用：保存当时的时间轴快照（可选） */
+  timelineSnapshot?: ArenaTimelineBlock[];
+  /** 回顾用：保存当时的步骤日志快照（可选） */
+  stepLogSnapshot?: ArenaStepEntry[];
 };
 
 export type AppMode = keyof typeof AppMode;
@@ -211,8 +217,6 @@ export type GenerationRecord = {
 };
 
 // ---------- 对话式生图模块 ----------
-export type DialogImageSizeMode = 'adaptive' | 'manual';
-
 /** 支持的画面比例（Gemini imageConfig.aspectRatio） */
 export const SUPPORTED_ASPECT_RATIOS = [
   { value: '1:1', label: '1:1' },
@@ -223,6 +227,12 @@ export const SUPPORTED_ASPECT_RATIOS = [
   { value: '3:2', label: '3:2' },
   { value: '2:3', label: '2:3' },
   { value: '21:9', label: '21:9' },
+] as const;
+
+/** 对话生图：比例选项（「自适应」= 不传 aspectRatio/imageSize，由输入图与模型决定） */
+export const DIALOG_ASPECT_RATIO_OPTIONS = [
+  { value: 'adaptive', label: '自适应' },
+  ...SUPPORTED_ASPECT_RATIOS,
 ] as const;
 
 /** 支持的输出尺寸（Gemini imageConfig.imageSize） */

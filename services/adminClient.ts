@@ -18,7 +18,7 @@ type AuditLog = {
 type AuditLogsResponse = { logs: AuditLog[] };
 
 export async function fetchAdminUsers() {
-  return requestJson<UsersResponse>(apiUrl('/api/admin/users'));
+  return requestJson<UsersResponse>(apiUrl('/api/admin/users'), { cache: 'no-store' });
 }
 
 export async function updateAdminUser(

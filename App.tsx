@@ -4,7 +4,7 @@ import { processTexture, DEFAULT_PROMPTS, normalizeApiErrorMessage, getTexturePr
 import { loadRecords, addRecord as addGenerationRecord, updateScore as updateGenerationScore } from './services/recordStore';
 import { loadSnippets } from './services/snippetStore';
 import { PRO_VIEW_IDS, type Submit3DProInput, type Submit3DRapidInput } from './services/tencentService';
-import { AppStep, AppMode, LibraryItem, SystemConfig, AppTask, AssetCategory, DialogMessage, DialogSession, DialogImageSizeMode, DialogTempItem, DialogImageGear, SUPPORTED_ASPECT_RATIOS, SUPPORTED_IMAGE_SIZES, DIALOG_IMAGE_MODELS, DIALOG_IMAGE_GEARS, type GenerationRecord, type CustomAppModule, type CapabilitySet, type WorkflowAsset, type WorkflowPendingTask, type ArenaCurrentStep, type ArenaStepEntry, type ArenaTimelineBlock } from './types';
+import { AppStep, AppMode, LibraryItem, SystemConfig, AppTask, AssetCategory, DialogMessage, DialogSession, DialogTempItem, DialogImageGear, DIALOG_ASPECT_RATIO_OPTIONS, SUPPORTED_IMAGE_SIZES, DIALOG_IMAGE_GEARS, type GenerationRecord, type CustomAppModule, type CapabilitySet, type WorkflowAsset, type WorkflowPendingTask, type ArenaCurrentStep, type ArenaStepEntry, type ArenaTimelineBlock } from './types';
 import DropdownSelect from './components/DropdownSelect';
 import MultiViewUpload from './components/MultiViewUpload';
 import type { ViewId } from './components/MultiViewUpload';
@@ -16,7 +16,7 @@ import { useDialogWorkspace } from './hooks/useDialogWorkspace';
 import { useDialogGeneration, getDialogUnderstandImageInput } from './hooks/useDialogGeneration';
 import { useDialogPostProcessing } from './hooks/useDialogPostProcessing';
 import { useAuth } from './components/auth/AuthContext';
-import { CustomDropdown } from './components/ui/CustomDropdown';
+import { CustomDropdown, DROPDOWN_TRIGGER_COMPACT } from './components/ui/CustomDropdown';
 import WorkspaceProjectShell from './components/WorkspaceProjectShell';
 import {
   loadWorkspaceProjects,
@@ -40,6 +40,7 @@ import {
 } from './services/workspaceCloudSync';
 import { hydrateWorkflowBundleFromCloud } from './services/workspaceR2ImageBundle';
 import { HttpRequestError } from './services/httpClient';
+import { fileExtensionForImageDataUrl } from './services/imageDataUrl';
 
 function formatWorkspaceCloudMb(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
@@ -199,7 +200,15 @@ const AssetViewer: React.FC<{ item: LibraryItem | null; onClose: () => void }> =
             </p>
           </div>
           <div className="flex flex-wrap gap-3">
-            {item.data && !isPlaceholderPreview && <a href={item.data} download={`${item.label}.png`} className="px-6 py-3 bg-blue-600 rounded-full font-black text-[10px] uppercase tracking-widest electric-glow">下载预览图</a>}
+            {item.data && !isPlaceholderPreview && (
+              <a
+                href={item.data}
+                download={`${item.label}.${fileExtensionForImageDataUrl(item.data)}`}
+                className="px-6 py-3 bg-blue-600 rounded-full font-black text-[10px] uppercase tracking-widest electric-glow"
+              >
+                下载预览图
+              </a>
+            )}
             {item.modelUrls?.map((url, i) => (
               <a key={i} href={url} target="_blank" rel="noopener noreferrer" className="px-6 py-3 bg-indigo-600/80 rounded-full font-black text-[10px] uppercase tracking-widest hover:bg-indigo-500/80 transition-colors">下载模型{item.modelUrls!.length > 1 ? ` ${i + 1}` : ''}</a>
             ))}
@@ -653,8 +662,6 @@ const MainApp: React.FC = () => {
   useEffect(() => {
     if (isExperimentalMode(mode)) setExperimentalNavExpanded(true);
   }, [mode, isExperimentalMode]);
-  const [dialogOptionsExpanded, setDialogOptionsExpanded] = useState(false);
-  const [dialogModelDropdownOpen, setDialogModelDropdownOpen] = useState(false);
   const [activeAssetId, setActiveAssetId] = useState<LibraryItem | null>(null);
   const [libFilter, setLibFilter] = useState<AssetCategory | 'ALL'>('ALL');
   const [libSelectedGroupIds, setLibSelectedGroupIds] = useState<Set<string>>(new Set());
@@ -1088,14 +1095,13 @@ const MainApp: React.FC = () => {
   // 对话式生图状态
   const [dialogInputText, setDialogInputText] = useState('');
   const DIALOG_INPUT_IMAGES_MAX = 9;
-  const [dialogInputImages, setDialogInputImages] = useState<Array<{ id: string; data: string }>>([]);
+  const [dialogInputImages, setDialogInputImages] = useState<Array<{ id: string; data: string; fromTemp?: boolean }>>([]);
   const [dialogImageGear, setDialogImageGear] = useState<DialogImageGear>('standard');
   const [dialogModel, setDialogModel] = useState<string>(
     () => DIALOG_IMAGE_GEARS.find((g) => g.id === 'standard')?.modelId || DIALOG_IMAGE_GEARS[0].modelId
   );
   const [dialogAutoGenerateImage, setDialogAutoGenerateImage] = useState(true);
-  const [dialogSizeMode, setDialogSizeMode] = useState<DialogImageSizeMode>('adaptive');
-  const [dialogAspectRatio, setDialogAspectRatio] = useState<string>(SUPPORTED_ASPECT_RATIOS[0].value);
+  const [dialogAspectRatio, setDialogAspectRatio] = useState<string>('adaptive');
   const [dialogImageSize, setDialogImageSize] = useState<string>(SUPPORTED_IMAGE_SIZES[1].value);
   const [dialogEditingMessageId, setDialogEditingMessageId] = useState<string | null>(null);
   const [dialogEditingText, setDialogEditingText] = useState('');
@@ -1168,7 +1174,7 @@ const MainApp: React.FC = () => {
     if (item.sourceMessageId) setTimeout(() => document.getElementById(`msg-${item.sourceMessageId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 150);
   };
   const handleDialogTempAddToInput = (item: DialogTempItem) => {
-    setDialogInputImages(prev => (prev.length >= DIALOG_INPUT_IMAGES_MAX ? prev : [...prev, { id: item.id, data: item.data }]));
+    setDialogInputImages(prev => (prev.length >= DIALOG_INPUT_IMAGES_MAX ? prev : [...prev, { id: item.id, data: item.data, fromTemp: true }]));
     if (item.userPrompt || item.understoodPrompt) setDialogInputText(item.userPrompt || item.understoodPrompt || '');
     dialogEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
@@ -1298,7 +1304,6 @@ const MainApp: React.FC = () => {
     setDialogMessages,
     dialogAutoGenerateImage,
     dialogModel,
-    dialogSizeMode,
     dialogAspectRatio,
     dialogImageSize,
     dialogActiveSessionIdResolved,
@@ -1569,7 +1574,7 @@ const MainApp: React.FC = () => {
     if (!v?.resultImageBase64) return;
     const a = document.createElement('a');
     a.href = v.resultImageBase64;
-    a.download = `对话_${msg.id.slice(0, 6)}.png`;
+    a.download = `对话_${msg.id.slice(0, 6)}.${fileExtensionForImageDataUrl(v.resultImageBase64)}`;
     a.click();
   };
 
@@ -1590,7 +1595,7 @@ const MainApp: React.FC = () => {
         const file = item.getAsFile();
         if (file) {
           const reader = new FileReader();
-          reader.onload = () => setDialogInputImages(prev => prev.length >= DIALOG_INPUT_IMAGES_MAX ? prev : [...prev, { id: Math.random().toString(36).slice(2, 11), data: reader.result as string }]);
+          reader.onload = () => setDialogInputImages(prev => prev.length >= DIALOG_INPUT_IMAGES_MAX ? prev : [...prev, { id: Math.random().toString(36).slice(2, 11), data: reader.result as string, fromTemp: false }]);
           reader.readAsDataURL(file);
         }
         return;
@@ -1625,7 +1630,7 @@ const MainApp: React.FC = () => {
       if (!item.data) continue;
       const a = document.createElement('a');
       a.href = item.data;
-      a.download = `${item.label || '资产'}_${i + 1}.png`;
+      a.download = `${item.label || '资产'}_${i + 1}.${fileExtensionForImageDataUrl(item.data)}`;
       a.click();
       if (i < toDownload.length - 1) await new Promise(r => setTimeout(r, 300));
     }
@@ -1641,7 +1646,7 @@ const MainApp: React.FC = () => {
   /** 根据格式将资产发送到各模块：图片可继续编辑/生成3D/贴图，3D 模型可进入生成3D 各子模块 */
   const sendLibraryItemToDialog = (item: LibraryItem) => {
     if (!item.data || item.data.includes('data:image/svg+xml')) return;
-    setDialogInputImages([{ id: item.id, data: item.data }]);
+    setDialogInputImages([{ id: item.id, data: item.data, fromTemp: true }]);
     setMode(AppMode.DIALOG);
     setDialogValidationError(null);
     setIsSidebarOpen(false);
@@ -2953,9 +2958,9 @@ const MainApp: React.FC = () => {
                   )}
                   <div ref={dialogEndRef} />
                   </div>
-                  {/* 输入区：支持粘贴图片；模式切换 + 可收起的详细设置 + 文案 + 发送 */}
+                  {/* 输入区：支持粘贴图片；档位 + 比例/尺寸 + 文案 + 发送（模型由档位决定） */}
                   <div className="glass rounded-[2rem] p-4 lg:p-6 border border-white/5 shrink-0 space-y-4" onPaste={handleDialogPaste}>
-                  <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex flex-wrap items-center gap-2 lg:gap-3">
                     <span className="text-[9px] font-black text-gray-500 uppercase">开启生图</span>
                     <button type="button" role="switch" aria-checked={dialogAutoGenerateImage} onClick={() => setDialogAutoGenerateImage(p => !p)} className={`relative w-11 h-6 rounded-full transition-colors ${dialogAutoGenerateImage ? 'bg-blue-600' : 'bg-white/10'}`}>
                       <span className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform ${dialogAutoGenerateImage ? 'left-6' : 'left-1'}`} />
@@ -2966,16 +2971,24 @@ const MainApp: React.FC = () => {
                         <button key={g.id} type="button" onClick={() => { setDialogImageGear(g.id); setDialogModel(g.modelId); }} className={`px-3 py-2 text-[9px] font-black uppercase transition-colors ${dialogImageGear === g.id ? 'bg-blue-600 text-white' : 'bg-white/5 text-gray-500 hover:bg-white/10'}`} title={g.modelId}>{g.label}</button>
                       ))}
                     </div>
-                    <button onClick={() => setDialogOptionsExpanded(p => !p)} className="px-3 py-2 rounded-xl text-[9px] font-black uppercase border border-white/10 bg-white/5 hover:bg-white/10 transition-all">
-                      {dialogOptionsExpanded ? '详细设置 ▲' : '详细设置 ▼'}
-                    </button>
+                    <span className="text-[9px] font-black text-gray-500 uppercase">比例</span>
+                    <CustomDropdown
+                      options={DIALOG_ASPECT_RATIO_OPTIONS.map((r) => ({ value: r.value, label: r.label }))}
+                      value={dialogAspectRatio}
+                      onChange={setDialogAspectRatio}
+                      triggerClassName={`${DROPDOWN_TRIGGER_COMPACT} min-w-[5.5rem]`}
+                    />
+                    <span className="text-[9px] font-black text-gray-500 uppercase">尺寸</span>
+                    <CustomDropdown
+                      options={SUPPORTED_IMAGE_SIZES.map((s) => ({ value: s.value, label: s.label }))}
+                      value={dialogImageSize}
+                      onChange={setDialogImageSize}
+                      triggerClassName={`${DROPDOWN_TRIGGER_COMPACT} min-w-[4rem]`}
+                    />
                   </div>
                   <div className="flex flex-col gap-2">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <label className="cursor-pointer flex items-center gap-2 px-4 py-2 bg-white/5 border border-white/10 rounded-xl text-[9px] font-black uppercase hover:bg-white/10 transition-all">
-                        <span>🖼️</span> 上传图片
-                          <input type="file" className="hidden" accept="image/*" onChange={e => { handleFileUpload(e, (b) => { setDialogInputImages(prev => prev.length >= DIALOG_INPUT_IMAGES_MAX ? prev : [...prev, { id: Math.random().toString(36).slice(2, 11), data: b }]); setDialogValidationError(null); }); }} />
-                        </label>
+                    {dialogInputImages.length > 0 && (
+                      <div className="flex flex-wrap items-center gap-2">
                         {dialogInputImages.map((img, i) => (
                           <div key={img.id} className="relative inline-flex items-center gap-1 rounded-lg border border-white/10 bg-white/5 overflow-hidden">
                             <span className="pl-2 text-[8px] font-black text-gray-500">图{i + 1}</span>
@@ -2984,54 +2997,9 @@ const MainApp: React.FC = () => {
                           </div>
                         ))}
                       </div>
+                    )}
                     <span className="text-[9px] text-gray-500">可添加多张图片（最多 {DIALOG_INPUT_IMAGES_MAX} 张），输入 @ 弹出选择图片；点击临时库图片直接加入输入框 · Ctrl+V 粘贴 · 无图时直接输入即文字对话</span>
                   </div>
-                  {dialogOptionsExpanded && (
-                    <>
-                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                        <div className="space-y-2 relative">
-                          <div className="text-[9px] font-black text-gray-500 uppercase">生图模型</div>
-                          <div className="relative">
-                            <button type="button" onClick={() => setDialogModelDropdownOpen(p => !p)} className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-[11px] text-left flex items-center justify-between outline-none focus:border-blue-500 hover:bg-white/10 transition-colors">
-                              <span>{DIALOG_IMAGE_MODELS.find(m => m.id === dialogModel)?.label ?? dialogModel}</span>
-                              <span className="text-gray-500">{dialogModelDropdownOpen ? '▲' : '▼'}</span>
-                            </button>
-                            {dialogModelDropdownOpen && (
-                              <>
-                                <div className="fixed inset-0 z-[1002]" aria-hidden onClick={() => setDialogModelDropdownOpen(false)} />
-                                <ul className="absolute top-full left-0 right-0 mt-1 z-[1003] max-h-56 overflow-y-auto rounded-xl border border-white/10 bg-[#0f0f0f] shadow-xl py-1 text-white" style={{ color: '#fff' }}>
-                                  {DIALOG_IMAGE_MODELS.map(m => (
-                                    <li key={m.id}>
-                                      <button type="button" onClick={() => { setDialogModel(m.id); setDialogModelDropdownOpen(false); const gear = DIALOG_IMAGE_GEARS.find(g => g.modelId === m.id); if (gear) setDialogImageGear(gear.id); }} className={`w-full px-4 py-3 text-left text-[11px] transition-colors ${dialogModel === m.id ? 'bg-blue-600/30 text-blue-300' : 'text-white hover:bg-white/10'}`}>
-                                        {m.label}
-                                      </button>
-                                    </li>
-                                  ))}
-                                </ul>
-                              </>
-                            )}
-                          </div>
-                        </div>
-                        <div className="space-y-2">
-                          <div className="text-[9px] font-black text-gray-500 uppercase">输出尺寸</div>
-                          <div className="flex gap-2">
-                            <button onClick={() => setDialogSizeMode('adaptive')} className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase border transition-all ${dialogSizeMode === 'adaptive' ? 'bg-blue-600 border-blue-500' : 'bg-white/5 border-white/10 text-gray-500'}`}>比例自适应</button>
-                            <button onClick={() => setDialogSizeMode('manual')} className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase border transition-all ${dialogSizeMode === 'manual' ? 'bg-blue-600 border-blue-500' : 'bg-white/5 border-white/10 text-gray-500'}`}>手动选择</button>
-                          </div>
-                          {dialogSizeMode === 'manual' && (
-                            <div className="flex gap-2 mt-2">
-                              <select value={dialogAspectRatio} onChange={e => setDialogAspectRatio(e.target.value)} className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500 transition-colors">
-                                {SUPPORTED_ASPECT_RATIOS.map(r => (<option key={r.value} value={r.value}>{r.label}</option>))}
-                              </select>
-                              <select value={dialogImageSize} onChange={e => setDialogImageSize(e.target.value)} className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500 transition-colors">
-                                {SUPPORTED_IMAGE_SIZES.map(s => (<option key={s.value} value={s.value}>{s.label}</option>))}
-                              </select>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </>
-                  )}
                   {dialogValidationError && (
                     <div className="text-[11px] text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded-xl px-4 py-2 flex items-center gap-2">
                       <span className="shrink-0">⚠</span>
@@ -3041,6 +3009,31 @@ const MainApp: React.FC = () => {
                   )}
                   <div ref={dialogInputWrapperRef} className="flex gap-3 relative">
                     <div className="flex-1 relative">
+                      <label
+                        className="absolute left-2 top-1/2 z-[1] -translate-y-1/2 flex h-9 w-9 cursor-pointer items-center justify-center rounded-lg border border-white/10 bg-white/5 text-gray-400 hover:bg-white/10 hover:text-gray-200 transition-colors"
+                        title="上传图片"
+                        aria-label="上传图片"
+                      >
+                        <input
+                          type="file"
+                          className="sr-only"
+                          accept="image/*"
+                          onChange={(e) => {
+                            handleFileUpload(e, (b) => {
+                              setDialogInputImages((prev) =>
+                                prev.length >= DIALOG_INPUT_IMAGES_MAX ? prev : [...prev, { id: Math.random().toString(36).slice(2, 11), data: b, fromTemp: false }]
+                              );
+                              setDialogValidationError(null);
+                            });
+                            e.target.value = '';
+                          }}
+                        />
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                          <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                          <circle cx="8.5" cy="8.5" r="1.5" />
+                          <path d="M21 15l-5-5L5 21" />
+                        </svg>
+                      </label>
                       <input
                         ref={dialogInputRef}
                         value={dialogInputText}
@@ -3059,7 +3052,7 @@ const MainApp: React.FC = () => {
                           if (e.key === 'Enter' && !e.shiftKey) handleDialogSend();
                         }}
                         placeholder="输入 @ 选择图片或直接输入文字；有图时描述修改需求，无图时可描述画面生成图片或与 AI 文字对话"
-                        className="w-full bg-white/5 border border-white/10 rounded-xl px-5 py-3 text-[11px] outline-none focus:border-blue-500 transition-colors placeholder:text-gray-600"
+                        className="w-full bg-white/5 border border-white/10 rounded-xl pl-12 pr-5 py-3 text-[11px] outline-none focus:border-blue-500 transition-colors placeholder:text-gray-600"
                       />
                       {atSuggestionsOpen && (dialogInputImages.length > 0 || dialogTempFiltered.length > 0) && (
                         <div className="absolute left-0 right-0 top-full mt-1 z-[1003] rounded-xl border border-white/10 bg-[#0f0f0f] shadow-xl py-1 max-h-48 overflow-y-auto">
@@ -3125,7 +3118,14 @@ const MainApp: React.FC = () => {
                               )}
                               <button onClick={(e) => { e.stopPropagation(); handleDialogTempAddToInput(item); setDialogTempPreviewId(null); }} className="shrink-0 w-full px-2 py-1 rounded-lg bg-black/70 text-[9px] font-black text-white hover:bg-green-600/80 transition-colors text-left">加入输入框</button>
                               <button onClick={(e) => { e.stopPropagation(); addDialogTempToLibrary(item); }} className="shrink-0 w-full px-2 py-1 rounded-lg bg-black/70 text-[9px] font-black text-white hover:bg-blue-600/80 transition-colors text-left">加入资产库</button>
-                              <a href={item.data} download={`临时库_${item.label || item.id}.png`} onClick={e => e.stopPropagation()} className="shrink-0 w-full px-2 py-1 rounded-lg bg-black/70 text-[9px] font-black text-white hover:bg-white/20 text-center transition-colors block">下载</a>
+                              <a
+                                href={item.data}
+                                download={`临时库_${item.label || item.id}.${fileExtensionForImageDataUrl(item.data)}`}
+                                onClick={e => e.stopPropagation()}
+                                className="shrink-0 w-full px-2 py-1 rounded-lg bg-black/70 text-[9px] font-black text-white hover:bg-white/20 text-center transition-colors block"
+                              >
+                                下载
+                              </a>
                             </div>
                           </div>
                         ))}
@@ -3168,7 +3168,13 @@ const MainApp: React.FC = () => {
                         )}
                         <button onClick={() => { handleDialogTempAddToInput(item); setDialogTempPreviewId(null); }} className="px-4 py-2 rounded-xl bg-green-600/80 text-[10px] font-black text-white hover:bg-green-500 transition-colors">加入输入框</button>
                         <button onClick={() => addDialogTempToLibrary(item)} className="px-4 py-2 rounded-xl bg-blue-600/80 text-[10px] font-black text-white hover:bg-blue-500 transition-colors">加入资产库</button>
-                        <a href={item.data} download={`临时库_${item.label || item.id}.png`} className="px-4 py-2 rounded-xl bg-white/10 text-[10px] font-black text-white hover:bg-white/20 transition-colors">下载</a>
+                        <a
+                          href={item.data}
+                          download={`临时库_${item.label || item.id}.${fileExtensionForImageDataUrl(item.data)}`}
+                          className="px-4 py-2 rounded-xl bg-white/10 text-[10px] font-black text-white hover:bg-white/20 transition-colors"
+                        >
+                          下载
+                        </a>
                         <button onClick={() => setDialogTempPreviewId(null)} className="px-4 py-2 rounded-xl bg-black/60 text-[10px] font-black text-white hover:bg-black/80">关闭</button>
                       </div>
                     </div>

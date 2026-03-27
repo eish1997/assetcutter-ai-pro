@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type SetStateAction } from 'react';
 
 import type { DialogMessage, DialogSession, DialogTempItem } from '../types';
+import { fileExtensionForImageDataUrl } from '../services/imageDataUrl';
 
 function createDialogSession(): DialogSession {
   const now = Date.now();
@@ -113,7 +114,7 @@ export function useDialogWorkspace() {
     for (let i = 0; i < list.length; i++) {
       const anchor = document.createElement('a');
       anchor.href = list[i].data;
-      anchor.download = `临时库_${list[i].label || list[i].id}.png`;
+      anchor.download = `临时库_${list[i].label || list[i].id}.${fileExtensionForImageDataUrl(list[i].data)}`;
       anchor.click();
       if (i < list.length - 1) await new Promise((resolve) => setTimeout(resolve, 300));
     }

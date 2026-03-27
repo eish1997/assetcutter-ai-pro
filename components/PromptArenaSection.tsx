@@ -1,12 +1,19 @@
-import React, { useState as useLocalState } from 'react';
-import { AppMode, ArenaStepEntry, ArenaCurrentStep, ArenaTimelineBlock, DIALOG_IMAGE_GEARS } from '../types';
-import { dialogGenerateImage, generateArenaPrompts, optimizeLoserPrompt, generateNewChallenger, getEditPrompt, normalizeApiErrorMessage, DEFAULT_PROMPTS } from '../services/geminiService';
+import React, { useEffect, useState as useLocalState } from 'react';
+import { createPortal } from 'react-dom';
+import { AppMode, ArenaStepEntry, ArenaCurrentStep, ArenaTimelineBlock, DIALOG_IMAGE_GEARS, WinningSnippet } from '../types';
+import { dialogGenerateImage, generateArenaPrompts, optimizeLoserPrompt, generateNewChallenger, getEditPrompt, normalizeApiErrorMessage, DEFAULT_PROMPTS, translateToChinese } from '../services/geminiService';
 import { loadSnippets, addSnippet, removeSnippet } from '../services/snippetStore';
 import { addChoice } from '../services/abChoiceStore';
 
-const ARENA_STEP_PREVIEW_LEN = 400;
+const ARENA_SNAPSHOT_TEXT_LIMIT = 4000;
 function stepId() {
   return `arena_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function truncateForSnapshot(text?: string): string | undefined {
+  if (!text) return text;
+  if (text.length <= ARENA_SNAPSHOT_TEXT_LIMIT) return text;
+  return text.slice(0, ARENA_SNAPSHOT_TEXT_LIMIT) + '\n\n...[已截断]';
 }
 function blockId() {
   return `block_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -92,8 +99,8 @@ export type PromptArenaSectionProps = {
   setArenaTimeline: React.Dispatch<React.SetStateAction<ArenaTimelineBlock[]>>;
   arenaSaveSnippetConfirm: boolean;
   setArenaSaveSnippetConfirm: (v: boolean) => void;
-  arenaSnippets: Array<{ id: string; text: string; timestamp: number; source?: string }>;
-  setArenaSnippets: (v: Array<{ id: string; text: string; timestamp: number; source?: string }>) => void;
+  arenaSnippets: WinningSnippet[];
+  setArenaSnippets: (v: WinningSnippet[]) => void;
   arenaFirstVisit: boolean;
   setArenaFirstVisit: (v: boolean) => void;
   setMode: (m: AppMode) => void;
@@ -187,9 +194,234 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
   } = props;
 
   const [processExpanded, setProcessExpanded] = useLocalState(true);
-  const [expandedBlocks, setExpandedBlocks] = useLocalState<Set<string>>(new Set());
-  const toggleBlock = (key: string) => setExpandedBlocks((prev) => { const n = new Set(prev); if (n.has(key)) n.delete(key); else n.add(key); return n; });
   const copyToClipboard = (text: string) => { try { navigator.clipboard.writeText(text); addGlobalLog('提示词擂台', 'info', '已复制到剪贴板', undefined); } catch { addGlobalLog('提示词擂台', 'warn', '复制失败', undefined); } };
+
+  type OptionFeedback = { strength: string; gaps: string };
+  const [optionFeedback, setOptionFeedback] = useLocalState<Record<string, OptionFeedback>>({});
+  const resetOptionFeedback = () => setOptionFeedback({});
+  const getOptionFeedback = (label: string): OptionFeedback => optionFeedback[label] ?? { strength: '', gaps: '' };
+  const updateOptionFeedback = (label: string, patch: Partial<OptionFeedback>) => {
+    setOptionFeedback((prev) => ({
+      ...prev,
+      [label]: {
+        strength: patch.strength ?? prev[label]?.strength ?? '',
+        gaps: patch.gaps ?? prev[label]?.gaps ?? ''
+      }
+    }));
+  };
+
+  const parseGapsToArray = (text: string): string[] => (text || '')
+    .split(/[、，,;；\n]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const [lightboxOpen, setLightboxOpen] = useLocalState(false);
+  const [lightboxImages, setLightboxImages] = useLocalState<Array<{ src: string; label: string; prompt: string }>>([]);
+  const [lightboxIndex, setLightboxIndex] = useLocalState(0);
+  const [lightboxPromptZhByKey, setLightboxPromptZhByKey] = useLocalState<Record<string, string>>({});
+  const [lightboxPromptTranslating, setLightboxPromptTranslating] = useLocalState<Set<string>>(new Set());
+  const openLightboxForOptions = (opts: Array<{ label: string; prompt: string; image: string | null }>, clickedIndex: number) => {
+    const imgs = opts.filter((o) => !!o.image).map((o) => ({ src: o.image!, label: o.label, prompt: o.prompt || '' }));
+    const clicked = opts[clickedIndex];
+    const clickedSrc = clicked?.image;
+    const idx = imgs.findIndex((i) => i.src === clickedSrc);
+    setLightboxImages(imgs);
+    setLightboxIndex(Math.max(0, idx));
+    setLightboxOpen(true);
+  };
+  const closeLightbox = () => setLightboxOpen(false);
+
+  useEffect(() => {
+    if (!lightboxOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeLightbox();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [lightboxOpen]);
+
+  const onLightboxWheel = (e: React.WheelEvent) => {
+    if (!lightboxOpen) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (lightboxImages.length <= 1) return;
+    const delta = e.deltaY > 0 ? 1 : -1;
+    setLightboxIndex((prev) => {
+      const len = lightboxImages.length;
+      return ((prev + delta) % len + len) % len;
+    });
+  };
+  useEffect(() => {
+    if (!lightboxOpen) return;
+    const current = lightboxImages[lightboxIndex];
+    if (!current?.prompt?.trim()) return;
+    const key = `${current.label}::${current.prompt}`;
+    if (lightboxPromptZhByKey[key]) return;
+    if (lightboxPromptTranslating.has(key)) return;
+    setLightboxPromptTranslating((prev) => new Set(prev).add(key));
+    (async () => {
+      try {
+        const zh = await translateToChinese(current.prompt, modelText);
+        setLightboxPromptZhByKey((prev) => ({ ...prev, [key]: zh }));
+      } catch {
+        setLightboxPromptZhByKey((prev) => ({ ...prev, [key]: '翻译失败。' }));
+      } finally {
+        setLightboxPromptTranslating((prev) => {
+          const n = new Set(prev);
+          n.delete(key);
+          return n;
+        });
+      }
+    })();
+  }, [lightboxOpen, lightboxIndex, lightboxImages, modelText]);
+  const [promptZhByKey, setPromptZhByKey] = useLocalState<Record<string, string>>({});
+  const [promptZhLoading, setPromptZhLoading] = useLocalState<Set<string>>(new Set());
+  const [expandedPromptBoxes, setExpandedPromptBoxes] = useLocalState<Set<string>>(new Set());
+  const expandPromptBox = (boxKey: string) => {
+    setExpandedPromptBoxes((prev) => {
+      if (prev.has(boxKey)) return prev;
+      const n = new Set(prev);
+      n.add(boxKey);
+      return n;
+    });
+  };
+  const collapsePromptBox = (boxKey: string) => {
+    setExpandedPromptBoxes((prev) => {
+      if (!prev.has(boxKey)) return prev;
+      const n = new Set(prev);
+      n.delete(boxKey);
+      return n;
+    });
+  };
+  const promptBoxClass = (boxKey: string) =>
+    expandedPromptBoxes.has(boxKey) ? 'max-h-none overflow-visible' : 'max-h-40 overflow-y-auto';
+  const ensurePromptZh = async (key: string, text: string) => {
+    const source = (text || '').trim();
+    if (!source) return;
+    if (promptZhByKey[key]) return;
+    if (promptZhLoading.has(key)) return;
+    setPromptZhLoading((prev) => new Set(prev).add(key));
+    try {
+      const zh = await translateToChinese(source, modelText);
+      setPromptZhByKey((prev) => ({ ...prev, [key]: zh }));
+    } catch {
+      setPromptZhByKey((prev) => ({ ...prev, [key]: '自动翻译失败。' }));
+    } finally {
+      setPromptZhLoading((prev) => {
+        const n = new Set(prev);
+        n.delete(key);
+        return n;
+      });
+    }
+  };
+  const isPromptRelated = (entry: ArenaStepEntry, text: string) => {
+    const label = entry.label || '';
+    const merged = `${label}\n${text || ''}`;
+    return /提示词|prompt|prompts|擂主|挑战者|优化败者|生成提示词/i.test(merged);
+  };
+  const [replaySnippet, setReplaySnippet] = useLocalState<WinningSnippet | null>(null);
+  const [replayOpen, setReplayOpen] = useLocalState(false);
+
+  useEffect(() => {
+    for (const entry of arenaStepLog) {
+      const input = entry.inputFull || '';
+      const output = entry.outputRaw || '';
+      if (input && isPromptRelated(entry, input)) ensurePromptZh(`${entry.id}_input`, input);
+      if (output && isPromptRelated(entry, output)) ensurePromptZh(`${entry.id}_output`, output);
+    }
+  }, [arenaStepLog]);
+
+  useEffect(() => {
+    if (!replaySnippet) return;
+    for (const entry of replaySnippet.stepLogSnapshot || []) {
+      const input = entry.inputFull || '';
+      const output = entry.outputRaw || '';
+      if (input && isPromptRelated(entry, input)) ensurePromptZh(`${entry.id}_input`, input);
+      if (output && isPromptRelated(entry, output)) ensurePromptZh(`${entry.id}_output`, output);
+    }
+  }, [replaySnippet]);
+
+  const renderPromptDualPane = (entry: ArenaStepEntry, key: string, text: string) => {
+    if (!text) return;
+    if (!isPromptRelated(entry, text)) {
+      const monoKey = `${key}_mono`;
+      return (
+        <pre
+          tabIndex={0}
+          onFocus={() => expandPromptBox(monoKey)}
+          onClick={() => expandPromptBox(monoKey)}
+          onBlur={() => collapsePromptBox(monoKey)}
+          className={`whitespace-pre-wrap break-words text-[10px] bg-black/30 rounded p-2 outline-none focus:border-blue-500 border border-white/10 ${promptBoxClass(monoKey)}`}
+        >
+          {text}
+        </pre>
+      );
+    }
+    const zh = promptZhByKey[key] || '';
+    const loading = promptZhLoading.has(key);
+    const leftKey = `${key}_left`;
+    const rightKey = `${key}_right`;
+    return (
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
+        <div className="rounded p-2 bg-black/30 border border-white/10">
+          <div className="text-[8px] text-gray-500 uppercase mb-1">原文</div>
+          <pre
+            tabIndex={0}
+            onFocus={() => expandPromptBox(leftKey)}
+            onClick={() => expandPromptBox(leftKey)}
+            onBlur={() => collapsePromptBox(leftKey)}
+            className={`whitespace-pre-wrap break-words text-[10px] outline-none focus:border-blue-500 border border-white/10 rounded p-2 ${promptBoxClass(leftKey)}`}
+          >
+            {text}
+          </pre>
+        </div>
+        <div className="rounded p-2 bg-black/30 border border-white/10">
+          <div className="text-[8px] text-gray-500 uppercase mb-1">中文</div>
+          <pre
+            tabIndex={0}
+            onFocus={() => expandPromptBox(rightKey)}
+            onClick={() => expandPromptBox(rightKey)}
+            onBlur={() => collapsePromptBox(rightKey)}
+            className={`whitespace-pre-wrap break-words text-[10px] outline-none focus:border-blue-500 border border-white/10 rounded p-2 ${promptBoxClass(rightKey)}`}
+          >
+            {zh || (loading ? '翻译中…' : '翻译中…')}
+          </pre>
+        </div>
+      </div>
+    );
+  };
+
+  const shrinkPreviewImage = async (src?: string | null): Promise<string | undefined> => {
+    if (!src) return undefined;
+    if (!src.startsWith('data:image/')) return src;
+    if (src.length <= 200_000) return src;
+    try {
+      const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const el = new Image();
+        el.onload = () => resolve(el);
+        el.onerror = reject;
+        el.src = src;
+      });
+      const maxW = 360;
+      const scale = Math.min(1, maxW / Math.max(1, img.naturalWidth));
+      const w = Math.max(1, Math.round(img.naturalWidth * scale));
+      const h = Math.max(1, Math.round(img.naturalHeight * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return undefined;
+      ctx.drawImage(img, 0, 0, w, h);
+      return canvas.toDataURL('image/jpeg', 0.68);
+    } catch {
+      return undefined;
+    }
+  };
   const STAGES: { step: ArenaCurrentStep; label: string }[] = [
     { step: 'idle', label: '未开始' },
     { step: 'generating_prompts', label: '生成提示词' },
@@ -211,6 +443,7 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
       return;
     }
     setArenaIsGenerating(true);
+    resetOptionFeedback();
     setArenaReasoning('');
     setArenaOptimizeReasoning('');
     setArenaChallenger2Prompt(null);
@@ -264,7 +497,7 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
           { id: stepImgId, step: `generating_image_${i}`, label: `生图 ${labels[i]}`, status: 'running', inputFull: `提示词（${labels[i]}）：${promptSlice}${(prompts[i]?.length ?? 0) > 200 ? '…' : ''}`, ts: Date.now() }
         ]);
         try {
-          const img = await dialogGenerateImage(arenaImage, prompts[i]!, arenaImageModel, undefined, promptEdit);
+          const img = await dialogGenerateImage(arenaImage, prompts[i]!, arenaImageModel, { imageSize: '2K' }, promptEdit);
           setArenaStepLog((prev) =>
             prev.map((s) => (s.id === stepImgId ? { ...s, status: 'done', outputRaw: '成功', ts: Date.now() } : s))
           );
@@ -319,6 +552,7 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
 
   const handleArenaPick = async (winnerIndex: number, skipOptimize = false) => {
     if (winnerIndex < 0) {
+      resetOptionFeedback();
       setArenaReportedGaps([]);
       setArenaWinnerStrength('');
       setArenaLoserRemark('');
@@ -337,6 +571,19 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
     const newChampImage = opts[winnerIndex].image;
     const winnerLabel = opts[winnerIndex].label;
     const losers = opts.filter((_, i) => i !== winnerIndex);
+
+    const winnerFb = optionFeedback[winnerLabel];
+    const winnerStrengthVal = winnerFb?.strength?.trim() || '';
+    const loserToOptimizeOpt = losers[0];
+    const loserFb = loserToOptimizeOpt ? optionFeedback[loserToOptimizeOpt.label] : undefined;
+    const loserRemarkVal = loserFb?.gaps?.trim() || '';
+    const userReportedGapsVal = parseGapsToArray(loserRemarkVal);
+
+    resetOptionFeedback();
+    setArenaReportedGaps([]);
+    setArenaWinnerStrength('');
+    setArenaLoserRemark('');
+
     setArenaTimeline((prev) => {
       const last = prev[prev.length - 1];
       if (last?.type === 'comparison' && !last.comparisonSnapshot)
@@ -376,7 +623,7 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
       setArenaTimeline((prev) => [...prev, { id: blockId(), type: 'step_group', label: '挑战者生图（不优化）', stepLogIds: [stepImgId], ts: Date.now() }]);
       setArenaIsGenerating(true);
       try {
-        const img = await dialogGenerateImage(arenaImage, loserToOptimize, arenaImageModel, undefined, promptEdit);
+        const img = await dialogGenerateImage(arenaImage, loserToOptimize, arenaImageModel, { imageSize: '2K' }, promptEdit);
         setArenaStepLog((prev) => prev.map((s) => (s.id === stepImgId ? { ...s, status: 'done', outputRaw: '成功', ts: Date.now() } : s)));
         setArenaChallengerImage(img);
         setArenaCurrentStep('awaiting_pick');
@@ -396,9 +643,9 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
       `Loser prompt (to improve): ${loserToOptimize}`,
       arenaUserDescription.trim() ? `Original user intent: ${arenaUserDescription.trim()}` : '',
       allPrevious.length > 0 ? `Other prompts already in this arena (avoid repeating, use for context):\n${allPrevious.map((p, i) => `[${i + 1}] ${p}`).join('\n')}` : '',
-      arenaReportedGaps.length > 0 ? `User-reported gaps in the loser (address or avoid these when improving): ${arenaReportedGaps.join(', ')}` : '',
-      arenaWinnerStrength.trim() ? `User-reported strength of the winner (preserve or learn from): ${arenaWinnerStrength.trim()}` : '',
-      arenaLoserRemark.trim() ? `User-reported remark about the loser (one sentence, address when improving): ${arenaLoserRemark.trim()}` : ''
+      userReportedGapsVal.length > 0 ? `User-reported gaps in the loser (address or avoid these when improving): ${userReportedGapsVal.join(', ')}` : '',
+      winnerStrengthVal.trim() ? `User-reported strength of the winner (preserve or learn from): ${winnerStrengthVal.trim()}` : '',
+      loserRemarkVal.trim() ? `User-reported remark about the loser (one sentence, address when improving): ${loserRemarkVal.trim()}` : ''
     ].filter(Boolean).join('\n\n');
     const inputOptimize = DEFAULT_PROMPTS.arena_optimize_loser + '\n\n' + userText;
     const stepOptId = stepId();
@@ -414,9 +661,9 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
         arenaUserDescription.trim() || undefined,
         modelText,
         allPrevious,
-        arenaReportedGaps.length > 0 ? arenaReportedGaps : undefined,
-        arenaWinnerStrength.trim() || undefined,
-        arenaLoserRemark.trim() || undefined
+        userReportedGapsVal.length > 0 ? userReportedGapsVal : undefined,
+        winnerStrengthVal.trim() || undefined,
+        loserRemarkVal.trim() || undefined
       );
       const parsed = rawResponse ? parseSummaryFromRaw(rawResponse) : {};
       setArenaStepLog((prev) =>
@@ -438,7 +685,7 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
       setArenaTimeline((prev) => [...prev, { id: blockId(), type: 'step_group', label: '挑战者生图', stepLogIds: [stepImgId], ts: Date.now() }]);
       setArenaIsGenerating(true);
       try {
-        const newChallengerImage = await dialogGenerateImage(arenaImage, newChallengerPrompt, arenaImageModel, undefined, promptEdit);
+        const newChallengerImage = await dialogGenerateImage(arenaImage, newChallengerPrompt, arenaImageModel, { imageSize: '2K' }, promptEdit);
         setArenaStepLog((prev) => prev.map((s) => (s.id === stepImgId ? { ...s, status: 'done', outputRaw: '成功', ts: Date.now() } : s)));
         setArenaChallengerImage(newChallengerImage);
       } catch (imgErr: unknown) {
@@ -459,6 +706,7 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
 
   const addChallenger = async () => {
     if (!arenaChampionPrompt || !arenaUserDescription.trim()) return;
+    resetOptionFeedback();
     const allPrevious = [arenaChampionPrompt, arenaChallengerPrompt, arenaChallenger2Prompt].filter(Boolean) as string[];
     setArenaIsGenerating(true);
     setArenaCurrentStep('adding_challenger');
@@ -494,7 +742,7 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
         { id: stepImgId, step: 'generating_challenger2_image', label: '挑战者2 生图', status: 'running', inputFull: `提示词：${prompt.slice(0, 300)}${prompt.length > 300 ? '…' : ''}`, ts: Date.now() }
       ]);
       try {
-        const img = await dialogGenerateImage(arenaImage, prompt, arenaImageModel, undefined, promptEdit);
+        const img = await dialogGenerateImage(arenaImage, prompt, arenaImageModel, { imageSize: '2K' }, promptEdit);
         setArenaStepLog((prev) => prev.map((s) => (s.id === stepImgId ? { ...s, status: 'done', outputRaw: '成功', ts: Date.now() } : s)));
         setArenaChallenger2Image(img);
       } catch (imgErr: unknown) {
@@ -512,9 +760,142 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
     }
   };
 
-  const confirmSave = (save: boolean) => {
+  const eliminateAllOptions = async () => {
+    if (!arenaChampionPrompt || !arenaUserDescription.trim()) return;
+    const feedbackChunks: string[] = [];
+    currentOptions.forEach((opt) => {
+      const fb = optionFeedback[opt.label];
+      const strength = fb?.strength?.trim();
+      const gaps = fb?.gaps?.trim();
+      if (strength) feedbackChunks.push(`[${opt.label}] 优点：${strength}`);
+      if (gaps) feedbackChunks.push(`[${opt.label}] 不足：${gaps}`);
+    });
+    const feedbackText = feedbackChunks.length
+      ? `User feedback (none satisfied, eliminate all):\n${feedbackChunks.join('\n')}`
+      : '';
+    const userIntentForModel = feedbackText ? `${arenaUserDescription.trim()}\n\n${feedbackText}` : arenaUserDescription.trim();
+
+    resetOptionFeedback();
+    setArenaReportedGaps([]);
+    setArenaWinnerStrength('');
+    setArenaLoserRemark('');
+
+    const allPrevious = [arenaChampionPrompt, arenaChallengerPrompt, arenaChallenger2Prompt].filter(Boolean) as string[];
+
+    // Snapshot 当前对比，用于时间轴回看
+    setArenaTimeline((prev) => {
+      const last = prev[prev.length - 1];
+      if (last?.type === 'comparison' && !last.comparisonSnapshot) {
+        return prev.map((b, i) => (i === prev.length - 1 ? { ...b, comparisonSnapshot: { options: currentOptions } } : b));
+      }
+      return prev;
+    });
+
+    setArenaIsGenerating(true);
+    setArenaCurrentStep('adding_challenger');
+    setArenaChallenger2Prompt(null);
+    setArenaChallenger2Image(null);
+
+    const inputNewCh = DEFAULT_PROMPTS.arena_new_challenger + '\n\n' + [
+      `Original user intent: ${userIntentForModel}`,
+      `Current champion (winner) prompt: ${arenaChampionPrompt}`,
+      allPrevious.length > 0
+        ? `All other prompts already in this arena (be distinct from these):\n${allPrevious.map((p, i) => `[${i + 1}] ${p}`).join('\n')}`
+        : ''
+    ].filter(Boolean).join('\n\n');
+
+    const stepNewId = stepId();
+    setArenaStepLog((prev) => [
+      ...prev,
+      { id: stepNewId, step: 'adding_challenger', label: '淘汰所有（生成新挑战者提示词）', status: 'running', inputFull: inputNewCh, ts: Date.now() }
+    ]);
+    setArenaTimeline((prev) => [
+      ...prev,
+      { id: blockId(), type: 'step_group', label: '淘汰所有（生成新挑战者提示词）', stepLogIds: [stepNewId], ts: Date.now() }
+    ]);
+    try {
+      const { reasoning, prompt, rawResponse } = await generateNewChallenger(
+        userIntentForModel,
+        arenaChampionPrompt,
+        allPrevious,
+        modelText
+      );
+      const parsed = rawResponse ? parseSummaryFromRaw(rawResponse) : {};
+      setArenaStepLog((prev) =>
+        prev.map((s) =>
+          s.id === stepNewId ? { ...s, status: 'done', outputRaw: rawResponse, outputParsed: parsed.summary, parseError: parsed.error, ts: Date.now() } : s
+        )
+      );
+      if (reasoning) setArenaOptimizeReasoning(reasoning);
+      setArenaChallengerPrompt(prompt);
+
+      const stepImgId = stepId();
+      setArenaStepLog((prev) => [
+        ...prev,
+        { id: stepImgId, step: 'generating_challenger_image', label: '淘汰所有（挑战者生图）', status: 'running', inputFull: `提示词：${prompt.slice(0, 300)}${prompt.length > 300 ? '…' : ''}`, ts: Date.now() }
+      ]);
+      setArenaCurrentStep('generating_challenger_image');
+      setArenaTimeline((prev) => [
+        ...prev,
+        { id: blockId(), type: 'step_group', label: '淘汰所有（挑战者生图）', stepLogIds: [stepImgId], ts: Date.now() }
+      ]);
+      try {
+        const img = await dialogGenerateImage(arenaImage, prompt, arenaImageModel, { imageSize: '2K' }, promptEdit);
+        setArenaStepLog((prev) => prev.map((s) => (s.id === stepImgId ? { ...s, status: 'done', outputRaw: '成功', ts: Date.now() } : s)));
+        setArenaChallengerImage(img);
+      } catch (imgErr: unknown) {
+        const errMsg = normalizeApiErrorMessage(imgErr);
+        setArenaStepLog((prev) => prev.map((s) => (s.id === stepImgId ? { ...s, status: 'error', outputRaw: errMsg, ts: Date.now() } : s)));
+        throw imgErr;
+      }
+
+      setArenaCurrentStep('awaiting_pick');
+      setArenaTimeline((prev) => [
+        ...prev,
+        { id: blockId(), type: 'comparison', label: `第 ${arenaRound} 轮（淘汰所有重来）`, round: arenaRound, ts: Date.now() }
+      ]);
+    } catch (err: unknown) {
+      addGlobalLog('提示词擂台', 'error', '淘汰所有失败', normalizeApiErrorMessage(err));
+      setArenaCurrentStep('idle');
+    } finally {
+      setArenaIsGenerating(false);
+    }
+  };
+
+  const confirmSave = async (save: boolean) => {
     if (save && arenaChampionPrompt) {
-      addSnippet({ text: arenaChampionPrompt, timestamp: Date.now(), source: 'arena_champion' });
+      const compactTimeline: ArenaTimelineBlock[] = arenaTimeline.map((b) => ({
+        ...b,
+        comparisonSnapshot: b.comparisonSnapshot
+          ? {
+              options: b.comparisonSnapshot.options.map((o) => ({
+                ...o,
+                // 不落盘保存大图，避免 localStorage 爆容量导致“保存不了”
+                image: null
+              }))
+            }
+          : undefined
+      }));
+      const compactStepLog: ArenaStepEntry[] = arenaStepLog.map((s) => ({
+        ...s,
+        inputFull: truncateForSnapshot(s.inputFull),
+        outputRaw: truncateForSnapshot(s.outputRaw)
+      }));
+      const preview = await shrinkPreviewImage(arenaChampionImage);
+      try {
+        addSnippet({
+          text: arenaChampionPrompt,
+          timestamp: Date.now(),
+          source: 'arena_champion',
+          previewImage: preview,
+          timelineSnapshot: compactTimeline,
+          stepLogSnapshot: compactStepLog,
+        });
+      } catch {
+        // 兜底：即使快照保存失败，也至少保存提示词本身
+        addSnippet({ text: arenaChampionPrompt, timestamp: Date.now(), source: 'arena_champion' });
+        addGlobalLog('提示词擂台', 'warn', '回顾快照过大，已仅保存提示词', undefined);
+      }
       setArenaSnippets(loadSnippets());
     }
     setArenaSaveSnippetConfirm(false);
@@ -547,8 +928,51 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
   const isLiveComparisonBlock = (block: ArenaTimelineBlock, index: number) =>
     block.type === 'comparison' && index === arenaTimeline.length - 1;
 
+  const openReplay = (snippet: WinningSnippet) => {
+    if (!snippet.timelineSnapshot || !snippet.stepLogSnapshot) {
+      addGlobalLog('提示词擂台', 'warn', '该条目暂无过程快照', '请在新版本中重新保存擂主后再回顾');
+      return;
+    }
+    setReplaySnippet(snippet);
+    setReplayOpen(true);
+  };
+
   return (
-    <div className="flex flex-col lg:flex-row gap-6">
+    <div className="flex flex-col lg:flex-row gap-6 items-start">
+      <aside className="w-full lg:w-72 shrink-0 lg:sticky lg:top-4 max-h-[calc(100vh-2rem)] overflow-hidden">
+        <div className="glass p-4 rounded-2xl border border-white/5 flex flex-col min-h-0 h-full">
+          <div className="text-[9px] font-black text-blue-400 uppercase mb-3">获胜片段库</div>
+          <p className="text-[8px] text-gray-500 mb-2">点击条目回顾擂台全流程</p>
+          <div className="flex-1 overflow-y-auto space-y-2 no-scrollbar min-h-0">
+            {arenaSnippets.length === 0 ? (
+              <div className="text-[9px] text-gray-500 py-4">保存的擂主提示词会出现在这里</div>
+            ) : (
+              arenaSnippets.map((s) => (
+                <div key={s.id} className="rounded-lg border border-white/10 bg-white/5 p-2 group">
+                  {s.previewImage && (
+                    <button type="button" onClick={() => openReplay(s)} className="block w-full mb-2">
+                      <img src={s.previewImage} alt="擂主预览" className="w-full h-28 object-cover rounded-lg border border-white/10" />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => openReplay(s)}
+                    className="w-full text-left text-[10px] text-gray-300 truncate hover:text-white"
+                    title={s.text}
+                  >
+                    {s.text}
+                  </button>
+                  <div className="mt-1 flex items-center justify-between">
+                    <button type="button" onClick={() => navigator.clipboard.writeText(s.text)} className="text-[8px] text-blue-400 hover:underline">复制提示词</button>
+                    <button type="button" onClick={() => { removeSnippet(s.id); setArenaSnippets(loadSnippets()); }} className="opacity-70 group-hover:opacity-100 w-6 h-6 rounded text-red-400 hover:bg-red-500/20 text-[10px]">×</button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </aside>
+
       <div className="flex-1 flex flex-col gap-4 min-w-0">
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <button onClick={() => setMode(AppMode.ADMIN)} className="px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-[9px] font-black uppercase hover:bg-white/10 transition-all">看效果分析</button>
@@ -608,14 +1032,8 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
                     {block.stepLogIds.map((sid) => {
                       const entry = getStepLogById(sid);
                       if (!entry) return null;
-                      const inputKey = `${entry.id}_input`;
-                      const outputKey = `${entry.id}_output`;
-                      const inputShowFull = expandedBlocks.has(inputKey);
-                      const outputShowFull = expandedBlocks.has(outputKey);
                       const inputText = entry.inputFull ?? '';
                       const outputText = entry.outputRaw ?? '';
-                      const inputPreview = inputText.length <= ARENA_STEP_PREVIEW_LEN ? inputText : inputText.slice(0, ARENA_STEP_PREVIEW_LEN) + '…';
-                      const outputPreview = outputText.length <= ARENA_STEP_PREVIEW_LEN ? outputText : outputText.slice(0, ARENA_STEP_PREVIEW_LEN) + '…';
                       return (
                         <div key={entry.id} className="rounded-lg border border-white/10 bg-black/20 p-2">
                           <div className="flex items-center gap-2 mb-1">
@@ -627,11 +1045,10 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
                               <div className="flex items-center justify-between gap-2 mb-0.5">
                                 <span className="text-[8px] font-black text-gray-500 uppercase">输入</span>
                                 <div className="flex gap-1">
-                                  <button type="button" onClick={() => toggleBlock(inputKey)} className="text-[8px] text-blue-400 hover:underline">{inputShowFull ? '收起' : '展开全部'}</button>
                                   <button type="button" onClick={() => copyToClipboard(inputText)} className="text-[8px] text-blue-400 hover:underline">复制</button>
                                 </div>
                               </div>
-                              <pre className="whitespace-pre-wrap break-words text-[10px] bg-black/30 rounded p-2 max-h-40 overflow-y-auto">{(inputShowFull ? inputText : inputPreview)}</pre>
+                              {renderPromptDualPane(entry, `${entry.id}_input`, inputText)}
                             </div>
                           )}
                           {(outputText || entry.outputParsed || entry.parseError) && (
@@ -640,14 +1057,13 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
                                 <span className="text-[8px] font-black text-gray-500 uppercase">输出</span>
                                 {outputText && (
                                   <div className="flex gap-1">
-                                    <button type="button" onClick={() => toggleBlock(outputKey)} className="text-[8px] text-blue-400 hover:underline">{outputShowFull ? '收起' : '展开全部'}</button>
                                     <button type="button" onClick={() => copyToClipboard(outputText)} className="text-[8px] text-blue-400 hover:underline">复制</button>
                                   </div>
                                 )}
                               </div>
                               {entry.outputParsed && <p className="text-[9px] text-green-300/90 mb-1">{entry.outputParsed}</p>}
                               {entry.parseError && <p className="text-[9px] text-red-300/90 mb-1">{entry.parseError}</p>}
-                              {outputText && <pre className="whitespace-pre-wrap break-words text-[10px] bg-black/30 rounded p-2 max-h-40 overflow-y-auto">{(outputShowFull ? outputText : outputPreview)}</pre>}
+                              {outputText && renderPromptDualPane(entry, `${entry.id}_output`, outputText)}
                             </div>
                           )}
                         </div>
@@ -668,22 +1084,43 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
                               <div key={i}>
                                 <div className="text-[9px] font-black text-gray-500 uppercase mb-1">{opt.label}</div>
                                 <div className="text-[9px] text-gray-400 mb-2 truncate" title={opt.prompt}>{opt.prompt}</div>
-                                {opt.image ? <img src={opt.image} alt={opt.label} className="w-full rounded-xl border border-white/10" /> : <div className="aspect-square rounded-xl bg-white/5 flex items-center justify-center text-[9px] text-gray-500">生成中…</div>}
+                                {opt.image ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => openLightboxForOptions(options, i)}
+                                    className="block w-full"
+                                    aria-label={`放大预览：${opt.label}`}
+                                  >
+                                    <img src={opt.image} alt={opt.label} className="w-full rounded-xl border border-white/10" />
+                                  </button>
+                                ) : (
+                                  <div className="aspect-square rounded-xl bg-white/5 flex items-center justify-center text-[9px] text-gray-500">生成中…</div>
+                                )}
+                                {isLive && (
+                                  <div className="mt-2 space-y-2">
+                                    <input
+                                      type="text"
+                                      value={getOptionFeedback(opt.label).strength}
+                                      onChange={(e) => updateOptionFeedback(opt.label, { strength: e.target.value })}
+                                      placeholder="优点（可选）"
+                                      disabled={busy}
+                                      className="w-full px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-[10px] text-gray-300 placeholder-gray-500 outline-none focus:border-blue-500 disabled:opacity-60"
+                                    />
+                                    <input
+                                      type="text"
+                                      value={getOptionFeedback(opt.label).gaps}
+                                      onChange={(e) => updateOptionFeedback(opt.label, { gaps: e.target.value })}
+                                      placeholder="不足（可选）"
+                                      disabled={busy}
+                                      className="w-full px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-[10px] text-gray-300 placeholder-gray-500 outline-none focus:border-blue-500 disabled:opacity-60"
+                                    />
+                                  </div>
+                                )}
                               </div>
                             ))}
                           </div>
                           {isLive && (
                             <>
-                              <div className="mb-3 space-y-2">
-                                <div>
-                                  <label className="text-[9px] font-black text-gray-500 uppercase block mb-1">败者差在哪？（一句话说明，可选）</label>
-                                  <input type="text" value={arenaLoserRemark} onChange={(e) => setArenaLoserRemark(e.target.value)} placeholder="一句话说明败者不足" className="w-full max-w-md px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-[10px] text-gray-300 placeholder-gray-500" />
-                                </div>
-                                <div>
-                                  <label className="text-[9px] font-black text-gray-500 uppercase block mb-1">胜者为何被选？（一句话说明，可选）</label>
-                                  <input type="text" value={arenaWinnerStrength} onChange={(e) => setArenaWinnerStrength(e.target.value)} placeholder="一句话说明胜者优点" className="w-full max-w-md px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-[10px] text-gray-300 placeholder-gray-500" />
-                                </div>
-                              </div>
                               <div className="flex flex-wrap gap-3">
                                 {currentOptions.map((_, i) => (
                                   <button key={i} type="button" onClick={() => handleArenaPick(i)} disabled={busy} className="px-4 py-2 rounded-xl bg-amber-600/80 text-[10px] font-black uppercase text-white hover:bg-amber-500 disabled:opacity-50">选择 {currentOptions[i].label}</button>
@@ -691,8 +1128,9 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
                                 <button type="button" onClick={() => handleArenaPick(-1)} disabled={busy} className="px-4 py-2 rounded-xl bg-white/10 text-[10px] font-black uppercase hover:bg-white/20 disabled:opacity-50">平局</button>
                                 {arenaRound > 0 && currentOptions.length === 2 && <button type="button" onClick={() => handleArenaPick(1, true)} disabled={busy} className="px-4 py-2 rounded-xl border border-white/20 text-[10px] font-black uppercase disabled:opacity-50" title="选挑战者且不优化">选择挑战者（不优化）</button>}
                                 {arenaRound > 0 && !arenaChallenger2Prompt && <button type="button" onClick={addChallenger} disabled={busy} className="px-4 py-2 rounded-xl border border-amber-500/50 text-amber-400 text-[10px] font-black uppercase disabled:opacity-50">增加挑战者</button>}
+                                {arenaRound > 0 && <button type="button" onClick={eliminateAllOptions} disabled={busy} className="px-4 py-2 rounded-xl bg-red-500/15 border border-red-500/40 text-red-200 text-[10px] font-black uppercase hover:bg-red-500/20 disabled:opacity-50">淘汰所有</button>}
                                 {arenaChampionPrompt && <button type="button" onClick={() => setArenaSaveSnippetConfirm(true)} className="px-4 py-2 rounded-xl bg-green-600/20 border border-green-500/30 text-[10px] font-black uppercase text-green-400">满意，保存</button>}
-                                <button type="button" onClick={() => { setArenaReportedGaps([]); setArenaWinnerStrength(''); setArenaLoserRemark(''); setArenaCurrentStep('idle'); }} className="px-4 py-2 rounded-xl border border-white/20 text-[10px] font-black uppercase">收起</button>
+                                <button type="button" onClick={() => { resetOptionFeedback(); setArenaReportedGaps([]); setArenaWinnerStrength(''); setArenaLoserRemark(''); setArenaCurrentStep('idle'); }} className="px-4 py-2 rounded-xl border border-white/20 text-[10px] font-black uppercase">收起</button>
                               </div>
                             </>
                           )}
@@ -730,14 +1168,8 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
                       <div className="text-[8px] font-black text-gray-500 uppercase mb-1 mt-2">每步 AI 输入 / 输出（可核对）</div>
                       <div className="space-y-3 max-h-[50vh] overflow-y-auto no-scrollbar">
                         {arenaStepLog.map((entry) => {
-                          const inputKey = `${entry.id}_input`;
-                          const outputKey = `${entry.id}_output`;
-                          const inputShowFull = expandedBlocks.has(inputKey);
-                          const outputShowFull = expandedBlocks.has(outputKey);
                           const inputText = entry.inputFull ?? '';
                           const outputText = entry.outputRaw ?? '';
-                          const inputPreview = inputText.length <= ARENA_STEP_PREVIEW_LEN ? inputText : inputText.slice(0, ARENA_STEP_PREVIEW_LEN) + '…';
-                          const outputPreview = outputText.length <= ARENA_STEP_PREVIEW_LEN ? outputText : outputText.slice(0, ARENA_STEP_PREVIEW_LEN) + '…';
                           return (
                             <div key={entry.id} className="rounded-lg border border-white/10 bg-black/20 p-2">
                               <div className="flex items-center gap-2 mb-1">
@@ -751,13 +1183,10 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
                                   <div className="flex items-center justify-between gap-2 mb-0.5">
                                     <span className="text-[8px] font-black text-gray-500 uppercase">输入（发给模型）</span>
                                     <div className="flex gap-1">
-                                      <button type="button" onClick={() => toggleBlock(inputKey)} className="text-[8px] text-blue-400 hover:underline">
-                                        {inputShowFull ? '收起' : '展开全部'}
-                                      </button>
                                       <button type="button" onClick={() => copyToClipboard(inputText)} className="text-[8px] text-blue-400 hover:underline">复制全文</button>
                                     </div>
                                   </div>
-                                  <pre className="whitespace-pre-wrap break-words text-[10px] bg-black/30 rounded p-2 max-h-40 overflow-y-auto">{(inputShowFull ? inputText : inputPreview)}</pre>
+                                  {renderPromptDualPane(entry, `${entry.id}_input`, inputText)}
                                 </div>
                               )}
                               {(outputText || entry.outputParsed || entry.parseError) && (
@@ -767,9 +1196,6 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
                                     <div className="flex gap-1">
                                       {outputText && (
                                         <>
-                                          <button type="button" onClick={() => toggleBlock(outputKey)} className="text-[8px] text-blue-400 hover:underline">
-                                            {outputShowFull ? '收起' : '展开全部'}
-                                          </button>
                                           <button type="button" onClick={() => copyToClipboard(outputText)} className="text-[8px] text-blue-400 hover:underline">复制全文</button>
                                         </>
                                       )}
@@ -777,7 +1203,7 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
                                   </div>
                                   {entry.outputParsed && <p className="text-[9px] text-green-300/90 mb-1">{entry.outputParsed}</p>}
                                   {entry.parseError && <p className="text-[9px] text-red-300/90 mb-1">{entry.parseError}</p>}
-                                  {outputText && <pre className="whitespace-pre-wrap break-words text-[10px] bg-black/30 rounded p-2 max-h-40 overflow-y-auto">{(outputShowFull ? outputText : outputPreview)}</pre>}
+                                  {outputText && renderPromptDualPane(entry, `${entry.id}_output`, outputText)}
                                 </div>
                               )}
                             </div>
@@ -812,9 +1238,9 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
         )}
       </div>
 
-      <div className="w-full lg:w-64 shrink-0 flex flex-col gap-4 max-h-[85vh] overflow-hidden">
+      <aside className="w-full lg:w-64 shrink-0 lg:sticky lg:top-4 max-h-[calc(100vh-2rem)] overflow-hidden">
         {arenaTimeline.length > 0 && (
-          <div className="glass p-3 rounded-2xl border border-white/5 flex flex-col min-h-0">
+          <div className="glass p-3 rounded-2xl border border-white/5 flex flex-col min-h-0 h-full">
             <div className="text-[8px] font-black text-blue-400 uppercase mb-2">进度地图</div>
             <div className="flex-1 overflow-y-auto space-y-1 no-scrollbar">
               {arenaTimeline.map((b, i) => (
@@ -825,23 +1251,7 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
             </div>
           </div>
         )}
-        <div className="glass p-4 rounded-2xl border border-white/5 flex flex-col min-h-0 flex-1">
-          <div className="text-[9px] font-black text-blue-400 uppercase mb-3">获胜片段库</div>
-        <p className="text-[8px] text-gray-500 mb-2">点击复制到剪贴板</p>
-        <div className="flex-1 overflow-y-auto space-y-1 no-scrollbar">
-          {arenaSnippets.length === 0 ? (
-            <div className="text-[9px] text-gray-500 py-4">保存的擂主提示词会出现在这里</div>
-          ) : (
-            arenaSnippets.map(s => (
-              <div key={s.id} className="flex items-center gap-2 group">
-                <button type="button" onClick={() => navigator.clipboard.writeText(s.text)} className="flex-1 text-left px-2 py-1.5 rounded-lg bg-white/5 border border-white/5 hover:bg-white/10 text-[10px] text-gray-300 truncate" title={s.text}>{s.text}</button>
-                <button type="button" onClick={() => { removeSnippet(s.id); setArenaSnippets(loadSnippets()); }} className="opacity-0 group-hover:opacity-100 w-6 h-6 rounded text-red-400 hover:bg-red-500/20 text-[10px]">×</button>
-              </div>
-            ))
-          )}
-        </div>
-        </div>
-      </div>
+      </aside>
 
       {arenaSaveSnippetConfirm && (
         <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/90 p-4" onClick={() => !busy && setArenaSaveSnippetConfirm(false)}>
@@ -854,6 +1264,117 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
           </div>
         </div>
       )}
+
+      {lightboxOpen &&
+        createPortal(
+          <div className="fixed inset-0 z-[2200] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" onClick={closeLightbox} onWheel={onLightboxWheel} role="presentation">
+            <div
+              className="relative w-full max-w-4xl rounded-2xl border border-white/10 bg-[#0f0f0f] shadow-xl p-4 flex flex-col"
+              onClick={(e) => e.stopPropagation()}
+              role="dialog"
+              aria-modal="true"
+            >
+              <div className="flex items-center justify-between mb-3">
+                <div className="text-[10px] font-black uppercase text-blue-300">{lightboxImages[lightboxIndex]?.label}</div>
+                <button
+                  type="button"
+                  onClick={closeLightbox}
+                  className="w-9 h-9 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-white/80 hover:text-white"
+                  aria-label="关闭预览"
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="flex-1 min-h-0 overflow-auto">
+                {lightboxImages[lightboxIndex]?.src ? (
+                  <img
+                    src={lightboxImages[lightboxIndex]?.src}
+                    alt={lightboxImages[lightboxIndex]?.label}
+                    className="w-full max-h-[75vh] object-contain rounded-xl border border-white/10"
+                    draggable={false}
+                  />
+                ) : null}
+              </div>
+              {lightboxImages[lightboxIndex]?.prompt && (
+                <div className="mt-3 grid grid-cols-1 lg:grid-cols-2 gap-2">
+                  <div className="rounded-lg border border-white/10 bg-black/30 p-2">
+                    <div className="text-[8px] text-gray-500 uppercase mb-1">提示词（原文）</div>
+                    <pre className="whitespace-pre-wrap break-words text-[10px] max-h-36 overflow-y-auto">
+                      {lightboxImages[lightboxIndex]?.prompt}
+                    </pre>
+                  </div>
+                  <div className="rounded-lg border border-white/10 bg-black/30 p-2">
+                    <div className="text-[8px] text-gray-500 uppercase mb-1">提示词（中文）</div>
+                    <pre className="whitespace-pre-wrap break-words text-[10px] max-h-36 overflow-y-auto">
+                      {(() => {
+                        const current = lightboxImages[lightboxIndex];
+                        const key = current ? `${current.label}::${current.prompt}` : '';
+                        if (!key) return '';
+                        if (lightboxPromptZhByKey[key]) return lightboxPromptZhByKey[key];
+                        if (lightboxPromptTranslating.has(key)) return '翻译中…';
+                        return '翻译中…';
+                      })()}
+                    </pre>
+                  </div>
+                </div>
+              )}
+              <div className="mt-3 text-[9px] text-gray-500">
+                滚轮切图（从左到右）
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {replayOpen && replaySnippet &&
+        createPortal(
+          <div className="fixed inset-0 z-[2300] bg-black/90 p-4 lg:p-8 overflow-y-auto" onClick={() => setReplayOpen(false)}>
+            <div className="max-w-5xl mx-auto rounded-2xl border border-white/10 bg-black/80 p-4 lg:p-6" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center justify-between mb-3">
+                <div className="text-[10px] font-black uppercase text-blue-300">擂台过程回顾</div>
+                <button type="button" onClick={() => setReplayOpen(false)} className="w-9 h-9 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10">✕</button>
+              </div>
+              {replaySnippet.previewImage && (
+                <img src={replaySnippet.previewImage} alt="擂主预览" className="w-full max-h-64 object-contain rounded-xl border border-white/10 mb-3" />
+              )}
+              <p className="text-[10px] text-gray-300 mb-3 break-words">{replaySnippet.text}</p>
+              <div className="space-y-3">
+                {(replaySnippet.timelineSnapshot || []).map((block) => (
+                  <div key={block.id} className="rounded-xl border border-white/10 bg-black/30 overflow-hidden">
+                    <div className="px-3 py-2 border-b border-white/10 text-[9px] font-black text-blue-400 uppercase">{block.label}</div>
+                    {block.type === 'step_group' && (
+                      <div className="p-3 space-y-2">
+                        {(block.stepLogIds || []).map((sid) => {
+                          const entry = (replaySnippet.stepLogSnapshot || []).find((s) => s.id === sid);
+                          if (!entry) return null;
+                          return (
+                            <div key={entry.id} className="rounded-lg border border-white/10 bg-black/20 p-2">
+                              <div className="text-[9px] font-black text-gray-400 mb-1">{entry.label}</div>
+                              {entry.inputFull && <div className="mb-2">{renderPromptDualPane(entry, `${entry.id}_input`, entry.inputFull)}</div>}
+                              {entry.outputRaw && <div>{renderPromptDualPane(entry, `${entry.id}_output`, entry.outputRaw)}</div>}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {block.type === 'comparison' && (
+                      <div className="p-3 grid gap-3 grid-cols-1 md:grid-cols-2">
+                        {(block.comparisonSnapshot?.options || []).map((opt, i) => (
+                          <div key={`${block.id}_${i}`} className="rounded-lg border border-white/10 bg-black/20 p-2">
+                            <div className="text-[9px] font-black text-gray-500 uppercase mb-1">{opt.label}</div>
+                            <div className="text-[9px] text-gray-400 mb-2 break-words">{opt.prompt}</div>
+                            {opt.image ? <img src={opt.image} alt={opt.label} className="w-full rounded-lg border border-white/10" /> : null}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
     </div>
   );
 };

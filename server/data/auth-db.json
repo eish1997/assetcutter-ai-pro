@@ -127,7 +127,40 @@
       "tokenHash": "d2c5b085f5394e1c62dcfa6f30da28561824ae87d10804e488b4bbf4ee3aab3a",
       "expiresAt": "2026-03-31T17:20:38.748Z",
       "createdAt": "2026-03-24T17:20:38.748Z",
-      "updatedAt": "2026-03-24T17:20:38.748Z",
+      "updatedAt": "2026-03-26T01:41:44.079Z",
+      "revokedAt": "2026-03-26T01:41:44.079Z",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
+      "ip": "127.0.0.1"
+    },
+    {
+      "id": "63d7cdab-9206-4934-9cc5-fab218457243",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "tokenHash": "4387d63475589790bcc90040b53d9a5755445cc95cb0c72920304c7340611e4f",
+      "expiresAt": "2026-04-02T01:41:44.079Z",
+      "createdAt": "2026-03-26T01:41:44.079Z",
+      "updatedAt": "2026-03-26T01:41:44.079Z",
+      "revokedAt": null,
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
+      "ip": "127.0.0.1"
+    },
+    {
+      "id": "eef79b7f-139f-4204-bb50-1c4eb71d9d76",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "tokenHash": "90fd52a4e39da3d0b91c7c42a99b091b0e23b5e1acaba998c39e883f2246cf51",
+      "expiresAt": "2026-04-02T01:41:54.536Z",
+      "createdAt": "2026-03-26T01:41:54.536Z",
+      "updatedAt": "2026-03-27T01:44:44.720Z",
+      "revokedAt": "2026-03-27T01:44:44.720Z",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
+      "ip": "127.0.0.1"
+    },
+    {
+      "id": "68750885-7be5-4fa6-b4a5-e55e197ba795",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "tokenHash": "c509b0b736c0e04796b8b16d575c9a039450b77b9bd0ce1678da1f4c09783cd0",
+      "expiresAt": "2026-04-03T01:44:44.720Z",
+      "createdAt": "2026-03-27T01:44:44.720Z",
+      "updatedAt": "2026-03-27T01:44:44.720Z",
       "revokedAt": null,
       "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
       "ip": "127.0.0.1"

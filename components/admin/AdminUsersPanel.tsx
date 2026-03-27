@@ -27,7 +27,8 @@ const AdminUsersPanel: React.FC = () => {
         const q = u.workspaceQuotaBytes;
         drafts[u.id] = q != null && Number.isFinite(q) ? String(Math.round(q / (1024 * 1024))) : '200';
       }
-      setQuotaDraftMb((prev) => ({ ...drafts, ...prev }));
+      // 刷新时以服务端最新数据为准，避免旧草稿覆盖真实用户配额
+      setQuotaDraftMb(drafts);
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载失败');
     } finally {
@@ -35,9 +36,28 @@ const AdminUsersPanel: React.FC = () => {
     }
   }, []);
 
+  const syncQuotaDraftByUser = React.useCallback((u: AuthUser) => {
+    const q = u.workspaceQuotaBytes;
+    setQuotaDraftMb((prev) => ({
+      ...prev,
+      [u.id]: q != null && Number.isFinite(q) ? String(Math.round(q / (1024 * 1024))) : '200',
+    }));
+  }, []);
+
   React.useEffect(() => {
     void loadUsers();
   }, [loadUsers]);
+
+  React.useEffect(() => {
+    const id = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      if (loading) return;
+      void loadUsers();
+    }, 30_000);
+    return () => {
+      window.clearInterval(id);
+    };
+  }, [loadUsers, loading]);
 
   const handlePatch = async (userId: string, patch: { role?: 'admin' | 'user'; status?: 'active' | 'disabled' }) => {
     setSavingId(userId);
@@ -45,6 +65,7 @@ const AdminUsersPanel: React.FC = () => {
     try {
       const res = await updateAdminUser(userId, patch);
       setUsers((prev) => prev.map((u) => (u.id === userId ? res.user : u)));
+      syncQuotaDraftByUser(res.user);
     } catch (err) {
       setError(err instanceof Error ? err.message : '保存失败');
     } finally {
@@ -64,6 +85,7 @@ const AdminUsersPanel: React.FC = () => {
     try {
       const res = await updateAdminUser(userId, { workspaceQuotaBytes: mb * 1024 * 1024 });
       setUsers((prev) => prev.map((u) => (u.id === userId ? res.user : u)));
+      syncQuotaDraftByUser(res.user);
     } catch (err) {
       setError(err instanceof Error ? err.message : '保存失败');
     } finally {
