@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type SetStateAction } from 'react';
 
 import type { DialogMessage, DialogSession, DialogTempItem } from '../types';
-import { fileExtensionForImageDataUrl } from '../services/imageDataUrl';
+import { triggerImageDownload } from '../services/imageDataUrl';
 
 function createDialogSession(): DialogSession {
   const now = Date.now();
@@ -112,10 +112,7 @@ export function useDialogWorkspace() {
   const handleDialogTempBatchDownload = useCallback(async () => {
     const list = dialogTempFiltered.filter((item) => dialogTempSelectedIds.has(item.id));
     for (let i = 0; i < list.length; i++) {
-      const anchor = document.createElement('a');
-      anchor.href = list[i].data;
-      anchor.download = `临时库_${list[i].label || list[i].id}.${fileExtensionForImageDataUrl(list[i].data)}`;
-      anchor.click();
+      await triggerImageDownload(list[i].data, `临时库_${list[i].label || list[i].id}`);
       if (i < list.length - 1) await new Promise((resolve) => setTimeout(resolve, 300));
     }
   }, [dialogTempFiltered, dialogTempSelectedIds]);

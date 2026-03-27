@@ -9,6 +9,7 @@ import { detectObjectsInImage, DEFAULT_PROMPTS } from '../services/geminiService
 import { executeCapability, executeCapabilitySet } from '../services/capabilityExecutor';
 import { WorkflowApiKeyModal } from './WorkflowApiKeyModal';
 import { isAiInvocationReady } from '../services/settingsStore';
+import { triggerImageDownload } from '../services/imageDataUrl';
 
 /** 云端 hydrate 前预览图为空时避免 img 的 src 为空字符串 */
 const WORKFLOW_IMG_EMPTY_PLACEHOLDER =
@@ -291,11 +292,8 @@ const ArchivedDetailModal: React.FC<{
   const [compositeUrl, setCompositeUrl] = useState<string | null>(null);
   const containerRef = React.useRef<HTMLDivElement>(null);
 
-  const downloadOne = (image: string, label: string) => {
-    const a = document.createElement('a');
-    a.href = image;
-    a.download = `workflow-${label}-${asset.id.slice(0, 6)}.png`;
-    a.click();
+  const downloadOne = async (image: string, label: string) => {
+    await triggerImageDownload(image, `workflow-${label}-${asset.id.slice(0, 6)}`);
   };
 
   const downloadMany = (images: string[], labelPrefix: string) => {
@@ -303,7 +301,9 @@ const ArchivedDetailModal: React.FC<{
     const intervalMs = 140;
     images.forEach((img, idx) => {
       const label = `${labelPrefix}-${String(idx + 1).padStart(2, '0')}`;
-      window.setTimeout(() => downloadOne(img, label), idx * intervalMs);
+      window.setTimeout(() => {
+        void downloadOne(img, label);
+      }, idx * intervalMs);
     });
   };
 
@@ -371,10 +371,7 @@ const ArchivedDetailModal: React.FC<{
 
   const downloadComposite = () => {
     if (!compositeUrl) return;
-    const a = document.createElement('a');
-    a.href = compositeUrl;
-    a.download = `workflow-flow-${asset.id.slice(0, 6)}.png`;
-    a.click();
+    void triggerImageDownload(compositeUrl, `workflow-flow-${asset.id.slice(0, 6)}`);
   };
 
   return (
@@ -484,8 +481,18 @@ const ArchivedDetailModal: React.FC<{
               ✕
             </button>
             <img src={cutLightboxImage} alt="" className="w-full max-h-[80vh] object-contain rounded-2xl border border-white/10 bg-black/40" />
-            {cutImages.length > 1 && (
-              <div className="flex justify-center gap-2 mt-3">
+            <div className="flex justify-center gap-2 mt-3">
+              <button
+                type="button"
+                onClick={() => {
+                  void downloadOne(cutLightboxImage, `cut-${cutLightboxIndex + 1}`);
+                }}
+                className="px-3 py-1 rounded-lg bg-blue-600/60 hover:bg-blue-500 text-[9px] font-black"
+              >
+                下载此张
+              </button>
+              {cutImages.length > 1 && (
+                <>
                 <button
                   type="button"
                   onClick={() => setCutLightboxIndex((i) => (i == null ? i : (i - 1 + cutImages.length) % cutImages.length))}
@@ -503,15 +510,9 @@ const ArchivedDetailModal: React.FC<{
                 >
                   下一张
                 </button>
-                <button
-                  type="button"
-                  onClick={() => downloadOne(cutLightboxImage, `cut-${cutLightboxIndex + 1}`)}
-                  className="px-3 py-1 rounded-lg bg-blue-600/60 hover:bg-blue-500 text-[9px] font-black"
-                >
-                  下载此张
-                </button>
-              </div>
-            )}
+                </>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -533,7 +534,9 @@ const WorkflowSection: React.FC<{
   onLog?: (level: 'info' | 'warn' | 'error', message: string, detail?: string) => void;
   /** 拖图到「生成3D」能力时调用，不进入执行队列，直接提交 3D 任务 */
   onAddGenerate3DJob?: (preset: CustomAppModule, imageBase64: string) => void;
-}> = ({ capabilityPresets, capabilitySets: capabilitySetsProp = [], assets: assetsProp, onAssetsChange: setAssets, pending: pendingProp, onPendingChange: setPending, onOpenLibraryPicker, onLog, onAddGenerate3DJob }) => {
+  /** 用于按账号隔离常用功能偏好；未传时走 guest */
+  preferenceScope?: string | null;
+}> = ({ capabilityPresets, capabilitySets: capabilitySetsProp = [], assets: assetsProp, onAssetsChange: setAssets, pending: pendingProp, onPendingChange: setPending, onOpenLibraryPicker, onLog, onAddGenerate3DJob, preferenceScope = null }) => {
   const assets = Array.isArray(assetsProp) ? assetsProp : [];
   const pending = Array.isArray(pendingProp) ? pendingProp : [];
   const capabilitySets = Array.isArray(capabilitySetsProp) ? capabilitySetsProp : [];
@@ -578,6 +581,11 @@ const WorkflowSection: React.FC<{
   const [completedTaskIds, setCompletedTaskIds] = useState<Set<string>>(new Set());
   const [draggingAssetIds, setDraggingAssetIds] = useState<string[] | null>(null);
   const [dragOverAction, setDragOverAction] = useState<string | null>(null);
+  const [draggingActionId, setDraggingActionId] = useState<string | null>(null);
+  const [draggingActionFromFavorite, setDraggingActionFromFavorite] = useState(false);
+  const [actionDroppedInFavorite, setActionDroppedInFavorite] = useState(false);
+  const [favoriteDropActive, setFavoriteDropActive] = useState(false);
+  const [collapsedSectionIds, setCollapsedSectionIds] = useState<Record<string, boolean>>({});
   const draggingAssetId = draggingAssetIds?.[0] ?? null;
   const [cutSelectState, setCutSelectState] = useState<{
     task: WorkflowPendingTask;
@@ -646,6 +654,12 @@ const WorkflowSection: React.FC<{
       return child ? getAssetDisplayImage(child, assetsList, visited) : a.original;
     }
     return a.results[a.displayKey] ?? a.original;
+  };
+  const getAssetDisplayTypeLabel = (a: WorkflowAsset): string => {
+    if (a.displayKey === 'original') return '原始';
+    if (a.displayKey === 'cut_image') return a.groupKind === 'manual' ? '组' : '切割';
+    const baseId = baseActionId(a.displayKey);
+    return getModule(baseId)?.label ?? baseId;
   };
 
   const addToPending = useCallback(
@@ -1118,24 +1132,82 @@ const WorkflowSection: React.FC<{
   };
 
   const [dropZoneActive, setDropZoneActive] = useState(false);
+  const favoriteStorageKey = useMemo(
+    () => (preferenceScope ? `ac_workflow_favorites_v1__u_${preferenceScope}` : 'ac_workflow_favorites_v1__guest'),
+    [preferenceScope]
+  );
+  const [favoriteActionIds, setFavoriteActionIds] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(favoriteStorageKey);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed.filter((x) => typeof x === 'string') : [];
+    } catch {
+      return [];
+    }
+  });
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(favoriteStorageKey);
+      const parsed = raw ? JSON.parse(raw) : [];
+      setFavoriteActionIds(Array.isArray(parsed) ? parsed.filter((x) => typeof x === 'string') : []);
+    } catch {
+      setFavoriteActionIds([]);
+    }
+  }, [favoriteStorageKey]);
+  useEffect(() => {
+    try {
+      localStorage.setItem(favoriteStorageKey, JSON.stringify(favoriteActionIds));
+    } catch {
+      // ignore persist failure
+    }
+  }, [favoriteActionIds, favoriteStorageKey]);
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setDropZoneActive(false);
     const files = e.dataTransfer?.files;
     if (files?.length) addImagesFromFiles(Array.from(files));
   }, [addImagesFromFiles]);
-  const handlePaste = useCallback((e: React.ClipboardEvent) => {
-    const items = e.clipboardData?.items;
-    if (!items?.length) return;
+  const collectImageFilesFromClipboardItems = useCallback((items?: DataTransferItemList | null) => {
+    if (!items?.length) return [] as File[];
     const files: File[] = [];
     for (let i = 0; i < items.length; i++) {
-      if (items[i].type.startsWith('image/')) files.push(items[i].getAsFile()!);
+      if (!items[i].type.startsWith('image/')) continue;
+      const f = items[i].getAsFile();
+      if (f) files.push(f);
     }
+    return files;
+  }, []);
+
+  const isEditableTarget = useCallback((target: EventTarget | null) => {
+    const el = target instanceof Element ? target : null;
+    if (!el) return false;
+    if (el.closest('input, textarea, select, [contenteditable="true"]')) return true;
+    if ((el as HTMLElement).isContentEditable) return true;
+    return false;
+  }, []);
+
+  const handlePaste = useCallback((e: React.ClipboardEvent) => {
+    const files = collectImageFilesFromClipboardItems(e.clipboardData?.items);
     if (files.length) {
       e.preventDefault();
       addImagesFromFiles(files);
     }
-  }, [addImagesFromFiles]);
+  }, [addImagesFromFiles, collectImageFilesFromClipboardItems]);
+
+  useEffect(() => {
+    const onWindowPaste = (e: ClipboardEvent) => {
+      if (showArchived) return;
+      if (isEditableTarget(e.target)) return;
+      const files = collectImageFilesFromClipboardItems(e.clipboardData?.items);
+      if (!files.length) return;
+      e.preventDefault();
+      addImagesFromFiles(files);
+    };
+    window.addEventListener('paste', onWindowPaste);
+    return () => {
+      window.removeEventListener('paste', onWindowPaste);
+    };
+  }, [addImagesFromFiles, collectImageFilesFromClipboardItems, isEditableTarget, showArchived]);
 
   const visibleAssets = useMemo(() => {
     // 仅展示“根资产”：归档状态匹配，且不是子资产（没有 parentAssetId）
@@ -1176,6 +1248,8 @@ const WorkflowSection: React.FC<{
     });
     return keys;
   };
+  const getGeneratedImageCount = (a: WorkflowAsset): number =>
+    Math.max(0, getDisplayKeysForAsset(a).length - 1);
 
   const cycleDisplayKey = (assetId: string, delta: number) => {
     const a = assets.find((x) => x.id === assetId);
@@ -1674,6 +1748,201 @@ const WorkflowSection: React.FC<{
     },
     [assets]
   );
+  const favoriteActionSet = useMemo(() => new Set(favoriteActionIds), [favoriteActionIds]);
+  const visibleByCategory = useMemo(
+    () =>
+      byCategory
+        .map((g) => ({ ...g, list: g.list.filter((m) => !favoriteActionSet.has(m.id)) }))
+        .filter((g) => g.list.length > 0),
+    [byCategory, favoriteActionSet]
+  );
+  const visiblePresets = useMemo(
+    () => presets.filter((m) => !favoriteActionSet.has(m.id)),
+    [presets, favoriteActionSet]
+  );
+  const visibleCapabilitySets = useMemo(
+    () => capabilitySets.filter((s) => !favoriteActionSet.has(`${SET_ACTION_PREFIX}${s.id}`)),
+    [capabilitySets, favoriteActionSet]
+  );
+  const favoriteEntries = useMemo(() => {
+    return favoriteActionIds
+      .map((id) => {
+        if (id.startsWith(SET_ACTION_PREFIX)) {
+          const sid = id.slice(SET_ACTION_PREFIX.length);
+          const set = capabilitySets.find((s) => s.id === sid);
+          if (!set) return null;
+          return { id, label: set.label, kind: 'set' as const, set };
+        }
+        const mod = actionModules.find((m) => m.id === id);
+        if (!mod) return null;
+        return { id, label: mod.label, kind: 'module' as const, mod };
+      })
+      .filter((x): x is { id: string; label: string; kind: 'module' | 'set'; mod?: CustomAppModule; set?: CapabilitySet } => !!x);
+  }, [favoriteActionIds, capabilitySets, actionModules]);
+  const removeActionFromFavorite = useCallback((actionId: string) => {
+    setFavoriteActionIds((prev) => prev.filter((id) => id !== actionId));
+  }, []);
+  const toggleSectionCollapsed = useCallback((sectionId: string) => {
+    setCollapsedSectionIds((prev) => ({ ...prev, [sectionId]: !prev[sectionId] }));
+  }, []);
+
+  const handleDropToModuleAction = useCallback(
+    (mod: CustomAppModule, tweakPrompt = false) => {
+      if (tweakPrompt) {
+        const targets: Array<
+          | { assetId: string; inputImage: string; sourceGroupAssetId?: string; sourceItemIndex?: number }
+          | { imageBase64: string; parentAssetId: string; sourceGroupAssetId: string; sourceItemIndex: number }
+        > = [];
+        if (draggingAssetIds?.length) {
+          const effectiveIds = getEffectiveAssetIdsForAction(draggingAssetIds);
+          effectiveIds.forEach((id) => {
+            const a = assets.find((x) => x.id === id);
+            if (a) targets.push({ assetId: id, inputImage: getAssetDisplayImage(a) });
+          });
+        } else if (draggingGroupItems && currentGroupAsset) {
+          draggingGroupItems.itemIndexes.forEach((itemIndex) => {
+            const item = currentGroupItems[itemIndex];
+            if (!item) return;
+            if (typeof item === 'string') {
+              targets.push({
+                imageBase64: item,
+                parentAssetId: currentGroupAsset.id,
+                sourceGroupAssetId: currentGroupAsset.id,
+                sourceItemIndex: itemIndex,
+              });
+            } else {
+              const child = assets.find((x) => x.id === (item as { assetId: string }).assetId);
+              if (child)
+                targets.push({
+                  assetId: (item as { assetId: string }).assetId,
+                  inputImage: getAssetDisplayImage(child),
+                  sourceGroupAssetId: currentGroupAsset.id,
+                  sourceItemIndex: itemIndex,
+                });
+            }
+          });
+        }
+        if (targets.length > 0) setPromptTweakModal({ preset: mod, targets });
+        return;
+      }
+
+      if (draggingAssetIds?.length) {
+        const effectiveIds = getEffectiveAssetIdsForAction(draggingAssetIds);
+        if (mod.category === 'generate_3d' && onAddGenerate3DJob && draggingAssetId) {
+          const a = assets.find((x) => x.id === draggingAssetId);
+          const img = a ? getAssetDisplayImage(a) : null;
+          if (img) onAddGenerate3DJob(mod, img);
+          return;
+        }
+        effectiveIds.forEach((id) => addToPending(id, mod.id));
+        return;
+      }
+      if (draggingGroupItems && currentGroupAsset) {
+        if (mod.category === 'generate_3d' && onAddGenerate3DJob) {
+          const firstIndex = draggingGroupItems.itemIndexes[0];
+          const item = currentGroupItems[firstIndex];
+          let img: string | null = null;
+          if (typeof item === 'string') img = item;
+          else {
+            const child = assets.find((x) => x.id === item.assetId);
+            if (child) img = getAssetDisplayImage(child);
+          }
+          if (img) onAddGenerate3DJob(mod, img);
+          return;
+        }
+        draggingGroupItems.itemIndexes.forEach((itemIndex) => {
+          const item = currentGroupItems[itemIndex];
+          if (!item) return;
+          if (typeof item === 'string') {
+            addImageToPending(item, mod.id, {
+              parentAssetId: currentGroupAsset.id,
+              sourceGroupAssetId: currentGroupAsset.id,
+              sourceItemIndex: itemIndex,
+            });
+          } else {
+            const child = assets.find((x) => x.id === (item as { assetId: string }).assetId);
+            const inputImage = child ? getAssetDisplayImage(child) : '';
+            setPending((prev) => [
+              ...prev,
+              {
+                id: uuid(),
+                assetId: (item as { assetId: string }).assetId,
+                actionType: mod.id,
+                inputImage,
+                addedAt: Date.now(),
+                sourceGroupAssetId: currentGroupAsset.id,
+                sourceItemIndex: itemIndex,
+              },
+            ]);
+          }
+        });
+      }
+    },
+    [
+      draggingAssetIds,
+      getEffectiveAssetIdsForAction,
+      assets,
+      getAssetDisplayImage,
+      draggingGroupItems,
+      currentGroupAsset,
+      currentGroupItems,
+      onAddGenerate3DJob,
+      draggingAssetId,
+      addToPending,
+      addImageToPending,
+      setPending,
+    ]
+  );
+
+  const handleDropToSetAction = useCallback(
+    (setActionId: string) => {
+      if (draggingAssetIds?.length) {
+        const effectiveIds = getEffectiveAssetIdsForAction(draggingAssetIds);
+        effectiveIds.forEach((id) => addToPending(id, setActionId));
+        return;
+      }
+      if (draggingGroupItems && currentGroupAsset) {
+        draggingGroupItems.itemIndexes.forEach((itemIndex) => {
+          const item = currentGroupItems[itemIndex];
+          if (!item) return;
+          if (typeof item === 'string') {
+            addImageToPending(item, setActionId, {
+              parentAssetId: currentGroupAsset.id,
+              sourceGroupAssetId: currentGroupAsset.id,
+              sourceItemIndex: itemIndex,
+            });
+          } else {
+            const child = assets.find((x) => x.id === (item as { assetId: string }).assetId);
+            const inputImage = child ? getAssetDisplayImage(child) : '';
+            setPending((prev) => [
+              ...prev,
+              {
+                id: uuid(),
+                assetId: (item as { assetId: string }).assetId,
+                actionType: setActionId,
+                inputImage,
+                addedAt: Date.now(),
+                sourceGroupAssetId: currentGroupAsset.id,
+                sourceItemIndex: itemIndex,
+              },
+            ]);
+          }
+        });
+      }
+    },
+    [
+      draggingAssetIds,
+      getEffectiveAssetIdsForAction,
+      addToPending,
+      draggingGroupItems,
+      currentGroupAsset,
+      currentGroupItems,
+      addImageToPending,
+      assets,
+      getAssetDisplayImage,
+      setPending,
+    ]
+  );
 
   return (
     <div className="flex flex-col min-h-[400px] h-[calc(100dvh-6rem)] gap-4">
@@ -1766,16 +2035,29 @@ const WorkflowSection: React.FC<{
           </button>
         )}
         <div className="flex items-center gap-2">
-          <span className="text-[9px] font-black text-gray-500 uppercase">瀑布流列数</span>
-          {[2, 3, 4, 5, 6].map((n) => (
+          <div className="inline-flex items-center rounded-lg border border-white/10 bg-white/5 overflow-hidden">
             <button
-              key={n}
-              onClick={() => setColumnCount(n)}
-              className={`w-8 h-8 rounded-lg text-[10px] font-black border ${columnCount === n ? 'bg-blue-600 border-blue-500' : 'bg-white/5 border-white/10 text-gray-500 hover:bg-white/10'}`}
+              type="button"
+              onClick={() => setColumnCount((n) => Math.max(2, n - 1))}
+              disabled={columnCount <= 2}
+              className="w-8 h-8 text-[12px] font-black text-gray-300 hover:bg-white/10 disabled:opacity-35 disabled:hover:bg-transparent"
+              aria-label="减少列数"
             >
-              {n}
+              −
             </button>
-          ))}
+            <span className="w-9 h-8 inline-flex items-center justify-center text-[10px] font-black text-blue-300 border-x border-white/10">
+              {columnCount}
+            </span>
+            <button
+              type="button"
+              onClick={() => setColumnCount((n) => Math.min(6, n + 1))}
+              disabled={columnCount >= 6}
+              className="w-8 h-8 text-[12px] font-black text-gray-300 hover:bg-white/10 disabled:opacity-35 disabled:hover:bg-transparent"
+              aria-label="增加列数"
+            >
+              +
+            </button>
+          </div>
         </div>
         {(pending.length > 0 || executingQueue) && (
           <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-white/5 border border-white/10">
@@ -1868,21 +2150,23 @@ const WorkflowSection: React.FC<{
         />
       )}
 
-      <div
-        className={`shrink-0 rounded-xl border-2 border-dashed p-4 text-center transition-colors ${dropZoneActive ? 'border-blue-500 bg-blue-500/10' : 'border-white/20 bg-white/5'}`}
-        onDragOver={(e) => { e.preventDefault(); setDropZoneActive(true); }}
-        onDragLeave={() => setDropZoneActive(false)}
-        onDrop={handleDrop}
-        onPaste={handlePaste}
-        tabIndex={0}
-      >
-        <span className="text-[9px] font-black uppercase text-gray-500">拖拽图片到此处，或在此区域按 Ctrl+V 粘贴</span>
-      </div>
-
       <div className="flex-1 min-h-0 flex gap-6">
         <div
           ref={scrollAreaRef}
-          className="flex-1 min-w-0 min-h-0 overflow-y-auto no-scrollbar flex flex-col gap-3"
+          className={`flex-1 min-w-0 min-h-0 overflow-y-auto no-scrollbar flex flex-col gap-3 rounded-xl transition-colors ${
+            dropZoneActive ? 'ring-1 ring-blue-500/60 bg-blue-500/[0.06]' : ''
+          }`}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDropZoneActive(true);
+          }}
+          onDragLeave={(e) => {
+            const next = e.relatedTarget as Node | null;
+            if (!next || !e.currentTarget.contains(next)) setDropZoneActive(false);
+          }}
+          onDrop={handleDrop}
+          onPaste={handlePaste}
+          tabIndex={0}
           onMouseDownCapture={(e) => {
             if (showArchived) return;
             if (!scrollAreaRef.current?.contains(e.target as Node)) return;
@@ -2004,7 +2288,14 @@ const WorkflowSection: React.FC<{
                         data-workflow-card
                         className="break-inside-avoid mb-4 rounded-2xl border border-white/10 bg-black/40 overflow-hidden"
                       >
-                        <img src={workflowSafeImgSrc(img)} alt="" className="w-full h-auto object-cover block" style={{ maxHeight: 280 }} />
+                        <img
+                          src={workflowSafeImgSrc(img)}
+                          alt=""
+                          draggable={false}
+                          onDragStart={(e) => e.preventDefault()}
+                          className="w-full h-auto object-cover block"
+                          style={{ maxHeight: 280 }}
+                        />
                       </div>
                     ))
                   : currentGroupItems.map((item, idx) => {
@@ -2218,8 +2509,16 @@ const WorkflowSection: React.FC<{
                                         return nestedChild ? getAssetDisplayImage(nestedChild) : img;
                                       })()}
                                       alt=""
+                                      draggable={false}
+                                      onDragStart={(e) => e.preventDefault()}
                                       className="w-full h-auto object-cover block"
                                       style={{ maxHeight: 360 }}
+                                    />
+                                    <div
+                                      aria-hidden
+                                      className="absolute inset-0 z-[1]"
+                                      draggable={false}
+                                      onDragStart={(e) => e.preventDefault()}
                                     />
                                     {isPendingOnly && (
                                       <div
@@ -2267,69 +2566,35 @@ const WorkflowSection: React.FC<{
                                         {(childAsset.groupLabel ?? (childAsset.groupKind === 'manual' ? '组' : '切割'))} {childAsset.cutImageGroup.length}
                                       </span>
                                     )}
-                                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-end justify-center gap-1 p-2">
-                                      <button
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setDisplayKey(childAsset.id, 'original');
-                                        }}
-                                        className={`px-2 py-1 rounded text-[8px] font-black uppercase ${
-                                          childAsset.displayKey === 'original' ? 'bg-blue-600' : 'bg-white/20 hover:bg-white/30'
-                                        }`}
-                                      >
-                                        原始
-                                      </button>
-                                      {childAsset.cutImageGroup?.length && childAsset.groupKind !== 'manual' && (
-                                        <button
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            setDisplayKey(childAsset.id, 'cut_image');
-                                          }}
-                                          className={`px-2 py-1 rounded text-[8px] font-black uppercase ${
-                                            childAsset.displayKey === 'cut_image' ? 'bg-blue-600' : 'bg-white/20 hover:bg-white/30'
-                                          }`}
-                                        >
-                                          {childAsset.groupKind === 'manual' ? '组' : '切割'}
-                                        </button>
-                                      )}
-                                      {(childAsset.resultOrder || []).map((k) => {
-                                        if (baseActionId(k) === 'cut_image') return null;
-                                        const mod = getModule(baseActionId(k));
-                                        const label = mod?.label ?? baseActionId(k);
-                                        if (!childAsset.results[k]) return null;
-                                        return (
+                                  </div>
+                                  {!childAsset.cutImageGroup?.length && (
+                                    <div className="p-2 flex flex-col gap-1.5 border-t border-white/5">
+                                      <div className="flex gap-1 flex-wrap items-center justify-between min-h-[18px]">
+                                        <span className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[7px] text-gray-300/95 select-none">
+                                          <span className="font-black text-blue-300">{getGeneratedImageCount(childAsset)}</span>
+                                          <span className="text-gray-500">·</span>
+                                          <span className="text-gray-400">{getAssetDisplayTypeLabel(childAsset)}</span>
+                                        </span>
+                                        {childAsset.displayKey !== 'original' && (
                                           <button
-                                            key={k}
-                                            onClick={(e) => {
-                                              e.stopPropagation();
-                                              setDisplayKey(childAsset.id, k);
-                                            }}
-                                            className={`px-2 py-1 rounded text-[8px] font-black uppercase ${
-                                              childAsset.displayKey === k ? 'bg-blue-600' : 'bg-white/20 hover:bg-white/30'
-                                            }`}
+                                            onClick={() => discardResult(childAsset.id, childAsset.displayKey)}
+                                            className="px-1.5 py-0.5 rounded text-[7px] text-red-400 hover:bg-red-500/20"
+                                            title="丢弃当前显示的版本"
                                           >
-                                            {label}
+                                            丢弃当前版本
                                           </button>
-                                        );
-                                      })}
+                                        )}
+                                        {childAsset.displayKey === 'original' && (
+                                          <span
+                                            aria-hidden
+                                            className="px-1.5 py-0.5 text-[7px] opacity-0 select-none pointer-events-none"
+                                          >
+                                            丢弃当前版本
+                                          </span>
+                                        )}
+                                      </div>
                                     </div>
-                                  </div>
-                                  <div className="p-2 flex flex-col gap-1.5 border-t border-white/5">
-                                    <span className="text-[7px] text-gray-500 leading-snug line-clamp-2 max-w-full">
-                                      拖到功能区 或 点击大图选操作 · 有切割组时点击大图进入组内
-                                    </span>
-                                    <div className="flex gap-1 flex-wrap items-center justify-end">
-                                      {childAsset.displayKey !== 'original' && (
-                                        <button
-                                          onClick={() => discardResult(childAsset.id, childAsset.displayKey)}
-                                          className="px-1.5 py-0.5 rounded text-[7px] text-red-400 hover:bg-red-500/20"
-                                          title="丢弃当前显示的版本"
-                                        >
-                                          丢弃当前版本
-                                        </button>
-                                      )}
-                                    </div>
-                                  </div>
+                                  )}
                                 </div>
                               );
                             })()}
@@ -2370,7 +2635,20 @@ const WorkflowSection: React.FC<{
                           }}
                         >
                           <div className="relative cursor-pointer" onClick={() => setGroupStringLightboxIndex(idx)}>
-                            <img src={workflowSafeImgSrc(img)} alt="" className="w-full h-auto object-cover block" style={{ maxHeight: 280 }} />
+                            <img
+                              src={workflowSafeImgSrc(img)}
+                              alt=""
+                              draggable={false}
+                              onDragStart={(e) => e.preventDefault()}
+                              className="w-full h-auto object-cover block"
+                              style={{ maxHeight: 280 }}
+                            />
+                            <div
+                              aria-hidden
+                              className="absolute inset-0 z-[1]"
+                              draggable={false}
+                              onDragStart={(e) => e.preventDefault()}
+                            />
                             {isPendingOnly && (
                               <div
                                 className="absolute inset-0 z-10 bg-black/40 flex items-center justify-center"
@@ -2408,9 +2686,7 @@ const WorkflowSection: React.FC<{
                               </div>
                             )}
                           </div>
-                          <div className="p-1.5 border-t border-white/5 text-[8px] text-gray-500">
-                            拖到功能区操作 · 点击预览大图
-                          </div>
+                          {/* 组内纯图片项不再保留底部留白 */}
                         </div>
                       );
                     })}
@@ -2639,6 +2915,8 @@ const WorkflowSection: React.FC<{
                                 })()
                               )}
                               alt=""
+                              draggable={false}
+                              onDragStart={(e) => e.preventDefault()}
                               className="absolute inset-0 w-full h-full object-cover block"
                               onLoad={(e) => {
                                 setAssetAspectById((prev) => {
@@ -2649,6 +2927,12 @@ const WorkflowSection: React.FC<{
                                   return { ...prev, [a.id]: ratio };
                                 });
                               }}
+                            />
+                            <div
+                              aria-hidden
+                              className="absolute inset-0 z-[1]"
+                              draggable={false}
+                              onDragStart={(e) => e.preventDefault()}
                             />
                           </div>
                           {isPendingOnly && (
@@ -2691,52 +2975,15 @@ const WorkflowSection: React.FC<{
                               {(a.groupLabel ?? (a.groupKind === 'manual' ? '组' : '切割'))} {a.cutImageGroup.length}
                             </span>
                           )}
-                          {!showArchived && (
-                            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-end justify-center gap-1 p-2">
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setDisplayKey(a.id, 'original');
-                                }}
-                                className={`px-2 py-1 rounded text-[8px] font-black uppercase ${
-                                  a.displayKey === 'original'
-                                    ? 'bg-blue-600'
-                                    : 'bg-white/20 hover:bg-white/30'
-                                }`}
-                              >
-                                原始
-                              </button>
-                              {(a.resultOrder || []).map((k) => {
-                                if (baseActionId(k) === 'cut_image') return null;
-                                const mod = getModule(baseActionId(k));
-                                const label = mod?.label ?? baseActionId(k);
-                                if (!a.results[k]) return null;
-                                return (
-                                  <button
-                                    key={k}
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setDisplayKey(a.id, k);
-                                    }}
-                                    className={`px-2 py-1 rounded text-[8px] font-black uppercase ${
-                                      a.displayKey === k
-                                        ? 'bg-blue-600'
-                                        : 'bg-white/20 hover:bg-white/30'
-                                    }`}
-                                  >
-                                    {label}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          )}
                         </div>
-                        {!showArchived && (
+                        {!showArchived && !a.cutImageGroup?.length && (
                           <div className="p-2 flex flex-col gap-1.5 border-t border-white/5 bg-black/90">
-                            <span className="text-[7px] text-gray-500 leading-snug line-clamp-2 max-w-full">
-                              拖到功能区 或 点击大图选操作 · 有切割组时点击大图进入组内
-                            </span>
-                            <div className="flex gap-1 flex-wrap items-center justify-end">
+                            <div className="flex gap-1 flex-wrap items-center justify-between min-h-[18px]">
+                              <span className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[7px] text-gray-300/95 select-none">
+                                <span className="font-black text-blue-300">{getGeneratedImageCount(a)}</span>
+                                <span className="text-gray-500">·</span>
+                                <span className="text-gray-400">{getAssetDisplayTypeLabel(a)}</span>
+                              </span>
                               {a.displayKey !== 'original' && (
                                 <button
                                   onClick={() => discardResult(a.id, a.displayKey)}
@@ -2745,6 +2992,14 @@ const WorkflowSection: React.FC<{
                                 >
                                   丢弃当前版本
                                 </button>
+                              )}
+                              {a.displayKey === 'original' && (
+                                <span
+                                  aria-hidden
+                                  className="px-1.5 py-0.5 text-[7px] opacity-0 select-none pointer-events-none"
+                                >
+                                  丢弃当前版本
+                                </span>
                               )}
                             </div>
                           </div>
@@ -2872,7 +3127,7 @@ const WorkflowSection: React.FC<{
               setDraggingAssetIds(null);
               setDraggingGroupItems(null);
             }}
-            className={`rounded-xl border-2 border-dashed p-3 min-h-[64px] flex flex-col items-center justify-center text-center transition-colors ${
+            className={`rounded-xl border-2 border-dashed p-2.5 min-h-[56px] flex flex-col items-center justify-center text-center transition-colors ${
               dragOverAction === '__group__'
                 ? 'border-violet-500 bg-violet-500/10'
                 : 'border-violet-400/40 bg-violet-500/5 hover:border-violet-400/60'
@@ -2899,7 +3154,7 @@ const WorkflowSection: React.FC<{
               setDragOverAction(null);
               setDraggingGroupItems(null);
             }}
-            className={`rounded-xl border-2 border-dashed p-3 min-h-[64px] flex flex-col items-center justify-center text-center transition-colors ${
+            className={`rounded-xl border-2 border-dashed p-2.5 min-h-[56px] flex flex-col items-center justify-center text-center transition-colors ${
               dragOverAction === '__ungroup__'
                 ? 'border-amber-500 bg-amber-500/10'
                 : 'border-amber-400/40 bg-amber-500/5 hover:border-amber-400/60'
@@ -2970,7 +3225,7 @@ const WorkflowSection: React.FC<{
               setDraggingAssetIds(null);
               setDraggingGroupItems(null);
             }}
-            className={`rounded-xl border-2 border-dashed p-3 min-h-[64px] flex flex-col items-center justify-center text-center transition-colors ${
+            className={`rounded-xl border-2 border-dashed p-2.5 min-h-[56px] flex flex-col items-center justify-center text-center transition-colors ${
               dragOverAction === '__copy__'
                 ? 'border-sky-500 bg-sky-500/10'
                 : 'border-sky-400/40 bg-sky-500/5 hover:border-sky-400/60'
@@ -3025,7 +3280,7 @@ const WorkflowSection: React.FC<{
               setDraggingAssetIds(null);
               setDraggingGroupItems(null);
             }}
-            className={`rounded-xl border-2 border-dashed p-3 min-h-[64px] flex flex-col items-center justify-center text-center transition-colors ${
+            className={`rounded-xl border-2 border-dashed p-2.5 min-h-[56px] flex flex-col items-center justify-center text-center transition-colors ${
               dragOverAction === '__delete__'
                 ? 'border-red-500 bg-red-500/10'
                 : 'border-red-400/40 bg-red-500/5 hover:border-red-400/60'
@@ -3080,7 +3335,7 @@ const WorkflowSection: React.FC<{
               setDraggingAssetIds(null);
               setDraggingGroupItems(null);
             }}
-            className={`rounded-xl border-2 border-dashed p-3 min-h-[64px] flex flex-col items-center justify-center text-center transition-colors col-span-2 ${
+            className={`rounded-xl border-2 border-dashed p-2.5 min-h-[56px] flex flex-col items-center justify-center text-center transition-colors col-span-2 ${
               dragOverAction === '__archive__'
                 ? 'border-emerald-500 bg-emerald-500/10'
                 : 'border-emerald-400/40 bg-emerald-500/5 hover:border-emerald-400/60'
@@ -3090,29 +3345,166 @@ const WorkflowSection: React.FC<{
             <span className="text-[8px] text-emerald-400/80 mt-0.5">将图片拖到此处标记为已完成（组内同效）</span>
           </div>
           </div>
-          {presets.length === 0 && capabilitySets.length === 0 && (
+          {visiblePresets.length === 0 && visibleCapabilitySets.length === 0 && favoriteEntries.length === 0 && (
             <div className="rounded-xl border border-dashed border-white/20 p-4 text-center text-[9px] text-gray-500">
               暂无能力预设，请先在「能力」界面添加
             </div>
           )}
-          {presets.length > 0 && (
+          {favoriteEntries.length > 0 || visiblePresets.length > 0 ? (
             <div className="space-y-4">
-              {byCategory.length > 0 ? (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between rounded-lg border border-cyan-400/25 bg-cyan-500/[0.06] px-2.5 py-1.5">
+                  <span className="text-[8px] font-black text-cyan-300/90 uppercase tracking-wide">常用功能</span>
+                  <span className="text-[8px] text-cyan-200/60">拖入收藏</span>
+                </div>
+                <div
+                  onDropCapture={() => {
+                    if (draggingActionId) setActionDroppedInFavorite(true);
+                  }}
+                  onDragOver={(e) => {
+                    if (!draggingActionId) return;
+                    e.preventDefault();
+                    setFavoriteDropActive(true);
+                  }}
+                  onDragLeave={() => setFavoriteDropActive(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setFavoriteDropActive(false);
+                    if (!draggingActionId) return;
+                    setFavoriteActionIds((prev) => (prev.includes(draggingActionId) ? prev : [...prev, draggingActionId]));
+                    setActionDroppedInFavorite(true);
+                  }}
+                  className="space-y-2"
+                >
+                  {favoriteEntries.length === 0 ? (
+                    <div className={`text-[8px] text-center py-2 ${favoriteDropActive ? 'text-cyan-200' : 'text-cyan-200/70'}`}>
+                      把功能块拖到这里，作为常用功能
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-2">
+                      {favoriteEntries.map((entry) => (
+                        <div
+                          key={`fav-${entry.id}`}
+                          className={`rounded-xl border-2 border-dashed min-h-[60px] flex transition-colors ${
+                            dragOverAction === entry.id
+                              ? 'border-blue-500 bg-blue-500/10'
+                              : dragOverAction === entry.id + '__tweak'
+                                ? 'border-indigo-400 bg-indigo-500/10 ring-1 ring-indigo-400/40'
+                                : entry.kind === 'set'
+                                  ? 'border-amber-500/30 bg-amber-600/10 hover:border-amber-400/50'
+                                  : 'border-white/20 bg-white/5 hover:border-white/30'
+                          }`}
+                          draggable
+                          onDragStart={() => {
+                            setDraggingActionId(entry.id);
+                            setDraggingActionFromFavorite(true);
+                            setActionDroppedInFavorite(false);
+                          }}
+                          onDragEnd={() => {
+                            if (draggingActionFromFavorite && !actionDroppedInFavorite) {
+                              removeActionFromFavorite(entry.id);
+                            }
+                            setDraggingActionId(null);
+                            setDraggingActionFromFavorite(false);
+                            setActionDroppedInFavorite(false);
+                            setFavoriteDropActive(false);
+                          }}
+                        >
+                          <div
+                            className={`flex-1 p-3 flex flex-col items-center justify-center text-center min-w-0 transition-colors ${
+                              entry.kind === 'module' && entry.mod?.category === 'image_gen' ? 'border-r border-white/10' : ''
+                            } ${
+                              dragOverAction === entry.id + '__tweak'
+                                ? 'bg-black/20'
+                                : dragOverAction === entry.id
+                                  ? 'bg-blue-500/10'
+                                  : ''
+                            }`}
+                            onDragOver={(e) => {
+                              e.preventDefault();
+                              setDragOverAction(entry.id);
+                            }}
+                            onDragLeave={() => setDragOverAction(null)}
+                            onDrop={(e) => {
+                              e.preventDefault();
+                              setDragOverAction(null);
+                              if (entry.kind === 'set') {
+                                handleDropToSetAction(entry.id);
+                              } else if (entry.mod) {
+                                handleDropToModuleAction(entry.mod, false);
+                              }
+                            }}
+                          >
+                            <span className="text-[9px] font-black uppercase">{entry.label}</span>
+                          </div>
+                          {entry.kind === 'module' && entry.mod?.category === 'image_gen' && (
+                            <div
+                              className={`w-11 shrink-0 flex flex-col items-center justify-center rounded-r-lg transition-colors cursor-default ${
+                                dragOverAction === entry.id + '__tweak'
+                                  ? 'bg-blue-600/25 border-l border-blue-400/40'
+                                  : 'bg-white/5 border-l border-white/10 hover:bg-white/10'
+                              }`}
+                              title="拖到此处可微调提示词后加入队列"
+                              onDragOver={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setDragOverAction(entry.id + '__tweak');
+                              }}
+                              onDragLeave={() => setDragOverAction(null)}
+                              onDrop={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setDragOverAction(null);
+                                if (entry.mod) handleDropToModuleAction(entry.mod, true);
+                              }}
+                            >
+                              <span className="text-[10px] text-blue-400 font-bold" title="微调提示词">调</span>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+          {visiblePresets.length > 0 && (
+            <div className="space-y-4">
+              {visibleByCategory.length > 0 ? (
                 <>
-              {byCategory.map(({ category, list }) => (
+              {visibleByCategory.map(({ category, list }) => (
                 <div key={category.id}>
-                  <div className="text-[8px] font-black text-gray-500 uppercase mb-1.5">{category.label}</div>
+                  <button
+                    type="button"
+                    onClick={() => toggleSectionCollapsed(`cat:${category.id}`)}
+                    className="w-full text-left mb-1.5 flex items-center justify-between rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-[8px] font-black uppercase tracking-wide text-gray-400 hover:bg-white/[0.06] hover:text-gray-200 transition-colors"
+                  >
+                    <span>{category.label}</span>
+                    <span className="text-[10px] text-gray-500">{collapsedSectionIds[`cat:${category.id}`] ? '▼' : '▲'}</span>
+                  </button>
+                  {!collapsedSectionIds[`cat:${category.id}`] && (
                   <div className="grid grid-cols-2 gap-2">
                     {list.map((mod) => (
                       <div
                         key={mod.id}
-                        className={`rounded-xl border-2 border-dashed min-h-[72px] flex transition-colors ${
+                        className={`rounded-xl border-2 border-dashed min-h-[60px] flex transition-colors ${
                           dragOverAction === mod.id
                             ? 'border-blue-500 bg-blue-500/10'
                             : dragOverAction === mod.id + '__tweak'
                               ? 'border-indigo-400 bg-indigo-500/10 ring-1 ring-indigo-400/40'
                               : 'border-white/20 bg-white/5 hover:border-white/30'
                         }`}
+                        draggable
+                        onDragStart={() => {
+                          setDraggingActionId(mod.id);
+                          setDraggingActionFromFavorite(false);
+                          setActionDroppedInFavorite(false);
+                        }}
+                        onDragEnd={() => {
+                          setDraggingActionId(null);
+                          setDraggingActionFromFavorite(false);
+                          setActionDroppedInFavorite(false);
+                          setFavoriteDropActive(false);
+                        }}
                       >
                         <div
                           className={`flex-1 p-3 flex flex-col items-center justify-center text-center min-w-0 transition-colors ${
@@ -3247,21 +3639,44 @@ const WorkflowSection: React.FC<{
                       </div>
                     ))}
                   </div>
+                  )}
                 </div>
               ))}
                 </>
               ) : (
+            <div>
+              <button
+                type="button"
+                onClick={() => toggleSectionCollapsed('__all_presets__')}
+                className="w-full text-left mb-1.5 flex items-center justify-between rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-[8px] font-black uppercase tracking-wide text-gray-400 hover:bg-white/[0.06] hover:text-gray-200 transition-colors"
+              >
+                <span>功能</span>
+                <span className="text-[10px] text-gray-500">{collapsedSectionIds.__all_presets__ ? '▼' : '▲'}</span>
+              </button>
+              {!collapsedSectionIds.__all_presets__ && (
             <div className="grid grid-cols-2 gap-2">
-              {presets.map((mod) => (
+              {visiblePresets.map((mod) => (
                 <div
                   key={mod.id}
-                  className={`rounded-xl border-2 border-dashed min-h-[72px] flex transition-colors ${
+                  className={`rounded-xl border-2 border-dashed min-h-[60px] flex transition-colors ${
                     dragOverAction === mod.id
                       ? 'border-blue-500 bg-blue-500/10'
                       : dragOverAction === mod.id + '__tweak'
                         ? 'border-indigo-400 bg-indigo-500/10 ring-1 ring-indigo-400/40'
                         : 'border-white/20 bg-white/5 hover:border-white/30'
                   }`}
+                  draggable
+                  onDragStart={() => {
+                    setDraggingActionId(mod.id);
+                    setDraggingActionFromFavorite(false);
+                    setActionDroppedInFavorite(false);
+                  }}
+                  onDragEnd={() => {
+                    setDraggingActionId(null);
+                    setDraggingActionFromFavorite(false);
+                    setActionDroppedInFavorite(false);
+                    setFavoriteDropActive(false);
+                  }}
                 >
                   <div
                     className={`flex-1 p-3 flex flex-col items-center justify-center text-center min-w-0 transition-colors ${
@@ -3398,17 +3813,41 @@ const WorkflowSection: React.FC<{
             </div>
               )}
             </div>
+              )}
+            </div>
           )}
+            </div>
+          ) : null}
 
-          {capabilitySets.length > 0 && (
+          {visibleCapabilitySets.length > 0 && (
             <div className="space-y-2">
-              <div className="text-[8px] font-black text-amber-400/90 uppercase">复合能力</div>
+              <button
+                type="button"
+                onClick={() => toggleSectionCollapsed('__capability_sets__')}
+                className="w-full text-left mb-1.5 flex items-center justify-between rounded-lg border border-amber-400/30 bg-amber-500/[0.06] px-2.5 py-1.5 text-[8px] font-black uppercase tracking-wide text-amber-300/90 hover:bg-amber-500/[0.1] hover:text-amber-200 transition-colors"
+              >
+                <span>复合能力</span>
+                <span className="text-[10px] text-amber-300/70">{collapsedSectionIds.__capability_sets__ ? '▼' : '▲'}</span>
+              </button>
+              {!collapsedSectionIds.__capability_sets__ && (
               <div className="grid grid-cols-2 gap-2">
-                {capabilitySets.map((set) => {
+                {visibleCapabilitySets.map((set) => {
                   const setActionId = SET_ACTION_PREFIX + set.id;
                   return (
                     <div
                       key={set.id}
+                      draggable
+                      onDragStart={() => {
+                        setDraggingActionId(setActionId);
+                        setDraggingActionFromFavorite(false);
+                        setActionDroppedInFavorite(false);
+                      }}
+                      onDragEnd={() => {
+                        setDraggingActionId(null);
+                        setDraggingActionFromFavorite(false);
+                        setActionDroppedInFavorite(false);
+                        setFavoriteDropActive(false);
+                      }}
                       onDragOver={(e) => {
                         e.preventDefault();
                         setDragOverAction(setActionId);
@@ -3453,7 +3892,7 @@ const WorkflowSection: React.FC<{
                           });
                         }
                       }}
-                      className={`rounded-xl border-2 border-dashed p-3 min-h-[72px] flex flex-col items-center justify-center text-center transition-colors ${
+                      className={`rounded-xl border-2 border-dashed p-2.5 min-h-[60px] flex flex-col items-center justify-center text-center transition-colors ${
                         dragOverAction === setActionId
                           ? 'border-amber-500 bg-amber-500/10'
                           : 'border-amber-500/30 bg-amber-600/10 hover:border-amber-400/50'
@@ -3464,6 +3903,7 @@ const WorkflowSection: React.FC<{
                   );
                 })}
               </div>
+              )}
             </div>
           )}
 
@@ -3518,6 +3958,18 @@ const WorkflowSection: React.FC<{
               })}
             </div>
             <div className="mt-3 flex flex-wrap gap-2 justify-center">
+              <button
+                type="button"
+                onClick={() => {
+                  void triggerImageDownload(
+                    getAssetDisplayImage(lightboxAsset),
+                    `workflow-preview-${lightboxAsset.id.slice(0, 6)}`
+                  );
+                }}
+                className="px-4 py-2 rounded-xl bg-blue-600/80 border border-blue-500/40 text-[10px] font-black uppercase hover:bg-blue-500"
+              >
+                下载当前大图
+              </button>
               {actionModules.map((mod) => (
                 <button
                   key={mod.id}

@@ -14,3 +14,22 @@ export function fileExtensionForImageDataUrl(dataUrl: string): string {
   if (subtype === 'svg+xml') return 'svg';
   return 'jpg';
 }
+
+export async function triggerImageDownload(dataUrl: string, filenameBase: string): Promise<void> {
+  const res = await fetch(dataUrl);
+  const srcBlob = await res.blob();
+  const parsedExt = fileExtensionForImageDataUrl(dataUrl);
+  const ext = parsedExt === 'jpeg' ? 'jpg' : parsedExt;
+  const mime = ext === 'jpg' ? 'image/jpeg' : srcBlob.type || `image/${ext}`;
+  const bytes = await srcBlob.arrayBuffer();
+  const blob = new Blob([bytes], { type: mime });
+  const url = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${filenameBase}.${ext}`;
+    a.click();
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}

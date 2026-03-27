@@ -5,12 +5,15 @@ type Props = {
   projects: WorkspaceProject[];
   onCreate: (name: string) => void;
   onOpen: (id: string) => void;
+  onRename: (id: string, name: string) => void;
   onDelete: (id: string) => void;
 };
 
-const WorkspaceProjectShell: React.FC<Props> = ({ projects, onCreate, onOpen, onDelete }) => {
+const WorkspaceProjectShell: React.FC<Props> = ({ projects, onCreate, onOpen, onRename, onDelete }) => {
   const [draftName, setDraftName] = useState('');
   const [filter, setFilter] = useState('');
+  const [renameTarget, setRenameTarget] = useState<WorkspaceProject | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
 
   const filtered = useMemo(() => {
     const q = filter.trim().toLowerCase();
@@ -21,6 +24,19 @@ const WorkspaceProjectShell: React.FC<Props> = ({ projects, onCreate, onOpen, on
   const handleCreate = () => {
     onCreate(draftName);
     setDraftName('');
+  };
+  const openRenameModal = (project: WorkspaceProject) => {
+    setRenameTarget(project);
+    setRenameDraft(project.name);
+  };
+  const closeRenameModal = () => {
+    setRenameTarget(null);
+    setRenameDraft('');
+  };
+  const confirmRename = () => {
+    if (!renameTarget) return;
+    onRename(renameTarget.id, renameDraft);
+    closeRenameModal();
   };
 
   return (
@@ -90,6 +106,18 @@ const WorkspaceProjectShell: React.FC<Props> = ({ projects, onCreate, onOpen, on
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
+                    openRenameModal(p);
+                  }}
+                  className="shrink-0 p-2 rounded-lg text-blue-300/80 hover:text-blue-200 hover:bg-blue-500/10 border border-transparent hover:border-blue-500/30 transition-colors"
+                  title="重命名项目"
+                  aria-label={`重命名 ${p.name}`}
+                >
+                  ✎
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
                     onDelete(p.id);
                   }}
                   className="shrink-0 p-2 rounded-lg text-red-400/80 hover:text-red-300 hover:bg-red-500/10 border border-transparent hover:border-red-500/30 transition-colors"
@@ -101,6 +129,62 @@ const WorkspaceProjectShell: React.FC<Props> = ({ projects, onCreate, onOpen, on
               </div>
             </div>
           ))}
+        </div>
+      )}
+      {renameTarget && (
+        <div
+          className="fixed inset-0 z-[2200] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={closeRenameModal}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl border border-white/10 bg-[#0f0f0f] shadow-2xl p-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-[12px] font-black uppercase tracking-wide text-blue-300">重命名项目</h3>
+              <button
+                type="button"
+                onClick={closeRenameModal}
+                className="w-8 h-8 rounded-lg text-gray-400 hover:text-white hover:bg-white/10"
+                aria-label="关闭"
+              >
+                ✕
+              </button>
+            </div>
+            <input
+              value={renameDraft}
+              onChange={(e) => setRenameDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  confirmRename();
+                }
+                if (e.key === 'Escape') {
+                  e.preventDefault();
+                  closeRenameModal();
+                }
+              }}
+              placeholder="输入新的项目名称"
+              autoFocus
+              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-[11px] text-white outline-none focus:border-blue-500 placeholder:text-gray-600"
+            />
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={closeRenameModal}
+                className="px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-[10px] font-black uppercase text-gray-300 hover:bg-white/10"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={confirmRename}
+                className="px-4 py-2 rounded-xl bg-blue-600 text-[10px] font-black uppercase text-white hover:bg-blue-500"
+              >
+                确定
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

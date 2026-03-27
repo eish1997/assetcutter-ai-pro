@@ -40,7 +40,7 @@ import {
 } from './services/workspaceCloudSync';
 import { hydrateWorkflowBundleFromCloud } from './services/workspaceR2ImageBundle';
 import { HttpRequestError } from './services/httpClient';
-import { fileExtensionForImageDataUrl } from './services/imageDataUrl';
+import { triggerImageDownload } from './services/imageDataUrl';
 
 function formatWorkspaceCloudMb(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
@@ -201,13 +201,15 @@ const AssetViewer: React.FC<{ item: LibraryItem | null; onClose: () => void }> =
           </div>
           <div className="flex flex-wrap gap-3">
             {item.data && !isPlaceholderPreview && (
-              <a
-                href={item.data}
-                download={`${item.label}.${fileExtensionForImageDataUrl(item.data)}`}
+              <button
+                type="button"
+                onClick={() => {
+                  void triggerImageDownload(item.data!, item.label);
+                }}
                 className="px-6 py-3 bg-blue-600 rounded-full font-black text-[10px] uppercase tracking-widest electric-glow"
               >
                 下载预览图
-              </a>
+              </button>
             )}
             {item.modelUrls?.map((url, i) => (
               <a key={i} href={url} target="_blank" rel="noopener noreferrer" className="px-6 py-3 bg-indigo-600/80 rounded-full font-black text-[10px] uppercase tracking-widest hover:bg-indigo-500/80 transition-colors">下载模型{item.modelUrls!.length > 1 ? ` ${i + 1}` : ''}</a>
@@ -995,6 +997,18 @@ const MainApp: React.FC = () => {
     [workspaceProjects, user?.id]
   );
 
+  const renameWorkspaceProjectEntry = useCallback(
+    (id: string, name: string) => {
+      const trimmed = String(name || '').trim();
+      if (!trimmed) return;
+      const scope = user?.id ?? null;
+      const next = workspaceProjects.map((p) => (p.id === id ? { ...p, name: trimmed } : p));
+      setWorkspaceProjects(next);
+      saveWorkspaceProjects(next, scope);
+    },
+    [workspaceProjects, user?.id]
+  );
+
   const deleteWorkspaceProjectEntry = useCallback(
     (id: string) => {
       if (!window.confirm('确定删除该项目？工作流画布数据将一并删除。')) return;
@@ -1022,6 +1036,14 @@ const MainApp: React.FC = () => {
     () => workspaceProjects.find((p) => p.id === activeWorkspaceProjectId)?.name ?? '',
     [workspaceProjects, activeWorkspaceProjectId]
   );
+  const workspaceCloudQuotaBytes = Number(user?.workspaceQuotaBytes ?? WORKSPACE_CLOUD_DEFAULT_QUOTA_BYTES);
+  const workspaceCloudUsedBytes = Number(user?.workspaceUsedBytes ?? 0);
+  const workspaceCloudUsageRatio = Math.max(
+    0,
+    Math.min(1, workspaceCloudQuotaBytes > 0 ? workspaceCloudUsedBytes / workspaceCloudQuotaBytes : 0)
+  );
+  const workspaceCloudUsagePercent = Math.round(workspaceCloudUsageRatio * 100);
+  const workspaceProjectOptions = workspaceProjects.map((p) => ({ value: p.id, label: p.name }));
 
   const handleUserMenuAction = useCallback(async (action: string) => {
     if (!action) return;
@@ -1572,10 +1594,7 @@ const MainApp: React.FC = () => {
   const handleDialogDownload = (msg: DialogMessage) => {
     const v = getDisplayVersion(msg);
     if (!v?.resultImageBase64) return;
-    const a = document.createElement('a');
-    a.href = v.resultImageBase64;
-    a.download = `对话_${msg.id.slice(0, 6)}.${fileExtensionForImageDataUrl(v.resultImageBase64)}`;
-    a.click();
+    void triggerImageDownload(v.resultImageBase64, `对话_${msg.id.slice(0, 6)}`);
   };
 
   const handleCopyDialogImage = async (base64: string) => {
@@ -1628,10 +1647,7 @@ const MainApp: React.FC = () => {
     for (let i = 0; i < toDownload.length; i++) {
       const item = toDownload[i][0];
       if (!item.data) continue;
-      const a = document.createElement('a');
-      a.href = item.data;
-      a.download = `${item.label || '资产'}_${i + 1}.${fileExtensionForImageDataUrl(item.data)}`;
-      a.click();
+      await triggerImageDownload(item.data, `${item.label || '资产'}_${i + 1}`);
       if (i < toDownload.length - 1) await new Promise(r => setTimeout(r, 300));
     }
   };
@@ -2242,15 +2258,29 @@ const MainApp: React.FC = () => {
             {mode === AppMode.WORKFLOW && !activeWorkspaceProjectId && (
               <>
                 {user?.id && isWorkspaceCloudEnabled() ? (
-                  <div className="max-w-6xl mx-auto w-full mb-5 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 flex flex-wrap items-center gap-x-4 gap-y-2">
-                    <span className="text-[10px] font-black uppercase tracking-wider text-gray-500">工作区云存储</span>
-                    <span className="text-[11px] text-gray-200 font-mono tabular-nums" title="仅统计已同步到云端的流程图片">
-                      {formatWorkspaceCloudMb(Number(user.workspaceUsedBytes ?? 0))} /{' '}
-                      {formatWorkspaceCloudMb(Number(user.workspaceQuotaBytes ?? WORKSPACE_CLOUD_DEFAULT_QUOTA_BYTES))}
-                    </span>
-                    <span className="text-[10px] text-gray-600 max-w-md leading-relaxed">
-                      登录且运行 auth-api（9100）后显示用量；打开项目后画布顶部也会显示同一行。
-                    </span>
+                  <div className="max-w-6xl mx-auto w-full mb-5 rounded-2xl border border-cyan-400/20 bg-gradient-to-r from-cyan-500/10 via-blue-600/10 to-violet-600/10 px-4 py-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <span className="text-[10px] font-black uppercase tracking-wider text-cyan-300/90">工作区云空间</span>
+                      <span className="text-[11px] text-white font-mono tabular-nums" title="仅统计已同步到云端的流程图片">
+                        {formatWorkspaceCloudMb(workspaceCloudUsedBytes)} / {formatWorkspaceCloudMb(workspaceCloudQuotaBytes)}
+                      </span>
+                    </div>
+                    <div className="mt-2 h-2.5 rounded-full bg-white/10 overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all ${
+                          workspaceCloudUsageRatio >= 0.95
+                            ? 'bg-gradient-to-r from-rose-500 to-amber-400'
+                            : workspaceCloudUsageRatio >= 0.8
+                            ? 'bg-gradient-to-r from-amber-400 to-orange-500'
+                            : 'bg-gradient-to-r from-cyan-400 via-blue-500 to-violet-500'
+                        }`}
+                        style={{ width: `${workspaceCloudUsagePercent}%` }}
+                      />
+                    </div>
+                    <div className="mt-1.5 flex items-center justify-between text-[9px] text-gray-400">
+                      <span>云同步状态</span>
+                      <span>{workspaceCloudUsagePercent}%</span>
+                    </div>
                   </div>
                 ) : user?.id && !isWorkspaceCloudEnabled() ? (
                   <div className="max-w-6xl mx-auto w-full mb-5 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-[10px] text-gray-500">
@@ -2261,6 +2291,7 @@ const MainApp: React.FC = () => {
                   projects={workspaceProjects}
                   onCreate={createWorkspaceProjectEntry}
                   onOpen={openWorkspaceProject}
+                  onRename={renameWorkspaceProjectEntry}
                   onDelete={deleteWorkspaceProjectEntry}
                 />
               </>
@@ -2271,27 +2302,58 @@ const MainApp: React.FC = () => {
                   <button
                     type="button"
                     onClick={backToWorkspaceProjectShell}
-                    className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-blue-600 text-white text-[10px] font-black uppercase tracking-wider hover:bg-blue-500 transition-colors shadow-lg shadow-blue-900/20"
+                    className="inline-flex items-center justify-center w-9 h-9 rounded-xl bg-white/5 border border-white/10 text-gray-300 hover:bg-white/10 hover:text-white transition-colors"
                     title="返回项目列表"
+                    aria-label="返回项目列表"
                   >
-                    <span aria-hidden>←</span>
-                    项目
+                    <svg aria-hidden viewBox="0 0 20 20" className="w-4 h-4" fill="none">
+                      <path
+                        d="M12.5 4.5L7 10l5.5 5.5"
+                        stroke="currentColor"
+                        strokeWidth="1.9"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
                   </button>
-                  {activeWorkspaceProjectName ? (
-                    <span className="text-[11px] text-gray-400 font-mono truncate max-w-[min(100%,24rem)]" title={activeWorkspaceProjectName}>
-                      {activeWorkspaceProjectName}
-                    </span>
-                  ) : null}
+                  <div className="min-w-[11rem] max-w-[min(100%,24rem)]">
+                    <CustomDropdown
+                      options={workspaceProjectOptions}
+                      value={activeWorkspaceProjectId ?? ''}
+                      onChange={(id) => {
+                        if (!id || id === activeWorkspaceProjectId) return;
+                        openWorkspaceProject(id);
+                      }}
+                      placeholder={activeWorkspaceProjectName || '选择项目'}
+                      triggerClassName="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[10px] text-left flex items-center justify-between outline-none focus:border-blue-500 hover:bg-white/10 transition-colors"
+                    />
+                  </div>
                   {workspaceCloudHydratingProjectId === activeWorkspaceProjectId ? (
                     <span className="text-[10px] text-amber-400/90 font-medium animate-pulse" title="正在从云端拉取图像">
                       云端图像载入中…
                     </span>
                   ) : null}
                   {user?.id && isWorkspaceCloudEnabled() ? (
-                    <span className="text-[10px] text-gray-500" title="仅统计工作流云图片，不含索引 JSON">
-                      云空间 {formatWorkspaceCloudMb(Number(user.workspaceUsedBytes ?? 0))} /{' '}
-                      {formatWorkspaceCloudMb(Number(user.workspaceQuotaBytes ?? WORKSPACE_CLOUD_DEFAULT_QUOTA_BYTES))}
-                    </span>
+                    <div className="ml-auto min-w-[15rem] rounded-xl border border-cyan-400/25 bg-gradient-to-r from-cyan-500/10 via-blue-600/10 to-violet-600/10 px-3 py-2">
+                      <div className="flex items-center justify-between text-[9px]">
+                        <span className="font-black uppercase text-cyan-300/90">云空间</span>
+                        <span className="font-mono tabular-nums text-white/90">
+                          {formatWorkspaceCloudMb(workspaceCloudUsedBytes)} / {formatWorkspaceCloudMb(workspaceCloudQuotaBytes)}
+                        </span>
+                      </div>
+                      <div className="mt-1.5 h-1.5 rounded-full bg-white/10 overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all ${
+                            workspaceCloudUsageRatio >= 0.95
+                              ? 'bg-gradient-to-r from-rose-500 to-amber-400'
+                              : workspaceCloudUsageRatio >= 0.8
+                              ? 'bg-gradient-to-r from-amber-400 to-orange-500'
+                              : 'bg-gradient-to-r from-cyan-400 via-blue-500 to-violet-500'
+                          }`}
+                          style={{ width: `${workspaceCloudUsagePercent}%` }}
+                        />
+                      </div>
+                    </div>
                   ) : null}
                 </div>
                 {workspaceCloudQuotaSuspended ? (
@@ -2300,7 +2362,7 @@ const MainApp: React.FC = () => {
                   </div>
                 ) : null}
                 <Suspense fallback={<LazySectionFallback label="工作区" />}>
-                  <WorkflowSection capabilityPresets={capabilityPresets} capabilitySets={capabilitySets} assets={workflowAssets} onAssetsChange={setWorkflowAssets} pending={workflowPending} onPendingChange={setWorkflowPending} onOpenLibraryPicker={(cb) => openPicker(undefined, cb, true)} onLog={(level, message, detail) => addGlobalLog('工作区', level, message, detail)} onAddGenerate3DJob={handleAddGenerate3DJobFromWorkflow} />
+                  <WorkflowSection capabilityPresets={capabilityPresets} capabilitySets={capabilitySets} assets={workflowAssets} onAssetsChange={setWorkflowAssets} pending={workflowPending} onPendingChange={setWorkflowPending} onOpenLibraryPicker={(cb) => openPicker(undefined, cb, true)} onLog={(level, message, detail) => addGlobalLog('工作区', level, message, detail)} onAddGenerate3DJob={handleAddGenerate3DJobFromWorkflow} preferenceScope={user?.id ?? null} />
                 </Suspense>
               </WorkflowErrorBoundary>
             )}
@@ -3118,14 +3180,16 @@ const MainApp: React.FC = () => {
                               )}
                               <button onClick={(e) => { e.stopPropagation(); handleDialogTempAddToInput(item); setDialogTempPreviewId(null); }} className="shrink-0 w-full px-2 py-1 rounded-lg bg-black/70 text-[9px] font-black text-white hover:bg-green-600/80 transition-colors text-left">加入输入框</button>
                               <button onClick={(e) => { e.stopPropagation(); addDialogTempToLibrary(item); }} className="shrink-0 w-full px-2 py-1 rounded-lg bg-black/70 text-[9px] font-black text-white hover:bg-blue-600/80 transition-colors text-left">加入资产库</button>
-                              <a
-                                href={item.data}
-                                download={`临时库_${item.label || item.id}.${fileExtensionForImageDataUrl(item.data)}`}
-                                onClick={e => e.stopPropagation()}
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void triggerImageDownload(item.data, `临时库_${item.label || item.id}`);
+                                }}
                                 className="shrink-0 w-full px-2 py-1 rounded-lg bg-black/70 text-[9px] font-black text-white hover:bg-white/20 text-center transition-colors block"
                               >
                                 下载
-                              </a>
+                              </button>
                             </div>
                           </div>
                         ))}
@@ -3168,13 +3232,15 @@ const MainApp: React.FC = () => {
                         )}
                         <button onClick={() => { handleDialogTempAddToInput(item); setDialogTempPreviewId(null); }} className="px-4 py-2 rounded-xl bg-green-600/80 text-[10px] font-black text-white hover:bg-green-500 transition-colors">加入输入框</button>
                         <button onClick={() => addDialogTempToLibrary(item)} className="px-4 py-2 rounded-xl bg-blue-600/80 text-[10px] font-black text-white hover:bg-blue-500 transition-colors">加入资产库</button>
-                        <a
-                          href={item.data}
-                          download={`临时库_${item.label || item.id}.${fileExtensionForImageDataUrl(item.data)}`}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void triggerImageDownload(item.data, `临时库_${item.label || item.id}`);
+                          }}
                           className="px-4 py-2 rounded-xl bg-white/10 text-[10px] font-black text-white hover:bg-white/20 transition-colors"
                         >
                           下载
-                        </a>
+                        </button>
                         <button onClick={() => setDialogTempPreviewId(null)} className="px-4 py-2 rounded-xl bg-black/60 text-[10px] font-black text-white hover:bg-black/80">关闭</button>
                       </div>
                     </div>
