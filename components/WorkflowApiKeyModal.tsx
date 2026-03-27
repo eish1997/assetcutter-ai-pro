@@ -16,6 +16,7 @@ import {
   type AiProvider,
 } from '../services/settingsStore';
 import { CustomDropdown, DROPDOWN_TRIGGER_COMPACT } from './ui/CustomDropdown';
+import AppIcon from './ui/AppIcon';
 
 const AI_PROVIDER_OPTIONS: { value: AiProvider; label: string }[] = [
   { value: 'gemini', label: 'Google Gemini（官方 API）' },
@@ -110,7 +111,7 @@ export const WorkflowApiKeyModal: React.FC<{
             className="w-8 h-8 flex items-center justify-center text-white/50 hover:text-white rounded-lg hover:bg-white/10"
             aria-label="关闭"
           >
-            ✕
+            <AppIcon name="close" className="w-4 h-4" />
           </button>
         </div>
         <div className="space-y-4">

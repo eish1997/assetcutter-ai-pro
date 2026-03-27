@@ -17,6 +17,8 @@ import { useDialogGeneration, getDialogUnderstandImageInput } from './hooks/useD
 import { useDialogPostProcessing } from './hooks/useDialogPostProcessing';
 import { useAuth } from './components/auth/AuthContext';
 import { CustomDropdown, DROPDOWN_TRIGGER_COMPACT } from './components/ui/CustomDropdown';
+import DotGrid from './components/ui/DotGrid';
+import AppIcon from './components/ui/AppIcon';
 import WorkspaceProjectShell from './components/WorkspaceProjectShell';
 import {
   loadWorkspaceProjects,
@@ -169,19 +171,33 @@ const ASSET_VIEWER_CATEGORY_LABELS: Record<string, string> = {
   TEXTURE_MAP: '贴图资产',
 };
 
+const SidebarIconButton: React.FC<{ active: boolean; label: string; onClick: () => void; children: React.ReactNode }> = ({ active, label, onClick, children }) => (
+  <button
+    onClick={onClick}
+    aria-label={label}
+    className={`group relative w-full h-10 rounded-xl border transition-colors flex items-center justify-center ${active ? 'bg-blue-600/15 text-blue-300 border-blue-500/40' : 'text-gray-400 border-white/10 hover:bg-white/10'}`}
+  >
+    {children}
+    <span className="pointer-events-none absolute left-[calc(100%+10px)] top-1/2 -translate-y-1/2 rounded-lg border border-white/10 bg-black/90 px-2 py-1 text-[10px] text-gray-200 whitespace-nowrap opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-150">
+      {label}
+    </span>
+  </button>
+);
+
 const AssetViewer: React.FC<{ item: LibraryItem | null; onClose: () => void }> = ({ item, onClose }) => {
   if (!item) return null;
   const categoryLabel = ASSET_VIEWER_CATEGORY_LABELS[item.category] ?? item.category;
   const is3D = item.category === 'MESH_MODEL' && (item.modelUrls?.length ?? 0) > 0;
   const isPlaceholderPreview = item.data?.includes('data:image/svg+xml') && is3D;
+
   return (
     <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/95 backdrop-blur-xl animate-in fade-in duration-300 p-4 lg:p-20" onClick={onClose}>
       <div className="relative max-w-7xl w-full h-full flex flex-col items-center justify-center" onClick={e => e.stopPropagation()}>
-        <button onClick={onClose} className="absolute top-0 right-0 w-12 h-12 flex items-center justify-center text-white/40 hover:text-white transition-colors">✕</button>
+        <button onClick={onClose} className="absolute top-0 right-0 w-12 h-12 flex items-center justify-center text-white/40 hover:text-white transition-colors"><AppIcon name="close" className="w-5 h-5" /></button>
         <div className="w-full flex-1 flex items-center justify-center overflow-hidden rounded-[3rem] border border-white/5 bg-black/40">
           {isPlaceholderPreview ? (
             <div className="flex flex-col items-center justify-center gap-4 text-gray-500">
-              <span className="text-4xl">🧊</span>
+              <AppIcon name="cube" className="w-10 h-10" />
               <p className="text-[11px] font-black uppercase tracking-widest">3D 模型 · 请从下方下载模型文件</p>
             </div>
           ) : (
@@ -427,12 +443,12 @@ const LibraryPickerModal: React.FC<{
       <div className="glass max-w-6xl w-full h-full rounded-[3rem] flex flex-col p-8 overflow-hidden" onClick={e => e.stopPropagation()}>
         <div className="flex justify-between items-center mb-8">
           <h2 className="text-sm font-black uppercase tracking-widest text-blue-400">从资产库导入{multiSelect ? '（可多选）' : ''}</h2>
-          <button onClick={onClose} className="w-10 h-10 flex items-center justify-center text-white/40 hover:text-white transition-colors">✕</button>
+          <button onClick={onClose} className="w-10 h-10 flex items-center justify-center text-white/40 hover:text-white transition-colors"><AppIcon name="close" className="w-4 h-4" /></button>
         </div>
         <div className="flex-1 overflow-y-auto no-scrollbar">
           {filtered.length === 0 ? (
              <div className="h-full flex flex-col items-center justify-center text-gray-600">
-               <span className="text-4xl mb-4">📦</span>
+              <AppIcon name="package" className="w-10 h-10 mb-4" />
                <span className="text-[10px] font-black uppercase tracking-widest">暂无可用资产</span>
              </div>
           ) : (
@@ -446,7 +462,7 @@ const LibraryPickerModal: React.FC<{
                   <img src={item.data} className="w-full h-full object-contain" alt="" />
                   {multiSelect && (
                     <div className="absolute top-1 right-1 w-5 h-5 rounded border flex items-center justify-center bg-black/50">
-                      {selectedIds.has(item.id) ? <span className="text-blue-400 text-xs">✓</span> : null}
+                      {selectedIds.has(item.id) ? <AppIcon name="check" className="w-3.5 h-3.5 text-blue-400" /> : null}
                     </div>
                   )}
                   {!multiSelect && (
@@ -1716,7 +1732,7 @@ const MainApp: React.FC = () => {
     return (
       <div className={`glass p-5 rounded-[2.5rem] border-white/5 group hover:border-blue-500/40 transition-all flex flex-col h-full relative ${isSelected ? 'ring-2 ring-blue-500/60' : ''}`}>
         <div className="absolute top-3 left-3 z-10 flex items-center gap-2">
-          <button type="button" onClick={e => { e.stopPropagation(); onToggleSelect(); }} className={`w-5 h-5 rounded border flex items-center justify-center text-[10px] ${isSelected ? 'bg-blue-600 border-blue-500 text-white' : 'bg-white/5 border-white/20 text-gray-500 hover:bg-white/10'}`}>{isSelected ? '✓' : ''}</button>
+          <button type="button" onClick={e => { e.stopPropagation(); onToggleSelect(); }} className={`w-5 h-5 rounded border flex items-center justify-center text-[10px] ${isSelected ? 'bg-blue-600 border-blue-500 text-white' : 'bg-white/5 border-white/20 text-gray-500 hover:bg-white/10'}`}>{isSelected ? <AppIcon name="check" className="w-3 h-3" /> : null}</button>
           {is3D && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-indigo-600/30 text-indigo-300 border border-indigo-500/40">3D</span>}
         </div>
         <div className="aspect-square mb-6 bg-black/40 rounded-[2rem] overflow-hidden flex items-center justify-center p-4 cursor-pointer relative" onClick={() => setActiveAssetId(activeItem)}>
@@ -1758,12 +1774,12 @@ const MainApp: React.FC = () => {
           {!textureSource ? (
             <div className="space-y-4">
               <label className="w-full h-64 cursor-pointer group flex flex-col items-center justify-center border-2 border-dashed border-white/10 rounded-3xl hover:bg-blue-600/5 transition-all">
-                <span className="text-3xl mb-4">🖼️</span>
+                <AppIcon name="image" className="w-8 h-8 mb-4" />
                 <span className="text-[9px] font-black uppercase text-gray-500">上传源图像</span>
                 <input type="file" className="hidden" accept="image/*" onChange={e => handleFileUpload(e, setTextureSource)} />
               </label>
               <button onClick={() => openPicker(undefined, (items) => setTextureSource(items[0]?.data ?? ''))} className="w-full py-4 bg-white/5 border border-white/10 rounded-2xl text-[9px] font-black uppercase tracking-widest hover:bg-white/10 transition-all flex items-center justify-center gap-2">
-                <span>📦</span> 从资产库导入
+                <AppIcon name="package" className="w-4 h-4" /> 从资产库导入
               </button>
             </div>
           ) : (
@@ -1799,7 +1815,7 @@ const MainApp: React.FC = () => {
                           onClick={() => { updateGenerationScore(recordId, score); setRatingCache(prev => ({ ...prev, [recordId]: score })); }}
                           className={`w-7 h-7 rounded border flex items-center justify-center text-[11px] transition-all ${(currentScore ?? 0) >= score ? 'border-amber-500/50 bg-amber-500/20 text-amber-400' : 'border-white/20 bg-white/5 hover:bg-amber-500/20 hover:border-amber-500/40 text-gray-500'}`}
                           title={`${score} 星`}
-                        >★</button>
+                        ><AppIcon name="star" className="w-3.5 h-3.5" /></button>
                       ))}
                       {currentScore != null && <span className="text-[9px] text-gray-500">{currentScore} 星</span>}
                     </div>
@@ -2147,106 +2163,92 @@ const MainApp: React.FC = () => {
   };
 
   return (
-    <div className="min-h-[100dvh] bg-[#050505] text-white flex flex-col lg:flex-row relative font-sans overflow-hidden">
+    <div className="min-h-[100dvh] bg-[#050505] text-white flex flex-col lg:flex-row relative isolate font-sans overflow-hidden">
+      <DotGrid />
       <AssetViewer item={activeAssetId} onClose={() => setActiveAssetId(null)} />
       {isLibraryPickerOpen && <LibraryPickerModal library={library} filter={pickerFilter} multiSelect={pickerMultiSelect} onSelect={(items) => { pickerCallback(items); setIsLibraryPickerOpen(false); }} onClose={() => setIsLibraryPickerOpen(false)} />}
 
-      <aside className={`fixed lg:static inset-y-0 left-0 glass border-r border-white/5 flex flex-col items-center py-6 shrink-0 z-[1001] transition-all duration-300 ${sidebarCollapsed ? 'w-16' : 'w-64'} ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}>
-        {user ? (
-          <div className="w-full px-2 mb-3">
-            <CustomDropdown
-              options={[
-                { value: 'manage', label: '管理账户' },
-                { value: 'switch', label: '切换用户' },
-                { value: 'logout', label: '退出登录' },
-              ]}
-              value=""
-              placeholder={user.username}
-              onChange={(value) => { void handleUserMenuAction(value); }}
-              triggerClassName="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[10px] text-left flex items-center justify-between outline-none focus:border-blue-500 hover:bg-white/10 transition-colors"
-            />
-          </div>
-        ) : null}
-        <nav className="flex-1 w-full space-y-2 px-2 min-h-0 flex flex-col overflow-y-auto no-scrollbar">
-          <div className="space-y-2">
-            <button onClick={() => { setMode(AppMode.WORKFLOW); setIsSidebarOpen(false); }} className={`w-full py-3 rounded-xl text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.WORKFLOW ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="工作区">{sidebarCollapsed ? '⚡' : '工作区'}</button>
-            <button onClick={() => { setMode(AppMode.CAPABILITY); setIsSidebarOpen(false); }} className={`w-full py-3 rounded-xl text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.CAPABILITY ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="能力（功能预设）">{sidebarCollapsed ? '◇' : '能力'}</button>
-            <button onClick={() => { setMode(AppMode.LIBRARY); setIsSidebarOpen(false); }} className={`w-full py-3 rounded-xl text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.LIBRARY ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="仓库">{sidebarCollapsed ? '📁' : '仓库'}</button>
-            <button onClick={() => { setMode(AppMode.SETTINGS); setIsSidebarOpen(false); }} className={`w-full py-3 rounded-xl text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.SETTINGS ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="设置">{sidebarCollapsed ? '⚙' : '设置'}</button>
+      <div className={`fixed top-1/2 left-4 -translate-y-1/2 z-[1001] w-14 max-h-[calc(100dvh-2rem)] transition-all ${isSidebarOpen ? 'opacity-100' : 'opacity-100'}`}>
+        <div className="rounded-2xl border border-white/10 bg-black/55 backdrop-blur-xl shadow-2xl p-2 overflow-y-auto no-scrollbar">
+          <div className="flex flex-col items-center gap-2">
+            {user ? (
+              <div className="w-full">
+                <CustomDropdown
+                  options={[
+                    { value: 'manage', label: '管理账户' },
+                    { value: 'switch', label: '切换用户' },
+                    { value: 'logout', label: '退出登录' },
+                  ]}
+                  value=""
+                  placeholder="◎"
+                  onChange={(value) => { void handleUserMenuAction(value); }}
+                  triggerClassName="w-full h-10 bg-white/5 border border-white/10 rounded-xl px-0 py-0 text-[14px] text-center flex items-center justify-center outline-none focus:border-blue-500 hover:bg-white/10 transition-colors"
+                />
+              </div>
+            ) : null}
 
-            {sidebarCollapsed ? (
-              <div className="space-y-2 pt-2 border-t border-white/10">
-                <button onClick={() => { setMode(AppMode.DIALOG); setIsSidebarOpen(false); }} className={`w-full py-3 rounded-xl text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.DIALOG ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="对话（实验性）">💬</button>
-                <button onClick={() => { setMode(AppMode.GENERATE_3D); setIsSidebarOpen(false); }} className={`w-full py-3 rounded-xl text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.GENERATE_3D ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="生成3D（实验性·未上线）">🧊</button>
-                <button onClick={() => { setMode(AppMode.TEXTURE); setStep(AppStep.T_PATTERN); setIsSidebarOpen(false); }} className={`w-full py-3 rounded-xl text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.TEXTURE ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="提取花纹（实验性）">🖼</button>
-                <button onClick={() => { setMode(AppMode.SEAM_REPAIR); setIsSidebarOpen(false); }} className={`w-full py-3 rounded-xl text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.SEAM_REPAIR ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="贴图修缝（实验性）">🔧</button>
-                <button onClick={() => { setMode(AppMode.PBR_TEXTURE); setIsSidebarOpen(false); }} className={`w-full py-3 rounded-xl text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.PBR_TEXTURE ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="生成贴图（实验性）">🎨</button>
-                <button onClick={() => { setMode(AppMode.ADMIN); setIsSidebarOpen(false); }} className={`w-full py-3 rounded-xl text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.ADMIN ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="提示词效果（实验性）">📊</button>
-                <button onClick={() => { setMode(AppMode.ARENA); setIsSidebarOpen(false); }} className={`w-full py-3 rounded-xl text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.ARENA ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="提示词擂台（实验性）">⚔</button>
-              </div>
-            ) : (
-              <div className={`rounded-xl border bg-white/[0.02] overflow-hidden ${isExperimentalMode(mode) && !experimentalNavExpanded ? 'border-blue-500/25' : 'border-white/10'}`}>
-                <button
-                  type="button"
-                  onClick={() => setExperimentalNavExpanded((e) => !e)}
-                  className={`w-full py-2.5 px-3 flex items-center justify-between text-[9px] font-black uppercase tracking-wider transition-colors ${isExperimentalMode(mode) && !experimentalNavExpanded ? 'text-blue-400/90 bg-blue-600/5 hover:bg-blue-600/10' : 'text-gray-500 hover:bg-white/5'}`}
-                  title="实验性功能（默认折叠）"
-                >
-                  <span>实验性功能</span>
-                  <span className="text-[10px] opacity-80" aria-hidden>{experimentalNavExpanded ? '▲' : '▼'}</span>
-                </button>
-                {experimentalNavExpanded && (
-                  <div className="p-2 space-y-2 border-t border-white/10">
-                    <button onClick={() => { setMode(AppMode.DIALOG); setIsSidebarOpen(false); }} className={`w-full py-2.5 rounded-xl text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.DIALOG ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="对话">对话</button>
-                    <button onClick={() => { setMode(AppMode.GENERATE_3D); setIsSidebarOpen(false); }} className={`w-full py-2.5 rounded-xl text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.GENERATE_3D ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="生成3D资产（未上线）"><span>生成3D</span><span className="text-[8px] font-normal normal-case text-amber-400/90">未上线</span></button>
-                    <div className="rounded-xl border border-white/10 bg-black/20 p-2 space-y-1.5">
-                      <div className="px-2 py-0.5 text-[8px] font-black uppercase tracking-wider text-gray-500">贴图</div>
-                      <button onClick={() => { setMode(AppMode.TEXTURE); setStep(AppStep.T_PATTERN); setIsSidebarOpen(false); }} className={`w-full py-2.5 rounded-lg text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.TEXTURE ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="提取花纹">提取花纹</button>
-                      <button onClick={() => { setMode(AppMode.SEAM_REPAIR); setIsSidebarOpen(false); }} className={`w-full py-2.5 rounded-lg text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.SEAM_REPAIR ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="贴图修缝">贴图修缝</button>
-                      <button onClick={() => { setMode(AppMode.PBR_TEXTURE); setIsSidebarOpen(false); }} className={`w-full py-2.5 rounded-lg text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.PBR_TEXTURE ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="生成贴图">生成贴图</button>
-                    </div>
-                    <div className="rounded-xl border border-white/10 bg-black/20 p-2 space-y-1.5">
-                      <div className="px-2 py-0.5 text-[8px] font-black uppercase tracking-wider text-gray-500">提示词</div>
-                      <button onClick={() => { setMode(AppMode.ADMIN); setIsSidebarOpen(false); }} className={`w-full py-2.5 rounded-lg text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.ADMIN ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="提示词效果">提示词效果</button>
-                      <button onClick={() => { setMode(AppMode.ARENA); setIsSidebarOpen(false); }} className={`w-full py-2.5 rounded-lg text-[10px] font-black uppercase border flex items-center justify-center gap-2 ${mode === AppMode.ARENA ? 'bg-blue-600/10 text-blue-400 border-blue-500/30' : 'text-gray-500 border-transparent hover:bg-white/5'}`} title="提示词擂台">提示词擂台</button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </nav>
-        {!sidebarCollapsed && (
-          <div className="w-full shrink-0 border-t border-white/10 mt-2 pt-2 px-2">
-            <div className="rounded-xl bg-black/40 border border-white/5 overflow-hidden">
-              <div className="px-2 py-1.5 border-b border-white/5 text-[9px] font-black uppercase text-gray-500">日志</div>
-              <div className="min-h-[min(28vh,240px)] max-h-[min(42vh,360px)] overflow-y-auto no-scrollbar space-y-1 p-2">
-                {(() => {
-                  const moduleForMode = mode === AppMode.DIALOG ? '对话' : mode === AppMode.TEXTURE ? '提取花纹' : mode === AppMode.GENERATE_3D ? '生成3D' : mode === AppMode.WORKFLOW ? '工作区' : mode === AppMode.CAPABILITY ? '能力' : mode === AppMode.ADMIN ? '提示词效果' : mode === AppMode.ARENA ? '提示词擂台' : mode === AppMode.SEAM_REPAIR ? '贴图修缝' : mode === AppMode.PBR_TEXTURE ? '生成贴图' : mode === AppMode.LIBRARY ? '仓库' : mode === AppMode.SETTINGS ? '设置' : null;
-                  const filtered = moduleForMode ? globalLogs.filter(l => l.module === moduleForMode) : [];
-                  if (filtered.length === 0) return <div className="text-[9px] text-gray-600 py-2 text-center">暂无日志</div>;
-                  return [...filtered].reverse().slice(0, 60).map(log => (
-                    <div key={log.id} className={`text-[9px] leading-snug py-1.5 px-2 rounded border-l-2 ${log.level === 'error' ? 'border-red-500/60 text-red-300/90 bg-red-500/10' : log.level === 'warn' ? 'border-amber-500/60 text-amber-300/90 bg-amber-500/10' : 'border-white/20 text-gray-400'}`}>
-                      <span className="text-gray-300">{log.message}</span>
-                      {log.detail && <span className="block text-gray-500 mt-0.5 text-[8px] break-all">{log.detail}</span>}
-                    </div>
-                  ));
-                })()}
-              </div>
+            <SidebarIconButton active={mode === AppMode.WORKFLOW} label="工作区" onClick={() => { setMode(AppMode.WORKFLOW); setIsSidebarOpen(false); }}>
+              <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><path d="M3.5 8.5L10 3.5l6.5 5v8H3.5v-8Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"/><path d="M8 16.5v-4h4v4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
+            </SidebarIconButton>
+            <SidebarIconButton active={mode === AppMode.CAPABILITY} label="能力" onClick={() => { setMode(AppMode.CAPABILITY); setIsSidebarOpen(false); }}>
+              <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><path d="M10 2.8l2.2 4.4 4.8.7-3.5 3.4.8 4.9L10 14l-4.3 2.2.8-4.9L3 7.9l4.8-.7L10 2.8Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/></svg>
+            </SidebarIconButton>
+            <SidebarIconButton active={mode === AppMode.LIBRARY} label="仓库" onClick={() => { setMode(AppMode.LIBRARY); setIsSidebarOpen(false); }}>
+              <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><path d="M3 6h5l1.3 1.5H17v8.5H3V6Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"/><path d="M3 8h14" stroke="currentColor" strokeWidth="1.6"/></svg>
+            </SidebarIconButton>
+            <SidebarIconButton active={mode === AppMode.SETTINGS} label="设置" onClick={() => { setMode(AppMode.SETTINGS); setIsSidebarOpen(false); }}>
+              <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><circle cx="10" cy="10" r="2.5" stroke="currentColor" strokeWidth="1.6"/><path d="M10 3v2.1M10 14.9V17M17 10h-2.1M5.1 10H3M14.9 5.1l-1.5 1.5M6.6 13.4l-1.5 1.5M14.9 14.9l-1.5-1.5M6.6 6.6 5.1 5.1" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
+            </SidebarIconButton>
+
+            <div className={`rounded-xl border overflow-hidden ${isExperimentalMode(mode) && !experimentalNavExpanded ? 'border-blue-500/25' : 'border-white/10'}`}>
+              <button
+                type="button"
+                onClick={() => setExperimentalNavExpanded((e) => !e)}
+                className={`group relative w-full h-10 flex items-center justify-center text-[15px] transition-colors ${isExperimentalMode(mode) && !experimentalNavExpanded ? 'text-blue-400/90 bg-blue-600/10 hover:bg-blue-600/15' : 'text-gray-400 hover:bg-white/10'}`}
+                aria-label="实验性功能"
+              >
+                <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><path d="M8 3.5h4M9 3.5v4.2l-4.1 6.6a2 2 0 0 0 1.7 3h6.8a2 2 0 0 0 1.7-3L11 7.7V3.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/><path d="M6.8 12.5h6.4" stroke="currentColor" strokeWidth="1.4"/></svg>
+                <span className="pointer-events-none absolute left-[calc(100%+10px)] top-1/2 -translate-y-1/2 rounded-lg border border-white/10 bg-black/90 px-2 py-1 text-[10px] text-gray-200 whitespace-nowrap opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-150">
+                  实验性功能
+                </span>
+              </button>
             </div>
           </div>
-        )}
-      </aside>
+
+          {experimentalNavExpanded && (
+            <div className="mt-2 pt-2 border-t border-white/10 flex flex-col gap-2">
+              <SidebarIconButton active={mode === AppMode.DIALOG} label="对话" onClick={() => { setMode(AppMode.DIALOG); setIsSidebarOpen(false); }}>
+                <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><path d="M4 5.5h12v8H9l-3.5 3v-3H4v-8Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"/></svg>
+              </SidebarIconButton>
+              <SidebarIconButton active={mode === AppMode.GENERATE_3D} label="生成3D" onClick={() => { setMode(AppMode.GENERATE_3D); setIsSidebarOpen(false); }}>
+                <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><path d="M10 2.8 16 6v8l-6 3.2L4 14V6l6-3.2Z" stroke="currentColor" strokeWidth="1.6"/><path d="M4 6l6 3.1L16 6M10 9.1V17" stroke="currentColor" strokeWidth="1.4"/></svg>
+              </SidebarIconButton>
+              <SidebarIconButton active={mode === AppMode.TEXTURE} label="提取花纹" onClick={() => { setMode(AppMode.TEXTURE); setStep(AppStep.T_PATTERN); setIsSidebarOpen(false); }}>
+                <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><rect x="3.5" y="4" width="13" height="12" rx="1.8" stroke="currentColor" strokeWidth="1.6"/><path d="M6 12l2.2-2.2 2.2 2.2 1.8-1.8L14 12" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              </SidebarIconButton>
+              <SidebarIconButton active={mode === AppMode.SEAM_REPAIR} label="贴图修缝" onClick={() => { setMode(AppMode.SEAM_REPAIR); setIsSidebarOpen(false); }}>
+                <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><path d="M4 6h5l2 2h5v6H4V6Z" stroke="currentColor" strokeWidth="1.6"/><path d="M8.2 8.2l3.6 3.6M11.8 8.2l-3.6 3.6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></svg>
+              </SidebarIconButton>
+              <SidebarIconButton active={mode === AppMode.PBR_TEXTURE} label="生成贴图" onClick={() => { setMode(AppMode.PBR_TEXTURE); setIsSidebarOpen(false); }}>
+                <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><circle cx="10" cy="10" r="6.2" stroke="currentColor" strokeWidth="1.6"/><path d="M10 3.8v12.4M3.8 10h12.4" stroke="currentColor" strokeWidth="1.2"/></svg>
+              </SidebarIconButton>
+              <SidebarIconButton active={mode === AppMode.ADMIN} label="提示词效果" onClick={() => { setMode(AppMode.ADMIN); setIsSidebarOpen(false); }}>
+                <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><path d="M4 14.5V11m4 3.5V8.5M12 14.5V6m4 8.5V9.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
+              </SidebarIconButton>
+              <SidebarIconButton active={mode === AppMode.ARENA} label="提示词擂台" onClick={() => { setMode(AppMode.ARENA); setIsSidebarOpen(false); }}>
+                <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><path d="M6 5.5h8l-1.2 2.6L15 10l-5 6-5-6 2.2-1.9L6 5.5Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"/></svg>
+              </SidebarIconButton>
+            </div>
+          )}
+        </div>
+      </div>
 
       <Suspense fallback={null}>
         <SiteAssistant tasks={tasks} onRemoveTask={id => setTasks(p => p.filter(t => t.id !== id))} />
       </Suspense>
 
       <main className="flex-1 flex flex-col h-[100dvh] overflow-hidden">
-        {!isSidebarOpen && (
-          <button type="button" onClick={() => setIsSidebarOpen(true)} className="lg:hidden fixed top-4 left-4 z-[1000] w-10 h-10 flex items-center justify-center bg-white/10 border border-white/20 rounded-xl hover:bg-white/20 transition-colors" title="打开菜单" aria-label="打开菜单">☰</button>
-        )}
-        <div ref={mainScrollRef} className="flex-1 overflow-y-auto p-4 lg:p-10 no-scrollbar touch-pan-y">
+        <div ref={mainScrollRef} className="flex-1 overflow-y-auto p-4 pt-6 pl-24 lg:p-10 lg:pl-28 no-scrollbar touch-pan-y">
           <div className="max-w-6xl mx-auto w-full">
             {mode === AppMode.SETTINGS && (
               <Suspense fallback={<LazySectionFallback label="设置" />}>
@@ -2869,7 +2871,7 @@ const MainApp: React.FC = () => {
                   <div className="flex-1 overflow-y-auto no-scrollbar space-y-6 pb-4">
                   {dialogMessages.length === 0 && (
                     <div className="flex flex-col items-center justify-center py-20 text-gray-500">
-                      <span className="text-4xl mb-4">💬</span>
+                      <AppIcon name="chat" className="w-10 h-10 mb-4" />
                       <span className="text-[10px] font-black uppercase tracking-widest">描述画面生成图片，或上传图片后描述修改</span>
                       <span className="text-[9px] mt-2 text-gray-600">仅输入文字即可生图；有图时可改图，无图时可与 AI 文字对话</span>
                     </div>
@@ -2988,7 +2990,7 @@ const MainApp: React.FC = () => {
                                         onClick={() => { updateGenerationScore(recordId, score); setRatingCache(prev => ({ ...prev, [recordId]: score })); }}
                                         className={`w-7 h-7 rounded border flex items-center justify-center text-[11px] transition-all ${(currentScore ?? 0) >= score ? 'border-amber-500/50 bg-amber-500/20 text-amber-400' : 'border-white/20 bg-white/5 hover:bg-amber-500/20 hover:border-amber-500/40 text-gray-500'}`}
                                         title={`${score} 星`}
-                                      >★</button>
+                                      ><AppIcon name="star" className="w-3.5 h-3.5" /></button>
                                     ))}
                                     {currentScore != null && <span className="text-[9px] text-gray-500">{currentScore} 星</span>}
                                   </div>
@@ -3064,7 +3066,7 @@ const MainApp: React.FC = () => {
                   </div>
                   {dialogValidationError && (
                     <div className="text-[11px] text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded-xl px-4 py-2 flex items-center gap-2">
-                      <span className="shrink-0">⚠</span>
+                      <AppIcon name="warning" className="shrink-0 w-3.5 h-3.5" />
                       <span>{dialogValidationError}</span>
                       <button type="button" onClick={() => setDialogValidationError(null)} className="ml-auto shrink-0 text-amber-400/80 hover:text-amber-300">×</button>
                     </div>
@@ -3309,7 +3311,7 @@ const MainApp: React.FC = () => {
                    </div>
                    {groupedLibrary.length === 0 ? (
                      <div className="flex flex-col items-center justify-center py-20 text-center">
-                       <span className="text-5xl mb-4 opacity-60">📦</span>
+                       <AppIcon name="package" className="w-12 h-12 mb-4 opacity-60" />
                        <p className="text-[11px] font-black uppercase tracking-widest text-gray-500 mb-2">暂无资产</p>
                        <p className="text-[10px] text-gray-600 max-w-sm">可点击左侧「上传图片」、或从「对话」「生成3D」保存到资产库。</p>
                      </div>

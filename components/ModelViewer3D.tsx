@@ -6,6 +6,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import AppIcon from './ui/AppIcon';
 
 const proxyBase = (typeof import.meta !== 'undefined' && (import.meta as { env?: Record<string, string> }).env?.VITE_TENCENT_PROXY as string)?.trim?.() || '';
 
@@ -192,7 +193,7 @@ const ModelViewer3D: React.FC<ModelViewer3DProps> = ({ url, onClose, inline = fa
   return (
     <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/95 backdrop-blur-xl p-4 lg:p-10" onClick={onClose}>
       <div className="relative w-full max-w-4xl h-[80vh] rounded-[2rem] overflow-hidden border border-white/10 bg-black/60 flex flex-col" onClick={(e: React.MouseEvent) => e.stopPropagation()}>
-        {onClose && <button onClick={onClose} className="absolute top-4 right-4 z-10 w-10 h-10 flex items-center justify-center rounded-full bg-black/60 text-white/80 hover:text-white hover:bg-black/80 transition-colors">✕</button>}
+        {onClose && <button onClick={onClose} className="absolute top-4 right-4 z-10 w-10 h-10 flex items-center justify-center rounded-full bg-black/60 text-white/80 hover:text-white hover:bg-black/80 transition-colors"><AppIcon name="close" className="w-4 h-4" /></button>}
         <div ref={containerRef} className="flex-1 min-h-[300px] rounded-[2rem]" />
         {overlayLoading}
         {overlayError}

@@ -10,6 +10,7 @@ import { executeCapability, executeCapabilitySet } from '../services/capabilityE
 import { WorkflowApiKeyModal } from './WorkflowApiKeyModal';
 import { isAiInvocationReady } from '../services/settingsStore';
 import { triggerImageDownload } from '../services/imageDataUrl';
+import AppIcon from './ui/AppIcon';
 
 /** 云端 hydrate 前预览图为空时避免 img 的 src 为空字符串 */
 const WORKFLOW_IMG_EMPTY_PLACEHOLDER =
@@ -66,7 +67,7 @@ const CutSelectModal: React.FC<{
       <div className="relative max-w-4xl w-full max-h-[90vh] overflow-auto rounded-2xl border border-white/10 bg-black/80 p-4" onClick={(e) => e.stopPropagation()}>
         <div className="flex justify-between items-center mb-3">
           <h3 className="text-[10px] font-black uppercase text-blue-400">识别到物体，勾选要切割保存的区域</h3>
-          <button onClick={onCancel} className="w-8 h-8 flex items-center justify-center text-white/50 hover:text-white">✕</button>
+          <button onClick={onCancel} className="w-8 h-8 flex items-center justify-center text-white/50 hover:text-white"><AppIcon name="close" className="w-4 h-4" /></button>
         </div>
         <div className="relative inline-block max-w-full">
           <img src={inputImage} alt="" className="max-h-[60vh] w-auto block" />
@@ -125,7 +126,7 @@ const PromptTweakModal: React.FC<{
       >
         <div className="flex items-center justify-between mb-3">
           <span className="text-[10px] font-black uppercase text-blue-400">微调提示词 · {preset.label}</span>
-          <button type="button" onClick={onCancel} className="w-8 h-8 flex items-center justify-center text-white/50 hover:text-white rounded">✕</button>
+          <button type="button" onClick={onCancel} className="w-8 h-8 flex items-center justify-center text-white/50 hover:text-white rounded"><AppIcon name="close" className="w-4 h-4" /></button>
         </div>
         <p className="text-[9px] text-gray-500 mb-2">可修改下方提示词后加入执行队列（{targets.length} 项）</p>
         <textarea
@@ -386,7 +387,7 @@ const ArchivedDetailModal: React.FC<{
       >
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-[10px] font-black uppercase text-blue-400">归档详情 · 生成流程图</h3>
-          <button onClick={onClose} className="w-10 h-10 flex items-center justify-center text-white/60 hover:text-white">✕</button>
+          <button onClick={onClose} className="w-10 h-10 flex items-center justify-center text-white/60 hover:text-white"><AppIcon name="close" className="w-4 h-4" /></button>
         </div>
 
         {/* 切割图片组（像资产库一样可逐张打开） */}
@@ -478,7 +479,7 @@ const ArchivedDetailModal: React.FC<{
               className="absolute -top-12 right-0 w-10 h-10 flex items-center justify-center text-white/60 hover:text-white"
               aria-label="关闭"
             >
-              ✕
+              <AppIcon name="close" className="w-4 h-4" />
             </button>
             <img src={cutLightboxImage} alt="" className="w-full max-h-[80vh] object-contain rounded-2xl border border-white/10 bg-black/40" />
             <div className="flex justify-center gap-2 mt-3">
@@ -1132,6 +1133,20 @@ const WorkflowSection: React.FC<{
   };
 
   const [dropZoneActive, setDropZoneActive] = useState(false);
+  const hasImageFileTransfer = useCallback((dt?: DataTransfer | null) => {
+    if (!dt) return false;
+    if (dt.files?.length) {
+      for (let i = 0; i < dt.files.length; i += 1) {
+        if (dt.files[i].type?.startsWith('image/')) return true;
+      }
+    }
+    if (dt.items?.length) {
+      for (let i = 0; i < dt.items.length; i += 1) {
+        if (dt.items[i].kind === 'file' && dt.items[i].type?.startsWith('image/')) return true;
+      }
+    }
+    return false;
+  }, []);
   const favoriteStorageKey = useMemo(
     () => (preferenceScope ? `ac_workflow_favorites_v1__u_${preferenceScope}` : 'ac_workflow_favorites_v1__guest'),
     [preferenceScope]
@@ -1162,11 +1177,12 @@ const WorkflowSection: React.FC<{
     }
   }, [favoriteActionIds, favoriteStorageKey]);
   const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
     setDropZoneActive(false);
+    if (!hasImageFileTransfer(e.dataTransfer)) return;
+    e.preventDefault();
     const files = e.dataTransfer?.files;
     if (files?.length) addImagesFromFiles(Array.from(files));
-  }, [addImagesFromFiles]);
+  }, [addImagesFromFiles, hasImageFileTransfer]);
   const collectImageFilesFromClipboardItems = useCallback((items?: DataTransferItemList | null) => {
     if (!items?.length) return [] as File[];
     const files: File[] = [];
@@ -1186,6 +1202,15 @@ const WorkflowSection: React.FC<{
     return false;
   }, []);
 
+  const isGlobalUploadBlockedTarget = useCallback((target: EventTarget | null) => {
+    const el = target instanceof Element ? target : null;
+    if (!el) return false;
+    if (isEditableTarget(el)) return true;
+    // Do not hijack drag/drop on explicit interactive controls or icon buttons.
+    if (el.closest('button, a, label, [role="button"], [role="menuitem"], [data-no-global-image-drop]')) return true;
+    return false;
+  }, [isEditableTarget]);
+
   const handlePaste = useCallback((e: React.ClipboardEvent) => {
     const files = collectImageFilesFromClipboardItems(e.clipboardData?.items);
     if (files.length) {
@@ -1197,7 +1222,7 @@ const WorkflowSection: React.FC<{
   useEffect(() => {
     const onWindowPaste = (e: ClipboardEvent) => {
       if (showArchived) return;
-      if (isEditableTarget(e.target)) return;
+      if (isGlobalUploadBlockedTarget(e.target)) return;
       const files = collectImageFilesFromClipboardItems(e.clipboardData?.items);
       if (!files.length) return;
       e.preventDefault();
@@ -1207,7 +1232,41 @@ const WorkflowSection: React.FC<{
     return () => {
       window.removeEventListener('paste', onWindowPaste);
     };
-  }, [addImagesFromFiles, collectImageFilesFromClipboardItems, isEditableTarget, showArchived]);
+  }, [addImagesFromFiles, collectImageFilesFromClipboardItems, isGlobalUploadBlockedTarget, showArchived]);
+
+  useEffect(() => {
+    const onWindowDragOver = (e: DragEvent) => {
+      if (showArchived) return;
+      if (isGlobalUploadBlockedTarget(e.target)) return;
+      if (!hasImageFileTransfer(e.dataTransfer)) return;
+      e.preventDefault();
+      setDropZoneActive(true);
+    };
+
+    const onWindowDrop = (e: DragEvent) => {
+      if (showArchived) return;
+      setDropZoneActive(false);
+      if (isGlobalUploadBlockedTarget(e.target)) return;
+      const dt = e.dataTransfer;
+      if (!hasImageFileTransfer(dt)) return;
+      e.preventDefault();
+      const files = Array.from(dt?.files || []).filter((f) => f.type?.startsWith('image/'));
+      if (files.length) addImagesFromFiles(files);
+    };
+
+    const onWindowDragEnd = () => setDropZoneActive(false);
+
+    window.addEventListener('dragover', onWindowDragOver);
+    window.addEventListener('drop', onWindowDrop);
+    window.addEventListener('dragleave', onWindowDragEnd);
+    window.addEventListener('dragend', onWindowDragEnd);
+    return () => {
+      window.removeEventListener('dragover', onWindowDragOver);
+      window.removeEventListener('drop', onWindowDrop);
+      window.removeEventListener('dragleave', onWindowDragEnd);
+      window.removeEventListener('dragend', onWindowDragEnd);
+    };
+  }, [addImagesFromFiles, hasImageFileTransfer, isGlobalUploadBlockedTarget, showArchived]);
 
   const visibleAssets = useMemo(() => {
     // 仅展示“根资产”：归档状态匹配，且不是子资产（没有 parentAssetId）
@@ -2157,6 +2216,7 @@ const WorkflowSection: React.FC<{
             dropZoneActive ? 'ring-1 ring-blue-500/60 bg-blue-500/[0.06]' : ''
           }`}
           onDragOver={(e) => {
+            if (!hasImageFileTransfer(e.dataTransfer)) return;
             e.preventDefault();
             setDropZoneActive(true);
           }}
@@ -2707,7 +2767,7 @@ const WorkflowSection: React.FC<{
                     className="absolute top-4 right-4 w-10 h-10 flex items-center justify-center text-white/60 hover:text-white rounded-full bg-black/40"
                     onClick={() => setGroupStringLightboxIndex(null)}
                   >
-                    ✕
+                    <AppIcon name="close" className="w-4 h-4" />
                   </button>
                 </div>
               )}
@@ -2717,7 +2777,7 @@ const WorkflowSection: React.FC<{
             </>
           ) : visibleAssets.length === 0 ? (
             <div className="flex flex-1 min-h-0 flex-col items-center justify-center px-6 py-10 text-gray-500">
-              <span className="text-4xl mb-2">📷</span>
+              <AppIcon name="camera" className="w-10 h-10 mb-2" />
               <p className="text-[10px] font-black uppercase">暂无图片</p>
               <p className="text-[9px] mt-1 text-center max-w-sm">
                 使用「多选上传」添加原始图片，或切换到「已完成」查看归档（可点击打开）
@@ -3923,7 +3983,7 @@ const WorkflowSection: React.FC<{
               cycleDisplayKey(lightboxAsset.id, e.deltaY);
             }}
           >
-            <button onClick={() => setLightboxAssetId(null)} className="absolute -top-12 right-0 w-10 h-10 flex items-center justify-center text-white/60 hover:text-white">✕</button>
+            <button onClick={() => setLightboxAssetId(null)} className="absolute -top-12 right-0 w-10 h-10 flex items-center justify-center text-white/60 hover:text-white"><AppIcon name="close" className="w-4 h-4" /></button>
             <img src={workflowSafeImgSrc(getAssetDisplayImage(lightboxAsset))} alt="" className="w-full max-h-[80vh] object-contain rounded-2xl border border-white/10" />
             <div className="mt-3 flex flex-wrap gap-1.5 justify-center items-center">
               <span className="text-[8px] font-black text-gray-500 uppercase mr-1">显示</span>

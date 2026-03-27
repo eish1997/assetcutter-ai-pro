@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import type { WorkspaceProject } from '../services/workspaceProjectStore';
+import AppIcon from './ui/AppIcon';
 
 type Props = {
   projects: WorkspaceProject[];
@@ -112,7 +113,7 @@ const WorkspaceProjectShell: React.FC<Props> = ({ projects, onCreate, onOpen, on
                   title="重命名项目"
                   aria-label={`重命名 ${p.name}`}
                 >
-                  ✎
+                  <AppIcon name="edit" className="w-4 h-4" />
                 </button>
                 <button
                   type="button"
@@ -124,7 +125,7 @@ const WorkspaceProjectShell: React.FC<Props> = ({ projects, onCreate, onOpen, on
                   title="删除项目"
                   aria-label={`删除 ${p.name}`}
                 >
-                  🗑
+                  <AppIcon name="trash" className="w-4 h-4" />
                 </button>
               </div>
             </div>
@@ -148,7 +149,7 @@ const WorkspaceProjectShell: React.FC<Props> = ({ projects, onCreate, onOpen, on
                 className="w-8 h-8 rounded-lg text-gray-400 hover:text-white hover:bg-white/10"
                 aria-label="关闭"
               >
-                ✕
+                <AppIcon name="close" className="w-4 h-4" />
               </button>
             </div>
             <input

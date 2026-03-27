@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { getSiteAssistantResponseStream } from '../services/geminiService';
 import type { AppTask } from '../types';
+import AppIcon from './ui/AppIcon';
 
 const SiteAssistant: React.FC<{
   tasks?: AppTask[];
@@ -71,7 +72,7 @@ const SiteAssistant: React.FC<{
           title="网站助手"
           aria-label="打开网站助手"
         >
-          💬
+          <AppIcon name="chat" className="w-6 h-6" />
         </button>
       </div>
 
@@ -90,7 +91,7 @@ const SiteAssistant: React.FC<{
               className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-400 hover:text-white hover:bg-white/10 transition-colors"
               aria-label="关闭"
             >
-              ×
+              <AppIcon name="close" className="w-4 h-4" />
             </button>
           </div>
           <div

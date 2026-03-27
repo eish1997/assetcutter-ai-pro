@@ -4,6 +4,7 @@ import { AppMode, ArenaStepEntry, ArenaCurrentStep, ArenaTimelineBlock, DIALOG_I
 import { dialogGenerateImage, generateArenaPrompts, optimizeLoserPrompt, generateNewChallenger, getEditPrompt, normalizeApiErrorMessage, DEFAULT_PROMPTS, translateToChinese } from '../services/geminiService';
 import { loadSnippets, addSnippet, removeSnippet } from '../services/snippetStore';
 import { addChoice } from '../services/abChoiceStore';
+import AppIcon from './ui/AppIcon';
 
 const ARENA_SNAPSHOT_TEXT_LIMIT = 4000;
 function stepId() {
@@ -1282,7 +1283,7 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
                   className="w-9 h-9 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-white/80 hover:text-white"
                   aria-label="关闭预览"
                 >
-                  ✕
+                  <AppIcon name="close" className="w-4 h-4 mx-auto" />
                 </button>
               </div>
               <div className="flex-1 min-h-0 overflow-auto">
@@ -1332,7 +1333,7 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
             <div className="max-w-5xl mx-auto rounded-2xl border border-white/10 bg-black/80 p-4 lg:p-6" onClick={(e) => e.stopPropagation()}>
               <div className="flex items-center justify-between mb-3">
                 <div className="text-[10px] font-black uppercase text-blue-300">擂台过程回顾</div>
-                <button type="button" onClick={() => setReplayOpen(false)} className="w-9 h-9 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10">✕</button>
+                <button type="button" onClick={() => setReplayOpen(false)} className="w-9 h-9 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 flex items-center justify-center"><AppIcon name="close" className="w-4 h-4" /></button>
               </div>
               {replaySnippet.previewImage && (
                 <img src={replaySnippet.previewImage} alt="擂主预览" className="w-full max-h-64 object-contain rounded-xl border border-white/10 mb-3" />

@@ -7,6 +7,7 @@ import { loadInstalledPacks, loadPackHistory } from '../services/storePackHistor
 import { useStoreCatalog } from '../services/storeCatalogHook';
 import CapabilitySetCanvas from './CapabilitySetCanvas';
 import { CustomDropdown, DROPDOWN_TRIGGER_COMPACT } from './ui/CustomDropdown';
+import AppIcon from './ui/AppIcon';
 
 const CAPABILITY_SETS_VERSION = 1;
 
@@ -1164,7 +1165,7 @@ const CapabilityPresetSection: React.FC<{
           onKeyDown={(e) => e.key === 'Escape' && setLightboxImage(null)}
           aria-label="关闭"
         >
-          <button type="button" onClick={() => setLightboxImage(null)} className="absolute top-4 right-4 w-10 h-10 flex items-center justify-center text-white/70 hover:text-white rounded-full bg-white/10">✕</button>
+          <button type="button" onClick={() => setLightboxImage(null)} className="absolute top-4 right-4 w-10 h-10 flex items-center justify-center text-white/70 hover:text-white rounded-full bg-white/10"><AppIcon name="close" className="w-4 h-4" /></button>
           <img src={lightboxImage} alt="结果大图" className="max-h-[90vh] max-w-full object-contain rounded-lg shadow-2xl" onClick={(e) => e.stopPropagation()} />
         </div>
       )}
