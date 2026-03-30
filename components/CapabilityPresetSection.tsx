@@ -1,4 +1,4 @@
-import React, { useState, useRef, useLayoutEffect, useMemo } from 'react';
+import React, { useState, useRef, useLayoutEffect, useMemo, useEffect } from 'react';
 import type { CustomAppModule, CapabilityCategory, CapabilityEngine, DialogImageGear, Generate3DPreset, CapabilitySet } from '../types';
 import { CAPABILITY_CATEGORIES, DIALOG_IMAGE_GEARS, SUPPORTED_ASPECT_RATIOS, SUPPORTED_IMAGE_SIZES } from '../types';
 import type { CapabilityTestResult } from '../services/capabilityTestRunner';
@@ -22,7 +22,8 @@ const CapabilityPresetSection: React.FC<{
   onUpdateSets?: (next: CapabilitySet[]) => void;
   onRunTest?: (preset: CustomAppModule, imageBase64: string) => Promise<CapabilityTestResult>;
   onLog?: (level: 'info' | 'warn' | 'error', message: string, detail?: string) => void;
-}> = ({ presets, onUpdate, sets = [], onUpdateSets, onRunTest, onLog }) => {
+  embeddedInWorkflow?: boolean;
+}> = ({ presets, onUpdate, sets = [], onUpdateSets, onRunTest, onLog, embeddedInWorkflow = false }) => {
   const [viewMode, setViewMode] = useState<ViewMode>('presets');
   const [canvasSet, setCanvasSet] = useState<CapabilitySet | null>(null);
   const [setLabel, setSetLabel] = useState('');
@@ -91,6 +92,55 @@ const CapabilityPresetSection: React.FC<{
     () => remotePresetItems.filter((rp) => !presets.some((p) => p.id === rp.preset.id)),
     [remotePresetItems, presets]
   );
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onToolbarAction = (event: Event) => {
+      const detail = (event as CustomEvent<{ action?: string }>).detail;
+      const action = detail?.action;
+      if (!action) return;
+      if (action === 'toggle-import-export') {
+        setShowImportExport((v) => !v);
+        return;
+      }
+      if (action === 'add-preset') {
+        setIsAdding(true);
+        return;
+      }
+      if (action === 'add-set') {
+        openNewSet();
+        return;
+      }
+      if (action === 'refresh-remote') {
+        void refreshCatalog();
+        return;
+      }
+      if (action === 'install-all' && effectiveUninstalledPresetItems.length > 0) {
+        void installPresets(effectiveUninstalledPresetItems.map((rp) => rp.preset));
+      }
+    };
+    window.addEventListener('ac:capability-preset-toolbar-action', onToolbarAction as EventListener);
+    return () => {
+      window.removeEventListener('ac:capability-preset-toolbar-action', onToolbarAction as EventListener);
+    };
+  }, [effectiveUninstalledPresetItems, installPresets, refreshCatalog]);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onViewModeSwitch = (event: Event) => {
+      const detail = (event as CustomEvent<{ mode?: ViewMode }>).detail;
+      const mode = detail?.mode;
+      if (mode === 'presets' || mode === 'sets') {
+        setViewMode(mode);
+      }
+    };
+    window.addEventListener('ac:capability-preset-view-mode', onViewModeSwitch as EventListener);
+    return () => {
+      window.removeEventListener('ac:capability-preset-view-mode', onViewModeSwitch as EventListener);
+    };
+  }, []);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.dispatchEvent(new CustomEvent('ac:capability-preset-view-mode-changed', { detail: { mode: viewMode } }));
+  }, [viewMode]);
 
   const movePreset = (id: string, delta: -1 | 1) => {
     const idx = presets.findIndex((p) => p.id === id);
@@ -412,6 +462,7 @@ const CapabilityPresetSection: React.FC<{
     <div className="flex flex-col gap-6 animate-in fade-in max-w-4xl">
       {presetStrip}
 
+      {!embeddedInWorkflow && (
       <div className="flex items-center gap-3 flex-wrap">
         <button
           type="button"
@@ -428,18 +479,21 @@ const CapabilityPresetSection: React.FC<{
           能力集合
         </button>
       </div>
+      )}
 
       {viewMode === 'sets' && (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <p className="text-[9px] text-gray-500">在画布中组合多个能力并连线，工作流中可整体使用。</p>
-            <button
-              type="button"
-              onClick={openNewSet}
-              className="px-4 py-2 rounded-xl bg-amber-600 text-[10px] font-black uppercase hover:bg-amber-500"
-            >
-              添加能力集合
-            </button>
+            {!embeddedInWorkflow && (
+              <button
+                type="button"
+                onClick={openNewSet}
+                className="px-4 py-2 rounded-xl bg-amber-600 text-[10px] font-black uppercase hover:bg-amber-500"
+              >
+                添加能力集合
+              </button>
+            )}
           </div>
           {sets.length === 0 ? (
             <div className="rounded-2xl border border-[#2e2e32] bg-[#16161a] p-8 text-center text-gray-500 text-[10px]">
@@ -467,6 +521,7 @@ const CapabilityPresetSection: React.FC<{
 
       {viewMode === 'presets' && (
         <>
+      {!embeddedInWorkflow && (
       <div className="flex items-center justify-between flex-wrap gap-2">
         <p className="text-[9px] text-gray-500">
           在此管理功能预设，工作流中的「功能区」将调用此处配置的项，拖拽图片到对应框即可执行。
@@ -504,6 +559,7 @@ const CapabilityPresetSection: React.FC<{
           )}
         </div>
       </div>
+      )}
       {catalogError && <div className="text-[10px] text-red-400 break-all">{catalogError}</div>}
       {packContentsLoading && <div className="text-[10px] text-gray-500">正在加载远程能力列表…</div>}
 

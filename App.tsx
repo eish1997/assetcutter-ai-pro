@@ -43,6 +43,8 @@ import {
 import { hydrateWorkflowBundleFromCloud } from './services/workspaceR2ImageBundle';
 import { HttpRequestError } from './services/httpClient';
 import { triggerImageDownload } from './services/imageDataUrl';
+import { isAiInvocationReady } from './services/settingsStore';
+import { WorkflowApiKeyModal } from './components/WorkflowApiKeyModal';
 
 function formatWorkspaceCloudMb(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
@@ -573,6 +575,8 @@ const MainApp: React.FC = () => {
   const editedWhileQuotaSuspendedRef = useRef(false);
   /** 离开工作区/切换项目时的整包上传中（阻塞 UI） */
   const [workspaceCloudLeaveSyncing, setWorkspaceCloudLeaveSyncing] = useState(false);
+  const [apiKeyModalOpen, setApiKeyModalOpen] = useState(false);
+  const [aiInvocationStatusRev, setAiInvocationStatusRev] = useState(0);
   /** 同步失败或配额场景下的应用内确认（替代浏览器原生 confirm） */
   const [workspaceCloudChoicePrompt, setWorkspaceCloudChoicePrompt] = useState<
     null | { kind: 'back' } | { kind: 'switch'; targetId: string } | { kind: 'quotaBack' }
@@ -1127,6 +1131,7 @@ const MainApp: React.FC = () => {
     Math.min(1, workspaceCloudQuotaBytes > 0 ? workspaceCloudUsedBytes / workspaceCloudQuotaBytes : 0)
   );
   const workspaceCloudUsagePercent = Math.round(workspaceCloudUsageRatio * 100);
+  const aiInvocationReady = useMemo(() => isAiInvocationReady(), [aiInvocationStatusRev]);
   const workspaceProjectOptions = workspaceProjects.map((p) => ({ value: p.id, label: p.name }));
 
   const handleUserMenuAction = useCallback(async (action: string) => {
@@ -1200,6 +1205,12 @@ const MainApp: React.FC = () => {
 
   useEffect(() => {
     if (mode === AppMode.ARENA) setArenaSnippets(loadSnippets());
+  }, [mode]);
+  useEffect(() => {
+    // 仓库/能力已并入工作区画卷，旧模式入口删除后统一回到工作区
+    if (mode === AppMode.LIBRARY || mode === AppMode.CAPABILITY) {
+      setMode(AppMode.WORKFLOW);
+    }
   }, [mode]);
 
   // 对话式生图状态
@@ -2250,6 +2261,13 @@ const MainApp: React.FC = () => {
       </div>
       <AssetViewer item={activeAssetId} onClose={() => setActiveAssetId(null)} />
       {isLibraryPickerOpen && <LibraryPickerModal library={library} filter={pickerFilter} multiSelect={pickerMultiSelect} onSelect={(items) => { pickerCallback(items); setIsLibraryPickerOpen(false); }} onClose={() => setIsLibraryPickerOpen(false)} />}
+      {apiKeyModalOpen && (
+        <WorkflowApiKeyModal
+          open={apiKeyModalOpen}
+          onClose={() => setApiKeyModalOpen(false)}
+          onSaved={() => setAiInvocationStatusRev((n) => n + 1)}
+        />
+      )}
 
       <div className={`fixed top-1/2 left-4 -translate-y-1/2 z-[1001] w-14 max-h-[calc(100dvh-2rem)] transition-all ${isSidebarOpen ? 'opacity-100' : 'opacity-100'}`}>
         <div className="rounded-2xl border border-[#2e2e32] bg-[#121214] shadow-2xl p-2 overflow-y-auto no-scrollbar">
@@ -2272,12 +2290,6 @@ const MainApp: React.FC = () => {
 
             <SidebarIconButton active={mode === AppMode.WORKFLOW} label="工作区" onClick={() => { setMode(AppMode.WORKFLOW); setIsSidebarOpen(false); }}>
               <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><path d="M3.5 8.5L10 3.5l6.5 5v8H3.5v-8Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"/><path d="M8 16.5v-4h4v4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
-            </SidebarIconButton>
-            <SidebarIconButton active={mode === AppMode.CAPABILITY} label="能力" onClick={() => { setMode(AppMode.CAPABILITY); setIsSidebarOpen(false); }}>
-              <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><path d="M10 2.8l2.2 4.4 4.8.7-3.5 3.4.8 4.9L10 14l-4.3 2.2.8-4.9L3 7.9l4.8-.7L10 2.8Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/></svg>
-            </SidebarIconButton>
-            <SidebarIconButton active={mode === AppMode.LIBRARY} label="仓库" onClick={() => { setMode(AppMode.LIBRARY); setIsSidebarOpen(false); }}>
-              <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><path d="M3 6h5l1.3 1.5H17v8.5H3V6Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"/><path d="M3 8h14" stroke="currentColor" strokeWidth="1.6"/></svg>
             </SidebarIconButton>
             <SidebarIconButton active={mode === AppMode.SETTINGS} label="设置" onClick={() => { setMode(AppMode.SETTINGS); setIsSidebarOpen(false); }}>
               <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><circle cx="10" cy="10" r="2.5" stroke="currentColor" strokeWidth="1.6"/><path d="M10 3v2.1M10 14.9V17M17 10h-2.1M5.1 10H3M14.9 5.1l-1.5 1.5M6.6 13.4l-1.5 1.5M14.9 14.9l-1.5-1.5M6.6 6.6 5.1 5.1" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
@@ -2391,17 +2403,17 @@ const MainApp: React.FC = () => {
             )}
             {mode === AppMode.WORKFLOW && activeWorkspaceProjectId && (
               <WorkflowErrorBoundary>
-                <div className="w-full max-w-6xl mx-auto mb-4 flex flex-wrap items-center gap-3">
+                <div className="w-full max-w-6xl mx-auto mb-2 flex flex-wrap items-center gap-1.5">
                   <button
                     type="button"
                     onClick={() => {
                       void backToWorkspaceProjectShell();
                     }}
-                    className="inline-flex items-center justify-center w-9 h-9 rounded-xl bg-[#1c1c22] border border-[#2e2e32] text-gray-300 hover:bg-[#2e2e36] hover:text-white transition-colors duration-200 cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
+                    className="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-[#1c1c22] border border-[#2e2e32] text-gray-300 hover:bg-[#2e2e36] hover:text-white transition-colors duration-200 cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
                     title="返回项目列表（将先同步到云端）"
                     aria-label="返回项目列表"
                   >
-                    <svg aria-hidden viewBox="0 0 20 20" className="w-4 h-4" fill="none">
+                    <svg aria-hidden viewBox="0 0 20 20" className="w-3 h-3" fill="none">
                       <path
                         d="M12.5 4.5L7 10l5.5 5.5"
                         stroke="currentColor"
@@ -2411,7 +2423,7 @@ const MainApp: React.FC = () => {
                       />
                     </svg>
                   </button>
-                  <div className="min-w-[11rem] max-w-[min(100%,24rem)]">
+                  <div className="min-w-[8rem] max-w-[min(100%,18rem)]">
                     <CustomDropdown
                       options={workspaceProjectOptions}
                       value={activeWorkspaceProjectId ?? ''}
@@ -2420,37 +2432,65 @@ const MainApp: React.FC = () => {
                         void openWorkspaceProject(id);
                       }}
                       placeholder={activeWorkspaceProjectName || '选择项目'}
-                      triggerClassName="w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[10px] text-left flex items-center justify-between outline-none focus:border-blue-500 hover:bg-[#2e2e36] transition-colors"
+                      triggerClassName="w-full h-7 bg-[#1c1c22] border border-[#2e2e32] rounded-lg px-2.5 text-[8px] text-left flex items-center justify-between outline-none focus:border-blue-500 hover:bg-[#2e2e36] transition-colors"
                     />
                   </div>
                   {workspaceCloudHydratingProjectId === activeWorkspaceProjectId ? (
-                    <span className="text-[10px] text-amber-400/90 font-medium animate-pulse" title="正按资源分批从云端还原图像">
+                    <span className="text-[8px] text-amber-400/90 font-medium animate-pulse" title="正按资源分批从云端还原图像">
                       正在从云端渐进载入图像…
                     </span>
                   ) : null}
                   {user?.id && isWorkspaceCloudEnabled() ? (
-                    <div
-                      className="ml-auto min-w-[10.5rem] max-w-[16rem] shrink rounded-md border border-white/[0.06] bg-white/[0.02] px-2.5 py-1.5"
-                      title="仅统计已同步到云端的流程图片"
-                    >
-                      <div className="flex items-center justify-between gap-2 text-[9px] text-gray-500">
-                        <span>云空间</span>
-                        <span className="font-mono tabular-nums text-gray-400">
-                          {formatWorkspaceCloudMb(workspaceCloudUsedBytes)} / {formatWorkspaceCloudMb(workspaceCloudQuotaBytes)}
-                        </span>
+                    <div className="ml-auto flex items-center gap-1.5">
+                      <div
+                        className="min-w-[8rem] max-w-[12rem] shrink rounded-md border border-white/[0.06] bg-white/[0.02] px-2 py-1"
+                        title="仅统计已同步到云端的流程图片"
+                      >
+                        <div className="flex items-center justify-between gap-1.5 text-[8px] text-gray-500">
+                          <span>云空间</span>
+                          <span className="font-mono tabular-nums text-gray-400">
+                            {formatWorkspaceCloudMb(workspaceCloudUsedBytes)} / {formatWorkspaceCloudMb(workspaceCloudQuotaBytes)}
+                          </span>
+                        </div>
+                        <div className="mt-0.5 h-0.5 rounded-full bg-white/[0.06] overflow-hidden">
+                          <div
+                            className={`h-full rounded-full transition-all ${
+                              workspaceCloudUsageRatio >= 0.95
+                                ? 'bg-red-500/70'
+                                : workspaceCloudUsageRatio >= 0.8
+                                ? 'bg-amber-500/60'
+                                : 'bg-gray-500/45'
+                            }`}
+                            style={{ width: `${Math.max(0, Math.min(100, workspaceCloudUsagePercent))}%` }}
+                          />
+                        </div>
                       </div>
-                      <div className="mt-1 h-0.5 rounded-full bg-white/[0.06] overflow-hidden">
-                        <div
-                          className={`h-full rounded-full transition-all ${
-                            workspaceCloudUsageRatio >= 0.95
-                              ? 'bg-red-500/70'
-                              : workspaceCloudUsageRatio >= 0.8
-                              ? 'bg-amber-500/60'
-                              : 'bg-gray-500/45'
+                      <button
+                        type="button"
+                        onClick={() => setApiKeyModalOpen(true)}
+                        className="inline-flex items-center gap-1.5 px-2 h-7 rounded-lg bg-[#1c1c22] border border-[#2e2e32] text-[8px] font-black uppercase hover:bg-[#2e2e36] hover:border-[#3b6fb8] whitespace-nowrap"
+                        title={
+                          aiInvocationReady
+                            ? '当前调用源已就绪 · 点击配置 API 密钥'
+                            : '当前供应商未配置 API Key（Gemini 也未配置批量代理）· 点击配置'
+                        }
+                        aria-label={
+                          aiInvocationReady
+                            ? 'API 密钥，当前调用源已就绪'
+                            : 'API 密钥，当前调用源未就绪，请配置'
+                        }
+                      >
+                        <span
+                          role="status"
+                          aria-hidden={true}
+                          className={`h-2 w-2 shrink-0 rounded-full border border-[#3a3a40] ${
+                            aiInvocationReady
+                              ? 'bg-emerald-500 shadow-[0_0_10px_rgba(34,197,94,0.45)]'
+                              : 'bg-[#b45309] shadow-[0_0_8px_rgba(217,119,6,0.35)]'
                           }`}
-                          style={{ width: `${Math.max(0, Math.min(100, workspaceCloudUsagePercent))}%` }}
                         />
-                      </div>
+                        <span>API 密钥</span>
+                      </button>
                     </div>
                   ) : null}
                 </div>
@@ -2472,6 +2512,26 @@ const MainApp: React.FC = () => {
                     onAddGenerate3DJob={handleAddGenerate3DJobFromWorkflow}
                     preferenceScope={user?.id ?? null}
                     registerMarqueeStartHandler={registerWorkflowMarqueeStart}
+                    libraryItems={library}
+                    capabilityPresetPanel={
+                      <Suspense fallback={<LazySectionFallback label="能力预设" />}>
+                        <CapabilityPresetSection
+                          presets={capabilityPresets}
+                          onUpdate={(next) => {
+                            setCapabilityPresets(next);
+                            saveCapabilityPresets(next);
+                          }}
+                          sets={capabilitySets}
+                          onUpdateSets={(next) => {
+                            setCapabilitySets(next);
+                            saveCapabilitySets(next);
+                          }}
+                          onRunTest={runCapabilityTest}
+                          onLog={(level, message, detail) => addGlobalLog('能力', level, message, detail)}
+                          embeddedInWorkflow={true}
+                        />
+                      </Suspense>
+                    }
                   />
                 </Suspense>
               </WorkflowErrorBoundary>
