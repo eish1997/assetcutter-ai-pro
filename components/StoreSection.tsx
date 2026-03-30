@@ -197,21 +197,21 @@ export default function StoreSection(props: {
   return (
     <div className="flex flex-col gap-6 animate-in fade-in max-w-4xl">
       {!embed && (
-        <header className="shrink-0 h-14 flex items-center px-4 lg:px-6 border-b border-white/10 bg-black/20 rounded-2xl">
+        <header className="shrink-0 h-14 flex items-center px-4 lg:px-6 border-b border-[#2e2e32] bg-[#121214] rounded-2xl">
           <h1 className="text-sm font-black uppercase tracking-widest text-white/90">商店</h1>
           <span className="ml-3 text-[10px] text-gray-500">远程能力包（配置）· 可安装/更新/回滚</span>
         </header>
       )}
 
       {!embed && (
-        <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 space-y-3">
+        <section className="rounded-2xl border border-[#2e2e32] bg-[#121214] p-4 space-y-3">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-[9px] font-black uppercase text-gray-500">Catalog URL</span>
             <input
               value={catalogUrl}
               onChange={(e) => setCatalogUrl(e.target.value)}
               placeholder="https://xxx.github.io/yyy/catalog.json"
-              className="flex-1 min-w-[280px] px-3 py-2 rounded-xl bg-black/40 border border-white/10 text-[11px] text-white placeholder-gray-600 focus:border-blue-500/50 focus:outline-none"
+              className="flex-1 min-w-[280px] px-3 py-2 rounded-xl bg-[#16161a] border border-[#2e2e32] text-[11px] text-white placeholder-gray-600 focus:border-[#3b82f6] focus:outline-none"
             />
             <button
               type="button"
@@ -230,7 +230,7 @@ export default function StoreSection(props: {
       )}
 
       {embed && (
-        <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 space-y-2">
+        <section className="rounded-2xl border border-[#2e2e32] bg-[#121214] p-4 space-y-2">
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <span className="text-[9px] font-black uppercase text-gray-500">远程目录</span>
             <button
@@ -271,7 +271,7 @@ export default function StoreSection(props: {
         </div>
 
         {catalog.length === 0 ? (
-          <div className="rounded-2xl border border-white/10 bg-black/40 p-8 text-center text-gray-500 text-[10px]">
+          <div className="rounded-2xl border border-[#2e2e32] bg-[#16161a] p-8 text-center text-gray-500 text-[10px]">
             暂无条目（检查 catalog URL 是否可访问 / 是否为 JSON 数组）
           </div>
         ) : (
@@ -281,7 +281,7 @@ export default function StoreSection(props: {
               const hasUpdate = ins && ins.version !== item.version;
               const history = loadPackHistory(item.id);
               return (
-                <div key={item.id} className="rounded-2xl border border-white/10 bg-black/40 p-4 space-y-2">
+                <div key={item.id} className="rounded-2xl border border-[#2e2e32] bg-[#16161a] p-4 space-y-2">
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <div className="text-[11px] font-black text-white/90">{item.name}</div>
@@ -299,8 +299,8 @@ export default function StoreSection(props: {
                         !ins
                           ? 'bg-blue-600 hover:bg-blue-500'
                           : hasUpdate
-                            ? 'bg-amber-600/80 hover:bg-amber-500'
-                            : 'bg-white/10 hover:bg-white/20'
+                            ? 'bg-[#9a3412] hover:bg-amber-500'
+                            : 'bg-[#26262c] hover:bg-[#383842]'
                       }`}
                       title={item.url}
                     >
@@ -315,7 +315,7 @@ export default function StoreSection(props: {
                   )}
 
                   {history.length > 0 && (
-                    <div className="pt-2 border-t border-white/10">
+                    <div className="pt-2 border-t border-[#2e2e32]">
                       <div className="text-[8px] font-black uppercase text-gray-500 mb-1">历史版本（本机）</div>
                       <div className="flex flex-wrap gap-2">
                         {history.slice(0, 6).map((h) => (
@@ -323,7 +323,7 @@ export default function StoreSection(props: {
                             key={`${item.id}-${h.version}-${h.installedAt}`}
                             type="button"
                             onClick={() => rollbackTo(item.id, h)}
-                            className="px-2 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-[8px] font-black uppercase"
+                            className="px-2 py-1 rounded-lg bg-[#26262c] hover:bg-[#383842] text-[8px] font-black uppercase"
                             title={new Date(h.installedAt).toLocaleString()}
                           >
                             v{h.version}

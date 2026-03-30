@@ -1,0 +1,36 @@
+{
+  "ruleset_version": "2026.03.29",
+  "planner_id": "rules-v1",
+  "rules": [
+    {
+      "id": "row.sketch_to_photoreal",
+      "priority": 100,
+      "enabled": true,
+      "when": {
+        "target_keywords_any": ["写实", "照片", "photoreal", "真实", "photo"],
+        "source_kind": "any"
+      },
+      "then": {
+        "steps": [
+          { "preset_id": "83f822d9c4", "label": "线稿" },
+          { "preset_id": "2406c96c0e", "label": "色块" },
+          { "preset_id": "style_transfer", "label": "转风格" }
+        ]
+      },
+      "reason": "目标偏写实/照片感时，优先稳定结构与色域后再做风格与渲染。"
+    },
+    {
+      "id": "row.default_lineart",
+      "priority": 10,
+      "enabled": true,
+      "when": {
+        "target_keywords_any": ["线稿", "线描", "lineart", "line"],
+        "source_kind": "any"
+      },
+      "then": {
+        "steps": [{ "preset_id": "83f822d9c4", "label": "线稿" }]
+      },
+      "reason": "目标明确为线稿时，单步生成线稿即可。"
+    }
+  ]
+}

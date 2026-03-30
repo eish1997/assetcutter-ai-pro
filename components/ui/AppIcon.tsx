@@ -12,7 +12,8 @@ type AppIconName =
   | 'cube'
   | 'edit'
   | 'trash'
-  | 'user';
+  | 'user'
+  | 'chevron-up';
 
 const paths: Record<AppIconName, React.ReactNode> = {
   close: <path d="M5 5l10 10M15 5 5 15" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />,
@@ -62,6 +63,7 @@ const paths: Record<AppIconName, React.ReactNode> = {
       <path d="M4.8 15.2c1.2-2 3-3 5.2-3s4 .9 5.2 3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
     </>
   ),
+  'chevron-up': <path d="M5 12.5 10 7l5 5.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />,
 };
 
 const AppIcon: React.FC<{ name: AppIconName; className?: string }> = ({ name, className }) => (

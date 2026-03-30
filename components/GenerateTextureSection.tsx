@@ -155,7 +155,7 @@ const GenerateTextureSection: React.FC<GenerateTextureSectionProps> = ({ onLog }
     <div className="max-w-6xl mx-auto space-y-6 animate-in fade-in">
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         <aside className="lg:col-span-4 space-y-4">
-          <div className="glass p-6 rounded-2xl border border-white/10 bg-black/40 space-y-6">
+          <div className="glass p-6 rounded-2xl border border-[#2e2e32] bg-[#16161a] space-y-6">
             <div>
               <h3 className="text-[10px] font-black uppercase tracking-wider text-gray-400 mb-3 flex items-center gap-2">
                 <span className="w-2 h-2 rounded-full bg-blue-500" />
@@ -182,12 +182,12 @@ const GenerateTextureSection: React.FC<GenerateTextureSectionProps> = ({ onLog }
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
                 placeholder="例如：生锈的深蓝漆面金属，缝隙有污渍…"
-                className="w-full h-28 bg-white/5 border border-white/10 rounded-xl p-3 text-[11px] text-white placeholder:text-gray-600 focus:ring-2 focus:ring-blue-500 focus:outline-none resize-none"
+                className="w-full h-28 bg-[#1c1c22] border border-[#2e2e32] rounded-xl p-3 text-[11px] text-white placeholder:text-gray-600 focus:ring-2 focus:ring-blue-500 focus:outline-none resize-none"
                 disabled={status !== 'idle' && status !== 'confirming'}
               />
             </div>
             {error && (
-              <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 text-[11px] rounded-xl">
+              <div className="p-3 bg-[#3a1818] border border-[#b85a5a] text-red-400 text-[11px] rounded-xl">
                 {error}
               </div>
             )}
@@ -196,11 +196,11 @@ const GenerateTextureSection: React.FC<GenerateTextureSectionProps> = ({ onLog }
                 type="button"
                 onClick={handleGenerateBaseColor}
                 disabled={!isReady || !prompt.trim() || status === 'generating_base' || status === 'generating_pbr'}
-                className="w-full py-3 bg-blue-600 hover:bg-blue-500 disabled:bg-white/10 disabled:text-gray-500 rounded-xl text-[10px] font-black uppercase flex items-center justify-center gap-2 transition-all"
+                className="w-full py-3 bg-blue-600 hover:bg-blue-500 disabled:bg-[#26262c] disabled:text-gray-500 rounded-xl text-[10px] font-black uppercase flex items-center justify-center gap-2 transition-all"
               >
                 {status === 'generating_base' ? (
                   <>
-                    <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    <div className="w-5 h-5 border-2 border-[#484850] border-t-white rounded-full animate-spin" />
                     生成中…
                   </>
                 ) : (
@@ -220,7 +220,7 @@ const GenerateTextureSection: React.FC<GenerateTextureSectionProps> = ({ onLog }
                 <button
                   type="button"
                   onClick={resetAll}
-                  className="w-full py-2.5 bg-white/10 hover:bg-white/15 border border-white/10 rounded-xl text-[10px] font-black uppercase transition-all"
+                  className="w-full py-2.5 bg-[#26262c] hover:bg-white/15 border border-[#2e2e32] rounded-xl text-[10px] font-black uppercase transition-all"
                 >
                   新建项目
                 </button>
@@ -233,8 +233,8 @@ const GenerateTextureSection: React.FC<GenerateTextureSectionProps> = ({ onLog }
         </aside>
 
         <main className="lg:col-span-8">
-          <div className="glass rounded-2xl border border-white/10 overflow-hidden min-h-[400px] flex flex-col">
-            <div className="p-4 border-b border-white/10 bg-white/5 flex justify-between items-center">
+          <div className="glass rounded-2xl border border-[#2e2e32] overflow-hidden min-h-[400px] flex flex-col">
+            <div className="p-4 border-b border-[#2e2e32] bg-[#1c1c22] flex justify-between items-center">
               <span className="text-[10px] font-black uppercase tracking-widest text-gray-400">贴图预览</span>
               {status === 'completed' && (
                 <button
@@ -249,16 +249,16 @@ const GenerateTextureSection: React.FC<GenerateTextureSectionProps> = ({ onLog }
             <div className="flex-1 p-6 flex flex-col gap-6">
               <div>
                 <h3 className="text-[10px] font-black uppercase text-gray-500 mb-2">Base Color (Albedo)</h3>
-                <div className="aspect-[16/9] bg-black/40 rounded-xl border-2 border-dashed border-white/10 flex items-center justify-center overflow-hidden">
+                <div className="aspect-[16/9] bg-[#16161a] rounded-xl border-2 border-dashed border-[#2e2e32] flex items-center justify-center overflow-hidden">
                   {status === 'generating_base' ? (
                     <div className="flex flex-col items-center gap-3 text-gray-400">
-                      <div className="w-12 h-12 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
+                      <div className="w-12 h-12 border-2 border-[#4b6a9e] border-t-blue-500 rounded-full animate-spin" />
                       <span className="text-[10px]">正在生成…</span>
                     </div>
                   ) : baseColorMap ? (
                     <div className="w-full h-full relative group">
                       <img src={baseColorMap.url!} className="w-full h-full object-contain" alt="Base Color" />
-                      <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                      <div className="absolute inset-0 bg-[#18181c] opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                         <button
                           type="button"
                           onClick={() => downloadTexture(baseColorMap.url!, 'base_color')}
@@ -280,22 +280,22 @@ const GenerateTextureSection: React.FC<GenerateTextureSectionProps> = ({ onLog }
                     [1, 2].map((i) => (
                       <div
                         key={i}
-                        className="aspect-square bg-black/40 rounded-xl border border-white/10 flex items-center justify-center"
+                        className="aspect-square bg-[#16161a] rounded-xl border border-[#2e2e32] flex items-center justify-center"
                       >
-                        <div className="w-8 h-8 border-2 border-emerald-500/30 border-t-emerald-500 rounded-full animate-spin" />
+                        <div className="w-8 h-8 border-2 border-[#34d399] border-t-emerald-500 rounded-full animate-spin" />
                       </div>
                     ))
                   ) : pbrMaps.length > 0 ? (
                     pbrMaps.map((map) => (
                       <div
                         key={map.id}
-                        className="group relative aspect-square bg-black/40 rounded-xl border border-white/10 overflow-hidden"
+                        className="group relative aspect-square bg-[#16161a] rounded-xl border border-[#2e2e32] overflow-hidden"
                       >
-                        <div className="absolute top-2 left-2 z-10 text-[9px] font-black uppercase bg-black/70 px-2 py-1 rounded text-gray-300">
+                        <div className="absolute top-2 left-2 z-10 text-[9px] font-black uppercase bg-[#0d0d10] px-2 py-1 rounded text-gray-300">
                           {map.type}
                         </div>
                         <img src={map.url!} className="w-full h-full object-cover" alt={map.type} />
-                        <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                        <div className="absolute inset-0 bg-[#1a1a1e] opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                           <button
                             type="button"
                             onClick={() => downloadTexture(map.url!, map.type)}
@@ -310,7 +310,7 @@ const GenerateTextureSection: React.FC<GenerateTextureSectionProps> = ({ onLog }
                     [1, 2].map((i) => (
                       <div
                         key={i}
-                        className="aspect-square bg-black/20 rounded-xl border border-dashed border-white/10 flex items-center justify-center text-gray-600 text-[10px]"
+                        className="aspect-square bg-[#121214] rounded-xl border border-dashed border-[#2e2e32] flex items-center justify-center text-gray-600 text-[10px]"
                       >
                         —
                       </div>

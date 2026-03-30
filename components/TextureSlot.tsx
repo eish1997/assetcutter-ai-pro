@@ -10,14 +10,14 @@ interface TextureSlotProps {
 
 const TextureSlot: React.FC<TextureSlotProps> = ({ type, imageUrl, onUpload, onClear, isLoading }) => {
   return (
-    <div className="relative group rounded-xl bg-black/40 border border-white/10 overflow-hidden flex flex-col aspect-square">
-      <div className="p-3 border-b border-white/10 bg-white/5 flex justify-between items-center z-10">
+    <div className="relative group rounded-xl bg-[#16161a] border border-[#2e2e32] overflow-hidden flex flex-col aspect-square">
+      <div className="p-3 border-b border-[#2e2e32] bg-[#1c1c22] flex justify-between items-center z-10">
         <span className="text-[10px] font-black uppercase tracking-wider text-gray-400">{type}</span>
         {imageUrl && !isLoading && (
           <button
             type="button"
             onClick={onClear}
-            className="p-1 hover:bg-white/10 rounded-full text-gray-500 hover:text-red-400 transition-colors"
+            className="p-1 hover:bg-[#2e2e36] rounded-full text-gray-500 hover:text-red-400 transition-colors"
           >
             ×
           </button>
@@ -32,7 +32,7 @@ const TextureSlot: React.FC<TextureSlotProps> = ({ type, imageUrl, onUpload, onC
         ) : imageUrl ? (
           <img src={imageUrl} alt={type} className="w-full h-full object-cover" />
         ) : (
-          <label className="flex flex-col items-center justify-center cursor-pointer w-full h-full hover:bg-white/5 transition-colors">
+          <label className="flex flex-col items-center justify-center cursor-pointer w-full h-full hover:bg-[#222228] transition-colors">
             <span className="mb-2 text-gray-500 group-hover:text-blue-400 transition-colors text-xl">↑</span>
             <span className="text-[10px] text-gray-500">上传贴图</span>
             <input type="file" className="hidden" accept="image/*" onChange={onUpload} />

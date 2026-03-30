@@ -1,3 +1,15 @@
+import type { VgpAssetExtension } from './types/vgp';
+
+export type { VgpAssetExtension, VgpGenStepCapture } from './types/vgp';
+export type {
+  PipelinePlan,
+  PlannedStep,
+  DecisionTraceEntry,
+  PlannerRulesetDocument,
+  PlannerRuleRow,
+  InputProfile,
+} from './types/planner';
+export { PLAN_SCHEMA_VERSION } from './types/planner';
 
 export const AppMode = {
   LAB: 'LAB',
@@ -362,6 +374,8 @@ export type WorkflowAsset = {
   archived: boolean;
   hiddenInGrid: boolean;
   createdAt: number;
+  /** VGP：语义快照 + 版本链 + Prompt 产物（阶段 A，可选以兼容旧数据） */
+  vgp?: VgpAssetExtension;
 };
 
 /** 待处理区单项：某资产的某操作 */
@@ -379,6 +393,11 @@ export type WorkflowPendingTask = {
   sourceItemIndex?: number;
   /** 临时微调提示词：从功能区「微调」入口拖入时填写，执行时覆盖预设的 instruction */
   promptOverride?: string;
+  /**
+   * 入队时当前资产用于执行的展示版本（与 inputImage 一致），供 VGP 解析父版本（可从任意步骤结果继续生图）。
+   * 缺省时按链头兼容旧任务。
+   */
+  inputSourceDisplayKey?: string;
 };
 
 /** 能力分类：生图=提示词相关；图像处理=切割/裁剪等；生成3D=混元生3D 预设 */

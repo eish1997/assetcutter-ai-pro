@@ -51,7 +51,7 @@ const DropdownSelect: React.FC<DropdownSelectProps> = ({
       <button
         type="button"
         onClick={() => setOpen((p) => !p)}
-        className={`w-full bg-white/5 border border-white/10 rounded-xl ${pad} ${textSize} text-left flex items-center justify-between outline-none focus:border-blue-500 hover:bg-white/10 transition-colors text-white ${buttonClassName}`}
+        className={`w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl ${pad} ${textSize} text-left flex items-center justify-between outline-none focus:border-blue-500 hover:bg-[#2e2e36] transition-colors text-white ${buttonClassName}`}
       >
         <span className="truncate">{displayLabel}</span>
         <span className="text-gray-500 shrink-0 ml-2">{open ? '▲' : '▼'}</span>
@@ -59,7 +59,7 @@ const DropdownSelect: React.FC<DropdownSelectProps> = ({
       {open && (
         <>
           <div className="fixed inset-0 z-[1002]" aria-hidden onClick={() => setOpen(false)} />
-          <ul className="absolute top-full left-0 right-0 mt-1 z-[1003] max-h-56 overflow-y-auto rounded-xl border border-white/10 bg-[#0f0f0f] shadow-xl py-1 text-white list-none">
+          <ul className="absolute top-full left-0 right-0 mt-1 z-[1003] max-h-56 overflow-y-auto rounded-xl border border-[#2e2e32] bg-[#0f0f0f] shadow-xl py-1 text-white list-none">
             {options.map((opt) => (
               <li key={opt.value}>
                 <button
@@ -68,7 +68,7 @@ const DropdownSelect: React.FC<DropdownSelectProps> = ({
                     onChange(opt.value);
                     setOpen(false);
                   }}
-                  className={`w-full ${pad} text-left ${textSize} transition-colors ${value === opt.value ? 'bg-blue-600/30 text-blue-300' : 'text-white hover:bg-white/10'}`}
+                  className={`w-full ${pad} text-left ${textSize} transition-colors ${value === opt.value ? 'bg-[#264670] text-blue-300' : 'text-white hover:bg-[#2e2e36]'}`}
                 >
                   {opt.label}
                 </button>

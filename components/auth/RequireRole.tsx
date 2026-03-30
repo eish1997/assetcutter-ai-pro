@@ -12,7 +12,7 @@ const RequireRole: React.FC<{ role: 'admin' | 'user'; children: React.ReactNode 
   if (role === 'admin' && user.role !== 'admin') {
     return (
       <div className="min-h-screen bg-[#050505] flex items-center justify-center p-4">
-        <div className="w-full max-w-sm rounded-2xl border border-white/10 bg-black/40 p-6 text-center">
+        <div className="w-full max-w-sm rounded-2xl border border-[#2e2e32] bg-[#16161a] p-6 text-center">
           <p className="text-[12px] text-gray-200 font-bold">无管理员权限</p>
           <p className="text-[11px] text-gray-500 mt-2">当前账号：{user.email}</p>
           <p className="text-[11px] text-gray-500 mt-4">

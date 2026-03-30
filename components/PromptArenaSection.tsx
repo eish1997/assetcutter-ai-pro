@@ -357,7 +357,7 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
           onFocus={() => expandPromptBox(monoKey)}
           onClick={() => expandPromptBox(monoKey)}
           onBlur={() => collapsePromptBox(monoKey)}
-          className={`whitespace-pre-wrap break-words text-[10px] bg-black/30 rounded p-2 outline-none focus:border-blue-500 border border-white/10 ${promptBoxClass(monoKey)}`}
+          className={`whitespace-pre-wrap break-words text-[10px] bg-[#141416] rounded p-2 outline-none focus:border-blue-500 border border-[#2e2e32] ${promptBoxClass(monoKey)}`}
         >
           {text}
         </pre>
@@ -369,26 +369,26 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
     const rightKey = `${key}_right`;
     return (
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
-        <div className="rounded p-2 bg-black/30 border border-white/10">
+        <div className="rounded p-2 bg-[#141416] border border-[#2e2e32]">
           <div className="text-[8px] text-gray-500 uppercase mb-1">原文</div>
           <pre
             tabIndex={0}
             onFocus={() => expandPromptBox(leftKey)}
             onClick={() => expandPromptBox(leftKey)}
             onBlur={() => collapsePromptBox(leftKey)}
-            className={`whitespace-pre-wrap break-words text-[10px] outline-none focus:border-blue-500 border border-white/10 rounded p-2 ${promptBoxClass(leftKey)}`}
+            className={`whitespace-pre-wrap break-words text-[10px] outline-none focus:border-blue-500 border border-[#2e2e32] rounded p-2 ${promptBoxClass(leftKey)}`}
           >
             {text}
           </pre>
         </div>
-        <div className="rounded p-2 bg-black/30 border border-white/10">
+        <div className="rounded p-2 bg-[#141416] border border-[#2e2e32]">
           <div className="text-[8px] text-gray-500 uppercase mb-1">中文</div>
           <pre
             tabIndex={0}
             onFocus={() => expandPromptBox(rightKey)}
             onClick={() => expandPromptBox(rightKey)}
             onBlur={() => collapsePromptBox(rightKey)}
-            className={`whitespace-pre-wrap break-words text-[10px] outline-none focus:border-blue-500 border border-white/10 rounded p-2 ${promptBoxClass(rightKey)}`}
+            className={`whitespace-pre-wrap break-words text-[10px] outline-none focus:border-blue-500 border border-[#2e2e32] rounded p-2 ${promptBoxClass(rightKey)}`}
           >
             {zh || (loading ? '翻译中…' : '翻译中…')}
           </pre>
@@ -941,7 +941,7 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
   return (
     <div className="flex flex-col lg:flex-row gap-6 items-start">
       <aside className="w-full lg:w-72 shrink-0 lg:sticky lg:top-4 max-h-[calc(100vh-2rem)] overflow-hidden">
-        <div className="glass p-4 rounded-2xl border border-white/5 flex flex-col min-h-0 h-full">
+        <div className="glass p-4 rounded-2xl border border-[#252528] flex flex-col min-h-0 h-full">
           <div className="text-[9px] font-black text-blue-400 uppercase mb-3">获胜片段库</div>
           <p className="text-[8px] text-gray-500 mb-2">点击条目回顾擂台全流程</p>
           <div className="flex-1 overflow-y-auto space-y-2 no-scrollbar min-h-0">
@@ -949,10 +949,10 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
               <div className="text-[9px] text-gray-500 py-4">保存的擂主提示词会出现在这里</div>
             ) : (
               arenaSnippets.map((s) => (
-                <div key={s.id} className="rounded-lg border border-white/10 bg-white/5 p-2 group">
+                <div key={s.id} className="rounded-lg border border-[#2e2e32] bg-[#1c1c22] p-2 group">
                   {s.previewImage && (
                     <button type="button" onClick={() => openReplay(s)} className="block w-full mb-2">
-                      <img src={s.previewImage} alt="擂主预览" className="w-full h-28 object-cover rounded-lg border border-white/10" />
+                      <img src={s.previewImage} alt="擂主预览" className="w-full h-28 object-cover rounded-lg border border-[#2e2e32]" />
                     </button>
                   )}
                   <button
@@ -965,7 +965,7 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
                   </button>
                   <div className="mt-1 flex items-center justify-between">
                     <button type="button" onClick={() => navigator.clipboard.writeText(s.text)} className="text-[8px] text-blue-400 hover:underline">复制提示词</button>
-                    <button type="button" onClick={() => { removeSnippet(s.id); setArenaSnippets(loadSnippets()); }} className="opacity-70 group-hover:opacity-100 w-6 h-6 rounded text-red-400 hover:bg-red-500/20 text-[10px]">×</button>
+                    <button type="button" onClick={() => { removeSnippet(s.id); setArenaSnippets(loadSnippets()); }} className="opacity-70 group-hover:opacity-100 w-6 h-6 rounded text-red-400 hover:bg-[#4a1c1c] text-[10px]">×</button>
                   </div>
                 </div>
               ))
@@ -976,58 +976,58 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
 
       <div className="flex-1 flex flex-col gap-4 min-w-0">
         <div className="flex items-center justify-between gap-4 flex-wrap">
-          <button onClick={() => setMode(AppMode.ADMIN)} className="px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-[9px] font-black uppercase hover:bg-white/10 transition-all">看效果分析</button>
+          <button onClick={() => setMode(AppMode.ADMIN)} className="px-4 py-2 rounded-xl bg-[#1c1c22] border border-[#2e2e32] text-[9px] font-black uppercase hover:bg-[#2e2e36] transition-all">看效果分析</button>
           {arenaFirstVisit && (
-            <div className="flex-1 flex items-center justify-between gap-2 px-4 py-2 rounded-xl bg-blue-600/10 border border-blue-500/30 text-[10px] text-blue-300">
+            <div className="flex-1 flex items-center justify-between gap-2 px-4 py-2 rounded-xl bg-[#152642] border border-[#4b6a9e] text-[10px] text-blue-300">
               <span>用自然语言描述想要的效果，过程在时间轴中展开，可回顾每步输入输出与结果；右侧为进度地图可跳转。</span>
               <button onClick={() => { setArenaFirstVisit(false); localStorage.setItem('ac_arena_visited', '1'); }} className="text-blue-400 hover:text-white">收起</button>
             </div>
           )}
         </div>
 
-        <section className="glass p-4 rounded-2xl border border-white/5 shrink-0">
+        <section className="glass p-4 rounded-2xl border border-[#252528] shrink-0">
           <div className="text-[9px] font-black text-gray-500 uppercase mb-2">底图</div>
           {!arenaImage ? (
-            <label className="block w-full h-32 cursor-pointer border-2 border-dashed border-white/10 rounded-xl hover:bg-white/5 flex items-center justify-center text-[9px] text-gray-500">
+            <label className="block w-full h-32 cursor-pointer border-2 border-dashed border-[#2e2e32] rounded-xl hover:bg-[#222228] flex items-center justify-center text-[9px] text-gray-500">
               上传底图
               <input type="file" className="hidden" accept="image/*" onChange={e => onFileUpload(e, setArenaImage)} />
             </label>
           ) : (
             <div className="relative inline-block">
-              <img src={arenaImage} alt="底图" className="max-h-32 rounded-xl border border-white/10" />
-              <button type="button" onClick={() => setArenaImage('')} className="absolute top-1 right-1 w-6 h-6 rounded bg-red-500/80 text-white text-xs">×</button>
+              <img src={arenaImage} alt="底图" className="max-h-32 rounded-xl border border-[#2e2e32]" />
+              <button type="button" onClick={() => setArenaImage('')} className="absolute top-1 right-1 w-6 h-6 rounded bg-[#b91c1c] text-white text-xs">×</button>
             </div>
           )}
         </section>
 
-        <section className="glass p-4 rounded-2xl border border-white/5 shrink-0">
+        <section className="glass p-4 rounded-2xl border border-[#252528] shrink-0">
           <div className="text-[9px] font-black text-gray-500 uppercase mb-2">自然语言描述（想要什么图）</div>
           <textarea
             value={arenaUserDescription}
             onChange={e => setArenaUserDescription(e.target.value)}
             placeholder="例如：科技公司用的现代感 logo，简洁一点"
-            className="w-full min-h-[80px] bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-[11px] outline-none focus:border-blue-500 resize-y"
+            className="w-full min-h-[80px] bg-[#16161a] border border-[#2e2e32] rounded-xl px-4 py-3 text-[11px] outline-none focus:border-blue-500 resize-y"
           />
           <div className="mt-2 flex items-center gap-3 flex-wrap">
             <span className="text-[9px] text-gray-500">参赛人数：</span>
             {([2, 3, 4] as const).map((n) => (
-              <button key={n} type="button" onClick={() => setArenaInitialCount(n)} className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${arenaInitialCount === n ? 'bg-blue-600/20 border-blue-500/50 text-blue-300' : 'bg-white/5 border-white/10 text-gray-500 hover:bg-white/10'}`}>{n}</button>
+              <button key={n} type="button" onClick={() => setArenaInitialCount(n)} className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${arenaInitialCount === n ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300' : 'bg-[#1c1c22] border-[#2e2e32] text-gray-500 hover:bg-[#2e2e36]'}`}>{n}</button>
             ))}
           </div>
           <div className="mt-2 flex items-center gap-3 flex-wrap">
             <span className="text-[9px] text-gray-500">生图模型：</span>
             {DIALOG_IMAGE_GEARS.map((g) => (
-              <button key={g.id} type="button" onClick={() => setArenaImageModel(g.modelId)} className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${arenaImageModel === g.modelId ? 'bg-blue-600/20 border-blue-500/50 text-blue-300' : 'bg-white/5 border-white/10 text-gray-500 hover:bg-white/10'}`} title={g.modelId}>{g.label}</button>
+              <button key={g.id} type="button" onClick={() => setArenaImageModel(g.modelId)} className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${arenaImageModel === g.modelId ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300' : 'bg-[#1c1c22] border-[#2e2e32] text-gray-500 hover:bg-[#2e2e36]'}`} title={g.modelId}>{g.label}</button>
             ))}
           </div>
           <button type="button" onClick={startArena} disabled={arenaIsGenerating || !arenaUserDescription.trim() || !arenaImage} className="mt-3 px-4 py-2 rounded-xl bg-blue-600 text-[9px] font-black uppercase text-white hover:bg-blue-500 disabled:opacity-50">开始擂台</button>
         </section>
 
         {arenaTimeline.length > 0 && (
-          <div ref={timelineScrollRef} className="flex-1 overflow-y-auto space-y-4 min-h-0 rounded-2xl border border-white/10 bg-black/20 p-4">
+          <div ref={timelineScrollRef} className="flex-1 overflow-y-auto space-y-4 min-h-0 rounded-2xl border border-[#2e2e32] bg-[#121214] p-4">
             {arenaTimeline.map((block, idx) => (
-              <div key={block.id} id={block.id} className="rounded-xl border border-white/10 bg-black/30 overflow-hidden">
-                <div className="px-3 py-2 border-b border-white/10 text-[9px] font-black text-blue-400 uppercase">{block.label}</div>
+              <div key={block.id} id={block.id} className="rounded-xl border border-[#2e2e32] bg-[#141416] overflow-hidden">
+                <div className="px-3 py-2 border-b border-[#2e2e32] text-[9px] font-black text-blue-400 uppercase">{block.label}</div>
                 {block.type === 'step_group' && block.stepLogIds && (
                   <div className="p-3 space-y-2">
                     {block.stepLogIds.map((sid) => {
@@ -1036,10 +1036,10 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
                       const inputText = entry.inputFull ?? '';
                       const outputText = entry.outputRaw ?? '';
                       return (
-                        <div key={entry.id} className="rounded-lg border border-white/10 bg-black/20 p-2">
+                        <div key={entry.id} className="rounded-lg border border-[#2e2e32] bg-[#121214] p-2">
                           <div className="flex items-center gap-2 mb-1">
                             <span className="text-[9px] font-black text-gray-400">{entry.label}</span>
-                            <span className={`px-1.5 py-0.5 rounded text-[8px] ${entry.status === 'running' ? 'bg-amber-600/30 text-amber-300' : entry.status === 'error' ? 'bg-red-600/30 text-red-300' : 'bg-green-600/20 text-green-300'}`}>{entry.status === 'running' ? '进行中' : entry.status === 'error' ? '失败' : '完成'}</span>
+                            <span className={`px-1.5 py-0.5 rounded text-[8px] ${entry.status === 'running' ? 'bg-[#92400e] text-amber-300' : entry.status === 'error' ? 'bg-[#5c1a1a] text-red-300' : 'bg-[#14532d] text-green-300'}`}>{entry.status === 'running' ? '进行中' : entry.status === 'error' ? '失败' : '完成'}</span>
                           </div>
                           {inputText && (
                             <div className="mb-2">
@@ -1092,10 +1092,10 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
                                     className="block w-full"
                                     aria-label={`放大预览：${opt.label}`}
                                   >
-                                    <img src={opt.image} alt={opt.label} className="w-full rounded-xl border border-white/10" />
+                                    <img src={opt.image} alt={opt.label} className="w-full rounded-xl border border-[#2e2e32]" />
                                   </button>
                                 ) : (
-                                  <div className="aspect-square rounded-xl bg-white/5 flex items-center justify-center text-[9px] text-gray-500">生成中…</div>
+                                  <div className="aspect-square rounded-xl bg-[#1c1c22] flex items-center justify-center text-[9px] text-gray-500">生成中…</div>
                                 )}
                                 {isLive && (
                                   <div className="mt-2 space-y-2">
@@ -1105,7 +1105,7 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
                                       onChange={(e) => updateOptionFeedback(opt.label, { strength: e.target.value })}
                                       placeholder="优点（可选）"
                                       disabled={busy}
-                                      className="w-full px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-[10px] text-gray-300 placeholder-gray-500 outline-none focus:border-blue-500 disabled:opacity-60"
+                                      className="w-full px-3 py-1.5 rounded-lg bg-[#1c1c22] border border-[#2e2e32] text-[10px] text-gray-300 placeholder-gray-500 outline-none focus:border-blue-500 disabled:opacity-60"
                                     />
                                     <input
                                       type="text"
@@ -1113,7 +1113,7 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
                                       onChange={(e) => updateOptionFeedback(opt.label, { gaps: e.target.value })}
                                       placeholder="不足（可选）"
                                       disabled={busy}
-                                      className="w-full px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-[10px] text-gray-300 placeholder-gray-500 outline-none focus:border-blue-500 disabled:opacity-60"
+                                      className="w-full px-3 py-1.5 rounded-lg bg-[#1c1c22] border border-[#2e2e32] text-[10px] text-gray-300 placeholder-gray-500 outline-none focus:border-blue-500 disabled:opacity-60"
                                     />
                                   </div>
                                 )}
@@ -1124,14 +1124,14 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
                             <>
                               <div className="flex flex-wrap gap-3">
                                 {currentOptions.map((_, i) => (
-                                  <button key={i} type="button" onClick={() => handleArenaPick(i)} disabled={busy} className="px-4 py-2 rounded-xl bg-amber-600/80 text-[10px] font-black uppercase text-white hover:bg-amber-500 disabled:opacity-50">选择 {currentOptions[i].label}</button>
+                                  <button key={i} type="button" onClick={() => handleArenaPick(i)} disabled={busy} className="px-4 py-2 rounded-xl bg-[#9a3412] text-[10px] font-black uppercase text-white hover:bg-amber-500 disabled:opacity-50">选择 {currentOptions[i].label}</button>
                                 ))}
-                                <button type="button" onClick={() => handleArenaPick(-1)} disabled={busy} className="px-4 py-2 rounded-xl bg-white/10 text-[10px] font-black uppercase hover:bg-white/20 disabled:opacity-50">平局</button>
-                                {arenaRound > 0 && currentOptions.length === 2 && <button type="button" onClick={() => handleArenaPick(1, true)} disabled={busy} className="px-4 py-2 rounded-xl border border-white/20 text-[10px] font-black uppercase disabled:opacity-50" title="选挑战者且不优化">选择挑战者（不优化）</button>}
-                                {arenaRound > 0 && !arenaChallenger2Prompt && <button type="button" onClick={addChallenger} disabled={busy} className="px-4 py-2 rounded-xl border border-amber-500/50 text-amber-400 text-[10px] font-black uppercase disabled:opacity-50">增加挑战者</button>}
-                                {arenaRound > 0 && <button type="button" onClick={eliminateAllOptions} disabled={busy} className="px-4 py-2 rounded-xl bg-red-500/15 border border-red-500/40 text-red-200 text-[10px] font-black uppercase hover:bg-red-500/20 disabled:opacity-50">淘汰所有</button>}
-                                {arenaChampionPrompt && <button type="button" onClick={() => setArenaSaveSnippetConfirm(true)} className="px-4 py-2 rounded-xl bg-green-600/20 border border-green-500/30 text-[10px] font-black uppercase text-green-400">满意，保存</button>}
-                                <button type="button" onClick={() => { resetOptionFeedback(); setArenaReportedGaps([]); setArenaWinnerStrength(''); setArenaLoserRemark(''); setArenaCurrentStep('idle'); }} className="px-4 py-2 rounded-xl border border-white/20 text-[10px] font-black uppercase">收起</button>
+                                <button type="button" onClick={() => handleArenaPick(-1)} disabled={busy} className="px-4 py-2 rounded-xl bg-[#26262c] text-[10px] font-black uppercase hover:bg-[#383842] disabled:opacity-50">平局</button>
+                                {arenaRound > 0 && currentOptions.length === 2 && <button type="button" onClick={() => handleArenaPick(1, true)} disabled={busy} className="px-4 py-2 rounded-xl border border-[#3a3a40] text-[10px] font-black uppercase disabled:opacity-50" title="选挑战者且不优化">选择挑战者（不优化）</button>}
+                                {arenaRound > 0 && !arenaChallenger2Prompt && <button type="button" onClick={addChallenger} disabled={busy} className="px-4 py-2 rounded-xl border border-[#f59e0b] text-amber-400 text-[10px] font-black uppercase disabled:opacity-50">增加挑战者</button>}
+                                {arenaRound > 0 && <button type="button" onClick={eliminateAllOptions} disabled={busy} className="px-4 py-2 rounded-xl bg-[#4a2228] border border-[#f87171] text-red-200 text-[10px] font-black uppercase hover:bg-[#4a1c1c] disabled:opacity-50">淘汰所有</button>}
+                                {arenaChampionPrompt && <button type="button" onClick={() => setArenaSaveSnippetConfirm(true)} className="px-4 py-2 rounded-xl bg-[#14532d] border border-green-500/30 text-[10px] font-black uppercase text-green-400">满意，保存</button>}
+                                <button type="button" onClick={() => { resetOptionFeedback(); setArenaReportedGaps([]); setArenaWinnerStrength(''); setArenaLoserRemark(''); setArenaCurrentStep('idle'); }} className="px-4 py-2 rounded-xl border border-[#3a3a40] text-[10px] font-black uppercase">收起</button>
                               </div>
                             </>
                           )}
@@ -1146,7 +1146,7 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
         )}
 
         {arenaTimeline.length === 0 && (arenaStepLog.length > 0 || arenaReasoning || arenaOptimizeReasoning) && (
-            <div className="mt-3 rounded-xl border border-white/10 bg-black/30 overflow-hidden">
+            <div className="mt-3 rounded-xl border border-[#2e2e32] bg-[#141416] overflow-hidden">
               <button type="button" onClick={() => setProcessExpanded(!processExpanded)} className="w-full px-3 py-2 text-left text-[9px] font-black text-blue-400 uppercase flex items-center justify-between">
                 {processExpanded ? '收起过程' : '展开过程'}
                 <span className="text-gray-500">{processExpanded ? '▼' : '▶'}</span>
@@ -1160,7 +1160,7 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
                         {STAGES.map(({ step, label }) => (
                           <span
                             key={step}
-                            className={`px-2 py-0.5 rounded text-[8px] font-bold uppercase ${arenaCurrentStep === step ? 'bg-blue-600/40 text-blue-200' : 'bg-white/5 text-gray-500'}`}
+                            className={`px-2 py-0.5 rounded text-[8px] font-bold uppercase ${arenaCurrentStep === step ? 'bg-[#2e5280] text-blue-200' : 'bg-[#1c1c22] text-gray-500'}`}
                           >
                             {label}
                           </span>
@@ -1172,10 +1172,10 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
                           const inputText = entry.inputFull ?? '';
                           const outputText = entry.outputRaw ?? '';
                           return (
-                            <div key={entry.id} className="rounded-lg border border-white/10 bg-black/20 p-2">
+                            <div key={entry.id} className="rounded-lg border border-[#2e2e32] bg-[#121214] p-2">
                               <div className="flex items-center gap-2 mb-1">
                                 <span className="text-[9px] font-black text-gray-400">{entry.label}</span>
-                                <span className={`px-1.5 py-0.5 rounded text-[8px] ${entry.status === 'running' ? 'bg-amber-600/30 text-amber-300' : entry.status === 'error' ? 'bg-red-600/30 text-red-300' : 'bg-green-600/20 text-green-300'}`}>
+                                <span className={`px-1.5 py-0.5 rounded text-[8px] ${entry.status === 'running' ? 'bg-[#92400e] text-amber-300' : entry.status === 'error' ? 'bg-[#5c1a1a] text-red-300' : 'bg-[#14532d] text-green-300'}`}>
                                   {entry.status === 'running' ? '进行中' : entry.status === 'error' ? '失败' : '完成'}
                                 </span>
                               </div>
@@ -1231,21 +1231,21 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
           )}
 
         {arenaChampionPrompt && arenaTimeline.length > 0 && (
-          <section className="glass p-4 rounded-2xl border border-white/5 shrink-0">
+          <section className="glass p-4 rounded-2xl border border-[#252528] shrink-0">
             <div className="text-[9px] font-black text-blue-400 uppercase mb-2">当前擂主</div>
             <p className="text-[10px] text-gray-300 break-words mb-2">{arenaChampionPrompt}</p>
-            <button type="button" onClick={() => setArenaSaveSnippetConfirm(true)} className="px-3 py-1.5 rounded-lg bg-amber-600/20 border border-amber-500/30 text-[9px] font-black uppercase text-amber-400">满意，保存</button>
+            <button type="button" onClick={() => setArenaSaveSnippetConfirm(true)} className="px-3 py-1.5 rounded-lg bg-[#3d2a10] border border-[#b45309] text-[9px] font-black uppercase text-amber-400">满意，保存</button>
           </section>
         )}
       </div>
 
       <aside className="w-full lg:w-64 shrink-0 lg:sticky lg:top-4 max-h-[calc(100vh-2rem)] overflow-hidden">
         {arenaTimeline.length > 0 && (
-          <div className="glass p-3 rounded-2xl border border-white/5 flex flex-col min-h-0 h-full">
+          <div className="glass p-3 rounded-2xl border border-[#252528] flex flex-col min-h-0 h-full">
             <div className="text-[8px] font-black text-blue-400 uppercase mb-2">进度地图</div>
             <div className="flex-1 overflow-y-auto space-y-1 no-scrollbar">
               {arenaTimeline.map((b, i) => (
-                <button key={b.id} type="button" onClick={() => scrollToBlock(b.id)} className="w-full text-left px-2 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-[9px] text-gray-300 truncate border border-transparent hover:border-white/20">
+                <button key={b.id} type="button" onClick={() => scrollToBlock(b.id)} className="w-full text-left px-2 py-1.5 rounded-lg bg-[#1c1c22] hover:bg-[#2e2e36] text-[9px] text-gray-300 truncate border border-transparent hover:border-[#3a3a40]">
                   {i + 1}. {b.label}
                 </button>
               ))}
@@ -1255,12 +1255,12 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
       </aside>
 
       {arenaSaveSnippetConfirm && (
-        <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/90 p-4" onClick={() => !busy && setArenaSaveSnippetConfirm(false)}>
-          <div className="relative rounded-2xl border border-white/10 bg-black/80 p-6 max-w-sm w-full" onClick={e => e.stopPropagation()}>
+        <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={() => !busy && setArenaSaveSnippetConfirm(false)}>
+          <div className="relative rounded-2xl border border-white/10 bg-[#14141a]/90 backdrop-blur-md p-6 max-w-sm w-full shadow-xl" onClick={e => e.stopPropagation()}>
             <p className="text-[11px] text-gray-300 mb-4">将当前擂主提示词保存至片段库？</p>
             <div className="flex gap-3">
               <button type="button" onClick={() => confirmSave(true)} className="px-4 py-2 rounded-xl bg-blue-600 text-[10px] font-black uppercase text-white hover:bg-blue-500">保存</button>
-              <button type="button" onClick={() => confirmSave(false)} className="px-4 py-2 rounded-xl bg-white/10 text-[10px] font-black uppercase hover:bg-white/20">不保存</button>
+              <button type="button" onClick={() => confirmSave(false)} className="px-4 py-2 rounded-xl bg-[#26262c] text-[10px] font-black uppercase hover:bg-[#383842]">不保存</button>
             </div>
           </div>
         </div>
@@ -1268,9 +1268,9 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
 
       {lightboxOpen &&
         createPortal(
-          <div className="fixed inset-0 z-[2200] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" onClick={closeLightbox} onWheel={onLightboxWheel} role="presentation">
+          <div className="fixed inset-0 z-[2200] flex items-center justify-center bg-black/65 backdrop-blur-sm p-4" onClick={closeLightbox} onWheel={onLightboxWheel} role="presentation">
             <div
-              className="relative w-full max-w-4xl rounded-2xl border border-white/10 bg-[#0f0f0f] shadow-xl p-4 flex flex-col"
+              className="relative w-full max-w-4xl rounded-2xl border border-white/10 bg-[#0e0e14]/92 backdrop-blur-md shadow-xl p-4 flex flex-col"
               onClick={(e) => e.stopPropagation()}
               role="dialog"
               aria-modal="true"
@@ -1280,7 +1280,7 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
                 <button
                   type="button"
                   onClick={closeLightbox}
-                  className="w-9 h-9 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-white/80 hover:text-white"
+                  className="w-9 h-9 rounded-lg bg-[#1c1c22] border border-[#2e2e32] hover:bg-[#2e2e36] text-white/80 hover:text-white"
                   aria-label="关闭预览"
                 >
                   <AppIcon name="close" className="w-4 h-4 mx-auto" />
@@ -1291,20 +1291,20 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
                   <img
                     src={lightboxImages[lightboxIndex]?.src}
                     alt={lightboxImages[lightboxIndex]?.label}
-                    className="w-full max-h-[75vh] object-contain rounded-xl border border-white/10"
+                    className="w-full max-h-[75vh] object-contain rounded-xl border border-[#2e2e32]"
                     draggable={false}
                   />
                 ) : null}
               </div>
               {lightboxImages[lightboxIndex]?.prompt && (
                 <div className="mt-3 grid grid-cols-1 lg:grid-cols-2 gap-2">
-                  <div className="rounded-lg border border-white/10 bg-black/30 p-2">
+                  <div className="rounded-lg border border-[#2e2e32] bg-[#141416] p-2">
                     <div className="text-[8px] text-gray-500 uppercase mb-1">提示词（原文）</div>
                     <pre className="whitespace-pre-wrap break-words text-[10px] max-h-36 overflow-y-auto">
                       {lightboxImages[lightboxIndex]?.prompt}
                     </pre>
                   </div>
-                  <div className="rounded-lg border border-white/10 bg-black/30 p-2">
+                  <div className="rounded-lg border border-[#2e2e32] bg-[#141416] p-2">
                     <div className="text-[8px] text-gray-500 uppercase mb-1">提示词（中文）</div>
                     <pre className="whitespace-pre-wrap break-words text-[10px] max-h-36 overflow-y-auto">
                       {(() => {
@@ -1329,27 +1329,27 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
 
       {replayOpen && replaySnippet &&
         createPortal(
-          <div className="fixed inset-0 z-[2300] bg-black/90 p-4 lg:p-8 overflow-y-auto" onClick={() => setReplayOpen(false)}>
-            <div className="max-w-5xl mx-auto rounded-2xl border border-white/10 bg-black/80 p-4 lg:p-6" onClick={(e) => e.stopPropagation()}>
+          <div className="fixed inset-0 z-[2300] bg-black/60 backdrop-blur-sm p-4 lg:p-8 overflow-y-auto" onClick={() => setReplayOpen(false)}>
+            <div className="max-w-5xl mx-auto rounded-2xl border border-white/10 bg-[#14141a]/92 backdrop-blur-md p-4 lg:p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
               <div className="flex items-center justify-between mb-3">
                 <div className="text-[10px] font-black uppercase text-blue-300">擂台过程回顾</div>
-                <button type="button" onClick={() => setReplayOpen(false)} className="w-9 h-9 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 flex items-center justify-center"><AppIcon name="close" className="w-4 h-4" /></button>
+                <button type="button" onClick={() => setReplayOpen(false)} className="w-9 h-9 rounded-lg bg-[#1c1c22] border border-[#2e2e32] hover:bg-[#2e2e36] flex items-center justify-center"><AppIcon name="close" className="w-4 h-4" /></button>
               </div>
               {replaySnippet.previewImage && (
-                <img src={replaySnippet.previewImage} alt="擂主预览" className="w-full max-h-64 object-contain rounded-xl border border-white/10 mb-3" />
+                <img src={replaySnippet.previewImage} alt="擂主预览" className="w-full max-h-64 object-contain rounded-xl border border-[#2e2e32] mb-3" />
               )}
               <p className="text-[10px] text-gray-300 mb-3 break-words">{replaySnippet.text}</p>
               <div className="space-y-3">
                 {(replaySnippet.timelineSnapshot || []).map((block) => (
-                  <div key={block.id} className="rounded-xl border border-white/10 bg-black/30 overflow-hidden">
-                    <div className="px-3 py-2 border-b border-white/10 text-[9px] font-black text-blue-400 uppercase">{block.label}</div>
+                  <div key={block.id} className="rounded-xl border border-[#2e2e32] bg-[#141416] overflow-hidden">
+                    <div className="px-3 py-2 border-b border-[#2e2e32] text-[9px] font-black text-blue-400 uppercase">{block.label}</div>
                     {block.type === 'step_group' && (
                       <div className="p-3 space-y-2">
                         {(block.stepLogIds || []).map((sid) => {
                           const entry = (replaySnippet.stepLogSnapshot || []).find((s) => s.id === sid);
                           if (!entry) return null;
                           return (
-                            <div key={entry.id} className="rounded-lg border border-white/10 bg-black/20 p-2">
+                            <div key={entry.id} className="rounded-lg border border-[#2e2e32] bg-[#121214] p-2">
                               <div className="text-[9px] font-black text-gray-400 mb-1">{entry.label}</div>
                               {entry.inputFull && <div className="mb-2">{renderPromptDualPane(entry, `${entry.id}_input`, entry.inputFull)}</div>}
                               {entry.outputRaw && <div>{renderPromptDualPane(entry, `${entry.id}_output`, entry.outputRaw)}</div>}
@@ -1361,10 +1361,10 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
                     {block.type === 'comparison' && (
                       <div className="p-3 grid gap-3 grid-cols-1 md:grid-cols-2">
                         {(block.comparisonSnapshot?.options || []).map((opt, i) => (
-                          <div key={`${block.id}_${i}`} className="rounded-lg border border-white/10 bg-black/20 p-2">
+                          <div key={`${block.id}_${i}`} className="rounded-lg border border-[#2e2e32] bg-[#121214] p-2">
                             <div className="text-[9px] font-black text-gray-500 uppercase mb-1">{opt.label}</div>
                             <div className="text-[9px] text-gray-400 mb-2 break-words">{opt.prompt}</div>
-                            {opt.image ? <img src={opt.image} alt={opt.label} className="w-full rounded-lg border border-white/10" /> : null}
+                            {opt.image ? <img src={opt.image} alt={opt.label} className="w-full rounded-lg border border-[#2e2e32]" /> : null}
                           </div>
                         ))}
                       </div>

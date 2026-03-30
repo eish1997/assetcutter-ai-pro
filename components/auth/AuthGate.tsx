@@ -32,7 +32,7 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-[#050505] p-4">
-      <div className="w-full max-w-sm rounded-2xl border border-white/10 bg-black/40 p-6 shadow-xl">
+      <div className="w-full max-w-sm rounded-2xl border border-[#2e2e32] bg-[#16161a] p-6 shadow-xl">
         <h1 className="text-center text-[14px] font-black uppercase text-gray-300 mb-1">用户系统</h1>
         <p className="text-center text-[11px] text-gray-500 mb-4">{mode === 'login' ? '用户名/邮箱登录' : '用户名+邮箱注册'}</p>
         <form onSubmit={submit} className="space-y-3">
@@ -42,7 +42,7 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
               value={identifier}
               onChange={(e) => setIdentifier(e.target.value)}
               placeholder="用户名或邮箱"
-              className="w-full rounded-xl border border-white/15 bg-white/5 px-4 py-3 text-sm text-white placeholder-gray-500 outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/30"
+              className="w-full rounded-xl border border-[#343438] bg-[#1c1c22] px-4 py-3 text-sm text-white placeholder-gray-500 outline-none focus:border-[#3b82f6] focus:ring-1 focus:ring-blue-500/30"
               autoFocus
               required
             />
@@ -53,7 +53,7 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 placeholder="用户名（3-32位，字母/数字/下划线）"
-                className="w-full rounded-xl border border-white/15 bg-white/5 px-4 py-3 text-sm text-white placeholder-gray-500 outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/30"
+                className="w-full rounded-xl border border-[#343438] bg-[#1c1c22] px-4 py-3 text-sm text-white placeholder-gray-500 outline-none focus:border-[#3b82f6] focus:ring-1 focus:ring-blue-500/30"
                 pattern="[A-Za-z0-9_]{3,32}"
                 autoFocus
                 required
@@ -63,7 +63,7 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="邮箱"
-                className="w-full rounded-xl border border-white/15 bg-white/5 px-4 py-3 text-sm text-white placeholder-gray-500 outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/30"
+                className="w-full rounded-xl border border-[#343438] bg-[#1c1c22] px-4 py-3 text-sm text-white placeholder-gray-500 outline-none focus:border-[#3b82f6] focus:ring-1 focus:ring-blue-500/30"
                 required
               />
             </>
@@ -73,7 +73,7 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             placeholder="密码（至少 8 位）"
-            className="w-full rounded-xl border border-white/15 bg-white/5 px-4 py-3 text-sm text-white placeholder-gray-500 outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/30"
+            className="w-full rounded-xl border border-[#343438] bg-[#1c1c22] px-4 py-3 text-sm text-white placeholder-gray-500 outline-none focus:border-[#3b82f6] focus:ring-1 focus:ring-blue-500/30"
             minLength={8}
             required
           />
@@ -81,12 +81,12 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           <button
             type="submit"
             disabled={submitting}
-            className="w-full py-3 rounded-xl bg-blue-600 text-[12px] font-black uppercase text-white hover:bg-blue-500 transition-colors disabled:opacity-50"
+            className="w-full py-3 rounded-xl bg-blue-600 text-[12px] font-black uppercase text-white hover:bg-blue-500 transition-colors duration-200 disabled:opacity-50 cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-blue-400/80 focus-visible:ring-offset-2 focus-visible:ring-offset-[#050505]"
           >
             {submitting ? '提交中…' : mode === 'login' ? '登录' : '注册'}
           </button>
         </form>
-        <button type="button" onClick={() => setMode((m) => (m === 'login' ? 'register' : 'login'))} className="mt-3 w-full text-[11px] text-gray-400 hover:text-gray-200">
+        <button type="button" onClick={() => setMode((m) => (m === 'login' ? 'register' : 'login'))} className="mt-3 w-full text-[11px] text-gray-400 hover:text-gray-200 cursor-pointer rounded-lg py-2 outline-none focus-visible:ring-2 focus-visible:ring-[#3b82f6] focus-visible:ring-offset-2 focus-visible:ring-offset-[#050505] transition-colors duration-200">
           {mode === 'login' ? '没有账号？去注册' : '已有账号？去登录'}
         </button>
       </div>

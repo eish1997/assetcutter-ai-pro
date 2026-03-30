@@ -238,12 +238,12 @@ const UnifiedModelViewer3D: React.FC<UnifiedModelViewer3DProps> = ({ url, format
   }, [url, inferredFormat]);
 
   const overlayLoading = status === 'loading' && (
-    <div className="absolute inset-0 flex items-center justify-center bg-black/40 rounded-2xl">
+    <div className="absolute inset-0 flex items-center justify-center bg-[#16161a] rounded-2xl">
       <span className="text-sm text-gray-400">加载模型中…</span>
     </div>
   );
   const overlayError = status === 'error' && (
-    <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 gap-2 p-4 rounded-2xl">
+    <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#1a1a1e] gap-2 p-4 rounded-2xl">
       <span className="text-amber-400 text-sm">无法在线预览</span>
       <span className="text-gray-500 text-[10px]">{errorMsg}</span>
       {!proxyBase && /^https?:\/\//i.test(url) && (
@@ -254,7 +254,7 @@ const UnifiedModelViewer3D: React.FC<UnifiedModelViewer3DProps> = ({ url, format
   const hint = <div className="absolute bottom-2 left-2 right-2 text-[9px] text-gray-500 text-center">拖拽旋转 · 滚轮缩放 · 左键平移</div>;
 
   return (
-    <div className="relative w-full h-full min-h-[280px] rounded-2xl overflow-hidden border border-white/10 bg-[#0a0a12] flex flex-col">
+    <div className="relative w-full h-full min-h-[280px] rounded-2xl overflow-hidden border border-[#2e2e32] bg-[#0a0a12] flex flex-col">
       <div ref={containerRef} className="flex-1 min-h-[280px] rounded-2xl" />
       {overlayLoading}
       {overlayError}

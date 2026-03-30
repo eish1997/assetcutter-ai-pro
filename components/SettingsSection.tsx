@@ -109,20 +109,20 @@ const SettingsSection: React.FC = () => {
   return (
     <div className="flex flex-col h-full min-h-[60vh]">
       {/* 标题栏 */}
-      <header className="shrink-0 h-14 flex items-center px-4 lg:px-6 border-b border-white/10 bg-black/20">
+      <header className="shrink-0 h-14 flex items-center px-4 lg:px-6 border-b border-[#2e2e32] bg-[#121214]">
         <h1 className="text-sm font-black uppercase tracking-widest text-white/90">设置</h1>
       </header>
 
       <div className="flex-1 flex min-h-0">
         {/* 侧边导航：仅做锚点跳转，内容全部展示 */}
-        <nav className="shrink-0 w-48 lg:w-56 border-r border-white/10 py-4 px-2">
+        <nav className="shrink-0 w-48 lg:w-56 border-r border-[#2e2e32] py-4 px-2">
           <ul className="space-y-0.5">
             {SETTINGS_NAV.map(({ id, label }) => (
               <li key={id}>
                 <button
                   type="button"
                   onClick={() => scrollToSection(id)}
-                  className="w-full text-left py-2.5 px-3 rounded-xl text-[11px] font-bold uppercase tracking-wider transition-colors text-gray-400 hover:bg-white/5 hover:text-gray-300 border border-transparent"
+                  className="w-full text-left py-2.5 px-3 rounded-xl text-[11px] font-bold uppercase tracking-wider transition-colors text-gray-400 hover:bg-[#222228] hover:text-gray-300 border border-transparent"
                 >
                   {label}
                 </button>
@@ -134,11 +134,11 @@ const SettingsSection: React.FC = () => {
         {/* 内容区：所有区块同时展示，导航仅滚动到对应标题 */}
         <div ref={contentRef} className="flex-1 overflow-y-auto p-6 lg:p-10">
           <div className="max-w-2xl space-y-8">
-            <section id="settings-api" className="scroll-mt-4 rounded-2xl border border-white/10 bg-white/[0.03] p-6">
+            <section id="settings-api" className="scroll-mt-4 rounded-2xl border border-[#2e2e32] bg-[#121214] p-6">
               <h2 className="text-xs font-black uppercase tracking-wider text-blue-400/90 mb-4">API</h2>
               <div className="space-y-8">
                 {/* AI 调用源 */}
-                <div className="rounded-xl border border-white/5 p-4 space-y-4">
+                <div className="rounded-xl border border-[#252528] p-4 space-y-4">
                   <h3 className="text-[11px] font-black uppercase tracking-wider text-blue-400/90 mb-1">AI 调用源</h3>
                   <div className="flex flex-col sm:flex-row sm:items-center gap-3">
                     <span className="text-[10px] text-gray-500 shrink-0">供应商</span>
@@ -160,7 +160,7 @@ const SettingsSection: React.FC = () => {
                           onChange={(e) => setApiKey(e.target.value)}
                           onBlur={handleSaveApiKey}
                           placeholder="Google AI Studio / Gemini API Key"
-                          className="flex-1 min-w-0 px-4 py-3 rounded-xl bg-black/40 border border-white/10 text-sm text-white placeholder-gray-500 focus:border-blue-500/50 focus:outline-none"
+                          className="flex-1 min-w-0 px-4 py-3 rounded-xl bg-[#16161a] border border-[#2e2e32] text-sm text-white placeholder-gray-500 focus:border-[#3b82f6] focus:outline-none"
                           autoComplete="off"
                         />
                         <button
@@ -182,7 +182,7 @@ const SettingsSection: React.FC = () => {
                           onChange={(e) => setToapisApiKeyState(e.target.value)}
                           onBlur={handleSaveToapis}
                           placeholder="ToAPIs API Key"
-                          className="flex-1 min-w-0 px-4 py-3 rounded-xl bg-black/40 border border-white/10 text-sm text-white placeholder-gray-500 focus:border-blue-500/50 focus:outline-none"
+                          className="flex-1 min-w-0 px-4 py-3 rounded-xl bg-[#16161a] border border-[#2e2e32] text-sm text-white placeholder-gray-500 focus:border-[#3b82f6] focus:outline-none"
                           autoComplete="off"
                         />
                         <button
@@ -205,7 +205,7 @@ const SettingsSection: React.FC = () => {
                             onChange={(e) => setVectorengineApiKeyState(e.target.value)}
                             onBlur={handleSaveVectorengine}
                             placeholder="VectorEngine API Key"
-                            className="flex-1 min-w-0 px-4 py-3 rounded-xl bg-black/40 border border-white/10 text-sm text-white placeholder-gray-500 focus:border-blue-500/50 focus:outline-none"
+                            className="flex-1 min-w-0 px-4 py-3 rounded-xl bg-[#16161a] border border-[#2e2e32] text-sm text-white placeholder-gray-500 focus:border-[#3b82f6] focus:outline-none"
                             autoComplete="off"
                           />
                           <button
@@ -223,7 +223,7 @@ const SettingsSection: React.FC = () => {
                 </div>
 
                 {/* 混元（腾讯云） */}
-                <div className="rounded-xl border border-white/5 p-4">
+                <div className="rounded-xl border border-[#252528] p-4">
                   <h3 className="text-[11px] font-black uppercase tracking-wider text-blue-400/90 mb-1">混元（腾讯云）</h3>
                   <div className="space-y-3">
                     <div className="flex flex-col sm:flex-row gap-3">
@@ -233,7 +233,7 @@ const SettingsSection: React.FC = () => {
                         onChange={(e) => setTencentSecretId(e.target.value)}
                         onBlur={handleSaveTencent}
                         placeholder="SecretId"
-                        className="flex-1 min-w-0 px-4 py-3 rounded-xl bg-black/40 border border-white/10 text-sm text-white placeholder-gray-500 focus:border-blue-500/50 focus:outline-none"
+                        className="flex-1 min-w-0 px-4 py-3 rounded-xl bg-[#16161a] border border-[#2e2e32] text-sm text-white placeholder-gray-500 focus:border-[#3b82f6] focus:outline-none"
                         autoComplete="off"
                       />
                       <input
@@ -242,7 +242,7 @@ const SettingsSection: React.FC = () => {
                         onChange={(e) => setTencentSecretKey(e.target.value)}
                         onBlur={handleSaveTencent}
                         placeholder="SecretKey"
-                        className="flex-1 min-w-0 px-4 py-3 rounded-xl bg-black/40 border border-white/10 text-sm text-white placeholder-gray-500 focus:border-blue-500/50 focus:outline-none"
+                        className="flex-1 min-w-0 px-4 py-3 rounded-xl bg-[#16161a] border border-[#2e2e32] text-sm text-white placeholder-gray-500 focus:border-[#3b82f6] focus:outline-none"
                         autoComplete="off"
                       />
                     </div>
@@ -259,7 +259,7 @@ const SettingsSection: React.FC = () => {
               </div>
             </section>
 
-            <section id="settings-general" className="scroll-mt-4 rounded-2xl border border-white/10 bg-white/[0.03] p-6">
+            <section id="settings-general" className="scroll-mt-4 rounded-2xl border border-[#2e2e32] bg-[#121214] p-6">
               <h2 className="text-xs font-black uppercase tracking-wider text-blue-400/90 mb-1">能力商店（GitHub 地址）</h2>
                   <p className="text-[11px] text-gray-500 mb-4">远程能力预设目录地址，用于在「能力」页自动拉取并安装能力包。填写 catalog.json 的完整 URL（如 GitHub Pages 或 jsDelivr 链接）。</p>
                   <div className="flex flex-col gap-3">
@@ -269,7 +269,7 @@ const SettingsSection: React.FC = () => {
                       onChange={(e) => setCapabilityStoreUrl(e.target.value)}
                       onBlur={handleSaveGeneral}
                       placeholder={DEFAULT_CAPABILITY_STORE_CATALOG_URL}
-                      className="w-full min-w-0 px-4 py-3 rounded-xl bg-black/40 border border-white/10 text-sm text-white placeholder-gray-500 focus:border-blue-500/50 focus:outline-none"
+                      className="w-full min-w-0 px-4 py-3 rounded-xl bg-[#16161a] border border-[#2e2e32] text-sm text-white placeholder-gray-500 focus:border-[#3b82f6] focus:outline-none"
                     />
                     <button
                       type="button"

@@ -359,13 +359,13 @@ const CapabilityPresetSection: React.FC<{
 
   // 顶部：仅展示已有能力（基础能力 + 复合能力）分两行，不拖动
   const presetStrip = (
-    <div className="shrink-0 flex flex-col gap-2 p-3 rounded-xl border border-white/10 bg-black/30">
+    <div className="shrink-0 flex flex-col gap-2 p-3 rounded-xl border border-[#2e2e32] bg-[#141416]">
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-[9px] font-black text-blue-400/90 uppercase mr-1">基础能力</span>
         {presets.filter((p) => p.enabled !== false).map((p) => (
           <span
             key={p.id}
-            className="px-3 py-1.5 rounded-lg bg-blue-600/20 border border-blue-500/40 text-[10px] font-semibold text-blue-200/90"
+            className="px-3 py-1.5 rounded-lg bg-[#1e3558] border border-[#3b6fb8] text-[10px] font-semibold text-blue-200/90"
           >
             {p.label}
           </span>
@@ -379,7 +379,7 @@ const CapabilityPresetSection: React.FC<{
         {sets.map((s) => (
           <span
             key={s.id}
-            className="px-3 py-1.5 rounded-lg bg-amber-600/20 border border-amber-500/40 text-[10px] font-semibold text-amber-200/90"
+            className="px-3 py-1.5 rounded-lg bg-[#3d2a10] border border-[#d97706] text-[10px] font-semibold text-amber-200/90"
           >
             {s.label}
           </span>
@@ -394,7 +394,7 @@ const CapabilityPresetSection: React.FC<{
   if (viewMode === 'canvas') {
     return (
       <div className="flex flex-col h-[calc(100dvh-8rem)] min-h-[400px] animate-in fade-in">
-        <div className="flex-1 min-h-0 rounded-2xl border border-white/10 overflow-hidden bg-white">
+        <div className="flex-1 min-h-0 rounded-2xl border border-[#2e2e32] overflow-hidden bg-white">
           <CapabilitySetCanvas
             presets={presets}
             initialSet={canvasSet}
@@ -416,14 +416,14 @@ const CapabilityPresetSection: React.FC<{
         <button
           type="button"
           onClick={() => setViewMode('presets')}
-          className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase border ${viewMode === 'presets' ? 'bg-blue-600/20 border-blue-500/50 text-blue-300' : 'bg-white/5 border-white/10 text-gray-500 hover:bg-white/10'}`}
+          className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase border ${viewMode === 'presets' ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300' : 'bg-[#1c1c22] border-[#2e2e32] text-gray-500 hover:bg-[#2e2e36]'}`}
         >
           基础能力预设
         </button>
         <button
           type="button"
           onClick={() => setViewMode('sets')}
-          className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase border ${viewMode === 'sets' ? 'bg-blue-600/20 border-blue-500/50 text-blue-300' : 'bg-white/5 border-white/10 text-gray-500 hover:bg-white/10'}`}
+          className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase border ${viewMode === 'sets' ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300' : 'bg-[#1c1c22] border-[#2e2e32] text-gray-500 hover:bg-[#2e2e36]'}`}
         >
           能力集合
         </button>
@@ -442,19 +442,19 @@ const CapabilityPresetSection: React.FC<{
             </button>
           </div>
           {sets.length === 0 ? (
-            <div className="rounded-2xl border border-white/10 bg-black/40 p-8 text-center text-gray-500 text-[10px]">
+            <div className="rounded-2xl border border-[#2e2e32] bg-[#16161a] p-8 text-center text-gray-500 text-[10px]">
               暂无能力集合，点击「添加能力集合」进入画布拖拽连线。
             </div>
           ) : (
             <div className="grid gap-3">
               {sets.map((s) => (
-                <div key={s.id} className="rounded-2xl border border-white/10 bg-black/40 p-4 flex items-center justify-between">
+                <div key={s.id} className="rounded-2xl border border-[#2e2e32] bg-[#16161a] p-4 flex items-center justify-between">
                   <span className="text-[11px] font-black uppercase">{s.label}</span>
                   <div className="flex gap-2">
-                    <button type="button" onClick={() => openEditSet(s)} className="px-3 py-1.5 rounded-lg bg-white/10 text-[9px] font-black uppercase hover:bg-white/20">
+                    <button type="button" onClick={() => openEditSet(s)} className="px-3 py-1.5 rounded-lg bg-[#26262c] text-[9px] font-black uppercase hover:bg-[#383842]">
                       编辑
                     </button>
-                    <button type="button" onClick={() => removeSet(s.id)} className="px-3 py-1.5 rounded-lg bg-red-500/20 text-red-400 text-[9px] font-black uppercase hover:bg-red-500/30">
+                    <button type="button" onClick={() => removeSet(s.id)} className="px-3 py-1.5 rounded-lg bg-[#4a1c1c] text-red-400 text-[9px] font-black uppercase hover:bg-[#5a2222]">
                       删除
                     </button>
                   </div>
@@ -474,7 +474,7 @@ const CapabilityPresetSection: React.FC<{
         <div className="flex gap-2 flex-wrap">
           <button
             onClick={() => setShowImportExport((v) => !v)}
-            className="px-4 py-2 rounded-xl bg-white/10 border border-white/10 text-[10px] font-black uppercase hover:bg-white/20"
+            className="px-4 py-2 rounded-xl bg-[#26262c] border border-[#2e2e32] text-[10px] font-black uppercase hover:bg-[#383842]"
           >
             导入/导出
           </button>
@@ -488,7 +488,7 @@ const CapabilityPresetSection: React.FC<{
             type="button"
             onClick={() => void refreshCatalog()}
             disabled={catalogLoading}
-            className="px-4 py-2 rounded-xl bg-white/10 border border-white/10 text-[10px] font-black uppercase hover:bg-white/20 disabled:opacity-50"
+            className="px-4 py-2 rounded-xl bg-[#26262c] border border-[#2e2e32] text-[10px] font-black uppercase hover:bg-[#383842] disabled:opacity-50"
           >
             {catalogLoading ? '加载中…' : '刷新远程'}
           </button>
@@ -508,17 +508,17 @@ const CapabilityPresetSection: React.FC<{
       {packContentsLoading && <div className="text-[10px] text-gray-500">正在加载远程能力列表…</div>}
 
       {showImportExport && (
-        <div className="rounded-2xl border border-white/10 bg-black/40 p-4 space-y-3">
+        <div className="rounded-2xl border border-[#2e2e32] bg-[#16161a] p-4 space-y-3">
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <div className="text-[9px] font-black text-gray-300 uppercase">导入仓库种子</div>
             <div className="flex gap-2 flex-wrap">
-              <button onClick={loadSeedFromRepo} className="px-3 py-1.5 rounded-lg bg-blue-600/80 text-[9px] font-black uppercase hover:bg-blue-500">
+              <button onClick={loadSeedFromRepo} className="px-3 py-1.5 rounded-lg bg-[#1e40af] text-[9px] font-black uppercase hover:bg-blue-500">
                 从仓库加载
               </button>
-              <button onClick={() => exportSeedForRepo('both')} className="px-3 py-1.5 rounded-lg bg-amber-600/60 text-[9px] font-black uppercase hover:bg-amber-500/70" title="下载后放入 public/capability-seed/ 再提交到 GitHub">
+              <button onClick={() => exportSeedForRepo('both')} className="px-3 py-1.5 rounded-lg bg-[#92400e] text-[9px] font-black uppercase hover:bg-[#a86207]" title="下载后放入 public/capability-seed/ 再提交到 GitHub">
                 导出为仓库种子
               </button>
-              <button onClick={() => setShowImportExport(false)} className="px-3 py-1.5 rounded-lg bg-white/10 text-[9px] font-black uppercase hover:bg-white/20">
+              <button onClick={() => setShowImportExport(false)} className="px-3 py-1.5 rounded-lg bg-[#26262c] text-[9px] font-black uppercase hover:bg-[#383842]">
                 关闭
               </button>
             </div>
@@ -527,7 +527,7 @@ const CapabilityPresetSection: React.FC<{
             从仓库加载：使用当前站点 public/capability-seed/ 中的种子。或将 capability-presets.json / capability-sets.json 拖入下方区域导入。
           </p>
           <div
-            className={`min-h-[120px] rounded-xl border-2 border-dashed flex items-center justify-center transition-colors ${seedDropActive ? 'border-blue-500 bg-blue-500/10' : 'border-white/20 bg-black/40'}`}
+            className={`min-h-[120px] rounded-xl border-2 border-dashed flex items-center justify-center transition-colors ${seedDropActive ? 'border-blue-500 bg-[#1a3354]' : 'border-[#3a3a40] bg-[#16161a]'}`}
             onDragOver={(e) => { e.preventDefault(); setSeedDropActive(true); }}
             onDragLeave={() => setSeedDropActive(false)}
             onDrop={handleSeedDrop}
@@ -538,7 +538,7 @@ const CapabilityPresetSection: React.FC<{
       )}
 
       {isAdding && (
-        <div className="rounded-2xl border border-blue-500/40 bg-black/40 p-4 space-y-3">
+        <div className="rounded-2xl border border-[#3b6fb8] bg-[#16161a] p-4 space-y-3">
           <div className="text-[9px] font-black text-blue-400 uppercase">新增</div>
           <div>
             <span className="text-[8px] font-black text-gray-500 uppercase">分类</span>
@@ -552,7 +552,7 @@ const CapabilityPresetSection: React.FC<{
                     if (c.id === 'image_gen') setNewEngine('gen_image');
                     if (c.id === 'image_process') setNewEngine('builtin');
                   }}
-                  className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${newCategory === c.id ? 'bg-blue-600/20 border-blue-500/50 text-blue-300' : 'bg-white/5 border-white/10 text-gray-500 hover:bg-white/10'}`}
+                  className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${newCategory === c.id ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300' : 'bg-[#1c1c22] border-[#2e2e32] text-gray-500 hover:bg-[#2e2e36]'}`}
                   title={c.desc}
                 >
                   {c.label}
@@ -629,7 +629,7 @@ const CapabilityPresetSection: React.FC<{
                     ? '如：拆分组件、切割图片、提取主体'
                     : '如：手办白模、低面数模型'
               }
-              className="mt-1 w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500"
+              className="mt-1 w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500"
             />
           </div>
           {newCategory === 'image_gen' && (
@@ -641,7 +641,7 @@ const CapabilityPresetSection: React.FC<{
                 onChange={(e) => setNewInstruction(e.target.value)}
                 placeholder="如：将图片转为赛博朋克风格，霓虹灯与机械细节；或：生成该物体的多视角线稿"
                 rows={4}
-                className="mt-1 w-full bg-white/5 border border-blue-500/30 rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none"
+                className="mt-1 w-full bg-[#1c1c22] border border-[#4b6a9e] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none"
               />
             </div>
           )}
@@ -649,19 +649,19 @@ const CapabilityPresetSection: React.FC<{
             <div>
               <span className="text-[8px] font-black text-blue-400/90 uppercase">预设提示词（必填）</span>
               <p className="text-[8px] text-gray-500 mt-0.5">工作流执行时先由文字模型理解，再生成生图用提示词。</p>
-              <textarea value={newInstruction} onChange={(e) => setNewInstruction(e.target.value)} placeholder="如：将图片转为赛博朋克风格" rows={3} className="mt-1 w-full bg-white/5 border border-blue-500/30 rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none" />
+              <textarea value={newInstruction} onChange={(e) => setNewInstruction(e.target.value)} placeholder="如：将图片转为赛博朋克风格" rows={3} className="mt-1 w-full bg-[#1c1c22] border border-[#4b6a9e] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none" />
             </div>
           )}
           {newCategory === 'image_process' && newEngine === 'builtin' && (
             <div>
               <span className="text-[8px] font-black text-gray-500 uppercase">可选：补充说明或约束</span>
               <p className="text-[8px] text-gray-600 mt-0.5">多数能力有内置逻辑（如切割按版面分块），可留空；需要时可填写额外说明。</p>
-              <textarea value={newInstruction} onChange={(e) => setNewInstruction(e.target.value)} placeholder="留空即使用内置逻辑；或填写如：只保留上半部分、排除背景" rows={2} className="mt-1 w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none" />
+              <textarea value={newInstruction} onChange={(e) => setNewInstruction(e.target.value)} placeholder="留空即使用内置逻辑；或填写如：只保留上半部分、排除背景" rows={2} className="mt-1 w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none" />
             </div>
           )}
           {newCategory === 'generate_3d' && (
             <>
-              <div className="rounded-xl border border-amber-500/40 bg-amber-500/5 p-3 space-y-2">
+              <div className="rounded-xl border border-[#d97706] bg-[#221c10] p-3 space-y-2">
                 <div className="text-[8px] font-black text-amber-400 uppercase">生成3D 预设（工作流拖图即按此配置提交）</div>
                 <div className="flex gap-2 flex-wrap">
                           <label className="flex items-center gap-1.5 text-[9px]">
@@ -692,7 +692,7 @@ const CapabilityPresetSection: React.FC<{
                     <>
                       <label className="flex items-center gap-1.5 text-[9px]">
                         <span>面数</span>
-                        <input type="number" min={10000} max={1500000} value={newGenerate3D.faceCount ?? 500000} onChange={(e) => setNewGenerate3D((g) => ({ ...g, faceCount: e.target.value ? parseInt(e.target.value, 10) : undefined }))} className="w-20 bg-white/10 border border-white/10 rounded px-2 py-1 text-[9px]" />
+                        <input type="number" min={10000} max={1500000} value={newGenerate3D.faceCount ?? 500000} onChange={(e) => setNewGenerate3D((g) => ({ ...g, faceCount: e.target.value ? parseInt(e.target.value, 10) : undefined }))} className="w-20 bg-[#26262c] border border-[#2e2e32] rounded px-2 py-1 text-[9px]" />
                       </label>
                       <label className="flex items-center gap-1.5 text-[9px]">
                         <span>类型</span>
@@ -729,7 +729,7 @@ const CapabilityPresetSection: React.FC<{
                   onChange={(e) => setNewInstruction(e.target.value)}
                   placeholder="留空即可；需要时可对生成效果做文字补充"
                   rows={1}
-                  className="mt-1 w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none"
+                  className="mt-1 w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none"
                 />
               </div>
             </>
@@ -738,7 +738,7 @@ const CapabilityPresetSection: React.FC<{
             <button onClick={addPreset} className="px-4 py-2 rounded-xl bg-blue-600 text-[10px] font-black uppercase">
               添加
             </button>
-            <button onClick={() => { setIsAdding(false); setNewLabel(''); setNewInstruction(''); }} className="px-4 py-2 rounded-xl bg-white/10 text-[10px] font-black uppercase">
+            <button onClick={() => { setIsAdding(false); setNewLabel(''); setNewInstruction(''); }} className="px-4 py-2 rounded-xl bg-[#26262c] text-[10px] font-black uppercase">
               取消
             </button>
           </div>
@@ -747,13 +747,13 @@ const CapabilityPresetSection: React.FC<{
 
       <div className="space-y-3">
         {presets.length === 0 && effectiveUninstalledPresetItems.length === 0 ? (
-          <div className="rounded-2xl border border-white/10 bg-black/40 p-8 text-center text-gray-500 text-[10px]">
+          <div className="rounded-2xl border border-[#2e2e32] bg-[#16161a] p-8 text-center text-gray-500 text-[10px]">
             暂无功能预设，点击「新增功能预设」添加；远程能力加载后将显示在下方。
           </div>
         ) : (
           <>
           {presets.map((p) => (
-            <div key={p.id} className="rounded-2xl border border-white/10 bg-black/40 p-4">
+            <div key={p.id} className="rounded-2xl border border-[#2e2e32] bg-[#16161a] p-4">
               {editingId === p.id ? (
                 <>
                   <div className="mb-2">
@@ -769,7 +769,7 @@ const CapabilityPresetSection: React.FC<{
                           if (c.id === 'image_process') setEditEngine('builtin');
                           if (c.id === 'generate_3d') setEditGenerate3D(p.category === 'generate_3d' && p.generate3D ? { ...p.generate3D } : { ...DEFAULT_GENERATE_3D });
                         }}
-                        className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${editCategory === c.id ? 'bg-blue-600/20 border-blue-500/50 text-blue-300' : 'bg-white/5 border-white/10 text-gray-500'}`}
+                        className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${editCategory === c.id ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300' : 'bg-[#1c1c22] border-[#2e2e32] text-gray-500'}`}
                       >
                         {c.label}
                       </button>
@@ -844,7 +844,7 @@ const CapabilityPresetSection: React.FC<{
                             ? '如：拆分组件、切割图片'
                             : '如：手办白模、低面数模型'
                       }
-                      className="mt-1 w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500"
+                      className="mt-1 w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500"
                     />
                   </div>
                   {editCategory === 'image_gen' && (
@@ -855,7 +855,7 @@ const CapabilityPresetSection: React.FC<{
                         value={editInstruction}
                         onChange={(e) => setEditInstruction(e.target.value)}
                         rows={4}
-                        className="mt-1 w-full bg-white/5 border border-blue-500/30 rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none"
+                        className="mt-1 w-full bg-[#1c1c22] border border-[#4b6a9e] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none"
                         placeholder="如：将图片转为赛博朋克风格"
                       />
                     </div>
@@ -868,7 +868,7 @@ const CapabilityPresetSection: React.FC<{
                         value={editInstruction}
                         onChange={(e) => setEditInstruction(e.target.value)}
                         rows={3}
-                        className="mt-1 w-full bg-white/5 border border-blue-500/30 rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none"
+                        className="mt-1 w-full bg-[#1c1c22] border border-[#4b6a9e] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none"
                         placeholder="如：将图片转为赛博朋克风格"
                       />
                     </div>
@@ -880,14 +880,14 @@ const CapabilityPresetSection: React.FC<{
                         value={editInstruction}
                         onChange={(e) => setEditInstruction(e.target.value)}
                         rows={2}
-                        className="mt-1 w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none"
+                        className="mt-1 w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none"
                         placeholder="可留空使用内置逻辑"
                       />
                     </div>
                   )}
                   {editCategory === 'generate_3d' && (
                     <>
-                      <div className="rounded-xl border border-amber-500/40 bg-amber-500/5 p-3 space-y-2 mb-2">
+                      <div className="rounded-xl border border-[#d97706] bg-[#221c10] p-3 space-y-2 mb-2">
                         <div className="text-[8px] font-black text-amber-400 uppercase">生成3D 预设</div>
                         <div className="flex gap-2 flex-wrap">
                           <label className="flex items-center gap-1.5 text-[9px]">
@@ -912,7 +912,7 @@ const CapabilityPresetSection: React.FC<{
                               </label>
                               <label className="flex items-center gap-1.5 text-[9px]">
                                 <span>面数</span>
-                                <input type="number" min={10000} max={1500000} value={editGenerate3D.faceCount ?? 500000} onChange={(e) => setEditGenerate3D((g) => ({ ...g, faceCount: e.target.value ? parseInt(e.target.value, 10) : undefined }))} className="w-20 bg-white/10 border border-white/10 rounded px-2 py-1 text-[9px]" />
+                                <input type="number" min={10000} max={1500000} value={editGenerate3D.faceCount ?? 500000} onChange={(e) => setEditGenerate3D((g) => ({ ...g, faceCount: e.target.value ? parseInt(e.target.value, 10) : undefined }))} className="w-20 bg-[#26262c] border border-[#2e2e32] rounded px-2 py-1 text-[9px]" />
                               </label>
                               <label className="flex items-center gap-1.5 text-[9px]">
                                 <span>类型</span>
@@ -952,7 +952,7 @@ const CapabilityPresetSection: React.FC<{
                           value={editInstruction}
                           onChange={(e) => setEditInstruction(e.target.value)}
                           rows={1}
-                          className="mt-1 w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none"
+                          className="mt-1 w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none"
                           placeholder="留空即可"
                         />
                       </div>
@@ -960,7 +960,7 @@ const CapabilityPresetSection: React.FC<{
                   )}
                   <div className="flex gap-2">
                     <button onClick={saveEdit} className="px-3 py-1.5 rounded-lg bg-blue-600 text-[9px] font-black uppercase">保存</button>
-                    <button onClick={() => setEditingId(null)} className="px-3 py-1.5 rounded-lg bg-white/10 text-[9px] font-black uppercase">取消</button>
+                    <button onClick={() => setEditingId(null)} className="px-3 py-1.5 rounded-lg bg-[#26262c] text-[9px] font-black uppercase">取消</button>
                   </div>
                 </>
               ) : (
@@ -968,36 +968,36 @@ const CapabilityPresetSection: React.FC<{
                   <div className="flex items-center justify-between gap-2 flex-wrap">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-[10px] font-black uppercase">{p.label}</span>
-                      <span className={`px-2 py-0.5 rounded text-[8px] font-black uppercase ${p.enabled === false ? 'bg-red-500/20 text-red-400' : 'bg-green-500/20 text-green-400'}`}>
+                      <span className={`px-2 py-0.5 rounded text-[8px] font-black uppercase ${p.enabled === false ? 'bg-[#4a1c1c] text-red-400' : 'bg-[#166534] text-green-400'}`}>
                         {p.enabled === false ? '禁用' : '启用'}
                       </span>
                       {p.category === 'image_process' && getEngine(p) === 'gen_image' && (
-                        <span className="px-2 py-0.5 rounded text-[8px] font-black uppercase bg-amber-500/20 text-amber-300">
+                        <span className="px-2 py-0.5 rounded text-[8px] font-black uppercase bg-[#3d3018] text-amber-300">
                           生图执行
                         </span>
                       )}
                     </div>
-                    <span className="px-2 py-0.5 rounded text-[8px] font-black uppercase bg-white/10 text-gray-400">
+                    <span className="px-2 py-0.5 rounded text-[8px] font-black uppercase bg-[#26262c] text-gray-400">
                       {CAPABILITY_CATEGORIES.find((c) => c.id === p.category)?.label ?? p.category}
                     </span>
                     <div className="flex gap-1">
                       <button
                         onClick={() => movePreset(p.id, -1)}
-                        className="px-2 py-1 rounded-lg bg-white/10 text-[8px] font-black uppercase hover:bg-white/20"
+                        className="px-2 py-1 rounded-lg bg-[#26262c] text-[8px] font-black uppercase hover:bg-[#383842]"
                         title="上移"
                       >
                         ↑
                       </button>
                       <button
                         onClick={() => movePreset(p.id, 1)}
-                        className="px-2 py-1 rounded-lg bg-white/10 text-[8px] font-black uppercase hover:bg-white/20"
+                        className="px-2 py-1 rounded-lg bg-[#26262c] text-[8px] font-black uppercase hover:bg-[#383842]"
                         title="下移"
                       >
                         ↓
                       </button>
                       <button
                         onClick={() => toggleEnabled(p.id)}
-                        className={`px-2 py-1 rounded-lg text-[8px] font-black uppercase hover:bg-white/20 ${p.enabled === false ? 'bg-emerald-500/20 text-emerald-300' : 'bg-white/10 text-gray-200'}`}
+                        className={`px-2 py-1 rounded-lg text-[8px] font-black uppercase hover:bg-[#383842] ${p.enabled === false ? 'bg-[#14532d] text-emerald-300' : 'bg-[#26262c] text-gray-200'}`}
                         title={p.enabled === false ? '启用' : '禁用'}
                       >
                         {p.enabled === false ? '启用' : '禁用'}
@@ -1015,11 +1015,11 @@ const CapabilityPresetSection: React.FC<{
                           setEditInstruction(((p as { instructionFixed?: string }).instructionFixed ?? p.instruction) || '');
                           setEditGenerate3D(p.category === 'generate_3d' && p.generate3D ? { ...p.generate3D } : { ...DEFAULT_GENERATE_3D });
                         }}
-                        className="px-2 py-1 rounded-lg bg-white/10 text-[8px] font-black uppercase hover:bg-white/20"
+                        className="px-2 py-1 rounded-lg bg-[#26262c] text-[8px] font-black uppercase hover:bg-[#383842]"
                       >
                         编辑
                       </button>
-                      <button onClick={() => removePreset(p.id)} className="px-2 py-1 rounded-lg bg-red-500/20 text-red-400 text-[8px] font-black uppercase hover:bg-red-500/30">删除</button>
+                      <button onClick={() => removePreset(p.id)} className="px-2 py-1 rounded-lg bg-[#4a1c1c] text-red-400 text-[8px] font-black uppercase hover:bg-[#5a2222]">删除</button>
                     </div>
                   </div>
                   <div className="mt-2 text-[8px] text-gray-500 space-x-3 flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -1030,9 +1030,9 @@ const CapabilityPresetSection: React.FC<{
                       <span>比例/尺寸: {p.imageAspectRatio || '—'} / {p.imageSize || '—'}</span>
                     )}
                     {presetSourceMap.get(p.id) ? (
-                      <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300/90" title="来自远程能力包">来自「{presetSourceMap.get(p.id)}」</span>
+                      <span className="px-1.5 py-0.5 rounded bg-[#3d3018] text-amber-300/90" title="来自远程能力包">来自「{presetSourceMap.get(p.id)}」</span>
                     ) : (
-                      <span className="px-1.5 py-0.5 rounded bg-white/10 text-gray-400" title="本地添加">本地</span>
+                      <span className="px-1.5 py-0.5 rounded bg-[#26262c] text-gray-400" title="本地添加">本地</span>
                     )}
                     {p.instruction ? <span className="text-gray-600 truncate max-w-[200px] inline-block align-bottom" title={p.instruction}>{p.instruction.slice(0, 30)}…</span> : null}
                   </div>
@@ -1052,7 +1052,7 @@ const CapabilityPresetSection: React.FC<{
                     </p>
                   )}
                   {onRunTest && p.category !== 'generate_3d' && (
-                    <div className="mt-3 pt-3 border-t border-white/10">
+                    <div className="mt-3 pt-3 border-t border-[#2e2e32]">
                       <div className="text-[8px] font-black text-gray-500 uppercase mb-2">测试区域</div>
                       <div className="flex flex-wrap gap-2 items-center">
                         <input
@@ -1062,26 +1062,26 @@ const CapabilityPresetSection: React.FC<{
                           className="hidden"
                           onChange={(e) => handleFile(p.id, e)}
                         />
-                        <button type="button" onClick={() => fileInputRef.current[p.id]?.click()} className="px-2 py-1.5 rounded-lg bg-white/10 text-[8px] font-black uppercase hover:bg-white/20">
+                        <button type="button" onClick={() => fileInputRef.current[p.id]?.click()} className="px-2 py-1.5 rounded-lg bg-[#26262c] text-[8px] font-black uppercase hover:bg-[#383842]">
                           上传测试图
                         </button>
                         <button
                           type="button"
                           disabled={!testImage[p.id] || testRunning[p.id]}
                           onClick={() => runTest(p)}
-                          className="px-2 py-1.5 rounded-lg bg-amber-600/80 text-[8px] font-black uppercase hover:bg-amber-500 disabled:opacity-50 disabled:pointer-events-none"
+                          className="px-2 py-1.5 rounded-lg bg-[#9a3412] text-[8px] font-black uppercase hover:bg-amber-500 disabled:opacity-50 disabled:pointer-events-none"
                         >
                           {testRunning[p.id] ? '运行中…' : '运行测试'}
                         </button>
                         {testImage[p.id] && (
                           <div className="flex items-center gap-1.5">
                             <span className="text-[8px] text-gray-500">预览：</span>
-                            <img src={testImage[p.id]} alt="测试图" className="h-12 w-12 object-cover rounded border border-white/20 shrink-0" />
+                            <img src={testImage[p.id]} alt="测试图" className="h-12 w-12 object-cover rounded border border-[#3a3a40] shrink-0" />
                           </div>
                         )}
                       </div>
                       {testResult[p.id] != null && (
-                        <div className="mt-2 p-2 rounded-lg bg-black/30 border border-white/10">
+                        <div className="mt-2 p-2 rounded-lg bg-[#141416] border border-[#2e2e32]">
                           <div className="text-[9px] flex items-center gap-2 flex-wrap">
                             {testResult[p.id]!.ok ? (
                               <>
@@ -1097,7 +1097,7 @@ const CapabilityPresetSection: React.FC<{
                             <div className="mt-2">
                               <span className="text-[8px] text-gray-500 uppercase">结果预览（点击放大）</span>
                               <button type="button" onClick={() => setLightboxImage(testResult[p.id]!.resultImage!)} className="mt-1 block w-full text-left">
-                                <img src={testResult[p.id]!.resultImage} alt="结果" className="max-h-32 w-auto max-w-full rounded border border-white/10 object-contain cursor-pointer hover:border-blue-500/50 transition-colors" />
+                                <img src={testResult[p.id]!.resultImage} alt="结果" className="max-h-32 w-auto max-w-full rounded border border-[#2e2e32] object-contain cursor-pointer hover:border-[#3b82f6] transition-colors" />
                               </button>
                             </div>
                           )}
@@ -1111,20 +1111,20 @@ const CapabilityPresetSection: React.FC<{
           ))}
 
           {effectiveUninstalledPresetItems.map((rp) => (
-            <div key={`remote-${rp.pack.id}-${rp.preset.id}`} className="rounded-2xl border border-white/10 bg-black/40 p-4">
+            <div key={`remote-${rp.pack.id}-${rp.preset.id}`} className="rounded-2xl border border-[#2e2e32] bg-[#16161a] p-4">
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-[10px] font-black uppercase">{rp.preset.label}</span>
-                  <span className="px-2 py-0.5 rounded text-[8px] font-black uppercase bg-gray-500/20 text-gray-400">
+                  <span className="px-2 py-0.5 rounded text-[8px] font-black uppercase bg-[#3f3f46] text-gray-400">
                     未安装
                   </span>
                   {rp.preset.category === 'image_process' && getEngine(rp.preset) === 'gen_image' && (
-                    <span className="px-2 py-0.5 rounded text-[8px] font-black uppercase bg-amber-500/20 text-amber-300">
+                    <span className="px-2 py-0.5 rounded text-[8px] font-black uppercase bg-[#3d3018] text-amber-300">
                       生图执行
                     </span>
                   )}
                 </div>
-                <span className="px-2 py-0.5 rounded text-[8px] font-black uppercase bg-white/10 text-gray-400">
+                <span className="px-2 py-0.5 rounded text-[8px] font-black uppercase bg-[#26262c] text-gray-400">
                   {CAPABILITY_CATEGORIES.find((c) => c.id === rp.preset.category)?.label ?? rp.preset.category}
                 </span>
                 <button
@@ -1158,14 +1158,14 @@ const CapabilityPresetSection: React.FC<{
 
       {lightboxImage && (
         <div
-          className="fixed inset-0 z-[3000] flex items-center justify-center bg-black/90 backdrop-blur-sm p-4"
+          className="fixed inset-0 z-[3000] flex items-center justify-center bg-black/78 backdrop-blur-sm p-4"
           onClick={() => setLightboxImage(null)}
           role="button"
           tabIndex={0}
           onKeyDown={(e) => e.key === 'Escape' && setLightboxImage(null)}
           aria-label="关闭"
         >
-          <button type="button" onClick={() => setLightboxImage(null)} className="absolute top-4 right-4 w-10 h-10 flex items-center justify-center text-white/70 hover:text-white rounded-full bg-white/10"><AppIcon name="close" className="w-4 h-4" /></button>
+          <button type="button" onClick={() => setLightboxImage(null)} className="absolute top-4 right-4 w-10 h-10 flex items-center justify-center text-white/70 hover:text-white rounded-full bg-[#26262c]"><AppIcon name="close" className="w-4 h-4" /></button>
           <img src={lightboxImage} alt="结果大图" className="max-h-[90vh] max-w-full object-contain rounded-lg shadow-2xl" onClick={(e) => e.stopPropagation()} />
         </div>
       )}

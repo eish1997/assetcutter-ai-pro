@@ -24,7 +24,7 @@ export function CustomDropdown({
   onChange,
   disabled = false,
   placeholder = '默认',
-  triggerClassName = 'bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-[11px] text-left flex items-center justify-between outline-none focus:border-blue-500 hover:bg-white/10 transition-colors',
+  triggerClassName = 'bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-4 py-3 text-[11px] text-left flex items-center justify-between outline-none focus:border-blue-500 hover:bg-[#2e2e36] transition-colors',
   portalZIndex = { backdrop: 1002, list: 1003 },
 }: CustomDropdownProps) {
   const [open, setOpen] = useState(false);
@@ -129,7 +129,7 @@ export function CustomDropdown({
         {listPosition && (
           <ul
             ref={listRef}
-            className="fixed overflow-y-auto rounded-xl border border-white/10 bg-[#0f0f0f] shadow-xl py-1 text-white"
+            className="fixed overflow-y-auto rounded-xl border border-[#2e2e32] bg-[#0f0f0f] shadow-xl py-1 text-white"
             style={{
               top: listPosition.top,
               bottom: listPosition.bottom,
@@ -149,7 +149,7 @@ export function CustomDropdown({
                     setOpen(false);
                   }}
                   className={`w-full px-3 py-2 text-left text-[10px] transition-colors ${
-                    value === opt.value ? 'bg-blue-600/30 text-blue-300' : 'text-white hover:bg-white/10'
+                    value === opt.value ? 'bg-[#264670] text-blue-300' : 'text-white hover:bg-[#2e2e36]'
                   }`}
                 >
                   {opt.label}
@@ -180,5 +180,5 @@ export function CustomDropdown({
 
 /** 表单内联时使用的紧凑触发器样式 */
 export const DROPDOWN_TRIGGER_COMPACT =
-  'bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[10px] text-left flex items-center justify-between outline-none focus:border-blue-500 hover:bg-white/10 transition-colors min-w-[5rem]';
+  'bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[10px] text-left flex items-center justify-between outline-none focus:border-blue-500 hover:bg-[#2e2e36] transition-colors min-w-[5rem]';
 

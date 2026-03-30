@@ -288,33 +288,33 @@ const SeamRepairSection: React.FC<{ onLog?: (level: 'info' | 'warn' | 'error', m
   return (
     <div className="flex h-[calc(100dvh-6rem)] gap-4 lg:gap-6 animate-in fade-in overflow-hidden flex-col">
       {backendAvailable === false && (
-        <div className="shrink-0 rounded-xl border border-blue-500/40 bg-blue-500/10 px-4 py-3 text-[11px] text-blue-200">
-          <strong>当前使用浏览器内计算（Pyodide）</strong>，无需后端即可修缝。若需更快或更稳，可启动 Python 后端：<code className="bg-black/30 px-1 rounded">npm run dev:seam-backend</code>，并配置 <code className="bg-black/30 px-1 rounded">VITE_SEAM_REPAIR_API</code>。
+        <div className="shrink-0 rounded-xl border border-[#3b6fb8] bg-[#1a3354] px-4 py-3 text-[11px] text-blue-200">
+          <strong>当前使用浏览器内计算（Pyodide）</strong>，无需后端即可修缝。若需更快或更稳，可启动 Python 后端：<code className="bg-[#141416] px-1 rounded">npm run dev:seam-backend</code>，并配置 <code className="bg-[#141416] px-1 rounded">VITE_SEAM_REPAIR_API</code>。
         </div>
       )}
       <div className="flex flex-1 min-h-0 gap-4 lg:gap-6 overflow-hidden">
       {/* 左侧：输入与参数 */}
       <div className="w-80 lg:w-96 shrink-0 flex flex-col gap-4 overflow-y-auto no-scrollbar pr-2">
-        <div className="glass rounded-2xl p-4 lg:p-6 border border-white/10 bg-black/40">
+        <div className="glass rounded-2xl p-4 lg:p-6 border border-[#2e2e32] bg-[#16161a]">
           <div className="text-[9px] font-black text-gray-500 uppercase mb-3">输入</div>
           <label className="block mb-3">
             <span className="text-[10px] font-black text-gray-400 uppercase">OBJ（含 vt UV）</span>
-            <input type="file" accept=".obj" onChange={onObjChange} className="mt-1 w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-[10px] file:bg-blue-600/30 file:text-blue-300" />
+            <input type="file" accept=".obj" onChange={onObjChange} className="mt-1 w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-[10px] file:bg-[#264670] file:text-blue-300" />
           </label>
           <label className="block mb-3">
             <span className="text-[10px] font-black text-gray-400 uppercase">贴图（BaseColor 等）</span>
-            <input type="file" accept="image/*" onChange={onTexChange} className="mt-1 w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-[10px] file:bg-blue-600/30 file:text-blue-300" />
+            <input type="file" accept="image/*" onChange={onTexChange} className="mt-1 w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-[10px] file:bg-[#264670] file:text-blue-300" />
           </label>
           <label className="block mb-4">
             <span className="text-[10px] font-black text-gray-400 uppercase">Seam Mask（可选）</span>
-            <input type="file" accept="image/*" onChange={onMaskChange} className="mt-1 w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-[10px] file:bg-blue-600/30 file:text-blue-300" />
+            <input type="file" accept="image/*" onChange={onMaskChange} className="mt-1 w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-[10px] file:bg-[#264670] file:text-blue-300" />
           </label>
 
           <div className="text-[9px] font-black text-gray-500 uppercase mb-2">参数</div>
           <div className="space-y-2 mb-4">
             <div>
               <span className="text-[9px] text-gray-500">贴图类型</span>
-              <select value={params.texture_kind} onChange={(e) => setParams((p) => ({ ...p, texture_kind: e.target.value }))} className="w-full mt-0.5 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500 transition-colors">
+              <select value={params.texture_kind} onChange={(e) => setParams((p) => ({ ...p, texture_kind: e.target.value }))} className="w-full mt-0.5 bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500 transition-colors">
                 <option value="basecolor">BaseColor（sRGB）</option>
                 <option value="data">数据贴图（线性）</option>
                 <option value="normal">Normal（向量法线）</option>
@@ -323,20 +323,20 @@ const SeamRepairSection: React.FC<{ onLog?: (level: 'info' | 'warn' | 'error', m
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <span className="text-[9px] text-gray-500">带宽(px)</span>
-                <input type="number" min={1} max={64} value={params.band_px} onChange={(e) => setParams((p) => ({ ...p, band_px: Number(e.target.value) || 8 }))} className="w-full mt-0.5 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500 transition-colors" />
+                <input type="number" min={1} max={64} value={params.band_px} onChange={(e) => setParams((p) => ({ ...p, band_px: Number(e.target.value) || 8 }))} className="w-full mt-0.5 bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500 transition-colors" />
               </div>
               <div>
                 <span className="text-[9px] text-gray-500">过渡(px)</span>
-                <input type="number" min={0} max={64} value={params.feather_px} onChange={(e) => setParams((p) => { const nextValue = Number(e.target.value); return { ...p, feather_px: Number.isFinite(nextValue) ? nextValue : 6 }; })} className="w-full mt-0.5 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500 transition-colors" />
+                <input type="number" min={0} max={64} value={params.feather_px} onChange={(e) => setParams((p) => { const nextValue = Number(e.target.value); return { ...p, feather_px: Number.isFinite(nextValue) ? nextValue : 6 }; })} className="w-full mt-0.5 bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500 transition-colors" />
               </div>
             </div>
             <div>
               <span className="text-[9px] text-gray-500">沿边步长(px)</span>
-                <input type="number" min={0.25} max={16} step={0.25} value={params.sample_step_px} onChange={(e) => setParams((p) => ({ ...p, sample_step_px: Number(e.target.value) || 2 }))} className="w-full mt-0.5 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500 transition-colors" />
+                <input type="number" min={0.25} max={16} step={0.25} value={params.sample_step_px} onChange={(e) => setParams((p) => ({ ...p, sample_step_px: Number(e.target.value) || 2 }))} className="w-full mt-0.5 bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500 transition-colors" />
             </div>
             <div>
               <span className="text-[9px] text-gray-500">模式</span>
-              <select value={params.mode} onChange={(e) => setParams((p) => ({ ...p, mode: e.target.value }))} className="w-full mt-0.5 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500 transition-colors">
+              <select value={params.mode} onChange={(e) => setParams((p) => ({ ...p, mode: e.target.value }))} className="w-full mt-0.5 bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500 transition-colors">
                 <option value="average">双向平均（推荐）</option>
                 <option value="a_to_b">A → B</option>
                 <option value="b_to_a">B → A</option>
@@ -348,7 +348,7 @@ const SeamRepairSection: React.FC<{ onLog?: (level: 'info' | 'warn' | 'error', m
             </label>
             <div>
               <span className="text-[9px] text-gray-500">Alpha 方式</span>
-              <select value={params.alpha_method} onChange={(e) => setParams((p) => ({ ...p, alpha_method: e.target.value }))} className="w-full mt-0.5 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500 transition-colors">
+              <select value={params.alpha_method} onChange={(e) => setParams((p) => ({ ...p, alpha_method: e.target.value }))} className="w-full mt-0.5 bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500 transition-colors">
                 <option value="distance">距离场（推荐）</option>
                 <option value="wacc">采样权重</option>
               </select>
@@ -359,7 +359,7 @@ const SeamRepairSection: React.FC<{ onLog?: (level: 'info' | 'warn' | 'error', m
             </label>
             <div>
               <span className="text-[9px] text-gray-500">颜色匹配</span>
-              <select value={params.color_match} onChange={(e) => setParams((p) => ({ ...p, color_match: e.target.value }))} className="w-full mt-0.5 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500 transition-colors">
+              <select value={params.color_match} onChange={(e) => setParams((p) => ({ ...p, color_match: e.target.value }))} className="w-full mt-0.5 bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500 transition-colors">
                 <option value="meanvar">均值/方差（推荐）</option>
                 <option value="meanvar_edge">按边（可能出色块）</option>
                 <option value="none">关闭</option>
@@ -367,7 +367,7 @@ const SeamRepairSection: React.FC<{ onLog?: (level: 'info' | 'warn' | 'error', m
             </div>
             <div>
               <span className="text-[9px] text-gray-500">Poisson 迭代</span>
-                <input type="number" min={0} max={200} step={25} value={params.poisson_iters} onChange={(e) => setParams((p) => ({ ...p, poisson_iters: Number(e.target.value) || 0 }))} className="w-full mt-0.5 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500 transition-colors" />
+                <input type="number" min={0} max={200} step={25} value={params.poisson_iters} onChange={(e) => setParams((p) => ({ ...p, poisson_iters: Number(e.target.value) || 0 }))} className="w-full mt-0.5 bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500 transition-colors" />
             </div>
           </div>
 
@@ -381,7 +381,7 @@ const SeamRepairSection: React.FC<{ onLog?: (level: 'info' | 'warn' | 'error', m
               <input type="checkbox" checked={previewFlipY} onChange={(e) => setPreviewFlipY(e.target.checked)} className="rounded" />
               <span>上下翻转</span>
             </label>
-            <select value={previewRotate} onChange={(e) => setPreviewRotate(Number(e.target.value))} className="bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500 transition-colors">
+            <select value={previewRotate} onChange={(e) => setPreviewRotate(Number(e.target.value))} className="bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500 transition-colors">
               <option value={0}>0°</option>
               <option value={90}>90°</option>
               <option value={180}>180°</option>
@@ -394,13 +394,13 @@ const SeamRepairSection: React.FC<{ onLog?: (level: 'info' | 'warn' | 'error', m
               {repairing ? '修复中…' : '开始修复'}
             </button>
             {repairing && (
-              <button type="button" onClick={handleCancelRepair} className="px-4 py-2.5 border border-white/15 rounded-xl text-[10px] font-black uppercase text-gray-300 hover:bg-white/5">
+              <button type="button" onClick={handleCancelRepair} className="px-4 py-2.5 border border-[#343438] rounded-xl text-[10px] font-black uppercase text-gray-300 hover:bg-[#222228]">
                 取消
               </button>
             )}
           </div>
           {resultUrl && (
-            <a href={resultUrl} download="repaired.png" className="mt-3 w-full py-2 border border-blue-500/50 rounded-xl text-[10px] font-black uppercase text-blue-300 text-center inline-block hover:bg-blue-600/20">
+            <a href={resultUrl} download="repaired.png" className="mt-3 w-full py-2 border border-[#3b82f6] rounded-xl text-[10px] font-black uppercase text-blue-300 text-center inline-block hover:bg-[#284d78]">
               下载修复图
             </a>
           )}
@@ -410,33 +410,33 @@ const SeamRepairSection: React.FC<{ onLog?: (level: 'info' | 'warn' | 'error', m
 
       {/* 右侧：上 2D 对比，下 3D 预览（两列布局，右侧单列上下排） */}
       <div className="flex-1 min-w-0 flex flex-col gap-4 overflow-hidden">
-        <div className="glass rounded-2xl p-4 border border-white/10 bg-black/40 shrink-0">
+        <div className="glass rounded-2xl p-4 border border-[#2e2e32] bg-[#16161a] shrink-0">
           <div className="text-[9px] font-black text-gray-500 uppercase mb-2">2D 对比</div>
           <div className="grid grid-cols-2 gap-2">
             <div>
               <div className="text-[9px] text-gray-500 mb-1">原图</div>
-              <div className="rounded-xl border border-white/10 bg-black/40 overflow-hidden h-[140px] flex items-center justify-center">
+              <div className="rounded-xl border border-[#2e2e32] bg-[#16161a] overflow-hidden h-[140px] flex items-center justify-center">
                 {texPreviewUrl ? <img src={texPreviewUrl} alt="原图" className="max-w-full max-h-full object-contain" /> : <span className="text-[9px] text-gray-600">—</span>}
               </div>
             </div>
             <div>
               <div className="text-[9px] text-gray-500 mb-1">修复后</div>
-              <div className="rounded-xl border border-white/10 bg-black/40 overflow-hidden h-[140px] flex items-center justify-center">
+              <div className="rounded-xl border border-[#2e2e32] bg-[#16161a] overflow-hidden h-[140px] flex items-center justify-center">
                 {resultUrl ? <img src={resultUrl} alt="修复后" className="max-w-full max-h-full object-contain" /> : <span className="text-[9px] text-gray-600">—</span>}
               </div>
             </div>
           </div>
         </div>
-        <div className="glass rounded-2xl p-4 border border-white/10 bg-black/40 flex flex-col flex-1 min-h-0">
+        <div className="glass rounded-2xl p-4 border border-[#2e2e32] bg-[#16161a] flex flex-col flex-1 min-h-0">
           <div className="flex items-center justify-between mb-2">
             <span className="text-[9px] font-black text-gray-500 uppercase">3D 预览（OBJ）</span>
             {resultUrl && texPreviewUrl && (
-              <button type="button" onClick={() => setUseResultTex((u) => !u)} className="text-[9px] font-black uppercase text-blue-400 hover:text-blue-300 border border-blue-500/40 rounded-lg px-2 py-1">
+              <button type="button" onClick={() => setUseResultTex((u) => !u)} className="text-[9px] font-black uppercase text-blue-400 hover:text-blue-300 border border-[#3b6fb8] rounded-lg px-2 py-1">
                 {useResultTex ? '切到原图' : '切到修复后'}
               </button>
             )}
           </div>
-          <div className="flex-1 rounded-xl border border-white/10 overflow-hidden min-h-[240px] bg-[#0a0a12]">
+          <div className="flex-1 rounded-xl border border-[#2e2e32] overflow-hidden min-h-[240px] bg-[#0a0a12]">
             <ObjTextureViewer objText={objText} textureUrl={currentTexUrl} flipX={previewFlipX} flipY={previewFlipY} rotateDeg={previewRotate} className="w-full h-full" />
           </div>
           <div className="text-[9px] text-gray-500 mt-1">鼠标左键旋转、滚轮缩放</div>

@@ -90,12 +90,12 @@ export const WorkflowApiKeyModal: React.FC<{
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[2100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+      className="fixed inset-0 z-[2100] flex items-center justify-center bg-black/55 backdrop-blur-sm p-4"
       onClick={onClose}
       role="presentation"
     >
       <div
-        className="relative w-full max-w-md rounded-2xl border border-white/10 bg-[#0f0f0f] shadow-xl p-5"
+        className="relative w-full max-w-md rounded-2xl border border-white/10 bg-[#0e0e14]/90 backdrop-blur-md shadow-xl p-5"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -108,7 +108,7 @@ export const WorkflowApiKeyModal: React.FC<{
           <button
             type="button"
             onClick={onClose}
-            className="w-8 h-8 flex items-center justify-center text-white/50 hover:text-white rounded-lg hover:bg-white/10"
+            className="w-8 h-8 flex items-center justify-center text-white/50 hover:text-white rounded-lg hover:bg-[#2e2e36]"
             aria-label="关闭"
           >
             <AppIcon name="close" className="w-4 h-4" />
@@ -133,7 +133,7 @@ export const WorkflowApiKeyModal: React.FC<{
               onChange={(e) => setKeyValue(e.target.value)}
               placeholder="粘贴密钥"
               autoComplete="off"
-              className="w-full min-w-0 px-4 py-3 rounded-xl bg-black/40 border border-white/10 text-sm text-white placeholder-gray-500 focus:border-blue-500/50 focus:outline-none"
+              className="w-full min-w-0 px-4 py-3 rounded-xl bg-[#16161a] border border-[#2e2e32] text-sm text-white placeholder-gray-500 focus:border-[#3b82f6] focus:outline-none"
             />
           </div>
           <div className="flex items-center gap-3 pt-1">
@@ -147,7 +147,7 @@ export const WorkflowApiKeyModal: React.FC<{
             <button
               type="button"
               onClick={onClose}
-              className="px-5 py-2.5 rounded-xl bg-white/10 border border-white/15 text-[10px] font-black uppercase text-gray-300 hover:bg-white/15 transition-colors"
+              className="px-5 py-2.5 rounded-xl bg-[#26262c] border border-[#343438] text-[10px] font-black uppercase text-gray-300 hover:bg-white/15 transition-colors"
             >
               关闭
             </button>

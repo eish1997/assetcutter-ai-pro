@@ -35,19 +35,19 @@ const AdminAuditLogsPanel: React.FC = () => {
 
   return (
     <div className="space-y-4">
-      <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 flex items-center justify-between">
+      <div className="rounded-2xl border border-[#2e2e32] bg-[#121214] p-4 flex items-center justify-between">
         <h2 className="text-[12px] font-black uppercase tracking-[0.2em] text-gray-300">审计日志</h2>
-        <button type="button" onClick={() => { void load(); }} className="px-3 py-2 rounded-xl border border-white/10 bg-white/5 text-[10px] hover:bg-white/10">
+        <button type="button" onClick={() => { void load(); }} className="px-3 py-2 rounded-xl border border-[#2e2e32] bg-[#1c1c22] text-[10px] hover:bg-[#2e2e36]">
           刷新
         </button>
       </div>
       {error ? <p className="text-[11px] text-red-400">{error}</p> : null}
       {loading ? (
-        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-6 text-[11px] text-gray-400">加载日志中…</div>
+        <div className="rounded-2xl border border-[#2e2e32] bg-[#121214] p-6 text-[11px] text-gray-400">加载日志中…</div>
       ) : (
-        <div className="rounded-2xl border border-white/10 bg-white/[0.03] overflow-hidden">
+        <div className="rounded-2xl border border-[#2e2e32] bg-[#121214] overflow-hidden">
           <table className="w-full text-[11px]">
-            <thead className="bg-white/[0.04] text-gray-400">
+            <thead className="bg-[#151518] text-gray-400">
               <tr>
                 <th className="text-left px-3 py-2">时间</th>
                 <th className="text-left px-3 py-2">操作者</th>
@@ -58,7 +58,7 @@ const AdminAuditLogsPanel: React.FC = () => {
             </thead>
             <tbody>
               {logs.map((item) => (
-                <tr key={item.id} className="border-t border-white/5">
+                <tr key={item.id} className="border-t border-[#252528]">
                   <td className="px-3 py-2 text-gray-400">{new Date(item.createdAt).toLocaleString()}</td>
                   <td className="px-3 py-2 text-gray-300">{item.actorIdentifier || '-'}</td>
                   <td className="px-3 py-2 text-gray-200">{item.action}</td>

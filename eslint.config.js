@@ -7,6 +7,7 @@ export default [
   {
     ignores: [
       'dist/**',
+      'scripts/**/*.mjs',
       'node_modules/**',
       'public/py/**',
       'WebSeamRepair/**',

@@ -55,12 +55,12 @@ const WorkspaceProjectShell: React.FC<Props> = ({ projects, onCreate, onOpen, on
             onChange={(e) => setDraftName(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), handleCreate())}
             placeholder="项目名称"
-            className="bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-[11px] outline-none focus:border-blue-500 min-w-[12rem] placeholder:text-gray-600"
+            className="bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-4 py-2.5 text-[11px] outline-none focus:border-blue-500 min-w-[12rem] placeholder:text-gray-600"
           />
           <button
             type="button"
             onClick={handleCreate}
-            className="px-5 py-2.5 rounded-xl bg-blue-600 text-[10px] font-black uppercase tracking-widest text-white hover:bg-blue-500 transition-colors shadow-lg shadow-blue-900/30"
+            className="px-5 py-2.5 rounded-xl bg-blue-600 text-[10px] font-black uppercase tracking-widest text-white hover:bg-blue-500 transition-colors duration-200 shadow-lg shadow-[#172554] cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-blue-400/70 focus-visible:ring-offset-2 focus-visible:ring-offset-[#050505]"
           >
             新建项目
           </button>
@@ -72,12 +72,12 @@ const WorkspaceProjectShell: React.FC<Props> = ({ projects, onCreate, onOpen, on
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
           placeholder="搜索项目…"
-          className="w-full max-w-sm bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-[11px] outline-none focus:border-blue-500 placeholder:text-gray-600"
+          className="w-full max-w-sm bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-4 py-2.5 text-[11px] outline-none focus:border-blue-500 placeholder:text-gray-600"
         />
       </div>
 
       {filtered.length === 0 ? (
-        <div className="rounded-2xl border border-dashed border-white/15 bg-white/[0.02] py-20 text-center text-[11px] text-gray-500">
+        <div className="rounded-2xl border border-dashed border-[#343438] bg-[#0e0e10] py-20 text-center text-[11px] text-gray-500">
           {projects.length === 0 ? '暂无项目，请新建' : '没有匹配的项目'}
         </div>
       ) : (
@@ -89,14 +89,14 @@ const WorkspaceProjectShell: React.FC<Props> = ({ projects, onCreate, onOpen, on
               tabIndex={0}
               onClick={() => onOpen(p.id)}
               onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), onOpen(p.id))}
-              className="group rounded-2xl border border-white/10 bg-black/30 overflow-hidden cursor-pointer hover:border-blue-500/40 hover:bg-white/[0.04] transition-all text-left"
+              className="group rounded-2xl border border-[#2e2e32] bg-[#141416] overflow-hidden cursor-pointer hover:border-[#3b6fb8] hover:bg-[#151518] transition-[border-color,box-shadow,background-color] duration-200 text-left outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 focus-visible:ring-offset-2 focus-visible:ring-offset-[#050505]"
             >
-              <div className="aspect-[16/10] relative bg-gradient-to-br from-violet-950/80 via-[#0f0f18] to-blue-950/60 flex items-center justify-center">
-                <div className="w-12 h-12 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center text-white/40 text-xl rotate-45 group-hover:scale-105 transition-transform">
-                  ◆
+              <div className="aspect-[16/10] relative bg-[#16101f] flex items-center justify-center">
+                <div className="w-12 h-12 rounded-xl bg-[#1c1c22] border border-[#2e2e32] flex items-center justify-center text-white/45 group-hover:text-white/70 group-hover:border-[#3a3a40] transition-colors duration-200">
+                  <AppIcon name="package" className="w-6 h-6" />
                 </div>
               </div>
-              <div className="p-4 flex items-start justify-between gap-2 border-t border-white/5">
+              <div className="p-4 flex items-start justify-between gap-2 border-t border-[#252528]">
                 <div className="min-w-0 flex-1">
                   <div className="text-[12px] font-bold text-white truncate">{p.name}</div>
                   <div className="text-[9px] text-gray-500 mt-1 font-mono">
@@ -109,7 +109,7 @@ const WorkspaceProjectShell: React.FC<Props> = ({ projects, onCreate, onOpen, on
                     e.stopPropagation();
                     openRenameModal(p);
                   }}
-                  className="shrink-0 p-2 rounded-lg text-blue-300/80 hover:text-blue-200 hover:bg-blue-500/10 border border-transparent hover:border-blue-500/30 transition-colors"
+                  className="shrink-0 p-2 rounded-lg text-blue-300/80 hover:text-blue-200 hover:bg-[#1a3354] border border-transparent hover:border-[#4b6a9e] transition-colors duration-200 cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-[#3b82f6]"
                   title="重命名项目"
                   aria-label={`重命名 ${p.name}`}
                 >
@@ -121,7 +121,7 @@ const WorkspaceProjectShell: React.FC<Props> = ({ projects, onCreate, onOpen, on
                     e.stopPropagation();
                     onDelete(p.id);
                   }}
-                  className="shrink-0 p-2 rounded-lg text-red-400/80 hover:text-red-300 hover:bg-red-500/10 border border-transparent hover:border-red-500/30 transition-colors"
+                  className="shrink-0 p-2 rounded-lg text-red-400/80 hover:text-red-300 hover:bg-[#3a1818] border border-transparent hover:border-[#dc6b6b] transition-colors duration-200 cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-red-500/40"
                   title="删除项目"
                   aria-label={`删除 ${p.name}`}
                 >
@@ -134,11 +134,11 @@ const WorkspaceProjectShell: React.FC<Props> = ({ projects, onCreate, onOpen, on
       )}
       {renameTarget && (
         <div
-          className="fixed inset-0 z-[2200] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
+          className="fixed inset-0 z-[2200] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4"
           onClick={closeRenameModal}
         >
           <div
-            className="w-full max-w-md rounded-2xl border border-white/10 bg-[#0f0f0f] shadow-2xl p-4"
+            className="w-full max-w-md rounded-2xl border border-white/10 bg-[#0e0e14]/90 backdrop-blur-md shadow-2xl p-4"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-3">
@@ -146,7 +146,7 @@ const WorkspaceProjectShell: React.FC<Props> = ({ projects, onCreate, onOpen, on
               <button
                 type="button"
                 onClick={closeRenameModal}
-                className="w-8 h-8 rounded-lg text-gray-400 hover:text-white hover:bg-white/10"
+                className="w-8 h-8 rounded-lg text-gray-400 hover:text-white hover:bg-[#2e2e36] cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
                 aria-label="关闭"
               >
                 <AppIcon name="close" className="w-4 h-4" />
@@ -167,20 +167,20 @@ const WorkspaceProjectShell: React.FC<Props> = ({ projects, onCreate, onOpen, on
               }}
               placeholder="输入新的项目名称"
               autoFocus
-              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-[11px] text-white outline-none focus:border-blue-500 placeholder:text-gray-600"
+              className="w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-4 py-2.5 text-[11px] text-white outline-none focus:border-blue-500 placeholder:text-gray-600"
             />
             <div className="mt-4 flex items-center justify-end gap-2">
               <button
                 type="button"
                 onClick={closeRenameModal}
-                className="px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-[10px] font-black uppercase text-gray-300 hover:bg-white/10"
+                className="px-4 py-2 rounded-xl bg-[#1c1c22] border border-[#2e2e32] text-[10px] font-black uppercase text-gray-300 hover:bg-[#2e2e36] cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-white/30 transition-colors duration-200"
               >
                 取消
               </button>
               <button
                 type="button"
                 onClick={confirmRename}
-                className="px-4 py-2 rounded-xl bg-blue-600 text-[10px] font-black uppercase text-white hover:bg-blue-500"
+                className="px-4 py-2 rounded-xl bg-blue-600 text-[10px] font-black uppercase text-white hover:bg-blue-500 cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-blue-400/70 transition-colors duration-200"
               >
                 确定
               </button>

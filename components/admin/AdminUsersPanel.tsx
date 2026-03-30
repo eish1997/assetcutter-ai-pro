@@ -127,7 +127,7 @@ const AdminUsersPanel: React.FC = () => {
 
   return (
     <div className="space-y-4">
-      <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+      <div className="rounded-2xl border border-[#2e2e32] bg-[#121214] p-4">
         <div className="flex flex-wrap gap-3 items-center justify-between">
           <div>
             <h2 className="text-[12px] font-black uppercase tracking-[0.2em] text-gray-300">用户管理</h2>
@@ -140,7 +140,7 @@ const AdminUsersPanel: React.FC = () => {
             onClick={() => {
               void loadUsers();
             }}
-            className="px-3 py-2 rounded-xl border border-white/10 bg-white/5 text-[10px] text-gray-200 hover:bg-white/10"
+            className="px-3 py-2 rounded-xl border border-[#2e2e32] bg-[#1c1c22] text-[10px] text-gray-200 hover:bg-[#2e2e36]"
           >
             刷新
           </button>
@@ -150,17 +150,17 @@ const AdminUsersPanel: React.FC = () => {
           value={keyword}
           onChange={(e) => setKeyword(e.target.value)}
           placeholder="搜索用户名或邮箱"
-          className="mt-3 w-full rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-[12px] text-white placeholder-gray-500 outline-none focus:border-blue-500/60"
+          className="mt-3 w-full rounded-xl border border-[#343438] bg-[#1c1c22] px-3 py-2 text-[12px] text-white placeholder-gray-500 outline-none focus:border-[#3b82f6]"
         />
       </div>
 
       {error ? <p className="text-[11px] text-red-400">{error}</p> : null}
       {loading ? (
-        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-6 text-[11px] text-gray-400">加载用户中…</div>
+        <div className="rounded-2xl border border-[#2e2e32] bg-[#121214] p-6 text-[11px] text-gray-400">加载用户中…</div>
       ) : (
-        <div className="rounded-2xl border border-white/10 bg-white/[0.03] overflow-x-auto">
+        <div className="rounded-2xl border border-[#2e2e32] bg-[#121214] overflow-x-auto">
           <table className="w-full text-[11px] min-w-[720px]">
-            <thead className="bg-white/[0.04] text-gray-400">
+            <thead className="bg-[#151518] text-gray-400">
               <tr>
                 <th className="text-left px-3 py-2">用户名</th>
                 <th className="text-left px-3 py-2">邮箱</th>
@@ -174,7 +174,7 @@ const AdminUsersPanel: React.FC = () => {
             </thead>
             <tbody>
               {filtered.map((u) => (
-                <tr key={u.id} className="border-t border-white/5">
+                <tr key={u.id} className="border-t border-[#252528]">
                   <td className="px-3 py-2 text-gray-200">{u.username}</td>
                   <td className="px-3 py-2 text-gray-300">{u.email}</td>
                   <td className="px-3 py-2 text-gray-400 whitespace-nowrap">
@@ -187,7 +187,7 @@ const AdminUsersPanel: React.FC = () => {
                         min={1}
                         value={quotaDraftMb[u.id] ?? ''}
                         onChange={(e) => setQuotaDraftMb((prev) => ({ ...prev, [u.id]: e.target.value }))}
-                        className="w-16 rounded-lg border border-white/15 bg-black/40 px-2 py-1 text-[10px] text-white outline-none focus:border-blue-500/50"
+                        className="w-16 rounded-lg border border-[#343438] bg-[#16161a] px-2 py-1 text-[10px] text-white outline-none focus:border-[#3b82f6]"
                       />
                       <button
                         type="button"
@@ -195,7 +195,7 @@ const AdminUsersPanel: React.FC = () => {
                         onClick={() => {
                           void handleSaveQuotaMb(u.id);
                         }}
-                        className="px-2 py-1 rounded-lg border border-blue-500/40 bg-blue-500/15 text-blue-200 disabled:opacity-40 hover:bg-blue-500/25"
+                        className="px-2 py-1 rounded-lg border border-[#3b6fb8] bg-[#1e3a5f] text-blue-200 disabled:opacity-40 hover:bg-[#2a5080]"
                       >
                         保存配额
                       </button>
@@ -205,7 +205,7 @@ const AdminUsersPanel: React.FC = () => {
                         onClick={() => {
                           void handleReconcile(u.id);
                         }}
-                        className="px-2 py-1 rounded-lg border border-white/10 bg-white/5 text-gray-300 disabled:opacity-40 hover:bg-white/10"
+                        className="px-2 py-1 rounded-lg border border-[#2e2e32] bg-[#1c1c22] text-gray-300 disabled:opacity-40 hover:bg-[#2e2e36]"
                         title="从 R2 扫描工作区图片并重建用量"
                       >
                         同步用量
@@ -216,7 +216,7 @@ const AdminUsersPanel: React.FC = () => {
                         onClick={() => {
                           void handleReconcile(u.id, true);
                         }}
-                        className="px-2 py-1 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-200/90 disabled:opacity-40 hover:bg-amber-500/20"
+                        className="px-2 py-1 rounded-lg border border-[#b45309] bg-[#2c2412] text-amber-200/90 disabled:opacity-40 hover:bg-[#3d3018]"
                         title="即使扫描为空也覆盖账本（桶已空时使用）"
                       >
                         强制同步
@@ -234,7 +234,7 @@ const AdminUsersPanel: React.FC = () => {
                         onClick={() => {
                           void handlePatch(u.id, { role: 'admin' });
                         }}
-                        className="px-2 py-1 rounded-lg border border-white/10 bg-white/5 disabled:opacity-40 hover:bg-white/10"
+                        className="px-2 py-1 rounded-lg border border-[#2e2e32] bg-[#1c1c22] disabled:opacity-40 hover:bg-[#2e2e36]"
                       >
                         设为管理员
                       </button>
@@ -244,7 +244,7 @@ const AdminUsersPanel: React.FC = () => {
                         onClick={() => {
                           void handlePatch(u.id, { role: 'user' });
                         }}
-                        className="px-2 py-1 rounded-lg border border-white/10 bg-white/5 disabled:opacity-40 hover:bg-white/10"
+                        className="px-2 py-1 rounded-lg border border-[#2e2e32] bg-[#1c1c22] disabled:opacity-40 hover:bg-[#2e2e36]"
                       >
                         设为普通用户
                       </button>
@@ -254,7 +254,7 @@ const AdminUsersPanel: React.FC = () => {
                         onClick={() => {
                           void handlePatch(u.id, { status: 'disabled' });
                         }}
-                        className="px-2 py-1 rounded-lg border border-red-500/30 bg-red-500/10 text-red-200 disabled:opacity-40 hover:bg-red-500/20"
+                        className="px-2 py-1 rounded-lg border border-[#dc6b6b] bg-[#3a1818] text-red-200 disabled:opacity-40 hover:bg-[#4a1c1c]"
                       >
                         禁用
                       </button>
@@ -264,7 +264,7 @@ const AdminUsersPanel: React.FC = () => {
                         onClick={() => {
                           void handlePatch(u.id, { status: 'active' });
                         }}
-                        className="px-2 py-1 rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-emerald-200 disabled:opacity-40 hover:bg-emerald-500/20"
+                        className="px-2 py-1 rounded-lg border border-[#34d399] bg-[#0d2818] text-emerald-200 disabled:opacity-40 hover:bg-[#14532d]"
                       >
                         启用
                       </button>

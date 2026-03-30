@@ -17,7 +17,7 @@ import { useDialogGeneration, getDialogUnderstandImageInput } from './hooks/useD
 import { useDialogPostProcessing } from './hooks/useDialogPostProcessing';
 import { useAuth } from './components/auth/AuthContext';
 import { CustomDropdown, DROPDOWN_TRIGGER_COMPACT } from './components/ui/CustomDropdown';
-import DotGrid from './components/ui/DotGrid';
+import Waves from './components/ui/Waves';
 import AppIcon from './components/ui/AppIcon';
 import WorkspaceProjectShell from './components/WorkspaceProjectShell';
 import {
@@ -68,19 +68,34 @@ type SourceAggregate = {
   samples: { fullPrompt: string; instruction?: string; userScore: number }[];
 };
 
+function workflowBoundaryNormalizeError(error: unknown): Error {
+  if (error instanceof Error) return error;
+  try {
+    return new Error(typeof error === 'string' ? error : String(error));
+  } catch {
+    return new Error('未知错误（无法序列化）');
+  }
+}
+
 class WorkflowErrorBoundary extends React.Component<{ children: React.ReactNode }, { error: Error | null }> {
   declare props: Readonly<{ children: React.ReactNode }>;
   state = { error: null as Error | null };
-  static getDerivedStateFromError(error: Error) { return { error }; }
-  componentDidCatch(error: Error) {
-    console.error('[工作流]', error);
+  static getDerivedStateFromError(error: unknown) {
+    return { error: workflowBoundaryNormalizeError(error) };
+  }
+  componentDidCatch(error: unknown) {
+    try {
+      console.error('[工作流]', error);
+    } catch {
+      console.error('[工作流] 子树抛错（控制台无法序列化该错误对象）');
+    }
   }
   render() {
     if (this.state.error) {
       const err = this.state.error;
       const fullText = `工作流报错\n\n${err.message}\n\n${err.stack ?? ''}`;
       return (
-        <div className="rounded-2xl border border-red-500/40 bg-red-950/40 p-6 text-red-200 min-h-[200px]">
+        <div className="rounded-2xl border border-[#f87171] bg-[#3f1518] p-6 text-red-200 min-h-[200px]">
           <div className="flex items-center justify-between gap-4 mb-3">
             <h3 className="text-[10px] font-black uppercase text-red-400">工作流内报错</h3>
             <button
@@ -88,16 +103,16 @@ class WorkflowErrorBoundary extends React.Component<{ children: React.ReactNode 
               onClick={() => {
                 navigator.clipboard.writeText(fullText);
               }}
-              className="px-3 py-1.5 rounded-lg bg-red-500/20 border border-red-500/40 text-[9px] font-black uppercase text-red-300 hover:bg-red-500/30"
+              className="px-3 py-1.5 rounded-lg bg-[#4a1c1c] border border-[#f87171] text-[9px] font-black uppercase text-red-300 hover:bg-[#5a2222] cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-red-400/50 transition-colors duration-200"
             >
               复制报错
             </button>
           </div>
-          <pre className="text-[9px] overflow-auto max-h-[40vh] whitespace-pre-wrap break-words bg-black/30 p-3 rounded-lg border border-red-500/20">{err.message}</pre>
+          <pre className="text-[9px] overflow-auto max-h-[40vh] whitespace-pre-wrap break-words bg-[#141416] p-3 rounded-lg border border-[#b85a5a]">{err.message}</pre>
           {err.stack && (
             <details className="mt-3">
               <summary className="text-[8px] font-black uppercase text-gray-500 cursor-pointer hover:text-gray-400">堆栈</summary>
-              <pre className="text-[8px] text-gray-500 mt-1 overflow-auto max-h-[30vh] whitespace-pre-wrap break-words bg-black/30 p-3 rounded-lg">{err.stack}</pre>
+              <pre className="text-[8px] text-gray-500 mt-1 overflow-auto max-h-[30vh] whitespace-pre-wrap break-words bg-[#141416] p-3 rounded-lg">{err.stack}</pre>
             </details>
           )}
         </div>
@@ -108,7 +123,7 @@ class WorkflowErrorBoundary extends React.Component<{ children: React.ReactNode 
 }
 
 const LazySectionFallback: React.FC<{ label?: string }> = ({ label = '模块' }) => (
-  <div className="min-h-[240px] w-full rounded-2xl border border-white/10 bg-black/20 flex items-center justify-center text-[11px] text-gray-500">
+  <div className="min-h-[240px] w-full rounded-2xl border border-[#2e2e32] bg-[#121214] flex items-center justify-center text-[11px] text-gray-500">
     加载{label}中…
   </div>
 );
@@ -173,12 +188,13 @@ const ASSET_VIEWER_CATEGORY_LABELS: Record<string, string> = {
 
 const SidebarIconButton: React.FC<{ active: boolean; label: string; onClick: () => void; children: React.ReactNode }> = ({ active, label, onClick, children }) => (
   <button
+    type="button"
     onClick={onClick}
     aria-label={label}
-    className={`group relative w-full h-10 rounded-xl border transition-colors flex items-center justify-center ${active ? 'bg-blue-600/15 text-blue-300 border-blue-500/40' : 'text-gray-400 border-white/10 hover:bg-white/10'}`}
+    className={`group relative w-full h-10 rounded-xl border transition-colors duration-200 flex items-center justify-center cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-blue-500/55 focus-visible:ring-offset-2 focus-visible:ring-offset-[#050505] ${active ? 'bg-[#1a2d4d] text-blue-300 border-[#3b6fb8]' : 'text-gray-400 border-[#2e2e32] hover:bg-[#2e2e36]'}`}
   >
     {children}
-    <span className="pointer-events-none absolute left-[calc(100%+10px)] top-1/2 -translate-y-1/2 rounded-lg border border-white/10 bg-black/90 px-2 py-1 text-[10px] text-gray-200 whitespace-nowrap opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-150">
+    <span className="pointer-events-none absolute left-[calc(100%+10px)] top-1/2 -translate-y-1/2 rounded-lg border border-[#2e2e32] bg-[#050505] px-2 py-1 text-[10px] text-gray-200 whitespace-nowrap opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-150">
       {label}
     </span>
   </button>
@@ -191,10 +207,10 @@ const AssetViewer: React.FC<{ item: LibraryItem | null; onClose: () => void }> =
   const isPlaceholderPreview = item.data?.includes('data:image/svg+xml') && is3D;
 
   return (
-    <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/95 backdrop-blur-xl animate-in fade-in duration-300 p-4 lg:p-20" onClick={onClose}>
+    <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/75 backdrop-blur-sm animate-in fade-in duration-300 p-4 lg:p-20" onClick={onClose}>
       <div className="relative max-w-7xl w-full h-full flex flex-col items-center justify-center" onClick={e => e.stopPropagation()}>
-        <button onClick={onClose} className="absolute top-0 right-0 w-12 h-12 flex items-center justify-center text-white/40 hover:text-white transition-colors"><AppIcon name="close" className="w-5 h-5" /></button>
-        <div className="w-full flex-1 flex items-center justify-center overflow-hidden rounded-[3rem] border border-white/5 bg-black/40">
+        <button type="button" onClick={onClose} className="absolute top-0 right-0 w-12 h-12 flex items-center justify-center text-white/40 hover:text-white transition-colors duration-200 cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 rounded-xl"><AppIcon name="close" className="w-5 h-5" /></button>
+        <div className="w-full flex-1 flex items-center justify-center overflow-hidden rounded-[3rem] border border-[#252528] bg-[#16161a]">
           {isPlaceholderPreview ? (
             <div className="flex flex-col items-center justify-center gap-4 text-gray-500">
               <AppIcon name="cube" className="w-10 h-10" />
@@ -208,7 +224,7 @@ const AssetViewer: React.FC<{ item: LibraryItem | null; onClose: () => void }> =
           <div>
             <div className="flex items-center gap-2">
               <h2 className="text-xl font-black uppercase tracking-widest">{item.label}</h2>
-              {is3D && <span className="px-2 py-0.5 rounded text-[9px] font-black uppercase bg-indigo-600/30 text-indigo-300 border border-indigo-500/40">3D</span>}
+              {is3D && <span className="px-2 py-0.5 rounded text-[9px] font-black uppercase bg-[#3730a3] text-indigo-300 border border-[#6366f1]">3D</span>}
             </div>
             <p className="text-[10px] mono text-blue-400 mt-1 uppercase tracking-widest">
               {categoryLabel}
@@ -228,7 +244,7 @@ const AssetViewer: React.FC<{ item: LibraryItem | null; onClose: () => void }> =
               </button>
             )}
             {item.modelUrls?.map((url, i) => (
-              <a key={i} href={url} target="_blank" rel="noopener noreferrer" className="px-6 py-3 bg-indigo-600/80 rounded-full font-black text-[10px] uppercase tracking-widest hover:bg-indigo-500/80 transition-colors">下载模型{item.modelUrls!.length > 1 ? ` ${i + 1}` : ''}</a>
+              <a key={i} href={url} target="_blank" rel="noopener noreferrer" className="px-6 py-3 bg-[#3730a3] rounded-full font-black text-[10px] uppercase tracking-widest hover:bg-[#4f46e5] transition-colors">下载模型{item.modelUrls!.length > 1 ? ` ${i + 1}` : ''}</a>
             ))}
           </div>
         </div>
@@ -375,7 +391,7 @@ const RegionSelector: React.FC<{
     <div className="flex flex-col gap-6 w-full">
       <div 
         ref={containerRef}
-        className="relative aspect-square glass rounded-[2rem] lg:rounded-[2.5rem] overflow-hidden bg-black/40 cursor-crosshair border border-white/5 touch-none"
+        className="relative aspect-square glass rounded-[2rem] lg:rounded-[2.5rem] overflow-hidden bg-[#16161a] cursor-crosshair border border-[#252528] touch-none"
         onMouseDown={handleStart}
         onMouseMove={handleMove}
         onMouseUp={handleEnd}
@@ -387,7 +403,7 @@ const RegionSelector: React.FC<{
         <img src={src} className="w-full h-full object-contain pointer-events-none select-none" />
         {selectionRect && (
           <div 
-            className="absolute border-2 border-blue-500 bg-blue-500/10 pointer-events-none"
+            className="absolute border border-dashed border-blue-400/70 bg-blue-500/12 pointer-events-none shadow-[inset_0_0_0_1px_rgba(59,130,246,0.25)]"
             style={{
               left: selectionRect.left,
               top: selectionRect.top,
@@ -400,7 +416,7 @@ const RegionSelector: React.FC<{
         )}
       </div>
       <div className="flex gap-4">
-        <button onClick={onCancel} className="flex-1 py-4 bg-white/5 border border-white/10 rounded-2xl text-[9px] font-black uppercase tracking-widest hover:bg-white/10 transition-all">取消</button>
+        <button onClick={onCancel} className="flex-1 py-4 bg-[#1c1c22] border border-[#2e2e32] rounded-2xl text-[9px] font-black uppercase tracking-widest hover:bg-[#2e2e36] transition-all">取消</button>
         <button onClick={executeCrop} disabled={!selectionRect} className="flex-1 py-4 bg-blue-600 rounded-2xl text-[9px] font-black uppercase tracking-widest electric-glow disabled:opacity-20 transition-all">确认提取</button>
       </div>
     </div>
@@ -439,7 +455,7 @@ const LibraryPickerModal: React.FC<{
   };
 
   return (
-    <div className="fixed inset-0 z-[2005] flex items-center justify-center bg-black/90 backdrop-blur-xl p-4 lg:p-20" onClick={onClose}>
+    <div className="fixed inset-0 z-[2005] flex items-center justify-center bg-black/55 backdrop-blur-sm p-4 lg:p-20" onClick={onClose}>
       <div className="glass max-w-6xl w-full h-full rounded-[3rem] flex flex-col p-8 overflow-hidden" onClick={e => e.stopPropagation()}>
         <div className="flex justify-between items-center mb-8">
           <h2 className="text-sm font-black uppercase tracking-widest text-blue-400">从资产库导入{multiSelect ? '（可多选）' : ''}</h2>
@@ -457,16 +473,16 @@ const LibraryPickerModal: React.FC<{
                 <div
                   key={item.id}
                   onClick={() => toggle(item.id)}
-                  className={`glass aspect-square rounded-2xl p-2 cursor-pointer border-white/5 hover:border-blue-500 transition-all group overflow-hidden relative ${multiSelect && selectedIds.has(item.id) ? 'ring-2 ring-blue-500' : ''}`}
+                  className={`glass aspect-square rounded-2xl p-2 cursor-pointer border-[#252528] hover:border-blue-500 transition-all group overflow-hidden relative ${multiSelect && selectedIds.has(item.id) ? 'ring-2 ring-blue-500' : ''}`}
                 >
                   <img src={item.data} className="w-full h-full object-contain" alt="" />
                   {multiSelect && (
-                    <div className="absolute top-1 right-1 w-5 h-5 rounded border flex items-center justify-center bg-black/50">
+                    <div className="absolute top-1 right-1 w-5 h-5 rounded border flex items-center justify-center bg-[#18181c]">
                       {selectedIds.has(item.id) ? <AppIcon name="check" className="w-3.5 h-3.5 text-blue-400" /> : null}
                     </div>
                   )}
                   {!multiSelect && (
-                    <div className="absolute inset-0 bg-blue-600/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                    <div className="absolute inset-0 bg-[#1e3558] opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                       <span className="text-[8px] font-black uppercase tracking-widest bg-blue-600 px-3 py-1 rounded-full shadow-lg">选中</span>
                     </div>
                   )}
@@ -1730,12 +1746,12 @@ const MainApp: React.FC = () => {
     const hasImage = activeItem.data && !activeItem.data.includes('data:image/svg+xml');
     const has3DModelUrl = (activeItem.modelUrls?.length ?? 0) > 0;
     return (
-      <div className={`glass p-5 rounded-[2.5rem] border-white/5 group hover:border-blue-500/40 transition-all flex flex-col h-full relative ${isSelected ? 'ring-2 ring-blue-500/60' : ''}`}>
+      <div className={`glass p-5 rounded-[2.5rem] border-[#252528] group hover:border-[#3b6fb8] transition-all flex flex-col h-full relative ${isSelected ? 'ring-2 ring-[#3b82f6]' : ''}`}>
         <div className="absolute top-3 left-3 z-10 flex items-center gap-2">
-          <button type="button" onClick={e => { e.stopPropagation(); onToggleSelect(); }} className={`w-5 h-5 rounded border flex items-center justify-center text-[10px] ${isSelected ? 'bg-blue-600 border-blue-500 text-white' : 'bg-white/5 border-white/20 text-gray-500 hover:bg-white/10'}`}>{isSelected ? <AppIcon name="check" className="w-3 h-3" /> : null}</button>
-          {is3D && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-indigo-600/30 text-indigo-300 border border-indigo-500/40">3D</span>}
+          <button type="button" onClick={e => { e.stopPropagation(); onToggleSelect(); }} className={`w-5 h-5 rounded border flex items-center justify-center text-[10px] ${isSelected ? 'bg-blue-600 border-blue-500 text-white' : 'bg-[#1c1c22] border-[#3a3a40] text-gray-500 hover:bg-[#2e2e36]'}`}>{isSelected ? <AppIcon name="check" className="w-3 h-3" /> : null}</button>
+          {is3D && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-[#3730a3] text-indigo-300 border border-[#6366f1]">3D</span>}
         </div>
-        <div className="aspect-square mb-6 bg-black/40 rounded-[2rem] overflow-hidden flex items-center justify-center p-4 cursor-pointer relative" onClick={() => setActiveAssetId(activeItem)}>
+        <div className="aspect-square mb-6 bg-[#16161a] rounded-[2rem] overflow-hidden flex items-center justify-center p-4 cursor-pointer relative" onClick={() => setActiveAssetId(activeItem)}>
            <img src={activeItem.data} className="max-w-full max-h-full object-contain" alt={activeItem.label} />
         </div>
         <div className="flex-1 px-1">
@@ -1743,7 +1759,7 @@ const MainApp: React.FC = () => {
           {items.length > 1 && (
             <div className="flex flex-wrap gap-1.5 mb-5 min-h-[24px]">
               {items.map((it, idx) => (
-                <button key={it.id} onClick={() => setActiveIdx(idx)} className={`w-8 h-8 rounded-lg flex items-center justify-center text-[7px] font-black border ${activeIdx === idx ? 'bg-blue-600 border-blue-500' : 'bg-white/5 border-white/10'}`}>{it.style?.slice(0,3).toUpperCase() || 'DEF'}</button>
+                <button key={it.id} onClick={() => setActiveIdx(idx)} className={`w-8 h-8 rounded-lg flex items-center justify-center text-[7px] font-black border ${activeIdx === idx ? 'bg-blue-600 border-blue-500' : 'bg-[#1c1c22] border-[#2e2e32]'}`}>{it.style?.slice(0,3).toUpperCase() || 'DEF'}</button>
               ))}
             </div>
           )}
@@ -1753,10 +1769,10 @@ const MainApp: React.FC = () => {
             <div className="mb-2 px-1">
               <div className="text-[8px] font-black uppercase text-gray-500 mb-1.5">发送到</div>
               <div className="flex flex-wrap gap-1.5">
-                {hasImage && onSendToDialog && <button onClick={() => onSendToDialog(activeItem)} className="py-1.5 px-2.5 rounded-lg bg-blue-600/20 border border-blue-500/40 text-[8px] font-black uppercase hover:bg-blue-600/40 text-blue-300">继续编辑</button>}
-                {hasImage && onSendToTexture && <button onClick={() => onSendToTexture(activeItem)} className="py-1.5 px-2.5 rounded-lg bg-indigo-600/20 border border-indigo-500/40 text-[8px] font-black uppercase hover:bg-indigo-600/40 text-indigo-300">贴图</button>}
-                {hasImage && onSendToGenerate3DImage && <button onClick={() => onSendToGenerate3DImage(activeItem)} className="py-1.5 px-2.5 rounded-lg bg-amber-600/20 border border-amber-500/40 text-[8px] font-black uppercase hover:bg-amber-600/40 text-amber-300">生成3D</button>}
-                {has3DModelUrl && onSendToGenerate3DModel && <button onClick={() => onSendToGenerate3DModel(activeItem)} className="py-1.5 px-2.5 rounded-lg bg-emerald-600/20 border border-emerald-500/40 text-[8px] font-black uppercase hover:bg-emerald-600/40 text-emerald-300">生成3D 中使用</button>}
+                {hasImage && onSendToDialog && <button onClick={() => onSendToDialog(activeItem)} className="py-1.5 px-2.5 rounded-lg bg-[#1e3558] border border-[#3b6fb8] text-[8px] font-black uppercase hover:bg-[#3868a8] text-blue-300">继续编辑</button>}
+                {hasImage && onSendToTexture && <button onClick={() => onSendToTexture(activeItem)} className="py-1.5 px-2.5 rounded-lg bg-[#312e5c] border border-[#6366f1] text-[8px] font-black uppercase hover:bg-[#3d3a70] text-indigo-300">贴图</button>}
+                {hasImage && onSendToGenerate3DImage && <button onClick={() => onSendToGenerate3DImage(activeItem)} className="py-1.5 px-2.5 rounded-lg bg-[#3d2a10] border border-[#d97706] text-[8px] font-black uppercase hover:bg-[#b45309] text-amber-300">生成3D</button>}
+                {has3DModelUrl && onSendToGenerate3DModel && <button onClick={() => onSendToGenerate3DModel(activeItem)} className="py-1.5 px-2.5 rounded-lg bg-[#14532d] border border-[#34d399] text-[8px] font-black uppercase hover:bg-[#166534] text-emerald-300">生成3D 中使用</button>}
               </div>
             </div>
           )}
@@ -1769,23 +1785,23 @@ const MainApp: React.FC = () => {
   const TextureEngineSection = () => (
     <div className="flex flex-col lg:flex-row gap-8">
       <div className="w-full lg:w-1/3 space-y-6">
-        <section className="glass p-6 rounded-[2.5rem] border-white/5 bg-black/40">
+        <section className="glass p-6 rounded-[2.5rem] border-[#252528] bg-[#16161a]">
           <div className="flex justify-between items-center mb-6"><h3 className="text-[10px] font-black text-blue-400 uppercase">源贴图输入</h3></div>
           {!textureSource ? (
             <div className="space-y-4">
-              <label className="w-full h-64 cursor-pointer group flex flex-col items-center justify-center border-2 border-dashed border-white/10 rounded-3xl hover:bg-blue-600/5 transition-all">
+              <label className="w-full h-64 cursor-pointer group flex flex-col items-center justify-center border-2 border-dashed border-[#2e2e32] rounded-3xl hover:bg-[#1a2332] transition-all">
                 <AppIcon name="image" className="w-8 h-8 mb-4" />
                 <span className="text-[9px] font-black uppercase text-gray-500">上传源图像</span>
                 <input type="file" className="hidden" accept="image/*" onChange={e => handleFileUpload(e, setTextureSource)} />
               </label>
-              <button onClick={() => openPicker(undefined, (items) => setTextureSource(items[0]?.data ?? ''))} className="w-full py-4 bg-white/5 border border-white/10 rounded-2xl text-[9px] font-black uppercase tracking-widest hover:bg-white/10 transition-all flex items-center justify-center gap-2">
+              <button onClick={() => openPicker(undefined, (items) => setTextureSource(items[0]?.data ?? ''))} className="w-full py-4 bg-[#1c1c22] border border-[#2e2e32] rounded-2xl text-[9px] font-black uppercase tracking-widest hover:bg-[#2e2e36] transition-all flex items-center justify-center gap-2">
                 <AppIcon name="package" className="w-4 h-4" /> 从资产库导入
               </button>
             </div>
           ) : (
-            <div className="relative aspect-square rounded-2xl overflow-hidden border border-white/10 group">
+            <div className="relative aspect-square rounded-2xl overflow-hidden border border-[#2e2e32] group">
               <img src={textureSource} className="w-full h-full object-cover" />
-              <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+              <div className="absolute inset-0 bg-[#16161a] opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
                 <button onClick={() => setTextureSource('')} className="bg-red-500 px-4 py-2 rounded-full text-[8px] font-black uppercase">移除</button>
               </div>
             </div>
@@ -1798,9 +1814,9 @@ const MainApp: React.FC = () => {
             {textureSource ? (
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                 <RegionSelector src={textureSource} onConfirm={(cropped) => runTextureProcessing(cropped, 'pattern')} onCancel={() => setTextureSource('')} />
-                <div className="relative aspect-square glass rounded-[2rem] bg-black/40 flex items-center justify-center overflow-hidden">
+                <div className="relative aspect-square glass rounded-[2rem] bg-[#16161a] flex items-center justify-center overflow-hidden">
                   {textureResult ? <img src={textureResult} className="max-w-full max-h-full object-contain p-8" /> : <span className="text-[10px] font-black uppercase text-gray-700">提取结果待生成</span>}
-                  {isTextureProcessing && <div className="absolute inset-0 bg-black/60 flex items-center justify-center"><div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" /></div>}
+                  {isTextureProcessing && <div className="absolute inset-0 bg-[#1a1a1e] flex items-center justify-center"><div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" /></div>}
                 </div>
                 {lastTextureRecordId && textureResult && (() => {
                   const recordId = lastTextureRecordId;
@@ -1813,7 +1829,7 @@ const MainApp: React.FC = () => {
                           key={score}
                           type="button"
                           onClick={() => { updateGenerationScore(recordId, score); setRatingCache(prev => ({ ...prev, [recordId]: score })); }}
-                          className={`w-7 h-7 rounded border flex items-center justify-center text-[11px] transition-all ${(currentScore ?? 0) >= score ? 'border-amber-500/50 bg-amber-500/20 text-amber-400' : 'border-white/20 bg-white/5 hover:bg-amber-500/20 hover:border-amber-500/40 text-gray-500'}`}
+                          className={`w-7 h-7 rounded border flex items-center justify-center text-[11px] transition-all ${(currentScore ?? 0) >= score ? 'border-[#f59e0b] bg-[#3d3018] text-amber-400' : 'border-[#3a3a40] bg-[#1c1c22] hover:bg-[#3d3018] hover:border-[#d97706] text-gray-500'}`}
                           title={`${score} 星`}
                         ><AppIcon name="star" className="w-3.5 h-3.5" /></button>
                       ))}
@@ -1828,14 +1844,14 @@ const MainApp: React.FC = () => {
         {step === AppStep.T_TILE && (
           <div className="flex flex-col gap-8 animate-in fade-in">
              <div className="flex gap-4">
-                <div className="flex-1 bg-white/5 p-4 rounded-2xl flex items-center gap-4">
+                <div className="flex-1 bg-[#1c1c22] p-4 rounded-2xl flex items-center gap-4">
                    <span className="text-[8px] font-black uppercase text-gray-500 whitespace-nowrap">预览密度: {tilingScale}x</span>
                    <input type="range" min="1" max="8" value={tilingScale} onChange={e => setTilingScale(parseInt(e.target.value))} className="flex-1" />
                 </div>
                 <button onClick={() => runTextureProcessing(textureSource, 'tileable')} disabled={!textureSource} className="px-10 py-4 bg-indigo-600 rounded-full text-[9px] font-black uppercase electric-glow disabled:opacity-20 transition-all">生成循环贴图</button>
              </div>
              <div className="flex-1 glass rounded-[2rem] relative overflow-hidden bg-[#0a0a0a] min-h-[500px]" style={{ backgroundImage: `url(${textureResult || textureSource})`, backgroundRepeat: 'repeat', backgroundSize: `${100 / tilingScale}%` }}>
-                {isTextureProcessing && <div className="absolute inset-0 bg-black/60 flex items-center justify-center"><div className="w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" /></div>}
+                {isTextureProcessing && <div className="absolute inset-0 bg-[#1a1a1e] flex items-center justify-center"><div className="w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" /></div>}
              </div>
           </div>
         )}
@@ -2015,43 +2031,43 @@ const MainApp: React.FC = () => {
 
     return (
       <div className="space-y-8">
-        <section className="glass p-6 rounded-[2.5rem] border-white/5">
+        <section className="glass p-6 rounded-[2.5rem] border-[#252528]">
           <h3 className="text-[10px] font-black text-blue-400 uppercase mb-4">筛选与导出</h3>
           <div className="flex flex-wrap items-center gap-4 mb-4">
-            <button type="button" onClick={() => setMode(AppMode.ARENA)} className="px-4 py-2 rounded-xl bg-amber-600/20 border border-amber-500/30 text-[9px] font-black uppercase text-amber-400 hover:bg-amber-600/30 transition-all">去对比测试</button>
+            <button type="button" onClick={() => setMode(AppMode.ARENA)} className="px-4 py-2 rounded-xl bg-[#3d2a10] border border-[#b45309] text-[9px] font-black uppercase text-amber-400 hover:bg-[#92400e] transition-all">去对比测试</button>
             <span className="text-[9px] font-black text-gray-500 uppercase">来源</span>
-            <select value={filterSource} onChange={e => setFilterSource(e.target.value as any)} className="bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500 transition-colors">
+            <select value={filterSource} onChange={e => setFilterSource(e.target.value as any)} className="bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500 transition-colors">
               <option value="all">全部</option>
               <option value="dialog">对话</option>
               <option value="texture">提取花纹</option>
             </select>
             <span className="text-[9px] font-black text-gray-500 uppercase ml-4">评分</span>
-            <select value={filterRated} onChange={e => setFilterRated(e.target.value as any)} className="bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500 transition-colors">
+            <select value={filterRated} onChange={e => setFilterRated(e.target.value as any)} className="bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500 transition-colors">
               <option value="all">全部</option>
               <option value="yes">已评分</option>
               <option value="no">未评分</option>
             </select>
-            <button onClick={exportJson} className="px-4 py-2 bg-blue-600/20 border border-blue-500/30 rounded-xl text-[9px] font-black uppercase text-blue-400 hover:bg-blue-600/30 transition-all">导出 JSON</button>
-            <button onClick={exportStructuredJson} className="px-4 py-2 bg-amber-600/20 border border-amber-500/30 rounded-xl text-[9px] font-black uppercase text-amber-400 hover:bg-amber-600/30 transition-all" title="主体/场景/风格/修饰/参数化模板，便于代码转自然语言">导出结构化 JSON</button>
-            <button onClick={exportCsv} className="px-4 py-2 bg-blue-600/20 border border-blue-500/30 rounded-xl text-[9px] font-black uppercase text-blue-400 hover:bg-blue-600/30 transition-all">导出 CSV</button>
+            <button onClick={exportJson} className="px-4 py-2 bg-[#1e3558] border border-[#4b6a9e] rounded-xl text-[9px] font-black uppercase text-blue-400 hover:bg-[#305a90] transition-all">导出 JSON</button>
+            <button onClick={exportStructuredJson} className="px-4 py-2 bg-[#3d2a10] border border-[#b45309] rounded-xl text-[9px] font-black uppercase text-amber-400 hover:bg-[#92400e] transition-all" title="主体/场景/风格/修饰/参数化模板，便于代码转自然语言">导出结构化 JSON</button>
+            <button onClick={exportCsv} className="px-4 py-2 bg-[#1e3558] border border-[#4b6a9e] rounded-xl text-[9px] font-black uppercase text-blue-400 hover:bg-[#305a90] transition-all">导出 CSV</button>
             <span className="text-[9px] font-black text-gray-500 uppercase ml-4">显示</span>
-            <button onClick={() => setViewMode('list')} className={`px-4 py-2 rounded-xl text-[9px] font-black uppercase border transition-all ${viewMode === 'list' ? 'bg-blue-600/20 text-blue-400 border-blue-500/30' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}>列表</button>
-            <button onClick={() => setViewMode('repro')} className={`px-4 py-2 rounded-xl text-[9px] font-black uppercase border transition-all ${viewMode === 'repro' ? 'bg-blue-600/20 text-blue-400 border-blue-500/30' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}>复现模板</button>
+            <button onClick={() => setViewMode('list')} className={`px-4 py-2 rounded-xl text-[9px] font-black uppercase border transition-all ${viewMode === 'list' ? 'bg-[#1e3558] text-blue-400 border-[#4b6a9e]' : 'bg-[#1c1c22] border-[#2e2e32] hover:bg-[#2e2e36]'}`}>列表</button>
+            <button onClick={() => setViewMode('repro')} className={`px-4 py-2 rounded-xl text-[9px] font-black uppercase border transition-all ${viewMode === 'repro' ? 'bg-[#1e3558] text-blue-400 border-[#4b6a9e]' : 'bg-[#1c1c22] border-[#2e2e32] hover:bg-[#2e2e36]'}`}>复现模板</button>
           </div>
           <p className="text-[9px] text-gray-500">共 {filtered.length} 条（最近 500 条），仅读分析用，不改动提示词或配置。</p>
         </section>
-        <section className="glass p-6 rounded-[2.5rem] border-white/5">
+        <section className="glass p-6 rounded-[2.5rem] border-[#252528]">
           <h3 className="text-[10px] font-black text-blue-400 uppercase mb-4">按来源聚合</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {(Object.entries(bySource) as [string, SourceAggregate][]).map(([key, agg]) => (
-              <div key={key} className="bg-black/40 rounded-xl p-4 border border-white/10">
+              <div key={key} className="bg-[#16161a] rounded-xl p-4 border border-[#2e2e32]">
                 <div className="text-[10px] font-black uppercase text-blue-400 mb-2">{key}</div>
                 <div className="text-[9px] text-gray-400 space-y-1">条数 {agg.count} · 已评 {agg.rated} · 平均分 {agg.rated ? (agg.sumScore / agg.rated).toFixed(1) : '-'}</div>
                 {agg.samples.length > 0 && (
                   <div className="mt-3 space-y-2">
                     <div className="text-[8px] font-black text-gray-500 uppercase">高分样本（≥4 星）</div>
                     {agg.samples.slice(0, 3).map((s, i) => (
-                      <div key={i} className="text-[9px] text-gray-300 bg-white/5 rounded-lg p-2 border border-white/5">
+                      <div key={i} className="text-[9px] text-gray-300 bg-[#1c1c22] rounded-lg p-2 border border-[#252528]">
                         <span className="text-amber-400">{s.userScore} 星</span> {s.instruction ?? s.fullPrompt}
                       </div>
                     ))}
@@ -2061,13 +2077,13 @@ const MainApp: React.FC = () => {
             ))}
           </div>
         </section>
-        <section className="glass p-6 rounded-[2.5rem] border-white/5">
+        <section className="glass p-6 rounded-[2.5rem] border-[#252528]">
           <h3 className="text-[10px] font-black text-blue-400 uppercase mb-4">{viewMode === 'repro' ? '结构化复现模板' : '记录列表'}</h3>
           {viewMode === 'list' ? (
             <>
               <div className="overflow-x-auto max-h-[60vh] overflow-y-auto">
                 <table className="w-full text-left text-[9px]">
-                  <thead className="sticky top-0 bg-black/80 border-b border-white/10">
+                  <thead className="sticky top-0 bg-[#1e1e22] border-b border-[#2e2e32]">
                     <tr>
                       <th className="py-2 px-2">时间</th>
                       <th className="py-2 px-2">来源</th>
@@ -2077,7 +2093,7 @@ const MainApp: React.FC = () => {
                   </thead>
                   <tbody>
                     {filtered.slice(0, 100).map(r => (
-                      <tr key={r.id} className="border-b border-white/5 hover:bg-white/5">
+                      <tr key={r.id} className="border-b border-[#252528] hover:bg-[#222228]">
                         <td className="py-2 px-2 text-gray-400">{new Date(r.timestamp).toLocaleString()}</td>
                         <td className="py-2 px-2">{r.source}{r.textureType ? `:${r.textureType}` : ''}</td>
                         <td className="py-2 px-2">{r.userScore != null ? `${r.userScore} 星` : '-'}</td>
@@ -2116,39 +2132,39 @@ const MainApp: React.FC = () => {
                   }
                 };
                 return (
-                  <div key={r.id} className="bg-black/40 rounded-xl border border-white/10 overflow-hidden">
-                    <div className="flex items-center justify-between px-4 py-2 border-b border-white/10 bg-white/5 flex-wrap gap-2">
+                  <div key={r.id} className="bg-[#16161a] rounded-xl border border-[#2e2e32] overflow-hidden">
+                    <div className="flex items-center justify-between px-4 py-2 border-b border-[#2e2e32] bg-[#1c1c22] flex-wrap gap-2">
                       <span className="text-[9px] font-black text-blue-400 uppercase">
                         {r.source === 'dialog' ? '对话' : `贴图 · ${r.textureType ?? '-'}`}
                         {r.userScore != null && <span className="text-amber-400 ml-2">{r.userScore} 星</span>}
                         {hasLlm && <span className="text-emerald-400 ml-2">LLM</span>}
                       </span>
                       <div className="flex items-center gap-2">
-                        <button type="button" onClick={runLlmParse} disabled={loading} className="px-3 py-1.5 rounded-lg bg-emerald-600/20 border border-emerald-500/30 text-[9px] font-black uppercase text-emerald-400 hover:bg-emerald-600/30 transition-all disabled:opacity-50" title="用大模型解析主体/场景/风格/修饰">{loading ? '解析中…' : '用 LLM 解析'}</button>
-                        <button type="button" onClick={() => navigator.clipboard.writeText(template)} className="px-3 py-1.5 rounded-lg bg-amber-600/20 border border-amber-500/30 text-[9px] font-black uppercase text-amber-400 hover:bg-amber-600/30 transition-all" title="复制参数化模板">复制模板</button>
-                        <button type="button" onClick={() => navigator.clipboard.writeText(jsonStr)} className="px-3 py-1.5 rounded-lg bg-white/10 border border-white/20 text-[9px] font-black uppercase hover:bg-white/20 transition-all" title="复制结构化 JSON">复制 JSON</button>
-                        <button type="button" onClick={() => navigator.clipboard.writeText(fullText)} className="px-3 py-1.5 rounded-lg bg-blue-600/20 border border-blue-500/30 text-[9px] font-black uppercase text-blue-400 hover:bg-blue-600/30 transition-all">复制本条</button>
+                        <button type="button" onClick={runLlmParse} disabled={loading} className="px-3 py-1.5 rounded-lg bg-[#14532d] border border-[#34d399] text-[9px] font-black uppercase text-emerald-400 hover:bg-[#166534] transition-all disabled:opacity-50" title="用大模型解析主体/场景/风格/修饰">{loading ? '解析中…' : '用 LLM 解析'}</button>
+                        <button type="button" onClick={() => navigator.clipboard.writeText(template)} className="px-3 py-1.5 rounded-lg bg-[#3d2a10] border border-[#b45309] text-[9px] font-black uppercase text-amber-400 hover:bg-[#92400e] transition-all" title="复制参数化模板">复制模板</button>
+                        <button type="button" onClick={() => navigator.clipboard.writeText(jsonStr)} className="px-3 py-1.5 rounded-lg bg-[#26262c] border border-[#3a3a40] text-[9px] font-black uppercase hover:bg-[#383842] transition-all" title="复制结构化 JSON">复制 JSON</button>
+                        <button type="button" onClick={() => navigator.clipboard.writeText(fullText)} className="px-3 py-1.5 rounded-lg bg-[#1e3558] border border-[#4b6a9e] text-[9px] font-black uppercase text-blue-400 hover:bg-[#305a90] transition-all">复制本条</button>
                       </div>
                     </div>
-                    {err && <div className="px-4 py-1.5 bg-red-900/20 border-b border-red-500/20 text-[10px] text-red-300">{err}</div>}
+                    {err && <div className="px-4 py-1.5 bg-[#5c2020] border-b border-[#b85a5a] text-[10px] text-red-300">{err}</div>}
                     <div className="p-4 space-y-4">
                       <div>
                         <div className="text-[8px] font-black text-gray-500 uppercase mb-2">结构化提示词（Imagen 建议写法）</div>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[10px]">
-                          <div className="bg-white/5 rounded-lg p-2 border border-white/5"><span className="text-gray-500">主体：</span><span className="text-gray-300">{structured.subject || '—'}</span></div>
-                          <div className="bg-white/5 rounded-lg p-2 border border-white/5"><span className="text-gray-500">场景/背景：</span><span className="text-gray-300">{structured.scene || '—'}</span></div>
-                          <div className="bg-white/5 rounded-lg p-2 border border-white/5"><span className="text-gray-500">风格：</span><span className="text-gray-300">{structured.style || '—'}</span></div>
-                          <div className="bg-white/5 rounded-lg p-2 border border-white/5"><span className="text-gray-500">可选修饰：</span><span className="text-gray-300">{structured.modifiers || '—'}</span></div>
+                          <div className="bg-[#1c1c22] rounded-lg p-2 border border-[#252528]"><span className="text-gray-500">主体：</span><span className="text-gray-300">{structured.subject || '—'}</span></div>
+                          <div className="bg-[#1c1c22] rounded-lg p-2 border border-[#252528]"><span className="text-gray-500">场景/背景：</span><span className="text-gray-300">{structured.scene || '—'}</span></div>
+                          <div className="bg-[#1c1c22] rounded-lg p-2 border border-[#252528]"><span className="text-gray-500">风格：</span><span className="text-gray-300">{structured.style || '—'}</span></div>
+                          <div className="bg-[#1c1c22] rounded-lg p-2 border border-[#252528]"><span className="text-gray-500">可选修饰：</span><span className="text-gray-300">{structured.modifiers || '—'}</span></div>
                         </div>
                       </div>
                       <div>
                         <div className="text-[8px] font-black text-gray-500 uppercase mb-2">参数化模板（占位符组句，便于复现）</div>
-                        <pre className="p-3 rounded-lg bg-black/40 border border-white/10 text-[10px] text-amber-200/90 font-mono whitespace-pre-wrap break-all">{template}</pre>
+                        <pre className="p-3 rounded-lg bg-[#16161a] border border-[#2e2e32] text-[10px] text-amber-200/90 font-mono whitespace-pre-wrap break-all">{template}</pre>
                         <p className="text-[8px] text-gray-500 mt-1">在代码中用占位符替换后生成自然语言，再发给模型。</p>
                       </div>
                       <details className="group">
                         <summary className="text-[9px] font-black text-gray-500 uppercase cursor-pointer hover:text-gray-400">原始完整句</summary>
-                        <pre className="mt-2 p-3 rounded-lg bg-black/40 border border-white/5 text-[9px] text-gray-400 whitespace-pre-wrap overflow-x-auto max-h-32">{r.fullPrompt}</pre>
+                        <pre className="mt-2 p-3 rounded-lg bg-[#16161a] border border-[#252528] text-[9px] text-gray-400 whitespace-pre-wrap overflow-x-auto max-h-32">{r.fullPrompt}</pre>
                       </details>
                     </div>
                   </div>
@@ -2164,12 +2180,23 @@ const MainApp: React.FC = () => {
 
   return (
     <div className="min-h-[100dvh] bg-[#050505] text-white flex flex-col lg:flex-row relative isolate font-sans overflow-hidden">
-      <DotGrid />
+      <div className="pointer-events-none absolute inset-0 -z-10 min-h-[100dvh] overflow-hidden" aria-hidden>
+        <Waves
+          backgroundColor="#050505"
+          lineColor="rgba(148, 163, 184, 0.11)"
+          lineWidth={1.2}
+          softBlurPx={1.4}
+          xGap={14}
+          yGap={38}
+          waveAmpX={26}
+          waveAmpY={13}
+        />
+      </div>
       <AssetViewer item={activeAssetId} onClose={() => setActiveAssetId(null)} />
       {isLibraryPickerOpen && <LibraryPickerModal library={library} filter={pickerFilter} multiSelect={pickerMultiSelect} onSelect={(items) => { pickerCallback(items); setIsLibraryPickerOpen(false); }} onClose={() => setIsLibraryPickerOpen(false)} />}
 
       <div className={`fixed top-1/2 left-4 -translate-y-1/2 z-[1001] w-14 max-h-[calc(100dvh-2rem)] transition-all ${isSidebarOpen ? 'opacity-100' : 'opacity-100'}`}>
-        <div className="rounded-2xl border border-white/10 bg-black/55 backdrop-blur-xl shadow-2xl p-2 overflow-y-auto no-scrollbar">
+        <div className="rounded-2xl border border-[#2e2e32] bg-[#121214] shadow-2xl p-2 overflow-y-auto no-scrollbar">
           <div className="flex flex-col items-center gap-2">
             {user ? (
               <div className="w-full">
@@ -2182,7 +2209,7 @@ const MainApp: React.FC = () => {
                   value=""
                   placeholder="◎"
                   onChange={(value) => { void handleUserMenuAction(value); }}
-                  triggerClassName="w-full h-10 bg-white/5 border border-white/10 rounded-xl px-0 py-0 text-[14px] text-center flex items-center justify-center outline-none focus:border-blue-500 hover:bg-white/10 transition-colors"
+                  triggerClassName="w-full h-10 bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-0 py-0 text-[14px] text-center flex items-center justify-center outline-none focus:border-blue-500 hover:bg-[#2e2e36] transition-colors"
                 />
               </div>
             ) : null}
@@ -2200,15 +2227,16 @@ const MainApp: React.FC = () => {
               <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><circle cx="10" cy="10" r="2.5" stroke="currentColor" strokeWidth="1.6"/><path d="M10 3v2.1M10 14.9V17M17 10h-2.1M5.1 10H3M14.9 5.1l-1.5 1.5M6.6 13.4l-1.5 1.5M14.9 14.9l-1.5-1.5M6.6 6.6 5.1 5.1" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
             </SidebarIconButton>
 
-            <div className={`rounded-xl border overflow-hidden ${isExperimentalMode(mode) && !experimentalNavExpanded ? 'border-blue-500/25' : 'border-white/10'}`}>
+            <div className={`rounded-xl border overflow-hidden ${isExperimentalMode(mode) && !experimentalNavExpanded ? 'border-blue-500/25' : 'border-[#2e2e32]'}`}>
               <button
                 type="button"
                 onClick={() => setExperimentalNavExpanded((e) => !e)}
-                className={`group relative w-full h-10 flex items-center justify-center text-[15px] transition-colors ${isExperimentalMode(mode) && !experimentalNavExpanded ? 'text-blue-400/90 bg-blue-600/10 hover:bg-blue-600/15' : 'text-gray-400 hover:bg-white/10'}`}
+                className={`group relative w-full h-10 flex items-center justify-center text-[15px] transition-colors duration-200 cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/50 ${isExperimentalMode(mode) && !experimentalNavExpanded ? 'text-blue-400/90 bg-[#152642] hover:bg-[#1a2d4d]' : 'text-gray-400 hover:bg-[#2e2e36]'}`}
                 aria-label="实验性功能"
+                aria-expanded={experimentalNavExpanded}
               >
                 <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><path d="M8 3.5h4M9 3.5v4.2l-4.1 6.6a2 2 0 0 0 1.7 3h6.8a2 2 0 0 0 1.7-3L11 7.7V3.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/><path d="M6.8 12.5h6.4" stroke="currentColor" strokeWidth="1.4"/></svg>
-                <span className="pointer-events-none absolute left-[calc(100%+10px)] top-1/2 -translate-y-1/2 rounded-lg border border-white/10 bg-black/90 px-2 py-1 text-[10px] text-gray-200 whitespace-nowrap opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-150">
+                <span className="pointer-events-none absolute left-[calc(100%+10px)] top-1/2 -translate-y-1/2 rounded-lg border border-[#2e2e32] bg-[#050505] px-2 py-1 text-[10px] text-gray-200 whitespace-nowrap opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-150">
                   实验性功能
                 </span>
               </button>
@@ -2216,7 +2244,7 @@ const MainApp: React.FC = () => {
           </div>
 
           {experimentalNavExpanded && (
-            <div className="mt-2 pt-2 border-t border-white/10 flex flex-col gap-2">
+            <div className="mt-2 pt-2 border-t border-[#2e2e32] flex flex-col gap-2">
               <SidebarIconButton active={mode === AppMode.DIALOG} label="对话" onClick={() => { setMode(AppMode.DIALOG); setIsSidebarOpen(false); }}>
                 <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><path d="M4 5.5h12v8H9l-3.5 3v-3H4v-8Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"/></svg>
               </SidebarIconButton>
@@ -2260,21 +2288,21 @@ const MainApp: React.FC = () => {
             {mode === AppMode.WORKFLOW && !activeWorkspaceProjectId && (
               <>
                 {user?.id && isWorkspaceCloudEnabled() ? (
-                  <div className="max-w-6xl mx-auto w-full mb-5 rounded-2xl border border-cyan-400/20 bg-gradient-to-r from-cyan-500/10 via-blue-600/10 to-violet-600/10 px-4 py-3">
+                  <div className="max-w-6xl mx-auto w-full mb-5 rounded-2xl border border-[#22d3ee] bg-[#101820] px-4 py-3">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <span className="text-[10px] font-black uppercase tracking-wider text-cyan-300/90">工作区云空间</span>
                       <span className="text-[11px] text-white font-mono tabular-nums" title="仅统计已同步到云端的流程图片">
                         {formatWorkspaceCloudMb(workspaceCloudUsedBytes)} / {formatWorkspaceCloudMb(workspaceCloudQuotaBytes)}
                       </span>
                     </div>
-                    <div className="mt-2 h-2.5 rounded-full bg-white/10 overflow-hidden">
+                    <div className="mt-2 h-2.5 rounded-full bg-[#26262c] overflow-hidden">
                       <div
                         className={`h-full rounded-full transition-all ${
                           workspaceCloudUsageRatio >= 0.95
-                            ? 'bg-gradient-to-r from-rose-500 to-amber-400'
+                            ? 'bg-[#c45c4a]'
                             : workspaceCloudUsageRatio >= 0.8
-                            ? 'bg-gradient-to-r from-amber-400 to-orange-500'
-                            : 'bg-gradient-to-r from-cyan-400 via-blue-500 to-violet-500'
+                            ? 'bg-[#c2873a]'
+                            : 'bg-[#3d5a80]'
                         }`}
                         style={{ width: `${workspaceCloudUsagePercent}%` }}
                       />
@@ -2285,7 +2313,7 @@ const MainApp: React.FC = () => {
                     </div>
                   </div>
                 ) : user?.id && !isWorkspaceCloudEnabled() ? (
-                  <div className="max-w-6xl mx-auto w-full mb-5 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-[10px] text-gray-500">
+                  <div className="max-w-6xl mx-auto w-full mb-5 rounded-xl border border-[#2e2e32] bg-[#121214] px-4 py-2.5 text-[10px] text-gray-500">
                     工作区云同步已关闭（VITE_WORKSPACE_CLOUD=false），数据仅保存在本机。
                   </div>
                 ) : null}
@@ -2304,7 +2332,7 @@ const MainApp: React.FC = () => {
                   <button
                     type="button"
                     onClick={backToWorkspaceProjectShell}
-                    className="inline-flex items-center justify-center w-9 h-9 rounded-xl bg-white/5 border border-white/10 text-gray-300 hover:bg-white/10 hover:text-white transition-colors"
+                    className="inline-flex items-center justify-center w-9 h-9 rounded-xl bg-[#1c1c22] border border-[#2e2e32] text-gray-300 hover:bg-[#2e2e36] hover:text-white transition-colors duration-200 cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
                     title="返回项目列表"
                     aria-label="返回项目列表"
                   >
@@ -2327,7 +2355,7 @@ const MainApp: React.FC = () => {
                         openWorkspaceProject(id);
                       }}
                       placeholder={activeWorkspaceProjectName || '选择项目'}
-                      triggerClassName="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[10px] text-left flex items-center justify-between outline-none focus:border-blue-500 hover:bg-white/10 transition-colors"
+                      triggerClassName="w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[10px] text-left flex items-center justify-between outline-none focus:border-blue-500 hover:bg-[#2e2e36] transition-colors"
                     />
                   </div>
                   {workspaceCloudHydratingProjectId === activeWorkspaceProjectId ? (
@@ -2336,21 +2364,21 @@ const MainApp: React.FC = () => {
                     </span>
                   ) : null}
                   {user?.id && isWorkspaceCloudEnabled() ? (
-                    <div className="ml-auto min-w-[15rem] rounded-xl border border-cyan-400/25 bg-gradient-to-r from-cyan-500/10 via-blue-600/10 to-violet-600/10 px-3 py-2">
+                    <div className="ml-auto min-w-[15rem] rounded-xl border border-[#22d3ee] bg-[#101820] px-3 py-2">
                       <div className="flex items-center justify-between text-[9px]">
                         <span className="font-black uppercase text-cyan-300/90">云空间</span>
                         <span className="font-mono tabular-nums text-white/90">
                           {formatWorkspaceCloudMb(workspaceCloudUsedBytes)} / {formatWorkspaceCloudMb(workspaceCloudQuotaBytes)}
                         </span>
                       </div>
-                      <div className="mt-1.5 h-1.5 rounded-full bg-white/10 overflow-hidden">
+                      <div className="mt-1.5 h-1.5 rounded-full bg-[#26262c] overflow-hidden">
                         <div
                           className={`h-full rounded-full transition-all ${
                             workspaceCloudUsageRatio >= 0.95
-                              ? 'bg-gradient-to-r from-rose-500 to-amber-400'
+                              ? 'bg-[#c45c4a]'
                               : workspaceCloudUsageRatio >= 0.8
-                              ? 'bg-gradient-to-r from-amber-400 to-orange-500'
-                              : 'bg-gradient-to-r from-cyan-400 via-blue-500 to-violet-500'
+                              ? 'bg-[#c2873a]'
+                              : 'bg-[#3d5a80]'
                           }`}
                           style={{ width: `${workspaceCloudUsagePercent}%` }}
                         />
@@ -2359,7 +2387,7 @@ const MainApp: React.FC = () => {
                   ) : null}
                 </div>
                 {workspaceCloudQuotaSuspended ? (
-                  <div className="w-full max-w-6xl mx-auto mb-3 rounded-xl border border-amber-500/35 bg-amber-500/10 px-4 py-3 text-[11px] text-amber-100/95 leading-relaxed">
+                  <div className="w-full max-w-6xl mx-auto mb-3 rounded-xl border border-amber-500/35 bg-[#2c2412] px-4 py-3 text-[11px] text-amber-100/95 leading-relaxed">
                     工作区<strong className="font-semibold">云空间已满</strong>：新图片与同步已暂停上传，画布数据仍会保存在本机浏览器。删除云端项目中的图或请管理员调高配额后可恢复同步。关闭或刷新页面前请注意未上云的数据可能丢失。
                   </div>
                 ) : null}
@@ -2480,23 +2508,23 @@ const MainApp: React.FC = () => {
             {mode === AppMode.GENERATE_3D && (
               <div className="flex h-[calc(100dvh-6rem)] gap-4 lg:gap-6 animate-in fade-in overflow-hidden">
                 <div className="w-80 lg:w-96 shrink-0 flex flex-col gap-4 overflow-y-auto no-scrollbar pr-2">
-                <div className="px-2 py-1.5 rounded-xl bg-amber-500/15 border border-amber-500/30 text-[9px] font-black uppercase text-amber-400">生成3D · 未上线</div>
-                <div className="glass rounded-2xl p-4 lg:p-6 border border-white/10 bg-black/40">
+                <div className="px-2 py-1.5 rounded-xl bg-[#3a3018] border border-[#b45309] text-[9px] font-black uppercase text-amber-400">生成3D · 未上线</div>
+                <div className="glass rounded-2xl p-4 lg:p-6 border border-[#2e2e32] bg-[#16161a]">
                   {!creds3D ? (
                     <div className="space-y-4 py-8">
                       <h3 className="text-[10px] font-black text-amber-400 uppercase">配置腾讯云凭证</h3>
-                      <p className="text-[11px] text-gray-400">混元生3D 默认仅支持通过本地代理调用。请在项目根目录 <code className="bg-white/10 px-1 rounded">.env.local</code> 中配置 <code className="bg-white/10 px-1 rounded">TENCENT_SECRET_ID</code>、<code className="bg-white/10 px-1 rounded">TENCENT_SECRET_KEY</code>，启动 <code className="bg-white/10 px-1 rounded">npm run proxy</code>，并设置 <code className="bg-white/10 px-1 rounded">VITE_TENCENT_PROXY</code>。</p>
+                      <p className="text-[11px] text-gray-400">混元生3D 默认仅支持通过本地代理调用。请在项目根目录 <code className="bg-[#26262c] px-1 rounded">.env.local</code> 中配置 <code className="bg-[#26262c] px-1 rounded">TENCENT_SECRET_ID</code>、<code className="bg-[#26262c] px-1 rounded">TENCENT_SECRET_KEY</code>，启动 <code className="bg-[#26262c] px-1 rounded">npm run proxy</code>，并设置 <code className="bg-[#26262c] px-1 rounded">VITE_TENCENT_PROXY</code>。</p>
                       {unsafeTencentBrowserCredsEnabled ? (
                         <>
-                          <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[9px] text-amber-300">当前已显式开启不安全模式：浏览器可临时直持腾讯云密钥。仅建议本地排障使用，勿用于生产环境。</div>
+                          <div className="rounded-xl border border-[#b45309] bg-[#2c2412] px-3 py-2 text-[9px] text-amber-300">当前已显式开启不安全模式：浏览器可临时直持腾讯云密钥。仅建议本地排障使用，勿用于生产环境。</div>
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <input value={generate3DCredsOverride?.secretId ?? ''} onChange={e => setGenerate3DCredsOverride(p => ({ secretId: e.target.value.trim(), secretKey: p?.secretKey ?? '' }))} placeholder="SecretId" className="bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-[11px] outline-none focus:border-blue-500" />
-                            <input type="password" value={generate3DCredsOverride?.secretKey ?? ''} onChange={e => setGenerate3DCredsOverride(p => ({ secretId: p?.secretId ?? '', secretKey: e.target.value }))} placeholder="SecretKey" className="bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-[11px] outline-none focus:border-blue-500" />
+                            <input value={generate3DCredsOverride?.secretId ?? ''} onChange={e => setGenerate3DCredsOverride(p => ({ secretId: e.target.value.trim(), secretKey: p?.secretKey ?? '' }))} placeholder="SecretId" className="bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-4 py-3 text-[11px] outline-none focus:border-blue-500" />
+                            <input type="password" value={generate3DCredsOverride?.secretKey ?? ''} onChange={e => setGenerate3DCredsOverride(p => ({ secretId: p?.secretId ?? '', secretKey: e.target.value }))} placeholder="SecretKey" className="bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-4 py-3 text-[11px] outline-none focus:border-blue-500" />
                           </div>
                         </>
                       ) : (
-                        <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-[9px] text-gray-400">
-                          如确需在浏览器直接调试，可在本地临时设置 <code className="bg-white/10 px-1 rounded">VITE_ALLOW_UNSAFE_TENCENT_BROWSER_CREDS=true</code> 后刷新页面，再手动输入凭证。
+                        <div className="rounded-xl border border-[#2e2e32] bg-[#1c1c22] px-3 py-2 text-[9px] text-gray-400">
+                          如确需在浏览器直接调试，可在本地临时设置 <code className="bg-[#26262c] px-1 rounded">VITE_ALLOW_UNSAFE_TENCENT_BROWSER_CREDS=true</code> 后刷新页面，再手动输入凭证。
                         </div>
                       )}
                       <p className="text-[9px] text-gray-500">密钥在 <a href="https://console.cloud.tencent.com/cam/capi" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">腾讯云 API 密钥</a> 创建；混元生3D 需开通 <a href="https://cloud.tencent.com/document/product/1804" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">产品页</a>。</p>
@@ -2511,7 +2539,7 @@ const MainApp: React.FC = () => {
                             <button
                               key={m.id}
                               onClick={() => setGenerate3DModule(m.id)}
-                              className={`w-full text-left px-3 py-2.5 rounded-xl border transition-colors ${generate3DModule === m.id ? 'bg-blue-600/20 border-blue-500/50 text-blue-300' : 'bg-white/5 border-white/10 text-gray-400 hover:bg-white/10 hover:text-white'}`}
+                              className={`w-full text-left px-3 py-2.5 rounded-xl border transition-colors ${generate3DModule === m.id ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300' : 'bg-[#1c1c22] border-[#2e2e32] text-gray-400 hover:bg-[#2e2e36] hover:text-white'}`}
                             >
                               <div className="text-[10px] font-black">{m.name}</div>
                               <div className="text-[9px] text-gray-500 mt-0.5">{m.desc}</div>
@@ -2521,32 +2549,32 @@ const MainApp: React.FC = () => {
                       </div>
 
                       {/* 当前模块表单 */}
-                      <div className="glass rounded-2xl p-4 border border-white/10 bg-black/30">
+                      <div className="glass rounded-2xl p-4 border border-[#2e2e32] bg-[#141416]">
                         {generate3DModule === 'pro' && (
                           <>
                             <p className="text-[9px] text-gray-500 mb-3">可选用 3.0/3.1，支持文生3D、图生3D（单图/多视图）、白模、草图、智能拓扑；3.1 支持八视图多角度输入。</p>
                             <div className="flex gap-2 mb-3">
-                              <button onClick={() => setGenerate3DMode('text')} className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${generate3DMode === 'text' ? 'bg-blue-600 border-blue-500' : 'bg-white/5 border-white/10 text-gray-500'}`}>文生3D</button>
-                              <button onClick={() => setGenerate3DMode('image')} className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${generate3DMode === 'image' ? 'bg-blue-600 border-blue-500' : 'bg-white/5 border-white/10 text-gray-500'}`}>图生3D</button>
+                              <button onClick={() => setGenerate3DMode('text')} className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${generate3DMode === 'text' ? 'bg-blue-600 border-blue-500' : 'bg-[#1c1c22] border-[#2e2e32] text-gray-500'}`}>文生3D</button>
+                              <button onClick={() => setGenerate3DMode('image')} className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${generate3DMode === 'image' ? 'bg-blue-600 border-blue-500' : 'bg-[#1c1c22] border-[#2e2e32] text-gray-500'}`}>图生3D</button>
                             </div>
                             {generate3DMode === 'text' ? (
-                              <textarea value={generate3DPrompt} onChange={e => setGenerate3DPrompt(e.target.value)} placeholder="文本描述…" rows={2} className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none mb-3" />
+                              <textarea value={generate3DPrompt} onChange={e => setGenerate3DPrompt(e.target.value)} placeholder="文本描述…" rows={2} className="w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none mb-3" />
                             ) : (
                               <>
                                 <div className="flex gap-2 mb-3">
-                                  <button onClick={() => { setGenerate3DImageMode('single'); setGenerate3DMultiViewImages({}); }} className={`flex-1 py-2 rounded-xl text-[9px] font-black uppercase border ${generate3DImageMode === 'single' ? 'bg-blue-600/20 border-blue-500/50 text-blue-300' : 'bg-white/5 border-white/10 text-gray-500'}`}>单图生成</button>
-                                  <button onClick={() => { setGenerate3DImageMode('multi'); setGenerate3DImage(null); }} className={`flex-1 py-2 rounded-xl text-[9px] font-black uppercase border ${generate3DImageMode === 'multi' ? 'bg-blue-600/20 border-blue-500/50 text-blue-300' : 'bg-white/5 border-white/10 text-gray-500'}`}>多图生成</button>
+                                  <button onClick={() => { setGenerate3DImageMode('single'); setGenerate3DMultiViewImages({}); }} className={`flex-1 py-2 rounded-xl text-[9px] font-black uppercase border ${generate3DImageMode === 'single' ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300' : 'bg-[#1c1c22] border-[#2e2e32] text-gray-500'}`}>单图生成</button>
+                                  <button onClick={() => { setGenerate3DImageMode('multi'); setGenerate3DImage(null); }} className={`flex-1 py-2 rounded-xl text-[9px] font-black uppercase border ${generate3DImageMode === 'multi' ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300' : 'bg-[#1c1c22] border-[#2e2e32] text-gray-500'}`}>多图生成</button>
                                 </div>
                                 {generate3DImageMode === 'single' ? (
                                   <div className="mb-3">
                                     {!generate3DImage ? (
-                                      <label className="block h-20 border-2 border-dashed border-white/10 rounded-xl flex items-center justify-center cursor-pointer hover:bg-white/5 text-[9px] text-gray-500">点击上传参考图<input type="file" className="hidden" accept="image/jpeg,image/png,image/webp" onChange={e => { const f = e.target.files?.[0]; if (f) { const r = new FileReader(); r.onload = () => setGenerate3DImage(r.result as string); r.readAsDataURL(f); } }} /></label>
+                                      <label className="block h-20 border-2 border-dashed border-[#2e2e32] rounded-xl flex items-center justify-center cursor-pointer hover:bg-[#222228] text-[9px] text-gray-500">点击上传参考图<input type="file" className="hidden" accept="image/jpeg,image/png,image/webp" onChange={e => { const f = e.target.files?.[0]; if (f) { const r = new FileReader(); r.onload = () => setGenerate3DImage(r.result as string); r.readAsDataURL(f); } }} /></label>
                                     ) : (
-                                      <div className="relative inline-block"><img src={generate3DImage} alt="参考" className="max-h-20 rounded-xl border border-white/10" /><button onClick={() => setGenerate3DImage(null)} className="absolute top-1 right-1 w-5 h-5 bg-red-500 rounded text-white text-xs">×</button></div>
+                                      <div className="relative inline-block"><img src={generate3DImage} alt="参考" className="max-h-20 rounded-xl border border-[#2e2e32]" /><button onClick={() => setGenerate3DImage(null)} className="absolute top-1 right-1 w-5 h-5 bg-red-500 rounded text-white text-xs">×</button></div>
                                     )}
                                   </div>
                                 ) : (
-                                  <div className="mb-3 py-2 rounded-xl border border-white/10 bg-black/40">
+                                  <div className="mb-3 py-2 rounded-xl border border-[#2e2e32] bg-[#16161a]">
                                     <MultiViewUpload images={generate3DMultiViewImages} onChange={setGenerate3DMultiViewImages} minCount={2} maxViews={generate3DModel === '3.1' ? 8 : 6} />
                                   </div>
                                 )}
@@ -2555,7 +2583,7 @@ const MainApp: React.FC = () => {
                             <div className="grid grid-cols-2 gap-2 mb-3">
                               <div><label className="block text-[8px] text-gray-500 uppercase mb-1">版本</label><DropdownSelect compact options={[{ value: '3.0', label: '3.0' }, { value: '3.1', label: '3.1' }]} value={generate3DModel} onChange={v => setGenerate3DModel(v as '3.0' | '3.1')} /></div>
                               <div><label className="block text-[8px] text-gray-500 uppercase mb-1">类型</label><DropdownSelect compact options={[{ value: 'Normal', label: '带纹理' }, { value: 'LowPoly', label: '智能拓扑' }, { value: 'Geometry', label: '白模' }, { value: 'Sketch', label: '草图' }]} value={generate3DType} onChange={v => setGenerate3DType(v as typeof generate3DType)} /></div>
-                              <div><label className="block text-[8px] text-gray-500 uppercase mb-1">面数</label><input type="number" min={3000} max={1500000} step={10000} value={generate3DFaceCount} onChange={e => setGenerate3DFaceCount(Number(e.target.value) || 100000)} className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-[10px] outline-none focus:border-blue-500" /></div>
+                              <div><label className="block text-[8px] text-gray-500 uppercase mb-1">面数</label><input type="number" min={3000} max={1500000} step={10000} value={generate3DFaceCount} onChange={e => setGenerate3DFaceCount(Number(e.target.value) || 100000)} className="w-full bg-[#1c1c22] border border-[#2e2e32] rounded-lg px-2 py-1.5 text-[10px] outline-none focus:border-blue-500" /></div>
                               {generate3DType === 'LowPoly' && <div><label className="block text-[8px] text-gray-500 uppercase mb-1">多边形</label><DropdownSelect compact options={[{ value: 'triangle', label: '三角' }, { value: 'quadrilateral', label: '四边' }]} value={generate3DPolygonType} onChange={v => setGenerate3DPolygonType(v as 'triangle' | 'quadrilateral')} /></div>}
                               <div><label className="block text-[8px] text-gray-500 uppercase mb-1">格式</label><DropdownSelect compact options={[{ value: '', label: 'OBJ+GLB' }, { value: 'FBX', label: 'FBX' }, { value: 'STL', label: 'STL' }, { value: 'USDZ', label: 'USDZ' }]} value={generate3DResultFormat} onChange={v => setGenerate3DResultFormat(v as '' | 'FBX' | 'STL' | 'USDZ')} /></div>
                               <div className="flex items-end"><label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="checkbox" checked={generate3DEnablePBR} onChange={e => setGenerate3DEnablePBR(e.target.checked)} className="rounded" />PBR</label></div>
@@ -2572,9 +2600,9 @@ const MainApp: React.FC = () => {
                         {generate3DModule === 'rapid' && (
                           <>
                             <p className="text-[9px] text-gray-500 mb-3">极速版模型，约 1 分 30 秒内生成 3D 文件。</p>
-                            <textarea value={rapidPrompt} onChange={e => setRapidPrompt(e.target.value)} placeholder="文本描述（与下图二选一）" rows={2} className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none mb-3" />
+                            <textarea value={rapidPrompt} onChange={e => setRapidPrompt(e.target.value)} placeholder="文本描述（与下图二选一）" rows={2} className="w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none mb-3" />
                             <div className="flex gap-2 mb-3">
-                              {!rapidImage ? <label className="flex-1 h-14 border border-dashed border-white/10 rounded-xl flex items-center justify-center cursor-pointer text-[9px] text-gray-500">上传图片<input type="file" className="hidden" accept="image/*" onChange={e => { const f = e.target.files?.[0]; if (f) { const r = new FileReader(); r.onload = () => setRapidImage(r.result as string); r.readAsDataURL(f); } }} /></label> : <div className="relative flex-1"><img src={rapidImage} alt="" className="h-14 w-full object-cover rounded-xl border border-white/10" /><button type="button" onClick={() => setRapidImage(null)} className="absolute top-0 right-0 w-5 h-5 bg-red-500 rounded text-white text-xs">×</button></div>}
+                              {!rapidImage ? <label className="flex-1 h-14 border border-dashed border-[#2e2e32] rounded-xl flex items-center justify-center cursor-pointer text-[9px] text-gray-500">上传图片<input type="file" className="hidden" accept="image/*" onChange={e => { const f = e.target.files?.[0]; if (f) { const r = new FileReader(); r.onload = () => setRapidImage(r.result as string); r.readAsDataURL(f); } }} /></label> : <div className="relative flex-1"><img src={rapidImage} alt="" className="h-14 w-full object-cover rounded-xl border border-[#2e2e32]" /><button type="button" onClick={() => setRapidImage(null)} className="absolute top-0 right-0 w-5 h-5 bg-red-500 rounded text-white text-xs">×</button></div>}
                               <div className="w-24 shrink-0"><DropdownSelect compact options={[{ value: 'FBX', label: 'FBX' }, { value: 'OBJ', label: 'OBJ' }, { value: 'GLB', label: 'GLB' }, { value: 'STL', label: 'STL' }, { value: 'USDZ', label: 'USDZ' }, { value: 'MP4', label: 'MP4' }]} value={rapidResultFormat} onChange={setRapidResultFormat} /></div>
                             </div>
                             <label className="flex items-center gap-2 text-[10px] mb-3"><input type="checkbox" checked={rapidEnablePBR} onChange={e => setRapidEnablePBR(e.target.checked)} className="rounded" />PBR</label>
@@ -2584,30 +2612,30 @@ const MainApp: React.FC = () => {
                         {generate3DModule === 'topology' && (
                           <>
                             <p className="text-[9px] text-gray-500 mb-3">Polygon 1.5：输入 3D 高模 URL，生成布线规整、较低面数模型。</p>
-                            <input value={topologyFileUrl} onChange={e => setTopologyFileUrl(e.target.value)} placeholder="3D 高模文件 URL（如 GLB/FBX）" className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 mb-3" />
+                            <input value={topologyFileUrl} onChange={e => setTopologyFileUrl(e.target.value)} placeholder="3D 高模文件 URL（如 GLB/FBX）" className="w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 mb-3" />
                             <button onClick={handleTopology3D} disabled={!topologyFileUrl.trim()} className="w-full py-2.5 bg-indigo-600 rounded-xl text-[10px] font-black uppercase disabled:opacity-40">提交（入队）</button>
                           </>
                         )}
                         {generate3DModule === 'texture' && (
                           <>
                             <p className="text-[9px] text-gray-500 mb-3">输入单几何模型 URL（必填）+ 参考图或文字描述二选一，生成纹理贴图。</p>
-                            <input value={textureModelUrl} onChange={e => setTextureModelUrl(e.target.value)} placeholder="单几何模型 URL（必填）" className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 mb-2" />
-                            <textarea value={texturePrompt} onChange={e => setTexturePrompt(e.target.value)} placeholder="文字描述（与参考图二选一）" rows={1} className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none mb-2" />
-                            <div className="mb-3">{!textureRefImage ? <label className="block h-14 border border-dashed border-white/10 rounded-xl flex items-center justify-center cursor-pointer text-[9px] text-gray-500">上传参考图（与描述二选一）<input type="file" className="hidden" accept="image/*" onChange={e => { const f = e.target.files?.[0]; if (f) { const r = new FileReader(); r.onload = () => setTextureRefImage(r.result as string); r.readAsDataURL(f); } }} /></label> : <div className="relative inline-block"><img src={textureRefImage} alt="" className="max-h-14 rounded-xl border border-white/10" /><button onClick={() => setTextureRefImage(null)} className="absolute top-1 right-1 w-5 h-5 bg-red-500 rounded text-white text-xs">×</button></div>}</div>
+                            <input value={textureModelUrl} onChange={e => setTextureModelUrl(e.target.value)} placeholder="单几何模型 URL（必填）" className="w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 mb-2" />
+                            <textarea value={texturePrompt} onChange={e => setTexturePrompt(e.target.value)} placeholder="文字描述（与参考图二选一）" rows={1} className="w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none mb-2" />
+                            <div className="mb-3">{!textureRefImage ? <label className="block h-14 border border-dashed border-[#2e2e32] rounded-xl flex items-center justify-center cursor-pointer text-[9px] text-gray-500">上传参考图（与描述二选一）<input type="file" className="hidden" accept="image/*" onChange={e => { const f = e.target.files?.[0]; if (f) { const r = new FileReader(); r.onload = () => setTextureRefImage(r.result as string); r.readAsDataURL(f); } }} /></label> : <div className="relative inline-block"><img src={textureRefImage} alt="" className="max-h-14 rounded-xl border border-[#2e2e32]" /><button onClick={() => setTextureRefImage(null)} className="absolute top-1 right-1 w-5 h-5 bg-red-500 rounded text-white text-xs">×</button></div>}</div>
                             <button onClick={handleTexture3D} disabled={!textureModelUrl.trim() || (!texturePrompt.trim() && !textureRefImage)} className="w-full py-2.5 bg-indigo-600 rounded-xl text-[10px] font-black uppercase disabled:opacity-40">提交（入队）</button>
                           </>
                         )}
                         {generate3DModule === 'component' && (
                           <>
                             <p className="text-[9px] text-gray-500 mb-3">输入 3D 模型，自动识别结构并生成对应 3D 组件。</p>
-                            <input value={componentFileUrl} onChange={e => setComponentFileUrl(e.target.value)} placeholder="3D 模型 URL（建议 FBX，≤100MB）" className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 mb-3" />
+                            <input value={componentFileUrl} onChange={e => setComponentFileUrl(e.target.value)} placeholder="3D 模型 URL（建议 FBX，≤100MB）" className="w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 mb-3" />
                             <button onClick={handleComponent3D} disabled={!componentFileUrl.trim()} className="w-full py-2.5 bg-indigo-600 rounded-xl text-[10px] font-black uppercase disabled:opacity-40">提交（入队）</button>
                           </>
                         )}
                         {generate3DModule === 'uv' && (
                           <>
                             <p className="text-[9px] text-gray-500 mb-3">输入 3D 模型，自动生成高质量 UV 切线。</p>
-                            <input value={uvFileUrl} onChange={e => setUvFileUrl(e.target.value)} placeholder="3D 模型 URL" className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 mb-3" />
+                            <input value={uvFileUrl} onChange={e => setUvFileUrl(e.target.value)} placeholder="3D 模型 URL" className="w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 mb-3" />
                             <button onClick={handleUV3D} disabled={!uvFileUrl.trim()} className="w-full py-2.5 bg-indigo-600 rounded-xl text-[10px] font-black uppercase disabled:opacity-40">提交（入队）</button>
                           </>
                         )}
@@ -2615,9 +2643,9 @@ const MainApp: React.FC = () => {
                           <>
                             <p className="text-[9px] text-gray-500 mb-3">输入人物头像，按模板生成对应 3D 形象。</p>
                             {!profileImage ? (
-                              <label className="block h-24 border-2 border-dashed border-white/10 rounded-xl flex items-center justify-center cursor-pointer hover:bg-white/5 text-[9px] text-gray-500 mb-3">点击上传人物头像<input type="file" className="hidden" accept="image/*" onChange={e => { const f = e.target.files?.[0]; if (f) { const r = new FileReader(); r.onload = () => setProfileImage(r.result as string); r.readAsDataURL(f); } }} /></label>
+                              <label className="block h-24 border-2 border-dashed border-[#2e2e32] rounded-xl flex items-center justify-center cursor-pointer hover:bg-[#222228] text-[9px] text-gray-500 mb-3">点击上传人物头像<input type="file" className="hidden" accept="image/*" onChange={e => { const f = e.target.files?.[0]; if (f) { const r = new FileReader(); r.onload = () => setProfileImage(r.result as string); r.readAsDataURL(f); } }} /></label>
                             ) : (
-                              <div className="relative inline-block mb-3"><img src={profileImage} alt="头像" className="max-h-24 rounded-xl border border-white/10" /><button onClick={() => setProfileImage(null)} className="absolute top-1 right-1 w-6 h-6 bg-red-500 rounded text-white text-xs">×</button></div>
+                              <div className="relative inline-block mb-3"><img src={profileImage} alt="头像" className="max-h-24 rounded-xl border border-[#2e2e32]" /><button onClick={() => setProfileImage(null)} className="absolute top-1 right-1 w-6 h-6 bg-red-500 rounded text-white text-xs">×</button></div>
                             )}
                             <button onClick={handleProfile3D} disabled={!profileImage} className="w-full py-2.5 bg-indigo-600 rounded-xl text-[10px] font-black uppercase disabled:opacity-40">提交（入队）</button>
                           </>
@@ -2625,7 +2653,7 @@ const MainApp: React.FC = () => {
                         {generate3DModule === 'convert' && (
                           <>
                             <p className="text-[9px] text-gray-500 mb-3">输入 3D 模型 URL，转换为目标格式。</p>
-                            <input value={convertFileUrl} onChange={e => setConvertFileUrl(e.target.value)} placeholder="3D 文件 URL（fbx/obj/glb 等）" className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 mb-2" />
+                            <input value={convertFileUrl} onChange={e => setConvertFileUrl(e.target.value)} placeholder="3D 文件 URL（fbx/obj/glb 等）" className="w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 mb-2" />
                             <div className="mb-3"><DropdownSelect compact options={[{ value: 'STL', label: 'STL' }, { value: 'USDZ', label: 'USDZ' }, { value: 'FBX', label: 'FBX' }, { value: 'MP4', label: 'MP4' }, { value: 'GIF', label: 'GIF' }]} value={convertFormat} onChange={setConvertFormat} /></div>
                             <button onClick={handleConvert3D} disabled={!convertFileUrl.trim()} className="w-full py-2.5 bg-indigo-600 rounded-xl text-[10px] font-black uppercase disabled:opacity-40">转换（入队）</button>
                           </>
@@ -2638,8 +2666,8 @@ const MainApp: React.FC = () => {
                 </div>
 
                 {/* 中间：3D 预览常驻 */}
-                <div className="flex-1 min-w-0 flex flex-col rounded-2xl border border-white/10 bg-black/60 overflow-hidden">
-                  <div className="px-3 py-2 text-[9px] font-black uppercase text-gray-500 border-b border-white/10">3D 预览 · 支持 OBJ/GLB，生成后自动显示，可点击右侧临时库切换</div>
+                <div className="flex-1 min-w-0 flex flex-col rounded-2xl border border-[#2e2e32] bg-[#1a1a1e] overflow-hidden">
+                  <div className="px-3 py-2 text-[9px] font-black uppercase text-gray-500 border-b border-[#2e2e32]">3D 预览 · 支持 OBJ/GLB，生成后自动显示，可点击右侧临时库切换</div>
                   <div className="flex-1 min-h-[280px] relative">
                     {generate3DPreview ? (
                     <Suspense fallback={<LazySectionFallback label="3D预览" />}>
@@ -2652,14 +2680,14 @@ const MainApp: React.FC = () => {
                 </div>
 
                 {/* 右侧：临时库 */}
-                <div className="w-64 lg:w-72 shrink-0 flex flex-col rounded-2xl border border-white/10 bg-black/40 overflow-hidden">
-                  <div className="px-3 py-2 border-b border-white/10 flex items-center justify-between">
+                <div className="w-64 lg:w-72 shrink-0 flex flex-col rounded-2xl border border-[#2e2e32] bg-[#16161a] overflow-hidden">
+                  <div className="px-3 py-2 border-b border-[#2e2e32] flex items-center justify-between">
                     <span className="text-[9px] font-black uppercase text-blue-400">临时库</span>
                     <span className="text-[9px] text-gray-500">队列 {generate3DQueue.length}（{generate3DQueue.filter(q => q.status === 'running').length} 运行中）</span>
                   </div>
                   <div className="flex-1 overflow-y-auto no-scrollbar p-2 space-y-2">
                     {generate3DQueue.length > 0 && (
-                      <div className="rounded-xl border border-white/10 bg-white/5 p-2 space-y-2">
+                      <div className="rounded-xl border border-[#2e2e32] bg-[#1c1c22] p-2 space-y-2">
                         <div className="flex items-center justify-between">
                           <span className="text-[8px] font-black uppercase text-gray-400">任务队列</span>
                           <div className="flex items-center gap-2">
@@ -2667,7 +2695,7 @@ const MainApp: React.FC = () => {
                             {generate3DQueue.some(q => q.status !== 'pending' && q.status !== 'running') && (
                               <button
                                 onClick={clearInactiveQueueItems}
-                                className="px-1.5 py-1 rounded-md border border-white/10 text-[8px] font-black uppercase text-gray-400 hover:bg-white/10"
+                                className="px-1.5 py-1 rounded-md border border-[#2e2e32] text-[8px] font-black uppercase text-gray-400 hover:bg-[#2e2e36]"
                               >
                                 清理
                               </button>
@@ -2686,16 +2714,16 @@ const MainApp: React.FC = () => {
                                     ? '已取消'
                                     : '失败';
                             const statusClass = item.status === 'running'
-                              ? 'bg-blue-500/15 text-blue-300 border-blue-500/30'
+                              ? 'bg-[#1e3a5f] text-blue-300 border-[#4b6a9e]'
                               : item.status === 'pending'
-                                ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                                ? 'bg-[#3a3018] text-amber-300 border-[#b45309]'
                                 : item.status === 'done'
-                                  ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                                  ? 'bg-[#0f3320] text-emerald-300 border-[#34d399]'
                                   : item.status === 'cancelled'
-                                    ? 'bg-gray-500/15 text-gray-300 border-gray-500/30'
-                                    : 'bg-red-500/15 text-red-300 border-red-500/30';
+                                    ? 'bg-[#3a3a40] text-gray-300 border-gray-500/30'
+                                    : 'bg-[#4a2228] text-red-300 border-[#dc6b6b]';
                             return (
-                              <div key={item.id} className="rounded-xl border border-white/10 bg-black/30 p-2">
+                              <div key={item.id} className="rounded-xl border border-[#2e2e32] bg-[#141416] p-2">
                                 <div className="flex items-start justify-between gap-2">
                                   <div className="min-w-0">
                                     <div className="text-[10px] font-black truncate">{item.label || item.type}</div>
@@ -2705,7 +2733,7 @@ const MainApp: React.FC = () => {
                                 </div>
                                 {typeof item.progress === 'number' && item.status === 'running' && (
                                   <div className="mt-2">
-                                    <div className="h-1.5 rounded-full bg-white/10 overflow-hidden">
+                                    <div className="h-1.5 rounded-full bg-[#26262c] overflow-hidden">
                                       <div className="h-full bg-blue-500" style={{ width: `${Math.max(0, Math.min(100, item.progress))}%` }} />
                                     </div>
                                   </div>
@@ -2717,7 +2745,7 @@ const MainApp: React.FC = () => {
                                   {(item.status === 'pending' || item.status === 'running') && (
                                     <button
                                       onClick={() => cancelQueueItem(item.id)}
-                                      className="flex-1 py-1.5 rounded-lg border border-red-500/30 bg-red-500/10 text-[9px] font-black uppercase text-red-300 hover:bg-red-500/15"
+                                      className="flex-1 py-1.5 rounded-lg border border-[#dc6b6b] bg-[#3a1818] text-[9px] font-black uppercase text-red-300 hover:bg-[#4a2228]"
                                     >
                                       取消任务
                                     </button>
@@ -2725,7 +2753,7 @@ const MainApp: React.FC = () => {
                                   {(item.status === 'fail' || item.status === 'cancelled') && (
                                     <button
                                       onClick={() => retryQueueItem(item.id)}
-                                      className="flex-1 py-1.5 rounded-lg border border-blue-500/30 bg-blue-500/10 text-[9px] font-black uppercase text-blue-300 hover:bg-blue-500/15"
+                                      className="flex-1 py-1.5 rounded-lg border border-[#4b6a9e] bg-[#1a3354] text-[9px] font-black uppercase text-blue-300 hover:bg-[#1e3a5f]"
                                     >
                                       重试
                                     </button>
@@ -2744,18 +2772,18 @@ const MainApp: React.FC = () => {
                         <div
                           key={item.id}
                           onClick={() => setSelectedTemp3DId(item.id)}
-                          className={`rounded-xl border overflow-hidden cursor-pointer transition-colors ${selectedTemp3DId === item.id ? 'border-blue-500 bg-blue-500/10' : 'border-white/10 bg-white/5 hover:bg-white/10'}`}
+                          className={`rounded-xl border overflow-hidden cursor-pointer transition-colors ${selectedTemp3DId === item.id ? 'border-blue-500 bg-[#1a3354]' : 'border-[#2e2e32] bg-[#1c1c22] hover:bg-[#2e2e36]'}`}
                         >
                           <div className="aspect-square relative">
                             {item.previewImageUrl ? <img src={item.previewImageUrl} alt="" className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-gray-600 text-[10px]">无预览图</div>}
-                            <span className="absolute bottom-1 left-1 px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-black/70 text-gray-300">{item.source}</span>
+                            <span className="absolute bottom-1 left-1 px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-[#0d0d10] text-gray-300">{item.source}</span>
                           </div>
                           <div className="p-2">
                             <div className="text-[10px] font-black truncate">{item.label}</div>
                             <div className="flex flex-wrap gap-1 mt-1">
                               {item.files.map((f, i) => f.Url && <a key={i} href={f.Url} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} className="text-[8px] text-blue-400 hover:underline">{f.Type || '下载'}</a>)}
                             </div>
-                            <button onClick={e => { e.stopPropagation(); handleSave3DToLibrary(item); }} className="mt-2 w-full py-1.5 rounded-lg bg-blue-600/80 text-[9px] font-black uppercase hover:bg-blue-600">保存到资产库</button>
+                            <button onClick={e => { e.stopPropagation(); handleSave3DToLibrary(item); }} className="mt-2 w-full py-1.5 rounded-lg bg-[#1e40af] text-[9px] font-black uppercase hover:bg-blue-600">保存到资产库</button>
                           </div>
                         </div>
                       ))
@@ -2774,7 +2802,7 @@ const MainApp: React.FC = () => {
                     <div className="text-[9px] font-black text-gray-500 uppercase tracking-widest">会话</div>
                     <button
                       onClick={createNewDialogSession}
-                      className="w-9 h-9 shrink-0 rounded-xl bg-white/10 border border-white/10 flex items-center justify-center text-lg font-bold text-white/80 hover:bg-white/20 transition-colors"
+                      className="w-9 h-9 shrink-0 rounded-xl bg-[#26262c] border border-[#2e2e32] flex items-center justify-center text-lg font-bold text-white/80 hover:bg-[#383842] transition-colors"
                       title="新对话"
                     >
                       +
@@ -2796,10 +2824,10 @@ const MainApp: React.FC = () => {
                           <div key={s.id} className="relative group">
                             <button
                               onClick={() => setDialogActiveSessionId(s.id)}
-                              className={`w-full flex items-center gap-3 px-3 py-2 rounded-2xl border transition-all pr-16 ${isActive ? 'bg-blue-600/15 border-blue-500/40' : 'bg-white/5 border-white/10 hover:bg-white/10 hover:border-white/20'}`}
+                              className={`w-full flex items-center gap-3 px-3 py-2 rounded-2xl border transition-all pr-16 ${isActive ? 'bg-[#1a2d4d] border-[#3b6fb8]' : 'bg-[#1c1c22] border-[#2e2e32] hover:bg-[#2e2e36] hover:border-[#3a3a40]'}`}
                               title={label}
                             >
-                              <div className="w-11 h-11 shrink-0 rounded-xl overflow-hidden border border-white/10 bg-white/5 flex items-center justify-center">
+                              <div className="w-11 h-11 shrink-0 rounded-xl overflow-hidden border border-[#2e2e32] bg-[#1c1c22] flex items-center justify-center">
                                 {thumb ? <img src={thumb} className="w-full h-full object-cover" alt="" /> : <span className="text-[10px] text-gray-500">新</span>}
                               </div>
                               <div className="min-w-0 flex-1 text-left">
@@ -2813,7 +2841,7 @@ const MainApp: React.FC = () => {
                               {showArchive && (
                                 <button
                                   onClick={(e) => { e.stopPropagation(); archiveDialogSession(s.id); }}
-                                  className="w-6 h-6 rounded-lg flex items-center justify-center text-[10px] text-gray-500 hover:text-amber-400 hover:bg-white/10 transition-colors"
+                                  className="w-6 h-6 rounded-lg flex items-center justify-center text-[10px] text-gray-500 hover:text-amber-400 hover:bg-[#2e2e36] transition-colors"
                                   title="归档"
                                 >
                                   档
@@ -2824,7 +2852,7 @@ const MainApp: React.FC = () => {
                                   e.stopPropagation();
                                   handleRemoveDialogSession(s.id);
                                 }}
-                                className="w-7 h-7 rounded-xl flex items-center justify-center text-gray-500 hover:text-white hover:bg-white/10 transition-colors"
+                                className="w-7 h-7 rounded-xl flex items-center justify-center text-gray-500 hover:text-white hover:bg-[#2e2e36] transition-colors"
                                 title="关闭会话"
                               >
                                 ×
@@ -2887,9 +2915,9 @@ const MainApp: React.FC = () => {
                     const aspectRatioLabel = displayVersion?.width != null && displayVersion?.height != null ? (() => { const g = gcd(displayVersion.width, displayVersion.height); return `${displayVersion.width / g}:${displayVersion.height / g}`; })() : null;
                     return (
                       <div key={msg.id} id={`msg-${msg.id}`} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                        <div className={`max-w-[85%] lg:max-w-[75%] rounded-2xl overflow-hidden ${msg.role === 'user' ? 'bg-blue-600/20 border border-blue-500/30' : 'bg-white/5 border border-white/10'}`}>
+                        <div className={`max-w-[85%] lg:max-w-[75%] rounded-2xl overflow-hidden ${msg.role === 'user' ? 'bg-[#1e3558] border border-[#4b6a9e]' : 'bg-[#1c1c22] border border-[#2e2e32]'}`}>
                           {msg.role === 'user' && (msg.inputImages?.length || msg.imageBase64) && (
-                            <div className="p-2 border-b border-white/10">
+                            <div className="p-2 border-b border-[#2e2e32]">
                               <div className={`grid gap-2 ${msg.inputImages && msg.inputImages.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}>
                                 {(msg.inputImages && msg.inputImages.length > 0 ? msg.inputImages : msg.imageBase64 ? [msg.imageBase64] : []).map((image, imageIndex) => (
                                   <img key={`${msg.id}-${imageIndex}`} src={image} className="max-h-48 rounded-xl object-contain mx-auto" alt="上传" />
@@ -2909,18 +2937,18 @@ const MainApp: React.FC = () => {
                           {msg.role === 'assistant' && displayVersion && !isEditingThis && (
                             <>
                               {displayVersion.understoodPrompt && (
-                                <div className="px-4 pb-2 text-[9px] text-blue-400/80 border-b border-white/5">理解指令: {displayVersion.understoodPrompt}</div>
+                                <div className="px-4 pb-2 text-[9px] text-blue-400/80 border-b border-[#252528]">理解指令: {displayVersion.understoodPrompt}</div>
                               )}
                               {versions.length > 1 && (
-                                <div className="px-4 py-2 flex items-center gap-2 border-b border-white/5">
+                                <div className="px-4 py-2 flex items-center gap-2 border-b border-[#252528]">
                                   <span className="text-[9px] font-black text-gray-500 uppercase">历史版本</span>
-                                  <button onClick={() => showPreviousDialogVersion(msg)} disabled={versionIndex <= 0} className="px-2 py-1 rounded-lg bg-white/5 text-[9px] font-black disabled:opacity-30">上一版</button>
+                                  <button onClick={() => showPreviousDialogVersion(msg)} disabled={versionIndex <= 0} className="px-2 py-1 rounded-lg bg-[#1c1c22] text-[9px] font-black disabled:opacity-30">上一版</button>
                                   <span className="text-[9px] text-gray-400">{(versionIndex + 1)} / {versions.length}</span>
-                                  <button onClick={() => showNextDialogVersion(msg)} disabled={versionIndex >= versions.length - 1} className="px-2 py-1 rounded-lg bg-white/5 text-[9px] font-black disabled:opacity-30">下一版</button>
+                                  <button onClick={() => showNextDialogVersion(msg)} disabled={versionIndex >= versions.length - 1} className="px-2 py-1 rounded-lg bg-[#1c1c22] text-[9px] font-black disabled:opacity-30">下一版</button>
                                 </div>
                               )}
                               {(displayVersion.width != null || displayVersion.height != null) && (
-                                <div className="px-4 py-1.5 text-[9px] text-gray-500 border-b border-white/5 flex flex-wrap gap-3">
+                                <div className="px-4 py-1.5 text-[9px] text-gray-500 border-b border-[#252528] flex flex-wrap gap-3">
                                   {displayVersion.width != null && displayVersion.height != null && <span>分辨率 {displayVersion.width} × {displayVersion.height}</span>}
                                   {aspectRatioLabel && <span>宽高比 {aspectRatioLabel}</span>}
                                   <span>{new Date(displayVersion.timestamp).toLocaleString()}</span>
@@ -2928,54 +2956,54 @@ const MainApp: React.FC = () => {
                               )}
                               <div className="p-4 relative">
                                 {isRegeneratingThis && (
-                                  <div className="absolute inset-0 bg-black/60 rounded-xl flex flex-col items-center justify-center gap-3 z-10">
-                                    <div className="w-8 h-8 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
-                                    <button onClick={handleDialogCancelGen} className="px-3 py-2 rounded-xl bg-red-600/50 border border-red-500/50 text-[9px] font-black text-red-300 hover:bg-red-600/70 transition-colors">停止</button>
+                                  <div className="absolute inset-0 bg-[#1a1a1e] rounded-xl flex flex-col items-center justify-center gap-3 z-10">
+                                    <div className="w-8 h-8 border-2 border-[#4b6a9e] border-t-blue-500 rounded-full animate-spin" />
+                                    <button onClick={handleDialogCancelGen} className="px-3 py-2 rounded-xl bg-[#991b1b] border border-[#ef4444]/50 text-[9px] font-black text-red-300 hover:bg-[#b91c1c] transition-colors">停止</button>
                                   </div>
                                 )}
                                 {dialogDetectMessageId === msg.id && (displayVersion.detectedBoxes?.length ?? 0) > 0 ? (
                                   <div className="relative inline-block max-w-full">
-                                    <img src={displayVersion.resultImageBase64} className="max-w-full rounded-xl border border-white/10" alt="生成" />
+                                    <img src={displayVersion.resultImageBase64} className="max-w-full rounded-xl border border-[#2e2e32]" alt="生成" />
                                     <div className="absolute inset-0 pointer-events-none">
                                       {(displayVersion.detectedBoxes ?? []).map((box, i) => (
-                                        <div key={box.id} className="absolute border-2 border-blue-500 bg-blue-500/20" style={{ left: `${box.xmin / 10}%`, top: `${box.ymin / 10}%`, width: `${(box.xmax - box.xmin) / 10}%`, height: `${(box.ymax - box.ymin) / 10}%` }}>
+                                        <div key={box.id} className="absolute border-2 border-blue-500 bg-[#1e40af]" style={{ left: `${box.xmin / 10}%`, top: `${box.ymin / 10}%`, width: `${(box.xmax - box.xmin) / 10}%`, height: `${(box.ymax - box.ymin) / 10}%` }}>
                                           <span className="absolute -top-7 left-0 min-w-[24px] h-6 px-1.5 rounded flex items-center justify-center text-xs font-black bg-blue-600 text-white shadow-lg">{DIALOG_BOX_LABELS[i] ?? i + 1}</span>
                                         </div>
                                       ))}
                                     </div>
                                   </div>
                                 ) : (
-                                  <img src={displayVersion.resultImageBase64} className="max-w-full rounded-xl border border-white/10" alt="生成" />
+                                  <img src={displayVersion.resultImageBase64} className="max-w-full rounded-xl border border-[#2e2e32]" alt="生成" />
                                 )}
                               </div>
                               {dialogDetectMessageId === msg.id && (displayVersion.detectedBoxes?.length ?? 0) > 0 && (
-                                <div className="px-4 pb-3 space-y-2 border-b border-white/10">
+                                <div className="px-4 pb-3 space-y-2 border-b border-[#2e2e32]">
                                   <div className="text-[9px] font-black text-blue-400 uppercase">点击数字下载该物体（带边距）· 可添加到右侧临时库</div>
                                   <div className="flex flex-wrap items-center gap-2">
                                     {(displayVersion.detectedBoxes ?? []).map((_, i) => (
-                                      <button key={i} onClick={() => handleDialogDownloadCropByIndex(msg, i)} className="w-9 h-9 rounded-xl bg-blue-600/30 border border-blue-500/50 text-sm font-black hover:bg-blue-600/50 transition-all flex items-center justify-center" title={`下载 ${DIALOG_BOX_LABELS[i] ?? i + 1}`}>{DIALOG_BOX_LABELS[i] ?? i + 1}</button>
+                                      <button key={i} onClick={() => handleDialogDownloadCropByIndex(msg, i)} className="w-9 h-9 rounded-xl bg-[#264670] border border-[#3b82f6] text-sm font-black hover:bg-[#365e92] transition-all flex items-center justify-center" title={`下载 ${DIALOG_BOX_LABELS[i] ?? i + 1}`}>{DIALOG_BOX_LABELS[i] ?? i + 1}</button>
                                     ))}
                                     <button onClick={() => handleDialogDownloadAllCrops(msg)} className="px-3 py-2 bg-blue-600 rounded-xl text-[9px] font-black uppercase text-white hover:bg-blue-500 transition-all">下载全部</button>
-                                    <button onClick={() => handleDialogTempAddAllCrops(msg)} className="px-3 py-2 bg-white/10 border border-white/10 rounded-xl text-[9px] font-black uppercase hover:bg-white/20 transition-all">全部加临时库</button>
-                                    <button onClick={() => handleDialogDetectObjects(msg, true)} disabled={dialogDetectingId === msg.id} className="px-3 py-2 bg-white/10 border border-white/10 rounded-xl text-[9px] font-black uppercase hover:bg-white/20 transition-all disabled:opacity-50">重新识别</button>
+                                    <button onClick={() => handleDialogTempAddAllCrops(msg)} className="px-3 py-2 bg-[#26262c] border border-[#2e2e32] rounded-xl text-[9px] font-black uppercase hover:bg-[#383842] transition-all">全部加临时库</button>
+                                    <button onClick={() => handleDialogDetectObjects(msg, true)} disabled={dialogDetectingId === msg.id} className="px-3 py-2 bg-[#26262c] border border-[#2e2e32] rounded-xl text-[9px] font-black uppercase hover:bg-[#383842] transition-all disabled:opacity-50">重新识别</button>
                                     <button onClick={handleDialogDetectClose} className="px-3 py-2 text-gray-500 text-[9px] font-black uppercase hover:text-white transition-colors">收起</button>
                                   </div>
                                   <div className="flex flex-wrap items-center gap-1.5">
                                     {(displayVersion.detectedBoxes ?? []).map((_, i) => (
-                                      <button key={i} onClick={() => handleDialogTempAddCropByIndex(msg, i)} className="px-2 py-1 rounded-lg bg-white/5 border border-white/10 text-[9px] font-black hover:bg-white/10 transition-all" title={`${DIALOG_BOX_LABELS[i] ?? i + 1} 加到临时库`}>+{DIALOG_BOX_LABELS[i] ?? i + 1}</button>
+                                      <button key={i} onClick={() => handleDialogTempAddCropByIndex(msg, i)} className="px-2 py-1 rounded-lg bg-[#1c1c22] border border-[#2e2e32] text-[9px] font-black hover:bg-[#2e2e36] transition-all" title={`${DIALOG_BOX_LABELS[i] ?? i + 1} 加到临时库`}>+{DIALOG_BOX_LABELS[i] ?? i + 1}</button>
                                     ))}
                                   </div>
                                 </div>
                               )}
                               <div className="px-4 pb-4 flex flex-wrap gap-2">
-                                <button onClick={() => handleDialogDownload(msg)} className="px-3 py-2 bg-blue-600/20 border border-blue-500/30 rounded-xl text-[9px] font-black uppercase text-blue-400 hover:bg-blue-600/30 transition-all">下载图片</button>
-                                <button onClick={() => displayVersion?.resultImageBase64 && handleCopyDialogImage(displayVersion.resultImageBase64)} className="px-3 py-2 bg-white/10 border border-white/10 rounded-xl text-[9px] font-black uppercase hover:bg-white/20 transition-all">复制图片</button>
-                                <button onClick={() => displayVersion?.resultImageBase64 && openDialogCrop(msg.id, displayVersion.resultImageBase64)} className="px-3 py-2 bg-white/10 border border-white/10 rounded-xl text-[9px] font-black uppercase hover:bg-white/20 transition-all">裁切</button>
-                                <button onClick={() => handleDialogUseAsInput(msg)} className="px-3 py-2 bg-green-600/20 border border-green-500/30 rounded-xl text-[9px] font-black uppercase text-green-400 hover:bg-green-600/30 transition-all">以此图继续</button>
-                                <button onClick={() => handleDialogDetectObjects(msg)} disabled={dialogDetectingId === msg.id} className="px-3 py-2 bg-white/5 border border-white/10 rounded-xl text-[9px] font-black uppercase hover:bg-white/10 transition-all disabled:opacity-50">{dialogDetectingId === msg.id ? '识别中...' : '识别图中物体'}</button>
-                                <button onClick={() => handleDialogSaveToLibrary(msg)} className="px-3 py-2 bg-blue-600/20 border border-blue-500/30 rounded-xl text-[9px] font-black uppercase text-blue-400 hover:bg-blue-600/30 transition-all">保存到库</button>
-                                <button onClick={() => handleDialogRegenerate(msg.id)} disabled={isRegeneratingThis || !userMsg} className="px-3 py-2 bg-white/5 border border-white/10 rounded-xl text-[9px] font-black uppercase hover:bg-white/10 transition-all disabled:opacity-50">直接重新生成</button>
-                                <button onClick={() => { setDialogEditingMessageId(msg.id); setDialogEditingText(userMsg?.role === 'user' ? userMsg.text : ''); }} disabled={isRegeneratingThis} className="px-3 py-2 bg-white/5 border border-white/10 rounded-xl text-[9px] font-black uppercase hover:bg-white/10 transition-all disabled:opacity-50">编辑后重新生成</button>
+                                <button onClick={() => handleDialogDownload(msg)} className="px-3 py-2 bg-[#1e3558] border border-[#4b6a9e] rounded-xl text-[9px] font-black uppercase text-blue-400 hover:bg-[#305a90] transition-all">下载图片</button>
+                                <button onClick={() => displayVersion?.resultImageBase64 && handleCopyDialogImage(displayVersion.resultImageBase64)} className="px-3 py-2 bg-[#26262c] border border-[#2e2e32] rounded-xl text-[9px] font-black uppercase hover:bg-[#383842] transition-all">复制图片</button>
+                                <button onClick={() => displayVersion?.resultImageBase64 && openDialogCrop(msg.id, displayVersion.resultImageBase64)} className="px-3 py-2 bg-[#26262c] border border-[#2e2e32] rounded-xl text-[9px] font-black uppercase hover:bg-[#383842] transition-all">裁切</button>
+                                <button onClick={() => handleDialogUseAsInput(msg)} className="px-3 py-2 bg-[#14532d] border border-green-500/30 rounded-xl text-[9px] font-black uppercase text-green-400 hover:bg-[#166534] transition-all">以此图继续</button>
+                                <button onClick={() => handleDialogDetectObjects(msg)} disabled={dialogDetectingId === msg.id} className="px-3 py-2 bg-[#1c1c22] border border-[#2e2e32] rounded-xl text-[9px] font-black uppercase hover:bg-[#2e2e36] transition-all disabled:opacity-50">{dialogDetectingId === msg.id ? '识别中...' : '识别图中物体'}</button>
+                                <button onClick={() => handleDialogSaveToLibrary(msg)} className="px-3 py-2 bg-[#1e3558] border border-[#4b6a9e] rounded-xl text-[9px] font-black uppercase text-blue-400 hover:bg-[#305a90] transition-all">保存到库</button>
+                                <button onClick={() => handleDialogRegenerate(msg.id)} disabled={isRegeneratingThis || !userMsg} className="px-3 py-2 bg-[#1c1c22] border border-[#2e2e32] rounded-xl text-[9px] font-black uppercase hover:bg-[#2e2e36] transition-all disabled:opacity-50">直接重新生成</button>
+                                <button onClick={() => { setDialogEditingMessageId(msg.id); setDialogEditingText(userMsg?.role === 'user' ? userMsg.text : ''); }} disabled={isRegeneratingThis} className="px-3 py-2 bg-[#1c1c22] border border-[#2e2e32] rounded-xl text-[9px] font-black uppercase hover:bg-[#2e2e36] transition-all disabled:opacity-50">编辑后重新生成</button>
                               </div>
                               {displayVersion?.generationRecordId && (() => {
                                 const recordId = displayVersion.generationRecordId!;
@@ -2988,7 +3016,7 @@ const MainApp: React.FC = () => {
                                         key={score}
                                         type="button"
                                         onClick={() => { updateGenerationScore(recordId, score); setRatingCache(prev => ({ ...prev, [recordId]: score })); }}
-                                        className={`w-7 h-7 rounded border flex items-center justify-center text-[11px] transition-all ${(currentScore ?? 0) >= score ? 'border-amber-500/50 bg-amber-500/20 text-amber-400' : 'border-white/20 bg-white/5 hover:bg-amber-500/20 hover:border-amber-500/40 text-gray-500'}`}
+                                        className={`w-7 h-7 rounded border flex items-center justify-center text-[11px] transition-all ${(currentScore ?? 0) >= score ? 'border-[#f59e0b] bg-[#3d3018] text-amber-400' : 'border-[#3a3a40] bg-[#1c1c22] hover:bg-[#3d3018] hover:border-[#d97706] text-gray-500'}`}
                                         title={`${score} 星`}
                                       ><AppIcon name="star" className="w-3.5 h-3.5" /></button>
                                     ))}
@@ -2999,11 +3027,11 @@ const MainApp: React.FC = () => {
                             </>
                           )}
                           {msg.role === 'assistant' && isEditingThis && (
-                            <div className="p-4 border-t border-white/10 space-y-3">
-                              <input value={dialogEditingText} onChange={e => setDialogEditingText(e.target.value)} placeholder="修改你的需求描述..." className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-[11px] outline-none focus:border-blue-500" />
+                            <div className="p-4 border-t border-[#2e2e32] space-y-3">
+                              <input value={dialogEditingText} onChange={e => setDialogEditingText(e.target.value)} placeholder="修改你的需求描述..." className="w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-4 py-3 text-[11px] outline-none focus:border-blue-500" />
                               <div className="flex gap-2">
                                 <button onClick={() => handleDialogEditThenRegenerate(msg.id, dialogEditingText)} disabled={!dialogEditingText.trim()} className="px-4 py-2 bg-blue-600 rounded-xl text-[9px] font-black uppercase disabled:opacity-50">确认重新生成</button>
-                                <button onClick={() => setDialogEditingMessageId(null)} className="px-4 py-2 bg-white/5 border border-white/10 rounded-xl text-[9px] font-black uppercase">取消</button>
+                                <button onClick={() => setDialogEditingMessageId(null)} className="px-4 py-2 bg-[#1c1c22] border border-[#2e2e32] rounded-xl text-[9px] font-black uppercase">取消</button>
                               </div>
                             </div>
                           )}
@@ -3013,26 +3041,26 @@ const MainApp: React.FC = () => {
                   })}
                   {dialogSendingSessionIds.includes(dialogActiveSessionIdResolved) && (
                     <div className="flex justify-start items-center gap-2">
-                      <div className="px-4 py-3 rounded-2xl bg-white/5 border border-white/10 text-[10px] text-gray-400 flex items-center gap-2">
-                        <div className="w-3 h-3 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
+                      <div className="px-4 py-3 rounded-2xl bg-[#1c1c22] border border-[#2e2e32] text-[10px] text-gray-400 flex items-center gap-2">
+                        <div className="w-3 h-3 border-2 border-[#4b6a9e] border-t-blue-500 rounded-full animate-spin" />
                         理解需求 → 生图中...
                       </div>
-                      <button onClick={handleDialogCancelGen} className="px-3 py-2 rounded-xl bg-red-600/30 border border-red-500/40 text-[9px] font-black text-red-400 hover:bg-red-600/50 transition-colors">停止</button>
+                      <button onClick={handleDialogCancelGen} className="px-3 py-2 rounded-xl bg-[#5c1a1a] border border-[#f87171] text-[9px] font-black text-red-400 hover:bg-[#991b1b] transition-colors">停止</button>
                     </div>
                   )}
                   <div ref={dialogEndRef} />
                   </div>
                   {/* 输入区：支持粘贴图片；档位 + 比例/尺寸 + 文案 + 发送（模型由档位决定） */}
-                  <div className="glass rounded-[2rem] p-4 lg:p-6 border border-white/5 shrink-0 space-y-4" onPaste={handleDialogPaste}>
+                  <div className="glass rounded-[2rem] p-4 lg:p-6 border border-[#252528] shrink-0 space-y-4" onPaste={handleDialogPaste}>
                   <div className="flex flex-wrap items-center gap-2 lg:gap-3">
                     <span className="text-[9px] font-black text-gray-500 uppercase">开启生图</span>
-                    <button type="button" role="switch" aria-checked={dialogAutoGenerateImage} onClick={() => setDialogAutoGenerateImage(p => !p)} className={`relative w-11 h-6 rounded-full transition-colors ${dialogAutoGenerateImage ? 'bg-blue-600' : 'bg-white/10'}`}>
+                    <button type="button" role="switch" aria-checked={dialogAutoGenerateImage} onClick={() => setDialogAutoGenerateImage(p => !p)} className={`relative w-11 h-6 rounded-full transition-colors ${dialogAutoGenerateImage ? 'bg-blue-600' : 'bg-[#26262c]'}`}>
                       <span className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform ${dialogAutoGenerateImage ? 'left-6' : 'left-1'}`} />
                     </button>
                     <span className="text-[9px] font-black text-gray-500 uppercase">挡位</span>
-                    <div className="flex rounded-lg overflow-hidden border border-white/10">
+                    <div className="flex rounded-lg overflow-hidden border border-[#2e2e32]">
                       {DIALOG_IMAGE_GEARS.map(g => (
-                        <button key={g.id} type="button" onClick={() => { setDialogImageGear(g.id); setDialogModel(g.modelId); }} className={`px-3 py-2 text-[9px] font-black uppercase transition-colors ${dialogImageGear === g.id ? 'bg-blue-600 text-white' : 'bg-white/5 text-gray-500 hover:bg-white/10'}`} title={g.modelId}>{g.label}</button>
+                        <button key={g.id} type="button" onClick={() => { setDialogImageGear(g.id); setDialogModel(g.modelId); }} className={`px-3 py-2 text-[9px] font-black uppercase transition-colors ${dialogImageGear === g.id ? 'bg-blue-600 text-white' : 'bg-[#1c1c22] text-gray-500 hover:bg-[#2e2e36]'}`} title={g.modelId}>{g.label}</button>
                       ))}
                     </div>
                     <span className="text-[9px] font-black text-gray-500 uppercase">比例</span>
@@ -3054,10 +3082,10 @@ const MainApp: React.FC = () => {
                     {dialogInputImages.length > 0 && (
                       <div className="flex flex-wrap items-center gap-2">
                         {dialogInputImages.map((img, i) => (
-                          <div key={img.id} className="relative inline-flex items-center gap-1 rounded-lg border border-white/10 bg-white/5 overflow-hidden">
+                          <div key={img.id} className="relative inline-flex items-center gap-1 rounded-lg border border-[#2e2e32] bg-[#1c1c22] overflow-hidden">
                             <span className="pl-2 text-[8px] font-black text-gray-500">图{i + 1}</span>
                             <img src={img.data} className="h-12 w-12 object-cover" alt={`图${i + 1}`} />
-                            <button type="button" onClick={() => setDialogInputImages(prev => prev.filter(x => x.id !== img.id))} className="p-1 text-red-400 hover:bg-red-500/20 rounded text-[10px] leading-none">×</button>
+                            <button type="button" onClick={() => setDialogInputImages(prev => prev.filter(x => x.id !== img.id))} className="p-1 text-red-400 hover:bg-[#4a1c1c] rounded text-[10px] leading-none">×</button>
                           </div>
                         ))}
                       </div>
@@ -3065,7 +3093,7 @@ const MainApp: React.FC = () => {
                     <span className="text-[9px] text-gray-500">可添加多张图片（最多 {DIALOG_INPUT_IMAGES_MAX} 张），输入 @ 弹出选择图片；点击临时库图片直接加入输入框 · Ctrl+V 粘贴 · 无图时直接输入即文字对话</span>
                   </div>
                   {dialogValidationError && (
-                    <div className="text-[11px] text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded-xl px-4 py-2 flex items-center gap-2">
+                    <div className="text-[11px] text-amber-400 bg-[#2c2412] border border-[#b45309] rounded-xl px-4 py-2 flex items-center gap-2">
                       <AppIcon name="warning" className="shrink-0 w-3.5 h-3.5" />
                       <span>{dialogValidationError}</span>
                       <button type="button" onClick={() => setDialogValidationError(null)} className="ml-auto shrink-0 text-amber-400/80 hover:text-amber-300">×</button>
@@ -3074,7 +3102,7 @@ const MainApp: React.FC = () => {
                   <div ref={dialogInputWrapperRef} className="flex gap-3 relative">
                     <div className="flex-1 relative">
                       <label
-                        className="absolute left-2 top-1/2 z-[1] -translate-y-1/2 flex h-9 w-9 cursor-pointer items-center justify-center rounded-lg border border-white/10 bg-white/5 text-gray-400 hover:bg-white/10 hover:text-gray-200 transition-colors"
+                        className="absolute left-2 top-1/2 z-[1] -translate-y-1/2 flex h-9 w-9 cursor-pointer items-center justify-center rounded-lg border border-[#2e2e32] bg-[#1c1c22] text-gray-400 hover:bg-[#2e2e36] hover:text-gray-200 transition-colors"
                         title="上传图片"
                         aria-label="上传图片"
                       >
@@ -3116,27 +3144,27 @@ const MainApp: React.FC = () => {
                           if (e.key === 'Enter' && !e.shiftKey) handleDialogSend();
                         }}
                         placeholder="输入 @ 选择图片或直接输入文字；有图时描述修改需求，无图时可描述画面生成图片或与 AI 文字对话"
-                        className="w-full bg-white/5 border border-white/10 rounded-xl pl-12 pr-5 py-3 text-[11px] outline-none focus:border-blue-500 transition-colors placeholder:text-gray-600"
+                        className="w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl pl-12 pr-5 py-3 text-[11px] outline-none focus:border-blue-500 transition-colors placeholder:text-gray-600"
                       />
                       {atSuggestionsOpen && (dialogInputImages.length > 0 || dialogTempFiltered.length > 0) && (
-                        <div className="absolute left-0 right-0 top-full mt-1 z-[1003] rounded-xl border border-white/10 bg-[#0f0f0f] shadow-xl py-1 max-h-48 overflow-y-auto">
+                        <div className="absolute left-0 right-0 top-full mt-1 z-[1003] rounded-xl border border-[#2e2e32] bg-[#0f0f0f] shadow-xl py-1 max-h-48 overflow-y-auto">
                           {dialogInputImages.length > 0 && (
                             <div className="px-2 py-1 text-[8px] font-black text-gray-500 uppercase">输入框图片</div>
                           )}
                           {dialogInputImages.map((img, i) => {
                             const imageNumber = i + 1;
                             return (
-                            <button key={img.id} type="button" onClick={() => { const newText = dialogInputText.slice(0, atSuggestionsCursor) + `@图${imageNumber} ` + dialogInputText.slice(atSuggestionsCursor + 1); setDialogInputText(newText); setAtSuggestionsOpen(false); dialogInputRef.current?.focus(); }} className="w-full flex items-center gap-2 px-3 py-2 text-left text-[11px] hover:bg-white/10 rounded-lg">
+                            <button key={img.id} type="button" onClick={() => { const newText = dialogInputText.slice(0, atSuggestionsCursor) + `@图${imageNumber} ` + dialogInputText.slice(atSuggestionsCursor + 1); setDialogInputText(newText); setAtSuggestionsOpen(false); dialogInputRef.current?.focus(); }} className="w-full flex items-center gap-2 px-3 py-2 text-left text-[11px] hover:bg-[#2e2e36] rounded-lg">
                               <img src={img.data} className="w-8 h-8 rounded object-cover shrink-0" alt="" />
                               <span>图{imageNumber}</span>
                             </button>
                             );
                           })}
                           {dialogTempFiltered.length > 0 && (
-                            <div className="px-2 py-1 text-[8px] font-black text-gray-500 uppercase mt-1 border-t border-white/5">临时库（点击加入输入框并插入 @）</div>
+                            <div className="px-2 py-1 text-[8px] font-black text-gray-500 uppercase mt-1 border-t border-[#252528]">临时库（点击加入输入框并插入 @）</div>
                           )}
                           {dialogTempFiltered.map((item, i) => (
-                            <button key={item.id} type="button" onClick={() => { handleDialogTempAddToInput(item); const newIdx = dialogInputImages.length + 1; const newText = dialogInputText.slice(0, atSuggestionsCursor) + `@图${newIdx} ` + dialogInputText.slice(atSuggestionsCursor + 1); setDialogInputText(newText); setAtSuggestionsOpen(false); dialogInputRef.current?.focus(); }} className="w-full flex items-center gap-2 px-3 py-2 text-left text-[11px] hover:bg-white/10 rounded-lg">
+                            <button key={item.id} type="button" onClick={() => { handleDialogTempAddToInput(item); const newIdx = dialogInputImages.length + 1; const newText = dialogInputText.slice(0, atSuggestionsCursor) + `@图${newIdx} ` + dialogInputText.slice(atSuggestionsCursor + 1); setDialogInputText(newText); setAtSuggestionsOpen(false); dialogInputRef.current?.focus(); }} className="w-full flex items-center gap-2 px-3 py-2 text-left text-[11px] hover:bg-[#2e2e36] rounded-lg">
                               <img src={item.data} className="w-8 h-8 rounded object-cover shrink-0" alt="" />
                               <span className="truncate">{item.label || `临时库 ${i + 1}`}</span>
                             </button>
@@ -3150,19 +3178,19 @@ const MainApp: React.FC = () => {
                 </div>
 
                 {/* 右侧：临时库（生图与识别物体自动加入，可筛全部/当前对话，删会话会同步清理） */}
-                <div className="w-52 lg:w-64 shrink-0 flex flex-col border border-white/10 rounded-2xl overflow-hidden bg-black/20 h-[calc(100dvh-6rem)]">
-                  <div className="flex-shrink-0 px-3 py-2 border-b border-white/10 flex items-center justify-between gap-2 flex-wrap">
+                <div className="w-52 lg:w-64 shrink-0 flex flex-col border border-[#2e2e32] rounded-2xl overflow-hidden bg-[#121214] h-[calc(100dvh-6rem)]">
+                  <div className="flex-shrink-0 px-3 py-2 border-b border-[#2e2e32] flex items-center justify-between gap-2 flex-wrap">
                     <span className="text-[9px] font-black text-gray-500 uppercase tracking-widest">临时库</span>
-                    <div className="flex rounded-lg overflow-hidden border border-white/10">
-                      <button onClick={() => setDialogTempLibraryFilter('all')} className={`px-2 py-1.5 text-[9px] font-black ${dialogTempLibraryFilter === 'all' ? 'bg-blue-600 text-white' : 'bg-white/5 text-gray-500 hover:bg-white/10'}`}>全部</button>
-                      <button onClick={() => setDialogTempLibraryFilter('current')} className={`px-2 py-1.5 text-[9px] font-black ${dialogTempLibraryFilter === 'current' ? 'bg-blue-600 text-white' : 'bg-white/5 text-gray-500 hover:bg-white/10'}`}>当前</button>
+                    <div className="flex rounded-lg overflow-hidden border border-[#2e2e32]">
+                      <button onClick={() => setDialogTempLibraryFilter('all')} className={`px-2 py-1.5 text-[9px] font-black ${dialogTempLibraryFilter === 'all' ? 'bg-blue-600 text-white' : 'bg-[#1c1c22] text-gray-500 hover:bg-[#2e2e36]'}`}>全部</button>
+                      <button onClick={() => setDialogTempLibraryFilter('current')} className={`px-2 py-1.5 text-[9px] font-black ${dialogTempLibraryFilter === 'current' ? 'bg-blue-600 text-white' : 'bg-[#1c1c22] text-gray-500 hover:bg-[#2e2e36]'}`}>当前</button>
                     </div>
                   </div>
                   {dialogTempFiltered.length > 0 && (
-                    <div className="flex-shrink-0 px-2 py-1.5 border-b border-white/5 flex flex-wrap items-center gap-1.5">
-                      <button onClick={handleDialogTempSelectAll} className="shrink-0 px-2 py-1 rounded bg-white/5 text-[8px] font-black text-gray-400 hover:bg-white/10 whitespace-nowrap">全选</button>
-                      <button onClick={handleDialogTempInvertSelect} className="shrink-0 px-2 py-1 rounded bg-white/5 text-[8px] font-black text-gray-400 hover:bg-white/10 whitespace-nowrap">反选</button>
-                      <button onClick={handleDialogTempBatchDownload} disabled={dialogTempSelectedIds.size === 0} className="shrink-0 px-2 py-1 rounded bg-blue-600/50 text-[8px] font-black text-white hover:bg-blue-600 disabled:opacity-40 whitespace-nowrap">批量下载{dialogTempSelectedIds.size > 0 ? `(${dialogTempSelectedIds.size})` : ''}</button>
+                    <div className="flex-shrink-0 px-2 py-1.5 border-b border-[#252528] flex flex-wrap items-center gap-1.5">
+                      <button onClick={handleDialogTempSelectAll} className="shrink-0 px-2 py-1 rounded bg-[#1c1c22] text-[8px] font-black text-gray-400 hover:bg-[#2e2e36] whitespace-nowrap">全选</button>
+                      <button onClick={handleDialogTempInvertSelect} className="shrink-0 px-2 py-1 rounded bg-[#1c1c22] text-[8px] font-black text-gray-400 hover:bg-[#2e2e36] whitespace-nowrap">反选</button>
+                      <button onClick={handleDialogTempBatchDownload} disabled={dialogTempSelectedIds.size === 0} className="shrink-0 px-2 py-1 rounded bg-[#365e92] text-[8px] font-black text-white hover:bg-blue-600 disabled:opacity-40 whitespace-nowrap">批量下载{dialogTempSelectedIds.size > 0 ? `(${dialogTempSelectedIds.size})` : ''}</button>
                     </div>
                   )}
                   <div className="flex-1 overflow-y-auto no-scrollbar p-2 min-h-0">
@@ -3171,24 +3199,24 @@ const MainApp: React.FC = () => {
                     ) : (
                       <div className="grid grid-cols-2 gap-2">
                         {dialogTempFiltered.map(item => (
-                          <div key={item.id} className="relative group rounded-xl overflow-hidden border border-white/10 bg-white/5 aspect-square">
-                            <input type="checkbox" checked={dialogTempSelectedIds.has(item.id)} onChange={() => handleDialogTempToggleSelect(item.id)} onClick={e => e.stopPropagation()} className="absolute top-1 left-1 z-10 w-4 h-4 rounded border-white/30 bg-black/50 accent-blue-500" title="选择" />
+                          <div key={item.id} className="relative group rounded-xl overflow-hidden border border-[#2e2e32] bg-[#1c1c22] aspect-square">
+                            <input type="checkbox" checked={dialogTempSelectedIds.has(item.id)} onChange={() => handleDialogTempToggleSelect(item.id)} onClick={e => e.stopPropagation()} className="absolute top-1 left-1 z-10 w-4 h-4 rounded border-[#484850] bg-[#18181c] accent-blue-500" title="选择" />
                             <img src={item.data} className="w-full h-full object-cover cursor-pointer" alt="" onClick={() => handleDialogTempAddToInput(item)} title="点击加入输入框" />
-                            {item.label && <span className="absolute bottom-0 left-0 right-0 py-0.5 text-center text-[9px] font-black bg-black/60 text-white truncate">{item.label}</span>}
-                            <div className="absolute inset-0 bg-black/50 group-hover:opacity-100 opacity-0 transition-opacity flex flex-col items-stretch justify-start gap-0.5 p-1 overflow-y-auto overflow-x-hidden min-h-0">
-                              <button onClick={(e) => { e.stopPropagation(); setDialogTempPreviewId(item.id); }} className="shrink-0 w-full px-2 py-1 rounded-lg bg-black/70 text-[9px] font-black text-white hover:bg-white/20 transition-colors text-left" title="查看大图及详情">查看大图</button>
+                            {item.label && <span className="absolute bottom-0 left-0 right-0 py-0.5 text-center text-[9px] font-black bg-[#1a1a1e] text-white truncate">{item.label}</span>}
+                            <div className="absolute inset-0 bg-[#18181c] group-hover:opacity-100 opacity-0 transition-opacity flex flex-col items-stretch justify-start gap-0.5 p-1 overflow-y-auto overflow-x-hidden min-h-0">
+                              <button onClick={(e) => { e.stopPropagation(); setDialogTempPreviewId(item.id); }} className="shrink-0 w-full px-2 py-1 rounded-lg bg-[#0d0d10] text-[9px] font-black text-white hover:bg-[#383842] transition-colors text-left" title="查看大图及详情">查看大图</button>
                               {item.sourceMessageId && (
-                                <button onClick={(e) => { e.stopPropagation(); handleDialogTempLocateMessage(item); setDialogTempPreviewId(null); }} className="shrink-0 w-full px-2 py-1 rounded-lg bg-black/70 text-[9px] font-black text-white hover:bg-blue-600/80 transition-colors text-left">定位消息</button>
+                                <button onClick={(e) => { e.stopPropagation(); handleDialogTempLocateMessage(item); setDialogTempPreviewId(null); }} className="shrink-0 w-full px-2 py-1 rounded-lg bg-[#0d0d10] text-[9px] font-black text-white hover:bg-[#1e40af] transition-colors text-left">定位消息</button>
                               )}
-                              <button onClick={(e) => { e.stopPropagation(); handleDialogTempAddToInput(item); setDialogTempPreviewId(null); }} className="shrink-0 w-full px-2 py-1 rounded-lg bg-black/70 text-[9px] font-black text-white hover:bg-green-600/80 transition-colors text-left">加入输入框</button>
-                              <button onClick={(e) => { e.stopPropagation(); addDialogTempToLibrary(item); }} className="shrink-0 w-full px-2 py-1 rounded-lg bg-black/70 text-[9px] font-black text-white hover:bg-blue-600/80 transition-colors text-left">加入资产库</button>
+                              <button onClick={(e) => { e.stopPropagation(); handleDialogTempAddToInput(item); setDialogTempPreviewId(null); }} className="shrink-0 w-full px-2 py-1 rounded-lg bg-[#0d0d10] text-[9px] font-black text-white hover:bg-[#15803d] transition-colors text-left">加入输入框</button>
+                              <button onClick={(e) => { e.stopPropagation(); addDialogTempToLibrary(item); }} className="shrink-0 w-full px-2 py-1 rounded-lg bg-[#0d0d10] text-[9px] font-black text-white hover:bg-[#1e40af] transition-colors text-left">加入资产库</button>
                               <button
                                 type="button"
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   void triggerImageDownload(item.data, `临时库_${item.label || item.id}`);
                                 }}
-                                className="shrink-0 w-full px-2 py-1 rounded-lg bg-black/70 text-[9px] font-black text-white hover:bg-white/20 text-center transition-colors block"
+                                className="shrink-0 w-full px-2 py-1 rounded-lg bg-[#0d0d10] text-[9px] font-black text-white hover:bg-[#383842] text-center transition-colors block"
                               >
                                 下载
                               </button>
@@ -3204,10 +3232,10 @@ const MainApp: React.FC = () => {
                 const item = dialogTempLibrary.find(x => x.id === dialogTempPreviewId);
                 if (!item) return null;
                 return (
-                  <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/90 backdrop-blur-sm animate-in fade-in p-4" onClick={() => setDialogTempPreviewId(null)}>
+                  <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in p-4" onClick={() => setDialogTempPreviewId(null)}>
                     <div className="relative max-w-[90vw] max-h-[90vh] flex flex-col items-center gap-3 overflow-y-auto" onClick={e => e.stopPropagation()}>
                       <img src={item.data} className="max-w-full max-h-[60vh] object-contain rounded-xl shadow-2xl" alt="" />
-                      <div className="w-full max-w-2xl rounded-xl bg-white/5 border border-white/10 p-4 space-y-2 text-left">
+                      <div className="w-full max-w-2xl rounded-xl bg-[#1c1c22] border border-[#2e2e32] p-4 space-y-2 text-left">
                         <div className="text-[9px] font-black text-gray-500 uppercase">类型</div>
                         <div className="text-[11px] text-white">{dialogTempSourceTypeLabel(item.sourceType)}{item.label ? ` · ${item.label}` : ''}</div>
                         {(item.userPrompt || item.understoodPrompt) && (
@@ -3230,20 +3258,20 @@ const MainApp: React.FC = () => {
                       </div>
                       <div className="flex flex-wrap items-center justify-center gap-2">
                         {item.sourceMessageId && (
-                          <button onClick={() => { handleDialogTempLocateMessage(item); setDialogTempPreviewId(null); }} className="px-4 py-2 rounded-xl bg-blue-600/80 text-[10px] font-black text-white hover:bg-blue-500 transition-colors">定位消息</button>
+                          <button onClick={() => { handleDialogTempLocateMessage(item); setDialogTempPreviewId(null); }} className="px-4 py-2 rounded-xl bg-[#1e40af] text-[10px] font-black text-white hover:bg-blue-500 transition-colors">定位消息</button>
                         )}
-                        <button onClick={() => { handleDialogTempAddToInput(item); setDialogTempPreviewId(null); }} className="px-4 py-2 rounded-xl bg-green-600/80 text-[10px] font-black text-white hover:bg-green-500 transition-colors">加入输入框</button>
-                        <button onClick={() => addDialogTempToLibrary(item)} className="px-4 py-2 rounded-xl bg-blue-600/80 text-[10px] font-black text-white hover:bg-blue-500 transition-colors">加入资产库</button>
+                        <button onClick={() => { handleDialogTempAddToInput(item); setDialogTempPreviewId(null); }} className="px-4 py-2 rounded-xl bg-[#15803d] text-[10px] font-black text-white hover:bg-[#22c55e] transition-colors">加入输入框</button>
+                        <button onClick={() => addDialogTempToLibrary(item)} className="px-4 py-2 rounded-xl bg-[#1e40af] text-[10px] font-black text-white hover:bg-blue-500 transition-colors">加入资产库</button>
                         <button
                           type="button"
                           onClick={() => {
                             void triggerImageDownload(item.data, `临时库_${item.label || item.id}`);
                           }}
-                          className="px-4 py-2 rounded-xl bg-white/10 text-[10px] font-black text-white hover:bg-white/20 transition-colors"
+                          className="px-4 py-2 rounded-xl bg-[#26262c] text-[10px] font-black text-white hover:bg-[#383842] transition-colors"
                         >
                           下载
                         </button>
-                        <button onClick={() => setDialogTempPreviewId(null)} className="px-4 py-2 rounded-xl bg-black/60 text-[10px] font-black text-white hover:bg-black/80">关闭</button>
+                        <button onClick={() => setDialogTempPreviewId(null)} className="px-4 py-2 rounded-xl bg-[#1a1a1e] text-[10px] font-black text-white hover:bg-[#1e1e22]">关闭</button>
                       </div>
                     </div>
                   </div>
@@ -3254,10 +3282,10 @@ const MainApp: React.FC = () => {
 
             {/* 对话生图裁切编辑器：全屏选区，确认后作为新版本显示在对话中 */}
             {dialogCropState && (
-              <div className="fixed inset-0 z-[2000] flex flex-col items-center justify-center bg-black/90 p-4">
+              <div className="fixed inset-0 z-[2000] flex flex-col items-center justify-center bg-black/60 backdrop-blur-sm p-4">
                 <div className="text-[10px] text-gray-400 mb-3">拖拽选择裁切区域，然后点击「确认裁切」</div>
                 <div
-                  className="inline-block max-w-full max-h-[70vh] relative cursor-crosshair select-none rounded-xl overflow-hidden border border-white/10"
+                  className="inline-block max-w-full max-h-[70vh] relative cursor-crosshair select-none rounded-xl overflow-hidden border border-[#2e2e32]"
                   onMouseDown={handleDialogCropMouseDown}
                 >
                   <img
@@ -3276,14 +3304,14 @@ const MainApp: React.FC = () => {
                   if (w < 2 && h < 2) return null;
                   return (
                     <div
-                      className="absolute pointer-events-none border-2 border-blue-500 bg-blue-500/20"
+                      className="absolute pointer-events-none border border-dashed border-blue-400/75 bg-blue-500/15 shadow-[inset_0_0_0_1px_rgba(59,130,246,0.25)]"
                       style={{ position: 'fixed', left, top, width: w, height: h, zIndex: 2001 }}
                     />
                   );
                 })()}
                 <div className="flex items-center gap-3 mt-4">
                   <button onClick={handleDialogCropExecute} className="px-5 py-2.5 rounded-xl bg-blue-600 text-[10px] font-black text-white hover:bg-blue-500 transition-colors">确认裁切</button>
-                  <button onClick={handleDialogCropCancel} className="px-5 py-2.5 rounded-xl bg-white/10 border border-white/20 text-[10px] font-black text-white hover:bg-white/20 transition-colors">取消</button>
+                  <button onClick={handleDialogCropCancel} className="px-5 py-2.5 rounded-xl bg-[#26262c] border border-[#3a3a40] text-[10px] font-black text-white hover:bg-[#383842] transition-colors">取消</button>
                 </div>
               </div>
             )}
@@ -3293,11 +3321,11 @@ const MainApp: React.FC = () => {
                  <div className="w-full lg:w-48 shrink-0 flex flex-col gap-4">
                    <div className="flex flex-row lg:flex-col gap-2 overflow-x-auto no-scrollbar pb-2 lg:pb-0">
                      {(['ALL', 'SCENE_OBJECT', 'PREVIEW_STRIP', 'PRODUCTION_ASSET', 'MESH_MODEL', 'TEXTURE_MAP'] as const).map(cat => (
-                       <button key={cat} onClick={() => setLibFilter(cat)} className={`px-6 py-3 rounded-xl text-[9px] font-black uppercase border transition-all whitespace-nowrap ${libFilter === cat ? 'bg-blue-600 border-blue-500 text-white' : 'bg-white/5 border-transparent text-gray-500 hover:bg-white/10'}`}>{LIBRARY_CATEGORY_LABELS[cat]}</button>
+                       <button key={cat} onClick={() => setLibFilter(cat)} className={`px-6 py-3 rounded-xl text-[9px] font-black uppercase border transition-all whitespace-nowrap ${libFilter === cat ? 'bg-blue-600 border-blue-500 text-white' : 'bg-[#1c1c22] border-transparent text-gray-500 hover:bg-[#2e2e36]'}`}>{LIBRARY_CATEGORY_LABELS[cat]}</button>
                      ))}
                    </div>
                    <p className="text-[9px] text-gray-500 uppercase tracking-widest">共 {groupedLibrary.length} 组</p>
-                   <label className="px-4 py-2.5 rounded-xl bg-blue-600/20 border border-blue-500/40 text-[9px] font-black uppercase text-blue-300 cursor-pointer hover:bg-blue-600/30 text-center">
+                   <label className="px-4 py-2.5 rounded-xl bg-[#1e3558] border border-[#3b6fb8] text-[9px] font-black uppercase text-blue-300 cursor-pointer hover:bg-[#305a90] text-center">
                      上传图片
                     <input type="file" className="hidden" accept="image/*" multiple onChange={(e: React.ChangeEvent<HTMLInputElement>) => { const input = e.currentTarget; const files: File[] = input.files ? Array.from(input.files) : []; files.filter((f) => f.type.startsWith('image/')).slice(0, 50).forEach((f) => { const r = new FileReader(); r.onload = () => addToLibrary([{ data: r.result as string, type: 'SLICE', category: 'SCENE_OBJECT', label: f.name.replace(/\.[^.]+$/, '') || '上传图片' }]); r.readAsDataURL(f); }); input.value = ''; }} />
                    </label>
@@ -3305,9 +3333,9 @@ const MainApp: React.FC = () => {
                  <div className="flex-1 flex flex-col gap-4">
                    <div className="flex flex-wrap items-center gap-2">
                      <span className="text-[9px] font-black text-gray-500 uppercase">批量操作</span>
-                     <button onClick={handleLibSelectAll} className="px-3 py-2 rounded-xl text-[9px] font-black uppercase border border-white/10 bg-white/5 hover:bg-white/10">全选</button>
-                     <button onClick={handleLibInvertSelect} className="px-3 py-2 rounded-xl text-[9px] font-black uppercase border border-white/10 bg-white/5 hover:bg-white/10">反选</button>
-                     <button onClick={handleLibBatchDownload} disabled={libSelectedGroupIds.size === 0} className="px-3 py-2 rounded-xl text-[9px] font-black uppercase border border-blue-500/50 bg-blue-600/20 text-blue-300 hover:bg-blue-600/30 disabled:opacity-40 disabled:cursor-not-allowed">批量下载（{libSelectedGroupIds.size}）</button>
+                     <button onClick={handleLibSelectAll} className="px-3 py-2 rounded-xl text-[9px] font-black uppercase border border-[#2e2e32] bg-[#1c1c22] hover:bg-[#2e2e36]">全选</button>
+                     <button onClick={handleLibInvertSelect} className="px-3 py-2 rounded-xl text-[9px] font-black uppercase border border-[#2e2e32] bg-[#1c1c22] hover:bg-[#2e2e36]">反选</button>
+                     <button onClick={handleLibBatchDownload} disabled={libSelectedGroupIds.size === 0} className="px-3 py-2 rounded-xl text-[9px] font-black uppercase border border-[#3b82f6] bg-[#1e3558] text-blue-300 hover:bg-[#305a90] disabled:opacity-40 disabled:cursor-not-allowed">批量下载（{libSelectedGroupIds.size}）</button>
                    </div>
                    {groupedLibrary.length === 0 ? (
                      <div className="flex flex-col items-center justify-center py-20 text-center">
@@ -3346,11 +3374,11 @@ const MainApp: React.FC = () => {
         <button
           type="button"
           onClick={scrollToTop}
-          className="fixed bottom-6 right-6 z-[1000] w-10 h-10 rounded-full bg-white/10 border border-white/20 flex items-center justify-center text-[14px] hover:bg-white/20 transition-all shadow-lg"
+          className="fixed bottom-6 right-6 z-[1000] w-10 h-10 rounded-full bg-[#26262c] border border-[#3a3a40] flex items-center justify-center text-white/90 hover:bg-[#383842] hover:border-[#484850] transition-colors duration-200 shadow-lg cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-[#3b82f6] focus-visible:ring-offset-2 focus-visible:ring-offset-[#050505]"
           title="回到顶部"
           aria-label="回到顶部"
         >
-          ↑
+          <AppIcon name="chevron-up" className="w-5 h-5" />
         </button>
       )}
     </div>

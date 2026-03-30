@@ -69,7 +69,7 @@ const MultiViewUpload: React.FC<MultiViewUploadProps> = ({
         onChange={handleFileChange}
       />
       {/* 中心：物体示意 */}
-      <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-14 h-14 rounded-2xl border border-white/20 bg-black/40 flex items-center justify-center">
+      <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-14 h-14 rounded-2xl border border-[#3a3a40] bg-[#16161a] flex items-center justify-center">
         <span className="text-[9px] font-black text-white/60 uppercase">物体</span>
       </div>
       {/* 8 个视角槽沿圆周排列：0° 前, 45° 右前, 90° 右, ... */}
@@ -95,8 +95,8 @@ const MultiViewUpload: React.FC<MultiViewUploadProps> = ({
               <div
                 className={`w-full h-full rounded-xl border-2 border-dashed flex flex-col items-center justify-center overflow-hidden transition-all duration-200 ${
                   hasImage
-                    ? 'border-blue-500/60 bg-blue-500/10 shadow-lg shadow-blue-500/20'
-                    : 'border-white/20 bg-white/5 hover:border-blue-500/40 hover:bg-white/10'
+                    ? 'border-[#3b82f6] bg-[#1a3354] shadow-lg shadow-blue-500/20'
+                    : 'border-[#3a3a40] bg-[#1c1c22] hover:border-[#3b6fb8] hover:bg-[#2e2e36]'
                 }`}
               >
                 {hasImage ? (
@@ -109,7 +109,7 @@ const MultiViewUpload: React.FC<MultiViewUploadProps> = ({
                     <button
                       type="button"
                       onClick={(e) => removeSlot(viewId, e)}
-                      className="absolute top-0.5 right-0.5 w-4 h-4 rounded-full bg-red-500/90 text-white text-[10px] flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                      className="absolute top-0.5 right-0.5 w-4 h-4 rounded-full bg-[#dc2626] text-white text-[10px] flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
                     >
                       ×
                     </button>

@@ -1,13 +1,26 @@
 import React, { useState, useCallback, useMemo, useRef, useEffect, startTransition } from 'react';
 import { createPortal } from 'react-dom';
-import type { WorkflowAsset, WorkflowPendingTask, CapabilitySet } from '../types';
+import type { WorkflowAsset, WorkflowPendingTask, CapabilitySet, VgpGenStepCapture } from '../types';
 import type { CustomAppModule, LibraryItem, WorkflowCutGroupItem } from '../types';
 import type { BoundingBox } from '../types';
 import { CAPABILITY_CATEGORIES } from '../types';
 import { getRandomGroupCodeName } from '../data/groupCodeNames';
 import { detectObjectsInImage, DEFAULT_PROMPTS } from '../services/geminiService';
-import { executeCapability, executeCapabilitySet } from '../services/capabilityExecutor';
+import {
+  executeCapability,
+  executeCapabilitySet,
+  getCapabilityEngine,
+  type CapabilityExecuteContext,
+} from '../services/capabilityExecutor';
+import { getPromptCompilerEnabled } from '../services/featureFlags';
+import {
+  applyVgpAfterSuccessfulGen,
+  applyVgpAfterCutStep,
+  attachInitialVgpToNewAsset,
+} from '../services/vgp/vgpStore';
 import { WorkflowApiKeyModal } from './WorkflowApiKeyModal';
+import { WorkflowGenerationRecordPanel } from './WorkflowGenerationRecordPanel';
+import { WorkflowPlannerBar } from './WorkflowPlannerBar';
 import { isAiInvocationReady } from '../services/settingsStore';
 import { triggerImageDownload } from '../services/imageDataUrl';
 import AppIcon from './ui/AppIcon';
@@ -15,8 +28,24 @@ import AppIcon from './ui/AppIcon';
 /** 云端 hydrate 前预览图为空时避免 img 的 src 为空字符串 */
 const WORKFLOW_IMG_EMPTY_PLACEHOLDER =
   'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
-const workflowSafeImgSrc = (s: string | undefined | null) =>
-  s != null && String(s).trim() !== '' ? s : WORKFLOW_IMG_EMPTY_PLACEHOLDER;
+
+/** 持久化数据异常时可能混入非 string，避免把对象传给 img src 触发 React 抛错 */
+const asWorkflowImageString = (v: unknown): string => (typeof v === 'string' ? v : '');
+
+const workflowSafeImgSrc = (s: string | undefined | null) => {
+  if (typeof s !== 'string' || s.trim() === '') return WORKFLOW_IMG_EMPTY_PLACEHOLDER;
+  return s;
+};
+
+function safeUnknownToString(v: unknown): string {
+  if (typeof v === 'string') return v;
+  if (v instanceof Error) return v.message;
+  try {
+    return String(v);
+  } catch {
+    return '[无法序列化的错误]';
+  }
+}
 
 const uuid = () => Math.random().toString(36).slice(2, 11);
 const RESULT_VER_SEP = '__v__';
@@ -63,8 +92,8 @@ const CutSelectModal: React.FC<{
   const toggle = (i: number) => setSelected((prev) => { const n = new Set(prev); if (n.has(i)) n.delete(i); else n.add(i); return n; });
   const scale = 1000;
   return (
-    <div className="fixed inset-0 z-[2100] flex items-center justify-center bg-black/90 backdrop-blur-xl p-4" onClick={onCancel}>
-      <div className="relative max-w-4xl w-full max-h-[90vh] overflow-auto rounded-2xl border border-white/10 bg-black/80 p-4" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-[2100] flex items-center justify-center bg-black/55 backdrop-blur-sm p-4" onClick={onCancel}>
+      <div className="relative max-w-4xl w-full max-h-[90vh] overflow-auto rounded-2xl border border-white/10 bg-[#14141a]/92 backdrop-blur-md shadow-xl p-4" onClick={(e) => e.stopPropagation()}>
         <div className="flex justify-between items-center mb-3">
           <h3 className="text-[10px] font-black uppercase text-blue-400">识别到物体，勾选要切割保存的区域</h3>
           <button onClick={onCancel} className="w-8 h-8 flex items-center justify-center text-white/50 hover:text-white"><AppIcon name="close" className="w-4 h-4" /></button>
@@ -88,7 +117,7 @@ const CutSelectModal: React.FC<{
         </div>
         <div className="flex flex-wrap gap-2 mt-3">
           {boxes.map((b, i) => (
-            <label key={i} className="flex items-center gap-2 cursor-pointer px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10">
+            <label key={i} className="flex items-center gap-2 cursor-pointer px-3 py-1.5 rounded-lg bg-[#1c1c22] border border-[#2e2e32] hover:bg-[#2e2e36]">
               <input type="checkbox" checked={selected.has(i)} onChange={() => toggle(i)} className="rounded" />
               <span className="text-[9px] font-black uppercase">{b.label || `区域 ${i + 1}`}</span>
             </label>
@@ -96,7 +125,7 @@ const CutSelectModal: React.FC<{
         </div>
         <div className="flex gap-2 mt-4">
           <button onClick={() => onConfirm([...selected])} disabled={selected.size === 0} className="px-4 py-2 rounded-xl bg-blue-600 text-[10px] font-black uppercase disabled:opacity-40">确认切割（{selected.size}）</button>
-          <button onClick={onCancel} className="px-4 py-2 rounded-xl bg-white/10 text-[10px] font-black uppercase">取消</button>
+          <button onClick={onCancel} className="px-4 py-2 rounded-xl bg-[#26262c] text-[10px] font-black uppercase">取消</button>
         </div>
       </div>
     </div>
@@ -107,7 +136,13 @@ const CutSelectModal: React.FC<{
 const PromptTweakModal: React.FC<{
   preset: CustomAppModule;
   targets: Array<
-    | { assetId: string; inputImage: string; sourceGroupAssetId?: string; sourceItemIndex?: number }
+    | {
+        assetId: string;
+        inputImage: string;
+        inputSourceDisplayKey?: string;
+        sourceGroupAssetId?: string;
+        sourceItemIndex?: number;
+      }
     | { imageBase64: string; parentAssetId: string; sourceGroupAssetId: string; sourceItemIndex: number }
   >;
   onConfirm: (editedPrompt: string) => void;
@@ -119,9 +154,9 @@ const PromptTweakModal: React.FC<{
     setText(preset.instruction || '');
   }, [preset.id, preset.instruction]);
   return createPortal(
-    <div className="fixed inset-0 z-[2100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" onClick={onCancel}>
+    <div className="fixed inset-0 z-[2100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={onCancel}>
       <div
-        className="relative w-full max-w-lg rounded-2xl border border-white/10 bg-[#0f0f0f] shadow-xl p-4"
+        className="relative w-full max-w-lg rounded-2xl border border-white/10 bg-[#0e0e14]/90 backdrop-blur-md shadow-xl p-4"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between mb-3">
@@ -133,7 +168,7 @@ const PromptTweakModal: React.FC<{
           ref={textareaRef}
           value={text}
           onChange={(e) => setText(e.target.value)}
-          className="w-full min-h-[120px] rounded-xl bg-white/5 border border-white/10 px-3 py-2 text-[11px] text-white placeholder-white/40 focus:border-blue-500 outline-none resize-y"
+          className="w-full min-h-[120px] rounded-xl bg-[#1c1c22] border border-[#2e2e32] px-3 py-2 text-[11px] text-white placeholder-white/40 focus:border-blue-500 outline-none resize-y"
           placeholder="预设提示词"
         />
         <div className="flex gap-2 mt-4">
@@ -144,7 +179,7 @@ const PromptTweakModal: React.FC<{
           >
             确定并加入队列
           </button>
-          <button type="button" onClick={onCancel} className="px-4 py-2 rounded-xl bg-white/10 text-[10px] font-black uppercase hover:bg-white/20">
+          <button type="button" onClick={onCancel} className="px-4 py-2 rounded-xl bg-[#26262c] text-[10px] font-black uppercase hover:bg-[#383842]">
             取消
           </button>
         </div>
@@ -377,12 +412,12 @@ const ArchivedDetailModal: React.FC<{
 
   return (
     <div
-      className="fixed inset-0 z-[2000] flex items-start justify-center bg-black/90 backdrop-blur-xl p-4 py-10 overflow-y-auto"
+      className="fixed inset-0 z-[2000] flex items-start justify-center bg-black/55 backdrop-blur-sm p-4 py-10 overflow-y-auto"
       onClick={onClose}
     >
       <div
         ref={containerRef}
-        className="relative max-w-4xl w-full max-h-[90vh] overflow-y-auto no-scrollbar bg-black/60 rounded-2xl border border-white/10 p-6"
+        className="relative max-w-4xl w-full max-h-[90vh] overflow-y-auto no-scrollbar bg-[#14141a]/92 backdrop-blur-md rounded-2xl border border-white/10 p-6 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between mb-4">
@@ -392,7 +427,7 @@ const ArchivedDetailModal: React.FC<{
 
         {/* 切割图片组（像资产库一样可逐张打开） */}
         {cutImages.length > 0 && (
-          <div className="mb-4 rounded-xl border border-white/10 bg-black/40 p-3">
+          <div className="mb-4 rounded-xl border border-[#2e2e32] bg-[#16161a] p-3">
             <div className="flex items-center justify-between mb-2">
               <span className="text-[9px] font-black uppercase text-gray-300">切割图片组（{cutImages.length}）</span>
               <div className="flex items-center gap-2">
@@ -400,7 +435,7 @@ const ArchivedDetailModal: React.FC<{
                 <button
                   type="button"
                   onClick={() => downloadMany(cutImages, 'cut')}
-                  className="px-2 py-1 rounded-lg bg-white/10 text-[8px] font-black uppercase hover:bg-white/20"
+                  className="px-2 py-1 rounded-lg bg-[#26262c] text-[8px] font-black uppercase hover:bg-[#383842]"
                   title="逐张触发下载（浏览器可能会拦截过多下载）"
                 >
                   批量下载
@@ -413,7 +448,7 @@ const ArchivedDetailModal: React.FC<{
                   key={idx}
                   type="button"
                   onClick={() => setCutLightboxIndex(idx)}
-                  className="rounded-lg border border-white/10 bg-black/30 overflow-hidden hover:border-blue-500/40 transition-colors"
+                  className="rounded-lg border border-[#2e2e32] bg-[#141416] overflow-hidden hover:border-[#3b6fb8] transition-colors"
                   title={`第 ${idx + 1} 张`}
                 >
                   <img src={img} alt={`cut-${idx}`} className="w-full h-20 object-cover block" />
@@ -425,20 +460,20 @@ const ArchivedDetailModal: React.FC<{
 
         <div className="space-y-4">
           {stepsForCards.map((s, i) => (
-            <div key={i} className="rounded-xl border border-white/10 overflow-hidden bg-black/40">
-              <div className="px-3 py-2 flex items-center justify-between border-b border-white/5">
+            <div key={i} className="rounded-xl border border-[#2e2e32] overflow-hidden bg-[#16161a]">
+              <div className="px-3 py-2 flex items-center justify-between border-b border-[#252528]">
                 <span className="text-[9px] font-black uppercase text-gray-300">{s.label}</span>
                 {s.executedAt != null && (
                   <span className="text-[8px] text-gray-500">{new Date(s.executedAt).toLocaleString()}</span>
                 )}
                 <button
                   onClick={() => downloadOne(s.image, s.label)}
-                  className="px-2 py-1 rounded-lg bg-white/10 text-[8px] font-black uppercase hover:bg-white/20"
+                  className="px-2 py-1 rounded-lg bg-[#26262c] text-[8px] font-black uppercase hover:bg-[#383842]"
                 >
                   下载此张
                 </button>
               </div>
-              <img src={s.image} alt={s.label} className="w-full max-h-[320px] object-contain bg-black/40" />
+              <img src={s.image} alt={s.label} className="w-full max-h-[320px] object-contain bg-[#16161a]" />
             </div>
           ))}
         </div>
@@ -446,7 +481,7 @@ const ArchivedDetailModal: React.FC<{
           <span className="text-[9px] text-gray-500">拼合后的流程图（按生成顺序）</span>
           {compositeUrl && (
             <>
-              <img src={compositeUrl} alt="流程图" className="max-h-48 rounded-lg border border-white/10" />
+              <img src={compositeUrl} alt="流程图" className="max-h-48 rounded-lg border border-[#2e2e32]" />
               <button
                 onClick={downloadComposite}
                 className="px-4 py-2 rounded-xl bg-blue-600 text-[10px] font-black uppercase hover:bg-blue-500"
@@ -461,7 +496,7 @@ const ArchivedDetailModal: React.FC<{
       {/* 切割组：单张查看（轻量 lightbox，类似资产库单图查看） */}
       {cutLightboxImage && cutLightboxIndex != null && (
         <div
-          className="fixed inset-0 z-[2200] flex items-center justify-center bg-black/90 backdrop-blur-xl p-4"
+          className="fixed inset-0 z-[2200] flex items-center justify-center bg-black/78 backdrop-blur-sm p-4"
           onClick={() => setCutLightboxIndex(null)}
           role="button"
           tabIndex={0}
@@ -481,14 +516,14 @@ const ArchivedDetailModal: React.FC<{
             >
               <AppIcon name="close" className="w-4 h-4" />
             </button>
-            <img src={cutLightboxImage} alt="" className="w-full max-h-[80vh] object-contain rounded-2xl border border-white/10 bg-black/40" />
+            <img src={cutLightboxImage} alt="" className="w-full max-h-[80vh] object-contain rounded-2xl border border-[#2e2e32] bg-[#16161a]" />
             <div className="flex justify-center gap-2 mt-3">
               <button
                 type="button"
                 onClick={() => {
                   void downloadOne(cutLightboxImage, `cut-${cutLightboxIndex + 1}`);
                 }}
-                className="px-3 py-1 rounded-lg bg-blue-600/60 hover:bg-blue-500 text-[9px] font-black"
+                className="px-3 py-1 rounded-lg bg-[#1d4ed8] hover:bg-blue-500 text-[9px] font-black"
               >
                 下载此张
               </button>
@@ -497,7 +532,7 @@ const ArchivedDetailModal: React.FC<{
                 <button
                   type="button"
                   onClick={() => setCutLightboxIndex((i) => (i == null ? i : (i - 1 + cutImages.length) % cutImages.length))}
-                  className="px-3 py-1 rounded-lg bg-white/10 text-[9px] font-black"
+                  className="px-3 py-1 rounded-lg bg-[#26262c] text-[9px] font-black"
                 >
                   上一张
                 </button>
@@ -507,7 +542,7 @@ const ArchivedDetailModal: React.FC<{
                 <button
                   type="button"
                   onClick={() => setCutLightboxIndex((i) => (i == null ? i : (i + 1) % cutImages.length))}
-                  className="px-3 py-1 rounded-lg bg-white/10 text-[9px] font-black"
+                  className="px-3 py-1 rounded-lg bg-[#26262c] text-[9px] font-black"
                 >
                   下一张
                 </button>
@@ -576,6 +611,7 @@ const WorkflowSection: React.FC<{
   const [showArchived, setShowArchived] = useState(false);
   const [archiveHint, setArchiveHint] = useState<{ assetId: string; ts: number } | null>(null);
   const [lightboxAssetId, setLightboxAssetId] = useState<string | null>(null);
+  const [showLightboxGenerationRecord, setShowLightboxGenerationRecord] = useState(false);
   const [archivedDetailAssetId, setArchivedDetailAssetId] = useState<string | null>(null);
   const [executing, setExecuting] = useState(false);
   const [executingQueue, setExecutingQueue] = useState<{ total: number; current: number; tasks: WorkflowPendingTask[] } | null>(null);
@@ -597,7 +633,13 @@ const WorkflowSection: React.FC<{
   const [promptTweakModal, setPromptTweakModal] = useState<{
     preset: CustomAppModule;
     targets: Array<
-      | { assetId: string; inputImage: string; sourceGroupAssetId?: string; sourceItemIndex?: number }
+      | {
+          assetId: string;
+          inputImage: string;
+          inputSourceDisplayKey?: string;
+          sourceGroupAssetId?: string;
+          sourceItemIndex?: number;
+        }
       | { imageBase64: string; parentAssetId: string; sourceGroupAssetId: string; sourceItemIndex: number }
     >;
   } | null>(null);
@@ -642,19 +684,30 @@ const WorkflowSection: React.FC<{
     }
     return getModule(actionType)?.label ?? actionType;
   };
+  const getGenerationRecordStepLabel = (stepKey: string) => {
+    if (stepKey === 'original') return '原图';
+    if (stepKey === 'cut_image') return '切割';
+    if (stepKey.startsWith(SET_ACTION_PREFIX)) {
+      const s = getSet(stepKey.slice(SET_ACTION_PREFIX.length));
+      return s?.label ?? stepKey;
+    }
+    return getModule(baseActionId(stepKey))?.label ?? stepKey;
+  };
   const getAssetDisplayImage = (a: WorkflowAsset, assetsList: WorkflowAsset[] = assets, visited: Set<string> = new Set()): string => {
-    if (a.displayKey === 'original') return a.original;
+    const orig = asWorkflowImageString(a.original);
+    if (a.displayKey === 'original') return orig;
     if (a.displayKey === 'cut_image' && a.cutImageGroup?.length) {
       const first = a.cutImageGroup[0];
       if (typeof first === 'string') return first;
-      if (first && typeof first === 'object' && 'r2Key' in first) return a.original;
-      if (visited.has(a.id)) return a.original;
+      if (first && typeof first === 'object' && 'r2Key' in first) return orig;
+      if (visited.has(a.id)) return orig;
       visited.add(a.id);
       const ref = first && typeof first === 'object' && 'assetId' in first ? (first as { assetId: string }).assetId : '';
       const child = ref ? assetsList.find((x) => x.id === ref) : undefined;
-      return child ? getAssetDisplayImage(child, assetsList, visited) : a.original;
+      return child ? getAssetDisplayImage(child, assetsList, visited) : orig;
     }
-    return a.results[a.displayKey] ?? a.original;
+    const fromResults = (a.results as Record<string, unknown>)[a.displayKey];
+    return asWorkflowImageString(fromResults) || orig;
   };
   const getAssetDisplayTypeLabel = (a: WorkflowAsset): string => {
     if (a.displayKey === 'original') return '原始';
@@ -674,6 +727,7 @@ const WorkflowSection: React.FC<{
         actionType,
         inputImage,
         addedAt: Date.now(),
+        inputSourceDisplayKey: asset.displayKey,
         ...(options?.promptOverride != null ? { promptOverride: options.promptOverride } : {}),
       };
       setPending((prev) => [...prev, task]);
@@ -694,7 +748,26 @@ const WorkflowSection: React.FC<{
     }
   }, [pending]);
 
-  const runTask = async (task: WorkflowPendingTask): Promise<string | null> => {
+  const buildCompilerExecuteContextForTask = (
+    task: WorkflowPendingTask,
+    module: CustomAppModule | undefined
+  ): CapabilityExecuteContext => {
+    const base: CapabilityExecuteContext = { onLog };
+    if (!getPromptCompilerEnabled()) return base;
+    if (task.actionType.startsWith(SET_ACTION_PREFIX)) {
+      const targetSummary = task.promptOverride?.trim() || undefined;
+      return { onLog, promptResolution: 'compiler', semanticForCompiler: { targetSummary } };
+    }
+    if (!module) return base;
+    if (getCapabilityEngine(module) !== 'gen_image') return base;
+    const targetSummary =
+      (task.promptOverride?.trim() || module.instruction?.trim() || '').trim() || undefined;
+    return { onLog, promptResolution: 'compiler', semanticForCompiler: { targetSummary } };
+  };
+
+  const runTask = async (
+    task: WorkflowPendingTask
+  ): Promise<{ image: string | null; vgpSteps?: VgpGenStepCapture[] }> => {
     const { actionType, inputImage } = task;
     if (actionType.startsWith(SET_ACTION_PREFIX)) {
       const set = getSet(actionType.slice(SET_ACTION_PREFIX.length));
@@ -702,57 +775,60 @@ const WorkflowSection: React.FC<{
         const msg = `[${getActionLabel(actionType)}] 能力集合不存在`;
         onLog?.('warn', msg);
         setAssetError(task.assetId, msg);
-        return null;
+        return { image: null };
       }
       const result = await executeCapabilitySet(set, inputImage ?? '', {
         presets: actionModules,
-        onLog,
+        ...buildCompilerExecuteContextForTask(task, undefined),
       });
       if (result.ok === false) {
         const msg = `[${getActionLabel(actionType)}] ${result.error}`;
         onLog?.('warn', msg);
         setAssetError(task.assetId, msg);
-        return null;
+        return { image: null };
       }
       setAssetError(task.assetId, null);
-      return result.kind === 'image' ? result.image : null;
+      return result.kind === 'image'
+        ? { image: result.image, vgpSteps: result.vgpSteps }
+        : { image: null };
     }
     const module = getModule(actionType);
     if (module?.category === 'generate_3d') {
       const msg = '生成3D 请拖图到能力框提交，不进入执行队列';
       onLog?.('warn', msg);
       setAssetError(task.assetId, msg);
-      return null;
+      return { image: null };
     }
     const actionLabel = getActionLabel(actionType);
     try {
       if (module) {
-        const preset = task.promptOverride != null && task.promptOverride.trim() !== ''
-          ? { ...module, instruction: task.promptOverride.trim() }
-          : module;
-        const out = await executeCapability(preset, inputImage, { onLog });
+        const preset =
+          task.promptOverride != null && task.promptOverride.trim() !== ''
+            ? { ...module, instruction: task.promptOverride.trim() }
+            : module;
+        const out = await executeCapability(preset, inputImage, buildCompilerExecuteContextForTask(task, preset));
         if (out.ok === false) {
           const msg = `[${actionLabel}] ${out.error}`;
           onLog?.('warn', msg);
           setAssetError(task.assetId, msg);
-          return null;
+          return { image: null };
         }
         setAssetError(task.assetId, null);
-        return out.image;
+        return { image: out.image, vgpSteps: out.vgpSteps };
       }
       if (actionType === 'cut_image') {
-        return null;
+        return { image: null };
       }
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = err instanceof Error ? err.message : safeUnknownToString(err);
       const full = `[${actionLabel}] 失败：${msg}`;
       onLog?.('error', full, msg);
       setAssetError(task.assetId, full);
-      return null;
+      return { image: null };
     }
     const fallbackMsg = `[${actionLabel}] 未能获得结果（请重试或检查配置）`;
     setAssetError(task.assetId, fallbackMsg);
-    return null;
+    return { image: null };
   };
 
   const replaceGroupItemWithSubAsset = useCallback((groupAssetId: string, itemIndex: number, subAssetId: string) => {
@@ -896,7 +972,7 @@ const WorkflowSection: React.FC<{
               ),
             ]);
           } catch (e) {
-            const msg = e instanceof Error ? e.message : String(e);
+            const msg = e instanceof Error ? e.message : safeUnknownToString(e);
             const full = `[${taskLabel}] 区域识别超时或失败（${msg}），将整图作为一块裁剪`;
             onLog?.('warn', full);
             setAssetError(task.assetId, full);
@@ -924,17 +1000,19 @@ const WorkflowSection: React.FC<{
             if (!taskAsset) return prev;
             const base = taskAsset.original;
             const imagesToAdd: string[] = base ? [base, ...cropped] : cropped;
-            const newAssets: WorkflowAsset[] = imagesToAdd.map((original) => ({
-              id: uuid(),
-              original,
-              displayKey: 'original',
-              results: {},
-              resultOrder: [],
-              archived: false,
-              hiddenInGrid: false,
-              createdAt: Date.now(),
-              parentAssetId: task.assetId,
-            }));
+            const newAssets: WorkflowAsset[] = imagesToAdd.map((original) =>
+              attachInitialVgpToNewAsset({
+                id: uuid(),
+                original,
+                displayKey: 'original',
+                results: {},
+                resultOrder: [],
+                archived: false,
+                hiddenInGrid: false,
+                createdAt: Date.now(),
+                parentAssetId: task.assetId,
+              })
+            );
             const cutImageGroup = newAssets.map((x) => ({ assetId: x.id }));
             const nextOrder = [...(taskAsset.resultOrder || []), task.actionType];
             const nextMeta = {
@@ -945,7 +1023,7 @@ const WorkflowSection: React.FC<{
             const usedLabels = new Set<string>(prev.map((a) => a.groupLabel).filter((x): x is string => !!x));
             return next.map((a) => {
               if (a.id !== task.assetId) return a;
-              return {
+              const updated: WorkflowAsset = {
                 ...a,
                 cutImageGroup,
                 groupKind: 'cut',
@@ -955,6 +1033,12 @@ const WorkflowSection: React.FC<{
                 displayKey: 'cut_image',
                 hiddenInGrid: a.parentAssetId ? a.hiddenInGrid : false,
               };
+              return cropped.length > 0
+                ? applyVgpAfterCutStep(updated, {
+                    stepKey: task.actionType,
+                    inputSourceDisplayKey: task.inputSourceDisplayKey,
+                  })
+                : updated;
             });
           });
           if (task.sourceGroupAssetId != null && task.sourceItemIndex != null) {
@@ -974,7 +1058,7 @@ const WorkflowSection: React.FC<{
         }
 
         onLog?.('info', `[${index}/${total}] ${taskLabel} 执行中…`);
-        const result = await runTask(task);
+        const { image: result, vgpSteps } = await runTask(task);
         setAssets((prev) =>
           prev.map((a) => {
             if (a.id !== task.assetId) return a;
@@ -986,7 +1070,7 @@ const WorkflowSection: React.FC<{
             const nextResults = result ? { ...a.results, [key]: result } : a.results;
             const nextOrder = result ? [...(a.resultOrder || []), key] : a.resultOrder || [];
             const nextMeta = { ...(a.resultMeta || {}), [key]: { executedAt: Date.now() } };
-            return {
+            let next: WorkflowAsset = {
               ...a,
               results: nextResults,
               resultOrder: nextOrder,
@@ -994,6 +1078,18 @@ const WorkflowSection: React.FC<{
               displayKey: result ? key : a.displayKey,
               hiddenInGrid: a.parentAssetId ? a.hiddenInGrid : false,
             };
+            if (result) {
+              const hadOverride = task.promptOverride != null && task.promptOverride.trim() !== '';
+              const summaryLabel = getActionLabel(task.actionType);
+              next = applyVgpAfterSuccessfulGen(next, {
+                resultKey: key,
+                vgpSteps: vgpSteps ?? [],
+                semanticSummary: hadOverride ? `${summaryLabel}（用户微调）` : summaryLabel,
+                hadPromptOverride: hadOverride,
+                inputSourceDisplayKey: task.inputSourceDisplayKey,
+              });
+            }
+            return next;
           })
         );
         setCompletedTaskIds((prev) => {
@@ -1048,24 +1144,26 @@ const WorkflowSection: React.FC<{
         if (!taskAsset) return prev;
         const base = taskAsset.original;
         const imagesToAdd: string[] = base ? [base, ...cropped] : cropped;
-        const newAssets: WorkflowAsset[] = imagesToAdd.map((original) => ({
-          id: uuid(),
-          original,
-          displayKey: 'original',
-          results: {},
-          resultOrder: [],
-          archived: false,
-          hiddenInGrid: false,
-          createdAt: Date.now(),
-          parentAssetId: task.assetId,
-        }));
+        const newAssets: WorkflowAsset[] = imagesToAdd.map((original) =>
+          attachInitialVgpToNewAsset({
+            id: uuid(),
+            original,
+            displayKey: 'original',
+            results: {},
+            resultOrder: [],
+            archived: false,
+            hiddenInGrid: false,
+            createdAt: Date.now(),
+            parentAssetId: task.assetId,
+          })
+        );
         const cutImageGroup = newAssets.map((x) => ({ assetId: x.id }));
         const nextOrder = [...(taskAsset.resultOrder || []), task.actionType];
         const nextMeta = { ...(taskAsset.resultMeta || {}), [task.actionType]: { executedAt: Date.now() } };
         const next = [...prev, ...newAssets];
         return next.map((a) => {
           if (a.id !== task.assetId) return a;
-          return {
+          const updated: WorkflowAsset = {
             ...a,
             cutImageGroup,
             resultOrder: nextOrder,
@@ -1073,6 +1171,10 @@ const WorkflowSection: React.FC<{
             displayKey: 'cut_image',
             hiddenInGrid: false,
           };
+          return applyVgpAfterCutStep(updated, {
+            stepKey: task.actionType,
+            inputSourceDisplayKey: task.inputSourceDisplayKey,
+          });
         });
       });
       if (task.sourceGroupAssetId != null && task.sourceItemIndex != null) {
@@ -1097,7 +1199,7 @@ const WorkflowSection: React.FC<{
               ? prev.find((a) => a.id === viewStack[viewStack.length - 1].assetId)
               : null;
           const newId = uuid();
-          const newAsset: WorkflowAsset = {
+          const newAsset: WorkflowAsset = attachInitialVgpToNewAsset({
             id: newId,
             original: base64,
             displayKey: 'original',
@@ -1107,7 +1209,7 @@ const WorkflowSection: React.FC<{
             hiddenInGrid: false,
             createdAt: Date.now(),
             ...(groupCtx ? { parentAssetId: groupCtx.id } : {}),
-          };
+          });
           if (!groupCtx) {
             return [...prev, newAsset];
           }
@@ -1169,6 +1271,9 @@ const WorkflowSection: React.FC<{
       setFavoriteActionIds([]);
     }
   }, [favoriteStorageKey]);
+  useEffect(() => {
+    if (!lightboxAssetId) setShowLightboxGenerationRecord(false);
+  }, [lightboxAssetId]);
   useEffect(() => {
     try {
       localStorage.setItem(favoriteStorageKey, JSON.stringify(favoriteActionIds));
@@ -1647,7 +1752,7 @@ const WorkflowSection: React.FC<{
         promptOverride?: string;
       }
     ) => {
-      const newAsset: WorkflowAsset = {
+      const newAsset: WorkflowAsset = attachInitialVgpToNewAsset({
         id: uuid(),
         original: imageBase64,
         displayKey: 'original',
@@ -1657,7 +1762,7 @@ const WorkflowSection: React.FC<{
         hiddenInGrid: true,
         createdAt: Date.now(),
         ...(opts?.parentAssetId ? { parentAssetId: opts.parentAssetId } : {}),
-      };
+      });
       const fromGroup = opts?.sourceGroupAssetId != null && opts.sourceItemIndex != null;
       setAssets((prev) => {
         const next = [...prev, newAsset];
@@ -1688,6 +1793,7 @@ const WorkflowSection: React.FC<{
           actionType,
           inputImage: imageBase64,
           addedAt: Date.now(),
+          inputSourceDisplayKey: 'original',
           ...(opts?.promptOverride != null ? { promptOverride: opts.promptOverride } : {}),
           ...(fromGroup
             ? { sourceGroupAssetId: opts!.sourceGroupAssetId, sourceItemIndex: opts!.sourceItemIndex }
@@ -1705,7 +1811,7 @@ const WorkflowSection: React.FC<{
       const coverImage = first ? getAssetDisplayImage(first) : '';
       const groupId = uuid();
       const usedLabels = new Set<string>(assets.map((a) => a.groupLabel).filter((x): x is string => !!x));
-      const newGroup: WorkflowAsset = {
+      const newGroup: WorkflowAsset = attachInitialVgpToNewAsset({
         id: groupId,
         original: coverImage,
         displayKey: 'original',
@@ -1717,7 +1823,7 @@ const WorkflowSection: React.FC<{
         archived: false,
         hiddenInGrid: false,
         createdAt: Date.now(),
-      };
+      });
       setAssets((prev) => {
         const mapped = prev.map((a) => {
           if (a.id === groupId) return a;
@@ -1751,7 +1857,7 @@ const WorkflowSection: React.FC<{
         const coverImage = child ? getAssetDisplayImage(child) : '';
         const newGroupId = uuid();
         const usedLabels = new Set<string>(prev.map((a) => a.groupLabel).filter((x): x is string => !!x));
-        const newGroup: WorkflowAsset = {
+        const newGroup: WorkflowAsset = attachInitialVgpToNewAsset({
           id: newGroupId,
           original: coverImage,
           displayKey: 'original',
@@ -1764,7 +1870,7 @@ const WorkflowSection: React.FC<{
           hiddenInGrid: false,
           createdAt: Date.now(),
           parentAssetId: groupAssetId,
-        };
+        });
         return prev
           .map((a) => {
             if (a.id === groupAssetId && a.cutImageGroup) {
@@ -1849,14 +1955,20 @@ const WorkflowSection: React.FC<{
     (mod: CustomAppModule, tweakPrompt = false) => {
       if (tweakPrompt) {
         const targets: Array<
-          | { assetId: string; inputImage: string; sourceGroupAssetId?: string; sourceItemIndex?: number }
+          | {
+              assetId: string;
+              inputImage: string;
+              inputSourceDisplayKey?: string;
+              sourceGroupAssetId?: string;
+              sourceItemIndex?: number;
+            }
           | { imageBase64: string; parentAssetId: string; sourceGroupAssetId: string; sourceItemIndex: number }
         > = [];
         if (draggingAssetIds?.length) {
           const effectiveIds = getEffectiveAssetIdsForAction(draggingAssetIds);
           effectiveIds.forEach((id) => {
             const a = assets.find((x) => x.id === id);
-            if (a) targets.push({ assetId: id, inputImage: getAssetDisplayImage(a) });
+            if (a) targets.push({ assetId: id, inputImage: getAssetDisplayImage(a), inputSourceDisplayKey: a.displayKey });
           });
         } else if (draggingGroupItems && currentGroupAsset) {
           draggingGroupItems.itemIndexes.forEach((itemIndex) => {
@@ -1875,6 +1987,7 @@ const WorkflowSection: React.FC<{
                 targets.push({
                   assetId: (item as { assetId: string }).assetId,
                   inputImage: getAssetDisplayImage(child),
+                  inputSourceDisplayKey: child.displayKey,
                   sourceGroupAssetId: currentGroupAsset.id,
                   sourceItemIndex: itemIndex,
                 });
@@ -1929,6 +2042,7 @@ const WorkflowSection: React.FC<{
                 actionType: mod.id,
                 inputImage,
                 addedAt: Date.now(),
+                inputSourceDisplayKey: child?.displayKey,
                 sourceGroupAssetId: currentGroupAsset.id,
                 sourceItemIndex: itemIndex,
               },
@@ -1981,6 +2095,7 @@ const WorkflowSection: React.FC<{
                 actionType: setActionId,
                 inputImage,
                 addedAt: Date.now(),
+                inputSourceDisplayKey: child?.displayKey,
                 sourceGroupAssetId: currentGroupAsset.id,
                 sourceItemIndex: itemIndex,
               },
@@ -2014,7 +2129,7 @@ const WorkflowSection: React.FC<{
             onClick={() => {
               setShowArchived(false);
             }}
-            className={`px-4 py-2 rounded-xl text-[9px] font-black uppercase border ${!showArchived ? 'bg-blue-600 border-blue-500 text-white' : 'bg-white/5 border-white/10 text-gray-500 hover:bg-white/10'}`}
+            className={`px-4 py-2 rounded-xl text-[9px] font-black uppercase border ${!showArchived ? 'bg-blue-600 border-blue-500 text-white' : 'bg-[#1c1c22] border-[#2e2e32] text-gray-500 hover:bg-[#2e2e36]'}`}
           >
             进行中
           </button>
@@ -2024,15 +2139,15 @@ const WorkflowSection: React.FC<{
               setViewStack([]);
               setSelectedGroupItemKeys(new Set());
             }}
-            className={`px-4 py-2 rounded-xl text-[9px] font-black uppercase border ${showArchived ? 'bg-blue-600 border-blue-500 text-white' : 'bg-white/5 border-white/10 text-gray-500 hover:bg-white/10'}`}
+            className={`px-4 py-2 rounded-xl text-[9px] font-black uppercase border ${showArchived ? 'bg-blue-600 border-blue-500 text-white' : 'bg-[#1c1c22] border-[#2e2e32] text-gray-500 hover:bg-[#2e2e36]'}`}
           >
             已完成
           </button>
         </div>
         {archiveHint && !showArchived && (
-          <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-emerald-600/10 border border-emerald-500/30 text-[9px] text-emerald-300">
+          <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-[#152642] border border-[#3b6fb8] text-[9px] text-blue-200">
             <span className="font-black uppercase">已归档</span>
-            <span className="text-emerald-200/80">在「已完成」里查看</span>
+            <span className="text-gray-300">在「已完成」里查看</span>
             <button
               type="button"
               onClick={() => {
@@ -2040,13 +2155,13 @@ const WorkflowSection: React.FC<{
                 setArchivedDetailAssetId(archiveHint.assetId);
                 setArchiveHint(null);
               }}
-              className="px-2 py-1 rounded-lg bg-emerald-600/30 hover:bg-emerald-600/40 text-[8px] font-black uppercase"
+              className="px-2 py-1 rounded-lg bg-[#1e3558] hover:bg-[#264670] text-[8px] font-black uppercase text-blue-100"
             >
               去查看
             </button>
           </div>
         )}
-        <label className="px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-[9px] font-black uppercase cursor-pointer hover:bg-white/10">
+        <label className="px-4 py-2 rounded-xl bg-[#1c1c22] border border-[#2e2e32] text-[9px] font-black uppercase cursor-pointer hover:bg-[#2e2e36]">
           多选上传
           <input type="file" className="hidden" accept="image/*" multiple onChange={handleBatchUploadCorrect} />
         </label>
@@ -2088,30 +2203,30 @@ const WorkflowSection: React.FC<{
                 });
               })
             }
-            className="px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-[9px] font-black uppercase hover:bg-white/10"
+            className="px-4 py-2 rounded-xl bg-[#1c1c22] border border-[#2e2e32] text-[9px] font-black uppercase hover:bg-[#2e2e36]"
           >
             从仓库导入
           </button>
         )}
         <div className="flex items-center gap-2">
-          <div className="inline-flex items-center rounded-lg border border-white/10 bg-white/5 overflow-hidden">
+          <div className="inline-flex items-center rounded-lg border border-[#2e2e32] bg-[#1c1c22] overflow-hidden">
             <button
               type="button"
               onClick={() => setColumnCount((n) => Math.max(2, n - 1))}
               disabled={columnCount <= 2}
-              className="w-8 h-8 text-[12px] font-black text-gray-300 hover:bg-white/10 disabled:opacity-35 disabled:hover:bg-transparent"
+              className="w-8 h-8 text-[12px] font-black text-gray-300 hover:bg-[#2e2e36] disabled:opacity-35 disabled:hover:bg-transparent"
               aria-label="减少列数"
             >
               −
             </button>
-            <span className="w-9 h-8 inline-flex items-center justify-center text-[10px] font-black text-blue-300 border-x border-white/10">
+            <span className="w-9 h-8 inline-flex items-center justify-center text-[10px] font-black text-blue-300 border-x border-[#2e2e32]">
               {columnCount}
             </span>
             <button
               type="button"
               onClick={() => setColumnCount((n) => Math.min(6, n + 1))}
               disabled={columnCount >= 6}
-              className="w-8 h-8 text-[12px] font-black text-gray-300 hover:bg-white/10 disabled:opacity-35 disabled:hover:bg-transparent"
+              className="w-8 h-8 text-[12px] font-black text-gray-300 hover:bg-[#2e2e36] disabled:opacity-35 disabled:hover:bg-transparent"
               aria-label="增加列数"
             >
               +
@@ -2119,7 +2234,7 @@ const WorkflowSection: React.FC<{
           </div>
         </div>
         {(pending.length > 0 || executingQueue) && (
-          <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-white/5 border border-white/10">
+          <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-[#1c1c22] border border-[#2e2e32]">
             {executingQueue ? (
               <>
                 <span className="text-[8px] font-black uppercase text-blue-300">执行中</span>
@@ -2129,12 +2244,12 @@ const WorkflowSection: React.FC<{
               </>
             ) : (
               <>
-                <span className="text-[8px] font-black uppercase text-amber-300">待处理</span>
+                <span className="text-[8px] font-black uppercase text-blue-300">待处理</span>
                 <span className="text-[8px] text-gray-300">{pending.length} 项等待执行</span>
                 <button
                   type="button"
                   onClick={() => setPending([])}
-                  className="text-[8px] text-amber-400 hover:text-amber-300 font-medium ml-1"
+                  className="text-[8px] text-blue-400 hover:text-blue-300 font-medium ml-1"
                 >
                   清空
                 </button>
@@ -2153,7 +2268,7 @@ const WorkflowSection: React.FC<{
                 const all = new Set(selectableIds);
                 setSelectedAssetIds((prev) => (prev.size === all.size ? new Set() : all));
               }}
-              className="px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border bg-white/5 border-white/10 hover:bg-white/10"
+              className="px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border bg-[#1c1c22] border-[#2e2e32] hover:bg-[#2e2e36]"
             >
               {(() => {
                 const selectableCount = visibleAssets.filter(
@@ -2176,7 +2291,7 @@ const WorkflowSection: React.FC<{
         <button
           type="button"
           onClick={() => setApiKeyModalOpen(true)}
-          className="shrink-0 inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-[9px] font-black uppercase hover:bg-white/10 hover:border-blue-500/40 self-end sm:self-center"
+          className="shrink-0 inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[#1c1c22] border border-[#2e2e32] text-[9px] font-black uppercase hover:bg-[#2e2e36] hover:border-[#3b6fb8] self-end sm:self-center"
           title={
             aiInvocationReady
               ? '当前调用源已就绪 · 点击配置 API 密钥'
@@ -2191,10 +2306,10 @@ const WorkflowSection: React.FC<{
           <span
             role="status"
             aria-hidden={true}
-            className={`h-2.5 w-2.5 shrink-0 rounded-full border border-white/20 ${
+            className={`h-2.5 w-2.5 shrink-0 rounded-full border border-[#3a3a40] ${
               aiInvocationReady
                 ? 'bg-emerald-500 shadow-[0_0_10px_rgba(34,197,94,0.45)]'
-                : 'bg-amber-600/90 shadow-[0_0_8px_rgba(217,119,6,0.35)]'
+                : 'bg-[#b45309] shadow-[0_0_8px_rgba(217,119,6,0.35)]'
             }`}
           />
           <span>API 密钥</span>
@@ -2213,7 +2328,7 @@ const WorkflowSection: React.FC<{
         <div
           ref={scrollAreaRef}
           className={`flex-1 min-w-0 min-h-0 overflow-y-auto no-scrollbar flex flex-col gap-3 rounded-xl transition-colors ${
-            dropZoneActive ? 'ring-1 ring-blue-500/60 bg-blue-500/[0.06]' : ''
+            dropZoneActive ? 'ring-1 ring-[#3b82f6] bg-[#152535]' : ''
           }`}
           onDragOver={(e) => {
             if (!hasImageFileTransfer(e.dataTransfer)) return;
@@ -2243,7 +2358,7 @@ const WorkflowSection: React.FC<{
                 <button
                   type="button"
                   onClick={() => startTransition(() => setViewStack((s) => s.slice(0, -1)))}
-                  className="px-3 py-1.5 rounded-lg bg-white/10 text-[9px] font-black uppercase hover:bg-white/20"
+                  className="px-3 py-1.5 rounded-lg bg-[#26262c] text-[9px] font-black uppercase hover:bg-[#383842]"
                 >
                   ← 返回
                 </button>
@@ -2280,7 +2395,7 @@ const WorkflowSection: React.FC<{
                     <button
                       type="button"
                       onClick={() => setShowAllInGroup((v) => !v)}
-                      className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${showAllInGroup ? 'bg-blue-600 border-blue-500' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}
+                      className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${showAllInGroup ? 'bg-blue-600 border-blue-500' : 'bg-[#1c1c22] border-[#2e2e32] hover:bg-[#2e2e36]'}`}
                     >
                       {showAllInGroup ? '显示层级' : '显示全部'}
                     </button>
@@ -2304,7 +2419,7 @@ const WorkflowSection: React.FC<{
                               prev.size === allKeys.size ? new Set() : allKeys
                             );
                           }}
-                          className="px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border bg-white/5 border-white/10 hover:bg-white/10"
+                          className="px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border bg-[#1c1c22] border-[#2e2e32] hover:bg-[#2e2e36]"
                         >
                           {(() => {
                             const selectableCount = currentGroupItems.filter(
@@ -2346,7 +2461,7 @@ const WorkflowSection: React.FC<{
                       <div
                         key={idx}
                         data-workflow-card
-                        className="break-inside-avoid mb-4 rounded-2xl border border-white/10 bg-black/40 overflow-hidden"
+                        className="break-inside-avoid mb-4 rounded-2xl border border-[#2e2e32] bg-[#16161a] overflow-hidden"
                       >
                         <img
                           src={workflowSafeImgSrc(img)}
@@ -2397,8 +2512,8 @@ const WorkflowSection: React.FC<{
                           <div key={idx} className="break-inside-avoid mb-6 relative">
                             {childAsset.cutImageGroup?.length && (
                               <>
-                                <div className="absolute inset-0 rounded-2xl bg-black/40 border border-blue-500/40 translate-x-[16px] translate-y-[16px] -rotate-3 opacity-70 shadow-xl shadow-black/60 pointer-events-none" />
-                                <div className="absolute inset-0 rounded-2xl bg-black/60 border border-blue-400/70 translate-x-[8px] translate-y-[8px] rotate-1 opacity-90 shadow-xl shadow-black/80 pointer-events-none" />
+                                <div className="absolute inset-0 rounded-2xl bg-[#16161a] border border-[#3b6fb8] translate-x-[16px] translate-y-[16px] -rotate-3 opacity-70 shadow-xl shadow-[#000000] pointer-events-none" />
+                                <div className="absolute inset-0 rounded-2xl bg-[#1a1a1e] border border-[#6090d0] translate-x-[8px] translate-y-[8px] rotate-1 opacity-90 shadow-xl shadow-[#000000] pointer-events-none" />
                               </>
                             )}
                             {(() => {
@@ -2417,14 +2532,14 @@ const WorkflowSection: React.FC<{
                                     if (el) cardRefs.current.set(groupKey, el);
                                     else cardRefs.current.delete(groupKey);
                                   }}
-                                  className={`group relative rounded-2xl border bg-black/40 overflow-hidden ${
+                                  className={`group relative rounded-2xl border bg-[#16161a] overflow-hidden ${
                                     selectedGroupItemKeys.has(groupKey)
                                       ? 'border-blue-500 ring-2 ring-blue-500/50'
                                       : dragOverGroupItemKey === groupKey
                                       ? 'border-blue-500 ring-2 ring-blue-500/50'
                                       : childAsset.cutImageGroup?.length
                                       ? 'border-blue-400'
-                                      : 'border-white/10'
+                                      : 'border-[#2e2e32]'
                                   } transition-transform duration-150 ease-out will-change-transform ${motionClass}`}
                                   draggable
                                   onDragStart={() => {
@@ -2496,7 +2611,7 @@ const WorkflowSection: React.FC<{
                                     const usedLabels = new Set<string>(
                                       updated.map((a) => a.groupLabel).filter((x): x is string => !!x)
                                     );
-                                    const newGroup: WorkflowAsset = {
+                                    const newGroup: WorkflowAsset = attachInitialVgpToNewAsset({
                                       id: newGroupId,
                                       original: coverImage,
                                       displayKey: 'original',
@@ -2509,7 +2624,7 @@ const WorkflowSection: React.FC<{
                                       hiddenInGrid: false,
                                       createdAt: Date.now(),
                                       parentAssetId: groupAssetId,
-                                    };
+                                    });
                                     setAssets([...updated, newGroup]);
                                     setSelectedGroupItemKeys(new Set());
                                     setDraggingGroupItems(null);
@@ -2582,7 +2697,7 @@ const WorkflowSection: React.FC<{
                                     />
                                     {isPendingOnly && (
                                       <div
-                                        className="absolute inset-0 z-10 bg-black/40 flex items-center justify-center"
+                                        className="absolute inset-0 z-10 bg-[#16161a] flex items-center justify-center"
                                         onClick={(e) => e.stopPropagation()}
                                       >
                                         <button
@@ -2598,7 +2713,7 @@ const WorkflowSection: React.FC<{
                                               )
                                             )
                                           }
-                                          className="w-8 h-8 rounded-full flex items-center justify-center bg-white/10 border border-white/20 text-gray-400 hover:bg-red-500/20 hover:border-red-400/30 hover:text-red-300 text-base font-medium leading-none"
+                                          className="w-8 h-8 rounded-full flex items-center justify-center bg-[#26262c] border border-[#3a3a40] text-gray-400 hover:bg-[#4a1c1c] hover:border-[#c87878] hover:text-red-300 text-base font-medium leading-none"
                                           title="从队列移除"
                                         >
                                           ×
@@ -2606,31 +2721,31 @@ const WorkflowSection: React.FC<{
                                       </div>
                                     )}
                                     {isPendingItem && !isPendingOnly && (
-                                      <div className="absolute inset-0 z-10 bg-black/40 flex items-center justify-center pointer-events-none">
+                                      <div className="absolute inset-0 z-10 bg-[#16161a] flex items-center justify-center pointer-events-none">
                                         <div
                                           className={`h-7 w-7 rounded-full border-[3px] ${
                                             isExecutingCurrentItem
                                               ? 'border-blue-400 border-t-transparent animate-spin'
-                                              : 'border-white/30 border-t-transparent'
+                                              : 'border-[#484850] border-t-transparent'
                                           }`}
                                         />
                                       </div>
                                     )}
                                     {assetErrors.has(childAsset.id) && (
-                                      <span className="absolute top-2 left-2 px-2 py-0.5 rounded-lg bg-red-600/90 text-[8px] font-black text-white">
+                                      <span className="absolute top-2 left-2 px-2 py-0.5 rounded-lg bg-[#b91c1c] text-[8px] font-black text-white">
                                         执行出错
                                       </span>
                                     )}
                                     {childAsset.cutImageGroup?.length && (
-                                      <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg text-[8px] font-black bg-blue-600/90">
+                                      <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg text-[8px] font-black bg-[#1d4ed8]">
                                         {(childAsset.groupLabel ?? (childAsset.groupKind === 'manual' ? '组' : '切割'))} {childAsset.cutImageGroup.length}
                                       </span>
                                     )}
                                   </div>
                                   {!childAsset.cutImageGroup?.length && (
-                                    <div className="p-2 flex flex-col gap-1.5 border-t border-white/5">
+                                    <div className="p-2 flex flex-col gap-1.5 border-t border-[#252528]">
                                       <div className="flex gap-1 flex-wrap items-center justify-between min-h-[18px]">
-                                        <span className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[7px] text-gray-300/95 select-none">
+                                        <span className="inline-flex items-center gap-1 rounded-full border border-[#2e2e32] bg-[#151518] px-2 py-0.5 text-[7px] text-gray-300/95 select-none">
                                           <span className="font-black text-blue-300">{getGeneratedImageCount(childAsset)}</span>
                                           <span className="text-gray-500">·</span>
                                           <span className="text-gray-400">{getAssetDisplayTypeLabel(childAsset)}</span>
@@ -2638,7 +2753,7 @@ const WorkflowSection: React.FC<{
                                         {childAsset.displayKey !== 'original' && (
                                           <button
                                             onClick={() => discardResult(childAsset.id, childAsset.displayKey)}
-                                            className="px-1.5 py-0.5 rounded text-[7px] text-red-400 hover:bg-red-500/20"
+                                            className="px-1.5 py-0.5 rounded text-[7px] text-red-400 hover:bg-[#4a1c1c]"
                                             title="丢弃当前显示的版本"
                                           >
                                             丢弃当前版本
@@ -2671,10 +2786,10 @@ const WorkflowSection: React.FC<{
                             if (el) cardRefs.current.set(groupKey, el);
                             else cardRefs.current.delete(groupKey);
                           }}
-                          className={`break-inside-avoid mb-4 group relative rounded-2xl border bg-black/40 overflow-hidden ${
+                          className={`break-inside-avoid mb-4 group relative rounded-2xl border bg-[#16161a] overflow-hidden ${
                             selectedGroupItemKeys.has(groupKey)
                               ? 'border-blue-500 ring-2 ring-blue-500/50'
-                              : 'border-white/10'
+                              : 'border-[#2e2e32]'
                           }`}
                           draggable
                           onDragStart={() => {
@@ -2711,7 +2826,7 @@ const WorkflowSection: React.FC<{
                             />
                             {isPendingOnly && (
                               <div
-                                className="absolute inset-0 z-10 bg-black/40 flex items-center justify-center"
+                                className="absolute inset-0 z-10 bg-[#16161a] flex items-center justify-center"
                                 onClick={(e) => e.stopPropagation()}
                               >
                                 <button
@@ -2727,7 +2842,7 @@ const WorkflowSection: React.FC<{
                                       )
                                     )
                                   }
-                                  className="w-8 h-8 rounded-full flex items-center justify-center bg-white/10 border border-white/20 text-gray-400 hover:bg-red-500/20 hover:border-red-400/30 hover:text-red-300 text-base font-medium leading-none"
+                                  className="w-8 h-8 rounded-full flex items-center justify-center bg-[#26262c] border border-[#3a3a40] text-gray-400 hover:bg-[#4a1c1c] hover:border-[#c87878] hover:text-red-300 text-base font-medium leading-none"
                                   title="从队列移除"
                                 >
                                   ×
@@ -2735,12 +2850,12 @@ const WorkflowSection: React.FC<{
                               </div>
                             )}
                             {isPendingItem && !isPendingOnly && (
-                              <div className="absolute inset-0 z-10 bg-black/40 flex items-center justify-center pointer-events-none">
+                              <div className="absolute inset-0 z-10 bg-[#16161a] flex items-center justify-center pointer-events-none">
                                 <div
                                   className={`h-7 w-7 rounded-full border-[3px] ${
                                     isExecutingCurrentItem
                                       ? 'border-blue-400 border-t-transparent animate-spin'
-                                      : 'border-white/30 border-t-transparent'
+                                      : 'border-[#484850] border-t-transparent'
                                   }`}
                                 />
                               </div>
@@ -2753,7 +2868,7 @@ const WorkflowSection: React.FC<{
               </div>
               {groupStringLightboxIndex != null && typeof currentGroupItems[groupStringLightboxIndex] === 'string' && (
                 <div
-                  className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/90 p-4"
+                  className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/78 backdrop-blur-sm p-4"
                   onClick={() => setGroupStringLightboxIndex(null)}
                 >
                   <img
@@ -2764,7 +2879,7 @@ const WorkflowSection: React.FC<{
                   />
                   <button
                     type="button"
-                    className="absolute top-4 right-4 w-10 h-10 flex items-center justify-center text-white/60 hover:text-white rounded-full bg-black/40"
+                    className="absolute top-4 right-4 w-10 h-10 flex items-center justify-center text-white/60 hover:text-white rounded-full bg-[#16161a]"
                     onClick={() => setGroupStringLightboxIndex(null)}
                   >
                     <AppIcon name="close" className="w-4 h-4" />
@@ -2816,8 +2931,8 @@ const WorkflowSection: React.FC<{
                     <div key={a.id} className="break-inside-avoid mb-6 relative">
                       {a.cutImageGroup?.length && (
                         <>
-                          <div className="absolute inset-0 rounded-2xl bg-black/40 border border-blue-500/40 translate-x-[16px] translate-y-[16px] -rotate-3 opacity-70 shadow-xl shadow-black/60 pointer-events-none" />
-                          <div className="absolute inset-0 rounded-2xl bg-black/60 border border-blue-400/70 translate-x-[8px] translate-y-[8px] rotate-1 opacity-90 shadow-xl shadow-black/80 pointer-events-none" />
+                          <div className="absolute inset-0 rounded-2xl bg-[#16161a] border border-[#3b6fb8] translate-x-[16px] translate-y-[16px] -rotate-3 opacity-70 shadow-xl shadow-[#000000] pointer-events-none" />
+                          <div className="absolute inset-0 rounded-2xl bg-[#1a1a1e] border border-[#6090d0] translate-x-[8px] translate-y-[8px] rotate-1 opacity-90 shadow-xl shadow-[#000000] pointer-events-none" />
                         </>
                       )}
                       <div
@@ -2826,7 +2941,7 @@ const WorkflowSection: React.FC<{
                           if (el) cardRefs.current.set(a.id, el);
                           else cardRefs.current.delete(a.id);
                         }}
-                        className={`group relative rounded-2xl border overflow-hidden bg-black/40 ${
+                        className={`group relative rounded-2xl border overflow-hidden bg-[#16161a] ${
                           selectedAssetIds.has(a.id)
                             ? 'border-blue-500 ring-2 ring-blue-500/50'
                             : dragOverAssetId === a.id
@@ -2835,7 +2950,7 @@ const WorkflowSection: React.FC<{
                               : 'border-blue-500 ring-2 ring-blue-500/50'
                             : a.cutImageGroup?.length
                             ? 'border-blue-400'
-                            : 'border-white/10'
+                            : 'border-[#2e2e32]'
                         } ${busyClass} transition-transform duration-150 ease-out will-change-transform ${motionClass}`}
                         draggable={!showArchived && !isBusy}
                         onDragStart={() => {
@@ -2997,7 +3112,7 @@ const WorkflowSection: React.FC<{
                           </div>
                           {isPendingOnly && (
                             <div
-                              className="absolute inset-0 z-10 bg-black/40 flex items-center justify-center"
+                              className="absolute inset-0 z-10 bg-[#16161a] flex items-center justify-center"
                               onClick={(e) => e.stopPropagation()}
                             >
                               <button
@@ -3007,7 +3122,7 @@ const WorkflowSection: React.FC<{
                                     prev.filter((t) => t.assetId !== a.id)
                                   )
                                 }
-                                className="w-8 h-8 rounded-full flex items-center justify-center bg-white/10 border border-white/20 text-gray-400 hover:bg-red-500/20 hover:border-red-400/30 hover:text-red-300 text-base font-medium leading-none"
+                                className="w-8 h-8 rounded-full flex items-center justify-center bg-[#26262c] border border-[#3a3a40] text-gray-400 hover:bg-[#4a1c1c] hover:border-[#c87878] hover:text-red-300 text-base font-medium leading-none"
                                 title="从队列移除"
                               >
                                 ×
@@ -3015,31 +3130,31 @@ const WorkflowSection: React.FC<{
                             </div>
                           )}
                           {isBusy && !isPendingOnly && (
-                            <div className="absolute inset-0 z-10 bg-black/40 flex items-center justify-center pointer-events-none">
+                            <div className="absolute inset-0 z-10 bg-[#16161a] flex items-center justify-center pointer-events-none">
                               <div
                                 className={`h-7 w-7 rounded-full border-[3px] ${
                                   isExecutingCurrent
                                     ? 'border-blue-400 border-t-transparent animate-spin'
-                                    : 'border-white/30 border-t-transparent'
+                                    : 'border-[#484850] border-t-transparent'
                                 }`}
                               />
                             </div>
                           )}
                           {assetErrors.has(a.id) && (
-                            <span className="absolute top-2 left-2 px-2 py-0.5 rounded-lg bg-red-600/90 text-[8px] font-black text-white">
+                            <span className="absolute top-2 left-2 px-2 py-0.5 rounded-lg bg-[#b91c1c] text-[8px] font-black text-white">
                               执行出错
                             </span>
                           )}
                           {a.cutImageGroup?.length && (
-                            <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg text-[8px] font-black bg-blue-600/90">
+                            <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg text-[8px] font-black bg-[#1d4ed8]">
                               {(a.groupLabel ?? (a.groupKind === 'manual' ? '组' : '切割'))} {a.cutImageGroup.length}
                             </span>
                           )}
                         </div>
                         {!showArchived && !a.cutImageGroup?.length && (
-                          <div className="p-2 flex flex-col gap-1.5 border-t border-white/5 bg-black/90">
+                          <div className="p-2 flex flex-col gap-1.5 border-t border-[#252528] bg-[#050505]">
                             <div className="flex gap-1 flex-wrap items-center justify-between min-h-[18px]">
-                              <span className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[7px] text-gray-300/95 select-none">
+                              <span className="inline-flex items-center gap-1 rounded-full border border-[#2e2e32] bg-[#151518] px-2 py-0.5 text-[7px] text-gray-300/95 select-none">
                                 <span className="font-black text-blue-300">{getGeneratedImageCount(a)}</span>
                                 <span className="text-gray-500">·</span>
                                 <span className="text-gray-400">{getAssetDisplayTypeLabel(a)}</span>
@@ -3047,7 +3162,7 @@ const WorkflowSection: React.FC<{
                               {a.displayKey !== 'original' && (
                                 <button
                                   onClick={() => discardResult(a.id, a.displayKey)}
-                                  className="px-1.5 py-0.5 rounded text-[7px] text-red-400 hover:bg-red-500/20"
+                                  className="px-1.5 py-0.5 rounded text-[7px] text-red-400 hover:bg-[#4a1c1c]"
                                   title="丢弃当前显示的版本"
                                 >
                                   丢弃当前版本
@@ -3076,7 +3191,7 @@ const WorkflowSection: React.FC<{
         {/* 全局框选矩形：根级 / 组内均可见，仅进行中视图展示 */}
         {marqueeRect && !showArchived && (
           <div
-            className="fixed pointer-events-none z-[150] border-2 border-blue-500 bg-blue-500/20"
+            className="fixed pointer-events-none z-[150] rounded-[3px] border-2 border-solid border-[#4570b0] bg-[#121a28]/50 shadow-[inset_0_0_0_1px_rgba(69,112,176,0.2)]"
             style={{
               left: Math.min(marqueeRect.startX, marqueeRect.endX),
               top: Math.min(marqueeRect.startY, marqueeRect.endY),
@@ -3093,13 +3208,23 @@ const WorkflowSection: React.FC<{
             <p className="text-[8px] text-gray-500">基础能力与复合能力 · 能力中增删会同步到此</p>
           </div>
 
-          <div className="flex flex-col gap-2 rounded-xl border border-blue-500/35 bg-gradient-to-b from-blue-600/15 to-blue-950/20 p-3 shadow-[0_0_24px_rgba(37,99,235,0.12)]">
+          <WorkflowPlannerBar
+            actionModules={actionModules}
+            selectedAssetId={selectedAssetIds.size > 0 ? [...selectedAssetIds][0]! : null}
+            onAddToQueue={(presetId) => {
+              const aid = selectedAssetIds.size > 0 ? [...selectedAssetIds][0]! : null;
+              if (aid) addToPending(aid, presetId);
+            }}
+            onLog={onLog}
+          />
+
+          <div className="flex flex-col gap-2 rounded-xl border border-[#4570b0] bg-[#121a28] p-3 shadow-[0_0_24px_rgba(37,99,235,0.12)]">
             {pending.length > 0 && !executing && (
               <div className="flex items-center justify-end">
                 <button
                   type="button"
                   onClick={() => setPending([])}
-                  className="px-2.5 py-1 rounded-lg border border-amber-500/50 bg-amber-500/10 text-[9px] font-black uppercase text-amber-300 hover:bg-amber-500/20"
+                  className="px-2.5 py-1 rounded-lg border border-[#3b6fb8] bg-[#1e3558] text-[9px] font-black uppercase text-blue-200 hover:bg-[#264670]"
                 >
                   清空队列
                 </button>
@@ -3109,7 +3234,7 @@ const WorkflowSection: React.FC<{
               type="button"
               onClick={() => executePending()}
               disabled={pending.length === 0 || executing}
-              className="w-full py-3.5 px-4 rounded-xl bg-blue-600 hover:bg-blue-500 text-[12px] font-black uppercase tracking-wide electric-glow disabled:opacity-40 disabled:hover:bg-blue-600 border border-blue-400/50 shadow-md"
+              className="w-full py-3.5 px-4 rounded-xl bg-blue-600 hover:bg-blue-500 text-[12px] font-black uppercase tracking-wide electric-glow disabled:opacity-40 disabled:hover:bg-blue-600 border border-[#60a5fa] shadow-md"
             >
               {executing
                 ? `执行中 ${executingQueue?.current ?? 0}/${executingQueue?.total ?? 0}`
@@ -3164,7 +3289,7 @@ const WorkflowSection: React.FC<{
                     const usedLabels = new Set<string>(
                       updated.map((a) => a.groupLabel).filter((x): x is string => !!x)
                     );
-                    const newGroup: WorkflowAsset = {
+                    const newGroup: WorkflowAsset = attachInitialVgpToNewAsset({
                       id: newGroupId,
                       original: coverImage,
                       displayKey: 'original',
@@ -3177,7 +3302,7 @@ const WorkflowSection: React.FC<{
                       hiddenInGrid: false,
                       createdAt: Date.now(),
                       parentAssetId: groupAssetId,
-                    };
+                    });
                     setAssets([...updated, newGroup]);
                     setSelectedGroupItemKeys(new Set());
                   }
@@ -3189,12 +3314,12 @@ const WorkflowSection: React.FC<{
             }}
             className={`rounded-xl border-2 border-dashed p-2.5 min-h-[56px] flex flex-col items-center justify-center text-center transition-colors ${
               dragOverAction === '__group__'
-                ? 'border-violet-500 bg-violet-500/10'
-                : 'border-violet-400/40 bg-violet-500/5 hover:border-violet-400/60'
+                ? 'border-blue-500 bg-[#152642]'
+                : 'border-[#3d4754] bg-[#0e0f12] hover:border-[#4b6a9e] hover:bg-[#1a1d26]'
             }`}
           >
-            <span className="text-[9px] font-black uppercase text-violet-300">组</span>
-            <span className="text-[8px] text-violet-400/80 mt-0.5">将选中图片拖入建组（组内同效）</span>
+            <span className="text-[9px] font-black uppercase text-gray-200">组</span>
+            <span className="text-[8px] text-gray-500 mt-0.5">将选中图片拖入建组（组内同效）</span>
           </div>
           <div
             onDragOver={(e) => {
@@ -3216,12 +3341,12 @@ const WorkflowSection: React.FC<{
             }}
             className={`rounded-xl border-2 border-dashed p-2.5 min-h-[56px] flex flex-col items-center justify-center text-center transition-colors ${
               dragOverAction === '__ungroup__'
-                ? 'border-amber-500 bg-amber-500/10'
-                : 'border-amber-400/40 bg-amber-500/5 hover:border-amber-400/60'
+                ? 'border-blue-500 bg-[#152642]'
+                : 'border-[#3d4754] bg-[#0e0f12] hover:border-[#4b6a9e] hover:bg-[#1a1d26]'
             }`}
           >
-            <span className="text-[9px] font-black uppercase text-amber-300">移出组</span>
-            <span className="text-[8px] text-amber-400/80 mt-0.5">将组内子卡片拖到此处，移到上一级</span>
+            <span className="text-[9px] font-black uppercase text-gray-200">移出组</span>
+            <span className="text-[8px] text-gray-500 mt-0.5">将组内子卡片拖到此处，移到上一级</span>
           </div>
           <div
             onDragOver={(e) => {
@@ -3287,12 +3412,12 @@ const WorkflowSection: React.FC<{
             }}
             className={`rounded-xl border-2 border-dashed p-2.5 min-h-[56px] flex flex-col items-center justify-center text-center transition-colors ${
               dragOverAction === '__copy__'
-                ? 'border-sky-500 bg-sky-500/10'
-                : 'border-sky-400/40 bg-sky-500/5 hover:border-sky-400/60'
+                ? 'border-blue-500 bg-[#152642]'
+                : 'border-[#3d4754] bg-[#0e0f12] hover:border-[#4b6a9e] hover:bg-[#1a1d26]'
             }`}
           >
-            <span className="text-[9px] font-black uppercase text-sky-300">复制</span>
-            <span className="text-[8px] text-sky-400/80 mt-0.5">拖入后在当前位置复制一份</span>
+            <span className="text-[9px] font-black uppercase text-gray-200">复制</span>
+            <span className="text-[8px] text-gray-500 mt-0.5">拖入后在当前位置复制一份</span>
           </div>
           <div
             onDragOver={(e) => {
@@ -3342,12 +3467,12 @@ const WorkflowSection: React.FC<{
             }}
             className={`rounded-xl border-2 border-dashed p-2.5 min-h-[56px] flex flex-col items-center justify-center text-center transition-colors ${
               dragOverAction === '__delete__'
-                ? 'border-red-500 bg-red-500/10'
-                : 'border-red-400/40 bg-red-500/5 hover:border-red-400/60'
+                ? 'border-red-500 bg-[#3a1818]'
+                : 'border-[#3d4754] bg-[#0e0f12] hover:border-[#b85454] hover:bg-[#1f1416]'
             }`}
           >
-            <span className="text-[9px] font-black uppercase text-red-300">删除</span>
-            <span className="text-[8px] text-red-400/80 mt-0.5">将图片拖到此处从工作流中删除（组内同效）</span>
+            <span className="text-[9px] font-black uppercase text-red-400">删除</span>
+            <span className="text-[8px] text-gray-500 mt-0.5">将图片拖到此处从工作流中删除（组内同效）</span>
           </div>
           <div
             onDragOver={(e) => {
@@ -3397,25 +3522,25 @@ const WorkflowSection: React.FC<{
             }}
             className={`rounded-xl border-2 border-dashed p-2.5 min-h-[56px] flex flex-col items-center justify-center text-center transition-colors col-span-2 ${
               dragOverAction === '__archive__'
-                ? 'border-emerald-500 bg-emerald-500/10'
-                : 'border-emerald-400/40 bg-emerald-500/5 hover:border-emerald-400/60'
+                ? 'border-blue-500 bg-[#152642]'
+                : 'border-[#3d4754] bg-[#0e0f12] hover:border-[#4b6a9e] hover:bg-[#1a1d26]'
             }`}
           >
-            <span className="text-[9px] font-black uppercase text-emerald-300">归档</span>
-            <span className="text-[8px] text-emerald-400/80 mt-0.5">将图片拖到此处标记为已完成（组内同效）</span>
+            <span className="text-[9px] font-black uppercase text-gray-200">归档</span>
+            <span className="text-[8px] text-gray-500 mt-0.5">将图片拖到此处标记为已完成（组内同效）</span>
           </div>
           </div>
           {visiblePresets.length === 0 && visibleCapabilitySets.length === 0 && favoriteEntries.length === 0 && (
-            <div className="rounded-xl border border-dashed border-white/20 p-4 text-center text-[9px] text-gray-500">
+            <div className="rounded-xl border border-dashed border-[#3a3a40] p-4 text-center text-[9px] text-gray-500">
               暂无能力预设，请先在「能力」界面添加
             </div>
           )}
           {favoriteEntries.length > 0 || visiblePresets.length > 0 ? (
             <div className="space-y-4">
               <div className="space-y-2">
-                <div className="flex items-center justify-between rounded-lg border border-cyan-400/25 bg-cyan-500/[0.06] px-2.5 py-1.5">
-                  <span className="text-[8px] font-black text-cyan-300/90 uppercase tracking-wide">常用功能</span>
-                  <span className="text-[8px] text-cyan-200/60">拖入收藏</span>
+                <div className="flex items-center justify-between rounded-lg border border-[#2e2e32] bg-[#16161a] px-2.5 py-1.5">
+                  <span className="text-[8px] font-black text-blue-300 uppercase tracking-wide">常用功能</span>
+                  <span className="text-[8px] text-gray-500">拖入收藏</span>
                 </div>
                 <div
                   onDropCapture={() => {
@@ -3437,7 +3562,7 @@ const WorkflowSection: React.FC<{
                   className="space-y-2"
                 >
                   {favoriteEntries.length === 0 ? (
-                    <div className={`text-[8px] text-center py-2 ${favoriteDropActive ? 'text-cyan-200' : 'text-cyan-200/70'}`}>
+                    <div className={`text-[8px] text-center py-2 ${favoriteDropActive ? 'text-blue-300' : 'text-gray-500'}`}>
                       把功能块拖到这里，作为常用功能
                     </div>
                   ) : (
@@ -3447,12 +3572,10 @@ const WorkflowSection: React.FC<{
                           key={`fav-${entry.id}`}
                           className={`rounded-xl border-2 border-dashed min-h-[60px] flex transition-colors ${
                             dragOverAction === entry.id
-                              ? 'border-blue-500 bg-blue-500/10'
+                              ? 'border-blue-500 bg-[#1a3354]'
                               : dragOverAction === entry.id + '__tweak'
-                                ? 'border-indigo-400 bg-indigo-500/10 ring-1 ring-indigo-400/40'
-                                : entry.kind === 'set'
-                                  ? 'border-amber-500/30 bg-amber-600/10 hover:border-amber-400/50'
-                                  : 'border-white/20 bg-white/5 hover:border-white/30'
+                                ? 'border-[#4b6a9e] bg-[#1e3558] ring-1 ring-[#3b82f6]'
+                                : 'border-[#3a3a40] bg-[#1c1c22] hover:border-[#484850]'
                           }`}
                           draggable
                           onDragStart={() => {
@@ -3472,12 +3595,12 @@ const WorkflowSection: React.FC<{
                         >
                           <div
                             className={`flex-1 p-3 flex flex-col items-center justify-center text-center min-w-0 transition-colors ${
-                              entry.kind === 'module' && entry.mod?.category === 'image_gen' ? 'border-r border-white/10' : ''
+                              entry.kind === 'module' && entry.mod?.category === 'image_gen' ? 'border-r border-[#2e2e32]' : ''
                             } ${
                               dragOverAction === entry.id + '__tweak'
-                                ? 'bg-black/20'
+                                ? 'bg-[#121214]'
                                 : dragOverAction === entry.id
-                                  ? 'bg-blue-500/10'
+                                  ? 'bg-[#1a3354]'
                                   : ''
                             }`}
                             onDragOver={(e) => {
@@ -3501,8 +3624,8 @@ const WorkflowSection: React.FC<{
                             <div
                               className={`w-11 shrink-0 flex flex-col items-center justify-center rounded-r-lg transition-colors cursor-default ${
                                 dragOverAction === entry.id + '__tweak'
-                                  ? 'bg-blue-600/25 border-l border-blue-400/40'
-                                  : 'bg-white/5 border-l border-white/10 hover:bg-white/10'
+                                  ? 'bg-[#223d5c] border-l border-[#5080c0]'
+                                  : 'bg-[#1c1c22] border-l border-[#2e2e32] hover:bg-[#2e2e36]'
                               }`}
                               title="拖到此处可微调提示词后加入队列"
                               onDragOver={(e) => {
@@ -3536,7 +3659,7 @@ const WorkflowSection: React.FC<{
                   <button
                     type="button"
                     onClick={() => toggleSectionCollapsed(`cat:${category.id}`)}
-                    className="w-full text-left mb-1.5 flex items-center justify-between rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-[8px] font-black uppercase tracking-wide text-gray-400 hover:bg-white/[0.06] hover:text-gray-200 transition-colors"
+                    className="w-full text-left mb-1.5 flex items-center justify-between rounded-lg border border-[#2e2e32] bg-[#121214] px-2.5 py-1.5 text-[8px] font-black uppercase tracking-wide text-gray-400 hover:bg-[#18181c] hover:text-gray-200 transition-colors"
                   >
                     <span>{category.label}</span>
                     <span className="text-[10px] text-gray-500">{collapsedSectionIds[`cat:${category.id}`] ? '▼' : '▲'}</span>
@@ -3548,10 +3671,10 @@ const WorkflowSection: React.FC<{
                         key={mod.id}
                         className={`rounded-xl border-2 border-dashed min-h-[60px] flex transition-colors ${
                           dragOverAction === mod.id
-                            ? 'border-blue-500 bg-blue-500/10'
+                            ? 'border-blue-500 bg-[#1a3354]'
                             : dragOverAction === mod.id + '__tweak'
-                              ? 'border-indigo-400 bg-indigo-500/10 ring-1 ring-indigo-400/40'
-                              : 'border-white/20 bg-white/5 hover:border-white/30'
+                              ? 'border-[#4b6a9e] bg-[#1e3558] ring-1 ring-[#3b82f6]'
+                              : 'border-[#3a3a40] bg-[#1c1c22] hover:border-[#484850]'
                         }`}
                         draggable
                         onDragStart={() => {
@@ -3568,12 +3691,12 @@ const WorkflowSection: React.FC<{
                       >
                         <div
                           className={`flex-1 p-3 flex flex-col items-center justify-center text-center min-w-0 transition-colors ${
-                            mod.category === 'image_gen' ? 'border-r border-white/10' : ''
+                            mod.category === 'image_gen' ? 'border-r border-[#2e2e32]' : ''
                           } ${
                             dragOverAction === mod.id + '__tweak'
-                              ? 'bg-black/20'
+                              ? 'bg-[#121214]'
                               : dragOverAction === mod.id
-                                ? 'bg-blue-500/10'
+                                ? 'bg-[#1a3354]'
                                 : ''
                           }`}
                           onDragOver={(e) => {
@@ -3628,6 +3751,7 @@ const WorkflowSection: React.FC<{
                                       actionType: mod.id,
                                       inputImage,
                                       addedAt: Date.now(),
+                                      inputSourceDisplayKey: child?.displayKey,
                                       sourceGroupAssetId: currentGroupAsset.id,
                                       sourceItemIndex: itemIndex,
                                     },
@@ -3643,8 +3767,8 @@ const WorkflowSection: React.FC<{
                           <div
                             className={`w-11 shrink-0 flex flex-col items-center justify-center rounded-r-lg transition-colors cursor-default ${
                               dragOverAction === mod.id + '__tweak'
-                                ? 'bg-blue-600/25 border-l border-blue-400/40'
-                                : 'bg-white/5 border-l border-white/10 hover:bg-white/10'
+                                ? 'bg-[#223d5c] border-l border-[#5080c0]'
+                                : 'bg-[#1c1c22] border-l border-[#2e2e32] hover:bg-[#2e2e36]'
                             }`}
                             title="拖到此处可微调提示词后加入队列"
                             onDragOver={(e) => {
@@ -3658,14 +3782,25 @@ const WorkflowSection: React.FC<{
                               e.stopPropagation();
                               setDragOverAction(null);
                               const targets: Array<
-                                | { assetId: string; inputImage: string; sourceGroupAssetId?: string; sourceItemIndex?: number }
+                                | {
+                                    assetId: string;
+                                    inputImage: string;
+                                    inputSourceDisplayKey?: string;
+                                    sourceGroupAssetId?: string;
+                                    sourceItemIndex?: number;
+                                  }
                                 | { imageBase64: string; parentAssetId: string; sourceGroupAssetId: string; sourceItemIndex: number }
                               > = [];
                               if (draggingAssetIds?.length) {
                                 const effectiveIds = getEffectiveAssetIdsForAction(draggingAssetIds);
                                 effectiveIds.forEach((id) => {
                                   const a = assets.find((x) => x.id === id);
-                                  if (a) targets.push({ assetId: id, inputImage: getAssetDisplayImage(a) });
+                                  if (a)
+                                    targets.push({
+                                      assetId: id,
+                                      inputImage: getAssetDisplayImage(a),
+                                      inputSourceDisplayKey: a.displayKey,
+                                    });
                                 });
                               } else if (draggingGroupItems && currentGroupAsset) {
                                 draggingGroupItems.itemIndexes.forEach((itemIndex) => {
@@ -3684,6 +3819,7 @@ const WorkflowSection: React.FC<{
                                       targets.push({
                                         assetId: (item as { assetId: string }).assetId,
                                         inputImage: getAssetDisplayImage(child),
+                                        inputSourceDisplayKey: child.displayKey,
                                         sourceGroupAssetId: currentGroupAsset.id,
                                         sourceItemIndex: itemIndex,
                                       });
@@ -3708,7 +3844,7 @@ const WorkflowSection: React.FC<{
               <button
                 type="button"
                 onClick={() => toggleSectionCollapsed('__all_presets__')}
-                className="w-full text-left mb-1.5 flex items-center justify-between rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-[8px] font-black uppercase tracking-wide text-gray-400 hover:bg-white/[0.06] hover:text-gray-200 transition-colors"
+                className="w-full text-left mb-1.5 flex items-center justify-between rounded-lg border border-[#2e2e32] bg-[#121214] px-2.5 py-1.5 text-[8px] font-black uppercase tracking-wide text-gray-400 hover:bg-[#18181c] hover:text-gray-200 transition-colors"
               >
                 <span>功能</span>
                 <span className="text-[10px] text-gray-500">{collapsedSectionIds.__all_presets__ ? '▼' : '▲'}</span>
@@ -3720,10 +3856,10 @@ const WorkflowSection: React.FC<{
                   key={mod.id}
                   className={`rounded-xl border-2 border-dashed min-h-[60px] flex transition-colors ${
                     dragOverAction === mod.id
-                      ? 'border-blue-500 bg-blue-500/10'
+                      ? 'border-blue-500 bg-[#1a3354]'
                       : dragOverAction === mod.id + '__tweak'
-                        ? 'border-indigo-400 bg-indigo-500/10 ring-1 ring-indigo-400/40'
-                        : 'border-white/20 bg-white/5 hover:border-white/30'
+                        ? 'border-[#4b6a9e] bg-[#1e3558] ring-1 ring-[#3b82f6]'
+                        : 'border-[#3a3a40] bg-[#1c1c22] hover:border-[#484850]'
                   }`}
                   draggable
                   onDragStart={() => {
@@ -3740,12 +3876,12 @@ const WorkflowSection: React.FC<{
                 >
                   <div
                     className={`flex-1 p-3 flex flex-col items-center justify-center text-center min-w-0 transition-colors ${
-                      mod.category === 'image_gen' ? 'border-r border-white/10' : ''
+                      mod.category === 'image_gen' ? 'border-r border-[#2e2e32]' : ''
                     } ${
                       dragOverAction === mod.id + '__tweak'
-                        ? 'bg-black/20'
+                        ? 'bg-[#121214]'
                         : dragOverAction === mod.id
-                          ? 'bg-blue-500/10'
+                          ? 'bg-[#1a3354]'
                           : ''
                     }`}
                     onDragOver={(e) => {
@@ -3800,6 +3936,7 @@ const WorkflowSection: React.FC<{
                                 actionType: mod.id,
                                 inputImage,
                                 addedAt: Date.now(),
+                                inputSourceDisplayKey: child?.displayKey,
                                 sourceGroupAssetId: currentGroupAsset.id,
                                 sourceItemIndex: itemIndex,
                               },
@@ -3815,8 +3952,8 @@ const WorkflowSection: React.FC<{
                     <div
                       className={`w-11 shrink-0 flex flex-col items-center justify-center rounded-r-lg transition-colors cursor-default ${
                         dragOverAction === mod.id + '__tweak'
-                          ? 'bg-blue-600/25 border-l border-blue-400/40'
-                          : 'bg-white/5 border-l border-white/10 hover:bg-white/10'
+                          ? 'bg-[#223d5c] border-l border-[#5080c0]'
+                          : 'bg-[#1c1c22] border-l border-[#2e2e32] hover:bg-[#2e2e36]'
                       }`}
                       title="拖到此处可微调提示词后加入队列"
                       onDragOver={(e) => {
@@ -3830,14 +3967,25 @@ const WorkflowSection: React.FC<{
                         e.stopPropagation();
                         setDragOverAction(null);
                         const targets: Array<
-                          | { assetId: string; inputImage: string; sourceGroupAssetId?: string; sourceItemIndex?: number }
+                          | {
+                              assetId: string;
+                              inputImage: string;
+                              inputSourceDisplayKey?: string;
+                              sourceGroupAssetId?: string;
+                              sourceItemIndex?: number;
+                            }
                           | { imageBase64: string; parentAssetId: string; sourceGroupAssetId: string; sourceItemIndex: number }
                         > = [];
                         if (draggingAssetIds?.length) {
                           const effectiveIds = getEffectiveAssetIdsForAction(draggingAssetIds);
                           effectiveIds.forEach((id) => {
                             const a = assets.find((x) => x.id === id);
-                            if (a) targets.push({ assetId: id, inputImage: getAssetDisplayImage(a) });
+                            if (a)
+                              targets.push({
+                                assetId: id,
+                                inputImage: getAssetDisplayImage(a),
+                                inputSourceDisplayKey: a.displayKey,
+                              });
                           });
                         } else if (draggingGroupItems && currentGroupAsset) {
                           draggingGroupItems.itemIndexes.forEach((itemIndex) => {
@@ -3856,6 +4004,7 @@ const WorkflowSection: React.FC<{
                                 targets.push({
                                   assetId: (item as { assetId: string }).assetId,
                                   inputImage: getAssetDisplayImage(child),
+                                  inputSourceDisplayKey: child.displayKey,
                                   sourceGroupAssetId: currentGroupAsset.id,
                                   sourceItemIndex: itemIndex,
                                 });
@@ -3884,10 +4033,10 @@ const WorkflowSection: React.FC<{
               <button
                 type="button"
                 onClick={() => toggleSectionCollapsed('__capability_sets__')}
-                className="w-full text-left mb-1.5 flex items-center justify-between rounded-lg border border-amber-400/30 bg-amber-500/[0.06] px-2.5 py-1.5 text-[8px] font-black uppercase tracking-wide text-amber-300/90 hover:bg-amber-500/[0.1] hover:text-amber-200 transition-colors"
+                className="w-full text-left mb-1.5 flex items-center justify-between rounded-lg border border-[#2e2e32] bg-[#121214] px-2.5 py-1.5 text-[8px] font-black uppercase tracking-wide text-gray-400 hover:bg-[#18181c] hover:text-gray-200 transition-colors"
               >
                 <span>复合能力</span>
-                <span className="text-[10px] text-amber-300/70">{collapsedSectionIds.__capability_sets__ ? '▼' : '▲'}</span>
+                <span className="text-[10px] text-gray-500">{collapsedSectionIds.__capability_sets__ ? '▼' : '▲'}</span>
               </button>
               {!collapsedSectionIds.__capability_sets__ && (
               <div className="grid grid-cols-2 gap-2">
@@ -3944,6 +4093,7 @@ const WorkflowSection: React.FC<{
                                   actionType: setActionId,
                                   inputImage,
                                   addedAt: Date.now(),
+                                  inputSourceDisplayKey: child?.displayKey,
                                   sourceGroupAssetId: currentGroupAsset.id,
                                   sourceItemIndex: itemIndex,
                                 },
@@ -3954,11 +4104,11 @@ const WorkflowSection: React.FC<{
                       }}
                       className={`rounded-xl border-2 border-dashed p-2.5 min-h-[60px] flex flex-col items-center justify-center text-center transition-colors ${
                         dragOverAction === setActionId
-                          ? 'border-amber-500 bg-amber-500/10'
-                          : 'border-amber-500/30 bg-amber-600/10 hover:border-amber-400/50'
+                          ? 'border-blue-500 bg-[#1a3354]'
+                          : 'border-[#3a3a40] bg-[#1c1c22] hover:border-[#484850]'
                       }`}
                     >
-                      <span className="text-[9px] font-black uppercase text-amber-200/90">{set.label}</span>
+                      <span className="text-[9px] font-black uppercase text-gray-200">{set.label}</span>
                     </div>
                   );
                 })}
@@ -3972,7 +4122,7 @@ const WorkflowSection: React.FC<{
 
       {/* 进行中：大图弹窗 */}
       {lightboxAsset && !showArchived && (
-        <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/90 backdrop-blur-xl p-4" onClick={() => setLightboxAssetId(null)}>
+        <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/78 backdrop-blur-sm p-4" onClick={() => setLightboxAssetId(null)}>
           <div
             className="relative max-w-4xl w-full"
             onClick={(e) => e.stopPropagation()}
@@ -3984,19 +4134,24 @@ const WorkflowSection: React.FC<{
             }}
           >
             <button onClick={() => setLightboxAssetId(null)} className="absolute -top-12 right-0 w-10 h-10 flex items-center justify-center text-white/60 hover:text-white"><AppIcon name="close" className="w-4 h-4" /></button>
-            <img src={workflowSafeImgSrc(getAssetDisplayImage(lightboxAsset))} alt="" className="w-full max-h-[80vh] object-contain rounded-2xl border border-white/10" />
+            <div className="rounded-2xl border border-[#2e2e32] bg-[#121214] p-4 sm:p-5">
+              <img
+                src={workflowSafeImgSrc(getAssetDisplayImage(lightboxAsset))}
+                alt=""
+                className="w-full max-h-[80vh] object-contain rounded-xl bg-[#16161a]"
+              />
             <div className="mt-3 flex flex-wrap gap-1.5 justify-center items-center">
               <span className="text-[8px] font-black text-gray-500 uppercase mr-1">显示</span>
               <button
                 onClick={() => setDisplayKey(lightboxAsset.id, 'original')}
-                className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${lightboxAsset.displayKey === 'original' ? 'bg-blue-600 border-blue-500 text-white' : 'bg-white/10 border-white/20 hover:bg-white/20'}`}
+                className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${lightboxAsset.displayKey === 'original' ? 'bg-blue-600 border-blue-500 text-white' : 'bg-[#26262c] border-[#3a3a40] hover:bg-[#383842]'}`}
               >
                 原始
               </button>
               {lightboxAsset.cutImageGroup?.length && (
                 <button
                   onClick={() => setDisplayKey(lightboxAsset.id, 'cut_image')}
-                  className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${lightboxAsset.displayKey === 'cut_image' ? 'bg-blue-600 border-blue-500 text-white' : 'bg-white/10 border-white/20 hover:bg-white/20'}`}
+                  className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${lightboxAsset.displayKey === 'cut_image' ? 'bg-blue-600 border-blue-500 text-white' : 'bg-[#26262c] border-[#3a3a40] hover:bg-[#383842]'}`}
                 >
                   切割
                 </button>
@@ -4010,7 +4165,7 @@ const WorkflowSection: React.FC<{
                   <button
                     key={k}
                     onClick={() => setDisplayKey(lightboxAsset.id, k)}
-                    className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${lightboxAsset.displayKey === k ? 'bg-blue-600 border-blue-500 text-white' : 'bg-white/10 border-white/20 hover:bg-white/20'}`}
+                    className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${lightboxAsset.displayKey === k ? 'bg-blue-600 border-blue-500 text-white' : 'bg-[#26262c] border-[#3a3a40] hover:bg-[#383842]'}`}
                   >
                     {label}
                   </button>
@@ -4026,9 +4181,19 @@ const WorkflowSection: React.FC<{
                     `workflow-preview-${lightboxAsset.id.slice(0, 6)}`
                   );
                 }}
-                className="px-4 py-2 rounded-xl bg-blue-600/80 border border-blue-500/40 text-[10px] font-black uppercase hover:bg-blue-500"
+                className="px-4 py-2 rounded-xl bg-[#1e40af] border border-[#3b6fb8] text-[10px] font-black uppercase hover:bg-blue-500"
               >
                 下载当前大图
+              </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowLightboxGenerationRecord(true);
+                }}
+                className="px-4 py-2 rounded-xl bg-[#26262c] border border-emerald-500/40 text-[10px] font-black uppercase text-emerald-200/90 hover:bg-emerald-900/30"
+              >
+                生成记录
               </button>
               {actionModules.map((mod) => (
                 <button
@@ -4043,7 +4208,7 @@ const WorkflowSection: React.FC<{
                     }
                     setLightboxAssetId(nextAsset?.id ?? null);
                   }}
-                  className="px-4 py-2 rounded-xl bg-white/10 border border-white/20 text-[10px] font-black uppercase hover:bg-blue-600/30 hover:border-blue-500/50"
+                  className="px-4 py-2 rounded-xl bg-[#26262c] border border-[#3a3a40] text-[10px] font-black uppercase hover:bg-[#305a90] hover:border-[#3b82f6]"
                 >
                   {mod.label}
                 </button>
@@ -4051,14 +4216,23 @@ const WorkflowSection: React.FC<{
             </div>
             {lightboxList.length > 1 && (
               <div className="flex justify-center gap-2 mt-2">
-                <button onClick={() => goLightbox(-1)} className="px-3 py-1 rounded-lg bg-white/10 text-[9px] font-black">上一张</button>
+                <button onClick={() => goLightbox(-1)} className="px-3 py-1 rounded-lg bg-[#26262c] text-[9px] font-black">上一张</button>
                 <span className="text-[9px] text-gray-500 self-center">{lightboxIndex + 1} / {lightboxList.length}</span>
-                <button onClick={() => goLightbox(1)} className="px-3 py-1 rounded-lg bg-white/10 text-[9px] font-black">下一张</button>
+                <button onClick={() => goLightbox(1)} className="px-3 py-1 rounded-lg bg-[#26262c] text-[9px] font-black">下一张</button>
               </div>
             )}
+            </div>
           </div>
         </div>
       )}
+
+      {showLightboxGenerationRecord && lightboxAsset ? (
+        <WorkflowGenerationRecordPanel
+          asset={lightboxAsset}
+          getStepLabel={getGenerationRecordStepLabel}
+          onClose={() => setShowLightboxGenerationRecord(false)}
+        />
+      ) : null}
 
       {/* 已完成：归档详情弹窗（流程图 + 下载） */}
       {archivedDetailAsset && (
@@ -4100,6 +4274,7 @@ const WorkflowSection: React.FC<{
                   actionType: promptTweakModal.preset.id,
                   inputImage: t.inputImage,
                   addedAt: Date.now(),
+                  ...(t.inputSourceDisplayKey != null ? { inputSourceDisplayKey: t.inputSourceDisplayKey } : {}),
                   ...(trimmed ? { promptOverride: trimmed } : {}),
                   ...(t.sourceGroupAssetId != null ? { sourceGroupAssetId: t.sourceGroupAssetId, sourceItemIndex: t.sourceItemIndex } : {}),
                 });

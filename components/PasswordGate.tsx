@@ -55,7 +55,7 @@ const PasswordGate: React.FC<{ children: React.ReactNode }> = ({ children }) => 
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-[#050505] p-4">
-      <div className="w-full max-w-sm rounded-2xl border border-white/10 bg-black/40 p-6 shadow-xl">
+      <div className="w-full max-w-sm rounded-2xl border border-[#2e2e32] bg-[#16161a] p-6 shadow-xl">
         <h1 className="text-center text-[14px] font-black uppercase text-gray-300 mb-1">进入网站</h1>
         <p className="text-center text-[11px] text-gray-500 mb-4">请输入密码以继续</p>
         <form onSubmit={submit} className="space-y-3">
@@ -64,7 +64,7 @@ const PasswordGate: React.FC<{ children: React.ReactNode }> = ({ children }) => 
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             placeholder="密码"
-            className="w-full rounded-xl border border-white/15 bg-white/5 px-4 py-3 text-sm text-white placeholder-gray-500 outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/30"
+            className="w-full rounded-xl border border-[#343438] bg-[#1c1c22] px-4 py-3 text-sm text-white placeholder-gray-500 outline-none focus:border-[#3b82f6] focus:ring-1 focus:ring-blue-500/30"
             autoFocus
           />
           {error && <p className="text-[11px] text-red-400 text-center">{error}</p>}

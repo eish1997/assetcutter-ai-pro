@@ -164,12 +164,12 @@ const ModelViewer3D: React.FC<ModelViewer3DProps> = ({ url, onClose, inline = fa
   }, [url]);
 
   const overlayLoading = status === 'loading' && (
-    <div className="absolute inset-0 flex items-center justify-center bg-black/40 rounded-2xl">
+    <div className="absolute inset-0 flex items-center justify-center bg-[#16161a] rounded-2xl">
       <span className="text-sm text-gray-400">加载模型中…</span>
     </div>
   );
   const overlayError = status === 'error' && (
-    <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 gap-2 p-4 rounded-2xl">
+    <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#1a1a1e] gap-2 p-4 rounded-2xl">
       <span className="text-amber-400 text-sm">无法在线预览</span>
       <span className="text-gray-500 text-[10px]">{errorMsg}</span>
       {!proxyBase && /^https?:\/\//i.test(url) && (
@@ -182,7 +182,7 @@ const ModelViewer3D: React.FC<ModelViewer3DProps> = ({ url, onClose, inline = fa
 
   if (inline) {
     return (
-      <div className="relative w-full h-full min-h-[280px] rounded-2xl overflow-hidden border border-white/10 bg-black/60 flex flex-col">
+      <div className="relative w-full h-full min-h-[280px] rounded-2xl overflow-hidden border border-[#2e2e32] bg-[#1a1a1e] flex flex-col">
         <div ref={containerRef} className="flex-1 min-h-[280px] rounded-2xl" />
         {overlayLoading}
         {overlayError}
@@ -191,9 +191,9 @@ const ModelViewer3D: React.FC<ModelViewer3DProps> = ({ url, onClose, inline = fa
     );
   }
   return (
-    <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/95 backdrop-blur-xl p-4 lg:p-10" onClick={onClose}>
-      <div className="relative w-full max-w-4xl h-[80vh] rounded-[2rem] overflow-hidden border border-white/10 bg-black/60 flex flex-col" onClick={(e: React.MouseEvent) => e.stopPropagation()}>
-        {onClose && <button onClick={onClose} className="absolute top-4 right-4 z-10 w-10 h-10 flex items-center justify-center rounded-full bg-black/60 text-white/80 hover:text-white hover:bg-black/80 transition-colors"><AppIcon name="close" className="w-4 h-4" /></button>}
+    <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 lg:p-10" onClick={onClose}>
+      <div className="relative w-full max-w-4xl h-[80vh] rounded-[2rem] overflow-hidden border border-[#2e2e32] bg-[#1a1a1e] flex flex-col" onClick={(e: React.MouseEvent) => e.stopPropagation()}>
+        {onClose && <button onClick={onClose} className="absolute top-4 right-4 z-10 w-10 h-10 flex items-center justify-center rounded-full bg-[#1a1a1e] text-white/80 hover:text-white hover:bg-[#1e1e22] transition-colors"><AppIcon name="close" className="w-4 h-4" /></button>}
         <div ref={containerRef} className="flex-1 min-h-[300px] rounded-[2rem]" />
         {overlayLoading}
         {overlayError}

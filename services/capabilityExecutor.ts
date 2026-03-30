@@ -1,5 +1,6 @@
 import type { CustomAppModule, DialogImageGear, CapabilitySet, CapabilitySetNode } from '../types';
 import { DIALOG_IMAGE_GEARS } from '../types';
+import type { VgpGenStepCapture } from '../types/vgp';
 import {
   detectObjectsInImage,
   understandImageEditIntent,
@@ -11,11 +12,39 @@ import {
 export type CapabilityExecuteContext = {
   /** 用于日志输出（可选） */
   onLog?: (level: 'info' | 'warn' | 'error', message: string, detail?: string) => void;
+  /**
+   * 阶段 B：默认 `legacy`（先理解预设提示词再生图）。
+   * `compiler` 为规则编译器直出英文指令，不调用「理解」LLM。
+   */
+  promptResolution?: 'legacy' | 'compiler';
+  /** 编译器输入：目标摘要、维度约束等 */
+  semanticForCompiler?: {
+    targetSummary?: string;
+    dimensions?: Record<string, string | undefined>;
+  };
 };
 
 export type CapabilityExecuteResult =
-  | { ok: true; kind: 'image'; image: string; durationMs: number }
+  | { ok: true; kind: 'image'; image: string; durationMs: number; vgpSteps?: VgpGenStepCapture[] }
   | { ok: false; kind: 'none'; error: string; durationMs: number };
+
+function makeVgpCapture(
+  preset: CustomAppModule,
+  understoodPrompt: string,
+  modelId: string,
+  stepKeyOverride?: string
+): VgpGenStepCapture {
+  return {
+    stepKey: stepKeyOverride ?? preset.id,
+    understoodPrompt,
+    presetId: preset.id,
+    presetLabel: preset.label || preset.id,
+    modelId,
+    gear: preset.imageGear,
+    aspectRatio: preset.imageAspectRatio,
+    imageSize: preset.imageSize,
+  };
+}
 
 export function getCapabilityEngine(preset: CustomAppModule): 'gen_image' | 'builtin' {
   if (preset.engine) return preset.engine;
@@ -48,6 +77,30 @@ async function resolveCapabilityPrompt(
   );
   const understood = (instruction || '').trim();
   return understood.length > 0 ? understood : null;
+}
+
+async function resolveGenImagePrompt(
+  preset: CustomAppModule,
+  inputImageBase64: string,
+  ctx: CapabilityExecuteContext
+): Promise<string | null> {
+  if (ctx.promptResolution === 'compiler') {
+    const { compilePromptForCapability } = await import('./compiler/compilePrompt');
+    const out = compilePromptForCapability({
+      preset,
+      targetSummary: ctx.semanticForCompiler?.targetSummary,
+      dimensions: ctx.semanticForCompiler?.dimensions,
+    });
+    if (out.compiled_prompt.trim()) {
+      ctx.onLog?.(
+        'info',
+        `[${preset.label || preset.id}] 使用规则编译器生成指令（${out.compiler_version}）`,
+        undefined
+      );
+      return out.compiled_prompt;
+    }
+  }
+  return resolveCapabilityPrompt(preset, inputImageBase64, ctx);
 }
 
 /**
@@ -99,13 +152,19 @@ export async function executeCapability(
       const cropped = canvas.toDataURL('image/png');
 
       if (engine === 'gen_image') {
-        const prompt = await resolveCapabilityPrompt(preset, cropped, ctx);
+        const prompt = await resolveGenImagePrompt(preset, cropped, ctx);
         if (!prompt) return { ok: false, kind: 'none', error: '该能力为生图执行方式，但未填写预设提示词或理解未返回有效指令', durationMs: Date.now() - start };
         ctx.onLog?.('info', `[${actionLabel}] 生图中…`, undefined);
         const modelId = resolveImageModelId(preset.imageGear);
         const imageOptions = (preset.imageAspectRatio || preset.imageSize) ? { aspectRatio: preset.imageAspectRatio, imageSize: preset.imageSize } : undefined;
         const result = await dialogGenerateImage(cropped, prompt, modelId, imageOptions);
-        return { ok: true, kind: 'image', image: result || cropped, durationMs: Date.now() - start };
+        return {
+          ok: true,
+          kind: 'image',
+          image: result || cropped,
+          durationMs: Date.now() - start,
+          vgpSteps: [makeVgpCapture(preset, prompt, modelId)],
+        };
       }
 
       return { ok: true, kind: 'image', image: cropped, durationMs: Date.now() - start };
@@ -119,13 +178,19 @@ export async function executeCapability(
       return { ok: false, kind: 'none', error: '该能力为图像处理执行方式，但没有内置实现', durationMs: Date.now() - start };
     }
 
-    const prompt = await resolveCapabilityPrompt(preset, inputImageBase64, ctx);
+    const prompt = await resolveGenImagePrompt(preset, inputImageBase64, ctx);
     if (!prompt) return { ok: false, kind: 'none', error: '该能力为生图执行方式，但未填写预设提示词或理解未返回有效指令', durationMs: Date.now() - start };
     ctx.onLog?.('info', `[${actionLabel}] 生图中…`, undefined);
     const modelId = resolveImageModelId(preset.imageGear);
     const imageOptions = (preset.imageAspectRatio || preset.imageSize) ? { aspectRatio: preset.imageAspectRatio, imageSize: preset.imageSize } : undefined;
     const result = await dialogGenerateImage(inputImageBase64, prompt, modelId, imageOptions);
-    return { ok: true, kind: 'image', image: result, durationMs: Date.now() - start };
+    return {
+      ok: true,
+      kind: 'image',
+      image: result,
+      durationMs: Date.now() - start,
+      vgpSteps: [makeVgpCapture(preset, prompt, modelId)],
+    };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return { ok: false, kind: 'none', error: msg, durationMs: Date.now() - start };
@@ -163,6 +228,7 @@ export async function executeCapabilitySet(
 ): Promise<CapabilityExecuteResult> {
   const start = Date.now();
   const { presets, onLog } = ctx;
+  const setVgpSteps: VgpGenStepCapture[] = [];
   const validationError = validateCapabilitySetGraph(set, presets);
   if (validationError) {
     return { ok: false, kind: 'none', error: validationError, durationMs: Date.now() - start };
@@ -215,6 +281,9 @@ export async function executeCapabilitySet(
             const result = await dialogGenerateImageMulti(images, instruction, modelId, imageOptions);
             outputs.set(n.id, result);
             lastImage = result;
+            setVgpSteps.push(
+              makeVgpCapture(preset, instruction, modelId, `set-node:${n.id}`)
+            );
           } catch (e) {
             const msg = e instanceof Error ? e.message : String(e);
             return { ok: false, kind: 'none', error: `[${n.data.label}] ${msg}`, durationMs: Date.now() - start };
@@ -223,12 +292,17 @@ export async function executeCapabilitySet(
           const srcId = sources.find((s) => outputs.has(s)) ?? sources[0];
           const srcImage = outputs.get(srcId) ?? inputImage;
           onLog?.('info', `[${set.label}] ${n.data.label} 执行中…`, undefined);
-          const out = await executeCapability(preset, srcImage, { onLog });
+          const out = await executeCapability(preset, srcImage, ctx);
           if (out.ok === false) {
             return { ok: false, kind: 'none', error: `[${n.data.label}] ${out.error}`, durationMs: Date.now() - start };
           }
           outputs.set(n.id, out.image);
           lastImage = out.image;
+          if (out.vgpSteps?.length) {
+            for (const s of out.vgpSteps) {
+              setVgpSteps.push({ ...s, stepKey: `set-node:${n.id}` });
+            }
+          }
         }
       } else if (n.type === 'input') {
         outputs.set(n.id, inputImage);
@@ -279,6 +353,12 @@ export async function executeCapabilitySet(
     }
   }
 
-  return { ok: true, kind: 'image', image: lastImage, durationMs: Date.now() - start };
+  return {
+    ok: true,
+    kind: 'image',
+    image: lastImage,
+    durationMs: Date.now() - start,
+    vgpSteps: setVgpSteps.length ? setVgpSteps : undefined,
+  };
 }
 

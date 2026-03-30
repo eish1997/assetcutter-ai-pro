@@ -324,7 +324,7 @@ function CanvasInner({ presets, initialSet, setLabel, onSetLabelChange, onSave, 
           value={setLabel}
           onChange={(e) => onSetLabelChange(e.target.value)}
           placeholder="集合名称"
-          className="sidebar-input w-full rounded border border-white/10 bg-white/5 px-3 py-2 text-xs text-gray-200 placeholder-gray-500 outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/30"
+          className="sidebar-input w-full rounded border border-[#2e2e32] bg-[#1c1c22] px-3 py-2 text-xs text-gray-200 placeholder-gray-500 outline-none focus:border-[#3b82f6] focus:ring-1 focus:ring-blue-500/30"
         />
         <div className="flex gap-2">
           <button
@@ -337,7 +337,7 @@ function CanvasInner({ presets, initialSet, setLabel, onSetLabelChange, onSave, 
           <button
             type="button"
             onClick={onClose}
-            className="flex-1 rounded border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-gray-300 hover:bg-white/10"
+            className="flex-1 rounded border border-[#2e2e32] bg-[#1c1c22] px-3 py-2 text-xs font-semibold text-gray-300 hover:bg-[#2e2e36]"
           >
             返回
           </button>
