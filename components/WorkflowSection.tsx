@@ -572,7 +572,21 @@ const WorkflowSection: React.FC<{
   onAddGenerate3DJob?: (preset: CustomAppModule, imageBase64: string) => void;
   /** 用于按账号隔离常用功能偏好；未传时走 guest */
   preferenceScope?: string | null;
-}> = ({ capabilityPresets, capabilitySets: capabilitySetsProp = [], assets: assetsProp, onAssetsChange: setAssets, pending: pendingProp, onPendingChange: setPending, onOpenLibraryPicker, onLog, onAddGenerate3DJob, preferenceScope = null }) => {
+  /** 由 App 主滚动层注册，使列表两侧留白等网页空白处也能开始框选 */
+  registerMarqueeStartHandler?: (handler: ((e: React.MouseEvent) => void) | null) => void;
+}> = ({
+  capabilityPresets,
+  capabilitySets: capabilitySetsProp = [],
+  assets: assetsProp,
+  onAssetsChange: setAssets,
+  pending: pendingProp,
+  onPendingChange: setPending,
+  onOpenLibraryPicker,
+  onLog,
+  onAddGenerate3DJob,
+  preferenceScope = null,
+  registerMarqueeStartHandler,
+}) => {
   const assets = Array.isArray(assetsProp) ? assetsProp : [];
   const pending = Array.isArray(pendingProp) ? pendingProp : [];
   const capabilitySets = Array.isArray(capabilitySetsProp) ? capabilitySetsProp : [];
@@ -654,14 +668,29 @@ const WorkflowSection: React.FC<{
   const [selectedGroupItemKeys, setSelectedGroupItemKeys] = useState<Set<string>>(new Set());
   const [marqueeRect, setMarqueeRect] = useState<{ startX: number; startY: number; endX: number; endY: number } | null>(null);
   const gridRef = useRef<HTMLDivElement>(null);
-  const scrollAreaRef = useRef<HTMLDivElement>(null);
+  const handleMarqueeMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      if (showArchived) return;
+      if ((e.target as Element).closest('[data-workflow-card]')) return;
+      if ((e.target as Element).closest('button, [role="button"], a, input, select, textarea, label')) return;
+      if ((e.target as Element).closest('[data-workflow-sidebar]')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setMarqueeRect({ startX: e.clientX, startY: e.clientY, endX: e.clientX, endY: e.clientY });
+    },
+    [showArchived]
+  );
+  useEffect(() => {
+    if (!registerMarqueeStartHandler) return;
+    registerMarqueeStartHandler(handleMarqueeMouseDown);
+    return () => registerMarqueeStartHandler(null);
+  }, [registerMarqueeStartHandler, handleMarqueeMouseDown]);
   const cardRefs = useRef<Map<string, HTMLElement>>(new Map());
   const [dragOverAssetId, setDragOverAssetId] = useState<string | null>(null);
   const [dragOverGroupItemKey, setDragOverGroupItemKey] = useState<string | null>(null);
   const [assetErrors, setAssetErrors] = useState<Map<string, string>>(new Map());
   const [groupPreviewIndexById, setGroupPreviewIndexById] = useState<Record<string, number>>({});
   const [groupBounceStateById, setGroupBounceStateById] = useState<Record<string, 'idle' | 'up' | 'down'>>({});
-  const [assetAspectById, setAssetAspectById] = useState<Record<string, number>>({});
 
   const setAssetError = useCallback((assetId: string, message: string | null) => {
     setAssetErrors((prev) => {
@@ -1281,13 +1310,6 @@ const WorkflowSection: React.FC<{
       // ignore persist failure
     }
   }, [favoriteActionIds, favoriteStorageKey]);
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    setDropZoneActive(false);
-    if (!hasImageFileTransfer(e.dataTransfer)) return;
-    e.preventDefault();
-    const files = e.dataTransfer?.files;
-    if (files?.length) addImagesFromFiles(Array.from(files));
-  }, [addImagesFromFiles, hasImageFileTransfer]);
   const collectImageFilesFromClipboardItems = useCallback((items?: DataTransferItemList | null) => {
     if (!items?.length) return [] as File[];
     const files: File[] = [];
@@ -1316,18 +1338,12 @@ const WorkflowSection: React.FC<{
     return false;
   }, [isEditableTarget]);
 
-  const handlePaste = useCallback((e: React.ClipboardEvent) => {
-    const files = collectImageFilesFromClipboardItems(e.clipboardData?.items);
-    if (files.length) {
-      e.preventDefault();
-      addImagesFromFiles(files);
-    }
-  }, [addImagesFromFiles, collectImageFilesFromClipboardItems]);
-
   useEffect(() => {
     const onWindowPaste = (e: ClipboardEvent) => {
       if (showArchived) return;
-      if (isGlobalUploadBlockedTarget(e.target)) return;
+      /** 仅让出真正的可编辑区；不要用 isGlobalUploadBlockedTarget(e.target)，否则焦点在顶部 Tab 等按钮上时，在列表里粘贴会被误拦截 */
+      const active = document.activeElement;
+      if (active && isEditableTarget(active)) return;
       const files = collectImageFilesFromClipboardItems(e.clipboardData?.items);
       if (!files.length) return;
       e.preventDefault();
@@ -1337,7 +1353,7 @@ const WorkflowSection: React.FC<{
     return () => {
       window.removeEventListener('paste', onWindowPaste);
     };
-  }, [addImagesFromFiles, collectImageFilesFromClipboardItems, isGlobalUploadBlockedTarget, showArchived]);
+  }, [addImagesFromFiles, collectImageFilesFromClipboardItems, isEditableTarget, showArchived]);
 
   useEffect(() => {
     const onWindowDragOver = (e: DragEvent) => {
@@ -2120,6 +2136,7 @@ const WorkflowSection: React.FC<{
 
   return (
     <div className="flex flex-col min-h-[400px] h-[calc(100dvh-6rem)] gap-4">
+      <div className="flex flex-col flex-1 min-h-0 gap-4 min-w-0">
       <div className="flex flex-col gap-2 shrink-0 w-full sm:flex-row sm:items-center sm:justify-between sm:gap-3">
         <div className="flex flex-wrap items-center gap-4 min-w-0 flex-1">
         <span className="text-[10px] font-black text-blue-400 uppercase mr-2">工作区</span>
@@ -2326,7 +2343,6 @@ const WorkflowSection: React.FC<{
 
       <div className="flex-1 min-h-0 flex gap-6">
         <div
-          ref={scrollAreaRef}
           className={`flex-1 min-w-0 min-h-0 overflow-y-auto no-scrollbar flex flex-col gap-3 rounded-xl transition-colors ${
             dropZoneActive ? 'ring-1 ring-[#3b82f6] bg-[#152535]' : ''
           }`}
@@ -2339,18 +2355,7 @@ const WorkflowSection: React.FC<{
             const next = e.relatedTarget as Node | null;
             if (!next || !e.currentTarget.contains(next)) setDropZoneActive(false);
           }}
-          onDrop={handleDrop}
-          onPaste={handlePaste}
           tabIndex={0}
-          onMouseDownCapture={(e) => {
-            if (showArchived) return;
-            if (!scrollAreaRef.current?.contains(e.target as Node)) return;
-            if ((e.target as Element).closest('[data-workflow-card]')) return;
-            if ((e.target as Element).closest('button, [role="button"], a, input, select, textarea')) return;
-            e.preventDefault();
-            e.stopPropagation();
-            setMarqueeRect({ startX: e.clientX, startY: e.clientY, endX: e.clientX, endY: e.clientY });
-          }}
         >
           {viewStack.length > 0 ? (
             <>
@@ -2461,15 +2466,14 @@ const WorkflowSection: React.FC<{
                       <div
                         key={idx}
                         data-workflow-card
-                        className="break-inside-avoid mb-4 rounded-2xl border border-[#2e2e32] bg-[#16161a] overflow-hidden"
+                        className="break-inside-avoid mb-4 rounded-2xl border border-[#2e2e32] bg-[#0b0b0e] overflow-hidden flex justify-center"
                       >
                         <img
                           src={workflowSafeImgSrc(img)}
                           alt=""
                           draggable={false}
                           onDragStart={(e) => e.preventDefault()}
-                          className="w-full h-auto object-cover block"
-                          style={{ maxHeight: 280 }}
+                          className="block max-h-[min(360px,70vh)] max-w-full w-auto h-auto object-contain"
                         />
                       </div>
                     ))
@@ -2665,36 +2669,37 @@ const WorkflowSection: React.FC<{
                                       }
                                     }}
                                   >
-                                    <img
-                                      src={(() => {
-                                        if (!childAsset.cutImageGroup?.length) return img;
-                                        const groupItems = childAsset.cutImageGroup;
-                                        const len = groupItems.length;
-                                        const rawIndex = groupPreviewIndexById[childAsset.id] ?? 0;
-                                        const safeIndex = len ? ((rawIndex % len) + len) % len : 0;
-                                        const itemInGroup = groupItems[safeIndex] ?? groupItems[0];
-                                        if (typeof itemInGroup === 'string') return itemInGroup;
-                                        if (itemInGroup && typeof itemInGroup === 'object' && 'r2Key' in itemInGroup)
-                                          return childAsset.original;
-                                        const nestedId =
-                                          itemInGroup && typeof itemInGroup === 'object' && 'assetId' in itemInGroup
-                                            ? (itemInGroup as { assetId: string }).assetId
-                                            : '';
-                                        const nestedChild = nestedId ? assets.find((x) => x.id === nestedId) : undefined;
-                                        return nestedChild ? getAssetDisplayImage(nestedChild) : img;
-                                      })()}
-                                      alt=""
-                                      draggable={false}
-                                      onDragStart={(e) => e.preventDefault()}
-                                      className="w-full h-auto object-cover block"
-                                      style={{ maxHeight: 360 }}
-                                    />
-                                    <div
-                                      aria-hidden
-                                      className="absolute inset-0 z-[1]"
-                                      draggable={false}
-                                      onDragStart={(e) => e.preventDefault()}
-                                    />
+                                    <div className="relative w-full bg-[#0b0b0e] flex justify-center">
+                                      <img
+                                        src={(() => {
+                                          if (!childAsset.cutImageGroup?.length) return img;
+                                          const groupItems = childAsset.cutImageGroup;
+                                          const len = groupItems.length;
+                                          const rawIndex = groupPreviewIndexById[childAsset.id] ?? 0;
+                                          const safeIndex = len ? ((rawIndex % len) + len) % len : 0;
+                                          const itemInGroup = groupItems[safeIndex] ?? groupItems[0];
+                                          if (typeof itemInGroup === 'string') return itemInGroup;
+                                          if (itemInGroup && typeof itemInGroup === 'object' && 'r2Key' in itemInGroup)
+                                            return childAsset.original;
+                                          const nestedId =
+                                            itemInGroup && typeof itemInGroup === 'object' && 'assetId' in itemInGroup
+                                              ? (itemInGroup as { assetId: string }).assetId
+                                              : '';
+                                          const nestedChild = nestedId ? assets.find((x) => x.id === nestedId) : undefined;
+                                          return nestedChild ? getAssetDisplayImage(nestedChild) : img;
+                                        })()}
+                                        alt=""
+                                        draggable={false}
+                                        onDragStart={(e) => e.preventDefault()}
+                                        className="block max-h-[min(360px,70vh)] max-w-full w-auto h-auto object-contain"
+                                      />
+                                      <div
+                                        aria-hidden
+                                        className="absolute inset-0 z-[1]"
+                                        draggable={false}
+                                        onDragStart={(e) => e.preventDefault()}
+                                      />
+                                    </div>
                                     {isPendingOnly && (
                                       <div
                                         className="absolute inset-0 z-10 bg-[#16161a] flex items-center justify-center"
@@ -2810,20 +2815,21 @@ const WorkflowSection: React.FC<{
                           }}
                         >
                           <div className="relative cursor-pointer" onClick={() => setGroupStringLightboxIndex(idx)}>
-                            <img
-                              src={workflowSafeImgSrc(img)}
-                              alt=""
-                              draggable={false}
-                              onDragStart={(e) => e.preventDefault()}
-                              className="w-full h-auto object-cover block"
-                              style={{ maxHeight: 280 }}
-                            />
-                            <div
-                              aria-hidden
-                              className="absolute inset-0 z-[1]"
-                              draggable={false}
-                              onDragStart={(e) => e.preventDefault()}
-                            />
+                            <div className="relative w-full bg-[#0b0b0e] flex justify-center">
+                              <img
+                                src={workflowSafeImgSrc(img)}
+                                alt=""
+                                draggable={false}
+                                onDragStart={(e) => e.preventDefault()}
+                                className="block max-h-[min(360px,70vh)] max-w-full w-auto h-auto object-contain"
+                              />
+                              <div
+                                aria-hidden
+                                className="absolute inset-0 z-[1]"
+                                draggable={false}
+                                onDragStart={(e) => e.preventDefault()}
+                              />
+                            </div>
                             {isPendingOnly && (
                               <div
                                 className="absolute inset-0 z-10 bg-[#16161a] flex items-center justify-center"
@@ -3070,11 +3076,7 @@ const WorkflowSection: React.FC<{
                             }
                           }}
                         >
-                          <div className="relative w-full max-h-[360px] overflow-hidden">
-                            <div
-                              className="w-full"
-                              style={{ paddingBottom: `${(assetAspectById[a.id] ?? 1) * 100}%` }}
-                            />
+                          <div className="relative w-full bg-[#0b0b0e] flex justify-center">
                             <img
                               src={workflowSafeImgSrc(
                                 (() => {
@@ -3092,16 +3094,7 @@ const WorkflowSection: React.FC<{
                               alt=""
                               draggable={false}
                               onDragStart={(e) => e.preventDefault()}
-                              className="absolute inset-0 w-full h-full object-cover block"
-                              onLoad={(e) => {
-                                setAssetAspectById((prev) => {
-                                  if (prev[a.id]) return prev;
-                                  const img = e.currentTarget as HTMLImageElement | null;
-                                  if (!img || !img.naturalWidth || !img.naturalHeight) return prev;
-                                  const ratio = img.naturalHeight / img.naturalWidth;
-                                  return { ...prev, [a.id]: ratio };
-                                });
-                              }}
+                              className="relative z-0 block max-h-[min(360px,70vh)] max-w-full w-auto h-auto mx-auto object-contain"
                             />
                             <div
                               aria-hidden
@@ -3202,7 +3195,10 @@ const WorkflowSection: React.FC<{
         )}
 
         {/* 功能区：全部来自「能力」，随能力内增删自动更新 */}
-        <div className="w-80 shrink-0 flex flex-col gap-3 overflow-y-auto no-scrollbar">
+        <div
+          data-workflow-sidebar
+          className="w-80 shrink-0 flex flex-col gap-3 overflow-y-auto no-scrollbar"
+        >
           <div>
             <div className="text-[9px] font-black text-blue-400 uppercase">功能区</div>
             <p className="text-[8px] text-gray-500">基础能力与复合能力 · 能力中增删会同步到此</p>
@@ -4118,6 +4114,7 @@ const WorkflowSection: React.FC<{
           )}
 
         </div>
+      </div>
       </div>
 
       {/* 进行中：大图弹窗 */}

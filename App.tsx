@@ -571,6 +571,21 @@ const MainApp: React.FC = () => {
   const [workspaceCloudQuotaSuspended, setWorkspaceCloudQuotaSuspended] = useState(false);
   const workspaceCloudQuotaSuspendedRef = useRef(false);
   const editedWhileQuotaSuspendedRef = useRef(false);
+  /** 离开工作区/切换项目时的整包上传中（阻塞 UI） */
+  const [workspaceCloudLeaveSyncing, setWorkspaceCloudLeaveSyncing] = useState(false);
+  /** 同步失败或配额场景下的应用内确认（替代浏览器原生 confirm） */
+  const [workspaceCloudChoicePrompt, setWorkspaceCloudChoicePrompt] = useState<
+    null | { kind: 'back' } | { kind: 'switch'; targetId: string } | { kind: 'quotaBack' }
+  >(null);
+  /** 工作区项目删除确认（替代浏览器 confirm） */
+  const [workspaceProjectDeletePending, setWorkspaceProjectDeletePending] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
+  /** 画布有未成功推送到云端的本地修改（用于关闭页面前提示） */
+  const workspaceCloudDirtyRef = useRef(false);
+  /** 刚从云端拉取合并完成，跳过一次「标脏」避免误判 */
+  const workspaceCloudPullJustCompletedRef = useRef(false);
   useEffect(() => {
     workspaceCloudQuotaSuspendedRef.current = workspaceCloudQuotaSuspended;
   }, [workspaceCloudQuotaSuspended]);
@@ -614,16 +629,16 @@ const MainApp: React.FC = () => {
     return () => window.removeEventListener('focus', onFocus);
   }, [user?.id, refreshAuthUser]);
 
+  /** 画布变更后标记未同步（云端拉取过程中不标脏） */
   useEffect(() => {
-    const onBeforeUnload = (ev: BeforeUnloadEvent) => {
-      if (workspaceCloudQuotaSuspended && editedWhileQuotaSuspendedRef.current) {
-        ev.preventDefault();
-        ev.returnValue = '';
-      }
-    };
-    window.addEventListener('beforeunload', onBeforeUnload);
-    return () => window.removeEventListener('beforeunload', onBeforeUnload);
-  }, [workspaceCloudQuotaSuspended]);
+    if (authLoading || !user?.id || !isWorkspaceCloudEnabled() || !activeWorkspaceProjectId) return;
+    if (workspaceCloudPullJustCompletedRef.current) {
+      workspaceCloudPullJustCompletedRef.current = false;
+      return;
+    }
+    if (workspaceCloudHydratingProjectId === activeWorkspaceProjectId) return;
+    workspaceCloudDirtyRef.current = true;
+  }, [authLoading, user?.id, workflowAssets, workflowPending, activeWorkspaceProjectId, workspaceCloudHydratingProjectId]);
 
   useEffect(() => {
     if (!workspaceCloudQuotaSuspended) return;
@@ -642,6 +657,8 @@ const MainApp: React.FC = () => {
         if (activeWorkspaceProjectIdRef.current !== projectId) return;
         if (!packed) {
           setWorkspaceCloudHydratingProjectId((cur) => (cur === projectId ? null : cur));
+          workspaceCloudPullJustCompletedRef.current = true;
+          workspaceCloudDirtyRef.current = false;
           return;
         }
         setWorkflowAssets(JSON.parse(JSON.stringify(packed.assets)) as WorkflowAsset[]);
@@ -655,6 +672,7 @@ const MainApp: React.FC = () => {
                 if (activeWorkspaceProjectIdRef.current !== projectId) return;
                 setWorkflowAssets(d.assets);
                 setWorkflowPending(d.pending);
+                trySaveWorkflowBundle(projectId, d, userId);
               },
             }
           );
@@ -667,6 +685,8 @@ const MainApp: React.FC = () => {
           const bundle = { assets: packed.assets, pending: packed.pending };
           trySaveWorkflowBundle(projectId, bundle, userId);
         }
+        workspaceCloudPullJustCompletedRef.current = true;
+        workspaceCloudDirtyRef.current = false;
       } catch (e) {
         console.warn('[workspace cloud] pull', e);
       } finally {
@@ -729,22 +749,7 @@ const MainApp: React.FC = () => {
     } catch {
       /* ignore */
     }
-    const uid = userIdRef.current;
-    if (
-      uid &&
-      isWorkspaceCloudEnabled() &&
-      !workspaceCloudQuotaSuspendedRef.current &&
-      workspaceCloudPushAllowedUserIdRef.current === uid
-    ) {
-      const lastOpen = getLastOpenedWorkspaceProjectId(scope);
-      void pushWorkspaceIndex(uid, workspaceProjectsRef.current, lastOpen).catch(() => {});
-      if (pid && workspaceCloudHydratingProjectIdRef.current !== pid) {
-        void pushWorkflowBundleToCloud(uid, pid, {
-          assets: workflowAssetsRef.current,
-          pending: workflowPendingRef.current,
-        }).catch(() => {});
-      }
-    }
+    /** 云同步改为仅在离开工作区/切换项目时整包上传，避免与渐进拉取竞态导致云端被不完整状态覆盖 */
   }, []);
 
   useEffect(() => {
@@ -899,50 +904,6 @@ const MainApp: React.FC = () => {
     };
   }, [authLoading, user?.id, runCloudWorkflowPull]);
 
-  /** 防抖同步到 R2（项目列表 + 当前打开项目的工作流） */
-  useEffect(() => {
-    if (authLoading || !user?.id || !isWorkspaceCloudEnabled()) return;
-    const uid = user.id;
-    const t = window.setTimeout(() => {
-      void (async () => {
-        try {
-          if (workspaceCloudPushAllowedUserIdRef.current !== uid) return;
-          if (workspaceCloudQuotaSuspendedRef.current) return;
-          const lastOpen = getLastOpenedWorkspaceProjectId(uid);
-          await pushWorkspaceIndex(uid, workspaceProjects, lastOpen);
-          const pid = activeWorkspaceProjectId;
-          if (pid && workspaceCloudHydratingProjectId === pid) return;
-          if (pid) {
-            await pushWorkflowBundleToCloud(uid, pid, {
-              assets: workflowAssetsRef.current,
-              pending: workflowPendingRef.current,
-            });
-          }
-          editedWhileQuotaSuspendedRef.current = false;
-          void refreshAuthUser();
-        } catch (e) {
-          console.warn('[workspace cloud] sync', e);
-          if (e instanceof HttpRequestError && e.code === 'STORAGE_QUOTA_EXCEEDED') {
-            setWorkspaceCloudQuotaSuspended(true);
-            editedWhileQuotaSuspendedRef.current = true;
-            void refreshAuthUser();
-          }
-        }
-      })();
-    }, 800);
-    return () => window.clearTimeout(t);
-  }, [
-    authLoading,
-    user?.id,
-    workspaceProjects,
-    activeWorkspaceProjectId,
-    workspaceCloudHydratingProjectId,
-    workspaceCloudQuotaSuspended,
-    workflowAssets,
-    workflowPending,
-    refreshAuthUser,
-  ]);
-
   useEffect(() => {
     if (!activeWorkspaceProjectId) return;
     const scope = user?.id ?? null;
@@ -952,72 +913,131 @@ const MainApp: React.FC = () => {
     return () => window.clearTimeout(t);
   }, [activeWorkspaceProjectId, workflowAssets, workflowPending, user?.id]);
 
-  const openWorkspaceProject = useCallback(
+  const proceedBackToWorkspaceShell = useCallback(() => {
+    cloudWorkflowSyncGenRef.current += 1;
+    setWorkspaceCloudHydratingProjectId(null);
+    const scope = userIdRef.current ?? null;
+    const pid = activeWorkspaceProjectIdRef.current;
+    if (pid) {
+      trySaveWorkflowBundle(
+        pid,
+        { assets: workflowAssetsRef.current, pending: workflowPendingRef.current },
+        scope
+      );
+    }
+    setActiveWorkspaceProjectId(null);
+    setWorkflowAssets([]);
+    setWorkflowPending([]);
+  }, []);
+
+  const loadWorkspaceProjectInternal = useCallback(
     (id: string) => {
-      const scope = user?.id ?? null;
-      if (activeWorkspaceProjectId) {
-        const prevBundle = {
-          assets: workflowAssetsRef.current,
-          pending: workflowPendingRef.current,
-        };
-        trySaveWorkflowBundle(activeWorkspaceProjectId, prevBundle, scope);
-        if (
-          user?.id &&
-          isWorkspaceCloudEnabled() &&
-          !workspaceCloudQuotaSuspendedRef.current &&
-          workspaceCloudPushAllowedUserIdRef.current === user.id
-        ) {
-          void pushWorkflowBundleToCloud(user.id, activeWorkspaceProjectId, prevBundle).catch((e) =>
-            console.warn('[workspace cloud]', e)
-          );
-        }
-      }
+      const scope = userIdRef.current ?? null;
       const local = loadWorkflowBundle(id, scope);
       setActiveWorkspaceProjectId(id);
       setLastOpenedWorkspaceProjectId(id, scope);
       setWorkflowAssets(local.assets);
       setWorkflowPending(local.pending);
-      if (user?.id && isWorkspaceCloudEnabled()) {
-        runCloudWorkflowPull(user.id, id);
+      const uid = userIdRef.current;
+      if (uid && isWorkspaceCloudEnabled()) {
+        runCloudWorkflowPull(uid, id);
       }
     },
-    [activeWorkspaceProjectId, user?.id, runCloudWorkflowPull]
+    [runCloudWorkflowPull]
   );
 
-  const backToWorkspaceProjectShell = useCallback(() => {
-    if (workspaceCloudQuotaSuspendedRef.current && editedWhileQuotaSuspendedRef.current) {
+  const openWorkspaceProject = useCallback(
+    async (id: string) => {
+      const scope = userIdRef.current ?? null;
+      const curId = activeWorkspaceProjectIdRef.current;
+      if (curId && curId !== id) {
+        const prevBundle = {
+          assets: workflowAssetsRef.current,
+          pending: workflowPendingRef.current,
+        };
+        trySaveWorkflowBundle(curId, prevBundle, scope);
+        const uid = userIdRef.current;
+        if (
+          uid &&
+          isWorkspaceCloudEnabled() &&
+          !workspaceCloudQuotaSuspendedRef.current &&
+          workspaceCloudPushAllowedUserIdRef.current === uid
+        ) {
+          setWorkspaceCloudLeaveSyncing(true);
+          try {
+            await pushWorkflowBundleToCloud(uid, curId, prevBundle);
+            await pushWorkspaceIndex(uid, workspaceProjectsRef.current, id);
+            workspaceCloudDirtyRef.current = false;
+            await refreshAuthUser();
+          } catch (e) {
+            console.warn('[workspace cloud] switch project sync', e);
+            if (e instanceof HttpRequestError && e.code === 'STORAGE_QUOTA_EXCEEDED') {
+              setWorkspaceCloudQuotaSuspended(true);
+              editedWhileQuotaSuspendedRef.current = true;
+              void refreshAuthUser();
+            }
+            setWorkspaceCloudChoicePrompt({ kind: 'switch', targetId: id });
+            return;
+          } finally {
+            setWorkspaceCloudLeaveSyncing(false);
+          }
+        }
+      }
+      loadWorkspaceProjectInternal(id);
+    },
+    [loadWorkspaceProjectInternal, refreshAuthUser]
+  );
+
+  const backToWorkspaceProjectShell = useCallback(
+    async (opts?: { skipQuotaBackConfirm?: boolean }) => {
       if (
-        !window.confirm(
-          '云空间已满，近期修改可能未同步到云端，仅保存在本机。确定返回项目列表？'
-        )
+        !opts?.skipQuotaBackConfirm &&
+        workspaceCloudQuotaSuspendedRef.current &&
+        editedWhileQuotaSuspendedRef.current
       ) {
+        setWorkspaceCloudChoicePrompt({ kind: 'quotaBack' });
         return;
       }
-    }
-    cloudWorkflowSyncGenRef.current += 1;
-    setWorkspaceCloudHydratingProjectId(null);
-    const scope = user?.id ?? null;
-    if (activeWorkspaceProjectId) {
-      const bundle = {
-        assets: workflowAssetsRef.current,
-        pending: workflowPendingRef.current,
-      };
-      trySaveWorkflowBundle(activeWorkspaceProjectId, bundle, scope);
-      if (
-        user?.id &&
-        isWorkspaceCloudEnabled() &&
-        !workspaceCloudQuotaSuspendedRef.current &&
-        workspaceCloudPushAllowedUserIdRef.current === user.id
-      ) {
-        void pushWorkflowBundleToCloud(user.id, activeWorkspaceProjectId, bundle).catch((e) =>
-          console.warn('[workspace cloud]', e)
-        );
+      const scope = userIdRef.current ?? null;
+      const pid = activeWorkspaceProjectIdRef.current;
+      if (pid) {
+        const bundle = {
+          assets: workflowAssetsRef.current,
+          pending: workflowPendingRef.current,
+        };
+        trySaveWorkflowBundle(pid, bundle, scope);
+        const uid = userIdRef.current;
+        if (
+          uid &&
+          isWorkspaceCloudEnabled() &&
+          !workspaceCloudQuotaSuspendedRef.current &&
+          workspaceCloudPushAllowedUserIdRef.current === uid
+        ) {
+          setWorkspaceCloudLeaveSyncing(true);
+          try {
+            await pushWorkflowBundleToCloud(uid, pid, bundle);
+            const lastOpen = getLastOpenedWorkspaceProjectId(scope);
+            await pushWorkspaceIndex(uid, workspaceProjectsRef.current, lastOpen);
+            workspaceCloudDirtyRef.current = false;
+            await refreshAuthUser();
+          } catch (e) {
+            console.warn('[workspace cloud] back sync', e);
+            if (e instanceof HttpRequestError && e.code === 'STORAGE_QUOTA_EXCEEDED') {
+              setWorkspaceCloudQuotaSuspended(true);
+              editedWhileQuotaSuspendedRef.current = true;
+              void refreshAuthUser();
+            }
+            setWorkspaceCloudChoicePrompt({ kind: 'back' });
+            return;
+          } finally {
+            setWorkspaceCloudLeaveSyncing(false);
+          }
+        }
       }
-    }
-    setActiveWorkspaceProjectId(null);
-    setWorkflowAssets([]);
-    setWorkflowPending([]);
-  }, [activeWorkspaceProjectId, user?.id]);
+      proceedBackToWorkspaceShell();
+    },
+    [proceedBackToWorkspaceShell, refreshAuthUser]
+  );
 
   const createWorkspaceProjectEntry = useCallback(
     (name: string) => {
@@ -1025,6 +1045,16 @@ const MainApp: React.FC = () => {
       const next = [...workspaceProjects, p];
       setWorkspaceProjects(next);
       saveWorkspaceProjects(next, user?.id ?? null);
+      if (
+        user?.id &&
+        isWorkspaceCloudEnabled() &&
+        workspaceCloudPushAllowedUserIdRef.current === user.id &&
+        !workspaceCloudQuotaSuspendedRef.current
+      ) {
+        void pushWorkspaceIndex(user.id, next, getLastOpenedWorkspaceProjectId(user.id)).catch((e) =>
+          console.warn('[workspace cloud] index', e)
+        );
+      }
     },
     [workspaceProjects, user?.id]
   );
@@ -1037,32 +1067,54 @@ const MainApp: React.FC = () => {
       const next = workspaceProjects.map((p) => (p.id === id ? { ...p, name: trimmed } : p));
       setWorkspaceProjects(next);
       saveWorkspaceProjects(next, scope);
+      if (
+        user?.id &&
+        isWorkspaceCloudEnabled() &&
+        workspaceCloudPushAllowedUserIdRef.current === user.id &&
+        !workspaceCloudQuotaSuspendedRef.current
+      ) {
+        void pushWorkspaceIndex(user.id, next, getLastOpenedWorkspaceProjectId(scope)).catch((e) =>
+          console.warn('[workspace cloud] index', e)
+        );
+      }
     },
     [workspaceProjects, user?.id]
   );
 
-  const deleteWorkspaceProjectEntry = useCallback(
-    (id: string) => {
-      if (!window.confirm('确定删除该项目？工作流画布数据将一并删除。')) return;
-      const scope = user?.id ?? null;
-      removeWorkflowBundle(id, scope);
-      if (user?.id && isWorkspaceCloudEnabled()) {
-        void deleteWorkspaceProjectObjects(user.id, id).catch((e) => console.warn('[workspace cloud]', e));
-      }
-      const next = workspaceProjects.filter((q) => q.id !== id);
-      setWorkspaceProjects(next);
-      saveWorkspaceProjects(next, scope);
-      if (activeWorkspaceProjectId === id) {
-        cloudWorkflowSyncGenRef.current += 1;
-        setWorkspaceCloudHydratingProjectId(null);
-        setLastOpenedWorkspaceProjectId(null, scope);
-        setActiveWorkspaceProjectId(null);
-        setWorkflowAssets([]);
-        setWorkflowPending([]);
-      }
-    },
-    [workspaceProjects, activeWorkspaceProjectId, user?.id]
-  );
+  const requestDeleteWorkspaceProject = useCallback((id: string) => {
+    const p = workspaceProjectsRef.current.find((q) => q.id === id);
+    setWorkspaceProjectDeletePending({ id, name: p?.name ?? '该项目' });
+  }, []);
+
+  const performDeleteWorkspaceProject = useCallback((id: string) => {
+    const scope = userIdRef.current ?? null;
+    const uid = userIdRef.current;
+    removeWorkflowBundle(id, scope);
+    if (uid && isWorkspaceCloudEnabled()) {
+      void deleteWorkspaceProjectObjects(uid, id).catch((e) => console.warn('[workspace cloud]', e));
+    }
+    const next = workspaceProjectsRef.current.filter((q) => q.id !== id);
+    setWorkspaceProjects(next);
+    saveWorkspaceProjects(next, scope);
+    if (activeWorkspaceProjectIdRef.current === id) {
+      cloudWorkflowSyncGenRef.current += 1;
+      setWorkspaceCloudHydratingProjectId(null);
+      setLastOpenedWorkspaceProjectId(null, scope);
+      setActiveWorkspaceProjectId(null);
+      setWorkflowAssets([]);
+      setWorkflowPending([]);
+    }
+    if (
+      uid &&
+      isWorkspaceCloudEnabled() &&
+      workspaceCloudPushAllowedUserIdRef.current === uid &&
+      !workspaceCloudQuotaSuspendedRef.current
+    ) {
+      void pushWorkspaceIndex(uid, next, getLastOpenedWorkspaceProjectId(scope)).catch((e) =>
+        console.warn('[workspace cloud] index', e)
+      );
+    }
+  }, []);
 
   const activeWorkspaceProjectName = useMemo(
     () => workspaceProjects.find((p) => p.id === activeWorkspaceProjectId)?.name ?? '',
@@ -1141,6 +1193,10 @@ const MainApp: React.FC = () => {
   const [arenaFirstVisit, setArenaFirstVisit] = useState(() => !localStorage.getItem('ac_arena_visited'));
 
   const { mainScrollRef, showBackToTop, scrollToTop } = useMainScrollBackToTop();
+  const workflowMarqueeStartRef = useRef<((e: React.MouseEvent) => void) | null>(null);
+  const registerWorkflowMarqueeStart = useCallback((handler: ((e: React.MouseEvent) => void) | null) => {
+    workflowMarqueeStartRef.current = handler;
+  }, []);
 
   useEffect(() => {
     if (mode === AppMode.ARENA) setArenaSnippets(loadSnippets());
@@ -2276,7 +2332,14 @@ const MainApp: React.FC = () => {
       </Suspense>
 
       <main className="flex-1 flex flex-col h-[100dvh] overflow-hidden">
-        <div ref={mainScrollRef} className="flex-1 overflow-y-auto p-4 pt-6 pl-24 lg:p-10 lg:pl-28 no-scrollbar touch-pan-y">
+        <div
+          ref={mainScrollRef}
+          className="flex-1 overflow-y-auto p-4 pt-6 pl-24 lg:p-10 lg:pl-28 no-scrollbar touch-pan-y"
+          onMouseDownCapture={(e) => {
+            if (mode !== AppMode.WORKFLOW || !activeWorkspaceProjectId) return;
+            workflowMarqueeStartRef.current?.(e);
+          }}
+        >
           <div className="max-w-6xl mx-auto w-full">
             {mode === AppMode.SETTINGS && (
               <Suspense fallback={<LazySectionFallback label="设置" />}>
@@ -2288,28 +2351,28 @@ const MainApp: React.FC = () => {
             {mode === AppMode.WORKFLOW && !activeWorkspaceProjectId && (
               <>
                 {user?.id && isWorkspaceCloudEnabled() ? (
-                  <div className="max-w-6xl mx-auto w-full mb-5 rounded-2xl border border-[#22d3ee] bg-[#101820] px-4 py-3">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <span className="text-[10px] font-black uppercase tracking-wider text-cyan-300/90">工作区云空间</span>
-                      <span className="text-[11px] text-white font-mono tabular-nums" title="仅统计已同步到云端的流程图片">
-                        {formatWorkspaceCloudMb(workspaceCloudUsedBytes)} / {formatWorkspaceCloudMb(workspaceCloudQuotaBytes)}
+                  <div
+                    className="max-w-6xl mx-auto w-full mb-4 rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-2"
+                    title="仅统计已同步到云端的流程图片；返回列表或切换项目时整包上传"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2 gap-y-1">
+                      <span className="text-[9px] text-gray-500">云空间</span>
+                      <span className="text-[10px] text-gray-400 font-mono tabular-nums">
+                        {formatWorkspaceCloudMb(workspaceCloudUsedBytes)} / {formatWorkspaceCloudMb(workspaceCloudQuotaBytes)}{' '}
+                        <span className="text-gray-600">·</span> {workspaceCloudUsagePercent}%
                       </span>
                     </div>
-                    <div className="mt-2 h-2.5 rounded-full bg-[#26262c] overflow-hidden">
+                    <div className="mt-1.5 h-1 rounded-full bg-white/[0.06] overflow-hidden">
                       <div
                         className={`h-full rounded-full transition-all ${
                           workspaceCloudUsageRatio >= 0.95
-                            ? 'bg-[#c45c4a]'
+                            ? 'bg-red-500/70'
                             : workspaceCloudUsageRatio >= 0.8
-                            ? 'bg-[#c2873a]'
-                            : 'bg-[#3d5a80]'
+                            ? 'bg-amber-500/60'
+                            : 'bg-gray-500/45'
                         }`}
-                        style={{ width: `${workspaceCloudUsagePercent}%` }}
+                        style={{ width: `${Math.max(0, Math.min(100, workspaceCloudUsagePercent))}%` }}
                       />
-                    </div>
-                    <div className="mt-1.5 flex items-center justify-between text-[9px] text-gray-400">
-                      <span>云同步状态</span>
-                      <span>{workspaceCloudUsagePercent}%</span>
                     </div>
                   </div>
                 ) : user?.id && !isWorkspaceCloudEnabled() ? (
@@ -2322,7 +2385,7 @@ const MainApp: React.FC = () => {
                   onCreate={createWorkspaceProjectEntry}
                   onOpen={openWorkspaceProject}
                   onRename={renameWorkspaceProjectEntry}
-                  onDelete={deleteWorkspaceProjectEntry}
+                  onDelete={requestDeleteWorkspaceProject}
                 />
               </>
             )}
@@ -2331,9 +2394,11 @@ const MainApp: React.FC = () => {
                 <div className="w-full max-w-6xl mx-auto mb-4 flex flex-wrap items-center gap-3">
                   <button
                     type="button"
-                    onClick={backToWorkspaceProjectShell}
+                    onClick={() => {
+                      void backToWorkspaceProjectShell();
+                    }}
                     className="inline-flex items-center justify-center w-9 h-9 rounded-xl bg-[#1c1c22] border border-[#2e2e32] text-gray-300 hover:bg-[#2e2e36] hover:text-white transition-colors duration-200 cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
-                    title="返回项目列表"
+                    title="返回项目列表（将先同步到云端）"
                     aria-label="返回项目列表"
                   >
                     <svg aria-hidden viewBox="0 0 20 20" className="w-4 h-4" fill="none">
@@ -2352,35 +2417,38 @@ const MainApp: React.FC = () => {
                       value={activeWorkspaceProjectId ?? ''}
                       onChange={(id) => {
                         if (!id || id === activeWorkspaceProjectId) return;
-                        openWorkspaceProject(id);
+                        void openWorkspaceProject(id);
                       }}
                       placeholder={activeWorkspaceProjectName || '选择项目'}
                       triggerClassName="w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[10px] text-left flex items-center justify-between outline-none focus:border-blue-500 hover:bg-[#2e2e36] transition-colors"
                     />
                   </div>
                   {workspaceCloudHydratingProjectId === activeWorkspaceProjectId ? (
-                    <span className="text-[10px] text-amber-400/90 font-medium animate-pulse" title="正在从云端拉取图像">
-                      云端图像载入中…
+                    <span className="text-[10px] text-amber-400/90 font-medium animate-pulse" title="正按资源分批从云端还原图像">
+                      正在从云端渐进载入图像…
                     </span>
                   ) : null}
                   {user?.id && isWorkspaceCloudEnabled() ? (
-                    <div className="ml-auto min-w-[15rem] rounded-xl border border-[#22d3ee] bg-[#101820] px-3 py-2">
-                      <div className="flex items-center justify-between text-[9px]">
-                        <span className="font-black uppercase text-cyan-300/90">云空间</span>
-                        <span className="font-mono tabular-nums text-white/90">
+                    <div
+                      className="ml-auto min-w-[10.5rem] max-w-[16rem] shrink rounded-md border border-white/[0.06] bg-white/[0.02] px-2.5 py-1.5"
+                      title="仅统计已同步到云端的流程图片"
+                    >
+                      <div className="flex items-center justify-between gap-2 text-[9px] text-gray-500">
+                        <span>云空间</span>
+                        <span className="font-mono tabular-nums text-gray-400">
                           {formatWorkspaceCloudMb(workspaceCloudUsedBytes)} / {formatWorkspaceCloudMb(workspaceCloudQuotaBytes)}
                         </span>
                       </div>
-                      <div className="mt-1.5 h-1.5 rounded-full bg-[#26262c] overflow-hidden">
+                      <div className="mt-1 h-0.5 rounded-full bg-white/[0.06] overflow-hidden">
                         <div
                           className={`h-full rounded-full transition-all ${
                             workspaceCloudUsageRatio >= 0.95
-                              ? 'bg-[#c45c4a]'
+                              ? 'bg-red-500/70'
                               : workspaceCloudUsageRatio >= 0.8
-                              ? 'bg-[#c2873a]'
-                              : 'bg-[#3d5a80]'
+                              ? 'bg-amber-500/60'
+                              : 'bg-gray-500/45'
                           }`}
-                          style={{ width: `${workspaceCloudUsagePercent}%` }}
+                          style={{ width: `${Math.max(0, Math.min(100, workspaceCloudUsagePercent))}%` }}
                         />
                       </div>
                     </div>
@@ -2388,11 +2456,23 @@ const MainApp: React.FC = () => {
                 </div>
                 {workspaceCloudQuotaSuspended ? (
                   <div className="w-full max-w-6xl mx-auto mb-3 rounded-xl border border-amber-500/35 bg-[#2c2412] px-4 py-3 text-[11px] text-amber-100/95 leading-relaxed">
-                    工作区<strong className="font-semibold">云空间已满</strong>：新图片与同步已暂停上传，画布数据仍会保存在本机浏览器。删除云端项目中的图或请管理员调高配额后可恢复同步。关闭或刷新页面前请注意未上云的数据可能丢失。
+                    工作区<strong className="font-semibold">云空间已满</strong>：新图片无法上传，画布仍保存在本机。删除云端项目中的图或请管理员调高配额后可恢复。返回列表或切换项目时若无法上传，请留意本地数据。
                   </div>
                 ) : null}
                 <Suspense fallback={<LazySectionFallback label="工作区" />}>
-                  <WorkflowSection capabilityPresets={capabilityPresets} capabilitySets={capabilitySets} assets={workflowAssets} onAssetsChange={setWorkflowAssets} pending={workflowPending} onPendingChange={setWorkflowPending} onOpenLibraryPicker={(cb) => openPicker(undefined, cb, true)} onLog={(level, message, detail) => addGlobalLog('工作区', level, message, detail)} onAddGenerate3DJob={handleAddGenerate3DJobFromWorkflow} preferenceScope={user?.id ?? null} />
+                  <WorkflowSection
+                    capabilityPresets={capabilityPresets}
+                    capabilitySets={capabilitySets}
+                    assets={workflowAssets}
+                    onAssetsChange={setWorkflowAssets}
+                    pending={workflowPending}
+                    onPendingChange={setWorkflowPending}
+                    onOpenLibraryPicker={(cb) => openPicker(undefined, cb, true)}
+                    onLog={(level, message, detail) => addGlobalLog('工作区', level, message, detail)}
+                    onAddGenerate3DJob={handleAddGenerate3DJobFromWorkflow}
+                    preferenceScope={user?.id ?? null}
+                    registerMarqueeStartHandler={registerWorkflowMarqueeStart}
+                  />
                 </Suspense>
               </WorkflowErrorBoundary>
             )}
@@ -3381,6 +3461,123 @@ const MainApp: React.FC = () => {
           <AppIcon name="chevron-up" className="w-5 h-5" />
         </button>
       )}
+
+      {workspaceCloudLeaveSyncing ? (
+        <div
+          className="fixed inset-0 z-[5000] flex items-center justify-center bg-black/75 backdrop-blur-sm px-6"
+          role="alertdialog"
+          aria-live="assertive"
+          aria-busy="true"
+        >
+          <div className="max-w-md rounded-2xl border border-amber-500/45 bg-[#101018] px-6 py-5 shadow-2xl text-center">
+            <p className="text-[13px] font-semibold text-amber-100/95 leading-relaxed">
+              正在将当前工作区画布与图片同步到云端，请稍候…
+            </p>
+            <p className="mt-2 text-[11px] text-gray-400 leading-relaxed">
+              完成前请勿关闭或刷新页面，以免未上传的数据丢失。
+            </p>
+            <div className="mt-4 flex justify-center" aria-hidden>
+              <span className="inline-block h-8 w-8 border-2 border-cyan-400/30 border-t-cyan-400 rounded-full animate-spin" />
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {workspaceCloudChoicePrompt ? (
+        <div
+          className="fixed inset-0 z-[5500] flex items-center justify-center bg-black/70 backdrop-blur-sm px-6"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="workspace-cloud-choice-title"
+        >
+          <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#0f0f0f] shadow-2xl px-6 py-5">
+            <h2 id="workspace-cloud-choice-title" className="text-[14px] font-semibold text-white">
+              {workspaceCloudChoicePrompt.kind === 'quotaBack'
+                ? '云空间已满'
+                : workspaceCloudChoicePrompt.kind === 'switch'
+                ? '同步失败'
+                : '同步失败'}
+            </h2>
+            <p className="mt-3 text-[12px] text-gray-300 leading-relaxed">
+              {workspaceCloudChoicePrompt.kind === 'quotaBack'
+                ? '近期修改可能未同步到云端，仅保存在本机。确定返回项目列表？'
+                : workspaceCloudChoicePrompt.kind === 'switch'
+                ? '无法将当前项目上传到云端。仍要切换到其他项目吗？未上传的修改可能丢失。'
+                : '无法将当前画布与图片上传到云端。仍要返回项目列表吗？未上传的修改可能仅保存在本机。'}
+            </p>
+            <div className="mt-6 flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setWorkspaceCloudChoicePrompt(null)}
+                className="rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-[11px] font-medium text-gray-200 hover:bg-white/10 outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
+              >
+                {workspaceCloudChoicePrompt.kind === 'switch' ? '留在当前项目' : '留在画布'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const p = workspaceCloudChoicePrompt;
+                  setWorkspaceCloudChoicePrompt(null);
+                  if (p.kind === 'quotaBack') {
+                    void backToWorkspaceProjectShell({ skipQuotaBackConfirm: true });
+                  } else if (p.kind === 'back') {
+                    proceedBackToWorkspaceShell();
+                  } else {
+                    loadWorkspaceProjectInternal(p.targetId);
+                  }
+                }}
+                className="rounded-xl border border-amber-600/50 bg-amber-900/30 px-4 py-2.5 text-[11px] font-medium text-amber-100 hover:bg-amber-900/45 outline-none focus-visible:ring-2 focus-visible:ring-amber-500/50"
+              >
+                {workspaceCloudChoicePrompt.kind === 'switch' ? '仍要切换' : '仍要返回列表'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {workspaceProjectDeletePending ? (
+        <div
+          className="fixed inset-0 z-[5600] flex items-center justify-center bg-black/70 backdrop-blur-sm px-6"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="workspace-delete-title"
+          onClick={() => setWorkspaceProjectDeletePending(null)}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl border border-white/10 bg-[#0f0f0f] shadow-2xl px-6 py-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="workspace-delete-title" className="text-[14px] font-semibold text-white">
+              删除项目
+            </h2>
+            <p className="mt-3 text-[12px] text-gray-300 leading-relaxed">
+              确定删除「
+              <span className="text-white font-medium">{workspaceProjectDeletePending.name}</span>
+              」吗？工作流画布数据将一并删除，且无法恢复。
+            </p>
+            <div className="mt-6 flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setWorkspaceProjectDeletePending(null)}
+                className="rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-[11px] font-medium text-gray-200 hover:bg-white/10 outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const id = workspaceProjectDeletePending.id;
+                  setWorkspaceProjectDeletePending(null);
+                  performDeleteWorkspaceProject(id);
+                }}
+                className="rounded-xl border border-red-500/40 bg-red-950/50 px-4 py-2.5 text-[11px] font-medium text-red-100 hover:bg-red-900/50 outline-none focus-visible:ring-2 focus-visible:ring-red-500/50"
+              >
+                删除
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 };
