@@ -595,6 +595,39 @@
       "ip": "127.0.0.1",
       "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
       "createdAt": "2026-03-31T07:56:22.133Z"
+    },
+    {
+      "id": "c5827e2f-2dd1-4c77-ab6d-5fc94c54b30a",
+      "actorUserId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "actorIdentifier": "maoer",
+      "action": "admin.capability_preset_publish",
+      "targetUserId": null,
+      "metaJson": "{\"presetId\":\"dc1b70b90d\",\"catalogObjectKey\":\"public/capability-store/catalog.json\",\"packObjectKey\":\"public/capability-store/presets/dc1b70b90d.json\"}",
+      "ip": "127.0.0.1",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
+      "createdAt": "2026-03-31T11:28:22.973Z"
+    },
+    {
+      "id": "19851e0c-d774-4dd8-b8f0-efbf6d4e8b44",
+      "actorUserId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "actorIdentifier": "maoer",
+      "action": "admin.capability_preset_publish",
+      "targetUserId": null,
+      "metaJson": "{\"presetId\":\"dc1b70b90d\",\"catalogObjectKey\":\"public/capability-store/catalog.json\",\"packObjectKey\":\"public/capability-store/presets/dc1b70b90d.json\"}",
+      "ip": "127.0.0.1",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
+      "createdAt": "2026-03-31T11:30:37.464Z"
+    },
+    {
+      "id": "0ca3308f-35d4-4089-bd31-59a703f9441f",
+      "actorUserId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "actorIdentifier": "maoer",
+      "action": "admin.capability_preset_publish",
+      "targetUserId": null,
+      "metaJson": "{\"presetId\":\"dc1b70b90d\",\"catalogObjectKey\":\"public/capability-store/catalog.json\",\"packObjectKey\":\"public/capability-store/presets/dc1b70b90d.json\"}",
+      "ip": "127.0.0.1",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
+      "createdAt": "2026-03-31T11:45:40.093Z"
     }
   ]
 }

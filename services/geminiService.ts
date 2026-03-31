@@ -480,15 +480,19 @@ async function callWithRetry<T>(
   apiFn: (signal: AbortSignal) => Promise<T>,
   options?: GeminiRequestOptions
 ): Promise<T> {
-  const retries = options?.retries ?? 3;
-  const delay = options?.retryDelayMs ?? 2000;
+  let retries = options?.retries ?? 3;
+  let delay = options?.retryDelayMs ?? 2000;
   const maxAttempts = retries + 1;
-  const currentAttempt = Math.max(1, maxAttempts - retries);
-  try {
-    return await withGeminiRequestControl(apiFn, options);
-  } catch (err) {
-    if (isAbortError(err)) throw err;
-    if (isRetryableError(err) && retries > 0) {
+  let currentAttempt = 1;
+
+  for (;;) {
+    try {
+      return await withGeminiRequestControl(apiFn, options);
+    } catch (err) {
+      if (isAbortError(err)) throw err;
+      if (!(isRetryableError(err) && retries > 0)) {
+        throw err;
+      }
       const raw = String((err as Error)?.message ?? err);
       const code =
         extractDiagCode(raw) ||
@@ -507,9 +511,10 @@ async function callWithRetry<T>(
         )
       );
       await sleepWithAbort(delay, options?.abortSignal);
-      return callWithRetry(apiFn, { ...options, retries: retries - 1, retryDelayMs: delay * 2 });
+      retries -= 1;
+      delay *= 2;
+      currentAttempt += 1;
     }
-    throw err;
   }
 }
 

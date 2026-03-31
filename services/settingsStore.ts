@@ -6,6 +6,7 @@ const STORAGE_KEY_TOAPIS_API_KEY = 'ac_toapis_api_key';
 const STORAGE_KEY_TOAPIS_BASE_URL = 'ac_toapis_base_url';
 const STORAGE_KEY_VECTORENGINE_API_KEY = 'ac_vectorengine_api_key';
 const STORAGE_KEY_VECTORENGINE_BASE_URL = 'ac_vectorengine_base_url';
+const STORAGE_KEY_DIALOG_SKIP_UNDERSTAND = 'ac_dialog_skip_understand';
 
 export type AiProvider = 'gemini' | 'toapis' | 'vectorengine';
 const SESSION_KEY_TENCENT_SECRET_ID = 'ac_tencent_secret_id';
@@ -180,6 +181,27 @@ export function isAiInvocationReady(): boolean {
     /* ignore */
   }
   return Boolean(getUserApiKey()?.trim());
+}
+
+/** 对话生图：是否跳过“理解意图”步骤，直接使用用户提示词调用生图模型 */
+export function getDialogSkipUnderstand(): boolean {
+  try {
+    return localStorage.getItem(STORAGE_KEY_DIALOG_SKIP_UNDERSTAND) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function setDialogSkipUnderstand(value: boolean): void {
+  try {
+    if (value) {
+      localStorage.setItem(STORAGE_KEY_DIALOG_SKIP_UNDERSTAND, '1');
+    } else {
+      localStorage.removeItem(STORAGE_KEY_DIALOG_SKIP_UNDERSTAND);
+    }
+  } catch {
+    // ignore
+  }
 }
 
 // ----- 混元（腾讯云） -----

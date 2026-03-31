@@ -1028,6 +1028,7 @@ const WorkflowSection: React.FC<{
     }
     if (!module) return base;
     if (getCapabilityEngine(module) !== 'gen_image') return base;
+    if (module.skipUnderstand === true) return base;
     const targetSummary =
       (task.promptOverride?.trim() || module.instruction?.trim() || '').trim() || undefined;
     return { onLog, promptResolution: 'compiler', semanticForCompiler: { targetSummary } };

@@ -62,6 +62,7 @@ const CapabilityPresetSection: React.FC<{
   const [editImageAspectRatio, setEditImageAspectRatio] = useState('');
   const [editImageSize, setEditImageSize] = useState('');
   const [editInstruction, setEditInstruction] = useState('');
+  const [editSkipUnderstand, setEditSkipUnderstand] = useState(false);
   const [isAdding, setIsAdding] = useState(false);
   const [newLabel, setNewLabel] = useState('');
   const [newCategory, setNewCategory] = useState<CapabilityCategory>('image_gen');
@@ -71,6 +72,7 @@ const CapabilityPresetSection: React.FC<{
   const [newImageAspectRatio, setNewImageAspectRatio] = useState('');
   const [newImageSize, setNewImageSize] = useState('');
   const [newInstruction, setNewInstruction] = useState('');
+  const [newSkipUnderstand, setNewSkipUnderstand] = useState(false);
   const [testImage, setTestImage] = useState<Record<string, string>>({});
   const [testResult, setTestResult] = useState<Record<string, CapabilityTestResult | null>>({});
   const [testRunning, setTestRunning] = useState<Record<string, boolean>>({});
@@ -260,6 +262,10 @@ const CapabilityPresetSection: React.FC<{
           label: editLabel,
           category: editCategory,
           instruction: editInstruction,
+          skipUnderstand:
+            editCategory === 'image_gen' || editEngine === 'gen_image'
+              ? editSkipUnderstand
+              : undefined,
           enabled: editEnabled,
           imageGear: editEngine === 'gen_image' || editCategory === 'image_gen' ? editImageGear : undefined,
           imageAspectRatio: editEngine === 'gen_image' || editCategory === 'image_gen' ? (editImageAspectRatio || undefined) : undefined,
@@ -291,6 +297,10 @@ const CapabilityPresetSection: React.FC<{
       label,
       category: newCategory,
       instruction: newInstruction,
+      skipUnderstand:
+        newCategory === 'image_gen' || newEngine === 'gen_image'
+          ? newSkipUnderstand
+          : undefined,
       enabled: newEnabled,
       order: presets.length,
       imageGear: (newCategory === 'image_gen' || newEngine === 'gen_image') ? newImageGear : undefined,
@@ -313,6 +323,7 @@ const CapabilityPresetSection: React.FC<{
     setNewImageAspectRatio('');
     setNewImageSize('');
     setNewInstruction('');
+    setNewSkipUnderstand(false);
     setNewGenerate3D({ ...DEFAULT_GENERATE_3D });
     setIsAdding(false);
   };
@@ -521,16 +532,6 @@ const CapabilityPresetSection: React.FC<{
   };
 
   const updatePresetPreviewImage = (presetId: string, dataUrl: string | undefined) => {
-    const setRuntimePreview = (nextDataUrl: string | undefined) => {
-      setRuntimePreviewImage((prev) => {
-        if (!nextDataUrl) {
-          const next = { ...prev };
-          delete next[presetId];
-          return next;
-        }
-        return { ...prev, [presetId]: nextDataUrl };
-      });
-    };
     const setRuntimeThumb = (nextDataUrl: string | undefined) => {
       setRuntimePreviewThumbImage((prev) => {
         if (!nextDataUrl) {
@@ -550,17 +551,7 @@ const CapabilityPresetSection: React.FC<{
       return { ...prev, [presetId]: dataUrl };
     });
     if (dataUrl && dataUrl.startsWith('data:image/')) {
-      void optimizePreviewDataUrl(dataUrl)
-        .then((optimized) => {
-          if (optimized !== dataUrl) {
-            setRuntimePreview(optimized);
-            onLog?.('info', '预览图已自动压缩后保存（用于避免上传 400）', undefined);
-          }
-        })
-        .catch(() => {
-          /* ignore preview optimize errors */
-        });
-      void optimizePreviewDataUrl(dataUrl, { maxSide: 640, targetBytes: 220 * 1024, qualities: [0.8, 0.72, 0.64] })
+      void createThumbnailDataUrlFromAny(dataUrl, { maxSide: 640, targetBytes: 220 * 1024, qualities: [0.8, 0.72, 0.64] })
         .then((thumb) => setRuntimeThumb(thumb))
         .catch(() => {
           /* ignore thumb optimize errors */
@@ -624,8 +615,9 @@ const CapabilityPresetSection: React.FC<{
       return `/api/r2/capability-store/${t.replace(/^\/+/, '')}`;
     };
     return (
-      runtimePreviewThumbImage[p.id] ||
       resolvePreviewSrc(p.previewOriginalThumbImage) ||
+      testImage[p.id] ||
+      resolvePreviewSrc(p.previewOriginalImage) ||
       null
     );
   };
@@ -656,14 +648,16 @@ const CapabilityPresetSection: React.FC<{
       return `/api/r2/capability-store/${t.replace(/^\/+/, '')}`;
     };
     return (
-      runtimePreviewThumbImage[p.id] ||
       resolvePreviewSrc(p.previewGeneratedThumbImage) ||
+      (testResult[p.id]?.ok ? testResult[p.id]?.resultImage : null) ||
+      runtimePreviewImage[p.id] ||
+      resolvePreviewSrc(p.previewGeneratedImage) ||
       null
     );
   };
   const openLightboxPreview = (p: CustomAppModule) => {
-    const original = getOriginalPreviewThumbSrc(p);
-    const generated = getGeneratedPreviewThumbSrc(p);
+    const original = getOriginalPreviewSrc(p) || getOriginalPreviewThumbSrc(p);
+    const generated = getGeneratedPreviewSrc(p) || getGeneratedPreviewThumbSrc(p);
     if (original && generated) {
       setLightboxImage(null);
       setLightboxSplitRatio(0.5);
@@ -671,6 +665,8 @@ const CapabilityPresetSection: React.FC<{
       return;
     }
     const src =
+      getGeneratedPreviewSrc(p) ||
+      getOriginalPreviewSrc(p) ||
       getGeneratedPreviewThumbSrc(p) ||
       getOriginalPreviewThumbSrc(p);
     if (!src) return;
@@ -686,19 +682,12 @@ const CapabilityPresetSection: React.FC<{
     setUploadingPresetIds((prev) => ({ ...prev, [p.id]: true }));
     try {
       const latest = presets.find((x) => x.id === p.id) ?? p;
-      const runtimePreviewRaw = runtimePreviewImage[p.id];
-      const runtimePreview = runtimePreviewRaw ? await optimizePreviewDataUrl(runtimePreviewRaw) : undefined;
-      if (runtimePreview && runtimePreview !== runtimePreviewRaw) {
-        setRuntimePreviewImage((prev) => ({ ...prev, [p.id]: runtimePreview }));
-      }
       const originalRaw = testImage[p.id] || latest.previewOriginalImage;
       const generatedRaw =
         (testResult[p.id]?.ok ? testResult[p.id]?.resultImage : null) ||
-        runtimePreview ||
+        runtimePreviewImage[p.id] ||
         latest.previewGeneratedImage ||
         latest.previewImage;
-      const originalPreview = originalRaw ? await optimizePreviewDataUrl(originalRaw) : undefined;
-      const generatedPreview = generatedRaw ? await optimizePreviewDataUrl(generatedRaw) : undefined;
       const originalThumbPreview = originalRaw
         ? await createThumbnailDataUrlFromAny(originalRaw, { maxSide: 640, targetBytes: 220 * 1024, qualities: [0.8, 0.72, 0.64] })
         : undefined;
@@ -707,8 +696,8 @@ const CapabilityPresetSection: React.FC<{
         : undefined;
       const payload = {
         ...latest,
-        ...(generatedPreview ? { previewImage: generatedPreview, previewGeneratedImage: generatedPreview } : {}),
-        ...(originalPreview ? { previewOriginalImage: originalPreview } : {}),
+        ...(generatedRaw ? { previewImage: generatedRaw, previewGeneratedImage: generatedRaw } : {}),
+        ...(originalRaw ? { previewOriginalImage: originalRaw } : {}),
         ...(generatedThumbPreview ? { previewGeneratedThumbImage: generatedThumbPreview } : {}),
         ...(originalThumbPreview ? { previewOriginalThumbImage: originalThumbPreview } : {}),
       };
@@ -1138,6 +1127,10 @@ const CapabilityPresetSection: React.FC<{
                     triggerClassName={DROPDOWN_TRIGGER_COMPACT}
                   />
                 </label>
+                <label className="flex items-center gap-2 text-[9px] text-gray-400">
+                  <input type="checkbox" checked={newSkipUnderstand} onChange={(e) => setNewSkipUnderstand(e.target.checked)} />
+                  <span className="font-black uppercase">关闭理解</span>
+                </label>
               </>
             )}
             {newCategory === 'image_process' && (
@@ -1176,7 +1169,11 @@ const CapabilityPresetSection: React.FC<{
           {newCategory === 'image_gen' && (
             <div>
               <span className="text-[8px] font-black text-blue-400/90 uppercase">预设提示词（必填）</span>
-              <p className="text-[8px] text-gray-500 mt-0.5">工作流执行时：先将此处内容交给文字模型理解，再根据理解结果生成生图用提示词发给生图模型（与对话模式一致）。</p>
+              <p className="text-[8px] text-gray-500 mt-0.5">
+                {newSkipUnderstand
+                  ? '工作流执行时：直接将此处提示词发送给生图模型（提示词+图片直发）。'
+                  : '工作流执行时：先将此处内容交给文字模型理解，再根据理解结果生成生图用提示词发给生图模型（与对话模式一致）。'}
+              </p>
               <textarea
                 value={newInstruction}
                 onChange={(e) => setNewInstruction(e.target.value)}
@@ -1189,7 +1186,11 @@ const CapabilityPresetSection: React.FC<{
           {newCategory === 'image_process' && newEngine === 'gen_image' && (
             <div>
               <span className="text-[8px] font-black text-blue-400/90 uppercase">预设提示词（必填）</span>
-              <p className="text-[8px] text-gray-500 mt-0.5">工作流执行时先由文字模型理解，再生成生图用提示词。</p>
+              <p className="text-[8px] text-gray-500 mt-0.5">
+                {newSkipUnderstand
+                  ? '工作流执行时直接将此处提示词发送给生图模型。'
+                  : '工作流执行时先由文字模型理解，再生成生图用提示词。'}
+              </p>
               <textarea value={newInstruction} onChange={(e) => setNewInstruction(e.target.value)} placeholder="如：将图片转为赛博朋克风格" rows={3} className="mt-1 w-full bg-[#1c1c22] border border-[#4b6a9e] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none" />
             </div>
           )}
@@ -1279,7 +1280,7 @@ const CapabilityPresetSection: React.FC<{
             <button onClick={addPreset} className="px-4 py-2 rounded-xl bg-blue-600 text-[10px] font-black uppercase">
               添加
             </button>
-            <button onClick={() => { setIsAdding(false); setNewLabel(''); setNewInstruction(''); }} className="px-4 py-2 rounded-xl bg-[#26262c] text-[10px] font-black uppercase">
+            <button onClick={() => { setIsAdding(false); setNewLabel(''); setNewInstruction(''); setNewSkipUnderstand(false); }} className="px-4 py-2 rounded-xl bg-[#26262c] text-[10px] font-black uppercase">
               取消
             </button>
           </div>
@@ -1360,6 +1361,10 @@ const CapabilityPresetSection: React.FC<{
                             triggerClassName={DROPDOWN_TRIGGER_COMPACT}
                           />
                         </label>
+                        <label className="flex items-center gap-2 text-[9px] text-gray-400">
+                          <input type="checkbox" checked={editSkipUnderstand} onChange={(e) => setEditSkipUnderstand(e.target.checked)} />
+                          <span className="font-black uppercase">关闭理解</span>
+                        </label>
                       </>
                     )}
                     {editCategory === 'image_process' && (
@@ -1398,7 +1403,11 @@ const CapabilityPresetSection: React.FC<{
                   {editCategory === 'image_gen' && (
                     <div className="mb-2">
                       <span className="text-[8px] font-black text-blue-400/90 uppercase">预设提示词（必填）</span>
-                      <p className="text-[8px] text-gray-500 mt-0.5">工作流执行时先由文字模型理解，再生成生图用提示词（与对话模式一致）。</p>
+                      <p className="text-[8px] text-gray-500 mt-0.5">
+                        {editSkipUnderstand
+                          ? '工作流执行时直接将此处提示词发送给生图模型（提示词+图片直发）。'
+                          : '工作流执行时先由文字模型理解，再生成生图用提示词（与对话模式一致）。'}
+                      </p>
                       <textarea
                         value={editInstruction}
                         onChange={(e) => setEditInstruction(e.target.value)}
@@ -1411,7 +1420,11 @@ const CapabilityPresetSection: React.FC<{
                   {editCategory === 'image_process' && editEngine === 'gen_image' && (
                     <div className="mb-2">
                       <span className="text-[8px] font-black text-blue-400/90 uppercase">预设提示词（必填）</span>
-                      <p className="text-[8px] text-gray-500 mt-0.5">工作流执行时先由文字模型理解，再生成生图用提示词。</p>
+                      <p className="text-[8px] text-gray-500 mt-0.5">
+                        {editSkipUnderstand
+                          ? '工作流执行时直接将此处提示词发送给生图模型。'
+                          : '工作流执行时先由文字模型理解，再生成生图用提示词。'}
+                      </p>
                       <textarea
                         value={editInstruction}
                         onChange={(e) => setEditInstruction(e.target.value)}
@@ -1602,6 +1615,11 @@ const CapabilityPresetSection: React.FC<{
                                 生图执行
                               </span>
                             )}
+                            {(p.category === 'image_gen' || getEngine(p) === 'gen_image') && p.skipUnderstand === true && (
+                              <span className="shrink-0 px-2 py-0.5 rounded text-[8px] font-black uppercase bg-[#1e3558] text-blue-300">
+                                关闭理解
+                              </span>
+                            )}
                             {isBuiltinImageProcess(p) && (
                               <span className="shrink-0 px-2 py-0.5 rounded text-[8px] font-black uppercase bg-[#1e3558] text-blue-300" title="系统内置图像处理能力">
                                 系统内置
@@ -1657,6 +1675,7 @@ const CapabilityPresetSection: React.FC<{
                               setEditImageAspectRatio(p.imageAspectRatio ?? '');
                               setEditImageSize(p.imageSize ?? '');
                               setEditInstruction(((p as { instructionFixed?: string }).instructionFixed ?? p.instruction) || '');
+                              setEditSkipUnderstand(p.skipUnderstand === true);
                               setEditGenerate3D(p.category === 'generate_3d' && p.generate3D ? { ...p.generate3D } : { ...DEFAULT_GENERATE_3D });
                             }}
                             className="px-2 py-1 rounded-lg bg-[#26262c] text-[8px] font-black uppercase hover:bg-[#383842] disabled:opacity-50"

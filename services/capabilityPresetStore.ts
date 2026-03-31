@@ -21,12 +21,14 @@ export function normalizeCapabilityPreset(input: CustomAppModule, index: number)
   const enabled = input.enabled !== false;
   const order = typeof input.order === 'number' ? input.order : index;
   const instruction = typeof input.instruction === 'string' ? input.instruction : '';
+  const skipUnderstand = input.skipUnderstand === true;
   const rawGear = (input as CustomAppModule).imageGear;
   const imageGear = rawGear === 'pro' || rawGear === 'fast' || rawGear === 'standard' ? rawGear : 'standard';
   const base: CustomAppModule = {
     ...input,
     category,
     instruction,
+    skipUnderstand,
     enabled,
     order,
     imageGear,

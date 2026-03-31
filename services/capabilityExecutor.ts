@@ -67,6 +67,10 @@ async function resolveCapabilityPrompt(
 ): Promise<string | null> {
   const presetPrompt = (preset.instruction || '').trim();
   if (!presetPrompt) return null;
+  if (preset.skipUnderstand === true) {
+    ctx.onLog?.('info', `[${preset.label || preset.id}] 已关闭理解，直发生图`, undefined);
+    return presetPrompt;
+  }
   ctx.onLog?.('info', `[${preset.label || preset.id}] 理解预设提示词中…`, undefined);
   const { instruction } = await understandImageEditIntent(
     inputImageBase64,
@@ -84,6 +88,10 @@ async function resolveGenImagePrompt(
   inputImageBase64: string,
   ctx: CapabilityExecuteContext
 ): Promise<string | null> {
+  if (preset.skipUnderstand === true) {
+    const directPrompt = (preset.instruction || '').trim();
+    return directPrompt || null;
+  }
   if (ctx.promptResolution === 'compiler') {
     const { compilePromptForCapability } = await import('./compiler/compilePrompt');
     const out = compilePromptForCapability({

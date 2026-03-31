@@ -452,6 +452,8 @@ export type CustomAppModule = {
   order?: number;
   /** 预设提示词。生图类：工作流执行时先交给文字模型理解，再拿理解结果调用生图模型（与对话模式一致）；图像处理类部分能力有内置逻辑可留空；生成3D 时可作补充描述。 */
   instruction: string;
+  /** 生图执行时跳过“理解”步骤，直接将 instruction（或覆写提示词）发送给生图模型 */
+  skipUnderstand?: boolean;
   /**
    * 卡片预览图：本地多为 data URL；从 R2 能力商店同步后可为同源相对路径或完整 URL。
    * 上传 R2 时服务端会将 data URL 转为独立对象并在 JSON 中写入相对路径，便于他人同步后展示。

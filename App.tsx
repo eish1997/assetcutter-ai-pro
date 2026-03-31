@@ -43,7 +43,7 @@ import {
 import { hydrateWorkflowBundleFromCloud } from './services/workspaceR2ImageBundle';
 import { HttpRequestError } from './services/httpClient';
 import { triggerImageDownload } from './services/imageDataUrl';
-import { isAiInvocationReady } from './services/settingsStore';
+import { getDialogSkipUnderstand, isAiInvocationReady, setDialogSkipUnderstand } from './services/settingsStore';
 import { WorkflowApiKeyModal } from './components/WorkflowApiKeyModal';
 
 function formatWorkspaceCloudMb(bytes: number) {
@@ -1223,6 +1223,7 @@ const MainApp: React.FC = () => {
     () => DIALOG_IMAGE_GEARS.find((g) => g.id === 'standard')?.modelId || DIALOG_IMAGE_GEARS[0].modelId
   );
   const [dialogAutoGenerateImage, setDialogAutoGenerateImage] = useState(true);
+  const [dialogSkipUnderstand, setDialogSkipUnderstandState] = useState<boolean>(() => getDialogSkipUnderstand());
   const [dialogAspectRatio, setDialogAspectRatio] = useState<string>('adaptive');
   const [dialogImageSize, setDialogImageSize] = useState<string>(SUPPORTED_IMAGE_SIZES[1].value);
   const [dialogEditingMessageId, setDialogEditingMessageId] = useState<string | null>(null);
@@ -1425,6 +1426,7 @@ const MainApp: React.FC = () => {
     dialogMessages,
     setDialogMessages,
     dialogAutoGenerateImage,
+    dialogSkipUnderstand,
     dialogModel,
     dialogAspectRatio,
     dialogImageSize,
@@ -1441,6 +1443,10 @@ const MainApp: React.FC = () => {
     addGlobalLog,
     addGenerationRecord,
   });
+
+  useEffect(() => {
+    setDialogSkipUnderstand(dialogSkipUnderstand);
+  }, [dialogSkipUnderstand]);
 
   const handleRemoveDialogSession = useCallback((sessionId: string) => {
     handleDialogCancelGen(sessionId);
@@ -3337,7 +3343,7 @@ const MainApp: React.FC = () => {
                     <div className="flex justify-start items-center gap-2">
                       <div className="px-4 py-3 rounded-2xl bg-[#1c1c22] border border-[#2e2e32] text-[10px] text-gray-400 flex items-center gap-2">
                         <div className="w-3 h-3 border-2 border-[#4b6a9e] border-t-blue-500 rounded-full animate-spin" />
-                        理解需求 → 生图中...
+                        {dialogSkipUnderstand ? '跳过理解 → 生图中...' : '理解需求 → 生图中...'}
                       </div>
                       <button onClick={handleDialogCancelGen} className="px-3 py-2 rounded-xl bg-[#5c1a1a] border border-[#f87171] text-[9px] font-black text-red-400 hover:bg-[#991b1b] transition-colors">停止</button>
                     </div>
@@ -3350,6 +3356,10 @@ const MainApp: React.FC = () => {
                     <span className="text-[9px] font-black text-gray-500 uppercase">开启生图</span>
                     <button type="button" role="switch" aria-checked={dialogAutoGenerateImage} onClick={() => setDialogAutoGenerateImage(p => !p)} className={`relative w-11 h-6 rounded-full transition-colors ${dialogAutoGenerateImage ? 'bg-blue-600' : 'bg-[#26262c]'}`}>
                       <span className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform ${dialogAutoGenerateImage ? 'left-6' : 'left-1'}`} />
+                    </button>
+                    <span className="text-[9px] font-black text-gray-500 uppercase">关闭理解</span>
+                    <button type="button" role="switch" aria-checked={dialogSkipUnderstand} onClick={() => setDialogSkipUnderstandState(p => !p)} className={`relative w-11 h-6 rounded-full transition-colors ${dialogSkipUnderstand ? 'bg-blue-600' : 'bg-[#26262c]'}`}>
+                      <span className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform ${dialogSkipUnderstand ? 'left-6' : 'left-1'}`} />
                     </button>
                     <span className="text-[9px] font-black text-gray-500 uppercase">挡位</span>
                     <div className="flex rounded-lg overflow-hidden border border-[#2e2e32]">

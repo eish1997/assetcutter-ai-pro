@@ -31,6 +31,7 @@ type UseDialogGenerationParams = {
   dialogMessages: DialogMessage[];
   setDialogMessages: (updater: SetStateAction<DialogMessage[]>) => void;
   dialogAutoGenerateImage: boolean;
+  dialogSkipUnderstand: boolean;
   dialogModel: string;
   dialogAspectRatio: string;
   dialogImageSize: string;
@@ -109,6 +110,7 @@ export function useDialogGeneration({
   dialogMessages,
   setDialogMessages,
   dialogAutoGenerateImage,
+  dialogSkipUnderstand,
   dialogModel,
   dialogAspectRatio,
   dialogImageSize,
@@ -369,13 +371,21 @@ export function useDialogGeneration({
     const taskId = addTask('DIALOG_GEN', '对话');
     try {
       updateTask(taskId, { status: 'RUNNING', progress: 20 });
-      const { instruction: understood, shouldGenerateImage } = await understandImageEditIntent(
-        getDialogUnderstandImageInput(sourceImages),
-        text,
-        config.modelText,
-        config.prompts.dialog_understand
+      const understoodResult = dialogSkipUnderstand
+        ? { instruction: text, shouldGenerateImage: true }
+        : await understandImageEditIntent(
+          getDialogUnderstandImageInput(sourceImages),
+          text,
+          config.modelText,
+          config.prompts.dialog_understand
+        );
+      const { instruction: understood, shouldGenerateImage } = understoodResult;
+      addGlobalLog(
+        '对话',
+        'info',
+        dialogSkipUnderstand ? '已跳过理解，直接生图' : '理解完成',
+        shouldGenerateImage ? (firstImage ? '需要生图' : '需要生图') : (firstImage ? '仅描述/问答' : '仅文字对话')
       );
-      addGlobalLog('对话', 'info', '理解完成', shouldGenerateImage ? (firstImage ? '需要生图' : '需要生图') : (firstImage ? '仅描述/问答' : '仅文字对话'));
 
       if (isDialogCancelled(sid)) {
         updateTask(taskId, { status: 'FAILED', error: '已取消' });
@@ -466,6 +476,7 @@ export function useDialogGeneration({
     config.prompts.edit,
     dialogActiveSessionIdResolved,
     dialogAutoGenerateImage,
+    dialogSkipUnderstand,
     dialogInputImages,
     dialogInputText,
     dialogMessages,
@@ -494,12 +505,16 @@ export function useDialogGeneration({
 
     try {
       updateTask(taskId, { status: 'RUNNING', progress: 20 });
-      const { instruction: understood } = await understandImageEditIntent(
-        getDialogUnderstandImageInput(sourceImages),
-        instructionText,
-        config.modelText,
-        config.prompts.dialog_understand
-      );
+      const understood = dialogSkipUnderstand
+        ? instructionText
+        : (
+          await understandImageEditIntent(
+            getDialogUnderstandImageInput(sourceImages),
+            instructionText,
+            config.modelText,
+            config.prompts.dialog_understand
+          )
+        ).instruction;
       if (isDialogCancelled(sid)) {
         updateTask(taskId, { status: 'FAILED', error: '已取消' });
         setDialogMessages((prev) => prev.map((message) => message.id === assistantMsgId ? { ...message, text: '已取消。' } : message));
@@ -558,6 +573,7 @@ export function useDialogGeneration({
     config.modelText,
     config.prompts.dialog_understand,
     config.prompts.edit,
+    dialogSkipUnderstand,
     dialogActiveSessionIdResolved,
     dialogMessages,
     finalizeGeneratedMessage,
