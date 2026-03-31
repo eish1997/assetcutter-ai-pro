@@ -5,6 +5,7 @@ import type { CapabilityTestResult } from '../services/capabilityTestRunner';
 import { CAPABILITY_PRESETS_VERSION } from '../services/capabilityPresetStore';
 import { loadInstalledPacks, loadPackHistory } from '../services/storePackHistory';
 import { useStoreCatalog } from '../services/storeCatalogHook';
+import { publishPresetToUserR2Catalog } from '../services/capabilityPresetR2Publish';
 import CapabilitySetCanvas from './CapabilitySetCanvas';
 import { CustomDropdown, DROPDOWN_TRIGGER_COMPACT } from './ui/CustomDropdown';
 import AppIcon from './ui/AppIcon';
@@ -23,7 +24,8 @@ const CapabilityPresetSection: React.FC<{
   onRunTest?: (preset: CustomAppModule, imageBase64: string) => Promise<CapabilityTestResult>;
   onLog?: (level: 'info' | 'warn' | 'error', message: string, detail?: string) => void;
   embeddedInWorkflow?: boolean;
-}> = ({ presets, onUpdate, sets = [], onUpdateSets, onRunTest, onLog, embeddedInWorkflow = false }) => {
+  canUploadToR2?: boolean;
+}> = ({ presets, onUpdate, sets = [], onUpdateSets, onRunTest, onLog, embeddedInWorkflow = false, canUploadToR2 = false }) => {
   const [viewMode, setViewMode] = useState<ViewMode>('presets');
   const [canvasSet, setCanvasSet] = useState<CapabilitySet | null>(null);
   const [setLabel, setSetLabel] = useState('');
@@ -75,6 +77,7 @@ const CapabilityPresetSection: React.FC<{
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
   const [showImportExport, setShowImportExport] = useState(false);
   const [seedDropActive, setSeedDropActive] = useState(false);
+  const [uploadingPresetIds, setUploadingPresetIds] = useState<Record<string, boolean>>({});
 
   const {
     loading: catalogLoading,
@@ -349,6 +352,26 @@ const CapabilityPresetSection: React.FC<{
       onLog?.('error', `[${p.label}] 异常`, msg);
     } finally {
       setTestRunning((prev) => ({ ...prev, [p.id]: false }));
+    }
+  };
+
+  const uploadPresetToR2 = async (p: CustomAppModule) => {
+    if (!canUploadToR2) {
+      onLog?.('warn', '仅管理员可上传预设到 R2', undefined);
+      return;
+    }
+    setUploadingPresetIds((prev) => ({ ...prev, [p.id]: true }));
+    try {
+      const result = await publishPresetToUserR2Catalog({ preset: p });
+      onLog?.(
+        'info',
+        `已上传到 R2：${p.label}`,
+        `catalog objectKey: ${result.catalogObjectKey}`
+      );
+    } catch (e) {
+      onLog?.('error', `上传失败：${p.label}`, e instanceof Error ? e.message : String(e));
+    } finally {
+      setUploadingPresetIds((prev) => ({ ...prev, [p.id]: false }));
     }
   };
 
@@ -1075,6 +1098,17 @@ const CapabilityPresetSection: React.FC<{
                       >
                         编辑
                       </button>
+                      {canUploadToR2 && (
+                        <button
+                          type="button"
+                          onClick={() => void uploadPresetToR2(p)}
+                          disabled={!!uploadingPresetIds[p.id]}
+                          className="px-2 py-1 rounded-lg bg-[#1e3558] text-blue-300 text-[8px] font-black uppercase hover:bg-[#305a90] disabled:opacity-50"
+                          title="上传该能力预设到 R2（并自动更新用户 catalog）"
+                        >
+                          {uploadingPresetIds[p.id] ? '上传中…' : '上传R2'}
+                        </button>
+                      )}
                       <button onClick={() => removePreset(p.id)} className="px-2 py-1 rounded-lg bg-[#4a1c1c] text-red-400 text-[8px] font-black uppercase hover:bg-[#5a2222]">删除</button>
                     </div>
                   </div>

@@ -2355,7 +2355,12 @@ const MainApp: React.FC = () => {
           <div className="max-w-6xl mx-auto w-full">
             {mode === AppMode.SETTINGS && (
               <Suspense fallback={<LazySectionFallback label="设置" />}>
-                <SettingsSection />
+                <SettingsSection
+                  currentUser={user}
+                  authLoading={authLoading}
+                  onRefreshUser={refreshAuthUser}
+                  onLogout={logout}
+                />
               </Suspense>
             )}
             {mode === AppMode.TEXTURE && <TextureEngineSection />}
@@ -2529,6 +2534,7 @@ const MainApp: React.FC = () => {
                           onRunTest={runCapabilityTest}
                           onLog={(level, message, detail) => addGlobalLog('能力', level, message, detail)}
                           embeddedInWorkflow={true}
+                          canUploadToR2={user?.role === 'admin'}
                         />
                       </Suspense>
                     }
@@ -2558,6 +2564,7 @@ const MainApp: React.FC = () => {
                   onUpdateSets={(next) => { setCapabilitySets(next); saveCapabilitySets(next); }}
                   onRunTest={runCapabilityTest}
                   onLog={(level, message, detail) => addGlobalLog('能力', level, message, detail)}
+                  canUploadToR2={user?.role === 'admin'}
                 />
               </Suspense>
             )}

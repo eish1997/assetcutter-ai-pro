@@ -26,6 +26,10 @@ const R2_PUBLIC_BASE_URL = () => String(process.env.R2_PUBLIC_BASE_URL || '').tr
 const AUTH_ME_URL = () => String(process.env.AUTH_ME_URL || 'http://127.0.0.1:9100/api/auth/me').trim();
 const R2_ENFORCE_USER_SCOPE = () =>
   String(process.env.R2_ENFORCE_USER_SCOPE || 'true').trim().toLowerCase() !== 'false';
+const R2_CAPABILITY_STORE_CATALOG_KEY = () =>
+  String(process.env.R2_CAPABILITY_STORE_CATALOG_KEY || 'public/capability-store/catalog.json')
+    .trim()
+    .replace(/^\/+/, '');
 
 export function isR2Configured() {
   return !!(R2_ACCOUNT_ID() && R2_ACCESS_KEY_ID() && R2_SECRET_ACCESS_KEY() && R2_BUCKET());
@@ -108,6 +112,57 @@ function safeObjectKey(raw) {
   if (!key) throw new Error('objectKey 不能为空');
   if (key.includes('..')) throw new Error('objectKey 非法');
   return key;
+}
+
+function safeRelativeObjectPath(raw) {
+  const key = String(raw || '').trim().replace(/^\/+/, '');
+  if (!key) throw new Error('objectPath 不能为空');
+  if (key.includes('..')) throw new Error('objectPath 非法');
+  return key;
+}
+
+function toYmd(ts) {
+  const d = new Date(ts);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function catalogRootPrefix() {
+  const key = R2_CAPABILITY_STORE_CATALOG_KEY();
+  const idx = key.lastIndexOf('/');
+  if (idx < 0) return '';
+  return key.slice(0, idx + 1);
+}
+
+async function streamBodyToString(body) {
+  if (!body) return '';
+  if (typeof body.transformToString === 'function') {
+    return body.transformToString('utf-8');
+  }
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    body.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+    body.on('error', reject);
+    body.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+  });
+}
+
+async function getJsonObjectOrDefault(s3, objectKey, fallbackValue) {
+  try {
+    const got = await s3.send(
+      new GetObjectCommand({
+        Bucket: R2_BUCKET(),
+        Key: objectKey,
+      })
+    );
+    const text = await streamBodyToString(got.Body);
+    const parsed = JSON.parse(text || 'null');
+    return parsed ?? fallbackValue;
+  } catch {
+    return fallbackValue;
+  }
 }
 
 function parsePositiveInt(value, fallback) {
@@ -444,6 +499,84 @@ async function handleDeleteObject(req, res, objectKey, sessionUserId, s3) {
   sendJson(res, 200, { ok: true, objectKey, usedBytes });
 }
 
+async function handleCapabilityStoreObject(req, res, objectKey, s3) {
+  const got = await s3.send(
+    new GetObjectCommand({
+      Bucket: R2_BUCKET(),
+      Key: objectKey,
+    })
+  );
+  const text = await streamBodyToString(got.Body);
+  const contentType = String(got.ContentType || '').toLowerCase();
+  const isJson = contentType.includes('application/json') || objectKey.endsWith('.json');
+  if (isJson) {
+    let parsed = null;
+    try {
+      parsed = JSON.parse(text || 'null');
+    } catch {
+      sendJson(res, 500, { error: `能力商店对象 JSON 非法：${objectKey}` });
+      return;
+    }
+    sendJson(res, 200, parsed);
+    return;
+  }
+  res.writeHead(200, { 'Content-Type': got.ContentType || 'application/octet-stream' });
+  res.end(text);
+}
+
+export async function publishCapabilityPresetToR2Catalog(adminUserId, preset) {
+  const uid = String(adminUserId || '').trim();
+  if (!uid) throw new Error('管理员身份无效');
+  const p = preset && typeof preset === 'object' ? preset : null;
+  if (!p) throw new Error('preset 无效');
+  const pid = String(p.id || '').trim();
+  const label = String(p.label || '').trim();
+  if (!pid || !label) throw new Error('preset 缺少 id 或 label');
+  const s3 = getS3();
+  if (!s3) throw new Error('R2 未配置');
+  const now = Date.now();
+  const root = catalogRootPrefix() || 'public/capability-store/';
+  const catalogObjectKey = R2_CAPABILITY_STORE_CATALOG_KEY();
+  const packObjectKey = `${root}presets/${pid}.json`;
+  const packBody = JSON.stringify([p], null, 2);
+  await s3.send(
+    new PutObjectCommand({
+      Bucket: R2_BUCKET(),
+      Key: packObjectKey,
+      Body: Buffer.from(packBody, 'utf8'),
+      ContentType: 'application/json; charset=utf-8',
+    })
+  );
+
+  const existing = await getJsonObjectOrDefault(s3, catalogObjectKey, []);
+  const currentCatalog = Array.isArray(existing) ? existing : [];
+  const nextItem = {
+    id: `preset_${pid}`,
+    type: 'capability_presets',
+    name: label || pid,
+    desc: `管理员上传能力预设：${label || pid}`,
+    version: String(now),
+    url: `./presets/${pid}.json`,
+    updatedAt: toYmd(now),
+    tags: ['r2', 'admin-upload'],
+  };
+  const filtered = currentCatalog.filter((x) => {
+    if (!x || typeof x !== 'object') return false;
+    const id = String(x.id || '').trim();
+    return id !== nextItem.id;
+  });
+  const nextCatalog = [nextItem, ...filtered];
+  await s3.send(
+    new PutObjectCommand({
+      Bucket: R2_BUCKET(),
+      Key: catalogObjectKey,
+      Body: Buffer.from(JSON.stringify(nextCatalog, null, 2), 'utf8'),
+      ContentType: 'application/json; charset=utf-8',
+    })
+  );
+  return { catalogObjectKey, packObjectKey };
+}
+
 /** inject.embedded：挂在 auth 同源；inject.resolveSessionUserId：直接解析会话，避免再请求 AUTH_ME_URL */
 export async function handleR2StorageRequest(req, res, inject = {}) {
   const embedded = !!inject.embedded;
@@ -521,6 +654,18 @@ export async function handleR2StorageRequest(req, res, inject = {}) {
         await handleDeleteObject(req, res, objectKey, sessionUserId, s3);
         return;
       }
+    }
+
+    if (pathname === '/api/r2/capability-store/catalog' && req.method === 'GET') {
+      await handleCapabilityStoreObject(req, res, R2_CAPABILITY_STORE_CATALOG_KEY(), s3);
+      return;
+    }
+
+    if (pathname.startsWith('/api/r2/capability-store/') && req.method === 'GET') {
+      const rel = safeRelativeObjectPath(pathname.slice('/api/r2/capability-store/'.length));
+      const objectKey = `${catalogRootPrefix()}${rel}`;
+      await handleCapabilityStoreObject(req, res, objectKey, s3);
+      return;
     }
 
     sendJson(res, 404, {

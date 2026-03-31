@@ -17,15 +17,13 @@ import {
   setTencentSecretId as saveTencentSecretId,
   getTencentSecretKey,
   setTencentSecretKey as saveTencentSecretKey,
-  getCapabilityStoreCatalogUrl,
-  setCapabilityStoreCatalogUrl,
-  DEFAULT_CAPABILITY_STORE_CATALOG_URL,
 } from '../services/settingsStore';
 import { CustomDropdown, DROPDOWN_TRIGGER_COMPACT } from './ui/CustomDropdown';
+import type { AuthUser } from '../services/authClient';
 
 const SETTINGS_NAV: { id: string; label: string }[] = [
+  { id: 'settings-user', label: '用户' },
   { id: 'settings-api', label: 'API' },
-  { id: 'settings-general', label: '通用' },
 ];
 
 const AI_PROVIDER_OPTIONS: { value: AiProvider; label: string }[] = [
@@ -34,7 +32,12 @@ const AI_PROVIDER_OPTIONS: { value: AiProvider; label: string }[] = [
   { value: 'vectorengine', label: '向量引擎 VectorEngine（Gemini 原生 REST）' },
 ];
 
-const SettingsSection: React.FC = () => {
+const SettingsSection: React.FC<{
+  currentUser?: AuthUser | null;
+  authLoading?: boolean;
+  onRefreshUser?: () => Promise<void>;
+  onLogout?: () => Promise<void>;
+}> = ({ currentUser = null, authLoading = false, onRefreshUser, onLogout }) => {
   const contentRef = useRef<HTMLDivElement>(null);
   const [aiProvider, setAiProviderState] = useState<AiProvider>('gemini');
   const [apiKey, setApiKey] = useState('');
@@ -46,8 +49,8 @@ const SettingsSection: React.FC = () => {
   const [tencentSecretKey, setTencentSecretKey] = useState('');
   const [saved, setSaved] = useState(false);
   const [tencentSaved, setTencentSaved] = useState(false);
-  const [capabilityStoreUrl, setCapabilityStoreUrl] = useState('');
-  const [generalSaved, setGeneralSaved] = useState(false);
+  const [userActionBusy, setUserActionBusy] = useState<'refresh' | 'logout' | null>(null);
+  const [userActionMsg, setUserActionMsg] = useState<string>('');
 
   useEffect(() => {
     setAiProviderState(getAiProvider());
@@ -58,7 +61,6 @@ const SettingsSection: React.FC = () => {
     setVectorengineBaseUrlState(getVectorengineBaseUrl());
     setTencentSecretId(getTencentSecretId() ?? '');
     setTencentSecretKey(getTencentSecretKey() ?? '');
-    setCapabilityStoreUrl(getCapabilityStoreCatalogUrl() || '');
   }, []);
 
   const handleSaveApiKey = () => {
@@ -95,15 +97,37 @@ const SettingsSection: React.FC = () => {
     setTimeout(() => setTencentSaved(false), 2000);
   };
 
-  const handleSaveGeneral = () => {
-    setCapabilityStoreCatalogUrl(capabilityStoreUrl.trim() || null);
-    setGeneralSaved(true);
-    setTimeout(() => setGeneralSaved(false), 2000);
-  };
-
   const scrollToSection = (id: string) => {
     const el = contentRef.current?.querySelector(`#${id}`);
     el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  const handleRefreshUser = async () => {
+    if (!onRefreshUser || userActionBusy) return;
+    setUserActionBusy('refresh');
+    setUserActionMsg('');
+    try {
+      await onRefreshUser();
+      setUserActionMsg('用户信息已刷新');
+    } catch (e) {
+      setUserActionMsg(`刷新失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setUserActionBusy(null);
+    }
+  };
+
+  const handleLogout = async () => {
+    if (!onLogout || userActionBusy) return;
+    setUserActionBusy('logout');
+    setUserActionMsg('');
+    try {
+      await onLogout();
+      setUserActionMsg('已退出登录');
+    } catch (e) {
+      setUserActionMsg(`退出失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setUserActionBusy(null);
+    }
   };
 
   return (
@@ -134,6 +158,61 @@ const SettingsSection: React.FC = () => {
         {/* 内容区：所有区块同时展示，导航仅滚动到对应标题 */}
         <div ref={contentRef} className="flex-1 overflow-y-auto p-6 lg:p-10">
           <div className="max-w-2xl space-y-8">
+            <section id="settings-user" className="scroll-mt-4 rounded-2xl border border-[#2e2e32] bg-[#121214] p-6">
+              <h2 className="text-xs font-black uppercase tracking-wider text-blue-400/90 mb-4">用户</h2>
+              <div className="rounded-xl border border-[#252528] p-4 space-y-4">
+                {authLoading ? (
+                  <p className="text-[10px] text-gray-500">正在加载用户信息…</p>
+                ) : currentUser ? (
+                  <>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-[10px]">
+                      <div className="rounded-lg border border-[#2e2e32] bg-[#16161a] px-3 py-2">
+                        <p className="text-gray-500">用户名</p>
+                        <p className="text-white mt-1 break-all">{currentUser.username}</p>
+                      </div>
+                      <div className="rounded-lg border border-[#2e2e32] bg-[#16161a] px-3 py-2">
+                        <p className="text-gray-500">邮箱</p>
+                        <p className="text-white mt-1 break-all">{currentUser.email}</p>
+                      </div>
+                      <div className="rounded-lg border border-[#2e2e32] bg-[#16161a] px-3 py-2">
+                        <p className="text-gray-500">用户 ID</p>
+                        <p className="text-white mt-1 break-all">{currentUser.id}</p>
+                      </div>
+                      <div className="rounded-lg border border-[#2e2e32] bg-[#16161a] px-3 py-2">
+                        <p className="text-gray-500">角色 / 状态</p>
+                        <p className="text-white mt-1 break-all">
+                          {currentUser.role} / {currentUser.status}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-3">
+                      <button
+                        type="button"
+                        onClick={() => void handleRefreshUser()}
+                        disabled={userActionBusy !== null}
+                        className="px-5 py-3 rounded-xl bg-[#26262c] hover:bg-[#383842] border border-[#2e2e32] text-white text-xs font-black uppercase tracking-wider transition-colors disabled:opacity-60"
+                      >
+                        {userActionBusy === 'refresh' ? '刷新中…' : '刷新信息'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleLogout()}
+                        disabled={userActionBusy !== null}
+                        className="px-5 py-3 rounded-xl bg-red-600/80 hover:bg-red-500 text-white text-xs font-black uppercase tracking-wider transition-colors disabled:opacity-60"
+                      >
+                        {userActionBusy === 'logout' ? '退出中…' : '退出登录'}
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-[10px] text-gray-500">当前未登录。</p>
+                )}
+                {userActionMsg ? (
+                  <p className="text-[10px] text-gray-400">{userActionMsg}</p>
+                ) : null}
+              </div>
+            </section>
+
             <section id="settings-api" className="scroll-mt-4 rounded-2xl border border-[#2e2e32] bg-[#121214] p-6">
               <h2 className="text-xs font-black uppercase tracking-wider text-blue-400/90 mb-4">API</h2>
               <div className="space-y-8">
@@ -259,28 +338,6 @@ const SettingsSection: React.FC = () => {
               </div>
             </section>
 
-            <section id="settings-general" className="scroll-mt-4 rounded-2xl border border-[#2e2e32] bg-[#121214] p-6">
-              <h2 className="text-xs font-black uppercase tracking-wider text-blue-400/90 mb-1">能力商店（GitHub 地址）</h2>
-                  <p className="text-[11px] text-gray-500 mb-4">远程能力预设目录地址，用于在「能力」页自动拉取并安装能力包。填写 catalog.json 的完整 URL（如 GitHub Pages 或 jsDelivr 链接）。</p>
-                  <div className="flex flex-col gap-3">
-                    <input
-                      type="url"
-                      value={capabilityStoreUrl}
-                      onChange={(e) => setCapabilityStoreUrl(e.target.value)}
-                      onBlur={handleSaveGeneral}
-                      placeholder={DEFAULT_CAPABILITY_STORE_CATALOG_URL}
-                      className="w-full min-w-0 px-4 py-3 rounded-xl bg-[#16161a] border border-[#2e2e32] text-sm text-white placeholder-gray-500 focus:border-[#3b82f6] focus:outline-none"
-                    />
-                    <button
-                      type="button"
-                      onClick={handleSaveGeneral}
-                      className="shrink-0 self-start px-5 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-black uppercase tracking-wider transition-colors"
-                    >
-                      {generalSaved ? '已保存' : '保存'}
-                    </button>
-                  </div>
-                  {generalSaved && <p className="mt-2 text-[10px] text-green-400/90">已保存到本机，能力页将使用此地址拉取远程预设</p>}
-            </section>
           </div>
         </div>
       </div>

@@ -16,7 +16,7 @@ import {
   verifyPassword,
   getWorkspaceQuotaBytesForUser,
 } from './auth-store.js';
-import { handleR2StorageRequest, isR2Configured, runWorkspaceUsageReconcileForUser } from './r2-storage-handlers.js';
+import { handleR2StorageRequest, isR2Configured, publishCapabilityPresetToR2Catalog, runWorkspaceUsageReconcileForUser } from './r2-storage-handlers.js';
 import { getWorkspaceUsedBytes } from './workspace-storage-usage.js';
 
 const PORT = Number(process.env.PORT || process.env.AUTH_PORT || 9100);
@@ -473,6 +473,36 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (path.startsWith('/api/r2')) {
+      if (path === '/api/r2/capability-store/publish' && req.method === 'POST') {
+        const admin = await requireAdmin(req, res);
+        if (!admin) return;
+        if (!isR2Configured()) {
+          json(res, 503, { error: 'R2 未配置，无法发布能力预设' });
+          return;
+        }
+        const body = await readBody(req);
+        const preset = body && typeof body === 'object' ? body.preset : null;
+        if (!preset || typeof preset !== 'object') {
+          json(res, 400, { error: '缺少 preset' });
+          return;
+        }
+        try {
+          const result = await publishCapabilityPresetToR2Catalog(admin.id, preset);
+          await createAuditLog({
+            actorUserId: admin.id,
+            actorIdentifier: admin.username,
+            action: 'admin.capability_preset_publish',
+            meta: { presetId: String((preset).id || ''), ...result },
+            ip: getClientIp(req),
+            userAgent: req.headers['user-agent'],
+          });
+          json(res, 200, { ok: true, ...result });
+        } catch (e) {
+          const message = e instanceof Error ? e.message : String(e);
+          json(res, 400, { error: message });
+        }
+        return;
+      }
       if (!isR2Configured()) {
         json(res, 503, { error: '工作区云存储未配置（需设置 R2_ACCOUNT_ID、R2_ACCESS_KEY_ID、R2_SECRET_ACCESS_KEY、R2_BUCKET）' });
         return;

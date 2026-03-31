@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CustomAppModule, StoreCatalogItem } from '../types';
 import { loadCapabilityPresets, mergeCapabilityPresets, saveCapabilityPresets } from './capabilityPresetStore';
-import { getCapabilityStoreCatalogUrl } from './settingsStore';
+import { getCapabilityStoreCatalogSources } from './settingsStore';
 
 async function fetchJson<T>(url: string): Promise<T> {
   const res = await fetch(url, { cache: 'no-store' });
@@ -60,6 +60,7 @@ export function useStoreCatalog(options: UseStoreCatalogOptions = {}) {
   const [packContentsLoading, setPackContentsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [installingAll, setInstallingAll] = useState(false);
+  const packBaseUrlMapRef = useRef<Record<string, string>>({});
 
   /** 远程各包展开为「能力」列表，用于按能力展示卡片 */
   const remotePresetItems = useMemo(
@@ -71,19 +72,43 @@ export function useStoreCatalog(options: UseStoreCatalogOptions = {}) {
   );
 
   const refresh = async () => {
-    const base = getCapabilityStoreCatalogUrl();
-    const toFetch = base.includes('?') ? `${base}&t=${Date.now()}` : `${base}?t=${Date.now()}`;
     setLoading(true);
     setError(null);
     try {
-      const raw = await fetchJson<unknown>(toFetch);
-      const arr = Array.isArray(raw) ? raw : [];
-      const list = arr.map(normalizeCatalogItem).filter(Boolean) as StoreCatalogItem[];
-      if (arr.length > list.length) {
-        onLog?.('warn', `商店目录部分项被过滤（原始 ${arr.length}，有效 ${list.length}）`, undefined);
+      const sources = getCapabilityStoreCatalogSources();
+      if (sources.length === 0) {
+        setCatalog([]);
+        packBaseUrlMapRef.current = {};
+        onLog?.('warn', '未配置能力商店源地址', undefined);
+        return;
       }
-      setCatalog(list);
-      onLog?.('info', `商店目录加载成功（${list.length} 项）`, undefined);
+      const merged: StoreCatalogItem[] = [];
+      const baseMap: Record<string, string> = {};
+      const seen = new Set<string>();
+      let filteredCount = 0;
+      for (const base of sources) {
+        const toFetch = base.includes('?') ? `${base}&t=${Date.now()}` : `${base}?t=${Date.now()}`;
+        try {
+          const raw = await fetchJson<unknown>(toFetch);
+          const arr = Array.isArray(raw) ? raw : [];
+          const list = arr.map(normalizeCatalogItem).filter(Boolean) as StoreCatalogItem[];
+          filteredCount += arr.length - list.length;
+          for (const item of list) {
+            if (seen.has(item.id)) continue;
+            seen.add(item.id);
+            merged.push(item);
+            baseMap[item.id] = base;
+          }
+        } catch (e) {
+          onLog?.('warn', `商店源加载失败：${base}`, e instanceof Error ? e.message : String(e));
+        }
+      }
+      packBaseUrlMapRef.current = baseMap;
+      if (filteredCount > 0) {
+        onLog?.('warn', `商店目录部分项被过滤（无效 ${filteredCount}）`, undefined);
+      }
+      setCatalog(merged);
+      onLog?.('info', `商店目录加载成功（${merged.length} 项，来源 ${sources.length}）`, undefined);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setError(msg);
@@ -103,11 +128,11 @@ export function useStoreCatalog(options: UseStoreCatalogOptions = {}) {
       setPackPresetsMap({});
       return;
     }
-    const baseUrl = getCapabilityStoreCatalogUrl();
     setPackContentsLoading(true);
     Promise.all(
       catalog.map(async (item) => {
         try {
+          const baseUrl = packBaseUrlMapRef.current[item.id] || '';
           const packUrl = (() => {
             try {
               return new URL(item.url, baseUrl).toString();

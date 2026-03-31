@@ -242,38 +242,38 @@ export function getTencentCreds(): { secretId: string; secretKey: string } {
 }
 
 // ----- 能力商店（远程预设 Catalog URL）-----
-const STORAGE_KEY_CAPABILITY_STORE_URL = 'ac_store_catalog_url';
-
-/** 默认能力预设商店目录（GitHub raw 避免 CDN 强缓存，保证能看到最新包列表） */
+/** 固定主源：不再提供设置页修改入口 */
 export const DEFAULT_CAPABILITY_STORE_CATALOG_URL =
-  (typeof import.meta !== 'undefined' && (import.meta as unknown as { env?: Record<string, string> })?.env?.VITE_STORE_CATALOG_URL) ||
   'https://raw.githubusercontent.com/eish1997/assetcutter-ai-pro-store/main/store/catalog.json';
-
-/** 已废弃的 jsDelivr 默认地址（强缓存导致只看到 1 个包），迁移到 raw 地址 */
-const DEPRECATED_JSDELIVR_CATALOG_URL = 'https://cdn.jsdelivr.net/gh/eish1997/assetcutter-ai-pro-store@main/store/catalog.json';
+/** 固定 R2 源：走同源 /api/r2 代理，无需公开 URL */
+export const DEFAULT_CAPABILITY_STORE_R2_CATALOG_URL = '/api/r2/capability-store/catalog';
 
 export function getCapabilityStoreCatalogUrl(): string {
-  try {
-    let v = localStorage.getItem(STORAGE_KEY_CAPABILITY_STORE_URL);
-    v = v && v.trim() ? v.trim() : '';
-    if (v === DEPRECATED_JSDELIVR_CATALOG_URL) {
-      localStorage.removeItem(STORAGE_KEY_CAPABILITY_STORE_URL);
-      return DEFAULT_CAPABILITY_STORE_CATALOG_URL;
-    }
-    return v || DEFAULT_CAPABILITY_STORE_CATALOG_URL;
-  } catch {
-    return DEFAULT_CAPABILITY_STORE_CATALOG_URL;
-  }
+  return DEFAULT_CAPABILITY_STORE_CATALOG_URL;
 }
 
 export function setCapabilityStoreCatalogUrl(value: string | null): void {
-  try {
-    if (value == null || !value.trim()) {
-      localStorage.removeItem(STORAGE_KEY_CAPABILITY_STORE_URL);
-    } else {
-      localStorage.setItem(STORAGE_KEY_CAPABILITY_STORE_URL, value.trim());
-    }
-  } catch {
-    // ignore
-  }
+  void value;
+}
+
+export function getCapabilityStoreR2CatalogUrl(): string {
+  return DEFAULT_CAPABILITY_STORE_R2_CATALOG_URL;
+}
+
+export function setCapabilityStoreR2CatalogUrl(value: string | null): void {
+  void value;
+}
+
+export function getCapabilityStoreCatalogSources(): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const push = (v: string) => {
+    const t = String(v || '').trim();
+    if (!t || seen.has(t)) return;
+    seen.add(t);
+    out.push(t);
+  };
+  push(getCapabilityStoreCatalogUrl());
+  push(getCapabilityStoreR2CatalogUrl());
+  return out;
 }

@@ -182,7 +182,18 @@
       "tokenHash": "91162229decfe07e214fae04feecb405bd72b026f0439bc9d201b9bcdb0dc1f0",
       "expiresAt": "2026-04-05T13:10:22.856Z",
       "createdAt": "2026-03-29T13:10:22.856Z",
-      "updatedAt": "2026-03-29T13:10:22.856Z",
+      "updatedAt": "2026-03-31T01:28:41.220Z",
+      "revokedAt": "2026-03-31T01:28:41.220Z",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
+      "ip": "127.0.0.1"
+    },
+    {
+      "id": "5bb0fd9d-ce0b-4177-8bae-38d4d3a67a55",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "tokenHash": "246c5defa6ed31084d2f5cae8072ae6cb28050e0528035a45702cb5d69940e9b",
+      "expiresAt": "2026-04-07T01:28:41.220Z",
+      "createdAt": "2026-03-31T01:28:41.221Z",
+      "updatedAt": "2026-03-31T01:28:41.221Z",
       "revokedAt": null,
       "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
       "ip": "127.0.0.1"
