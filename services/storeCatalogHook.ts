@@ -6,7 +6,17 @@ import { getCapabilityStoreCatalogSources } from './settingsStore';
 async function fetchJson<T>(url: string): Promise<T> {
   const res = await fetch(url, { cache: 'no-store' });
   if (!res.ok) throw new Error(`请求失败：${res.status} ${res.statusText}`);
-  return (await res.json()) as T;
+  const contentType = String(res.headers.get('content-type') || '').toLowerCase();
+  const text = await res.text();
+  const looksLikeHtml = /^\s*</.test(text);
+  if (!contentType.includes('application/json') || looksLikeHtml) {
+    throw new Error(`接口返回非 JSON（疑似 HTML 回退页）：${url}`);
+  }
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error(`接口 JSON 解析失败：${url}`);
+  }
 }
 
 function resolvePackUrl(itemUrl: string, baseUrl: string): string {

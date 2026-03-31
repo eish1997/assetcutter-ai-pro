@@ -1,4 +1,4 @@
-import React, { useState, useRef, useLayoutEffect, useMemo, useEffect } from 'react';
+import React, { useState, useRef, useLayoutEffect, useMemo, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import type { CustomAppModule, CapabilityCategory, CapabilityEngine, DialogImageGear, Generate3DPreset, CapabilitySet } from '../types';
 import { CAPABILITY_CATEGORIES, DIALOG_IMAGE_GEARS, SUPPORTED_ASPECT_RATIOS, SUPPORTED_IMAGE_SIZES } from '../types';
@@ -110,6 +110,7 @@ const CapabilityPresetSection: React.FC<{
     BUILTIN_IMAGE_PROCESS_IDS.includes(p.id as (typeof BUILTIN_IMAGE_PROCESS_IDS)[number]);
 
   const {
+    catalog,
     loading: catalogLoading,
     error: catalogError,
     refresh: refreshCatalog,
@@ -118,6 +119,14 @@ const CapabilityPresetSection: React.FC<{
     packContentsLoading,
     remotePresetItems,
   } = useStoreCatalog({ onPresetsApplied: (next) => onUpdate(next), onLog });
+  const triggerRemoteRefreshSync = useCallback(async () => {
+    try {
+      await refreshCatalog();
+    } finally {
+      // 刷新目录后再触发同步，避免先用旧远程列表“空同步”导致看起来无反应
+      setSyncAfterRefresh(true);
+    }
+  }, [refreshCatalog]);
 
   /** 远程能力中尚未出现在当前列表的（按能力展示为卡片，每张卡片可点安装） */
   const effectiveUninstalledPresetItems = useMemo(
@@ -143,8 +152,7 @@ const CapabilityPresetSection: React.FC<{
         return;
       }
       if (action === 'refresh-remote') {
-        setSyncAfterRefresh(true);
-        void refreshCatalog();
+        void triggerRemoteRefreshSync();
         return;
       }
     };
@@ -152,20 +160,25 @@ const CapabilityPresetSection: React.FC<{
     return () => {
       window.removeEventListener('ac:capability-preset-toolbar-action', onToolbarAction as EventListener);
     };
-  }, [effectiveUninstalledPresetItems, installPresets, refreshCatalog]);
+  }, [effectiveUninstalledPresetItems, installPresets, triggerRemoteRefreshSync]);
 
   useEffect(() => {
     if (!syncAfterRefresh) return;
     if (catalogLoading || packContentsLoading) return;
+    if (catalog.length === 0) {
+      onLog?.('info', 'R2 目录为空，无需同步', undefined);
+      setSyncAfterRefresh(false);
+      return;
+    }
     const allRemote = remotePresetItems.map((rp) => rp.preset);
+    // 目录已加载但远程能力尚未展开（异步时序），继续等待下一轮状态更新
+    if (allRemote.length === 0) return;
     if (allRemote.length > 0) {
       installPresets(allRemote);
       onLog?.('info', `已同步 R2 预设（${allRemote.length} 条）`, undefined);
-    } else {
-      onLog?.('info', 'R2 预设为空，无需同步', undefined);
     }
     setSyncAfterRefresh(false);
-  }, [syncAfterRefresh, catalogLoading, packContentsLoading, remotePresetItems, installPresets, onLog]);
+  }, [syncAfterRefresh, catalogLoading, packContentsLoading, catalog, remotePresetItems, installPresets, onLog]);
   useEffect(() => {
     // 自动补齐公共仓库能力：仅在当前本地有缺失时执行一次，避免每次进入都覆盖本地排序
     if (autoSyncedRemoteRef.current) return;
@@ -952,8 +965,7 @@ const CapabilityPresetSection: React.FC<{
           <button
             type="button"
             onClick={() => {
-              setSyncAfterRefresh(true);
-              void refreshCatalog();
+              void triggerRemoteRefreshSync();
             }}
             disabled={catalogLoading || packContentsLoading || installingAll}
             className="px-4 py-2 rounded-xl bg-[#26262c] border border-[#2e2e32] text-[10px] font-black uppercase hover:bg-[#383842] disabled:opacity-50"
