@@ -1,8 +1,9 @@
 import React, { useState, useRef, useLayoutEffect, useMemo, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import type { CustomAppModule, CapabilityCategory, CapabilityEngine, DialogImageGear, Generate3DPreset, CapabilitySet } from '../types';
 import { CAPABILITY_CATEGORIES, DIALOG_IMAGE_GEARS, SUPPORTED_ASPECT_RATIOS, SUPPORTED_IMAGE_SIZES } from '../types';
 import type { CapabilityTestResult } from '../services/capabilityTestRunner';
-import { CAPABILITY_PRESETS_VERSION } from '../services/capabilityPresetStore';
+import { BUILTIN_IMAGE_PROCESS_IDS, CAPABILITY_PRESETS_VERSION } from '../services/capabilityPresetStore';
 import { loadInstalledPacks, loadPackHistory } from '../services/storePackHistory';
 import { useStoreCatalog } from '../services/storeCatalogHook';
 import { publishPresetToUserR2Catalog } from '../services/capabilityPresetR2Publish';
@@ -14,7 +15,7 @@ const CAPABILITY_SETS_VERSION = 1;
 
 const DEFAULT_GENERATE_3D: Generate3DPreset = { module: 'pro', model: '3.0', enablePBR: false };
 
-type ViewMode = 'presets' | 'sets' | 'canvas';
+type ViewMode = 'presets' | 'image_process' | 'sets' | 'canvas';
 
 const CapabilityPresetSection: React.FC<{
   presets: CustomAppModule[];
@@ -25,7 +26,9 @@ const CapabilityPresetSection: React.FC<{
   onLog?: (level: 'info' | 'warn' | 'error', message: string, detail?: string) => void;
   embeddedInWorkflow?: boolean;
   canUploadToR2?: boolean;
-}> = ({ presets, onUpdate, sets = [], onUpdateSets, onRunTest, onLog, embeddedInWorkflow = false, canUploadToR2 = false }) => {
+  /** 工作区侧栏：挂到「仅卡片区域」的滚动容器，与顶部预览条同级，避免预览条占用滚动视口导致定位被裁切 */
+  scrollContainerRef?: React.Ref<HTMLDivElement>;
+}> = ({ presets, onUpdate, sets = [], onUpdateSets, onRunTest, onLog, embeddedInWorkflow = false, canUploadToR2 = false, scrollContainerRef }) => {
   const [viewMode, setViewMode] = useState<ViewMode>('presets');
   const [canvasSet, setCanvasSet] = useState<CapabilitySet | null>(null);
   const [setLabel, setSetLabel] = useState('');
@@ -71,19 +74,44 @@ const CapabilityPresetSection: React.FC<{
   const [testImage, setTestImage] = useState<Record<string, string>>({});
   const [testResult, setTestResult] = useState<Record<string, CapabilityTestResult | null>>({});
   const [testRunning, setTestRunning] = useState<Record<string, boolean>>({});
+  /** 本地临时预览图（不落 localStorage，避免超配额） */
+  const [runtimePreviewImage, setRuntimePreviewImage] = useState<Record<string, string>>({});
+  const [runtimePreviewThumbImage, setRuntimePreviewThumbImage] = useState<Record<string, string>>({});
+  const [previewSplitRatio, setPreviewSplitRatio] = useState<Record<string, number>>({});
   const fileInputRef = useRef<Record<string, HTMLInputElement | null>>({});
   const [newGenerate3D, setNewGenerate3D] = useState<Generate3DPreset>({ ...DEFAULT_GENERATE_3D });
   const [editGenerate3D, setEditGenerate3D] = useState<Generate3DPreset>({ ...DEFAULT_GENERATE_3D });
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
+  const [lightboxCompare, setLightboxCompare] = useState<{ original: string; generated: string } | null>(null);
+  const [lightboxSplitRatio, setLightboxSplitRatio] = useState(0.5);
+  useEffect(() => {
+    if (!lightboxImage && !lightboxCompare) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setLightboxImage(null);
+        setLightboxCompare(null);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [lightboxImage, lightboxCompare]);
   const [showImportExport, setShowImportExport] = useState(false);
   const [seedDropActive, setSeedDropActive] = useState(false);
   const [uploadingPresetIds, setUploadingPresetIds] = useState<Record<string, boolean>>({});
+  const [syncAfterRefresh, setSyncAfterRefresh] = useState(false);
+  const [pendingScrollTarget, setPendingScrollTarget] = useState<{ kind: 'preset' | 'set'; id: string } | null>(null);
+  const presetCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const setCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  /** 仅预设「内容区」滚动容器；定位时用 scrollTo 只滚此处，避免 scrollIntoView 连带滚主布局 */
+  const presetContentScrollRef = useRef<HTMLDivElement | null>(null);
+  const isBuiltinImageProcess = (p: CustomAppModule) =>
+    p.category === 'image_process' &&
+    BUILTIN_IMAGE_PROCESS_IDS.includes(p.id as (typeof BUILTIN_IMAGE_PROCESS_IDS)[number]);
 
   const {
     loading: catalogLoading,
     error: catalogError,
     refresh: refreshCatalog,
-    installSinglePreset,
     installPresets,
     installingAll,
     packContentsLoading,
@@ -114,11 +142,9 @@ const CapabilityPresetSection: React.FC<{
         return;
       }
       if (action === 'refresh-remote') {
+        setSyncAfterRefresh(true);
         void refreshCatalog();
         return;
-      }
-      if (action === 'install-all' && effectiveUninstalledPresetItems.length > 0) {
-        void installPresets(effectiveUninstalledPresetItems.map((rp) => rp.preset));
       }
     };
     window.addEventListener('ac:capability-preset-toolbar-action', onToolbarAction as EventListener);
@@ -126,12 +152,25 @@ const CapabilityPresetSection: React.FC<{
       window.removeEventListener('ac:capability-preset-toolbar-action', onToolbarAction as EventListener);
     };
   }, [effectiveUninstalledPresetItems, installPresets, refreshCatalog]);
+
+  useEffect(() => {
+    if (!syncAfterRefresh) return;
+    if (catalogLoading || packContentsLoading) return;
+    const allRemote = remotePresetItems.map((rp) => rp.preset);
+    if (allRemote.length > 0) {
+      installPresets(allRemote);
+      onLog?.('info', `已同步 R2 预设（${allRemote.length} 条）`, undefined);
+    } else {
+      onLog?.('info', 'R2 预设为空，无需同步', undefined);
+    }
+    setSyncAfterRefresh(false);
+  }, [syncAfterRefresh, catalogLoading, packContentsLoading, remotePresetItems, installPresets, onLog]);
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const onViewModeSwitch = (event: Event) => {
       const detail = (event as CustomEvent<{ mode?: ViewMode }>).detail;
       const mode = detail?.mode;
-      if (mode === 'presets' || mode === 'sets') {
+      if (mode === 'presets' || mode === 'image_process' || mode === 'sets') {
         setViewMode(mode);
       }
     };
@@ -140,6 +179,26 @@ const CapabilityPresetSection: React.FC<{
       window.removeEventListener('ac:capability-preset-view-mode', onViewModeSwitch as EventListener);
     };
   }, []);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onJumpToPreset = (event: Event) => {
+      const detail = (event as CustomEvent<{ presetId?: string }>).detail;
+      const id = detail?.presetId;
+      if (!id) return;
+      const preset = presets.find((p) => p.id === id);
+      if (!preset) return;
+      if (preset.category === 'image_process') {
+        setViewMode('image_process');
+      } else {
+        setViewMode('presets');
+      }
+      setPendingScrollTarget({ kind: 'preset', id });
+    };
+    window.addEventListener('ac:capability-jump-to-preset', onJumpToPreset as EventListener);
+    return () => {
+      window.removeEventListener('ac:capability-jump-to-preset', onJumpToPreset as EventListener);
+    };
+  }, [presets]);
   useEffect(() => {
     if (typeof window === 'undefined') return;
     window.dispatchEvent(new CustomEvent('ac:capability-preset-view-mode-changed', { detail: { mode: viewMode } }));
@@ -260,7 +319,7 @@ const CapabilityPresetSection: React.FC<{
     }
   };
 
-  const loadSeedFromRepo = () => {
+  const loadSeedFromLocal = () => {
     Promise.all([
       fetch('/capability-seed/capability-presets.json').then((r) => (r.ok ? r.json() : null)),
       fetch('/capability-seed/capability-sets.json').then((r) => (r.ok ? r.json() : null)),
@@ -268,17 +327,17 @@ const CapabilityPresetSection: React.FC<{
       .then(([presetsData, setsData]) => {
         if (presetsData?.presets?.length) {
           update(presetsData.presets as CustomAppModule[]);
-          onLog?.('info', `已从仓库加载 ${presetsData.presets.length} 条能力预设`, undefined);
+          onLog?.('info', `已从本地种子加载 ${presetsData.presets.length} 条能力预设`, undefined);
         }
         if (setsData?.sets && setsData.version === 1) {
           onUpdateSets?.(setsData.sets as CapabilitySet[]);
-          onLog?.('info', `已从仓库加载 ${(setsData.sets as CapabilitySet[]).length} 个能力集合`, undefined);
+          onLog?.('info', `已从本地种子加载 ${(setsData.sets as CapabilitySet[]).length} 个能力集合`, undefined);
         }
         if (!presetsData?.presets?.length && !setsData?.sets?.length) {
-          onLog?.('warn', '仓库种子为空或请求失败', undefined);
+          onLog?.('warn', '本地种子为空或请求失败', undefined);
         }
       })
-      .catch((e) => onLog?.('error', '从仓库加载失败', e instanceof Error ? e.message : String(e)));
+      .catch((e) => onLog?.('error', '从本地种子加载失败', e instanceof Error ? e.message : String(e)));
   };
 
   const handleSeedDrop = (e: React.DragEvent) => {
@@ -307,7 +366,7 @@ const CapabilityPresetSection: React.FC<{
     });
   };
 
-  /** 下载当前能力预设/集合为仓库种子文件，可放入 public/capability-seed/ 后提交到 GitHub */
+  /** 下载当前能力预设/集合为本地种子文件 */
   const exportSeedForRepo = (which: 'presets' | 'sets' | 'both') => {
     try {
       const download = (filename: string, json: object) => {
@@ -325,7 +384,7 @@ const CapabilityPresetSection: React.FC<{
       if (which === 'sets' || which === 'both') {
         download('capability-sets.json', { version: CAPABILITY_SETS_VERSION, sets });
       }
-      onLog?.('info', '已下载仓库种子文件，请放入 public/capability-seed/ 后提交', undefined);
+      onLog?.('info', '已下载本地种子文件', undefined);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       onLog?.('error', '导出种子失败', msg);
@@ -342,6 +401,7 @@ const CapabilityPresetSection: React.FC<{
       const result = await onRunTest(p, img);
       setTestResult((prev) => ({ ...prev, [p.id]: result }));
       if (result.ok) {
+        if (result.resultImage) updatePresetPreviewImage(p.id, result.resultImage);
         onLog?.('info', `[${p.label}] 完成`, result.cutCount != null ? `裁剪 ${result.cutCount} 张` : `${result.durationMs}ms`);
       } else {
         onLog?.('warn', `[${p.label}] 失败`, result.error);
@@ -355,6 +415,244 @@ const CapabilityPresetSection: React.FC<{
     }
   };
 
+  const estimateDataUrlBytes = (value: string) => {
+    const i = value.indexOf(',');
+    const b64 = i >= 0 ? value.slice(i + 1) : value;
+    return Math.floor((b64.length * 3) / 4);
+  };
+
+  const optimizePreviewDataUrl = async (
+    source: string,
+    options?: { maxSide?: number; targetBytes?: number; qualities?: number[] }
+  ): Promise<string> => {
+    if (!source.startsWith('data:image/')) return source;
+    const rawBytes = estimateDataUrlBytes(source);
+    const maxSideLimit = options?.maxSide ?? 1280;
+    const targetBytes = options?.targetBytes ?? 1.6 * 1024 * 1024;
+    const qualities = options?.qualities ?? [0.86, 0.76, 0.66];
+    if (rawBytes <= targetBytes && maxSideLimit >= 2048) return source;
+    if (typeof window === 'undefined' || typeof document === 'undefined') return source;
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const node = new Image();
+      node.onload = () => resolve(node);
+      node.onerror = () => reject(new Error('预览图加载失败'));
+      node.src = source;
+    });
+    const canvas = document.createElement('canvas');
+    const maxSide = Math.max(img.naturalWidth, img.naturalHeight);
+    const scale = maxSide > maxSideLimit ? maxSideLimit / maxSide : 1;
+    canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return source;
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    for (const q of qualities) {
+      const next = canvas.toDataURL('image/jpeg', q);
+      if (estimateDataUrlBytes(next) <= targetBytes) return next;
+    }
+    return canvas.toDataURL('image/jpeg', Math.max(0.5, qualities[qualities.length - 1] ?? 0.58));
+  };
+
+  const resolvePreviewSourceForLoad = (value: string): string => {
+    const t = String(value || '').trim();
+    if (!t) return '';
+    if (/^https?:\/\//i.test(t) || t.startsWith('data:') || t.startsWith('/')) return t;
+    if (t.startsWith('./')) return `/api/r2/capability-store/${t.slice(2)}`;
+    return `/api/r2/capability-store/${t.replace(/^\/+/, '')}`;
+  };
+
+  const createThumbnailDataUrlFromAny = async (
+    source: string,
+    options?: { maxSide?: number; targetBytes?: number; qualities?: number[] }
+  ): Promise<string | undefined> => {
+    const src = resolvePreviewSourceForLoad(source);
+    if (!src) return undefined;
+    if (src.startsWith('data:image/')) {
+      return optimizePreviewDataUrl(src, options);
+    }
+    if (typeof window === 'undefined' || typeof document === 'undefined') return undefined;
+    const maxSideLimit = options?.maxSide ?? 640;
+    const targetBytes = options?.targetBytes ?? 220 * 1024;
+    const qualities = options?.qualities ?? [0.8, 0.72, 0.64];
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const node = new Image();
+      node.onload = () => resolve(node);
+      node.onerror = () => reject(new Error('缩略图源加载失败'));
+      node.src = src;
+    });
+    const canvas = document.createElement('canvas');
+    const maxSide = Math.max(img.naturalWidth, img.naturalHeight);
+    const scale = maxSide > maxSideLimit ? maxSideLimit / maxSide : 1;
+    canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return undefined;
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    for (const q of qualities) {
+      const next = canvas.toDataURL('image/jpeg', q);
+      if (estimateDataUrlBytes(next) <= targetBytes) return next;
+    }
+    return canvas.toDataURL('image/jpeg', Math.max(0.5, qualities[qualities.length - 1] ?? 0.58));
+  };
+
+  const updatePresetPreviewImage = (presetId: string, dataUrl: string | undefined) => {
+    const setRuntimePreview = (nextDataUrl: string | undefined) => {
+      setRuntimePreviewImage((prev) => {
+        if (!nextDataUrl) {
+          const next = { ...prev };
+          delete next[presetId];
+          return next;
+        }
+        return { ...prev, [presetId]: nextDataUrl };
+      });
+    };
+    const setRuntimeThumb = (nextDataUrl: string | undefined) => {
+      setRuntimePreviewThumbImage((prev) => {
+        if (!nextDataUrl) {
+          const next = { ...prev };
+          delete next[presetId];
+          return next;
+        }
+        return { ...prev, [presetId]: nextDataUrl };
+      });
+    };
+    setRuntimePreviewImage((prev) => {
+      if (!dataUrl) {
+        const next = { ...prev };
+        delete next[presetId];
+        return next;
+      }
+      return { ...prev, [presetId]: dataUrl };
+    });
+    if (dataUrl && dataUrl.startsWith('data:image/')) {
+      void optimizePreviewDataUrl(dataUrl)
+        .then((optimized) => {
+          if (optimized !== dataUrl) {
+            setRuntimePreview(optimized);
+            onLog?.('info', '预览图已自动压缩后保存（用于避免上传 400）', undefined);
+          }
+        })
+        .catch(() => {
+          /* ignore preview optimize errors */
+        });
+      void optimizePreviewDataUrl(dataUrl, { maxSide: 640, targetBytes: 220 * 1024, qualities: [0.8, 0.72, 0.64] })
+        .then((thumb) => setRuntimeThumb(thumb))
+        .catch(() => {
+          /* ignore thumb optimize errors */
+        });
+    } else if (dataUrl) {
+      setRuntimeThumb(dataUrl);
+    }
+    if (dataUrl === undefined) onLog?.('info', '已清除卡片预览图', undefined);
+  };
+
+  /** 左侧大图：优先持久化预览图，其次测试结果，其次临时测试图 */
+  const getCardPreviewSrc = (p: CustomAppModule): string | null => {
+    const resolvePreviewSrc = (v: string | undefined): string | undefined => {
+      if (!v) return undefined;
+      const t = v.trim();
+      if (!t) return undefined;
+      if (/^https?:\/\//i.test(t) || t.startsWith('data:') || t.startsWith('/')) return t;
+      if (t.startsWith('./')) return `/api/r2/capability-store/${t.slice(2)}`;
+      return `/api/r2/capability-store/${t.replace(/^\/+/, '')}`;
+    };
+    const runtimeThumb = runtimePreviewThumbImage[p.id];
+    if (runtimeThumb) return runtimeThumb;
+    const runtime = runtimePreviewImage[p.id];
+    if (runtime) return runtime;
+    const pvGenThumb = resolvePreviewSrc(p.previewGeneratedThumbImage);
+    if (pvGenThumb) return pvGenThumb;
+    const pvGen = resolvePreviewSrc(p.previewGeneratedImage);
+    if (pvGen) return pvGen;
+    const pvThumb = resolvePreviewSrc(p.previewOriginalThumbImage);
+    if (pvThumb) return pvThumb;
+    const pv = resolvePreviewSrc(p.previewImage);
+    if (pv) return pv;
+    const r = testResult[p.id]?.ok ? testResult[p.id]?.resultImage : undefined;
+    if (r) return r;
+    return testImage[p.id] || null;
+  };
+  const getOriginalPreviewSrc = (p: CustomAppModule): string | null => {
+    const resolvePreviewSrc = (v: string | undefined): string | undefined => {
+      if (!v) return undefined;
+      const t = v.trim();
+      if (!t) return undefined;
+      if (/^https?:\/\//i.test(t) || t.startsWith('data:') || t.startsWith('/')) return t;
+      if (t.startsWith('./')) return `/api/r2/capability-store/${t.slice(2)}`;
+      return `/api/r2/capability-store/${t.replace(/^\/+/, '')}`;
+    };
+    const src =
+      testImage[p.id] ||
+      resolvePreviewSrc(p.previewOriginalImage) ||
+      runtimePreviewImage[p.id] ||
+      resolvePreviewSrc(p.previewImage) ||
+      null;
+    return src || null;
+  };
+  const getOriginalPreviewThumbSrc = (p: CustomAppModule): string | null => {
+    const resolvePreviewSrc = (v: string | undefined): string | undefined => {
+      if (!v) return undefined;
+      const t = v.trim();
+      if (!t) return undefined;
+      if (/^https?:\/\//i.test(t) || t.startsWith('data:') || t.startsWith('/')) return t;
+      if (t.startsWith('./')) return `/api/r2/capability-store/${t.slice(2)}`;
+      return `/api/r2/capability-store/${t.replace(/^\/+/, '')}`;
+    };
+    return (
+      runtimePreviewThumbImage[p.id] ||
+      resolvePreviewSrc(p.previewOriginalThumbImage) ||
+      null
+    );
+  };
+  const getGeneratedPreviewSrc = (p: CustomAppModule): string | null => {
+    const resolvePreviewSrc = (v: string | undefined): string | undefined => {
+      if (!v) return undefined;
+      const t = v.trim();
+      if (!t) return undefined;
+      if (/^https?:\/\//i.test(t) || t.startsWith('data:') || t.startsWith('/')) return t;
+      if (t.startsWith('./')) return `/api/r2/capability-store/${t.slice(2)}`;
+      return `/api/r2/capability-store/${t.replace(/^\/+/, '')}`;
+    };
+    const src =
+      (testResult[p.id]?.ok ? testResult[p.id]?.resultImage : null) ||
+      runtimePreviewImage[p.id] ||
+      resolvePreviewSrc(p.previewGeneratedImage) ||
+      resolvePreviewSrc(p.previewImage) ||
+      null;
+    return src || null;
+  };
+  const getGeneratedPreviewThumbSrc = (p: CustomAppModule): string | null => {
+    const resolvePreviewSrc = (v: string | undefined): string | undefined => {
+      if (!v) return undefined;
+      const t = v.trim();
+      if (!t) return undefined;
+      if (/^https?:\/\//i.test(t) || t.startsWith('data:') || t.startsWith('/')) return t;
+      if (t.startsWith('./')) return `/api/r2/capability-store/${t.slice(2)}`;
+      return `/api/r2/capability-store/${t.replace(/^\/+/, '')}`;
+    };
+    return (
+      runtimePreviewThumbImage[p.id] ||
+      resolvePreviewSrc(p.previewGeneratedThumbImage) ||
+      null
+    );
+  };
+  const openLightboxPreview = (p: CustomAppModule) => {
+    const original = getOriginalPreviewThumbSrc(p);
+    const generated = getGeneratedPreviewThumbSrc(p);
+    if (original && generated) {
+      setLightboxImage(null);
+      setLightboxSplitRatio(0.5);
+      setLightboxCompare({ original, generated });
+      return;
+    }
+    const src =
+      getGeneratedPreviewThumbSrc(p) ||
+      getOriginalPreviewThumbSrc(p);
+    if (!src) return;
+    setLightboxCompare(null);
+    setLightboxImage(src);
+  };
+
   const uploadPresetToR2 = async (p: CustomAppModule) => {
     if (!canUploadToR2) {
       onLog?.('warn', '仅管理员可上传预设到 R2', undefined);
@@ -362,12 +660,41 @@ const CapabilityPresetSection: React.FC<{
     }
     setUploadingPresetIds((prev) => ({ ...prev, [p.id]: true }));
     try {
-      const result = await publishPresetToUserR2Catalog({ preset: p });
+      const latest = presets.find((x) => x.id === p.id) ?? p;
+      const runtimePreviewRaw = runtimePreviewImage[p.id];
+      const runtimePreview = runtimePreviewRaw ? await optimizePreviewDataUrl(runtimePreviewRaw) : undefined;
+      if (runtimePreview && runtimePreview !== runtimePreviewRaw) {
+        setRuntimePreviewImage((prev) => ({ ...prev, [p.id]: runtimePreview }));
+      }
+      const originalRaw = testImage[p.id] || latest.previewOriginalImage;
+      const generatedRaw =
+        (testResult[p.id]?.ok ? testResult[p.id]?.resultImage : null) ||
+        runtimePreview ||
+        latest.previewGeneratedImage ||
+        latest.previewImage;
+      const originalPreview = originalRaw ? await optimizePreviewDataUrl(originalRaw) : undefined;
+      const generatedPreview = generatedRaw ? await optimizePreviewDataUrl(generatedRaw) : undefined;
+      const originalThumbPreview = originalRaw
+        ? await createThumbnailDataUrlFromAny(originalRaw, { maxSide: 640, targetBytes: 220 * 1024, qualities: [0.8, 0.72, 0.64] })
+        : undefined;
+      const generatedThumbPreview = generatedRaw
+        ? await createThumbnailDataUrlFromAny(generatedRaw, { maxSide: 640, targetBytes: 220 * 1024, qualities: [0.8, 0.72, 0.64] })
+        : undefined;
+      const payload = {
+        ...latest,
+        ...(generatedPreview ? { previewImage: generatedPreview, previewGeneratedImage: generatedPreview } : {}),
+        ...(originalPreview ? { previewOriginalImage: originalPreview } : {}),
+        ...(generatedThumbPreview ? { previewGeneratedThumbImage: generatedThumbPreview } : {}),
+        ...(originalThumbPreview ? { previewOriginalThumbImage: originalThumbPreview } : {}),
+      };
+      const result = await publishPresetToUserR2Catalog({ preset: payload });
       onLog?.(
         'info',
         `已上传到 R2：${p.label}`,
         `catalog objectKey: ${result.catalogObjectKey}`
       );
+      await refreshCatalog();
+      onLog?.('info', '已自动刷新远程能力列表', undefined);
     } catch (e) {
       onLog?.('error', `上传失败：${p.label}`, e instanceof Error ? e.message : String(e));
     } finally {
@@ -379,7 +706,11 @@ const CapabilityPresetSection: React.FC<{
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = () => setTestImage((prev) => ({ ...prev, [presetId]: reader.result as string }));
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      setTestImage((prev) => ({ ...prev, [presetId]: dataUrl }));
+      updatePresetPreviewImage(presetId, dataUrl);
+    };
     reader.readAsDataURL(file);
     e.target.value = '';
   };
@@ -429,33 +760,66 @@ const CapabilityPresetSection: React.FC<{
     }
     return map;
   }, [presets]);
+  const visiblePresets = useMemo(() => {
+    if (viewMode === 'image_process') return presets.filter((p) => p.category === 'image_process');
+    return presets.filter((p) => p.category !== 'image_process');
+  }, [presets, viewMode]);
 
   // 顶部：仅展示已有能力（基础能力 + 复合能力）分两行，不拖动
   const presetStrip = (
-    <div className="shrink-0 flex flex-col gap-2 p-3 rounded-xl border border-[#2e2e32] bg-[#141416]">
+    <div className="shrink-0 flex flex-col gap-2 p-3 rounded-xl border border-[#2e2e32] bg-[#141416]/95 backdrop-blur supports-[backdrop-filter]:bg-[#141416]/85">
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-[9px] font-black text-blue-400/90 uppercase mr-1">基础能力</span>
-        {presets.filter((p) => p.enabled !== false).map((p) => (
-          <span
+        {presets.filter((p) => p.enabled !== false && p.category !== 'image_process').map((p) => (
+          <button
             key={p.id}
-            className="px-3 py-1.5 rounded-lg bg-[#1e3558] border border-[#3b6fb8] text-[10px] font-semibold text-blue-200/90"
+            type="button"
+            onClick={() => {
+              setViewMode('presets');
+              setPendingScrollTarget({ kind: 'preset', id: p.id });
+            }}
+            className="px-3 py-1.5 rounded-lg bg-[#1e3558] border border-[#3b6fb8] text-[10px] font-semibold text-blue-200/90 hover:bg-[#305a90]"
           >
             {p.label}
-          </span>
+          </button>
         ))}
-        {presets.filter((p) => p.enabled !== false).length === 0 && (
+        {presets.filter((p) => p.enabled !== false && p.category !== 'image_process').length === 0 && (
+          <span className="text-[9px] text-gray-500">暂无</span>
+        )}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[9px] font-black text-cyan-400/90 uppercase mr-1">图像处理</span>
+        {presets.filter((p) => p.enabled !== false && p.category === 'image_process').map((p) => (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => {
+              setViewMode('image_process');
+              setPendingScrollTarget({ kind: 'preset', id: p.id });
+            }}
+            className="px-3 py-1.5 rounded-lg bg-[#123447] border border-[#2c78a0] text-[10px] font-semibold text-cyan-200/90 hover:bg-[#1d4f6a]"
+          >
+            {p.label}
+          </button>
+        ))}
+        {presets.filter((p) => p.enabled !== false && p.category === 'image_process').length === 0 && (
           <span className="text-[9px] text-gray-500">暂无</span>
         )}
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-[9px] font-black text-amber-400/90 uppercase mr-1">复合能力</span>
         {sets.map((s) => (
-          <span
+          <button
             key={s.id}
-            className="px-3 py-1.5 rounded-lg bg-[#3d2a10] border border-[#d97706] text-[10px] font-semibold text-amber-200/90"
+            type="button"
+            onClick={() => {
+              setViewMode('sets');
+              setPendingScrollTarget({ kind: 'set', id: s.id });
+            }}
+            className="px-3 py-1.5 rounded-lg bg-[#3d2a10] border border-[#d97706] text-[10px] font-semibold text-amber-200/90 hover:bg-[#5a3f1a]"
           >
             {s.label}
-          </span>
+          </button>
         ))}
         {sets.length === 0 && (
           <span className="text-[9px] text-gray-500">暂无</span>
@@ -463,6 +827,57 @@ const CapabilityPresetSection: React.FC<{
       </div>
     </div>
   );
+
+  useEffect(() => {
+    if (!pendingScrollTarget) return;
+    const target = pendingScrollTarget;
+    const mode = viewMode;
+
+    const scrollIntoPresetContentOnly = (targetEl: HTMLElement) => {
+      const container = presetContentScrollRef.current;
+      if (!container) return false;
+      const top = targetEl.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop;
+      container.scrollTo({ top, behavior: 'smooth' });
+      return true;
+    };
+
+    let cancelled = false;
+    let timeoutId: number | undefined;
+
+    const tryScroll = (attempt: number) => {
+      if (cancelled) return;
+      if (target.kind === 'preset' && (mode === 'presets' || mode === 'image_process')) {
+        const el = presetCardRefs.current[target.id];
+        if (el && scrollIntoPresetContentOnly(el)) {
+          setPendingScrollTarget(null);
+          return;
+        }
+        if (!el && attempt < 15) {
+          timeoutId = window.setTimeout(() => tryScroll(attempt + 1), 48) as unknown as number;
+        }
+        return;
+      }
+      if (target.kind === 'set' && mode === 'sets') {
+        const el = setCardRefs.current[target.id];
+        if (el && scrollIntoPresetContentOnly(el)) {
+          setPendingScrollTarget(null);
+          return;
+        }
+        if (!el && attempt < 15) {
+          timeoutId = window.setTimeout(() => tryScroll(attempt + 1), 48) as unknown as number;
+        }
+      }
+    };
+
+    const raf = window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => tryScroll(0));
+    });
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(raf);
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+    };
+  }, [pendingScrollTarget, viewMode, visiblePresets, sets]);
 
   if (viewMode === 'canvas') {
     return (
@@ -482,11 +897,23 @@ const CapabilityPresetSection: React.FC<{
   }
 
   return (
-    <div className="flex flex-col gap-6 animate-in fade-in max-w-4xl">
-      {presetStrip}
-
+    <div
+      className={`flex flex-col gap-3 animate-in fade-in w-full min-h-0 ${embeddedInWorkflow ? 'h-full flex-1 overflow-hidden' : ''}`}
+    >
+      <div className="w-full max-w-4xl shrink-0">{presetStrip}</div>
+      <div
+        ref={(el) => {
+          presetContentScrollRef.current = el;
+          if (scrollContainerRef) {
+            if (typeof scrollContainerRef === 'function') scrollContainerRef(el);
+            else (scrollContainerRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
+          }
+        }}
+        className={`flex flex-col gap-6 min-h-0 w-full max-w-4xl mx-auto overflow-y-auto no-scrollbar ${embeddedInWorkflow ? 'flex-1' : 'max-h-[calc(100dvh-12rem)]'}`}
+      >
       {!embeddedInWorkflow && (
-      <div className="flex items-center gap-3 flex-wrap">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between w-full min-w-0">
+        <div className="flex items-center gap-3 flex-wrap min-w-0">
         <button
           type="button"
           onClick={() => setViewMode('presets')}
@@ -496,11 +923,41 @@ const CapabilityPresetSection: React.FC<{
         </button>
         <button
           type="button"
+          onClick={() => setViewMode('image_process')}
+          className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase border ${viewMode === 'image_process' ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300' : 'bg-[#1c1c22] border-[#2e2e32] text-gray-500 hover:bg-[#2e2e36]'}`}
+        >
+          图像处理
+        </button>
+        <button
+          type="button"
           onClick={() => setViewMode('sets')}
           className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase border ${viewMode === 'sets' ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300' : 'bg-[#1c1c22] border-[#2e2e32] text-gray-500 hover:bg-[#2e2e36]'}`}
         >
           能力集合
         </button>
+        </div>
+        <div className="flex items-center justify-end gap-2 flex-wrap w-full sm:w-auto sm:shrink-0 sm:ml-auto">
+          <button
+            type="button"
+            onClick={() => {
+              setSyncAfterRefresh(true);
+              void refreshCatalog();
+            }}
+            disabled={catalogLoading || packContentsLoading || installingAll}
+            className="px-4 py-2 rounded-xl bg-[#26262c] border border-[#2e2e32] text-[10px] font-black uppercase hover:bg-[#383842] disabled:opacity-50"
+          >
+            {catalogLoading || packContentsLoading || installingAll ? '同步中…' : '刷新同步'}
+          </button>
+          {viewMode === 'presets' && (
+            <button
+              type="button"
+              onClick={() => setIsAdding(true)}
+              className="px-4 py-2 rounded-xl bg-blue-600 text-[10px] font-black uppercase hover:bg-blue-500"
+            >
+              新增能力
+            </button>
+          )}
+        </div>
       </div>
       )}
 
@@ -525,7 +982,13 @@ const CapabilityPresetSection: React.FC<{
           ) : (
             <div className="grid gap-3">
               {sets.map((s) => (
-                <div key={s.id} className="rounded-2xl border border-[#2e2e32] bg-[#16161a] p-4 flex items-center justify-between">
+                <div
+                  key={s.id}
+                  ref={(el) => {
+                    setCardRefs.current[s.id] = el;
+                  }}
+                  className="rounded-2xl border border-[#2e2e32] bg-[#16161a] p-4 flex items-center justify-between"
+                >
                   <span className="text-[11px] font-black uppercase">{s.label}</span>
                   <div className="flex gap-2">
                     <button type="button" onClick={() => openEditSet(s)} className="px-3 py-1.5 rounded-lg bg-[#26262c] text-[9px] font-black uppercase hover:bg-[#383842]">
@@ -542,44 +1005,20 @@ const CapabilityPresetSection: React.FC<{
         </div>
       )}
 
-      {viewMode === 'presets' && (
+      {(viewMode === 'presets' || viewMode === 'image_process') && (
         <>
       {!embeddedInWorkflow && (
       <div className="flex items-center justify-between flex-wrap gap-2">
         <p className="text-[9px] text-gray-500">
           在此管理功能预设，工作流中的「功能区」将调用此处配置的项，拖拽图片到对应框即可执行。
         </p>
-        <div className="flex gap-2 flex-wrap">
+        <div className="flex gap-2 flex-wrap shrink-0">
           <button
             onClick={() => setShowImportExport((v) => !v)}
             className="px-4 py-2 rounded-xl bg-[#26262c] border border-[#2e2e32] text-[10px] font-black uppercase hover:bg-[#383842]"
           >
             导入/导出
           </button>
-          <button
-            onClick={() => setIsAdding(true)}
-            className="px-4 py-2 rounded-xl bg-blue-600 text-[10px] font-black uppercase hover:bg-blue-500"
-          >
-            新增功能预设
-          </button>
-          <button
-            type="button"
-            onClick={() => void refreshCatalog()}
-            disabled={catalogLoading}
-            className="px-4 py-2 rounded-xl bg-[#26262c] border border-[#2e2e32] text-[10px] font-black uppercase hover:bg-[#383842] disabled:opacity-50"
-          >
-            {catalogLoading ? '加载中…' : '刷新远程'}
-          </button>
-          {effectiveUninstalledPresetItems.length > 0 && (
-            <button
-              type="button"
-              onClick={() => installPresets(effectiveUninstalledPresetItems.map((rp) => rp.preset))}
-              disabled={catalogLoading || packContentsLoading || installingAll}
-              className="px-4 py-2 rounded-xl bg-amber-600 text-[10px] font-black uppercase hover:bg-amber-500 disabled:opacity-50"
-            >
-              {installingAll ? '安装中…' : `一键安装全部（${effectiveUninstalledPresetItems.length}）`}
-            </button>
-          )}
         </div>
       </div>
       )}
@@ -589,13 +1028,13 @@ const CapabilityPresetSection: React.FC<{
       {showImportExport && (
         <div className="rounded-2xl border border-[#2e2e32] bg-[#16161a] p-4 space-y-3">
           <div className="flex items-center justify-between gap-2 flex-wrap">
-            <div className="text-[9px] font-black text-gray-300 uppercase">导入仓库种子</div>
+            <div className="text-[9px] font-black text-gray-300 uppercase">导入本地种子</div>
             <div className="flex gap-2 flex-wrap">
-              <button onClick={loadSeedFromRepo} className="px-3 py-1.5 rounded-lg bg-[#1e40af] text-[9px] font-black uppercase hover:bg-blue-500">
-                从仓库加载
+              <button onClick={loadSeedFromLocal} className="px-3 py-1.5 rounded-lg bg-[#1e40af] text-[9px] font-black uppercase hover:bg-blue-500">
+                从本地种子加载
               </button>
-              <button onClick={() => exportSeedForRepo('both')} className="px-3 py-1.5 rounded-lg bg-[#92400e] text-[9px] font-black uppercase hover:bg-[#a86207]" title="下载后放入 public/capability-seed/ 再提交到 GitHub">
-                导出为仓库种子
+              <button onClick={() => exportSeedForRepo('both')} className="px-3 py-1.5 rounded-lg bg-[#92400e] text-[9px] font-black uppercase hover:bg-[#a86207]" title="下载 capability-presets.json / capability-sets.json 到本地">
+                导出为本地种子
               </button>
               <button onClick={() => setShowImportExport(false)} className="px-3 py-1.5 rounded-lg bg-[#26262c] text-[9px] font-black uppercase hover:bg-[#383842]">
                 关闭
@@ -603,7 +1042,7 @@ const CapabilityPresetSection: React.FC<{
             </div>
           </div>
           <p className="text-[8px] text-gray-500">
-            从仓库加载：使用当前站点 public/capability-seed/ 中的种子。或将 capability-presets.json / capability-sets.json 拖入下方区域导入。
+            从本地种子加载：使用当前站点 public/capability-seed/ 中的默认种子。或将 capability-presets.json / capability-sets.json 拖入下方区域导入。
           </p>
           <div
             className={`min-h-[120px] rounded-xl border-2 border-dashed flex items-center justify-center transition-colors ${seedDropActive ? 'border-blue-500 bg-[#1a3354]' : 'border-[#3a3a40] bg-[#16161a]'}`}
@@ -622,14 +1061,13 @@ const CapabilityPresetSection: React.FC<{
           <div>
             <span className="text-[8px] font-black text-gray-500 uppercase">分类</span>
             <div className="flex gap-2 mt-1">
-              {CAPABILITY_CATEGORIES.map((c) => (
+              {CAPABILITY_CATEGORIES.filter((c) => c.id !== 'image_process').map((c) => (
                 <button
                   key={c.id}
                   type="button"
                   onClick={() => {
                     setNewCategory(c.id);
                     if (c.id === 'image_gen') setNewEngine('gen_image');
-                    if (c.id === 'image_process') setNewEngine('builtin');
                   }}
                   className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${newCategory === c.id ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300' : 'bg-[#1c1c22] border-[#2e2e32] text-gray-500 hover:bg-[#2e2e36]'}`}
                   title={c.desc}
@@ -825,27 +1263,34 @@ const CapabilityPresetSection: React.FC<{
       )}
 
       <div className="space-y-3">
-        {presets.length === 0 && effectiveUninstalledPresetItems.length === 0 ? (
+        {visiblePresets.length === 0 && effectiveUninstalledPresetItems.length === 0 ? (
           <div className="rounded-2xl border border-[#2e2e32] bg-[#16161a] p-8 text-center text-gray-500 text-[10px]">
-            暂无功能预设，点击「新增功能预设」添加；远程能力加载后将显示在下方。
+            {viewMode === 'image_process'
+              ? '暂无图像处理能力。'
+              : '暂无基础能力预设，点击「新增能力」添加；远程能力加载后将显示在下方。'}
           </div>
         ) : (
           <>
-          {presets.map((p) => (
-            <div key={p.id} className="rounded-2xl border border-[#2e2e32] bg-[#16161a] p-4">
+          {visiblePresets.map((p) => (
+            <div
+              key={p.id}
+              ref={(el) => {
+                presetCardRefs.current[p.id] = el;
+              }}
+              className="rounded-2xl border border-[#2e2e32] bg-[#16161a] p-4"
+            >
               {editingId === p.id ? (
                 <>
                   <div className="mb-2">
                     <span className="text-[8px] font-black text-gray-500 uppercase">分类</span>
                     <div className="flex gap-2 mt-1">
-                      {CAPABILITY_CATEGORIES.map((c) => (
+                      {CAPABILITY_CATEGORIES.filter((c) => c.id !== 'image_process').map((c) => (
                         <button
                         key={c.id}
                         type="button"
                         onClick={() => {
                           setEditCategory(c.id);
                           if (c.id === 'image_gen') setEditEngine('gen_image');
-                          if (c.id === 'image_process') setEditEngine('builtin');
                           if (c.id === 'generate_3d') setEditGenerate3D(p.category === 'generate_3d' && p.generate3D ? { ...p.generate3D } : { ...DEFAULT_GENERATE_3D });
                         }}
                         className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${editCategory === c.id ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300' : 'bg-[#1c1c22] border-[#2e2e32] text-gray-500'}`}
@@ -1044,106 +1489,216 @@ const CapabilityPresetSection: React.FC<{
                 </>
               ) : (
                 <>
-                  <div className="flex items-center justify-between gap-2 flex-wrap">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-[10px] font-black uppercase">{p.label}</span>
-                      <span className={`px-2 py-0.5 rounded text-[8px] font-black uppercase ${p.enabled === false ? 'bg-[#4a1c1c] text-red-400' : 'bg-[#166534] text-green-400'}`}>
-                        {p.enabled === false ? '禁用' : '启用'}
-                      </span>
-                      {p.category === 'image_process' && getEngine(p) === 'gen_image' && (
-                        <span className="px-2 py-0.5 rounded text-[8px] font-black uppercase bg-[#3d3018] text-amber-300">
-                          生图执行
+                  <div className="flex gap-3 items-stretch">
+                    <div
+                      className={`relative shrink-0 w-[9.5rem] min-h-[12rem] self-stretch rounded-xl border border-[#2e2e32] bg-[#0f0f10] overflow-hidden flex items-center justify-center ${
+                        getCardPreviewSrc(p)
+                          ? 'cursor-pointer hover:ring-2 hover:ring-blue-500/40'
+                          : ''
+                      }`}
+                      title="预览对比：左原图、右生成图；悬浮移动分割线"
+                      onClick={() => openLightboxPreview(p)}
+                      onMouseMove={(e) => {
+                        if (!getGeneratedPreviewThumbSrc(p) || !getOriginalPreviewThumbSrc(p)) return;
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        if (!rect.width) return;
+                        const ratio = (e.clientX - rect.left) / rect.width;
+                        const clamped = Math.max(0.1, Math.min(0.9, ratio));
+                        setPreviewSplitRatio((prev) => ({ ...prev, [p.id]: clamped }));
+                      }}
+                      onMouseLeave={() => {
+                        if (!getGeneratedPreviewThumbSrc(p) || !getOriginalPreviewThumbSrc(p)) return;
+                        setPreviewSplitRatio((prev) => ({ ...prev, [p.id]: 0.5 }));
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key !== 'Enter' && e.key !== ' ') return;
+                        openLightboxPreview(p);
+                      }}
+                      role={getCardPreviewSrc(p) ? 'button' : undefined}
+                      tabIndex={getCardPreviewSrc(p) ? 0 : undefined}
+                    >
+                      {(() => {
+                        const originalSrc = getOriginalPreviewThumbSrc(p);
+                        const generatedSrc = getGeneratedPreviewThumbSrc(p);
+                        const src = getCardPreviewSrc(p);
+                        if (src) {
+                          if (originalSrc && generatedSrc) {
+                            const split = previewSplitRatio[p.id] ?? 0.5;
+                            const splitPct = split * 100;
+                            const slant = 4;
+                            const topCut = Math.max(0, Math.min(100, splitPct + slant));
+                            const bottomCut = Math.max(0, Math.min(100, splitPct - slant));
+                            const lineTopLeft = Math.max(0, Math.min(100, topCut - 0.35));
+                            const lineTopRight = Math.max(0, Math.min(100, topCut + 0.35));
+                            const lineBottomLeft = Math.max(0, Math.min(100, bottomCut - 0.35));
+                            const lineBottomRight = Math.max(0, Math.min(100, bottomCut + 0.35));
+                            return (
+                              <>
+                                <img src={originalSrc} alt="" className="absolute inset-0 h-full w-full min-h-[12rem] object-cover" />
+                                <img
+                                  src={generatedSrc}
+                                  alt=""
+                                  className="absolute inset-0 h-full w-full min-h-[12rem] object-cover"
+                                  style={{ clipPath: `polygon(${topCut}% 0%, 100% 0%, 100% 100%, ${bottomCut}% 100%)` }}
+                                />
+                                <div
+                                  className="absolute inset-0 pointer-events-none"
+                                  style={{
+                                    clipPath: `polygon(${lineTopLeft}% 0%, ${lineTopRight}% 0%, ${lineBottomRight}% 100%, ${lineBottomLeft}% 100%)`,
+                                    background: 'linear-gradient(180deg, rgba(255,255,255,0.82) 0%, rgba(191,219,254,0.92) 50%, rgba(255,255,255,0.78) 100%)',
+                                    boxShadow: '0 0 10px rgba(59,130,246,0.35)',
+                                  }}
+                                />
+                              </>
+                            );
+                          }
+                          return <img src={src} alt="" className="h-full w-full min-h-[12rem] object-cover" />;
+                        }
+                        const iconName =
+                          p.category === 'generate_3d' ? 'cube' : p.category === 'image_process' ? 'camera' : 'image';
+                        return (
+                          <div className="flex flex-col items-center justify-center gap-1 text-gray-600 px-1">
+                            <AppIcon name={iconName} className="w-12 h-12 opacity-75" />
+                            <span className="text-[7px] font-black uppercase tracking-wide text-gray-500">预览</span>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                    <div className="flex-1 min-w-0 min-h-0 flex flex-col gap-1.5">
+                      <div className="flex-1 min-h-0 flex flex-col gap-1.5">
+                      <div className="flex items-start justify-between gap-2 flex-wrap">
+                        <div className="flex flex-col gap-1 min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="text-[10px] font-black uppercase truncate">{p.label}</span>
+                            <span className={`shrink-0 px-2 py-0.5 rounded text-[8px] font-black uppercase ${p.enabled === false ? 'bg-[#4a1c1c] text-red-400' : 'bg-[#166534] text-green-400'}`}>
+                              {p.enabled === false ? '禁用' : '启用'}
+                            </span>
+                            {p.category === 'image_process' && getEngine(p) === 'gen_image' && (
+                              <span className="shrink-0 px-2 py-0.5 rounded text-[8px] font-black uppercase bg-[#3d3018] text-amber-300">
+                                生图执行
+                              </span>
+                            )}
+                            {isBuiltinImageProcess(p) && (
+                              <span className="shrink-0 px-2 py-0.5 rounded text-[8px] font-black uppercase bg-[#1e3558] text-blue-300" title="系统内置图像处理能力">
+                                系统内置
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="px-2 py-0.5 rounded text-[8px] font-black uppercase bg-[#26262c] text-gray-400">
+                              {CAPABILITY_CATEGORIES.find((c) => c.id === p.category)?.label ?? p.category}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap gap-1 justify-end shrink-0">
+                          {!isBuiltinImageProcess(p) && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => movePreset(p.id, -1)}
+                                className="px-2 py-1 rounded-lg bg-[#26262c] text-[8px] font-black uppercase hover:bg-[#383842]"
+                                title="上移"
+                              >
+                                ↑
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => movePreset(p.id, 1)}
+                                className="px-2 py-1 rounded-lg bg-[#26262c] text-[8px] font-black uppercase hover:bg-[#383842]"
+                                title="下移"
+                              >
+                                ↓
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => toggleEnabled(p.id)}
+                                className={`px-2 py-1 rounded-lg text-[8px] font-black uppercase hover:bg-[#383842] ${p.enabled === false ? 'bg-[#14532d] text-emerald-300' : 'bg-[#26262c] text-gray-200'}`}
+                                title={p.enabled === false ? '启用' : '禁用'}
+                              >
+                                {p.enabled === false ? '启用' : '禁用'}
+                              </button>
+                            </>
+                          )}
+                          <button
+                            type="button"
+                            disabled={isBuiltinImageProcess(p)}
+                            onClick={() => {
+                              if (isBuiltinImageProcess(p)) return;
+                              setEditingId(p.id);
+                              setEditLabel(p.label);
+                              setEditCategory(p.category);
+                              setEditEngine(getEngine(p));
+                              setEditEnabled(p.enabled !== false);
+                              setEditImageGear(getGear(p));
+                              setEditImageAspectRatio(p.imageAspectRatio ?? '');
+                              setEditImageSize(p.imageSize ?? '');
+                              setEditInstruction(((p as { instructionFixed?: string }).instructionFixed ?? p.instruction) || '');
+                              setEditGenerate3D(p.category === 'generate_3d' && p.generate3D ? { ...p.generate3D } : { ...DEFAULT_GENERATE_3D });
+                            }}
+                            className="px-2 py-1 rounded-lg bg-[#26262c] text-[8px] font-black uppercase hover:bg-[#383842] disabled:opacity-50"
+                          >
+                            编辑
+                          </button>
+                          {canUploadToR2 && (
+                            <button
+                              type="button"
+                              onClick={() => void uploadPresetToR2(p)}
+                              disabled={!!uploadingPresetIds[p.id]}
+                              className="px-2 py-1 rounded-lg bg-[#1e3558] text-blue-300 text-[8px] font-black uppercase hover:bg-[#305a90] disabled:opacity-50"
+                              title="将本预设（含卡片预览图）写入 R2 能力商店目录，他人配置同源商店后可刷新同步"
+                            >
+                              {uploadingPresetIds[p.id] ? '上传中…' : '上传R2'}
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => removePreset(p.id)}
+                            disabled={isBuiltinImageProcess(p)}
+                            className="px-2 py-1 rounded-lg bg-[#4a1c1c] text-red-400 text-[8px] font-black uppercase hover:bg-[#5a2222] disabled:opacity-50"
+                          >
+                            删除
+                          </button>
+                        </div>
+                      </div>
+                      <div className="text-[7px] text-gray-500 flex flex-wrap items-center gap-x-2 gap-y-0.5 leading-tight">
+                        <span className="font-mono truncate max-w-[10rem]" title={p.id}>
+                          id: {p.id}
                         </span>
+                        <span>预设 {p.instruction?.length ?? 0} 字</span>
+                        {(p.category === 'image_gen' || getEngine(p) === 'gen_image') && (p.imageAspectRatio || p.imageSize) && (
+                          <span>
+                            {p.imageAspectRatio || '—'} / {p.imageSize || '—'}
+                          </span>
+                        )}
+                        {presetSourceMap.get(p.id) ? (
+                          <span className="px-1 py-0.5 rounded bg-[#3d3018] text-amber-300/90" title="来自远程能力包">
+                            「{presetSourceMap.get(p.id)}」
+                          </span>
+                        ) : (
+                          <span className="px-1 py-0.5 rounded bg-[#26262c] text-gray-400" title="本地添加">
+                            本地
+                          </span>
+                        )}
+                      </div>
+                      {p.instruction ? (
+                        <p className="text-[9px] text-gray-500 break-words line-clamp-2 leading-snug">{p.instruction}</p>
+                      ) : (
+                        <p className="text-[9px] text-gray-600 leading-snug">（使用内置逻辑或未设置预设提示词）</p>
                       )}
-                    </div>
-                    <span className="px-2 py-0.5 rounded text-[8px] font-black uppercase bg-[#26262c] text-gray-400">
-                      {CAPABILITY_CATEGORIES.find((c) => c.id === p.category)?.label ?? p.category}
-                    </span>
-                    <div className="flex gap-1">
-                      <button
-                        onClick={() => movePreset(p.id, -1)}
-                        className="px-2 py-1 rounded-lg bg-[#26262c] text-[8px] font-black uppercase hover:bg-[#383842]"
-                        title="上移"
-                      >
-                        ↑
-                      </button>
-                      <button
-                        onClick={() => movePreset(p.id, 1)}
-                        className="px-2 py-1 rounded-lg bg-[#26262c] text-[8px] font-black uppercase hover:bg-[#383842]"
-                        title="下移"
-                      >
-                        ↓
-                      </button>
-                      <button
-                        onClick={() => toggleEnabled(p.id)}
-                        className={`px-2 py-1 rounded-lg text-[8px] font-black uppercase hover:bg-[#383842] ${p.enabled === false ? 'bg-[#14532d] text-emerald-300' : 'bg-[#26262c] text-gray-200'}`}
-                        title={p.enabled === false ? '启用' : '禁用'}
-                      >
-                        {p.enabled === false ? '启用' : '禁用'}
-                      </button>
-                      <button
-                        onClick={() => {
-                          setEditingId(p.id);
-                          setEditLabel(p.label);
-                          setEditCategory(p.category);
-                          setEditEngine(getEngine(p));
-                          setEditEnabled(p.enabled !== false);
-                          setEditImageGear(getGear(p));
-                          setEditImageAspectRatio(p.imageAspectRatio ?? '');
-                          setEditImageSize(p.imageSize ?? '');
-                          setEditInstruction(((p as { instructionFixed?: string }).instructionFixed ?? p.instruction) || '');
-                          setEditGenerate3D(p.category === 'generate_3d' && p.generate3D ? { ...p.generate3D } : { ...DEFAULT_GENERATE_3D });
-                        }}
-                        className="px-2 py-1 rounded-lg bg-[#26262c] text-[8px] font-black uppercase hover:bg-[#383842]"
-                      >
-                        编辑
-                      </button>
-                      {canUploadToR2 && (
-                        <button
-                          type="button"
-                          onClick={() => void uploadPresetToR2(p)}
-                          disabled={!!uploadingPresetIds[p.id]}
-                          className="px-2 py-1 rounded-lg bg-[#1e3558] text-blue-300 text-[8px] font-black uppercase hover:bg-[#305a90] disabled:opacity-50"
-                          title="上传该能力预设到 R2（并自动更新用户 catalog）"
-                        >
-                          {uploadingPresetIds[p.id] ? '上传中…' : '上传R2'}
-                        </button>
+                      {p.category === 'generate_3d' && p.generate3D && (
+                        <p className="text-[8px] text-amber-500/90 line-clamp-2 leading-snug">
+                          {p.generate3D.module === 'pro' ? '专业版' : '极速版'}
+                          {p.generate3D.model ? ` ${p.generate3D.model}` : ''}
+                          {p.generate3D.enablePBR ? ' · PBR' : ''}
+                          {p.generate3D.generateType ? ` · ${p.generate3D.generateType}` : ''}
+                          {p.generate3D.faceCount ? ` · ${p.generate3D.faceCount} 面` : ''}
+                          <span className="text-gray-500"> — 拖图即按此预设提交3D</span>
+                        </p>
                       )}
-                      <button onClick={() => removePreset(p.id)} className="px-2 py-1 rounded-lg bg-[#4a1c1c] text-red-400 text-[8px] font-black uppercase hover:bg-[#5a2222]">删除</button>
-                    </div>
-                  </div>
-                  <div className="mt-2 text-[8px] text-gray-500 space-x-3 flex flex-wrap items-center gap-x-3 gap-y-1">
-                    <span>id: {p.id}</span>
-                    <span>分类: {p.category}</span>
-                    <span>预设: {p.instruction?.length ?? 0} 字</span>
-                    {(p.category === 'image_gen' || getEngine(p) === 'gen_image') && (p.imageAspectRatio || p.imageSize) && (
-                      <span>比例/尺寸: {p.imageAspectRatio || '—'} / {p.imageSize || '—'}</span>
-                    )}
-                    {presetSourceMap.get(p.id) ? (
-                      <span className="px-1.5 py-0.5 rounded bg-[#3d3018] text-amber-300/90" title="来自远程能力包">来自「{presetSourceMap.get(p.id)}」</span>
-                    ) : (
-                      <span className="px-1.5 py-0.5 rounded bg-[#26262c] text-gray-400" title="本地添加">本地</span>
-                    )}
-                    {p.instruction ? <span className="text-gray-600 truncate max-w-[200px] inline-block align-bottom" title={p.instruction}>{p.instruction.slice(0, 30)}…</span> : null}
-                  </div>
-                  {p.instruction ? (
-                    <p className="mt-1 text-[9px] text-gray-500 break-words line-clamp-2">{p.instruction}</p>
-                  ) : (
-                    <p className="mt-1 text-[9px] text-gray-600">（使用内置逻辑或未设置预设提示词）</p>
-                  )}
-                  {p.category === 'generate_3d' && p.generate3D && (
-                    <p className="mt-1 text-[8px] text-amber-500/90">
-                      {p.generate3D.module === 'pro' ? '专业版' : '极速版'}
-                      {p.generate3D.model ? ` ${p.generate3D.model}` : ''}
-                      {p.generate3D.enablePBR ? ' · PBR' : ''}
-                      {p.generate3D.generateType ? ` · ${p.generate3D.generateType}` : ''}
-                      {p.generate3D.faceCount ? ` · ${p.generate3D.faceCount} 面` : ''}
-                      — 工作流中拖图到本能力即按此预设提交3D
-                    </p>
-                  )}
-                  {onRunTest && p.category !== 'generate_3d' && (
-                    <div className="mt-3 pt-3 border-t border-[#2e2e32]">
-                      <div className="text-[8px] font-black text-gray-500 uppercase mb-2">测试区域</div>
+                      </div>
+                      {onRunTest && p.category !== 'generate_3d' && (
+                    <div className="mt-auto pt-2 border-t border-[#2e2e32] shrink-0">
+                      <div className="text-[8px] font-black text-gray-500 uppercase mb-1.5">测试区域</div>
                       <div className="flex flex-wrap gap-2 items-center">
                         <input
                           ref={(el) => { fileInputRef.current[p.id] = el; }}
@@ -1153,7 +1708,7 @@ const CapabilityPresetSection: React.FC<{
                           onChange={(e) => handleFile(p.id, e)}
                         />
                         <button type="button" onClick={() => fileInputRef.current[p.id]?.click()} className="px-2 py-1.5 rounded-lg bg-[#26262c] text-[8px] font-black uppercase hover:bg-[#383842]">
-                          上传测试图
+                          上传预览图
                         </button>
                         <button
                           type="button"
@@ -1163,12 +1718,6 @@ const CapabilityPresetSection: React.FC<{
                         >
                           {testRunning[p.id] ? '运行中…' : '运行测试'}
                         </button>
-                        {testImage[p.id] && (
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-[8px] text-gray-500">预览：</span>
-                            <img src={testImage[p.id]} alt="测试图" className="h-12 w-12 object-cover rounded border border-[#3a3a40] shrink-0" />
-                          </div>
-                        )}
                       </div>
                       {testResult[p.id] != null && (
                         <div className="mt-2 p-2 rounded-lg bg-[#141416] border border-[#2e2e32]">
@@ -1184,83 +1733,108 @@ const CapabilityPresetSection: React.FC<{
                             )}
                           </div>
                           {testResult[p.id]!.ok && testResult[p.id]!.resultImage && (
-                            <div className="mt-2">
-                              <span className="text-[8px] text-gray-500 uppercase">结果预览（点击放大）</span>
-                              <button type="button" onClick={() => setLightboxImage(testResult[p.id]!.resultImage!)} className="mt-1 block w-full text-left">
-                                <img src={testResult[p.id]!.resultImage} alt="结果" className="max-h-32 w-auto max-w-full rounded border border-[#2e2e32] object-contain cursor-pointer hover:border-[#3b82f6] transition-colors" />
-                              </button>
-                            </div>
+                            <p className="mt-1.5 text-[8px] text-gray-500">
+                              结果图已显示在左侧预览，点击预览可放大查看。
+                            </p>
                           )}
                         </div>
                       )}
                     </div>
-                  )}
+                      )}
+                    </div>
+                  </div>
                 </>
               )}
             </div>
           ))}
 
-          {effectiveUninstalledPresetItems.map((rp) => (
-            <div key={`remote-${rp.pack.id}-${rp.preset.id}`} className="rounded-2xl border border-[#2e2e32] bg-[#16161a] p-4">
-              <div className="flex items-center justify-between gap-2 flex-wrap">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-[10px] font-black uppercase">{rp.preset.label}</span>
-                  <span className="px-2 py-0.5 rounded text-[8px] font-black uppercase bg-[#3f3f46] text-gray-400">
-                    未安装
-                  </span>
-                  {rp.preset.category === 'image_process' && getEngine(rp.preset) === 'gen_image' && (
-                    <span className="px-2 py-0.5 rounded text-[8px] font-black uppercase bg-[#3d3018] text-amber-300">
-                      生图执行
-                    </span>
-                  )}
-                </div>
-                <span className="px-2 py-0.5 rounded text-[8px] font-black uppercase bg-[#26262c] text-gray-400">
-                  {CAPABILITY_CATEGORIES.find((c) => c.id === rp.preset.category)?.label ?? rp.preset.category}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => installSinglePreset(rp.preset)}
-                  disabled={catalogLoading || packContentsLoading}
-                  className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-[9px] font-black uppercase"
-                >
-                  安装
-                </button>
-              </div>
-              <div className="mt-2 text-[8px] text-gray-500 space-x-3 flex flex-wrap items-center gap-x-3 gap-y-1">
-                <span>id: {rp.preset.id}</span>
-                <span>分类: {rp.preset.category}</span>
-                {rp.preset.instruction && (
-                  <span className="text-gray-600 truncate max-w-[200px] inline-block" title={rp.preset.instruction}>
-                    {rp.preset.instruction.slice(0, 30)}…
-                  </span>
-                )}
-              </div>
-              {rp.preset.instruction ? (
-                <p className="mt-1 text-[9px] text-gray-500 break-words line-clamp-2">{rp.preset.instruction}</p>
-              ) : (
-                <p className="mt-1 text-[9px] text-gray-600">（使用内置逻辑或未设置预设提示词）</p>
-              )}
+          {effectiveUninstalledPresetItems.length > 0 && (
+            <div className="rounded-2xl border border-[#2e2e32] bg-[#16161a] p-4 text-[9px] text-gray-400">
+              检测到 {effectiveUninstalledPresetItems.length} 条远程预设，点击上方「刷新同步」即可自动同步。
             </div>
-          ))}
+          )}
           </>
         )}
       </div>
 
-      {lightboxImage && (
-        <div
-          className="fixed inset-0 z-[3000] flex items-center justify-center bg-black/78 backdrop-blur-sm p-4"
-          onClick={() => setLightboxImage(null)}
-          role="button"
-          tabIndex={0}
-          onKeyDown={(e) => e.key === 'Escape' && setLightboxImage(null)}
-          aria-label="关闭"
-        >
-          <button type="button" onClick={() => setLightboxImage(null)} className="absolute top-4 right-4 w-10 h-10 flex items-center justify-center text-white/70 hover:text-white rounded-full bg-[#26262c]"><AppIcon name="close" className="w-4 h-4" /></button>
-          <img src={lightboxImage} alt="结果大图" className="max-h-[90vh] max-w-full object-contain rounded-lg shadow-2xl" onClick={(e) => e.stopPropagation()} />
-        </div>
-      )}
+      {typeof document !== 'undefined' &&
+        (lightboxImage || lightboxCompare) &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/78 backdrop-blur-sm p-4"
+            onClick={() => {
+              setLightboxImage(null);
+              setLightboxCompare(null);
+            }}
+            role="presentation"
+          >
+            <button
+              type="button"
+              onClick={() => {
+                setLightboxImage(null);
+                setLightboxCompare(null);
+              }}
+              className="absolute top-4 right-4 z-[10001] w-10 h-10 flex items-center justify-center text-white/70 hover:text-white rounded-full bg-[#26262c]"
+              aria-label="关闭"
+            >
+              <AppIcon name="close" className="w-4 h-4" />
+            </button>
+            {lightboxCompare ? (
+              <div
+                className="relative w-full max-w-[min(100vw-2rem,1200px)] h-[min(90vh,860px)] rounded-lg overflow-hidden shadow-2xl bg-[#0f0f10]"
+                onClick={(e) => e.stopPropagation()}
+                onMouseMove={(e) => {
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  if (!rect.width) return;
+                  const ratio = (e.clientX - rect.left) / rect.width;
+                  setLightboxSplitRatio(Math.max(0.05, Math.min(0.95, ratio)));
+                }}
+                onMouseLeave={() => setLightboxSplitRatio(0.5)}
+              >
+                {(() => {
+                  const splitPct = lightboxSplitRatio * 100;
+                  const slant = 4;
+                  const topCut = Math.max(0, Math.min(100, splitPct + slant));
+                  const bottomCut = Math.max(0, Math.min(100, splitPct - slant));
+                  const lineTopLeft = Math.max(0, Math.min(100, topCut - 0.25));
+                  const lineTopRight = Math.max(0, Math.min(100, topCut + 0.25));
+                  const lineBottomLeft = Math.max(0, Math.min(100, bottomCut - 0.25));
+                  const lineBottomRight = Math.max(0, Math.min(100, bottomCut + 0.25));
+                  return (
+                    <>
+                      <img src={lightboxCompare.original} alt="原图" className="absolute inset-0 h-full w-full object-contain" />
+                      <img
+                        src={lightboxCompare.generated}
+                        alt="生成图"
+                        className="absolute inset-0 h-full w-full object-contain"
+                        style={{ clipPath: `polygon(${topCut}% 0%, 100% 0%, 100% 100%, ${bottomCut}% 100%)` }}
+                      />
+                      <div
+                        className="absolute inset-0 pointer-events-none"
+                        style={{
+                          clipPath: `polygon(${lineTopLeft}% 0%, ${lineTopRight}% 0%, ${lineBottomRight}% 100%, ${lineBottomLeft}% 100%)`,
+                          background: 'linear-gradient(180deg, rgba(255,255,255,0.82) 0%, rgba(191,219,254,0.92) 50%, rgba(255,255,255,0.78) 100%)',
+                          boxShadow: '0 0 10px rgba(59,130,246,0.35)',
+                        }}
+                      />
+                    </>
+                  );
+                })()}
+              </div>
+            ) : (
+              <img
+                src={lightboxImage || ''}
+                alt="预览大图"
+                className="max-h-[90vh] max-w-[min(100vw-2rem,1200px)] w-auto object-contain rounded-lg shadow-2xl"
+                onClick={(e) => e.stopPropagation()}
+              />
+            )}
+          </div>,
+          document.body
+        )}
         </>
       )}
+      </div>
     </div>
   );
 };

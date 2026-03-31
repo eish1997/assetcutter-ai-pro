@@ -2,6 +2,7 @@ import type { CapabilityCategory, CustomAppModule } from '../types';
 
 export const CAPABILITY_PRESETS_KEY = 'ac_capability_presets';
 export const CAPABILITY_PRESETS_VERSION = 3;
+export const BUILTIN_IMAGE_PROCESS_IDS = ['cut_image'] as const;
 
 type CapabilityPresetsPayload = {
   version: number;
@@ -39,6 +40,22 @@ export function normalizeCapabilityPreset(input: CustomAppModule, index: number)
     // 非 3D 不应带 generate3D
     delete (base as any).generate3D;
   }
+  // 避免把大体积 data URL 写入 localStorage 导致 QUOTA_EXCEEDED_ERR
+  if (typeof base.previewImage === 'string' && base.previewImage.trim().startsWith('data:')) {
+    delete (base as CustomAppModule & { previewImage?: string }).previewImage;
+  }
+  if (typeof base.previewOriginalImage === 'string' && base.previewOriginalImage.trim().startsWith('data:')) {
+    delete (base as CustomAppModule & { previewOriginalImage?: string }).previewOriginalImage;
+  }
+  if (typeof base.previewGeneratedImage === 'string' && base.previewGeneratedImage.trim().startsWith('data:')) {
+    delete (base as CustomAppModule & { previewGeneratedImage?: string }).previewGeneratedImage;
+  }
+  if (typeof base.previewOriginalThumbImage === 'string' && base.previewOriginalThumbImage.trim().startsWith('data:')) {
+    delete (base as CustomAppModule & { previewOriginalThumbImage?: string }).previewOriginalThumbImage;
+  }
+  if (typeof base.previewGeneratedThumbImage === 'string' && base.previewGeneratedThumbImage.trim().startsWith('data:')) {
+    delete (base as CustomAppModule & { previewGeneratedThumbImage?: string }).previewGeneratedThumbImage;
+  }
   return base;
 }
 
@@ -49,13 +66,35 @@ const DEFAULT_PRESETS: CustomAppModule[] = [
   { id: 'cut_image', label: '切割图片', category: 'image_process', engine: 'builtin', enabled: true, order: 3, instruction: '' },
 ];
 
-/** 工作流依赖的内置能力：若列表中缺失则自动补上，保证切割等功能始终可用 */
-const REQUIRED_BUILTIN_IDS = ['cut_image'] as const;
-function ensureRequiredBuiltins(list: CustomAppModule[]): CustomAppModule[] {
-  const ids = new Set(list.map((p) => p.id));
-  const toAdd = DEFAULT_PRESETS.filter((p) => REQUIRED_BUILTIN_IDS.includes(p.id as typeof REQUIRED_BUILTIN_IDS[number]) && !ids.has(p.id));
-  if (toAdd.length === 0) return list;
-  return mergeCapabilityPresets(list, toAdd);
+const BUILTIN_IMAGE_PROCESS_PRESETS = DEFAULT_PRESETS.filter((p) =>
+  BUILTIN_IMAGE_PROCESS_IDS.includes(p.id as (typeof BUILTIN_IMAGE_PROCESS_IDS)[number])
+).map((p, i) => normalizeCapabilityPreset({ ...p, order: i, enabled: true, engine: 'builtin' }, i));
+
+/** 仅内置图像处理能力（如 cut_image）始终存在，其余能力仍走预设体系 */
+export function enforceBuiltinImageProcessPresets(list: CustomAppModule[]): CustomAppModule[] {
+  const nonBuiltin = list.filter(
+    (p) => !BUILTIN_IMAGE_PROCESS_IDS.includes(p.id as (typeof BUILTIN_IMAGE_PROCESS_IDS)[number])
+  );
+  const map = new Map<string, CustomAppModule>();
+  nonBuiltin.forEach((p, i) => {
+    map.set(p.id, normalizeCapabilityPreset(p, i));
+  });
+  BUILTIN_IMAGE_PROCESS_PRESETS.forEach((p) => {
+    map.set(
+      p.id,
+      normalizeCapabilityPreset(
+        {
+          ...p,
+          enabled: true,
+          engine: 'builtin',
+          category: 'image_process',
+        },
+        map.size
+      )
+    );
+  });
+  const result = Array.from(map.values()).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  return result.map((p, i) => ({ ...p, order: i }));
 }
 
 export function loadCapabilityPresets(): CustomAppModule[] {
@@ -66,22 +105,24 @@ export function loadCapabilityPresets(): CustomAppModule[] {
       if (raw) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          const normalized = parsed.map((p: CustomAppModule, i: number) => normalizeCapabilityPreset(p, i));
+          const normalized = enforceBuiltinImageProcessPresets(
+            parsed.map((p: CustomAppModule, i: number) => normalizeCapabilityPreset(p, i))
+          );
           saveCapabilityPresets(normalized);
           localStorage.removeItem('ac_custom_modules');
           return normalized;
         }
       }
-      const def = DEFAULT_PRESETS.map((p, i) => normalizeCapabilityPreset(p, i));
+      const def = enforceBuiltinImageProcessPresets(DEFAULT_PRESETS.map((p, i) => normalizeCapabilityPreset(p, i)));
       saveCapabilityPresets(def);
       return def;
     }
     const parsed = JSON.parse(raw);
     // v1: 直接数组
     if (Array.isArray(parsed)) {
-      if (parsed.length === 0) return DEFAULT_PRESETS;
+      if (parsed.length === 0) return enforceBuiltinImageProcessPresets(DEFAULT_PRESETS);
       let normalized = parsed.map((p: CustomAppModule, i: number) => normalizeCapabilityPreset(p, i));
-      normalized = ensureRequiredBuiltins(normalized);
+      normalized = enforceBuiltinImageProcessPresets(normalized);
       saveCapabilityPresets(normalized);
       return normalized;
     }
@@ -89,37 +130,40 @@ export function loadCapabilityPresets(): CustomAppModule[] {
     if (parsed && typeof parsed === 'object' && Array.isArray((parsed as CapabilityPresetsPayload).presets)) {
       const list = (parsed as CapabilityPresetsPayload).presets;
       let normalized = list.map((p: CustomAppModule, i: number) => normalizeCapabilityPreset(p, i));
-      normalized = ensureRequiredBuiltins(normalized);
+      normalized = enforceBuiltinImageProcessPresets(normalized);
       // 版本不一致或字段缺失时回写一次
       if ((parsed as CapabilityPresetsPayload).version !== CAPABILITY_PRESETS_VERSION) {
         saveCapabilityPresets(normalized);
       }
       return normalized;
     }
-    return DEFAULT_PRESETS;
+    return enforceBuiltinImageProcessPresets(DEFAULT_PRESETS);
   } catch {
-    return DEFAULT_PRESETS;
+    return enforceBuiltinImageProcessPresets(DEFAULT_PRESETS);
   }
 }
 
 export function saveCapabilityPresets(list: CustomAppModule[]): void {
-  const normalized = list.map((p, i) => normalizeCapabilityPreset(p, i));
+  const normalized = enforceBuiltinImageProcessPresets(list.map((p, i) => normalizeCapabilityPreset(p, i)));
   const payload: CapabilityPresetsPayload = { version: CAPABILITY_PRESETS_VERSION, presets: normalized };
   localStorage.setItem(CAPABILITY_PRESETS_KEY, JSON.stringify(payload));
 }
 
 /** 合并覆盖：同 id 覆盖；返回完整列表（按 order 重新排序并重排 order） */
 export function mergeCapabilityPresets(existing: CustomAppModule[], next: CustomAppModule[]): CustomAppModule[] {
+  const nextFiltered = next.filter(
+    (p) => !BUILTIN_IMAGE_PROCESS_IDS.includes(p.id as (typeof BUILTIN_IMAGE_PROCESS_IDS)[number])
+  );
   const map = new Map<string, CustomAppModule>();
   existing.forEach((p, i) => {
     const n = normalizeCapabilityPreset(p, i);
     map.set(n.id, n);
   });
-  next.forEach((p, i) => {
+  nextFiltered.forEach((p, i) => {
     const n = normalizeCapabilityPreset(p, existing.length + i);
     map.set(n.id, n);
   });
   const list = Array.from(map.values()).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-  return list.map((p, i) => ({ ...p, order: i }));
+  return enforceBuiltinImageProcessPresets(list.map((p, i) => ({ ...p, order: i })));
 }
 

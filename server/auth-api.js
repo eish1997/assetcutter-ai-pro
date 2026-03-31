@@ -170,13 +170,14 @@ function assertCsrf(req, res) {
   return false;
 }
 
-function readBody(req) {
+function readBody(req, options = {}) {
+  const maxBytes = typeof options.maxBytes === 'number' ? options.maxBytes : BODY_LIMIT;
   return new Promise((resolve, reject) => {
     let size = 0;
     let chunks = '';
     req.on('data', (chunk) => {
       size += chunk.length;
-      if (size > BODY_LIMIT) {
+      if (size > maxBytes) {
         reject(new Error('请求体过大'));
         req.destroy();
         return;
@@ -480,7 +481,7 @@ const server = http.createServer(async (req, res) => {
           json(res, 503, { error: 'R2 未配置，无法发布能力预设' });
           return;
         }
-        const body = await readBody(req);
+        const body = await readBody(req, { maxBytes: 12 * 1024 * 1024 });
         const preset = body && typeof body === 'object' ? body.preset : null;
         if (!preset || typeof preset !== 'object') {
           json(res, 400, { error: '缺少 preset' });

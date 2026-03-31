@@ -709,7 +709,6 @@ const MainApp: React.FC = () => {
   const [experimentalNavExpanded, setExperimentalNavExpanded] = useState(false);
 
   const isExperimentalMode = useCallback((m: AppMode) =>
-    m === AppMode.DIALOG ||
     m === AppMode.GENERATE_3D ||
     m === AppMode.TEXTURE ||
     m === AppMode.SEAM_REPAIR ||
@@ -728,6 +727,8 @@ const MainApp: React.FC = () => {
   const [pickerMultiSelect, setPickerMultiSelect] = useState(false);
   const [pickerCallback, setPickerCallback] = useState<(items: LibraryItem[]) => void>(() => {});
   const [globalLogs, setGlobalLogs] = useState<Array<{ id: string; time: number; module: string; level: 'info' | 'warn' | 'error'; message: string; detail?: string }>>([]);
+  const [globalLogOpen, setGlobalLogOpen] = useState(false);
+  const [globalLogCopiedId, setGlobalLogCopiedId] = useState<string | null>(null);
   const addGlobalLog = useCallback((module: string, level: 'info' | 'warn' | 'error', message: string, detail?: string) => {
     setGlobalLogs(prev => [...prev.slice(-199), { id: Math.random().toString(36).slice(2, 11), time: Date.now(), module, level, message, detail }]);
   }, []);
@@ -1730,6 +1731,39 @@ const MainApp: React.FC = () => {
     }
   };
 
+  const handleDialogImagesUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const fileList = e.target.files;
+    const files: File[] = fileList ? Array.from(fileList) : [];
+    const imageFiles = files.filter((f) => f.type.startsWith('image/'));
+    if (imageFiles.length === 0) {
+      e.target.value = '';
+      return;
+    }
+    const room = Math.max(0, DIALOG_INPUT_IMAGES_MAX - dialogInputImages.length);
+    const selected = imageFiles.slice(0, room);
+    if (selected.length === 0) {
+      e.target.value = '';
+      return;
+    }
+    const encoded = await Promise.all(
+      selected.map(
+        (file) =>
+          new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = (ev) => resolve(ev.target?.result as string);
+            reader.onerror = () => reject(new Error(`读取图片失败: ${file.name}`));
+            reader.readAsDataURL(file);
+          })
+      )
+    );
+    setDialogInputImages((prev) => [
+      ...prev,
+      ...encoded.map((data) => ({ id: Math.random().toString(36).slice(2, 11), data, fromTemp: false })),
+    ]);
+    setDialogValidationError(null);
+    e.target.value = '';
+  };
+
   const groupedLibrary = useMemo(() => {
     const groups: Record<string, LibraryItem[]> = {};
     library.forEach(item => {
@@ -2291,6 +2325,9 @@ const MainApp: React.FC = () => {
             <SidebarIconButton active={mode === AppMode.WORKFLOW} label="工作区" onClick={() => { setMode(AppMode.WORKFLOW); setIsSidebarOpen(false); }}>
               <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><path d="M3.5 8.5L10 3.5l6.5 5v8H3.5v-8Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"/><path d="M8 16.5v-4h4v4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
             </SidebarIconButton>
+            <SidebarIconButton active={mode === AppMode.DIALOG} label="对话" onClick={() => { setMode(AppMode.DIALOG); setIsSidebarOpen(false); }}>
+              <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><path d="M4 5.5h12v8H9l-3.5 3v-3H4v-8Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"/></svg>
+            </SidebarIconButton>
             <SidebarIconButton active={mode === AppMode.SETTINGS} label="设置" onClick={() => { setMode(AppMode.SETTINGS); setIsSidebarOpen(false); }}>
               <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><circle cx="10" cy="10" r="2.5" stroke="currentColor" strokeWidth="1.6"/><path d="M10 3v2.1M10 14.9V17M17 10h-2.1M5.1 10H3M14.9 5.1l-1.5 1.5M6.6 13.4l-1.5 1.5M14.9 14.9l-1.5-1.5M6.6 6.6 5.1 5.1" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
             </SidebarIconButton>
@@ -2313,9 +2350,6 @@ const MainApp: React.FC = () => {
 
           {experimentalNavExpanded && (
             <div className="mt-2 pt-2 border-t border-[#2e2e32] flex flex-col gap-2">
-              <SidebarIconButton active={mode === AppMode.DIALOG} label="对话" onClick={() => { setMode(AppMode.DIALOG); setIsSidebarOpen(false); }}>
-                <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><path d="M4 5.5h12v8H9l-3.5 3v-3H4v-8Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"/></svg>
-              </SidebarIconButton>
               <SidebarIconButton active={mode === AppMode.GENERATE_3D} label="生成3D" onClick={() => { setMode(AppMode.GENERATE_3D); setIsSidebarOpen(false); }}>
                 <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><path d="M10 2.8 16 6v8l-6 3.2L4 14V6l6-3.2Z" stroke="currentColor" strokeWidth="1.6"/><path d="M4 6l6 3.1L16 6M10 9.1V17" stroke="currentColor" strokeWidth="1.4"/></svg>
               </SidebarIconButton>
@@ -2342,6 +2376,119 @@ const MainApp: React.FC = () => {
       <Suspense fallback={null}>
         <SiteAssistant tasks={tasks} onRemoveTask={id => setTasks(p => p.filter(t => t.id !== id))} />
       </Suspense>
+
+      {/* 全局日志：悬浮图标（位于网页助手上方）+ 可开关面板 */}
+      <div className="fixed bottom-24 right-6 z-[2001] flex items-center justify-center">
+        <button
+          type="button"
+          onClick={() => setGlobalLogOpen(v => !v)}
+          className={`relative w-12 h-12 rounded-full border shadow-lg flex items-center justify-center transition-all outline-none focus:ring-2 focus:ring-blue-500/50 ${
+            globalLogOpen
+              ? 'bg-[#1a3354] border-[#3b6fb8] text-blue-200'
+              : 'bg-[#16161a] border-[#343438] text-gray-200 hover:bg-[#1f1f24] hover:border-[#3b6fb8]'
+          }`}
+          title={globalLogOpen ? '关闭日志' : '打开日志'}
+          aria-label={globalLogOpen ? '关闭日志' : '打开日志'}
+        >
+          <svg viewBox="0 0 20 20" className="w-5 h-5" fill="none" aria-hidden>
+            <rect x="4" y="3.5" width="12" height="13" rx="1.8" stroke="currentColor" strokeWidth="1.5" />
+            <path d="M7 7h6M7 10h6M7 13h4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+          </svg>
+          {globalLogs.length > 0 ? (
+            <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-blue-600 text-white text-[9px] leading-[18px] text-center border border-[#0f0f10]">
+              {Math.min(globalLogs.length, 99)}
+            </span>
+          ) : null}
+        </button>
+      </div>
+
+      {globalLogOpen && (
+        <div
+          className="fixed bottom-40 right-6 z-[2000] w-[min(420px,calc(100vw-3rem))] max-h-[min(56vh,420px)] rounded-2xl border border-[#343438] bg-[#0f0f0f] shadow-2xl overflow-hidden"
+          role="dialog"
+          aria-label="全局日志"
+        >
+          <div className="px-4 py-3 border-b border-[#2e2e32] bg-[#141416] flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-black uppercase tracking-wider text-white">运行日志</span>
+              <span className="text-[10px] text-gray-500">最近 {globalLogs.length} 条</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setGlobalLogs([])}
+                className="px-2.5 py-1.5 rounded-lg border border-white/10 bg-white/5 text-[10px] text-gray-300 hover:bg-white/10 transition-colors"
+              >
+                清空
+              </button>
+              <button
+                type="button"
+                onClick={() => setGlobalLogOpen(false)}
+                className="w-7 h-7 rounded-lg flex items-center justify-center text-gray-400 hover:text-white hover:bg-[#2e2e36] transition-colors"
+                aria-label="关闭日志"
+              >
+                <AppIcon name="close" className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+
+          <div className="p-3 overflow-y-auto max-h-[min(48vh,340px)] no-scrollbar">
+            {globalLogs.length === 0 ? (
+              <div className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-6 text-center text-[11px] text-gray-500">
+                暂无日志
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {[...globalLogs].reverse().map((log) => (
+                  <button
+                    key={log.id}
+                    type="button"
+                    onClick={async () => {
+                      const line = `[${new Date(log.time).toLocaleString()}] [${log.level.toUpperCase()}] [${log.module}] ${log.message}${log.detail ? `\n${log.detail}` : ''}`;
+                      try {
+                        await navigator.clipboard.writeText(line);
+                        setGlobalLogCopiedId(log.id);
+                        window.setTimeout(() => {
+                          setGlobalLogCopiedId((prev) => (prev === log.id ? null : prev));
+                        }, 1200);
+                      } catch {
+                        /* ignore clipboard permission issues */
+                      }
+                    }}
+                    className="w-full text-left rounded-xl border border-[#2e2e32] bg-[#141416] px-3 py-2.5 hover:bg-[#1a1a20] transition-colors"
+                    title="点击复制日志"
+                    aria-label="点击复制日志"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] text-gray-400">{new Date(log.time).toLocaleTimeString()}</span>
+                      <div className="flex items-center gap-1.5">
+                        {globalLogCopiedId === log.id ? (
+                          <span className="text-[9px] text-emerald-300">已复制</span>
+                        ) : null}
+                        <span
+                          className={`text-[10px] px-1.5 py-0.5 rounded border ${
+                            log.level === 'error'
+                              ? 'text-red-300 border-red-500/40 bg-red-900/20'
+                              : log.level === 'warn'
+                              ? 'text-amber-300 border-amber-500/40 bg-amber-900/20'
+                              : 'text-blue-300 border-blue-500/40 bg-blue-900/20'
+                          }`}
+                        >
+                          {log.level.toUpperCase()}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="mt-1 text-[11px] text-white/90 leading-relaxed">[{log.module}] {log.message}</div>
+                    {log.detail ? (
+                      <div className="mt-1 text-[10px] text-gray-400 leading-relaxed break-all">{log.detail}</div>
+                    ) : null}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       <main className="flex-1 flex flex-col h-[100dvh] overflow-hidden">
         <div
@@ -3257,14 +3404,9 @@ const MainApp: React.FC = () => {
                           type="file"
                           className="sr-only"
                           accept="image/*"
+                          multiple
                           onChange={(e) => {
-                            handleFileUpload(e, (b) => {
-                              setDialogInputImages((prev) =>
-                                prev.length >= DIALOG_INPUT_IMAGES_MAX ? prev : [...prev, { id: Math.random().toString(36).slice(2, 11), data: b, fromTemp: false }]
-                              );
-                              setDialogValidationError(null);
-                            });
-                            e.target.value = '';
+                            void handleDialogImagesUpload(e);
                           }}
                         />
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>

@@ -242,14 +242,11 @@ export function getTencentCreds(): { secretId: string; secretKey: string } {
 }
 
 // ----- 能力商店（远程预设 Catalog URL）-----
-/** 固定主源：不再提供设置页修改入口 */
-export const DEFAULT_CAPABILITY_STORE_CATALOG_URL =
-  'https://raw.githubusercontent.com/eish1997/assetcutter-ai-pro-store/main/store/catalog.json';
 /** 固定 R2 源：走同源 /api/r2 代理，无需公开 URL */
 export const DEFAULT_CAPABILITY_STORE_R2_CATALOG_URL = '/api/r2/capability-store/catalog';
 
 export function getCapabilityStoreCatalogUrl(): string {
-  return DEFAULT_CAPABILITY_STORE_CATALOG_URL;
+  return '';
 }
 
 export function setCapabilityStoreCatalogUrl(value: string | null): void {
@@ -273,7 +270,6 @@ export function getCapabilityStoreCatalogSources(): string[] {
     seen.add(t);
     out.push(t);
   };
-  push(getCapabilityStoreCatalogUrl());
   push(getCapabilityStoreR2CatalogUrl());
   return out;
 }

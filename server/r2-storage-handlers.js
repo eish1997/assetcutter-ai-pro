@@ -149,6 +149,24 @@ async function streamBodyToString(body) {
   });
 }
 
+async function streamBodyToBuffer(body) {
+  if (!body) return Buffer.alloc(0);
+  if (typeof body.transformToByteArray === 'function') {
+    const arr = await body.transformToByteArray();
+    return Buffer.from(arr);
+  }
+  if (typeof body.transformToString === 'function') {
+    const text = await body.transformToString('utf-8');
+    return Buffer.from(text, 'utf8');
+  }
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    body.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+    body.on('error', reject);
+    body.on('end', () => resolve(Buffer.concat(chunks)));
+  });
+}
+
 async function getJsonObjectOrDefault(s3, objectKey, fallbackValue) {
   try {
     const got = await s3.send(
@@ -499,6 +517,28 @@ async function handleDeleteObject(req, res, objectKey, sessionUserId, s3) {
   sendJson(res, 200, { ok: true, objectKey, usedBytes });
 }
 
+const MAX_CAPABILITY_PREVIEW_BYTES = 8 * 1024 * 1024;
+
+function extFromMime(mime) {
+  const m = String(mime || '').toLowerCase();
+  if (m.includes('png')) return 'png';
+  if (m.includes('jpeg') || m.includes('jpg')) return 'jpg';
+  if (m.includes('webp')) return 'webp';
+  if (m.includes('gif')) return 'gif';
+  return 'png';
+}
+
+function parseDataUrlImage(dataUrl) {
+  const s = String(dataUrl || '').trim();
+  const m = /^data:([^;]+);base64,(.+)$/is.exec(s);
+  if (!m) return null;
+  const mime = m[1].trim();
+  const b64 = m[2].replace(/\s/g, '');
+  const buffer = Buffer.from(b64, 'base64');
+  if (!buffer.length || buffer.length > MAX_CAPABILITY_PREVIEW_BYTES) return null;
+  return { mime: mime || 'image/png', buffer };
+}
+
 async function handleCapabilityStoreObject(req, res, objectKey, s3) {
   const got = await s3.send(
     new GetObjectCommand({
@@ -506,10 +546,10 @@ async function handleCapabilityStoreObject(req, res, objectKey, s3) {
       Key: objectKey,
     })
   );
-  const text = await streamBodyToString(got.Body);
   const contentType = String(got.ContentType || '').toLowerCase();
   const isJson = contentType.includes('application/json') || objectKey.endsWith('.json');
   if (isJson) {
+    const text = await streamBodyToString(got.Body);
     let parsed = null;
     try {
       parsed = JSON.parse(text || 'null');
@@ -520,8 +560,12 @@ async function handleCapabilityStoreObject(req, res, objectKey, s3) {
     sendJson(res, 200, parsed);
     return;
   }
-  res.writeHead(200, { 'Content-Type': got.ContentType || 'application/octet-stream' });
-  res.end(text);
+  const bin = await streamBodyToBuffer(got.Body);
+  res.writeHead(200, {
+    'Content-Type': got.ContentType || 'application/octet-stream',
+    'Content-Length': String(bin.length),
+  });
+  res.end(bin);
 }
 
 export async function publishCapabilityPresetToR2Catalog(adminUserId, preset) {
@@ -538,7 +582,49 @@ export async function publishCapabilityPresetToR2Catalog(adminUserId, preset) {
   const root = catalogRootPrefix() || 'public/capability-store/';
   const catalogObjectKey = R2_CAPABILITY_STORE_CATALOG_KEY();
   const packObjectKey = `${root}presets/${pid}.json`;
-  const packBody = JSON.stringify([p], null, 2);
+
+  const presetForPack = { ...p };
+  const rawPreviewText = typeof presetForPack.previewImage === 'string' ? presetForPack.previewImage.trim() : '';
+  const rawGeneratedText =
+    typeof presetForPack.previewGeneratedImage === 'string' ? presetForPack.previewGeneratedImage.trim() : '';
+  // 若兼容字段与生成图字段是同一张 data URL，避免重复上传两份
+  if (rawPreviewText && rawGeneratedText && rawPreviewText === rawGeneratedText && rawPreviewText.startsWith('data:')) {
+    delete presetForPack.previewImage;
+  }
+  const uploadPreviewField = async (fieldName, suffix = '') => {
+    const raw = presetForPack[fieldName];
+    if (typeof raw !== 'string') return;
+    const text = raw.trim();
+    if (!text.startsWith('data:')) return;
+    const parsed = parseDataUrlImage(text);
+    if (!parsed) {
+      delete presetForPack[fieldName];
+      return;
+    }
+    const ext = extFromMime(parsed.mime);
+    const keyName = `${pid}${suffix ? `-${suffix}` : ''}.${ext}`;
+    const previewRel = `./previews/${keyName}`;
+    const previewObjectKey = `${root}previews/${keyName}`;
+    await s3.send(
+      new PutObjectCommand({
+        Bucket: R2_BUCKET(),
+        Key: previewObjectKey,
+        Body: parsed.buffer,
+        ContentType: parsed.mime,
+      })
+    );
+    presetForPack[fieldName] = previewRel;
+  };
+  await uploadPreviewField('previewImage');
+  await uploadPreviewField('previewOriginalImage', 'orig');
+  await uploadPreviewField('previewGeneratedImage', 'gen');
+  await uploadPreviewField('previewOriginalThumbImage', 'orig-sm');
+  await uploadPreviewField('previewGeneratedThumbImage', 'gen-sm');
+  if (!presetForPack.previewImage && typeof presetForPack.previewGeneratedImage === 'string') {
+    presetForPack.previewImage = presetForPack.previewGeneratedImage;
+  }
+
+  const packBody = JSON.stringify([presetForPack], null, 2);
   await s3.send(
     new PutObjectCommand({
       Bucket: R2_BUCKET(),
@@ -559,6 +645,9 @@ export async function publishCapabilityPresetToR2Catalog(adminUserId, preset) {
     url: `./presets/${pid}.json`,
     updatedAt: toYmd(now),
     tags: ['r2', 'admin-upload'],
+    ...(typeof presetForPack.previewImage === 'string' && presetForPack.previewImage.trim().startsWith('./')
+      ? { previewUrl: presetForPack.previewImage }
+      : {}),
   };
   const filtered = currentCatalog.filter((x) => {
     if (!x || typeof x !== 'object') return false;

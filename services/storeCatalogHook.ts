@@ -1,12 +1,29 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CustomAppModule, StoreCatalogItem } from '../types';
-import { loadCapabilityPresets, mergeCapabilityPresets, saveCapabilityPresets } from './capabilityPresetStore';
+import { BUILTIN_IMAGE_PROCESS_IDS, loadCapabilityPresets, mergeCapabilityPresets, saveCapabilityPresets } from './capabilityPresetStore';
 import { getCapabilityStoreCatalogSources } from './settingsStore';
 
 async function fetchJson<T>(url: string): Promise<T> {
   const res = await fetch(url, { cache: 'no-store' });
   if (!res.ok) throw new Error(`请求失败：${res.status} ${res.statusText}`);
   return (await res.json()) as T;
+}
+
+function resolvePackUrl(itemUrl: string, baseUrl: string): string {
+  const raw = String(itemUrl || '').trim();
+  const base = String(baseUrl || '').trim();
+  if (!raw) return raw;
+  try {
+    if (/^https?:\/\//i.test(raw)) return raw;
+    if (/^https?:\/\//i.test(base)) return new URL(raw, base).toString();
+    // base 为同源相对路径（如 /api/r2/capability-store/catalog）时，使用当前 origin 兜底
+    if (typeof window !== 'undefined' && base.startsWith('/')) {
+      return new URL(raw, `${window.location.origin}${base}`).toString();
+    }
+    return new URL(raw, window.location.href).toString();
+  } catch {
+    return raw;
+  }
 }
 
 function normalizeCatalogItem(x: unknown): StoreCatalogItem | null {
@@ -26,6 +43,7 @@ function normalizeCatalogItem(x: unknown): StoreCatalogItem | null {
     version,
     url,
     desc: o.desc ? String(o.desc) : undefined,
+    previewUrl: o.previewUrl ? String(o.previewUrl) : undefined,
     sha256: o.sha256 ? String(o.sha256) : undefined,
     updatedAt: o.updatedAt ? String(o.updatedAt) : undefined,
     tags: Array.isArray(o.tags) ? (o.tags as unknown[]).map((t) => String(t)).filter(Boolean).slice(0, 20) : undefined,
@@ -40,6 +58,7 @@ function normalizePreset(x: unknown): CustomAppModule | null {
   const label = String(o.label || '').trim();
   if (!id || !label) return null;
   if (typeof o.instruction !== 'string' && typeof o.prompt === 'string') (o as Record<string, string>).instruction = o.prompt as string;
+  if (o.previewImage != null && typeof o.previewImage !== 'string') delete (o as Record<string, unknown>).previewImage;
   return o as unknown as CustomAppModule;
 }
 
@@ -66,7 +85,9 @@ export function useStoreCatalog(options: UseStoreCatalogOptions = {}) {
   const remotePresetItems = useMemo(
     () =>
       catalog.flatMap((pack) =>
-        (packPresetsMap[pack.id] || []).map((preset) => ({ preset, pack } as RemotePresetItem))
+        (packPresetsMap[pack.id] || [])
+          .filter((preset) => !BUILTIN_IMAGE_PROCESS_IDS.includes(preset.id as (typeof BUILTIN_IMAGE_PROCESS_IDS)[number]))
+          .map((preset) => ({ preset, pack } as RemotePresetItem))
       ),
     [catalog, packPresetsMap]
   );
@@ -133,16 +154,47 @@ export function useStoreCatalog(options: UseStoreCatalogOptions = {}) {
       catalog.map(async (item) => {
         try {
           const baseUrl = packBaseUrlMapRef.current[item.id] || '';
-          const packUrl = (() => {
-            try {
-              return new URL(item.url, baseUrl).toString();
-            } catch {
-              return item.url;
-            }
-          })();
+          const packUrl = resolvePackUrl(item.url, baseUrl);
           const raw = await fetchJson<unknown>(packUrl);
           if (!Array.isArray(raw)) return { id: item.id, presets: [] };
-          const presets = raw.map(normalizePreset).filter(Boolean) as CustomAppModule[];
+          const catalogBase = packBaseUrlMapRef.current[item.id] || '';
+          const presets = raw
+            .map(normalizePreset)
+            .filter(Boolean)
+            .map((pr) => {
+              let p = pr as CustomAppModule;
+              if ((!p.previewImage || !String(p.previewImage).trim()) && item.previewUrl && catalogBase) {
+                p = { ...p, previewImage: resolvePackUrl(String(item.previewUrl), catalogBase) };
+              }
+              const resolvePreviewField = (value: unknown): string | undefined => {
+                if (typeof value !== 'string' || !value.trim()) return undefined;
+                const t = value.trim();
+                if (/^https?:\/\//i.test(t) || t.startsWith('data:')) return t;
+                if (!catalogBase) return t;
+                return resolvePackUrl(t, catalogBase);
+              };
+              const resolvedPreviewImage = resolvePreviewField(p.previewImage);
+              const resolvedOriginal = resolvePreviewField((p as CustomAppModule).previewOriginalImage);
+              const resolvedGenerated = resolvePreviewField((p as CustomAppModule).previewGeneratedImage);
+              const resolvedOriginalThumb = resolvePreviewField((p as CustomAppModule).previewOriginalThumbImage);
+              const resolvedGeneratedThumb = resolvePreviewField((p as CustomAppModule).previewGeneratedThumbImage);
+              const inferredOriginal =
+                !resolvedOriginal && typeof resolvedPreviewImage === 'string' && /-gen\.[a-z0-9]+$/i.test(resolvedPreviewImage)
+                  ? resolvedPreviewImage.replace(/-gen(\.[a-z0-9]+)$/i, '-orig$1')
+                  : resolvedOriginal;
+              const inferredOriginalThumb =
+                !resolvedOriginalThumb && typeof resolvedGeneratedThumb === 'string' && /-gen-sm\.[a-z0-9]+$/i.test(resolvedGeneratedThumb)
+                  ? resolvedGeneratedThumb.replace(/-gen-sm(\.[a-z0-9]+)$/i, '-orig-sm$1')
+                  : resolvedOriginalThumb;
+              return {
+                ...p,
+                previewImage: resolvedPreviewImage,
+                previewOriginalImage: inferredOriginal,
+                previewGeneratedImage: resolvedGenerated ?? resolvedPreviewImage,
+                previewOriginalThumbImage: inferredOriginalThumb,
+                previewGeneratedThumbImage: resolvedGeneratedThumb,
+              };
+            }) as CustomAppModule[];
           return { id: item.id, presets };
         } catch (e) {
           onLogRef.current?.('warn', `拉取能力包失败：${item.name}`, e instanceof Error ? e.message : String(e));
@@ -159,6 +211,7 @@ export function useStoreCatalog(options: UseStoreCatalogOptions = {}) {
 
   /** 安装单个能力到当前列表（以能力为单位，不按包） */
   const installSinglePreset = (preset: CustomAppModule) => {
+    if (BUILTIN_IMAGE_PROCESS_IDS.includes(preset.id as (typeof BUILTIN_IMAGE_PROCESS_IDS)[number])) return;
     setError(null);
     const merged = mergeCapabilityPresets(loadCapabilityPresets(), [preset]);
     saveCapabilityPresets(merged);
@@ -168,13 +221,16 @@ export function useStoreCatalog(options: UseStoreCatalogOptions = {}) {
 
   /** 批量添加多个能力到当前列表（一键安装全部未安装的能力） */
   const installPresets = (presets: CustomAppModule[]) => {
-    if (presets.length === 0) return;
+    const filtered = presets.filter(
+      (p) => !BUILTIN_IMAGE_PROCESS_IDS.includes(p.id as (typeof BUILTIN_IMAGE_PROCESS_IDS)[number])
+    );
+    if (filtered.length === 0) return;
     setInstallingAll(true);
     setError(null);
-    const merged = mergeCapabilityPresets(loadCapabilityPresets(), presets);
+    const merged = mergeCapabilityPresets(loadCapabilityPresets(), filtered);
     saveCapabilityPresets(merged);
     onPresetsApplied?.(merged);
-    onLog?.('info', `已添加 ${presets.length} 个能力`, undefined);
+    onLog?.('info', `已添加 ${filtered.length} 个能力`, undefined);
     setInstallingAll(false);
   };
 

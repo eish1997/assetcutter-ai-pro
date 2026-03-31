@@ -45,6 +45,41 @@ function safeUnknownToString(v: unknown): string {
   }
 }
 
+/** 常用功能区 dragOver 兜底：首轮 dragover 可能早于 ref 同步，但 setData 后 types 已有 text/plain */
+function dragTransferHasPlainText(e: React.DragEvent): boolean {
+  try {
+    const t = e.dataTransfer?.types;
+    if (!t) return false;
+    for (let i = 0; i < t.length; i++) {
+      if (t[i] === 'text/plain') return true;
+    }
+  } catch {
+    /* ignore */
+  }
+  return false;
+}
+
+/** App 传入的 capabilityPresetPanel 常包在 Suspense 外；cloneElement 需把 scrollContainerRef 传到内层 CapabilityPresetSection */
+function cloneCapabilityPresetPanelWithScrollRef(
+  panel: React.ReactNode,
+  scrollRef: React.RefObject<HTMLDivElement | null>
+): React.ReactNode {
+  if (!React.isValidElement(panel)) return panel;
+  if (panel.type === React.Suspense) {
+    const inner = panel.props.children;
+    if (React.isValidElement(inner)) {
+      return React.cloneElement(panel, {
+        children: React.cloneElement(inner as React.ReactElement<{ scrollContainerRef?: React.Ref<HTMLDivElement> }>, {
+          scrollContainerRef: scrollRef,
+        }),
+      });
+    }
+  }
+  return React.cloneElement(panel as React.ReactElement<{ scrollContainerRef?: React.Ref<HTMLDivElement> }>, {
+    scrollContainerRef: scrollRef,
+  });
+}
+
 const uuid = () => Math.random().toString(36).slice(2, 11);
 const RESULT_VER_SEP = '__v__';
 const baseActionId = (k: string) => (k.includes(RESULT_VER_SEP) ? k.split(RESULT_VER_SEP)[0] : k);
@@ -645,7 +680,11 @@ const WorkflowSection: React.FC<{
   const [completedTaskIds, setCompletedTaskIds] = useState<Set<string>>(new Set());
   const [draggingAssetIds, setDraggingAssetIds] = useState<string[] | null>(null);
   const [dragOverAction, setDragOverAction] = useState<string | null>(null);
-  const [draggingActionId, setDraggingActionId] = useState<string | null>(null);
+  /** 功能块拖拽 id（仅 ref，不用 state：dragover 首帧时 setState 尚未提交会导致未 preventDefault、drop 失败） */
+  const draggingActionIdRef = useRef<string | null>(null);
+  const updateDraggingActionId = useCallback((id: string | null) => {
+    draggingActionIdRef.current = id;
+  }, []);
   const [draggingActionFromFavorite, setDraggingActionFromFavorite] = useState(false);
   const [actionDroppedInFavorite, setActionDroppedInFavorite] = useState(false);
   const [favoriteDropActive, setFavoriteDropActive] = useState(false);
@@ -676,7 +715,7 @@ const WorkflowSection: React.FC<{
   const [draggingGroupItems, setDraggingGroupItems] = useState<{ groupAssetId: string; itemIndexes: number[] } | null>(null);
   const [selectedAssetIds, setSelectedAssetIds] = useState<Set<string>>(new Set());
   const [selectedGroupItemKeys, setSelectedGroupItemKeys] = useState<Set<string>>(new Set());
-  const [capabilityPresetViewMode, setCapabilityPresetViewMode] = useState<'presets' | 'sets'>('presets');
+  const [capabilityPresetViewMode, setCapabilityPresetViewMode] = useState<'presets' | 'image_process' | 'sets'>('presets');
   const [cardAspectByAssetId, setCardAspectByAssetId] = useState<Record<string, number>>({});
   const [marqueeRect, setMarqueeRect] = useState<{ startX: number; startY: number; endX: number; endY: number } | null>(null);
   const gridRef = useRef<HTMLDivElement>(null);
@@ -740,11 +779,29 @@ const WorkflowSection: React.FC<{
       }
     };
   }, []);
+  /** 从功能区「词」进入能力页：横向滑到能力列并滚动到对应预设卡片 */
+  const jumpToCapabilityPreset = useCallback((preset: CustomAppModule) => {
+    const mode: 'presets' | 'image_process' =
+      preset.category === 'image_process' ? 'image_process' : 'presets';
+    setCapabilityPresetViewMode(mode);
+    if (typeof window !== 'undefined') {
+      const emitJump = () => {
+        window.dispatchEvent(new CustomEvent('ac:capability-preset-view-mode', { detail: { mode } }));
+        window.dispatchEvent(new CustomEvent('ac:capability-jump-to-preset', { detail: { presetId: preset.id } }));
+      };
+      // 首次点击时能力区可能正处于懒加载/重排，补发两次可显著降低“点两次才跳转”
+      emitJump();
+      window.requestAnimationFrame(emitJump);
+      window.setTimeout(emitJump, 220);
+    }
+    snapWorkspacePaneToNode(2);
+  }, [snapWorkspacePaneToNode]);
   const [spacePanEnabled, setSpacePanEnabled] = useState(false);
   const [spacePanDragging, setSpacePanDragging] = useState(false);
   const marqueeStartRef = useRef(false);
   const suppressClickAfterPanRef = useRef(false);
   const [libraryImportIds, setLibraryImportIds] = useState<Set<string>>(new Set());
+  const [libraryFilter, setLibraryFilter] = useState<'all' | 'library' | 'archived'>('all');
   const handleMarqueeMouseDown = useCallback(
     (e: React.MouseEvent) => {
       if (workspacePane < 0.5 || workspacePane > 1.5) return;
@@ -772,6 +829,8 @@ const WorkflowSection: React.FC<{
   const [assetErrors, setAssetErrors] = useState<Map<string, string>>(new Map());
   const [groupPreviewIndexById, setGroupPreviewIndexById] = useState<Record<string, number>>({});
   const [groupBounceStateById, setGroupBounceStateById] = useState<Record<string, 'idle' | 'up' | 'down'>>({});
+  const [hoverPreview, setHoverPreview] = useState<{ mod: CustomAppModule; x: number; y: number } | null>(null);
+  const [hoverPreviewScanProgress, setHoverPreviewScanProgress] = useState(0);
 
   const setAssetError = useCallback((assetId: string, message: string | null) => {
     setAssetErrors((prev) => {
@@ -786,6 +845,63 @@ const WorkflowSection: React.FC<{
   }, []);
 
   const getModule = (id: string) => actionModules.find((m) => m.id === id);
+  const resolveCapabilityPreviewUrl = useCallback((v?: string): string | null => {
+    const t = String(v || '').trim();
+    if (!t) return null;
+    if (/^https?:\/\//i.test(t) || t.startsWith('data:') || t.startsWith('/')) return t;
+    if (t.startsWith('./')) return `/api/r2/capability-store/${t.slice(2)}`;
+    return `/api/r2/capability-store/${t.replace(/^\/+/, '')}`;
+  }, []);
+  const getModulePreviewOriginal = useCallback(
+    (mod: CustomAppModule): string | null =>
+      resolveCapabilityPreviewUrl(mod.previewOriginalThumbImage) ||
+      resolveCapabilityPreviewUrl(mod.previewOriginalImage) ||
+      resolveCapabilityPreviewUrl(mod.previewImage),
+    [resolveCapabilityPreviewUrl]
+  );
+  const getModulePreviewGenerated = useCallback(
+    (mod: CustomAppModule): string | null =>
+      resolveCapabilityPreviewUrl(mod.previewGeneratedThumbImage) ||
+      resolveCapabilityPreviewUrl(mod.previewGeneratedImage) ||
+      resolveCapabilityPreviewUrl(mod.previewImage),
+    [resolveCapabilityPreviewUrl]
+  );
+  useEffect(() => {
+    if (!hoverPreview) return;
+    let raf = 0;
+    const start = performance.now();
+    const loop = (now: number) => {
+      const duration = 1800;
+      const p = ((now - start) % duration) / duration;
+      setHoverPreviewScanProgress(p);
+      raf = window.requestAnimationFrame(loop);
+    };
+    raf = window.requestAnimationFrame(loop);
+    return () => {
+      if (raf) window.cancelAnimationFrame(raf);
+      setHoverPreviewScanProgress(0);
+    };
+  }, [hoverPreview]);
+  useEffect(() => {
+    if (!hoverPreview || typeof window === 'undefined' || typeof document === 'undefined') return;
+    const targetId = hoverPreview.mod.id;
+    const onMove = (ev: MouseEvent) => {
+      const el = document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null;
+      if (!el) {
+        setHoverPreview(null);
+        return;
+      }
+      const holder = el.closest(`[data-capability-hover-id="${targetId}"]`);
+      if (!holder) setHoverPreview(null);
+    };
+    const onBlur = () => setHoverPreview(null);
+    window.addEventListener('mousemove', onMove, true);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      window.removeEventListener('mousemove', onMove, true);
+      window.removeEventListener('blur', onBlur);
+    };
+  }, [hoverPreview]);
   const getSet = (id: string) => capabilitySets.find((s) => s.id === id);
   const getActionLabel = (actionType: string) => {
     if (actionType.startsWith(SET_ACTION_PREFIX)) {
@@ -825,6 +941,48 @@ const WorkflowSection: React.FC<{
     const baseId = baseActionId(a.displayKey);
     return getModule(baseId)?.label ?? baseId;
   };
+  const archivedLibraryItems = useMemo<LibraryItem[]>(() => {
+    return assets
+      .filter((a) => a.archived && !a.parentAssetId)
+      .map((a) => {
+        const data = getAssetDisplayImage(a);
+        if (!data) return null;
+        return {
+          id: `archived:${a.id}`,
+          type: 'SLICE' as const,
+          category: 'PREVIEW_STRIP' as const,
+          label: a.groupLabel || `归档-${new Date(a.createdAt).toLocaleDateString('zh-CN')}`,
+          data,
+          sourceId: a.id,
+          timestamp: a.createdAt,
+          groupId: 'workflow-archived',
+        };
+      })
+      .filter(Boolean) as LibraryItem[];
+  }, [assets, getAssetDisplayImage]);
+  const repositoryItems = useMemo<LibraryItem[]>(() => {
+    if (libraryFilter === 'library') return libraryItems;
+    if (libraryFilter === 'archived') return archivedLibraryItems;
+    return [...libraryItems, ...archivedLibraryItems];
+  }, [libraryFilter, libraryItems, archivedLibraryItems]);
+  useEffect(() => {
+    const validIds = new Set(repositoryItems.map((item) => item.id));
+    setLibraryImportIds((prev) => {
+      const next = new Set<string>();
+      prev.forEach((id) => {
+        if (validIds.has(id)) next.add(id);
+      });
+      // 仅在实际变化时更新，避免无意义的状态回写造成交互卡顿/失效
+      if (next.size === prev.size) {
+        let same = true;
+        prev.forEach((id) => {
+          if (!next.has(id)) same = false;
+        });
+        if (same) return prev;
+      }
+      return next;
+    });
+  }, [repositoryItems]);
 
   const addToPending = useCallback(
     (assetId: string, actionType: string, options?: { promptOverride?: string }) => {
@@ -962,20 +1120,36 @@ const WorkflowSection: React.FC<{
         if (groupIdx === -1) return prev;
         const group = list[groupIdx];
         const items = group.cutImageGroup ?? [];
-        const indexSet = new Set(itemIndexes);
+        const dedupIndexes = Array.from(new Set(itemIndexes)).filter((i) => i >= 0 && i < items.length);
+        if (dedupIndexes.length === 0) return prev;
+        const indexSet = new Set(dedupIndexes);
         const nextItems = items.filter((_, i) => !indexSet.has(i));
         const parentId = group.parentAssetId;
 
         const childIds: string[] = [];
+        const childIdSeen = new Set<string>();
         items.forEach((item, i) => {
           if (!indexSet.has(i)) return;
           const childId =
             typeof item === 'object' && item && 'assetId' in item ? (item as { assetId: string }).assetId : null;
-          if (childId) childIds.push(childId);
+          if (childId && !childIdSeen.has(childId)) {
+            childIdSeen.add(childId);
+            childIds.push(childId);
+          }
         });
 
         if (nextItems.length === 0) {
           list.splice(groupIdx, 1);
+          if (parentId) {
+            const parentIdx = list.findIndex((a) => a.id === parentId);
+            if (parentIdx !== -1) {
+              const parent = list[parentIdx];
+              const parentItems = (parent.cutImageGroup ?? []).filter(
+                (it) => !(typeof it === 'object' && it && 'assetId' in it && (it as { assetId: string }).assetId === groupAssetId)
+              );
+              list[parentIdx] = { ...parent, cutImageGroup: parentItems.length ? parentItems : undefined };
+            }
+          }
         } else {
           list[groupIdx] = { ...group, cutImageGroup: nextItems };
         }
@@ -988,7 +1162,12 @@ const WorkflowSection: React.FC<{
             const parentIdx = list.findIndex((a) => a.id === parentId);
             if (parentIdx !== -1) {
               const parent = list[parentIdx];
-              const parentItems = [...(parent.cutImageGroup ?? []), { assetId: childId }];
+              const existsInParent = (parent.cutImageGroup ?? []).some(
+                (it) => typeof it === 'object' && it && 'assetId' in it && (it as { assetId: string }).assetId === childId
+              );
+              const parentItems = existsInParent
+                ? [...(parent.cutImageGroup ?? [])]
+                : [...(parent.cutImageGroup ?? []), { assetId: childId }];
               list[parentIdx] = { ...parent, cutImageGroup: parentItems };
               list[childIdx] = { ...child, parentAssetId: parent.id };
             } else {
@@ -1487,7 +1666,8 @@ const WorkflowSection: React.FC<{
       img.onload = () => {
         const w = img.naturalWidth || 1;
         const h = img.naturalHeight || 1;
-        const ratio = Math.max(0.2, Math.min(5, w / h));
+        // 限制卡片展示比例，避免出现过长/过扁的预览（最大 2:1，最小 1:2）
+        const ratio = Math.max(0.5, Math.min(2, w / h));
         setCardAspectByAssetId((prev) => (prev[asset.id] != null ? prev : { ...prev, [asset.id]: ratio }));
       };
       img.src = src;
@@ -1503,7 +1683,7 @@ const WorkflowSection: React.FC<{
     if (typeof window === 'undefined') return;
     const onModeChanged = (event: Event) => {
       const detail = (event as CustomEvent<{ mode?: string }>).detail;
-      if (detail?.mode === 'presets' || detail?.mode === 'sets') {
+      if (detail?.mode === 'presets' || detail?.mode === 'image_process' || detail?.mode === 'sets') {
         setCapabilityPresetViewMode(detail.mode);
       }
     };
@@ -2296,7 +2476,36 @@ const WorkflowSection: React.FC<{
   const activePaneNode = Math.max(0, Math.min(2, Math.round(workspacePane)));
   const topTitleColumns = useMemo(() => {
     if (activePaneNode === 0) {
-      return [{ title: '资产仓库', desc: '多选后导入到工作区，与「从仓库导入」相同', actions: null }];
+      return [{
+        title: '资产仓库',
+        desc: '多选后导入到工作区，与「从仓库导入」相同',
+        actions: (
+          <div className="flex items-center gap-2 whitespace-nowrap">
+            <span className="text-[9px] font-black text-gray-500 uppercase">筛选</span>
+            <button
+              type="button"
+              onClick={() => setLibraryFilter('all')}
+              className={libraryFilter === 'all' ? TITLE_ROW_BTN_ACTIVE : TITLE_ROW_BTN_NEUTRAL}
+            >
+              全部
+            </button>
+            <button
+              type="button"
+              onClick={() => setLibraryFilter('library')}
+              className={libraryFilter === 'library' ? TITLE_ROW_BTN_ACTIVE : TITLE_ROW_BTN_NEUTRAL}
+            >
+              仓库
+            </button>
+            <button
+              type="button"
+              onClick={() => setLibraryFilter('archived')}
+              className={libraryFilter === 'archived' ? TITLE_ROW_BTN_ACTIVE : TITLE_ROW_BTN_NEUTRAL}
+            >
+              归档
+            </button>
+          </div>
+        ),
+      }];
     }
     if (activePaneNode === 1) {
       const selectableCount = visibleAssets.filter(
@@ -2499,7 +2708,7 @@ const WorkflowSection: React.FC<{
         ),
       },
       {
-        title: capabilityPresetViewMode === 'sets' ? '能力集合' : '基础能力',
+        title: capabilityPresetViewMode === 'sets' ? '能力集合' : capabilityPresetViewMode === 'image_process' ? '图像处理' : '基础能力',
         desc: '当前能力配置与预设编辑',
         actions: (
           <div className="flex items-center gap-2 whitespace-nowrap">
@@ -2522,6 +2731,21 @@ const WorkflowSection: React.FC<{
               <button
                 type="button"
                 onClick={() => {
+                  setCapabilityPresetViewMode('image_process');
+                  if (typeof window === 'undefined') return;
+                  window.dispatchEvent(new CustomEvent('ac:capability-preset-view-mode', { detail: { mode: 'image_process' } }));
+                }}
+                className={`h-8 px-3 text-[9px] font-black uppercase border-l border-[#2e2e32] ${
+                  capabilityPresetViewMode === 'image_process'
+                    ? 'bg-blue-600 text-white'
+                    : 'text-gray-300 hover:bg-[#2e2e36]'
+                }`}
+              >
+                图像处理
+              </button>
+              <button
+                type="button"
+                onClick={() => {
                   setCapabilityPresetViewMode('sets');
                   if (typeof window === 'undefined') return;
                   window.dispatchEvent(new CustomEvent('ac:capability-preset-view-mode', { detail: { mode: 'sets' } }));
@@ -2535,7 +2759,7 @@ const WorkflowSection: React.FC<{
                 能力集合
               </button>
             </div>
-            {capabilityPresetViewMode === 'presets' && (
+            {(capabilityPresetViewMode === 'presets' || capabilityPresetViewMode === 'image_process') && (
               <>
             <button
               type="button"
@@ -2551,32 +2775,24 @@ const WorkflowSection: React.FC<{
               type="button"
               onClick={() => {
                 if (typeof window === 'undefined') return;
-                window.dispatchEvent(new CustomEvent('ac:capability-preset-toolbar-action', { detail: { action: 'add-preset' } }));
-              }}
-              className={TITLE_ROW_BTN_ACTIVE}
-            >
-              新增功能预设
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                if (typeof window === 'undefined') return;
                 window.dispatchEvent(new CustomEvent('ac:capability-preset-toolbar-action', { detail: { action: 'refresh-remote' } }));
               }}
               className={TITLE_ROW_BTN_NEUTRAL}
             >
-              刷新远程
+              刷新同步
             </button>
-            <button
-              type="button"
-              onClick={() => {
-                if (typeof window === 'undefined') return;
-                window.dispatchEvent(new CustomEvent('ac:capability-preset-toolbar-action', { detail: { action: 'install-all' } }));
-              }}
-              className={TITLE_ROW_BTN_NEUTRAL}
-            >
-              一键安装全部
-            </button>
+            {capabilityPresetViewMode === 'presets' && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (typeof window === 'undefined') return;
+                  window.dispatchEvent(new CustomEvent('ac:capability-preset-toolbar-action', { detail: { action: 'add-preset' } }));
+                }}
+                className={TITLE_ROW_BTN_ACTIVE}
+              >
+                新增能力
+              </button>
+            )}
               </>
             )}
             {capabilityPresetViewMode === 'sets' && (
@@ -2618,6 +2834,7 @@ const WorkflowSection: React.FC<{
     showArchived,
     visibleAssets,
     capabilityPresetViewMode,
+    libraryFilter,
   ]);
   const topTitleGridStyle = useMemo<React.CSSProperties | undefined>(() => {
     if (activePaneNode === 1) {
@@ -2762,7 +2979,7 @@ const WorkflowSection: React.FC<{
           ? 'w-full min-h-0 flex-1 flex flex-col gap-3 overflow-y-auto no-scrollbar'
           : wide
             ? 'w-full min-h-0 flex flex-col gap-3 overflow-y-auto no-scrollbar shrink-0 max-h-[min(52vh,520px)]'
-            : 'w-80 shrink-0 flex flex-col gap-3 overflow-y-auto no-scrollbar'
+            : 'w-80 shrink-0 min-h-0 flex-1 flex flex-col gap-3 overflow-y-auto no-scrollbar'
       }
     >
           <WorkflowPlannerBar
@@ -2775,7 +2992,7 @@ const WorkflowSection: React.FC<{
             onLog={onLog}
           />
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-5 gap-2">
           <div
             onDragOver={(e) => {
               e.preventDefault();
@@ -2845,14 +3062,17 @@ const WorkflowSection: React.FC<{
               setDraggingAssetIds(null);
               setDraggingGroupItems(null);
             }}
-            className={`rounded-xl border-2 border-dashed p-2.5 min-h-[56px] flex flex-col items-center justify-center text-center transition-colors ${
+            title="将选中图片拖入建组（组内同效）"
+            className={`rounded-xl border-2 border-dashed h-[52px] px-1 flex flex-col items-center justify-center text-center transition-colors ${
               dragOverAction === '__group__'
                 ? 'border-blue-500 bg-[#152642]'
                 : 'border-[#3d4754] bg-[#0e0f12] hover:border-[#4b6a9e] hover:bg-[#1a1d26]'
             }`}
           >
-            <span className="text-[9px] font-black uppercase text-gray-200">组</span>
-            <span className="text-[8px] text-gray-500 mt-0.5">将选中图片拖入建组（组内同效）</span>
+            <svg viewBox="0 0 20 20" className="w-3 h-3 text-gray-400 mb-0.5" aria-hidden>
+              <path d="M3 4h6v5H3zM11 4h6v5h-6zM3 11h6v5H3zM11 11h6v5h-6z" fill="currentColor" />
+            </svg>
+            <span className="text-[8px] font-black uppercase text-gray-200">组</span>
           </div>
           <div
             onDragOver={(e) => {
@@ -2872,14 +3092,17 @@ const WorkflowSection: React.FC<{
               setDragOverAction(null);
               setDraggingGroupItems(null);
             }}
-            className={`rounded-xl border-2 border-dashed p-2.5 min-h-[56px] flex flex-col items-center justify-center text-center transition-colors ${
+            title="将组内子卡片拖到此处，移到上一级"
+            className={`rounded-xl border-2 border-dashed h-[52px] px-1 flex flex-col items-center justify-center text-center transition-colors ${
               dragOverAction === '__ungroup__'
                 ? 'border-blue-500 bg-[#152642]'
                 : 'border-[#3d4754] bg-[#0e0f12] hover:border-[#4b6a9e] hover:bg-[#1a1d26]'
             }`}
           >
-            <span className="text-[9px] font-black uppercase text-gray-200">移出组</span>
-            <span className="text-[8px] text-gray-500 mt-0.5">将组内子卡片拖到此处，移到上一级</span>
+            <svg viewBox="0 0 20 20" className="w-3 h-3 text-gray-400 mb-0.5" aria-hidden>
+              <path d="M7 5h10v10H7zM3 9l4-4v3h5v2H7v3z" fill="currentColor" />
+            </svg>
+            <span className="text-[8px] font-black uppercase text-gray-200">移出组</span>
           </div>
           <div
             onDragOver={(e) => {
@@ -2943,14 +3166,17 @@ const WorkflowSection: React.FC<{
               setDraggingAssetIds(null);
               setDraggingGroupItems(null);
             }}
-            className={`rounded-xl border-2 border-dashed p-2.5 min-h-[56px] flex flex-col items-center justify-center text-center transition-colors ${
+            title="拖入后在当前位置复制一份"
+            className={`rounded-xl border-2 border-dashed h-[52px] px-1 flex flex-col items-center justify-center text-center transition-colors ${
               dragOverAction === '__copy__'
                 ? 'border-blue-500 bg-[#152642]'
                 : 'border-[#3d4754] bg-[#0e0f12] hover:border-[#4b6a9e] hover:bg-[#1a1d26]'
             }`}
           >
-            <span className="text-[9px] font-black uppercase text-gray-200">复制</span>
-            <span className="text-[8px] text-gray-500 mt-0.5">拖入后在当前位置复制一份</span>
+            <svg viewBox="0 0 20 20" className="w-3 h-3 text-gray-400 mb-0.5" aria-hidden>
+              <path d="M6 6h9v10H6zM4 4h9v1H5v9H4z" fill="currentColor" />
+            </svg>
+            <span className="text-[8px] font-black uppercase text-gray-200">复制</span>
           </div>
           <div
             onDragOver={(e) => {
@@ -2998,14 +3224,17 @@ const WorkflowSection: React.FC<{
               setDraggingAssetIds(null);
               setDraggingGroupItems(null);
             }}
-            className={`rounded-xl border-2 border-dashed p-2.5 min-h-[56px] flex flex-col items-center justify-center text-center transition-colors ${
+            title="将图片拖到此处从工作流中删除（组内同效）"
+            className={`rounded-xl border-2 border-dashed h-[52px] px-1 flex flex-col items-center justify-center text-center transition-colors ${
               dragOverAction === '__delete__'
                 ? 'border-red-500 bg-[#3a1818]'
                 : 'border-[#3d4754] bg-[#0e0f12] hover:border-[#b85454] hover:bg-[#1f1416]'
             }`}
           >
-            <span className="text-[9px] font-black uppercase text-red-400">删除</span>
-            <span className="text-[8px] text-gray-500 mt-0.5">将图片拖到此处从工作流中删除（组内同效）</span>
+            <svg viewBox="0 0 20 20" className="w-3 h-3 text-red-300 mb-0.5" aria-hidden>
+              <path d="M6 6h8l-.6 10H6.6L6 6zm2-2h4l1 1h3v2H4V5h3l1-1z" fill="currentColor" />
+            </svg>
+            <span className="text-[8px] font-black uppercase text-red-400">删除</span>
           </div>
           <div
             onDragOver={(e) => {
@@ -3053,14 +3282,17 @@ const WorkflowSection: React.FC<{
               setDraggingAssetIds(null);
               setDraggingGroupItems(null);
             }}
-            className={`rounded-xl border-2 border-dashed p-2.5 min-h-[56px] flex flex-col items-center justify-center text-center transition-colors col-span-2 ${
+            title="将图片拖到此处标记为已完成（组内同效）"
+            className={`rounded-xl border-2 border-dashed h-[52px] px-1 flex flex-col items-center justify-center text-center transition-colors ${
               dragOverAction === '__archive__'
                 ? 'border-blue-500 bg-[#152642]'
                 : 'border-[#3d4754] bg-[#0e0f12] hover:border-[#4b6a9e] hover:bg-[#1a1d26]'
             }`}
           >
-            <span className="text-[9px] font-black uppercase text-gray-200">归档</span>
-            <span className="text-[8px] text-gray-500 mt-0.5">将图片拖到此处标记为已完成（组内同效）</span>
+            <svg viewBox="0 0 20 20" className="w-3 h-3 text-gray-400 mb-0.5" aria-hidden>
+              <path d="M4 4h12v3H4zM5 8h10v8H5zM8 10h4v2H8z" fill="currentColor" />
+            </svg>
+            <span className="text-[8px] font-black uppercase text-gray-200">归档</span>
           </div>
           </div>
           {visiblePresets.length === 0 && visibleCapabilitySets.length === 0 && favoriteEntries.length === 0 && (
@@ -3077,19 +3309,41 @@ const WorkflowSection: React.FC<{
                 </div>
                 <div
                   onDropCapture={() => {
-                    if (draggingActionId) setActionDroppedInFavorite(true);
+                    if (draggingActionIdRef.current) setActionDroppedInFavorite(true);
                   }}
                   onDragOver={(e) => {
-                    if (!draggingActionId) return;
+                    if (!draggingActionIdRef.current && !dragTransferHasPlainText(e)) return;
                     e.preventDefault();
+                    try {
+                      e.dataTransfer.dropEffect = 'copy';
+                    } catch {
+                      /* ignore */
+                    }
                     setFavoriteDropActive(true);
                   }}
-                  onDragLeave={() => setFavoriteDropActive(false)}
+                  onDragLeave={(ev) => {
+                    const next = ev.relatedTarget as Node | null;
+                    if (next && ev.currentTarget.contains(next)) return;
+                    setFavoriteDropActive(false);
+                  }}
                   onDrop={(e) => {
                     e.preventDefault();
                     setFavoriteDropActive(false);
-                    if (!draggingActionId) return;
-                    setFavoriteActionIds((prev) => (prev.includes(draggingActionId) ? prev : [...prev, draggingActionId]));
+                    let id = draggingActionIdRef.current;
+                    if (!id) {
+                      try {
+                        id = e.dataTransfer.getData('text/plain') || null;
+                      } catch {
+                        /* ignore */
+                      }
+                    }
+                    if (!id?.trim()) return;
+                    const validFavoriteId =
+                      actionModules.some((m) => m.id === id) ||
+                      (id.startsWith(SET_ACTION_PREFIX) &&
+                        capabilitySets.some((s) => s.id === id.slice(SET_ACTION_PREFIX.length)));
+                    if (!validFavoriteId) return;
+                    setFavoriteActionIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
                     setActionDroppedInFavorite(true);
                   }}
                   className="space-y-2"
@@ -3103,6 +3357,7 @@ const WorkflowSection: React.FC<{
                       {favoriteEntries.map((entry) => (
                         <div
                           key={`fav-${entry.id}`}
+                          data-capability-hover-id={entry.kind === 'module' ? entry.mod?.id : undefined}
                           className={`rounded-xl border-2 border-dashed min-h-[60px] flex transition-colors ${
                             dragOverAction === entry.id
                               ? 'border-blue-500 bg-[#1a3354]'
@@ -3111,8 +3366,27 @@ const WorkflowSection: React.FC<{
                                 : 'border-[#3a3a40] bg-[#1c1c22] hover:border-[#484850]'
                           }`}
                           draggable
-                          onDragStart={() => {
-                            setDraggingActionId(entry.id);
+                          onMouseEnter={(e) => {
+                            if (entry.kind !== 'module' || !entry.mod) return;
+                            setHoverPreview({ mod: entry.mod, x: e.clientX, y: e.clientY });
+                          }}
+                          onMouseMove={(e) => {
+                            if (entry.kind !== 'module' || !entry.mod) return;
+                            setHoverPreview((prev) =>
+                              prev && prev.mod.id === entry.mod!.id
+                                ? { ...prev, x: e.clientX, y: e.clientY }
+                                : { mod: entry.mod, x: e.clientX, y: e.clientY }
+                            );
+                          }}
+                          onMouseLeave={() => setHoverPreview((prev) => (prev?.mod.id === entry.id ? null : prev))}
+                          onDragStart={(e) => {
+                            try {
+                              e.dataTransfer.setData('text/plain', entry.id);
+                              e.dataTransfer.effectAllowed = 'copyMove';
+                            } catch {
+                              /* ignore */
+                            }
+                            updateDraggingActionId(entry.id);
                             setDraggingActionFromFavorite(true);
                             setActionDroppedInFavorite(false);
                           }}
@@ -3120,7 +3394,7 @@ const WorkflowSection: React.FC<{
                             if (draggingActionFromFavorite && !actionDroppedInFavorite) {
                               removeActionFromFavorite(entry.id);
                             }
-                            setDraggingActionId(null);
+                            updateDraggingActionId(null);
                             setDraggingActionFromFavorite(false);
                             setActionDroppedInFavorite(false);
                             setFavoriteDropActive(false);
@@ -3141,6 +3415,19 @@ const WorkflowSection: React.FC<{
                               setDragOverAction(entry.id);
                             }}
                             onDragLeave={() => setDragOverAction(null)}
+                            onMouseEnter={(e) => {
+                              if (entry.kind !== 'module' || !entry.mod) return;
+                              setHoverPreview({ mod: entry.mod, x: e.clientX, y: e.clientY });
+                            }}
+                            onMouseMove={(e) => {
+                              if (entry.kind !== 'module' || !entry.mod) return;
+                              setHoverPreview((prev) =>
+                                prev && prev.mod.id === entry.mod!.id
+                                  ? { ...prev, x: e.clientX, y: e.clientY }
+                                  : { mod: entry.mod, x: e.clientX, y: e.clientY }
+                              );
+                            }}
+                            onMouseLeave={() => setHoverPreview((prev) => (prev?.mod.id === entry.id ? null : prev))}
                             onDrop={(e) => {
                               e.preventDefault();
                               setDragOverAction(null);
@@ -3155,12 +3442,16 @@ const WorkflowSection: React.FC<{
                           </div>
                           {entry.kind === 'module' && entry.mod?.category === 'image_gen' && (
                             <div
-                              className={`w-11 shrink-0 flex flex-col items-center justify-center rounded-r-lg transition-colors cursor-default ${
+                              className={`w-11 shrink-0 flex flex-col items-center justify-center rounded-r-lg transition-colors cursor-pointer ${
                                 dragOverAction === entry.id + '__tweak'
                                   ? 'bg-[#223d5c] border-l border-[#5080c0]'
                                   : 'bg-[#1c1c22] border-l border-[#2e2e32] hover:bg-[#2e2e36]'
                               }`}
-                              title="拖到此处可微调提示词后加入队列"
+                              title="拖到此处可微调提示词后加入队列；点击前往能力页调整预设"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (entry.kind === 'module' && entry.mod) jumpToCapabilityPreset(entry.mod);
+                              }}
                               onDragOver={(e) => {
                                 e.preventDefault();
                                 e.stopPropagation();
@@ -3174,7 +3465,7 @@ const WorkflowSection: React.FC<{
                                 if (entry.mod) handleDropToModuleAction(entry.mod, true);
                               }}
                             >
-                              <span className="text-[10px] text-blue-400 font-bold" title="微调提示词">调</span>
+                              <span className="text-[10px] text-blue-400 font-bold" title="微调提示词">词</span>
                             </div>
                           )}
                         </div>
@@ -3202,6 +3493,7 @@ const WorkflowSection: React.FC<{
                     {list.map((mod) => (
                       <div
                         key={mod.id}
+                        data-capability-hover-id={mod.id}
                         className={`rounded-xl border-2 border-dashed min-h-[60px] flex transition-colors ${
                           dragOverAction === mod.id
                             ? 'border-blue-500 bg-[#1a3354]'
@@ -3210,13 +3502,28 @@ const WorkflowSection: React.FC<{
                               : 'border-[#3a3a40] bg-[#1c1c22] hover:border-[#484850]'
                         }`}
                         draggable
-                        onDragStart={() => {
-                          setDraggingActionId(mod.id);
+                        onMouseEnter={(e) => setHoverPreview({ mod, x: e.clientX, y: e.clientY })}
+                        onMouseMove={(e) =>
+                          setHoverPreview((prev) =>
+                            prev && prev.mod.id === mod.id
+                              ? { ...prev, x: e.clientX, y: e.clientY }
+                              : { mod, x: e.clientX, y: e.clientY }
+                          )
+                        }
+                        onMouseLeave={() => setHoverPreview((prev) => (prev?.mod.id === mod.id ? null : prev))}
+                        onDragStart={(e) => {
+                          try {
+                            e.dataTransfer.setData('text/plain', mod.id);
+                            e.dataTransfer.effectAllowed = 'copyMove';
+                          } catch {
+                            /* ignore */
+                          }
+                          updateDraggingActionId(mod.id);
                           setDraggingActionFromFavorite(false);
                           setActionDroppedInFavorite(false);
                         }}
                         onDragEnd={() => {
-                          setDraggingActionId(null);
+                          updateDraggingActionId(null);
                           setDraggingActionFromFavorite(false);
                           setActionDroppedInFavorite(false);
                           setFavoriteDropActive(false);
@@ -3237,6 +3544,15 @@ const WorkflowSection: React.FC<{
                             setDragOverAction(mod.id);
                           }}
                           onDragLeave={() => setDragOverAction(null)}
+                          onMouseEnter={(e) => setHoverPreview({ mod, x: e.clientX, y: e.clientY })}
+                          onMouseMove={(e) =>
+                            setHoverPreview((prev) =>
+                              prev && prev.mod.id === mod.id
+                                ? { ...prev, x: e.clientX, y: e.clientY }
+                                : { mod, x: e.clientX, y: e.clientY }
+                            )
+                          }
+                          onMouseLeave={() => setHoverPreview((prev) => (prev?.mod.id === mod.id ? null : prev))}
                           onDrop={(e) => {
                             e.preventDefault();
                             setDragOverAction(null);
@@ -3298,12 +3614,16 @@ const WorkflowSection: React.FC<{
                         </div>
                         {mod.category === 'image_gen' && (
                           <div
-                            className={`w-11 shrink-0 flex flex-col items-center justify-center rounded-r-lg transition-colors cursor-default ${
+                            className={`w-11 shrink-0 flex flex-col items-center justify-center rounded-r-lg transition-colors cursor-pointer ${
                               dragOverAction === mod.id + '__tweak'
                                 ? 'bg-[#223d5c] border-l border-[#5080c0]'
                                 : 'bg-[#1c1c22] border-l border-[#2e2e32] hover:bg-[#2e2e36]'
                             }`}
-                            title="拖到此处可微调提示词后加入队列"
+                            title="拖到此处可微调提示词后加入队列；点击前往能力页调整预设"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              jumpToCapabilityPreset(mod);
+                            }}
                             onDragOver={(e) => {
                               e.preventDefault();
                               e.stopPropagation();
@@ -3362,7 +3682,7 @@ const WorkflowSection: React.FC<{
                               if (targets.length > 0) setPromptTweakModal({ preset: mod, targets });
                             }}
                           >
-                            <span className="text-[10px] text-blue-400 font-bold" title="微调提示词">调</span>
+                            <span className="text-[10px] text-blue-400 font-bold" title="微调提示词">词</span>
                           </div>
                         )}
                       </div>
@@ -3395,13 +3715,19 @@ const WorkflowSection: React.FC<{
                         : 'border-[#3a3a40] bg-[#1c1c22] hover:border-[#484850]'
                   }`}
                   draggable
-                  onDragStart={() => {
-                    setDraggingActionId(mod.id);
+                  onDragStart={(e) => {
+                    try {
+                      e.dataTransfer.setData('text/plain', mod.id);
+                      e.dataTransfer.effectAllowed = 'copyMove';
+                    } catch {
+                      /* ignore */
+                    }
+                    updateDraggingActionId(mod.id);
                     setDraggingActionFromFavorite(false);
                     setActionDroppedInFavorite(false);
                   }}
                   onDragEnd={() => {
-                    setDraggingActionId(null);
+                    updateDraggingActionId(null);
                     setDraggingActionFromFavorite(false);
                     setActionDroppedInFavorite(false);
                     setFavoriteDropActive(false);
@@ -3483,12 +3809,16 @@ const WorkflowSection: React.FC<{
                   </div>
                   {mod.category === 'image_gen' && (
                     <div
-                      className={`w-11 shrink-0 flex flex-col items-center justify-center rounded-r-lg transition-colors cursor-default ${
+                      className={`w-11 shrink-0 flex flex-col items-center justify-center rounded-r-lg transition-colors cursor-pointer ${
                         dragOverAction === mod.id + '__tweak'
                           ? 'bg-[#223d5c] border-l border-[#5080c0]'
                           : 'bg-[#1c1c22] border-l border-[#2e2e32] hover:bg-[#2e2e36]'
                       }`}
-                      title="拖到此处可微调提示词后加入队列"
+                      title="拖到此处可微调提示词后加入队列；点击前往能力页调整预设"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        jumpToCapabilityPreset(mod);
+                      }}
                       onDragOver={(e) => {
                         e.preventDefault();
                         e.stopPropagation();
@@ -3547,7 +3877,7 @@ const WorkflowSection: React.FC<{
                         if (targets.length > 0) setPromptTweakModal({ preset: mod, targets });
                       }}
                     >
-                      <span className="text-[10px] text-blue-400 font-bold" title="微调提示词">调</span>
+                      <span className="text-[10px] text-blue-400 font-bold" title="微调提示词">词</span>
                     </div>
                   )}
                 </div>
@@ -3579,13 +3909,19 @@ const WorkflowSection: React.FC<{
                     <div
                       key={set.id}
                       draggable
-                      onDragStart={() => {
-                        setDraggingActionId(setActionId);
+                      onDragStart={(e) => {
+                        try {
+                          e.dataTransfer.setData('text/plain', setActionId);
+                          e.dataTransfer.effectAllowed = 'copyMove';
+                        } catch {
+                          /* ignore */
+                        }
+                        updateDraggingActionId(setActionId);
                         setDraggingActionFromFavorite(false);
                         setActionDroppedInFavorite(false);
                       }}
                       onDragEnd={() => {
-                        setDraggingActionId(null);
+                        updateDraggingActionId(null);
                         setDraggingActionFromFavorite(false);
                         setActionDroppedInFavorite(false);
                         setFavoriteDropActive(false);
@@ -3730,14 +4066,14 @@ const WorkflowSection: React.FC<{
           >
         <div className="h-full min-h-0 shrink-0 flex flex-col pr-4 border-r border-white/[0.06]" style={{ width: `${libraryPaneWidth}px` }}>
           <div ref={libraryScrollRef} className="flex-1 min-h-0 overflow-y-auto no-scrollbar px-1">
-            {libraryItems.length === 0 ? (
+            {repositoryItems.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-16 text-gray-600 gap-2">
                 <span className="text-[10px] font-black uppercase tracking-wider">暂无资产</span>
                 <span className="text-[8px] text-gray-600">对话与其它入口生成的图会进入资产库</span>
               </div>
             ) : (
               <div className="grid grid-cols-2 gap-2 sm:gap-3">
-                {libraryItems.map((item) => (
+                {repositoryItems.map((item) => (
                   <button
                     key={item.id}
                     type="button"
@@ -3769,7 +4105,7 @@ const WorkflowSection: React.FC<{
               </div>
             )}
           </div>
-          {libraryItems.length > 0 && (
+          {repositoryItems.length > 0 && (
             <div className="shrink-0 pt-3 mt-1 flex justify-end gap-2 border-t border-white/[0.06]">
               <button
                 type="button"
@@ -3782,7 +4118,7 @@ const WorkflowSection: React.FC<{
                 type="button"
                 disabled={libraryImportIds.size === 0}
                 onClick={() => {
-                  const picked = libraryItems.filter((i) => libraryImportIds.has(i.id));
+                  const picked = repositoryItems.filter((i) => libraryImportIds.has(i.id));
                   importLibraryItemsIntoWorkflow(picked);
                 }}
                 className="px-4 py-2 rounded-xl bg-blue-600 text-[9px] font-black uppercase text-white disabled:opacity-40"
@@ -4665,11 +5001,12 @@ const WorkflowSection: React.FC<{
         {/* 右侧页：仅预设；功能区为中间页共享列，保证横向连续平移不跳变 */}
         <div className={`h-full min-h-0 shrink-0 flex flex-col overflow-hidden border-l border-white/[0.06] pl-4`} style={{ width: `${presetPaneWidth}px` }}>
           {capabilityPresetPanel ? (
-            <>
-              <div ref={presetScrollRef} data-workflow-preset className="flex-1 min-h-0 overflow-y-auto no-scrollbar rounded-xl border border-white/[0.06] bg-[#0a0a0c] p-2">
-                {capabilityPresetPanel}
-              </div>
-            </>
+            <div
+              data-workflow-preset
+              className="flex flex-col flex-1 min-h-0 overflow-hidden rounded-xl border border-white/[0.06] bg-[#0a0a0c] p-2"
+            >
+              {cloneCapabilityPresetPanelWithScrollRef(capabilityPresetPanel, presetScrollRef)}
+            </div>
           ) : (
             <div className="flex-1 min-h-0 rounded-xl border border-dashed border-white/10 bg-white/[0.02] flex items-center justify-center text-[9px] text-gray-600">
               未挂载能力预设
@@ -4786,6 +5123,39 @@ const WorkflowSection: React.FC<{
           </div>
         </div>
       )}
+
+      {hoverPreview &&
+        (() => {
+          const original = getModulePreviewOriginal(hoverPreview.mod);
+          const generated = getModulePreviewGenerated(hoverPreview.mod);
+          if (!original || !generated) return null;
+          const p = Math.max(0, Math.min(1, hoverPreviewScanProgress));
+          const cut = p * 100;
+          return createPortal(
+            <div
+              className="fixed z-[2500] pointer-events-none"
+              style={{ left: hoverPreview.x + 18, top: hoverPreview.y + 18 }}
+            >
+              <div className="w-52 rounded-xl border border-white/15 bg-[#0f1116]/90 backdrop-blur-sm p-2 shadow-2xl">
+                <div className="text-[8px] text-gray-300 mb-1">{hoverPreview.mod.label}</div>
+                <div className="relative w-full aspect-square rounded-lg overflow-hidden bg-black/30">
+                  <img src={original} alt="" className="absolute inset-0 h-full w-full object-cover" />
+                  <img
+                    src={generated}
+                    alt=""
+                    className="absolute inset-0 h-full w-full object-cover"
+                    style={{ clipPath: `polygon(0 0, ${cut}% 0, ${cut}% 100%, 0 100%)` }}
+                  />
+                  <div
+                    className="absolute inset-y-0 w-[1px] bg-cyan-100/90 shadow-[0_0_10px_rgba(34,211,238,0.55)]"
+                    style={{ left: `${cut}%`, transform: 'translateX(-50%)' }}
+                  />
+                </div>
+              </div>
+            </div>,
+            document.body
+          );
+        })()}
 
       {showLightboxGenerationRecord && lightboxAsset ? (
         <WorkflowGenerationRecordPanel

@@ -87,6 +87,8 @@ export type StoreCatalogItem = {
   desc?: string;
   version: string;
   url: string;
+  /** 能力预设卡片预览（相对能力商店根路径，与包内 preset.previewImage 一致） */
+  previewUrl?: string;
   sha256?: string;
   updatedAt?: string;
   tags?: string[];
@@ -450,6 +452,19 @@ export type CustomAppModule = {
   order?: number;
   /** 预设提示词。生图类：工作流执行时先交给文字模型理解，再拿理解结果调用生图模型（与对话模式一致）；图像处理类部分能力有内置逻辑可留空；生成3D 时可作补充描述。 */
   instruction: string;
+  /**
+   * 卡片预览图：本地多为 data URL；从 R2 能力商店同步后可为同源相对路径或完整 URL。
+   * 上传 R2 时服务端会将 data URL 转为独立对象并在 JSON 中写入相对路径，便于他人同步后展示。
+   */
+  previewImage?: string;
+  /** 对比预览：原始图（可选） */
+  previewOriginalImage?: string;
+  /** 对比预览：生成图（可选） */
+  previewGeneratedImage?: string;
+  /** 对比预览：原始图缩略图（可选） */
+  previewOriginalThumbImage?: string;
+  /** 对比预览：生成图缩略图（可选） */
+  previewGeneratedThumbImage?: string;
   /** 仅当 category === 'generate_3d' 时使用 */
   generate3D?: Generate3DPreset;
 };
