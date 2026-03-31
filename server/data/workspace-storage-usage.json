@@ -1,4 +1,17 @@
 {
   "version": 1,
-  "users": {}
+  "users": {
+    "d93ce5f5-38f9-4b66-8f40-b64028b53fae": {
+      "usedBytes": 714209,
+      "keys": {
+        "users/d93ce5f5-38f9-4b66-8f40-b64028b53fae/workspace/projects/b46346dd-6d5b-465a-b457-1331f5f3e8c7/assets/we1eta3y3/original.jpg": 34361,
+        "users/d93ce5f5-38f9-4b66-8f40-b64028b53fae/workspace/projects/b46346dd-6d5b-465a-b457-1331f5f3e8c7/assets/jr8k1ka3k/original.jpg": 156880,
+        "users/d93ce5f5-38f9-4b66-8f40-b64028b53fae/workspace/projects/b46346dd-6d5b-465a-b457-1331f5f3e8c7/assets/yptenzhy5/original.jpg": 146972,
+        "users/d93ce5f5-38f9-4b66-8f40-b64028b53fae/workspace/projects/b46346dd-6d5b-465a-b457-1331f5f3e8c7/assets/7bnyejs0z/original.jpg": 59107,
+        "users/d93ce5f5-38f9-4b66-8f40-b64028b53fae/workspace/projects/b46346dd-6d5b-465a-b457-1331f5f3e8c7/assets/7htpm0rso/original.jpg": 78127,
+        "users/d93ce5f5-38f9-4b66-8f40-b64028b53fae/workspace/projects/b46346dd-6d5b-465a-b457-1331f5f3e8c7/assets/n0c56umbo/original.jpg": 100887,
+        "users/d93ce5f5-38f9-4b66-8f40-b64028b53fae/workspace/projects/b46346dd-6d5b-465a-b457-1331f5f3e8c7/assets/11yp0zkew/original.jpg": 137875
+      }
+    }
+  }
 }

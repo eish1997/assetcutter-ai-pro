@@ -99,6 +99,7 @@ const CapabilityPresetSection: React.FC<{
   const [seedDropActive, setSeedDropActive] = useState(false);
   const [uploadingPresetIds, setUploadingPresetIds] = useState<Record<string, boolean>>({});
   const [syncAfterRefresh, setSyncAfterRefresh] = useState(false);
+  const autoSyncedRemoteRef = useRef(false);
   const [pendingScrollTarget, setPendingScrollTarget] = useState<{ kind: 'preset' | 'set'; id: string } | null>(null);
   const presetCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const setCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -165,6 +166,17 @@ const CapabilityPresetSection: React.FC<{
     }
     setSyncAfterRefresh(false);
   }, [syncAfterRefresh, catalogLoading, packContentsLoading, remotePresetItems, installPresets, onLog]);
+  useEffect(() => {
+    // 自动补齐公共仓库能力：仅在当前本地有缺失时执行一次，避免每次进入都覆盖本地排序
+    if (autoSyncedRemoteRef.current) return;
+    if (catalogLoading || packContentsLoading) return;
+    if (effectiveUninstalledPresetItems.length === 0) return;
+    const allRemote = remotePresetItems.map((rp) => rp.preset);
+    if (allRemote.length === 0) return;
+    installPresets(allRemote);
+    autoSyncedRemoteRef.current = true;
+    onLog?.('info', `已自动同步公共仓库能力（${allRemote.length} 条）`, undefined);
+  }, [catalogLoading, packContentsLoading, effectiveUninstalledPresetItems, remotePresetItems, installPresets, onLog]);
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const onViewModeSwitch = (event: Event) => {
