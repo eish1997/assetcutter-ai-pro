@@ -229,7 +229,8 @@ export async function pushWorkflowBundleToCloud(
   userId: string,
   projectId: string,
   bundle: { assets: WorkflowAsset[]; pending: WorkflowPendingTask[] },
-  username?: string | null
+  username?: string | null,
+  options?: { pruneUnreferenced?: boolean }
 ): Promise<void> {
   const prevPacked = await fetchWorkflowPackedFromCloud(userId, projectId, username);
   const packed = await packWorkflowBundleForCloud(userId, projectId, bundle, username);
@@ -239,7 +240,9 @@ export async function pushWorkflowBundleToCloud(
   const removeKeys = [...prevRefs].filter((k) => !nextRefs.has(k));
   await reconcileWorkspaceObjectRefs(addKeys, removeKeys);
   await putObjectBytes(workspaceWorkflowKey(userId, projectId, username), 'application/json', JSON.stringify(packed));
-  await pruneUnreferencedProjectObjects(userId, projectId, nextRefs, username);
+  if (options?.pruneUnreferenced !== false) {
+    await pruneUnreferencedProjectObjects(userId, projectId, nextRefs, username);
+  }
 }
 
 /** 删除某项目下所有 R2 对象（workflow.json、assets/、pending/ 等），避免孤儿图片 */

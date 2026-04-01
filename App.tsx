@@ -43,11 +43,31 @@ import {
 import { hydrateWorkflowBundleFromCloud } from './services/workspaceR2ImageBundle';
 import { HttpRequestError } from './services/httpClient';
 import { triggerImageDownload } from './services/imageDataUrl';
-import { getDialogSkipUnderstand, isAiInvocationReady, setDialogSkipUnderstand } from './services/settingsStore';
+import {
+  getDialogSkipUnderstand,
+  getWorkspaceAutoSyncEnabled,
+  isAiInvocationReady,
+  setDialogSkipUnderstand,
+  setWorkspaceAutoSyncEnabled,
+} from './services/settingsStore';
 import { WorkflowApiKeyModal } from './components/WorkflowApiKeyModal';
 
 function formatWorkspaceCloudMb(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+const WORKSPACE_AUTO_SYNC_INTERVAL_MS = 60 * 1000;
+
+function formatTimestampText(ts: number | null): string {
+  if (!ts) return '未同步';
+  return new Date(ts).toLocaleString();
+}
+
+function formatCountdownText(ms: number): string {
+  const total = Math.max(0, Math.ceil(ms / 1000));
+  const mm = String(Math.floor(total / 60)).padStart(2, '0');
+  const ss = String(total % 60).padStart(2, '0');
+  return `${mm}:${ss}`;
 }
 
 const UnifiedModelViewer3D = React.lazy(() => import('./components/UnifiedModelViewer3D'));
@@ -576,6 +596,12 @@ const MainApp: React.FC = () => {
   const editedWhileQuotaSuspendedRef = useRef(false);
   /** 离开工作区/切换项目时的整包上传中（阻塞 UI） */
   const [workspaceCloudLeaveSyncing, setWorkspaceCloudLeaveSyncing] = useState(false);
+  const [workspaceCloudLastSyncAt, setWorkspaceCloudLastSyncAt] = useState<number | null>(null);
+  const [workspaceCloudNextAutoSyncAt, setWorkspaceCloudNextAutoSyncAt] = useState<number | null>(null);
+  const [workspaceCloudCountdownNow, setWorkspaceCloudCountdownNow] = useState(() => Date.now());
+  const [workspaceCloudAutoSyncing, setWorkspaceCloudAutoSyncing] = useState(false);
+  const [workspaceAutoSyncEnabled, setWorkspaceAutoSyncEnabledState] = useState<boolean>(() => getWorkspaceAutoSyncEnabled());
+  const workspaceCloudAutoSyncingRef = useRef(false);
   const [apiKeyModalOpen, setApiKeyModalOpen] = useState(false);
   const [aiInvocationStatusRev, setAiInvocationStatusRev] = useState(0);
   /** 同步失败或配额场景下的应用内确认（替代浏览器原生 confirm） */
@@ -653,6 +679,74 @@ const MainApp: React.FC = () => {
     if (!user?.id || !user?.username || !isWorkspaceCloudEnabled() || !activeWorkspaceProjectId) return;
     editedWhileQuotaSuspendedRef.current = true;
   }, [workflowAssets, workflowPending, workspaceCloudQuotaSuspended, user?.id, activeWorkspaceProjectId]);
+
+  const triggerWorkspaceCloudSyncNow = useCallback(async (): Promise<boolean> => {
+    if (workspaceCloudAutoSyncingRef.current) return false;
+    if (mode !== AppMode.WORKFLOW) return false;
+    const uid = userIdRef.current;
+    const projectId = activeWorkspaceProjectIdRef.current;
+    if (
+      !uid ||
+      !projectId ||
+      !usernameRef.current ||
+      !isWorkspaceCloudEnabled() ||
+      workspaceCloudQuotaSuspendedRef.current ||
+      workspaceCloudPushAllowedUserIdRef.current !== uid ||
+      workspaceCloudHydratingProjectIdRef.current === projectId
+    ) {
+      return false;
+    }
+    workspaceCloudAutoSyncingRef.current = true;
+    setWorkspaceCloudAutoSyncing(true);
+    const bundle = { assets: workflowAssetsRef.current, pending: workflowPendingRef.current };
+    try {
+      await pushWorkflowBundleToCloud(uid, projectId, bundle, usernameRef.current, { pruneUnreferenced: false });
+      await pushWorkspaceIndex(uid, workspaceProjectsRef.current, activeWorkspaceProjectIdRef.current, usernameRef.current);
+      workspaceCloudDirtyRef.current = false;
+      setWorkspaceCloudLastSyncAt(Date.now());
+      return true;
+    } catch (e) {
+      console.warn('[workspace cloud] auto sync', e);
+      if (e instanceof HttpRequestError && e.code === 'STORAGE_QUOTA_EXCEEDED') {
+        setWorkspaceCloudQuotaSuspended(true);
+        editedWhileQuotaSuspendedRef.current = true;
+        void refreshAuthUser();
+      }
+      return false;
+    } finally {
+      workspaceCloudAutoSyncingRef.current = false;
+      setWorkspaceCloudAutoSyncing(false);
+      setWorkspaceCloudNextAutoSyncAt(Date.now() + WORKSPACE_AUTO_SYNC_INTERVAL_MS);
+    }
+  }, [mode, refreshAuthUser]);
+
+  useEffect(() => {
+    if (
+      !workspaceAutoSyncEnabled ||
+      mode !== AppMode.WORKFLOW ||
+      !activeWorkspaceProjectId ||
+      !user?.id ||
+      !user?.username ||
+      !isWorkspaceCloudEnabled()
+    ) {
+      setWorkspaceCloudNextAutoSyncAt(null);
+      return;
+    }
+    setWorkspaceCloudNextAutoSyncAt(Date.now() + WORKSPACE_AUTO_SYNC_INTERVAL_MS);
+  }, [workspaceAutoSyncEnabled, mode, activeWorkspaceProjectId, user?.id, user?.username]);
+
+  useEffect(() => {
+    if (!workspaceCloudNextAutoSyncAt) return;
+    const t = window.setInterval(() => setWorkspaceCloudCountdownNow(Date.now()), 1000);
+    return () => window.clearInterval(t);
+  }, [workspaceCloudNextAutoSyncAt]);
+
+  useEffect(() => {
+    if (!workspaceCloudNextAutoSyncAt) return;
+    if (Date.now() < workspaceCloudNextAutoSyncAt) return;
+    if (!workspaceAutoSyncEnabled) return;
+    void triggerWorkspaceCloudSyncNow();
+  }, [triggerWorkspaceCloudSyncNow, workspaceAutoSyncEnabled, workspaceCloudCountdownNow, workspaceCloudNextAutoSyncAt]);
 
   const runCloudWorkflowPull = useCallback((userId: string, projectId: string) => {
     cloudWorkflowSyncGenRef.current += 1;
@@ -995,6 +1089,8 @@ const MainApp: React.FC = () => {
             await pushWorkflowBundleToCloud(uid, curId, prevBundle, usernameRef.current);
             await pushWorkspaceIndex(uid, workspaceProjectsRef.current, id, usernameRef.current);
             workspaceCloudDirtyRef.current = false;
+            setWorkspaceCloudLastSyncAt(Date.now());
+            setWorkspaceCloudNextAutoSyncAt(Date.now() + WORKSPACE_AUTO_SYNC_INTERVAL_MS);
             await refreshAuthUser();
           } catch (e) {
             console.warn('[workspace cloud] switch project sync', e);
@@ -1047,6 +1143,8 @@ const MainApp: React.FC = () => {
             const lastOpen = getLastOpenedWorkspaceProjectId(scope);
             await pushWorkspaceIndex(uid, workspaceProjectsRef.current, lastOpen, usernameRef.current);
             workspaceCloudDirtyRef.current = false;
+            setWorkspaceCloudLastSyncAt(Date.now());
+            setWorkspaceCloudNextAutoSyncAt(Date.now() + WORKSPACE_AUTO_SYNC_INTERVAL_MS);
             await refreshAuthUser();
           } catch (e) {
             console.warn('[workspace cloud] back sync', e);
@@ -1160,6 +1258,12 @@ const MainApp: React.FC = () => {
   const workspaceCloudUsagePercent = Math.round(workspaceCloudUsageRatio * 100);
   const aiInvocationReady = useMemo(() => isAiInvocationReady(), [aiInvocationStatusRev]);
   const workspaceProjectOptions = workspaceProjects.map((p) => ({ value: p.id, label: p.name }));
+  const workspaceAutoSyncCountdownText = workspaceCloudAutoSyncing
+    ? '正在同步...'
+    : workspaceCloudNextAutoSyncAt
+    ? formatCountdownText(workspaceCloudNextAutoSyncAt - workspaceCloudCountdownNow)
+    : '--:--';
+  const workspaceLastSyncText = formatTimestampText(workspaceCloudLastSyncAt);
 
   const handleUserMenuAction = useCallback(async (action: string) => {
     if (!action) return;
@@ -2655,6 +2759,48 @@ const MainApp: React.FC = () => {
                     <span className="text-[8px] text-amber-400/90 font-medium animate-pulse" title="正按资源分批从云端还原图像">
                       正在从云端渐进载入图像…
                     </span>
+                  ) : null}
+                  {user?.id && isWorkspaceCloudEnabled() ? (
+                    <div className="flex items-center gap-2">
+                      <div className={`text-[8px] whitespace-nowrap ${workspaceCloudAutoSyncing ? 'text-blue-300 animate-pulse' : 'text-gray-400'}`}>
+                        云同步: {workspaceLastSyncText} · 自动同步倒计时 {workspaceAutoSyncEnabled ? workspaceAutoSyncCountdownText : '已关闭'}
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={workspaceAutoSyncEnabled}
+                        onClick={() => {
+                          setWorkspaceAutoSyncEnabledState((prev) => {
+                            const next = !prev;
+                            setWorkspaceAutoSyncEnabled(next);
+                            return next;
+                          });
+                        }}
+                        className={`relative inline-flex shrink-0 w-8 h-4 rounded-full transition-colors ${
+                          workspaceAutoSyncEnabled ? 'bg-blue-600' : 'bg-[#26262c]'
+                        }`}
+                        title={workspaceAutoSyncEnabled ? '点击关闭自动同步' : '点击开启自动同步'}
+                        aria-label={workspaceAutoSyncEnabled ? '自动同步已开启，点击关闭' : '自动同步已关闭，点击开启'}
+                      >
+                        <span
+                          className={`absolute top-0.5 left-0.5 w-3 h-3 rounded-full bg-white transition-transform ${
+                            workspaceAutoSyncEnabled ? 'translate-x-4' : 'translate-x-0'
+                          }`}
+                        />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void triggerWorkspaceCloudSyncNow();
+                        }}
+                        disabled={workspaceCloudAutoSyncing}
+                        className="h-6 px-2 rounded-md border border-[#2e2e32] bg-[#1c1c22] text-[8px] text-gray-300 hover:bg-[#2e2e36] hover:text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        title="立即同步当前工作区到云端"
+                        aria-label="立即同步当前工作区到云端"
+                      >
+                        立即同步
+                      </button>
+                    </div>
                   ) : null}
                   {user?.id && isWorkspaceCloudEnabled() ? (
                     <div className="ml-auto flex items-center gap-1.5">

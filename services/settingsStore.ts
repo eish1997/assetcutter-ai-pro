@@ -7,6 +7,7 @@ const STORAGE_KEY_TOAPIS_BASE_URL = 'ac_toapis_base_url';
 const STORAGE_KEY_VECTORENGINE_API_KEY = 'ac_vectorengine_api_key';
 const STORAGE_KEY_VECTORENGINE_BASE_URL = 'ac_vectorengine_base_url';
 const STORAGE_KEY_DIALOG_SKIP_UNDERSTAND = 'ac_dialog_skip_understand';
+const STORAGE_KEY_WORKSPACE_AUTO_SYNC = 'ac_workspace_auto_sync';
 
 export type AiProvider = 'gemini' | 'toapis' | 'vectorengine';
 const SESSION_KEY_TENCENT_SECRET_ID = 'ac_tencent_secret_id';
@@ -198,6 +199,27 @@ export function setDialogSkipUnderstand(value: boolean): void {
       localStorage.setItem(STORAGE_KEY_DIALOG_SKIP_UNDERSTAND, '1');
     } else {
       localStorage.removeItem(STORAGE_KEY_DIALOG_SKIP_UNDERSTAND);
+    }
+  } catch {
+    // ignore
+  }
+}
+
+/** 工作区：是否启用自动云同步（默认开启） */
+export function getWorkspaceAutoSyncEnabled(): boolean {
+  try {
+    return localStorage.getItem(STORAGE_KEY_WORKSPACE_AUTO_SYNC) !== '0';
+  } catch {
+    return true;
+  }
+}
+
+export function setWorkspaceAutoSyncEnabled(value: boolean): void {
+  try {
+    if (value) {
+      localStorage.removeItem(STORAGE_KEY_WORKSPACE_AUTO_SYNC);
+    } else {
+      localStorage.setItem(STORAGE_KEY_WORKSPACE_AUTO_SYNC, '0');
     }
   } catch {
     // ignore

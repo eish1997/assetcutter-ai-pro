@@ -101,6 +101,58 @@ function safeUnknownToString(v: unknown): string {
   }
 }
 
+function sanitizeDroppedUrl(raw: string): string | null {
+  const text = raw.trim();
+  if (!text) return null;
+  try {
+    const u = new URL(text);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+    return u.toString();
+  } catch {
+    return null;
+  }
+}
+
+function collectImageLikeUrlsFromText(raw: string): string[] {
+  if (!raw) return [];
+  const urls = raw
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#'))
+    .map(sanitizeDroppedUrl)
+    .filter((v): v is string => !!v);
+  return Array.from(new Set(urls));
+}
+
+function collectImageLikeUrlsFromHtml(rawHtml: string): string[] {
+  if (!rawHtml) return [];
+  try {
+    const doc = new DOMParser().parseFromString(rawHtml, 'text/html');
+    const urls = new Set<string>();
+    doc.querySelectorAll('img[src]').forEach((img) => {
+      const src = sanitizeDroppedUrl(img.getAttribute('src') || '');
+      if (src) urls.add(src);
+    });
+    doc.querySelectorAll('a[href]').forEach((a) => {
+      const href = sanitizeDroppedUrl(a.getAttribute('href') || '');
+      if (href && /\.(png|jpe?g|webp|gif|bmp|svg)(\?.*)?$/i.test(href)) urls.add(href);
+    });
+    return Array.from(urls);
+  } catch {
+    return [];
+  }
+}
+
+function dataTransferItemToString(item: DataTransferItem): Promise<string> {
+  return new Promise((resolve) => {
+    try {
+      item.getAsString((s) => resolve(s || ''));
+    } catch {
+      resolve('');
+    }
+  });
+}
+
 /** 常用功能区 dragOver 兜底：首轮 dragover 可能早于 ref 同步，但 setData 后 types 已有 text/plain */
 function dragTransferHasPlainText(e: React.DragEvent): boolean {
   try {
@@ -1724,7 +1776,6 @@ const WorkflowSection: React.FC<{
     e.target.value = '';
   };
 
-  const [dropZoneActive, setDropZoneActive] = useState(false);
   const hasImageFileTransfer = useCallback((dt?: DataTransfer | null) => {
     if (!dt) return false;
     if (dt.files?.length) {
@@ -1737,7 +1788,63 @@ const WorkflowSection: React.FC<{
         if (dt.items[i].kind === 'file' && dt.items[i].type?.startsWith('image/')) return true;
       }
     }
+    const types = dt.types ? Array.from(dt.types) : [];
+    if (types.includes('text/uri-list') || types.includes('text/html')) return true;
     return false;
+  }, []);
+  const collectImageLikeUrlsFromDataTransfer = useCallback(async (dt?: DataTransfer | null) => {
+    if (!dt) return [] as string[];
+    const urls = new Set<string>();
+    collectImageLikeUrlsFromText(dt.getData('text/uri-list') || '').forEach((u) => urls.add(u));
+    collectImageLikeUrlsFromText(dt.getData('text/plain') || '').forEach((u) => urls.add(u));
+    collectImageLikeUrlsFromHtml(dt.getData('text/html') || '').forEach((u) => urls.add(u));
+    if (dt.items?.length) {
+      const pending: Promise<void>[] = [];
+      for (let i = 0; i < dt.items.length; i += 1) {
+        const it = dt.items[i];
+        if (it.kind !== 'string') continue;
+        if (it.type === 'text/uri-list' || it.type === 'text/plain') {
+          pending.push(
+            dataTransferItemToString(it).then((raw) => {
+              collectImageLikeUrlsFromText(raw).forEach((u) => urls.add(u));
+            })
+          );
+        } else if (it.type === 'text/html') {
+          pending.push(
+            dataTransferItemToString(it).then((raw) => {
+              collectImageLikeUrlsFromHtml(raw).forEach((u) => urls.add(u));
+            })
+          );
+        }
+      }
+      if (pending.length) await Promise.all(pending);
+    }
+    return Array.from(urls).slice(0, 20);
+  }, []);
+  const fetchImageFilesFromUrls = useCallback(async (urls: string[]) => {
+    const extFromType = (type: string) => {
+      if (type === 'image/jpeg') return 'jpg';
+      if (type === 'image/png') return 'png';
+      if (type === 'image/webp') return 'webp';
+      if (type === 'image/gif') return 'gif';
+      return 'png';
+    };
+    const files: File[] = [];
+    for (let i = 0; i < urls.length; i += 1) {
+      const url = urls[i];
+      try {
+        const res = await fetch(url, { mode: 'cors' });
+        if (!res.ok) continue;
+        const type = (res.headers.get('content-type') || '').split(';')[0].trim();
+        if (!type.startsWith('image/')) continue;
+        const blob = await res.blob();
+        const file = new File([blob], `web-drop-${Date.now()}-${i}.${extFromType(type)}`, { type: blob.type || type });
+        files.push(file);
+      } catch {
+        // 某些站点会因 CORS 阻止读取，跳过并继续处理其他链接
+      }
+    }
+    return files;
   }, []);
   const favoriteStorageKey = useMemo(
     () => (preferenceScope ? `ac_workflow_favorites_v1__u_${preferenceScope}` : 'ac_workflow_favorites_v1__guest'),
@@ -1822,33 +1929,34 @@ const WorkflowSection: React.FC<{
       if (isGlobalUploadBlockedTarget(e.target)) return;
       if (!hasImageFileTransfer(e.dataTransfer)) return;
       e.preventDefault();
-      setDropZoneActive(true);
     };
 
     const onWindowDrop = (e: DragEvent) => {
       if (showArchived) return;
-      setDropZoneActive(false);
       if (isGlobalUploadBlockedTarget(e.target)) return;
       const dt = e.dataTransfer;
       if (!hasImageFileTransfer(dt)) return;
       e.preventDefault();
       const files = Array.from(dt?.files || []).filter((f) => f.type?.startsWith('image/'));
-      if (files.length) addImagesFromFiles(files);
+      if (files.length) {
+        addImagesFromFiles(files);
+        return;
+      }
+      void (async () => {
+        const urls = await collectImageLikeUrlsFromDataTransfer(dt);
+        if (!urls.length) return;
+        const remoteFiles = await fetchImageFilesFromUrls(urls);
+        if (remoteFiles.length) addImagesFromFiles(remoteFiles);
+      })();
     };
-
-    const onWindowDragEnd = () => setDropZoneActive(false);
 
     window.addEventListener('dragover', onWindowDragOver);
     window.addEventListener('drop', onWindowDrop);
-    window.addEventListener('dragleave', onWindowDragEnd);
-    window.addEventListener('dragend', onWindowDragEnd);
     return () => {
       window.removeEventListener('dragover', onWindowDragOver);
       window.removeEventListener('drop', onWindowDrop);
-      window.removeEventListener('dragleave', onWindowDragEnd);
-      window.removeEventListener('dragend', onWindowDragEnd);
     };
-  }, [addImagesFromFiles, hasImageFileTransfer, isGlobalUploadBlockedTarget, showArchived]);
+  }, [addImagesFromFiles, collectImageLikeUrlsFromDataTransfer, fetchImageFilesFromUrls, hasImageFileTransfer, isGlobalUploadBlockedTarget, showArchived]);
 
   const visibleAssets = useMemo(() => {
     // 仅展示“根资产”：归档状态匹配，且不是子资产（没有 parentAssetId）
@@ -4867,17 +4975,10 @@ const WorkflowSection: React.FC<{
         <div className="min-w-0 min-h-0 h-full flex flex-col shrink-0" style={{ width: `${listPaneWidth}px` }}>
         <div
           ref={centerScrollRef}
-          className={`flex-1 min-w-0 min-h-0 overflow-y-auto no-scrollbar flex flex-col gap-3 rounded-xl transition-colors ${
-            dropZoneActive ? 'ring-1 ring-[#3b82f6] bg-[#152535]' : ''
-          }`}
+          className="flex-1 min-w-0 min-h-0 overflow-y-auto no-scrollbar flex flex-col gap-3 rounded-xl transition-colors"
           onDragOver={(e) => {
             if (!hasImageFileTransfer(e.dataTransfer)) return;
             e.preventDefault();
-            setDropZoneActive(true);
-          }}
-          onDragLeave={(e) => {
-            const next = e.relatedTarget as Node | null;
-            if (!next || !e.currentTarget.contains(next)) setDropZoneActive(false);
           }}
           tabIndex={0}
         >

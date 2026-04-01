@@ -57,6 +57,28 @@ function isLikelyHttpImageUrl(s: string): boolean {
 /** 云端对象默认尽量用 JPEG（更小）；0.85~0.9 为常用折中 */
 const CLOUD_UPLOAD_JPEG_QUALITY = 0.88;
 const CLOUD_ENCODE_MAX_SIDE = 8192;
+const CLOUD_PACK_UPLOAD_CONCURRENCY = 4;
+
+async function mapLimit<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  if (!items.length) return [];
+  const limit = Math.max(1, Math.min(concurrency, items.length));
+  const out = new Array<R>(items.length);
+  let cursor = 0;
+  await Promise.all(
+    Array.from({ length: limit }, async () => {
+      for (;;) {
+        const i = cursor++;
+        if (i >= items.length) break;
+        out[i] = await mapper(items[i], i);
+      }
+    })
+  );
+  return out;
+}
 
 /**
  * 将可解码的位图 data URL 转为 JPEG data URL（仅全不透明像素时）。
@@ -298,7 +320,7 @@ export async function packWorkflowBundleForCloud(
   const dataUrlToKey = new Map<string, string>();
   const contentHashToKey = new Map<string, string>();
 
-  for (const a of assets) {
+  await mapLimit(assets, CLOUD_PACK_UPLOAD_CONCURRENCY, async (a) => {
     delete a.originalObjectKey;
     delete a.resultsObjectKeys;
     const base = assetBasePath(userId, projectId, a.id, username);
@@ -313,37 +335,48 @@ export async function packWorkflowBundleForCloud(
 
     const resultsKeys: Record<string, string> = {};
     const nextResults: Record<string, string> = { ...a.results };
-    for (const stepId of Object.keys(nextResults)) {
+    const stepIds = Object.keys(nextResults);
+    const resultPairs = await mapLimit(stepIds, CLOUD_PACK_UPLOAD_CONCURRENCY, async (stepId) => {
       const v = nextResults[stepId];
-      const key = v
-        ? await uploadDataUrlDeduped(dataUrlToKey, contentHashToKey, v, userId, username, (p) => `${base}/results/${sanitizeSegment(stepId)}.${mimeToExt(p.mime)}`)
-        : null;
-      if (key) {
-        resultsKeys[stepId] = key;
-        delete nextResults[stepId];
-      }
+      if (!v) return { stepId, key: null as string | null };
+      const key = await uploadDataUrlDeduped(
+        dataUrlToKey,
+        contentHashToKey,
+        v,
+        userId,
+        username,
+        (p) => `${base}/results/${sanitizeSegment(stepId)}.${mimeToExt(p.mime)}`
+      );
+      return { stepId, key };
+    });
+    for (const pair of resultPairs) {
+      if (!pair.key) continue;
+      resultsKeys[pair.stepId] = pair.key;
+      delete nextResults[pair.stepId];
     }
     a.results = nextResults;
     if (Object.keys(resultsKeys).length) a.resultsObjectKeys = resultsKeys;
 
     if (a.cutImageGroup?.length) {
-      const nextGroup: WorkflowCutGroupItem[] = [];
-      let idx = 0;
-      for (const item of a.cutImageGroup) {
+      const nextGroup = await mapLimit(a.cutImageGroup, CLOUD_PACK_UPLOAD_CONCURRENCY, async (item, idx) => {
         if (typeof item === 'string') {
-          const key = await uploadDataUrlDeduped(dataUrlToKey, contentHashToKey, item, userId, username, (p) => `${base}/cut/${idx}.${mimeToExt(p.mime)}`);
-          if (key) nextGroup.push({ r2Key: key });
-          else nextGroup.push(item);
-        } else {
-          nextGroup.push(item);
+          const key = await uploadDataUrlDeduped(
+            dataUrlToKey,
+            contentHashToKey,
+            item,
+            userId,
+            username,
+            (p) => `${base}/cut/${idx}.${mimeToExt(p.mime)}`
+          );
+          return key ? ({ r2Key: key } as WorkflowCutGroupItem) : item;
         }
-        idx++;
-      }
+        return item;
+      });
       a.cutImageGroup = nextGroup;
     }
-  }
+  });
 
-  for (const t of pending) {
+  await mapLimit(pending, CLOUD_PACK_UPLOAD_CONCURRENCY, async (t) => {
     delete t.inputImageObjectKey;
     const pendBase = `users/${userStorageDirName(userId, username)}/workspace/projects/${projectId}/pending/${t.id}`;
     const key = await uploadDataUrlDeduped(dataUrlToKey, contentHashToKey, t.inputImage, userId, username, (p) => `${pendBase}.${mimeToExt(p.mime)}`);
@@ -351,7 +384,7 @@ export async function packWorkflowBundleForCloud(
       t.inputImageObjectKey = key;
       t.inputImage = '';
     }
-  }
+  });
 
   return { version: 2, assets, pending };
 }
