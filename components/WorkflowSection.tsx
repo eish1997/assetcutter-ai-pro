@@ -27,8 +27,64 @@ import AppIcon from './ui/AppIcon';
 const WORKFLOW_IMG_EMPTY_PLACEHOLDER =
   'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 
-/** 持久化数据异常时可能混入非 string，避免把对象传给 img src 触发 React 抛错 */
+/** 持久化数据异常时可能混入 non string，避免把对象传给 img src 触发 React 抛错 */
 const asWorkflowImageString = (v: unknown): string => (typeof v === 'string' ? v : '');
+
+/** 大纲底部拖放：仓库条目 / 工作区导出（与 onDragStart setData 一致） */
+const DT_AC_LIBRARY_ITEM_ID = 'application/x-ac-library-item-id';
+const DT_AC_WORKFLOW_EXPORT = 'application/x-ac-workflow-export';
+
+type AcWorkflowExportPayload =
+  | { mode: 'roots'; assetIds: string[] }
+  | { mode: 'groupItems'; items: Array<{ parentId: string; index: number }> };
+
+function buildLibraryItemsFromWorkflowExport(
+  assets: WorkflowAsset[],
+  showArchived: boolean,
+  getDisplay: (a: WorkflowAsset) => string,
+  payload: AcWorkflowExportPayload
+): Partial<LibraryItem>[] {
+  const items: Partial<LibraryItem>[] = [];
+  if (payload.mode === 'roots') {
+    const seen = new Set<string>();
+    for (const id of payload.assetIds) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const a = assets.find((x) => x.id === id);
+      if (!a || a.archived !== showArchived || a.parentAssetId) continue;
+      const data = getDisplay(a);
+      if (!data || data === WORKFLOW_IMG_EMPTY_PLACEHOLDER) continue;
+      items.push({
+        data,
+        label: (a.groupLabel && a.groupLabel.trim()) || `工作区-${id.slice(0, 8)}`,
+        type: 'SLICE',
+        category: 'PREVIEW_STRIP',
+      });
+    }
+  } else {
+    for (const { parentId, index: idx } of payload.items) {
+      const parent = assets.find((x) => x.id === parentId);
+      const raw = parent?.cutImageGroup?.[idx];
+      if (raw == null) continue;
+      let data: string | null = null;
+      if (typeof raw === 'string') data = raw;
+      else if (raw && typeof raw === 'object' && 'assetId' in raw) {
+        const ch = assets.find((x) => x.id === (raw as { assetId: string }).assetId);
+        data = ch ? getDisplay(ch) : null;
+      } else if (raw && typeof raw === 'object' && 'r2Key' in raw) {
+        data = asWorkflowImageString(parent?.original);
+      }
+      if (!data || data === WORKFLOW_IMG_EMPTY_PLACEHOLDER) continue;
+      items.push({
+        data,
+        label: `${parent?.groupLabel || '组'} · 子项 ${idx + 1}`,
+        type: 'SLICE',
+        category: 'PREVIEW_STRIP',
+      });
+    }
+  }
+  return items;
+}
 
 const workflowSafeImgSrc = (s: string | undefined | null) => {
   if (typeof s !== 'string' || s.trim() === '') return WORKFLOW_IMG_EMPTY_PLACEHOLDER;
@@ -600,6 +656,68 @@ const TITLE_ROW_BTN_BASE =
 const TITLE_ROW_BTN_NEUTRAL = `${TITLE_ROW_BTN_BASE} bg-[#1c1c22] border-[#2e2e32] text-gray-300 hover:bg-[#2e2e36]`;
 const TITLE_ROW_BTN_ACTIVE = `${TITLE_ROW_BTN_BASE} bg-blue-600 border-blue-500 text-white`;
 
+/** 大纲：子资产沿 parentAssetId 得到 viewStack（不含子资产自身），用于组内子卡片定位 */
+function workflowOutlineAncestorStack(childAssetId: string, assets: WorkflowAsset[]): { assetId: string }[] {
+  const target = assets.find((a) => a.id === childAssetId);
+  if (!target?.parentAssetId) return [];
+  const chain: string[] = [];
+  let pid: string | undefined = target.parentAssetId;
+  while (pid) {
+    chain.push(pid);
+    const p = assets.find((x) => x.id === pid);
+    pid = p?.parentAssetId;
+  }
+  chain.reverse();
+  return chain.map((id) => ({ assetId: id }));
+}
+
+/** 进入某组内部：栈为从根到该组（含该组） */
+function workflowOutlineDrillStackToEnterGroup(groupId: string, assets: WorkflowAsset[]): { assetId: string }[] {
+  const chain: string[] = [];
+  let id: string | undefined = groupId;
+  while (id) {
+    chain.push(id);
+    const n = assets.find((a) => a.id === id);
+    id = n?.parentAssetId;
+  }
+  chain.reverse();
+  return chain.map((i) => ({ assetId: i }));
+}
+
+function workflowFindGroupItemIndex(parent: WorkflowAsset, childAssetId: string): number | null {
+  const items = parent.cutImageGroup ?? [];
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    if (it && typeof it === 'object' && 'assetId' in it && (it as { assetId: string }).assetId === childAssetId) {
+      return i;
+    }
+  }
+  return null;
+}
+
+/** 大纲树中所有「有子项」的组节点 id（与 outlineTreeRows 遍历一致，含嵌套引用子资产） */
+function workflowOutlineExpandableGroupIds(assets: WorkflowAsset[], visibleRoots: WorkflowAsset[]): Set<string> {
+  const ids = new Set<string>();
+  const visit = (a: WorkflowAsset, visited: Set<string>) => {
+    if (visited.has(a.id)) return;
+    visited.add(a.id);
+    const items = a.cutImageGroup ?? [];
+    if (items.length > 0) ids.add(a.id);
+    items.forEach((item) => {
+      const isRef = item && typeof item === 'object' && 'assetId' in item;
+      const childId = isRef ? (item as { assetId: string }).assetId : '';
+      if (typeof item === 'string' || (item && typeof item === 'object' && 'r2Key' in item && !isRef)) return;
+      if (isRef && childId) {
+        const child = assets.find((x) => x.id === childId);
+        if (child) visit(child, visited);
+      }
+    });
+  };
+  const seen = new Set<string>();
+  visibleRoots.forEach((root) => visit(root, seen));
+  return ids;
+}
+
 const WorkflowSection: React.FC<{
   capabilityPresets: CustomAppModule[];
   capabilitySets?: CapabilitySet[];
@@ -617,6 +735,8 @@ const WorkflowSection: React.FC<{
   registerMarqueeStartHandler?: (handler: ((e: React.MouseEvent) => void) | null) => void;
   /** 左侧「仓库」页：资产库条目（与弹窗导入同源） */
   libraryItems?: LibraryItem[];
+  /** 大纲底部「放到仓库」：将选中工作区资产写入资产库（与 App 内 addToLibrary 同源） */
+  onAddToLibrary?: (items: Partial<LibraryItem>[]) => void;
   /** 右侧「能力」页底部：能力预设编辑区（由 App 传入 Suspense 包裹的 CapabilityPresetSection） */
   capabilityPresetPanel?: React.ReactNode;
 }> = ({
@@ -632,6 +752,7 @@ const WorkflowSection: React.FC<{
   preferenceScope = null,
   registerMarqueeStartHandler,
   libraryItems: libraryItemsProp,
+  onAddToLibrary,
   capabilityPresetPanel,
 }) => {
   const libraryItems = Array.isArray(libraryItemsProp) ? libraryItemsProp : [];
@@ -722,22 +843,25 @@ const WorkflowSection: React.FC<{
   const workspaceViewportRef = useRef<HTMLDivElement>(null);
   const workspaceTrackRef = useRef<HTMLDivElement>(null);
   const libraryScrollRef = useRef<HTMLDivElement>(null);
+  const outlineScrollRef = useRef<HTMLDivElement>(null);
+  /** 大纲：有 id 表示该组折叠子项；默认全展开 */
+  const [outlineCollapsedIds, setOutlineCollapsedIds] = useState<Set<string>>(() => new Set());
   const centerScrollRef = useRef<HTMLDivElement>(null);
   const presetScrollRef = useRef<HTMLDivElement>(null);
   const [workspaceViewportWidth, setWorkspaceViewportWidth] = useState(0);
-  /** 0=仓库 1=工作区(画布) 2=能力；支持连续位置（如 1.37） */
-  const [workspacePane, setWorkspacePane] = useState<number>(1);
-  const workspacePaneRef = useRef<number>(1);
+  /** 0=仓库|大纲 1=大纲|工作区 2=工作区|功能区 3=功能区|能力；支持连续位置 */
+  const [workspacePane, setWorkspacePane] = useState<number>(2);
+  const workspacePaneRef = useRef<number>(2);
   const [workspaceSnapping, setWorkspaceSnapping] = useState(false);
   const workspaceSnapTimerRef = useRef<number | null>(null);
   const workspaceSwipeTouchX = useRef(0);
   const workspaceSwipeStartOffsetPx = useRef(0);
   // 拖动时连续更新会触发大量 setState，使用 rAF 节流避免抖动
   const workspaceRafRef = useRef<number | null>(null);
-  const workspaceNextPaneRef = useRef<number>(1);
+  const workspaceNextPaneRef = useRef<number>(2);
   const setWorkspacePaneRaf = useCallback(
     (next: number) => {
-      const clamped = Math.max(0, Math.min(2, next));
+      const clamped = Math.max(0, Math.min(3, next));
       workspaceNextPaneRef.current = clamped;
       if (typeof window === 'undefined') {
         setWorkspacePane(clamped);
@@ -753,7 +877,7 @@ const WorkflowSection: React.FC<{
   );
   const snapWorkspacePaneToNode = useCallback((rawPane?: number) => {
     const base = typeof rawPane === 'number' ? rawPane : workspacePaneRef.current;
-    const snapped = Math.max(0, Math.min(2, Math.round(base)));
+    const snapped = Math.max(0, Math.min(3, Math.round(base)));
     if (workspaceSnapTimerRef.current != null && typeof window !== 'undefined') {
       window.clearTimeout(workspaceSnapTimerRef.current);
       workspaceSnapTimerRef.current = null;
@@ -794,22 +918,36 @@ const WorkflowSection: React.FC<{
       window.requestAnimationFrame(emitJump);
       window.setTimeout(emitJump, 220);
     }
-    snapWorkspacePaneToNode(2);
+    snapWorkspacePaneToNode(3);
   }, [snapWorkspacePaneToNode]);
   const [spacePanEnabled, setSpacePanEnabled] = useState(false);
   const [spacePanDragging, setSpacePanDragging] = useState(false);
   const marqueeStartRef = useRef(false);
   const suppressClickAfterPanRef = useRef(false);
   const [libraryImportIds, setLibraryImportIds] = useState<Set<string>>(new Set());
+  /** 大纲底部拖入区高亮 */
+  const [outlineFooterDropOver, setOutlineFooterDropOver] = useState<'toWorkspace' | 'toLibrary' | null>(null);
   const [libraryFilter, setLibraryFilter] = useState<'all' | 'library' | 'archived'>('all');
+  /** 框选起始时的横向页：0=仓库 1|2=工作区画布（与 workspacePane 对齐） */
+  const marqueePaneRef = useRef(0);
   const handleMarqueeMouseDown = useCallback(
     (e: React.MouseEvent) => {
-      if (workspacePane < 0.5 || workspacePane > 1.5) return;
-      if (showArchived) return;
+      const pn = Math.round(workspacePane);
+      if (pn !== 0 && pn !== 1 && pn !== 2) return;
+      if (pn !== 0 && showArchived) return;
       if ((e.target as Element).closest('[data-workflow-toolbar]')) return;
-      if ((e.target as Element).closest('[data-workflow-card]')) return;
-      if ((e.target as Element).closest('button, [role="button"], a, input, select, textarea, label')) return;
-      if ((e.target as Element).closest('[data-workflow-sidebar], [data-workflow-preset]')) return;
+      if (pn === 0) {
+        if ((e.target as Element).closest('[data-workflow-library-card]')) return;
+        if ((e.target as Element).closest('[data-workflow-outline]')) return;
+        if ((e.target as Element).closest('[data-workflow-outline-footer]')) return;
+        if ((e.target as Element).closest('button, [role="button"], a, input, select, textarea, label')) return;
+        if ((e.target as Element).closest('[data-workflow-sidebar], [data-workflow-preset]')) return;
+      } else {
+        if ((e.target as Element).closest('[data-workflow-card]')) return;
+        if ((e.target as Element).closest('button, [role="button"], a, input, select, textarea, label')) return;
+        if ((e.target as Element).closest('[data-workflow-sidebar], [data-workflow-preset], [data-workflow-outline]')) return;
+      }
+      marqueePaneRef.current = pn;
       // 本次鼠标按下将启动框选；如果同时按了 Space，我们让“平移抓手”不要抢占该事件
       marqueeStartRef.current = true;
       e.preventDefault();
@@ -824,6 +962,56 @@ const WorkflowSection: React.FC<{
     return () => registerMarqueeStartHandler(null);
   }, [registerMarqueeStartHandler, handleMarqueeMouseDown]);
   const cardRefs = useRef<Map<string, HTMLElement>>(new Map());
+  const libraryCardRefs = useRef<Map<string, HTMLElement>>(new Map());
+
+  const toggleOutlineGroupCollapsed = useCallback((groupId: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setOutlineCollapsedIds((prev) => {
+      const n = new Set(prev);
+      if (n.has(groupId)) n.delete(groupId);
+      else n.add(groupId);
+      return n;
+    });
+  }, []);
+
+  const navigateOutlineToAsset = useCallback(
+    (asset: WorkflowAsset) => {
+      if (!asset.parentAssetId) {
+        setViewStack([]);
+        setSelectedGroupItemKeys(new Set());
+        setSelectedAssetIds(new Set([asset.id]));
+        requestAnimationFrame(() => {
+          cardRefs.current.get(asset.id)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        });
+        return;
+      }
+      const parent = assets.find((p) => p.id === asset.parentAssetId);
+      if (!parent) return;
+      const idx = workflowFindGroupItemIndex(parent, asset.id);
+      if (idx == null) return;
+      setViewStack(workflowOutlineAncestorStack(asset.id, assets));
+      setSelectedAssetIds(new Set());
+      setSelectedGroupItemKeys(new Set([`${parent.id}::${idx}`]));
+      requestAnimationFrame(() => {
+        cardRefs.current.get(`${parent.id}::${idx}`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      });
+    },
+    [assets]
+  );
+
+  const navigateOutlineToGroupItem = useCallback(
+    (group: WorkflowAsset, itemIndex: number) => {
+      setViewStack(workflowOutlineDrillStackToEnterGroup(group.id, assets));
+      setSelectedAssetIds(new Set());
+      setSelectedGroupItemKeys(new Set([`${group.id}::${itemIndex}`]));
+      requestAnimationFrame(() => {
+        cardRefs.current.get(`${group.id}::${itemIndex}`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      });
+    },
+    [assets]
+  );
+
   const [dragOverAssetId, setDragOverAssetId] = useState<string | null>(null);
   const [dragOverGroupItemKey, setDragOverGroupItemKey] = useState<string | null>(null);
   const [assetErrors, setAssetErrors] = useState<Map<string, string>>(new Map());
@@ -1656,6 +1844,214 @@ const WorkflowSection: React.FC<{
       (a) => a.archived === showArchived && (!a.hiddenInGrid || a.archived) && !a.parentAssetId
     );
   }, [assets, showArchived]);
+
+  const outlineExpandableGroupIds = useMemo(
+    () => workflowOutlineExpandableGroupIds(assets, visibleAssets),
+    [assets, visibleAssets]
+  );
+
+  const expandOutlineAll = useCallback(() => {
+    setOutlineCollapsedIds(new Set());
+  }, []);
+
+  const collapseOutlineAll = useCallback(() => {
+    setOutlineCollapsedIds(new Set(outlineExpandableGroupIds));
+  }, [outlineExpandableGroupIds]);
+
+  const outlineTreeRows = useMemo(() => {
+    const rows: React.ReactElement[] = [];
+    const visit = (
+      a: WorkflowAsset,
+      depth: number,
+      parent: WorkflowAsset | null,
+      indexInParent: number | null,
+      visited: Set<string>
+    ) => {
+      if (visited.has(a.id)) return;
+      visited.add(a.id);
+      const label =
+        a.groupLabel ||
+        (a.cutImageGroup?.length ? (a.groupKind === 'manual' ? '组' : '切割') : null) ||
+        `图片 ${a.id.slice(0, 8)}`;
+      const items = a.cutImageGroup ?? [];
+      const hasChildren = items.length > 0;
+      const expanded = !hasChildren || !outlineCollapsedIds.has(a.id);
+      const isSel =
+        parent != null && indexInParent != null
+          ? selectedGroupItemKeys.has(`${parent.id}::${indexInParent}`)
+          : selectedAssetIds.has(a.id) && viewStack.length === 0;
+
+      rows.push(
+        <div
+          key={`ol-${a.id}-d${depth}-p${parent?.id ?? 'root'}i${indexInParent ?? -1}`}
+          className="flex items-stretch gap-0.5 min-w-0"
+          style={{ paddingLeft: depth * 10 }}
+        >
+          {hasChildren ? (
+            <button
+              type="button"
+              aria-expanded={expanded}
+              aria-label={expanded ? '折叠子项' : '展开子项'}
+              onClick={(e) => toggleOutlineGroupCollapsed(a.id, e)}
+              className="shrink-0 w-5 h-7 flex items-center justify-center rounded-md text-gray-400 hover:bg-white/10 hover:text-white outline-none focus-visible:ring-1 focus-visible:ring-blue-500/50"
+            >
+              <span className="text-[9px] font-bold leading-none" aria-hidden>
+                {expanded ? '▼' : '▶'}
+              </span>
+            </button>
+          ) : (
+            <span className="shrink-0 w-5 h-7" aria-hidden />
+          )}
+          <button
+            type="button"
+            draggable
+            onDragStart={(e) => {
+              e.stopPropagation();
+              try {
+                const payload: AcWorkflowExportPayload = { mode: 'roots', assetIds: [a.id] };
+                e.dataTransfer.setData(DT_AC_WORKFLOW_EXPORT, JSON.stringify(payload));
+                e.dataTransfer.effectAllowed = 'copy';
+              } catch {
+                /* ignore */
+              }
+            }}
+            onClick={() => {
+              setShowArchived(!!a.archived);
+              navigateOutlineToAsset(a);
+            }}
+            className={`flex-1 min-w-0 text-left rounded-lg px-2 py-1.5 text-[9px] border transition-colors truncate ${
+              isSel ? 'border-blue-500 bg-[#152642] text-blue-200' : 'border-white/[0.06] bg-[#141416] text-gray-300 hover:bg-[#1c1c22]'
+            }`}
+          >
+            {a.archived ? <span className="text-gray-500 mr-1">已归</span> : null}
+            {label}
+            {hasChildren ? (
+              <span className="text-gray-500 ml-1 tabular-nums font-mono text-[8px]">({items.length})</span>
+            ) : null}
+          </button>
+        </div>
+      );
+
+      if (!hasChildren || !expanded) return;
+
+      items.forEach((item, idx) => {
+        const isRef = item && typeof item === 'object' && 'assetId' in item;
+        const childId = isRef ? (item as { assetId: string }).assetId : '';
+        if (typeof item === 'string' || (item && typeof item === 'object' && 'r2Key' in item && !isRef)) {
+          const gk = `${a.id}::${idx}`;
+          const sel = selectedGroupItemKeys.has(gk);
+          rows.push(
+            <div
+              key={`ol-${a.id}-slot-${idx}`}
+              className="flex items-stretch gap-0.5 min-w-0"
+              style={{ paddingLeft: (depth + 1) * 10 }}
+            >
+              <span className="shrink-0 w-5 h-7" aria-hidden />
+              <button
+                type="button"
+                draggable
+                onDragStart={(e) => {
+                  e.stopPropagation();
+                  try {
+                    const payload: AcWorkflowExportPayload = {
+                      mode: 'groupItems',
+                      items: [{ parentId: a.id, index: idx }],
+                    };
+                    e.dataTransfer.setData(DT_AC_WORKFLOW_EXPORT, JSON.stringify(payload));
+                    e.dataTransfer.effectAllowed = 'copy';
+                  } catch {
+                    /* ignore */
+                  }
+                }}
+                onClick={() => {
+                  setShowArchived(!!a.archived);
+                  navigateOutlineToGroupItem(a, idx);
+                }}
+                className={`flex-1 min-w-0 text-left rounded-lg px-2 py-1.5 text-[9px] border transition-colors truncate ${
+                  sel ? 'border-blue-500 bg-[#152642] text-blue-200' : 'border-white/[0.06] bg-[#141416] text-gray-300 hover:bg-[#1c1c22]'
+                }`}
+              >
+                <span className="text-gray-500 mr-1">图</span>子项 {idx + 1}
+              </button>
+            </div>
+          );
+          return;
+        }
+        if (isRef && childId) {
+          const child = assets.find((x) => x.id === childId);
+          if (child) {
+            visit(child, depth + 1, a, idx, visited);
+          } else {
+            rows.push(
+              <div
+                key={`ol-miss-${a.id}-${idx}`}
+                className="text-[8px] text-amber-600/90 pl-2 py-0.5"
+                style={{ paddingLeft: (depth + 1) * 10 + 20 }}
+              >
+                引用缺失 #{idx + 1}
+              </div>
+            );
+          }
+        }
+      });
+    };
+
+    const seen = new Set<string>();
+    visibleAssets.forEach((root) => visit(root, 0, null, null, seen));
+    return rows;
+  }, [
+    assets,
+    visibleAssets,
+    outlineCollapsedIds,
+    selectedAssetIds,
+    selectedGroupItemKeys,
+    viewStack.length,
+    navigateOutlineToAsset,
+    navigateOutlineToGroupItem,
+    toggleOutlineGroupCollapsed,
+  ]);
+
+  /** 第 0 页大纲列：仓库条目（与左侧网格多选同步），非工作区资产树 */
+  const repositoryOutlineRows = useMemo(
+    () =>
+      repositoryItems.map((item) => {
+        const selected = libraryImportIds.has(item.id);
+        return (
+          <div key={`repo-ol-${item.id}`} className="flex items-stretch gap-0.5 min-w-0">
+            <span className="shrink-0 w-5 h-7" aria-hidden />
+            <button
+              type="button"
+              draggable
+              onDragStart={(e) => {
+                try {
+                  e.dataTransfer.setData(DT_AC_LIBRARY_ITEM_ID, item.id);
+                  e.dataTransfer.effectAllowed = 'copy';
+                } catch {
+                  /* ignore */
+                }
+              }}
+              onClick={() => {
+                setLibraryImportIds((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(item.id)) next.delete(item.id);
+                  else next.add(item.id);
+                  return next;
+                });
+              }}
+              className={`flex-1 min-w-0 text-left rounded-lg px-2 py-1.5 text-[9px] border transition-colors truncate ${
+                selected
+                  ? 'border-blue-500 bg-[#152642] text-blue-200'
+                  : 'border-white/[0.06] bg-[#141416] text-gray-300 hover:bg-[#1c1c22]'
+              }`}
+            >
+              {item.label?.trim() || '未命名'}
+            </button>
+          </div>
+        );
+      }),
+    [repositoryItems, libraryImportIds]
+  );
+
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const pendingLoads: Array<() => void> = [];
@@ -1788,8 +2184,11 @@ const WorkflowSection: React.FC<{
         const width = Math.abs(prev.endX - prev.startX);
         const height = Math.abs(prev.endY - prev.startY);
         const isClick = width < 5 && height < 5;
+        const pane = marqueePaneRef.current;
         if (isClick) {
-          if (viewStack.length === 0) {
+          if (pane === 0) {
+            setLibraryImportIds(new Set());
+          } else if (viewStack.length === 0) {
             setSelectedAssetIds(new Set());
           } else {
             setSelectedGroupItemKeys(new Set());
@@ -1797,6 +2196,26 @@ const WorkflowSection: React.FC<{
           return null;
         }
         const sel = { left, top, width, height };
+        if (pane === 0) {
+          const ids: string[] = [];
+          libraryCardRefs.current.forEach((el, id) => {
+            const r = el.getBoundingClientRect();
+            const overlap =
+              !(sel.left + sel.width < r.left || r.left + r.width < sel.left || sel.top + sel.height < r.top || r.top + r.height < sel.top);
+            if (overlap) ids.push(id);
+          });
+          if (ids.length) {
+            const toAdd = e.altKey ? [] : ids;
+            const toRemove = e.altKey ? ids : [];
+            setLibraryImportIds((s) => {
+              const next = new Set(s);
+              toRemove.forEach((id) => next.delete(id));
+              toAdd.forEach((id) => next.add(id));
+              return next;
+            });
+          }
+          return null;
+        }
         const ids: string[] = [];
         cardRefs.current.forEach((el, id) => {
           const r = el.getBoundingClientRect();
@@ -2455,10 +2874,51 @@ const WorkflowSection: React.FC<{
         return next.concat(created);
       });
       setLibraryImportIds(new Set());
-      setWorkspacePane(1);
+      setWorkspacePane(2);
     },
     [viewStack, setAssets]
   );
+
+  const handleOutlineDropToWorkspace = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const id = e.dataTransfer.getData(DT_AC_LIBRARY_ITEM_ID);
+      if (!id) return;
+      const item = repositoryItems.find((i) => i.id === id);
+      if (!item?.data) return;
+      importLibraryItemsIntoWorkflow([item]);
+    },
+    [repositoryItems, importLibraryItemsIntoWorkflow]
+  );
+
+  const handleOutlineDropToLibrary = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!onAddToLibrary) {
+        onLog?.('warn', '无法写入仓库', '未配置 onAddToLibrary');
+        return;
+      }
+      const raw = e.dataTransfer.getData(DT_AC_WORKFLOW_EXPORT);
+      if (!raw) return;
+      let payload: AcWorkflowExportPayload;
+      try {
+        payload = JSON.parse(raw) as AcWorkflowExportPayload;
+      } catch {
+        return;
+      }
+      const items = buildLibraryItemsFromWorkflowExport(assets, showArchived, getAssetDisplayImage, payload);
+      if (items.length === 0) {
+        onLog?.('warn', '未写入仓库', '拖入项无可导出的图');
+        return;
+      }
+      onAddToLibrary(items);
+      onLog?.('info', `已写入仓库 ${items.length} 条`, undefined);
+    },
+    [onAddToLibrary, onLog, assets, showArchived, getAssetDisplayImage]
+  );
+
   useLayoutEffect(() => {
     const el = workspaceViewportRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
@@ -2471,44 +2931,131 @@ const WorkflowSection: React.FC<{
   const paneWidth = Math.max(320, workspaceViewportWidth || 0);
   const sidebarWidth = 320;
   const listPaneWidth = Math.max(320, paneWidth - sidebarWidth);
-  const libraryPaneWidth = paneWidth;
+  /** 轨道顺序：仓(L)|纲(320)|工(L)|功(320)|能(L)；大纲宽=功能区宽 */
   const presetPaneWidth = listPaneWidth;
-  const trackTotalWidth = libraryPaneWidth + listPaneWidth + sidebarWidth + presetPaneWidth;
-  const activePaneNode = Math.max(0, Math.min(2, Math.round(workspacePane)));
+  const trackTotalWidth = listPaneWidth + sidebarWidth + listPaneWidth + sidebarWidth + presetPaneWidth;
+  const activePaneNode = Math.max(0, Math.min(3, Math.round(workspacePane)));
   const topTitleColumns = useMemo(() => {
+    const outlineExpandDisabled =
+      outlineExpandableGroupIds.size === 0 || outlineCollapsedIds.size === 0;
+    const outlineCollapseDisabled =
+      outlineExpandableGroupIds.size === 0 ||
+      [...outlineExpandableGroupIds].every((id) => outlineCollapsedIds.has(id));
+
+    /** 第 0 页：大纲列对应仓库条目列表 */
+    const outlineRepoTopBarColumn = {
+      title: '大纲',
+      desc: '当前筛选下的仓库条目；点击行与左侧画布多选同步',
+      actions: null as React.ReactNode,
+    };
+
+    /** 第 1 页起：工作区资产树大纲 */
+    const outlineWorkflowTopBarColumn = {
+      title: '大纲',
+      desc: '窄栏与功能区同宽；右侧为完整工作区',
+      actions: (
+        <div className="flex items-center gap-2 whitespace-nowrap flex-wrap">
+          <button
+            type="button"
+            onClick={expandOutlineAll}
+            disabled={outlineExpandDisabled}
+            className={TITLE_ROW_BTN_NEUTRAL}
+          >
+            展开
+          </button>
+          <button
+            type="button"
+            onClick={collapseOutlineAll}
+            disabled={outlineCollapseDisabled}
+            className={TITLE_ROW_BTN_NEUTRAL}
+          >
+            折叠
+          </button>
+        </div>
+      ),
+    };
+
     if (activePaneNode === 0) {
-      return [{
-        title: '资产仓库',
-        desc: '多选后导入到工作区，与「从仓库导入」相同',
-        actions: (
-          <div className="flex items-center gap-2 whitespace-nowrap">
-            <span className="text-[9px] font-black text-gray-500 uppercase">筛选</span>
-            <button
-              type="button"
-              onClick={() => setLibraryFilter('all')}
-              className={libraryFilter === 'all' ? TITLE_ROW_BTN_ACTIVE : TITLE_ROW_BTN_NEUTRAL}
-            >
-              全部
-            </button>
-            <button
-              type="button"
-              onClick={() => setLibraryFilter('library')}
-              className={libraryFilter === 'library' ? TITLE_ROW_BTN_ACTIVE : TITLE_ROW_BTN_NEUTRAL}
-            >
-              仓库
-            </button>
-            <button
-              type="button"
-              onClick={() => setLibraryFilter('archived')}
-              className={libraryFilter === 'archived' ? TITLE_ROW_BTN_ACTIVE : TITLE_ROW_BTN_NEUTRAL}
-            >
-              归档
-            </button>
-          </div>
-        ),
-      }];
+      return [
+        {
+          title: '资产仓库',
+          desc: '筛选后点击或框选多选；列数与工作区画布共用设置；右侧大纲与操作区可同步',
+          actions: (
+            <div className="flex flex-wrap items-center gap-2 justify-end min-w-0">
+              <span className="text-[9px] font-black text-gray-500 uppercase shrink-0">筛选</span>
+              <button
+                type="button"
+                onClick={() => setLibraryFilter('all')}
+                className={libraryFilter === 'all' ? TITLE_ROW_BTN_ACTIVE : TITLE_ROW_BTN_NEUTRAL}
+              >
+                全部
+              </button>
+              <button
+                type="button"
+                onClick={() => setLibraryFilter('library')}
+                className={libraryFilter === 'library' ? TITLE_ROW_BTN_ACTIVE : TITLE_ROW_BTN_NEUTRAL}
+              >
+                仓库
+              </button>
+              <button
+                type="button"
+                onClick={() => setLibraryFilter('archived')}
+                className={libraryFilter === 'archived' ? TITLE_ROW_BTN_ACTIVE : TITLE_ROW_BTN_NEUTRAL}
+              >
+                归档
+              </button>
+              <div className="h-8 inline-flex items-center rounded-lg border border-[#2e2e32] bg-[#1c1c22] overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setColumnCount((n) => Math.max(2, n - 1))}
+                  disabled={columnCount <= 2}
+                  className="w-8 h-8 text-[11px] font-black text-gray-300 hover:bg-[#2e2e36] disabled:opacity-35 disabled:hover:bg-transparent"
+                  aria-label="减少列数"
+                >
+                  −
+                </button>
+                <span className="w-9 h-8 inline-flex items-center justify-center text-[9px] font-black text-blue-300 border-x border-[#2e2e32]">
+                  {columnCount}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setColumnCount((n) => Math.min(6, n + 1))}
+                  disabled={columnCount >= 6}
+                  className="w-8 h-8 text-[11px] font-black text-gray-300 hover:bg-[#2e2e36] disabled:opacity-35 disabled:hover:bg-transparent"
+                  aria-label="增加列数"
+                >
+                  +
+                </button>
+              </div>
+              {repositoryItems.length > 0 && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setLibraryImportIds(new Set())}
+                    className={TITLE_ROW_BTN_NEUTRAL}
+                  >
+                    清空选择
+                  </button>
+                  <button
+                    type="button"
+                    disabled={libraryImportIds.size === 0}
+                    onClick={() => {
+                      const picked = repositoryItems.filter((i) => libraryImportIds.has(i.id));
+                      importLibraryItemsIntoWorkflow(picked);
+                    }}
+                    className={`${TITLE_ROW_BTN_BASE} bg-blue-600 border-blue-500 text-white hover:bg-blue-500 disabled:opacity-40 disabled:hover:bg-blue-600`}
+                  >
+                    导入工作区（{libraryImportIds.size}）
+                  </button>
+                </>
+              )}
+            </div>
+          ),
+        },
+        outlineRepoTopBarColumn,
+      ];
     }
-    if (activePaneNode === 1) {
+    if (activePaneNode === 1 || activePaneNode === 2) {
       const selectableCount = visibleAssets.filter(
         (a) => !pending.some((t) => t.assetId === a.id)
       ).length;
@@ -2519,7 +3066,7 @@ const WorkflowSection: React.FC<{
       );
       const allSelected = selectedAssetIds.size === selectableCount && selectableCount > 0;
 
-      return [
+      const workspaceAndFunctionCols = [
         {
           title: '工作区',
           desc: '进行中与已完成内容管理',
@@ -2664,6 +3211,8 @@ const WorkflowSection: React.FC<{
           ),
         },
       ];
+      if (activePaneNode === 1) return [outlineWorkflowTopBarColumn, workspaceAndFunctionCols[0]!];
+      return workspaceAndFunctionCols;
     }
     return [
       {
@@ -2836,36 +3385,56 @@ const WorkflowSection: React.FC<{
     visibleAssets,
     capabilityPresetViewMode,
     libraryFilter,
+    snapWorkspacePaneToNode,
+    outlineCollapsedIds,
+    outlineExpandableGroupIds,
+    expandOutlineAll,
+    collapseOutlineAll,
+    repositoryItems,
+    libraryImportIds,
   ]);
   const topTitleGridStyle = useMemo<React.CSSProperties | undefined>(() => {
-    if (activePaneNode === 1) {
+    if (activePaneNode === 0) {
       return { gridTemplateColumns: `minmax(0, ${listPaneWidth}px) minmax(0, ${sidebarWidth}px)` };
     }
+    if (activePaneNode === 1) {
+      return { gridTemplateColumns: `minmax(0, ${sidebarWidth}px) minmax(0, ${listPaneWidth}px)` };
+    }
     if (activePaneNode === 2) {
+      return { gridTemplateColumns: `minmax(0, ${listPaneWidth}px) minmax(0, ${sidebarWidth}px)` };
+    }
+    if (activePaneNode === 3) {
       return { gridTemplateColumns: `minmax(0, ${sidebarWidth}px) minmax(0, ${presetPaneWidth}px)` };
     }
     return undefined;
   }, [activePaneNode, listPaneWidth, sidebarWidth, presetPaneWidth]);
+  /** 四页 snap：0 仓(L)|纲(320) 1 纲(320)|工(L) 2 工|功 3 功|能 */
   const paneToOffsetPx = useCallback(
     (pane: number) => {
-      const p = Math.max(0, Math.min(2, pane));
-      if (p <= 1) return p * libraryPaneWidth;
-      return libraryPaneWidth + (p - 1) * listPaneWidth;
+      const wh = sidebarWidth;
+      const L = listPaneWidth;
+      const p = Math.max(0, Math.min(3, pane));
+      if (p <= 1) return p * L;
+      if (p <= 2) return L + (p - 1) * wh;
+      return L + wh + (p - 2) * L;
     },
-    [libraryPaneWidth, listPaneWidth]
+    [listPaneWidth, sidebarWidth]
   );
   const offsetPxToPane = useCallback(
     (offset: number) => {
-      const maxOffset = libraryPaneWidth + listPaneWidth;
-      const x = Math.max(0, Math.min(maxOffset, offset));
-      if (x <= libraryPaneWidth) return libraryPaneWidth > 0 ? x / libraryPaneWidth : 0;
-      return 1 + (x - libraryPaneWidth) / Math.max(1, listPaneWidth);
+      const wh = sidebarWidth;
+      const L = listPaneWidth;
+      const maxOff = Math.max(0, wh + 2 * L);
+      const x = Math.max(0, Math.min(maxOff, offset));
+      if (x <= L) return L > 0 ? x / L : 0;
+      if (x <= L + wh) return 1 + (x - L) / Math.max(1, wh);
+      return 2 + (x - L - wh) / Math.max(1, L);
     },
-    [libraryPaneWidth, listPaneWidth]
+    [listPaneWidth, sidebarWidth]
   );
   const applyWorkspacePaneImmediate = useCallback(
     (next: number) => {
-      const clamped = Math.max(0, Math.min(2, next));
+      const clamped = Math.max(0, Math.min(3, next));
       workspacePaneRef.current = clamped;
       const track = workspaceTrackRef.current;
       if (track) {
@@ -2885,8 +3454,10 @@ const WorkflowSection: React.FC<{
     }
   }, [workspacePane, workspaceOffsetPx, workspaceSnapping]);
   const getActiveWorkspaceScrollEl = useCallback((): HTMLDivElement | null => {
-    if (workspacePane < 0.75) return libraryScrollRef.current;
-    if (workspacePane < 1.5) return centerScrollRef.current;
+    const n = Math.round(workspacePane);
+    if (n <= 0) return libraryScrollRef.current;
+    if (n === 1) return outlineScrollRef.current;
+    if (n === 2) return centerScrollRef.current;
     return presetScrollRef.current ?? centerScrollRef.current;
   }, [workspacePane]);
   useEffect(() => {
@@ -3995,28 +4566,54 @@ const WorkflowSection: React.FC<{
         <div className="rounded-2xl border border-white/[0.08] bg-gradient-to-b from-white/[0.05] to-white/[0.02] p-2 shadow-[0_8px_24px_rgba(0,0,0,0.28)]">
           <div className="flex items-center gap-2 min-h-5 rounded-lg px-2 py-0.5">
             <span className="text-[8px] font-black uppercase text-gray-600/80 w-7 shrink-0 text-right">仓库</span>
-            <input
-              type="range"
-              min={0}
-              max={2}
-              step={0.01}
-              value={workspacePane}
-              onChange={(e) => setWorkspacePaneRaf(Number(e.target.value))}
-              onMouseUp={() => snapWorkspacePaneToNode(workspacePaneRef.current)}
-              onTouchEnd={() => snapWorkspacePaneToNode(workspacePaneRef.current)}
-              onKeyUp={(e) => {
-                if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'Home' || e.key === 'End') {
-                  snapWorkspacePaneToNode(workspacePaneRef.current);
-                }
-              }}
-              className="flex-1 h-1 rounded-full appearance-none cursor-pointer bg-white/[0.05] accent-blue-400/65 outline-none focus:outline-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500/35
-                [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-2 [&::-webkit-slider-thumb]:w-2 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-blue-400/75 [&::-webkit-slider-thumb]:border [&::-webkit-slider-thumb]:border-white/10 [&::-webkit-slider-thumb]:shadow-[0_0_0_1px_rgba(59,130,246,0.10)]
-                [&::-moz-range-thumb]:h-2 [&::-moz-range-thumb]:w-2 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-blue-400/75 [&::-moz-range-thumb]:border [&::-moz-range-thumb]:border-white/10"
-              aria-valuemin={0}
-              aria-valuemax={2}
-              aria-valuenow={workspacePane}
-              aria-label="页面：仓库、工作区、能力"
-            />
+            <div className="relative flex-1 min-h-5 flex items-center">
+              {/* 圆点必须在滑条之上：原生 range 整块可点区域会盖住下层；pointer-events-none 让操作仍落在 input 上 */}
+              <input
+                type="range"
+                min={0}
+                max={3}
+                step={0.01}
+                value={workspacePane}
+                onChange={(e) => setWorkspacePaneRaf(Number(e.target.value))}
+                onMouseUp={() => snapWorkspacePaneToNode(workspacePaneRef.current)}
+                onTouchEnd={() => snapWorkspacePaneToNode(workspacePaneRef.current)}
+                onKeyUp={(e) => {
+                  if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'Home' || e.key === 'End') {
+                    snapWorkspacePaneToNode(workspacePaneRef.current);
+                  }
+                }}
+                className="relative z-10 w-full h-1 rounded-full appearance-none cursor-pointer bg-white/[0.05] accent-blue-400/65 outline-none focus:outline-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500/35
+                [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-1.5 [&::-webkit-slider-thumb]:w-1.5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-blue-400/80 [&::-webkit-slider-thumb]:border [&::-webkit-slider-thumb]:border-white/10 [&::-webkit-slider-thumb]:shadow-[0_0_0_1px_rgba(59,130,246,0.08)]
+                [&::-moz-range-thumb]:h-1.5 [&::-moz-range-thumb]:w-1.5 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-blue-400/80 [&::-moz-range-thumb]:border [&::-moz-range-thumb]:border-white/10"
+                aria-valuemin={0}
+                aria-valuemax={3}
+                aria-valuenow={workspacePane}
+                aria-label="页面：仓库与大纲、大纲与工作区、工作区与功能区、功能区与能力"
+              />
+              <div className="pointer-events-none absolute inset-0 z-20 flex items-center" aria-hidden>
+                {(() => {
+                  /** 与 [&::-webkit-slider-thumb]:w-1.5 / h-1.5（6px）一致；拇指中心在轨道内为线性内缩，非 0%~100% 贴边 */
+                  const thumbPx = 6;
+                  const thumbR = thumbPx / 2;
+                  /** 当前值与该档距离小于此阈值时隐藏白点，避免叠在蓝拇指上露边 */
+                  const hideDotNearThumb = 0.13;
+                  return [0, 1, 2, 3].map((i) => {
+                    const hiddenByThumb = Math.abs(workspacePane - i) < hideDotNearThumb;
+                    return (
+                      <span
+                        key={i}
+                        className={`absolute top-1/2 h-[3px] w-[3px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-white/[0.18] shadow-[0_0_0_1px_rgba(0,0,0,0.35)] transition-opacity duration-150 ${
+                          hiddenByThumb ? 'opacity-0' : 'opacity-100'
+                        }`}
+                        style={{
+                          left: `calc(${thumbR}px + (100% - ${thumbPx}px) * ${i / 3})`,
+                        }}
+                      />
+                    );
+                  });
+                })()}
+              </div>
+            </div>
             <span className="text-[8px] font-black uppercase text-gray-600/80 w-7 shrink-0">能力</span>
           </div>
           <div
@@ -4027,7 +4624,11 @@ const WorkflowSection: React.FC<{
               <div key={item.title} className={SECTION_HEADER_CLASS}>
                 <div className="flex items-center gap-2">
                   <div className={`${SECTION_TITLE_CLASS} shrink-0`}>{item.title}</div>
-                  {item.actions ? <div className="min-w-0 flex-1 flex items-center gap-2 overflow-x-auto no-scrollbar">{item.actions}</div> : null}
+                  {item.actions ? (
+                    <div className="min-w-0 flex-1 flex flex-wrap items-center gap-2 justify-end overflow-x-auto no-scrollbar">
+                      {item.actions}
+                    </div>
+                  ) : null}
                 </div>
               </div>
             ))}
@@ -4065,79 +4666,166 @@ const WorkflowSection: React.FC<{
             className="flex h-full will-change-transform motion-reduce:transition-none"
             style={{ width: `${trackTotalWidth}px`, transform: `translate3d(${-workspaceOffsetPx}px, 0, 0)` }}
           >
-        <div className="h-full min-h-0 shrink-0 flex flex-col pr-4 border-r border-white/[0.06]" style={{ width: `${libraryPaneWidth}px` }}>
-          <div ref={libraryScrollRef} className="flex-1 min-h-0 overflow-y-auto no-scrollbar px-1">
+        <div className="h-full min-h-0 shrink-0 flex flex-col pr-3 border-r border-white/[0.06]" style={{ width: `${listPaneWidth}px` }}>
+          <div ref={libraryScrollRef} className="flex-1 min-h-0 overflow-y-auto no-scrollbar">
             {repositoryItems.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-16 text-gray-600 gap-2">
+              <div className="flex flex-col items-center justify-center py-16 px-6 text-gray-600 gap-2">
                 <span className="text-[10px] font-black uppercase tracking-wider">暂无资产</span>
                 <span className="text-[8px] text-gray-600">对话与其它入口生成的图会进入资产库</span>
               </div>
             ) : (
-              <div className="grid grid-cols-2 gap-2 sm:gap-3">
-                {repositoryItems.map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => {
-                      setLibraryImportIds((prev) => {
-                        const next = new Set(prev);
-                        if (next.has(item.id)) next.delete(item.id);
-                        else next.add(item.id);
-                        return next;
-                      });
-                    }}
-                    className={`relative aspect-square rounded-xl border p-1.5 text-left overflow-hidden transition-colors ${
-                      libraryImportIds.has(item.id)
-                        ? 'border-blue-500 ring-1 ring-blue-500 bg-[#152642]/40'
-                        : 'border-[#2e2e32] bg-[#121214] hover:border-[#484850]'
-                    }`}
-                  >
-                    <img src={item.data} className="w-full h-full object-contain" alt="" />
-                    {libraryImportIds.has(item.id) && (
-                      <div className="absolute top-1 right-1 w-5 h-5 rounded border border-blue-400/80 bg-[#18181c] flex items-center justify-center text-[10px] text-blue-300">
-                        ✓
+              <div className="p-6 min-w-0">
+                <div className="gap-4 relative" style={{ columnCount, columnFill: 'balance' as const }}>
+                  {repositoryItems.map((item) => (
+                    <div key={item.id} className="break-inside-avoid mb-6 relative">
+                      <div
+                        data-workflow-library-card
+                        ref={(el) => {
+                          if (el) libraryCardRefs.current.set(item.id, el);
+                          else libraryCardRefs.current.delete(item.id);
+                        }}
+                        draggable
+                        onDragStart={(e) => {
+                          try {
+                            e.dataTransfer.setData(DT_AC_LIBRARY_ITEM_ID, item.id);
+                            e.dataTransfer.effectAllowed = 'copy';
+                          } catch {
+                            /* ignore */
+                          }
+                        }}
+                        className={`group relative rounded-2xl border overflow-hidden bg-[#16161a] transition-colors ${
+                          libraryImportIds.has(item.id)
+                            ? 'border-blue-500 ring-2 ring-blue-500/50'
+                            : 'border-[#2e2e32]'
+                        }`}
+                      >
+                        <div
+                          className="relative cursor-pointer"
+                          role="presentation"
+                          onClick={() => {
+                            setLibraryImportIds((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(item.id)) next.delete(item.id);
+                              else next.add(item.id);
+                              return next;
+                            });
+                          }}
+                        >
+                          <div className="relative w-full bg-[#0b0b0e] flex justify-center" style={{ aspectRatio: 1 }}>
+                            <img
+                              src={workflowSafeImgSrc(item.data)}
+                              alt=""
+                              className="w-full h-full object-contain"
+                              draggable={false}
+                              onDragStart={(ev) => ev.preventDefault()}
+                            />
+                            {libraryImportIds.has(item.id) && (
+                              <div className="absolute top-2 right-2 w-6 h-6 rounded-lg border border-blue-400/80 bg-[#18181c] flex items-center justify-center text-[11px] text-blue-300 shadow-lg">
+                                ✓
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        <div className="p-2 flex flex-col gap-1 border-t border-[#252528]">
+                          <span className="text-[9px] font-black text-gray-300 truncate">{item.label?.trim() || '未命名'}</span>
+                        </div>
                       </div>
-                    )}
-                    <div className="absolute bottom-1 left-1 right-1 truncate text-[6px] font-black uppercase text-white/50">
-                      {item.label || '未命名'}
                     </div>
-                  </button>
-                ))}
+                  ))}
+                </div>
               </div>
             )}
           </div>
-          {repositoryItems.length > 0 && (
-            <div className="shrink-0 pt-3 mt-1 flex justify-end gap-2 border-t border-white/[0.06]">
-              <button
-                type="button"
-                onClick={() => setLibraryImportIds(new Set())}
-                className="px-3 py-2 rounded-xl text-[9px] font-black uppercase border border-[#2e2e32] text-gray-400 hover:bg-[#1c1c22]"
-              >
-                清空选择
-              </button>
-              <button
-                type="button"
-                disabled={libraryImportIds.size === 0}
-                onClick={() => {
-                  const picked = repositoryItems.filter((i) => libraryImportIds.has(i.id));
-                  importLibraryItemsIntoWorkflow(picked);
-                }}
-                className="px-4 py-2 rounded-xl bg-blue-600 text-[9px] font-black uppercase text-white disabled:opacity-40"
-              >
-                导入工作区（{libraryImportIds.size}）
-              </button>
+        </div>
+
+        <div
+          data-workflow-outline
+          className="h-full min-h-0 shrink-0 flex flex-col border-r border-white/[0.06] pr-2 min-w-0"
+          style={{ width: `${sidebarWidth}px` }}
+        >
+          <div ref={outlineScrollRef} className="flex-1 min-h-0 overflow-y-auto no-scrollbar flex flex-col gap-0.5 px-1 pt-2 pb-2">
+            {activePaneNode === 0 ? (
+              repositoryItems.length === 0 ? (
+                <div className="text-[9px] text-gray-600 py-6 text-center leading-relaxed">
+                  暂无资产 · 与左侧筛选一致
+                </div>
+              ) : (
+                repositoryOutlineRows
+              )
+            ) : visibleAssets.length === 0 ? (
+              <div className="text-[9px] text-gray-600 py-6 text-center leading-relaxed">暂无资产 · 导入或生成后将显示在此</div>
+            ) : (
+              outlineTreeRows
+            )}
+          </div>
+          {(activePaneNode === 0 || activePaneNode === 1) && (
+            <div
+              data-workflow-outline-footer
+              className="shrink-0 border-t border-white/[0.06] pt-2 pb-2 px-1 bg-[#0a0a0c]/95"
+              onDragLeave={(e) => {
+                if (!e.currentTarget.contains(e.relatedTarget as Node)) setOutlineFooterDropOver(null);
+              }}
+            >
+              {activePaneNode === 0 ? (
+                <div
+                  className={`min-h-[5.75rem] rounded-xl border border-dashed px-3 py-3 flex flex-col items-center justify-center gap-1.5 transition-colors ${
+                    outlineFooterDropOver === 'toWorkspace'
+                      ? 'border-blue-400 bg-blue-950/45'
+                      : 'border-white/15 bg-[#0f0f12]'
+                  }`}
+                  onDragEnter={(e) => {
+                    if (Array.from(e.dataTransfer.types).includes(DT_AC_LIBRARY_ITEM_ID)) {
+                      setOutlineFooterDropOver('toWorkspace');
+                    }
+                  }}
+                  onDragOver={(e) => {
+                    if (!Array.from(e.dataTransfer.types).includes(DT_AC_LIBRARY_ITEM_ID)) return;
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = 'copy';
+                  }}
+                  onDrop={(e) => {
+                    setOutlineFooterDropOver(null);
+                    handleOutlineDropToWorkspace(e);
+                  }}
+                >
+                  <p className="text-[8px] text-gray-500 text-center leading-snug">
+                    从左侧仓库或上方列表拖入条目
+                  </p>
+                  <span className="text-[9px] font-black uppercase text-blue-200/90">放到工作区</span>
+                </div>
+              ) : (
+                <div
+                  className={`min-h-[5.75rem] rounded-xl border border-dashed px-3 py-3 flex flex-col items-center justify-center gap-1.5 transition-colors ${
+                    outlineFooterDropOver === 'toLibrary'
+                      ? 'border-blue-400 bg-blue-950/45'
+                      : 'border-white/15 bg-[#0f0f12]'
+                  }`}
+                  onDragEnter={(e) => {
+                    if (Array.from(e.dataTransfer.types).includes(DT_AC_WORKFLOW_EXPORT)) {
+                      setOutlineFooterDropOver('toLibrary');
+                    }
+                  }}
+                  onDragOver={(e) => {
+                    if (!Array.from(e.dataTransfer.types).includes(DT_AC_WORKFLOW_EXPORT)) return;
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = 'copy';
+                  }}
+                  onDrop={(e) => {
+                    setOutlineFooterDropOver(null);
+                    handleOutlineDropToLibrary(e);
+                  }}
+                >
+                  <p className="text-[8px] text-gray-500 text-center leading-snug">
+                    从画布卡片或上方大纲拖入资产
+                  </p>
+                  <span className="text-[9px] font-black uppercase text-blue-200/90">放到仓库</span>
+                </div>
+              )}
             </div>
           )}
         </div>
 
-        <div
-          className="h-full min-h-0 shrink-0 grid items-stretch min-w-0"
-          style={{
-            width: `${listPaneWidth + sidebarWidth}px`,
-            gridTemplateColumns: `minmax(0, ${listPaneWidth}px) minmax(0, ${sidebarWidth}px)`,
-          }}
-        >
-        <div className="min-w-0 min-h-0 flex flex-col">
+        <div className="min-w-0 min-h-0 h-full flex flex-col shrink-0" style={{ width: `${listPaneWidth}px` }}>
         <div
           ref={centerScrollRef}
           className={`flex-1 min-w-0 min-h-0 overflow-y-auto no-scrollbar flex flex-col gap-3 rounded-xl transition-colors ${
@@ -4757,13 +5445,20 @@ const WorkflowSection: React.FC<{
                             : 'border-[#2e2e32]'
                         } ${busyClass} transition-transform duration-150 ease-out will-change-transform ${motionClass}`}
                         draggable={!showArchived && !isBusy}
-                        onDragStart={() => {
+                        onDragStart={(e) => {
                           if (showArchived || isBusy) return;
                           const ids =
                             selectedAssetIds.has(a.id) && selectedAssetIds.size > 0
                               ? Array.from(selectedAssetIds)
                               : [a.id];
                           setDraggingAssetIds(ids);
+                          try {
+                            const payload: AcWorkflowExportPayload = { mode: 'roots', assetIds: ids };
+                            e.dataTransfer.setData(DT_AC_WORKFLOW_EXPORT, JSON.stringify(payload));
+                            e.dataTransfer.effectAllowed = 'copyMove';
+                          } catch {
+                            /* ignore */
+                          }
                         }}
                         onDragEnd={() => {
                           setDraggingAssetIds(null);
@@ -4980,7 +5675,7 @@ const WorkflowSection: React.FC<{
         </div>
 
         {/* 全局框选矩形：根级 / 组内均可见，仅进行中视图展示 */}
-        {marqueeRect && !showArchived && typeof document !== 'undefined' &&
+        {marqueeRect && (marqueePaneRef.current === 0 || !showArchived) && typeof document !== 'undefined' &&
           createPortal(
             <div
               className="fixed pointer-events-none z-[150] rounded-[3px] border-2 border-solid border-[#4570b0] bg-[#121a28]/50 shadow-[inset_0_0_0_1px_rgba(69,112,176,0.2)]"
@@ -4994,12 +5689,11 @@ const WorkflowSection: React.FC<{
             document.body
           )}
         </div>
-        <div className="shrink-0 w-full h-full min-h-0 flex flex-col">
+        <div className="h-full min-h-0 shrink-0 flex flex-col min-w-0" style={{ width: `${sidebarWidth}px` }}>
           <WorkflowSidebarColumn />
         </div>
-        </div>
 
-        {/* 右侧页：仅预设；功能区为中间页共享列，保证横向连续平移不跳变 */}
+        {/* 右侧：能力预设列 */}
         <div className={`h-full min-h-0 shrink-0 flex flex-col overflow-hidden border-l border-white/[0.06] pl-4`} style={{ width: `${presetPaneWidth}px` }}>
           {capabilityPresetPanel ? (
             <div

@@ -231,26 +231,34 @@ const CapabilityPresetSection: React.FC<{
     window.dispatchEvent(new CustomEvent('ac:capability-preset-view-mode-changed', { detail: { mode: viewMode } }));
   }, [viewMode]);
 
-  const movePreset = (id: string, delta: -1 | 1) => {
-    const idx = presets.findIndex((p) => p.id === id);
-    const to = idx + delta;
-    if (idx < 0 || to < 0 || to >= presets.length) return;
-    const next = [...presets];
-    const tmp = next[idx];
-    next[idx] = next[to];
-    next[to] = tmp;
-    update(next);
-  };
+  /** 仅调整同一 category 内顺序，保持其它分类条目在全局数组中的位置关系 */
+  const reorderPresetsInCategory = useCallback(
+    (category: CapabilityCategory, fromIndex: number, toIndex: number) => {
+      if (fromIndex === toIndex) return;
+      const catItems = presets.filter((p) => p.category === category);
+      if (fromIndex < 0 || toIndex < 0 || fromIndex >= catItems.length || toIndex >= catItems.length) return;
+      const nextCat = [...catItems];
+      const [moved] = nextCat.splice(fromIndex, 1);
+      nextCat.splice(toIndex, 0, moved);
+      let i = 0;
+      update(presets.map((p) => (p.category === category ? nextCat[i++]! : p)));
+    },
+    [presets, update]
+  );
 
-  const toggleEnabled = (id: string) => {
-    update(
-      presets.map((p) => {
-        if (p.id !== id) return p;
-        const cur = p.enabled !== false;
-        return { ...p, enabled: !cur };
-      })
-    );
-  };
+  const reorderSetsAt = useCallback(
+    (fromIndex: number, toIndex: number) => {
+      if (fromIndex === toIndex) return;
+      const next = [...sets];
+      const [m] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, m);
+      onUpdateSets?.(next);
+    },
+    [sets, onUpdateSets]
+  );
+
+  /** 预览条拖拽后抑制一次误触「定位」 */
+  const suppressStripClickRef = useRef(false);
 
   const saveEdit = () => {
     if (!editingId) return;
@@ -779,65 +787,242 @@ const CapabilityPresetSection: React.FC<{
     return presets.filter((p) => p.category !== 'image_process');
   }, [presets, viewMode]);
 
-  // 顶部：仅展示已有能力（基础能力 + 复合能力）分两行，不拖动
+  const STRIP_DRAG_MIME = 'application/x-ac-cap-strip';
+
+  const onStripPresetContextMenu = useCallback(
+    (e: React.MouseEvent, presetId: string) => {
+      e.preventDefault();
+      update(
+        presets.map((p) => {
+          if (p.id !== presetId) return p;
+          const cur = p.enabled !== false;
+          return { ...p, enabled: !cur };
+        })
+      );
+    },
+    [presets, update]
+  );
+
   const presetStrip = (
     <div className="shrink-0 flex flex-col gap-2 p-3 rounded-xl border border-[#2e2e32] bg-[#141416]/95 backdrop-blur supports-[backdrop-filter]:bg-[#141416]/85">
+      <p className="text-[8px] text-gray-500 leading-snug">
+        左键定位 · 拖拽同组排序 · 右键启用/禁用
+      </p>
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-[9px] font-black text-blue-400/90 uppercase mr-1">基础能力</span>
-        {presets.filter((p) => p.enabled !== false && p.category !== 'image_process').map((p) => (
+        <span className="text-[9px] font-black text-blue-400/90 uppercase mr-1 shrink-0">基础能力</span>
+        {presets.filter((p) => p.category === 'image_gen').map((p) => (
           <button
             key={p.id}
             type="button"
+            draggable
+            onDragStart={(e) => {
+              e.dataTransfer.setData(STRIP_DRAG_MIME, JSON.stringify({ kind: 'preset', category: 'image_gen', id: p.id }));
+              e.dataTransfer.effectAllowed = 'move';
+            }}
+            onDragEnd={() => {
+              suppressStripClickRef.current = true;
+              window.setTimeout(() => {
+                suppressStripClickRef.current = false;
+              }, 0);
+            }}
+            onDragOver={(e) => {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = 'move';
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              const raw = e.dataTransfer.getData(STRIP_DRAG_MIME);
+              if (!raw) return;
+              try {
+                const d = JSON.parse(raw) as { kind?: string; category?: string; id?: string };
+                if (d.kind !== 'preset' || d.category !== 'image_gen' || !d.id) return;
+                const catItems = presets.filter((x) => x.category === 'image_gen');
+                const from = catItems.findIndex((x) => x.id === d.id);
+                const to = catItems.findIndex((x) => x.id === p.id);
+                if (from < 0 || to < 0) return;
+                reorderPresetsInCategory('image_gen', from, to);
+              } catch {
+                /* ignore */
+              }
+            }}
+            onContextMenu={(e) => onStripPresetContextMenu(e, p.id)}
             onClick={() => {
+              if (suppressStripClickRef.current) return;
               setViewMode('presets');
               setPendingScrollTarget({ kind: 'preset', id: p.id });
             }}
-            className="px-3 py-1.5 rounded-lg bg-[#1e3558] border border-[#3b6fb8] text-[10px] font-semibold text-blue-200/90 hover:bg-[#305a90]"
+            title="左键定位 · 拖拽排序 · 右键启用/禁用"
+            className={`px-3 py-1.5 rounded-lg border text-[10px] font-semibold bg-[#1e3558] border-[#3b6fb8] text-blue-200/90 hover:bg-[#305a90] ${
+              p.enabled === false ? 'opacity-45 saturate-50' : ''
+            }`}
           >
             {p.label}
           </button>
         ))}
-        {presets.filter((p) => p.enabled !== false && p.category !== 'image_process').length === 0 && (
+        {presets.filter((p) => p.category === 'image_gen').length === 0 && (
           <span className="text-[9px] text-gray-500">暂无</span>
         )}
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-[9px] font-black text-cyan-400/90 uppercase mr-1">图像处理</span>
-        {presets.filter((p) => p.enabled !== false && p.category === 'image_process').map((p) => (
+        <span className="text-[9px] font-black text-blue-300/90 uppercase mr-1 shrink-0">变体</span>
+        {presets.filter((p) => p.category === 'generate_3d').map((p) => (
           <button
             key={p.id}
             type="button"
+            draggable
+            onDragStart={(e) => {
+              e.dataTransfer.setData(STRIP_DRAG_MIME, JSON.stringify({ kind: 'preset', category: 'generate_3d', id: p.id }));
+              e.dataTransfer.effectAllowed = 'move';
+            }}
+            onDragEnd={() => {
+              suppressStripClickRef.current = true;
+              window.setTimeout(() => {
+                suppressStripClickRef.current = false;
+              }, 0);
+            }}
+            onDragOver={(e) => {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = 'move';
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              const raw = e.dataTransfer.getData(STRIP_DRAG_MIME);
+              if (!raw) return;
+              try {
+                const d = JSON.parse(raw) as { kind?: string; category?: string; id?: string };
+                if (d.kind !== 'preset' || d.category !== 'generate_3d' || !d.id) return;
+                const catItems = presets.filter((x) => x.category === 'generate_3d');
+                const from = catItems.findIndex((x) => x.id === d.id);
+                const to = catItems.findIndex((x) => x.id === p.id);
+                if (from < 0 || to < 0) return;
+                reorderPresetsInCategory('generate_3d', from, to);
+              } catch {
+                /* ignore */
+              }
+            }}
+            onContextMenu={(e) => onStripPresetContextMenu(e, p.id)}
             onClick={() => {
-              setViewMode('image_process');
+              if (suppressStripClickRef.current) return;
+              setViewMode('presets');
               setPendingScrollTarget({ kind: 'preset', id: p.id });
             }}
-            className="px-3 py-1.5 rounded-lg bg-[#123447] border border-[#2c78a0] text-[10px] font-semibold text-cyan-200/90 hover:bg-[#1d4f6a]"
+            title="左键定位 · 拖拽排序 · 右键启用/禁用"
+            className={`px-3 py-1.5 rounded-lg border text-[10px] font-semibold bg-[#1e3558] border-[#3b6fb8] text-blue-200/90 hover:bg-[#305a90] ${
+              p.enabled === false ? 'opacity-45 saturate-50' : ''
+            }`}
           >
             {p.label}
           </button>
         ))}
-        {presets.filter((p) => p.enabled !== false && p.category === 'image_process').length === 0 && (
+        {presets.filter((p) => p.category === 'generate_3d').length === 0 && (
           <span className="text-[9px] text-gray-500">暂无</span>
         )}
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-[9px] font-black text-amber-400/90 uppercase mr-1">复合能力</span>
+        <span className="text-[9px] font-black text-cyan-400/90 uppercase mr-1 shrink-0">图像处理</span>
+        {presets.filter((p) => p.category === 'image_process').map((p) => (
+          <button
+            key={p.id}
+            type="button"
+            draggable={!isBuiltinImageProcess(p)}
+            onDragStart={(e) => {
+              if (isBuiltinImageProcess(p)) return;
+              e.dataTransfer.setData(STRIP_DRAG_MIME, JSON.stringify({ kind: 'preset', category: 'image_process', id: p.id }));
+              e.dataTransfer.effectAllowed = 'move';
+            }}
+            onDragEnd={() => {
+              suppressStripClickRef.current = true;
+              window.setTimeout(() => {
+                suppressStripClickRef.current = false;
+              }, 0);
+            }}
+            onDragOver={(e) => {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = 'move';
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              if (isBuiltinImageProcess(p)) return;
+              const raw = e.dataTransfer.getData(STRIP_DRAG_MIME);
+              if (!raw) return;
+              try {
+                const d = JSON.parse(raw) as { kind?: string; category?: string; id?: string };
+                if (d.kind !== 'preset' || d.category !== 'image_process' || !d.id) return;
+                const catItems = presets.filter((x) => x.category === 'image_process');
+                const from = catItems.findIndex((x) => x.id === d.id);
+                const to = catItems.findIndex((x) => x.id === p.id);
+                if (from < 0 || to < 0) return;
+                reorderPresetsInCategory('image_process', from, to);
+              } catch {
+                /* ignore */
+              }
+            }}
+            onContextMenu={(e) => onStripPresetContextMenu(e, p.id)}
+            onClick={() => {
+              if (suppressStripClickRef.current) return;
+              setViewMode('image_process');
+              setPendingScrollTarget({ kind: 'preset', id: p.id });
+            }}
+            title={isBuiltinImageProcess(p) ? '左键定位 · 右键启用/禁用（内置顺序固定）' : '左键定位 · 拖拽排序 · 右键启用/禁用'}
+            className={`px-3 py-1.5 rounded-lg border text-[10px] font-semibold bg-[#123447] border-[#2c78a0] text-cyan-200/90 hover:bg-[#1d4f6a] ${
+              p.enabled === false ? 'opacity-45 saturate-50' : ''
+            } ${isBuiltinImageProcess(p) ? 'cursor-default' : ''}`}
+          >
+            {p.label}
+          </button>
+        ))}
+        {presets.filter((p) => p.category === 'image_process').length === 0 && (
+          <span className="text-[9px] text-gray-500">暂无</span>
+        )}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[9px] font-black text-amber-400/90 uppercase mr-1 shrink-0">复合能力</span>
         {sets.map((s) => (
           <button
             key={s.id}
             type="button"
+            draggable
+            onDragStart={(e) => {
+              e.dataTransfer.setData(STRIP_DRAG_MIME, JSON.stringify({ kind: 'set', id: s.id }));
+              e.dataTransfer.effectAllowed = 'move';
+            }}
+            onDragEnd={() => {
+              suppressStripClickRef.current = true;
+              window.setTimeout(() => {
+                suppressStripClickRef.current = false;
+              }, 0);
+            }}
+            onDragOver={(e) => {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = 'move';
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              const raw = e.dataTransfer.getData(STRIP_DRAG_MIME);
+              if (!raw) return;
+              try {
+                const d = JSON.parse(raw) as { kind?: string; id?: string };
+                if (d.kind !== 'set' || !d.id) return;
+                const from = sets.findIndex((x) => x.id === d.id);
+                const to = sets.findIndex((x) => x.id === s.id);
+                if (from < 0 || to < 0) return;
+                reorderSetsAt(from, to);
+              } catch {
+                /* ignore */
+              }
+            }}
             onClick={() => {
+              if (suppressStripClickRef.current) return;
               setViewMode('sets');
               setPendingScrollTarget({ kind: 'set', id: s.id });
             }}
+            title="左键定位 · 拖拽排序"
             className="px-3 py-1.5 rounded-lg bg-[#3d2a10] border border-[#d97706] text-[10px] font-semibold text-amber-200/90 hover:bg-[#5a3f1a]"
           >
             {s.label}
           </button>
         ))}
-        {sets.length === 0 && (
-          <span className="text-[9px] text-gray-500">暂无</span>
-        )}
+        {sets.length === 0 && <span className="text-[9px] text-gray-500">暂无</span>}
       </div>
     </div>
   );
@@ -1633,34 +1818,6 @@ const CapabilityPresetSection: React.FC<{
                           </div>
                         </div>
                         <div className="flex flex-wrap gap-1 justify-end shrink-0">
-                          {!isBuiltinImageProcess(p) && (
-                            <>
-                              <button
-                                type="button"
-                                onClick={() => movePreset(p.id, -1)}
-                                className="px-2 py-1 rounded-lg bg-[#26262c] text-[8px] font-black uppercase hover:bg-[#383842]"
-                                title="上移"
-                              >
-                                ↑
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => movePreset(p.id, 1)}
-                                className="px-2 py-1 rounded-lg bg-[#26262c] text-[8px] font-black uppercase hover:bg-[#383842]"
-                                title="下移"
-                              >
-                                ↓
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => toggleEnabled(p.id)}
-                                className={`px-2 py-1 rounded-lg text-[8px] font-black uppercase hover:bg-[#383842] ${p.enabled === false ? 'bg-[#14532d] text-emerald-300' : 'bg-[#26262c] text-gray-200'}`}
-                                title={p.enabled === false ? '启用' : '禁用'}
-                              >
-                                {p.enabled === false ? '启用' : '禁用'}
-                              </button>
-                            </>
-                          )}
                           <button
                             type="button"
                             disabled={isBuiltinImageProcess(p)}

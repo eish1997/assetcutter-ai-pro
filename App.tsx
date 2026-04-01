@@ -2671,6 +2671,7 @@ const MainApp: React.FC = () => {
                     preferenceScope={user?.id ?? null}
                     registerMarqueeStartHandler={registerWorkflowMarqueeStart}
                     libraryItems={library}
+                    onAddToLibrary={addToLibrary}
                     capabilityPresetPanel={
                       <Suspense fallback={<LazySectionFallback label="能力预设" />}>
                         <CapabilityPresetSection
