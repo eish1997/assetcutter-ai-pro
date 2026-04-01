@@ -39,9 +39,10 @@ export function isBillableWorkspaceImageKey(userId, objectKey) {
   const uid = String(userId || '').trim();
   const key = String(objectKey || '').trim();
   if (!uid || !key) return false;
-  const root = `users/${uid}/workspace/`;
-  if (!key.startsWith(root)) return false;
-  if (key === `users/${uid}/workspace/projects-index.json`) return false;
+  const userSegment = key.startsWith('users/') ? key.slice('users/'.length).split('/')[0] || '' : '';
+  if (!(userSegment && userSegment.endsWith(`-${uid}`) && key.startsWith(`users/${userSegment}/workspace/`))) return false;
+  const root = `users/${userSegment}/workspace/`;
+  if (key === `${root}projects-index.json`) return false;
   if (key.endsWith('/workflow.json')) return false;
   return true;
 }
@@ -135,7 +136,7 @@ export function replaceUserUsageFromScan(userId, keyToSize, options = {}) {
   const scanKeyCount = Object.keys(keys).length;
   if (scanKeyCount === 0 && used === 0 && prevUsed >= EMPTY_RECONCILE_BLOCK_PREV_BYTES && !forceEmptyReset) {
     const err = new Error(
-      'R2 扫描未列出任何计费对象，但当前用量账本显示仍有数据。为避免误把账本清零导致配额与同步异常，已中止。请核对 R2_BUCKET、密钥、用户 ID 与对象前缀 users/<id>/workspace/；若确认桶中已无计费文件，可在管理端使用「强制同步」。'
+      'R2 扫描未列出任何计费对象，但当前用量账本显示仍有数据。为避免误把账本清零导致配额与同步异常，已中止。请核对 R2_BUCKET、密钥、用户 ID 与对象前缀 users/<username-id>/workspace/；若确认桶中已无计费文件，可在管理端使用「强制同步」。'
     );
     err.code = 'RECONCILE_EMPTY_BLOCKED';
     throw err;

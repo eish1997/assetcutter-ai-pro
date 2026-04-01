@@ -19,6 +19,21 @@ function sanitizeSegment(s: string): string {
   return String(s).replace(/[^a-zA-Z0-9_.-]/g, '_').slice(0, 120) || 'step';
 }
 
+function sanitizeUserPathSegment(s: string): string {
+  return String(s || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9_.-]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 64);
+}
+
+function userStorageDirName(userId: string, username?: string | null): string {
+  const uid = String(userId || '').trim();
+  const name = sanitizeUserPathSegment(username || '');
+  return name ? `${name}-${uid}` : uid;
+}
+
 /** data URL → bytes + mime；非 data URL 返回 null */
 export function parseDataUrlToBytes(dataUrl: string): { mime: string; buffer: ArrayBuffer } | null {
   const m = String(dataUrl).match(/^data:([^;,]+);base64,(.+)$/i);
@@ -209,8 +224,8 @@ async function downloadObjectAsDataUrl(objectKey: string): Promise<string> {
   });
 }
 
-function assetBasePath(userId: string, projectId: string, assetId: string): string {
-  return `users/${userId}/workspace/projects/${projectId}/assets/${assetId}`;
+function assetBasePath(userId: string, projectId: string, assetId: string, username?: string | null): string {
+  return `users/${userStorageDirName(userId, username)}/workspace/projects/${projectId}/assets/${assetId}`;
 }
 
 export type WorkflowCloudBundleV2 = {
@@ -250,7 +265,8 @@ export function collectReferencedObjectKeysFromPackedV2(packed: WorkflowCloudBun
 export async function packWorkflowBundleForCloud(
   userId: string,
   projectId: string,
-  bundle: { assets: WorkflowAsset[]; pending: WorkflowPendingTask[] }
+  bundle: { assets: WorkflowAsset[]; pending: WorkflowPendingTask[] },
+  username?: string | null
 ): Promise<WorkflowCloudBundleV2> {
   const assets: WorkflowAsset[] = JSON.parse(JSON.stringify(bundle.assets)) as WorkflowAsset[];
   const pending: WorkflowPendingTask[] = JSON.parse(JSON.stringify(bundle.pending)) as WorkflowPendingTask[];
@@ -260,7 +276,7 @@ export async function packWorkflowBundleForCloud(
   for (const a of assets) {
     delete a.originalObjectKey;
     delete a.resultsObjectKeys;
-    const base = assetBasePath(userId, projectId, a.id);
+    const base = assetBasePath(userId, projectId, a.id, username);
 
     if (a.original && !isLikelyHttpImageUrl(a.original)) {
       const key = await uploadDataUrlDeduped(dataUrlToKey, contentHashToKey, a.original, (p) => `${base}/original.${mimeToExt(p.mime)}`);
@@ -302,7 +318,7 @@ export async function packWorkflowBundleForCloud(
 
   for (const t of pending) {
     delete t.inputImageObjectKey;
-    const pendBase = `users/${userId}/workspace/projects/${projectId}/pending/${t.id}`;
+    const pendBase = `users/${userStorageDirName(userId, username)}/workspace/projects/${projectId}/pending/${t.id}`;
     const key = await uploadDataUrlDeduped(dataUrlToKey, contentHashToKey, t.inputImage, (p) => `${pendBase}.${mimeToExt(p.mime)}`);
     if (key) {
       t.inputImageObjectKey = key;

@@ -207,7 +207,22 @@ function readBody(req, maxBytes = MAX_BODY_BYTES) {
   });
 }
 
-async function resolveSessionUserIdFetch(req) {
+function sanitizeUserPathSegment(s) {
+  return String(s || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9_.-]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 64);
+}
+
+function userStorageDirName(userId, username) {
+  const uid = String(userId || '').trim();
+  const name = sanitizeUserPathSegment(username || '');
+  return name ? `${name}-${uid}` : uid;
+}
+
+async function resolveSessionUserFetch(req) {
   if (!R2_ENFORCE_USER_SCOPE()) return null;
   const cookie = String(req.headers.cookie || '');
   if (!cookie) return null;
@@ -216,42 +231,58 @@ async function resolveSessionUserIdFetch(req) {
     if (!r.ok) return null;
     const data = await r.json();
     const id = data?.user?.id;
-    return typeof id === 'string' && id ? id : null;
+    const username = data?.user?.username;
+    if (typeof id !== 'string' || !id) return null;
+    return {
+      id,
+      username: typeof username === 'string' && username.trim() ? username.trim() : null,
+    };
   } catch {
     return null;
   }
 }
 
-async function resolveSessionUserId(req, inject) {
+async function resolveSessionUser(req, inject) {
   if (!R2_ENFORCE_USER_SCOPE()) return null;
-  if (inject?.resolveSessionUserId) {
-    return inject.resolveSessionUserId(req);
+  if (inject?.resolveSessionUser) {
+    const u = await inject.resolveSessionUser(req);
+    const id = u?.id;
+    const username = u?.username;
+    if (typeof id !== 'string' || !id) return null;
+    return {
+      id,
+      username: typeof username === 'string' && username.trim() ? username.trim() : null,
+    };
   }
-  return resolveSessionUserIdFetch(req);
+  if (inject?.resolveSessionUserId) {
+    const id = await inject.resolveSessionUserId(req);
+    return id ? { id, username: null } : null;
+  }
+  return resolveSessionUserFetch(req);
 }
 
-function userRootPrefix(userId) {
-  return `users/${userId}/`;
+function userRootPrefix(userId, username) {
+  return `users/${userStorageDirName(userId, username)}/`;
 }
 
-function assertUserObjectKey(sessionUserId, objectKey) {
+function assertUserObjectKey(sessionUser, objectKey) {
   if (!R2_ENFORCE_USER_SCOPE()) return;
-  if (!sessionUserId) throw new Error('未登录');
-  const prefix = userRootPrefix(sessionUserId);
+  if (!sessionUser?.id) throw new Error('未登录');
+  const prefix = userRootPrefix(sessionUser.id, sessionUser.username);
   if (!objectKey.startsWith(prefix)) throw new Error('无权访问该对象路径');
 }
 
-function resolveListPrefix(sessionUserId, prefixRaw) {
+function resolveListPrefix(sessionUser, prefixRaw) {
   if (!R2_ENFORCE_USER_SCOPE()) return String(prefixRaw || '');
-  if (!sessionUserId) throw new Error('未登录');
-  const root = userRootPrefix(sessionUserId);
+  if (!sessionUser?.id) throw new Error('未登录');
+  const root = userRootPrefix(sessionUser.id, sessionUser.username);
   let p = String(prefixRaw || '').trim().replace(/^\/+/, '');
   if (!p) return root;
   if (!p.startsWith(root)) throw new Error('列举路径必须在当前用户命名空间下');
   return p;
 }
 
-async function handleCreateUploadUrl(req, res, sessionUserId, s3) {
+async function handleCreateUploadUrl(req, res, sessionUser, s3) {
   const bodyText = await readBody(req);
   let body = {};
   if (bodyText) {
@@ -264,27 +295,27 @@ async function handleCreateUploadUrl(req, res, sessionUserId, s3) {
   }
   const objectKey = safeObjectKey(body.objectKey);
   try {
-    assertUserObjectKey(sessionUserId, objectKey);
+    assertUserObjectKey(sessionUser, objectKey);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     sendJson(res, msg === '未登录' ? 401 : 403, { error: msg });
     return;
   }
-  const billable = !!(sessionUserId && isBillableWorkspaceImageKey(sessionUserId, objectKey));
+  const billable = !!(sessionUser?.id && isBillableWorkspaceImageKey(sessionUser.id, objectKey));
   if (billable) {
     const declared = Math.floor(Number(body.contentLength));
     if (!Number.isFinite(declared) || declared < 1) {
       sendJson(res, 400, { error: '上传工作区图片必须提供 contentLength（字节）', code: 'CONTENT_LENGTH_REQUIRED' });
       return;
     }
-    const dbUser = await findUserById(sessionUserId);
+    const dbUser = await findUserById(sessionUser.id);
     if (!dbUser) {
       sendJson(res, 401, { error: '用户不存在' });
       return;
     }
     const quota = getWorkspaceQuotaBytesForUser(dbUser);
-    const used = getWorkspaceUsedBytes(sessionUserId);
-    const oldTracked = getTrackedBytesForKey(sessionUserId, objectKey);
+    const used = getWorkspaceUsedBytes(sessionUser.id);
+    const oldTracked = getTrackedBytesForKey(sessionUser.id, objectKey);
     const projected = used - oldTracked + declared;
     if (projected > quota) {
       sendJson(res, 403, {
@@ -325,7 +356,7 @@ async function handleCreateUploadUrl(req, res, sessionUserId, s3) {
   });
 }
 
-async function handleCreateDownloadUrl(req, res, sessionUserId, s3) {
+async function handleCreateDownloadUrl(req, res, sessionUser, s3) {
   const bodyText = await readBody(req);
   let body = {};
   if (bodyText) {
@@ -338,7 +369,7 @@ async function handleCreateDownloadUrl(req, res, sessionUserId, s3) {
   }
   const objectKey = safeObjectKey(body.objectKey);
   try {
-    assertUserObjectKey(sessionUserId, objectKey);
+    assertUserObjectKey(sessionUser, objectKey);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     sendJson(res, msg === '未登录' ? 401 : 403, { error: msg });
@@ -366,7 +397,7 @@ async function handleCreateDownloadUrl(req, res, sessionUserId, s3) {
   sendJson(res, 200, { objectKey, expiresIn, downloadUrl });
 }
 
-async function handleRegisterUpload(req, res, sessionUserId, s3) {
+async function handleRegisterUpload(req, res, sessionUser, s3) {
   const bodyText = await readBody(req);
   let body = {};
   if (bodyText) {
@@ -379,7 +410,7 @@ async function handleRegisterUpload(req, res, sessionUserId, s3) {
   }
   const objectKey = safeObjectKey(body.objectKey);
   try {
-    assertUserObjectKey(sessionUserId, objectKey);
+    assertUserObjectKey(sessionUser, objectKey);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     sendJson(res, msg === '未登录' ? 401 : 403, { error: msg });
@@ -399,22 +430,22 @@ async function handleRegisterUpload(req, res, sessionUserId, s3) {
     sendJson(res, 404, { error: '对象尚未写入或不存在，请稍后重试 register-upload' });
     return;
   }
-  if (!isBillableWorkspaceImageKey(sessionUserId, objectKey)) {
+  if (!isBillableWorkspaceImageKey(sessionUser?.id, objectKey)) {
     sendJson(res, 200, {
       ok: true,
       billable: false,
-      usedBytes: getWorkspaceUsedBytes(sessionUserId),
+      usedBytes: getWorkspaceUsedBytes(sessionUser?.id),
     });
     return;
   }
-  const dbUser = await findUserById(sessionUserId);
+  const dbUser = await findUserById(sessionUser.id);
   if (!dbUser) {
     sendJson(res, 401, { error: '用户不存在' });
     return;
   }
   const quota = getWorkspaceQuotaBytesForUser(dbUser);
-  const used = getWorkspaceUsedBytes(sessionUserId);
-  const oldTracked = getTrackedBytesForKey(sessionUserId, objectKey);
+  const used = getWorkspaceUsedBytes(sessionUser.id);
+  const oldTracked = getTrackedBytesForKey(sessionUser.id, objectKey);
   if (used - oldTracked + headSize > quota) {
     try {
       await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: objectKey }));
@@ -424,12 +455,12 @@ async function handleRegisterUpload(req, res, sessionUserId, s3) {
     sendJson(res, 403, {
       error: '上传后超出工作区云配额，已丢弃该对象。',
       code: 'STORAGE_QUOTA_EXCEEDED',
-      usedBytes: getWorkspaceUsedBytes(sessionUserId),
+      usedBytes: getWorkspaceUsedBytes(sessionUser.id),
       quotaBytes: quota,
     });
     return;
   }
-  const { ok, usedBytes } = registerBillableObjectAfterPut(sessionUserId, objectKey, headSize);
+  const { ok, usedBytes } = registerBillableObjectAfterPut(sessionUser.id, objectKey, headSize);
   if (!ok) {
     sendJson(res, 400, { error: '登记用量失败' });
     return;
@@ -437,10 +468,10 @@ async function handleRegisterUpload(req, res, sessionUserId, s3) {
   sendJson(res, 200, { ok: true, billable: true, usedBytes, quotaBytes: quota });
 }
 
-async function handleListObjects(req, res, parsedUrl, sessionUserId, s3) {
+async function handleListObjects(req, res, parsedUrl, sessionUser, s3) {
   let prefix;
   try {
-    prefix = resolveListPrefix(sessionUserId, parsedUrl.searchParams.get('prefix') || '');
+    prefix = resolveListPrefix(sessionUser, parsedUrl.searchParams.get('prefix') || '');
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     sendJson(res, msg === '未登录' ? 401 : 403, { error: msg });
@@ -474,9 +505,9 @@ async function handleListObjects(req, res, parsedUrl, sessionUserId, s3) {
   });
 }
 
-async function handleHeadObject(req, res, objectKey, sessionUserId, s3) {
+async function handleHeadObject(req, res, objectKey, sessionUser, s3) {
   try {
-    assertUserObjectKey(sessionUserId, objectKey);
+    assertUserObjectKey(sessionUser, objectKey);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     sendJson(res, msg === '未登录' ? 401 : 403, { error: msg });
@@ -491,9 +522,9 @@ async function handleHeadObject(req, res, objectKey, sessionUserId, s3) {
   sendJson(res, 200, { ok: true, objectKey });
 }
 
-async function handleDeleteObject(req, res, objectKey, sessionUserId, s3) {
+async function handleDeleteObject(req, res, objectKey, sessionUser, s3) {
   try {
-    assertUserObjectKey(sessionUserId, objectKey);
+    assertUserObjectKey(sessionUser, objectKey);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     sendJson(res, msg === '未登录' ? 401 : 403, { error: msg });
@@ -513,7 +544,7 @@ async function handleDeleteObject(req, res, objectKey, sessionUserId, s3) {
       Key: objectKey,
     })
   );
-  const { usedBytes } = unregisterBillableObjectAfterDelete(sessionUserId, objectKey, headSize);
+  const { usedBytes } = unregisterBillableObjectAfterDelete(sessionUser?.id, objectKey, headSize);
   sendJson(res, 200, { ok: true, objectKey, usedBytes });
 }
 
@@ -711,36 +742,36 @@ export async function handleR2StorageRequest(req, res, inject = {}) {
       return;
     }
 
-    const sessionUserId = await resolveSessionUserId(req, inject);
+    const sessionUser = await resolveSessionUser(req, inject);
 
     if (pathname === '/api/r2/upload-url' && req.method === 'POST') {
-      await handleCreateUploadUrl(req, res, sessionUserId, s3);
+      await handleCreateUploadUrl(req, res, sessionUser, s3);
       return;
     }
 
     if (pathname === '/api/r2/register-upload' && req.method === 'POST') {
-      await handleRegisterUpload(req, res, sessionUserId, s3);
+      await handleRegisterUpload(req, res, sessionUser, s3);
       return;
     }
 
     if (pathname === '/api/r2/download-url' && req.method === 'POST') {
-      await handleCreateDownloadUrl(req, res, sessionUserId, s3);
+      await handleCreateDownloadUrl(req, res, sessionUser, s3);
       return;
     }
 
     if (pathname === '/api/r2/objects' && req.method === 'GET') {
-      await handleListObjects(req, res, parsedUrl, sessionUserId, s3);
+      await handleListObjects(req, res, parsedUrl, sessionUser, s3);
       return;
     }
 
     if (pathname.startsWith('/api/r2/objects/')) {
       const objectKey = safeObjectKey(decodeURIComponent(pathname.slice('/api/r2/objects/'.length)));
       if (req.method === 'GET') {
-        await handleHeadObject(req, res, objectKey, sessionUserId, s3);
+        await handleHeadObject(req, res, objectKey, sessionUser, s3);
         return;
       }
       if (req.method === 'DELETE') {
-        await handleDeleteObject(req, res, objectKey, sessionUserId, s3);
+        await handleDeleteObject(req, res, objectKey, sessionUser, s3);
         return;
       }
     }
@@ -770,7 +801,8 @@ export async function handleR2StorageRequest(req, res, inject = {}) {
 export async function reconcileUserWorkspaceBillableUsage(userId, s3, bucket, options = {}) {
   const uid = String(userId || '').trim();
   if (!uid) throw new Error('userId 无效');
-  const prefix = `users/${uid}/workspace/`;
+  const dbUser = await findUserById(uid);
+  const prefix = `users/${userStorageDirName(uid, dbUser?.username)}/workspace/`;
   const keyToSize = {};
   let token;
   for (;;) {

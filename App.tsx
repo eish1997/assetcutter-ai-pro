@@ -565,6 +565,7 @@ const MainApp: React.FC = () => {
   const activeWorkspaceProjectIdRef = useRef<string | null>(activeWorkspaceProjectId);
   const workspaceProjectsRef = useRef(workspaceProjects);
   const userIdRef = useRef<string | undefined>(user?.id);
+  const usernameRef = useRef<string | undefined>(user?.username);
   /** 仅在该用户完成云 hydrate / 迁移后允许 push，避免切换账号时用上一账号内存态覆盖云端 */
   const workspaceCloudPushAllowedUserIdRef = useRef<string | null>(null);
   const cloudWorkflowSyncGenRef = useRef(0);
@@ -605,6 +606,9 @@ const MainApp: React.FC = () => {
   useEffect(() => {
     userIdRef.current = user?.id;
   }, [user?.id]);
+  useEffect(() => {
+    usernameRef.current = user?.username;
+  }, [user?.username]);
 
   useEffect(() => {
     if (!user?.id) workspaceCloudPushAllowedUserIdRef.current = null;
@@ -635,7 +639,7 @@ const MainApp: React.FC = () => {
 
   /** 画布变更后标记未同步（云端拉取过程中不标脏） */
   useEffect(() => {
-    if (authLoading || !user?.id || !isWorkspaceCloudEnabled() || !activeWorkspaceProjectId) return;
+    if (authLoading || !user?.id || !user?.username || !isWorkspaceCloudEnabled() || !activeWorkspaceProjectId) return;
     if (workspaceCloudPullJustCompletedRef.current) {
       workspaceCloudPullJustCompletedRef.current = false;
       return;
@@ -646,7 +650,7 @@ const MainApp: React.FC = () => {
 
   useEffect(() => {
     if (!workspaceCloudQuotaSuspended) return;
-    if (!user?.id || !isWorkspaceCloudEnabled() || !activeWorkspaceProjectId) return;
+    if (!user?.id || !user?.username || !isWorkspaceCloudEnabled() || !activeWorkspaceProjectId) return;
     editedWhileQuotaSuspendedRef.current = true;
   }, [workflowAssets, workflowPending, workspaceCloudQuotaSuspended, user?.id, activeWorkspaceProjectId]);
 
@@ -656,7 +660,7 @@ const MainApp: React.FC = () => {
     setWorkspaceCloudHydratingProjectId(projectId);
     void (async () => {
       try {
-        const packed = await fetchWorkflowPackedFromCloud(userId, projectId);
+        const packed = await fetchWorkflowPackedFromCloud(userId, projectId, usernameRef.current);
         if (gen !== cloudWorkflowSyncGenRef.current) return;
         if (activeWorkspaceProjectIdRef.current !== projectId) return;
         if (!packed) {
@@ -770,6 +774,23 @@ const MainApp: React.FC = () => {
     };
   }, [flushProjectPersistence]);
 
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      flushProjectPersistence();
+      const shouldWarn =
+        !!userIdRef.current &&
+        !!usernameRef.current &&
+        isWorkspaceCloudEnabled() &&
+        (workspaceCloudDirtyRef.current || workspaceCloudLeaveSyncing);
+      if (!shouldWarn) return;
+      e.preventDefault();
+      // 现代浏览器会忽略自定义文案，但必须赋值 returnValue 才会触发确认弹窗
+      e.returnValue = '存在未同步到云端的工作区修改，关闭后可能丢失。请先完成同步。';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [flushProjectPersistence, workspaceCloudLeaveSyncing]);
+
   /** 未登录：工作区读回访客级 localStorage（与已登录账号隔离键） */
   useEffect(() => {
     if (authLoading) return;
@@ -806,7 +827,7 @@ const MainApp: React.FC = () => {
 
   /** 已登录且开启云同步：切换账号时先清空内存态，再从 R2 hydrate；访客数据仅在「云端无索引」时迁入 */
   useEffect(() => {
-    if (authLoading || !user?.id || !isWorkspaceCloudEnabled()) return;
+    if (authLoading || !user?.id || !user?.username || !isWorkspaceCloudEnabled()) return;
     const uid = user.id;
     workspaceCloudPushAllowedUserIdRef.current = null;
     cloudWorkflowSyncGenRef.current += 1;
@@ -840,13 +861,13 @@ const MainApp: React.FC = () => {
 
     void (async () => {
       try {
-        const index = await fetchWorkspaceCloudIndex(uid);
+        const index = await fetchWorkspaceCloudIndex(uid, user.username);
         if (cancelled) return;
         if (index) {
           applyIndex(index);
           return;
         }
-        const migrated = await migrateLocalWorkspaceToCloud(uid);
+        const migrated = await migrateLocalWorkspaceToCloud(uid, user.username);
         if (cancelled) return;
         if (migrated) {
           const { projects, lastOpenProjectId } = migrated;
@@ -859,7 +880,7 @@ const MainApp: React.FC = () => {
             const local = loadWorkflowBundle(validLast, uid);
             setWorkflowAssets(local.assets);
             setWorkflowPending(local.pending);
-            runCloudWorkflowPull(uid, validLast);
+        runCloudWorkflowPull(uid, validLast);
           } else {
             setWorkflowAssets([]);
             setWorkflowPending([]);
@@ -867,7 +888,7 @@ const MainApp: React.FC = () => {
           workspaceCloudPushAllowedUserIdRef.current = uid;
           return;
         }
-        const again = await fetchWorkspaceCloudIndex(uid);
+        const again = await fetchWorkspaceCloudIndex(uid, user.username);
         if (cancelled) return;
         if (again) {
           applyIndex(again);
@@ -944,7 +965,7 @@ const MainApp: React.FC = () => {
       setWorkflowAssets(local.assets);
       setWorkflowPending(local.pending);
       const uid = userIdRef.current;
-      if (uid && isWorkspaceCloudEnabled()) {
+      if (uid && usernameRef.current && isWorkspaceCloudEnabled()) {
         runCloudWorkflowPull(uid, id);
       }
     },
@@ -964,14 +985,15 @@ const MainApp: React.FC = () => {
         const uid = userIdRef.current;
         if (
           uid &&
+          usernameRef.current &&
           isWorkspaceCloudEnabled() &&
           !workspaceCloudQuotaSuspendedRef.current &&
           workspaceCloudPushAllowedUserIdRef.current === uid
         ) {
           setWorkspaceCloudLeaveSyncing(true);
           try {
-            await pushWorkflowBundleToCloud(uid, curId, prevBundle);
-            await pushWorkspaceIndex(uid, workspaceProjectsRef.current, id);
+            await pushWorkflowBundleToCloud(uid, curId, prevBundle, usernameRef.current);
+            await pushWorkspaceIndex(uid, workspaceProjectsRef.current, id, usernameRef.current);
             workspaceCloudDirtyRef.current = false;
             await refreshAuthUser();
           } catch (e) {
@@ -1014,15 +1036,16 @@ const MainApp: React.FC = () => {
         const uid = userIdRef.current;
         if (
           uid &&
+          usernameRef.current &&
           isWorkspaceCloudEnabled() &&
           !workspaceCloudQuotaSuspendedRef.current &&
           workspaceCloudPushAllowedUserIdRef.current === uid
         ) {
           setWorkspaceCloudLeaveSyncing(true);
           try {
-            await pushWorkflowBundleToCloud(uid, pid, bundle);
+            await pushWorkflowBundleToCloud(uid, pid, bundle, usernameRef.current);
             const lastOpen = getLastOpenedWorkspaceProjectId(scope);
-            await pushWorkspaceIndex(uid, workspaceProjectsRef.current, lastOpen);
+            await pushWorkspaceIndex(uid, workspaceProjectsRef.current, lastOpen, usernameRef.current);
             workspaceCloudDirtyRef.current = false;
             await refreshAuthUser();
           } catch (e) {
@@ -1052,11 +1075,12 @@ const MainApp: React.FC = () => {
       saveWorkspaceProjects(next, user?.id ?? null);
       if (
         user?.id &&
+        user?.username &&
         isWorkspaceCloudEnabled() &&
         workspaceCloudPushAllowedUserIdRef.current === user.id &&
         !workspaceCloudQuotaSuspendedRef.current
       ) {
-        void pushWorkspaceIndex(user.id, next, getLastOpenedWorkspaceProjectId(user.id)).catch((e) =>
+        void pushWorkspaceIndex(user.id, next, getLastOpenedWorkspaceProjectId(user.id), user.username).catch((e) =>
           console.warn('[workspace cloud] index', e)
         );
       }
@@ -1074,11 +1098,12 @@ const MainApp: React.FC = () => {
       saveWorkspaceProjects(next, scope);
       if (
         user?.id &&
+        user?.username &&
         isWorkspaceCloudEnabled() &&
         workspaceCloudPushAllowedUserIdRef.current === user.id &&
         !workspaceCloudQuotaSuspendedRef.current
       ) {
-        void pushWorkspaceIndex(user.id, next, getLastOpenedWorkspaceProjectId(scope)).catch((e) =>
+        void pushWorkspaceIndex(user.id, next, getLastOpenedWorkspaceProjectId(scope), user.username).catch((e) =>
           console.warn('[workspace cloud] index', e)
         );
       }
@@ -1095,8 +1120,8 @@ const MainApp: React.FC = () => {
     const scope = userIdRef.current ?? null;
     const uid = userIdRef.current;
     removeWorkflowBundle(id, scope);
-    if (uid && isWorkspaceCloudEnabled()) {
-      void deleteWorkspaceProjectObjects(uid, id).catch((e) => console.warn('[workspace cloud]', e));
+    if (uid && usernameRef.current && isWorkspaceCloudEnabled()) {
+      void deleteWorkspaceProjectObjects(uid, id, usernameRef.current).catch((e) => console.warn('[workspace cloud]', e));
     }
     const next = workspaceProjectsRef.current.filter((q) => q.id !== id);
     setWorkspaceProjects(next);
@@ -1111,11 +1136,12 @@ const MainApp: React.FC = () => {
     }
     if (
       uid &&
+      usernameRef.current &&
       isWorkspaceCloudEnabled() &&
       workspaceCloudPushAllowedUserIdRef.current === uid &&
       !workspaceCloudQuotaSuspendedRef.current
     ) {
-      void pushWorkspaceIndex(uid, next, getLastOpenedWorkspaceProjectId(scope)).catch((e) =>
+      void pushWorkspaceIndex(uid, next, getLastOpenedWorkspaceProjectId(scope), usernameRef.current).catch((e) =>
         console.warn('[workspace cloud] index', e)
       );
     }

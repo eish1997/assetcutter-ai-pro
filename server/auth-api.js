@@ -514,12 +514,17 @@ const server = http.createServer(async (req, res) => {
       }
       await handleR2StorageRequest(req, res, {
         embedded: true,
-        async resolveSessionUserId(r) {
+        async resolveSessionUser(r) {
           const token = parseCookie(r)[COOKIE_NAME];
           if (!token) return null;
           const row = await getSessionWithUser(token);
           const id = row?.user?.id;
-          return typeof id === 'string' && id ? id : null;
+          const username = row?.user?.username;
+          if (typeof id !== 'string' || !id) return null;
+          return {
+            id,
+            username: typeof username === 'string' && username.trim() ? username.trim() : null,
+          };
         },
       });
       return;
