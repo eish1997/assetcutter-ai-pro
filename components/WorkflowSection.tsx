@@ -655,6 +655,9 @@ const TITLE_ROW_BTN_BASE =
   'h-8 px-3 inline-flex items-center justify-center rounded-lg text-[9px] font-black uppercase border transition-colors';
 const TITLE_ROW_BTN_NEUTRAL = `${TITLE_ROW_BTN_BASE} bg-[#1c1c22] border-[#2e2e32] text-gray-300 hover:bg-[#2e2e36]`;
 const TITLE_ROW_BTN_ACTIVE = `${TITLE_ROW_BTN_BASE} bg-blue-600 border-blue-500 text-white`;
+const WORKSPACE_SNAP_DURATION_MS = 260;
+// y2 > 1 形成轻微回弹，避免左右切页“硬切”。
+const WORKSPACE_SNAP_EASING = 'cubic-bezier(0.22, 1.12, 0.36, 1)';
 
 /** 大纲：子资产沿 parentAssetId 得到 viewStack（不含子资产自身），用于组内子卡片定位 */
 function workflowOutlineAncestorStack(childAssetId: string, assets: WorkflowAsset[]): { assetId: string }[] {
@@ -733,6 +736,8 @@ const WorkflowSection: React.FC<{
   preferenceScope?: string | null;
   /** 由 App 主滚动层注册，使列表两侧留白等网页空白处也能开始框选 */
   registerMarqueeStartHandler?: (handler: ((e: React.MouseEvent) => void) | null) => void;
+  /** 由 App 主滚动层注册：左右留白区域滚轮可横向切页 */
+  registerPaneWheelHandler?: (handler: ((e: React.WheelEvent) => void) | null) => void;
   /** 左侧「仓库」页：资产库条目（与弹窗导入同源） */
   libraryItems?: LibraryItem[];
   /** 大纲底部「放到仓库」：将选中工作区资产写入资产库（与 App 内 addToLibrary 同源） */
@@ -751,6 +756,7 @@ const WorkflowSection: React.FC<{
   onAddGenerate3DJob,
   preferenceScope = null,
   registerMarqueeStartHandler,
+  registerPaneWheelHandler,
   libraryItems: libraryItemsProp,
   onAddToLibrary,
   capabilityPresetPanel,
@@ -882,13 +888,18 @@ const WorkflowSection: React.FC<{
       window.clearTimeout(workspaceSnapTimerRef.current);
       workspaceSnapTimerRef.current = null;
     }
+    const track = workspaceTrackRef.current;
+    if (track) {
+      // 先写入过渡，避免状态批处理时偶发“无动画硬切”。
+      track.style.transition = `transform ${WORKSPACE_SNAP_DURATION_MS}ms ${WORKSPACE_SNAP_EASING}`;
+    }
     setWorkspaceSnapping(true);
     setWorkspacePane(snapped);
     if (typeof window !== 'undefined') {
       workspaceSnapTimerRef.current = window.setTimeout(() => {
         setWorkspaceSnapping(false);
         workspaceSnapTimerRef.current = null;
-      }, 180);
+      }, WORKSPACE_SNAP_DURATION_MS);
     } else {
       setWorkspaceSnapping(false);
     }
@@ -924,6 +935,7 @@ const WorkflowSection: React.FC<{
   const [spacePanDragging, setSpacePanDragging] = useState(false);
   const marqueeStartRef = useRef(false);
   const suppressClickAfterPanRef = useRef(false);
+  const wheelLockUntilRef = useRef(0);
   const [libraryImportIds, setLibraryImportIds] = useState<Set<string>>(new Set());
   /** 大纲底部拖入区高亮 */
   const [outlineFooterDropOver, setOutlineFooterDropOver] = useState<'toWorkspace' | 'toLibrary' | null>(null);
@@ -3438,18 +3450,42 @@ const WorkflowSection: React.FC<{
       workspacePaneRef.current = clamped;
       const track = workspaceTrackRef.current;
       if (track) {
+        track.style.transition = 'none';
         const offset = paneToOffsetPx(clamped);
         track.style.transform = `translate3d(${-offset}px, 0, 0)`;
       }
     },
     [paneToOffsetPx]
   );
+  const handlePaneWheel = useCallback(
+    (e: React.WheelEvent) => {
+      const deltaPrimary = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
+      e.preventDefault();
+      e.stopPropagation();
+      if (Math.abs(deltaPrimary) < 2) return;
+      const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+      if (now < wheelLockUntilRef.current) return;
+      wheelLockUntilRef.current = now + 180;
+      // 离散切页：一次滚轮手势切一页
+      const currentNode = Math.max(0, Math.min(3, Math.round(workspacePaneRef.current)));
+      const dir = deltaPrimary > 0 ? 1 : -1;
+      const targetNode = Math.max(0, Math.min(3, currentNode + dir));
+      if (targetNode === currentNode) return;
+      snapWorkspacePaneToNode(targetNode);
+    },
+    [snapWorkspacePaneToNode]
+  );
+  useEffect(() => {
+    if (!registerPaneWheelHandler) return;
+    registerPaneWheelHandler(handlePaneWheel);
+    return () => registerPaneWheelHandler(null);
+  }, [registerPaneWheelHandler, handlePaneWheel]);
   const workspaceOffsetPx = paneToOffsetPx(workspacePane);
   useEffect(() => {
     workspacePaneRef.current = workspacePane;
     const track = workspaceTrackRef.current;
     if (track) {
-      track.style.transition = workspaceSnapping ? 'transform 180ms cubic-bezier(0.22,1,0.36,1)' : 'none';
+      track.style.transition = workspaceSnapping ? `transform ${WORKSPACE_SNAP_DURATION_MS}ms ${WORKSPACE_SNAP_EASING}` : 'none';
       track.style.transform = `translate3d(${-workspaceOffsetPx}px, 0, 0)`;
     }
   }, [workspacePane, workspaceOffsetPx, workspaceSnapping]);
@@ -3536,7 +3572,7 @@ const WorkflowSection: React.FC<{
     };
   }, [isEditableTarget]);
 
-  const WorkflowSidebarColumn = ({
+  const renderWorkflowSidebarColumn = ({
     wide,
     variant = 'dock',
   }: {
@@ -4563,7 +4599,10 @@ const WorkflowSection: React.FC<{
     <div className="flex flex-col min-h-[400px] h-[calc(100dvh-6rem)] gap-4">
       <div className="flex flex-col flex-1 min-h-0 gap-4 min-w-0">
       <div className="flex flex-col items-stretch gap-2 shrink-0 px-0.5">
-        <div className="rounded-2xl border border-white/[0.08] bg-gradient-to-b from-white/[0.05] to-white/[0.02] p-2 shadow-[0_8px_24px_rgba(0,0,0,0.28)]">
+        <div
+          className="rounded-2xl border border-white/[0.08] bg-gradient-to-b from-white/[0.05] to-white/[0.02] p-2 shadow-[0_8px_24px_rgba(0,0,0,0.28)]"
+          onWheelCapture={handlePaneWheel}
+        >
           <div className="flex items-center gap-2 min-h-5 rounded-lg px-2 py-0.5">
             <span className="text-[8px] font-black uppercase text-gray-600/80 w-7 shrink-0 text-right">仓库</span>
             <div className="relative flex-1 min-h-5 flex items-center">
@@ -5690,7 +5729,7 @@ const WorkflowSection: React.FC<{
           )}
         </div>
         <div className="h-full min-h-0 shrink-0 flex flex-col min-w-0" style={{ width: `${sidebarWidth}px` }}>
-          <WorkflowSidebarColumn />
+          {renderWorkflowSidebarColumn({})}
         </div>
 
         {/* 右侧：能力预设列 */}

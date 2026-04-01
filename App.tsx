@@ -1199,9 +1199,14 @@ const MainApp: React.FC = () => {
   const [arenaFirstVisit, setArenaFirstVisit] = useState(() => !localStorage.getItem('ac_arena_visited'));
 
   const { mainScrollRef, showBackToTop, scrollToTop } = useMainScrollBackToTop();
+  const workflowMainContentRef = useRef<HTMLDivElement | null>(null);
   const workflowMarqueeStartRef = useRef<((e: React.MouseEvent) => void) | null>(null);
+  const workflowPaneWheelRef = useRef<((e: React.WheelEvent) => void) | null>(null);
   const registerWorkflowMarqueeStart = useCallback((handler: ((e: React.MouseEvent) => void) | null) => {
     workflowMarqueeStartRef.current = handler;
+  }, []);
+  const registerWorkflowPaneWheel = useCallback((handler: ((e: React.WheelEvent) => void) | null) => {
+    workflowPaneWheelRef.current = handler;
   }, []);
 
   useEffect(() => {
@@ -2499,13 +2504,40 @@ const MainApp: React.FC = () => {
       <main className="flex-1 flex flex-col h-[100dvh] overflow-hidden">
         <div
           ref={mainScrollRef}
-          className="flex-1 overflow-y-auto p-4 pt-6 pl-24 lg:p-10 lg:pl-28 no-scrollbar touch-pan-y"
+          className={`flex-1 no-scrollbar touch-pan-y ${
+            mode === AppMode.WORKFLOW && activeWorkspaceProjectId
+              ? 'overflow-hidden p-3 pt-3 pl-24 lg:px-6 lg:pt-4 lg:pb-6 lg:pl-28'
+              : 'overflow-y-auto p-4 pt-6 pl-24 lg:p-10 lg:pl-28'
+          }`}
           onMouseDownCapture={(e) => {
             if (mode !== AppMode.WORKFLOW || !activeWorkspaceProjectId) return;
             workflowMarqueeStartRef.current?.(e);
           }}
+          onWheelCapture={(e) => {
+            if (mode !== AppMode.WORKFLOW || !activeWorkspaceProjectId) return;
+            const target = e.target as Element | null;
+            // 工作区内部（仓库/大纲/工作区/功能区/能力）始终放行原生纵向滚动与拖放
+            if (
+              target?.closest(
+                '[data-workflow-sidebar], [data-workflow-preset], [data-workflow-outline], [data-workflow-card], [data-workflow-library-card]'
+              )
+            ) {
+              return;
+            }
+            // 仅主内容两侧留白触发：用坐标判定，避免 closest 在复杂目标下误判
+            const content = workflowMainContentRef.current;
+            if (content) {
+              const r = content.getBoundingClientRect();
+              if (e.clientX >= r.left && e.clientX <= r.right) return;
+            } else if (target?.closest('.max-w-6xl')) {
+              return;
+            }
+            // 空白区滚轮明确用于横向切页：先阻止主容器默认纵向滚动，避免出现“微微上下抖动”
+            e.preventDefault();
+            workflowPaneWheelRef.current?.(e);
+          }}
         >
-          <div className="max-w-6xl mx-auto w-full">
+          <div ref={workflowMainContentRef} className="max-w-6xl mx-auto w-full">
             {mode === AppMode.SETTINGS && (
               <Suspense fallback={<LazySectionFallback label="设置" />}>
                 <SettingsSection
@@ -2670,6 +2702,7 @@ const MainApp: React.FC = () => {
                     onAddGenerate3DJob={handleAddGenerate3DJobFromWorkflow}
                     preferenceScope={user?.id ?? null}
                     registerMarqueeStartHandler={registerWorkflowMarqueeStart}
+                    registerPaneWheelHandler={registerWorkflowPaneWheel}
                     libraryItems={library}
                     onAddToLibrary={addToLibrary}
                     capabilityPresetPanel={

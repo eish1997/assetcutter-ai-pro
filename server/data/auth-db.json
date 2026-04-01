@@ -661,6 +661,17 @@
       "ip": "127.0.0.1",
       "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
       "createdAt": "2026-04-01T02:00:38.006Z"
+    },
+    {
+      "id": "edc2599b-f590-4af7-acb6-6e4c3bb34edf",
+      "actorUserId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "actorIdentifier": "maoer",
+      "action": "admin.capability_preset_publish",
+      "targetUserId": null,
+      "metaJson": "{\"presetId\":\"2e6af70866\",\"catalogObjectKey\":\"public/capability-store/catalog.json\",\"packObjectKey\":\"public/capability-store/presets/2e6af70866.json\"}",
+      "ip": "127.0.0.1",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
+      "createdAt": "2026-04-01T05:56:16.117Z"
     }
   ]
 }
