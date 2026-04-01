@@ -9,6 +9,7 @@ import {
   replaceUserUsageFromScan,
   unregisterBillableObjectAfterDelete,
 } from './workspace-storage-usage.js';
+import { applyWorkspaceObjectRefDelta } from './workspace-object-refs.js';
 
 const MAX_BODY_BYTES = 1024 * 1024;
 const DEFAULT_ALLOWED_ORIGINS = ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:5173', 'http://127.0.0.1:5173'];
@@ -265,11 +266,31 @@ function userRootPrefix(userId, username) {
   return `users/${userStorageDirName(userId, username)}/`;
 }
 
+function extractUserSegmentFromKey(objectKey) {
+  const key = String(objectKey || '').trim().replace(/^\/+/, '');
+  if (!key.startsWith('users/')) return '';
+  return key.slice('users/'.length).split('/')[0] || '';
+}
+
+function isUserScopedObjectKey(sessionUser, objectKey) {
+  if (!sessionUser?.id) return false;
+  const seg = extractUserSegmentFromKey(objectKey);
+  if (!seg) return false;
+  return seg.endsWith(`-${sessionUser.id}`);
+}
+
+function isUserScopedPrefix(sessionUser, prefixRaw) {
+  if (!sessionUser?.id) return false;
+  const p = String(prefixRaw || '').trim().replace(/^\/+/, '');
+  if (!p.startsWith('users/')) return false;
+  const seg = p.slice('users/'.length).split('/')[0] || '';
+  return !!seg && seg.endsWith(`-${sessionUser.id}`);
+}
+
 function assertUserObjectKey(sessionUser, objectKey) {
   if (!R2_ENFORCE_USER_SCOPE()) return;
   if (!sessionUser?.id) throw new Error('未登录');
-  const prefix = userRootPrefix(sessionUser.id, sessionUser.username);
-  if (!objectKey.startsWith(prefix)) throw new Error('无权访问该对象路径');
+  if (!isUserScopedObjectKey(sessionUser, objectKey)) throw new Error('无权访问该对象路径');
 }
 
 function resolveListPrefix(sessionUser, prefixRaw) {
@@ -278,7 +299,7 @@ function resolveListPrefix(sessionUser, prefixRaw) {
   const root = userRootPrefix(sessionUser.id, sessionUser.username);
   let p = String(prefixRaw || '').trim().replace(/^\/+/, '');
   if (!p) return root;
-  if (!p.startsWith(root)) throw new Error('列举路径必须在当前用户命名空间下');
+  if (!isUserScopedPrefix(sessionUser, p)) throw new Error('列举路径必须在当前用户命名空间下');
   return p;
 }
 
@@ -513,12 +534,24 @@ async function handleHeadObject(req, res, objectKey, sessionUser, s3) {
     sendJson(res, msg === '未登录' ? 401 : 403, { error: msg });
     return;
   }
-  await s3.send(
-    new HeadObjectCommand({
-      Bucket: R2_BUCKET(),
-      Key: objectKey,
-    })
-  );
+  try {
+    await s3.send(
+      new HeadObjectCommand({
+        Bucket: R2_BUCKET(),
+        Key: objectKey,
+      })
+    );
+  } catch (e) {
+    const status = Number(e?.$metadata?.httpStatusCode || 0);
+    const name = String(e?.name || '');
+    const msg = String(e?.message || '');
+    const notFound = status === 404 || name === 'NotFound' || msg.toLowerCase().includes('not found');
+    if (notFound) {
+      sendJson(res, 404, { error: '对象不存在' });
+      return;
+    }
+    throw e;
+  }
   sendJson(res, 200, { ok: true, objectKey });
 }
 
@@ -546,6 +579,35 @@ async function handleDeleteObject(req, res, objectKey, sessionUser, s3) {
   );
   const { usedBytes } = unregisterBillableObjectAfterDelete(sessionUser?.id, objectKey, headSize);
   sendJson(res, 200, { ok: true, objectKey, usedBytes });
+}
+
+async function handleReconcileObjectRefs(req, res, sessionUser, s3) {
+  const bodyText = await readBody(req);
+  let body = {};
+  if (bodyText) {
+    try {
+      body = JSON.parse(bodyText);
+    } catch {
+      sendJson(res, 400, { error: 'Invalid JSON body' });
+      return;
+    }
+  }
+  const addKeysRaw = Array.isArray(body.addKeys) ? body.addKeys : [];
+  const removeKeysRaw = Array.isArray(body.removeKeys) ? body.removeKeys : [];
+  const addKeys = addKeysRaw.map((k) => safeObjectKey(k));
+  const removeKeys = removeKeysRaw.map((k) => safeObjectKey(k));
+  for (const k of addKeys) assertUserObjectKey(sessionUser, k);
+  for (const k of removeKeys) assertUserObjectKey(sessionUser, k);
+  const { deletedKeys } = applyWorkspaceObjectRefDelta(sessionUser.id, addKeys, removeKeys);
+  for (const key of deletedKeys) {
+    try {
+      await s3.send(new DeleteObjectCommand({ Bucket: R2_BUCKET(), Key: key }));
+    } catch {
+      /* ignore */
+    }
+    unregisterBillableObjectAfterDelete(sessionUser.id, key, 0);
+  }
+  sendJson(res, 200, { ok: true, deletedKeys });
 }
 
 const MAX_CAPABILITY_PREVIEW_BYTES = 8 * 1024 * 1024;
@@ -761,6 +823,11 @@ export async function handleR2StorageRequest(req, res, inject = {}) {
 
     if (pathname === '/api/r2/objects' && req.method === 'GET') {
       await handleListObjects(req, res, parsedUrl, sessionUser, s3);
+      return;
+    }
+
+    if (pathname === '/api/r2/object-refs/reconcile' && req.method === 'POST') {
+      await handleReconcileObjectRefs(req, res, sessionUser, s3);
       return;
     }
 

@@ -61,6 +61,7 @@ export type WorkspaceCloudIndexV1 = {
 
 type UploadUrlResponse = { uploadUrl: string; objectKey: string };
 type DownloadUrlResponse = { downloadUrl: string; objectKey: string };
+type ReconcileRefsResponse = { ok: boolean; deletedKeys?: string[] };
 
 function getCsrfHeader(): Record<string, string> {
   if (typeof document === 'undefined') return {};
@@ -130,6 +131,16 @@ async function listAllObjectKeysWithPrefix(prefix: string): Promise<string[]> {
     else break;
   }
   return out;
+}
+
+async function reconcileWorkspaceObjectRefs(addKeys: string[], removeKeys: string[]): Promise<void> {
+  const add = [...new Set(addKeys.filter((k) => !!k?.trim()))];
+  const remove = [...new Set(removeKeys.filter((k) => !!k?.trim()))];
+  if (!add.length && !remove.length) return;
+  await requestJson<ReconcileRefsResponse>(r2ApiUrl('/object-refs/reconcile'), {
+    method: 'POST',
+    body: JSON.stringify({ addKeys: add, removeKeys: remove }),
+  });
 }
 
 /** 删除该项目前缀下「未被当前 workflow 引用」的对象（删图/删资产后同步 bucket） */
@@ -220,14 +231,24 @@ export async function pushWorkflowBundleToCloud(
   bundle: { assets: WorkflowAsset[]; pending: WorkflowPendingTask[] },
   username?: string | null
 ): Promise<void> {
+  const prevPacked = await fetchWorkflowPackedFromCloud(userId, projectId, username);
   const packed = await packWorkflowBundleForCloud(userId, projectId, bundle, username);
+  const prevRefs = prevPacked ? collectReferencedObjectKeysFromPackedV2(prevPacked) : new Set<string>();
+  const nextRefs = collectReferencedObjectKeysFromPackedV2(packed);
+  const addKeys = [...nextRefs].filter((k) => !prevRefs.has(k));
+  const removeKeys = [...prevRefs].filter((k) => !nextRefs.has(k));
+  await reconcileWorkspaceObjectRefs(addKeys, removeKeys);
   await putObjectBytes(workspaceWorkflowKey(userId, projectId, username), 'application/json', JSON.stringify(packed));
-  const referenced = collectReferencedObjectKeysFromPackedV2(packed);
-  await pruneUnreferencedProjectObjects(userId, projectId, referenced, username);
+  await pruneUnreferencedProjectObjects(userId, projectId, nextRefs, username);
 }
 
 /** 删除某项目下所有 R2 对象（workflow.json、assets/、pending/ 等），避免孤儿图片 */
 export async function deleteWorkspaceProjectObjects(userId: string, projectId: string, username?: string | null): Promise<void> {
+  const prevPacked = await fetchWorkflowPackedFromCloud(userId, projectId, username);
+  if (prevPacked) {
+    const prevRefs = collectReferencedObjectKeysFromPackedV2(prevPacked);
+    await reconcileWorkspaceObjectRefs([], [...prevRefs]);
+  }
   const prefix = `${workspaceRootPrefix(userId, username)}/projects/${projectId}/`;
   const keys = await listAllObjectKeysWithPrefix(prefix);
   for (const key of keys) await deleteWorkspaceObject(key);

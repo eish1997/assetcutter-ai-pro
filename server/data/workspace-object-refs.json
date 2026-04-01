@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "users": {
+    "d93ce5f5-38f9-4b66-8f40-b64028b53fae": {
+      "refs": {
+        "users/maoer-d93ce5f5-38f9-4b66-8f40-b64028b53fae/workspace/objects/sha256/530367af20cfcf4fbd6020e493b3ec8594503843aa74561e971cae3883fd26d8.jpg": 1,
+        "users/maoer-d93ce5f5-38f9-4b66-8f40-b64028b53fae/workspace/objects/sha256/d97d48692dd88743c1ae53c9c7d4b80ca32bfc061f812646e36be34a64442480.jpg": 1,
+        "users/maoer-d93ce5f5-38f9-4b66-8f40-b64028b53fae/workspace/objects/sha256/261ad3ac8a3eb7333090559a29034e3388dfffff04de4b21344540ed915eef3f.jpg": 1,
+        "users/maoer-d93ce5f5-38f9-4b66-8f40-b64028b53fae/workspace/objects/sha256/58363c73aa5943cdc97e9fe3b8367608bac031e83f47d7f9201858d608a25463.jpg": 1
+      }
+    }
+  }
+}

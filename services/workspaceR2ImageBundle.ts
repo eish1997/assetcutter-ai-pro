@@ -143,6 +143,16 @@ async function uploadBytes(objectKey: string, contentType: string, buffer: Array
   await commitRegisterUpload(objectKey);
 }
 
+async function objectExistsInCloud(objectKey: string): Promise<boolean> {
+  const res = await fetch(r2ApiUrl(`/objects/${encodeURIComponent(objectKey)}`), {
+    method: 'GET',
+    credentials: 'include',
+  });
+  if (res.status === 404) return false;
+  if (!res.ok) throw new Error(`R2 HEAD 失败（${res.status}）`);
+  return true;
+}
+
 async function sha256HexOfBuffer(buffer: ArrayBuffer): Promise<string | null> {
   try {
     const subtle = globalThis.crypto?.subtle;
@@ -166,6 +176,8 @@ async function uploadDataUrlDeduped(
   dedup: Map<string, string>,
   hashToKey: Map<string, string>,
   dataUrl: string,
+  userId: string,
+  username: string | null | undefined,
   allocateKey: (parsed: { mime: string; buffer: ArrayBuffer }) => string
 ): Promise<string | null> {
   const cached = dedup.get(dataUrl);
@@ -198,6 +210,19 @@ async function uploadDataUrlDeduped(
       dedup.set(effective, byHash);
       return byHash;
     }
+    const ext = mimeToExt(parsed.mime);
+    const hashKey = `users/${userStorageDirName(userId, username)}/workspace/objects/sha256/${hashHex}.${ext}`;
+    if (await objectExistsInCloud(hashKey)) {
+      dedup.set(dataUrl, hashKey);
+      dedup.set(effective, hashKey);
+      hashToKey.set(hashHex, hashKey);
+      return hashKey;
+    }
+    await uploadBytes(hashKey, parsed.mime, parsed.buffer);
+    dedup.set(dataUrl, hashKey);
+    dedup.set(effective, hashKey);
+    hashToKey.set(hashHex, hashKey);
+    return hashKey;
   }
 
   const key = allocateKey(parsed);
@@ -235,7 +260,7 @@ export type WorkflowCloudBundleV2 = {
 };
 
 /** 从已打包的 v2 工作流 JSON 收集仍应保留的 R2 对象键（用于推送后清理孤儿） */
-export function collectReferencedObjectKeysFromPackedV2(packed: WorkflowCloudBundleV2): Set<string> {
+export function collectReferencedObjectKeysFromPackedV2(packed: { assets: WorkflowAsset[]; pending: WorkflowPendingTask[] }): Set<string> {
   const keys = new Set<string>();
   for (const a of packed.assets) {
     if (a.originalObjectKey?.trim()) keys.add(a.originalObjectKey.trim());
@@ -279,7 +304,7 @@ export async function packWorkflowBundleForCloud(
     const base = assetBasePath(userId, projectId, a.id, username);
 
     if (a.original && !isLikelyHttpImageUrl(a.original)) {
-      const key = await uploadDataUrlDeduped(dataUrlToKey, contentHashToKey, a.original, (p) => `${base}/original.${mimeToExt(p.mime)}`);
+      const key = await uploadDataUrlDeduped(dataUrlToKey, contentHashToKey, a.original, userId, username, (p) => `${base}/original.${mimeToExt(p.mime)}`);
       if (key) {
         a.originalObjectKey = key;
         a.original = '';
@@ -290,7 +315,9 @@ export async function packWorkflowBundleForCloud(
     const nextResults: Record<string, string> = { ...a.results };
     for (const stepId of Object.keys(nextResults)) {
       const v = nextResults[stepId];
-      const key = v ? await uploadDataUrlDeduped(dataUrlToKey, contentHashToKey, v, (p) => `${base}/results/${sanitizeSegment(stepId)}.${mimeToExt(p.mime)}`) : null;
+      const key = v
+        ? await uploadDataUrlDeduped(dataUrlToKey, contentHashToKey, v, userId, username, (p) => `${base}/results/${sanitizeSegment(stepId)}.${mimeToExt(p.mime)}`)
+        : null;
       if (key) {
         resultsKeys[stepId] = key;
         delete nextResults[stepId];
@@ -304,7 +331,7 @@ export async function packWorkflowBundleForCloud(
       let idx = 0;
       for (const item of a.cutImageGroup) {
         if (typeof item === 'string') {
-          const key = await uploadDataUrlDeduped(dataUrlToKey, contentHashToKey, item, (p) => `${base}/cut/${idx}.${mimeToExt(p.mime)}`);
+          const key = await uploadDataUrlDeduped(dataUrlToKey, contentHashToKey, item, userId, username, (p) => `${base}/cut/${idx}.${mimeToExt(p.mime)}`);
           if (key) nextGroup.push({ r2Key: key });
           else nextGroup.push(item);
         } else {
@@ -319,7 +346,7 @@ export async function packWorkflowBundleForCloud(
   for (const t of pending) {
     delete t.inputImageObjectKey;
     const pendBase = `users/${userStorageDirName(userId, username)}/workspace/projects/${projectId}/pending/${t.id}`;
-    const key = await uploadDataUrlDeduped(dataUrlToKey, contentHashToKey, t.inputImage, (p) => `${pendBase}.${mimeToExt(p.mime)}`);
+    const key = await uploadDataUrlDeduped(dataUrlToKey, contentHashToKey, t.inputImage, userId, username, (p) => `${pendBase}.${mimeToExt(p.mime)}`);
     if (key) {
       t.inputImageObjectKey = key;
       t.inputImage = '';
