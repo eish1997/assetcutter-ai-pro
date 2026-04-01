@@ -672,6 +672,61 @@
       "ip": "127.0.0.1",
       "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
       "createdAt": "2026-04-01T05:56:16.117Z"
+    },
+    {
+      "id": "5be459a7-0579-40ff-8bde-b3f5addaa2dc",
+      "actorUserId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "actorIdentifier": "maoer",
+      "action": "admin.capability_preset_publish",
+      "targetUserId": null,
+      "metaJson": "{\"presetId\":\"style_transfer\",\"catalogObjectKey\":\"public/capability-store/catalog.json\",\"packObjectKey\":\"public/capability-store/presets/style_transfer.json\"}",
+      "ip": "127.0.0.1",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
+      "createdAt": "2026-04-01T09:45:55.192Z"
+    },
+    {
+      "id": "01d01937-f044-45a2-9ae5-966e08305753",
+      "actorUserId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "actorIdentifier": "maoer",
+      "action": "admin.capability_preset_publish",
+      "targetUserId": null,
+      "metaJson": "{\"presetId\":\"style_transfer\",\"catalogObjectKey\":\"public/capability-store/catalog.json\",\"packObjectKey\":\"public/capability-store/presets/style_transfer.json\"}",
+      "ip": "127.0.0.1",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
+      "createdAt": "2026-04-01T09:53:17.164Z"
+    },
+    {
+      "id": "1d15054b-210f-46d8-8445-c2d07eccc1f5",
+      "actorUserId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "actorIdentifier": "maoer",
+      "action": "admin.capability_preset_publish",
+      "targetUserId": null,
+      "metaJson": "{\"presetId\":\"split_component\",\"catalogObjectKey\":\"public/capability-store/catalog.json\",\"packObjectKey\":\"public/capability-store/presets/split_component.json\"}",
+      "ip": "127.0.0.1",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
+      "createdAt": "2026-04-01T09:53:54.386Z"
+    },
+    {
+      "id": "9272edac-2566-4039-b469-08a3efc0a734",
+      "actorUserId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "actorIdentifier": "maoer",
+      "action": "admin.capability_preset_publish",
+      "targetUserId": null,
+      "metaJson": "{\"presetId\":\"multi_view\",\"catalogObjectKey\":\"public/capability-store/catalog.json\",\"packObjectKey\":\"public/capability-store/presets/multi_view.json\"}",
+      "ip": "127.0.0.1",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
+      "createdAt": "2026-04-01T09:54:20.640Z"
+    },
+    {
+      "id": "2b764a1a-5111-47eb-a70f-97a4e10942e3",
+      "actorUserId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "actorIdentifier": "maoer",
+      "action": "admin.capability_preset_publish",
+      "targetUserId": null,
+      "metaJson": "{\"presetId\":\"149e6b4e64\",\"catalogObjectKey\":\"public/capability-store/catalog.json\",\"packObjectKey\":\"public/capability-store/presets/149e6b4e64.json\"}",
+      "ip": "127.0.0.1",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
+      "createdAt": "2026-04-01T09:54:36.270Z"
     }
   ]
 }

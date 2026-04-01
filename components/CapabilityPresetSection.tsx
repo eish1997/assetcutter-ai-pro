@@ -99,7 +99,7 @@ const CapabilityPresetSection: React.FC<{
   }, [lightboxImage, lightboxCompare]);
   const [showImportExport, setShowImportExport] = useState(false);
   const [seedDropActive, setSeedDropActive] = useState(false);
-  const [uploadingPresetIds, setUploadingPresetIds] = useState<Record<string, boolean>>({});
+  const [uploadingPresetActions, setUploadingPresetActions] = useState<Record<string, 'preview' | 'preset' | undefined>>({});
   const [syncAfterRefresh, setSyncAfterRefresh] = useState(false);
   const autoSyncedRemoteRef = useRef(false);
   const [pendingScrollTarget, setPendingScrollTarget] = useState<{ kind: 'preset' | 'set'; id: string } | null>(null);
@@ -682,45 +682,84 @@ const CapabilityPresetSection: React.FC<{
     setLightboxImage(src);
   };
 
-  const uploadPresetToR2 = async (p: CustomAppModule) => {
+  const uploadPresetToR2 = async (p: CustomAppModule, mode: 'preview' | 'preset') => {
     if (!canUploadToR2) {
       onLog?.('warn', '仅管理员可上传预设到 R2', undefined);
       return;
     }
-    setUploadingPresetIds((prev) => ({ ...prev, [p.id]: true }));
+    setUploadingPresetActions((prev) => ({ ...prev, [p.id]: mode }));
     try {
       const latest = presets.find((x) => x.id === p.id) ?? p;
-      const originalRaw = testImage[p.id] || latest.previewOriginalImage;
-      const generatedRaw =
-        (testResult[p.id]?.ok ? testResult[p.id]?.resultImage : null) ||
-        runtimePreviewImage[p.id] ||
-        latest.previewGeneratedImage ||
-        latest.previewImage;
-      const originalThumbPreview = originalRaw
-        ? await createThumbnailDataUrlFromAny(originalRaw, { maxSide: 640, targetBytes: 220 * 1024, qualities: [0.8, 0.72, 0.64] })
-        : undefined;
-      const generatedThumbPreview = generatedRaw
-        ? await createThumbnailDataUrlFromAny(generatedRaw, { maxSide: 640, targetBytes: 220 * 1024, qualities: [0.8, 0.72, 0.64] })
-        : undefined;
-      const payload = {
-        ...latest,
-        ...(generatedRaw ? { previewImage: generatedRaw, previewGeneratedImage: generatedRaw } : {}),
-        ...(originalRaw ? { previewOriginalImage: originalRaw } : {}),
-        ...(generatedThumbPreview ? { previewGeneratedThumbImage: generatedThumbPreview } : {}),
-        ...(originalThumbPreview ? { previewOriginalThumbImage: originalThumbPreview } : {}),
+      const remotePreset = remotePresetItems.find((rp) => rp.preset.id === p.id)?.preset;
+      const {
+        previewImage: _omitPreviewImage,
+        previewGeneratedImage: _omitPreviewGeneratedImage,
+        previewOriginalImage: _omitPreviewOriginalImage,
+        previewGeneratedThumbImage: _omitPreviewGeneratedThumbImage,
+        previewOriginalThumbImage: _omitPreviewOriginalThumbImage,
+        ...latestWithoutPreview
+      } = latest as CustomAppModule & {
+        previewImage?: string;
+        previewGeneratedImage?: string;
+        previewOriginalImage?: string;
+        previewGeneratedThumbImage?: string;
+        previewOriginalThumbImage?: string;
       };
+      const remotePreviewFields = {
+        ...(remotePreset?.previewImage ? { previewImage: remotePreset.previewImage } : {}),
+        ...(remotePreset?.previewGeneratedImage ? { previewGeneratedImage: remotePreset.previewGeneratedImage } : {}),
+        ...(remotePreset?.previewOriginalImage ? { previewOriginalImage: remotePreset.previewOriginalImage } : {}),
+        ...(remotePreset?.previewGeneratedThumbImage ? { previewGeneratedThumbImage: remotePreset.previewGeneratedThumbImage } : {}),
+        ...(remotePreset?.previewOriginalThumbImage ? { previewOriginalThumbImage: remotePreset.previewOriginalThumbImage } : {}),
+      };
+
+      let payload: CustomAppModule;
+      if (mode === 'preview') {
+        const originalRaw = testImage[p.id] || latest.previewOriginalImage;
+        const generatedRaw =
+          (testResult[p.id]?.ok ? testResult[p.id]?.resultImage : null) ||
+          runtimePreviewImage[p.id] ||
+          latest.previewGeneratedImage ||
+          latest.previewImage;
+        const originalThumbPreview = originalRaw
+          ? await createThumbnailDataUrlFromAny(originalRaw, { maxSide: 640, targetBytes: 220 * 1024, qualities: [0.8, 0.72, 0.64] })
+          : undefined;
+        const generatedThumbPreview = generatedRaw
+          ? await createThumbnailDataUrlFromAny(generatedRaw, { maxSide: 640, targetBytes: 220 * 1024, qualities: [0.8, 0.72, 0.64] })
+          : undefined;
+        const previewFields = {
+          ...(generatedRaw ? { previewImage: generatedRaw, previewGeneratedImage: generatedRaw } : {}),
+          ...(originalRaw ? { previewOriginalImage: originalRaw } : {}),
+          ...(generatedThumbPreview ? { previewGeneratedThumbImage: generatedThumbPreview } : {}),
+          ...(originalThumbPreview ? { previewOriginalThumbImage: originalThumbPreview } : {}),
+        };
+        payload = {
+          ...(remotePreset ?? latestWithoutPreview),
+          id: latest.id,
+          label: latest.label,
+          category: latest.category,
+          enabled: latest.enabled,
+          order: latest.order,
+          ...previewFields,
+        };
+      } else {
+        payload = {
+          ...latestWithoutPreview,
+          ...remotePreviewFields,
+        };
+      }
       const result = await publishPresetToUserR2Catalog({ preset: payload });
       onLog?.(
         'info',
-        `已上传到 R2：${p.label}`,
+        `${mode === 'preview' ? '已上传预览图到 R2' : '已上传预设到 R2'}：${p.label}`,
         `catalog objectKey: ${result.catalogObjectKey}`
       );
       await refreshCatalog();
       onLog?.('info', '已自动刷新远程能力列表', undefined);
     } catch (e) {
-      onLog?.('error', `上传失败：${p.label}`, e instanceof Error ? e.message : String(e));
+      onLog?.('error', `${mode === 'preview' ? '上传预览图失败' : '上传预设失败'}：${p.label}`, e instanceof Error ? e.message : String(e));
     } finally {
-      setUploadingPresetIds((prev) => ({ ...prev, [p.id]: false }));
+      setUploadingPresetActions((prev) => ({ ...prev, [p.id]: undefined }));
     }
   };
 
@@ -1840,15 +1879,26 @@ const CapabilityPresetSection: React.FC<{
                             编辑
                           </button>
                           {canUploadToR2 && (
-                            <button
-                              type="button"
-                              onClick={() => void uploadPresetToR2(p)}
-                              disabled={!!uploadingPresetIds[p.id]}
-                              className="px-2 py-1 rounded-lg bg-[#1e3558] text-blue-300 text-[8px] font-black uppercase hover:bg-[#305a90] disabled:opacity-50"
-                              title="将本预设（含卡片预览图）写入 R2 能力商店目录，他人配置同源商店后可刷新同步"
-                            >
-                              {uploadingPresetIds[p.id] ? '上传中…' : '上传R2'}
-                            </button>
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => void uploadPresetToR2(p, 'preview')}
+                                disabled={!!uploadingPresetActions[p.id]}
+                                className="px-2 py-1 rounded-lg bg-[#1e3558] text-blue-300 text-[8px] font-black uppercase hover:bg-[#305a90] disabled:opacity-50"
+                                title="仅上传该能力的预览图到 R2，保留远程现有提示词等配置"
+                              >
+                                {uploadingPresetActions[p.id] === 'preview' ? '上传中…' : '上传预览图'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void uploadPresetToR2(p, 'preset')}
+                                disabled={!!uploadingPresetActions[p.id]}
+                                className="px-2 py-1 rounded-lg bg-[#1f4b2b] text-green-300 text-[8px] font-black uppercase hover:bg-[#276439] disabled:opacity-50"
+                                title="仅上传该能力的预设配置到 R2，保留远程现有预览图"
+                              >
+                                {uploadingPresetActions[p.id] === 'preset' ? '上传中…' : '上传预设'}
+                              </button>
+                            </>
                           )}
                           <button
                             type="button"
