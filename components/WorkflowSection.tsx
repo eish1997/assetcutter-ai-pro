@@ -33,6 +33,7 @@ const asWorkflowImageString = (v: unknown): string => (typeof v === 'string' ? v
 /** 大纲底部拖放：仓库条目 / 工作区导出（与 onDragStart setData 一致） */
 const DT_AC_LIBRARY_ITEM_ID = 'application/x-ac-library-item-id';
 const DT_AC_WORKFLOW_EXPORT = 'application/x-ac-workflow-export';
+const WORKFLOW_FIRST_SWEEP_DONE_KEY = 'ac_workflow_first_sweep_done_v1';
 
 type AcWorkflowExportPayload =
   | { mode: 'roots'; assetIds: string[] }
@@ -796,6 +797,8 @@ const WorkflowSection: React.FC<{
   onAddToLibrary?: (items: Partial<LibraryItem>[]) => void;
   /** 右侧「能力」页底部：能力预设编辑区（由 App 传入 Suspense 包裹的 CapabilityPresetSection） */
   capabilityPresetPanel?: React.ReactNode;
+  /** 首次进入项目时的导览键（同一键仅执行一次横扫导览） */
+  onboardingKey?: string | null;
 }> = ({
   capabilityPresets,
   capabilitySets: capabilitySetsProp = [],
@@ -812,6 +815,7 @@ const WorkflowSection: React.FC<{
   libraryItems: libraryItemsProp,
   onAddToLibrary,
   capabilityPresetPanel,
+  onboardingKey = null,
 }) => {
   const libraryItems = Array.isArray(libraryItemsProp) ? libraryItemsProp : [];
   const assets = Array.isArray(assetsProp) ? assetsProp : [];
@@ -956,6 +960,43 @@ const WorkflowSection: React.FC<{
       setWorkspaceSnapping(false);
     }
   }, []);
+  useEffect(() => {
+    const key = String(onboardingKey || '').trim();
+    if (!key) return;
+    let done = false;
+    try {
+      done = localStorage.getItem(`${WORKFLOW_FIRST_SWEEP_DONE_KEY}:${key}`) === '1';
+    } catch {
+      done = false;
+    }
+    if (done) return;
+    let cancelled = false;
+    const timers: number[] = [];
+    const markDone = () => {
+      try {
+        localStorage.setItem(`${WORKFLOW_FIRST_SWEEP_DONE_KEY}:${key}`, '1');
+      } catch {
+        /* ignore */
+      }
+    };
+    timers.push(window.setTimeout(() => {
+      if (cancelled) return;
+      snapWorkspacePaneToNode(0);
+    }, 260));
+    timers.push(window.setTimeout(() => {
+      if (cancelled) return;
+      snapWorkspacePaneToNode(3);
+    }, 980));
+    timers.push(window.setTimeout(() => {
+      if (cancelled) return;
+      snapWorkspacePaneToNode(2);
+      markDone();
+    }, 1700));
+    return () => {
+      cancelled = true;
+      timers.forEach((id) => window.clearTimeout(id));
+    };
+  }, [onboardingKey, snapWorkspacePaneToNode]);
   useEffect(() => {
     return () => {
       if (workspaceRafRef.current != null && typeof window !== 'undefined') {

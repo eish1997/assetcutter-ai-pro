@@ -684,6 +684,26 @@ export async function publishCapabilityPresetToR2Catalog(adminUserId, preset) {
   if (rawPreviewText && rawGeneratedText && rawPreviewText === rawGeneratedText && rawPreviewText.startsWith('data:')) {
     delete presetForPack.previewImage;
   }
+  const normalizePreviewFieldRef = (fieldName) => {
+    const raw = presetForPack[fieldName];
+    if (typeof raw !== 'string') return;
+    const text = raw.trim();
+    if (!text || text.startsWith('data:') || text.startsWith('./')) return;
+    try {
+      const m = text.match(/^https?:\/\/[^/]+\/api\/r2\/capability-store\/(.+)$/i);
+      if (m?.[1]) {
+        const rel = String(m[1]).replace(/^\/+/, '');
+        presetForPack[fieldName] = `./${rel}`;
+      }
+    } catch {
+      // ignore malformed url
+    }
+  };
+  normalizePreviewFieldRef('previewImage');
+  normalizePreviewFieldRef('previewOriginalImage');
+  normalizePreviewFieldRef('previewGeneratedImage');
+  normalizePreviewFieldRef('previewOriginalThumbImage');
+  normalizePreviewFieldRef('previewGeneratedThumbImage');
   const uploadPreviewField = async (fieldName, suffix = '') => {
     const raw = presetForPack[fieldName];
     if (typeof raw !== 'string') return;

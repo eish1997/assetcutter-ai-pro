@@ -7,6 +7,7 @@ import { BUILTIN_IMAGE_PROCESS_IDS, CAPABILITY_PRESETS_VERSION } from '../servic
 import { loadInstalledPacks, loadPackHistory } from '../services/storePackHistory';
 import { useStoreCatalog } from '../services/storeCatalogHook';
 import { publishPresetToUserR2Catalog } from '../services/capabilityPresetR2Publish';
+import { getCapabilityStoreCatalogSources } from '../services/settingsStore';
 import CapabilitySetCanvas from './CapabilitySetCanvas';
 import { CustomDropdown, DROPDOWN_TRIGGER_COMPACT } from './ui/CustomDropdown';
 import AppIcon from './ui/AppIcon';
@@ -570,16 +571,46 @@ const CapabilityPresetSection: React.FC<{
     if (dataUrl === undefined) onLog?.('info', '已清除卡片预览图', undefined);
   };
 
-  /** 左侧大图：优先持久化预览图，其次测试结果，其次临时测试图 */
-  const getCardPreviewSrc = (p: CustomAppModule): string | null => {
-    const resolvePreviewSrc = (v: string | undefined): string | undefined => {
+  const capabilityStoreCatalogSources = useMemo(() => getCapabilityStoreCatalogSources(), []);
+  const resolvePreviewSrc = useCallback(
+    (v: string | undefined): string | undefined => {
       if (!v) return undefined;
       const t = v.trim();
       if (!t) return undefined;
-      if (/^https?:\/\//i.test(t) || t.startsWith('data:') || t.startsWith('/')) return t;
-      if (t.startsWith('./')) return `/api/r2/capability-store/${t.slice(2)}`;
-      return `/api/r2/capability-store/${t.replace(/^\/+/, '')}`;
-    };
+      if (/^https?:\/\//i.test(t)) {
+        try {
+          if (typeof window !== 'undefined') {
+            const u = new URL(t);
+            const currentHost = window.location.hostname.toLowerCase();
+            const host = u.hostname.toLowerCase();
+            const isCapabilityStoreApiPath = /\/api\/r2\/capability-store\//i.test(u.pathname || '');
+            if (isCapabilityStoreApiPath && host !== currentHost) {
+              return `${window.location.origin}${u.pathname}${u.search}${u.hash}`;
+            }
+          }
+        } catch {
+          // ignore
+        }
+        return t;
+      }
+      if (t.startsWith('data:') || t.startsWith('/')) return t;
+      const rel = t.startsWith('./') ? t.slice(2) : t.replace(/^\/+/, '');
+      for (const src of capabilityStoreCatalogSources) {
+        if (!/^https?:\/\//i.test(src)) continue;
+        try {
+          return new URL(rel, src).toString();
+        } catch {
+          // ignore and try next source
+        }
+      }
+      const normalized = rel.replace(/^public\/capability-store\/?/i, '');
+      return `/api/r2/capability-store/${normalized}`;
+    },
+    [capabilityStoreCatalogSources]
+  );
+
+  /** 左侧大图：优先持久化预览图，其次测试结果，其次临时测试图 */
+  const getCardPreviewSrc = (p: CustomAppModule): string | null => {
     const runtimeThumb = runtimePreviewThumbImage[p.id];
     if (runtimeThumb) return runtimeThumb;
     const runtime = runtimePreviewImage[p.id];
@@ -597,14 +628,6 @@ const CapabilityPresetSection: React.FC<{
     return testImage[p.id] || null;
   };
   const getOriginalPreviewSrc = (p: CustomAppModule): string | null => {
-    const resolvePreviewSrc = (v: string | undefined): string | undefined => {
-      if (!v) return undefined;
-      const t = v.trim();
-      if (!t) return undefined;
-      if (/^https?:\/\//i.test(t) || t.startsWith('data:') || t.startsWith('/')) return t;
-      if (t.startsWith('./')) return `/api/r2/capability-store/${t.slice(2)}`;
-      return `/api/r2/capability-store/${t.replace(/^\/+/, '')}`;
-    };
     const src =
       testImage[p.id] ||
       resolvePreviewSrc(p.previewOriginalImage) ||
@@ -614,14 +637,6 @@ const CapabilityPresetSection: React.FC<{
     return src || null;
   };
   const getOriginalPreviewThumbSrc = (p: CustomAppModule): string | null => {
-    const resolvePreviewSrc = (v: string | undefined): string | undefined => {
-      if (!v) return undefined;
-      const t = v.trim();
-      if (!t) return undefined;
-      if (/^https?:\/\//i.test(t) || t.startsWith('data:') || t.startsWith('/')) return t;
-      if (t.startsWith('./')) return `/api/r2/capability-store/${t.slice(2)}`;
-      return `/api/r2/capability-store/${t.replace(/^\/+/, '')}`;
-    };
     return (
       resolvePreviewSrc(p.previewOriginalThumbImage) ||
       testImage[p.id] ||
@@ -630,14 +645,6 @@ const CapabilityPresetSection: React.FC<{
     );
   };
   const getGeneratedPreviewSrc = (p: CustomAppModule): string | null => {
-    const resolvePreviewSrc = (v: string | undefined): string | undefined => {
-      if (!v) return undefined;
-      const t = v.trim();
-      if (!t) return undefined;
-      if (/^https?:\/\//i.test(t) || t.startsWith('data:') || t.startsWith('/')) return t;
-      if (t.startsWith('./')) return `/api/r2/capability-store/${t.slice(2)}`;
-      return `/api/r2/capability-store/${t.replace(/^\/+/, '')}`;
-    };
     const src =
       (testResult[p.id]?.ok ? testResult[p.id]?.resultImage : null) ||
       runtimePreviewImage[p.id] ||
@@ -647,14 +654,6 @@ const CapabilityPresetSection: React.FC<{
     return src || null;
   };
   const getGeneratedPreviewThumbSrc = (p: CustomAppModule): string | null => {
-    const resolvePreviewSrc = (v: string | undefined): string | undefined => {
-      if (!v) return undefined;
-      const t = v.trim();
-      if (!t) return undefined;
-      if (/^https?:\/\//i.test(t) || t.startsWith('data:') || t.startsWith('/')) return t;
-      if (t.startsWith('./')) return `/api/r2/capability-store/${t.slice(2)}`;
-      return `/api/r2/capability-store/${t.replace(/^\/+/, '')}`;
-    };
     return (
       resolvePreviewSrc(p.previewGeneratedThumbImage) ||
       (testResult[p.id]?.ok ? testResult[p.id]?.resultImage : null) ||

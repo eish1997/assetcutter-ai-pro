@@ -49,10 +49,11 @@ export function useDialogWorkspace() {
   }, []);
 
   const dialogTempFiltered = useMemo(() => {
-    if (dialogTempLibraryFilter === 'current') {
-      return dialogTempLibrary.filter((item) => item.sourceSessionId === dialogActiveSessionIdResolved);
-    }
-    return dialogTempLibrary;
+    const filtered =
+      dialogTempLibraryFilter === 'current'
+        ? dialogTempLibrary.filter((item) => item.sourceSessionId === dialogActiveSessionIdResolved)
+        : dialogTempLibrary;
+    return [...filtered].sort((a, b) => b.timestamp - a.timestamp);
   }, [dialogActiveSessionIdResolved, dialogTempLibrary, dialogTempLibraryFilter]);
 
   const createNewDialogSession = useCallback(() => {
@@ -143,6 +144,7 @@ export function useDialogWorkspace() {
     dialogTempPreviewId,
     setDialogTempPreviewId,
     dialogTempSelectedIds,
+    setDialogTempSelectedIds,
     dialogTempFiltered,
     addToDialogTempLibrary,
     createNewDialogSession,

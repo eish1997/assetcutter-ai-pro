@@ -44,12 +44,25 @@ import { hydrateWorkflowBundleFromCloud } from './services/workspaceR2ImageBundl
 import { HttpRequestError } from './services/httpClient';
 import { triggerImageDownload } from './services/imageDataUrl';
 import {
+  getAiProvider,
   getDialogSkipUnderstand,
+  getToapisApiKey,
+  getToapisBaseUrl,
+  getUserApiKey,
+  getVectorengineApiKey,
+  getVectorengineBaseUrl,
   getWorkspaceAutoSyncEnabled,
   isAiInvocationReady,
+  setAiProvider,
   setDialogSkipUnderstand,
+  setToapisApiKey,
+  setToapisBaseUrl,
+  setUserApiKey,
+  setVectorengineApiKey,
+  setVectorengineBaseUrl,
   setWorkspaceAutoSyncEnabled,
 } from './services/settingsStore';
+import { fetchWorkspaceUserCloudConfig, pushWorkspaceUserCloudConfig } from './services/workspaceUserCloudConfig';
 import { WorkflowApiKeyModal } from './components/WorkflowApiKeyModal';
 
 function formatWorkspaceCloudMb(bytes: number) {
@@ -602,6 +615,9 @@ const MainApp: React.FC = () => {
   const [workspaceCloudAutoSyncing, setWorkspaceCloudAutoSyncing] = useState(false);
   const [workspaceAutoSyncEnabled, setWorkspaceAutoSyncEnabledState] = useState<boolean>(() => getWorkspaceAutoSyncEnabled());
   const workspaceCloudAutoSyncingRef = useRef(false);
+  const workspaceCloudConfigHydratedUserIdRef = useRef<string | null>(null);
+  const workspaceCloudConfigHydratingUserIdRef = useRef<string | null>(null);
+  const workspaceCloudConfigPushTimerRef = useRef<number | null>(null);
   const [apiKeyModalOpen, setApiKeyModalOpen] = useState(false);
   const [aiInvocationStatusRev, setAiInvocationStatusRev] = useState(0);
   /** 同步失败或配额场景下的应用内确认（替代浏览器原生 confirm） */
@@ -638,6 +654,17 @@ const MainApp: React.FC = () => {
 
   useEffect(() => {
     if (!user?.id) workspaceCloudPushAllowedUserIdRef.current = null;
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user?.id) {
+      workspaceCloudConfigHydratedUserIdRef.current = null;
+      workspaceCloudConfigHydratingUserIdRef.current = null;
+      if (workspaceCloudConfigPushTimerRef.current != null && typeof window !== 'undefined') {
+        window.clearTimeout(workspaceCloudConfigPushTimerRef.current);
+        workspaceCloudConfigPushTimerRef.current = null;
+      }
+    }
   }, [user?.id]);
 
   useEffect(() => {
@@ -679,6 +706,87 @@ const MainApp: React.FC = () => {
     if (!user?.id || !user?.username || !isWorkspaceCloudEnabled() || !activeWorkspaceProjectId) return;
     editedWhileQuotaSuspendedRef.current = true;
   }, [workflowAssets, workflowPending, workspaceCloudQuotaSuspended, user?.id, activeWorkspaceProjectId]);
+
+  useEffect(() => {
+    if (authLoading || !user?.id || !user?.username || !isWorkspaceCloudEnabled()) return;
+    const uid = user.id;
+    if (workspaceCloudConfigHydratedUserIdRef.current === uid) return;
+    if (workspaceCloudConfigHydratingUserIdRef.current === uid) return;
+    workspaceCloudConfigHydratingUserIdRef.current = uid;
+    void (async () => {
+      try {
+        const cfg = await fetchWorkspaceUserCloudConfig(uid, user.username);
+        if (userIdRef.current !== uid) return;
+        if (cfg) {
+          setCapabilityPresets(cfg.capabilityPresets);
+          saveCapabilityPresets(cfg.capabilityPresets);
+          setCapabilitySets(cfg.capabilitySets);
+          saveCapabilitySets(cfg.capabilitySets);
+          setDialogSkipUnderstand(cfg.settings.dialogSkipUnderstand);
+          setDialogSkipUnderstandState(cfg.settings.dialogSkipUnderstand);
+          setWorkspaceAutoSyncEnabled(cfg.settings.workspaceAutoSyncEnabled);
+          setWorkspaceAutoSyncEnabledState(cfg.settings.workspaceAutoSyncEnabled);
+          setAiProvider(cfg.settings.aiProvider);
+          setUserApiKey(cfg.settings.geminiApiKey || null);
+          setToapisApiKey(cfg.settings.toapisApiKey || null);
+          setToapisBaseUrl(cfg.settings.toapisBaseUrl || null);
+          setVectorengineApiKey(cfg.settings.vectorengineApiKey || null);
+          setVectorengineBaseUrl(cfg.settings.vectorengineBaseUrl || null);
+          setAiInvocationStatusRev((n) => n + 1);
+        }
+      } catch (e) {
+        console.warn('[workspace cloud] user config pull', e);
+      } finally {
+        if (workspaceCloudConfigHydratingUserIdRef.current === uid) {
+          workspaceCloudConfigHydratingUserIdRef.current = null;
+        }
+        workspaceCloudConfigHydratedUserIdRef.current = uid;
+      }
+    })();
+  }, [authLoading, user?.id, user?.username]);
+
+  useEffect(() => {
+    if (authLoading || !user?.id || !user?.username || !isWorkspaceCloudEnabled()) return;
+    const uid = user.id;
+    if (workspaceCloudConfigHydratedUserIdRef.current !== uid) return;
+    if (workspaceCloudConfigHydratingUserIdRef.current === uid) return;
+    if (workspaceCloudPushAllowedUserIdRef.current !== uid) return;
+    if (workspaceCloudConfigPushTimerRef.current != null && typeof window !== 'undefined') {
+      window.clearTimeout(workspaceCloudConfigPushTimerRef.current);
+    }
+    if (typeof window === 'undefined') return;
+    workspaceCloudConfigPushTimerRef.current = window.setTimeout(() => {
+      workspaceCloudConfigPushTimerRef.current = null;
+      void pushWorkspaceUserCloudConfig(uid, user.username, {
+        capabilityPresets,
+        capabilitySets,
+        settings: {
+          dialogSkipUnderstand: getDialogSkipUnderstand(),
+          workspaceAutoSyncEnabled,
+          aiProvider: getAiProvider(),
+          geminiApiKey: getUserApiKey() || '',
+          toapisApiKey: getToapisApiKey() || '',
+          toapisBaseUrl: getToapisBaseUrl() || '',
+          vectorengineApiKey: getVectorengineApiKey() || '',
+          vectorengineBaseUrl: getVectorengineBaseUrl() || '',
+        },
+      }).catch((e) => console.warn('[workspace cloud] user config push', e));
+    }, 1200);
+    return () => {
+      if (workspaceCloudConfigPushTimerRef.current != null) {
+        window.clearTimeout(workspaceCloudConfigPushTimerRef.current);
+        workspaceCloudConfigPushTimerRef.current = null;
+      }
+    };
+  }, [
+    authLoading,
+    user?.id,
+    user?.username,
+    capabilityPresets,
+    capabilitySets,
+    workspaceAutoSyncEnabled,
+    aiInvocationStatusRev,
+  ]);
 
   const triggerWorkspaceCloudSyncNow = useCallback(async (): Promise<boolean> => {
     if (workspaceCloudAutoSyncingRef.current) return false;
@@ -1380,6 +1488,7 @@ const MainApp: React.FC = () => {
     dialogTempPreviewId,
     setDialogTempPreviewId,
     dialogTempSelectedIds,
+    setDialogTempSelectedIds,
     dialogTempFiltered,
     addToDialogTempLibrary,
     createNewDialogSession,
@@ -1398,6 +1507,15 @@ const MainApp: React.FC = () => {
   const [atSuggestionsCursor, setAtSuggestionsCursor] = useState(0);
   const dialogInputRef = useRef<HTMLInputElement>(null);
   const dialogInputWrapperRef = useRef<HTMLDivElement>(null);
+  const dialogTempItemRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const dialogTempMarqueeStartRef = useRef<{ x: number; y: number } | null>(null);
+  const dialogTempMarqueeActiveRef = useRef(false);
+  const [dialogTempMarqueeRect, setDialogTempMarqueeRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
+  const [dialogTempPreviewScale, setDialogTempPreviewScale] = useState(1);
+  const dialogTempPreviewDragRef = useRef<{ startX: number; startY: number; startScale: number } | null>(null);
+  const [dialogTempPreviewOffset, setDialogTempPreviewOffset] = useState({ x: 0, y: 0 });
+  const dialogTempPreviewPanRef = useRef<{ startX: number; startY: number; startOffsetX: number; startOffsetY: number } | null>(null);
+  const dialogTempPreviewSpacePressedRef = useRef(false);
 
   // 生成3D资产（腾讯混元生3D）
   const [generate3DMode, setGenerate3DMode] = useState<'text' | 'image'>('text');
@@ -1862,6 +1980,246 @@ const MainApp: React.FC = () => {
       }
     }
   };
+
+  const addDialogTempFromFiles = useCallback((files: File[], fallbackLabel: string) => {
+    files
+      .filter((f) => f.type.startsWith('image/'))
+      .slice(0, 50)
+      .forEach((file) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const data = reader.result as string;
+          addToDialogTempLibrary({
+            data,
+            sourceSessionId: dialogActiveSessionIdResolved,
+            sourceType: 'user_input',
+            label: file.name?.replace(/\.[^.]+$/, '') || fallbackLabel,
+          });
+        };
+        reader.readAsDataURL(file);
+      });
+  }, [addToDialogTempLibrary, dialogActiveSessionIdResolved]);
+
+  const collectDialogTempImageFilesFromClipboardItems = useCallback((items?: DataTransferItemList | null) => {
+    if (!items?.length) return [] as File[];
+    const files: File[] = [];
+    for (let i = 0; i < items.length; i++) {
+      if (!items[i].type.startsWith('image/')) continue;
+      const f = items[i].getAsFile();
+      if (f) files.push(f);
+    }
+    return files;
+  }, []);
+
+  const isDialogTempEditableTarget = useCallback((target: EventTarget | null) => {
+    const el = target instanceof Element ? target : null;
+    if (!el) return false;
+    if (el.closest('input, textarea, select, [contenteditable="true"]')) return true;
+    if ((el as HTMLElement).isContentEditable) return true;
+    return false;
+  }, []);
+
+  const isDialogTempUploadBlockedTarget = useCallback((target: EventTarget | null) => {
+    const el = target instanceof Element ? target : null;
+    if (!el) return false;
+    if (isDialogTempEditableTarget(el)) return true;
+    if (el.closest('button, a, label, [role="button"], [role="menuitem"], [data-no-dialog-temp-drop]')) return true;
+    return false;
+  }, [isDialogTempEditableTarget]);
+
+  const hasDialogTempImageFileTransfer = useCallback((dt: DataTransfer | null | undefined) => {
+    if (!dt) return false;
+    const hasImageFile = Array.from(dt.files || []).some((f) => f.type?.startsWith('image/'));
+    if (hasImageFile) return true;
+    return Array.from(dt.items || []).some((item) => item.kind === 'file' && item.type.startsWith('image/'));
+  }, []);
+
+  const handleDialogTempLibraryPaste = useCallback((e: React.ClipboardEvent) => {
+    const files = collectDialogTempImageFilesFromClipboardItems(e.clipboardData?.items);
+    if (!files.length) return;
+    e.preventDefault();
+    addDialogTempFromFiles(files, '粘贴图片');
+  }, [addDialogTempFromFiles, collectDialogTempImageFilesFromClipboardItems]);
+
+  const handleDialogTempLibraryDragOver = useCallback((e: React.DragEvent) => {
+    if (!hasDialogTempImageFileTransfer(e.dataTransfer)) return;
+    e.preventDefault();
+  }, [hasDialogTempImageFileTransfer]);
+
+  const handleDialogTempLibraryDrop = useCallback((e: React.DragEvent) => {
+    if (!hasDialogTempImageFileTransfer(e.dataTransfer)) return;
+    e.preventDefault();
+    const files = Array.from(e.dataTransfer?.files || []).filter((f) => f.type?.startsWith('image/'));
+    if (!files.length) return;
+    addDialogTempFromFiles(files, '拖拽图片');
+  }, [addDialogTempFromFiles, hasDialogTempImageFileTransfer]);
+
+  useEffect(() => {
+    const onWindowPaste = (e: ClipboardEvent) => {
+      if (mode !== AppMode.DIALOG) return;
+      if (e.defaultPrevented) return;
+      const active = document.activeElement;
+      if (active && isDialogTempEditableTarget(active)) return;
+      const files = collectDialogTempImageFilesFromClipboardItems(e.clipboardData?.items);
+      if (!files.length) return;
+      e.preventDefault();
+      addDialogTempFromFiles(files, '粘贴图片');
+    };
+
+    const onWindowDragOver = (e: DragEvent) => {
+      if (mode !== AppMode.DIALOG) return;
+      if (isDialogTempUploadBlockedTarget(e.target)) return;
+      if (!hasDialogTempImageFileTransfer(e.dataTransfer)) return;
+      e.preventDefault();
+    };
+
+    const onWindowDrop = (e: DragEvent) => {
+      if (mode !== AppMode.DIALOG) return;
+      if (isDialogTempUploadBlockedTarget(e.target)) return;
+      if (!hasDialogTempImageFileTransfer(e.dataTransfer)) return;
+      e.preventDefault();
+      const files = Array.from(e.dataTransfer?.files || []).filter((f) => f.type?.startsWith('image/'));
+      if (!files.length) return;
+      addDialogTempFromFiles(files, '拖拽图片');
+    };
+
+    window.addEventListener('paste', onWindowPaste);
+    window.addEventListener('dragover', onWindowDragOver);
+    window.addEventListener('drop', onWindowDrop);
+    return () => {
+      window.removeEventListener('paste', onWindowPaste);
+      window.removeEventListener('dragover', onWindowDragOver);
+      window.removeEventListener('drop', onWindowDrop);
+    };
+  }, [
+    addDialogTempFromFiles,
+    collectDialogTempImageFilesFromClipboardItems,
+    hasDialogTempImageFileTransfer,
+    isDialogTempEditableTarget,
+    isDialogTempUploadBlockedTarget,
+    mode,
+  ]);
+
+  const handleDialogTempMarqueeMouseDown = useCallback((e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    const target = e.target as HTMLElement | null;
+    if (!target) return;
+    if (target.closest('button, input, a, label, img, [role="button"], [data-no-dialog-temp-marquee]')) return;
+    dialogTempMarqueeStartRef.current = { x: e.clientX, y: e.clientY };
+    dialogTempMarqueeActiveRef.current = true;
+    setDialogTempMarqueeRect({ left: e.clientX, top: e.clientY, width: 0, height: 0 });
+    e.preventDefault();
+  }, []);
+
+  useEffect(() => {
+    const onMouseMove = (e: MouseEvent) => {
+      if (!dialogTempMarqueeActiveRef.current || !dialogTempMarqueeStartRef.current) return;
+      const start = dialogTempMarqueeStartRef.current;
+      const left = Math.min(start.x, e.clientX);
+      const top = Math.min(start.y, e.clientY);
+      const width = Math.abs(e.clientX - start.x);
+      const height = Math.abs(e.clientY - start.y);
+      setDialogTempMarqueeRect({ left, top, width, height });
+      if (width < 4 && height < 4) return;
+      const right = left + width;
+      const bottom = top + height;
+      const selectedIds: string[] = [];
+      for (const item of dialogTempFiltered) {
+        const el = dialogTempItemRefs.current[item.id];
+        if (!el) continue;
+        const rect = el.getBoundingClientRect();
+        const intersects = rect.left < right && rect.right > left && rect.top < bottom && rect.bottom > top;
+        if (intersects) selectedIds.push(item.id);
+      }
+      setDialogTempSelectedIds(new Set(selectedIds));
+    };
+
+    const onMouseUp = () => {
+      if (!dialogTempMarqueeActiveRef.current) return;
+      dialogTempMarqueeActiveRef.current = false;
+      dialogTempMarqueeStartRef.current = null;
+      setDialogTempMarqueeRect(null);
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+  }, [dialogTempFiltered, setDialogTempSelectedIds]);
+
+  useEffect(() => {
+    if (!dialogTempPreviewId) {
+      setDialogTempPreviewScale(1);
+      setDialogTempPreviewOffset({ x: 0, y: 0 });
+      dialogTempPreviewDragRef.current = null;
+      dialogTempPreviewPanRef.current = null;
+    }
+  }, [dialogTempPreviewId]);
+
+  useEffect(() => {
+    if (!dialogTempPreviewId) return;
+    const blockContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    // 捕获阶段全局拦截，尽量避免浏览器插件抢右键菜单。
+    window.addEventListener('contextmenu', blockContextMenu, true);
+    return () => {
+      window.removeEventListener('contextmenu', blockContextMenu, true);
+    };
+  }, [dialogTempPreviewId]);
+
+  useEffect(() => {
+    if (!dialogTempPreviewId) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'Space') dialogTempPreviewSpacePressedRef.current = true;
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'Space') dialogTempPreviewSpacePressedRef.current = false;
+    };
+    const onBlur = () => {
+      dialogTempPreviewSpacePressedRef.current = false;
+    };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', onBlur);
+    };
+  }, [dialogTempPreviewId]);
+
+  useEffect(() => {
+    const onMouseMove = (e: MouseEvent) => {
+      const drag = dialogTempPreviewDragRef.current;
+      if (drag) {
+        const dx = e.clientX - drag.startX;
+        const dy = e.clientY - drag.startY;
+        // 右拖/上拖放大，左拖/下拖缩小；支持上下左右四向手势
+        const nextScale = Math.max(0.2, Math.min(6, drag.startScale + (dx - dy) * 0.005));
+        setDialogTempPreviewScale(nextScale);
+      }
+      const pan = dialogTempPreviewPanRef.current;
+      if (pan) {
+        const dx = e.clientX - pan.startX;
+        const dy = e.clientY - pan.startY;
+        setDialogTempPreviewOffset({ x: pan.startOffsetX + dx, y: pan.startOffsetY + dy });
+      }
+    };
+    const onMouseUp = () => {
+      dialogTempPreviewDragRef.current = null;
+      dialogTempPreviewPanRef.current = null;
+    };
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+  }, []);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, callback: (base64: string) => void) => {
     const file = e.target.files?.[0];
@@ -2873,6 +3231,7 @@ const MainApp: React.FC = () => {
                     onLog={(level, message, detail) => addGlobalLog('工作区', level, message, detail)}
                     onAddGenerate3DJob={handleAddGenerate3DJobFromWorkflow}
                     preferenceScope={user?.id ?? null}
+                    onboardingKey={`${user?.id ?? 'guest'}:${activeWorkspaceProjectId}`}
                     registerMarqueeStartHandler={registerWorkflowMarqueeStart}
                     registerPaneWheelHandler={registerWorkflowPaneWheel}
                     libraryItems={library}
@@ -3318,9 +3677,16 @@ const MainApp: React.FC = () => {
                     {(() => {
                       const RECENT_MS = 24 * 60 * 60 * 1000;
                       const now = Date.now();
-                      const recent = dialogSessions.filter(s => !s.archived && (now - s.updatedAt) < RECENT_MS);
-                      const older = dialogSessions.filter(s => !s.archived && (now - s.updatedAt) >= RECENT_MS);
-                      const archived = dialogSessions.filter(s => s.archived);
+                      const byLatestUpdated = (a: DialogSession, b: DialogSession) => b.updatedAt - a.updatedAt;
+                      const recent = dialogSessions
+                        .filter(s => !s.archived && (now - s.updatedAt) < RECENT_MS)
+                        .sort(byLatestUpdated);
+                      const older = dialogSessions
+                        .filter(s => !s.archived && (now - s.updatedAt) >= RECENT_MS)
+                        .sort(byLatestUpdated);
+                      const archived = dialogSessions
+                        .filter(s => s.archived)
+                        .sort(byLatestUpdated);
                       const renderSession = (s: DialogSession, showArchive: boolean) => {
                         const lastImg = [...s.messages].reverse().find(m => m.role === 'assistant' && (m.versions?.length ? m.versions[m.versions.length - 1]?.resultImageBase64 : m.resultImageBase64));
                         const thumb = lastImg?.versions?.length ? lastImg.versions[lastImg.versions.length - 1]?.resultImageBase64 : lastImg?.resultImageBase64;
@@ -3406,8 +3772,17 @@ const MainApp: React.FC = () => {
                   {dialogMessages.length === 0 && (
                     <div className="flex flex-col items-center justify-center py-20 text-gray-500">
                       <AppIcon name="chat" className="w-10 h-10 mb-4" />
-                      <span className="text-[10px] font-black uppercase tracking-widest">描述画面生成图片，或上传图片后描述修改</span>
-                      <span className="text-[9px] mt-2 text-gray-600">仅输入文字即可生图；有图时可改图，无图时可与 AI 文字对话</span>
+                      {dialogAutoGenerateImage ? (
+                        <>
+                          <span className="text-[10px] font-black uppercase tracking-widest">描述画面生成图片，或上传图片后描述修改</span>
+                          <span className="text-[9px] mt-2 text-gray-600">仅输入文字即可生图；有图时可改图，无图时可与 AI 文字对话</span>
+                        </>
+                      ) : (
+                        <>
+                          <span className="text-[10px] font-black uppercase tracking-widest">与 AI 文字对话，或上传图片做图文问答</span>
+                          <span className="text-[9px] mt-2 text-gray-600">关闭生图后仅文字/图文回复，不输出新图片</span>
+                        </>
+                      )}
                     </div>
                   )}
                   {dialogMessages.map((msg, idx) => {
@@ -3432,7 +3807,13 @@ const MainApp: React.FC = () => {
                             </div>
                           )}
                           <div className="px-4 py-3 text-[11px] leading-relaxed">{msg.text}</div>
-                          {msg.role === 'assistant' && msg.understoodPrompt && !displayVersion && !msg.versions?.length && !msg.resultImageBase64 && !isEditingThis && (
+                          {dialogAutoGenerateImage &&
+                            msg.role === 'assistant' &&
+                            msg.understoodPrompt &&
+                            !displayVersion &&
+                            !msg.versions?.length &&
+                            !msg.resultImageBase64 &&
+                            !isEditingThis && (
                             <div className="px-4 pb-4 space-y-3">
                               <div className="text-[9px] text-blue-400/80">理解指令: {msg.understoodPrompt}</div>
                               <button onClick={() => handleDialogGenerateFromUnderstood(msg.id)} disabled={dialogGeneratingFromUnderstoodId === msg.id || !(idx > 0 && dialogMessages[idx - 1].role === 'user')} className="px-4 py-2 rounded-xl bg-blue-600 text-[10px] font-black uppercase text-white hover:bg-blue-500 disabled:opacity-50 transition-colors">
@@ -3549,7 +3930,13 @@ const MainApp: React.FC = () => {
                     <div className="flex justify-start items-center gap-2">
                       <div className="px-4 py-3 rounded-2xl bg-[#1c1c22] border border-[#2e2e32] text-[10px] text-gray-400 flex items-center gap-2">
                         <div className="w-3 h-3 border-2 border-[#4b6a9e] border-t-blue-500 rounded-full animate-spin" />
-                        {dialogSkipUnderstand ? '跳过理解 → 生图中...' : '理解需求 → 生图中...'}
+                        {dialogAutoGenerateImage
+                          ? dialogSkipUnderstand
+                            ? '跳过理解 → 生图中...'
+                            : '理解需求 → 生图中...'
+                          : dialogSkipUnderstand
+                            ? '处理中...'
+                            : '理解需求中...'}
                       </div>
                       <button onClick={handleDialogCancelGen} className="px-3 py-2 rounded-xl bg-[#5c1a1a] border border-[#f87171] text-[9px] font-black text-red-400 hover:bg-[#991b1b] transition-colors">停止</button>
                     </div>
@@ -3563,30 +3950,34 @@ const MainApp: React.FC = () => {
                     <button type="button" role="switch" aria-checked={dialogAutoGenerateImage} onClick={() => setDialogAutoGenerateImage(p => !p)} className={`relative w-11 h-6 rounded-full transition-colors ${dialogAutoGenerateImage ? 'bg-blue-600' : 'bg-[#26262c]'}`}>
                       <span className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform ${dialogAutoGenerateImage ? 'left-6' : 'left-1'}`} />
                     </button>
-                    <span className="text-[9px] font-black text-gray-500 uppercase">关闭理解</span>
-                    <button type="button" role="switch" aria-checked={dialogSkipUnderstand} onClick={() => setDialogSkipUnderstandState(p => !p)} className={`relative w-11 h-6 rounded-full transition-colors ${dialogSkipUnderstand ? 'bg-blue-600' : 'bg-[#26262c]'}`}>
-                      <span className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform ${dialogSkipUnderstand ? 'left-6' : 'left-1'}`} />
-                    </button>
-                    <span className="text-[9px] font-black text-gray-500 uppercase">挡位</span>
-                    <div className="flex rounded-lg overflow-hidden border border-[#2e2e32]">
-                      {DIALOG_IMAGE_GEARS.map(g => (
-                        <button key={g.id} type="button" onClick={() => { setDialogImageGear(g.id); setDialogModel(g.modelId); }} className={`px-3 py-2 text-[9px] font-black uppercase transition-colors ${dialogImageGear === g.id ? 'bg-blue-600 text-white' : 'bg-[#1c1c22] text-gray-500 hover:bg-[#2e2e36]'}`} title={g.modelId}>{g.label}</button>
-                      ))}
-                    </div>
-                    <span className="text-[9px] font-black text-gray-500 uppercase">比例</span>
-                    <CustomDropdown
-                      options={DIALOG_ASPECT_RATIO_OPTIONS.map((r) => ({ value: r.value, label: r.label }))}
-                      value={dialogAspectRatio}
-                      onChange={setDialogAspectRatio}
-                      triggerClassName={`${DROPDOWN_TRIGGER_COMPACT} min-w-[5.5rem]`}
-                    />
-                    <span className="text-[9px] font-black text-gray-500 uppercase">尺寸</span>
-                    <CustomDropdown
-                      options={SUPPORTED_IMAGE_SIZES.map((s) => ({ value: s.value, label: s.label }))}
-                      value={dialogImageSize}
-                      onChange={setDialogImageSize}
-                      triggerClassName={`${DROPDOWN_TRIGGER_COMPACT} min-w-[4rem]`}
-                    />
+                    {dialogAutoGenerateImage ? (
+                      <>
+                        <span className="text-[9px] font-black text-gray-500 uppercase">关闭理解</span>
+                        <button type="button" role="switch" aria-checked={dialogSkipUnderstand} onClick={() => setDialogSkipUnderstandState(p => !p)} className={`relative w-11 h-6 rounded-full transition-colors ${dialogSkipUnderstand ? 'bg-blue-600' : 'bg-[#26262c]'}`}>
+                          <span className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform ${dialogSkipUnderstand ? 'left-6' : 'left-1'}`} />
+                        </button>
+                        <span className="text-[9px] font-black text-gray-500 uppercase">挡位</span>
+                        <div className="flex rounded-lg overflow-hidden border border-[#2e2e32]">
+                          {DIALOG_IMAGE_GEARS.map(g => (
+                            <button key={g.id} type="button" onClick={() => { setDialogImageGear(g.id); setDialogModel(g.modelId); }} className={`px-3 py-2 text-[9px] font-black uppercase transition-colors ${dialogImageGear === g.id ? 'bg-blue-600 text-white' : 'bg-[#1c1c22] text-gray-500 hover:bg-[#2e2e36]'}`} title={g.modelId}>{g.label}</button>
+                          ))}
+                        </div>
+                        <span className="text-[9px] font-black text-gray-500 uppercase">比例</span>
+                        <CustomDropdown
+                          options={DIALOG_ASPECT_RATIO_OPTIONS.map((r) => ({ value: r.value, label: r.label }))}
+                          value={dialogAspectRatio}
+                          onChange={setDialogAspectRatio}
+                          triggerClassName={`${DROPDOWN_TRIGGER_COMPACT} min-w-[5.5rem]`}
+                        />
+                        <span className="text-[9px] font-black text-gray-500 uppercase">尺寸</span>
+                        <CustomDropdown
+                          options={SUPPORTED_IMAGE_SIZES.map((s) => ({ value: s.value, label: s.label }))}
+                          value={dialogImageSize}
+                          onChange={setDialogImageSize}
+                          triggerClassName={`${DROPDOWN_TRIGGER_COMPACT} min-w-[4rem]`}
+                        />
+                      </>
+                    ) : null}
                   </div>
                   <div className="flex flex-col gap-2">
                     {dialogInputImages.length > 0 && (
@@ -3600,7 +3991,11 @@ const MainApp: React.FC = () => {
                         ))}
                       </div>
                     )}
-                    <span className="text-[9px] text-gray-500">可添加多张图片（最多 {DIALOG_INPUT_IMAGES_MAX} 张），输入 @ 弹出选择图片；点击临时库图片直接加入输入框 · Ctrl+V 粘贴 · 无图时直接输入即文字对话</span>
+                    <span className="text-[9px] text-gray-500">
+                      {dialogAutoGenerateImage
+                        ? `可添加多张图片（最多 ${DIALOG_INPUT_IMAGES_MAX} 张），输入 @ 弹出选择图片；点击临时库图片直接加入输入框 · Ctrl+V 粘贴 · 无图时直接输入即文字对话`
+                        : `可添加多张图片（最多 ${DIALOG_INPUT_IMAGES_MAX} 张）做图文问答，输入 @ 选择图片；点击临时库图片加入输入框 · Ctrl+V 粘贴 · 当前已关闭生图，仅文字/图文回复`}
+                    </span>
                   </div>
                   {dialogValidationError && (
                     <div className="text-[11px] text-amber-400 bg-[#2c2412] border border-[#b45309] rounded-xl px-4 py-2 flex items-center gap-2">
@@ -3648,7 +4043,11 @@ const MainApp: React.FC = () => {
                           if (e.key === 'Escape') setAtSuggestionsOpen(false);
                           if (e.key === 'Enter' && !e.shiftKey) handleDialogSend();
                         }}
-                        placeholder="输入 @ 选择图片或直接输入文字；有图时描述修改需求，无图时可描述画面生成图片或与 AI 文字对话"
+                        placeholder={
+                          dialogAutoGenerateImage
+                            ? '输入 @ 选择图片或直接输入文字；有图时描述修改需求，无图时可描述画面生成图片或与 AI 文字对话'
+                            : '输入 @ 选择图片或直接输入文字；可与 AI 对话或上传图片做图文问答（不生图）'
+                        }
                         className="w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl pl-12 pr-5 py-3 text-[11px] outline-none focus:border-blue-500 transition-colors placeholder:text-gray-600"
                       />
                       {atSuggestionsOpen && (dialogInputImages.length > 0 || dialogTempFiltered.length > 0) && (
@@ -3683,7 +4082,12 @@ const MainApp: React.FC = () => {
                 </div>
 
                 {/* 右侧：临时库（生图与识别物体自动加入，可筛全部/当前对话，删会话会同步清理） */}
-                <div className="w-52 lg:w-64 shrink-0 flex flex-col border border-[#2e2e32] rounded-2xl overflow-hidden bg-[#121214] h-[calc(100dvh-6rem)]">
+                <div
+                  className="w-52 lg:w-64 shrink-0 flex flex-col border border-[#2e2e32] rounded-2xl overflow-hidden bg-[#121214] h-[calc(100dvh-6rem)]"
+                  onPaste={handleDialogTempLibraryPaste}
+                  onDragOver={handleDialogTempLibraryDragOver}
+                  onDrop={handleDialogTempLibraryDrop}
+                >
                   <div className="flex-shrink-0 px-3 py-2 border-b border-[#2e2e32] flex items-center justify-between gap-2 flex-wrap">
                     <span className="text-[9px] font-black text-gray-500 uppercase tracking-widest">临时库</span>
                     <div className="flex rounded-lg overflow-hidden border border-[#2e2e32]">
@@ -3698,49 +4102,121 @@ const MainApp: React.FC = () => {
                       <button onClick={handleDialogTempBatchDownload} disabled={dialogTempSelectedIds.size === 0} className="shrink-0 px-2 py-1 rounded bg-[#365e92] text-[8px] font-black text-white hover:bg-blue-600 disabled:opacity-40 whitespace-nowrap">批量下载{dialogTempSelectedIds.size > 0 ? `(${dialogTempSelectedIds.size})` : ''}</button>
                     </div>
                   )}
-                  <div className="flex-1 overflow-y-auto no-scrollbar p-2 min-h-0">
+                  <div className="flex-1 overflow-y-auto no-scrollbar p-2 min-h-0" onMouseDown={handleDialogTempMarqueeMouseDown}>
                     {dialogTempFiltered.length === 0 ? (
                       <div className="flex items-center justify-center py-12 text-[9px] text-gray-500 px-4 text-center">生图、用户上传与识别物体会自动加入此处</div>
                     ) : (
                       <div className="grid grid-cols-2 gap-2">
                         {dialogTempFiltered.map(item => (
-                          <div key={item.id} className="relative group rounded-xl overflow-hidden border border-[#2e2e32] bg-[#1c1c22] aspect-square">
-                            <input type="checkbox" checked={dialogTempSelectedIds.has(item.id)} onChange={() => handleDialogTempToggleSelect(item.id)} onClick={e => e.stopPropagation()} className="absolute top-1 left-1 z-10 w-4 h-4 rounded border-[#484850] bg-[#18181c] accent-blue-500" title="选择" />
-                            <img src={item.data} className="w-full h-full object-cover cursor-pointer" alt="" onClick={() => handleDialogTempAddToInput(item)} title="点击加入输入框" />
+                          <div
+                            key={item.id}
+                            ref={(el) => { dialogTempItemRefs.current[item.id] = el; }}
+                            onClick={() => setDialogTempPreviewId(item.id)}
+                            className={`relative group rounded-xl overflow-hidden border bg-[#1c1c22] aspect-square cursor-pointer ${
+                              dialogTempSelectedIds.has(item.id)
+                                ? 'border-blue-500 shadow-[0_0_0_1px_rgba(59,130,246,0.45)]'
+                                : 'border-[#2e2e32]'
+                            }`}
+                          >
+                            <img
+                              src={item.data}
+                              className="w-full h-full object-cover cursor-pointer"
+                              alt=""
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setDialogTempPreviewId(item.id);
+                              }}
+                              title="点击查看大图"
+                            />
                             {item.label && <span className="absolute bottom-0 left-0 right-0 py-0.5 text-center text-[9px] font-black bg-[#1a1a1e] text-white truncate">{item.label}</span>}
-                            <div className="absolute inset-0 bg-[#18181c] group-hover:opacity-100 opacity-0 transition-opacity flex flex-col items-stretch justify-start gap-0.5 p-1 overflow-y-auto overflow-x-hidden min-h-0">
-                              <button onClick={(e) => { e.stopPropagation(); setDialogTempPreviewId(item.id); }} className="shrink-0 w-full px-2 py-1 rounded-lg bg-[#0d0d10] text-[9px] font-black text-white hover:bg-[#383842] transition-colors text-left" title="查看大图及详情">查看大图</button>
-                              {item.sourceMessageId && (
-                                <button onClick={(e) => { e.stopPropagation(); handleDialogTempLocateMessage(item); setDialogTempPreviewId(null); }} className="shrink-0 w-full px-2 py-1 rounded-lg bg-[#0d0d10] text-[9px] font-black text-white hover:bg-[#1e40af] transition-colors text-left">定位消息</button>
-                              )}
-                              <button onClick={(e) => { e.stopPropagation(); handleDialogTempAddToInput(item); setDialogTempPreviewId(null); }} className="shrink-0 w-full px-2 py-1 rounded-lg bg-[#0d0d10] text-[9px] font-black text-white hover:bg-[#15803d] transition-colors text-left">加入输入框</button>
-                              <button onClick={(e) => { e.stopPropagation(); addDialogTempToLibrary(item); }} className="shrink-0 w-full px-2 py-1 rounded-lg bg-[#0d0d10] text-[9px] font-black text-white hover:bg-[#1e40af] transition-colors text-left">加入资产库</button>
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  void triggerImageDownload(item.data, `临时库_${item.label || item.id}`);
-                                }}
-                                className="shrink-0 w-full px-2 py-1 rounded-lg bg-[#0d0d10] text-[9px] font-black text-white hover:bg-[#383842] text-center transition-colors block"
-                              >
-                                下载
-                              </button>
-                            </div>
                           </div>
                         ))}
                       </div>
                     )}
                   </div>
                 </div>
+                {dialogTempMarqueeRect && (
+                  <div
+                    className="fixed z-[1900] pointer-events-none border border-blue-400/70 bg-blue-500/20"
+                    style={{
+                      left: dialogTempMarqueeRect.left,
+                      top: dialogTempMarqueeRect.top,
+                      width: dialogTempMarqueeRect.width,
+                      height: dialogTempMarqueeRect.height,
+                    }}
+                  />
+                )}
               </div>
               {dialogTempPreviewId && (() => {
                 const item = dialogTempLibrary.find(x => x.id === dialogTempPreviewId);
                 if (!item) return null;
                 return (
-                  <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in p-4" onClick={() => setDialogTempPreviewId(null)}>
-                    <div className="relative max-w-[90vw] max-h-[90vh] flex flex-col items-center gap-3 overflow-y-auto" onClick={e => e.stopPropagation()}>
-                      <img src={item.data} className="max-w-full max-h-[60vh] object-contain rounded-xl shadow-2xl" alt="" />
-                      <div className="w-full max-w-2xl rounded-xl bg-[#1c1c22] border border-[#2e2e32] p-4 space-y-2 text-left">
+                  <div
+                    className="fixed inset-0 z-[2000] bg-black/72 backdrop-blur-sm animate-in fade-in"
+                    onClick={() => setDialogTempPreviewId(null)}
+                    onContextMenuCapture={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }}
+                  >
+                    <div
+                      className="relative w-full h-full overflow-hidden"
+                      onClick={e => e.stopPropagation()}
+                      onContextMenuCapture={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                      }}
+                    >
+                      <img
+                        src={item.data}
+                        className="absolute left-1/2 top-1/2 max-w-[92vw] max-h-[88vh] object-contain rounded-xl shadow-2xl select-none cursor-zoom-in"
+                        alt=""
+                        draggable={false}
+                        onContextMenu={(e) => e.preventDefault()}
+                        onMouseDown={(e) => {
+                          if (e.button !== 0 && e.button !== 2) return;
+                          e.preventDefault();
+                          e.stopPropagation();
+                          if (e.button === 0) {
+                            const useLeftPan = e.shiftKey || dialogTempPreviewSpacePressedRef.current;
+                            if (useLeftPan) {
+                              dialogTempPreviewPanRef.current = {
+                                startX: e.clientX,
+                                startY: e.clientY,
+                                startOffsetX: dialogTempPreviewOffset.x,
+                                startOffsetY: dialogTempPreviewOffset.y,
+                              };
+                              return;
+                            }
+                            dialogTempPreviewDragRef.current = {
+                              startX: e.clientX,
+                              startY: e.clientY,
+                              startScale: dialogTempPreviewScale,
+                            };
+                            return;
+                          }
+                          dialogTempPreviewPanRef.current = {
+                            startX: e.clientX,
+                            startY: e.clientY,
+                            startOffsetX: dialogTempPreviewOffset.x,
+                            startOffsetY: dialogTempPreviewOffset.y,
+                          };
+                        }}
+                        style={{
+                          transform: `translate(-50%, -50%) translate(${dialogTempPreviewOffset.x}px, ${dialogTempPreviewOffset.y}px) scale(${dialogTempPreviewScale})`,
+                          transformOrigin: 'center center',
+                        }}
+                      />
+
+                      <div className="absolute top-4 left-1/2 -translate-x-1/2 rounded-xl bg-[#101018]/90 border border-[#2e2e32] px-4 py-2 text-[10px] text-gray-300 pointer-events-none">
+                        左键拖拽缩放；空格+左键 / Shift+左键 / 右键拖拽平移（当前缩放 {Math.round(dialogTempPreviewScale * 100)}%）
+                      </div>
+
+                      <div className="absolute right-4 top-4 z-10">
+                        <button onClick={() => setDialogTempPreviewId(null)} className="px-3 py-2 rounded-xl bg-[#1a1a1e]/95 border border-[#2e2e32] text-[10px] font-black text-white hover:bg-[#2a2a32]">关闭</button>
+                      </div>
+
+                      <div className="absolute left-4 bottom-4 max-w-[min(680px,92vw)] rounded-xl bg-[#1c1c22]/95 border border-[#2e2e32] p-4 space-y-2 text-left">
                         <div className="text-[9px] font-black text-gray-500 uppercase">类型</div>
                         <div className="text-[11px] text-white">{dialogTempSourceTypeLabel(item.sourceType)}{item.label ? ` · ${item.label}` : ''}</div>
                         {(item.userPrompt || item.understoodPrompt) && (
@@ -3748,20 +4224,21 @@ const MainApp: React.FC = () => {
                             {item.userPrompt && (
                               <>
                                 <div className="text-[9px] font-black text-gray-500 uppercase mt-2">用户描述</div>
-                                <div className="text-[11px] text-gray-300 break-words">{item.userPrompt}</div>
+                                <div className="text-[11px] text-gray-300 break-words max-h-20 overflow-y-auto">{item.userPrompt}</div>
                               </>
                             )}
                             {item.understoodPrompt && (
                               <>
                                 <div className="text-[9px] font-black text-gray-500 uppercase mt-2">理解指令</div>
-                                <div className="text-[11px] text-blue-300/90 break-words">{item.understoodPrompt}</div>
+                                <div className="text-[11px] text-blue-300/90 break-words max-h-20 overflow-y-auto">{item.understoodPrompt}</div>
                               </>
                             )}
                           </>
                         )}
                         <div className="text-[9px] text-gray-500 mt-2">{new Date(item.timestamp).toLocaleString()}</div>
                       </div>
-                      <div className="flex flex-wrap items-center justify-center gap-2">
+
+                      <div className="absolute right-4 bottom-4 flex flex-wrap items-center justify-end gap-2 max-w-[min(680px,92vw)]">
                         {item.sourceMessageId && (
                           <button onClick={() => { handleDialogTempLocateMessage(item); setDialogTempPreviewId(null); }} className="px-4 py-2 rounded-xl bg-[#1e40af] text-[10px] font-black text-white hover:bg-blue-500 transition-colors">定位消息</button>
                         )}
@@ -3776,7 +4253,6 @@ const MainApp: React.FC = () => {
                         >
                           下载
                         </button>
-                        <button onClick={() => setDialogTempPreviewId(null)} className="px-4 py-2 rounded-xl bg-[#1a1a1e] text-[10px] font-black text-white hover:bg-[#1e1e22]">关闭</button>
                       </div>
                     </div>
                   </div>

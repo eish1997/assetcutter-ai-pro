@@ -23,9 +23,24 @@ function resolvePackUrl(itemUrl: string, baseUrl: string): string {
   const raw = String(itemUrl || '').trim();
   const base = String(baseUrl || '').trim();
   if (!raw) return raw;
+  const normalizeCapabilityStoreHost = (input: string): string => {
+    try {
+      if (typeof window === 'undefined') return input;
+      const u = new URL(input);
+      const currentHost = window.location.hostname.toLowerCase();
+      const host = u.hostname.toLowerCase();
+      const isCapabilityStoreApiPath = /\/api\/r2\/capability-store\//i.test(u.pathname || '');
+      if (isCapabilityStoreApiPath && host !== currentHost) {
+        return `${window.location.origin}${u.pathname}${u.search}${u.hash}`;
+      }
+      return input;
+    } catch {
+      return input;
+    }
+  };
   try {
-    if (/^https?:\/\//i.test(raw)) return raw;
-    if (/^https?:\/\//i.test(base)) return new URL(raw, base).toString();
+    if (/^https?:\/\//i.test(raw)) return normalizeCapabilityStoreHost(raw);
+    if (/^https?:\/\//i.test(base)) return normalizeCapabilityStoreHost(new URL(raw, base).toString());
     // base 为同源相对路径（如 /api/r2/capability-store/catalog）时，使用当前 origin 兜底
     if (typeof window !== 'undefined' && base.startsWith('/')) {
       return new URL(raw, `${window.location.origin}${base}`).toString();
@@ -179,7 +194,7 @@ export function useStoreCatalog(options: UseStoreCatalogOptions = {}) {
               const resolvePreviewField = (value: unknown): string | undefined => {
                 if (typeof value !== 'string' || !value.trim()) return undefined;
                 const t = value.trim();
-                if (/^https?:\/\//i.test(t) || t.startsWith('data:')) return t;
+                if (/^https?:\/\//i.test(t) || t.startsWith('data:')) return resolvePackUrl(t, '');
                 if (!catalogBase) return t;
                 return resolvePackUrl(t, catalogBase);
               };
