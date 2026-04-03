@@ -18,12 +18,17 @@ import {
 } from './auth-store.js';
 import { handleR2StorageRequest, isR2Configured, publishCapabilityPresetToR2Catalog, runWorkspaceUsageReconcileForUser } from './r2-storage-handlers.js';
 import { getWorkspaceUsedBytes } from './workspace-storage-usage.js';
+import {
+  API_JSON_BODY_MAX_BYTES,
+  BODY_TOO_LARGE_MESSAGE,
+  CAPABILITY_PUBLISH_ADMIN_BODY_BYTES,
+  readBodyUtf8,
+} from './http-limits.js';
 
 const PORT = Number(process.env.PORT || process.env.AUTH_PORT || 9100);
 const BIND_HOST = String(process.env.AUTH_BIND_HOST || '0.0.0.0').trim() || '0.0.0.0';
 const COOKIE_NAME = 'ac_session';
 const SESSION_TTL_MS = Number(process.env.AUTH_SESSION_TTL_MS || 1000 * 60 * 60 * 24 * 7);
-const BODY_LIMIT = 1024 * 1024;
 const IS_PROD = String(process.env.NODE_ENV || '').toLowerCase() === 'production';
 const COOKIE_SAME_SITE = String(process.env.AUTH_COOKIE_SAMESITE || (IS_PROD ? 'none' : 'lax')).trim().toLowerCase();
 const COOKIE_SECURE = String(process.env.AUTH_COOKIE_SECURE || (IS_PROD ? 'true' : 'false')).trim().toLowerCase() === 'true';
@@ -170,34 +175,15 @@ function assertCsrf(req, res) {
   return false;
 }
 
-function readBody(req, options = {}) {
-  const maxBytes = typeof options.maxBytes === 'number' ? options.maxBytes : BODY_LIMIT;
-  return new Promise((resolve, reject) => {
-    let size = 0;
-    let overflow = false;
-    let chunks = '';
-    req.on('data', (chunk) => {
-      size += chunk.length;
-      if (size > maxBytes) {
-        overflow = true;
-        return;
-      }
-      if (!overflow) chunks += chunk.toString('utf8');
-    });
-    req.on('error', reject);
-    req.on('end', () => {
-      if (overflow) {
-        reject(new Error(`请求体过大（>${Math.floor(maxBytes / (1024 * 1024))}MB）`));
-        return;
-      }
-      if (!chunks) return resolve({});
-      try {
-        resolve(JSON.parse(chunks));
-      } catch {
-        reject(new Error('无效 JSON'));
-      }
-    });
-  });
+async function readBody(req, options = {}) {
+  const maxBytes = typeof options.maxBytes === 'number' ? options.maxBytes : API_JSON_BODY_MAX_BYTES;
+  const text = await readBodyUtf8(req, maxBytes);
+  if (!text || !String(text).trim()) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error('无效 JSON');
+  }
 }
 
 function getClientIp(req) {
@@ -485,7 +471,7 @@ const server = http.createServer(async (req, res) => {
           json(res, 503, { error: 'R2 未配置，无法发布能力预设' });
           return;
         }
-        const body = await readBody(req, { maxBytes: 64 * 1024 * 1024 });
+        const body = await readBody(req, { maxBytes: CAPABILITY_PUBLISH_ADMIN_BODY_BYTES });
         const preset = body && typeof body === 'object' ? body.preset : null;
         if (!preset || typeof preset !== 'object') {
           json(res, 400, { error: '缺少 preset' });
@@ -533,6 +519,10 @@ const server = http.createServer(async (req, res) => {
     json(res, 404, { error: 'Not found' });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (message === BODY_TOO_LARGE_MESSAGE) {
+      json(res, 413, { error: '请求体过大' });
+      return;
+    }
     json(res, 400, { error: message });
   }
 });

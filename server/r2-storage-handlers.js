@@ -10,8 +10,12 @@ import {
   unregisterBillableObjectAfterDelete,
 } from './workspace-storage-usage.js';
 import { applyWorkspaceObjectRefDelta } from './workspace-object-refs.js';
-
-const MAX_BODY_BYTES = 1024 * 1024;
+import {
+  API_JSON_BODY_MAX_BYTES,
+  BODY_TOO_LARGE_MESSAGE,
+  R2_CAPABILITY_PREVIEW_MAX_BYTES,
+  readBodyUtf8,
+} from './http-limits.js';
 const DEFAULT_ALLOWED_ORIGINS = ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:5173', 'http://127.0.0.1:5173'];
 
 function normalizeSecret(v) {
@@ -190,22 +194,8 @@ function parsePositiveInt(value, fallback) {
   return Math.floor(n);
 }
 
-function readBody(req, maxBytes = MAX_BODY_BYTES) {
-  return new Promise((resolve, reject) => {
-    let total = 0;
-    let body = '';
-    req.on('data', (chunk) => {
-      total += chunk.length;
-      if (total > maxBytes) {
-        req.destroy();
-        reject(new Error('Body too large'));
-        return;
-      }
-      body += chunk.toString('utf8');
-    });
-    req.on('error', reject);
-    req.on('end', () => resolve(body));
-  });
+async function readBody(req, maxBytes = API_JSON_BODY_MAX_BYTES) {
+  return readBodyUtf8(req, maxBytes);
 }
 
 function sanitizeUserPathSegment(s) {
@@ -610,7 +600,6 @@ async function handleReconcileObjectRefs(req, res, sessionUser, s3) {
   sendJson(res, 200, { ok: true, deletedKeys });
 }
 
-const MAX_CAPABILITY_PREVIEW_BYTES = 8 * 1024 * 1024;
 
 function extFromMime(mime) {
   const m = String(mime || '').toLowerCase();
@@ -628,7 +617,7 @@ function parseDataUrlImage(dataUrl) {
   const mime = m[1].trim();
   const b64 = m[2].replace(/\s/g, '');
   const buffer = Buffer.from(b64, 'base64');
-  if (!buffer.length || buffer.length > MAX_CAPABILITY_PREVIEW_BYTES) return null;
+  if (!buffer.length || buffer.length > R2_CAPABILITY_PREVIEW_MAX_BYTES) return null;
   return { mime: mime || 'image/png', buffer };
 }
 
@@ -880,6 +869,10 @@ export async function handleR2StorageRequest(req, res, inject = {}) {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (message === BODY_TOO_LARGE_MESSAGE) {
+      sendJson(res, 413, { error: message });
+      return;
+    }
     sendJson(res, 400, { error: message });
   }
 }

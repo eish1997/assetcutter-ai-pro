@@ -7,10 +7,14 @@
  */
 import http from 'http';
 import { GoogleGenAI } from '@google/genai';
+import {
+  GEMINI_PROXY_MAX_BODY_BYTES as MAX_BODY_BYTES,
+  BODY_TOO_LARGE_MESSAGE,
+  readBodyUtf8,
+} from './http-limits.js';
 
 const PORT = Number(process.env.PORT || process.env.BULK_IMAGE_PORT || process.env.GEMINI_PROXY_PORT) || 9002;
 const BIND_HOST = (process.env.BULK_IMAGE_BIND_HOST || '0.0.0.0').trim() || '0.0.0.0';
-const MAX_BODY_BYTES = 10 * 1024 * 1024;
 const IMAGE_REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_IMAGE_REQUEST_TIMEOUT_MS) || 120_000;
 const TOAPIS_BASE_URL = String(process.env.TOAPIS_BASE_URL || 'https://toapis.com/v1').trim().replace(/\/+$/, '');
 const TOAPIS_API_KEY = normalizeSecret(process.env.TOAPIS_API_KEY || '');
@@ -449,25 +453,13 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-function readBody(req, maxBytes) {
-  return new Promise((resolve, reject) => {
-    let body = '';
-    let size = 0;
-    req.on('data', (chunk) => {
-      size += chunk.length;
-      if (size > maxBytes) {
-        req.destroy();
-        reject(new Error('Body too large'));
-        return;
-      }
-      body += chunk.toString('utf8');
-    });
-    req.on('error', reject);
-    req.on('end', () => {
-      if (size > maxBytes) reject(new Error('Body too large'));
-      else resolve(body);
-    });
-  });
+function sendBodyReadError(res, e) {
+  const msg = e?.message ?? String(e);
+  if (msg === BODY_TOO_LARGE_MESSAGE) {
+    sendError(res, 413, msg);
+  } else {
+    sendError(res, 500, msg);
+  }
 }
 
 const GEMINI_ASYNC_PATH = '/proxy/gemini/async';
@@ -495,7 +487,7 @@ const server = http.createServer(async (req, res) => {
 
   if (path === GEMINI_ASYNC_PATH && req.method === 'POST') {
     try {
-      const body = await readBody(req, MAX_BODY_BYTES);
+      const body = await readBodyUtf8(req, MAX_BODY_BYTES);
       let parsed;
       try {
         parsed = JSON.parse(body);
@@ -516,7 +508,7 @@ const server = http.createServer(async (req, res) => {
       const jobId = createGeminiAsyncJob(model, contents, config);
       sendJson(res, 202, { jobId, status: 'pending' });
     } catch (e) {
-      sendError(res, 500, e?.message ?? String(e));
+      sendBodyReadError(res, e);
     }
     return;
   }
@@ -546,7 +538,7 @@ const server = http.createServer(async (req, res) => {
 
   if (path === '/proxy/gemini/generate-content' && req.method === 'POST') {
     try {
-      const body = await readBody(req, MAX_BODY_BYTES);
+      const body = await readBodyUtf8(req, MAX_BODY_BYTES);
       let parsed;
       try {
         parsed = JSON.parse(body);
@@ -567,8 +559,8 @@ const server = http.createServer(async (req, res) => {
         console.error('[gemini-proxy] generate-content error:', msg);
         sendError(res, 500, msg);
       }
-    } catch {
-      sendError(res, 500, 'Request error');
+    } catch (e) {
+      sendBodyReadError(res, e);
     }
     return;
   }

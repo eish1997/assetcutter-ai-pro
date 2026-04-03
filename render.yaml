@@ -1,4 +1,22 @@
 services:
+  # Gemini 异步代理（无 --env-file；密钥与 CORS 在 Dashboard 配置）
+  - type: web
+    name: assetcutter-gemini-proxy
+    runtime: node
+    plan: free
+    rootDir: .
+    buildCommand: npm ci
+    startCommand: npm run start:gemini-proxy
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: PROXY_ALLOWED_ORIGINS
+        sync: false
+      # 可选：GEMINI_API_KEYS、ENABLE_TOAPIS_FALLBACK、TOAPIS_API_KEY 等，见 README
+
   - type: web
     name: assetcutter-auth-api
     runtime: node

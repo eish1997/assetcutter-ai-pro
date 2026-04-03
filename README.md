@@ -63,6 +63,7 @@
 - `assetcutter-web`：`VITE_AUTH_API_BASE_URL=https://你的-auth-api.onrender.com`
 - `assetcutter-auth-api`：`AUTH_ADMIN_EMAIL`、`AUTH_ADMIN_PASSWORD`（可选 `AUTH_ADMIN_USERNAME`）；**生产启动使用 `npm run start:auth-backend`**（仅 `node server/auth-api.js`，环境变量以 Dashboard 为准）。勿用 `dev:auth-backend`：其中含 Windows 的 `set` 与 `--env-file=.env.local`，在 Render（Linux）上会部署失败。
 - **必配**：`AUTH_ALLOWED_ORIGINS`（含前端完整 Origin，如 `https://xxx.vercel.app`）、`DATABASE_URL`（Blueprint 会从 Postgres 注入）；生产还要求 `AUTH_COOKIE_SAMESITE=none` 与 `AUTH_COOKIE_SECURE=true`（`render.yaml` 已写）。
+- **Gemini 代理**（`assetcutter-gemini-proxy`）：在 Dashboard 配置 `GEMINI_API_KEY`、`PROXY_ALLOWED_ORIGINS`（含 Vercel 前端 Origin）；前端构建变量 `VITE_BULK_IMAGE_API=https://该服务.onrender.com`（无尾斜杠）。
 
 **前端（如 Vercel）+ 可选 Gemini 代理（如 Render）**  
 若浏览器未配置官方 Key，或需避免长请求被平台超时：构建时设置 `VITE_BULK_IMAGE_API` 指向 `server/gemini-proxy-api.js` 的公网地址；Gemini key 仅配置在后端（`GEMINI_API_KEY` 或 `GEMINI_API_KEYS`）。对话/网站助手等经 **`POST /proxy/gemini/async` + 轮询 `GET /proxy/gemini/async/:jobId`**。异步并发/重试可通过 `GEMINI_ASYNC_PROXY_MAX_CONCURRENT`、`GEMINI_PROXY_RETRIES`、`GEMINI_ASYNC_JOB_TTL_MS`、`GEMINI_ASYNC_JOB_MAX_WAIT_MS` 调整；跨域允许源通过 `PROXY_ALLOWED_ORIGINS` 配置。
@@ -82,7 +83,7 @@
 | 2. 配置环境变量 | 在 [.env.local](.env.local) 中设置腾讯 3D / 修缝 / 可选 Gemini 代理等 | Gemini Key 在设置页填写 |
 | 3. 启动主站（必选） | `npm run dev` | 打开 http://localhost:3000 使用整站 |
 | 4. 贴图修缝后端（可选） | `npm run dev:seam-backend` | 仅在使用「贴图修缝」时需要，端口 8008 |
-| 5. Gemini 代理（可选） | `npm run dev:gemini-proxy` | 无浏览器 Key 或需异步代理时，端口默认 9002 |
+| 5. Gemini 代理（可选） | 本地：`npm run dev:gemini-proxy`；**Render/生产：`npm run start:gemini-proxy`** | 端口默认 9002；**勿**在生产使用 `dev:gemini-proxy`（含 `--env-file=.env.local`，Linux 无该文件会启动失败 → 502） |
 | 6. 腾讯 3D 代理（可选） | `npm run proxy` | 仅在使用「生成3D」时需要，端口 9001，需配置腾讯云密钥 |
 | 7. 用户系统认证后端（可选） | `npm run dev:auth-backend` | 邮箱密码登录与 RBAC，端口默认 9100；配置 `R2_*` 后同源提供 `/api/r2` |
 | 8. R2 独立进程（可选） | `npm run dev:r2-api` | 仅高级场景，端口默认 9003；需改 Vite 代理 target 指向 9003 |
@@ -113,6 +114,10 @@
 - （Gemini 代理）`GEMINI_KEY_POOL_MAX_IN_FLIGHT_PER_KEY`：单个 key 允许的并发 in-flight 请求数
 - （Gemini 代理）`GEMINI_ASYNC_PROXY_MAX_CONCURRENT`：异步代理全局并发上限（避免 429/503）
 - （Gemini 代理）`GEMINI_ASYNC_JOB_TTL_MS` / `GEMINI_ASYNC_JOB_MAX_WAIT_MS` / `GEMINI_PROXY_RETRIES`：异步 job 生命周期、最大等待与失败重试策略
+- （Gemini 代理）`GEMINI_PROXY_MAX_BODY_BYTES`：单次 POST JSON 最大体积（默认约 25MB）。大图 base64 易超过旧版 10MB 上限，过小会在边缘表现为 **502**；可按需调大
+- （Auth / R2 JSON）`API_JSON_BODY_MAX_BYTES`：登录、预签名 upload-url、object-refs 等 **JSON** 体上限（默认 **4MB**）。文件本体仍走 **PUT 直传 R2**，不经此限制；旧版 1MB 易误伤工作区索引类请求
+- （R2）`R2_CAPABILITY_PREVIEW_MAX_BYTES`：能力商店预览图上传校验（默认 8MB）
+- （管理端）`CAPABILITY_PUBLISH_ADMIN_BODY_BYTES`：发布能力包到 R2 的 POST 体（默认 64MB）
 - （Gemini 代理）`PROXY_ALLOWED_ORIGINS`：CORS 允许源列表；以及 `BULK_IMAGE_BIND_HOST`（云平台端口扫描需监听 `0.0.0.0`，默认已是 `0.0.0.0`）
 - （R2 存储 API）`R2_ACCOUNT_ID` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` / `R2_BUCKET`：R2 S3 兼容访问必填项
 - （R2 存储 API）`R2_PUBLIC_BASE_URL`：可选。若 bucket 绑定了公网域名（如 `https://assets.example.com`），接口会返回可直接访问的 `publicUrl`
@@ -146,6 +151,7 @@ pip install -r requirements.txt
 - **贴图修缝点「开始修复」报错**：说明修缝后端未启动。执行 `npm run dev:seam-backend` 或 `npm run dev:all`；若提示找不到 `python`，请安装 Python 并先执行上文的 `pip install -r requirements.txt`。
 - **无浏览器 Key 且需代理**：启动 `npm run dev:gemini-proxy` 并设置 `VITE_BULK_IMAGE_API=http://localhost:9002`；管理后台 `/admin` 由用户角色控制（需 `admin` 账号）。
 - **线上对话生图 503/504 或短超时**：若前端已配 `VITE_BULK_IMAGE_API`，请确认后端已部署含异步 Gemini 代理的版本，并重新构建前端；仍失败时检查 Render 等服务日志与 `PROXY_ALLOWED_ORIGINS`（需包含 Vercel 站点 Origin）。
+- **Render 上 Gemini 代理一直 502**：多为 **Start Command 用了 `npm run dev:gemini-proxy`**（依赖不存在的 `.env.local`，进程起不来）。改为 **`npm run start:gemini-proxy`**，并确认已设 `GEMINI_API_KEY`（或 `GEMINI_API_KEYS`）、`PROXY_ALLOWED_ORIGINS` 含 `https://你的站点.vercel.app`。仓库 `render.yaml` 已包含 `assetcutter-gemini-proxy` 正确启动方式。若 **`/healthz` 正常** 而 **`POST /proxy/gemini/async` 仍 502**，请看 Network 里 **Content-Length**：超过 **10MB** 的旧代理会拒 body，可 **升级含 `GEMINI_PROXY_MAX_BODY_BYTES` 的版本** 或在环境变量里调大。
 - **生图报 503 / UNAVAILABLE（模型繁忙）**：前端会对生图请求做有限次退避重试；后端异步代理可对同一任务多次重试（可选 `GEMINI_PROXY_RETRIES`）。高峰仍失败时请隔段时间再试或换模型挡位。
 - **生图报 504 / DEADLINE_EXCEEDED（处理超时）**：系统会按可重试错误自动退避重试；若仍失败，通常是模型侧高峰导致处理窗口不足，可稍后重试。
 - **生成 3D 报错 / CORS**：本地开发需运行 `npm run proxy` 并设置 `VITE_TENCENT_PROXY=http://localhost:9001`，同时在代理环境中配置好 `TENCENT_SECRET_ID`、`TENCENT_SECRET_KEY`。
