@@ -226,8 +226,8 @@
       "tokenHash": "81a63aa51adb0eb7c6e9c972e70cf0e3a0fe1ad07e0d134bcacd5e411870bca8",
       "expiresAt": "2026-04-08T15:07:51.962Z",
       "createdAt": "2026-04-01T15:07:51.962Z",
-      "updatedAt": "2026-04-01T15:07:51.962Z",
-      "revokedAt": null,
+      "updatedAt": "2026-04-03T01:28:12.085Z",
+      "revokedAt": "2026-04-03T01:28:12.085Z",
       "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
       "ip": "127.0.0.1"
     },
@@ -251,6 +251,17 @@
       "updatedAt": "2026-04-02T09:13:30.397Z",
       "revokedAt": null,
       "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 Edg/122.0.0.0",
+      "ip": "127.0.0.1"
+    },
+    {
+      "id": "b2d89a37-4a76-41b8-880c-990d0bda694e",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "tokenHash": "c841e08a17d392f6171d7602dfbbf481598d5a9f6f40e1560a6fceffd0a257bd",
+      "expiresAt": "2026-04-10T01:28:12.085Z",
+      "createdAt": "2026-04-03T01:28:12.085Z",
+      "updatedAt": "2026-04-03T01:28:12.085Z",
+      "revokedAt": null,
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
       "ip": "127.0.0.1"
     }
   ],

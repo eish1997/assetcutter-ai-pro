@@ -1500,6 +1500,8 @@ const MainApp: React.FC = () => {
     handleDialogTempInvertSelect,
     handleDialogTempBatchDownload,
   } = useDialogWorkspace();
+  const dialogTempFilteredRef = useRef(dialogTempFiltered);
+  dialogTempFilteredRef.current = dialogTempFiltered;
   const DIALOG_BOX_LABELS = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'];
   const dialogEndRef = useRef<HTMLDivElement>(null);
   const [dialogValidationError, setDialogValidationError] = useState<string | null>(null);
@@ -1516,6 +1518,10 @@ const MainApp: React.FC = () => {
   const [dialogTempPreviewOffset, setDialogTempPreviewOffset] = useState({ x: 0, y: 0 });
   const dialogTempPreviewPanRef = useRef<{ startX: number; startY: number; startOffsetX: number; startOffsetY: number } | null>(null);
   const dialogTempPreviewSpacePressedRef = useRef(false);
+  const dialogTempPreviewImgRef = useRef<HTMLImageElement | null>(null);
+  const dialogTempPreviewZoomPivotRef = useRef<{ x: number; y: number } | null>(null);
+  const dialogTempPreviewZoomLastScaleRef = useRef(1);
+  const dialogTempPreviewWheelAccumRef = useRef(0);
 
   // 生成3D资产（腾讯混元生3D）
   const [generate3DMode, setGenerate3DMode] = useState<'text' | 'image'>('text');
@@ -2049,7 +2055,10 @@ const MainApp: React.FC = () => {
   const handleDialogTempLibraryDrop = useCallback((e: React.DragEvent) => {
     if (!hasDialogTempImageFileTransfer(e.dataTransfer)) return;
     e.preventDefault();
-    const files = Array.from(e.dataTransfer?.files || []).filter((f) => f.type?.startsWith('image/'));
+    e.stopPropagation();
+    const files = Array.from(e.dataTransfer?.files ?? []).filter(
+      (f): f is File => f instanceof File && f.type.startsWith('image/')
+    );
     if (!files.length) return;
     addDialogTempFromFiles(files, '拖拽图片');
   }, [addDialogTempFromFiles, hasDialogTempImageFileTransfer]);
@@ -2075,10 +2084,13 @@ const MainApp: React.FC = () => {
 
     const onWindowDrop = (e: DragEvent) => {
       if (mode !== AppMode.DIALOG) return;
+      if (e.defaultPrevented) return;
       if (isDialogTempUploadBlockedTarget(e.target)) return;
       if (!hasDialogTempImageFileTransfer(e.dataTransfer)) return;
       e.preventDefault();
-      const files = Array.from(e.dataTransfer?.files || []).filter((f) => f.type?.startsWith('image/'));
+      const files = Array.from(e.dataTransfer?.files ?? []).filter(
+      (f): f is File => f instanceof File && f.type.startsWith('image/')
+    );
       if (!files.length) return;
       addDialogTempFromFiles(files, '拖拽图片');
     };
@@ -2155,6 +2167,9 @@ const MainApp: React.FC = () => {
       setDialogTempPreviewOffset({ x: 0, y: 0 });
       dialogTempPreviewDragRef.current = null;
       dialogTempPreviewPanRef.current = null;
+      dialogTempPreviewZoomPivotRef.current = null;
+      dialogTempPreviewZoomLastScaleRef.current = 1;
+      dialogTempPreviewWheelAccumRef.current = 0;
     }
   }, [dialogTempPreviewId]);
 
@@ -2174,7 +2189,15 @@ const MainApp: React.FC = () => {
   useEffect(() => {
     if (!dialogTempPreviewId) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.code === 'Space') dialogTempPreviewSpacePressedRef.current = true;
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setDialogTempPreviewId(null);
+        return;
+      }
+      if (e.code === 'Space') {
+        e.preventDefault();
+        dialogTempPreviewSpacePressedRef.current = true;
+      }
     };
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.code === 'Space') dialogTempPreviewSpacePressedRef.current = false;
@@ -2190,7 +2213,67 @@ const MainApp: React.FC = () => {
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
     };
-  }, [dialogTempPreviewId]);
+  }, [dialogTempPreviewId, setDialogTempPreviewId]);
+
+  useEffect(() => {
+    if (!dialogTempPreviewId) return;
+    const onWheel = (e: WheelEvent) => {
+      const t = e.target;
+      if (t instanceof Element && t.closest('[data-no-temp-preview-wheel]')) {
+        const scrollEl = t.closest('[data-dialog-temp-preview-scroll]') as HTMLElement | null;
+        if (scrollEl && scrollEl.scrollHeight > scrollEl.clientHeight + 1) {
+          const st = scrollEl.scrollTop;
+          const sh = scrollEl.scrollHeight;
+          const ch = scrollEl.clientHeight;
+          if ((e.deltaY < 0 && st > 0) || (e.deltaY > 0 && st + ch < sh - 1)) return;
+        }
+        e.preventDefault();
+        return;
+      }
+      const list = dialogTempFilteredRef.current;
+      if (list.length <= 1) {
+        e.preventDefault();
+        return;
+      }
+      e.preventDefault();
+      let dy = e.deltaY;
+      const dx = e.deltaX;
+      if (Math.abs(dx) > Math.abs(dy)) dy = dx;
+      if (e.deltaMode === 1) dy *= 16;
+      if (e.deltaMode === 2) dy *= 120;
+      if (!dy && typeof (e as unknown as { wheelDelta?: number }).wheelDelta === 'number') {
+        dy = -(e as unknown as { wheelDelta: number }).wheelDelta / 3;
+      }
+      if (Math.abs(dy) < 0.25) return;
+      const THRESH = 18;
+      const MAX_STEPS_PER_EVENT = 12;
+      dialogTempPreviewWheelAccumRef.current += dy;
+      let steps = 0;
+      while (dialogTempPreviewWheelAccumRef.current >= THRESH && steps < MAX_STEPS_PER_EVENT) {
+        dialogTempPreviewWheelAccumRef.current -= THRESH;
+        steps += 1;
+      }
+      while (dialogTempPreviewWheelAccumRef.current <= -THRESH && steps > -MAX_STEPS_PER_EVENT) {
+        dialogTempPreviewWheelAccumRef.current += THRESH;
+        steps -= 1;
+      }
+      if (steps === 0) return;
+      setDialogTempPreviewId((prev) => {
+        if (!prev) return null;
+        const cur = dialogTempFilteredRef.current;
+        const i = cur.findIndex((x) => x.id === prev);
+        if (i < 0) return prev;
+        let ni = i;
+        const dir = steps > 0 ? 1 : -1;
+        for (let k = 0; k < Math.abs(steps); k++) {
+          ni = (ni + dir + cur.length) % cur.length;
+        }
+        return cur[ni].id;
+      });
+    };
+    window.addEventListener('wheel', onWheel, { passive: false });
+    return () => window.removeEventListener('wheel', onWheel);
+  }, [dialogTempPreviewId, setDialogTempPreviewId]);
 
   useEffect(() => {
     const onMouseMove = (e: MouseEvent) => {
@@ -2200,6 +2283,22 @@ const MainApp: React.FC = () => {
         const dy = e.clientY - drag.startY;
         // 右拖/上拖放大，左拖/下拖缩小；支持上下左右四向手势
         const nextScale = Math.max(0.2, Math.min(6, drag.startScale + (dx - dy) * 0.005));
+        const prevS = dialogTempPreviewZoomLastScaleRef.current;
+        const pivot = dialogTempPreviewZoomPivotRef.current;
+        const img = dialogTempPreviewImgRef.current;
+        if (img && pivot && Math.abs(nextScale - prevS) > 1e-9) {
+          const rect = img.getBoundingClientRect();
+          const cx = rect.left + rect.width / 2;
+          const cy = rect.top + rect.height / 2;
+          const f = 1 - nextScale / prevS;
+          setDialogTempPreviewOffset((prev) => ({
+            x: prev.x + f * (pivot.x - cx),
+            y: prev.y + f * (pivot.y - cy),
+          }));
+          dialogTempPreviewZoomLastScaleRef.current = nextScale;
+        } else if (Math.abs(nextScale - prevS) > 1e-9) {
+          dialogTempPreviewZoomLastScaleRef.current = nextScale;
+        }
         setDialogTempPreviewScale(nextScale);
       }
       const pan = dialogTempPreviewPanRef.current;
@@ -2212,6 +2311,7 @@ const MainApp: React.FC = () => {
     const onMouseUp = () => {
       dialogTempPreviewDragRef.current = null;
       dialogTempPreviewPanRef.current = null;
+      dialogTempPreviewZoomPivotRef.current = null;
     };
     window.addEventListener('mousemove', onMouseMove);
     window.addEventListener('mouseup', onMouseUp);
@@ -2999,11 +3099,14 @@ const MainApp: React.FC = () => {
           }`}
           onMouseDownCapture={(e) => {
             if (mode !== AppMode.WORKFLOW || !activeWorkspaceProjectId) return;
+            const t = e.target as Element | null;
+            if (t?.closest('[data-ac-block-workflow-marquee]')) return;
             workflowMarqueeStartRef.current?.(e);
           }}
           onWheelCapture={(e) => {
             if (mode !== AppMode.WORKFLOW || !activeWorkspaceProjectId) return;
             const target = e.target as Element | null;
+            if (target?.closest('[data-ac-block-workflow-marquee]')) return;
             // 工作区内部（仓库/大纲/工作区/功能区/能力）始终放行原生纵向滚动与拖放
             if (
               target?.closest(
@@ -4153,6 +4256,7 @@ const MainApp: React.FC = () => {
                 return (
                   <div
                     className="fixed inset-0 z-[2000] bg-black/72 backdrop-blur-sm animate-in fade-in"
+                    data-ac-block-workflow-marquee
                     onClick={() => setDialogTempPreviewId(null)}
                     onContextMenuCapture={(e) => {
                       e.preventDefault();
@@ -4173,6 +4277,17 @@ const MainApp: React.FC = () => {
                         alt=""
                         draggable={false}
                         onContextMenu={(e) => e.preventDefault()}
+                        onDoubleClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setDialogTempPreviewScale(1);
+                          setDialogTempPreviewOffset({ x: 0, y: 0 });
+                          dialogTempPreviewDragRef.current = null;
+                          dialogTempPreviewPanRef.current = null;
+                          dialogTempPreviewZoomPivotRef.current = null;
+                          dialogTempPreviewZoomLastScaleRef.current = 1;
+                        }}
+                        ref={dialogTempPreviewImgRef}
                         onMouseDown={(e) => {
                           if (e.button !== 0 && e.button !== 2) return;
                           e.preventDefault();
@@ -4188,6 +4303,8 @@ const MainApp: React.FC = () => {
                               };
                               return;
                             }
+                            dialogTempPreviewZoomPivotRef.current = { x: e.clientX, y: e.clientY };
+                            dialogTempPreviewZoomLastScaleRef.current = dialogTempPreviewScale;
                             dialogTempPreviewDragRef.current = {
                               startX: e.clientX,
                               startY: e.clientY,
@@ -4208,15 +4325,23 @@ const MainApp: React.FC = () => {
                         }}
                       />
 
-                      <div className="absolute top-4 left-1/2 -translate-x-1/2 rounded-xl bg-[#101018]/90 border border-[#2e2e32] px-4 py-2 text-[10px] text-gray-300 pointer-events-none">
-                        左键拖拽缩放；空格+左键 / Shift+左键 / 右键拖拽平移（当前缩放 {Math.round(dialogTempPreviewScale * 100)}%）
+                      <div className="absolute top-4 left-4 z-10 max-w-[min(280px,calc(100vw-6rem))] rounded-xl bg-[#101018]/90 border border-[#2e2e32] px-3 py-2 text-[9px] text-gray-300 pointer-events-none text-left leading-relaxed space-y-1">
+                        <div>滚轮：上一张 / 下一张</div>
+                        <div>Esc：关闭预览</div>
+                        <div>双击：复原缩放与位置</div>
+                        <div>左键：缩放</div>
+                        <div>空格+左键 / Shift+左键 / 右键：平移画布</div>
+                        <div className="text-gray-500 pt-0.5 border-t border-white/10">当前缩放 {Math.round(dialogTempPreviewScale * 100)}%</div>
                       </div>
 
                       <div className="absolute right-4 top-4 z-10">
-                        <button onClick={() => setDialogTempPreviewId(null)} className="px-3 py-2 rounded-xl bg-[#1a1a1e]/95 border border-[#2e2e32] text-[10px] font-black text-white hover:bg-[#2a2a32]">关闭</button>
+                        <button type="button" onClick={() => setDialogTempPreviewId(null)} className="px-3 py-2 rounded-xl bg-[#1a1a1e]/95 border border-[#2e2e32] text-[10px] font-black text-white hover:bg-[#2a2a32]">关闭</button>
                       </div>
 
-                      <div className="absolute left-4 bottom-4 max-w-[min(680px,92vw)] rounded-xl bg-[#1c1c22]/95 border border-[#2e2e32] p-4 space-y-2 text-left">
+                      <div
+                        className="absolute left-4 bottom-4 max-w-[min(680px,92vw)] rounded-xl bg-[#1c1c22]/95 border border-[#2e2e32] p-4 space-y-2 text-left"
+                        data-no-temp-preview-wheel
+                      >
                         <div className="text-[9px] font-black text-gray-500 uppercase">类型</div>
                         <div className="text-[11px] text-white">{dialogTempSourceTypeLabel(item.sourceType)}{item.label ? ` · ${item.label}` : ''}</div>
                         {(item.userPrompt || item.understoodPrompt) && (
@@ -4224,13 +4349,13 @@ const MainApp: React.FC = () => {
                             {item.userPrompt && (
                               <>
                                 <div className="text-[9px] font-black text-gray-500 uppercase mt-2">用户描述</div>
-                                <div className="text-[11px] text-gray-300 break-words max-h-20 overflow-y-auto">{item.userPrompt}</div>
+                                <div className="text-[11px] text-gray-300 break-words max-h-20 overflow-y-auto" data-dialog-temp-preview-scroll>{item.userPrompt}</div>
                               </>
                             )}
                             {item.understoodPrompt && (
                               <>
                                 <div className="text-[9px] font-black text-gray-500 uppercase mt-2">理解指令</div>
-                                <div className="text-[11px] text-blue-300/90 break-words max-h-20 overflow-y-auto">{item.understoodPrompt}</div>
+                                <div className="text-[11px] text-blue-300/90 break-words max-h-20 overflow-y-auto" data-dialog-temp-preview-scroll>{item.understoodPrompt}</div>
                               </>
                             )}
                           </>
@@ -4238,7 +4363,7 @@ const MainApp: React.FC = () => {
                         <div className="text-[9px] text-gray-500 mt-2">{new Date(item.timestamp).toLocaleString()}</div>
                       </div>
 
-                      <div className="absolute right-4 bottom-4 flex flex-wrap items-center justify-end gap-2 max-w-[min(680px,92vw)]">
+                      <div className="absolute right-4 bottom-4 flex flex-wrap items-center justify-end gap-2 max-w-[min(680px,92vw)]" data-no-temp-preview-wheel>
                         {item.sourceMessageId && (
                           <button onClick={() => { handleDialogTempLocateMessage(item); setDialogTempPreviewId(null); }} className="px-4 py-2 rounded-xl bg-[#1e40af] text-[10px] font-black text-white hover:bg-blue-500 transition-colors">定位消息</button>
                         )}

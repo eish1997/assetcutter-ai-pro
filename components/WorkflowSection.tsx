@@ -22,6 +22,7 @@ import { WorkflowGenerationRecordPanel } from './WorkflowGenerationRecordPanel';
 import { WorkflowPlannerBar } from './WorkflowPlannerBar';
 import { triggerImageDownload } from '../services/imageDataUrl';
 import AppIcon from './ui/AppIcon';
+import { ImagePreviewOverlay } from './ImagePreviewOverlay';
 
 /** 云端 hydrate 前预览图为空时避免 img 的 src 为空字符串 */
 const WORKFLOW_IMG_EMPTY_PLACEHOLDER =
@@ -711,6 +712,16 @@ const TITLE_ROW_BTN_ACTIVE = `${TITLE_ROW_BTN_BASE} bg-blue-600 border-blue-500 
 const WORKSPACE_SNAP_DURATION_MS = 260;
 // y2 > 1 形成轻微回弹，避免左右切页“硬切”。
 const WORKSPACE_SNAP_EASING = 'cubic-bezier(0.22, 1.12, 0.36, 1)';
+
+/** 根级网格 / 大图列表：新到旧（createdAt 降序） */
+function sortRootWorkflowAssetsNewestFirst(list: WorkflowAsset[]): WorkflowAsset[] {
+  return [...list].sort((a, b) => {
+    const ca = a.createdAt ?? 0;
+    const cb = b.createdAt ?? 0;
+    if (cb !== ca) return cb - ca;
+    return a.id.localeCompare(b.id);
+  });
+}
 
 /** 大纲：子资产沿 parentAssetId 得到 viewStack（不含子资产自身），用于组内子卡片定位 */
 function workflowOutlineAncestorStack(childAssetId: string, assets: WorkflowAsset[]): { assetId: string }[] {
@@ -1772,7 +1783,9 @@ const WorkflowSection: React.FC<{
 
   const addImagesFromFiles = useCallback((files: File[]) => {
     const imageFiles = files.filter((f) => f.type.startsWith('image/')).slice(0, 50);
-    imageFiles.forEach((file) => {
+    const batchBase = Date.now();
+    const n = imageFiles.length;
+    imageFiles.forEach((file, fileIdx) => {
       const reader = new FileReader();
       reader.onload = () => {
         const base64 = reader.result as string;
@@ -1790,7 +1803,7 @@ const WorkflowSection: React.FC<{
             resultOrder: [],
             archived: false,
             hiddenInGrid: false,
-            createdAt: Date.now(),
+            createdAt: batchBase + (n - 1 - fileIdx),
             ...(groupCtx ? { parentAssetId: groupCtx.id } : {}),
           });
           if (!groupCtx) {
@@ -2000,10 +2013,11 @@ const WorkflowSection: React.FC<{
   }, [addImagesFromFiles, collectImageLikeUrlsFromDataTransfer, fetchImageFilesFromUrls, hasImageFileTransfer, isGlobalUploadBlockedTarget, showArchived]);
 
   const visibleAssets = useMemo(() => {
-    // 仅展示“根资产”：归档状态匹配，且不是子资产（没有 parentAssetId）
-    return assets.filter(
+    // 仅展示“根资产”：归档状态匹配，且不是子资产（没有 parentAssetId）；新导入在前（createdAt 降序）
+    const list = assets.filter(
       (a) => a.archived === showArchived && (!a.hiddenInGrid || a.archived) && !a.parentAssetId
     );
+    return sortRootWorkflowAssetsNewestFirst(list);
   }, [assets, showArchived]);
 
   const outlineExpandableGroupIds = useMemo(
@@ -2263,13 +2277,52 @@ const WorkflowSection: React.FC<{
   }, [pending, executingQueue, completedTaskIds]);
 
   const lightboxAsset = lightboxAssetId ? assets.find((a) => a.id === lightboxAssetId) : null;
-  const lightboxList = assets.filter((a) => !a.archived && !a.hiddenInGrid && !a.parentAssetId);
+  const lightboxList = useMemo(
+    () =>
+      sortRootWorkflowAssetsNewestFirst(
+        assets.filter((a) => !a.archived && !a.hiddenInGrid && !a.parentAssetId)
+      ),
+    [assets]
+  );
+  const lightboxListRef = useRef(lightboxList);
+  lightboxListRef.current = lightboxList;
   const lightboxIndex = lightboxAssetId ? lightboxList.findIndex((a) => a.id === lightboxAssetId) : -1;
   const goLightbox = (delta: number) => {
     if (lightboxList.length === 0) return;
     const next = (lightboxIndex + delta + lightboxList.length) % lightboxList.length;
     setLightboxAssetId(lightboxList[next].id);
   };
+
+  const handleLightboxWheelNavigate = useCallback((deltaSteps: number) => {
+    setLightboxAssetId((prev) => {
+      if (!prev) return null;
+      const list = lightboxListRef.current;
+      if (list.length <= 1) return prev;
+      const i = list.findIndex((a) => a.id === prev);
+      if (i < 0) return prev;
+      let ni = i;
+      const dir = deltaSteps > 0 ? 1 : -1;
+      for (let k = 0; k < Math.abs(deltaSteps); k++) {
+        ni = (ni + dir + list.length) % list.length;
+      }
+      return list[ni].id;
+    });
+  }, []);
+
+  /** 大图预览：普通滚轮在本资产内切换 displayKey */
+  const handleLightboxWheelCycleDisplay = useCallback((deltaSteps: number) => {
+    setAssets((prev) => {
+      const id = lightboxAssetId;
+      if (!id) return prev;
+      const a = prev.find((x) => x.id === id);
+      if (!a) return prev;
+      const keys = getDisplayKeysForAsset(a);
+      if (keys.length <= 1) return prev;
+      const idx = Math.max(0, keys.indexOf(a.displayKey));
+      const nextIdx = ((idx + deltaSteps) % keys.length + keys.length) % keys.length;
+      return prev.map((x) => (x.id === id ? { ...x, displayKey: keys[nextIdx] } : x));
+    });
+  }, [lightboxAssetId]);
 
   const setDisplayKey = (assetId: string, key: string) => {
     setAssets((prev) => prev.map((a) => (a.id === assetId ? { ...a, displayKey: key } : a)));
@@ -3010,7 +3063,9 @@ const WorkflowSection: React.FC<{
           viewStack.length > 0
             ? prev.find((a) => a.id === viewStack[viewStack.length - 1].assetId)
             : null;
-        const created: WorkflowAsset[] = valid.map((item) => ({
+        const baseT = Date.now();
+        const n = valid.length;
+        const created: WorkflowAsset[] = valid.map((item, idx) => ({
           id: uuid(),
           original: item.data,
           displayKey: 'original' as const,
@@ -3018,7 +3073,7 @@ const WorkflowSection: React.FC<{
           resultOrder: [] as string[],
           archived: false,
           hiddenInGrid: false,
-          createdAt: Date.now(),
+          createdAt: baseT + (n - 1 - idx),
           ...(groupCtx ? { parentAssetId: groupCtx.id } : {}),
         }));
         if (!groupCtx) {
@@ -3649,6 +3704,8 @@ const WorkflowSection: React.FC<{
     if (!spacePanEnabled) return;
     const onMouseDown = (e: MouseEvent) => {
       if (e.button !== 0) return;
+      const t = e.target as Element | null;
+      if (t?.closest('[data-ac-block-workflow-marquee]')) return;
       // 空格抓手为全局优先级：即便在按钮上也接管（输入框仍放行）
       if (isEditableTarget(e.target)) return;
       marqueeStartRef.current = false;
@@ -3699,6 +3756,7 @@ const WorkflowSection: React.FC<{
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.code !== 'Space') return;
       if (isEditableTarget(e.target)) return;
+      if (typeof document !== 'undefined' && document.querySelector('[data-ac-block-workflow-marquee]')) return;
       e.preventDefault();
       setSpacePanEnabled(true);
     };
@@ -3720,6 +3778,35 @@ const WorkflowSection: React.FC<{
       window.removeEventListener('blur', onBlur);
     };
   }, [isEditableTarget]);
+
+  /** 数字行 1–4、0：快速对齐到四档页面（与滑条圆点一致）；0 为最右档 */
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.repeat) return;
+      if (e.ctrlKey || e.altKey || e.metaKey) return;
+      if (isEditableTarget(e.target)) return;
+      if (typeof document !== 'undefined' && document.querySelector('[data-ac-block-workflow-marquee]')) return;
+
+      const paneByCode: Record<string, number> = {
+        Digit1: 0,
+        Digit2: 1,
+        Digit3: 2,
+        Digit4: 3,
+        Digit0: 3,
+        Numpad1: 0,
+        Numpad2: 1,
+        Numpad3: 2,
+        Numpad4: 3,
+        Numpad0: 3,
+      };
+      const pane = paneByCode[e.code];
+      if (pane === undefined) return;
+      e.preventDefault();
+      snapWorkspacePaneToNode(pane);
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [isEditableTarget, snapWorkspacePaneToNode]);
 
   const renderWorkflowSidebarColumn = ({
     wide,
@@ -4776,7 +4863,7 @@ const WorkflowSection: React.FC<{
                 aria-valuemin={0}
                 aria-valuemax={3}
                 aria-valuenow={workspacePane}
-                aria-label="页面：仓库与大纲、大纲与工作区、工作区与功能区、功能区与能力"
+                aria-label="页面：仓库与大纲、大纲与工作区、工作区与功能区、功能区与能力。快捷键 1–4、0 切换"
               />
               <div className="pointer-events-none absolute inset-0 z-20 flex items-center" aria-hidden>
                 {(() => {
@@ -5894,42 +5981,47 @@ const WorkflowSection: React.FC<{
       </div>
       </div>
 
-      {/* 进行中：大图弹窗 */}
+      {/* 进行中：大图弹窗（与对话临时库预览一致：全屏画布、滚轮切资产、缩放平移） */}
       {lightboxAsset && !showArchived && (
-        <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/78 backdrop-blur-sm p-4" onClick={() => setLightboxAssetId(null)}>
+        <ImagePreviewOverlay
+          open
+          resetKey={lightboxAsset.id}
+          imageSrc={workflowSafeImgSrc(getAssetDisplayImage(lightboxAsset))}
+          onClose={() => setLightboxAssetId(null)}
+          wheelListLength={lightboxList.length}
+          onWheelNavigate={handleLightboxWheelNavigate}
+          innerWheelOptionCount={getDisplayKeysForAsset(lightboxAsset).length}
+          onWheelInnerNavigate={handleLightboxWheelCycleDisplay}
+          innerLayoutStableKey={lightboxAsset.id}
+          layoutReferenceSrc={
+            asWorkflowImageString(lightboxAsset.original).trim()
+              ? workflowSafeImgSrc(lightboxAsset.original)
+              : undefined
+          }
+        >
           <div
-            className="relative max-w-4xl w-full"
-            onClick={(e) => e.stopPropagation()}
-            onWheel={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              if (getDisplayKeysForAsset(lightboxAsset).length <= 1) return;
-              cycleDisplayKey(lightboxAsset.id, e.deltaY);
-            }}
+            className="absolute left-4 right-4 bottom-4 z-10 max-h-[42vh] overflow-y-auto rounded-xl bg-[#121214]/95 border border-[#2e2e32] p-3 sm:p-4 space-y-3"
+            data-image-preview-no-wheel
+            data-image-preview-scroll
           >
-            <button onClick={() => setLightboxAssetId(null)} className="absolute -top-12 right-0 w-10 h-10 flex items-center justify-center text-white/60 hover:text-white"><AppIcon name="close" className="w-4 h-4" /></button>
-            <div className="rounded-2xl border border-[#2e2e32] bg-[#121214] p-4 sm:p-5">
-              <img
-                src={workflowSafeImgSrc(getAssetDisplayImage(lightboxAsset))}
-                alt=""
-                className="w-full max-h-[80vh] object-contain rounded-xl bg-[#16161a]"
-              />
-            <div className="mt-3 flex flex-wrap gap-1.5 justify-center items-center">
+            <div className="flex flex-wrap gap-1.5 justify-center items-center">
               <span className="text-[8px] font-black text-gray-500 uppercase mr-1">显示</span>
               <button
+                type="button"
                 onClick={() => setDisplayKey(lightboxAsset.id, 'original')}
                 className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${lightboxAsset.displayKey === 'original' ? 'bg-blue-600 border-blue-500 text-white' : 'bg-[#26262c] border-[#3a3a40] hover:bg-[#383842]'}`}
               >
                 原始
               </button>
-              {lightboxAsset.cutImageGroup?.length && (
+              {lightboxAsset.cutImageGroup?.length ? (
                 <button
+                  type="button"
                   onClick={() => setDisplayKey(lightboxAsset.id, 'cut_image')}
                   className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${lightboxAsset.displayKey === 'cut_image' ? 'bg-blue-600 border-blue-500 text-white' : 'bg-[#26262c] border-[#3a3a40] hover:bg-[#383842]'}`}
                 >
                   切割
                 </button>
-              )}
+              ) : null}
               {(lightboxAsset.resultOrder || []).map((k) => {
                 if (baseActionId(k) === 'cut_image') return null;
                 const mod = getModule(baseActionId(k));
@@ -5937,6 +6029,7 @@ const WorkflowSection: React.FC<{
                 if (!lightboxAsset.results?.[k]) return null;
                 return (
                   <button
+                    type="button"
                     key={k}
                     onClick={() => setDisplayKey(lightboxAsset.id, k)}
                     className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${lightboxAsset.displayKey === k ? 'bg-blue-600 border-blue-500 text-white' : 'bg-[#26262c] border-[#3a3a40] hover:bg-[#383842]'}`}
@@ -5946,7 +6039,7 @@ const WorkflowSection: React.FC<{
                 );
               })}
             </div>
-            <div className="mt-3 flex flex-wrap gap-2 justify-center">
+            <div className="flex flex-wrap gap-2 justify-center">
               <button
                 type="button"
                 onClick={() => {
@@ -5972,6 +6065,7 @@ const WorkflowSection: React.FC<{
               {actionModules.map((mod) => (
                 <button
                   key={mod.id}
+                  type="button"
                   onClick={() => {
                     const idx = lightboxList.findIndex((a) => a.id === lightboxAsset.id);
                     const nextAsset = idx >= 0 && idx < lightboxList.length - 1 ? lightboxList[idx + 1] : null;
@@ -5989,15 +6083,20 @@ const WorkflowSection: React.FC<{
               ))}
             </div>
             {lightboxList.length > 1 && (
-              <div className="flex justify-center gap-2 mt-2">
-                <button onClick={() => goLightbox(-1)} className="px-3 py-1 rounded-lg bg-[#26262c] text-[9px] font-black">上一张</button>
-                <span className="text-[9px] text-gray-500 self-center">{lightboxIndex + 1} / {lightboxList.length}</span>
-                <button onClick={() => goLightbox(1)} className="px-3 py-1 rounded-lg bg-[#26262c] text-[9px] font-black">下一张</button>
+              <div className="flex justify-center gap-2 items-center flex-wrap">
+                <button type="button" onClick={() => goLightbox(-1)} className="px-3 py-1 rounded-lg bg-[#26262c] text-[9px] font-black">
+                  上一张
+                </button>
+                <span className="text-[9px] text-gray-500">
+                  {lightboxIndex + 1} / {lightboxList.length}
+                </span>
+                <button type="button" onClick={() => goLightbox(1)} className="px-3 py-1 rounded-lg bg-[#26262c] text-[9px] font-black">
+                  下一张
+                </button>
               </div>
             )}
-            </div>
           </div>
-        </div>
+        </ImagePreviewOverlay>
       )}
 
       {hoverPreview &&
