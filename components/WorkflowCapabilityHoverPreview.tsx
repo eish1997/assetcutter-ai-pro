@@ -1,5 +1,6 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
+import { ProgressivePreviewImage } from './ProgressivePreviewImage';
 
 type Props = {
   label: string;
@@ -21,6 +22,11 @@ export const WorkflowCapabilityHoverPreview = React.memo(function WorkflowCapabi
 }: Props) {
   const genRef = useRef<HTMLImageElement | null>(null);
   const lineRef = useRef<HTMLDivElement | null>(null);
+  const HOVER_THUMB = 208;
+  const cacheKeyBase = useMemo(
+    () => `cap-hover:${label}:${original.length}:${generated.length}:${original.slice(0, 48)}:${generated.slice(0, 48)}`,
+    [label, original, generated]
+  );
 
   useEffect(() => {
     let raf = 0;
@@ -51,14 +57,23 @@ export const WorkflowCapabilityHoverPreview = React.memo(function WorkflowCapabi
       <div className="w-52 rounded-xl border border-white/15 bg-[#0f1116]/90 backdrop-blur-sm p-2 shadow-2xl">
         <div className="text-[8px] text-gray-300 mb-1">{label}</div>
         <div className="relative w-full aspect-square rounded-lg overflow-hidden bg-black/30">
-          <img src={original} alt="" className="absolute inset-0 h-full w-full object-cover" decoding="async" />
-          <img
-            ref={genRef}
-            src={generated}
+          <ProgressivePreviewImage
+            fullSrc={original}
+            cacheKey={`${cacheKeyBase}:orig`}
+            thumbMaxEdge={HOVER_THUMB}
+            className="absolute inset-0"
+            imgClassName="absolute inset-0 h-full w-full object-cover"
             alt=""
-            className="absolute inset-0 h-full w-full object-cover"
-            decoding="async"
-            style={{ clipPath: 'polygon(0 0, 0% 0, 0% 100%, 0 100%)' }}
+          />
+          <ProgressivePreviewImage
+            ref={genRef}
+            fullSrc={generated}
+            cacheKey={`${cacheKeyBase}:gen`}
+            thumbMaxEdge={HOVER_THUMB}
+            className="absolute inset-0"
+            imgClassName="absolute inset-0 h-full w-full object-cover"
+            imgStyle={{ clipPath: 'polygon(0 0, 0% 0, 0% 100%, 0 100%)' }}
+            alt=""
           />
           <div
             ref={lineRef}

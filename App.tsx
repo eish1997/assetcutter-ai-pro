@@ -19,6 +19,7 @@ import { useAuth } from './components/auth/AuthContext';
 import { CustomDropdown, DROPDOWN_TRIGGER_COMPACT } from './components/ui/CustomDropdown';
 import Waves from './components/ui/Waves';
 import AppIcon from './components/ui/AppIcon';
+import { ProgressivePreviewImage } from './components/ProgressivePreviewImage';
 import WorkspaceProjectShell from './components/WorkspaceProjectShell';
 import {
   loadWorkspaceProjects,
@@ -29,6 +30,8 @@ import {
   trySaveWorkflowBundle,
   removeWorkflowBundle,
   setLastOpenedWorkspaceProjectId,
+  ensureWorkspaceBundlesHydratedFromIdb,
+  flushWorkspaceBundleIdbWrites,
 } from './services/workspaceProjectStore';
 import {
   deleteWorkspaceProjectObjects,
@@ -594,13 +597,26 @@ const MainApp: React.FC = () => {
     getLastOpenedWorkspaceProjectId(null)
   );
   const [workflowAssets, setWorkflowAssets] = useState<WorkflowAsset[]>(() => {
+    if (typeof indexedDB !== 'undefined') return [];
     const id = getLastOpenedWorkspaceProjectId(null);
     return id ? loadWorkflowBundle(id, null).assets : [];
   });
   const [workflowPending, setWorkflowPending] = useState<WorkflowPendingTask[]>(() => {
+    if (typeof indexedDB !== 'undefined') return [];
     const id = getLastOpenedWorkspaceProjectId(null);
     return id ? loadWorkflowBundle(id, null).pending : [];
   });
+  /** 有 IndexedDB 时：首屏先 hydrate 本地 bundle 再展示工作区，避免 LS 快照与 IDB 不一致闪烁；无 IDB 时为 true */
+  const [workspaceLocalIdbHydrateReady, setWorkspaceLocalIdbHydrateReady] = useState(
+    () => typeof indexedDB === 'undefined'
+  );
+  const workspaceLocalIdbHydrateReadyRef = useRef(workspaceLocalIdbHydrateReady);
+  useEffect(() => {
+    workspaceLocalIdbHydrateReadyRef.current = workspaceLocalIdbHydrateReady;
+  }, [workspaceLocalIdbHydrateReady]);
+  const markWorkspaceLocalIdbHydrateReady = useCallback(() => {
+    setWorkspaceLocalIdbHydrateReady(true);
+  }, []);
 
   const activeWorkspaceProjectIdRef = useRef<string | null>(activeWorkspaceProjectId);
   const workspaceProjectsRef = useRef(workspaceProjects);
@@ -639,8 +655,11 @@ const MainApp: React.FC = () => {
   } | null>(null);
   /** 画布有未成功推送到云端的本地修改（用于关闭页面前提示） */
   const workspaceCloudDirtyRef = useRef(false);
-  /** 刚从云端拉取合并完成，跳过一次「标脏」避免误判 */
-  const workspaceCloudPullJustCompletedRef = useRef(false);
+  /**
+   * 云端拉取完成后，跳过若干次「画布变更 → 标脏」effect（覆盖 Strict Mode 双跑、多轮 setState）。
+   * 避免「无本地编辑」却仍显示未同步 / 触发无意义上传。
+   */
+  const workspaceCloudPostPullDirtySuppressRef = useRef(0);
   useEffect(() => {
     workspaceCloudQuotaSuspendedRef.current = workspaceCloudQuotaSuspended;
   }, [workspaceCloudQuotaSuspended]);
@@ -701,8 +720,8 @@ const MainApp: React.FC = () => {
   /** 画布变更后标记未同步（云端拉取过程中不标脏） */
   useEffect(() => {
     if (authLoading || !user?.id || !user?.username || !isWorkspaceCloudEnabled() || !activeWorkspaceProjectId) return;
-    if (workspaceCloudPullJustCompletedRef.current) {
-      workspaceCloudPullJustCompletedRef.current = false;
+    if (workspaceCloudPostPullDirtySuppressRef.current > 0) {
+      workspaceCloudPostPullDirtySuppressRef.current -= 1;
       return;
     }
     if (workspaceCloudHydratingProjectId === activeWorkspaceProjectId) return;
@@ -802,6 +821,7 @@ const MainApp: React.FC = () => {
     if (mode !== AppMode.WORKFLOW) return false;
     const uid = userIdRef.current;
     const projectId = activeWorkspaceProjectIdRef.current;
+    if (!workspaceLocalIdbHydrateReadyRef.current) return false;
     if (
       !uid ||
       !projectId ||
@@ -878,7 +898,7 @@ const MainApp: React.FC = () => {
         if (activeWorkspaceProjectIdRef.current !== projectId) return;
         if (!packed) {
           setWorkspaceCloudHydratingProjectId((cur) => (cur === projectId ? null : cur));
-          workspaceCloudPullJustCompletedRef.current = true;
+          workspaceCloudPostPullDirtySuppressRef.current = 3;
           workspaceCloudDirtyRef.current = false;
           return;
         }
@@ -893,7 +913,9 @@ const MainApp: React.FC = () => {
                 if (activeWorkspaceProjectIdRef.current !== projectId) return;
                 setWorkflowAssets(d.assets);
                 setWorkflowPending(d.pending);
-                trySaveWorkflowBundle(projectId, d, userId);
+                if (workspaceLocalIdbHydrateReadyRef.current) {
+                  trySaveWorkflowBundle(projectId, d, userId);
+                }
               },
             }
           );
@@ -901,12 +923,16 @@ const MainApp: React.FC = () => {
           if (activeWorkspaceProjectIdRef.current !== projectId) return;
           setWorkflowAssets(final.assets);
           setWorkflowPending(final.pending);
-          trySaveWorkflowBundle(projectId, final, userId);
+          if (workspaceLocalIdbHydrateReadyRef.current) {
+            trySaveWorkflowBundle(projectId, final, userId);
+          }
         } else {
           const bundle = { assets: packed.assets, pending: packed.pending };
-          trySaveWorkflowBundle(projectId, bundle, userId);
+          if (workspaceLocalIdbHydrateReadyRef.current) {
+            trySaveWorkflowBundle(projectId, bundle, userId);
+          }
         }
-        workspaceCloudPullJustCompletedRef.current = true;
+        workspaceCloudPostPullDirtySuppressRef.current = 3;
         workspaceCloudDirtyRef.current = false;
       } catch (e) {
         console.warn('[workspace cloud] pull', e);
@@ -958,20 +984,23 @@ const MainApp: React.FC = () => {
   }, [workflowAssets, workflowPending]);
 
   const flushProjectPersistence = useCallback(() => {
-    const pid = activeWorkspaceProjectIdRef.current;
-    const scope = userIdRef.current ?? null;
-    if (pid) {
-      trySaveWorkflowBundle(pid, {
-        assets: workflowAssetsRef.current,
-        pending: workflowPendingRef.current,
-      }, scope);
-    }
-    try {
-      saveWorkspaceProjects(workspaceProjectsRef.current, scope);
-    } catch {
-      /* ignore */
-    }
-    /** 云同步改为仅在离开工作区/切换项目时整包上传，避免与渐进拉取竞态导致云端被不完整状态覆盖 */
+    void (async () => {
+      const pid = activeWorkspaceProjectIdRef.current;
+      const scope = userIdRef.current ?? null;
+      if (pid && workspaceLocalIdbHydrateReadyRef.current) {
+        trySaveWorkflowBundle(pid, {
+          assets: workflowAssetsRef.current,
+          pending: workflowPendingRef.current,
+        }, scope);
+      }
+      await flushWorkspaceBundleIdbWrites();
+      try {
+        saveWorkspaceProjects(workspaceProjectsRef.current, scope);
+      } catch {
+        /* ignore */
+      }
+      /** 云同步改为仅在离开工作区/切换项目时整包上传，避免与渐进拉取竞态导致云端被不完整状态覆盖 */
+    })();
   }, []);
 
   useEffect(() => {
@@ -1004,44 +1033,71 @@ const MainApp: React.FC = () => {
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, [flushProjectPersistence, workspaceCloudLeaveSyncing]);
 
-  /** 未登录：工作区读回访客级 localStorage（与已登录账号隔离键） */
+  /** 未登录：工作区读回访客级 localStorage（与已登录账号隔离键）；IndexedDB 优先 hydrate 后再读 bundle */
   useEffect(() => {
     if (authLoading) return;
     if (user?.id) return;
-    setWorkspaceProjects(loadWorkspaceProjects(null));
-    const last = getLastOpenedWorkspaceProjectId(null);
-    setActiveWorkspaceProjectId(last);
-    if (last) {
-      const b = loadWorkflowBundle(last, null);
-      setWorkflowAssets(b.assets);
-      setWorkflowPending(b.pending);
-    } else {
-      setWorkflowAssets([]);
-      setWorkflowPending([]);
+    if (typeof indexedDB !== 'undefined') {
+      setWorkspaceLocalIdbHydrateReady(false);
     }
-  }, [authLoading, user?.id]);
+    let cancelled = false;
+    void (async () => {
+      await ensureWorkspaceBundlesHydratedFromIdb(null);
+      if (cancelled) return;
+      setWorkspaceProjects(loadWorkspaceProjects(null));
+      const last = getLastOpenedWorkspaceProjectId(null);
+      setActiveWorkspaceProjectId(last);
+      if (last) {
+        const b = loadWorkflowBundle(last, null);
+        setWorkflowAssets(b.assets);
+        setWorkflowPending(b.pending);
+      } else {
+        setWorkflowAssets([]);
+        setWorkflowPending([]);
+      }
+      markWorkspaceLocalIdbHydrateReady();
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [authLoading, user?.id, markWorkspaceLocalIdbHydrateReady]);
 
-  /** 已登录且关闭云同步：仅使用当前用户隔离的 localStorage */
+  /** 已登录且关闭云同步：仅使用当前用户隔离的 localStorage；IndexedDB 优先 hydrate */
   useEffect(() => {
     if (authLoading || !user?.id || isWorkspaceCloudEnabled()) return;
     const uid = user.id;
-    setWorkspaceProjects(loadWorkspaceProjects(uid));
-    const last = getLastOpenedWorkspaceProjectId(uid);
-    setActiveWorkspaceProjectId(last);
-    if (last) {
-      const b = loadWorkflowBundle(last, uid);
-      setWorkflowAssets(b.assets);
-      setWorkflowPending(b.pending);
-    } else {
-      setWorkflowAssets([]);
-      setWorkflowPending([]);
+    if (typeof indexedDB !== 'undefined') {
+      setWorkspaceLocalIdbHydrateReady(false);
     }
-  }, [authLoading, user?.id]);
+    let cancelled = false;
+    void (async () => {
+      await ensureWorkspaceBundlesHydratedFromIdb(uid);
+      if (cancelled) return;
+      setWorkspaceProjects(loadWorkspaceProjects(uid));
+      const last = getLastOpenedWorkspaceProjectId(uid);
+      setActiveWorkspaceProjectId(last);
+      if (last) {
+        const b = loadWorkflowBundle(last, uid);
+        setWorkflowAssets(b.assets);
+        setWorkflowPending(b.pending);
+      } else {
+        setWorkflowAssets([]);
+        setWorkflowPending([]);
+      }
+      markWorkspaceLocalIdbHydrateReady();
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [authLoading, user?.id, markWorkspaceLocalIdbHydrateReady]);
 
   /** 已登录且开启云同步：切换账号时先清空内存态，再从 R2 hydrate；访客数据仅在「云端无索引」时迁入 */
   useEffect(() => {
     if (authLoading || !user?.id || !user?.username || !isWorkspaceCloudEnabled()) return;
     const uid = user.id;
+    if (typeof indexedDB !== 'undefined') {
+      setWorkspaceLocalIdbHydrateReady(false);
+    }
     workspaceCloudPushAllowedUserIdRef.current = null;
     cloudWorkflowSyncGenRef.current += 1;
     setWorkspaceCloudHydratingProjectId(null);
@@ -1070,10 +1126,13 @@ const MainApp: React.FC = () => {
         setWorkflowPending([]);
       }
       workspaceCloudPushAllowedUserIdRef.current = uid;
+      markWorkspaceLocalIdbHydrateReady();
     };
 
     void (async () => {
       try {
+        await ensureWorkspaceBundlesHydratedFromIdb(uid);
+        if (cancelled) return;
         const index = await fetchWorkspaceCloudIndex(uid, user.username);
         if (cancelled) return;
         if (index) {
@@ -1093,12 +1152,13 @@ const MainApp: React.FC = () => {
             const local = loadWorkflowBundle(validLast, uid);
             setWorkflowAssets(local.assets);
             setWorkflowPending(local.pending);
-        runCloudWorkflowPull(uid, validLast);
+            runCloudWorkflowPull(uid, validLast);
           } else {
             setWorkflowAssets([]);
             setWorkflowPending([]);
           }
           workspaceCloudPushAllowedUserIdRef.current = uid;
+          markWorkspaceLocalIdbHydrateReady();
           return;
         }
         const again = await fetchWorkspaceCloudIndex(uid, user.username);
@@ -1120,6 +1180,7 @@ const MainApp: React.FC = () => {
           setWorkflowPending([]);
         }
         workspaceCloudPushAllowedUserIdRef.current = uid;
+        markWorkspaceLocalIdbHydrateReady();
       } catch (e) {
         console.warn('[workspace cloud] hydrate', e);
         if (cancelled) return;
@@ -1136,28 +1197,29 @@ const MainApp: React.FC = () => {
           setWorkflowPending([]);
         }
         workspaceCloudPushAllowedUserIdRef.current = uid;
+        markWorkspaceLocalIdbHydrateReady();
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [authLoading, user?.id, runCloudWorkflowPull]);
+  }, [authLoading, user?.id, runCloudWorkflowPull, markWorkspaceLocalIdbHydrateReady]);
 
   useEffect(() => {
-    if (!activeWorkspaceProjectId) return;
+    if (!activeWorkspaceProjectId || !workspaceLocalIdbHydrateReady) return;
     const scope = user?.id ?? null;
     const t = window.setTimeout(() => {
       trySaveWorkflowBundle(activeWorkspaceProjectId, { assets: workflowAssets, pending: workflowPending }, scope);
     }, 650);
     return () => window.clearTimeout(t);
-  }, [activeWorkspaceProjectId, workflowAssets, workflowPending, user?.id]);
+  }, [activeWorkspaceProjectId, workflowAssets, workflowPending, user?.id, workspaceLocalIdbHydrateReady]);
 
   const proceedBackToWorkspaceShell = useCallback(() => {
     cloudWorkflowSyncGenRef.current += 1;
     setWorkspaceCloudHydratingProjectId(null);
     const scope = userIdRef.current ?? null;
     const pid = activeWorkspaceProjectIdRef.current;
-    if (pid) {
+    if (pid && workspaceLocalIdbHydrateReadyRef.current) {
       trySaveWorkflowBundle(
         pid,
         { assets: workflowAssetsRef.current, pending: workflowPendingRef.current },
@@ -1171,6 +1233,7 @@ const MainApp: React.FC = () => {
 
   const loadWorkspaceProjectInternal = useCallback(
     (id: string) => {
+      if (typeof indexedDB !== 'undefined' && !workspaceLocalIdbHydrateReadyRef.current) return;
       const scope = userIdRef.current ?? null;
       const local = loadWorkflowBundle(id, scope);
       setActiveWorkspaceProjectId(id);
@@ -1187,6 +1250,7 @@ const MainApp: React.FC = () => {
 
   const openWorkspaceProject = useCallback(
     async (id: string) => {
+      if (typeof indexedDB !== 'undefined' && !workspaceLocalIdbHydrateReadyRef.current) return;
       const scope = userIdRef.current ?? null;
       const curId = activeWorkspaceProjectIdRef.current;
       if (curId && curId !== id) {
@@ -1194,7 +1258,9 @@ const MainApp: React.FC = () => {
           assets: workflowAssetsRef.current,
           pending: workflowPendingRef.current,
         };
-        trySaveWorkflowBundle(curId, prevBundle, scope);
+        if (workspaceLocalIdbHydrateReadyRef.current) {
+          trySaveWorkflowBundle(curId, prevBundle, scope);
+        }
         const uid = userIdRef.current;
         if (
           uid &&
@@ -1247,7 +1313,9 @@ const MainApp: React.FC = () => {
           assets: workflowAssetsRef.current,
           pending: workflowPendingRef.current,
         };
-        trySaveWorkflowBundle(pid, bundle, scope);
+        if (workspaceLocalIdbHydrateReadyRef.current) {
+          trySaveWorkflowBundle(pid, bundle, scope);
+        }
         const uid = userIdRef.current;
         if (
           uid &&
@@ -2912,6 +2980,9 @@ const MainApp: React.FC = () => {
     );
   };
 
+  const showWorkspaceIdbHydrateOverlay =
+    mode === AppMode.WORKFLOW && typeof indexedDB !== 'undefined' && !workspaceLocalIdbHydrateReady;
+
   return (
     <div className="min-h-[100dvh] bg-[#050505] text-white flex flex-col lg:flex-row relative isolate font-sans overflow-hidden">
       <div className="pointer-events-none absolute inset-0 -z-10 min-h-[100dvh] overflow-hidden" aria-hidden>
@@ -3175,7 +3246,21 @@ const MainApp: React.FC = () => {
             )}
             {mode === AppMode.TEXTURE && <TextureEngineSection />}
 
-            {mode === AppMode.WORKFLOW && !activeWorkspaceProjectId && (
+            {mode === AppMode.WORKFLOW && (
+              <div className="relative w-full">
+                {showWorkspaceIdbHydrateOverlay && (
+                  <div
+                    className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-2 rounded-xl bg-[#050505]/90 backdrop-blur-[2px] border border-white/[0.06]"
+                    role="status"
+                    aria-busy="true"
+                    aria-live="polite"
+                  >
+                    <div className="h-6 w-6 rounded-full border-2 border-white/20 border-t-blue-500/90 animate-spin" />
+                    <p className="text-[10px] text-gray-400">正在准备工作区…</p>
+                  </div>
+                )}
+                <div className={showWorkspaceIdbHydrateOverlay ? 'pointer-events-none select-none opacity-[0.72]' : undefined}>
+                  {!activeWorkspaceProjectId && (
               <>
                 {user?.id && isWorkspaceCloudEnabled() ? (
                   <div
@@ -3218,8 +3303,8 @@ const MainApp: React.FC = () => {
                   onDelete={requestDeleteWorkspaceProject}
                 />
               </>
-            )}
-            {mode === AppMode.WORKFLOW && activeWorkspaceProjectId && (
+                  )}
+                  {activeWorkspaceProjectId && (
               <WorkflowErrorBoundary>
                 <div className="w-full max-w-6xl mx-auto mb-2 flex flex-wrap items-center gap-1.5">
                   <button
@@ -3408,6 +3493,9 @@ const MainApp: React.FC = () => {
                   />
                 </Suspense>
               </WorkflowErrorBoundary>
+                  )}
+                </div>
+              </div>
             )}
 
             {mode === AppMode.SEAM_REPAIR && (
@@ -3584,7 +3672,17 @@ const MainApp: React.FC = () => {
                                     {!generate3DImage ? (
                                       <label className="block h-20 border-2 border-dashed border-[#2e2e32] rounded-xl flex items-center justify-center cursor-pointer hover:bg-[#222228] text-[9px] text-gray-500">点击上传参考图<input type="file" className="hidden" accept="image/jpeg,image/png,image/webp" onChange={e => { const f = e.target.files?.[0]; if (f) { const r = new FileReader(); r.onload = () => setGenerate3DImage(r.result as string); r.readAsDataURL(f); } }} /></label>
                                     ) : (
-                                      <div className="relative inline-block"><img src={generate3DImage} alt="参考" className="max-h-20 rounded-xl border border-[#2e2e32]" /><button onClick={() => setGenerate3DImage(null)} className="absolute top-1 right-1 w-5 h-5 bg-red-500 rounded text-white text-xs">×</button></div>
+                                      <div className="relative inline-block">
+                                        <ProgressivePreviewImage
+                                          fullSrc={generate3DImage}
+                                          cacheKey={`g3d-ref:${generate3DImage.slice(0, 64)}`}
+                                          thumbMaxEdge={160}
+                                          className="relative inline-block"
+                                          imgClassName="max-h-20 rounded-xl border border-[#2e2e32]"
+                                          alt="参考"
+                                        />
+                                        <button onClick={() => setGenerate3DImage(null)} className="absolute top-1 right-1 w-5 h-5 bg-red-500 rounded text-white text-xs">×</button>
+                                      </div>
                                     )}
                                   </div>
                                 ) : (
@@ -3616,7 +3714,7 @@ const MainApp: React.FC = () => {
                             <p className="text-[9px] text-gray-500 mb-3">极速版模型，约 1 分 30 秒内生成 3D 文件。</p>
                             <textarea value={rapidPrompt} onChange={e => setRapidPrompt(e.target.value)} placeholder="文本描述（与下图二选一）" rows={2} className="w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none mb-3" />
                             <div className="flex gap-2 mb-3">
-                              {!rapidImage ? <label className="flex-1 h-14 border border-dashed border-[#2e2e32] rounded-xl flex items-center justify-center cursor-pointer text-[9px] text-gray-500">上传图片<input type="file" className="hidden" accept="image/*" onChange={e => { const f = e.target.files?.[0]; if (f) { const r = new FileReader(); r.onload = () => setRapidImage(r.result as string); r.readAsDataURL(f); } }} /></label> : <div className="relative flex-1"><img src={rapidImage} alt="" className="h-14 w-full object-cover rounded-xl border border-[#2e2e32]" /><button type="button" onClick={() => setRapidImage(null)} className="absolute top-0 right-0 w-5 h-5 bg-red-500 rounded text-white text-xs">×</button></div>}
+                              {!rapidImage ? <label className="flex-1 h-14 border border-dashed border-[#2e2e32] rounded-xl flex items-center justify-center cursor-pointer text-[9px] text-gray-500">上传图片<input type="file" className="hidden" accept="image/*" onChange={e => { const f = e.target.files?.[0]; if (f) { const r = new FileReader(); r.onload = () => setRapidImage(r.result as string); r.readAsDataURL(f); } }} /></label> : <div className="relative flex-1"><ProgressivePreviewImage fullSrc={rapidImage} cacheKey={`rapid:${rapidImage.slice(0, 64)}`} thumbMaxEdge={112} className="relative h-14 w-full" imgClassName="h-14 w-full object-cover rounded-xl border border-[#2e2e32]" alt="" /><button type="button" onClick={() => setRapidImage(null)} className="absolute top-0 right-0 w-5 h-5 bg-red-500 rounded text-white text-xs">×</button></div>}
                               <div className="w-24 shrink-0"><DropdownSelect compact options={[{ value: 'FBX', label: 'FBX' }, { value: 'OBJ', label: 'OBJ' }, { value: 'GLB', label: 'GLB' }, { value: 'STL', label: 'STL' }, { value: 'USDZ', label: 'USDZ' }, { value: 'MP4', label: 'MP4' }]} value={rapidResultFormat} onChange={setRapidResultFormat} /></div>
                             </div>
                             <label className="flex items-center gap-2 text-[10px] mb-3"><input type="checkbox" checked={rapidEnablePBR} onChange={e => setRapidEnablePBR(e.target.checked)} className="rounded" />PBR</label>
@@ -3635,7 +3733,7 @@ const MainApp: React.FC = () => {
                             <p className="text-[9px] text-gray-500 mb-3">输入单几何模型 URL（必填）+ 参考图或文字描述二选一，生成纹理贴图。</p>
                             <input value={textureModelUrl} onChange={e => setTextureModelUrl(e.target.value)} placeholder="单几何模型 URL（必填）" className="w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 mb-2" />
                             <textarea value={texturePrompt} onChange={e => setTexturePrompt(e.target.value)} placeholder="文字描述（与参考图二选一）" rows={1} className="w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none mb-2" />
-                            <div className="mb-3">{!textureRefImage ? <label className="block h-14 border border-dashed border-[#2e2e32] rounded-xl flex items-center justify-center cursor-pointer text-[9px] text-gray-500">上传参考图（与描述二选一）<input type="file" className="hidden" accept="image/*" onChange={e => { const f = e.target.files?.[0]; if (f) { const r = new FileReader(); r.onload = () => setTextureRefImage(r.result as string); r.readAsDataURL(f); } }} /></label> : <div className="relative inline-block"><img src={textureRefImage} alt="" className="max-h-14 rounded-xl border border-[#2e2e32]" /><button onClick={() => setTextureRefImage(null)} className="absolute top-1 right-1 w-5 h-5 bg-red-500 rounded text-white text-xs">×</button></div>}</div>
+                            <div className="mb-3">{!textureRefImage ? <label className="block h-14 border border-dashed border-[#2e2e32] rounded-xl flex items-center justify-center cursor-pointer text-[9px] text-gray-500">上传参考图（与描述二选一）<input type="file" className="hidden" accept="image/*" onChange={e => { const f = e.target.files?.[0]; if (f) { const r = new FileReader(); r.onload = () => setTextureRefImage(r.result as string); r.readAsDataURL(f); } }} /></label> : <div className="relative inline-block"><ProgressivePreviewImage fullSrc={textureRefImage} cacheKey={`texref:${textureRefImage.slice(0, 64)}`} thumbMaxEdge={112} className="relative inline-block" imgClassName="max-h-14 rounded-xl border border-[#2e2e32]" alt="" /><button onClick={() => setTextureRefImage(null)} className="absolute top-1 right-1 w-5 h-5 bg-red-500 rounded text-white text-xs">×</button></div>}</div>
                             <button onClick={handleTexture3D} disabled={!textureModelUrl.trim() || (!texturePrompt.trim() && !textureRefImage)} className="w-full py-2.5 bg-indigo-600 rounded-xl text-[10px] font-black uppercase disabled:opacity-40">提交（入队）</button>
                           </>
                         )}
@@ -3659,7 +3757,17 @@ const MainApp: React.FC = () => {
                             {!profileImage ? (
                               <label className="block h-24 border-2 border-dashed border-[#2e2e32] rounded-xl flex items-center justify-center cursor-pointer hover:bg-[#222228] text-[9px] text-gray-500 mb-3">点击上传人物头像<input type="file" className="hidden" accept="image/*" onChange={e => { const f = e.target.files?.[0]; if (f) { const r = new FileReader(); r.onload = () => setProfileImage(r.result as string); r.readAsDataURL(f); } }} /></label>
                             ) : (
-                              <div className="relative inline-block mb-3"><img src={profileImage} alt="头像" className="max-h-24 rounded-xl border border-[#2e2e32]" /><button onClick={() => setProfileImage(null)} className="absolute top-1 right-1 w-6 h-6 bg-red-500 rounded text-white text-xs">×</button></div>
+                              <div className="relative inline-block mb-3">
+                                <ProgressivePreviewImage
+                                  fullSrc={profileImage}
+                                  cacheKey={`profile:${profileImage.slice(0, 64)}`}
+                                  thumbMaxEdge={192}
+                                  className="relative inline-block"
+                                  imgClassName="max-h-24 rounded-xl border border-[#2e2e32]"
+                                  alt="头像"
+                                />
+                                <button onClick={() => setProfileImage(null)} className="absolute top-1 right-1 w-6 h-6 bg-red-500 rounded text-white text-xs">×</button>
+                              </div>
                             )}
                             <button onClick={handleProfile3D} disabled={!profileImage} className="w-full py-2.5 bg-indigo-600 rounded-xl text-[10px] font-black uppercase disabled:opacity-40">提交（入队）</button>
                           </>
@@ -3789,7 +3897,18 @@ const MainApp: React.FC = () => {
                           className={`rounded-xl border overflow-hidden cursor-pointer transition-colors ${selectedTemp3DId === item.id ? 'border-blue-500 bg-[#1a3354]' : 'border-[#2e2e32] bg-[#1c1c22] hover:bg-[#2e2e36]'}`}
                         >
                           <div className="aspect-square relative">
-                            {item.previewImageUrl ? <img src={item.previewImageUrl} alt="" className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-gray-600 text-[10px]">无预览图</div>}
+                            {item.previewImageUrl ? (
+                              <ProgressivePreviewImage
+                                fullSrc={item.previewImageUrl}
+                                cacheKey={`temp3d-prev:${item.id}`}
+                                thumbMaxEdge={512}
+                                className="w-full h-full"
+                                imgClassName="w-full h-full object-cover"
+                                alt=""
+                              />
+                            ) : (
+                              <div className="w-full h-full flex items-center justify-center text-gray-600 text-[10px]">无预览图</div>
+                            )}
                             <span className="absolute bottom-1 left-1 px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-[#0d0d10] text-gray-300">{item.source}</span>
                           </div>
                           <div className="p-2">
@@ -3855,7 +3974,20 @@ const MainApp: React.FC = () => {
                               title={label}
                             >
                               <div className="w-11 h-11 shrink-0 rounded-xl overflow-hidden border border-[#2e2e32] bg-[#1c1c22] flex items-center justify-center">
-                                {thumb ? <img src={thumb} className="w-full h-full object-cover" alt="" /> : thumbPending ? <span className="text-[8px] text-gray-500">加载</span> : <span className="text-[10px] text-gray-500">新</span>}
+                                {thumb ? (
+                                  <ProgressivePreviewImage
+                                    fullSrc={thumb}
+                                    cacheKey={`dialog-sess-thumb:${s.id}`}
+                                    thumbMaxEdge={128}
+                                    className="w-full h-full"
+                                    imgClassName="w-full h-full object-cover"
+                                    alt=""
+                                  />
+                                ) : thumbPending ? (
+                                  <span className="text-[8px] text-gray-500">加载</span>
+                                ) : (
+                                  <span className="text-[10px] text-gray-500">新</span>
+                                )}
                               </div>
                               <div className="min-w-0 flex-1 text-left">
                                 <div className="text-[10px] font-black text-white/85 truncate">{label}</div>
@@ -3958,7 +4090,15 @@ const MainApp: React.FC = () => {
                             <div className="p-2 border-b border-[#2e2e32]">
                               <div className={`grid gap-2 ${msg.inputImages && msg.inputImages.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}>
                                 {(msg.inputImages && msg.inputImages.length > 0 ? msg.inputImages : msg.imageBase64 ? [msg.imageBase64] : []).map((image, imageIndex) => (
-                                  <img key={`${msg.id}-${imageIndex}`} src={image} className="max-h-48 rounded-xl object-contain mx-auto" alt="上传" />
+                                  <ProgressivePreviewImage
+                                    key={`${msg.id}-${imageIndex}`}
+                                    fullSrc={image}
+                                    cacheKey={`dialog-user:${msg.id}:${imageIndex}`}
+                                    thumbMaxEdge={384}
+                                    className="relative inline-block max-w-full mx-auto"
+                                    imgClassName="max-h-48 rounded-xl object-contain mx-auto max-w-full"
+                                    alt="上传"
+                                  />
                                 ))}
                               </div>
                             </div>
@@ -4019,7 +4159,14 @@ const MainApp: React.FC = () => {
                                     </div>
                                   </div>
                                 ) : displaySrc ? (
-                                  <img src={displaySrc} className="max-w-full rounded-xl border border-[#2e2e32]" alt="生成" />
+                                  <ProgressivePreviewImage
+                                    fullSrc={displaySrc}
+                                    cacheKey={`dialog-asst:${msg.id}:v${versionIndex}`}
+                                    thumbMaxEdge={1280}
+                                    className="relative inline-block max-w-full"
+                                    imgClassName="max-w-full rounded-xl border border-[#2e2e32]"
+                                    alt="生成"
+                                  />
                                 ) : null}
                               </div>
                               {dialogDetectMessageId === msg.id && (displayVersion.detectedBoxes?.length ?? 0) > 0 && (
@@ -4144,7 +4291,14 @@ const MainApp: React.FC = () => {
                         {dialogInputImages.map((img, i) => (
                           <div key={img.id} className="relative inline-flex items-center gap-1 rounded-lg border border-[#2e2e32] bg-[#1c1c22] overflow-hidden">
                             <span className="pl-2 text-[8px] font-black text-gray-500">图{i + 1}</span>
-                            <img src={img.data} className="h-12 w-12 object-cover" alt={`图${i + 1}`} />
+                            <ProgressivePreviewImage
+                              fullSrc={img.data}
+                              cacheKey={`dialog-inp-thumb:${img.id}`}
+                              thumbMaxEdge={96}
+                              className="relative h-12 w-12 shrink-0"
+                              imgClassName="h-12 w-12 object-cover"
+                              alt={`图${i + 1}`}
+                            />
                             <button type="button" onClick={() => setDialogInputImages(prev => prev.filter(x => x.id !== img.id))} className="p-1 text-red-400 hover:bg-[#4a1c1c] rounded text-[10px] leading-none">×</button>
                           </div>
                         ))}
@@ -4222,7 +4376,14 @@ const MainApp: React.FC = () => {
                             const imageNumber = i + 1;
                             return (
                             <button key={img.id} type="button" onClick={() => { const newText = dialogInputText.slice(0, atSuggestionsCursor) + `@图${imageNumber} ` + dialogInputText.slice(atSuggestionsCursor + 1); setDialogInputText(newText); setAtSuggestionsOpen(false); dialogInputRef.current?.focus(); }} className="w-full flex items-center gap-2 px-3 py-2 text-left text-[11px] hover:bg-[#2e2e36] rounded-lg">
-                              <img src={img.data} className="w-8 h-8 rounded object-cover shrink-0" alt="" />
+                              <ProgressivePreviewImage
+                                fullSrc={img.data}
+                                cacheKey={`dialog-at-inp:${img.id}`}
+                                thumbMaxEdge={64}
+                                className="w-8 h-8 shrink-0 rounded overflow-hidden"
+                                imgClassName="w-8 h-8 rounded object-cover shrink-0"
+                                alt=""
+                              />
                               <span>图{imageNumber}</span>
                             </button>
                             );
@@ -4232,7 +4393,14 @@ const MainApp: React.FC = () => {
                           )}
                           {dialogTempFiltered.map((item, i) => (
                             <button key={item.id} type="button" onClick={() => { handleDialogTempAddToInput(item); const newIdx = dialogInputImages.length + 1; const newText = dialogInputText.slice(0, atSuggestionsCursor) + `@图${newIdx} ` + dialogInputText.slice(atSuggestionsCursor + 1); setDialogInputText(newText); setAtSuggestionsOpen(false); dialogInputRef.current?.focus(); }} className="w-full flex items-center gap-2 px-3 py-2 text-left text-[11px] hover:bg-[#2e2e36] rounded-lg">
-                              <img src={item.data} className="w-8 h-8 rounded object-cover shrink-0" alt="" />
+                              <ProgressivePreviewImage
+                                fullSrc={item.data}
+                                cacheKey={`dialog-at-temp:${item.id}`}
+                                thumbMaxEdge={64}
+                                className="w-8 h-8 shrink-0 rounded overflow-hidden"
+                                imgClassName="w-8 h-8 rounded object-cover shrink-0"
+                                alt=""
+                              />
                               <span className="truncate">{item.label || `临时库 ${i + 1}`}</span>
                             </button>
                           ))}
@@ -4281,15 +4449,18 @@ const MainApp: React.FC = () => {
                                 : 'border-[#2e2e32]'
                             }`}
                           >
-                            <img
-                              src={item.data}
-                              className="w-full h-full object-cover cursor-pointer"
+                            <ProgressivePreviewImage
+                              fullSrc={item.data}
+                              cacheKey={`dialog-temp-grid:${item.id}`}
+                              thumbMaxEdge={512}
+                              className="w-full h-full cursor-pointer"
+                              imgClassName="w-full h-full object-cover cursor-pointer"
                               alt=""
+                              title="点击查看大图"
                               onClick={(e) => {
                                 e.stopPropagation();
                                 setDialogTempPreviewId(item.id);
                               }}
-                              title="点击查看大图"
                             />
                             {item.label && <span className="absolute bottom-0 left-0 right-0 py-0.5 text-center text-[9px] font-black bg-[#1a1a1e] text-white truncate">{item.label}</span>}
                           </div>

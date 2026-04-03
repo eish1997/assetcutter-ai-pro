@@ -1,4 +1,5 @@
 import type { WorkflowAsset, WorkflowPendingTask } from '../types';
+import { idbDeleteBundle, idbLoadBundleJson, idbSaveBundleJson } from './workspaceBundleIdb';
 
 export type WorkspaceProject = {
   id: string;
@@ -19,7 +20,7 @@ function lastOpenStorageKey(persistUserId: WorkspacePersistUserId): string {
   return persistUserId ? `ac_workspace_last_open_v1__u_${persistUserId}` : 'ac_workspace_last_open_v1';
 }
 
-function workflowBundleStorageKey(projectId: string, persistUserId: WorkspacePersistUserId): string {
+export function workflowBundleStorageKey(projectId: string, persistUserId: WorkspacePersistUserId): string {
   return persistUserId
     ? `ac_workflow_bundle_v1__u_${persistUserId}_${projectId}`
     : `ac_workflow_bundle_v1_${projectId}`;
@@ -29,6 +30,94 @@ export type WorkflowProjectBundle = {
   assets: WorkflowAsset[];
   pending: WorkflowPendingTask[];
 };
+
+const bundleMemoryCache = new Map<string, WorkflowProjectBundle>();
+/** 同一 bundle 连续保存时只保留待写入 JSON，避免排队多次完整 IDB 写入 */
+const pendingIdbPayloadByKey = new Map<string, string>();
+const pendingIdbWrites = new Map<string, Promise<void>>();
+/** removeWorkflowBundle 后跳过已在队列中的写入，避免删项又被写回 IDB */
+const cancelledIdbBundleKeys = new Set<string>();
+
+function cloneBundle(b: WorkflowProjectBundle): WorkflowProjectBundle {
+  return JSON.parse(JSON.stringify(b)) as WorkflowProjectBundle;
+}
+
+function parseBundleJson(raw: string): WorkflowProjectBundle {
+  const data = JSON.parse(raw) as Partial<WorkflowProjectBundle>;
+  return {
+    assets: Array.isArray(data.assets) ? data.assets : [],
+    pending: Array.isArray(data.pending) ? data.pending : [],
+  };
+}
+
+function schedulePersistToIdb(bundleKey: string, json: string): void {
+  if (typeof indexedDB === 'undefined') {
+    try {
+      localStorage.setItem(bundleKey, json);
+    } catch (e) {
+      const name = typeof DOMException !== 'undefined' && e instanceof DOMException ? e.name : '';
+      if (name === 'QuotaExceededError' || (e instanceof Error && /quota/i.test(e.message))) {
+        console.error(
+          '[workspace] localStorage 空间不足（无 IndexedDB）。请减少大图或启用云端同步。'
+        );
+      } else {
+        console.error('[workspace] 保存失败', e);
+      }
+    }
+    return;
+  }
+
+  pendingIdbPayloadByKey.set(bundleKey, json);
+  cancelledIdbBundleKeys.delete(bundleKey);
+  if (pendingIdbWrites.has(bundleKey)) return;
+
+  const drain = async (): Promise<void> => {
+    try {
+      while (pendingIdbPayloadByKey.has(bundleKey)) {
+        const payload = pendingIdbPayloadByKey.get(bundleKey)!;
+        pendingIdbPayloadByKey.delete(bundleKey);
+        if (cancelledIdbBundleKeys.has(bundleKey)) {
+          cancelledIdbBundleKeys.delete(bundleKey);
+          continue;
+        }
+        try {
+          await idbSaveBundleJson(bundleKey, payload);
+          try {
+            localStorage.removeItem(bundleKey);
+          } catch {
+            /* ignore */
+          }
+        } catch (e) {
+          console.warn('[workspace] IndexedDB 保存失败，回退 localStorage', e);
+          try {
+            localStorage.setItem(bundleKey, payload);
+          } catch (e2) {
+            const name = typeof DOMException !== 'undefined' && e2 instanceof DOMException ? e2.name : '';
+            if (name === 'QuotaExceededError' || (e2 instanceof Error && /quota/i.test(e2.message))) {
+              console.error('[workspace] localStorage 空间不足，画布未能完整保存。');
+            } else {
+              console.error('[workspace] 回退保存失败', e2);
+            }
+          }
+        }
+        if (cancelledIdbBundleKeys.has(bundleKey)) {
+          cancelledIdbBundleKeys.delete(bundleKey);
+          try {
+            localStorage.removeItem(bundleKey);
+          } catch {
+            /* ignore */
+          }
+          void idbDeleteBundle(bundleKey);
+        }
+      }
+    } finally {
+      pendingIdbWrites.delete(bundleKey);
+    }
+  };
+
+  const p = drain();
+  pendingIdbWrites.set(bundleKey, p);
+}
 
 export function loadWorkspaceProjects(persistUserId: WorkspacePersistUserId = null): WorkspaceProject[] {
   const pk = projectsStorageKey(persistUserId);
@@ -92,14 +181,15 @@ export function setLastOpenedWorkspaceProjectId(id: string | null, persistUserId
 }
 
 export function loadWorkflowBundle(projectId: string, persistUserId: WorkspacePersistUserId = null): WorkflowProjectBundle {
+  const key = workflowBundleStorageKey(projectId, persistUserId);
+  const cached = bundleMemoryCache.get(key);
+  if (cached) return cloneBundle(cached);
   try {
-    const raw = localStorage.getItem(workflowBundleStorageKey(projectId, persistUserId));
+    const raw = localStorage.getItem(key);
     if (!raw) return { assets: [], pending: [] };
-    const data = JSON.parse(raw) as Partial<WorkflowProjectBundle>;
-    return {
-      assets: Array.isArray(data.assets) ? data.assets : [],
-      pending: Array.isArray(data.pending) ? data.pending : [],
-    };
+    const bundle = parseBundleJson(raw);
+    bundleMemoryCache.set(key, cloneBundle(bundle));
+    return bundle;
   } catch {
     return { assets: [], pending: [] };
   }
@@ -111,19 +201,46 @@ export function saveWorkflowBundle(
   persistUserId: WorkspacePersistUserId = null
 ): void {
   const key = workflowBundleStorageKey(projectId, persistUserId);
-  const payload = JSON.stringify(bundle);
-  try {
-    localStorage.setItem(key, payload);
-  } catch (e) {
-    const name = typeof DOMException !== 'undefined' && e instanceof DOMException ? e.name : '';
-    if (name === 'QuotaExceededError' || (e instanceof Error && /quota/i.test(e.message))) {
-      console.error(
-        '[workspace] localStorage 空间不足，项目画布未能完整保存。请清理站点数据、减少大图数量，或确保已登录并启用云端同步（R2）。'
-      );
-    } else {
-      console.error('[workspace] 保存失败', e);
+  const snapshot = cloneBundle(bundle);
+  bundleMemoryCache.set(key, snapshot);
+  const payload = JSON.stringify(snapshot);
+  schedulePersistToIdb(key, payload);
+}
+
+/** 等待正在进行的 IndexedDB 写入完成（供 pagehide / 关页前尽力落盘） */
+export async function flushWorkspaceBundleIdbWrites(): Promise<void> {
+  const pending = [...pendingIdbWrites.values()];
+  if (pending.length === 0) return;
+  await Promise.allSettled(pending);
+}
+
+/** 从 IndexedDB 拉取各项目 bundle 进内存，并迁移仅存在于 localStorage 的旧数据 */
+export async function ensureWorkspaceBundlesHydratedFromIdb(persistUserId: WorkspacePersistUserId): Promise<void> {
+  if (typeof indexedDB === 'undefined') return;
+  const projects = loadWorkspaceProjects(persistUserId);
+  for (const p of projects) {
+    const key = workflowBundleStorageKey(p.id, persistUserId);
+    try {
+      const fromIdb = await idbLoadBundleJson(key);
+      if (fromIdb) {
+        const bundle = parseBundleJson(fromIdb);
+        bundleMemoryCache.set(key, cloneBundle(bundle));
+        continue;
+      }
+      const raw = localStorage.getItem(key);
+      if (raw) {
+        const bundle = parseBundleJson(raw);
+        bundleMemoryCache.set(key, cloneBundle(bundle));
+        await idbSaveBundleJson(key, raw).catch(() => {});
+        try {
+          localStorage.removeItem(key);
+        } catch {
+          /* ignore */
+        }
+      }
+    } catch (e) {
+      console.warn('[workspace] hydrate bundle', key, e);
     }
-    throw e;
   }
 }
 
@@ -142,5 +259,14 @@ export function trySaveWorkflowBundle(
 }
 
 export function removeWorkflowBundle(projectId: string, persistUserId: WorkspacePersistUserId = null): void {
-  localStorage.removeItem(workflowBundleStorageKey(projectId, persistUserId));
+  const key = workflowBundleStorageKey(projectId, persistUserId);
+  bundleMemoryCache.delete(key);
+  pendingIdbPayloadByKey.delete(key);
+  cancelledIdbBundleKeys.add(key);
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    /* ignore */
+  }
+  void idbDeleteBundle(key);
 }

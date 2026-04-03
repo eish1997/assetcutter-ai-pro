@@ -26,10 +26,8 @@ import { ImagePreviewOverlay } from './ImagePreviewOverlay';
 import { resolveCapabilityPreviewSrc } from '../services/capabilityPreviewUrl';
 import { CapabilityPreviewImg } from './CapabilityPreviewImg';
 import { WorkflowCapabilityHoverPreview } from './WorkflowCapabilityHoverPreview';
-
-/** 云端 hydrate 前预览图为空时避免 img 的 src 为空字符串 */
-const WORKFLOW_IMG_EMPTY_PLACEHOLDER =
-  'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+import { ProgressivePreviewImage, WorkflowGridImage } from './ProgressivePreviewImage';
+import { workflowSafeImgSrc, WORKFLOW_IMG_EMPTY_PLACEHOLDER } from '../services/workflowImageDisplay';
 
 /** 持久化数据异常时可能混入 non string，避免把对象传给 img src 触发 React 抛错 */
 const asWorkflowImageString = (v: unknown): string => (typeof v === 'string' ? v : '');
@@ -90,11 +88,6 @@ function buildLibraryItemsFromWorkflowExport(
   }
   return items;
 }
-
-const workflowSafeImgSrc = (s: string | undefined | null) => {
-  if (typeof s !== 'string' || s.trim() === '') return WORKFLOW_IMG_EMPTY_PLACEHOLDER;
-  return s;
-};
 
 function safeUnknownToString(v: unknown): string {
   if (typeof v === 'string') return v;
@@ -245,6 +238,7 @@ const CutSelectModal: React.FC<{
           <button onClick={onCancel} className="w-8 h-8 flex items-center justify-center text-white/50 hover:text-white"><AppIcon name="close" className="w-4 h-4" /></button>
         </div>
         <div className="relative inline-block max-w-full">
+          {/* 选区与 SVG 叠加依赖原图像素比例，此处必须全分辨率，不能用缩略图 */}
           <img src={inputImage} alt="" className="max-h-[60vh] w-auto block" />
           <svg className="absolute inset-0 w-full h-full pointer-events-none" style={{ left: 0, top: 0 }} viewBox={`0 0 ${scale} ${scale}`} preserveAspectRatio="none">
             {boxes.map((b, i) => (
@@ -597,7 +591,13 @@ const ArchivedDetailModal: React.FC<{
                   className="rounded-lg border border-[#2e2e32] bg-[#141416] overflow-hidden hover:border-[#3b6fb8] transition-colors"
                   title={`第 ${idx + 1} 张`}
                 >
-                  <img src={img} alt={`cut-${idx}`} className="w-full h-20 object-cover block" />
+                  <ProgressivePreviewImage
+                    fullSrc={img}
+                    cacheKey={`arch-cut:${asset.id}:${idx}`}
+                    thumbMaxEdge={240}
+                    className="relative w-full h-20"
+                    imgClassName="w-full h-20 object-cover block"
+                  />
                 </button>
               ))}
             </div>
@@ -619,7 +619,14 @@ const ArchivedDetailModal: React.FC<{
                   下载此张
                 </button>
               </div>
-              <img src={s.image} alt={s.label} className="w-full max-h-[320px] object-contain bg-[#16161a]" />
+              <ProgressivePreviewImage
+                fullSrc={s.image}
+                cacheKey={`arch-step:${asset.id}:${i}:${s.label}`}
+                thumbMaxEdge={480}
+                className="relative w-full min-h-[120px] max-h-[320px]"
+                imgClassName="w-full max-h-[320px] object-contain bg-[#16161a]"
+                alt={s.label}
+              />
             </div>
           ))}
         </div>
@@ -627,7 +634,14 @@ const ArchivedDetailModal: React.FC<{
           <span className="text-[9px] text-gray-500">拼合后的流程图（按生成顺序）</span>
           {compositeUrl && (
             <>
-              <img src={compositeUrl} alt="流程图" className="max-h-48 rounded-lg border border-[#2e2e32]" />
+              <ProgressivePreviewImage
+                fullSrc={compositeUrl}
+                cacheKey={`arch-composite:${asset.id}`}
+                thumbMaxEdge={360}
+                className="relative inline-block max-h-48 max-w-full"
+                imgClassName="max-h-48 rounded-lg border border-[#2e2e32] object-contain"
+                alt="流程图"
+              />
               <button
                 onClick={downloadComposite}
                 className="px-4 py-2 rounded-xl bg-blue-600 text-[10px] font-black uppercase hover:bg-blue-500"
@@ -2219,30 +2233,6 @@ const WorkflowSection: React.FC<{
     [repositoryItems, libraryImportIds]
   );
 
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const pendingLoads: Array<() => void> = [];
-    visibleAssets.forEach((asset) => {
-      if (cardAspectByAssetId[asset.id] != null) return;
-      const src = asWorkflowImageString(asset.original);
-      if (!src) return;
-      const img = new Image();
-      img.onload = () => {
-        const w = img.naturalWidth || 1;
-        const h = img.naturalHeight || 1;
-        // 限制卡片展示比例，避免出现过长/过扁的预览（最大 2:1，最小 1:2）
-        const ratio = Math.max(0.5, Math.min(2, w / h));
-        setCardAspectByAssetId((prev) => (prev[asset.id] != null ? prev : { ...prev, [asset.id]: ratio }));
-      };
-      img.src = src;
-      pendingLoads.push(() => {
-        img.onload = null;
-      });
-    });
-    return () => {
-      pendingLoads.forEach((dispose) => dispose());
-    };
-  }, [visibleAssets, cardAspectByAssetId]);
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const onModeChanged = (event: Event) => {
@@ -5008,11 +4998,12 @@ const WorkflowSection: React.FC<{
                             });
                           }}
                         >
-                          <div className="relative w-full bg-[#0b0b0e] flex justify-center" style={{ aspectRatio: 1 }}>
-                            <img
-                              src={workflowSafeImgSrc(item.data)}
-                              alt=""
-                              className="w-full h-full object-contain"
+                          <div className="relative w-full bg-[#141416] flex justify-center" style={{ aspectRatio: 1 }}>
+                            <WorkflowGridImage
+                              fullSrc={item.data}
+                              cacheKey={`lib:${item.id}`}
+                              className="relative w-full h-full flex justify-center bg-[#141416]"
+                              imgClassName="w-full h-full object-contain"
                               draggable={false}
                               onDragStart={(ev) => ev.preventDefault()}
                             />
@@ -5241,14 +5232,15 @@ const WorkflowSection: React.FC<{
                       <div
                         key={idx}
                         data-workflow-card
-                        className="break-inside-avoid mb-4 rounded-2xl border border-[#2e2e32] bg-[#0b0b0e] overflow-hidden flex justify-center"
+                        className="break-inside-avoid mb-4 rounded-2xl border border-[#2e2e32] bg-[#141416] overflow-hidden flex justify-center"
                       >
-                        <img
-                          src={workflowSafeImgSrc(img)}
-                          alt=""
+                        <WorkflowGridImage
+                          fullSrc={img}
+                          cacheKey={`gall:${currentGroupAsset?.id ?? 'x'}:${idx}`}
+                          className="relative w-full flex justify-center bg-[#141416]"
+                          imgClassName="block max-h-[min(360px,70vh)] max-w-full w-auto h-auto object-contain"
                           draggable={false}
                           onDragStart={(e) => e.preventDefault()}
-                          className="block max-h-[min(360px,70vh)] max-w-full w-auto h-auto object-contain"
                         />
                       </div>
                     ))
@@ -5303,6 +5295,27 @@ const WorkflowSection: React.FC<{
                                   : bounce === 'down'
                                   ? 'translate-y-0.5 rotate-[0.6deg] scale-[0.985]'
                                   : '';
+                              const cRaw = groupPreviewIndexById[childAsset.id] ?? 0;
+                              const cGLen = childAsset.cutImageGroup?.length ?? 0;
+                              const cSafe = cGLen ? ((cRaw % cGLen) + cGLen) % cGLen : 0;
+                              const childGridPreviewSrc = !childAsset.cutImageGroup?.length
+                                ? img
+                                : (() => {
+                                    const groupItems = childAsset.cutImageGroup!;
+                                    const itemInGroup = groupItems[cSafe] ?? groupItems[0];
+                                    if (typeof itemInGroup === 'string') return itemInGroup;
+                                    if (itemInGroup && typeof itemInGroup === 'object' && 'r2Key' in itemInGroup)
+                                      return childAsset.original;
+                                    const nestedId =
+                                      itemInGroup && typeof itemInGroup === 'object' && 'assetId' in itemInGroup
+                                        ? (itemInGroup as { assetId: string }).assetId
+                                        : '';
+                                    const nestedChild = nestedId ? assets.find((x) => x.id === nestedId) : undefined;
+                                    return nestedChild ? getAssetDisplayImage(nestedChild) : img;
+                                  })();
+                              const childGridCacheKey = childAsset.cutImageGroup?.length
+                                ? `${childAsset.id}:${childAsset.displayKey}:g${cSafe}`
+                                : `${childAsset.id}:${childAsset.displayKey}`;
                               return (
                                 <div
                                   data-workflow-card
@@ -5444,29 +5457,14 @@ const WorkflowSection: React.FC<{
                                       }
                                     }}
                                   >
-                                    <div className="relative w-full bg-[#0b0b0e] flex justify-center">
-                                      <img
-                                        src={(() => {
-                                          if (!childAsset.cutImageGroup?.length) return img;
-                                          const groupItems = childAsset.cutImageGroup;
-                                          const len = groupItems.length;
-                                          const rawIndex = groupPreviewIndexById[childAsset.id] ?? 0;
-                                          const safeIndex = len ? ((rawIndex % len) + len) % len : 0;
-                                          const itemInGroup = groupItems[safeIndex] ?? groupItems[0];
-                                          if (typeof itemInGroup === 'string') return itemInGroup;
-                                          if (itemInGroup && typeof itemInGroup === 'object' && 'r2Key' in itemInGroup)
-                                            return childAsset.original;
-                                          const nestedId =
-                                            itemInGroup && typeof itemInGroup === 'object' && 'assetId' in itemInGroup
-                                              ? (itemInGroup as { assetId: string }).assetId
-                                              : '';
-                                          const nestedChild = nestedId ? assets.find((x) => x.id === nestedId) : undefined;
-                                          return nestedChild ? getAssetDisplayImage(nestedChild) : img;
-                                        })()}
-                                        alt=""
+                                    <div className="relative w-full bg-[#141416] flex justify-center">
+                                      <WorkflowGridImage
+                                        fullSrc={childGridPreviewSrc}
+                                        cacheKey={childGridCacheKey}
+                                        className="relative w-full flex justify-center bg-[#141416]"
+                                        imgClassName="block max-h-[min(360px,70vh)] max-w-full w-auto h-auto object-contain"
                                         draggable={false}
                                         onDragStart={(e) => e.preventDefault()}
-                                        className="block max-h-[min(360px,70vh)] max-w-full w-auto h-auto object-contain"
                                       />
                                       <div
                                         aria-hidden
@@ -5590,13 +5588,14 @@ const WorkflowSection: React.FC<{
                           }}
                         >
                           <div className="relative cursor-pointer" onClick={() => setGroupStringLightboxIndex(idx)}>
-                            <div className="relative w-full bg-[#0b0b0e] flex justify-center">
-                              <img
-                                src={workflowSafeImgSrc(img)}
-                                alt=""
+                            <div className="relative w-full bg-[#141416] flex justify-center">
+                              <WorkflowGridImage
+                                fullSrc={img}
+                                cacheKey={`gstr:${currentGroupAsset?.id ?? 'x'}:${idx}`}
+                                className="relative w-full flex justify-center bg-[#141416]"
+                                imgClassName="block max-h-[min(360px,70vh)] max-w-full w-auto h-auto object-contain"
                                 draggable={false}
                                 onDragStart={(e) => e.preventDefault()}
-                                className="block max-h-[min(360px,70vh)] max-w-full w-auto h-auto object-contain"
                               />
                               <div
                                 aria-hidden
@@ -5708,6 +5707,21 @@ const WorkflowSection: React.FC<{
                       : '';
                   const busyClass =
                     isBusy && !isPendingOnly ? 'pointer-events-none' : '';
+                  const rawG = groupPreviewIndexById[a.id] ?? 0;
+                  const gLen = a.cutImageGroup?.length ?? 0;
+                  const gSafe = gLen ? ((rawG % gLen) + gLen) % gLen : 0;
+                  const gridPreviewSrc = !a.cutImageGroup?.length
+                    ? getAssetDisplayImage(a)
+                    : (() => {
+                        const groupItems = a.cutImageGroup!;
+                        const item = groupItems[gSafe] ?? groupItems[0];
+                        if (typeof item === 'string') return item;
+                        const child = assets.find((x) => x.id === item.assetId);
+                        return child ? getAssetDisplayImage(child) : getAssetDisplayImage(a);
+                      })();
+                  const gridPreviewCacheKey = a.cutImageGroup?.length
+                    ? `${a.id}:${a.displayKey}:g${gSafe}`
+                    : `${a.id}:${a.displayKey}`;
 
                   return (
                     <div key={a.id} className="break-inside-avoid mb-6 relative">
@@ -5859,25 +5873,21 @@ const WorkflowSection: React.FC<{
                             }
                           }}
                         >
-                          <div className="relative w-full bg-[#0b0b0e] flex justify-center" style={{ aspectRatio: `${cardAspect}` }}>
-                            <img
-                              src={workflowSafeImgSrc(
-                                (() => {
-                                  if (!a.cutImageGroup?.length) return getAssetDisplayImage(a);
-                                  const groupItems = a.cutImageGroup;
-                                  const len = groupItems.length;
-                                  const rawIndex = groupPreviewIndexById[a.id] ?? 0;
-                                  const safeIndex = len ? ((rawIndex % len) + len) % len : 0;
-                                  const item = groupItems[safeIndex] ?? groupItems[0];
-                                  if (typeof item === 'string') return item;
-                                  const child = assets.find((x) => x.id === item.assetId);
-                                  return child ? getAssetDisplayImage(child) : getAssetDisplayImage(a);
-                                })()
-                              )}
-                              alt=""
+                          <div className="relative w-full bg-[#141416] flex justify-center" style={{ aspectRatio: `${cardAspect}` }}>
+                            <WorkflowGridImage
+                              fullSrc={gridPreviewSrc}
+                              cacheKey={gridPreviewCacheKey}
+                              className="relative z-0 block w-full h-full min-h-[5rem]"
+                              imgClassName="relative z-0 block w-full h-full object-contain"
                               draggable={false}
                               onDragStart={(e) => e.preventDefault()}
-                              className="relative z-0 block w-full h-full object-contain"
+                              onIntrinsicSize={(w, h) => {
+                                setCardAspectByAssetId((prev) => {
+                                  if (prev[a.id] != null) return prev;
+                                  const ratio = Math.max(0.5, Math.min(2, w / h));
+                                  return { ...prev, [a.id]: ratio };
+                                });
+                              }}
                             />
                             <div
                               aria-hidden

@@ -3,6 +3,7 @@
  */
 import React, { useRef } from 'react';
 import { PRO_VIEW_IDS, PRO_VIEW_LABELS } from '../services/tencentService';
+import { ProgressivePreviewImage } from './ProgressivePreviewImage';
 
 export type ViewId = (typeof PRO_VIEW_IDS)[number];
 
@@ -93,7 +94,7 @@ const MultiViewUpload: React.FC<MultiViewUploadProps> = ({
               onClick={() => handleSlotClick(viewId)}
             >
               <div
-                className={`w-full h-full rounded-xl border-2 border-dashed flex flex-col items-center justify-center overflow-hidden transition-all duration-200 ${
+                className={`relative w-full h-full rounded-xl border-2 border-dashed flex flex-col items-center justify-center overflow-hidden transition-all duration-200 ${
                   hasImage
                     ? 'border-[#3b82f6] bg-[#1a3354] shadow-lg shadow-blue-500/20'
                     : 'border-[#3a3a40] bg-[#1c1c22] hover:border-[#3b6fb8] hover:bg-[#2e2e36]'
@@ -101,10 +102,13 @@ const MultiViewUpload: React.FC<MultiViewUploadProps> = ({
               >
                 {hasImage ? (
                   <>
-                    <img
-                      src={images[viewId]}
+                    <ProgressivePreviewImage
+                      fullSrc={images[viewId]!}
+                      cacheKey={`mvu:${viewId}:${images[viewId]!.slice(0, 48)}`}
+                      thumbMaxEdge={96}
+                      className="absolute inset-0 w-full h-full"
+                      imgClassName="w-full h-full object-cover"
                       alt={PRO_VIEW_LABELS[viewId]}
-                      className="w-full h-full object-cover"
                     />
                     <button
                       type="button"
