@@ -101,6 +101,11 @@ export function CustomDropdown({
     };
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        // 大图预览等在 document 捕获阶段会关层；此处若 stopPropagation，部分环境下会阻断后续逻辑。
+        if (typeof document !== 'undefined' && document.querySelector('[data-ac-block-workflow-marquee]')) {
+          close();
+          return;
+        }
         e.stopPropagation();
         close();
       }

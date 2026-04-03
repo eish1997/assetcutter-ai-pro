@@ -2,7 +2,7 @@
   "version": 1,
   "users": {
     "d93ce5f5-38f9-4b66-8f40-b64028b53fae": {
-      "usedBytes": 11817106,
+      "usedBytes": 27584074,
       "keys": {
         "users/d93ce5f5-38f9-4b66-8f40-b64028b53fae/workspace/projects/b46346dd-6d5b-465a-b457-1331f5f3e8c7/assets/we1eta3y3/original.jpg": 34361,
         "users/d93ce5f5-38f9-4b66-8f40-b64028b53fae/workspace/projects/b46346dd-6d5b-465a-b457-1331f5f3e8c7/assets/jr8k1ka3k/original.jpg": 156880,
@@ -20,7 +20,13 @@
         "users/maoer-d93ce5f5-38f9-4b66-8f40-b64028b53fae/workspace/objects/sha256/dc78e57b40684f172bdf5affebaea5df0bf8cb3129088132f6095a8e4683b07a.jpg": 374064,
         "users/maoer-d93ce5f5-38f9-4b66-8f40-b64028b53fae/workspace/objects/sha256/cc298e9accf2babb56b094e7a050eae1a29ff19c20e6663097bd089ad49341b2.jpg": 607503,
         "users/maoer-d93ce5f5-38f9-4b66-8f40-b64028b53fae/workspace/objects/sha256/9a4ddb7aef746696b59a5c3d8e552214ca2b7ddded9213bffa8cfe4d2726307d.jpg": 8623746,
-        "users/maoer-d93ce5f5-38f9-4b66-8f40-b64028b53fae/workspace/objects/sha256/e3fa61d6f6c13a8970f2085f71d6c80e7eb057854fc82abb6a6052870c87b920.jpg": 496383
+        "users/maoer-d93ce5f5-38f9-4b66-8f40-b64028b53fae/workspace/objects/sha256/e3fa61d6f6c13a8970f2085f71d6c80e7eb057854fc82abb6a6052870c87b920.jpg": 496383,
+        "users/maoer-d93ce5f5-38f9-4b66-8f40-b64028b53fae/workspace/objects/sha256/3843a468b2428e48b5dbef7523ad0287742a2baf760cef87a086f44589321241.jpg": 420036,
+        "users/maoer-d93ce5f5-38f9-4b66-8f40-b64028b53fae/workspace/objects/sha256/4af40f34fbbababb94c54a89834f6a2b58028e71a380c71b908aa403c5695d72.jpg": 2195765,
+        "users/maoer-d93ce5f5-38f9-4b66-8f40-b64028b53fae/workspace/objects/sha256/ae49764d8e99700f1264ba8420fb4af94a4a3b752a85fae87c8fd280a1327e2d.jpg": 2433744,
+        "users/maoer-d93ce5f5-38f9-4b66-8f40-b64028b53fae/workspace/objects/sha256/dd8deafcd7faa11b7dc6b0355b68243a029f082e1cd8e3e3d4609368676989d8.jpg": 7814369,
+        "users/maoer-d93ce5f5-38f9-4b66-8f40-b64028b53fae/workspace/objects/sha256/0a06115ce9e31de51e0cb8450febee67a354bd10650fef1c2efda0106ae80b2b.jpg": 2454874,
+        "users/maoer-d93ce5f5-38f9-4b66-8f40-b64028b53fae/workspace/objects/sha256/28dcf1be8b45d82d57a26bfd9ffc1cc4eb516e353245eebb26771653647dcee2.jpg": 448180
       }
     }
   }

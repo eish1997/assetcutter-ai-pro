@@ -1,7 +1,10 @@
-import { useCallback, useEffect, useMemo, useState, type SetStateAction } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from 'react';
 
 import type { DialogMessage, DialogSession, DialogTempItem } from '../types';
+import { dialogVersionsForMessage } from '../services/dialogImageHelpers';
 import { triggerImageDownload } from '../services/imageDataUrl';
+import { loadDialogWorkspaceState, saveDialogWorkspaceState } from '../services/dialogSessionStore';
+import { hydrateDialogSessionsWithR2, mergeHydratedDialogSessions } from '../services/dialogR2Image';
 
 function createDialogSession(): DialogSession {
   const now = Date.now();
@@ -13,7 +16,12 @@ function createDialogSession(): DialogSession {
   };
 }
 
-export function useDialogWorkspace() {
+const SAVE_DEBOUNCE_MS = 450;
+
+/**
+ * @param persistUserId 已登录用户 id；未登录传 null（与访客 localStorage 键隔离）
+ */
+export function useDialogWorkspace(persistUserId: string | null = null) {
   const [dialogSessions, setDialogSessions] = useState<DialogSession[]>(() => [createDialogSession()]);
   const [dialogActiveSessionId, setDialogActiveSessionId] = useState<string>('');
   const [dialogTempLibrary, setDialogTempLibrary] = useState<DialogTempItem[]>([]);
@@ -22,6 +30,15 @@ export function useDialogWorkspace() {
   const [dialogArchivedCollapsed, setDialogArchivedCollapsed] = useState(true);
   const [dialogTempPreviewId, setDialogTempPreviewId] = useState<string | null>(null);
   const [dialogTempSelectedIds, setDialogTempSelectedIds] = useState<Set<string>>(new Set());
+
+  const storageKeyRef = useRef<string | null | undefined>(undefined);
+  const hydratedRef = useRef(false);
+  const sessionsRef = useRef(dialogSessions);
+  const activeIdRef = useRef(dialogActiveSessionId);
+  const tempLibRef = useRef(dialogTempLibrary);
+  sessionsRef.current = dialogSessions;
+  activeIdRef.current = dialogActiveSessionId;
+  tempLibRef.current = dialogTempLibrary;
 
   const dialogActiveSessionIdResolved = dialogActiveSessionId || dialogSessions[0]?.id || '';
   const activeSession = useMemo(
@@ -67,31 +84,37 @@ export function useDialogWorkspace() {
     setDialogSessions((prev) => prev.map((session) => (session.id === sessionId ? updater(session) : session)));
   }, []);
 
-  const archiveDialogSession = useCallback((sessionId: string) => {
-    updateDialogSession(sessionId, (session) => ({ ...session, archived: true }));
-  }, [updateDialogSession]);
+  const archiveDialogSession = useCallback(
+    (sessionId: string) => {
+      updateDialogSession(sessionId, (session) => ({ ...session, archived: true }));
+    },
+    [updateDialogSession]
+  );
 
-  const removeDialogSession = useCallback((sessionId: string) => {
-    setDialogSessions((prev) => {
-      const next = prev.filter((session) => session.id !== sessionId);
-      return next.length ? next : [createDialogSession()];
-    });
-    setDialogTempLibrary((prev) => prev.filter((item) => item.sourceSessionId !== sessionId));
-    setDialogTempSelectedIds((prev) => {
-      const next = new Set(prev);
-      for (const item of dialogTempLibrary) {
-        if (item.sourceSessionId === sessionId) next.delete(item.id);
+  const removeDialogSession = useCallback(
+    (sessionId: string) => {
+      setDialogSessions((prev) => {
+        const next = prev.filter((session) => session.id !== sessionId);
+        return next.length ? next : [createDialogSession()];
+      });
+      setDialogTempLibrary((prev) => prev.filter((item) => item.sourceSessionId !== sessionId));
+      setDialogTempSelectedIds((prev) => {
+        const next = new Set(prev);
+        for (const item of dialogTempLibrary) {
+          if (item.sourceSessionId === sessionId) next.delete(item.id);
+        }
+        return next;
+      });
+      setDialogTempPreviewId((prev) => {
+        const item = dialogTempLibrary.find((entry) => entry.id === prev);
+        return item?.sourceSessionId === sessionId ? null : prev;
+      });
+      if (sessionId === dialogActiveSessionIdResolved) {
+        setDialogActiveSessionId('');
       }
-      return next;
-    });
-    setDialogTempPreviewId((prev) => {
-      const item = dialogTempLibrary.find((entry) => entry.id === prev);
-      return item?.sourceSessionId === sessionId ? null : prev;
-    });
-    if (sessionId === dialogActiveSessionIdResolved) {
-      setDialogActiveSessionId('');
-    }
-  }, [dialogActiveSessionIdResolved, dialogTempLibrary]);
+    },
+    [dialogActiveSessionIdResolved, dialogTempLibrary]
+  );
 
   const handleDialogTempToggleSelect = useCallback((id: string) => {
     setDialogTempSelectedIds((prev) => {
@@ -123,6 +146,99 @@ export function useDialogWorkspace() {
       setDialogActiveSessionId(dialogSessions[0].id);
     }
   }, [dialogActiveSessionId, dialogSessions]);
+
+  /** 切换账号时：先落盘旧键，再载入新键 */
+  useEffect(() => {
+    const prevKey = storageKeyRef.current;
+    if (prevKey === persistUserId && hydratedRef.current) return;
+
+    if (hydratedRef.current && prevKey !== persistUserId) {
+      saveDialogWorkspaceState(prevKey ?? null, {
+        version: 1,
+        sessions: sessionsRef.current,
+        activeSessionId: activeIdRef.current,
+        tempLibrary: tempLibRef.current,
+      });
+    }
+
+    const loaded = loadDialogWorkspaceState(persistUserId);
+    if (loaded?.sessions?.length) {
+      setDialogSessions(loaded.sessions);
+      setDialogActiveSessionId(loaded.activeSessionId || loaded.sessions[0]?.id || '');
+      setDialogTempLibrary(loaded.tempLibrary || []);
+    } else {
+      setDialogSessions([createDialogSession()]);
+      setDialogActiveSessionId('');
+      setDialogTempLibrary([]);
+    }
+    storageKeyRef.current = persistUserId;
+    hydratedRef.current = true;
+  }, [persistUserId]);
+
+  /** 登录用户：将仅存 R2 key 的版本拉取为 data URL。依赖 persistUserId；setTimeout(0) 让「从 localStorage 载入会话」先落盘到 state，再读 ref。合并结果避免覆盖刚发的消息。 */
+  useEffect(() => {
+    if (!persistUserId || !hydratedRef.current) return;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      let needs = false;
+      for (const s of sessionsRef.current) {
+        for (const m of s.messages) {
+          if (m.role !== 'assistant') continue;
+          for (const v of dialogVersionsForMessage(m)) {
+            if (v.resultImageObjectKey && !v.resultImageBase64) {
+              needs = true;
+              break;
+            }
+          }
+          if (needs) break;
+        }
+        if (needs) break;
+      }
+      if (!needs) return;
+      void (async () => {
+        const snap = sessionsRef.current;
+        const hydrated = await hydrateDialogSessionsWithR2(snap);
+        if (cancelled) return;
+        setDialogSessions((prev) => mergeHydratedDialogSessions(prev, hydrated));
+      })();
+    }, 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [persistUserId]);
+
+  /** 会话 / 临时库变更时防抖写入 */
+  useEffect(() => {
+    if (!hydratedRef.current) return;
+    const key = storageKeyRef.current;
+    const t = window.setTimeout(() => {
+      saveDialogWorkspaceState(key ?? null, {
+        version: 1,
+        sessions: sessionsRef.current,
+        activeSessionId: activeIdRef.current,
+        tempLibrary: tempLibRef.current,
+      });
+    }, SAVE_DEBOUNCE_MS);
+    return () => window.clearTimeout(t);
+  }, [dialogSessions, dialogActiveSessionId, dialogTempLibrary, persistUserId]);
+
+  /** 页面卸载时尽力同步 */
+  useEffect(() => {
+    const onBeforeUnload = () => {
+      saveDialogWorkspaceState(storageKeyRef.current ?? null, {
+        version: 1,
+        sessions: sessionsRef.current,
+        activeSessionId: activeIdRef.current,
+        tempLibrary: tempLibRef.current,
+      });
+    };
+    window.addEventListener('pagehide', onBeforeUnload);
+    return () => {
+      window.removeEventListener('pagehide', onBeforeUnload);
+      onBeforeUnload();
+    };
+  }, []);
 
   return {
     dialogSessions,

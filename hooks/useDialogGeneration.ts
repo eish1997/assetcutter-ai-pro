@@ -10,6 +10,8 @@ import {
   normalizeApiErrorMessage,
   understandImageEditIntent,
 } from '../services/geminiService';
+import { dialogVersionsForMessage } from '../services/dialogImageHelpers';
+import { uploadDialogResultImageToR2 } from '../services/dialogR2Image';
 import type {
   AppTask,
   DialogMessage,
@@ -47,6 +49,11 @@ type UseDialogGenerationParams = {
   updateTask: (id: string, patch: Partial<AppTask>) => void;
   addGlobalLog: (source: string, level: 'info' | 'warn' | 'error', message: string, detail?: string) => void;
   addGenerationRecord: (record: Omit<GenerationRecord, 'id'>) => GenerationRecord;
+  /** 已登录用户 id；未登录为 null */
+  dialogPersistUserId: string | null;
+  dialogUsername: string | null | undefined;
+  /** 登录且工作区云同步开启时，对话生图上传 R2、本地仅存 object key */
+  dialogCloudPersistEnabled: boolean;
 };
 
 function createDialogMessageId() {
@@ -126,6 +133,9 @@ export function useDialogGeneration({
   updateTask,
   addGlobalLog,
   addGenerationRecord,
+  dialogPersistUserId,
+  dialogUsername,
+  dialogCloudPersistEnabled,
 }: UseDialogGenerationParams) {
   const [dialogSendingSessionIds, setDialogSendingSessionIds] = useState<string[]>([]);
   const [dialogRegeneratingId, setDialogRegeneratingId] = useState<string | null>(null);
@@ -212,8 +222,15 @@ export function useDialogGeneration({
     if (!isDialogSessionAlive(sid) || isDialogCancelled(sid)) return false;
     const { width, height } = await probeImageSize(resultImage);
     if (!isDialogSessionAlive(sid) || isDialogCancelled(sid)) return false;
+    const messageIdForUpload = sourceMessageId ?? createDialogMessageId();
+    const uploadVersionIndex = sourceMessageId
+      ? (() => {
+          const cm = dialogMessages.find((x) => x.id === sourceMessageId);
+          return cm ? dialogVersionsForMessage(cm).length : 0;
+        })()
+      : 0;
     const assistantMsg: DialogMessage = {
-      id: sourceMessageId ?? createDialogMessageId(),
+      id: messageIdForUpload,
       role: 'assistant',
       text: assistantText,
       timestamp: Date.now(),
@@ -247,11 +264,9 @@ export function useDialogGeneration({
       };
       setDialogMessages((prev) => prev.map((message) => {
         if (message.id !== sourceMessageId) return message;
-        const prevVersions = message.versions ?? (
-          message.resultImageBase64
-            ? [{ resultImageBase64: message.resultImageBase64, understoodPrompt: message.understoodPrompt, timestamp: message.timestamp }]
-            : []
-        );
+        const prevVersions = message.versions?.length
+          ? message.versions
+          : dialogVersionsForMessage(message);
         return { ...message, text: assistantText, versions: [...prevVersions, newVersion] };
       }));
       setDialogVersionIndex((prev) => ({ ...prev, [sourceMessageId]: versionIndex }));
@@ -269,8 +284,62 @@ export function useDialogGeneration({
         understoodPrompt: understood,
       });
     }
+
+    if (
+      dialogCloudPersistEnabled &&
+      dialogPersistUserId &&
+      isDialogSessionAlive(sid) &&
+      !isDialogCancelled(sid)
+    ) {
+      void (async () => {
+        try {
+          const objectKey = await uploadDialogResultImageToR2(
+            dialogPersistUserId,
+            dialogUsername,
+            sid,
+            messageIdForUpload,
+            uploadVersionIndex,
+            resultImage
+          );
+          if (!objectKey || !isDialogSessionAlive(sid) || isDialogCancelled(sid)) return;
+          setDialogMessages((prev) =>
+            prev.map((message) => {
+              if (message.id !== messageIdForUpload) return message;
+              const vs = dialogVersionsForMessage(message);
+              if (!vs[uploadVersionIndex]) return message;
+              const next = [...vs];
+              next[uploadVersionIndex] = { ...next[uploadVersionIndex], resultImageObjectKey: objectKey };
+              return { ...message, versions: next };
+            })
+          );
+        } catch (e) {
+          addGlobalLog(
+            '对话',
+            'warn',
+            '对话生图云端备份失败',
+            e instanceof Error ? e.message : String(e)
+          );
+        }
+      })();
+    }
     return true;
-  }, [addGenerationRecord, addToDialogTempLibrary, appendAssistantMessage, dialogModel, isDialogCancelled, isDialogSessionAlive, probeImageSize, resolveImageOptions, setDialogMessages, setDialogVersionIndex]);
+  }, [
+    addGenerationRecord,
+    addGlobalLog,
+    addToDialogTempLibrary,
+    appendAssistantMessage,
+    dialogCloudPersistEnabled,
+    dialogMessages,
+    dialogModel,
+    dialogPersistUserId,
+    dialogUsername,
+    isDialogCancelled,
+    isDialogSessionAlive,
+    probeImageSize,
+    resolveImageOptions,
+    setDialogMessages,
+    setDialogVersionIndex,
+  ]);
 
   const handleDialogCancelGen = useCallback((sid = dialogActiveSessionIdResolved) => {
     if (!sid) return;
@@ -535,11 +604,9 @@ export function useDialogGeneration({
       }
 
       const currentMsg = dialogMessages.find((message) => message.id === assistantMsgId);
-      const prevVersionsForIndex = currentMsg?.versions ?? (
-        currentMsg?.resultImageBase64
-          ? [{ resultImageBase64: currentMsg.resultImageBase64, understoodPrompt: currentMsg.understoodPrompt, timestamp: currentMsg.timestamp }]
-          : []
-      );
+      const prevVersionsForIndex = currentMsg
+        ? (currentMsg.versions?.length ? currentMsg.versions : dialogVersionsForMessage(currentMsg))
+        : [];
       const newVersionIndex = prevVersionsForIndex.length;
       const finalized = await finalizeGeneratedMessage({
         sid,

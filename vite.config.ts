@@ -57,6 +57,11 @@ export default defineConfig(({ mode }) => {
             secure: true,
             rewrite: (path) => path.replace(/^\/__vectorengine/, '') || '/',
           },
+          /** Gemini 异步代理：与前端同源，避免浏览器跨端口访问 localhost:9002 触发 CORS */
+          '/proxy/gemini': {
+            target: 'http://127.0.0.1:9002',
+            changeOrigin: true,
+          },
         },
       },
       plugins: [react()],

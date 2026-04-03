@@ -23,14 +23,37 @@ function resolvePackUrl(itemUrl: string, baseUrl: string): string {
   const raw = String(itemUrl || '').trim();
   const base = String(baseUrl || '').trim();
   if (!raw) return raw;
+  const getPreferredCapabilityStoreOrigin = (): string => {
+    try {
+      if (!base) return '';
+      const baseResolved =
+        /^https?:\/\//i.test(base)
+          ? new URL(base)
+          : typeof window !== 'undefined'
+            ? new URL(base, window.location.origin)
+            : null;
+      if (!baseResolved) return '';
+      const isCapabilityStoreApiPath = /\/api\/r2\/capability-store(\/|$)/i.test(baseResolved.pathname || '');
+      if (!isCapabilityStoreApiPath) return '';
+      return `${baseResolved.protocol}//${baseResolved.host}`;
+    } catch {
+      return '';
+    }
+  };
+  const preferredCapabilityStoreOrigin = getPreferredCapabilityStoreOrigin();
   const normalizeCapabilityStoreHost = (input: string): string => {
     try {
-      if (typeof window === 'undefined') return input;
       const u = new URL(input);
+      const isCapabilityStoreApiPath = /\/api\/r2\/capability-store(\/|$)/i.test(u.pathname || '');
+      if (!isCapabilityStoreApiPath) return input;
+      // 只要目录源明确了 capability-store 的后端 origin，就统一走它，避免误打到返回 HTML 的前端域名。
+      if (preferredCapabilityStoreOrigin) {
+        return `${preferredCapabilityStoreOrigin}${u.pathname}${u.search}${u.hash}`;
+      }
+      if (typeof window === 'undefined') return input;
       const currentHost = window.location.hostname.toLowerCase();
       const host = u.hostname.toLowerCase();
-      const isCapabilityStoreApiPath = /\/api\/r2\/capability-store\//i.test(u.pathname || '');
-      if (isCapabilityStoreApiPath && host !== currentHost) {
+      if (host !== currentHost) {
         return `${window.location.origin}${u.pathname}${u.search}${u.hash}`;
       }
       return input;

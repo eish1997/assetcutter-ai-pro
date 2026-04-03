@@ -258,7 +258,10 @@ export const SUPPORTED_IMAGE_SIZES = [
 
 /** 单次生成结果的版本（含元数据） */
 export type DialogMessageVersion = {
-  resultImageBase64: string;
+  /** 内存或本地未上传时存在；已上传 R2 后持久化可仅存 key，加载时再 hydrate */
+  resultImageBase64?: string;
+  /** 登录且云同步时上传至 R2 的对象键（users/…/dialogs/…） */
+  resultImageObjectKey?: string;
   understoodPrompt?: string;
   timestamp: number;
   width?: number;
@@ -290,6 +293,8 @@ export type DialogMessage = {
   inputImages?: string[];
   /** @deprecated 使用 versions 最后一版；兼容旧数据 */
   resultImageBase64?: string;
+  /** @deprecated 使用 versions 最后一版；兼容旧数据 */
+  resultImageObjectKey?: string;
   /** @deprecated 使用 versions 最后一版；兼容旧数据 */
   understoodPrompt?: string;
   timestamp: number;

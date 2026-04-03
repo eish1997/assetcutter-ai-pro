@@ -7,8 +7,9 @@ import { BUILTIN_IMAGE_PROCESS_IDS, CAPABILITY_PRESETS_VERSION } from '../servic
 import { loadInstalledPacks, loadPackHistory } from '../services/storePackHistory';
 import { useStoreCatalog } from '../services/storeCatalogHook';
 import { publishPresetToUserR2Catalog } from '../services/capabilityPresetR2Publish';
-import { getCapabilityStoreCatalogSources } from '../services/settingsStore';
+import { resolveCapabilityPreviewSrc } from '../services/capabilityPreviewUrl';
 import CapabilitySetCanvas from './CapabilitySetCanvas';
+import { CapabilityPreviewImg } from './CapabilityPreviewImg';
 import { CustomDropdown, DROPDOWN_TRIGGER_COMPACT } from './ui/CustomDropdown';
 import AppIcon from './ui/AppIcon';
 
@@ -498,13 +499,7 @@ const CapabilityPresetSection: React.FC<{
     return canvas.toDataURL('image/jpeg', Math.max(0.5, qualities[qualities.length - 1] ?? 0.58));
   };
 
-  const resolvePreviewSourceForLoad = (value: string): string => {
-    const t = String(value || '').trim();
-    if (!t) return '';
-    if (/^https?:\/\//i.test(t) || t.startsWith('data:') || t.startsWith('/')) return t;
-    if (t.startsWith('./')) return `/api/r2/capability-store/${t.slice(2)}`;
-    return `/api/r2/capability-store/${t.replace(/^\/+/, '')}`;
-  };
+  const resolvePreviewSourceForLoad = (value: string): string => resolveCapabilityPreviewSrc(value) ?? '';
 
   const createThumbnailDataUrlFromAny = async (
     source: string,
@@ -571,57 +566,19 @@ const CapabilityPresetSection: React.FC<{
     if (dataUrl === undefined) onLog?.('info', '已清除卡片预览图', undefined);
   };
 
-  const capabilityStoreCatalogSources = useMemo(() => getCapabilityStoreCatalogSources(), []);
-  const resolvePreviewSrc = useCallback(
-    (v: string | undefined): string | undefined => {
-      if (!v) return undefined;
-      const t = v.trim();
-      if (!t) return undefined;
-      if (/^https?:\/\//i.test(t)) {
-        try {
-          if (typeof window !== 'undefined') {
-            const u = new URL(t);
-            const currentHost = window.location.hostname.toLowerCase();
-            const host = u.hostname.toLowerCase();
-            const isCapabilityStoreApiPath = /\/api\/r2\/capability-store\//i.test(u.pathname || '');
-            if (isCapabilityStoreApiPath && host !== currentHost) {
-              return `${window.location.origin}${u.pathname}${u.search}${u.hash}`;
-            }
-          }
-        } catch {
-          // ignore
-        }
-        return t;
-      }
-      if (t.startsWith('data:') || t.startsWith('/')) return t;
-      const rel = t.startsWith('./') ? t.slice(2) : t.replace(/^\/+/, '');
-      for (const src of capabilityStoreCatalogSources) {
-        if (!/^https?:\/\//i.test(src)) continue;
-        try {
-          return new URL(rel, src).toString();
-        } catch {
-          // ignore and try next source
-        }
-      }
-      const normalized = rel.replace(/^public\/capability-store\/?/i, '');
-      return `/api/r2/capability-store/${normalized}`;
-    },
-    [capabilityStoreCatalogSources]
-  );
-
   /** 左侧大图：优先持久化预览图，其次测试结果，其次临时测试图 */
   const getCardPreviewSrc = (p: CustomAppModule): string | null => {
     const runtimeThumb = runtimePreviewThumbImage[p.id];
     if (runtimeThumb) return runtimeThumb;
     const runtime = runtimePreviewImage[p.id];
     if (runtime) return runtime;
-    const pvGenThumb = resolvePreviewSrc(p.previewGeneratedThumbImage);
+    const pvGenThumb = resolveCapabilityPreviewSrc(p.previewGeneratedThumbImage);
     if (pvGenThumb) return pvGenThumb;
-    const pvGen = resolvePreviewSrc(p.previewGeneratedImage);
+    const pvGen = resolveCapabilityPreviewSrc(p.previewGeneratedImage);
     if (pvGen) return pvGen;
-    const pvThumb = resolvePreviewSrc(p.previewOriginalThumbImage);
+    const pvThumb = resolveCapabilityPreviewSrc(p.previewOriginalThumbImage);
     if (pvThumb) return pvThumb;
-    const pv = resolvePreviewSrc(p.previewImage);
+    const pv = resolveCapabilityPreviewSrc(p.previewImage);
     if (pv) return pv;
     const r = testResult[p.id]?.ok ? testResult[p.id]?.resultImage : undefined;
     if (r) return r;
@@ -630,17 +587,17 @@ const CapabilityPresetSection: React.FC<{
   const getOriginalPreviewSrc = (p: CustomAppModule): string | null => {
     const src =
       testImage[p.id] ||
-      resolvePreviewSrc(p.previewOriginalImage) ||
+      resolveCapabilityPreviewSrc(p.previewOriginalImage) ||
       runtimePreviewImage[p.id] ||
-      resolvePreviewSrc(p.previewImage) ||
+      resolveCapabilityPreviewSrc(p.previewImage) ||
       null;
     return src || null;
   };
   const getOriginalPreviewThumbSrc = (p: CustomAppModule): string | null => {
     return (
-      resolvePreviewSrc(p.previewOriginalThumbImage) ||
+      resolveCapabilityPreviewSrc(p.previewOriginalThumbImage) ||
       testImage[p.id] ||
-      resolvePreviewSrc(p.previewOriginalImage) ||
+      resolveCapabilityPreviewSrc(p.previewOriginalImage) ||
       null
     );
   };
@@ -648,17 +605,17 @@ const CapabilityPresetSection: React.FC<{
     const src =
       (testResult[p.id]?.ok ? testResult[p.id]?.resultImage : null) ||
       runtimePreviewImage[p.id] ||
-      resolvePreviewSrc(p.previewGeneratedImage) ||
-      resolvePreviewSrc(p.previewImage) ||
+      resolveCapabilityPreviewSrc(p.previewGeneratedImage) ||
+      resolveCapabilityPreviewSrc(p.previewImage) ||
       null;
     return src || null;
   };
   const getGeneratedPreviewThumbSrc = (p: CustomAppModule): string | null => {
     return (
-      resolvePreviewSrc(p.previewGeneratedThumbImage) ||
+      resolveCapabilityPreviewSrc(p.previewGeneratedThumbImage) ||
       (testResult[p.id]?.ok ? testResult[p.id]?.resultImage : null) ||
       runtimePreviewImage[p.id] ||
-      resolvePreviewSrc(p.previewGeneratedImage) ||
+      resolveCapabilityPreviewSrc(p.previewGeneratedImage) ||
       null
     );
   };
@@ -1794,8 +1751,8 @@ const CapabilityPresetSection: React.FC<{
                             const lineBottomRight = Math.max(0, Math.min(100, bottomCut + 0.35));
                             return (
                               <>
-                                <img src={originalSrc} alt="" className="absolute inset-0 h-full w-full min-h-[12rem] object-cover" />
-                                <img
+                                <CapabilityPreviewImg src={originalSrc} alt="" className="absolute inset-0 h-full w-full min-h-[12rem] object-cover" />
+                                <CapabilityPreviewImg
                                   src={generatedSrc}
                                   alt=""
                                   className="absolute inset-0 h-full w-full min-h-[12rem] object-cover"
@@ -1812,7 +1769,7 @@ const CapabilityPresetSection: React.FC<{
                               </>
                             );
                           }
-                          return <img src={src} alt="" className="h-full w-full min-h-[12rem] object-cover" />;
+                          return <CapabilityPreviewImg src={src} alt="" className="h-full w-full min-h-[12rem] object-cover" />;
                         }
                         const iconName =
                           p.category === 'generate_3d' ? 'cube' : p.category === 'image_process' ? 'camera' : 'image';
@@ -2051,8 +2008,8 @@ const CapabilityPresetSection: React.FC<{
                   const lineBottomRight = Math.max(0, Math.min(100, bottomCut + 0.25));
                   return (
                     <>
-                      <img src={lightboxCompare.original} alt="原图" className="absolute inset-0 h-full w-full object-contain" />
-                      <img
+                      <CapabilityPreviewImg src={lightboxCompare.original} alt="原图" className="absolute inset-0 h-full w-full object-contain" />
+                      <CapabilityPreviewImg
                         src={lightboxCompare.generated}
                         alt="生成图"
                         className="absolute inset-0 h-full w-full object-contain"
@@ -2071,7 +2028,7 @@ const CapabilityPresetSection: React.FC<{
                 })()}
               </div>
             ) : (
-              <img
+              <CapabilityPreviewImg
                 src={lightboxImage || ''}
                 alt="预览大图"
                 className="max-h-[90vh] max-w-[min(100vw-2rem,1200px)] w-auto object-contain rounded-lg shadow-2xl"

@@ -143,7 +143,10 @@ async function reconcileWorkspaceObjectRefs(addKeys: string[], removeKeys: strin
   });
 }
 
-/** 删除该项目前缀下「未被当前 workflow 引用」的对象（删图/删资产后同步 bucket） */
+/**
+ * 以「当前 workflow JSON 中引用的 objectKey」为唯一保留依据，删除该项目 R2 前缀下其余对象（始终保留 workflow.json 本身）。
+ * 注意：跨项目去重路径 `workspace/objects/sha256/*` 不在此前缀内，由 object-refs 引用计数归零时服务端删除。
+ */
 async function pruneUnreferencedProjectObjects(
   userId: string,
   projectId: string,
@@ -158,6 +161,18 @@ async function pruneUnreferencedProjectObjects(
   for (const key of listed) {
     if (!keep.has(key)) await deleteWorkspaceObject(key);
   }
+}
+
+/** 从云端读取当前 workflow.json，再按其中引用清理该项目前缀下孤儿对象（不重新打包上传，用于纠偏） */
+export async function pruneWorkspaceProjectFromCloudJson(
+  userId: string,
+  projectId: string,
+  username?: string | null
+): Promise<void> {
+  const packed = await fetchWorkflowPackedFromCloud(userId, projectId, username);
+  if (!packed) return;
+  const refs = collectReferencedObjectKeysFromPackedV2(packed);
+  await pruneUnreferencedProjectObjects(userId, projectId, refs, username);
 }
 
 export async function fetchWorkspaceCloudIndex(userId: string, username?: string | null): Promise<WorkspaceCloudIndexV1 | null> {
@@ -225,6 +240,10 @@ export async function pushWorkspaceIndex(
   await putObjectBytes(workspaceProjectsIndexKey(userId, username), 'application/json', JSON.stringify(index));
 }
 
+/**
+ * 推送工作流：先 reconcile 引用计数（含 sha256 去重键），写入 workflow.json，再按 JSON 引用清理该项目下孤儿文件。
+ * `pruneUnreferenced: false` 仅用于调试；正常同步应以 JSON 为准自动清理。
+ */
 export async function pushWorkflowBundleToCloud(
   userId: string,
   projectId: string,

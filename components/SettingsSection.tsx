@@ -23,6 +23,7 @@ import type { AuthUser } from '../services/authClient';
 
 const SETTINGS_NAV: { id: string; label: string }[] = [
   { id: 'settings-user', label: '用户' },
+  { id: 'settings-storage', label: '数据与存储' },
   { id: 'settings-api', label: 'API' },
 ];
 
@@ -210,6 +211,22 @@ const SettingsSection: React.FC<{
                 {userActionMsg ? (
                   <p className="text-[10px] text-gray-400">{userActionMsg}</p>
                 ) : null}
+              </div>
+            </section>
+
+            <section id="settings-storage" className="scroll-mt-4 rounded-2xl border border-[#2e2e32] bg-[#121214] p-6">
+              <h2 className="text-xs font-black uppercase tracking-wider text-blue-400/90 mb-4">数据与存储</h2>
+              <div className="rounded-xl border border-[#252528] p-4 space-y-3 text-[10px] text-gray-400 leading-relaxed">
+                <p className="text-gray-300 font-semibold">本机浏览器（localStorage）</p>
+                <ul className="list-disc list-inside space-y-1.5 text-gray-500">
+                  <li>工作区项目画布、对话会话与临时库、仓库条目、能力预设等会占用<strong className="text-gray-400">当前站点在本机的存储配额</strong>（各浏览器通常共约数 MB～十余 MB，与设备有关）。</li>
+                  <li>配额不足时可能无法保存；可清理本站数据、减少大图与项目数量，或登录后使用云端工作区同步。</li>
+                </ul>
+                <p className="text-gray-300 font-semibold pt-2">云端（登录且开启工作区云同步）</p>
+                <ul className="list-disc list-inside space-y-1.5 text-gray-500">
+                  <li>流程图片等可走对象存储，<strong className="text-gray-400">工作区云空间</strong>有 per-user 配额（默认约 200MB，管理员可调）；与工作流 JSON 的本地缓存是两套概念。</li>
+                  <li>大图以独立对象上传，不在单次 JSON 请求里塞满 base64，便于跨设备与省本地配额。</li>
+                </ul>
               </div>
             </section>
 

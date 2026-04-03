@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type MouseEvent as ReactMouseEvent, type RefObject, type SetStateAction } from 'react';
 
 import { detectObjectsInImage } from '../services/geminiService';
+import { dialogVersionsForMessage, getDialogVersionImageDataUrl } from '../services/dialogImageHelpers';
 import type { AppTask, BoundingBox, DialogMessage, DialogMessageVersion, DialogTempItem, LibraryItem } from '../types';
 
 type DialogInputImage = { id: string; data: string };
@@ -21,12 +22,6 @@ type UseDialogPostProcessingParams = {
   dialogEndRef: RefObject<HTMLDivElement | null>;
   dialogBoxLabels: string[];
 };
-
-function createLegacyVersion(message: DialogMessage): DialogMessageVersion[] {
-  return message.resultImageBase64
-    ? [{ resultImageBase64: message.resultImageBase64, understoodPrompt: message.understoodPrompt, timestamp: message.timestamp }]
-    : [];
-}
 
 function probeImageDimensions(base64: string): Promise<{ width: number; height: number }> {
   return new Promise((resolve, reject) => {
@@ -69,7 +64,7 @@ export function applyDetectedBoxesToDialogMessage(
   versionIndex: number,
   boxes: BoundingBox[]
 ): DialogMessage {
-  const versions = message.versions && message.versions.length > 0 ? [...message.versions] : createLegacyVersion(message);
+  const versions = message.versions && message.versions.length > 0 ? [...message.versions] : dialogVersionsForMessage(message);
   if (!versions[versionIndex]) return message;
   versions[versionIndex] = { ...versions[versionIndex], detectedBoxes: boxes };
   return { ...message, versions };
@@ -98,9 +93,7 @@ export function useDialogPostProcessing({
   const [dialogCropSelecting, setDialogCropSelecting] = useState(false);
   const dialogCropImgRef = useRef<HTMLImageElement>(null);
 
-  const getDialogVersions = useCallback((message: DialogMessage) => (
-    message.versions && message.versions.length > 0 ? message.versions : createLegacyVersion(message)
-  ), []);
+  const getDialogVersions = useCallback((message: DialogMessage) => dialogVersionsForMessage(message), []);
 
   const getDisplayVersion = useCallback((message: DialogMessage): DialogMessageVersion | null => {
     const versions = getDialogVersions(message);
@@ -248,9 +241,10 @@ export function useDialogPostProcessing({
 
   const handleDialogSaveToLibrary = useCallback((message: DialogMessage) => {
     const displayVersion = getDisplayVersion(message);
-    if (!displayVersion?.resultImageBase64) return;
+    const dataUrl = getDialogVersionImageDataUrl(displayVersion);
+    if (!dataUrl) return;
     addToLibrary([{
-      data: displayVersion.resultImageBase64,
+      data: dataUrl,
       type: 'STRIP',
       category: 'PREVIEW_STRIP',
       label: `对话_${message.id.slice(0, 4)}`,
@@ -260,14 +254,16 @@ export function useDialogPostProcessing({
 
   const handleDialogUseAsInput = useCallback((message: DialogMessage) => {
     const displayVersion = getDisplayVersion(message);
-    if (!displayVersion?.resultImageBase64) return;
-    setDialogInputImages([{ id: Math.random().toString(36).slice(2, 11), data: displayVersion.resultImageBase64 }]);
+    const dataUrl = getDialogVersionImageDataUrl(displayVersion);
+    if (!dataUrl) return;
+    setDialogInputImages([{ id: Math.random().toString(36).slice(2, 11), data: dataUrl }]);
     dialogEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [dialogEndRef, getDisplayVersion, setDialogInputImages]);
 
   const handleDialogDetectObjects = useCallback(async (message: DialogMessage, forceReDetect = false) => {
     const displayVersion = getDisplayVersion(message);
-    if (!displayVersion?.resultImageBase64) return;
+    const dataUrl = getDialogVersionImageDataUrl(displayVersion);
+    if (!dataUrl) return;
     const targetVersionIndex = getDialogVersionPosition(message);
     if (!forceReDetect && displayVersion.detectedBoxes && displayVersion.detectedBoxes.length > 0) {
       setDialogDetectMessageId(message.id);
@@ -278,7 +274,7 @@ export function useDialogPostProcessing({
     const taskId = addTask('DIALOG_GEN', '识别图中物体');
     try {
       updateTask(taskId, { status: 'RUNNING', progress: 50 });
-      const boxes = await detectObjectsInImage(displayVersion.resultImageBase64, modelText);
+      const boxes = await detectObjectsInImage(dataUrl, modelText);
       setDialogMessages((prev) => prev.map((entry) => {
         if (entry.id !== message.id) return entry;
         return applyDetectedBoxesToDialogMessage(entry, targetVersionIndex, boxes);
@@ -296,9 +292,10 @@ export function useDialogPostProcessing({
 
   const handleDialogDownloadCropByIndex = useCallback(async (message: DialogMessage, index: number) => {
     const displayVersion = getDisplayVersion(message);
-    if (!displayVersion?.resultImageBase64 || !displayVersion.detectedBoxes?.[index]) return;
+    const src = getDialogVersionImageDataUrl(displayVersion);
+    if (!src || !displayVersion.detectedBoxes?.[index]) return;
     try {
-      const dataUrl = await cropImageByBox(displayVersion.resultImageBase64, displayVersion.detectedBoxes[index]);
+      const dataUrl = await cropImageByBox(src, displayVersion.detectedBoxes[index]);
       const anchor = document.createElement('a');
       anchor.href = dataUrl;
       const label = dialogBoxLabels[index] ?? `${index + 1}`;
@@ -314,7 +311,7 @@ export function useDialogPostProcessing({
 
   const handleDialogDownloadAllCrops = useCallback(async (message: DialogMessage) => {
     const displayVersion = getDisplayVersion(message);
-    if (!displayVersion?.resultImageBase64 || !displayVersion.detectedBoxes?.length) return;
+    if (!getDialogVersionImageDataUrl(displayVersion) || !displayVersion.detectedBoxes?.length) return;
     for (let i = 0; i < displayVersion.detectedBoxes.length; i++) {
       await handleDialogDownloadCropByIndex(message, i);
       await new Promise((resolve) => setTimeout(resolve, 200));
@@ -323,9 +320,10 @@ export function useDialogPostProcessing({
 
   const handleDialogTempAddCropByIndex = useCallback(async (message: DialogMessage, index: number) => {
     const displayVersion = getDisplayVersion(message);
-    if (!displayVersion?.resultImageBase64 || !displayVersion.detectedBoxes?.[index]) return;
+    const src = getDialogVersionImageDataUrl(displayVersion);
+    if (!src || !displayVersion.detectedBoxes?.[index]) return;
     try {
-      const dataUrl = await cropImageByBox(displayVersion.resultImageBase64, displayVersion.detectedBoxes[index]);
+      const dataUrl = await cropImageByBox(src, displayVersion.detectedBoxes[index]);
       const label = dialogBoxLabels[index] ?? `${index + 1}`;
       addToDialogTempLibrary({
         data: dataUrl,
@@ -341,7 +339,7 @@ export function useDialogPostProcessing({
 
   const handleDialogTempAddAllCrops = useCallback(async (message: DialogMessage) => {
     const displayVersion = getDisplayVersion(message);
-    if (!displayVersion?.resultImageBase64 || !displayVersion.detectedBoxes?.length) return;
+    if (!getDialogVersionImageDataUrl(displayVersion) || !displayVersion.detectedBoxes?.length) return;
     for (let i = 0; i < displayVersion.detectedBoxes.length; i++) {
       await handleDialogTempAddCropByIndex(message, i);
       await new Promise((resolve) => setTimeout(resolve, 100));

@@ -23,6 +23,9 @@ import { WorkflowPlannerBar } from './WorkflowPlannerBar';
 import { triggerImageDownload } from '../services/imageDataUrl';
 import AppIcon from './ui/AppIcon';
 import { ImagePreviewOverlay } from './ImagePreviewOverlay';
+import { resolveCapabilityPreviewSrc } from '../services/capabilityPreviewUrl';
+import { CapabilityPreviewImg } from './CapabilityPreviewImg';
+import { WorkflowCapabilityHoverPreview } from './WorkflowCapabilityHoverPreview';
 
 /** 云端 hydrate 前预览图为空时避免 img 的 src 为空字符串 */
 const WORKFLOW_IMG_EMPTY_PLACEHOLDER =
@@ -904,6 +907,8 @@ const WorkflowSection: React.FC<{
     >;
   } | null>(null);
   const [viewStack, setViewStack] = useState<{ assetId: string }[]>([]);
+  const viewStackRef = useRef(viewStack);
+  viewStackRef.current = viewStack;
   const [showAllInGroup, setShowAllInGroup] = useState(false);
   const [groupStringLightboxIndex, setGroupStringLightboxIndex] = useState<number | null>(null);
   const [draggingGroupItems, setDraggingGroupItems] = useState<{ groupAssetId: string; itemIndexes: number[] } | null>(null);
@@ -911,7 +916,10 @@ const WorkflowSection: React.FC<{
   const [selectedGroupItemKeys, setSelectedGroupItemKeys] = useState<Set<string>>(new Set());
   const [capabilityPresetViewMode, setCapabilityPresetViewMode] = useState<'presets' | 'image_process' | 'sets'>('presets');
   const [cardAspectByAssetId, setCardAspectByAssetId] = useState<Record<string, number>>({});
-  const [marqueeRect, setMarqueeRect] = useState<{ startX: number; startY: number; endX: number; endY: number } | null>(null);
+  /** 框选进行中：仅用布尔触发挂载选框层；拖动中用 ref + 直接改 DOM，避免每帧整表重绘 */
+  const [marqueeActive, setMarqueeActive] = useState(false);
+  const marqueeDataRef = useRef({ startX: 0, startY: 0, endX: 0, endY: 0 });
+  const marqueeOverlayElRef = useRef<HTMLDivElement | null>(null);
   const gridRef = useRef<HTMLDivElement>(null);
   const workspaceViewportRef = useRef<HTMLDivElement>(null);
   const workspaceTrackRef = useRef<HTMLDivElement>(null);
@@ -1068,7 +1076,13 @@ const WorkflowSection: React.FC<{
       marqueeStartRef.current = true;
       e.preventDefault();
       e.stopPropagation();
-      setMarqueeRect({ startX: e.clientX, startY: e.clientY, endX: e.clientX, endY: e.clientY });
+      marqueeDataRef.current = {
+        startX: e.clientX,
+        startY: e.clientY,
+        endX: e.clientX,
+        endY: e.clientY,
+      };
+      setMarqueeActive(true);
     },
     [showArchived, workspacePane]
   );
@@ -1134,7 +1148,6 @@ const WorkflowSection: React.FC<{
   const [groupPreviewIndexById, setGroupPreviewIndexById] = useState<Record<string, number>>({});
   const [groupBounceStateById, setGroupBounceStateById] = useState<Record<string, 'idle' | 'up' | 'down'>>({});
   const [hoverPreview, setHoverPreview] = useState<{ mod: CustomAppModule; x: number; y: number } | null>(null);
-  const [hoverPreviewScanProgress, setHoverPreviewScanProgress] = useState(0);
 
   const setAssetError = useCallback((assetId: string, message: string | null) => {
     setAssetErrors((prev) => {
@@ -1149,43 +1162,22 @@ const WorkflowSection: React.FC<{
   }, []);
 
   const getModule = (id: string) => actionModules.find((m) => m.id === id);
-  const resolveCapabilityPreviewUrl = useCallback((v?: string): string | null => {
-    const t = String(v || '').trim();
-    if (!t) return null;
-    if (/^https?:\/\//i.test(t) || t.startsWith('data:') || t.startsWith('/')) return t;
-    if (t.startsWith('./')) return `/api/r2/capability-store/${t.slice(2)}`;
-    return `/api/r2/capability-store/${t.replace(/^\/+/, '')}`;
-  }, []);
   const getModulePreviewOriginal = useCallback(
     (mod: CustomAppModule): string | null =>
-      resolveCapabilityPreviewUrl(mod.previewOriginalThumbImage) ||
-      resolveCapabilityPreviewUrl(mod.previewOriginalImage) ||
-      resolveCapabilityPreviewUrl(mod.previewImage),
-    [resolveCapabilityPreviewUrl]
+      resolveCapabilityPreviewSrc(mod.previewOriginalThumbImage) ||
+      resolveCapabilityPreviewSrc(mod.previewOriginalImage) ||
+      resolveCapabilityPreviewSrc(mod.previewImage) ||
+      null,
+    []
   );
   const getModulePreviewGenerated = useCallback(
     (mod: CustomAppModule): string | null =>
-      resolveCapabilityPreviewUrl(mod.previewGeneratedThumbImage) ||
-      resolveCapabilityPreviewUrl(mod.previewGeneratedImage) ||
-      resolveCapabilityPreviewUrl(mod.previewImage),
-    [resolveCapabilityPreviewUrl]
+      resolveCapabilityPreviewSrc(mod.previewGeneratedThumbImage) ||
+      resolveCapabilityPreviewSrc(mod.previewGeneratedImage) ||
+      resolveCapabilityPreviewSrc(mod.previewImage) ||
+      null,
+    []
   );
-  useEffect(() => {
-    if (!hoverPreview) return;
-    let raf = 0;
-    const start = performance.now();
-    const loop = (now: number) => {
-      const duration = 1800;
-      const p = ((now - start) % duration) / duration;
-      setHoverPreviewScanProgress(p);
-      raf = window.requestAnimationFrame(loop);
-    };
-    raf = window.requestAnimationFrame(loop);
-    return () => {
-      if (raf) window.cancelAnimationFrame(raf);
-      setHoverPreviewScanProgress(0);
-    };
-  }, [hoverPreview]);
   useEffect(() => {
     if (!hoverPreview || typeof window === 'undefined' || typeof document === 'undefined') return;
     const targetId = hoverPreview.mod.id;
@@ -2385,31 +2377,61 @@ const WorkflowSection: React.FC<{
     [setAssets]
   );
 
+  const updateMarqueeOverlayDom = useCallback(() => {
+    const d = marqueeDataRef.current;
+    const el = marqueeOverlayElRef.current;
+    if (!el) return;
+    const left = Math.min(d.startX, d.endX);
+    const top = Math.min(d.startY, d.endY);
+    const width = Math.max(0, Math.abs(d.endX - d.startX));
+    const height = Math.max(0, Math.abs(d.endY - d.startY));
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
+    el.style.width = `${width}px`;
+    el.style.height = `${height}px`;
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!marqueeActive) return;
+    updateMarqueeOverlayDom();
+  }, [marqueeActive, updateMarqueeOverlayDom]);
+
   useEffect(() => {
-    if (!marqueeRect) return;
+    if (!marqueeActive) return;
     const onMove = (e: MouseEvent) => {
-      setMarqueeRect((prev) => (prev ? { ...prev, endX: e.clientX, endY: e.clientY } : null));
+      marqueeDataRef.current.endX = e.clientX;
+      marqueeDataRef.current.endY = e.clientY;
+      updateMarqueeOverlayDom();
     };
     const onUp = (e: MouseEvent) => {
-      setMarqueeRect((prev) => {
-        if (!prev) return null;
-        const left = Math.min(prev.startX, prev.endX);
-        const top = Math.min(prev.startY, prev.endY);
-        const width = Math.abs(prev.endX - prev.startX);
-        const height = Math.abs(prev.endY - prev.startY);
-        const isClick = width < 5 && height < 5;
-        const pane = marqueePaneRef.current;
-        if (isClick) {
-          if (pane === 0) {
-            setLibraryImportIds(new Set());
-          } else if (viewStack.length === 0) {
-            setSelectedAssetIds(new Set());
-          } else {
-            setSelectedGroupItemKeys(new Set());
-          }
-          return null;
+      const d = marqueeDataRef.current;
+      const left = Math.min(d.startX, d.endX);
+      const top = Math.min(d.startY, d.endY);
+      const width = Math.abs(d.endX - d.startX);
+      const height = Math.abs(d.endY - d.startY);
+      const isClick = width < 5 && height < 5;
+      const pane = marqueePaneRef.current;
+      const vs = viewStackRef.current;
+      const altKey = e.altKey;
+
+      // 先收起选框再算相交：大量 getBoundingClientRect 会长时间占用主线程，否则松手后仍像「卡一下」才消失
+      marqueeOverlayElRef.current?.style.setProperty('visibility', 'hidden');
+      setMarqueeActive(false);
+
+      if (isClick) {
+        if (pane === 0) {
+          setLibraryImportIds(new Set());
+        } else if (vs.length === 0) {
+          setSelectedAssetIds(new Set());
+        } else {
+          setSelectedGroupItemKeys(new Set());
         }
-        const sel = { left, top, width, height };
+        return;
+      }
+
+      const sel = { left, top, width, height };
+
+      const applySelection = () => {
         if (pane === 0) {
           const ids: string[] = [];
           libraryCardRefs.current.forEach((el, id) => {
@@ -2419,8 +2441,8 @@ const WorkflowSection: React.FC<{
             if (overlap) ids.push(id);
           });
           if (ids.length) {
-            const toAdd = e.altKey ? [] : ids;
-            const toRemove = e.altKey ? ids : [];
+            const toAdd = altKey ? [] : ids;
+            const toRemove = altKey ? ids : [];
             setLibraryImportIds((s) => {
               const next = new Set(s);
               toRemove.forEach((id) => next.delete(id));
@@ -2428,7 +2450,7 @@ const WorkflowSection: React.FC<{
               return next;
             });
           }
-          return null;
+          return;
         }
         const ids: string[] = [];
         cardRefs.current.forEach((el, id) => {
@@ -2437,40 +2459,40 @@ const WorkflowSection: React.FC<{
             !(sel.left + sel.width < r.left || r.left + r.width < sel.left || sel.top + sel.height < r.top || r.top + r.height < sel.top);
           if (overlap) ids.push(id);
         });
-        if (ids.length) {
-          if (viewStack.length === 0) {
-            const toAdd = e.altKey ? [] : ids.filter((id) => !pending.some((t) => t.assetId === id));
-            const toRemove = e.altKey ? ids : [];
-            setSelectedAssetIds((s) => {
-              const next = new Set(s);
-              toRemove.forEach((id) => next.delete(id));
-              toAdd.forEach((id) => next.add(id));
-              return next;
-            });
-          } else {
-            const currentGroupId = viewStack[viewStack.length - 1]?.assetId;
-            const toAdd = e.altKey
-              ? []
-              : ids.filter((key) => {
-                  const parts = String(key).split('::');
-                  if (parts.length !== 2) return true;
-                  const idx = parseInt(parts[1], 10);
-                  if (Number.isNaN(idx)) return true;
-                  return !pending.some(
-                    (t) => t.sourceGroupAssetId === currentGroupId && t.sourceItemIndex === idx
-                  );
-                });
-            const toRemove = e.altKey ? ids : [];
-            setSelectedGroupItemKeys((s) => {
-              const next = new Set(s);
-              toRemove.forEach((key) => next.delete(key));
-              toAdd.forEach((key) => next.add(key));
-              return next;
-            });
-          }
+        if (!ids.length) return;
+        const vsNow = viewStackRef.current;
+        const pendNow = pendingRef.current;
+        if (vsNow.length === 0) {
+          const toAdd = altKey ? [] : ids.filter((id) => !pendNow.some((t) => t.assetId === id));
+          const toRemove = altKey ? ids : [];
+          setSelectedAssetIds((s) => {
+            const next = new Set(s);
+            toRemove.forEach((id) => next.delete(id));
+            toAdd.forEach((id) => next.add(id));
+            return next;
+          });
+        } else {
+          const currentGroupId = vsNow[vsNow.length - 1]?.assetId;
+          const toAdd = altKey
+            ? []
+            : ids.filter((key) => {
+                const parts = String(key).split('::');
+                if (parts.length !== 2) return true;
+                const idx = parseInt(parts[1], 10);
+                if (Number.isNaN(idx)) return true;
+                return !pendNow.some((t) => t.sourceGroupAssetId === currentGroupId && t.sourceItemIndex === idx);
+              });
+          const toRemove = altKey ? ids : [];
+          setSelectedGroupItemKeys((s) => {
+            const next = new Set(s);
+            toRemove.forEach((key) => next.delete(key));
+            toAdd.forEach((key) => next.add(key));
+            return next;
+          });
         }
-        return null;
-      });
+      };
+
+      window.requestAnimationFrame(applySelection);
     };
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
@@ -2478,7 +2500,7 @@ const WorkflowSection: React.FC<{
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
     };
-  }, [marqueeRect, viewStack, pending]);
+  }, [marqueeActive, updateMarqueeOverlayDom]);
 
   useEffect(() => {
     const pendingAssetIds = new Set(pending.map((t) => t.assetId));
@@ -5943,16 +5965,12 @@ const WorkflowSection: React.FC<{
         </div>
 
         {/* 全局框选矩形：根级 / 组内均可见，仅进行中视图展示 */}
-        {marqueeRect && (marqueePaneRef.current === 0 || !showArchived) && typeof document !== 'undefined' &&
+        {marqueeActive && (marqueePaneRef.current === 0 || !showArchived) && typeof document !== 'undefined' &&
           createPortal(
             <div
+              ref={marqueeOverlayElRef}
               className="fixed pointer-events-none z-[150] rounded-[3px] border-2 border-solid border-[#4570b0] bg-[#121a28]/50 shadow-[inset_0_0_0_1px_rgba(69,112,176,0.2)]"
-              style={{
-                left: Math.min(marqueeRect.startX, marqueeRect.endX),
-                top: Math.min(marqueeRect.startY, marqueeRect.endY),
-                width: Math.max(0, Math.abs(marqueeRect.endX - marqueeRect.startX)),
-                height: Math.max(0, Math.abs(marqueeRect.endY - marqueeRect.startY)),
-              }}
+              style={{ left: 0, top: 0, width: 0, height: 0 }}
             />,
             document.body
           )}
@@ -6099,38 +6117,15 @@ const WorkflowSection: React.FC<{
         </ImagePreviewOverlay>
       )}
 
-      {hoverPreview &&
-        (() => {
-          const original = getModulePreviewOriginal(hoverPreview.mod);
-          const generated = getModulePreviewGenerated(hoverPreview.mod);
-          if (!original || !generated) return null;
-          const p = Math.max(0, Math.min(1, hoverPreviewScanProgress));
-          const cut = p * 100;
-          return createPortal(
-            <div
-              className="fixed z-[2500] pointer-events-none"
-              style={{ left: hoverPreview.x + 18, top: hoverPreview.y + 18 }}
-            >
-              <div className="w-52 rounded-xl border border-white/15 bg-[#0f1116]/90 backdrop-blur-sm p-2 shadow-2xl">
-                <div className="text-[8px] text-gray-300 mb-1">{hoverPreview.mod.label}</div>
-                <div className="relative w-full aspect-square rounded-lg overflow-hidden bg-black/30">
-                  <img src={original} alt="" className="absolute inset-0 h-full w-full object-cover" />
-                  <img
-                    src={generated}
-                    alt=""
-                    className="absolute inset-0 h-full w-full object-cover"
-                    style={{ clipPath: `polygon(0 0, ${cut}% 0, ${cut}% 100%, 0 100%)` }}
-                  />
-                  <div
-                    className="absolute inset-y-0 w-[1px] bg-cyan-100/90 shadow-[0_0_10px_rgba(34,211,238,0.55)]"
-                    style={{ left: `${cut}%`, transform: 'translateX(-50%)' }}
-                  />
-                </div>
-              </div>
-            </div>,
-            document.body
-          );
-        })()}
+      {hoverPreview ? (
+        <WorkflowCapabilityHoverPreview
+          label={hoverPreview.mod.label}
+          x={hoverPreview.x}
+          y={hoverPreview.y}
+          original={getModulePreviewOriginal(hoverPreview.mod) ?? ''}
+          generated={getModulePreviewGenerated(hoverPreview.mod) ?? ''}
+        />
+      ) : null}
 
       {showLightboxGenerationRecord && lightboxAsset ? (
         <WorkflowGenerationRecordPanel

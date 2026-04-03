@@ -41,6 +41,7 @@ import {
   WORKSPACE_CLOUD_DEFAULT_QUOTA_BYTES,
 } from './services/workspaceCloudSync';
 import { hydrateWorkflowBundleFromCloud } from './services/workspaceR2ImageBundle';
+import { dialogVersionHasRenderableImage, dialogVersionsForMessage, getDialogVersionImageDataUrl } from './services/dialogImageHelpers';
 import { HttpRequestError } from './services/httpClient';
 import { triggerImageDownload } from './services/imageDataUrl';
 import {
@@ -64,23 +65,29 @@ import {
 } from './services/settingsStore';
 import { fetchWorkspaceUserCloudConfig, pushWorkspaceUserCloudConfig } from './services/workspaceUserCloudConfig';
 import { WorkflowApiKeyModal } from './components/WorkflowApiKeyModal';
+import { WorkspaceCloudSyncCountdown } from './components/WorkspaceCloudSyncCountdown';
+
+function isImagePreviewEscapeKey(e: KeyboardEvent): boolean {
+  return e.key === 'Escape' || e.code === 'Escape' || e.keyCode === 27;
+}
 
 function formatWorkspaceCloudMb(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-const WORKSPACE_AUTO_SYNC_INTERVAL_MS = 60 * 1000;
+/** 自动同步间隔：默认 3 分钟，减少后台上传频率；可在 .env 设 `VITE_WORKSPACE_AUTO_SYNC_INTERVAL_MS`（30000～3600000）覆盖 */
+function readWorkspaceAutoSyncIntervalMs(): number {
+  const raw = import.meta.env.VITE_WORKSPACE_AUTO_SYNC_INTERVAL_MS;
+  if (raw === undefined || raw === '') return 3 * 60 * 1000;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return 3 * 60 * 1000;
+  return Math.min(3600_000, Math.max(30_000, Math.floor(n)));
+}
+const WORKSPACE_AUTO_SYNC_INTERVAL_MS = readWorkspaceAutoSyncIntervalMs();
 
 function formatTimestampText(ts: number | null): string {
   if (!ts) return '未同步';
   return new Date(ts).toLocaleString();
-}
-
-function formatCountdownText(ms: number): string {
-  const total = Math.max(0, Math.ceil(ms / 1000));
-  const mm = String(Math.floor(total / 60)).padStart(2, '0');
-  const ss = String(total % 60).padStart(2, '0');
-  return `${mm}:${ss}`;
 }
 
 const UnifiedModelViewer3D = React.lazy(() => import('./components/UnifiedModelViewer3D'));
@@ -611,7 +618,8 @@ const MainApp: React.FC = () => {
   const [workspaceCloudLeaveSyncing, setWorkspaceCloudLeaveSyncing] = useState(false);
   const [workspaceCloudLastSyncAt, setWorkspaceCloudLastSyncAt] = useState<number | null>(null);
   const [workspaceCloudNextAutoSyncAt, setWorkspaceCloudNextAutoSyncAt] = useState<number | null>(null);
-  const [workspaceCloudCountdownNow, setWorkspaceCloudCountdownNow] = useState(() => Date.now());
+  const workspaceCloudNextAutoSyncAtRef = useRef<number | null>(null);
+  workspaceCloudNextAutoSyncAtRef.current = workspaceCloudNextAutoSyncAt;
   const [workspaceCloudAutoSyncing, setWorkspaceCloudAutoSyncing] = useState(false);
   const [workspaceAutoSyncEnabled, setWorkspaceAutoSyncEnabledState] = useState<boolean>(() => getWorkspaceAutoSyncEnabled());
   const workspaceCloudAutoSyncingRef = useRef(false);
@@ -788,7 +796,8 @@ const MainApp: React.FC = () => {
     aiInvocationStatusRev,
   ]);
 
-  const triggerWorkspaceCloudSyncNow = useCallback(async (): Promise<boolean> => {
+  /** `force`：手动点「立即同步」时必跑；`false` 时仅在有本地未推送改动时自动同步，避免每分钟全量打包上传。 */
+  const triggerWorkspaceCloudSyncNow = useCallback(async (opts?: { force?: boolean }): Promise<boolean> => {
     if (workspaceCloudAutoSyncingRef.current) return false;
     if (mode !== AppMode.WORKFLOW) return false;
     const uid = userIdRef.current;
@@ -804,11 +813,15 @@ const MainApp: React.FC = () => {
     ) {
       return false;
     }
+    if (!opts?.force && !workspaceCloudDirtyRef.current) {
+      setWorkspaceCloudNextAutoSyncAt(Date.now() + WORKSPACE_AUTO_SYNC_INTERVAL_MS);
+      return true;
+    }
     workspaceCloudAutoSyncingRef.current = true;
     setWorkspaceCloudAutoSyncing(true);
     const bundle = { assets: workflowAssetsRef.current, pending: workflowPendingRef.current };
     try {
-      await pushWorkflowBundleToCloud(uid, projectId, bundle, usernameRef.current, { pruneUnreferenced: false });
+      await pushWorkflowBundleToCloud(uid, projectId, bundle, usernameRef.current);
       await pushWorkspaceIndex(uid, workspaceProjectsRef.current, activeWorkspaceProjectIdRef.current, usernameRef.current);
       workspaceCloudDirtyRef.current = false;
       setWorkspaceCloudLastSyncAt(Date.now());
@@ -843,18 +856,16 @@ const MainApp: React.FC = () => {
     setWorkspaceCloudNextAutoSyncAt(Date.now() + WORKSPACE_AUTO_SYNC_INTERVAL_MS);
   }, [workspaceAutoSyncEnabled, mode, activeWorkspaceProjectId, user?.id, user?.username]);
 
+  /** 到点触发自动同步：读 ref 避免闭包拿到过期的 nextAutoSyncAt；不通过 App 根每秒 setState 刷倒计时 */
   useEffect(() => {
-    if (!workspaceCloudNextAutoSyncAt) return;
-    const t = window.setInterval(() => setWorkspaceCloudCountdownNow(Date.now()), 1000);
-    return () => window.clearInterval(t);
-  }, [workspaceCloudNextAutoSyncAt]);
-
-  useEffect(() => {
-    if (!workspaceCloudNextAutoSyncAt) return;
-    if (Date.now() < workspaceCloudNextAutoSyncAt) return;
     if (!workspaceAutoSyncEnabled) return;
-    void triggerWorkspaceCloudSyncNow();
-  }, [triggerWorkspaceCloudSyncNow, workspaceAutoSyncEnabled, workspaceCloudCountdownNow, workspaceCloudNextAutoSyncAt]);
+    const id = window.setInterval(() => {
+      const next = workspaceCloudNextAutoSyncAtRef.current;
+      if (next == null || Date.now() < next) return;
+      void triggerWorkspaceCloudSyncNow();
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [triggerWorkspaceCloudSyncNow, workspaceAutoSyncEnabled]);
 
   const runCloudWorkflowPull = useCallback((userId: string, projectId: string) => {
     cloudWorkflowSyncGenRef.current += 1;
@@ -1137,7 +1148,7 @@ const MainApp: React.FC = () => {
     const scope = user?.id ?? null;
     const t = window.setTimeout(() => {
       trySaveWorkflowBundle(activeWorkspaceProjectId, { assets: workflowAssets, pending: workflowPending }, scope);
-    }, 350);
+    }, 650);
     return () => window.clearTimeout(t);
   }, [activeWorkspaceProjectId, workflowAssets, workflowPending, user?.id]);
 
@@ -1366,11 +1377,6 @@ const MainApp: React.FC = () => {
   const workspaceCloudUsagePercent = Math.round(workspaceCloudUsageRatio * 100);
   const aiInvocationReady = useMemo(() => isAiInvocationReady(), [aiInvocationStatusRev]);
   const workspaceProjectOptions = workspaceProjects.map((p) => ({ value: p.id, label: p.name }));
-  const workspaceAutoSyncCountdownText = workspaceCloudAutoSyncing
-    ? '正在同步...'
-    : workspaceCloudNextAutoSyncAt
-    ? formatCountdownText(workspaceCloudNextAutoSyncAt - workspaceCloudCountdownNow)
-    : '--:--';
   const workspaceLastSyncText = formatTimestampText(workspaceCloudLastSyncAt);
 
   const handleUserMenuAction = useCallback(async (action: string) => {
@@ -1499,7 +1505,7 @@ const MainApp: React.FC = () => {
     handleDialogTempSelectAll,
     handleDialogTempInvertSelect,
     handleDialogTempBatchDownload,
-  } = useDialogWorkspace();
+  } = useDialogWorkspace(user?.id ?? null);
   const dialogTempFilteredRef = useRef(dialogTempFiltered);
   dialogTempFilteredRef.current = dialogTempFiltered;
   const DIALOG_BOX_LABELS = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'];
@@ -1529,6 +1535,7 @@ const MainApp: React.FC = () => {
   const dialogTempPreviewPanRef = useRef<{ startX: number; startY: number; startOffsetX: number; startOffsetY: number } | null>(null);
   const dialogTempPreviewSpacePressedRef = useRef(false);
   const dialogTempPreviewImgRef = useRef<HTMLImageElement | null>(null);
+  const dialogTempPreviewOverlayRef = useRef<HTMLDivElement | null>(null);
   const dialogTempPreviewZoomPivotRef = useRef<{ x: number; y: number } | null>(null);
   const dialogTempPreviewZoomLastScaleRef = useRef(1);
   const dialogTempPreviewWheelAccumRef = useRef(0);
@@ -1711,6 +1718,9 @@ const MainApp: React.FC = () => {
     updateTask,
     addGlobalLog,
     addGenerationRecord,
+    dialogPersistUserId: user?.id ?? null,
+    dialogUsername: user?.username,
+    dialogCloudPersistEnabled: Boolean(user?.id && isWorkspaceCloudEnabled()),
   });
 
   useEffect(() => {
@@ -1968,8 +1978,9 @@ const MainApp: React.FC = () => {
 
   const handleDialogDownload = (msg: DialogMessage) => {
     const v = getDisplayVersion(msg);
-    if (!v?.resultImageBase64) return;
-    void triggerImageDownload(v.resultImageBase64, `对话_${msg.id.slice(0, 6)}`);
+    const url = getDialogVersionImageDataUrl(v);
+    if (!url) return;
+    void triggerImageDownload(url, `对话_${msg.id.slice(0, 6)}`);
   };
 
   const handleCopyDialogImage = async (base64: string) => {
@@ -2196,14 +2207,27 @@ const MainApp: React.FC = () => {
     };
   }, [dialogTempPreviewId]);
 
+  /** Esc：document 捕获 + 遮罩 focus，避免焦点在输入框或 CustomDropdown 冒泡拦截时关不掉。 */
+  useLayoutEffect(() => {
+    if (!dialogTempPreviewId) return;
+    const onEscCapture = (e: KeyboardEvent) => {
+      if (!isImagePreviewEscapeKey(e)) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      setDialogTempPreviewId(null);
+    };
+    document.addEventListener('keydown', onEscCapture, true);
+    return () => document.removeEventListener('keydown', onEscCapture, true);
+  }, [dialogTempPreviewId, setDialogTempPreviewId]);
+
+  useLayoutEffect(() => {
+    if (!dialogTempPreviewId) return;
+    dialogTempPreviewOverlayRef.current?.focus({ preventScroll: true });
+  }, [dialogTempPreviewId]);
+
   useEffect(() => {
     if (!dialogTempPreviewId) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        setDialogTempPreviewId(null);
-        return;
-      }
       if (e.code === 'Space') {
         e.preventDefault();
         dialogTempPreviewSpacePressedRef.current = true;
@@ -2223,7 +2247,7 @@ const MainApp: React.FC = () => {
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
     };
-  }, [dialogTempPreviewId, setDialogTempPreviewId]);
+  }, [dialogTempPreviewId]);
 
   useEffect(() => {
     if (!dialogTempPreviewId) return;
@@ -3177,6 +3201,9 @@ const MainApp: React.FC = () => {
                         style={{ width: `${Math.max(0, Math.min(100, workspaceCloudUsagePercent))}%` }}
                       />
                     </div>
+                    <p className="mt-2 text-[9px] text-gray-600 leading-snug">
+                      以上为<strong className="text-gray-500">云端工作区图片</strong>用量；本机浏览器另有<strong className="text-gray-500">整站 localStorage 上限</strong>（与浏览器有关）。详见设置 → 数据与存储。
+                    </p>
                   </div>
                 ) : user?.id && !isWorkspaceCloudEnabled() ? (
                   <div className="max-w-6xl mx-auto w-full mb-5 rounded-xl border border-[#2e2e32] bg-[#121214] px-4 py-2.5 text-[10px] text-gray-500">
@@ -3234,7 +3261,12 @@ const MainApp: React.FC = () => {
                   {user?.id && isWorkspaceCloudEnabled() ? (
                     <div className="flex items-center gap-2">
                       <div className={`text-[8px] whitespace-nowrap ${workspaceCloudAutoSyncing ? 'text-blue-300 animate-pulse' : 'text-gray-400'}`}>
-                        云同步: {workspaceLastSyncText} · 自动同步倒计时 {workspaceAutoSyncEnabled ? workspaceAutoSyncCountdownText : '已关闭'}
+                        云同步: {workspaceLastSyncText} · 自动同步倒计时{' '}
+                        <WorkspaceCloudSyncCountdown
+                          enabled={workspaceAutoSyncEnabled}
+                          nextAt={workspaceCloudNextAutoSyncAt}
+                          syncing={workspaceCloudAutoSyncing}
+                        />
                       </div>
                       <button
                         type="button"
@@ -3250,7 +3282,11 @@ const MainApp: React.FC = () => {
                         className={`relative inline-flex shrink-0 w-8 h-4 rounded-full transition-colors ${
                           workspaceAutoSyncEnabled ? 'bg-blue-600' : 'bg-[#26262c]'
                         }`}
-                        title={workspaceAutoSyncEnabled ? '点击关闭自动同步' : '点击开启自动同步'}
+                        title={
+                          workspaceAutoSyncEnabled
+                            ? '关闭后不再定时上传，编辑更流畅；需要时点「立即同步」'
+                            : '开启后按间隔将改动备份到云端（有改动才上传）'
+                        }
                         aria-label={workspaceAutoSyncEnabled ? '自动同步已开启，点击关闭' : '自动同步已关闭，点击开启'}
                       >
                         <span
@@ -3262,11 +3298,11 @@ const MainApp: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => {
-                          void triggerWorkspaceCloudSyncNow();
+                          void triggerWorkspaceCloudSyncNow({ force: true });
                         }}
                         disabled={workspaceCloudAutoSyncing}
                         className="h-6 px-2 rounded-md border border-[#2e2e32] bg-[#1c1c22] text-[8px] text-gray-300 hover:bg-[#2e2e36] hover:text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                        title="立即同步当前工作区到云端"
+                        title="手动全量同步到云端（关闭自动同步时靠此项备份）"
                         aria-label="立即同步当前工作区到云端"
                       >
                         立即同步
@@ -3801,8 +3837,14 @@ const MainApp: React.FC = () => {
                         .filter(s => s.archived)
                         .sort(byLatestUpdated);
                       const renderSession = (s: DialogSession, showArchive: boolean) => {
-                        const lastImg = [...s.messages].reverse().find(m => m.role === 'assistant' && (m.versions?.length ? m.versions[m.versions.length - 1]?.resultImageBase64 : m.resultImageBase64));
-                        const thumb = lastImg?.versions?.length ? lastImg.versions[lastImg.versions.length - 1]?.resultImageBase64 : lastImg?.resultImageBase64;
+                        const lastImg = [...s.messages].reverse().find((m) => {
+                          if (m.role !== 'assistant') return false;
+                          const last = dialogVersionsForMessage(m).at(-1);
+                          return !!(last && dialogVersionHasRenderableImage(last));
+                        });
+                        const lastVer = lastImg ? dialogVersionsForMessage(lastImg).at(-1) : undefined;
+                        const thumb = lastVer ? getDialogVersionImageDataUrl(lastVer) : undefined;
+                        const thumbPending = !!(lastVer && dialogVersionHasRenderableImage(lastVer) && !thumb);
                         const isActive = s.id === dialogActiveSessionIdResolved;
                         const label = s.title || (s.messages.length === 0 ? '新对话' : `对话${s.messages.length}`);
                         return (
@@ -3813,7 +3855,7 @@ const MainApp: React.FC = () => {
                               title={label}
                             >
                               <div className="w-11 h-11 shrink-0 rounded-xl overflow-hidden border border-[#2e2e32] bg-[#1c1c22] flex items-center justify-center">
-                                {thumb ? <img src={thumb} className="w-full h-full object-cover" alt="" /> : <span className="text-[10px] text-gray-500">新</span>}
+                                {thumb ? <img src={thumb} className="w-full h-full object-cover" alt="" /> : thumbPending ? <span className="text-[8px] text-gray-500">加载</span> : <span className="text-[10px] text-gray-500">新</span>}
                               </div>
                               <div className="min-w-0 flex-1 text-left">
                                 <div className="text-[10px] font-black text-white/85 truncate">{label}</div>
@@ -3907,6 +3949,8 @@ const MainApp: React.FC = () => {
                     const versionIndex = displayVersion && versions.length > 0 ? getDialogVersionPosition(msg) : 0;
                     const gcd = (a: number, b: number) => (b ? gcd(b, a % b) : a);
                     const aspectRatioLabel = displayVersion?.width != null && displayVersion?.height != null ? (() => { const g = gcd(displayVersion.width, displayVersion.height); return `${displayVersion.width / g}:${displayVersion.height / g}`; })() : null;
+                    const displaySrc = displayVersion ? getDialogVersionImageDataUrl(displayVersion) : undefined;
+                    const displayPending = !!(displayVersion && dialogVersionHasRenderableImage(displayVersion) && !displaySrc);
                     return (
                       <div key={msg.id} id={`msg-${msg.id}`} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                         <div className={`max-w-[85%] lg:max-w-[75%] rounded-2xl overflow-hidden ${msg.role === 'user' ? 'bg-[#1e3558] border border-[#4b6a9e]' : 'bg-[#1c1c22] border border-[#2e2e32]'}`}>
@@ -3961,9 +4005,11 @@ const MainApp: React.FC = () => {
                                     <button onClick={handleDialogCancelGen} className="px-3 py-2 rounded-xl bg-[#991b1b] border border-[#ef4444]/50 text-[9px] font-black text-red-300 hover:bg-[#b91c1c] transition-colors">停止</button>
                                   </div>
                                 )}
-                                {dialogDetectMessageId === msg.id && (displayVersion.detectedBoxes?.length ?? 0) > 0 ? (
+                                {displayPending ? (
+                                  <div className="flex items-center justify-center min-h-[140px] rounded-xl border border-[#2e2e32] bg-[#141416] text-[9px] text-gray-500">图片加载中…</div>
+                                ) : dialogDetectMessageId === msg.id && (displayVersion.detectedBoxes?.length ?? 0) > 0 && displaySrc ? (
                                   <div className="relative inline-block max-w-full">
-                                    <img src={displayVersion.resultImageBase64} className="max-w-full rounded-xl border border-[#2e2e32]" alt="生成" />
+                                    <img src={displaySrc} className="max-w-full rounded-xl border border-[#2e2e32]" alt="生成" />
                                     <div className="absolute inset-0 pointer-events-none">
                                       {(displayVersion.detectedBoxes ?? []).map((box, i) => (
                                         <div key={box.id} className="absolute border-2 border-blue-500 bg-[#1e40af]" style={{ left: `${box.xmin / 10}%`, top: `${box.ymin / 10}%`, width: `${(box.xmax - box.xmin) / 10}%`, height: `${(box.ymax - box.ymin) / 10}%` }}>
@@ -3972,9 +4018,9 @@ const MainApp: React.FC = () => {
                                       ))}
                                     </div>
                                   </div>
-                                ) : (
-                                  <img src={displayVersion.resultImageBase64} className="max-w-full rounded-xl border border-[#2e2e32]" alt="生成" />
-                                )}
+                                ) : displaySrc ? (
+                                  <img src={displaySrc} className="max-w-full rounded-xl border border-[#2e2e32]" alt="生成" />
+                                ) : null}
                               </div>
                               {dialogDetectMessageId === msg.id && (displayVersion.detectedBoxes?.length ?? 0) > 0 && (
                                 <div className="px-4 pb-3 space-y-2 border-b border-[#2e2e32]">
@@ -3997,8 +4043,8 @@ const MainApp: React.FC = () => {
                               )}
                               <div className="px-4 pb-4 flex flex-wrap gap-2">
                                 <button onClick={() => handleDialogDownload(msg)} className="px-3 py-2 bg-[#1e3558] border border-[#4b6a9e] rounded-xl text-[9px] font-black uppercase text-blue-400 hover:bg-[#305a90] transition-all">下载图片</button>
-                                <button onClick={() => displayVersion?.resultImageBase64 && handleCopyDialogImage(displayVersion.resultImageBase64)} className="px-3 py-2 bg-[#26262c] border border-[#2e2e32] rounded-xl text-[9px] font-black uppercase hover:bg-[#383842] transition-all">复制图片</button>
-                                <button onClick={() => displayVersion?.resultImageBase64 && openDialogCrop(msg.id, displayVersion.resultImageBase64)} className="px-3 py-2 bg-[#26262c] border border-[#2e2e32] rounded-xl text-[9px] font-black uppercase hover:bg-[#383842] transition-all">裁切</button>
+                                <button onClick={() => displaySrc && handleCopyDialogImage(displaySrc)} disabled={!displaySrc} className="px-3 py-2 bg-[#26262c] border border-[#2e2e32] rounded-xl text-[9px] font-black uppercase hover:bg-[#383842] transition-all disabled:opacity-40">复制图片</button>
+                                <button onClick={() => displaySrc && openDialogCrop(msg.id, displaySrc)} disabled={!displaySrc} className="px-3 py-2 bg-[#26262c] border border-[#2e2e32] rounded-xl text-[9px] font-black uppercase hover:bg-[#383842] transition-all disabled:opacity-40">裁切</button>
                                 <button onClick={() => handleDialogUseAsInput(msg)} className="px-3 py-2 bg-[#14532d] border border-green-500/30 rounded-xl text-[9px] font-black uppercase text-green-400 hover:bg-[#166534] transition-all">以此图继续</button>
                                 <button onClick={() => handleDialogDetectObjects(msg)} disabled={dialogDetectingId === msg.id} className="px-3 py-2 bg-[#1c1c22] border border-[#2e2e32] rounded-xl text-[9px] font-black uppercase hover:bg-[#2e2e36] transition-all disabled:opacity-50">{dialogDetectingId === msg.id ? '识别中...' : '识别图中物体'}</button>
                                 <button onClick={() => handleDialogSaveToLibrary(msg)} className="px-3 py-2 bg-[#1e3558] border border-[#4b6a9e] rounded-xl text-[9px] font-black uppercase text-blue-400 hover:bg-[#305a90] transition-all">保存到库</button>
@@ -4269,8 +4315,18 @@ const MainApp: React.FC = () => {
                 if (!item) return null;
                 return (
                   <div
-                    className="fixed inset-0 z-[2000] bg-black/72 backdrop-blur-sm animate-in fade-in"
+                    ref={dialogTempPreviewOverlayRef}
+                    tabIndex={-1}
+                    role="dialog"
+                    aria-modal
+                    className="fixed inset-0 z-[2000] bg-black/72 backdrop-blur-sm animate-in fade-in outline-none"
                     data-ac-block-workflow-marquee
+                    onKeyDownCapture={(e) => {
+                      if (!isImagePreviewEscapeKey(e)) return;
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setDialogTempPreviewId(null);
+                    }}
                     onClick={() => setDialogTempPreviewId(null)}
                     onContextMenuCapture={(e) => {
                       e.preventDefault();

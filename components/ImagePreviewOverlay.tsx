@@ -1,4 +1,8 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+
+function isEscapeKey(e: KeyboardEvent): boolean {
+  return e.key === 'Escape' || e.code === 'Escape' || e.keyCode === 27;
+}
 
 const NO_WHEEL = '[data-image-preview-no-wheel]';
 const SCROLL = '[data-image-preview-scroll]';
@@ -65,6 +69,9 @@ export function ImagePreviewOverlay({
   const zoomLastScaleRef = useRef(1);
   const spacePressedRef = useRef(false);
   const wheelAccumRef = useRef(0);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const shellRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -110,14 +117,31 @@ export function ImagePreviewOverlay({
     return () => window.removeEventListener('contextmenu', blockContextMenu, true);
   }, [open]);
 
+  /**
+   * Esc：用 document 捕获 + useLayoutEffect，在目标元素收到按键之前处理；
+   * 另配合 shell focus + onKeyDownCapture，避免焦点留在输入框时仅靠冒泡失效。
+   * onClose 用 ref，避免父组件每次 render 换函数导致监听器反复拆装。
+   */
+  useLayoutEffect(() => {
+    if (!open) return;
+    const onEscCapture = (e: KeyboardEvent) => {
+      if (!isEscapeKey(e)) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      onCloseRef.current();
+    };
+    document.addEventListener('keydown', onEscCapture, true);
+    return () => document.removeEventListener('keydown', onEscCapture, true);
+  }, [open]);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    shellRef.current?.focus({ preventScroll: true });
+  }, [open, resetKey]);
+
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        onClose();
-        return;
-      }
       if (e.code === 'Space') {
         e.preventDefault();
         if (!spacePressedRef.current) wheelAccumRef.current = 0;
@@ -142,7 +166,7 @@ export function ImagePreviewOverlay({
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
     };
-  }, [open, onClose]);
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -329,8 +353,18 @@ export function ImagePreviewOverlay({
 
   return (
     <div
-      className="fixed inset-0 z-[2000] bg-black/72 backdrop-blur-sm animate-in fade-in"
+      ref={shellRef}
+      tabIndex={-1}
+      role="dialog"
+      aria-modal
+      className="fixed inset-0 z-[2000] bg-black/72 backdrop-blur-sm animate-in fade-in outline-none"
       data-ac-block-workflow-marquee
+      onKeyDownCapture={(e) => {
+        if (!isEscapeKey(e)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        onCloseRef.current();
+      }}
       onClick={onClose}
       onContextMenuCapture={(e) => {
         e.preventDefault();

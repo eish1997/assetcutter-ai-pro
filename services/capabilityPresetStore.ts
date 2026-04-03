@@ -1,5 +1,20 @@
 import type { CapabilityCategory, CustomAppModule } from '../types';
 
+/** 持久化时去掉错误域名的能力商店绝对 URL，避免换环境后预览长期裂图 */
+function normalizeCapabilityStoreImageUrlForPersist(raw: string): string {
+  const t = String(raw || '').trim();
+  if (!t || t.startsWith('data:') || t.startsWith('/')) return t;
+  try {
+    const u = new URL(t);
+    if (/\/api\/r2\/capability-store\//i.test(u.pathname)) {
+      return `${u.pathname}${u.search}${u.hash}`;
+    }
+  } catch {
+    /* keep */
+  }
+  return t;
+}
+
 export const CAPABILITY_PRESETS_KEY = 'ac_capability_presets';
 export const CAPABILITY_PRESETS_VERSION = 3;
 export const BUILTIN_IMAGE_PROCESS_IDS = ['cut_image'] as const;
@@ -58,6 +73,16 @@ export function normalizeCapabilityPreset(input: CustomAppModule, index: number)
   if (typeof base.previewGeneratedThumbImage === 'string' && base.previewGeneratedThumbImage.trim().startsWith('data:')) {
     delete (base as CustomAppModule & { previewGeneratedThumbImage?: string }).previewGeneratedThumbImage;
   }
+  const norm = (s: string | undefined, key: keyof CustomAppModule) => {
+    if (typeof s !== 'string' || !s.trim()) return;
+    const next = normalizeCapabilityStoreImageUrlForPersist(s);
+    if (next !== s) (base as Record<string, unknown>)[key] = next;
+  };
+  norm(base.previewImage, 'previewImage');
+  norm(base.previewOriginalImage, 'previewOriginalImage');
+  norm(base.previewGeneratedImage, 'previewGeneratedImage');
+  norm(base.previewOriginalThumbImage, 'previewOriginalThumbImage');
+  norm(base.previewGeneratedThumbImage, 'previewGeneratedThumbImage');
   return base;
 }
 

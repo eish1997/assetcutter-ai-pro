@@ -168,7 +168,7 @@ export function getApiKey(): string | undefined {
 /**
  * 当前选用的 AI 供应商是否具备调用条件：
  * - ToAPIs / VectorEngine：本机已填 Key
- * - Gemini：本机 Key，或构建时配置了 VITE_BULK_IMAGE_API（走后端代理）
+ * - Gemini：本机 Key，或构建时配置了 VITE_BULK_IMAGE_API（走后端代理；与 geminiService.getAI 优先级一致）
  */
 export function isAiInvocationReady(): boolean {
   const p = getAiProvider();

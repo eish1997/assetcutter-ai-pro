@@ -11,21 +11,64 @@ import {
   getVectorengineBaseUrl,
 } from "./settingsStore";
 
-const BULK_BASE =
+const BULK_RAW =
   typeof import.meta !== "undefined" && (import.meta as unknown as { env?: Record<string, string | undefined> })?.env
     ? String(
         ((import.meta as unknown as { env?: Record<string, string | undefined> }).env?.VITE_BULK_IMAGE_API || "").trim()
       )
     : "";
 
+/** 与当前页面同源（配合 Vite `/proxy/gemini` → 本机 9002），避免跨端口 CORS */
+const BULK_SAME_ORIGIN_MARKER = "__SAME_ORIGIN__";
+
+function resolveBulkBase(): string {
+  const t = BULK_RAW;
+  if (!t) return "";
+  const lower = t.toLowerCase();
+  if (t === "1" || lower === "true" || lower === "same-origin") {
+    return BULK_SAME_ORIGIN_MARKER;
+  }
+  return t;
+}
+
+const BULK_BASE = resolveBulkBase();
+
+/** 为 true 时恢复旧行为：本机 Gemini Key 优先于 VITE_BULK_IMAGE_API（浏览器直连 Google）。默认 false：有代理地址则优先走后端代理，与生产环境一致、避免本机 Key 直连触发地区限制。 */
+function preferBrowserGeminiKeyFirst(): boolean {
+  try {
+    return (
+      String(
+        (import.meta as unknown as { env?: Record<string, string | undefined> }).env?.VITE_USE_BROWSER_GEMINI_KEY_FIRST || ""
+      ).trim() === "true"
+    );
+  } catch {
+    return false;
+  }
+}
+
 function bulkApiUrl(path: string): string {
   if (!BULK_BASE) return path;
+  const p = path.startsWith("/") ? path : `/${path}`;
+  if (BULK_BASE === BULK_SAME_ORIGIN_MARKER) {
+    return p;
+  }
   const base = BULK_BASE.replace(/\/$/, "");
-  return `${base}${path.startsWith("/") ? path : `/${path}`}`;
+  return `${base}${p}`;
 }
 
 /** Render 等对长连接常限 10～15s：走后端异步 job + 轮询，避免 503/504 */
 const GEMINI_ASYNC_POLL_MS = 1500;
+
+function parseBulkProxyErrorBody(text: string): string {
+  const raw = (text || "").trim();
+  try {
+    const j = JSON.parse(raw) as { error?: string };
+    if (typeof j.error === "string" && j.error.trim()) return j.error.trim();
+  } catch {
+    /* ignore */
+  }
+  return raw;
+}
 
 async function bulkProxyGenerateContentAsync(args: {
   model: string;
@@ -55,16 +98,17 @@ async function bulkProxyGenerateContentAsync(args: {
   const createText = await createRes.text();
   if (!createRes.ok) {
     const raw = (createText || "").trim();
+    const parsedMsg = parseBulkProxyErrorBody(raw);
     if (/Use POST \/jobs/i.test(raw)) {
       throw new Error(
         [
-          raw,
+          parsedMsg,
           `当前后端代理地址不是 Gemini 代理：VITE_BULK_IMAGE_API=${BULK_BASE || "(empty)"}`,
           "请改为部署了 server/gemini-proxy-api.js 的根地址（应支持 POST /proxy/gemini/async）。",
         ].join(" ")
       );
     }
-    throw new Error(raw || `Gemini 异步任务创建失败（${createRes.status}）`);
+    throw new Error(parsedMsg || `Gemini 异步任务创建失败（${createRes.status}）`);
   }
   let jobId: string;
   try {
@@ -83,7 +127,7 @@ async function bulkProxyGenerateContentAsync(args: {
     });
     const pollText = await pollRes.text();
     if (!pollRes.ok) {
-      throw new Error(pollText || `轮询失败（${pollRes.status}）`);
+      throw new Error(parseBulkProxyErrorBody(pollText) || `轮询失败（${pollRes.status}）`);
     }
     let j: { status?: string; result?: { text?: string; candidates?: unknown[] }; error?: string };
     try {
@@ -127,23 +171,36 @@ const getAI = (): GeminiClientLike => {
       return createVectorengineGeminiClient(getVectorengineBaseUrl(), k) as unknown as GeminiClientLike;
     }
   }
-  const apiKey = getUserApiKey();
-  if (apiKey) {
-    return new GoogleGenAI({ apiKey }) as unknown as GeminiClientLike;
-  }
-  if (BULK_BASE) {
-    const proxyClient: GeminiClientLike = {
-      models: {
-        async generateContent(args) {
-          return bulkProxyGenerateContentAsync({
-            model: args.model,
-            contents: args.contents,
-            config: (args.config || {}) as Record<string, unknown>,
-          });
-        },
+
+  const proxyClient: GeminiClientLike = {
+    models: {
+      async generateContent(args) {
+        return bulkProxyGenerateContentAsync({
+          model: args.model,
+          contents: args.contents,
+          config: (args.config || {}) as Record<string, unknown>,
+        });
       },
-    };
-    return proxyClient;
+    },
+  };
+
+  const apiKey = getUserApiKey();
+  const preferKey = preferBrowserGeminiKeyFirst();
+
+  if (preferKey) {
+    if (apiKey) {
+      return new GoogleGenAI({ apiKey }) as unknown as GeminiClientLike;
+    }
+    if (BULK_BASE) {
+      return proxyClient;
+    }
+  } else {
+    if (BULK_BASE) {
+      return proxyClient;
+    }
+    if (apiKey) {
+      return new GoogleGenAI({ apiKey }) as unknown as GeminiClientLike;
+    }
   }
   if (provider === "toapis") {
     throw new Error("未配置 ToAPIs API Key，且未配置后端代理地址：请填写 ToAPIs Key，或联系管理员配置 VITE_BULK_IMAGE_API");
@@ -987,8 +1044,8 @@ export async function getSiteAssistantResponseStream(
   model = 'gemini-3-flash-preview',
   options?: GeminiRequestOptions
 ): Promise<string> {
-  const apiKey = getApiKey();
-  if (!apiKey && BULK_BASE) {
+  /** 走后端代理时没有 generateContentStream，统一走非流式（与 !apiKey && BULK 时行为一致） */
+  if (BULK_BASE) {
     const full = await getSiteAssistantResponse(userMessage, history, model, options);
     onChunk(full);
     return full;
