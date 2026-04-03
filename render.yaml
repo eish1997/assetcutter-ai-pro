@@ -73,6 +73,7 @@ services:
         source: /*
         destination: /index.html
     envVars:
+      # 与 auth 不同源时构建期必填，否则能力预览仍请求静态站 /api/r2（易回退成 index.html →「预览不可用」）
       - key: VITE_AUTH_API_BASE_URL
         sync: false
       # 与 auth 同源时可不填；仅当 R2 单独域名部署时再设

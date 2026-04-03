@@ -53,7 +53,15 @@ export const CapabilityPreviewImg = forwardRef<HTMLImageElement, Props>(function
       loading="lazy"
       decoding="async"
       onClick={onClick}
-      onError={() => setAttempt((a) => a + 1)}
+      onError={() =>
+        setAttempt((a) => {
+          const next = a + 1;
+          if (next >= candidates.length) {
+            console.warn('[CapabilityPreviewImg] 预览图加载失败（已尝试全部候选）', candidates);
+          }
+          return next;
+        })
+      }
     />
   );
 });
