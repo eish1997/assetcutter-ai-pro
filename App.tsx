@@ -17,6 +17,8 @@ import { useDialogGeneration, getDialogUnderstandImageInput } from './hooks/useD
 import { useDialogPostProcessing } from './hooks/useDialogPostProcessing';
 import { useAuth } from './components/auth/AuthContext';
 import { CustomDropdown, DROPDOWN_TRIGGER_COMPACT } from './components/ui/CustomDropdown';
+import { SidebarAccountAvatar } from './components/SidebarAccountAvatar';
+import { useUserUiPrefs } from './hooks/useUserUiPrefs';
 import Waves from './components/ui/Waves';
 import AppIcon from './components/ui/AppIcon';
 import { ProgressivePreviewImage } from './components/ProgressivePreviewImage';
@@ -67,6 +69,7 @@ import {
   setWorkspaceAutoSyncEnabled,
 } from './services/settingsStore';
 import { fetchWorkspaceUserCloudConfig, pushWorkspaceUserCloudConfig } from './services/workspaceUserCloudConfig';
+import { getUserUiPrefs, setUserUiPrefs } from './services/userUiPrefs';
 import { WorkflowApiKeyModal } from './components/WorkflowApiKeyModal';
 import { WorkspaceCloudSyncCountdown } from './components/WorkspaceCloudSyncCountdown';
 
@@ -555,6 +558,7 @@ const LibraryPickerModal: React.FC<{
 /** 主站： hooks 必须始终在同一调用顺序下执行，不可与 /admin 分支混在同一个组件里 */
 const MainApp: React.FC = () => {
   const { user, logout, loading: authLoading, refresh: refreshAuthUser } = useAuth();
+  const userUiPrefs = useUserUiPrefs();
 
   const [mode, setMode] = useState<AppMode>(AppMode.WORKFLOW);
   const [capabilityPresets, setCapabilityPresets] = useState<CustomAppModule[]>(loadCapabilityPresets);
@@ -741,6 +745,7 @@ const MainApp: React.FC = () => {
     if (workspaceCloudConfigHydratingUserIdRef.current === uid) return;
     workspaceCloudConfigHydratingUserIdRef.current = uid;
     void (async () => {
+      let sidebarMerge: { displayName: string; avatarUrl: string } | undefined;
       try {
         const cfg = await fetchWorkspaceUserCloudConfig(uid, user.username);
         if (userIdRef.current !== uid) return;
@@ -760,6 +765,7 @@ const MainApp: React.FC = () => {
           setVectorengineApiKey(cfg.settings.vectorengineApiKey || null);
           setVectorengineBaseUrl(cfg.settings.vectorengineBaseUrl || null);
           setAiInvocationStatusRev((n) => n + 1);
+          if (cfg.sidebarProfile) sidebarMerge = cfg.sidebarProfile;
         }
       } catch (e) {
         console.warn('[workspace cloud] user config pull', e);
@@ -768,6 +774,13 @@ const MainApp: React.FC = () => {
           workspaceCloudConfigHydratingUserIdRef.current = null;
         }
         workspaceCloudConfigHydratedUserIdRef.current = uid;
+      }
+      if (sidebarMerge && userIdRef.current === uid) {
+        const local = getUserUiPrefs();
+        const rd = sidebarMerge.displayName.trim();
+        const ra = sidebarMerge.avatarUrl;
+        const nextAvatar = local.avatarUrl.startsWith('data:') ? local.avatarUrl : ra || local.avatarUrl;
+        setUserUiPrefs({ displayName: rd, avatarUrl: nextAvatar });
       }
     })();
   }, [authLoading, user?.id, user?.username]);
@@ -784,6 +797,7 @@ const MainApp: React.FC = () => {
     if (typeof window === 'undefined') return;
     workspaceCloudConfigPushTimerRef.current = window.setTimeout(() => {
       workspaceCloudConfigPushTimerRef.current = null;
+      const prefsNow = getUserUiPrefs();
       void pushWorkspaceUserCloudConfig(uid, user.username, {
         capabilityPresets,
         capabilitySets,
@@ -796,6 +810,10 @@ const MainApp: React.FC = () => {
           toapisBaseUrl: getToapisBaseUrl() || '',
           vectorengineApiKey: getVectorengineApiKey() || '',
           vectorengineBaseUrl: getVectorengineBaseUrl() || '',
+        },
+        sidebarProfile: {
+          displayName: prefsNow.displayName,
+          avatarUrl: prefsNow.avatarUrl.startsWith('data:') ? '' : prefsNow.avatarUrl,
         },
       }).catch((e) => console.warn('[workspace cloud] user config push', e));
     }, 1200);
@@ -813,6 +831,7 @@ const MainApp: React.FC = () => {
     capabilitySets,
     workspaceAutoSyncEnabled,
     aiInvocationStatusRev,
+    userUiPrefs,
   ]);
 
   /** `force`：手动点「立即同步」时必跑；`false` 时仅在有本地未推送改动时自动同步，避免每分钟全量打包上传。 */
@@ -3013,15 +3032,27 @@ const MainApp: React.FC = () => {
             {user ? (
               <div className="w-full">
                 <CustomDropdown
+                  triggerAriaLabel="账户菜单"
                   options={[
                     { value: 'manage', label: '管理账户' },
                     { value: 'switch', label: '切换用户' },
                     { value: 'logout', label: '退出登录' },
                   ]}
                   value=""
-                  placeholder="◎"
-                  onChange={(value) => { void handleUserMenuAction(value); }}
-                  triggerClassName="w-full h-10 bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-0 py-0 text-[14px] text-center flex items-center justify-center outline-none focus:border-blue-500 hover:bg-[#2e2e36] transition-colors"
+                  placeholder=""
+                  onChange={(value) => {
+                    void handleUserMenuAction(value);
+                  }}
+                  renderTrigger={({ open }) => (
+                    <span className="relative inline-flex">
+                      <SidebarAccountAvatar user={user} prefs={userUiPrefs} />
+                      <span className="pointer-events-none absolute -right-0.5 -bottom-0.5 flex h-3.5 min-w-[14px] items-center justify-center rounded-full border border-[#3a3a40] bg-[#16161a] px-[2px] text-[6px] font-black leading-none text-gray-500">
+                        {open ? '▲' : '▼'}
+                      </span>
+                    </span>
+                  )}
+                  triggerClassName="w-full h-10 rounded-xl border border-[#2e2e32] bg-[#1c1c22] p-0 flex items-center justify-center outline-none focus:border-blue-500 hover:bg-[#2e2e36] transition-colors"
+                  portalZIndex={{ backdrop: 1100, list: 1101 }}
                 />
               </div>
             ) : null}
@@ -3036,20 +3067,31 @@ const MainApp: React.FC = () => {
               <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><circle cx="10" cy="10" r="2.5" stroke="currentColor" strokeWidth="1.6"/><path d="M10 3v2.1M10 14.9V17M17 10h-2.1M5.1 10H3M14.9 5.1l-1.5 1.5M6.6 13.4l-1.5 1.5M14.9 14.9l-1.5-1.5M6.6 6.6 5.1 5.1" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
             </SidebarIconButton>
 
-            <div className={`rounded-xl border overflow-hidden ${isExperimentalMode(mode) && !experimentalNavExpanded ? 'border-blue-500/25' : 'border-[#2e2e32]'}`}>
-              <button
-                type="button"
-                onClick={() => setExperimentalNavExpanded((e) => !e)}
-                className={`group relative w-full h-10 flex items-center justify-center text-[15px] transition-colors duration-200 cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/50 ${isExperimentalMode(mode) && !experimentalNavExpanded ? 'text-blue-400/90 bg-[#152642] hover:bg-[#1a2d4d]' : 'text-gray-400 hover:bg-[#2e2e36]'}`}
-                aria-label="实验性功能"
-                aria-expanded={experimentalNavExpanded}
-              >
-                <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><path d="M8 3.5h4M9 3.5v4.2l-4.1 6.6a2 2 0 0 0 1.7 3h6.8a2 2 0 0 0 1.7-3L11 7.7V3.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/><path d="M6.8 12.5h6.4" stroke="currentColor" strokeWidth="1.4"/></svg>
-                <span className="pointer-events-none absolute left-[calc(100%+10px)] top-1/2 -translate-y-1/2 rounded-lg border border-[#2e2e32] bg-[#050505] px-2 py-1 text-[10px] text-gray-200 whitespace-nowrap opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-150">
-                  实验性功能
-                </span>
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={() => setExperimentalNavExpanded((e) => !e)}
+              className={`group relative w-full h-10 rounded-xl border transition-colors duration-200 flex items-center justify-center cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-blue-500/55 focus-visible:ring-offset-2 focus-visible:ring-offset-[#050505] ${
+                isExperimentalMode(mode) && !experimentalNavExpanded
+                  ? 'bg-[#1a2d4d] text-blue-300 border-[#3b6fb8]'
+                  : 'text-gray-400 border-[#2e2e32] hover:bg-[#2e2e36]'
+              }`}
+              aria-label="实验性功能"
+              aria-expanded={experimentalNavExpanded}
+            >
+              <svg viewBox="0 0 20 20" className="w-4 h-4 shrink-0" fill="none" aria-hidden>
+                <path
+                  d="M8 3.5h4M9 3.5v4.2l-4.1 6.6a2 2 0 0 0 1.7 3h6.8a2 2 0 0 0 1.7-3L11 7.7V3.5"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <path d="M6.8 12.5h6.4" stroke="currentColor" strokeWidth="1.4" />
+              </svg>
+              <span className="pointer-events-none absolute left-[calc(100%+10px)] top-1/2 -translate-y-1/2 rounded-lg border border-[#2e2e32] bg-[#050505] px-2 py-1 text-[10px] text-gray-200 whitespace-nowrap opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-150">
+                实验性功能
+              </span>
+            </button>
           </div>
 
           {experimentalNavExpanded && (

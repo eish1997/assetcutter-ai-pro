@@ -1,4 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { SidebarAccountAvatar } from './SidebarAccountAvatar';
+import { useUserUiPrefs } from '../hooks/useUserUiPrefs';
+import {
+  setUserUiPrefs,
+  sanitizeAvatarUrl,
+  MAX_AVATAR_DATA_URL_CHARS,
+} from '../services/userUiPrefs';
 import {
   getUserApiKey,
   setUserApiKey,
@@ -18,6 +25,7 @@ import {
   getTencentSecretKey,
   setTencentSecretKey as saveTencentSecretKey,
 } from '../services/settingsStore';
+import { isWorkspaceCloudEnabled } from '../services/workspaceCloudSync';
 import { CustomDropdown, DROPDOWN_TRIGGER_COMPACT } from './ui/CustomDropdown';
 import type { AuthUser } from '../services/authClient';
 
@@ -52,6 +60,15 @@ const SettingsSection: React.FC<{
   const [tencentSaved, setTencentSaved] = useState(false);
   const [userActionBusy, setUserActionBusy] = useState<'refresh' | 'logout' | null>(null);
   const [userActionMsg, setUserActionMsg] = useState<string>('');
+  const userUiPrefs = useUserUiPrefs();
+  const [avatarLinkDraft, setAvatarLinkDraft] = useState('');
+  const [prefsUiHint, setPrefsUiHint] = useState('');
+  const avatarFileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const u = userUiPrefs.avatarUrl.trim();
+    setAvatarLinkDraft(/^https?:\/\//i.test(u) ? u : '');
+  }, [userUiPrefs.avatarUrl]);
 
   useEffect(() => {
     setAiProviderState(getAiProvider());
@@ -186,6 +203,120 @@ const SettingsSection: React.FC<{
                         </p>
                       </div>
                     </div>
+
+                    <div className="rounded-xl border border-[#2e2e32] bg-[#16161a] p-4 space-y-4">
+                      <div>
+                        <h3 className="text-[10px] font-black uppercase tracking-wider text-blue-400/80">侧栏展示</h3>
+                        <p className="text-[9px] text-gray-600 mt-1 leading-relaxed">
+                          自定义左侧边栏账户入口的头像与展示名（圆角矩形，与全站按钮风格一致）。修改后会写入本机并随「用户云配置」自动同步到云端（与能力预设等同一份
+                          user-config.json）；不会修改服务器上的登录名与密码。
+                          {isWorkspaceCloudEnabled()
+                            ? ' 本地上传的 data 头像体积较大，不会上传云端；换设备请使用「图片链接」或仅用展示名。'
+                            : ' 当前未开启工作区云同步时，侧栏偏好仅保存在本机。'}
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-4">
+                        <SidebarAccountAvatar user={currentUser} prefs={userUiPrefs} />
+                        <div className="flex-1 min-w-[12rem] space-y-2">
+                          <label className="block text-[9px] text-gray-500 uppercase tracking-wide">展示名（可选）</label>
+                          <input
+                            type="text"
+                            value={userUiPrefs.displayName}
+                            onChange={(e) => setUserUiPrefs({ displayName: e.target.value })}
+                            placeholder={currentUser.username || '与登录名相同可留空'}
+                            maxLength={24}
+                            className="w-full px-3 py-2 rounded-xl bg-[#121214] border border-[#2e2e32] text-[11px] text-white placeholder-gray-600 focus:border-blue-500 focus:outline-none"
+                          />
+                          <p className="text-[9px] text-gray-600">留空时侧栏缩写取自用户名或邮箱。</p>
+                        </div>
+                      </div>
+                      <div className="space-y-2">
+                        <span className="text-[9px] text-gray-500 uppercase tracking-wide">头像图片</span>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <input
+                            ref={avatarFileInputRef}
+                            type="file"
+                            accept="image/png,image/jpeg,image/jpg,image/webp,image/gif"
+                            className="hidden"
+                            onChange={(e) => {
+                              const f = e.target.files?.[0];
+                              e.target.value = '';
+                              if (!f || !f.type.startsWith('image/')) return;
+                              if (f.size > 2 * 1024 * 1024) {
+                                setPrefsUiHint('请选择小于 2MB 的图片');
+                                return;
+                              }
+                              const reader = new FileReader();
+                              reader.onload = () => {
+                                const data = String(reader.result || '');
+                                if (data.length > MAX_AVATAR_DATA_URL_CHARS) {
+                                  setPrefsUiHint('图片过大，请压缩或换一张');
+                                  return;
+                                }
+                                setUserUiPrefs({ avatarUrl: data });
+                                setPrefsUiHint('已更新本地上传头像');
+                              };
+                              reader.readAsDataURL(f);
+                            }}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => avatarFileInputRef.current?.click()}
+                            className="px-4 py-2 rounded-xl bg-[#26262c] hover:bg-[#383842] border border-[#2e2e32] text-[10px] font-bold text-gray-200 transition-colors"
+                          >
+                            上传图片
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setUserUiPrefs({ avatarUrl: '' });
+                              setAvatarLinkDraft('');
+                              setPrefsUiHint('已恢复默认缩写头像');
+                            }}
+                            className="px-4 py-2 rounded-xl border border-[#3f3f46] text-[10px] font-bold text-gray-400 hover:bg-[#222228] transition-colors"
+                          >
+                            清除自定义头像
+                          </button>
+                        </div>
+                        {userUiPrefs.avatarUrl.startsWith('data:') ? (
+                          <p className="text-[9px] text-gray-500">当前使用本地上传的图片。</p>
+                        ) : null}
+                      </div>
+                      <div className="space-y-2">
+                        <label className="block text-[9px] text-gray-500 uppercase tracking-wide">或图片链接（https 直链）</label>
+                        <div className="flex flex-col sm:flex-row gap-2">
+                          <input
+                            type="url"
+                            value={avatarLinkDraft}
+                            onChange={(e) => setAvatarLinkDraft(e.target.value)}
+                            placeholder="https://example.com/avatar.png"
+                            className="flex-1 min-w-0 px-3 py-2 rounded-xl bg-[#121214] border border-[#2e2e32] text-[11px] text-white placeholder-gray-600 focus:border-blue-500 focus:outline-none"
+                            autoComplete="off"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const s = sanitizeAvatarUrl(avatarLinkDraft);
+                              if (!avatarLinkDraft.trim()) {
+                                setPrefsUiHint('请先填写图片 URL');
+                                return;
+                              }
+                              if (!s) {
+                                setPrefsUiHint('无效链接（需 http(s) 图片地址，勿填 localhost）');
+                                return;
+                              }
+                              setUserUiPrefs({ avatarUrl: s });
+                              setPrefsUiHint('已应用链接头像');
+                            }}
+                            className="shrink-0 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-[10px] font-black uppercase text-white transition-colors"
+                          >
+                            应用链接
+                          </button>
+                        </div>
+                      </div>
+                      {prefsUiHint ? <p className="text-[9px] text-gray-500">{prefsUiHint}</p> : null}
+                    </div>
+
                     <div className="flex flex-wrap gap-3">
                       <button
                         type="button"

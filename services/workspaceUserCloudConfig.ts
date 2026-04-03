@@ -1,6 +1,7 @@
 import type { CapabilitySet, CustomAppModule } from '../types';
 import { r2ApiUrl } from './apiBase';
 import { requestJson } from './httpClient';
+import { sanitizeAvatarUrl } from './userUiPrefs';
 import { workspaceRootPrefix } from './workspaceCloudSync';
 
 type UploadUrlResponse = { uploadUrl: string; objectKey: string };
@@ -20,6 +21,11 @@ export type WorkspaceUserCloudConfig = {
     toapisBaseUrl: string;
     vectorengineApiKey: string;
     vectorengineBaseUrl: string;
+  };
+  /** 侧栏展示名与头像（仅同步 https/http 图链；本机 data 头像不上云） */
+  sidebarProfile?: {
+    displayName: string;
+    avatarUrl: string;
   };
 };
 
@@ -64,6 +70,14 @@ export async function fetchWorkspaceUserCloudConfig(
   try {
     const parsed = JSON.parse(raw) as Partial<WorkspaceUserCloudConfig>;
     if (parsed.version !== 1) return null;
+    const sp = parsed.sidebarProfile;
+    const sidebarProfile =
+      sp && typeof sp === 'object'
+        ? {
+            displayName: String((sp as { displayName?: unknown }).displayName || '').slice(0, 24).trim(),
+            avatarUrl: sanitizeAvatarUrl(String((sp as { avatarUrl?: unknown }).avatarUrl || '')),
+          }
+        : undefined;
     return {
       version: 1,
       updatedAt: Number(parsed.updatedAt || Date.now()),
@@ -82,6 +96,7 @@ export async function fetchWorkspaceUserCloudConfig(
         vectorengineApiKey: String(parsed.settings?.vectorengineApiKey || ''),
         vectorengineBaseUrl: String(parsed.settings?.vectorengineBaseUrl || ''),
       },
+      ...(sidebarProfile ? { sidebarProfile } : {}),
     };
   } catch {
     return null;
@@ -93,6 +108,12 @@ export async function pushWorkspaceUserCloudConfig(
   username: string | null | undefined,
   input: Omit<WorkspaceUserCloudConfig, 'version' | 'updatedAt'>
 ): Promise<void> {
+  const sidebarProfile = input.sidebarProfile
+    ? {
+        displayName: String(input.sidebarProfile.displayName || '').slice(0, 24).trim(),
+        avatarUrl: sanitizeAvatarUrl(String(input.sidebarProfile.avatarUrl || '')),
+      }
+    : { displayName: '', avatarUrl: '' };
   const payload: WorkspaceUserCloudConfig = {
     version: 1,
     updatedAt: Date.now(),
@@ -111,6 +132,7 @@ export async function pushWorkspaceUserCloudConfig(
       vectorengineApiKey: String(input.settings.vectorengineApiKey || ''),
       vectorengineBaseUrl: String(input.settings.vectorengineBaseUrl || ''),
     },
+    sidebarProfile,
   };
   await putObjectBytes(userCloudConfigKey(userId, username), 'application/json', JSON.stringify(payload));
 }

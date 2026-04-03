@@ -2901,6 +2901,8 @@ const WorkflowSection: React.FC<{
 
   const handleDropToModuleAction = useCallback(
     (mod: CustomAppModule, tweakPrompt = false) => {
+      // 组内子卡片不允许拖到功能区「生图」块（含微调入口），避免误把组槽位图塞进生成队列
+      if (draggingGroupItems && currentGroupAsset && mod.category === 'image_gen') return;
       if (tweakPrompt) {
         const targets: Array<
           | {
@@ -2917,29 +2919,6 @@ const WorkflowSection: React.FC<{
           effectiveIds.forEach((id) => {
             const a = assets.find((x) => x.id === id);
             if (a) targets.push({ assetId: id, inputImage: getAssetDisplayImage(a), inputSourceDisplayKey: a.displayKey });
-          });
-        } else if (draggingGroupItems && currentGroupAsset) {
-          draggingGroupItems.itemIndexes.forEach((itemIndex) => {
-            const item = currentGroupItems[itemIndex];
-            if (!item) return;
-            if (typeof item === 'string') {
-              targets.push({
-                imageBase64: item,
-                parentAssetId: currentGroupAsset.id,
-                sourceGroupAssetId: currentGroupAsset.id,
-                sourceItemIndex: itemIndex,
-              });
-            } else {
-              const child = assets.find((x) => x.id === (item as { assetId: string }).assetId);
-              if (child)
-                targets.push({
-                  assetId: (item as { assetId: string }).assetId,
-                  inputImage: getAssetDisplayImage(child),
-                  inputSourceDisplayKey: child.displayKey,
-                  sourceGroupAssetId: currentGroupAsset.id,
-                  sourceItemIndex: itemIndex,
-                });
-            }
           });
         }
         if (targets.length > 0) setPromptTweakModal({ preset: mod, targets });
@@ -4423,7 +4402,7 @@ const WorkflowSection: React.FC<{
                               effectiveIds.forEach((id) => addToPending(id, mod.id));
                               return;
                             }
-                            if (draggingGroupItems && currentGroupAsset) {
+                            if (draggingGroupItems && currentGroupAsset && mod.category !== 'image_gen') {
                               if (mod.category === 'generate_3d' && onAddGenerate3DJob) {
                                 const firstIndex = draggingGroupItems.itemIndexes[0];
                                 const item = currentGroupItems[firstIndex];
@@ -4511,29 +4490,6 @@ const WorkflowSection: React.FC<{
                                       inputSourceDisplayKey: a.displayKey,
                                     });
                                 });
-                              } else if (draggingGroupItems && currentGroupAsset) {
-                                draggingGroupItems.itemIndexes.forEach((itemIndex) => {
-                                  const item = currentGroupItems[itemIndex];
-                                  if (!item) return;
-                                  if (typeof item === 'string') {
-                                    targets.push({
-                                      imageBase64: item,
-                                      parentAssetId: currentGroupAsset.id,
-                                      sourceGroupAssetId: currentGroupAsset.id,
-                                      sourceItemIndex: itemIndex,
-                                    });
-                                  } else {
-                                    const child = assets.find((x) => x.id === (item as { assetId: string }).assetId);
-                                    if (child)
-                                      targets.push({
-                                        assetId: (item as { assetId: string }).assetId,
-                                        inputImage: getAssetDisplayImage(child),
-                                        inputSourceDisplayKey: child.displayKey,
-                                        sourceGroupAssetId: currentGroupAsset.id,
-                                        sourceItemIndex: itemIndex,
-                                      });
-                                  }
-                                });
                               }
                               if (targets.length > 0) setPromptTweakModal({ preset: mod, targets });
                             }}
@@ -4618,7 +4574,7 @@ const WorkflowSection: React.FC<{
                         effectiveIds.forEach((id) => addToPending(id, mod.id));
                         return;
                       }
-                      if (draggingGroupItems && currentGroupAsset) {
+                      if (draggingGroupItems && currentGroupAsset && mod.category !== 'image_gen') {
                         if (mod.category === 'generate_3d' && onAddGenerate3DJob) {
                           const firstIndex = draggingGroupItems.itemIndexes[0];
                           const item = currentGroupItems[firstIndex];
@@ -4705,29 +4661,6 @@ const WorkflowSection: React.FC<{
                                 inputImage: getAssetDisplayImage(a),
                                 inputSourceDisplayKey: a.displayKey,
                               });
-                          });
-                        } else if (draggingGroupItems && currentGroupAsset) {
-                          draggingGroupItems.itemIndexes.forEach((itemIndex) => {
-                            const item = currentGroupItems[itemIndex];
-                            if (!item) return;
-                            if (typeof item === 'string') {
-                              targets.push({
-                                imageBase64: item,
-                                parentAssetId: currentGroupAsset.id,
-                                sourceGroupAssetId: currentGroupAsset.id,
-                                sourceItemIndex: itemIndex,
-                              });
-                            } else {
-                              const child = assets.find((x) => x.id === (item as { assetId: string }).assetId);
-                              if (child)
-                                targets.push({
-                                  assetId: (item as { assetId: string }).assetId,
-                                  inputImage: getAssetDisplayImage(child),
-                                  inputSourceDisplayKey: child.displayKey,
-                                  sourceGroupAssetId: currentGroupAsset.id,
-                                  sourceItemIndex: itemIndex,
-                                });
-                            }
                           });
                         }
                         if (targets.length > 0) setPromptTweakModal({ preset: mod, targets });

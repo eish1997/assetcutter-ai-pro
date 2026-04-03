@@ -10,6 +10,10 @@ type CustomDropdownProps = {
   disabled?: boolean;
   placeholder?: string;
   triggerClassName?: string;
+  /** 自定义触发区（如头像）；提供时不再渲染默认「标签 + ▼」 */
+  renderTrigger?: (ctx: { open: boolean }) => React.ReactNode;
+  /** 触发按钮 aria-label（自定义触发器时常用） */
+  triggerAriaLabel?: string;
   /**
    * Portal 遮罩与列表的 z-index（内联样式，避免低于宿主弹窗时被挡住）。
    * 默认 1002 / 1003；嵌在 z-[2100] 等弹窗内时请传入更大值，例如 { backdrop: 2200, list: 2201 }。
@@ -25,6 +29,8 @@ export function CustomDropdown({
   disabled = false,
   placeholder = '默认',
   triggerClassName = 'bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-4 py-3 text-[11px] text-left flex items-center justify-between outline-none focus:border-blue-500 hover:bg-[#2e2e36] transition-colors',
+  renderTrigger,
+  triggerAriaLabel,
   portalZIndex = { backdrop: 1002, list: 1003 },
 }: CustomDropdownProps) {
   const [open, setOpen] = useState(false);
@@ -172,11 +178,20 @@ export function CustomDropdown({
         type="button"
         disabled={disabled}
         aria-disabled={disabled}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={triggerAriaLabel}
         onClick={() => !disabled && setOpen((p) => !p)}
         className={`${triggerClassName} ${disabled ? 'opacity-40 cursor-not-allowed pointer-events-none' : ''}`}
       >
-        <span>{label}</span>
-        <span className="text-gray-500 shrink-0 ml-1">{open ? '▲' : '▼'}</span>
+        {renderTrigger ? (
+          renderTrigger({ open })
+        ) : (
+          <>
+            <span>{label}</span>
+            <span className="text-gray-500 shrink-0 ml-1">{open ? '▲' : '▼'}</span>
+          </>
+        )}
       </button>
       {portalContent && typeof document !== 'undefined' ? createPortal(portalContent, document.body) : null}
     </div>
