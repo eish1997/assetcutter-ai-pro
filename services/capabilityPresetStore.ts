@@ -1,19 +1,5 @@
 import type { CapabilityCategory, CustomAppModule } from '../types';
-
-/** 持久化时去掉错误域名的能力商店绝对 URL，避免换环境后预览长期裂图 */
-function normalizeCapabilityStoreImageUrlForPersist(raw: string): string {
-  const t = String(raw || '').trim();
-  if (!t || t.startsWith('data:') || t.startsWith('/')) return t;
-  try {
-    const u = new URL(t);
-    if (/\/api\/r2\/capability-store\//i.test(u.pathname)) {
-      return `${u.pathname}${u.search}${u.hash}`;
-    }
-  } catch {
-    /* keep */
-  }
-  return t;
-}
+import { normalizeCapabilityPreviewUrlForPersist } from './capabilityPreviewUrl';
 
 export const CAPABILITY_PRESETS_KEY = 'ac_capability_presets';
 export const CAPABILITY_PRESETS_VERSION = 3;
@@ -75,7 +61,7 @@ export function normalizeCapabilityPreset(input: CustomAppModule, index: number)
   }
   const norm = (s: string | undefined, key: keyof CustomAppModule) => {
     if (typeof s !== 'string' || !s.trim()) return;
-    const next = normalizeCapabilityStoreImageUrlForPersist(s);
+    const next = normalizeCapabilityPreviewUrlForPersist(s);
     if (next !== s) (base as Record<string, unknown>)[key] = next;
   };
   norm(base.previewImage, 'previewImage');

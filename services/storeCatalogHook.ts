@@ -51,9 +51,7 @@ function resolvePackUrl(itemUrl: string, baseUrl: string): string {
         return `${preferredCapabilityStoreOrigin}${u.pathname}${u.search}${u.hash}`;
       }
       if (typeof window === 'undefined') return input;
-      const currentHost = window.location.hostname.toLowerCase();
-      const host = u.hostname.toLowerCase();
-      if (host !== currentHost) {
+      if (u.origin !== window.location.origin) {
         return `${window.location.origin}${u.pathname}${u.search}${u.hash}`;
       }
       return input;

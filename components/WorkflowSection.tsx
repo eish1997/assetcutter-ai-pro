@@ -5228,22 +5228,37 @@ const WorkflowSection: React.FC<{
                 {!currentGroupAsset ? (
                   <div className="py-8 text-center text-[9px] text-gray-500">该组已被删除或不存在，请返回</div>
                 ) : showAllImages
-                  ? showAllImages.map((img, idx) => (
-                      <div
-                        key={idx}
-                        data-workflow-card
-                        className="break-inside-avoid mb-4 rounded-2xl border border-[#2e2e32] bg-[#141416] overflow-hidden flex justify-center"
-                      >
-                        <WorkflowGridImage
-                          fullSrc={img}
-                          cacheKey={`gall:${currentGroupAsset?.id ?? 'x'}:${idx}`}
-                          className="relative w-full flex justify-center bg-[#141416]"
-                          imgClassName="block max-h-[min(360px,70vh)] max-w-full w-auto h-auto object-contain"
-                          draggable={false}
-                          onDragStart={(e) => e.preventDefault()}
-                        />
-                      </div>
-                    ))
+                  ? showAllImages.map((img, idx) => {
+                      const gallKey = `gall:${currentGroupAsset?.id ?? 'x'}:${idx}`;
+                      return (
+                        <div
+                          key={idx}
+                          data-workflow-card
+                          className="break-inside-avoid mb-4 rounded-2xl border border-[#2e2e32] bg-[#141416] overflow-hidden flex justify-center"
+                        >
+                          <div
+                            className="relative w-full bg-[#141416] flex justify-center"
+                            style={{ aspectRatio: `${cardAspectByAssetId[gallKey] ?? 1}` }}
+                          >
+                            <WorkflowGridImage
+                              fullSrc={img}
+                              cacheKey={gallKey}
+                              className="relative z-0 block w-full h-full min-h-[5rem]"
+                              imgClassName="relative z-0 block w-full h-full object-contain"
+                              draggable={false}
+                              onDragStart={(e) => e.preventDefault()}
+                              onIntrinsicSize={(w, h) => {
+                                setCardAspectByAssetId((prev) => {
+                                  if (prev[gallKey] != null) return prev;
+                                  const ratio = Math.max(0.5, Math.min(2, w / h));
+                                  return { ...prev, [gallKey]: ratio };
+                                });
+                              }}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })
                   : currentGroupItems.map((item, idx) => {
                       const isAssetRef = typeof item === 'object' && item && 'assetId' in item;
                       const childAsset = isAssetRef ? assets.find((x) => x.id === (item as { assetId: string }).assetId) : null;
@@ -5457,14 +5472,24 @@ const WorkflowSection: React.FC<{
                                       }
                                     }}
                                   >
-                                    <div className="relative w-full bg-[#141416] flex justify-center">
+                                    <div
+                                      className="relative w-full bg-[#141416] flex justify-center"
+                                      style={{ aspectRatio: `${cardAspectByAssetId[childAsset.id] ?? 1}` }}
+                                    >
                                       <WorkflowGridImage
                                         fullSrc={childGridPreviewSrc}
                                         cacheKey={childGridCacheKey}
-                                        className="relative w-full flex justify-center bg-[#141416]"
-                                        imgClassName="block max-h-[min(360px,70vh)] max-w-full w-auto h-auto object-contain"
+                                        className="relative z-0 block w-full h-full min-h-[5rem]"
+                                        imgClassName="relative z-0 block w-full h-full object-contain"
                                         draggable={false}
                                         onDragStart={(e) => e.preventDefault()}
+                                        onIntrinsicSize={(w, h) => {
+                                          setCardAspectByAssetId((prev) => {
+                                            if (prev[childAsset.id] != null) return prev;
+                                            const ratio = Math.max(0.5, Math.min(2, w / h));
+                                            return { ...prev, [childAsset.id]: ratio };
+                                          });
+                                        }}
                                       />
                                       <div
                                         aria-hidden
@@ -5588,14 +5613,24 @@ const WorkflowSection: React.FC<{
                           }}
                         >
                           <div className="relative cursor-pointer" onClick={() => setGroupStringLightboxIndex(idx)}>
-                            <div className="relative w-full bg-[#141416] flex justify-center">
+                            <div
+                              className="relative w-full bg-[#141416] flex justify-center"
+                              style={{ aspectRatio: `${cardAspectByAssetId[groupKey] ?? 1}` }}
+                            >
                               <WorkflowGridImage
                                 fullSrc={img}
                                 cacheKey={`gstr:${currentGroupAsset?.id ?? 'x'}:${idx}`}
-                                className="relative w-full flex justify-center bg-[#141416]"
-                                imgClassName="block max-h-[min(360px,70vh)] max-w-full w-auto h-auto object-contain"
+                                className="relative z-0 block w-full h-full min-h-[5rem]"
+                                imgClassName="relative z-0 block w-full h-full object-contain"
                                 draggable={false}
                                 onDragStart={(e) => e.preventDefault()}
+                                onIntrinsicSize={(w, h) => {
+                                  setCardAspectByAssetId((prev) => {
+                                    if (prev[groupKey] != null) return prev;
+                                    const ratio = Math.max(0.5, Math.min(2, w / h));
+                                    return { ...prev, [groupKey]: ratio };
+                                  });
+                                }}
                               />
                               <div
                                 aria-hidden

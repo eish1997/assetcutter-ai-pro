@@ -1,6 +1,9 @@
 import React, { useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { ProgressivePreviewImage } from './ProgressivePreviewImage';
+import { CapabilityPreviewImg } from './CapabilityPreviewImg';
+import { workflowSafeImgSrc } from '../services/workflowImageDisplay';
+import { shouldUsePreviewThumbnail } from '../services/workflowImageThumb';
 
 type Props = {
   label: string;
@@ -10,8 +13,14 @@ type Props = {
   generated: string;
 };
 
+const HOVER_THUMB = 208;
+const GEN_CLIP_INITIAL: React.CSSProperties = {
+  clipPath: 'polygon(0 0, 0% 0, 0% 100%, 0 100%)',
+};
+
 /**
  * 能力卡片悬浮对比预览：扫描动画用 rAF 直接改 DOM，避免在巨型 WorkflowSection 上每秒 setState 导致整页卡顿。
+ * http(s) 预览走 CapabilityPreviewImg（多候选 URL）；大 data URL 走 ProgressivePreviewImage。
  */
 export const WorkflowCapabilityHoverPreview = React.memo(function WorkflowCapabilityHoverPreview({
   label,
@@ -22,11 +31,13 @@ export const WorkflowCapabilityHoverPreview = React.memo(function WorkflowCapabi
 }: Props) {
   const genRef = useRef<HTMLImageElement | null>(null);
   const lineRef = useRef<HTMLDivElement | null>(null);
-  const HOVER_THUMB = 208;
   const cacheKeyBase = useMemo(
     () => `cap-hover:${label}:${original.length}:${generated.length}:${original.slice(0, 48)}:${generated.slice(0, 48)}`,
     [label, original, generated]
   );
+
+  const useProgOrig = shouldUsePreviewThumbnail(workflowSafeImgSrc(original));
+  const useProgGen = shouldUsePreviewThumbnail(workflowSafeImgSrc(generated));
 
   useEffect(() => {
     let raf = 0;
@@ -57,24 +68,42 @@ export const WorkflowCapabilityHoverPreview = React.memo(function WorkflowCapabi
       <div className="w-52 rounded-xl border border-white/15 bg-[#0f1116]/90 backdrop-blur-sm p-2 shadow-2xl">
         <div className="text-[8px] text-gray-300 mb-1">{label}</div>
         <div className="relative w-full aspect-square rounded-lg overflow-hidden bg-black/30">
-          <ProgressivePreviewImage
-            fullSrc={original}
-            cacheKey={`${cacheKeyBase}:orig`}
-            thumbMaxEdge={HOVER_THUMB}
-            className="absolute inset-0"
-            imgClassName="absolute inset-0 h-full w-full object-cover"
-            alt=""
-          />
-          <ProgressivePreviewImage
-            ref={genRef}
-            fullSrc={generated}
-            cacheKey={`${cacheKeyBase}:gen`}
-            thumbMaxEdge={HOVER_THUMB}
-            className="absolute inset-0"
-            imgClassName="absolute inset-0 h-full w-full object-cover"
-            imgStyle={{ clipPath: 'polygon(0 0, 0% 0, 0% 100%, 0 100%)' }}
-            alt=""
-          />
+          {useProgOrig ? (
+            <ProgressivePreviewImage
+              fullSrc={original}
+              cacheKey={`${cacheKeyBase}:orig`}
+              thumbMaxEdge={HOVER_THUMB}
+              className="absolute inset-0"
+              imgClassName="absolute inset-0 h-full w-full object-cover"
+              alt=""
+            />
+          ) : (
+            <CapabilityPreviewImg
+              src={original}
+              className="absolute inset-0 h-full w-full object-cover"
+              alt=""
+            />
+          )}
+          {useProgGen ? (
+            <ProgressivePreviewImage
+              ref={genRef}
+              fullSrc={generated}
+              cacheKey={`${cacheKeyBase}:gen`}
+              thumbMaxEdge={HOVER_THUMB}
+              className="absolute inset-0"
+              imgClassName="absolute inset-0 h-full w-full object-cover"
+              imgStyle={GEN_CLIP_INITIAL}
+              alt=""
+            />
+          ) : (
+            <CapabilityPreviewImg
+              ref={genRef}
+              src={generated}
+              className="absolute inset-0 h-full w-full object-cover"
+              style={GEN_CLIP_INITIAL}
+              alt=""
+            />
+          )}
           <div
             ref={lineRef}
             className="absolute inset-y-0 w-[1px] bg-cyan-100/90 shadow-[0_0_10px_rgba(34,211,238,0.55)]"

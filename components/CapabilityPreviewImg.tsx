@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, forwardRef } from 'react';
 import { capabilityPreviewAlternateUrls } from '../services/capabilityPreviewUrl';
 
 type Props = {
@@ -14,7 +14,10 @@ type Props = {
 /**
  * 能力商店预览图：同源改写后若仍失败，再尝试绝对同源 URL；避免打开站点后大量裂图。
  */
-export const CapabilityPreviewImg: React.FC<Props> = ({ src, alt = '', className, style, onClick, fallback }) => {
+export const CapabilityPreviewImg = forwardRef<HTMLImageElement, Props>(function CapabilityPreviewImg(
+  { src, alt = '', className, style, onClick, fallback },
+  ref
+) {
   const [attempt, setAttempt] = useState(0);
   const candidates = capabilityPreviewAlternateUrls(src);
   const current = candidates[Math.min(attempt, candidates.length - 1)] ?? src;
@@ -41,6 +44,7 @@ export const CapabilityPreviewImg: React.FC<Props> = ({ src, alt = '', className
 
   return (
     <img
+      ref={ref}
       key={`${current}-${attempt}`}
       src={current}
       alt={alt}
@@ -52,4 +56,4 @@ export const CapabilityPreviewImg: React.FC<Props> = ({ src, alt = '', className
       onError={() => setAttempt((a) => a + 1)}
     />
   );
-};
+});
