@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "dev:auth-backend": "set PORT=9100&& node --env-file=.env.local server/auth-api.js",
+    "start:auth-backend": "node server/auth-api.js",
     "dev:seam-backend": "node scripts/start-seam-backend.js",
     "dev:all": "concurrently -n main,seam,auth -c blue,green,magenta \"npm run dev\" \"npm run dev:seam-backend\" \"npm run dev:auth-backend\"",
     "dev:with-r2": "concurrently -n vite,auth -c blue,magenta \"npm run dev\" \"node --env-file=.env.local server/auth-api.js\"",

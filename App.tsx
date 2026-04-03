@@ -1,5 +1,5 @@
 
-import React, { Suspense, useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import React, { Suspense, useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from 'react';
 import { processTexture, DEFAULT_PROMPTS, normalizeApiErrorMessage, getTexturePrompt, parsePromptStructured, understandImageEditIntent } from './services/geminiService';
 import { loadRecords, addRecord as addGenerationRecord, updateScore as updateGenerationScore } from './services/recordStore';
 import { loadSnippets } from './services/snippetStore';
@@ -1507,8 +1507,18 @@ const MainApp: React.FC = () => {
   const [dialogValidationError, setDialogValidationError] = useState<string | null>(null);
   const [atSuggestionsOpen, setAtSuggestionsOpen] = useState(false);
   const [atSuggestionsCursor, setAtSuggestionsCursor] = useState(0);
-  const dialogInputRef = useRef<HTMLInputElement>(null);
+  const dialogInputRef = useRef<HTMLTextAreaElement>(null);
   const dialogInputWrapperRef = useRef<HTMLDivElement>(null);
+  const adjustDialogTextareaHeight = useCallback(() => {
+    const el = dialogInputRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    const max = Math.min(typeof window !== 'undefined' ? window.innerHeight * 0.4 : 240, 280);
+    el.style.height = `${Math.min(el.scrollHeight, max)}px`;
+  }, []);
+  useLayoutEffect(() => {
+    adjustDialogTextareaHeight();
+  }, [dialogInputText, adjustDialogTextareaHeight]);
   const dialogTempItemRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const dialogTempMarqueeStartRef = useRef<{ x: number; y: number } | null>(null);
   const dialogTempMarqueeActiveRef = useRef(false);
@@ -4096,8 +4106,8 @@ const MainApp: React.FC = () => {
                     )}
                     <span className="text-[9px] text-gray-500">
                       {dialogAutoGenerateImage
-                        ? `可添加多张图片（最多 ${DIALOG_INPUT_IMAGES_MAX} 张），输入 @ 弹出选择图片；点击临时库图片直接加入输入框 · Ctrl+V 粘贴 · 无图时直接输入即文字对话`
-                        : `可添加多张图片（最多 ${DIALOG_INPUT_IMAGES_MAX} 张）做图文问答，输入 @ 选择图片；点击临时库图片加入输入框 · Ctrl+V 粘贴 · 当前已关闭生图，仅文字/图文回复`}
+                        ? `可添加多张图片（最多 ${DIALOG_INPUT_IMAGES_MAX} 张），输入 @ 弹出选择图片；点击临时库图片直接加入输入框 · Ctrl+V 粘贴 · 无图时直接输入即文字对话 · Enter 发送，Shift+Enter 换行`
+                        : `可添加多张图片（最多 ${DIALOG_INPUT_IMAGES_MAX} 张）做图文问答，输入 @ 选择图片；点击临时库图片加入输入框 · Ctrl+V 粘贴 · 当前已关闭生图，仅文字/图文回复 · Enter 发送，Shift+Enter 换行`}
                     </span>
                   </div>
                   {dialogValidationError && (
@@ -4107,10 +4117,10 @@ const MainApp: React.FC = () => {
                       <button type="button" onClick={() => setDialogValidationError(null)} className="ml-auto shrink-0 text-amber-400/80 hover:text-amber-300">×</button>
                     </div>
                   )}
-                  <div ref={dialogInputWrapperRef} className="flex gap-3 relative">
+                  <div ref={dialogInputWrapperRef} className="flex gap-3 relative items-end">
                     <div className="flex-1 relative">
                       <label
-                        className="absolute left-2 top-1/2 z-[1] -translate-y-1/2 flex h-9 w-9 cursor-pointer items-center justify-center rounded-lg border border-[#2e2e32] bg-[#1c1c22] text-gray-400 hover:bg-[#2e2e36] hover:text-gray-200 transition-colors"
+                        className="absolute left-2 top-3 z-[1] flex h-9 w-9 cursor-pointer items-center justify-center rounded-lg border border-[#2e2e32] bg-[#1c1c22] text-gray-400 hover:bg-[#2e2e36] hover:text-gray-200 transition-colors"
                         title="上传图片"
                         aria-label="上传图片"
                       >
@@ -4129,11 +4139,12 @@ const MainApp: React.FC = () => {
                           <path d="M21 15l-5-5L5 21" />
                         </svg>
                       </label>
-                      <input
+                      <textarea
                         ref={dialogInputRef}
                         value={dialogInputText}
+                        rows={1}
                         onChange={e => {
-                          const target = e.target as HTMLInputElement;
+                          const target = e.target as HTMLTextAreaElement;
                           setDialogInputText(target.value);
                           setDialogValidationError(null);
                           const pos = target.selectionStart ?? 0;
@@ -4144,14 +4155,17 @@ const MainApp: React.FC = () => {
                         }}
                         onKeyDown={e => {
                           if (e.key === 'Escape') setAtSuggestionsOpen(false);
-                          if (e.key === 'Enter' && !e.shiftKey) handleDialogSend();
+                          if (e.key === 'Enter' && !e.shiftKey) {
+                            e.preventDefault();
+                            handleDialogSend();
+                          }
                         }}
                         placeholder={
                           dialogAutoGenerateImage
                             ? '输入 @ 选择图片或直接输入文字；有图时描述修改需求，无图时可描述画面生成图片或与 AI 文字对话'
                             : '输入 @ 选择图片或直接输入文字；可与 AI 对话或上传图片做图文问答（不生图）'
                         }
-                        className="w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl pl-12 pr-5 py-3 text-[11px] outline-none focus:border-blue-500 transition-colors placeholder:text-gray-600"
+                        className="w-full min-h-[44px] max-h-[min(40vh,280px)] resize-none overflow-y-auto bg-[#1c1c22] border border-[#2e2e32] rounded-xl pl-12 pr-5 py-3 text-[11px] leading-relaxed outline-none focus:border-blue-500 transition-colors placeholder:text-gray-600"
                       />
                       {atSuggestionsOpen && (dialogInputImages.length > 0 || dialogTempFiltered.length > 0) && (
                         <div className="absolute left-0 right-0 top-full mt-1 z-[1003] rounded-xl border border-[#2e2e32] bg-[#0f0f0f] shadow-xl py-1 max-h-48 overflow-y-auto">

@@ -5,7 +5,7 @@ services:
     plan: free
     rootDir: .
     buildCommand: npm ci
-    startCommand: npm run dev:auth-backend
+    startCommand: npm run start:auth-backend
     healthCheckPath: /healthz
     envVars:
       - key: NODE_ENV

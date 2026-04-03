@@ -61,7 +61,8 @@
 若使用 Render，仓库已提供 `render.yaml`（静态前端 + auth-api + Postgres 免费起步版）。首次部署时请在 Render Dashboard 补齐：
 
 - `assetcutter-web`：`VITE_AUTH_API_BASE_URL=https://你的-auth-api.onrender.com`
-- `assetcutter-auth-api`：`AUTH_ADMIN_EMAIL`、`AUTH_ADMIN_PASSWORD`（可选 `AUTH_ADMIN_USERNAME`）
+- `assetcutter-auth-api`：`AUTH_ADMIN_EMAIL`、`AUTH_ADMIN_PASSWORD`（可选 `AUTH_ADMIN_USERNAME`）；**生产启动使用 `npm run start:auth-backend`**（仅 `node server/auth-api.js`，环境变量以 Dashboard 为准）。勿用 `dev:auth-backend`：其中含 Windows 的 `set` 与 `--env-file=.env.local`，在 Render（Linux）上会部署失败。
+- **必配**：`AUTH_ALLOWED_ORIGINS`（含前端完整 Origin，如 `https://xxx.vercel.app`）、`DATABASE_URL`（Blueprint 会从 Postgres 注入）；生产还要求 `AUTH_COOKIE_SAMESITE=none` 与 `AUTH_COOKIE_SECURE=true`（`render.yaml` 已写）。
 
 **前端（如 Vercel）+ 可选 Gemini 代理（如 Render）**  
 若浏览器未配置官方 Key，或需避免长请求被平台超时：构建时设置 `VITE_BULK_IMAGE_API` 指向 `server/gemini-proxy-api.js` 的公网地址；Gemini key 仅配置在后端（`GEMINI_API_KEY` 或 `GEMINI_API_KEYS`）。对话/网站助手等经 **`POST /proxy/gemini/async` + 轮询 `GET /proxy/gemini/async/:jobId`**。异步并发/重试可通过 `GEMINI_ASYNC_PROXY_MAX_CONCURRENT`、`GEMINI_PROXY_RETRIES`、`GEMINI_ASYNC_JOB_TTL_MS`、`GEMINI_ASYNC_JOB_MAX_WAIT_MS` 调整；跨域允许源通过 `PROXY_ALLOWED_ORIGINS` 配置。
