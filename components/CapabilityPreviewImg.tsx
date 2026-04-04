@@ -1,5 +1,5 @@
-import React, { useEffect, useState, forwardRef } from 'react';
-import { capabilityPreviewAlternateUrls } from '../services/capabilityPreviewUrl';
+import React, { forwardRef } from 'react';
+import { SiteImage } from './SiteImage';
 
 type Props = {
   src: string;
@@ -12,56 +12,26 @@ type Props = {
 };
 
 /**
- * 能力商店预览图：同源改写后若仍失败，再尝试绝对同源 URL；避免打开站点后大量裂图。
+ * 能力商店等场景预览图：行为与全站 `SiteImage` 一致（同源多候选 URL 重试）。
  */
 export const CapabilityPreviewImg = forwardRef<HTMLImageElement, Props>(function CapabilityPreviewImg(
   { src, alt = '', className, style, onClick, fallback },
   ref
 ) {
-  const [attempt, setAttempt] = useState(0);
-  const candidates = capabilityPreviewAlternateUrls(src);
-  const current = candidates[Math.min(attempt, candidates.length - 1)] ?? src;
-
-  useEffect(() => {
-    setAttempt(0);
-  }, [src]);
-
   if (!src.trim()) {
-    return fallback ?? null;
-  }
-
-  if (attempt >= candidates.length) {
-    return (
-      <>
-        {fallback ?? (
-          <div className={`flex flex-col items-center justify-center bg-white/5 text-gray-500 ${className ?? ''}`} style={style}>
-            <span className="text-[8px] uppercase tracking-wide">预览不可用</span>
-          </div>
-        )}
-      </>
-    );
+    return <>{fallback ?? null}</>;
   }
 
   return (
-    <img
+    <SiteImage
       ref={ref}
-      key={`${current}-${attempt}`}
-      src={current}
+      src={src}
       alt={alt}
       className={className}
       style={style}
-      loading="lazy"
-      decoding="async"
       onClick={onClick}
-      onError={() =>
-        setAttempt((a) => {
-          const next = a + 1;
-          if (next >= candidates.length) {
-            console.warn('[CapabilityPreviewImg] 预览图加载失败（已尝试全部候选）', candidates);
-          }
-          return next;
-        })
-      }
+      fallback={fallback}
+      loading="lazy"
     />
   );
 });

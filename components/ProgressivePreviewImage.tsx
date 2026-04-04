@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback, forwardRef, useRef } from 'react';
 import { workflowSafeImgSrc } from '../services/workflowImageDisplay';
+import { SiteImage } from './SiteImage';
 import {
   createPreviewMicroThumbnail,
   createPreviewThumbnail,
@@ -95,6 +96,8 @@ export type ProgressivePreviewImageProps = {
   onIntrinsicSize?: (naturalWidth: number, naturalHeight: number) => void;
   onClick?: React.MouseEventHandler<HTMLImageElement>;
   title?: string;
+  /** 直链模式（非渐进缩略）下全部 URL 加载失败时渲染 */
+  directLoadFallback?: React.ReactNode;
 };
 
 /**
@@ -123,6 +126,7 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
       onIntrinsicSize,
       onClick,
       title,
+      directLoadFallback,
     },
     ref
   ) {
@@ -274,28 +278,24 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
       return <div className={`${className ?? 'relative w-full h-full'} ${PLACEHOLDER_BG} overflow-hidden`} />;
     }
 
-    // 极短 data URL 或非 data：无渐进必要；http(s) 仍为整图请求（无法离线缩略）
+    // 极短 data URL 或非 data：无渐进必要；http(s) 走 SiteImage 多候选重试（与全站直链一致）
     if (!needThumb) {
       return (
         <div className={className ?? 'relative w-full h-full'}>
-          <img
+          <SiteImage
             ref={assignVisibleRef}
-            src={safe}
+            src={fullSrc}
             alt={alt}
             draggable={draggable}
             onDragStart={onDragStart}
             loading={imageFetchPriority === 'high' ? 'eager' : 'lazy'}
             fetchPriority={imageFetchPriority}
-            decoding="async"
-            onLoad={(e) => {
-              const iw = e.currentTarget.naturalWidth;
-              const ih = e.currentTarget.naturalHeight;
-              if (iw > 0 && ih > 0) onIntrinsicSize?.(iw, ih);
-            }}
+            onIntrinsicSize={onIntrinsicSize}
             onClick={onClick}
             title={title}
             className={imgClassName}
             style={imgStyle}
+            fallback={directLoadFallback}
           />
         </div>
       );

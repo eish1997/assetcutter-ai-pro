@@ -452,7 +452,7 @@ export function useDialogGeneration({
       addGlobalLog(
         '对话',
         'info',
-        dialogSkipUnderstand ? '已跳过理解，直接生图' : '理解完成',
+        dialogSkipUnderstand ? '未启用理解，直发生图' : '理解完成',
         shouldGenerateImage ? (firstImage ? '需要生图' : '需要生图') : (firstImage ? '仅描述/问答' : '仅文字对话')
       );
 
@@ -488,7 +488,7 @@ export function useDialogGeneration({
         appendAssistantMessage({
           id: createDialogMessageId(),
           role: 'assistant',
-          text: `理解结果：${understood}`,
+          text: dialogSkipUnderstand ? understood : `理解结果：${understood}`,
           understoodPrompt: understood,
           timestamp: Date.now(),
         });

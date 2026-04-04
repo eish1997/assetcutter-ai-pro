@@ -6,6 +6,7 @@ import * as THREE from 'three';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { seamRepairWithFallback, seamRepairHealth, type SeamRepairParams } from '../services/seamRepairService';
+import { SiteImage } from './SiteImage';
 
 // OBJ + 贴图 3D 预览（仅影响预览，不改变修复结果）
 const ObjTextureViewer: React.FC<{
@@ -416,13 +417,13 @@ const SeamRepairSection: React.FC<{ onLog?: (level: 'info' | 'warn' | 'error', m
             <div>
               <div className="text-[9px] text-gray-500 mb-1">原图</div>
               <div className="rounded-xl border border-[#2e2e32] bg-[#16161a] overflow-hidden h-[140px] flex items-center justify-center">
-                {texPreviewUrl ? <img src={texPreviewUrl} alt="原图" className="max-w-full max-h-full object-contain" /> : <span className="text-[9px] text-gray-600">—</span>}
+                {texPreviewUrl ? <SiteImage src={texPreviewUrl} alt="原图" className="max-w-full max-h-full object-contain" /> : <span className="text-[9px] text-gray-600">—</span>}
               </div>
             </div>
             <div>
               <div className="text-[9px] text-gray-500 mb-1">修复后</div>
               <div className="rounded-xl border border-[#2e2e32] bg-[#16161a] overflow-hidden h-[140px] flex items-center justify-center">
-                {resultUrl ? <img src={resultUrl} alt="修复后" className="max-w-full max-h-full object-contain" /> : <span className="text-[9px] text-gray-600">—</span>}
+                {resultUrl ? <SiteImage src={resultUrl} alt="修复后" className="max-w-full max-h-full object-contain" /> : <span className="text-[9px] text-gray-600">—</span>}
               </div>
             </div>
           </div>

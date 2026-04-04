@@ -68,7 +68,7 @@ async function resolveCapabilityPrompt(
   const presetPrompt = (preset.instruction || '').trim();
   if (!presetPrompt) return null;
   if (preset.skipUnderstand === true) {
-    ctx.onLog?.('info', `[${preset.label || preset.id}] 已关闭理解，直发生图`, undefined);
+    ctx.onLog?.('info', `[${preset.label || preset.id}] 未启用理解，提示词直发生图`, undefined);
     return presetPrompt;
   }
   ctx.onLog?.('info', `[${preset.label || preset.id}] 理解预设提示词中…`, undefined);

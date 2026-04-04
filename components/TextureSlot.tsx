@@ -1,4 +1,5 @@
 import React from 'react';
+import { SiteImage } from './SiteImage';
 
 interface TextureSlotProps {
   type: string;
@@ -30,7 +31,7 @@ const TextureSlot: React.FC<TextureSlotProps> = ({ type, imageUrl, onUpload, onC
             <span className="text-[10px] text-gray-500 animate-pulse">生成中…</span>
           </div>
         ) : imageUrl ? (
-          <img src={imageUrl} alt={type} className="w-full h-full object-cover" />
+          <SiteImage src={imageUrl} alt={type} className="w-full h-full object-cover" />
         ) : (
           <label className="flex flex-col items-center justify-center cursor-pointer w-full h-full hover:bg-[#222228] transition-colors">
             <span className="mb-2 text-gray-500 group-hover:text-blue-400 transition-colors text-xl">↑</span>

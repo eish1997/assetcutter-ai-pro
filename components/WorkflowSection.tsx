@@ -25,9 +25,8 @@ import { readLocalJson, workflowFavoritesStorageKey, writeLocalJson } from '../s
 import AppIcon from './ui/AppIcon';
 import { ImagePreviewOverlay } from './ImagePreviewOverlay';
 import { resolveCapabilityPreviewSrc } from '../services/capabilityPreviewUrl';
-import { CapabilityPreviewImg } from './CapabilityPreviewImg';
 import { WorkflowCapabilityHoverPreview } from './WorkflowCapabilityHoverPreview';
-import { ProgressivePreviewImage, WorkflowGridImage } from './ProgressivePreviewImage';
+import { WorkflowGridImage } from './ProgressivePreviewImage';
 import WorkflowPixelBusyOverlay from './WorkflowPixelBusyOverlay';
 import { workflowSafeImgSrc } from '../services/workflowImageDisplay';
 import {

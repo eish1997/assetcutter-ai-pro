@@ -25,6 +25,7 @@ import { useUserUiPrefs } from './hooks/useUserUiPrefs';
 import Waves from './components/ui/Waves';
 import AppIcon from './components/ui/AppIcon';
 import { ProgressivePreviewImage } from './components/ProgressivePreviewImage';
+import { SiteImage } from './components/SiteImage';
 import {
   loadWorkspaceProjects,
   saveWorkspaceProjects,
@@ -201,7 +202,7 @@ const AssetViewer: React.FC<{ item: LibraryItem | null; onClose: () => void }> =
               <p className="text-[11px] font-black uppercase tracking-widest">3D 模型 · 请从下方下载模型文件</p>
             </div>
           ) : (
-            <img src={item.data} className="max-w-full max-h-full object-contain shadow-2xl" alt={item.label} />
+            <SiteImage src={item.data} className="max-w-full max-h-full object-contain shadow-2xl" alt={item.label} loading="eager" />
           )}
         </div>
         <div className="w-full mt-8 flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
@@ -384,7 +385,7 @@ const RegionSelector: React.FC<{
         onTouchMove={handleMove}
         onTouchEnd={handleEnd}
       >
-        <img src={src} className="w-full h-full object-contain pointer-events-none select-none" />
+        <SiteImage src={src} className="w-full h-full object-contain pointer-events-none select-none" loading="eager" />
         {selectionRect && (
           <div 
             className="absolute border border-dashed border-blue-400/70 bg-blue-500/12 pointer-events-none shadow-[inset_0_0_0_1px_rgba(59,130,246,0.25)]"
@@ -459,7 +460,7 @@ const LibraryPickerModal: React.FC<{
                   onClick={() => toggle(item.id)}
                   className={`glass aspect-square rounded-2xl p-2 cursor-pointer border-[#252528] hover:border-blue-500 transition-all group overflow-hidden relative ${multiSelect && selectedIds.has(item.id) ? 'ring-2 ring-blue-500' : ''}`}
                 >
-                  <img src={item.data} className="w-full h-full object-contain" alt="" />
+                  <SiteImage src={item.data} className="w-full h-full object-contain" alt="" />
                   {multiSelect && (
                     <div className="absolute top-1 right-1 w-5 h-5 rounded border flex items-center justify-center bg-[#18181c]">
                       {selectedIds.has(item.id) ? <AppIcon name="check" className="w-3.5 h-3.5 text-blue-400" /> : null}
@@ -1488,6 +1489,8 @@ const MainApp: React.FC = () => {
   // 对话式生图状态
   const [dialogInputText, setDialogInputText] = useState('');
   const DIALOG_INPUT_IMAGES_MAX = 9;
+  /** 对话输入条与「发送」按钮统一的单行高度（px） */
+  const DIALOG_INPUT_BAR_H = 48;
   const [dialogInputImages, setDialogInputImages] = useState<Array<{ id: string; data: string; fromTemp?: boolean }>>([]);
   const [dialogImageGear, setDialogImageGear] = useState<DialogImageGear>('standard');
   const [dialogModel, setDialogModel] = useState<string>(
@@ -1537,13 +1540,17 @@ const MainApp: React.FC = () => {
   const [atSuggestionsCursor, setAtSuggestionsCursor] = useState(0);
   const dialogInputRef = useRef<HTMLTextAreaElement>(null);
   const dialogInputWrapperRef = useRef<HTMLDivElement>(null);
+  const [dialogInputScrollOverflow, setDialogInputScrollOverflow] = useState(false);
   const adjustDialogTextareaHeight = useCallback(() => {
     const el = dialogInputRef.current;
     if (!el) return;
     el.style.height = 'auto';
     const max = Math.min(typeof window !== 'undefined' ? window.innerHeight * 0.4 : 240, 280);
-    el.style.height = `${Math.min(el.scrollHeight, max)}px`;
-  }, []);
+    const natural = el.scrollHeight;
+    const next = Math.min(Math.max(natural, DIALOG_INPUT_BAR_H), max);
+    el.style.height = `${next}px`;
+    setDialogInputScrollOverflow(natural > max);
+  }, [DIALOG_INPUT_BAR_H]);
   useLayoutEffect(() => {
     adjustDialogTextareaHeight();
   }, [dialogInputText, adjustDialogTextareaHeight]);
@@ -2508,7 +2515,7 @@ const MainApp: React.FC = () => {
           {is3D && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-[#3730a3] text-indigo-300 border border-[#6366f1]">3D</span>}
         </div>
         <div className="aspect-square mb-6 bg-[#16161a] rounded-[2rem] overflow-hidden flex items-center justify-center p-4 cursor-pointer relative" onClick={() => setActiveAssetId(activeItem)}>
-           <img src={activeItem.data} className="max-w-full max-h-full object-contain" alt={activeItem.label} />
+           <SiteImage src={activeItem.data} className="max-w-full max-h-full object-contain" alt={activeItem.label} />
         </div>
         <div className="flex-1 px-1">
           <div className="text-[10px] font-bold truncate mb-4 uppercase tracking-widest">{activeItem.label}</div>
@@ -2556,7 +2563,7 @@ const MainApp: React.FC = () => {
             </div>
           ) : (
             <div className="relative aspect-square rounded-2xl overflow-hidden border border-[#2e2e32] group">
-              <img src={textureSource} className="w-full h-full object-cover" />
+              <SiteImage src={textureSource} className="w-full h-full object-cover" />
               <div className="absolute inset-0 bg-[#16161a] opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
                 <button onClick={() => setTextureSource('')} className="bg-red-500 px-4 py-2 rounded-full text-[8px] font-black uppercase">移除</button>
               </div>
@@ -2571,7 +2578,7 @@ const MainApp: React.FC = () => {
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                 <RegionSelector src={textureSource} onConfirm={(cropped) => runTextureProcessing(cropped, 'pattern')} onCancel={() => setTextureSource('')} />
                 <div className="relative aspect-square glass rounded-[2rem] bg-[#16161a] flex items-center justify-center overflow-hidden">
-                  {textureResult ? <img src={textureResult} className="max-w-full max-h-full object-contain p-8" /> : <span className="text-[10px] font-black uppercase text-gray-700">提取结果待生成</span>}
+                  {textureResult ? <SiteImage src={textureResult} className="max-w-full max-h-full object-contain p-8" /> : <span className="text-[10px] font-black uppercase text-gray-700">提取结果待生成</span>}
                   {isTextureProcessing && <div className="absolute inset-0 bg-[#1a1a1e] flex items-center justify-center"><div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" /></div>}
                 </div>
                 {lastTextureRecordId && textureResult && (() => {
@@ -3825,8 +3832,8 @@ const MainApp: React.FC = () => {
                   </div>
                 </div>
 
-                {/* 右侧：对话内容 */}
-                <div className="flex-1 flex flex-col min-w-0">
+                {/* 中间：对话内容 + 底部输入（min-w-0 避免工具条/下拉在 flex 内被横向裁切） */}
+                <div className="flex-1 flex flex-col min-w-0 overflow-x-visible">
                   {/* 对话列表 */}
                   <div className="flex-1 overflow-y-auto no-scrollbar space-y-6 pb-4">
                   {dialogMessages.length === 0 && (
@@ -3922,7 +3929,7 @@ const MainApp: React.FC = () => {
                                   <div className="flex items-center justify-center min-h-[140px] rounded-xl border border-[#2e2e32] bg-[#141416] text-[9px] text-gray-500">图片加载中…</div>
                                 ) : dialogDetectMessageId === msg.id && (displayVersion.detectedBoxes?.length ?? 0) > 0 && displaySrc ? (
                                   <div className="relative inline-block max-w-full">
-                                    <img src={displaySrc} className="max-w-full rounded-xl border border-[#2e2e32]" alt="生成" />
+                                    <SiteImage src={displaySrc} className="max-w-full rounded-xl border border-[#2e2e32]" alt="生成" loading="eager" />
                                     <div className="absolute inset-0 pointer-events-none">
                                       {(displayVersion.detectedBoxes ?? []).map((box, i) => (
                                         <div key={box.id} className="absolute border-2 border-blue-500 bg-[#1e40af]" style={{ left: `${box.xmin / 10}%`, top: `${box.ymin / 10}%`, width: `${(box.xmax - box.xmin) / 10}%`, height: `${(box.ymax - box.ymin) / 10}%` }}>
@@ -4011,11 +4018,11 @@ const MainApp: React.FC = () => {
                         <div className="w-3 h-3 border-2 border-[#4b6a9e] border-t-blue-500 rounded-full animate-spin" />
                         {dialogAutoGenerateImage
                           ? dialogSkipUnderstand
-                            ? '跳过理解 → 生图中...'
-                            : '理解需求 → 生图中...'
+                            ? '直发提示词，生图中…'
+                            : '理解需求 → 生图中…'
                           : dialogSkipUnderstand
-                            ? '处理中...'
-                            : '理解需求中...'}
+                            ? '处理中…'
+                            : '理解需求中…'}
                       </div>
                       <button onClick={handleDialogCancelGen} className="px-3 py-2 rounded-xl bg-[#5c1a1a] border border-[#f87171] text-[9px] font-black text-red-400 hover:bg-[#991b1b] transition-colors">停止</button>
                     </div>
@@ -4023,39 +4030,62 @@ const MainApp: React.FC = () => {
                   <div ref={dialogEndRef} />
                   </div>
                   {/* 输入区：支持粘贴图片；档位 + 比例/尺寸 + 文案 + 发送（模型由档位决定） */}
-                  <div className="glass rounded-[2rem] p-4 lg:p-6 border border-[#252528] shrink-0 space-y-4" onPaste={handleDialogPaste}>
-                  <div className="flex flex-wrap items-center gap-2 lg:gap-3">
-                    <span className="text-[9px] font-black text-gray-500 uppercase">开启生图</span>
-                    <button type="button" role="switch" aria-checked={dialogAutoGenerateImage} onClick={() => setDialogAutoGenerateImage(p => !p)} className={`relative w-11 h-6 rounded-full transition-colors ${dialogAutoGenerateImage ? 'bg-blue-600' : 'bg-[#26262c]'}`}>
-                      <span className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform ${dialogAutoGenerateImage ? 'left-6' : 'left-1'}`} />
-                    </button>
-                    {dialogAutoGenerateImage ? (
-                      <>
-                        <span className="text-[9px] font-black text-gray-500 uppercase">关闭理解</span>
-                        <button type="button" role="switch" aria-checked={dialogSkipUnderstand} onClick={() => setDialogSkipUnderstandState(p => !p)} className={`relative w-11 h-6 rounded-full transition-colors ${dialogSkipUnderstand ? 'bg-blue-600' : 'bg-[#26262c]'}`}>
-                          <span className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform ${dialogSkipUnderstand ? 'left-6' : 'left-1'}`} />
+                  <div className="glass rounded-[2rem] p-4 lg:p-6 border border-[#252528] shrink-0 min-w-0 space-y-3 overflow-visible" onPaste={handleDialogPaste}>
+                  <div className="flex w-full min-w-0 items-center gap-2 min-h-9">
+                    <div className="flex min-w-0 flex-1 flex-nowrap items-center gap-x-2 gap-y-2 overflow-x-auto overflow-y-visible no-scrollbar pr-1">
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <span className="text-[9px] font-black text-gray-500 uppercase whitespace-nowrap">开启生图</span>
+                        <button type="button" role="switch" aria-checked={dialogAutoGenerateImage} onClick={() => setDialogAutoGenerateImage(p => !p)} className={`relative w-11 h-6 rounded-full shrink-0 transition-colors ${dialogAutoGenerateImage ? 'bg-blue-600' : 'bg-[#26262c]'}`}>
+                          <span className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform ${dialogAutoGenerateImage ? 'left-6' : 'left-1'}`} />
                         </button>
-                        <span className="text-[9px] font-black text-gray-500 uppercase">挡位</span>
-                        <div className="flex rounded-lg overflow-hidden border border-[#2e2e32]">
-                          {DIALOG_IMAGE_GEARS.map(g => (
-                            <button key={g.id} type="button" onClick={() => { setDialogImageGear(g.id); setDialogModel(g.modelId); }} className={`px-3 py-2 text-[9px] font-black uppercase transition-colors ${dialogImageGear === g.id ? 'bg-blue-600 text-white' : 'bg-[#1c1c22] text-gray-500 hover:bg-[#2e2e36]'}`} title={g.modelId}>{g.label}</button>
-                          ))}
+                      </div>
+                      {dialogAutoGenerateImage ? (
+                        <>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <span className="text-[9px] font-black text-gray-500 uppercase whitespace-nowrap">理解</span>
+                            <button
+                              type="button"
+                              role="switch"
+                              aria-checked={!dialogSkipUnderstand}
+                              title={dialogSkipUnderstand ? '已关闭：将直接使用输入框内容生图/回复' : '已开启：先由模型理解需求再执行'}
+                              onClick={() => setDialogSkipUnderstandState((p) => !p)}
+                              className={`relative w-11 h-6 rounded-full shrink-0 transition-colors ${!dialogSkipUnderstand ? 'bg-blue-600' : 'bg-[#26262c]'}`}
+                            >
+                              <span className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform ${!dialogSkipUnderstand ? 'left-6' : 'left-1'}`} />
+                            </button>
+                          </div>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <span className="text-[9px] font-black text-gray-500 uppercase whitespace-nowrap">挡位</span>
+                            <div className="flex rounded-lg overflow-hidden border border-[#2e2e32] shrink-0">
+                              {DIALOG_IMAGE_GEARS.map(g => (
+                                <button key={g.id} type="button" onClick={() => { setDialogImageGear(g.id); setDialogModel(g.modelId); }} className={`px-2.5 py-1.5 text-[9px] font-black uppercase transition-colors ${dialogImageGear === g.id ? 'bg-blue-600 text-white' : 'bg-[#1c1c22] text-gray-500 hover:bg-[#2e2e36]'}`} title={g.modelId}>{g.label}</button>
+                              ))}
+                            </div>
+                          </div>
+                        </>
+                      ) : null}
+                    </div>
+                    {dialogAutoGenerateImage ? (
+                      <div className="flex shrink-0 items-center gap-2 border-l border-white/10 pl-2 sm:pl-3">
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <span className="text-[9px] font-black text-gray-500 uppercase whitespace-nowrap">比例</span>
+                          <CustomDropdown
+                            options={DIALOG_ASPECT_RATIO_OPTIONS.map((r) => ({ value: r.value, label: r.label }))}
+                            value={dialogAspectRatio}
+                            onChange={setDialogAspectRatio}
+                            triggerClassName={`${DROPDOWN_TRIGGER_COMPACT} min-w-[5.5rem]`}
+                          />
                         </div>
-                        <span className="text-[9px] font-black text-gray-500 uppercase">比例</span>
-                        <CustomDropdown
-                          options={DIALOG_ASPECT_RATIO_OPTIONS.map((r) => ({ value: r.value, label: r.label }))}
-                          value={dialogAspectRatio}
-                          onChange={setDialogAspectRatio}
-                          triggerClassName={`${DROPDOWN_TRIGGER_COMPACT} min-w-[5.5rem]`}
-                        />
-                        <span className="text-[9px] font-black text-gray-500 uppercase">尺寸</span>
-                        <CustomDropdown
-                          options={SUPPORTED_IMAGE_SIZES.map((s) => ({ value: s.value, label: s.label }))}
-                          value={dialogImageSize}
-                          onChange={setDialogImageSize}
-                          triggerClassName={`${DROPDOWN_TRIGGER_COMPACT} min-w-[4rem]`}
-                        />
-                      </>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <span className="text-[9px] font-black text-gray-500 uppercase whitespace-nowrap">尺寸</span>
+                          <CustomDropdown
+                            options={SUPPORTED_IMAGE_SIZES.map((s) => ({ value: s.value, label: s.label }))}
+                            value={dialogImageSize}
+                            onChange={setDialogImageSize}
+                            triggerClassName={`${DROPDOWN_TRIGGER_COMPACT} min-w-[4.75rem]`}
+                          />
+                        </div>
+                      </div>
                     ) : null}
                   </div>
                   <div className="flex flex-col gap-2">
@@ -4077,11 +4107,18 @@ const MainApp: React.FC = () => {
                         ))}
                       </div>
                     )}
-                    <span className="text-[9px] text-gray-500">
+                    <p
+                      className="text-[9px] text-gray-500 leading-snug"
+                      title={
+                        dialogAutoGenerateImage
+                          ? `可添加多张图片（最多 ${DIALOG_INPUT_IMAGES_MAX} 张），输入 @ 弹出选择；临时库图片可加入输入框。Ctrl+V 粘贴。无图时可文字对话或描述生图。Enter 发送，Shift+Enter 换行。`
+                          : `可添加多张图片（最多 ${DIALOG_INPUT_IMAGES_MAX} 张）做图文问答。@ 选择图片，Ctrl+V 粘贴。已关闭生图，仅文字/图文回复。Enter 发送，Shift+Enter 换行。`
+                      }
+                    >
                       {dialogAutoGenerateImage
-                        ? `可添加多张图片（最多 ${DIALOG_INPUT_IMAGES_MAX} 张），输入 @ 弹出选择图片；点击临时库图片直接加入输入框 · Ctrl+V 粘贴 · 无图时直接输入即文字对话 · Enter 发送，Shift+Enter 换行`
-                        : `可添加多张图片（最多 ${DIALOG_INPUT_IMAGES_MAX} 张）做图文问答，输入 @ 选择图片；点击临时库图片加入输入框 · Ctrl+V 粘贴 · 当前已关闭生图，仅文字/图文回复 · Enter 发送，Shift+Enter 换行`}
-                    </span>
+                        ? `最多 ${DIALOG_INPUT_IMAGES_MAX} 张 · @ 选图 · Ctrl+V · Enter 发送 · Shift+Enter 换行`
+                        : `最多 ${DIALOG_INPUT_IMAGES_MAX} 张 · @ 选图 · 不生图 · Enter 发送 · Shift+Enter 换行`}
+                    </p>
                   </div>
                   {dialogValidationError && (
                     <div className="text-[11px] text-amber-400 bg-[#2c2412] border border-[#b45309] rounded-xl px-4 py-2 flex items-center gap-2">
@@ -4091,26 +4128,28 @@ const MainApp: React.FC = () => {
                     </div>
                   )}
                   <div ref={dialogInputWrapperRef} className="flex gap-3 relative items-end">
-                    <div className="flex-1 relative">
+                    <div className="flex-1 relative flex min-h-12 min-w-0 gap-3 rounded-xl border border-[#2e2e32] bg-[#1c1c22] transition-colors focus-within:border-blue-500 overflow-visible">
                       <label
-                        className="absolute left-2 top-3 z-[1] flex h-9 w-9 cursor-pointer items-center justify-center rounded-lg border border-[#2e2e32] bg-[#1c1c22] text-gray-400 hover:bg-[#2e2e36] hover:text-gray-200 transition-colors"
+                        className="shrink-0 flex min-h-12 w-11 items-center justify-center pl-2.5 self-stretch cursor-pointer text-gray-400 hover:text-gray-200"
                         title="上传图片"
                         aria-label="上传图片"
                       >
-                        <input
-                          type="file"
-                          className="sr-only"
-                          accept="image/*"
-                          multiple
-                          onChange={(e) => {
-                            void handleDialogImagesUpload(e);
-                          }}
-                        />
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                          <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                          <circle cx="8.5" cy="8.5" r="1.5" />
-                          <path d="M21 15l-5-5L5 21" />
-                        </svg>
+                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-[#2e2e32] bg-[#16161a] hover:bg-[#2e2e36] transition-colors">
+                          <input
+                            type="file"
+                            className="sr-only"
+                            accept="image/*"
+                            multiple
+                            onChange={(e) => {
+                              void handleDialogImagesUpload(e);
+                            }}
+                          />
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                            <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                            <circle cx="8.5" cy="8.5" r="1.5" />
+                            <path d="M21 15l-5-5L5 21" />
+                          </svg>
+                        </span>
                       </label>
                       <textarea
                         ref={dialogInputRef}
@@ -4135,13 +4174,13 @@ const MainApp: React.FC = () => {
                         }}
                         placeholder={
                           dialogAutoGenerateImage
-                            ? '输入 @ 选择图片或直接输入文字；有图时描述修改需求，无图时可描述画面生成图片或与 AI 文字对话'
-                            : '输入 @ 选择图片或直接输入文字；可与 AI 对话或上传图片做图文问答（不生图）'
+                            ? '@ 选图或输入文字；有图写改法，无图可生图或闲聊'
+                            : '@ 选图或输入文字；图文问答（不生图）'
                         }
-                        className="w-full min-h-[44px] max-h-[min(40vh,280px)] resize-none overflow-y-auto bg-[#1c1c22] border border-[#2e2e32] rounded-xl pl-12 pr-5 py-3 text-[11px] leading-relaxed outline-none focus:border-blue-500 transition-colors placeholder:text-gray-600"
+                        className={`flex-1 min-w-0 min-h-12 max-h-[min(40vh,280px)] resize-none border-0 bg-transparent py-[14px] pr-4 text-[11px] leading-5 outline-none ring-0 focus:ring-0 transition-colors placeholder:text-gray-600 rounded-r-xl ${dialogInputScrollOverflow ? 'overflow-y-auto' : 'overflow-y-hidden'}`}
                       />
                       {atSuggestionsOpen && (dialogInputImages.length > 0 || dialogTempFiltered.length > 0) && (
-                        <div className="absolute left-0 right-0 top-full mt-1 z-[1003] rounded-xl border border-[#2e2e32] bg-[#0f0f0f] shadow-xl py-1 max-h-48 overflow-y-auto">
+                        <div className="absolute left-0 right-0 bottom-full mb-1 z-[5000] rounded-xl border border-[#2e2e32] bg-[#0f0f0f] shadow-xl py-1 max-h-[min(50vh,240px)] overflow-y-auto">
                           {dialogInputImages.length > 0 && (
                             <div className="px-2 py-1 text-[8px] font-black text-gray-500 uppercase">输入框图片</div>
                           )}
@@ -4180,7 +4219,7 @@ const MainApp: React.FC = () => {
                         </div>
                       )}
                     </div>
-                    <button onClick={handleDialogSend} disabled={dialogSendingSessionIds.includes(dialogActiveSessionIdResolved) || !dialogInputText.trim()} className="px-8 py-3 bg-blue-600 rounded-xl text-[10px] font-black uppercase electric-glow disabled:opacity-20 transition-all shrink-0">发送</button>
+                    <button type="button" onClick={handleDialogSend} disabled={dialogSendingSessionIds.includes(dialogActiveSessionIdResolved) || !dialogInputText.trim()} className="inline-flex h-12 items-center justify-center px-8 rounded-xl text-[10px] font-black uppercase shrink-0 transition-all bg-blue-600 text-white hover:bg-blue-500 shadow-md shadow-blue-600/25 border border-blue-500/30 self-end disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none disabled:border-transparent disabled:hover:bg-blue-600">发送</button>
                   </div>
                 </div>
                 </div>

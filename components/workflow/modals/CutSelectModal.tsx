@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import type { BoundingBox } from '../../../types';
 import AppIcon from '../../ui/AppIcon';
+import { SiteImage } from '../../SiteImage';
 
 const CutSelectModal: React.FC<{
   inputImage: string;
@@ -36,7 +37,7 @@ const CutSelectModal: React.FC<{
           </button>
         </div>
         <div className="relative inline-block max-w-full">
-          <img src={inputImage} alt="" className="max-h-[60vh] w-auto block" />
+          <SiteImage src={inputImage} alt="" className="max-h-[60vh] w-auto block" loading="eager" />
           <svg
             className="absolute inset-0 w-full h-full pointer-events-none"
             style={{ left: 0, top: 0 }}

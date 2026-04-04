@@ -5,6 +5,7 @@ import { dialogGenerateImage, generateArenaPrompts, optimizeLoserPrompt, generat
 import { loadSnippets, addSnippet, removeSnippet } from '../services/snippetStore';
 import { addChoice } from '../services/abChoiceStore';
 import AppIcon from './ui/AppIcon';
+import { SiteImage } from './SiteImage';
 
 const ARENA_SNAPSHOT_TEXT_LIMIT = 4000;
 function stepId() {
@@ -952,7 +953,7 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
                 <div key={s.id} className="rounded-lg border border-[#2e2e32] bg-[#1c1c22] p-2 group">
                   {s.previewImage && (
                     <button type="button" onClick={() => openReplay(s)} className="block w-full mb-2">
-                      <img src={s.previewImage} alt="擂主预览" className="w-full h-28 object-cover rounded-lg border border-[#2e2e32]" />
+                      <SiteImage src={s.previewImage} alt="擂主预览" className="w-full h-28 object-cover rounded-lg border border-[#2e2e32]" />
                     </button>
                   )}
                   <button
@@ -994,7 +995,7 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
             </label>
           ) : (
             <div className="relative inline-block">
-              <img src={arenaImage} alt="底图" className="max-h-32 rounded-xl border border-[#2e2e32]" />
+              <SiteImage src={arenaImage} alt="底图" className="max-h-32 rounded-xl border border-[#2e2e32]" />
               <button type="button" onClick={() => setArenaImage('')} className="absolute top-1 right-1 w-6 h-6 rounded bg-[#b91c1c] text-white text-xs">×</button>
             </div>
           )}
@@ -1092,7 +1093,7 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
                                     className="block w-full"
                                     aria-label={`放大预览：${opt.label}`}
                                   >
-                                    <img src={opt.image} alt={opt.label} className="w-full rounded-xl border border-[#2e2e32]" />
+                                    <SiteImage src={opt.image} alt={opt.label} className="w-full rounded-xl border border-[#2e2e32]" />
                                   </button>
                                 ) : (
                                   <div className="aspect-square rounded-xl bg-[#1c1c22] flex items-center justify-center text-[9px] text-gray-500">生成中…</div>
@@ -1336,7 +1337,7 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
                 <button type="button" onClick={() => setReplayOpen(false)} className="w-9 h-9 rounded-lg bg-[#1c1c22] border border-[#2e2e32] hover:bg-[#2e2e36] flex items-center justify-center"><AppIcon name="close" className="w-4 h-4" /></button>
               </div>
               {replaySnippet.previewImage && (
-                <img src={replaySnippet.previewImage} alt="擂主预览" className="w-full max-h-64 object-contain rounded-xl border border-[#2e2e32] mb-3" />
+                <SiteImage src={replaySnippet.previewImage} alt="擂主预览" className="w-full max-h-64 object-contain rounded-xl border border-[#2e2e32] mb-3" />
               )}
               <p className="text-[10px] text-gray-300 mb-3 break-words">{replaySnippet.text}</p>
               <div className="space-y-3">
@@ -1364,7 +1365,7 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
                           <div key={`${block.id}_${i}`} className="rounded-lg border border-[#2e2e32] bg-[#121214] p-2">
                             <div className="text-[9px] font-black text-gray-500 uppercase mb-1">{opt.label}</div>
                             <div className="text-[9px] text-gray-400 mb-2 break-words">{opt.prompt}</div>
-                            {opt.image ? <img src={opt.image} alt={opt.label} className="w-full rounded-lg border border-[#2e2e32]" /> : null}
+                            {opt.image ? <SiteImage src={opt.image} alt={opt.label} className="w-full rounded-lg border border-[#2e2e32]" /> : null}
                           </div>
                         ))}
                       </div>

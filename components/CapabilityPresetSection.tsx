@@ -1350,9 +1350,13 @@ const CapabilityPresetSection: React.FC<{
                     triggerClassName={DROPDOWN_TRIGGER_COMPACT}
                   />
                 </label>
-                <label className="flex items-center gap-2 text-[9px] text-gray-400">
-                  <input type="checkbox" checked={newSkipUnderstand} onChange={(e) => setNewSkipUnderstand(e.target.checked)} />
-                  <span className="font-black uppercase">关闭理解</span>
+                <label className="flex items-center gap-2 text-[9px] text-gray-400 cursor-pointer" title="勾选：先由文字模型理解预设提示词再生成生图提示词；不勾选：预设提示词直发生图模型">
+                  <input
+                    type="checkbox"
+                    checked={!newSkipUnderstand}
+                    onChange={(e) => setNewSkipUnderstand(!e.target.checked)}
+                  />
+                  <span className="font-black uppercase">理解</span>
                 </label>
               </>
             )}
@@ -1642,9 +1646,13 @@ const CapabilityPresetSection: React.FC<{
                             triggerClassName={DROPDOWN_TRIGGER_COMPACT}
                           />
                         </label>
-                        <label className="flex items-center gap-2 text-[9px] text-gray-400">
-                          <input type="checkbox" checked={editSkipUnderstand} onChange={(e) => setEditSkipUnderstand(e.target.checked)} />
-                          <span className="font-black uppercase">关闭理解</span>
+                        <label className="flex items-center gap-2 text-[9px] text-gray-400 cursor-pointer" title="勾选：先理解再生成生图提示词；不勾选：预设提示词直发">
+                          <input
+                            type="checkbox"
+                            checked={!editSkipUnderstand}
+                            onChange={(e) => setEditSkipUnderstand(!e.target.checked)}
+                          />
+                          <span className="font-black uppercase">理解</span>
                         </label>
                       </>
                     )}
@@ -1898,8 +1906,8 @@ const CapabilityPresetSection: React.FC<{
                               </span>
                             )}
                             {(p.category === 'image_gen' || getEngine(p) === 'gen_image') && p.skipUnderstand === true && (
-                              <span className="shrink-0 px-2 py-0.5 rounded text-[8px] font-black uppercase bg-[#1e3558] text-blue-300">
-                                关闭理解
+                              <span className="shrink-0 px-2 py-0.5 rounded text-[8px] font-black uppercase bg-[#1e3558] text-blue-300" title="不先理解，预设提示词直发生图">
+                                直发
                               </span>
                             )}
                             {isBuiltinImageProcess(p) && (

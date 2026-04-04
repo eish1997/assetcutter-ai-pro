@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import TextureSlot from './TextureSlot';
+import { SiteImage } from './SiteImage';
 import { generatePBRTexture } from '../services/geminiService';
 
 const PBR_TEXTURE_IDS = ['ao', 'curvature', 'normal', 'position'] as const;
@@ -257,7 +258,7 @@ const GenerateTextureSection: React.FC<GenerateTextureSectionProps> = ({ onLog }
                     </div>
                   ) : baseColorMap ? (
                     <div className="w-full h-full relative group">
-                      <img src={baseColorMap.url!} className="w-full h-full object-contain" alt="Base Color" />
+                      <SiteImage src={baseColorMap.url!} className="w-full h-full object-contain" alt="Base Color" />
                       <div className="absolute inset-0 bg-[#18181c] opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                         <button
                           type="button"
@@ -294,7 +295,7 @@ const GenerateTextureSection: React.FC<GenerateTextureSectionProps> = ({ onLog }
                         <div className="absolute top-2 left-2 z-10 text-[9px] font-black uppercase bg-[#0d0d10] px-2 py-1 rounded text-gray-300">
                           {map.type}
                         </div>
-                        <img src={map.url!} className="w-full h-full object-cover" alt={map.type} />
+                        <SiteImage src={map.url!} className="w-full h-full object-cover" alt={map.type} />
                         <div className="absolute inset-0 bg-[#1a1a1e] opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                           <button
                             type="button"
