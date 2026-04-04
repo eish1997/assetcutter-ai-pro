@@ -2585,6 +2585,15 @@ const WorkflowSection: React.FC<{
 
   const currentGroupAsset = viewStack.length > 0 ? assets.find((a) => a.id === viewStack[viewStack.length - 1].assetId) : null;
   const currentGroupItems = currentGroupAsset?.cutImageGroup ?? [];
+  /** 组内拖到功能区/队列时以 drag state 中的组 id 为准，避免 viewStack 与拖拽源短暂不一致导致无法入队 */
+  const groupAssetForDrag = useMemo(
+    () =>
+      draggingGroupItems
+        ? assets.find((a) => a.id === draggingGroupItems.groupAssetId) ?? null
+        : null,
+    [draggingGroupItems, assets]
+  );
+  const dragGroupCutItems = groupAssetForDrag?.cutImageGroup ?? [];
 
   const flattenGroupImages = useCallback(
     (asset: WorkflowAsset, visited: Set<string> = new Set()): string[] => {
@@ -2619,6 +2628,20 @@ const WorkflowSection: React.FC<{
         label: a.groupLabel ?? (a.groupKind === 'manual' ? `组 ${idx + 1}` : `切割 ${idx + 1}`),
       }));
   }, [viewStack, assets]);
+
+  /** Planner「将第一步加入待处理」：根网格用 selectedAssetIds；组内选区需解析到子资产 id（与根级单选入队一致） */
+  const plannerTargetAssetId = useMemo((): string | null => {
+    if (selectedAssetIds.size > 0) return [...selectedAssetIds][0] ?? null;
+    if (!currentGroupAsset || selectedGroupItemKeys.size === 0) return null;
+    const firstKey = [...selectedGroupItemKeys][0];
+    const idx = Number(String(firstKey).split('::').pop());
+    if (Number.isNaN(idx) || idx < 0) return null;
+    const item = currentGroupAsset.cutImageGroup?.[idx];
+    if (item && typeof item === 'object' && 'assetId' in item) {
+      return (item as { assetId: string }).assetId;
+    }
+    return null;
+  }, [selectedAssetIds, currentGroupAsset, selectedGroupItemKeys]);
 
   /** 将组内项解析为资产 id 列表：引用项直接取 assetId；base64 项先创建子资产并更新组，再返回新 id */
   const ensureGroupItemsAsAssets = useCallback(
@@ -2901,8 +2924,6 @@ const WorkflowSection: React.FC<{
 
   const handleDropToModuleAction = useCallback(
     (mod: CustomAppModule, tweakPrompt = false) => {
-      // 组内子卡片不允许拖到功能区「生图」块（含微调入口），避免误把组槽位图塞进生成队列
-      if (draggingGroupItems && currentGroupAsset && mod.category === 'image_gen') return;
       if (tweakPrompt) {
         const targets: Array<
           | {
@@ -2921,6 +2942,32 @@ const WorkflowSection: React.FC<{
             if (a) targets.push({ assetId: id, inputImage: getAssetDisplayImage(a), inputSourceDisplayKey: a.displayKey });
           });
         }
+        if (draggingGroupItems && groupAssetForDrag) {
+          const groupId = groupAssetForDrag.id;
+          draggingGroupItems.itemIndexes.forEach((itemIndex) => {
+            const item = dragGroupCutItems[itemIndex];
+            if (!item) return;
+            if (typeof item === 'string') {
+              targets.push({
+                imageBase64: item,
+                parentAssetId: groupId,
+                sourceGroupAssetId: groupId,
+                sourceItemIndex: itemIndex,
+              });
+            } else if (item && typeof item === 'object' && 'assetId' in item) {
+              const child = assets.find((x) => x.id === (item as { assetId: string }).assetId);
+              if (child) {
+                targets.push({
+                  assetId: child.id,
+                  inputImage: getAssetDisplayImage(child),
+                  inputSourceDisplayKey: child.displayKey,
+                  sourceGroupAssetId: groupId,
+                  sourceItemIndex: itemIndex,
+                });
+              }
+            }
+          });
+        }
         if (targets.length > 0) setPromptTweakModal({ preset: mod, targets });
         return;
       }
@@ -2936,13 +2983,14 @@ const WorkflowSection: React.FC<{
         effectiveIds.forEach((id) => addToPending(id, mod.id));
         return;
       }
-      if (draggingGroupItems && currentGroupAsset) {
+      if (draggingGroupItems && groupAssetForDrag) {
+        const groupId = groupAssetForDrag.id;
         if (mod.category === 'generate_3d' && onAddGenerate3DJob) {
           const firstIndex = draggingGroupItems.itemIndexes[0];
-          const item = currentGroupItems[firstIndex];
+          const item = dragGroupCutItems[firstIndex];
           let img: string | null = null;
           if (typeof item === 'string') img = item;
-          else {
+          else if (item && typeof item === 'object' && 'assetId' in item) {
             const child = assets.find((x) => x.id === item.assetId);
             if (child) img = getAssetDisplayImage(child);
           }
@@ -2950,12 +2998,12 @@ const WorkflowSection: React.FC<{
           return;
         }
         draggingGroupItems.itemIndexes.forEach((itemIndex) => {
-          const item = currentGroupItems[itemIndex];
+          const item = dragGroupCutItems[itemIndex];
           if (!item) return;
           if (typeof item === 'string') {
             addImageToPending(item, mod.id, {
-              parentAssetId: currentGroupAsset.id,
-              sourceGroupAssetId: currentGroupAsset.id,
+              parentAssetId: groupId,
+              sourceGroupAssetId: groupId,
               sourceItemIndex: itemIndex,
             });
           } else {
@@ -2970,7 +3018,7 @@ const WorkflowSection: React.FC<{
                 inputImage,
                 addedAt: Date.now(),
                 inputSourceDisplayKey: child?.displayKey,
-                sourceGroupAssetId: currentGroupAsset.id,
+                sourceGroupAssetId: groupId,
                 sourceItemIndex: itemIndex,
               },
             ]);
@@ -2984,13 +3032,14 @@ const WorkflowSection: React.FC<{
       assets,
       getAssetDisplayImage,
       draggingGroupItems,
-      currentGroupAsset,
-      currentGroupItems,
+      groupAssetForDrag,
+      dragGroupCutItems,
       onAddGenerate3DJob,
       draggingAssetId,
       addToPending,
       addImageToPending,
       setPending,
+      setPromptTweakModal,
     ]
   );
 
@@ -3001,14 +3050,15 @@ const WorkflowSection: React.FC<{
         effectiveIds.forEach((id) => addToPending(id, setActionId));
         return;
       }
-      if (draggingGroupItems && currentGroupAsset) {
+      if (draggingGroupItems && groupAssetForDrag) {
+        const groupId = groupAssetForDrag.id;
         draggingGroupItems.itemIndexes.forEach((itemIndex) => {
-          const item = currentGroupItems[itemIndex];
+          const item = dragGroupCutItems[itemIndex];
           if (!item) return;
           if (typeof item === 'string') {
             addImageToPending(item, setActionId, {
-              parentAssetId: currentGroupAsset.id,
-              sourceGroupAssetId: currentGroupAsset.id,
+              parentAssetId: groupId,
+              sourceGroupAssetId: groupId,
               sourceItemIndex: itemIndex,
             });
           } else {
@@ -3023,7 +3073,7 @@ const WorkflowSection: React.FC<{
                 inputImage,
                 addedAt: Date.now(),
                 inputSourceDisplayKey: child?.displayKey,
-                sourceGroupAssetId: currentGroupAsset.id,
+                sourceGroupAssetId: groupId,
                 sourceItemIndex: itemIndex,
               },
             ]);
@@ -3036,8 +3086,8 @@ const WorkflowSection: React.FC<{
       getEffectiveAssetIdsForAction,
       addToPending,
       draggingGroupItems,
-      currentGroupAsset,
-      currentGroupItems,
+      groupAssetForDrag,
+      dragGroupCutItems,
       addImageToPending,
       assets,
       getAssetDisplayImage,
@@ -3819,10 +3869,9 @@ const WorkflowSection: React.FC<{
     >
           <WorkflowPlannerBar
             actionModules={actionModules}
-            selectedAssetId={selectedAssetIds.size > 0 ? [...selectedAssetIds][0]! : null}
+            selectedAssetId={plannerTargetAssetId}
             onAddToQueue={(presetId) => {
-              const aid = selectedAssetIds.size > 0 ? [...selectedAssetIds][0]! : null;
-              if (aid) addToPending(aid, presetId);
+              if (plannerTargetAssetId) addToPending(plannerTargetAssetId, presetId);
             }}
             onLog={onLog}
           />
@@ -3960,7 +4009,7 @@ const WorkflowSection: React.FC<{
               }
               if (draggingAssetIds?.length) {
                 duplicateAssetInPlace(draggingAssetIds, null);
-              } else if (draggingGroupItems && currentGroupAsset) {
+              } else if (draggingGroupItems && groupAssetForDrag && currentGroupAsset) {
                 const groupId = currentGroupAsset.id;
                 setAssets((prev) => {
                   const { nextAssets, assetIds } = ensureGroupItemsAsAssets(
@@ -4402,13 +4451,14 @@ const WorkflowSection: React.FC<{
                               effectiveIds.forEach((id) => addToPending(id, mod.id));
                               return;
                             }
-                            if (draggingGroupItems && currentGroupAsset && mod.category !== 'image_gen') {
+                            if (draggingGroupItems && groupAssetForDrag) {
+                              const groupId = groupAssetForDrag.id;
                               if (mod.category === 'generate_3d' && onAddGenerate3DJob) {
                                 const firstIndex = draggingGroupItems.itemIndexes[0];
-                                const item = currentGroupItems[firstIndex];
+                                const item = dragGroupCutItems[firstIndex];
                                 let img: string | null = null;
                                 if (typeof item === 'string') img = item;
-                                else {
+                                else if (item && typeof item === 'object' && 'assetId' in item) {
                                   const child = assets.find((x) => x.id === item.assetId);
                                   if (child) img = getAssetDisplayImage(child);
                                 }
@@ -4416,12 +4466,12 @@ const WorkflowSection: React.FC<{
                                 return;
                               }
                               draggingGroupItems.itemIndexes.forEach((itemIndex) => {
-                                const item = currentGroupItems[itemIndex];
+                                const item = dragGroupCutItems[itemIndex];
                                 if (!item) return;
                                 if (typeof item === 'string') {
                                   addImageToPending(item, mod.id, {
-                                    parentAssetId: currentGroupAsset.id,
-                                    sourceGroupAssetId: currentGroupAsset.id,
+                                    parentAssetId: groupId,
+                                    sourceGroupAssetId: groupId,
                                     sourceItemIndex: itemIndex,
                                   });
                                 } else {
@@ -4436,7 +4486,7 @@ const WorkflowSection: React.FC<{
                                       inputImage,
                                       addedAt: Date.now(),
                                       inputSourceDisplayKey: child?.displayKey,
-                                      sourceGroupAssetId: currentGroupAsset.id,
+                                      sourceGroupAssetId: groupId,
                                       sourceItemIndex: itemIndex,
                                     },
                                   ]);
@@ -4469,29 +4519,7 @@ const WorkflowSection: React.FC<{
                               e.preventDefault();
                               e.stopPropagation();
                               setDragOverAction(null);
-                              const targets: Array<
-                                | {
-                                    assetId: string;
-                                    inputImage: string;
-                                    inputSourceDisplayKey?: string;
-                                    sourceGroupAssetId?: string;
-                                    sourceItemIndex?: number;
-                                  }
-                                | { imageBase64: string; parentAssetId: string; sourceGroupAssetId: string; sourceItemIndex: number }
-                              > = [];
-                              if (draggingAssetIds?.length) {
-                                const effectiveIds = getEffectiveAssetIdsForAction(draggingAssetIds);
-                                effectiveIds.forEach((id) => {
-                                  const a = assets.find((x) => x.id === id);
-                                  if (a)
-                                    targets.push({
-                                      assetId: id,
-                                      inputImage: getAssetDisplayImage(a),
-                                      inputSourceDisplayKey: a.displayKey,
-                                    });
-                                });
-                              }
-                              if (targets.length > 0) setPromptTweakModal({ preset: mod, targets });
+                              handleDropToModuleAction(mod, true);
                             }}
                           >
                             <span className="text-[10px] text-blue-400 font-bold" title="微调提示词">词</span>
@@ -4574,13 +4602,14 @@ const WorkflowSection: React.FC<{
                         effectiveIds.forEach((id) => addToPending(id, mod.id));
                         return;
                       }
-                      if (draggingGroupItems && currentGroupAsset && mod.category !== 'image_gen') {
+                      if (draggingGroupItems && groupAssetForDrag) {
+                        const groupId = groupAssetForDrag.id;
                         if (mod.category === 'generate_3d' && onAddGenerate3DJob) {
                           const firstIndex = draggingGroupItems.itemIndexes[0];
-                          const item = currentGroupItems[firstIndex];
+                          const item = dragGroupCutItems[firstIndex];
                           let img: string | null = null;
                           if (typeof item === 'string') img = item;
-                          else {
+                          else if (item && typeof item === 'object' && 'assetId' in item) {
                             const child = assets.find((x) => x.id === item.assetId);
                             if (child) img = getAssetDisplayImage(child);
                           }
@@ -4588,12 +4617,12 @@ const WorkflowSection: React.FC<{
                           return;
                         }
                         draggingGroupItems.itemIndexes.forEach((itemIndex) => {
-                          const item = currentGroupItems[itemIndex];
+                          const item = dragGroupCutItems[itemIndex];
                           if (!item) return;
                           if (typeof item === 'string') {
                             addImageToPending(item, mod.id, {
-                              parentAssetId: currentGroupAsset.id,
-                              sourceGroupAssetId: currentGroupAsset.id,
+                              parentAssetId: groupId,
+                              sourceGroupAssetId: groupId,
                               sourceItemIndex: itemIndex,
                             });
                           } else {
@@ -4608,7 +4637,7 @@ const WorkflowSection: React.FC<{
                                 inputImage,
                                 addedAt: Date.now(),
                                 inputSourceDisplayKey: child?.displayKey,
-                                sourceGroupAssetId: currentGroupAsset.id,
+                                sourceGroupAssetId: groupId,
                                 sourceItemIndex: itemIndex,
                               },
                             ]);
@@ -4641,29 +4670,7 @@ const WorkflowSection: React.FC<{
                         e.preventDefault();
                         e.stopPropagation();
                         setDragOverAction(null);
-                        const targets: Array<
-                          | {
-                              assetId: string;
-                              inputImage: string;
-                              inputSourceDisplayKey?: string;
-                              sourceGroupAssetId?: string;
-                              sourceItemIndex?: number;
-                            }
-                          | { imageBase64: string; parentAssetId: string; sourceGroupAssetId: string; sourceItemIndex: number }
-                        > = [];
-                        if (draggingAssetIds?.length) {
-                          const effectiveIds = getEffectiveAssetIdsForAction(draggingAssetIds);
-                          effectiveIds.forEach((id) => {
-                            const a = assets.find((x) => x.id === id);
-                            if (a)
-                              targets.push({
-                                assetId: id,
-                                inputImage: getAssetDisplayImage(a),
-                                inputSourceDisplayKey: a.displayKey,
-                              });
-                          });
-                        }
-                        if (targets.length > 0) setPromptTweakModal({ preset: mod, targets });
+                        handleDropToModuleAction(mod, true);
                       }}
                     >
                       <span className="text-[10px] text-blue-400 font-bold" title="微调提示词">词</span>
@@ -4730,14 +4737,15 @@ const WorkflowSection: React.FC<{
                           return;
                         }
 
-                        if (draggingGroupItems && currentGroupAsset) {
+                        if (draggingGroupItems && groupAssetForDrag) {
+                          const groupId = groupAssetForDrag.id;
                           draggingGroupItems.itemIndexes.forEach((itemIndex) => {
-                            const item = currentGroupItems[itemIndex];
+                            const item = dragGroupCutItems[itemIndex];
                             if (!item) return;
                             if (typeof item === 'string') {
                               addImageToPending(item, setActionId, {
-                                parentAssetId: currentGroupAsset.id,
-                                sourceGroupAssetId: currentGroupAsset.id,
+                                parentAssetId: groupId,
+                                sourceGroupAssetId: groupId,
                                 sourceItemIndex: itemIndex,
                               });
                             } else {
@@ -4752,7 +4760,7 @@ const WorkflowSection: React.FC<{
                                   inputImage,
                                   addedAt: Date.now(),
                                   inputSourceDisplayKey: child?.displayKey,
-                                  sourceGroupAssetId: currentGroupAsset.id,
+                                  sourceGroupAssetId: groupId,
                                   sourceItemIndex: itemIndex,
                                 },
                               ]);
