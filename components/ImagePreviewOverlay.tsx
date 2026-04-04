@@ -1,8 +1,10 @@
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-
-function isEscapeKey(e: KeyboardEvent): boolean {
-  return e.key === 'Escape' || e.code === 'Escape' || e.keyCode === 27;
-}
+import React, { Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import {
+  getLazyImagePreviewViewer,
+  PreviewShell,
+  PreviewViewerFallback,
+  previewPolicyForMode,
+} from './preview';
 
 const NO_WHEEL = '[data-image-preview-no-wheel]';
 const SCROLL = '[data-image-preview-scroll]';
@@ -32,6 +34,8 @@ export type ImagePreviewOverlayProps = {
   innerLayoutStableKey?: string;
   /** 计算外框用的基准图 URL（建议原图）；缺省或加载失败则用当前预览图首次 onLoad */
   layoutReferenceSrc?: string;
+  /** 是否显示「平面 / 全景」切换（全景为等距柱状 360° 浏览效果） */
+  enablePanoramaMode?: boolean;
   children?: React.ReactNode;
 };
 
@@ -42,6 +46,9 @@ function fitImageToPreviewViewport(nw: number, nh: number): { w: number; h: numb
   const s = Math.min(maxW / nw, maxH / nh);
   return { w: nw * s, h: nh * s };
 }
+
+/** 全景 Viewer 独立 chunk（registry 懒加载） */
+const LazyImageEquirectViewer = getLazyImagePreviewViewer('image.equirect');
 
 /**
  * 全屏大图预览：滚轮切图、Esc 关闭、双击复原、左键拖拽缩放（按下处为轴）、空格/Shift+左键/右键平移。
@@ -57,8 +64,10 @@ export function ImagePreviewOverlay({
   innerWheelOptionCount = 1,
   innerLayoutStableKey,
   layoutReferenceSrc,
+  enablePanoramaMode = true,
   children,
 }: ImagePreviewOverlayProps) {
+  const [previewLayout, setPreviewLayout] = useState<'flat' | 'pano'>('flat');
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [lockedFrame, setLockedFrame] = useState<{ w: number; h: number } | null>(null);
@@ -69,12 +78,10 @@ export function ImagePreviewOverlay({
   const zoomLastScaleRef = useRef(1);
   const spacePressedRef = useRef(false);
   const wheelAccumRef = useRef(0);
-  const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
-  const shellRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!open) return;
+    setPreviewLayout('flat');
     setScale(1);
     setOffset({ x: 0, y: 0 });
     dragRef.current = null;
@@ -109,38 +116,6 @@ export function ImagePreviewOverlay({
 
   useEffect(() => {
     if (!open) return;
-    const blockContextMenu = (e: MouseEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-    };
-    window.addEventListener('contextmenu', blockContextMenu, true);
-    return () => window.removeEventListener('contextmenu', blockContextMenu, true);
-  }, [open]);
-
-  /**
-   * Esc：用 document 捕获 + useLayoutEffect，在目标元素收到按键之前处理；
-   * 另配合 shell focus + onKeyDownCapture，避免焦点留在输入框时仅靠冒泡失效。
-   * onClose 用 ref，避免父组件每次 render 换函数导致监听器反复拆装。
-   */
-  useLayoutEffect(() => {
-    if (!open) return;
-    const onEscCapture = (e: KeyboardEvent) => {
-      if (!isEscapeKey(e)) return;
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      onCloseRef.current();
-    };
-    document.addEventListener('keydown', onEscCapture, true);
-    return () => document.removeEventListener('keydown', onEscCapture, true);
-  }, [open]);
-
-  useLayoutEffect(() => {
-    if (!open) return;
-    shellRef.current?.focus({ preventScroll: true });
-  }, [open, resetKey]);
-
-  useEffect(() => {
-    if (!open) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.code === 'Space') {
         e.preventDefault();
@@ -171,6 +146,9 @@ export function ImagePreviewOverlay({
   useEffect(() => {
     if (!open) return;
     const onWheel = (e: WheelEvent) => {
+      const viewerCapturesWheel =
+        enablePanoramaMode && previewLayout === 'pano' && previewPolicyForMode('image.equirect').captureGlobalWheel;
+      if (viewerCapturesWheel) return;
       const t = e.target;
       if (t instanceof Element && t.closest(NO_WHEEL)) {
         const scrollEl = t.closest(SCROLL) as HTMLElement | null;
@@ -246,7 +224,15 @@ export function ImagePreviewOverlay({
     };
     window.addEventListener('wheel', onWheel, { passive: false });
     return () => window.removeEventListener('wheel', onWheel);
-  }, [open, wheelListLength, onWheelNavigate, onWheelInnerNavigate, innerWheelOptionCount]);
+  }, [
+    open,
+    previewLayout,
+    enablePanoramaMode,
+    wheelListLength,
+    onWheelNavigate,
+    onWheelInnerNavigate,
+    innerWheelOptionCount,
+  ]);
 
   useEffect(() => {
     const onMouseMove = (e: MouseEvent) => {
@@ -352,80 +338,110 @@ export function ImagePreviewOverlay({
   };
 
   return (
-    <div
-      ref={shellRef}
-      tabIndex={-1}
-      role="dialog"
-      aria-modal
-      className="fixed inset-0 z-[2000] bg-black/72 backdrop-blur-sm animate-in fade-in outline-none"
-      data-ac-block-workflow-marquee
-      onKeyDownCapture={(e) => {
-        if (!isEscapeKey(e)) return;
-        e.preventDefault();
-        e.stopPropagation();
-        onCloseRef.current();
-      }}
-      onClick={onClose}
-      onContextMenuCapture={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
-      }}
-    >
-      <div
-        className="relative w-full h-full overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-        onContextMenuCapture={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-        }}
-      >
-        <div
-          className={`absolute left-1/2 top-1/2 ${useFrameLock ? 'flex items-center justify-center' : ''}`}
-          style={shellStyle}
-        >
-          <img
-            src={imageSrc}
-            className={
-              useFrameLock
-                ? 'max-w-full max-h-full w-full h-full object-contain rounded-xl shadow-2xl select-none cursor-zoom-in'
-                : 'max-w-[92vw] max-h-[88vh] object-contain rounded-xl shadow-2xl select-none cursor-zoom-in'
-            }
-            alt=""
-            draggable={false}
-            onContextMenu={(e) => e.preventDefault()}
-            onLoad={handleImgLoad}
-            onDoubleClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              setScale(1);
-              setOffset({ x: 0, y: 0 });
-              dragRef.current = null;
-              panRef.current = null;
-              zoomPivotRef.current = null;
-              zoomLastScaleRef.current = 1;
-            }}
-            ref={imgRef}
-            onMouseDown={handleImgMouseDown}
-          />
-        </div>
+    <PreviewShell open={open} onClose={onClose} focusKey={resetKey}>
+        {enablePanoramaMode && previewLayout === 'pano' && LazyImageEquirectViewer ? (
+          <div
+            className="absolute inset-0 z-[5] min-h-[200px]"
+            onWheel={(e) => e.stopPropagation()}
+          >
+            <Suspense fallback={<PreviewViewerFallback label="全景模块加载中…" />}>
+              <LazyImageEquirectViewer imageSrc={imageSrc} className="h-full w-full rounded-none border-0" />
+            </Suspense>
+          </div>
+        ) : null}
+
+        {!(enablePanoramaMode && previewLayout === 'pano') ? (
+          <div
+            className={`absolute left-1/2 top-1/2 ${useFrameLock ? 'flex items-center justify-center' : ''}`}
+            style={shellStyle}
+          >
+            <img
+              src={imageSrc}
+              className={
+                useFrameLock
+                  ? 'max-w-full max-h-full w-full h-full object-contain rounded-xl shadow-2xl select-none cursor-zoom-in'
+                  : 'max-w-[92vw] max-h-[88vh] object-contain rounded-xl shadow-2xl select-none cursor-zoom-in'
+              }
+              alt=""
+              draggable={false}
+              onContextMenu={(e) => e.preventDefault()}
+              onLoad={handleImgLoad}
+              onDoubleClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setScale(1);
+                setOffset({ x: 0, y: 0 });
+                dragRef.current = null;
+                panRef.current = null;
+                zoomPivotRef.current = null;
+                zoomLastScaleRef.current = 1;
+              }}
+              ref={imgRef}
+              onMouseDown={handleImgMouseDown}
+            />
+          </div>
+        ) : null}
 
         <div className="absolute top-4 left-4 z-10 max-w-[min(300px,calc(100vw-6rem))] rounded-xl bg-[#101018]/90 border border-[#2e2e32] px-3 py-2 text-[9px] text-gray-300 pointer-events-none text-left leading-relaxed space-y-1">
-          {typeof onWheelInnerNavigate === 'function' ? (
+          {enablePanoramaMode && previewLayout === 'pano' ? (
+            <>
+              <div>拖拽：旋转视角（360° 全景）</div>
+              <div>滚轮：调整视野宽窄</div>
+              <div>切回「平面」后可滚轮切图 / 缩放平移</div>
+              <div>Esc：关闭预览</div>
+            </>
+          ) : typeof onWheelInnerNavigate === 'function' ? (
             <>
               <div>滚轮：本卡片多版本时切换显示</div>
               <div>空格+滚轮：上一资产 / 下一资产</div>
+              <div>Esc：关闭预览</div>
+              <div>双击：复原缩放与位置</div>
+              <div>左键：缩放</div>
+              <div>空格+左键 / Shift+左键 / 右键：平移画布</div>
+              <div className="text-gray-500 pt-0.5 border-t border-white/10">当前缩放 {Math.round(scale * 100)}%</div>
             </>
           ) : (
-            <div>滚轮：上一张 / 下一张</div>
+            <>
+              <div>滚轮：上一张 / 下一张</div>
+              <div>Esc：关闭预览</div>
+              <div>双击：复原缩放与位置</div>
+              <div>左键：缩放</div>
+              <div>空格+左键 / Shift+左键 / 右键：平移画布</div>
+              <div className="text-gray-500 pt-0.5 border-t border-white/10">当前缩放 {Math.round(scale * 100)}%</div>
+            </>
           )}
-          <div>Esc：关闭预览</div>
-          <div>双击：复原缩放与位置</div>
-          <div>左键：缩放</div>
-          <div>空格+左键 / Shift+左键 / 右键：平移画布</div>
-          <div className="text-gray-500 pt-0.5 border-t border-white/10">当前缩放 {Math.round(scale * 100)}%</div>
         </div>
 
-        <div className="absolute right-4 top-4 z-10">
+        <div className="absolute right-4 top-4 z-10 flex items-center gap-2">
+          {enablePanoramaMode ? (
+            <div
+              className="flex rounded-xl border border-[#2e2e32] overflow-hidden"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <button
+                type="button"
+                onClick={() => setPreviewLayout('flat')}
+                className={`px-3 py-2 text-[10px] font-black uppercase transition-colors ${
+                  previewLayout === 'flat'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-[#1a1a1e]/95 text-gray-300 hover:bg-[#2a2a32]'
+                }`}
+              >
+                平面
+              </button>
+              <button
+                type="button"
+                onClick={() => setPreviewLayout('pano')}
+                className={`px-3 py-2 text-[10px] font-black uppercase transition-colors border-l border-[#2e2e32] ${
+                  previewLayout === 'pano'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-[#1a1a1e]/95 text-gray-300 hover:bg-[#2a2a32]'
+                }`}
+              >
+                全景
+              </button>
+            </div>
+          ) : null}
           <button
             type="button"
             onClick={onClose}
@@ -436,7 +452,6 @@ export function ImagePreviewOverlay({
         </div>
 
         {children}
-      </div>
-    </div>
+    </PreviewShell>
   );
 }

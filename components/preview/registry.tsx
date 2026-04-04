@@ -1,0 +1,49 @@
+/**
+ * 预览 Viewer 注册表：按 mode 懒加载 React 组件，后续新增 3D / 点云 / 视频在此注册即可。
+ */
+import { lazy, type ComponentType, type LazyExoticComponent } from 'react';
+
+/** 与懒加载 Viewer 对齐的最小 props（图片类）；其它类型可另建 registry 或扩展联合类型 */
+export type LazyImagePreviewViewerProps = {
+  imageSrc: string;
+  className?: string;
+};
+
+type Loader = () => Promise<{ default: ComponentType<LazyImagePreviewViewerProps> }>;
+
+const builtInImageLoaders: Record<string, Loader> = {
+  'image.equirect': () => import('./viewers/ImageEquirectViewer'),
+};
+
+const customImageLoaders = new Map<string, Loader>();
+
+const lazyImageCache = new Map<string, LazyExoticComponent<ComponentType<LazyImagePreviewViewerProps>>>();
+
+function getLoader(mode: string): Loader | undefined {
+  return customImageLoaders.get(mode) ?? builtInImageLoaders[mode];
+}
+
+/**
+ * 运行时注册图片类预览（例如插件在入口调用一次）。
+ * 会清除该 mode 的 lazy 缓存，下次 getLazyImagePreviewViewer 重新创建。
+ */
+export function registerImagePreviewLoader(mode: string, loader: Loader): void {
+  customImageLoaders.set(mode, loader);
+  lazyImageCache.delete(mode);
+}
+
+/**
+ * 返回该 mode 对应的懒加载组件；未注册则返回 null（由壳层走内联或其它分支）。
+ */
+export function getLazyImagePreviewViewer(
+  mode: string
+): LazyExoticComponent<ComponentType<LazyImagePreviewViewerProps>> | null {
+  const load = getLoader(mode);
+  if (!load) return null;
+  let cached = lazyImageCache.get(mode);
+  if (!cached) {
+    cached = lazy(load);
+    lazyImageCache.set(mode, cached);
+  }
+  return cached;
+}

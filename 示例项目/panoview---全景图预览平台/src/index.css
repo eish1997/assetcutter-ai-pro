@@ -1,0 +1,50 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&family=Inter:wght@400;500;600&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Outfit", sans-serif;
+}
+
+@layer base {
+  body {
+    @apply bg-[#050505] text-slate-100 font-sans antialiased overflow-hidden;
+  }
+}
+
+@utility glass {
+  @apply bg-white/5 backdrop-blur-xl border border-white/10 shadow-2xl;
+}
+
+@utility glass-dark {
+  @apply bg-black/40 backdrop-blur-2xl border border-white/5 shadow-2xl;
+}
+
+@layer components {
+  .btn-primary {
+    @apply bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-2.5 rounded-full font-semibold transition-all shadow-lg shadow-indigo-500/20 active:scale-95 flex items-center gap-2;
+  }
+
+  .btn-glass {
+    @apply bg-white/5 backdrop-blur-xl border border-white/10 shadow-2xl hover:bg-white/10 text-white p-3 rounded-full transition-all active:scale-95 flex items-center justify-center;
+  }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-white/10 rounded-full hover:bg-white/20;
+}
+
+/* Pannellum Overrides */
+.pnlm-container {
+  background: #000 !important;
+}
+.pnlm-load-box {
+  display: none !important;
+}

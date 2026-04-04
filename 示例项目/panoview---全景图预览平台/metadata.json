@@ -1,0 +1,5 @@
+{
+  "name": "PanoView - 全景图预览平台",
+  "description": "一个简单易用的全景图上传与360度全景预览平台，支持手机端友好展示。",
+  "requestFramePermissions": []
+}
