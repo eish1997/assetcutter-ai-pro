@@ -4,6 +4,7 @@ import {
   createPreviewMicroThumbnail,
   createPreviewThumbnail,
   shouldUsePreviewThumbnail,
+  type PreviewThumbDecodePriority,
 } from '../services/workflowImageThumb';
 
 /**
@@ -78,6 +79,12 @@ export type ProgressivePreviewImageProps = {
   thumbMaxEdge?: number;
   /** 第一层 WebP 微缩最长边；默认按 thumbMaxEdge 比例推算 */
   microMaxEdge?: number;
+  /** 为真时不解码/不生成缩略，仅占位（配合视口解锁，让首屏先加载）。 */
+  deferThumbnail?: boolean;
+  /** 列表优先加载时用 high */
+  imageFetchPriority?: 'high' | 'low' | 'auto';
+  /** 传入全局缩略解码队列：视口内 high，屏外 low（先完成当前可见小图） */
+  thumbDecodePriority?: 'high' | 'low';
   className?: string;
   imgClassName?: string;
   /** 作用于当前可见的顶层 `<img>`（微图或小图，以小图优先） */
@@ -104,6 +111,9 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
       cacheKey,
       thumbMaxEdge = 512,
       microMaxEdge: microMaxEdgeProp,
+      deferThumbnail = false,
+      imageFetchPriority = 'auto',
+      thumbDecodePriority = 'low',
       className,
       imgClassName,
       imgStyle,
@@ -119,6 +129,7 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
     const safe = workflowSafeImgSrc(fullSrc);
     const needThumb = shouldUsePreviewThumbnail(safe);
     const microEdge = microMaxEdgeProp ?? defaultMicroMaxEdge(thumbMaxEdge);
+    const decodePri: PreviewThumbDecodePriority = thumbDecodePriority === 'high' ? 'high' : 'low';
 
     const [microSrc, setMicroSrc] = useState<string | null>(null);
     const [thumbSrc, setThumbSrc] = useState<string | null>(null);
@@ -157,6 +168,13 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
     }, [thumbReady, thumbSrc, microSrc]);
 
     useEffect(() => {
+      if (deferThumbnail) {
+        setMicroSrc(null);
+        setThumbSrc(null);
+        setThumbReady(false);
+        return;
+      }
+
       const s = workflowSafeImgSrc(fullSrc);
       if (!shouldUsePreviewThumbnail(s)) {
         setMicroSrc(null);
@@ -193,7 +211,7 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
             setThumbReady(true);
           });
           // 仅有小图缓存时仍从原图生成微图并写入缓存，下次可先发微图再叠小图
-          void createPreviewMicroThumbnail(s, microEdge, 0.62, 0.72).then((m) => {
+          void createPreviewMicroThumbnail(s, microEdge, 0.62, 0.72, decodePri).then((m) => {
             if (cancelled) return;
             cacheSet(mKey, m);
           });
@@ -211,7 +229,7 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
       const thumbDoneRef = { current: false };
 
       const runThumb = () => {
-        void createPreviewThumbnail(s, thumbMaxEdge, 0.82).then(async (t) => {
+        void createPreviewThumbnail(s, thumbMaxEdge, 0.82, decodePri).then(async (t) => {
           if (cancelled) return;
           thumbDoneRef.current = true;
           cacheSet(tKey, t);
@@ -229,7 +247,7 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
       };
 
       if (!microHit) {
-        void createPreviewMicroThumbnail(s, microEdge, 0.62, 0.72).then((m) => {
+        void createPreviewMicroThumbnail(s, microEdge, 0.62, 0.72, decodePri).then((m) => {
           if (cancelled) return;
           cacheSet(mKey, m);
           if (thumbDoneRef.current) return;
@@ -243,7 +261,7 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
       return () => {
         cancelled = true;
       };
-    }, [fullSrc, cacheKey, thumbMaxEdge, microEdge, safe]);
+    }, [deferThumbnail, fullSrc, cacheKey, thumbMaxEdge, microEdge, safe, decodePri]);
 
     const baseImg = imgClassName ?? '';
     const layerClass = `${baseImg} absolute inset-0 max-w-none max-h-none`;
@@ -251,6 +269,10 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
 
     const microRefActive = !!(microSrc && !(thumbReady && thumbSrc));
     const thumbRefActive = !!(thumbSrc && (thumbReady || !microSrc));
+
+    if (deferThumbnail) {
+      return <div className={`${className ?? 'relative w-full h-full'} ${PLACEHOLDER_BG} overflow-hidden`} />;
+    }
 
     // 极短 data URL 或非 data：无渐进必要；http(s) 仍为整图请求（无法离线缩略）
     if (!needThumb) {
@@ -262,7 +284,8 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
             alt={alt}
             draggable={draggable}
             onDragStart={onDragStart}
-            loading="lazy"
+            loading={imageFetchPriority === 'high' ? 'eager' : 'lazy'}
+            fetchPriority={imageFetchPriority}
             decoding="async"
             onLoad={(e) => {
               const iw = e.currentTarget.naturalWidth;
@@ -288,9 +311,15 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
             draggable={draggable}
             onDragStart={onDragStart}
             loading="eager"
+            fetchPriority={imageFetchPriority}
             decoding="async"
             onClick={onClick}
             title={title}
+            onLoad={(e) => {
+              const iw = e.currentTarget.naturalWidth;
+              const ih = e.currentTarget.naturalHeight;
+              if (iw > 0 && ih > 0) onIntrinsicSize?.(iw, ih);
+            }}
             className={`${layerClass} z-[1] opacity-100 ${thumbReady && thumbSrc ? 'pointer-events-none' : ''}`}
             aria-hidden={!!(thumbReady && thumbSrc)}
           />
@@ -304,6 +333,7 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
             draggable={draggable}
             onDragStart={onDragStart}
             loading="eager"
+            fetchPriority={imageFetchPriority}
             decoding="async"
             onClick={onClick}
             title={title}

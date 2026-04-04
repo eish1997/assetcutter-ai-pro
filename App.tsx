@@ -12,17 +12,19 @@ import { runCapabilityTest } from './services/capabilityTestRunner';
 import { loadCapabilityPresets, saveCapabilityPresets, CAPABILITY_PRESETS_KEY } from './services/capabilityPresetStore';
 import { loadCapabilitySets, saveCapabilitySets, CAPABILITY_SETS_KEY } from './services/capabilitySetStore';
 import { useGenerate3DManager, type Temp3DItem } from './hooks/useGenerate3DManager';
+import { useWorkflowMainScrollCapture } from './hooks/useWorkflowMainScrollCapture';
 import { useDialogWorkspace } from './hooks/useDialogWorkspace';
 import { useDialogGeneration, getDialogUnderstandImageInput } from './hooks/useDialogGeneration';
 import { useDialogPostProcessing } from './hooks/useDialogPostProcessing';
 import { useAuth } from './components/auth/AuthContext';
 import { CustomDropdown, DROPDOWN_TRIGGER_COMPACT } from './components/ui/CustomDropdown';
 import { SidebarAccountAvatar } from './components/SidebarAccountAvatar';
+import LazySectionFallback from './components/ui/LazySectionFallback';
+import WorkflowModeShell from './components/WorkflowModeShell';
 import { useUserUiPrefs } from './hooks/useUserUiPrefs';
 import Waves from './components/ui/Waves';
 import AppIcon from './components/ui/AppIcon';
 import { ProgressivePreviewImage } from './components/ProgressivePreviewImage';
-import WorkspaceProjectShell from './components/WorkspaceProjectShell';
 import {
   loadWorkspaceProjects,
   saveWorkspaceProjects,
@@ -71,14 +73,8 @@ import {
 import { fetchWorkspaceUserCloudConfig, pushWorkspaceUserCloudConfig } from './services/workspaceUserCloudConfig';
 import { getUserUiPrefs, setUserUiPrefs } from './services/userUiPrefs';
 import { WorkflowApiKeyModal } from './components/WorkflowApiKeyModal';
-import { WorkspaceCloudSyncCountdown } from './components/WorkspaceCloudSyncCountdown';
-
 function isImagePreviewEscapeKey(e: KeyboardEvent): boolean {
   return e.key === 'Escape' || e.code === 'Escape' || e.keyCode === 27;
-}
-
-function formatWorkspaceCloudMb(bytes: number) {
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 /** 自动同步间隔：默认 3 分钟，减少后台上传频率；可在 .env 设 `VITE_WORKSPACE_AUTO_SYNC_INTERVAL_MS`（30000～3600000）覆盖 */
@@ -115,66 +111,6 @@ type SourceAggregate = {
   sumScore: number;
   samples: { fullPrompt: string; instruction?: string; userScore: number }[];
 };
-
-function workflowBoundaryNormalizeError(error: unknown): Error {
-  if (error instanceof Error) return error;
-  try {
-    return new Error(typeof error === 'string' ? error : String(error));
-  } catch {
-    return new Error('未知错误（无法序列化）');
-  }
-}
-
-class WorkflowErrorBoundary extends React.Component<{ children: React.ReactNode }, { error: Error | null }> {
-  declare props: Readonly<{ children: React.ReactNode }>;
-  state = { error: null as Error | null };
-  static getDerivedStateFromError(error: unknown) {
-    return { error: workflowBoundaryNormalizeError(error) };
-  }
-  componentDidCatch(error: unknown) {
-    try {
-      console.error('[工作流]', error);
-    } catch {
-      console.error('[工作流] 子树抛错（控制台无法序列化该错误对象）');
-    }
-  }
-  render() {
-    if (this.state.error) {
-      const err = this.state.error;
-      const fullText = `工作流报错\n\n${err.message}\n\n${err.stack ?? ''}`;
-      return (
-        <div className="rounded-2xl border border-[#f87171] bg-[#3f1518] p-6 text-red-200 min-h-[200px]">
-          <div className="flex items-center justify-between gap-4 mb-3">
-            <h3 className="text-[10px] font-black uppercase text-red-400">工作流内报错</h3>
-            <button
-              type="button"
-              onClick={() => {
-                navigator.clipboard.writeText(fullText);
-              }}
-              className="px-3 py-1.5 rounded-lg bg-[#4a1c1c] border border-[#f87171] text-[9px] font-black uppercase text-red-300 hover:bg-[#5a2222] cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-red-400/50 transition-colors duration-200"
-            >
-              复制报错
-            </button>
-          </div>
-          <pre className="text-[9px] overflow-auto max-h-[40vh] whitespace-pre-wrap break-words bg-[#141416] p-3 rounded-lg border border-[#b85a5a]">{err.message}</pre>
-          {err.stack && (
-            <details className="mt-3">
-              <summary className="text-[8px] font-black uppercase text-gray-500 cursor-pointer hover:text-gray-400">堆栈</summary>
-              <pre className="text-[8px] text-gray-500 mt-1 overflow-auto max-h-[30vh] whitespace-pre-wrap break-words bg-[#141416] p-3 rounded-lg">{err.stack}</pre>
-            </details>
-          )}
-        </div>
-      );
-    }
-    return this.props.children;
-  }
-}
-
-const LazySectionFallback: React.FC<{ label?: string }> = ({ label = '模块' }) => (
-  <div className="min-h-[240px] w-full rounded-2xl border border-[#2e2e32] bg-[#121214] flex items-center justify-center text-[11px] text-gray-500">
-    加载{label}中…
-  </div>
-);
 
 /** 主内容区滚动容器 ref，用于全局回到顶部 */
 function useMainScrollBackToTop() {
@@ -1530,15 +1466,14 @@ const MainApp: React.FC = () => {
   const [arenaFirstVisit, setArenaFirstVisit] = useState(() => !localStorage.getItem('ac_arena_visited'));
 
   const { mainScrollRef, showBackToTop, scrollToTop } = useMainScrollBackToTop();
-  const workflowMainContentRef = useRef<HTMLDivElement | null>(null);
-  const workflowMarqueeStartRef = useRef<((e: React.MouseEvent) => void) | null>(null);
-  const workflowPaneWheelRef = useRef<((e: React.WheelEvent) => void) | null>(null);
-  const registerWorkflowMarqueeStart = useCallback((handler: ((e: React.MouseEvent) => void) | null) => {
-    workflowMarqueeStartRef.current = handler;
-  }, []);
-  const registerWorkflowPaneWheel = useCallback((handler: ((e: React.WheelEvent) => void) | null) => {
-    workflowPaneWheelRef.current = handler;
-  }, []);
+  const isWorkflowMarqueeWheelActive = mode === AppMode.WORKFLOW && !!activeWorkspaceProjectId;
+  const {
+    workflowMainContentRef,
+    onMainMouseDownCapture,
+    onMainWheelCapture,
+    registerMarqueeStart: registerWorkflowMarqueeStart,
+    registerPaneWheel: registerWorkflowPaneWheel,
+  } = useWorkflowMainScrollCapture(isWorkflowMarqueeWheelActive);
 
   useEffect(() => {
     if (mode === AppMode.ARENA) setArenaSnippets(loadSnippets());
@@ -3244,36 +3179,8 @@ const MainApp: React.FC = () => {
               ? 'overflow-hidden p-3 pt-3 pl-24 lg:px-6 lg:pt-4 lg:pb-6 lg:pl-28'
               : 'overflow-y-auto p-4 pt-6 pl-24 lg:p-10 lg:pl-28'
           }`}
-          onMouseDownCapture={(e) => {
-            if (mode !== AppMode.WORKFLOW || !activeWorkspaceProjectId) return;
-            const t = e.target as Element | null;
-            if (t?.closest('[data-ac-block-workflow-marquee]')) return;
-            workflowMarqueeStartRef.current?.(e);
-          }}
-          onWheelCapture={(e) => {
-            if (mode !== AppMode.WORKFLOW || !activeWorkspaceProjectId) return;
-            const target = e.target as Element | null;
-            if (target?.closest('[data-ac-block-workflow-marquee]')) return;
-            // 工作区内部（仓库/大纲/工作区/功能区/能力）始终放行原生纵向滚动与拖放
-            if (
-              target?.closest(
-                '[data-workflow-sidebar], [data-workflow-preset], [data-workflow-outline], [data-workflow-card], [data-workflow-library-card]'
-              )
-            ) {
-              return;
-            }
-            // 仅主内容两侧留白触发：用坐标判定，避免 closest 在复杂目标下误判
-            const content = workflowMainContentRef.current;
-            if (content) {
-              const r = content.getBoundingClientRect();
-              if (e.clientX >= r.left && e.clientX <= r.right) return;
-            } else if (target?.closest('.max-w-6xl')) {
-              return;
-            }
-            // 空白区滚轮明确用于横向切页：先阻止主容器默认纵向滚动，避免出现“微微上下抖动”
-            e.preventDefault();
-            workflowPaneWheelRef.current?.(e);
-          }}
+          onMouseDownCapture={onMainMouseDownCapture}
+          onWheelCapture={onMainWheelCapture}
         >
           <div ref={workflowMainContentRef} className="max-w-6xl mx-auto w-full">
             {mode === AppMode.SETTINGS && (
@@ -3289,213 +3196,40 @@ const MainApp: React.FC = () => {
             {mode === AppMode.TEXTURE && <TextureEngineSection />}
 
             {mode === AppMode.WORKFLOW && (
-              <div className="relative w-full">
-                {showWorkspaceIdbHydrateOverlay && (
-                  <div
-                    className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-2 rounded-xl bg-[#050505]/90 backdrop-blur-[2px] border border-white/[0.06]"
-                    role="status"
-                    aria-busy="true"
-                    aria-live="polite"
-                  >
-                    <div className="h-6 w-6 rounded-full border-2 border-white/20 border-t-blue-500/90 animate-spin" />
-                    <p className="text-[10px] text-gray-400">正在准备工作区…</p>
-                  </div>
-                )}
-                <div className={showWorkspaceIdbHydrateOverlay ? 'pointer-events-none select-none opacity-[0.72]' : undefined}>
-                  {!activeWorkspaceProjectId && (
-              <>
-                {user?.id && isWorkspaceCloudEnabled() ? (
-                  <div
-                    className="max-w-6xl mx-auto w-full mb-4 rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-2"
-                    title="仅统计已同步到云端的流程图片；返回列表或切换项目时整包上传"
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-2 gap-y-1">
-                      <span className="text-[9px] text-gray-500">云空间</span>
-                      <span className="text-[10px] text-gray-400 font-mono tabular-nums">
-                        {formatWorkspaceCloudMb(workspaceCloudUsedBytes)} / {formatWorkspaceCloudMb(workspaceCloudQuotaBytes)}{' '}
-                        <span className="text-gray-600">·</span> {workspaceCloudUsagePercent}%
-                      </span>
-                    </div>
-                    <div className="mt-1.5 h-1 rounded-full bg-white/[0.06] overflow-hidden">
-                      <div
-                        className={`h-full rounded-full transition-all ${
-                          workspaceCloudUsageRatio >= 0.95
-                            ? 'bg-red-500/70'
-                            : workspaceCloudUsageRatio >= 0.8
-                            ? 'bg-amber-500/60'
-                            : 'bg-gray-500/45'
-                        }`}
-                        style={{ width: `${Math.max(0, Math.min(100, workspaceCloudUsagePercent))}%` }}
-                      />
-                    </div>
-                    <p className="mt-2 text-[9px] text-gray-600 leading-snug">
-                      以上为<strong className="text-gray-500">云端工作区图片</strong>用量；本机浏览器另有<strong className="text-gray-500">整站 localStorage 上限</strong>（与浏览器有关）。详见设置 → 数据与存储。
-                    </p>
-                  </div>
-                ) : user?.id && !isWorkspaceCloudEnabled() ? (
-                  <div className="max-w-6xl mx-auto w-full mb-5 rounded-xl border border-[#2e2e32] bg-[#121214] px-4 py-2.5 text-[10px] text-gray-500">
-                    工作区云同步已关闭（VITE_WORKSPACE_CLOUD=false），数据仅保存在本机。
-                  </div>
-                ) : null}
-                <WorkspaceProjectShell
-                  projects={workspaceProjects}
-                  onCreate={createWorkspaceProjectEntry}
-                  onOpen={openWorkspaceProject}
-                  onRename={renameWorkspaceProjectEntry}
-                  onDelete={requestDeleteWorkspaceProject}
-                />
-              </>
-                  )}
-                  {activeWorkspaceProjectId && (
-              <WorkflowErrorBoundary>
-                <div className="w-full max-w-6xl mx-auto mb-2 flex flex-wrap items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void backToWorkspaceProjectShell();
-                    }}
-                    className="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-[#1c1c22] border border-[#2e2e32] text-gray-300 hover:bg-[#2e2e36] hover:text-white transition-colors duration-200 cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
-                    title="返回项目列表（将先同步到云端）"
-                    aria-label="返回项目列表"
-                  >
-                    <svg aria-hidden viewBox="0 0 20 20" className="w-3 h-3" fill="none">
-                      <path
-                        d="M12.5 4.5L7 10l5.5 5.5"
-                        stroke="currentColor"
-                        strokeWidth="1.9"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  </button>
-                  <div className="min-w-[8rem] max-w-[min(100%,18rem)]">
-                    <CustomDropdown
-                      options={workspaceProjectOptions}
-                      value={activeWorkspaceProjectId ?? ''}
-                      onChange={(id) => {
-                        if (!id || id === activeWorkspaceProjectId) return;
-                        void openWorkspaceProject(id);
-                      }}
-                      placeholder={activeWorkspaceProjectName || '选择项目'}
-                      triggerClassName="w-full h-7 bg-[#1c1c22] border border-[#2e2e32] rounded-lg px-2.5 text-[8px] text-left flex items-center justify-between outline-none focus:border-blue-500 hover:bg-[#2e2e36] transition-colors"
-                    />
-                  </div>
-                  {workspaceCloudHydratingProjectId === activeWorkspaceProjectId ? (
-                    <span className="text-[8px] text-amber-400/90 font-medium animate-pulse" title="正按资源分批从云端还原图像">
-                      正在从云端渐进载入图像…
-                    </span>
-                  ) : null}
-                  {user?.id && isWorkspaceCloudEnabled() ? (
-                    <div className="flex items-center gap-2">
-                      <div className={`text-[8px] whitespace-nowrap ${workspaceCloudAutoSyncing ? 'text-blue-300 animate-pulse' : 'text-gray-400'}`}>
-                        云同步: {workspaceLastSyncText} · 自动同步倒计时{' '}
-                        <WorkspaceCloudSyncCountdown
-                          enabled={workspaceAutoSyncEnabled}
-                          nextAt={workspaceCloudNextAutoSyncAt}
-                          syncing={workspaceCloudAutoSyncing}
-                        />
-                      </div>
-                      <button
-                        type="button"
-                        role="switch"
-                        aria-checked={workspaceAutoSyncEnabled}
-                        onClick={() => {
-                          setWorkspaceAutoSyncEnabledState((prev) => {
-                            const next = !prev;
-                            setWorkspaceAutoSyncEnabled(next);
-                            return next;
-                          });
-                        }}
-                        className={`relative inline-flex shrink-0 w-8 h-4 rounded-full transition-colors ${
-                          workspaceAutoSyncEnabled ? 'bg-blue-600' : 'bg-[#26262c]'
-                        }`}
-                        title={
-                          workspaceAutoSyncEnabled
-                            ? '关闭后不再定时上传，编辑更流畅；需要时点「立即同步」'
-                            : '开启后按间隔将改动备份到云端（有改动才上传）'
-                        }
-                        aria-label={workspaceAutoSyncEnabled ? '自动同步已开启，点击关闭' : '自动同步已关闭，点击开启'}
-                      >
-                        <span
-                          className={`absolute top-0.5 left-0.5 w-3 h-3 rounded-full bg-white transition-transform ${
-                            workspaceAutoSyncEnabled ? 'translate-x-4' : 'translate-x-0'
-                          }`}
-                        />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          void triggerWorkspaceCloudSyncNow({ force: true });
-                        }}
-                        disabled={workspaceCloudAutoSyncing}
-                        className="h-6 px-2 rounded-md border border-[#2e2e32] bg-[#1c1c22] text-[8px] text-gray-300 hover:bg-[#2e2e36] hover:text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                        title="手动全量同步到云端（关闭自动同步时靠此项备份）"
-                        aria-label="立即同步当前工作区到云端"
-                      >
-                        立即同步
-                      </button>
-                    </div>
-                  ) : null}
-                  {user?.id && isWorkspaceCloudEnabled() ? (
-                    <div className="ml-auto flex items-center gap-1.5">
-                      <div
-                        className="min-w-[8rem] max-w-[12rem] shrink rounded-md border border-white/[0.06] bg-white/[0.02] px-2 py-1"
-                        title="仅统计已同步到云端的流程图片"
-                      >
-                        <div className="flex items-center justify-between gap-1.5 text-[8px] text-gray-500">
-                          <span>云空间</span>
-                          <span className="font-mono tabular-nums text-gray-400">
-                            {formatWorkspaceCloudMb(workspaceCloudUsedBytes)} / {formatWorkspaceCloudMb(workspaceCloudQuotaBytes)}
-                          </span>
-                        </div>
-                        <div className="mt-0.5 h-0.5 rounded-full bg-white/[0.06] overflow-hidden">
-                          <div
-                            className={`h-full rounded-full transition-all ${
-                              workspaceCloudUsageRatio >= 0.95
-                                ? 'bg-red-500/70'
-                                : workspaceCloudUsageRatio >= 0.8
-                                ? 'bg-amber-500/60'
-                                : 'bg-gray-500/45'
-                            }`}
-                            style={{ width: `${Math.max(0, Math.min(100, workspaceCloudUsagePercent))}%` }}
-                          />
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setApiKeyModalOpen(true)}
-                        className="inline-flex items-center gap-1.5 px-2 h-7 rounded-lg bg-[#1c1c22] border border-[#2e2e32] text-[8px] font-black uppercase hover:bg-[#2e2e36] hover:border-[#3b6fb8] whitespace-nowrap"
-                        title={
-                          aiInvocationReady
-                            ? '当前调用源已就绪 · 点击配置 API 密钥'
-                            : '当前供应商未配置 API Key（Gemini 也未配置批量代理）· 点击配置'
-                        }
-                        aria-label={
-                          aiInvocationReady
-                            ? 'API 密钥，当前调用源已就绪'
-                            : 'API 密钥，当前调用源未就绪，请配置'
-                        }
-                      >
-                        <span
-                          role="status"
-                          aria-hidden={true}
-                          className={`h-2 w-2 shrink-0 rounded-full border border-[#3a3a40] ${
-                            aiInvocationReady
-                              ? 'bg-emerald-500 shadow-[0_0_10px_rgba(34,197,94,0.45)]'
-                              : 'bg-[#b45309] shadow-[0_0_8px_rgba(217,119,6,0.35)]'
-                          }`}
-                        />
-                        <span>API 密钥</span>
-                      </button>
-                    </div>
-                  ) : null}
-                </div>
-                {workspaceCloudQuotaSuspended ? (
-                  <div className="w-full max-w-6xl mx-auto mb-3 rounded-xl border border-amber-500/35 bg-[#2c2412] px-4 py-3 text-[11px] text-amber-100/95 leading-relaxed">
-                    工作区<strong className="font-semibold">云空间已满</strong>：新图片无法上传，画布仍保存在本机。删除云端项目中的图或请管理员调高配额后可恢复。返回列表或切换项目时若无法上传，请留意本地数据。
-                  </div>
-                ) : null}
-                <Suspense fallback={<LazySectionFallback label="工作区" />}>
+              <WorkflowModeShell
+                showWorkspaceIdbHydrateOverlay={showWorkspaceIdbHydrateOverlay}
+                activeWorkspaceProjectId={activeWorkspaceProjectId}
+                user={user}
+                workspaceCloudEnabled={isWorkspaceCloudEnabled()}
+                workspaceCloudUsedBytes={workspaceCloudUsedBytes}
+                workspaceCloudQuotaBytes={workspaceCloudQuotaBytes}
+                workspaceCloudUsageRatio={workspaceCloudUsageRatio}
+                workspaceCloudUsagePercent={workspaceCloudUsagePercent}
+                workspaceProjects={workspaceProjects}
+                onWorkspaceCreate={createWorkspaceProjectEntry}
+                onWorkspaceOpen={openWorkspaceProject}
+                onWorkspaceRename={renameWorkspaceProjectEntry}
+                onWorkspaceDelete={requestDeleteWorkspaceProject}
+                onBackToWorkspaceList={() => void backToWorkspaceProjectShell()}
+                workspaceProjectOptions={workspaceProjectOptions}
+                activeWorkspaceProjectName={activeWorkspaceProjectName}
+                workspaceCloudHydratingProjectId={workspaceCloudHydratingProjectId}
+                workspaceLastSyncText={workspaceLastSyncText}
+                workspaceCloudAutoSyncing={workspaceCloudAutoSyncing}
+                workspaceAutoSyncEnabled={workspaceAutoSyncEnabled}
+                workspaceCloudNextAutoSyncAt={workspaceCloudNextAutoSyncAt}
+                onToggleWorkspaceAutoSync={() => {
+                  setWorkspaceAutoSyncEnabledState((prev) => {
+                    const next = !prev;
+                    setWorkspaceAutoSyncEnabled(next);
+                    return next;
+                  });
+                }}
+                onTriggerWorkspaceSyncNow={() => void triggerWorkspaceCloudSyncNow({ force: true })}
+                workspaceCloudQuotaSuspended={workspaceCloudQuotaSuspended}
+                onOpenApiKeyModal={() => setApiKeyModalOpen(true)}
+                aiInvocationReady={aiInvocationReady}
+                renderWorkflowSection={() => (
                   <WorkflowSection
                     capabilityPresets={capabilityPresets}
                     capabilitySets={capabilitySets}
@@ -3533,11 +3267,8 @@ const MainApp: React.FC = () => {
                       </Suspense>
                     }
                   />
-                </Suspense>
-              </WorkflowErrorBoundary>
-                  )}
-                </div>
-              </div>
+                )}
+              />
             )}
 
             {mode === AppMode.SEAM_REPAIR && (

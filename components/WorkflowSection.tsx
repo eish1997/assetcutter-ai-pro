@@ -1,9 +1,10 @@
 import React, { useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect, startTransition } from 'react';
+import { useWorkflowWorkspacePanes } from '../hooks/useWorkflowWorkspacePanes';
+import { useWorkflowMarquee } from '../hooks/useWorkflowMarquee';
 import { createPortal } from 'react-dom';
 import type { WorkflowAsset, WorkflowPendingTask, CapabilitySet, VgpGenStepCapture } from '../types';
 import type { CustomAppModule, LibraryItem, WorkflowCutGroupItem } from '../types';
 import type { BoundingBox } from '../types';
-import { CAPABILITY_CATEGORIES } from '../types';
 import { getRandomGroupCodeName } from '../data/groupCodeNames';
 import { detectObjectsInImage, DEFAULT_PROMPTS } from '../services/geminiService';
 import {
@@ -19,8 +20,8 @@ import {
   attachInitialVgpToNewAsset,
 } from '../services/vgp/vgpStore';
 import { WorkflowGenerationRecordPanel } from './WorkflowGenerationRecordPanel';
-import { WorkflowPlannerBar } from './WorkflowPlannerBar';
 import { triggerImageDownload } from '../services/imageDataUrl';
+import { readLocalJson, workflowFavoritesStorageKey, writeLocalJson } from '../services/clientPersist';
 import AppIcon from './ui/AppIcon';
 import { ImagePreviewOverlay } from './ImagePreviewOverlay';
 import { resolveCapabilityPreviewSrc } from '../services/capabilityPreviewUrl';
@@ -28,7 +29,7 @@ import { CapabilityPreviewImg } from './CapabilityPreviewImg';
 import { WorkflowCapabilityHoverPreview } from './WorkflowCapabilityHoverPreview';
 import { ProgressivePreviewImage, WorkflowGridImage } from './ProgressivePreviewImage';
 import WorkflowPixelBusyOverlay from './WorkflowPixelBusyOverlay';
-import { workflowSafeImgSrc, WORKFLOW_IMG_EMPTY_PLACEHOLDER } from '../services/workflowImageDisplay';
+import { workflowSafeImgSrc } from '../services/workflowImageDisplay';
 import {
   type AcWorkflowExportPayload,
   DT_AC_WORKFLOW_EXPORT,
@@ -39,791 +40,45 @@ import {
   resolveCapabilityDropDragSources,
   workflowDragSourceAllowsSidebarOps,
 } from '../services/workflowDragPipeline';
-
-/** 工作流「切割」区域识别：默认 90s（原 30s 易在慢网络/代理下误报 GEMINI_TIMEOUT）；可用 VITE_WORKFLOW_CUT_DETECT_TIMEOUT_MS 覆盖 */
-const WORKFLOW_CUT_DETECT_TIMEOUT_MS =
-  Number(String(import.meta.env?.VITE_WORKFLOW_CUT_DETECT_TIMEOUT_MS || '').trim()) || 90_000;
-
-/** 持久化数据异常时可能混入 non string，避免把对象传给 img src 触发 React 抛错 */
-const asWorkflowImageString = (v: unknown): string => (typeof v === 'string' ? v : '');
-
-/** 大纲底部拖放：仓库条目 / 工作区导出（与 onDragStart setData 一致） */
-const DT_AC_LIBRARY_ITEM_ID = 'application/x-ac-library-item-id';
-const WORKFLOW_FIRST_SWEEP_DONE_KEY = 'ac_workflow_first_sweep_done_v1';
-
-function buildLibraryItemsFromWorkflowExport(
-  assets: WorkflowAsset[],
-  showArchived: boolean,
-  getDisplay: (a: WorkflowAsset) => string,
-  payload: AcWorkflowExportPayload
-): Partial<LibraryItem>[] {
-  const items: Partial<LibraryItem>[] = [];
-  if (payload.mode === 'roots') {
-    const seen = new Set<string>();
-    for (const id of payload.assetIds) {
-      if (seen.has(id)) continue;
-      seen.add(id);
-      const a = assets.find((x) => x.id === id);
-      if (!a || a.archived !== showArchived || a.parentAssetId) continue;
-      const data = getDisplay(a);
-      if (!data || data === WORKFLOW_IMG_EMPTY_PLACEHOLDER) continue;
-      items.push({
-        data,
-        label: (a.groupLabel && a.groupLabel.trim()) || `工作区-${id.slice(0, 8)}`,
-        type: 'SLICE',
-        category: 'PREVIEW_STRIP',
-      });
-    }
-  } else {
-    for (const { parentId, index: idx } of payload.items) {
-      const parent = assets.find((x) => x.id === parentId);
-      const raw = parent?.cutImageGroup?.[idx];
-      if (raw == null) continue;
-      let data: string | null = null;
-      if (typeof raw === 'string') data = raw;
-      else if (raw && typeof raw === 'object' && 'assetId' in raw) {
-        const ch = assets.find((x) => x.id === (raw as { assetId: string }).assetId);
-        data = ch ? getDisplay(ch) : null;
-      } else if (raw && typeof raw === 'object' && 'r2Key' in raw) {
-        data = asWorkflowImageString(parent?.original);
-      }
-      if (!data || data === WORKFLOW_IMG_EMPTY_PLACEHOLDER) continue;
-      items.push({
-        data,
-        label: `${parent?.groupLabel || '组'} · 子项 ${idx + 1}`,
-        type: 'SLICE',
-        category: 'PREVIEW_STRIP',
-      });
-    }
-  }
-  return items;
-}
-
-function safeUnknownToString(v: unknown): string {
-  if (typeof v === 'string') return v;
-  if (v instanceof Error) return v.message;
-  try {
-    return String(v);
-  } catch {
-    return '[无法序列化的错误]';
-  }
-}
-
-function sanitizeDroppedUrl(raw: string): string | null {
-  const text = raw.trim();
-  if (!text) return null;
-  try {
-    const u = new URL(text);
-    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
-    return u.toString();
-  } catch {
-    return null;
-  }
-}
-
-function collectImageLikeUrlsFromText(raw: string): string[] {
-  if (!raw) return [];
-  const urls = raw
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line && !line.startsWith('#'))
-    .map(sanitizeDroppedUrl)
-    .filter((v): v is string => !!v);
-  return Array.from(new Set(urls));
-}
-
-function collectImageLikeUrlsFromHtml(rawHtml: string): string[] {
-  if (!rawHtml) return [];
-  try {
-    const doc = new DOMParser().parseFromString(rawHtml, 'text/html');
-    const urls = new Set<string>();
-    doc.querySelectorAll('img[src]').forEach((img) => {
-      const src = sanitizeDroppedUrl(img.getAttribute('src') || '');
-      if (src) urls.add(src);
-    });
-    doc.querySelectorAll('a[href]').forEach((a) => {
-      const href = sanitizeDroppedUrl(a.getAttribute('href') || '');
-      if (href && /\.(png|jpe?g|webp|gif|bmp|svg)(\?.*)?$/i.test(href)) urls.add(href);
-    });
-    return Array.from(urls);
-  } catch {
-    return [];
-  }
-}
-
-function dataTransferItemToString(item: DataTransferItem): Promise<string> {
-  return new Promise((resolve) => {
-    try {
-      item.getAsString((s) => resolve(s || ''));
-    } catch {
-      resolve('');
-    }
-  });
-}
-
-/** 常用功能区 dragOver 兜底：首轮 dragover 可能早于 ref 同步，但 setData 后 types 已有 text/plain */
-function dragTransferHasPlainText(e: React.DragEvent): boolean {
-  try {
-    const t = e.dataTransfer?.types;
-    if (!t) return false;
-    for (let i = 0; i < t.length; i++) {
-      if (t[i] === 'text/plain') return true;
-    }
-  } catch {
-    /* ignore */
-  }
-  return false;
-}
-
-/** App 传入的 capabilityPresetPanel 常包在 Suspense 外；cloneElement 需把 scrollContainerRef 传到内层 CapabilityPresetSection */
-function cloneCapabilityPresetPanelWithScrollRef(
-  panel: React.ReactNode,
-  scrollRef: React.RefObject<HTMLDivElement | null>
-): React.ReactNode {
-  if (!React.isValidElement(panel)) return panel;
-  if (panel.type === React.Suspense) {
-    const inner = panel.props.children;
-    if (React.isValidElement(inner)) {
-      return React.cloneElement(panel, {
-        children: React.cloneElement(inner as React.ReactElement<{ scrollContainerRef?: React.Ref<HTMLDivElement> }>, {
-          scrollContainerRef: scrollRef,
-        }),
-      });
-    }
-  }
-  return React.cloneElement(panel as React.ReactElement<{ scrollContainerRef?: React.Ref<HTMLDivElement> }>, {
-    scrollContainerRef: scrollRef,
-  });
-}
-
-const uuid = () => Math.random().toString(36).slice(2, 11);
-const RESULT_VER_SEP = '__v__';
-const baseActionId = (k: string) => (k.includes(RESULT_VER_SEP) ? k.split(RESULT_VER_SEP)[0] : k);
-const makeVersionKey = (baseId: string) => `${baseId}${RESULT_VER_SEP}${Date.now().toString(36)}`;
-
-/** 裁剪图片：根据框选裁剪出多张图；`overflowPx` 为每边向外扩展的像素（基于原图像素，不超出图幅） */
-function cropBoxes(
-  inputImage: string,
-  boxes: BoundingBox[],
-  selectedIndexes: number[],
-  overflowPx = 0
-): Promise<string[]> {
-  const results: string[] = [];
-  const img = new Image();
-  img.src = inputImage;
-  const pad = Math.max(0, Math.min(512, Math.round(overflowPx)));
-  return new Promise<string[]>((resolve) => {
-    img.onload = () => {
-      const nw = img.naturalWidth;
-      const nh = img.naturalHeight;
-      const scaleX = nw / 1000;
-      const scaleY = nh / 1000;
-      for (const i of selectedIndexes) {
-        if (i < 0 || i >= boxes.length) continue;
-        const b = boxes[i];
-        let x = Math.round(b.xmin * scaleX - pad);
-        let y = Math.round(b.ymin * scaleY - pad);
-        let w = Math.round((b.xmax - b.xmin) * scaleX + 2 * pad);
-        let h = Math.round((b.ymax - b.ymin) * scaleY + 2 * pad);
-        x = Math.max(0, x);
-        y = Math.max(0, y);
-        w = Math.min(nw - x, w);
-        h = Math.min(nh - y, h);
-        if (w < 1 || h < 1) continue;
-        const canvas = document.createElement('canvas');
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext('2d')!;
-        ctx.drawImage(img, x, y, w, h, 0, 0, w, h);
-        results.push(canvas.toDataURL('image/png'));
-      }
-      resolve(results);
-    };
-    img.onerror = () => resolve([]);
-  });
-}
-
-// ---------- 切割图片：识别物体后选择要保存的区域 ----------
-const CutSelectModal: React.FC<{
-  inputImage: string;
-  boxes: BoundingBox[];
-  onConfirm: (selectedIndexes: number[]) => void;
-  onCancel: () => void;
-}> = ({ inputImage, boxes, onConfirm, onCancel }) => {
-  const [selected, setSelected] = useState<Set<number>>(new Set(boxes.map((_, i) => i)));
-  const toggle = (i: number) => setSelected((prev) => { const n = new Set(prev); if (n.has(i)) n.delete(i); else n.add(i); return n; });
-  const scale = 1000;
-  return (
-    <div className="fixed inset-0 z-[2100] flex items-center justify-center bg-black/55 backdrop-blur-sm p-4" onClick={onCancel}>
-      <div className="relative max-w-4xl w-full max-h-[90vh] overflow-auto rounded-2xl border border-white/10 bg-[#14141a]/92 backdrop-blur-md shadow-xl p-4" onClick={(e) => e.stopPropagation()}>
-        <div className="flex justify-between items-center mb-3">
-          <h3 className="text-[10px] font-black uppercase text-blue-400">识别到物体，勾选要切割保存的区域</h3>
-          <button onClick={onCancel} className="w-8 h-8 flex items-center justify-center text-white/50 hover:text-white"><AppIcon name="close" className="w-4 h-4" /></button>
-        </div>
-        <div className="relative inline-block max-w-full">
-          {/* 选区与 SVG 叠加依赖原图像素比例，此处必须全分辨率，不能用缩略图 */}
-          <img src={inputImage} alt="" className="max-h-[60vh] w-auto block" />
-          <svg className="absolute inset-0 w-full h-full pointer-events-none" style={{ left: 0, top: 0 }} viewBox={`0 0 ${scale} ${scale}`} preserveAspectRatio="none">
-            {boxes.map((b, i) => (
-              <rect
-                key={i}
-                x={b.xmin}
-                y={b.ymin}
-                width={b.xmax - b.xmin}
-                height={b.ymax - b.ymin}
-                fill="none"
-                stroke={selected.has(i) ? 'rgba(34,197,94,0.8)' : 'rgba(239,68,68,0.5)'}
-                strokeWidth={selected.has(i) ? 8 : 4}
-              />
-            ))}
-          </svg>
-        </div>
-        <div className="flex flex-wrap gap-2 mt-3">
-          {boxes.map((b, i) => (
-            <label key={i} className="flex items-center gap-2 cursor-pointer px-3 py-1.5 rounded-lg bg-[#1c1c22] border border-[#2e2e32] hover:bg-[#2e2e36]">
-              <input type="checkbox" checked={selected.has(i)} onChange={() => toggle(i)} className="rounded" />
-              <span className="text-[9px] font-black uppercase">{b.label || `区域 ${i + 1}`}</span>
-            </label>
-          ))}
-        </div>
-        <div className="flex gap-2 mt-4">
-          <button onClick={() => onConfirm([...selected])} disabled={selected.size === 0} className="px-4 py-2 rounded-xl bg-blue-600 text-[10px] font-black uppercase disabled:opacity-40">确认切割（{selected.size}）</button>
-          <button onClick={onCancel} className="px-4 py-2 rounded-xl bg-[#26262c] text-[10px] font-black uppercase">取消</button>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-/** 微调提示词弹窗：预设 instruction 预填，可编辑，确定后以 promptOverride 加入执行队列 */
-const PromptTweakModal: React.FC<{
-  preset: CustomAppModule;
-  targets: Array<
-    | {
-        assetId: string;
-        inputImage: string;
-        inputSourceDisplayKey?: string;
-        sourceGroupAssetId?: string;
-        sourceItemIndex?: number;
-      }
-    | { imageBase64: string; parentAssetId: string; sourceGroupAssetId: string; sourceItemIndex: number }
-  >;
-  onConfirm: (editedPrompt: string) => void;
-  onCancel: () => void;
-}> = ({ preset, targets, onConfirm, onCancel }) => {
-  const [text, setText] = useState(preset.instruction || '');
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  useEffect(() => {
-    setText(preset.instruction || '');
-  }, [preset.id, preset.instruction]);
-  return createPortal(
-    <div className="fixed inset-0 z-[2100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={onCancel}>
-      <div
-        className="relative w-full max-w-lg rounded-2xl border border-white/10 bg-[#0e0e14]/90 backdrop-blur-md shadow-xl p-4"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between mb-3">
-          <span className="text-[10px] font-black uppercase text-blue-400">微调提示词 · {preset.label}</span>
-          <button type="button" onClick={onCancel} className="w-8 h-8 flex items-center justify-center text-white/50 hover:text-white rounded"><AppIcon name="close" className="w-4 h-4" /></button>
-        </div>
-        <p className="text-[9px] text-gray-500 mb-2">可修改下方提示词后加入执行队列（{targets.length} 项）</p>
-        <textarea
-          ref={textareaRef}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          className="w-full min-h-[120px] rounded-xl bg-[#1c1c22] border border-[#2e2e32] px-3 py-2 text-[11px] text-white placeholder-white/40 focus:border-blue-500 outline-none resize-y"
-          placeholder="预设提示词"
-        />
-        <div className="flex gap-2 mt-4">
-          <button
-            type="button"
-            onClick={() => onConfirm(text)}
-            className="px-4 py-2 rounded-xl bg-blue-600 text-[10px] font-black uppercase hover:bg-blue-500"
-          >
-            确定并加入队列
-          </button>
-          <button type="button" onClick={onCancel} className="px-4 py-2 rounded-xl bg-[#26262c] text-[10px] font-black uppercase hover:bg-[#383842]">
-            取消
-          </button>
-        </div>
-      </div>
-    </div>,
-    document.body
-  );
-};
-
-// ---------- 归档详情弹窗：流程图 + 单张/整张下载 ----------
-const ArchivedDetailModal: React.FC<{
-  asset: WorkflowAsset;
-  assets: WorkflowAsset[];
-  modules: CustomAppModule[];
-  onClose: () => void;
-}> = ({ asset, assets, modules, onClose }) => {
-  const resolveGroupImages = useCallback(
-    (a: WorkflowAsset, visited: Set<string> = new Set()): string[] => {
-      if (visited.has(a.id)) return [];
-      visited.add(a.id);
-      const out: string[] = [];
-      for (const item of a.cutImageGroup ?? []) {
-        if (typeof item === 'string') out.push(item);
-        else if (item && typeof item === 'object' && 'r2Key' in item) continue;
-        else if (item && typeof item === 'object' && 'assetId' in item) {
-          const child = assets.find((x) => x.id === item.assetId);
-          if (!child) continue;
-          if (child.cutImageGroup?.length) out.push(...resolveGroupImages(child, visited));
-          else out.push(child.results[child.displayKey] ?? child.original);
-        }
-      }
-      return out;
-    },
-    [assets]
-  );
-
-  const cutImages = useMemo(() => {
-    if (!asset.cutImageGroup?.length) return [];
-    return resolveGroupImages(asset);
-  }, [asset, resolveGroupImages]);
-
-  const [cutContactSheetUrl, setCutContactSheetUrl] = useState<string | null>(null);
-  React.useEffect(() => {
-    let cancelled = false;
-    const buildContactSheet = async () => {
-      if (cutImages.length === 0) {
-        setCutContactSheetUrl(null);
-        return;
-      }
-      // 生成一张“切割组拼贴图”，供流程图展示（避免只取第一张）
-      const maxW = 1200;
-      const maxH = 700;
-      const pad = 12;
-      const gap = 8;
-      const count = Math.min(cutImages.length, 12);
-      const cols = Math.min(4, count);
-      const rows = Math.ceil(count / cols);
-      const sheetW = maxW;
-      const sheetH = Math.min(maxH, Math.max(220, rows * 200 + pad * 2 + gap * (rows - 1)));
-
-      const canvas = document.createElement('canvas');
-      canvas.width = sheetW;
-      canvas.height = sheetH;
-      const ctx = canvas.getContext('2d')!;
-      ctx.fillStyle = '#111';
-      ctx.fillRect(0, 0, sheetW, sheetH);
-
-      const cellW = Math.floor((sheetW - pad * 2 - gap * (cols - 1)) / cols);
-      const cellH = Math.floor((sheetH - pad * 2 - gap * (rows - 1)) / rows);
-
-      const loadOne = (src: string) =>
-        new Promise<HTMLImageElement>((resolve) => {
-          const img = new Image();
-          img.onload = () => resolve(img);
-          img.onerror = () => resolve(img);
-          img.src = src;
-        });
-      const imgs = await Promise.all(cutImages.slice(0, count).map(loadOne));
-
-      imgs.forEach((img, i) => {
-        const r = Math.floor(i / cols);
-        const c = i % cols;
-        const x0 = pad + c * (cellW + gap);
-        const y0 = pad + r * (cellH + gap);
-
-        // cell background
-        ctx.fillStyle = '#0b0b0b';
-        ctx.fillRect(x0, y0, cellW, cellH);
-
-        if (!img.naturalWidth || !img.naturalHeight) return;
-        const scale = Math.min(cellW / img.naturalWidth, cellH / img.naturalHeight);
-        const dw = img.naturalWidth * scale;
-        const dh = img.naturalHeight * scale;
-        const dx = x0 + (cellW - dw) / 2;
-        const dy = y0 + (cellH - dh) / 2;
-        ctx.drawImage(img, dx, dy, dw, dh);
-
-        // index badge
-        ctx.fillStyle = 'rgba(0,0,0,0.55)';
-        ctx.fillRect(x0 + 6, y0 + 6, 28, 18);
-        ctx.fillStyle = '#cbd5e1';
-        ctx.font = 'bold 12px sans-serif';
-        ctx.fillText(String(i + 1), x0 + 12, y0 + 19);
-      });
-
-      const url = canvas.toDataURL('image/png');
-      if (!cancelled) setCutContactSheetUrl(url);
-    };
-    void buildContactSheet();
-    return () => {
-      cancelled = true;
-    };
-  }, [cutImages]);
-
-  const [cutLightboxIndex, setCutLightboxIndex] = useState<number | null>(null);
-  const cutLightboxImage = cutLightboxIndex != null ? cutImages[cutLightboxIndex] : null;
-
-  const stepsForComposite = useMemo(() => {
-    const list: { id: string; label: string; image: string; executedAt?: number }[] = [
-      { id: 'original', label: '原始', image: asset.original },
-    ];
-    for (const id of asset.resultOrder) {
-      const baseId = baseActionId(id);
-      // cut_image 的结果存在 cutImageGroup，不在 results 里；用组内首张作代表
-      const img =
-        baseId === 'cut_image'
-          ? (cutContactSheetUrl ?? cutImages[0] ?? null)
-          : (asset.results[id] ?? null);
-      if (!img) continue;
-      const mod = modules.find((m) => m.id === baseId);
-      list.push({
-        id,
-        label: mod?.label ?? baseId,
-        image: img,
-        executedAt: asset.resultMeta?.[id]?.executedAt,
-      });
-    }
-    return list;
-  }, [asset, modules, cutImages, cutContactSheetUrl]);
-
-  // UI 上不再重复展示 cut_image 步骤卡片（已有“切割图片组”）
-  const stepsForCards = useMemo(() => {
-    return stepsForComposite.filter((s) => s.id !== 'cut_image');
-  }, [stepsForComposite]);
-
-  const [compositeUrl, setCompositeUrl] = useState<string | null>(null);
-  const containerRef = React.useRef<HTMLDivElement>(null);
-
-  const downloadOne = async (image: string, label: string) => {
-    await triggerImageDownload(image, `workflow-${label}-${asset.id.slice(0, 6)}`);
-  };
-
-  const downloadMany = (images: string[], labelPrefix: string) => {
-    // 浏览器可能会限制短时间内的多次下载触发：加一点间隔更稳定
-    const intervalMs = 140;
-    images.forEach((img, idx) => {
-      const label = `${labelPrefix}-${String(idx + 1).padStart(2, '0')}`;
-      window.setTimeout(() => {
-        void downloadOne(img, label);
-      }, idx * intervalMs);
-    });
-  };
-
-  const buildComposite = useCallback(() => {
-    if (stepsForComposite.length === 0) return;
-    // 提升清晰度：更大的目标宽度 + DPR 缩放
-    const maxW = 1200;
-    const maxH = 700;
-    const lineHeight = 24;
-    const gap = 10;
-    const dpr = Math.min(2, typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1);
-    const loadAll = (): Promise<{ img: HTMLImageElement; drawH: number; drawW: number }[]> => {
-      return Promise.all(
-        stepsForComposite.map(
-          (s) =>
-            new Promise<{ img: HTMLImageElement; drawH: number; drawW: number }>((resolve) => {
-              const img = new Image();
-              img.onload = () => {
-                // 等比缩放：同时约束最大宽/高，避免“压缩/拉伸”
-                const scale = Math.min(maxW / img.naturalWidth, maxH / img.naturalHeight);
-                const drawW = img.naturalWidth * scale;
-                const drawH = img.naturalHeight * scale;
-                resolve({ img, drawH, drawW });
-              };
-              img.onerror = () => resolve({ img, drawH: 200, drawW: 300 });
-              img.src = s.image;
-            })
-        )
-      );
-    };
-
-    loadAll().then((loaded) => {
-      let height = 40;
-      loaded.forEach((l) => {
-        height += lineHeight + gap + l.drawH + gap;
-      });
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.ceil((maxW + 40) * dpr);
-      canvas.height = Math.ceil(height * dpr);
-      const ctx = canvas.getContext('2d')!;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.fillStyle = '#1a1a1a';
-      ctx.fillRect(0, 0, maxW + 40, height);
-      let y = 20;
-      stepsForComposite.forEach((s, i) => {
-        ctx.fillStyle = '#94a3b8';
-        ctx.font = 'bold 14px sans-serif';
-        ctx.fillText(s.label + (s.executedAt ? ` · ${new Date(s.executedAt).toLocaleString()}` : ''), 20, y + 16);
-        y += lineHeight + gap;
-        const { img, drawH, drawW } = loaded[i];
-        if (img && img.complete && img.naturalWidth) {
-          ctx.drawImage(img, 20, y, drawW, drawH);
-          y += drawH + gap;
-        } else {
-          y += 200 + gap;
-        }
-      });
-      setCompositeUrl(canvas.toDataURL('image/png'));
-    });
-  }, [stepsForComposite]);
-
-  React.useEffect(() => {
-    buildComposite();
-  }, [buildComposite]);
-
-  const downloadComposite = () => {
-    if (!compositeUrl) return;
-    void triggerImageDownload(compositeUrl, `workflow-flow-${asset.id.slice(0, 6)}`);
-  };
-
-  return (
-    <div
-      className="fixed inset-0 z-[2000] flex items-start justify-center bg-black/55 backdrop-blur-sm p-4 py-10 overflow-y-auto"
-      onClick={onClose}
-    >
-      <div
-        ref={containerRef}
-        className="relative max-w-4xl w-full max-h-[90vh] overflow-y-auto no-scrollbar bg-[#14141a]/92 backdrop-blur-md rounded-2xl border border-white/10 p-6 shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-[10px] font-black uppercase text-blue-400">归档详情 · 生成流程图</h3>
-          <button onClick={onClose} className="w-10 h-10 flex items-center justify-center text-white/60 hover:text-white"><AppIcon name="close" className="w-4 h-4" /></button>
-        </div>
-
-        {/* 切割图片组（像资产库一样可逐张打开） */}
-        {cutImages.length > 0 && (
-          <div className="mb-4 rounded-xl border border-[#2e2e32] bg-[#16161a] p-3">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-[9px] font-black uppercase text-gray-300">切割图片组（{cutImages.length}）</span>
-              <div className="flex items-center gap-2">
-                <span className="text-[8px] text-gray-500">点击缩略图可单张查看</span>
-                <button
-                  type="button"
-                  onClick={() => downloadMany(cutImages, 'cut')}
-                  className="px-2 py-1 rounded-lg bg-[#26262c] text-[8px] font-black uppercase hover:bg-[#383842]"
-                  title="逐张触发下载（浏览器可能会拦截过多下载）"
-                >
-                  批量下载
-                </button>
-              </div>
-            </div>
-            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2">
-              {cutImages.map((img, idx) => (
-                <button
-                  key={idx}
-                  type="button"
-                  onClick={() => setCutLightboxIndex(idx)}
-                  className="rounded-lg border border-[#2e2e32] bg-[#141416] overflow-hidden hover:border-[#3b6fb8] transition-colors"
-                  title={`第 ${idx + 1} 张`}
-                >
-                  <ProgressivePreviewImage
-                    fullSrc={img}
-                    cacheKey={`arch-cut:${asset.id}:${idx}`}
-                    thumbMaxEdge={240}
-                    className="relative w-full h-20"
-                    imgClassName="w-full h-20 object-cover block"
-                  />
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        <div className="space-y-4">
-          {stepsForCards.map((s, i) => (
-            <div key={i} className="rounded-xl border border-[#2e2e32] overflow-hidden bg-[#16161a]">
-              <div className="px-3 py-2 flex items-center justify-between border-b border-[#252528]">
-                <span className="text-[9px] font-black uppercase text-gray-300">{s.label}</span>
-                {s.executedAt != null && (
-                  <span className="text-[8px] text-gray-500">{new Date(s.executedAt).toLocaleString()}</span>
-                )}
-                <button
-                  onClick={() => downloadOne(s.image, s.label)}
-                  className="px-2 py-1 rounded-lg bg-[#26262c] text-[8px] font-black uppercase hover:bg-[#383842]"
-                >
-                  下载此张
-                </button>
-              </div>
-              <ProgressivePreviewImage
-                fullSrc={s.image}
-                cacheKey={`arch-step:${asset.id}:${i}:${s.label}`}
-                thumbMaxEdge={480}
-                className="relative w-full min-h-[120px] max-h-[320px]"
-                imgClassName="w-full max-h-[320px] object-contain bg-[#16161a]"
-                alt={s.label}
-              />
-            </div>
-          ))}
-        </div>
-        <div className="mt-4 flex items-center gap-3">
-          <span className="text-[9px] text-gray-500">拼合后的流程图（按生成顺序）</span>
-          {compositeUrl && (
-            <>
-              <ProgressivePreviewImage
-                fullSrc={compositeUrl}
-                cacheKey={`arch-composite:${asset.id}`}
-                thumbMaxEdge={360}
-                className="relative inline-block max-h-48 max-w-full"
-                imgClassName="max-h-48 rounded-lg border border-[#2e2e32] object-contain"
-                alt="流程图"
-              />
-              <button
-                onClick={downloadComposite}
-                className="px-4 py-2 rounded-xl bg-blue-600 text-[10px] font-black uppercase hover:bg-blue-500"
-              >
-                下载整张流程图
-              </button>
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* 切割组：单张查看（轻量 lightbox，类似资产库单图查看） */}
-      {cutLightboxImage && cutLightboxIndex != null && (
-        <div
-          className="fixed inset-0 z-[2200] flex items-center justify-center bg-black/78 backdrop-blur-sm p-4"
-          onClick={() => setCutLightboxIndex(null)}
-          role="button"
-          tabIndex={0}
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') setCutLightboxIndex(null);
-            if (e.key === 'ArrowLeft') setCutLightboxIndex((i) => (i == null ? i : (i - 1 + cutImages.length) % cutImages.length));
-            if (e.key === 'ArrowRight') setCutLightboxIndex((i) => (i == null ? i : (i + 1) % cutImages.length));
-          }}
-          aria-label="查看切割图片"
-        >
-          <div className="relative max-w-5xl w-full" onClick={(e) => e.stopPropagation()}>
-            <button
-              type="button"
-              onClick={() => setCutLightboxIndex(null)}
-              className="absolute -top-12 right-0 w-10 h-10 flex items-center justify-center text-white/60 hover:text-white"
-              aria-label="关闭"
-            >
-              <AppIcon name="close" className="w-4 h-4" />
-            </button>
-            <img src={cutLightboxImage} alt="" className="w-full max-h-[80vh] object-contain rounded-2xl border border-[#2e2e32] bg-[#16161a]" />
-            <div className="flex justify-center gap-2 mt-3">
-              <button
-                type="button"
-                onClick={() => {
-                  void downloadOne(cutLightboxImage, `cut-${cutLightboxIndex + 1}`);
-                }}
-                className="px-3 py-1 rounded-lg bg-[#1d4ed8] hover:bg-blue-500 text-[9px] font-black"
-              >
-                下载此张
-              </button>
-              {cutImages.length > 1 && (
-                <>
-                <button
-                  type="button"
-                  onClick={() => setCutLightboxIndex((i) => (i == null ? i : (i - 1 + cutImages.length) % cutImages.length))}
-                  className="px-3 py-1 rounded-lg bg-[#26262c] text-[9px] font-black"
-                >
-                  上一张
-                </button>
-                <span className="text-[9px] text-gray-500 self-center">
-                  {cutLightboxIndex + 1} / {cutImages.length}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setCutLightboxIndex((i) => (i == null ? i : (i + 1) % cutImages.length))}
-                  className="px-3 py-1 rounded-lg bg-[#26262c] text-[9px] font-black"
-                >
-                  下一张
-                </button>
-                </>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
-
-// ---------- 主组件 ----------
-const SET_ACTION_PREFIX = 'set:';
-const SECTION_HEADER_CLASS = 'rounded-lg px-3 py-2';
-const SECTION_TITLE_CLASS = 'text-[9px] font-black text-blue-400 uppercase tracking-wide';
-const SECTION_DESC_CLASS = 'text-[8px] text-gray-500 mt-0.5';
-const SECTION_HEADER_BOTTOM_GAP_CLASS = 'mb-3';
-const TITLE_ROW_BTN_BASE =
-  'h-8 px-3 inline-flex items-center justify-center rounded-lg text-[9px] font-black uppercase border transition-colors';
-const TITLE_ROW_BTN_NEUTRAL = `${TITLE_ROW_BTN_BASE} bg-[#1c1c22] border-[#2e2e32] text-gray-300 hover:bg-[#2e2e36]`;
-const TITLE_ROW_BTN_ACTIVE = `${TITLE_ROW_BTN_BASE} bg-blue-600 border-blue-500 text-white`;
-const WORKSPACE_SNAP_DURATION_MS = 260;
-// y2 > 1 形成轻微回弹，避免左右切页“硬切”。
-const WORKSPACE_SNAP_EASING = 'cubic-bezier(0.22, 1.12, 0.36, 1)';
-
-/** 根级网格 / 大图列表：新到旧（createdAt 降序） */
-function sortRootWorkflowAssetsNewestFirst(list: WorkflowAsset[]): WorkflowAsset[] {
-  return [...list].sort((a, b) => {
-    const ca = a.createdAt ?? 0;
-    const cb = b.createdAt ?? 0;
-    if (cb !== ca) return cb - ca;
-    return a.id.localeCompare(b.id);
-  });
-}
-
-/** 大纲：子资产沿 parentAssetId 得到 viewStack（不含子资产自身），用于组内子卡片定位 */
-function workflowOutlineAncestorStack(childAssetId: string, assets: WorkflowAsset[]): { assetId: string }[] {
-  const target = assets.find((a) => a.id === childAssetId);
-  if (!target?.parentAssetId) return [];
-  const chain: string[] = [];
-  let pid: string | undefined = target.parentAssetId;
-  while (pid) {
-    chain.push(pid);
-    const p = assets.find((x) => x.id === pid);
-    pid = p?.parentAssetId;
-  }
-  chain.reverse();
-  return chain.map((id) => ({ assetId: id }));
-}
-
-/** 进入某组内部：栈为从根到该组（含该组） */
-function workflowOutlineDrillStackToEnterGroup(groupId: string, assets: WorkflowAsset[]): { assetId: string }[] {
-  const chain: string[] = [];
-  let id: string | undefined = groupId;
-  while (id) {
-    chain.push(id);
-    const n = assets.find((a) => a.id === id);
-    id = n?.parentAssetId;
-  }
-  chain.reverse();
-  return chain.map((i) => ({ assetId: i }));
-}
-
-function workflowFindGroupItemIndex(parent: WorkflowAsset, childAssetId: string): number | null {
-  const items = parent.cutImageGroup ?? [];
-  for (let i = 0; i < items.length; i++) {
-    const it = items[i];
-    if (it && typeof it === 'object' && 'assetId' in it && (it as { assetId: string }).assetId === childAssetId) {
-      return i;
-    }
-  }
-  return null;
-}
-
-/** 大纲树中所有「有子项」的组节点 id（与 outlineTreeRows 遍历一致，含嵌套引用子资产） */
-function workflowOutlineExpandableGroupIds(assets: WorkflowAsset[], visibleRoots: WorkflowAsset[]): Set<string> {
-  const ids = new Set<string>();
-  const visit = (a: WorkflowAsset, visited: Set<string>) => {
-    if (visited.has(a.id)) return;
-    visited.add(a.id);
-    const items = a.cutImageGroup ?? [];
-    if (items.length > 0) ids.add(a.id);
-    items.forEach((item) => {
-      const isRef = item && typeof item === 'object' && 'assetId' in item;
-      const childId = isRef ? (item as { assetId: string }).assetId : '';
-      if (typeof item === 'string' || (item && typeof item === 'object' && 'r2Key' in item && !isRef)) return;
-      if (isRef && childId) {
-        const child = assets.find((x) => x.id === childId);
-        if (child) visit(child, visited);
-      }
-    });
-  };
-  const seen = new Set<string>();
-  visibleRoots.forEach((root) => visit(root, seen));
-  return ids;
-}
+import { WORKFLOW_CUT_DETECT_TIMEOUT_MS, DT_AC_LIBRARY_ITEM_ID } from './workflow/workflowConstants';
+import { uuid, baseActionId, makeVersionKey } from './workflow/workflowIds';
+import {
+  asWorkflowImageString,
+  buildLibraryItemsFromWorkflowExport,
+  safeUnknownToString,
+  collectImageLikeUrlsFromText,
+  collectImageLikeUrlsFromHtml,
+  dataTransferItemToString,
+  dragTransferHasPlainText,
+  cloneCapabilityPresetPanelWithScrollRef,
+  cropBoxes,
+} from './workflow/workflowSectionHelpers';
+import { CutSelectModal, PromptTweakModal, ArchivedDetailModal, type PromptTweakTarget } from './workflow/modals';
+import {
+  SET_ACTION_PREFIX,
+  SECTION_HEADER_CLASS,
+  SECTION_TITLE_CLASS,
+  TITLE_ROW_BTN_BASE,
+  TITLE_ROW_BTN_NEUTRAL,
+  TITLE_ROW_BTN_ACTIVE,
+} from './workflow/workflowSectionUiConstants';
+import {
+  sortRootWorkflowAssetsNewestFirst,
+  workflowOutlineAncestorStack,
+  workflowOutlineDrillStackToEnterGroup,
+  workflowFindGroupItemIndex,
+  workflowOutlineExpandableGroupIds,
+} from './workflow/workflowOutlineUtils';
+import { isWorkflowEditableTarget } from './workflow/workflowDomUtils';
+import {
+  clampWorkflowCardAspectRatio,
+  mergeCardAspectFromIntrinsic,
+  persistWorkflowCardAspects,
+  readSessionWorkflowCardAspects,
+} from './workflow/workflowCardAspect';
+import { groupCapabilityPresetsByCategory } from './workflow/workflowCapabilityGroups';
+import { workflowTopTitleGridStyle } from './workflow/workflowPaneLayout';
+import { WorkflowSidebarColumn, type WorkflowSidebarFavoriteEntry } from './workflow/WorkflowSidebarColumn';
 
 const WorkflowSection: React.FC<{
   capabilityPresets: CustomAppModule[];
@@ -885,24 +140,7 @@ const WorkflowSection: React.FC<{
       .map(({ p }) => p);
   }, [capabilityPresets]);
   const actionModules: CustomAppModule[] = presets;
-  const byCategory = useMemo<Array<{ category: { id: string; label: string; desc: string }; list: CustomAppModule[] }>>(() => {
-    const knownIds = new Set(CAPABILITY_CATEGORIES.map((c) => c.id));
-    const map: Record<string, CustomAppModule[]> = {};
-    CAPABILITY_CATEGORIES.forEach((c) => { map[c.id] = []; });
-    const other: CustomAppModule[] = [];
-    presets.forEach((p) => {
-      const cat = p.category ?? 'image_process';
-      if (knownIds.has(cat)) {
-        map[cat].push(p);
-      } else {
-        other.push(p);
-      }
-    });
-    const groups: Array<{ category: { id: string; label: string; desc: string }; list: CustomAppModule[] }> =
-      CAPABILITY_CATEGORIES.map((c) => ({ category: c, list: map[c.id] ?? [] })).filter((g) => g.list.length > 0);
-    if (other.length > 0) groups.push({ category: { id: 'other', label: '其他', desc: '' }, list: other });
-    return groups;
-  }, [presets]);
+  const byCategory = useMemo(() => groupCapabilityPresetsByCategory(presets), [presets]);
   const [columnCount, setColumnCount] = useState(4);
   const [showArchived, setShowArchived] = useState(false);
   const [archiveHint, setArchiveHint] = useState<{ assetId: string; ts: number } | null>(null);
@@ -919,6 +157,8 @@ const WorkflowSection: React.FC<{
   /** 并发执行中：已由 worker 取出、尚未结束的任务（用于卡片「执行中」与工具栏进度，避免误用单一 current 索引） */
   const [activeTaskIds, setActiveTaskIds] = useState<Set<string>>(() => new Set());
   const [completedTaskIds, setCompletedTaskIds] = useState<Set<string>>(new Set());
+  /** 批处理已开始后用户从卡片取消「排队中」项：worker 仍会从本地 queue shift，此处跳过执行 */
+  const cancelledTaskIdsRef = useRef<Set<string>>(new Set());
   const [draggingAssetIds, setDraggingAssetIds] = useState<string[] | null>(null);
   const [dragOverAction, setDragOverAction] = useState<string | null>(null);
   /** 功能块拖拽 id（仅 ref，不用 state：dragover 首帧时 setState 尚未提交会导致未 preventDefault、drop 失败） */
@@ -938,16 +178,7 @@ const WorkflowSection: React.FC<{
   } | null>(null);
   const [promptTweakModal, setPromptTweakModal] = useState<{
     preset: CustomAppModule;
-    targets: Array<
-      | {
-          assetId: string;
-          inputImage: string;
-          inputSourceDisplayKey?: string;
-          sourceGroupAssetId?: string;
-          sourceItemIndex?: number;
-        }
-      | { imageBase64: string; parentAssetId: string; sourceGroupAssetId: string; sourceItemIndex: number }
-    >;
+    targets: PromptTweakTarget[];
   } | null>(null);
   const [viewStack, setViewStack] = useState<{ assetId: string }[]>([]);
   const viewStackRef = useRef(viewStack);
@@ -958,11 +189,13 @@ const WorkflowSection: React.FC<{
   const [selectedAssetIds, setSelectedAssetIds] = useState<Set<string>>(new Set());
   const [selectedGroupItemKeys, setSelectedGroupItemKeys] = useState<Set<string>>(new Set());
   const [capabilityPresetViewMode, setCapabilityPresetViewMode] = useState<'presets' | 'image_process' | 'sets'>('presets');
-  const [cardAspectByAssetId, setCardAspectByAssetId] = useState<Record<string, number>>({});
-  /** 框选进行中：仅用布尔触发挂载选框层；拖动中用 ref + 直接改 DOM，避免每帧整表重绘 */
-  const [marqueeActive, setMarqueeActive] = useState(false);
-  const marqueeDataRef = useRef({ startX: 0, startY: 0, endX: 0, endY: 0 });
-  const marqueeOverlayElRef = useRef<HTMLDivElement | null>(null);
+  const [cardAspectByAssetId, setCardAspectByAssetId] = useState<Record<string, number>>(
+    () => readSessionWorkflowCardAspects()
+  );
+  const [thumbUnlockKeys, setThumbUnlockKeys] = useState<Set<string>>(() => new Set());
+  /** 当前视口内（严格 intersect）卡片：缩略解码队列 high，优先于屏外 */
+  const [thumbHotKeys, setThumbHotKeys] = useState<Set<string>>(() => new Set());
+  const thumbOnboardingRef = useRef<string | null>(null);
   const gridRef = useRef<HTMLDivElement>(null);
   const workspaceViewportRef = useRef<HTMLDivElement>(null);
   const workspaceTrackRef = useRef<HTMLDivElement>(null);
@@ -973,102 +206,62 @@ const WorkflowSection: React.FC<{
   const centerScrollRef = useRef<HTMLDivElement>(null);
   const presetScrollRef = useRef<HTMLDivElement>(null);
   const [workspaceViewportWidth, setWorkspaceViewportWidth] = useState(0);
-  /** 0=仓库|大纲 1=大纲|工作区 2=工作区|功能区 3=功能区|能力；支持连续位置 */
-  const [workspacePane, setWorkspacePane] = useState<number>(2);
-  const workspacePaneRef = useRef<number>(2);
-  const [workspaceSnapping, setWorkspaceSnapping] = useState(false);
-  const workspaceSnapTimerRef = useRef<number | null>(null);
-  const workspaceSwipeTouchX = useRef(0);
-  const workspaceSwipeStartOffsetPx = useRef(0);
-  // 拖动时连续更新会触发大量 setState，使用 rAF 节流避免抖动
-  const workspaceRafRef = useRef<number | null>(null);
-  const workspaceNextPaneRef = useRef<number>(2);
-  const setWorkspacePaneRaf = useCallback(
-    (next: number) => {
-      const clamped = Math.max(0, Math.min(3, next));
-      workspaceNextPaneRef.current = clamped;
-      if (typeof window === 'undefined') {
-        setWorkspacePane(clamped);
-        return;
-      }
-      if (workspaceRafRef.current != null) return;
-      workspaceRafRef.current = window.requestAnimationFrame(() => {
-        workspaceRafRef.current = null;
-        setWorkspacePane(workspaceNextPaneRef.current);
-      });
-    },
-    []
-  );
-  const snapWorkspacePaneToNode = useCallback((rawPane?: number) => {
-    const base = typeof rawPane === 'number' ? rawPane : workspacePaneRef.current;
-    const snapped = Math.max(0, Math.min(3, Math.round(base)));
-    if (workspaceSnapTimerRef.current != null && typeof window !== 'undefined') {
-      window.clearTimeout(workspaceSnapTimerRef.current);
-      workspaceSnapTimerRef.current = null;
+
+  useLayoutEffect(() => {
+    const key = onboardingKey ?? '';
+    if (thumbOnboardingRef.current === null) {
+      thumbOnboardingRef.current = key;
+      return;
     }
-    const track = workspaceTrackRef.current;
-    if (track) {
-      // 先写入过渡，避免状态批处理时偶发“无动画硬切”。
-      track.style.transition = `transform ${WORKSPACE_SNAP_DURATION_MS}ms ${WORKSPACE_SNAP_EASING}`;
+    if (thumbOnboardingRef.current !== key) {
+      thumbOnboardingRef.current = key;
+      setThumbUnlockKeys(new Set());
+      setThumbHotKeys(new Set());
     }
-    setWorkspaceSnapping(true);
-    setWorkspacePane(snapped);
-    if (typeof window !== 'undefined') {
-      workspaceSnapTimerRef.current = window.setTimeout(() => {
-        setWorkspaceSnapping(false);
-        workspaceSnapTimerRef.current = null;
-      }, WORKSPACE_SNAP_DURATION_MS);
-    } else {
-      setWorkspaceSnapping(false);
-    }
-  }, []);
+  }, [onboardingKey]);
+
   useEffect(() => {
-    const key = String(onboardingKey || '').trim();
-    if (!key) return;
-    let done = false;
-    try {
-      done = localStorage.getItem(`${WORKFLOW_FIRST_SWEEP_DONE_KEY}:${key}`) === '1';
-    } catch {
-      done = false;
-    }
-    if (done) return;
-    let cancelled = false;
-    const timers: number[] = [];
-    const markDone = () => {
-      try {
-        localStorage.setItem(`${WORKFLOW_FIRST_SWEEP_DONE_KEY}:${key}`, '1');
-      } catch {
-        /* ignore */
-      }
-    };
-    timers.push(window.setTimeout(() => {
-      if (cancelled) return;
-      snapWorkspacePaneToNode(0);
-    }, 260));
-    timers.push(window.setTimeout(() => {
-      if (cancelled) return;
-      snapWorkspacePaneToNode(3);
-    }, 980));
-    timers.push(window.setTimeout(() => {
-      if (cancelled) return;
-      snapWorkspacePaneToNode(2);
-      markDone();
-    }, 1700));
-    return () => {
-      cancelled = true;
-      timers.forEach((id) => window.clearTimeout(id));
-    };
-  }, [onboardingKey, snapWorkspacePaneToNode]);
-  useEffect(() => {
-    return () => {
-      if (workspaceRafRef.current != null && typeof window !== 'undefined') {
-        window.cancelAnimationFrame(workspaceRafRef.current);
-      }
-      if (workspaceSnapTimerRef.current != null && typeof window !== 'undefined') {
-        window.clearTimeout(workspaceSnapTimerRef.current);
-      }
-    };
+    const t = window.setTimeout(() => {
+      persistWorkflowCardAspects(cardAspectByAssetId);
+    }, 400);
+    return () => window.clearTimeout(t);
+  }, [cardAspectByAssetId]);
+
+  useLayoutEffect(() => {
+    const el = workspaceViewportRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const update = () => setWorkspaceViewportWidth(el.clientWidth || 0);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
   }, []);
+  const sidebarWidth = 320;
+  const paneWidth = Math.max(320, workspaceViewportWidth || 0);
+  const listPaneWidth = Math.max(320, paneWidth - sidebarWidth);
+  const presetPaneWidth = listPaneWidth;
+  const trackTotalWidth = listPaneWidth + sidebarWidth + listPaneWidth + sidebarWidth + presetPaneWidth;
+  const marqueeStartRef = useRef(false);
+  const {
+    workspacePane,
+    setWorkspacePane,
+    workspacePaneRef,
+    setWorkspacePaneRaf,
+    snapWorkspacePaneToNode,
+    handlePaneWheel,
+    workspaceOffsetPx,
+    spacePanEnabled,
+    spacePanDragging,
+    suppressClickAfterPanRef,
+    workspaceViewportTouchHandlers,
+  } = useWorkflowWorkspacePanes({
+    workspaceTrackRef,
+    registerPaneWheelHandler,
+    listPaneWidth,
+    sidebarWidth,
+    onboardingKey,
+    marqueeStartRef,
+  });
   /** 从功能区「词」进入能力页：横向滑到能力列并滚动到对应预设卡片 */
   const jumpToCapabilityPreset = useCallback((preset: CustomAppModule) => {
     const mode: 'presets' | 'image_process' =
@@ -1079,63 +272,35 @@ const WorkflowSection: React.FC<{
         window.dispatchEvent(new CustomEvent('ac:capability-preset-view-mode', { detail: { mode } }));
         window.dispatchEvent(new CustomEvent('ac:capability-jump-to-preset', { detail: { presetId: preset.id } }));
       };
-      // 首次点击时能力区可能正处于懒加载/重排，补发两次可显著降低“点两次才跳转”
       emitJump();
       window.requestAnimationFrame(emitJump);
       window.setTimeout(emitJump, 220);
     }
     snapWorkspacePaneToNode(3);
   }, [snapWorkspacePaneToNode]);
-  const [spacePanEnabled, setSpacePanEnabled] = useState(false);
-  const [spacePanDragging, setSpacePanDragging] = useState(false);
-  const marqueeStartRef = useRef(false);
-  const suppressClickAfterPanRef = useRef(false);
-  const wheelLockUntilRef = useRef(0);
   const [libraryImportIds, setLibraryImportIds] = useState<Set<string>>(new Set());
   /** 大纲底部拖入区高亮 */
   const [outlineFooterDropOver, setOutlineFooterDropOver] = useState<'toWorkspace' | 'toLibrary' | null>(null);
   const [libraryFilter, setLibraryFilter] = useState<'all' | 'library' | 'archived'>('all');
-  /** 框选起始时的横向页：0=仓库 1|2=工作区画布（与 workspacePane 对齐） */
-  const marqueePaneRef = useRef(0);
-  const handleMarqueeMouseDown = useCallback(
-    (e: React.MouseEvent) => {
-      const pn = Math.round(workspacePane);
-      if (pn !== 0 && pn !== 1 && pn !== 2) return;
-      if (pn !== 0 && showArchived) return;
-      if ((e.target as Element).closest('[data-workflow-toolbar]')) return;
-      if (pn === 0) {
-        if ((e.target as Element).closest('[data-workflow-library-card]')) return;
-        if ((e.target as Element).closest('[data-workflow-outline]')) return;
-        if ((e.target as Element).closest('[data-workflow-outline-footer]')) return;
-        if ((e.target as Element).closest('button, [role="button"], a, input, select, textarea, label')) return;
-        if ((e.target as Element).closest('[data-workflow-sidebar], [data-workflow-preset]')) return;
-      } else {
-        if ((e.target as Element).closest('[data-workflow-card]')) return;
-        if ((e.target as Element).closest('button, [role="button"], a, input, select, textarea, label')) return;
-        if ((e.target as Element).closest('[data-workflow-sidebar], [data-workflow-preset], [data-workflow-outline]')) return;
-      }
-      marqueePaneRef.current = pn;
-      // 本次鼠标按下将启动框选；如果同时按了 Space，我们让“平移抓手”不要抢占该事件
-      marqueeStartRef.current = true;
-      e.preventDefault();
-      e.stopPropagation();
-      marqueeDataRef.current = {
-        startX: e.clientX,
-        startY: e.clientY,
-        endX: e.clientX,
-        endY: e.clientY,
-      };
-      setMarqueeActive(true);
-    },
-    [showArchived, workspacePane]
-  );
-  useEffect(() => {
-    if (!registerMarqueeStartHandler) return;
-    registerMarqueeStartHandler(handleMarqueeMouseDown);
-    return () => registerMarqueeStartHandler(null);
-  }, [registerMarqueeStartHandler, handleMarqueeMouseDown]);
   const cardRefs = useRef<Map<string, HTMLElement>>(new Map());
   const libraryCardRefs = useRef<Map<string, HTMLElement>>(new Map());
+  const {
+    marqueeActive,
+    marqueeOverlayElRef,
+    marqueePaneRef,
+  } = useWorkflowMarquee({
+    registerMarqueeStartHandler,
+    showArchived,
+    workspacePane,
+    marqueeStartRef,
+    libraryCardRefs,
+    cardRefs,
+    viewStackRef,
+    pendingRef,
+    setLibraryImportIds,
+    setSelectedAssetIds,
+    setSelectedGroupItemKeys,
+  });
 
   const toggleOutlineGroupCollapsed = useCallback((groupId: string, e: React.MouseEvent) => {
     e.preventDefault();
@@ -1570,6 +735,7 @@ const WorkflowSection: React.FC<{
       if (queue.length === 0 || (executing && !overridePending)) return;
       // 新一轮批处理前清空已完成任务标记；本批快照已写入 queue，始终清空 pending（含递归续跑），避免完成后仍误判「在队列内」
       setCompletedTaskIds(new Set());
+      cancelledTaskIdsRef.current = new Set();
       setPending([]);
       setActiveTaskIds(new Set());
       setExecuting(true);
@@ -1580,6 +746,9 @@ const WorkflowSection: React.FC<{
       const logBatch = `[${total}项·并发≤${MAX_CONCURRENCY}]`;
 
       const processTask = async (task: WorkflowPendingTask) => {
+        if (cancelledTaskIdsRef.current.has(task.id)) {
+          return;
+        }
         setActiveTaskIds((prev) => new Set(prev).add(task.id));
         try {
           const taskLabel = getActionLabel(task.actionType);
@@ -1779,6 +948,7 @@ const WorkflowSection: React.FC<{
         const msg = e instanceof Error ? e.message : safeUnknownToString(e);
         onLog?.('error', `队列执行异常：${msg}`);
       } finally {
+        cancelledTaskIdsRef.current = new Set();
         setExecuting(false);
         setExecutingQueue(null);
         setActiveTaskIds(new Set());
@@ -1795,6 +965,12 @@ const WorkflowSection: React.FC<{
     },
     [executing, onLog, setPending, setAssets, getActionLabel, replaceGroupItemWithSubAsset, runTask, actionModules]
   );
+
+  const cancelQueuedTaskInBatch = useCallback((taskId: string) => {
+    if (!taskId) return;
+    cancelledTaskIdsRef.current.add(taskId);
+    setCompletedTaskIds((prev) => new Set(prev).add(taskId));
+  }, []);
 
   const onCutConfirm = useCallback(
     async (selectedIndexes: number[]) => {
@@ -1868,35 +1044,73 @@ const WorkflowSection: React.FC<{
       const reader = new FileReader();
       reader.onload = () => {
         const base64 = reader.result as string;
-        setAssets((prev) => {
-          const groupCtx =
-            viewStack.length > 0
-              ? prev.find((a) => a.id === viewStack[viewStack.length - 1].assetId)
-              : null;
-          const newId = uuid();
-          const newAsset: WorkflowAsset = attachInitialVgpToNewAsset({
-            id: newId,
-            original: base64,
-            displayKey: 'original',
-            results: {},
-            resultOrder: [],
-            archived: false,
-            hiddenInGrid: false,
-            createdAt: batchBase + (n - 1 - fileIdx),
-            ...(groupCtx ? { parentAssetId: groupCtx.id } : {}),
-          });
-          if (!groupCtx) {
-            return [...prev, newAsset];
-          }
-          return prev.map((a) => {
-            if (a.id === groupCtx.id) {
-              const items = [...(a.cutImageGroup ?? [])];
-              items.push({ assetId: newId });
-              return { ...a, cutImageGroup: items };
+        const newId = uuid();
+        const pushNewAsset = () => {
+          setAssets((prev) => {
+            const groupCtx =
+              viewStack.length > 0
+                ? prev.find((a) => a.id === viewStack[viewStack.length - 1].assetId)
+                : null;
+            const newAsset: WorkflowAsset = attachInitialVgpToNewAsset({
+              id: newId,
+              original: base64,
+              displayKey: 'original',
+              results: {},
+              resultOrder: [],
+              archived: false,
+              hiddenInGrid: false,
+              createdAt: batchBase + (n - 1 - fileIdx),
+              ...(groupCtx ? { parentAssetId: groupCtx.id } : {}),
+            });
+            if (!groupCtx) {
+              return [...prev, newAsset];
             }
-            return a;
-          }).concat(newAsset);
-        });
+            return prev
+              .map((a) => {
+                if (a.id === groupCtx.id) {
+                  const items = [...(a.cutImageGroup ?? [])];
+                  items.push({ assetId: newId });
+                  return { ...a, cutImageGroup: items };
+                }
+                return a;
+              })
+              .concat(newAsset);
+          });
+        };
+        const im = new Image();
+        im.onload = () => {
+          const ratio = clampWorkflowCardAspectRatio(im.naturalWidth, im.naturalHeight);
+          setCardAspectByAssetId((prev) => (prev[newId] != null ? prev : { ...prev, [newId]: ratio }));
+          setThumbUnlockKeys((prev) => {
+            if (prev.has(newId)) return prev;
+            const next = new Set(prev);
+            next.add(newId);
+            return next;
+          });
+          setThumbHotKeys((prev) => {
+            if (prev.has(newId)) return prev;
+            const next = new Set(prev);
+            next.add(newId);
+            return next;
+          });
+          pushNewAsset();
+        };
+        im.onerror = () => {
+          setThumbUnlockKeys((prev) => {
+            if (prev.has(newId)) return prev;
+            const next = new Set(prev);
+            next.add(newId);
+            return next;
+          });
+          setThumbHotKeys((prev) => {
+            if (prev.has(newId)) return prev;
+            const next = new Set(prev);
+            next.add(newId);
+            return next;
+          });
+          pushNewAsset();
+        };
+        im.src = base64;
       };
       reader.readAsDataURL(file);
     });
@@ -1979,37 +1193,22 @@ const WorkflowSection: React.FC<{
     }
     return files;
   }, []);
-  const favoriteStorageKey = useMemo(
-    () => (preferenceScope ? `ac_workflow_favorites_v1__u_${preferenceScope}` : 'ac_workflow_favorites_v1__guest'),
-    [preferenceScope]
+  const favoriteStorageKey = useMemo(() => workflowFavoritesStorageKey(preferenceScope), [preferenceScope]);
+  const parseFavoriteIds = useCallback((parsed: unknown): string[] | null => {
+    if (!Array.isArray(parsed)) return null;
+    return parsed.filter((x): x is string => typeof x === 'string');
+  }, []);
+  const [favoriteActionIds, setFavoriteActionIds] = useState<string[]>(() =>
+    readLocalJson<string[]>(favoriteStorageKey, [], parseFavoriteIds)
   );
-  const [favoriteActionIds, setFavoriteActionIds] = useState<string[]>(() => {
-    try {
-      const raw = localStorage.getItem(favoriteStorageKey);
-      const parsed = raw ? JSON.parse(raw) : [];
-      return Array.isArray(parsed) ? parsed.filter((x) => typeof x === 'string') : [];
-    } catch {
-      return [];
-    }
-  });
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(favoriteStorageKey);
-      const parsed = raw ? JSON.parse(raw) : [];
-      setFavoriteActionIds(Array.isArray(parsed) ? parsed.filter((x) => typeof x === 'string') : []);
-    } catch {
-      setFavoriteActionIds([]);
-    }
-  }, [favoriteStorageKey]);
+    setFavoriteActionIds(readLocalJson<string[]>(favoriteStorageKey, [], parseFavoriteIds));
+  }, [favoriteStorageKey, parseFavoriteIds]);
   useEffect(() => {
     if (!lightboxAssetId) setShowLightboxGenerationRecord(false);
   }, [lightboxAssetId]);
   useEffect(() => {
-    try {
-      localStorage.setItem(favoriteStorageKey, JSON.stringify(favoriteActionIds));
-    } catch {
-      // ignore persist failure
-    }
+    writeLocalJson(favoriteStorageKey, favoriteActionIds);
   }, [favoriteActionIds, favoriteStorageKey]);
   const collectImageFilesFromClipboardItems = useCallback((items?: DataTransferItemList | null) => {
     if (!items?.length) return [] as File[];
@@ -2022,29 +1221,21 @@ const WorkflowSection: React.FC<{
     return files;
   }, []);
 
-  const isEditableTarget = useCallback((target: EventTarget | null) => {
-    const el = target instanceof Element ? target : null;
-    if (!el) return false;
-    if (el.closest('input, textarea, select, [contenteditable="true"]')) return true;
-    if ((el as HTMLElement).isContentEditable) return true;
-    return false;
-  }, []);
-
   const isGlobalUploadBlockedTarget = useCallback((target: EventTarget | null) => {
     const el = target instanceof Element ? target : null;
     if (!el) return false;
-    if (isEditableTarget(el)) return true;
+    if (isWorkflowEditableTarget(el)) return true;
     // Do not hijack drag/drop on explicit interactive controls or icon buttons.
     if (el.closest('button, a, label, [role="button"], [role="menuitem"], [data-no-global-image-drop]')) return true;
     return false;
-  }, [isEditableTarget]);
+  }, []);
 
   useEffect(() => {
     const onWindowPaste = (e: ClipboardEvent) => {
       if (showArchived) return;
       /** 仅让出真正的可编辑区；不要用 isGlobalUploadBlockedTarget(e.target)，否则焦点在顶部 Tab 等按钮上时，在列表里粘贴会被误拦截 */
       const active = document.activeElement;
-      if (active && isEditableTarget(active)) return;
+      if (active && isWorkflowEditableTarget(active)) return;
       const files = collectImageFilesFromClipboardItems(e.clipboardData?.items);
       if (!files.length) return;
       e.preventDefault();
@@ -2054,7 +1245,7 @@ const WorkflowSection: React.FC<{
     return () => {
       window.removeEventListener('paste', onWindowPaste);
     };
-  }, [addImagesFromFiles, collectImageFilesFromClipboardItems, isEditableTarget, showArchived]);
+  }, [addImagesFromFiles, collectImageFilesFromClipboardItems, showArchived]);
 
   useEffect(() => {
     const onWindowDragOver = (e: DragEvent) => {
@@ -2447,131 +1638,6 @@ const WorkflowSection: React.FC<{
     [setAssets]
   );
 
-  const updateMarqueeOverlayDom = useCallback(() => {
-    const d = marqueeDataRef.current;
-    const el = marqueeOverlayElRef.current;
-    if (!el) return;
-    const left = Math.min(d.startX, d.endX);
-    const top = Math.min(d.startY, d.endY);
-    const width = Math.max(0, Math.abs(d.endX - d.startX));
-    const height = Math.max(0, Math.abs(d.endY - d.startY));
-    el.style.left = `${left}px`;
-    el.style.top = `${top}px`;
-    el.style.width = `${width}px`;
-    el.style.height = `${height}px`;
-  }, []);
-
-  useLayoutEffect(() => {
-    if (!marqueeActive) return;
-    updateMarqueeOverlayDom();
-  }, [marqueeActive, updateMarqueeOverlayDom]);
-
-  useEffect(() => {
-    if (!marqueeActive) return;
-    const onMove = (e: MouseEvent) => {
-      marqueeDataRef.current.endX = e.clientX;
-      marqueeDataRef.current.endY = e.clientY;
-      updateMarqueeOverlayDom();
-    };
-    const onUp = (e: MouseEvent) => {
-      const d = marqueeDataRef.current;
-      const left = Math.min(d.startX, d.endX);
-      const top = Math.min(d.startY, d.endY);
-      const width = Math.abs(d.endX - d.startX);
-      const height = Math.abs(d.endY - d.startY);
-      const isClick = width < 5 && height < 5;
-      const pane = marqueePaneRef.current;
-      const vs = viewStackRef.current;
-      const altKey = e.altKey;
-
-      // 先收起选框再算相交：大量 getBoundingClientRect 会长时间占用主线程，否则松手后仍像「卡一下」才消失
-      marqueeOverlayElRef.current?.style.setProperty('visibility', 'hidden');
-      setMarqueeActive(false);
-
-      if (isClick) {
-        if (pane === 0) {
-          setLibraryImportIds(new Set());
-        } else if (vs.length === 0) {
-          setSelectedAssetIds(new Set());
-        } else {
-          setSelectedGroupItemKeys(new Set());
-        }
-        return;
-      }
-
-      const sel = { left, top, width, height };
-
-      const applySelection = () => {
-        if (pane === 0) {
-          const ids: string[] = [];
-          libraryCardRefs.current.forEach((el, id) => {
-            const r = el.getBoundingClientRect();
-            const overlap =
-              !(sel.left + sel.width < r.left || r.left + r.width < sel.left || sel.top + sel.height < r.top || r.top + r.height < sel.top);
-            if (overlap) ids.push(id);
-          });
-          if (ids.length) {
-            const toAdd = altKey ? [] : ids;
-            const toRemove = altKey ? ids : [];
-            setLibraryImportIds((s) => {
-              const next = new Set(s);
-              toRemove.forEach((id) => next.delete(id));
-              toAdd.forEach((id) => next.add(id));
-              return next;
-            });
-          }
-          return;
-        }
-        const ids: string[] = [];
-        cardRefs.current.forEach((el, id) => {
-          const r = el.getBoundingClientRect();
-          const overlap =
-            !(sel.left + sel.width < r.left || r.left + r.width < sel.left || sel.top + sel.height < r.top || r.top + r.height < sel.top);
-          if (overlap) ids.push(id);
-        });
-        if (!ids.length) return;
-        const vsNow = viewStackRef.current;
-        const pendNow = pendingRef.current;
-        if (vsNow.length === 0) {
-          const toAdd = altKey ? [] : ids.filter((id) => !pendNow.some((t) => t.assetId === id));
-          const toRemove = altKey ? ids : [];
-          setSelectedAssetIds((s) => {
-            const next = new Set(s);
-            toRemove.forEach((id) => next.delete(id));
-            toAdd.forEach((id) => next.add(id));
-            return next;
-          });
-        } else {
-          const currentGroupId = vsNow[vsNow.length - 1]?.assetId;
-          const toAdd = altKey
-            ? []
-            : ids.filter((key) => {
-                const parts = String(key).split('::');
-                if (parts.length !== 2) return true;
-                const idx = parseInt(parts[1], 10);
-                if (Number.isNaN(idx)) return true;
-                return !pendNow.some((t) => t.sourceGroupAssetId === currentGroupId && t.sourceItemIndex === idx);
-              });
-          const toRemove = altKey ? ids : [];
-          setSelectedGroupItemKeys((s) => {
-            const next = new Set(s);
-            toRemove.forEach((key) => next.delete(key));
-            toAdd.forEach((key) => next.add(key));
-            return next;
-          });
-        }
-      };
-
-      window.requestAnimationFrame(applySelection);
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-    return () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    };
-  }, [marqueeActive, updateMarqueeOverlayDom]);
-
   useEffect(() => {
     const pendingAssetIds = new Set(pending.map((t) => t.assetId));
     const pendingGroupKeys = new Set(
@@ -2697,6 +1763,146 @@ const WorkflowSection: React.FC<{
     if (!currentGroupAsset || !showAllInGroup) return null;
     return flattenGroupImages(currentGroupAsset);
   }, [currentGroupAsset, showAllInGroup, flattenGroupImages]);
+
+  const mergeThumbUnlockKeys = useCallback((prev: Set<string>, keys: Iterable<string>) => {
+    const next = new Set(prev);
+    let changed = false;
+    for (const k of keys) {
+      if (!next.has(k)) {
+        next.add(k);
+        changed = true;
+      }
+    }
+    return changed ? next : prev;
+  }, []);
+
+  useEffect(() => {
+    const unlockKeys: string[] = [];
+    const hotKeys: string[] = [];
+    const seedUnlockRoot = Math.min(visibleAssets.length, columnCount * 3);
+    const seedHotRoot = Math.min(visibleAssets.length, columnCount);
+    const seedUnlockGroup = columnCount * 3;
+    const seedHotGroup = columnCount;
+    if (viewStack.length === 0) {
+      visibleAssets.slice(0, seedUnlockRoot).forEach((a) => unlockKeys.push(a.id));
+      visibleAssets.slice(0, seedHotRoot).forEach((a) => hotKeys.push(a.id));
+    } else if (currentGroupAsset) {
+      if (showAllImages?.length) {
+        const capU = Math.min(showAllImages.length, seedUnlockGroup);
+        const capH = Math.min(showAllImages.length, seedHotGroup);
+        for (let i = 0; i < capU; i++) {
+          unlockKeys.push(`gall:${currentGroupAsset.id}:${i}`);
+        }
+        for (let i = 0; i < capH; i++) {
+          hotKeys.push(`gall:${currentGroupAsset.id}:${i}`);
+        }
+      } else {
+        const capU = Math.min(currentGroupItems.length, seedUnlockGroup);
+        const capH = Math.min(currentGroupItems.length, seedHotGroup);
+        for (let i = 0; i < capU; i++) {
+          unlockKeys.push(`${currentGroupAsset.id}::${i}`);
+        }
+        for (let i = 0; i < capH; i++) {
+          hotKeys.push(`${currentGroupAsset.id}::${i}`);
+        }
+      }
+    }
+    setThumbUnlockKeys((prev) => mergeThumbUnlockKeys(prev, unlockKeys));
+    setThumbHotKeys((prev) => mergeThumbUnlockKeys(prev, hotKeys));
+  }, [
+    visibleAssets,
+    viewStack.length,
+    currentGroupAsset,
+    columnCount,
+    showAllImages,
+    currentGroupItems.length,
+    mergeThumbUnlockKeys,
+  ]);
+
+  useEffect(() => {
+    const root = centerScrollRef.current;
+    if (!root) return;
+    let cancelled = false;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (cancelled) return;
+        setThumbUnlockKeys((prev) => {
+          let next: Set<string> | null = null;
+          for (const en of entries) {
+            if (!en.isIntersecting) continue;
+            const k = (en.target as HTMLElement).getAttribute('data-workflow-thumb-key');
+            if (!k) continue;
+            if (!prev.has(k)) {
+              if (!next) next = new Set(prev);
+              next.add(k);
+            }
+          }
+          return next ?? prev;
+        });
+      },
+      { root, rootMargin: '200px 0px 280px 0px', threshold: 0.01 }
+    );
+    const run = () => {
+      if (cancelled) return;
+      root.querySelectorAll('[data-workflow-thumb-key]').forEach((el) => io.observe(el));
+    };
+    const raf = window.requestAnimationFrame(() => window.requestAnimationFrame(run));
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(raf);
+      io.disconnect();
+    };
+  }, [
+    visibleAssets.length,
+    viewStack.length,
+    currentGroupAsset?.id,
+    currentGroupItems.length,
+    columnCount,
+    showAllImages?.length,
+    showArchived,
+    showAllInGroup,
+  ]);
+
+  useEffect(() => {
+    const root = centerScrollRef.current;
+    if (!root) return;
+    let cancelled = false;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (cancelled) return;
+        setThumbHotKeys((prev) => {
+          const next = new Set(prev);
+          for (const en of entries) {
+            const k = (en.target as HTMLElement).getAttribute('data-workflow-thumb-key');
+            if (!k) continue;
+            if (en.isIntersecting) next.add(k);
+            else next.delete(k);
+          }
+          return next;
+        });
+      },
+      { root, rootMargin: '0px', threshold: 0.05 }
+    );
+    const run = () => {
+      if (cancelled) return;
+      root.querySelectorAll('[data-workflow-thumb-key]').forEach((el) => io.observe(el));
+    };
+    const raf = window.requestAnimationFrame(() => window.requestAnimationFrame(run));
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(raf);
+      io.disconnect();
+    };
+  }, [
+    visibleAssets.length,
+    viewStack.length,
+    currentGroupAsset?.id,
+    currentGroupItems.length,
+    columnCount,
+    showAllImages?.length,
+    showArchived,
+    showAllInGroup,
+  ]);
 
   const groupBreadcrumb = useMemo(() => {
     if (viewStack.length === 0) return [];
@@ -3007,7 +2213,7 @@ const WorkflowSection: React.FC<{
   const visibleByCategory = useMemo(() => byCategory, [byCategory]);
   const visiblePresets = useMemo(() => presets, [presets]);
   const visibleCapabilitySets = useMemo(() => capabilitySets, [capabilitySets]);
-  const favoriteEntries = useMemo(() => {
+  const favoriteEntries = useMemo((): WorkflowSidebarFavoriteEntry[] => {
     return favoriteActionIds
       .map((id) => {
         if (id.startsWith(SET_ACTION_PREFIX)) {
@@ -3020,7 +2226,7 @@ const WorkflowSection: React.FC<{
         if (!mod) return null;
         return { id, label: mod.label, kind: 'module' as const, mod };
       })
-      .filter((x): x is { id: string; label: string; kind: 'module' | 'set'; mod?: CustomAppModule; set?: CapabilitySet } => !!x);
+      .filter((x): x is WorkflowSidebarFavoriteEntry => x != null);
   }, [favoriteActionIds, capabilitySets, actionModules]);
   const removeActionFromFavorite = useCallback((actionId: string) => {
     setFavoriteActionIds((prev) => prev.filter((id) => id !== actionId));
@@ -3302,21 +2508,6 @@ const WorkflowSection: React.FC<{
     [onAddToLibrary, onLog, assets, showArchived, getAssetDisplayImage]
   );
 
-  useLayoutEffect(() => {
-    const el = workspaceViewportRef.current;
-    if (!el || typeof ResizeObserver === 'undefined') return;
-    const update = () => setWorkspaceViewportWidth(el.clientWidth || 0);
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-  const paneWidth = Math.max(320, workspaceViewportWidth || 0);
-  const sidebarWidth = 320;
-  const listPaneWidth = Math.max(320, paneWidth - sidebarWidth);
-  /** 轨道顺序：仓(L)|纲(320)|工(L)|功(320)|能(L)；大纲宽=功能区宽 */
-  const presetPaneWidth = listPaneWidth;
-  const trackTotalWidth = listPaneWidth + sidebarWidth + listPaneWidth + sidebarWidth + presetPaneWidth;
   const activePaneNode = Math.max(0, Math.min(3, Math.round(workspacePane)));
   const topTitleColumns = useMemo(() => {
     const outlineExpandDisabled =
@@ -3777,999 +2968,16 @@ const WorkflowSection: React.FC<{
     repositoryItems,
     libraryImportIds,
   ]);
-  const topTitleGridStyle = useMemo<React.CSSProperties | undefined>(() => {
-    if (activePaneNode === 0) {
-      return { gridTemplateColumns: `minmax(0, ${listPaneWidth}px) minmax(0, ${sidebarWidth}px)` };
-    }
-    if (activePaneNode === 1) {
-      return { gridTemplateColumns: `minmax(0, ${sidebarWidth}px) minmax(0, ${listPaneWidth}px)` };
-    }
-    if (activePaneNode === 2) {
-      return { gridTemplateColumns: `minmax(0, ${listPaneWidth}px) minmax(0, ${sidebarWidth}px)` };
-    }
-    if (activePaneNode === 3) {
-      return { gridTemplateColumns: `minmax(0, ${sidebarWidth}px) minmax(0, ${presetPaneWidth}px)` };
-    }
-    return undefined;
-  }, [activePaneNode, listPaneWidth, sidebarWidth, presetPaneWidth]);
-  /** 四页 snap：0 仓(L)|纲(320) 1 纲(320)|工(L) 2 工|功 3 功|能 */
-  const paneToOffsetPx = useCallback(
-    (pane: number) => {
-      const wh = sidebarWidth;
-      const L = listPaneWidth;
-      const p = Math.max(0, Math.min(3, pane));
-      if (p <= 1) return p * L;
-      if (p <= 2) return L + (p - 1) * wh;
-      return L + wh + (p - 2) * L;
-    },
-    [listPaneWidth, sidebarWidth]
+  const topTitleGridStyle = useMemo(
+    () => workflowTopTitleGridStyle(activePaneNode, listPaneWidth, sidebarWidth, presetPaneWidth),
+    [activePaneNode, listPaneWidth, sidebarWidth, presetPaneWidth]
   );
-  const offsetPxToPane = useCallback(
-    (offset: number) => {
-      const wh = sidebarWidth;
-      const L = listPaneWidth;
-      const maxOff = Math.max(0, wh + 2 * L);
-      const x = Math.max(0, Math.min(maxOff, offset));
-      if (x <= L) return L > 0 ? x / L : 0;
-      if (x <= L + wh) return 1 + (x - L) / Math.max(1, wh);
-      return 2 + (x - L - wh) / Math.max(1, L);
-    },
-    [listPaneWidth, sidebarWidth]
-  );
-  const applyWorkspacePaneImmediate = useCallback(
-    (next: number) => {
-      const clamped = Math.max(0, Math.min(3, next));
-      workspacePaneRef.current = clamped;
-      const track = workspaceTrackRef.current;
-      if (track) {
-        track.style.transition = 'none';
-        const offset = paneToOffsetPx(clamped);
-        track.style.transform = `translate3d(${-offset}px, 0, 0)`;
-      }
-    },
-    [paneToOffsetPx]
-  );
-  const handlePaneWheel = useCallback(
-    (e: React.WheelEvent) => {
-      const deltaPrimary = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
-      e.preventDefault();
-      e.stopPropagation();
-      if (Math.abs(deltaPrimary) < 2) return;
-      const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
-      if (now < wheelLockUntilRef.current) return;
-      wheelLockUntilRef.current = now + 180;
-      // 离散切页：一次滚轮手势切一页
-      const currentNode = Math.max(0, Math.min(3, Math.round(workspacePaneRef.current)));
-      const dir = deltaPrimary > 0 ? 1 : -1;
-      const targetNode = Math.max(0, Math.min(3, currentNode + dir));
-      if (targetNode === currentNode) return;
-      snapWorkspacePaneToNode(targetNode);
-    },
-    [snapWorkspacePaneToNode]
-  );
-  useEffect(() => {
-    if (!registerPaneWheelHandler) return;
-    registerPaneWheelHandler(handlePaneWheel);
-    return () => registerPaneWheelHandler(null);
-  }, [registerPaneWheelHandler, handlePaneWheel]);
-  const workspaceOffsetPx = paneToOffsetPx(workspacePane);
-  useEffect(() => {
-    workspacePaneRef.current = workspacePane;
-    const track = workspaceTrackRef.current;
-    if (track) {
-      track.style.transition = workspaceSnapping ? `transform ${WORKSPACE_SNAP_DURATION_MS}ms ${WORKSPACE_SNAP_EASING}` : 'none';
-      track.style.transform = `translate3d(${-workspaceOffsetPx}px, 0, 0)`;
-    }
-  }, [workspacePane, workspaceOffsetPx, workspaceSnapping]);
-  const getActiveWorkspaceScrollEl = useCallback((): HTMLDivElement | null => {
-    const n = Math.round(workspacePane);
-    if (n <= 0) return libraryScrollRef.current;
-    if (n === 1) return outlineScrollRef.current;
-    if (n === 2) return centerScrollRef.current;
-    return presetScrollRef.current ?? centerScrollRef.current;
-  }, [workspacePane]);
-  useEffect(() => {
-    if (!spacePanEnabled) return;
-    const onMouseDown = (e: MouseEvent) => {
-      if (e.button !== 0) return;
-      const t = e.target as Element | null;
-      if (t?.closest('[data-ac-block-workflow-marquee]')) return;
-      // 空格抓手为全局优先级：即便在按钮上也接管（输入框仍放行）
-      if (isEditableTarget(e.target)) return;
-      marqueeStartRef.current = false;
-      e.preventDefault();
-      e.stopPropagation();
-      const startX = e.clientX;
-      const startOffset = paneToOffsetPx(workspacePane);
-      let panStarted = false;
-      const onMove = (ev: MouseEvent) => {
-        const dx = ev.clientX - startX;
-        if (!panStarted) {
-            if (Math.abs(dx) < 2) return;
-          panStarted = true;
-          suppressClickAfterPanRef.current = true;
-          setSpacePanDragging(true);
-        }
-        ev.preventDefault();
-        const nextOffset = startOffset - dx;
-        const next = offsetPxToPane(nextOffset);
-          applyWorkspacePaneImmediate(next);
-      };
-      const onUp = () => {
-          snapWorkspacePaneToNode();
-        if (panStarted) setSpacePanDragging(false);
-        window.removeEventListener('mousemove', onMove, true);
-      };
-      window.addEventListener('mousemove', onMove, true);
-      window.addEventListener('mouseup', onUp, { once: true, capture: true });
-    };
-    window.addEventListener('mousedown', onMouseDown, true);
-    return () => {
-      window.removeEventListener('mousedown', onMouseDown, true);
-      setSpacePanDragging(false);
-    };
-  }, [spacePanEnabled, workspacePane, isEditableTarget, paneToOffsetPx, offsetPxToPane, applyWorkspacePaneImmediate, snapWorkspacePaneToNode]);
-  useEffect(() => {
-    if (typeof document === 'undefined') return;
-    if (spacePanEnabled) {
-      document.body.style.cursor = spacePanDragging ? 'grabbing' : 'grab';
-    } else {
-      document.body.style.cursor = '';
-    }
-    return () => {
-      document.body.style.cursor = '';
-    };
-  }, [spacePanEnabled, spacePanDragging]);
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.code !== 'Space') return;
-      if (isEditableTarget(e.target)) return;
-      if (typeof document !== 'undefined' && document.querySelector('[data-ac-block-workflow-marquee]')) return;
-      e.preventDefault();
-      setSpacePanEnabled(true);
-    };
-    const onKeyUp = (e: KeyboardEvent) => {
-      if (e.code !== 'Space') return;
-      setSpacePanEnabled(false);
-      setSpacePanDragging(false);
-    };
-    const onBlur = () => {
-      setSpacePanEnabled(false);
-      setSpacePanDragging(false);
-    };
-    window.addEventListener('keydown', onKeyDown);
-    window.addEventListener('keyup', onKeyUp);
-    window.addEventListener('blur', onBlur);
-    return () => {
-      window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('keyup', onKeyUp);
-      window.removeEventListener('blur', onBlur);
-    };
-  }, [isEditableTarget]);
-
-  /** 数字行 1–4、0：快速对齐到四档页面（与滑条圆点一致）；0 为最右档 */
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.repeat) return;
-      if (e.ctrlKey || e.altKey || e.metaKey) return;
-      if (isEditableTarget(e.target)) return;
-      if (typeof document !== 'undefined' && document.querySelector('[data-ac-block-workflow-marquee]')) return;
-
-      const paneByCode: Record<string, number> = {
-        Digit1: 0,
-        Digit2: 1,
-        Digit3: 2,
-        Digit4: 3,
-        Digit0: 3,
-        Numpad1: 0,
-        Numpad2: 1,
-        Numpad3: 2,
-        Numpad4: 3,
-        Numpad0: 3,
-      };
-      const pane = paneByCode[e.code];
-      if (pane === undefined) return;
-      e.preventDefault();
-      snapWorkspacePaneToNode(pane);
-    };
-    window.addEventListener('keydown', onKeyDown, true);
-    return () => window.removeEventListener('keydown', onKeyDown, true);
-  }, [isEditableTarget, snapWorkspacePaneToNode]);
 
   const sidebarOpsAllowed = workflowDragSourceAllowsSidebarOps(
     parseWorkflowDragSource(draggingAssetIds, draggingGroupItems),
     showArchived
   );
 
-  const renderWorkflowSidebarColumn = ({
-    wide,
-    variant = 'dock',
-  }: {
-    wide?: boolean;
-    /** dock=工作区右侧栏；splitLeft=能力页左栏（与预设并排，占满列高） */
-    variant?: 'dock' | 'splitLeft';
-  }) => (
-    <div
-      data-workflow-sidebar
-      className={
-        variant === 'splitLeft'
-          ? 'w-full min-h-0 flex-1 flex flex-col gap-3 overflow-y-auto no-scrollbar'
-          : wide
-            ? 'w-full min-h-0 flex flex-col gap-3 overflow-y-auto no-scrollbar shrink-0 max-h-[min(52vh,520px)]'
-            : 'w-80 shrink-0 min-h-0 flex-1 flex flex-col gap-3 overflow-y-auto no-scrollbar'
-      }
-    >
-          <WorkflowPlannerBar
-            actionModules={actionModules}
-            selectedAssetId={plannerTargetAssetId}
-            onAddToQueue={(presetId) => {
-              if (plannerTargetAssetId) addToPending(plannerTargetAssetId, presetId);
-            }}
-            onLog={onLog}
-          />
-
-          <div className="grid grid-cols-5 gap-2">
-          <div
-            onDragOver={(e) => {
-              e.preventDefault();
-              setDragOverAction('__group__');
-            }}
-            onDragLeave={() => {
-              if (dragOverAction === '__group__') setDragOverAction(null);
-            }}
-            onDrop={(e) => {
-              e.preventDefault();
-              if (draggingAssetIds?.length) {
-                createGroupFromAssets(draggingAssetIds);
-              } else if (draggingGroupItems) {
-                const { itemIndexes, groupAssetId } = draggingGroupItems;
-                if (itemIndexes.length === 1) {
-                  createNestedGroupFromGroupItem(groupAssetId, itemIndexes[0]);
-                } else if (itemIndexes.length > 1) {
-                  const { nextAssets, assetIds } = ensureGroupItemsAsAssets(assets, groupAssetId, itemIndexes);
-                  if (assetIds.length > 0) {
-                    const firstAsset = nextAssets.find((a) => a.id === assetIds[0]);
-                    const coverImage = firstAsset ? getAssetDisplayImage(firstAsset, nextAssets) : '';
-                    const newGroupId = uuid();
-                    let updated = nextAssets.map((a) =>
-                      assetIds.includes(a.id) ? { ...a, parentAssetId: newGroupId } : a
-                    );
-                    const groupIdx = updated.findIndex((a) => a.id === groupAssetId);
-                    if (groupIdx !== -1) {
-                      const g = updated[groupIdx];
-                      const items = [...(g.cutImageGroup ?? [])];
-                      const sorted = [...itemIndexes]
-                        .filter((i) => i >= 0 && i < items.length)
-                        .sort((a, b) => a - b);
-                      const keep: typeof items = [];
-                      items.forEach((it, idx) => {
-                        if (!sorted.includes(idx)) keep.push(it);
-                      });
-                      const insertPos = sorted.length ? sorted[0] : keep.length;
-                      const withGroup = [...keep];
-                      withGroup.splice(insertPos, 0, { assetId: newGroupId });
-                      updated = updated.map((a, idx) =>
-                        idx === groupIdx ? { ...a, cutImageGroup: withGroup } : a
-                      );
-                    }
-                    const usedLabels = new Set<string>(
-                      updated.map((a) => a.groupLabel).filter((x): x is string => !!x)
-                    );
-                    const newGroup: WorkflowAsset = attachInitialVgpToNewAsset({
-                      id: newGroupId,
-                      original: coverImage,
-                      displayKey: 'original',
-                      results: {},
-                      resultOrder: [],
-                      cutImageGroup: assetIds.map((id) => ({ assetId: id })),
-                      groupKind: 'manual',
-                      groupLabel: getRandomGroupCodeName(usedLabels),
-                      archived: false,
-                      hiddenInGrid: false,
-                      createdAt: Date.now(),
-                      parentAssetId: groupAssetId,
-                    });
-                    setAssets([...updated, newGroup]);
-                    setSelectedGroupItemKeys(new Set());
-                  }
-                }
-              }
-              setDragOverAction(null);
-              setDraggingAssetIds(null);
-              setDraggingGroupItems(null);
-            }}
-            title="将选中图片拖入建组（组内同效）"
-            className={`rounded-xl border-2 border-dashed h-[52px] px-1 flex flex-col items-center justify-center text-center transition-colors ${
-              dragOverAction === '__group__'
-                ? 'border-blue-500 bg-[#152642]'
-                : 'border-[#3d4754] bg-[#0e0f12] hover:border-[#4b6a9e] hover:bg-[#1a1d26]'
-            }`}
-          >
-            <svg viewBox="0 0 20 20" className="w-3 h-3 text-gray-400 mb-0.5" aria-hidden>
-              <path d="M3 4h6v5H3zM11 4h6v5h-6zM3 11h6v5H3zM11 11h6v5h-6z" fill="currentColor" />
-            </svg>
-            <span className="text-[8px] font-black uppercase text-gray-200">组</span>
-          </div>
-          <div
-            onDragOver={(e) => {
-              if (!viewStack.length || !draggingGroupItems) return;
-              e.preventDefault();
-              setDragOverAction('__ungroup__');
-            }}
-            onDragLeave={() => {
-              if (dragOverAction === '__ungroup__') setDragOverAction(null);
-            }}
-            onDrop={(e) => {
-              e.preventDefault();
-              if (dragOverAction === '__ungroup__' && draggingGroupItems) {
-                const { groupAssetId, itemIndexes } = draggingGroupItems;
-                moveGroupItemsToUpperLevel(groupAssetId, itemIndexes);
-              }
-              setDragOverAction(null);
-              setDraggingGroupItems(null);
-            }}
-            title="将组内子卡片拖到此处，移到上一级"
-            className={`rounded-xl border-2 border-dashed h-[52px] px-1 flex flex-col items-center justify-center text-center transition-colors ${
-              dragOverAction === '__ungroup__'
-                ? 'border-blue-500 bg-[#152642]'
-                : 'border-[#3d4754] bg-[#0e0f12] hover:border-[#4b6a9e] hover:bg-[#1a1d26]'
-            }`}
-          >
-            <svg viewBox="0 0 20 20" className="w-3 h-3 text-gray-400 mb-0.5" aria-hidden>
-              <path d="M7 5h10v10H7zM3 9l4-4v3h5v2H7v3z" fill="currentColor" />
-            </svg>
-            <span className="text-[8px] font-black uppercase text-gray-200">移出组</span>
-          </div>
-          <div
-            onDragOver={(e) => {
-              if (!sidebarOpsAllowed) return;
-              e.preventDefault();
-              setDragOverAction('__copy__');
-            }}
-            onDragLeave={() => {
-              if (dragOverAction === '__copy__') setDragOverAction(null);
-            }}
-            onDrop={(e) => {
-              e.preventDefault();
-              if (dragOverAction !== '__copy__') {
-                setDragOverAction(null);
-                setDraggingAssetIds(null);
-                setDraggingGroupItems(null);
-                return;
-              }
-              if (draggingAssetIds?.length) {
-                duplicateAssetInPlace(draggingAssetIds, null);
-              } else if (draggingGroupItems && groupAssetForDrag && currentGroupAsset) {
-                const groupId = currentGroupAsset.id;
-                setAssets((prev) => {
-                  const { nextAssets, assetIds } = ensureGroupItemsAsAssets(
-                    prev,
-                    draggingGroupItems.groupAssetId,
-                    draggingGroupItems.itemIndexes
-                  );
-                  if (assetIds.length === 0) return prev;
-                  const copies: WorkflowAsset[] = [];
-                  const newIds: string[] = [];
-                  assetIds.forEach((id) => {
-                    const src = nextAssets.find((a) => a.id === id);
-                    if (!src) return;
-                    const newId = uuid();
-                    newIds.push(newId);
-                    copies.push({
-                      ...src,
-                      id: newId,
-                      parentAssetId: groupId,
-                      archived: false,
-                      hiddenInGrid: false,
-                      createdAt: Date.now(),
-                    });
-                  });
-                  if (copies.length === 0) return nextAssets;
-                  let next = [...nextAssets, ...copies];
-                  const gi = next.findIndex((a) => a.id === groupId);
-                  if (gi !== -1) {
-                    const g = next[gi];
-                    const items = [...(g.cutImageGroup ?? []), ...newIds.map((id) => ({ assetId: id }))];
-                    next = next.map((a, i) => (i === gi ? { ...a, cutImageGroup: items } : a));
-                  }
-                  return next;
-                });
-                setSelectedGroupItemKeys(new Set());
-              }
-              setDragOverAction(null);
-              setDraggingAssetIds(null);
-              setDraggingGroupItems(null);
-            }}
-            title="拖入后在当前位置复制一份"
-            className={`rounded-xl border-2 border-dashed h-[52px] px-1 flex flex-col items-center justify-center text-center transition-colors ${
-              dragOverAction === '__copy__'
-                ? 'border-blue-500 bg-[#152642]'
-                : 'border-[#3d4754] bg-[#0e0f12] hover:border-[#4b6a9e] hover:bg-[#1a1d26]'
-            }`}
-          >
-            <svg viewBox="0 0 20 20" className="w-3 h-3 text-gray-400 mb-0.5" aria-hidden>
-              <path d="M6 6h9v10H6zM4 4h9v1H5v9H4z" fill="currentColor" />
-            </svg>
-            <span className="text-[8px] font-black uppercase text-gray-200">复制</span>
-          </div>
-          <div
-            onDragOver={(e) => {
-              if (!sidebarOpsAllowed) return;
-              e.preventDefault();
-              setDragOverAction('__delete__');
-            }}
-            onDragLeave={() => {
-              if (dragOverAction === '__delete__') setDragOverAction(null);
-            }}
-            onDrop={(e) => {
-              e.preventDefault();
-              if (dragOverAction !== '__delete__') {
-                setDragOverAction(null);
-                setDraggingAssetIds(null);
-                setDraggingGroupItems(null);
-                return;
-              }
-              if (draggingAssetIds?.length) {
-                draggingAssetIds.forEach((id) => removeAsset(id));
-              } else if (draggingGroupItems) {
-                const { nextAssets, assetIds } = ensureGroupItemsAsAssets(
-                  assets,
-                  draggingGroupItems.groupAssetId,
-                  draggingGroupItems.itemIndexes
-                );
-                if (assetIds.length > 0) {
-                  const afterRemove = removeGroupItems(
-                    nextAssets,
-                    draggingGroupItems.groupAssetId,
-                    draggingGroupItems.itemIndexes
-                  );
-                  const groupRemoved = !afterRemove.some((a) => a.id === draggingGroupItems.groupAssetId);
-                  setAssets(afterRemove);
-                  assetIds.forEach((id) => removeAsset(id));
-                  setSelectedGroupItemKeys(new Set());
-                  if (groupRemoved) {
-                    setViewStack((s) => s.filter((x) => x.assetId !== draggingGroupItems.groupAssetId));
-                  }
-                }
-              }
-              setDragOverAction(null);
-              setDraggingAssetIds(null);
-              setDraggingGroupItems(null);
-            }}
-            title="将图片拖到此处从工作流中删除（组内同效）"
-            className={`rounded-xl border-2 border-dashed h-[52px] px-1 flex flex-col items-center justify-center text-center transition-colors ${
-              dragOverAction === '__delete__'
-                ? 'border-red-500 bg-[#3a1818]'
-                : 'border-[#3d4754] bg-[#0e0f12] hover:border-[#b85454] hover:bg-[#1f1416]'
-            }`}
-          >
-            <svg viewBox="0 0 20 20" className="w-3 h-3 text-red-300 mb-0.5" aria-hidden>
-              <path d="M6 6h8l-.6 10H6.6L6 6zm2-2h4l1 1h3v2H4V5h3l1-1z" fill="currentColor" />
-            </svg>
-            <span className="text-[8px] font-black uppercase text-red-400">删除</span>
-          </div>
-          <div
-            onDragOver={(e) => {
-              if (!sidebarOpsAllowed) return;
-              e.preventDefault();
-              setDragOverAction('__archive__');
-            }}
-            onDragLeave={() => {
-              if (dragOverAction === '__archive__') setDragOverAction(null);
-            }}
-            onDrop={(e) => {
-              e.preventDefault();
-              if (dragOverAction !== '__archive__') {
-                setDragOverAction(null);
-                setDraggingAssetIds(null);
-                setDraggingGroupItems(null);
-                return;
-              }
-              if (draggingAssetIds?.length) {
-                draggingAssetIds.forEach((id) => markArchived(id));
-              } else if (draggingGroupItems) {
-                const { nextAssets, assetIds } = ensureGroupItemsAsAssets(
-                  assets,
-                  draggingGroupItems.groupAssetId,
-                  draggingGroupItems.itemIndexes
-                );
-                if (assetIds.length > 0) {
-                  const afterRemove = removeGroupItems(
-                    nextAssets,
-                    draggingGroupItems.groupAssetId,
-                    draggingGroupItems.itemIndexes
-                  );
-                  const groupRemoved = !afterRemove.some((a) => a.id === draggingGroupItems.groupAssetId);
-                  setAssets(afterRemove);
-                  assetIds.forEach((id) => markArchived(id));
-                  setSelectedGroupItemKeys(new Set());
-                  if (groupRemoved) {
-                    setViewStack((s) => s.filter((x) => x.assetId !== draggingGroupItems.groupAssetId));
-                  }
-                }
-              }
-              setDragOverAction(null);
-              setDraggingAssetIds(null);
-              setDraggingGroupItems(null);
-            }}
-            title="将图片拖到此处标记为已完成（组内同效）"
-            className={`rounded-xl border-2 border-dashed h-[52px] px-1 flex flex-col items-center justify-center text-center transition-colors ${
-              dragOverAction === '__archive__'
-                ? 'border-blue-500 bg-[#152642]'
-                : 'border-[#3d4754] bg-[#0e0f12] hover:border-[#4b6a9e] hover:bg-[#1a1d26]'
-            }`}
-          >
-            <svg viewBox="0 0 20 20" className="w-3 h-3 text-gray-400 mb-0.5" aria-hidden>
-              <path d="M4 4h12v3H4zM5 8h10v8H5zM8 10h4v2H8z" fill="currentColor" />
-            </svg>
-            <span className="text-[8px] font-black uppercase text-gray-200">归档</span>
-          </div>
-          </div>
-          {visiblePresets.length === 0 && visibleCapabilitySets.length === 0 && favoriteEntries.length === 0 && (
-            <div className="rounded-xl border border-dashed border-[#3a3a40] p-4 text-center text-[9px] text-gray-500">
-              暂无能力预设，请先在「能力」界面添加
-            </div>
-          )}
-          {favoriteEntries.length > 0 || visiblePresets.length > 0 ? (
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <div className="flex items-center justify-between rounded-lg border border-[#2e2e32] bg-[#16161a] px-2.5 py-1.5">
-                  <span className="text-[8px] font-black text-blue-300 uppercase tracking-wide">常用功能</span>
-                  <span className="text-[8px] text-gray-500">拖入收藏</span>
-                </div>
-                <div
-                  onDropCapture={() => {
-                    if (draggingActionIdRef.current) setActionDroppedInFavorite(true);
-                  }}
-                  onDragOver={(e) => {
-                    if (!draggingActionIdRef.current && !dragTransferHasPlainText(e)) return;
-                    e.preventDefault();
-                    try {
-                      e.dataTransfer.dropEffect = 'copy';
-                    } catch {
-                      /* ignore */
-                    }
-                    setFavoriteDropActive(true);
-                  }}
-                  onDragLeave={(ev) => {
-                    const next = ev.relatedTarget as Node | null;
-                    if (next && ev.currentTarget.contains(next)) return;
-                    setFavoriteDropActive(false);
-                  }}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    setFavoriteDropActive(false);
-                    let id = draggingActionIdRef.current;
-                    if (!id) {
-                      try {
-                        id = e.dataTransfer.getData('text/plain') || null;
-                      } catch {
-                        /* ignore */
-                      }
-                    }
-                    if (!id?.trim()) return;
-                    const validFavoriteId =
-                      actionModules.some((m) => m.id === id) ||
-                      (id.startsWith(SET_ACTION_PREFIX) &&
-                        capabilitySets.some((s) => s.id === id.slice(SET_ACTION_PREFIX.length)));
-                    if (!validFavoriteId) return;
-                    setFavoriteActionIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
-                    setActionDroppedInFavorite(true);
-                  }}
-                  className="space-y-2"
-                >
-                  {favoriteEntries.length === 0 ? (
-                    <div className={`text-[8px] text-center py-2 ${favoriteDropActive ? 'text-blue-300' : 'text-gray-500'}`}>
-                      把功能块拖到这里，作为常用功能
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-2 gap-2">
-                      {favoriteEntries.map((entry) => (
-                        <div
-                          key={`fav-${entry.id}`}
-                          data-capability-hover-id={entry.kind === 'module' ? entry.mod?.id : undefined}
-                          className={`rounded-xl border-2 border-dashed min-h-[60px] flex transition-colors ${
-                            dragOverAction === entry.id
-                              ? 'border-blue-500 bg-[#1a3354]'
-                              : dragOverAction === entry.id + '__tweak'
-                                ? 'border-[#4b6a9e] bg-[#1e3558] ring-1 ring-[#3b82f6]'
-                                : 'border-[#3a3a40] bg-[#1c1c22] hover:border-[#484850]'
-                          }`}
-                          draggable
-                          onMouseEnter={(e) => {
-                            if (entry.kind !== 'module' || !entry.mod) return;
-                            setHoverPreview({ mod: entry.mod, x: e.clientX, y: e.clientY });
-                          }}
-                          onMouseMove={(e) => {
-                            if (entry.kind !== 'module' || !entry.mod) return;
-                            setHoverPreview((prev) =>
-                              prev && prev.mod.id === entry.mod!.id
-                                ? { ...prev, x: e.clientX, y: e.clientY }
-                                : { mod: entry.mod, x: e.clientX, y: e.clientY }
-                            );
-                          }}
-                          onMouseLeave={() => setHoverPreview((prev) => (prev?.mod.id === entry.id ? null : prev))}
-                          onDragStart={(e) => {
-                            try {
-                              e.dataTransfer.setData('text/plain', entry.id);
-                              e.dataTransfer.effectAllowed = 'copyMove';
-                            } catch {
-                              /* ignore */
-                            }
-                            updateDraggingActionId(entry.id);
-                            setDraggingActionFromFavorite(true);
-                            setActionDroppedInFavorite(false);
-                          }}
-                          onDragEnd={() => {
-                            if (draggingActionFromFavorite && !actionDroppedInFavorite) {
-                              removeActionFromFavorite(entry.id);
-                            }
-                            updateDraggingActionId(null);
-                            setDraggingActionFromFavorite(false);
-                            setActionDroppedInFavorite(false);
-                            setFavoriteDropActive(false);
-                          }}
-                        >
-                          <div
-                            className={`flex-1 p-3 flex flex-col items-center justify-center text-center min-w-0 transition-colors ${
-                              entry.kind === 'module' && entry.mod?.category === 'image_gen' ? 'border-r border-[#2e2e32]' : ''
-                            } ${
-                              dragOverAction === entry.id + '__tweak'
-                                ? 'bg-[#121214]'
-                                : dragOverAction === entry.id
-                                  ? 'bg-[#1a3354]'
-                                  : ''
-                            }`}
-                            onDragOver={(e) => {
-                              e.preventDefault();
-                              setDragOverAction(entry.id);
-                            }}
-                            onDragLeave={() => setDragOverAction(null)}
-                            onMouseEnter={(e) => {
-                              if (entry.kind !== 'module' || !entry.mod) return;
-                              setHoverPreview({ mod: entry.mod, x: e.clientX, y: e.clientY });
-                            }}
-                            onMouseMove={(e) => {
-                              if (entry.kind !== 'module' || !entry.mod) return;
-                              setHoverPreview((prev) =>
-                                prev && prev.mod.id === entry.mod!.id
-                                  ? { ...prev, x: e.clientX, y: e.clientY }
-                                  : { mod: entry.mod, x: e.clientX, y: e.clientY }
-                              );
-                            }}
-                            onMouseLeave={() => setHoverPreview((prev) => (prev?.mod.id === entry.id ? null : prev))}
-            onDrop={(e) => {
-              e.preventDefault();
-              setDragOverAction(null);
-              if (entry.kind === 'set') {
-                handleDropToSetAction(entry.id, e);
-              } else if (entry.mod) {
-                handleDropToModuleAction(entry.mod, false, e);
-              }
-            }}
-                          >
-                            <span className="text-[9px] font-black uppercase">{entry.label}</span>
-                          </div>
-                          {entry.kind === 'module' && entry.mod?.category === 'image_gen' && (
-                            <div
-                              className={`w-11 shrink-0 flex flex-col items-center justify-center rounded-r-lg transition-colors cursor-pointer ${
-                                dragOverAction === entry.id + '__tweak'
-                                  ? 'bg-[#223d5c] border-l border-[#5080c0]'
-                                  : 'bg-[#1c1c22] border-l border-[#2e2e32] hover:bg-[#2e2e36]'
-                              }`}
-                              title="拖到此处可微调提示词后加入队列；点击前往能力页调整预设"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (entry.kind === 'module' && entry.mod) jumpToCapabilityPreset(entry.mod);
-                              }}
-                              onDragOver={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                setDragOverAction(entry.id + '__tweak');
-                              }}
-                              onDragLeave={() => setDragOverAction(null)}
-                              onDrop={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                setDragOverAction(null);
-                                if (entry.mod) handleDropToModuleAction(entry.mod, true, e);
-                              }}
-                            >
-                              <span className="text-[10px] text-blue-400 font-bold" title="微调提示词">词</span>
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-          {visiblePresets.length > 0 && (
-            <div className="space-y-4">
-              {visibleByCategory.length > 0 ? (
-                <>
-              {visibleByCategory.map(({ category, list }) => (
-                <div key={category.id}>
-                  <button
-                    type="button"
-                    onClick={() => toggleSectionCollapsed(`cat:${category.id}`)}
-                    className="w-full text-left mb-1.5 flex items-center justify-between rounded-lg border border-[#2e2e32] bg-[#121214] px-2.5 py-1.5 text-[8px] font-black uppercase tracking-wide text-gray-400 hover:bg-[#18181c] hover:text-gray-200 transition-colors"
-                  >
-                    <span>{category.label}</span>
-                    <span className="text-[10px] text-gray-500">{collapsedSectionIds[`cat:${category.id}`] ? '▼' : '▲'}</span>
-                  </button>
-                  {!collapsedSectionIds[`cat:${category.id}`] && (
-                  <div className="grid grid-cols-2 gap-2">
-                    {list.map((mod) => (
-                      <div
-                        key={mod.id}
-                        data-capability-hover-id={mod.id}
-                        className={`rounded-xl border-2 border-dashed min-h-[60px] flex transition-colors ${
-                          dragOverAction === mod.id
-                            ? 'border-blue-500 bg-[#1a3354]'
-                            : dragOverAction === mod.id + '__tweak'
-                              ? 'border-[#4b6a9e] bg-[#1e3558] ring-1 ring-[#3b82f6]'
-                              : 'border-[#3a3a40] bg-[#1c1c22] hover:border-[#484850]'
-                        }`}
-                        draggable
-                        onMouseEnter={(e) => setHoverPreview({ mod, x: e.clientX, y: e.clientY })}
-                        onMouseMove={(e) =>
-                          setHoverPreview((prev) =>
-                            prev && prev.mod.id === mod.id
-                              ? { ...prev, x: e.clientX, y: e.clientY }
-                              : { mod, x: e.clientX, y: e.clientY }
-                          )
-                        }
-                        onMouseLeave={() => setHoverPreview((prev) => (prev?.mod.id === mod.id ? null : prev))}
-                        onDragStart={(e) => {
-                          try {
-                            e.dataTransfer.setData('text/plain', mod.id);
-                            e.dataTransfer.effectAllowed = 'copyMove';
-                          } catch {
-                            /* ignore */
-                          }
-                          updateDraggingActionId(mod.id);
-                          setDraggingActionFromFavorite(false);
-                          setActionDroppedInFavorite(false);
-                        }}
-                        onDragEnd={() => {
-                          updateDraggingActionId(null);
-                          setDraggingActionFromFavorite(false);
-                          setActionDroppedInFavorite(false);
-                          setFavoriteDropActive(false);
-                        }}
-                      >
-                        <div
-                          className={`flex-1 p-3 flex flex-col items-center justify-center text-center min-w-0 transition-colors ${
-                            mod.category === 'image_gen' ? 'border-r border-[#2e2e32]' : ''
-                          } ${
-                            dragOverAction === mod.id + '__tweak'
-                              ? 'bg-[#121214]'
-                              : dragOverAction === mod.id
-                                ? 'bg-[#1a3354]'
-                                : ''
-                          }`}
-                          onDragOver={(e) => {
-                            e.preventDefault();
-                            setDragOverAction(mod.id);
-                          }}
-                          onDragLeave={() => setDragOverAction(null)}
-                          onMouseEnter={(e) => setHoverPreview({ mod, x: e.clientX, y: e.clientY })}
-                          onMouseMove={(e) =>
-                            setHoverPreview((prev) =>
-                              prev && prev.mod.id === mod.id
-                                ? { ...prev, x: e.clientX, y: e.clientY }
-                                : { mod, x: e.clientX, y: e.clientY }
-                            )
-                          }
-                          onMouseLeave={() => setHoverPreview((prev) => (prev?.mod.id === mod.id ? null : prev))}
-                          onDrop={(e) => {
-                            e.preventDefault();
-                            setDragOverAction(null);
-                            handleDropToModuleAction(mod, false, e);
-                          }}
-                        >
-                          <span className="text-[9px] font-black uppercase">{mod.label}</span>
-                        </div>
-                        {mod.category === 'image_gen' && (
-                          <div
-                            className={`w-11 shrink-0 flex flex-col items-center justify-center rounded-r-lg transition-colors cursor-pointer ${
-                              dragOverAction === mod.id + '__tweak'
-                                ? 'bg-[#223d5c] border-l border-[#5080c0]'
-                                : 'bg-[#1c1c22] border-l border-[#2e2e32] hover:bg-[#2e2e36]'
-                            }`}
-                            title="拖到此处可微调提示词后加入队列；点击前往能力页调整预设"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              jumpToCapabilityPreset(mod);
-                            }}
-                            onDragOver={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              setDragOverAction(mod.id + '__tweak');
-                            }}
-                            onDragLeave={() => setDragOverAction(null)}
-                            onDrop={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              setDragOverAction(null);
-                              handleDropToModuleAction(mod, true, e);
-                            }}
-                          >
-                            <span className="text-[10px] text-blue-400 font-bold" title="微调提示词">词</span>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                  )}
-                </div>
-              ))}
-                </>
-              ) : (
-            <div>
-              <button
-                type="button"
-                onClick={() => toggleSectionCollapsed('__all_presets__')}
-                className="w-full text-left mb-1.5 flex items-center justify-between rounded-lg border border-[#2e2e32] bg-[#121214] px-2.5 py-1.5 text-[8px] font-black uppercase tracking-wide text-gray-400 hover:bg-[#18181c] hover:text-gray-200 transition-colors"
-              >
-                <span>功能</span>
-                <span className="text-[10px] text-gray-500">{collapsedSectionIds.__all_presets__ ? '▼' : '▲'}</span>
-              </button>
-              {!collapsedSectionIds.__all_presets__ && (
-            <div className="grid grid-cols-2 gap-2">
-              {visiblePresets.map((mod) => (
-                <div
-                  key={mod.id}
-                  className={`rounded-xl border-2 border-dashed min-h-[60px] flex transition-colors ${
-                    dragOverAction === mod.id
-                      ? 'border-blue-500 bg-[#1a3354]'
-                      : dragOverAction === mod.id + '__tweak'
-                        ? 'border-[#4b6a9e] bg-[#1e3558] ring-1 ring-[#3b82f6]'
-                        : 'border-[#3a3a40] bg-[#1c1c22] hover:border-[#484850]'
-                  }`}
-                  draggable
-                  onDragStart={(e) => {
-                    try {
-                      e.dataTransfer.setData('text/plain', mod.id);
-                      e.dataTransfer.effectAllowed = 'copyMove';
-                    } catch {
-                      /* ignore */
-                    }
-                    updateDraggingActionId(mod.id);
-                    setDraggingActionFromFavorite(false);
-                    setActionDroppedInFavorite(false);
-                  }}
-                  onDragEnd={() => {
-                    updateDraggingActionId(null);
-                    setDraggingActionFromFavorite(false);
-                    setActionDroppedInFavorite(false);
-                    setFavoriteDropActive(false);
-                  }}
-                >
-                  <div
-                    className={`flex-1 p-3 flex flex-col items-center justify-center text-center min-w-0 transition-colors ${
-                      mod.category === 'image_gen' ? 'border-r border-[#2e2e32]' : ''
-                    } ${
-                      dragOverAction === mod.id + '__tweak'
-                        ? 'bg-[#121214]'
-                        : dragOverAction === mod.id
-                          ? 'bg-[#1a3354]'
-                          : ''
-                    }`}
-                    onDragOver={(e) => {
-                      e.preventDefault();
-                      setDragOverAction(mod.id);
-                    }}
-                    onDragLeave={() => setDragOverAction(null)}
-                    onDrop={(e) => {
-                      e.preventDefault();
-                      setDragOverAction(null);
-                      handleDropToModuleAction(mod, false, e);
-                    }}
-                  >
-                    <span className="text-[9px] font-black uppercase">{mod.label}</span>
-                  </div>
-                  {mod.category === 'image_gen' && (
-                    <div
-                      className={`w-11 shrink-0 flex flex-col items-center justify-center rounded-r-lg transition-colors cursor-pointer ${
-                        dragOverAction === mod.id + '__tweak'
-                          ? 'bg-[#223d5c] border-l border-[#5080c0]'
-                          : 'bg-[#1c1c22] border-l border-[#2e2e32] hover:bg-[#2e2e36]'
-                      }`}
-                      title="拖到此处可微调提示词后加入队列；点击前往能力页调整预设"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        jumpToCapabilityPreset(mod);
-                      }}
-                      onDragOver={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        setDragOverAction(mod.id + '__tweak');
-                      }}
-                      onDragLeave={() => setDragOverAction(null)}
-                      onDrop={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        setDragOverAction(null);
-                        handleDropToModuleAction(mod, true, e);
-                      }}
-                    >
-                      <span className="text-[10px] text-blue-400 font-bold" title="微调提示词">词</span>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-              )}
-            </div>
-              )}
-            </div>
-          )}
-            </div>
-          ) : null}
-
-          {visibleCapabilitySets.length > 0 && (
-            <div className="space-y-2">
-              <button
-                type="button"
-                onClick={() => toggleSectionCollapsed('__capability_sets__')}
-                className="w-full text-left mb-1.5 flex items-center justify-between rounded-lg border border-[#2e2e32] bg-[#121214] px-2.5 py-1.5 text-[8px] font-black uppercase tracking-wide text-gray-400 hover:bg-[#18181c] hover:text-gray-200 transition-colors"
-              >
-                <span>复合能力</span>
-                <span className="text-[10px] text-gray-500">{collapsedSectionIds.__capability_sets__ ? '▼' : '▲'}</span>
-              </button>
-              {!collapsedSectionIds.__capability_sets__ && (
-              <div className="grid grid-cols-2 gap-2">
-                {visibleCapabilitySets.map((set) => {
-                  const setActionId = SET_ACTION_PREFIX + set.id;
-                  return (
-                    <div
-                      key={set.id}
-                      draggable
-                      onDragStart={(e) => {
-                        try {
-                          e.dataTransfer.setData('text/plain', setActionId);
-                          e.dataTransfer.effectAllowed = 'copyMove';
-                        } catch {
-                          /* ignore */
-                        }
-                        updateDraggingActionId(setActionId);
-                        setDraggingActionFromFavorite(false);
-                        setActionDroppedInFavorite(false);
-                      }}
-                      onDragEnd={() => {
-                        updateDraggingActionId(null);
-                        setDraggingActionFromFavorite(false);
-                        setActionDroppedInFavorite(false);
-                        setFavoriteDropActive(false);
-                      }}
-                      onDragOver={(e) => {
-                        e.preventDefault();
-                        setDragOverAction(setActionId);
-                      }}
-                      onDragLeave={() => setDragOverAction(null)}
-                      onDrop={(e) => {
-                        e.preventDefault();
-                        setDragOverAction(null);
-                        handleDropToSetAction(setActionId, e);
-                      }}
-                      className={`rounded-xl border-2 border-dashed p-2.5 min-h-[60px] flex flex-col items-center justify-center text-center transition-colors ${
-                        dragOverAction === setActionId
-                          ? 'border-blue-500 bg-[#1a3354]'
-                          : 'border-[#3a3a40] bg-[#1c1c22] hover:border-[#484850]'
-                      }`}
-                    >
-                      <span className="text-[9px] font-black uppercase text-gray-200">{set.label}</span>
-                    </div>
-                  );
-                })}
-              </div>
-              )}
-            </div>
-          )}
-    </div>
-  );
   return (
     <div className="flex flex-col min-h-[400px] h-[calc(100dvh-6rem)] gap-4">
       <div className="flex flex-col flex-1 min-h-0 gap-4 min-w-0">
@@ -4860,20 +3068,7 @@ const WorkflowSection: React.FC<{
             e.preventDefault();
             e.stopPropagation();
           }}
-          onTouchStart={(e) => {
-            workspaceSwipeTouchX.current = e.touches[0]?.clientX ?? 0;
-            workspaceSwipeStartOffsetPx.current = paneToOffsetPx(workspacePane);
-          }}
-          onTouchMove={(e) => {
-            const x = e.touches[0]?.clientX ?? workspaceSwipeTouchX.current;
-            const dx = x - workspaceSwipeTouchX.current;
-            const nextOffset = workspaceSwipeStartOffsetPx.current - dx;
-            const next = offsetPxToPane(nextOffset);
-            applyWorkspacePaneImmediate(next);
-          }}
-          onTouchEnd={() => {
-            snapWorkspacePaneToNode();
-          }}
+          {...workspaceViewportTouchHandlers}
         >
           <div
             ref={workspaceTrackRef}
@@ -5161,6 +3356,7 @@ const WorkflowSection: React.FC<{
                         <div
                           key={idx}
                           data-workflow-card
+                          data-workflow-thumb-key={gallKey}
                           className="break-inside-avoid mb-4 rounded-2xl border border-[#2e2e32] bg-[#141416] overflow-hidden flex justify-center"
                         >
                           <div
@@ -5170,16 +3366,17 @@ const WorkflowSection: React.FC<{
                             <WorkflowGridImage
                               fullSrc={img}
                               cacheKey={gallKey}
+                              deferThumbnail={!thumbUnlockKeys.has(gallKey)}
+                              thumbDecodePriority={thumbHotKeys.has(gallKey) ? 'high' : 'low'}
+                              imageFetchPriority={thumbHotKeys.has(gallKey) ? 'high' : 'auto'}
                               className="relative z-0 block w-full h-full min-h-[5rem]"
                               imgClassName="relative z-0 block w-full h-full object-contain"
                               draggable={false}
                               onDragStart={(e) => e.preventDefault()}
                               onIntrinsicSize={(w, h) => {
-                                setCardAspectByAssetId((prev) => {
-                                  if (prev[gallKey] != null) return prev;
-                                  const ratio = Math.max(0.5, Math.min(2, w / h));
-                                  return { ...prev, [gallKey]: ratio };
-                                });
+                                setCardAspectByAssetId(
+                                  (prev) => mergeCardAspectFromIntrinsic(prev, gallKey, w, h) ?? prev
+                                );
                               }}
                             />
                           </div>
@@ -5219,10 +3416,29 @@ const WorkflowSection: React.FC<{
                         ) ?? null;
                       const isExecutingCurrentItem =
                         !!taskForGroupSlot && activeTaskIds.has(taskForGroupSlot.id);
+                      const pendingTaskForGroupSlot =
+                        pending.find(
+                          (t) =>
+                            t.sourceGroupAssetId === currentGroupAsset?.id &&
+                            t.sourceItemIndex === idx
+                        ) ?? null;
+                      const groupBatchQueuedCancelId =
+                        taskForGroupSlot && !activeTaskIds.has(taskForGroupSlot.id)
+                          ? taskForGroupSlot.id
+                          : null;
+                      const groupPendingDuringBatchCancelId =
+                        executingQueue != null &&
+                        pendingTaskForGroupSlot != null &&
+                        !executingQueue.tasks.some((t) => t.id === pendingTaskForGroupSlot.id) &&
+                        groupBatchQueuedCancelId == null
+                          ? pendingTaskForGroupSlot.id
+                          : null;
+                      const showGroupQueueCancelBtn =
+                        groupBatchQueuedCancelId != null || groupPendingDuringBatchCancelId != null;
 
                       if (isAssetRef && childAsset) {
                         return (
-                          <div key={idx} className="break-inside-avoid mb-6 relative">
+                          <div key={idx} className="break-inside-avoid mb-6 relative" data-workflow-thumb-key={groupKey}>
                             {childAsset.cutImageGroup?.length && (
                               <>
                                 <div className="absolute inset-0 rounded-2xl bg-[#16161a] border border-[#3b6fb8] translate-x-[16px] translate-y-[16px] -rotate-3 opacity-70 shadow-xl shadow-[#000000] pointer-events-none" />
@@ -5413,16 +3629,18 @@ const WorkflowSection: React.FC<{
                                       <WorkflowGridImage
                                         fullSrc={childGridPreviewSrc}
                                         cacheKey={childGridCacheKey}
+                                        deferThumbnail={!thumbUnlockKeys.has(groupKey)}
+                                        thumbDecodePriority={thumbHotKeys.has(groupKey) ? 'high' : 'low'}
+                                        imageFetchPriority={thumbHotKeys.has(groupKey) ? 'high' : 'auto'}
                                         className="relative z-0 block w-full h-full min-h-[5rem]"
                                         imgClassName="relative z-0 block w-full h-full object-contain"
                                         draggable={false}
                                         onDragStart={(e) => e.preventDefault()}
                                         onIntrinsicSize={(w, h) => {
-                                          setCardAspectByAssetId((prev) => {
-                                            if (prev[childAsset.id] != null) return prev;
-                                            const ratio = Math.max(0.5, Math.min(2, w / h));
-                                            return { ...prev, [childAsset.id]: ratio };
-                                          });
+                                          setCardAspectByAssetId(
+                                            (prev) =>
+                                              mergeCardAspectFromIntrinsic(prev, childAsset.id, w, h) ?? prev
+                                          );
                                         }}
                                       />
                                       <div
@@ -5458,7 +3676,36 @@ const WorkflowSection: React.FC<{
                                       </div>
                                     )}
                                     {isPendingItem && !isPendingOnly && (
-                                      <WorkflowPixelBusyOverlay executing={isExecutingCurrentItem} />
+                                      <>
+                                        <div
+                                          className="absolute inset-0 z-[9] bg-transparent"
+                                          onClick={(e) => e.stopPropagation()}
+                                          onPointerDown={(e) => e.stopPropagation()}
+                                          aria-hidden
+                                        />
+                                        <WorkflowPixelBusyOverlay executing={isExecutingCurrentItem} />
+                                        {showGroupQueueCancelBtn && (
+                                          <div className="absolute inset-0 z-[11] flex items-center justify-center pointer-events-none">
+                                            <button
+                                              type="button"
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                if (groupBatchQueuedCancelId != null) {
+                                                  cancelQueuedTaskInBatch(groupBatchQueuedCancelId);
+                                                } else if (groupPendingDuringBatchCancelId != null) {
+                                                  setPending((prev) =>
+                                                    prev.filter((t) => t.id !== groupPendingDuringBatchCancelId)
+                                                  );
+                                                }
+                                              }}
+                                              className="pointer-events-auto w-8 h-8 rounded-full flex items-center justify-center bg-[#111827]/80 backdrop-blur border border-white/20 text-gray-200 hover:bg-[#4a1c1c]/85 hover:border-[#c87878] hover:text-red-200 text-base font-medium leading-none"
+                                              title="从队列移除"
+                                            >
+                                              ×
+                                            </button>
+                                          </div>
+                                        )}
+                                      </>
                                     )}
                                     {assetErrors.has(childAsset.id) && (
                                       <span className="absolute top-2 left-2 px-2 py-0.5 rounded-lg bg-[#b91c1c] text-[8px] font-black text-white">
@@ -5510,6 +3757,7 @@ const WorkflowSection: React.FC<{
                         <div
                           key={idx}
                           data-workflow-card
+                          data-workflow-thumb-key={groupKey}
                           ref={(el) => {
                             if (!currentGroupAsset) return;
                             if (el) cardRefs.current.set(groupKey, el);
@@ -5546,16 +3794,17 @@ const WorkflowSection: React.FC<{
                               <WorkflowGridImage
                                 fullSrc={img}
                                 cacheKey={`gstr:${currentGroupAsset?.id ?? 'x'}:${idx}`}
+                                deferThumbnail={!thumbUnlockKeys.has(groupKey)}
+                                thumbDecodePriority={thumbHotKeys.has(groupKey) ? 'high' : 'low'}
+                                imageFetchPriority={thumbHotKeys.has(groupKey) ? 'high' : 'auto'}
                                 className="relative z-0 block w-full h-full min-h-[5rem]"
                                 imgClassName="relative z-0 block w-full h-full object-contain"
                                 draggable={false}
                                 onDragStart={(e) => e.preventDefault()}
                                 onIntrinsicSize={(w, h) => {
-                                  setCardAspectByAssetId((prev) => {
-                                    if (prev[groupKey] != null) return prev;
-                                    const ratio = Math.max(0.5, Math.min(2, w / h));
-                                    return { ...prev, [groupKey]: ratio };
-                                  });
+                                  setCardAspectByAssetId(
+                                    (prev) => mergeCardAspectFromIntrinsic(prev, groupKey, w, h) ?? prev
+                                  );
                                 }}
                               />
                               <div
@@ -5591,15 +3840,44 @@ const WorkflowSection: React.FC<{
                               </div>
                             )}
                             {isPendingItem && !isPendingOnly && (
-                              <div className="absolute inset-0 z-10 bg-[#16161a] flex items-center justify-center pointer-events-none">
+                              <>
                                 <div
-                                  className={`h-7 w-7 rounded-full border-[3px] ${
-                                    isExecutingCurrentItem
-                                      ? 'border-blue-400 border-t-transparent animate-spin'
-                                      : 'border-[#484850] border-t-transparent'
-                                  }`}
+                                  className="absolute inset-0 z-[9] bg-transparent"
+                                  onClick={(e) => e.stopPropagation()}
+                                  onPointerDown={(e) => e.stopPropagation()}
+                                  aria-hidden
                                 />
-                              </div>
+                                <div className="absolute inset-0 z-10 bg-[#16161a] flex items-center justify-center pointer-events-none">
+                                  <div
+                                    className={`h-7 w-7 rounded-full border-[3px] ${
+                                      isExecutingCurrentItem
+                                        ? 'border-blue-400 border-t-transparent animate-spin'
+                                        : 'border-[#484850] border-t-transparent'
+                                    }`}
+                                  />
+                                </div>
+                                {showGroupQueueCancelBtn && (
+                                  <div className="absolute inset-0 z-[11] flex items-center justify-center pointer-events-none">
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        if (groupBatchQueuedCancelId != null) {
+                                          cancelQueuedTaskInBatch(groupBatchQueuedCancelId);
+                                        } else if (groupPendingDuringBatchCancelId != null) {
+                                          setPending((prev) =>
+                                            prev.filter((t) => t.id !== groupPendingDuringBatchCancelId)
+                                          );
+                                        }
+                                      }}
+                                      className="pointer-events-auto w-8 h-8 rounded-full flex items-center justify-center bg-[#111827]/80 backdrop-blur border border-white/20 text-gray-200 hover:bg-[#4a1c1c]/85 hover:border-[#c87878] hover:text-red-200 text-base font-medium leading-none"
+                                      title="从队列移除"
+                                    >
+                                      ×
+                                    </button>
+                                  </div>
+                                )}
+                              </>
                             )}
                           </div>
                           {/* 组内纯图片项不再保留底部留白 */}
@@ -5655,6 +3933,19 @@ const WorkflowSection: React.FC<{
                     executingQueue?.tasks.find((t) => t.assetId === a.id && !completedTaskIds.has(t.id)) ?? null;
                   const isExecutingCurrent =
                     !!taskForRootSlot && activeTaskIds.has(taskForRootSlot.id);
+                  /** 批处理进行中时新拖入的任务只进 pending，不在本批 executingQueue.tasks，仍会 busy +「排队中」，须单独给 × */
+                  const pendingTaskForRootAsset = pending.find((t) => t.assetId === a.id) ?? null;
+                  const rootBatchQueuedCancelId =
+                    taskForRootSlot && !activeTaskIds.has(taskForRootSlot.id) ? taskForRootSlot.id : null;
+                  const rootPendingDuringBatchCancelId =
+                    executingQueue != null &&
+                    pendingTaskForRootAsset != null &&
+                    !executingQueue.tasks.some((t) => t.id === pendingTaskForRootAsset.id) &&
+                    rootBatchQueuedCancelId == null
+                      ? pendingTaskForRootAsset.id
+                      : null;
+                  const showRootQueueCancelBtn =
+                    rootBatchQueuedCancelId != null || rootPendingDuringBatchCancelId != null;
                   const bounce = groupBounceStateById[a.id] ?? 'idle';
                   const motionClass =
                     bounce === 'up'
@@ -5662,8 +3953,9 @@ const WorkflowSection: React.FC<{
                       : bounce === 'down'
                       ? 'translate-y-0.5 rotate-[0.6deg] scale-[0.985]'
                       : '';
+                  /** 仅「执行中」整卡禁指针；「排队中」要可点 ×，不能用整卡 pointer-events-none */
                   const busyClass =
-                    isBusy && !isPendingOnly ? 'pointer-events-none' : '';
+                    isBusy && !isPendingOnly && isExecutingCurrent ? 'pointer-events-none' : '';
                   const rawG = groupPreviewIndexById[a.id] ?? 0;
                   const gLen = a.cutImageGroup?.length ?? 0;
                   const gSafe = gLen ? ((rawG % gLen) + gLen) % gLen : 0;
@@ -5681,7 +3973,7 @@ const WorkflowSection: React.FC<{
                     : `${a.id}:${a.displayKey}`;
 
                   return (
-                    <div key={a.id} className="break-inside-avoid mb-6 relative">
+                    <div key={a.id} className="break-inside-avoid mb-6 relative" data-workflow-thumb-key={a.id}>
                       {a.cutImageGroup?.length && (
                         <>
                           <div className="absolute inset-0 rounded-2xl bg-[#16161a] border border-[#3b6fb8] translate-x-[16px] translate-y-[16px] -rotate-3 opacity-70 shadow-xl shadow-[#000000] pointer-events-none" />
@@ -5848,16 +4140,17 @@ const WorkflowSection: React.FC<{
                             <WorkflowGridImage
                               fullSrc={gridPreviewSrc}
                               cacheKey={gridPreviewCacheKey}
+                              deferThumbnail={!thumbUnlockKeys.has(a.id)}
+                              thumbDecodePriority={thumbHotKeys.has(a.id) ? 'high' : 'low'}
+                              imageFetchPriority={thumbHotKeys.has(a.id) ? 'high' : 'auto'}
                               className="relative z-0 block w-full h-full min-h-[5rem]"
                               imgClassName="relative z-0 block w-full h-full object-contain"
                               draggable={false}
                               onDragStart={(e) => e.preventDefault()}
                               onIntrinsicSize={(w, h) => {
-                                setCardAspectByAssetId((prev) => {
-                                  if (prev[a.id] != null) return prev;
-                                  const ratio = Math.max(0.5, Math.min(2, w / h));
-                                  return { ...prev, [a.id]: ratio };
-                                });
+                                setCardAspectByAssetId(
+                                  (prev) => mergeCardAspectFromIntrinsic(prev, a.id, w, h) ?? prev
+                                );
                               }}
                             />
                             <div
@@ -5887,7 +4180,37 @@ const WorkflowSection: React.FC<{
                             </div>
                           )}
                           {isBusy && !isPendingOnly && (
-                            <WorkflowPixelBusyOverlay executing={isExecutingCurrent} />
+                            <>
+                              {/* 像素遮罩为 pointer-events-none，需单独挡住点击，否则会点到下层打开大图 */}
+                              <div
+                                className="absolute inset-0 z-[9] bg-transparent"
+                                onClick={(e) => e.stopPropagation()}
+                                onPointerDown={(e) => e.stopPropagation()}
+                                aria-hidden
+                              />
+                              <WorkflowPixelBusyOverlay executing={isExecutingCurrent} />
+                              {showRootQueueCancelBtn && (
+                                <div className="absolute inset-0 z-[11] flex items-center justify-center pointer-events-none">
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (rootBatchQueuedCancelId != null) {
+                                        cancelQueuedTaskInBatch(rootBatchQueuedCancelId);
+                                      } else if (rootPendingDuringBatchCancelId != null) {
+                                        setPending((prev) =>
+                                          prev.filter((t) => t.id !== rootPendingDuringBatchCancelId)
+                                        );
+                                      }
+                                    }}
+                                    className="pointer-events-auto w-8 h-8 rounded-full flex items-center justify-center bg-[#111827]/80 backdrop-blur border border-white/20 text-gray-200 hover:bg-[#4a1c1c]/85 hover:border-[#c87878] hover:text-red-200 text-base font-medium leading-none"
+                                    title="从队列移除"
+                                  >
+                                    ×
+                                  </button>
+                                </div>
+                              )}
+                            </>
                           )}
                           {assetErrors.has(a.id) && (
                             <span className="absolute top-2 left-2 px-2 py-0.5 rounded-lg bg-[#b91c1c] text-[8px] font-black text-white">
@@ -5949,7 +4272,58 @@ const WorkflowSection: React.FC<{
           )}
         </div>
         <div className="h-full min-h-0 shrink-0 flex flex-col min-w-0" style={{ width: `${sidebarWidth}px` }}>
-          {renderWorkflowSidebarColumn({})}
+          <WorkflowSidebarColumn
+            actionModules={actionModules}
+            capabilitySets={capabilitySets}
+            plannerTargetAssetId={plannerTargetAssetId}
+            onPlannerAddToQueue={(presetId) => {
+              if (plannerTargetAssetId) addToPending(plannerTargetAssetId, presetId);
+            }}
+            onLog={onLog}
+            dragOverAction={dragOverAction}
+            setDragOverAction={setDragOverAction}
+            draggingAssetIds={draggingAssetIds}
+            setDraggingAssetIds={setDraggingAssetIds}
+            draggingGroupItems={draggingGroupItems}
+            setDraggingGroupItems={setDraggingGroupItems}
+            createGroupFromAssets={createGroupFromAssets}
+            createNestedGroupFromGroupItem={createNestedGroupFromGroupItem}
+            ensureGroupItemsAsAssets={ensureGroupItemsAsAssets}
+            assets={assets}
+            getAssetDisplayImage={getAssetDisplayImage}
+            setAssets={setAssets}
+            setSelectedGroupItemKeys={setSelectedGroupItemKeys}
+            viewStackLength={viewStack.length}
+            moveGroupItemsToUpperLevel={moveGroupItemsToUpperLevel}
+            sidebarOpsAllowed={sidebarOpsAllowed}
+            groupAssetForDrag={groupAssetForDrag}
+            currentGroupAsset={currentGroupAsset}
+            duplicateAssetInPlace={duplicateAssetInPlace}
+            removeAsset={removeAsset}
+            removeGroupItems={removeGroupItems}
+            setViewStack={setViewStack}
+            markArchived={markArchived}
+            visiblePresets={visiblePresets}
+            visibleCapabilitySets={visibleCapabilitySets}
+            visibleByCategory={visibleByCategory}
+            favoriteEntries={favoriteEntries}
+            draggingActionIdRef={draggingActionIdRef}
+            favoriteDropActive={favoriteDropActive}
+            setFavoriteDropActive={setFavoriteDropActive}
+            setFavoriteActionIds={setFavoriteActionIds}
+            collapsedSectionIds={collapsedSectionIds}
+            toggleSectionCollapsed={toggleSectionCollapsed}
+            updateDraggingActionId={updateDraggingActionId}
+            draggingActionFromFavorite={draggingActionFromFavorite}
+            actionDroppedInFavorite={actionDroppedInFavorite}
+            setDraggingActionFromFavorite={setDraggingActionFromFavorite}
+            setActionDroppedInFavorite={setActionDroppedInFavorite}
+            removeActionFromFavorite={removeActionFromFavorite}
+            setHoverPreview={setHoverPreview}
+            handleDropToModuleAction={handleDropToModuleAction}
+            handleDropToSetAction={handleDropToSetAction}
+            jumpToCapabilityPreset={jumpToCapabilityPreset}
+          />
         </div>
 
         {/* 右侧：能力预设列 */}

@@ -1,5 +1,49 @@
 import { WORKFLOW_IMG_EMPTY_PLACEHOLDER, workflowSafeImgSrc } from './workflowImageDisplay';
 
+/** 缩略解码并发上限：避免首屏大量 `drawImage` 与大图 decode 抢主线程，拖慢当前视口内卡片 */
+const PREVIEW_THUMB_DECODE_MAX_PARALLEL = 3;
+
+let previewThumbDecodeRunning = 0;
+const previewThumbDecodeHighQueue: Array<() => void> = [];
+const previewThumbDecodeLowQueue: Array<() => void> = [];
+
+function pumpPreviewThumbDecodeQueue() {
+  while (previewThumbDecodeRunning < PREVIEW_THUMB_DECODE_MAX_PARALLEL) {
+    const next = previewThumbDecodeHighQueue.shift() ?? previewThumbDecodeLowQueue.shift();
+    if (!next) break;
+    previewThumbDecodeRunning++;
+    next();
+  }
+}
+
+export type PreviewThumbDecodePriority = 'high' | 'low';
+
+/**
+ * 将 data URL 解码并缩放到画布的工作纳入全局队列：**high 优先于 low**，同优先 FIFO。
+ * 用于工作区网格「先完成视口内小图，再处理屏外」。
+ */
+export function runPreviewThumbDecode<T>(priority: PreviewThumbDecodePriority, fn: () => Promise<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const run = () => {
+      void fn().then(
+        (v) => {
+          previewThumbDecodeRunning--;
+          resolve(v);
+          pumpPreviewThumbDecodeQueue();
+        },
+        (e) => {
+          previewThumbDecodeRunning--;
+          reject(e);
+          pumpPreviewThumbDecodeQueue();
+        }
+      );
+    };
+    if (priority === 'high') previewThumbDecodeHighQueue.push(run);
+    else previewThumbDecodeLowQueue.push(run);
+    pumpPreviewThumbDecodeQueue();
+  });
+}
+
 /**
  * 超过该长度的 data URL 走「微图 → 小图」渐进预览，**DOM 的 img 不直接绑原图**；原图仅在独立预览/灯箱使用。
  * 画布侧会解码一次原 data 用于生成缩略（客户端无法不读像素就缩放）。
@@ -64,57 +108,72 @@ export function createPreviewMicroThumbnail(
   dataUrl: string,
   maxEdge: number,
   webpQuality: number,
-  jpegFallbackQuality: number
+  jpegFallbackQuality: number,
+  decodePriority: PreviewThumbDecodePriority = 'low'
 ): Promise<string> {
   const safe = workflowSafeImgSrc(dataUrl);
   if (typeof document === 'undefined' || !safe.startsWith('data:')) return Promise.resolve(safe);
-  return new Promise((resolve) => {
-    void drawDataUrlToCanvas(safe, maxEdge).then((canvas) => {
-      if (!canvas) {
-        resolve(safe);
-        return;
-      }
-      try {
-        const webp = canvas.toDataURL('image/webp', webpQuality);
-        if (webp.startsWith('data:image/webp')) {
-          resolve(webp);
+  return runPreviewThumbDecode(decodePriority, () =>
+    new Promise<string>((resolve) => {
+      void drawDataUrlToCanvas(safe, maxEdge).then((canvas) => {
+        if (!canvas) {
+          resolve(safe);
           return;
         }
-        resolve(canvas.toDataURL('image/jpeg', jpegFallbackQuality));
-      } catch {
         try {
+          const webp = canvas.toDataURL('image/webp', webpQuality);
+          if (webp.startsWith('data:image/webp')) {
+            resolve(webp);
+            return;
+          }
           resolve(canvas.toDataURL('image/jpeg', jpegFallbackQuality));
         } catch {
-          resolve(safe);
+          try {
+            resolve(canvas.toDataURL('image/jpeg', jpegFallbackQuality));
+          } catch {
+            resolve(safe);
+          }
         }
-      }
-    });
-  });
+      });
+    })
+  );
 }
 
 /**
  * 将 data URL 缩放到最长边 maxEdge，输出 JPEG（质量 quality），用于列表/卡片/悬浮等小图预览。
  * 失败时回退为原串。
  */
-export function createPreviewThumbnail(dataUrl: string, maxEdge: number, quality: number): Promise<string> {
+export function createPreviewThumbnail(
+  dataUrl: string,
+  maxEdge: number,
+  quality: number,
+  decodePriority: PreviewThumbDecodePriority = 'low'
+): Promise<string> {
   const safe = workflowSafeImgSrc(dataUrl);
   if (typeof document === 'undefined' || !safe.startsWith('data:')) return Promise.resolve(safe);
-  return new Promise((resolve) => {
-    void drawDataUrlToCanvas(safe, maxEdge).then((canvas) => {
-      if (!canvas) {
-        resolve(safe);
-        return;
-      }
-      try {
-        resolve(canvas.toDataURL('image/jpeg', quality));
-      } catch {
-        resolve(safe);
-      }
-    });
-  });
+  return runPreviewThumbDecode(decodePriority, () =>
+    new Promise<string>((resolve) => {
+      void drawDataUrlToCanvas(safe, maxEdge).then((canvas) => {
+        if (!canvas) {
+          resolve(safe);
+          return;
+        }
+        try {
+          resolve(canvas.toDataURL('image/jpeg', quality));
+        } catch {
+          resolve(safe);
+        }
+      });
+    })
+  );
 }
 
 /** @deprecated 使用 createPreviewThumbnail */
-export function createWorkflowGridThumbnail(dataUrl: string, maxEdge: number, quality: number): Promise<string> {
-  return createPreviewThumbnail(dataUrl, maxEdge, quality);
+export function createWorkflowGridThumbnail(
+  dataUrl: string,
+  maxEdge: number,
+  quality: number,
+  decodePriority: PreviewThumbDecodePriority = 'low'
+): Promise<string> {
+  return createPreviewThumbnail(dataUrl, maxEdge, quality, decodePriority);
 }
