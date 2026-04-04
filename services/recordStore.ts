@@ -5,6 +5,7 @@
  */
 
 import type { GenerationRecord } from '../types';
+import { readLocalJson, writeLocalJson } from './clientPersist';
 
 const STORAGE_KEY = 'ac_generation_records';
 const MAX_RECORDS = 500;
@@ -14,24 +15,21 @@ function genId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 11)}`;
 }
 
+function parseRecords(parsed: unknown): GenerationRecord[] | null {
+  if (!Array.isArray(parsed)) return null;
+  return [...(parsed as GenerationRecord[])].sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0));
+}
+
 /** 读取当前列表，保证返回数组，按 timestamp 降序 */
 export function loadRecords(): GenerationRecord[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const list = JSON.parse(raw) as GenerationRecord[];
-    if (!Array.isArray(list)) return [];
-    return [...list].sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0));
-  } catch {
-    return [];
-  }
+  return readLocalJson<GenerationRecord[]>(STORAGE_KEY, [], parseRecords);
 }
 
 /** 写入前按 timestamp 降序并截断至 MAX_RECORDS */
 export function saveRecords(records: GenerationRecord[]): void {
   const sorted = [...records].sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0));
   const trimmed = sorted.slice(0, MAX_RECORDS);
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(trimmed));
+  writeLocalJson(STORAGE_KEY, trimmed);
 }
 
 /** 生成 id、追加记录、保存并返回完整记录 */

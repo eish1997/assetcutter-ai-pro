@@ -1,5 +1,6 @@
 import type { DialogSession, DialogTempItem } from '../types';
 
+import { readLocalString, writeLocalStringOrThrow } from './clientPersist';
 import { dialogVersionsForMessage } from './dialogImageHelpers';
 
 const STORE_VERSION = 1 as const;
@@ -142,7 +143,7 @@ function lightenPayload(input: DialogWorkspacePersistPayload): DialogWorkspacePe
 
 export function loadDialogWorkspaceState(persistUserId: string | null): DialogWorkspacePersistPayload | null {
   try {
-    const raw = localStorage.getItem(dialogWorkspaceStorageKey(persistUserId));
+    const raw = readLocalString(dialogWorkspaceStorageKey(persistUserId));
     if (!raw) return null;
     const data = JSON.parse(raw) as Partial<DialogWorkspacePersistPayload>;
     if (data.version !== STORE_VERSION || !Array.isArray(data.sessions)) return null;
@@ -169,8 +170,9 @@ export function saveDialogWorkspaceState(persistUserId: string | null, payload: 
     toSave = lightenPayload(toSave);
     json = JSON.stringify(stripDialogPayloadForPersist(toSave));
   }
+  const key = dialogWorkspaceStorageKey(persistUserId);
   try {
-    localStorage.setItem(dialogWorkspaceStorageKey(persistUserId), json);
+    writeLocalStringOrThrow(key, json);
   } catch (e) {
     const name = typeof DOMException !== 'undefined' && e instanceof DOMException ? e.name : '';
     if (name === 'QuotaExceededError' || (e instanceof Error && /quota/i.test(e.message))) {
@@ -180,7 +182,7 @@ export function saveDialogWorkspaceState(persistUserId: string | null, payload: 
         tempLibrary: [],
       });
       try {
-        localStorage.setItem(dialogWorkspaceStorageKey(persistUserId), JSON.stringify(stripDialogPayloadForPersist(toSave)));
+        writeLocalStringOrThrow(key, JSON.stringify(stripDialogPayloadForPersist(toSave)));
       } catch {
         console.warn('[dialog] localStorage 仍不足，已跳过本次对话持久化');
       }

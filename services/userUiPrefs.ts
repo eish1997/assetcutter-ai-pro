@@ -1,4 +1,6 @@
-/** 本机用户界面偏好（侧栏头像等），存 localStorage；不参与服务端账户 */
+import { readLocalString, writeLocalString } from './clientPersist';
+
+/** 本机用户界面偏好（侧栏头像等），存 localStorage；不参与服务端账户；读写经 `clientPersist` */
 
 const STORAGE_KEY = 'ac_user_ui_prefs_v1';
 const DISPLAY_NAME_MAX = 24;
@@ -87,13 +89,7 @@ function buildPrefsFromRaw(raw: string): UserUiPrefs {
 }
 
 export function getUserUiPrefs(): UserUiPrefs {
-  if (typeof localStorage === 'undefined') return EMPTY_PREFS;
-  let raw: string;
-  try {
-    raw = localStorage.getItem(STORAGE_KEY) ?? '';
-  } catch {
-    return EMPTY_PREFS;
-  }
+  const raw = readLocalString(STORAGE_KEY) ?? '';
   if (cachedRaw === raw && cachedPrefs !== undefined) return cachedPrefs;
   cachedRaw = raw;
   cachedPrefs = buildPrefsFromRaw(raw);
@@ -101,7 +97,6 @@ export function getUserUiPrefs(): UserUiPrefs {
 }
 
 export function setUserUiPrefs(patch: Partial<UserUiPrefs>): void {
-  if (typeof localStorage === 'undefined') return;
   const cur = getUserUiPrefs();
   const nextPlain: UserUiPrefs = {
     displayName:
@@ -110,11 +105,7 @@ export function setUserUiPrefs(patch: Partial<UserUiPrefs>): void {
         : cur.displayName,
     avatarUrl: patch.avatarUrl !== undefined ? sanitizeAvatarUrl(patch.avatarUrl) : cur.avatarUrl,
   };
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(nextPlain));
-  } catch {
-    /* ignore quota */
-  }
+  writeLocalString(STORAGE_KEY, JSON.stringify(nextPlain));
   invalidateCache();
   notify();
 }

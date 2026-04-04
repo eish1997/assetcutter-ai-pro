@@ -1,5 +1,8 @@
 import type { CapabilityCategory, CustomAppModule } from '../types';
+import { readLocalString, removeLocalKey, writeLocalJson } from './clientPersist';
 import { normalizeCapabilityPreviewUrlForPersist } from './capabilityPreviewUrl';
+
+const LEGACY_CUSTOM_MODULES_KEY = 'ac_custom_modules';
 
 export const CAPABILITY_PRESETS_KEY = 'ac_capability_presets';
 export const CAPABILITY_PRESETS_VERSION = 3;
@@ -128,9 +131,9 @@ export function enforceBuiltinImageProcessPresets(list: CustomAppModule[]): Cust
 
 export function loadCapabilityPresets(): CustomAppModule[] {
   try {
-    let raw = localStorage.getItem(CAPABILITY_PRESETS_KEY);
+    let raw = readLocalString(CAPABILITY_PRESETS_KEY);
     if (!raw) {
-      raw = localStorage.getItem('ac_custom_modules');
+      raw = readLocalString(LEGACY_CUSTOM_MODULES_KEY);
       if (raw) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed) && parsed.length > 0) {
@@ -138,7 +141,7 @@ export function loadCapabilityPresets(): CustomAppModule[] {
             parsed.map((p: CustomAppModule, i: number) => normalizeCapabilityPreset(p, i))
           );
           saveCapabilityPresets(normalized);
-          localStorage.removeItem('ac_custom_modules');
+          removeLocalKey(LEGACY_CUSTOM_MODULES_KEY);
           return normalized;
         }
       }
@@ -175,7 +178,7 @@ export function loadCapabilityPresets(): CustomAppModule[] {
 export function saveCapabilityPresets(list: CustomAppModule[]): void {
   const normalized = enforceBuiltinImageProcessPresets(list.map((p, i) => normalizeCapabilityPreset(p, i)));
   const payload: CapabilityPresetsPayload = { version: CAPABILITY_PRESETS_VERSION, presets: normalized };
-  localStorage.setItem(CAPABILITY_PRESETS_KEY, JSON.stringify(payload));
+  writeLocalJson(CAPABILITY_PRESETS_KEY, payload);
 }
 
 /** 合并覆盖：同 id 覆盖；返回完整列表（按 order 重新排序并重排 order） */

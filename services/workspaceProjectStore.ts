@@ -1,4 +1,5 @@
 import type { WorkflowAsset, WorkflowPendingTask } from '../types';
+import { readLocalString, removeLocalKey, safeLocalStorage, writeLocalJson, writeLocalString, writeLocalStringOrThrow } from './clientPersist';
 import { idbDeleteBundle, idbLoadBundleJson, idbSaveBundleJson } from './workspaceBundleIdb';
 
 export type WorkspaceProject = {
@@ -52,16 +53,19 @@ function parseBundleJson(raw: string): WorkflowProjectBundle {
 
 function schedulePersistToIdb(bundleKey: string, json: string): void {
   if (typeof indexedDB === 'undefined') {
-    try {
-      localStorage.setItem(bundleKey, json);
-    } catch (e) {
-      const name = typeof DOMException !== 'undefined' && e instanceof DOMException ? e.name : '';
-      if (name === 'QuotaExceededError' || (e instanceof Error && /quota/i.test(e.message))) {
-        console.error(
-          '[workspace] localStorage 空间不足（无 IndexedDB）。请减少大图或启用云端同步。'
-        );
-      } else {
-        console.error('[workspace] 保存失败', e);
+    const st = safeLocalStorage();
+    if (st) {
+      try {
+        st.setItem(bundleKey, json);
+      } catch (e) {
+        const name = typeof DOMException !== 'undefined' && e instanceof DOMException ? e.name : '';
+        if (name === 'QuotaExceededError' || (e instanceof Error && /quota/i.test(e.message))) {
+          console.error(
+            '[workspace] localStorage 空间不足（无 IndexedDB）。请减少大图或启用云端同步。'
+          );
+        } else {
+          console.error('[workspace] 保存失败', e);
+        }
       }
     }
     return;
@@ -82,15 +86,11 @@ function schedulePersistToIdb(bundleKey: string, json: string): void {
         }
         try {
           await idbSaveBundleJson(bundleKey, payload);
-          try {
-            localStorage.removeItem(bundleKey);
-          } catch {
-            /* ignore */
-          }
+          removeLocalKey(bundleKey);
         } catch (e) {
           console.warn('[workspace] IndexedDB 保存失败，回退 localStorage', e);
           try {
-            localStorage.setItem(bundleKey, payload);
+            writeLocalStringOrThrow(bundleKey, payload);
           } catch (e2) {
             const name = typeof DOMException !== 'undefined' && e2 instanceof DOMException ? e2.name : '';
             if (name === 'QuotaExceededError' || (e2 instanceof Error && /quota/i.test(e2.message))) {
@@ -102,11 +102,7 @@ function schedulePersistToIdb(bundleKey: string, json: string): void {
         }
         if (cancelledIdbBundleKeys.has(bundleKey)) {
           cancelledIdbBundleKeys.delete(bundleKey);
-          try {
-            localStorage.removeItem(bundleKey);
-          } catch {
-            /* ignore */
-          }
+          removeLocalKey(bundleKey);
           void idbDeleteBundle(bundleKey);
         }
       }
@@ -122,24 +118,24 @@ function schedulePersistToIdb(bundleKey: string, json: string): void {
 export function loadWorkspaceProjects(persistUserId: WorkspacePersistUserId = null): WorkspaceProject[] {
   const pk = projectsStorageKey(persistUserId);
   try {
-    const raw = localStorage.getItem(pk);
+    const raw = readLocalString(pk);
     let list: WorkspaceProject[] = raw ? JSON.parse(raw) : [];
     if (!Array.isArray(list)) list = [];
     if (list.length === 0) {
       const p: WorkspaceProject = { id: newId(), name: '默认项目', createdAt: Date.now() };
       list = [p];
-      localStorage.setItem(pk, JSON.stringify(list));
+      writeLocalJson(pk, list);
     }
     return list;
   } catch {
     const p: WorkspaceProject = { id: newId(), name: '默认项目', createdAt: Date.now() };
-    localStorage.setItem(pk, JSON.stringify([p]));
+    writeLocalJson(pk, [p]);
     return [p];
   }
 }
 
 export function saveWorkspaceProjects(projects: WorkspaceProject[], persistUserId: WorkspacePersistUserId = null): void {
-  localStorage.setItem(projectsStorageKey(persistUserId), JSON.stringify(projects));
+  writeLocalJson(projectsStorageKey(persistUserId), projects);
 }
 
 export function createWorkspaceProject(name: string): WorkspaceProject {
@@ -153,7 +149,7 @@ export function createWorkspaceProject(name: string): WorkspaceProject {
 
 export function getLastOpenedWorkspaceProjectId(persistUserId: WorkspacePersistUserId = null): string | null {
   try {
-    const id = localStorage.getItem(lastOpenStorageKey(persistUserId));
+    const id = readLocalString(lastOpenStorageKey(persistUserId));
     if (!id) return null;
     const projects = loadWorkspaceProjects(persistUserId);
     return projects.some((p) => p.id === id) ? id : null;
@@ -176,8 +172,8 @@ export function readInitialWorkflowProjectSession(persistUserId: WorkspacePersis
 
 export function setLastOpenedWorkspaceProjectId(id: string | null, persistUserId: WorkspacePersistUserId = null): void {
   const lk = lastOpenStorageKey(persistUserId);
-  if (id == null) localStorage.removeItem(lk);
-  else localStorage.setItem(lk, id);
+  if (id == null) removeLocalKey(lk);
+  else writeLocalString(lk, id);
 }
 
 export function loadWorkflowBundle(projectId: string, persistUserId: WorkspacePersistUserId = null): WorkflowProjectBundle {
@@ -185,7 +181,7 @@ export function loadWorkflowBundle(projectId: string, persistUserId: WorkspacePe
   const cached = bundleMemoryCache.get(key);
   if (cached) return cloneBundle(cached);
   try {
-    const raw = localStorage.getItem(key);
+    const raw = readLocalString(key);
     if (!raw) return { assets: [], pending: [] };
     const bundle = parseBundleJson(raw);
     bundleMemoryCache.set(key, cloneBundle(bundle));
@@ -227,16 +223,12 @@ export async function ensureWorkspaceBundlesHydratedFromIdb(persistUserId: Works
         bundleMemoryCache.set(key, cloneBundle(bundle));
         continue;
       }
-      const raw = localStorage.getItem(key);
+      const raw = readLocalString(key);
       if (raw) {
         const bundle = parseBundleJson(raw);
         bundleMemoryCache.set(key, cloneBundle(bundle));
         await idbSaveBundleJson(key, raw).catch(() => {});
-        try {
-          localStorage.removeItem(key);
-        } catch {
-          /* ignore */
-        }
+        removeLocalKey(key);
       }
     } catch (e) {
       console.warn('[workspace] hydrate bundle', key, e);
@@ -263,10 +255,6 @@ export function removeWorkflowBundle(projectId: string, persistUserId: Workspace
   bundleMemoryCache.delete(key);
   pendingIdbPayloadByKey.delete(key);
   cancelledIdbBundleKeys.add(key);
-  try {
-    localStorage.removeItem(key);
-  } catch {
-    /* ignore */
-  }
+  removeLocalKey(key);
   void idbDeleteBundle(key);
 }

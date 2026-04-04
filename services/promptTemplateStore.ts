@@ -1,4 +1,5 @@
 import type { PromptTemplate } from '../types';
+import { readLocalString, writeLocalJson } from './clientPersist';
 
 const STORAGE_KEY = 'ac_prompt_templates';
 
@@ -17,9 +18,9 @@ function normalizeTemplate(t: PromptTemplate): PromptTemplate | null {
 }
 
 export function loadPromptTemplates(): PromptTemplate[] {
+  const raw = readLocalString(STORAGE_KEY);
+  if (!raw) return [];
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
     const parsed = JSON.parse(raw) as PromptTemplate[];
     if (!Array.isArray(parsed)) return [];
     const out: PromptTemplate[] = [];
@@ -27,7 +28,6 @@ export function loadPromptTemplates(): PromptTemplate[] {
       const n = normalizeTemplate(item);
       if (n) out.push(n);
     }
-    // 最近更新优先
     return out.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
   } catch {
     return [];
@@ -40,7 +40,7 @@ export function savePromptTemplates(list: PromptTemplate[]): void {
     const n = normalizeTemplate(item);
     if (n) normalized.push(n);
   }
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
+  writeLocalJson(STORAGE_KEY, normalized);
 }
 
 /**
@@ -61,4 +61,3 @@ export function mergePromptTemplates(existing: PromptTemplate[], next: PromptTem
   }
   return Array.from(map.values()).sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
 }
-

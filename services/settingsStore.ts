@@ -1,4 +1,16 @@
-/** 用户设置的 API 密钥存 localStorage，键名与读写逻辑集中在此 */
+/** 用户设置的 API 密钥存 localStorage，键名与读写逻辑集中在此；底层经 `clientPersist` 安全访问 */
+
+import {
+  readLocalFlag,
+  readLocalNonEmptyTrimmed,
+  readLocalString,
+  readSessionNonEmptyTrimmed,
+  removeLocalKey,
+  writeLocalFlag,
+  writeLocalNonEmptyTrimmedOrRemove,
+  writeLocalString,
+  writeSessionNonEmptyTrimmedOrRemove,
+} from './clientPersist';
 
 const STORAGE_KEY_GEMINI = 'ac_gemini_api_key';
 const STORAGE_KEY_AI_PROVIDER = 'ac_ai_provider';
@@ -13,141 +25,60 @@ export type AiProvider = 'gemini' | 'toapis' | 'vectorengine';
 const SESSION_KEY_TENCENT_SECRET_ID = 'ac_tencent_secret_id';
 const SESSION_KEY_TENCENT_SECRET_KEY = 'ac_tencent_secret_key';
 
-function getSessionStorage(): Storage | null {
-  try {
-    return typeof sessionStorage === 'undefined' ? null : sessionStorage;
-  } catch {
-    return null;
-  }
-}
-
 // ----- Gemini -----
 export function getUserApiKey(): string | null {
-  try {
-    const v = localStorage.getItem(STORAGE_KEY_GEMINI);
-    return v && v.trim() ? v.trim() : null;
-  } catch {
-    return null;
-  }
+  return readLocalNonEmptyTrimmed(STORAGE_KEY_GEMINI);
 }
 
 export function setUserApiKey(value: string | null): void {
-  try {
-    if (value == null || !value.trim()) {
-      localStorage.removeItem(STORAGE_KEY_GEMINI);
-    } else {
-      localStorage.setItem(STORAGE_KEY_GEMINI, value.trim());
-    }
-  } catch {
-    // ignore
-  }
+  writeLocalNonEmptyTrimmedOrRemove(STORAGE_KEY_GEMINI, value);
 }
 
 export function getAiProvider(): AiProvider {
-  try {
-    const v = localStorage.getItem(STORAGE_KEY_AI_PROVIDER);
-    if (v === 'toapis') return 'toapis';
-    if (v === 'vectorengine') return 'vectorengine';
-    return 'gemini';
-  } catch {
-    return 'gemini';
-  }
+  const v = readLocalString(STORAGE_KEY_AI_PROVIDER);
+  if (v === 'toapis') return 'toapis';
+  if (v === 'vectorengine') return 'vectorengine';
+  return 'gemini';
 }
 
 export function setAiProvider(value: AiProvider): void {
-  try {
-    localStorage.setItem(STORAGE_KEY_AI_PROVIDER, value);
-  } catch {
-    // ignore
-  }
+  writeLocalString(STORAGE_KEY_AI_PROVIDER, value);
 }
 
 export function getToapisApiKey(): string | null {
-  try {
-    const v = localStorage.getItem(STORAGE_KEY_TOAPIS_API_KEY);
-    return v && v.trim() ? v.trim() : null;
-  } catch {
-    return null;
-  }
+  return readLocalNonEmptyTrimmed(STORAGE_KEY_TOAPIS_API_KEY);
 }
 
 export function setToapisApiKey(value: string | null): void {
-  try {
-    if (value == null || !value.trim()) {
-      localStorage.removeItem(STORAGE_KEY_TOAPIS_API_KEY);
-    } else {
-      localStorage.setItem(STORAGE_KEY_TOAPIS_API_KEY, value.trim());
-    }
-  } catch {
-    // ignore
-  }
+  writeLocalNonEmptyTrimmedOrRemove(STORAGE_KEY_TOAPIS_API_KEY, value);
 }
 
 /** ToAPIs 网关根路径，须含 /v1，如 https://toapis.com/v1 */
 export function getToapisBaseUrl(): string {
-  try {
-    const v = localStorage.getItem(STORAGE_KEY_TOAPIS_BASE_URL);
-    const t = v && v.trim() ? v.trim() : '';
-    return t || 'https://toapis.com/v1';
-  } catch {
-    return 'https://toapis.com/v1';
-  }
+  const t = readLocalNonEmptyTrimmed(STORAGE_KEY_TOAPIS_BASE_URL) ?? '';
+  return t || 'https://toapis.com/v1';
 }
 
 export function setToapisBaseUrl(value: string | null): void {
-  try {
-    if (value == null || !value.trim()) {
-      localStorage.removeItem(STORAGE_KEY_TOAPIS_BASE_URL);
-    } else {
-      localStorage.setItem(STORAGE_KEY_TOAPIS_BASE_URL, value.trim());
-    }
-  } catch {
-    // ignore
-  }
+  writeLocalNonEmptyTrimmedOrRemove(STORAGE_KEY_TOAPIS_BASE_URL, value);
 }
 
 export function getVectorengineApiKey(): string | null {
-  try {
-    const v = localStorage.getItem(STORAGE_KEY_VECTORENGINE_API_KEY);
-    return v && v.trim() ? v.trim() : null;
-  } catch {
-    return null;
-  }
+  return readLocalNonEmptyTrimmed(STORAGE_KEY_VECTORENGINE_API_KEY);
 }
 
 export function setVectorengineApiKey(value: string | null): void {
-  try {
-    if (value == null || !value.trim()) {
-      localStorage.removeItem(STORAGE_KEY_VECTORENGINE_API_KEY);
-    } else {
-      localStorage.setItem(STORAGE_KEY_VECTORENGINE_API_KEY, value.trim());
-    }
-  } catch {
-    // ignore
-  }
+  writeLocalNonEmptyTrimmedOrRemove(STORAGE_KEY_VECTORENGINE_API_KEY, value);
 }
 
 /** 向量引擎根地址（不含 /v1beta 路径），如 https://api.vectorengine.ai */
 export function getVectorengineBaseUrl(): string {
-  try {
-    const v = localStorage.getItem(STORAGE_KEY_VECTORENGINE_BASE_URL);
-    const t = v && v.trim() ? v.trim() : '';
-    return t || 'https://api.vectorengine.ai';
-  } catch {
-    return 'https://api.vectorengine.ai';
-  }
+  const t = readLocalNonEmptyTrimmed(STORAGE_KEY_VECTORENGINE_BASE_URL) ?? '';
+  return t || 'https://api.vectorengine.ai';
 }
 
 export function setVectorengineBaseUrl(value: string | null): void {
-  try {
-    if (value == null || !value.trim()) {
-      localStorage.removeItem(STORAGE_KEY_VECTORENGINE_BASE_URL);
-    } else {
-      localStorage.setItem(STORAGE_KEY_VECTORENGINE_BASE_URL, value.trim());
-    }
-  } catch {
-    // ignore
-  }
+  writeLocalNonEmptyTrimmedOrRemove(STORAGE_KEY_VECTORENGINE_BASE_URL, value);
 }
 
 /** 当前选用供应商下的 API Key（Gemini 官方、ToAPIs 或 VectorEngine） */
@@ -186,91 +117,41 @@ export function isAiInvocationReady(): boolean {
 
 /** 对话生图：是否跳过“理解意图”步骤，直接使用用户提示词调用生图模型 */
 export function getDialogSkipUnderstand(): boolean {
-  try {
-    return localStorage.getItem(STORAGE_KEY_DIALOG_SKIP_UNDERSTAND) === '1';
-  } catch {
-    return false;
-  }
+  return readLocalFlag(STORAGE_KEY_DIALOG_SKIP_UNDERSTAND);
 }
 
 export function setDialogSkipUnderstand(value: boolean): void {
-  try {
-    if (value) {
-      localStorage.setItem(STORAGE_KEY_DIALOG_SKIP_UNDERSTAND, '1');
-    } else {
-      localStorage.removeItem(STORAGE_KEY_DIALOG_SKIP_UNDERSTAND);
-    }
-  } catch {
-    // ignore
-  }
+  writeLocalFlag(STORAGE_KEY_DIALOG_SKIP_UNDERSTAND, value);
 }
 
 /** 工作区：是否启用自动云同步（默认开启） */
 export function getWorkspaceAutoSyncEnabled(): boolean {
-  try {
-    return localStorage.getItem(STORAGE_KEY_WORKSPACE_AUTO_SYNC) !== '0';
-  } catch {
-    return true;
-  }
+  return readLocalString(STORAGE_KEY_WORKSPACE_AUTO_SYNC) !== '0';
 }
 
 export function setWorkspaceAutoSyncEnabled(value: boolean): void {
-  try {
-    if (value) {
-      localStorage.removeItem(STORAGE_KEY_WORKSPACE_AUTO_SYNC);
-    } else {
-      localStorage.setItem(STORAGE_KEY_WORKSPACE_AUTO_SYNC, '0');
-    }
-  } catch {
-    // ignore
+  if (value) {
+    removeLocalKey(STORAGE_KEY_WORKSPACE_AUTO_SYNC);
+  } else {
+    writeLocalString(STORAGE_KEY_WORKSPACE_AUTO_SYNC, '0');
   }
 }
 
 // ----- 混元（腾讯云） -----
 export function getTencentSecretId(): string | null {
-  try {
-    const v = getSessionStorage()?.getItem(SESSION_KEY_TENCENT_SECRET_ID);
-    return v && v.trim() ? v.trim() : null;
-  } catch {
-    return null;
-  }
+  return readSessionNonEmptyTrimmed(SESSION_KEY_TENCENT_SECRET_ID);
 }
 
 export function setTencentSecretId(value: string | null): void {
-  try {
-    const storage = getSessionStorage();
-    if (!storage) return;
-    if (value == null || !value.trim()) {
-      storage.removeItem(SESSION_KEY_TENCENT_SECRET_ID);
-    } else {
-      storage.setItem(SESSION_KEY_TENCENT_SECRET_ID, value.trim());
-    }
-  } catch {
-    // ignore
-  }
+  writeSessionNonEmptyTrimmedOrRemove(SESSION_KEY_TENCENT_SECRET_ID, value);
 }
 
 export function getTencentSecretKey(): string | null {
-  try {
-    const v = getSessionStorage()?.getItem(SESSION_KEY_TENCENT_SECRET_KEY);
-    return v && v.trim() ? v.trim() : null;
-  } catch {
-    return null;
-  }
+  return readSessionNonEmptyTrimmed(SESSION_KEY_TENCENT_SECRET_KEY);
 }
 
 export function setTencentSecretKey(value: string | null): void {
-  try {
-    const storage = getSessionStorage();
-    if (!storage) return;
-    if (value == null || !value.trim()) {
-      storage.removeItem(SESSION_KEY_TENCENT_SECRET_KEY);
-    } else {
-      storage.setItem(SESSION_KEY_TENCENT_SECRET_KEY, value.trim());
-    }
-  } catch {
-    // ignore
-  }
+  writeSessionNonEmptyTrimmedOrRemove(SESSION_KEY_TENCENT_SECRET_KEY, value);
 }
 
 /**

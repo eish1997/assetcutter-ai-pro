@@ -5,6 +5,7 @@
  */
 
 import type { ABChoice } from '../types';
+import { readLocalJson, writeLocalJson } from './clientPersist';
 
 const STORAGE_KEY = 'ac_ab_choices';
 const MAX_RECORDS = 200;
@@ -14,22 +15,19 @@ function genId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 11)}`;
 }
 
+function parseChoices(parsed: unknown): ABChoice[] | null {
+  if (!Array.isArray(parsed)) return null;
+  return [...(parsed as ABChoice[])].sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0));
+}
+
 export function loadChoices(): ABChoice[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const list = JSON.parse(raw) as ABChoice[];
-    if (!Array.isArray(list)) return [];
-    return [...list].sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0));
-  } catch {
-    return [];
-  }
+  return readLocalJson<ABChoice[]>(STORAGE_KEY, [], parseChoices);
 }
 
 function saveChoices(records: ABChoice[]): void {
   const sorted = [...records].sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0));
   const trimmed = sorted.slice(0, MAX_RECORDS);
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(trimmed));
+  writeLocalJson(STORAGE_KEY, trimmed);
 }
 
 export function addChoice(record: Omit<ABChoice, 'id'>): ABChoice {

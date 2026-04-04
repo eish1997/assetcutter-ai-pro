@@ -5,6 +5,7 @@
  */
 
 import type { WinningSnippet } from '../types';
+import { readLocalJson, writeLocalJson } from './clientPersist';
 
 const STORAGE_KEY = 'ac_winning_snippets';
 const MAX_RECORDS = 100;
@@ -14,22 +15,19 @@ function genId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 11)}`;
 }
 
+function parseSnippets(parsed: unknown): WinningSnippet[] | null {
+  if (!Array.isArray(parsed)) return null;
+  return [...(parsed as WinningSnippet[])].sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0));
+}
+
 export function loadSnippets(): WinningSnippet[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const list = JSON.parse(raw) as WinningSnippet[];
-    if (!Array.isArray(list)) return [];
-    return [...list].sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0));
-  } catch {
-    return [];
-  }
+  return readLocalJson<WinningSnippet[]>(STORAGE_KEY, [], parseSnippets);
 }
 
 function saveSnippets(records: WinningSnippet[]): void {
   const sorted = [...records].sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0));
   const trimmed = sorted.slice(0, MAX_RECORDS);
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(trimmed));
+  writeLocalJson(STORAGE_KEY, trimmed);
 }
 
 export function addSnippet(snippet: Omit<WinningSnippet, 'id'>): WinningSnippet {
