@@ -5,6 +5,9 @@ export const CAPABILITY_PRESETS_KEY = 'ac_capability_presets';
 export const CAPABILITY_PRESETS_VERSION = 3;
 export const BUILTIN_IMAGE_PROCESS_IDS = ['cut_image'] as const;
 
+/** 允许在能力页修改配置的内置预设（如切割溢出）；不可删除，仍走 enforce 合并 */
+export const BUILTIN_CAPABILITY_EDITABLE_IDS: readonly string[] = ['cut_image'];
+
 type CapabilityPresetsPayload = {
   version: number;
   presets: CustomAppModule[];
@@ -69,6 +72,16 @@ export function normalizeCapabilityPreset(input: CustomAppModule, index: number)
   norm(base.previewGeneratedImage, 'previewGeneratedImage');
   norm(base.previewOriginalThumbImage, 'previewOriginalThumbImage');
   norm(base.previewGeneratedThumbImage, 'previewGeneratedThumbImage');
+  if (base.id === 'cut_image') {
+    const rawOv = (input as CustomAppModule).cutOverflowPx;
+    if (typeof rawOv === 'number' && Number.isFinite(rawOv)) {
+      base.cutOverflowPx = Math.max(0, Math.min(512, Math.round(rawOv)));
+    } else {
+      delete (base as CustomAppModule & { cutOverflowPx?: number }).cutOverflowPx;
+    }
+  } else {
+    delete (base as CustomAppModule & { cutOverflowPx?: number }).cutOverflowPx;
+  }
   return base;
 }
 
@@ -93,11 +106,14 @@ export function enforceBuiltinImageProcessPresets(list: CustomAppModule[]): Cust
     map.set(p.id, normalizeCapabilityPreset(p, i));
   });
   BUILTIN_IMAGE_PROCESS_PRESETS.forEach((p) => {
+    const incoming = list.find((x) => x.id === p.id);
     map.set(
       p.id,
       normalizeCapabilityPreset(
         {
           ...p,
+          ...(incoming ? incoming : {}),
+          id: p.id,
           enabled: true,
           engine: 'builtin',
           category: 'image_process',

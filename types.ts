@@ -474,6 +474,11 @@ export type CustomAppModule = {
   previewGeneratedThumbImage?: string;
   /** 仅当 category === 'generate_3d' 时使用 */
   generate3D?: Generate3DPreset;
+  /**
+   * 仅 `id === 'cut_image'` 时使用：识别框裁剪时每边向外扩展的像素（0～512），便于保留边缘内容。
+   * 其它图像处理预设忽略此字段。
+   */
+  cutOverflowPx?: number;
 };
 
 /** 能力集合画布节点（与 React Flow 序列化兼容） */

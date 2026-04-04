@@ -3,7 +3,12 @@ import { createPortal } from 'react-dom';
 import type { CustomAppModule, CapabilityCategory, CapabilityEngine, DialogImageGear, Generate3DPreset, CapabilitySet } from '../types';
 import { CAPABILITY_CATEGORIES, DIALOG_IMAGE_GEARS, SUPPORTED_ASPECT_RATIOS, SUPPORTED_IMAGE_SIZES } from '../types';
 import type { CapabilityTestResult } from '../services/capabilityTestRunner';
-import { BUILTIN_IMAGE_PROCESS_IDS, CAPABILITY_PRESETS_VERSION } from '../services/capabilityPresetStore';
+import {
+  BUILTIN_CAPABILITY_EDITABLE_IDS,
+  BUILTIN_IMAGE_PROCESS_IDS,
+  CAPABILITY_PRESETS_VERSION,
+  normalizeCapabilityPreset,
+} from '../services/capabilityPresetStore';
 import { loadInstalledPacks, loadPackHistory } from '../services/storePackHistory';
 import { useStoreCatalog } from '../services/storeCatalogHook';
 import { publishPresetToUserR2Catalog } from '../services/capabilityPresetR2Publish';
@@ -64,6 +69,8 @@ const CapabilityPresetSection: React.FC<{
   const [editImageAspectRatio, setEditImageAspectRatio] = useState('');
   const [editImageSize, setEditImageSize] = useState('');
   const [editInstruction, setEditInstruction] = useState('');
+  /** 仅编辑「切割图片」内置预设时使用 */
+  const [editCutOverflowPx, setEditCutOverflowPx] = useState(0);
   const [editSkipUnderstand, setEditSkipUnderstand] = useState(false);
   const [isAdding, setIsAdding] = useState(false);
   const [newLabel, setNewLabel] = useState('');
@@ -112,6 +119,8 @@ const CapabilityPresetSection: React.FC<{
   const isBuiltinImageProcess = (p: CustomAppModule) =>
     p.category === 'image_process' &&
     BUILTIN_IMAGE_PROCESS_IDS.includes(p.id as (typeof BUILTIN_IMAGE_PROCESS_IDS)[number]);
+  const isBuiltinLockedPreset = (p: CustomAppModule) =>
+    isBuiltinImageProcess(p) && !BUILTIN_CAPABILITY_EDITABLE_IDS.includes(p.id);
 
   const {
     catalog,
@@ -264,6 +273,40 @@ const CapabilityPresetSection: React.FC<{
 
   const saveEdit = () => {
     if (!editingId) return;
+    if (editingId === 'cut_image') {
+      const ix = presets.findIndex((x) => x.id === 'cut_image');
+      const prev = ix >= 0 ? presets[ix] : null;
+      if (!prev) {
+        setEditingId(null);
+        return;
+      }
+      const {
+        imageGear: _ig,
+        imageAspectRatio: _iar,
+        imageSize: _is,
+        skipUnderstand: _su,
+        ...prevRest
+      } = prev;
+      void _ig;
+      void _iar;
+      void _is;
+      void _su;
+      const next = normalizeCapabilityPreset(
+        {
+          ...prevRest,
+          label: editLabel.trim() || '切割图片',
+          category: 'image_process',
+          engine: 'builtin',
+          instruction: editInstruction,
+          enabled: editEnabled,
+          cutOverflowPx: Math.max(0, Math.min(512, Math.round(Number(editCutOverflowPx) || 0))),
+        },
+        ix
+      );
+      update(presets.map((p) => (p.id === 'cut_image' ? next : p)));
+      setEditingId(null);
+      return;
+    }
     update(
       presets.map((p) => {
         if (p.id !== editingId) return p;
@@ -1485,6 +1528,64 @@ const CapabilityPresetSection: React.FC<{
               className="rounded-2xl border border-[#2e2e32] bg-[#16161a] p-4"
             >
               {editingId === p.id ? (
+                editingId === 'cut_image' ? (
+                  <>
+                    <div className="mb-3 rounded-xl border border-blue-500/35 bg-[#121a24] px-3 py-2.5">
+                      <p className="text-[9px] font-black uppercase text-blue-300/95">内置 · 切割图片</p>
+                      <p className="text-[8px] text-gray-500 mt-1 leading-relaxed">
+                        与生图类预设不同：此处不配置模型与提示词链路，仅调整名称、启用状态、<span className="text-gray-400">切割溢出</span>（按识别框扩展裁剪）及可选说明。
+                      </p>
+                    </div>
+                    <div className="mb-2 flex flex-wrap items-center gap-4">
+                      <label className="flex items-center gap-2 text-[9px] text-gray-400">
+                        <input type="checkbox" checked={editEnabled} onChange={(e) => setEditEnabled(e.target.checked)} />
+                        <span className="font-black uppercase">启用</span>
+                      </label>
+                    </div>
+                    <div className="mb-2">
+                      <span className="text-[8px] font-black text-gray-500 uppercase">功能名称</span>
+                      <input
+                        value={editLabel}
+                        onChange={(e) => setEditLabel(e.target.value)}
+                        placeholder="切割图片"
+                        className="mt-1 w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500"
+                      />
+                    </div>
+                    <div className="mb-2">
+                      <span className="text-[8px] font-black text-emerald-400/90 uppercase">切割溢出（每边像素）</span>
+                      <p className="text-[8px] text-gray-500 mt-0.5">
+                        在模型返回的识别框基础上，四边各向外扩展若干像素再裁剪，便于保留边缘；最大 512，超出部分会被原图边界截断。
+                      </p>
+                      <input
+                        type="number"
+                        min={0}
+                        max={512}
+                        step={1}
+                        value={editCutOverflowPx}
+                        onChange={(e) => setEditCutOverflowPx(Math.max(0, Math.min(512, Math.round(Number(e.target.value) || 0))))}
+                        className="mt-1 w-28 bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500"
+                      />
+                    </div>
+                    <div className="mb-2">
+                      <span className="text-[8px] font-black text-gray-500 uppercase">可选：补充说明</span>
+                      <textarea
+                        value={editInstruction}
+                        onChange={(e) => setEditInstruction(e.target.value)}
+                        rows={2}
+                        className="mt-1 w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none"
+                        placeholder="可留空；当前不影响切割算法，仅作备注"
+                      />
+                    </div>
+                    <div className="flex gap-2">
+                      <button type="button" onClick={saveEdit} className="px-3 py-1.5 rounded-lg bg-blue-600 text-[9px] font-black uppercase">
+                        保存
+                      </button>
+                      <button type="button" onClick={() => setEditingId(null)} className="px-3 py-1.5 rounded-lg bg-[#26262c] text-[9px] font-black uppercase">
+                        取消
+                      </button>
+                    </div>
+                  </>
+                ) : (
                 <>
                   <div className="mb-2">
                     <span className="text-[8px] font-black text-gray-500 uppercase">分类</span>
@@ -1704,6 +1805,7 @@ const CapabilityPresetSection: React.FC<{
                     <button onClick={() => setEditingId(null)} className="px-3 py-1.5 rounded-lg bg-[#26262c] text-[9px] font-black uppercase">取消</button>
                   </div>
                 </>
+                )
               ) : (
                 <>
                   <div className="flex gap-3 items-stretch">
@@ -1815,9 +1917,23 @@ const CapabilityPresetSection: React.FC<{
                         <div className="flex flex-wrap gap-1 justify-end shrink-0">
                           <button
                             type="button"
-                            disabled={isBuiltinImageProcess(p)}
+                            disabled={isBuiltinLockedPreset(p)}
                             onClick={() => {
-                              if (isBuiltinImageProcess(p)) return;
+                              if (isBuiltinLockedPreset(p)) return;
+                              if (p.id === 'cut_image') {
+                                setEditingId('cut_image');
+                                setEditLabel(p.label);
+                                setEditCategory('image_process');
+                                setEditEngine('builtin');
+                                setEditEnabled(p.enabled !== false);
+                                setEditInstruction(((p as { instructionFixed?: string }).instructionFixed ?? p.instruction) || '');
+                                setEditCutOverflowPx(
+                                  typeof p.cutOverflowPx === 'number' && Number.isFinite(p.cutOverflowPx)
+                                    ? Math.max(0, Math.min(512, Math.round(p.cutOverflowPx)))
+                                    : 0
+                                );
+                                return;
+                              }
                               setEditingId(p.id);
                               setEditLabel(p.label);
                               setEditCategory(p.category);
@@ -1874,6 +1990,11 @@ const CapabilityPresetSection: React.FC<{
                         {(p.category === 'image_gen' || getEngine(p) === 'gen_image') && (p.imageAspectRatio || p.imageSize) && (
                           <span>
                             {p.imageAspectRatio || '—'} / {p.imageSize || '—'}
+                          </span>
+                        )}
+                        {p.id === 'cut_image' && (p.cutOverflowPx ?? 0) > 0 && (
+                          <span className="text-emerald-400/85" title="识别框四边各扩展的像素">
+                            溢出 {p.cutOverflowPx}px/边
                           </span>
                         )}
                         {presetSourceMap.get(p.id) ? (
