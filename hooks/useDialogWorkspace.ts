@@ -16,6 +16,15 @@ function createDialogSession(): DialogSession {
   };
 }
 
+/** 持久化/合并后可能缺 updatedAt 或为 NaN，会导致 UI 按 24h 分组时两边都进不去 */
+function normalizeDialogSession(s: DialogSession): DialogSession {
+  const now = Date.now();
+  const createdAt = typeof s.createdAt === 'number' && Number.isFinite(s.createdAt) ? s.createdAt : now;
+  let updatedAt = typeof s.updatedAt === 'number' && Number.isFinite(s.updatedAt) ? s.updatedAt : createdAt;
+  if (updatedAt < createdAt) updatedAt = createdAt;
+  return { ...s, createdAt, updatedAt };
+}
+
 const SAVE_DEBOUNCE_MS = 450;
 
 /**
@@ -26,7 +35,8 @@ export function useDialogWorkspace(persistUserId: string | null = null) {
   const [dialogActiveSessionId, setDialogActiveSessionId] = useState<string>('');
   const [dialogTempLibrary, setDialogTempLibrary] = useState<DialogTempItem[]>([]);
   const [dialogTempLibraryFilter, setDialogTempLibraryFilter] = useState<'all' | 'current'>('all');
-  const [dialogOlderCollapsed, setDialogOlderCollapsed] = useState(true);
+  /** 默认展开「更早」，避免会话全落在该区时看起来像「没有会话」 */
+  const [dialogOlderCollapsed, setDialogOlderCollapsed] = useState(false);
   const [dialogArchivedCollapsed, setDialogArchivedCollapsed] = useState(true);
   const [dialogTempPreviewId, setDialogTempPreviewId] = useState<string | null>(null);
   const [dialogTempSelectedIds, setDialogTempSelectedIds] = useState<Set<string>>(new Set());
@@ -141,11 +151,18 @@ export function useDialogWorkspace(persistUserId: string | null = null) {
     }
   }, [dialogTempFiltered, dialogTempSelectedIds]);
 
+  /** 活动会话 id 必须在列表中；否则 activeSession 为空 → 对话区无消息、发送也写不进任何会话 */
   useEffect(() => {
-    if (!dialogActiveSessionId && dialogSessions.length > 0) {
-      setDialogActiveSessionId(dialogSessions[0].id);
+    if (dialogSessions.length === 0) return;
+    const firstId = dialogSessions[0].id;
+    if (!dialogActiveSessionId) {
+      setDialogActiveSessionId(firstId);
+      return;
     }
-  }, [dialogActiveSessionId, dialogSessions]);
+    if (!dialogSessions.some((s) => s.id === dialogActiveSessionId)) {
+      setDialogActiveSessionId(firstId);
+    }
+  }, [dialogSessions, dialogActiveSessionId]);
 
   /** 切换账号时：先落盘旧键，再载入新键 */
   useEffect(() => {
@@ -163,7 +180,7 @@ export function useDialogWorkspace(persistUserId: string | null = null) {
 
     const loaded = loadDialogWorkspaceState(persistUserId);
     if (loaded?.sessions?.length) {
-      setDialogSessions(loaded.sessions);
+      setDialogSessions(loaded.sessions.map(normalizeDialogSession));
       setDialogActiveSessionId(loaded.activeSessionId || loaded.sessions[0]?.id || '');
       setDialogTempLibrary(loaded.tempLibrary || []);
     } else {
@@ -199,7 +216,7 @@ export function useDialogWorkspace(persistUserId: string | null = null) {
         const snap = sessionsRef.current;
         const hydrated = await hydrateDialogSessionsWithR2(snap);
         if (cancelled) return;
-        setDialogSessions((prev) => mergeHydratedDialogSessions(prev, hydrated));
+        setDialogSessions((prev) => mergeHydratedDialogSessions(prev, hydrated).map(normalizeDialogSession));
       })();
     }, 0);
     return () => {

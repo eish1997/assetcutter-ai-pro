@@ -25,6 +25,7 @@ import { useUserUiPrefs } from './hooks/useUserUiPrefs';
 import Waves from './components/ui/Waves';
 import AppIcon from './components/ui/AppIcon';
 import { ProgressivePreviewImage } from './components/ProgressivePreviewImage';
+import { DialogSessionRowBackdrop } from './components/DialogSessionRowBackdrop';
 import { SiteImage } from './components/SiteImage';
 import {
   loadWorkspaceProjects,
@@ -1533,6 +1534,15 @@ const MainApp: React.FC = () => {
   } = useDialogWorkspace(user?.id ?? null);
   const dialogTempFilteredRef = useRef(dialogTempFiltered);
   dialogTempFilteredRef.current = dialogTempFiltered;
+  /** 对话气泡内点开大图：临时库无对应项时用内存数据走与临时库相同的预览层 */
+  const [dialogChatImagePreview, setDialogChatImagePreview] = useState<{
+    data: string;
+    messageId: string;
+    sourceType: DialogTempItem['sourceType'];
+    userPrompt?: string;
+    understoodPrompt?: string;
+    timestamp: number;
+  } | null>(null);
   const DIALOG_BOX_LABELS = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'];
   const dialogEndRef = useRef<HTMLDivElement>(null);
   const [dialogValidationError, setDialogValidationError] = useState<string | null>(null);
@@ -1611,6 +1621,41 @@ const MainApp: React.FC = () => {
     addToLibrary([{ data: item.data, category: 'PREVIEW_STRIP', label: item.label || '临时库', type: 'STRIP' }]);
   };
   const dialogTempSourceTypeLabel = (t: DialogTempItem['sourceType']) => t === 'user_input' ? '用户上传' : t === 'object_crop' ? '识别物体' : '生图';
+
+  const closeDialogImagePreview = useCallback(() => {
+    setDialogTempPreviewId(null);
+    setDialogChatImagePreview(null);
+  }, [setDialogTempPreviewId]);
+
+  const openDialogImagePreviewFromChat = useCallback(
+    (p: {
+      dataUrl: string;
+      sourceMessageId: string;
+      sourceType: DialogTempItem['sourceType'];
+      userPrompt?: string;
+      understoodPrompt?: string;
+      timestamp: number;
+    }) => {
+      const match = dialogTempLibrary.find(
+        (t) => t.sourceMessageId === p.sourceMessageId && t.sourceType === p.sourceType
+      );
+      if (match) {
+        setDialogChatImagePreview(null);
+        setDialogTempPreviewId(match.id);
+        return;
+      }
+      setDialogTempPreviewId(null);
+      setDialogChatImagePreview({
+        data: p.dataUrl,
+        messageId: p.sourceMessageId,
+        sourceType: p.sourceType,
+        userPrompt: p.userPrompt,
+        understoodPrompt: p.understoodPrompt,
+        timestamp: p.timestamp,
+      });
+    },
+    [dialogTempLibrary, setDialogTempPreviewId]
+  );
 
   const [library, setLibrary] = useState<LibraryItem[]>([]);
   const [config] = useState<SystemConfig>(() => {
@@ -2212,7 +2257,7 @@ const MainApp: React.FC = () => {
   }, [dialogTempFiltered, setDialogTempSelectedIds]);
 
   useEffect(() => {
-    if (!dialogTempPreviewId) {
+    if (!dialogTempPreviewId && !dialogChatImagePreview) {
       setDialogTempPreviewScale(1);
       setDialogTempPreviewOffset({ x: 0, y: 0 });
       dialogTempPreviewDragRef.current = null;
@@ -2221,10 +2266,10 @@ const MainApp: React.FC = () => {
       dialogTempPreviewZoomLastScaleRef.current = 1;
       dialogTempPreviewWheelAccumRef.current = 0;
     }
-  }, [dialogTempPreviewId]);
+  }, [dialogTempPreviewId, dialogChatImagePreview]);
 
   useEffect(() => {
-    if (!dialogTempPreviewId) return;
+    if (!dialogTempPreviewId && !dialogChatImagePreview) return;
     const blockContextMenu = (e: MouseEvent) => {
       e.preventDefault();
       e.stopPropagation();
@@ -2234,28 +2279,28 @@ const MainApp: React.FC = () => {
     return () => {
       window.removeEventListener('contextmenu', blockContextMenu, true);
     };
-  }, [dialogTempPreviewId]);
+  }, [dialogTempPreviewId, dialogChatImagePreview]);
 
   /** Esc：document 捕获 + 遮罩 focus，避免焦点在输入框或 CustomDropdown 冒泡拦截时关不掉。 */
   useLayoutEffect(() => {
-    if (!dialogTempPreviewId) return;
+    if (!dialogTempPreviewId && !dialogChatImagePreview) return;
     const onEscCapture = (e: KeyboardEvent) => {
       if (!isImagePreviewEscapeKey(e)) return;
       e.preventDefault();
       e.stopImmediatePropagation();
-      setDialogTempPreviewId(null);
+      closeDialogImagePreview();
     };
     document.addEventListener('keydown', onEscCapture, true);
     return () => document.removeEventListener('keydown', onEscCapture, true);
-  }, [dialogTempPreviewId, setDialogTempPreviewId]);
+  }, [dialogTempPreviewId, dialogChatImagePreview, closeDialogImagePreview]);
 
   useLayoutEffect(() => {
-    if (!dialogTempPreviewId) return;
+    if (!dialogTempPreviewId && !dialogChatImagePreview) return;
     dialogTempPreviewOverlayRef.current?.focus({ preventScroll: true });
-  }, [dialogTempPreviewId]);
+  }, [dialogTempPreviewId, dialogChatImagePreview]);
 
   useEffect(() => {
-    if (!dialogTempPreviewId) return;
+    if (!dialogTempPreviewId && !dialogChatImagePreview) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.code === 'Space') {
         e.preventDefault();
@@ -2276,10 +2321,10 @@ const MainApp: React.FC = () => {
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
     };
-  }, [dialogTempPreviewId]);
+  }, [dialogTempPreviewId, dialogChatImagePreview]);
 
   useEffect(() => {
-    if (!dialogTempPreviewId) return;
+    if (!dialogTempPreviewId && !dialogChatImagePreview) return;
     const onWheel = (e: WheelEvent) => {
       const t = e.target;
       if (t instanceof Element && t.closest('[data-no-temp-preview-wheel]')) {
@@ -2293,6 +2338,7 @@ const MainApp: React.FC = () => {
         e.preventDefault();
         return;
       }
+      if (!dialogTempPreviewId) return;
       const list = dialogTempFilteredRef.current;
       if (list.length <= 1) {
         e.preventDefault();
@@ -2336,7 +2382,7 @@ const MainApp: React.FC = () => {
     };
     window.addEventListener('wheel', onWheel, { passive: false });
     return () => window.removeEventListener('wheel', onWheel);
-  }, [dialogTempPreviewId, setDialogTempPreviewId]);
+  }, [dialogTempPreviewId, dialogChatImagePreview, setDialogTempPreviewId]);
 
   useEffect(() => {
     const onMouseMove = (e: MouseEvent) => {
@@ -3725,15 +3771,21 @@ const MainApp: React.FC = () => {
                     {(() => {
                       const RECENT_MS = 24 * 60 * 60 * 1000;
                       const now = Date.now();
-                      const byLatestUpdated = (a: DialogSession, b: DialogSession) => b.updatedAt - a.updatedAt;
+                      const activityAt = (s: DialogSession) => {
+                        const u = Number(s.updatedAt);
+                        if (Number.isFinite(u)) return u;
+                        const c = Number(s.createdAt);
+                        return Number.isFinite(c) ? c : now;
+                      };
+                      const byLatestUpdated = (a: DialogSession, b: DialogSession) => activityAt(b) - activityAt(a);
                       const recent = dialogSessions
-                        .filter(s => !s.archived && (now - s.updatedAt) < RECENT_MS)
+                        .filter((s) => !s.archived && now - activityAt(s) < RECENT_MS)
                         .sort(byLatestUpdated);
                       const older = dialogSessions
-                        .filter(s => !s.archived && (now - s.updatedAt) >= RECENT_MS)
+                        .filter((s) => !s.archived && now - activityAt(s) >= RECENT_MS)
                         .sort(byLatestUpdated);
                       const archived = dialogSessions
-                        .filter(s => s.archived)
+                        .filter((s) => s.archived)
                         .sort(byLatestUpdated);
                       const renderSession = (s: DialogSession, showArchive: boolean) => {
                         const lastImg = [...s.messages].reverse().find((m) => {
@@ -3742,41 +3794,47 @@ const MainApp: React.FC = () => {
                           return !!(last && dialogVersionHasRenderableImage(last));
                         });
                         const lastVer = lastImg ? dialogVersionsForMessage(lastImg).at(-1) : undefined;
-                        const thumb = lastVer ? getDialogVersionImageDataUrl(lastVer) : undefined;
-                        const thumbPending = !!(lastVer && dialogVersionHasRenderableImage(lastVer) && !thumb);
+                        const hasLastGenBackdrop = !!(lastVer && dialogVersionHasRenderableImage(lastVer));
                         const isActive = s.id === dialogActiveSessionIdResolved;
                         const label = s.title || (s.messages.length === 0 ? '新对话' : `对话${s.messages.length}`);
                         return (
-                          <div key={s.id} className="relative group">
-                            <button
-                              onClick={() => setDialogActiveSessionId(s.id)}
-                              className={`w-full flex items-center gap-3 px-3 py-2 rounded-2xl border transition-all pr-16 ${isActive ? 'bg-[#1a2d4d] border-[#3b6fb8]' : 'bg-[#1c1c22] border-[#2e2e32] hover:bg-[#2e2e36] hover:border-[#3a3a40]'}`}
-                              title={label}
+                          <div key={s.id} className="relative group isolate">
+                            <div
+                              className={`relative w-full overflow-hidden rounded-2xl border transition-colors ${
+                                hasLastGenBackdrop
+                                  ? isActive
+                                    ? 'border-[#3b6fb8]'
+                                    : 'border-[#2e2e32] hover:border-[#3a3a40]'
+                                  : isActive
+                                    ? 'bg-[#1a2d4d] border-[#3b6fb8]'
+                                    : 'bg-[#1c1c22] border-[#2e2e32] hover:bg-[#2e2e36] hover:border-[#3a3a40]'
+                              }`}
                             >
-                              <div className="w-11 h-11 shrink-0 rounded-xl overflow-hidden border border-[#2e2e32] bg-[#1c1c22] flex items-center justify-center">
-                                {thumb ? (
-                                  <ProgressivePreviewImage
-                                    fullSrc={thumb}
-                                    cacheKey={`dialog-sess-thumb:${s.id}`}
-                                    thumbMaxEdge={128}
-                                    className="w-full h-full"
-                                    imgClassName="w-full h-full object-cover"
-                                    alt=""
-                                  />
-                                ) : thumbPending ? (
-                                  <span className="text-[8px] text-gray-500">加载</span>
-                                ) : (
-                                  <span className="text-[10px] text-gray-500">新</span>
-                                )}
-                              </div>
-                              <div className="min-w-0 flex-1 text-left">
-                                <div className="text-[10px] font-black text-white/85 truncate">{label}</div>
-                                <div className="text-[9px] text-gray-500 truncate">
-                                  {s.messages.length} 条 · {new Date(s.updatedAt).toLocaleString()}
-                                </div>
-                              </div>
-                            </button>
-                            <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-0.5">
+                              {hasLastGenBackdrop && lastVer ? (
+                                <DialogSessionRowBackdrop version={lastVer} isActive={isActive} />
+                              ) : null}
+                              <button
+                                type="button"
+                                onClick={() => setDialogActiveSessionId(s.id)}
+                                className={`relative z-[1] w-full text-left px-3 py-2.5 pr-14 rounded-2xl transition-colors ${
+                                  hasLastGenBackdrop ? 'bg-transparent hover:bg-white/[0.06]' : ''
+                                }`}
+                                title={label}
+                              >
+                                <span className="flex items-start gap-2 min-w-0">
+                                  {!hasLastGenBackdrop ? (
+                                    <span className="mt-0.5 shrink-0 w-5 h-5 rounded-lg border border-[#2e2e32] bg-[#141416] flex items-center justify-center text-[9px] text-gray-500">新</span>
+                                  ) : null}
+                                  <span className="min-w-0 flex-1">
+                                    <span className="block text-[10px] font-black text-white truncate [text-shadow:0_1px_2px_rgba(0,0,0,0.9)]">{label}</span>
+                                    <span className="block text-[9px] text-gray-200/90 truncate mt-0.5 [text-shadow:0_1px_1px_rgba(0,0,0,0.85)]">
+                                      {s.messages.length} 条 · {new Date(activityAt(s)).toLocaleString()}
+                                    </span>
+                                  </span>
+                                </span>
+                              </button>
+                            </div>
+                            <div className="absolute right-2 top-1/2 -translate-y-1/2 z-[3] flex items-center gap-0.5">
                               {showArchive && (
                                 <button
                                   onClick={(e) => { e.stopPropagation(); archiveDialogSession(s.id); }}
@@ -3865,25 +3923,53 @@ const MainApp: React.FC = () => {
                     const displayPending = !!(displayVersion && dialogVersionHasRenderableImage(displayVersion) && !displaySrc);
                     return (
                       <div key={msg.id} id={`msg-${msg.id}`} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                        <div className={`max-w-[85%] lg:max-w-[75%] rounded-2xl overflow-hidden ${msg.role === 'user' ? 'bg-[#1e3558] border border-[#4b6a9e]' : 'bg-[#1c1c22] border border-[#2e2e32]'}`}>
+                        <div
+                          className={`max-w-[85%] lg:max-w-[75%] rounded-2xl overflow-visible ${
+                            msg.role === 'user' ? 'bg-[#1e3558] border border-[#4b6a9e]' : 'bg-[#1c1c22] border border-[#2e2e32]'
+                          }`}
+                        >
                           {msg.role === 'user' && (msg.inputImages?.length || msg.imageBase64) && (
-                            <div className="p-2 border-b border-[#2e2e32]">
+                            <div className="p-2 border-b border-[#2e2e32] overflow-hidden rounded-t-2xl">
                               <div className={`grid gap-2 ${msg.inputImages && msg.inputImages.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}>
                                 {(msg.inputImages && msg.inputImages.length > 0 ? msg.inputImages : msg.imageBase64 ? [msg.imageBase64] : []).map((image, imageIndex) => (
-                                  <ProgressivePreviewImage
+                                  <div
                                     key={`${msg.id}-${imageIndex}`}
-                                    fullSrc={image}
-                                    cacheKey={`dialog-user:${msg.id}:${imageIndex}`}
-                                    thumbMaxEdge={384}
-                                    className="relative inline-block max-w-full mx-auto"
-                                    imgClassName="max-h-48 rounded-xl object-contain mx-auto max-w-full"
-                                    alt="上传"
-                                  />
+                                    className="mx-auto w-full max-w-full rounded-xl border border-[#2e2e32] bg-[#141416] p-1 flex justify-center"
+                                  >
+                                    <SiteImage
+                                      src={image}
+                                      className="block h-auto max-h-[min(78dvh,920px)] w-auto max-w-full cursor-zoom-in object-contain rounded-lg"
+                                      alt="上传"
+                                      title="点击查看大图"
+                                      loading="eager"
+                                      fetchPriority="high"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        openDialogImagePreviewFromChat({
+                                          dataUrl: image,
+                                          sourceMessageId: msg.id,
+                                          sourceType: 'user_input',
+                                          userPrompt: msg.text,
+                                          timestamp: msg.timestamp,
+                                        });
+                                      }}
+                                    />
+                                  </div>
                                 ))}
                               </div>
                             </div>
                           )}
-                          <div className="px-4 py-3 text-[11px] leading-relaxed">{msg.text}</div>
+                          <div
+                            className={`px-4 py-3 text-[11px] leading-relaxed whitespace-pre-wrap break-words ${
+                              msg.role === 'user' ? 'text-white' : 'text-gray-100'
+                            }`}
+                          >
+                            {msg.text?.trim()
+                              ? msg.text
+                              : msg.role === 'user' && (msg.inputImages?.length || msg.imageBase64)
+                                ? '（已发送附图，可在上方查看）'
+                                : msg.text}
+                          </div>
                           {dialogAutoGenerateImage &&
                             msg.role === 'assistant' &&
                             msg.understoodPrompt &&
@@ -3929,7 +4015,26 @@ const MainApp: React.FC = () => {
                                   <div className="flex items-center justify-center min-h-[140px] rounded-xl border border-[#2e2e32] bg-[#141416] text-[9px] text-gray-500">图片加载中…</div>
                                 ) : dialogDetectMessageId === msg.id && (displayVersion.detectedBoxes?.length ?? 0) > 0 && displaySrc ? (
                                   <div className="relative inline-block max-w-full">
-                                    <SiteImage src={displaySrc} className="max-w-full rounded-xl border border-[#2e2e32]" alt="生成" loading="eager" />
+                                    <SiteImage
+                                      src={displaySrc}
+                                      className="block h-auto max-h-[min(90dvh,960px)] w-auto max-w-full cursor-zoom-in object-contain rounded-xl border border-[#2e2e32]"
+                                      alt="生成"
+                                      title="点击查看大图"
+                                      loading="eager"
+                                      fetchPriority="high"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        const prevU = idx > 0 && dialogMessages[idx - 1]?.role === 'user' ? dialogMessages[idx - 1] : undefined;
+                                        openDialogImagePreviewFromChat({
+                                          dataUrl: displaySrc,
+                                          sourceMessageId: msg.id,
+                                          sourceType: 'generated',
+                                          userPrompt: prevU?.text,
+                                          understoodPrompt: displayVersion?.understoodPrompt,
+                                          timestamp: displayVersion?.timestamp ?? msg.timestamp,
+                                        });
+                                      }}
+                                    />
                                     <div className="absolute inset-0 pointer-events-none">
                                       {(displayVersion.detectedBoxes ?? []).map((box, i) => (
                                         <div key={box.id} className="absolute border-2 border-blue-500 bg-[#1e40af]" style={{ left: `${box.xmin / 10}%`, top: `${box.ymin / 10}%`, width: `${(box.xmax - box.xmin) / 10}%`, height: `${(box.ymax - box.ymin) / 10}%` }}>
@@ -3939,14 +4044,28 @@ const MainApp: React.FC = () => {
                                     </div>
                                   </div>
                                 ) : displaySrc ? (
-                                  <ProgressivePreviewImage
-                                    fullSrc={displaySrc}
-                                    cacheKey={`dialog-asst:${msg.id}:v${versionIndex}`}
-                                    thumbMaxEdge={1280}
-                                    className="relative inline-block max-w-full"
-                                    imgClassName="max-w-full rounded-xl border border-[#2e2e32]"
-                                    alt="生成"
-                                  />
+                                  <div className="w-full max-w-full rounded-xl border border-[#2e2e32] bg-[#141416] p-1 flex justify-center">
+                                    <SiteImage
+                                      src={displaySrc}
+                                      className="block h-auto max-h-[min(90dvh,960px)] w-auto max-w-full cursor-zoom-in object-contain rounded-lg"
+                                      alt="生成"
+                                      title="点击查看大图"
+                                      loading="eager"
+                                      fetchPriority="high"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        const prevU = idx > 0 && dialogMessages[idx - 1]?.role === 'user' ? dialogMessages[idx - 1] : undefined;
+                                        openDialogImagePreviewFromChat({
+                                          dataUrl: displaySrc,
+                                          sourceMessageId: msg.id,
+                                          sourceType: 'generated',
+                                          userPrompt: prevU?.text,
+                                          understoodPrompt: displayVersion?.understoodPrompt,
+                                          timestamp: displayVersion?.timestamp ?? msg.timestamp,
+                                        });
+                                      }}
+                                    />
+                                  </div>
                                 ) : null}
                               </div>
                               {dialogDetectMessageId === msg.id && (displayVersion.detectedBoxes?.length ?? 0) > 0 && (
@@ -4254,7 +4373,10 @@ const MainApp: React.FC = () => {
                           <div
                             key={item.id}
                             ref={(el) => { dialogTempItemRefs.current[item.id] = el; }}
-                            onClick={() => setDialogTempPreviewId(item.id)}
+                            onClick={() => {
+                              setDialogChatImagePreview(null);
+                              setDialogTempPreviewId(item.id);
+                            }}
                             className={`relative group rounded-xl overflow-hidden border bg-[#1c1c22] aspect-square cursor-pointer ${
                               dialogTempSelectedIds.has(item.id)
                                 ? 'border-blue-500 shadow-[0_0_0_1px_rgba(59,130,246,0.45)]'
@@ -4271,6 +4393,7 @@ const MainApp: React.FC = () => {
                               title="点击查看大图"
                               onClick={(e) => {
                                 e.stopPropagation();
+                                setDialogChatImagePreview(null);
                                 setDialogTempPreviewId(item.id);
                               }}
                             />
@@ -4293,8 +4416,22 @@ const MainApp: React.FC = () => {
                   />
                 )}
               </div>
-              {dialogTempPreviewId && (() => {
-                const item = dialogTempLibrary.find(x => x.id === dialogTempPreviewId);
+              {(dialogTempPreviewId || dialogChatImagePreview) && (() => {
+                const tempItem = dialogTempPreviewId ? dialogTempLibrary.find((x) => x.id === dialogTempPreviewId) : null;
+                const item: DialogTempItem | null =
+                  tempItem ??
+                  (dialogChatImagePreview
+                    ? {
+                        id: `__chat_inline__${dialogChatImagePreview.messageId}`,
+                        data: dialogChatImagePreview.data,
+                        sourceSessionId: dialogActiveSessionIdResolved,
+                        sourceMessageId: dialogChatImagePreview.messageId,
+                        sourceType: dialogChatImagePreview.sourceType,
+                        userPrompt: dialogChatImagePreview.userPrompt,
+                        understoodPrompt: dialogChatImagePreview.understoodPrompt,
+                        timestamp: dialogChatImagePreview.timestamp,
+                      }
+                    : null);
                 if (!item) return null;
                 return (
                   <div
@@ -4308,9 +4445,9 @@ const MainApp: React.FC = () => {
                       if (!isImagePreviewEscapeKey(e)) return;
                       e.preventDefault();
                       e.stopPropagation();
-                      setDialogTempPreviewId(null);
+                      closeDialogImagePreview();
                     }}
-                    onClick={() => setDialogTempPreviewId(null)}
+                    onClick={() => closeDialogImagePreview()}
                     onContextMenuCapture={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
@@ -4379,7 +4516,8 @@ const MainApp: React.FC = () => {
                       />
 
                       <div className="absolute top-4 left-4 z-10 max-w-[min(280px,calc(100vw-6rem))] rounded-xl bg-[#101018]/90 border border-[#2e2e32] px-3 py-2 text-[9px] text-gray-300 pointer-events-none text-left leading-relaxed space-y-1">
-                        <div>滚轮：上一张 / 下一张</div>
+                        <div>对话中点击生成图 / 附图也可打开此预览</div>
+                        <div>滚轮：上一张 / 下一张（与临时库一致；仅从临时库打开时切换）</div>
                         <div>Esc：关闭预览</div>
                         <div>双击：复原缩放与位置</div>
                         <div>左键：缩放</div>
@@ -4388,7 +4526,7 @@ const MainApp: React.FC = () => {
                       </div>
 
                       <div className="absolute right-4 top-4 z-10">
-                        <button type="button" onClick={() => setDialogTempPreviewId(null)} className="px-3 py-2 rounded-xl bg-[#1a1a1e]/95 border border-[#2e2e32] text-[10px] font-black text-white hover:bg-[#2a2a32]">关闭</button>
+                        <button type="button" onClick={() => closeDialogImagePreview()} className="px-3 py-2 rounded-xl bg-[#1a1a1e]/95 border border-[#2e2e32] text-[10px] font-black text-white hover:bg-[#2a2a32]">关闭</button>
                       </div>
 
                       <div
@@ -4418,9 +4556,9 @@ const MainApp: React.FC = () => {
 
                       <div className="absolute right-4 bottom-4 flex flex-wrap items-center justify-end gap-2 max-w-[min(680px,92vw)]" data-no-temp-preview-wheel>
                         {item.sourceMessageId && (
-                          <button onClick={() => { handleDialogTempLocateMessage(item); setDialogTempPreviewId(null); }} className="px-4 py-2 rounded-xl bg-[#1e40af] text-[10px] font-black text-white hover:bg-blue-500 transition-colors">定位消息</button>
+                          <button onClick={() => { handleDialogTempLocateMessage(item); closeDialogImagePreview(); }} className="px-4 py-2 rounded-xl bg-[#1e40af] text-[10px] font-black text-white hover:bg-blue-500 transition-colors">定位消息</button>
                         )}
-                        <button onClick={() => { handleDialogTempAddToInput(item); setDialogTempPreviewId(null); }} className="px-4 py-2 rounded-xl bg-[#15803d] text-[10px] font-black text-white hover:bg-[#22c55e] transition-colors">加入输入框</button>
+                        <button onClick={() => { handleDialogTempAddToInput(item); closeDialogImagePreview(); }} className="px-4 py-2 rounded-xl bg-[#15803d] text-[10px] font-black text-white hover:bg-[#22c55e] transition-colors">加入输入框</button>
                         <button onClick={() => addDialogTempToLibrary(item)} className="px-4 py-2 rounded-xl bg-[#1e40af] text-[10px] font-black text-white hover:bg-blue-500 transition-colors">加入资产库</button>
                         <button
                           type="button"

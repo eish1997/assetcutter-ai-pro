@@ -1,0 +1,3 @@
+# Cloudflare Pages：无匹配静态资源时回退到 SPA（与 vercel.json 中 SPA rewrite 语义一致）
+# 静态文件仍优先匹配；见 https://developers.cloudflare.com/pages/configuration/redirects/
+/*    /index.html   200
