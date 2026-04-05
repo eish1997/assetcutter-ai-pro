@@ -28,6 +28,11 @@ import { ProgressivePreviewImage } from './components/ProgressivePreviewImage';
 import { DialogSessionRowBackdrop } from './components/DialogSessionRowBackdrop';
 import { SiteImage } from './components/SiteImage';
 import {
+  getLazyImagePreviewViewer,
+  PreviewViewerFallback,
+  previewPolicyForMode,
+} from './components/preview';
+import {
   loadWorkspaceProjects,
   saveWorkspaceProjects,
   createWorkspaceProject,
@@ -88,6 +93,9 @@ function readWorkspaceAutoSyncIntervalMs(): number {
   return Math.min(3600_000, Math.max(30_000, Math.floor(n)));
 }
 const WORKSPACE_AUTO_SYNC_INTERVAL_MS = readWorkspaceAutoSyncIntervalMs();
+
+/** 对话大图预览全景模式：与工作区 ImagePreviewOverlay 同 registry chunk */
+const LazyDialogTempEquirectViewer = getLazyImagePreviewViewer('image.equirect');
 
 function formatTimestampText(ts: number | null): string {
   if (!ts) return '未同步';
@@ -1569,6 +1577,7 @@ const MainApp: React.FC = () => {
   const dialogTempMarqueeActiveRef = useRef(false);
   const [dialogTempMarqueeRect, setDialogTempMarqueeRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
   const [dialogTempPreviewScale, setDialogTempPreviewScale] = useState(1);
+  const [dialogTempPreviewLayout, setDialogTempPreviewLayout] = useState<'flat' | 'pano'>('flat');
   const dialogTempPreviewDragRef = useRef<{ startX: number; startY: number; startScale: number } | null>(null);
   const [dialogTempPreviewOffset, setDialogTempPreviewOffset] = useState({ x: 0, y: 0 });
   const dialogTempPreviewPanRef = useRef<{ startX: number; startY: number; startOffsetX: number; startOffsetY: number } | null>(null);
@@ -2257,6 +2266,7 @@ const MainApp: React.FC = () => {
   }, [dialogTempFiltered, setDialogTempSelectedIds]);
 
   useEffect(() => {
+    setDialogTempPreviewLayout('flat');
     if (!dialogTempPreviewId && !dialogChatImagePreview) {
       setDialogTempPreviewScale(1);
       setDialogTempPreviewOffset({ x: 0, y: 0 });
@@ -2326,6 +2336,9 @@ const MainApp: React.FC = () => {
   useEffect(() => {
     if (!dialogTempPreviewId && !dialogChatImagePreview) return;
     const onWheel = (e: WheelEvent) => {
+      const viewerCapturesWheel =
+        dialogTempPreviewLayout === 'pano' && previewPolicyForMode('image.equirect').captureGlobalWheel;
+      if (viewerCapturesWheel) return;
       const t = e.target;
       if (t instanceof Element && t.closest('[data-no-temp-preview-wheel]')) {
         const scrollEl = t.closest('[data-dialog-temp-preview-scroll]') as HTMLElement | null;
@@ -2382,7 +2395,7 @@ const MainApp: React.FC = () => {
     };
     window.addEventListener('wheel', onWheel, { passive: false });
     return () => window.removeEventListener('wheel', onWheel);
-  }, [dialogTempPreviewId, dialogChatImagePreview, setDialogTempPreviewId]);
+  }, [dialogTempPreviewId, dialogChatImagePreview, dialogTempPreviewLayout, setDialogTempPreviewId]);
 
   useEffect(() => {
     const onMouseMove = (e: MouseEvent) => {
@@ -4461,71 +4474,125 @@ const MainApp: React.FC = () => {
                         e.stopPropagation();
                       }}
                     >
-                      <img
-                        src={item.data}
-                        className="absolute left-1/2 top-1/2 max-w-[92vw] max-h-[88vh] object-contain rounded-xl shadow-2xl select-none cursor-zoom-in"
-                        alt=""
-                        draggable={false}
-                        onContextMenu={(e) => e.preventDefault()}
-                        onDoubleClick={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          setDialogTempPreviewScale(1);
-                          setDialogTempPreviewOffset({ x: 0, y: 0 });
-                          dialogTempPreviewDragRef.current = null;
-                          dialogTempPreviewPanRef.current = null;
-                          dialogTempPreviewZoomPivotRef.current = null;
-                          dialogTempPreviewZoomLastScaleRef.current = 1;
-                        }}
-                        ref={dialogTempPreviewImgRef}
-                        onMouseDown={(e) => {
-                          if (e.button !== 0 && e.button !== 2) return;
-                          e.preventDefault();
-                          e.stopPropagation();
-                          if (e.button === 0) {
-                            const useLeftPan = e.shiftKey || dialogTempPreviewSpacePressedRef.current;
-                            if (useLeftPan) {
-                              dialogTempPreviewPanRef.current = {
+                      {dialogTempPreviewLayout === 'pano' && LazyDialogTempEquirectViewer ? (
+                        <div
+                          className="absolute inset-0 z-[5] min-h-[200px]"
+                          onWheel={(e) => e.stopPropagation()}
+                        >
+                          <Suspense fallback={<PreviewViewerFallback label="全景模块加载中…" />}>
+                            <LazyDialogTempEquirectViewer
+                              imageSrc={item.data}
+                              className="h-full w-full rounded-none border-0"
+                            />
+                          </Suspense>
+                        </div>
+                      ) : null}
+
+                      {dialogTempPreviewLayout === 'flat' ? (
+                        <img
+                          src={item.data}
+                          className="absolute left-1/2 top-1/2 max-w-[92vw] max-h-[88vh] object-contain rounded-xl shadow-2xl select-none cursor-zoom-in"
+                          alt=""
+                          draggable={false}
+                          onContextMenu={(e) => e.preventDefault()}
+                          onDoubleClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setDialogTempPreviewScale(1);
+                            setDialogTempPreviewOffset({ x: 0, y: 0 });
+                            dialogTempPreviewDragRef.current = null;
+                            dialogTempPreviewPanRef.current = null;
+                            dialogTempPreviewZoomPivotRef.current = null;
+                            dialogTempPreviewZoomLastScaleRef.current = 1;
+                          }}
+                          ref={dialogTempPreviewImgRef}
+                          onMouseDown={(e) => {
+                            if (e.button !== 0 && e.button !== 2) return;
+                            e.preventDefault();
+                            e.stopPropagation();
+                            if (e.button === 0) {
+                              const useLeftPan = e.shiftKey || dialogTempPreviewSpacePressedRef.current;
+                              if (useLeftPan) {
+                                dialogTempPreviewPanRef.current = {
+                                  startX: e.clientX,
+                                  startY: e.clientY,
+                                  startOffsetX: dialogTempPreviewOffset.x,
+                                  startOffsetY: dialogTempPreviewOffset.y,
+                                };
+                                return;
+                              }
+                              dialogTempPreviewZoomPivotRef.current = { x: e.clientX, y: e.clientY };
+                              dialogTempPreviewZoomLastScaleRef.current = dialogTempPreviewScale;
+                              dialogTempPreviewDragRef.current = {
                                 startX: e.clientX,
                                 startY: e.clientY,
-                                startOffsetX: dialogTempPreviewOffset.x,
-                                startOffsetY: dialogTempPreviewOffset.y,
+                                startScale: dialogTempPreviewScale,
                               };
                               return;
                             }
-                            dialogTempPreviewZoomPivotRef.current = { x: e.clientX, y: e.clientY };
-                            dialogTempPreviewZoomLastScaleRef.current = dialogTempPreviewScale;
-                            dialogTempPreviewDragRef.current = {
+                            dialogTempPreviewPanRef.current = {
                               startX: e.clientX,
                               startY: e.clientY,
-                              startScale: dialogTempPreviewScale,
+                              startOffsetX: dialogTempPreviewOffset.x,
+                              startOffsetY: dialogTempPreviewOffset.y,
                             };
-                            return;
-                          }
-                          dialogTempPreviewPanRef.current = {
-                            startX: e.clientX,
-                            startY: e.clientY,
-                            startOffsetX: dialogTempPreviewOffset.x,
-                            startOffsetY: dialogTempPreviewOffset.y,
-                          };
-                        }}
-                        style={{
-                          transform: `translate(-50%, -50%) translate(${dialogTempPreviewOffset.x}px, ${dialogTempPreviewOffset.y}px) scale(${dialogTempPreviewScale})`,
-                          transformOrigin: 'center center',
-                        }}
-                      />
+                          }}
+                          style={{
+                            transform: `translate(-50%, -50%) translate(${dialogTempPreviewOffset.x}px, ${dialogTempPreviewOffset.y}px) scale(${dialogTempPreviewScale})`,
+                            transformOrigin: 'center center',
+                          }}
+                        />
+                      ) : null}
 
-                      <div className="absolute top-4 left-4 z-10 max-w-[min(280px,calc(100vw-6rem))] rounded-xl bg-[#101018]/90 border border-[#2e2e32] px-3 py-2 text-[9px] text-gray-300 pointer-events-none text-left leading-relaxed space-y-1">
-                        <div>对话中点击生成图 / 附图也可打开此预览</div>
-                        <div>滚轮：上一张 / 下一张（与临时库一致；仅从临时库打开时切换）</div>
-                        <div>Esc：关闭预览</div>
-                        <div>双击：复原缩放与位置</div>
-                        <div>左键：缩放</div>
-                        <div>空格+左键 / Shift+左键 / 右键：平移画布</div>
-                        <div className="text-gray-500 pt-0.5 border-t border-white/10">当前缩放 {Math.round(dialogTempPreviewScale * 100)}%</div>
+                      <div className="absolute top-4 left-4 z-10 max-w-[min(300px,calc(100vw-6rem))] rounded-xl bg-[#101018]/90 border border-[#2e2e32] px-3 py-2 text-[9px] text-gray-300 pointer-events-none text-left leading-relaxed space-y-1">
+                        {dialogTempPreviewLayout === 'pano' ? (
+                          <>
+                            <div>拖拽：旋转视角（360° 全景）</div>
+                            <div>滚轮：调整视野宽窄</div>
+                            <div>切回「平面」后可滚轮切图 / 缩放平移</div>
+                            <div>Esc：关闭预览</div>
+                          </>
+                        ) : (
+                          <>
+                            <div>对话中点击生成图 / 附图也可打开此预览</div>
+                            <div>滚轮：上一张 / 下一张（与临时库一致；仅从临时库打开时切换）</div>
+                            <div>Esc：关闭预览</div>
+                            <div>双击：复原缩放与位置</div>
+                            <div>左键：缩放</div>
+                            <div>空格+左键 / Shift+左键 / 右键：平移画布</div>
+                            <div className="text-gray-500 pt-0.5 border-t border-white/10">当前缩放 {Math.round(dialogTempPreviewScale * 100)}%</div>
+                          </>
+                        )}
                       </div>
 
-                      <div className="absolute right-4 top-4 z-10">
+                      <div className="absolute right-4 top-4 z-10 flex items-center gap-2">
+                        <div
+                          className="flex rounded-xl border border-[#2e2e32] overflow-hidden"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => setDialogTempPreviewLayout('flat')}
+                            className={`px-3 py-2 text-[10px] font-black uppercase transition-colors ${
+                              dialogTempPreviewLayout === 'flat'
+                                ? 'bg-blue-600 text-white'
+                                : 'bg-[#1a1a1e]/95 text-gray-300 hover:bg-[#2a2a32]'
+                            }`}
+                          >
+                            平面
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setDialogTempPreviewLayout('pano')}
+                            className={`px-3 py-2 text-[10px] font-black uppercase transition-colors border-l border-[#2e2e32] ${
+                              dialogTempPreviewLayout === 'pano'
+                                ? 'bg-blue-600 text-white'
+                                : 'bg-[#1a1a1e]/95 text-gray-300 hover:bg-[#2a2a32]'
+                            }`}
+                          >
+                            全景
+                          </button>
+                        </div>
                         <button type="button" onClick={() => closeDialogImagePreview()} className="px-3 py-2 rounded-xl bg-[#1a1a1e]/95 border border-[#2e2e32] text-[10px] font-black text-white hover:bg-[#2a2a32]">关闭</button>
                       </div>
 
