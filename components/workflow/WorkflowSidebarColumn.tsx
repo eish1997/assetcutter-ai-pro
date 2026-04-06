@@ -7,7 +7,6 @@ import React, {
 import { getRandomGroupCodeName } from '../../data/groupCodeNames';
 import { attachInitialVgpToNewAsset } from '../../services/vgp/vgpStore';
 import type { CustomAppModule, CapabilitySet, WorkflowAsset } from '../../types';
-import { WorkflowPlannerBar } from '../WorkflowPlannerBar';
 import { dragTransferHasPlainText } from './workflowSectionHelpers';
 import { SET_ACTION_PREFIX } from './workflowSectionUiConstants';
 import { uuid } from './workflowIds';
@@ -22,9 +21,6 @@ export type WorkflowSidebarColumnProps = {
   variant?: 'dock' | 'splitLeft';
   actionModules: CustomAppModule[];
   capabilitySets: CapabilitySet[];
-  plannerTargetAssetId: string | null;
-  onPlannerAddToQueue: (presetId: string) => void;
-  onLog?: (level: 'info' | 'warn' | 'error', message: string, detail?: string) => void;
   dragOverAction: string | null;
   setDragOverAction: Dispatch<SetStateAction<string | null>>;
   draggingAssetIds: string[] | null;
@@ -79,9 +75,6 @@ export function WorkflowSidebarColumn({
   variant = 'dock',
   actionModules,
   capabilitySets,
-  plannerTargetAssetId,
-  onPlannerAddToQueue,
-  onLog,
   dragOverAction,
   setDragOverAction,
   draggingAssetIds,
@@ -137,13 +130,6 @@ export function WorkflowSidebarColumn({
             : 'w-80 shrink-0 min-h-0 flex-1 flex flex-col gap-3 overflow-y-auto no-scrollbar'
       }
     >
-          <WorkflowPlannerBar
-            actionModules={actionModules}
-            selectedAssetId={plannerTargetAssetId}
-            onAddToQueue={onPlannerAddToQueue}
-            onLog={onLog}
-          />
-
           <div className="grid grid-cols-5 gap-2">
           <div
             onDragOver={(e) => {

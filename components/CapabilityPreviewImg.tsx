@@ -7,6 +7,7 @@ type Props = {
   className?: string;
   style?: React.CSSProperties;
   onClick?: React.MouseEventHandler<HTMLImageElement>;
+  onIntrinsicSize?: (naturalWidth: number, naturalHeight: number) => void;
   /** 全部候选加载失败时展示 */
   fallback?: React.ReactNode;
 };
@@ -15,7 +16,7 @@ type Props = {
  * 能力商店等场景预览图：行为与全站 `SiteImage` 一致（同源多候选 URL 重试）。
  */
 export const CapabilityPreviewImg = forwardRef<HTMLImageElement, Props>(function CapabilityPreviewImg(
-  { src, alt = '', className, style, onClick, fallback },
+  { src, alt = '', className, style, onClick, onIntrinsicSize, fallback },
   ref
 ) {
   if (!src.trim()) {
@@ -30,6 +31,7 @@ export const CapabilityPreviewImg = forwardRef<HTMLImageElement, Props>(function
       className={className}
       style={style}
       onClick={onClick}
+      onIntrinsicSize={onIntrinsicSize}
       fallback={fallback}
       loading="lazy"
     />

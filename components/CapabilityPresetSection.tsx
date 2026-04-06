@@ -13,6 +13,7 @@ import { loadInstalledPacks, loadPackHistory } from '../services/storePackHistor
 import { useStoreCatalog } from '../services/storeCatalogHook';
 import { publishPresetToUserR2Catalog } from '../services/capabilityPresetR2Publish';
 import { resolveCapabilityPreviewSrc } from '../services/capabilityPreviewUrl';
+import { mergeCardAspectFromIntrinsic } from './workflow/workflowCardAspect';
 import CapabilitySetCanvas from './CapabilitySetCanvas';
 import { CapabilityPreviewImg } from './CapabilityPreviewImg';
 import { CustomDropdown, DROPDOWN_TRIGGER_COMPACT } from './ui/CustomDropdown';
@@ -33,7 +34,7 @@ const CapabilityPresetSection: React.FC<{
   onLog?: (level: 'info' | 'warn' | 'error', message: string, detail?: string) => void;
   embeddedInWorkflow?: boolean;
   canUploadToR2?: boolean;
-  /** 工作区侧栏：挂到「仅卡片区域」的滚动容器，与顶部预览条同级，避免预览条占用滚动视口导致定位被裁切 */
+  /** 工作区侧栏：挂到「仅卡片区域」的滚动容器，供外层接管滚动行为 */
   scrollContainerRef?: React.Ref<HTMLDivElement>;
 }> = ({ presets, onUpdate, sets = [], onUpdateSets, onRunTest, onLog, embeddedInWorkflow = false, canUploadToR2 = false, scrollContainerRef }) => {
   const [viewMode, setViewMode] = useState<ViewMode>('presets');
@@ -89,12 +90,15 @@ const CapabilityPresetSection: React.FC<{
   const [runtimePreviewImage, setRuntimePreviewImage] = useState<Record<string, string>>({});
   const [runtimePreviewThumbImage, setRuntimePreviewThumbImage] = useState<Record<string, string>>({});
   const [previewSplitRatio, setPreviewSplitRatio] = useState<Record<string, number>>({});
+  const [cardAspectByPresetId, setCardAspectByPresetId] = useState<Record<string, number>>({});
   const fileInputRef = useRef<Record<string, HTMLInputElement | null>>({});
   const [newGenerate3D, setNewGenerate3D] = useState<Generate3DPreset>({ ...DEFAULT_GENERATE_3D });
   const [editGenerate3D, setEditGenerate3D] = useState<Generate3DPreset>({ ...DEFAULT_GENERATE_3D });
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
   const [lightboxCompare, setLightboxCompare] = useState<{ original: string; generated: string } | null>(null);
   const [lightboxSplitRatio, setLightboxSplitRatio] = useState(0.5);
+  const [detailPresetId, setDetailPresetId] = useState<string | null>(null);
+  const [detailEditMode, setDetailEditMode] = useState(false);
   useEffect(() => {
     if (!lightboxImage && !lightboxCompare) return;
     const onKey = (e: KeyboardEvent) => {
@@ -241,35 +245,6 @@ const CapabilityPresetSection: React.FC<{
     if (typeof window === 'undefined') return;
     window.dispatchEvent(new CustomEvent('ac:capability-preset-view-mode-changed', { detail: { mode: viewMode } }));
   }, [viewMode]);
-
-  /** 仅调整同一 category 内顺序，保持其它分类条目在全局数组中的位置关系 */
-  const reorderPresetsInCategory = useCallback(
-    (category: CapabilityCategory, fromIndex: number, toIndex: number) => {
-      if (fromIndex === toIndex) return;
-      const catItems = presets.filter((p) => p.category === category);
-      if (fromIndex < 0 || toIndex < 0 || fromIndex >= catItems.length || toIndex >= catItems.length) return;
-      const nextCat = [...catItems];
-      const [moved] = nextCat.splice(fromIndex, 1);
-      nextCat.splice(toIndex, 0, moved);
-      let i = 0;
-      update(presets.map((p) => (p.category === category ? nextCat[i++]! : p)));
-    },
-    [presets, update]
-  );
-
-  const reorderSetsAt = useCallback(
-    (fromIndex: number, toIndex: number) => {
-      if (fromIndex === toIndex) return;
-      const next = [...sets];
-      const [m] = next.splice(fromIndex, 1);
-      next.splice(toIndex, 0, m);
-      onUpdateSets?.(next);
-    },
-    [sets, onUpdateSets]
-  );
-
-  /** 预览条拖拽后抑制一次误触「定位」 */
-  const suppressStripClickRef = useRef(false);
 
   const saveEdit = () => {
     if (!editingId) return;
@@ -662,6 +637,9 @@ const CapabilityPresetSection: React.FC<{
       null
     );
   };
+  const onPresetCardIntrinsicSize = useCallback((presetId: string, w: number, h: number) => {
+    setCardAspectByPresetId((prev) => mergeCardAspectFromIntrinsic(prev, presetId, w, h) ?? prev);
+  }, []);
   const openLightboxPreview = (p: CustomAppModule) => {
     const original = getOriginalPreviewSrc(p) || getOriginalPreviewThumbSrc(p);
     const generated = getGeneratedPreviewSrc(p) || getGeneratedPreviewThumbSrc(p);
@@ -679,6 +657,47 @@ const CapabilityPresetSection: React.FC<{
     if (!src) return;
     setLightboxCompare(null);
     setLightboxImage(src);
+  };
+  const openPresetDetail = (p: CustomAppModule) => {
+    setDetailPresetId(p.id);
+    setDetailEditMode(false);
+    setEditingId(null);
+  };
+  const detailPreset = detailPresetId ? presets.find((x) => x.id === detailPresetId) ?? null : null;
+  const beginDetailEdit = (p: CustomAppModule) => {
+    if (isBuiltinLockedPreset(p)) return;
+    if (p.id === 'cut_image') {
+      setEditingId('cut_image');
+      setEditLabel(p.label);
+      setEditCategory('image_process');
+      setEditEngine('builtin');
+      setEditEnabled(p.enabled !== false);
+      setEditInstruction(((p as { instructionFixed?: string }).instructionFixed ?? p.instruction) || '');
+      setEditCutOverflowPx(
+        typeof p.cutOverflowPx === 'number' && Number.isFinite(p.cutOverflowPx)
+          ? Math.max(0, Math.min(512, Math.round(p.cutOverflowPx)))
+          : 0
+      );
+      setDetailEditMode(true);
+      return;
+    }
+    setEditingId(p.id);
+    setEditLabel(p.label);
+    setEditCategory(p.category);
+    setEditEngine(getEngine(p));
+    setEditEnabled(p.enabled !== false);
+    setEditImageGear(getGear(p));
+    setEditImageAspectRatio(p.imageAspectRatio ?? '');
+    setEditImageSize(p.imageSize ?? '');
+    setEditInstruction(((p as { instructionFixed?: string }).instructionFixed ?? p.instruction) || '');
+    setEditSkipUnderstand(p.skipUnderstand === true);
+    setEditGenerate3D(p.category === 'generate_3d' && p.generate3D ? { ...p.generate3D } : { ...DEFAULT_GENERATE_3D });
+    setDetailEditMode(true);
+  };
+  const saveDetailEdit = () => {
+    if (!editingId) return;
+    saveEdit();
+    setDetailEditMode(false);
   };
 
   const uploadPresetToR2 = async (p: CustomAppModule, mode: 'preview' | 'preset') => {
@@ -825,246 +844,6 @@ const CapabilityPresetSection: React.FC<{
     return presets.filter((p) => p.category !== 'image_process');
   }, [presets, viewMode]);
 
-  const STRIP_DRAG_MIME = 'application/x-ac-cap-strip';
-
-  const onStripPresetContextMenu = useCallback(
-    (e: React.MouseEvent, presetId: string) => {
-      e.preventDefault();
-      update(
-        presets.map((p) => {
-          if (p.id !== presetId) return p;
-          const cur = p.enabled !== false;
-          return { ...p, enabled: !cur };
-        })
-      );
-    },
-    [presets, update]
-  );
-
-  const presetStrip = (
-    <div className="shrink-0 flex flex-col gap-2 p-3 rounded-xl border border-[#2e2e32] bg-[#141416]/95 backdrop-blur supports-[backdrop-filter]:bg-[#141416]/85">
-      <p className="text-[8px] text-gray-500 leading-snug">
-        左键定位 · 拖拽同组排序 · 右键启用/禁用
-      </p>
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-[9px] font-black text-blue-400/90 uppercase mr-1 shrink-0">基础能力</span>
-        {presets.filter((p) => p.category === 'image_gen').map((p) => (
-          <button
-            key={p.id}
-            type="button"
-            draggable
-            onDragStart={(e) => {
-              e.dataTransfer.setData(STRIP_DRAG_MIME, JSON.stringify({ kind: 'preset', category: 'image_gen', id: p.id }));
-              e.dataTransfer.effectAllowed = 'move';
-            }}
-            onDragEnd={() => {
-              suppressStripClickRef.current = true;
-              window.setTimeout(() => {
-                suppressStripClickRef.current = false;
-              }, 0);
-            }}
-            onDragOver={(e) => {
-              e.preventDefault();
-              e.dataTransfer.dropEffect = 'move';
-            }}
-            onDrop={(e) => {
-              e.preventDefault();
-              const raw = e.dataTransfer.getData(STRIP_DRAG_MIME);
-              if (!raw) return;
-              try {
-                const d = JSON.parse(raw) as { kind?: string; category?: string; id?: string };
-                if (d.kind !== 'preset' || d.category !== 'image_gen' || !d.id) return;
-                const catItems = presets.filter((x) => x.category === 'image_gen');
-                const from = catItems.findIndex((x) => x.id === d.id);
-                const to = catItems.findIndex((x) => x.id === p.id);
-                if (from < 0 || to < 0) return;
-                reorderPresetsInCategory('image_gen', from, to);
-              } catch {
-                /* ignore */
-              }
-            }}
-            onContextMenu={(e) => onStripPresetContextMenu(e, p.id)}
-            onClick={() => {
-              if (suppressStripClickRef.current) return;
-              setViewMode('presets');
-              setPendingScrollTarget({ kind: 'preset', id: p.id });
-            }}
-            title="左键定位 · 拖拽排序 · 右键启用/禁用"
-            className={`px-3 py-1.5 rounded-lg border text-[10px] font-semibold bg-[#1e3558] border-[#3b6fb8] text-blue-200/90 hover:bg-[#305a90] ${
-              p.enabled === false ? 'opacity-45 saturate-50' : ''
-            }`}
-          >
-            {p.label}
-          </button>
-        ))}
-        {presets.filter((p) => p.category === 'image_gen').length === 0 && (
-          <span className="text-[9px] text-gray-500">暂无</span>
-        )}
-      </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-[9px] font-black text-blue-300/90 uppercase mr-1 shrink-0">变体</span>
-        {presets.filter((p) => p.category === 'generate_3d').map((p) => (
-          <button
-            key={p.id}
-            type="button"
-            draggable
-            onDragStart={(e) => {
-              e.dataTransfer.setData(STRIP_DRAG_MIME, JSON.stringify({ kind: 'preset', category: 'generate_3d', id: p.id }));
-              e.dataTransfer.effectAllowed = 'move';
-            }}
-            onDragEnd={() => {
-              suppressStripClickRef.current = true;
-              window.setTimeout(() => {
-                suppressStripClickRef.current = false;
-              }, 0);
-            }}
-            onDragOver={(e) => {
-              e.preventDefault();
-              e.dataTransfer.dropEffect = 'move';
-            }}
-            onDrop={(e) => {
-              e.preventDefault();
-              const raw = e.dataTransfer.getData(STRIP_DRAG_MIME);
-              if (!raw) return;
-              try {
-                const d = JSON.parse(raw) as { kind?: string; category?: string; id?: string };
-                if (d.kind !== 'preset' || d.category !== 'generate_3d' || !d.id) return;
-                const catItems = presets.filter((x) => x.category === 'generate_3d');
-                const from = catItems.findIndex((x) => x.id === d.id);
-                const to = catItems.findIndex((x) => x.id === p.id);
-                if (from < 0 || to < 0) return;
-                reorderPresetsInCategory('generate_3d', from, to);
-              } catch {
-                /* ignore */
-              }
-            }}
-            onContextMenu={(e) => onStripPresetContextMenu(e, p.id)}
-            onClick={() => {
-              if (suppressStripClickRef.current) return;
-              setViewMode('presets');
-              setPendingScrollTarget({ kind: 'preset', id: p.id });
-            }}
-            title="左键定位 · 拖拽排序 · 右键启用/禁用"
-            className={`px-3 py-1.5 rounded-lg border text-[10px] font-semibold bg-[#1e3558] border-[#3b6fb8] text-blue-200/90 hover:bg-[#305a90] ${
-              p.enabled === false ? 'opacity-45 saturate-50' : ''
-            }`}
-          >
-            {p.label}
-          </button>
-        ))}
-        {presets.filter((p) => p.category === 'generate_3d').length === 0 && (
-          <span className="text-[9px] text-gray-500">暂无</span>
-        )}
-      </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-[9px] font-black text-cyan-400/90 uppercase mr-1 shrink-0">图像处理</span>
-        {presets.filter((p) => p.category === 'image_process').map((p) => (
-          <button
-            key={p.id}
-            type="button"
-            draggable={!isBuiltinImageProcess(p)}
-            onDragStart={(e) => {
-              if (isBuiltinImageProcess(p)) return;
-              e.dataTransfer.setData(STRIP_DRAG_MIME, JSON.stringify({ kind: 'preset', category: 'image_process', id: p.id }));
-              e.dataTransfer.effectAllowed = 'move';
-            }}
-            onDragEnd={() => {
-              suppressStripClickRef.current = true;
-              window.setTimeout(() => {
-                suppressStripClickRef.current = false;
-              }, 0);
-            }}
-            onDragOver={(e) => {
-              e.preventDefault();
-              e.dataTransfer.dropEffect = 'move';
-            }}
-            onDrop={(e) => {
-              e.preventDefault();
-              if (isBuiltinImageProcess(p)) return;
-              const raw = e.dataTransfer.getData(STRIP_DRAG_MIME);
-              if (!raw) return;
-              try {
-                const d = JSON.parse(raw) as { kind?: string; category?: string; id?: string };
-                if (d.kind !== 'preset' || d.category !== 'image_process' || !d.id) return;
-                const catItems = presets.filter((x) => x.category === 'image_process');
-                const from = catItems.findIndex((x) => x.id === d.id);
-                const to = catItems.findIndex((x) => x.id === p.id);
-                if (from < 0 || to < 0) return;
-                reorderPresetsInCategory('image_process', from, to);
-              } catch {
-                /* ignore */
-              }
-            }}
-            onContextMenu={(e) => onStripPresetContextMenu(e, p.id)}
-            onClick={() => {
-              if (suppressStripClickRef.current) return;
-              setViewMode('image_process');
-              setPendingScrollTarget({ kind: 'preset', id: p.id });
-            }}
-            title={isBuiltinImageProcess(p) ? '左键定位 · 右键启用/禁用（内置顺序固定）' : '左键定位 · 拖拽排序 · 右键启用/禁用'}
-            className={`px-3 py-1.5 rounded-lg border text-[10px] font-semibold bg-[#123447] border-[#2c78a0] text-cyan-200/90 hover:bg-[#1d4f6a] ${
-              p.enabled === false ? 'opacity-45 saturate-50' : ''
-            } ${isBuiltinImageProcess(p) ? 'cursor-default' : ''}`}
-          >
-            {p.label}
-          </button>
-        ))}
-        {presets.filter((p) => p.category === 'image_process').length === 0 && (
-          <span className="text-[9px] text-gray-500">暂无</span>
-        )}
-      </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-[9px] font-black text-amber-400/90 uppercase mr-1 shrink-0">复合能力</span>
-        {sets.map((s) => (
-          <button
-            key={s.id}
-            type="button"
-            draggable
-            onDragStart={(e) => {
-              e.dataTransfer.setData(STRIP_DRAG_MIME, JSON.stringify({ kind: 'set', id: s.id }));
-              e.dataTransfer.effectAllowed = 'move';
-            }}
-            onDragEnd={() => {
-              suppressStripClickRef.current = true;
-              window.setTimeout(() => {
-                suppressStripClickRef.current = false;
-              }, 0);
-            }}
-            onDragOver={(e) => {
-              e.preventDefault();
-              e.dataTransfer.dropEffect = 'move';
-            }}
-            onDrop={(e) => {
-              e.preventDefault();
-              const raw = e.dataTransfer.getData(STRIP_DRAG_MIME);
-              if (!raw) return;
-              try {
-                const d = JSON.parse(raw) as { kind?: string; id?: string };
-                if (d.kind !== 'set' || !d.id) return;
-                const from = sets.findIndex((x) => x.id === d.id);
-                const to = sets.findIndex((x) => x.id === s.id);
-                if (from < 0 || to < 0) return;
-                reorderSetsAt(from, to);
-              } catch {
-                /* ignore */
-              }
-            }}
-            onClick={() => {
-              if (suppressStripClickRef.current) return;
-              setViewMode('sets');
-              setPendingScrollTarget({ kind: 'set', id: s.id });
-            }}
-            title="左键定位 · 拖拽排序"
-            className="px-3 py-1.5 rounded-lg bg-[#3d2a10] border border-[#d97706] text-[10px] font-semibold text-amber-200/90 hover:bg-[#5a3f1a]"
-          >
-            {s.label}
-          </button>
-        ))}
-        {sets.length === 0 && <span className="text-[9px] text-gray-500">暂无</span>}
-      </div>
-    </div>
-  );
-
   useEffect(() => {
     if (!pendingScrollTarget) return;
     const target = pendingScrollTarget;
@@ -1137,7 +916,6 @@ const CapabilityPresetSection: React.FC<{
     <div
       className={`flex flex-col gap-3 animate-in fade-in w-full min-h-0 ${embeddedInWorkflow ? 'h-full flex-1 overflow-hidden' : ''}`}
     >
-      <div className="w-full max-w-4xl shrink-0">{presetStrip}</div>
       <div
         ref={(el) => {
           presetContentScrollRef.current = el;
@@ -1523,574 +1301,472 @@ const CapabilityPresetSection: React.FC<{
           </div>
         ) : (
           <>
-          {visiblePresets.map((p) => (
+            <div className="columns-1 sm:columns-2 lg:columns-3 xl:columns-4 [column-gap:0.75rem] [column-fill:_balance]">
+              {visiblePresets.map((p) => {
+                const src = getCardPreviewSrc(p);
+                const categoryLabel = CAPABILITY_CATEGORIES.find((c) => c.id === p.category)?.label ?? p.category;
+                const iconName = p.category === 'generate_3d' ? 'cube' : p.category === 'image_process' ? 'camera' : 'image';
+                return (
+                  <button
+                    key={p.id}
+                    type="button"
+                    ref={(el) => {
+                      presetCardRefs.current[p.id] = el;
+                    }}
+                    onClick={() => openPresetDetail(p)}
+                    onMouseMove={(e) => {
+                      if (!getGeneratedPreviewThumbSrc(p) || !getOriginalPreviewThumbSrc(p)) return;
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      if (!rect.width) return;
+                      const ratio = (e.clientX - rect.left) / rect.width;
+                      const clamped = Math.max(0.1, Math.min(0.9, ratio));
+                      setPreviewSplitRatio((prev) => ({ ...prev, [p.id]: clamped }));
+                    }}
+                    onMouseLeave={() => {
+                      if (!getGeneratedPreviewThumbSrc(p) || !getOriginalPreviewThumbSrc(p)) return;
+                      setPreviewSplitRatio((prev) => ({ ...prev, [p.id]: 0.5 }));
+                    }}
+                    className="inline-block align-top mb-3 w-full break-inside-avoid rounded-2xl border border-[#2e2e32] bg-[#16161a] overflow-hidden text-left hover:border-blue-400/50 transition-colors group"
+                  >
+                    <div
+                      className="relative w-full bg-[#0f0f10] flex justify-center"
+                      style={{ aspectRatio: `${cardAspectByPresetId[p.id] ?? 1}` }}
+                    >
+                      {(() => {
+                        const originalThumb = getOriginalPreviewThumbSrc(p);
+                        const generatedThumb = getGeneratedPreviewThumbSrc(p);
+                        if (originalThumb && generatedThumb) {
+                          const split = previewSplitRatio[p.id] ?? 0.5;
+                          const splitPct = split * 100;
+                          const slant = 4;
+                          const topCut = Math.max(0, Math.min(100, splitPct + slant));
+                          const bottomCut = Math.max(0, Math.min(100, splitPct - slant));
+                          const lineTopLeft = Math.max(0, Math.min(100, topCut - 0.35));
+                          const lineTopRight = Math.max(0, Math.min(100, topCut + 0.35));
+                          const lineBottomLeft = Math.max(0, Math.min(100, bottomCut - 0.35));
+                          const lineBottomRight = Math.max(0, Math.min(100, bottomCut + 0.35));
+                          return (
+                            <>
+                              <CapabilityPreviewImg
+                                src={originalThumb}
+                                alt=""
+                                className="absolute inset-0 h-full w-full min-h-[5rem] object-contain"
+                                onIntrinsicSize={(w, h) => onPresetCardIntrinsicSize(p.id, w, h)}
+                              />
+                              <CapabilityPreviewImg
+                                src={generatedThumb}
+                                alt=""
+                                className="absolute inset-0 h-full w-full min-h-[5rem] object-contain"
+                                onIntrinsicSize={(w, h) => onPresetCardIntrinsicSize(p.id, w, h)}
+                                style={{ clipPath: `polygon(${topCut}% 0%, 100% 0%, 100% 100%, ${bottomCut}% 100%)` }}
+                              />
+                              <div
+                                className="absolute inset-0 pointer-events-none"
+                                style={{
+                                  clipPath: `polygon(${lineTopLeft}% 0%, ${lineTopRight}% 0%, ${lineBottomRight}% 100%, ${lineBottomLeft}% 100%)`,
+                                  background: 'linear-gradient(180deg, rgba(255,255,255,0.82) 0%, rgba(191,219,254,0.92) 50%, rgba(255,255,255,0.78) 100%)',
+                                  boxShadow: '0 0 10px rgba(59,130,246,0.35)',
+                                }}
+                              />
+                            </>
+                          );
+                        }
+                        if (src) {
+                          return (
+                            <CapabilityPreviewImg
+                              src={src}
+                              alt=""
+                              className="h-full w-full min-h-[5rem] object-contain"
+                              onIntrinsicSize={(w, h) => onPresetCardIntrinsicSize(p.id, w, h)}
+                            />
+                          );
+                        }
+                        return (
+                          <div className="h-full min-h-[5rem] w-full flex flex-col items-center justify-center gap-1 text-gray-600">
+                            <AppIcon name={iconName} className="w-10 h-10 opacity-75" />
+                            <span className="text-[8px] font-black uppercase tracking-wide text-gray-500">预览</span>
+                          </div>
+                        );
+                      })()}
+                      <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-2">
+                        <div className="text-[10px] font-black text-white truncate">{p.label}</div>
+                        <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+                          <span className="px-2 py-0.5 rounded text-[8px] font-black uppercase bg-[#26262c]/95 text-gray-300">{categoryLabel}</span>
+                          <span className={`px-2 py-0.5 rounded text-[8px] font-black uppercase ${p.enabled === false ? 'bg-[#4a1c1c]/95 text-red-300' : 'bg-[#166534]/95 text-green-300'}`}>
+                            {p.enabled === false ? '禁用' : '启用'}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
+            {effectiveUninstalledPresetItems.length > 0 && (
+              <div className="rounded-2xl border border-[#2e2e32] bg-[#16161a] p-4 text-[9px] text-gray-400">
+                检测到 {effectiveUninstalledPresetItems.length} 条远程预设，点击上方「刷新同步」即可自动同步。
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      {typeof document !== 'undefined' &&
+        detailPreset &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/78 backdrop-blur-sm p-3 md:p-5"
+            onClick={() => setDetailPresetId(null)}
+            role="presentation"
+          >
             <div
-              key={p.id}
-              ref={(el) => {
-                presetCardRefs.current[p.id] = el;
-              }}
-              className="rounded-2xl border border-[#2e2e32] bg-[#16161a] p-4"
+              className="w-full max-w-[min(1500px,98vw)] h-[min(94vh,980px)] rounded-2xl border border-[#2e2e32] bg-[#101014] overflow-hidden shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
             >
-              {editingId === p.id ? (
-                editingId === 'cut_image' ? (
-                  <>
-                    <div className="mb-3 rounded-xl border border-blue-500/35 bg-[#121a24] px-3 py-2.5">
-                      <p className="text-[9px] font-black uppercase text-blue-300/95">内置 · 切割图片</p>
-                      <p className="text-[8px] text-gray-500 mt-1 leading-relaxed">
-                        与生图类预设不同：此处不配置模型与提示词链路，仅调整名称、启用状态、<span className="text-gray-400">切割溢出</span>（按识别框扩展裁剪）及可选说明。
-                      </p>
+              <div className="h-full grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px] xl:grid-cols-[minmax(0,1fr)_420px]">
+                <div className="min-h-0 bg-[#0b0b0d] border-b lg:border-b-0 lg:border-r border-[#2e2e32]">
+                  <div className="h-full flex flex-col">
+                    <div className="shrink-0 px-4 py-3 border-b border-[#2e2e32] flex items-center justify-between bg-[#0f1014]">
+                      <div className="min-w-0">
+                        <div className="text-[9px] text-gray-500 uppercase tracking-wide">能力预览</div>
+                        <div className="text-[14px] font-black text-white truncate mt-0.5">{detailPreset.label}</div>
+                        <div className="text-[9px] text-gray-500 mt-0.5">左侧预览对比，右侧参数与操作</div>
+                      </div>
+                      <button type="button" onClick={() => setDetailPresetId(null)} className="px-3 py-2 rounded-xl bg-[#1a1a1e]/95 border border-[#2e2e32] text-[10px] font-black text-white hover:bg-[#2a2a32]">关闭</button>
                     </div>
-                    <div className="mb-2 flex flex-wrap items-center gap-4">
-                      <label className="flex items-center gap-2 text-[9px] text-gray-400">
-                        <input type="checkbox" checked={editEnabled} onChange={(e) => setEditEnabled(e.target.checked)} />
-                        <span className="font-black uppercase">启用</span>
-                      </label>
-                    </div>
-                    <div className="mb-2">
-                      <span className="text-[8px] font-black text-gray-500 uppercase">功能名称</span>
-                      <input
-                        value={editLabel}
-                        onChange={(e) => setEditLabel(e.target.value)}
-                        placeholder="切割图片"
-                        className="mt-1 w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500"
-                      />
-                    </div>
-                    <div className="mb-2">
-                      <span className="text-[8px] font-black text-emerald-400/90 uppercase">切割溢出（每边像素）</span>
-                      <p className="text-[8px] text-gray-500 mt-0.5">
-                        在模型返回的识别框基础上，四边各向外扩展若干像素再裁剪，便于保留边缘；最大 512，超出部分会被原图边界截断。
-                      </p>
-                      <input
-                        type="number"
-                        min={0}
-                        max={512}
-                        step={1}
-                        value={editCutOverflowPx}
-                        onChange={(e) => setEditCutOverflowPx(Math.max(0, Math.min(512, Math.round(Number(e.target.value) || 0))))}
-                        className="mt-1 w-28 bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500"
-                      />
-                    </div>
-                    <div className="mb-2">
-                      <span className="text-[8px] font-black text-gray-500 uppercase">可选：补充说明</span>
-                      <textarea
-                        value={editInstruction}
-                        onChange={(e) => setEditInstruction(e.target.value)}
-                        rows={2}
-                        className="mt-1 w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none"
-                        placeholder="可留空；当前不影响切割算法，仅作备注"
-                      />
-                    </div>
-                    <div className="flex gap-2">
-                      <button type="button" onClick={saveEdit} className="px-3 py-1.5 rounded-lg bg-blue-600 text-[9px] font-black uppercase">
-                        保存
-                      </button>
-                      <button type="button" onClick={() => setEditingId(null)} className="px-3 py-1.5 rounded-lg bg-[#26262c] text-[9px] font-black uppercase">
-                        取消
-                      </button>
-                    </div>
-                  </>
-                ) : (
-                <>
-                  <div className="mb-2">
-                    <span className="text-[8px] font-black text-gray-500 uppercase">分类</span>
-                    <div className="flex gap-2 mt-1">
-                      {CAPABILITY_CATEGORIES.filter((c) => c.id !== 'image_process').map((c) => (
-                        <button
-                        key={c.id}
-                        type="button"
-                        onClick={() => {
-                          setEditCategory(c.id);
-                          if (c.id === 'image_gen') setEditEngine('gen_image');
-                          if (c.id === 'generate_3d') setEditGenerate3D(p.category === 'generate_3d' && p.generate3D ? { ...p.generate3D } : { ...DEFAULT_GENERATE_3D });
-                        }}
-                        className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${editCategory === c.id ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300' : 'bg-[#1c1c22] border-[#2e2e32] text-gray-500'}`}
-                      >
-                        {c.label}
-                      </button>
-                      ))}
+                    <div
+                      className="flex-1 min-h-0 w-full bg-[#0f0f10] relative"
+                      onMouseMove={(e) => {
+                        const original = getOriginalPreviewSrc(detailPreset) || getOriginalPreviewThumbSrc(detailPreset);
+                        const generated = getGeneratedPreviewSrc(detailPreset) || getGeneratedPreviewThumbSrc(detailPreset);
+                        if (!original || !generated) return;
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        if (!rect.width) return;
+                        const ratio = (e.clientX - rect.left) / rect.width;
+                        setLightboxSplitRatio(Math.max(0.05, Math.min(0.95, ratio)));
+                      }}
+                      onMouseLeave={() => setLightboxSplitRatio(0.5)}
+                    >
+                      {(() => {
+                        const original = getOriginalPreviewSrc(detailPreset) || getOriginalPreviewThumbSrc(detailPreset);
+                        const generated = getGeneratedPreviewSrc(detailPreset) || getGeneratedPreviewThumbSrc(detailPreset);
+                        if (original && generated) {
+                          const splitPct = lightboxSplitRatio * 100;
+                          const slant = 4;
+                          const topCut = Math.max(0, Math.min(100, splitPct + slant));
+                          const bottomCut = Math.max(0, Math.min(100, splitPct - slant));
+                          const lineTopLeft = Math.max(0, Math.min(100, topCut - 0.25));
+                          const lineTopRight = Math.max(0, Math.min(100, topCut + 0.25));
+                          const lineBottomLeft = Math.max(0, Math.min(100, bottomCut - 0.25));
+                          const lineBottomRight = Math.max(0, Math.min(100, bottomCut + 0.25));
+                          return (
+                            <>
+                              <CapabilityPreviewImg src={original} alt="原图" className="absolute inset-0 h-full w-full object-contain" />
+                              <CapabilityPreviewImg
+                                src={generated}
+                                alt="生成图"
+                                className="absolute inset-0 h-full w-full object-contain"
+                                style={{ clipPath: `polygon(${topCut}% 0%, 100% 0%, 100% 100%, ${bottomCut}% 100%)` }}
+                              />
+                              <div
+                                className="absolute inset-0 pointer-events-none"
+                                style={{
+                                  clipPath: `polygon(${lineTopLeft}% 0%, ${lineTopRight}% 0%, ${lineBottomRight}% 100%, ${lineBottomLeft}% 100%)`,
+                                  background: 'linear-gradient(180deg, rgba(255,255,255,0.82) 0%, rgba(191,219,254,0.92) 50%, rgba(255,255,255,0.78) 100%)',
+                                  boxShadow: '0 0 10px rgba(59,130,246,0.35)',
+                                }}
+                              />
+                            </>
+                          );
+                        }
+                        const src = getCardPreviewSrc(detailPreset);
+                        if (!src) {
+                          return <div className="h-full min-h-[18rem] flex items-center justify-center text-gray-500 text-[10px]">暂无预览图</div>;
+                        }
+                        return <CapabilityPreviewImg src={src} alt="" className="h-full max-h-full w-full object-contain" />;
+                      })()}
                     </div>
                   </div>
-                  <div className="mb-2 flex flex-wrap items-center gap-4">
-                    <label className="flex items-center gap-2 text-[9px] text-gray-400">
-                      <input type="checkbox" checked={editEnabled} onChange={(e) => setEditEnabled(e.target.checked)} />
-                      <span className="font-black uppercase">启用</span>
-                    </label>
-                    {(editCategory === 'image_gen' || editEngine === 'gen_image') && (
-                      <>
-                        <label className="flex items-center gap-2 text-[9px] text-gray-400">
-                          <span className="font-black uppercase">生图档位</span>
-                          <CustomDropdown
-                            options={DIALOG_IMAGE_GEARS.map((g) => ({ value: g.id, label: g.label }))}
-                            value={editImageGear}
-                            onChange={(v) => setEditImageGear(v as DialogImageGear)}
-                            triggerClassName={DROPDOWN_TRIGGER_COMPACT}
-                          />
-                        </label>
-                        <label className="flex items-center gap-2 text-[9px] text-gray-400">
-                          <span className="font-black uppercase">贴图比例</span>
-                          <CustomDropdown
-                            options={[{ value: '', label: '默认' }, ...SUPPORTED_ASPECT_RATIOS.map((r) => ({ value: r.value, label: r.label }))]}
-                            value={editImageAspectRatio}
-                            onChange={setEditImageAspectRatio}
-                            placeholder="默认"
-                            triggerClassName={DROPDOWN_TRIGGER_COMPACT}
-                          />
-                        </label>
-                        <label className="flex items-center gap-2 text-[9px] text-gray-400">
-                          <span className="font-black uppercase">贴图尺寸</span>
-                          <CustomDropdown
-                            options={[{ value: '', label: '默认' }, ...SUPPORTED_IMAGE_SIZES.map((s) => ({ value: s.value, label: s.label }))]}
-                            value={editImageSize}
-                            onChange={setEditImageSize}
-                            placeholder="默认"
-                            triggerClassName={DROPDOWN_TRIGGER_COMPACT}
-                          />
-                        </label>
-                        <label className="flex items-center gap-2 text-[9px] text-gray-400 cursor-pointer" title="勾选：先理解再生成生图提示词；不勾选：预设提示词直发">
-                          <input
-                            type="checkbox"
-                            checked={!editSkipUnderstand}
-                            onChange={(e) => setEditSkipUnderstand(!e.target.checked)}
-                          />
-                          <span className="font-black uppercase">理解</span>
-                        </label>
-                      </>
-                    )}
-                    {editCategory === 'image_process' && (
-                      <label className="flex items-center gap-2 text-[9px] text-gray-400">
-                        <span className="font-black uppercase">执行方式</span>
-                        <CustomDropdown
-                          options={[
-                            { value: 'builtin', label: '图像处理（内置）' },
-                            { value: 'gen_image', label: '生图（提示词）' },
-                          ]}
-                          value={editEngine}
-                          onChange={(v) => setEditEngine(v as CapabilityEngine)}
-                          triggerClassName={DROPDOWN_TRIGGER_COMPACT}
-                        />
-                      </label>
-                    )}
-                    {editCategory === 'image_gen' && (
-                      <span className="text-[8px] text-gray-500">执行方式：生图（提示词）</span>
-                    )}
-                  </div>
-                  <div className="mb-2">
-                    <span className="text-[8px] font-black text-gray-500 uppercase">功能名称</span>
-                    <input
-                      value={editLabel}
-                      onChange={(e) => setEditLabel(e.target.value)}
-                      placeholder={
-                        editCategory === 'image_gen'
-                          ? '如：转赛博朋克风格、生成多视角'
-                          : editCategory === 'image_process'
-                            ? '如：拆分组件、切割图片'
-                            : '如：手办白模、低面数模型'
-                      }
-                      className="mt-1 w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500"
-                    />
-                  </div>
-                  {editCategory === 'image_gen' && (
-                    <div className="mb-2">
-                      <span className="text-[8px] font-black text-blue-400/90 uppercase">预设提示词（必填）</span>
-                      <p className="text-[8px] text-gray-500 mt-0.5">
-                        {editSkipUnderstand
-                          ? '工作流执行时直接将此处提示词发送给生图模型（提示词+图片直发）。'
-                          : '工作流执行时先由文字模型理解，再生成生图用提示词（与对话模式一致）。'}
-                      </p>
-                      <textarea
-                        value={editInstruction}
-                        onChange={(e) => setEditInstruction(e.target.value)}
-                        rows={4}
-                        className="mt-1 w-full bg-[#1c1c22] border border-[#4b6a9e] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none"
-                        placeholder="如：将图片转为赛博朋克风格"
-                      />
-                    </div>
-                  )}
-                  {editCategory === 'image_process' && editEngine === 'gen_image' && (
-                    <div className="mb-2">
-                      <span className="text-[8px] font-black text-blue-400/90 uppercase">预设提示词（必填）</span>
-                      <p className="text-[8px] text-gray-500 mt-0.5">
-                        {editSkipUnderstand
-                          ? '工作流执行时直接将此处提示词发送给生图模型。'
-                          : '工作流执行时先由文字模型理解，再生成生图用提示词。'}
-                      </p>
-                      <textarea
-                        value={editInstruction}
-                        onChange={(e) => setEditInstruction(e.target.value)}
-                        rows={3}
-                        className="mt-1 w-full bg-[#1c1c22] border border-[#4b6a9e] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none"
-                        placeholder="如：将图片转为赛博朋克风格"
-                      />
-                    </div>
-                  )}
-                  {editCategory === 'image_process' && editEngine === 'builtin' && (
-                    <div className="mb-2">
-                      <span className="text-[8px] font-black text-gray-500 uppercase">可选：补充说明或约束</span>
-                      <textarea
-                        value={editInstruction}
-                        onChange={(e) => setEditInstruction(e.target.value)}
-                        rows={2}
-                        className="mt-1 w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none"
-                        placeholder="可留空使用内置逻辑"
-                      />
-                    </div>
-                  )}
-                  {editCategory === 'generate_3d' && (
-                    <>
-                      <div className="rounded-xl border border-[#d97706] bg-[#221c10] p-3 space-y-2 mb-2">
-                        <div className="text-[8px] font-black text-amber-400 uppercase">生成3D 预设</div>
-                        <div className="flex gap-2 flex-wrap">
-                          <label className="flex items-center gap-1.5 text-[9px]">
-                            <span>模块</span>
-                            <CustomDropdown
-                              options={[{ value: 'pro', label: '专业版' }, { value: 'rapid', label: '极速版' }]}
-                              value={editGenerate3D.module}
-                              onChange={(v) => setEditGenerate3D((g) => ({ ...g, module: v as 'pro' | 'rapid' }))}
-                              triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                </div>
+                <div className="min-h-0 overflow-y-auto p-3 md:p-4 space-y-3 bg-[#121216]">
+                  <div className="rounded-2xl border border-[#2e2e32] bg-[#16161a] p-3 space-y-2">
+                    {detailEditMode ? (
+                      editingId === 'cut_image' ? (
+                        <>
+                          <div className="text-[9px] text-blue-300/95 font-black uppercase">内置 · 切割图片</div>
+                          <label className="flex items-center gap-2 text-[10px] text-gray-300">
+                            <input type="checkbox" checked={editEnabled} onChange={(e) => setEditEnabled(e.target.checked)} />
+                            启用
+                          </label>
+                          <label className="block">
+                            <div className="text-[9px] text-gray-500 uppercase mb-1">功能名称</div>
+                            <input value={editLabel} onChange={(e) => setEditLabel(e.target.value)} className="w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500" />
+                          </label>
+                          <label className="block">
+                          <div className="text-[9px] text-gray-400 uppercase mb-1">切割溢出（每边像素）</div>
+                            <input
+                              type="number"
+                              min={0}
+                              max={512}
+                              step={1}
+                              value={editCutOverflowPx}
+                              onChange={(e) => setEditCutOverflowPx(Math.max(0, Math.min(512, Math.round(Number(e.target.value) || 0))))}
+                              className="w-28 bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500"
                             />
                           </label>
-                          {editGenerate3D.module === 'pro' && (
-                            <>
-                              <label className="flex items-center gap-1.5 text-[9px]">
-                                <span>模型</span>
+                          <label className="block">
+                            <div className="text-[9px] text-gray-500 uppercase mb-1">补充说明</div>
+                            <textarea value={editInstruction} onChange={(e) => setEditInstruction(e.target.value)} rows={4} className="w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-y" />
+                          </label>
+                          <div className="flex gap-2">
+                            <button type="button" onClick={saveDetailEdit} className="px-3 py-1.5 rounded-lg border border-[#36578f] bg-[#1d3154] text-blue-200 text-[9px] font-black uppercase hover:bg-[#264171]">保存</button>
+                            <button type="button" onClick={() => { setDetailEditMode(false); setEditingId(null); }} className="px-3 py-1.5 rounded-lg border border-[#2e2e32] bg-[#1a1a1f] text-[9px] font-black uppercase text-gray-200 hover:bg-[#262630]">取消</button>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="text-[9px] text-gray-500 uppercase">完整设置</div>
+                          <div className="flex gap-2 flex-wrap">
+                            {CAPABILITY_CATEGORIES.filter((c) => c.id !== 'image_process').map((c) => (
+                              <button
+                                key={c.id}
+                                type="button"
+                                onClick={() => {
+                                  setEditCategory(c.id);
+                                  if (c.id === 'image_gen') setEditEngine('gen_image');
+                                  if (c.id === 'generate_3d') setEditGenerate3D(editCategory === 'generate_3d' ? { ...editGenerate3D } : { ...DEFAULT_GENERATE_3D });
+                                }}
+                                className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${editCategory === c.id ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300' : 'bg-[#1c1c22] border-[#2e2e32] text-gray-500'}`}
+                              >
+                                {c.label}
+                              </button>
+                            ))}
+                          </div>
+                          <label className="flex items-center gap-2 text-[10px] text-gray-300">
+                            <input type="checkbox" checked={editEnabled} onChange={(e) => setEditEnabled(e.target.checked)} />
+                            启用
+                          </label>
+                          {(editCategory === 'image_gen' || editEngine === 'gen_image') && (
+                            <div className="grid grid-cols-1 gap-2">
+                              <label className="flex items-center gap-2 text-[9px] text-gray-400">
+                                <span className="font-black uppercase">生图档位</span>
                                 <CustomDropdown
-                                  options={[{ value: '3.0', label: '3.0' }, { value: '3.1', label: '3.1' }]}
-                                  value={editGenerate3D.model ?? '3.0'}
-                                  onChange={(v) => setEditGenerate3D((g) => ({ ...g, model: v as '3.0' | '3.1' }))}
+                                  options={DIALOG_IMAGE_GEARS.map((g) => ({ value: g.id, label: g.label }))}
+                                  value={editImageGear}
+                                  onChange={(v) => setEditImageGear(v as DialogImageGear)}
                                   triggerClassName={DROPDOWN_TRIGGER_COMPACT}
                                 />
                               </label>
-                              <label className="flex items-center gap-1.5 text-[9px]">
-                                <span>面数</span>
-                                <input type="number" min={10000} max={1500000} value={editGenerate3D.faceCount ?? 500000} onChange={(e) => setEditGenerate3D((g) => ({ ...g, faceCount: e.target.value ? parseInt(e.target.value, 10) : undefined }))} className="w-20 bg-[#26262c] border border-[#2e2e32] rounded px-2 py-1 text-[9px]" />
-                              </label>
-                              <label className="flex items-center gap-1.5 text-[9px]">
-                                <span>类型</span>
+                              <label className="flex items-center gap-2 text-[9px] text-gray-400">
+                                <span className="font-black uppercase">贴图比例</span>
                                 <CustomDropdown
-                                  options={[
-                                    { value: 'Normal', label: 'Normal' },
-                                    { value: 'LowPoly', label: 'LowPoly' },
-                                    { value: 'Geometry', label: 'Geometry' },
-                                    { value: 'Sketch', label: 'Sketch' },
-                                  ]}
-                                  value={editGenerate3D.generateType ?? 'Normal'}
-                                  onChange={(v) => setEditGenerate3D((g) => ({ ...g, generateType: v as Generate3DPreset['generateType'] }))}
-                                  triggerClassName={DROPDOWN_TRIGGER_COMPACT}
-                                />
-                              </label>
-                              <label className="flex items-center gap-1.5 text-[9px]">
-                                <span>格式</span>
-                                <CustomDropdown
-                                  options={[{ value: '', label: '默认' }, { value: 'STL', label: 'STL' }, { value: 'USDZ', label: 'USDZ' }, { value: 'FBX', label: 'FBX' }]}
-                                  value={editGenerate3D.resultFormat ?? ''}
-                                  onChange={(v) => setEditGenerate3D((g) => ({ ...g, resultFormat: v || undefined }))}
+                                  options={[{ value: '', label: '默认' }, ...SUPPORTED_ASPECT_RATIOS.map((r) => ({ value: r.value, label: r.label }))]}
+                                  value={editImageAspectRatio}
+                                  onChange={setEditImageAspectRatio}
                                   placeholder="默认"
                                   triggerClassName={DROPDOWN_TRIGGER_COMPACT}
                                 />
                               </label>
-                            </>
+                              <label className="flex items-center gap-2 text-[9px] text-gray-400">
+                                <span className="font-black uppercase">贴图尺寸</span>
+                                <CustomDropdown
+                                  options={[{ value: '', label: '默认' }, ...SUPPORTED_IMAGE_SIZES.map((s) => ({ value: s.value, label: s.label }))]}
+                                  value={editImageSize}
+                                  onChange={setEditImageSize}
+                                  placeholder="默认"
+                                  triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                                />
+                              </label>
+                              <label className="flex items-center gap-2 text-[9px] text-gray-400 cursor-pointer" title="勾选：先理解再生成生图提示词；不勾选：预设提示词直发">
+                                <input type="checkbox" checked={!editSkipUnderstand} onChange={(e) => setEditSkipUnderstand(!e.target.checked)} />
+                                <span className="font-black uppercase">理解</span>
+                              </label>
+                            </div>
                           )}
-                          <label className="flex items-center gap-1.5 text-[9px]">
-                            <input type="checkbox" checked={editGenerate3D.enablePBR ?? false} onChange={(e) => setEditGenerate3D((g) => ({ ...g, enablePBR: e.target.checked }))} />
-                            <span>PBR</span>
+                          {editCategory === 'image_process' && (
+                            <label className="flex items-center gap-2 text-[9px] text-gray-400">
+                              <span className="font-black uppercase">执行方式</span>
+                              <CustomDropdown
+                                options={[
+                                  { value: 'builtin', label: '图像处理（内置）' },
+                                  { value: 'gen_image', label: '生图（提示词）' },
+                                ]}
+                                value={editEngine}
+                                onChange={(v) => setEditEngine(v as CapabilityEngine)}
+                                triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                              />
+                            </label>
+                          )}
+                          {editCategory === 'generate_3d' && (
+                            <div className="rounded-xl border border-[#2e3f5d] bg-[#141b26] p-3 space-y-2">
+                              <div className="text-[8px] font-black text-blue-300 uppercase">生成3D 预设</div>
+                              <label className="flex items-center gap-2 text-[9px]">
+                                <span>模块</span>
+                                <CustomDropdown
+                                  options={[{ value: 'pro', label: '专业版' }, { value: 'rapid', label: '极速版' }]}
+                                  value={editGenerate3D.module}
+                                  onChange={(v) => setEditGenerate3D((g) => ({ ...g, module: v as 'pro' | 'rapid' }))}
+                                  triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                                />
+                              </label>
+                              {editGenerate3D.module === 'pro' && (
+                                <>
+                                  <label className="flex items-center gap-2 text-[9px]">
+                                    <span>模型</span>
+                                    <CustomDropdown
+                                      options={[{ value: '3.0', label: '3.0' }, { value: '3.1', label: '3.1' }]}
+                                      value={editGenerate3D.model ?? '3.0'}
+                                      onChange={(v) => setEditGenerate3D((g) => ({ ...g, model: v as '3.0' | '3.1' }))}
+                                      triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                                    />
+                                  </label>
+                                  <label className="flex items-center gap-2 text-[9px]">
+                                    <span>面数</span>
+                                    <input type="number" min={10000} max={1500000} value={editGenerate3D.faceCount ?? 500000} onChange={(e) => setEditGenerate3D((g) => ({ ...g, faceCount: e.target.value ? parseInt(e.target.value, 10) : undefined }))} className="w-24 bg-[#26262c] border border-[#2e2e32] rounded px-2 py-1 text-[9px]" />
+                                  </label>
+                                  <label className="flex items-center gap-2 text-[9px]">
+                                    <span>类型</span>
+                                    <CustomDropdown
+                                      options={[
+                                        { value: 'Normal', label: 'Normal' },
+                                        { value: 'LowPoly', label: 'LowPoly' },
+                                        { value: 'Geometry', label: 'Geometry' },
+                                        { value: 'Sketch', label: 'Sketch' },
+                                      ]}
+                                      value={editGenerate3D.generateType ?? 'Normal'}
+                                      onChange={(v) => setEditGenerate3D((g) => ({ ...g, generateType: v as Generate3DPreset['generateType'] }))}
+                                      triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                                    />
+                                  </label>
+                                  <label className="flex items-center gap-2 text-[9px]">
+                                    <span>格式</span>
+                                    <CustomDropdown
+                                      options={[{ value: '', label: '默认' }, { value: 'STL', label: 'STL' }, { value: 'USDZ', label: 'USDZ' }, { value: 'FBX', label: 'FBX' }]}
+                                      value={editGenerate3D.resultFormat ?? ''}
+                                      onChange={(v) => setEditGenerate3D((g) => ({ ...g, resultFormat: v || undefined }))}
+                                      placeholder="默认"
+                                      triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                                    />
+                                  </label>
+                                </>
+                              )}
+                              <label className="flex items-center gap-1.5 text-[9px]">
+                                <input type="checkbox" checked={editGenerate3D.enablePBR ?? false} onChange={(e) => setEditGenerate3D((g) => ({ ...g, enablePBR: e.target.checked }))} />
+                                <span>PBR</span>
+                              </label>
+                            </div>
+                          )}
+                          <label className="block">
+                            <div className="text-[9px] text-gray-500 uppercase mb-1">功能名称</div>
+                            <input value={editLabel} onChange={(e) => setEditLabel(e.target.value)} className="w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500" />
                           </label>
+                          <label className="block">
+                            <div className="text-[9px] text-gray-500 uppercase mb-1">提示词 / 说明</div>
+                            <textarea value={editInstruction} onChange={(e) => setEditInstruction(e.target.value)} rows={8} className="w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-y" />
+                          </label>
+                          <div className="flex gap-2">
+                            <button type="button" onClick={saveDetailEdit} className="px-3 py-1.5 rounded-lg border border-[#36578f] bg-[#1d3154] text-blue-200 text-[9px] font-black uppercase hover:bg-[#264171]">保存</button>
+                            <button type="button" onClick={() => { setDetailEditMode(false); setEditingId(null); }} className="px-3 py-1.5 rounded-lg border border-[#2e2e32] bg-[#1a1a1f] text-[9px] font-black uppercase text-gray-200 hover:bg-[#262630]">取消</button>
+                          </div>
+                        </>
+                      )
+                    ) : (
+                      <>
+                        <div className="text-[9px] text-gray-500 uppercase">参数概览（只读）</div>
+                        <div className="grid grid-cols-2 gap-2 text-[9px]">
+                          <div className="rounded-lg bg-[#1b1b21] border border-[#2a2a32] px-2 py-1.5">
+                            <div className="text-gray-500">分类</div>
+                            <div className="text-gray-200 mt-0.5">{CAPABILITY_CATEGORIES.find((c) => c.id === detailPreset.category)?.label ?? detailPreset.category}</div>
+                          </div>
+                          <div className="rounded-lg bg-[#1b1b21] border border-[#2a2a32] px-2 py-1.5">
+                            <div className="text-gray-500">启用</div>
+                            <div className="text-gray-200 mt-0.5">{detailPreset.enabled === false ? '否' : '是'}</div>
+                          </div>
+                          <div className="rounded-lg bg-[#1b1b21] border border-[#2a2a32] px-2 py-1.5">
+                            <div className="text-gray-500">执行方式</div>
+                            <div className="text-gray-200 mt-0.5">
+                              {detailPreset.category === 'generate_3d'
+                                ? '3D生成'
+                                : detailPreset.category === 'image_gen'
+                                  ? '生图（提示词）'
+                                  : getEngine(detailPreset) === 'gen_image'
+                                    ? '生图（提示词）'
+                                    : '图像处理（内置）'}
+                            </div>
+                          </div>
+                          <div className="rounded-lg bg-[#1b1b21] border border-[#2a2a32] px-2 py-1.5">
+                            <div className="text-gray-500">生图档位</div>
+                            <div className="text-gray-200 mt-0.5">{detailPreset.imageGear || '默认'}</div>
+                          </div>
+                          <div className="rounded-lg bg-[#1b1b21] border border-[#2a2a32] px-2 py-1.5">
+                            <div className="text-gray-500">比例 / 尺寸</div>
+                            <div className="text-gray-200 mt-0.5">{detailPreset.imageAspectRatio || '默认'} / {detailPreset.imageSize || '默认'}</div>
+                          </div>
+                          <div className="rounded-lg bg-[#1b1b21] border border-[#2a2a32] px-2 py-1.5">
+                            <div className="text-gray-500">理解开关</div>
+                            <div className="text-gray-200 mt-0.5">{detailPreset.skipUnderstand === true ? '直发提示词' : '先理解再生成'}</div>
+                          </div>
                         </div>
-                      </div>
-                      <div className="mb-2">
-                        <span className="text-[8px] font-black text-gray-500 uppercase">可选：图生3D 补充描述</span>
-                        <textarea
-                          value={editInstruction}
-                          onChange={(e) => setEditInstruction(e.target.value)}
-                          rows={1}
-                          className="mt-1 w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none"
-                          placeholder="留空即可"
-                        />
-                      </div>
-                    </>
-                  )}
-                  <div className="flex gap-2">
-                    <button onClick={saveEdit} className="px-3 py-1.5 rounded-lg bg-blue-600 text-[9px] font-black uppercase">保存</button>
-                    <button onClick={() => setEditingId(null)} className="px-3 py-1.5 rounded-lg bg-[#26262c] text-[9px] font-black uppercase">取消</button>
+                        {detailPreset.category === 'generate_3d' && detailPreset.generate3D && (
+                          <div className="rounded-lg bg-[#1b1b21] border border-[#2a2a32] px-2 py-2 text-[9px] text-gray-300">
+                            3D：{detailPreset.generate3D.module === 'pro' ? '专业版' : '极速版'}
+                            {detailPreset.generate3D.model ? ` · ${detailPreset.generate3D.model}` : ''}
+                            {detailPreset.generate3D.generateType ? ` · ${detailPreset.generate3D.generateType}` : ''}
+                            {detailPreset.generate3D.resultFormat ? ` · ${detailPreset.generate3D.resultFormat}` : ''}
+                            {detailPreset.generate3D.faceCount ? ` · ${detailPreset.generate3D.faceCount} 面` : ''}
+                            {detailPreset.generate3D.enablePBR ? ' · PBR' : ''}
+                          </div>
+                        )}
+                        <div className="rounded-lg bg-[#1b1b21] border border-[#2a2a32] px-2 py-2">
+                          <div className="text-[9px] text-gray-500 uppercase mb-1">提示词 / 说明</div>
+                          <div className="text-[11px] text-gray-300 break-words leading-relaxed">{detailPreset.instruction || '（使用内置逻辑或未设置预设提示词）'}</div>
+                        </div>
+                        <div className="text-[9px] text-gray-500">id: {detailPreset.id}</div>
+                        <button type="button" onClick={() => beginDetailEdit(detailPreset)} className="px-3 py-1.5 rounded-lg border border-[#36578f] bg-[#1d3154] text-[9px] font-black uppercase text-blue-200 hover:bg-[#264171]">编辑参数</button>
+                      </>
+                    )}
                   </div>
-                </>
-                )
-              ) : (
-                <>
-                  <div className="flex gap-3 items-stretch">
-                    <div
-                      className={`relative shrink-0 w-[9.5rem] min-h-[12rem] self-stretch rounded-xl border border-[#2e2e32] bg-[#0f0f10] overflow-hidden flex items-center justify-center ${
-                        getCardPreviewSrc(p)
-                          ? 'cursor-pointer hover:ring-2 hover:ring-blue-500/40'
-                          : ''
-                      }`}
-                      title="预览对比：左原图、右生成图；悬浮移动分割线"
-                      onClick={() => openLightboxPreview(p)}
-                      onMouseMove={(e) => {
-                        if (!getGeneratedPreviewThumbSrc(p) || !getOriginalPreviewThumbSrc(p)) return;
-                        const rect = e.currentTarget.getBoundingClientRect();
-                        if (!rect.width) return;
-                        const ratio = (e.clientX - rect.left) / rect.width;
-                        const clamped = Math.max(0.1, Math.min(0.9, ratio));
-                        setPreviewSplitRatio((prev) => ({ ...prev, [p.id]: clamped }));
-                      }}
-                      onMouseLeave={() => {
-                        if (!getGeneratedPreviewThumbSrc(p) || !getOriginalPreviewThumbSrc(p)) return;
-                        setPreviewSplitRatio((prev) => ({ ...prev, [p.id]: 0.5 }));
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key !== 'Enter' && e.key !== ' ') return;
-                        openLightboxPreview(p);
-                      }}
-                      role={getCardPreviewSrc(p) ? 'button' : undefined}
-                      tabIndex={getCardPreviewSrc(p) ? 0 : undefined}
-                    >
-                      {(() => {
-                        const originalSrc = getOriginalPreviewThumbSrc(p);
-                        const generatedSrc = getGeneratedPreviewThumbSrc(p);
-                        const src = getCardPreviewSrc(p);
-                        if (src) {
-                          if (originalSrc && generatedSrc) {
-                            const split = previewSplitRatio[p.id] ?? 0.5;
-                            const splitPct = split * 100;
-                            const slant = 4;
-                            const topCut = Math.max(0, Math.min(100, splitPct + slant));
-                            const bottomCut = Math.max(0, Math.min(100, splitPct - slant));
-                            const lineTopLeft = Math.max(0, Math.min(100, topCut - 0.35));
-                            const lineTopRight = Math.max(0, Math.min(100, topCut + 0.35));
-                            const lineBottomLeft = Math.max(0, Math.min(100, bottomCut - 0.35));
-                            const lineBottomRight = Math.max(0, Math.min(100, bottomCut + 0.35));
-                            return (
-                              <>
-                                <CapabilityPreviewImg src={originalSrc} alt="" className="absolute inset-0 h-full w-full min-h-[12rem] object-cover" />
-                                <CapabilityPreviewImg
-                                  src={generatedSrc}
-                                  alt=""
-                                  className="absolute inset-0 h-full w-full min-h-[12rem] object-cover"
-                                  style={{ clipPath: `polygon(${topCut}% 0%, 100% 0%, 100% 100%, ${bottomCut}% 100%)` }}
-                                />
-                                <div
-                                  className="absolute inset-0 pointer-events-none"
-                                  style={{
-                                    clipPath: `polygon(${lineTopLeft}% 0%, ${lineTopRight}% 0%, ${lineBottomRight}% 100%, ${lineBottomLeft}% 100%)`,
-                                    background: 'linear-gradient(180deg, rgba(255,255,255,0.82) 0%, rgba(191,219,254,0.92) 50%, rgba(255,255,255,0.78) 100%)',
-                                    boxShadow: '0 0 10px rgba(59,130,246,0.35)',
-                                  }}
-                                />
-                              </>
-                            );
-                          }
-                          return <CapabilityPreviewImg src={src} alt="" className="h-full w-full min-h-[12rem] object-cover" />;
-                        }
-                        const iconName =
-                          p.category === 'generate_3d' ? 'cube' : p.category === 'image_process' ? 'camera' : 'image';
-                        return (
-                          <div className="flex flex-col items-center justify-center gap-1 text-gray-600 px-1">
-                            <AppIcon name={iconName} className="w-12 h-12 opacity-75" />
-                            <span className="text-[7px] font-black uppercase tracking-wide text-gray-500">预览</span>
-                          </div>
-                        );
-                      })()}
-                    </div>
-                    <div className="flex-1 min-w-0 min-h-0 flex flex-col gap-1.5">
-                      <div className="flex-1 min-h-0 flex flex-col gap-1.5">
-                      <div className="flex items-start justify-between gap-2 flex-wrap">
-                        <div className="flex flex-col gap-1 min-w-0 flex-1">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <span className="text-[10px] font-black uppercase truncate">{p.label}</span>
-                            <span className={`shrink-0 px-2 py-0.5 rounded text-[8px] font-black uppercase ${p.enabled === false ? 'bg-[#4a1c1c] text-red-400' : 'bg-[#166534] text-green-400'}`}>
-                              {p.enabled === false ? '禁用' : '启用'}
-                            </span>
-                            {p.category === 'image_process' && getEngine(p) === 'gen_image' && (
-                              <span className="shrink-0 px-2 py-0.5 rounded text-[8px] font-black uppercase bg-[#3d3018] text-amber-300">
-                                生图执行
-                              </span>
-                            )}
-                            {(p.category === 'image_gen' || getEngine(p) === 'gen_image') && p.skipUnderstand === true && (
-                              <span className="shrink-0 px-2 py-0.5 rounded text-[8px] font-black uppercase bg-[#1e3558] text-blue-300" title="不先理解，预设提示词直发生图">
-                                直发
-                              </span>
-                            )}
-                            {isBuiltinImageProcess(p) && (
-                              <span className="shrink-0 px-2 py-0.5 rounded text-[8px] font-black uppercase bg-[#1e3558] text-blue-300" title="系统内置图像处理能力">
-                                系统内置
-                              </span>
-                            )}
-                          </div>
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            <span className="px-2 py-0.5 rounded text-[8px] font-black uppercase bg-[#26262c] text-gray-400">
-                              {CAPABILITY_CATEGORIES.find((c) => c.id === p.category)?.label ?? p.category}
-                            </span>
-                          </div>
-                        </div>
-                        <div className="flex flex-wrap gap-1 justify-end shrink-0">
-                          <button
-                            type="button"
-                            disabled={isBuiltinLockedPreset(p)}
-                            onClick={() => {
-                              if (isBuiltinLockedPreset(p)) return;
-                              if (p.id === 'cut_image') {
-                                setEditingId('cut_image');
-                                setEditLabel(p.label);
-                                setEditCategory('image_process');
-                                setEditEngine('builtin');
-                                setEditEnabled(p.enabled !== false);
-                                setEditInstruction(((p as { instructionFixed?: string }).instructionFixed ?? p.instruction) || '');
-                                setEditCutOverflowPx(
-                                  typeof p.cutOverflowPx === 'number' && Number.isFinite(p.cutOverflowPx)
-                                    ? Math.max(0, Math.min(512, Math.round(p.cutOverflowPx)))
-                                    : 0
-                                );
-                                return;
-                              }
-                              setEditingId(p.id);
-                              setEditLabel(p.label);
-                              setEditCategory(p.category);
-                              setEditEngine(getEngine(p));
-                              setEditEnabled(p.enabled !== false);
-                              setEditImageGear(getGear(p));
-                              setEditImageAspectRatio(p.imageAspectRatio ?? '');
-                              setEditImageSize(p.imageSize ?? '');
-                              setEditInstruction(((p as { instructionFixed?: string }).instructionFixed ?? p.instruction) || '');
-                              setEditSkipUnderstand(p.skipUnderstand === true);
-                              setEditGenerate3D(p.category === 'generate_3d' && p.generate3D ? { ...p.generate3D } : { ...DEFAULT_GENERATE_3D });
-                            }}
-                            className="px-2 py-1 rounded-lg bg-[#26262c] text-[8px] font-black uppercase hover:bg-[#383842] disabled:opacity-50"
-                          >
-                            编辑
-                          </button>
-                          {canUploadToR2 && (
-                            <>
-                              <button
-                                type="button"
-                                onClick={() => void uploadPresetToR2(p, 'preview')}
-                                disabled={!!uploadingPresetActions[p.id]}
-                                className="px-2 py-1 rounded-lg bg-[#1e3558] text-blue-300 text-[8px] font-black uppercase hover:bg-[#305a90] disabled:opacity-50"
-                                title="仅上传该能力的预览图到 R2，保留远程现有提示词等配置"
-                              >
-                                {uploadingPresetActions[p.id] === 'preview' ? '上传中…' : '上传预览图'}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => void uploadPresetToR2(p, 'preset')}
-                                disabled={!!uploadingPresetActions[p.id]}
-                                className="px-2 py-1 rounded-lg bg-[#1f4b2b] text-green-300 text-[8px] font-black uppercase hover:bg-[#276439] disabled:opacity-50"
-                                title="仅上传该能力的预设配置到 R2，保留远程现有预览图"
-                              >
-                                {uploadingPresetActions[p.id] === 'preset' ? '上传中…' : '上传预设'}
-                              </button>
-                            </>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => removePreset(p.id)}
-                            disabled={isBuiltinImageProcess(p)}
-                            className="px-2 py-1 rounded-lg bg-[#4a1c1c] text-red-400 text-[8px] font-black uppercase hover:bg-[#5a2222] disabled:opacity-50"
-                          >
-                            删除
-                          </button>
-                        </div>
-                      </div>
-                      <div className="text-[7px] text-gray-500 flex flex-wrap items-center gap-x-2 gap-y-0.5 leading-tight">
-                        <span className="font-mono truncate max-w-[10rem]" title={p.id}>
-                          id: {p.id}
-                        </span>
-                        <span>预设 {p.instruction?.length ?? 0} 字</span>
-                        {(p.category === 'image_gen' || getEngine(p) === 'gen_image') && (p.imageAspectRatio || p.imageSize) && (
-                          <span>
-                            {p.imageAspectRatio || '—'} / {p.imageSize || '—'}
-                          </span>
-                        )}
-                        {p.id === 'cut_image' && (p.cutOverflowPx ?? 0) > 0 && (
-                          <span className="text-emerald-400/85" title="识别框四边各扩展的像素">
-                            溢出 {p.cutOverflowPx}px/边
-                          </span>
-                        )}
-                        {presetSourceMap.get(p.id) ? (
-                          <span className="px-1 py-0.5 rounded bg-[#3d3018] text-amber-300/90" title="来自远程能力包">
-                            「{presetSourceMap.get(p.id)}」
-                          </span>
-                        ) : (
-                          <span className="px-1 py-0.5 rounded bg-[#26262c] text-gray-400" title="本地添加">
-                            本地
-                          </span>
-                        )}
-                      </div>
-                      {p.instruction ? (
-                        <p className="text-[9px] text-gray-500 break-words line-clamp-2 leading-snug">{p.instruction}</p>
-                      ) : (
-                        <p className="text-[9px] text-gray-600 leading-snug">（使用内置逻辑或未设置预设提示词）</p>
-                      )}
-                      {p.category === 'generate_3d' && p.generate3D && (
-                        <p className="text-[8px] text-amber-500/90 line-clamp-2 leading-snug">
-                          {p.generate3D.module === 'pro' ? '专业版' : '极速版'}
-                          {p.generate3D.model ? ` ${p.generate3D.model}` : ''}
-                          {p.generate3D.enablePBR ? ' · PBR' : ''}
-                          {p.generate3D.generateType ? ` · ${p.generate3D.generateType}` : ''}
-                          {p.generate3D.faceCount ? ` · ${p.generate3D.faceCount} 面` : ''}
-                          <span className="text-gray-500"> — 拖图即按此预设提交3D</span>
-                        </p>
-                      )}
-                      </div>
-                      {onRunTest && p.category !== 'generate_3d' && (
-                    <div className="mt-auto pt-2 border-t border-[#2e2e32] shrink-0">
-                      <div className="text-[8px] font-black text-gray-500 uppercase mb-1.5">测试区域</div>
-                      <div className="flex flex-wrap gap-2 items-center">
-                        <input
-                          ref={(el) => { fileInputRef.current[p.id] = el; }}
-                          type="file"
-                          accept="image/*"
-                          className="hidden"
-                          onChange={(e) => handleFile(p.id, e)}
-                        />
-                        <button type="button" onClick={() => fileInputRef.current[p.id]?.click()} className="px-2 py-1.5 rounded-lg bg-[#26262c] text-[8px] font-black uppercase hover:bg-[#383842]">
-                          上传预览图
+                  <div className="rounded-2xl border border-[#2e2e32] bg-[#16161a] p-3 space-y-2">
+                    <div className="text-[9px] text-gray-500 uppercase">功能按钮</div>
+                    <input
+                      ref={(el) => { fileInputRef.current[detailPreset.id] = el; }}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => handleFile(detailPreset.id, e)}
+                    />
+                    <button type="button" onClick={() => fileInputRef.current[detailPreset.id]?.click()} className="w-full px-3 py-2 rounded-lg border border-[#36578f] bg-[#1d3154] text-blue-200 text-[9px] font-black uppercase hover:bg-[#264171]">上传预览图</button>
+                    {onRunTest && detailPreset.category !== 'generate_3d' && (
+                      <button
+                        type="button"
+                        disabled={!testImage[detailPreset.id] || testRunning[detailPreset.id]}
+                        onClick={() => runTest(detailPreset)}
+                        className="w-full px-3 py-2 rounded-lg border border-[#36578f] bg-[#1d3154] text-blue-200 text-[9px] font-black uppercase hover:bg-[#264171] disabled:opacity-50 disabled:pointer-events-none"
+                      >
+                        {testRunning[detailPreset.id] ? '运行中…' : '运行测试'}
+                      </button>
+                    )}
+                    {canUploadToR2 && (
+                      <>
+                        <button type="button" onClick={() => void uploadPresetToR2(detailPreset, 'preview')} disabled={!!uploadingPresetActions[detailPreset.id]} className="w-full px-3 py-2 rounded-lg border border-[#36578f] bg-[#1d3154] text-blue-200 text-[9px] font-black uppercase hover:bg-[#264171] disabled:opacity-50">
+                          {uploadingPresetActions[detailPreset.id] === 'preview' ? '上传中…' : '上传预览图到R2'}
                         </button>
-                        <button
-                          type="button"
-                          disabled={!testImage[p.id] || testRunning[p.id]}
-                          onClick={() => runTest(p)}
-                          className="px-2 py-1.5 rounded-lg bg-[#9a3412] text-[8px] font-black uppercase hover:bg-amber-500 disabled:opacity-50 disabled:pointer-events-none"
-                        >
-                          {testRunning[p.id] ? '运行中…' : '运行测试'}
+                        <button type="button" onClick={() => void uploadPresetToR2(detailPreset, 'preset')} disabled={!!uploadingPresetActions[detailPreset.id]} className="w-full px-3 py-2 rounded-lg border border-[#36578f] bg-[#1d3154] text-blue-200 text-[9px] font-black uppercase hover:bg-[#264171] disabled:opacity-50">
+                          {uploadingPresetActions[detailPreset.id] === 'preset' ? '上传中…' : '上传预设到R2'}
                         </button>
-                      </div>
-                      {testResult[p.id] != null && (
-                        <div className="mt-2 p-2 rounded-lg bg-[#141416] border border-[#2e2e32]">
-                          <div className="text-[9px] flex items-center gap-2 flex-wrap">
-                            {testResult[p.id]!.ok ? (
-                              <>
-                                <span className="text-green-500 font-medium">完成</span>
-                                {testResult[p.id]!.cutCount != null && <span className="text-gray-500">裁剪 {testResult[p.id]!.cutCount} 张</span>}
-                                <span className="text-gray-500">{testResult[p.id]!.durationMs}ms</span>
-                              </>
-                            ) : (
-                              <span className="text-red-400">{testResult[p.id]!.error ?? '失败'}</span>
-                            )}
-                          </div>
-                          {testResult[p.id]!.ok && testResult[p.id]!.resultImage && (
-                            <p className="mt-1.5 text-[8px] text-gray-500">
-                              结果图已显示在左侧预览，点击预览可放大查看。
-                            </p>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                      )}
-                    </div>
+                      </>
+                    )}
+                    <button type="button" onClick={() => { removePreset(detailPreset.id); setDetailPresetId(null); }} disabled={isBuiltinImageProcess(detailPreset)} className="w-full px-3 py-2 rounded-lg border border-[#2e2e32] bg-[#1a1a1f] text-gray-200 text-[9px] font-black uppercase hover:bg-[#262630] disabled:opacity-50">
+                      删除预设
+                    </button>
                   </div>
-                </>
-              )}
+                </div>
+              </div>
             </div>
-          ))}
-
-          {effectiveUninstalledPresetItems.length > 0 && (
-            <div className="rounded-2xl border border-[#2e2e32] bg-[#16161a] p-4 text-[9px] text-gray-400">
-              检测到 {effectiveUninstalledPresetItems.length} 条远程预设，点击上方「刷新同步」即可自动同步。
-            </div>
-          )}
-          </>
+          </div>,
+          document.body
         )}
-      </div>
 
       {typeof document !== 'undefined' &&
         (lightboxImage || lightboxCompare) &&

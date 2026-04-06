@@ -11,9 +11,7 @@ import {
   executeCapability,
   executeCapabilitySet,
   getCapabilityEngine,
-  type CapabilityExecuteContext,
 } from '../services/capabilityExecutor';
-import { getPromptCompilerEnabled } from '../services/featureFlags';
 import {
   applyVgpAfterSuccessfulGen,
   applyVgpAfterCutStep,
@@ -32,10 +30,8 @@ import { workflowSafeImgSrc } from '../services/workflowImageDisplay';
 import {
   type AcWorkflowExportPayload,
   DT_AC_WORKFLOW_EXPORT,
-  computeWorkflowEffectiveSelection,
   parseAcWorkflowExportDragSources,
   parseWorkflowDragSource,
-  plannerTargetAssetIdFromEffectiveSelection,
   resolveCapabilityDropDragSources,
   workflowDragSourceAllowsSidebarOps,
 } from '../services/workflowDragPipeline';
@@ -535,24 +531,6 @@ const WorkflowSection: React.FC<{
     }
   }, [pending]);
 
-  const buildCompilerExecuteContextForTask = (
-    task: WorkflowPendingTask,
-    module: CustomAppModule | undefined
-  ): CapabilityExecuteContext => {
-    const base: CapabilityExecuteContext = { onLog };
-    if (!getPromptCompilerEnabled()) return base;
-    if (task.actionType.startsWith(SET_ACTION_PREFIX)) {
-      const targetSummary = task.promptOverride?.trim() || undefined;
-      return { onLog, promptResolution: 'compiler', semanticForCompiler: { targetSummary } };
-    }
-    if (!module) return base;
-    if (getCapabilityEngine(module) !== 'gen_image') return base;
-    if (module.skipUnderstand === true) return base;
-    const targetSummary =
-      (task.promptOverride?.trim() || module.instruction?.trim() || '').trim() || undefined;
-    return { onLog, promptResolution: 'compiler', semanticForCompiler: { targetSummary } };
-  };
-
   const runTask = async (
     task: WorkflowPendingTask
   ): Promise<{ image: string | null; vgpSteps?: VgpGenStepCapture[] }> => {
@@ -567,7 +545,7 @@ const WorkflowSection: React.FC<{
       }
       const result = await executeCapabilitySet(set, inputImage ?? '', {
         presets: actionModules,
-        ...buildCompilerExecuteContextForTask(task, undefined),
+        onLog,
       });
       if (result.ok === false) {
         const msg = `[${getActionLabel(actionType)}] ${result.error}`;
@@ -594,7 +572,7 @@ const WorkflowSection: React.FC<{
           task.promptOverride != null && task.promptOverride.trim() !== ''
             ? { ...module, instruction: task.promptOverride.trim() }
             : module;
-        const out = await executeCapability(preset, inputImage, buildCompilerExecuteContextForTask(task, preset));
+        const out = await executeCapability(preset, inputImage, { onLog });
         if (out.ok === false) {
           const msg = `[${actionLabel}] ${out.error}`;
           onLog?.('warn', msg);
@@ -1913,17 +1891,6 @@ const WorkflowSection: React.FC<{
         label: a.groupLabel ?? (a.groupKind === 'manual' ? `组 ${idx + 1}` : `切割 ${idx + 1}`),
       }));
   }, [viewStack, assets]);
-
-  /** 根/组选区统一出口：Planner、后续单资产操作可复用 */
-  const workflowEffectiveSelection = useMemo(
-    () =>
-      computeWorkflowEffectiveSelection(selectedAssetIds, selectedGroupItemKeys, currentGroupAsset ?? null),
-    [selectedAssetIds, selectedGroupItemKeys, currentGroupAsset]
-  );
-  const plannerTargetAssetId = useMemo(
-    () => plannerTargetAssetIdFromEffectiveSelection(workflowEffectiveSelection),
-    [workflowEffectiveSelection]
-  );
 
   /** 将组内项解析为资产 id 列表：引用项直接取 assetId；base64 项先创建子资产并更新组，再返回新 id */
   const ensureGroupItemsAsAssets = useCallback(
@@ -4274,11 +4241,6 @@ const WorkflowSection: React.FC<{
           <WorkflowSidebarColumn
             actionModules={actionModules}
             capabilitySets={capabilitySets}
-            plannerTargetAssetId={plannerTargetAssetId}
-            onPlannerAddToQueue={(presetId) => {
-              if (plannerTargetAssetId) addToPending(plannerTargetAssetId, presetId);
-            }}
-            onLog={onLog}
             dragOverAction={dragOverAction}
             setDragOverAction={setDragOverAction}
             draggingAssetIds={draggingAssetIds}
