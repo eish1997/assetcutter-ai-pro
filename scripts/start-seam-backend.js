@@ -10,7 +10,9 @@ import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const backendDir = path.join(__dirname, '..', 'WebSeamRepair', 'backend');
+const repoRoot = path.join(__dirname, '..');
+const backendDir = path.join(repoRoot, 'WebSeamRepair', 'backend');
+const vendoredSitePackages = path.join(repoRoot, 'lib', 'site-packages');
 if (!fs.existsSync(path.join(backendDir, 'main.py'))) {
   console.error('[seam-backend] 未找到 WebSeamRepair/backend，请确认仓库结构。');
   process.exit(1);
@@ -22,10 +24,19 @@ const args = ['-m', 'uvicorn', 'main:app', '--host', '127.0.0.1', '--port', '800
 
 console.log('[seam-backend] 启动贴图修缝后端 (http://127.0.0.1:8008) …');
 console.log('[seam-backend] 工作目录:', backendDir);
+/** 与「在仓库根目录 pip install -t lib/site-packages」的布局对齐，子目录启动也能找到 uvicorn */
+const env = { ...process.env };
+if (fs.existsSync(vendoredSitePackages)) {
+  const sep = isWin ? ';' : ':';
+  env.PYTHONPATH = env.PYTHONPATH
+    ? `${vendoredSitePackages}${sep}${env.PYTHONPATH}`
+    : vendoredSitePackages;
+}
 const child = spawn(cmd, args, {
   cwd: backendDir,
   stdio: 'inherit',
   shell: isWin,
+  env,
 });
 
 child.on('error', (err) => {

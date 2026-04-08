@@ -1,14 +1,4 @@
-import {
-  useState,
-  useRef,
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  type RefObject,
-  type MouseEvent as ReactMouseEvent,
-  type Dispatch,
-  type SetStateAction,
-} from 'react';
+import { useState, useRef, useCallback, useEffect, useLayoutEffect, type RefObject, type MouseEvent as ReactMouseEvent, type Dispatch, type SetStateAction } from 'react';
 import type { WorkflowPendingTask } from '../types';
 
 export type UseWorkflowMarqueeArgs = {
@@ -20,7 +10,6 @@ export type UseWorkflowMarqueeArgs = {
   cardRefs: RefObject<Map<string, HTMLElement>>;
   viewStackRef: RefObject<{ assetId: string }[]>;
   pendingRef: RefObject<WorkflowPendingTask[]>;
-  setLibraryImportIds: Dispatch<SetStateAction<Set<string>>>;
   setSelectedAssetIds: Dispatch<SetStateAction<Set<string>>>;
   setSelectedGroupItemKeys: Dispatch<SetStateAction<Set<string>>>;
 };
@@ -34,7 +23,6 @@ export function useWorkflowMarquee({
   cardRefs,
   viewStackRef,
   pendingRef,
-  setLibraryImportIds,
   setSelectedAssetIds,
   setSelectedGroupItemKeys,
 }: UseWorkflowMarqueeArgs) {
@@ -122,11 +110,9 @@ export function useWorkflowMarquee({
       setMarqueeActive(false);
 
       if (isClick) {
-        if (pane === 0) {
-          setLibraryImportIds(new Set());
-        } else if (vs.length === 0) {
+        if (pane !== 0 && vs.length === 0) {
           setSelectedAssetIds(new Set());
-        } else {
+        } else if (pane !== 0) {
           setSelectedGroupItemKeys(new Set());
         }
         return;
@@ -135,31 +121,7 @@ export function useWorkflowMarquee({
       const sel = { left, top, width, height };
 
       const applySelection = () => {
-        if (pane === 0) {
-          const ids: string[] = [];
-          libraryCardRefs.current?.forEach((el, id) => {
-            const r = el.getBoundingClientRect();
-            const overlap =
-              !(
-                sel.left + sel.width < r.left ||
-                r.left + r.width < sel.left ||
-                sel.top + sel.height < r.top ||
-                r.top + r.height < sel.top
-              );
-            if (overlap) ids.push(id);
-          });
-          if (ids.length) {
-            const toAdd = altKey ? [] : ids;
-            const toRemove = altKey ? ids : [];
-            setLibraryImportIds((s) => {
-              const next = new Set(s);
-              toRemove.forEach((id) => next.delete(id));
-              toAdd.forEach((id) => next.add(id));
-              return next;
-            });
-          }
-          return;
-        }
+        if (pane === 0) return;
         const ids: string[] = [];
         cardRefs.current?.forEach((el, id) => {
           const r = el.getBoundingClientRect();
@@ -220,7 +182,6 @@ export function useWorkflowMarquee({
     cardRefs,
     viewStackRef,
     pendingRef,
-    setLibraryImportIds,
     setSelectedAssetIds,
     setSelectedGroupItemKeys,
   ]);

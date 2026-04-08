@@ -10,6 +10,8 @@ export type PromptTweakTarget =
       inputSourceDisplayKey?: string;
       sourceGroupAssetId?: string;
       sourceItemIndex?: number;
+      /** 文字资产卡片拖入时 */
+      inputText?: string;
     }
   | { imageBase64: string; parentAssetId: string; sourceGroupAssetId: string; sourceItemIndex: number };
 

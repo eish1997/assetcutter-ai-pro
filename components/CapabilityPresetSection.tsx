@@ -9,6 +9,7 @@ import {
   CAPABILITY_PRESETS_VERSION,
   normalizeCapabilityPreset,
 } from '../services/capabilityPresetStore';
+import { getCapabilityEngine } from '../services/capabilityExecutor';
 import { loadInstalledPacks, loadPackHistory } from '../services/storePackHistory';
 import { useStoreCatalog } from '../services/storeCatalogHook';
 import { publishPresetToUserR2Catalog } from '../services/capabilityPresetR2Publish';
@@ -42,11 +43,9 @@ const CapabilityPresetSection: React.FC<{
   const [setLabel, setSetLabel] = useState('');
   const reindex = (list: CustomAppModule[]) => list.map((p, i) => ({ ...p, order: i }));
   const update = (list: CustomAppModule[]) => onUpdate(reindex(list));
-  const getEngine = (p: CustomAppModule): CapabilityEngine => {
-    if (p.engine) return p.engine;
-    if (p.category === 'image_gen') return 'gen_image';
-    return 'builtin';
-  };
+  const getEngine = (p: CustomAppModule): CapabilityEngine => getCapabilityEngine(p);
+  const isBuiltinImagePipelinePreset = (p: CustomAppModule) =>
+    p.category === 'image_to_image' && getCapabilityEngine(p) === 'builtin';
   const getGear = (p: CustomAppModule): DialogImageGear => {
     const g = (p.imageGear as DialogImageGear) || 'standard';
     return DIALOG_IMAGE_GEARS.some((x) => x.id === g) ? g : 'standard';
@@ -63,7 +62,7 @@ const CapabilityPresetSection: React.FC<{
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editLabel, setEditLabel] = useState('');
-  const [editCategory, setEditCategory] = useState<CapabilityCategory>('image_gen');
+  const [editCategory, setEditCategory] = useState<CapabilityCategory>('image_to_image');
   const [editEngine, setEditEngine] = useState<CapabilityEngine>('gen_image');
   const [editEnabled, setEditEnabled] = useState(true);
   const [editImageGear, setEditImageGear] = useState<DialogImageGear>('standard');
@@ -75,7 +74,7 @@ const CapabilityPresetSection: React.FC<{
   const [editSkipUnderstand, setEditSkipUnderstand] = useState(false);
   const [isAdding, setIsAdding] = useState(false);
   const [newLabel, setNewLabel] = useState('');
-  const [newCategory, setNewCategory] = useState<CapabilityCategory>('image_gen');
+  const [newCategory, setNewCategory] = useState<CapabilityCategory>('image_to_image');
   const [newEngine, setNewEngine] = useState<CapabilityEngine>('gen_image');
   const [newEnabled, setNewEnabled] = useState(true);
   const [newImageGear, setNewImageGear] = useState<DialogImageGear>('standard');
@@ -121,7 +120,7 @@ const CapabilityPresetSection: React.FC<{
   /** 仅预设「内容区」滚动容器；定位时用 scrollTo 只滚此处，避免 scrollIntoView 连带滚主布局 */
   const presetContentScrollRef = useRef<HTMLDivElement | null>(null);
   const isBuiltinImageProcess = (p: CustomAppModule) =>
-    p.category === 'image_process' &&
+    isBuiltinImagePipelinePreset(p) &&
     BUILTIN_IMAGE_PROCESS_IDS.includes(p.id as (typeof BUILTIN_IMAGE_PROCESS_IDS)[number]);
   const isBuiltinLockedPreset = (p: CustomAppModule) =>
     isBuiltinImageProcess(p) && !BUILTIN_CAPABILITY_EDITABLE_IDS.includes(p.id);
@@ -229,7 +228,7 @@ const CapabilityPresetSection: React.FC<{
       if (!id) return;
       const preset = presets.find((p) => p.id === id);
       if (!preset) return;
-      if (preset.category === 'image_process') {
+      if (preset.category === 'image_to_image' && getCapabilityEngine(preset) === 'builtin') {
         setViewMode('image_process');
       } else {
         setViewMode('presets');
@@ -270,7 +269,7 @@ const CapabilityPresetSection: React.FC<{
         {
           ...prevRest,
           label: editLabel.trim() || '切割图片',
-          category: 'image_process',
+          category: 'image_to_image',
           engine: 'builtin',
           instruction: editInstruction,
           enabled: editEnabled,
@@ -285,25 +284,26 @@ const CapabilityPresetSection: React.FC<{
     update(
       presets.map((p) => {
         if (p.id !== editingId) return p;
+        const showGenImageFields =
+          editCategory === 'text_to_image' || (editCategory === 'image_to_image' && editEngine === 'gen_image');
         const next: CustomAppModule = {
           ...p,
           label: editLabel,
           category: editCategory,
           instruction: editInstruction,
-          skipUnderstand:
-            editCategory === 'image_gen' || editEngine === 'gen_image'
-              ? editSkipUnderstand
-              : undefined,
+          skipUnderstand: showGenImageFields ? editSkipUnderstand : undefined,
           enabled: editEnabled,
-          imageGear: editEngine === 'gen_image' || editCategory === 'image_gen' ? editImageGear : undefined,
-          imageAspectRatio: editEngine === 'gen_image' || editCategory === 'image_gen' ? (editImageAspectRatio || undefined) : undefined,
-          imageSize: editEngine === 'gen_image' || editCategory === 'image_gen' ? (editImageSize || undefined) : undefined,
+          imageGear: showGenImageFields ? editImageGear : undefined,
+          imageAspectRatio: showGenImageFields ? editImageAspectRatio || undefined : undefined,
+          imageSize: showGenImageFields ? editImageSize || undefined : undefined,
           engine:
             editCategory === 'generate_3d'
               ? undefined
-              : editCategory === 'image_gen'
-                ? 'gen_image'
-                : editEngine,
+              : editCategory === 'text_to_text' || editCategory === 'image_to_text'
+                ? 'gen_text'
+                : editCategory === 'text_to_image'
+                  ? 'gen_image'
+                  : editEngine,
         };
         if (editCategory === 'generate_3d') {
           next.generate3D = { ...editGenerate3D };
@@ -320,31 +320,32 @@ const CapabilityPresetSection: React.FC<{
   const addPreset = () => {
     const label = newLabel.trim() || '新功能';
     const id = genId();
+    const showNewGenImage =
+      newCategory === 'text_to_image' || (newCategory === 'image_to_image' && newEngine === 'gen_image');
     const preset: CustomAppModule = {
       id,
       label,
       category: newCategory,
       instruction: newInstruction,
-      skipUnderstand:
-        newCategory === 'image_gen' || newEngine === 'gen_image'
-          ? newSkipUnderstand
-          : undefined,
+      skipUnderstand: showNewGenImage ? newSkipUnderstand : undefined,
       enabled: newEnabled,
       order: presets.length,
-      imageGear: (newCategory === 'image_gen' || newEngine === 'gen_image') ? newImageGear : undefined,
-      imageAspectRatio: (newCategory === 'image_gen' || newEngine === 'gen_image') ? (newImageAspectRatio || undefined) : undefined,
-      imageSize: (newCategory === 'image_gen' || newEngine === 'gen_image') ? (newImageSize || undefined) : undefined,
+      imageGear: showNewGenImage ? newImageGear : undefined,
+      imageAspectRatio: showNewGenImage ? newImageAspectRatio || undefined : undefined,
+      imageSize: showNewGenImage ? newImageSize || undefined : undefined,
       engine:
         newCategory === 'generate_3d'
           ? undefined
-          : newCategory === 'image_gen'
-            ? 'gen_image'
-            : newEngine,
+          : newCategory === 'text_to_text' || newCategory === 'image_to_text'
+            ? 'gen_text'
+            : newCategory === 'text_to_image'
+              ? 'gen_image'
+              : newEngine,
     };
     if (newCategory === 'generate_3d') preset.generate3D = { ...newGenerate3D };
     update([...presets, preset]);
     setNewLabel('');
-    setNewCategory('image_gen');
+    setNewCategory('image_to_image');
     setNewEngine('gen_image');
     setNewEnabled(true);
     setNewImageGear('standard');
@@ -669,7 +670,7 @@ const CapabilityPresetSection: React.FC<{
     if (p.id === 'cut_image') {
       setEditingId('cut_image');
       setEditLabel(p.label);
-      setEditCategory('image_process');
+      setEditCategory('image_to_image');
       setEditEngine('builtin');
       setEditEnabled(p.enabled !== false);
       setEditInstruction(((p as { instructionFixed?: string }).instructionFixed ?? p.instruction) || '');
@@ -840,8 +841,10 @@ const CapabilityPresetSection: React.FC<{
     return map;
   }, [presets]);
   const visiblePresets = useMemo(() => {
-    if (viewMode === 'image_process') return presets.filter((p) => p.category === 'image_process');
-    return presets.filter((p) => p.category !== 'image_process');
+    const isBuiltinPipeline = (p: CustomAppModule) =>
+      p.category === 'image_to_image' && getCapabilityEngine(p) === 'builtin';
+    if (viewMode === 'image_process') return presets.filter(isBuiltinPipeline);
+    return presets.filter((p) => !isBuiltinPipeline(p));
   }, [presets, viewMode]);
 
   useEffect(() => {
@@ -1074,14 +1077,16 @@ const CapabilityPresetSection: React.FC<{
           <div className="text-[9px] font-black text-blue-400 uppercase">新增</div>
           <div>
             <span className="text-[8px] font-black text-gray-500 uppercase">分类</span>
-            <div className="flex gap-2 mt-1">
-              {CAPABILITY_CATEGORIES.filter((c) => c.id !== 'image_process').map((c) => (
+            <div className="flex flex-wrap gap-2 mt-1">
+              {CAPABILITY_CATEGORIES.map((c) => (
                 <button
                   key={c.id}
                   type="button"
                   onClick={() => {
                     setNewCategory(c.id);
-                    if (c.id === 'image_gen') setNewEngine('gen_image');
+                    if (c.id === 'image_to_image') setNewEngine('gen_image');
+                    if (c.id === 'text_to_text' || c.id === 'image_to_text') setNewEngine('gen_text');
+                    if (c.id === 'text_to_image') setNewEngine('gen_image');
                   }}
                   className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${newCategory === c.id ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300' : 'bg-[#1c1c22] border-[#2e2e32] text-gray-500 hover:bg-[#2e2e36]'}`}
                   title={c.desc}
@@ -1097,7 +1102,21 @@ const CapabilityPresetSection: React.FC<{
               <input type="checkbox" checked={newEnabled} onChange={(e) => setNewEnabled(e.target.checked)} />
               <span className="font-black uppercase">启用</span>
             </label>
-            {(newCategory === 'image_gen' || newEngine === 'gen_image') && (
+            {newCategory === 'image_to_image' && (
+              <label className="flex items-center gap-2 text-[9px] text-gray-400">
+                <span className="font-black uppercase">图生图方式</span>
+                <CustomDropdown
+                  options={[
+                    { value: 'builtin', label: '内置图像处理（拆分/切割等）' },
+                    { value: 'gen_image', label: '生图模型（提示词）' },
+                  ]}
+                  value={newEngine === 'gen_image' ? 'gen_image' : 'builtin'}
+                  onChange={(v) => setNewEngine(v as CapabilityEngine)}
+                  triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                />
+              </label>
+            )}
+            {(newCategory === 'text_to_image' || (newCategory === 'image_to_image' && newEngine === 'gen_image')) && (
               <>
                 <label className="flex items-center gap-2 text-[9px] text-gray-400">
                   <span className="font-black uppercase">生图档位</span>
@@ -1138,22 +1157,20 @@ const CapabilityPresetSection: React.FC<{
                 </label>
               </>
             )}
-            {newCategory === 'image_process' && (
-              <label className="flex items-center gap-2 text-[9px] text-gray-400">
-                <span className="font-black uppercase">执行方式</span>
-                <CustomDropdown
-                  options={[
-                    { value: 'builtin', label: '图像处理（内置）' },
-                    { value: 'gen_image', label: '生图（提示词）' },
-                  ]}
-                  value={newEngine}
-                  onChange={(v) => setNewEngine(v as CapabilityEngine)}
-                  triggerClassName={DROPDOWN_TRIGGER_COMPACT}
-                />
-              </label>
+            {newCategory === 'text_to_text' && (
+              <span className="text-[8px] text-gray-500">工作流请拖入文字卡</span>
             )}
-            {newCategory === 'image_gen' && (
-              <span className="text-[8px] text-gray-500">执行方式：生图（提示词）</span>
+            {newCategory === 'text_to_image' && (
+              <span className="text-[8px] text-gray-500">工作流请拖入文字卡</span>
+            )}
+            {newCategory === 'image_to_text' && (
+              <span className="text-[8px] text-gray-500">工作流请拖入图片卡</span>
+            )}
+            {newCategory === 'image_to_image' && newEngine === 'gen_image' && (
+              <span className="text-[8px] text-gray-500">工作流请拖入图片卡</span>
+            )}
+            {newCategory === 'image_to_image' && newEngine === 'builtin' && (
+              <span className="text-[8px] text-gray-500">工作流请拖入图片卡（内置处理）</span>
             )}
           </div>
           <div>
@@ -1162,44 +1179,68 @@ const CapabilityPresetSection: React.FC<{
               value={newLabel}
               onChange={(e) => setNewLabel(e.target.value)}
               placeholder={
-                newCategory === 'image_gen'
+                newCategory === 'image_to_image' && newEngine === 'gen_image'
                   ? '如：转赛博朋克风格、生成多视角、写实化'
-                  : newCategory === 'image_process'
-                    ? '如：拆分组件、切割图片、提取主体'
-                    : '如：手办白模、低面数模型'
+                  : newCategory === 'text_to_text'
+                    ? '如：扩写脚本、翻译、提取关键词'
+                    : newCategory === 'image_to_text'
+                      ? '如：描述附图中的主要物体与风格'
+                      : newCategory === 'text_to_image'
+                        ? '如：按描述生成概念图'
+                        : newCategory === 'image_to_image' && newEngine === 'builtin'
+                          ? '如：拆分组件、切割图片、提取主体'
+                          : '如：手办白模、低面数模型'
               }
               className="mt-1 w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500"
             />
           </div>
-          {newCategory === 'image_gen' && (
+          {(newCategory === 'text_to_image' || (newCategory === 'image_to_image' && newEngine === 'gen_image')) && (
             <div>
               <span className="text-[8px] font-black text-blue-400/90 uppercase">预设提示词（必填）</span>
               <p className="text-[8px] text-gray-500 mt-0.5">
-                {newSkipUnderstand
-                  ? '工作流执行时：直接将此处提示词发送给生图模型（提示词+图片直发）。'
-                  : '工作流执行时：先将此处内容交给文字模型理解，再根据理解结果生成生图用提示词发给生图模型（与对话模式一致）。'}
+                {newCategory === 'text_to_image'
+                  ? newSkipUnderstand
+                    ? '工作流拖文字卡：将预设与用户文字合并后直发生图模型。'
+                    : '工作流拖文字卡：先由文字模型整理画面描述，再文生图。'
+                  : newSkipUnderstand
+                    ? '工作流拖图片卡：将此处提示词直发生图模型（图生图）。'
+                    : '工作流拖图片卡：先理解预设与图像再图生图。'}
               </p>
               <textarea
                 value={newInstruction}
                 onChange={(e) => setNewInstruction(e.target.value)}
-                placeholder="如：将图片转为赛博朋克风格，霓虹灯与机械细节；或：生成该物体的多视角线稿"
+                placeholder={
+                  newCategory === 'text_to_image'
+                    ? '如：根据用户描述生成赛博朋克街景'
+                    : '如：将图片转为赛博朋克风格'
+                }
                 rows={4}
                 className="mt-1 w-full bg-[#1c1c22] border border-[#4b6a9e] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none"
               />
             </div>
           )}
-          {newCategory === 'image_process' && newEngine === 'gen_image' && (
+          {(newCategory === 'text_to_text' || newCategory === 'image_to_text') && (
             <div>
-              <span className="text-[8px] font-black text-blue-400/90 uppercase">预设提示词（必填）</span>
+              <span className="text-[8px] font-black text-emerald-400/90 uppercase">系统说明 / 任务（必填）</span>
               <p className="text-[8px] text-gray-500 mt-0.5">
-                {newSkipUnderstand
-                  ? '工作流执行时直接将此处提示词发送给生图模型。'
-                  : '工作流执行时先由文字模型理解，再生成生图用提示词。'}
+                {newCategory === 'text_to_text'
+                  ? '工作流拖入文字卡时，卡片正文作为用户输入。'
+                  : '工作流拖入图片卡时，以附图配合本说明输出文字。'}
               </p>
-              <textarea value={newInstruction} onChange={(e) => setNewInstruction(e.target.value)} placeholder="如：将图片转为赛博朋克风格" rows={3} className="mt-1 w-full bg-[#1c1c22] border border-[#4b6a9e] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none" />
+              <textarea
+                value={newInstruction}
+                onChange={(e) => setNewInstruction(e.target.value)}
+                placeholder={
+                  newCategory === 'text_to_text'
+                    ? '如：将用户文字翻译为英文并保留术语'
+                    : '如：描述附图中的主要物体与风格'
+                }
+                rows={4}
+                className="mt-1 w-full bg-[#1c1c22] border border-emerald-900/40 rounded-xl px-3 py-2 text-[11px] outline-none focus:border-emerald-600 resize-none"
+              />
             </div>
           )}
-          {newCategory === 'image_process' && newEngine === 'builtin' && (
+          {newCategory === 'image_to_image' && newEngine === 'builtin' && (
             <div>
               <span className="text-[8px] font-black text-gray-500 uppercase">可选：补充说明或约束</span>
               <p className="text-[8px] text-gray-600 mt-0.5">多数能力有内置逻辑（如切割按版面分块），可留空；需要时可填写额外说明。</p>
@@ -1305,7 +1346,7 @@ const CapabilityPresetSection: React.FC<{
               {visiblePresets.map((p) => {
                 const src = getCardPreviewSrc(p);
                 const categoryLabel = CAPABILITY_CATEGORIES.find((c) => c.id === p.category)?.label ?? p.category;
-                const iconName = p.category === 'generate_3d' ? 'cube' : p.category === 'image_process' ? 'camera' : 'image';
+                const iconName = p.category === 'generate_3d' ? 'cube' : isBuiltinImagePipelinePreset(p) ? 'camera' : 'image';
                 return (
                   <button
                     key={p.id}
@@ -1527,14 +1568,16 @@ const CapabilityPresetSection: React.FC<{
                       ) : (
                         <>
                           <div className="text-[9px] text-gray-500 uppercase">完整设置</div>
-                          <div className="flex gap-2 flex-wrap">
-                            {CAPABILITY_CATEGORIES.filter((c) => c.id !== 'image_process').map((c) => (
+                          <div className="flex flex-wrap gap-2">
+                            {CAPABILITY_CATEGORIES.map((c) => (
                               <button
                                 key={c.id}
                                 type="button"
                                 onClick={() => {
                                   setEditCategory(c.id);
-                                  if (c.id === 'image_gen') setEditEngine('gen_image');
+                                  if (c.id === 'image_to_image') setEditEngine('gen_image');
+                                  if (c.id === 'text_to_text' || c.id === 'image_to_text') setEditEngine('gen_text');
+                                  if (c.id === 'text_to_image') setEditEngine('gen_image');
                                   if (c.id === 'generate_3d') setEditGenerate3D(editCategory === 'generate_3d' ? { ...editGenerate3D } : { ...DEFAULT_GENERATE_3D });
                                 }}
                                 className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${editCategory === c.id ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300' : 'bg-[#1c1c22] border-[#2e2e32] text-gray-500'}`}
@@ -1547,7 +1590,21 @@ const CapabilityPresetSection: React.FC<{
                             <input type="checkbox" checked={editEnabled} onChange={(e) => setEditEnabled(e.target.checked)} />
                             启用
                           </label>
-                          {(editCategory === 'image_gen' || editEngine === 'gen_image') && (
+                          {editCategory === 'image_to_image' && (
+                            <label className="flex items-center gap-2 text-[9px] text-gray-400">
+                              <span className="font-black uppercase">图生图方式</span>
+                              <CustomDropdown
+                                options={[
+                                  { value: 'builtin', label: '内置图像处理' },
+                                  { value: 'gen_image', label: '生图模型（提示词）' },
+                                ]}
+                                value={editEngine === 'gen_image' ? 'gen_image' : 'builtin'}
+                                onChange={(v) => setEditEngine(v as CapabilityEngine)}
+                                triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                              />
+                            </label>
+                          )}
+                          {(editCategory === 'text_to_image' || (editCategory === 'image_to_image' && editEngine === 'gen_image')) && (
                             <div className="grid grid-cols-1 gap-2">
                               <label className="flex items-center gap-2 text-[9px] text-gray-400">
                                 <span className="font-black uppercase">生图档位</span>
@@ -1583,20 +1640,6 @@ const CapabilityPresetSection: React.FC<{
                                 <span className="font-black uppercase">理解</span>
                               </label>
                             </div>
-                          )}
-                          {editCategory === 'image_process' && (
-                            <label className="flex items-center gap-2 text-[9px] text-gray-400">
-                              <span className="font-black uppercase">执行方式</span>
-                              <CustomDropdown
-                                options={[
-                                  { value: 'builtin', label: '图像处理（内置）' },
-                                  { value: 'gen_image', label: '生图（提示词）' },
-                                ]}
-                                value={editEngine}
-                                onChange={(v) => setEditEngine(v as CapabilityEngine)}
-                                triggerClassName={DROPDOWN_TRIGGER_COMPACT}
-                              />
-                            </label>
                           )}
                           {editCategory === 'generate_3d' && (
                             <div className="rounded-xl border border-[#2e3f5d] bg-[#141b26] p-3 space-y-2">
@@ -1688,11 +1731,19 @@ const CapabilityPresetSection: React.FC<{
                             <div className="text-gray-200 mt-0.5">
                               {detailPreset.category === 'generate_3d'
                                 ? '3D生成'
-                                : detailPreset.category === 'image_gen'
-                                  ? '生图（提示词）'
-                                  : getEngine(detailPreset) === 'gen_image'
-                                    ? '生图（提示词）'
-                                    : '图像处理（内置）'}
+                                : detailPreset.category === 'text_to_text'
+                                  ? '文字模型（文生文）'
+                                  : detailPreset.category === 'image_to_text'
+                                    ? '文字模型（图生文）'
+                                    : detailPreset.category === 'text_to_image'
+                                      ? '生图（文生图）'
+                                      : detailPreset.category === 'image_to_image' && getEngine(detailPreset) === 'builtin'
+                                        ? '图像处理（内置）'
+                                        : detailPreset.category === 'image_to_image'
+                                          ? '生图（图生图）'
+                                          : getEngine(detailPreset) === 'gen_image'
+                                            ? '生图（提示词）'
+                                            : '内置'}
                             </div>
                           </div>
                           <div className="rounded-lg bg-[#1b1b21] border border-[#2a2a32] px-2 py-1.5">

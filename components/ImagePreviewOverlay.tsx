@@ -9,6 +9,10 @@ import {
 const NO_WHEEL = '[data-image-preview-no-wheel]';
 const SCROLL = '[data-image-preview-scroll]';
 
+function isEscapeLikeKey(e: KeyboardEvent): boolean {
+  return e.key === 'Escape' || e.key === 'Esc' || e.code === 'Escape' || e.keyCode === 27;
+}
+
 export type ImagePreviewOverlayProps = {
   open: boolean;
   /** 切换图片或重新打开时重置缩放/平移 */
@@ -36,6 +40,8 @@ export type ImagePreviewOverlayProps = {
   layoutReferenceSrc?: string;
   /** 是否显示「平面 / 全景」切换（全景为等距柱状 360° 浏览效果） */
   enablePanoramaMode?: boolean;
+  /** 右侧占位宽度（如常驻侧栏），用于将主图居中到左侧可用区域 */
+  contentRightInset?: string;
   children?: React.ReactNode;
 };
 
@@ -65,12 +71,15 @@ export function ImagePreviewOverlay({
   innerLayoutStableKey,
   layoutReferenceSrc,
   enablePanoramaMode = true,
+  contentRightInset = '0px',
   children,
 }: ImagePreviewOverlayProps) {
   const [previewLayout, setPreviewLayout] = useState<'flat' | 'pano'>('flat');
+  const [uiHidden, setUiHidden] = useState(false);
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [lockedFrame, setLockedFrame] = useState<{ w: number; h: number } | null>(null);
+  const [imageMeta, setImageMeta] = useState<{ width: number; height: number } | null>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
   const dragRef = useRef<{ startX: number; startY: number; startScale: number } | null>(null);
   const panRef = useRef<{ startX: number; startY: number; startOffsetX: number; startOffsetY: number } | null>(null);
@@ -78,10 +87,12 @@ export function ImagePreviewOverlay({
   const zoomLastScaleRef = useRef(1);
   const spacePressedRef = useRef(false);
   const wheelAccumRef = useRef(0);
+  const wheelLastNavigateAtRef = useRef(0);
 
   useEffect(() => {
     if (!open) return;
     setPreviewLayout('flat');
+    setUiHidden(false);
     setScale(1);
     setOffset({ x: 0, y: 0 });
     dragRef.current = null;
@@ -89,7 +100,40 @@ export function ImagePreviewOverlay({
     zoomPivotRef.current = null;
     zoomLastScaleRef.current = 1;
     wheelAccumRef.current = 0;
+    wheelLastNavigateAtRef.current = 0;
+    setImageMeta(null);
   }, [open, resetKey]);
+
+  const parseMeta = useCallback((src: string, width: number, height: number) => {
+    const ratio = width > 0 && height > 0 ? (width / height).toFixed(3) : '-';
+    let mime = 'unknown';
+    let approxBytes = 0;
+    const m = src.match(/^data:([^;,]+);base64,(.+)$/i);
+    if (m) {
+      mime = (m[1] || 'unknown').toLowerCase();
+      const base64 = m[2] || '';
+      // Base64 payload bytes: len * 3/4 - paddings
+      const padding = (base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0);
+      approxBytes = Math.max(0, Math.floor(base64.length * 3 / 4) - padding);
+    } else if (/^https?:\/\//i.test(src)) {
+      try {
+        const u = new URL(src);
+        const ext = u.pathname.split('.').pop()?.toLowerCase() || '';
+        mime =
+          ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg'
+            : ext === 'png' ? 'image/png'
+            : ext === 'webp' ? 'image/webp'
+            : ext === 'gif' ? 'image/gif'
+            : ext === 'bmp' ? 'image/bmp'
+            : ext === 'svg' ? 'image/svg+xml'
+            : 'remote';
+      } catch {
+        mime = 'remote';
+      }
+    }
+    const kb = approxBytes > 0 ? `${(approxBytes / 1024).toFixed(1)} KB` : '-';
+    return { ratio, mime, kb };
+  }, []);
 
   useEffect(() => {
     if (!open || !innerLayoutStableKey) {
@@ -117,6 +161,17 @@ export function ImagePreviewOverlay({
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (e: KeyboardEvent) => {
+      if (isEscapeLikeKey(e)) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        onClose();
+        return;
+      }
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        setUiHidden((v) => !v);
+        return;
+      }
       if (e.code === 'Space') {
         e.preventDefault();
         if (!spacePressedRef.current) wheelAccumRef.current = 0;
@@ -133,15 +188,15 @@ export function ImagePreviewOverlay({
       spacePressedRef.current = false;
       wheelAccumRef.current = 0;
     };
-    window.addEventListener('keydown', onKeyDown);
+    document.addEventListener('keydown', onKeyDown, true);
     window.addEventListener('keyup', onKeyUp);
     window.addEventListener('blur', onBlur);
     return () => {
-      window.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('keydown', onKeyDown, true);
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
     };
-  }, [open]);
+  }, [open, onClose]);
 
   useEffect(() => {
     if (!open) return;
@@ -151,6 +206,12 @@ export function ImagePreviewOverlay({
       if (viewerCapturesWheel) return;
       const t = e.target;
       if (t instanceof Element && t.closest(NO_WHEEL)) {
+        const innerMode = typeof onWheelInnerNavigate === 'function';
+        const allowSpaceNavigate =
+          innerMode && spacePressedRef.current && wheelListLength > 1;
+        if (allowSpaceNavigate) {
+          // 空格+滚轮切资产为全局手势：即使悬停在 no-wheel 区域也放行到后续导航逻辑
+        } else {
         const scrollEl = t.closest(SCROLL) as HTMLElement | null;
         if (scrollEl && scrollEl.scrollHeight > scrollEl.clientHeight + 1) {
           const st = scrollEl.scrollTop;
@@ -160,6 +221,7 @@ export function ImagePreviewOverlay({
         }
         e.preventDefault();
         return;
+        }
       }
       const innerMode = typeof onWheelInnerNavigate === 'function';
 
@@ -187,24 +249,45 @@ export function ImagePreviewOverlay({
         dy = -(e as unknown as { wheelDelta: number }).wheelDelta / 3;
       }
       if (Math.abs(dy) < 0.25) return;
+      const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+      const QUICK_STEP_THRESH = 4;
+      const NAV_COOLDOWN_MS = 90;
+      const emitStep = (step: number) => {
+        wheelAccumRef.current = 0;
+        wheelLastNavigateAtRef.current = now;
+        if (innerMode) onWheelInnerNavigate!(step);
+        else onWheelNavigate(step);
+      };
 
       // 空格+切资产：单次滚轮事件常见 deltaY≈16，用 18 阈值会要滚两下才触发一次
       if (innerMode && spacePressedRef.current) {
         if (wheelListLength <= 1) return;
+        if (Math.abs(dy) >= QUICK_STEP_THRESH && now - wheelLastNavigateAtRef.current >= NAV_COOLDOWN_MS) {
+          emitStep(dy > 0 ? 1 : -1);
+          return;
+        }
         const SPACE_THRESH = 8;
+        if (wheelAccumRef.current !== 0 && Math.sign(wheelAccumRef.current) !== Math.sign(dy)) {
+          wheelAccumRef.current = 0;
+        }
         wheelAccumRef.current += dy;
         if (wheelAccumRef.current >= SPACE_THRESH) {
-          wheelAccumRef.current = 0;
-          onWheelNavigate(1);
+          emitStep(1);
         } else if (wheelAccumRef.current <= -SPACE_THRESH) {
-          wheelAccumRef.current = 0;
-          onWheelNavigate(-1);
+          emitStep(-1);
         }
         return;
       }
 
       const THRESH = 18;
       const MAX_STEPS_PER_EVENT = 12;
+      if (Math.abs(dy) >= QUICK_STEP_THRESH && now - wheelLastNavigateAtRef.current >= NAV_COOLDOWN_MS) {
+        emitStep(dy > 0 ? 1 : -1);
+        return;
+      }
+      if (wheelAccumRef.current !== 0 && Math.sign(wheelAccumRef.current) !== Math.sign(dy)) {
+        wheelAccumRef.current = 0;
+      }
       wheelAccumRef.current += dy;
       let steps = 0;
       while (wheelAccumRef.current >= THRESH && steps < MAX_STEPS_PER_EVENT) {
@@ -216,11 +299,9 @@ export function ImagePreviewOverlay({
         steps -= 1;
       }
       if (steps === 0) return;
-      if (innerMode) {
-        onWheelInnerNavigate!(steps);
-      } else {
-        onWheelNavigate(steps);
-      }
+      wheelLastNavigateAtRef.current = now;
+      if (innerMode) onWheelInnerNavigate!(steps);
+      else onWheelNavigate(steps);
     };
     window.addEventListener('wheel', onWheel, { passive: false });
     return () => window.removeEventListener('wheel', onWheel);
@@ -321,15 +402,35 @@ export function ImagePreviewOverlay({
       const nw = im.naturalWidth;
       const nh = im.naturalHeight;
       if (!nw || !nh) return;
-      setLockedFrame((prev) => prev ?? fitImageToPreviewViewport(nw, nh));
+      setImageMeta({ width: nw, height: nh });
+      const next = fitImageToPreviewViewport(nw, nh);
+      // 多版本切换时，外框按已出现版本里的更大边扩展，避免“原图很窄导致生成图显示过小”。
+      setLockedFrame((prev) =>
+        prev
+          ? { w: Math.max(prev.w, next.w), h: Math.max(prev.h, next.h) }
+          : next
+      );
     },
     [innerLayoutStableKey]
+  );
+
+  const handleImgLoadGeneral = useCallback(
+    (e: React.SyntheticEvent<HTMLImageElement>) => {
+      const im = e.currentTarget;
+      const nw = im.naturalWidth;
+      const nh = im.naturalHeight;
+      if (!nw || !nh) return;
+      setImageMeta({ width: nw, height: nh });
+      handleImgLoad(e);
+    },
+    [handleImgLoad]
   );
 
   if (!open || !imageSrc) return null;
 
   const useFrameLock = Boolean(innerLayoutStableKey && lockedFrame);
   const shellStyle: React.CSSProperties = {
+    left: `calc((100% - ${contentRightInset}) / 2)`,
     transform: `translate(-50%, -50%) translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
     transformOrigin: 'center center',
     ...(useFrameLock && lockedFrame
@@ -352,7 +453,7 @@ export function ImagePreviewOverlay({
 
         {!(enablePanoramaMode && previewLayout === 'pano') ? (
           <div
-            className={`absolute left-1/2 top-1/2 ${useFrameLock ? 'flex items-center justify-center' : ''}`}
+            className={`absolute top-1/2 ${useFrameLock ? 'flex items-center justify-center' : ''}`}
             style={shellStyle}
           >
             <img
@@ -365,7 +466,7 @@ export function ImagePreviewOverlay({
               alt=""
               draggable={false}
               onContextMenu={(e) => e.preventDefault()}
-              onLoad={handleImgLoad}
+              onLoad={handleImgLoadGeneral}
               onDoubleClick={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
@@ -382,18 +483,21 @@ export function ImagePreviewOverlay({
           </div>
         ) : null}
 
-        <div className="absolute top-4 left-4 z-10 max-w-[min(300px,calc(100vw-6rem))] rounded-xl bg-[#101018]/90 border border-[#2e2e32] px-3 py-2 text-[9px] text-gray-300 pointer-events-none text-left leading-relaxed space-y-1">
+        {!uiHidden ? (
+        <div className="absolute top-4 left-4 z-10 max-w-[min(300px,calc(100vw-6rem))] rounded-xl border border-white/10 bg-[#0f0f12]/98 px-3 py-2 text-[9px] text-gray-300 pointer-events-none text-left leading-relaxed space-y-1 shadow-xl backdrop-blur-[2px]">
           {enablePanoramaMode && previewLayout === 'pano' ? (
             <>
               <div>拖拽：旋转视角（360° 全景）</div>
               <div>滚轮：调整视野宽窄</div>
               <div>切回「平面」后可滚轮切图 / 缩放平移</div>
+              <div>Tab：隐藏/显示界面（仅看图片）</div>
               <div>Esc：关闭预览</div>
             </>
           ) : typeof onWheelInnerNavigate === 'function' ? (
             <>
               <div>滚轮：本卡片多版本时切换显示</div>
               <div>空格+滚轮：上一资产 / 下一资产</div>
+              <div>Tab：隐藏/显示界面（仅看图片）</div>
               <div>Esc：关闭预览</div>
               <div>双击：复原缩放与位置</div>
               <div>左键：缩放</div>
@@ -403,6 +507,7 @@ export function ImagePreviewOverlay({
           ) : (
             <>
               <div>滚轮：上一张 / 下一张</div>
+              <div>Tab：隐藏/显示界面（仅看图片）</div>
               <div>Esc：关闭预览</div>
               <div>双击：复原缩放与位置</div>
               <div>左键：缩放</div>
@@ -411,7 +516,9 @@ export function ImagePreviewOverlay({
             </>
           )}
         </div>
+        ) : null}
 
+        {!uiHidden ? (
         <div className="absolute right-4 top-4 z-10 flex items-center gap-2">
           {enablePanoramaMode ? (
             <div
@@ -450,8 +557,9 @@ export function ImagePreviewOverlay({
             关闭
           </button>
         </div>
+        ) : null}
 
-        {children}
+        {!uiHidden ? children : null}
     </PreviewShell>
   );
 }

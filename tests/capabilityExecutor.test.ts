@@ -7,7 +7,8 @@ function makePreset(id: string): CustomAppModule {
   return {
     id,
     label: id,
-    category: 'image_process',
+    category: 'image_to_image',
+    engine: 'builtin',
     instruction: '',
   };
 }

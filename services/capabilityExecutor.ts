@@ -6,7 +6,9 @@ import {
   understandImageEditIntent,
   dialogGenerateImage,
   dialogGenerateImageMulti,
+  getDialogTextResponse,
   CAPABILITY_UNDERSTAND_RETRY_OPTIONS,
+  normalizeApiErrorMessage,
 } from './geminiService';
 
 export type CapabilityExecuteContext = {
@@ -26,7 +28,22 @@ export type CapabilityExecuteContext = {
 
 export type CapabilityExecuteResult =
   | { ok: true; kind: 'image'; image: string; durationMs: number; vgpSteps?: VgpGenStepCapture[] }
+  | { ok: true; kind: 'text'; text: string; durationMs: number }
   | { ok: false; kind: 'none'; error: string; durationMs: number };
+
+function parseInlineForLlm(input: string): { mimeType: string; data: string } {
+  const raw = (input || '').trim();
+  const matched = raw.match(/^data:([^;,]+);base64,(.+)$/i);
+  if (matched) {
+    return { mimeType: matched[1] || 'image/jpeg', data: matched[2] || '' };
+  }
+  return { mimeType: 'image/jpeg', data: raw };
+}
+
+function hasUsableImageBase64(input: string): boolean {
+  const p = parseInlineForLlm(input);
+  return p.data.length > 8;
+}
 
 function makeVgpCapture(
   preset: CustomAppModule,
@@ -46,10 +63,25 @@ function makeVgpCapture(
   };
 }
 
-export function getCapabilityEngine(preset: CustomAppModule): 'gen_image' | 'builtin' {
+export function getCapabilityEngine(preset: CustomAppModule): 'gen_image' | 'gen_text' | 'builtin' {
   if (preset.engine) return preset.engine;
-  if (preset.category === 'image_gen') return 'gen_image';
+  const cat = preset.category;
+  if (cat === 'text_to_text' || cat === 'image_to_text') return 'gen_text';
+  if (cat === 'text_to_image') return 'gen_image';
+  if (cat === 'image_to_image') {
+    if (preset.id === 'split_component' || preset.id === 'cut_image') return 'builtin';
+    return 'gen_image';
+  }
+  if (cat === 'generate_3d') return 'builtin';
+  if (cat === 'image_gen' || (cat as string) === 'image_gen') return 'gen_image';
+  if (cat === 'text_llm' || (cat as string) === 'text_llm') return 'gen_text';
+  if (cat === 'image_process' || (cat as string) === 'image_process') return 'builtin';
   return 'builtin';
+}
+
+/** 工作流侧栏「词」微调列：走生图模型时展示 */
+export function capabilityUsesGenImageEngine(preset: CustomAppModule): boolean {
+  return getCapabilityEngine(preset) === 'gen_image';
 }
 
 export function resolveImageModelId(gear?: DialogImageGear): string {
@@ -111,15 +143,120 @@ async function resolveGenImagePrompt(
   return resolveCapabilityPrompt(preset, inputImageBase64, ctx);
 }
 
+async function resolveTextOnlyImagePrompt(
+  preset: CustomAppModule,
+  userText: string,
+  ctx: CapabilityExecuteContext
+): Promise<string | null> {
+  const presetPrompt = (preset.instruction || '').trim();
+  const ut = (userText || '').trim();
+  if (preset.skipUnderstand === true) {
+    const merged = [presetPrompt, ut].filter(Boolean).join('\n\n').trim();
+    return merged || null;
+  }
+  ctx.onLog?.('info', `[${preset.label || preset.id}] 整理文生图提示词中…`, undefined);
+  const fused = await getDialogTextResponse(
+    [
+      {
+        role: 'user',
+        parts: [
+          {
+            text: `你是生图提示词助手。将「预设」与「用户文字」融合为一段可直接用于文生图的简洁画面描述（中文或英文均可，只输出描述正文）。\n\n【预设】\n${presetPrompt || '(无)'}\n\n【用户文字】\n${ut || '(无)'}`,
+          },
+        ],
+      },
+    ],
+    'gemini-3-flash-preview'
+  );
+  const out = (fused || '').trim();
+  return out.length > 0 ? out : null;
+}
+
+async function executeGenTextPath(
+  preset: CustomAppModule,
+  inputImageBase64: string,
+  inputText: string | undefined,
+  ctx: CapabilityExecuteContext
+): Promise<CapabilityExecuteResult> {
+  const start = Date.now();
+  const actionLabel = preset.label || preset.id;
+  const sys = (preset.instruction || '').trim() || '请根据用户输入完成任务，直接输出结果正文。';
+  const userT = (inputText || '').trim();
+  const hasImg = hasUsableImageBase64(inputImageBase64);
+  if (preset.category === 'text_to_text') {
+    if (hasImg) {
+      return {
+        ok: false,
+        kind: 'none',
+        error: '文生文能力请拖入文字卡（不要拖图片）',
+        durationMs: Date.now() - start,
+      };
+    }
+    if (!userT) {
+      return {
+        ok: false,
+        kind: 'none',
+        error: '文生文需要文字卡片内容',
+        durationMs: Date.now() - start,
+      };
+    }
+  }
+  if (preset.category === 'image_to_text' && !hasImg) {
+    return {
+      ok: false,
+      kind: 'none',
+      error: '图生文需要图片',
+      durationMs: Date.now() - start,
+    };
+  }
+  if (!hasImg && !userT) {
+    return {
+      ok: false,
+      kind: 'none',
+      error: '需要文字卡片内容或图片',
+      durationMs: Date.now() - start,
+    };
+  }
+  ctx.onLog?.('info', `[${actionLabel}] 文字模型处理中…`, undefined);
+  const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [];
+  if (hasImg) {
+    parts.push({ inlineData: parseInlineForLlm(inputImageBase64) });
+  }
+  const body = [
+    `【系统任务】\n${sys}`,
+    userT && `【用户文字】\n${userT}`,
+    hasImg && '【附图】请结合图片完成上述任务。',
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+  parts.push({ text: body });
+  try {
+    const text = await getDialogTextResponse([{ role: 'user', parts }], 'gemini-3-flash-preview');
+    const out = (text || '').trim();
+    if (!out) return { ok: false, kind: 'none', error: '文字模型未返回内容', durationMs: Date.now() - start };
+    return { ok: true, kind: 'text', text: out, durationMs: Date.now() - start };
+  } catch (e) {
+    const msg = normalizeApiErrorMessage(e);
+    return { ok: false, kind: 'none', error: msg, durationMs: Date.now() - start };
+  }
+}
+
+export type ExecuteCapabilityOptions = {
+  /** 来自文字资产卡片的正文 */
+  inputText?: string;
+};
+
 /**
- * 执行能力（单张图 -> 单张图）。切割图片等“多图输出/交互选择”的能力不在此处理。
+ * 执行能力：生图 / 文字 / 内置图像处理。切割图片等“多图输出/交互选择”的能力不在此处理。
  */
 export async function executeCapability(
   preset: CustomAppModule,
   inputImageBase64: string,
-  ctx: CapabilityExecuteContext = {}
+  ctx: CapabilityExecuteContext = {},
+  opts?: ExecuteCapabilityOptions
 ): Promise<CapabilityExecuteResult> {
   const start = Date.now();
+  const inputText = opts?.inputText;
   try {
     if (preset.category === 'generate_3d') {
       return { ok: false, kind: 'none', error: '生成3D 请在工作流中拖图到能力框提交', durationMs: Date.now() - start };
@@ -127,6 +264,10 @@ export async function executeCapability(
 
     const engine = getCapabilityEngine(preset);
     const actionLabel = preset.label || preset.id;
+
+    if (engine === 'gen_text') {
+      return executeGenTextPath(preset, inputImageBase64, inputText, ctx);
+    }
 
     // 内置：拆分组件（输出“首个区域裁剪图”，可选再走生图）
     if (preset.id === 'split_component') {
@@ -186,21 +327,71 @@ export async function executeCapability(
       return { ok: false, kind: 'none', error: '该能力为图像处理执行方式，但没有内置实现', durationMs: Date.now() - start };
     }
 
+    const hasImg = hasUsableImageBase64(inputImageBase64);
+    const userT = (inputText || '').trim();
+
+    if (preset.category === 'text_to_image' && hasImg) {
+      return {
+        ok: false,
+        kind: 'none',
+        error: '文生图能力请拖入文字卡，不要拖图片',
+        durationMs: Date.now() - start,
+      };
+    }
+
+    if (!hasImg) {
+      if (preset.category === 'image_to_image') {
+        return {
+          ok: false,
+          kind: 'none',
+          error: '图生图需要图片（请拖入图片卡）',
+          durationMs: Date.now() - start,
+        };
+      }
+      const prompt = await resolveTextOnlyImagePrompt(preset, userT, ctx);
+      if (!prompt) {
+        return {
+          ok: false,
+          kind: 'none',
+          error: '文生图需要预设提示词，或勾选「理解」并提供文字卡片内容',
+          durationMs: Date.now() - start,
+        };
+      }
+      ctx.onLog?.('info', `[${actionLabel}] 文生图中…`, undefined);
+      const modelId = resolveImageModelId(preset.imageGear);
+      const imageOptions =
+        preset.imageAspectRatio || preset.imageSize
+          ? { aspectRatio: preset.imageAspectRatio, imageSize: preset.imageSize }
+          : undefined;
+      const result = await dialogGenerateImage(null, prompt, modelId, imageOptions);
+      return {
+        ok: true,
+        kind: 'image',
+        image: result,
+        durationMs: Date.now() - start,
+        vgpSteps: [makeVgpCapture(preset, prompt, modelId)],
+      };
+    }
+
     const prompt = await resolveGenImagePrompt(preset, inputImageBase64, ctx);
     if (!prompt) return { ok: false, kind: 'none', error: '该能力为生图执行方式，但未填写预设提示词或理解未返回有效指令', durationMs: Date.now() - start };
+    const augmented =
+      userT && (preset.category === 'image_to_image' || (preset.category as string) === 'image_gen' || (preset.category as string) === 'text_llm')
+        ? `${prompt}\n\n【用户补充文字】\n${userT}`
+        : prompt;
     ctx.onLog?.('info', `[${actionLabel}] 生图中…`, undefined);
     const modelId = resolveImageModelId(preset.imageGear);
     const imageOptions = (preset.imageAspectRatio || preset.imageSize) ? { aspectRatio: preset.imageAspectRatio, imageSize: preset.imageSize } : undefined;
-    const result = await dialogGenerateImage(inputImageBase64, prompt, modelId, imageOptions);
+    const result = await dialogGenerateImage(inputImageBase64, augmented, modelId, imageOptions);
     return {
       ok: true,
       kind: 'image',
       image: result,
       durationMs: Date.now() - start,
-      vgpSteps: [makeVgpCapture(preset, prompt, modelId)],
+      vgpSteps: [makeVgpCapture(preset, augmented, modelId)],
     };
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
+    const msg = normalizeApiErrorMessage(e);
     return { ok: false, kind: 'none', error: msg, durationMs: Date.now() - start };
   }
 }
@@ -293,7 +484,7 @@ export async function executeCapabilitySet(
               makeVgpCapture(preset, instruction, modelId, `set-node:${n.id}`)
             );
           } catch (e) {
-            const msg = e instanceof Error ? e.message : String(e);
+            const msg = normalizeApiErrorMessage(e);
             return { ok: false, kind: 'none', error: `[${n.data.label}] ${msg}`, durationMs: Date.now() - start };
           }
         } else {
@@ -303,6 +494,14 @@ export async function executeCapabilitySet(
           const out = await executeCapability(preset, srcImage, ctx);
           if (out.ok === false) {
             return { ok: false, kind: 'none', error: `[${n.data.label}] ${out.error}`, durationMs: Date.now() - start };
+          }
+          if (out.kind !== 'image') {
+            return {
+              ok: false,
+              kind: 'none',
+              error: `[${n.data.label}] 能力集合暂不支持该节点的纯文字输出，请在工作流单预设中执行`,
+              durationMs: Date.now() - start,
+            };
           }
           outputs.set(n.id, out.image);
           lastImage = out.image;

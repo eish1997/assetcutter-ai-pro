@@ -1,4 +1,5 @@
 import React, {
+  useState,
   type Dispatch,
   type DragEvent,
   type RefObject,
@@ -6,7 +7,14 @@ import React, {
 } from 'react';
 import { getRandomGroupCodeName } from '../../data/groupCodeNames';
 import { attachInitialVgpToNewAsset } from '../../services/vgp/vgpStore';
+import {
+  DIALOG_IMAGE_GEARS,
+  SUPPORTED_ASPECT_RATIOS,
+  SUPPORTED_IMAGE_SIZES,
+} from '../../types';
 import type { CustomAppModule, CapabilitySet, WorkflowAsset } from '../../types';
+import { capabilityUsesGenImageEngine } from '../../services/capabilityExecutor';
+import { CustomDropdown, DROPDOWN_TRIGGER_COMPACT } from '../ui/CustomDropdown';
 import { dragTransferHasPlainText } from './workflowSectionHelpers';
 import { SET_ACTION_PREFIX } from './workflowSectionUiConstants';
 import { uuid } from './workflowIds';
@@ -65,7 +73,17 @@ export type WorkflowSidebarColumnProps = {
   setActionDroppedInFavorite: Dispatch<SetStateAction<boolean>>;
   removeActionFromFavorite: (actionId: string) => void;
   setHoverPreview: Dispatch<SetStateAction<{ mod: CustomAppModule; x: number; y: number } | null>>;
-  handleDropToModuleAction: (mod: CustomAppModule, tweakPrompt: boolean, dropEvent?: DragEvent<HTMLElement>) => void;
+  handleDropToModuleAction: (
+    mod: CustomAppModule,
+    tweakPrompt: boolean,
+    dropEvent?: DragEvent<HTMLElement>,
+    groupOverrides?: {
+      imageGear?: CustomAppModule['imageGear'];
+      imageAspectRatio?: string;
+      imageSize?: string;
+      understand?: boolean;
+    }
+  ) => void;
   handleDropToSetAction: (setActionId: string, e: DragEvent<HTMLElement>) => void;
   jumpToCapabilityPreset: (preset: CustomAppModule) => void;
 };
@@ -119,6 +137,28 @@ export function WorkflowSidebarColumn({
   handleDropToSetAction,
   jumpToCapabilityPreset,
 }: WorkflowSidebarColumnProps) {
+  const [groupOverrideByCategory, setGroupOverrideByCategory] = useState<
+    Record<
+      string,
+      {
+        enabled?: boolean;
+        imageGear?: CustomAppModule['imageGear'];
+        imageAspectRatio?: string;
+        imageSize?: string;
+        understand?: boolean;
+      }
+    >
+  >({});
+  const getGroupOverridesForCategory = (categoryId: string) => {
+    const cfg = groupOverrideByCategory[categoryId];
+    if (!cfg?.enabled) return undefined;
+    return {
+      ...(cfg.imageGear ? { imageGear: cfg.imageGear } : {}),
+      ...(cfg.imageAspectRatio ? { imageAspectRatio: cfg.imageAspectRatio } : {}),
+      ...(cfg.imageSize ? { imageSize: cfg.imageSize } : {}),
+      ...(typeof cfg.understand === 'boolean' ? { understand: cfg.understand } : {}),
+    };
+  };
   return (
     <div
       data-workflow-sidebar
@@ -534,7 +574,7 @@ export function WorkflowSidebarColumn({
                         >
                           <div
                             className={`flex-1 p-3 flex flex-col items-center justify-center text-center min-w-0 transition-colors ${
-                              entry.kind === 'module' && entry.mod?.category === 'image_gen' ? 'border-r border-[#2e2e32]' : ''
+                              entry.kind === 'module' && entry.mod && capabilityUsesGenImageEngine(entry.mod) ? 'border-r border-[#2e2e32]' : ''
                             } ${
                               dragOverAction === entry.id + '__tweak'
                                 ? 'bg-[#121214]'
@@ -572,7 +612,7 @@ export function WorkflowSidebarColumn({
                           >
                             <span className="text-[9px] font-black uppercase">{entry.label}</span>
                           </div>
-                          {entry.kind === 'module' && entry.mod?.category === 'image_gen' && (
+                          {entry.kind === 'module' && entry.mod && capabilityUsesGenImageEngine(entry.mod) && (
                             <div
                               className={`w-11 shrink-0 flex flex-col items-center justify-center rounded-r-lg transition-colors cursor-pointer ${
                                 dragOverAction === entry.id + '__tweak'
@@ -612,14 +652,137 @@ export function WorkflowSidebarColumn({
                 <>
               {visibleByCategory.map(({ category, list }) => (
                 <div key={category.id}>
-                  <button
-                    type="button"
-                    onClick={() => toggleSectionCollapsed(`cat:${category.id}`)}
-                    className="w-full text-left mb-1.5 flex items-center justify-between rounded-lg border border-[#2e2e32] bg-[#121214] px-2.5 py-1.5 text-[8px] font-black uppercase tracking-wide text-gray-400 hover:bg-[#18181c] hover:text-gray-200 transition-colors"
-                  >
-                    <span>{category.label}</span>
-                    <span className="text-[10px] text-gray-500">{collapsedSectionIds[`cat:${category.id}`] ? '▼' : '▲'}</span>
-                  </button>
+                  <div className="mb-1 rounded-lg border border-[#2e2e32] bg-[#121214] px-2 py-1 flex items-center gap-1.5 min-h-[1.6rem]">
+                    <button
+                      type="button"
+                      onClick={() => toggleSectionCollapsed(`cat:${category.id}`)}
+                      className="shrink-0 text-left inline-flex items-center gap-1 text-[8px] font-black uppercase tracking-wide text-gray-400 hover:text-gray-200 transition-colors"
+                    >
+                      <span>{category.label}</span>
+                      <span className="text-[10px] text-gray-500">{collapsedSectionIds[`cat:${category.id}`] ? '▼' : '▲'}</span>
+                    </button>
+                    <div className="flex-1 min-w-0 flex items-center justify-end gap-0.5" onClick={(e) => e.stopPropagation()}>
+                      {(() => {
+                        const hasParamOptions = list.some((m) => capabilityUsesGenImageEngine(m));
+                        const cfg = groupOverrideByCategory[category.id] || {};
+                        const gearChanged = Boolean(cfg.imageGear);
+                        const ratioChanged = Boolean(cfg.imageAspectRatio);
+                        const sizeChanged = Boolean(cfg.imageSize);
+                        const gearText = gearChanged
+                          ? (DIALOG_IMAGE_GEARS.find((g) => g.id === cfg.imageGear)?.label || String(cfg.imageGear)).slice(0, 1)
+                          : '档';
+                        const ratioText = ratioChanged ? String(cfg.imageAspectRatio).slice(0, 1) : '比';
+                        const sizeText = sizeChanged ? String(cfg.imageSize).slice(0, 1) : '寸';
+                        return (
+                          <>
+                      <button
+                        type="button"
+                        title="覆盖参数开关"
+                        onClick={() =>
+                          setGroupOverrideByCategory((prev) => ({
+                            ...prev,
+                            [category.id]: {
+                              ...(prev[category.id] || {}),
+                              enabled: !(prev[category.id]?.enabled === true),
+                            },
+                          }))
+                        }
+                        className={`w-6 h-6 rounded-full border inline-flex items-center justify-center text-[9px] font-black ${groupOverrideByCategory[category.id]?.enabled ? 'border-blue-500 text-blue-300 bg-blue-950/35' : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'}`}
+                      >
+                        覆
+                      </button>
+                      {hasParamOptions ? (
+                        <>
+                      <CustomDropdown
+                        options={[{ value: '', label: '默认' }, ...DIALOG_IMAGE_GEARS.map((g) => ({ value: g.id, label: g.label }))]}
+                        value={groupOverrideByCategory[category.id]?.imageGear || ''}
+                        onChange={(v) =>
+                          setGroupOverrideByCategory((prev) => ({
+                            ...prev,
+                            [category.id]: { ...(prev[category.id] || {}), imageGear: (v || undefined) as CustomAppModule['imageGear'] | undefined },
+                          }))
+                        }
+                        disabled={!groupOverrideByCategory[category.id]?.enabled}
+                        triggerClassName="p-0 bg-transparent border-0 rounded-none hover:bg-transparent"
+                        renderTrigger={() => (
+                          <span
+                            title={gearChanged ? `档位：${DIALOG_IMAGE_GEARS.find((g) => g.id === cfg.imageGear)?.label || cfg.imageGear}` : '档位：默认'}
+                            className={`w-6 h-6 rounded-full border inline-flex items-center justify-center text-[9px] font-black ${
+                              gearChanged ? 'border-blue-500 text-blue-300 bg-blue-950/35' : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'
+                            }`}
+                          >
+                            {gearText}
+                          </span>
+                        )}
+                      />
+                      <CustomDropdown
+                        options={[{ value: '', label: '默认' }, ...SUPPORTED_ASPECT_RATIOS.map((r) => ({ value: r.value, label: r.label }))]}
+                        value={groupOverrideByCategory[category.id]?.imageAspectRatio || ''}
+                        onChange={(v) =>
+                          setGroupOverrideByCategory((prev) => ({
+                            ...prev,
+                            [category.id]: { ...(prev[category.id] || {}), imageAspectRatio: v || undefined },
+                          }))
+                        }
+                        disabled={!groupOverrideByCategory[category.id]?.enabled}
+                        triggerClassName="p-0 bg-transparent border-0 rounded-none hover:bg-transparent"
+                        renderTrigger={() => (
+                          <span
+                            title={ratioChanged ? `比例：${cfg.imageAspectRatio}` : '比例：默认'}
+                            className={`w-6 h-6 rounded-full border inline-flex items-center justify-center text-[9px] font-black ${
+                              ratioChanged ? 'border-blue-500 text-blue-300 bg-blue-950/35' : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'
+                            }`}
+                          >
+                            {ratioText}
+                          </span>
+                        )}
+                      />
+                      <CustomDropdown
+                        options={[{ value: '', label: '默认' }, ...SUPPORTED_IMAGE_SIZES.map((s) => ({ value: s.value, label: s.label }))]}
+                        value={groupOverrideByCategory[category.id]?.imageSize || ''}
+                        onChange={(v) =>
+                          setGroupOverrideByCategory((prev) => ({
+                            ...prev,
+                            [category.id]: { ...(prev[category.id] || {}), imageSize: v || undefined },
+                          }))
+                        }
+                        disabled={!groupOverrideByCategory[category.id]?.enabled}
+                        triggerClassName="p-0 bg-transparent border-0 rounded-none hover:bg-transparent"
+                        renderTrigger={() => (
+                          <span
+                            title={sizeChanged ? `尺寸：${cfg.imageSize}` : '尺寸：默认'}
+                            className={`w-6 h-6 rounded-full border inline-flex items-center justify-center text-[9px] font-black ${
+                              sizeChanged ? 'border-blue-500 text-blue-300 bg-blue-950/35' : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'
+                            }`}
+                          >
+                            {sizeText}
+                          </span>
+                        )}
+                      />
+                      <button
+                        type="button"
+                        title="理解开关"
+                        disabled={!groupOverrideByCategory[category.id]?.enabled}
+                        onClick={() =>
+                          setGroupOverrideByCategory((prev) => ({
+                            ...prev,
+                            [category.id]: {
+                              ...(prev[category.id] || {}),
+                              understand: prev[category.id]?.understand === false,
+                            },
+                          }))
+                        }
+                        className={`w-6 h-6 rounded-full border inline-flex items-center justify-center text-[9px] font-black ${groupOverrideByCategory[category.id]?.understand !== false ? 'border-blue-500 text-blue-300 bg-blue-950/35' : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'} disabled:opacity-50`}
+                      >
+                        解
+                      </button>
+                        </>
+                      ) : null}
+                          </>
+                        );
+                      })()}
+                    </div>
+                  </div>
                   {!collapsedSectionIds[`cat:${category.id}`] && (
                   <div className="grid grid-cols-2 gap-2">
                     {list.map((mod) => (
@@ -663,7 +826,7 @@ export function WorkflowSidebarColumn({
                       >
                         <div
                           className={`flex-1 p-3 flex flex-col items-center justify-center text-center min-w-0 transition-colors ${
-                            mod.category === 'image_gen' ? 'border-r border-[#2e2e32]' : ''
+                            capabilityUsesGenImageEngine(mod) ? 'border-r border-[#2e2e32]' : ''
                           } ${
                             dragOverAction === mod.id + '__tweak'
                               ? 'bg-[#121214]'
@@ -688,12 +851,12 @@ export function WorkflowSidebarColumn({
                           onDrop={(e) => {
                             e.preventDefault();
                             setDragOverAction(null);
-                            handleDropToModuleAction(mod, false, e);
+                            handleDropToModuleAction(mod, false, e, getGroupOverridesForCategory(category.id));
                           }}
                         >
                           <span className="text-[9px] font-black uppercase">{mod.label}</span>
                         </div>
-                        {mod.category === 'image_gen' && (
+                        {capabilityUsesGenImageEngine(mod) && (
                           <div
                             className={`w-11 shrink-0 flex flex-col items-center justify-center rounded-r-lg transition-colors cursor-pointer ${
                               dragOverAction === mod.id + '__tweak'
@@ -715,7 +878,7 @@ export function WorkflowSidebarColumn({
                               e.preventDefault();
                               e.stopPropagation();
                               setDragOverAction(null);
-                              handleDropToModuleAction(mod, true, e);
+                              handleDropToModuleAction(mod, true, e, getGroupOverridesForCategory(category.id));
                             }}
                           >
                             <span className="text-[10px] text-blue-400 font-bold" title="微调提示词">词</span>
@@ -771,7 +934,7 @@ export function WorkflowSidebarColumn({
                 >
                   <div
                     className={`flex-1 p-3 flex flex-col items-center justify-center text-center min-w-0 transition-colors ${
-                      mod.category === 'image_gen' ? 'border-r border-[#2e2e32]' : ''
+                      capabilityUsesGenImageEngine(mod) ? 'border-r border-[#2e2e32]' : ''
                     } ${
                       dragOverAction === mod.id + '__tweak'
                         ? 'bg-[#121214]'
@@ -792,7 +955,7 @@ export function WorkflowSidebarColumn({
                   >
                     <span className="text-[9px] font-black uppercase">{mod.label}</span>
                   </div>
-                  {mod.category === 'image_gen' && (
+                  {capabilityUsesGenImageEngine(mod) && (
                     <div
                       className={`w-11 shrink-0 flex flex-col items-center justify-center rounded-r-lg transition-colors cursor-pointer ${
                         dragOverAction === mod.id + '__tweak'

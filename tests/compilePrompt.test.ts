@@ -7,7 +7,7 @@ function makeGenPreset(partial: Partial<CustomAppModule>): CustomAppModule {
   return {
     id: 'test-preset',
     label: '测试能力',
-    category: 'image_gen',
+    category: 'image_to_image',
     instruction: '把主体变亮',
     ...partial,
   };

@@ -1,10 +1,10 @@
 {
-  "version": 3,
+  "version": 4,
   "presets": [
     {
       "id": "split_component",
       "label": "拆分组件",
-      "category": "image_gen",
+      "category": "image_to_image",
       "engine": "gen_image",
       "enabled": true,
       "order": 0,
@@ -14,7 +14,7 @@
     {
       "id": "style_transfer",
       "label": "转风格",
-      "category": "image_gen",
+      "category": "image_to_image",
       "engine": "gen_image",
       "enabled": true,
       "order": 1,
@@ -26,7 +26,7 @@
     {
       "id": "multi_view",
       "label": "生成多视角",
-      "category": "image_gen",
+      "category": "image_to_image",
       "engine": "gen_image",
       "enabled": true,
       "order": 2,
@@ -36,7 +36,7 @@
     {
       "id": "cut_image",
       "label": "切割图片",
-      "category": "image_process",
+      "category": "image_to_image",
       "engine": "builtin",
       "enabled": true,
       "order": 3,
@@ -46,7 +46,7 @@
     {
       "id": "83f822d9c4",
       "label": "线稿",
-      "category": "image_gen",
+      "category": "image_to_image",
       "instruction": "将图片转成黑白线描效果图，干净背景。",
       "enabled": true,
       "order": 4,
@@ -56,7 +56,7 @@
     {
       "id": "2406c96c0e",
       "label": "色块",
-      "category": "image_gen",
+      "category": "image_to_image",
       "instruction": "将图片转成纯平色块效果图，干净背景。",
       "enabled": true,
       "order": 5,
@@ -66,7 +66,7 @@
     {
       "id": "842d3d6e19",
       "label": "白模",
-      "category": "image_gen",
+      "category": "image_to_image",
       "instruction": "将图片转成传统3D游戏影视流程中的白模效果图，灰色背景。",
       "enabled": true,
       "order": 6,
@@ -76,7 +76,7 @@
     {
       "id": "7f352bf0f7",
       "label": "线稿色块",
-      "category": "image_gen",
+      "category": "image_to_image",
       "instruction": "将图片转成线稿色块图，干净背景。",
       "enabled": true,
       "order": 7,

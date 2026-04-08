@@ -30,13 +30,17 @@ function parentStepLabel(
 export type WorkflowGenerationRecordPanelProps = {
   asset: WorkflowAsset;
   getStepLabel: (stepKey: string) => string;
-  onClose: () => void;
+  onClose?: () => void;
+  mode?: 'modal' | 'inline';
+  onSelectDisplayKey?: (key: string) => void;
 };
 
 export const WorkflowGenerationRecordPanel: React.FC<WorkflowGenerationRecordPanelProps> = ({
   asset,
   getStepLabel,
   onClose,
+  mode = 'modal',
+  onSelectDisplayKey,
 }) => {
   const [focusedVersionId, setFocusedVersionId] = useState<string | null>(null);
   const [promptExpandedId, setPromptExpandedId] = useState<string | null>(null);
@@ -44,10 +48,17 @@ export const WorkflowGenerationRecordPanel: React.FC<WorkflowGenerationRecordPan
   const vgp = displayAsset.vgp;
 
   if (!vgp) {
+    if (mode === 'inline') {
+      return (
+        <div className="rounded-2xl border border-white/10 bg-[#0f0f12] p-4">
+          <p className="text-sm text-gray-300">暂无生成记录数据。</p>
+        </div>
+      );
+    }
     return createPortal(
       <div
         className="fixed inset-0 z-[2100] flex items-center justify-center bg-black/70 p-4"
-        onClick={onClose}
+        onClick={() => onClose?.()}
         role="presentation"
       >
         <div
@@ -57,7 +68,7 @@ export const WorkflowGenerationRecordPanel: React.FC<WorkflowGenerationRecordPan
           <p className="text-sm text-gray-300">暂无生成记录数据。</p>
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => onClose?.()}
             className="mt-4 px-4 py-2 rounded-xl bg-white/10 text-[10px] font-black uppercase hover:bg-white/15"
           >
             关闭
@@ -89,44 +100,39 @@ export const WorkflowGenerationRecordPanel: React.FC<WorkflowGenerationRecordPan
     URL.revokeObjectURL(a.href);
   };
 
-  return createPortal(
+  const panelContent = (
     <div
-      className="fixed inset-0 z-[2100] flex items-center justify-center bg-black/75 p-4 overflow-y-auto"
-      onClick={onClose}
-      role="presentation"
+      className={`${
+        mode === 'inline'
+          ? 'h-full rounded-none border-0 bg-transparent shadow-none'
+          : 'max-w-2xl w-full max-h-[90vh] my-4 overflow-y-auto rounded-2xl border border-white/10 bg-[#0f0f12] shadow-xl'
+      }`}
     >
-      <div
-        className="max-w-2xl w-full max-h-[90vh] overflow-y-auto rounded-2xl border border-white/10 bg-[#0f0f12] shadow-xl my-4"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="sticky top-0 z-10 flex items-center justify-between gap-2 px-4 py-3 border-b border-white/10 bg-[#141418]">
-          <h2 className="text-sm font-black text-white tracking-tight">生成记录</h2>
-          <div className="flex gap-2">
+        {mode === 'modal' ? (
+          <div className="sticky top-0 z-10 flex items-center justify-end gap-2 px-4 py-3 border-b border-white/10 bg-[#141418]">
             <button
               type="button"
-              onClick={exportTxt}
-              className="px-3 py-1.5 rounded-xl text-[9px] font-black uppercase border border-white/15 bg-white/5 hover:bg-white/10 text-gray-200"
-            >
-              导出 .txt
-            </button>
-            <button
-              type="button"
-              onClick={onClose}
+              onClick={() => onClose?.()}
               className="px-3 py-1.5 rounded-xl text-[9px] font-black uppercase bg-blue-600/80 hover:bg-blue-600 text-white"
             >
               关闭
             </button>
           </div>
-        </div>
+        ) : null}
 
         <div className="p-4 border-b border-white/5">
           <p className="text-[9px] font-black uppercase text-gray-500 mb-2">步骤缩略图</p>
-          <div className="flex flex-wrap gap-2 items-end">
+          <div className="overflow-x-auto overflow-y-hidden no-scrollbar">
+            <div className="inline-flex min-w-max gap-2 items-end pr-1">
             {orderedVersions.map((v) => (
               <button
                 key={v.id}
                 type="button"
-                onClick={() => setFocusedVersionId(v.id)}
+                onClick={() => {
+                  setFocusedVersionId(v.id);
+                  const key = v.imageRef.kind === 'original_field' ? 'original' : v.imageRef.key;
+                  onSelectDisplayKey?.(key);
+                }}
                 className={`relative rounded-lg border overflow-hidden w-16 h-16 shrink-0 ${focusedVersionId === v.id ? 'ring-2 ring-blue-500' : 'border-white/10'}`}
               >
                 <img
@@ -139,14 +145,24 @@ export const WorkflowGenerationRecordPanel: React.FC<WorkflowGenerationRecordPan
                 </span>
               </button>
             ))}
+            </div>
           </div>
         </div>
 
         <div className="p-4 space-y-4">
-          <p className="text-[10px] text-gray-500">
-            已记录步骤数：<span className="text-gray-300 font-mono">{orderedVersions.length}</span>
-            {orderedVersions.length <= 1 ? '（仅原图，执行生成步骤后会增加）' : null}
-          </p>
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[10px] text-gray-500">
+              已记录步骤数：<span className="text-gray-300 font-mono">{orderedVersions.length}</span>
+              {orderedVersions.length <= 1 ? '（仅原图，执行生成步骤后会增加）' : null}
+            </p>
+            <button
+              type="button"
+              onClick={exportTxt}
+              className="px-2.5 py-1 rounded-lg text-[8px] font-black uppercase border border-white/15 bg-white/5 hover:bg-white/10 text-gray-200 shrink-0"
+            >
+              导出.TXT
+            </button>
+          </div>
 
           {orderedVersions.map((v) => {
             const sem = vgp.semanticsById[v.semanticStateId];
@@ -198,6 +214,22 @@ export const WorkflowGenerationRecordPanel: React.FC<WorkflowGenerationRecordPan
             );
           })}
         </div>
+      </div>
+  );
+
+  if (mode === 'inline') return panelContent;
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[2100] flex items-center justify-center bg-black/75 p-4 overflow-y-auto"
+      onClick={() => onClose?.()}
+      role="presentation"
+    >
+      <div
+        className="max-w-2xl w-full max-h-[90vh]"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {panelContent}
       </div>
     </div>,
     document.body

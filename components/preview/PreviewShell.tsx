@@ -40,8 +40,22 @@ export const PreviewShell = forwardRef<HTMLDivElement, PreviewShellProps>(functi
       e.stopImmediatePropagation();
       onCloseRef.current();
     };
+    const onEscCaptureUp = (e: KeyboardEvent) => {
+      if (!isEscapeKey(e)) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      onCloseRef.current();
+    };
     document.addEventListener('keydown', onEscCapture, true);
-    return () => document.removeEventListener('keydown', onEscCapture, true);
+    window.addEventListener('keydown', onEscCapture, true);
+    document.addEventListener('keyup', onEscCaptureUp, true);
+    window.addEventListener('keyup', onEscCaptureUp, true);
+    return () => {
+      document.removeEventListener('keydown', onEscCapture, true);
+      window.removeEventListener('keydown', onEscCapture, true);
+      document.removeEventListener('keyup', onEscCaptureUp, true);
+      window.removeEventListener('keyup', onEscCaptureUp, true);
+    };
   }, [open]);
 
   const rootRef = useRef<HTMLDivElement | null>(null);

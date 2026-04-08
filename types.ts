@@ -356,7 +356,16 @@ export type WorkflowCutGroupItem = string | { assetId: string } | { r2Key: strin
 /** 单个资产：原始图 + 各类型结果图，当前展示版本，是否已归档；归档后可按生成顺序拼流程图 */
 export type WorkflowAsset = {
   id: string;
-  /** 原始输入图 base64 或外链；云端可仅保留 originalObjectKey 由 hydrate 填回 */
+  /**
+   * 资产形态：缺省视为 `image`，兼容旧数据。
+   * `text`：工作区文字卡片（无位图执行能力，不进入图像能力队列）。
+   */
+  assetKind?: 'image' | 'text';
+  /** 文字资产标题（可选） */
+  textTitle?: string;
+  /** 文字资产正文 */
+  textBody?: string;
+  /** 原始输入图 base64 或外链；云端可仅保留 originalObjectKey 由 hydrate 填回；文字资产可为空串 */
   original: string;
   /** R2 对象键（users/.../assets/<id>/original.xxx），与 original 二选一存在云端 JSON */
   originalObjectKey?: string;
@@ -378,7 +387,18 @@ export type WorkflowAsset = {
   resultOrder: string[];
   /** 各步骤执行时间等，可追溯 */
   resultMeta?: Record<string, { executedAt: number }>;
+  /** 文字能力（gen_text）等产生的文本结果，key 与 resultOrder 中步骤 id 对齐 */
+  textResults?: Record<string, string>;
+  /**
+   * 图像标签索引（key=版本键，value=扁平 tags）。
+   * 约定维度前缀：subject/style/lighting/composition/mood/material/quality/usecase 等。
+   */
+  imageTags?: Record<string, string[]>;
+  /** 标签阶段：coarse=规则粗标，refined=低成本二段式精修 */
+  imageTagStage?: Record<string, 'coarse' | 'refined'>;
   archived: boolean;
+  /** true=仅在仓库列显示；false/undefined=在工作区列显示 */
+  inRepository?: boolean;
   hiddenInGrid: boolean;
   createdAt: number;
   /** VGP：语义快照 + 版本链 + Prompt 产物（阶段 A，可选以兼容旧数据） */
@@ -405,18 +425,30 @@ export type WorkflowPendingTask = {
    * 缺省时按链头兼容旧任务。
    */
   inputSourceDisplayKey?: string;
+  /** 来自文字资产卡片时的正文（标题+正文拼接），文生文/文生图时使用 */
+  inputText?: string;
+  /** 功能区分组覆盖参数：仅对生图执行路径生效 */
+  overrideImageGear?: DialogImageGear;
+  overrideImageAspectRatio?: string;
+  overrideImageSize?: string;
+  overrideSkipUnderstand?: boolean;
 };
 
-/** 能力分类：生图=提示词相关；图像处理=切割/裁剪等；生成3D=混元生3D 预设 */
+/**
+ * 能力分类：按「输入格式 → 输出格式」划分（工作区仅文字卡 / 图片卡两类资产）。
+ * 另含生成3D（独立管线）。
+ */
 export const CAPABILITY_CATEGORIES = [
-  { id: 'image_gen', label: '生图', desc: '提示词相关，指令传给生图模型（转风格、生成多视角等）' },
-  { id: 'image_process', label: '图像处理', desc: '切割、裁剪、贴图提取、检测拆分等（不依赖生图提示词）' },
+  { id: 'text_to_text', label: '文生文', desc: '文字入 → 文字出（拖文字卡）' },
+  { id: 'text_to_image', label: '文生图', desc: '文字入 → 图片出（拖文字卡）' },
+  { id: 'image_to_image', label: '图生图', desc: '图片入 → 图片出（拖图片卡；可选内置处理或生图模型）' },
+  { id: 'image_to_text', label: '图生文', desc: '图片入 → 文字出（拖图片卡）' },
   { id: 'generate_3d', label: '生成3D', desc: '混元生3D：工作流中拖图到该能力即按预设提交 3D 任务' },
 ] as const;
 export type CapabilityCategory = (typeof CAPABILITY_CATEGORIES)[number]['id'];
 
-/** 能力执行引擎：gen_image=调用生图模型；builtin=仅走内置图像处理逻辑 */
-export type CapabilityEngine = 'gen_image' | 'builtin';
+/** 能力执行引擎：gen_image=调用生图模型；gen_text=调用文字模型；builtin=仅走内置图像处理逻辑 */
+export type CapabilityEngine = 'gen_image' | 'gen_text' | 'builtin';
 
 /** 生成3D 能力预设：在工作流中拖图即用此配置提交 */
 export type Generate3DPreset = {
@@ -436,13 +468,14 @@ export type Generate3DPreset = {
 export type CustomAppModule = {
   id: string;
   label: string;
-  /** 分类：生图 | 图像处理 | 生成3D */
+  /** 分类：文生文 | 文生图 | 图生图 | 图生文 | 生成3D */
   category: CapabilityCategory;
   /**
-   * 执行引擎（可选）：
-   * - image_gen 默认 gen_image
-   * - image_process 默认 builtin（如需走生图，需要显式改为 gen_image）
-   * - generate_3d 不使用此字段
+   * 执行引擎（可选，由分类推导或显式指定）：
+   * - text_to_text / image_to_text → gen_text
+   * - text_to_image → gen_image
+   * - image_to_image → builtin（切割/拆分等）或 gen_image（提示词生图）
+   * - generate_3d 不使用
    */
   engine?: CapabilityEngine;
   /** 生图档位（可选），仅在 engine === 'gen_image' 时生效 */

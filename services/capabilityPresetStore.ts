@@ -1,11 +1,11 @@
-import type { CapabilityCategory, CustomAppModule } from '../types';
+import type { CapabilityCategory, CapabilityEngine, CustomAppModule } from '../types';
 import { readLocalString, removeLocalKey, writeLocalJson } from './clientPersist';
 import { normalizeCapabilityPreviewUrlForPersist } from './capabilityPreviewUrl';
 
 const LEGACY_CUSTOM_MODULES_KEY = 'ac_custom_modules';
 
 export const CAPABILITY_PRESETS_KEY = 'ac_capability_presets';
-export const CAPABILITY_PRESETS_VERSION = 3;
+export const CAPABILITY_PRESETS_VERSION = 4;
 export const BUILTIN_IMAGE_PROCESS_IDS = ['cut_image'] as const;
 
 /** 允许在能力页修改配置的内置预设（如切割溢出）；不可删除，仍走 enforce 合并 */
@@ -16,15 +16,38 @@ type CapabilityPresetsPayload = {
   presets: CustomAppModule[];
 };
 
+function migrateCapabilityCategory(input: CustomAppModule): CapabilityCategory {
+  const raw = String(input.category ?? '');
+  if (
+    raw === 'text_to_text' ||
+    raw === 'text_to_image' ||
+    raw === 'image_to_image' ||
+    raw === 'image_to_text' ||
+    raw === 'generate_3d'
+  ) {
+    return raw as CapabilityCategory;
+  }
+  if (raw === 'image_gen') return 'image_to_image';
+  if (raw === 'image_process') return 'image_to_image';
+  if (raw === 'text_llm') return input.engine === 'gen_image' ? 'text_to_image' : 'text_to_text';
+  return input.instruction ? 'image_to_image' : 'image_to_image';
+}
+
+function deriveEngineForCategory(category: CapabilityCategory, input: CustomAppModule, rawCat: string): CapabilityEngine | undefined {
+  if (category === 'generate_3d') return undefined;
+  if (category === 'text_to_text' || category === 'image_to_text') return 'gen_text';
+  if (category === 'text_to_image') return 'gen_image';
+  if (input.engine === 'gen_image' || input.engine === 'builtin') return input.engine;
+  if (rawCat === 'image_process') return 'builtin';
+  if (rawCat === 'image_gen') return 'gen_image';
+  if (input.id === 'split_component' || input.id === 'cut_image') return 'builtin';
+  return 'gen_image';
+}
+
 export function normalizeCapabilityPreset(input: CustomAppModule, index: number): CustomAppModule {
-  const category: CapabilityCategory =
-    (input.category as CapabilityCategory) ?? (input.instruction ? 'image_gen' : 'image_process');
-  const engine =
-    category === 'image_gen'
-      ? 'gen_image'
-      : category === 'image_process'
-        ? (input.engine ?? 'builtin')
-        : undefined;
+  const rawCat = String(input.category ?? '');
+  const category = migrateCapabilityCategory(input);
+  const engine = deriveEngineForCategory(category, input, rawCat);
   const enabled = input.enabled !== false;
   const order = typeof input.order === 'number' ? input.order : index;
   const instruction = typeof input.instruction === 'string' ? input.instruction : '';
@@ -89,10 +112,10 @@ export function normalizeCapabilityPreset(input: CustomAppModule, index: number)
 }
 
 const DEFAULT_PRESETS: CustomAppModule[] = [
-  { id: 'split_component', label: '拆分组件', category: 'image_process', engine: 'builtin', enabled: true, order: 0, instruction: '' },
-  { id: 'style_transfer', label: '转风格', category: 'image_gen', engine: 'gen_image', enabled: true, order: 1, instruction: 'Convert this image to a consistent artistic style: stylized digital art, clean lines, modern flat design. Keep the same composition and main subjects.' },
-  { id: 'multi_view', label: '生成多视角', category: 'image_gen', engine: 'gen_image', enabled: true, order: 2, instruction: 'Generate a clean front view of the main object in this image, centered on white or neutral background, orthographic style, suitable as a reference sheet view.' },
-  { id: 'cut_image', label: '切割图片', category: 'image_process', engine: 'builtin', enabled: true, order: 3, instruction: '' },
+  { id: 'split_component', label: '拆分组件', category: 'image_to_image', engine: 'builtin', enabled: true, order: 0, instruction: '' },
+  { id: 'style_transfer', label: '转风格', category: 'image_to_image', engine: 'gen_image', enabled: true, order: 1, instruction: 'Convert this image to a consistent artistic style: stylized digital art, clean lines, modern flat design. Keep the same composition and main subjects.' },
+  { id: 'multi_view', label: '生成多视角', category: 'image_to_image', engine: 'gen_image', enabled: true, order: 2, instruction: 'Generate a clean front view of the main object in this image, centered on white or neutral background, orthographic style, suitable as a reference sheet view.' },
+  { id: 'cut_image', label: '切割图片', category: 'image_to_image', engine: 'builtin', enabled: true, order: 3, instruction: '' },
 ];
 
 const BUILTIN_IMAGE_PROCESS_PRESETS = DEFAULT_PRESETS.filter((p) =>
@@ -119,7 +142,7 @@ export function enforceBuiltinImageProcessPresets(list: CustomAppModule[]): Cust
           id: p.id,
           enabled: true,
           engine: 'builtin',
-          category: 'image_process',
+          category: 'image_to_image',
         },
         map.size
       )

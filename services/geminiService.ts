@@ -575,6 +575,46 @@ async function callWithRetry<T>(
   }
 }
 
+const GEMINI_PERMISSION_DENIED_HINT =
+  "Google 已拒绝当前密钥对应项目的访问（403 PERMISSION_DENIED）。请到 Google AI Studio / Cloud Console 检查该项目是否欠费、违规受限或未开通 Gemini；或更换新的 API Key。若站点配置了后端生图代理（VITE_BULK_IMAGE_API），请在服务器环境变量中使用有效的 GEMINI_API_KEY。";
+
+function parseGoogleStyleErrorPayload(raw: string): { code?: number; status?: string; message?: string } | null {
+  const s = String(raw || "").trim();
+  const tryParse = (t: string) => {
+    try {
+      const parsed = JSON.parse(t) as {
+        error?: { code?: number; status?: string; message?: string };
+        code?: number;
+        status?: string;
+        message?: string;
+      };
+      const nested = parsed?.error;
+      if (nested && typeof nested === "object") {
+        return {
+          code: typeof nested.code === "number" ? nested.code : undefined,
+          status: typeof nested.status === "string" ? nested.status : undefined,
+          message: typeof nested.message === "string" ? nested.message : undefined,
+        };
+      }
+      return {
+        code: typeof parsed?.code === "number" ? parsed.code : undefined,
+        status: typeof parsed?.status === "string" ? parsed.status : undefined,
+        message: typeof parsed?.message === "string" ? parsed.message : undefined,
+      };
+    } catch {
+      return null;
+    }
+  };
+  const direct = tryParse(s);
+  if (direct && (direct.code != null || direct.status || direct.message)) return direct;
+  const i = s.indexOf('{"error"');
+  if (i >= 0) {
+    const sub = tryParse(s.slice(i));
+    if (sub && (sub.code != null || sub.status || sub.message)) return sub;
+  }
+  return null;
+}
+
 /** 将 API 返回的原始错误转为用户可读的简短说明（用于界面展示） */
 export function normalizeApiErrorMessage(err: unknown): string {
   const raw = String((err as any)?.message ?? err);
@@ -586,6 +626,29 @@ export function normalizeApiErrorMessage(err: unknown): string {
   if (raw.includes('Failed to fetch sending request') || raw.includes('TypeError: Failed to fetch')) {
     return '请求发送失败：请检查网络或稍后重试。若使用 VectorEngine 等第三方网关，多为浏览器跨域（CORS）：本地开发请用 npm run dev；线上需在服务器做同源反代并配置 VITE_VECTOR_ENGINE_PROXY。';
   }
+
+  const googleErr = parseGoogleStyleErrorPayload(raw);
+  if (googleErr) {
+    const { code, status, message } = googleErr;
+    if (code === 403 || status === "PERMISSION_DENIED" || /denied access/i.test(String(message || ""))) {
+      return GEMINI_PERMISSION_DENIED_HINT;
+    }
+    if (code === 500 || status === "INTERNAL") {
+      return "服务暂时异常 (500)，请稍后重试";
+    }
+    if (code === 504 || status === "DEADLINE_EXCEEDED") {
+      return "生图请求超时（504），系统已自动重试；请稍后再试";
+    }
+    if (code === 503 || status === "UNAVAILABLE") {
+      return "生图模型当前繁忙（503），系统已自动重试；请稍后再试";
+    }
+    if (typeof message === "string" && message.length > 0 && message.length < 200) return message;
+  }
+
+  if (/PERMISSION_DENIED/i.test(raw) || /"code"\s*:\s*403/.test(raw) || /denied access/i.test(raw)) {
+    return GEMINI_PERMISSION_DENIED_HINT;
+  }
+
   try {
     const parsed = JSON.parse(raw);
     const code = parsed?.error?.code ?? parsed?.code;

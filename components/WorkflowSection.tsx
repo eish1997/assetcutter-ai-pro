@@ -7,6 +7,7 @@ import type { CustomAppModule, LibraryItem, WorkflowCutGroupItem } from '../type
 import type { BoundingBox } from '../types';
 import { getRandomGroupCodeName } from '../data/groupCodeNames';
 import { detectObjectsInImage, DEFAULT_PROMPTS } from '../services/geminiService';
+import { normalizeApiErrorMessage } from '../services/geminiService';
 import {
   executeCapability,
   executeCapabilitySet,
@@ -20,6 +21,11 @@ import {
 import { WorkflowGenerationRecordPanel } from './WorkflowGenerationRecordPanel';
 import { triggerImageDownload } from '../services/imageDataUrl';
 import { readLocalJson, workflowFavoritesStorageKey, writeLocalJson } from '../services/clientPersist';
+import {
+  buildWorkflowImageTags,
+  normalizeWorkflowTagMapToChinese,
+  refineWorkflowImageTagsLowCost,
+} from '../services/workflowImageTags';
 import AppIcon from './ui/AppIcon';
 import { ImagePreviewOverlay } from './ImagePreviewOverlay';
 import { resolveCapabilityPreviewSrc } from '../services/capabilityPreviewUrl';
@@ -35,11 +41,19 @@ import {
   resolveCapabilityDropDragSources,
   workflowDragSourceAllowsSidebarOps,
 } from '../services/workflowDragPipeline';
-import { WORKFLOW_CUT_DETECT_TIMEOUT_MS, DT_AC_LIBRARY_ITEM_ID } from './workflow/workflowConstants';
+import { WORKFLOW_CUT_DETECT_TIMEOUT_MS } from './workflow/workflowConstants';
+import WorkflowTextAssetOverlay from './workflow/WorkflowTextAssetOverlay';
+import {
+  clampWorkflowTextBody,
+  isWorkflowTextAsset,
+  workflowAssetAllowedForCapabilityDrop,
+  workflowAssetToInputText,
+  workflowPresetAcceptsTextCardDrag,
+  workflowTextAssetOutlineLabel,
+} from '../services/workflowTextAsset';
 import { uuid, baseActionId, makeVersionKey } from './workflow/workflowIds';
 import {
   asWorkflowImageString,
-  buildLibraryItemsFromWorkflowExport,
   safeUnknownToString,
   collectImageLikeUrlsFromText,
   collectImageLikeUrlsFromHtml,
@@ -113,12 +127,10 @@ const WorkflowSection: React.FC<{
   preferenceScope = null,
   registerMarqueeStartHandler,
   registerPaneWheelHandler,
-  libraryItems: libraryItemsProp,
   onAddToLibrary,
   capabilityPresetPanel,
   onboardingKey = null,
 }) => {
-  const libraryItems = Array.isArray(libraryItemsProp) ? libraryItemsProp : [];
   const assets = Array.isArray(assetsProp) ? assetsProp : [];
   const pending = Array.isArray(pendingProp) ? pendingProp : [];
   const capabilitySets = Array.isArray(capabilitySetsProp) ? capabilitySetsProp : [];
@@ -137,15 +149,16 @@ const WorkflowSection: React.FC<{
   const actionModules: CustomAppModule[] = presets;
   const byCategory = useMemo(() => groupCapabilityPresetsByCategory(presets), [presets]);
   const [columnCount, setColumnCount] = useState(4);
-  const [showArchived, setShowArchived] = useState(false);
+  const showArchived = false;
   const [archiveHint, setArchiveHint] = useState<{ assetId: string; ts: number } | null>(null);
+  const [refiningTagKeys, setRefiningTagKeys] = useState<Set<string>>(new Set());
   const [lightboxAssetId, setLightboxAssetId] = useState<string | null>(null);
+  const [lightboxMetaText, setLightboxMetaText] = useState<string>('');
   /** 从组内网格打开大图时记录槽位，预设入队可带 sourceGroup* 与拖拽一致 */
   const [lightboxSourceSlot, setLightboxSourceSlot] = useState<{
     sourceGroupAssetId: string;
     sourceItemIndex: number;
   } | null>(null);
-  const [showLightboxGenerationRecord, setShowLightboxGenerationRecord] = useState(false);
   const [archivedDetailAssetId, setArchivedDetailAssetId] = useState<string | null>(null);
   const [executing, setExecuting] = useState(false);
   const [executingQueue, setExecutingQueue] = useState<{ total: number; tasks: WorkflowPendingTask[] } | null>(null);
@@ -174,6 +187,12 @@ const WorkflowSection: React.FC<{
   const [promptTweakModal, setPromptTweakModal] = useState<{
     preset: CustomAppModule;
     targets: PromptTweakTarget[];
+    overrides?: {
+      imageGear?: CustomAppModule['imageGear'];
+      imageAspectRatio?: string;
+      imageSize?: string;
+      understand?: boolean;
+    };
   } | null>(null);
   const [viewStack, setViewStack] = useState<{ assetId: string }[]>([]);
   const viewStackRef = useRef(viewStack);
@@ -260,7 +279,7 @@ const WorkflowSection: React.FC<{
   /** 从功能区「词」进入能力页：横向滑到能力列并滚动到对应预设卡片 */
   const jumpToCapabilityPreset = useCallback((preset: CustomAppModule) => {
     const mode: 'presets' | 'image_process' =
-      preset.category === 'image_process' ? 'image_process' : 'presets';
+      preset.category === 'image_to_image' && getCapabilityEngine(preset) === 'builtin' ? 'image_process' : 'presets';
     setCapabilityPresetViewMode(mode);
     if (typeof window !== 'undefined') {
       const emitJump = () => {
@@ -273,10 +292,12 @@ const WorkflowSection: React.FC<{
     }
     snapWorkspacePaneToNode(3);
   }, [snapWorkspacePaneToNode]);
-  const [libraryImportIds, setLibraryImportIds] = useState<Set<string>>(new Set());
   /** 大纲底部拖入区高亮 */
   const [outlineFooterDropOver, setOutlineFooterDropOver] = useState<'toWorkspace' | 'toLibrary' | null>(null);
   const [libraryFilter, setLibraryFilter] = useState<'all' | 'library' | 'archived'>('all');
+  const [libraryTagQuery, setLibraryTagQuery] = useState('');
+  const [repositoryOutlineMode, setRepositoryOutlineMode] = useState<'list' | 'tags'>('list');
+  const [repositorySelectedTags, setRepositorySelectedTags] = useState<Set<string>>(new Set());
   const cardRefs = useRef<Map<string, HTMLElement>>(new Map());
   const libraryCardRefs = useRef<Map<string, HTMLElement>>(new Map());
   const {
@@ -292,7 +313,6 @@ const WorkflowSection: React.FC<{
     cardRefs,
     viewStackRef,
     pendingRef,
-    setLibraryImportIds,
     setSelectedAssetIds,
     setSelectedGroupItemKeys,
   });
@@ -419,6 +439,7 @@ const WorkflowSection: React.FC<{
     return getModule(baseActionId(stepKey))?.label ?? stepKey;
   };
   const getAssetDisplayImage = (a: WorkflowAsset, assetsList: WorkflowAsset[] = assets, visited: Set<string> = new Set()): string => {
+    if (isWorkflowTextAsset(a)) return '';
     const orig = asWorkflowImageString(a.original);
     if (a.displayKey === 'original') return orig;
     if (a.displayKey === 'cut_image' && a.cutImageGroup?.length) {
@@ -434,55 +455,67 @@ const WorkflowSection: React.FC<{
     const fromResults = (a.results as Record<string, unknown>)[a.displayKey];
     return asWorkflowImageString(fromResults) || orig;
   };
+  const getAssetDisplayText = (a: WorkflowAsset): string => {
+    if (!isWorkflowTextAsset(a)) return '';
+    if (a.displayKey === 'original') return (a.textBody ?? '').trim();
+    return ((a.textResults || {})[a.displayKey] ?? '').trim();
+  };
   const getAssetDisplayTypeLabel = (a: WorkflowAsset): string => {
+    if (isWorkflowTextAsset(a)) return '文字';
     if (a.displayKey === 'original') return '原始';
     if (a.displayKey === 'cut_image') return a.groupKind === 'manual' ? '组' : '切割';
     const baseId = baseActionId(a.displayKey);
     return getModule(baseId)?.label ?? baseId;
   };
-  const archivedLibraryItems = useMemo<LibraryItem[]>(() => {
-    return assets
-      .filter((a) => a.archived && !a.parentAssetId)
-      .map((a) => {
-        const data = getAssetDisplayImage(a);
-        if (!data) return null;
-        return {
-          id: `archived:${a.id}`,
-          type: 'SLICE' as const,
-          category: 'PREVIEW_STRIP' as const,
-          label: a.groupLabel || `归档-${new Date(a.createdAt).toLocaleDateString('zh-CN')}`,
-          data,
-          sourceId: a.id,
-          timestamp: a.createdAt,
-          groupId: 'workflow-archived',
-        };
-      })
-      .filter(Boolean) as LibraryItem[];
-  }, [assets, getAssetDisplayImage]);
-  const repositoryItems = useMemo<LibraryItem[]>(() => {
-    if (libraryFilter === 'library') return libraryItems;
-    if (libraryFilter === 'archived') return archivedLibraryItems;
-    return [...libraryItems, ...archivedLibraryItems];
-  }, [libraryFilter, libraryItems, archivedLibraryItems]);
-  useEffect(() => {
-    const validIds = new Set(repositoryItems.map((item) => item.id));
-    setLibraryImportIds((prev) => {
-      const next = new Set<string>();
-      prev.forEach((id) => {
-        if (validIds.has(id)) next.add(id);
-      });
-      // 仅在实际变化时更新，避免无意义的状态回写造成交互卡顿/失效
-      if (next.size === prev.size) {
-        let same = true;
-        prev.forEach((id) => {
-          if (!next.has(id)) same = false;
-        });
-        if (same) return prev;
-      }
-      return next;
+  const repositoryItems = useMemo<WorkflowAsset[]>(() => {
+    const q = libraryTagQuery.trim().toLowerCase();
+    const base = assets.filter((a) => {
+      if (a.parentAssetId) return false;
+      if (!a.inRepository) return false;
+      if (libraryFilter === 'library') return !a.archived;
+      if (libraryFilter === 'archived') return !!a.archived;
+      return true;
     });
+    if (!q) return base;
+    const words = q.split(/\s+/).filter(Boolean);
+    return base.filter((item) => {
+      const tags = (item.imageTags?.[item.displayKey] || []).join(' ');
+      const hay = `${item.groupLabel || ''} ${tags} ${getAssetDisplayText(item)}`.toLowerCase();
+      return words.every((w) => hay.includes(w));
+    });
+  }, [assets, libraryFilter, libraryTagQuery]);
+  useEffect(() => {
+    setAssets((prev) => {
+      let changed = false;
+      const next = prev.map((a) => {
+        const { next: normalized, changed: tagChanged } = normalizeWorkflowTagMapToChinese(a.imageTags);
+        if (!tagChanged) return a;
+        changed = true;
+        return { ...a, imageTags: normalized };
+      });
+      return changed ? next : prev;
+    });
+  }, [setAssets]);
+  const repositoryTagOptions = useMemo(() => {
+    const counts = new Map<string, number>();
+    repositoryItems.forEach((item) => {
+      const tags = item.imageTags?.[item.displayKey] || [];
+      tags.forEach((tag) => {
+        const t = tag.trim();
+        if (!t) return;
+        counts.set(t, (counts.get(t) ?? 0) + 1);
+      });
+    });
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]);
   }, [repositoryItems]);
-
+  const repositoryVisibleItems = useMemo(() => {
+    if (repositorySelectedTags.size === 0) return repositoryItems;
+    const selected = [...repositorySelectedTags];
+    return repositoryItems.filter((item) => {
+      const tags = new Set((item.imageTags?.[item.displayKey] || []).filter(Boolean));
+      return selected.every((tag) => tags.has(tag));
+    });
+  }, [repositoryItems, repositorySelectedTags]);
   const addToPending = useCallback(
     (
       assetId: string,
@@ -491,11 +524,26 @@ const WorkflowSection: React.FC<{
         promptOverride?: string;
         sourceGroupAssetId?: string;
         sourceItemIndex?: number;
+        inputText?: string;
+        overrideImageGear?: CustomAppModule['imageGear'];
+        overrideImageAspectRatio?: string;
+        overrideImageSize?: string;
+        overrideSkipUnderstand?: boolean;
       }
     ) => {
       const asset = assets.find((x) => x.id === assetId);
       if (!asset) return;
+      const mod = actionModules.find((m) => m.id === actionType);
+      if (isWorkflowTextAsset(asset)) {
+        if (!mod || !workflowPresetAcceptsTextCardDrag(mod)) {
+          onLog?.('warn', '文字资产请拖入「文字能力」或「生图」类预设');
+          return;
+        }
+      }
       const inputImage = getAssetDisplayImage(asset);
+      const inputTextFromCard =
+        options?.inputText ??
+        (isWorkflowTextAsset(asset) ? workflowAssetToInputText(asset) : undefined);
       const fromGroup =
         options?.sourceGroupAssetId != null && options?.sourceItemIndex != null;
       const task: WorkflowPendingTask = {
@@ -506,6 +554,15 @@ const WorkflowSection: React.FC<{
         addedAt: Date.now(),
         inputSourceDisplayKey: asset.displayKey,
         ...(options?.promptOverride != null ? { promptOverride: options.promptOverride } : {}),
+        ...(options?.overrideImageGear ? { overrideImageGear: options.overrideImageGear } : {}),
+        ...(options?.overrideImageAspectRatio ? { overrideImageAspectRatio: options.overrideImageAspectRatio } : {}),
+        ...(options?.overrideImageSize ? { overrideImageSize: options.overrideImageSize } : {}),
+        ...(typeof options?.overrideSkipUnderstand === 'boolean'
+          ? { overrideSkipUnderstand: options.overrideSkipUnderstand }
+          : {}),
+        ...(inputTextFromCard != null && String(inputTextFromCard).trim() !== ''
+          ? { inputText: String(inputTextFromCard).trim() }
+          : {}),
         ...(fromGroup
           ? {
               sourceGroupAssetId: options!.sourceGroupAssetId,
@@ -515,8 +572,29 @@ const WorkflowSection: React.FC<{
       };
       setPending((prev) => [...prev, task]);
     },
-    [assets, getAssetDisplayImage]
+    [assets, getAssetDisplayImage, onLog, actionModules]
   );
+
+  const addWorkflowTextAsset = useCallback((initialText?: string) => {
+    const raw = (initialText || '').trim();
+    const id = uuid();
+    const next = attachInitialVgpToNewAsset({
+      id,
+      original: '',
+      displayKey: 'original',
+      results: {},
+      resultOrder: [],
+      archived: false,
+      hiddenInGrid: false,
+      createdAt: Date.now(),
+      assetKind: 'text',
+      textTitle: '',
+      textBody: raw ? clampWorkflowTextBody(raw) : '',
+    });
+    setAssets((prev) => [...prev, next]);
+    setLightboxAssetId(id);
+    onLog?.('info', raw ? '已粘贴为文字资产' : '已添加文字资产');
+  }, [onLog]);
 
   const addTasksToPending = useCallback((tasks: WorkflowPendingTask[]) => {
     if (tasks.length === 0) return;
@@ -533,8 +611,8 @@ const WorkflowSection: React.FC<{
 
   const runTask = async (
     task: WorkflowPendingTask
-  ): Promise<{ image: string | null; vgpSteps?: VgpGenStepCapture[] }> => {
-    const { actionType, inputImage } = task;
+  ): Promise<{ image: string | null; text?: string; vgpSteps?: VgpGenStepCapture[] }> => {
+    const { actionType, inputImage, inputText } = task;
     if (actionType.startsWith(SET_ACTION_PREFIX)) {
       const set = getSet(actionType.slice(SET_ACTION_PREFIX.length));
       if (!set) {
@@ -568,11 +646,20 @@ const WorkflowSection: React.FC<{
     const actionLabel = getActionLabel(actionType);
     try {
       if (module) {
-        const preset =
+        const presetBase =
           task.promptOverride != null && task.promptOverride.trim() !== ''
             ? { ...module, instruction: task.promptOverride.trim() }
             : module;
-        const out = await executeCapability(preset, inputImage, { onLog });
+        const preset = {
+          ...presetBase,
+          ...(task.overrideImageGear ? { imageGear: task.overrideImageGear } : {}),
+          ...(task.overrideImageAspectRatio ? { imageAspectRatio: task.overrideImageAspectRatio } : {}),
+          ...(task.overrideImageSize ? { imageSize: task.overrideImageSize } : {}),
+          ...(typeof task.overrideSkipUnderstand === 'boolean'
+            ? { skipUnderstand: !task.overrideSkipUnderstand }
+            : {}),
+        };
+        const out = await executeCapability(preset, inputImage ?? '', { onLog }, { inputText });
         if (out.ok === false) {
           const msg = `[${actionLabel}] ${out.error}`;
           onLog?.('warn', msg);
@@ -580,6 +667,9 @@ const WorkflowSection: React.FC<{
           return { image: null };
         }
         setAssetError(task.assetId, null);
+        if (out.kind === 'text') {
+          return { image: null, text: out.text };
+        }
         return { image: out.image, vgpSteps: out.vgpSteps };
       }
       if (actionType === 'cut_image') {
@@ -855,7 +945,28 @@ const WorkflowSection: React.FC<{
           }
 
           onLog?.('info', `${logBatch} ${taskLabel} 执行中…`);
-          const { image: result, vgpSteps } = await runTask(task);
+          const { image: result, text: textResult, vgpSteps } = await runTask(task);
+        if (textResult != null && textResult !== '') {
+          setAssets((prev) =>
+            prev.map((a) => {
+              if (a.id !== task.assetId) return a;
+              const baseId = task.actionType;
+              const hasAnyText = Object.keys(a.textResults || {}).some((k) => baseActionId(k) === baseId);
+              const tKey = hasAnyText ? makeVersionKey(baseId) : baseId;
+              const nextOrder = [...(a.resultOrder || []), tKey];
+              const nextMeta = { ...(a.resultMeta || {}), [tKey]: { executedAt: Date.now() } };
+              const next: WorkflowAsset = {
+                ...a,
+                textResults: { ...(a.textResults || {}), [tKey]: textResult },
+                resultOrder: nextOrder,
+                resultMeta: nextMeta,
+                displayKey: tKey,
+                hiddenInGrid: a.parentAssetId ? a.hiddenInGrid : false,
+              };
+              return next;
+            })
+          );
+        } else {
         setAssets((prev) =>
           prev.map((a) => {
             if (a.id !== task.assetId) return a;
@@ -867,11 +978,27 @@ const WorkflowSection: React.FC<{
             const nextResults = result ? { ...a.results, [key]: result } : a.results;
             const nextOrder = result ? [...(a.resultOrder || []), key] : a.resultOrder || [];
             const nextMeta = { ...(a.resultMeta || {}), [key]: { executedAt: Date.now() } };
+            const tagList =
+              result
+                ? buildWorkflowImageTags({
+                    actionLabel: getActionLabel(task.actionType),
+                    actionId: baseActionId(task.actionType),
+                    presetInstruction: getModule(task.actionType)?.instruction,
+                    promptOverride: task.promptOverride,
+                    inputText: task.inputText,
+                  })
+                : [];
             let next: WorkflowAsset = {
               ...a,
               results: nextResults,
               resultOrder: nextOrder,
               resultMeta: nextMeta,
+              ...(result
+                ? {
+                    imageTags: { ...(a.imageTags || {}), [key]: tagList },
+                    imageTagStage: { ...(a.imageTagStage || {}), [key]: 'coarse' as const },
+                  }
+                : {}),
               displayKey: result ? key : a.displayKey,
               hiddenInGrid: a.parentAssetId ? a.hiddenInGrid : false,
             };
@@ -889,6 +1016,7 @@ const WorkflowSection: React.FC<{
             return next;
           })
         );
+        }
           setCompletedTaskIds((prev) => {
             const next = new Set(prev);
             next.add(task.id);
@@ -1182,9 +1310,6 @@ const WorkflowSection: React.FC<{
     setFavoriteActionIds(readLocalJson<string[]>(favoriteStorageKey, [], parseFavoriteIds));
   }, [favoriteStorageKey, parseFavoriteIds]);
   useEffect(() => {
-    if (!lightboxAssetId) setShowLightboxGenerationRecord(false);
-  }, [lightboxAssetId]);
-  useEffect(() => {
     writeLocalJson(favoriteStorageKey, favoriteActionIds);
   }, [favoriteActionIds, favoriteStorageKey]);
   const collectImageFilesFromClipboardItems = useCallback((items?: DataTransferItemList | null) => {
@@ -1214,15 +1339,21 @@ const WorkflowSection: React.FC<{
       const active = document.activeElement;
       if (active && isWorkflowEditableTarget(active)) return;
       const files = collectImageFilesFromClipboardItems(e.clipboardData?.items);
-      if (!files.length) return;
+      if (files.length) {
+        e.preventDefault();
+        addImagesFromFiles(files);
+        return;
+      }
+      const text = (e.clipboardData?.getData('text/plain') || '').trim();
+      if (!text) return;
       e.preventDefault();
-      addImagesFromFiles(files);
+      addWorkflowTextAsset(text);
     };
     window.addEventListener('paste', onWindowPaste);
     return () => {
       window.removeEventListener('paste', onWindowPaste);
     };
-  }, [addImagesFromFiles, collectImageFilesFromClipboardItems, showArchived]);
+  }, [addImagesFromFiles, addWorkflowTextAsset, collectImageFilesFromClipboardItems, showArchived]);
 
   useEffect(() => {
     const onWindowDragOver = (e: DragEvent) => {
@@ -1262,10 +1393,10 @@ const WorkflowSection: React.FC<{
   const visibleAssets = useMemo(() => {
     // 仅展示“根资产”：归档状态匹配，且不是子资产（没有 parentAssetId）；新导入在前（createdAt 降序）
     const list = assets.filter(
-      (a) => a.archived === showArchived && (!a.hiddenInGrid || a.archived) && !a.parentAssetId
+      (a) => !a.archived && (!a.hiddenInGrid || a.archived) && !a.parentAssetId && !a.inRepository
     );
     return sortRootWorkflowAssetsNewestFirst(list);
-  }, [assets, showArchived]);
+  }, [assets]);
 
   const outlineExpandableGroupIds = useMemo(
     () => workflowOutlineExpandableGroupIds(assets, visibleAssets),
@@ -1291,10 +1422,11 @@ const WorkflowSection: React.FC<{
     ) => {
       if (visited.has(a.id)) return;
       visited.add(a.id);
-      const label =
-        a.groupLabel ||
-        (a.cutImageGroup?.length ? (a.groupKind === 'manual' ? '组' : '切割') : null) ||
-        `图片 ${a.id.slice(0, 8)}`;
+      const label = isWorkflowTextAsset(a)
+        ? workflowTextAssetOutlineLabel(a)
+        : a.groupLabel ||
+          (a.cutImageGroup?.length ? (a.groupKind === 'manual' ? '组' : '切割') : null) ||
+          `图片 ${a.id.slice(0, 8)}`;
       const items = a.cutImageGroup ?? [];
       const hasChildren = items.length > 0;
       const expanded = !hasChildren || !outlineCollapsedIds.has(a.id);
@@ -1338,7 +1470,6 @@ const WorkflowSection: React.FC<{
               }
             }}
             onClick={() => {
-              setShowArchived(!!a.archived);
               navigateOutlineToAsset(a);
             }}
             className={`flex-1 min-w-0 text-left rounded-lg px-2 py-1.5 text-[9px] border transition-colors truncate ${
@@ -1386,7 +1517,6 @@ const WorkflowSection: React.FC<{
                   }
                 }}
                 onClick={() => {
-                  setShowArchived(!!a.archived);
                   navigateOutlineToGroupItem(a, idx);
                 }}
                 className={`flex-1 min-w-0 text-left rounded-lg px-2 py-1.5 text-[9px] border transition-colors truncate ${
@@ -1436,8 +1566,12 @@ const WorkflowSection: React.FC<{
   /** 第 0 页大纲列：仓库条目（与左侧网格多选同步），非工作区资产树 */
   const repositoryOutlineRows = useMemo(
     () =>
-      repositoryItems.map((item) => {
-        const selected = libraryImportIds.has(item.id);
+      repositoryVisibleItems.map((item) => {
+        const label =
+          item.groupLabel ||
+          (isWorkflowTextAsset(item)
+            ? workflowTextAssetOutlineLabel(item)
+            : `图片 ${item.id.slice(0, 8)}`);
         return (
           <div key={`repo-ol-${item.id}`} className="flex items-stretch gap-0.5 min-w-0">
             <span className="shrink-0 w-5 h-7" aria-hidden />
@@ -1446,32 +1580,58 @@ const WorkflowSection: React.FC<{
               draggable
               onDragStart={(e) => {
                 try {
-                  e.dataTransfer.setData(DT_AC_LIBRARY_ITEM_ID, item.id);
+                  const payload: AcWorkflowExportPayload = { mode: 'roots', assetIds: [item.id] };
+                  e.dataTransfer.setData(DT_AC_WORKFLOW_EXPORT, JSON.stringify(payload));
                   e.dataTransfer.effectAllowed = 'copy';
                 } catch {
                   /* ignore */
                 }
               }}
               onClick={() => {
-                setLibraryImportIds((prev) => {
-                  const next = new Set(prev);
-                  if (next.has(item.id)) next.delete(item.id);
-                  else next.add(item.id);
-                  return next;
-                });
+                if (item.cutImageGroup?.length && !isWorkflowTextAsset(item)) {
+                  setViewStack([{ assetId: item.id }]);
+                  return;
+                }
+                setLightboxSourceSlot(null);
+                setLightboxAssetId(item.id);
               }}
-              className={`flex-1 min-w-0 text-left rounded-lg px-2 py-1.5 text-[9px] border transition-colors truncate ${
-                selected
-                  ? 'border-blue-500 bg-[#152642] text-blue-200'
-                  : 'border-white/[0.06] bg-[#141416] text-gray-300 hover:bg-[#1c1c22]'
-              }`}
+              className="flex-1 min-w-0 text-left rounded-lg px-2 py-1.5 text-[9px] border transition-colors truncate border-white/[0.06] bg-[#141416] text-gray-300 hover:bg-[#1c1c22]"
             >
-              {item.label?.trim() || '未命名'}
+              {label}
             </button>
           </div>
         );
       }),
-    [repositoryItems, libraryImportIds]
+    [repositoryVisibleItems, setLightboxAssetId, setLightboxSourceSlot, setViewStack]
+  );
+  const repositoryOutlineTagRows = useMemo(
+    () =>
+      repositoryTagOptions.map(([tag, count]) => {
+        const active = repositorySelectedTags.has(tag);
+        return (
+          <button
+            key={`repo-tag-${tag}`}
+            type="button"
+            onClick={() =>
+              setRepositorySelectedTags((prev) => {
+                const next = new Set(prev);
+                if (next.has(tag)) next.delete(tag);
+                else next.add(tag);
+                return next;
+              })
+            }
+            className={`w-full text-left rounded-lg px-2 py-1.5 text-[9px] border transition-colors ${
+              active
+                ? 'border-blue-500 bg-[#152642] text-blue-200'
+                : 'border-white/[0.06] bg-[#141416] text-gray-300 hover:bg-[#1c1c22]'
+            }`}
+          >
+            <span className="truncate">{tag}</span>
+            <span className="ml-2 text-[8px] text-gray-500">{count}</span>
+          </button>
+        );
+      }),
+    [repositoryTagOptions, repositorySelectedTags]
   );
 
   useEffect(() => {
@@ -1515,6 +1675,59 @@ const WorkflowSection: React.FC<{
   const lightboxListRef = useRef(lightboxList);
   lightboxListRef.current = lightboxList;
   const lightboxIndex = lightboxAssetId ? lightboxList.findIndex((a) => a.id === lightboxAssetId) : -1;
+  useEffect(() => {
+    if (!lightboxAsset || isWorkflowTextAsset(lightboxAsset)) {
+      setLightboxMetaText('');
+      return;
+    }
+    const src = getAssetDisplayImage(lightboxAsset);
+    if (!src) {
+      setLightboxMetaText('');
+      return;
+    }
+    let cancelled = false;
+    const img = new Image();
+    img.onload = () => {
+      if (cancelled) return;
+      const w = img.naturalWidth || 0;
+      const h = img.naturalHeight || 0;
+      const ratio = w > 0 && h > 0 ? (w / h).toFixed(3) : '-';
+      let mime = 'unknown';
+      let approxBytes = 0;
+      const m = src.match(/^data:([^;,]+);base64,(.+)$/i);
+      if (m) {
+        mime = (m[1] || 'unknown').toLowerCase();
+        const base64 = m[2] || '';
+        const padding = (base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0);
+        approxBytes = Math.max(0, Math.floor(base64.length * 3 / 4) - padding);
+      } else if (/^https?:\/\//i.test(src)) {
+        try {
+          const u = new URL(src);
+          const ext = u.pathname.split('.').pop()?.toLowerCase() || '';
+          mime =
+            ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg'
+              : ext === 'png' ? 'image/png'
+              : ext === 'webp' ? 'image/webp'
+              : ext === 'gif' ? 'image/gif'
+              : ext === 'bmp' ? 'image/bmp'
+              : ext === 'svg' ? 'image/svg+xml'
+              : 'remote';
+        } catch {
+          mime = 'remote';
+        }
+      }
+      const kb = approxBytes > 0 ? `${(approxBytes / 1024).toFixed(1)} KB` : '-';
+      setLightboxMetaText(`元数据 · ${w}×${h} · 比例 ${ratio} · ${mime} · 约 ${kb}`);
+    };
+    img.onerror = () => {
+      if (cancelled) return;
+      setLightboxMetaText('');
+    };
+    img.src = src;
+    return () => {
+      cancelled = true;
+    };
+  }, [lightboxAsset, assets]);
   const goLightbox = (delta: number) => {
     if (lightboxList.length === 0) return;
     const next = (lightboxIndex + delta + lightboxList.length) % lightboxList.length;
@@ -1560,6 +1773,12 @@ const WorkflowSection: React.FC<{
 
   const getDisplayKeysForAsset = (a: WorkflowAsset): string[] => {
     const keys: string[] = ['original'];
+    if (isWorkflowTextAsset(a)) {
+      (a.resultOrder || []).forEach((k) => {
+        if ((a.textResults || {})[k]) keys.push(k);
+      });
+      return keys;
+    }
     if (a.cutImageGroup?.length && a.groupKind !== 'manual') keys.push('cut_image');
     (a.resultOrder || []).forEach((k) => {
       if (baseActionId(k) !== 'cut_image') keys.push(k);
@@ -1665,21 +1884,32 @@ const WorkflowSection: React.FC<{
         if (a.id !== assetId) return a;
         const nextResults = { ...a.results };
         delete nextResults[actionType];
+        const nextTextResults = { ...(a.textResults || {}) };
+        delete nextTextResults[actionType];
         const nextOrder = (a.resultOrder || []).filter((k) => k !== actionType);
         const nextMeta = { ...a.resultMeta };
         delete nextMeta[actionType];
         const displayKey = a.displayKey === actionType ? 'original' : a.displayKey;
         const cutImageGroup = baseId === 'cut_image' ? undefined : a.cutImageGroup;
-        return { ...a, results: nextResults, resultOrder: nextOrder, resultMeta: nextMeta, displayKey, cutImageGroup };
+        return {
+          ...a,
+          results: nextResults,
+          textResults: nextTextResults,
+          resultOrder: nextOrder,
+          resultMeta: nextMeta,
+          displayKey,
+          cutImageGroup,
+        };
       })
     );
   };
 
   const markArchived = (assetId: string) => {
+    const snapshot = assets.find((a) => a.id === assetId) || null;
     setAssets((prev) =>
       prev.map((a) => {
         if (a.id === assetId) {
-          return { ...a, archived: true, hiddenInGrid: false, parentAssetId: undefined };
+          return { ...a, archived: true, inRepository: true, hiddenInGrid: false, parentAssetId: undefined };
         }
         if (a.cutImageGroup?.length) {
           const filtered = a.cutImageGroup.filter(
@@ -1694,6 +1924,46 @@ const WorkflowSection: React.FC<{
     );
     setArchiveHint({ assetId, ts: Date.now() });
     setTimeout(() => setArchiveHint((h) => (h?.assetId === assetId ? null : h)), 4000);
+    if (!snapshot || isWorkflowTextAsset(snapshot)) return;
+    const versionKey = snapshot.displayKey;
+    const coarse = snapshot.imageTags?.[versionKey] || [];
+    if (!coarse.length) return;
+    if (snapshot.imageTagStage?.[versionKey] === 'refined') return;
+    const rk = `${snapshot.id}:${versionKey}`;
+    if (refiningTagKeys.has(rk)) return;
+    setRefiningTagKeys((prev) => new Set(prev).add(rk));
+    void (async () => {
+      try {
+        const refined = await refineWorkflowImageTagsLowCost({
+          coarseTags: coarse,
+          actionId: baseActionId(versionKey),
+          actionLabel: getActionLabel(baseActionId(versionKey)),
+          promptHint: (snapshot.resultMeta && snapshot.resultMeta[versionKey]?.semanticSummary) || '',
+        });
+        if (refined.length > 0) {
+          setAssets((prev) =>
+            prev.map((a) =>
+              a.id === snapshot.id
+                ? {
+                    ...a,
+                    imageTags: { ...(a.imageTags || {}), [versionKey]: refined },
+                    imageTagStage: { ...(a.imageTagStage || {}), [versionKey]: 'refined' as const },
+                  }
+                : a
+            )
+          );
+          onLog?.('info', `已精修标签（低成本）: ${snapshot.id.slice(0, 6)} · ${versionKey}`);
+        }
+      } catch (e) {
+        onLog?.('warn', '标签精修失败，已保留粗标签', normalizeApiErrorMessage(e));
+      } finally {
+        setRefiningTagKeys((prev) => {
+          const next = new Set(prev);
+          next.delete(rk);
+          return next;
+        });
+      }
+    })();
   };
 
   const removeAsset = useCallback((assetId: string) => {
@@ -1981,6 +2251,10 @@ const WorkflowSection: React.FC<{
         sourceGroupAssetId?: string;
         sourceItemIndex?: number;
         promptOverride?: string;
+        overrideImageGear?: CustomAppModule['imageGear'];
+        overrideImageAspectRatio?: string;
+        overrideImageSize?: string;
+        overrideSkipUnderstand?: boolean;
       }
     ) => {
       const newAsset: WorkflowAsset = attachInitialVgpToNewAsset({
@@ -2026,6 +2300,12 @@ const WorkflowSection: React.FC<{
           addedAt: Date.now(),
           inputSourceDisplayKey: 'original',
           ...(opts?.promptOverride != null ? { promptOverride: opts.promptOverride } : {}),
+          ...(opts?.overrideImageGear ? { overrideImageGear: opts.overrideImageGear } : {}),
+          ...(opts?.overrideImageAspectRatio ? { overrideImageAspectRatio: opts.overrideImageAspectRatio } : {}),
+          ...(opts?.overrideImageSize ? { overrideImageSize: opts.overrideImageSize } : {}),
+          ...(typeof opts?.overrideSkipUnderstand === 'boolean'
+            ? { overrideSkipUnderstand: opts.overrideSkipUnderstand }
+            : {}),
           ...(fromGroup
             ? { sourceGroupAssetId: opts!.sourceGroupAssetId, sourceItemIndex: opts!.sourceItemIndex }
             : {}),
@@ -2037,8 +2317,12 @@ const WorkflowSection: React.FC<{
 
   /** 在给定 `prev` 上插入手动组（供「建组」与组内拖入非组卡一次 setAssets 复用） */
   const insertManualGroupForAssetIds = useCallback((prev: WorkflowAsset[], assetIds: string[]): WorkflowAsset[] => {
-    if (!assetIds.length) return prev;
-    const first = prev.find((x) => x.id === assetIds[0]);
+    const ids = [...new Set(assetIds)].filter((id) => {
+      const x = prev.find((a) => a.id === id);
+      return x && !isWorkflowTextAsset(x);
+    });
+    if (ids.length < 2) return prev;
+    const first = prev.find((x) => x.id === ids[0]);
     const coverImage = first ? getAssetDisplayImage(first, prev) : '';
     const groupId = uuid();
     const usedLabels = new Set<string>(prev.map((x) => x.groupLabel).filter((x): x is string => !!x));
@@ -2048,7 +2332,7 @@ const WorkflowSection: React.FC<{
       displayKey: 'original',
       results: {},
       resultOrder: [],
-      cutImageGroup: assetIds.map((id) => ({ assetId: id })),
+      cutImageGroup: ids.map((id) => ({ assetId: id })),
       groupKind: 'manual',
       groupLabel: getRandomGroupCodeName(usedLabels),
       archived: false,
@@ -2057,43 +2341,49 @@ const WorkflowSection: React.FC<{
     });
     const mapped = prev.map((x) => {
       if (x.id === groupId) return x;
-      if (assetIds.includes(x.id)) return { ...x, parentAssetId: groupId };
+      if (ids.includes(x.id)) return { ...x, parentAssetId: groupId };
       if (x.cutImageGroup?.length) {
         const filtered = x.cutImageGroup.filter(
-          (it) => !(typeof it === 'object' && it && 'assetId' in it && assetIds.includes((it as { assetId: string }).assetId))
+          (it) => !(typeof it === 'object' && it && 'assetId' in it && ids.includes((it as { assetId: string }).assetId))
         );
         if (filtered.length !== x.cutImageGroup.length) return { ...x, cutImageGroup: filtered.length ? filtered : undefined };
       }
       return x;
     });
-    const insertIndex = prev.findIndex((x) => !x.parentAssetId && assetIds.includes(x.id));
+    const insertIndex = prev.findIndex((x) => !x.parentAssetId && ids.includes(x.id));
     const idx = insertIndex >= 0 ? insertIndex : prev.length;
     return [...mapped.slice(0, idx), newGroup, ...mapped.slice(idx)];
   }, [getAssetDisplayImage]);
 
   /** 将已存在的子资产 id 并入某张根级组卡（与根网格 onDrop 并入组同构） */
   const mergeAssetIdsIntoGroupCardAssets = useCallback(
-    (prev: WorkflowAsset[], targetGroupAssetId: string, movingAssetIds: string[]): WorkflowAsset[] =>
-      prev.map((asset) => {
+    (prev: WorkflowAsset[], targetGroupAssetId: string, movingAssetIds: string[]): WorkflowAsset[] => {
+      const moving = movingAssetIds.filter((id) => {
+        const x = prev.find((a) => a.id === id);
+        return x && !isWorkflowTextAsset(x);
+      });
+      if (moving.length === 0) return prev;
+      return prev.map((asset) => {
         if (asset.id === targetGroupAssetId) {
           const groupItems = [...(asset.cutImageGroup ?? [])];
-          movingAssetIds.forEach((id) => groupItems.push({ assetId: id }));
+          moving.forEach((id) => groupItems.push({ assetId: id }));
           return { ...asset, cutImageGroup: groupItems };
         }
-        if (movingAssetIds.includes(asset.id)) {
+        if (moving.includes(asset.id)) {
           return { ...asset, parentAssetId: targetGroupAssetId };
         }
         if (asset.cutImageGroup?.length) {
           const filtered = asset.cutImageGroup.filter(
             (x) =>
-              !(typeof x === 'object' && x && 'assetId' in x && movingAssetIds.includes((x as { assetId: string }).assetId))
+              !(typeof x === 'object' && x && 'assetId' in x && moving.includes((x as { assetId: string }).assetId))
           );
           if (filtered.length !== asset.cutImageGroup.length) {
             return { ...asset, cutImageGroup: filtered.length ? filtered : undefined };
           }
         }
         return asset;
-      }),
+      });
+    },
     []
   );
 
@@ -2202,7 +2492,17 @@ const WorkflowSection: React.FC<{
   }, []);
 
   const handleDropToModuleAction = useCallback(
-    (mod: CustomAppModule, tweakPrompt = false, dropEvent?: React.DragEvent) => {
+    (
+      mod: CustomAppModule,
+      tweakPrompt = false,
+      dropEvent?: React.DragEvent,
+      groupOverrides?: {
+        imageGear?: CustomAppModule['imageGear'];
+        imageAspectRatio?: string;
+        imageSize?: string;
+        understand?: boolean;
+      }
+    ) => {
       const sources = resolveCapabilityDropDragSources(
         draggingAssetIds,
         draggingGroupItems,
@@ -2223,10 +2523,20 @@ const WorkflowSection: React.FC<{
         > = [];
         for (const source of sources) {
           if (source.kind === 'root') {
-            const effectiveIds = getEffectiveAssetIdsForAction(source.assetIds);
+            const effectiveIds = getEffectiveAssetIdsForAction(source.assetIds).filter((id) => {
+              const x = assets.find((a) => a.id === id);
+              return x != null && workflowAssetAllowedForCapabilityDrop(x, mod);
+            });
             effectiveIds.forEach((id) => {
               const a = assets.find((x) => x.id === id);
-              if (a) targets.push({ assetId: id, inputImage: getAssetDisplayImage(a), inputSourceDisplayKey: a.displayKey });
+              if (a) {
+                targets.push({
+                  assetId: id,
+                  inputImage: getAssetDisplayImage(a),
+                  inputSourceDisplayKey: a.displayKey,
+                  ...(isWorkflowTextAsset(a) ? { inputText: workflowAssetToInputText(a) } : {}),
+                });
+              }
             });
           } else {
             const group = assets.find((x) => x.id === source.groupAssetId);
@@ -2245,26 +2555,41 @@ const WorkflowSection: React.FC<{
                 });
               } else if (item && typeof item === 'object' && 'assetId' in item) {
                 const child = assets.find((x) => x.id === (item as { assetId: string }).assetId);
-                if (child) {
+                if (child && workflowAssetAllowedForCapabilityDrop(child, mod)) {
                   targets.push({
                     assetId: child.id,
                     inputImage: getAssetDisplayImage(child),
                     inputSourceDisplayKey: child.displayKey,
                     sourceGroupAssetId: groupId,
                     sourceItemIndex: itemIndex,
+                    ...(isWorkflowTextAsset(child) ? { inputText: workflowAssetToInputText(child) } : {}),
                   });
                 }
               }
             }
           }
         }
-        if (targets.length > 0) setPromptTweakModal({ preset: mod, targets });
+        if (targets.length > 0) setPromptTweakModal({ preset: mod, targets, overrides: groupOverrides });
         return;
       }
+      const queueOverrideOptions =
+        groupOverrides && getCapabilityEngine(mod) === 'gen_image'
+          ? {
+              ...(groupOverrides.imageGear ? { overrideImageGear: groupOverrides.imageGear } : {}),
+              ...(groupOverrides.imageAspectRatio ? { overrideImageAspectRatio: groupOverrides.imageAspectRatio } : {}),
+              ...(groupOverrides.imageSize ? { overrideImageSize: groupOverrides.imageSize } : {}),
+              ...(typeof groupOverrides.understand === 'boolean'
+                ? { overrideSkipUnderstand: groupOverrides.understand }
+                : {}),
+            }
+          : undefined;
 
       for (const source of sources) {
         if (source.kind === 'root') {
-          const effectiveIds = getEffectiveAssetIdsForAction(source.assetIds);
+          const effectiveIds = getEffectiveAssetIdsForAction(source.assetIds).filter((id) => {
+            const x = assets.find((a) => a.id === id);
+            return x != null && workflowAssetAllowedForCapabilityDrop(x, mod);
+          });
           if (mod.category === 'generate_3d' && onAddGenerate3DJob) {
             const firstId = effectiveIds[0];
             const a = firstId ? assets.find((x) => x.id === firstId) : null;
@@ -2272,7 +2597,7 @@ const WorkflowSection: React.FC<{
             if (img) onAddGenerate3DJob(mod, img);
             continue;
           }
-          effectiveIds.forEach((id) => addToPending(id, mod.id));
+          effectiveIds.forEach((id) => addToPending(id, mod.id, queueOverrideOptions));
           continue;
         }
         const groupAssetForSrc = assets.find((x) => x.id === source.groupAssetId);
@@ -2299,23 +2624,16 @@ const WorkflowSection: React.FC<{
               parentAssetId: groupId,
               sourceGroupAssetId: groupId,
               sourceItemIndex: itemIndex,
+              ...(queueOverrideOptions ?? {}),
             });
           } else {
             const child = assets.find((x) => x.id === (item as { assetId: string }).assetId);
-            const inputImage = child ? getAssetDisplayImage(child) : '';
-            setPending((prev) => [
-              ...prev,
-              {
-                id: uuid(),
-                assetId: (item as { assetId: string }).assetId,
-                actionType: mod.id,
-                inputImage,
-                addedAt: Date.now(),
-                inputSourceDisplayKey: child?.displayKey,
-                sourceGroupAssetId: groupId,
-                sourceItemIndex: itemIndex,
-              },
-            ]);
+            if (!child || !workflowAssetAllowedForCapabilityDrop(child, mod)) continue;
+            addToPending(child.id, mod.id, {
+              sourceGroupAssetId: groupId,
+              sourceItemIndex: itemIndex,
+              ...(queueOverrideOptions ?? {}),
+            });
           }
         }
       }
@@ -2344,7 +2662,10 @@ const WorkflowSection: React.FC<{
       if (sources.length === 0) return;
       for (const source of sources) {
         if (source.kind === 'root') {
-          const effectiveIds = getEffectiveAssetIdsForAction(source.assetIds);
+          const effectiveIds = getEffectiveAssetIdsForAction(source.assetIds).filter((id) => {
+            const x = assets.find((a) => a.id === id);
+            return x && !isWorkflowTextAsset(x);
+          });
           effectiveIds.forEach((id) => addToPending(id, setActionId));
           continue;
         }
@@ -2363,6 +2684,7 @@ const WorkflowSection: React.FC<{
             });
           } else {
             const child = assets.find((x) => x.id === (item as { assetId: string }).assetId);
+            if (child && isWorkflowTextAsset(child)) continue;
             const inputImage = child ? getAssetDisplayImage(child) : '';
             setPending((prev) => [
               ...prev,
@@ -2393,58 +2715,69 @@ const WorkflowSection: React.FC<{
     ]
   );
 
-  const importLibraryItemsIntoWorkflow = useCallback(
-    (items: LibraryItem[]) => {
-      const valid = items.filter((item) => item?.data);
-      if (!valid.length) return;
-      setAssets((prev) => {
-        const groupCtx =
-          viewStack.length > 0
-            ? prev.find((a) => a.id === viewStack[viewStack.length - 1].assetId)
-            : null;
-        const baseT = Date.now();
-        const n = valid.length;
-        const created: WorkflowAsset[] = valid.map((item, idx) => ({
+  function importLibraryItemsIntoWorkflow(items: Array<WorkflowAsset | LibraryItem>) {
+    const workflowIds = new Set<string>();
+    const externalImages: string[] = [];
+    items.forEach((item) => {
+      if (!item) return;
+      if ('inRepository' in item) {
+        if (item.id) workflowIds.add(item.id);
+        return;
+      }
+      if (item.data) externalImages.push(item.data);
+    });
+    if (workflowIds.size === 0 && externalImages.length === 0) return;
+    setAssets((prev) => {
+      let next = [...prev];
+      if (workflowIds.size > 0) {
+        const sourceAssets = prev.filter((a) => workflowIds.has(a.id));
+        const clonedFromRepo: WorkflowAsset[] = sourceAssets.map((a, idx) => ({
+          ...a,
           id: uuid(),
-          original: item.data,
-          displayKey: 'original' as const,
-          results: {} as Record<string, string>,
-          resultOrder: [] as string[],
+          parentAssetId: undefined,
+          inRepository: false,
           archived: false,
           hiddenInGrid: false,
-          createdAt: baseT + (n - 1 - idx),
-          ...(groupCtx ? { parentAssetId: groupCtx.id } : {}),
+          createdAt: Date.now() + idx,
         }));
-        if (!groupCtx) {
-          return [...prev, ...created];
-        }
-        const next = prev.map((a) => {
-          if (a.id === groupCtx.id) {
-            const gItems = [...(a.cutImageGroup ?? [])];
-            created.forEach((c) => gItems.push({ assetId: c.id }));
-            return { ...a, cutImageGroup: gItems };
-          }
-          return a;
-        });
-        return next.concat(created);
-      });
-      setLibraryImportIds(new Set());
-      setWorkspacePane(2);
-    },
-    [viewStack, setAssets]
-  );
+        next = next.concat(clonedFromRepo);
+      }
+      if (externalImages.length > 0) {
+        const baseT = Date.now();
+        const n = externalImages.length;
+        const created: WorkflowAsset[] = externalImages.map((src, idx) => ({
+          id: uuid(),
+          original: src,
+          displayKey: 'original',
+          results: {},
+          resultOrder: [],
+          archived: false,
+          hiddenInGrid: false,
+          inRepository: false,
+          createdAt: baseT + (n - 1 - idx),
+        }));
+        next = next.concat(created);
+      }
+      return next;
+    });
+    setWorkspacePane(2);
+  }
 
   const handleOutlineDropToWorkspace = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
       e.stopPropagation();
-      const id = e.dataTransfer.getData(DT_AC_LIBRARY_ITEM_ID);
-      if (!id) return;
-      const item = repositoryItems.find((i) => i.id === id);
-      if (!item?.data) return;
-      importLibraryItemsIntoWorkflow([item]);
+      const sources = parseAcWorkflowExportDragSources(e.dataTransfer);
+      const rootIds = new Set<string>();
+      sources.forEach((src) => {
+        if (src.kind === 'root') src.assetIds.forEach((id) => rootIds.add(id));
+      });
+      if (rootIds.size === 0) return;
+      const picked = repositoryVisibleItems.filter((i) => rootIds.has(i.id));
+      if (!picked.length) return;
+      importLibraryItemsIntoWorkflow(picked);
     },
-    [repositoryItems, importLibraryItemsIntoWorkflow]
+    [repositoryVisibleItems, importLibraryItemsIntoWorkflow]
   );
 
   const handleOutlineDropToLibrary = useCallback(
@@ -2452,26 +2785,21 @@ const WorkflowSection: React.FC<{
       e.preventDefault();
       e.stopPropagation();
       if (!onAddToLibrary) {
-        onLog?.('warn', '无法写入仓库', '未配置 onAddToLibrary');
+        onLog?.('warn', '未配置外部仓库写入，改为工作区内仓库切换', undefined);
+      }
+      const sources = parseAcWorkflowExportDragSources(e.dataTransfer);
+      const rootIds = new Set<string>();
+      sources.forEach((src) => {
+        if (src.kind === 'root') src.assetIds.forEach((id) => rootIds.add(id));
+      });
+      if (rootIds.size === 0) {
+        onLog?.('warn', '未写入仓库', '仅支持根资产');
         return;
       }
-      const raw = e.dataTransfer.getData(DT_AC_WORKFLOW_EXPORT);
-      if (!raw) return;
-      let payload: AcWorkflowExportPayload;
-      try {
-        payload = JSON.parse(raw) as AcWorkflowExportPayload;
-      } catch {
-        return;
-      }
-      const items = buildLibraryItemsFromWorkflowExport(assets, showArchived, getAssetDisplayImage, payload);
-      if (items.length === 0) {
-        onLog?.('warn', '未写入仓库', '拖入项无可导出的图');
-        return;
-      }
-      onAddToLibrary(items);
-      onLog?.('info', `已写入仓库 ${items.length} 条`, undefined);
+      setAssets((prev) => prev.map((a) => (rootIds.has(a.id) ? { ...a, inRepository: true, hiddenInGrid: false } : a)));
+      onLog?.('info', `已写入仓库 ${rootIds.size} 条`, undefined);
     },
-    [onAddToLibrary, onLog, assets, showArchived, getAssetDisplayImage]
+    [onAddToLibrary, onLog, setAssets]
   );
 
   const activePaneNode = Math.max(0, Math.min(3, Math.round(workspacePane)));
@@ -2485,8 +2813,30 @@ const WorkflowSection: React.FC<{
     /** 第 0 页：大纲列对应仓库条目列表 */
     const outlineRepoTopBarColumn = {
       title: '大纲',
-      desc: '当前筛选下的仓库条目；点击行与左侧画布多选同步',
-      actions: null as React.ReactNode,
+      desc: repositoryOutlineMode === 'tags' ? '按标签筛选仓库资产（支持多选）' : '当前筛选下的仓库条目；点击行预览大图',
+      actions: (
+        <div className="flex items-center gap-2 whitespace-nowrap flex-wrap">
+          <button
+            type="button"
+            onClick={() => setRepositoryOutlineMode('list')}
+            className={repositoryOutlineMode === 'list' ? TITLE_ROW_BTN_ACTIVE : TITLE_ROW_BTN_NEUTRAL}
+          >
+            列表
+          </button>
+          <button
+            type="button"
+            onClick={() => setRepositoryOutlineMode('tags')}
+            className={repositoryOutlineMode === 'tags' ? TITLE_ROW_BTN_ACTIVE : TITLE_ROW_BTN_NEUTRAL}
+          >
+            标签
+          </button>
+          {repositorySelectedTags.size > 0 && (
+            <button type="button" onClick={() => setRepositorySelectedTags(new Set())} className={TITLE_ROW_BTN_NEUTRAL}>
+              清空标签（{repositorySelectedTags.size}）
+            </button>
+          )}
+        </div>
+      ),
     };
 
     /** 第 1 页起：工作区资产树大纲 */
@@ -2519,10 +2869,16 @@ const WorkflowSection: React.FC<{
       return [
         {
           title: '资产仓库',
-          desc: '筛选后点击或框选多选；列数与工作区画布共用设置；右侧大纲与操作区可同步',
+          desc: '筛选后点击预览；列数与工作区画布共用设置；右侧大纲支持列表/标签模式',
           actions: (
             <div className="flex flex-wrap items-center gap-2 justify-end min-w-0">
               <span className="text-[9px] font-black text-gray-500 uppercase shrink-0">筛选</span>
+              <input
+                value={libraryTagQuery}
+                onChange={(e) => setLibraryTagQuery(e.target.value)}
+                placeholder="标签检索：style:anime lighting:neon"
+                className="h-8 min-w-[12rem] max-w-[20rem] bg-[#1c1c22] border border-[#2e2e32] rounded-lg px-2 text-[9px] text-gray-200 outline-none focus:border-blue-500"
+              />
               <button
                 type="button"
                 onClick={() => setLibraryFilter('all')}
@@ -2567,28 +2923,6 @@ const WorkflowSection: React.FC<{
                   +
                 </button>
               </div>
-              {repositoryItems.length > 0 && (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => setLibraryImportIds(new Set())}
-                    className={TITLE_ROW_BTN_NEUTRAL}
-                  >
-                    清空选择
-                  </button>
-                  <button
-                    type="button"
-                    disabled={libraryImportIds.size === 0}
-                    onClick={() => {
-                      const picked = repositoryItems.filter((i) => libraryImportIds.has(i.id));
-                      importLibraryItemsIntoWorkflow(picked);
-                    }}
-                    className={`${TITLE_ROW_BTN_BASE} bg-blue-600 border-blue-500 text-white hover:bg-blue-500 disabled:opacity-40 disabled:hover:bg-blue-600`}
-                  >
-                    导入工作区（{libraryImportIds.size}）
-                  </button>
-                </>
-              )}
             </div>
           ),
         },
@@ -2609,31 +2943,10 @@ const WorkflowSection: React.FC<{
       const workspaceAndFunctionCols = [
         {
           title: '工作区',
-          desc: '进行中与已完成内容管理',
+          desc: '工作区资产管理',
           actions: (
             <>
               <div className="flex items-center gap-2 whitespace-nowrap">
-                <span className="text-[9px] font-black text-gray-500 uppercase">显示</span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowArchived(false);
-                  }}
-                  className={!showArchived ? TITLE_ROW_BTN_ACTIVE : TITLE_ROW_BTN_NEUTRAL}
-                >
-                  进行中
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowArchived(true);
-                    setViewStack([]);
-                    setSelectedGroupItemKeys(new Set());
-                  }}
-                  className={showArchived ? TITLE_ROW_BTN_ACTIVE : TITLE_ROW_BTN_NEUTRAL}
-                >
-                  已完成
-                </button>
                 <label className={`${TITLE_ROW_BTN_NEUTRAL} cursor-pointer`}>
                   多选上传
                   <input type="file" className="hidden" accept="image/*" multiple onChange={handleBatchUploadCorrect} />
@@ -2670,22 +2983,20 @@ const WorkflowSection: React.FC<{
                     +
                   </button>
                 </div>
+                {!showArchived && (
+                  <button
+                    type="button"
+                    onClick={() => addWorkflowTextAsset()}
+                    className="h-8 px-3 rounded-lg border border-emerald-800/50 bg-emerald-950/40 text-[9px] font-black uppercase text-emerald-200 hover:bg-emerald-900/35"
+                  >
+                    添加文字
+                  </button>
+                )}
               </div>
               {archiveHint && !showArchived && (
                 <div className="h-8 flex items-center gap-2 px-3 rounded-lg bg-[#152642] border border-[#3b6fb8] text-[9px] text-blue-200">
                   <span className="font-black uppercase">已归档</span>
-                  <span className="text-gray-300">在「已完成」里查看</span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowArchived(true);
-                      setArchivedDetailAssetId(archiveHint.assetId);
-                      setArchiveHint(null);
-                    }}
-                    className="h-6 px-2 rounded-md bg-[#1e3558] hover:bg-[#264670] text-[8px] font-black uppercase text-blue-100 inline-flex items-center"
-                  >
-                    去查看
-                  </button>
+                  <span className="text-gray-300">已移入资产仓库</span>
                 </div>
               )}
               {!showArchived && visibleAssets.length > 0 && (
@@ -2920,19 +3231,20 @@ const WorkflowSection: React.FC<{
     setPending,
     setSelectedAssetIds,
     setSelectedGroupItemKeys,
-    setShowArchived,
     setViewStack,
     showArchived,
     visibleAssets,
     capabilityPresetViewMode,
     libraryFilter,
+    repositoryOutlineMode,
+    repositorySelectedTags,
     snapWorkspacePaneToNode,
     outlineCollapsedIds,
     outlineExpandableGroupIds,
     expandOutlineAll,
     collapseOutlineAll,
     repositoryItems,
-    libraryImportIds,
+    repositoryVisibleItems,
   ]);
   const topTitleGridStyle = useMemo(
     () => workflowTopTitleGridStyle(activePaneNode, listPaneWidth, sidebarWidth, presetPaneWidth),
@@ -3043,7 +3355,7 @@ const WorkflowSection: React.FC<{
           >
         <div className="h-full min-h-0 shrink-0 flex flex-col pr-3 border-r border-white/[0.06]" style={{ width: `${listPaneWidth}px` }}>
           <div ref={libraryScrollRef} className="flex-1 min-h-0 overflow-y-auto no-scrollbar">
-            {repositoryItems.length === 0 ? (
+            {repositoryVisibleItems.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-16 px-6 text-gray-600 gap-2">
                 <span className="text-[10px] font-black uppercase tracking-wider">暂无资产</span>
                 <span className="text-[8px] text-gray-600">对话与其它入口生成的图会进入资产库</span>
@@ -3051,7 +3363,7 @@ const WorkflowSection: React.FC<{
             ) : (
               <div className="p-6 min-w-0">
                 <div className="gap-4 relative" style={{ columnCount, columnFill: 'balance' as const }}>
-                  {repositoryItems.map((item) => (
+                  {repositoryVisibleItems.map((item) => (
                     <div key={item.id} className="break-inside-avoid mb-6 relative">
                       <div
                         data-workflow-library-card
@@ -3062,49 +3374,139 @@ const WorkflowSection: React.FC<{
                         draggable
                         onDragStart={(e) => {
                           try {
-                            e.dataTransfer.setData(DT_AC_LIBRARY_ITEM_ID, item.id);
+                            const payload: AcWorkflowExportPayload = { mode: 'roots', assetIds: [item.id] };
+                            e.dataTransfer.setData(DT_AC_WORKFLOW_EXPORT, JSON.stringify(payload));
                             e.dataTransfer.effectAllowed = 'copy';
                           } catch {
                             /* ignore */
                           }
                         }}
                         className={`group relative rounded-2xl border overflow-hidden bg-[#16161a] transition-colors ${
-                          libraryImportIds.has(item.id)
-                            ? 'border-blue-500 ring-2 ring-blue-500/50'
+                          item.cutImageGroup?.length
+                            ? 'border-blue-400'
+                            : isWorkflowTextAsset(item)
+                            ? 'border-emerald-900/45'
                             : 'border-[#2e2e32]'
                         }`}
+                        onWheel={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          if (item.cutImageGroup?.length) {
+                            const delta = e.deltaY > 0 ? 1 : -1;
+                            setGroupPreviewIndexById((prev) => {
+                              const current = prev[item.id] ?? 0;
+                              const len = item.cutImageGroup ? item.cutImageGroup.length : 1;
+                              const next = ((current + delta) % len + len) % len;
+                              return { ...prev, [item.id]: next };
+                            });
+                            const direction: 'up' | 'down' = e.deltaY > 0 ? 'down' : 'up';
+                            const assetId = item.id;
+                            setGroupBounceStateById((prev) => ({ ...prev, [assetId]: direction }));
+                            window.setTimeout(() => {
+                              setGroupBounceStateById((prev) => ({ ...prev, [assetId]: 'idle' }));
+                            }, 180);
+                            return;
+                          }
+                          if (getDisplayKeysForAsset(item).length <= 1) return;
+                          cycleDisplayKey(item.id, e.deltaY);
+                        }}
                       >
+                        {item.cutImageGroup?.length && !isWorkflowTextAsset(item) && (
+                          <>
+                            <div className="absolute inset-0 rounded-2xl bg-[#16161a] border border-[#3b6fb8] translate-x-[16px] translate-y-[16px] -rotate-3 opacity-70 shadow-xl shadow-[#000000] pointer-events-none" />
+                            <div className="absolute inset-0 rounded-2xl bg-[#1a1a1e] border border-[#6090d0] translate-x-[8px] translate-y-[8px] rotate-1 opacity-90 shadow-xl shadow-[#000000] pointer-events-none" />
+                          </>
+                        )}
                         <div
                           className="relative cursor-pointer"
                           role="presentation"
                           onClick={() => {
-                            setLibraryImportIds((prev) => {
-                              const next = new Set(prev);
-                              if (next.has(item.id)) next.delete(item.id);
-                              else next.add(item.id);
-                              return next;
-                            });
+                            if (item.cutImageGroup?.length && !isWorkflowTextAsset(item)) {
+                              setViewStack([{ assetId: item.id }]);
+                              return;
+                            }
+                            setLightboxSourceSlot(null);
+                            setLightboxAssetId(item.id);
                           }}
                         >
-                          <div className="relative w-full bg-[#141416] flex justify-center" style={{ aspectRatio: 1 }}>
-                            <WorkflowGridImage
-                              fullSrc={item.data}
-                              cacheKey={`lib:${item.id}`}
-                              className="relative w-full h-full flex justify-center bg-[#141416]"
-                              imgClassName="w-full h-full object-contain"
-                              draggable={false}
-                              onDragStart={(ev) => ev.preventDefault()}
-                            />
-                            {libraryImportIds.has(item.id) && (
-                              <div className="absolute top-2 right-2 w-6 h-6 rounded-lg border border-blue-400/80 bg-[#18181c] flex items-center justify-center text-[11px] text-blue-300 shadow-lg">
-                                ✓
-                              </div>
-                            )}
+                          {isWorkflowTextAsset(item) ? (
+                            <div
+                              className="relative w-full bg-[#0d1110] flex flex-col justify-start p-3 text-left border-t border-emerald-950/25"
+                              style={{ aspectRatio: `${3 / 4}`, minHeight: '10rem' }}
+                            >
+                              <span className="text-[8px] font-black uppercase text-emerald-500/90 mb-1.5">文字</span>
+                              {item.textTitle?.trim() ? (
+                                <p className="text-[11px] font-bold text-gray-100 line-clamp-2 mb-1.5">{item.textTitle.trim()}</p>
+                              ) : null}
+                              <p
+                                className={`text-[10px] text-gray-400 leading-snug whitespace-pre-wrap flex-1 overflow-hidden ${
+                                  item.textTitle?.trim() ? 'line-clamp-6' : 'line-clamp-8'
+                                }`}
+                              >
+                                {getAssetDisplayText(item) || '（空白，点击编辑）'}
+                              </p>
+                            </div>
+                          ) : (
+                            <div
+                              className="relative w-full bg-[#141416] flex justify-center"
+                              style={{ aspectRatio: `${cardAspectByAssetId[item.id] ?? 1}` }}
+                            >
+                              <WorkflowGridImage
+                                fullSrc={getAssetDisplayImage(item)}
+                                cacheKey={`repo:${item.id}:${item.displayKey}`}
+                                className="relative z-0 block w-full h-full min-h-[5rem]"
+                                imgClassName="relative z-0 block w-full h-full object-contain"
+                                draggable={false}
+                                onDragStart={(ev) => ev.preventDefault()}
+                                onIntrinsicSize={(w, h) => {
+                                  setCardAspectByAssetId((prev) => mergeCardAspectFromIntrinsic(prev, item.id, w, h) ?? prev);
+                                }}
+                              />
+                              <div
+                                aria-hidden
+                                className="absolute inset-0 z-[1]"
+                                draggable={false}
+                                onDragStart={(e) => e.preventDefault()}
+                              />
+                            </div>
+                          )}
+                          {isWorkflowTextAsset(item) ? (
+                            <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg text-[8px] font-black bg-emerald-900/85 text-emerald-100">
+                              文字
+                            </span>
+                          ) : item.cutImageGroup?.length ? (
+                            <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg text-[8px] font-black bg-[#1d4ed8]">
+                              {(item.groupLabel ?? (item.groupKind === 'manual' ? '组' : '切割'))} {item.cutImageGroup.length}
+                            </span>
+                          ) : null}
+                        </div>
+                        {!item.cutImageGroup?.length && (
+                          <div className="p-2 flex flex-col gap-1.5 border-t border-[#252528] bg-[#050505]">
+                            <div className="flex gap-1 flex-wrap items-center justify-between min-h-[18px]">
+                              <span className="inline-flex items-center gap-1 rounded-full border border-[#2e2e32] bg-[#151518] px-2 py-0.5 text-[7px] text-gray-300/95 select-none">
+                                <span className="font-black text-blue-300">{getGeneratedImageCount(item)}</span>
+                                <span className="text-gray-500">·</span>
+                                <span className="text-gray-400">{getAssetDisplayTypeLabel(item)}</span>
+                              </span>
+                              {item.displayKey !== 'original' ? (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    discardResult(item.id, item.displayKey);
+                                  }}
+                                  className="px-1.5 py-0.5 rounded text-[7px] text-red-400 hover:bg-[#4a1c1c]"
+                                  title="丢弃当前显示的版本"
+                                >
+                                  丢弃当前版本
+                                </button>
+                              ) : (
+                                <span aria-hidden className="px-1.5 py-0.5 text-[7px] opacity-0 select-none pointer-events-none">
+                                  丢弃当前版本
+                                </span>
+                              )}
+                            </div>
                           </div>
-                        </div>
-                        <div className="p-2 flex flex-col gap-1 border-t border-[#252528]">
-                          <span className="text-[9px] font-black text-gray-300 truncate">{item.label?.trim() || '未命名'}</span>
-                        </div>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -3121,12 +3523,12 @@ const WorkflowSection: React.FC<{
         >
           <div ref={outlineScrollRef} className="flex-1 min-h-0 overflow-y-auto no-scrollbar flex flex-col gap-0.5 px-1 pt-2 pb-2">
             {activePaneNode === 0 ? (
-              repositoryItems.length === 0 ? (
+              repositoryVisibleItems.length === 0 ? (
                 <div className="text-[9px] text-gray-600 py-6 text-center leading-relaxed">
-                  暂无资产 · 与左侧筛选一致
+                  {repositoryOutlineMode === 'tags' ? '暂无标签 · 试试切回列表或调整筛选' : '暂无资产 · 与左侧筛选一致'}
                 </div>
               ) : (
-                repositoryOutlineRows
+                repositoryOutlineMode === 'tags' ? repositoryOutlineTagRows : repositoryOutlineRows
               )
             ) : visibleAssets.length === 0 ? (
               <div className="text-[9px] text-gray-600 py-6 text-center leading-relaxed">暂无资产 · 导入或生成后将显示在此</div>
@@ -3150,12 +3552,12 @@ const WorkflowSection: React.FC<{
                       : 'border-white/15 bg-[#0f0f12]'
                   }`}
                   onDragEnter={(e) => {
-                    if (Array.from(e.dataTransfer.types).includes(DT_AC_LIBRARY_ITEM_ID)) {
+                    if (Array.from(e.dataTransfer.types).includes(DT_AC_WORKFLOW_EXPORT)) {
                       setOutlineFooterDropOver('toWorkspace');
                     }
                   }}
                   onDragOver={(e) => {
-                    if (!Array.from(e.dataTransfer.types).includes(DT_AC_LIBRARY_ITEM_ID)) return;
+                    if (!Array.from(e.dataTransfer.types).includes(DT_AC_WORKFLOW_EXPORT)) return;
                     e.preventDefault();
                     e.dataTransfer.dropEffect = 'copy';
                   }}
@@ -3878,9 +4280,9 @@ const WorkflowSection: React.FC<{
           ) : visibleAssets.length === 0 ? (
             <div className="flex flex-1 min-h-0 flex-col items-center justify-center px-6 py-10 text-gray-500">
               <AppIcon name="camera" className="w-10 h-10 mb-2" />
-              <p className="text-[10px] font-black uppercase">暂无图片</p>
+              <p className="text-[10px] font-black uppercase">暂无内容</p>
               <p className="text-[9px] mt-1 text-center max-w-sm">
-                使用「多选上传」添加原始图片，或切换到「已完成」查看归档（可点击打开）
+                使用「多选上传」添加图片，或点顶栏「添加文字」建文字卡片
               </p>
             </div>
           ) : (
@@ -3891,7 +4293,8 @@ const WorkflowSection: React.FC<{
                 style={{ columnCount, columnFill: 'balance' as const }}
               >
                 {visibleAssets.map((a) => {
-                  const cardAspect = cardAspectByAssetId[a.id] ?? 1;
+                  const isTextCard = isWorkflowTextAsset(a);
+                  const cardAspect = isTextCard ? 3 / 4 : cardAspectByAssetId[a.id] ?? 1;
                   const isBusy = busyAssetIds.has(a.id);
                   const isPendingOnly =
                     pending.some((t) => t.assetId === a.id) && !executingQueue;
@@ -3925,7 +4328,9 @@ const WorkflowSection: React.FC<{
                   const rawG = groupPreviewIndexById[a.id] ?? 0;
                   const gLen = a.cutImageGroup?.length ?? 0;
                   const gSafe = gLen ? ((rawG % gLen) + gLen) % gLen : 0;
-                  const gridPreviewSrc = !a.cutImageGroup?.length
+                  const gridPreviewSrc = isTextCard
+                    ? ''
+                    : !a.cutImageGroup?.length
                     ? getAssetDisplayImage(a)
                     : (() => {
                         const groupItems = a.cutImageGroup!;
@@ -3940,7 +4345,7 @@ const WorkflowSection: React.FC<{
 
                   return (
                     <div key={a.id} className="break-inside-avoid mb-6 relative" data-workflow-thumb-key={a.id}>
-                      {a.cutImageGroup?.length && (
+                      {a.cutImageGroup?.length && !isTextCard && (
                         <>
                           <div className="absolute inset-0 rounded-2xl bg-[#16161a] border border-[#3b6fb8] translate-x-[16px] translate-y-[16px] -rotate-3 opacity-70 shadow-xl shadow-[#000000] pointer-events-none" />
                           <div className="absolute inset-0 rounded-2xl bg-[#1a1a1e] border border-[#6090d0] translate-x-[8px] translate-y-[8px] rotate-1 opacity-90 shadow-xl shadow-[#000000] pointer-events-none" />
@@ -3952,7 +4357,9 @@ const WorkflowSection: React.FC<{
                           if (el) cardRefs.current.set(a.id, el);
                           else cardRefs.current.delete(a.id);
                         }}
-                        className={`group relative rounded-2xl border overflow-hidden bg-[#16161a] ${
+                        className={`group relative rounded-2xl border overflow-hidden ${
+                          isTextCard ? 'bg-[#0c1210]' : 'bg-[#16161a]'
+                        } ${
                           selectedAssetIds.has(a.id)
                             ? 'border-blue-500 ring-2 ring-blue-500/50'
                             : dragOverAssetId === a.id
@@ -3961,6 +4368,8 @@ const WorkflowSection: React.FC<{
                               : 'border-blue-500 ring-2 ring-blue-500/50'
                             : a.cutImageGroup?.length
                             ? 'border-blue-400'
+                            : isTextCard
+                            ? 'border-emerald-900/45'
                             : 'border-[#2e2e32]'
                         } ${busyClass} transition-transform duration-150 ease-out will-change-transform ${motionClass}`}
                         draggable={!showArchived && !isBusy}
@@ -4022,9 +4431,16 @@ const WorkflowSection: React.FC<{
                             return;
                           }
                           const src = sources[0]!;
+                          if (isWorkflowTextAsset(a)) {
+                            finish();
+                            return;
+                          }
                           const targetId = a.id;
                           if (src.kind === 'root') {
-                            const dragIds = Array.from(new Set(src.assetIds.filter((id) => id !== targetId)));
+                            const dragIds = Array.from(new Set(src.assetIds.filter((id) => id !== targetId))).filter((id) => {
+                              const ast = assets.find((x) => x.id === id);
+                              return ast != null && !isWorkflowTextAsset(ast);
+                            });
                             if (dragIds.length > 0) {
                               if (a.cutImageGroup?.length) {
                                 setAssets((prev) => mergeAssetIdsIntoGroupCardAssets(prev, targetId, dragIds));
@@ -4094,7 +4510,7 @@ const WorkflowSection: React.FC<{
                           onClick={() => {
                             if (showArchived) {
                               setArchivedDetailAssetId(a.id);
-                            } else if (a.cutImageGroup?.length) {
+                            } else if (a.cutImageGroup?.length && !isTextCard) {
                               setViewStack([{ assetId: a.id }]);
                             } else {
                               setLightboxSourceSlot(null);
@@ -4102,30 +4518,49 @@ const WorkflowSection: React.FC<{
                             }
                           }}
                         >
-                          <div className="relative w-full bg-[#141416] flex justify-center" style={{ aspectRatio: `${cardAspect}` }}>
-                            <WorkflowGridImage
-                              fullSrc={gridPreviewSrc}
-                              cacheKey={gridPreviewCacheKey}
-                              deferThumbnail={!thumbUnlockKeys.has(a.id)}
-                              thumbDecodePriority={thumbHotKeys.has(a.id) ? 'high' : 'low'}
-                              imageFetchPriority={thumbHotKeys.has(a.id) ? 'high' : 'auto'}
-                              className="relative z-0 block w-full h-full min-h-[5rem]"
-                              imgClassName="relative z-0 block w-full h-full object-contain"
-                              draggable={false}
-                              onDragStart={(e) => e.preventDefault()}
-                              onIntrinsicSize={(w, h) => {
-                                setCardAspectByAssetId(
-                                  (prev) => mergeCardAspectFromIntrinsic(prev, a.id, w, h) ?? prev
-                                );
-                              }}
-                            />
+                          {isTextCard ? (
                             <div
-                              aria-hidden
-                              className="absolute inset-0 z-[1]"
-                              draggable={false}
-                              onDragStart={(e) => e.preventDefault()}
-                            />
-                          </div>
+                              className="relative w-full bg-[#0d1110] flex flex-col justify-start p-3 text-left border-t border-emerald-950/25"
+                              style={{ aspectRatio: `${cardAspect}`, minHeight: '10rem' }}
+                            >
+                              <span className="text-[8px] font-black uppercase text-emerald-500/90 mb-1.5">文字</span>
+                              {a.textTitle?.trim() ? (
+                                <p className="text-[11px] font-bold text-gray-100 line-clamp-2 mb-1.5">{a.textTitle.trim()}</p>
+                              ) : null}
+                              <p
+                                className={`text-[10px] text-gray-400 leading-snug whitespace-pre-wrap flex-1 overflow-hidden ${
+                                  a.textTitle?.trim() ? 'line-clamp-6' : 'line-clamp-8'
+                                }`}
+                              >
+                                {getAssetDisplayText(a) || '（空白，点击编辑）'}
+                              </p>
+                            </div>
+                          ) : (
+                            <div className="relative w-full bg-[#141416] flex justify-center" style={{ aspectRatio: `${cardAspect}` }}>
+                              <WorkflowGridImage
+                                fullSrc={gridPreviewSrc}
+                                cacheKey={gridPreviewCacheKey}
+                                deferThumbnail={!thumbUnlockKeys.has(a.id)}
+                                thumbDecodePriority={thumbHotKeys.has(a.id) ? 'high' : 'low'}
+                                imageFetchPriority={thumbHotKeys.has(a.id) ? 'high' : 'auto'}
+                                className="relative z-0 block w-full h-full min-h-[5rem]"
+                                imgClassName="relative z-0 block w-full h-full object-contain"
+                                draggable={false}
+                                onDragStart={(e) => e.preventDefault()}
+                                onIntrinsicSize={(w, h) => {
+                                  setCardAspectByAssetId(
+                                    (prev) => mergeCardAspectFromIntrinsic(prev, a.id, w, h) ?? prev
+                                  );
+                                }}
+                              />
+                              <div
+                                aria-hidden
+                                className="absolute inset-0 z-[1]"
+                                draggable={false}
+                                onDragStart={(e) => e.preventDefault()}
+                              />
+                            </div>
+                          )}
                           {isPendingOnly && (
                             <div
                               className="absolute inset-0 z-10 bg-[#0b1220]/35 backdrop-blur-[2px] flex items-center justify-center"
@@ -4183,11 +4618,15 @@ const WorkflowSection: React.FC<{
                               执行出错
                             </span>
                           )}
-                          {a.cutImageGroup?.length && (
+                          {isTextCard ? (
+                            <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg text-[8px] font-black bg-emerald-900/85 text-emerald-100">
+                              文字
+                            </span>
+                          ) : a.cutImageGroup?.length ? (
                             <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg text-[8px] font-black bg-[#1d4ed8]">
                               {(a.groupLabel ?? (a.groupKind === 'manual' ? '组' : '切割'))} {a.cutImageGroup.length}
                             </span>
-                          )}
+                          ) : null}
                         </div>
                         {!showArchived && !a.cutImageGroup?.length && (
                           <div className="p-2 flex flex-col gap-1.5 border-t border-[#252528] bg-[#050505]">
@@ -4309,6 +4748,43 @@ const WorkflowSection: React.FC<{
 
       {/* 进行中：大图弹窗（与对话临时库预览一致：全屏画布、滚轮切资产、缩放平移） */}
       {lightboxAsset && !showArchived && (
+        isWorkflowTextAsset(lightboxAsset) ? (
+          <WorkflowTextAssetOverlay
+            open
+            title={lightboxAsset.textTitle ?? ''}
+            body={getAssetDisplayText(lightboxAsset)}
+            displayKey={lightboxAsset.displayKey}
+            versions={getDisplayKeysForAsset(lightboxAsset).map((k) => ({
+              key: k,
+              label: k === 'original' ? '原始' : getActionLabel(baseActionId(k)),
+            }))}
+            onSelectDisplayKey={(key) => setDisplayKey(lightboxAsset.id, key)}
+            onDiscardDisplayKey={(key) => discardResult(lightboxAsset.id, key)}
+            onClose={() => {
+              setLightboxAssetId(null);
+              setLightboxSourceSlot(null);
+            }}
+            onSave={(next) => {
+              const id = lightboxAsset.id;
+              const currentKey = lightboxAsset.displayKey;
+              setAssets((prev) =>
+                prev.map((x) => {
+                  if (x.id !== id) return x;
+                  if (currentKey !== 'original') {
+                    return {
+                      ...x,
+                      textTitle: next.textTitle,
+                      textResults: { ...(x.textResults || {}), [currentKey]: next.textBody },
+                    };
+                  }
+                  return { ...x, textTitle: next.textTitle, textBody: next.textBody };
+                })
+              );
+            }}
+            wheelListLength={lightboxList.length}
+            onWheelNavigate={handleLightboxWheelNavigate}
+          />
+        ) : (
         <ImagePreviewOverlay
           open
           resetKey={lightboxAsset.id}
@@ -4322,18 +4798,117 @@ const WorkflowSection: React.FC<{
           innerWheelOptionCount={getDisplayKeysForAsset(lightboxAsset).length}
           onWheelInnerNavigate={handleLightboxWheelCycleDisplay}
           innerLayoutStableKey={lightboxAsset.id}
+          contentRightInset="min(24rem,30vw)"
           layoutReferenceSrc={
             asWorkflowImageString(lightboxAsset.original).trim()
               ? workflowSafeImgSrc(lightboxAsset.original)
               : undefined
           }
         >
+          <div className="absolute left-4 bottom-4 z-10 flex flex-col items-start gap-2" data-image-preview-no-wheel>
+            {actionModules.map((mod) => (
+              <button
+                key={mod.id}
+                type="button"
+                onClick={() => {
+                  const idx = lightboxList.findIndex((a) => a.id === lightboxAsset.id);
+                  const nextAsset = idx >= 0 && idx < lightboxList.length - 1 ? lightboxList[idx + 1] : null;
+                  if (mod.category === 'generate_3d' && onAddGenerate3DJob) {
+                    onAddGenerate3DJob(mod, getAssetDisplayImage(lightboxAsset));
+                  } else {
+                    addToPending(lightboxAsset.id, mod.id, {
+                      ...(lightboxSourceSlot
+                        ? {
+                            sourceGroupAssetId: lightboxSourceSlot.sourceGroupAssetId,
+                            sourceItemIndex: lightboxSourceSlot.sourceItemIndex,
+                          }
+                        : {}),
+                    });
+                  }
+                  setLightboxSourceSlot(null);
+                  setLightboxAssetId(nextAsset?.id ?? null);
+                }}
+                className="inline-flex w-auto px-3 py-1.5 rounded-lg bg-[#26262c]/95 border border-[#3a3a40] text-[9px] font-black uppercase hover:bg-[#305a90] hover:border-[#3b82f6]"
+              >
+                {mod.label}
+              </button>
+            ))}
+          </div>
           <div
-            className="absolute left-4 right-4 bottom-4 z-10 max-h-[42vh] overflow-y-auto rounded-xl bg-[#121214]/95 border border-[#2e2e32] p-3 sm:p-4 space-y-3"
+            className="absolute top-16 right-4 z-[9] w-[min(24rem,30vw)] max-h-[72vh]"
+            data-image-preview-no-wheel
+            data-image-preview-scroll
+          >
+            <div className="h-full overflow-y-auto rounded-2xl border border-white/10 bg-[#0f0f12]/98 shadow-xl backdrop-blur-[2px]">
+              {lightboxMetaText ? (
+                <div className="px-3 pt-3 pb-2 border-b border-white/10 text-[8px] text-gray-400">
+                  {lightboxMetaText}
+                </div>
+              ) : null}
+              {(() => {
+                const displayKey = lightboxAsset.displayKey;
+                const saved = (lightboxAsset.imageTags?.[displayKey] || []).filter(Boolean);
+                const tags =
+                  saved.length > 0
+                    ? saved
+                    : displayKey !== 'original'
+                      ? buildWorkflowImageTags({
+                          actionLabel: getActionLabel(baseActionId(displayKey)),
+                          actionId: baseActionId(displayKey),
+                          presetInstruction: getModule(baseActionId(displayKey))?.instruction,
+                        })
+                      : [];
+                return (
+                  <div className="px-3 pt-3 pb-2 border-b border-white/10">
+                    <div className="text-[8px] font-black text-gray-500 uppercase mb-1.5">标签</div>
+                    {tags.length > 0 ? (
+                      <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto pr-1">
+                        {tags.map((tag) => (
+                          <span
+                            key={`${lightboxAsset.id}:${lightboxAsset.displayKey}:${tag}:right`}
+                            className="px-2 py-0.5 rounded-md border border-[#314767] bg-[#182235] text-[8px] text-blue-200/95"
+                          >
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-[8px] text-gray-600">当前版本暂无标签</div>
+                    )}
+                  </div>
+                );
+              })()}
+              <WorkflowGenerationRecordPanel
+                asset={lightboxAsset}
+                getStepLabel={getGenerationRecordStepLabel}
+                mode="inline"
+                onSelectDisplayKey={(key) => setDisplayKey(lightboxAsset.id, key)}
+              />
+            </div>
+          </div>
+          <div
+            className="absolute bottom-4 z-10 max-h-[42vh] overflow-y-auto rounded-xl border border-white/10 bg-[#0f0f12]/98 p-3 sm:p-4 space-y-3 shadow-xl backdrop-blur-[2px]"
+            style={{
+              left: 'calc((100% - min(24rem,30vw)) / 2)',
+              transform: 'translateX(-50%)',
+              width: 'min(58rem, calc(100vw - min(24rem,30vw) - 3rem))',
+            }}
             data-image-preview-no-wheel
             data-image-preview-scroll
           >
             <div className="flex flex-wrap gap-1.5 justify-center items-center">
+              <button
+                type="button"
+                onClick={() => {
+                  void triggerImageDownload(
+                    getAssetDisplayImage(lightboxAsset),
+                    `workflow-preview-${lightboxAsset.id.slice(0, 6)}`
+                  );
+                }}
+                className="px-3 py-1.5 rounded-lg bg-[#1e40af] border border-[#3b6fb8] text-[9px] font-black uppercase hover:bg-blue-500"
+              >
+                下载
+              </button>
               <span className="text-[8px] font-black text-gray-500 uppercase mr-1">显示</span>
               <button
                 type="button"
@@ -4368,72 +4943,9 @@ const WorkflowSection: React.FC<{
                 );
               })}
             </div>
-            <div className="flex flex-wrap gap-2 justify-center">
-              <button
-                type="button"
-                onClick={() => {
-                  void triggerImageDownload(
-                    getAssetDisplayImage(lightboxAsset),
-                    `workflow-preview-${lightboxAsset.id.slice(0, 6)}`
-                  );
-                }}
-                className="px-4 py-2 rounded-xl bg-[#1e40af] border border-[#3b6fb8] text-[10px] font-black uppercase hover:bg-blue-500"
-              >
-                下载当前大图
-              </button>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setShowLightboxGenerationRecord(true);
-                }}
-                className="px-4 py-2 rounded-xl bg-[#26262c] border border-emerald-500/40 text-[10px] font-black uppercase text-emerald-200/90 hover:bg-emerald-900/30"
-              >
-                生成记录
-              </button>
-              {actionModules.map((mod) => (
-                <button
-                  key={mod.id}
-                  type="button"
-                  onClick={() => {
-                    const idx = lightboxList.findIndex((a) => a.id === lightboxAsset.id);
-                    const nextAsset = idx >= 0 && idx < lightboxList.length - 1 ? lightboxList[idx + 1] : null;
-                    if (mod.category === 'generate_3d' && onAddGenerate3DJob) {
-                      onAddGenerate3DJob(mod, getAssetDisplayImage(lightboxAsset));
-                    } else {
-                      addToPending(lightboxAsset.id, mod.id, {
-                        ...(lightboxSourceSlot
-                          ? {
-                              sourceGroupAssetId: lightboxSourceSlot.sourceGroupAssetId,
-                              sourceItemIndex: lightboxSourceSlot.sourceItemIndex,
-                            }
-                          : {}),
-                      });
-                    }
-                    setLightboxSourceSlot(null);
-                    setLightboxAssetId(nextAsset?.id ?? null);
-                  }}
-                  className="px-4 py-2 rounded-xl bg-[#26262c] border border-[#3a3a40] text-[10px] font-black uppercase hover:bg-[#305a90] hover:border-[#3b82f6]"
-                >
-                  {mod.label}
-                </button>
-              ))}
-            </div>
-            {lightboxList.length > 1 && (
-              <div className="flex justify-center gap-2 items-center flex-wrap">
-                <button type="button" onClick={() => goLightbox(-1)} className="px-3 py-1 rounded-lg bg-[#26262c] text-[9px] font-black">
-                  上一张
-                </button>
-                <span className="text-[9px] text-gray-500">
-                  {lightboxIndex + 1} / {lightboxList.length}
-                </span>
-                <button type="button" onClick={() => goLightbox(1)} className="px-3 py-1 rounded-lg bg-[#26262c] text-[9px] font-black">
-                  下一张
-                </button>
-              </div>
-            )}
           </div>
         </ImagePreviewOverlay>
+        )
       )}
 
       {hoverPreview ? (
@@ -4443,14 +4955,6 @@ const WorkflowSection: React.FC<{
           y={hoverPreview.y}
           original={getModulePreviewOriginal(hoverPreview.mod) ?? ''}
           generated={getModulePreviewGenerated(hoverPreview.mod) ?? ''}
-        />
-      ) : null}
-
-      {showLightboxGenerationRecord && lightboxAsset ? (
-        <WorkflowGenerationRecordPanel
-          asset={lightboxAsset}
-          getStepLabel={getGenerationRecordStepLabel}
-          onClose={() => setShowLightboxGenerationRecord(false)}
         />
       ) : null}
 
@@ -4496,7 +5000,14 @@ const WorkflowSection: React.FC<{
                   addedAt: Date.now(),
                   ...(t.inputSourceDisplayKey != null ? { inputSourceDisplayKey: t.inputSourceDisplayKey } : {}),
                   ...(trimmed ? { promptOverride: trimmed } : {}),
+                  ...(promptTweakModal.overrides?.imageGear ? { overrideImageGear: promptTweakModal.overrides.imageGear } : {}),
+                  ...(promptTweakModal.overrides?.imageAspectRatio ? { overrideImageAspectRatio: promptTweakModal.overrides.imageAspectRatio } : {}),
+                  ...(promptTweakModal.overrides?.imageSize ? { overrideImageSize: promptTweakModal.overrides.imageSize } : {}),
+                  ...(typeof promptTweakModal.overrides?.understand === 'boolean'
+                    ? { overrideSkipUnderstand: promptTweakModal.overrides.understand }
+                    : {}),
                   ...(t.sourceGroupAssetId != null ? { sourceGroupAssetId: t.sourceGroupAssetId, sourceItemIndex: t.sourceItemIndex } : {}),
+                  ...(t.inputText != null && t.inputText.trim() !== '' ? { inputText: t.inputText.trim() } : {}),
                 });
               } else {
                 addImageToPending(t.imageBase64, promptTweakModal.preset.id, {
@@ -4504,6 +5015,12 @@ const WorkflowSection: React.FC<{
                   sourceGroupAssetId: t.sourceGroupAssetId,
                   sourceItemIndex: t.sourceItemIndex,
                   ...(trimmed ? { promptOverride: trimmed } : {}),
+                  ...(promptTweakModal.overrides?.imageGear ? { overrideImageGear: promptTweakModal.overrides.imageGear } : {}),
+                  ...(promptTweakModal.overrides?.imageAspectRatio ? { overrideImageAspectRatio: promptTweakModal.overrides.imageAspectRatio } : {}),
+                  ...(promptTweakModal.overrides?.imageSize ? { overrideImageSize: promptTweakModal.overrides.imageSize } : {}),
+                  ...(typeof promptTweakModal.overrides?.understand === 'boolean'
+                    ? { overrideSkipUnderstand: promptTweakModal.overrides.understand }
+                    : {}),
                 });
               }
             }

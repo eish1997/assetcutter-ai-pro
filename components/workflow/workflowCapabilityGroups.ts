@@ -15,7 +15,7 @@ export function groupCapabilityPresetsByCategory(presets: CustomAppModule[]): Ca
   });
   const other: CustomAppModule[] = [];
   presets.forEach((p) => {
-    const cat = p.category ?? 'image_process';
+    const cat = p.category ?? 'image_to_image';
     if (knownIds.has(cat)) {
       map[cat].push(p);
     } else {

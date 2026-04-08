@@ -36,6 +36,8 @@ function cropBoxes(inputImage: string, boxes: BoundingBox[], indexes: number[]):
 export type CapabilityTestResult = {
   ok: boolean;
   resultImage?: string;
+  /** 文字能力（gen_text）测试结果 */
+  resultText?: string;
   error?: string;
   durationMs: number;
   /** 切割图片时返回裁剪张数 */
@@ -67,6 +69,9 @@ export async function runCapabilityTest(
     }
     const out = await executeCapability(preset, imageBase64);
     if (out.ok === false) return { ok: false, error: out.error, durationMs: out.durationMs };
+    if (out.kind === 'text') {
+      return { ok: true, resultImage: '', durationMs: out.durationMs, resultText: out.text };
+    }
     return { ok: true, resultImage: out.image, durationMs: out.durationMs };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
