@@ -398,6 +398,15 @@ export async function executeCapability(
 
 export type CapabilitySetExecuteContext = CapabilityExecuteContext & {
   presets: CustomAppModule[];
+  /**
+   * 资产输入节点可用的图片映射（key=nodeId）。
+   * 主要用于画布内运行测试时，从工作区/仓库选中的资产喂给流程。
+   */
+  assetInputs?: Record<string, string | undefined>;
+  /**
+   * 若设置：执行到该测试断点节点并完成其透传后**立即返回**（不跑下游），用于画布「运行测试」。
+   */
+  stopAtNodeId?: string;
 };
 
 export function validateCapabilitySetGraph(set: CapabilitySet, presets: CustomAppModule[]): string | null {
@@ -411,6 +420,21 @@ export function validateCapabilitySetGraph(set: CapabilitySet, presets: CustomAp
     if (!node.data.presetId) return `节点「${node.data.label || node.id}」缺少预设绑定`;
     if (!presets.some((preset) => preset.id === node.data.presetId)) {
       return `节点「${node.data.label || node.id}」引用了不存在的预设`;
+    }
+  }
+
+  const inByTarget = new Map<string, number>();
+  const outBySource = new Map<string, number>();
+  for (const e of set.edges) {
+    inByTarget.set(e.target, (inByTarget.get(e.target) ?? 0) + 1);
+    outBySource.set(e.source, (outBySource.get(e.source) ?? 0) + 1);
+  }
+  for (const n of set.nodes) {
+    if (n.type !== 'testStop') continue;
+    const inc = inByTarget.get(n.id) ?? 0;
+    const outc = outBySource.get(n.id) ?? 0;
+    if (inc < 1 || outc < 1) {
+      return `测试断点「${n.data.label || n.id}」需至少一条入边与一条出边`;
     }
   }
 
@@ -462,7 +486,7 @@ export async function executeCapabilitySet(
         }
         const imageSourceIds = sources.filter((s) => {
           const node = nodeMap.get(s);
-          return node && (node.type === 'input' || node.type === 'preset');
+          return node && (node.type === 'input' || node.type === 'preset' || node.type === 'assetInput');
         });
         const textGenSourceId = sources.find((s) => nodeMap.get(s)?.type === 'textGen');
         const imagesFromSources = imageSourceIds.map((id) => outputs.get(id)).filter(Boolean) as string[];
@@ -514,6 +538,11 @@ export async function executeCapabilitySet(
       } else if (n.type === 'input') {
         outputs.set(n.id, inputImage);
         lastImage = inputImage;
+      } else if (n.type === 'assetInput') {
+        const fromMap = ctx.assetInputs?.[n.id];
+        const img = (fromMap ?? '').trim() || inputImage;
+        outputs.set(n.id, img);
+        lastImage = img;
       } else if (n.type === 'output') {
         if (!sources.length) {
           return { ok: false, kind: 'none', error: `输出节点「${n.data.label || n.id}」缺少输入`, durationMs: Date.now() - start };
@@ -541,6 +570,23 @@ export async function executeCapabilitySet(
       } else if (n.type === 'textGen') {
         done.add(n.id);
         progressed = true;
+        continue;
+      } else if (n.type === 'testStop') {
+        const srcId = sources.find((s) => outputs.has(s)) ?? sources[0];
+        const img = (srcId ? outputs.get(srcId) : undefined) ?? inputImage;
+        outputs.set(n.id, img);
+        lastImage = img;
+        done.add(n.id);
+        progressed = true;
+        if (ctx.stopAtNodeId === n.id) {
+          return {
+            ok: true,
+            kind: 'image',
+            image: img,
+            durationMs: Date.now() - start,
+            vgpSteps: setVgpSteps.length ? setVgpSteps : undefined,
+          };
+        }
         continue;
       }
       done.add(n.id);

@@ -7,20 +7,17 @@ import {
   type WheelEvent as ReactWheelEvent,
   type TouchEvent as ReactTouchEvent,
 } from 'react';
-import { WORKFLOW_FIRST_SWEEP_DONE_KEY } from '../components/workflow/workflowConstants';
 import {
   WORKSPACE_SNAP_DURATION_MS,
   WORKSPACE_SNAP_EASING,
 } from '../components/workflow/workflowSectionUiConstants';
 import { isWorkflowEditableTarget } from '../components/workflow/workflowDomUtils';
-import { readLocalFlag, writeLocalFlag } from '../services/clientPersist';
 
 export type UseWorkflowWorkspacePanesArgs = {
   workspaceTrackRef: RefObject<HTMLDivElement | null>;
   registerPaneWheelHandler?: (handler: ((e: ReactWheelEvent) => void) | null) => void;
   listPaneWidth: number;
   sidebarWidth: number;
-  onboardingKey: string | null | undefined;
   /** 与框选协调：空格平移开始时清除 */
   marqueeStartRef: RefObject<boolean>;
 };
@@ -30,7 +27,6 @@ export function useWorkflowWorkspacePanes({
   registerPaneWheelHandler,
   listPaneWidth,
   sidebarWidth,
-  onboardingKey,
   marqueeStartRef,
 }: UseWorkflowWorkspacePanesArgs) {
   const [workspacePane, setWorkspacePane] = useState<number>(2);
@@ -82,41 +78,6 @@ export function useWorkflowWorkspacePanes({
       setWorkspaceSnapping(false);
     }
   }, [workspaceTrackRef]);
-
-  useEffect(() => {
-    const key = String(onboardingKey || '').trim();
-    if (!key) return;
-    const done = readLocalFlag(`${WORKFLOW_FIRST_SWEEP_DONE_KEY}:${key}`);
-    if (done) return;
-    let cancelled = false;
-    const timers: number[] = [];
-    const markDone = () => {
-      writeLocalFlag(`${WORKFLOW_FIRST_SWEEP_DONE_KEY}:${key}`, true);
-    };
-    timers.push(
-      window.setTimeout(() => {
-        if (cancelled) return;
-        snapWorkspacePaneToNode(0);
-      }, 260)
-    );
-    timers.push(
-      window.setTimeout(() => {
-        if (cancelled) return;
-        snapWorkspacePaneToNode(3);
-      }, 980)
-    );
-    timers.push(
-      window.setTimeout(() => {
-        if (cancelled) return;
-        snapWorkspacePaneToNode(2);
-        markDone();
-      }, 1700)
-    );
-    return () => {
-      cancelled = true;
-      timers.forEach((id) => window.clearTimeout(id));
-    };
-  }, [onboardingKey, snapWorkspacePaneToNode]);
 
   useEffect(() => {
     return () => {

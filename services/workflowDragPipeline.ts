@@ -3,6 +3,12 @@ import type { WorkflowAsset } from '../types';
 /** 与 `WorkflowSection` 内 `dataTransfer.setData` 一致，避免 MIME 字符串散落 */
 export const DT_AC_WORKFLOW_EXPORT = 'application/x-ac-workflow-export';
 
+/** 功能区能力块 / 常用入口 / 复合能力：拖起时写入，便于主区域右侧留白识别「禁用能力」拖拽（`text/plain` 过宽，不能单独用于 dragover） */
+export const DT_AC_CAPABILITY_ACTION = 'application/x-ac-capability-action';
+
+/** 工作区「能力」列底部预设卡片拖向功能区侧栏时写入，与侧栏能力块拖拽区分 */
+export const DT_AC_CAPABILITY_FROM_EDITOR = 'application/x-ac-capability-from-editor';
+
 /** 与 `WorkflowSection` 中 `onDragStart` 写入的 JSON 结构一致（大纲 / 根网格共用） */
 export type AcWorkflowExportPayload =
   | { mode: 'roots'; assetIds: string[] }

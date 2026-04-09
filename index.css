@@ -1,1 +1,5 @@
-/* 项目入口样式 - 主要样式在 index.html 内联 */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* 项目其余全局样式在 index.html 内联，此处仅接入构建期 Tailwind */

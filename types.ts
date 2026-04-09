@@ -517,14 +517,22 @@ export type CustomAppModule = {
 /** 能力集合画布节点（与 React Flow 序列化兼容） */
 export type CapabilitySetNode = {
   id: string;
-  type: 'input' | 'preset' | 'output' | 'textGen';
+  type: 'input' | 'preset' | 'output' | 'textGen' | 'testStop' | 'assetInput';
   position: { x: number; y: number };
   data: {
     label: string;
     /** type===preset 时关联的基础预设 id */
     presetId?: string;
+    /** 卡片预览图：与 CustomAppModule.previewImage 同源（data URL / 相对路径 / URL），持久化在集合 JSON */
+    previewImage?: string;
     /** type===textGen 时用户输入的文本，用于生成提示词 */
     text?: string;
+    /** type===assetInput 时：来源范围（工作区/仓库） */
+    assetScope?: 'workspace' | 'repository';
+    /** type===assetInput 时：选中的资产 id */
+    assetId?: string;
+    /** type===output 时：期望产物类型（与 CAPABILITY_CATEGORIES 一致，多输出节点时用于区分） */
+    outputCategory?: CapabilityCategory;
   };
 };
 

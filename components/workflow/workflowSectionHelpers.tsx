@@ -133,7 +133,8 @@ export function dragTransferHasPlainText(e: React.DragEvent): boolean {
 /** App 传入的 capabilityPresetPanel 常包在 Suspense 外；cloneElement 需把 scrollContainerRef 传到内层 CapabilityPresetSection */
 export function cloneCapabilityPresetPanelWithScrollRef(
   panel: React.ReactNode,
-  scrollRef: React.RefObject<HTMLDivElement | null>
+  scrollRef: React.RefObject<HTMLDivElement | null>,
+  extraProps?: Record<string, unknown>
 ): React.ReactNode {
   if (!React.isValidElement(panel)) return panel;
   if (panel.type === React.Suspense) {
@@ -142,12 +143,14 @@ export function cloneCapabilityPresetPanelWithScrollRef(
       return React.cloneElement(panel, {
         children: React.cloneElement(inner as React.ReactElement<{ scrollContainerRef?: React.Ref<HTMLDivElement> }>, {
           scrollContainerRef: scrollRef,
+          ...(extraProps || {}),
         }),
       });
     }
   }
   return React.cloneElement(panel as React.ReactElement<{ scrollContainerRef?: React.Ref<HTMLDivElement> }>, {
     scrollContainerRef: scrollRef,
+    ...(extraProps || {}),
   });
 }
 

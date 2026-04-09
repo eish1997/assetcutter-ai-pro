@@ -12,7 +12,7 @@ import { runCapabilityTest } from './services/capabilityTestRunner';
 import { loadCapabilityPresets, saveCapabilityPresets, CAPABILITY_PRESETS_KEY } from './services/capabilityPresetStore';
 import { loadCapabilitySets, saveCapabilitySets, CAPABILITY_SETS_KEY } from './services/capabilitySetStore';
 import { useGenerate3DManager, type Temp3DItem } from './hooks/useGenerate3DManager';
-import { useWorkflowMainScrollCapture } from './hooks/useWorkflowMainScrollCapture';
+import { useWorkflowMainScrollCapture, type WorkflowCapabilityGutterDropConfig } from './hooks/useWorkflowMainScrollCapture';
 import { useDialogWorkspace } from './hooks/useDialogWorkspace';
 import { useDialogGeneration, getDialogUnderstandImageInput } from './hooks/useDialogGeneration';
 import { useDialogPostProcessing } from './hooks/useDialogPostProcessing';
@@ -105,6 +105,7 @@ function formatTimestampText(ts: number | null): string {
 const UnifiedModelViewer3D = React.lazy(() => import('./components/UnifiedModelViewer3D'));
 const WorkflowSection = React.lazy(() => import('./components/WorkflowSection'));
 const CapabilityPresetSection = React.lazy(() => import('./components/CapabilityPresetSection'));
+const WorkflowComposerOverlay = React.lazy(() => import('./components/WorkflowComposerOverlay'));
 const PromptArenaSection = React.lazy(() => import('./components/PromptArenaSection'));
 const SeamRepairSection = React.lazy(() => import('./components/SeamRepairSection'));
 const GenerateTextureSection = React.lazy(() => import('./components/GenerateTextureSection'));
@@ -509,6 +510,14 @@ const MainApp: React.FC = () => {
   const [mode, setMode] = useState<AppMode>(AppMode.WORKFLOW);
   const [capabilityPresets, setCapabilityPresets] = useState<CustomAppModule[]>(loadCapabilityPresets);
   const [capabilitySets, setCapabilitySets] = useState<CapabilitySet[]>(loadCapabilitySets);
+  const [globalComposerOpen, setGlobalComposerOpen] = useState(false);
+  const [globalComposerSessionKey, setGlobalComposerSessionKey] = useState(0);
+  const [globalComposerInitialSet, setGlobalComposerInitialSet] = useState<CapabilitySet | null>(null);
+  const openGlobalWorkflowComposer = useCallback((initialSet: CapabilitySet | null) => {
+    setGlobalComposerInitialSet(initialSet);
+    setGlobalComposerSessionKey((k) => k + 1);
+    setGlobalComposerOpen(true);
+  }, []);
   useEffect(() => {
     if (mode === AppMode.WORKFLOW) {
       setCapabilityPresets(loadCapabilityPresets());
@@ -1477,13 +1486,33 @@ const MainApp: React.FC = () => {
 
   const { mainScrollRef, showBackToTop, scrollToTop } = useMainScrollBackToTop();
   const isWorkflowMarqueeWheelActive = mode === AppMode.WORKFLOW && !!activeWorkspaceProjectId;
+  const tryDisableCapabilityPresetById = useCallback((id: string): boolean => {
+    if (!id || id.startsWith('set:')) return false;
+    let changed = false;
+    setCapabilityPresets((prev) => {
+      const idx = prev.findIndex((p) => p.id === id);
+      if (idx < 0 || prev[idx]!.enabled === false) return prev;
+      changed = true;
+      const next = [...prev];
+      next[idx] = { ...next[idx]!, enabled: false };
+      saveCapabilityPresets(next);
+      return next;
+    });
+    return changed;
+  }, []);
+  const capabilityGutterDrop = useMemo((): WorkflowCapabilityGutterDropConfig | null => {
+    if (!isWorkflowMarqueeWheelActive) return null;
+    return { enabled: true, onTryDisablePreset: tryDisableCapabilityPresetById };
+  }, [isWorkflowMarqueeWheelActive, tryDisableCapabilityPresetById]);
   const {
     workflowMainContentRef,
     onMainMouseDownCapture,
     onMainWheelCapture,
+    onMainDragOverCapture,
+    onMainDropCapture,
     registerMarqueeStart: registerWorkflowMarqueeStart,
     registerPaneWheel: registerWorkflowPaneWheel,
-  } = useWorkflowMainScrollCapture(isWorkflowMarqueeWheelActive);
+  } = useWorkflowMainScrollCapture(isWorkflowMarqueeWheelActive, capabilityGutterDrop);
 
   useEffect(() => {
     if (mode === AppMode.ARENA) setArenaSnippets(loadSnippets());
@@ -3247,6 +3276,8 @@ const MainApp: React.FC = () => {
           }`}
           onMouseDownCapture={onMainMouseDownCapture}
           onWheelCapture={onMainWheelCapture}
+          onDragOverCapture={onMainDragOverCapture}
+          onDropCapture={onMainDropCapture}
         >
           <div ref={workflowMainContentRef} className="max-w-6xl mx-auto w-full">
             {mode === AppMode.SETTINGS && (
@@ -3312,6 +3343,14 @@ const MainApp: React.FC = () => {
                     registerPaneWheelHandler={registerWorkflowPaneWheel}
                     libraryItems={library}
                     onAddToLibrary={addToLibrary}
+                    onUpdateCapabilityPresets={(next) => {
+                      setCapabilityPresets(next);
+                      saveCapabilityPresets(next);
+                    }}
+                    onUpdateCapabilitySets={(next) => {
+                      setCapabilitySets(next);
+                      saveCapabilitySets(next);
+                    }}
                     capabilityPresetPanel={
                       <Suspense fallback={<LazySectionFallback label="能力预设" />}>
                         <CapabilityPresetSection
@@ -3356,9 +3395,31 @@ const MainApp: React.FC = () => {
                   onUpdate={(next) => { setCapabilityPresets(next); saveCapabilityPresets(next); }}
                   sets={capabilitySets}
                   onUpdateSets={(next) => { setCapabilitySets(next); saveCapabilitySets(next); }}
+                  onOpenWorkflowComposer={openGlobalWorkflowComposer}
                   onRunTest={runCapabilityTest}
                   onLog={(level, message, detail) => addGlobalLog('能力', level, message, detail)}
                   canUploadToR2={user?.role === 'admin'}
+                />
+              </Suspense>
+            )}
+
+            {globalComposerOpen && (
+              <Suspense fallback={null}>
+                <WorkflowComposerOverlay
+                  open={globalComposerOpen}
+                  onClose={() => setGlobalComposerOpen(false)}
+                  sessionKey={globalComposerSessionKey}
+                  presets={capabilityPresets}
+                  initialSet={globalComposerInitialSet}
+                  onSave={(set) => {
+                    const next = capabilitySets.some((s) => s.id === set.id)
+                      ? capabilitySets.map((s) => (s.id === set.id ? set : s))
+                      : [...capabilitySets, set];
+                    setCapabilitySets(next);
+                    saveCapabilitySets(next);
+                    addGlobalLog('能力', 'info', `已保存工作流：${set.label}`);
+                  }}
+                  onLog={(level, message, detail) => addGlobalLog('能力', level, message, detail)}
                 />
               </Suspense>
             )}

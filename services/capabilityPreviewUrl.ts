@@ -1,5 +1,6 @@
 import { r2ApiUrl } from './apiBase';
 import { getCapabilityStoreCatalogSources } from './settingsStore';
+import type { CustomAppModule } from '../types';
 
 /**
  * 将「站内形态」的 /api/r2/...（可含 query/hash）转为浏览器实际请求的 URL。
@@ -88,6 +89,18 @@ export function resolveCapabilityPreviewSrc(
   }
   const normalized = rel.replace(/^public\/capability-store\/?/i, '');
   return mapSiteR2PathToFetchUrl(`/api/r2/capability-store/${normalized}`);
+}
+
+/** 能力预设卡片预览：优先主预览缩略图，便于工作流节点资产卡展示 */
+export function pickCapabilityPresetPreview(p: CustomAppModule | undefined | null): string | undefined {
+  if (!p) return undefined;
+  const v =
+    p.previewImage ||
+    p.previewGeneratedThumbImage ||
+    p.previewOriginalThumbImage ||
+    p.previewGeneratedImage ||
+    p.previewOriginalImage;
+  return v?.trim() ? v.trim() : undefined;
 }
 
 /** 加载失败时依次尝试的候选 URL（当前页同源 path 作为兜底） */

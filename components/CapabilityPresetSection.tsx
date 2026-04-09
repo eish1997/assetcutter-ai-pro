@@ -15,7 +15,8 @@ import { useStoreCatalog } from '../services/storeCatalogHook';
 import { publishPresetToUserR2Catalog } from '../services/capabilityPresetR2Publish';
 import { resolveCapabilityPreviewSrc } from '../services/capabilityPreviewUrl';
 import { mergeCardAspectFromIntrinsic } from './workflow/workflowCardAspect';
-import CapabilitySetCanvas from './CapabilitySetCanvas';
+import { DT_AC_CAPABILITY_FROM_EDITOR } from '../services/workflowDragPipeline';
+import WorkflowComposerOverlay from './WorkflowComposerOverlay';
 import { CapabilityPreviewImg } from './CapabilityPreviewImg';
 import { CustomDropdown, DROPDOWN_TRIGGER_COMPACT } from './ui/CustomDropdown';
 import AppIcon from './ui/AppIcon';
@@ -24,23 +25,26 @@ const CAPABILITY_SETS_VERSION = 1;
 
 const DEFAULT_GENERATE_3D: Generate3DPreset = { module: 'pro', model: '3.0', enablePBR: false };
 
-type ViewMode = 'presets' | 'image_process' | 'sets' | 'canvas';
+type ViewMode = 'presets' | 'image_process' | 'sets';
 
 const CapabilityPresetSection: React.FC<{
   presets: CustomAppModule[];
   onUpdate: (next: CustomAppModule[]) => void;
   sets?: CapabilitySet[];
   onUpdateSets?: (next: CapabilitySet[]) => void;
+  /** 若提供则复用外层统一工作流编排房间（避免本组件再开一套 overlay） */
+  onOpenWorkflowComposer?: (initialSet: CapabilitySet | null) => void;
   onRunTest?: (preset: CustomAppModule, imageBase64: string) => Promise<CapabilityTestResult>;
   onLog?: (level: 'info' | 'warn' | 'error', message: string, detail?: string) => void;
   embeddedInWorkflow?: boolean;
   canUploadToR2?: boolean;
   /** 工作区侧栏：挂到「仅卡片区域」的滚动容器，供外层接管滚动行为 */
   scrollContainerRef?: React.Ref<HTMLDivElement>;
-}> = ({ presets, onUpdate, sets = [], onUpdateSets, onRunTest, onLog, embeddedInWorkflow = false, canUploadToR2 = false, scrollContainerRef }) => {
+}> = ({ presets, onUpdate, sets = [], onUpdateSets, onOpenWorkflowComposer, onRunTest, onLog, embeddedInWorkflow = false, canUploadToR2 = false, scrollContainerRef }) => {
   const [viewMode, setViewMode] = useState<ViewMode>('presets');
   const [canvasSet, setCanvasSet] = useState<CapabilitySet | null>(null);
-  const [setLabel, setSetLabel] = useState('');
+  const [composerOpen, setComposerOpen] = useState(false);
+  const [composerSessionKey, setComposerSessionKey] = useState(0);
   const reindex = (list: CustomAppModule[]) => list.map((p, i) => ({ ...p, order: i }));
   const update = (list: CustomAppModule[]) => onUpdate(reindex(list));
   const getEngine = (p: CustomAppModule): CapabilityEngine => getCapabilityEngine(p);
@@ -797,18 +801,26 @@ const CapabilityPresetSection: React.FC<{
 
   const openNewSet = () => {
     setCanvasSet(null);
-    setSetLabel('新能力集合');
-    setViewMode('canvas');
+    if (onOpenWorkflowComposer) {
+      onOpenWorkflowComposer(null);
+      return;
+    }
+    setComposerSessionKey((k) => k + 1);
+    setComposerOpen(true);
   };
 
   const openEditSet = (set: CapabilitySet) => {
     setCanvasSet(set);
-    setSetLabel(set.label);
-    setViewMode('canvas');
+    if (onOpenWorkflowComposer) {
+      onOpenWorkflowComposer(set);
+      return;
+    }
+    setComposerSessionKey((k) => k + 1);
+    setComposerOpen(true);
   };
 
   const closeCanvas = () => {
-    setViewMode(viewMode === 'canvas' ? 'sets' : viewMode);
+    setComposerOpen(false);
     setCanvasSet(null);
   };
 
@@ -898,23 +910,6 @@ const CapabilityPresetSection: React.FC<{
     };
   }, [pendingScrollTarget, viewMode, visiblePresets, sets]);
 
-  if (viewMode === 'canvas') {
-    return (
-      <div className="flex flex-col h-[calc(100dvh-8rem)] min-h-[400px] animate-in fade-in">
-        <div className="flex-1 min-h-0 rounded-2xl border border-[#2e2e32] overflow-hidden bg-white">
-          <CapabilitySetCanvas
-            presets={presets}
-            initialSet={canvasSet}
-            setLabel={setLabel}
-            onSetLabelChange={setSetLabel}
-            onSave={handleSaveSet}
-            onClose={closeCanvas}
-          />
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div
       className={`flex flex-col gap-3 animate-in fade-in w-full min-h-0 ${embeddedInWorkflow ? 'h-full flex-1 overflow-hidden' : ''}`}
@@ -980,7 +975,7 @@ const CapabilityPresetSection: React.FC<{
 
       {viewMode === 'sets' && (
         <div className="space-y-3">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between flex-wrap gap-2">
             <p className="text-[9px] text-gray-500">在画布中组合多个能力并连线，工作流中可整体使用。</p>
             {!embeddedInWorkflow && (
               <button
@@ -997,25 +992,57 @@ const CapabilityPresetSection: React.FC<{
               暂无能力集合，点击「添加能力集合」进入画布拖拽连线。
             </div>
           ) : (
-            <div className="grid gap-3">
+            <div className="columns-1 sm:columns-2 lg:columns-3 xl:columns-4 [column-gap:0.75rem] [column-fill:_balance]">
               {sets.map((s) => (
-                <div
+                <button
+                  type="button"
                   key={s.id}
                   ref={(el) => {
                     setCardRefs.current[s.id] = el;
                   }}
-                  className="rounded-2xl border border-[#2e2e32] bg-[#16161a] p-4 flex items-center justify-between"
+                  onClick={() => openEditSet(s)}
+                  className="inline-block align-top mb-3 w-full break-inside-avoid rounded-2xl border border-[#2e2e32] bg-[#16161a] overflow-hidden text-left hover:border-blue-400/50 transition-colors group"
                 >
-                  <span className="text-[11px] font-black uppercase">{s.label}</span>
-                  <div className="flex gap-2">
-                    <button type="button" onClick={() => openEditSet(s)} className="px-3 py-1.5 rounded-lg bg-[#26262c] text-[9px] font-black uppercase hover:bg-[#383842]">
+                  <div className="relative w-full bg-[#0f0f10] flex items-center justify-center min-h-[7rem]">
+                    <div className="h-full w-full flex flex-col items-center justify-center gap-1 text-gray-600">
+                      <AppIcon name="image" className="w-10 h-10 opacity-70" />
+                      <span className="text-[8px] font-black uppercase tracking-wide text-gray-500">能力集合</span>
+                    </div>
+                    <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-2">
+                      <div className="text-[10px] font-black text-white truncate">{s.label}</div>
+                      <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+                        <span className="px-2 py-0.5 rounded text-[8px] font-black uppercase bg-[#26262c]/95 text-gray-300">
+                          组合流程
+                        </span>
+                        <span className="px-2 py-0.5 rounded text-[8px] font-black uppercase bg-[#1e3558]/95 text-blue-300">
+                          可复用
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="p-2 border-t border-[#2a2a32] bg-[#141418] flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openEditSet(s);
+                      }}
+                      className="px-3 py-1.5 rounded-lg bg-[#26262c] text-[9px] font-black uppercase hover:bg-[#383842]"
+                    >
                       编辑
                     </button>
-                    <button type="button" onClick={() => removeSet(s.id)} className="px-3 py-1.5 rounded-lg bg-[#4a1c1c] text-red-400 text-[9px] font-black uppercase hover:bg-[#5a2222]">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        removeSet(s.id);
+                      }}
+                      className="px-3 py-1.5 rounded-lg bg-[#4a1c1c] text-red-400 text-[9px] font-black uppercase hover:bg-[#5a2222]"
+                    >
                       删除
                     </button>
                   </div>
-                </div>
+                </button>
               ))}
             </div>
           )}
@@ -1351,6 +1378,21 @@ const CapabilityPresetSection: React.FC<{
                   <button
                     key={p.id}
                     type="button"
+                    draggable={embeddedInWorkflow}
+                    onDragStart={
+                      embeddedInWorkflow
+                        ? (e) => {
+                            e.stopPropagation();
+                            try {
+                              e.dataTransfer.setData(DT_AC_CAPABILITY_FROM_EDITOR, p.id);
+                              e.dataTransfer.setData('text/plain', p.id);
+                              e.dataTransfer.effectAllowed = 'copy';
+                            } catch {
+                              /* ignore */
+                            }
+                          }
+                        : undefined
+                    }
                     ref={(el) => {
                       presetCardRefs.current[p.id] = el;
                     }}
@@ -1895,6 +1937,17 @@ const CapabilityPresetSection: React.FC<{
           document.body
         )}
         </>
+      )}
+      {composerOpen && (
+        <WorkflowComposerOverlay
+          open={composerOpen}
+          onClose={closeCanvas}
+          sessionKey={composerSessionKey}
+          presets={presets}
+          initialSet={canvasSet}
+          onSave={handleSaveSet}
+          onLog={onLog}
+        />
       )}
       </div>
     </div>

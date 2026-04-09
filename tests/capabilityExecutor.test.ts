@@ -49,6 +49,21 @@ describe('validateCapabilitySetGraph', () => {
 
     expect(validateCapabilitySetGraph(set, [makePreset('other')])).toBe('节点「能力」引用了不存在的预设');
   });
+
+  it('测试断点缺少入边或出边时返回错误', () => {
+    const set = makeSet(
+      [
+        { id: 'input', type: 'input', position: { x: 0, y: 0 }, data: { label: '输入' } },
+        { id: 'ts', type: 'testStop', position: { x: 1, y: 0 }, data: { label: '测试' } },
+        { id: 'output', type: 'output', position: { x: 2, y: 0 }, data: { label: '输出' } },
+      ],
+      [
+        { id: 'e0', source: 'input', target: 'output' },
+        { id: 'e1', source: 'ts', target: 'output' },
+      ]
+    );
+    expect(validateCapabilitySetGraph(set, [])).toContain('测试断点');
+  });
 });
 
 describe('executeCapabilitySet', () => {
@@ -94,5 +109,30 @@ describe('executeCapabilitySet', () => {
     expect(result.ok).toBe(false);
     if (result.ok !== false) throw new Error('expected failure result');
     expect(result.error).toContain('未收到有效图像输入');
+  });
+
+  it('stopAtNodeId 在测试断点处返回当前图且不跑下游预设', async () => {
+    const preset = makePreset('p1');
+    const set = makeSet(
+      [
+        { id: 'input', type: 'input', position: { x: 0, y: 0 }, data: { label: '输入' } },
+        { id: 'ts', type: 'testStop', position: { x: 1, y: 0 }, data: { label: '测试' } },
+        { id: 'preset', type: 'preset', position: { x: 2, y: 0 }, data: { label: '能力', presetId: 'p1' } },
+        { id: 'output', type: 'output', position: { x: 3, y: 0 }, data: { label: '输出' } },
+      ],
+      [
+        { id: 'e1', source: 'input', target: 'ts' },
+        { id: 'e2', source: 'ts', target: 'preset' },
+        { id: 'e3', source: 'preset', target: 'output' },
+      ]
+    );
+    const img = 'data:image/png;base64,QUJD';
+    const result = await executeCapabilitySet(set, img, {
+      presets: [preset],
+      stopAtNodeId: 'ts',
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok !== true || result.kind !== 'image') throw new Error('expected image');
+    expect(result.image).toBe(img);
   });
 });

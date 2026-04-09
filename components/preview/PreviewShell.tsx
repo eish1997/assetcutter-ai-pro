@@ -1,4 +1,5 @@
 import React, { forwardRef, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 
 function isEscapeKey(e: KeyboardEvent): boolean {
   return e.key === 'Escape' || e.code === 'Escape' || e.keyCode === 27;
@@ -17,6 +18,8 @@ export type PreviewShellProps = {
   children: React.ReactNode;
   /** 覆盖层 z-index 类名 */
   zIndexClassName?: string;
+  /** 遮罩底色与模糊（默认与大图预览一致） */
+  backdropTintClassName?: string;
 };
 
 /**
@@ -24,7 +27,14 @@ export type PreviewShellProps = {
  * 具体 Viewer（平面 / 全景 / 未来 3D）放在 children 内。
  */
 export const PreviewShell = forwardRef<HTMLDivElement, PreviewShellProps>(function PreviewShell(
-  { open, onClose, focusKey, children, zIndexClassName = 'z-[2000]' },
+  {
+    open,
+    onClose,
+    focusKey,
+    children,
+    zIndexClassName = 'z-[2000]',
+    backdropTintClassName = 'bg-black/72 backdrop-blur-sm',
+  },
   ref
 ) {
   const onCloseRef = useRef(onClose);
@@ -84,13 +94,13 @@ export const PreviewShell = forwardRef<HTMLDivElement, PreviewShellProps>(functi
 
   if (!open) return null;
 
-  return (
+  const content = (
     <div
       ref={setRootRef}
       tabIndex={-1}
       role="dialog"
       aria-modal
-      className={`fixed inset-0 ${zIndexClassName} bg-black/72 backdrop-blur-sm animate-in fade-in outline-none`}
+      className={`fixed inset-0 ${zIndexClassName} ${backdropTintClassName} animate-in fade-in outline-none`}
       data-ac-block-workflow-marquee
       onKeyDownCapture={(e) => {
         if (!isEscapeKey(e)) return;
@@ -116,4 +126,7 @@ export const PreviewShell = forwardRef<HTMLDivElement, PreviewShellProps>(functi
       </div>
     </div>
   );
+
+  if (typeof document === 'undefined') return content;
+  return createPortal(content, document.body);
 });

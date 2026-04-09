@@ -1,4 +1,14 @@
-import React, { useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect, startTransition } from 'react';
+import React, {
+  useState,
+  useCallback,
+  useMemo,
+  useRef,
+  useEffect,
+  useLayoutEffect,
+  startTransition,
+  Suspense,
+  lazy,
+} from 'react';
 import { useWorkflowWorkspacePanes } from '../hooks/useWorkflowWorkspacePanes';
 import { useWorkflowMarquee } from '../hooks/useWorkflowMarquee';
 import { createPortal } from 'react-dom';
@@ -40,6 +50,7 @@ import {
   parseWorkflowDragSource,
   resolveCapabilityDropDragSources,
   workflowDragSourceAllowsSidebarOps,
+  type WorkflowDragSource,
 } from '../services/workflowDragPipeline';
 import { WORKFLOW_CUT_DETECT_TIMEOUT_MS } from './workflow/workflowConstants';
 import WorkflowTextAssetOverlay from './workflow/WorkflowTextAssetOverlay';
@@ -88,6 +99,10 @@ import {
 import { groupCapabilityPresetsByCategory } from './workflow/workflowCapabilityGroups';
 import { workflowTopTitleGridStyle } from './workflow/workflowPaneLayout';
 import { WorkflowSidebarColumn, type WorkflowSidebarFavoriteEntry } from './workflow/WorkflowSidebarColumn';
+import { buildWorkflowComposerSeedFromTwoPresets } from './workflow/buildWorkflowComposerSeed';
+import type { CapabilityAssetCandidate } from './CapabilitySetCanvas';
+
+const WorkflowComposerOverlay = lazy(() => import('./WorkflowComposerOverlay'));
 
 const WorkflowSection: React.FC<{
   capabilityPresets: CustomAppModule[];
@@ -112,6 +127,10 @@ const WorkflowSection: React.FC<{
   onAddToLibrary?: (items: Partial<LibraryItem>[]) => void;
   /** 右侧「能力」页底部：能力预设编辑区（由 App 传入 Suspense 包裹的 CapabilityPresetSection） */
   capabilityPresetPanel?: React.ReactNode;
+  /** 与能力页 `onUpdate` 同源：用于从工作区侧栏启用被禁用的预设并持久化 */
+  onUpdateCapabilityPresets?: (next: CustomAppModule[]) => void;
+  /** 与能力页 `onUpdateSets` 同源：工作流创建保存为复合能力 */
+  onUpdateCapabilitySets?: (next: CapabilitySet[]) => void;
   /** 首次进入项目时的导览键（同一键仅执行一次横扫导览） */
   onboardingKey?: string | null;
 }> = ({
@@ -129,6 +148,8 @@ const WorkflowSection: React.FC<{
   registerPaneWheelHandler,
   onAddToLibrary,
   capabilityPresetPanel,
+  onUpdateCapabilityPresets,
+  onUpdateCapabilitySets,
   onboardingKey = null,
 }) => {
   const assets = Array.isArray(assetsProp) ? assetsProp : [];
@@ -177,6 +198,9 @@ const WorkflowSection: React.FC<{
   const [draggingActionFromFavorite, setDraggingActionFromFavorite] = useState(false);
   const [actionDroppedInFavorite, setActionDroppedInFavorite] = useState(false);
   const [favoriteDropActive, setFavoriteDropActive] = useState(false);
+  const [composerOpen, setComposerOpen] = useState(false);
+  const [composerSessionKey, setComposerSessionKey] = useState(0);
+  const [composerInitialSet, setComposerInitialSet] = useState<CapabilitySet | null>(null);
   const [collapsedSectionIds, setCollapsedSectionIds] = useState<Record<string, boolean>>({});
   const [cutSelectState, setCutSelectState] = useState<{
     task: WorkflowPendingTask;
@@ -273,7 +297,6 @@ const WorkflowSection: React.FC<{
     registerPaneWheelHandler,
     listPaneWidth,
     sidebarWidth,
-    onboardingKey,
     marqueeStartRef,
   });
   /** 从功能区「词」进入能力页：横向滑到能力列并滚动到对应预设卡片 */
@@ -533,7 +556,9 @@ const WorkflowSection: React.FC<{
     ) => {
       const asset = assets.find((x) => x.id === assetId);
       if (!asset) return;
-      const mod = actionModules.find((m) => m.id === actionType);
+      const mod =
+        actionModules.find((m) => m.id === actionType) ??
+        capabilityPresets.find((p) => p.id === actionType);
       if (isWorkflowTextAsset(asset)) {
         if (!mod || !workflowPresetAcceptsTextCardDrag(mod)) {
           onLog?.('warn', '文字资产请拖入「文字能力」或「生图」类预设');
@@ -572,7 +597,7 @@ const WorkflowSection: React.FC<{
       };
       setPending((prev) => [...prev, task]);
     },
-    [assets, getAssetDisplayImage, onLog, actionModules]
+    [assets, getAssetDisplayImage, onLog, actionModules, capabilityPresets]
   );
 
   const addWorkflowTextAsset = useCallback((initialText?: string) => {
@@ -1312,6 +1337,19 @@ const WorkflowSection: React.FC<{
   useEffect(() => {
     writeLocalJson(favoriteStorageKey, favoriteActionIds);
   }, [favoriteActionIds, favoriteStorageKey]);
+  /** 能力被禁用或复合能力被删后，从常用功能里剔除无效 id */
+  useEffect(() => {
+    setFavoriteActionIds((prev) =>
+      prev.filter((id) => {
+        if (id.startsWith(SET_ACTION_PREFIX)) {
+          const sid = id.slice(SET_ACTION_PREFIX.length);
+          return capabilitySets.some((s) => s.id === sid);
+        }
+        const p = capabilityPresets.find((m) => m.id === id);
+        return p != null && p.enabled !== false;
+      })
+    );
+  }, [capabilityPresets, capabilitySets]);
   const collectImageFilesFromClipboardItems = useCallback((items?: DataTransferItemList | null) => {
     if (!items?.length) return [] as File[];
     const files: File[] = [];
@@ -1397,6 +1435,18 @@ const WorkflowSection: React.FC<{
     );
     return sortRootWorkflowAssetsNewestFirst(list);
   }, [assets]);
+  const rootCanvasAssets = useMemo(() => {
+    if (!showAllInGroup) return visibleAssets;
+    return [...assets]
+      .filter((a) => {
+        if (a.archived || a.inRepository) return false;
+        // 显示全部：隐藏“组容器”本体，仅展示可见叶子资产（含组内子资产）
+        if (a.cutImageGroup?.length) return false;
+        if (a.parentAssetId) return true;
+        return !a.hiddenInGrid;
+      })
+      .sort((a, b) => b.createdAt - a.createdAt);
+  }, [assets, showAllInGroup, visibleAssets]);
 
   const outlineExpandableGroupIds = useMemo(
     () => workflowOutlineExpandableGroupIds(assets, visibleAssets),
@@ -2491,6 +2541,26 @@ const WorkflowSection: React.FC<{
     setCollapsedSectionIds((prev) => ({ ...prev, [sectionId]: !prev[sectionId] }));
   }, []);
 
+  const buildWorkflowSelectionDragSources = useCallback((): WorkflowDragSource[] => {
+    if (showArchived) return [];
+    if (selectedAssetIds.size > 0) {
+      return [{ kind: 'root', assetIds: [...selectedAssetIds] }];
+    }
+    if (currentGroupAsset && selectedGroupItemKeys.size > 0) {
+      const gid = currentGroupAsset.id;
+      const prefix = `${gid}::`;
+      const indexes: number[] = [];
+      for (const key of selectedGroupItemKeys) {
+        if (!key.startsWith(prefix)) continue;
+        const idx = Number(key.slice(prefix.length));
+        if (!Number.isNaN(idx) && idx >= 0) indexes.push(idx);
+      }
+      const uniq = [...new Set(indexes)].sort((a, b) => a - b);
+      if (uniq.length > 0) return [{ kind: 'group', groupAssetId: gid, itemIndexes: uniq }];
+    }
+    return [];
+  }, [showArchived, selectedAssetIds, currentGroupAsset, selectedGroupItemKeys]);
+
   const handleDropToModuleAction = useCallback(
     (
       mod: CustomAppModule,
@@ -2501,13 +2571,17 @@ const WorkflowSection: React.FC<{
         imageAspectRatio?: string;
         imageSize?: string;
         understand?: boolean;
-      }
+      },
+      explicitSources?: WorkflowDragSource[]
     ) => {
-      const sources = resolveCapabilityDropDragSources(
-        draggingAssetIds,
-        draggingGroupItems,
-        dropEvent?.dataTransfer ?? null
-      );
+      const sources =
+        explicitSources !== undefined
+          ? explicitSources
+          : resolveCapabilityDropDragSources(
+              draggingAssetIds,
+              draggingGroupItems,
+              dropEvent?.dataTransfer ?? null
+            );
       if (sources.length === 0) return;
 
       if (tweakPrompt) {
@@ -2651,6 +2725,102 @@ const WorkflowSection: React.FC<{
       setPromptTweakModal,
     ]
   );
+
+  const handleActivatePresetFromEditorDrop = useCallback(
+    (presetId: string) => {
+      const raw = capabilityPresets.find((p) => p.id === presetId);
+      if (!raw) {
+        onLog?.('warn', '未找到该能力预设', presetId);
+        return;
+      }
+      if (raw.enabled === false) {
+        if (!onUpdateCapabilityPresets) {
+          onLog?.('warn', '无法启用已禁用的预设：未连接保存');
+          return;
+        }
+        onUpdateCapabilityPresets(capabilityPresets.map((p) => (p.id === presetId ? { ...p, enabled: true } : p)));
+      }
+      const mod: CustomAppModule = { ...raw, enabled: true };
+      const sources = buildWorkflowSelectionDragSources();
+      if (sources.length === 0) {
+        onLog?.('info', `已就绪「${mod.label}」：请选中工作区图片后拖入功能块，或再次从能力区拖入此处执行`);
+        return;
+      }
+      handleDropToModuleAction(mod, false, undefined, undefined, sources);
+    },
+    [
+      capabilityPresets,
+      onUpdateCapabilityPresets,
+      onLog,
+      buildWorkflowSelectionDragSources,
+      handleDropToModuleAction,
+    ]
+  );
+
+  const handleComposeCapabilities = useCallback(
+    (sourcePresetId: string, targetPresetId: string) => {
+      const a = capabilityPresets.find((p) => p.id === sourcePresetId);
+      const b = capabilityPresets.find((p) => p.id === targetPresetId);
+      if (!a || !b) {
+        onLog?.('warn', '仅能对已存在的能力预设创建工作流');
+        return;
+      }
+      setComposerInitialSet(buildWorkflowComposerSeedFromTwoPresets(a, b));
+      setComposerSessionKey((k) => k + 1);
+      setComposerOpen(true);
+    },
+    [capabilityPresets, onLog]
+  );
+  const openUnifiedComposer = useCallback((initialSet: CapabilitySet | null) => {
+    setComposerInitialSet(initialSet);
+    setComposerSessionKey((k) => k + 1);
+    setComposerOpen(true);
+  }, []);
+
+  const handleComposerSave = useCallback(
+    (set: CapabilitySet) => {
+      if (!onUpdateCapabilitySets) {
+        onLog?.('warn', '无法保存工作流：未连接复合能力存储');
+        return;
+      }
+      const next = capabilitySets.some((s) => s.id === set.id)
+        ? capabilitySets.map((s) => (s.id === set.id ? set : s))
+        : [...capabilitySets, set];
+      onUpdateCapabilitySets(next);
+      onLog?.('info', `已保存工作流：${set.label}`);
+    },
+    [capabilitySets, onUpdateCapabilitySets, onLog]
+  );
+
+  const getComposerPartialTestInputImage = useCallback((): string | null => {
+    if (lightboxAsset && !isWorkflowTextAsset(lightboxAsset)) {
+      const img = getAssetDisplayImage(lightboxAsset);
+      return img.trim() || null;
+    }
+    for (const id of Array.from(selectedAssetIds)) {
+      const a = assets.find((x) => x.id === id);
+      if (!a || isWorkflowTextAsset(a)) continue;
+      const img = getAssetDisplayImage(a);
+      if (img.trim()) return img.trim();
+    }
+    return null;
+  }, [lightboxAsset, selectedAssetIds, assets]);
+
+  const composerAssetCandidates = useMemo<CapabilityAssetCandidate[]>(() => {
+    const out: CapabilityAssetCandidate[] = [];
+    for (const a of assets) {
+      if (isWorkflowTextAsset(a)) continue;
+      const img = getAssetDisplayImage(a).trim();
+      if (!img) continue;
+      out.push({
+        id: a.id,
+        label: a.groupLabel?.trim() || `资产 ${a.id.slice(0, 6)}`,
+        scope: a.inRepository ? 'repository' : 'workspace',
+        image: img,
+      });
+    }
+    return out.sort((x, y) => x.label.localeCompare(y.label, 'zh-CN'));
+  }, [assets, getAssetDisplayImage]);
 
   const handleDropToSetAction = useCallback(
     (setActionId: string, dropEvent?: React.DragEvent) => {
@@ -2939,16 +3109,49 @@ const WorkflowSection: React.FC<{
           .map((a) => a.id)
       );
       const allSelected = selectedAssetIds.size === selectableCount && selectableCount > 0;
+      const inGroupView = !!currentGroupAsset;
+      const groupSelectableKeys =
+        currentGroupAsset && !showAllInGroup
+          ? currentGroupItems
+              .map((_, i) => `${currentGroupAsset.id}::${i}`)
+              .filter(
+                (_, i) =>
+                  !pending.some(
+                    (t) =>
+                      t.sourceGroupAssetId === currentGroupAsset.id &&
+                      t.sourceItemIndex === i
+                  )
+              )
+          : [];
+      const groupAllSelected =
+        inGroupView &&
+        groupSelectableKeys.length > 0 &&
+        selectedGroupItemKeys.size === groupSelectableKeys.length;
 
       const workspaceAndFunctionCols = [
         {
-          title: '工作区',
+          title: inGroupView
+            ? selectedGroupItemKeys.size > 0
+              ? `工作区 · 已选 ${selectedGroupItemKeys.size}`
+              : '工作区'
+            : selectedAssetIds.size > 0
+            ? `工作区 · 已选 ${selectedAssetIds.size}`
+            : '工作区',
           desc: '工作区资产管理',
           actions: (
             <>
               <div className="flex items-center gap-2 whitespace-nowrap">
+                {!showArchived && (
+                  <button
+                    type="button"
+                    onClick={() => addWorkflowTextAsset()}
+                    className="h-8 px-3 rounded-lg border border-emerald-800/50 bg-emerald-950/40 text-[9px] font-black uppercase text-emerald-200 hover:bg-emerald-900/35"
+                  >
+                    添加文字
+                  </button>
+                )}
                 <label className={`${TITLE_ROW_BTN_NEUTRAL} cursor-pointer`}>
-                  多选上传
+                  导入图片
                   <input type="file" className="hidden" accept="image/*" multiple onChange={handleBatchUploadCorrect} />
                 </label>
                 {onOpenLibraryPicker && (
@@ -2983,15 +3186,6 @@ const WorkflowSection: React.FC<{
                     +
                   </button>
                 </div>
-                {!showArchived && (
-                  <button
-                    type="button"
-                    onClick={() => addWorkflowTextAsset()}
-                    className="h-8 px-3 rounded-lg border border-emerald-800/50 bg-emerald-950/40 text-[9px] font-black uppercase text-emerald-200 hover:bg-emerald-900/35"
-                  >
-                    添加文字
-                  </button>
-                )}
               </div>
               {archiveHint && !showArchived && (
                 <div className="h-8 flex items-center gap-2 px-3 rounded-lg bg-[#152642] border border-[#3b6fb8] text-[9px] text-blue-200">
@@ -2999,21 +3193,43 @@ const WorkflowSection: React.FC<{
                   <span className="text-gray-300">已移入资产仓库</span>
                 </div>
               )}
-              {!showArchived && visibleAssets.length > 0 && (
+              {!showArchived && (inGroupView || visibleAssets.length > 0) && (
                 <div className="flex items-center gap-2 whitespace-nowrap">
                   <button
                     type="button"
-                    onClick={() => setSelectedAssetIds((prev) => (prev.size === allSelectableIds.size ? new Set() : allSelectableIds))}
+                    onClick={() => {
+                      if (!inGroupView) setViewStack([]);
+                      setShowAllInGroup((v) => !v);
+                      setSelectedGroupItemKeys(new Set());
+                    }}
                     className={TITLE_ROW_BTN_NEUTRAL}
                   >
-                    {allSelected ? '取消全选' : '全选'}
+                    {showAllInGroup ? '显示层级' : '显示全部'}
                   </button>
-                  {selectedAssetIds.size > 0 && (
-                    <>
-                      <span className="text-[9px] text-gray-500">已选 {selectedAssetIds.size}</span>
-                      <span className="text-[8px] text-gray-600">空白处点击清空 · Alt+框选减选</span>
-                    </>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (inGroupView) {
+                        const allKeys = new Set(groupSelectableKeys);
+                        setSelectedGroupItemKeys((prev) =>
+                          prev.size === allKeys.size ? new Set() : allKeys
+                        );
+                        return;
+                      }
+                      setSelectedAssetIds((prev) =>
+                        prev.size === allSelectableIds.size ? new Set() : allSelectableIds
+                      );
+                    }}
+                    className={TITLE_ROW_BTN_NEUTRAL}
+                  >
+                    {inGroupView
+                      ? groupAllSelected
+                        ? '取消全选'
+                        : '全选'
+                      : allSelected
+                      ? '取消全选'
+                      : '全选'}
+                  </button>
                 </div>
               )}
             </>
@@ -3224,7 +3440,11 @@ const WorkflowSection: React.FC<{
     importLibraryItemsIntoWorkflow,
     onOpenLibraryPicker,
     pending,
+    currentGroupAsset,
+    currentGroupItems,
     selectedAssetIds,
+    selectedGroupItemKeys,
+    showAllInGroup,
     setArchiveHint,
     setArchivedDetailAssetId,
     setColumnCount,
@@ -3653,58 +3873,6 @@ const WorkflowSection: React.FC<{
                         (currentGroupAsset.groupKind === 'manual' ? '组' : '切割')}{' '}
                       组内 ({currentGroupItems.length})
                     </span>
-                    <button
-                      type="button"
-                      onClick={() => setShowAllInGroup((v) => !v)}
-                      className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${showAllInGroup ? 'bg-blue-600 border-blue-500' : 'bg-[#1c1c22] border-[#2e2e32] hover:bg-[#2e2e36]'}`}
-                    >
-                      {showAllInGroup ? '显示层级' : '显示全部'}
-                    </button>
-                    {!showAllInGroup && currentGroupItems.length > 0 && (
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const selectableKeys = currentGroupItems
-                              .map((_, i) => `${currentGroupAsset.id}::${i}`)
-                              .filter(
-                                (_, i) =>
-                                  !pending.some(
-                                    (t) =>
-                                      t.sourceGroupAssetId === currentGroupAsset.id &&
-                                      t.sourceItemIndex === i
-                                  )
-                              );
-                            const allKeys = new Set(selectableKeys);
-                            setSelectedGroupItemKeys((prev) =>
-                              prev.size === allKeys.size ? new Set() : allKeys
-                            );
-                          }}
-                          className="px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border bg-[#1c1c22] border-[#2e2e32] hover:bg-[#2e2e36]"
-                        >
-                          {(() => {
-                            const selectableCount = currentGroupItems.filter(
-                              (_, i) =>
-                                !pending.some(
-                                  (t) =>
-                                    t.sourceGroupAssetId === currentGroupAsset.id &&
-                                    t.sourceItemIndex === i
-                                )
-                            ).length;
-                            return selectedGroupItemKeys.size === selectableCount &&
-                              selectableCount > 0
-                              ? '取消全选'
-                              : '全选';
-                          })()}
-                        </button>
-                        {selectedGroupItemKeys.size > 0 && (
-                          <>
-                            <span className="text-[9px] text-gray-500">已选 {selectedGroupItemKeys.size}</span>
-                            <span className="text-[8px] text-gray-600">空白处点击清空 · Alt+框选减选</span>
-                          </>
-                        )}
-                      </div>
-                    )}
                   </>
                 )}
               </div>
@@ -4277,12 +4445,12 @@ const WorkflowSection: React.FC<{
                 <div className="flex flex-col items-center justify-center py-12 text-gray-500 text-[9px]">此组暂无内容</div>
               )}
             </>
-          ) : visibleAssets.length === 0 ? (
+          ) : rootCanvasAssets.length === 0 ? (
             <div className="flex flex-1 min-h-0 flex-col items-center justify-center px-6 py-10 text-gray-500">
               <AppIcon name="camera" className="w-10 h-10 mb-2" />
               <p className="text-[10px] font-black uppercase">暂无内容</p>
               <p className="text-[9px] mt-1 text-center max-w-sm">
-                使用「多选上传」添加图片，或点顶栏「添加文字」建文字卡片
+                使用「导入图片」添加图片，或点顶栏「添加文字」建文字卡片
               </p>
             </div>
           ) : (
@@ -4292,7 +4460,7 @@ const WorkflowSection: React.FC<{
                 className="gap-4 relative"
                 style={{ columnCount, columnFill: 'balance' as const }}
               >
-                {visibleAssets.map((a) => {
+                {rootCanvasAssets.map((a) => {
                   const isTextCard = isWorkflowTextAsset(a);
                   const cardAspect = isTextCard ? 3 / 4 : cardAspectByAssetId[a.id] ?? 1;
                   const isBusy = busyAssetIds.has(a.id);
@@ -4723,6 +4891,8 @@ const WorkflowSection: React.FC<{
             handleDropToModuleAction={handleDropToModuleAction}
             handleDropToSetAction={handleDropToSetAction}
             jumpToCapabilityPreset={jumpToCapabilityPreset}
+            onDropPresetFromEditor={handleActivatePresetFromEditorDrop}
+            onComposeCapabilities={handleComposeCapabilities}
           />
         </div>
 
@@ -4733,7 +4903,9 @@ const WorkflowSection: React.FC<{
               data-workflow-preset
               className="flex flex-col flex-1 min-h-0 overflow-hidden rounded-xl border border-white/[0.06] bg-[#0a0a0c] p-2"
             >
-              {cloneCapabilityPresetPanelWithScrollRef(capabilityPresetPanel, presetScrollRef)}
+              {cloneCapabilityPresetPanelWithScrollRef(capabilityPresetPanel, presetScrollRef, {
+                onOpenWorkflowComposer: openUnifiedComposer,
+              })}
             </div>
           ) : (
             <div className="flex-1 min-h-0 rounded-xl border border-dashed border-white/10 bg-white/[0.02] flex items-center justify-center text-[9px] text-gray-600">
@@ -4983,6 +5155,22 @@ const WorkflowSection: React.FC<{
           }}
         />
       )}
+      {composerOpen && (
+        <Suspense fallback={null}>
+          <WorkflowComposerOverlay
+            open={composerOpen}
+            onClose={() => setComposerOpen(false)}
+            sessionKey={composerSessionKey}
+            presets={capabilityPresets}
+            initialSet={composerInitialSet}
+            onSave={handleComposerSave}
+            onLog={onLog}
+            getPartialTestInputImage={getComposerPartialTestInputImage}
+            assetCandidates={composerAssetCandidates}
+          />
+        </Suspense>
+      )}
+
       {promptTweakModal && (
         <PromptTweakModal
           preset={promptTweakModal.preset}

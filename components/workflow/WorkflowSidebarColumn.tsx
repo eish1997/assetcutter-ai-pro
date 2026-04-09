@@ -15,10 +15,30 @@ import {
 import type { CustomAppModule, CapabilitySet, WorkflowAsset } from '../../types';
 import { capabilityUsesGenImageEngine } from '../../services/capabilityExecutor';
 import { CustomDropdown, DROPDOWN_TRIGGER_COMPACT } from '../ui/CustomDropdown';
+import { DT_AC_CAPABILITY_ACTION, DT_AC_CAPABILITY_FROM_EDITOR } from '../../services/workflowDragPipeline';
 import { dragTransferHasPlainText } from './workflowSectionHelpers';
 import { SET_ACTION_PREFIX } from './workflowSectionUiConstants';
 import { uuid } from './workflowIds';
 import type { CapabilityCategoryGroup } from './workflowCapabilityGroups';
+
+function tryConsumeCapabilityComposeDrop(
+  e: DragEvent<HTMLElement>,
+  targetMod: CustomAppModule,
+  draggingActionIdRef: RefObject<string | null>,
+  onComposeCapabilities: ((sourceId: string, targetId: string) => void) | undefined,
+  setDragOverAction: Dispatch<SetStateAction<string | null>>,
+  updateDraggingActionId: (id: string | null) => void
+): boolean {
+  if (!onComposeCapabilities) return false;
+  const src = draggingActionIdRef.current;
+  if (!src || src.startsWith(SET_ACTION_PREFIX) || src === targetMod.id) return false;
+  e.preventDefault();
+  e.stopPropagation();
+  setDragOverAction(null);
+  updateDraggingActionId(null);
+  onComposeCapabilities(src, targetMod.id);
+  return true;
+}
 
 export type WorkflowSidebarFavoriteEntry =
   | { id: string; label: string; kind: 'module'; mod: CustomAppModule }
@@ -86,6 +106,10 @@ export type WorkflowSidebarColumnProps = {
   ) => void;
   handleDropToSetAction: (setActionId: string, e: DragEvent<HTMLElement>) => void;
   jumpToCapabilityPreset: (preset: CustomAppModule) => void;
+  /** 能力区预设卡片拖入侧栏任意处：启用并入队当前选中资产 */
+  onDropPresetFromEditor?: (presetId: string) => void;
+  /** 将一能力拖到另一能力主区域：打开工作流创建 */
+  onComposeCapabilities?: (sourcePresetId: string, targetPresetId: string) => void;
 };
 
 export function WorkflowSidebarColumn({
@@ -136,6 +160,8 @@ export function WorkflowSidebarColumn({
   handleDropToModuleAction,
   handleDropToSetAction,
   jumpToCapabilityPreset,
+  onDropPresetFromEditor,
+  onComposeCapabilities,
 }: WorkflowSidebarColumnProps) {
   const [groupOverrideByCategory, setGroupOverrideByCategory] = useState<
     Record<
@@ -159,9 +185,45 @@ export function WorkflowSidebarColumn({
       ...(typeof cfg.understand === 'boolean' ? { understand: cfg.understand } : {}),
     };
   };
+  const typesHasCapabilityFromEditor = (dt: DataTransfer | null) => {
+    if (!dt?.types) return false;
+    try {
+      return Array.from(dt.types).includes(DT_AC_CAPABILITY_FROM_EDITOR);
+    } catch {
+      return false;
+    }
+  };
   return (
     <div
       data-workflow-sidebar
+      onDragOverCapture={(e) => {
+        if (!onDropPresetFromEditor) return;
+        if (!typesHasCapabilityFromEditor(e.dataTransfer)) return;
+        e.preventDefault();
+        try {
+          e.dataTransfer.dropEffect = 'copy';
+        } catch {
+          /* ignore */
+        }
+      }}
+      onDropCapture={(e) => {
+        if (!onDropPresetFromEditor) return;
+        if (!typesHasCapabilityFromEditor(e.dataTransfer)) return;
+        let id = '';
+        try {
+          id =
+            e.dataTransfer.getData(DT_AC_CAPABILITY_FROM_EDITOR) ||
+            e.dataTransfer.getData('text/plain') ||
+            '';
+        } catch {
+          id = '';
+        }
+        const trimmed = id.trim();
+        if (!trimmed) return;
+        e.preventDefault();
+        e.stopPropagation();
+        onDropPresetFromEditor(trimmed);
+      }}
       className={
         variant === 'splitLeft'
           ? 'w-full min-h-0 flex-1 flex flex-col gap-3 overflow-y-auto no-scrollbar'
@@ -553,6 +615,7 @@ export function WorkflowSidebarColumn({
                           onMouseLeave={() => setHoverPreview((prev) => (prev?.mod.id === entry.id ? null : prev))}
                           onDragStart={(e) => {
                             try {
+                              e.dataTransfer.setData(DT_AC_CAPABILITY_ACTION, entry.id);
                               e.dataTransfer.setData('text/plain', entry.id);
                               e.dataTransfer.effectAllowed = 'copyMove';
                             } catch {
@@ -601,6 +664,20 @@ export function WorkflowSidebarColumn({
                             }}
                             onMouseLeave={() => setHoverPreview((prev) => (prev?.mod.id === entry.id ? null : prev))}
             onDrop={(e) => {
+              if (entry.kind === 'module' && entry.mod) {
+                if (
+                  tryConsumeCapabilityComposeDrop(
+                    e,
+                    entry.mod,
+                    draggingActionIdRef,
+                    onComposeCapabilities,
+                    setDragOverAction,
+                    updateDraggingActionId
+                  )
+                ) {
+                  return;
+                }
+              }
               e.preventDefault();
               setDragOverAction(null);
               if (entry.kind === 'set') {
@@ -661,7 +738,7 @@ export function WorkflowSidebarColumn({
                       <span>{category.label}</span>
                       <span className="text-[10px] text-gray-500">{collapsedSectionIds[`cat:${category.id}`] ? '▼' : '▲'}</span>
                     </button>
-                    <div className="flex-1 min-w-0 flex items-center justify-end gap-0.5" onClick={(e) => e.stopPropagation()}>
+                    <div className="flex-1 min-w-0 flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
                       {(() => {
                         const hasParamOptions = list.some((m) => capabilityUsesGenImageEngine(m));
                         const cfg = groupOverrideByCategory[category.id] || {};
@@ -687,7 +764,7 @@ export function WorkflowSidebarColumn({
                             },
                           }))
                         }
-                        className={`w-6 h-6 rounded-full border inline-flex items-center justify-center text-[9px] font-black ${groupOverrideByCategory[category.id]?.enabled ? 'border-blue-500 text-blue-300 bg-blue-950/35' : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'}`}
+                        className={`shrink-0 w-6 h-6 rounded-full border inline-flex items-center justify-center leading-none text-[9px] font-black ${groupOverrideByCategory[category.id]?.enabled ? 'border-blue-500 text-blue-300 bg-blue-950/35' : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'}`}
                       >
                         覆
                       </button>
@@ -703,11 +780,11 @@ export function WorkflowSidebarColumn({
                           }))
                         }
                         disabled={!groupOverrideByCategory[category.id]?.enabled}
-                        triggerClassName="p-0 bg-transparent border-0 rounded-none hover:bg-transparent"
+                        triggerClassName="p-0 w-6 h-6 inline-flex items-center justify-center bg-transparent border-0 rounded-none hover:bg-transparent align-middle"
                         renderTrigger={() => (
                           <span
                             title={gearChanged ? `档位：${DIALOG_IMAGE_GEARS.find((g) => g.id === cfg.imageGear)?.label || cfg.imageGear}` : '档位：默认'}
-                            className={`w-6 h-6 rounded-full border inline-flex items-center justify-center text-[9px] font-black ${
+                            className={`w-6 h-6 rounded-full border inline-flex items-center justify-center leading-none text-[9px] font-black ${
                               gearChanged ? 'border-blue-500 text-blue-300 bg-blue-950/35' : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'
                             }`}
                           >
@@ -725,11 +802,11 @@ export function WorkflowSidebarColumn({
                           }))
                         }
                         disabled={!groupOverrideByCategory[category.id]?.enabled}
-                        triggerClassName="p-0 bg-transparent border-0 rounded-none hover:bg-transparent"
+                        triggerClassName="p-0 w-6 h-6 inline-flex items-center justify-center bg-transparent border-0 rounded-none hover:bg-transparent align-middle"
                         renderTrigger={() => (
                           <span
                             title={ratioChanged ? `比例：${cfg.imageAspectRatio}` : '比例：默认'}
-                            className={`w-6 h-6 rounded-full border inline-flex items-center justify-center text-[9px] font-black ${
+                            className={`w-6 h-6 rounded-full border inline-flex items-center justify-center leading-none text-[9px] font-black ${
                               ratioChanged ? 'border-blue-500 text-blue-300 bg-blue-950/35' : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'
                             }`}
                           >
@@ -747,11 +824,11 @@ export function WorkflowSidebarColumn({
                           }))
                         }
                         disabled={!groupOverrideByCategory[category.id]?.enabled}
-                        triggerClassName="p-0 bg-transparent border-0 rounded-none hover:bg-transparent"
+                        triggerClassName="p-0 w-6 h-6 inline-flex items-center justify-center bg-transparent border-0 rounded-none hover:bg-transparent align-middle"
                         renderTrigger={() => (
                           <span
                             title={sizeChanged ? `尺寸：${cfg.imageSize}` : '尺寸：默认'}
-                            className={`w-6 h-6 rounded-full border inline-flex items-center justify-center text-[9px] font-black ${
+                            className={`w-6 h-6 rounded-full border inline-flex items-center justify-center leading-none text-[9px] font-black ${
                               sizeChanged ? 'border-blue-500 text-blue-300 bg-blue-950/35' : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'
                             }`}
                           >
@@ -772,7 +849,7 @@ export function WorkflowSidebarColumn({
                             },
                           }))
                         }
-                        className={`w-6 h-6 rounded-full border inline-flex items-center justify-center text-[9px] font-black ${groupOverrideByCategory[category.id]?.understand !== false ? 'border-blue-500 text-blue-300 bg-blue-950/35' : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'} disabled:opacity-50`}
+                        className={`shrink-0 w-6 h-6 rounded-full border inline-flex items-center justify-center leading-none text-[9px] font-black ${groupOverrideByCategory[category.id]?.understand !== false ? 'border-blue-500 text-blue-300 bg-blue-950/35' : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'} disabled:opacity-50`}
                       >
                         解
                       </button>
@@ -808,6 +885,7 @@ export function WorkflowSidebarColumn({
                         onMouseLeave={() => setHoverPreview((prev) => (prev?.mod.id === mod.id ? null : prev))}
                         onDragStart={(e) => {
                           try {
+                            e.dataTransfer.setData(DT_AC_CAPABILITY_ACTION, mod.id);
                             e.dataTransfer.setData('text/plain', mod.id);
                             e.dataTransfer.effectAllowed = 'copyMove';
                           } catch {
@@ -849,6 +927,18 @@ export function WorkflowSidebarColumn({
                           }
                           onMouseLeave={() => setHoverPreview((prev) => (prev?.mod.id === mod.id ? null : prev))}
                           onDrop={(e) => {
+                            if (
+                              tryConsumeCapabilityComposeDrop(
+                                e,
+                                mod,
+                                draggingActionIdRef,
+                                onComposeCapabilities,
+                                setDragOverAction,
+                                updateDraggingActionId
+                              )
+                            ) {
+                              return;
+                            }
                             e.preventDefault();
                             setDragOverAction(null);
                             handleDropToModuleAction(mod, false, e, getGroupOverridesForCategory(category.id));
@@ -916,6 +1006,7 @@ export function WorkflowSidebarColumn({
                   draggable
                   onDragStart={(e) => {
                     try {
+                      e.dataTransfer.setData(DT_AC_CAPABILITY_ACTION, mod.id);
                       e.dataTransfer.setData('text/plain', mod.id);
                       e.dataTransfer.effectAllowed = 'copyMove';
                     } catch {
@@ -948,6 +1039,18 @@ export function WorkflowSidebarColumn({
                     }}
                     onDragLeave={() => setDragOverAction(null)}
                     onDrop={(e) => {
+                      if (
+                        tryConsumeCapabilityComposeDrop(
+                          e,
+                          mod,
+                          draggingActionIdRef,
+                          onComposeCapabilities,
+                          setDragOverAction,
+                          updateDraggingActionId
+                        )
+                      ) {
+                        return;
+                      }
                       e.preventDefault();
                       setDragOverAction(null);
                       handleDropToModuleAction(mod, false, e);
@@ -1014,6 +1117,7 @@ export function WorkflowSidebarColumn({
                       draggable
                       onDragStart={(e) => {
                         try {
+                          e.dataTransfer.setData(DT_AC_CAPABILITY_ACTION, setActionId);
                           e.dataTransfer.setData('text/plain', setActionId);
                           e.dataTransfer.effectAllowed = 'copyMove';
                         } catch {
