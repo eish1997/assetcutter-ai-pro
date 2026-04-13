@@ -15,10 +15,12 @@ export type WorkspaceUserCloudConfig = {
   settings: {
     dialogSkipUnderstand: boolean;
     workspaceAutoSyncEnabled: boolean;
-    aiProvider: 'gemini' | 'toapis' | 'vectorengine';
+    aiProvider: 'gemini' | 'vertex' | 'toapis' | 'antigravity' | 'vectorengine';
     geminiApiKey: string;
     toapisApiKey: string;
     toapisBaseUrl: string;
+    antigravityApiKey: string;
+    antigravityBaseUrl: string;
     vectorengineApiKey: string;
     vectorengineBaseUrl: string;
   };
@@ -34,9 +36,10 @@ function userCloudConfigKey(userId: string, username?: string | null): string {
 }
 
 async function putObjectBytes(objectKey: string, contentType: string, body: string): Promise<void> {
+  const contentLength = new TextEncoder().encode(body).byteLength;
   const { uploadUrl } = await requestJson<UploadUrlResponse>(r2ApiUrl('/upload-url'), {
     method: 'POST',
-    body: JSON.stringify({ objectKey, contentType, expiresIn: 900 }),
+    body: JSON.stringify({ objectKey, contentType, expiresIn: 900, contentLength }),
   });
   const put = await fetch(uploadUrl, {
     method: 'PUT',
@@ -86,13 +89,19 @@ export async function fetchWorkspaceUserCloudConfig(
       settings: {
         dialogSkipUnderstand: parsed.settings?.dialogSkipUnderstand === true,
         workspaceAutoSyncEnabled: parsed.settings?.workspaceAutoSyncEnabled !== false,
-        aiProvider:
-          parsed.settings?.aiProvider === 'toapis' || parsed.settings?.aiProvider === 'vectorengine'
-            ? parsed.settings.aiProvider
-            : 'gemini',
+        aiProvider: (() => {
+          const ap = String(parsed.settings?.aiProvider ?? '')
+            .trim()
+            .toLowerCase();
+          return ap === 'vertex' || ap === 'toapis' || ap === 'antigravity' || ap === 'vectorengine'
+            ? (ap as WorkspaceUserCloudConfig['settings']['aiProvider'])
+            : 'gemini';
+        })(),
         geminiApiKey: String(parsed.settings?.geminiApiKey || ''),
         toapisApiKey: String(parsed.settings?.toapisApiKey || ''),
         toapisBaseUrl: String(parsed.settings?.toapisBaseUrl || ''),
+        antigravityApiKey: String(parsed.settings?.antigravityApiKey || ''),
+        antigravityBaseUrl: String(parsed.settings?.antigravityBaseUrl || ''),
         vectorengineApiKey: String(parsed.settings?.vectorengineApiKey || ''),
         vectorengineBaseUrl: String(parsed.settings?.vectorengineBaseUrl || ''),
       },
@@ -122,13 +131,19 @@ export async function pushWorkspaceUserCloudConfig(
     settings: {
       dialogSkipUnderstand: input.settings.dialogSkipUnderstand === true,
       workspaceAutoSyncEnabled: input.settings.workspaceAutoSyncEnabled !== false,
-      aiProvider:
-        input.settings.aiProvider === 'toapis' || input.settings.aiProvider === 'vectorengine'
-          ? input.settings.aiProvider
-          : 'gemini',
+      aiProvider: (() => {
+        const ap = String(input.settings.aiProvider ?? '')
+          .trim()
+          .toLowerCase();
+        return ap === 'vertex' || ap === 'toapis' || ap === 'antigravity' || ap === 'vectorengine'
+          ? (ap as WorkspaceUserCloudConfig['settings']['aiProvider'])
+          : 'gemini';
+      })(),
       geminiApiKey: String(input.settings.geminiApiKey || ''),
       toapisApiKey: String(input.settings.toapisApiKey || ''),
       toapisBaseUrl: String(input.settings.toapisBaseUrl || ''),
+      antigravityApiKey: String(input.settings.antigravityApiKey || ''),
+      antigravityBaseUrl: String(input.settings.antigravityBaseUrl || ''),
       vectorengineApiKey: String(input.settings.vectorengineApiKey || ''),
       vectorengineBaseUrl: String(input.settings.vectorengineBaseUrl || ''),
     },

@@ -60,6 +60,9 @@ import { HttpRequestError } from './services/httpClient';
 import { triggerImageDownload } from './services/imageDataUrl';
 import {
   getAiProvider,
+  getAiProviderToolbarLabel,
+  getAntigravityApiKey,
+  getAntigravityBaseUrl,
   getDialogSkipUnderstand,
   getToapisApiKey,
   getToapisBaseUrl,
@@ -69,6 +72,8 @@ import {
   getWorkspaceAutoSyncEnabled,
   isAiInvocationReady,
   setAiProvider,
+  setAntigravityApiKey,
+  setAntigravityBaseUrl,
   setDialogSkipUnderstand,
   setToapisApiKey,
   setToapisBaseUrl,
@@ -717,6 +722,8 @@ const MainApp: React.FC = () => {
           setUserApiKey(cfg.settings.geminiApiKey || null);
           setToapisApiKey(cfg.settings.toapisApiKey || null);
           setToapisBaseUrl(cfg.settings.toapisBaseUrl || null);
+          setAntigravityApiKey(cfg.settings.antigravityApiKey || null);
+          setAntigravityBaseUrl(cfg.settings.antigravityBaseUrl || null);
           setVectorengineApiKey(cfg.settings.vectorengineApiKey || null);
           setVectorengineBaseUrl(cfg.settings.vectorengineBaseUrl || null);
           setAiInvocationStatusRev((n) => n + 1);
@@ -763,6 +770,8 @@ const MainApp: React.FC = () => {
           geminiApiKey: getUserApiKey() || '',
           toapisApiKey: getToapisApiKey() || '',
           toapisBaseUrl: getToapisBaseUrl() || '',
+          antigravityApiKey: getAntigravityApiKey() || '',
+          antigravityBaseUrl: getAntigravityBaseUrl() || '',
           vectorengineApiKey: getVectorengineApiKey() || '',
           vectorengineBaseUrl: getVectorengineBaseUrl() || '',
         },
@@ -1418,6 +1427,7 @@ const MainApp: React.FC = () => {
   );
   const workspaceCloudUsagePercent = Math.round(workspaceCloudUsageRatio * 100);
   const aiInvocationReady = useMemo(() => isAiInvocationReady(), [aiInvocationStatusRev]);
+  const aiProviderToolbarLabel = useMemo(() => getAiProviderToolbarLabel(), [aiInvocationStatusRev]);
   const workspaceProjectOptions = workspaceProjects.map((p) => ({ value: p.id, label: p.name }));
   const workspaceLastSyncText = formatTimestampText(workspaceCloudLastSyncAt);
 
@@ -3287,6 +3297,7 @@ const MainApp: React.FC = () => {
                   authLoading={authLoading}
                   onRefreshUser={refreshAuthUser}
                   onLogout={logout}
+                  onAiInvocationSurfaceChange={() => setAiInvocationStatusRev((n) => n + 1)}
                 />
               </Suspense>
             )}
@@ -3326,6 +3337,7 @@ const MainApp: React.FC = () => {
                 workspaceCloudQuotaSuspended={workspaceCloudQuotaSuspended}
                 onOpenApiKeyModal={() => setApiKeyModalOpen(true)}
                 aiInvocationReady={aiInvocationReady}
+                aiPlatformLabel={aiProviderToolbarLabel}
                 renderWorkflowSection={() => (
                   <WorkflowSection
                     capabilityPresets={capabilityPresets}

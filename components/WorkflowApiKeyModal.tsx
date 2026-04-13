@@ -9,6 +9,10 @@ import {
   setToapisApiKey,
   getToapisBaseUrl,
   setToapisBaseUrl,
+  getAntigravityApiKey,
+  setAntigravityApiKey,
+  getAntigravityBaseUrl,
+  setAntigravityBaseUrl,
   getVectorengineApiKey,
   setVectorengineApiKey,
   getVectorengineBaseUrl,
@@ -20,7 +24,9 @@ import AppIcon from './ui/AppIcon';
 
 const AI_PROVIDER_OPTIONS: { value: AiProvider; label: string }[] = [
   { value: 'gemini', label: 'Google Gemini（官方 API）' },
+  { value: 'vertex', label: 'Vertex AI（经 gemini-proxy）' },
   { value: 'toapis', label: 'ToAPIs 网关' },
+  { value: 'antigravity', label: 'Antigravity Tools（本机反代）' },
   { value: 'vectorengine', label: '向量引擎 VectorEngine' },
 ];
 
@@ -33,8 +39,10 @@ export const WorkflowApiKeyModal: React.FC<{
   const [provider, setProvider] = useState<AiProvider>('gemini');
   const [geminiKey, setGeminiKey] = useState('');
   const [toapisKey, setToapisKey] = useState('');
+  const [agKey, setAgKey] = useState('');
   const [veKey, setVeKey] = useState('');
   const [toapisBase, setToapisBase] = useState('');
+  const [agBase, setAgBase] = useState('');
   const [veBase, setVeBase] = useState('');
   const [savedFlash, setSavedFlash] = useState(false);
 
@@ -43,8 +51,10 @@ export const WorkflowApiKeyModal: React.FC<{
     setProvider(getAiProvider());
     setGeminiKey(getUserApiKey() ?? '');
     setToapisKey(getToapisApiKey() ?? '');
+    setAgKey(getAntigravityApiKey() ?? '');
     setVeKey(getVectorengineApiKey() ?? '');
     setToapisBase(getToapisBaseUrl());
+    setAgBase(getAntigravityBaseUrl());
     setVeBase(getVectorengineBaseUrl());
   }, [open]);
 
@@ -63,16 +73,34 @@ export const WorkflowApiKeyModal: React.FC<{
 
   if (!open) return null;
 
-  const keyValue = provider === 'gemini' ? geminiKey : provider === 'toapis' ? toapisKey : veKey;
+  const keyValue =
+    provider === 'gemini'
+      ? geminiKey
+      : provider === 'vertex'
+        ? ''
+        : provider === 'toapis'
+          ? toapisKey
+          : provider === 'antigravity'
+            ? agKey
+            : veKey;
   const setKeyValue = (v: string) => {
     if (provider === 'gemini') setGeminiKey(v);
     else if (provider === 'toapis') setToapisKey(v);
-    else setVeKey(v);
+    else if (provider === 'antigravity') setAgKey(v);
+    else if (provider === 'vectorengine') setVeKey(v);
   };
 
   const handleProviderChange = (value: string) => {
     const v: AiProvider =
-      value === 'toapis' ? 'toapis' : value === 'vectorengine' ? 'vectorengine' : 'gemini';
+      value === 'vertex'
+        ? 'vertex'
+        : value === 'toapis'
+          ? 'toapis'
+          : value === 'antigravity'
+            ? 'antigravity'
+            : value === 'vectorengine'
+              ? 'vectorengine'
+              : 'gemini';
     setProvider(v);
   };
 
@@ -81,6 +109,8 @@ export const WorkflowApiKeyModal: React.FC<{
     setUserApiKey(geminiKey.trim() || null);
     setToapisApiKey(toapisKey.trim() || null);
     setToapisBaseUrl(toapisBase.trim() || null);
+    setAntigravityApiKey(agKey.trim() || null);
+    setAntigravityBaseUrl(agBase.trim() || null);
     setVectorengineApiKey(veKey.trim() || null);
     setVectorengineBaseUrl(veBase.trim() || null);
     setSavedFlash(true);
@@ -125,17 +155,37 @@ export const WorkflowApiKeyModal: React.FC<{
               portalZIndex={{ backdrop: 2200, list: 2201 }}
             />
           </div>
-          <div>
-            <span className="block text-[9px] font-black uppercase text-gray-500 mb-2">API Key</span>
-            <input
-              type="password"
-              value={keyValue}
-              onChange={(e) => setKeyValue(e.target.value)}
-              placeholder="粘贴密钥"
-              autoComplete="off"
-              className="w-full min-w-0 px-4 py-3 rounded-xl bg-[#16161a] border border-[#2e2e32] text-sm text-white placeholder-gray-500 focus:border-[#3b82f6] focus:outline-none"
-            />
-          </div>
+          {provider === 'antigravity' ? (
+            <div>
+              <span className="block text-[9px] font-black uppercase text-gray-500 mb-2">Base URL（含 /v1）</span>
+              <input
+                type="url"
+                value={agBase}
+                onChange={(e) => setAgBase(e.target.value)}
+                placeholder="http://127.0.0.1:8045/v1"
+                autoComplete="off"
+                className="w-full min-w-0 px-4 py-3 rounded-xl bg-[#16161a] border border-[#2e2e32] text-sm text-white placeholder-gray-500 focus:border-[#3b82f6] focus:outline-none mb-3"
+              />
+            </div>
+          ) : null}
+          {provider === 'vertex' ? (
+            <p className="text-[10px] text-gray-500 leading-relaxed">
+              Vertex 凭据在服务端配置（见 <code className="text-gray-400">docs/VERTEX_AI_INTEGRATION.md</code>
+              ）；站点须设置 <code className="text-gray-400">VITE_BULK_IMAGE_API</code>。此处无需填写 Key。
+            </p>
+          ) : (
+            <div>
+              <span className="block text-[9px] font-black uppercase text-gray-500 mb-2">API Key</span>
+              <input
+                type="password"
+                value={keyValue}
+                onChange={(e) => setKeyValue(e.target.value)}
+                placeholder="粘贴密钥"
+                autoComplete="off"
+                className="w-full min-w-0 px-4 py-3 rounded-xl bg-[#16161a] border border-[#2e2e32] text-sm text-white placeholder-gray-500 focus:border-[#3b82f6] focus:outline-none"
+              />
+            </div>
+          )}
           <div className="flex items-center gap-3 pt-1">
             <button
               type="button"

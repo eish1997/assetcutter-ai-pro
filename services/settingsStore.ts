@@ -11,17 +11,20 @@ import {
   writeLocalString,
   writeSessionNonEmptyTrimmedOrRemove,
 } from './clientPersist';
+import { normalizeToapisBaseUrl } from './toapisAdapter';
 
 const STORAGE_KEY_GEMINI = 'ac_gemini_api_key';
 const STORAGE_KEY_AI_PROVIDER = 'ac_ai_provider';
 const STORAGE_KEY_TOAPIS_API_KEY = 'ac_toapis_api_key';
 const STORAGE_KEY_TOAPIS_BASE_URL = 'ac_toapis_base_url';
+const STORAGE_KEY_ANTIGRAVITY_API_KEY = 'ac_antigravity_api_key';
+const STORAGE_KEY_ANTIGRAVITY_BASE_URL = 'ac_antigravity_base_url';
 const STORAGE_KEY_VECTORENGINE_API_KEY = 'ac_vectorengine_api_key';
 const STORAGE_KEY_VECTORENGINE_BASE_URL = 'ac_vectorengine_base_url';
 const STORAGE_KEY_DIALOG_SKIP_UNDERSTAND = 'ac_dialog_skip_understand';
 const STORAGE_KEY_WORKSPACE_AUTO_SYNC = 'ac_workspace_auto_sync';
 
-export type AiProvider = 'gemini' | 'toapis' | 'vectorengine';
+export type AiProvider = 'gemini' | 'vertex' | 'toapis' | 'antigravity' | 'vectorengine';
 const SESSION_KEY_TENCENT_SECRET_ID = 'ac_tencent_secret_id';
 const SESSION_KEY_TENCENT_SECRET_KEY = 'ac_tencent_secret_key';
 
@@ -35,14 +38,32 @@ export function setUserApiKey(value: string | null): void {
 }
 
 export function getAiProvider(): AiProvider {
-  const v = readLocalString(STORAGE_KEY_AI_PROVIDER);
+  const v = readLocalString(STORAGE_KEY_AI_PROVIDER).trim().toLowerCase();
+  if (v === 'vertex') return 'vertex';
   if (v === 'toapis') return 'toapis';
+  if (v === 'antigravity') return 'antigravity';
   if (v === 'vectorengine') return 'vectorengine';
   return 'gemini';
 }
 
 export function setAiProvider(value: AiProvider): void {
   writeLocalString(STORAGE_KEY_AI_PROVIDER, value);
+}
+
+/** 工作区顶栏等：当前选用的 AI 供应商短名称 */
+export function getAiProviderToolbarLabel(): string {
+  switch (getAiProvider()) {
+    case 'vertex':
+      return 'Vertex AI';
+    case 'toapis':
+      return 'ToAPIs';
+    case 'antigravity':
+      return 'Antigravity';
+    case 'vectorengine':
+      return 'VectorEngine';
+    default:
+      return 'Google Gemini';
+  }
 }
 
 export function getToapisApiKey(): string | null {
@@ -61,6 +82,25 @@ export function getToapisBaseUrl(): string {
 
 export function setToapisBaseUrl(value: string | null): void {
   writeLocalNonEmptyTrimmedOrRemove(STORAGE_KEY_TOAPIS_BASE_URL, value);
+}
+
+export function getAntigravityApiKey(): string | null {
+  return readLocalNonEmptyTrimmed(STORAGE_KEY_ANTIGRAVITY_API_KEY);
+}
+
+export function setAntigravityApiKey(value: string | null): void {
+  writeLocalNonEmptyTrimmedOrRemove(STORAGE_KEY_ANTIGRAVITY_API_KEY, value);
+}
+
+/** Antigravity-Manager 反代 OpenAI 兼容根路径，默认本机 8045，如 http://127.0.0.1:8045/v1 */
+export function getAntigravityBaseUrl(): string {
+  const t = readLocalNonEmptyTrimmed(STORAGE_KEY_ANTIGRAVITY_BASE_URL) ?? '';
+  if (!t.trim()) return 'http://127.0.0.1:8045/v1';
+  return normalizeToapisBaseUrl(t);
+}
+
+export function setAntigravityBaseUrl(value: string | null): void {
+  writeLocalNonEmptyTrimmedOrRemove(STORAGE_KEY_ANTIGRAVITY_BASE_URL, value);
 }
 
 export function getVectorengineApiKey(): string | null {
@@ -83,8 +123,15 @@ export function setVectorengineBaseUrl(value: string | null): void {
 
 /** 当前选用供应商下的 API Key（Gemini 官方、ToAPIs 或 VectorEngine） */
 export function getApiKey(): string | undefined {
+  if (getAiProvider() === 'vertex') {
+    return undefined;
+  }
   if (getAiProvider() === 'toapis') {
     const k = getToapisApiKey();
+    return k ?? undefined;
+  }
+  if (getAiProvider() === 'antigravity') {
+    const k = getAntigravityApiKey();
     return k ?? undefined;
   }
   if (getAiProvider() === 'vectorengine') {
@@ -98,12 +145,24 @@ export function getApiKey(): string | undefined {
 
 /**
  * 当前选用的 AI 供应商是否具备调用条件：
- * - ToAPIs / VectorEngine：本机已填 Key
+ * - ToAPIs / Antigravity / VectorEngine：本机已填 Key
+ * - Vertex：构建时配置了 VITE_BULK_IMAGE_API（与官方 Gemini 走后端代理相同；GCP 凭据仅在代理服务器）
  * - Gemini：本机 Key，或构建时配置了 VITE_BULK_IMAGE_API（走后端代理；与 geminiService.getAI 优先级一致）
  */
 export function isAiInvocationReady(): boolean {
   const p = getAiProvider();
+  if (p === 'vertex') {
+    try {
+      const env = typeof import.meta !== 'undefined' ? (import.meta as { env?: Record<string, string | undefined> }).env : undefined;
+      const bulk = env?.VITE_BULK_IMAGE_API;
+      if (bulk && String(bulk).trim()) return true;
+    } catch {
+      /* ignore */
+    }
+    return false;
+  }
   if (p === 'toapis') return Boolean(getToapisApiKey()?.trim());
+  if (p === 'antigravity') return Boolean(getAntigravityApiKey()?.trim());
   if (p === 'vectorengine') return Boolean(getVectorengineApiKey()?.trim());
   try {
     const env = typeof import.meta !== 'undefined' ? (import.meta as { env?: Record<string, string | undefined> }).env : undefined;

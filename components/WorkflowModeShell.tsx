@@ -37,6 +37,8 @@ export type WorkflowModeShellProps = {
   workspaceCloudQuotaSuspended: boolean;
   onOpenApiKeyModal: () => void;
   aiInvocationReady: boolean;
+  /** 顶栏按钮文案：当前选用的 AI 平台（如 Vertex AI、Google Gemini） */
+  aiPlatformLabel: string;
   /** 仅在已选项目时调用，避免未进入画布就实例化懒加载的 WorkflowSection */
   renderWorkflowSection: () => React.ReactNode;
 };
@@ -68,6 +70,7 @@ const WorkflowModeShell: React.FC<WorkflowModeShellProps> = ({
   workspaceCloudQuotaSuspended,
   onOpenApiKeyModal,
   aiInvocationReady,
+  aiPlatformLabel,
   renderWorkflowSection,
 }) => (
   <div className="relative w-full">
@@ -243,11 +246,13 @@ const WorkflowModeShell: React.FC<WorkflowModeShellProps> = ({
                   className="inline-flex items-center gap-1.5 px-2 h-7 rounded-lg bg-[#1c1c22] border border-[#2e2e32] text-[8px] font-black uppercase hover:bg-[#2e2e36] hover:border-[#3b6fb8] whitespace-nowrap"
                   title={
                     aiInvocationReady
-                      ? '当前调用源已就绪 · 点击配置 API 密钥'
-                      : '当前供应商未配置 API Key（Gemini 也未配置批量代理）· 点击配置'
+                      ? `${aiPlatformLabel} · 调用源已就绪，点击配置`
+                      : `${aiPlatformLabel} · 未就绪（缺 Key 或未配置批量代理），点击配置`
                   }
                   aria-label={
-                    aiInvocationReady ? 'API 密钥，当前调用源已就绪' : 'API 密钥，当前调用源未就绪，请配置'
+                    aiInvocationReady
+                      ? `${aiPlatformLabel}，当前调用源已就绪，点击打开配置`
+                      : `${aiPlatformLabel}，当前调用源未就绪，点击打开配置`
                   }
                 >
                   <span
@@ -259,7 +264,9 @@ const WorkflowModeShell: React.FC<WorkflowModeShellProps> = ({
                         : 'bg-[#b45309] shadow-[0_0_8px_rgba(217,119,6,0.35)]'
                     }`}
                   />
-                  <span>API 密钥</span>
+                  <span className="max-w-[9rem] truncate normal-case tracking-normal font-semibold">
+                    {aiPlatformLabel}
+                  </span>
                 </button>
               </div>
             ) : null}

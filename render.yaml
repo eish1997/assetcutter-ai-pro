@@ -15,7 +15,7 @@ services:
         sync: false
       - key: PROXY_ALLOWED_ORIGINS
         sync: false
-      # 可选：GEMINI_API_KEYS、ENABLE_TOAPIS_FALLBACK、TOAPIS_API_KEY 等，见 README
+      # 可选：GEMINI_API_KEYS、ENABLE_TOAPIS_FALLBACK、TOAPIS_API_KEY、VERTEX_PROJECT_ID、VERTEX_LOCATION、GOOGLE_APPLICATION_CREDENTIALS（Vertex）等，见 README 与 docs/VERTEX_AI_INTEGRATION.md
 
   - type: web
     name: assetcutter-auth-api

@@ -3,7 +3,8 @@ import { createToapisGeminiClient } from "./toapisAdapter";
 import { createVectorengineGeminiClient } from "./vectorengineAdapter";
 import {
   getAiProvider,
-  getApiKey,
+  getAntigravityApiKey,
+  getAntigravityBaseUrl,
   getToapisApiKey,
   getToapisBaseUrl,
   getUserApiKey,
@@ -85,6 +86,8 @@ async function bulkProxyGenerateContentAsync(args: {
   /** 服务端可对 503 多次退避，轮询上限需覆盖 */
   const maxPollMs = Math.min(600_000, Math.max(httpTimeout + 240_000, 540_000));
 
+  const aiBackendExtra = getAiProvider() === "vertex" ? { aiBackend: "vertex" as const } : {};
+
   const createRes = await fetch(bulkApiUrl("/proxy/gemini/async"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -92,6 +95,7 @@ async function bulkProxyGenerateContentAsync(args: {
       model: args.model,
       contents: args.contents,
       config: safeConfig,
+      ...aiBackendExtra,
     }),
     signal: abortSignal,
   });
@@ -159,17 +163,38 @@ type GeminiClientLike = {
 
 const getAI = (): GeminiClientLike => {
   const provider = getAiProvider();
+  /**
+   * 供应商为网关时**必须**使用对应 Key，禁止静默回退到 GoogleGenAI。
+   * 否则用户以为走 Antigravity，实际仍用浏览器内 Gemini Key，@google/genai 对空 body 调 `response.json()` 会报
+   * Failed to execute 'json' on 'Response': Unexpected end of JSON input。
+   */
   if (provider === "toapis") {
     const k = getToapisApiKey();
-    if (k) {
-      return createToapisGeminiClient(getToapisBaseUrl(), k) as unknown as GeminiClientLike;
+    if (!k) {
+      throw new Error("当前供应商为 ToAPIs：请先在设置中填写 ToAPIs API Key，或改选「Google Gemini」使用官方 Key / 后端代理。");
     }
+    return createToapisGeminiClient(getToapisBaseUrl(), k) as unknown as GeminiClientLike;
+  }
+  if (provider === "antigravity") {
+    const k = getAntigravityApiKey();
+    if (!k) {
+      throw new Error(
+        "当前供应商为 Antigravity：请填写 Antigravity 反代 API Key（并确认 Base URL，默认 http://127.0.0.1:8045/v1），或改选「Google Gemini」。"
+      );
+    }
+    return createToapisGeminiClient(getAntigravityBaseUrl(), k, {
+      passthroughModels: true,
+      skipToapisImageUpload: true,
+    }) as unknown as GeminiClientLike;
   }
   if (provider === "vectorengine") {
     const k = getVectorengineApiKey();
-    if (k) {
-      return createVectorengineGeminiClient(getVectorengineBaseUrl(), k) as unknown as GeminiClientLike;
+    if (!k) {
+      throw new Error(
+        "当前供应商为 VectorEngine：请填写 VectorEngine API Key，或改选「Google Gemini」。"
+      );
     }
+    return createVectorengineGeminiClient(getVectorengineBaseUrl(), k) as unknown as GeminiClientLike;
   }
 
   const proxyClient: GeminiClientLike = {
@@ -183,6 +208,15 @@ const getAI = (): GeminiClientLike => {
       },
     },
   };
+
+  if (provider === "vertex") {
+    if (!BULK_BASE) {
+      throw new Error(
+        "当前供应商为 Vertex AI：请在构建环境配置 VITE_BULK_IMAGE_API（指向已部署的 gemini-proxy 或本地同源代理），并在代理服务器设置 VERTEX_PROJECT_ID 或 GOOGLE_CLOUD_PROJECT 与 GCP 凭据（ADC）。说明见 docs/VERTEX_AI_INTEGRATION.md"
+      );
+    }
+    return proxyClient;
+  }
 
   const apiKey = getUserApiKey();
   const preferKey = preferBrowserGeminiKeyFirst();
@@ -201,12 +235,6 @@ const getAI = (): GeminiClientLike => {
     if (apiKey) {
       return new GoogleGenAI({ apiKey }) as unknown as GeminiClientLike;
     }
-  }
-  if (provider === "toapis") {
-    throw new Error("未配置 ToAPIs API Key，且未配置后端代理地址：请填写 ToAPIs Key，或联系管理员配置 VITE_BULK_IMAGE_API");
-  }
-  if (provider === "vectorengine") {
-    throw new Error("未配置 VectorEngine API Key，且未配置后端代理地址：请填写 VectorEngine Key，或联系管理员配置 VITE_BULK_IMAGE_API");
   }
   throw new Error("未配置 API 密钥，请在设置页填写 Gemini API Key，或联系管理员配置后端代理地址（VITE_BULK_IMAGE_API）");
 };
@@ -578,6 +606,21 @@ async function callWithRetry<T>(
 const GEMINI_PERMISSION_DENIED_HINT =
   "Google 已拒绝当前密钥对应项目的访问（403 PERMISSION_DENIED）。请到 Google AI Studio / Cloud Console 检查该项目是否欠费、违规受限或未开通 Gemini；或更换新的 API Key。若站点配置了后端生图代理（VITE_BULK_IMAGE_API），请在服务器环境变量中使用有效的 GEMINI_API_KEY。";
 
+/** 403 提示：按当前构建配置说明「实际用的是哪一把 Key」，避免用户只改设置页却无效 */
+function geminiPermissionDeniedHintForBuild(): string {
+  if (!BULK_BASE) return GEMINI_PERMISSION_DENIED_HINT;
+  if (preferBrowserGeminiKeyFirst()) {
+    return (
+      GEMINI_PERMISSION_DENIED_HINT +
+      " 【说明】已配置后端代理，但当前构建启用了 VITE_USE_BROWSER_GEMINI_KEY_FIRST：优先使用设置页/本地的 Gemini Key；若你确定 Key 在 AI Studio 可用却仍 403，请把 Network 里失败请求的 URL 发管理员核对是否走了代理或其它域名。"
+    );
+  }
+  return (
+    GEMINI_PERMISSION_DENIED_HINT +
+    " 【说明】当前构建已配置 VITE_BULK_IMAGE_API 且默认优先走后端：Google 看到的是代理服务器上的 GEMINI_API_KEY，与设置页里的 Key 通常不是同一把；请在部署代理的环境（如 Render）里更换/核对密钥并重启服务。"
+  );
+}
+
 function parseGoogleStyleErrorPayload(raw: string): { code?: number; status?: string; message?: string } | null {
   const s = String(raw || "").trim();
   const tryParse = (t: string) => {
@@ -631,7 +674,7 @@ export function normalizeApiErrorMessage(err: unknown): string {
   if (googleErr) {
     const { code, status, message } = googleErr;
     if (code === 403 || status === "PERMISSION_DENIED" || /denied access/i.test(String(message || ""))) {
-      return GEMINI_PERMISSION_DENIED_HINT;
+      return geminiPermissionDeniedHintForBuild();
     }
     if (code === 500 || status === "INTERNAL") {
       return "服务暂时异常 (500)，请稍后重试";
@@ -646,7 +689,7 @@ export function normalizeApiErrorMessage(err: unknown): string {
   }
 
   if (/PERMISSION_DENIED/i.test(raw) || /"code"\s*:\s*403/.test(raw) || /denied access/i.test(raw)) {
-    return GEMINI_PERMISSION_DENIED_HINT;
+    return geminiPermissionDeniedHintForBuild();
   }
 
   try {
@@ -669,6 +712,45 @@ export function normalizeApiErrorMessage(err: unknown): string {
       return "服务暂时异常 (500)，请稍后重试";
     }
     return raw.length > 120 ? raw.slice(0, 120) + "…" : raw;
+  }
+}
+
+/**
+ * OpenAI 兼容网关（Antigravity / 部分 ToAPIs）在 `json_object` 模式下仍可能返回 ```json … ``` 包裹的文本；
+ * 官方 Gemini structured output 多为裸 JSON。此处统一剥围栏并尽量截取首个 `[`…`]` 数组再 parse。
+ */
+function parseBoundingBoxJsonArrayFromModelText(raw: string): unknown[] {
+  const t = (raw || "").trim();
+  if (!t) return [];
+  let s = t;
+  const fenced = s.match(/```(?:json)?\s*\r?\n?([\s\S]*?)\r?\n?```/i);
+  if (fenced) {
+    s = fenced[1].trim();
+  } else if (/^```(?:json)?/i.test(s)) {
+    s = s
+      .replace(/^```(?:json)?\s*\r?\n?/i, "")
+      .replace(/\r?\n?```\s*$/i, "")
+      .trim();
+  }
+  const tryArray = (json: string): unknown[] => {
+    const parsed = JSON.parse(json) as unknown;
+    return Array.isArray(parsed) ? parsed : [];
+  };
+  try {
+    return tryArray(s);
+  } catch {
+    const i = s.indexOf("[");
+    const j = s.lastIndexOf("]");
+    if (i >= 0 && j > i) {
+      try {
+        return tryArray(s.slice(i, j + 1));
+      } catch {
+        /* fall through */
+      }
+    }
+    throw new Error(
+      "模型返回无法解析为 JSON 数组（可能被 markdown 代码块或说明文字包裹；可换网关或收紧提示词）。"
+    );
   }
 }
 
@@ -701,7 +783,7 @@ export async function detectObjectsInImage(base64Image: string, model = 'gemini-
         }
       }, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)
     });
-    const results = JSON.parse(response.text || "[]");
+    const results = parseBoundingBoxJsonArrayFromModelText(response.text || "");
     return results.map((r) => ({
       id: r.id,
       label: r.label,

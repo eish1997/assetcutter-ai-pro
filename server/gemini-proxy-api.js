@@ -4,6 +4,9 @@
  *
  * 用法：GEMINI_API_KEY=xxx node server/gemini-proxy-api.js
  * 前端：VITE_BULK_IMAGE_API=http://localhost:9002
+ *
+ * Vertex AI：请求 JSON 带 aiBackend: "vertex" 时走 GCP（需 VERTEX_PROJECT_ID 或 GOOGLE_CLOUD_PROJECT、ADC）。
+ * 详见 docs/VERTEX_AI_INTEGRATION.md
  */
 import http from 'http';
 import { GoogleGenAI } from '@google/genai';
@@ -83,6 +86,55 @@ function formatErrorDetail(err) {
 function normalizeSecret(v) {
   if (typeof v !== 'string') return '';
   return v.replace(/\uFEFF/g, '').replace(/\r\n?/g, '').trim();
+}
+
+function vertexProjectId() {
+  return (process.env.VERTEX_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || '').trim();
+}
+
+function vertexLocation() {
+  return (process.env.VERTEX_LOCATION || 'global').trim();
+}
+
+function isVertexConfigured() {
+  return Boolean(vertexProjectId());
+}
+
+/** Vertex 使用 ADC；lazy 按 project+location 重建 */
+let vertexAiClient = null;
+let vertexAiClientCacheKey = '';
+
+function getVertexAI() {
+  const project = vertexProjectId();
+  if (!project) {
+    throw new Error('Vertex: set VERTEX_PROJECT_ID or GOOGLE_CLOUD_PROJECT');
+  }
+  const location = vertexLocation();
+  const key = `${project}\0${location}`;
+  if (!vertexAiClient || vertexAiClientCacheKey !== key) {
+    vertexAiClient = new GoogleGenAI({ vertexai: true, project, location });
+    vertexAiClientCacheKey = key;
+  }
+  return vertexAiClient;
+}
+
+async function proxyVertexGenerateContent(model, contents, config) {
+  const safeConfig = { ...(config || {}) };
+  if (safeConfig.abortSignal) delete safeConfig.abortSignal;
+  const timeout = Number(safeConfig?.httpOptions?.timeout) || IMAGE_REQUEST_TIMEOUT_MS;
+  const mergedConfig = {
+    ...safeConfig,
+    httpOptions: { ...(safeConfig.httpOptions || {}), timeout },
+  };
+  const ai = getVertexAI();
+  const response = await ai.models.generateContent({
+    model: model || 'gemini-2.5-flash',
+    contents,
+    config: mergedConfig,
+  });
+  const text = typeof response.text === 'string' ? response.text : '';
+  const candidates = response.candidates || response.response?.candidates || [];
+  return { text, candidates };
 }
 
 function isGeminiNetworkError(detail) {
@@ -386,7 +438,7 @@ function sweepGeminiAsyncJobs() {
   }
 }
 
-function createGeminiAsyncJob(model, contents, config) {
+function createGeminiAsyncJob(model, contents, config, useVertex) {
   sweepGeminiAsyncJobs();
   const id = `gasync-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   geminiAsyncJobs.set(id, {
@@ -408,7 +460,9 @@ function createGeminiAsyncJob(model, contents, config) {
         if (Date.now() - startedAt > GEMINI_ASYNC_JOB_MAX_WAIT_MS) {
           throw new Error(`Gemini 异步任务最大等待超时（>${GEMINI_ASYNC_JOB_MAX_WAIT_MS}ms）`);
         }
-        const result = await withGeminiProxySlot(() => proxyGenerateContent(model, contents, config));
+        const result = await withGeminiProxySlot(() =>
+          useVertex ? proxyVertexGenerateContent(model, contents, config) : proxyGenerateContent(model, contents, config)
+        );
         const j = geminiAsyncJobs.get(id);
         if (!j) return;
         j.status = 'completed';
@@ -495,17 +549,27 @@ const server = http.createServer(async (req, res) => {
         sendError(res, 400, 'Invalid JSON body');
         return;
       }
-      const { model, contents, config } = parsed || {};
+      const { model, contents, config, aiBackend } = parsed || {};
       if (!model || !contents) {
         sendError(res, 400, 'Missing model or contents');
         return;
       }
+      const useVertex = aiBackend === 'vertex';
       const key = normalizeSecret(process.env.GEMINI_API_KEY || '');
-      if (!GEMINI_API_KEY_POOL.length && !key && !(ENABLE_TOAPIS_FALLBACK && TOAPIS_API_KEY)) {
+      if (useVertex) {
+        if (!isVertexConfigured()) {
+          sendError(
+            res,
+            500,
+            'Vertex not configured: set VERTEX_PROJECT_ID or GOOGLE_CLOUD_PROJECT, VERTEX_LOCATION (optional), and ADC (e.g. GOOGLE_APPLICATION_CREDENTIALS)'
+          );
+          return;
+        }
+      } else if (!GEMINI_API_KEY_POOL.length && !key && !(ENABLE_TOAPIS_FALLBACK && TOAPIS_API_KEY)) {
         sendError(res, 500, 'No backend key. Set GEMINI_API_KEY/GEMINI_API_KEYS');
         return;
       }
-      const jobId = createGeminiAsyncJob(model, contents, config);
+      const jobId = createGeminiAsyncJob(model, contents, config, useVertex);
       sendJson(res, 202, { jobId, status: 'pending' });
     } catch (e) {
       sendBodyReadError(res, e);
@@ -546,13 +610,24 @@ const server = http.createServer(async (req, res) => {
         sendError(res, 400, 'Invalid JSON body');
         return;
       }
-      const { model, contents, config } = parsed || {};
+      const { model, contents, config, aiBackend } = parsed || {};
       if (!model || !contents) {
         sendError(res, 400, 'Missing model or contents');
         return;
       }
+      const useVertex = aiBackend === 'vertex';
+      if (useVertex && !isVertexConfigured()) {
+        sendError(
+          res,
+          500,
+          'Vertex not configured: set VERTEX_PROJECT_ID or GOOGLE_CLOUD_PROJECT, VERTEX_LOCATION (optional), and ADC'
+        );
+        return;
+      }
       try {
-        const response = await proxyGenerateContent(model, contents, config);
+        const response = useVertex
+          ? await proxyVertexGenerateContent(model, contents, config)
+          : await proxyGenerateContent(model, contents, config);
         sendJson(res, 200, response);
       } catch (e) {
         const msg = formatErrorDetail(e);
@@ -571,13 +646,17 @@ const server = http.createServer(async (req, res) => {
       service: 'gemini-proxy-api',
       geminiAsyncJobs: geminiAsyncJobs.size,
       geminiProxyInFlight,
+      vertex: {
+        configured: isVertexConfigured(),
+        location: isVertexConfigured() ? vertexLocation() : null,
+      },
     });
     return;
   }
 
   sendJson(res, 404, {
     error:
-      'Not found. POST /proxy/gemini/async + GET /proxy/gemini/async/:jobId; POST /proxy/gemini/generate-content; GET /healthz',
+      'Not found. POST /proxy/gemini/async (body optional aiBackend:vertex) + GET /proxy/gemini/async/:jobId; POST /proxy/gemini/generate-content; GET /healthz',
   });
 });
 

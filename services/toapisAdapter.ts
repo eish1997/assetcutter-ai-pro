@@ -17,10 +17,11 @@
  *    - ToAPIs 侧实际请求名见 DEFAULT_TEXT_MODEL_MAP / DEFAULT_IMAGE_MODEL_MAP；未映射则原样透传（可能 400）。
  *
  * 3) 生图请求体
- *    - `image_urls` 必须为 URL 字符串数组 `["https://..."]`（文档示例），不要用 `{url}` 对象数组。
+ *    - ToAPIs：`image_urls` 为 URL 字符串数组 `["https://..."]`（须先 `/uploads/images`），勿用 `{url}` 对象。
+ *    - Antigravity 图生图：**multipart `/images/edits`** 的 `image1`…，勿依赖 generations JSON 的 `image_urls`（上游不读）。
  *    - `prompt` 有长度上限（TOAPIS_IMAGE_PROMPT_MAX_CHARS），超长会截断（官方 Gemini 无此统一截断）。
- *    - `size` 仅来自 imageConfig.aspectRatio；非法比例会回退 1:1；支持的枚举需与 ToAPIs 各模型文档对齐。
- *    - `config.imageConfig.imageSize`：已映射为 `metadata.resolution`（1K/2K/4K）；2.5 Flash 生图仅支持 1K，请求 2K/4K 时会降级为 1K 以免 400。
+ *    - `size` 来自 imageConfig.aspectRatio：ToAPIs 用比例枚举（如 `16:9`）；**Antigravity（skipToapisImageUpload）须 `WIDTHxHEIGHT`**（见 aspectRatioToAntigravityWxH）。
+ *    - `config.imageConfig.imageSize`：ToAPIs 映射为 `metadata.resolution`（1K/2K/4K）；Antigravity 映射为 OpenAI **`quality`**（standard/medium/hd）；2.5 Flash 生图仅 1K，quality 固定 standard。
  *
  * 4) 结构化输出
  *    - 官方：responseSchema + responseMimeType 可做强 JSON 约束。
@@ -34,6 +35,12 @@
  *
  * 7) 与可选 Gemini 代理（VITE_BULK_IMAGE_API → server/gemini-proxy-api.js）关系
  *    - 选择 ToAPIs 时走本适配层，不会自动改用代理的 `/proxy/gemini/async`。
+ *
+ * 8) Antigravity Tools（本机 OpenAI 兼容反代，与 GitHub `openai.rs` 对齐）
+ *    - **文生图**：`POST /v1/images/generations`（JSON：`prompt/model/n/size/quality/response_format`，**无 `image_urls` 参与上游**，多余字段仅被忽略）。
+ *    - **图生图**：须 `POST /v1/images/edits`（**multipart**：`prompt`、`model`、`image1`/`image2`… 参考图文件、`aspect_ratio` 或 `size`、`image_size` 等）；勿把参考图只塞进 generations 的 JSON。
+ *    - `skipToapisImageUpload`：无 `/v1/uploads/images`；有参考图时走 **edits** multipart，无参考图走 **generations** JSON。
+ *    - 生图响应若含 `data[0].b64_json` / `url`，与 ToAPIs 相同解析；否则再轮询 `id`。
  */
 
 const IMAGE_POLL_MS = 3000;
@@ -162,6 +169,24 @@ async function fetchAsDataUrl(imageUrl: string, signal?: AbortSignal): Promise<s
   return `data:${mime};base64,${b64}`;
 }
 
+/** 读一次 body，同时得到 JSON（若可解析）与原文，便于错误分支展示纯文本（如 Antigravity 返回非 JSON 的 429 说明） */
+async function readResponseBody(res: Response): Promise<{ json: unknown | null; text: string }> {
+  const text = await res.text();
+  const t = text.trim();
+  if (!t) return { json: null, text: '' };
+  try {
+    return { json: JSON.parse(t) as unknown, text: t };
+  } catch {
+    return { json: null, text: t };
+  }
+}
+
+/** 避免对空 body 调用 `Response.json()`（浏览器报 Failed to execute 'json' on 'Response'） */
+async function readResponseJson(res: Response): Promise<unknown | null> {
+  const { json } = await readResponseBody(res);
+  return json;
+}
+
 async function uploadBase64ToToapis(
   baseUrl: string,
   apiKey: string,
@@ -188,7 +213,10 @@ async function uploadBase64ToToapis(
     body: formData,
     signal,
   });
-  const json = (await res.json()) as { success?: boolean; data?: { url?: string }; message?: string };
+  const json = (await readResponseJson(res)) as { success?: boolean; data?: { url?: string }; message?: string } | null;
+  if (!json) {
+    throw new Error(`上传参考图失败（${res.status}）：响应体为空或非 JSON`);
+  }
   if (!res.ok || json.success === false || !json.data?.url) {
     throw new Error(json.message || `上传参考图失败（${res.status}）`);
   }
@@ -208,14 +236,19 @@ async function pollImageTask(
       headers: { Authorization: `Bearer ${apiKey}` },
       signal,
     });
-    const data = (await res.json()) as {
+    const data = (await readResponseJson(res)) as {
       status?: string;
       error?: { message?: string };
       result?: { data?: Array<{ url?: string }> };
-    };
+    } | null;
     if (!res.ok) {
-      const msg = (data as { error?: { message?: string } }).error?.message || `查询任务失败（${res.status}）`;
+      const msg =
+        (data as { error?: { message?: string } } | null)?.error?.message ||
+        (data == null ? `查询任务失败（${res.status}）：空响应` : `查询任务失败（${res.status}）`);
       throw new Error(msg);
+    }
+    if (!data) {
+      throw new Error(`查询任务失败（${res.status}）：响应体为空`);
     }
     const st = data.status;
     if (st === 'completed') {
@@ -249,6 +282,41 @@ function aspectToSize(aspect?: string): string {
   return allowed.has(a) ? a : '1:1';
 }
 
+/**
+ * Antigravity / Imagen 的 OpenAI Images 映射：`size` 须为 `WIDTHxHEIGHT`。
+ * 若传 `16:9` 等比例字符串，代理会解析失败并回退 1:1，极端情况可致上游异常（如 502）。
+ * @see https://opencodedocs.com/lbjlaq/Antigravity-Manager/platforms/imagen
+ */
+function aspectRatioToAntigravityWxH(aspect?: string): string {
+  const a = (aspect || '1:1').trim().toLowerCase();
+  const map: Record<string, string> = {
+    '1:1': '1024x1024',
+    '16:9': '1920x1080',
+    '9:16': '1080x1920',
+    '4:3': '800x600',
+    '3:4': '600x800',
+    '3:2': '768x512',
+    '2:3': '512x768',
+    '4:5': '1024x1280',
+    '5:4': '1280x1024',
+    '21:9': '2560x1080',
+  };
+  return map[a] || '1024x1024';
+}
+
+/** skipToapisImageUpload 路径：用 OpenAI `quality` 映射分辨率档，勿发 ToAPIs 专用 `metadata` */
+function imageSizeToOpenAiQuality(
+  imageSize: string | undefined,
+  mappedModel: string
+): 'standard' | 'medium' | 'hd' {
+  const isFlash25Image = mappedModel.includes('2.5-flash-image');
+  if (isFlash25Image) return 'standard';
+  const raw = (imageSize || '').trim().toUpperCase();
+  if (raw === '4K' || raw === '4') return 'hd';
+  if (raw === '2K' || raw === '2') return 'medium';
+  return 'standard';
+}
+
 /** 站内 imageSize（1K/2K/4K）→ ToAPIs metadata.resolution；2.5 Flash 仅文档支持 1K */
 function toapisImageMetadataResolution(
   imageSize: string | undefined,
@@ -269,8 +337,33 @@ function toapisImageMetadataResolution(
   return resolution ? { resolution } : undefined;
 }
 
-function parseToapisHttpErrorJson(json: unknown, status: number, fallback: string): string {
-  if (!json || typeof json !== 'object') return fallback;
+/** Antigravity-Manager 等在账号轮询失败后返回的文案；附简短排查提示（问题在反代/网络/账号，非本站业务逻辑） */
+function enrichOpenAiGatewayErrorMessage(msg: string): string {
+  const m = (msg || '').trim();
+  if (!m) return msg;
+  if (/All accounts exhausted/i.test(m)) {
+    return `${m}（说明：Antigravity 反代访问 Google 上游 cloudcode-pa.googleapis.com 失败，账号池已全部重试。请在本机检查 Antigravity-Manager 的账号、代理/VPN、防火墙及反代日志。）`;
+  }
+  if (/cloudcode-pa\.googleapis\.com|\/v1internal/i.test(m) && /error sending|request failed|failed to connect|connection/i.test(m)) {
+    return `${m}（说明：多为运行 Antigravity 的环境无法稳定连上 Google API，请检查系统代理是否对该域名生效、DNS 与 TLS。）`;
+  }
+  return msg;
+}
+
+/**
+ * @param rawBodyText 响应原文（非 JSON 时仍可读，如 Antigravity 纯文本错误）
+ */
+function parseToapisHttpErrorJson(
+  json: unknown,
+  status: number,
+  fallback: string,
+  rawBodyText?: string
+): string {
+  const raw = (rawBodyText || '').trim();
+  if (!json || typeof json !== 'object') {
+    const fromText = raw ? (raw.length > 1200 ? `${raw.slice(0, 1200)}…` : raw) : '';
+    return enrichOpenAiGatewayErrorMessage(fromText || fallback);
+  }
   const o = json as Record<string, unknown>;
   const err = o.error;
   if (typeof err === 'string' && err.trim()) {
@@ -278,18 +371,95 @@ function parseToapisHttpErrorJson(json: unknown, status: number, fallback: strin
     if (/Use POST \/jobs/i.test(msg)) {
       return `${msg}（当前 ToAPIs Base URL 似乎指向了其他服务。请在设置中将 ToAPIs Base URL 改为包含 /v1 的网关地址，例如 https://toapis.com/v1）`;
     }
-    return msg;
+    return enrichOpenAiGatewayErrorMessage(msg);
   }
   if (err && typeof err === 'object') {
     const m = (err as { message?: string }).message;
-    if (typeof m === 'string' && m.trim()) return m.trim();
+    if (typeof m === 'string' && m.trim()) return enrichOpenAiGatewayErrorMessage(m.trim());
   }
-  if (typeof o.message === 'string' && o.message.trim()) return o.message.trim();
+  if (typeof o.message === 'string' && o.message.trim()) return enrichOpenAiGatewayErrorMessage(o.message.trim());
   try {
-    return JSON.stringify(json);
+    return enrichOpenAiGatewayErrorMessage(JSON.stringify(json));
   } catch {
-    return fallback || `请求失败（${status}）`;
+    return enrichOpenAiGatewayErrorMessage(fallback || `请求失败（${status}）`);
   }
+}
+
+function dataUrlToBlobAndFilename(dataUrl: string): { blob: Blob; filename: string } {
+  const parsed = dataUrl.trim().match(/^data:([^;,]+);base64,(.+)$/i);
+  let mime = 'image/jpeg';
+  let b64 = dataUrl.replace(/\s/g, '');
+  if (parsed) {
+    mime = parsed[1] || mime;
+    b64 = parsed[2] || '';
+  }
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  const ext = mime.includes('png') ? 'png' : mime.includes('webp') ? 'webp' : mime.includes('gif') ? 'gif' : 'jpg';
+  return { blob: new Blob([bytes], { type: mime }), filename: `ref.${ext}` };
+}
+
+/** Antigravity `handle_images_edits`  multipart 字段 `image_size`（1K/2K/4K） */
+function antigravityEditsFormImageSize(imageSize: string | undefined, mappedModel: string): string | undefined {
+  if (mappedModel.includes('2.5-flash-image')) return '1K';
+  const raw = (imageSize || '').trim().toUpperCase();
+  if (raw === '4K' || raw === '4') return '4K';
+  if (raw === '2K' || raw === '2') return '2K';
+  if (raw === '1K' || raw === '1') return '1K';
+  return undefined;
+}
+
+async function resolveOpenAiImageJsonToCandidates(
+  createJson: unknown,
+  ctx: { baseUrl: string; apiKey: string; signal?: AbortSignal }
+): Promise<{ text?: string; candidates: unknown[] }> {
+  const cj = createJson as {
+    id?: string;
+    data?: Array<{ url?: string; b64_json?: string }>;
+  };
+  const sync0 = Array.isArray(cj.data) ? cj.data[0] : undefined;
+  if (sync0?.b64_json && String(sync0.b64_json).trim()) {
+    return {
+      text: undefined,
+      candidates: [
+        {
+          content: {
+            parts: [{ inlineData: { mimeType: 'image/png', data: String(sync0.b64_json).trim() } }],
+          },
+        },
+      ],
+    };
+  }
+  if (sync0?.url && String(sync0.url).trim()) {
+    const dataUrl = await fetchAsDataUrl(String(sync0.url).trim(), ctx.signal);
+    const base64Part = dataUrl.split(',')[1] || '';
+    return {
+      text: undefined,
+      candidates: [
+        {
+          content: {
+            parts: [{ inlineData: { mimeType: 'image/png', data: base64Part } }],
+          },
+        },
+      ],
+    };
+  }
+  const taskId = cj?.id;
+  if (!taskId) throw new Error('未返回图像任务 ID（且响应中无 OpenAI 风格 data[0].b64_json/url）');
+  const outUrl = await pollImageTask(ctx.baseUrl, ctx.apiKey, taskId, ctx.signal);
+  const dataUrl = await fetchAsDataUrl(outUrl, ctx.signal);
+  const base64Part = dataUrl.split(',')[1] || '';
+  return {
+    text: undefined,
+    candidates: [
+      {
+        content: {
+          parts: [{ inlineData: { mimeType: 'image/png', data: base64Part } }],
+        },
+      },
+    ],
+  };
 }
 
 async function toapisImageGenerateContent(args: {
@@ -299,12 +469,19 @@ async function toapisImageGenerateContent(args: {
   contents: unknown;
   config?: Record<string, unknown>;
   signal?: AbortSignal;
+  mapImageModel?: (internal: string) => string;
+  /** Antigravity 等无 `/v1/uploads/images`：参考图直接塞 data URL，勿先上传换 HTTPS 链 */
+  skipToapisImageUpload?: boolean;
 }): Promise<{ text?: string; candidates?: unknown[] }> {
   const cfg = args.config || {};
   const systemInstruction = typeof cfg.systemInstruction === 'string' ? cfg.systemInstruction : '';
   const imageConfig = (cfg.imageConfig || {}) as { aspectRatio?: string; imageSize?: string };
-  const size = aspectToSize(imageConfig.aspectRatio);
-  const mappedModel = mapToapisImageModel(args.model);
+  const useAntigravityImageShape = args.skipToapisImageUpload === true;
+  const size = useAntigravityImageShape
+    ? aspectRatioToAntigravityWxH(imageConfig.aspectRatio)
+    : aspectToSize(imageConfig.aspectRatio);
+  const mapImg = args.mapImageModel ?? mapToapisImageModel;
+  const mappedModel = mapImg(args.model);
   const metaRes = toapisImageMetadataResolution(imageConfig.imageSize, mappedModel);
 
   const turns = parseContents(args.contents);
@@ -322,11 +499,56 @@ async function toapisImageGenerateContent(args: {
   let prompt = clampToapisImagePrompt(systemInstruction, userText, TOAPIS_IMAGE_PROMPT_MAX_CHARS);
   if (!prompt) throw new Error('生图提示词为空');
 
-  /** ToAPIs 文档示例为 URL 字符串数组，对象形式会导致 400 */
+  /**
+   * Antigravity：`/images/generations` 上游只用纯文本 prompt，**不读 `image_urls`**。
+   * 图生图须走 `/images/edits`（multipart，`image1`…），见 lbjlaq/Antigravity-Manager `handle_images_edits`。
+   */
+  if (useAntigravityImageShape && inlineImages.length > 0) {
+    const form = new FormData();
+    form.append('prompt', prompt);
+    form.append('model', mappedModel);
+    form.append('n', '1');
+    form.append('response_format', 'b64_json');
+    form.append('aspect_ratio', aspectToSize(imageConfig.aspectRatio));
+    const isz = antigravityEditsFormImageSize(imageConfig.imageSize, mappedModel);
+    if (isz) form.append('image_size', isz);
+    inlineImages.forEach((du, i) => {
+      const { blob, filename } = dataUrlToBlobAndFilename(du);
+      form.append(`image${i + 1}`, blob, filename);
+    });
+    const editRes = await fetch(`${args.baseUrl}/images/edits`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${args.apiKey}` },
+      body: form,
+      signal: args.signal,
+    });
+    const { json: editJson, text: editBodyText } = await readResponseBody(editRes);
+    if (!editRes.ok) {
+      throw new Error(
+        parseToapisHttpErrorJson(
+          editJson,
+          editRes.status,
+          `图像编辑/参考图生图失败（${editRes.status}）`,
+          editBodyText
+        )
+      );
+    }
+    return resolveOpenAiImageJsonToCandidates(editJson, {
+      baseUrl: args.baseUrl,
+      apiKey: args.apiKey,
+      signal: args.signal,
+    });
+  }
+
+  /** ToAPIs：先 POST /uploads/images 换 URL；Antigravity 文生图无参考图则不走 uploads */
   const imageUrlStrings: string[] = [];
-  for (const dataUrl of inlineImages) {
-    const url = await uploadBase64ToToapis(args.baseUrl, args.apiKey, dataUrl, args.signal);
-    imageUrlStrings.push(url);
+  if (args.skipToapisImageUpload === true) {
+    imageUrlStrings.push(...inlineImages);
+  } else {
+    for (const dataUrl of inlineImages) {
+      const url = await uploadBase64ToToapis(args.baseUrl, args.apiKey, dataUrl, args.signal);
+      imageUrlStrings.push(url);
+    }
   }
 
   const body: Record<string, unknown> = {
@@ -335,7 +557,10 @@ async function toapisImageGenerateContent(args: {
     size,
     n: 1,
   };
-  if (metaRes) {
+  if (useAntigravityImageShape) {
+    body.response_format = 'b64_json';
+    body.quality = imageSizeToOpenAiQuality(imageConfig.imageSize, mappedModel);
+  } else if (metaRes) {
     body.metadata = { ...metaRes };
   }
   if (imageUrlStrings.length > 0) {
@@ -351,33 +576,69 @@ async function toapisImageGenerateContent(args: {
     body: JSON.stringify(body),
     signal: args.signal,
   });
-  let createJson: unknown;
-  try {
-    createJson = await createRes.json();
-  } catch {
-    createJson = null;
-  }
+  const { json: createJson, text: createBodyText } = await readResponseBody(createRes);
   if (!createRes.ok) {
     throw new Error(
-      parseToapisHttpErrorJson(createJson, createRes.status, `创建图像任务失败（${createRes.status}）`)
+      parseToapisHttpErrorJson(
+        createJson,
+        createRes.status,
+        `创建图像任务失败（${createRes.status}）`,
+        createBodyText
+      )
     );
   }
-  const taskId = (createJson as { id?: string })?.id;
-  if (!taskId) throw new Error('未返回图像任务 ID');
 
-  const outUrl = await pollImageTask(args.baseUrl, args.apiKey, taskId, args.signal);
-  const dataUrl = await fetchAsDataUrl(outUrl, args.signal);
-  const base64Part = dataUrl.split(',')[1] || '';
-  return {
-    text: undefined,
-    candidates: [
-      {
-        content: {
-          parts: [{ inlineData: { mimeType: 'image/png', data: base64Part } }],
-        },
-      },
-    ],
-  };
+  return resolveOpenAiImageJsonToCandidates(createJson, {
+    baseUrl: args.baseUrl,
+    apiKey: args.apiKey,
+    signal: args.signal,
+  });
+}
+
+/**
+ * 解析 OpenAI 兼容 chat/completions 的 HTTP 正文：标准 JSON，或部分网关误返回的 SSE（data: 行）。
+ * 空 body 时避免裸 `JSON.parse('')`（浏览器报 Unexpected end of JSON input / Failed to execute 'json' on 'Response'）。
+ */
+function parseOpenAiChatCompletionsBody(raw: string): { choices?: Array<{ message?: { content?: unknown } }> } {
+  const t = (raw || '').trim();
+  if (!t) {
+    throw new Error(
+      'Chat 响应体为空（请确认 Antigravity 反代已启动，且 Base URL 指向 /v1/chat/completions 可达地址）'
+    );
+  }
+  try {
+    return JSON.parse(t) as { choices?: Array<{ message?: { content?: unknown } }> };
+  } catch {
+    /* 非整段 JSON：尝试按 SSE 聚合 */
+  }
+  if (!/\bdata:\s*/i.test(t)) {
+    throw new Error(`Chat 响应不是合法 JSON：${t.slice(0, 120)}${t.length > 120 ? '…' : ''}`);
+  }
+  const parts: string[] = [];
+  for (const line of t.split(/\r?\n/)) {
+    const s = line.trim();
+    if (!s.startsWith('data:')) continue;
+    const payload = s.slice(5).trim();
+    if (payload === '[DONE]') continue;
+    let j: { choices?: Array<{ delta?: { content?: string }; message?: { content?: string } }> };
+    try {
+      j = JSON.parse(payload) as typeof j;
+    } catch {
+      continue;
+    }
+    const ch0 = j.choices?.[0];
+    const d = ch0?.delta?.content;
+    const m = ch0?.message?.content;
+    if (typeof d === 'string' && d) parts.push(d);
+    else if (typeof m === 'string' && m) parts.push(m);
+  }
+  const merged = parts.join('');
+  if (!merged.trim()) {
+    throw new Error(
+      'Chat 返回为 SSE 流但未解析到助手正文（已在请求中强制 stream:false；若仍如此请检查网关配置）'
+    );
+  }
+  return { choices: [{ message: { content: merged } }] };
 }
 
 async function toapisChatGenerateContent(args: {
@@ -387,16 +648,20 @@ async function toapisChatGenerateContent(args: {
   contents: unknown;
   config?: Record<string, unknown>;
   signal?: AbortSignal;
+  mapTextModel?: (internal: string) => string;
 }): Promise<{ text?: string; candidates?: unknown[] }> {
   const cfg = args.config || {};
   const systemInstruction = typeof cfg.systemInstruction === 'string' ? cfg.systemInstruction : undefined;
   const responseMimeType = cfg.responseMimeType as string | undefined;
   const messages = buildOpenAIMessages(args.contents, systemInstruction);
-  const mappedModel = mapToapisTextModel(args.model);
+  const mapTxt = args.mapTextModel ?? mapToapisTextModel;
+  const mappedModel = mapTxt(args.model);
 
   const body: Record<string, unknown> = {
     model: mappedModel,
     messages,
+    /** 部分反代默认流式，整段 `res.text()` 会得到非 JSON，导致解析失败 */
+    stream: false,
   };
   if (responseMimeType === 'application/json') {
     body.response_format = { type: 'json_object' };
@@ -415,20 +680,23 @@ async function toapisChatGenerateContent(args: {
   if (!res.ok) {
     let parsed: unknown;
     try {
-      parsed = JSON.parse(raw) as unknown;
+      parsed = raw.trim() ? (JSON.parse(raw) as unknown) : null;
     } catch {
       parsed = null;
     }
-    throw new Error(parseToapisHttpErrorJson(parsed, res.status, raw || `Chat 请求失败（${res.status}）`));
+    throw new Error(
+      parseToapisHttpErrorJson(parsed, res.status, raw || `Chat 请求失败（${res.status}）`, raw)
+    );
   }
-  let parsed: { choices?: Array<{ message?: { content?: string } }> };
-  try {
-    parsed = JSON.parse(raw) as typeof parsed;
-  } catch {
-    throw new Error('Chat 响应不是合法 JSON');
-  }
-  const text = parsed.choices?.[0]?.message?.content ?? '';
-  return buildGeminiLikeTextResponse(typeof text === 'string' ? text : String(text));
+  const parsed = parseOpenAiChatCompletionsBody(raw);
+  const content = parsed.choices?.[0]?.message?.content;
+  const text =
+    typeof content === 'string'
+      ? content
+      : content != null
+        ? String(content)
+        : '';
+  return buildGeminiLikeTextResponse(text);
 }
 
 export type GeminiClientLike = {
@@ -442,8 +710,22 @@ export type GeminiClientLike = {
   };
 };
 
-export function createToapisGeminiClient(baseUrl: string, apiKey: string): GeminiClientLike {
+/** Antigravity 等在网关侧自行映射模型：勿使用 ToAPIs 的 *-official 等后缀改写 */
+export type CreateToapisGeminiClientOptions = {
+  passthroughModels?: boolean;
+  /** 为 true 时不请求 ToAPIs `/uploads/images`；Antigravity 下文生图走 JSON，**有参考图**走 `/images/edits` multipart */
+  skipToapisImageUpload?: boolean;
+};
+
+export function createToapisGeminiClient(
+  baseUrl: string,
+  apiKey: string,
+  options?: CreateToapisGeminiClientOptions
+): GeminiClientLike {
   const base = normalizeToapisBaseUrl(baseUrl);
+  const mapTextModel = options?.passthroughModels === true ? (m: string) => m : mapToapisTextModel;
+  const mapImageModel = options?.passthroughModels === true ? (m: string) => m : mapToapisImageModel;
+  const skipToapisImageUpload = options?.skipToapisImageUpload === true;
   return {
     models: {
       async generateContent(args) {
@@ -457,6 +739,8 @@ export function createToapisGeminiClient(baseUrl: string, apiKey: string): Gemin
             contents: args.contents,
             config: cfg,
             signal,
+            mapImageModel,
+            skipToapisImageUpload,
           });
         }
         return toapisChatGenerateContent({
@@ -466,13 +750,14 @@ export function createToapisGeminiClient(baseUrl: string, apiKey: string): Gemin
           contents: args.contents,
           config: cfg,
           signal,
+          mapTextModel,
         });
       },
       async *generateContentStream(args) {
         const cfg = (args.config || {}) as Record<string, unknown>;
         const systemInstruction = typeof cfg.systemInstruction === 'string' ? cfg.systemInstruction : undefined;
         const messages = buildOpenAIMessages(args.contents, systemInstruction);
-        const mappedModel = mapToapisTextModel(args.model);
+        const mappedModel = mapTextModel(args.model);
         const ac = new AbortController();
         const signal = cfg.abortSignal as AbortSignal | undefined;
         if (signal) {
@@ -500,7 +785,9 @@ export function createToapisGeminiClient(baseUrl: string, apiKey: string): Gemin
           } catch {
             parsed = null;
           }
-          throw new Error(parseToapisHttpErrorJson(parsed, res.status, t || `流式请求失败（${res.status}）`));
+          throw new Error(
+            parseToapisHttpErrorJson(parsed, res.status, t || `流式请求失败（${res.status}）`, t)
+          );
         }
         const reader = res.body?.getReader();
         if (!reader) throw new Error('无法读取流式响应');

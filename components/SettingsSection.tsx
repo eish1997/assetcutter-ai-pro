@@ -15,6 +15,10 @@ import {
   setToapisApiKey,
   getToapisBaseUrl,
   setToapisBaseUrl,
+  getAntigravityApiKey,
+  setAntigravityApiKey,
+  getAntigravityBaseUrl,
+  setAntigravityBaseUrl,
   getVectorengineApiKey,
   setVectorengineApiKey,
   getVectorengineBaseUrl,
@@ -37,7 +41,9 @@ const SETTINGS_NAV: { id: string; label: string }[] = [
 
 const AI_PROVIDER_OPTIONS: { value: AiProvider; label: string }[] = [
   { value: 'gemini', label: 'Google Gemini（官方 API）' },
+  { value: 'vertex', label: 'Vertex AI（GCP · 经本站 gemini-proxy）' },
   { value: 'toapis', label: 'ToAPIs 网关（OpenAI 兼容 + 异步生图）' },
+  { value: 'antigravity', label: 'Antigravity Tools（本机 OpenAI 兼容反代）' },
   { value: 'vectorengine', label: '向量引擎 VectorEngine（Gemini 原生 REST）' },
 ];
 
@@ -46,12 +52,16 @@ const SettingsSection: React.FC<{
   authLoading?: boolean;
   onRefreshUser?: () => Promise<void>;
   onLogout?: () => Promise<void>;
-}> = ({ currentUser = null, authLoading = false, onRefreshUser, onLogout }) => {
+  /** 切换 AI 供应商后通知父级刷新顶栏等平台文案 */
+  onAiInvocationSurfaceChange?: () => void;
+}> = ({ currentUser = null, authLoading = false, onRefreshUser, onLogout, onAiInvocationSurfaceChange }) => {
   const contentRef = useRef<HTMLDivElement>(null);
   const [aiProvider, setAiProviderState] = useState<AiProvider>('gemini');
   const [apiKey, setApiKey] = useState('');
   const [toapisApiKey, setToapisApiKeyState] = useState('');
   const [toapisBaseUrl, setToapisBaseUrlState] = useState('');
+  const [antigravityApiKey, setAntigravityApiKeyState] = useState('');
+  const [antigravityBaseUrl, setAntigravityBaseUrlState] = useState('');
   const [vectorengineApiKey, setVectorengineApiKeyState] = useState('');
   const [vectorengineBaseUrl, setVectorengineBaseUrlState] = useState('');
   const [tencentSecretId, setTencentSecretId] = useState('');
@@ -75,6 +85,8 @@ const SettingsSection: React.FC<{
     setApiKey(getUserApiKey() ?? '');
     setToapisApiKeyState(getToapisApiKey() ?? '');
     setToapisBaseUrlState(getToapisBaseUrl());
+    setAntigravityApiKeyState(getAntigravityApiKey() ?? '');
+    setAntigravityBaseUrlState(getAntigravityBaseUrl());
     setVectorengineApiKeyState(getVectorengineApiKey() ?? '');
     setVectorengineBaseUrlState(getVectorengineBaseUrl());
     setTencentSecretId(getTencentSecretId() ?? '');
@@ -94,6 +106,13 @@ const SettingsSection: React.FC<{
     setTimeout(() => setSaved(false), 2000);
   };
 
+  const handleSaveAntigravity = () => {
+    setAntigravityApiKey(antigravityApiKey.trim() || null);
+    setAntigravityBaseUrl(antigravityBaseUrl.trim() || null);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  };
+
   const handleSaveVectorengine = () => {
     setVectorengineApiKey(vectorengineApiKey.trim() || null);
     setVectorengineBaseUrl(vectorengineBaseUrl.trim() || null);
@@ -103,9 +122,18 @@ const SettingsSection: React.FC<{
 
   const handleAiProviderChange = (value: string) => {
     const v: AiProvider =
-      value === 'toapis' ? 'toapis' : value === 'vectorengine' ? 'vectorengine' : 'gemini';
+      value === 'vertex'
+        ? 'vertex'
+        : value === 'toapis'
+          ? 'toapis'
+          : value === 'antigravity'
+            ? 'antigravity'
+            : value === 'vectorengine'
+              ? 'vectorengine'
+              : 'gemini';
     setAiProviderState(v);
     setAiProvider(v);
+    onAiInvocationSurfaceChange?.();
   };
 
   const handleSaveTencent = () => {
@@ -399,6 +427,18 @@ const SettingsSection: React.FC<{
                         </button>
                       </div>
                     </>
+                  ) : aiProvider === 'vertex' ? (
+                    <>
+                      <h4 className="text-[10px] font-bold text-white/80 uppercase tracking-wider">Vertex AI</h4>
+                      <p className="text-[9px] text-gray-500 leading-relaxed">
+                        不在浏览器保存 GCP 密钥。请由部署方在 <strong className="text-gray-400">gemini-proxy</strong> 配置{' '}
+                        <code className="text-gray-400">VERTEX_PROJECT_ID</code> 或{' '}
+                        <code className="text-gray-400">GOOGLE_CLOUD_PROJECT</code>、可选{' '}
+                        <code className="text-gray-400">VERTEX_LOCATION</code>（默认 global）及服务账号 / ADC；前端构建需设置{' '}
+                        <code className="text-gray-400">VITE_BULK_IMAGE_API</code> 指向该代理。详见{' '}
+                        <code className="text-gray-400">docs/VERTEX_AI_INTEGRATION.md</code>。
+                      </p>
+                    </>
                   ) : aiProvider === 'toapis' ? (
                     <>
                       <h4 className="text-[10px] font-bold text-white/80 uppercase tracking-wider">ToAPIs</h4>
@@ -419,6 +459,42 @@ const SettingsSection: React.FC<{
                         >
                           {saved ? '已保存' : '保存'}
                         </button>
+                      </div>
+                    </>
+                  ) : aiProvider === 'antigravity' ? (
+                    <>
+                      <h4 className="text-[10px] font-bold text-white/80 uppercase tracking-wider">Antigravity Tools</h4>
+                      <p className="text-[9px] text-gray-500 leading-relaxed">
+                        在本机启动 Antigravity 的「API 反代」后填写；Base URL 须指向 OpenAI 兼容前缀（含 /v1），默认本机 8045 端口。若浏览器跨域失败，可在 vite 配置同源代理后再填代理路径。
+                      </p>
+                      <div className="space-y-3">
+                        <input
+                          type="url"
+                          value={antigravityBaseUrl}
+                          onChange={(e) => setAntigravityBaseUrlState(e.target.value)}
+                          onBlur={handleSaveAntigravity}
+                          placeholder="http://127.0.0.1:8045/v1"
+                          className="w-full min-w-0 px-4 py-3 rounded-xl bg-[#16161a] border border-[#2e2e32] text-sm text-white placeholder-gray-500 focus:border-[#3b82f6] focus:outline-none"
+                          autoComplete="off"
+                        />
+                        <div className="flex flex-col sm:flex-row gap-3">
+                          <input
+                            type="password"
+                            value={antigravityApiKey}
+                            onChange={(e) => setAntigravityApiKeyState(e.target.value)}
+                            onBlur={handleSaveAntigravity}
+                            placeholder="Antigravity 反代 API Key"
+                            className="flex-1 min-w-0 px-4 py-3 rounded-xl bg-[#16161a] border border-[#2e2e32] text-sm text-white placeholder-gray-500 focus:border-[#3b82f6] focus:outline-none"
+                            autoComplete="off"
+                          />
+                          <button
+                            type="button"
+                            onClick={handleSaveAntigravity}
+                            className="shrink-0 px-5 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-black uppercase tracking-wider transition-colors"
+                          >
+                            {saved ? '已保存' : '保存'}
+                          </button>
+                        </div>
                       </div>
                     </>
                   ) : (

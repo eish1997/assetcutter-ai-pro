@@ -64,9 +64,10 @@
 - `assetcutter-auth-api`：`AUTH_ADMIN_EMAIL`、`AUTH_ADMIN_PASSWORD`（可选 `AUTH_ADMIN_USERNAME`）；**生产启动使用 `npm run start:auth-backend`**（仅 `node server/auth-api.js`，环境变量以 Dashboard 为准）。勿用 `dev:auth-backend`：其中含 Windows 的 `set` 与 `--env-file=.env.local`，在 Render（Linux）上会部署失败。
 - **必配**：`AUTH_ALLOWED_ORIGINS`（含前端完整 Origin，如 `https://xxx.vercel.app`）、`DATABASE_URL`（Blueprint 会从 Postgres 注入）；生产还要求 `AUTH_COOKIE_SAMESITE=none` 与 `AUTH_COOKIE_SECURE=true`（`render.yaml` 已写）。
 - **Gemini 代理**（`assetcutter-gemini-proxy`）：在 Dashboard 配置 `GEMINI_API_KEY`、`PROXY_ALLOWED_ORIGINS`（含 Vercel 前端 Origin）；前端构建变量 `VITE_BULK_IMAGE_API=https://该服务.onrender.com`（无尾斜杠）。
+- **Vertex AI（可选）**：同一代理进程可配置 `VERTEX_PROJECT_ID`（或 `GOOGLE_CLOUD_PROJECT`）、`VERTEX_LOCATION`（默认 `global`）、ADC（如 `GOOGLE_APPLICATION_CREDENTIALS`）；设置页选择「Vertex」后，前端请求体会带 `aiBackend:vertex`。详见 [docs/VERTEX_AI_INTEGRATION.md](docs/VERTEX_AI_INTEGRATION.md)。
 
 **前端（如 Vercel）+ 可选 Gemini 代理（如 Render）**  
-若浏览器未配置官方 Key，或需避免长请求被平台超时：构建时设置 `VITE_BULK_IMAGE_API` 指向 `server/gemini-proxy-api.js` 的公网地址；Gemini key 仅配置在后端（`GEMINI_API_KEY` 或 `GEMINI_API_KEYS`）。对话/网站助手等经 **`POST /proxy/gemini/async` + 轮询 `GET /proxy/gemini/async/:jobId`**。异步并发/重试可通过 `GEMINI_ASYNC_PROXY_MAX_CONCURRENT`、`GEMINI_PROXY_RETRIES`、`GEMINI_ASYNC_JOB_TTL_MS`、`GEMINI_ASYNC_JOB_MAX_WAIT_MS` 调整；跨域允许源通过 `PROXY_ALLOWED_ORIGINS` 配置。
+若浏览器未配置官方 Key，或需避免长请求被平台超时：构建时设置 `VITE_BULK_IMAGE_API` 指向 `server/gemini-proxy-api.js` 的公网地址；Gemini key 仅配置在后端（`GEMINI_API_KEY` 或 `GEMINI_API_KEYS`）。对话/网站助手等经 **`POST /proxy/gemini/async` + 轮询 `GET /proxy/gemini/async/:jobId`**（Vertex 路径在同一接口增加 `aiBackend:vertex`）。异步并发/重试可通过 `GEMINI_ASYNC_PROXY_MAX_CONCURRENT`、`GEMINI_PROXY_RETRIES`、`GEMINI_ASYNC_JOB_TTL_MS`、`GEMINI_ASYNC_JOB_MAX_WAIT_MS` 调整；跨域允许源通过 `PROXY_ALLOWED_ORIGINS` 配置。
 
 **可选：入站密码**  
 在环境变量、`.env` 或本地开发时的 `.env.local` 中设置 `VITE_SITE_PASSWORD` 后，打开网站会先要求输入密码，正确后才进入应用；同一标签页内刷新无需重输，关闭标签页后需重新输入。不设置则无密码门控。

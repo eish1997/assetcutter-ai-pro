@@ -73,10 +73,17 @@ function getCsrfHeader(): Record<string, string> {
   return {};
 }
 
+function r2PutBodyByteLength(body: string | ArrayBuffer | Blob): number {
+  if (typeof body === 'string') return new TextEncoder().encode(body).byteLength;
+  if (body instanceof ArrayBuffer) return body.byteLength;
+  return body.size;
+}
+
 async function putObjectBytes(objectKey: string, contentType: string, body: string | ArrayBuffer | Blob): Promise<void> {
+  const contentLength = r2PutBodyByteLength(body);
   const { uploadUrl } = await requestJson<UploadUrlResponse>(r2ApiUrl('/upload-url'), {
     method: 'POST',
-    body: JSON.stringify({ objectKey, contentType, expiresIn: 900 }),
+    body: JSON.stringify({ objectKey, contentType, expiresIn: 900, contentLength }),
   });
   const put = await fetch(uploadUrl, {
     method: 'PUT',
