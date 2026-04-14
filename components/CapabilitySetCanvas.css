@@ -150,6 +150,24 @@
   transform: translate(50%, -50%) !important;
 }
 
+.test-stop-node__preview {
+  width: 64px;
+  height: 64px;
+  margin-top: 4px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  flex-shrink: 0;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.test-stop-node__preview-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
 .test-stop-node__stem {
   width: 1.5px;
   height: 14px;
@@ -175,6 +193,11 @@
   cursor: pointer;
   white-space: nowrap;
   outline: none;
+}
+
+.test-stop-node__run:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .test-stop-node__run:hover {
@@ -433,6 +456,11 @@
   font-size: 7px;
   line-height: 1.2;
   cursor: pointer;
+}
+
+.output-node__run:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .output-node__run:hover {
@@ -881,4 +909,188 @@
   background: rgba(6, 6, 10, 0.45) !important;
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
+}
+
+/* 全屏工作流收起：左侧浮层滑出屏外；画布淡出；节点替身飞入 dock；右侧控件移出 */
+@keyframes ac-cap-dock-sidebar-leave {
+  0% {
+    transform: translate3d(0, 0, 0);
+    opacity: 1;
+    filter: blur(0);
+  }
+  100% {
+    transform: translate3d(calc(-100% - 56px), 0, 0);
+    opacity: 0;
+    filter: blur(3px);
+  }
+}
+
+@keyframes ac-cap-dock-main-fadeout {
+  from {
+    opacity: 1;
+    filter: blur(0);
+  }
+  to {
+    opacity: 0;
+    filter: blur(2px);
+  }
+}
+
+@keyframes ac-cap-dock-main-fadein {
+  from {
+    opacity: 0;
+    filter: blur(2px);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+  }
+}
+
+@keyframes ac-cap-dock-right-chrome-out {
+  from {
+    transform: translate3d(0, 0, 0);
+    opacity: 1;
+  }
+  to {
+    transform: translate3d(calc(100% + 48px), 0, 0);
+    opacity: 0;
+  }
+}
+
+/* --sx/--sy/--ex/--ey 为节点与 dock 的中心；--half 为替身正方形边长的一半（默认 36px = 72px 边长） */
+@keyframes ac-cap-node-fly-to-dock-acc {
+  0% {
+    transform: translate3d(calc(var(--sx) - var(--half)), calc(var(--sy) - var(--half)), 0) scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: translate3d(calc(var(--ex) - var(--half)), calc(var(--ey) - var(--half)), 0) scale(0.34);
+    opacity: 0.92;
+  }
+}
+
+.ac-cap-dock-node-fly {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 2210;
+  pointer-events: none;
+  width: 72px;
+  height: 72px;
+  animation: ac-cap-node-fly-to-dock-acc 0.58s cubic-bezier(0.22, 0.85, 0.28, 1) forwards;
+  will-change: transform, opacity;
+}
+
+.ac-cap-dock-node-fly__card {
+  transform: translateZ(0);
+}
+
+.dndflow--overlay-glass .sidebar.ac-cap-dock-sidebar-leave {
+  animation: ac-cap-dock-sidebar-leave 0.5s cubic-bezier(0.32, 0.72, 0, 1) forwards;
+  pointer-events: none;
+  will-change: transform, opacity, filter;
+}
+
+.dndflow--overlay-glass .sidebar.ac-cap-dock-sidebar-enter {
+  animation: ac-cap-dock-sidebar-leave 0.48s cubic-bezier(0.2, 0.9, 0.32, 1) reverse both;
+  pointer-events: none;
+  will-change: transform, opacity, filter;
+}
+
+.dndflow--overlay-glass .reactflow-wrapper.ac-cap-dock-main-fadeout {
+  animation: ac-cap-dock-main-fadeout 0.55s cubic-bezier(0.25, 0.85, 0.35, 1) forwards;
+  pointer-events: none;
+}
+
+.dndflow--overlay-glass .reactflow-wrapper.ac-cap-dock-main-fadein {
+  animation: ac-cap-dock-main-fadein 0.48s cubic-bezier(0.26, 1.05, 0.36, 1) both;
+  pointer-events: none;
+}
+
+.dndflow--dock-collapsing .svelteflow-controls {
+  animation: ac-cap-dock-right-chrome-out 0.46s cubic-bezier(0.32, 0.72, 0, 1) forwards;
+  will-change: transform, opacity;
+}
+
+.dndflow--dock-collapsing .react-flow__minimap.svelteflow-minimap {
+  animation: ac-cap-dock-right-chrome-out 0.46s cubic-bezier(0.32, 0.72, 0, 1) forwards;
+  will-change: transform, opacity;
+}
+
+.dndflow--dock-expanding .svelteflow-controls {
+  animation: ac-cap-dock-right-chrome-out 0.4s cubic-bezier(0.2, 0.9, 0.32, 1) reverse both;
+}
+
+.dndflow--dock-expanding .react-flow__minimap.svelteflow-minimap {
+  animation: ac-cap-dock-right-chrome-out 0.4s cubic-bezier(0.2, 0.9, 0.32, 1) reverse both;
+}
+
+.dndflow--dock-collapsing .react-flow__node {
+  opacity: 0 !important;
+  transition: opacity 0.06s linear;
+}
+
+.dndflow--dock-collapsing .react-flow__edge {
+  opacity: 0 !important;
+  transition: opacity 0.08s linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ac-cap-dock-node-fly {
+    animation: none !important;
+    opacity: 0 !important;
+  }
+
+  .dndflow--overlay-glass .sidebar.ac-cap-dock-sidebar-leave {
+    animation: ac-cap-dock-sidebar-leave-simple 0.16s ease forwards !important;
+  }
+
+  .dndflow--overlay-glass .sidebar.ac-cap-dock-sidebar-enter {
+    animation: ac-cap-dock-sidebar-leave-simple 0.16s ease reverse both !important;
+  }
+
+  .dndflow--overlay-glass .reactflow-wrapper.ac-cap-dock-main-fadeout {
+    animation: ac-cap-dock-main-simple 0.18s ease forwards !important;
+  }
+
+  .dndflow--overlay-glass .reactflow-wrapper.ac-cap-dock-main-fadein {
+    animation: ac-cap-dock-main-simple 0.18s ease reverse both !important;
+  }
+
+  .dndflow--dock-collapsing .svelteflow-controls,
+  .dndflow--dock-collapsing .react-flow__minimap.svelteflow-minimap {
+    animation: none !important;
+    opacity: 0;
+    transform: translate3d(24px, 0, 0);
+  }
+
+  .dndflow--dock-expanding .svelteflow-controls,
+  .dndflow--dock-expanding .react-flow__minimap.svelteflow-minimap {
+    animation: none !important;
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes ac-cap-dock-sidebar-leave-simple {
+  from {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    opacity: 0;
+    transform: translate3d(-24px, 0, 0);
+  }
+}
+
+@keyframes ac-cap-dock-main-simple {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.94);
+  }
 }

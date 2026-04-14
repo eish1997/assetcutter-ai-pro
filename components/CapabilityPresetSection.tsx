@@ -15,6 +15,7 @@ import { useStoreCatalog } from '../services/storeCatalogHook';
 import { publishPresetToUserR2Catalog } from '../services/capabilityPresetR2Publish';
 import { resolveCapabilityPreviewSrc } from '../services/capabilityPreviewUrl';
 import { mergeCardAspectFromIntrinsic } from './workflow/workflowCardAspect';
+import { uuid } from './workflow/workflowIds';
 import { DT_AC_CAPABILITY_FROM_EDITOR } from '../services/workflowDragPipeline';
 import WorkflowComposerOverlay from './WorkflowComposerOverlay';
 import { CapabilityPreviewImg } from './CapabilityPreviewImg';
@@ -42,9 +43,14 @@ const CapabilityPresetSection: React.FC<{
   scrollContainerRef?: React.Ref<HTMLDivElement>;
 }> = ({ presets, onUpdate, sets = [], onUpdateSets, onOpenWorkflowComposer, onRunTest, onLog, embeddedInWorkflow = false, canUploadToR2 = false, scrollContainerRef }) => {
   const [viewMode, setViewMode] = useState<ViewMode>('presets');
-  const [canvasSet, setCanvasSet] = useState<CapabilitySet | null>(null);
-  const [composerOpen, setComposerOpen] = useState(false);
-  const [composerSessionKey, setComposerSessionKey] = useState(0);
+  type EmbedComposerSession = { id: string; initialSet: CapabilitySet | null; sessionKey: number };
+  const [embedComposerSessions, setEmbedComposerSessions] = useState<EmbedComposerSession[]>([]);
+  const [embedComposerActiveId, setEmbedComposerActiveId] = useState<string | null>(null);
+  const [embedComposerMinimized, setEmbedComposerMinimized] = useState<Record<string, boolean>>({});
+  const embedComposerActiveIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    embedComposerActiveIdRef.current = embedComposerActiveId;
+  }, [embedComposerActiveId]);
   const reindex = (list: CustomAppModule[]) => list.map((p, i) => ({ ...p, order: i }));
   const update = (list: CustomAppModule[]) => onUpdate(reindex(list));
   const getEngine = (p: CustomAppModule): CapabilityEngine => getCapabilityEngine(p);
@@ -800,29 +806,62 @@ const CapabilityPresetSection: React.FC<{
   };
 
   const openNewSet = () => {
-    setCanvasSet(null);
     if (onOpenWorkflowComposer) {
       onOpenWorkflowComposer(null);
       return;
     }
-    setComposerSessionKey((k) => k + 1);
-    setComposerOpen(true);
+    const id = uuid();
+    setEmbedComposerSessions((prev) => [...prev, { id, initialSet: null, sessionKey: Date.now() }]);
+    setEmbedComposerActiveId(id);
   };
 
   const openEditSet = (set: CapabilitySet) => {
-    setCanvasSet(set);
     if (onOpenWorkflowComposer) {
       onOpenWorkflowComposer(set);
       return;
     }
-    setComposerSessionKey((k) => k + 1);
-    setComposerOpen(true);
+    const id = uuid();
+    setEmbedComposerSessions((prev) => [...prev, { id, initialSet: set, sessionKey: Date.now() }]);
+    setEmbedComposerActiveId(id);
   };
 
-  const closeCanvas = () => {
-    setComposerOpen(false);
-    setCanvasSet(null);
-  };
+  const closeEmbedComposerSession = useCallback((sessionId: string) => {
+    setEmbedComposerSessions((prev) => {
+      const next = prev.filter((s) => s.id !== sessionId);
+      const wasActive = embedComposerActiveIdRef.current === sessionId;
+      if (wasActive) {
+        const nextActive = next[0]?.id ?? null;
+        embedComposerActiveIdRef.current = nextActive;
+        setEmbedComposerActiveId(nextActive);
+      }
+      return next;
+    });
+    setEmbedComposerMinimized((m) => {
+      if (!(sessionId in m)) return m;
+      const { [sessionId]: _, ...rest } = m;
+      return rest;
+    });
+  }, []);
+
+  const getEmbedComposerDockStackIndex = useCallback(
+    (sessionId: string) => {
+      const minimizedOrdered = embedComposerSessions.filter((s) => embedComposerMinimized[s.id]);
+      const idx = minimizedOrdered.findIndex((s) => s.id === sessionId);
+      if (idx >= 0) return idx;
+      return minimizedOrdered.length;
+    },
+    [embedComposerSessions, embedComposerMinimized]
+  );
+  const getEmbedComposerDockStackCount = useCallback(
+    (sessionId: string) => {
+      const minimizedOrdered = embedComposerSessions.filter((s) => embedComposerMinimized[s.id]);
+      if (embedComposerMinimized[sessionId]) {
+        return Math.max(1, minimizedOrdered.length);
+      }
+      return Math.max(1, minimizedOrdered.length + 1);
+    },
+    [embedComposerSessions, embedComposerMinimized]
+  );
 
   const handleSaveSet = (set: CapabilitySet) => {
     const next = sets.some((s) => s.id === set.id)
@@ -830,7 +869,6 @@ const CapabilityPresetSection: React.FC<{
       : [...sets, set];
     onUpdateSets?.(next);
     onLog?.('info', `已保存能力集合：${set.label}`, undefined);
-    closeCanvas();
   };
 
   const removeSet = (id: string) => {
@@ -1500,6 +1538,7 @@ const CapabilityPresetSection: React.FC<{
         createPortal(
           <div
             className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/78 backdrop-blur-sm p-3 md:p-5"
+            data-ac-esc-sink
             onClick={() => setDetailPresetId(null)}
             role="presentation"
           >
@@ -1866,6 +1905,7 @@ const CapabilityPresetSection: React.FC<{
         createPortal(
           <div
             className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/78 backdrop-blur-sm p-4"
+            data-ac-esc-sink
             onClick={() => {
               setLightboxImage(null);
               setLightboxCompare(null);
@@ -1938,17 +1978,30 @@ const CapabilityPresetSection: React.FC<{
         )}
         </>
       )}
-      {composerOpen && (
-        <WorkflowComposerOverlay
-          open={composerOpen}
-          onClose={closeCanvas}
-          sessionKey={composerSessionKey}
-          presets={presets}
-          initialSet={canvasSet}
-          onSave={handleSaveSet}
-          onLog={onLog}
-        />
-      )}
+      {!onOpenWorkflowComposer &&
+        embedComposerSessions.map((sess) => (
+          <React.Fragment key={sess.id}>
+            <WorkflowComposerOverlay
+              open
+              onClose={() => closeEmbedComposerSession(sess.id)}
+              sessionKey={sess.sessionKey}
+              presets={presets}
+              initialSet={sess.initialSet}
+              isForeground={sess.id === embedComposerActiveId}
+              dockStackIndex={getEmbedComposerDockStackIndex(sess.id)}
+              dockStackCount={getEmbedComposerDockStackCount(sess.id)}
+              onRequestForeground={() => setEmbedComposerActiveId(sess.id)}
+              onMinimizedChange={(minimized) =>
+                setEmbedComposerMinimized((prev) => {
+                  if (prev[sess.id] === minimized) return prev;
+                  return { ...prev, [sess.id]: minimized };
+                })
+              }
+              onSave={handleSaveSet}
+              onLog={onLog}
+            />
+          </React.Fragment>
+        ))}
       </div>
     </div>
   );

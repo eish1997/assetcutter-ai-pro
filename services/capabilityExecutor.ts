@@ -1,4 +1,10 @@
-import type { CustomAppModule, DialogImageGear, CapabilitySet, CapabilitySetNode } from '../types';
+import type {
+  CustomAppModule,
+  DialogImageGear,
+  CapabilitySet,
+  CapabilitySetNode,
+  CapabilitySetEdge,
+} from '../types';
 import { DIALOG_IMAGE_GEARS } from '../types';
 import type { VgpGenStepCapture } from '../types/vgp';
 import {
@@ -9,11 +15,24 @@ import {
   getDialogTextResponse,
   CAPABILITY_UNDERSTAND_RETRY_OPTIONS,
   normalizeApiErrorMessage,
+  resolveUpstreamImageModelId,
 } from './geminiService';
+
+export type CapabilityRunProgressMeta = {
+  /** 能力集合画布节点 id，用于把进度归到具体卡片 */
+  nodeId?: string;
+};
 
 export type CapabilityExecuteContext = {
   /** 用于日志输出（可选） */
   onLog?: (level: 'info' | 'warn' | 'error', message: string, detail?: string) => void;
+  /** 能力集合画布等：单步进度文案（可选）；meta.nodeId 归因到节点 */
+  onRunProgress?: (message: string, meta?: CapabilityRunProgressMeta) => void;
+  /**
+   * 能力集合执行到某画布节点时，由 executeCapabilitySet 写入；
+   * executeCapability 内向 onRunProgress 附带此 nodeId。
+   */
+  runProgressNodeId?: string;
   /**
    * 阶段 B：默认 `legacy`（先理解预设提示词再生图）。
    * `compiler` 为规则编译器直出英文指令，不调用「理解」LLM。
@@ -27,9 +46,26 @@ export type CapabilityExecuteContext = {
 };
 
 export type CapabilityExecuteResult =
-  | { ok: true; kind: 'image'; image: string; durationMs: number; vgpSteps?: VgpGenStepCapture[] }
+  | {
+      ok: true;
+      kind: 'image';
+      image: string;
+      durationMs: number;
+      vgpSteps?: VgpGenStepCapture[];
+      /** 各节点在当次执行中的图像输出（画布测试预览用） */
+      nodeImageOutputs?: Record<string, string>;
+    }
   | { ok: true; kind: 'text'; text: string; durationMs: number }
-  | { ok: false; kind: 'none'; error: string; durationMs: number };
+  | {
+      ok: false;
+      kind: 'none';
+      error: string;
+      durationMs: number;
+      /** 失败前已完成的节点图像（画布可合并显示） */
+      nodeImageOutputs?: Record<string, string>;
+      /** 失败所在画布节点（若有） */
+      failedNodeId?: string;
+    };
 
 function parseInlineForLlm(input: string): { mimeType: string; data: string } {
   const raw = (input || '').trim();
@@ -43,6 +79,11 @@ function parseInlineForLlm(input: string): { mimeType: string; data: string } {
 function hasUsableImageBase64(input: string): boolean {
   const p = parseInlineForLlm(input);
   return p.data.length > 8;
+}
+
+function emitCapabilityRunProgress(ctx: CapabilityExecuteContext, message: string) {
+  const nid = ctx.runProgressNodeId;
+  ctx.onRunProgress?.(message, nid ? { nodeId: nid } : undefined);
 }
 
 function makeVgpCapture(
@@ -86,7 +127,8 @@ export function capabilityUsesGenImageEngine(preset: CustomAppModule): boolean {
 
 export function resolveImageModelId(gear?: DialogImageGear): string {
   const g = gear || 'standard';
-  return DIALOG_IMAGE_GEARS.find((x) => x.id === g)?.modelId || 'gemini-3.1-flash-image-preview';
+  const internal = DIALOG_IMAGE_GEARS.find((x) => x.id === g)?.modelId || 'gemini-3.1-flash-image-preview';
+  return resolveUpstreamImageModelId(internal);
 }
 
 /**
@@ -272,6 +314,7 @@ export async function executeCapability(
     // 内置：拆分组件（输出“首个区域裁剪图”，可选再走生图）
     if (preset.id === 'split_component') {
       ctx.onLog?.('info', `[${actionLabel}] 识别物体中…`, undefined);
+      emitCapabilityRunProgress(ctx, `${actionLabel}：检测物体中（视觉模型，可能需数十秒）…`);
       const boxes = await detectObjectsInImage(inputImageBase64);
       if (!boxes.length) {
         return { ok: false, kind: 'none', error: '未识别到区域', durationMs: Date.now() - start };
@@ -299,11 +342,14 @@ export async function executeCapability(
       const c2d = canvas.getContext('2d')!;
       c2d.drawImage(img, x, y, w, h, 0, 0, w, h);
       const cropped = canvas.toDataURL('image/png');
+      emitCapabilityRunProgress(ctx, `${actionLabel}：已裁剪最大区域，准备后续步骤…`);
 
       if (engine === 'gen_image') {
+        emitCapabilityRunProgress(ctx, `${actionLabel}：理解提示词中…`);
         const prompt = await resolveGenImagePrompt(preset, cropped, ctx);
         if (!prompt) return { ok: false, kind: 'none', error: '该能力为生图执行方式，但未填写预设提示词或理解未返回有效指令', durationMs: Date.now() - start };
         ctx.onLog?.('info', `[${actionLabel}] 生图中…`, undefined);
+        emitCapabilityRunProgress(ctx, `${actionLabel}：生图中…`);
         const modelId = resolveImageModelId(preset.imageGear);
         const imageOptions = (preset.imageAspectRatio || preset.imageSize) ? { aspectRatio: preset.imageAspectRatio, imageSize: preset.imageSize } : undefined;
         const result = await dialogGenerateImage(cropped, prompt, modelId, imageOptions);
@@ -316,6 +362,7 @@ export async function executeCapability(
         };
       }
 
+      emitCapabilityRunProgress(ctx, `${actionLabel}：裁剪完成（未接生图）`);
       return { ok: true, kind: 'image', image: cropped, durationMs: Date.now() - start };
     }
 
@@ -373,6 +420,7 @@ export async function executeCapability(
       };
     }
 
+    emitCapabilityRunProgress(ctx, `${actionLabel}：理解图片与提示词中（若失败多为网关超时或模型不可用）…`);
     const prompt = await resolveGenImagePrompt(preset, inputImageBase64, ctx);
     if (!prompt) return { ok: false, kind: 'none', error: '该能力为生图执行方式，但未填写预设提示词或理解未返回有效指令', durationMs: Date.now() - start };
     const augmented =
@@ -380,6 +428,7 @@ export async function executeCapability(
         ? `${prompt}\n\n【用户补充文字】\n${userT}`
         : prompt;
     ctx.onLog?.('info', `[${actionLabel}] 生图中…`, undefined);
+    emitCapabilityRunProgress(ctx, `${actionLabel}：生图中（可能较慢）…`);
     const modelId = resolveImageModelId(preset.imageGear);
     const imageOptions = (preset.imageAspectRatio || preset.imageSize) ? { aspectRatio: preset.imageAspectRatio, imageSize: preset.imageSize } : undefined;
     const result = await dialogGenerateImage(inputImageBase64, augmented, modelId, imageOptions);
@@ -407,12 +456,18 @@ export type CapabilitySetExecuteContext = CapabilityExecuteContext & {
    * 若设置：执行到该测试断点节点并完成其透传后**立即返回**（不跑下游），用于画布「运行测试」。
    */
   stopAtNodeId?: string;
+  /** 每完成一个节点的图像输出后回调（用于画布逐步刷新预览） */
+  onNodeImageOutput?: (nodeId: string, image: string) => void;
 };
 
 export function validateCapabilitySetGraph(set: CapabilitySet, presets: CustomAppModule[]): string | null {
   const inputNodes = set.nodes.filter((n) => n.type === 'input');
+  const assetInputNodes = set.nodes.filter((n) => n.type === 'assetInput');
   const outputNodes = set.nodes.filter((n) => n.type === 'output');
-  if (inputNodes.length !== 1) return '能力集合必须且只能有 1 个输入节点';
+  if (inputNodes.length > 1) return '能力集合最多只能有 1 个「原始输入」节点';
+  if (inputNodes.length === 0 && assetInputNodes.length === 0) {
+    return '能力集合需要 1 个原始输入节点或至少 1 个资产输入节点';
+  }
   if (outputNodes.length < 1) return '能力集合至少需要 1 个输出节点';
 
   for (const node of set.nodes) {
@@ -442,6 +497,75 @@ export function validateCapabilitySetGraph(set: CapabilitySet, presets: CustomAp
 }
 
 /**
+ * 从图中移除测试断点节点并将边桥接，使执行等价于「连线不经过测试点」。
+ * @param exceptTestStopId 若设置且为图中 `testStop`：保留该节点（用于「在该测试点运行测试」）；否则移除全部测试点。
+ */
+export function collapseTestStopsForExecution(
+  set: CapabilitySet,
+  exceptTestStopId: string | null
+): CapabilitySet {
+  let nodes = [...set.nodes];
+  let edges = set.edges.map((e) => ({ ...e }));
+
+  const shouldRemove = (tid: string) => {
+    const n = nodes.find((x) => x.id === tid);
+    if (!n || n.type !== 'testStop') return false;
+    if (exceptTestStopId && tid === exceptTestStopId) return false;
+    return true;
+  };
+
+  let guard = 0;
+  while (guard++ < 256) {
+    const victim = nodes.find((n) => shouldRemove(n.id));
+    if (!victim) break;
+    const tid = victim.id;
+    const preds = edges.filter((e) => e.target === tid);
+    const succs = edges.filter((e) => e.source === tid);
+    edges = edges.filter((e) => e.source !== tid && e.target !== tid);
+    if (preds.length > 0 && succs.length > 0) {
+      for (const p of preds) {
+        for (const s of succs) {
+          if (p.source === s.target) continue;
+          const exists = edges.some((e) => e.source === p.source && e.target === s.target);
+          if (exists) continue;
+          const bridge: CapabilitySetEdge = {
+            id: `bridge-${p.source}-${s.target}-${Math.random().toString(36).slice(2, 10)}`,
+            source: p.source,
+            target: s.target,
+            sourceHandle: p.sourceHandle ?? null,
+            targetHandle: s.targetHandle ?? null,
+          };
+          edges.push(bridge);
+        }
+      }
+    }
+    nodes = nodes.filter((n) => n.id !== tid);
+  }
+
+  return { ...set, nodes, edges };
+}
+
+function capabilitySetFail(
+  error: string,
+  startMs: number,
+  partial: Record<string, string>,
+  failedNodeId?: string
+): CapabilityExecuteResult {
+  const keys = Object.keys(partial);
+  const copy: Record<string, string> = {};
+  for (const k of keys) copy[k] = partial[k];
+  const base = {
+    ok: false as const,
+    kind: 'none' as const,
+    error,
+    durationMs: Date.now() - startMs,
+    ...(failedNodeId ? { failedNodeId } : {}),
+    ...(keys.length > 0 ? { nodeImageOutputs: copy } : {}),
+  };
+  return base;
+}
+
+/**
  * 执行能力集合：按图的拓扑顺序执行。支持多分支汇聚到生图模型（线稿+色块+文本生成 -> 生图模型）。
  */
 export async function executeCapabilitySet(
@@ -454,24 +578,47 @@ export async function executeCapabilitySet(
   const setVgpSteps: VgpGenStepCapture[] = [];
   const validationError = validateCapabilitySetGraph(set, presets);
   if (validationError) {
-    return { ok: false, kind: 'none', error: validationError, durationMs: Date.now() - start };
+    return capabilitySetFail(validationError, start, {});
   }
-  const nodeMap = new Map<string, CapabilitySetNode>(set.nodes.map((n) => [n.id, n]));
+
+  const rawNodeMap = new Map<string, CapabilitySetNode>(set.nodes.map((n) => [n.id, n]));
+  const stopId = ctx.stopAtNodeId;
+  const exceptTestStop =
+    stopId && rawNodeMap.get(stopId)?.type === 'testStop' ? stopId : null;
+  const effectiveSet = collapseTestStopsForExecution(set, exceptTestStop);
+
+  ctx.onRunProgress?.(
+    ctx.stopAtNodeId
+      ? `校验通过，执行至所选节点（含该节点）…`
+      : `校验通过，开始执行全流程（已自动跳过测试节点）…`
+  );
+  const nodeMap = new Map<string, CapabilitySetNode>(effectiveSet.nodes.map((n) => [n.id, n]));
+  const execGraph = effectiveSet;
   const inEdges = new Map<string, string[]>();
-  for (const e of set.edges) {
+  for (const e of execGraph.edges) {
     if (!inEdges.has(e.target)) inEdges.set(e.target, []);
     inEdges.get(e.target)!.push(e.source);
   }
   const outputs = new Map<string, string>();
-  const inputNode = set.nodes.find((n) => n.type === 'input');
-  if (inputNode) outputs.set(inputNode.id, inputImage);
+  const nodeImageOutputs: Record<string, string> = {};
+  const recordNodeImage = (nodeId: string, img: string) => {
+    if (img && typeof img === 'string') {
+      nodeImageOutputs[nodeId] = img;
+      ctx.onNodeImageOutput?.(nodeId, img);
+    }
+  };
+  const inputNode = execGraph.nodes.find((n) => n.type === 'input');
+  if (inputNode) {
+    outputs.set(inputNode.id, inputImage);
+    recordNodeImage(inputNode.id, inputImage);
+  }
 
   const done = new Set<string>(inputNode ? [inputNode.id] : []);
   let lastImage: string = inputImage;
 
-  while (done.size < set.nodes.length) {
+  while (done.size < execGraph.nodes.length) {
     let progressed = false;
-    for (const n of set.nodes) {
+    for (const n of execGraph.nodes) {
       if (done.has(n.id)) continue;
       const sources = inEdges.get(n.id) ?? [];
       if (sources.some((s) => !done.has(s))) continue;
@@ -480,10 +627,12 @@ export async function executeCapabilitySet(
         const preset = presets.find((p) => p.id === n.data.presetId);
         if (!preset) {
           onLog?.('warn', `[能力集合] 未找到预设 ${n.data.presetId}，跳过节点 ${n.data.label}`);
+          ctx.onRunProgress?.(`跳过：未找到预设「${n.data.label || n.id}」`, { nodeId: n.id });
           done.add(n.id);
           progressed = true;
           continue;
         }
+        ctx.onRunProgress?.(`正在执行：${n.data.label || preset.label || n.id}`, { nodeId: n.id });
         const imageSourceIds = sources.filter((s) => {
           const node = nodeMap.get(s);
           return node && (node.type === 'input' || node.type === 'preset' || node.type === 'assetInput');
@@ -497,37 +646,42 @@ export async function executeCapabilitySet(
         if (isMultiInput && getCapabilityEngine(preset) === 'gen_image') {
           const images = imagesFromSources.length > 0 ? imagesFromSources : [inputImage];
           const instruction = promptFromTextGen || (preset.instruction ?? '').trim() || '根据以上参考图生成最终效果。';
-          onLog?.('info', `[${set.label}] ${n.data.label} 执行中（${images.length} 张图 + 提示词）…`, undefined);
+          onLog?.('info', `[${execGraph.label}] ${n.data.label} 执行中（${images.length} 张图 + 提示词）…`, undefined);
+          ctx.onRunProgress?.(`${n.data.label || preset.label || n.id}：多图生图中（${images.length} 张参考）…`, {
+            nodeId: n.id,
+          });
           const modelId = resolveImageModelId(preset.imageGear);
           const imageOptions = (preset.imageAspectRatio || preset.imageSize) ? { aspectRatio: preset.imageAspectRatio, imageSize: preset.imageSize } : undefined;
           try {
             const result = await dialogGenerateImageMulti(images, instruction, modelId, imageOptions);
             outputs.set(n.id, result);
+            recordNodeImage(n.id, result);
             lastImage = result;
             setVgpSteps.push(
               makeVgpCapture(preset, instruction, modelId, `set-node:${n.id}`)
             );
           } catch (e) {
             const msg = normalizeApiErrorMessage(e);
-            return { ok: false, kind: 'none', error: `[${n.data.label}] ${msg}`, durationMs: Date.now() - start };
+            return capabilitySetFail(`[${n.data.label}] ${msg}`, start, nodeImageOutputs, n.id);
           }
         } else {
           const srcId = sources.find((s) => outputs.has(s)) ?? sources[0];
           const srcImage = outputs.get(srcId) ?? inputImage;
-          onLog?.('info', `[${set.label}] ${n.data.label} 执行中…`, undefined);
-          const out = await executeCapability(preset, srcImage, ctx);
+          onLog?.('info', `[${execGraph.label}] ${n.data.label} 执行中…`, undefined);
+          const out = await executeCapability(preset, srcImage, { ...ctx, runProgressNodeId: n.id });
           if (out.ok === false) {
-            return { ok: false, kind: 'none', error: `[${n.data.label}] ${out.error}`, durationMs: Date.now() - start };
+            return capabilitySetFail(`[${n.data.label}] ${out.error}`, start, nodeImageOutputs, n.id);
           }
           if (out.kind !== 'image') {
-            return {
-              ok: false,
-              kind: 'none',
-              error: `[${n.data.label}] 能力集合暂不支持该节点的纯文字输出，请在工作流单预设中执行`,
-              durationMs: Date.now() - start,
-            };
+            return capabilitySetFail(
+              `[${n.data.label}] 能力集合暂不支持该节点的纯文字输出，请在工作流单预设中执行`,
+              start,
+              nodeImageOutputs,
+              n.id
+            );
           }
           outputs.set(n.id, out.image);
+          recordNodeImage(n.id, out.image);
           lastImage = out.image;
           if (out.vgpSteps?.length) {
             for (const s of out.vgpSteps) {
@@ -536,55 +690,81 @@ export async function executeCapabilitySet(
           }
         }
       } else if (n.type === 'input') {
+        ctx.onRunProgress?.('读取原始输入图…', { nodeId: n.id });
         outputs.set(n.id, inputImage);
+        recordNodeImage(n.id, inputImage);
         lastImage = inputImage;
       } else if (n.type === 'assetInput') {
+        ctx.onRunProgress?.(`读取资产输入：${n.data.label || n.id}`, { nodeId: n.id });
         const fromMap = ctx.assetInputs?.[n.id];
         const img = (fromMap ?? '').trim() || inputImage;
         outputs.set(n.id, img);
+        recordNodeImage(n.id, img);
         lastImage = img;
       } else if (n.type === 'output') {
+        ctx.onRunProgress?.(`汇总输出：${n.data.label || n.id}`, { nodeId: n.id });
         if (!sources.length) {
-          return { ok: false, kind: 'none', error: `输出节点「${n.data.label || n.id}」缺少输入`, durationMs: Date.now() - start };
+          return capabilitySetFail(`输出节点「${n.data.label || n.id}」缺少输入`, start, nodeImageOutputs, n.id);
         }
         const srcId = sources.find((s) => outputs.has(s));
         if (!srcId) {
-          return {
-            ok: false,
-            kind: 'none',
-            error: `输出节点「${n.data.label || n.id}」未收到有效图像输入`,
-            durationMs: Date.now() - start,
-          };
+          return capabilitySetFail(
+            `输出节点「${n.data.label || n.id}」未收到有效图像输入`,
+            start,
+            nodeImageOutputs,
+            n.id
+          );
         }
         const outputImage = outputs.get(srcId);
         if (!outputImage) {
-          return {
-            ok: false,
-            kind: 'none',
-            error: `输出节点「${n.data.label || n.id}」未收到有效图像输入`,
-            durationMs: Date.now() - start,
-          };
+          return capabilitySetFail(
+            `输出节点「${n.data.label || n.id}」未收到有效图像输入`,
+            start,
+            nodeImageOutputs,
+            n.id
+          );
         }
         lastImage = outputImage;
         outputs.set(n.id, outputImage);
+        recordNodeImage(n.id, outputImage);
+        if (ctx.stopAtNodeId === n.id) {
+          ctx.onRunProgress?.('已在输出节点停止，正在生成预览…', { nodeId: n.id });
+          return {
+            ok: true,
+            kind: 'image',
+            image: outputImage,
+            durationMs: Date.now() - start,
+            vgpSteps: setVgpSteps.length ? setVgpSteps : undefined,
+            nodeImageOutputs,
+          };
+        }
       } else if (n.type === 'textGen') {
         done.add(n.id);
         progressed = true;
         continue;
       } else if (n.type === 'testStop') {
+        ctx.onRunProgress?.(
+          ctx.stopAtNodeId === n.id
+            ? '到达测试节点，在此停止（不执行下游）…'
+            : '经过测试节点（透传上游图像）…',
+          { nodeId: n.id }
+        );
         const srcId = sources.find((s) => outputs.has(s)) ?? sources[0];
         const img = (srcId ? outputs.get(srcId) : undefined) ?? inputImage;
         outputs.set(n.id, img);
+        recordNodeImage(n.id, img);
         lastImage = img;
         done.add(n.id);
         progressed = true;
         if (ctx.stopAtNodeId === n.id) {
+          ctx.onRunProgress?.('测试节点已完成，正在更新画布预览…', { nodeId: n.id });
           return {
             ok: true,
             kind: 'image',
             image: img,
             durationMs: Date.now() - start,
             vgpSteps: setVgpSteps.length ? setVgpSteps : undefined,
+            nodeImageOutputs,
           };
         }
         continue;
@@ -593,25 +773,26 @@ export async function executeCapabilitySet(
       progressed = true;
     }
     if (!progressed) {
-      const blocked = set.nodes
+      const blocked = execGraph.nodes
         .filter((n) => !done.has(n.id))
         .map((n) => n.data.label || n.id)
         .join('、');
-      return {
-        ok: false,
-        kind: 'none',
-        error: `能力集合无法继续执行，可能存在环路或缺少上游输入：${blocked}`,
-        durationMs: Date.now() - start,
-      };
+      return capabilitySetFail(
+        `能力集合无法继续执行，可能存在环路或缺少上游输入：${blocked}`,
+        start,
+        nodeImageOutputs
+      );
     }
   }
 
+  ctx.onRunProgress?.('全流程执行完毕，正在更新画布预览…');
   return {
     ok: true,
     kind: 'image',
     image: lastImage,
     durationMs: Date.now() - start,
     vgpSteps: setVgpSteps.length ? setVgpSteps : undefined,
+    nodeImageOutputs: Object.keys(nodeImageOutputs).length > 0 ? nodeImageOutputs : {},
   };
 }
 

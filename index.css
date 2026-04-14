@@ -3,3 +3,73 @@
 @tailwind utilities;
 
 /* 项目其余全局样式在 index.html 内联，此处仅接入构建期 Tailwind */
+
+/* —— 工作流全屏 ↔ 右下角 Dock：收起 / 展开动效（WorkflowComposerOverlay） —— */
+.ac-workflow-dock-backdrop {
+  opacity: 1;
+  transition:
+    opacity 0.38s cubic-bezier(0.25, 0.85, 0.35, 1),
+    backdrop-filter 0.38s cubic-bezier(0.25, 0.85, 0.35, 1);
+}
+
+.ac-workflow-dock-backdrop--out {
+  opacity: 0;
+  backdrop-filter: blur(0px);
+  -webkit-backdrop-filter: blur(0px);
+}
+
+@keyframes ac-workflow-dock-backdrop-in {
+  from {
+    opacity: 0;
+    backdrop-filter: blur(0px);
+    -webkit-backdrop-filter: blur(0px);
+  }
+  to {
+    opacity: 1;
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+  }
+}
+
+.ac-workflow-dock-backdrop--in {
+  opacity: 0;
+  animation: ac-workflow-dock-backdrop-in 0.42s cubic-bezier(0.25, 0.85, 0.35, 1) forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ac-workflow-dock-backdrop--in {
+    animation: none !important;
+    opacity: 1;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+  }
+
+  .ac-workflow-dock-chip-in {
+    animation: none !important;
+  }
+}
+
+@keyframes ac-workflow-dock-chip-in {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 14px, 0) scale(0.82) rotate(-4deg);
+    filter: blur(4px);
+    box-shadow: 0 0 0 0 rgba(59, 111, 184, 0);
+  }
+  62% {
+    opacity: 1;
+    transform: translate3d(0, -3px, 0) scale(1.06) rotate(0.8deg);
+    filter: blur(0);
+    box-shadow: 0 0 0 1px rgba(59, 111, 184, 0.35);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1) rotate(0deg);
+    filter: blur(0);
+    box-shadow: 0 0 0 0 rgba(59, 111, 184, 0);
+  }
+}
+
+.ac-workflow-dock-chip-in {
+  animation: ac-workflow-dock-chip-in 0.52s cubic-bezier(0.34, 1.15, 0.45, 1) both;
+}

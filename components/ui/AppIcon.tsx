@@ -2,6 +2,7 @@ import React from 'react';
 
 type AppIconName =
   | 'close'
+  | 'chevron-down'
   | 'check'
   | 'warning'
   | 'star'
@@ -17,6 +18,9 @@ type AppIconName =
 
 const paths: Record<AppIconName, React.ReactNode> = {
   close: <path d="M5 5l10 10M15 5 5 15" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />,
+  'chevron-down': (
+    <path d="M5 7.5 10 12.5 15 7.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+  ),
   check: <path d="M4.5 10.5 8.2 14 15.5 6.8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />,
   warning: (
     <>

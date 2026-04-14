@@ -101,6 +101,7 @@ export const PreviewShell = forwardRef<HTMLDivElement, PreviewShellProps>(functi
       role="dialog"
       aria-modal
       className={`fixed inset-0 ${zIndexClassName} ${backdropTintClassName} animate-in fade-in outline-none`}
+      data-ac-esc-sink
       data-ac-block-workflow-marquee
       onKeyDownCapture={(e) => {
         if (!isEscapeKey(e)) return;

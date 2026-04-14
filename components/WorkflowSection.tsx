@@ -45,6 +45,8 @@ import WorkflowPixelBusyOverlay from './WorkflowPixelBusyOverlay';
 import { workflowSafeImgSrc } from '../services/workflowImageDisplay';
 import {
   type AcWorkflowExportPayload,
+  DT_AC_CAPABILITY_ACTION,
+  DT_AC_CAPABILITY_FROM_EDITOR,
   DT_AC_WORKFLOW_EXPORT,
   parseAcWorkflowExportDragSources,
   parseWorkflowDragSource,
@@ -103,6 +105,50 @@ import { buildWorkflowComposerSeedFromTwoPresets } from './workflow/buildWorkflo
 import type { CapabilityAssetCandidate } from './CapabilitySetCanvas';
 
 const WorkflowComposerOverlay = lazy(() => import('./WorkflowComposerOverlay'));
+
+type WorkflowPendingTaskOptions = {
+  promptOverride?: string;
+  sourceGroupAssetId?: string;
+  sourceItemIndex?: number;
+  inputText?: string;
+  overrideImageGear?: CustomAppModule['imageGear'];
+  overrideImageAspectRatio?: string;
+  overrideImageSize?: string;
+  overrideSkipUnderstand?: boolean;
+};
+
+type WorkflowGroupOverrides = {
+  imageGear?: CustomAppModule['imageGear'];
+  imageAspectRatio?: string;
+  imageSize?: string;
+  understand?: boolean;
+  generateCount?: number;
+};
+
+const WORKFLOW_GROUP_GENERATE_COUNT_HARD_MAX = 999;
+const WORKFLOW_GROUP_GENERATE_CONFIRM_THRESHOLD = 20;
+
+function normalizeWorkflowGenerateCount(raw: unknown): number {
+  const n = Math.floor(Number(raw));
+  if (!Number.isFinite(n)) return 1;
+  return Math.max(1, Math.min(WORKFLOW_GROUP_GENERATE_COUNT_HARD_MAX, n));
+}
+
+function readCapabilityDragActionId(dataTransfer: DataTransfer | null): string | null {
+  if (!dataTransfer) return null;
+  let raw = '';
+  try {
+    raw =
+      dataTransfer.getData(DT_AC_CAPABILITY_ACTION) ||
+      dataTransfer.getData(DT_AC_CAPABILITY_FROM_EDITOR) ||
+      dataTransfer.getData('text/plain') ||
+      '';
+  } catch {
+    return null;
+  }
+  const id = raw.trim();
+  return id || null;
+}
 
 const WorkflowSection: React.FC<{
   capabilityPresets: CustomAppModule[];
@@ -185,6 +231,10 @@ const WorkflowSection: React.FC<{
   const [executingQueue, setExecutingQueue] = useState<{ total: number; tasks: WorkflowPendingTask[] } | null>(null);
   /** 并发执行中：已由 worker 取出、尚未结束的任务（用于卡片「执行中」与工具栏进度，避免误用单一 current 索引） */
   const [activeTaskIds, setActiveTaskIds] = useState<Set<string>>(() => new Set());
+  /** 工作区队列执行能力集合时：逐步预览与阶段文案（按 assetId，与画布试运行一致） */
+  const [capabilitySetRunByAssetId, setCapabilitySetRunByAssetId] = useState<
+    Record<string, { taskId: string; progressLine: string; latestImage: string | null }>
+  >({});
   const [completedTaskIds, setCompletedTaskIds] = useState<Set<string>>(new Set());
   /** 批处理已开始后用户从卡片取消「排队中」项：worker 仍会从本地 queue shift，此处跳过执行 */
   const cancelledTaskIdsRef = useRef<Set<string>>(new Set());
@@ -198,9 +248,14 @@ const WorkflowSection: React.FC<{
   const [draggingActionFromFavorite, setDraggingActionFromFavorite] = useState(false);
   const [actionDroppedInFavorite, setActionDroppedInFavorite] = useState(false);
   const [favoriteDropActive, setFavoriteDropActive] = useState(false);
-  const [composerOpen, setComposerOpen] = useState(false);
-  const [composerSessionKey, setComposerSessionKey] = useState(0);
-  const [composerInitialSet, setComposerInitialSet] = useState<CapabilitySet | null>(null);
+  type LocalComposerSession = { id: string; initialSet: CapabilitySet | null; sessionKey: number };
+  const [composerSessions, setComposerSessions] = useState<LocalComposerSession[]>([]);
+  const [composerActiveId, setComposerActiveId] = useState<string | null>(null);
+  const [composerMinimized, setComposerMinimized] = useState<Record<string, boolean>>({});
+  const composerActiveIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    composerActiveIdRef.current = composerActiveId;
+  }, [composerActiveId]);
   const [collapsedSectionIds, setCollapsedSectionIds] = useState<Record<string, boolean>>({});
   const [cutSelectState, setCutSelectState] = useState<{
     task: WorkflowPendingTask;
@@ -211,12 +266,7 @@ const WorkflowSection: React.FC<{
   const [promptTweakModal, setPromptTweakModal] = useState<{
     preset: CustomAppModule;
     targets: PromptTweakTarget[];
-    overrides?: {
-      imageGear?: CustomAppModule['imageGear'];
-      imageAspectRatio?: string;
-      imageSize?: string;
-      understand?: boolean;
-    };
+    overrides?: WorkflowGroupOverrides;
   } | null>(null);
   const [viewStack, setViewStack] = useState<{ assetId: string }[]>([]);
   const viewStackRef = useRef(viewStack);
@@ -539,30 +589,20 @@ const WorkflowSection: React.FC<{
       return selected.every((tag) => tags.has(tag));
     });
   }, [repositoryItems, repositorySelectedTags]);
-  const addToPending = useCallback(
+  const buildPendingTaskFromAssetSnapshot = useCallback(
     (
-      assetId: string,
+      asset: WorkflowAsset,
+      targetAssetId: string,
       actionType: string,
-      options?: {
-        promptOverride?: string;
-        sourceGroupAssetId?: string;
-        sourceItemIndex?: number;
-        inputText?: string;
-        overrideImageGear?: CustomAppModule['imageGear'];
-        overrideImageAspectRatio?: string;
-        overrideImageSize?: string;
-        overrideSkipUnderstand?: boolean;
-      }
-    ) => {
-      const asset = assets.find((x) => x.id === assetId);
-      if (!asset) return;
+      options?: WorkflowPendingTaskOptions
+    ): WorkflowPendingTask | null => {
       const mod =
         actionModules.find((m) => m.id === actionType) ??
         capabilityPresets.find((p) => p.id === actionType);
       if (isWorkflowTextAsset(asset)) {
         if (!mod || !workflowPresetAcceptsTextCardDrag(mod)) {
           onLog?.('warn', '文字资产请拖入「文字能力」或「生图」类预设');
-          return;
+          return null;
         }
       }
       const inputImage = getAssetDisplayImage(asset);
@@ -573,7 +613,7 @@ const WorkflowSection: React.FC<{
         options?.sourceGroupAssetId != null && options?.sourceItemIndex != null;
       const task: WorkflowPendingTask = {
         id: uuid(),
-        assetId,
+        assetId: targetAssetId,
         actionType,
         inputImage,
         addedAt: Date.now(),
@@ -595,9 +635,26 @@ const WorkflowSection: React.FC<{
             }
           : {}),
       };
-      setPending((prev) => [...prev, task]);
+      return task;
     },
-    [assets, getAssetDisplayImage, onLog, actionModules, capabilityPresets]
+    [getAssetDisplayImage, onLog, actionModules, capabilityPresets]
+  );
+
+  const makePendingTaskForAsset = useCallback(
+    (assetId: string, actionType: string, options?: WorkflowPendingTaskOptions): WorkflowPendingTask | null => {
+      const asset = assets.find((x) => x.id === assetId);
+      if (!asset) return null;
+      return buildPendingTaskFromAssetSnapshot(asset, assetId, actionType, options);
+    },
+    [assets, buildPendingTaskFromAssetSnapshot]
+  );
+
+  const addToPending = useCallback(
+    (assetId: string, actionType: string, options?: WorkflowPendingTaskOptions) => {
+      const task = makePendingTaskForAsset(assetId, actionType, options);
+      if (task) setPending((prev) => [...prev, task]);
+    },
+    [makePendingTaskForAsset, setPending]
   );
 
   const addWorkflowTextAsset = useCallback((initialText?: string) => {
@@ -646,20 +703,56 @@ const WorkflowSection: React.FC<{
         setAssetError(task.assetId, msg);
         return { image: null };
       }
-      const result = await executeCapabilitySet(set, inputImage ?? '', {
-        presets: actionModules,
-        onLog,
-      });
-      if (result.ok === false) {
-        const msg = `[${getActionLabel(actionType)}] ${result.error}`;
-        onLog?.('warn', msg);
-        setAssetError(task.assetId, msg);
-        return { image: null };
+      const assetId = task.assetId;
+      const clearSetRunUi = () => {
+        setCapabilitySetRunByAssetId((prev) => {
+          const cur = prev[assetId];
+          if (cur?.taskId !== task.id) return prev;
+          const next = { ...prev };
+          delete next[assetId];
+          return next;
+        });
+      };
+      setCapabilitySetRunByAssetId((prev) => ({
+        ...prev,
+        [assetId]: {
+          taskId: task.id,
+          progressLine: '准备执行能力集合…',
+          latestImage: null,
+        },
+      }));
+      try {
+        const result = await executeCapabilitySet(set, inputImage ?? '', {
+          presets: actionModules,
+          onLog,
+          onRunProgress: (line) => {
+            setCapabilitySetRunByAssetId((prev) => {
+              const cur = prev[assetId];
+              if (cur?.taskId !== task.id) return prev;
+              return { ...prev, [assetId]: { ...cur, progressLine: line } };
+            });
+          },
+          onNodeImageOutput: (_nodeId, image) => {
+            setCapabilitySetRunByAssetId((prev) => {
+              const cur = prev[assetId];
+              if (cur?.taskId !== task.id) return prev;
+              return { ...prev, [assetId]: { ...cur, latestImage: image } };
+            });
+          },
+        });
+        if (result.ok === false) {
+          const msg = `[${getActionLabel(actionType)}] ${result.error}`;
+          onLog?.('warn', msg);
+          setAssetError(task.assetId, msg);
+          return { image: null };
+        }
+        setAssetError(task.assetId, null);
+        return result.kind === 'image'
+          ? { image: result.image, vgpSteps: result.vgpSteps }
+          : { image: null };
+      } finally {
+        clearSetRunUi();
       }
-      setAssetError(task.assetId, null);
-      return result.kind === 'image'
-        ? { image: result.image, vgpSteps: result.vgpSteps }
-        : { image: null };
     }
     const module = getModule(actionType);
     if (module?.category === 'generate_3d') {
@@ -1094,6 +1187,52 @@ const WorkflowSection: React.FC<{
       }
     },
     [executing, onLog, setPending, setAssets, getActionLabel, replaceGroupItemWithSubAsset, runTask, actionModules]
+  );
+
+  /** 能力块拖到资产卡：以该卡为唯一输入立即执行（插队），不单独停留在待执行列表 */
+  const runCapabilityOnAssetCardImmediate = useCallback(
+    (targetAsset: WorkflowAsset, actionType: string) => {
+      const trimmed = actionType.trim();
+      if (!trimmed) return;
+      if (trimmed.startsWith(SET_ACTION_PREFIX)) {
+        if (isWorkflowTextAsset(targetAsset)) {
+          onLog?.('warn', '复合能力需要图片资产作为输入');
+          return;
+        }
+      } else {
+        const mod =
+          actionModules.find((m) => m.id === trimmed) ??
+          capabilityPresets.find((p) => p.id === trimmed);
+        if (mod?.category === 'generate_3d' && onAddGenerate3DJob) {
+          const img = getAssetDisplayImage(targetAsset);
+          if (img) onAddGenerate3DJob(mod, img);
+          else onLog?.('warn', '无法读取图片，无法提交生成 3D');
+          return;
+        }
+        if (mod && !isWorkflowTextAsset(targetAsset) && !workflowAssetAllowedForCapabilityDrop(targetAsset, mod)) {
+          onLog?.('warn', '该能力与当前资产类型不匹配');
+          return;
+        }
+      }
+      const task = makePendingTaskForAsset(targetAsset.id, trimmed, undefined);
+      if (!task) return;
+      if (executing) {
+        setPending((prev) => [task, ...prev]);
+      } else {
+        void executePending([task, ...pendingRef.current]);
+      }
+    },
+    [
+      actionModules,
+      capabilityPresets,
+      executing,
+      executePending,
+      getAssetDisplayImage,
+      makePendingTaskForAsset,
+      onAddGenerate3DJob,
+      onLog,
+      setPending,
+    ]
   );
 
   const cancelQueuedTaskInBatch = useCallback((taskId: string) => {
@@ -2405,6 +2544,56 @@ const WorkflowSection: React.FC<{
     return [...mapped.slice(0, idx), newGroup, ...mapped.slice(idx)];
   }, [getAssetDisplayImage]);
 
+  const expandRootAssetsForGenerateCount = useCallback(
+    (
+      assetIds: string[],
+      generateCount: number
+    ): { rootIds: string[]; cloneTaskSeeds: Array<{ sourceAsset: WorkflowAsset; targetAssetId: string }> } => {
+      if (generateCount <= 1) return { rootIds: assetIds, cloneTaskSeeds: [] };
+      type ClonePlan = { sourceId: string; cloneId: string; sourceAsset: WorkflowAsset };
+      const clonePlans: ClonePlan[] = [];
+      const groupPlans: string[][] = [];
+      const rootIds: string[] = [];
+      const cloneTaskSeeds: Array<{ sourceAsset: WorkflowAsset; targetAssetId: string }> = [];
+      for (const id of assetIds) {
+        const source = assets.find((a) => a.id === id);
+        if (!source || source.parentAssetId || isWorkflowTextAsset(source)) {
+          rootIds.push(id);
+          continue;
+        }
+        rootIds.push(id);
+        const idsForGroup = [id];
+        for (let i = 1; i < generateCount; i += 1) {
+          const cloneId = uuid();
+          clonePlans.push({ sourceId: id, cloneId, sourceAsset: source });
+          cloneTaskSeeds.push({ sourceAsset: source, targetAssetId: cloneId });
+          idsForGroup.push(cloneId);
+        }
+        if (idsForGroup.length > 1) groupPlans.push(idsForGroup);
+      }
+      if (clonePlans.length === 0) return { rootIds, cloneTaskSeeds };
+      setAssets((prev) => {
+        let next = [...prev];
+        for (const plan of clonePlans) {
+          const src = next.find((a) => a.id === plan.sourceId);
+          if (!src) continue;
+          next.push({
+            ...src,
+            id: plan.cloneId,
+            parentAssetId: undefined,
+            archived: false,
+            hiddenInGrid: false,
+            createdAt: Date.now(),
+          });
+        }
+        for (const ids of groupPlans) next = insertManualGroupForAssetIds(next, ids);
+        return next;
+      });
+      return { rootIds, cloneTaskSeeds };
+    },
+    [assets, setAssets, insertManualGroupForAssetIds]
+  );
+
   /** 将已存在的子资产 id 并入某张根级组卡（与根网格 onDrop 并入组同构） */
   const mergeAssetIdsIntoGroupCardAssets = useCallback(
     (prev: WorkflowAsset[], targetGroupAssetId: string, movingAssetIds: string[]): WorkflowAsset[] => {
@@ -2566,12 +2755,7 @@ const WorkflowSection: React.FC<{
       mod: CustomAppModule,
       tweakPrompt = false,
       dropEvent?: React.DragEvent,
-      groupOverrides?: {
-        imageGear?: CustomAppModule['imageGear'];
-        imageAspectRatio?: string;
-        imageSize?: string;
-        understand?: boolean;
-      },
+      groupOverrides?: WorkflowGroupOverrides,
       explicitSources?: WorkflowDragSource[]
     ) => {
       const sources =
@@ -2657,6 +2841,17 @@ const WorkflowSection: React.FC<{
                 : {}),
             }
           : undefined;
+      const generateCount =
+        groupOverrides && getCapabilityEngine(mod) === 'gen_image'
+          ? normalizeWorkflowGenerateCount(groupOverrides.generateCount)
+          : 1;
+      if (
+        generateCount > WORKFLOW_GROUP_GENERATE_CONFIRM_THRESHOLD &&
+        typeof window !== 'undefined' &&
+        !window.confirm(`当前生成数量为 ${generateCount}，将创建大量任务，是否继续？`)
+      ) {
+        return;
+      }
 
       for (const source of sources) {
         if (source.kind === 'root') {
@@ -2671,7 +2866,25 @@ const WorkflowSection: React.FC<{
             if (img) onAddGenerate3DJob(mod, img);
             continue;
           }
-          effectiveIds.forEach((id) => addToPending(id, mod.id, queueOverrideOptions));
+          const { rootIds, cloneTaskSeeds } =
+            generateCount > 1
+              ? expandRootAssetsForGenerateCount(effectiveIds, generateCount)
+              : { rootIds: effectiveIds, cloneTaskSeeds: [] as Array<{ sourceAsset: WorkflowAsset; targetAssetId: string }> };
+          const rootTasks: WorkflowPendingTask[] = [];
+          for (const id of rootIds) {
+            const task = makePendingTaskForAsset(id, mod.id, queueOverrideOptions);
+            if (task) rootTasks.push(task);
+          }
+          for (const seed of cloneTaskSeeds) {
+            const task = buildPendingTaskFromAssetSnapshot(
+              seed.sourceAsset,
+              seed.targetAssetId,
+              mod.id,
+              queueOverrideOptions
+            );
+            if (task) rootTasks.push(task);
+          }
+          if (rootTasks.length > 0) setPending((prev) => [...prev, ...rootTasks]);
           continue;
         }
         const groupAssetForSrc = assets.find((x) => x.id === source.groupAssetId);
@@ -2721,6 +2934,9 @@ const WorkflowSection: React.FC<{
       onAddGenerate3DJob,
       addToPending,
       addImageToPending,
+      makePendingTaskForAsset,
+      buildPendingTaskFromAssetSnapshot,
+      expandRootAssetsForGenerateCount,
       setPending,
       setPromptTweakModal,
     ]
@@ -2765,17 +2981,56 @@ const WorkflowSection: React.FC<{
         onLog?.('warn', '仅能对已存在的能力预设创建工作流');
         return;
       }
-      setComposerInitialSet(buildWorkflowComposerSeedFromTwoPresets(a, b));
-      setComposerSessionKey((k) => k + 1);
-      setComposerOpen(true);
+      const id = uuid();
+      setComposerSessions((prev) => [
+        ...prev,
+        { id, initialSet: buildWorkflowComposerSeedFromTwoPresets(a, b), sessionKey: Date.now() },
+      ]);
+      setComposerActiveId(id);
     },
     [capabilityPresets, onLog]
   );
   const openUnifiedComposer = useCallback((initialSet: CapabilitySet | null) => {
-    setComposerInitialSet(initialSet);
-    setComposerSessionKey((k) => k + 1);
-    setComposerOpen(true);
+    const id = uuid();
+    setComposerSessions((prev) => [...prev, { id, initialSet, sessionKey: Date.now() }]);
+    setComposerActiveId(id);
   }, []);
+  const closeComposerSession = useCallback((id: string) => {
+    setComposerSessions((prev) => {
+      const next = prev.filter((s) => s.id !== id);
+      const wasActive = composerActiveIdRef.current === id;
+      if (wasActive) {
+        const nextActive = next[0]?.id ?? null;
+        composerActiveIdRef.current = nextActive;
+        setComposerActiveId(nextActive);
+      }
+      return next;
+    });
+    setComposerMinimized((m) => {
+      if (!(id in m)) return m;
+      const { [id]: _, ...rest } = m;
+      return rest;
+    });
+  }, []);
+  const getComposerDockStackIndex = useCallback(
+    (sessionId: string) => {
+      const minimizedOrdered = composerSessions.filter((s) => composerMinimized[s.id]);
+      const idx = minimizedOrdered.findIndex((s) => s.id === sessionId);
+      if (idx >= 0) return idx;
+      return minimizedOrdered.length;
+    },
+    [composerSessions, composerMinimized]
+  );
+  const getComposerDockStackCount = useCallback(
+    (sessionId: string) => {
+      const minimizedOrdered = composerSessions.filter((s) => composerMinimized[s.id]);
+      if (composerMinimized[sessionId]) {
+        return Math.max(1, minimizedOrdered.length);
+      }
+      return Math.max(1, minimizedOrdered.length + 1);
+    },
+    [composerSessions, composerMinimized]
+  );
 
   const handleComposerSave = useCallback(
     (set: CapabilitySet) => {
@@ -3929,35 +4184,24 @@ const WorkflowSection: React.FC<{
                             ? item
                             : currentGroupAsset?.original ?? '';
                       const groupKey = currentGroupAsset ? `${currentGroupAsset.id}::${idx}` : `${idx}`;
+                      const taskMatchesGroupSlot = (t: WorkflowPendingTask) =>
+                        t.sourceGroupAssetId === currentGroupAsset?.id && t.sourceItemIndex === idx;
+                      const taskMatchesCurrentItem = (t: WorkflowPendingTask) =>
+                        taskMatchesGroupSlot(t) || (!!childAsset && t.assetId === childAsset.id);
                       const isPendingItem =
-                        !!pending.find(
-                          (t) => t.sourceGroupAssetId === currentGroupAsset.id && t.sourceItemIndex === idx
-                        ) ||
+                        pending.some(taskMatchesCurrentItem) ||
                         !!executingQueue?.tasks.find(
-                          (t) =>
-                            t.sourceGroupAssetId === currentGroupAsset.id &&
-                            t.sourceItemIndex === idx &&
-                            !completedTaskIds.has(t.id)
+                          (t) => taskMatchesCurrentItem(t) && !completedTaskIds.has(t.id)
                         );
-                      const isPendingOnly =
-                        !!pending.find(
-                          (t) => t.sourceGroupAssetId === currentGroupAsset.id && t.sourceItemIndex === idx
-                        ) && !executingQueue;
+                      const isPendingOnly = pending.some(taskMatchesCurrentItem) && !executingQueue;
                       const taskForGroupSlot =
                         executingQueue?.tasks.find(
-                          (t) =>
-                            t.sourceGroupAssetId === currentGroupAsset?.id &&
-                            t.sourceItemIndex === idx &&
-                            !completedTaskIds.has(t.id)
+                          (t) => taskMatchesCurrentItem(t) && !completedTaskIds.has(t.id)
                         ) ?? null;
                       const isExecutingCurrentItem =
                         !!taskForGroupSlot && activeTaskIds.has(taskForGroupSlot.id);
                       const pendingTaskForGroupSlot =
-                        pending.find(
-                          (t) =>
-                            t.sourceGroupAssetId === currentGroupAsset?.id &&
-                            t.sourceItemIndex === idx
-                        ) ?? null;
+                        pending.find(taskMatchesCurrentItem) ?? null;
                       const groupBatchQueuedCancelId =
                         taskForGroupSlot && !activeTaskIds.has(taskForGroupSlot.id)
                           ? taskForGroupSlot.id
@@ -3971,6 +4215,7 @@ const WorkflowSection: React.FC<{
                           : null;
                       const showGroupQueueCancelBtn =
                         groupBatchQueuedCancelId != null || groupPendingDuringBatchCancelId != null;
+                      const isBusyGroupItem = isPendingItem;
 
                       if (isAssetRef && childAsset) {
                         return (
@@ -4010,6 +4255,25 @@ const WorkflowSection: React.FC<{
                               const childGridCacheKey = childAsset.cutImageGroup?.length
                                 ? `${childAsset.id}:${childAsset.displayKey}:g${cSafe}`
                                 : `${childAsset.id}:${childAsset.displayKey}`;
+                              const childSetRunUi = capabilitySetRunByAssetId[childAsset.id];
+                              const showChildSetRunProgress =
+                                isExecutingCurrentItem &&
+                                !!taskForGroupSlot &&
+                                taskForGroupSlot.actionType.startsWith(SET_ACTION_PREFIX) &&
+                                !!childSetRunUi &&
+                                childSetRunUi.taskId === taskForGroupSlot.id;
+                              const childGridPreviewSrcEffective =
+                                showChildSetRunProgress && childSetRunUi.latestImage
+                                  ? childSetRunUi.latestImage
+                                  : childGridPreviewSrc;
+                              const childGridCacheKeyEffective =
+                                showChildSetRunProgress && childSetRunUi.latestImage
+                                  ? `${childGridCacheKey}:sr:${childSetRunUi.latestImage.length}`
+                                  : childGridCacheKey;
+                              const childSetRunAccentClass =
+                                showChildSetRunProgress && !selectedGroupItemKeys.has(groupKey)
+                                  ? 'ring-2 ring-blue-500/35 shadow-[0_0_22px_rgba(59,130,246,0.14)]'
+                                  : '';
                               return (
                                 <div
                                   data-workflow-card
@@ -4026,9 +4290,10 @@ const WorkflowSection: React.FC<{
                                       : childAsset.cutImageGroup?.length
                                       ? 'border-blue-400'
                                       : 'border-[#2e2e32]'
-                                  } transition-transform duration-150 ease-out will-change-transform ${motionClass}`}
-                                  draggable
+                                  } ${childSetRunAccentClass} transition-transform duration-150 ease-out will-change-transform ${motionClass}`}
+                                  draggable={!isBusyGroupItem}
                                   onDragStart={() => {
+                                    if (isBusyGroupItem) return;
                                     if (!currentGroupAsset) return;
                                     const keys = selectedGroupItemKeys.has(groupKey)
                                       ? Array.from(selectedGroupItemKeys)
@@ -4119,6 +4384,7 @@ const WorkflowSection: React.FC<{
                                     ? { 'data-prevent-wheel-scroll': '' }
                                     : {})}
                                   onWheel={(e) => {
+                                    if (isBusyGroupItem) return;
                                     e.preventDefault();
                                     e.stopPropagation();
                                     if (childAsset.cutImageGroup?.length) {
@@ -4163,8 +4429,8 @@ const WorkflowSection: React.FC<{
                                       style={{ aspectRatio: `${cardAspectByAssetId[childAsset.id] ?? 1}` }}
                                     >
                                       <WorkflowGridImage
-                                        fullSrc={childGridPreviewSrc}
-                                        cacheKey={childGridCacheKey}
+                                        fullSrc={childGridPreviewSrcEffective}
+                                        cacheKey={childGridCacheKeyEffective}
                                         deferThumbnail={!thumbUnlockKeys.has(groupKey)}
                                         thumbDecodePriority={thumbHotKeys.has(groupKey) ? 'high' : 'low'}
                                         imageFetchPriority={thumbHotKeys.has(groupKey) ? 'high' : 'auto'}
@@ -4219,7 +4485,12 @@ const WorkflowSection: React.FC<{
                                           onPointerDown={(e) => e.stopPropagation()}
                                           aria-hidden
                                         />
-                                        <WorkflowPixelBusyOverlay executing={isExecutingCurrentItem} />
+                                        <WorkflowPixelBusyOverlay
+                                          executing={isExecutingCurrentItem}
+                                          accentExecuting={showChildSetRunProgress}
+                                          progressDetail={showChildSetRunProgress ? childSetRunUi?.progressLine : null}
+                                          backdropImageSrc={showChildSetRunProgress ? childSetRunUi?.latestImage : null}
+                                        />
                                         {showGroupQueueCancelBtn && (
                                           <div className="absolute inset-0 z-[11] flex items-center justify-center pointer-events-none">
                                             <button
@@ -4304,8 +4575,9 @@ const WorkflowSection: React.FC<{
                               ? 'border-blue-500 ring-2 ring-blue-500/50'
                               : 'border-[#2e2e32]'
                           }`}
-                          draggable
+                          draggable={!isBusyGroupItem}
                           onDragStart={() => {
+                            if (isBusyGroupItem) return;
                             if (!currentGroupAsset) return;
                             const keys = selectedGroupItemKeys.has(groupKey)
                               ? Array.from(selectedGroupItemKeys)
@@ -4510,6 +4782,23 @@ const WorkflowSection: React.FC<{
                   const gridPreviewCacheKey = a.cutImageGroup?.length
                     ? `${a.id}:${a.displayKey}:g${gSafe}`
                     : `${a.id}:${a.displayKey}`;
+                  const setRunUi = capabilitySetRunByAssetId[a.id];
+                  const showSetRunProgress =
+                    isExecutingCurrent &&
+                    !!taskForRootSlot &&
+                    taskForRootSlot.actionType.startsWith(SET_ACTION_PREFIX) &&
+                    !!setRunUi &&
+                    setRunUi.taskId === taskForRootSlot.id;
+                  const gridPreviewSrcEffective =
+                    showSetRunProgress && setRunUi.latestImage ? setRunUi.latestImage : gridPreviewSrc;
+                  const gridPreviewCacheKeyEffective =
+                    showSetRunProgress && setRunUi.latestImage
+                      ? `${gridPreviewCacheKey}:sr:${setRunUi.latestImage.length}`
+                      : gridPreviewCacheKey;
+                  const setRunAccentClass =
+                    showSetRunProgress && !selectedAssetIds.has(a.id)
+                      ? 'ring-2 ring-blue-500/35 shadow-[0_0_22px_rgba(59,130,246,0.14)]'
+                      : '';
 
                   return (
                     <div key={a.id} className="break-inside-avoid mb-6 relative" data-workflow-thumb-key={a.id}>
@@ -4539,7 +4828,7 @@ const WorkflowSection: React.FC<{
                             : isTextCard
                             ? 'border-emerald-900/45'
                             : 'border-[#2e2e32]'
-                        } ${busyClass} transition-transform duration-150 ease-out will-change-transform ${motionClass}`}
+                        } ${setRunAccentClass} ${busyClass} transition-transform duration-150 ease-out will-change-transform ${motionClass}`}
                         draggable={!showArchived && !isBusy}
                         onDragStart={(e) => {
                           if (showArchived || isBusy) return;
@@ -4563,13 +4852,28 @@ const WorkflowSection: React.FC<{
                         }}
                         onDragOver={(e) => {
                           if (isBusy) return;
+                          let types: string[] = [];
+                          try {
+                            types = Array.from(e.dataTransfer.types);
+                          } catch {
+                            types = [];
+                          }
+                          if (
+                            types.includes(DT_AC_CAPABILITY_ACTION) ||
+                            types.includes(DT_AC_CAPABILITY_FROM_EDITOR)
+                          ) {
+                            e.preventDefault();
+                            e.dataTransfer.dropEffect = 'copy';
+                            setDragOverAssetId(a.id);
+                            return;
+                          }
                           if (draggingAssetIds?.length || draggingGroupItems?.itemIndexes?.length) {
                             e.preventDefault();
                             setDragOverAssetId(a.id);
                             return;
                           }
                           try {
-                            if (Array.from(e.dataTransfer.types).includes(DT_AC_WORKFLOW_EXPORT)) {
+                            if (types.includes(DT_AC_WORKFLOW_EXPORT)) {
                               e.preventDefault();
                               setDragOverAssetId(a.id);
                             }
@@ -4585,6 +4889,24 @@ const WorkflowSection: React.FC<{
                           e.preventDefault();
                           if (isBusy) {
                             setDragOverAssetId(null);
+                            return;
+                          }
+                          let capTypes: string[] = [];
+                          try {
+                            capTypes = Array.from(e.dataTransfer.types);
+                          } catch {
+                            capTypes = [];
+                          }
+                          const isCapabilityDrop =
+                            capTypes.includes(DT_AC_CAPABILITY_ACTION) ||
+                            capTypes.includes(DT_AC_CAPABILITY_FROM_EDITOR);
+                          if (isCapabilityDrop) {
+                            const capId = readCapabilityDragActionId(e.dataTransfer);
+                            setDragOverAssetId(null);
+                            setDraggingAssetIds(null);
+                            setDraggingGroupItems(null);
+                            updateDraggingActionId(null);
+                            if (capId) runCapabilityOnAssetCardImmediate(a, capId);
                             return;
                           }
                           const fromState = parseWorkflowDragSource(draggingAssetIds, draggingGroupItems);
@@ -4706,8 +5028,8 @@ const WorkflowSection: React.FC<{
                           ) : (
                             <div className="relative w-full bg-[#141416] flex justify-center" style={{ aspectRatio: `${cardAspect}` }}>
                               <WorkflowGridImage
-                                fullSrc={gridPreviewSrc}
-                                cacheKey={gridPreviewCacheKey}
+                                fullSrc={gridPreviewSrcEffective}
+                                cacheKey={gridPreviewCacheKeyEffective}
                                 deferThumbnail={!thumbUnlockKeys.has(a.id)}
                                 thumbDecodePriority={thumbHotKeys.has(a.id) ? 'high' : 'low'}
                                 imageFetchPriority={thumbHotKeys.has(a.id) ? 'high' : 'auto'}
@@ -4757,7 +5079,12 @@ const WorkflowSection: React.FC<{
                                 onPointerDown={(e) => e.stopPropagation()}
                                 aria-hidden
                               />
-                              <WorkflowPixelBusyOverlay executing={isExecutingCurrent} />
+                              <WorkflowPixelBusyOverlay
+                                executing={isExecutingCurrent}
+                                accentExecuting={showSetRunProgress}
+                                progressDetail={showSetRunProgress ? setRunUi?.progressLine : null}
+                                backdropImageSrc={showSetRunProgress ? setRunUi?.latestImage : null}
+                              />
                               {showRootQueueCancelBtn && (
                                 <div className="absolute inset-0 z-[11] flex items-center justify-center pointer-events-none">
                                   <button
@@ -5155,21 +5482,31 @@ const WorkflowSection: React.FC<{
           }}
         />
       )}
-      {composerOpen && (
-        <Suspense fallback={null}>
+      {composerSessions.map((sess) => (
+        <Suspense key={sess.id} fallback={null}>
           <WorkflowComposerOverlay
-            open={composerOpen}
-            onClose={() => setComposerOpen(false)}
-            sessionKey={composerSessionKey}
+            open
+            onClose={() => closeComposerSession(sess.id)}
+            sessionKey={sess.sessionKey}
             presets={capabilityPresets}
-            initialSet={composerInitialSet}
+            initialSet={sess.initialSet}
+            isForeground={sess.id === composerActiveId}
+            dockStackIndex={getComposerDockStackIndex(sess.id)}
+            dockStackCount={getComposerDockStackCount(sess.id)}
+            onRequestForeground={() => setComposerActiveId(sess.id)}
+            onMinimizedChange={(minimized) =>
+              setComposerMinimized((prev) => {
+                if (prev[sess.id] === minimized) return prev;
+                return { ...prev, [sess.id]: minimized };
+              })
+            }
             onSave={handleComposerSave}
             onLog={onLog}
             getPartialTestInputImage={getComposerPartialTestInputImage}
             assetCandidates={composerAssetCandidates}
           />
         </Suspense>
-      )}
+      ))}
 
       {promptTweakModal && (
         <PromptTweakModal
@@ -5177,7 +5514,26 @@ const WorkflowSection: React.FC<{
           targets={promptTweakModal.targets}
           onConfirm={(editedPrompt) => {
             const trimmed = editedPrompt.trim();
+            const generateCount = normalizeWorkflowGenerateCount(promptTweakModal.overrides?.generateCount);
+            if (
+              generateCount > WORKFLOW_GROUP_GENERATE_CONFIRM_THRESHOLD &&
+              typeof window !== 'undefined' &&
+              !window.confirm(`当前生成数量为 ${generateCount}，将创建大量任务，是否继续？`)
+            ) {
+              return;
+            }
+            const taskOptions: WorkflowPendingTaskOptions = {
+              ...(trimmed ? { promptOverride: trimmed } : {}),
+              ...(promptTweakModal.overrides?.imageGear ? { overrideImageGear: promptTweakModal.overrides.imageGear } : {}),
+              ...(promptTweakModal.overrides?.imageAspectRatio ? { overrideImageAspectRatio: promptTweakModal.overrides.imageAspectRatio } : {}),
+              ...(promptTweakModal.overrides?.imageSize ? { overrideImageSize: promptTweakModal.overrides.imageSize } : {}),
+              ...(typeof promptTweakModal.overrides?.understand === 'boolean'
+                ? { overrideSkipUnderstand: promptTweakModal.overrides.understand }
+                : {}),
+            };
             const tasks: WorkflowPendingTask[] = [];
+            const clonePlans: Array<{ sourceId: string; cloneId: string }> = [];
+            const groupPlans: string[][] = [];
             for (const t of promptTweakModal.targets) {
               if ('assetId' in t) {
                 tasks.push({
@@ -5187,30 +5543,80 @@ const WorkflowSection: React.FC<{
                   inputImage: t.inputImage,
                   addedAt: Date.now(),
                   ...(t.inputSourceDisplayKey != null ? { inputSourceDisplayKey: t.inputSourceDisplayKey } : {}),
-                  ...(trimmed ? { promptOverride: trimmed } : {}),
-                  ...(promptTweakModal.overrides?.imageGear ? { overrideImageGear: promptTweakModal.overrides.imageGear } : {}),
-                  ...(promptTweakModal.overrides?.imageAspectRatio ? { overrideImageAspectRatio: promptTweakModal.overrides.imageAspectRatio } : {}),
-                  ...(promptTweakModal.overrides?.imageSize ? { overrideImageSize: promptTweakModal.overrides.imageSize } : {}),
-                  ...(typeof promptTweakModal.overrides?.understand === 'boolean'
-                    ? { overrideSkipUnderstand: promptTweakModal.overrides.understand }
+                  ...(taskOptions.promptOverride != null ? { promptOverride: taskOptions.promptOverride } : {}),
+                  ...(taskOptions.overrideImageGear ? { overrideImageGear: taskOptions.overrideImageGear } : {}),
+                  ...(taskOptions.overrideImageAspectRatio ? { overrideImageAspectRatio: taskOptions.overrideImageAspectRatio } : {}),
+                  ...(taskOptions.overrideImageSize ? { overrideImageSize: taskOptions.overrideImageSize } : {}),
+                  ...(typeof taskOptions.overrideSkipUnderstand === 'boolean'
+                    ? { overrideSkipUnderstand: taskOptions.overrideSkipUnderstand }
                     : {}),
                   ...(t.sourceGroupAssetId != null ? { sourceGroupAssetId: t.sourceGroupAssetId, sourceItemIndex: t.sourceItemIndex } : {}),
                   ...(t.inputText != null && t.inputText.trim() !== '' ? { inputText: t.inputText.trim() } : {}),
                 });
+                if (generateCount > 1 && t.sourceGroupAssetId == null) {
+                  const sourceAsset = assets.find((a) => a.id === t.assetId);
+                  if (sourceAsset && !sourceAsset.parentAssetId) {
+                    const idsForGroup = [t.assetId];
+                    for (let i = 1; i < generateCount; i += 1) {
+                      const cloneId = uuid();
+                      clonePlans.push({ sourceId: t.assetId, cloneId });
+                      idsForGroup.push(cloneId);
+                      tasks.push({
+                        id: uuid(),
+                        assetId: cloneId,
+                        actionType: promptTweakModal.preset.id,
+                        inputImage: t.inputImage,
+                        addedAt: Date.now(),
+                        ...(t.inputSourceDisplayKey != null ? { inputSourceDisplayKey: t.inputSourceDisplayKey } : {}),
+                        ...(taskOptions.promptOverride != null ? { promptOverride: taskOptions.promptOverride } : {}),
+                        ...(taskOptions.overrideImageGear ? { overrideImageGear: taskOptions.overrideImageGear } : {}),
+                        ...(taskOptions.overrideImageAspectRatio ? { overrideImageAspectRatio: taskOptions.overrideImageAspectRatio } : {}),
+                        ...(taskOptions.overrideImageSize ? { overrideImageSize: taskOptions.overrideImageSize } : {}),
+                        ...(typeof taskOptions.overrideSkipUnderstand === 'boolean'
+                          ? { overrideSkipUnderstand: taskOptions.overrideSkipUnderstand }
+                          : {}),
+                        ...(t.inputText != null && t.inputText.trim() !== '' ? { inputText: t.inputText.trim() } : {}),
+                      });
+                    }
+                    if (idsForGroup.length > 1) groupPlans.push(idsForGroup);
+                  }
+                }
               } else {
-                addImageToPending(t.imageBase64, promptTweakModal.preset.id, {
-                  parentAssetId: t.parentAssetId,
-                  sourceGroupAssetId: t.sourceGroupAssetId,
-                  sourceItemIndex: t.sourceItemIndex,
-                  ...(trimmed ? { promptOverride: trimmed } : {}),
-                  ...(promptTweakModal.overrides?.imageGear ? { overrideImageGear: promptTweakModal.overrides.imageGear } : {}),
-                  ...(promptTweakModal.overrides?.imageAspectRatio ? { overrideImageAspectRatio: promptTweakModal.overrides.imageAspectRatio } : {}),
-                  ...(promptTweakModal.overrides?.imageSize ? { overrideImageSize: promptTweakModal.overrides.imageSize } : {}),
-                  ...(typeof promptTweakModal.overrides?.understand === 'boolean'
-                    ? { overrideSkipUnderstand: promptTweakModal.overrides.understand }
-                    : {}),
-                });
+                const runTimes = generateCount > 1 ? generateCount : 1;
+                for (let i = 0; i < runTimes; i += 1) {
+                  addImageToPending(t.imageBase64, promptTweakModal.preset.id, {
+                    parentAssetId: t.parentAssetId,
+                    sourceGroupAssetId: t.sourceGroupAssetId,
+                    sourceItemIndex: t.sourceItemIndex,
+                    ...(taskOptions.promptOverride != null ? { promptOverride: taskOptions.promptOverride } : {}),
+                    ...(taskOptions.overrideImageGear ? { overrideImageGear: taskOptions.overrideImageGear } : {}),
+                    ...(taskOptions.overrideImageAspectRatio ? { overrideImageAspectRatio: taskOptions.overrideImageAspectRatio } : {}),
+                    ...(taskOptions.overrideImageSize ? { overrideImageSize: taskOptions.overrideImageSize } : {}),
+                    ...(typeof taskOptions.overrideSkipUnderstand === 'boolean'
+                      ? { overrideSkipUnderstand: taskOptions.overrideSkipUnderstand }
+                      : {}),
+                  });
+                }
               }
+            }
+            if (clonePlans.length > 0) {
+              setAssets((prev) => {
+                let next = [...prev];
+                for (const plan of clonePlans) {
+                  const src = next.find((a) => a.id === plan.sourceId);
+                  if (!src) continue;
+                  next.push({
+                    ...src,
+                    id: plan.cloneId,
+                    parentAssetId: undefined,
+                    archived: false,
+                    hiddenInGrid: false,
+                    createdAt: Date.now(),
+                  });
+                }
+                for (const ids of groupPlans) next = insertManualGroupForAssetIds(next, ids);
+                return next;
+              });
             }
             if (tasks.length > 0) addTasksToPending(tasks);
             setPromptTweakModal(null);

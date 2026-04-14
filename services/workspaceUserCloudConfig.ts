@@ -93,9 +93,11 @@ export async function fetchWorkspaceUserCloudConfig(
           const ap = String(parsed.settings?.aiProvider ?? '')
             .trim()
             .toLowerCase();
-          return ap === 'vertex' || ap === 'toapis' || ap === 'antigravity' || ap === 'vectorengine'
-            ? (ap as WorkspaceUserCloudConfig['settings']['aiProvider'])
-            : 'gemini';
+          if (ap === 'vertex' || ap === 'toapis' || ap === 'antigravity' || ap === 'vectorengine') {
+            return ap as WorkspaceUserCloudConfig['settings']['aiProvider'];
+          }
+          if (ap === 'gemini') return 'gemini';
+          return 'vertex';
         })(),
         geminiApiKey: String(parsed.settings?.geminiApiKey || ''),
         toapisApiKey: String(parsed.settings?.toapisApiKey || ''),
@@ -135,9 +137,11 @@ export async function pushWorkspaceUserCloudConfig(
         const ap = String(input.settings.aiProvider ?? '')
           .trim()
           .toLowerCase();
-        return ap === 'vertex' || ap === 'toapis' || ap === 'antigravity' || ap === 'vectorengine'
-          ? (ap as WorkspaceUserCloudConfig['settings']['aiProvider'])
-          : 'gemini';
+        if (ap === 'vertex' || ap === 'toapis' || ap === 'antigravity' || ap === 'vectorengine') {
+          return ap as WorkspaceUserCloudConfig['settings']['aiProvider'];
+        }
+        if (ap === 'gemini') return 'gemini';
+        return 'vertex';
       })(),
       geminiApiKey: String(input.settings.geminiApiKey || ''),
       toapisApiKey: String(input.settings.toapisApiKey || ''),

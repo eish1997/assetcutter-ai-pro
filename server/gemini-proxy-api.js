@@ -430,6 +430,7 @@ async function withGeminiProxySlot(fn) {
 }
 
 const GEMINI_ASYNC_JOB_MAX_WAIT_MS = Number(process.env.GEMINI_ASYNC_JOB_MAX_WAIT_MS) || 590_000;
+const GEMINI_ASYNC_BATCH_MAX_ITEMS = Number(process.env.GEMINI_ASYNC_BATCH_MAX_ITEMS) || 20;
 
 function sweepGeminiAsyncJobs() {
   const now = Date.now();
@@ -488,6 +489,73 @@ function createGeminiAsyncJob(model, contents, config, useVertex) {
   return id;
 }
 
+async function runGeminiWithRetries(model, contents, config, useVertex) {
+  const GEMINI_PROXY_MAX_ATTEMPTS = Number(process.env.GEMINI_PROXY_RETRIES) || 15;
+  const startedAt = Date.now();
+  let lastErr;
+  for (let attempt = 0; attempt < GEMINI_PROXY_MAX_ATTEMPTS; attempt++) {
+    try {
+      if (Date.now() - startedAt > GEMINI_ASYNC_JOB_MAX_WAIT_MS) {
+        throw new Error(`Gemini 异步任务最大等待超时（>${GEMINI_ASYNC_JOB_MAX_WAIT_MS}ms）`);
+      }
+      return await withGeminiProxySlot(() =>
+        useVertex ? proxyVertexGenerateContent(model, contents, config) : proxyGenerateContent(model, contents, config)
+      );
+    } catch (e) {
+      lastErr = e;
+      const shouldRetry = attempt < GEMINI_PROXY_MAX_ATTEMPTS - 1 && isRetryable(e);
+      if (!shouldRetry) break;
+      const delay = Math.min(30_000, 5000 * Math.pow(2, attempt));
+      await sleep(delay);
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(formatErrorDetail(lastErr));
+}
+
+function createGeminiAsyncBatchJob(items, useVertex) {
+  sweepGeminiAsyncJobs();
+  const id = `gasync-batch-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  geminiAsyncJobs.set(id, {
+    id,
+    status: 'pending',
+    createdAt: Date.now(),
+    result: null,
+    error: null,
+  });
+  setImmediate(async () => {
+    const job = geminiAsyncJobs.get(id);
+    if (!job) return;
+    job.status = 'running';
+    try {
+      const results = await Promise.all(
+        items.map(async (item, index) => {
+          try {
+            const result = await runGeminiWithRetries(item.model, item.contents, item.config, useVertex);
+            return { ok: true, result };
+          } catch (e) {
+            const error = formatErrorDetail(e);
+            console.error(`[gemini-proxy] async batch item failed id=${id} index=${index} error=${error}`);
+            return { ok: false, error };
+          }
+        })
+      );
+      const j = geminiAsyncJobs.get(id);
+      if (!j) return;
+      j.status = 'completed';
+      j.result = { items: results };
+      j.updatedAt = Date.now();
+    } catch (e) {
+      const j = geminiAsyncJobs.get(id);
+      if (!j) return;
+      j.status = 'failed';
+      j.error = formatErrorDetail(e);
+      j.updatedAt = Date.now();
+      console.error(`[gemini-proxy] async batch failed id=${id} error=${j.error}`);
+    }
+  });
+  return id;
+}
+
 function isRetryable(e) {
   const msg = String((e && e.message) || e);
   if (/429|503|504|overloaded|UNAVAILABLE|DEADLINE_EXCEEDED|Deadline expired|500|INTERNAL|Internal error|high demand|try again later/i.test(msg)) return true;
@@ -517,6 +585,7 @@ function sendBodyReadError(res, e) {
 }
 
 const GEMINI_ASYNC_PATH = '/proxy/gemini/async';
+const GEMINI_ASYNC_BATCH_PATH = '/proxy/gemini/async-batch';
 
 const server = http.createServer(async (req, res) => {
   const corsOk = applyCors(req, res);
@@ -577,8 +646,82 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (path === GEMINI_ASYNC_BATCH_PATH && req.method === 'POST') {
+    try {
+      const body = await readBodyUtf8(req, MAX_BODY_BYTES);
+      let parsed;
+      try {
+        parsed = JSON.parse(body);
+      } catch {
+        sendError(res, 400, 'Invalid JSON body');
+        return;
+      }
+      const { items, aiBackend } = parsed || {};
+      if (!Array.isArray(items) || items.length === 0) {
+        sendError(res, 400, 'Missing items');
+        return;
+      }
+      if (items.length > GEMINI_ASYNC_BATCH_MAX_ITEMS) {
+        sendError(res, 400, `Too many items (>${GEMINI_ASYNC_BATCH_MAX_ITEMS})`);
+        return;
+      }
+      const useVertex = aiBackend === 'vertex';
+      const key = normalizeSecret(process.env.GEMINI_API_KEY || '');
+      if (useVertex) {
+        if (!isVertexConfigured()) {
+          sendError(
+            res,
+            500,
+            'Vertex not configured: set VERTEX_PROJECT_ID or GOOGLE_CLOUD_PROJECT, VERTEX_LOCATION (optional), and ADC (e.g. GOOGLE_APPLICATION_CREDENTIALS)'
+          );
+          return;
+        }
+      } else if (!GEMINI_API_KEY_POOL.length && !key && !(ENABLE_TOAPIS_FALLBACK && TOAPIS_API_KEY)) {
+        sendError(res, 500, 'No backend key. Set GEMINI_API_KEY/GEMINI_API_KEYS');
+        return;
+      }
+      const normalizedItems = items.map((item) => ({
+        model: item?.model,
+        contents: item?.contents,
+        config: item?.config || {},
+      }));
+      if (normalizedItems.some((item) => !item.model || !item.contents)) {
+        sendError(res, 400, 'Each item needs model and contents');
+        return;
+      }
+      const jobId = createGeminiAsyncBatchJob(normalizedItems, useVertex);
+      sendJson(res, 202, { jobId, status: 'pending' });
+    } catch (e) {
+      sendBodyReadError(res, e);
+    }
+    return;
+  }
+
   if (path.startsWith(`${GEMINI_ASYNC_PATH}/`) && req.method === 'GET') {
     const jobId = decodeURIComponent(path.slice(GEMINI_ASYNC_PATH.length + 1)).split('/')[0];
+    if (!jobId || jobId.includes('..')) {
+      sendError(res, 400, 'Invalid job id');
+      return;
+    }
+    const job = geminiAsyncJobs.get(jobId);
+    if (!job) {
+      sendJson(res, 404, { error: 'Job not found or expired' });
+      return;
+    }
+    if (job.status === 'completed') {
+      sendJson(res, 200, { status: 'completed', result: job.result });
+      return;
+    }
+    if (job.status === 'failed') {
+      sendJson(res, 200, { status: 'failed', error: job.error || 'Unknown error' });
+      return;
+    }
+    sendJson(res, 200, { status: job.status });
+    return;
+  }
+
+  if (path.startsWith(`${GEMINI_ASYNC_BATCH_PATH}/`) && req.method === 'GET') {
+    const jobId = decodeURIComponent(path.slice(GEMINI_ASYNC_BATCH_PATH.length + 1)).split('/')[0];
     if (!jobId || jobId.includes('..')) {
       sendError(res, 400, 'Invalid job id');
       return;
@@ -656,7 +799,7 @@ const server = http.createServer(async (req, res) => {
 
   sendJson(res, 404, {
     error:
-      'Not found. POST /proxy/gemini/async (body optional aiBackend:vertex) + GET /proxy/gemini/async/:jobId; POST /proxy/gemini/generate-content; GET /healthz',
+      'Not found. POST /proxy/gemini/async or /proxy/gemini/async-batch (body optional aiBackend:vertex) + GET /proxy/gemini/async/:jobId or /proxy/gemini/async-batch/:jobId; POST /proxy/gemini/generate-content; GET /healthz',
   });
 });
 

@@ -1,4 +1,11 @@
-/** 用户设置的 API 密钥存 localStorage，键名与读写逻辑集中在此；底层经 `clientPersist` 安全访问 */
+/**
+ * 用户设置的 API 密钥存 localStorage，键名与读写逻辑集中在此；底层经 `clientPersist` 安全访问。
+ *
+ * **AI 渠道（供应商）唯一真相源**：`getAiProvider()` + 各供应商对应的 Key/BaseURL（见下方 getter）。
+ * 全站所有大模型调用必须走 `geminiService.getAI()`（内部**每次**调用都会读当前 `getAiProvider()`），
+ * 禁止在业务组件里自行 `new GoogleGenAI`、直连 ToAPIs/VectorEngine，以免与设置里选的渠道不一致。
+ * 登录后云端 `user-config.json` 会合并进同一套 localStorage 键，与设置页、工作流密钥弹窗共用。
+ */
 
 import {
   readLocalFlag,
@@ -25,6 +32,9 @@ const STORAGE_KEY_DIALOG_SKIP_UNDERSTAND = 'ac_dialog_skip_understand';
 const STORAGE_KEY_WORKSPACE_AUTO_SYNC = 'ac_workspace_auto_sync';
 
 export type AiProvider = 'gemini' | 'vertex' | 'toapis' | 'antigravity' | 'vectorengine';
+
+/** 未选择或本地无记录时的默认供应商（新用户 / 清空存储后） */
+export const DEFAULT_AI_PROVIDER: AiProvider = 'vertex';
 const SESSION_KEY_TENCENT_SECRET_ID = 'ac_tencent_secret_id';
 const SESSION_KEY_TENCENT_SECRET_KEY = 'ac_tencent_secret_key';
 
@@ -43,11 +53,36 @@ export function getAiProvider(): AiProvider {
   if (v === 'toapis') return 'toapis';
   if (v === 'antigravity') return 'antigravity';
   if (v === 'vectorengine') return 'vectorengine';
-  return 'gemini';
+  if (v === 'gemini') return 'gemini';
+  return DEFAULT_AI_PROVIDER;
 }
 
 export function setAiProvider(value: AiProvider): void {
   writeLocalString(STORAGE_KEY_AI_PROVIDER, value);
+}
+
+/** 另一浏览器标签页修改了下列键时，`storage` 事件会触发；用于设置页与顶栏等保持同步 */
+export function isAiSettingsStorageKey(key: string | null): boolean {
+  if (key == null) return true;
+  return (
+    key === STORAGE_KEY_AI_PROVIDER ||
+    key === STORAGE_KEY_GEMINI ||
+    key === STORAGE_KEY_TOAPIS_API_KEY ||
+    key === STORAGE_KEY_TOAPIS_BASE_URL ||
+    key === STORAGE_KEY_ANTIGRAVITY_API_KEY ||
+    key === STORAGE_KEY_ANTIGRAVITY_BASE_URL ||
+    key === STORAGE_KEY_VECTORENGINE_API_KEY ||
+    key === STORAGE_KEY_VECTORENGINE_BASE_URL
+  );
+}
+
+export function subscribeAiSettingsCrossTab(onChange: () => void): () => void {
+  const handler = (e: StorageEvent) => {
+    if (isAiSettingsStorageKey(e.key)) onChange();
+  };
+  if (typeof window === 'undefined') return () => {};
+  window.addEventListener('storage', handler);
+  return () => window.removeEventListener('storage', handler);
 }
 
 /** 工作区顶栏等：当前选用的 AI 供应商短名称 */

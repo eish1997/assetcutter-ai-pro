@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import {
+  DEFAULT_AI_PROVIDER,
   getAiProvider,
   setAiProvider,
   getUserApiKey,
@@ -36,7 +37,7 @@ export const WorkflowApiKeyModal: React.FC<{
   /** 保存成功后回调，用于刷新外部状态信号等 */
   onSaved?: () => void;
 }> = ({ open, onClose, onSaved }) => {
-  const [provider, setProvider] = useState<AiProvider>('gemini');
+  const [provider, setProvider] = useState<AiProvider>(DEFAULT_AI_PROVIDER);
   const [geminiKey, setGeminiKey] = useState('');
   const [toapisKey, setToapisKey] = useState('');
   const [agKey, setAgKey] = useState('');

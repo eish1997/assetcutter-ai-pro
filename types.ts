@@ -533,6 +533,8 @@ export type CapabilitySetNode = {
     assetId?: string;
     /** type===output 时：期望产物类型（与 CAPABILITY_CATEGORIES 一致，多输出节点时用于区分） */
     outputCategory?: CapabilityCategory;
+    /** 画布「运行测试」成功后写入的临时预览图，不写入持久化 JSON */
+    testRunPreview?: string;
   };
 };
 

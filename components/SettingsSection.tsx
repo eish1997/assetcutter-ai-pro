@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { SidebarAccountAvatar } from './SidebarAccountAvatar';
 import { useUserUiPrefs } from '../hooks/useUserUiPrefs';
 import {
@@ -9,6 +9,7 @@ import {
 import {
   getUserApiKey,
   setUserApiKey,
+  DEFAULT_AI_PROVIDER,
   getAiProvider,
   setAiProvider,
   getToapisApiKey,
@@ -28,6 +29,7 @@ import {
   setTencentSecretId as saveTencentSecretId,
   getTencentSecretKey,
   setTencentSecretKey as saveTencentSecretKey,
+  subscribeAiSettingsCrossTab,
 } from '../services/settingsStore';
 import { isWorkspaceCloudEnabled } from '../services/workspaceCloudSync';
 import { CustomDropdown, DROPDOWN_TRIGGER_COMPACT } from './ui/CustomDropdown';
@@ -54,9 +56,14 @@ const SettingsSection: React.FC<{
   onLogout?: () => Promise<void>;
   /** 切换 AI 供应商后通知父级刷新顶栏等平台文案 */
   onAiInvocationSurfaceChange?: () => void;
-}> = ({ currentUser = null, authLoading = false, onRefreshUser, onLogout, onAiInvocationSurfaceChange }) => {
+  /**
+   * 与 App 内 `aiInvocationStatusRev` 同步：云端拉取 user-config、工作流密钥弹窗保存等会递增，
+   * 避免设置页仍显示旧的供应商/Key（与 `getAiProvider()` 真相源不一致）。
+   */
+  aiSettingsSyncRev?: number;
+}> = ({ currentUser = null, authLoading = false, onRefreshUser, onLogout, onAiInvocationSurfaceChange, aiSettingsSyncRev = 0 }) => {
   const contentRef = useRef<HTMLDivElement>(null);
-  const [aiProvider, setAiProviderState] = useState<AiProvider>('gemini');
+  const [aiProvider, setAiProviderState] = useState<AiProvider>(DEFAULT_AI_PROVIDER);
   const [apiKey, setApiKey] = useState('');
   const [toapisApiKey, setToapisApiKeyState] = useState('');
   const [toapisBaseUrl, setToapisBaseUrlState] = useState('');
@@ -80,7 +87,7 @@ const SettingsSection: React.FC<{
     setAvatarLinkDraft(/^https?:\/\//i.test(u) ? u : '');
   }, [userUiPrefs.avatarUrl]);
 
-  useEffect(() => {
+  const reloadApiSettingsFromStore = useCallback(() => {
     setAiProviderState(getAiProvider());
     setApiKey(getUserApiKey() ?? '');
     setToapisApiKeyState(getToapisApiKey() ?? '');
@@ -92,6 +99,14 @@ const SettingsSection: React.FC<{
     setTencentSecretId(getTencentSecretId() ?? '');
     setTencentSecretKey(getTencentSecretKey() ?? '');
   }, []);
+
+  useEffect(() => {
+    reloadApiSettingsFromStore();
+  }, [aiSettingsSyncRev, reloadApiSettingsFromStore]);
+
+  useEffect(() => {
+    return subscribeAiSettingsCrossTab(reloadApiSettingsFromStore);
+  }, [reloadApiSettingsFromStore]);
 
   const handleSaveApiKey = () => {
     setUserApiKey(apiKey.trim() || null);

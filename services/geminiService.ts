@@ -34,6 +34,40 @@ function resolveBulkBase(): string {
 
 const BULK_BASE = resolveBulkBase();
 
+/**
+ * 部分第三方 Gemini 网关（尤其 VectorEngine）对 `gemini-3-flash-preview` 等预览 id 会返回含
+ * “valid … user model” 类 4xx；能力与对话里的「理解 / 纯文本」在此回退到更通用的模型 id。
+ * 官方 Gemini / Vertex / 本站代理仍用调用方传入的 id。
+ */
+export function resolveUpstreamTextModelId(internalModel: string): string {
+  const p = getAiProvider();
+  const m = (internalModel || '').trim();
+  if (!m) return internalModel;
+  const ml = m.toLowerCase();
+  if (p === 'vectorengine') {
+    if (ml.includes('gemini-3-flash-preview')) return 'gemini-2.5-flash';
+    if (ml.includes('gemini-3-pro-preview')) return 'gemini-2.5-pro';
+  }
+  return m;
+}
+
+/**
+ * 部分第三方网关（尤其 VectorEngine）不认 `gemini-3.1-flash-image-preview` 等预览 id；
+ * ToAPIs 等在各自 adapter 内映射，此处**不再**改写，避免双重映射。
+ */
+export function resolveUpstreamImageModelId(internalModel: string): string {
+  const p = getAiProvider();
+  const m = (internalModel || '').trim();
+  if (!m) return internalModel;
+  const ml = m.toLowerCase();
+  if (p === 'vectorengine') {
+    if (ml.includes('gemini-3.1-flash-image-preview') || ml.includes('gemini-3-pro-image-preview')) {
+      return 'gemini-2.5-flash-image';
+    }
+  }
+  return m;
+}
+
 /** 为 true 时恢复旧行为：本机 Gemini Key 优先于 VITE_BULK_IMAGE_API（浏览器直连 Google）。默认 false：有代理地址则优先走后端代理，与生产环境一致、避免本机 Key 直连触发地区限制。 */
 function preferBrowserGeminiKeyFirst(): boolean {
   try {
@@ -59,6 +93,34 @@ function bulkApiUrl(path: string): string {
 
 /** Render 等对长连接常限 10～15s：走后端异步 job + 轮询，避免 503/504 */
 const GEMINI_ASYNC_POLL_MS = 1500;
+/** 与 proxy 侧 GEMINI_ASYNC_JOB_MAX_WAIT_MS（默认 590s）对齐，避免前端提前超时 */
+const GEMINI_ASYNC_CLIENT_MAX_POLL_MS = 600_000;
+/** 生图阶段「盒子批处理」：凑满后一次发给 proxy（默认 Vertex=4，其它=3） */
+const GEMINI_IMAGE_BATCH_BOX_SIZE_DEFAULT = 3;
+const GEMINI_IMAGE_BATCH_BOX_SIZE_VERTEX_DEFAULT = 4;
+const GEMINI_IMAGE_BATCH_FLUSH_MS = 30;
+
+function readEnvNumber(key: string): number | null {
+  try {
+    const raw =
+      ((import.meta as unknown as { env?: Record<string, string | undefined> }).env?.[key] || '').trim();
+    if (!raw) return null;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return null;
+    return n;
+  } catch {
+    return null;
+  }
+}
+
+function resolveImageBatchBoxSize(aiBackend?: "vertex"): number {
+  const envGeneric = readEnvNumber('VITE_GEMINI_IMAGE_BATCH_BOX_SIZE');
+  const envVertex = readEnvNumber('VITE_GEMINI_IMAGE_BATCH_BOX_SIZE_VERTEX');
+  const defaultSize =
+    aiBackend === 'vertex' ? GEMINI_IMAGE_BATCH_BOX_SIZE_VERTEX_DEFAULT : GEMINI_IMAGE_BATCH_BOX_SIZE_DEFAULT;
+  const raw = aiBackend === 'vertex' ? (envVertex ?? envGeneric ?? defaultSize) : (envGeneric ?? defaultSize);
+  return Math.max(1, Math.min(20, Math.floor(raw)));
+}
 
 function parseBulkProxyErrorBody(text: string): string {
   const raw = (text || "").trim();
@@ -84,7 +146,7 @@ async function bulkProxyGenerateContentAsync(args: {
     Number((safeConfig.httpOptions as Record<string, unknown> | undefined)?.timeout) ||
     GEMINI_IMAGE_REQUEST_TIMEOUT_MS;
   /** 服务端可对 503 多次退避，轮询上限需覆盖 */
-  const maxPollMs = Math.min(600_000, Math.max(httpTimeout + 240_000, 540_000));
+  const maxPollMs = Math.max(httpTimeout + 240_000, GEMINI_ASYNC_CLIENT_MAX_POLL_MS);
 
   const aiBackendExtra = getAiProvider() === "vertex" ? { aiBackend: "vertex" as const } : {};
 
@@ -150,6 +212,171 @@ async function bulkProxyGenerateContentAsync(args: {
   throw new Error(`等待 Gemini 结果超时（>${maxPollMs}ms），请稍后重试`);
 }
 
+async function bulkProxyGenerateContentBatchAsync(args: {
+  items: Array<{ model: string; contents: unknown; config?: Record<string, unknown> }>;
+  aiBackend?: "vertex";
+}): Promise<Array<{ ok: boolean; result?: { text?: string; candidates?: unknown[] }; error?: string }>> {
+  if (!Array.isArray(args.items) || args.items.length === 0) return [];
+  const createRes = await fetch(bulkApiUrl("/proxy/gemini/async-batch"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      items: args.items.map((item) => ({
+        model: item.model,
+        contents: item.contents,
+        config: item.config || {},
+      })),
+      ...(args.aiBackend ? { aiBackend: args.aiBackend } : {}),
+    }),
+  });
+  const createText = await createRes.text();
+  if (!createRes.ok) {
+    throw new Error(parseBulkProxyErrorBody(createText) || `Gemini 批量异步任务创建失败（${createRes.status}）`);
+  }
+  let jobId: string;
+  try {
+    const parsed = JSON.parse(createText) as { jobId?: string };
+    jobId = String(parsed.jobId || "");
+  } catch {
+    throw new Error("批量异步任务响应无效");
+  }
+  if (!jobId) throw new Error("批量异步任务未返回 jobId");
+
+  const deadline = Date.now() + GEMINI_ASYNC_CLIENT_MAX_POLL_MS;
+  while (Date.now() < deadline) {
+    const pollRes = await fetch(bulkApiUrl(`/proxy/gemini/async-batch/${encodeURIComponent(jobId)}`));
+    const pollText = await pollRes.text();
+    if (!pollRes.ok) {
+      throw new Error(parseBulkProxyErrorBody(pollText) || `批量任务轮询失败（${pollRes.status}）`);
+    }
+    let j: {
+      status?: string;
+      result?: { items?: Array<{ ok?: boolean; result?: { text?: string; candidates?: unknown[] }; error?: string }> };
+      error?: string;
+    };
+    try {
+      j = JSON.parse(pollText) as typeof j;
+    } catch {
+      throw new Error("批量轮询响应无效");
+    }
+    if (j.status === "completed") {
+      const items = Array.isArray(j.result?.items) ? j.result!.items! : [];
+      return items.map((it) => ({
+        ok: it?.ok === true,
+        ...(it?.result ? { result: it.result } : {}),
+        ...(it?.error ? { error: String(it.error) } : {}),
+      }));
+    }
+    if (j.status === "failed") {
+      throw new Error(j.error || "Gemini 批量任务失败");
+    }
+    await sleepWithAbort(GEMINI_ASYNC_POLL_MS);
+  }
+  throw new Error(`等待 Gemini 批量结果超时（>${GEMINI_ASYNC_CLIENT_MAX_POLL_MS}ms），请稍后重试`);
+}
+
+type PendingImageBatchItem = {
+  model: string;
+  contents: unknown;
+  config?: Record<string, unknown>;
+  aiBackend?: "vertex";
+  resolve: (value: { text?: string; candidates?: unknown[] }) => void;
+  reject: (reason?: unknown) => void;
+};
+
+let pendingImageBatchItems: PendingImageBatchItem[] = [];
+let imageBatchTimer: ReturnType<typeof setTimeout> | null = null;
+let imageBatchInFlight = false;
+
+function scheduleImageBatchFlush() {
+  if (imageBatchTimer != null) return;
+  imageBatchTimer = setTimeout(() => {
+    imageBatchTimer = null;
+    void flushImageBatchQueue();
+  }, GEMINI_IMAGE_BATCH_FLUSH_MS);
+}
+
+async function flushImageBatchQueue(): Promise<void> {
+  if (imageBatchInFlight) return;
+  if (pendingImageBatchItems.length === 0) return;
+  imageBatchInFlight = true;
+  try {
+    while (pendingImageBatchItems.length > 0) {
+      const queueAiBackend = pendingImageBatchItems[0]?.aiBackend;
+      const batchBoxSize = resolveImageBatchBoxSize(queueAiBackend);
+      const chunk = pendingImageBatchItems.splice(0, batchBoxSize);
+      const aiBackend = chunk[0]?.aiBackend;
+      const mixedBackend = chunk.some((item) => item.aiBackend !== aiBackend);
+      if (mixedBackend) {
+        // 理论上不会发生（provider 全局唯一），兜底回退逐个请求。
+        for (const item of chunk) {
+          try {
+            const single = await bulkProxyGenerateContentAsync({
+              model: item.model,
+              contents: item.contents,
+              config: item.config,
+            });
+            item.resolve(single);
+          } catch (e) {
+            item.reject(e);
+          }
+        }
+        continue;
+      }
+      try {
+        console.info(
+          `[gemini-batch] dispatch size=${chunk.length} box=${batchBoxSize} provider=${aiBackend ?? 'gemini'}`
+        );
+        const results = await bulkProxyGenerateContentBatchAsync({
+          items: chunk.map((item) => ({
+            model: item.model,
+            contents: item.contents,
+            config: item.config,
+          })),
+          ...(aiBackend ? { aiBackend } : {}),
+        });
+        chunk.forEach((item, idx) => {
+          const result = results[idx];
+          if (result?.ok && result.result) {
+            item.resolve(result.result);
+          } else {
+            item.reject(new Error(result?.error || "Gemini 批量子任务失败"));
+          }
+        });
+      } catch (e) {
+        chunk.forEach((item) => item.reject(e));
+      }
+    }
+  } finally {
+    imageBatchInFlight = false;
+    if (pendingImageBatchItems.length > 0) scheduleImageBatchFlush();
+  }
+}
+
+function enqueueImageBatchGenerateContent(args: {
+  model: string;
+  contents: unknown;
+  config?: Record<string, unknown>;
+}): Promise<{ text?: string; candidates?: unknown[] }> {
+  return new Promise((resolve, reject) => {
+    const aiBackend = getAiProvider() === "vertex" ? ("vertex" as const) : undefined;
+    const batchBoxSize = resolveImageBatchBoxSize(aiBackend);
+    pendingImageBatchItems.push({
+      model: args.model,
+      contents: args.contents,
+      config: args.config,
+      aiBackend,
+      resolve,
+      reject,
+    });
+    if (pendingImageBatchItems.length >= batchBoxSize) {
+      void flushImageBatchQueue();
+    } else {
+      scheduleImageBatchFlush();
+    }
+  });
+}
+
 type GeminiClientLike = {
   models: {
     generateContent: (args: { model: string; contents: unknown; config?: Record<string, unknown> }) => Promise<any>;
@@ -161,6 +388,11 @@ type GeminiClientLike = {
   };
 };
 
+/**
+ * 全站统一入口：对话、工作流/能力执行、贴图、擂台、站点助手等**一律**通过本函数取客户端。
+ * 供应商仅由 `settingsStore.getAiProvider()`（设置页 / 工作流密钥弹窗 / 云端 user-config 写入的同一存储）决定；
+ * 此处按供应商**互斥**分支返回实现，不会在 ToAPIs/VectorEngine 等网关下静默改走 Google 官方 Key。
+ */
 const getAI = (): GeminiClientLike => {
   const provider = getAiProvider();
   /**
@@ -688,6 +920,17 @@ export function normalizeApiErrorMessage(err: unknown): string {
     if (typeof message === "string" && message.length > 0 && message.length < 200) return message;
   }
 
+  if (/Please use a valid role:\s*user\s*model/i.test(raw)) {
+    return (
+      '网关拒绝了对话请求的「角色」格式（常见于部分 Gemini 兼容线路）。请更新本站代码后重试；若仍失败可暂时改用 Google Gemini / Vertex 官方代理，或向网关服务商反馈。'
+    );
+  }
+  if (/valid stable user model/i.test(raw)) {
+    return (
+      '上游提示模型不可用（常见于 VectorEngine 等对预览模型 id 限制）。已在向量引擎线路自动改用 gemini-2.5-flash / gemini-2.5-pro；若仍失败请在设置中更换供应商或核对订阅/额度。'
+    );
+  }
+
   if (/PERMISSION_DENIED/i.test(raw) || /"code"\s*:\s*403/.test(raw) || /denied access/i.test(raw)) {
     return geminiPermissionDeniedHintForBuild();
   }
@@ -759,14 +1002,18 @@ export async function detectObjectsInImage(base64Image: string, model = 'gemini-
   return callWithRetry(async (signal) => {
     const ai = getAI();
     const prompt = customPrompt || DEFAULT_PROMPTS.detect_single;
+    const resolvedModel = resolveUpstreamTextModelId(model);
     const response = await ai.models.generateContent({
-      model,
-      contents: {
-        parts: [
-          { text: prompt },
-          { inlineData: { mimeType: 'image/jpeg', data: base64Image.split(',')[1] || base64Image } }
-        ]
-      },
+      model: resolvedModel,
+      contents: [
+        {
+          role: 'user' as const,
+          parts: [
+            { text: prompt },
+            { inlineData: { mimeType: 'image/jpeg', data: base64Image.split(',')[1] || base64Image } },
+          ],
+        },
+      ],
       config: buildGeminiConfig({
         responseMimeType: "application/json",
         responseSchema: {
@@ -807,14 +1054,18 @@ export async function describeImageSubject(
   const text = await callWithRetry(async (signal) => {
     const ai = getAI();
     const prompt = customPrompt || DEFAULT_PROMPTS.describe_subject;
+    const resolvedModel = resolveUpstreamTextModelId(model);
     const response = await ai.models.generateContent({
-      model,
-      contents: {
-        parts: [
-          { inlineData: { mimeType: 'image/jpeg', data: base64Image.split(',')[1] || base64Image } },
-          { text: prompt }
-        ]
-      },
+      model: resolvedModel,
+      contents: [
+        {
+          role: 'user' as const,
+          parts: [
+            { inlineData: { mimeType: 'image/jpeg', data: base64Image.split(',')[1] || base64Image } },
+            { text: prompt },
+          ],
+        },
+      ],
       config: buildGeminiConfig({}, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)
     });
     const raw = (response.text || '').trim();
@@ -835,14 +1086,18 @@ export async function processTexture(base64Image, type: 'pattern' | 'tileable' |
     if (type === 'pbr') prompt = (prompt || DEFAULT_PROMPTS.texture_pbr).replace('{mapType}', mapType);
 
     const timeoutMs = options?.timeoutMs ?? GEMINI_IMAGE_REQUEST_TIMEOUT_MS;
+    const imageModel = resolveUpstreamImageModelId(model);
     const response = await ai.models.generateContent({
-      model: model,
-      contents: {
-        parts: [
-          { inlineData: { mimeType: 'image/jpeg', data: base64Image.split(',')[1] || base64Image } },
-          { text: prompt }
-        ]
-      },
+      model: imageModel,
+      contents: [
+        {
+          role: 'user' as const,
+          parts: [
+            { inlineData: { mimeType: 'image/jpeg', data: base64Image.split(',')[1] || base64Image } },
+            { text: prompt },
+          ],
+        },
+      ],
       config: buildGeminiConfig({}, signal, timeoutMs)
     });
 
@@ -871,6 +1126,7 @@ export async function understandImageEditIntent(
   const controlTimeout = capabilityScale
     ? Math.max(innerTimeout, BULK_PROXY_UNDERSTAND_TIMEOUT_MS)
     : innerTimeout;
+  const resolvedModel = resolveUpstreamTextModelId(model);
   const raw = await callWithRetry(
     async (signal) => {
       const ai = getAI();
@@ -886,8 +1142,8 @@ export async function understandImageEditIntent(
         parts.unshift({ inlineData: { mimeType: parsed.mimeType, data: parsed.data } });
       }
       const response = await ai.models.generateContent({
-        model,
-        contents: { parts },
+        model: resolvedModel,
+        contents: [{ role: 'user' as const, parts }],
         config: buildGeminiConfig({ systemInstruction: systemPrompt }, signal, innerTimeout),
       });
       const text = response.text?.trim();
@@ -958,11 +1214,15 @@ export async function dialogGenerateImage(
         throw new Error(buildDiagMessage("INPUT_IMAGE_EMPTY", "输入图片为空或 base64 无效"));
       }
     }
-    const response = await ai.models.generateContent({
-      model,
-      contents: { parts },
-      config: buildGeminiConfig(config, signal, timeoutMs)
-    });
+    const resolvedImageModel = resolveUpstreamImageModelId(model);
+    const payload = {
+      model: resolvedImageModel,
+      contents: [{ role: 'user' as const, parts }],
+      config: buildGeminiConfig(config, signal, timeoutMs),
+    };
+    const response = BULK_BASE
+      ? await enqueueImageBatchGenerateContent(payload)
+      : await ai.models.generateContent(payload);
     const images = collectInlineImagesFromGeminiResponse(response);
     if (images.length > 0) {
       return images[0];
@@ -1021,9 +1281,10 @@ export async function dialogGenerateImages(
         throw new Error(buildDiagMessage("INPUT_IMAGE_EMPTY", "输入图片为空或 base64 无效"));
       }
     }
+    const resolvedImageModel = resolveUpstreamImageModelId(model);
     const response = await ai.models.generateContent({
-      model,
-      contents: { parts },
+      model: resolvedImageModel,
+      contents: [{ role: 'user' as const, parts }],
       config: buildGeminiConfig(config, signal, timeoutMs)
     });
     const out = collectInlineImagesFromGeminiResponse(response);
@@ -1076,9 +1337,10 @@ export async function dialogGenerateImageMulti(
       throw new Error(buildDiagMessage("INPUT_IMAGE_EMPTY", "多图输入中存在空图片或无效 base64"));
     }
     parts.push({ text: instruction });
+    const resolvedImageModel = resolveUpstreamImageModelId(model);
     const response = await ai.models.generateContent({
-      model,
-      contents: { parts },
+      model: resolvedImageModel,
+      contents: [{ role: 'user' as const, parts }],
       config: buildGeminiConfig(config, signal, timeoutMs)
     });
     const images = collectInlineImagesFromGeminiResponse(response);
@@ -1116,11 +1378,12 @@ export async function generateSessionTitle(
     const data = imageBase64.split(',')[1] || imageBase64;
     parts.unshift({ inlineData: { mimeType: 'image/jpeg', data } });
   }
+  const resolvedModel = resolveUpstreamTextModelId(model);
   const raw = await callWithRetry(async (signal) => {
     const ai = getAI();
     const response = await ai.models.generateContent({
-      model,
-      contents: { parts },
+      model: resolvedModel,
+      contents: [{ role: 'user' as const, parts }],
       config: buildGeminiConfig({}, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)
     });
     const out = response.text?.trim();
@@ -1136,14 +1399,28 @@ export async function getDialogTextResponse(
   model = 'gemini-3-flash-preview',
   options?: GeminiRequestOptions
 ): Promise<string> {
+  const resolvedModel = resolveUpstreamTextModelId(model);
   return callWithRetry(async (signal) => {
     const ai = getAI();
+    /**
+     * 单轮仅 user：用显式 `[{ role:'user', parts }]`，避免仅 `{ parts }` 时部分网关误解析并报
+     * “valid stable user model” 等；多轮对话仍用完整 role 数组。
+     */
+    const single = contents.length === 1 ? contents[0] : null;
+    const useSingleUserTurn =
+      single != null &&
+      single.role === 'user' &&
+      Array.isArray(single.parts) &&
+      single.parts.length > 0;
+    const payload: unknown = useSingleUserTurn
+      ? [{ role: 'user' as const, parts: single!.parts }]
+      : contents.map((c) => ({
+          role: c.role === 'model' ? 'model' : 'user',
+          parts: c.parts,
+        }));
     const response = await ai.models.generateContent({
-      model,
-      contents: contents.map((c) => ({
-        role: c.role === 'model' ? 'model' : 'user',
-        parts: c.parts
-      })),
+      model: resolvedModel,
+      contents: payload,
       config: buildGeminiConfig({}, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)
     });
     const text = response.text?.trim();
@@ -1164,6 +1441,7 @@ export async function getSiteAssistantResponse(
   model = 'gemini-3-flash-preview',
   options?: GeminiRequestOptions
 ): Promise<string> {
+  const resolvedModel = resolveUpstreamTextModelId(model);
   return callWithRetry(async (signal) => {
     const ai = getAI();
     const contents = [
@@ -1171,7 +1449,7 @@ export async function getSiteAssistantResponse(
       { role: 'user' as const, parts: [{ text: (userMessage || '').trim() || '(empty)' }] }
     ];
     const response = await ai.models.generateContent({
-      model,
+      model: resolvedModel,
       contents,
       config: buildGeminiConfig({ systemInstruction: SITE_ASSISTANT_SYSTEM }, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)
     });
@@ -1195,6 +1473,7 @@ export async function getSiteAssistantResponseStream(
     onChunk(full);
     return full;
   }
+  const resolvedModel = resolveUpstreamTextModelId(model);
   return callWithRetry(async (signal) => {
     const ai = getAI();
     const contents = [
@@ -1202,7 +1481,7 @@ export async function getSiteAssistantResponseStream(
       { role: 'user' as const, parts: [{ text: (userMessage || '').trim() || '(empty)' }] }
     ];
     const stream = await ai.models.generateContentStream({
-      model,
+      model: resolvedModel,
       contents,
       config: buildGeminiConfig({ systemInstruction: SITE_ASSISTANT_SYSTEM }, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)
     });
@@ -1223,16 +1502,22 @@ export async function generateArenaABPrompts(
   model = 'gemini-3-flash-preview',
   options?: GeminiRequestOptions
 ): Promise<{ reasoning?: string; promptA: string; promptB: string; rawResponse?: string }> {
+  const resolvedModel = resolveUpstreamTextModelId(model);
   const raw = await callWithRetry(async (signal) => {
     const ai = getAI();
     const response = await ai.models.generateContent({
-      model,
-      contents: {
-        parts: [
-          { text: DEFAULT_PROMPTS.arena_ab },
-          { text: `User description: ${(userDescription || '').trim().slice(0, 500)}\n\nImportant: These prompts will be sent to the image model together with the user's uploaded image. Ensure each prompt is an instruction to modify or transform that image (not a standalone description of a new scene).` }
-        ]
-      },
+      model: resolvedModel,
+      contents: [
+        {
+          role: 'user' as const,
+          parts: [
+            { text: DEFAULT_PROMPTS.arena_ab },
+            {
+              text: `User description: ${(userDescription || '').trim().slice(0, 500)}\n\nImportant: These prompts will be sent to the image model together with the user's uploaded image. Ensure each prompt is an instruction to modify or transform that image (not a standalone description of a new scene).`,
+            },
+          ],
+        },
+      ],
       config: buildGeminiConfig({ responseMimeType: 'application/json' }, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)
     });
     const text = response.text?.trim();
@@ -1285,14 +1570,15 @@ export async function optimizeLoserPrompt(
         ? `User-reported remark about the loser (one sentence, address when improving): ${loserRemark.trim()}`
         : ''
     ].filter(Boolean).join('\n\n');
+    const resolvedModel = resolveUpstreamTextModelId(model);
     const response = await ai.models.generateContent({
-      model,
-      contents: {
-        parts: [
-          { text: DEFAULT_PROMPTS.arena_optimize_loser },
-          { text: userText }
-        ]
-      },
+      model: resolvedModel,
+      contents: [
+        {
+          role: 'user' as const,
+          parts: [{ text: DEFAULT_PROMPTS.arena_optimize_loser }, { text: userText }],
+        },
+      ],
       config: buildGeminiConfig({ responseMimeType: 'application/json' }, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)
     });
     const text = response.text?.trim();
@@ -1323,16 +1609,22 @@ export async function generateArenaPrompts(
     const out = await generateArenaABPrompts(userDescription, model, options);
     return { reasoning: out.reasoning, prompts: [out.promptA, out.promptB], rawResponse: out.rawResponse };
   }
+  const resolvedModel = resolveUpstreamTextModelId(model);
   const raw = await callWithRetry(async (signal) => {
     const ai = getAI();
     const response = await ai.models.generateContent({
-      model,
-      contents: {
-        parts: [
-          { text: DEFAULT_PROMPTS.arena_ab_n },
-          { text: `User description: ${(userDescription || '').trim().slice(0, 500)}\n\nN = ${count}. Output exactly ${count} prompts (promptA, promptB${count >= 3 ? ', promptC' : ''}${count >= 4 ? ', promptD' : ''}). Important: These prompts will be sent to the image model together with the user's uploaded image; ensure each prompt is an instruction to modify or transform that image (not a standalone description of a new scene).` }
-        ]
-      },
+      model: resolvedModel,
+      contents: [
+        {
+          role: 'user' as const,
+          parts: [
+            { text: DEFAULT_PROMPTS.arena_ab_n },
+            {
+              text: `User description: ${(userDescription || '').trim().slice(0, 500)}\n\nN = ${count}. Output exactly ${count} prompts (promptA, promptB${count >= 3 ? ', promptC' : ''}${count >= 4 ? ', promptD' : ''}). Important: These prompts will be sent to the image model together with the user's uploaded image; ensure each prompt is an instruction to modify or transform that image (not a standalone description of a new scene).`,
+            },
+          ],
+        },
+      ],
       config: buildGeminiConfig({ responseMimeType: 'application/json' }, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)
     });
     const text = response.text?.trim();
@@ -1375,14 +1667,15 @@ export async function generateNewChallenger(
         ? `All other prompts already in this arena (be distinct from these):\n${allPreviousPrompts.map((p, i) => `[${i + 1}] ${p}`).join('\n')}`
         : ''
     ].filter(Boolean).join('\n\n');
+    const resolvedModel = resolveUpstreamTextModelId(model);
     const response = await ai.models.generateContent({
-      model,
-      contents: {
-        parts: [
-          { text: DEFAULT_PROMPTS.arena_new_challenger },
-          { text: userText }
-        ]
-      },
+      model: resolvedModel,
+      contents: [
+        {
+          role: 'user' as const,
+          parts: [{ text: DEFAULT_PROMPTS.arena_new_challenger }, { text: userText }],
+        },
+      ],
       config: buildGeminiConfig({ responseMimeType: 'application/json' }, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)
     });
     const text = response.text?.trim();
@@ -1408,16 +1701,20 @@ export async function parsePromptStructured(
   model = 'gemini-3-flash-preview',
   options?: GeminiRequestOptions
 ): Promise<{ subject: string; scene: string; style: string; modifiers: string }> {
+  const resolvedModel = resolveUpstreamTextModelId(model);
   const raw = await callWithRetry(async (signal) => {
     const ai = getAI();
     const response = await ai.models.generateContent({
-      model,
-      contents: {
-        parts: [
-          { text: DEFAULT_PROMPTS.parse_structured },
-          { text: `Prompt to analyze:\n${(prompt || '').trim().slice(0, 3000)}` }
-        ]
-      },
+      model: resolvedModel,
+      contents: [
+        {
+          role: 'user' as const,
+          parts: [
+            { text: DEFAULT_PROMPTS.parse_structured },
+            { text: `Prompt to analyze:\n${(prompt || '').trim().slice(0, 3000)}` },
+          ],
+        },
+      ],
       config: buildGeminiConfig({ responseMimeType: 'application/json' }, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)
     });
     const text = response.text?.trim();
@@ -1446,19 +1743,23 @@ export async function translateToChinese(
 ): Promise<string> {
   const source = (text || '').trim();
   if (!source) return '';
+  const resolvedModel = resolveUpstreamTextModelId(model);
   return callWithRetry(async (signal) => {
     const ai = getAI();
     const response = await ai.models.generateContent({
-      model,
-      contents: {
-        parts: [
-          {
-            text:
-              'Translate the following text into concise Simplified Chinese. Keep structure, bullet points, and code-like fragments when possible. Output ONLY the translated text.'
-          },
-          { text: source.slice(0, 12000) }
-        ]
-      },
+      model: resolvedModel,
+      contents: [
+        {
+          role: 'user' as const,
+          parts: [
+            {
+              text:
+                'Translate the following text into concise Simplified Chinese. Keep structure, bullet points, and code-like fragments when possible. Output ONLY the translated text.',
+            },
+            { text: source.slice(0, 12000) },
+          ],
+        },
+      ],
       config: buildGeminiConfig({}, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)
     });
     const out = response.text?.trim();
@@ -1481,7 +1782,7 @@ export async function generatePBRTexture(
 ): Promise<string> {
   return callWithRetry(async (signal) => {
     const ai = getAI();
-    const MODEL_NAME = 'gemini-2.5-flash-image';
+    const imageModel = resolveUpstreamImageModelId('gemini-2.5-flash-image');
     const parts: { inlineData?: { mimeType: string; data: string }; text?: string }[] = [];
 
     functionalMaps.forEach((map) => {
@@ -1526,8 +1827,8 @@ Output ONLY the image.`;
 
     const timeoutMs = options?.timeoutMs ?? GEMINI_IMAGE_REQUEST_TIMEOUT_MS;
     const response = await ai.models.generateContent({
-      model: MODEL_NAME,
-      contents: { parts },
+      model: imageModel,
+      contents: [{ role: 'user' as const, parts }],
       config: buildGeminiConfig({
         imageConfig: { aspectRatio: '1:1' }
       }, signal, timeoutMs)

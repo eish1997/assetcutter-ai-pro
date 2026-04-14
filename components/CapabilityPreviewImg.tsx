@@ -10,13 +10,14 @@ type Props = {
   onIntrinsicSize?: (naturalWidth: number, naturalHeight: number) => void;
   /** 全部候选加载失败时展示 */
   fallback?: React.ReactNode;
+  loading?: 'lazy' | 'eager';
 };
 
 /**
  * 能力商店等场景预览图：行为与全站 `SiteImage` 一致（同源多候选 URL 重试）。
  */
 export const CapabilityPreviewImg = forwardRef<HTMLImageElement, Props>(function CapabilityPreviewImg(
-  { src, alt = '', className, style, onClick, onIntrinsicSize, fallback },
+  { src, alt = '', className, style, onClick, onIntrinsicSize, fallback, loading = 'lazy' },
   ref
 ) {
   if (!src.trim()) {
@@ -33,7 +34,7 @@ export const CapabilityPreviewImg = forwardRef<HTMLImageElement, Props>(function
       onClick={onClick}
       onIntrinsicSize={onIntrinsicSize}
       fallback={fallback}
-      loading="lazy"
+      loading={loading}
     />
   );
 });

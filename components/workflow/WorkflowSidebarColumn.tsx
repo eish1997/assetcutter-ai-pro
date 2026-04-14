@@ -102,6 +102,7 @@ export type WorkflowSidebarColumnProps = {
       imageAspectRatio?: string;
       imageSize?: string;
       understand?: boolean;
+      generateCount?: number;
     }
   ) => void;
   handleDropToSetAction: (setActionId: string, e: DragEvent<HTMLElement>) => void;
@@ -172,17 +173,27 @@ export function WorkflowSidebarColumn({
         imageAspectRatio?: string;
         imageSize?: string;
         understand?: boolean;
+        generateCount?: number;
       }
     >
   >({});
+  const [countCustomEditingByCategory, setCountCustomEditingByCategory] = useState<Record<string, boolean>>({});
+  const [countCustomDraftByCategory, setCountCustomDraftByCategory] = useState<Record<string, string>>({});
   const getGroupOverridesForCategory = (categoryId: string) => {
     const cfg = groupOverrideByCategory[categoryId];
-    if (!cfg?.enabled) return undefined;
+    const countRaw = Number(cfg?.generateCount ?? 1);
+    const generateCount = Number.isFinite(countRaw) ? Math.max(1, Math.floor(countRaw)) : 1;
+    if (!cfg?.enabled && generateCount <= 1) return undefined;
     return {
-      ...(cfg.imageGear ? { imageGear: cfg.imageGear } : {}),
-      ...(cfg.imageAspectRatio ? { imageAspectRatio: cfg.imageAspectRatio } : {}),
-      ...(cfg.imageSize ? { imageSize: cfg.imageSize } : {}),
-      ...(typeof cfg.understand === 'boolean' ? { understand: cfg.understand } : {}),
+      ...(cfg?.enabled
+        ? {
+            ...(cfg.imageGear ? { imageGear: cfg.imageGear } : {}),
+            ...(cfg.imageAspectRatio ? { imageAspectRatio: cfg.imageAspectRatio } : {}),
+            ...(cfg.imageSize ? { imageSize: cfg.imageSize } : {}),
+            ...(typeof cfg.understand === 'boolean' ? { understand: cfg.understand } : {}),
+          }
+        : {}),
+      ...(generateCount > 1 ? { generateCount } : {}),
     };
   };
   const typesHasCapabilityFromEditor = (dt: DataTransfer | null) => {
@@ -745,6 +756,24 @@ export function WorkflowSidebarColumn({
                         const gearChanged = Boolean(cfg.imageGear);
                         const ratioChanged = Boolean(cfg.imageAspectRatio);
                         const sizeChanged = Boolean(cfg.imageSize);
+                        const countValue = Number.isFinite(cfg.generateCount)
+                          ? Math.max(1, Math.floor(cfg.generateCount as number))
+                          : 1;
+                        const countChanged = countValue > 1;
+                        const isCountCustomEditing = !!countCustomEditingByCategory[category.id];
+                        const countCustomDraft = countCustomDraftByCategory[category.id] ?? String(countValue);
+                        const applyCustomCount = () => {
+                          const n = Math.floor(Number(countCustomDraft));
+                          if (!Number.isFinite(n) || n < 1) return;
+                          setGroupOverrideByCategory((prev) => ({
+                            ...prev,
+                            [category.id]: {
+                              ...(prev[category.id] || {}),
+                              generateCount: n,
+                            },
+                          }));
+                          setCountCustomEditingByCategory((prev) => ({ ...prev, [category.id]: false }));
+                        };
                         const gearText = gearChanged
                           ? (DIALOG_IMAGE_GEARS.find((g) => g.id === cfg.imageGear)?.label || String(cfg.imageGear)).slice(0, 1)
                           : '档';
@@ -752,6 +781,71 @@ export function WorkflowSidebarColumn({
                         const sizeText = sizeChanged ? String(cfg.imageSize).slice(0, 1) : '寸';
                         return (
                           <>
+                      {hasParamOptions ? (
+                        <>
+                      {isCountCustomEditing ? (
+                        <div
+                          className="h-6 rounded-full border border-blue-500 text-blue-200 bg-blue-950/35 inline-flex items-center px-1 gap-1"
+                          title="输入数量后点✓确认"
+                        >
+                          <input
+                            value={countCustomDraft}
+                            onChange={(e) =>
+                              setCountCustomDraftByCategory((prev) => ({ ...prev, [category.id]: e.target.value }))
+                            }
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') applyCustomCount();
+                              if (e.key === 'Escape') {
+                                setCountCustomEditingByCategory((prev) => ({ ...prev, [category.id]: false }));
+                              }
+                            }}
+                            className="w-8 bg-transparent text-[9px] font-black text-center outline-none"
+                            autoFocus
+                          />
+                          <button
+                            type="button"
+                            onClick={applyCustomCount}
+                            className="text-[9px] leading-none font-black text-blue-300 hover:text-blue-100"
+                            title="确认数量"
+                          >
+                            ✓
+                          </button>
+                        </div>
+                      ) : (
+                        <CustomDropdown
+                          options={[
+                            ...Array.from({ length: 10 }, (_, i) => ({ value: String(i + 1), label: `${i + 1}张` })),
+                            { value: '__custom__', label: '自定义…' },
+                          ]}
+                          value={String(Math.min(10, Math.max(1, countValue)))}
+                          onChange={(v) => {
+                            if (v === '__custom__') {
+                              setCountCustomDraftByCategory((prev) => ({ ...prev, [category.id]: String(countValue) }));
+                              setCountCustomEditingByCategory((prev) => ({ ...prev, [category.id]: true }));
+                              return;
+                            }
+                            const n = Math.max(1, Math.floor(Number(v) || 1));
+                            setGroupOverrideByCategory((prev) => ({
+                              ...prev,
+                              [category.id]: {
+                                ...(prev[category.id] || {}),
+                                generateCount: n,
+                              },
+                            }));
+                          }}
+                          triggerClassName="p-0 w-6 h-6 inline-flex items-center justify-center bg-transparent border-0 rounded-none hover:bg-transparent align-middle"
+                          renderTrigger={() => (
+                            <span
+                              title={countChanged ? `生成数量：${countValue} 张` : '生成数量：1 张（默认）'}
+                              className={`w-6 h-6 rounded-full border inline-flex items-center justify-center leading-none text-[9px] font-black ${
+                                countChanged ? 'border-blue-500 text-blue-300 bg-blue-950/35' : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'
+                              }`}
+                            >
+                              {countChanged ? String(countValue) : '数'}
+                            </span>
+                          )}
+                        />
+                      )}
                       <button
                         type="button"
                         title="覆盖参数开关"
@@ -768,8 +862,6 @@ export function WorkflowSidebarColumn({
                       >
                         覆
                       </button>
-                      {hasParamOptions ? (
-                        <>
                       <CustomDropdown
                         options={[{ value: '', label: '默认' }, ...DIALOG_IMAGE_GEARS.map((g) => ({ value: g.id, label: g.label }))]}
                         value={groupOverrideByCategory[category.id]?.imageGear || ''}

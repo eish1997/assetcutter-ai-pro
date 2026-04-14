@@ -4,10 +4,12 @@ import React, {
   useEffect,
   useLayoutEffect,
   useRef,
+  useState,
   createContext,
   useContext,
   Fragment,
 } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -36,10 +38,16 @@ import './CapabilitySetCanvas.css';
 import type { CustomAppModule } from '../types';
 import type { CapabilitySet, CapabilitySetNode, CapabilitySetEdge, CapabilityCategory } from '../types';
 import { CAPABILITY_CATEGORIES } from '../types';
-import { executeCapabilitySet } from '../services/capabilityExecutor';
+import { executeCapabilitySet, type CapabilityExecuteResult } from '../services/capabilityExecutor';
 import { findClosestFlowEdgeHit } from '../services/capabilityFlowEdgeHit';
 import { CapabilityPreviewImg } from './CapabilityPreviewImg';
+import { ImagePreviewOverlay } from './ImagePreviewOverlay';
+import WorkflowPixelBusyOverlay from './WorkflowPixelBusyOverlay';
 import { pickCapabilityPresetPreview, resolveCapabilityPreviewSrc } from '../services/capabilityPreviewUrl';
+import {
+  estimateWorkflowDockChipWidthPx,
+  getWorkflowDockChipCenterInViewport,
+} from './floatingDockConstants';
 import {
   inferInputWorkflowMedia,
   inferOutputWorkflowMedia,
@@ -49,6 +57,26 @@ import {
 } from '../services/inferCapabilitySetIo';
 
 const genId = () => Math.random().toString(36).slice(2, 11);
+
+const DOCK_NODE_STAGGER_MS = 76;
+const DOCK_NODE_FLY_MS = 580;
+/** 飞入 dock 的替身卡片边长（px），与 CSS --half 同步为一半 */
+const DOCK_FLY_THUMB_PX = 72;
+const DOCK_FLY_THUMB_HALF_PX = DOCK_FLY_THUMB_PX / 2;
+
+type DockFlyPhVariant = 'image' | 'text' | 'output';
+
+type DockFlyParticleItem = {
+  id: string;
+  label: string;
+  previewSrc: string;
+  placeholderVariant: DockFlyPhVariant;
+  fromX: number;
+  fromY: number;
+  toX: number;
+  toY: number;
+  delayMs: number;
+};
 
 function toGraphLite(nodes: Node[], edges: Edge[]): {
   nodes: CapabilityGraphNodeLite[];
@@ -64,6 +92,58 @@ function toGraphLite(nodes: Node[], edges: Edge[]): {
   };
 }
 
+/** 收起飞入 dock 时：与各节点组件相同的预览图解析逻辑 */
+function resolveDockFlyPreviewForNode(
+  n: Node,
+  presetsById: Map<string, CustomAppModule>,
+  assetCandidates: CapabilityAssetCandidate[],
+  lite: { nodes: CapabilityGraphNodeLite[]; edges: CapabilityGraphEdgeLite[] }
+): { previewSrc: string; placeholderVariant: DockFlyPhVariant } {
+  const t = String(n.type || '');
+  const d = n.data as CapabilitySetNode['data'] & { previewImage?: string };
+
+  if (t === 'preset') {
+    const raw =
+      (d as { testRunPreview?: string }).testRunPreview?.trim() ||
+      d.previewImage?.trim() ||
+      (d.presetId ? pickCapabilityPresetPreview(presetsById.get(d.presetId)) : undefined);
+    return { previewSrc: resolveCapabilityPreviewSrc(raw) ?? '', placeholderVariant: 'image' };
+  }
+
+  if (t === 'assetInput') {
+    const scope = d.assetScope === 'repository' ? 'repository' : 'workspace';
+    const scoped = assetCandidates.filter((x) => x.scope === scope);
+    const selected = scoped.find((x) => x.id === d.assetId) ?? null;
+    const raw = (d as { testRunPreview?: string }).testRunPreview?.trim() || selected?.image || '';
+    return { previewSrc: resolveCapabilityPreviewSrc(raw) ?? '', placeholderVariant: 'image' };
+  }
+
+  if (t === 'input') {
+    const inputMedia = inferInputWorkflowMedia(n.id, lite.edges, lite.nodes, presetsById);
+    if (inputMedia === 'text') return { previewSrc: '', placeholderVariant: 'text' };
+    const raw = d.previewImage;
+    return { previewSrc: resolveCapabilityPreviewSrc(raw) ?? '', placeholderVariant: 'image' };
+  }
+
+  if (t === 'output') {
+    const outMedia = inferOutputWorkflowMedia(n.id, lite.edges, lite.nodes, presetsById);
+    const raw = (d as { testRunPreview?: string }).testRunPreview?.trim() ?? '';
+    const placeholderVariant: DockFlyPhVariant = outMedia === 'text' ? 'text' : 'output';
+    return { previewSrc: resolveCapabilityPreviewSrc(raw) ?? '', placeholderVariant };
+  }
+
+  if (t === 'testStop') {
+    const raw = (d as { testRunPreview?: string }).testRunPreview?.trim() ?? '';
+    return { previewSrc: resolveCapabilityPreviewSrc(raw) ?? '', placeholderVariant: 'image' };
+  }
+
+  if (t === 'textGen') {
+    return { previewSrc: '', placeholderVariant: 'text' };
+  }
+
+  return { previewSrc: '', placeholderVariant: 'image' };
+}
+
 /** 与 `layoutVariant` 同步，供节点组件做紧凑排版 */
 const CanvasLayoutContext = createContext<'default' | 'overlayGlass'>('default');
 
@@ -71,8 +151,53 @@ const CanvasLayoutContext = createContext<'default' | 'overlayGlass'>('default')
 const PresetsByIdContext = createContext<Map<string, CustomAppModule>>(new Map());
 const AssetCandidatesContext = createContext<CapabilityAssetCandidate[]>([]);
 
-/** 测试断点节点点击「运行测试」→ 画布内执行到该节点 */
-const TestStopRunContext = createContext<(nodeId: string) => void>(() => {});
+/** 画布内「运行测试」：断点 / 输出节点 / 侧栏全流程 */
+const ComposerTestRunContext = createContext<{
+  runToStop: (nodeId: string) => void;
+  runFullPipeline: () => void;
+  busy: boolean;
+}>({
+  runToStop: () => {},
+  runFullPipeline: () => {},
+  busy: false,
+});
+
+/** 节点内预览图双击放大（与边线双击删边区分） */
+const ComposerNodeImagePreviewContext = createContext<(src: string) => void>(() => {});
+
+/** 试运行：当前执行节点上的进度遮罩 + 失败节点上的错误文案 */
+const ComposerNodeRunOverlayContext = createContext<{
+  busy: boolean;
+  activeNodeId: string | null;
+  activeDetail: string;
+  errorByNodeId: Record<string, string>;
+}>({
+  busy: false,
+  activeNodeId: null,
+  activeDetail: '',
+  errorByNodeId: {},
+});
+
+function useComposerNodeRunUi(nodeId: string) {
+  const { busy, activeNodeId, activeDetail, errorByNodeId } = useContext(ComposerNodeRunOverlayContext);
+  const err = errorByNodeId[nodeId];
+  return {
+    errorText: err ?? null,
+    showRunOverlay: !!(busy && activeNodeId === nodeId && !err),
+    progressDetail: activeDetail,
+  };
+}
+
+function NodeRunErrorBanner({ message }: { message: string }) {
+  return (
+    <div
+      className="pointer-events-none absolute inset-0 z-[35] flex flex-col justify-end rounded-[inherit] border border-red-500/45 bg-gradient-to-t from-red-950/95 via-red-950/80 to-red-950/20 p-2"
+      role="alert"
+    >
+      <p className="text-[8px] font-semibold leading-snug text-red-100 line-clamp-8 break-words">{message}</p>
+    </div>
+  );
+}
 
 /** 边上释放 HTML5 拖放时转发到画布（SVG 边线默认不会触发 pane 的 onDrop） */
 const CanvasDropForwardRefContext = createContext<React.MutableRefObject<
@@ -102,12 +227,18 @@ const AssetCardPlaceholder: React.FC<{ variant: 'image' | 'text' | 'output' }> =
   </div>
 );
 
-/** 节点：资产卡 — 上预览、下标题；去掉 nodrag 使整块可拖拽 */
-const PresetNode: React.FC<{ data: { label: string; presetId?: string; previewImage?: string } }> = ({ data }) => {
+/** 节点：资产卡 — 上预览、下标题；预览区可拖节点，勿加 nodrag（仅按钮/输入等加 nodrag） */
+const PresetNode: React.FC<{
+  id: string;
+  data: { label: string; presetId?: string; previewImage?: string; testRunPreview?: string };
+}> = ({ id, data }) => {
+  const openImagePreview = useContext(ComposerNodeImagePreviewContext);
   const layout = useContext(CanvasLayoutContext);
   const presetsById = useContext(PresetsByIdContext);
+  const { errorText, showRunOverlay, progressDetail } = useComposerNodeRunUi(id);
   const compact = layout === 'overlayGlass';
   const raw =
+    data.testRunPreview?.trim() ||
     data.previewImage?.trim() ||
     (data.presetId ? pickCapabilityPresetPreview(presetsById.get(data.presetId)) : undefined);
   const resolved = useMemo(() => resolveCapabilityPreviewSrc(raw) ?? '', [raw]);
@@ -116,13 +247,31 @@ const PresetNode: React.FC<{ data: { label: string; presetId?: string; previewIm
       className={`asset-card-node svelteflow-node preset-node${compact ? ' asset-card-node--compact preset-node--compact' : ''}`}
     >
       <Handle type="target" position={Position.Left} className="svelteflow-handle" />
-      <div className="asset-card-node__media">
+      <div
+        className="asset-card-node__media relative cursor-zoom-in overflow-hidden rounded-[inherit]"
+        title="双击查看大图"
+        onDoubleClick={(e) => {
+          e.stopPropagation();
+          if (resolved.trim()) openImagePreview(resolved);
+        }}
+      >
         <CapabilityPreviewImg
           src={resolved}
           alt=""
           className="asset-card-node__img"
           fallback={<AssetCardPlaceholder variant="image" />}
+          loading={data.testRunPreview?.trim() ? 'eager' : 'lazy'}
         />
+        {showRunOverlay ? (
+          <WorkflowPixelBusyOverlay
+            executing
+            accentExecuting
+            density="compact"
+            progressDetail={progressDetail}
+            backdropImageSrc={resolved.trim() ? resolved : null}
+          />
+        ) : null}
+        {errorText ? <NodeRunErrorBanner message={errorText} /> : null}
       </div>
       <div className="asset-card-node__bar">
         <span className="asset-card-node__title">{data.label}</span>
@@ -140,6 +289,7 @@ const TextGenNode: React.FC<{
   const { setNodes } = useReactFlow();
   const updateNodeInternals = useUpdateNodeInternals();
   const layout = useContext(CanvasLayoutContext);
+  const { errorText } = useComposerNodeRunUi(id);
   const compact = layout === 'overlayGlass';
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const updateText = useCallback(
@@ -163,10 +313,10 @@ const TextGenNode: React.FC<{
   }, [id, compact, data.text, updateNodeInternals]);
   return (
     <div
-      className={`asset-card-node svelteflow-node textgen-node${compact ? ' asset-card-node--compact textgen-node--compact' : ''}`}
+      className={`asset-card-node svelteflow-node textgen-node relative${compact ? ' asset-card-node--compact textgen-node--compact' : ''}`}
     >
       <Handle type="target" position={Position.Left} className="svelteflow-handle" />
-      <div className="asset-card-node__media asset-card-node__media--textgen">
+      <div className="asset-card-node__media asset-card-node__media--textgen relative overflow-hidden rounded-[inherit]">
         <textarea
           ref={textareaRef}
           className="asset-card-node__textarea nodrag"
@@ -177,6 +327,7 @@ const TextGenNode: React.FC<{
           onMouseDown={(e) => e.stopPropagation()}
           rows={1}
         />
+        {errorText ? <NodeRunErrorBanner message={errorText} /> : null}
       </div>
       <div className="asset-card-node__bar">
         <span className="asset-card-node__title">文本生成</span>
@@ -187,8 +338,10 @@ const TextGenNode: React.FC<{
 };
 
 const AssetInputNode: React.FC<{ id: string; data: CapabilitySetNode['data'] }> = ({ id, data }) => {
+  const openImagePreview = useContext(ComposerNodeImagePreviewContext);
   const { setNodes } = useReactFlow();
   const layout = useContext(CanvasLayoutContext);
+  const { errorText, showRunOverlay, progressDetail } = useComposerNodeRunUi(id);
   const compact = layout === 'overlayGlass';
   const candidates = useContext(AssetCandidatesContext);
   const [openPanel, setOpenPanel] = React.useState(false);
@@ -263,17 +416,46 @@ const AssetInputNode: React.FC<{ id: string; data: CapabilitySetNode['data'] }> 
       ref={rootRef}
       className={`asset-card-node asset-card-node--input asset-input-node svelteflow-node preset-node${compact ? ' asset-card-node--compact preset-node--compact' : ''}`}
     >
-      <div className="asset-card-node__media">
-        {selected ? (
+      <div
+        className={`asset-card-node__media relative overflow-hidden rounded-[inherit]${
+          selected || data.testRunPreview?.trim() ? ' cursor-zoom-in' : ''
+        }`}
+        title={selected || data.testRunPreview?.trim() ? '双击查看大图' : undefined}
+        onDoubleClick={(e) => {
+          e.stopPropagation();
+          const raw = data.testRunPreview?.trim() || selected?.image || '';
+          const u = resolveCapabilityPreviewSrc(raw) ?? '';
+          if (u.trim()) openImagePreview(u);
+        }}
+      >
+        {selected || data.testRunPreview?.trim() ? (
           <CapabilityPreviewImg
-            src={resolveCapabilityPreviewSrc(selected.image) ?? ''}
+            src={
+              resolveCapabilityPreviewSrc(
+                data.testRunPreview?.trim() || selected?.image || ''
+              ) ?? ''
+            }
             alt=""
             className="asset-card-node__img"
             fallback={<AssetCardPlaceholder variant="image" />}
+            loading={data.testRunPreview?.trim() ? 'eager' : 'lazy'}
           />
         ) : (
           <AssetCardPlaceholder variant="image" />
         )}
+        {showRunOverlay ? (
+          <WorkflowPixelBusyOverlay
+            executing
+            accentExecuting
+            density="compact"
+            progressDetail={progressDetail}
+            backdropImageSrc={
+              (resolveCapabilityPreviewSrc(data.testRunPreview?.trim() || selected?.image || '') ?? '').trim() ||
+              null
+            }
+          />
+        ) : null}
+        {errorText ? <NodeRunErrorBanner message={errorText} /> : null}
       </div>
       <div className="asset-card-node__bar asset-input-node__bar">
         <span className="asset-card-node__title asset-input-node__title">
@@ -353,8 +535,10 @@ const WorkflowInputNode: React.FC<{ id: string; data: { label: string; previewIm
   id,
   data,
 }) => {
+  const openImagePreview = useContext(ComposerNodeImagePreviewContext);
   const layout = useContext(CanvasLayoutContext);
   const presetsById = useContext(PresetsByIdContext);
+  const { errorText, showRunOverlay, progressDetail } = useComposerNodeRunUi(id);
   const compact = layout === 'overlayGlass';
   const nodes = useStore((s) => s.nodes);
   const edges = useStore((s) => s.edges);
@@ -377,16 +561,38 @@ const WorkflowInputNode: React.FC<{ id: string; data: { label: string; previewIm
     <div
       className={`asset-card-node asset-card-node--input svelteflow-node preset-node${compact ? ' asset-card-node--compact preset-node--compact' : ''}`}
     >
-      <div className="asset-card-node__media">
+      <div className="asset-card-node__media relative overflow-hidden rounded-[inherit]">
         {inputMedia === 'text' ? (
-          <AssetCardPlaceholder variant="text" />
+          <>
+            <AssetCardPlaceholder variant="text" />
+            {errorText ? <NodeRunErrorBanner message={errorText} /> : null}
+          </>
         ) : (
-          <CapabilityPreviewImg
-            src={resolved}
-            alt=""
-            className="asset-card-node__img"
-            fallback={<AssetCardPlaceholder variant="image" />}
-          />
+          <div
+            className="relative h-full w-full cursor-zoom-in"
+            title="双击查看大图"
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+              if (resolved.trim()) openImagePreview(resolved);
+            }}
+          >
+            <CapabilityPreviewImg
+              src={resolved}
+              alt=""
+              className="asset-card-node__img"
+              fallback={<AssetCardPlaceholder variant="image" />}
+            />
+            {showRunOverlay ? (
+              <WorkflowPixelBusyOverlay
+                executing
+                accentExecuting
+                density="compact"
+                progressDetail={progressDetail}
+                backdropImageSrc={resolved.trim() ? resolved : null}
+              />
+            ) : null}
+            {errorText ? <NodeRunErrorBanner message={errorText} /> : null}
+          </div>
         )}
       </div>
       <div className="asset-card-node__bar">
@@ -399,36 +605,88 @@ const WorkflowInputNode: React.FC<{ id: string; data: { label: string; previewIm
 
 /** 输出节点：仅作汇点；文字/图片态由直接上游预设分类推断 */
 /** 插在连线上的断点：线穿过节点，向下伸出「运行测试」 */
-const TestStopNode: React.FC<{ id: string }> = ({ id }) => {
-  const run = useContext(TestStopRunContext);
+const TestStopNode: React.FC<{ id: string; data: CapabilitySetNode['data'] }> = ({ id, data }) => {
+  const openImagePreview = useContext(ComposerNodeImagePreviewContext);
+  const { runToStop, busy } = useContext(ComposerTestRunContext);
   const layout = useContext(CanvasLayoutContext);
+  const { errorText, showRunOverlay, progressDetail } = useComposerNodeRunUi(id);
   const compact = layout === 'overlayGlass';
+  const previewSrc = useMemo(
+    () => resolveCapabilityPreviewSrc(data.testRunPreview?.trim() ?? '') ?? '',
+    [data.testRunPreview]
+  );
   return (
-    <div className={`test-stop-node svelteflow-node${compact ? ' test-stop-node--compact' : ''}`}>
+    <div
+      className={`test-stop-node svelteflow-node relative${compact ? ' test-stop-node--compact' : ''}`}
+    >
       <div className="test-stop-node__wire">
         <Handle type="target" position={Position.Left} className="svelteflow-handle test-stop-node__handle" />
         <div className="test-stop-node__joint" aria-hidden />
         <Handle type="source" position={Position.Right} className="svelteflow-handle test-stop-node__handle" />
       </div>
+        {previewSrc ? (
+        <div
+          className="test-stop-node__preview relative cursor-zoom-in overflow-hidden"
+          title="双击查看大图"
+          onDoubleClick={(e) => {
+            e.stopPropagation();
+            if (previewSrc.trim()) openImagePreview(previewSrc);
+          }}
+        >
+          <CapabilityPreviewImg
+            src={previewSrc}
+            alt=""
+            className="test-stop-node__preview-img"
+            loading="eager"
+          />
+          {showRunOverlay ? (
+            <WorkflowPixelBusyOverlay
+              executing
+              accentExecuting
+              density="compact"
+              progressDetail={progressDetail}
+              backdropImageSrc={previewSrc.trim() ? previewSrc : null}
+            />
+          ) : null}
+          {errorText ? <NodeRunErrorBanner message={errorText} /> : null}
+        </div>
+      ) : null}
+      {!previewSrc && (showRunOverlay || errorText) ? (
+        <div className="test-stop-node__preview relative min-h-[48px] w-full overflow-hidden rounded-md border border-white/10 bg-[#141416]">
+          {showRunOverlay ? (
+            <WorkflowPixelBusyOverlay
+              executing
+              accentExecuting
+              density="compact"
+              progressDetail={progressDetail}
+              backdropImageSrc={null}
+            />
+          ) : null}
+          {errorText ? <NodeRunErrorBanner message={errorText} /> : null}
+        </div>
+      ) : null}
       <div className="test-stop-node__stem" aria-hidden />
       <button
         type="button"
         className="test-stop-node__run nodrag"
+        disabled={busy}
         onClick={(e) => {
           e.stopPropagation();
-          run(id);
+          runToStop(id);
         }}
       >
-        运行测试
+        {busy ? '等待' : '运行测试'}
       </button>
     </div>
   );
 };
 
 const WorkflowOutputNode: React.FC<{ id: string; data: CapabilitySetNode['data'] }> = ({ id, data }) => {
-  const run = useContext(TestStopRunContext);
+  const openImagePreview = useContext(ComposerNodeImagePreviewContext);
+  const { runToStop, busy } = useContext(ComposerTestRunContext);
   const layout = useContext(CanvasLayoutContext);
   const presetsById = useContext(PresetsByIdContext);
+  const { errorText, showRunOverlay, progressDetail } = useComposerNodeRunUi(id);
   const compact = layout === 'overlayGlass';
   const nodes = useStore((s) => s.nodes);
   const edges = useStore((s) => s.edges);
@@ -444,25 +702,60 @@ const WorkflowOutputNode: React.FC<{ id: string; data: CapabilitySetNode['data']
   const titleLine =
     outMedia === 'text' ? `${baseTitle} · 文字` : outMedia === 'image' ? `${baseTitle} · 图片` : baseTitle;
 
+  const testPreviewSrc = useMemo(
+    () => resolveCapabilityPreviewSrc(data.testRunPreview?.trim() ?? '') ?? '',
+    [data.testRunPreview]
+  );
+
   return (
     <div
       className={`asset-card-node svelteflow-node output-node${compact ? ' asset-card-node--compact output-node--compact' : ''}`}
     >
       <Handle type="target" position={Position.Left} className="svelteflow-handle" />
-      <div className="asset-card-node__media">
-        <AssetCardPlaceholder variant={outMedia === 'text' ? 'text' : 'output'} />
+      <div
+        className={`asset-card-node__media relative overflow-hidden rounded-[inherit]${
+          testPreviewSrc ? ' cursor-zoom-in' : ''
+        }`}
+        title={testPreviewSrc ? '双击查看大图' : undefined}
+        onDoubleClick={(e) => {
+          e.stopPropagation();
+          if (testPreviewSrc.trim()) openImagePreview(testPreviewSrc);
+        }}
+      >
+        {testPreviewSrc ? (
+          <CapabilityPreviewImg
+            src={testPreviewSrc}
+            alt=""
+            className="asset-card-node__img"
+            fallback={<AssetCardPlaceholder variant={outMedia === 'text' ? 'text' : 'output'} />}
+            loading="eager"
+          />
+        ) : (
+          <AssetCardPlaceholder variant={outMedia === 'text' ? 'text' : 'output'} />
+        )}
+        {showRunOverlay ? (
+          <WorkflowPixelBusyOverlay
+            executing
+            accentExecuting
+            density="compact"
+            progressDetail={progressDetail}
+            backdropImageSrc={testPreviewSrc.trim() ? testPreviewSrc : null}
+          />
+        ) : null}
+        {errorText ? <NodeRunErrorBanner message={errorText} /> : null}
       </div>
       <div className="asset-card-node__bar output-node__bar">
         <span className="asset-card-node__title">{titleLine}</span>
         <button
           type="button"
           className="output-node__run nodrag"
+          disabled={busy}
           onClick={(e) => {
             e.stopPropagation();
-            run(id);
+            runToStop(id);
           }}
         >
-          运行测试
+          {busy ? '等待' : '运行测试'}
         </button>
       </div>
     </div>
@@ -635,6 +928,8 @@ function normalizeFlowNodesForLoad(nodes: Node[]): Node[] {
   });
 }
 
+export type CapabilityCanvasDockMotionPhase = 'idle' | 'collapsing' | 'expanding';
+
 type CanvasInnerProps = {
   presets: CustomAppModule[];
   initialSet: CapabilitySet | null;
@@ -644,6 +939,14 @@ type CanvasInnerProps = {
   onClose: () => void;
   /** 工作流创建全屏层：紧凑尺寸 + 透明模糊画布 */
   layoutVariant?: 'default' | 'overlayGlass';
+  /** 与全屏层 dock 联动：收起时侧栏左移、画布飞向右下角 */
+  dockMotionPhase?: CapabilityCanvasDockMotionPhase;
+  /** 画布区 dock 飞入/飞出动效结束（由 reactflow-wrapper 的 animationend 触发） */
+  onDockMotionComplete?: (phase: 'collapsing' | 'expanding') => void;
+  /** 多会话时飞入落点竖向偏移（与 WorkflowComposerOverlay dockStackIndex 一致） */
+  dockFlyStackIndex?: number;
+  /** 与 dockFlyStackIndex 配套的堆叠条数（收起动画落点与 Dock 居中一致） */
+  dockFlyStackCount?: number;
   /** 断点「运行测试」日志（可选） */
   onLog?: (level: 'info' | 'warn' | 'error', message: string, detail?: string) => void;
   /** 断点测试用的输入图；未返回则使用 1×1 占位图并打 warn */
@@ -665,12 +968,30 @@ function CanvasInner({
   onSave,
   onClose,
   layoutVariant = 'default',
+  dockMotionPhase = 'idle',
+  onDockMotionComplete,
+  dockFlyStackIndex = 0,
+  dockFlyStackCount = 1,
   onLog,
   getPartialTestInputImage,
   assetCandidates = [],
 }: CanvasInnerProps) {
   const { screenToFlowPosition, getNodes, getEdges } = useReactFlow();
+  const updateNodeInternals = useUpdateNodeInternals();
   const { zoom } = useViewport();
+  const [testRunBusy, setTestRunBusy] = useState(false);
+  const testRunBusyRef = useRef(false);
+  const lastProgressNodeRef = useRef<string | null>(null);
+  const [composerRunUi, setComposerRunUi] = useState<{
+    activeNodeId: string | null;
+    activeDetail: string;
+    errorByNodeId: Record<string, string>;
+  }>({ activeNodeId: null, activeDetail: '', errorByNodeId: {} });
+  const [composerLightboxSrc, setComposerLightboxSrc] = useState<string | null>(null);
+  const openComposerImagePreview = useCallback((src: string) => {
+    const t = (src || '').trim();
+    if (t) setComposerLightboxSrc(t);
+  }, []);
   const canvasDropForwardRef = useRef<(e: React.DragEvent, droppedOnEdgeId?: string) => void>(() => {});
   const lastTestStopDropRef = useRef<{ edgeId?: string; x: number; y: number; at: number } | null>(null);
   const [nodes, setNodes, onNodesChange] = useNodesState(
@@ -684,6 +1005,145 @@ function CanvasInner({
   const dndRootRef = useRef<HTMLDivElement>(null);
   const presetsById = useMemo(() => new Map(presets.map((p) => [p.id, p])), [presets]);
   const assetById = useMemo(() => new Map(assetCandidates.map((a) => [a.id, a])), [assetCandidates]);
+
+  const [dockFlyParticles, setDockFlyParticles] = useState<DockFlyParticleItem[] | null>(null);
+  const [collapseFadeMs, setCollapseFadeMs] = useState<number | null>(null);
+  const onDockMotionCompleteRef = useRef(onDockMotionComplete);
+  useEffect(() => {
+    onDockMotionCompleteRef.current = onDockMotionComplete;
+  }, [onDockMotionComplete]);
+  const collapseCompleteOnceRef = useRef(false);
+
+  useLayoutEffect(() => {
+    if (layoutVariant !== 'overlayGlass' || dockMotionPhase !== 'collapsing') {
+      setDockFlyParticles(null);
+      setCollapseFadeMs(null);
+      collapseCompleteOnceRef.current = false;
+      return;
+    }
+
+    if (typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      const t = window.setTimeout(() => {
+        if (!collapseCompleteOnceRef.current) {
+          collapseCompleteOnceRef.current = true;
+          onDockMotionCompleteRef.current?.('collapsing');
+        }
+      }, 160);
+      return () => window.clearTimeout(t);
+    }
+
+    collapseCompleteOnceRef.current = false;
+    let cancelled = false;
+    let timeoutId = 0;
+    let rafOuter = 0;
+    let rafInner = 0;
+
+    const run = () => {
+      if (cancelled) return;
+      const flowEl = dndRootRef.current?.querySelector('.react-flow') as HTMLElement | null;
+      if (!flowEl) {
+        if (!collapseCompleteOnceRef.current) {
+          collapseCompleteOnceRef.current = true;
+          onDockMotionCompleteRef.current?.('collapsing');
+        }
+        return;
+      }
+      const chipW = estimateWorkflowDockChipWidthPx(setLabel);
+      const target = getWorkflowDockChipCenterInViewport(chipW, dockFlyStackIndex, dockFlyStackCount);
+      const raw = getNodes();
+      const lite = toGraphLite(raw, getEdges());
+      const nodeElById = new Map<string, HTMLElement>();
+      flowEl.querySelectorAll('.react-flow__node').forEach((dom) => {
+        const id = dom.getAttribute('data-id');
+        if (id) nodeElById.set(id, dom as HTMLElement);
+      });
+      const items: DockFlyParticleItem[] = [];
+      for (const n of raw) {
+        const el = nodeElById.get(n.id);
+        if (!el) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width < 2 && r.height < 2) continue;
+        const d = n.data as { label?: string };
+        const label = (d.label && String(d.label).trim()) || n.type || n.id;
+        const { previewSrc, placeholderVariant } = resolveDockFlyPreviewForNode(
+          n,
+          presetsById,
+          assetCandidates,
+          lite
+        );
+        items.push({
+          id: n.id,
+          label,
+          previewSrc,
+          placeholderVariant,
+          fromX: r.left + r.width / 2,
+          fromY: r.top + r.height / 2,
+          toX: target.x,
+          toY: target.y,
+          delayMs: 0,
+        });
+      }
+      items.sort((a, b) => (a.fromY !== b.fromY ? a.fromY - b.fromY : a.fromX - b.fromX));
+      items.forEach((it, i) => {
+        it.delayMs = i * DOCK_NODE_STAGGER_MS;
+      });
+
+      const totalMs =
+        items.length > 0 ? (items.length - 1) * DOCK_NODE_STAGGER_MS + DOCK_NODE_FLY_MS : 240;
+
+      if (items.length === 0) {
+        setDockFlyParticles(null);
+        setCollapseFadeMs(420);
+      } else {
+        setCollapseFadeMs(Math.max(480, totalMs - 48));
+        setDockFlyParticles(items);
+      }
+
+      timeoutId = window.setTimeout(() => {
+        if (cancelled || collapseCompleteOnceRef.current) return;
+        collapseCompleteOnceRef.current = true;
+        onDockMotionCompleteRef.current?.('collapsing');
+      }, totalMs);
+    };
+
+    rafOuter = requestAnimationFrame(() => {
+      rafInner = requestAnimationFrame(run);
+    });
+
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(rafOuter);
+      cancelAnimationFrame(rafInner);
+      if (timeoutId) window.clearTimeout(timeoutId);
+      setDockFlyParticles(null);
+      setCollapseFadeMs(null);
+    };
+  }, [layoutVariant, dockMotionPhase, setLabel, dockFlyStackIndex, dockFlyStackCount, getNodes, getEdges, presetsById, assetCandidates]);
+
+  const handleDockMainAnimationEnd = useCallback(
+    (e: React.AnimationEvent<HTMLDivElement>) => {
+      if (e.target !== e.currentTarget) return;
+      const name = String(e.animationName || '');
+      if (!name.includes('ac-cap-dock-main-fadein')) return;
+      if (layoutVariant !== 'overlayGlass') return;
+      if (dockMotionPhase === 'expanding') onDockMotionComplete?.('expanding');
+    },
+    [layoutVariant, dockMotionPhase, onDockMotionComplete]
+  );
+
+  const overlayGlassDock = layoutVariant === 'overlayGlass';
+  const sidebarDockClass =
+    overlayGlassDock && dockMotionPhase === 'collapsing'
+      ? 'ac-cap-dock-sidebar-leave'
+      : overlayGlassDock && dockMotionPhase === 'expanding'
+        ? 'ac-cap-dock-sidebar-enter'
+        : '';
+  const mainDockClass =
+    overlayGlassDock && dockMotionPhase === 'collapsing'
+      ? 'ac-cap-dock-main-fadeout'
+      : overlayGlassDock && dockMotionPhase === 'expanding'
+        ? 'ac-cap-dock-main-fadein'
+        : '';
 
   const enabledPresets = useMemo(
     () => presets.filter((p) => p.enabled !== false),
@@ -944,12 +1404,14 @@ function CanvasInner({
     const { nodes: liteNodes, edges: liteEdges } = toGraphLite(nodes, edges);
     const savedNodes = nodes.map((n) => {
       const base = fromFlowNode(n);
-      if (n.type !== 'output') return base;
+      const { testRunPreview: _trp, ...persistData } = base.data as CapabilitySetNode['data'];
+      const stripped = { ...base, data: persistData };
+      if (n.type !== 'output') return stripped;
       const cat = inferUpstreamPresetCategory(n.id, liteEdges, liteNodes, presetsById);
       if (cat) {
-        return { ...base, data: { ...base.data, outputCategory: cat } };
+        return { ...stripped, data: { ...stripped.data, outputCategory: cat } };
       }
-      return base;
+      return stripped;
     });
     return {
       id: setId,
@@ -965,42 +1427,169 @@ function CanvasInner({
     onSave(buildPersistedSet());
   }, [onSave, buildPersistedSet]);
 
-  const runPartialTest = useCallback(
-    (stopNodeId: string) => {
-      void (async () => {
-        const set = buildPersistedSet();
-        const assetInputs: Record<string, string> = {};
-        for (const n of set.nodes) {
-          if (n.type !== 'assetInput') continue;
-          const aid = n.data.assetId;
-          if (!aid) continue;
-          const c = assetById.get(aid);
-          const img = (c?.image ?? '').trim();
-          if (img) assetInputs[n.id] = img;
-        }
-        const raw = getPartialTestInputImage?.() ?? null;
-        const trimmed = (raw ?? '').trim();
-        const input = trimmed.length > 0 ? trimmed : PARTIAL_TEST_PLACEHOLDER_IMAGE;
-        if (trimmed.length === 0 && Object.keys(assetInputs).length === 0) {
-          onLog?.('warn', '运行测试：未配置输入图，使用占位图', undefined);
-        }
-        try {
-          const result = await executeCapabilitySet(set, input, {
-            presets,
-            onLog,
-            assetInputs,
-            stopAtNodeId: stopNodeId,
-          });
-          if (!result.ok) onLog?.('warn', result.error, undefined);
-          else onLog?.('info', `[测试] 已执行至断点，耗时 ${result.durationMs}ms`, undefined);
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          onLog?.('error', `[测试] ${msg}`, undefined);
-        }
-      })();
+  const applyComposerTestPreviews = useCallback(
+    (result: CapabilityExecuteResult) => {
+      if (!result.ok || result.kind !== 'image') return;
+      const byId = result.nodeImageOutputs ?? {};
+      setNodes((nds) =>
+        nds.map((n) => {
+          const d = n.data as CapabilitySetNode['data'];
+          const { testRunPreview: _prev, ...rest } = d;
+          const img = byId[n.id];
+          return {
+            ...n,
+            data: img ? { ...rest, testRunPreview: img } : rest,
+          };
+        })
+      );
+      const ids = Object.keys(byId);
+      if (ids.length > 0) {
+        requestAnimationFrame(() => {
+          for (const id of ids) {
+            try {
+              updateNodeInternals(id);
+            } catch {
+              /* ignore */
+            }
+          }
+        });
+      }
     },
-    [buildPersistedSet, getPartialTestInputImage, onLog, presets, assetById]
+    [setNodes, updateNodeInternals]
   );
+
+  const runComposerTest = useCallback(
+    async (stopAtNodeId: string | undefined) => {
+      if (testRunBusyRef.current) return;
+      testRunBusyRef.current = true;
+      setTestRunBusy(true);
+      lastProgressNodeRef.current = null;
+      setComposerRunUi({ activeNodeId: null, activeDetail: '', errorByNodeId: {} });
+      const set = buildPersistedSet();
+      const assetInputs: Record<string, string> = {};
+      for (const n of set.nodes) {
+        if (n.type !== 'assetInput') continue;
+        const aid = n.data.assetId;
+        if (!aid) continue;
+        const c = assetById.get(aid);
+        const img = (c?.image ?? '').trim();
+        if (img) assetInputs[n.id] = img;
+      }
+      const raw = getPartialTestInputImage?.() ?? null;
+      const trimmed = (raw ?? '').trim();
+      const input = trimmed.length > 0 ? trimmed : PARTIAL_TEST_PLACEHOLDER_IMAGE;
+      if (trimmed.length === 0 && Object.keys(assetInputs).length === 0) {
+        onLog?.('warn', '运行测试：未配置输入图，使用占位图', undefined);
+      }
+      try {
+        const result = await executeCapabilitySet(set, input, {
+          presets,
+          onLog,
+          assetInputs,
+          onRunProgress: (line, meta) => {
+            if (meta?.nodeId) lastProgressNodeRef.current = meta.nodeId;
+            setComposerRunUi((prev) => ({
+              ...prev,
+              activeNodeId: meta?.nodeId ?? prev.activeNodeId,
+              activeDetail: line,
+            }));
+          },
+          onNodeImageOutput: (nodeId, image) => {
+            setNodes((nds) =>
+              nds.map((n) => {
+                if (n.id !== nodeId) return n;
+                const d = n.data as CapabilitySetNode['data'];
+                const { testRunPreview: _p, ...rest } = d;
+                return { ...n, data: { ...rest, testRunPreview: image } };
+              })
+            );
+            requestAnimationFrame(() => {
+              try {
+                updateNodeInternals(nodeId);
+              } catch {
+                /* ignore */
+              }
+            });
+          },
+          ...(stopAtNodeId != null ? { stopAtNodeId } : {}),
+        });
+        if (result.ok === false) {
+          if (result.nodeImageOutputs && Object.keys(result.nodeImageOutputs).length > 0) {
+            const map = result.nodeImageOutputs;
+            setNodes((nds) =>
+              nds.map((n) => {
+                const img = map[n.id];
+                if (!img) return n;
+                const d = n.data as CapabilitySetNode['data'];
+                const { testRunPreview: _p, ...rest } = d;
+                return { ...n, data: { ...rest, testRunPreview: img } };
+              })
+            );
+            requestAnimationFrame(() => {
+              for (const id of Object.keys(map)) {
+                try {
+                  updateNodeInternals(id);
+                } catch {
+                  /* ignore */
+                }
+              }
+            });
+          }
+          onLog?.('warn', result.error, undefined);
+          const fid = result.failedNodeId ?? lastProgressNodeRef.current;
+          setComposerRunUi((prev) => ({
+            ...prev,
+            activeNodeId: null,
+            activeDetail: '',
+            errorByNodeId: fid ? { ...prev.errorByNodeId, [fid]: result.error } : prev.errorByNodeId,
+          }));
+        } else if (result.kind === 'image') {
+          setComposerRunUi((prev) => ({ ...prev, errorByNodeId: {} }));
+          applyComposerTestPreviews(result);
+          const summary =
+            stopAtNodeId != null
+              ? `已在所选节点完成（${result.durationMs}ms），各节点预览已更新`
+              : `全流程完成（${result.durationMs}ms），各节点预览已更新`;
+          onLog?.('info', `[测试] ${summary}`, undefined);
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        onLog?.('error', `[测试] ${msg}`, undefined);
+        const fid = lastProgressNodeRef.current;
+        setComposerRunUi((prev) => ({
+          ...prev,
+          activeNodeId: null,
+          activeDetail: '',
+          errorByNodeId: fid ? { ...prev.errorByNodeId, [fid]: msg } : prev.errorByNodeId,
+        }));
+      } finally {
+        testRunBusyRef.current = false;
+        setTestRunBusy(false);
+        setComposerRunUi((prev) => ({ ...prev, activeNodeId: null, activeDetail: '' }));
+      }
+    },
+    [
+      buildPersistedSet,
+      getPartialTestInputImage,
+      onLog,
+      presets,
+      assetById,
+      applyComposerTestPreviews,
+      setNodes,
+      updateNodeInternals,
+    ]
+  );
+
+  const runToStop = useCallback(
+    (stopNodeId: string) => {
+      void runComposerTest(stopNodeId);
+    },
+    [runComposerTest]
+  );
+
+  const runFullPipeline = useCallback(() => {
+    void runComposerTest(undefined);
+  }, [runComposerTest]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -1062,16 +1651,38 @@ function CanvasInner({
   }, [getNodes, getEdges, setNodes, setEdges, pushSnapshot, undo]);
 
   return (
+    <>
+    <ComposerNodeImagePreviewContext.Provider value={openComposerImagePreview}>
     <CanvasLayoutContext.Provider value={layoutVariant}>
     <PresetsByIdContext.Provider value={presetsById}>
     <AssetCandidatesContext.Provider value={assetCandidates}>
-    <TestStopRunContext.Provider value={runPartialTest}>
+    <ComposerNodeRunOverlayContext.Provider
+      value={{
+        busy: testRunBusy,
+        activeNodeId: composerRunUi.activeNodeId,
+        activeDetail: composerRunUi.activeDetail,
+        errorByNodeId: composerRunUi.errorByNodeId,
+      }}
+    >
+    <ComposerTestRunContext.Provider
+      value={{
+        runToStop,
+        runFullPipeline,
+        busy: testRunBusy,
+      }}
+    >
     <CanvasDropForwardRefContext.Provider value={canvasDropForwardRef}>
     <div
       ref={dndRootRef}
-      className={layoutVariant === 'overlayGlass' ? 'dndflow dndflow--overlay-glass' : 'dndflow'}
+      className={
+        layoutVariant === 'overlayGlass'
+          ? `dndflow dndflow--overlay-glass${dockMotionPhase === 'collapsing' ? ' dndflow--dock-collapsing' : ''}${
+              dockMotionPhase === 'expanding' ? ' dndflow--dock-expanding' : ''
+            }`
+          : 'dndflow'
+      }
     >
-      <aside className="sidebar">
+      <aside className={`sidebar${sidebarDockClass ? ` ${sidebarDockClass}` : ''}`}>
         <div className="sidebar-header">能力集合</div>
         <input
           value={setLabel}
@@ -1079,27 +1690,37 @@ function CanvasInner({
           placeholder="集合名称"
           className="sidebar-input w-full rounded border border-[#2e2e32] bg-[#1c1c22] px-3 py-2 text-xs text-gray-200 placeholder-gray-500 outline-none focus:border-[#3b82f6] focus:ring-1 focus:ring-blue-500/30"
         />
-        <div className={layoutVariant === 'overlayGlass' ? '' : 'flex gap-2'}>
-          <button
-            type="button"
-            onClick={handleSave}
-            className={
-              layoutVariant === 'overlayGlass'
-                ? 'w-full rounded bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-500'
-                : 'flex-1 rounded bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-500'
-            }
-          >
-            保存
-          </button>
-          {layoutVariant !== 'overlayGlass' ? (
+        <div className="flex flex-col gap-2">
+          <div className={layoutVariant === 'overlayGlass' ? '' : 'flex gap-2'}>
             <button
               type="button"
-              onClick={onClose}
-              className="flex-1 rounded border border-[#2e2e32] bg-[#1c1c22] px-3 py-2 text-xs font-semibold text-gray-300 hover:bg-[#2e2e36]"
+              onClick={handleSave}
+              className={
+                layoutVariant === 'overlayGlass'
+                  ? 'w-full rounded bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-500'
+                  : 'flex-1 rounded bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-500'
+              }
             >
-              返回
+              保存
             </button>
-          ) : null}
+            {layoutVariant !== 'overlayGlass' ? (
+              <button
+                type="button"
+                onClick={onClose}
+                className="flex-1 rounded border border-[#2e2e32] bg-[#1c1c22] px-3 py-2 text-xs font-semibold text-gray-300 hover:bg-[#2e2e36]"
+              >
+                返回
+              </button>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            onClick={runFullPipeline}
+            disabled={testRunBusy}
+            className="w-full rounded-lg border border-amber-500/35 bg-amber-500/10 px-3 py-2 text-[10px] font-black uppercase tracking-wide text-amber-200 hover:bg-amber-500/15 transition-colors disabled:cursor-not-allowed disabled:opacity-45"
+          >
+            {testRunBusy ? '执行中…' : '试运行全流程'}
+          </button>
         </div>
         <div className="sidebar-header">通用节点</div>
         <button
@@ -1130,7 +1751,7 @@ function CanvasInner({
           资产节点
         </div>
         <p className="text-[9px] text-gray-500 leading-snug mt-1 px-0.5">
-          测试节点拖到<strong className="text-gray-400">已有连线</strong>上释放；资产节点拖到画布后可选工作区/仓库资产。
+          测试节点拖到<strong className="text-gray-400">已有连线</strong>上释放；<strong className="text-amber-200/80">试运行全流程</strong>与工作区队列执行时会<strong className="text-gray-300">自动跳过</strong>测试节点（仅连线生效）。试运行时<strong className="text-gray-300">当前步骤的进度动效与文案</strong>显示在对应节点卡片上（与工作区一致）；<strong className="text-gray-300">失败时错误直接显示在出错节点上</strong>。每完成一步会刷新该节点预览；已成功步骤的预览在失败时仍会保留。在<strong className="text-amber-200/90">测试节点</strong>上点「运行测试」只执行到该节点（下游不跑）。在<strong className="text-blue-200/90">输出节点</strong>上点「运行测试」则执行到该输出。节点预览图<strong className="text-gray-300">双击</strong>可放大查看。
         </p>
         <div className="sidebar-header">拖到画布</div>
         <div className="sidebar-nodes">
@@ -1193,7 +1814,21 @@ function CanvasInner({
           )}
         </div>
       </aside>
-      <div className="reactflow-wrapper svelteflow-style" role="application" aria-label="能力集合画布">
+      <div
+        className={`reactflow-wrapper svelteflow-style relative min-h-0${mainDockClass ? ` ${mainDockClass}` : ''}`}
+        role="application"
+        aria-label="能力集合画布"
+        style={
+          overlayGlassDock && dockMotionPhase === 'collapsing' && collapseFadeMs != null
+            ? { animationDuration: `${collapseFadeMs}ms` }
+            : undefined
+        }
+        onAnimationEnd={
+          overlayGlassDock && dockMotionPhase === 'expanding' && mainDockClass
+            ? handleDockMainAnimationEnd
+            : undefined
+        }
+      >
         <ReactFlow
           nodes={nodes}
           edges={edges}
@@ -1237,10 +1872,61 @@ function CanvasInner({
       </div>
     </div>
     </CanvasDropForwardRefContext.Provider>
-    </TestStopRunContext.Provider>
+    </ComposerTestRunContext.Provider>
+    </ComposerNodeRunOverlayContext.Provider>
     </AssetCandidatesContext.Provider>
     </PresetsByIdContext.Provider>
     </CanvasLayoutContext.Provider>
+    </ComposerNodeImagePreviewContext.Provider>
+    {dockFlyParticles && dockFlyParticles.length > 0 && typeof document !== 'undefined'
+      ? createPortal(
+          <div className="pointer-events-none fixed inset-0 z-[2200]" aria-hidden>
+            {dockFlyParticles.map((p) => (
+              <div
+                key={p.id}
+                className="ac-cap-dock-node-fly"
+                style={
+                  {
+                    '--sx': `${p.fromX}px`,
+                    '--sy': `${p.fromY}px`,
+                    '--ex': `${p.toX}px`,
+                    '--ey': `${p.toY}px`,
+                    '--half': `${DOCK_FLY_THUMB_HALF_PX}px`,
+                    animationDelay: `${p.delayMs}ms`,
+                  } as React.CSSProperties
+                }
+              >
+                <div
+                  className="ac-cap-dock-node-fly__card overflow-hidden rounded-xl border border-white/20 bg-[#0c0c10] shadow-[0_16px_40px_rgba(0,0,0,0.65)] ring-1 ring-white/10"
+                  style={{ width: DOCK_FLY_THUMB_PX, height: DOCK_FLY_THUMB_PX }}
+                  title={p.label}
+                >
+                  <CapabilityPreviewImg
+                    src={p.previewSrc}
+                    alt=""
+                    className="h-full w-full object-cover"
+                    fallback={<AssetCardPlaceholder variant={p.placeholderVariant} />}
+                    loading="eager"
+                  />
+                </div>
+              </div>
+            ))}
+          </div>,
+          document.body
+        )
+      : null}
+    <ImagePreviewOverlay
+      open={Boolean(composerLightboxSrc)}
+      resetKey={composerLightboxSrc ?? 'closed'}
+      imageSrc={composerLightboxSrc ?? ''}
+      onClose={() => setComposerLightboxSrc(null)}
+      wheelListLength={1}
+      onWheelNavigate={() => {}}
+      enablePanoramaMode
+      contentRightInset="0px"
+      shellZIndexClassName={layoutVariant === 'overlayGlass' ? 'z-[2200]' : undefined}
+    />
+    </>
   );
 }
 
@@ -1252,6 +1938,10 @@ export type CapabilitySetCanvasProps = {
   onSave: (set: CapabilitySet) => void;
   onClose: () => void;
   layoutVariant?: 'default' | 'overlayGlass';
+  dockMotionPhase?: CapabilityCanvasDockMotionPhase;
+  onDockMotionComplete?: (phase: 'collapsing' | 'expanding') => void;
+  dockFlyStackIndex?: number;
+  dockFlyStackCount?: number;
   onLog?: CanvasInnerProps['onLog'];
   getPartialTestInputImage?: CanvasInnerProps['getPartialTestInputImage'];
   assetCandidates?: CanvasInnerProps['assetCandidates'];

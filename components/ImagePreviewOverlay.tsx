@@ -42,6 +42,10 @@ export type ImagePreviewOverlayProps = {
   enablePanoramaMode?: boolean;
   /** 右侧占位宽度（如常驻侧栏），用于将主图居中到左侧可用区域 */
   contentRightInset?: string;
+  /**
+   * 传给 PreviewShell 的全屏层 z-index（Tailwind 类）。嵌套在更高 z 的全屏壳内（如工作流编排 `z-[2100]`）时必须高于父层，否则预览会显示在父层背后。
+   */
+  shellZIndexClassName?: string;
   children?: React.ReactNode;
 };
 
@@ -72,6 +76,7 @@ export function ImagePreviewOverlay({
   layoutReferenceSrc,
   enablePanoramaMode = true,
   contentRightInset = '0px',
+  shellZIndexClassName,
   children,
 }: ImagePreviewOverlayProps) {
   const [previewLayout, setPreviewLayout] = useState<'flat' | 'pano'>('flat');
@@ -439,7 +444,12 @@ export function ImagePreviewOverlay({
   };
 
   return (
-    <PreviewShell open={open} onClose={onClose} focusKey={resetKey}>
+    <PreviewShell
+      open={open}
+      onClose={onClose}
+      focusKey={resetKey}
+      zIndexClassName={shellZIndexClassName ?? 'z-[2000]'}
+    >
         {enablePanoramaMode && previewLayout === 'pano' && LazyImageEquirectViewer ? (
           <div
             className="absolute inset-0 z-[5] min-h-[200px]"

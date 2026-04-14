@@ -24,6 +24,7 @@ import WorkflowModeShell from './components/WorkflowModeShell';
 import { useUserUiPrefs } from './hooks/useUserUiPrefs';
 import Waves from './components/ui/Waves';
 import AppIcon from './components/ui/AppIcon';
+import { RIGHT_DOCK_LOG_BOTTOM, RIGHT_DOCK_LOG_PANEL_BOTTOM, RIGHT_DOCK_RIGHT } from './components/floatingDockConstants';
 import { ProgressivePreviewImage } from './components/ProgressivePreviewImage';
 import { DialogSessionRowBackdrop } from './components/DialogSessionRowBackdrop';
 import { SiteImage } from './components/SiteImage';
@@ -515,14 +516,58 @@ const MainApp: React.FC = () => {
   const [mode, setMode] = useState<AppMode>(AppMode.WORKFLOW);
   const [capabilityPresets, setCapabilityPresets] = useState<CustomAppModule[]>(loadCapabilityPresets);
   const [capabilitySets, setCapabilitySets] = useState<CapabilitySet[]>(loadCapabilitySets);
-  const [globalComposerOpen, setGlobalComposerOpen] = useState(false);
-  const [globalComposerSessionKey, setGlobalComposerSessionKey] = useState(0);
-  const [globalComposerInitialSet, setGlobalComposerInitialSet] = useState<CapabilitySet | null>(null);
+  type GlobalComposerSession = { id: string; initialSet: CapabilitySet | null; sessionKey: number };
+  const [globalComposerSessions, setGlobalComposerSessions] = useState<GlobalComposerSession[]>([]);
+  const [globalComposerActiveId, setGlobalComposerActiveId] = useState<string | null>(null);
+  const [globalComposerMinimized, setGlobalComposerMinimized] = useState<Record<string, boolean>>({});
+  const globalComposerActiveIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    globalComposerActiveIdRef.current = globalComposerActiveId;
+  }, [globalComposerActiveId]);
   const openGlobalWorkflowComposer = useCallback((initialSet: CapabilitySet | null) => {
-    setGlobalComposerInitialSet(initialSet);
-    setGlobalComposerSessionKey((k) => k + 1);
-    setGlobalComposerOpen(true);
+    const id =
+      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `wf-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setGlobalComposerSessions((prev) => [...prev, { id, initialSet, sessionKey: Date.now() }]);
+    setGlobalComposerActiveId(id);
   }, []);
+  const closeGlobalComposerSession = useCallback((id: string) => {
+    setGlobalComposerSessions((prev) => {
+      const next = prev.filter((s) => s.id !== id);
+      const wasActive = globalComposerActiveIdRef.current === id;
+      if (wasActive) {
+        const nextActive = next[0]?.id ?? null;
+        globalComposerActiveIdRef.current = nextActive;
+        setGlobalComposerActiveId(nextActive);
+      }
+      return next;
+    });
+    setGlobalComposerMinimized((m) => {
+      if (!(id in m)) return m;
+      const { [id]: _, ...rest } = m;
+      return rest;
+    });
+  }, []);
+  const getGlobalComposerDockStackIndex = useCallback(
+    (sessionId: string) => {
+      const minimizedOrdered = globalComposerSessions.filter((s) => globalComposerMinimized[s.id]);
+      const idx = minimizedOrdered.findIndex((s) => s.id === sessionId);
+      if (idx >= 0) return idx;
+      return minimizedOrdered.length;
+    },
+    [globalComposerSessions, globalComposerMinimized]
+  );
+  const getGlobalComposerDockStackCount = useCallback(
+    (sessionId: string) => {
+      const minimizedOrdered = globalComposerSessions.filter((s) => globalComposerMinimized[s.id]);
+      if (globalComposerMinimized[sessionId]) {
+        return Math.max(1, minimizedOrdered.length);
+      }
+      return Math.max(1, minimizedOrdered.length + 1);
+    },
+    [globalComposerSessions, globalComposerMinimized]
+  );
   useEffect(() => {
     if (mode === AppMode.WORKFLOW) {
       setCapabilityPresets(loadCapabilityPresets());
@@ -3164,7 +3209,7 @@ const MainApp: React.FC = () => {
       </Suspense>
 
       {/* 全局日志：悬浮图标（位于网页助手上方）+ 可开关面板 */}
-      <div className="fixed bottom-24 right-6 z-[2001] flex items-center justify-center">
+      <div className={`fixed ${RIGHT_DOCK_LOG_BOTTOM} ${RIGHT_DOCK_RIGHT} z-[2001] flex items-center justify-center`}>
         <button
           type="button"
           onClick={() => setGlobalLogOpen(v => !v)}
@@ -3190,7 +3235,7 @@ const MainApp: React.FC = () => {
 
       {globalLogOpen && (
         <div
-          className="fixed bottom-40 right-6 z-[2000] w-[min(420px,calc(100vw-3rem))] max-h-[min(56vh,420px)] rounded-2xl border border-[#343438] bg-[#0f0f0f] shadow-2xl overflow-hidden"
+          className={`fixed ${RIGHT_DOCK_LOG_PANEL_BOTTOM} ${RIGHT_DOCK_RIGHT} z-[2000] w-[min(420px,calc(100vw-3rem))] max-h-[min(56vh,420px)] rounded-2xl border border-[#343438] bg-[#0f0f0f] shadow-2xl overflow-hidden`}
           role="dialog"
           aria-label="全局日志"
         >
@@ -3298,6 +3343,7 @@ const MainApp: React.FC = () => {
                   onRefreshUser={refreshAuthUser}
                   onLogout={logout}
                   onAiInvocationSurfaceChange={() => setAiInvocationStatusRev((n) => n + 1)}
+                  aiSettingsSyncRev={aiInvocationStatusRev}
                 />
               </Suspense>
             )}
@@ -3415,14 +3461,24 @@ const MainApp: React.FC = () => {
               </Suspense>
             )}
 
-            {globalComposerOpen && (
-              <Suspense fallback={null}>
+            {globalComposerSessions.map((sess) => (
+              <Suspense key={sess.id} fallback={null}>
                 <WorkflowComposerOverlay
-                  open={globalComposerOpen}
-                  onClose={() => setGlobalComposerOpen(false)}
-                  sessionKey={globalComposerSessionKey}
+                  open
+                  onClose={() => closeGlobalComposerSession(sess.id)}
+                  sessionKey={sess.sessionKey}
                   presets={capabilityPresets}
-                  initialSet={globalComposerInitialSet}
+                  initialSet={sess.initialSet}
+                  isForeground={sess.id === globalComposerActiveId}
+                  dockStackIndex={getGlobalComposerDockStackIndex(sess.id)}
+                  dockStackCount={getGlobalComposerDockStackCount(sess.id)}
+                  onRequestForeground={() => setGlobalComposerActiveId(sess.id)}
+                  onMinimizedChange={(minimized) =>
+                    setGlobalComposerMinimized((prev) => {
+                      if (prev[sess.id] === minimized) return prev;
+                      return { ...prev, [sess.id]: minimized };
+                    })
+                  }
                   onSave={(set) => {
                     const next = capabilitySets.some((s) => s.id === set.id)
                       ? capabilitySets.map((s) => (s.id === set.id ? set : s))
@@ -3434,7 +3490,7 @@ const MainApp: React.FC = () => {
                   onLog={(level, message, detail) => addGlobalLog('能力', level, message, detail)}
                 />
               </Suspense>
-            )}
+            ))}
 
             {mode === AppMode.ADMIN && <GenerationRecordsAnalysis />}
 

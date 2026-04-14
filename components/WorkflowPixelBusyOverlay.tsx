@@ -116,8 +116,26 @@ const DEFAULT_COLORS = '#f8fafc,#f1f5f9,#cbd5e1';
 
 const WorkflowPixelBusyOverlay: React.FC<{
   executing: boolean;
+  /** 能力集合等：底部略高的像素动画强度 */
+  accentExecuting?: boolean;
+  /** 第二行：执行阶段说明（如「拆分组件：生图中…」） */
+  progressDetail?: string | null;
+  /** 逐步预览：叠在暗色底下的参考图（object-contain） */
+  backdropImageSrc?: string | null;
+  /**
+   * `compact`：能力集合等小节点用——更密的像素栅、不叠底图（与工作区大图观感一致）、
+   * 主标题缩小；阶段说明不叠在栅格内（悬停遮罩可看 `title`），避免小卡片大字截断。
+   */
+  density?: 'default' | 'compact';
   className?: string;
-}> = ({ executing, className = '' }) => {
+}> = ({
+  executing,
+  accentExecuting = false,
+  progressDetail,
+  backdropImageSrc,
+  density = 'default',
+  className = '',
+}) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const pixelsRef = useRef<Pixel[]>([]);
@@ -127,9 +145,26 @@ const WorkflowPixelBusyOverlay: React.FC<{
     typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
   );
 
+  const isCompact = density === 'compact';
+
   useEffect(() => {
-    const gap = 5;
-    const speed = executing ? 35 : 22;
+    const gap = isCompact ? 4 : 5;
+    const speed =
+      executing && accentExecuting
+        ? isCompact
+          ? 44
+          : 50
+        : executing
+          ? isCompact
+            ? 30
+            : 35
+          : accentExecuting
+            ? isCompact
+              ? 24
+              : 28
+            : isCompact
+              ? 20
+              : 22;
     const colors = DEFAULT_COLORS;
     const reducedMotion = reducedMotionRef.current;
 
@@ -216,32 +251,93 @@ const WorkflowPixelBusyOverlay: React.FC<{
       if (animationRef.current != null) cancelAnimationFrame(animationRef.current);
       animationRef.current = null;
     };
-  }, [executing]);
+  }, [executing, accentExecuting, isCompact]);
+
+  const detail = (progressDetail || '').trim();
+  const hasBackdrop = !!backdropImageSrc && backdropImageSrc.length > 0;
+  /** 小节点上不叠预览图，避免与像素层糊成一团（对齐工作区「纯栅格+执行中」主视觉） */
+  const useBackdrop = hasBackdrop && !isCompact;
 
   return (
     <div
       ref={containerRef}
-      className={`absolute inset-0 z-10 overflow-hidden rounded-[inherit] border border-white/[0.06] bg-[#09090b] pointer-events-none isolate ${className}`.trim()}
-      aria-hidden
+      className={`absolute inset-0 z-10 overflow-hidden rounded-[inherit] border border-white/[0.06] ${
+        useBackdrop ? 'bg-transparent' : 'bg-[#09090b]'
+      } pointer-events-none isolate ${className}`.trim()}
+      title={isCompact && detail ? detail : undefined}
+      aria-hidden={!(isCompact && detail)}
     >
-      <canvas ref={canvasRef} className="absolute inset-0 z-0 block h-full w-full" />
+      {useBackdrop ? (
+        <>
+          <img
+            src={backdropImageSrc!}
+            alt=""
+            className="absolute inset-0 z-0 h-full w-full object-contain opacity-[0.42]"
+            draggable={false}
+          />
+          <div
+            className="absolute inset-0 z-[0.5] bg-gradient-to-b from-[#09090b]/55 via-[#09090b]/72 to-[#09090b]/88"
+            aria-hidden
+          />
+        </>
+      ) : null}
+      <canvas ref={canvasRef} className="absolute inset-0 z-[1] block h-full w-full" />
       {/* 与官方 .pixel-card:hover::before 一致：叠在像素层之上，中心径向压暗 */}
       <div
-        className="pointer-events-none absolute inset-0 z-[1] m-auto aspect-square opacity-100"
+        className="pointer-events-none absolute inset-0 z-[2] m-auto aspect-square opacity-100"
         style={{
-          background: 'radial-gradient(circle, #09090b, transparent 85%)',
+          background: isCompact
+            ? 'radial-gradient(circle, rgba(9,9,11,0.94) 0%, rgba(9,9,11,0.55) 52%, transparent 78%)'
+            : 'radial-gradient(circle, #09090b, transparent 85%)',
         }}
       />
-      <div className="pointer-events-none absolute inset-0 z-[2] grid place-items-center px-3">
+      <div
+        className={`pointer-events-none absolute inset-0 z-[3] flex flex-col items-center justify-center ${
+          isCompact ? 'px-1.5 gap-0.5' : 'px-3 gap-1'
+        } ${executing && accentExecuting && !isCompact ? 'motion-safe:animate-pulse' : ''}`}
+      >
         <span
-          className={`text-center text-[11px] font-bold tracking-wide ${
-            executing ? 'text-zinc-500' : 'text-zinc-600'
+          className={`text-center font-bold tracking-wide ${
+            isCompact
+              ? executing
+                ? 'text-[8px] font-black uppercase tracking-[0.14em] text-zinc-100'
+                : 'text-[8px] font-semibold text-zinc-500'
+              : executing
+                ? 'text-[11px] text-zinc-300'
+                : 'text-[11px] text-zinc-600'
           }`}
           style={{ textShadow: '0 0 24px rgba(0,0,0,0.85)' }}
         >
           {executing ? '执行中' : '排队中'}
         </span>
+        {detail && !isCompact ? (
+          <span
+            className="text-center text-[9px] font-medium text-zinc-400/95 leading-snug max-w-[95%] line-clamp-3"
+            style={{ textShadow: '0 0 12px rgba(0,0,0,0.9)' }}
+          >
+            {detail}
+          </span>
+        ) : null}
       </div>
+      {executing && accentExecuting ? (
+        <div
+          className={`pointer-events-none absolute bottom-0 left-0 right-0 z-[4] overflow-hidden rounded-b-[inherit] bg-blue-500/15 ${
+            isCompact ? 'h-[2px]' : 'h-[3px]'
+          }`}
+          aria-hidden
+        >
+          <div
+            className="absolute inset-y-0 left-0 w-2/5 bg-gradient-to-r from-transparent via-blue-400/90 to-transparent motion-reduce:animate-none"
+            style={{ animation: 'workspaceSetRunBar 1.1s ease-in-out infinite' }}
+          />
+        </div>
+      ) : null}
+      <style>{`
+        @keyframes workspaceSetRunBar {
+          0% { transform: translateX(-100%); }
+          100% { transform: translateX(340%); }
+        }
+      `}</style>
     </div>
   );
 };

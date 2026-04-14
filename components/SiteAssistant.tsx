@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { getSiteAssistantResponseStream } from '../services/geminiService';
 import type { AppTask } from '../types';
 import AppIcon from './ui/AppIcon';
+import { RIGHT_DOCK_ASSISTANT_BOTTOM, RIGHT_DOCK_RIGHT } from './floatingDockConstants';
 
 const SiteAssistant: React.FC<{
   tasks?: AppTask[];
@@ -64,22 +65,28 @@ const SiteAssistant: React.FC<{
   return (
     <>
       {/* 悬浮按钮：网站助手 */}
-      <div className="fixed bottom-6 right-6 z-[1999] flex items-center justify-center">
+      <div
+        className={`fixed ${RIGHT_DOCK_ASSISTANT_BOTTOM} ${RIGHT_DOCK_RIGHT} z-[1999] flex items-center justify-center`}
+      >
         <button
           type="button"
           onClick={() => setOpen((o) => !o)}
-          className="w-14 h-14 rounded-full glass border border-[#343438] shadow-lg flex items-center justify-center text-2xl hover:border-[#3b6fb8] hover:bg-[#1a3354] transition-all focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+          className={`relative w-12 h-12 rounded-full border shadow-lg flex items-center justify-center transition-all outline-none focus:ring-2 focus:ring-blue-500/50 ${
+            open
+              ? 'bg-[#1a3354] border-[#3b6fb8] text-blue-200'
+              : 'bg-[#16161a] border-[#343438] text-gray-200 hover:bg-[#1f1f24] hover:border-[#3b6fb8]'
+          }`}
           title="网站助手"
           aria-label="打开网站助手"
         >
-          <AppIcon name="chat" className="w-6 h-6" />
+          <AppIcon name="chat" className="w-5 h-5" />
         </button>
       </div>
 
       {/* 对话面板 */}
       {open && (
         <div
-          className="fixed bottom-20 right-6 z-[1998] w-[min(360px,calc(100vw-3rem))] max-h-[min(70vh,520px)] flex flex-col glass rounded-2xl border border-[#343438] shadow-2xl overflow-hidden animate-in slide-in-from-bottom-4 duration-200"
+          className={`fixed bottom-20 ${RIGHT_DOCK_RIGHT} z-[1998] w-[min(360px,calc(100vw-3rem))] max-h-[min(70vh,520px)] flex flex-col glass rounded-2xl border border-[#343438] shadow-2xl overflow-hidden animate-in slide-in-from-bottom-4 duration-200`}
           role="dialog"
           aria-label="网站助手"
         >
