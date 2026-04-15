@@ -463,6 +463,11 @@ export type CapabilitySetExecuteContext = CapabilityExecuteContext & {
    */
   assetInputs?: Record<string, string | undefined>;
   /**
+   * 资产输入节点可用的文字映射（key=nodeId），与 `assetInputs` 互斥（同一节点优先文本）。
+   * 用于工作区文字卡接入能力集合。
+   */
+  assetInputTexts?: Record<string, string | undefined>;
+  /**
    * 若设置：执行到该测试断点节点并完成其透传后**立即返回**（不跑下游），用于画布「运行测试」。
    */
   stopAtNodeId?: string;
@@ -610,6 +615,8 @@ export async function executeCapabilitySet(
     inEdges.get(e.target)!.push(e.source);
   }
   const outputs = new Map<string, string>();
+  /** 节点输出的纯文本（文字卡资产输入、文生文预设等），供下游合并为 inputText */
+  const upstreamTextByNodeId = new Map<string, string>();
   const nodeImageOutputs: Record<string, string> = {};
   const recordNodeImage = (nodeId: string, img: string) => {
     if (img && typeof img === 'string') {
@@ -650,12 +657,21 @@ export async function executeCapabilitySet(
         const textGenSourceId = sources.find((s) => nodeMap.get(s)?.type === 'textGen');
         const imagesFromSources = imageSourceIds.map((id) => outputs.get(id)).filter(Boolean) as string[];
         const promptFromTextGen = textGenSourceId ? (nodeMap.get(textGenSourceId)?.data?.text ?? '').trim() : '';
+        const textFromUpstreamNodes = sources
+          .map((s) => upstreamTextByNodeId.get(s))
+          .filter((t): t is string => Boolean(t?.trim()))
+          .map((t) => t.trim());
+        const combinedPrompt =
+          [...textFromUpstreamNodes, promptFromTextGen].filter(Boolean).join('\n\n') || '';
 
-        const isMultiInput = imagesFromSources.length > 1 || (imagesFromSources.length >= 1 && promptFromTextGen.length > 0);
+        const isMultiInput =
+          imagesFromSources.length > 1 ||
+          (imagesFromSources.length >= 1 && combinedPrompt.length > 0);
 
         if (isMultiInput && getCapabilityEngine(preset) === 'gen_image') {
           const images = imagesFromSources.length > 0 ? imagesFromSources : [inputImage];
-          const instruction = promptFromTextGen || (preset.instruction ?? '').trim() || '根据以上参考图生成最终效果。';
+          const instruction =
+            combinedPrompt || (preset.instruction ?? '').trim() || '根据以上参考图生成最终效果。';
           onLog?.('info', `[${execGraph.label}] ${n.data.label} 执行中（${images.length} 张图 + 提示词）…`, undefined);
           ctx.onRunProgress?.(`${n.data.label || preset.label || n.id}：多图生图中（${images.length} 张参考）…`, {
             nodeId: n.id,
@@ -675,12 +691,46 @@ export async function executeCapabilitySet(
             return capabilitySetFail(`[${n.data.label}] ${msg}`, start, nodeImageOutputs, n.id);
           }
         } else {
-          const srcId = sources.find((s) => outputs.has(s)) ?? sources[0];
-          const srcImage = outputs.get(srcId) ?? inputImage;
+          const promptFromTextGenSingle = textGenSourceId
+            ? (nodeMap.get(textGenSourceId)?.data?.text ?? '').trim()
+            : '';
+          const mergedInputTextParts: string[] = [];
+          for (const s of sources) {
+            const ut = upstreamTextByNodeId.get(s);
+            if (ut?.trim()) mergedInputTextParts.push(ut.trim());
+          }
+          if (promptFromTextGenSingle) mergedInputTextParts.push(promptFromTextGenSingle);
+          const mergedInputText =
+            mergedInputTextParts.length > 0 ? mergedInputTextParts.join('\n\n') : undefined;
+
+          const imageSrcIds = sources.filter((s) => {
+            const v = outputs.get(s);
+            return typeof v === 'string' && v.trim().length > 0 && hasUsableImageBase64(v);
+          });
+          const useGlobalInputFallback = Boolean(inputNode && sources.includes(inputNode.id));
+          let srcImage = '';
+          if (imageSrcIds.length > 0) {
+            srcImage = outputs.get(imageSrcIds[0]!) ?? '';
+          } else if (useGlobalInputFallback) {
+            srcImage = inputImage;
+          }
+
           onLog?.('info', `[${execGraph.label}] ${n.data.label} 执行中…`, undefined);
-          const out = await executeCapability(preset, srcImage, { ...ctx, runProgressNodeId: n.id });
+          const out = await executeCapability(
+            preset,
+            srcImage,
+            { ...ctx, runProgressNodeId: n.id },
+            mergedInputText ? { inputText: mergedInputText } : undefined
+          );
           if (out.ok === false) {
             return capabilitySetFail(`[${n.data.label}] ${out.error}`, start, nodeImageOutputs, n.id);
+          }
+          if (out.kind === 'text') {
+            upstreamTextByNodeId.set(n.id, out.text);
+            outputs.set(n.id, '');
+            done.add(n.id);
+            progressed = true;
+            continue;
           }
           if (out.kind !== 'image') {
             return capabilitySetFail(
@@ -706,17 +756,29 @@ export async function executeCapabilitySet(
         lastImage = inputImage;
       } else if (n.type === 'assetInput') {
         ctx.onRunProgress?.(`读取资产输入：${n.data.label || n.id}`, { nodeId: n.id });
-        const fromMap = ctx.assetInputs?.[n.id];
-        const img = (fromMap ?? '').trim() || inputImage;
-        outputs.set(n.id, img);
-        recordNodeImage(n.id, img);
-        lastImage = img;
+        const fromText = (ctx.assetInputTexts?.[n.id] ?? '').trim();
+        const fromMap = (ctx.assetInputs?.[n.id] ?? '').trim();
+        if (fromText) {
+          upstreamTextByNodeId.set(n.id, fromText);
+          outputs.set(n.id, '');
+        } else if (fromMap) {
+          outputs.set(n.id, fromMap);
+          recordNodeImage(n.id, fromMap);
+          lastImage = fromMap;
+        } else {
+          outputs.set(n.id, inputImage);
+          recordNodeImage(n.id, inputImage);
+          lastImage = inputImage;
+        }
       } else if (n.type === 'output') {
         ctx.onRunProgress?.(`汇总输出：${n.data.label || n.id}`, { nodeId: n.id });
         if (!sources.length) {
           return capabilitySetFail(`输出节点「${n.data.label || n.id}」缺少输入`, start, nodeImageOutputs, n.id);
         }
-        const srcId = sources.find((s) => outputs.has(s));
+        const srcId = sources.find((s) => {
+          const v = outputs.get(s);
+          return typeof v === 'string' && v.trim().length > 0 && hasUsableImageBase64(v);
+        });
         if (!srcId) {
           return capabilitySetFail(
             `输出节点「${n.data.label || n.id}」未收到有效图像输入`,

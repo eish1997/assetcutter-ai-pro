@@ -20,12 +20,32 @@ const PromptTweakModal: React.FC<{
   targets: PromptTweakTarget[];
   onConfirm: (editedPrompt: string) => void;
   onCancel: () => void;
-}> = ({ preset, targets, onConfirm, onCancel }) => {
-  const [text, setText] = useState(preset.instruction || '');
+  mode?: 'replace' | 'append';
+  titleText?: string;
+  helperText?: string;
+  placeholderText?: string;
+  initialText?: string;
+  requireNonEmpty?: boolean;
+}> = ({
+  preset,
+  targets,
+  onConfirm,
+  onCancel,
+  mode = 'replace',
+  titleText,
+  helperText,
+  placeholderText,
+  initialText,
+  requireNonEmpty = false,
+}) => {
+  const defaultText = initialText != null ? initialText : mode === 'append' ? '' : preset.instruction || '';
+  const [text, setText] = useState(defaultText);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const trimmed = text.trim();
+  const submitDisabled = requireNonEmpty && trimmed.length === 0;
   useEffect(() => {
-    setText(preset.instruction || '');
-  }, [preset.id, preset.instruction]);
+    setText(defaultText);
+  }, [defaultText, preset.id, preset.instruction]);
   return createPortal(
     <div
       className="fixed inset-0 z-[2100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
@@ -36,7 +56,9 @@ const PromptTweakModal: React.FC<{
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between mb-3">
-          <span className="text-[10px] font-black uppercase text-blue-400">微调提示词 · {preset.label}</span>
+          <span className="text-[10px] font-black uppercase text-blue-400">
+            {titleText || `微调提示词 · ${preset.label}`}
+          </span>
           <button
             type="button"
             onClick={onCancel}
@@ -45,19 +67,25 @@ const PromptTweakModal: React.FC<{
             <AppIcon name="close" className="w-4 h-4" />
           </button>
         </div>
-        <p className="text-[9px] text-gray-500 mb-2">可修改下方提示词后加入执行队列（{targets.length} 项）</p>
+        <p className="text-[9px] text-gray-500 mb-2">
+          {helperText || `可修改下方提示词后加入执行队列（${targets.length} 项）`}
+        </p>
         <textarea
           ref={textareaRef}
           value={text}
           onChange={(e) => setText(e.target.value)}
           className="w-full min-h-[120px] rounded-xl bg-[#1c1c22] border border-[#2e2e32] px-3 py-2 text-[11px] text-white placeholder-white/40 focus:border-blue-500 outline-none resize-y"
-          placeholder="预设提示词"
+          placeholder={placeholderText || '预设提示词'}
         />
+        {requireNonEmpty && trimmed.length === 0 ? (
+          <p className="mt-2 text-[9px] text-amber-300">请输入提示词后再加入队列。</p>
+        ) : null}
         <div className="flex gap-2 mt-4">
           <button
             type="button"
             onClick={() => onConfirm(text)}
-            className="px-4 py-2 rounded-xl bg-blue-600 text-[10px] font-black uppercase hover:bg-blue-500"
+            disabled={submitDisabled}
+            className="px-4 py-2 rounded-xl bg-blue-600 text-[10px] font-black uppercase hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             确定并加入队列
           </button>

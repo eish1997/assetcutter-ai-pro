@@ -70,3 +70,86 @@ export function workflowTextAssetOutlineLabel(a: WorkflowAsset): string {
   }
   return '文字';
 }
+
+function escapeXmlForSvgText(s: string): string {
+  return String(s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+/** 正文：单行内字符数、总行数；超出在末行末字加「…」 */
+function splitComposerThumbBodyLines(bodyRaw: string, maxLines: number, charsPerLine: number): string[] {
+  const t = String(bodyRaw || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const base = t || '（空白）';
+  const maxChars = maxLines * charsPerLine;
+  const overflow = base.length > maxChars;
+  const core = overflow ? base.slice(0, maxChars - 1) : base;
+  const lines: string[] = [];
+  for (let i = 0; i < core.length && lines.length < maxLines; i += charsPerLine) {
+    lines.push(core.slice(i, i + charsPerLine));
+  }
+  if (overflow && lines.length > 0) {
+    const last = lines[lines.length - 1]!;
+    lines[lines.length - 1] =
+      last.length >= charsPerLine ? `${last.slice(0, charsPerLine - 1)}…` : `${last}…`;
+  }
+  return lines;
+}
+
+function splitTitleForThumb(titleRaw: string, charsPerLine: number): { line1: string; line2: string | null } {
+  const s = (titleRaw || '').trim() || '文本资产';
+  if (s.length <= charsPerLine) return { line1: s, line2: null };
+  const line1 = s.slice(0, charsPerLine);
+  const rest = s.slice(charsPerLine);
+  if (rest.length <= charsPerLine) return { line1, line2: rest };
+  return { line1, line2: `${rest.slice(0, charsPerLine - 1)}…` };
+}
+
+/**
+ * 能力集合「选择资产」面板 / 资产节点预览用缩略图（data URL SVG）。
+ * 相对全屏 lightbox 用更小 viewBox、更大字号，便于格子内阅读；正文按字符截断。
+ */
+export function buildComposerTextAssetThumbDataUrl(titleRaw: string, bodyRaw: string): string {
+  const TITLE_CHARS = 16;
+  const BODY_LINES = 7;
+  const BODY_CHARS_PER_LINE = 13;
+  const { line1, line2 } = splitTitleForThumb(titleRaw, TITLE_CHARS);
+  const t1 = escapeXmlForSvgText(line1);
+  const t2 = line2 != null ? escapeXmlForSvgText(line2) : null;
+  const bodyLines = splitComposerThumbBodyLines(bodyRaw, BODY_LINES, BODY_CHARS_PER_LINE).map(escapeXmlForSvgText);
+  const lineH = 28;
+  const title1Y = 38;
+  const title2Y = 66;
+  const bodyStartY = t2 != null ? 94 : 72;
+  const title2Svg = t2
+    ? `<text x="18" y="${title2Y}" fill="#f8fafc" font-size="22" font-weight="700" font-family="ui-sans-serif,system-ui,sans-serif">${t2}</text>`
+    : '';
+  const lineSvg = bodyLines
+    .map(
+      (line, i) =>
+        `<text x="18" y="${bodyStartY + i * lineH}" fill="#cbd5e1" font-size="20" font-family="ui-sans-serif,system-ui,sans-serif">${line}</text>`
+    )
+    .join('');
+  const svgH = 320;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="${svgH}" viewBox="0 0 320 ${svgH}">
+<defs>
+  <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0%" stop-color="#0f172a"/>
+    <stop offset="100%" stop-color="#1e293b"/>
+  </linearGradient>
+</defs>
+<rect width="320" height="${svgH}" rx="20" fill="url(#g)"/>
+<rect x="10" y="10" width="300" height="${svgH - 20}" rx="16" fill="#0b1222" stroke="#334155" stroke-width="1.5"/>
+<text x="18" y="22" fill="#64748b" font-size="12" font-weight="600" font-family="ui-sans-serif,system-ui,sans-serif">文字资产</text>
+<text x="18" y="${title1Y}" fill="#38bdf8" font-size="22" font-weight="700" font-family="ui-sans-serif,system-ui,sans-serif">${t1}</text>
+${title2Svg}
+${lineSvg}
+</svg>`;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}

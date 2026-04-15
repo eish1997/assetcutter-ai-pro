@@ -25,6 +25,7 @@ import AppIcon from './ui/AppIcon';
 const CAPABILITY_SETS_VERSION = 1;
 
 const DEFAULT_GENERATE_3D: Generate3DPreset = { module: 'pro', model: '3.0', enablePBR: false };
+const DETAIL_DROPDOWN_PORTAL_ZINDEX = { backdrop: 10120, list: 10121 } as const;
 
 type ViewMode = 'presets' | 'image_process' | 'sets';
 
@@ -82,6 +83,7 @@ const CapabilityPresetSection: React.FC<{
   /** 仅编辑「切割图片」内置预设时使用 */
   const [editCutOverflowPx, setEditCutOverflowPx] = useState(0);
   const [editSkipUnderstand, setEditSkipUnderstand] = useState(false);
+  const [editRequirePromptOnTextDrop, setEditRequirePromptOnTextDrop] = useState(false);
   const [isAdding, setIsAdding] = useState(false);
   const [newLabel, setNewLabel] = useState('');
   const [newCategory, setNewCategory] = useState<CapabilityCategory>('image_to_image');
@@ -92,6 +94,7 @@ const CapabilityPresetSection: React.FC<{
   const [newImageSize, setNewImageSize] = useState('');
   const [newInstruction, setNewInstruction] = useState('');
   const [newSkipUnderstand, setNewSkipUnderstand] = useState(false);
+  const [newRequirePromptOnTextDrop, setNewRequirePromptOnTextDrop] = useState(false);
   const [testImage, setTestImage] = useState<Record<string, string>>({});
   const [testResult, setTestResult] = useState<Record<string, CapabilityTestResult | null>>({});
   const [testRunning, setTestRunning] = useState<Record<string, boolean>>({});
@@ -302,6 +305,7 @@ const CapabilityPresetSection: React.FC<{
           category: editCategory,
           instruction: editInstruction,
           skipUnderstand: showGenImageFields ? editSkipUnderstand : undefined,
+          requirePromptOnTextDrop: editCategory === 'text_to_text' ? editRequirePromptOnTextDrop : undefined,
           enabled: editEnabled,
           imageGear: showGenImageFields ? editImageGear : undefined,
           imageAspectRatio: showGenImageFields ? editImageAspectRatio || undefined : undefined,
@@ -338,6 +342,7 @@ const CapabilityPresetSection: React.FC<{
       category: newCategory,
       instruction: newInstruction,
       skipUnderstand: showNewGenImage ? newSkipUnderstand : undefined,
+      requirePromptOnTextDrop: newCategory === 'text_to_text' ? newRequirePromptOnTextDrop : undefined,
       enabled: newEnabled,
       order: presets.length,
       imageGear: showNewGenImage ? newImageGear : undefined,
@@ -363,6 +368,7 @@ const CapabilityPresetSection: React.FC<{
     setNewImageSize('');
     setNewInstruction('');
     setNewSkipUnderstand(false);
+    setNewRequirePromptOnTextDrop(false);
     setNewGenerate3D({ ...DEFAULT_GENERATE_3D });
     setIsAdding(false);
   };
@@ -702,6 +708,7 @@ const CapabilityPresetSection: React.FC<{
     setEditImageSize(p.imageSize ?? '');
     setEditInstruction(((p as { instructionFixed?: string }).instructionFixed ?? p.instruction) || '');
     setEditSkipUnderstand(p.skipUnderstand === true);
+    setEditRequirePromptOnTextDrop(p.requirePromptOnTextDrop === true);
     setEditGenerate3D(p.category === 'generate_3d' && p.generate3D ? { ...p.generate3D } : { ...DEFAULT_GENERATE_3D });
     setDetailEditMode(true);
   };
@@ -1303,6 +1310,16 @@ const CapabilityPresetSection: React.FC<{
                 rows={4}
                 className="mt-1 w-full bg-[#1c1c22] border border-emerald-900/40 rounded-xl px-3 py-2 text-[11px] outline-none focus:border-emerald-600 resize-none"
               />
+              {newCategory === 'text_to_text' ? (
+                <label className="mt-2 flex items-center gap-2 text-[9px] text-gray-400 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={newRequirePromptOnTextDrop}
+                    onChange={(e) => setNewRequirePromptOnTextDrop(e.target.checked)}
+                  />
+                  <span className="font-black uppercase">拖拽时要求输入临时提示词</span>
+                </label>
+              ) : null}
             </div>
           )}
           {newCategory === 'image_to_image' && newEngine === 'builtin' && (
@@ -1682,6 +1699,7 @@ const CapabilityPresetSection: React.FC<{
                                 value={editEngine === 'gen_image' ? 'gen_image' : 'builtin'}
                                 onChange={(v) => setEditEngine(v as CapabilityEngine)}
                                 triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                                portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
                               />
                             </label>
                           )}
@@ -1694,6 +1712,7 @@ const CapabilityPresetSection: React.FC<{
                                   value={editImageGear}
                                   onChange={(v) => setEditImageGear(v as DialogImageGear)}
                                   triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                                  portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
                                 />
                               </label>
                               <label className="flex items-center gap-2 text-[9px] text-gray-400">
@@ -1704,6 +1723,7 @@ const CapabilityPresetSection: React.FC<{
                                   onChange={setEditImageAspectRatio}
                                   placeholder="默认"
                                   triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                                  portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
                                 />
                               </label>
                               <label className="flex items-center gap-2 text-[9px] text-gray-400">
@@ -1714,6 +1734,7 @@ const CapabilityPresetSection: React.FC<{
                                   onChange={setEditImageSize}
                                   placeholder="默认"
                                   triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                                  portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
                                 />
                               </label>
                               <label className="flex items-center gap-2 text-[9px] text-gray-400 cursor-pointer" title="勾选：先理解再生成生图提示词；不勾选：预设提示词直发">
@@ -1722,6 +1743,16 @@ const CapabilityPresetSection: React.FC<{
                               </label>
                             </div>
                           )}
+                          {editCategory === 'text_to_text' ? (
+                            <label className="flex items-center gap-2 text-[9px] text-gray-400 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={editRequirePromptOnTextDrop}
+                                onChange={(e) => setEditRequirePromptOnTextDrop(e.target.checked)}
+                              />
+                              <span className="font-black uppercase">拖拽时要求输入临时提示词</span>
+                            </label>
+                          ) : null}
                           {editCategory === 'generate_3d' && (
                             <div className="rounded-xl border border-[#2e3f5d] bg-[#141b26] p-3 space-y-2">
                               <div className="text-[8px] font-black text-blue-300 uppercase">生成3D 预设</div>
@@ -1732,6 +1763,7 @@ const CapabilityPresetSection: React.FC<{
                                   value={editGenerate3D.module}
                                   onChange={(v) => setEditGenerate3D((g) => ({ ...g, module: v as 'pro' | 'rapid' }))}
                                   triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                                  portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
                                 />
                               </label>
                               {editGenerate3D.module === 'pro' && (
@@ -1743,6 +1775,7 @@ const CapabilityPresetSection: React.FC<{
                                       value={editGenerate3D.model ?? '3.0'}
                                       onChange={(v) => setEditGenerate3D((g) => ({ ...g, model: v as '3.0' | '3.1' }))}
                                       triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                                      portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
                                     />
                                   </label>
                                   <label className="flex items-center gap-2 text-[9px]">
@@ -1761,6 +1794,7 @@ const CapabilityPresetSection: React.FC<{
                                       value={editGenerate3D.generateType ?? 'Normal'}
                                       onChange={(v) => setEditGenerate3D((g) => ({ ...g, generateType: v as Generate3DPreset['generateType'] }))}
                                       triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                                      portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
                                     />
                                   </label>
                                   <label className="flex items-center gap-2 text-[9px]">
@@ -1771,6 +1805,7 @@ const CapabilityPresetSection: React.FC<{
                                       onChange={(v) => setEditGenerate3D((g) => ({ ...g, resultFormat: v || undefined }))}
                                       placeholder="默认"
                                       triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                                      portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
                                     />
                                   </label>
                                 </>
@@ -1838,6 +1873,14 @@ const CapabilityPresetSection: React.FC<{
                           <div className="rounded-lg bg-[#1b1b21] border border-[#2a2a32] px-2 py-1.5">
                             <div className="text-gray-500">理解开关</div>
                             <div className="text-gray-200 mt-0.5">{detailPreset.skipUnderstand === true ? '直发提示词' : '先理解再生成'}</div>
+                          </div>
+                          <div className="rounded-lg bg-[#1b1b21] border border-[#2a2a32] px-2 py-1.5">
+                            <div className="text-gray-500">拖拽临时提示词</div>
+                            <div className="text-gray-200 mt-0.5">
+                              {detailPreset.category === 'text_to_text'
+                                ? (detailPreset.requirePromptOnTextDrop === true ? '开启（必填）' : '关闭（直接入队）')
+                                : '不适用'}
+                            </div>
                           </div>
                         </div>
                         {detailPreset.category === 'generate_3d' && detailPreset.generate3D && (

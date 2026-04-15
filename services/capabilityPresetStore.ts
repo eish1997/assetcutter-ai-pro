@@ -52,6 +52,7 @@ export function normalizeCapabilityPreset(input: CustomAppModule, index: number)
   const order = typeof input.order === 'number' ? input.order : index;
   const instruction = typeof input.instruction === 'string' ? input.instruction : '';
   const skipUnderstand = input.skipUnderstand === true;
+  const requirePromptOnTextDrop = input.requirePromptOnTextDrop === true;
   const rawGear = (input as CustomAppModule).imageGear;
   const imageGear = rawGear === 'pro' || rawGear === 'fast' || rawGear === 'standard' ? rawGear : 'standard';
   const base: CustomAppModule = {
@@ -59,6 +60,7 @@ export function normalizeCapabilityPreset(input: CustomAppModule, index: number)
     category,
     instruction,
     skipUnderstand,
+    requirePromptOnTextDrop,
     enabled,
     order,
     imageGear,
@@ -71,6 +73,9 @@ export function normalizeCapabilityPreset(input: CustomAppModule, index: number)
   } else {
     // 非 3D 不应带 generate3D
     delete (base as any).generate3D;
+  }
+  if (category !== 'text_to_text') {
+    delete (base as CustomAppModule & { requirePromptOnTextDrop?: boolean }).requirePromptOnTextDrop;
   }
   // 避免把大体积 data URL 写入 localStorage 导致 QUOTA_EXCEEDED_ERR
   if (typeof base.previewImage === 'string' && base.previewImage.trim().startsWith('data:')) {

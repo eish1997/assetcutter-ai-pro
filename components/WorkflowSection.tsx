@@ -60,6 +60,7 @@ import WorkflowTextLightboxCenter, {
   type WorkflowTextLightboxCenterHandle,
 } from './workflow/WorkflowTextLightboxCenter';
 import {
+  buildComposerTextAssetThumbDataUrl,
   clampWorkflowTextBody,
   isWorkflowTextAsset,
   workflowAssetAllowedForCapabilityDrop,
@@ -275,6 +276,12 @@ const WorkflowSection: React.FC<{
     preset: CustomAppModule;
     targets: PromptTweakTarget[];
     overrides?: WorkflowGroupOverrides;
+    mode?: 'replace' | 'append';
+    initialText?: string;
+    titleText?: string;
+    helperText?: string;
+    placeholderText?: string;
+    requireNonEmpty?: boolean;
   } | null>(null);
   const [viewStack, setViewStack] = useState<{ assetId: string }[]>([]);
   const viewStackRef = useRef(viewStack);
@@ -2875,18 +2882,9 @@ ${lineSvg}
             );
       if (sources.length === 0) return;
 
-      if (tweakPrompt) {
-        const targets: Array<
-          | {
-              assetId: string;
-              inputImage: string;
-              inputSourceDisplayKey?: string;
-              sourceGroupAssetId?: string;
-              sourceItemIndex?: number;
-            }
-          | { imageBase64: string; parentAssetId: string; sourceGroupAssetId: string; sourceItemIndex: number }
-        > = [];
-        for (const source of sources) {
+      const collectPromptTargets = (incoming: WorkflowDragSource[]): PromptTweakTarget[] => {
+        const targets: PromptTweakTarget[] = [];
+        for (const source of incoming) {
           if (source.kind === 'root') {
             const effectiveIds = getEffectiveAssetIdsForAction(source.assetIds).filter((id) => {
               const x = assets.find((a) => a.id === id);
@@ -2934,7 +2932,42 @@ ${lineSvg}
             }
           }
         }
-        if (targets.length > 0) setPromptTweakModal({ preset: mod, targets, overrides: groupOverrides });
+        return targets;
+      };
+
+      if (tweakPrompt) {
+        const targets = collectPromptTargets(sources);
+        if (targets.length > 0) {
+          setPromptTweakModal({
+            preset: mod,
+            targets,
+            overrides: groupOverrides,
+            mode: 'replace',
+            initialText: mod.instruction || '',
+            titleText: `微调提示词 · ${mod.label}`,
+            helperText: `可修改下方提示词后加入执行队列（${targets.length} 项）`,
+            placeholderText: '预设提示词',
+            requireNonEmpty: false,
+          });
+        }
+        return;
+      }
+
+      if (mod.category === 'text_to_text' && mod.requirePromptOnTextDrop === true) {
+        const targets = collectPromptTargets(sources);
+        if (targets.length > 0) {
+          setPromptTweakModal({
+            preset: mod,
+            targets,
+            overrides: groupOverrides,
+            mode: 'append',
+            initialText: '',
+            titleText: `输入临时提示词 · ${mod.label}`,
+            helperText: `请输入本次额外要求（必填，${targets.length} 项）；提交后将与预设提示词一起发送。`,
+            placeholderText: '请输入本次临时提示词',
+            requireNonEmpty: true,
+          });
+        }
         return;
       }
       const queueOverrideOptions =
@@ -2975,11 +3008,13 @@ ${lineSvg}
             if (img) onAddGenerate3DJob(mod, img);
             continue;
           }
+          const allowTextAssetsForGenerateCount =
+            mod.category === 'text_to_text' || mod.category === 'text_to_image';
           const { rootIds, cloneTaskSeeds } =
             generateCount > 1
               ? expandRootAssetsForGenerateCount(effectiveIds, generateCount, {
-                  allowTextAssetsForExpansion: mod.category === 'text_to_text',
-                  allowTextAssetsForGrouping: mod.category === 'text_to_text',
+                  allowTextAssetsForExpansion: allowTextAssetsForGenerateCount,
+                  allowTextAssetsForGrouping: allowTextAssetsForGenerateCount,
                 })
               : { rootIds: effectiveIds, cloneTaskSeeds: [] as Array<{ sourceAsset: WorkflowAsset; targetAssetId: string }> };
           const rootTasks: WorkflowPendingTask[] = [];
@@ -3176,18 +3211,26 @@ ${lineSvg}
   const composerAssetCandidates = useMemo<CapabilityAssetCandidate[]>(() => {
     const out: CapabilityAssetCandidate[] = [];
     for (const a of assets) {
-      if (isWorkflowTextAsset(a)) continue;
+      const label = a.groupLabel?.trim() || `资产 ${a.id.slice(0, 6)}`;
+      const scope = a.inRepository ? 'repository' : 'workspace';
+      if (isWorkflowTextAsset(a)) {
+        const textContent = workflowAssetToInputText(a).trim();
+        if (!textContent) continue;
+        out.push({
+          id: a.id,
+          label,
+          scope,
+          image: buildComposerTextAssetThumbDataUrl(a.textTitle || '', getAssetDisplayText(a)),
+          textContent,
+        });
+        continue;
+      }
       const img = getAssetDisplayImage(a).trim();
       if (!img) continue;
-      out.push({
-        id: a.id,
-        label: a.groupLabel?.trim() || `资产 ${a.id.slice(0, 6)}`,
-        scope: a.inRepository ? 'repository' : 'workspace',
-        image: img,
-      });
+      out.push({ id: a.id, label, scope, image: img });
     }
     return out.sort((x, y) => x.label.localeCompare(y.label, 'zh-CN'));
-  }, [assets, getAssetDisplayImage]);
+  }, [assets, getAssetDisplayImage, getAssetDisplayText]);
 
   const handleDropToSetAction = useCallback(
     (setActionId: string, dropEvent?: React.DragEvent) => {
@@ -5742,8 +5785,20 @@ ${lineSvg}
         <PromptTweakModal
           preset={promptTweakModal.preset}
           targets={promptTweakModal.targets}
+          mode={promptTweakModal.mode}
+          initialText={promptTweakModal.initialText}
+          titleText={promptTweakModal.titleText}
+          helperText={promptTweakModal.helperText}
+          placeholderText={promptTweakModal.placeholderText}
+          requireNonEmpty={promptTweakModal.requireNonEmpty}
           onConfirm={(editedPrompt) => {
             const trimmed = editedPrompt.trim();
+            if (promptTweakModal.requireNonEmpty && !trimmed) return;
+            const mode = promptTweakModal.mode ?? 'replace';
+            const promptForExecution =
+              mode === 'append'
+                ? [promptTweakModal.preset.instruction?.trim() || '', trimmed].filter(Boolean).join('\n\n').trim()
+                : trimmed;
             const generateCount = normalizeWorkflowGenerateCount(promptTweakModal.overrides?.generateCount);
             if (
               generateCount > WORKFLOW_GROUP_GENERATE_CONFIRM_THRESHOLD &&
@@ -5753,7 +5808,7 @@ ${lineSvg}
               return;
             }
             const taskOptions: WorkflowPendingTaskOptions = {
-              ...(trimmed ? { promptOverride: trimmed } : {}),
+              ...(promptForExecution ? { promptOverride: promptForExecution } : {}),
               ...(promptTweakModal.overrides?.imageGear ? { overrideImageGear: promptTweakModal.overrides.imageGear } : {}),
               ...(promptTweakModal.overrides?.imageAspectRatio ? { overrideImageAspectRatio: promptTweakModal.overrides.imageAspectRatio } : {}),
               ...(promptTweakModal.overrides?.imageSize ? { overrideImageSize: promptTweakModal.overrides.imageSize } : {}),
@@ -5844,7 +5899,14 @@ ${lineSvg}
                     createdAt: Date.now(),
                   });
                 }
-                for (const ids of groupPlans) next = insertManualGroupForAssetIds(next, ids);
+                const allowTextAssetsForGenerateCount =
+                  promptTweakModal.preset.category === 'text_to_text' ||
+                  promptTweakModal.preset.category === 'text_to_image';
+                for (const ids of groupPlans) {
+                  next = insertManualGroupForAssetIds(next, ids, {
+                    allowTextAssets: allowTextAssetsForGenerateCount,
+                  });
+                }
                 return next;
               });
             }

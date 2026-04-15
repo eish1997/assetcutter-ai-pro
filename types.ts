@@ -493,6 +493,12 @@ export type CustomAppModule = {
   /** 生图执行时跳过“理解”步骤，直接将 instruction（或覆写提示词）发送给生图模型 */
   skipUnderstand?: boolean;
   /**
+   * 仅文生文（text_to_text）生效：开启后，工作流将文字资产拖拽到该能力时
+   * 会先弹出“临时提示词”输入框（默认空、必须输入），再与 instruction 拼接后执行。
+   * 关闭时维持原行为（直接入队）。
+   */
+  requirePromptOnTextDrop?: boolean;
+  /**
    * 卡片预览图：本地多为 data URL；从 R2 能力商店同步后可为同源相对路径或完整 URL。
    * 上传 R2 时服务端会将 data URL 转为独立对象并在 JSON 中写入相对路径，便于他人同步后展示。
    */

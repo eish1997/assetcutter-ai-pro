@@ -115,7 +115,11 @@ function resolveDockFlyPreviewForNode(
     const scoped = assetCandidates.filter((x) => x.scope === scope);
     const selected = scoped.find((x) => x.id === d.assetId) ?? null;
     const raw = (d as { testRunPreview?: string }).testRunPreview?.trim() || selected?.image || '';
-    return { previewSrc: resolveCapabilityPreviewSrc(raw) ?? '', placeholderVariant: 'image' };
+    const isText = Boolean(selected?.textContent?.trim());
+    return {
+      previewSrc: resolveCapabilityPreviewSrc(raw) ?? '',
+      placeholderVariant: isText ? 'text' : 'image',
+    };
   }
 
   if (t === 'input') {
@@ -212,7 +216,10 @@ export type CapabilityAssetCandidate = {
   id: string;
   label: string;
   scope: 'workspace' | 'repository';
+  /** 缩略图：图片 URL/data URL；文字资产为 SVG 封面 */
   image: string;
+  /** 有值时表示文字卡：运行测试时作为文本送入下游（文生文/文生图等） */
+  textContent?: string;
 };
 
 const AssetCardPlaceholder: React.FC<{ variant: 'image' | 'text' | 'output' }> = ({ variant }) => (
@@ -437,7 +444,9 @@ const AssetInputNode: React.FC<{ id: string; data: CapabilitySetNode['data'] }> 
             }
             alt=""
             className="asset-card-node__img"
-            fallback={<AssetCardPlaceholder variant="image" />}
+            fallback={
+              <AssetCardPlaceholder variant={selected?.textContent?.trim() ? 'text' : 'image'} />
+            }
             loading={data.testRunPreview?.trim() ? 'eager' : 'lazy'}
           />
         ) : (
@@ -513,12 +522,14 @@ const AssetInputNode: React.FC<{ id: string; data: CapabilitySetNode['data'] }> 
                   src={resolveCapabilityPreviewSrc(item.image) ?? ''}
                   alt=""
                   className="asset-input-node__thumb-img"
-                  fallback={<AssetCardPlaceholder variant="image" />}
+                  fallback={
+                    <AssetCardPlaceholder variant={item.textContent?.trim() ? 'text' : 'image'} />
+                  }
                 />
               </button>
             ))}
             {panelItems.length === 0 ? (
-              <div className="asset-input-node__empty">暂无图片资产</div>
+              <div className="asset-input-node__empty">暂无可用资产（需图片或文字卡）</div>
             ) : null}
           </div>
         </div>
@@ -1467,18 +1478,28 @@ function CanvasInner({
       setComposerRunUi({ activeNodeId: null, activeDetail: '', errorByNodeId: {} });
       const set = buildPersistedSet();
       const assetInputs: Record<string, string> = {};
+      const assetInputTexts: Record<string, string> = {};
       for (const n of set.nodes) {
         if (n.type !== 'assetInput') continue;
         const aid = n.data.assetId;
         if (!aid) continue;
         const c = assetById.get(aid);
-        const img = (c?.image ?? '').trim();
-        if (img) assetInputs[n.id] = img;
+        if (!c) continue;
+        const tx = (c.textContent ?? '').trim();
+        if (tx) assetInputTexts[n.id] = tx;
+        else {
+          const img = (c.image ?? '').trim();
+          if (img) assetInputs[n.id] = img;
+        }
       }
       const raw = getPartialTestInputImage?.() ?? null;
       const trimmed = (raw ?? '').trim();
       const input = trimmed.length > 0 ? trimmed : PARTIAL_TEST_PLACEHOLDER_IMAGE;
-      if (trimmed.length === 0 && Object.keys(assetInputs).length === 0) {
+      if (
+        trimmed.length === 0 &&
+        Object.keys(assetInputs).length === 0 &&
+        Object.keys(assetInputTexts).length === 0
+      ) {
         onLog?.('warn', '运行测试：未配置输入图，使用占位图', undefined);
       }
       try {
@@ -1486,6 +1507,7 @@ function CanvasInner({
           presets,
           onLog,
           assetInputs,
+          assetInputTexts,
           onRunProgress: (line, meta) => {
             if (meta?.nodeId) lastProgressNodeRef.current = meta.nodeId;
             setComposerRunUi((prev) => ({

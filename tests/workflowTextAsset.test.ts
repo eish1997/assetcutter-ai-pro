@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { WorkflowAsset } from '../types';
-import { workflowAssetToInputText } from '../services/workflowTextAsset';
+import { buildComposerTextAssetThumbDataUrl, workflowAssetToInputText } from '../services/workflowTextAsset';
 
 function makeTextAsset(partial?: Partial<WorkflowAsset>): WorkflowAsset {
   return {
@@ -37,5 +37,23 @@ describe('workflowAssetToInputText', () => {
       textResults: {},
     });
     expect(workflowAssetToInputText(asset)).toBe('标题\n\n原始正文');
+  });
+});
+
+describe('buildComposerTextAssetThumbDataUrl', () => {
+  it('返回 data URL 且正文过长时在 SVG 中带省略', () => {
+    const long = 'a'.repeat(200);
+    const url = buildComposerTextAssetThumbDataUrl('短标题', long);
+    expect(url.startsWith('data:image/svg+xml')).toBe(true);
+    const decoded = decodeURIComponent(url.slice(url.indexOf(',') + 1));
+    expect(decoded).toContain('短标题');
+    expect(decoded).toContain('…');
+  });
+
+  it('对 XML 特殊字符转义', () => {
+    const url = buildComposerTextAssetThumbDataUrl('a<b', 'c&d');
+    const decoded = decodeURIComponent(url.slice(url.indexOf(',') + 1));
+    expect(decoded).toContain('a&lt;b');
+    expect(decoded).toContain('c&amp;d');
   });
 });
