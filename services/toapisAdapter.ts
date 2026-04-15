@@ -36,7 +36,7 @@
  * 7) 与可选 Gemini 代理（VITE_BULK_IMAGE_API → server/gemini-proxy-api.js）关系
  *    - 选择 ToAPIs 时走本适配层，不会自动改用代理的 `/proxy/gemini/async`。
  *
- * 8) Antigravity Tools（本机 OpenAI 兼容反代，与 GitHub `openai.rs` 对齐）
+ * 8) Antigravity Tools（走其 **OpenAI 协议** `/v1/*`；与控制台「Gemini 协议 /v1beta」为不同入口，勿混填 Base URL）
  *    - **文生图**：`POST /v1/images/generations`（JSON：`prompt/model/n/size/quality/response_format`，**无 `image_urls` 参与上游**，多余字段仅被忽略）。
  *    - **图生图**：须 `POST /v1/images/edits`（**multipart**：`prompt`、`model`、`image1`/`image2`… 参考图文件、`aspect_ratio` 或 `size`、`image_size` 等）；勿把参考图只塞进 generations 的 JSON。
  *    - `skipToapisImageUpload`：无 `/v1/uploads/images`；有参考图时走 **edits** multipart，无参考图走 **generations** JSON。

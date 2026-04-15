@@ -52,14 +52,26 @@ export function resolveUpstreamTextModelId(internalModel: string): string {
 }
 
 /**
- * 部分第三方网关（尤其 VectorEngine）不认 `gemini-3.1-flash-image-preview` 等预览 id；
- * ToAPIs 等在各自 adapter 内映射，此处**不再**改写，避免双重映射。
+ * 部分第三方网关不认站内「预览」生图 id（易 404 Requested entity was not found）：
+ * - **VectorEngine**：官方 REST 对部分预览名不可用 → 回退 `gemini-2.5-flash-image`。
+ * - **Antigravity Tools**：反代侧模型表与站内 id 不一致；`passthroughModels` 下须把挡位 id 映射到控制台「模型 ID」
+ *  （与 Antigravity「API 反代」页示例一致，如 `gemini-3.1-flash-image`、`gemini-3-pro-image`）。
+ * - **ToAPIs** 在 `toapisAdapter` 内单独映射，此处**不再**改写，避免双重映射。
  */
 export function resolveUpstreamImageModelId(internalModel: string): string {
   const p = getAiProvider();
   const m = (internalModel || '').trim();
   if (!m) return internalModel;
   const ml = m.toLowerCase();
+  if (p === 'antigravity') {
+    if (ml.includes('gemini-3.1-flash-image-preview')) {
+      return 'gemini-3.1-flash-image';
+    }
+    if (ml.includes('gemini-3-pro-image-preview')) {
+      return 'gemini-3-pro-image';
+    }
+    return m;
+  }
   if (p === 'vectorengine') {
     if (ml.includes('gemini-3.1-flash-image-preview') || ml.includes('gemini-3-pro-image-preview')) {
       return 'gemini-2.5-flash-image';
@@ -81,6 +93,21 @@ function preferBrowserGeminiKeyFirst(): boolean {
   }
 }
 
+/**
+ * `dialogGenerateImage` 专用：是否走后端 `VITE_BULK_IMAGE_API` 的异步批量队列。
+ * ToAPIs / Antigravity / VectorEngine 的生图必须在浏览器侧走各自 `getAI()` 适配层；若仅判断 `BULK_BASE` 为真
+ * 就入队，会误把请求发到 gemini-proxy（用户表现为「文字走反代正常、生图完全不走 Antigravity」）。
+ */
+function shouldUseBulkImageBatchQueue(): boolean {
+  if (!BULK_BASE) return false;
+  const p = getAiProvider();
+  if (p === "toapis" || p === "antigravity" || p === "vectorengine") return false;
+  if (p === "vertex") return true;
+  const apiKey = getUserApiKey();
+  if (preferBrowserGeminiKeyFirst() && apiKey?.trim()) return false;
+  return true;
+}
+
 function bulkApiUrl(path: string): string {
   if (!BULK_BASE) return path;
   const p = path.startsWith("/") ? path : `/${path}`;
@@ -99,6 +126,7 @@ const GEMINI_ASYNC_CLIENT_MAX_POLL_MS = 600_000;
 const GEMINI_IMAGE_BATCH_BOX_SIZE_DEFAULT = 3;
 const GEMINI_IMAGE_BATCH_BOX_SIZE_VERTEX_DEFAULT = 4;
 const GEMINI_IMAGE_BATCH_FLUSH_MS = 30;
+const GEMINI_IMAGE_BATCH_GROUP_WAIT_MS = 8_000;
 
 function readEnvNumber(key: string): number | null {
   try {
@@ -113,13 +141,17 @@ function readEnvNumber(key: string): number | null {
   }
 }
 
-function resolveImageBatchBoxSize(aiBackend?: "vertex"): number {
+export function resolveImageBatchBoxSize(aiBackend?: "vertex"): number {
   const envGeneric = readEnvNumber('VITE_GEMINI_IMAGE_BATCH_BOX_SIZE');
   const envVertex = readEnvNumber('VITE_GEMINI_IMAGE_BATCH_BOX_SIZE_VERTEX');
   const defaultSize =
     aiBackend === 'vertex' ? GEMINI_IMAGE_BATCH_BOX_SIZE_VERTEX_DEFAULT : GEMINI_IMAGE_BATCH_BOX_SIZE_DEFAULT;
   const raw = aiBackend === 'vertex' ? (envVertex ?? envGeneric ?? defaultSize) : (envGeneric ?? defaultSize);
   return Math.max(1, Math.min(20, Math.floor(raw)));
+}
+
+export function getGeminiImageBatchBoxSizeForCurrentProvider(): number {
+  return resolveImageBatchBoxSize(getAiProvider() === "vertex" ? "vertex" : undefined);
 }
 
 function parseBulkProxyErrorBody(text: string): string {
@@ -280,13 +312,21 @@ type PendingImageBatchItem = {
   contents: unknown;
   config?: Record<string, unknown>;
   aiBackend?: "vertex";
+  batchGroupKey?: string;
   resolve: (value: { text?: string; candidates?: unknown[] }) => void;
   reject: (reason?: unknown) => void;
+};
+
+type ImageBatchGroupState = {
+  expected: number;
+  pendingCount: number;
+  firstEnqueueAt: number;
 };
 
 let pendingImageBatchItems: PendingImageBatchItem[] = [];
 let imageBatchTimer: ReturnType<typeof setTimeout> | null = null;
 let imageBatchInFlight = false;
+const imageBatchGroupState = new Map<string, ImageBatchGroupState>();
 
 function scheduleImageBatchFlush() {
   if (imageBatchTimer != null) return;
@@ -302,9 +342,36 @@ async function flushImageBatchQueue(): Promise<void> {
   imageBatchInFlight = true;
   try {
     while (pendingImageBatchItems.length > 0) {
-      const queueAiBackend = pendingImageBatchItems[0]?.aiBackend;
+      const first = pendingImageBatchItems[0];
+      if (!first) break;
+      const queueAiBackend = first.aiBackend;
       const batchBoxSize = resolveImageBatchBoxSize(queueAiBackend);
-      const chunk = pendingImageBatchItems.splice(0, batchBoxSize);
+      let chunk: PendingImageBatchItem[] = [];
+      if (first.batchGroupKey) {
+        const key = first.batchGroupKey;
+        const state = imageBatchGroupState.get(key);
+        const readyByCount = !!state && state.pendingCount >= state.expected;
+        const readyByTimeout =
+          !!state && Date.now() - state.firstEnqueueAt >= GEMINI_IMAGE_BATCH_GROUP_WAIT_MS;
+        if (!readyByCount && !readyByTimeout) {
+          scheduleImageBatchFlush();
+          break;
+        }
+        const maxTake = Math.min(batchBoxSize, state?.pendingCount ?? batchBoxSize);
+        for (let i = 0; i < pendingImageBatchItems.length && chunk.length < maxTake; i += 1) {
+          const item = pendingImageBatchItems[i];
+          if (item.batchGroupKey !== key) break;
+          chunk.push(item);
+        }
+        pendingImageBatchItems.splice(0, chunk.length);
+        if (state) {
+          state.pendingCount = Math.max(0, state.pendingCount - chunk.length);
+          if (state.pendingCount === 0) imageBatchGroupState.delete(key);
+          else imageBatchGroupState.set(key, state);
+        }
+      } else {
+        chunk = pendingImageBatchItems.splice(0, batchBoxSize);
+      }
       const aiBackend = chunk[0]?.aiBackend;
       const mixedBackend = chunk.some((item) => item.aiBackend !== aiBackend);
       if (mixedBackend) {
@@ -357,15 +424,28 @@ function enqueueImageBatchGenerateContent(args: {
   model: string;
   contents: unknown;
   config?: Record<string, unknown>;
+  batchGroupKey?: string;
+  batchGroupExpected?: number;
 }): Promise<{ text?: string; candidates?: unknown[] }> {
   return new Promise((resolve, reject) => {
     const aiBackend = getAiProvider() === "vertex" ? ("vertex" as const) : undefined;
     const batchBoxSize = resolveImageBatchBoxSize(aiBackend);
+    const batchGroupKey = args.batchGroupKey?.trim();
+    if (batchGroupKey) {
+      const prev = imageBatchGroupState.get(batchGroupKey);
+      const expected = Math.max(1, Math.floor(args.batchGroupExpected || prev?.expected || 1));
+      imageBatchGroupState.set(batchGroupKey, {
+        expected,
+        pendingCount: (prev?.pendingCount ?? 0) + 1,
+        firstEnqueueAt: prev?.firstEnqueueAt ?? Date.now(),
+      });
+    }
     pendingImageBatchItems.push({
       model: args.model,
       contents: args.contents,
       config: args.config,
       aiBackend,
+      ...(batchGroupKey ? { batchGroupKey } : {}),
       resolve,
       reject,
     });
@@ -478,8 +558,15 @@ export interface GeminiRequestOptions {
   retryDelayMs?: number;
 }
 
+export type GeminiImageBatchGroupOptions = {
+  batchGroupKey?: string;
+  batchGroupExpected?: number;
+};
+
 const GEMINI_REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_REQUEST_TIMEOUT_MS) || 45_000;
 const GEMINI_IMAGE_REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_IMAGE_REQUEST_TIMEOUT_MS) || 120_000;
+/** Vertex 生图单项常见超过 120s，默认提高下限，避免同批次部分任务被过早取消 */
+const GEMINI_VERTEX_IMAGE_TIMEOUT_MS = Number(process.env.GEMINI_VERTEX_IMAGE_TIMEOUT_MS) || 300_000;
 
 type GeminiDiagCode =
   | "INPUT_IMAGE_EMPTY"
@@ -776,7 +863,10 @@ function isRetryableError(err: unknown): boolean {
     msg.includes("high demand") ||
     msg.includes("500") ||
     msg.includes("INTERNAL") ||
-    msg.includes("Internal error")
+    msg.includes("Internal error") ||
+    msg.includes("The operation was cancelled") ||
+    msg.includes("operation was canceled") ||
+    msg.includes("CANCELLED")
   );
 }
 
@@ -1184,16 +1274,21 @@ export async function dialogGenerateImage(
   options?: { aspectRatio?: string; imageSize?: string },
   customSystemPrompt?: string,
   abortSignal?: AbortSignal,
-  requestOptions?: Omit<GeminiRequestOptions, 'abortSignal'>
+  requestOptions?: Omit<GeminiRequestOptions, 'abortSignal'> & GeminiImageBatchGroupOptions
 ): Promise<string> {
   const baseTimeout = requestOptions?.timeoutMs ?? GEMINI_IMAGE_REQUEST_TIMEOUT_MS;
-  const controlTimeoutMs = BULK_BASE ? Math.max(baseTimeout, BULK_PROXY_IMAGE_TIMEOUT_MS) : baseTimeout;
+  const useBulkImageQueue = shouldUseBulkImageBatchQueue();
+  const controlTimeoutMs = useBulkImageQueue ? Math.max(baseTimeout, BULK_PROXY_IMAGE_TIMEOUT_MS) : baseTimeout;
   // 429/503/UNAVAILABLE 等自动退避重试；成功返回图片后不会再次请求。
   return callWithRetry(async (signal) => {
     const ai = getAI();
+    const provider = getAiProvider();
     const isTextToImage = !imageBase64;
     const systemInstruction = (customSystemPrompt || (isTextToImage ? DEFAULT_PROMPTS.dialog_text_to_image : DEFAULT_PROMPTS.edit)).replace('{instruction}', instruction);
-    const timeoutMs = baseTimeout;
+    const timeoutMs =
+      provider === 'vertex'
+        ? Math.max(baseTimeout, GEMINI_VERTEX_IMAGE_TIMEOUT_MS)
+        : baseTimeout;
     const config: { systemInstruction: string; imageConfig?: { aspectRatio?: string; imageSize?: string } } = {
       systemInstruction
     };
@@ -1220,8 +1315,14 @@ export async function dialogGenerateImage(
       contents: [{ role: 'user' as const, parts }],
       config: buildGeminiConfig(config, signal, timeoutMs),
     };
-    const response = BULK_BASE
-      ? await enqueueImageBatchGenerateContent(payload)
+    const response = useBulkImageQueue
+      ? await enqueueImageBatchGenerateContent({
+          ...payload,
+          ...(requestOptions?.batchGroupKey ? { batchGroupKey: requestOptions.batchGroupKey } : {}),
+          ...(requestOptions?.batchGroupExpected
+            ? { batchGroupExpected: requestOptions.batchGroupExpected }
+            : {}),
+        })
       : await ai.models.generateContent(payload);
     const images = collectInlineImagesFromGeminiResponse(response);
     if (images.length > 0) {
@@ -1258,9 +1359,13 @@ export async function dialogGenerateImages(
   const controlTimeoutMs = BULK_BASE ? Math.max(baseTimeout, BULK_PROXY_IMAGE_TIMEOUT_MS) : baseTimeout;
   return callWithRetry(async (signal) => {
     const ai = getAI();
+    const provider = getAiProvider();
     const isTextToImage = !imageBase64;
     const systemInstruction = (customSystemPrompt || (isTextToImage ? DEFAULT_PROMPTS.dialog_text_to_image : DEFAULT_PROMPTS.edit)).replace('{instruction}', instruction);
-    const timeoutMs = baseTimeout;
+    const timeoutMs =
+      provider === 'vertex'
+        ? Math.max(baseTimeout, GEMINI_VERTEX_IMAGE_TIMEOUT_MS)
+        : baseTimeout;
     const config: { systemInstruction: string; imageConfig?: { aspectRatio?: string; imageSize?: string } } = {
       systemInstruction
     };
@@ -1319,8 +1424,12 @@ export async function dialogGenerateImageMulti(
   const controlTimeoutMs = BULK_BASE ? Math.max(baseTimeout, BULK_PROXY_IMAGE_TIMEOUT_MS) : baseTimeout;
   return callWithRetry(async (signal) => {
     const ai = getAI();
+    const provider = getAiProvider();
     const systemInstruction = (DEFAULT_PROMPTS.edit || '').replace('{instruction}', instruction);
-    const timeoutMs = baseTimeout;
+    const timeoutMs =
+      provider === 'vertex'
+        ? Math.max(baseTimeout, GEMINI_VERTEX_IMAGE_TIMEOUT_MS)
+        : baseTimeout;
     const config: { systemInstruction: string; imageConfig?: { aspectRatio?: string; imageSize?: string } } = {
       systemInstruction
     };

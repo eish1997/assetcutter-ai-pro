@@ -16,6 +16,7 @@ import {
   CAPABILITY_UNDERSTAND_RETRY_OPTIONS,
   normalizeApiErrorMessage,
   resolveUpstreamImageModelId,
+  type GeminiImageBatchGroupOptions,
 } from './geminiService';
 
 export type CapabilityRunProgressMeta = {
@@ -286,7 +287,7 @@ async function executeGenTextPath(
 export type ExecuteCapabilityOptions = {
   /** 来自文字资产卡片的正文 */
   inputText?: string;
-};
+} & GeminiImageBatchGroupOptions;
 
 /**
  * 执行能力：生图 / 文字 / 内置图像处理。切割图片等“多图输出/交互选择”的能力不在此处理。
@@ -352,7 +353,10 @@ export async function executeCapability(
         emitCapabilityRunProgress(ctx, `${actionLabel}：生图中…`);
         const modelId = resolveImageModelId(preset.imageGear);
         const imageOptions = (preset.imageAspectRatio || preset.imageSize) ? { aspectRatio: preset.imageAspectRatio, imageSize: preset.imageSize } : undefined;
-        const result = await dialogGenerateImage(cropped, prompt, modelId, imageOptions);
+        const result = await dialogGenerateImage(cropped, prompt, modelId, imageOptions, undefined, undefined, {
+          ...(opts?.batchGroupKey ? { batchGroupKey: opts.batchGroupKey } : {}),
+          ...(opts?.batchGroupExpected ? { batchGroupExpected: opts.batchGroupExpected } : {}),
+        });
         return {
           ok: true,
           kind: 'image',
@@ -410,7 +414,10 @@ export async function executeCapability(
         preset.imageAspectRatio || preset.imageSize
           ? { aspectRatio: preset.imageAspectRatio, imageSize: preset.imageSize }
           : undefined;
-      const result = await dialogGenerateImage(null, prompt, modelId, imageOptions);
+      const result = await dialogGenerateImage(null, prompt, modelId, imageOptions, undefined, undefined, {
+        ...(opts?.batchGroupKey ? { batchGroupKey: opts.batchGroupKey } : {}),
+        ...(opts?.batchGroupExpected ? { batchGroupExpected: opts.batchGroupExpected } : {}),
+      });
       return {
         ok: true,
         kind: 'image',
@@ -431,7 +438,10 @@ export async function executeCapability(
     emitCapabilityRunProgress(ctx, `${actionLabel}：生图中（可能较慢）…`);
     const modelId = resolveImageModelId(preset.imageGear);
     const imageOptions = (preset.imageAspectRatio || preset.imageSize) ? { aspectRatio: preset.imageAspectRatio, imageSize: preset.imageSize } : undefined;
-    const result = await dialogGenerateImage(inputImageBase64, augmented, modelId, imageOptions);
+    const result = await dialogGenerateImage(inputImageBase64, augmented, modelId, imageOptions, undefined, undefined, {
+      ...(opts?.batchGroupKey ? { batchGroupKey: opts.batchGroupKey } : {}),
+      ...(opts?.batchGroupExpected ? { batchGroupExpected: opts.batchGroupExpected } : {}),
+    });
     return {
       ok: true,
       kind: 'image',

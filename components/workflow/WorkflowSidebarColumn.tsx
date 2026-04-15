@@ -14,7 +14,7 @@ import {
 } from '../../types';
 import type { CustomAppModule, CapabilitySet, WorkflowAsset } from '../../types';
 import { capabilityUsesGenImageEngine } from '../../services/capabilityExecutor';
-import { CustomDropdown, DROPDOWN_TRIGGER_COMPACT } from '../ui/CustomDropdown';
+import { CustomDropdown } from '../ui/CustomDropdown';
 import { DT_AC_CAPABILITY_ACTION, DT_AC_CAPABILITY_FROM_EDITOR } from '../../services/workflowDragPipeline';
 import { dragTransferHasPlainText } from './workflowSectionHelpers';
 import { SET_ACTION_PREFIX } from './workflowSectionUiConstants';
@@ -751,7 +751,9 @@ export function WorkflowSidebarColumn({
                     </button>
                     <div className="flex-1 min-w-0 flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
                       {(() => {
-                        const hasParamOptions = list.some((m) => capabilityUsesGenImageEngine(m));
+                        const hasImageParamOptions = list.some((m) => capabilityUsesGenImageEngine(m));
+                        const hasGenerateCountOptions =
+                          hasImageParamOptions || category.id === 'text_to_text';
                         const cfg = groupOverrideByCategory[category.id] || {};
                         const gearChanged = Boolean(cfg.imageGear);
                         const ratioChanged = Boolean(cfg.imageAspectRatio);
@@ -781,7 +783,7 @@ export function WorkflowSidebarColumn({
                         const sizeText = sizeChanged ? String(cfg.imageSize).slice(0, 1) : '寸';
                         return (
                           <>
-                      {hasParamOptions ? (
+                      {hasGenerateCountOptions ? (
                         <>
                       {isCountCustomEditing ? (
                         <div
@@ -814,7 +816,7 @@ export function WorkflowSidebarColumn({
                       ) : (
                         <CustomDropdown
                           options={[
-                            ...Array.from({ length: 10 }, (_, i) => ({ value: String(i + 1), label: `${i + 1}张` })),
+                            ...Array.from({ length: 10 }, (_, i) => ({ value: String(i + 1), label: `${i + 1}` })),
                             { value: '__custom__', label: '自定义…' },
                           ]}
                           value={String(Math.min(10, Math.max(1, countValue)))}
@@ -846,105 +848,109 @@ export function WorkflowSidebarColumn({
                           )}
                         />
                       )}
-                      <button
-                        type="button"
-                        title="覆盖参数开关"
-                        onClick={() =>
-                          setGroupOverrideByCategory((prev) => ({
-                            ...prev,
-                            [category.id]: {
-                              ...(prev[category.id] || {}),
-                              enabled: !(prev[category.id]?.enabled === true),
-                            },
-                          }))
-                        }
-                        className={`shrink-0 w-6 h-6 rounded-full border inline-flex items-center justify-center leading-none text-[9px] font-black ${groupOverrideByCategory[category.id]?.enabled ? 'border-blue-500 text-blue-300 bg-blue-950/35' : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'}`}
-                      >
-                        覆
-                      </button>
-                      <CustomDropdown
-                        options={[{ value: '', label: '默认' }, ...DIALOG_IMAGE_GEARS.map((g) => ({ value: g.id, label: g.label }))]}
-                        value={groupOverrideByCategory[category.id]?.imageGear || ''}
-                        onChange={(v) =>
-                          setGroupOverrideByCategory((prev) => ({
-                            ...prev,
-                            [category.id]: { ...(prev[category.id] || {}), imageGear: (v || undefined) as CustomAppModule['imageGear'] | undefined },
-                          }))
-                        }
-                        disabled={!groupOverrideByCategory[category.id]?.enabled}
-                        triggerClassName="p-0 w-6 h-6 inline-flex items-center justify-center bg-transparent border-0 rounded-none hover:bg-transparent align-middle"
-                        renderTrigger={() => (
-                          <span
-                            title={gearChanged ? `档位：${DIALOG_IMAGE_GEARS.find((g) => g.id === cfg.imageGear)?.label || cfg.imageGear}` : '档位：默认'}
-                            className={`w-6 h-6 rounded-full border inline-flex items-center justify-center leading-none text-[9px] font-black ${
-                              gearChanged ? 'border-blue-500 text-blue-300 bg-blue-950/35' : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'
-                            }`}
+                      {hasImageParamOptions ? (
+                        <>
+                          <button
+                            type="button"
+                            title="覆盖参数开关"
+                            onClick={() =>
+                              setGroupOverrideByCategory((prev) => ({
+                                ...prev,
+                                [category.id]: {
+                                  ...(prev[category.id] || {}),
+                                  enabled: !(prev[category.id]?.enabled === true),
+                                },
+                              }))
+                            }
+                            className={`shrink-0 w-6 h-6 rounded-full border inline-flex items-center justify-center leading-none text-[9px] font-black ${groupOverrideByCategory[category.id]?.enabled ? 'border-blue-500 text-blue-300 bg-blue-950/35' : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'}`}
                           >
-                            {gearText}
-                          </span>
-                        )}
-                      />
-                      <CustomDropdown
-                        options={[{ value: '', label: '默认' }, ...SUPPORTED_ASPECT_RATIOS.map((r) => ({ value: r.value, label: r.label }))]}
-                        value={groupOverrideByCategory[category.id]?.imageAspectRatio || ''}
-                        onChange={(v) =>
-                          setGroupOverrideByCategory((prev) => ({
-                            ...prev,
-                            [category.id]: { ...(prev[category.id] || {}), imageAspectRatio: v || undefined },
-                          }))
-                        }
-                        disabled={!groupOverrideByCategory[category.id]?.enabled}
-                        triggerClassName="p-0 w-6 h-6 inline-flex items-center justify-center bg-transparent border-0 rounded-none hover:bg-transparent align-middle"
-                        renderTrigger={() => (
-                          <span
-                            title={ratioChanged ? `比例：${cfg.imageAspectRatio}` : '比例：默认'}
-                            className={`w-6 h-6 rounded-full border inline-flex items-center justify-center leading-none text-[9px] font-black ${
-                              ratioChanged ? 'border-blue-500 text-blue-300 bg-blue-950/35' : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'
-                            }`}
+                            覆
+                          </button>
+                          <CustomDropdown
+                            options={[{ value: '', label: '默认' }, ...DIALOG_IMAGE_GEARS.map((g) => ({ value: g.id, label: g.label }))]}
+                            value={groupOverrideByCategory[category.id]?.imageGear || ''}
+                            onChange={(v) =>
+                              setGroupOverrideByCategory((prev) => ({
+                                ...prev,
+                                [category.id]: { ...(prev[category.id] || {}), imageGear: (v || undefined) as CustomAppModule['imageGear'] | undefined },
+                              }))
+                            }
+                            disabled={!groupOverrideByCategory[category.id]?.enabled}
+                            triggerClassName="p-0 w-6 h-6 inline-flex items-center justify-center bg-transparent border-0 rounded-none hover:bg-transparent align-middle"
+                            renderTrigger={() => (
+                              <span
+                                title={gearChanged ? `档位：${DIALOG_IMAGE_GEARS.find((g) => g.id === cfg.imageGear)?.label || cfg.imageGear}` : '档位：默认'}
+                                className={`w-6 h-6 rounded-full border inline-flex items-center justify-center leading-none text-[9px] font-black ${
+                                  gearChanged ? 'border-blue-500 text-blue-300 bg-blue-950/35' : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'
+                                }`}
+                              >
+                                {gearText}
+                              </span>
+                            )}
+                          />
+                          <CustomDropdown
+                            options={[{ value: '', label: '默认' }, ...SUPPORTED_ASPECT_RATIOS.map((r) => ({ value: r.value, label: r.label }))]}
+                            value={groupOverrideByCategory[category.id]?.imageAspectRatio || ''}
+                            onChange={(v) =>
+                              setGroupOverrideByCategory((prev) => ({
+                                ...prev,
+                                [category.id]: { ...(prev[category.id] || {}), imageAspectRatio: v || undefined },
+                              }))
+                            }
+                            disabled={!groupOverrideByCategory[category.id]?.enabled}
+                            triggerClassName="p-0 w-6 h-6 inline-flex items-center justify-center bg-transparent border-0 rounded-none hover:bg-transparent align-middle"
+                            renderTrigger={() => (
+                              <span
+                                title={ratioChanged ? `比例：${cfg.imageAspectRatio}` : '比例：默认'}
+                                className={`w-6 h-6 rounded-full border inline-flex items-center justify-center leading-none text-[9px] font-black ${
+                                  ratioChanged ? 'border-blue-500 text-blue-300 bg-blue-950/35' : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'
+                                }`}
+                              >
+                                {ratioText}
+                              </span>
+                            )}
+                          />
+                          <CustomDropdown
+                            options={[{ value: '', label: '默认' }, ...SUPPORTED_IMAGE_SIZES.map((s) => ({ value: s.value, label: s.label }))]}
+                            value={groupOverrideByCategory[category.id]?.imageSize || ''}
+                            onChange={(v) =>
+                              setGroupOverrideByCategory((prev) => ({
+                                ...prev,
+                                [category.id]: { ...(prev[category.id] || {}), imageSize: v || undefined },
+                              }))
+                            }
+                            disabled={!groupOverrideByCategory[category.id]?.enabled}
+                            triggerClassName="p-0 w-6 h-6 inline-flex items-center justify-center bg-transparent border-0 rounded-none hover:bg-transparent align-middle"
+                            renderTrigger={() => (
+                              <span
+                                title={sizeChanged ? `尺寸：${cfg.imageSize}` : '尺寸：默认'}
+                                className={`w-6 h-6 rounded-full border inline-flex items-center justify-center leading-none text-[9px] font-black ${
+                                  sizeChanged ? 'border-blue-500 text-blue-300 bg-blue-950/35' : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'
+                                }`}
+                              >
+                                {sizeText}
+                              </span>
+                            )}
+                          />
+                          <button
+                            type="button"
+                            title="理解开关"
+                            disabled={!groupOverrideByCategory[category.id]?.enabled}
+                            onClick={() =>
+                              setGroupOverrideByCategory((prev) => ({
+                                ...prev,
+                                [category.id]: {
+                                  ...(prev[category.id] || {}),
+                                  understand: prev[category.id]?.understand === false,
+                                },
+                              }))
+                            }
+                            className={`shrink-0 w-6 h-6 rounded-full border inline-flex items-center justify-center leading-none text-[9px] font-black ${groupOverrideByCategory[category.id]?.understand !== false ? 'border-blue-500 text-blue-300 bg-blue-950/35' : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'} disabled:opacity-50`}
                           >
-                            {ratioText}
-                          </span>
-                        )}
-                      />
-                      <CustomDropdown
-                        options={[{ value: '', label: '默认' }, ...SUPPORTED_IMAGE_SIZES.map((s) => ({ value: s.value, label: s.label }))]}
-                        value={groupOverrideByCategory[category.id]?.imageSize || ''}
-                        onChange={(v) =>
-                          setGroupOverrideByCategory((prev) => ({
-                            ...prev,
-                            [category.id]: { ...(prev[category.id] || {}), imageSize: v || undefined },
-                          }))
-                        }
-                        disabled={!groupOverrideByCategory[category.id]?.enabled}
-                        triggerClassName="p-0 w-6 h-6 inline-flex items-center justify-center bg-transparent border-0 rounded-none hover:bg-transparent align-middle"
-                        renderTrigger={() => (
-                          <span
-                            title={sizeChanged ? `尺寸：${cfg.imageSize}` : '尺寸：默认'}
-                            className={`w-6 h-6 rounded-full border inline-flex items-center justify-center leading-none text-[9px] font-black ${
-                              sizeChanged ? 'border-blue-500 text-blue-300 bg-blue-950/35' : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'
-                            }`}
-                          >
-                            {sizeText}
-                          </span>
-                        )}
-                      />
-                      <button
-                        type="button"
-                        title="理解开关"
-                        disabled={!groupOverrideByCategory[category.id]?.enabled}
-                        onClick={() =>
-                          setGroupOverrideByCategory((prev) => ({
-                            ...prev,
-                            [category.id]: {
-                              ...(prev[category.id] || {}),
-                              understand: prev[category.id]?.understand === false,
-                            },
-                          }))
-                        }
-                        className={`shrink-0 w-6 h-6 rounded-full border inline-flex items-center justify-center leading-none text-[9px] font-black ${groupOverrideByCategory[category.id]?.understand !== false ? 'border-blue-500 text-blue-300 bg-blue-950/35' : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'} disabled:opacity-50`}
-                      >
-                        解
-                      </button>
+                            解
+                          </button>
+                        </>
+                      ) : null}
                         </>
                       ) : null}
                           </>

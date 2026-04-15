@@ -17,15 +17,18 @@ export type ImagePreviewOverlayProps = {
   open: boolean;
   /** 切换图片或重新打开时重置缩放/平移 */
   resetKey: string;
-  imageSrc: string;
+  /** 与 centerSlot 二选一：有中央自定义内容时可省略 */
+  imageSrc?: string;
+  /** 替代中央图片区（如文字编辑）。有时与 imageSrc 同时存在：仅展示 centerSlot，不展示图片与缩放平移 */
+  centerSlot?: React.ReactNode;
   onClose: () => void;
-  /** 按住空格+滚轮：切换「上一资产 / 下一资产」时的列表长度（≤1 时不切换） */
+  /** 按住 Shift+滚轮：切换「上一资产 / 下一资产」时的列表长度（≤1 时不切换） */
   wheelListLength: number;
-  /** 按住空格+滚轮：在资产列表中前进/后退多步 */
+  /** 按住 Shift+滚轮：在资产列表中前进/后退多步 */
   onWheelNavigate: (deltaSteps: number) => void;
   /**
    * 若提供：普通滚轮仅在 innerWheelOptionCount &gt; 1 时在本卡片内切换版本；
-   * 按住空格+滚轮始终走 onWheelNavigate 切资产列表（与单图/多图无关）。
+   * 按住 Shift+滚轮始终走 onWheelNavigate 切资产列表（与单图/多图无关）。
    * 未提供时滚轮行为与 onWheelNavigate 一致（如对话临时库）。
    */
   onWheelInnerNavigate?: (deltaSteps: number) => void;
@@ -61,12 +64,13 @@ function fitImageToPreviewViewport(nw: number, nh: number): { w: number; h: numb
 const LazyImageEquirectViewer = getLazyImagePreviewViewer('image.equirect');
 
 /**
- * 全屏大图预览：滚轮切图、Esc 关闭、双击复原、左键拖拽缩放（按下处为轴）、空格/Shift+左键/右键平移。
+ * 全屏大图预览：滚轮切图、Esc 关闭、双击复原、左键拖拽缩放（按下处为轴）、空格/Shift+左键/右键平移；多资产时 Shift+滚轮切资产。
  */
 export function ImagePreviewOverlay({
   open,
   resetKey,
   imageSrc,
+  centerSlot,
   onClose,
   wheelListLength,
   onWheelNavigate,
@@ -179,19 +183,16 @@ export function ImagePreviewOverlay({
       }
       if (e.code === 'Space') {
         e.preventDefault();
-        if (!spacePressedRef.current) wheelAccumRef.current = 0;
         spacePressedRef.current = true;
       }
     };
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.code === 'Space') {
         spacePressedRef.current = false;
-        wheelAccumRef.current = 0;
       }
     };
     const onBlur = () => {
       spacePressedRef.current = false;
-      wheelAccumRef.current = 0;
     };
     document.addEventListener('keydown', onKeyDown, true);
     window.addEventListener('keyup', onKeyUp);
@@ -209,40 +210,36 @@ export function ImagePreviewOverlay({
       const viewerCapturesWheel =
         enablePanoramaMode && previewLayout === 'pano' && previewPolicyForMode('image.equirect').captureGlobalWheel;
       if (viewerCapturesWheel) return;
+
+      const innerMode = typeof onWheelInnerNavigate === 'function';
+      const shiftAssetNav = e.shiftKey && wheelListLength > 1;
+
       const t = e.target;
       if (t instanceof Element && t.closest(NO_WHEEL)) {
-        const innerMode = typeof onWheelInnerNavigate === 'function';
-        const allowSpaceNavigate =
-          innerMode && spacePressedRef.current && wheelListLength > 1;
-        if (allowSpaceNavigate) {
-          // 空格+滚轮切资产为全局手势：即使悬停在 no-wheel 区域也放行到后续导航逻辑
-        } else {
-        const scrollEl = t.closest(SCROLL) as HTMLElement | null;
-        if (scrollEl && scrollEl.scrollHeight > scrollEl.clientHeight + 1) {
-          const st = scrollEl.scrollTop;
-          const sh = scrollEl.scrollHeight;
-          const ch = scrollEl.clientHeight;
-          if ((e.deltaY < 0 && st > 0) || (e.deltaY > 0 && st + ch < sh - 1)) return;
+        if (!shiftAssetNav) {
+          const scrollEl = t.closest(SCROLL) as HTMLElement | null;
+          if (scrollEl && scrollEl.scrollHeight > scrollEl.clientHeight + 1) {
+            const st = scrollEl.scrollTop;
+            const sh = scrollEl.scrollHeight;
+            const ch = scrollEl.clientHeight;
+            if ((e.deltaY < 0 && st > 0) || (e.deltaY > 0 && st + ch < sh - 1)) return;
+          }
+          e.preventDefault();
+          return;
         }
-        e.preventDefault();
-        return;
-        }
+        // Shift+滚轮切资产：全局手势，悬停在底部按钮条（no-wheel）时也生效
       }
-      const innerMode = typeof onWheelInnerNavigate === 'function';
 
-      if (innerMode && spacePressedRef.current) {
-        if (wheelListLength <= 1) {
+      if (!shiftAssetNav) {
+        if (innerMode) {
+          if (innerWheelOptionCount <= 1) {
+            e.preventDefault();
+            return;
+          }
+        } else if (wheelListLength <= 1) {
           e.preventDefault();
           return;
         }
-      } else if (innerMode) {
-        if (innerWheelOptionCount <= 1) {
-          e.preventDefault();
-          return;
-        }
-      } else if (wheelListLength <= 1) {
-        e.preventDefault();
-        return;
       }
       e.preventDefault();
       let dy = e.deltaY;
@@ -257,29 +254,35 @@ export function ImagePreviewOverlay({
       const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
       const QUICK_STEP_THRESH = 4;
       const NAV_COOLDOWN_MS = 90;
-      const emitStep = (step: number) => {
+
+      /** 无 Shift：滚轮切「本卡 displayKey」或单列表切图 */
+      const emitInnerOrListStep = (step: number) => {
         wheelAccumRef.current = 0;
         wheelLastNavigateAtRef.current = now;
         if (innerMode) onWheelInnerNavigate!(step);
         else onWheelNavigate(step);
       };
 
-      // 空格+切资产：单次滚轮事件常见 deltaY≈16，用 18 阈值会要滚两下才触发一次
-      if (innerMode && spacePressedRef.current) {
-        if (wheelListLength <= 1) return;
+      // Shift+切资产：单次滚轮事件常见 deltaY≈16，用较低累积阈值
+      if (shiftAssetNav) {
+        const emitAssetStep = (step: number) => {
+          wheelAccumRef.current = 0;
+          wheelLastNavigateAtRef.current = now;
+          onWheelNavigate(step);
+        };
         if (Math.abs(dy) >= QUICK_STEP_THRESH && now - wheelLastNavigateAtRef.current >= NAV_COOLDOWN_MS) {
-          emitStep(dy > 0 ? 1 : -1);
+          emitAssetStep(dy > 0 ? 1 : -1);
           return;
         }
-        const SPACE_THRESH = 8;
+        const SHIFT_THRESH = 8;
         if (wheelAccumRef.current !== 0 && Math.sign(wheelAccumRef.current) !== Math.sign(dy)) {
           wheelAccumRef.current = 0;
         }
         wheelAccumRef.current += dy;
-        if (wheelAccumRef.current >= SPACE_THRESH) {
-          emitStep(1);
-        } else if (wheelAccumRef.current <= -SPACE_THRESH) {
-          emitStep(-1);
+        if (wheelAccumRef.current >= SHIFT_THRESH) {
+          emitAssetStep(1);
+        } else if (wheelAccumRef.current <= -SHIFT_THRESH) {
+          emitAssetStep(-1);
         }
         return;
       }
@@ -287,7 +290,7 @@ export function ImagePreviewOverlay({
       const THRESH = 18;
       const MAX_STEPS_PER_EVENT = 12;
       if (Math.abs(dy) >= QUICK_STEP_THRESH && now - wheelLastNavigateAtRef.current >= NAV_COOLDOWN_MS) {
-        emitStep(dy > 0 ? 1 : -1);
+        emitInnerOrListStep(dy > 0 ? 1 : -1);
         return;
       }
       if (wheelAccumRef.current !== 0 && Math.sign(wheelAccumRef.current) !== Math.sign(dy)) {
@@ -431,9 +434,10 @@ export function ImagePreviewOverlay({
     [handleImgLoad]
   );
 
-  if (!open || !imageSrc) return null;
+  const hasImage = Boolean(imageSrc && imageSrc.trim());
+  if (!open || (!hasImage && !centerSlot)) return null;
 
-  const useFrameLock = Boolean(innerLayoutStableKey && lockedFrame);
+  const useFrameLock = Boolean(!centerSlot && innerLayoutStableKey && lockedFrame);
   const shellStyle: React.CSSProperties = {
     left: `calc((100% - ${contentRightInset}) / 2)`,
     transform: `translate(-50%, -50%) translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
@@ -450,24 +454,36 @@ export function ImagePreviewOverlay({
       focusKey={resetKey}
       zIndexClassName={shellZIndexClassName ?? 'z-[2000]'}
     >
-        {enablePanoramaMode && previewLayout === 'pano' && LazyImageEquirectViewer ? (
+        {!centerSlot && enablePanoramaMode && previewLayout === 'pano' && LazyImageEquirectViewer ? (
           <div
             className="absolute inset-0 z-[5] min-h-[200px]"
             onWheel={(e) => e.stopPropagation()}
           >
             <Suspense fallback={<PreviewViewerFallback label="全景模块加载中…" />}>
-              <LazyImageEquirectViewer imageSrc={imageSrc} className="h-full w-full rounded-none border-0" />
+              <LazyImageEquirectViewer imageSrc={imageSrc!} className="h-full w-full rounded-none border-0" />
             </Suspense>
           </div>
         ) : null}
 
-        {!(enablePanoramaMode && previewLayout === 'pano') ? (
+        {centerSlot ? (
+          <div
+            className="absolute top-1/2 z-[4] flex items-center justify-center px-4 box-border w-[min(80rem,calc(100vw-3rem))] max-w-[calc(100vw-3rem)]"
+            style={{
+              left: `calc((100% - ${contentRightInset}) / 2)`,
+              transform: 'translate(-50%, -50%)',
+            }}
+          >
+            {centerSlot}
+          </div>
+        ) : null}
+
+        {!centerSlot && !(enablePanoramaMode && previewLayout === 'pano') ? (
           <div
             className={`absolute top-1/2 ${useFrameLock ? 'flex items-center justify-center' : ''}`}
             style={shellStyle}
           >
             <img
-              src={imageSrc}
+              src={imageSrc!}
               className={
                 useFrameLock
                   ? 'max-w-full max-h-full w-full h-full object-contain rounded-xl shadow-2xl select-none cursor-zoom-in'
@@ -503,10 +519,17 @@ export function ImagePreviewOverlay({
               <div>Tab：隐藏/显示界面（仅看图片）</div>
               <div>Esc：关闭预览</div>
             </>
+          ) : centerSlot ? (
+            <>
+              <div>滚轮：本卡片多版本时切换显示</div>
+              <div>Shift+滚轮：上一资产 / 下一资产</div>
+              <div>Tab：隐藏/显示界面</div>
+              <div>Esc：关闭预览</div>
+            </>
           ) : typeof onWheelInnerNavigate === 'function' ? (
             <>
               <div>滚轮：本卡片多版本时切换显示</div>
-              <div>空格+滚轮：上一资产 / 下一资产</div>
+              <div>Shift+滚轮：上一资产 / 下一资产</div>
               <div>Tab：隐藏/显示界面（仅看图片）</div>
               <div>Esc：关闭预览</div>
               <div>双击：复原缩放与位置</div>
@@ -530,7 +553,7 @@ export function ImagePreviewOverlay({
 
         {!uiHidden ? (
         <div className="absolute right-4 top-4 z-10 flex items-center gap-2">
-          {enablePanoramaMode ? (
+          {!centerSlot && enablePanoramaMode ? (
             <div
               className="flex rounded-xl border border-[#2e2e32] overflow-hidden"
               onClick={(e) => e.stopPropagation()}

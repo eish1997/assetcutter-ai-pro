@@ -19,6 +19,7 @@ import {
 const PORT = Number(process.env.PORT || process.env.BULK_IMAGE_PORT || process.env.GEMINI_PROXY_PORT) || 9002;
 const BIND_HOST = (process.env.BULK_IMAGE_BIND_HOST || '0.0.0.0').trim() || '0.0.0.0';
 const IMAGE_REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_IMAGE_REQUEST_TIMEOUT_MS) || 120_000;
+const VERTEX_IMAGE_REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_VERTEX_IMAGE_TIMEOUT_MS) || 300_000;
 const TOAPIS_BASE_URL = String(process.env.TOAPIS_BASE_URL || 'https://toapis.com/v1').trim().replace(/\/+$/, '');
 const TOAPIS_API_KEY = normalizeSecret(process.env.TOAPIS_API_KEY || '');
 const ENABLE_TOAPIS_FALLBACK = String(process.env.ENABLE_TOAPIS_FALLBACK || '').trim().toLowerCase() === 'true';
@@ -121,7 +122,10 @@ function getVertexAI() {
 async function proxyVertexGenerateContent(model, contents, config) {
   const safeConfig = { ...(config || {}) };
   if (safeConfig.abortSignal) delete safeConfig.abortSignal;
-  const timeout = Number(safeConfig?.httpOptions?.timeout) || IMAGE_REQUEST_TIMEOUT_MS;
+  const timeout = Math.max(
+    Number(safeConfig?.httpOptions?.timeout) || IMAGE_REQUEST_TIMEOUT_MS,
+    VERTEX_IMAGE_REQUEST_TIMEOUT_MS
+  );
   const mergedConfig = {
     ...safeConfig,
     httpOptions: { ...(safeConfig.httpOptions || {}), timeout },
@@ -558,7 +562,7 @@ function createGeminiAsyncBatchJob(items, useVertex) {
 
 function isRetryable(e) {
   const msg = String((e && e.message) || e);
-  if (/429|503|504|overloaded|UNAVAILABLE|DEADLINE_EXCEEDED|Deadline expired|500|INTERNAL|Internal error|high demand|try again later/i.test(msg)) return true;
+  if (/429|503|504|overloaded|UNAVAILABLE|DEADLINE_EXCEEDED|Deadline expired|500|INTERNAL|Internal error|high demand|try again later|The operation was cancelled|operation was canceled|CANCELLED/i.test(msg)) return true;
   const code = e && e.code;
   const status = e && e.status;
   if (code === 504 || code === 503 || code === 429 || status === 'DEADLINE_EXCEEDED' || status === 'UNAVAILABLE') return true;
