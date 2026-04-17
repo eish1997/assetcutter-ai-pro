@@ -1,0 +1,14 @@
+{
+  "name": "a-driver-workspace",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w @a-driver/local-bridge",
+    "typecheck": "npm run typecheck -w @a-driver/protocol && npm run typecheck -w @a-driver/local-bridge"
+  }
+}

@@ -25,6 +25,10 @@ export default defineConfig(({ mode }) => {
             target: 'http://127.0.0.1:9100',
             changeOrigin: true,
           },
+          '/api/bridge': {
+            target: 'http://127.0.0.1:9100',
+            changeOrigin: true,
+          },
           '/api/r2': {
             /** 生产与本地推荐：R2 路由挂在 auth-api（9100）同源 Cookie；独立 9003 仅用于 npm run dev:r2-api / start:r2-api */
             target: 'http://127.0.0.1:9100',

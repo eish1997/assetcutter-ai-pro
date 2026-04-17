@@ -12,6 +12,8 @@ import {
 } from '../services/geminiService';
 import { dialogVersionsForMessage } from '../services/dialogImageHelpers';
 import { uploadDialogResultImageToR2 } from '../services/dialogR2Image';
+import { pollBridgeTaskUntilDone, sendBridgeUserMessage } from '../services/dialogBridgeClient';
+import type { DialogBridgeConnectorId } from '../services/dialogBridgePrefs';
 import type {
   AppTask,
   DialogMessage,
@@ -54,9 +56,14 @@ type UseDialogGenerationParams = {
   dialogUsername: string | null | undefined;
   /** 登录且工作区云同步开启时，对话生图上传 R2、本地仅存 object key */
   dialogCloudPersistEnabled: boolean;
+  /** 本地 bb-browser 桥接：走用户设备与 /api/bridge/user/* */
+  dialogBridgeEnabled: boolean;
+  dialogBridgeDeviceId: string;
+  dialogBridgeBbRoute: string;
+  dialogBridgeConnectorId: DialogBridgeConnectorId;
 };
 
-function createDialogMessageId() {
+export function createDialogMessageId() {
   return Math.random().toString(36).substr(2, 9);
 }
 
@@ -136,6 +143,10 @@ export function useDialogGeneration({
   dialogPersistUserId,
   dialogUsername,
   dialogCloudPersistEnabled,
+  dialogBridgeEnabled,
+  dialogBridgeDeviceId,
+  dialogBridgeBbRoute,
+  dialogBridgeConnectorId,
 }: UseDialogGenerationParams) {
   const [dialogSendingSessionIds, setDialogSendingSessionIds] = useState<string[]>([]);
   const [dialogRegeneratingId, setDialogRegeneratingId] = useState<string | null>(null);
@@ -440,6 +451,151 @@ export function useDialogGeneration({
     const taskId = addTask('DIALOG_GEN', '对话');
     try {
       updateTask(taskId, { status: 'RUNNING', progress: 20 });
+
+      if (dialogBridgeEnabled) {
+        if (!dialogPersistUserId) {
+          updateTask(taskId, { status: 'FAILED', error: '未登录' });
+          if (isDialogSessionAlive(sid)) {
+            appendFailureMessage('请先登录后再使用本地桥接模式。');
+          }
+          return;
+        }
+        if (!dialogBridgeDeviceId.trim()) {
+          updateTask(taskId, { status: 'FAILED', error: '未填写设备 ID' });
+          setDialogValidationError('本地桥接：请填写设备 ID（与 A-Driver 中 BRIDGE_DEVICE_ID 一致）');
+          if (isDialogSessionAlive(sid)) {
+            appendFailureMessage('本地桥接：请先在输入区上方填写设备 ID，并确保本机 A-Driver 已连接。');
+          }
+          return;
+        }
+
+        const ac = new AbortController();
+        setDialogAbortController(sid, ac);
+        try {
+          let bridgeText = text;
+          if (sourceImages.length > 0) {
+            if (!dialogSkipUnderstand) {
+              const ur = await understandImageEditIntent(
+                getDialogUnderstandImageInput(sourceImages),
+                text,
+                config.modelText,
+                config.prompts.dialog_understand
+              );
+              bridgeText = `${text}\n\n[附图理解] ${ur.instruction}`;
+            } else {
+              bridgeText = `${text}\n\n（用户附有 ${sourceImages.length} 张图；未开启「理解」时未做视觉理解）`;
+            }
+          }
+
+          const imagesPayload =
+            sourceImages.length > 0
+              ? sourceImages.slice(0, 4).map((dataUrl) => {
+                  const m = /^data:([^;]+);base64,(.+)$/i.exec(dataUrl);
+                  if (m) return { mimeType: m[1].trim() || 'image/jpeg', dataBase64: m[2].trim() };
+                  const raw = dataUrl.includes(',') ? dataUrl.split(',')[1] || '' : dataUrl;
+                  return { mimeType: 'image/jpeg', dataBase64: raw };
+                })
+              : undefined;
+
+          const messageId =
+            typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+              ? crypto.randomUUID()
+              : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+          const route = dialogBridgeBbRoute.trim();
+          const threadIdForBridge =
+            dialogBridgeConnectorId === 'bb-site'
+              ? route || undefined
+              : route.startsWith('http://') || route.startsWith('https://')
+                ? route
+                : undefined;
+
+          const sendRes = await sendBridgeUserMessage({
+            deviceId: dialogBridgeDeviceId.trim(),
+            text: bridgeText,
+            threadId: threadIdForBridge,
+            connectorId: dialogBridgeConnectorId,
+            messageId,
+            images: imagesPayload,
+          });
+
+          if (isDialogCancelled(sid)) {
+            updateTask(taskId, { status: 'FAILED', error: '已取消' });
+            if (isDialogSessionAlive(sid)) appendCancelMessage();
+            return;
+          }
+
+          const assistantId = createDialogMessageId();
+          appendAssistantMessage({
+            id: assistantId,
+            role: 'assistant',
+            text: '',
+            timestamp: Date.now(),
+          });
+
+          const pollResult = await pollBridgeTaskUntilDone(sendRes.taskId, {
+            signal: ac.signal,
+            onDelta: (full) => {
+              if (!isDialogSessionAlive(sid) || isDialogCancelled(sid)) return;
+              setDialogMessages((prev) =>
+                prev.map((m) => (m.id === assistantId ? { ...m, text: full } : m))
+              );
+            },
+          });
+
+          if (isDialogCancelled(sid)) {
+            updateTask(taskId, { status: 'FAILED', error: '已取消' });
+            if (isDialogSessionAlive(sid)) appendCancelMessage();
+            return;
+          }
+
+          if (pollResult.ok === false) {
+            const errMsg = `${pollResult.message} (${pollResult.code})`;
+            updateTask(taskId, { status: 'FAILED', error: errMsg });
+            if (isDialogSessionAlive(sid)) {
+              setDialogMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId ? { ...m, text: `桥接失败: ${errMsg}` } : m
+                )
+              );
+            }
+            return;
+          }
+
+          const img0 = pollResult.images[0];
+          if (isDialogSessionAlive(sid)) {
+            if (img0) {
+              setDialogMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId
+                    ? {
+                        ...m,
+                        text: pollResult.text.trim() || '（含图片回复）',
+                        versions: [
+                          {
+                            resultImageBase64: img0,
+                            timestamp: Date.now(),
+                          },
+                        ],
+                      }
+                    : m
+                )
+              );
+            } else {
+              setDialogMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId ? { ...m, text: pollResult.text } : m
+                )
+              );
+            }
+          }
+          updateTask(taskId, { status: 'SUCCESS', progress: 100 });
+        } finally {
+          setDialogAbortController(sid, null);
+        }
+        return;
+      }
+
       const understoodResult = dialogSkipUnderstand
         ? { instruction: text, shouldGenerateImage: true }
         : await understandImageEditIntent(
@@ -545,15 +701,21 @@ export function useDialogGeneration({
     config.prompts.edit,
     dialogActiveSessionIdResolved,
     dialogAutoGenerateImage,
+    dialogBridgeBbRoute,
+    dialogBridgeConnectorId,
+    dialogBridgeDeviceId,
+    dialogBridgeEnabled,
     dialogSkipUnderstand,
     dialogInputImages,
     dialogInputText,
     dialogMessages,
     dialogModel,
+    dialogPersistUserId,
     dialogSendingSessionIds,
     finalizeGeneratedMessage,
     isDialogCancelled,
     isDialogSessionAlive,
+    setDialogAbortController,
     setDialogInputImages,
     setDialogInputText,
     setDialogMessages,

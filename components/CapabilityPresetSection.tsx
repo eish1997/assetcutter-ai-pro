@@ -9,6 +9,7 @@ import {
   CAPABILITY_PRESETS_VERSION,
   normalizeCapabilityPreset,
 } from '../services/capabilityPresetStore';
+import { readLocalJson, writeLocalJson } from '../services/clientPersist';
 import { getCapabilityEngine } from '../services/capabilityExecutor';
 import { loadInstalledPacks, loadPackHistory } from '../services/storePackHistory';
 import { useStoreCatalog } from '../services/storeCatalogHook';
@@ -19,15 +20,59 @@ import { uuid } from './workflow/workflowIds';
 import { DT_AC_CAPABILITY_FROM_EDITOR } from '../services/workflowDragPipeline';
 import WorkflowComposerOverlay from './WorkflowComposerOverlay';
 import { CapabilityPreviewImg } from './CapabilityPreviewImg';
+import { ImagePreviewOverlay } from './ImagePreviewOverlay';
 import { CustomDropdown, DROPDOWN_TRIGGER_COMPACT } from './ui/CustomDropdown';
 import AppIcon from './ui/AppIcon';
 
 const CAPABILITY_SETS_VERSION = 1;
+const CAPABILITY_PRESET_COLUMNS_KEY = 'ac_capability_preset_columns_v1';
+const CAPABILITY_PRESET_COLUMNS_MIN = 2;
+const CAPABILITY_PRESET_COLUMNS_MAX = 6;
+const DRAG_SCROLL_EDGE_PX = 64;
+const DRAG_SCROLL_MAX_STEP_PX = 24;
+
+function normalizeCapabilityPresetColumnCount(raw: unknown): number {
+  const n = Math.floor(Number(raw));
+  if (!Number.isFinite(n)) return 6;
+  return Math.max(CAPABILITY_PRESET_COLUMNS_MIN, Math.min(CAPABILITY_PRESET_COLUMNS_MAX, n));
+}
+
+function autoScrollContainerOnDrag(
+  container: HTMLElement,
+  clientY: number,
+  edgePx = DRAG_SCROLL_EDGE_PX,
+  maxStepPx = DRAG_SCROLL_MAX_STEP_PX
+): void {
+  if (!Number.isFinite(clientY) || clientY <= 0) return;
+  const rect = container.getBoundingClientRect();
+  if (!rect.height) return;
+  let delta = 0;
+  if (clientY < rect.top + edgePx) {
+    const ratio = (rect.top + edgePx - clientY) / edgePx;
+    delta = -Math.ceil(Math.max(0, Math.min(1, ratio)) * maxStepPx);
+  } else if (clientY > rect.bottom - edgePx) {
+    const ratio = (clientY - (rect.bottom - edgePx)) / edgePx;
+    delta = Math.ceil(Math.max(0, Math.min(1, ratio)) * maxStepPx);
+  }
+  if (delta !== 0) container.scrollTop += delta;
+}
+
+function normalizeWheelDeltaY(e: React.WheelEvent<HTMLElement>): number {
+  let dy = e.deltaY;
+  if (Math.abs(e.deltaX) > Math.abs(dy)) dy = e.deltaX;
+  if (e.deltaMode === 1) dy *= 16;
+  if (e.deltaMode === 2) dy *= 120;
+  if (!dy && typeof (e as unknown as { wheelDelta?: number }).wheelDelta === 'number') {
+    dy = -(e as unknown as { wheelDelta: number }).wheelDelta / 3;
+  }
+  return dy;
+}
 
 const DEFAULT_GENERATE_3D: Generate3DPreset = { module: 'pro', model: '3.0', enablePBR: false };
 const DETAIL_DROPDOWN_PORTAL_ZINDEX = { backdrop: 10120, list: 10121 } as const;
 
 type ViewMode = 'presets' | 'image_process' | 'sets';
+type PresetTypeFilter = 'all' | 'text_to_text' | 'text_to_image' | 'image_to_image' | 'image_to_text';
 
 const CapabilityPresetSection: React.FC<{
   presets: CustomAppModule[];
@@ -44,6 +89,12 @@ const CapabilityPresetSection: React.FC<{
   scrollContainerRef?: React.Ref<HTMLDivElement>;
 }> = ({ presets, onUpdate, sets = [], onUpdateSets, onOpenWorkflowComposer, onRunTest, onLog, embeddedInWorkflow = false, canUploadToR2 = false, scrollContainerRef }) => {
   const [viewMode, setViewMode] = useState<ViewMode>('presets');
+  const [presetTypeFilter, setPresetTypeFilter] = useState<PresetTypeFilter>('all');
+  const [presetColumnCount, setPresetColumnCount] = useState<number>(() =>
+    readLocalJson<number>(CAPABILITY_PRESET_COLUMNS_KEY, 6, (parsed) =>
+      typeof parsed === 'number' ? normalizeCapabilityPresetColumnCount(parsed) : null
+    )
+  );
   type EmbedComposerSession = { id: string; initialSet: CapabilitySet | null; sessionKey: number };
   const [embedComposerSessions, setEmbedComposerSessions] = useState<EmbedComposerSession[]>([]);
   const [embedComposerActiveId, setEmbedComposerActiveId] = useState<string | null>(null);
@@ -128,6 +179,8 @@ const CapabilityPresetSection: React.FC<{
   const [syncAfterRefresh, setSyncAfterRefresh] = useState(false);
   const autoSyncedRemoteRef = useRef(false);
   const [pendingScrollTarget, setPendingScrollTarget] = useState<{ kind: 'preset' | 'set'; id: string } | null>(null);
+  const [draggingPresetId, setDraggingPresetId] = useState<string | null>(null);
+  const dragPreviewElRef = useRef<HTMLDivElement | null>(null);
   const presetCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const setCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
   /** 仅预设「内容区」滚动容器；定位时用 scrollTo 只滚此处，避免 scrollIntoView 连带滚主布局 */
@@ -235,6 +288,26 @@ const CapabilityPresetSection: React.FC<{
   }, []);
   useEffect(() => {
     if (typeof window === 'undefined') return;
+    const onTypeFilterSwitch = (event: Event) => {
+      const detail = (event as CustomEvent<{ filter?: PresetTypeFilter }>).detail;
+      const filter = detail?.filter;
+      if (
+        filter === 'all' ||
+        filter === 'text_to_text' ||
+        filter === 'text_to_image' ||
+        filter === 'image_to_image' ||
+        filter === 'image_to_text'
+      ) {
+        setPresetTypeFilter(filter);
+      }
+    };
+    window.addEventListener('ac:capability-preset-type-filter', onTypeFilterSwitch as EventListener);
+    return () => {
+      window.removeEventListener('ac:capability-preset-type-filter', onTypeFilterSwitch as EventListener);
+    };
+  }, []);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
     const onJumpToPreset = (event: Event) => {
       const detail = (event as CustomEvent<{ presetId?: string }>).detail;
       const id = detail?.presetId;
@@ -245,6 +318,7 @@ const CapabilityPresetSection: React.FC<{
         setViewMode('image_process');
       } else {
         setViewMode('presets');
+        setPresetTypeFilter('all');
       }
       setPendingScrollTarget({ kind: 'preset', id });
     };
@@ -257,6 +331,10 @@ const CapabilityPresetSection: React.FC<{
     if (typeof window === 'undefined') return;
     window.dispatchEvent(new CustomEvent('ac:capability-preset-view-mode-changed', { detail: { mode: viewMode } }));
   }, [viewMode]);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.dispatchEvent(new CustomEvent('ac:capability-preset-type-filter-changed', { detail: { filter: presetTypeFilter } }));
+  }, [presetTypeFilter]);
 
   const saveEdit = () => {
     if (!editingId) return;
@@ -654,6 +732,94 @@ const CapabilityPresetSection: React.FC<{
       null
     );
   };
+  const clearPresetDragPreview = useCallback(() => {
+    const node = dragPreviewElRef.current;
+    if (node?.parentElement) node.parentElement.removeChild(node);
+    dragPreviewElRef.current = null;
+  }, []);
+  const setGlobalDraggingPresetId = useCallback((id: string | null) => {
+    if (typeof window === 'undefined') return;
+    try {
+      (window as Window & { __acDraggingPresetId?: string | null }).__acDraggingPresetId = id;
+    } catch {
+      /* ignore global drag id set errors */
+    }
+  }, []);
+  useEffect(() => {
+    return () => {
+      clearPresetDragPreview();
+      setGlobalDraggingPresetId(null);
+    };
+  }, [clearPresetDragPreview, setGlobalDraggingPresetId]);
+  const applyPresetDragImage = useCallback((e: React.DragEvent<HTMLElement>, preset: CustomAppModule) => {
+    if (typeof document === 'undefined') return;
+    const dt = e.dataTransfer;
+    if (!dt) return;
+    clearPresetDragPreview();
+    const previewSrc = getCardPreviewSrc(preset);
+    const node = document.createElement('div');
+    node.style.position = 'fixed';
+    node.style.left = '-9999px';
+    node.style.top = '-9999px';
+    node.style.width = '184px';
+    node.style.height = '52px';
+    node.style.display = 'flex';
+    node.style.alignItems = 'center';
+    node.style.gap = '8px';
+    node.style.padding = '6px 8px';
+    node.style.borderRadius = '12px';
+    node.style.border = '1px solid rgba(59,130,246,0.5)';
+    node.style.background = 'rgba(12,14,19,0.95)';
+    node.style.boxShadow = '0 8px 24px rgba(0,0,0,0.35)';
+    node.style.color = '#dbeafe';
+    node.style.fontFamily = 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
+    if (previewSrc) {
+      const img = document.createElement('img');
+      img.src = previewSrc;
+      img.alt = '';
+      img.style.width = '40px';
+      img.style.height = '40px';
+      img.style.objectFit = 'cover';
+      img.style.borderRadius = '8px';
+      img.style.border = '1px solid rgba(255,255,255,0.14)';
+      img.style.background = '#111827';
+      node.appendChild(img);
+    } else {
+      const placeholder = document.createElement('div');
+      placeholder.style.width = '40px';
+      placeholder.style.height = '40px';
+      placeholder.style.borderRadius = '8px';
+      placeholder.style.border = '1px solid rgba(255,255,255,0.14)';
+      placeholder.style.background = 'rgba(255,255,255,0.06)';
+      node.appendChild(placeholder);
+    }
+    const textWrap = document.createElement('div');
+    textWrap.style.minWidth = '0';
+    textWrap.style.display = 'flex';
+    textWrap.style.flexDirection = 'column';
+    textWrap.style.gap = '2px';
+    const title = document.createElement('div');
+    title.textContent = preset.label || '能力预设';
+    title.style.fontSize = '11px';
+    title.style.fontWeight = '700';
+    title.style.whiteSpace = 'nowrap';
+    title.style.overflow = 'hidden';
+    title.style.textOverflow = 'ellipsis';
+    const sub = document.createElement('div');
+    sub.textContent = '拖拽到功能区执行';
+    sub.style.fontSize = '10px';
+    sub.style.color = '#93c5fd';
+    textWrap.appendChild(title);
+    textWrap.appendChild(sub);
+    node.appendChild(textWrap);
+    document.body.appendChild(node);
+    dragPreviewElRef.current = node;
+    try {
+      dt.setDragImage(node, 20, 20);
+    } catch {
+      /* ignore custom drag image errors */
+    }
+  }, [clearPresetDragPreview]);
   const onPresetCardIntrinsicSize = useCallback((presetId: string, w: number, h: number) => {
     setCardAspectByPresetId((prev) => mergeCardAspectFromIntrinsic(prev, presetId, w, h) ?? prev);
   }, []);
@@ -681,6 +847,14 @@ const CapabilityPresetSection: React.FC<{
     setEditingId(null);
   };
   const detailPreset = detailPresetId ? presets.find((x) => x.id === detailPresetId) ?? null : null;
+  const detailOriginalPreview = detailPreset
+    ? getOriginalPreviewSrc(detailPreset) || getOriginalPreviewThumbSrc(detailPreset) || ''
+    : '';
+  const detailGeneratedPreview = detailPreset
+    ? getGeneratedPreviewSrc(detailPreset) || getGeneratedPreviewThumbSrc(detailPreset) || ''
+    : '';
+  const detailMainPreview = detailPreset ? getCardPreviewSrc(detailPreset) || '' : '';
+  const detailHasCompare = Boolean(detailOriginalPreview && detailGeneratedPreview);
   const beginDetailEdit = (p: CustomAppModule) => {
     if (isBuiltinLockedPreset(p)) return;
     if (p.id === 'cut_image') {
@@ -717,6 +891,28 @@ const CapabilityPresetSection: React.FC<{
     saveEdit();
     setDetailEditMode(false);
   };
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onOpenPresetDetail = (event: Event) => {
+      const detail = (event as CustomEvent<{ presetId?: string; edit?: boolean }>).detail;
+      const id = detail?.presetId;
+      if (!id) return;
+      const preset = presets.find((p) => p.id === id);
+      if (!preset) return;
+      if (preset.category === 'image_to_image' && getCapabilityEngine(preset) === 'builtin') {
+        setViewMode('image_process');
+      } else {
+        setViewMode('presets');
+      }
+      setPendingScrollTarget({ kind: 'preset', id });
+      openPresetDetail(preset);
+      if (detail?.edit === true) beginDetailEdit(preset);
+    };
+    window.addEventListener('ac:capability-preset-open-detail', onOpenPresetDetail as EventListener);
+    return () => {
+      window.removeEventListener('ac:capability-preset-open-detail', onOpenPresetDetail as EventListener);
+    };
+  }, [presets]);
 
   const uploadPresetToR2 = async (p: CustomAppModule, mode: 'preview' | 'preset') => {
     if (!canUploadToR2) {
@@ -881,6 +1077,34 @@ const CapabilityPresetSection: React.FC<{
   const removeSet = (id: string) => {
     onUpdateSets?.(sets.filter((s) => s.id !== id));
   };
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onColumnAdjust = (event: Event) => {
+      const detail = (event as CustomEvent<{ delta?: number; value?: number }>).detail;
+      const value = detail?.value;
+      if (typeof value === 'number') {
+        setPresetColumnCount(normalizeCapabilityPresetColumnCount(value));
+        return;
+      }
+      const delta = Math.floor(Number(detail?.delta ?? 0));
+      if (!Number.isFinite(delta) || delta === 0) return;
+      setPresetColumnCount((n) => normalizeCapabilityPresetColumnCount(n + delta));
+    };
+    window.addEventListener('ac:capability-preset-column-count', onColumnAdjust as EventListener);
+    return () => {
+      window.removeEventListener('ac:capability-preset-column-count', onColumnAdjust as EventListener);
+    };
+  }, []);
+  useEffect(() => {
+    writeLocalJson(CAPABILITY_PRESET_COLUMNS_KEY, normalizeCapabilityPresetColumnCount(presetColumnCount));
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('ac:capability-preset-column-count-changed', {
+          detail: { value: normalizeCapabilityPresetColumnCount(presetColumnCount) },
+        })
+      );
+    }
+  }, [presetColumnCount]);
 
   /** 预设来源：presetId -> 包名（来自已安装包的为包名，否则为本地） */
   const presetSourceMap = useMemo(() => {
@@ -901,8 +1125,12 @@ const CapabilityPresetSection: React.FC<{
     const isBuiltinPipeline = (p: CustomAppModule) =>
       p.category === 'image_to_image' && getCapabilityEngine(p) === 'builtin';
     if (viewMode === 'image_process') return presets.filter(isBuiltinPipeline);
-    return presets.filter((p) => !isBuiltinPipeline(p));
-  }, [presets, viewMode]);
+    return presets.filter((p) => {
+      if (isBuiltinPipeline(p)) return false;
+      if (presetTypeFilter === 'all') return true;
+      return p.category === presetTypeFilter;
+    });
+  }, [presets, viewMode, presetTypeFilter]);
 
   useEffect(() => {
     if (!pendingScrollTarget) return;
@@ -968,6 +1196,26 @@ const CapabilityPresetSection: React.FC<{
           }
         }}
         className={`flex flex-col gap-6 min-h-0 w-full max-w-4xl mx-auto overflow-y-auto no-scrollbar ${embeddedInWorkflow ? 'flex-1' : 'max-h-[calc(100dvh-12rem)]'}`}
+        onWheelCapture={(e) => {
+          const hasPresetDrag = (() => {
+            if (typeof window === 'undefined') return false;
+            try {
+              return Boolean((window as Window & { __acDraggingPresetId?: string | null }).__acDraggingPresetId);
+            } catch {
+              return false;
+            }
+          })();
+          const isDragging = Boolean(draggingPresetId) || hasPresetDrag;
+          if (!isDragging) return;
+          const dy = normalizeWheelDeltaY(e);
+          if (!Number.isFinite(dy) || Math.abs(dy) < 0.1) return;
+          e.preventDefault();
+          e.stopPropagation();
+          (e.currentTarget as HTMLDivElement).scrollTop += dy;
+        }}
+        onDragOverCapture={(e) => {
+          autoScrollContainerOnDrag(e.currentTarget as HTMLElement, e.clientY);
+        }}
       >
       {!embeddedInWorkflow && (
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between w-full min-w-0">
@@ -995,6 +1243,29 @@ const CapabilityPresetSection: React.FC<{
         </button>
         </div>
         <div className="flex items-center justify-end gap-2 flex-wrap w-full sm:w-auto sm:shrink-0 sm:ml-auto">
+          <div className="h-8 inline-flex items-center rounded-lg border border-[#2e2e32] bg-[#1c1c22] overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setPresetColumnCount((n) => Math.max(CAPABILITY_PRESET_COLUMNS_MIN, n - 1))}
+              disabled={presetColumnCount <= CAPABILITY_PRESET_COLUMNS_MIN}
+              className="w-8 h-8 text-[11px] font-black text-gray-300 hover:bg-[#2e2e36] disabled:opacity-35 disabled:hover:bg-transparent"
+              aria-label="减少能力预设列数"
+            >
+              −
+            </button>
+            <span className="w-9 h-8 inline-flex items-center justify-center text-[9px] font-black text-blue-300 border-x border-[#2e2e32]">
+              {presetColumnCount}
+            </span>
+            <button
+              type="button"
+              onClick={() => setPresetColumnCount((n) => Math.min(CAPABILITY_PRESET_COLUMNS_MAX, n + 1))}
+              disabled={presetColumnCount >= CAPABILITY_PRESET_COLUMNS_MAX}
+              className="w-8 h-8 text-[11px] font-black text-gray-300 hover:bg-[#2e2e36] disabled:opacity-35 disabled:hover:bg-transparent"
+              aria-label="增加能力预设列数"
+            >
+              +
+            </button>
+          </div>
           <button
             type="button"
             onClick={() => {
@@ -1037,7 +1308,10 @@ const CapabilityPresetSection: React.FC<{
               暂无能力集合，点击「添加能力集合」进入画布拖拽连线。
             </div>
           ) : (
-            <div className="columns-1 sm:columns-2 lg:columns-3 xl:columns-4 [column-gap:0.75rem] [column-fill:_balance]">
+            <div
+              className="[column-gap:0.75rem] [column-fill:_balance]"
+              style={{ columnCount: normalizeCapabilityPresetColumnCount(presetColumnCount) }}
+            >
               {sets.map((s) => (
                 <button
                   type="button"
@@ -1424,11 +1698,15 @@ const CapabilityPresetSection: React.FC<{
           </div>
         ) : (
           <>
-            <div className="columns-1 sm:columns-2 lg:columns-3 xl:columns-4 [column-gap:0.75rem] [column-fill:_balance]">
+            <div
+              className="[column-gap:0.75rem] [column-fill:_balance]"
+              style={{ columnCount: normalizeCapabilityPresetColumnCount(presetColumnCount) }}
+            >
               {visiblePresets.map((p) => {
                 const src = getCardPreviewSrc(p);
                 const categoryLabel = CAPABILITY_CATEGORIES.find((c) => c.id === p.category)?.label ?? p.category;
                 const iconName = p.category === 'generate_3d' ? 'cube' : isBuiltinImagePipelinePreset(p) ? 'camera' : 'image';
+                const isTextToTextPreset = p.category === 'text_to_text';
                 return (
                   <button
                     key={p.id}
@@ -1438,6 +1716,8 @@ const CapabilityPresetSection: React.FC<{
                       embeddedInWorkflow
                         ? (e) => {
                             e.stopPropagation();
+                            setDraggingPresetId(p.id);
+                            setGlobalDraggingPresetId(p.id);
                             try {
                               e.dataTransfer.setData(DT_AC_CAPABILITY_FROM_EDITOR, p.id);
                               e.dataTransfer.setData('text/plain', p.id);
@@ -1445,6 +1725,16 @@ const CapabilityPresetSection: React.FC<{
                             } catch {
                               /* ignore */
                             }
+                            applyPresetDragImage(e, p);
+                          }
+                        : undefined
+                    }
+                    onDragEnd={
+                      embeddedInWorkflow
+                        ? () => {
+                            setDraggingPresetId((prev) => (prev === p.id ? null : prev));
+                            setGlobalDraggingPresetId(null);
+                            clearPresetDragPreview();
                           }
                         : undefined
                     }
@@ -1464,78 +1754,94 @@ const CapabilityPresetSection: React.FC<{
                       if (!getGeneratedPreviewThumbSrc(p) || !getOriginalPreviewThumbSrc(p)) return;
                       setPreviewSplitRatio((prev) => ({ ...prev, [p.id]: 0.5 }));
                     }}
-                    className="inline-block align-top mb-3 w-full break-inside-avoid rounded-2xl border border-[#2e2e32] bg-[#16161a] overflow-hidden text-left hover:border-blue-400/50 transition-colors group"
+                    className={`inline-block align-top mb-3 w-full break-inside-avoid rounded-2xl border bg-[#16161a] overflow-hidden text-left transition-colors group ${
+                      draggingPresetId === p.id
+                        ? 'border-blue-500/70 ring-1 ring-blue-500/40 opacity-70'
+                        : 'border-[#2e2e32] hover:border-blue-400/50'
+                    }`}
                   >
-                    <div
-                      className="relative w-full bg-[#0f0f10] flex justify-center"
-                      style={{ aspectRatio: `${cardAspectByPresetId[p.id] ?? 1}` }}
-                    >
-                      {(() => {
-                        const originalThumb = getOriginalPreviewThumbSrc(p);
-                        const generatedThumb = getGeneratedPreviewThumbSrc(p);
-                        if (originalThumb && generatedThumb) {
-                          const split = previewSplitRatio[p.id] ?? 0.5;
-                          const splitPct = split * 100;
-                          const slant = 4;
-                          const topCut = Math.max(0, Math.min(100, splitPct + slant));
-                          const bottomCut = Math.max(0, Math.min(100, splitPct - slant));
-                          const lineTopLeft = Math.max(0, Math.min(100, topCut - 0.35));
-                          const lineTopRight = Math.max(0, Math.min(100, topCut + 0.35));
-                          const lineBottomLeft = Math.max(0, Math.min(100, bottomCut - 0.35));
-                          const lineBottomRight = Math.max(0, Math.min(100, bottomCut + 0.35));
-                          return (
-                            <>
-                              <CapabilityPreviewImg
-                                src={originalThumb}
-                                alt=""
-                                className="absolute inset-0 h-full w-full min-h-[5rem] object-contain"
-                                onIntrinsicSize={(w, h) => onPresetCardIntrinsicSize(p.id, w, h)}
-                              />
-                              <CapabilityPreviewImg
-                                src={generatedThumb}
-                                alt=""
-                                className="absolute inset-0 h-full w-full min-h-[5rem] object-contain"
-                                onIntrinsicSize={(w, h) => onPresetCardIntrinsicSize(p.id, w, h)}
-                                style={{ clipPath: `polygon(${topCut}% 0%, 100% 0%, 100% 100%, ${bottomCut}% 100%)` }}
-                              />
-                              <div
-                                className="absolute inset-0 pointer-events-none"
-                                style={{
-                                  clipPath: `polygon(${lineTopLeft}% 0%, ${lineTopRight}% 0%, ${lineBottomRight}% 100%, ${lineBottomLeft}% 100%)`,
-                                  background: 'linear-gradient(180deg, rgba(255,255,255,0.82) 0%, rgba(191,219,254,0.92) 50%, rgba(255,255,255,0.78) 100%)',
-                                  boxShadow: '0 0 10px rgba(59,130,246,0.35)',
-                                }}
-                              />
-                            </>
-                          );
-                        }
-                        if (src) {
-                          return (
-                            <CapabilityPreviewImg
-                              src={src}
-                              alt=""
-                              className="h-full w-full min-h-[5rem] object-contain"
-                              onIntrinsicSize={(w, h) => onPresetCardIntrinsicSize(p.id, w, h)}
-                            />
-                          );
-                        }
-                        return (
-                          <div className="h-full min-h-[5rem] w-full flex flex-col items-center justify-center gap-1 text-gray-600">
-                            <AppIcon name={iconName} className="w-10 h-10 opacity-75" />
-                            <span className="text-[8px] font-black uppercase tracking-wide text-gray-500">预览</span>
-                          </div>
-                        );
-                      })()}
-                      <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-2">
+                    {isTextToTextPreset ? (
+                      <div className="p-2.5 min-h-[4.5rem] flex flex-col justify-between gap-1.5">
                         <div className="text-[10px] font-black text-white truncate">{p.label}</div>
-                        <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+                        <div className="flex items-center gap-1.5 flex-wrap">
                           <span className="px-2 py-0.5 rounded text-[8px] font-black uppercase bg-[#26262c]/95 text-gray-300">{categoryLabel}</span>
                           <span className={`px-2 py-0.5 rounded text-[8px] font-black uppercase ${p.enabled === false ? 'bg-[#4a1c1c]/95 text-red-300' : 'bg-[#166534]/95 text-green-300'}`}>
                             {p.enabled === false ? '禁用' : '启用'}
                           </span>
                         </div>
                       </div>
-                    </div>
+                    ) : (
+                      <div
+                        className="relative w-full bg-[#0f0f10] flex justify-center"
+                        style={{ aspectRatio: `${cardAspectByPresetId[p.id] ?? 1}` }}
+                      >
+                        {(() => {
+                          const originalThumb = getOriginalPreviewThumbSrc(p);
+                          const generatedThumb = getGeneratedPreviewThumbSrc(p);
+                          if (originalThumb && generatedThumb) {
+                            const split = previewSplitRatio[p.id] ?? 0.5;
+                            const splitPct = split * 100;
+                            const slant = 4;
+                            const topCut = Math.max(0, Math.min(100, splitPct + slant));
+                            const bottomCut = Math.max(0, Math.min(100, splitPct - slant));
+                            const lineTopLeft = Math.max(0, Math.min(100, topCut - 0.35));
+                            const lineTopRight = Math.max(0, Math.min(100, topCut + 0.35));
+                            const lineBottomLeft = Math.max(0, Math.min(100, bottomCut - 0.35));
+                            const lineBottomRight = Math.max(0, Math.min(100, bottomCut + 0.35));
+                            return (
+                              <>
+                                <CapabilityPreviewImg
+                                  src={originalThumb}
+                                  alt=""
+                                  className="absolute inset-0 h-full w-full min-h-[5rem] object-contain"
+                                  onIntrinsicSize={(w, h) => onPresetCardIntrinsicSize(p.id, w, h)}
+                                />
+                                <CapabilityPreviewImg
+                                  src={generatedThumb}
+                                  alt=""
+                                  className="absolute inset-0 h-full w-full min-h-[5rem] object-contain"
+                                  onIntrinsicSize={(w, h) => onPresetCardIntrinsicSize(p.id, w, h)}
+                                  style={{ clipPath: `polygon(${topCut}% 0%, 100% 0%, 100% 100%, ${bottomCut}% 100%)` }}
+                                />
+                                <div
+                                  className="absolute inset-0 pointer-events-none"
+                                  style={{
+                                    clipPath: `polygon(${lineTopLeft}% 0%, ${lineTopRight}% 0%, ${lineBottomRight}% 100%, ${lineBottomLeft}% 100%)`,
+                                    background: 'linear-gradient(180deg, rgba(255,255,255,0.82) 0%, rgba(191,219,254,0.92) 50%, rgba(255,255,255,0.78) 100%)',
+                                    boxShadow: '0 0 10px rgba(59,130,246,0.35)',
+                                  }}
+                                />
+                              </>
+                            );
+                          }
+                          if (src) {
+                            return (
+                              <CapabilityPreviewImg
+                                src={src}
+                                alt=""
+                                className="h-full w-full min-h-[5rem] object-contain"
+                                onIntrinsicSize={(w, h) => onPresetCardIntrinsicSize(p.id, w, h)}
+                              />
+                            );
+                          }
+                          return (
+                            <div className="h-full min-h-[5rem] w-full flex flex-col items-center justify-center gap-1 text-gray-600">
+                              <AppIcon name={iconName} className="w-10 h-10 opacity-75" />
+                              <span className="text-[8px] font-black uppercase tracking-wide text-gray-500">预览</span>
+                            </div>
+                          );
+                        })()}
+                        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-2">
+                          <div className="text-[10px] font-black text-white truncate">{p.label}</div>
+                          <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+                            <span className="px-2 py-0.5 rounded text-[8px] font-black uppercase bg-[#26262c]/95 text-gray-300">{categoryLabel}</span>
+                            <span className={`px-2 py-0.5 rounded text-[8px] font-black uppercase ${p.enabled === false ? 'bg-[#4a1c1c]/95 text-red-300' : 'bg-[#166534]/95 text-green-300'}`}>
+                              {p.enabled === false ? '禁用' : '启用'}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </button>
                 );
               })}
@@ -1550,86 +1856,78 @@ const CapabilityPresetSection: React.FC<{
         )}
       </div>
 
-      {typeof document !== 'undefined' &&
-        detailPreset &&
-        createPortal(
+      {detailPreset && (
+        <ImagePreviewOverlay
+          open
+          resetKey={`capability-preset:${detailPreset.id}`}
+          imageSrc={detailHasCompare ? undefined : (detailMainPreview || undefined)}
+          centerSlot={
+            detailHasCompare ? (
+              <div
+                className="relative w-[min(80rem,calc(100vw-3rem))] max-w-[calc(100vw-3rem)] h-[min(82vh,860px)] rounded-2xl overflow-hidden shadow-2xl bg-transparent"
+                onMouseMove={(e) => {
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  if (!rect.width) return;
+                  const ratio = (e.clientX - rect.left) / rect.width;
+                  setLightboxSplitRatio(Math.max(0.05, Math.min(0.95, ratio)));
+                }}
+                onMouseLeave={() => setLightboxSplitRatio(0.5)}
+              >
+                {(() => {
+                  const splitPct = lightboxSplitRatio * 100;
+                  const slant = 4;
+                  const topCut = Math.max(0, Math.min(100, splitPct + slant));
+                  const bottomCut = Math.max(0, Math.min(100, splitPct - slant));
+                  const lineTopLeft = Math.max(0, Math.min(100, topCut - 0.25));
+                  const lineTopRight = Math.max(0, Math.min(100, topCut + 0.25));
+                  const lineBottomLeft = Math.max(0, Math.min(100, bottomCut - 0.25));
+                  const lineBottomRight = Math.max(0, Math.min(100, bottomCut + 0.25));
+                  return (
+                    <>
+                      <CapabilityPreviewImg src={detailOriginalPreview} alt="原图" className="absolute inset-0 h-full w-full object-contain" />
+                      <CapabilityPreviewImg
+                        src={detailGeneratedPreview}
+                        alt="生成图"
+                        className="absolute inset-0 h-full w-full object-contain"
+                        style={{ clipPath: `polygon(${topCut}% 0%, 100% 0%, 100% 100%, ${bottomCut}% 100%)` }}
+                      />
+                      <div
+                        className="absolute inset-0 pointer-events-none"
+                        style={{
+                          clipPath: `polygon(${lineTopLeft}% 0%, ${lineTopRight}% 0%, ${lineBottomRight}% 100%, ${lineBottomLeft}% 100%)`,
+                          background: 'linear-gradient(180deg, rgba(255,255,255,0.82) 0%, rgba(191,219,254,0.92) 50%, rgba(255,255,255,0.78) 100%)',
+                          boxShadow: '0 0 10px rgba(59,130,246,0.35)',
+                        }}
+                      />
+                    </>
+                  );
+                })()}
+              </div>
+            ) : detailMainPreview ? undefined : (
+              <div className="w-[min(80rem,calc(100vw-3rem))] max-w-[calc(100vw-3rem)] h-[min(82vh,860px)] rounded-2xl border border-white/10 bg-[#0f0f12]/98 flex items-center justify-center text-gray-500 text-[10px]">
+                暂无预览图
+              </div>
+            )
+          }
+          onClose={() => setDetailPresetId(null)}
+          wheelListLength={1}
+          onWheelNavigate={() => {}}
+          enablePanoramaMode={!detailHasCompare && Boolean(detailMainPreview)}
+          shellZIndexClassName="z-[10000]"
+          contentRightInset="min(24rem,30vw)"
+        >
           <div
-            className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/78 backdrop-blur-sm p-3 md:p-5"
-            data-ac-esc-sink
-            onClick={() => setDetailPresetId(null)}
-            role="presentation"
+            className="absolute top-16 right-4 z-[9] w-[min(24rem,30vw)] max-h-[72vh]"
+            data-image-preview-no-wheel
+            data-image-preview-scroll
           >
-            <div
-              className="w-full max-w-[min(1500px,98vw)] h-[min(94vh,980px)] rounded-2xl border border-[#2e2e32] bg-[#101014] overflow-hidden shadow-2xl"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="h-full grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px] xl:grid-cols-[minmax(0,1fr)_420px]">
-                <div className="min-h-0 bg-[#0b0b0d] border-b lg:border-b-0 lg:border-r border-[#2e2e32]">
-                  <div className="h-full flex flex-col">
-                    <div className="shrink-0 px-4 py-3 border-b border-[#2e2e32] flex items-center justify-between bg-[#0f1014]">
-                      <div className="min-w-0">
-                        <div className="text-[9px] text-gray-500 uppercase tracking-wide">能力预览</div>
-                        <div className="text-[14px] font-black text-white truncate mt-0.5">{detailPreset.label}</div>
-                        <div className="text-[9px] text-gray-500 mt-0.5">左侧预览对比，右侧参数与操作</div>
-                      </div>
-                      <button type="button" onClick={() => setDetailPresetId(null)} className="px-3 py-2 rounded-xl bg-[#1a1a1e]/95 border border-[#2e2e32] text-[10px] font-black text-white hover:bg-[#2a2a32]">关闭</button>
-                    </div>
-                    <div
-                      className="flex-1 min-h-0 w-full bg-[#0f0f10] relative"
-                      onMouseMove={(e) => {
-                        const original = getOriginalPreviewSrc(detailPreset) || getOriginalPreviewThumbSrc(detailPreset);
-                        const generated = getGeneratedPreviewSrc(detailPreset) || getGeneratedPreviewThumbSrc(detailPreset);
-                        if (!original || !generated) return;
-                        const rect = e.currentTarget.getBoundingClientRect();
-                        if (!rect.width) return;
-                        const ratio = (e.clientX - rect.left) / rect.width;
-                        setLightboxSplitRatio(Math.max(0.05, Math.min(0.95, ratio)));
-                      }}
-                      onMouseLeave={() => setLightboxSplitRatio(0.5)}
-                    >
-                      {(() => {
-                        const original = getOriginalPreviewSrc(detailPreset) || getOriginalPreviewThumbSrc(detailPreset);
-                        const generated = getGeneratedPreviewSrc(detailPreset) || getGeneratedPreviewThumbSrc(detailPreset);
-                        if (original && generated) {
-                          const splitPct = lightboxSplitRatio * 100;
-                          const slant = 4;
-                          const topCut = Math.max(0, Math.min(100, splitPct + slant));
-                          const bottomCut = Math.max(0, Math.min(100, splitPct - slant));
-                          const lineTopLeft = Math.max(0, Math.min(100, topCut - 0.25));
-                          const lineTopRight = Math.max(0, Math.min(100, topCut + 0.25));
-                          const lineBottomLeft = Math.max(0, Math.min(100, bottomCut - 0.25));
-                          const lineBottomRight = Math.max(0, Math.min(100, bottomCut + 0.25));
-                          return (
-                            <>
-                              <CapabilityPreviewImg src={original} alt="原图" className="absolute inset-0 h-full w-full object-contain" />
-                              <CapabilityPreviewImg
-                                src={generated}
-                                alt="生成图"
-                                className="absolute inset-0 h-full w-full object-contain"
-                                style={{ clipPath: `polygon(${topCut}% 0%, 100% 0%, 100% 100%, ${bottomCut}% 100%)` }}
-                              />
-                              <div
-                                className="absolute inset-0 pointer-events-none"
-                                style={{
-                                  clipPath: `polygon(${lineTopLeft}% 0%, ${lineTopRight}% 0%, ${lineBottomRight}% 100%, ${lineBottomLeft}% 100%)`,
-                                  background: 'linear-gradient(180deg, rgba(255,255,255,0.82) 0%, rgba(191,219,254,0.92) 50%, rgba(255,255,255,0.78) 100%)',
-                                  boxShadow: '0 0 10px rgba(59,130,246,0.35)',
-                                }}
-                              />
-                            </>
-                          );
-                        }
-                        const src = getCardPreviewSrc(detailPreset);
-                        if (!src) {
-                          return <div className="h-full min-h-[18rem] flex items-center justify-center text-gray-500 text-[10px]">暂无预览图</div>;
-                        }
-                        return <CapabilityPreviewImg src={src} alt="" className="h-full max-h-full w-full object-contain" />;
-                      })()}
-                    </div>
-                  </div>
-                </div>
-                <div className="min-h-0 overflow-y-auto p-3 md:p-4 space-y-3 bg-[#121216]">
-                  <div className="rounded-2xl border border-[#2e2e32] bg-[#16161a] p-3 space-y-2">
+            <div className="h-full overflow-y-auto rounded-2xl border border-white/10 bg-[#0f0f12]/98 p-3 md:p-4 space-y-3 shadow-xl backdrop-blur-[2px]">
+              <div className="rounded-2xl border border-[#2e2e32] bg-[#16161a] p-3 space-y-2">
+                <div className="text-[9px] text-gray-500 uppercase tracking-wide">能力预览</div>
+                <div className="text-[14px] font-black text-white truncate">{detailPreset.label}</div>
+                <div className="text-[9px] text-gray-500">左侧预览对比，右侧参数与操作</div>
+              </div>
+              <div className="rounded-2xl border border-[#2e2e32] bg-[#16161a] p-3 space-y-2">
                     {detailEditMode ? (
                       editingId === 'cut_image' ? (
                         <>
@@ -1901,47 +2199,88 @@ const CapabilityPresetSection: React.FC<{
                         <button type="button" onClick={() => beginDetailEdit(detailPreset)} className="px-3 py-1.5 rounded-lg border border-[#36578f] bg-[#1d3154] text-[9px] font-black uppercase text-blue-200 hover:bg-[#264171]">编辑参数</button>
                       </>
                     )}
-                  </div>
-                  <div className="rounded-2xl border border-[#2e2e32] bg-[#16161a] p-3 space-y-2">
-                    <div className="text-[9px] text-gray-500 uppercase">功能按钮</div>
-                    <input
-                      ref={(el) => { fileInputRef.current[detailPreset.id] = el; }}
-                      type="file"
-                      accept="image/*"
-                      className="hidden"
-                      onChange={(e) => handleFile(detailPreset.id, e)}
-                    />
-                    <button type="button" onClick={() => fileInputRef.current[detailPreset.id]?.click()} className="w-full px-3 py-2 rounded-lg border border-[#36578f] bg-[#1d3154] text-blue-200 text-[9px] font-black uppercase hover:bg-[#264171]">上传预览图</button>
-                    {onRunTest && detailPreset.category !== 'generate_3d' && (
-                      <button
-                        type="button"
-                        disabled={!testImage[detailPreset.id] || testRunning[detailPreset.id]}
-                        onClick={() => runTest(detailPreset)}
-                        className="w-full px-3 py-2 rounded-lg border border-[#36578f] bg-[#1d3154] text-blue-200 text-[9px] font-black uppercase hover:bg-[#264171] disabled:opacity-50 disabled:pointer-events-none"
-                      >
-                        {testRunning[detailPreset.id] ? '运行中…' : '运行测试'}
-                      </button>
-                    )}
-                    {canUploadToR2 && (
-                      <>
-                        <button type="button" onClick={() => void uploadPresetToR2(detailPreset, 'preview')} disabled={!!uploadingPresetActions[detailPreset.id]} className="w-full px-3 py-2 rounded-lg border border-[#36578f] bg-[#1d3154] text-blue-200 text-[9px] font-black uppercase hover:bg-[#264171] disabled:opacity-50">
-                          {uploadingPresetActions[detailPreset.id] === 'preview' ? '上传中…' : '上传预览图到R2'}
-                        </button>
-                        <button type="button" onClick={() => void uploadPresetToR2(detailPreset, 'preset')} disabled={!!uploadingPresetActions[detailPreset.id]} className="w-full px-3 py-2 rounded-lg border border-[#36578f] bg-[#1d3154] text-blue-200 text-[9px] font-black uppercase hover:bg-[#264171] disabled:opacity-50">
-                          {uploadingPresetActions[detailPreset.id] === 'preset' ? '上传中…' : '上传预设到R2'}
-                        </button>
-                      </>
-                    )}
-                    <button type="button" onClick={() => { removePreset(detailPreset.id); setDetailPresetId(null); }} disabled={isBuiltinImageProcess(detailPreset)} className="w-full px-3 py-2 rounded-lg border border-[#2e2e32] bg-[#1a1a1f] text-gray-200 text-[9px] font-black uppercase hover:bg-[#262630] disabled:opacity-50">
-                      删除预设
-                    </button>
-                  </div>
-                </div>
               </div>
             </div>
-          </div>,
-          document.body
-        )}
+          </div>
+          <div
+            className="absolute bottom-4 z-10 max-h-[42vh] overflow-y-auto rounded-xl border border-white/10 bg-[#0f0f12]/98 p-3 sm:p-4 space-y-3 shadow-xl backdrop-blur-[2px]"
+            style={{
+              left: '50%',
+              transform: 'translateX(-50%)',
+              width: 'min(58rem, calc(100vw - 3rem))',
+            }}
+            data-image-preview-no-wheel
+            data-image-preview-scroll
+          >
+            <div className="flex flex-wrap gap-1.5 justify-center items-center">
+              <input
+                ref={(el) => { fileInputRef.current[detailPreset.id] = el; }}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => handleFile(detailPreset.id, e)}
+              />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current[detailPreset.id]?.click()}
+                className="px-3 py-1.5 rounded-lg border border-[#36578f] bg-[#1d3154] text-blue-200 text-[9px] font-black uppercase hover:bg-[#264171]"
+              >
+                上传预览图
+              </button>
+              {onRunTest && detailPreset.category !== 'generate_3d' && (
+                <button
+                  type="button"
+                  disabled={!testImage[detailPreset.id] || testRunning[detailPreset.id]}
+                  onClick={() => runTest(detailPreset)}
+                  className="px-3 py-1.5 rounded-lg border border-[#36578f] bg-[#1d3154] text-blue-200 text-[9px] font-black uppercase hover:bg-[#264171] disabled:opacity-50 disabled:pointer-events-none"
+                >
+                  {testRunning[detailPreset.id] ? '运行中…' : '运行测试'}
+                </button>
+              )}
+              {canUploadToR2 && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => void uploadPresetToR2(detailPreset, 'preview')}
+                    disabled={!!uploadingPresetActions[detailPreset.id]}
+                    className="px-3 py-1.5 rounded-lg border border-[#36578f] bg-[#1d3154] text-blue-200 text-[9px] font-black uppercase hover:bg-[#264171] disabled:opacity-50"
+                  >
+                    {uploadingPresetActions[detailPreset.id] === 'preview' ? '上传中…' : '上传预览图到R2'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void uploadPresetToR2(detailPreset, 'preset')}
+                    disabled={!!uploadingPresetActions[detailPreset.id]}
+                    className="px-3 py-1.5 rounded-lg border border-[#36578f] bg-[#1d3154] text-blue-200 text-[9px] font-black uppercase hover:bg-[#264171] disabled:opacity-50"
+                  >
+                    {uploadingPresetActions[detailPreset.id] === 'preset' ? '上传中…' : '上传预设到R2'}
+                  </button>
+                </>
+              )}
+              {!detailEditMode && (
+                <button
+                  type="button"
+                  onClick={() => beginDetailEdit(detailPreset)}
+                  className="px-3 py-1.5 rounded-lg border border-[#36578f] bg-[#1d3154] text-[9px] font-black uppercase text-blue-200 hover:bg-[#264171]"
+                >
+                  编辑参数
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  removePreset(detailPreset.id);
+                  setDetailPresetId(null);
+                }}
+                disabled={isBuiltinImageProcess(detailPreset)}
+                className="px-3 py-1.5 rounded-lg border border-[#2e2e32] bg-[#1a1a1f] text-gray-200 text-[9px] font-black uppercase hover:bg-[#262630] disabled:opacity-50"
+              >
+                删除预设
+              </button>
+            </div>
+          </div>
+        </ImagePreviewOverlay>
+      )}
 
       {typeof document !== 'undefined' &&
         (lightboxImage || lightboxCompare) &&

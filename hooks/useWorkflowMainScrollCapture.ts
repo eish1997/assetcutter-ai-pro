@@ -1,5 +1,5 @@
 import { useCallback, useRef, type MouseEvent as ReactMouseEvent, type WheelEvent as ReactWheelEvent, type DragEvent as ReactDragEvent } from 'react';
-import { DT_AC_CAPABILITY_ACTION } from '../services/workflowDragPipeline';
+import { DT_AC_CAPABILITY_ACTION, DT_AC_CAPABILITY_ACTION_SOURCE } from '../services/workflowDragPipeline';
 
 export type WorkflowCapabilityGutterDropConfig = {
   enabled: boolean;
@@ -13,6 +13,15 @@ function dragTypesIncludeCapabilityAction(dt: DataTransfer | null): boolean {
     return Array.from(dt.types).includes(DT_AC_CAPABILITY_ACTION);
   } catch {
     return false;
+  }
+}
+
+function readCapabilityActionSource(dt: DataTransfer | null): string {
+  if (!dt) return '';
+  try {
+    return (dt.getData(DT_AC_CAPABILITY_ACTION_SOURCE) || '').trim().toLowerCase();
+  } catch {
+    return '';
   }
 }
 
@@ -83,6 +92,7 @@ export function useWorkflowMainScrollCapture(
       const cfg = capabilityGutterDrop;
       if (!cfg?.enabled) return;
       if (!dragTypesIncludeCapabilityAction(e.dataTransfer)) return;
+      if (readCapabilityActionSource(e.dataTransfer) === 'favorite') return;
       if (!isPointerInMainRightGutter(e.clientX)) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
@@ -95,6 +105,7 @@ export function useWorkflowMainScrollCapture(
       const cfg = capabilityGutterDrop;
       if (!cfg?.enabled) return;
       if (!dragTypesIncludeCapabilityAction(e.dataTransfer)) return;
+      if (readCapabilityActionSource(e.dataTransfer) === 'favorite') return;
       if (!isPointerInMainRightGutter(e.clientX)) return;
       let id = '';
       try {

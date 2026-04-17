@@ -39,6 +39,7 @@ import {
 } from '../services/workflowImageTags';
 import AppIcon from './ui/AppIcon';
 import { ImagePreviewOverlay } from './ImagePreviewOverlay';
+import { CustomDropdown } from './ui/CustomDropdown';
 import { resolveCapabilityPreviewSrc } from '../services/capabilityPreviewUrl';
 import { WorkflowCapabilityHoverPreview } from './WorkflowCapabilityHoverPreview';
 import { WorkflowGridImage } from './ProgressivePreviewImage';
@@ -47,6 +48,7 @@ import { workflowSafeImgSrc } from '../services/workflowImageDisplay';
 import {
   type AcWorkflowExportPayload,
   DT_AC_CAPABILITY_ACTION,
+  DT_AC_CAPABILITY_ACTION_SOURCE,
   DT_AC_CAPABILITY_FROM_EDITOR,
   DT_AC_WORKFLOW_EXPORT,
   parseAcWorkflowExportDragSources,
@@ -107,6 +109,7 @@ import { workflowTopTitleGridStyle } from './workflow/workflowPaneLayout';
 import { WorkflowSidebarColumn, type WorkflowSidebarFavoriteEntry } from './workflow/WorkflowSidebarColumn';
 import { buildWorkflowComposerSeedFromTwoPresets } from './workflow/buildWorkflowComposerSeed';
 import type { CapabilityAssetCandidate } from './CapabilitySetCanvas';
+import { BUILTIN_IMAGE_PROCESS_IDS } from '../services/capabilityPresetStore';
 
 const WorkflowComposerOverlay = lazy(() => import('./WorkflowComposerOverlay'));
 
@@ -131,11 +134,62 @@ type WorkflowGroupOverrides = {
 
 const WORKFLOW_GROUP_GENERATE_COUNT_HARD_MAX = 999;
 const WORKFLOW_GROUP_GENERATE_CONFIRM_THRESHOLD = 20;
+const CAPABILITY_PRESET_COLUMNS_KEY = 'ac_capability_preset_columns_v1';
+const CAPABILITY_PRESET_COLUMNS_MIN = 2;
+const CAPABILITY_PRESET_COLUMNS_MAX = 6;
+
+type CapabilityPresetTypeFilter = 'all' | 'text_to_text' | 'text_to_image' | 'image_to_image' | 'image_to_text';
+const CAPABILITY_PRESET_TYPE_FILTER_OPTIONS: Array<{ value: CapabilityPresetTypeFilter; label: string }> = [
+  { value: 'all', label: '全部类型' },
+  { value: 'text_to_text', label: '文生文' },
+  { value: 'text_to_image', label: '文生图' },
+  { value: 'image_to_image', label: '图生图' },
+  { value: 'image_to_text', label: '图生文' },
+];
+const DRAG_SCROLL_EDGE_PX = 64;
+const DRAG_SCROLL_MAX_STEP_PX = 28;
 
 function normalizeWorkflowGenerateCount(raw: unknown): number {
   const n = Math.floor(Number(raw));
   if (!Number.isFinite(n)) return 1;
   return Math.max(1, Math.min(WORKFLOW_GROUP_GENERATE_COUNT_HARD_MAX, n));
+}
+
+function normalizeCapabilityPresetColumnCount(raw: unknown): number {
+  const n = Math.floor(Number(raw));
+  if (!Number.isFinite(n)) return 6;
+  return Math.max(CAPABILITY_PRESET_COLUMNS_MIN, Math.min(CAPABILITY_PRESET_COLUMNS_MAX, n));
+}
+
+function autoScrollContainerOnDrag(
+  container: HTMLElement,
+  clientY: number,
+  edgePx = DRAG_SCROLL_EDGE_PX,
+  maxStepPx = DRAG_SCROLL_MAX_STEP_PX
+): void {
+  if (!Number.isFinite(clientY) || clientY <= 0) return;
+  const rect = container.getBoundingClientRect();
+  if (!rect.height) return;
+  let delta = 0;
+  if (clientY < rect.top + edgePx) {
+    const ratio = (rect.top + edgePx - clientY) / edgePx;
+    delta = -Math.ceil(Math.max(0, Math.min(1, ratio)) * maxStepPx);
+  } else if (clientY > rect.bottom - edgePx) {
+    const ratio = (clientY - (rect.bottom - edgePx)) / edgePx;
+    delta = Math.ceil(Math.max(0, Math.min(1, ratio)) * maxStepPx);
+  }
+  if (delta !== 0) container.scrollTop += delta;
+}
+
+function normalizeWheelDeltaY(e: React.WheelEvent<HTMLElement>): number {
+  let dy = e.deltaY;
+  if (Math.abs(e.deltaX) > Math.abs(dy)) dy = e.deltaX;
+  if (e.deltaMode === 1) dy *= 16;
+  if (e.deltaMode === 2) dy *= 120;
+  if (!dy && typeof (e as unknown as { wheelDelta?: number }).wheelDelta === 'number') {
+    dy = -(e as unknown as { wheelDelta: number }).wheelDelta / 3;
+  }
+  return dy;
 }
 
 function readCapabilityDragActionId(dataTransfer: DataTransfer | null): string | null {
@@ -152,6 +206,15 @@ function readCapabilityDragActionId(dataTransfer: DataTransfer | null): string |
   }
   const id = raw.trim();
   return id || null;
+}
+
+function readCapabilityDragSource(dataTransfer: DataTransfer | null): string {
+  if (!dataTransfer) return '';
+  try {
+    return (dataTransfer.getData(DT_AC_CAPABILITY_ACTION_SOURCE) || '').trim().toLowerCase();
+  } catch {
+    return '';
+  }
 }
 
 const WorkflowSection: React.FC<{
@@ -292,6 +355,12 @@ const WorkflowSection: React.FC<{
   const [selectedAssetIds, setSelectedAssetIds] = useState<Set<string>>(new Set());
   const [selectedGroupItemKeys, setSelectedGroupItemKeys] = useState<Set<string>>(new Set());
   const [capabilityPresetViewMode, setCapabilityPresetViewMode] = useState<'presets' | 'image_process' | 'sets'>('presets');
+  const [capabilityPresetTypeFilter, setCapabilityPresetTypeFilter] = useState<CapabilityPresetTypeFilter>('all');
+  const [capabilityPresetColumnCount, setCapabilityPresetColumnCount] = useState<number>(() =>
+    readLocalJson<number>(CAPABILITY_PRESET_COLUMNS_KEY, 6, (parsed) =>
+      typeof parsed === 'number' ? normalizeCapabilityPresetColumnCount(parsed) : null
+    )
+  );
   const [cardAspectByAssetId, setCardAspectByAssetId] = useState<Record<string, number>>(
     () => readSessionWorkflowCardAspects()
   );
@@ -309,6 +378,61 @@ const WorkflowSection: React.FC<{
   const centerScrollRef = useRef<HTMLDivElement>(null);
   const presetScrollRef = useRef<HTMLDivElement>(null);
   const [workspaceViewportWidth, setWorkspaceViewportWidth] = useState(0);
+  const handleCenterWheelDuringDrag = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
+    const hasPresetDrag = (() => {
+      if (typeof window === 'undefined') return false;
+      try {
+        return Boolean((window as Window & { __acDraggingPresetId?: string | null }).__acDraggingPresetId);
+      } catch {
+        return false;
+      }
+    })();
+    const isDragging =
+      Boolean(draggingAssetIds?.length) ||
+      Boolean(draggingGroupItems?.itemIndexes?.length) ||
+      Boolean(draggingActionIdRef.current) ||
+      hasPresetDrag;
+    if (!isDragging) return;
+    const dy = normalizeWheelDeltaY(e);
+    if (!Number.isFinite(dy) || Math.abs(dy) < 0.1) return;
+    e.preventDefault();
+    e.stopPropagation();
+    (e.currentTarget as HTMLDivElement).scrollTop += dy;
+  }, [draggingAssetIds, draggingGroupItems]);
+  useEffect(() => {
+    const el = centerScrollRef.current;
+    if (!el) return;
+    const onWheelNative = (ev: WheelEvent) => {
+      // React onWheelCapture 已处理时避免重复滚动
+      if (ev.defaultPrevented) return;
+      const hasPresetDrag = (() => {
+        if (typeof window === 'undefined') return false;
+        try {
+          return Boolean((window as Window & { __acDraggingPresetId?: string | null }).__acDraggingPresetId);
+        } catch {
+          return false;
+        }
+      })();
+      const isDragging =
+        Boolean(draggingAssetIds?.length) ||
+        Boolean(draggingGroupItems?.itemIndexes?.length) ||
+        Boolean(draggingActionIdRef.current) ||
+        hasPresetDrag;
+      if (!isDragging) return;
+      let dy = ev.deltaY;
+      if (Math.abs(ev.deltaX) > Math.abs(dy)) dy = ev.deltaX;
+      if (ev.deltaMode === 1) dy *= 16;
+      if (ev.deltaMode === 2) dy *= 120;
+      if (!Number.isFinite(dy) || Math.abs(dy) < 0.1) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      el.scrollTop += dy;
+    };
+    el.addEventListener('wheel', onWheelNative, { passive: false });
+    return () => {
+      el.removeEventListener('wheel', onWheelNative);
+    };
+  }, [draggingAssetIds, draggingGroupItems]);
 
   useLayoutEffect(() => {
     const key = onboardingKey ?? '';
@@ -388,6 +512,29 @@ const WorkflowSection: React.FC<{
   const [repositorySelectedTags, setRepositorySelectedTags] = useState<Set<string>>(new Set());
   const cardRefs = useRef<Map<string, HTMLElement>>(new Map());
   const libraryCardRefs = useRef<Map<string, HTMLElement>>(new Map());
+  const setSelectedRootAssetIds = useCallback<React.Dispatch<React.SetStateAction<Set<string>>>>(
+    (value) => {
+      setSelectedAssetIds((prev) => {
+        const resolved = typeof value === 'function' ? value(prev) : value;
+        const next = new Set<string>();
+        resolved.forEach((id) => {
+          const asset = assetsRef.current.find((x) => x.id === id);
+          if (!asset?.cutImageGroup?.length) {
+            next.add(id);
+          }
+        });
+        if (next.size === prev.size) {
+          let unchanged = true;
+          next.forEach((id) => {
+            if (!prev.has(id)) unchanged = false;
+          });
+          if (unchanged) return prev;
+        }
+        return next;
+      });
+    },
+    []
+  );
   const {
     marqueeActive,
     marqueeOverlayElRef,
@@ -401,7 +548,7 @@ const WorkflowSection: React.FC<{
     cardRefs,
     viewStackRef,
     pendingRef,
-    setSelectedAssetIds,
+    setSelectedAssetIds: setSelectedRootAssetIds,
     setSelectedGroupItemKeys,
   });
 
@@ -421,7 +568,7 @@ const WorkflowSection: React.FC<{
       if (!asset.parentAssetId) {
         setViewStack([]);
         setSelectedGroupItemKeys(new Set());
-        setSelectedAssetIds(new Set([asset.id]));
+        setSelectedRootAssetIds(new Set([asset.id]));
         requestAnimationFrame(() => {
           cardRefs.current.get(asset.id)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
         });
@@ -444,13 +591,13 @@ const WorkflowSection: React.FC<{
   const navigateOutlineToGroupItem = useCallback(
     (group: WorkflowAsset, itemIndex: number) => {
       setViewStack(workflowOutlineDrillStackToEnterGroup(group.id, assets));
-      setSelectedAssetIds(new Set());
+      setSelectedRootAssetIds(new Set());
       setSelectedGroupItemKeys(new Set([`${group.id}::${itemIndex}`]));
       requestAnimationFrame(() => {
         cardRefs.current.get(`${group.id}::${itemIndex}`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
       });
     },
-    [assets]
+    [assets, setSelectedRootAssetIds]
   );
 
   const [dragOverAssetId, setDragOverAssetId] = useState<string | null>(null);
@@ -1924,9 +2071,31 @@ ${lineSvg}
         setCapabilityPresetViewMode(detail.mode);
       }
     };
+    const onColumnChanged = (event: Event) => {
+      const detail = (event as CustomEvent<{ value?: number }>).detail;
+      if (typeof detail?.value !== 'number') return;
+      setCapabilityPresetColumnCount(normalizeCapabilityPresetColumnCount(detail.value));
+    };
+    const onTypeFilterChanged = (event: Event) => {
+      const detail = (event as CustomEvent<{ filter?: CapabilityPresetTypeFilter }>).detail;
+      const filter = detail?.filter;
+      if (
+        filter === 'all' ||
+        filter === 'text_to_text' ||
+        filter === 'text_to_image' ||
+        filter === 'image_to_image' ||
+        filter === 'image_to_text'
+      ) {
+        setCapabilityPresetTypeFilter(filter);
+      }
+    };
     window.addEventListener('ac:capability-preset-view-mode-changed', onModeChanged as EventListener);
+    window.addEventListener('ac:capability-preset-column-count-changed', onColumnChanged as EventListener);
+    window.addEventListener('ac:capability-preset-type-filter-changed', onTypeFilterChanged as EventListener);
     return () => {
       window.removeEventListener('ac:capability-preset-view-mode-changed', onModeChanged as EventListener);
+      window.removeEventListener('ac:capability-preset-column-count-changed', onColumnChanged as EventListener);
+      window.removeEventListener('ac:capability-preset-type-filter-changed', onTypeFilterChanged as EventListener);
     };
   }, []);
 
@@ -3120,6 +3289,63 @@ ${lineSvg}
     ]
   );
 
+  const handlePresetActionDrop = useCallback(
+    (action: 'edit' | 'copy' | 'delete', presetId: string) => {
+      const preset = capabilityPresets.find((p) => p.id === presetId);
+      if (!preset) {
+        onLog?.('warn', '未找到该能力预设', presetId);
+        return;
+      }
+      if (action === 'edit') {
+        jumpToCapabilityPreset(preset);
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(
+            new CustomEvent('ac:capability-preset-open-detail', {
+              detail: { presetId, edit: true },
+            })
+          );
+        }
+        onLog?.('info', `已打开能力预设编辑：${preset.label}`);
+        return;
+      }
+      if (action === 'copy') {
+        if (!onUpdateCapabilityPresets) {
+          onLog?.('warn', '无法复制能力预设：未连接保存');
+          return;
+        }
+        const copiedLabelBase = `${preset.label} 副本`;
+        const taken = new Set(capabilityPresets.map((p) => p.label.trim()));
+        let copiedLabel = copiedLabelBase;
+        let suffix = 2;
+        while (taken.has(copiedLabel)) {
+          copiedLabel = `${copiedLabelBase} ${suffix}`;
+          suffix += 1;
+        }
+        const maxOrder = capabilityPresets.reduce((m, p, idx) => Math.max(m, typeof p.order === 'number' ? p.order : idx), 0);
+        const copiedPreset: CustomAppModule = {
+          ...preset,
+          id: `preset_${uuid()}`,
+          label: copiedLabel,
+          order: maxOrder + 1,
+        };
+        onUpdateCapabilityPresets([...capabilityPresets, copiedPreset]);
+        onLog?.('info', `已复制能力预设：${preset.label} → ${copiedLabel}`);
+        return;
+      }
+      if (!onUpdateCapabilityPresets) {
+        onLog?.('warn', '无法删除能力预设：未连接保存');
+        return;
+      }
+      if (BUILTIN_IMAGE_PROCESS_IDS.includes(preset.id as (typeof BUILTIN_IMAGE_PROCESS_IDS)[number])) {
+        onLog?.('warn', `内置能力「${preset.label}」不可删除`);
+        return;
+      }
+      onUpdateCapabilityPresets(capabilityPresets.filter((p) => p.id !== presetId));
+      onLog?.('info', `已删除能力预设：${preset.label}`);
+    },
+    [capabilityPresets, jumpToCapabilityPreset, onLog, onUpdateCapabilityPresets]
+  );
+
   const handleComposeCapabilities = useCallback(
     (sourcePresetId: string, targetPresetId: string) => {
       const a = capabilityPresets.find((p) => p.id === sourcePresetId);
@@ -3511,11 +3737,11 @@ ${lineSvg}
     }
     if (activePaneNode === 1 || activePaneNode === 2) {
       const selectableCount = visibleAssets.filter(
-        (a) => !pending.some((t) => t.assetId === a.id)
+        (a) => !a.cutImageGroup?.length && !pending.some((t) => t.assetId === a.id)
       ).length;
       const allSelectableIds = new Set(
         visibleAssets
-          .filter((a) => !pending.some((t) => t.assetId === a.id))
+          .filter((a) => !a.cutImageGroup?.length && !pending.some((t) => t.assetId === a.id))
           .map((a) => a.id)
       );
       const allSelected = selectedAssetIds.size === selectableCount && selectableCount > 0;
@@ -3626,7 +3852,7 @@ ${lineSvg}
                         );
                         return;
                       }
-                      setSelectedAssetIds((prev) =>
+                      setSelectedRootAssetIds((prev) =>
                         prev.size === allSelectableIds.size ? new Set() : allSelectableIds
                       );
                     }}
@@ -3735,10 +3961,10 @@ ${lineSvg}
         ),
       },
       {
-        title: capabilityPresetViewMode === 'sets' ? '能力集合' : capabilityPresetViewMode === 'image_process' ? '图像处理' : '基础能力',
+        title: '能力预设',
         desc: '当前能力配置与预设编辑',
         actions: (
-          <div className="flex items-center gap-2 whitespace-nowrap">
+          <div className="w-full min-w-0 flex items-center justify-between gap-2 whitespace-nowrap">
             <div className="h-8 inline-flex items-center rounded-lg border border-[#2e2e32] bg-[#1c1c22] overflow-hidden">
               <button
                 type="button"
@@ -3786,54 +4012,104 @@ ${lineSvg}
                 能力集合
               </button>
             </div>
-            {(capabilityPresetViewMode === 'presets' || capabilityPresetViewMode === 'image_process') && (
-              <>
-            <button
-              type="button"
-              onClick={() => {
-                if (typeof window === 'undefined') return;
-                window.dispatchEvent(new CustomEvent('ac:capability-preset-toolbar-action', { detail: { action: 'toggle-import-export' } }));
-              }}
-              className={TITLE_ROW_BTN_NEUTRAL}
-            >
-              导入/导出
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                if (typeof window === 'undefined') return;
-                window.dispatchEvent(new CustomEvent('ac:capability-preset-toolbar-action', { detail: { action: 'refresh-remote' } }));
-              }}
-              className={TITLE_ROW_BTN_NEUTRAL}
-            >
-              刷新同步
-            </button>
-            {capabilityPresetViewMode === 'presets' && (
-              <button
-                type="button"
-                onClick={() => {
-                  if (typeof window === 'undefined') return;
-                  window.dispatchEvent(new CustomEvent('ac:capability-preset-toolbar-action', { detail: { action: 'add-preset' } }));
-                }}
-                className={TITLE_ROW_BTN_ACTIVE}
-              >
-                新增能力
-              </button>
-            )}
-              </>
-            )}
-            {capabilityPresetViewMode === 'sets' && (
-              <button
-                type="button"
-                onClick={() => {
-                  if (typeof window === 'undefined') return;
-                  window.dispatchEvent(new CustomEvent('ac:capability-preset-toolbar-action', { detail: { action: 'add-set' } }));
-                }}
-                className={TITLE_ROW_BTN_ACTIVE}
-              >
-                添加能力集合
-              </button>
-            )}
+            <div className="min-w-0 flex items-center justify-end gap-2">
+              {(capabilityPresetViewMode === 'presets' || capabilityPresetViewMode === 'image_process') && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (typeof window === 'undefined') return;
+                      window.dispatchEvent(new CustomEvent('ac:capability-preset-toolbar-action', { detail: { action: 'toggle-import-export' } }));
+                    }}
+                    className={TITLE_ROW_BTN_NEUTRAL}
+                  >
+                    导入/导出
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (typeof window === 'undefined') return;
+                      window.dispatchEvent(new CustomEvent('ac:capability-preset-toolbar-action', { detail: { action: 'refresh-remote' } }));
+                    }}
+                    className={TITLE_ROW_BTN_NEUTRAL}
+                  >
+                    刷新同步
+                  </button>
+                  {capabilityPresetViewMode === 'presets' && (
+                    <CustomDropdown
+                      options={CAPABILITY_PRESET_TYPE_FILTER_OPTIONS}
+                      value={capabilityPresetTypeFilter}
+                      onChange={(value) => {
+                        const filter = value as CapabilityPresetTypeFilter;
+                        setCapabilityPresetTypeFilter(filter);
+                        if (typeof window === 'undefined') return;
+                        window.dispatchEvent(
+                          new CustomEvent('ac:capability-preset-type-filter', { detail: { filter } })
+                        );
+                      }}
+                      triggerClassName="h-8 min-w-[5.5rem] px-2 inline-flex items-center justify-center bg-[#1c1c22] border border-[#2e2e32] rounded-lg text-[9px] font-black text-gray-200 hover:bg-[#2e2e36]"
+                    />
+                  )}
+                  {capabilityPresetViewMode === 'presets' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (typeof window === 'undefined') return;
+                        window.dispatchEvent(new CustomEvent('ac:capability-preset-toolbar-action', { detail: { action: 'add-preset' } }));
+                      }}
+                      className={TITLE_ROW_BTN_ACTIVE}
+                    >
+                      新增能力
+                    </button>
+                  )}
+                </>
+              )}
+              {capabilityPresetViewMode === 'sets' && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (typeof window === 'undefined') return;
+                    window.dispatchEvent(new CustomEvent('ac:capability-preset-toolbar-action', { detail: { action: 'add-set' } }));
+                  }}
+                  className={TITLE_ROW_BTN_ACTIVE}
+                >
+                  添加能力集合
+                </button>
+              )}
+              <div className="h-8 inline-flex items-center rounded-lg border border-[#2e2e32] bg-[#1c1c22] overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (typeof window === 'undefined') return;
+                    window.dispatchEvent(
+                      new CustomEvent('ac:capability-preset-column-count', { detail: { delta: -1 } })
+                    );
+                  }}
+                  disabled={capabilityPresetColumnCount <= CAPABILITY_PRESET_COLUMNS_MIN}
+                  className="w-8 h-8 text-[11px] font-black text-gray-300 hover:bg-[#2e2e36] disabled:opacity-35 disabled:hover:bg-transparent"
+                  aria-label="减少能力预设列数"
+                >
+                  −
+                </button>
+                <span className="w-9 h-8 inline-flex items-center justify-center text-[9px] font-black text-blue-300 border-x border-[#2e2e32]">
+                  {capabilityPresetColumnCount}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (typeof window === 'undefined') return;
+                    window.dispatchEvent(
+                      new CustomEvent('ac:capability-preset-column-count', { detail: { delta: 1 } })
+                    );
+                  }}
+                  disabled={capabilityPresetColumnCount >= CAPABILITY_PRESET_COLUMNS_MAX}
+                  className="w-8 h-8 text-[11px] font-black text-gray-300 hover:bg-[#2e2e36] disabled:opacity-35 disabled:hover:bg-transparent"
+                  aria-label="增加能力预设列数"
+                >
+                  +
+                </button>
+              </div>
+            </div>
           </div>
         ),
       },
@@ -3865,6 +4141,7 @@ ${lineSvg}
     showArchived,
     visibleAssets,
     capabilityPresetViewMode,
+    capabilityPresetTypeFilter,
     libraryFilter,
     repositoryOutlineMode,
     repositorySelectedTags,
@@ -3983,7 +4260,7 @@ ${lineSvg}
             className="flex h-full will-change-transform motion-reduce:transition-none"
             style={{ width: `${trackTotalWidth}px`, transform: `translate3d(${-workspaceOffsetPx}px, 0, 0)` }}
           >
-        <div className="h-full min-h-0 shrink-0 flex flex-col pr-3 border-r border-white/[0.06]" style={{ width: `${listPaneWidth}px` }}>
+        <div className="h-full min-h-0 shrink-0 flex flex-col pr-3" style={{ width: `${listPaneWidth}px` }}>
           <div ref={libraryScrollRef} className="flex-1 min-h-0 overflow-y-auto no-scrollbar">
             {repositoryVisibleItems.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-16 px-6 text-gray-600 gap-2">
@@ -4148,7 +4425,7 @@ ${lineSvg}
 
         <div
           data-workflow-outline
-          className="h-full min-h-0 shrink-0 flex flex-col border-r border-white/[0.06] pr-2 min-w-0"
+          className="h-full min-h-0 shrink-0 flex flex-col pr-2 min-w-0"
           style={{ width: `${sidebarWidth}px` }}
         >
           <div ref={outlineScrollRef} className="flex-1 min-h-0 overflow-y-auto no-scrollbar flex flex-col gap-0.5 px-1 pt-2 pb-2">
@@ -4237,7 +4514,9 @@ ${lineSvg}
         <div
           ref={centerScrollRef}
           className="flex-1 min-w-0 min-h-0 overflow-y-auto no-scrollbar flex flex-col gap-3 rounded-xl transition-colors"
+          onWheelCapture={handleCenterWheelDuringDrag}
           onDragOver={(e) => {
+            autoScrollContainerOnDrag(e.currentTarget as HTMLElement, e.clientY);
             if (!hasImageFileTransfer(e.dataTransfer)) return;
             e.preventDefault();
           }}
@@ -4959,6 +5238,7 @@ ${lineSvg}
                     isBusy && !isPendingOnly && isExecutingCurrent ? 'pointer-events-none' : '';
                   const rawG = groupPreviewIndexById[a.id] ?? 0;
                   const gLen = a.cutImageGroup?.length ?? 0;
+                  const isGroupCard = gLen > 0;
                   const gSafe = gLen ? ((rawG % gLen) + gLen) % gLen : 0;
                   const groupPreviewItem = a.cutImageGroup?.[gSafe] ?? a.cutImageGroup?.[0];
                   const groupPreviewTextAsset =
@@ -5035,9 +5315,9 @@ ${lineSvg}
                             ? 'border-blue-400'
                             : 'border-[#2e2e32]'
                         } ${setRunAccentClass} ${busyClass} transition-transform duration-150 ease-out will-change-transform ${motionClass}`}
-                        draggable={!showArchived && !isBusy}
+                        draggable={!showArchived && !isBusy && !isGroupCard}
                         onDragStart={(e) => {
-                          if (showArchived || isBusy) return;
+                          if (showArchived || isBusy || isGroupCard) return;
                           const ids =
                             selectedAssetIds.has(a.id) && selectedAssetIds.size > 0
                               ? Array.from(selectedAssetIds)
@@ -5108,11 +5388,17 @@ ${lineSvg}
                             capTypes.includes(DT_AC_CAPABILITY_FROM_EDITOR);
                           if (isCapabilityDrop) {
                             const capId = readCapabilityDragActionId(e.dataTransfer);
+                            const capSource = readCapabilityDragSource(e.dataTransfer);
                             setDragOverAssetId(null);
                             setDraggingAssetIds(null);
                             setDraggingGroupItems(null);
                             updateDraggingActionId(null);
-                            if (capId) runCapabilityOnAssetCardImmediate(a, capId);
+                            if (capId) {
+                              runCapabilityOnAssetCardImmediate(a, capId);
+                              if (capSource === 'favorite') {
+                                setActionDroppedInFavorite(true);
+                              }
+                            }
                             return;
                           }
                           const fromState = parseWorkflowDragSource(draggingAssetIds, draggingGroupItems);
@@ -5429,16 +5715,18 @@ ${lineSvg}
             handleDropToSetAction={handleDropToSetAction}
             jumpToCapabilityPreset={jumpToCapabilityPreset}
             onDropPresetFromEditor={handleActivatePresetFromEditorDrop}
+            onDropPresetAction={handlePresetActionDrop}
+            topActionMode={activePaneNode === 3 ? 'capabilityPreset' : 'asset'}
             onComposeCapabilities={handleComposeCapabilities}
           />
         </div>
 
         {/* 右侧：能力预设列 */}
-        <div className={`h-full min-h-0 shrink-0 flex flex-col overflow-hidden border-l border-white/[0.06] pl-4`} style={{ width: `${presetPaneWidth}px` }}>
+        <div className={`h-full min-h-0 shrink-0 flex flex-col overflow-hidden pl-4`} style={{ width: `${presetPaneWidth}px` }}>
           {capabilityPresetPanel ? (
             <div
               data-workflow-preset
-              className="flex flex-col flex-1 min-h-0 overflow-hidden rounded-xl border border-white/[0.06] bg-[#0a0a0c] p-2"
+              className="flex flex-col flex-1 min-h-0 overflow-hidden rounded-xl bg-transparent p-2"
             >
               {cloneCapabilityPresetPanelWithScrollRef(capabilityPresetPanel, presetScrollRef, {
                 onOpenWorkflowComposer: openUnifiedComposer,

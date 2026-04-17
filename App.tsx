@@ -85,6 +85,8 @@ import {
 } from './services/settingsStore';
 import { fetchWorkspaceUserCloudConfig, pushWorkspaceUserCloudConfig } from './services/workspaceUserCloudConfig';
 import { getUserUiPrefs, setUserUiPrefs } from './services/userUiPrefs';
+import { getDialogBridgePrefs, setDialogBridgePrefs, subscribeDialogBridgePrefs } from './services/dialogBridgePrefs';
+import { fetchBridgeUserDevices } from './services/dialogBridgeClient';
 import { WorkflowApiKeyModal } from './components/WorkflowApiKeyModal';
 function isImagePreviewEscapeKey(e: KeyboardEvent): boolean {
   return e.key === 'Escape' || e.code === 'Escape' || e.keyCode === 27;
@@ -1638,6 +1640,8 @@ const MainApp: React.FC = () => {
   const DIALOG_BOX_LABELS = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'];
   const dialogEndRef = useRef<HTMLDivElement>(null);
   const [dialogValidationError, setDialogValidationError] = useState<string | null>(null);
+  const [dialogBridgePrefs, setDialogBridgePrefsState] = useState(getDialogBridgePrefs);
+  useEffect(() => subscribeDialogBridgePrefs(() => setDialogBridgePrefsState(getDialogBridgePrefs())), []);
   const [atSuggestionsOpen, setAtSuggestionsOpen] = useState(false);
   const [atSuggestionsCursor, setAtSuggestionsCursor] = useState(0);
   const dialogInputRef = useRef<HTMLTextAreaElement>(null);
@@ -1888,6 +1892,10 @@ const MainApp: React.FC = () => {
     dialogPersistUserId: user?.id ?? null,
     dialogUsername: user?.username,
     dialogCloudPersistEnabled: Boolean(user?.id && isWorkspaceCloudEnabled()),
+    dialogBridgeEnabled: dialogBridgePrefs.enabled,
+    dialogBridgeDeviceId: dialogBridgePrefs.deviceId,
+    dialogBridgeBbRoute: dialogBridgePrefs.bbSiteRoute,
+    dialogBridgeConnectorId: dialogBridgePrefs.connectorId,
   });
 
   useEffect(() => {
@@ -4277,13 +4285,15 @@ const MainApp: React.FC = () => {
                     <div className="flex justify-start items-center gap-2">
                       <div className="px-4 py-3 rounded-2xl bg-[#1c1c22] border border-[#2e2e32] text-[10px] text-gray-400 flex items-center gap-2">
                         <div className="w-3 h-3 border-2 border-[#4b6a9e] border-t-blue-500 rounded-full animate-spin" />
-                        {dialogAutoGenerateImage
-                          ? dialogSkipUnderstand
-                            ? '直发提示词，生图中…'
-                            : '理解需求 → 生图中…'
-                          : dialogSkipUnderstand
-                            ? '处理中…'
-                            : '理解需求中…'}
+                        {dialogBridgePrefs.enabled
+                          ? '本地桥接处理中…'
+                          : dialogAutoGenerateImage
+                            ? dialogSkipUnderstand
+                              ? '直发提示词，生图中…'
+                              : '理解需求 → 生图中…'
+                            : dialogSkipUnderstand
+                              ? '处理中…'
+                              : '理解需求中…'}
                       </div>
                       <button onClick={handleDialogCancelGen} className="px-3 py-2 rounded-xl bg-[#5c1a1a] border border-[#f87171] text-[9px] font-black text-red-400 hover:bg-[#991b1b] transition-colors">停止</button>
                     </div>
@@ -4292,6 +4302,95 @@ const MainApp: React.FC = () => {
                   </div>
                   {/* 输入区：支持粘贴图片；档位 + 比例/尺寸 + 文案 + 发送（模型由档位决定） */}
                   <div className="glass rounded-[2rem] p-4 lg:p-6 border border-[#252528] shrink-0 min-w-0 space-y-3 overflow-visible" onPaste={handleDialogPaste}>
+                  <div className="rounded-xl border border-amber-500/25 bg-amber-500/5 px-3 py-2 space-y-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-[9px] font-black text-amber-200/90 uppercase shrink-0">本地桥接</span>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={dialogBridgePrefs.enabled}
+                        title="开启后对话走本机 A-Driver + bb-browser，不再直连接口生图链路"
+                        onClick={() => setDialogBridgePrefs({ enabled: !dialogBridgePrefs.enabled })}
+                        className={`relative w-11 h-6 rounded-full shrink-0 transition-colors ${dialogBridgePrefs.enabled ? 'bg-amber-600' : 'bg-[#26262c]'}`}
+                      >
+                        <span className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform ${dialogBridgePrefs.enabled ? 'left-6' : 'left-1'}`} />
+                      </button>
+                      <span className="text-[9px] text-gray-500 leading-snug">
+                        需登录；本机 A-Driver + bb-browser 能连上你已登录的 Chrome。Gemini 网页模式会打开 gemini.google.com/app。
+                      </span>
+                    </div>
+                    {dialogBridgePrefs.enabled ? (
+                      <div className="flex flex-col gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-[9px] text-gray-500 shrink-0">目标</span>
+                      <button
+                        type="button"
+                        onClick={() => setDialogBridgePrefs({ connectorId: 'gemini-web' })}
+                        className={`px-2.5 py-1 rounded-lg text-[9px] font-bold border transition-colors ${
+                          dialogBridgePrefs.connectorId === 'gemini-web'
+                            ? 'border-amber-500/60 bg-amber-500/15 text-amber-100'
+                            : 'border-white/10 bg-[#1c1c22] text-gray-400 hover:bg-white/5'
+                        }`}
+                      >
+                        Gemini 网页
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDialogBridgePrefs({ connectorId: 'bb-site' })}
+                        className={`px-2.5 py-1 rounded-lg text-[9px] font-bold border transition-colors ${
+                          dialogBridgePrefs.connectorId === 'bb-site'
+                            ? 'border-amber-500/60 bg-amber-500/15 text-amber-100'
+                            : 'border-white/10 bg-[#1c1c22] text-gray-400 hover:bg-white/5'
+                        }`}
+                      >
+                        bb 站点搜索
+                      </button>
+                    </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <input
+                          className="min-w-[10rem] flex-1 bg-[#1c1c22] border border-[#2e2e32] rounded-lg px-2 py-1.5 text-[10px] outline-none focus:border-amber-500/60"
+                          placeholder="设备 ID（与 BRIDGE_DEVICE_ID 一致）"
+                          value={dialogBridgePrefs.deviceId}
+                          onChange={(e) => setDialogBridgePrefs({ deviceId: e.target.value })}
+                        />
+                        <input
+                          className="min-w-[10rem] flex-1 bg-[#1c1c22] border border-[#2e2e32] rounded-lg px-2 py-1.5 text-[10px] outline-none focus:border-amber-500/60"
+                          placeholder={
+                            dialogBridgePrefs.connectorId === 'gemini-web'
+                              ? '可选：完整 Gemini URL（留空用默认 https://gemini.google.com/app）'
+                              : 'bb 路由（可选，如 duckduckgo/search）'
+                          }
+                          value={dialogBridgePrefs.bbSiteRoute}
+                          onChange={(e) => setDialogBridgePrefs({ bbSiteRoute: e.target.value })}
+                        />
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              const r = await fetchBridgeUserDevices();
+                              addGlobalLog(
+                                '对话',
+                                'info',
+                                `在线桥接设备 ${r.devices.length} 个`,
+                                r.devices.map((d) => `${d.deviceId}×${d.connections}`).join(', ') || '无'
+                              );
+                            } catch (e) {
+                              addGlobalLog(
+                                '对话',
+                                'error',
+                                '拉取桥接设备失败',
+                                e instanceof Error ? e.message : String(e)
+                              );
+                            }
+                          }}
+                          className="shrink-0 px-2.5 py-1.5 rounded-lg border border-amber-500/40 bg-[#1c1c22] text-[9px] font-black uppercase text-amber-100/90 hover:bg-amber-500/10"
+                        >
+                          列设备
+                        </button>
+                      </div>
+                      </div>
+                    ) : null}
+                  </div>
                   <div className="flex w-full min-w-0 items-center gap-2 min-h-9">
                     <div className="flex min-w-0 flex-1 flex-nowrap items-center gap-x-2 gap-y-2 overflow-x-auto overflow-y-visible no-scrollbar pr-1">
                       <div className="flex items-center gap-1.5 shrink-0">

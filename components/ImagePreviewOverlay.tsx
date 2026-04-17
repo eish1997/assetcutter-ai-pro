@@ -60,6 +60,16 @@ function fitImageToPreviewViewport(nw: number, nh: number): { w: number; h: numb
   return { w: nw * s, h: nh * s };
 }
 
+function dominantAxisForImage(nw: number, nh: number): 'width' | 'height' {
+  return nw >= nh ? 'width' : 'height';
+}
+
+function lockByOriginalDominantAxis(nw: number, nh: number): { axis: 'width' | 'height'; size: number } {
+  const fit = fitImageToPreviewViewport(nw, nh);
+  const axis = dominantAxisForImage(nw, nh);
+  return { axis, size: axis === 'width' ? fit.w : fit.h };
+}
+
 /** 全景 Viewer 独立 chunk（registry 懒加载） */
 const LazyImageEquirectViewer = getLazyImagePreviewViewer('image.equirect');
 
@@ -87,7 +97,7 @@ export function ImagePreviewOverlay({
   const [uiHidden, setUiHidden] = useState(false);
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
-  const [lockedFrame, setLockedFrame] = useState<{ w: number; h: number } | null>(null);
+  const [lockedDominant, setLockedDominant] = useState<{ axis: 'width' | 'height'; size: number } | null>(null);
   const [imageMeta, setImageMeta] = useState<{ width: number; height: number } | null>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
   const dragRef = useRef<{ startX: number; startY: number; startScale: number } | null>(null);
@@ -146,10 +156,10 @@ export function ImagePreviewOverlay({
 
   useEffect(() => {
     if (!open || !innerLayoutStableKey) {
-      setLockedFrame(null);
+      setLockedDominant(null);
       return;
     }
-    setLockedFrame(null);
+    setLockedDominant(null);
     if (!layoutReferenceSrc) return;
     let cancelled = false;
     const img = new Image();
@@ -158,7 +168,7 @@ export function ImagePreviewOverlay({
       const nw = img.naturalWidth;
       const nh = img.naturalHeight;
       if (!nw || !nh) return;
-      setLockedFrame(fitImageToPreviewViewport(nw, nh));
+      setLockedDominant(lockByOriginalDominantAxis(nw, nh));
     };
     img.onerror = () => {};
     img.src = layoutReferenceSrc;
@@ -411,16 +421,30 @@ export function ImagePreviewOverlay({
       const nh = im.naturalHeight;
       if (!nw || !nh) return;
       setImageMeta({ width: nw, height: nh });
-      const next = fitImageToPreviewViewport(nw, nh);
-      // 多版本切换时，外框按已出现版本里的更大边扩展，避免“原图很窄导致生成图显示过小”。
-      setLockedFrame((prev) =>
-        prev
-          ? { w: Math.max(prev.w, next.w), h: Math.max(prev.h, next.h) }
-          : next
-      );
+      const next = lockByOriginalDominantAxis(nw, nh);
+      // 约定：按原始图“较大侧”对齐；若已锁定则不再被后续版本改写。
+      setLockedDominant((prev) => prev ?? next);
     },
     [innerLayoutStableKey]
   );
+
+  /**
+   * 某些浏览器在缓存命中时可能出现 onLoad 未按预期触发，
+   * 这里在 src 变更后主动读取 complete 图片的固有尺寸兜底。
+   */
+  useEffect(() => {
+    if (!open || centerSlot || !imageSrc?.trim()) return;
+    const im = imgRef.current;
+    if (!im) return;
+    if (!im.complete) return;
+    const nw = im.naturalWidth;
+    const nh = im.naturalHeight;
+    if (!nw || !nh) return;
+    setImageMeta({ width: nw, height: nh });
+    if (!innerLayoutStableKey) return;
+    const next = lockByOriginalDominantAxis(nw, nh);
+    setLockedDominant((prev) => prev ?? next);
+  }, [open, centerSlot, imageSrc, innerLayoutStableKey, resetKey]);
 
   const handleImgLoadGeneral = useCallback(
     (e: React.SyntheticEvent<HTMLImageElement>) => {
@@ -437,15 +461,17 @@ export function ImagePreviewOverlay({
   const hasImage = Boolean(imageSrc && imageSrc.trim());
   if (!open || (!hasImage && !centerSlot)) return null;
 
-  const useFrameLock = Boolean(!centerSlot && innerLayoutStableKey && lockedFrame);
+  const useFrameLock = Boolean(!centerSlot && innerLayoutStableKey && lockedDominant);
   const shellStyle: React.CSSProperties = {
     left: `calc((100% - ${contentRightInset}) / 2)`,
     transform: `translate(-50%, -50%) translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
     transformOrigin: 'center center',
-    ...(useFrameLock && lockedFrame
-      ? { width: lockedFrame.w, height: lockedFrame.h }
-      : {}),
   };
+  const lockedImgStyle: React.CSSProperties | undefined = useFrameLock && lockedDominant
+    ? lockedDominant.axis === 'width'
+      ? { width: `${lockedDominant.size}px`, height: 'auto', maxWidth: '92vw', maxHeight: '88vh' }
+      : { height: `${lockedDominant.size}px`, width: 'auto', maxWidth: '92vw', maxHeight: '88vh' }
+    : undefined;
 
   return (
     <PreviewShell
@@ -483,12 +509,14 @@ export function ImagePreviewOverlay({
             style={shellStyle}
           >
             <img
+              key={imageSrc}
               src={imageSrc!}
               className={
                 useFrameLock
-                  ? 'max-w-full max-h-full w-full h-full object-contain rounded-xl shadow-2xl select-none cursor-zoom-in'
+                  ? 'object-contain rounded-xl shadow-2xl select-none cursor-zoom-in'
                   : 'max-w-[92vw] max-h-[88vh] object-contain rounded-xl shadow-2xl select-none cursor-zoom-in'
               }
+              style={lockedImgStyle}
               alt=""
               draggable={false}
               onContextMenu={(e) => e.preventDefault()}

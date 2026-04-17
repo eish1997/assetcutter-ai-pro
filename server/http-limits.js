@@ -19,6 +19,15 @@ export const GEMINI_PROXY_MAX_BODY_BYTES = envBytes('GEMINI_PROXY_MAX_BODY_BYTES
  */
 export const API_JSON_BODY_MAX_BYTES = envBytes('API_JSON_BODY_MAX_BYTES', 4 * 1024 * 1024);
 
+/**
+ * 桥接 send-message（JSON 内含 base64 图片）：
+ * 4MB 原图经 base64 + JSON 包装后会超过 4MB，单独放宽。
+ */
+export const BRIDGE_SEND_MESSAGE_MAX_BODY_BYTES = envBytes(
+  'BRIDGE_SEND_MESSAGE_MAX_BODY_BYTES',
+  16 * 1024 * 1024
+);
+
 /** 能力商店预览图等二进制校验 */
 export const R2_CAPABILITY_PREVIEW_MAX_BYTES = envBytes('R2_CAPABILITY_PREVIEW_MAX_BYTES', 8 * 1024 * 1024);
 

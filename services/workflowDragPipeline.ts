@@ -5,6 +5,8 @@ export const DT_AC_WORKFLOW_EXPORT = 'application/x-ac-workflow-export';
 
 /** 功能区能力块 / 常用入口 / 复合能力：拖起时写入，便于主区域右侧留白识别「禁用能力」拖拽（`text/plain` 过宽，不能单独用于 dragover） */
 export const DT_AC_CAPABILITY_ACTION = 'application/x-ac-capability-action';
+/** 功能能力拖拽来源：`favorite`(常用区) / `catalog`(原始分组区) */
+export const DT_AC_CAPABILITY_ACTION_SOURCE = 'application/x-ac-capability-action-source';
 
 /** 工作区「能力」列底部预设卡片拖向功能区侧栏时写入，与侧栏能力块拖拽区分 */
 export const DT_AC_CAPABILITY_FROM_EDITOR = 'application/x-ac-capability-from-editor';

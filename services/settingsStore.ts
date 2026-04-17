@@ -48,7 +48,7 @@ export function setUserApiKey(value: string | null): void {
 }
 
 export function getAiProvider(): AiProvider {
-  const v = readLocalString(STORAGE_KEY_AI_PROVIDER).trim().toLowerCase();
+  const v = (readLocalString(STORAGE_KEY_AI_PROVIDER) ?? '').trim().toLowerCase();
   if (v === 'vertex') return 'vertex';
   if (v === 'toapis') return 'toapis';
   if (v === 'antigravity') return 'antigravity';

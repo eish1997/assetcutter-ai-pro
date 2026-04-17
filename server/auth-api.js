@@ -20,10 +20,12 @@ import { handleR2StorageRequest, isR2Configured, publishCapabilityPresetToR2Cata
 import { getWorkspaceUsedBytes } from './workspace-storage-usage.js';
 import {
   API_JSON_BODY_MAX_BYTES,
+  BRIDGE_SEND_MESSAGE_MAX_BODY_BYTES,
   BODY_TOO_LARGE_MESSAGE,
   CAPABILITY_PUBLISH_ADMIN_BODY_BYTES,
   readBodyUtf8,
 } from './http-limits.js';
+import { createBridgeRelay } from './bridge-relay.js';
 
 const PORT = Number(process.env.PORT || process.env.AUTH_PORT || 9100);
 const BIND_HOST = String(process.env.AUTH_BIND_HOST || '0.0.0.0').trim() || '0.0.0.0';
@@ -37,6 +39,7 @@ const RATE_LIMIT_WINDOW_MS = Number(process.env.AUTH_RATE_LIMIT_WINDOW_MS || 60_
 const LOGIN_RATE_LIMIT_MAX = Number(process.env.AUTH_LOGIN_RATE_LIMIT_MAX || 10);
 const REGISTER_RATE_LIMIT_MAX = Number(process.env.AUTH_REGISTER_RATE_LIMIT_MAX || 20);
 const CSRF_COOKIE_NAME = 'ac_csrf';
+const BRIDGE_REQUIRE_AUTH = String(process.env.BRIDGE_REQUIRE_AUTH || 'true').trim().toLowerCase() !== 'false';
 
 const allowedOrigins = AUTH_ALLOWED_ORIGINS
   ? new Set(
@@ -168,6 +171,10 @@ function assertCsrf(req, res) {
     const origin = String(req.headers.origin || '');
     if (origin && isAllowedOrigin(origin)) return true;
   }
+  if (pathOnly.startsWith('/api/bridge')) {
+    const origin = String(req.headers.origin || '');
+    if (origin && isAllowedOrigin(origin)) return true;
+  }
   const cookieToken = readCsrfFromCookie(req);
   const headerToken = String(req.headers['x-csrf-token'] || '');
   if (cookieToken && headerToken && cookieToken === headerToken) return true;
@@ -267,6 +274,112 @@ const server = http.createServer(async (req, res) => {
   try {
     if (path === '/healthz' && req.method === 'GET') {
       json(res, 200, { ok: true, service: 'auth-api' });
+      return;
+    }
+
+    if (path === '/api/bridge/user/devices' && req.method === 'GET') {
+      const user = await requireAuth(req, res);
+      if (!user) return;
+      json(res, 200, { devices: bridgeRelay.listDevicesForUser(user.id) });
+      return;
+    }
+
+    if (path === '/api/bridge/user/send-message' && req.method === 'POST') {
+      const user = await requireAuth(req, res);
+      if (!user) return;
+      const body = await readBody(req, { maxBytes: BRIDGE_SEND_MESSAGE_MAX_BODY_BYTES });
+      const result = bridgeRelay.sendTask(
+        {
+          deviceId: body.deviceId,
+          taskId: body.taskId,
+          connectorId: body.connectorId,
+          text: body.text,
+          threadId: body.threadId,
+          messageId: body.messageId,
+          images: body.images,
+        },
+        { userId: user.id }
+      );
+      if (!result.ok) {
+        json(res, 400, { error: result.error || '发送任务失败' });
+        return;
+      }
+      json(res, 200, {
+        ok: true,
+        taskId: result.taskId,
+        messageId: result.messageId,
+        deduped: Boolean(result.deduped),
+      });
+      return;
+    }
+
+    if (path.startsWith('/api/bridge/user/tasks/') && path.endsWith('/events') && req.method === 'GET') {
+      const user = await requireAuth(req, res);
+      if (!user) return;
+      const rawTaskId = path.slice('/api/bridge/user/tasks/'.length, -'/events'.length);
+      const taskId = decodeURIComponent(rawTaskId || '').trim();
+      if (!taskId) {
+        json(res, 400, { error: '无效 taskId' });
+        return;
+      }
+      const events = bridgeRelay.getTaskEvents(taskId, user.id);
+      if (events === null) {
+        json(res, 403, { error: '无权查看该任务' });
+        return;
+      }
+      json(res, 200, { taskId, events });
+      return;
+    }
+
+    if (path === '/api/bridge/devices' && req.method === 'GET') {
+      const admin = await requireAdmin(req, res);
+      if (!admin) return;
+      json(res, 200, {
+        devices: bridgeRelay.listDevices(),
+        authRequired: BRIDGE_REQUIRE_AUTH,
+      });
+      return;
+    }
+
+    if (path === '/api/bridge/tasks/send-message' && req.method === 'POST') {
+      const admin = await requireAdmin(req, res);
+      if (!admin) return;
+      const body = await readBody(req, { maxBytes: BRIDGE_SEND_MESSAGE_MAX_BODY_BYTES });
+      const result = bridgeRelay.sendTask({
+        deviceId: body.deviceId,
+        taskId: body.taskId,
+        connectorId: body.connectorId,
+        text: body.text,
+        threadId: body.threadId,
+        messageId: body.messageId,
+        images: body.images,
+      });
+      if (!result.ok) {
+        json(res, 400, { error: result.error || '发送任务失败' });
+        return;
+      }
+      json(res, 200, {
+        ok: true,
+        taskId: result.taskId,
+        messageId: result.messageId,
+        deduped: Boolean(result.deduped),
+      });
+      return;
+    }
+
+    if (path.startsWith('/api/bridge/tasks/') && path.endsWith('/events') && req.method === 'GET') {
+      const admin = await requireAdmin(req, res);
+      if (!admin) return;
+      const rawTaskId = path.slice('/api/bridge/tasks/'.length, -'/events'.length);
+      const taskId = decodeURIComponent(rawTaskId || '').trim();
+      if (!taskId) {
+        json(res, 400, { error: '无效 taskId' });
+        return;
+      }
+      json(res, 200, {
+        taskId,
+        events: bridgeRelay.getTaskEvents(taskId),
+      });
       return;
     }
 
@@ -527,6 +640,14 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+const bridgeRelay = createBridgeRelay({
+  requireAuth: BRIDGE_REQUIRE_AUTH,
+  async resolveSessionUser(token) {
+    const row = await getSessionWithUser(token);
+    return row?.user || null;
+  },
+});
+
 initAuthStore()
   .then(async () => {
     assertProductionConfig();
@@ -542,8 +663,22 @@ initAuthStore()
         console.error('[auth-api] ensure admin failed:', error instanceof Error ? error.message : String(error));
       }
     }
+    server.on('upgrade', async (req, socket, head) => {
+      try {
+        const handled = await bridgeRelay.handleUpgrade(req, socket, head);
+        if (!handled) {
+          socket.destroy();
+        }
+      } catch (error) {
+        socket.write('HTTP/1.1 500 Internal Server Error\r\n\r\n');
+        socket.destroy();
+        console.error('[bridge-relay] upgrade error:', error instanceof Error ? error.message : String(error));
+      }
+    });
+
     server.listen(PORT, BIND_HOST, () => {
       console.log(`[auth-api] http://${BIND_HOST}:${PORT}${isR2Configured() ? ' (R2 /api/r2 enabled)' : ''}`);
+      console.log(`[bridge-relay] ws://${BIND_HOST}:${PORT}/ws/bridge auth=${BRIDGE_REQUIRE_AUTH ? 'required' : 'disabled'}`);
     });
   })
   .catch((error) => {
