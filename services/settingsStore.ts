@@ -31,10 +31,10 @@ const STORAGE_KEY_VECTORENGINE_BASE_URL = 'ac_vectorengine_base_url';
 const STORAGE_KEY_DIALOG_SKIP_UNDERSTAND = 'ac_dialog_skip_understand';
 const STORAGE_KEY_WORKSPACE_AUTO_SYNC = 'ac_workspace_auto_sync';
 
-export type AiProvider = 'gemini' | 'vertex' | 'toapis' | 'antigravity' | 'vectorengine';
+export type AiProvider = 'trial' | 'gemini' | 'vertex' | 'toapis' | 'antigravity' | 'vectorengine';
 
 /** 未选择或本地无记录时的默认供应商（新用户 / 清空存储后） */
-export const DEFAULT_AI_PROVIDER: AiProvider = 'vertex';
+export const DEFAULT_AI_PROVIDER: AiProvider = 'trial';
 const SESSION_KEY_TENCENT_SECRET_ID = 'ac_tencent_secret_id';
 const SESSION_KEY_TENCENT_SECRET_KEY = 'ac_tencent_secret_key';
 
@@ -49,6 +49,7 @@ export function setUserApiKey(value: string | null): void {
 
 export function getAiProvider(): AiProvider {
   const v = (readLocalString(STORAGE_KEY_AI_PROVIDER) ?? '').trim().toLowerCase();
+  if (v === 'trial') return 'trial';
   if (v === 'vertex') return 'vertex';
   if (v === 'toapis') return 'toapis';
   if (v === 'antigravity') return 'antigravity';
@@ -88,6 +89,8 @@ export function subscribeAiSettingsCrossTab(onChange: () => void): () => void {
 /** 工作区顶栏等：当前选用的 AI 供应商短名称 */
 export function getAiProviderToolbarLabel(): string {
   switch (getAiProvider()) {
+    case 'trial':
+      return '试用（代理）';
     case 'vertex':
       return 'Vertex AI';
     case 'toapis':
@@ -158,6 +161,9 @@ export function setVectorengineBaseUrl(value: string | null): void {
 
 /** 当前选用供应商下的 API Key（Gemini 官方、ToAPIs 或 VectorEngine） */
 export function getApiKey(): string | undefined {
+  if (getAiProvider() === 'trial') {
+    return undefined;
+  }
   if (getAiProvider() === 'vertex') {
     return undefined;
   }
@@ -186,6 +192,15 @@ export function getApiKey(): string | undefined {
  */
 export function isAiInvocationReady(): boolean {
   const p = getAiProvider();
+  if (p === 'trial') {
+    try {
+      const env = typeof import.meta !== 'undefined' ? (import.meta as { env?: Record<string, string | undefined> }).env : undefined;
+      const bulk = env?.VITE_BULK_IMAGE_API;
+      return Boolean(bulk && String(bulk).trim());
+    } catch {
+      return false;
+    }
+  }
   if (p === 'vertex') {
     try {
       const env = typeof import.meta !== 'undefined' ? (import.meta as { env?: Record<string, string | undefined> }).env : undefined;

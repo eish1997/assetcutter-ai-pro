@@ -24,6 +24,7 @@ import { CustomDropdown, DROPDOWN_TRIGGER_COMPACT } from './ui/CustomDropdown';
 import AppIcon from './ui/AppIcon';
 
 const AI_PROVIDER_OPTIONS: { value: AiProvider; label: string }[] = [
+  { value: 'trial', label: '试用（代理通道）' },
   { value: 'gemini', label: 'Google Gemini（官方 API）' },
   { value: 'vertex', label: 'Vertex AI（经 gemini-proxy）' },
   { value: 'toapis', label: 'ToAPIs 网关' },
@@ -79,6 +80,8 @@ export const WorkflowApiKeyModal: React.FC<{
       ? geminiKey
       : provider === 'vertex'
         ? ''
+        : provider === 'trial'
+          ? ''
         : provider === 'toapis'
           ? toapisKey
           : provider === 'antigravity'
@@ -93,7 +96,9 @@ export const WorkflowApiKeyModal: React.FC<{
 
   const handleProviderChange = (value: string) => {
     const v: AiProvider =
-      value === 'vertex'
+      value === 'trial'
+        ? 'trial'
+        : value === 'vertex'
         ? 'vertex'
         : value === 'toapis'
           ? 'toapis'
@@ -169,7 +174,11 @@ export const WorkflowApiKeyModal: React.FC<{
               />
             </div>
           ) : null}
-          {provider === 'vertex' ? (
+          {provider === 'trial' ? (
+            <p className="text-[10px] text-gray-500 leading-relaxed">
+              试用模式固定走代理通道（<code className="text-gray-400">VITE_BULK_IMAGE_API</code>），无需填写 Key。
+            </p>
+          ) : provider === 'vertex' ? (
             <p className="text-[10px] text-gray-500 leading-relaxed">
               Vertex 凭据在服务端配置（见 <code className="text-gray-400">docs/VERTEX_AI_INTEGRATION.md</code>
               ）；站点须设置 <code className="text-gray-400">VITE_BULK_IMAGE_API</code>。此处无需填写 Key。

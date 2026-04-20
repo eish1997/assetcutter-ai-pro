@@ -101,11 +101,10 @@ function preferBrowserGeminiKeyFirst(): boolean {
 function shouldUseBulkImageBatchQueue(): boolean {
   if (!BULK_BASE) return false;
   const p = getAiProvider();
+  if (p === "trial") return true;
   if (p === "toapis" || p === "antigravity" || p === "vectorengine") return false;
   if (p === "vertex") return true;
-  const apiKey = getUserApiKey();
-  if (preferBrowserGeminiKeyFirst() && apiKey?.trim()) return false;
-  return true;
+  return false;
 }
 
 function bulkApiUrl(path: string): string {
@@ -521,6 +520,15 @@ const getAI = (): GeminiClientLike => {
     },
   };
 
+  if (provider === "trial") {
+    if (!BULK_BASE) {
+      throw new Error(
+        "当前供应商为试用：请配置 VITE_BULK_IMAGE_API（指向可用的 gemini-proxy）。"
+      );
+    }
+    return proxyClient;
+  }
+
   if (provider === "vertex") {
     if (!BULK_BASE) {
       throw new Error(
@@ -531,24 +539,10 @@ const getAI = (): GeminiClientLike => {
   }
 
   const apiKey = getUserApiKey();
-  const preferKey = preferBrowserGeminiKeyFirst();
-
-  if (preferKey) {
-    if (apiKey) {
-      return new GoogleGenAI({ apiKey }) as unknown as GeminiClientLike;
-    }
-    if (BULK_BASE) {
-      return proxyClient;
-    }
-  } else {
-    if (BULK_BASE) {
-      return proxyClient;
-    }
-    if (apiKey) {
-      return new GoogleGenAI({ apiKey }) as unknown as GeminiClientLike;
-    }
+  if (apiKey) {
+    return new GoogleGenAI({ apiKey }) as unknown as GeminiClientLike;
   }
-  throw new Error("未配置 API 密钥，请在设置页填写 Gemini API Key，或联系管理员配置后端代理地址（VITE_BULK_IMAGE_API）");
+  throw new Error("当前供应商为 Google Gemini：请在设置页填写 Gemini API Key，或切换到「试用（代理）」模式。");
 };
 
 export interface GeminiRequestOptions {
@@ -556,6 +550,7 @@ export interface GeminiRequestOptions {
   timeoutMs?: number;
   retries?: number;
   retryDelayMs?: number;
+  maxRetryDelayMs?: number;
 }
 
 export type GeminiImageBatchGroupOptions = {
@@ -875,13 +870,33 @@ const IMAGE_GEN_RETRIES_ON_OVERLOAD = 8;
 /** 工作流「理解→生图」：理解阶段在 bulk 代理下需等服务端多次 503 退避，外层超时不能太短 */
 /** 工作流/能力（如转风格）调用 understand 时传入，不跳过理解、专抗 503 高峰 */
 export const CAPABILITY_UNDERSTAND_RETRY_OPTIONS: GeminiRequestOptions = {
-  retries: 16,
-  retryDelayMs: 7000,
+  timeoutMs: 90_000,
+  retries: 4,
+  retryDelayMs: 2500,
+  maxRetryDelayMs: 12_000,
 };
-const BULK_PROXY_UNDERSTAND_TIMEOUT_MS = 600_000;
+const BULK_PROXY_UNDERSTAND_TIMEOUT_MS = 120_000;
 const IMAGE_GEN_RETRY_DELAY_MS = 6000;
 /** 走 bulk 异步代理时含轮询+服务端退避，总等待需长于单次 SDK 超时 */
 const BULK_PROXY_IMAGE_TIMEOUT_MS = 600_000;
+
+function shouldFallbackUnderstandToBrowserGemini(error: unknown): boolean {
+  if (!BULK_BASE) return false;
+  if (getAiProvider() !== "gemini") return false;
+  if (!getUserApiKey()) return false;
+  const msg = String((error as Error)?.message ?? error ?? "");
+  return (
+    msg.includes("GEMINI_TIMEOUT") ||
+    msg.includes("请求超时") ||
+    msg.includes("Failed to fetch") ||
+    msg.includes("NetworkError") ||
+    msg.includes("503") ||
+    msg.includes("504") ||
+    msg.includes("UNAVAILABLE") ||
+    msg.includes("DEADLINE_EXCEEDED") ||
+    msg.includes("high demand")
+  );
+}
 
 async function callWithRetry<T>(
   apiFn: (signal: AbortSignal) => Promise<T>,
@@ -889,6 +904,7 @@ async function callWithRetry<T>(
 ): Promise<T> {
   let retries = options?.retries ?? 3;
   let delay = options?.retryDelayMs ?? 2000;
+  const maxRetryDelayMs = options?.maxRetryDelayMs ?? 15_000;
   const maxAttempts = retries + 1;
   let currentAttempt = 1;
 
@@ -919,7 +935,7 @@ async function callWithRetry<T>(
       );
       await sleepWithAbort(delay, options?.abortSignal);
       retries -= 1;
-      delay *= 2;
+      delay = Math.min(delay * 2, maxRetryDelayMs);
       currentAttempt += 1;
     }
   }
@@ -1217,38 +1233,66 @@ export async function understandImageEditIntent(
     ? Math.max(innerTimeout, BULK_PROXY_UNDERSTAND_TIMEOUT_MS)
     : innerTimeout;
   const resolvedModel = resolveUpstreamTextModelId(model);
-  const raw = await callWithRetry(
-    async (signal) => {
-      const ai = getAI();
-      const systemPrompt = customPrompt || DEFAULT_PROMPTS.dialog_understand;
-      const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [
-        {
-          text: `User request: ${userPrompt}\n\nOutput only a valid JSON object with "instruction" (required), optional "summary", and "shouldGenerateImage" (required, true only when user wants to edit/generate a new image):`,
-        },
-      ];
-      const images = Array.isArray(imageBase64) ? imageBase64.filter(Boolean) : imageBase64 ? [imageBase64] : [];
-      for (let i = images.length - 1; i >= 0; i--) {
-        const parsed = parseInlineImageData(images[i]);
-        parts.unshift({ inlineData: { mimeType: parsed.mimeType, data: parsed.data } });
+  const runUnderstand = async (
+    strategy: "default" | "browser_google",
+    overrideOptions?: GeminiRequestOptions
+  ): Promise<string> =>
+    callWithRetry(
+      async (signal) => {
+        const ai =
+          strategy === "browser_google"
+            ? (new GoogleGenAI({ apiKey: getUserApiKey()! }) as unknown as GeminiClientLike)
+            : getAI();
+        const systemPrompt = customPrompt || DEFAULT_PROMPTS.dialog_understand;
+        const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [
+          {
+            text: `User request: ${userPrompt}\n\nOutput only a valid JSON object with "instruction" (required), optional "summary", and "shouldGenerateImage" (required, true only when user wants to edit/generate a new image):`,
+          },
+        ];
+        const images = Array.isArray(imageBase64) ? imageBase64.filter(Boolean) : imageBase64 ? [imageBase64] : [];
+        for (let i = images.length - 1; i >= 0; i--) {
+          const parsed = parseInlineImageData(images[i]);
+          parts.unshift({ inlineData: { mimeType: parsed.mimeType, data: parsed.data } });
+        }
+        const timeoutForThisRun =
+          overrideOptions?.timeoutMs ?? (strategy === "browser_google" ? innerTimeout : controlTimeout);
+        const response = await ai.models.generateContent({
+          model: resolvedModel,
+          contents: [{ role: 'user' as const, parts }],
+          config: buildGeminiConfig({ systemInstruction: systemPrompt }, signal, timeoutForThisRun),
+        });
+        const text = response.text?.trim();
+        if (!text) throw new Error("Empty understanding response");
+        return text;
+      },
+      {
+        ...options,
+        timeoutMs: controlTimeout,
+        retries:
+          options?.retries ??
+          (BULK_BASE ? 10 : 3),
+        retryDelayMs: options?.retryDelayMs ?? (BULK_BASE ? 6000 : 2000),
+        ...overrideOptions,
       }
-      const response = await ai.models.generateContent({
-        model: resolvedModel,
-        contents: [{ role: 'user' as const, parts }],
-        config: buildGeminiConfig({ systemInstruction: systemPrompt }, signal, innerTimeout),
-      });
-      const text = response.text?.trim();
-      if (!text) throw new Error("Empty understanding response");
-      return text;
-    },
-    {
-      ...options,
-      timeoutMs: controlTimeout,
-      retries:
-        options?.retries ??
-        (BULK_BASE ? 10 : 3),
-      retryDelayMs: options?.retryDelayMs ?? (BULK_BASE ? 6000 : 2000),
+    );
+
+  let raw: string;
+  try {
+    raw = await runUnderstand("default");
+  } catch (error) {
+    if (!shouldFallbackUnderstandToBrowserGemini(error)) {
+      throw error;
     }
-  );
+    console.warn(
+      "understandImageEditIntent: bulk proxy slow/unavailable, fallback to browser Gemini key for understanding."
+    );
+    raw = await runUnderstand("browser_google", {
+      timeoutMs: Math.min(innerTimeout, 45_000),
+      retries: 1,
+      retryDelayMs: 1200,
+      maxRetryDelayMs: 2000,
+    });
+  }
   try {
     const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
     const obj = JSON.parse(cleaned);

@@ -42,6 +42,7 @@ const SETTINGS_NAV: { id: string; label: string }[] = [
 ];
 
 const AI_PROVIDER_OPTIONS: { value: AiProvider; label: string }[] = [
+  { value: 'trial', label: '试用（代理通道，无需本地 Key）' },
   { value: 'gemini', label: 'Google Gemini（官方 API）' },
   { value: 'vertex', label: 'Vertex AI（GCP · 经本站 gemini-proxy）' },
   { value: 'toapis', label: 'ToAPIs 网关（OpenAI 兼容 + 异步生图）' },
@@ -137,7 +138,9 @@ const SettingsSection: React.FC<{
 
   const handleAiProviderChange = (value: string) => {
     const v: AiProvider =
-      value === 'vertex'
+      value === 'trial'
+        ? 'trial'
+        : value === 'vertex'
         ? 'vertex'
         : value === 'toapis'
           ? 'toapis'
@@ -420,7 +423,15 @@ const SettingsSection: React.FC<{
                     />
                   </div>
 
-                  {aiProvider === 'gemini' ? (
+                  {aiProvider === 'trial' ? (
+                    <>
+                      <h4 className="text-[10px] font-bold text-white/80 uppercase tracking-wider">试用通道（代理）</h4>
+                      <p className="text-[9px] text-gray-500 leading-relaxed">
+                        试用模式固定走站点配置的 <code className="text-gray-400">VITE_BULK_IMAGE_API</code> 代理，无需在本机填写 API Key。
+                        若代理拥堵/限流，建议切换到其它供应商并填写对应前端 Key 直连。
+                      </p>
+                    </>
+                  ) : aiProvider === 'gemini' ? (
                     <>
                       <h4 className="text-[10px] font-bold text-white/80 uppercase tracking-wider">Gemini API Key</h4>
                       <div className="flex flex-col sm:flex-row gap-3">
