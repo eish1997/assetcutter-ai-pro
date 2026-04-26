@@ -44,7 +44,7 @@ const WorkflowModeShell: React.FC<WorkflowModeShellProps> = ({
   workspaceCloudQuotaSuspended,
   renderWorkflowSection,
 }) => (
-  <div className="relative w-full">
+  <div className={activeWorkspaceProjectId ? 'relative flex h-full min-h-0 w-full flex-col' : 'relative w-full'}>
     {showWorkspaceIdbHydrateOverlay && (
       <div
         className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-2 rounded-xl bg-[#050505]/90 backdrop-blur-[2px] border border-white/[0.06]"
@@ -56,7 +56,14 @@ const WorkflowModeShell: React.FC<WorkflowModeShellProps> = ({
         <p className="text-[10px] text-gray-400">正在准备工作区…</p>
       </div>
     )}
-    <div className={showWorkspaceIdbHydrateOverlay ? 'pointer-events-none select-none opacity-[0.72]' : undefined}>
+    <div
+      className={[
+        activeWorkspaceProjectId ? 'flex min-h-0 flex-1 flex-col' : '',
+        showWorkspaceIdbHydrateOverlay ? 'pointer-events-none select-none opacity-[0.72]' : '',
+      ]
+        .filter(Boolean)
+        .join(' ') || undefined}
+    >
       {!activeWorkspaceProjectId && (
         <>
           {user?.id && workspaceCloudEnabled ? (
@@ -104,13 +111,17 @@ const WorkflowModeShell: React.FC<WorkflowModeShellProps> = ({
       )}
       {activeWorkspaceProjectId && (
         <WorkflowErrorBoundary>
-          {workspaceCloudQuotaSuspended ? (
-            <div className="w-full max-w-6xl mx-auto mb-3 rounded-xl border border-amber-500/35 bg-[#2c2412] px-4 py-3 text-[11px] text-amber-100/95 leading-relaxed">
-              工作区<strong className="font-semibold">云空间已满</strong>
-              ：新图片无法上传，画布仍保存在本机。删除云端项目中的图或请管理员调高配额后可恢复。返回列表或切换项目时若无法上传，请留意本地数据。
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
+            {workspaceCloudQuotaSuspended ? (
+              <div className="mx-auto mb-1 w-full max-w-6xl shrink-0 rounded-xl border border-amber-500/35 bg-[#2c2412] px-4 py-3 text-[11px] text-amber-100/95 leading-relaxed">
+                工作区<strong className="font-semibold">云空间已满</strong>
+                ：新图片无法上传，画布仍保存在本机。删除云端项目中的图或请管理员调高配额后可恢复。返回列表或切换项目时若无法上传，请留意本地数据。
+              </div>
+            ) : null}
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+              <Suspense fallback={<LazySectionFallback label="工作区" />}>{renderWorkflowSection()}</Suspense>
             </div>
-          ) : null}
-          <Suspense fallback={<LazySectionFallback label="工作区" />}>{renderWorkflowSection()}</Suspense>
+          </div>
         </WorkflowErrorBoundary>
       )}
     </div>

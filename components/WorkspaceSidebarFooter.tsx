@@ -1,5 +1,4 @@
 import React from 'react';
-import { CustomDropdown } from './ui/CustomDropdown';
 import { WorkspaceCloudSyncCountdown } from './WorkspaceCloudSyncCountdown';
 
 function formatWorkspaceCloudMb(bytes: number) {
@@ -14,8 +13,6 @@ export type WorkspaceSidebarFooterProps = {
   workspaceCloudQuotaBytes: number;
   workspaceCloudUsageRatio: number;
   workspaceCloudUsagePercent: number;
-  workspaceProjectOptions: Array<{ value: string; label: string }>;
-  activeWorkspaceProjectName: string;
   workspaceCloudHydratingProjectId: string | null;
   workspaceLastSyncText: string;
   workspaceCloudAutoSyncing: boolean;
@@ -26,13 +23,11 @@ export type WorkspaceSidebarFooterProps = {
   onOpenApiKeyModal: () => void;
   aiInvocationReady: boolean;
   aiPlatformLabel: string;
-  onBackToWorkspaceList: () => void | Promise<void>;
-  onWorkspaceOpen: (id: string) => void | Promise<void>;
 };
 
 /**
- * 工作区已进入项目时：主导航底部 Footer（窄栏竖排，与方案 4 一致）。
- * 长文案进 title，列表仍走 CustomDropdown Portal。
+ * 工作区已进入项目时：主导航底部 Footer（云同步、API 等）。
+ * 「返回项目 / 切换项目」已迁至 WorkflowSection 顶栏 1–4 分档左侧。
  */
 const WorkspaceSidebarFooter: React.FC<WorkspaceSidebarFooterProps> = ({
   user,
@@ -42,8 +37,6 @@ const WorkspaceSidebarFooter: React.FC<WorkspaceSidebarFooterProps> = ({
   workspaceCloudQuotaBytes,
   workspaceCloudUsageRatio,
   workspaceCloudUsagePercent,
-  workspaceProjectOptions,
-  activeWorkspaceProjectName,
   workspaceCloudHydratingProjectId,
   workspaceLastSyncText,
   workspaceCloudAutoSyncing,
@@ -54,66 +47,8 @@ const WorkspaceSidebarFooter: React.FC<WorkspaceSidebarFooterProps> = ({
   onOpenApiKeyModal,
   aiInvocationReady,
   aiPlatformLabel,
-  onBackToWorkspaceList,
-  onWorkspaceOpen,
 }) => (
-  <div className="shrink-0 border-t border-white/[0.06] bg-[#0a0a0d]/95 px-1.5 py-2 flex flex-col gap-2">
-    <button
-      type="button"
-      onClick={() => {
-        void onBackToWorkspaceList();
-      }}
-      className="inline-flex w-full h-9 items-center justify-center rounded-xl bg-white/[0.05] text-gray-300 ring-1 ring-white/[0.06] hover:bg-white/[0.09] hover:text-white transition-colors outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
-      title="返回项目列表（将先同步到云端）"
-      aria-label="返回项目列表"
-    >
-      <svg aria-hidden viewBox="0 0 20 20" className="w-3.5 h-3.5" fill="none">
-        <path
-          d="M12.5 4.5L7 10l5.5 5.5"
-          stroke="currentColor"
-          strokeWidth="1.9"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
-    </button>
-
-    <div className="w-full">
-      <CustomDropdown
-        options={workspaceProjectOptions}
-        value={activeWorkspaceProjectId}
-        onChange={(id) => {
-          if (!id || id === activeWorkspaceProjectId) return;
-          void onWorkspaceOpen(id);
-        }}
-        placeholder={activeWorkspaceProjectName || '项目'}
-        triggerAriaLabel={`当前项目：${activeWorkspaceProjectName || '选择项目'}`}
-        renderTrigger={({ open }) => (
-          <span
-            className={`flex w-full h-9 flex-col items-center justify-center rounded-xl bg-white/[0.05] outline-none transition-colors ring-1 ${
-              open ? 'ring-blue-500/50 shadow-[inset_0_0_0_1px_rgba(59,130,246,0.35)]' : 'ring-white/[0.06] hover:bg-white/[0.09]'
-            }`}
-            title={activeWorkspaceProjectName || '切换项目'}
-          >
-            <svg viewBox="0 0 20 20" className="w-3.5 h-3.5 text-blue-300/90" fill="none" aria-hidden>
-              <path
-                d="M4 6.5h12v9a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-9Z"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                strokeLinejoin="round"
-              />
-              <path d="M4 8.5h12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-            </svg>
-            <span className="mt-0.5 max-w-full truncate px-0.5 text-[6px] font-black uppercase leading-none text-gray-400">
-              {activeWorkspaceProjectName || '项目'}
-            </span>
-          </span>
-        )}
-        triggerClassName="w-full p-0 border-0 bg-transparent"
-        portalZIndex={{ backdrop: 1100, list: 1101 }}
-      />
-    </div>
-
+  <div className="flex shrink-0 flex-col gap-2 px-1.5 py-2">
     {workspaceCloudHydratingProjectId === activeWorkspaceProjectId ? (
       <p
         className="text-[6px] text-amber-400/90 text-center leading-tight font-medium animate-pulse px-0.5"

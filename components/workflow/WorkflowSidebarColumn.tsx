@@ -32,6 +32,20 @@ import type { CapabilityCategoryGroup } from './workflowCapabilityGroups';
 const DRAG_SCROLL_EDGE_PX = 64;
 const DRAG_SCROLL_MAX_STEP_PX = 24;
 
+/** 功能区顶行拖放槽：实线 ring，与侧栏其它控件一致（替代虚线占位感） */
+const SIDEBAR_TOP_DROP_SLOT_BASE =
+  'rounded-xl h-[52px] px-1 flex flex-col items-center justify-center text-center transition-[box-shadow,background-color]';
+const SIDEBAR_TOP_DROP_IDLE = `${SIDEBAR_TOP_DROP_SLOT_BASE} ring-1 ring-inset ring-white/[0.08] bg-white/[0.03] hover:bg-white/[0.06] hover:ring-white/[0.12]`;
+const SIDEBAR_TOP_DROP_ACTIVE_BLUE = `${SIDEBAR_TOP_DROP_SLOT_BASE} ring-2 ring-inset ring-blue-500/90 bg-[#152642] shadow-[inset_0_0_0_1px_rgba(59,130,246,0.28)]`;
+const SIDEBAR_TOP_DROP_DELETE_IDLE = `${SIDEBAR_TOP_DROP_SLOT_BASE} ring-1 ring-inset ring-white/[0.08] bg-white/[0.03] hover:bg-red-950/30 hover:ring-red-500/40`;
+const SIDEBAR_TOP_DROP_DELETE_ACTIVE = `${SIDEBAR_TOP_DROP_SLOT_BASE} ring-2 ring-inset ring-red-500 bg-[#3a1818]`;
+
+/** 侧栏分组标题行：统一高度、无边框；拖入高亮用 ring */
+const SIDEBAR_GROUP_HEADER_BASE =
+  'flex items-center justify-between rounded-lg px-2.5 min-h-8 transition-[background-color,box-shadow]';
+const SIDEBAR_GROUP_HEADER_IDLE = `${SIDEBAR_GROUP_HEADER_BASE} bg-white/[0.04]`;
+const SIDEBAR_GROUP_HEADER_DROP = `${SIDEBAR_GROUP_HEADER_BASE} bg-[#1a2a41] ring-1 ring-inset ring-blue-400/45`;
+
 function autoScrollContainerOnDrag(
   container: HTMLElement,
   clientY: number,
@@ -449,6 +463,20 @@ export function WorkflowSidebarColumn({
   const DROP_TARGET_INELIGIBLE_CLASS = 'opacity-45 saturate-50';
   const sidebarRootRef = useRef<HTMLDivElement | null>(null);
   const sidebarListScrollRef = useRef<HTMLDivElement | null>(null);
+  /** 无收藏时默认收起占位区；有收藏时始终展开 */
+  const [favoritesBodyExpanded, setFavoritesBodyExpanded] = useState(() => favoriteEntries.length > 0);
+  const prevFavoriteCountRef = useRef<number | null>(null);
+  useEffect(() => {
+    const n = favoriteEntries.length;
+    const prev = prevFavoriteCountRef.current;
+    prevFavoriteCountRef.current = n;
+    if (n > 0) {
+      setFavoritesBodyExpanded(true);
+    } else if (prev !== null && prev > 0 && n === 0) {
+      setFavoritesBodyExpanded(false);
+    }
+  }, [favoriteEntries.length]);
+  const showFavoritesDropBody = favoriteEntries.length > 0 || favoritesBodyExpanded;
   const hasPresetEditorDragging = () => {
     if (typeof window === 'undefined') return false;
     try {
@@ -579,8 +607,8 @@ export function WorkflowSidebarColumn({
               id: 'edit' as const,
               label: '编辑',
               title: '将能力预设拖到此处打开编辑',
-              activeClass: 'border-blue-500 bg-[#152642]',
-              idleClass: 'border-[#3d4754] bg-[#0e0f12] hover:border-[#4b6a9e] hover:bg-[#1a1d26]',
+              activeClass: SIDEBAR_TOP_DROP_ACTIVE_BLUE,
+              idleClass: SIDEBAR_TOP_DROP_IDLE,
               iconClass: 'text-gray-300',
               textClass: 'text-gray-200',
               iconPath: 'M4 13.5V16h2.5l7.2-7.2-2.5-2.5L4 13.5zm10.7-6.8a.7.7 0 000-1L13.3 4.3a.7.7 0 00-1 0l-1.1 1.1 2.5 2.5 1-1.2z',
@@ -589,8 +617,8 @@ export function WorkflowSidebarColumn({
               id: 'copy' as const,
               label: '复制',
               title: '将能力预设拖到此处复制一份',
-              activeClass: 'border-blue-500 bg-[#152642]',
-              idleClass: 'border-[#3d4754] bg-[#0e0f12] hover:border-[#4b6a9e] hover:bg-[#1a1d26]',
+              activeClass: SIDEBAR_TOP_DROP_ACTIVE_BLUE,
+              idleClass: SIDEBAR_TOP_DROP_IDLE,
               iconClass: 'text-gray-300',
               textClass: 'text-gray-200',
               iconPath: 'M6 6h9v10H6zM4 4h9v1H5v9H4z',
@@ -599,8 +627,8 @@ export function WorkflowSidebarColumn({
               id: 'delete' as const,
               label: '删除',
               title: '将能力预设拖到此处删除',
-              activeClass: 'border-red-500 bg-[#3a1818]',
-              idleClass: 'border-[#3d4754] bg-[#0e0f12] hover:border-[#b85454] hover:bg-[#1f1416]',
+              activeClass: SIDEBAR_TOP_DROP_DELETE_ACTIVE,
+              idleClass: SIDEBAR_TOP_DROP_DELETE_IDLE,
               iconClass: 'text-red-300',
               textClass: 'text-red-400',
               iconPath: 'M6 6h8l-.6 10H6.6L6 6zm2-2h4l1 1h3v2H4V5h3l1-1z',
@@ -632,9 +660,9 @@ export function WorkflowSidebarColumn({
                   onDropPresetAction(action.id, presetId);
                 }}
                 title={action.title}
-                className={`rounded-xl border-2 border-dashed h-[52px] px-1 flex flex-col items-center justify-center text-center transition-colors ${
-                  dragOverAction === dragKey ? action.activeClass : action.idleClass
-                } ${enabled ? '' : 'opacity-60 cursor-not-allowed'}`}
+                className={`${dragOverAction === dragKey ? action.activeClass : action.idleClass} ${
+                  enabled ? '' : 'opacity-60 cursor-not-allowed'
+                }`}
               >
                 <svg viewBox="0 0 20 20" className={`w-3 h-3 mb-0.5 ${action.iconClass}`} aria-hidden>
                   <path d={action.iconPath} fill="currentColor" />
@@ -799,11 +827,9 @@ export function WorkflowSidebarColumn({
               setDraggingGroupItems(null);
             }}
             title="将选中图片拖入建组（组内同效）"
-            className={`rounded-xl border-2 border-dashed h-[52px] px-1 flex flex-col items-center justify-center text-center transition-colors ${
-              dragOverAction === '__group__'
-                ? 'border-blue-500 bg-[#152642]'
-                : 'border-[#3d4754] bg-[#0e0f12] hover:border-[#4b6a9e] hover:bg-[#1a1d26]'
-            }`}
+            className={
+              dragOverAction === '__group__' ? SIDEBAR_TOP_DROP_ACTIVE_BLUE : SIDEBAR_TOP_DROP_IDLE
+            }
           >
             <svg viewBox="0 0 20 20" className="w-3 h-3 text-gray-400 mb-0.5" aria-hidden>
               <path d="M3 4h6v5H3zM11 4h6v5h-6zM3 11h6v5H3zM11 11h6v5h-6z" fill="currentColor" />
@@ -829,11 +855,9 @@ export function WorkflowSidebarColumn({
               setDraggingGroupItems(null);
             }}
             title="将组内子卡片拖到此处，移到上一级"
-            className={`rounded-xl border-2 border-dashed h-[52px] px-1 flex flex-col items-center justify-center text-center transition-colors ${
-              dragOverAction === '__ungroup__'
-                ? 'border-blue-500 bg-[#152642]'
-                : 'border-[#3d4754] bg-[#0e0f12] hover:border-[#4b6a9e] hover:bg-[#1a1d26]'
-            }`}
+            className={
+              dragOverAction === '__ungroup__' ? SIDEBAR_TOP_DROP_ACTIVE_BLUE : SIDEBAR_TOP_DROP_IDLE
+            }
           >
             <svg viewBox="0 0 20 20" className="w-3 h-3 text-gray-400 mb-0.5" aria-hidden>
               <path d="M7 5h10v10H7zM3 9l4-4v3h5v2H7v3z" fill="currentColor" />
@@ -901,11 +925,9 @@ export function WorkflowSidebarColumn({
               setDraggingGroupItems(null);
             }}
             title="拖入后在当前位置复制一份"
-            className={`rounded-xl border-2 border-dashed h-[52px] px-1 flex flex-col items-center justify-center text-center transition-colors ${
-              dragOverAction === '__copy__'
-                ? 'border-blue-500 bg-[#152642]'
-                : 'border-[#3d4754] bg-[#0e0f12] hover:border-[#4b6a9e] hover:bg-[#1a1d26]'
-            }`}
+            className={
+              dragOverAction === '__copy__' ? SIDEBAR_TOP_DROP_ACTIVE_BLUE : SIDEBAR_TOP_DROP_IDLE
+            }
           >
             <svg viewBox="0 0 20 20" className="w-3 h-3 text-gray-400 mb-0.5" aria-hidden>
               <path d="M6 6h9v10H6zM4 4h9v1H5v9H4z" fill="currentColor" />
@@ -957,11 +979,9 @@ export function WorkflowSidebarColumn({
               setDraggingGroupItems(null);
             }}
             title="将图片拖到此处从工作流中删除（组内同效）"
-            className={`rounded-xl border-2 border-dashed h-[52px] px-1 flex flex-col items-center justify-center text-center transition-colors ${
-              dragOverAction === '__delete__'
-                ? 'border-red-500 bg-[#3a1818]'
-                : 'border-[#3d4754] bg-[#0e0f12] hover:border-[#b85454] hover:bg-[#1f1416]'
-            }`}
+            className={
+              dragOverAction === '__delete__' ? SIDEBAR_TOP_DROP_DELETE_ACTIVE : SIDEBAR_TOP_DROP_DELETE_IDLE
+            }
           >
             <svg viewBox="0 0 20 20" className="w-3 h-3 text-red-300 mb-0.5" aria-hidden>
               <path d="M6 6h8l-.6 10H6.6L6 6zm2-2h4l1 1h3v2H4V5h3l1-1z" fill="currentColor" />
@@ -1013,11 +1033,9 @@ export function WorkflowSidebarColumn({
               setDraggingGroupItems(null);
             }}
             title="将图片拖到此处标记为已完成（组内同效）"
-            className={`rounded-xl border-2 border-dashed h-[52px] px-1 flex flex-col items-center justify-center text-center transition-colors ${
-              dragOverAction === '__archive__'
-                ? 'border-blue-500 bg-[#152642]'
-                : 'border-[#3d4754] bg-[#0e0f12] hover:border-[#4b6a9e] hover:bg-[#1a1d26]'
-            }`}
+            className={
+              dragOverAction === '__archive__' ? SIDEBAR_TOP_DROP_ACTIVE_BLUE : SIDEBAR_TOP_DROP_IDLE
+            }
           >
             <svg viewBox="0 0 20 20" className="w-3 h-3 text-gray-400 mb-0.5" aria-hidden>
               <path d="M4 4h12v3H4zM5 8h10v8H5zM8 10h4v2H8z" fill="currentColor" />
@@ -1052,15 +1070,33 @@ export function WorkflowSidebarColumn({
                     setFavoriteDropActive(false);
                     tryAddActionToFavoriteFromEvent(e);
                   }}
-                  className={`flex items-center justify-between rounded-lg border px-2.5 py-1.5 transition-colors ${
+                  className={
                     dragOverAction === '__favorite_group_header__'
-                      ? 'border-blue-400 bg-[#1a2a41]'
-                      : 'border-[#2e2e32] bg-[#16161a]'
-                  }`}
+                      ? SIDEBAR_GROUP_HEADER_DROP
+                      : `${SIDEBAR_GROUP_HEADER_IDLE} hover:bg-white/[0.07]`
+                  }
                 >
-                  <span className="text-[8px] font-black text-blue-300 uppercase tracking-wide">常用功能</span>
+                  <span className="text-[8px] font-black text-blue-300 uppercase tracking-wide shrink-0">常用功能</span>
                   <div className="flex-1 min-w-0 flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
-                    {favoriteHasGenerateCountOptions ? (
+                    {favoriteEntries.length === 0 && !showFavoritesDropBody ? (
+                      <>
+                        <span
+                          className="text-[8px] text-gray-500 truncate min-w-0"
+                          title="将能力卡拖到本行即可加入常用；展开后可在下方区域拖放"
+                        >
+                          拖到本行加入，或点展开
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setFavoritesBodyExpanded(true)}
+                          className="shrink-0 text-[8px] font-black text-blue-300/95 hover:text-blue-200 px-1.5 py-0.5 rounded-md ring-1 ring-inset ring-white/[0.08] bg-white/[0.03]"
+                          title="展开常用功能区"
+                          aria-expanded={showFavoritesDropBody}
+                        >
+                          展开
+                        </button>
+                      </>
+                    ) : favoriteHasGenerateCountOptions ? (
                       <>
                         {favoriteIsCountCustomEditing ? (
                           <div
@@ -1259,10 +1295,24 @@ export function WorkflowSidebarColumn({
                         ) : null}
                       </>
                     ) : (
-                      <span className="text-[8px] text-gray-500">拖入收藏</span>
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="text-[8px] text-gray-500">拖入收藏</span>
+                        {favoriteEntries.length === 0 && favoritesBodyExpanded ? (
+                          <button
+                            type="button"
+                            onClick={() => setFavoritesBodyExpanded(false)}
+                            className="shrink-0 text-[8px] font-black text-gray-500 hover:text-gray-300 px-1 py-0.5 rounded-md ring-1 ring-inset ring-white/[0.06]"
+                            title="收起常用功能占位区"
+                            aria-expanded={showFavoritesDropBody}
+                          >
+                            收起
+                          </button>
+                        ) : null}
+                      </span>
                     )}
                   </div>
                 </div>
+                {showFavoritesDropBody ? (
                 <div
                   onDropCapture={() => {
                     if (draggingActionIdRef.current) setActionDroppedInFavorite(true);
@@ -1290,8 +1340,8 @@ export function WorkflowSidebarColumn({
                   className="space-y-2"
                 >
                   {favoriteEntries.length === 0 ? (
-                    <div className={`text-[8px] text-center py-2 ${favoriteDropActive ? 'text-blue-300' : 'text-gray-500'}`}>
-                      把功能块拖到这里，作为常用功能
+                    <div className={`text-[8px] text-center py-1 leading-tight ${favoriteDropActive ? 'text-blue-300' : 'text-gray-500'}`}>
+                      拖拽能力卡到此处加入常用（也可拖到本区标题或分类标题）
                     </div>
                   ) : (
                     <div className="grid grid-cols-5 gap-1.5">
@@ -1443,6 +1493,7 @@ export function WorkflowSidebarColumn({
                     </div>
                   )}
                 </div>
+                ) : null}
               </div>
             </div>
           ) : null}
@@ -1482,10 +1533,10 @@ export function WorkflowSidebarColumn({
                       setFavoriteDropActive(false);
                       tryAddActionToFavoriteFromEvent(e);
                     }}
-                    className={`mb-1 rounded-lg border px-2 py-1 flex items-center gap-1.5 min-h-[1.6rem] transition-colors ${
+                    className={`mb-1 gap-1.5 ${
                       dragOverAction === `__favorite_group_header__:${category.id}`
-                        ? 'border-blue-400 bg-[#1a2a41]'
-                        : 'border-[#2e2e32] bg-[#121214]'
+                        ? SIDEBAR_GROUP_HEADER_DROP
+                        : `${SIDEBAR_GROUP_HEADER_IDLE} hover:bg-white/[0.07]`
                     }`}
                   >
                     <button
@@ -1855,10 +1906,10 @@ export function WorkflowSidebarColumn({
                   tryAddActionToFavoriteFromEvent(e);
                 }}
                 onClick={() => toggleSectionCollapsed('__all_presets__')}
-                className={`w-full text-left mb-1.5 flex items-center justify-between rounded-lg border px-2.5 py-1.5 text-[8px] font-black uppercase tracking-wide text-gray-400 hover:bg-[#18181c] hover:text-gray-200 transition-colors ${
+                className={`w-full text-left mb-1.5 text-[8px] font-black uppercase tracking-wide text-gray-400 transition-colors ${
                   dragOverAction === '__favorite_group_header__:all-presets'
-                    ? 'border-blue-400 bg-[#1a2a41] text-blue-200'
-                    : 'border-[#2e2e32] bg-[#121214]'
+                    ? `${SIDEBAR_GROUP_HEADER_DROP} text-blue-200`
+                    : `${SIDEBAR_GROUP_HEADER_IDLE} hover:bg-white/[0.07] hover:text-gray-200`
                 }`}
               >
                 <span>功能</span>
@@ -1997,10 +2048,10 @@ export function WorkflowSidebarColumn({
                   tryAddActionToFavoriteFromEvent(e);
                 }}
                 onClick={() => toggleSectionCollapsed('__capability_sets__')}
-                className={`w-full text-left mb-1.5 flex items-center justify-between rounded-lg border px-2.5 py-1.5 text-[8px] font-black uppercase tracking-wide text-gray-400 hover:bg-[#18181c] hover:text-gray-200 transition-colors ${
+                className={`w-full text-left mb-1.5 text-[8px] font-black uppercase tracking-wide text-gray-400 transition-colors ${
                   dragOverAction === '__favorite_group_header__:sets'
-                    ? 'border-blue-400 bg-[#1a2a41] text-blue-200'
-                    : 'border-[#2e2e32] bg-[#121214]'
+                    ? `${SIDEBAR_GROUP_HEADER_DROP} text-blue-200`
+                    : `${SIDEBAR_GROUP_HEADER_IDLE} hover:bg-white/[0.07] hover:text-gray-200`
                 }`}
               >
                 <span>复合能力</span>

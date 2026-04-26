@@ -195,10 +195,10 @@ const SidebarIconButton: React.FC<{ active: boolean; label: string; onClick: () 
     type="button"
     onClick={onClick}
     aria-label={label}
-    className={`group relative w-full h-10 rounded-xl transition-colors duration-200 flex items-center justify-center cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-blue-500/55 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0c0c0f] ${
+    className={`group relative flex h-10 w-full cursor-pointer items-center justify-center rounded-xl outline-none transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-blue-500/55 focus-visible:ring-offset-2 focus-visible:ring-offset-[#050505] ${
       active
         ? 'bg-[#152a4a] text-blue-200 ring-1 ring-blue-500/40 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]'
-        : 'text-gray-400 bg-white/[0.04] ring-1 ring-transparent hover:bg-white/[0.08] hover:ring-white/[0.06]'
+        : 'text-gray-400 ring-1 ring-transparent hover:bg-white/[0.06] hover:ring-white/[0.06]'
     }`}
   >
     {children}
@@ -3125,9 +3125,9 @@ const MainApp: React.FC = () => {
       )}
 
       <div
-        className={`fixed left-4 top-4 bottom-4 z-[1001] w-14 flex flex-col transition-all ${isSidebarOpen ? 'opacity-100' : 'opacity-100'}`}
+        className={`fixed left-3 top-4 bottom-4 z-[1001] w-14 flex flex-col transition-all ${isSidebarOpen ? 'opacity-100' : 'opacity-100'}`}
       >
-        <div className="flex flex-1 min-h-0 flex-col overflow-hidden rounded-2xl bg-[#0c0c0f] shadow-[0_12px_40px_rgba(0,0,0,0.55)] ring-1 ring-white/[0.07]">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <div className="min-h-0 flex-1 overflow-y-auto no-scrollbar p-2">
           <div className="flex flex-col items-center gap-2">
             {user ? (
@@ -3171,10 +3171,10 @@ const MainApp: React.FC = () => {
             <button
               type="button"
               onClick={() => setExperimentalNavExpanded((e) => !e)}
-              className={`group relative w-full h-10 rounded-xl transition-colors duration-200 flex items-center justify-center cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-blue-500/55 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0c0c0f] ${
+              className={`group relative flex h-10 w-full cursor-pointer items-center justify-center rounded-xl outline-none transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-blue-500/55 focus-visible:ring-offset-2 focus-visible:ring-offset-[#050505] ${
                 isExperimentalMode(mode) && !experimentalNavExpanded
                   ? 'bg-[#152a4a] text-blue-200 ring-1 ring-blue-500/40'
-                  : 'text-gray-400 bg-white/[0.04] ring-1 ring-transparent hover:bg-white/[0.08] hover:ring-white/[0.06]'
+                  : 'text-gray-400 ring-1 ring-transparent hover:bg-white/[0.06] hover:ring-white/[0.06]'
               }`}
               aria-label="实验性功能"
               aria-expanded={experimentalNavExpanded}
@@ -3196,7 +3196,7 @@ const MainApp: React.FC = () => {
           </div>
 
           {experimentalNavExpanded && (
-            <div className="mt-2 pt-2 border-t border-white/[0.06] flex flex-col gap-2">
+            <div className="mt-2 flex flex-col gap-2 pt-2">
               <SidebarIconButton active={mode === AppMode.GENERATE_3D} label="生成3D" onClick={() => { setMode(AppMode.GENERATE_3D); setIsSidebarOpen(false); }}>
                 <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><path d="M10 2.8 16 6v8l-6 3.2L4 14V6l6-3.2Z" stroke="currentColor" strokeWidth="1.6"/><path d="M4 6l6 3.1L16 6M10 9.1V17" stroke="currentColor" strokeWidth="1.4"/></svg>
               </SidebarIconButton>
@@ -3227,8 +3227,6 @@ const MainApp: React.FC = () => {
               workspaceCloudQuotaBytes={workspaceCloudQuotaBytes}
               workspaceCloudUsageRatio={workspaceCloudUsageRatio}
               workspaceCloudUsagePercent={workspaceCloudUsagePercent}
-              workspaceProjectOptions={workspaceProjectOptions}
-              activeWorkspaceProjectName={activeWorkspaceProjectName}
               workspaceCloudHydratingProjectId={workspaceCloudHydratingProjectId}
               workspaceLastSyncText={workspaceLastSyncText}
               workspaceCloudAutoSyncing={workspaceCloudAutoSyncing}
@@ -3245,8 +3243,6 @@ const MainApp: React.FC = () => {
               onOpenApiKeyModal={() => setApiKeyModalOpen(true)}
               aiInvocationReady={aiInvocationReady}
               aiPlatformLabel={aiProviderToolbarLabel}
-              onBackToWorkspaceList={() => void backToWorkspaceProjectShell()}
-              onWorkspaceOpen={(id) => void openWorkspaceProject(id)}
             />
           ) : null}
         </div>
@@ -3372,17 +3368,24 @@ const MainApp: React.FC = () => {
       <main className="flex-1 flex flex-col h-[100dvh] overflow-hidden">
         <div
           ref={mainScrollRef}
-          className={`flex-1 no-scrollbar touch-pan-y ${
+          className={`flex-1 min-h-0 no-scrollbar touch-pan-y ${
             mode === AppMode.WORKFLOW && activeWorkspaceProjectId
-              ? 'overflow-hidden pt-3 pb-3 pl-[calc(1rem+3.5rem+1rem)] pr-4 lg:pt-4 lg:pb-6 lg:pl-[calc(1.5rem+3.5rem+1.5rem)] lg:pr-6'
-              : 'overflow-y-auto pt-6 pb-4 pl-[calc(1rem+3.5rem+1rem)] pr-4 lg:py-10 lg:pl-[calc(1.5rem+3.5rem+1.5rem)] lg:pr-10'
+              ? 'flex flex-col overflow-hidden pt-3 pb-3 pl-[calc(0.75rem+3.5rem+0.5rem)] pr-4 lg:pt-4 lg:pb-6 lg:pl-[calc(1rem+3.5rem+0.75rem)] lg:pr-6'
+              : 'overflow-y-auto pt-6 pb-4 pl-[calc(0.75rem+3.5rem+0.5rem)] pr-4 lg:py-10 lg:pl-[calc(1rem+3.5rem+0.75rem)] lg:pr-10'
           }`}
           onMouseDownCapture={onMainMouseDownCapture}
           onWheelCapture={onMainWheelCapture}
           onDragOverCapture={onMainDragOverCapture}
           onDropCapture={onMainDropCapture}
         >
-          <div ref={workflowMainContentRef} className="w-full h-full">
+          <div
+            ref={workflowMainContentRef}
+            className={
+              mode === AppMode.WORKFLOW && activeWorkspaceProjectId
+                ? 'flex h-full min-h-0 min-w-0 w-full flex-1 flex-col'
+                : 'h-full w-full'
+            }
+          >
             {mode === AppMode.SETTINGS && (
               <Suspense fallback={<LazySectionFallback label="设置" />}>
                 <SettingsSection
@@ -3426,6 +3429,13 @@ const MainApp: React.FC = () => {
                     onAddGenerate3DJob={handleAddGenerate3DJobFromWorkflow}
                     preferenceScope={user?.id ?? null}
                     onboardingKey={`${user?.id ?? 'guest'}:${activeWorkspaceProjectId}`}
+                    workspaceProjectChrome={{
+                      projectOptions: workspaceProjectOptions,
+                      activeProjectId: activeWorkspaceProjectId,
+                      activeProjectName: activeWorkspaceProjectName,
+                      onBackToProjectList: () => void backToWorkspaceProjectShell(),
+                      onSelectProject: (id) => void openWorkspaceProject(id),
+                    }}
                     registerMarqueeStartHandler={registerWorkflowMarqueeStart}
                     registerPaneWheelHandler={registerWorkflowPaneWheel}
                     libraryItems={library}
@@ -4793,7 +4803,7 @@ const MainApp: React.FC = () => {
                         />
                       ) : null}
 
-                      <div className="absolute top-4 left-4 z-10 max-w-[min(300px,calc(100vw-6rem))] rounded-xl bg-[#101018]/90 ring-1 ring-white/[0.06] px-3 py-2 text-[9px] text-gray-300 pointer-events-none text-left leading-relaxed space-y-1">
+                      <div className="absolute top-4 left-3 z-10 max-w-[min(300px,calc(100vw-6rem))] rounded-xl bg-[#101018]/90 ring-1 ring-white/[0.06] px-3 py-2 text-[9px] text-gray-300 pointer-events-none text-left leading-relaxed space-y-1">
                         {dialogTempPreviewLayout === 'pano' ? (
                           <>
                             <div>拖拽：旋转视角（360° 全景）</div>
@@ -4846,7 +4856,7 @@ const MainApp: React.FC = () => {
                       </div>
 
                       <div
-                        className="absolute left-4 bottom-4 max-w-[min(680px,92vw)] rounded-xl bg-[#1c1c22]/95 ring-1 ring-white/[0.06] p-4 space-y-2 text-left"
+                        className="absolute left-3 bottom-4 max-w-[min(680px,92vw)] rounded-xl bg-[#1c1c22]/95 ring-1 ring-white/[0.06] p-4 space-y-2 text-left"
                         data-no-temp-preview-wheel
                       >
                         <div className="text-[9px] font-black text-gray-500 uppercase">类型</div>

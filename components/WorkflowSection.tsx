@@ -84,9 +84,10 @@ import {
 import { CutSelectModal, PromptTweakModal, ArchivedDetailModal, type PromptTweakTarget } from './workflow/modals';
 import {
   SET_ACTION_PREFIX,
-  TITLE_ROW_BTN_BASE,
   TITLE_ROW_BTN_NEUTRAL,
   TITLE_ROW_BTN_ACTIVE,
+  TITLE_ROW_BTN_PRIMARY,
+  TITLE_ROW_BTN_EMERALD,
   TITLE_ROW_STEPPER_SHELL,
   TITLE_ROW_STEPPER_VALUE,
   TITLE_ROW_STEPPER_BTN,
@@ -97,6 +98,7 @@ import {
   WORKFLOW_META_PILL,
   WORKFLOW_EDGE_GUTTER,
   WORKFLOW_CHROME_BTN_NEUTRAL,
+  WORKFLOW_TOPBAR_ICON_BTN,
   WORKFLOW_LIGHTBOX_TAB_IDLE,
   WORKFLOW_CARD_DISMISS_ICON_BTN,
 } from './workflow/workflowSectionUiConstants';
@@ -258,6 +260,14 @@ const WorkflowSection: React.FC<{
   onUpdateCapabilitySets?: (next: CapabilitySet[]) => void;
   /** 首次进入项目时的导览键（同一键仅执行一次横扫导览） */
   onboardingKey?: string | null;
+  /** 顶栏左侧：返回项目列表 + 切换项目（位于 1–4 分档前）；不传则不渲染 */
+  workspaceProjectChrome?: {
+    projectOptions: Array<{ value: string; label: string }>;
+    activeProjectId: string;
+    activeProjectName: string;
+    onBackToProjectList: () => void | Promise<void>;
+    onSelectProject: (id: string) => void | Promise<void>;
+  };
 }> = ({
   capabilityPresets,
   capabilitySets: capabilitySetsProp = [],
@@ -276,6 +286,7 @@ const WorkflowSection: React.FC<{
   onUpdateCapabilityPresets,
   onUpdateCapabilitySets,
   onboardingKey = null,
+  workspaceProjectChrome,
 }) => {
   const assets = Array.isArray(assetsProp) ? assetsProp : [];
   const pending = Array.isArray(pendingProp) ? pendingProp : [];
@@ -3641,7 +3652,7 @@ ${lineSvg}
       title: '大纲',
       desc: repositoryOutlineMode === 'tags' ? '按标签筛选仓库资产（支持多选）' : '当前筛选下的仓库条目；点击行预览大图',
       actions: (
-        <div className="flex items-center gap-2 whitespace-nowrap flex-wrap">
+        <div className="flex flex-wrap items-center gap-1.5 whitespace-nowrap">
           <button
             type="button"
             onClick={() => setRepositoryOutlineMode('list')}
@@ -3670,7 +3681,7 @@ ${lineSvg}
       title: '大纲',
       desc: '窄栏与功能区同宽；与工作区同屏时在视口右侧',
       actions: (
-        <div className="flex items-center gap-2 whitespace-nowrap flex-wrap">
+        <div className="flex flex-wrap items-center gap-1.5 whitespace-nowrap">
           <button
             type="button"
             onClick={expandOutlineAll}
@@ -3697,8 +3708,8 @@ ${lineSvg}
           title: '资产仓库',
           desc: '筛选后点击预览；列数与工作区画布共用设置；右侧大纲支持列表/标签模式',
           actions: (
-            <div className="flex flex-wrap items-center gap-2 justify-end min-w-0">
-              <span className="text-[9px] font-black text-gray-500 uppercase shrink-0">筛选</span>
+            <div className="flex min-w-0 flex-wrap items-center justify-end gap-1.5">
+              <span className="shrink-0 text-[8px] font-black uppercase tracking-wide text-gray-500">筛选</span>
               <input
                 value={libraryTagQuery}
                 onChange={(e) => setLibraryTagQuery(e.target.value)}
@@ -3794,13 +3805,9 @@ ${lineSvg}
           desc: '工作区资产管理',
           actions: (
             <>
-              <div className="flex items-center gap-2 whitespace-nowrap">
+              <div className="flex items-center gap-1.5 whitespace-nowrap">
                 {!showArchived && (
-                  <button
-                    type="button"
-                    onClick={() => addWorkflowTextAsset()}
-                    className="h-8 px-3 rounded-lg border border-emerald-800/50 bg-emerald-950/40 text-[9px] font-black uppercase text-emerald-200 hover:bg-emerald-900/35"
-                  >
+                  <button type="button" onClick={() => addWorkflowTextAsset()} className={TITLE_ROW_BTN_EMERALD}>
                     添加文字
                   </button>
                 )}
@@ -3840,13 +3847,13 @@ ${lineSvg}
                 </div>
               </div>
               {archiveHint && !showArchived && (
-                <div className="h-8 flex items-center gap-2 px-3 rounded-lg bg-[#152642] border border-[#3b6fb8] text-[9px] text-blue-200">
-                  <span className="font-black uppercase">已归档</span>
+                <div className="flex h-7 items-center gap-1.5 rounded-md bg-[#152642] px-2.5 text-[8px] text-blue-200 ring-1 ring-blue-500/35">
+                  <span className="font-black uppercase tracking-wide">已归档</span>
                   <span className="text-gray-300">已移入资产仓库</span>
                 </div>
               )}
               {!showArchived && (inGroupView || visibleAssets.length > 0) && (
-                <div className="flex items-center gap-2 whitespace-nowrap">
+                <div className="flex items-center gap-1.5 whitespace-nowrap">
                   <button
                     type="button"
                     onClick={() => {
@@ -3891,12 +3898,12 @@ ${lineSvg}
           title: '功能区',
           desc: '基础能力与复合能力',
           actions: (
-            <div className="flex items-center gap-2 whitespace-nowrap">
+            <div className="flex items-center gap-1.5 whitespace-nowrap">
               <button
                 type="button"
                 onClick={() => executePending()}
                 disabled={pending.length === 0 || executing}
-                className={`${TITLE_ROW_BTN_BASE} bg-blue-600 hover:bg-blue-500 ring-1 ring-blue-300/50 text-white disabled:opacity-40 disabled:hover:bg-blue-600`}
+                className={TITLE_ROW_BTN_PRIMARY}
               >
                 {executing
                   ? `执行中 ${executingQueueDoneCount}/${executingQueue?.total ?? 0}`
@@ -3938,12 +3945,12 @@ ${lineSvg}
         title: '功能区',
         desc: '基础能力与复合能力',
         actions: (
-          <div className="flex items-center gap-2 whitespace-nowrap">
+          <div className="flex items-center gap-1.5 whitespace-nowrap">
             <button
               type="button"
               onClick={() => executePending()}
               disabled={pending.length === 0 || executing}
-              className={`${TITLE_ROW_BTN_BASE} bg-blue-600 hover:bg-blue-500 ring-1 ring-blue-300/50 text-white disabled:opacity-40 disabled:hover:bg-blue-600`}
+              className={TITLE_ROW_BTN_PRIMARY}
             >
               {executing
                 ? `执行中 ${executingQueueDoneCount}/${executingQueue?.total ?? 0}`
@@ -3980,7 +3987,7 @@ ${lineSvg}
         title: '能力预设',
         desc: '当前能力配置与预设编辑',
         actions: (
-          <div className="w-full min-w-0 flex items-center justify-between gap-2 whitespace-nowrap">
+          <div className="flex w-full min-w-0 items-center justify-between gap-1.5 whitespace-nowrap">
             <div className={TITLE_ROW_STEPPER_SHELL}>
               <button
                 type="button"
@@ -3989,9 +3996,9 @@ ${lineSvg}
                   if (typeof window === 'undefined') return;
                   window.dispatchEvent(new CustomEvent('ac:capability-preset-view-mode', { detail: { mode: 'presets' } }));
                 }}
-                className={`h-8 px-3 text-[9px] font-black uppercase ${
+                className={`h-7 px-2.5 text-[8px] font-black uppercase tracking-wide ${
                   capabilityPresetViewMode === 'presets'
-                    ? 'bg-blue-600 text-white'
+                    ? 'bg-blue-600 text-white ring-1 ring-inset ring-blue-400/30'
                     : 'text-gray-300 hover:bg-white/[0.08]'
                 }`}
               >
@@ -4004,9 +4011,9 @@ ${lineSvg}
                   if (typeof window === 'undefined') return;
                   window.dispatchEvent(new CustomEvent('ac:capability-preset-view-mode', { detail: { mode: 'image_process' } }));
                 }}
-                className={`h-8 px-3 text-[9px] font-black uppercase border-l border-white/[0.08] ${
+                className={`h-7 border-l border-white/[0.08] px-2.5 text-[8px] font-black uppercase tracking-wide ${
                   capabilityPresetViewMode === 'image_process'
-                    ? 'bg-blue-600 text-white'
+                    ? 'bg-blue-600 text-white ring-1 ring-inset ring-blue-400/30'
                     : 'text-gray-300 hover:bg-white/[0.08]'
                 }`}
               >
@@ -4019,16 +4026,16 @@ ${lineSvg}
                   if (typeof window === 'undefined') return;
                   window.dispatchEvent(new CustomEvent('ac:capability-preset-view-mode', { detail: { mode: 'sets' } }));
                 }}
-                className={`h-8 px-3 text-[9px] font-black uppercase border-l border-white/[0.08] ${
+                className={`h-7 border-l border-white/[0.08] px-2.5 text-[8px] font-black uppercase tracking-wide ${
                   capabilityPresetViewMode === 'sets'
-                    ? 'bg-blue-600 text-white'
+                    ? 'bg-blue-600 text-white ring-1 ring-inset ring-blue-400/30'
                     : 'text-gray-300 hover:bg-white/[0.08]'
                 }`}
               >
                 能力集合
               </button>
             </div>
-            <div className="min-w-0 flex items-center justify-end gap-2">
+            <div className="flex min-w-0 items-center justify-end gap-1.5">
               {(capabilityPresetViewMode === 'presets' || capabilityPresetViewMode === 'image_process') && (
                 <>
                   <button
@@ -4173,17 +4180,73 @@ ${lineSvg}
   );
 
   return (
-    <div className="flex flex-col min-h-[400px] h-[calc(100dvh-5.5rem)] gap-3">
-      <div className="flex flex-col flex-1 min-h-0 gap-3 min-w-0">
-      <div className={`flex flex-col items-stretch gap-2 shrink-0 ${WORKFLOW_EDGE_GUTTER}`}>
-        <div
-          className="rounded-2xl bg-[#0c0c0f]/92 backdrop-blur-sm ring-1 ring-white/[0.06] py-1.5 shadow-[0_8px_24px_rgba(0,0,0,0.28)]"
-          onWheelCapture={handlePaneWheel}
-          data-workflow-topbar
-        >
-          <div className="flex items-center gap-2 min-h-8">
+    <div className="flex h-full min-h-0 flex-col gap-2">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
+      <div className={`flex flex-col items-stretch gap-1.5 shrink-0 ${WORKFLOW_EDGE_GUTTER}`}>
+        <div className="py-0.5" onWheelCapture={handlePaneWheel} data-workflow-topbar>
+          <div className="flex min-h-7 items-center gap-1.5">
+            {workspaceProjectChrome ? (
+              <div className="mr-1 flex shrink-0 items-center gap-1 pr-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    void workspaceProjectChrome.onBackToProjectList();
+                  }}
+                  className={WORKFLOW_TOPBAR_ICON_BTN}
+                  title="返回项目列表（将先同步到云端）"
+                  aria-label="返回项目列表"
+                >
+                  <svg aria-hidden viewBox="0 0 20 20" className="h-3 w-3" fill="none">
+                    <path
+                      d="M12.5 4.5L7 10l5.5 5.5"
+                      stroke="currentColor"
+                      strokeWidth="1.9"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </button>
+                <div className="min-w-0 max-w-[min(11rem,32vw)]">
+                  <CustomDropdown
+                    options={workspaceProjectChrome.projectOptions}
+                    value={workspaceProjectChrome.activeProjectId}
+                    onChange={(id) => {
+                      if (!id || id === workspaceProjectChrome.activeProjectId) return;
+                      void workspaceProjectChrome.onSelectProject(id);
+                    }}
+                    placeholder={workspaceProjectChrome.activeProjectName || '项目'}
+                    triggerAriaLabel={`当前项目：${workspaceProjectChrome.activeProjectName || '选择项目'}`}
+                    renderTrigger={({ open }) => (
+                      <span
+                        className={`flex h-7 min-w-0 max-w-full items-center gap-1 rounded-md bg-white/[0.05] px-2 outline-none ring-1 transition-colors ${
+                          open
+                            ? 'shadow-[inset_0_0_0_1px_rgba(59,130,246,0.35)] ring-blue-500/50'
+                            : 'ring-white/[0.06] hover:bg-white/[0.09]'
+                        }`}
+                        title={workspaceProjectChrome.activeProjectName || '切换项目'}
+                      >
+                        <svg viewBox="0 0 20 20" className="h-3 w-3 shrink-0 text-blue-300/90" fill="none" aria-hidden>
+                          <path
+                            d="M4 6.5h12v9a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-9Z"
+                            stroke="currentColor"
+                            strokeWidth="1.5"
+                            strokeLinejoin="round"
+                          />
+                          <path d="M4 8.5h12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                        </svg>
+                        <span className="min-w-0 truncate text-[8px] font-black uppercase leading-none tracking-wide text-gray-300">
+                          {workspaceProjectChrome.activeProjectName || '项目'}
+                        </span>
+                      </span>
+                    )}
+                    triggerClassName="w-full min-w-0 p-0 border-0 bg-transparent"
+                    portalZIndex={{ backdrop: 1100, list: 1101 }}
+                  />
+                </div>
+              </div>
+            ) : null}
             <div
-              className="flex shrink-0 items-center gap-px rounded-lg bg-[#08080b] p-px ring-1 ring-white/[0.06]"
+              className="flex shrink-0 items-center gap-0.5"
               role="group"
               aria-label="卷轴分档：1 能力 2 功能区+工作区 3 工作区+大纲 4 仓库"
             >
@@ -4202,10 +4265,10 @@ ${lineSvg}
                     type="button"
                     title={t}
                     onClick={() => snapWorkspacePaneToNode(pane)}
-                    className={`min-w-[1.75rem] h-7 px-1 rounded-md text-[9px] font-black tabular-nums transition-colors ${
+                    className={`h-7 min-w-[1.625rem] rounded-[0.2rem] px-1 text-[8px] font-black tabular-nums tracking-wide transition-colors ${
                       on
-                        ? 'bg-blue-600 text-white shadow-sm'
-                        : 'text-gray-500 hover:text-gray-200 hover:bg-white/[0.06]'
+                        ? 'bg-blue-600 text-white ring-1 ring-inset ring-blue-400/35'
+                        : 'text-gray-400 hover:bg-white/[0.07] hover:text-gray-200'
                     }`}
                   >
                     {k}
@@ -4213,26 +4276,23 @@ ${lineSvg}
                 );
               })}
             </div>
-            <div className="flex-1 min-h-7 min-w-0 flex items-center gap-0 overflow-x-auto no-scrollbar border-l border-white/[0.05] pl-3">
+            <div className="flex min-h-7 min-w-0 flex-1 items-center gap-2 overflow-x-auto pl-1.5 no-scrollbar">
               {topTitleColumns.map((item) => (
-                <div
-                  key={item.title}
-                  className="flex items-center gap-1.5 shrink-0 pr-2 mr-1 border-r border-white/[0.05] last:border-0 last:mr-0 last:pr-0"
-                >
+                <div key={item.title} className="flex shrink-0 items-center gap-1 pr-1">
                   <span
-                    className="text-[8px] font-black uppercase text-blue-400/90 max-w-[4.5rem] truncate shrink-0"
+                    className="max-w-[4.5rem] shrink-0 truncate text-[8px] font-black uppercase tracking-wide text-blue-300/90"
                     title={item.desc}
                   >
                     {item.title}
                   </span>
                   {item.actions ? (
-                    <div className="flex items-center gap-1 flex-nowrap shrink-0">{item.actions}</div>
+                    <div className="flex shrink-0 flex-nowrap items-center gap-1">{item.actions}</div>
                   ) : null}
                 </div>
               ))}
             </div>
           </div>
-          <div className="mt-1 h-0.5 w-full rounded-full bg-white/[0.06] overflow-hidden" aria-hidden>
+          <div className="mt-2.5 h-0.5 w-full overflow-hidden rounded-full bg-white/[0.06]" aria-hidden>
             <div
               className="h-full rounded-full bg-blue-500/40 transition-[width] duration-150 ease-out"
               style={{
