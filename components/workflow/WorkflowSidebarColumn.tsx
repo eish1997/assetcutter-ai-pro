@@ -23,8 +23,9 @@ import {
   DT_AC_CAPABILITY_ACTION_SOURCE,
   DT_AC_CAPABILITY_FROM_EDITOR,
 } from '../../services/workflowDragPipeline';
+import { isGroupAsset } from '../../services/groupHelpers';
 import { dragTransferHasPlainText } from './workflowSectionHelpers';
-import { SET_ACTION_PREFIX } from './workflowSectionUiConstants';
+import { SET_ACTION_PREFIX, WORKFLOW_EDGE_GUTTER } from './workflowSectionUiConstants';
 import { uuid } from './workflowIds';
 import type { CapabilityCategoryGroup } from './workflowCapabilityGroups';
 
@@ -76,7 +77,7 @@ function hasAnyImagePayload(asset: WorkflowAsset): boolean {
   }
   const results = asset.results || {};
   if (Object.values(results).some((v) => String(v || '').trim() !== '')) return true;
-  if ((asset.cutImageGroup || []).some((it) => typeof it === 'string' && it.trim() !== '')) return true;
+  if (asset.assetIds?.length) return true;
   return false;
 }
 
@@ -194,8 +195,8 @@ export type WorkflowSidebarColumnProps = {
   assets: WorkflowAsset[];
   getAssetDisplayImage: (a: WorkflowAsset, assetsList?: WorkflowAsset[]) => string;
   setAssets: Dispatch<SetStateAction<WorkflowAsset[]>>;
+  selectedGroupItemKeys: Set<string>;
   setSelectedGroupItemKeys: Dispatch<SetStateAction<Set<string>>>;
-  viewStackLength: number;
   moveGroupItemsToUpperLevel: (groupAssetId: string, itemIndexes: number[]) => void;
   sidebarOpsAllowed: boolean;
   groupAssetForDrag: WorkflowAsset | null;
@@ -203,7 +204,7 @@ export type WorkflowSidebarColumnProps = {
   duplicateAssetInPlace: (sourceIds: string[], parentGroupId: string | null) => void;
   removeAsset: (assetId: string) => void;
   removeGroupItems: (prev: WorkflowAsset[], groupAssetId: string, itemIndexes: number[]) => WorkflowAsset[];
-  setViewStack: Dispatch<SetStateAction<{ assetId: string }[]>>;
+  setGroupFilterId: Dispatch<SetStateAction<string | null>>;
   markArchived: (assetId: string) => void;
   visiblePresets: CustomAppModule[];
   visibleCapabilitySets: CapabilitySet[];
@@ -263,8 +264,8 @@ export function WorkflowSidebarColumn({
   assets,
   getAssetDisplayImage,
   setAssets,
+  selectedGroupItemKeys,
   setSelectedGroupItemKeys,
-  viewStackLength,
   moveGroupItemsToUpperLevel,
   sidebarOpsAllowed,
   groupAssetForDrag,
@@ -272,7 +273,7 @@ export function WorkflowSidebarColumn({
   duplicateAssetInPlace,
   removeAsset,
   removeGroupItems,
-  setViewStack,
+  setGroupFilterId,
   markArchived,
   visiblePresets,
   visibleCapabilitySets,
@@ -428,17 +429,11 @@ export function WorkflowSidebarColumn({
     }
     if (draggingGroupItems?.itemIndexes?.length) {
       const group = assets.find((a) => a.id === draggingGroupItems.groupAssetId);
-      const items = group?.cutImageGroup || [];
+      const ids = group?.assetIds ?? [];
       draggingGroupItems.itemIndexes.forEach((idx) => {
-        const item = items[idx];
-        if (!item) return;
-        if (typeof item === 'string') {
-          result.hasDrag = true;
-          if (item.trim()) result.hasImage = true;
-          return;
-        }
-        if (typeof item === 'object' && item && 'assetId' in item) {
-          appendFromAsset(assets.find((a) => a.id === item.assetId));
+        const childId = ids[idx];
+        if (childId) {
+          appendFromAsset(assets.find((a) => a.id === childId));
         }
       });
     }
@@ -570,10 +565,10 @@ export function WorkflowSidebarColumn({
       }}
       className={
         variant === 'splitLeft'
-          ? 'w-full min-h-0 flex-1 flex flex-col gap-3 overflow-hidden relative isolate'
+          ? `w-full min-h-0 flex-1 flex flex-col gap-3 overflow-hidden relative isolate ${WORKFLOW_EDGE_GUTTER}`
           : wide
-            ? 'w-full min-h-0 flex flex-col gap-3 overflow-hidden no-scrollbar shrink-0 max-h-[min(52vh,520px)] relative isolate'
-            : 'w-80 shrink-0 min-h-0 flex-1 flex flex-col gap-3 overflow-hidden relative isolate'
+            ? `w-full min-h-0 flex flex-col gap-3 overflow-hidden no-scrollbar shrink-0 max-h-[min(52vh,520px)] relative isolate ${WORKFLOW_EDGE_GUTTER}`
+            : `w-80 shrink-0 min-h-0 flex-1 flex flex-col gap-3 overflow-hidden relative isolate ${WORKFLOW_EDGE_GUTTER}`
       }
     >
       <div className="sticky top-0 z-40 bg-gradient-to-b from-[#0b0b0d]/96 via-[#0b0b0d]/90 to-transparent pt-2 pb-3">
@@ -668,7 +663,86 @@ export function WorkflowSidebarColumn({
             }}
             onDrop={(e) => {
               e.preventDefault();
-              if (draggingAssetIds?.length) {
+              // 如果当前在组视图中，使用 selectedGroupItemKeys 在组内创建嵌套组
+              if (currentGroupAsset && selectedGroupItemKeys.size > 0) {
+                const indexes = [...selectedGroupItemKeys]
+                  .map((key) => {
+                    const parts = String(key).split('::');
+                    if (parts.length !== 2 || parts[0] !== currentGroupAsset.id) return null;
+                    const idx = Number(parts[1]);
+                    return Number.isNaN(idx) ? null : idx;
+                  })
+                  .filter((idx): idx is number => idx !== null);
+                if (indexes.length >= 2) {
+                  // 组内成组
+                  if (indexes.length === 2) {
+                    createNestedGroupFromGroupItem(currentGroupAsset.id, indexes[0]);
+                  } else {
+                    // 多个资产成组：在当前组内创建嵌套组
+                    setAssets((prev) => {
+                      const group = prev.find((a) => a.id === currentGroupAsset.id);
+                      if (!group || !isGroupAsset(group)) return prev;
+
+                      const assetIds = indexes
+                        .map((idx) => group.assetIds?.[idx])
+                        .filter((id): id is string => !!id);
+
+                      if (assetIds.length < 2) return prev;
+
+                      const firstAsset = prev.find((a) => a.id === assetIds[0]);
+                      const coverImage = firstAsset ? getAssetDisplayImage(firstAsset, prev) : '';
+                      const newGroupId = uuid();
+                      const usedLabels = new Set<string>(
+                        prev.map((a) => a.groupLabel).filter((x): x is string => !!x)
+                      );
+
+                      const newGroup: WorkflowAsset = attachInitialVgpToNewAsset({
+                        id: newGroupId,
+                        isGroup: true,
+                        original: coverImage,
+                        displayKey: 'original',
+                        results: {},
+                        resultOrder: [],
+                        assetIds,
+                        groupId: currentGroupAsset.id, // 继承父组的 groupId，使其成为嵌套组
+                        groupLabel: getRandomGroupCodeName(usedLabels),
+                        archived: false,
+                        hiddenInGrid: false,
+                        createdAt: Date.now(),
+                      });
+
+                      let updated = prev.map((a) => {
+                        if (assetIds.includes(a.id)) {
+                          return { ...a, groupId: newGroupId };
+                        }
+                        return a;
+                      });
+
+                      // 更新当前组：将选中的资产替换为嵌套组的引用
+                      const parentAssetIds = [...(group.assetIds ?? [])];
+                      indexes.sort((a, b) => b - a); // 降序删除
+                      const removedIds: string[] = [];
+                      for (const idx of indexes) {
+                        removedIds.push(parentAssetIds[idx]);
+                        parentAssetIds.splice(idx, 1);
+                      }
+                      // 在第一个被移除的位置插入嵌套组
+                      const insertIdx = indexes[indexes.length - 1];
+                      parentAssetIds.splice(insertIdx, 0, newGroupId);
+
+                      updated = updated.map((a) => {
+                        if (a.id === currentGroupAsset.id) {
+                          return { ...a, assetIds: parentAssetIds };
+                        }
+                        return a;
+                      });
+
+                      return [...updated, newGroup];
+                    });
+                  }
+                  setSelectedGroupItemKeys(new Set());
+                }
+              } else if (draggingAssetIds?.length) {
                 createGroupFromAssets(draggingAssetIds);
               } else if (draggingGroupItems) {
                 const { itemIndexes, groupAssetId } = draggingGroupItems;
@@ -681,24 +755,21 @@ export function WorkflowSidebarColumn({
                     const coverImage = firstAsset ? getAssetDisplayImage(firstAsset, nextAssets) : '';
                     const newGroupId = uuid();
                     let updated = nextAssets.map((a) =>
-                      assetIds.includes(a.id) ? { ...a, parentAssetId: newGroupId } : a
+                      assetIds.includes(a.id) ? { ...a, groupId: newGroupId } : a
                     );
-                    const groupIdx = updated.findIndex((a) => a.id === groupAssetId);
-                    if (groupIdx !== -1) {
-                      const g = updated[groupIdx];
-                      const items = [...(g.cutImageGroup ?? [])];
-                      const sorted = [...itemIndexes]
-                        .filter((i) => i >= 0 && i < items.length)
-                        .sort((a, b) => a - b);
-                      const keep: typeof items = [];
-                      items.forEach((it, idx) => {
-                        if (!sorted.includes(idx)) keep.push(it);
+                    const parentGroupIdx = updated.findIndex((a) => a.id === groupAssetId);
+                    if (parentGroupIdx !== -1) {
+                      const g = updated[parentGroupIdx];
+                      const existingIds = g.assetIds ?? [];
+                      const sorted = [...itemIndexes].filter((i) => i >= 0 && i < existingIds.length).sort((a, b) => a - b);
+                      const keep: string[] = [];
+                      existingIds.forEach((id, idx) => {
+                        if (!sorted.includes(idx)) keep.push(id);
                       });
                       const insertPos = sorted.length ? sorted[0] : keep.length;
-                      const withGroup = [...keep];
-                      withGroup.splice(insertPos, 0, { assetId: newGroupId });
+                      keep.splice(insertPos, 0, newGroupId);
                       updated = updated.map((a, idx) =>
-                        idx === groupIdx ? { ...a, cutImageGroup: withGroup } : a
+                        idx === parentGroupIdx ? { ...a, assetIds: keep } : a
                       );
                     }
                     const usedLabels = new Set<string>(
@@ -706,17 +777,17 @@ export function WorkflowSidebarColumn({
                     );
                     const newGroup: WorkflowAsset = attachInitialVgpToNewAsset({
                       id: newGroupId,
+                      isGroup: true,
                       original: coverImage,
                       displayKey: 'original',
                       results: {},
                       resultOrder: [],
-                      cutImageGroup: assetIds.map((id) => ({ assetId: id })),
-                      groupKind: 'manual',
+                      assetIds,
+                      groupId: groupAssetId, // 继承父组的 groupId，使其成为嵌套组
                       groupLabel: getRandomGroupCodeName(usedLabels),
                       archived: false,
                       hiddenInGrid: false,
                       createdAt: Date.now(),
-                      parentAssetId: groupAssetId,
                     });
                     setAssets([...updated, newGroup]);
                     setSelectedGroupItemKeys(new Set());
@@ -741,7 +812,7 @@ export function WorkflowSidebarColumn({
           </div>
           <div
             onDragOver={(e) => {
-              if (!viewStackLength || !draggingGroupItems) return;
+              if (!draggingGroupItems) return;
               e.preventDefault();
               setDragOverAction('__ungroup__');
             }}
@@ -818,8 +889,8 @@ export function WorkflowSidebarColumn({
                   const gi = next.findIndex((a) => a.id === groupId);
                   if (gi !== -1) {
                     const g = next[gi];
-                    const items = [...(g.cutImageGroup ?? []), ...newIds.map((id) => ({ assetId: id }))];
-                    next = next.map((a, i) => (i === gi ? { ...a, cutImageGroup: items } : a));
+                    const items = [...(g.assetIds ?? []), ...newIds];
+                    next = next.map((a, i) => (i === gi ? { ...a, assetIds: items } : a));
                   }
                   return next;
                 });
@@ -877,7 +948,7 @@ export function WorkflowSidebarColumn({
                   assetIds.forEach((id) => removeAsset(id));
                   setSelectedGroupItemKeys(new Set());
                   if (groupRemoved) {
-                    setViewStack((s) => s.filter((x) => x.assetId !== draggingGroupItems.groupAssetId));
+                    setGroupFilterId(null);
                   }
                 }
               }
@@ -933,7 +1004,7 @@ export function WorkflowSidebarColumn({
                   assetIds.forEach((id) => markArchived(id));
                   setSelectedGroupItemKeys(new Set());
                   if (groupRemoved) {
-                    setViewStack((s) => s.filter((x) => x.assetId !== draggingGroupItems.groupAssetId));
+                    setGroupFilterId(null);
                   }
                 }
               }
@@ -1344,7 +1415,7 @@ export function WorkflowSidebarColumn({
                               className={`w-1/4 min-w-[1.75rem] shrink-0 flex flex-col items-center justify-center rounded-r-lg transition-colors cursor-pointer ${
                                 dragOverAction === entry.id + '__tweak'
                                   ? 'bg-[#223d5c]'
-                                  : 'bg-[#1c1c22] hover:bg-[#2e2e36]'
+                                  : 'bg-white/[0.05] hover:bg-white/[0.09]'
                               }`}
                               title="拖到此处可微调提示词后加入队列；点击前往能力页调整预设"
                               onClick={(e) => {
@@ -1730,7 +1801,7 @@ export function WorkflowSidebarColumn({
                             className={`w-11 shrink-0 flex flex-col items-center justify-center rounded-r-lg transition-colors cursor-pointer ${
                               dragOverAction === mod.id + '__tweak'
                                 ? 'bg-[#223d5c]'
-                                : 'bg-[#1c1c22] hover:bg-[#2e2e36]'
+                                : 'bg-white/[0.05] hover:bg-white/[0.09]'
                             }`}
                             title="拖到此处可微调提示词后加入队列；点击前往能力页调整预设"
                             onClick={(e) => {
@@ -1870,7 +1941,7 @@ export function WorkflowSidebarColumn({
                       className={`w-11 shrink-0 flex flex-col items-center justify-center rounded-r-lg transition-colors cursor-pointer ${
                         dragOverAction === mod.id + '__tweak'
                           ? 'bg-[#223d5c]'
-                          : 'bg-[#1c1c22] hover:bg-[#2e2e36]'
+                          : 'bg-white/[0.05] hover:bg-white/[0.09]'
                       }`}
                       title="拖到此处可微调提示词后加入队列；点击前往能力页调整预设"
                       onClick={(e) => {

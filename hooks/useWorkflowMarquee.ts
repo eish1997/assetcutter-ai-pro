@@ -8,7 +8,7 @@ export type UseWorkflowMarqueeArgs = {
   marqueeStartRef: RefObject<boolean>;
   libraryCardRefs: RefObject<Map<string, HTMLElement>>;
   cardRefs: RefObject<Map<string, HTMLElement>>;
-  viewStackRef: RefObject<{ assetId: string }[]>;
+  groupFilterIdRef: RefObject<string | null>;
   pendingRef: RefObject<WorkflowPendingTask[]>;
   setSelectedAssetIds: Dispatch<SetStateAction<Set<string>>>;
   setSelectedGroupItemKeys: Dispatch<SetStateAction<Set<string>>>;
@@ -21,7 +21,7 @@ export function useWorkflowMarquee({
   marqueeStartRef,
   libraryCardRefs,
   cardRefs,
-  viewStackRef,
+  groupFilterIdRef,
   pendingRef,
   setSelectedAssetIds,
   setSelectedGroupItemKeys,
@@ -103,16 +103,20 @@ export function useWorkflowMarquee({
       const height = Math.abs(d.endY - d.startY);
       const isClick = width < 5 && height < 5;
       const pane = marqueePaneRef.current;
-      const vs = viewStackRef.current;
+      const inGroup = !!groupFilterIdRef.current;
       const altKey = e.altKey;
 
       marqueeOverlayElRef.current?.style.setProperty('visibility', 'hidden');
       setMarqueeActive(false);
 
       if (isClick) {
-        if (pane !== 0 && vs.length === 0) {
+        if (pane === 0 && !inGroup) {
+          return;
+        } else if (pane === 0) {
+          setSelectedGroupItemKeys(new Set());
+        } else if (!inGroup) {
           setSelectedAssetIds(new Set());
-        } else if (pane !== 0) {
+        } else {
           setSelectedGroupItemKeys(new Set());
         }
         return;
@@ -121,7 +125,6 @@ export function useWorkflowMarquee({
       const sel = { left, top, width, height };
 
       const applySelection = () => {
-        if (pane === 0) return;
         const ids: string[] = [];
         cardRefs.current?.forEach((el, id) => {
           const r = el.getBoundingClientRect();
@@ -135,9 +138,9 @@ export function useWorkflowMarquee({
           if (overlap) ids.push(id);
         });
         if (!ids.length) return;
-        const vsNow = viewStackRef.current;
+        const currentGroupId = groupFilterIdRef.current;
         const pendNow = pendingRef.current ?? [];
-        if (vsNow.length === 0) {
+        if (!currentGroupId) {
           const toAdd = altKey ? [] : ids.filter((id) => !pendNow.some((t) => t.assetId === id));
           const toRemove = altKey ? ids : [];
           setSelectedAssetIds((s) => {
@@ -147,7 +150,6 @@ export function useWorkflowMarquee({
             return next;
           });
         } else {
-          const currentGroupId = vsNow[vsNow.length - 1]?.assetId;
           const toAdd = altKey
             ? []
             : ids.filter((key) => {
@@ -180,7 +182,7 @@ export function useWorkflowMarquee({
     updateMarqueeOverlayDom,
     libraryCardRefs,
     cardRefs,
-    viewStackRef,
+    groupFilterIdRef,
     pendingRef,
     setSelectedAssetIds,
     setSelectedGroupItemKeys,

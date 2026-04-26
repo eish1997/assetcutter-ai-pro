@@ -1,12 +1,12 @@
 /**
  * 右下角悬浮操作列：自底向上堆叠，避免多个 fixed 控件重叠。
- * 统一圆形按钮尺寸 w-12 h-12（48px），竖向间距 12px。
+ * 助手为大入口（64px），日志钮为 48px，竖向间距 12px。
  */
 
-/** 自底向上第 1 个：网站助手 */
+/** 自底向上第 1 个：网站助手（大圆钮） */
 export const RIGHT_DOCK_ASSISTANT_BOTTOM = 'bottom-6';
-/** 自底向上第 2 个：全局日志 = bottom-6 + 48px + 12px */
-export const RIGHT_DOCK_LOG_BOTTOM = 'bottom-[5.25rem]';
+/** 自底向上第 2 个：全局日志 = bottom-6 + 64px + 12px */
+export const RIGHT_DOCK_LOG_BOTTOM = 'bottom-[6.5rem]';
 /** 历史：工作流 dock 曾贴底 `bottom-36`，现已改为视口右侧垂直居中，常量保留供文档/对照 */
 export const RIGHT_DOCK_WORKFLOW_BOTTOM = 'bottom-36';
 

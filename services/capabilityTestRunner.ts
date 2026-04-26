@@ -4,6 +4,7 @@
 import type { CustomAppModule, BoundingBox } from '../types';
 import { DEFAULT_PROMPTS, detectObjectsInImage } from './geminiService';
 import { executeCapability } from './capabilityExecutor';
+import { detectGrid } from './gridDetector';
 
 function cropBoxes(inputImage: string, boxes: BoundingBox[], indexes: number[]): Promise<string[]> {
   return new Promise((resolve, reject) => {
@@ -54,10 +55,36 @@ export async function runCapabilityTest(
       return { ok: false, error: '生成3D 请在工作流中拖图到能力框提交', durationMs: Date.now() - start };
     }
     if (preset.id === 'cut_image') {
-      const boxes = await Promise.race([
-        detectObjectsInImage(imageBase64, 'gemini-3-flash-preview', DEFAULT_PROMPTS.detect_blocks),
-        new Promise<BoundingBox[]>((_, rej) => setTimeout(() => rej(new Error('timeout')), 10000)),
-      ]).catch(() => [] as BoundingBox[]);
+      const cutMode = preset.cutMode || 'auto';
+      let boxes: BoundingBox[] = [];
+
+      if (cutMode === 'uniform') {
+        // 均匀分割
+        const rows = typeof preset.uniformRows === 'number' && preset.uniformRows > 0 ? preset.uniformRows : 2;
+        const cols = typeof preset.uniformCols === 'number' && preset.uniformCols > 0 ? preset.uniformCols : 2;
+        boxes = await detectGrid(imageBase64, { mode: 'uniform', config: { rows, cols } });
+      } else if (cutMode === 'auto') {
+        // 自动检测
+        try {
+          boxes = await Promise.race([
+            detectGrid(imageBase64, { mode: 'auto', config: {} }),
+            new Promise<BoundingBox[]>((_, rej) => setTimeout(() => rej(new Error('timeout')), 10000)),
+          ]);
+        } catch {
+          boxes = [];
+        }
+      } else {
+        // vision 模式
+        try {
+          boxes = await Promise.race([
+            detectObjectsInImage(imageBase64, 'gemini-3-flash-preview', DEFAULT_PROMPTS.detect_blocks),
+            new Promise<BoundingBox[]>((_, rej) => setTimeout(() => rej(new Error('timeout')), 10000)),
+          ]);
+        } catch {
+          boxes = [];
+        }
+      }
+
       const list = boxes.length ? boxes : [{ id: 'full', label: '整图', ymin: 0, xmin: 0, ymax: 1000, xmax: 1000 }];
       const cropped = await cropBoxes(imageBase64, list, list.map((_, i) => i));
       return {

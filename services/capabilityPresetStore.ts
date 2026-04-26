@@ -110,8 +110,28 @@ export function normalizeCapabilityPreset(input: CustomAppModule, index: number)
     } else {
       delete (base as CustomAppModule & { cutOverflowPx?: number }).cutOverflowPx;
     }
+    // 切割模式
+    const rawMode = (input as CustomAppModule).cutMode;
+    if (rawMode === 'uniform' || rawMode === 'auto' || rawMode === 'vision') {
+      base.cutMode = rawMode;
+    } else {
+      delete (base as CustomAppModule & { cutMode?: string }).cutMode;
+    }
+    // 均匀分割行列数
+    const rawRows = (input as CustomAppModule).uniformRows;
+    const rawCols = (input as CustomAppModule).uniformCols;
+    if (base.cutMode === 'uniform') {
+      base.uniformRows = typeof rawRows === 'number' && Number.isFinite(rawRows) ? Math.max(1, Math.min(10, Math.round(rawRows))) : 2;
+      base.uniformCols = typeof rawCols === 'number' && Number.isFinite(rawCols) ? Math.max(1, Math.min(10, Math.round(rawCols))) : 2;
+    } else {
+      delete (base as CustomAppModule & { uniformRows?: number }).uniformRows;
+      delete (base as CustomAppModule & { uniformCols?: number }).uniformCols;
+    }
   } else {
     delete (base as CustomAppModule & { cutOverflowPx?: number }).cutOverflowPx;
+    delete (base as CustomAppModule & { cutMode?: string }).cutMode;
+    delete (base as CustomAppModule & { uniformRows?: number }).uniformRows;
+    delete (base as CustomAppModule & { uniformCols?: number }).uniformCols;
   }
   return base;
 }
@@ -120,7 +140,7 @@ const DEFAULT_PRESETS: CustomAppModule[] = [
   { id: 'split_component', label: '拆分组件', category: 'image_to_image', engine: 'builtin', enabled: true, order: 0, instruction: '' },
   { id: 'style_transfer', label: '转风格', category: 'image_to_image', engine: 'gen_image', enabled: true, order: 1, instruction: 'Convert this image to a consistent artistic style: stylized digital art, clean lines, modern flat design. Keep the same composition and main subjects.' },
   { id: 'multi_view', label: '生成多视角', category: 'image_to_image', engine: 'gen_image', enabled: true, order: 2, instruction: 'Generate a clean front view of the main object in this image, centered on white or neutral background, orthographic style, suitable as a reference sheet view.' },
-  { id: 'cut_image', label: '切割图片', category: 'image_to_image', engine: 'builtin', enabled: true, order: 3, instruction: '' },
+  { id: 'cut_image', label: '切割图片', category: 'image_to_image', engine: 'builtin', enabled: true, order: 3, instruction: '', cutMode: 'auto', uniformRows: 2, uniformCols: 2 },
 ];
 
 const BUILTIN_IMAGE_PROCESS_PRESETS = DEFAULT_PRESETS.filter((p) =>

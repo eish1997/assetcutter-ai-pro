@@ -1,6 +1,7 @@
 import type { WorkflowAsset, WorkflowPendingTask } from '../types';
 import { readLocalString, removeLocalKey, safeLocalStorage, writeLocalJson, writeLocalString, writeLocalStringOrThrow } from './clientPersist';
 import { idbDeleteBundle, idbLoadBundleJson, idbSaveBundleJson } from './workspaceBundleIdb';
+import { migrateLegacyAssets } from './assetGroupMigration';
 
 export type WorkspaceProject = {
   id: string;
@@ -45,10 +46,13 @@ function cloneBundle(b: WorkflowProjectBundle): WorkflowProjectBundle {
 
 function parseBundleJson(raw: string): WorkflowProjectBundle {
   const data = JSON.parse(raw) as Partial<WorkflowProjectBundle>;
-  return {
+  const bundle: WorkflowProjectBundle = {
     assets: Array.isArray(data.assets) ? data.assets : [],
     pending: Array.isArray(data.pending) ? data.pending : [],
   };
+  // 迁移旧数据到新结构
+  bundle.assets = migrateLegacyAssets(bundle.assets);
+  return bundle;
 }
 
 function schedulePersistToIdb(bundleKey: string, json: string): void {

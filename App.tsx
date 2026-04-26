@@ -21,6 +21,7 @@ import { CustomDropdown, DROPDOWN_TRIGGER_COMPACT } from './components/ui/Custom
 import { SidebarAccountAvatar } from './components/SidebarAccountAvatar';
 import LazySectionFallback from './components/ui/LazySectionFallback';
 import WorkflowModeShell from './components/WorkflowModeShell';
+import WorkspaceSidebarFooter from './components/WorkspaceSidebarFooter';
 import { useUserUiPrefs } from './hooks/useUserUiPrefs';
 import Waves from './components/ui/Waves';
 import AppIcon from './components/ui/AppIcon';
@@ -194,10 +195,14 @@ const SidebarIconButton: React.FC<{ active: boolean; label: string; onClick: () 
     type="button"
     onClick={onClick}
     aria-label={label}
-    className={`group relative w-full h-10 rounded-xl border transition-colors duration-200 flex items-center justify-center cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-blue-500/55 focus-visible:ring-offset-2 focus-visible:ring-offset-[#050505] ${active ? 'bg-[#1a2d4d] text-blue-300 border-[#3b6fb8]' : 'text-gray-400 border-[#2e2e32] hover:bg-[#2e2e36]'}`}
+    className={`group relative w-full h-10 rounded-xl transition-colors duration-200 flex items-center justify-center cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-blue-500/55 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0c0c0f] ${
+      active
+        ? 'bg-[#152a4a] text-blue-200 ring-1 ring-blue-500/40 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]'
+        : 'text-gray-400 bg-white/[0.04] ring-1 ring-transparent hover:bg-white/[0.08] hover:ring-white/[0.06]'
+    }`}
   >
     {children}
-    <span className="pointer-events-none absolute left-[calc(100%+10px)] top-1/2 -translate-y-1/2 rounded-lg border border-[#2e2e32] bg-[#050505] px-2 py-1 text-[10px] text-gray-200 whitespace-nowrap opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-150">
+    <span className="pointer-events-none absolute left-[calc(100%+10px)] top-1/2 -translate-y-1/2 rounded-lg bg-[#0c0c0f] px-2 py-1 text-[10px] text-gray-200 ring-1 ring-white/[0.12] shadow-md whitespace-nowrap opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-150 motion-reduce:transition-none">
       {label}
     </span>
   </button>
@@ -419,7 +424,7 @@ const RegionSelector: React.FC<{
         )}
       </div>
       <div className="flex gap-4">
-        <button onClick={onCancel} className="flex-1 py-4 bg-[#1c1c22] border border-[#2e2e32] rounded-2xl text-[9px] font-black uppercase tracking-widest hover:bg-[#2e2e36] transition-all">取消</button>
+        <button onClick={onCancel} className="flex-1 py-4 bg-white/[0.05] ring-1 ring-white/[0.06] rounded-2xl text-[9px] font-black uppercase tracking-widest hover:bg-[#2e2e36] transition-all">取消</button>
         <button onClick={executeCrop} disabled={!selectionRect} className="flex-1 py-4 bg-blue-600 rounded-2xl text-[9px] font-black uppercase tracking-widest electric-glow disabled:opacity-20 transition-all">确认提取</button>
       </div>
     </div>
@@ -2673,7 +2678,7 @@ const MainApp: React.FC = () => {
           {items.length > 1 && (
             <div className="flex flex-wrap gap-1.5 mb-5 min-h-[24px]">
               {items.map((it, idx) => (
-                <button key={it.id} onClick={() => setActiveIdx(idx)} className={`w-8 h-8 rounded-lg flex items-center justify-center text-[7px] font-black border ${activeIdx === idx ? 'bg-blue-600 border-blue-500' : 'bg-[#1c1c22] border-[#2e2e32]'}`}>{it.style?.slice(0,3).toUpperCase() || 'DEF'}</button>
+                <button key={it.id} onClick={() => setActiveIdx(idx)} className={`w-8 h-8 rounded-lg flex items-center justify-center text-[7px] font-black border ${activeIdx === idx ? 'bg-blue-600 border-blue-500' : 'bg-white/[0.05] ring-1 ring-white/[0.06] border-transparent'}`}>{it.style?.slice(0,3).toUpperCase() || 'DEF'}</button>
               ))}
             </div>
           )}
@@ -2703,17 +2708,17 @@ const MainApp: React.FC = () => {
           <div className="flex justify-between items-center mb-6"><h3 className="text-[10px] font-black text-blue-400 uppercase">源贴图输入</h3></div>
           {!textureSource ? (
             <div className="space-y-4">
-              <label className="w-full h-64 cursor-pointer group flex flex-col items-center justify-center border-2 border-dashed border-[#2e2e32] rounded-3xl hover:bg-[#1a2332] transition-all">
+              <label className="w-full h-64 cursor-pointer group flex flex-col items-center justify-center border-2 border-dashed border-white/[0.12] rounded-3xl hover:bg-[#1a2332] transition-all">
                 <AppIcon name="image" className="w-8 h-8 mb-4" />
                 <span className="text-[9px] font-black uppercase text-gray-500">上传源图像</span>
                 <input type="file" className="hidden" accept="image/*" onChange={e => handleFileUpload(e, setTextureSource)} />
               </label>
-              <button onClick={() => openPicker(undefined, (items) => setTextureSource(items[0]?.data ?? ''))} className="w-full py-4 bg-[#1c1c22] border border-[#2e2e32] rounded-2xl text-[9px] font-black uppercase tracking-widest hover:bg-[#2e2e36] transition-all flex items-center justify-center gap-2">
+              <button onClick={() => openPicker(undefined, (items) => setTextureSource(items[0]?.data ?? ''))} className="w-full py-4 bg-white/[0.05] ring-1 ring-white/[0.06] rounded-2xl text-[9px] font-black uppercase tracking-widest hover:bg-[#2e2e36] transition-all flex items-center justify-center gap-2">
                 <AppIcon name="package" className="w-4 h-4" /> 从资产库导入
               </button>
             </div>
           ) : (
-            <div className="relative aspect-square rounded-2xl overflow-hidden border border-[#2e2e32] group">
+            <div className="relative aspect-square rounded-2xl overflow-hidden ring-1 ring-white/[0.06] group">
               <SiteImage src={textureSource} className="w-full h-full object-cover" />
               <div className="absolute inset-0 bg-[#16161a] opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
                 <button onClick={() => setTextureSource('')} className="bg-red-500 px-4 py-2 rounded-full text-[8px] font-black uppercase">移除</button>
@@ -2950,13 +2955,13 @@ const MainApp: React.FC = () => {
           <div className="flex flex-wrap items-center gap-4 mb-4">
             <button type="button" onClick={() => setMode(AppMode.ARENA)} className="px-4 py-2 rounded-xl bg-[#3d2a10] border border-[#b45309] text-[9px] font-black uppercase text-amber-400 hover:bg-[#92400e] transition-all">去对比测试</button>
             <span className="text-[9px] font-black text-gray-500 uppercase">来源</span>
-            <select value={filterSource} onChange={e => setFilterSource(e.target.value as any)} className="bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500 transition-colors">
+            <select value={filterSource} onChange={e => setFilterSource(e.target.value as any)} className="bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[10px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 transition-colors">
               <option value="all">全部</option>
               <option value="dialog">对话</option>
               <option value="texture">提取花纹</option>
             </select>
             <span className="text-[9px] font-black text-gray-500 uppercase ml-4">评分</span>
-            <select value={filterRated} onChange={e => setFilterRated(e.target.value as any)} className="bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[10px] outline-none focus:border-blue-500 transition-colors">
+            <select value={filterRated} onChange={e => setFilterRated(e.target.value as any)} className="bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[10px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 transition-colors">
               <option value="all">全部</option>
               <option value="yes">已评分</option>
               <option value="no">未评分</option>
@@ -2965,8 +2970,8 @@ const MainApp: React.FC = () => {
             <button onClick={exportStructuredJson} className="px-4 py-2 bg-[#3d2a10] border border-[#b45309] rounded-xl text-[9px] font-black uppercase text-amber-400 hover:bg-[#92400e] transition-all" title="主体/场景/风格/修饰/参数化模板，便于代码转自然语言">导出结构化 JSON</button>
             <button onClick={exportCsv} className="px-4 py-2 bg-[#1e3558] border border-[#4b6a9e] rounded-xl text-[9px] font-black uppercase text-blue-400 hover:bg-[#305a90] transition-all">导出 CSV</button>
             <span className="text-[9px] font-black text-gray-500 uppercase ml-4">显示</span>
-            <button onClick={() => setViewMode('list')} className={`px-4 py-2 rounded-xl text-[9px] font-black uppercase border transition-all ${viewMode === 'list' ? 'bg-[#1e3558] text-blue-400 border-[#4b6a9e]' : 'bg-[#1c1c22] border-[#2e2e32] hover:bg-[#2e2e36]'}`}>列表</button>
-            <button onClick={() => setViewMode('repro')} className={`px-4 py-2 rounded-xl text-[9px] font-black uppercase border transition-all ${viewMode === 'repro' ? 'bg-[#1e3558] text-blue-400 border-[#4b6a9e]' : 'bg-[#1c1c22] border-[#2e2e32] hover:bg-[#2e2e36]'}`}>复现模板</button>
+            <button onClick={() => setViewMode('list')} className={`px-4 py-2 rounded-xl text-[9px] font-black uppercase border transition-all ${viewMode === 'list' ? 'bg-[#1e3558] text-blue-400 border-[#4b6a9e]' : 'bg-white/[0.05] ring-1 ring-white/[0.06] hover:bg-white/[0.09] border-transparent'}`}>列表</button>
+            <button onClick={() => setViewMode('repro')} className={`px-4 py-2 rounded-xl text-[9px] font-black uppercase border transition-all ${viewMode === 'repro' ? 'bg-[#1e3558] text-blue-400 border-[#4b6a9e]' : 'bg-white/[0.05] ring-1 ring-white/[0.06] hover:bg-white/[0.09] border-transparent'}`}>复现模板</button>
           </div>
           <p className="text-[9px] text-gray-500">共 {filtered.length} 条（最近 500 条），仅读分析用，不改动提示词或配置。</p>
         </section>
@@ -2974,7 +2979,7 @@ const MainApp: React.FC = () => {
           <h3 className="text-[10px] font-black text-blue-400 uppercase mb-4">按来源聚合</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {(Object.entries(bySource) as [string, SourceAggregate][]).map(([key, agg]) => (
-              <div key={key} className="bg-[#16161a] rounded-xl p-4 border border-[#2e2e32]">
+              <div key={key} className="bg-[#16161a] rounded-xl p-4 ring-1 ring-white/[0.06]">
                 <div className="text-[10px] font-black uppercase text-blue-400 mb-2">{key}</div>
                 <div className="text-[9px] text-gray-400 space-y-1">条数 {agg.count} · 已评 {agg.rated} · 平均分 {agg.rated ? (agg.sumScore / agg.rated).toFixed(1) : '-'}</div>
                 {agg.samples.length > 0 && (
@@ -2997,7 +3002,7 @@ const MainApp: React.FC = () => {
             <>
               <div className="overflow-x-auto max-h-[60vh] overflow-y-auto">
                 <table className="w-full text-left text-[9px]">
-                  <thead className="sticky top-0 bg-[#1e1e22] border-b border-[#2e2e32]">
+                  <thead className="sticky top-0 bg-[#1e1e22] border-b border-white/[0.06]">
                     <tr>
                       <th className="py-2 px-2">时间</th>
                       <th className="py-2 px-2">来源</th>
@@ -3046,8 +3051,8 @@ const MainApp: React.FC = () => {
                   }
                 };
                 return (
-                  <div key={r.id} className="bg-[#16161a] rounded-xl border border-[#2e2e32] overflow-hidden">
-                    <div className="flex items-center justify-between px-4 py-2 border-b border-[#2e2e32] bg-[#1c1c22] flex-wrap gap-2">
+                  <div key={r.id} className="bg-[#16161a] rounded-xl ring-1 ring-white/[0.06] overflow-hidden">
+                    <div className="flex items-center justify-between px-4 py-2 border-b border-white/[0.06] bg-[#1c1c22] flex-wrap gap-2">
                       <span className="text-[9px] font-black text-blue-400 uppercase">
                         {r.source === 'dialog' ? '对话' : `贴图 · ${r.textureType ?? '-'}`}
                         {r.userScore != null && <span className="text-amber-400 ml-2">{r.userScore} 星</span>}
@@ -3073,7 +3078,7 @@ const MainApp: React.FC = () => {
                       </div>
                       <div>
                         <div className="text-[8px] font-black text-gray-500 uppercase mb-2">参数化模板（占位符组句，便于复现）</div>
-                        <pre className="p-3 rounded-lg bg-[#16161a] border border-[#2e2e32] text-[10px] text-amber-200/90 font-mono whitespace-pre-wrap break-all">{template}</pre>
+                        <pre className="p-3 rounded-lg bg-[#16161a] ring-1 ring-white/[0.06] text-[10px] text-amber-200/90 font-mono whitespace-pre-wrap break-all">{template}</pre>
                         <p className="text-[8px] text-gray-500 mt-1">在代码中用占位符替换后生成自然语言，再发给模型。</p>
                       </div>
                       <details className="group">
@@ -3119,8 +3124,11 @@ const MainApp: React.FC = () => {
         />
       )}
 
-      <div className={`fixed top-1/2 left-4 -translate-y-1/2 z-[1001] w-14 max-h-[calc(100dvh-2rem)] transition-all ${isSidebarOpen ? 'opacity-100' : 'opacity-100'}`}>
-        <div className="rounded-2xl border border-[#2e2e32] bg-[#121214] shadow-2xl p-2 overflow-y-auto no-scrollbar">
+      <div
+        className={`fixed left-4 top-4 bottom-4 z-[1001] w-14 flex flex-col transition-all ${isSidebarOpen ? 'opacity-100' : 'opacity-100'}`}
+      >
+        <div className="flex flex-1 min-h-0 flex-col overflow-hidden rounded-2xl bg-[#0c0c0f] shadow-[0_12px_40px_rgba(0,0,0,0.55)] ring-1 ring-white/[0.07]">
+          <div className="min-h-0 flex-1 overflow-y-auto no-scrollbar p-2">
           <div className="flex flex-col items-center gap-2">
             {user ? (
               <div className="w-full">
@@ -3144,7 +3152,7 @@ const MainApp: React.FC = () => {
                       </span>
                     </span>
                   )}
-                  triggerClassName="w-full h-10 rounded-xl border border-[#2e2e32] bg-[#1c1c22] p-0 flex items-center justify-center outline-none focus:border-blue-500 hover:bg-[#2e2e36] transition-colors"
+                  triggerClassName="w-full h-10 rounded-xl bg-white/[0.05] ring-1 ring-white/[0.06] p-0 flex items-center justify-center outline-none focus-visible:ring-blue-500/50 hover:bg-white/[0.09] transition-colors"
                   portalZIndex={{ backdrop: 1100, list: 1101 }}
                 />
               </div>
@@ -3163,10 +3171,10 @@ const MainApp: React.FC = () => {
             <button
               type="button"
               onClick={() => setExperimentalNavExpanded((e) => !e)}
-              className={`group relative w-full h-10 rounded-xl border transition-colors duration-200 flex items-center justify-center cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-blue-500/55 focus-visible:ring-offset-2 focus-visible:ring-offset-[#050505] ${
+              className={`group relative w-full h-10 rounded-xl transition-colors duration-200 flex items-center justify-center cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-blue-500/55 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0c0c0f] ${
                 isExperimentalMode(mode) && !experimentalNavExpanded
-                  ? 'bg-[#1a2d4d] text-blue-300 border-[#3b6fb8]'
-                  : 'text-gray-400 border-[#2e2e32] hover:bg-[#2e2e36]'
+                  ? 'bg-[#152a4a] text-blue-200 ring-1 ring-blue-500/40'
+                  : 'text-gray-400 bg-white/[0.04] ring-1 ring-transparent hover:bg-white/[0.08] hover:ring-white/[0.06]'
               }`}
               aria-label="实验性功能"
               aria-expanded={experimentalNavExpanded}
@@ -3181,14 +3189,14 @@ const MainApp: React.FC = () => {
                 />
                 <path d="M6.8 12.5h6.4" stroke="currentColor" strokeWidth="1.4" />
               </svg>
-              <span className="pointer-events-none absolute left-[calc(100%+10px)] top-1/2 -translate-y-1/2 rounded-lg border border-[#2e2e32] bg-[#050505] px-2 py-1 text-[10px] text-gray-200 whitespace-nowrap opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-150">
+              <span className="pointer-events-none absolute left-[calc(100%+10px)] top-1/2 -translate-y-1/2 rounded-lg bg-[#0c0c0f] px-2 py-1 text-[10px] text-gray-200 ring-1 ring-white/[0.12] shadow-md whitespace-nowrap opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-150 motion-reduce:transition-none">
                 实验性功能
               </span>
             </button>
           </div>
 
           {experimentalNavExpanded && (
-            <div className="mt-2 pt-2 border-t border-[#2e2e32] flex flex-col gap-2">
+            <div className="mt-2 pt-2 border-t border-white/[0.06] flex flex-col gap-2">
               <SidebarIconButton active={mode === AppMode.GENERATE_3D} label="生成3D" onClick={() => { setMode(AppMode.GENERATE_3D); setIsSidebarOpen(false); }}>
                 <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><path d="M10 2.8 16 6v8l-6 3.2L4 14V6l6-3.2Z" stroke="currentColor" strokeWidth="1.6"/><path d="M4 6l6 3.1L16 6M10 9.1V17" stroke="currentColor" strokeWidth="1.4"/></svg>
               </SidebarIconButton>
@@ -3209,6 +3217,38 @@ const MainApp: React.FC = () => {
               </SidebarIconButton>
             </div>
           )}
+          </div>
+          {mode === AppMode.WORKFLOW && activeWorkspaceProjectId ? (
+            <WorkspaceSidebarFooter
+              user={user}
+              activeWorkspaceProjectId={activeWorkspaceProjectId}
+              workspaceCloudEnabled={isWorkspaceCloudEnabled()}
+              workspaceCloudUsedBytes={workspaceCloudUsedBytes}
+              workspaceCloudQuotaBytes={workspaceCloudQuotaBytes}
+              workspaceCloudUsageRatio={workspaceCloudUsageRatio}
+              workspaceCloudUsagePercent={workspaceCloudUsagePercent}
+              workspaceProjectOptions={workspaceProjectOptions}
+              activeWorkspaceProjectName={activeWorkspaceProjectName}
+              workspaceCloudHydratingProjectId={workspaceCloudHydratingProjectId}
+              workspaceLastSyncText={workspaceLastSyncText}
+              workspaceCloudAutoSyncing={workspaceCloudAutoSyncing}
+              workspaceAutoSyncEnabled={workspaceAutoSyncEnabled}
+              workspaceCloudNextAutoSyncAt={workspaceCloudNextAutoSyncAt}
+              onToggleWorkspaceAutoSync={() => {
+                setWorkspaceAutoSyncEnabledState((prev) => {
+                  const next = !prev;
+                  setWorkspaceAutoSyncEnabled(next);
+                  return next;
+                });
+              }}
+              onTriggerWorkspaceSyncNow={() => void triggerWorkspaceCloudSyncNow({ force: true })}
+              onOpenApiKeyModal={() => setApiKeyModalOpen(true)}
+              aiInvocationReady={aiInvocationReady}
+              aiPlatformLabel={aiProviderToolbarLabel}
+              onBackToWorkspaceList={() => void backToWorkspaceProjectShell()}
+              onWorkspaceOpen={(id) => void openWorkspaceProject(id)}
+            />
+          ) : null}
         </div>
       </div>
 
@@ -3221,10 +3261,10 @@ const MainApp: React.FC = () => {
         <button
           type="button"
           onClick={() => setGlobalLogOpen(v => !v)}
-          className={`relative w-12 h-12 rounded-full border shadow-lg flex items-center justify-center transition-all outline-none focus:ring-2 focus:ring-blue-500/50 ${
+          className={`relative w-12 h-12 rounded-full shadow-lg flex items-center justify-center transition-all outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 motion-reduce:transition-none ${
             globalLogOpen
-              ? 'bg-[#1a3354] border-[#3b6fb8] text-blue-200'
-              : 'bg-[#16161a] border-[#343438] text-gray-200 hover:bg-[#1f1f24] hover:border-[#3b6fb8]'
+              ? 'bg-[#1a3354] ring-2 ring-blue-500/45 text-blue-200'
+              : 'bg-[#16161a] ring-1 ring-white/[0.1] text-gray-200 hover:bg-[#1f1f24] hover:ring-blue-500/35'
           }`}
           title={globalLogOpen ? '关闭日志' : '打开日志'}
           aria-label={globalLogOpen ? '关闭日志' : '打开日志'}
@@ -3243,11 +3283,11 @@ const MainApp: React.FC = () => {
 
       {globalLogOpen && (
         <div
-          className={`fixed ${RIGHT_DOCK_LOG_PANEL_BOTTOM} ${RIGHT_DOCK_RIGHT} z-[2000] w-[min(420px,calc(100vw-3rem))] max-h-[min(56vh,420px)] rounded-2xl border border-[#343438] bg-[#0f0f0f] shadow-2xl overflow-hidden`}
+          className={`fixed ${RIGHT_DOCK_LOG_PANEL_BOTTOM} ${RIGHT_DOCK_RIGHT} z-[2000] w-[min(420px,calc(100vw-3rem))] max-h-[min(56vh,420px)] rounded-2xl bg-[#0f0f0f] ring-1 ring-white/[0.1] shadow-2xl overflow-hidden motion-reduce:shadow-none`}
           role="dialog"
           aria-label="全局日志"
         >
-          <div className="px-4 py-3 border-b border-[#2e2e32] bg-[#141416] flex items-center justify-between gap-3">
+          <div className="px-4 py-3 border-b border-white/[0.06] bg-[#141416] flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <span className="text-[11px] font-black uppercase tracking-wider text-white">运行日志</span>
               <span className="text-[10px] text-gray-500">最近 {globalLogs.length} 条</span>
@@ -3294,7 +3334,7 @@ const MainApp: React.FC = () => {
                         /* ignore clipboard permission issues */
                       }
                     }}
-                    className="w-full text-left rounded-xl border border-[#2e2e32] bg-[#141416] px-3 py-2.5 hover:bg-[#1a1a20] transition-colors"
+                    className="w-full text-left rounded-xl ring-1 ring-white/[0.06] bg-[#141416] px-3 py-2.5 hover:bg-[#1a1a20] transition-colors"
                     title="点击复制日志"
                     aria-label="点击复制日志"
                   >
@@ -3334,15 +3374,15 @@ const MainApp: React.FC = () => {
           ref={mainScrollRef}
           className={`flex-1 no-scrollbar touch-pan-y ${
             mode === AppMode.WORKFLOW && activeWorkspaceProjectId
-              ? 'overflow-hidden p-3 pt-3 pl-24 lg:px-6 lg:pt-4 lg:pb-6 lg:pl-28'
-              : 'overflow-y-auto p-4 pt-6 pl-24 lg:p-10 lg:pl-28'
+              ? 'overflow-hidden pt-3 pb-3 pl-[calc(1rem+3.5rem+1rem)] pr-4 lg:pt-4 lg:pb-6 lg:pl-[calc(1.5rem+3.5rem+1.5rem)] lg:pr-6'
+              : 'overflow-y-auto pt-6 pb-4 pl-[calc(1rem+3.5rem+1rem)] pr-4 lg:py-10 lg:pl-[calc(1.5rem+3.5rem+1.5rem)] lg:pr-10'
           }`}
           onMouseDownCapture={onMainMouseDownCapture}
           onWheelCapture={onMainWheelCapture}
           onDragOverCapture={onMainDragOverCapture}
           onDropCapture={onMainDropCapture}
         >
-          <div ref={workflowMainContentRef} className="max-w-6xl mx-auto w-full">
+          <div ref={workflowMainContentRef} className="w-full h-full">
             {mode === AppMode.SETTINGS && (
               <Suspense fallback={<LazySectionFallback label="设置" />}>
                 <SettingsSection
@@ -3372,26 +3412,7 @@ const MainApp: React.FC = () => {
                 onWorkspaceOpen={openWorkspaceProject}
                 onWorkspaceRename={renameWorkspaceProjectEntry}
                 onWorkspaceDelete={requestDeleteWorkspaceProject}
-                onBackToWorkspaceList={() => void backToWorkspaceProjectShell()}
-                workspaceProjectOptions={workspaceProjectOptions}
-                activeWorkspaceProjectName={activeWorkspaceProjectName}
-                workspaceCloudHydratingProjectId={workspaceCloudHydratingProjectId}
-                workspaceLastSyncText={workspaceLastSyncText}
-                workspaceCloudAutoSyncing={workspaceCloudAutoSyncing}
-                workspaceAutoSyncEnabled={workspaceAutoSyncEnabled}
-                workspaceCloudNextAutoSyncAt={workspaceCloudNextAutoSyncAt}
-                onToggleWorkspaceAutoSync={() => {
-                  setWorkspaceAutoSyncEnabledState((prev) => {
-                    const next = !prev;
-                    setWorkspaceAutoSyncEnabled(next);
-                    return next;
-                  });
-                }}
-                onTriggerWorkspaceSyncNow={() => void triggerWorkspaceCloudSyncNow({ force: true })}
                 workspaceCloudQuotaSuspended={workspaceCloudQuotaSuspended}
-                onOpenApiKeyModal={() => setApiKeyModalOpen(true)}
-                aiInvocationReady={aiInvocationReady}
-                aiPlatformLabel={aiProviderToolbarLabel}
                 renderWorkflowSection={() => (
                   <WorkflowSection
                     capabilityPresets={capabilityPresets}
@@ -3587,7 +3608,7 @@ const MainApp: React.FC = () => {
               <div className="flex h-[calc(100dvh-6rem)] gap-4 lg:gap-6 animate-in fade-in overflow-hidden">
                 <div className="w-80 lg:w-96 shrink-0 flex flex-col gap-4 overflow-y-auto no-scrollbar pr-2">
                 <div className="px-2 py-1.5 rounded-xl bg-[#3a3018] border border-[#b45309] text-[9px] font-black uppercase text-amber-400">生成3D · 未上线</div>
-                <div className="glass rounded-2xl p-4 lg:p-6 border border-[#2e2e32] bg-[#16161a]">
+                <div className="glass rounded-2xl p-4 lg:p-6 ring-1 ring-white/[0.06] bg-[#16161a]">
                   {!creds3D ? (
                     <div className="space-y-4 py-8">
                       <h3 className="text-[10px] font-black text-amber-400 uppercase">配置腾讯云凭证</h3>
@@ -3596,12 +3617,12 @@ const MainApp: React.FC = () => {
                         <>
                           <div className="rounded-xl border border-[#b45309] bg-[#2c2412] px-3 py-2 text-[9px] text-amber-300">当前已显式开启不安全模式：浏览器可临时直持腾讯云密钥。仅建议本地排障使用，勿用于生产环境。</div>
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <input value={generate3DCredsOverride?.secretId ?? ''} onChange={e => setGenerate3DCredsOverride(p => ({ secretId: e.target.value.trim(), secretKey: p?.secretKey ?? '' }))} placeholder="SecretId" className="bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-4 py-3 text-[11px] outline-none focus:border-blue-500" />
-                            <input type="password" value={generate3DCredsOverride?.secretKey ?? ''} onChange={e => setGenerate3DCredsOverride(p => ({ secretId: p?.secretId ?? '', secretKey: e.target.value }))} placeholder="SecretKey" className="bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-4 py-3 text-[11px] outline-none focus:border-blue-500" />
+                            <input value={generate3DCredsOverride?.secretId ?? ''} onChange={e => setGenerate3DCredsOverride(p => ({ secretId: e.target.value.trim(), secretKey: p?.secretKey ?? '' }))} placeholder="SecretId" className="bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-4 py-3 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50" />
+                            <input type="password" value={generate3DCredsOverride?.secretKey ?? ''} onChange={e => setGenerate3DCredsOverride(p => ({ secretId: p?.secretId ?? '', secretKey: e.target.value }))} placeholder="SecretKey" className="bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-4 py-3 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50" />
                           </div>
                         </>
                       ) : (
-                        <div className="rounded-xl border border-[#2e2e32] bg-[#1c1c22] px-3 py-2 text-[9px] text-gray-400">
+                        <div className="rounded-xl ring-1 ring-white/[0.06] bg-[#1c1c22] px-3 py-2 text-[9px] text-gray-400">
                           如确需在浏览器直接调试，可在本地临时设置 <code className="bg-[#26262c] px-1 rounded">VITE_ALLOW_UNSAFE_TENCENT_BROWSER_CREDS=true</code> 后刷新页面，再手动输入凭证。
                         </div>
                       )}
@@ -3617,7 +3638,7 @@ const MainApp: React.FC = () => {
                             <button
                               key={m.id}
                               onClick={() => setGenerate3DModule(m.id)}
-                              className={`w-full text-left px-3 py-2.5 rounded-xl border transition-colors ${generate3DModule === m.id ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300' : 'bg-[#1c1c22] border-[#2e2e32] text-gray-400 hover:bg-[#2e2e36] hover:text-white'}`}
+                              className={`w-full text-left px-3 py-2.5 rounded-xl border transition-colors ${generate3DModule === m.id ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300' : 'bg-white/[0.05] ring-1 ring-white/[0.06] text-gray-400 hover:bg-white/[0.09] hover:text-white border-transparent'}`}
                             >
                               <div className="text-[10px] font-black">{m.name}</div>
                               <div className="text-[9px] text-gray-500 mt-0.5">{m.desc}</div>
@@ -3627,26 +3648,26 @@ const MainApp: React.FC = () => {
                       </div>
 
                       {/* 当前模块表单 */}
-                      <div className="glass rounded-2xl p-4 border border-[#2e2e32] bg-[#141416]">
+                      <div className="glass rounded-2xl p-4 ring-1 ring-white/[0.06] bg-[#141416]">
                         {generate3DModule === 'pro' && (
                           <>
                             <p className="text-[9px] text-gray-500 mb-3">可选用 3.0/3.1，支持文生3D、图生3D（单图/多视图）、白模、草图、智能拓扑；3.1 支持八视图多角度输入。</p>
                             <div className="flex gap-2 mb-3">
-                              <button onClick={() => setGenerate3DMode('text')} className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${generate3DMode === 'text' ? 'bg-blue-600 border-blue-500' : 'bg-[#1c1c22] border-[#2e2e32] text-gray-500'}`}>文生3D</button>
-                              <button onClick={() => setGenerate3DMode('image')} className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${generate3DMode === 'image' ? 'bg-blue-600 border-blue-500' : 'bg-[#1c1c22] border-[#2e2e32] text-gray-500'}`}>图生3D</button>
+                              <button onClick={() => setGenerate3DMode('text')} className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${generate3DMode === 'text' ? 'bg-blue-600 border-blue-500' : 'bg-white/[0.05] ring-1 ring-white/[0.06] text-gray-500 border-transparent'}`}>文生3D</button>
+                              <button onClick={() => setGenerate3DMode('image')} className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${generate3DMode === 'image' ? 'bg-blue-600 border-blue-500' : 'bg-white/[0.05] ring-1 ring-white/[0.06] text-gray-500 border-transparent'}`}>图生3D</button>
                             </div>
                             {generate3DMode === 'text' ? (
-                              <textarea value={generate3DPrompt} onChange={e => setGenerate3DPrompt(e.target.value)} placeholder="文本描述…" rows={2} className="w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none mb-3" />
+                              <textarea value={generate3DPrompt} onChange={e => setGenerate3DPrompt(e.target.value)} placeholder="文本描述…" rows={2} className="w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 resize-none mb-3" />
                             ) : (
                               <>
                                 <div className="flex gap-2 mb-3">
-                                  <button onClick={() => { setGenerate3DImageMode('single'); setGenerate3DMultiViewImages({}); }} className={`flex-1 py-2 rounded-xl text-[9px] font-black uppercase border ${generate3DImageMode === 'single' ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300' : 'bg-[#1c1c22] border-[#2e2e32] text-gray-500'}`}>单图生成</button>
-                                  <button onClick={() => { setGenerate3DImageMode('multi'); setGenerate3DImage(null); }} className={`flex-1 py-2 rounded-xl text-[9px] font-black uppercase border ${generate3DImageMode === 'multi' ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300' : 'bg-[#1c1c22] border-[#2e2e32] text-gray-500'}`}>多图生成</button>
+                                  <button onClick={() => { setGenerate3DImageMode('single'); setGenerate3DMultiViewImages({}); }} className={`flex-1 py-2 rounded-xl text-[9px] font-black uppercase border ${generate3DImageMode === 'single' ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300' : 'bg-white/[0.05] ring-1 ring-white/[0.06] text-gray-500 border-transparent'}`}>单图生成</button>
+                                  <button onClick={() => { setGenerate3DImageMode('multi'); setGenerate3DImage(null); }} className={`flex-1 py-2 rounded-xl text-[9px] font-black uppercase border ${generate3DImageMode === 'multi' ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300' : 'bg-white/[0.05] ring-1 ring-white/[0.06] text-gray-500 border-transparent'}`}>多图生成</button>
                                 </div>
                                 {generate3DImageMode === 'single' ? (
                                   <div className="mb-3">
                                     {!generate3DImage ? (
-                                      <label className="block h-20 border-2 border-dashed border-[#2e2e32] rounded-xl flex items-center justify-center cursor-pointer hover:bg-[#222228] text-[9px] text-gray-500">点击上传参考图<input type="file" className="hidden" accept="image/jpeg,image/png,image/webp" onChange={e => { const f = e.target.files?.[0]; if (f) { const r = new FileReader(); r.onload = () => setGenerate3DImage(r.result as string); r.readAsDataURL(f); } }} /></label>
+                                      <label className="block h-20 border-2 border-dashed border-white/[0.12] rounded-xl flex items-center justify-center cursor-pointer hover:bg-[#222228] text-[9px] text-gray-500">点击上传参考图<input type="file" className="hidden" accept="image/jpeg,image/png,image/webp" onChange={e => { const f = e.target.files?.[0]; if (f) { const r = new FileReader(); r.onload = () => setGenerate3DImage(r.result as string); r.readAsDataURL(f); } }} /></label>
                                     ) : (
                                       <div className="relative inline-block">
                                         <ProgressivePreviewImage
@@ -3654,7 +3675,7 @@ const MainApp: React.FC = () => {
                                           cacheKey={`g3d-ref:${generate3DImage.slice(0, 64)}`}
                                           thumbMaxEdge={160}
                                           className="relative inline-block"
-                                          imgClassName="max-h-20 rounded-xl border border-[#2e2e32]"
+                                          imgClassName="max-h-20 rounded-xl ring-1 ring-white/[0.06]"
                                           alt="参考"
                                         />
                                         <button onClick={() => setGenerate3DImage(null)} className="absolute top-1 right-1 w-5 h-5 bg-red-500 rounded text-white text-xs">×</button>
@@ -3662,7 +3683,7 @@ const MainApp: React.FC = () => {
                                     )}
                                   </div>
                                 ) : (
-                                  <div className="mb-3 py-2 rounded-xl border border-[#2e2e32] bg-[#16161a]">
+                                  <div className="mb-3 py-2 rounded-xl ring-1 ring-white/[0.06] bg-[#16161a]">
                                     <MultiViewUpload images={generate3DMultiViewImages} onChange={setGenerate3DMultiViewImages} minCount={2} maxViews={generate3DModel === '3.1' ? 8 : 6} />
                                   </div>
                                 )}
@@ -3671,7 +3692,7 @@ const MainApp: React.FC = () => {
                             <div className="grid grid-cols-2 gap-2 mb-3">
                               <div><label className="block text-[8px] text-gray-500 uppercase mb-1">版本</label><DropdownSelect compact options={[{ value: '3.0', label: '3.0' }, { value: '3.1', label: '3.1' }]} value={generate3DModel} onChange={v => setGenerate3DModel(v as '3.0' | '3.1')} /></div>
                               <div><label className="block text-[8px] text-gray-500 uppercase mb-1">类型</label><DropdownSelect compact options={[{ value: 'Normal', label: '带纹理' }, { value: 'LowPoly', label: '智能拓扑' }, { value: 'Geometry', label: '白模' }, { value: 'Sketch', label: '草图' }]} value={generate3DType} onChange={v => setGenerate3DType(v as typeof generate3DType)} /></div>
-                              <div><label className="block text-[8px] text-gray-500 uppercase mb-1">面数</label><input type="number" min={3000} max={1500000} step={10000} value={generate3DFaceCount} onChange={e => setGenerate3DFaceCount(Number(e.target.value) || 100000)} className="w-full bg-[#1c1c22] border border-[#2e2e32] rounded-lg px-2 py-1.5 text-[10px] outline-none focus:border-blue-500" /></div>
+                              <div><label className="block text-[8px] text-gray-500 uppercase mb-1">面数</label><input type="number" min={3000} max={1500000} step={10000} value={generate3DFaceCount} onChange={e => setGenerate3DFaceCount(Number(e.target.value) || 100000)} className="w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-lg px-2 py-1.5 text-[10px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50" /></div>
                               {generate3DType === 'LowPoly' && <div><label className="block text-[8px] text-gray-500 uppercase mb-1">多边形</label><DropdownSelect compact options={[{ value: 'triangle', label: '三角' }, { value: 'quadrilateral', label: '四边' }]} value={generate3DPolygonType} onChange={v => setGenerate3DPolygonType(v as 'triangle' | 'quadrilateral')} /></div>}
                               <div><label className="block text-[8px] text-gray-500 uppercase mb-1">格式</label><DropdownSelect compact options={[{ value: '', label: 'OBJ+GLB' }, { value: 'FBX', label: 'FBX' }, { value: 'STL', label: 'STL' }, { value: 'USDZ', label: 'USDZ' }]} value={generate3DResultFormat} onChange={v => setGenerate3DResultFormat(v as '' | 'FBX' | 'STL' | 'USDZ')} /></div>
                               <div className="flex items-end"><label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="checkbox" checked={generate3DEnablePBR} onChange={e => setGenerate3DEnablePBR(e.target.checked)} className="rounded" />PBR</label></div>
@@ -3688,9 +3709,9 @@ const MainApp: React.FC = () => {
                         {generate3DModule === 'rapid' && (
                           <>
                             <p className="text-[9px] text-gray-500 mb-3">极速版模型，约 1 分 30 秒内生成 3D 文件。</p>
-                            <textarea value={rapidPrompt} onChange={e => setRapidPrompt(e.target.value)} placeholder="文本描述（与下图二选一）" rows={2} className="w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none mb-3" />
+                            <textarea value={rapidPrompt} onChange={e => setRapidPrompt(e.target.value)} placeholder="文本描述（与下图二选一）" rows={2} className="w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 resize-none mb-3" />
                             <div className="flex gap-2 mb-3">
-                              {!rapidImage ? <label className="flex-1 h-14 border border-dashed border-[#2e2e32] rounded-xl flex items-center justify-center cursor-pointer text-[9px] text-gray-500">上传图片<input type="file" className="hidden" accept="image/*" onChange={e => { const f = e.target.files?.[0]; if (f) { const r = new FileReader(); r.onload = () => setRapidImage(r.result as string); r.readAsDataURL(f); } }} /></label> : <div className="relative flex-1"><ProgressivePreviewImage fullSrc={rapidImage} cacheKey={`rapid:${rapidImage.slice(0, 64)}`} thumbMaxEdge={112} className="relative h-14 w-full" imgClassName="h-14 w-full object-cover rounded-xl border border-[#2e2e32]" alt="" /><button type="button" onClick={() => setRapidImage(null)} className="absolute top-0 right-0 w-5 h-5 bg-red-500 rounded text-white text-xs">×</button></div>}
+                              {!rapidImage ? <label className="flex-1 h-14 border border-dashed border-white/[0.12] rounded-xl flex items-center justify-center cursor-pointer text-[9px] text-gray-500">上传图片<input type="file" className="hidden" accept="image/*" onChange={e => { const f = e.target.files?.[0]; if (f) { const r = new FileReader(); r.onload = () => setRapidImage(r.result as string); r.readAsDataURL(f); } }} /></label> : <div className="relative flex-1"><ProgressivePreviewImage fullSrc={rapidImage} cacheKey={`rapid:${rapidImage.slice(0, 64)}`} thumbMaxEdge={112} className="relative h-14 w-full" imgClassName="h-14 w-full object-cover rounded-xl ring-1 ring-white/[0.06]" alt="" /><button type="button" onClick={() => setRapidImage(null)} className="absolute top-0 right-0 w-5 h-5 bg-red-500 rounded text-white text-xs">×</button></div>}
                               <div className="w-24 shrink-0"><DropdownSelect compact options={[{ value: 'FBX', label: 'FBX' }, { value: 'OBJ', label: 'OBJ' }, { value: 'GLB', label: 'GLB' }, { value: 'STL', label: 'STL' }, { value: 'USDZ', label: 'USDZ' }, { value: 'MP4', label: 'MP4' }]} value={rapidResultFormat} onChange={setRapidResultFormat} /></div>
                             </div>
                             <label className="flex items-center gap-2 text-[10px] mb-3"><input type="checkbox" checked={rapidEnablePBR} onChange={e => setRapidEnablePBR(e.target.checked)} className="rounded" />PBR</label>
@@ -3700,30 +3721,30 @@ const MainApp: React.FC = () => {
                         {generate3DModule === 'topology' && (
                           <>
                             <p className="text-[9px] text-gray-500 mb-3">Polygon 1.5：输入 3D 高模 URL，生成布线规整、较低面数模型。</p>
-                            <input value={topologyFileUrl} onChange={e => setTopologyFileUrl(e.target.value)} placeholder="3D 高模文件 URL（如 GLB/FBX）" className="w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 mb-3" />
+                            <input value={topologyFileUrl} onChange={e => setTopologyFileUrl(e.target.value)} placeholder="3D 高模文件 URL（如 GLB/FBX）" className="w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 mb-3" />
                             <button onClick={handleTopology3D} disabled={!topologyFileUrl.trim()} className="w-full py-2.5 bg-indigo-600 rounded-xl text-[10px] font-black uppercase disabled:opacity-40">提交（入队）</button>
                           </>
                         )}
                         {generate3DModule === 'texture' && (
                           <>
                             <p className="text-[9px] text-gray-500 mb-3">输入单几何模型 URL（必填）+ 参考图或文字描述二选一，生成纹理贴图。</p>
-                            <input value={textureModelUrl} onChange={e => setTextureModelUrl(e.target.value)} placeholder="单几何模型 URL（必填）" className="w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 mb-2" />
-                            <textarea value={texturePrompt} onChange={e => setTexturePrompt(e.target.value)} placeholder="文字描述（与参考图二选一）" rows={1} className="w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none mb-2" />
-                            <div className="mb-3">{!textureRefImage ? <label className="block h-14 border border-dashed border-[#2e2e32] rounded-xl flex items-center justify-center cursor-pointer text-[9px] text-gray-500">上传参考图（与描述二选一）<input type="file" className="hidden" accept="image/*" onChange={e => { const f = e.target.files?.[0]; if (f) { const r = new FileReader(); r.onload = () => setTextureRefImage(r.result as string); r.readAsDataURL(f); } }} /></label> : <div className="relative inline-block"><ProgressivePreviewImage fullSrc={textureRefImage} cacheKey={`texref:${textureRefImage.slice(0, 64)}`} thumbMaxEdge={112} className="relative inline-block" imgClassName="max-h-14 rounded-xl border border-[#2e2e32]" alt="" /><button onClick={() => setTextureRefImage(null)} className="absolute top-1 right-1 w-5 h-5 bg-red-500 rounded text-white text-xs">×</button></div>}</div>
+                            <input value={textureModelUrl} onChange={e => setTextureModelUrl(e.target.value)} placeholder="单几何模型 URL（必填）" className="w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 mb-2" />
+                            <textarea value={texturePrompt} onChange={e => setTexturePrompt(e.target.value)} placeholder="文字描述（与参考图二选一）" rows={1} className="w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 resize-none mb-2" />
+                            <div className="mb-3">{!textureRefImage ? <label className="block h-14 border border-dashed border-white/[0.12] rounded-xl flex items-center justify-center cursor-pointer text-[9px] text-gray-500">上传参考图（与描述二选一）<input type="file" className="hidden" accept="image/*" onChange={e => { const f = e.target.files?.[0]; if (f) { const r = new FileReader(); r.onload = () => setTextureRefImage(r.result as string); r.readAsDataURL(f); } }} /></label> : <div className="relative inline-block"><ProgressivePreviewImage fullSrc={textureRefImage} cacheKey={`texref:${textureRefImage.slice(0, 64)}`} thumbMaxEdge={112} className="relative inline-block" imgClassName="max-h-14 rounded-xl ring-1 ring-white/[0.06]" alt="" /><button onClick={() => setTextureRefImage(null)} className="absolute top-1 right-1 w-5 h-5 bg-red-500 rounded text-white text-xs">×</button></div>}</div>
                             <button onClick={handleTexture3D} disabled={!textureModelUrl.trim() || (!texturePrompt.trim() && !textureRefImage)} className="w-full py-2.5 bg-indigo-600 rounded-xl text-[10px] font-black uppercase disabled:opacity-40">提交（入队）</button>
                           </>
                         )}
                         {generate3DModule === 'component' && (
                           <>
                             <p className="text-[9px] text-gray-500 mb-3">输入 3D 模型，自动识别结构并生成对应 3D 组件。</p>
-                            <input value={componentFileUrl} onChange={e => setComponentFileUrl(e.target.value)} placeholder="3D 模型 URL（建议 FBX，≤100MB）" className="w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 mb-3" />
+                            <input value={componentFileUrl} onChange={e => setComponentFileUrl(e.target.value)} placeholder="3D 模型 URL（建议 FBX，≤100MB）" className="w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 mb-3" />
                             <button onClick={handleComponent3D} disabled={!componentFileUrl.trim()} className="w-full py-2.5 bg-indigo-600 rounded-xl text-[10px] font-black uppercase disabled:opacity-40">提交（入队）</button>
                           </>
                         )}
                         {generate3DModule === 'uv' && (
                           <>
                             <p className="text-[9px] text-gray-500 mb-3">输入 3D 模型，自动生成高质量 UV 切线。</p>
-                            <input value={uvFileUrl} onChange={e => setUvFileUrl(e.target.value)} placeholder="3D 模型 URL" className="w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 mb-3" />
+                            <input value={uvFileUrl} onChange={e => setUvFileUrl(e.target.value)} placeholder="3D 模型 URL" className="w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 mb-3" />
                             <button onClick={handleUV3D} disabled={!uvFileUrl.trim()} className="w-full py-2.5 bg-indigo-600 rounded-xl text-[10px] font-black uppercase disabled:opacity-40">提交（入队）</button>
                           </>
                         )}
@@ -3731,7 +3752,7 @@ const MainApp: React.FC = () => {
                           <>
                             <p className="text-[9px] text-gray-500 mb-3">输入人物头像，按模板生成对应 3D 形象。</p>
                             {!profileImage ? (
-                              <label className="block h-24 border-2 border-dashed border-[#2e2e32] rounded-xl flex items-center justify-center cursor-pointer hover:bg-[#222228] text-[9px] text-gray-500 mb-3">点击上传人物头像<input type="file" className="hidden" accept="image/*" onChange={e => { const f = e.target.files?.[0]; if (f) { const r = new FileReader(); r.onload = () => setProfileImage(r.result as string); r.readAsDataURL(f); } }} /></label>
+                              <label className="block h-24 border-2 border-dashed border-white/[0.12] rounded-xl flex items-center justify-center cursor-pointer hover:bg-[#222228] text-[9px] text-gray-500 mb-3">点击上传人物头像<input type="file" className="hidden" accept="image/*" onChange={e => { const f = e.target.files?.[0]; if (f) { const r = new FileReader(); r.onload = () => setProfileImage(r.result as string); r.readAsDataURL(f); } }} /></label>
                             ) : (
                               <div className="relative inline-block mb-3">
                                 <ProgressivePreviewImage
@@ -3739,7 +3760,7 @@ const MainApp: React.FC = () => {
                                   cacheKey={`profile:${profileImage.slice(0, 64)}`}
                                   thumbMaxEdge={192}
                                   className="relative inline-block"
-                                  imgClassName="max-h-24 rounded-xl border border-[#2e2e32]"
+                                  imgClassName="max-h-24 rounded-xl ring-1 ring-white/[0.06]"
                                   alt="头像"
                                 />
                                 <button onClick={() => setProfileImage(null)} className="absolute top-1 right-1 w-6 h-6 bg-red-500 rounded text-white text-xs">×</button>
@@ -3751,7 +3772,7 @@ const MainApp: React.FC = () => {
                         {generate3DModule === 'convert' && (
                           <>
                             <p className="text-[9px] text-gray-500 mb-3">输入 3D 模型 URL，转换为目标格式。</p>
-                            <input value={convertFileUrl} onChange={e => setConvertFileUrl(e.target.value)} placeholder="3D 文件 URL（fbx/obj/glb 等）" className="w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 mb-2" />
+                            <input value={convertFileUrl} onChange={e => setConvertFileUrl(e.target.value)} placeholder="3D 文件 URL（fbx/obj/glb 等）" className="w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 mb-2" />
                             <div className="mb-3"><DropdownSelect compact options={[{ value: 'STL', label: 'STL' }, { value: 'USDZ', label: 'USDZ' }, { value: 'FBX', label: 'FBX' }, { value: 'MP4', label: 'MP4' }, { value: 'GIF', label: 'GIF' }]} value={convertFormat} onChange={setConvertFormat} /></div>
                             <button onClick={handleConvert3D} disabled={!convertFileUrl.trim()} className="w-full py-2.5 bg-indigo-600 rounded-xl text-[10px] font-black uppercase disabled:opacity-40">转换（入队）</button>
                           </>
@@ -3764,8 +3785,8 @@ const MainApp: React.FC = () => {
                 </div>
 
                 {/* 中间：3D 预览常驻 */}
-                <div className="flex-1 min-w-0 flex flex-col rounded-2xl border border-[#2e2e32] bg-[#1a1a1e] overflow-hidden">
-                  <div className="px-3 py-2 text-[9px] font-black uppercase text-gray-500 border-b border-[#2e2e32]">3D 预览 · 支持 OBJ/GLB，生成后自动显示，可点击右侧临时库切换</div>
+                <div className="flex-1 min-w-0 flex flex-col rounded-2xl ring-1 ring-white/[0.06] bg-[#1a1a1e] overflow-hidden">
+                  <div className="px-3 py-2 text-[9px] font-black uppercase text-gray-500 border-b border-white/[0.06]">3D 预览 · 支持 OBJ/GLB，生成后自动显示，可点击右侧临时库切换</div>
                   <div className="flex-1 min-h-[280px] relative">
                     {generate3DPreview ? (
                     <Suspense fallback={<LazySectionFallback label="3D预览" />}>
@@ -3778,14 +3799,14 @@ const MainApp: React.FC = () => {
                 </div>
 
                 {/* 右侧：临时库 */}
-                <div className="w-64 lg:w-72 shrink-0 flex flex-col rounded-2xl border border-[#2e2e32] bg-[#16161a] overflow-hidden">
-                  <div className="px-3 py-2 border-b border-[#2e2e32] flex items-center justify-between">
+                <div className="w-64 lg:w-72 shrink-0 flex flex-col rounded-2xl ring-1 ring-white/[0.06] bg-[#16161a] overflow-hidden">
+                  <div className="px-3 py-2 border-b border-white/[0.06] flex items-center justify-between">
                     <span className="text-[9px] font-black uppercase text-blue-400">临时库</span>
                     <span className="text-[9px] text-gray-500">队列 {generate3DQueue.length}（{generate3DQueue.filter(q => q.status === 'running').length} 运行中）</span>
                   </div>
                   <div className="flex-1 overflow-y-auto no-scrollbar p-2 space-y-2">
                     {generate3DQueue.length > 0 && (
-                      <div className="rounded-xl border border-[#2e2e32] bg-[#1c1c22] p-2 space-y-2">
+                      <div className="rounded-xl ring-1 ring-white/[0.06] bg-[#1c1c22] p-2 space-y-2">
                         <div className="flex items-center justify-between">
                           <span className="text-[8px] font-black uppercase text-gray-400">任务队列</span>
                           <div className="flex items-center gap-2">
@@ -3793,7 +3814,7 @@ const MainApp: React.FC = () => {
                             {generate3DQueue.some(q => q.status !== 'pending' && q.status !== 'running') && (
                               <button
                                 onClick={clearInactiveQueueItems}
-                                className="px-1.5 py-1 rounded-md border border-[#2e2e32] text-[8px] font-black uppercase text-gray-400 hover:bg-[#2e2e36]"
+                                className="px-1.5 py-1 rounded-md ring-1 ring-white/[0.06] text-[8px] font-black uppercase text-gray-400 hover:bg-[#2e2e36]"
                               >
                                 清理
                               </button>
@@ -3821,7 +3842,7 @@ const MainApp: React.FC = () => {
                                     ? 'bg-[#3a3a40] text-gray-300 border-gray-500/30'
                                     : 'bg-[#4a2228] text-red-300 border-[#dc6b6b]';
                             return (
-                              <div key={item.id} className="rounded-xl border border-[#2e2e32] bg-[#141416] p-2">
+                              <div key={item.id} className="rounded-xl ring-1 ring-white/[0.06] bg-[#141416] p-2">
                                 <div className="flex items-start justify-between gap-2">
                                   <div className="min-w-0">
                                     <div className="text-[10px] font-black truncate">{item.label || item.type}</div>
@@ -3870,7 +3891,7 @@ const MainApp: React.FC = () => {
                         <div
                           key={item.id}
                           onClick={() => setSelectedTemp3DId(item.id)}
-                          className={`rounded-xl border overflow-hidden cursor-pointer transition-colors ${selectedTemp3DId === item.id ? 'border-blue-500 bg-[#1a3354]' : 'border-[#2e2e32] bg-[#1c1c22] hover:bg-[#2e2e36]'}`}
+                          className={`rounded-xl border overflow-hidden cursor-pointer transition-colors ${selectedTemp3DId === item.id ? 'border-blue-500 bg-[#1a3354]' : 'ring-1 ring-white/[0.06] bg-white/[0.05] hover:bg-white/[0.09] border-transparent'}`}
                         >
                           <div className="aspect-square relative">
                             {item.previewImageUrl ? (
@@ -3911,7 +3932,7 @@ const MainApp: React.FC = () => {
                     <div className="text-[9px] font-black text-gray-500 uppercase tracking-widest">会话</div>
                     <button
                       onClick={createNewDialogSession}
-                      className="w-9 h-9 shrink-0 rounded-xl bg-[#26262c] border border-[#2e2e32] flex items-center justify-center text-lg font-bold text-white/80 hover:bg-[#383842] transition-colors"
+                      className="w-9 h-9 shrink-0 rounded-xl bg-[#26262c] ring-1 ring-white/[0.06] flex items-center justify-center text-lg font-bold text-white/80 hover:bg-[#383842] transition-colors"
                       title="新对话"
                     >
                       +
@@ -3954,10 +3975,10 @@ const MainApp: React.FC = () => {
                                 hasLastGenBackdrop
                                   ? isActive
                                     ? 'border-[#3b6fb8]'
-                                    : 'border-[#2e2e32] hover:border-[#3a3a40]'
+                                    : 'ring-1 ring-white/[0.06] hover:ring-white/[0.12] border-transparent'
                                   : isActive
                                     ? 'bg-[#1a2d4d] border-[#3b6fb8]'
-                                    : 'bg-[#1c1c22] border-[#2e2e32] hover:bg-[#2e2e36] hover:border-[#3a3a40]'
+                                    : 'bg-white/[0.05] ring-1 ring-white/[0.06] hover:bg-white/[0.09] hover:ring-white/[0.1] border-transparent'
                               }`}
                             >
                               {hasLastGenBackdrop && lastVer ? (
@@ -3973,7 +3994,7 @@ const MainApp: React.FC = () => {
                               >
                                 <span className="flex items-start gap-2 min-w-0">
                                   {!hasLastGenBackdrop ? (
-                                    <span className="mt-0.5 shrink-0 w-5 h-5 rounded-lg border border-[#2e2e32] bg-[#141416] flex items-center justify-center text-[9px] text-gray-500">新</span>
+                                    <span className="mt-0.5 shrink-0 w-5 h-5 rounded-lg ring-1 ring-white/[0.06] bg-[#141416] flex items-center justify-center text-[9px] text-gray-500">新</span>
                                   ) : null}
                                   <span className="min-w-0 flex-1">
                                     <span className="block text-[10px] font-black text-white truncate [text-shadow:0_1px_2px_rgba(0,0,0,0.9)]">{label}</span>
@@ -4075,16 +4096,16 @@ const MainApp: React.FC = () => {
                       <div key={msg.id} id={`msg-${msg.id}`} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                         <div
                           className={`max-w-[85%] lg:max-w-[75%] rounded-2xl overflow-visible ${
-                            msg.role === 'user' ? 'bg-[#1e3558] border border-[#4b6a9e]' : 'bg-[#1c1c22] border border-[#2e2e32]'
+                            msg.role === 'user' ? 'bg-[#1e3558] border border-[#4b6a9e]' : 'bg-white/[0.05] ring-1 ring-white/[0.06]'
                           }`}
                         >
                           {msg.role === 'user' && (msg.inputImages?.length || msg.imageBase64) && (
-                            <div className="p-2 border-b border-[#2e2e32] overflow-hidden rounded-t-2xl">
+                            <div className="p-2 border-b border-white/[0.06] overflow-hidden rounded-t-2xl">
                               <div className={`grid gap-2 ${msg.inputImages && msg.inputImages.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}>
                                 {(msg.inputImages && msg.inputImages.length > 0 ? msg.inputImages : msg.imageBase64 ? [msg.imageBase64] : []).map((image, imageIndex) => (
                                   <div
                                     key={`${msg.id}-${imageIndex}`}
-                                    className="mx-auto w-full max-w-full rounded-xl border border-[#2e2e32] bg-[#141416] p-1 flex justify-center"
+                                    className="mx-auto w-full max-w-full rounded-xl ring-1 ring-white/[0.06] bg-[#141416] p-1 flex justify-center"
                                   >
                                     <SiteImage
                                       src={image}
@@ -4162,12 +4183,12 @@ const MainApp: React.FC = () => {
                                   </div>
                                 )}
                                 {displayPending ? (
-                                  <div className="flex items-center justify-center min-h-[140px] rounded-xl border border-[#2e2e32] bg-[#141416] text-[9px] text-gray-500">图片加载中…</div>
+                                  <div className="flex items-center justify-center min-h-[140px] rounded-xl ring-1 ring-white/[0.06] bg-[#141416] text-[9px] text-gray-500">图片加载中…</div>
                                 ) : dialogDetectMessageId === msg.id && (displayVersion.detectedBoxes?.length ?? 0) > 0 && displaySrc ? (
                                   <div className="relative inline-block max-w-full">
                                     <SiteImage
                                       src={displaySrc}
-                                      className="block h-auto max-h-[min(90dvh,960px)] w-auto max-w-full cursor-zoom-in object-contain rounded-xl border border-[#2e2e32]"
+                                      className="block h-auto max-h-[min(90dvh,960px)] w-auto max-w-full cursor-zoom-in object-contain rounded-xl ring-1 ring-white/[0.06]"
                                       alt="生成"
                                       title="点击查看大图"
                                       loading="eager"
@@ -4194,7 +4215,7 @@ const MainApp: React.FC = () => {
                                     </div>
                                   </div>
                                 ) : displaySrc ? (
-                                  <div className="w-full max-w-full rounded-xl border border-[#2e2e32] bg-[#141416] p-1 flex justify-center">
+                                  <div className="w-full max-w-full rounded-xl ring-1 ring-white/[0.06] bg-[#141416] p-1 flex justify-center">
                                     <SiteImage
                                       src={displaySrc}
                                       className="block h-auto max-h-[min(90dvh,960px)] w-auto max-w-full cursor-zoom-in object-contain rounded-lg"
@@ -4219,33 +4240,33 @@ const MainApp: React.FC = () => {
                                 ) : null}
                               </div>
                               {dialogDetectMessageId === msg.id && (displayVersion.detectedBoxes?.length ?? 0) > 0 && (
-                                <div className="px-4 pb-3 space-y-2 border-b border-[#2e2e32]">
+                                <div className="px-4 pb-3 space-y-2 border-b border-white/[0.06]">
                                   <div className="text-[9px] font-black text-blue-400 uppercase">点击数字下载该物体（带边距）· 可添加到右侧临时库</div>
                                   <div className="flex flex-wrap items-center gap-2">
                                     {(displayVersion.detectedBoxes ?? []).map((_, i) => (
                                       <button key={i} onClick={() => handleDialogDownloadCropByIndex(msg, i)} className="w-9 h-9 rounded-xl bg-[#264670] border border-[#3b82f6] text-sm font-black hover:bg-[#365e92] transition-all flex items-center justify-center" title={`下载 ${DIALOG_BOX_LABELS[i] ?? i + 1}`}>{DIALOG_BOX_LABELS[i] ?? i + 1}</button>
                                     ))}
                                     <button onClick={() => handleDialogDownloadAllCrops(msg)} className="px-3 py-2 bg-blue-600 rounded-xl text-[9px] font-black uppercase text-white hover:bg-blue-500 transition-all">下载全部</button>
-                                    <button onClick={() => handleDialogTempAddAllCrops(msg)} className="px-3 py-2 bg-[#26262c] border border-[#2e2e32] rounded-xl text-[9px] font-black uppercase hover:bg-[#383842] transition-all">全部加临时库</button>
-                                    <button onClick={() => handleDialogDetectObjects(msg, true)} disabled={dialogDetectingId === msg.id} className="px-3 py-2 bg-[#26262c] border border-[#2e2e32] rounded-xl text-[9px] font-black uppercase hover:bg-[#383842] transition-all disabled:opacity-50">重新识别</button>
+                                    <button onClick={() => handleDialogTempAddAllCrops(msg)} className="px-3 py-2 bg-[#26262c] ring-1 ring-white/[0.06] rounded-xl text-[9px] font-black uppercase hover:bg-[#383842] transition-all">全部加临时库</button>
+                                    <button onClick={() => handleDialogDetectObjects(msg, true)} disabled={dialogDetectingId === msg.id} className="px-3 py-2 bg-[#26262c] ring-1 ring-white/[0.06] rounded-xl text-[9px] font-black uppercase hover:bg-[#383842] transition-all disabled:opacity-50">重新识别</button>
                                     <button onClick={handleDialogDetectClose} className="px-3 py-2 text-gray-500 text-[9px] font-black uppercase hover:text-white transition-colors">收起</button>
                                   </div>
                                   <div className="flex flex-wrap items-center gap-1.5">
                                     {(displayVersion.detectedBoxes ?? []).map((_, i) => (
-                                      <button key={i} onClick={() => handleDialogTempAddCropByIndex(msg, i)} className="px-2 py-1 rounded-lg bg-[#1c1c22] border border-[#2e2e32] text-[9px] font-black hover:bg-[#2e2e36] transition-all" title={`${DIALOG_BOX_LABELS[i] ?? i + 1} 加到临时库`}>+{DIALOG_BOX_LABELS[i] ?? i + 1}</button>
+                                      <button key={i} onClick={() => handleDialogTempAddCropByIndex(msg, i)} className="px-2 py-1 rounded-lg bg-white/[0.05] ring-1 ring-white/[0.06] text-[9px] font-black hover:bg-[#2e2e36] transition-all" title={`${DIALOG_BOX_LABELS[i] ?? i + 1} 加到临时库`}>+{DIALOG_BOX_LABELS[i] ?? i + 1}</button>
                                     ))}
                                   </div>
                                 </div>
                               )}
                               <div className="px-4 pb-4 flex flex-wrap gap-2">
                                 <button onClick={() => handleDialogDownload(msg)} className="px-3 py-2 bg-[#1e3558] border border-[#4b6a9e] rounded-xl text-[9px] font-black uppercase text-blue-400 hover:bg-[#305a90] transition-all">下载图片</button>
-                                <button onClick={() => displaySrc && handleCopyDialogImage(displaySrc)} disabled={!displaySrc} className="px-3 py-2 bg-[#26262c] border border-[#2e2e32] rounded-xl text-[9px] font-black uppercase hover:bg-[#383842] transition-all disabled:opacity-40">复制图片</button>
-                                <button onClick={() => displaySrc && openDialogCrop(msg.id, displaySrc)} disabled={!displaySrc} className="px-3 py-2 bg-[#26262c] border border-[#2e2e32] rounded-xl text-[9px] font-black uppercase hover:bg-[#383842] transition-all disabled:opacity-40">裁切</button>
+                                <button onClick={() => displaySrc && handleCopyDialogImage(displaySrc)} disabled={!displaySrc} className="px-3 py-2 bg-[#26262c] ring-1 ring-white/[0.06] rounded-xl text-[9px] font-black uppercase hover:bg-[#383842] transition-all disabled:opacity-40">复制图片</button>
+                                <button onClick={() => displaySrc && openDialogCrop(msg.id, displaySrc)} disabled={!displaySrc} className="px-3 py-2 bg-[#26262c] ring-1 ring-white/[0.06] rounded-xl text-[9px] font-black uppercase hover:bg-[#383842] transition-all disabled:opacity-40">裁切</button>
                                 <button onClick={() => handleDialogUseAsInput(msg)} className="px-3 py-2 bg-[#14532d] border border-green-500/30 rounded-xl text-[9px] font-black uppercase text-green-400 hover:bg-[#166534] transition-all">以此图继续</button>
-                                <button onClick={() => handleDialogDetectObjects(msg)} disabled={dialogDetectingId === msg.id} className="px-3 py-2 bg-[#1c1c22] border border-[#2e2e32] rounded-xl text-[9px] font-black uppercase hover:bg-[#2e2e36] transition-all disabled:opacity-50">{dialogDetectingId === msg.id ? '识别中...' : '识别图中物体'}</button>
+                                <button onClick={() => handleDialogDetectObjects(msg)} disabled={dialogDetectingId === msg.id} className="px-3 py-2 bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl text-[9px] font-black uppercase hover:bg-[#2e2e36] transition-all disabled:opacity-50">{dialogDetectingId === msg.id ? '识别中...' : '识别图中物体'}</button>
                                 <button onClick={() => handleDialogSaveToLibrary(msg)} className="px-3 py-2 bg-[#1e3558] border border-[#4b6a9e] rounded-xl text-[9px] font-black uppercase text-blue-400 hover:bg-[#305a90] transition-all">保存到库</button>
-                                <button onClick={() => handleDialogRegenerate(msg.id)} disabled={isRegeneratingThis || !userMsg} className="px-3 py-2 bg-[#1c1c22] border border-[#2e2e32] rounded-xl text-[9px] font-black uppercase hover:bg-[#2e2e36] transition-all disabled:opacity-50">直接重新生成</button>
-                                <button onClick={() => { setDialogEditingMessageId(msg.id); setDialogEditingText(userMsg?.role === 'user' ? userMsg.text : ''); }} disabled={isRegeneratingThis} className="px-3 py-2 bg-[#1c1c22] border border-[#2e2e32] rounded-xl text-[9px] font-black uppercase hover:bg-[#2e2e36] transition-all disabled:opacity-50">编辑后重新生成</button>
+                                <button onClick={() => handleDialogRegenerate(msg.id)} disabled={isRegeneratingThis || !userMsg} className="px-3 py-2 bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl text-[9px] font-black uppercase hover:bg-[#2e2e36] transition-all disabled:opacity-50">直接重新生成</button>
+                                <button onClick={() => { setDialogEditingMessageId(msg.id); setDialogEditingText(userMsg?.role === 'user' ? userMsg.text : ''); }} disabled={isRegeneratingThis} className="px-3 py-2 bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl text-[9px] font-black uppercase hover:bg-[#2e2e36] transition-all disabled:opacity-50">编辑后重新生成</button>
                               </div>
                               {displayVersion?.generationRecordId && (() => {
                                 const recordId = displayVersion.generationRecordId!;
@@ -4269,11 +4290,11 @@ const MainApp: React.FC = () => {
                             </>
                           )}
                           {msg.role === 'assistant' && isEditingThis && (
-                            <div className="p-4 border-t border-[#2e2e32] space-y-3">
-                              <input value={dialogEditingText} onChange={e => setDialogEditingText(e.target.value)} placeholder="修改你的需求描述..." className="w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-4 py-3 text-[11px] outline-none focus:border-blue-500" />
+                            <div className="p-4 border-t border-white/[0.06] space-y-3">
+                              <input value={dialogEditingText} onChange={e => setDialogEditingText(e.target.value)} placeholder="修改你的需求描述..." className="w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-4 py-3 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50" />
                               <div className="flex gap-2">
                                 <button onClick={() => handleDialogEditThenRegenerate(msg.id, dialogEditingText)} disabled={!dialogEditingText.trim()} className="px-4 py-2 bg-blue-600 rounded-xl text-[9px] font-black uppercase disabled:opacity-50">确认重新生成</button>
-                                <button onClick={() => setDialogEditingMessageId(null)} className="px-4 py-2 bg-[#1c1c22] border border-[#2e2e32] rounded-xl text-[9px] font-black uppercase">取消</button>
+                                <button onClick={() => setDialogEditingMessageId(null)} className="px-4 py-2 bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl text-[9px] font-black uppercase">取消</button>
                               </div>
                             </div>
                           )}
@@ -4283,7 +4304,7 @@ const MainApp: React.FC = () => {
                   })}
                   {dialogSendingSessionIds.includes(dialogActiveSessionIdResolved) && (
                     <div className="flex justify-start items-center gap-2">
-                      <div className="px-4 py-3 rounded-2xl bg-[#1c1c22] border border-[#2e2e32] text-[10px] text-gray-400 flex items-center gap-2">
+                      <div className="px-4 py-3 rounded-2xl bg-white/[0.05] ring-1 ring-white/[0.06] text-[10px] text-gray-400 flex items-center gap-2">
                         <div className="w-3 h-3 border-2 border-[#4b6a9e] border-t-blue-500 rounded-full animate-spin" />
                         {dialogBridgePrefs.enabled
                           ? '本地桥接处理中…'
@@ -4348,13 +4369,13 @@ const MainApp: React.FC = () => {
                     </div>
                       <div className="flex flex-wrap items-center gap-2">
                         <input
-                          className="min-w-[10rem] flex-1 bg-[#1c1c22] border border-[#2e2e32] rounded-lg px-2 py-1.5 text-[10px] outline-none focus:border-amber-500/60"
+                          className="min-w-[10rem] flex-1 bg-white/[0.05] ring-1 ring-white/[0.06] rounded-lg px-2 py-1.5 text-[10px] outline-none focus:border-amber-500/60"
                           placeholder="设备 ID（与 BRIDGE_DEVICE_ID 一致）"
                           value={dialogBridgePrefs.deviceId}
                           onChange={(e) => setDialogBridgePrefs({ deviceId: e.target.value })}
                         />
                         <input
-                          className="min-w-[10rem] flex-1 bg-[#1c1c22] border border-[#2e2e32] rounded-lg px-2 py-1.5 text-[10px] outline-none focus:border-amber-500/60"
+                          className="min-w-[10rem] flex-1 bg-white/[0.05] ring-1 ring-white/[0.06] rounded-lg px-2 py-1.5 text-[10px] outline-none focus:border-amber-500/60"
                           placeholder={
                             dialogBridgePrefs.connectorId === 'gemini-web'
                               ? '可选：完整 Gemini URL（留空用默认 https://gemini.google.com/app）'
@@ -4416,7 +4437,7 @@ const MainApp: React.FC = () => {
                           </div>
                           <div className="flex items-center gap-1.5 shrink-0">
                             <span className="text-[9px] font-black text-gray-500 uppercase whitespace-nowrap">挡位</span>
-                            <div className="flex rounded-lg overflow-hidden border border-[#2e2e32] shrink-0">
+                            <div className="flex rounded-lg overflow-hidden ring-1 ring-white/[0.06] shrink-0">
                               {DIALOG_IMAGE_GEARS.map(g => (
                                 <button key={g.id} type="button" onClick={() => { setDialogImageGear(g.id); setDialogModel(g.modelId); }} className={`px-2.5 py-1.5 text-[9px] font-black uppercase transition-colors ${dialogImageGear === g.id ? 'bg-blue-600 text-white' : 'bg-[#1c1c22] text-gray-500 hover:bg-[#2e2e36]'}`} title={g.modelId}>{g.label}</button>
                               ))}
@@ -4452,7 +4473,7 @@ const MainApp: React.FC = () => {
                     {dialogInputImages.length > 0 && (
                       <div className="flex flex-wrap items-center gap-2">
                         {dialogInputImages.map((img, i) => (
-                          <div key={img.id} className="relative inline-flex items-center gap-1 rounded-lg border border-[#2e2e32] bg-[#1c1c22] overflow-hidden">
+                          <div key={img.id} className="relative inline-flex items-center gap-1 rounded-lg ring-1 ring-white/[0.06] bg-[#1c1c22] overflow-hidden">
                             <span className="pl-2 text-[8px] font-black text-gray-500">图{i + 1}</span>
                             <ProgressivePreviewImage
                               fullSrc={img.data}
@@ -4488,13 +4509,13 @@ const MainApp: React.FC = () => {
                     </div>
                   )}
                   <div ref={dialogInputWrapperRef} className="flex gap-3 relative items-end">
-                    <div className="flex-1 relative flex min-h-12 min-w-0 gap-3 rounded-xl border border-[#2e2e32] bg-[#1c1c22] transition-colors focus-within:border-blue-500 overflow-visible">
+                    <div className="flex-1 relative flex min-h-12 min-w-0 gap-3 rounded-xl bg-white/[0.05] ring-1 ring-white/[0.06] transition-colors focus-within:ring-2 focus-within:ring-blue-500/45 overflow-visible">
                       <label
                         className="shrink-0 flex min-h-12 w-11 items-center justify-center pl-2.5 self-stretch cursor-pointer text-gray-400 hover:text-gray-200"
                         title="上传图片"
                         aria-label="上传图片"
                       >
-                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-[#2e2e32] bg-[#16161a] hover:bg-[#2e2e36] transition-colors">
+                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ring-1 ring-white/[0.06] bg-[#16161a] hover:bg-[#2e2e36] transition-colors">
                           <input
                             type="file"
                             className="sr-only"
@@ -4540,7 +4561,7 @@ const MainApp: React.FC = () => {
                         className={`flex-1 min-w-0 min-h-12 max-h-[min(40vh,280px)] resize-none border-0 bg-transparent py-[14px] pr-4 text-[11px] leading-5 outline-none ring-0 focus:ring-0 transition-colors placeholder:text-gray-600 rounded-r-xl ${dialogInputScrollOverflow ? 'overflow-y-auto' : 'overflow-y-hidden'}`}
                       />
                       {atSuggestionsOpen && (dialogInputImages.length > 0 || dialogTempFiltered.length > 0) && (
-                        <div className="absolute left-0 right-0 bottom-full mb-1 z-[5000] rounded-xl border border-[#2e2e32] bg-[#0f0f0f] shadow-xl py-1 max-h-[min(50vh,240px)] overflow-y-auto">
+                        <div className="absolute left-0 right-0 bottom-full mb-1 z-[5000] rounded-xl ring-1 ring-white/[0.06] bg-[#0f0f0f] shadow-xl py-1 max-h-[min(50vh,240px)] overflow-y-auto">
                           {dialogInputImages.length > 0 && (
                             <div className="px-2 py-1 text-[8px] font-black text-gray-500 uppercase">输入框图片</div>
                           )}
@@ -4586,14 +4607,14 @@ const MainApp: React.FC = () => {
 
                 {/* 右侧：临时库（生图与识别物体自动加入，可筛全部/当前对话，删会话会同步清理） */}
                 <div
-                  className="w-52 lg:w-64 shrink-0 flex flex-col border border-[#2e2e32] rounded-2xl overflow-hidden bg-[#121214] h-[calc(100dvh-6rem)]"
+                  className="w-52 lg:w-64 shrink-0 flex flex-col ring-1 ring-white/[0.06] rounded-2xl overflow-hidden bg-[#121214] h-[calc(100dvh-6rem)]"
                   onPaste={handleDialogTempLibraryPaste}
                   onDragOver={handleDialogTempLibraryDragOver}
                   onDrop={handleDialogTempLibraryDrop}
                 >
-                  <div className="flex-shrink-0 px-3 py-2 border-b border-[#2e2e32] flex items-center justify-between gap-2 flex-wrap">
+                  <div className="flex-shrink-0 px-3 py-2 border-b border-white/[0.06] flex items-center justify-between gap-2 flex-wrap">
                     <span className="text-[9px] font-black text-gray-500 uppercase tracking-widest">临时库</span>
-                    <div className="flex rounded-lg overflow-hidden border border-[#2e2e32]">
+                    <div className="flex rounded-lg overflow-hidden ring-1 ring-white/[0.06]">
                       <button onClick={() => setDialogTempLibraryFilter('all')} className={`px-2 py-1.5 text-[9px] font-black ${dialogTempLibraryFilter === 'all' ? 'bg-blue-600 text-white' : 'bg-[#1c1c22] text-gray-500 hover:bg-[#2e2e36]'}`}>全部</button>
                       <button onClick={() => setDialogTempLibraryFilter('current')} className={`px-2 py-1.5 text-[9px] font-black ${dialogTempLibraryFilter === 'current' ? 'bg-blue-600 text-white' : 'bg-[#1c1c22] text-gray-500 hover:bg-[#2e2e36]'}`}>当前</button>
                     </div>
@@ -4621,7 +4642,7 @@ const MainApp: React.FC = () => {
                             className={`relative group rounded-xl overflow-hidden border bg-[#1c1c22] aspect-square cursor-pointer ${
                               dialogTempSelectedIds.has(item.id)
                                 ? 'border-blue-500 shadow-[0_0_0_1px_rgba(59,130,246,0.45)]'
-                                : 'border-[#2e2e32]'
+                                : 'ring-1 ring-white/[0.06] border-transparent'
                             }`}
                           >
                             <ProgressivePreviewImage
@@ -4772,7 +4793,7 @@ const MainApp: React.FC = () => {
                         />
                       ) : null}
 
-                      <div className="absolute top-4 left-4 z-10 max-w-[min(300px,calc(100vw-6rem))] rounded-xl bg-[#101018]/90 border border-[#2e2e32] px-3 py-2 text-[9px] text-gray-300 pointer-events-none text-left leading-relaxed space-y-1">
+                      <div className="absolute top-4 left-4 z-10 max-w-[min(300px,calc(100vw-6rem))] rounded-xl bg-[#101018]/90 ring-1 ring-white/[0.06] px-3 py-2 text-[9px] text-gray-300 pointer-events-none text-left leading-relaxed space-y-1">
                         {dialogTempPreviewLayout === 'pano' ? (
                           <>
                             <div>拖拽：旋转视角（360° 全景）</div>
@@ -4795,7 +4816,7 @@ const MainApp: React.FC = () => {
 
                       <div className="absolute right-4 top-4 z-10 flex items-center gap-2">
                         <div
-                          className="flex rounded-xl border border-[#2e2e32] overflow-hidden"
+                          className="flex rounded-xl ring-1 ring-white/[0.06] overflow-hidden"
                           onClick={(e) => e.stopPropagation()}
                         >
                           <button
@@ -4812,7 +4833,7 @@ const MainApp: React.FC = () => {
                           <button
                             type="button"
                             onClick={() => setDialogTempPreviewLayout('pano')}
-                            className={`px-3 py-2 text-[10px] font-black uppercase transition-colors border-l border-[#2e2e32] ${
+                            className={`px-3 py-2 text-[10px] font-black uppercase transition-colors border-l border-white/[0.08] ${
                               dialogTempPreviewLayout === 'pano'
                                 ? 'bg-blue-600 text-white'
                                 : 'bg-[#1a1a1e]/95 text-gray-300 hover:bg-[#2a2a32]'
@@ -4821,11 +4842,11 @@ const MainApp: React.FC = () => {
                             全景
                           </button>
                         </div>
-                        <button type="button" onClick={() => closeDialogImagePreview()} className="px-3 py-2 rounded-xl bg-[#1a1a1e]/95 border border-[#2e2e32] text-[10px] font-black text-white hover:bg-[#2a2a32]">关闭</button>
+                        <button type="button" onClick={() => closeDialogImagePreview()} className="px-3 py-2 rounded-xl bg-[#1a1a1e]/95 ring-1 ring-white/[0.06] text-[10px] font-black text-white hover:bg-[#2a2a32]">关闭</button>
                       </div>
 
                       <div
-                        className="absolute left-4 bottom-4 max-w-[min(680px,92vw)] rounded-xl bg-[#1c1c22]/95 border border-[#2e2e32] p-4 space-y-2 text-left"
+                        className="absolute left-4 bottom-4 max-w-[min(680px,92vw)] rounded-xl bg-[#1c1c22]/95 ring-1 ring-white/[0.06] p-4 space-y-2 text-left"
                         data-no-temp-preview-wheel
                       >
                         <div className="text-[9px] font-black text-gray-500 uppercase">类型</div>
@@ -4877,7 +4898,7 @@ const MainApp: React.FC = () => {
               <div className="fixed inset-0 z-[2000] flex flex-col items-center justify-center bg-black/60 backdrop-blur-sm p-4">
                 <div className="text-[10px] text-gray-400 mb-3">拖拽选择裁切区域，然后点击「确认裁切」</div>
                 <div
-                  className="inline-block max-w-full max-h-[70vh] relative cursor-crosshair select-none rounded-xl overflow-hidden border border-[#2e2e32]"
+                  className="inline-block max-w-full max-h-[70vh] relative cursor-crosshair select-none rounded-xl overflow-hidden ring-1 ring-white/[0.06]"
                   onMouseDown={handleDialogCropMouseDown}
                 >
                   <img
@@ -4925,8 +4946,8 @@ const MainApp: React.FC = () => {
                  <div className="flex-1 flex flex-col gap-4">
                    <div className="flex flex-wrap items-center gap-2">
                      <span className="text-[9px] font-black text-gray-500 uppercase">批量操作</span>
-                     <button onClick={handleLibSelectAll} className="px-3 py-2 rounded-xl text-[9px] font-black uppercase border border-[#2e2e32] bg-[#1c1c22] hover:bg-[#2e2e36]">全选</button>
-                     <button onClick={handleLibInvertSelect} className="px-3 py-2 rounded-xl text-[9px] font-black uppercase border border-[#2e2e32] bg-[#1c1c22] hover:bg-[#2e2e36]">反选</button>
+                     <button onClick={handleLibSelectAll} className="px-3 py-2 rounded-xl text-[9px] font-black uppercase ring-1 ring-white/[0.06] bg-[#1c1c22] hover:bg-[#2e2e36]">全选</button>
+                     <button onClick={handleLibInvertSelect} className="px-3 py-2 rounded-xl text-[9px] font-black uppercase ring-1 ring-white/[0.06] bg-[#1c1c22] hover:bg-[#2e2e36]">反选</button>
                      <button onClick={handleLibBatchDownload} disabled={libSelectedGroupIds.size === 0} className="px-3 py-2 rounded-xl text-[9px] font-black uppercase border border-[#3b82f6] bg-[#1e3558] text-blue-300 hover:bg-[#305a90] disabled:opacity-40 disabled:cursor-not-allowed">批量下载（{libSelectedGroupIds.size}）</button>
                    </div>
                    {groupedLibrary.length === 0 ? (

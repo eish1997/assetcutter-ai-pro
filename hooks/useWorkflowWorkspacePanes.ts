@@ -3,6 +3,7 @@ import {
   useRef,
   useCallback,
   useEffect,
+  useLayoutEffect,
   type RefObject,
   type WheelEvent as ReactWheelEvent,
   type TouchEvent as ReactTouchEvent,
@@ -90,27 +91,44 @@ export function useWorkflowWorkspacePanes({
     };
   }, []);
 
+  /**
+   * 与 WorkflowSection 轨道 DOM 一致（左→右）：能力预设 | 功能区 | 工作区 | 大纲 | 仓库。
+   * 语义档 0–3：0 仓库、1 工作区+大纲、2 功能区+工作区、3 能力+功能区；offset 越大卷轴越左移。
+   * `workspacePane` 可为小数（滑条 step=0.01）：在相邻两档间线性插值，卷轴才跟手顺滑。
+   */
   const paneToOffsetPx = useCallback(
     (pane: number) => {
-      const wh = sidebarWidth;
+      const W = sidebarWidth;
       const L = listPaneWidth;
       const p = Math.max(0, Math.min(3, pane));
-      if (p <= 1) return p * L;
-      if (p <= 2) return L + (p - 1) * wh;
-      return L + wh + (p - 2) * L;
+      const o0 = 2 * L + W;
+      const o1 = L + W;
+      const o2 = L;
+      const o3 = 0;
+      if (p <= 1) return o0 + (o1 - o0) * p;
+      if (p <= 2) return o1 + (o2 - o1) * (p - 1);
+      return o2 + (o3 - o2) * (p - 2);
     },
     [listPaneWidth, sidebarWidth]
   );
 
+  /** 与 paneToOffsetPx 互逆（连续 offset → 连续 pane），供空格拖拽跟手 */
   const offsetPxToPane = useCallback(
     (offset: number) => {
-      const wh = sidebarWidth;
+      const W = sidebarWidth;
       const L = listPaneWidth;
-      const maxOff = Math.max(0, wh + 2 * L);
+      const o0 = 2 * L + W;
+      const o1 = L + W;
+      const o2 = L;
+      const o3 = 0;
+      const maxOff = Math.max(0, 2 * L + 2 * W);
       const x = Math.max(0, Math.min(maxOff, offset));
-      if (x <= L) return L > 0 ? x / L : 0;
-      if (x <= L + wh) return 1 + (x - L) / Math.max(1, wh);
-      return 2 + (x - L - wh) / Math.max(1, L);
+      const den = 1e-9;
+      if (x <= o3) return 3;
+      if (x < o2) return 3 - (x - o3) / Math.max(o2 - o3, den);
+      if (x < o1) return 2 - (x - o2) / Math.max(o1 - o2, den);
+      if (x < o0) return 1 - (x - o1) / Math.max(o0 - o1, den);
+      return 0;
     },
     [listPaneWidth, sidebarWidth]
   );
@@ -131,20 +149,11 @@ export function useWorkflowWorkspacePanes({
 
   const handlePaneWheel = useCallback(
     (e: ReactWheelEvent) => {
-      const deltaPrimary = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
+      // 滚轮切换页面功能已禁用
       e.preventDefault();
       e.stopPropagation();
-      if (Math.abs(deltaPrimary) < 2) return;
-      const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
-      if (now < wheelLockUntilRef.current) return;
-      wheelLockUntilRef.current = now + 180;
-      const currentNode = Math.max(0, Math.min(3, Math.round(workspacePaneRef.current)));
-      const dir = deltaPrimary > 0 ? 1 : -1;
-      const targetNode = Math.max(0, Math.min(3, currentNode + dir));
-      if (targetNode === currentNode) return;
-      snapWorkspacePaneToNode(targetNode);
     },
-    [snapWorkspacePaneToNode]
+    []
   );
 
   useEffect(() => {
@@ -155,15 +164,14 @@ export function useWorkflowWorkspacePanes({
 
   const workspaceOffsetPx = paneToOffsetPx(workspacePane);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     workspacePaneRef.current = workspacePane;
     const track = workspaceTrackRef.current;
-    if (track) {
-      track.style.transition = workspaceSnapping
-        ? `transform ${WORKSPACE_SNAP_DURATION_MS}ms ${WORKSPACE_SNAP_EASING}`
-        : 'none';
-      track.style.transform = `translate3d(${-workspaceOffsetPx}px, 0, 0)`;
-    }
+    if (!track) return;
+    track.style.transition = workspaceSnapping
+      ? `transform ${WORKSPACE_SNAP_DURATION_MS}ms ${WORKSPACE_SNAP_EASING}`
+      : 'none';
+    track.style.transform = `translate3d(${-workspaceOffsetPx}px, 0, 0)`;
   }, [workspacePane, workspaceOffsetPx, workspaceSnapping, workspaceTrackRef]);
 
   useEffect(() => {
@@ -261,16 +269,17 @@ export function useWorkflowWorkspacePanes({
       if (isWorkflowEditableTarget(e.target)) return;
       if (typeof document !== 'undefined' && document.querySelector('[data-ac-block-workflow-marquee]')) return;
 
+      /** 与卷轴从左到右一致：1 能力、2 功能区+工作区、3 工作区+大纲、4 仓库；0 同 1（最左） */
       const paneByCode: Record<string, number> = {
-        Digit1: 0,
-        Digit2: 1,
-        Digit3: 2,
-        Digit4: 3,
+        Digit1: 3,
+        Digit2: 2,
+        Digit3: 1,
+        Digit4: 0,
         Digit0: 3,
-        Numpad1: 0,
-        Numpad2: 1,
-        Numpad3: 2,
-        Numpad4: 3,
+        Numpad1: 3,
+        Numpad2: 2,
+        Numpad3: 1,
+        Numpad4: 0,
         Numpad0: 3,
       };
       const pane = paneByCode[e.code];

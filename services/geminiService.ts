@@ -1137,14 +1137,17 @@ export async function detectObjectsInImage(base64Image: string, model = 'gemini-
       }, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)
     });
     const results = parseBoundingBoxJsonArrayFromModelText(response.text || "");
-    return results.map((r) => ({
-      id: r.id,
-      label: r.label,
-      ymin: r.box_2d[0],
-      xmin: r.box_2d[1],
-      ymax: r.box_2d[2],
-      xmax: r.box_2d[3]
-    }));
+    return results.map((r) => {
+      const box = r as { id: string; label: string; box_2d: number[] };
+      return {
+        id: box.id,
+        label: box.label,
+        ymin: box.box_2d[0],
+        xmin: box.box_2d[1],
+        ymax: box.box_2d[2],
+        xmax: box.box_2d[3]
+      };
+    });
   }, options);
 }
 

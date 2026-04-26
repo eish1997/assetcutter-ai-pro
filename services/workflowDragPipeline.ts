@@ -1,4 +1,5 @@
 import type { WorkflowAsset } from '../types';
+import { isGroupAsset } from './groupHelpers';
 
 /** 与 `WorkflowSection` 内 `dataTransfer.setData` 一致，避免 MIME 字符串散落 */
 export const DT_AC_WORKFLOW_EXPORT = 'application/x-ac-workflow-export';
@@ -135,11 +136,11 @@ export function computeWorkflowEffectiveSelection(
   const idx = idxRaw !== undefined ? Number(idxRaw) : NaN;
   let primaryChildAssetId: string | null = null;
   let primarySlotIndex: number | null = null;
-  if (!Number.isNaN(idx) && idx >= 0) {
-    primarySlotIndex = idx;
-    const item = currentGroupAsset.cutImageGroup?.[idx];
-    if (item && typeof item === 'object' && 'assetId' in item) {
-      primaryChildAssetId = (item as { assetId: string }).assetId;
+  if (!Number.isNaN(idx) && idx >= 0 && isGroupAsset(currentGroupAsset)) {
+    const childId = currentGroupAsset.assetIds?.[idx];
+    if (childId) {
+      primarySlotIndex = idx;
+      primaryChildAssetId = childId;
     }
   }
   return {

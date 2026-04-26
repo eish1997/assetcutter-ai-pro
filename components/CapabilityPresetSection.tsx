@@ -16,6 +16,11 @@ import { useStoreCatalog } from '../services/storeCatalogHook';
 import { publishPresetToUserR2Catalog } from '../services/capabilityPresetR2Publish';
 import { resolveCapabilityPreviewSrc } from '../services/capabilityPreviewUrl';
 import { mergeCardAspectFromIntrinsic } from './workflow/workflowCardAspect';
+import {
+  TITLE_ROW_STEPPER_SHELL,
+  TITLE_ROW_STEPPER_VALUE,
+  TITLE_ROW_STEPPER_BTN,
+} from './workflow/workflowSectionUiConstants';
 import { uuid } from './workflow/workflowIds';
 import { DT_AC_CAPABILITY_FROM_EDITOR } from '../services/workflowDragPipeline';
 import WorkflowComposerOverlay from './WorkflowComposerOverlay';
@@ -133,6 +138,12 @@ const CapabilityPresetSection: React.FC<{
   const [editInstruction, setEditInstruction] = useState('');
   /** 仅编辑「切割图片」内置预设时使用 */
   const [editCutOverflowPx, setEditCutOverflowPx] = useState(0);
+  /** 切割模式：uniform=均匀分割, auto=自动检测, vision=视觉识别 */
+  const [editCutMode, setEditCutMode] = useState<'uniform' | 'auto' | 'vision'>('auto');
+  /** 均匀分割行数 */
+  const [editUniformRows, setEditUniformRows] = useState(2);
+  /** 均匀分割列数 */
+  const [editUniformCols, setEditUniformCols] = useState(2);
   const [editSkipUnderstand, setEditSkipUnderstand] = useState(false);
   const [editRequirePromptOnTextDrop, setEditRequirePromptOnTextDrop] = useState(false);
   const [isAdding, setIsAdding] = useState(false);
@@ -365,6 +376,9 @@ const CapabilityPresetSection: React.FC<{
           instruction: editInstruction,
           enabled: editEnabled,
           cutOverflowPx: Math.max(0, Math.min(512, Math.round(Number(editCutOverflowPx) || 0))),
+          cutMode: editCutMode,
+          uniformRows: editCutMode === 'uniform' ? editUniformRows : undefined,
+          uniformCols: editCutMode === 'uniform' ? editUniformCols : undefined,
         },
         ix
       );
@@ -869,6 +883,21 @@ const CapabilityPresetSection: React.FC<{
           ? Math.max(0, Math.min(512, Math.round(p.cutOverflowPx)))
           : 0
       );
+      setEditCutMode(
+        p.cutMode === 'uniform' || p.cutMode === 'auto' || p.cutMode === 'vision'
+          ? p.cutMode
+          : 'auto'
+      );
+      setEditUniformRows(
+        typeof p.uniformRows === 'number' && Number.isFinite(p.uniformRows)
+          ? Math.max(1, Math.min(10, Math.round(p.uniformRows)))
+          : 2
+      );
+      setEditUniformCols(
+        typeof p.uniformCols === 'number' && Number.isFinite(p.uniformCols)
+          ? Math.max(1, Math.min(10, Math.round(p.uniformCols)))
+          : 2
+      );
       setDetailEditMode(true);
       return;
     }
@@ -1195,7 +1224,7 @@ const CapabilityPresetSection: React.FC<{
             else (scrollContainerRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
           }
         }}
-        className={`flex flex-col gap-6 min-h-0 w-full max-w-4xl mx-auto overflow-y-auto no-scrollbar ${embeddedInWorkflow ? 'flex-1' : 'max-h-[calc(100dvh-12rem)]'}`}
+        className={`flex flex-col min-h-0 w-full overflow-y-auto no-scrollbar ${embeddedInWorkflow ? 'flex-1 max-w-none gap-4' : 'max-w-4xl mx-auto max-h-[calc(100dvh-12rem)] gap-6'}`}
         onWheelCapture={(e) => {
           const hasPresetDrag = (() => {
             if (typeof window === 'undefined') return false;
@@ -1223,44 +1252,42 @@ const CapabilityPresetSection: React.FC<{
         <button
           type="button"
           onClick={() => setViewMode('presets')}
-          className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase border ${viewMode === 'presets' ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300' : 'bg-[#1c1c22] border-[#2e2e32] text-gray-500 hover:bg-[#2e2e36]'}`}
+          className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase border ${viewMode === 'presets' ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300' : 'bg-white/[0.05] ring-1 ring-white/[0.06] text-gray-500 hover:bg-white/[0.09] border-transparent'}`}
         >
           基础能力预设
         </button>
         <button
           type="button"
           onClick={() => setViewMode('image_process')}
-          className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase border ${viewMode === 'image_process' ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300' : 'bg-[#1c1c22] border-[#2e2e32] text-gray-500 hover:bg-[#2e2e36]'}`}
+          className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase border ${viewMode === 'image_process' ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300' : 'bg-white/[0.05] ring-1 ring-white/[0.06] text-gray-500 hover:bg-white/[0.09] border-transparent'}`}
         >
           图像处理
         </button>
         <button
           type="button"
           onClick={() => setViewMode('sets')}
-          className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase border ${viewMode === 'sets' ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300' : 'bg-[#1c1c22] border-[#2e2e32] text-gray-500 hover:bg-[#2e2e36]'}`}
+          className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase border ${viewMode === 'sets' ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300' : 'bg-white/[0.05] ring-1 ring-white/[0.06] text-gray-500 hover:bg-white/[0.09] border-transparent'}`}
         >
           能力集合
         </button>
         </div>
         <div className="flex items-center justify-end gap-2 flex-wrap w-full sm:w-auto sm:shrink-0 sm:ml-auto">
-          <div className="h-8 inline-flex items-center rounded-lg border border-[#2e2e32] bg-[#1c1c22] overflow-hidden">
+          <div className={TITLE_ROW_STEPPER_SHELL}>
             <button
               type="button"
               onClick={() => setPresetColumnCount((n) => Math.max(CAPABILITY_PRESET_COLUMNS_MIN, n - 1))}
               disabled={presetColumnCount <= CAPABILITY_PRESET_COLUMNS_MIN}
-              className="w-8 h-8 text-[11px] font-black text-gray-300 hover:bg-[#2e2e36] disabled:opacity-35 disabled:hover:bg-transparent"
+              className={TITLE_ROW_STEPPER_BTN}
               aria-label="减少能力预设列数"
             >
               −
             </button>
-            <span className="w-9 h-8 inline-flex items-center justify-center text-[9px] font-black text-blue-300 border-x border-[#2e2e32]">
-              {presetColumnCount}
-            </span>
+            <span className={TITLE_ROW_STEPPER_VALUE}>{presetColumnCount}</span>
             <button
               type="button"
               onClick={() => setPresetColumnCount((n) => Math.min(CAPABILITY_PRESET_COLUMNS_MAX, n + 1))}
               disabled={presetColumnCount >= CAPABILITY_PRESET_COLUMNS_MAX}
-              className="w-8 h-8 text-[11px] font-black text-gray-300 hover:bg-[#2e2e36] disabled:opacity-35 disabled:hover:bg-transparent"
+              className={TITLE_ROW_STEPPER_BTN}
               aria-label="增加能力预设列数"
             >
               +
@@ -1272,7 +1299,7 @@ const CapabilityPresetSection: React.FC<{
               void triggerRemoteRefreshSync();
             }}
             disabled={catalogLoading || packContentsLoading || installingAll}
-            className="px-4 py-2 rounded-xl bg-[#26262c] border border-[#2e2e32] text-[10px] font-black uppercase hover:bg-[#383842] disabled:opacity-50"
+            className="px-4 py-2 rounded-xl bg-white/[0.06] ring-1 ring-white/[0.08] text-[10px] font-black uppercase hover:bg-white/[0.1] disabled:opacity-50"
           >
             {catalogLoading || packContentsLoading || installingAll ? '同步中…' : '刷新同步'}
           </button>
@@ -1304,7 +1331,7 @@ const CapabilityPresetSection: React.FC<{
             )}
           </div>
           {sets.length === 0 ? (
-            <div className="rounded-2xl border border-[#2e2e32] bg-[#16161a] p-8 text-center text-gray-500 text-[10px]">
+            <div className="rounded-2xl bg-[#16161a] ring-1 ring-white/[0.07] p-8 text-center text-gray-500 text-[10px]">
               暂无能力集合，点击「添加能力集合」进入画布拖拽连线。
             </div>
           ) : (
@@ -1320,7 +1347,7 @@ const CapabilityPresetSection: React.FC<{
                     setCardRefs.current[s.id] = el;
                   }}
                   onClick={() => openEditSet(s)}
-                  className="inline-block align-top mb-3 w-full break-inside-avoid rounded-2xl border border-[#2e2e32] bg-[#16161a] overflow-hidden text-left hover:border-blue-400/50 transition-colors group"
+                  className="inline-block align-top mb-3 w-full break-inside-avoid rounded-2xl bg-[#16161a] ring-1 ring-white/[0.07] overflow-hidden text-left hover:ring-blue-400/40 transition-colors group"
                 >
                   <div className="relative w-full bg-[#0f0f10] flex items-center justify-center min-h-[7rem]">
                     <div className="h-full w-full flex flex-col items-center justify-center gap-1 text-gray-600">
@@ -1378,7 +1405,7 @@ const CapabilityPresetSection: React.FC<{
         <div className="flex gap-2 flex-wrap shrink-0">
           <button
             onClick={() => setShowImportExport((v) => !v)}
-            className="px-4 py-2 rounded-xl bg-[#26262c] border border-[#2e2e32] text-[10px] font-black uppercase hover:bg-[#383842]"
+            className="px-4 py-2 rounded-xl bg-white/[0.06] ring-1 ring-white/[0.08] text-[10px] font-black uppercase hover:bg-white/[0.1]"
           >
             导入/导出
           </button>
@@ -1389,7 +1416,7 @@ const CapabilityPresetSection: React.FC<{
       {packContentsLoading && <div className="text-[10px] text-gray-500">正在加载远程能力列表…</div>}
 
       {showImportExport && (
-        <div className="rounded-2xl border border-[#2e2e32] bg-[#16161a] p-4 space-y-3">
+        <div className="rounded-2xl bg-[#16161a] ring-1 ring-white/[0.07] p-4 space-y-3">
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <div className="text-[9px] font-black text-gray-300 uppercase">导入本地种子</div>
             <div className="flex gap-2 flex-wrap">
@@ -1434,7 +1461,7 @@ const CapabilityPresetSection: React.FC<{
                     if (c.id === 'text_to_text' || c.id === 'image_to_text') setNewEngine('gen_text');
                     if (c.id === 'text_to_image') setNewEngine('gen_image');
                   }}
-                  className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${newCategory === c.id ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300' : 'bg-[#1c1c22] border-[#2e2e32] text-gray-500 hover:bg-[#2e2e36]'}`}
+                  className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${newCategory === c.id ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300' : 'bg-white/[0.05] ring-1 ring-white/[0.06] text-gray-500 hover:bg-white/[0.09] border-transparent'}`}
                   title={c.desc}
                 >
                   {c.label}
@@ -1537,7 +1564,7 @@ const CapabilityPresetSection: React.FC<{
                           ? '如：拆分组件、切割图片、提取主体'
                           : '如：手办白模、低面数模型'
               }
-              className="mt-1 w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500"
+              className="mt-1 w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
             />
           </div>
           {(newCategory === 'text_to_image' || (newCategory === 'image_to_image' && newEngine === 'gen_image')) && (
@@ -1561,7 +1588,7 @@ const CapabilityPresetSection: React.FC<{
                     : '如：将图片转为赛博朋克风格'
                 }
                 rows={4}
-                className="mt-1 w-full bg-[#1c1c22] border border-[#4b6a9e] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none"
+                className="mt-1 w-full resize-none rounded-xl bg-white/[0.05] px-3 py-2 text-[11px] ring-1 ring-blue-500/30 outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
               />
             </div>
           )}
@@ -1582,7 +1609,7 @@ const CapabilityPresetSection: React.FC<{
                     : '如：描述附图中的主要物体与风格'
                 }
                 rows={4}
-                className="mt-1 w-full bg-[#1c1c22] border border-emerald-900/40 rounded-xl px-3 py-2 text-[11px] outline-none focus:border-emerald-600 resize-none"
+                className="mt-1 w-full rounded-xl bg-white/[0.05] px-3 py-2 text-[11px] ring-1 ring-emerald-900/35 outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/45 resize-none"
               />
               {newCategory === 'text_to_text' ? (
                 <label className="mt-2 flex items-center gap-2 text-[9px] text-gray-400 cursor-pointer">
@@ -1600,7 +1627,7 @@ const CapabilityPresetSection: React.FC<{
             <div>
               <span className="text-[8px] font-black text-gray-500 uppercase">可选：补充说明或约束</span>
               <p className="text-[8px] text-gray-600 mt-0.5">多数能力有内置逻辑（如切割按版面分块），可留空；需要时可填写额外说明。</p>
-              <textarea value={newInstruction} onChange={(e) => setNewInstruction(e.target.value)} placeholder="留空即使用内置逻辑；或填写如：只保留上半部分、排除背景" rows={2} className="mt-1 w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none" />
+              <textarea value={newInstruction} onChange={(e) => setNewInstruction(e.target.value)} placeholder="留空即使用内置逻辑；或填写如：只保留上半部分、排除背景" rows={2} className="mt-1 w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 resize-none" />
             </div>
           )}
           {newCategory === 'generate_3d' && (
@@ -1636,7 +1663,7 @@ const CapabilityPresetSection: React.FC<{
                     <>
                       <label className="flex items-center gap-1.5 text-[9px]">
                         <span>面数</span>
-                        <input type="number" min={10000} max={1500000} value={newGenerate3D.faceCount ?? 500000} onChange={(e) => setNewGenerate3D((g) => ({ ...g, faceCount: e.target.value ? parseInt(e.target.value, 10) : undefined }))} className="w-20 bg-[#26262c] border border-[#2e2e32] rounded px-2 py-1 text-[9px]" />
+                        <input type="number" min={10000} max={1500000} value={newGenerate3D.faceCount ?? 500000} onChange={(e) => setNewGenerate3D((g) => ({ ...g, faceCount: e.target.value ? parseInt(e.target.value, 10) : undefined }))} className="w-20 rounded bg-white/[0.06] px-2 py-1 text-[9px] ring-1 ring-white/[0.08]" />
                       </label>
                       <label className="flex items-center gap-1.5 text-[9px]">
                         <span>类型</span>
@@ -1673,7 +1700,7 @@ const CapabilityPresetSection: React.FC<{
                   onChange={(e) => setNewInstruction(e.target.value)}
                   placeholder="留空即可；需要时可对生成效果做文字补充"
                   rows={1}
-                  className="mt-1 w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-none"
+                  className="mt-1 w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 resize-none"
                 />
               </div>
             </>
@@ -1691,7 +1718,7 @@ const CapabilityPresetSection: React.FC<{
 
       <div className="space-y-3">
         {visiblePresets.length === 0 && effectiveUninstalledPresetItems.length === 0 ? (
-          <div className="rounded-2xl border border-[#2e2e32] bg-[#16161a] p-8 text-center text-gray-500 text-[10px]">
+          <div className="rounded-2xl bg-[#16161a] ring-1 ring-white/[0.07] p-8 text-center text-gray-500 text-[10px]">
             {viewMode === 'image_process'
               ? '暂无图像处理能力。'
               : '暂无基础能力预设，点击「新增能力」添加；远程能力加载后将显示在下方。'}
@@ -1757,7 +1784,7 @@ const CapabilityPresetSection: React.FC<{
                     className={`inline-block align-top mb-3 w-full break-inside-avoid rounded-2xl border bg-[#16161a] overflow-hidden text-left transition-colors group ${
                       draggingPresetId === p.id
                         ? 'border-blue-500/70 ring-1 ring-blue-500/40 opacity-70'
-                        : 'border-[#2e2e32] hover:border-blue-400/50'
+                        : 'ring-1 ring-white/[0.08] hover:ring-blue-400/40 border-transparent'
                     }`}
                   >
                     {isTextToTextPreset ? (
@@ -1848,7 +1875,7 @@ const CapabilityPresetSection: React.FC<{
             </div>
 
             {effectiveUninstalledPresetItems.length > 0 && (
-              <div className="rounded-2xl border border-[#2e2e32] bg-[#16161a] p-4 text-[9px] text-gray-400">
+              <div className="rounded-2xl bg-[#16161a] ring-1 ring-white/[0.07] p-4 text-[9px] text-gray-400">
                 检测到 {effectiveUninstalledPresetItems.length} 条远程预设，点击上方「刷新同步」即可自动同步。
               </div>
             )}
@@ -1922,12 +1949,12 @@ const CapabilityPresetSection: React.FC<{
             data-image-preview-scroll
           >
             <div className="h-full overflow-y-auto rounded-2xl border border-white/10 bg-[#0f0f12]/98 p-3 md:p-4 space-y-3 shadow-xl backdrop-blur-[2px]">
-              <div className="rounded-2xl border border-[#2e2e32] bg-[#16161a] p-3 space-y-2">
+              <div className="rounded-2xl bg-[#16161a] ring-1 ring-white/[0.07] p-3 space-y-2">
                 <div className="text-[9px] text-gray-500 uppercase tracking-wide">能力预览</div>
                 <div className="text-[14px] font-black text-white truncate">{detailPreset.label}</div>
                 <div className="text-[9px] text-gray-500">左侧预览对比，右侧参数与操作</div>
               </div>
-              <div className="rounded-2xl border border-[#2e2e32] bg-[#16161a] p-3 space-y-2">
+              <div className="rounded-2xl bg-[#16161a] ring-1 ring-white/[0.07] p-3 space-y-2">
                     {detailEditMode ? (
                       editingId === 'cut_image' ? (
                         <>
@@ -1938,10 +1965,71 @@ const CapabilityPresetSection: React.FC<{
                           </label>
                           <label className="block">
                             <div className="text-[9px] text-gray-500 uppercase mb-1">功能名称</div>
-                            <input value={editLabel} onChange={(e) => setEditLabel(e.target.value)} className="w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500" />
+                            <input value={editLabel} onChange={(e) => setEditLabel(e.target.value)} className="w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50" />
                           </label>
+                          {/* 切割模式选择 */}
+                          <div className="space-y-1.5">
+                            <div className="text-[9px] text-gray-400 uppercase">切割方式</div>
+                            <div className="flex gap-1.5">
+                              {([
+                                { value: 'uniform', label: '均匀' },
+                                { value: 'auto', label: '自动' },
+                                { value: 'vision', label: '视觉' },
+                              ] as const).map((mode) => (
+                                <button
+                                  key={mode.value}
+                                  type="button"
+                                  onClick={() => setEditCutMode(mode.value)}
+                                  className={`flex-1 px-2 py-1.5 rounded-lg text-[9px] font-black uppercase border transition-colors ${
+                                    editCutMode === mode.value
+                                      ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300'
+                                      : 'bg-white/[0.05] ring-1 ring-white/[0.06] text-gray-500 hover:bg-white/[0.09] border-transparent'
+                                  }`}
+                                  title={
+                                    mode.value === 'uniform' ? '按行列数等分图片' :
+                                    mode.value === 'auto' ? '自动检测宫格缝隙' :
+                                    '调用视觉模型识别'
+                                  }
+                                >
+                                  {mode.label}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                          {/* 均匀分割配置 */}
+                          {editCutMode === 'uniform' && (
+                            <div className="flex gap-2 items-center">
+                              <label className="flex items-center gap-1.5">
+                                <span className="text-[9px] text-gray-500 uppercase">行</span>
+                                <input
+                                  type="number"
+                                  min={1}
+                                  max={10}
+                                  value={editUniformRows}
+                                  onChange={(e) => setEditUniformRows(Math.max(1, Math.min(10, Math.round(Number(e.target.value) || 2))))}
+                                  className="w-14 bg-white/[0.05] ring-1 ring-white/[0.06] rounded-lg px-2 py-1.5 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
+                                />
+                              </label>
+                              <label className="flex items-center gap-1.5">
+                                <span className="text-[9px] text-gray-500 uppercase">列</span>
+                                <input
+                                  type="number"
+                                  min={1}
+                                  max={10}
+                                  value={editUniformCols}
+                                  onChange={(e) => setEditUniformCols(Math.max(1, Math.min(10, Math.round(Number(e.target.value) || 2))))}
+                                  className="w-14 bg-white/[0.05] ring-1 ring-white/[0.06] rounded-lg px-2 py-1.5 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
+                                />
+                              </label>
+                            </div>
+                          )}
+                          {editCutMode !== 'uniform' && (
+                            <div className="text-[8px] text-gray-600 italic">
+                              {editCutMode === 'auto' ? '自动检测宫格缝隙，支持有明显分割线的图片' : '调用 Gemini 视觉模型识别区域，精度高但较慢'}
+                            </div>
+                          )}
                           <label className="block">
-                          <div className="text-[9px] text-gray-400 uppercase mb-1">切割溢出（每边像素）</div>
+                            <div className="text-[9px] text-gray-400 uppercase mb-1">切割溢出（每边像素）</div>
                             <input
                               type="number"
                               min={0}
@@ -1949,16 +2037,16 @@ const CapabilityPresetSection: React.FC<{
                               step={1}
                               value={editCutOverflowPx}
                               onChange={(e) => setEditCutOverflowPx(Math.max(0, Math.min(512, Math.round(Number(e.target.value) || 0))))}
-                              className="w-28 bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500"
+                              className="w-28 bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
                             />
                           </label>
                           <label className="block">
                             <div className="text-[9px] text-gray-500 uppercase mb-1">补充说明</div>
-                            <textarea value={editInstruction} onChange={(e) => setEditInstruction(e.target.value)} rows={4} className="w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-y" />
+                            <textarea value={editInstruction} onChange={(e) => setEditInstruction(e.target.value)} rows={4} className="w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 resize-y" />
                           </label>
                           <div className="flex gap-2">
                             <button type="button" onClick={saveDetailEdit} className="px-3 py-1.5 rounded-lg border border-[#36578f] bg-[#1d3154] text-blue-200 text-[9px] font-black uppercase hover:bg-[#264171]">保存</button>
-                            <button type="button" onClick={() => { setDetailEditMode(false); setEditingId(null); }} className="px-3 py-1.5 rounded-lg border border-[#2e2e32] bg-[#1a1a1f] text-[9px] font-black uppercase text-gray-200 hover:bg-[#262630]">取消</button>
+                            <button type="button" onClick={() => { setDetailEditMode(false); setEditingId(null); }} className="px-3 py-1.5 rounded-lg bg-[#121214] text-[9px] font-black uppercase text-gray-200 ring-1 ring-white/[0.08] hover:bg-white/[0.06]">取消</button>
                           </div>
                         </>
                       ) : (
@@ -1976,7 +2064,7 @@ const CapabilityPresetSection: React.FC<{
                                   if (c.id === 'text_to_image') setEditEngine('gen_image');
                                   if (c.id === 'generate_3d') setEditGenerate3D(editCategory === 'generate_3d' ? { ...editGenerate3D } : { ...DEFAULT_GENERATE_3D });
                                 }}
-                                className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${editCategory === c.id ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300' : 'bg-[#1c1c22] border-[#2e2e32] text-gray-500'}`}
+                                className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${editCategory === c.id ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300' : 'bg-white/[0.05] ring-1 ring-white/[0.06] text-gray-500 border-transparent'}`}
                               >
                                 {c.label}
                               </button>
@@ -2078,7 +2166,7 @@ const CapabilityPresetSection: React.FC<{
                                   </label>
                                   <label className="flex items-center gap-2 text-[9px]">
                                     <span>面数</span>
-                                    <input type="number" min={10000} max={1500000} value={editGenerate3D.faceCount ?? 500000} onChange={(e) => setEditGenerate3D((g) => ({ ...g, faceCount: e.target.value ? parseInt(e.target.value, 10) : undefined }))} className="w-24 bg-[#26262c] border border-[#2e2e32] rounded px-2 py-1 text-[9px]" />
+                                    <input type="number" min={10000} max={1500000} value={editGenerate3D.faceCount ?? 500000} onChange={(e) => setEditGenerate3D((g) => ({ ...g, faceCount: e.target.value ? parseInt(e.target.value, 10) : undefined }))} className="w-24 rounded bg-white/[0.06] px-2 py-1 text-[9px] ring-1 ring-white/[0.08]" />
                                   </label>
                                   <label className="flex items-center gap-2 text-[9px]">
                                     <span>类型</span>
@@ -2116,15 +2204,15 @@ const CapabilityPresetSection: React.FC<{
                           )}
                           <label className="block">
                             <div className="text-[9px] text-gray-500 uppercase mb-1">功能名称</div>
-                            <input value={editLabel} onChange={(e) => setEditLabel(e.target.value)} className="w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500" />
+                            <input value={editLabel} onChange={(e) => setEditLabel(e.target.value)} className="w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50" />
                           </label>
                           <label className="block">
                             <div className="text-[9px] text-gray-500 uppercase mb-1">提示词 / 说明</div>
-                            <textarea value={editInstruction} onChange={(e) => setEditInstruction(e.target.value)} rows={8} className="w-full bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-3 py-2 text-[11px] outline-none focus:border-blue-500 resize-y" />
+                            <textarea value={editInstruction} onChange={(e) => setEditInstruction(e.target.value)} rows={8} className="w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 resize-y" />
                           </label>
                           <div className="flex gap-2">
                             <button type="button" onClick={saveDetailEdit} className="px-3 py-1.5 rounded-lg border border-[#36578f] bg-[#1d3154] text-blue-200 text-[9px] font-black uppercase hover:bg-[#264171]">保存</button>
-                            <button type="button" onClick={() => { setDetailEditMode(false); setEditingId(null); }} className="px-3 py-1.5 rounded-lg border border-[#2e2e32] bg-[#1a1a1f] text-[9px] font-black uppercase text-gray-200 hover:bg-[#262630]">取消</button>
+                            <button type="button" onClick={() => { setDetailEditMode(false); setEditingId(null); }} className="px-3 py-1.5 rounded-lg bg-[#121214] text-[9px] font-black uppercase text-gray-200 ring-1 ring-white/[0.08] hover:bg-white/[0.06]">取消</button>
                           </div>
                         </>
                       )
@@ -2273,7 +2361,7 @@ const CapabilityPresetSection: React.FC<{
                   setDetailPresetId(null);
                 }}
                 disabled={isBuiltinImageProcess(detailPreset)}
-                className="px-3 py-1.5 rounded-lg border border-[#2e2e32] bg-[#1a1a1f] text-gray-200 text-[9px] font-black uppercase hover:bg-[#262630] disabled:opacity-50"
+                className="px-3 py-1.5 rounded-lg bg-[#121214] text-gray-200 text-[9px] font-black uppercase ring-1 ring-white/[0.08] hover:bg-white/[0.06] disabled:opacity-50"
               >
                 删除预设
               </button>

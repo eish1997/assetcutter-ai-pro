@@ -10,41 +10,11 @@ export function sortRootWorkflowAssetsNewestFirst(list: WorkflowAsset[]): Workfl
   });
 }
 
-/** 大纲：子资产沿 parentAssetId 得到 viewStack（不含子资产自身），用于组内子卡片定位 */
-export function workflowOutlineAncestorStack(childAssetId: string, assets: WorkflowAsset[]): { assetId: string }[] {
-  const target = assets.find((a) => a.id === childAssetId);
-  if (!target?.parentAssetId) return [];
-  const chain: string[] = [];
-  let pid: string | undefined = target.parentAssetId;
-  while (pid) {
-    chain.push(pid);
-    const p = assets.find((x) => x.id === pid);
-    pid = p?.parentAssetId;
-  }
-  chain.reverse();
-  return chain.map((id) => ({ assetId: id }));
-}
-
-/** 进入某组内部：栈为从根到该组（含该组） */
-export function workflowOutlineDrillStackToEnterGroup(groupId: string, assets: WorkflowAsset[]): { assetId: string }[] {
-  const chain: string[] = [];
-  let id: string | undefined = groupId;
-  while (id) {
-    chain.push(id);
-    const n = assets.find((a) => a.id === id);
-    id = n?.parentAssetId;
-  }
-  chain.reverse();
-  return chain.map((i) => ({ assetId: i }));
-}
-
 export function workflowFindGroupItemIndex(parent: WorkflowAsset, childAssetId: string): number | null {
-  const items = parent.cutImageGroup ?? [];
-  for (let i = 0; i < items.length; i++) {
-    const it = items[i];
-    if (it && typeof it === 'object' && 'assetId' in it && (it as { assetId: string }).assetId === childAssetId) {
-      return i;
-    }
+  // 新版：使用 isGroup + assetIds
+  if (parent.isGroup === true && parent.assetIds?.length) {
+    const idx = parent.assetIds.indexOf(childAssetId);
+    return idx >= 0 ? idx : null;
   }
   return null;
 }
@@ -55,17 +25,14 @@ export function workflowOutlineExpandableGroupIds(assets: WorkflowAsset[], visib
   const visit = (a: WorkflowAsset, visited: Set<string>) => {
     if (visited.has(a.id)) return;
     visited.add(a.id);
-    const items = a.cutImageGroup ?? [];
-    if (items.length > 0) ids.add(a.id);
-    items.forEach((item) => {
-      const isRef = item && typeof item === 'object' && 'assetId' in item;
-      const childId = isRef ? (item as { assetId: string }).assetId : '';
-      if (typeof item === 'string' || (item && typeof item === 'object' && 'r2Key' in item && !isRef)) return;
-      if (isRef && childId) {
+    // 新版：使用 isGroup + assetIds
+    if (a.isGroup === true && a.assetIds?.length) {
+      ids.add(a.id);
+      a.assetIds.forEach((childId) => {
         const child = assets.find((x) => x.id === childId);
         if (child) visit(child, visited);
-      }
-    });
+      });
+    }
   };
   const seen = new Set<string>();
   visibleRoots.forEach((root) => visit(root, seen));

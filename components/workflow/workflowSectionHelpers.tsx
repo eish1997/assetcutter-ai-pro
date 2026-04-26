@@ -32,20 +32,15 @@ export function buildLibraryItemsFromWorkflowExport(
   } else {
     for (const { parentId, index: idx } of payload.items) {
       const parent = assets.find((x) => x.id === parentId);
-      const raw = parent?.cutImageGroup?.[idx];
-      if (raw == null) continue;
-      let data: string | null = null;
-      if (typeof raw === 'string') data = raw;
-      else if (raw && typeof raw === 'object' && 'assetId' in raw) {
-        const ch = assets.find((x) => x.id === (raw as { assetId: string }).assetId);
-        data = ch ? getDisplay(ch) : null;
-      } else if (raw && typeof raw === 'object' && 'r2Key' in raw) {
-        data = asWorkflowImageString(parent?.original);
-      }
+      if (!parent) continue;
+      const childId = parent.assetIds?.[idx];
+      if (!childId) continue;
+      const ch = assets.find((x) => x.id === childId);
+      const data = ch ? getDisplay(ch) : null;
       if (!data || data === WORKFLOW_IMG_EMPTY_PLACEHOLDER) continue;
       items.push({
         data,
-        label: `${parent?.groupLabel || '组'} · 子项 ${idx + 1}`,
+        label: `${parent.groupLabel || '组'} · 子项 ${idx + 1}`,
         type: 'SLICE',
         category: 'PREVIEW_STRIP',
       });

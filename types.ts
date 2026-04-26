@@ -350,7 +350,7 @@ export type WorkflowActionModule = {
   instruction: string;
 };
 
-/** 切割图片组内一项：直接图片 或 引用子资产（套娃）；{ r2Key } 为云端独立对象，hydrate 后通常会变回 string */
+/** 切割图片组内一项（已废弃，改用 groupId）：直接图片 或 引用子资产（套娃）；{ r2Key } 为云端独立对象，hydrate 后通常会变回 string */
 export type WorkflowCutGroupItem = string | { assetId: string } | { r2Key: string };
 
 /** 单个资产：原始图 + 各类型结果图，当前展示版本，是否已归档；归档后可按生成顺序拼流程图 */
@@ -361,6 +361,10 @@ export type WorkflowAsset = {
    * `text`：工作区文字卡片（无位图执行能力，不进入图像能力队列）。
    */
   assetKind?: 'image' | 'text';
+  /** 是否为组：true=组卡片，false/undefined=普通资产卡片 */
+  isGroup?: boolean;
+  /** 组内关联的资产 ID 列表（组卡片时使用）；筛选时根据此字段显示直接成员 */
+  assetIds?: string[];
   /** 文字资产标题（可选） */
   textTitle?: string;
   /** 文字资产正文 */
@@ -371,18 +375,16 @@ export type WorkflowAsset = {
   originalObjectKey?: string;
   /** 当前展示的版本 key：'original' 或能力模块 id */
   displayKey: string;
-  /** 各类型生成结果图 base64（key 为能力模块 id）；切割图片也可用 cutImageGroup */
+  /** 各类型生成结果图 base64（key 为能力模块 id） */
   results: Record<string, string>;
   /** 各步骤结果在 R2 的键，hydrate 后写回 results */
   resultsObjectKeys?: Record<string, string>;
-  /** 切割图片结果：多图成组，可含子资产引用（套娃）；用户拖到「组」建的组也用此字段 */
-  cutImageGroup?: WorkflowCutGroupItem[];
-  /** 组类型：切割=切割能力生成；manual=用户拖到「组」创建 */
-  groupKind?: 'cut' | 'manual';
-  /** 组显示名称，角标显示为「groupLabel + 组内数量」；不设则用 groupKind 的默认名（组/切割） */
+  /** 所属组的唯一 ID，null/undefined = 不在任何组 */
+  groupId?: string | null;
+  /** 组显示名称（冗余存，UI 直接用） */
   groupLabel?: string;
-  /** 若本资产来自某资产的组内，记录父资产 id（用于 显示全部） */
-  parentAssetId?: string;
+  /** 组内顺序（数字越小越靠前） */
+  groupOrder?: number;
   /** 生成顺序，用于拼合流程图 */
   resultOrder: string[];
   /** 各步骤执行时间等，可追溯 */
@@ -403,6 +405,14 @@ export type WorkflowAsset = {
   createdAt: number;
   /** VGP：语义快照 + 版本链 + Prompt 产物（阶段 A，可选以兼容旧数据） */
   vgp?: VgpAssetExtension;
+
+  // === 兼容旧字段（迁移后会清理） ===
+  /** @deprecated 改用 groupId */
+  cutImageGroup?: WorkflowCutGroupItem[];
+  /** @deprecated 改用 groupId */
+  groupKind?: 'cut' | 'manual';
+  /** @deprecated 改用 groupId */
+  parentAssetId?: string;
 };
 
 /** 待处理区单项：某资产的某操作 */
@@ -518,6 +528,17 @@ export type CustomAppModule = {
    * 其它图像处理预设忽略此字段。
    */
   cutOverflowPx?: number;
+  /**
+   * 仅 `id === 'cut_image'` 时使用：切割模式
+   * - uniform: 均匀分割（需配合 uniformRows/uniformCols）
+   * - auto: 自动检测（颜色跳变+边缘检测）
+   * - vision: 视觉识别（调用 Gemini）
+   */
+  cutMode?: 'uniform' | 'auto' | 'vision';
+  /** 仅 cutMode === 'uniform' 时使用：均匀分割行数 */
+  uniformRows?: number;
+  /** 仅 cutMode === 'uniform' 时使用：均匀分割列数 */
+  uniformCols?: number;
 };
 
 /** 能力集合画布节点（与 React Flow 序列化兼容） */

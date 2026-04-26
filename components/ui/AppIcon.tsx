@@ -14,7 +14,8 @@ type AppIconName =
   | 'edit'
   | 'trash'
   | 'user'
-  | 'chevron-up';
+  | 'chevron-up'
+  | 'send';
 
 const paths: Record<AppIconName, React.ReactNode> = {
   close: <path d="M5 5l10 10M15 5 5 15" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />,
@@ -68,6 +69,14 @@ const paths: Record<AppIconName, React.ReactNode> = {
     </>
   ),
   'chevron-up': <path d="M5 12.5 10 7l5 5.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />,
+  send: (
+    <path
+      d="M3.5 10 16.5 3.5 10 16.5l-2-5.5-5-1.5Z"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinejoin="round"
+    />
+  ),
 };
 
 const AppIcon: React.FC<{ name: AppIconName; className?: string }> = ({ name, className }) => (

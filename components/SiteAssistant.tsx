@@ -71,10 +71,10 @@ const SiteAssistant: React.FC<{
         <button
           type="button"
           onClick={() => setOpen((o) => !o)}
-          className={`relative w-12 h-12 rounded-full border shadow-lg flex items-center justify-center transition-all outline-none focus:ring-2 focus:ring-blue-500/50 ${
+          className={`relative w-12 h-12 rounded-full shadow-lg flex items-center justify-center transition-all outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 motion-reduce:transition-none ${
             open
-              ? 'bg-[#1a3354] border-[#3b6fb8] text-blue-200'
-              : 'bg-[#16161a] border-[#343438] text-gray-200 hover:bg-[#1f1f24] hover:border-[#3b6fb8]'
+              ? 'bg-[#1a3354] ring-2 ring-blue-500/45 text-blue-200'
+              : 'bg-[#16161a] ring-1 ring-white/[0.1] text-gray-200 hover:bg-[#1f1f24] hover:ring-blue-500/35'
           }`}
           title="网站助手"
           aria-label="打开网站助手"
@@ -86,11 +86,11 @@ const SiteAssistant: React.FC<{
       {/* 对话面板 */}
       {open && (
         <div
-          className={`fixed bottom-20 ${RIGHT_DOCK_RIGHT} z-[1998] w-[min(360px,calc(100vw-3rem))] max-h-[min(70vh,520px)] flex flex-col glass rounded-2xl border border-[#343438] shadow-2xl overflow-hidden animate-in slide-in-from-bottom-4 duration-200`}
+          className={`fixed bottom-20 ${RIGHT_DOCK_RIGHT} z-[1998] w-[min(360px,calc(100vw-3rem))] max-h-[min(70vh,520px)] flex flex-col glass rounded-2xl bg-[#0f0f0f]/95 ring-1 ring-white/[0.1] shadow-2xl overflow-hidden animate-in slide-in-from-bottom-4 duration-200 motion-reduce:animate-none`}
           role="dialog"
           aria-label="网站助手"
         >
-          <div className="flex items-center justify-between px-4 py-3 border-b border-[#2e2e32] bg-[#141416] shrink-0">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-white/[0.06] bg-[#141416] shrink-0">
             <span className="text-[11px] font-black uppercase tracking-wider text-white">网站助手</span>
             <button
               type="button"
@@ -119,7 +119,7 @@ const SiteAssistant: React.FC<{
                   className={`max-w-[85%] rounded-xl px-3 py-2 text-[11px] leading-relaxed ${
                     m.role === 'user'
                       ? 'bg-[#264670] border border-[#4b6a9e] text-white'
-                      : 'bg-[#1c1c22] border border-[#2e2e32] text-gray-200'
+                      : 'bg-white/[0.05] ring-1 ring-white/[0.06] text-gray-200'
                   }`}
                 >
                   <span className="whitespace-pre-wrap break-words">
@@ -140,7 +140,7 @@ const SiteAssistant: React.FC<{
               <p className="text-[10px] text-red-400 px-2">{error}</p>
             )}
           </div>
-          <div className="p-3 border-t border-[#2e2e32] bg-[#121214] shrink-0">
+          <div className="p-3 border-t border-white/[0.06] bg-[#121214] shrink-0">
             <div className="flex gap-2">
               <textarea
                 ref={inputRef}
@@ -149,7 +149,7 @@ const SiteAssistant: React.FC<{
                 onKeyDown={handleKeyDown}
                 placeholder="输入问题…"
                 rows={2}
-                className="flex-1 min-h-[44px] max-h-[80px] resize-none rounded-xl bg-[#1c1c22] border border-[#2e2e32] px-3 py-2 text-[11px] text-white placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-[#3b82f6]"
+                className="flex-1 min-h-[44px] max-h-[80px] resize-none rounded-xl bg-white/[0.05] px-3 py-2 text-[11px] text-white ring-1 ring-white/[0.06] placeholder:text-gray-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
                 disabled={loading}
               />
               <button

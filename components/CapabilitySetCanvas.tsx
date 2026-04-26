@@ -397,7 +397,7 @@ const AssetInputNode: React.FC<{ id: string; data: CapabilitySetNode['data'] }> 
     const onPointerDown = (ev: MouseEvent) => {
       const root = rootRef.current;
       if (!root) return;
-      if (!root.contains(ev.target as Node)) setOpenPanel(false);
+      if (!root.contains(ev.target as unknown as Node)) setOpenPanel(false);
     };
     const onKeyDown = (ev: KeyboardEvent) => {
       if (ev.key === 'Escape') setOpenPanel(false);
