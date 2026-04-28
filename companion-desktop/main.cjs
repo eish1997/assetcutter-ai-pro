@@ -3,7 +3,7 @@
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
-const { app, Tray, Menu, nativeImage, shell, BrowserWindow, ipcMain } = require('electron');
+const { app, Tray, Menu, nativeImage, shell, BrowserWindow, ipcMain, dialog } = require('electron');
 const { spawn } = require('child_process');
 
 /** Windows：与产品路径一致，数据落在 %LOCALAPPDATA%\\AssetCutterCompanion\\desktop-shell */
@@ -38,6 +38,8 @@ let companionLastError = null;
 let statusPollTimer = null;
 /** @type {string | null} */
 let lastStatusAlertKey = null;
+/** @type {boolean} */
+let companionAutoUpdateConfigured = false;
 
 function readHttpPort() {
   const raw = process.env.COMPANION_HTTP_PORT?.trim();
@@ -147,7 +149,7 @@ function notifyCompanionFailure(message) {
     tray.displayBalloon({
       iconType: 'warning',
       title: '本地伴侣异常',
-      content: `${message}。可在托盘菜单执行“重新启动本地伴侣”或“打开本机控制台排查”。`,
+      content: `${message}。可在托盘菜单执行“重新启动本地伴侣”或“打开本机管理页排查”。`,
     });
   }
 }
@@ -160,7 +162,7 @@ function notifyStatusIssue(title, message, dedupeKey) {
     tray.displayBalloon({
       iconType: 'warning',
       title,
-      content: `${message}。可在托盘菜单执行“重新启动本地伴侣”或“打开本机控制台排查”。`,
+      content: `${message}。可在托盘菜单执行“重新启动本地伴侣”或“打开本机管理页排查”。`,
     });
   }
 }
@@ -295,7 +297,7 @@ async function pollCompanionStatus() {
       companionLastError = 'status_needs_token';
       updateTrayTooltip();
       rebuildTrayMenu();
-      notifyStatusIssue('本地伴侣提醒', '状态检查被拒绝，请确认 COMPANION_SHARED_TOKEN 配置一致', 'status_needs_token');
+      notifyStatusIssue('本地伴侣提醒', '配对验证失败，请在「首次设置向导」或网站设置中检查本机通信密码是否一致', 'status_needs_token');
       return;
     }
     companionStatusNote = '状态检查失败';
@@ -422,7 +424,7 @@ function buildTrayMenu() {
     },
     { type: 'separator' },
     {
-      label: '打开本机控制台',
+      label: '打开本机管理页',
       click: () => openConsole(),
     },
     {
@@ -437,8 +439,24 @@ function buildTrayMenu() {
 
   if (process.platform === 'win32') {
     template.push({
-      label: '欢迎向导',
+      label: '首次设置向导',
       click: () => openFirstRunWizard(),
+    });
+  }
+
+  const updateFeed = process.env.COMPANION_UPDATE_FEED_URL?.trim();
+  if (updateFeed) {
+    template.push({
+      label: '检查更新…',
+      click: async () => {
+        try {
+          const { autoUpdater } = require('electron-updater');
+          await autoUpdater.checkForUpdates();
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          void dialog.showErrorBox('检查更新失败', msg);
+        }
+      },
     });
   }
 
@@ -465,8 +483,8 @@ function openFirstRunWizard() {
   }
 
   const wizardTitle = hasCompletedWizard()
-    ? '本地伴侣 — 使用说明'
-    : '本地伴侣 — 首次运行';
+    ? '本地伴侣 — 说明与设置'
+    : '本地伴侣 — 首次设置';
 
   wizardWindow = new BrowserWindow({
     width: 520,
@@ -533,18 +551,76 @@ function openMainWindow() {
       '<div style="max-width:720px;margin:64px auto;padding:24px;background:#16161a;border:1px solid #27272a;border-radius:12px;">',
       '<h2 style="margin:0 0 12px;">本地伴侣未就绪</h2>',
       `<p style="line-height:1.7;margin:0 0 10px;">无法打开 <code>${consoleUrl}</code>。你可以先重启本地伴侣，再点击托盘“打开主窗口”。</p>`,
-      '<p style="line-height:1.7;margin:0;color:#a1a1aa;">若持续失败，请在托盘中选择“打开本机控制台”检查状态或查看终端日志。</p>',
+      '<p style="line-height:1.7;margin:0;color:#a1a1aa;">若持续失败，请在托盘中选择“打开本机管理页”检查状态或查看终端日志。</p>',
       '</div></body></html>',
     ].join('');
     void mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(fallbackHtml)}`);
   });
 }
 
+function setupOptionalAutoUpdate() {
+  const feed = process.env.COMPANION_UPDATE_FEED_URL?.trim();
+  if (!feed || companionAutoUpdateConfigured) return;
+  let autoUpdater;
+  try {
+    ({ autoUpdater } = require('electron-updater'));
+  } catch (e) {
+    console.error('[companion-desktop] electron-updater 未安装:', e.message);
+    return;
+  }
+  companionAutoUpdateConfigured = true;
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.setFeedURL({ provider: 'generic', url: feed });
+  autoUpdater.on('update-not-available', () => {
+    if (process.platform === 'win32' && tray && !tray.isDestroyed()) {
+      tray.displayBalloon({ title: '软件更新', content: '当前已是最新版本。' });
+    }
+  });
+  autoUpdater.on('update-available', (info) => {
+    const ver = info && typeof info.version === 'string' ? info.version : '新版本';
+    void dialog
+      .showMessageBox({
+        type: 'info',
+        title: '发现新版本',
+        message: `可更新至 ${ver}`,
+        detail: '是否下载更新？下载完成后可在退出应用时安装。',
+        buttons: ['稍后', '下载更新'],
+        defaultId: 1,
+        cancelId: 0,
+      })
+      .then((r) => {
+        if (r.response === 1) void autoUpdater.downloadUpdate();
+      });
+  });
+  autoUpdater.on('update-downloaded', () => {
+    void dialog
+      .showMessageBox({
+        type: 'info',
+        title: '更新已就绪',
+        message: '更新已下载完成。',
+        detail: '需要退出应用后完成安装。是否现在退出并安装？',
+        buttons: ['稍后', '退出并安装'],
+        defaultId: 1,
+        cancelId: 0,
+      })
+      .then((r) => {
+        if (r.response === 1) autoUpdater.quitAndInstall(false, true);
+      });
+  });
+  autoUpdater.on('error', (err) => {
+    console.error('[companion-desktop][updater]', err);
+  });
+  setTimeout(() => {
+    void autoUpdater.checkForUpdates().catch((e) => console.error('[companion-desktop][updater] check', e));
+  }, 20000);
+}
+
 function buildTray() {
   tray = new Tray(createTrayIcon());
   updateTrayTooltip();
 
-  /** Windows：左键单击快速打开控制台（右键仍为菜单）。 */
+  /** Windows：左键单击快速打开本机管理页（右键仍为菜单）。 */
   if (process.platform === 'win32') {
     tray.on('click', () => {
       openConsole();
@@ -602,6 +678,7 @@ if (!gotLock) {
     void startLocalCompanion();
     buildTray();
     startStatusPolling();
+    setupOptionalAutoUpdate();
     if (shouldShowFirstRunWizard()) {
       openFirstRunWizard();
     }

@@ -57,6 +57,7 @@ import {
   getCompanionJobTerminalEvent,
   saveCompanionJobTerminalEvent,
 } from '../services/companionJobTerminalStore';
+import { companionJobStatusHuman } from '../services/companionJobStatusHuman';
 import { CustomDropdown, DROPDOWN_TRIGGER_COMPACT } from './ui/CustomDropdown';
 import type { AuthUser } from '../services/authClient';
 
@@ -77,6 +78,7 @@ const AI_PROVIDER_OPTIONS: { value: AiProvider; label: string }[] = [
 ];
 
 const COMPANION_SETTINGS_STREAM_STATE_KEY = 'ac_companion_settings_stream_state_v2';
+
 const TERMINAL_JOB_EVENT_TYPES = new Set<CompanionJobEventV1['type']>([
   'reply.completed',
   'task.failed',
@@ -302,7 +304,7 @@ const SettingsSection: React.FC<{
   const handleSaveCompanionToken = () => {
     setCompanionLocalToken(companionTokenDraft);
     setCompanionTokenDraft(getCompanionLocalToken());
-    setCompanionProbeHint('已保存配对 Token（与宿主 COMPANION_SHARED_TOKEN 一致时才能调 API）');
+    setCompanionProbeHint('已保存。请与本机伴侣里填写的本机通信密码一致，网站才能正常调用本机。');
     setTimeout(() => setCompanionProbeHint(''), 2500);
   };
 
@@ -373,7 +375,7 @@ const SettingsSection: React.FC<{
     async (resetCursor = false) => {
       const jobId = companionJobIdDraft.trim();
       if (!jobId) {
-        setCompanionJobEventsHint('请先填写 jobId');
+        setCompanionJobEventsHint('请先填写任务编号');
         return;
       }
       const base = normalizeCompanionBaseUrl(companionBaseDraft);
@@ -405,7 +407,9 @@ const SettingsSection: React.FC<{
         setCompanionJobAfterSeq(next);
         setCompanionJobCursor(jobId, next);
         setCompanionJobEventsHint(
-          `事件 ${incoming.length} 条${r.latencyMs != null ? `（${r.latencyMs}ms）` : ''}；cursor=${next}`,
+          incoming.length
+            ? `已同步 ${incoming.length} 条进度${r.latencyMs != null ? `（${r.latencyMs}ms）` : ''}`
+            : `进度已是最新${r.latencyMs != null ? `（${r.latencyMs}ms）` : ''}`,
         );
       } catch (e) {
         setCompanionJobEventsHint(`拉取异常：${e instanceof Error ? e.message : String(e)}`);
@@ -428,7 +432,7 @@ const SettingsSection: React.FC<{
     const stream = createCompanionJobEventStream(base, jobId, afterSeq);
     let closed = false;
     setCompanionStreamMode('sse');
-    setCompanionJobEventsHint((prev) => prev || '已连接 SSE 事件流');
+    setCompanionJobEventsHint((prev) => prev || '已连接实时进度');
 
     const onJobEvent = (ev: MessageEvent) => {
       let parsed: CompanionJobEventV1 | null = null;
@@ -451,14 +455,14 @@ const SettingsSection: React.FC<{
       });
     };
     const onJobEnd = () => {
-      setCompanionJobEventsHint('SSE 事件流已结束（任务终态）');
+      setCompanionJobEventsHint('任务已结束');
       setCompanionStreamMode('idle');
       stream.close();
     };
     const onError = () => {
       if (closed) return;
       setCompanionStreamMode('poll');
-      setCompanionJobEventsHint('SSE 不可用，已回退轮询');
+      setCompanionJobEventsHint('实时连接不可用，已改为定时刷新');
       stream.close();
     };
     stream.addEventListener('job.event', onJobEvent as EventListener);
@@ -489,7 +493,7 @@ const SettingsSection: React.FC<{
     if (!companionJobEventsAuto) return;
     setCompanionJobEventsAuto(false);
     setCompanionStreamMode('idle');
-    setCompanionJobEventsHint(`任务已到终态：${latest.type}（已停止自动跟踪）`);
+    setCompanionJobEventsHint('任务已结束，已停止自动跟随');
   }, [companionJobEvents, companionJobEventsAuto]);
 
   useEffect(() => {
@@ -523,7 +527,7 @@ const SettingsSection: React.FC<{
     );
     try {
       await navigator.clipboard.writeText(content);
-      setCompanionJobEventsHint('已复制排障信息（jobId/cursor/latestEvent）');
+      setCompanionJobEventsHint('已复制诊断信息');
     } catch {
       setCompanionJobEventsHint('复制失败：浏览器未授予剪贴板权限');
     }
@@ -751,31 +755,27 @@ const SettingsSection: React.FC<{
             <section id="settings-companion" className="scroll-mt-4 rounded-2xl border border-[#2e2e32] bg-[#121214] p-6">
               <h2 className="text-xs font-black uppercase tracking-wider text-blue-400/90 mb-4">本地伴侣</h2>
               <div className="rounded-xl border border-[#252528] p-4 space-y-4 text-[10px] text-gray-400 leading-relaxed">
-                <p className="text-[9px] text-gray-500">
-                  本机可运行 <code className="text-gray-400">local-companion</code>（仓库 <code className="text-gray-400">local-companion/</code>）或 A-Driver
-                  <code className="text-gray-400"> local-bridge</code>；默认根地址 <code className="text-gray-400">http://127.0.0.1:18765</code> 用于探测与打开控制台。
-                  下方「拉取项目 id」调用伴侣 <code className="text-gray-400">GET /v1/projects</code>（需 <code className="text-gray-400">local-companion</code> 已启动）。
-                  若宿主启用了 <code className="text-gray-400">COMPANION_SHARED_TOKEN</code>，请在本页填写相同 Token；<code className="text-gray-400">COMPANION_ALLOWED_ORIGINS</code> 须包含当前站点 Origin（如{' '}
-                  <code className="text-gray-400">http://localhost:5173</code> 或 <code className="text-gray-400">http://127.0.0.1:*</code>）。
+                <p className="text-[11px] text-gray-300 leading-relaxed">
+                  在本机安装并运行「本地伴侣」后，部分处理可在本机完成，通常更快、素材也可留在本机。请先保存连接信息并点击「检测连接」。
                 </p>
                 <div className="space-y-2">
-                  <label className="block text-[9px] text-gray-500 uppercase tracking-wide">HTTP 根地址</label>
+                  <label className="block text-[10px] text-gray-400">本机地址</label>
                   <input
                     type="url"
                     value={companionBaseDraft}
                     onChange={(e) => setCompanionBaseDraft(e.target.value)}
-                    placeholder="http://127.0.0.1:18765"
+                    placeholder="默认本机端口即可"
                     className="w-full px-3 py-2 rounded-xl bg-[#16161a] border border-[#2e2e32] text-[11px] text-white placeholder-gray-600 focus:border-blue-500 focus:outline-none"
                     autoComplete="off"
                   />
                 </div>
                 <div className="space-y-2">
-                  <label className="block text-[9px] text-gray-500 uppercase tracking-wide">配对 Token（可选，与 COMPANION_SHARED_TOKEN 一致）</label>
+                  <label className="block text-[10px] text-gray-400">配对密码（可选）</label>
                   <input
                     type="password"
                     value={companionTokenDraft}
                     onChange={(e) => setCompanionTokenDraft(e.target.value)}
-                    placeholder="未启用宿主 Token 时可留空"
+                    placeholder="与桌面向导或本机配置一致时填写"
                     className="w-full px-3 py-2 rounded-xl bg-[#16161a] border border-[#2e2e32] text-[11px] text-white placeholder-gray-600 focus:border-blue-500 focus:outline-none"
                     autoComplete="off"
                   />
@@ -793,7 +793,7 @@ const SettingsSection: React.FC<{
                     onClick={handleSaveCompanionToken}
                     className="px-4 py-2 rounded-xl bg-[#26262c] hover:bg-[#383842] border border-[#2e2e32] text-[10px] font-bold text-gray-200 transition-colors"
                   >
-                    保存 Token
+                    保存配对密码
                   </button>
                   <button
                     type="button"
@@ -809,7 +809,7 @@ const SettingsSection: React.FC<{
                     rel="noopener noreferrer"
                     className="inline-flex items-center px-4 py-2 rounded-xl border border-[#3f3f46] text-[10px] font-bold text-gray-300 hover:bg-[#222228] transition-colors"
                   >
-                    打开本地控制台
+                    打开本机管理页
                   </a>
                   <button
                     type="button"
@@ -817,139 +817,139 @@ const SettingsSection: React.FC<{
                     disabled={companionProjectsBusy}
                     className="px-4 py-2 rounded-xl bg-[#26262c] hover:bg-[#383842] border border-[#2e2e32] text-[10px] font-bold text-gray-200 transition-colors disabled:opacity-60"
                   >
-                    {companionProjectsBusy ? '拉取中…' : '拉取项目 id'}
+                    {companionProjectsBusy ? '刷新中…' : '刷新本机项目列表'}
                   </button>
                 </div>
                 {companionProbeHint ? <p className="text-[10px] text-gray-300">{companionProbeHint}</p> : null}
-                {companionHealthSnippet ? (
-                  <details className="rounded-lg border border-[#2e2e32] bg-[#16161a] p-3">
-                    <summary className="cursor-pointer text-[9px] font-bold text-gray-400 uppercase tracking-wide">
-                      /v1/health 响应摘要
-                    </summary>
-                    <pre className="mt-2 text-[9px] text-gray-500 whitespace-pre-wrap break-all max-h-40 overflow-y-auto">
-                      {companionHealthSnippet}
-                    </pre>
-                  </details>
-                ) : null}
-                {companionCapSnippet ? (
-                  <details className="rounded-lg border border-[#2e2e32] bg-[#16161a] p-3">
-                    <summary className="cursor-pointer text-[9px] font-bold text-gray-400 uppercase tracking-wide">
-                      /v1/capabilities 响应摘要
-                    </summary>
-                    <pre className="mt-2 text-[9px] text-gray-500 whitespace-pre-wrap break-all max-h-40 overflow-y-auto">
-                      {companionCapSnippet}
-                    </pre>
-                  </details>
-                ) : null}
-                {companionRelaySnippet ? (
-                  <details className="rounded-lg border border-[#2e2e32] bg-[#16161a] p-3">
-                    <summary className="cursor-pointer text-[9px] font-bold text-gray-400 uppercase tracking-wide">
-                      Relay（capabilities.relay）
-                    </summary>
-                    <pre className="mt-2 text-[9px] text-gray-500 whitespace-pre-wrap break-all max-h-32 overflow-y-auto">
-                      {companionRelaySnippet}
-                    </pre>
-                  </details>
-                ) : null}
-                {companionSeamSnippet ? (
-                  <details className="rounded-lg border border-[#2e2e32] bg-[#16161a] p-3">
-                    <summary className="cursor-pointer text-[9px] font-bold text-gray-400 uppercase tracking-wide">
-                      修缝（capabilities.compute.seamRepair）
-                    </summary>
-                    <pre className="mt-2 text-[9px] text-gray-500 whitespace-pre-wrap break-all max-h-32 overflow-y-auto">
-                      {companionSeamSnippet}
-                    </pre>
-                  </details>
-                ) : null}
-                {companionProjectsSnippet ? (
-                  <details className="rounded-lg border border-[#2e2e32] bg-[#16161a] p-3">
-                    <summary className="cursor-pointer text-[9px] font-bold text-gray-400 uppercase tracking-wide">
-                      GET /v1/projects
-                    </summary>
-                    <pre className="mt-2 text-[9px] text-gray-500 whitespace-pre-wrap break-all max-h-40 overflow-y-auto">
-                      {companionProjectsSnippet}
-                    </pre>
-                  </details>
-                ) : null}
-                <div className="rounded-lg border border-[#2e2e32] bg-[#16161a] p-3 space-y-3">
-                  <p className="text-[9px] font-bold text-gray-400 uppercase tracking-wide">闭环事件流（/v1/compute/jobs/:jobId/events）</p>
-                  <input
-                    type="text"
-                    value={companionJobIdDraft}
-                    onChange={(e) => setCompanionJobIdDraft(e.target.value)}
-                    placeholder="填一个已提交任务的 jobId"
-                    className="w-full px-3 py-2 rounded-xl bg-[#101014] border border-[#2e2e32] text-[11px] text-white placeholder-gray-600 focus:border-blue-500 focus:outline-none"
-                    autoComplete="off"
-                  />
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() => void pullCompanionJobEvents(true)}
-                      disabled={companionJobEventsBusy}
-                      className="px-3 py-1.5 rounded-lg bg-[#26262c] hover:bg-[#383842] border border-[#2e2e32] text-[10px] font-bold text-gray-200 transition-colors disabled:opacity-60"
-                    >
-                      {companionJobEventsBusy ? '拉取中…' : '重置并拉取'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void pullCompanionJobEvents(false)}
-                      disabled={companionJobEventsBusy}
-                      className="px-3 py-1.5 rounded-lg bg-[#26262c] hover:bg-[#383842] border border-[#2e2e32] text-[10px] font-bold text-gray-200 transition-colors disabled:opacity-60"
-                    >
-                      增量拉取
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setCompanionJobEventsAuto((v) => !v)}
-                      className="px-3 py-1.5 rounded-lg border border-[#2e2e32] text-[10px] font-bold text-gray-200 hover:bg-[#222228] transition-colors"
-                    >
-                      {companionJobEventsAuto ? '停止自动轮询' : '开启自动轮询'}
-                    </button>
+                <details className="rounded-lg border border-[#2e2e32] bg-[#16161a] group">
+                  <summary className="cursor-pointer list-none px-3 py-2.5 text-[10px] font-bold text-gray-400 marker:content-none [&::-webkit-details-marker]:hidden">
+                    连接与能力详情（可选，供排障）
+                  </summary>
+                  <div className="px-3 pb-3 space-y-2 border-t border-[#2e2e32] pt-2">
+                    {companionHealthSnippet ? (
+                      <details className="rounded-lg border border-[#2e2e32] bg-[#101014] p-2">
+                        <summary className="cursor-pointer text-[9px] font-bold text-gray-500">健康检查</summary>
+                        <pre className="mt-2 text-[9px] text-gray-500 whitespace-pre-wrap break-all max-h-40 overflow-y-auto">
+                          {companionHealthSnippet}
+                        </pre>
+                      </details>
+                    ) : null}
+                    {companionCapSnippet ? (
+                      <details className="rounded-lg border border-[#2e2e32] bg-[#101014] p-2">
+                        <summary className="cursor-pointer text-[9px] font-bold text-gray-500">能力清单</summary>
+                        <pre className="mt-2 text-[9px] text-gray-500 whitespace-pre-wrap break-all max-h-40 overflow-y-auto">
+                          {companionCapSnippet}
+                        </pre>
+                      </details>
+                    ) : null}
+                    {companionRelaySnippet ? (
+                      <details className="rounded-lg border border-[#2e2e32] bg-[#101014] p-2">
+                        <summary className="cursor-pointer text-[9px] font-bold text-gray-500">站点中转（Relay）</summary>
+                        <pre className="mt-2 text-[9px] text-gray-500 whitespace-pre-wrap break-all max-h-32 overflow-y-auto">
+                          {companionRelaySnippet}
+                        </pre>
+                      </details>
+                    ) : null}
+                    {companionSeamSnippet ? (
+                      <details className="rounded-lg border border-[#2e2e32] bg-[#101014] p-2">
+                        <summary className="cursor-pointer text-[9px] font-bold text-gray-500">本机修缝能力</summary>
+                        <pre className="mt-2 text-[9px] text-gray-500 whitespace-pre-wrap break-all max-h-32 overflow-y-auto">
+                          {companionSeamSnippet}
+                        </pre>
+                      </details>
+                    ) : null}
+                    {companionProjectsSnippet ? (
+                      <details className="rounded-lg border border-[#2e2e32] bg-[#101014] p-2">
+                        <summary className="cursor-pointer text-[9px] font-bold text-gray-500">项目列表（原始）</summary>
+                        <pre className="mt-2 text-[9px] text-gray-500 whitespace-pre-wrap break-all max-h-40 overflow-y-auto">
+                          {companionProjectsSnippet}
+                        </pre>
+                      </details>
+                    ) : null}
                   </div>
-                  <p className="text-[9px] text-gray-500">
-                    当前 cursor：<code className="text-gray-400">{companionJobAfterSeq}</code>
-                  </p>
-                  {latestCompanionJobEvent ? (
-                    <p className="text-[9px] text-gray-500">
-                      最新事件：<code className="text-gray-400">{latestCompanionJobEvent.type}</code> / seq=
-                      <code className="text-gray-400">{latestCompanionJobEvent.seq}</code>
-                    </p>
-                  ) : null}
-                  {companionJobEventsHint ? <p className="text-[10px] text-gray-300">{companionJobEventsHint}</p> : null}
-                  {(companionJobFailed || companionJobCompleted) ? (
+                </details>
+                <details className="rounded-lg border border-[#2e2e32] bg-[#16161a]">
+                  <summary className="cursor-pointer list-none px-3 py-2.5 text-[10px] font-bold text-gray-400 marker:content-none [&::-webkit-details-marker]:hidden">
+                    高级：任务进度与日志（一般无需展开）
+                  </summary>
+                  <div className="px-3 pb-3 space-y-3 border-t border-[#2e2e32] pt-2">
+                    <input
+                      type="text"
+                      value={companionJobIdDraft}
+                      onChange={(e) => setCompanionJobIdDraft(e.target.value)}
+                      placeholder="任务编号（向支持人员索取时可填）"
+                      className="w-full px-3 py-2 rounded-xl bg-[#101014] border border-[#2e2e32] text-[11px] text-white placeholder-gray-600 focus:border-blue-500 focus:outline-none"
+                      autoComplete="off"
+                    />
                     <div className="flex flex-wrap gap-2">
-                      {companionJobFailed ? (
-                        <button
-                          type="button"
-                          onClick={() => void pullCompanionJobEvents(true)}
-                          disabled={companionJobEventsBusy}
-                          className="px-3 py-1.5 rounded-lg border border-[#b45309] text-[10px] font-bold text-amber-300 hover:bg-[#3a2a12] transition-colors disabled:opacity-60"
-                        >
-                          重置游标并重拉
-                        </button>
-                      ) : null}
                       <button
                         type="button"
-                        onClick={openCompanionConsole}
-                        className="px-3 py-1.5 rounded-lg border border-[#2e2e32] text-[10px] font-bold text-gray-200 hover:bg-[#222228] transition-colors"
+                        onClick={() => void pullCompanionJobEvents(true)}
+                        disabled={companionJobEventsBusy}
+                        className="px-3 py-1.5 rounded-lg bg-[#26262c] hover:bg-[#383842] border border-[#2e2e32] text-[10px] font-bold text-gray-200 transition-colors disabled:opacity-60"
                       >
-                        打开本地控制台排查
+                        {companionJobEventsBusy ? '刷新中…' : '从头刷新'}
                       </button>
                       <button
                         type="button"
-                        onClick={() => void copyCompanionJobDiagnostics()}
+                        onClick={() => void pullCompanionJobEvents(false)}
+                        disabled={companionJobEventsBusy}
+                        className="px-3 py-1.5 rounded-lg bg-[#26262c] hover:bg-[#383842] border border-[#2e2e32] text-[10px] font-bold text-gray-200 transition-colors disabled:opacity-60"
+                      >
+                        仅看新进度
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCompanionJobEventsAuto((v) => !v)}
                         className="px-3 py-1.5 rounded-lg border border-[#2e2e32] text-[10px] font-bold text-gray-200 hover:bg-[#222228] transition-colors"
                       >
-                        复制排障信息
+                        {companionJobEventsAuto ? '停止自动跟随' : '自动跟随进度'}
                       </button>
                     </div>
-                  ) : null}
-                  <pre className="text-[9px] text-gray-500 whitespace-pre-wrap break-all max-h-48 overflow-y-auto">
-                    {companionJobEvents.length
-                      ? JSON.stringify(companionJobEvents.slice(-80), null, 2)
-                      : '（暂无事件）'}
-                  </pre>
-                </div>
+                    {latestCompanionJobEvent ? (
+                      <p className="text-[11px] text-gray-300">
+                        状态：<span className="text-white">{companionJobStatusHuman(latestCompanionJobEvent)}</span>
+                      </p>
+                    ) : null}
+                    {companionJobEventsHint ? <p className="text-[10px] text-gray-300">{companionJobEventsHint}</p> : null}
+                    {(companionJobFailed || companionJobCompleted) ? (
+                      <div className="flex flex-wrap gap-2">
+                        {companionJobFailed ? (
+                          <button
+                            type="button"
+                            onClick={() => void pullCompanionJobEvents(true)}
+                            disabled={companionJobEventsBusy}
+                            className="px-3 py-1.5 rounded-lg border border-[#b45309] text-[10px] font-bold text-amber-300 hover:bg-[#3a2a12] transition-colors disabled:opacity-60"
+                          >
+                            重试同步
+                          </button>
+                        ) : null}
+                        <button
+                          type="button"
+                          onClick={openCompanionConsole}
+                          className="px-3 py-1.5 rounded-lg border border-[#2e2e32] text-[10px] font-bold text-gray-200 hover:bg-[#222228] transition-colors"
+                        >
+                          打开本机管理页
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void copyCompanionJobDiagnostics()}
+                          className="px-3 py-1.5 rounded-lg border border-[#2e2e32] text-[10px] font-bold text-gray-200 hover:bg-[#222228] transition-colors"
+                        >
+                          复制诊断信息
+                        </button>
+                      </div>
+                    ) : null}
+                    <details className="rounded-lg border border-[#2e2e32] bg-[#101014] p-2">
+                      <summary className="cursor-pointer text-[9px] font-bold text-gray-500">原始事件数据</summary>
+                      <pre className="mt-2 text-[9px] text-gray-500 whitespace-pre-wrap break-all max-h-48 overflow-y-auto">
+                        {companionJobEvents.length
+                          ? JSON.stringify(companionJobEvents.slice(-80), null, 2)
+                          : '（暂无）'}
+                      </pre>
+                    </details>
+                  </div>
+                </details>
               </div>
             </section>
 

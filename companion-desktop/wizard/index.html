@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>本地伴侣 — 首次运行</title>
+    <title>本地伴侣 — 首次设置</title>
     <style>
       * {
         box-sizing: border-box;
@@ -110,29 +110,29 @@
     </style>
   </head>
   <body>
-    <h1>欢迎使用 Asset Cutter 本地伴侣</h1>
-    <p>在 <strong>Windows</strong> 上，本窗口会在<strong>首次启动</strong>时自动打开；之后可在托盘菜单选择<strong>「欢迎向导」</strong>再次查看。伴侣已在后台运行，<strong>左键单击托盘图标</strong>可快速打开本机控制台，<strong>右键</strong>打开菜单（含退出）。</p>
+    <h1>欢迎使用本地伴侣</h1>
+    <p>首次在 <strong>Windows</strong> 打开本程序时会出现本页；之后可在托盘菜单点<strong>「首次设置向导」</strong>再看一次。程序会在后台常驻，<strong>左键单击托盘图标</strong>可打开本机管理页，<strong>右键</strong>可打开菜单（含退出）。</p>
     <ul>
-      <li>托盘菜单 →「打开本机控制台」管理插件与仓库。</li>
-      <li>与网站联调前，请保持本程序运行；默认仅监听本机回环地址。</li>
-      <li>可先在本向导填写配对 Token 与站点 Origin（会持久化到本机配置）。</li>
+      <li>保持本程序运行，网站上的「本机处理」功能才能连到这台电脑。</li>
+      <li>若网站提示连不上，请在本页填写<strong>与网站一致的密码</strong>，并填写<strong>允许访问的网站地址</strong>（可留空则使用默认）。</li>
+      <li>需要查看任务或文件时，点下方「打开本机管理页」。</li>
     </ul>
     <div class="pairing">
-      <h3>网站配对（最小可用）</h3>
+      <h3>与网站保持一致（可选）</h3>
       <div class="field">
-        <label for="pair-token">配对 Token（可选）</label>
-        <input id="pair-token" type="password" placeholder="与网站设置页填写一致（至少 8 位）" />
+        <label for="pair-token">本机通信密码</label>
+        <input id="pair-token" type="password" placeholder="在网站「设置 → 本地伴侣」里填写的密码，至少 8 位" />
       </div>
       <div class="field">
-        <label for="pair-origin">允许站点 Origin（可选）</label>
-        <input id="pair-origin" type="text" placeholder="如 http://localhost:5173,http://127.0.0.1:*" />
+        <label for="pair-origin">允许打开的网站地址</label>
+        <input id="pair-origin" type="text" placeholder="多个用英文逗号隔开，例如 http://localhost:5173" />
       </div>
-      <button type="button" id="save-pairing">保存配对配置</button>
-      <p class="hint" id="pairing-hint">未保存（Origin 用逗号分隔，支持 http://127.0.0.1:* 形式）</p>
+      <button type="button" id="save-pairing">保存以上设置</button>
+      <p class="hint" id="pairing-hint">修改后请点保存；保存成功后一般无需重启即可生效。</p>
     </div>
     <div class="actions">
-      <button type="button" class="primary" id="open-console">打开本机控制台</button>
-      <button type="button" id="complete">完成，进入托盘运行</button>
+      <button type="button" class="primary" id="open-console">打开本机管理页</button>
+      <button type="button" id="complete">完成，缩小到托盘</button>
     </div>
     <label class="row">
       <input type="checkbox" id="autostart" disabled />
@@ -151,7 +151,7 @@
           const cfg = await w.loadPairing();
           tokenEl.value = cfg && typeof cfg.sharedToken === 'string' ? cfg.sharedToken : '';
           originEl.value = cfg && typeof cfg.allowedOrigins === 'string' ? cfg.allowedOrigins : '';
-          hintEl.textContent = '已加载本机配对配置';
+          hintEl.textContent = '已读取本机已保存的设置';
         } catch {
           hintEl.textContent = '读取配置失败';
         }
@@ -166,7 +166,7 @@
             sharedToken: tokenEl.value || '',
             allowedOrigins: originEl.value || '',
           });
-          hintEl.textContent = r && r.ok ? '保存成功（重启后生效）' : `保存失败：${(r && r.error) || 'unknown'}`;
+          hintEl.textContent = r && r.ok ? '保存成功' : `未能保存：${(r && r.error) || '请稍后重试'}`;
         } catch {
           hintEl.textContent = '保存失败';
         } finally {

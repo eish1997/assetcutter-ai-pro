@@ -42,7 +42,13 @@
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "allowElevation": true
     }
+  },
+  "dependencies": {
+    "electron-updater": "^6.6.2"
   }
 }

@@ -25,6 +25,7 @@ import {
   getCompanionJobTerminalEvent,
   saveCompanionJobTerminalEvent,
 } from '../services/companionJobTerminalStore';
+import { companionJobStatusHuman } from '../services/companionJobStatusHuman';
 import { SiteImage } from './SiteImage';
 
 // OBJ + 贴图 3D 预览（仅影响预览，不改变修复结果）
@@ -375,7 +376,7 @@ const SeamRepairSection: React.FC<{ onLog?: (level: 'info' | 'warn' | 'error', m
     async (resetCursor = false) => {
       const jobId = companionJobId.trim();
       if (!jobId) {
-        setCompanionEventsHint('请先填写 jobId');
+        setCompanionEventsHint('请先填写任务编号');
         return;
       }
       setCompanionEventsBusy(true);
@@ -408,7 +409,9 @@ const SeamRepairSection: React.FC<{ onLog?: (level: 'info' | 'warn' | 'error', m
         setCompanionAfterSeq(next);
         setCompanionJobCursor(jobId, next);
         setCompanionEventsHint(
-          `事件 ${incoming.length} 条${r.latencyMs != null ? `（${r.latencyMs}ms）` : ''}；cursor=${next}`,
+          incoming.length
+            ? `已同步 ${incoming.length} 条进度${r.latencyMs != null ? `（${r.latencyMs}ms）` : ''}`
+            : `进度已是最新${r.latencyMs != null ? `（${r.latencyMs}ms）` : ''}`,
         );
       } catch (e) {
         setCompanionEventsHint(`拉取异常：${e instanceof Error ? e.message : String(e)}`);
@@ -421,12 +424,12 @@ const SeamRepairSection: React.FC<{ onLog?: (level: 'info' | 'warn' | 'error', m
 
   const submitToCompanionAndTrack = useCallback(async () => {
     if (!objFile || !texFile) {
-      setCompanionEventsHint('请先选择 OBJ 与贴图后再提交本地伴侣任务');
+      setCompanionEventsHint('请先选择 OBJ 与贴图');
       return;
     }
     const projectId = companionProjectId.trim();
     if (!projectId) {
-      setCompanionEventsHint('请先填写 companion projectId');
+      setCompanionEventsHint('请先填写本机项目名');
       return;
     }
     setCompanionSubmitBusy(true);
@@ -473,7 +476,7 @@ const SeamRepairSection: React.FC<{ onLog?: (level: 'info' | 'warn' | 'error', m
       setCompanionEvents([]);
       setCompanionAfterSeq(0);
       setCompanionEventsAuto(true);
-      setCompanionEventsHint(`已提交 companion seam_repair，jobId=${jid}；已开启自动轮询`);
+      setCompanionEventsHint('已提交到本机处理，将自动显示进度');
       // 立即拉一次，用户可立刻看到 accepted/running
       window.setTimeout(() => {
         void pullCompanionEvents(true);
@@ -505,7 +508,7 @@ const SeamRepairSection: React.FC<{ onLog?: (level: 'info' | 'warn' | 'error', m
     );
     try {
       await navigator.clipboard.writeText(content);
-      setCompanionEventsHint('已复制排障信息（含 jobId / cursor / latestEvent）');
+      setCompanionEventsHint('已复制诊断信息');
     } catch {
       setCompanionEventsHint('复制失败：浏览器未授予剪贴板权限');
     }
@@ -515,7 +518,7 @@ const SeamRepairSection: React.FC<{ onLog?: (level: 'info' | 'warn' | 'error', m
     async (outputKey: string, token: string, opts?: { force?: boolean }) => {
       const pid = companionProjectId.trim();
       if (!pid) {
-        setCompanionEventsHint('请先填写 companion projectId');
+        setCompanionEventsHint('请先填写本机项目名');
         return;
       }
       if (opts?.force) lastCompanionOutputLoadedRef.current = '';
@@ -570,7 +573,7 @@ const SeamRepairSection: React.FC<{ onLog?: (level: 'info' | 'warn' | 'error', m
     const stream = createCompanionJobEventStream(base, jobId, afterSeq);
     let closed = false;
     setCompanionStreamMode('sse');
-    setCompanionEventsHint((prev) => prev || '已连接 SSE 事件流');
+    setCompanionEventsHint((prev) => prev || '已连接实时进度');
 
     const onJobEvent = (ev: MessageEvent) => {
       let parsed: CompanionJobEventV1 | null = null;
@@ -593,14 +596,14 @@ const SeamRepairSection: React.FC<{ onLog?: (level: 'info' | 'warn' | 'error', m
       });
     };
     const onJobEnd = () => {
-      setCompanionEventsHint('SSE 事件流已结束（任务终态）');
+      setCompanionEventsHint('任务已结束');
       setCompanionStreamMode('idle');
       stream.close();
     };
     const onError = () => {
       if (closed) return;
       setCompanionStreamMode('poll');
-      setCompanionEventsHint('SSE 不可用，已回退轮询');
+      setCompanionEventsHint('实时连接不可用，已改为定时刷新');
       stream.close();
     };
     stream.addEventListener('job.event', onJobEvent as EventListener);
@@ -631,7 +634,7 @@ const SeamRepairSection: React.FC<{ onLog?: (level: 'info' | 'warn' | 'error', m
     if (!companionEventsAuto) return;
     setCompanionEventsAuto(false);
     setCompanionStreamMode('idle');
-    setCompanionEventsHint(`任务已到终态：${latest.type}（已停止自动跟踪）`);
+    setCompanionEventsHint('任务已结束，已停止自动跟随');
   }, [companionEvents, companionEventsAuto]);
 
   useEffect(() => {
@@ -810,69 +813,51 @@ const SeamRepairSection: React.FC<{ onLog?: (level: 'info' | 'warn' | 'error', m
           若接缝是<strong className="text-gray-400">法线/切线空间</strong>导致的「光照裂」，修 BaseColor 不会治本；本工具主要解决贴图跨缝不一致。
         </footer>
         <div className="glass rounded-2xl p-4 border border-[#2e2e32] bg-[#16161a] shrink-0">
-          <div className="text-[9px] font-black text-gray-500 uppercase mb-2">本地伴侣任务事件流（闭环调试）</div>
-          <p className="text-[9px] text-gray-500 mb-2">
-            用于查看 `task.accepted → reply.delta → reply.completed/failed` 链路。可直接把当前页面 OBJ/贴图提交到本地伴侣并自动跟踪。
+          <div className="text-[10px] font-bold text-gray-300 mb-1">在本机完成修缝（可选）</div>
+          <p className="text-[9px] text-gray-500 mb-3 leading-relaxed">
+            若已安装本地伴侣，可一键把当前 OBJ/贴图传到本机处理；完成后修复图会自动出现在上方预览。
           </p>
           <input
             type="text"
             value={companionProjectId}
             onChange={(e) => setCompanionProjectId(e.target.value)}
-            placeholder="companion projectId（例如 demo-seam）"
+            placeholder="本机项目名（可保留默认）"
             className="w-full px-3 py-2 rounded-xl bg-[#101014] border border-[#2e2e32] text-[11px] text-white placeholder-gray-600 focus:border-blue-500 focus:outline-none mb-2"
             autoComplete="off"
           />
-          <input
-            type="text"
-            value={companionJobId}
-            onChange={(e) => setCompanionJobId(e.target.value)}
-            placeholder="请输入 companion jobId"
-            className="w-full px-3 py-2 rounded-xl bg-[#101014] border border-[#2e2e32] text-[11px] text-white placeholder-gray-600 focus:border-blue-500 focus:outline-none"
-            autoComplete="off"
-          />
-          <div className="flex flex-wrap gap-2 mt-2">
+          <div className="flex flex-wrap gap-2">
             <button
               type="button"
               onClick={() => void submitToCompanionAndTrack()}
               disabled={companionSubmitBusy}
               className="px-3 py-1.5 rounded-lg border border-[#3b82f6] text-[10px] font-bold text-blue-300 hover:bg-[#1d3e66] transition-colors disabled:opacity-60"
             >
-              {companionSubmitBusy ? '提交中…' : '提交到本地伴侣并跟踪'}
+              {companionSubmitBusy ? '提交中…' : '上传到本机修缝'}
             </button>
-            <button
-              type="button"
-              onClick={() => void pullCompanionEvents(true)}
-              disabled={companionEventsBusy || companionSubmitBusy}
-              className="px-3 py-1.5 rounded-lg bg-[#26262c] hover:bg-[#383842] border border-[#2e2e32] text-[10px] font-bold text-gray-200 transition-colors disabled:opacity-60"
-            >
-              {companionEventsBusy ? '拉取中…' : '重置并拉取'}
-            </button>
-            <button
-              type="button"
-              onClick={() => void pullCompanionEvents(false)}
-              disabled={companionEventsBusy || companionSubmitBusy}
-              className="px-3 py-1.5 rounded-lg bg-[#26262c] hover:bg-[#383842] border border-[#2e2e32] text-[10px] font-bold text-gray-200 transition-colors disabled:opacity-60"
-            >
-              增量拉取
-            </button>
-            <button
-              type="button"
-              onClick={() => setCompanionEventsAuto((v) => !v)}
-              className="px-3 py-1.5 rounded-lg border border-[#2e2e32] text-[10px] font-bold text-gray-200 hover:bg-[#222228] transition-colors"
-            >
-              {companionEventsAuto ? '停止自动轮询' : '开启自动轮询'}
-            </button>
+            {companionCompleted &&
+            typeof latestCompanionEvent?.payload?.outputKey === 'string' &&
+            latestCompanionEvent.payload.outputKey.trim() ? (
+              <button
+                type="button"
+                onClick={() => {
+                  const latest = companionEvents.length ? companionEvents[companionEvents.length - 1] : null;
+                  const key = latest?.payload?.outputKey;
+                  if (typeof key === 'string' && key.trim() && latest) {
+                    void applyCompanionRepairOutput(key.trim(), `${latest.jobId}:${latest.seq}`, { force: true });
+                  }
+                }}
+                className="px-3 py-1.5 rounded-lg border border-[#3b82f6] text-[10px] font-bold text-blue-300 hover:bg-[#1d3e66] transition-colors"
+              >
+                重新载入本机结果
+              </button>
+            ) : null}
           </div>
-          <p className="text-[9px] text-gray-500 mt-2">
-            当前 cursor：<code className="text-gray-400">{companionAfterSeq}</code>
-          </p>
           {latestCompanionEvent ? (
-            <p className="text-[9px] text-gray-500 mt-1">
-              最新事件：<code className="text-gray-400">{latestCompanionEvent.type}</code> / seq=
-              <code className="text-gray-400">{latestCompanionEvent.seq}</code>
+            <p className="text-[10px] text-gray-300 mt-2">
+              本机任务：<span className="text-white">{companionJobStatusHuman(latestCompanionEvent)}</span>
             </p>
           ) : null}
-          {companionEventsHint ? <p className="text-[10px] text-gray-300 mt-1">{companionEventsHint}</p> : null}
+          {companionEventsHint ? <p className="text-[10px] text-gray-400 mt-1">{companionEventsHint}</p> : null}
           {(companionFailed || companionCompleted) ? (
             <div className="mt-2 flex flex-wrap gap-2">
               {companionFailed ? (
@@ -882,7 +867,7 @@ const SeamRepairSection: React.FC<{ onLog?: (level: 'info' | 'warn' | 'error', m
                   disabled={companionSubmitBusy}
                   className="px-3 py-1.5 rounded-lg border border-[#b45309] text-[10px] font-bold text-amber-300 hover:bg-[#3a2a12] transition-colors disabled:opacity-60"
                 >
-                  失败后重试提交
+                  再试一次
                 </button>
               ) : null}
               <button
@@ -890,37 +875,58 @@ const SeamRepairSection: React.FC<{ onLog?: (level: 'info' | 'warn' | 'error', m
                 onClick={openCompanionConsole}
                 className="px-3 py-1.5 rounded-lg border border-[#2e2e32] text-[10px] font-bold text-gray-200 hover:bg-[#222228] transition-colors"
               >
-                打开本地控制台排查
+                打开本机管理页
               </button>
               <button
                 type="button"
                 onClick={() => void copyCompanionDiagnostics()}
                 className="px-3 py-1.5 rounded-lg border border-[#2e2e32] text-[10px] font-bold text-gray-200 hover:bg-[#222228] transition-colors"
               >
-                复制排障信息
+                复制诊断信息
               </button>
-              {companionCompleted &&
-              typeof latestCompanionEvent?.payload?.outputKey === 'string' &&
-              latestCompanionEvent.payload.outputKey.trim() ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    const latest = companionEvents.length ? companionEvents[companionEvents.length - 1] : null;
-                    const key = latest?.payload?.outputKey;
-                    if (typeof key === 'string' && key.trim() && latest) {
-                      void applyCompanionRepairOutput(key.trim(), `${latest.jobId}:${latest.seq}`, { force: true });
-                    }
-                  }}
-                  className="px-3 py-1.5 rounded-lg border border-[#3b82f6] text-[10px] font-bold text-blue-300 hover:bg-[#1d3e66] transition-colors"
-                >
-                  重新从伴侣加载输出贴图
-                </button>
-              ) : null}
             </div>
           ) : null}
-          <pre className="mt-2 text-[9px] text-gray-500 whitespace-pre-wrap break-all max-h-44 overflow-y-auto">
-            {companionEvents.length ? JSON.stringify(companionEvents.slice(-80), null, 2) : '（暂无事件）'}
-          </pre>
+          <details className="mt-3 rounded-lg border border-[#2e2e32] bg-[#101014] p-2">
+            <summary className="cursor-pointer text-[9px] font-bold text-gray-500 list-none marker:content-none [&::-webkit-details-marker]:hidden">
+              高级：任务编号与详细日志
+            </summary>
+            <input
+              type="text"
+              value={companionJobId}
+              onChange={(e) => setCompanionJobId(e.target.value)}
+              placeholder="任务编号（一般无需填写）"
+              className="w-full px-3 py-2 rounded-xl bg-[#0c0c10] border border-[#2e2e32] text-[11px] text-white placeholder-gray-600 focus:border-blue-500 focus:outline-none mt-2"
+              autoComplete="off"
+            />
+            <div className="flex flex-wrap gap-2 mt-2">
+              <button
+                type="button"
+                onClick={() => void pullCompanionEvents(true)}
+                disabled={companionEventsBusy || companionSubmitBusy}
+                className="px-3 py-1.5 rounded-lg bg-[#26262c] hover:bg-[#383842] border border-[#2e2e32] text-[10px] font-bold text-gray-200 transition-colors disabled:opacity-60"
+              >
+                {companionEventsBusy ? '刷新中…' : '从头刷新'}
+              </button>
+              <button
+                type="button"
+                onClick={() => void pullCompanionEvents(false)}
+                disabled={companionEventsBusy || companionSubmitBusy}
+                className="px-3 py-1.5 rounded-lg bg-[#26262c] hover:bg-[#383842] border border-[#2e2e32] text-[10px] font-bold text-gray-200 transition-colors disabled:opacity-60"
+              >
+                仅看新进度
+              </button>
+              <button
+                type="button"
+                onClick={() => setCompanionEventsAuto((v) => !v)}
+                className="px-3 py-1.5 rounded-lg border border-[#2e2e32] text-[10px] font-bold text-gray-200 hover:bg-[#222228] transition-colors"
+              >
+                {companionEventsAuto ? '停止自动跟随' : '自动跟随进度'}
+              </button>
+            </div>
+            <pre className="mt-2 text-[9px] text-gray-500 whitespace-pre-wrap break-all max-h-36 overflow-y-auto">
+              {companionEvents.length ? JSON.stringify(companionEvents.slice(-80), null, 2) : '（暂无）'}
+            </pre>
+          </details>
         </div>
       </div>
       </div>

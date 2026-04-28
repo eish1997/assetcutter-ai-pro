@@ -1,6 +1,6 @@
 # 本地伴侣（`@assetcutter/local-companion`）
 
-本仓库内的 **可运行本地宿主**：Node 进程监听 `127.0.0.1`，提供 **浏览器控制台** 与 **`/v1/*` HTTP API**（与主站「设置 → 本地伴侣」探测兼容）。**产品目标（已决）**：**Electron** 安装包 + **托盘必选 + 主窗口可选**；详见 `docs/本地伴侣-待决策清单与建议.md`。本目录为开发期 Node 宿主。
+本仓库内的 **可运行本地宿主**：Node 进程监听 `127.0.0.1`，提供 **浏览器本机管理页** 与 **`/v1/*` HTTP API**（与主站「设置 → 本地伴侣」探测兼容）。**产品目标（已决）**：**Electron** 安装包 + **托盘必选 + 主窗口可选**；详见 `docs/本地伴侣-待决策清单与建议.md`。本目录为开发期 Node 宿主。
 
 ## 功能（当前）
 
@@ -34,7 +34,7 @@ npm run dev
 | `COMPANION_RELAY_CMD` | 可选。整行 shell 命令，启动后拉起 Relay（如 `local-bridge`）。 |
 | `COMPANION_RELAY_CHILD_HTTP_PORT` | 子进程 `COMPANION_HTTP_PORT`：`0`（默认）、端口数字、或 **`keep`**。 |
 | `COMPANION_ALLOWED_ORIGINS` | 可选。逗号分隔 **Origin** 白名单；未设则 CORS 仍宽松。支持 **`http://localhost:*`**、**`http://127.0.0.1:*`**。 |
-| `COMPANION_SHARED_TOKEN` | 可选。非空时除健康检查与控制台静态页外需 **`Authorization: Bearer …`**；与主站设置「配对 Token」一致。 |
+| `COMPANION_SHARED_TOKEN` | 可选。非空时除健康检查与管理页静态资源外需 **`Authorization: Bearer …`**；与主站设置「本机通信密码」一致。 |
 | `COMPANION_SEAM_REPAIR_URL` | 可选。WebSeamRepair 修缝 API，默认 **`http://127.0.0.1:8008/api/repair`**。 |
 | `COMPANION_SEAM_REPAIR_TIMEOUT_MS` | 可选。修缝 HTTP 超时（毫秒），默认 **`120000`**，范围约 `5000`～`600000`。 |
 

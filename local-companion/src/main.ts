@@ -26,7 +26,7 @@ async function main(): Promise<void> {
 
   const srv = await startCompanionHttpServer(port);
   const base = `http://127.0.0.1:${srv.port}`;
-  console.log(`[local-companion] 控制台 ${base}/`);
+  console.log(`[local-companion] 本机管理页 ${base}/`);
   console.log(`[local-companion] health ${base}/v1/health`);
   console.log(`[local-companion] 卷根 COMPANION_VOLUME_ROOT=${process.env.COMPANION_VOLUME_ROOT ?? '(默认 ~/.assetcutter-companion/volume)'}`);
   console.log('[local-companion] 存储 API: GET /v1/projects , GET|PUT /v1/projects/:id/assets/:key');
