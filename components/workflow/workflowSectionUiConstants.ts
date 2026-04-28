@@ -31,8 +31,8 @@ export const TITLE_ROW_QUEUE_CHIP = `${TOP_CTRL_H} flex items-center gap-1.5 rou
 
 export const TITLE_ROW_DROPDOWN_TRIGGER = `${TOP_CTRL_H} min-w-[4.75rem] px-2 inline-flex items-center justify-center rounded-md bg-white/[0.05] ring-1 ring-white/[0.06] text-[8px] font-black text-gray-200 hover:bg-white/[0.09] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/45`;
 
-/** 画布 / 仓库卡片默认外沿（非选中、非组强调） */
-export const WORKFLOW_CARD_SURFACE_IDLE = 'ring-1 ring-white/[0.08] border-0';
+/** 画布 / 仓库卡片默认外沿（非选中、非组强调）；与选中态同为 ring-2，避免切换时 1px 级布局跳动 */
+export const WORKFLOW_CARD_SURFACE_IDLE = 'ring-2 ring-white/[0.06] border-0';
 
 /** 小标签 pill（版本数等） */
 export const WORKFLOW_META_PILL =

@@ -22,7 +22,15 @@
     "dev:r2-api": "node --env-file=.env.local server/r2-storage-api.js",
     "start:r2-api": "node server/r2-storage-api.js",
     "seed:admin": "node scripts/seed-admin.js",
-    "migrate:auth-to-postgres": "node scripts/migrate-auth-json-to-postgres.js"
+    "migrate:auth-to-postgres": "node scripts/migrate-auth-json-to-postgres.js",
+    "local-companion:dev": "npm run dev --prefix local-companion",
+    "local-companion:start": "npm run start --prefix local-companion",
+    "companion-desktop:start": "npm run start --prefix companion-desktop",
+    "companion-desktop:pack": "npm run pack --prefix companion-desktop",
+    "companion-desktop:dist:win": "npm run dist:win --prefix companion-desktop",
+    "companion-desktop:dist:portable": "npm run dist:portable --prefix companion-desktop",
+    "companion-desktop:dist:retry": "powershell -NoProfile -ExecutionPolicy Bypass -File \"scripts/companion-desktop-dist.ps1\" -Target both -Retries 3",
+    "companion-desktop:release:check": "powershell -NoProfile -ExecutionPolicy Bypass -File \"scripts/companion-desktop-release-check.ps1\""
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.926.0",

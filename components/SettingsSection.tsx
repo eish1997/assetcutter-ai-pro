@@ -32,12 +32,38 @@ import {
   subscribeAiSettingsCrossTab,
 } from '../services/settingsStore';
 import { isWorkspaceCloudEnabled } from '../services/workspaceCloudSync';
+import {
+  getCompanionLocalBaseUrl,
+  getCompanionLocalToken,
+  setCompanionLocalBaseUrl,
+  setCompanionLocalToken,
+  normalizeCompanionBaseUrl,
+} from '../services/companionLocalPrefs';
+import {
+  createCompanionJobEventStream,
+  listCompanionProjects,
+  listCompanionJobEvents,
+  type CompanionJobEventV1,
+  probeCompanionCapabilities,
+  probeCompanionHealth,
+} from '../services/companionClient';
+import {
+  clearCompanionJobCursor,
+  getCompanionJobCursor,
+  setCompanionJobCursor,
+} from '../services/companionJobCursorStore';
+import {
+  clearCompanionJobTerminalEvent,
+  getCompanionJobTerminalEvent,
+  saveCompanionJobTerminalEvent,
+} from '../services/companionJobTerminalStore';
 import { CustomDropdown, DROPDOWN_TRIGGER_COMPACT } from './ui/CustomDropdown';
 import type { AuthUser } from '../services/authClient';
 
 const SETTINGS_NAV: { id: string; label: string }[] = [
   { id: 'settings-user', label: '用户' },
   { id: 'settings-storage', label: '数据与存储' },
+  { id: 'settings-companion', label: '本地伴侣' },
   { id: 'settings-api', label: 'API' },
 ];
 
@@ -49,6 +75,13 @@ const AI_PROVIDER_OPTIONS: { value: AiProvider; label: string }[] = [
   { value: 'antigravity', label: 'Antigravity Tools（本机 OpenAI 兼容反代）' },
   { value: 'vectorengine', label: '向量引擎 VectorEngine（Gemini 原生 REST）' },
 ];
+
+const COMPANION_SETTINGS_STREAM_STATE_KEY = 'ac_companion_settings_stream_state_v2';
+const TERMINAL_JOB_EVENT_TYPES = new Set<CompanionJobEventV1['type']>([
+  'reply.completed',
+  'task.failed',
+  'task.cancelled',
+]);
 
 const SettingsSection: React.FC<{
   currentUser?: AuthUser | null;
@@ -82,11 +115,76 @@ const SettingsSection: React.FC<{
   const [avatarLinkDraft, setAvatarLinkDraft] = useState('');
   const [prefsUiHint, setPrefsUiHint] = useState('');
   const avatarFileInputRef = useRef<HTMLInputElement>(null);
+  const [companionBaseDraft, setCompanionBaseDraft] = useState('');
+  const [companionTokenDraft, setCompanionTokenDraft] = useState('');
+  const [companionProbeBusy, setCompanionProbeBusy] = useState(false);
+  const [companionProbeHint, setCompanionProbeHint] = useState('');
+  const [companionHealthSnippet, setCompanionHealthSnippet] = useState('');
+  const [companionCapSnippet, setCompanionCapSnippet] = useState('');
+  const [companionRelaySnippet, setCompanionRelaySnippet] = useState('');
+  const [companionSeamSnippet, setCompanionSeamSnippet] = useState('');
+  const [companionProjectsBusy, setCompanionProjectsBusy] = useState(false);
+  const [companionProjectsSnippet, setCompanionProjectsSnippet] = useState('');
+  const [companionJobIdDraft, setCompanionJobIdDraft] = useState('');
+  const [companionJobEventsBusy, setCompanionJobEventsBusy] = useState(false);
+  const [companionJobEvents, setCompanionJobEvents] = useState<CompanionJobEventV1[]>([]);
+  const [companionJobAfterSeq, setCompanionJobAfterSeq] = useState(0);
+  const [companionJobEventsHint, setCompanionJobEventsHint] = useState('');
+  const [companionJobEventsAuto, setCompanionJobEventsAuto] = useState(false);
+  const [companionStreamMode, setCompanionStreamMode] = useState<'idle' | 'sse' | 'poll'>('idle');
 
   useEffect(() => {
     const u = userUiPrefs.avatarUrl.trim();
     setAvatarLinkDraft(/^https?:\/\//i.test(u) ? u : '');
   }, [userUiPrefs.avatarUrl]);
+
+  useEffect(() => {
+    setCompanionBaseDraft(getCompanionLocalBaseUrl());
+    setCompanionTokenDraft(getCompanionLocalToken());
+  }, []);
+
+  useEffect(() => {
+    try {
+      const raw = globalThis.localStorage?.getItem(COMPANION_SETTINGS_STREAM_STATE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as {
+        jobId?: string;
+        afterSeq?: number;
+        auto?: boolean;
+      };
+      if (parsed.jobId) setCompanionJobIdDraft(parsed.jobId);
+      if (Number.isFinite(parsed.afterSeq)) setCompanionJobAfterSeq(Math.max(0, Math.floor(parsed.afterSeq ?? 0)));
+      if (typeof parsed.auto === 'boolean') setCompanionJobEventsAuto(parsed.auto);
+      if (parsed.jobId) {
+        const sharedCursor = getCompanionJobCursor(parsed.jobId);
+        if (sharedCursor > 0) {
+          setCompanionJobAfterSeq((prev) => Math.max(prev, sharedCursor));
+        }
+        const snap = getCompanionJobTerminalEvent(parsed.jobId);
+        if (snap && TERMINAL_JOB_EVENT_TYPES.has(snap.type)) {
+          setCompanionJobEvents([snap]);
+          setCompanionJobAfterSeq((prev) => Math.max(prev, snap.seq));
+        }
+      }
+    } catch {
+      /* ignore malformed session state */
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      const payload = JSON.stringify({
+        jobId: companionJobIdDraft.trim(),
+        afterSeq: companionJobAfterSeq,
+        auto: companionJobEventsAuto,
+      });
+      globalThis.localStorage?.setItem(COMPANION_SETTINGS_STREAM_STATE_KEY, payload);
+      const jid = companionJobIdDraft.trim();
+      if (jid) setCompanionJobCursor(jid, companionJobAfterSeq);
+    } catch {
+      /* ignore */
+    }
+  }, [companionJobAfterSeq, companionJobEventsAuto, companionJobIdDraft]);
 
   const reloadApiSettingsFromStore = useCallback(() => {
     setAiProviderState(getAiProvider());
@@ -193,6 +291,249 @@ const SettingsSection: React.FC<{
       setUserActionBusy(null);
     }
   };
+
+  const handleSaveCompanionBase = () => {
+    setCompanionLocalBaseUrl(companionBaseDraft);
+    setCompanionBaseDraft(getCompanionLocalBaseUrl());
+    setCompanionProbeHint('已保存本机探测地址');
+    setTimeout(() => setCompanionProbeHint(''), 2500);
+  };
+
+  const handleSaveCompanionToken = () => {
+    setCompanionLocalToken(companionTokenDraft);
+    setCompanionTokenDraft(getCompanionLocalToken());
+    setCompanionProbeHint('已保存配对 Token（与宿主 COMPANION_SHARED_TOKEN 一致时才能调 API）');
+    setTimeout(() => setCompanionProbeHint(''), 2500);
+  };
+
+  const handleProbeCompanion = async () => {
+    const base = normalizeCompanionBaseUrl(companionBaseDraft);
+    setCompanionProbeBusy(true);
+    setCompanionProbeHint('');
+    setCompanionHealthSnippet('');
+    setCompanionCapSnippet('');
+    setCompanionRelaySnippet('');
+    setCompanionSeamSnippet('');
+    try {
+      const [h, c] = await Promise.all([probeCompanionHealth(base), probeCompanionCapabilities(base)]);
+      const parts: string[] = [];
+      if (h.ok) {
+        parts.push(`健康检查：成功${h.latencyMs != null ? `（${h.latencyMs}ms）` : ''}`);
+        setCompanionHealthSnippet(
+          typeof h.body === 'string' ? h.body.slice(0, 800) : JSON.stringify(h.body, null, 2).slice(0, 1200),
+        );
+      } else {
+        parts.push(`健康检查：失败 — ${h.error ?? '未知错误'}`);
+      }
+      if (c.ok) {
+        parts.push(`能力清单：成功${c.latencyMs != null ? `（${c.latencyMs}ms）` : ''}`);
+        setCompanionCapSnippet(
+          typeof c.body === 'string' ? c.body.slice(0, 800) : JSON.stringify(c.body, null, 2).slice(0, 1200),
+        );
+        if (c.body && typeof c.body === 'object' && !Array.isArray(c.body)) {
+          const cap = c.body as Record<string, unknown>;
+          const relay = cap.relay;
+          const compute = cap.compute as Record<string, unknown> | undefined;
+          const seamRepair = compute?.seamRepair;
+          setCompanionRelaySnippet(relay != null ? JSON.stringify(relay, null, 2) : '（capabilities 无 relay）');
+          setCompanionSeamSnippet(
+            seamRepair != null ? JSON.stringify(seamRepair, null, 2) : '（capabilities.compute 无 seamRepair）',
+          );
+        }
+      } else {
+        parts.push(`能力清单：失败 — ${c.error ?? '未知错误'}`);
+      }
+      setCompanionProbeHint(parts.join('；'));
+    } finally {
+      setCompanionProbeBusy(false);
+    }
+  };
+
+  const companionConsoleHref = `${normalizeCompanionBaseUrl(companionBaseDraft)}/`;
+
+  const handleListCompanionProjects = async () => {
+    const base = normalizeCompanionBaseUrl(companionBaseDraft);
+    setCompanionProjectsBusy(true);
+    setCompanionProjectsSnippet('');
+    try {
+      const r = await listCompanionProjects(base);
+      if (r.ok === false) {
+        setCompanionProjectsSnippet(`失败：${r.error}${r.status != null ? `（HTTP ${r.status}）` : ''}`);
+        return;
+      }
+      setCompanionProjectsSnippet(JSON.stringify(r.data, null, 2));
+    } catch (e) {
+      setCompanionProjectsSnippet(String(e));
+    } finally {
+      setCompanionProjectsBusy(false);
+    }
+  };
+
+  const pullCompanionJobEvents = useCallback(
+    async (resetCursor = false) => {
+      const jobId = companionJobIdDraft.trim();
+      if (!jobId) {
+        setCompanionJobEventsHint('请先填写 jobId');
+        return;
+      }
+      const base = normalizeCompanionBaseUrl(companionBaseDraft);
+      setCompanionJobEventsBusy(true);
+      setCompanionJobEventsHint('');
+      const sharedCursor = getCompanionJobCursor(jobId);
+      const afterSeq = resetCursor ? 0 : Math.max(companionJobAfterSeq, sharedCursor);
+      if (resetCursor) {
+        setCompanionJobEvents([]);
+        setCompanionJobAfterSeq(0);
+        clearCompanionJobCursor(jobId);
+        clearCompanionJobTerminalEvent(jobId);
+      }
+      try {
+        const r = await listCompanionJobEvents(base, jobId, afterSeq, 80);
+        if (r.ok === false) {
+          setCompanionJobEventsHint(`拉取失败：${r.error}${r.status != null ? `（HTTP ${r.status}）` : ''}`);
+          return;
+        }
+        const incoming = Array.isArray(r.data.events) ? r.data.events : [];
+        if (incoming.length) {
+          setCompanionJobEvents((prev) => {
+            const seen = new Set(prev.map((e) => e.seq));
+            const merged = [...prev, ...incoming.filter((e) => !seen.has(e.seq))];
+            return merged.sort((a, b) => a.seq - b.seq).slice(-300);
+          });
+        }
+        const next = r.data.nextAfterSeq ?? afterSeq;
+        setCompanionJobAfterSeq(next);
+        setCompanionJobCursor(jobId, next);
+        setCompanionJobEventsHint(
+          `事件 ${incoming.length} 条${r.latencyMs != null ? `（${r.latencyMs}ms）` : ''}；cursor=${next}`,
+        );
+      } catch (e) {
+        setCompanionJobEventsHint(`拉取异常：${e instanceof Error ? e.message : String(e)}`);
+      } finally {
+        setCompanionJobEventsBusy(false);
+      }
+    },
+    [companionBaseDraft, companionJobAfterSeq, companionJobIdDraft],
+  );
+
+  useEffect(() => {
+    if (!companionJobEventsAuto) {
+      setCompanionStreamMode('idle');
+      return;
+    }
+    const jobId = companionJobIdDraft.trim();
+    if (!jobId) return;
+    const base = normalizeCompanionBaseUrl(companionBaseDraft);
+    const afterSeq = Math.max(companionJobAfterSeq, getCompanionJobCursor(jobId));
+    const stream = createCompanionJobEventStream(base, jobId, afterSeq);
+    let closed = false;
+    setCompanionStreamMode('sse');
+    setCompanionJobEventsHint((prev) => prev || '已连接 SSE 事件流');
+
+    const onJobEvent = (ev: MessageEvent) => {
+      let parsed: CompanionJobEventV1 | null = null;
+      try {
+        parsed = JSON.parse(ev.data) as CompanionJobEventV1;
+      } catch {
+        return;
+      }
+      if (!parsed || typeof parsed.seq !== 'number') return;
+      setCompanionJobEvents((prev) => {
+        const seen = new Set(prev.map((e) => e.seq));
+        const merged = seen.has(parsed.seq) ? prev : [...prev, parsed];
+        return merged.sort((a, b) => a.seq - b.seq).slice(-300);
+      });
+      const seq = parsed.seq;
+      setCompanionJobAfterSeq((prev) => {
+        const next = Math.max(prev, seq);
+        setCompanionJobCursor(jobId, next);
+        return next;
+      });
+    };
+    const onJobEnd = () => {
+      setCompanionJobEventsHint('SSE 事件流已结束（任务终态）');
+      setCompanionStreamMode('idle');
+      stream.close();
+    };
+    const onError = () => {
+      if (closed) return;
+      setCompanionStreamMode('poll');
+      setCompanionJobEventsHint('SSE 不可用，已回退轮询');
+      stream.close();
+    };
+    stream.addEventListener('job.event', onJobEvent as EventListener);
+    stream.addEventListener('job.end', onJobEnd as EventListener);
+    stream.onerror = onError;
+    return () => {
+      closed = true;
+      stream.removeEventListener('job.event', onJobEvent as EventListener);
+      stream.removeEventListener('job.end', onJobEnd as EventListener);
+      stream.close();
+    };
+  }, [companionBaseDraft, companionJobAfterSeq, companionJobEventsAuto, companionJobIdDraft]);
+
+  useEffect(() => {
+    if (!companionJobEventsAuto) return;
+    if (companionStreamMode === 'sse') return;
+    if (!companionJobIdDraft.trim()) return;
+    setCompanionStreamMode('poll');
+    const t = window.setInterval(() => {
+      void pullCompanionJobEvents(false);
+    }, 2500);
+    return () => window.clearInterval(t);
+  }, [companionJobEventsAuto, companionJobIdDraft, companionStreamMode, pullCompanionJobEvents]);
+
+  useEffect(() => {
+    const latest = companionJobEvents.length ? companionJobEvents[companionJobEvents.length - 1] : null;
+    if (!latest || !TERMINAL_JOB_EVENT_TYPES.has(latest.type)) return;
+    if (!companionJobEventsAuto) return;
+    setCompanionJobEventsAuto(false);
+    setCompanionStreamMode('idle');
+    setCompanionJobEventsHint(`任务已到终态：${latest.type}（已停止自动跟踪）`);
+  }, [companionJobEvents, companionJobEventsAuto]);
+
+  useEffect(() => {
+    const latest = companionJobEvents.length ? companionJobEvents[companionJobEvents.length - 1] : null;
+    if (!latest || !TERMINAL_JOB_EVENT_TYPES.has(latest.type)) return;
+    saveCompanionJobTerminalEvent(latest);
+  }, [companionJobEvents]);
+
+  useEffect(() => {
+    if (!companionJobIdDraft.trim()) return;
+    if (companionJobEvents.length > 0) return;
+    void pullCompanionJobEvents(false);
+  }, [companionJobEvents.length, companionJobIdDraft, pullCompanionJobEvents]);
+
+  const openCompanionConsole = useCallback(() => {
+    const base = normalizeCompanionBaseUrl(companionBaseDraft);
+    window.open(`${base}/`, '_blank', 'noopener,noreferrer');
+  }, [companionBaseDraft]);
+
+  const copyCompanionJobDiagnostics = useCallback(async () => {
+    const latest = companionJobEvents.length ? companionJobEvents[companionJobEvents.length - 1] : null;
+    const content = JSON.stringify(
+      {
+        jobId: companionJobIdDraft.trim(),
+        cursor: companionJobAfterSeq,
+        hint: companionJobEventsHint,
+        latestEvent: latest,
+      },
+      null,
+      2,
+    );
+    try {
+      await navigator.clipboard.writeText(content);
+      setCompanionJobEventsHint('已复制排障信息（jobId/cursor/latestEvent）');
+    } catch {
+      setCompanionJobEventsHint('复制失败：浏览器未授予剪贴板权限');
+    }
+  }, [companionJobAfterSeq, companionJobEvents, companionJobEventsHint, companionJobIdDraft]);
+
+  const latestCompanionJobEvent = companionJobEvents.length
+    ? companionJobEvents[companionJobEvents.length - 1]
+    : null;
+  const companionJobFailed = latestCompanionJobEvent?.type === 'task.failed';
+  const companionJobCompleted = latestCompanionJobEvent?.type === 'reply.completed';
 
   return (
     <div className="flex flex-col h-full min-h-[60vh]">
@@ -404,6 +745,211 @@ const SettingsSection: React.FC<{
                   <li>流程图片等可走对象存储，<strong className="text-gray-400">工作区云空间</strong>有 per-user 配额（默认约 200MB，管理员可调）；与工作流 JSON 的本地缓存是两套概念。</li>
                   <li>大图以独立对象上传，不在单次 JSON 请求里塞满 base64，便于跨设备与省本地配额。</li>
                 </ul>
+              </div>
+            </section>
+
+            <section id="settings-companion" className="scroll-mt-4 rounded-2xl border border-[#2e2e32] bg-[#121214] p-6">
+              <h2 className="text-xs font-black uppercase tracking-wider text-blue-400/90 mb-4">本地伴侣</h2>
+              <div className="rounded-xl border border-[#252528] p-4 space-y-4 text-[10px] text-gray-400 leading-relaxed">
+                <p className="text-[9px] text-gray-500">
+                  本机可运行 <code className="text-gray-400">local-companion</code>（仓库 <code className="text-gray-400">local-companion/</code>）或 A-Driver
+                  <code className="text-gray-400"> local-bridge</code>；默认根地址 <code className="text-gray-400">http://127.0.0.1:18765</code> 用于探测与打开控制台。
+                  下方「拉取项目 id」调用伴侣 <code className="text-gray-400">GET /v1/projects</code>（需 <code className="text-gray-400">local-companion</code> 已启动）。
+                  若宿主启用了 <code className="text-gray-400">COMPANION_SHARED_TOKEN</code>，请在本页填写相同 Token；<code className="text-gray-400">COMPANION_ALLOWED_ORIGINS</code> 须包含当前站点 Origin（如{' '}
+                  <code className="text-gray-400">http://localhost:5173</code> 或 <code className="text-gray-400">http://127.0.0.1:*</code>）。
+                </p>
+                <div className="space-y-2">
+                  <label className="block text-[9px] text-gray-500 uppercase tracking-wide">HTTP 根地址</label>
+                  <input
+                    type="url"
+                    value={companionBaseDraft}
+                    onChange={(e) => setCompanionBaseDraft(e.target.value)}
+                    placeholder="http://127.0.0.1:18765"
+                    className="w-full px-3 py-2 rounded-xl bg-[#16161a] border border-[#2e2e32] text-[11px] text-white placeholder-gray-600 focus:border-blue-500 focus:outline-none"
+                    autoComplete="off"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="block text-[9px] text-gray-500 uppercase tracking-wide">配对 Token（可选，与 COMPANION_SHARED_TOKEN 一致）</label>
+                  <input
+                    type="password"
+                    value={companionTokenDraft}
+                    onChange={(e) => setCompanionTokenDraft(e.target.value)}
+                    placeholder="未启用宿主 Token 时可留空"
+                    className="w-full px-3 py-2 rounded-xl bg-[#16161a] border border-[#2e2e32] text-[11px] text-white placeholder-gray-600 focus:border-blue-500 focus:outline-none"
+                    autoComplete="off"
+                  />
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={handleSaveCompanionBase}
+                    className="px-4 py-2 rounded-xl bg-[#26262c] hover:bg-[#383842] border border-[#2e2e32] text-[10px] font-bold text-gray-200 transition-colors"
+                  >
+                    保存地址
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSaveCompanionToken}
+                    className="px-4 py-2 rounded-xl bg-[#26262c] hover:bg-[#383842] border border-[#2e2e32] text-[10px] font-bold text-gray-200 transition-colors"
+                  >
+                    保存 Token
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleProbeCompanion()}
+                    disabled={companionProbeBusy}
+                    className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-[10px] font-black uppercase text-white transition-colors disabled:opacity-60"
+                  >
+                    {companionProbeBusy ? '检测中…' : '检测连接'}
+                  </button>
+                  <a
+                    href={companionConsoleHref}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center px-4 py-2 rounded-xl border border-[#3f3f46] text-[10px] font-bold text-gray-300 hover:bg-[#222228] transition-colors"
+                  >
+                    打开本地控制台
+                  </a>
+                  <button
+                    type="button"
+                    onClick={() => void handleListCompanionProjects()}
+                    disabled={companionProjectsBusy}
+                    className="px-4 py-2 rounded-xl bg-[#26262c] hover:bg-[#383842] border border-[#2e2e32] text-[10px] font-bold text-gray-200 transition-colors disabled:opacity-60"
+                  >
+                    {companionProjectsBusy ? '拉取中…' : '拉取项目 id'}
+                  </button>
+                </div>
+                {companionProbeHint ? <p className="text-[10px] text-gray-300">{companionProbeHint}</p> : null}
+                {companionHealthSnippet ? (
+                  <details className="rounded-lg border border-[#2e2e32] bg-[#16161a] p-3">
+                    <summary className="cursor-pointer text-[9px] font-bold text-gray-400 uppercase tracking-wide">
+                      /v1/health 响应摘要
+                    </summary>
+                    <pre className="mt-2 text-[9px] text-gray-500 whitespace-pre-wrap break-all max-h-40 overflow-y-auto">
+                      {companionHealthSnippet}
+                    </pre>
+                  </details>
+                ) : null}
+                {companionCapSnippet ? (
+                  <details className="rounded-lg border border-[#2e2e32] bg-[#16161a] p-3">
+                    <summary className="cursor-pointer text-[9px] font-bold text-gray-400 uppercase tracking-wide">
+                      /v1/capabilities 响应摘要
+                    </summary>
+                    <pre className="mt-2 text-[9px] text-gray-500 whitespace-pre-wrap break-all max-h-40 overflow-y-auto">
+                      {companionCapSnippet}
+                    </pre>
+                  </details>
+                ) : null}
+                {companionRelaySnippet ? (
+                  <details className="rounded-lg border border-[#2e2e32] bg-[#16161a] p-3">
+                    <summary className="cursor-pointer text-[9px] font-bold text-gray-400 uppercase tracking-wide">
+                      Relay（capabilities.relay）
+                    </summary>
+                    <pre className="mt-2 text-[9px] text-gray-500 whitespace-pre-wrap break-all max-h-32 overflow-y-auto">
+                      {companionRelaySnippet}
+                    </pre>
+                  </details>
+                ) : null}
+                {companionSeamSnippet ? (
+                  <details className="rounded-lg border border-[#2e2e32] bg-[#16161a] p-3">
+                    <summary className="cursor-pointer text-[9px] font-bold text-gray-400 uppercase tracking-wide">
+                      修缝（capabilities.compute.seamRepair）
+                    </summary>
+                    <pre className="mt-2 text-[9px] text-gray-500 whitespace-pre-wrap break-all max-h-32 overflow-y-auto">
+                      {companionSeamSnippet}
+                    </pre>
+                  </details>
+                ) : null}
+                {companionProjectsSnippet ? (
+                  <details className="rounded-lg border border-[#2e2e32] bg-[#16161a] p-3">
+                    <summary className="cursor-pointer text-[9px] font-bold text-gray-400 uppercase tracking-wide">
+                      GET /v1/projects
+                    </summary>
+                    <pre className="mt-2 text-[9px] text-gray-500 whitespace-pre-wrap break-all max-h-40 overflow-y-auto">
+                      {companionProjectsSnippet}
+                    </pre>
+                  </details>
+                ) : null}
+                <div className="rounded-lg border border-[#2e2e32] bg-[#16161a] p-3 space-y-3">
+                  <p className="text-[9px] font-bold text-gray-400 uppercase tracking-wide">闭环事件流（/v1/compute/jobs/:jobId/events）</p>
+                  <input
+                    type="text"
+                    value={companionJobIdDraft}
+                    onChange={(e) => setCompanionJobIdDraft(e.target.value)}
+                    placeholder="填一个已提交任务的 jobId"
+                    className="w-full px-3 py-2 rounded-xl bg-[#101014] border border-[#2e2e32] text-[11px] text-white placeholder-gray-600 focus:border-blue-500 focus:outline-none"
+                    autoComplete="off"
+                  />
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void pullCompanionJobEvents(true)}
+                      disabled={companionJobEventsBusy}
+                      className="px-3 py-1.5 rounded-lg bg-[#26262c] hover:bg-[#383842] border border-[#2e2e32] text-[10px] font-bold text-gray-200 transition-colors disabled:opacity-60"
+                    >
+                      {companionJobEventsBusy ? '拉取中…' : '重置并拉取'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void pullCompanionJobEvents(false)}
+                      disabled={companionJobEventsBusy}
+                      className="px-3 py-1.5 rounded-lg bg-[#26262c] hover:bg-[#383842] border border-[#2e2e32] text-[10px] font-bold text-gray-200 transition-colors disabled:opacity-60"
+                    >
+                      增量拉取
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCompanionJobEventsAuto((v) => !v)}
+                      className="px-3 py-1.5 rounded-lg border border-[#2e2e32] text-[10px] font-bold text-gray-200 hover:bg-[#222228] transition-colors"
+                    >
+                      {companionJobEventsAuto ? '停止自动轮询' : '开启自动轮询'}
+                    </button>
+                  </div>
+                  <p className="text-[9px] text-gray-500">
+                    当前 cursor：<code className="text-gray-400">{companionJobAfterSeq}</code>
+                  </p>
+                  {latestCompanionJobEvent ? (
+                    <p className="text-[9px] text-gray-500">
+                      最新事件：<code className="text-gray-400">{latestCompanionJobEvent.type}</code> / seq=
+                      <code className="text-gray-400">{latestCompanionJobEvent.seq}</code>
+                    </p>
+                  ) : null}
+                  {companionJobEventsHint ? <p className="text-[10px] text-gray-300">{companionJobEventsHint}</p> : null}
+                  {(companionJobFailed || companionJobCompleted) ? (
+                    <div className="flex flex-wrap gap-2">
+                      {companionJobFailed ? (
+                        <button
+                          type="button"
+                          onClick={() => void pullCompanionJobEvents(true)}
+                          disabled={companionJobEventsBusy}
+                          className="px-3 py-1.5 rounded-lg border border-[#b45309] text-[10px] font-bold text-amber-300 hover:bg-[#3a2a12] transition-colors disabled:opacity-60"
+                        >
+                          重置游标并重拉
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={openCompanionConsole}
+                        className="px-3 py-1.5 rounded-lg border border-[#2e2e32] text-[10px] font-bold text-gray-200 hover:bg-[#222228] transition-colors"
+                      >
+                        打开本地控制台排查
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void copyCompanionJobDiagnostics()}
+                        className="px-3 py-1.5 rounded-lg border border-[#2e2e32] text-[10px] font-bold text-gray-200 hover:bg-[#222228] transition-colors"
+                      >
+                        复制排障信息
+                      </button>
+                    </div>
+                  ) : null}
+                  <pre className="text-[9px] text-gray-500 whitespace-pre-wrap break-all max-h-48 overflow-y-auto">
+                    {companionJobEvents.length
+                      ? JSON.stringify(companionJobEvents.slice(-80), null, 2)
+                      : '（暂无事件）'}
+                  </pre>
+                </div>
               </div>
             </section>
 

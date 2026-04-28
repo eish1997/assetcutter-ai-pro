@@ -369,7 +369,7 @@ export type WorkflowAsset = {
   textTitle?: string;
   /** 文字资产正文 */
   textBody?: string;
-  /** 原始输入图 base64 或外链；云端可仅保留 originalObjectKey 由 hydrate 填回；文字资产可为空串 */
+  /** 原始输入图 base64 或外链；云端可仅保留 originalObjectKey 由 hydrate 填回；文字资产可为空串；本地 3D 导入可先为 SVG 占位，后台生成 JPEG 快照后写回供网格缩略图 */
   original: string;
   /** R2 对象键（users/.../assets/<id>/original.xxx），与 original 二选一存在云端 JSON */
   originalObjectKey?: string;
@@ -377,6 +377,10 @@ export type WorkflowAsset = {
   displayKey: string;
   /** 各类型生成结果图 base64（key 为能力模块 id） */
   results: Record<string, string>;
+  /** 关联 3D 模型下载地址（可选）；用于大图预览切换到 3D 视口 */
+  modelUrls?: string[];
+  /** 本地 blob 模型无 URL 后缀时，用原始文件名推断格式（.glb/.fbx/.obj 等） */
+  modelSourceName?: string;
   /** 各步骤结果在 R2 的键，hydrate 后写回 results */
   resultsObjectKeys?: Record<string, string>;
   /** 所属组的唯一 ID，null/undefined = 不在任何组 */

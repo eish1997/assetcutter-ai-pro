@@ -3,7 +3,7 @@
  */
 
 /** 当前已接入注册表的图片类模式（平面仍由内联实现，不走路由懒加载） */
-export type RegisteredImagePreviewMode = 'image.flat' | 'image.equirect';
+export type RegisteredImagePreviewMode = 'image.flat' | 'image.equirect' | 'image.model3d';
 
 /** 未来可扩展为 model.glb | pointcloud | splat | video 等 */
 export type PreviewMode = RegisteredImagePreviewMode | (string & {});
@@ -29,7 +29,7 @@ export type PreviewViewerInputPolicy = {
 };
 
 export function previewPolicyForMode(mode: PreviewMode): PreviewViewerInputPolicy {
-  if (mode === 'image.equirect') {
+  if (mode === 'image.equirect' || mode === 'image.model3d') {
     return { captureGlobalWheel: true };
   }
   return { captureGlobalWheel: false };

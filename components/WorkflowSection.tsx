@@ -31,7 +31,7 @@ import {
 } from '../services/vgp/vgpStore';
 import { WorkflowGenerationRecordPanel } from './WorkflowGenerationRecordPanel';
 import { triggerImageDownload } from '../services/imageDataUrl';
-import { readLocalJson, workflowFavoritesStorageKey, writeLocalJson } from '../services/clientPersist';
+import { readLocalJson, scopedStorageKey, workflowFavoritesStorageKey, writeLocalJson } from '../services/clientPersist';
 import {
   buildWorkflowImageTags,
   normalizeWorkflowTagMapToChinese,
@@ -45,6 +45,7 @@ import { WorkflowCapabilityHoverPreview } from './WorkflowCapabilityHoverPreview
 import { WorkflowGridImage } from './ProgressivePreviewImage';
 import WorkflowPixelBusyOverlay from './WorkflowPixelBusyOverlay';
 import { workflowSafeImgSrc } from '../services/workflowImageDisplay';
+import { previewSrcCacheFingerprint } from '../services/workflowImageThumb';
 import {
   type AcWorkflowExportPayload,
   DT_AC_CAPABILITY_ACTION,
@@ -121,9 +122,42 @@ import {
 } from './workflow/workflowCardAspect';
 import { groupCapabilityPresetsByCategory } from './workflow/workflowCapabilityGroups';
 import { WorkflowSidebarColumn, type WorkflowSidebarFavoriteEntry } from './workflow/WorkflowSidebarColumn';
+import WorkspaceQuickComposeBar from './WorkspaceQuickComposeBar';
 import { buildWorkflowComposerSeedFromTwoPresets } from './workflow/buildWorkflowComposerSeed';
 import type { CapabilityAssetCandidate } from './CapabilitySetCanvas';
 import { BUILTIN_IMAGE_PROCESS_IDS } from '../services/capabilityPresetStore';
+import {
+  formatWorkflowModelPreviewLimitLabel,
+  revokeWorkflowModelBlobUrlsAfterAssetRemoved,
+  workflowLocalModelFileExceedsPreviewLimit,
+} from '../services/workflowModelBlob';
+import { captureWorkflowModelThumbnailDataUrl } from '../services/workflowModelPreviewCapture';
+
+const WORKFLOW_MODEL_EXT_RE = /\.(glb|gltf|fbx|obj)$/i;
+
+function isWorkflowModelFile(file: File): boolean {
+  const name = file.name || '';
+  if (WORKFLOW_MODEL_EXT_RE.test(name)) return true;
+  const t = (file.type || '').toLowerCase();
+  if (t === 'model/gltf-binary' || t.includes('gltf')) return true;
+  return false;
+}
+
+function workflowModelItemLooksLikeModel(it: DataTransferItem): boolean {
+  if (it.kind !== 'file') return false;
+  const f = it.getAsFile();
+  if (f && isWorkflowModelFile(f)) return true;
+  const wk = it as DataTransferItem & { webkitGetAsEntry?: () => FileSystemEntry | null };
+  try {
+    const ent = wk.webkitGetAsEntry?.();
+    if (ent && ent.isFile) {
+      return WORKFLOW_MODEL_EXT_RE.test((ent as FileSystemFileEntry).name || '');
+    }
+  } catch {
+    /* ignore */
+  }
+  return false;
+}
 
 const WorkflowComposerOverlay = lazy(() => import('./WorkflowComposerOverlay'));
 
@@ -369,6 +403,9 @@ const WorkflowSection: React.FC<{
     placeholderText?: string;
     requireNonEmpty?: boolean;
   } | null>(null);
+  const [quickComposeDraft, setQuickComposeDraft] = useState('');
+  const [quickComposeImage, setQuickComposeImage] = useState<string | null>(null);
+  const [quickComposeActionId, setQuickComposeActionId] = useState('');
   const [showAllInGroup, setShowAllInGroup] = useState(false);
   /** 组筛选 ID：用于查看组内资产 */
   const [groupFilterId, setGroupFilterId] = useState<string | null>(null);
@@ -711,7 +748,19 @@ const WorkflowSection: React.FC<{
     return ((a.textResults || {})[a.displayKey] ?? '').trim();
   };
   const getAssetDisplayTypeLabel = (a: WorkflowAsset): string => {
-    if (isWorkflowTextAsset(a)) return '文字';
+    if (isWorkflowTextAsset(a)) {
+      const dk = (a.displayKey || 'original').trim() || 'original';
+      if (dk !== 'original') {
+        const img = asWorkflowImageString((a.results as Record<string, unknown>)[dk]).trim();
+        if (img && !img.includes('image/svg+xml')) {
+          if (dk === 'cut_image') return '切割';
+          const baseId = baseActionId(dk);
+          return getModule(baseId)?.label ?? baseId;
+        }
+      }
+      return '文字';
+    }
+    if ((a.modelUrls?.length ?? 0) > 0 && a.displayKey === 'original') return '3D 模型';
     if (a.displayKey === 'original') return '原始';
     if (a.displayKey === 'cut_image') return '切割';
     const baseId = baseActionId(a.displayKey);
@@ -743,6 +792,30 @@ const WorkflowSection: React.FC<{
 <text x="64" y="136" fill="#60a5fa" font-size="24" font-weight="700">文本预览</text>
 <text x="64" y="188" fill="#f8fafc" font-size="42" font-weight="700">${title}</text>
 ${lineSvg}
+</svg>`;
+    return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+  }, []);
+  const buildWorkflowModelPlaceholderDataUrl = useCallback((fileNameRaw: string): string => {
+    const esc = (s: string) =>
+      s
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    const base = esc((fileNameRaw || '').trim() || 'model.bin');
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000">
+<defs>
+  <linearGradient id="wfm" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0%" stop-color="#0f172a"/>
+    <stop offset="100%" stop-color="#020617"/>
+  </linearGradient>
+</defs>
+<rect width="1600" height="1000" fill="url(#wfm)"/>
+<rect x="48" y="48" width="1504" height="904" rx="32" fill="#111827" stroke="#38bdf8" stroke-width="2" stroke-opacity="0.35"/>
+<text x="64" y="136" fill="#38bdf8" font-size="24" font-weight="700">3D 模型</text>
+<text x="64" y="228" fill="#f8fafc" font-size="34" font-weight="600">本地预览</text>
+<text x="64" y="296" fill="#94a3b8" font-size="26">${base}</text>
 </svg>`;
     return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
   }, []);
@@ -810,13 +883,22 @@ ${lineSvg}
       const mod =
         actionModules.find((m) => m.id === actionType) ??
         capabilityPresets.find((p) => p.id === actionType);
+      const inputImage = getAssetDisplayImage(asset);
       if (isWorkflowTextAsset(asset)) {
-        if (!mod || !workflowPresetAcceptsTextCardDrag(mod)) {
-          onLog?.('warn', '文字资产请拖入「文字能力」或「生图」类预设');
+        const textPresetOk = mod && workflowPresetAcceptsTextCardDrag(mod);
+        const textRasterOk =
+          mod &&
+          !workflowPresetAcceptsTextCardDrag(mod) &&
+          workflowAssetAllowedForCapabilityDrop(asset, mod) &&
+          inputImage.trim() !== '';
+        if (!mod || (!textPresetOk && !textRasterOk)) {
+          onLog?.(
+            'warn',
+            '文字资产请拖入文生文/文生图类能力；若已对正文做过文生图，请将卡片切换到该图版本后再拖入图生图、图像处理、图生文等'
+          );
           return null;
         }
       }
-      const inputImage = getAssetDisplayImage(asset);
       const inputTextFromCard =
         options?.inputText ??
         (isWorkflowTextAsset(asset) ? workflowAssetToInputText(asset) : undefined);
@@ -1239,6 +1321,7 @@ ${lineSvg}
                   newGroup,
                 ];
 
+                revokeWorkflowModelBlobUrlsAfterAssetRemoved(taskAsset, next);
                 return next;
               });
 
@@ -1434,9 +1517,24 @@ ${lineSvg}
           else onLog?.('warn', '无法读取图片，无法提交生成 3D');
           return;
         }
-        if (mod && !isWorkflowTextAsset(targetAsset) && !workflowAssetAllowedForCapabilityDrop(targetAsset, mod)) {
+        if (mod && !workflowAssetAllowedForCapabilityDrop(targetAsset, mod)) {
           onLog?.('warn', '该能力与当前资产类型不匹配');
           return;
+        }
+        if (mod && isWorkflowTextAsset(targetAsset)) {
+          const img = getAssetDisplayImage(targetAsset);
+          const textPresetOk = workflowPresetAcceptsTextCardDrag(mod);
+          const textRasterOk =
+            !textPresetOk &&
+            workflowAssetAllowedForCapabilityDrop(targetAsset, mod) &&
+            img.trim() !== '';
+          if (!textPresetOk && !textRasterOk) {
+            onLog?.(
+              'warn',
+              '文字资产请使用文生文/文生图，或将卡片切换到文生图结果后再使用图类能力'
+            );
+            return;
+          }
         }
       }
       const task = makePendingTaskForAsset(targetAsset.id, trimmed, undefined);
@@ -1459,6 +1557,116 @@ ${lineSvg}
       setPending,
     ]
   );
+
+  const submitQuickCompose = useCallback(() => {
+    const mod =
+      actionModules.find((m) => m.id === quickComposeActionId) ??
+      capabilityPresets.find((p) => p.id === quickComposeActionId);
+    if (!mod || mod.disabled) {
+      onLog?.('warn', '底部快捷栏：请在下拉中选择一个能力');
+      return;
+    }
+    const text = quickComposeDraft.trim();
+    const img = quickComposeImage;
+
+    if (!text && !img) {
+      onLog?.('warn', '底部快捷栏：请输入文字或点击 + 添加图片');
+      return;
+    }
+
+    if (img) {
+      const probe = attachInitialVgpToNewAsset({
+        id: '__qc_probe__',
+        original: img,
+        displayKey: 'original',
+        results: {},
+        resultOrder: [],
+        archived: false,
+        hiddenInGrid: true,
+        createdAt: Date.now(),
+      });
+      if (!workflowAssetAllowedForCapabilityDrop(probe, mod)) {
+        onLog?.(
+          'warn',
+          '底部快捷栏：当前能力与图片输入不匹配（文生类需纯文字）。有图时请选图生图/图生文等；仅文字请去掉图片并选文生文/文生图'
+        );
+        return;
+      }
+      const newId = uuid();
+      const newAsset = attachInitialVgpToNewAsset({
+        id: newId,
+        original: img,
+        displayKey: 'original',
+        results: {},
+        resultOrder: [],
+        archived: false,
+        hiddenInGrid: true,
+        createdAt: Date.now(),
+      });
+      const newTask: WorkflowPendingTask = {
+        id: uuid(),
+        assetId: newId,
+        actionType: mod.id,
+        inputImage: img,
+        addedAt: Date.now(),
+        inputSourceDisplayKey: 'original',
+        ...(text ? { promptOverride: text } : {}),
+      };
+      setAssets((prev) => [...prev, newAsset]);
+      if (executing) {
+        setPending((prev) => [...prev, newTask]);
+      } else {
+        void executePending([newTask, ...pendingRef.current]);
+      }
+    } else {
+      if (!workflowPresetAcceptsTextCardDrag(mod)) {
+        onLog?.('warn', '底部快捷栏：纯文字请选用「文生文」或「文生图」类能力');
+        return;
+      }
+      const body = clampWorkflowTextBody(text);
+      const newId = uuid();
+      const asset = attachInitialVgpToNewAsset({
+        id: newId,
+        original: '',
+        displayKey: 'original',
+        results: {},
+        resultOrder: [],
+        archived: false,
+        hiddenInGrid: false,
+        createdAt: Date.now(),
+        assetKind: 'text',
+        textTitle: '',
+        textBody: body,
+      });
+      const task = buildPendingTaskFromAssetSnapshot(asset, asset.id, mod.id);
+      if (!task) {
+        onLog?.('warn', '底部快捷栏：无法创建任务');
+        return;
+      }
+      setAssets((prev) => [...prev, asset]);
+      if (executing) {
+        setPending((prev) => [...prev, task]);
+      } else {
+        void executePending([task, ...pendingRef.current]);
+      }
+    }
+
+    setQuickComposeDraft('');
+    setQuickComposeImage(null);
+    onLog?.('info', '底部快捷栏：已加入执行队列');
+  }, [
+    quickComposeActionId,
+    quickComposeDraft,
+    quickComposeImage,
+    actionModules,
+    capabilityPresets,
+    onLog,
+    setAssets,
+    setPending,
+    executing,
+    executePending,
+    buildPendingTaskFromAssetSnapshot,
+  ]);
 
   const cancelQueuedTaskInBatch = useCallback((taskId: string) => {
     if (!taskId) return;
@@ -1526,10 +1734,8 @@ ${lineSvg}
           newGroup,
         ];
 
-        return next.map((a) => {
-          if (a.id === task.assetId) return a; // 原资产已被移除
-          return a;
-        });
+        revokeWorkflowModelBlobUrlsAfterAssetRemoved(taskAsset, next);
+        return next;
       });
       if (task.sourceGroupAssetId != null && task.sourceItemIndex != null) {
         replaceGroupItemWithSubAsset(task.sourceGroupAssetId, task.sourceItemIndex, task.assetId);
@@ -1618,29 +1824,147 @@ ${lineSvg}
     });
   }, [groupFilterId, setAssets]);
 
+  const addModelsFromFiles = useCallback(
+    (files: File[]) => {
+      const skippedOversized: string[] = [];
+      const modelFiles = files
+        .filter((f) => isWorkflowModelFile(f))
+        .filter((f) => {
+          if (workflowLocalModelFileExceedsPreviewLimit(f.size)) {
+            skippedOversized.push(f.name || '未命名');
+            return false;
+          }
+          return true;
+        })
+        .slice(0, 50);
+      if (skippedOversized.length) {
+        const cap = 5;
+        const head = skippedOversized.slice(0, cap).join('、');
+        const tail = skippedOversized.length > cap ? ` 等 ${skippedOversized.length} 个` : '';
+        onLog?.(
+          'warn',
+          `以下模型超过本地预览上限（${formatWorkflowModelPreviewLimitLabel()}），已跳过：${head}${tail}`
+        );
+      }
+      const batchBase = Date.now();
+      const n = modelFiles.length;
+      const ratio = clampWorkflowCardAspectRatio(1600, 1000);
+      modelFiles.forEach((file, fileIdx) => {
+        const newId = uuid();
+        const blobUrl = URL.createObjectURL(file);
+        const placeholder = buildWorkflowModelPlaceholderDataUrl(file.name);
+        setCardAspectByAssetId((prev) => (prev[newId] != null ? prev : { ...prev, [newId]: ratio }));
+        setThumbUnlockKeys((prev) => {
+          if (prev.has(newId)) return prev;
+          const next = new Set(prev);
+          next.add(newId);
+          return next;
+        });
+        setThumbHotKeys((prev) => {
+          if (prev.has(newId)) return prev;
+          const next = new Set(prev);
+          next.add(newId);
+          return next;
+        });
+        setAssets((prev) => {
+          const parentGroup = groupFilterId ? prev.find((a) => a.id === groupFilterId) : null;
+          const newAsset: WorkflowAsset = attachInitialVgpToNewAsset({
+            id: newId,
+            original: placeholder,
+            displayKey: 'original',
+            results: {},
+            resultOrder: [],
+            modelUrls: [blobUrl],
+            modelSourceName: file.name,
+            archived: false,
+            hiddenInGrid: false,
+            createdAt: batchBase + (n - 1 - fileIdx),
+            ...(parentGroup ? { groupId: parentGroup.id } : {}),
+          });
+          if (!parentGroup) {
+            return [...prev, newAsset];
+          }
+          return prev
+            .map((a) => {
+              if (a.id === parentGroup.id) {
+                return { ...a, assetIds: [...(a.assetIds ?? []), newId] };
+              }
+              return a;
+            })
+            .concat(newAsset);
+        });
+        void captureWorkflowModelThumbnailDataUrl({
+          modelSrc: blobUrl,
+          modelFileName: file.name,
+        }).then((thumb) => {
+          if (!thumb) return;
+          const thumbRatio = clampWorkflowCardAspectRatio(1280, 800);
+          setAssets((prev) => {
+            if (!prev.some((x) => x.id === newId)) return prev;
+            return prev.map((x) => {
+              if (x.id !== newId) return x;
+              const stillBlob = (x.modelUrls || []).some((u) => u === blobUrl);
+              if (!stillBlob) return x;
+              const o = String(x.original || '');
+              if (!o.includes('image/svg+xml')) return x;
+              return { ...x, original: thumb };
+            });
+          });
+          setCardAspectByAssetId((prev) => ({ ...prev, [newId]: thumbRatio }));
+        });
+      });
+    },
+    [buildWorkflowModelPlaceholderDataUrl, groupFilterId, onLog, setAssets]
+  );
+
   const handleBatchUploadCorrect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files?.length) return;
-    addImagesFromFiles(Array.from(files));
+    const list = Array.from(files);
+    addImagesFromFiles(list);
+    addModelsFromFiles(list);
     e.target.value = '';
   };
 
-  const hasImageFileTransfer = useCallback((dt?: DataTransfer | null) => {
+  const hasWorkflowDropTransfer = useCallback((dt?: DataTransfer | null) => {
     if (!dt) return false;
+    const types = dt.types ? Array.from(dt.types) : [];
     if (dt.files?.length) {
       for (let i = 0; i < dt.files.length; i += 1) {
-        if (dt.files[i].type?.startsWith('image/')) return true;
+        const f = dt.files[i];
+        if (f.type?.startsWith('image/')) return true;
+        if (isWorkflowModelFile(f)) return true;
       }
     }
     if (dt.items?.length) {
       for (let i = 0; i < dt.items.length; i += 1) {
-        if (dt.items[i].kind === 'file' && dt.items[i].type?.startsWith('image/')) return true;
+        const it = dt.items[i];
+        if (it.kind === 'file' && it.type?.startsWith('image/')) return true;
+        if (workflowModelItemLooksLikeModel(it)) return true;
+        // dragover 阶段：.glb/.fbx 等常为 '' 或 application/octet-stream，且 getAsFile 可能为空
+        if (it.kind === 'file') {
+          const t = (it.type || '').toLowerCase();
+          if (t === '' || t === 'application/octet-stream') return true;
+        }
       }
     }
-    const types = dt.types ? Array.from(dt.types) : [];
     if (types.includes('text/uri-list') || types.includes('text/html')) return true;
+    // 部分浏览器在 dragover 时暂不暴露 items，仅含 Files
+    if (types.includes('Files')) return true;
     return false;
   }, []);
+
+  /** 处理系统拖入的本机文件（图片 + 工作区模型）；有消费则返回 true */
+  const ingestWorkflowFilesFromDataTransfer = useCallback((dt: DataTransfer | null | undefined) => {
+    if (!dt) return false;
+    const allFiles = Array.from(dt.files || []);
+    const imageFiles = allFiles.filter((f) => f.type?.startsWith('image/'));
+    const modelFiles = allFiles.filter((f) => isWorkflowModelFile(f));
+    if (imageFiles.length === 0 && modelFiles.length === 0) return false;
+    if (imageFiles.length) addImagesFromFiles(imageFiles);
+    if (modelFiles.length) addModelsFromFiles(modelFiles);
+    return true;
+  }, [addImagesFromFiles, addModelsFromFiles]);
   const collectImageLikeUrlsFromDataTransfer = useCallback(async (dt?: DataTransfer | null) => {
     if (!dt) return [] as string[];
     const urls = new Set<string>();
@@ -1769,7 +2093,7 @@ ${lineSvg}
     const onWindowDragOver = (e: DragEvent) => {
       if (showArchived) return;
       if (isGlobalUploadBlockedTarget(e.target)) return;
-      if (!hasImageFileTransfer(e.dataTransfer)) return;
+      if (!hasWorkflowDropTransfer(e.dataTransfer)) return;
       e.preventDefault();
     };
 
@@ -1777,13 +2101,9 @@ ${lineSvg}
       if (showArchived) return;
       if (isGlobalUploadBlockedTarget(e.target)) return;
       const dt = e.dataTransfer;
-      if (!hasImageFileTransfer(dt)) return;
+      if (!hasWorkflowDropTransfer(dt)) return;
       e.preventDefault();
-      const files = Array.from(dt?.files || []).filter((f) => f.type?.startsWith('image/'));
-      if (files.length) {
-        addImagesFromFiles(files);
-        return;
-      }
+      if (ingestWorkflowFilesFromDataTransfer(dt)) return;
       void (async () => {
         const urls = await collectImageLikeUrlsFromDataTransfer(dt);
         if (!urls.length) return;
@@ -1798,7 +2118,15 @@ ${lineSvg}
       window.removeEventListener('dragover', onWindowDragOver);
       window.removeEventListener('drop', onWindowDrop);
     };
-  }, [addImagesFromFiles, collectImageLikeUrlsFromDataTransfer, fetchImageFilesFromUrls, hasImageFileTransfer, isGlobalUploadBlockedTarget, showArchived]);
+  }, [
+    addImagesFromFiles,
+    collectImageLikeUrlsFromDataTransfer,
+    fetchImageFilesFromUrls,
+    hasWorkflowDropTransfer,
+    ingestWorkflowFilesFromDataTransfer,
+    isGlobalUploadBlockedTarget,
+    showArchived,
+  ]);
 
   const visibleAssets = useMemo(() => {
     const base = assets.filter((a) => !a.archived && !a.inRepository);
@@ -2148,6 +2476,10 @@ ${lineSvg}
 
   const lightboxAsset = lightboxAssetId ? assets.find((a) => a.id === lightboxAssetId) : null;
   const lightboxShowsImage = Boolean(lightboxAsset && getAssetDisplayImage(lightboxAsset).trim());
+  const lightboxModelUrls = useMemo(
+    () => (lightboxAsset?.modelUrls || []).map((u) => String(u || '').trim()).filter(Boolean),
+    [lightboxAsset?.modelUrls]
+  );
   const lightboxList = useMemo(
     () =>
       sortRootWorkflowAssetsNewestFirst(
@@ -2262,15 +2594,9 @@ ${lineSvg}
     setAssets((prev) => prev.map((a) => (a.id === assetId ? { ...a, displayKey: key } : a)));
   };
 
+  /** 文字/图片/组内子项：统一用 resultOrder 版本链（与滚轮切换一致），不按资产类型区分 */
   const getDisplayKeysForAsset = (a: WorkflowAsset): string[] => {
     const keys: string[] = ['original'];
-    if (isWorkflowTextAsset(a)) {
-      (a.resultOrder || []).forEach((k) => {
-        if ((a.textResults || {})[k] || asWorkflowImageString(a.results?.[k]).trim()) keys.push(k);
-      });
-      return keys;
-    }
-    // 组卡片不需要额外的 cut_image 版本键
     (a.resultOrder || []).forEach((k) => {
       if (baseActionId(k) !== 'cut_image') keys.push(k);
     });
@@ -2454,7 +2780,12 @@ ${lineSvg}
   };
 
   const removeAsset = useCallback((assetId: string) => {
-    setAssets((prev) => prev.filter((a) => a.id !== assetId));
+    setAssets((prev) => {
+      const removed = prev.find((a) => a.id === assetId);
+      const next = prev.filter((a) => a.id !== assetId);
+      if (removed) revokeWorkflowModelBlobUrlsAfterAssetRemoved(removed, next);
+      return next;
+    });
     setPending((prev) => prev.filter((t) => t.assetId !== assetId));
     if (lightboxAssetId === assetId) setLightboxAssetId(null);
     if (archivedDetailAssetId === assetId) setArchivedDetailAssetId(null);
@@ -3019,6 +3350,58 @@ ${lineSvg}
       })
       .filter((x): x is WorkflowSidebarFavoriteEntry => x != null);
   }, [favoriteActionIds, capabilitySets, actionModules]);
+
+  const quickComposeStorageKey = useMemo(
+    () => scopedStorageKey('workflow_quick_compose_action', preferenceScope),
+    [preferenceScope]
+  );
+
+  const quickComposeOptions = useMemo(() => {
+    const out: { value: string; label: string }[] = [];
+    const seen = new Set<string>();
+    const allowEngine = (p: CustomAppModule) => {
+      const eng = getCapabilityEngine(p);
+      if (eng === 'gen_image' || eng === 'gen_text') return true;
+      if (eng === 'builtin' && p.category === 'image_to_image') return true;
+      return false;
+    };
+    for (const e of favoriteEntries) {
+      if (e.kind !== 'module') continue;
+      const p = e.mod;
+      if (p.disabled || p.id === 'cut_image' || p.category === 'generate_3d') continue;
+      if (!allowEngine(p)) continue;
+      seen.add(p.id);
+      out.push({ value: p.id, label: p.label });
+    }
+    for (const p of capabilityPresets) {
+      if (p.disabled || seen.has(p.id) || p.id === 'cut_image' || p.category === 'generate_3d') continue;
+      if (!allowEngine(p)) continue;
+      seen.add(p.id);
+      out.push({ value: p.id, label: p.label });
+    }
+    return out;
+  }, [favoriteEntries, capabilityPresets]);
+
+  useEffect(() => {
+    if (quickComposeOptions.length === 0) {
+      setQuickComposeActionId('');
+      return;
+    }
+    const saved = readLocalJson<string>(quickComposeStorageKey, '', (parsed) =>
+      typeof parsed === 'string' ? parsed : null
+    );
+    setQuickComposeActionId((cur) => {
+      if (cur && quickComposeOptions.some((o) => o.value === cur)) return cur;
+      if (saved && quickComposeOptions.some((o) => o.value === saved)) return saved;
+      return quickComposeOptions[0]!.value;
+    });
+  }, [quickComposeOptions, quickComposeStorageKey]);
+
+  useEffect(() => {
+    if (!quickComposeActionId) return;
+    writeLocalJson(quickComposeStorageKey, quickComposeActionId);
+  }, [quickComposeActionId, quickComposeStorageKey]);
+
   const removeActionFromFavorite = useCallback((actionId: string) => {
     setFavoriteActionIds((prev) => prev.filter((id) => id !== actionId));
   }, []);
@@ -3070,7 +3453,12 @@ ${lineSvg}
           if (source.kind === 'root') {
             const effectiveIds = getEffectiveAssetIdsForAction(source.assetIds).filter((id) => {
               const x = assets.find((a) => a.id === id);
-              return x != null && workflowAssetAllowedForCapabilityDrop(x, mod);
+              if (x == null || !workflowAssetAllowedForCapabilityDrop(x, mod)) return false;
+              if (isWorkflowTextAsset(x)) {
+                if (workflowPresetAcceptsTextCardDrag(mod)) return true;
+                return getAssetDisplayImage(x).trim() !== '';
+              }
+              return true;
             });
             effectiveIds.forEach((id) => {
               const a = assets.find((x) => x.id === id);
@@ -3095,7 +3483,12 @@ ${lineSvg}
               // 新版 assetIds 是字符串数组
               if (Array.isArray(cut) && typeof item === 'string') {
                 const child = assets.find((x) => x.id === item);
-                if (child && workflowAssetAllowedForCapabilityDrop(child, mod)) {
+                if (!child || !workflowAssetAllowedForCapabilityDrop(child, mod)) continue;
+                const passChildText =
+                  !isWorkflowTextAsset(child) ||
+                  workflowPresetAcceptsTextCardDrag(mod) ||
+                  (workflowAssetAllowedForCapabilityDrop(child, mod) && getAssetDisplayImage(child).trim() !== '');
+                if (passChildText) {
                   targets.push({
                     assetId: child.id,
                     inputImage: getAssetDisplayImage(child),
@@ -3116,7 +3509,12 @@ ${lineSvg}
                 });
               } else if (item && typeof item === 'object' && 'assetId' in item) {
                 const child = assets.find((x) => x.id === (item as { assetId: string }).assetId);
-                if (child && workflowAssetAllowedForCapabilityDrop(child, mod)) {
+                if (!child || !workflowAssetAllowedForCapabilityDrop(child, mod)) continue;
+                const passLegacyChildText =
+                  !isWorkflowTextAsset(child) ||
+                  workflowPresetAcceptsTextCardDrag(mod) ||
+                  (workflowAssetAllowedForCapabilityDrop(child, mod) && getAssetDisplayImage(child).trim() !== '');
+                if (passLegacyChildText) {
                   targets.push({
                     assetId: child.id,
                     inputImage: getAssetDisplayImage(child),
@@ -3197,7 +3595,12 @@ ${lineSvg}
         if (source.kind === 'root') {
           const effectiveIds = getEffectiveAssetIdsForAction(source.assetIds).filter((id) => {
             const x = assets.find((a) => a.id === id);
-            return x != null && workflowAssetAllowedForCapabilityDrop(x, mod);
+            if (x == null || !workflowAssetAllowedForCapabilityDrop(x, mod)) return false;
+            if (isWorkflowTextAsset(x)) {
+              if (workflowPresetAcceptsTextCardDrag(mod)) return true;
+              return getAssetDisplayImage(x).trim() !== '';
+            }
+            return true;
           });
           if (mod.category === 'generate_3d' && onAddGenerate3DJob) {
             const firstId = effectiveIds[0];
@@ -3813,7 +4216,13 @@ ${lineSvg}
                 )}
                 <label className={`${TITLE_ROW_BTN_NEUTRAL} cursor-pointer`}>
                   导入图片
-                  <input type="file" className="hidden" accept="image/*" multiple onChange={handleBatchUploadCorrect} />
+                  <input
+                    type="file"
+                    className="hidden"
+                    accept="image/*,.glb,.gltf,.fbx,.obj"
+                    multiple
+                    onChange={handleBatchUploadCorrect}
+                  />
                 </label>
                 {onOpenLibraryPicker && (
                   <button
@@ -4180,6 +4589,7 @@ ${lineSvg}
   );
 
   return (
+    <>
     <div className="flex h-full min-h-0 flex-col gap-2">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
       <div className={`flex flex-col items-stretch gap-1.5 shrink-0 ${WORKFLOW_EDGE_GUTTER}`}>
@@ -4280,7 +4690,7 @@ ${lineSvg}
               {topTitleColumns.map((item) => (
                 <div key={item.title} className="flex shrink-0 items-center gap-1 pr-1">
                   <span
-                    className="max-w-[4.5rem] shrink-0 truncate text-[8px] font-black uppercase tracking-wide text-blue-300/90"
+                    className="max-w-[6.5rem] min-w-0 whitespace-normal break-words line-clamp-2 leading-tight text-[8px] font-black uppercase tracking-wide text-blue-300/90"
                     title={item.desc}
                   >
                     {item.title}
@@ -4405,7 +4815,7 @@ ${lineSvg}
           onWheelCapture={handleCenterWheelDuringDrag}
           onDragOver={(e) => {
             autoScrollContainerOnDrag(e.currentTarget as HTMLElement, e.clientY);
-            if (!hasImageFileTransfer(e.dataTransfer)) return;
+            if (!hasWorkflowDropTransfer(e.dataTransfer)) return;
             e.preventDefault();
           }}
           tabIndex={0}
@@ -4478,7 +4888,7 @@ ${lineSvg}
                               thumbDecodePriority={thumbHotKeys.has(gallKey) ? 'high' : 'low'}
                               imageFetchPriority={thumbHotKeys.has(gallKey) ? 'high' : 'auto'}
                               className="relative z-0 block w-full h-full min-h-[5rem]"
-                              imgClassName="relative z-0 block w-full h-full object-contain"
+                              imgClassName="relative z-0 block w-full h-full object-cover"
                               draggable={false}
                               onDragStart={(e) => e.preventDefault()}
                               onIntrinsicSize={(w, h) => {
@@ -4569,9 +4979,10 @@ ${lineSvg}
                                 !!childTextDisplay ||
                                 !!(childAsset.textTitle || '').trim() ||
                                 Object.values(childAsset.textResults || {}).some((v) => String(v || '').trim() !== '');
-                              const childGridCacheKey = childIsGroup
+                              const childGridCacheKeyBase = childIsGroup
                                 ? `${childAsset.id}:${childAsset.displayKey}:g${cSafe}`
                                 : `${childAsset.id}:${childAsset.displayKey}`;
+                              const childGridCacheKey = `${childGridCacheKeyBase}:fp${previewSrcCacheFingerprint(childGridPreviewSrc)}`;
                               const childSetRunUi = capabilitySetRunByAssetId[childAsset.id];
                               const showChildSetRunProgress =
                                 isExecutingCurrentItem &&
@@ -4601,11 +5012,11 @@ ${lineSvg}
                                   }}
                                   className={`group relative rounded-2xl overflow-hidden bg-[#16161a] ${
                                     selectedGroupItemKeys.has(groupKey)
-                                      ? 'border border-blue-500 ring-2 ring-blue-500/50'
+                                      ? 'border-0 ring-2 ring-blue-500/50'
                                       : dragOverGroupItemKey === groupKey
-                                      ? 'border border-blue-500 ring-2 ring-blue-500/50'
+                                      ? 'border-0 ring-2 ring-blue-500/50'
                                       : childIsGroup
-                                      ? 'border border-blue-400'
+                                      ? 'border-0 ring-2 ring-blue-400/45'
                                       : WORKFLOW_CARD_SURFACE_IDLE
                                   } ${childSetRunAccentClass} transition-transform duration-150 ease-out will-change-transform ${motionClass}`}
                                   draggable={!isBusyGroupItem}
@@ -4638,6 +5049,10 @@ ${lineSvg}
                                   onDrop={(e) => {
                                     e.preventDefault();
                                     setDragOverGroupItemKey(null);
+                                    if (!showArchived && ingestWorkflowFilesFromDataTransfer(e.dataTransfer)) {
+                                      setDraggingGroupItems(null);
+                                      return;
+                                    }
                                     if (!draggingGroupItems?.itemIndexes?.length || !currentGroupAsset) {
                                       setDraggingGroupItems(null);
                                       return;
@@ -4743,12 +5158,11 @@ ${lineSvg}
                                       }
                                     }}
                                   >
-                                    {!hasChildDisplayImage ? (
+                                    {!hasChildDisplayImage && isWorkflowTextAsset(childAsset) ? (
                                       <div
                                         className="relative w-full bg-[#141416] flex flex-col justify-start p-3 text-left"
                                         style={{ aspectRatio: `${3 / 4}`, minHeight: '10rem' }}
                                       >
-                                        <span className="text-[8px] font-black uppercase text-blue-300 mb-1.5">文本</span>
                                         {childAsset.textTitle?.trim() ? (
                                           <p className="text-[11px] font-bold text-gray-100 line-clamp-2 mb-1.5">
                                             {childAsset.textTitle.trim()}
@@ -4774,7 +5188,7 @@ ${lineSvg}
                                           thumbDecodePriority={thumbHotKeys.has(groupKey) ? 'high' : 'low'}
                                           imageFetchPriority={thumbHotKeys.has(groupKey) ? 'high' : 'auto'}
                                           className="relative z-0 block w-full h-full min-h-[5rem]"
-                                          imgClassName="relative z-0 block w-full h-full object-contain"
+                                          imgClassName="relative z-0 block w-full h-full object-cover"
                                           draggable={false}
                                           onDragStart={(e) => e.preventDefault()}
                                           onIntrinsicSize={(w, h) => {
@@ -4916,7 +5330,7 @@ ${lineSvg}
                           }}
                           className={`break-inside-avoid mb-4 group relative rounded-2xl overflow-hidden bg-[#16161a] ${
                             selectedGroupItemKeys.has(groupKey)
-                              ? 'border border-blue-500 ring-2 ring-blue-500/50'
+                              ? 'border-0 ring-2 ring-blue-500/50'
                               : WORKFLOW_CARD_SURFACE_IDLE
                           }`}
                           draggable={!isBusyGroupItem}
@@ -4950,7 +5364,7 @@ ${lineSvg}
                                 thumbDecodePriority={thumbHotKeys.has(groupKey) ? 'high' : 'low'}
                                 imageFetchPriority={thumbHotKeys.has(groupKey) ? 'high' : 'auto'}
                                 className="relative z-0 block w-full h-full min-h-[5rem]"
-                                imgClassName="relative z-0 block w-full h-full object-contain"
+                                imgClassName="relative z-0 block w-full h-full object-cover"
                                 draggable={false}
                                 onDragStart={(e) => e.preventDefault()}
                                 onIntrinsicSize={(w, h) => {
@@ -5134,11 +5548,10 @@ ${lineSvg}
                         return child ? getAssetDisplayImage(child) : baseDisplayImage;
                       })()
                     : baseDisplayImage;
-                  const gridPreviewCacheKey = isGroupCard
+                  const gridPreviewCacheKeyBase = isGroupCard
                     ? `${a.id}:${a.displayKey}:g${gSafe}`
                     : `${a.id}:${a.displayKey}`;
-                  const isAllTextGroup = isWorkflowTextAsset(a);
-                  const rootTextPreviewAsset = isAllTextGroup ? a : null;
+                  const gridPreviewCacheKey = `${gridPreviewCacheKeyBase}:fp${previewSrcCacheFingerprint(gridPreviewSrc)}`;
                   const setRunUi = capabilitySetRunByAssetId[a.id];
                   const showSetRunProgress =
                     isExecutingCurrent &&
@@ -5173,13 +5586,13 @@ ${lineSvg}
                         }}
                         className={`group relative rounded-2xl overflow-hidden bg-[#16161a] ${
                           selectedAssetIds.has(a.id)
-                            ? 'border border-blue-500 ring-2 ring-blue-500/50'
+                            ? 'border-0 ring-2 ring-blue-500/50'
                             : dragOverAssetId === a.id
                             ? isGroupCard
-                              ? 'border border-blue-400 ring-2 ring-blue-400/60'
-                              : 'border border-blue-500 ring-2 ring-blue-500/50'
+                              ? 'border-0 ring-2 ring-blue-400/60'
+                              : 'border-0 ring-2 ring-blue-500/50'
                             : isGroupCard
-                            ? 'border border-blue-400'
+                            ? 'border-0 ring-2 ring-blue-400/45'
                             : WORKFLOW_CARD_SURFACE_IDLE
                         } ${setRunAccentClass} ${busyClass} transition-transform duration-150 ease-out will-change-transform ${motionClass}`}
                         draggable={!showArchived && !isBusy}
@@ -5266,6 +5679,12 @@ ${lineSvg}
                                 setActionDroppedInFavorite(true);
                               }
                             }
+                            return;
+                          }
+                          if (ingestWorkflowFilesFromDataTransfer(e.dataTransfer)) {
+                            setDragOverAssetId(null);
+                            setDraggingAssetIds(null);
+                            setDraggingGroupItems(null);
                             return;
                           }
                           const fromState = parseWorkflowDragSource(draggingAssetIds, draggingGroupItems);
@@ -5364,25 +5783,22 @@ ${lineSvg}
                             }
                           }}
                         >
-                          {!hasDisplayImage || isAllTextGroup ? (
+                          {!hasDisplayImage && isWorkflowTextAsset(a) ? (
                             <div
                               className="relative w-full bg-[#141416] flex flex-col justify-start p-3 text-left"
                               style={{ aspectRatio: `${3 / 4}`, minHeight: '10rem' }}
                             >
-                              <span className="text-[8px] font-black uppercase text-blue-300 mb-1.5">文本</span>
-                              {(rootTextPreviewAsset?.textTitle || a.textTitle)?.trim() ? (
+                              {a.textTitle?.trim() ? (
                                 <p className="text-[11px] font-bold text-gray-100 line-clamp-2 mb-1.5">
-                                  {(rootTextPreviewAsset?.textTitle || a.textTitle || '').trim()}
+                                  {a.textTitle.trim()}
                                 </p>
                               ) : null}
                               <p
                                 className={`text-[10px] text-gray-400 leading-snug whitespace-pre-wrap flex-1 overflow-hidden ${
-                                  ((rootTextPreviewAsset?.textTitle || a.textTitle || '').trim()) ? 'line-clamp-6' : 'line-clamp-8'
+                                  a.textTitle?.trim() ? 'line-clamp-6' : 'line-clamp-8'
                                 }`}
                               >
-                                {rootTextPreviewAsset
-                                  ? (getAssetDisplayText(rootTextPreviewAsset) || '（空白，点击编辑）')
-                                  : (textDisplay || '（空白，点击编辑）')}
+                                {textDisplay || '（空白，点击编辑）'}
                               </p>
                             </div>
                           ) : (
@@ -5390,11 +5806,12 @@ ${lineSvg}
                               <WorkflowGridImage
                                 fullSrc={gridPreviewSrcEffective}
                                 cacheKey={gridPreviewCacheKeyEffective}
+                                thumbMaxEdge={(a.modelUrls?.length ?? 0) > 0 ? 896 : undefined}
                                 deferThumbnail={!thumbUnlockKeys.has(a.id)}
                                 thumbDecodePriority={thumbHotKeys.has(a.id) ? 'high' : 'low'}
                                 imageFetchPriority={thumbHotKeys.has(a.id) ? 'high' : 'auto'}
                                 className="relative z-0 block w-full h-full min-h-[5rem]"
-                                imgClassName="relative z-0 block w-full h-full object-contain"
+                                imgClassName="relative z-0 block w-full h-full object-cover"
                                 draggable={false}
                                 onDragStart={(e) => e.preventDefault()}
                                 onIntrinsicSize={(w, h) => {
@@ -5477,13 +5894,15 @@ ${lineSvg}
                             <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg text-[8px] font-black bg-[#1d4ed8]">
                               {(a.groupLabel ?? '组')} {a.assetIds?.length}
                             </span>
-                          ) : hasTextPayload ? (
+                          ) : hasTextPayload && !isWorkflowTextAsset(a) ? (
                             <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg text-[8px] font-black bg-[#1d4ed8] text-white">
                               文本
                             </span>
                           ) : null}
                         </div>
-                        {!showArchived && !isGroupAsset(a) && !hasTextPayload && (
+                        {!showArchived &&
+                          !isGroupAsset(a) &&
+                          (!hasTextPayload || isWorkflowTextAsset(a)) && (
                           <div className="p-2 flex flex-col gap-1.5 border-t border-white/[0.06] bg-[#08080b]/80">
                             <div className="flex gap-1 flex-wrap items-center justify-between min-h-[18px]">
                               <span className={WORKFLOW_META_PILL}>
@@ -5665,9 +6084,7 @@ ${lineSvg}
                         }}
                         className={`group relative rounded-2xl overflow-hidden bg-[#16161a] transition-colors ${
                           isGroupAsset(item) && (item.assetIds?.length ?? 0) > 0
-                            ? 'border border-blue-400'
-                            : isWorkflowTextAsset(item)
-                            ? 'border border-emerald-900/45'
+                            ? 'border-0 ring-2 ring-blue-400/45'
                             : WORKFLOW_CARD_SURFACE_IDLE
                         }`}
                         onWheel={(e) => {
@@ -5712,12 +6129,11 @@ ${lineSvg}
                             setLightboxAssetId(item.id);
                           }}
                         >
-                          {isWorkflowTextAsset(item) ? (
+                          {!getAssetDisplayImage(item).trim() && isWorkflowTextAsset(item) ? (
                             <div
-                              className="relative w-full bg-[#0d1110] flex flex-col justify-start p-3 text-left border-t border-emerald-950/25"
+                              className="relative w-full bg-[#141416] flex flex-col justify-start p-3 text-left"
                               style={{ aspectRatio: `${3 / 4}`, minHeight: '10rem' }}
                             >
-                              <span className="text-[8px] font-black uppercase text-emerald-500/90 mb-1.5">文字</span>
                               {item.textTitle?.trim() ? (
                                 <p className="text-[11px] font-bold text-gray-100 line-clamp-2 mb-1.5">{item.textTitle.trim()}</p>
                               ) : null}
@@ -5736,9 +6152,9 @@ ${lineSvg}
                             >
                               <WorkflowGridImage
                                 fullSrc={getAssetDisplayImage(item)}
-                                cacheKey={`repo:${item.id}:${item.displayKey}`}
+                                cacheKey={`repo:${item.id}:${item.displayKey}:fp${previewSrcCacheFingerprint(getAssetDisplayImage(item))}`}
                                 className="relative z-0 block w-full h-full min-h-[5rem]"
-                                imgClassName="relative z-0 block w-full h-full object-contain"
+                                imgClassName="relative z-0 block w-full h-full object-cover"
                                 draggable={false}
                                 onDragStart={(ev) => ev.preventDefault()}
                                 onIntrinsicSize={(w, h) => {
@@ -5753,23 +6169,17 @@ ${lineSvg}
                               />
                             </div>
                           )}
-                          {isWorkflowTextAsset(item) ? (
-                            <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg text-[8px] font-black bg-emerald-900/85 text-emerald-100">
-                              文字
-                            </span>
-                          ) : null}
                           {isGroupAsset(item) && (item.assetIds?.length ?? 0) > 0 ? (
                             <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg text-[8px] font-black bg-[#1d4ed8]">
                               {(item.groupLabel ?? '组')} {item.assetIds?.length}
                             </span>
-                          ) : null}
-                          {!isGroupAsset(item) && !isWorkflowTextAsset(item) ? (
+                          ) : !isGroupAsset(item) ? (
                             <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg text-[8px] font-black bg-emerald-900/85 text-emerald-100">
                               资产
                             </span>
                           ) : null}
                         </div>
-                        {!isGroupAsset(item) && !itemHasTextPayload && (
+                        {!isGroupAsset(item) && (!itemHasTextPayload || isWorkflowTextAsset(item)) && (
                           <div className="p-2 flex flex-col gap-1.5 border-t border-white/[0.06] bg-[#08080b]/80">
                             <div className="flex gap-1 flex-wrap items-center justify-between min-h-[18px]">
                               <span className={WORKFLOW_META_PILL}>
@@ -5862,6 +6272,8 @@ ${lineSvg}
           innerLayoutStableKey={lightboxShowsImage ? lightboxAsset.id : undefined}
           contentRightInset="0px"
           enablePanoramaMode={lightboxShowsImage}
+          modelUrls={lightboxModelUrls}
+          modelFileName={lightboxAsset.modelSourceName}
           layoutReferenceSrc={
             lightboxShowsImage && asWorkflowImageString(lightboxAsset.original).trim()
               ? workflowSafeImgSrc(lightboxAsset.original)
@@ -6031,6 +6443,17 @@ ${lineSvg}
               >
                 下载
               </button>
+              {lightboxModelUrls.map((url, idx) => (
+                <a
+                  key={`${url}:${idx}`}
+                  href={url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-3 py-1.5 rounded-lg bg-[#3730a3] border border-[#6366f1] text-[9px] font-black uppercase text-indigo-200 hover:bg-[#4f46e5]"
+                >
+                  下载模型{lightboxModelUrls.length > 1 ? ` ${idx + 1}` : ''}
+                </a>
+              ))}
               <span className="text-[8px] font-black text-gray-500 uppercase mr-1">显示</span>
               <button
                 type="button"
@@ -6278,6 +6701,29 @@ ${lineSvg}
         />
       )}
     </div>
+    {typeof document !== 'undefined'
+      ? createPortal(
+          <WorkspaceQuickComposeBar
+            visible={
+              quickComposeOptions.length > 0 &&
+              !lightboxAsset &&
+              !cutSelectState &&
+              !promptTweakModal
+            }
+            options={quickComposeOptions}
+            actionId={quickComposeActionId}
+            onActionChange={setQuickComposeActionId}
+            draft={quickComposeDraft}
+            onDraftChange={setQuickComposeDraft}
+            attachedImage={quickComposeImage}
+            onAttachImage={setQuickComposeImage}
+            onClearAttachment={() => setQuickComposeImage(null)}
+            onSubmit={submitQuickCompose}
+          />,
+          document.body
+        )
+      : null}
+    </>
   );
 };
 

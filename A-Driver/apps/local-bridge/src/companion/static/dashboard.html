@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>本地伴侣 · 控制台</title>
+  <style>
+    :root {
+      --bg: #0a0a0c;
+      --card: #121214;
+      --border: #2e2e32;
+      --text: #e4e4e7;
+      --muted: #71717a;
+      --accent: #3b82f6;
+      --ok: #22c55e;
+      --warn: #eab308;
+      --bad: #ef4444;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      line-height: 1.5;
+    }
+    .wrap { max-width: 52rem; margin: 0 auto; padding: 1.5rem 1rem 3rem; }
+    h1 {
+      font-size: 1.125rem;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin: 0 0 0.25rem;
+    }
+    .sub { font-size: 0.7rem; color: var(--muted); margin-bottom: 1.5rem; }
+    .grid { display: grid; gap: 0.75rem; grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr)); }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 0.75rem;
+      padding: 1rem;
+    }
+    .card h2 { font-size: 0.65rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em; color: var(--accent); margin: 0 0 0.5rem; }
+    .val { font-size: 0.9rem; font-weight: 600; word-break: break-all; }
+    .pill {
+      display: inline-block;
+      font-size: 0.65rem;
+      font-weight: 700;
+      padding: 0.2rem 0.5rem;
+      border-radius: 9999px;
+      margin-top: 0.35rem;
+    }
+    .pill.ok { background: rgba(34,197,94,0.15); color: var(--ok); }
+    .pill.bad { background: rgba(239,68,68,0.15); color: var(--bad); }
+    .pill.neutral { background: rgba(113,113,122,0.2); color: var(--muted); }
+    pre {
+      margin: 1rem 0 0;
+      padding: 1rem;
+      background: #08080a;
+      border: 1px solid var(--border);
+      border-radius: 0.5rem;
+      font-size: 0.65rem;
+      overflow: auto;
+      max-height: 14rem;
+      color: #a1a1aa;
+    }
+    .foot { margin-top: 1.5rem; font-size: 0.65rem; color: var(--muted); }
+    ul.conn { margin: 0.35rem 0 0; padding-left: 1.1rem; font-size: 0.75rem; color: #a1a1aa; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>本地伴侣</h1>
+    <p class="sub">主程序控制台 · Relay（站点中转）与能力宣告 · 仅本机访问</p>
+
+    <div class="grid">
+      <div class="card">
+        <h2>运行模式</h2>
+        <div class="val" id="mode">—</div>
+        <span class="pill neutral" id="modePill">加载中</span>
+      </div>
+      <div class="card">
+        <h2>云端 WebSocket</h2>
+        <div class="val" id="wsState">—</div>
+        <span class="pill neutral" id="wsPill">—</span>
+      </div>
+      <div class="card">
+        <h2>设备 ID</h2>
+        <div class="val" id="deviceId">—</div>
+      </div>
+      <div class="card">
+        <h2>Companion 版本</h2>
+        <div class="val" id="cver">—</div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:1rem">
+      <h2>站点连接器（Relay）</h2>
+      <ul class="conn" id="connectors"></ul>
+    </div>
+
+    <div class="card" style="margin-top:1rem">
+      <h2>存储 / 计算插件</h2>
+      <div class="val" id="pluginsOther" style="font-size:0.75rem;color:#a1a1aa">—</div>
+    </div>
+
+    <h2 style="font-size:0.65rem;font-weight:800;text-transform:uppercase;letter-spacing:0.1em;color:var(--accent);margin:1.25rem 0 0.5rem">原始 JSON · /v1/runtime-status</h2>
+    <pre id="rawRuntime">{}</pre>
+    <h2 style="font-size:0.65rem;font-weight:800;text-transform:uppercase;letter-spacing:0.1em;color:var(--accent);margin:1rem 0 0.5rem">原始 JSON · /v1/capabilities</h2>
+    <pre id="rawCaps">{}</pre>
+
+    <p class="foot">每 2s 刷新运行状态 · 每 10s 刷新 capabilities。关闭本窗口不会停止本地伴侣进程。</p>
+  </div>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    async function loadJson(path) {
+      const r = await fetch(path, { cache: 'no-store' });
+      if (!r.ok) throw new Error(r.status + ' ' + path);
+      return r.json();
+    }
+    function setPill(el, ok, text) {
+      el.textContent = text;
+      el.className = 'pill ' + (ok === true ? 'ok' : ok === false ? 'bad' : 'neutral');
+    }
+    async function tick() {
+      try {
+        const rt = await loadJson('/v1/runtime-status');
+        $('rawRuntime').textContent = JSON.stringify(rt, null, 2);
+        $('mode').textContent = rt.mode === 'ws' ? '在线（已配置 BRIDGE_SERVER_WS_URL）' : '演示 / 未连云端';
+        setPill($('modePill'), rt.mode === 'ws', rt.mode === 'ws' ? 'WS 模式' : 'Demo');
+        const wsOk = rt.wsConnected === true;
+        $('wsState').textContent = rt.mode === 'ws' ? (wsOk ? '已连接' : '未连接 / 重连中') : '未启用（未配置 WS URL）';
+        setPill($('wsPill'), rt.mode !== 'ws' ? null : wsOk, rt.mode !== 'ws' ? 'N/A' : wsOk ? '已连接' : '断开');
+        $('deviceId').textContent = rt.deviceId || '—';
+        $('cver').textContent = rt.companionVersion || '—';
+        const list = $('connectors');
+        list.innerHTML = '';
+        (rt.connectors || []).forEach(function (c) {
+          const li = document.createElement('li');
+          li.textContent = c.id + ' @ ' + c.version;
+          list.appendChild(li);
+        });
+        if (!rt.connectors || !rt.connectors.length) list.innerHTML = '<li>（无）</li>';
+        $('pluginsOther').textContent =
+          'storage: ' + JSON.stringify(rt.storage || {}) + ' · compute: ' + JSON.stringify(rt.compute || {});
+      } catch (e) {
+        $('rawRuntime').textContent = String(e);
+      }
+    }
+    async function tickCaps() {
+      try {
+        const c = await loadJson('/v1/capabilities');
+        $('rawCaps').textContent = JSON.stringify(c, null, 2);
+      } catch (e) {
+        $('rawCaps').textContent = String(e);
+      }
+    }
+    tick();
+    tickCaps();
+    setInterval(tick, 2000);
+    setInterval(tickCaps, 10000);
+  </script>
+</body>
+</html>

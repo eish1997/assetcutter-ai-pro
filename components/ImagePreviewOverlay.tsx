@@ -9,6 +9,30 @@ import {
 const NO_WHEEL = '[data-image-preview-no-wheel]';
 const SCROLL = '[data-image-preview-scroll]';
 
+const MODEL_PREVIEW_EXT_RE = /\.(glb|gltf|fbx|obj)$/i;
+
+function pickPreviewableModelUrl(modelUrls?: string[]): string | null {
+  if (!Array.isArray(modelUrls) || modelUrls.length === 0) return null;
+  const cleaned = modelUrls.map((u) => String(u || '').trim()).filter(Boolean);
+  if (cleaned.length === 0) return null;
+  const score = (u: string) => {
+    const pure = u.split('#')[0]?.split('?')[0] ?? u;
+    if (/\.glb$/i.test(pure)) return 0;
+    if (/\.gltf$/i.test(pure)) return 1;
+    if (/\.fbx$/i.test(pure)) return 2;
+    if (/\.obj$/i.test(pure)) return 3;
+    if (/^blob:/i.test(u)) return 4;
+    return 99;
+  };
+  const candidates = cleaned.filter((u) => {
+    const pure = u.split('#')[0]?.split('?')[0] ?? u;
+    return MODEL_PREVIEW_EXT_RE.test(pure) || /^blob:/i.test(u);
+  });
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => score(a) - score(b));
+  return candidates[0] ?? null;
+}
+
 function isEscapeLikeKey(e: KeyboardEvent): boolean {
   return e.key === 'Escape' || e.key === 'Esc' || e.code === 'Escape' || e.keyCode === 27;
 }
@@ -43,6 +67,10 @@ export type ImagePreviewOverlayProps = {
   layoutReferenceSrc?: string;
   /** 是否显示「平面 / 全景」切换（全景为等距柱状 360° 浏览效果） */
   enablePanoramaMode?: boolean;
+  /** 关联 3D 模型 URL 列表（在线预览：GLB/GLTF/FBX/OBJ；blob 需配合 modelFileName） */
+  modelUrls?: string[];
+  /** 本地拖入模型的原始文件名（用于 blob URL 推断格式） */
+  modelFileName?: string;
   /** 右侧占位宽度（如常驻侧栏），用于将主图居中到左侧可用区域 */
   contentRightInset?: string;
   /**
@@ -72,6 +100,8 @@ function lockByOriginalDominantAxis(nw: number, nh: number): { axis: 'width' | '
 
 /** 全景 Viewer 独立 chunk（registry 懒加载） */
 const LazyImageEquirectViewer = getLazyImagePreviewViewer('image.equirect');
+/** 3D Viewer 独立 chunk（registry 懒加载） */
+const LazyImageModel3DViewer = getLazyImagePreviewViewer('image.model3d');
 
 /**
  * 全屏大图预览：滚轮切图、Esc 关闭、双击复原、左键拖拽缩放（按下处为轴）、空格/Shift+左键/右键平移；多资产时 Shift+滚轮切资产。
@@ -89,11 +119,13 @@ export function ImagePreviewOverlay({
   innerLayoutStableKey,
   layoutReferenceSrc,
   enablePanoramaMode = true,
+  modelUrls,
+  modelFileName,
   contentRightInset = '0px',
   shellZIndexClassName,
   children,
 }: ImagePreviewOverlayProps) {
-  const [previewLayout, setPreviewLayout] = useState<'flat' | 'pano'>('flat');
+  const [previewLayout, setPreviewLayout] = useState<'flat' | 'pano' | 'model3d'>('flat');
   const [uiHidden, setUiHidden] = useState(false);
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
@@ -107,6 +139,8 @@ export function ImagePreviewOverlay({
   const spacePressedRef = useRef(false);
   const wheelAccumRef = useRef(0);
   const wheelLastNavigateAtRef = useRef(0);
+  const previewModelSrc = pickPreviewableModelUrl(modelUrls);
+  const hasModel3DMode = Boolean(!centerSlot && previewModelSrc && LazyImageModel3DViewer);
 
   useEffect(() => {
     if (!open) return;
@@ -218,7 +252,8 @@ export function ImagePreviewOverlay({
     if (!open) return;
     const onWheel = (e: WheelEvent) => {
       const viewerCapturesWheel =
-        enablePanoramaMode && previewLayout === 'pano' && previewPolicyForMode('image.equirect').captureGlobalWheel;
+        (enablePanoramaMode && previewLayout === 'pano' && previewPolicyForMode('image.equirect').captureGlobalWheel) ||
+        (hasModel3DMode && previewLayout === 'model3d' && previewPolicyForMode('image.model3d').captureGlobalWheel);
       if (viewerCapturesWheel) return;
 
       const innerMode = typeof onWheelInnerNavigate === 'function';
@@ -327,6 +362,7 @@ export function ImagePreviewOverlay({
     open,
     previewLayout,
     enablePanoramaMode,
+    hasModel3DMode,
     wheelListLength,
     onWheelNavigate,
     onWheelInnerNavigate,
@@ -491,6 +527,19 @@ export function ImagePreviewOverlay({
           </div>
         ) : null}
 
+        {!centerSlot && hasModel3DMode && previewLayout === 'model3d' ? (
+          <div className="absolute inset-0 z-[5] min-h-0" onWheel={(e) => e.stopPropagation()}>
+            <Suspense fallback={<PreviewViewerFallback label="3D 模块加载中…" />}>
+              <LazyImageModel3DViewer
+                imageSrc={imageSrc!}
+                modelSrc={previewModelSrc ?? undefined}
+                modelFileName={modelFileName}
+                className="h-full w-full min-h-0"
+              />
+            </Suspense>
+          </div>
+        ) : null}
+
         {centerSlot ? (
           <div
             className="absolute top-1/2 z-[4] flex items-center justify-center px-4 box-border w-[min(80rem,calc(100vw-3rem))] max-w-[calc(100vw-3rem)]"
@@ -503,7 +552,7 @@ export function ImagePreviewOverlay({
           </div>
         ) : null}
 
-        {!centerSlot && !(enablePanoramaMode && previewLayout === 'pano') ? (
+        {!centerSlot && !(enablePanoramaMode && previewLayout === 'pano') && !(hasModel3DMode && previewLayout === 'model3d') ? (
           <div
             className={`absolute top-1/2 ${useFrameLock ? 'flex items-center justify-center' : ''}`}
             style={shellStyle}
@@ -547,6 +596,14 @@ export function ImagePreviewOverlay({
               <div>Tab：隐藏/显示界面（仅看图片）</div>
               <div>Esc：关闭预览</div>
             </>
+          ) : hasModel3DMode && previewLayout === 'model3d' ? (
+            <>
+              <div>拖拽：旋转模型</div>
+              <div>滚轮：缩放距离</div>
+              <div>切回「平面」后可滚轮切图 / 缩放平移</div>
+              <div>Tab：隐藏/显示界面（仅看图片）</div>
+              <div>Esc：关闭预览</div>
+            </>
           ) : centerSlot ? (
             <>
               <div>滚轮：本卡片多版本时切换显示</div>
@@ -581,7 +638,7 @@ export function ImagePreviewOverlay({
 
         {!uiHidden ? (
         <div className="absolute right-4 top-4 z-10 flex items-center gap-2">
-          {!centerSlot && enablePanoramaMode ? (
+          {!centerSlot && (enablePanoramaMode || hasModel3DMode) ? (
             <div
               className="flex rounded-xl border border-[#2e2e32] overflow-hidden"
               onClick={(e) => e.stopPropagation()}
@@ -597,17 +654,32 @@ export function ImagePreviewOverlay({
               >
                 平面
               </button>
-              <button
-                type="button"
-                onClick={() => setPreviewLayout('pano')}
-                className={`px-3 py-2 text-[10px] font-black uppercase transition-colors border-l border-[#2e2e32] ${
-                  previewLayout === 'pano'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-[#1a1a1e]/95 text-gray-300 hover:bg-[#2a2a32]'
-                }`}
-              >
-                全景
-              </button>
+              {enablePanoramaMode ? (
+                <button
+                  type="button"
+                  onClick={() => setPreviewLayout('pano')}
+                  className={`px-3 py-2 text-[10px] font-black uppercase transition-colors border-l border-[#2e2e32] ${
+                    previewLayout === 'pano'
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-[#1a1a1e]/95 text-gray-300 hover:bg-[#2a2a32]'
+                  }`}
+                >
+                  全景
+                </button>
+              ) : null}
+              {hasModel3DMode ? (
+                <button
+                  type="button"
+                  onClick={() => setPreviewLayout('model3d')}
+                  className={`px-3 py-2 text-[10px] font-black uppercase transition-colors border-l border-[#2e2e32] ${
+                    previewLayout === 'model3d'
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-[#1a1a1e]/95 text-gray-300 hover:bg-[#2a2a32]'
+                  }`}
+                >
+                  3D
+                </button>
+              ) : null}
             </div>
           ) : null}
           <button

@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>本地伴侣 · AssetCutter</title>
+  <style>
+    :root {
+      --bg: #0c0c0e;
+      --panel: #121214;
+      --border: #2e2e32;
+      --text: #e4e4e7;
+      --muted: #71717a;
+      --accent: #3b82f6;
+      --ok: #22c55e;
+      --warn: #eab308;
+      --off: #52525b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 13px;
+      line-height: 1.5;
+      min-height: 100vh;
+    }
+    header {
+      border-bottom: 1px solid var(--border);
+      padding: 14px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      background: var(--panel);
+    }
+    header h1 {
+      margin: 0;
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: #fff;
+    }
+    .pill {
+      font-size: 10px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      color: var(--muted);
+    }
+    .pill.ok { border-color: #166534; color: var(--ok); }
+    .pill.bad { border-color: #7f1d1d; color: #f87171; }
+    nav.tabs {
+      display: flex;
+      gap: 4px;
+      padding: 12px 20px 0;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel);
+    }
+    nav.tabs button {
+      background: transparent;
+      border: none;
+      color: var(--muted);
+      padding: 10px 16px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      cursor: pointer;
+      border-radius: 10px 10px 0 0;
+      border: 1px solid transparent;
+      border-bottom: none;
+      margin-bottom: -1px;
+    }
+    nav.tabs button:hover { color: var(--text); background: #1a1a1e; }
+    nav.tabs button.active {
+      color: var(--accent);
+      background: var(--bg);
+      border-color: var(--border);
+      border-bottom-color: var(--bg);
+    }
+    main { padding: 20px; max-width: 960px; margin: 0 auto; }
+    .panel {
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      background: var(--panel);
+      padding: 18px;
+      margin-bottom: 16px;
+    }
+    .panel h2 {
+      margin: 0 0 12px;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: #93c5fd;
+    }
+    .muted { color: var(--muted); font-size: 11px; }
+    pre {
+      margin: 0;
+      padding: 12px;
+      border-radius: 10px;
+      background: #0a0a0b;
+      border: 1px solid var(--border);
+      font-size: 10px;
+      overflow: auto;
+      max-height: 220px;
+      color: #a1a1aa;
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 11px; }
+    th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+    th { color: var(--muted); font-weight: 700; font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; }
+    tr:last-child td { border-bottom: none; }
+    .role { font-size: 10px; color: #a78bfa; }
+    .health-ok { color: var(--ok); }
+    .health-degraded { color: var(--warn); }
+    .health-disabled { color: var(--off); }
+    .path { word-break: break-all; font-family: ui-monospace, monospace; font-size: 10px; color: #cbd5e1; }
+    .hidden { display: none !important; }
+    code { font-size: 10px; background: #1c1c20; padding: 2px 6px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>本地伴侣</h1>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+      <span id="connPill" class="pill">轮询中…</span>
+      <span class="pill" id="uptimePill">—</span>
+    </div>
+  </header>
+  <nav class="tabs" role="tablist">
+    <button type="button" role="tab" data-tab="overview" class="active" aria-selected="true">总览</button>
+    <button type="button" role="tab" data-tab="plugins" aria-selected="false">插件</button>
+    <button type="button" role="tab" data-tab="repo" aria-selected="false">仓库</button>
+    <button type="button" role="tab" data-tab="apitest" aria-selected="false">联调</button>
+  </nav>
+  <main>
+    <section id="tab-overview" class="tab-page">
+      <div class="panel">
+        <h2>运行状态</h2>
+        <p class="muted">与主站「设置 → 本地伴侣」探测使用相同根地址；本页直接请求本机 <code>/v1/runtime-status</code>。</p>
+        <pre id="runtimePre">加载中…</pre>
+      </div>
+      <div class="panel">
+        <h2>能力宣告摘要</h2>
+        <pre id="capsPre">加载中…</pre>
+      </div>
+    </section>
+    <section id="tab-plugins" class="tab-page hidden">
+      <div class="panel">
+        <h2>插件模块</h2>
+        <p class="muted">每个插件在宿主内注册 <code>id</code>、<code>role</code> 与能力片段；后续可单独启停、热扩 Adapter / 连接器。</p>
+        <div style="overflow-x:auto;">
+          <table>
+            <thead>
+              <tr>
+                <th>插件</th>
+                <th>角色</th>
+                <th>版本</th>
+                <th>健康</th>
+                <th>说明</th>
+              </tr>
+            </thead>
+            <tbody id="pluginRows"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+    <section id="tab-repo" class="tab-page hidden">
+      <div class="panel">
+        <h2>仓库模块</h2>
+        <p class="muted">本机资源平面（Volume）：大文件落盘、<code>manifest</code> 与后续 <code>catalog</code>；网站只持久化 <code>AssetHandle</code>。</p>
+        <table>
+          <tbody>
+            <tr><th style="width:140px">卷根路径</th><td class="path" id="repoRoot">—</td></tr>
+            <tr><th>路径存在</th><td id="repoExists">—</td></tr>
+            <tr><th>一级条目数</th><td id="repoCount">—</td></tr>
+            <tr><th>浅层文件合计</th><td id="repoBytes">—</td></tr>
+            <tr><th>说明</th><td class="muted" id="repoNote">—</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+    <section id="tab-apitest" class="tab-page hidden">
+      <div class="panel">
+        <h2>存储</h2>
+        <p class="muted">
+          布局：<code>projects/&lt;projectId&gt;/manifest.json</code> 与
+          <code>assets/&lt;key&gt;/object</code>。可用 curl / 前端直连本机，勿写死外网域名。
+        </p>
+        <p class="muted" style="margin-top:8px">当前项目 id（含卷内 <code>projects</code> 子目录）:</p>
+        <pre id="projectsPre">—</pre>
+      </div>
+      <div class="panel">
+        <h2>计算</h2>
+        <p class="muted">POST <code>/v1/compute/jobs</code>，最小合法体为 <code>{&quot;type&quot;:&quot;stub.ping&quot;,&quot;protocolVersion&quot;:1}</code>。</p>
+        <p class="muted" style="margin-top:8px">
+          <strong>seam_repair</strong>：需本机 <code>WebSeamRepair</code>（如 <code>npm run dev:seam-backend</code>，默认 8008）。请先将 OBJ / 贴图 / 可选 mask 以
+          <code>PUT /v1/projects/:id/assets/:key</code> 写入卷，再提交 Job（含 <code>projectId</code> 与 <code>inputs: { objKey, textureKey, maskKey?, outputKey? }</code>）。环境变量
+          <code>COMPANION_SEAM_REPAIR_URL</code> 可改修缝 API 地址。
+        </p>
+        <p style="margin:12px 0;">
+          <button type="button" id="btnStub" style="padding:8px 14px;border-radius:10px;border:1px solid #3b82f6;background:#1e3a5f;color:#e0e7ff;font-size:11px;font-weight:700;cursor:pointer;">
+            发送 stub.ping
+          </button>
+        </p>
+        <p class="muted" style="margin-top:10px"><strong>seam_repair 快速提交</strong>（先 PUT 好资产；WebSeamRepair 默认 8008）</p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;max-width:520px;margin-top:6px;font-size:10px;">
+          <input id="seamProjectId" placeholder="projectId" style="padding:6px 8px;border-radius:8px;border:1px solid #333;background:#16161a;color:#e5e5e5;" />
+          <input id="seamObjKey" placeholder="objKey" style="padding:6px 8px;border-radius:8px;border:1px solid #333;background:#16161a;color:#e5e5e5;" />
+          <input id="seamTexKey" placeholder="textureKey" style="padding:6px 8px;border-radius:8px;border:1px solid #333;background:#16161a;color:#e5e5e5;" />
+          <input id="seamMaskKey" placeholder="maskKey（可选）" style="padding:6px 8px;border-radius:8px;border:1px solid #333;background:#16161a;color:#e5e5e5;" />
+          <input id="seamOutKey" placeholder="outputKey（可选 PNG 写回）" style="padding:6px 8px;border-radius:8px;border:1px solid #333;background:#16161a;color:#e5e5e5;grid-column:1/-1;" />
+        </div>
+        <p style="margin:8px 0 0;">
+          <button type="button" id="btnSeam" style="padding:8px 14px;border-radius:10px;border:1px solid #ca8a04;background:#422006;color:#fef3c7;font-size:11px;font-weight:700;cursor:pointer;">
+            提交 seam_repair
+          </button>
+        </p>
+        <p class="muted">最近一次任务响应：</p>
+        <pre id="jobPre">（点击按钮）</pre>
+        <p class="muted" style="margin-top:8px">近期任务（GET /v1/compute/jobs）:</p>
+        <pre id="jobsListPre">—</pre>
+      </div>
+    </section>
+  </main>
+  <script>
+    (function () {
+      const $ = (id) => document.getElementById(id);
+      const pages = {
+        overview: $('tab-overview'),
+        plugins: $('tab-plugins'),
+        repo: $('tab-repo'),
+        apitest: $('tab-apitest'),
+      };
+      document.querySelectorAll('nav.tabs button').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const tab = btn.getAttribute('data-tab');
+          document.querySelectorAll('nav.tabs button').forEach((b) => {
+            const on = b.getAttribute('data-tab') === tab;
+            b.classList.toggle('active', on);
+            b.setAttribute('aria-selected', on ? 'true' : 'false');
+          });
+          Object.keys(pages).forEach((k) => {
+            pages[k].classList.toggle('hidden', k !== tab);
+          });
+        });
+      });
+
+      function fmtBytes(n) {
+        if (n == null || n < 0) return '—';
+        if (n < 1024) return n + ' B';
+        if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+        return (n / (1024 * 1024)).toFixed(2) + ' MB';
+      }
+
+      function setConn(ok, ms) {
+        const el = $('connPill');
+        el.textContent = ok ? '本机 API 正常' + (ms != null ? ' · ' + ms + 'ms' : '') : '无法连接本机 API';
+        el.className = 'pill ' + (ok ? 'ok' : 'bad');
+      }
+
+      async function fetchJson(path) {
+        const t0 = performance.now();
+        const r = await fetch(path, { method: 'GET' });
+        const ms = Math.round(performance.now() - t0);
+        const text = await r.text();
+        let data;
+        try {
+          data = JSON.parse(text);
+        } catch {
+          data = { _raw: text };
+        }
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return { data, ms };
+      }
+
+      async function refreshOverview() {
+        try {
+          const { data: rt, ms } = await fetchJson('/v1/runtime-status');
+          setConn(true, ms);
+          $('runtimePre').textContent = JSON.stringify(rt, null, 2);
+          $('uptimePill').textContent = '运行 ' + (rt.uptimeSec ?? 0) + 's';
+          const { data: caps } = await fetchJson('/v1/capabilities');
+          $('capsPre').textContent = JSON.stringify(caps, null, 2);
+          renderPlugins(rt.plugins || []);
+        } catch (e) {
+          setConn(false);
+          $('runtimePre').textContent = String(e);
+        }
+      }
+
+      function renderPlugins(plugins) {
+        const tb = $('pluginRows');
+        tb.innerHTML = '';
+        (plugins || []).forEach((p) => {
+          const tr = document.createElement('tr');
+          const hClass =
+            p.health === 'ok' ? 'health-ok' : p.health === 'disabled' ? 'health-disabled' : 'health-degraded';
+          tr.innerHTML =
+            '<td><strong>' +
+            escapeHtml(p.displayName) +
+            '</strong><div class="muted">' +
+            escapeHtml(p.id) +
+            '</div></td>' +
+            '<td><span class="role">' +
+            escapeHtml(p.role) +
+            '</span></td>' +
+            '<td>' +
+            escapeHtml(String(p.semver)) +
+            '</td>' +
+            '<td class="' +
+            hClass +
+            '">' +
+            escapeHtml(p.health) +
+            (p.enabled === false ? ' · 未启用' : '') +
+            '</td>' +
+            '<td class="muted">' +
+            escapeHtml(p.description || '') +
+            (p.detail ? '<div style="margin-top:6px;color:#94a3b8">' + escapeHtml(p.detail) + '</div>' : '') +
+            '</td>';
+          tb.appendChild(tr);
+        });
+      }
+
+      function escapeHtml(s) {
+        return String(s)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;');
+      }
+
+      async function refreshRepo() {
+        try {
+          const { data } = await fetchJson('/v1/repository/summary');
+          $('repoRoot').textContent = data.rootAbsolutePath || data.volumeRootConfigured || '—';
+          $('repoExists').textContent = data.exists ? '是' : '否';
+          $('repoCount').textContent = String(data.topLevelEntryCount ?? '—');
+          $('repoBytes').textContent = fmtBytes(data.shallowFileBytesTotal);
+          $('repoNote').textContent = data.note || '';
+        } catch (e) {
+          $('repoRoot').textContent = String(e);
+        }
+      }
+
+      async function refreshApitest() {
+        try {
+          const { data } = await fetchJson('/v1/projects');
+          $('projectsPre').textContent = JSON.stringify(data, null, 2);
+        } catch (e) {
+          $('projectsPre').textContent = String(e);
+        }
+        try {
+          const { data: j } = await fetchJson('/v1/compute/jobs');
+          $('jobsListPre').textContent = JSON.stringify(j, null, 2);
+        } catch (e) {
+          $('jobsListPre').textContent = String(e);
+        }
+      }
+
+      $('btnStub').addEventListener('click', async function () {
+        const el = $('jobPre');
+        el.textContent = '请求中…';
+        try {
+          const r = await fetch('/v1/compute/jobs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ type: 'stub.ping', protocolVersion: 1 }),
+          });
+          const t = await r.text();
+          el.textContent = 'HTTP ' + r.status + '\n' + t;
+          void refreshApitest();
+        } catch (e) {
+          el.textContent = String(e);
+        }
+      });
+
+      $('btnSeam').addEventListener('click', async function () {
+        const el = $('jobPre');
+        const projectId = ($('seamProjectId').value || '').trim();
+        const objKey = ($('seamObjKey').value || '').trim();
+        const textureKey = ($('seamTexKey').value || '').trim();
+        const maskKey = ($('seamMaskKey').value || '').trim();
+        const outputKey = ($('seamOutKey').value || '').trim();
+        if (!projectId || !objKey || !textureKey) {
+          el.textContent = '请填写 projectId、objKey、textureKey';
+          return;
+        }
+        const inputs = { objKey, textureKey };
+        if (maskKey) inputs.maskKey = maskKey;
+        if (outputKey) inputs.outputKey = outputKey;
+        el.textContent = 'seam_repair 执行中（可能较久）…';
+        try {
+          const r = await fetch('/v1/compute/jobs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              protocolVersion: 1,
+              type: 'seam_repair',
+              projectId,
+              inputs,
+            }),
+          });
+          const t = await r.text();
+          el.textContent = 'HTTP ' + r.status + '\n' + t;
+          void refreshApitest();
+        } catch (e) {
+          el.textContent = String(e);
+        }
+      });
+
+      refreshOverview();
+      refreshRepo();
+      refreshApitest();
+      setInterval(refreshOverview, 2500);
+      setInterval(refreshRepo, 8000);
+      setInterval(refreshApitest, 6000);
+    })();
+  </script>
+</body>
+</html>

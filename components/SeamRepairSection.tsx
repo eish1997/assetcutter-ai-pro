@@ -6,6 +6,25 @@ import * as THREE from 'three';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { seamRepairWithFallback, seamRepairHealth, type SeamRepairParams } from '../services/seamRepairService';
+import { getCompanionLocalBaseUrl, normalizeCompanionBaseUrl } from '../services/companionLocalPrefs';
+import {
+  createCompanionJobEventStream,
+  fetchCompanionAssetBlob,
+  listCompanionJobEvents,
+  putCompanionAsset,
+  submitCompanionSeamRepairJob,
+  type CompanionJobEventV1,
+} from '../services/companionClient';
+import {
+  clearCompanionJobCursor,
+  getCompanionJobCursor,
+  setCompanionJobCursor,
+} from '../services/companionJobCursorStore';
+import {
+  clearCompanionJobTerminalEvent,
+  getCompanionJobTerminalEvent,
+  saveCompanionJobTerminalEvent,
+} from '../services/companionJobTerminalStore';
 import { SiteImage } from './SiteImage';
 
 // OBJ + 贴图 3D 预览（仅影响预览，不改变修复结果）
@@ -179,6 +198,13 @@ const DEFAULT_PARAMS: SeamRepairParams = {
   poisson_iters: 0,
 };
 
+const COMPANION_STREAM_STATE_KEY = 'ac_companion_seam_stream_state_v2';
+const TERMINAL_JOB_EVENT_TYPES = new Set<CompanionJobEventV1['type']>([
+  'reply.completed',
+  'task.failed',
+  'task.cancelled',
+]);
+
 const SeamRepairSection: React.FC<{ onLog?: (level: 'info' | 'warn' | 'error', message: string, detail?: string) => void }> = ({ onLog }) => {
   const [objFile, setObjFile] = useState<File | null>(null);
   const [objText, setObjText] = useState<string | null>(null);
@@ -194,14 +220,73 @@ const SeamRepairSection: React.FC<{ onLog?: (level: 'info' | 'warn' | 'error', m
   const [resultUrl, setResultUrl] = useState<string | null>(null);
   const [useResultTex, setUseResultTex] = useState(true);
   const [backendAvailable, setBackendAvailable] = useState<boolean | null>(null);
+  const [companionJobId, setCompanionJobId] = useState('');
+  const [companionProjectId, setCompanionProjectId] = useState('demo-seam');
+  const [companionSubmitBusy, setCompanionSubmitBusy] = useState(false);
+  const [companionEvents, setCompanionEvents] = useState<CompanionJobEventV1[]>([]);
+  const [companionAfterSeq, setCompanionAfterSeq] = useState(0);
+  const [companionEventsBusy, setCompanionEventsBusy] = useState(false);
+  const [companionEventsHint, setCompanionEventsHint] = useState('');
+  const [companionEventsAuto, setCompanionEventsAuto] = useState(false);
+  const [companionStreamMode, setCompanionStreamMode] = useState<'idle' | 'sse' | 'poll'>('idle');
   const resultUrlRef = useRef<string | null>(null);
   const repairAbortRef = useRef<AbortController | null>(null);
+  const lastCompanionOutputLoadedRef = useRef<string>('');
+  const companionOutputFetchBusyRef = useRef(false);
 
   useEffect(() => {
     seamRepairHealth()
       .then(() => setBackendAvailable(true))
       .catch(() => setBackendAvailable(false));
   }, []);
+
+  useEffect(() => {
+    lastCompanionOutputLoadedRef.current = '';
+  }, [companionJobId]);
+
+  useEffect(() => {
+    try {
+      const raw = globalThis.localStorage?.getItem(COMPANION_STREAM_STATE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as {
+        projectId?: string;
+        jobId?: string;
+        afterSeq?: number;
+        auto?: boolean;
+      };
+      if (parsed.projectId) setCompanionProjectId(parsed.projectId);
+      if (parsed.jobId) setCompanionJobId(parsed.jobId);
+      if (Number.isFinite(parsed.afterSeq)) setCompanionAfterSeq(Math.max(0, Math.floor(parsed.afterSeq ?? 0)));
+      if (typeof parsed.auto === 'boolean') setCompanionEventsAuto(parsed.auto);
+      if (parsed.jobId) {
+        const sharedCursor = getCompanionJobCursor(parsed.jobId);
+        if (sharedCursor > 0) setCompanionAfterSeq((prev) => Math.max(prev, sharedCursor));
+        const snap = getCompanionJobTerminalEvent(parsed.jobId);
+        if (snap && TERMINAL_JOB_EVENT_TYPES.has(snap.type)) {
+          setCompanionEvents([snap]);
+          setCompanionAfterSeq((prev) => Math.max(prev, snap.seq));
+        }
+      }
+    } catch {
+      /* ignore malformed session state */
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      const payload = JSON.stringify({
+        projectId: companionProjectId.trim(),
+        jobId: companionJobId.trim(),
+        afterSeq: companionAfterSeq,
+        auto: companionEventsAuto,
+      });
+      globalThis.localStorage?.setItem(COMPANION_STREAM_STATE_KEY, payload);
+      const jid = companionJobId.trim();
+      if (jid) setCompanionJobCursor(jid, companionAfterSeq);
+    } catch {
+      /* ignore */
+    }
+  }, [companionAfterSeq, companionEventsAuto, companionJobId, companionProjectId]);
 
   const revokeResult = useCallback(() => {
     if (resultUrlRef.current) {
@@ -285,6 +370,285 @@ const SeamRepairSection: React.FC<{ onLog?: (level: 'info' | 'warn' | 'error', m
   }, []);
 
   const currentTexUrl = (useResultTex && resultUrl) ? resultUrl : texPreviewUrl;
+
+  const pullCompanionEvents = useCallback(
+    async (resetCursor = false) => {
+      const jobId = companionJobId.trim();
+      if (!jobId) {
+        setCompanionEventsHint('请先填写 jobId');
+        return;
+      }
+      setCompanionEventsBusy(true);
+      setCompanionEventsHint('');
+      const sharedCursor = getCompanionJobCursor(jobId);
+      const afterSeq = resetCursor ? 0 : Math.max(companionAfterSeq, sharedCursor);
+      if (resetCursor) {
+        setCompanionEvents([]);
+        setCompanionAfterSeq(0);
+        clearCompanionJobCursor(jobId);
+        clearCompanionJobTerminalEvent(jobId);
+        lastCompanionOutputLoadedRef.current = '';
+      }
+      try {
+        const base = normalizeCompanionBaseUrl(getCompanionLocalBaseUrl());
+        const r = await listCompanionJobEvents(base, jobId, afterSeq, 80);
+        if (r.ok === false) {
+          setCompanionEventsHint(`拉取失败：${r.error}${r.status != null ? `（HTTP ${r.status}）` : ''}`);
+          return;
+        }
+        const incoming = Array.isArray(r.data.events) ? r.data.events : [];
+        if (incoming.length) {
+          setCompanionEvents((prev) => {
+            const seen = new Set(prev.map((e) => e.seq));
+            const merged = [...prev, ...incoming.filter((e) => !seen.has(e.seq))];
+            return merged.sort((a, b) => a.seq - b.seq).slice(-300);
+          });
+        }
+        const next = r.data.nextAfterSeq ?? afterSeq;
+        setCompanionAfterSeq(next);
+        setCompanionJobCursor(jobId, next);
+        setCompanionEventsHint(
+          `事件 ${incoming.length} 条${r.latencyMs != null ? `（${r.latencyMs}ms）` : ''}；cursor=${next}`,
+        );
+      } catch (e) {
+        setCompanionEventsHint(`拉取异常：${e instanceof Error ? e.message : String(e)}`);
+      } finally {
+        setCompanionEventsBusy(false);
+      }
+    },
+    [companionAfterSeq, companionJobId],
+  );
+
+  const submitToCompanionAndTrack = useCallback(async () => {
+    if (!objFile || !texFile) {
+      setCompanionEventsHint('请先选择 OBJ 与贴图后再提交本地伴侣任务');
+      return;
+    }
+    const projectId = companionProjectId.trim();
+    if (!projectId) {
+      setCompanionEventsHint('请先填写 companion projectId');
+      return;
+    }
+    setCompanionSubmitBusy(true);
+    setCompanionEventsHint('');
+    try {
+      const base = normalizeCompanionBaseUrl(getCompanionLocalBaseUrl());
+      const stamp = Date.now();
+      const objKey = `seam_obj_${stamp}`;
+      const texKey = `seam_tex_${stamp}`;
+      const maskKey = maskFile ? `seam_mask_${stamp}` : undefined;
+      const outKey = `seam_out_${stamp}`;
+
+      const putObj = await putCompanionAsset(base, projectId, objKey, objFile, 'model/obj');
+      if (putObj.ok === false) {
+        setCompanionEventsHint(`上传 OBJ 失败：${putObj.error}${putObj.status != null ? `（HTTP ${putObj.status}）` : ''}`);
+        return;
+      }
+      const putTex = await putCompanionAsset(base, projectId, texKey, texFile, texFile.type || 'image/png');
+      if (putTex.ok === false) {
+        setCompanionEventsHint(`上传贴图失败：${putTex.error}${putTex.status != null ? `（HTTP ${putTex.status}）` : ''}`);
+        return;
+      }
+      if (maskFile && maskKey) {
+        const putMask = await putCompanionAsset(base, projectId, maskKey, maskFile, maskFile.type || 'image/png');
+        if (putMask.ok === false) {
+          setCompanionEventsHint(`上传 mask 失败：${putMask.error}${putMask.status != null ? `（HTTP ${putMask.status}）` : ''}`);
+          return;
+        }
+      }
+
+      const submit = await submitCompanionSeamRepairJob(
+        base,
+        projectId,
+        { objKey, textureKey: texKey, maskKey, outputKey: outKey },
+        params as Record<string, unknown>,
+      );
+      if (submit.ok === false) {
+        setCompanionEventsHint(`提交任务失败：${submit.error}${submit.status != null ? `（HTTP ${submit.status}）` : ''}`);
+        return;
+      }
+
+      const jid = submit.data.jobId;
+      setCompanionJobId(jid);
+      setCompanionEvents([]);
+      setCompanionAfterSeq(0);
+      setCompanionEventsAuto(true);
+      setCompanionEventsHint(`已提交 companion seam_repair，jobId=${jid}；已开启自动轮询`);
+      // 立即拉一次，用户可立刻看到 accepted/running
+      window.setTimeout(() => {
+        void pullCompanionEvents(true);
+      }, 50);
+    } catch (e) {
+      setCompanionEventsHint(`提交异常：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setCompanionSubmitBusy(false);
+    }
+  }, [companionProjectId, maskFile, objFile, params, pullCompanionEvents, texFile]);
+
+  const openCompanionConsole = useCallback(() => {
+    const base = normalizeCompanionBaseUrl(getCompanionLocalBaseUrl());
+    window.open(`${base}/`, '_blank', 'noopener,noreferrer');
+  }, []);
+
+  const copyCompanionDiagnostics = useCallback(async () => {
+    const latest = companionEvents.length ? companionEvents[companionEvents.length - 1] : null;
+    const content = JSON.stringify(
+      {
+        projectId: companionProjectId.trim(),
+        jobId: companionJobId.trim(),
+        cursor: companionAfterSeq,
+        hint: companionEventsHint,
+        latestEvent: latest,
+      },
+      null,
+      2,
+    );
+    try {
+      await navigator.clipboard.writeText(content);
+      setCompanionEventsHint('已复制排障信息（含 jobId / cursor / latestEvent）');
+    } catch {
+      setCompanionEventsHint('复制失败：浏览器未授予剪贴板权限');
+    }
+  }, [companionAfterSeq, companionEvents, companionEventsHint, companionJobId, companionProjectId]);
+
+  const applyCompanionRepairOutput = useCallback(
+    async (outputKey: string, token: string, opts?: { force?: boolean }) => {
+      const pid = companionProjectId.trim();
+      if (!pid) {
+        setCompanionEventsHint('请先填写 companion projectId');
+        return;
+      }
+      if (opts?.force) lastCompanionOutputLoadedRef.current = '';
+      if (!opts?.force && lastCompanionOutputLoadedRef.current === token) return;
+      if (companionOutputFetchBusyRef.current) return;
+      companionOutputFetchBusyRef.current = true;
+      try {
+        const base = normalizeCompanionBaseUrl(getCompanionLocalBaseUrl());
+        const r = await fetchCompanionAssetBlob(base, pid, outputKey);
+        if (r.ok === false) {
+          setCompanionEventsHint(
+            `加载伴侣输出失败：${r.error}${r.status != null ? `（HTTP ${r.status}）` : ''}`,
+          );
+          return;
+        }
+        const blob = new Blob([r.data], { type: 'image/png' });
+        revokeResult();
+        const url = URL.createObjectURL(blob);
+        resultUrlRef.current = url;
+        setResultUrl(url);
+        setUseResultTex(true);
+        lastCompanionOutputLoadedRef.current = token;
+        setCompanionEventsHint(
+          `已从伴侣加载输出贴图（key=${outputKey}）${r.latencyMs != null ? ` ${r.latencyMs}ms` : ''}`,
+        );
+        setStatus('已从本地伴侣拉回修复贴图，可 2D/3D 预览与下载。');
+      } finally {
+        companionOutputFetchBusyRef.current = false;
+      }
+    },
+    [companionProjectId, revokeResult],
+  );
+
+  useEffect(() => {
+    const latest = companionEvents.length ? companionEvents[companionEvents.length - 1] : null;
+    if (!latest || latest.type !== 'reply.completed') return;
+    const raw = latest.payload?.outputKey;
+    if (raw == null || typeof raw !== 'string' || !raw.trim()) return;
+    const token = `${latest.jobId}:${latest.seq}`;
+    void applyCompanionRepairOutput(raw.trim(), token);
+  }, [companionEvents, applyCompanionRepairOutput]);
+
+  useEffect(() => {
+    if (!companionEventsAuto) {
+      setCompanionStreamMode('idle');
+      return;
+    }
+    const jobId = companionJobId.trim();
+    if (!jobId) return;
+    const base = normalizeCompanionBaseUrl(getCompanionLocalBaseUrl());
+    const afterSeq = Math.max(companionAfterSeq, getCompanionJobCursor(jobId));
+    const stream = createCompanionJobEventStream(base, jobId, afterSeq);
+    let closed = false;
+    setCompanionStreamMode('sse');
+    setCompanionEventsHint((prev) => prev || '已连接 SSE 事件流');
+
+    const onJobEvent = (ev: MessageEvent) => {
+      let parsed: CompanionJobEventV1 | null = null;
+      try {
+        parsed = JSON.parse(ev.data) as CompanionJobEventV1;
+      } catch {
+        return;
+      }
+      if (!parsed || typeof parsed.seq !== 'number') return;
+      setCompanionEvents((prev) => {
+        const seen = new Set(prev.map((e) => e.seq));
+        const merged = seen.has(parsed.seq) ? prev : [...prev, parsed];
+        return merged.sort((a, b) => a.seq - b.seq).slice(-300);
+      });
+      const seq = parsed.seq;
+      setCompanionAfterSeq((prev) => {
+        const next = Math.max(prev, seq);
+        setCompanionJobCursor(jobId, next);
+        return next;
+      });
+    };
+    const onJobEnd = () => {
+      setCompanionEventsHint('SSE 事件流已结束（任务终态）');
+      setCompanionStreamMode('idle');
+      stream.close();
+    };
+    const onError = () => {
+      if (closed) return;
+      setCompanionStreamMode('poll');
+      setCompanionEventsHint('SSE 不可用，已回退轮询');
+      stream.close();
+    };
+    stream.addEventListener('job.event', onJobEvent as EventListener);
+    stream.addEventListener('job.end', onJobEnd as EventListener);
+    stream.onerror = onError;
+    return () => {
+      closed = true;
+      stream.removeEventListener('job.event', onJobEvent as EventListener);
+      stream.removeEventListener('job.end', onJobEnd as EventListener);
+      stream.close();
+    };
+  }, [companionAfterSeq, companionEventsAuto, companionJobId]);
+
+  useEffect(() => {
+    if (!companionEventsAuto) return;
+    if (companionStreamMode === 'sse') return;
+    if (!companionJobId.trim()) return;
+    setCompanionStreamMode('poll');
+    const t = window.setInterval(() => {
+      void pullCompanionEvents(false);
+    }, 2500);
+    return () => window.clearInterval(t);
+  }, [companionEventsAuto, companionJobId, companionStreamMode, pullCompanionEvents]);
+
+  useEffect(() => {
+    const latest = companionEvents.length ? companionEvents[companionEvents.length - 1] : null;
+    if (!latest || !TERMINAL_JOB_EVENT_TYPES.has(latest.type)) return;
+    if (!companionEventsAuto) return;
+    setCompanionEventsAuto(false);
+    setCompanionStreamMode('idle');
+    setCompanionEventsHint(`任务已到终态：${latest.type}（已停止自动跟踪）`);
+  }, [companionEvents, companionEventsAuto]);
+
+  useEffect(() => {
+    const latest = companionEvents.length ? companionEvents[companionEvents.length - 1] : null;
+    if (!latest || !TERMINAL_JOB_EVENT_TYPES.has(latest.type)) return;
+    saveCompanionJobTerminalEvent(latest);
+  }, [companionEvents]);
+
+  useEffect(() => {
+    if (!companionJobId.trim()) return;
+    if (companionEvents.length > 0) return;
+    void pullCompanionEvents(false);
+  }, [companionEvents.length, companionJobId, pullCompanionEvents]);
+
+  const latestCompanionEvent = companionEvents.length ? companionEvents[companionEvents.length - 1] : null;
+  const companionFailed = latestCompanionEvent?.type === 'task.failed';
+  const companionCompleted = latestCompanionEvent?.type === 'reply.completed';
 
   return (
     <div className="flex h-[calc(100dvh-6rem)] gap-4 lg:gap-6 animate-in fade-in overflow-hidden flex-col">
@@ -445,6 +809,119 @@ const SeamRepairSection: React.FC<{ onLog?: (level: 'info' | 'warn' | 'error', m
         <footer className="text-[9px] text-gray-500 shrink-0">
           若接缝是<strong className="text-gray-400">法线/切线空间</strong>导致的「光照裂」，修 BaseColor 不会治本；本工具主要解决贴图跨缝不一致。
         </footer>
+        <div className="glass rounded-2xl p-4 border border-[#2e2e32] bg-[#16161a] shrink-0">
+          <div className="text-[9px] font-black text-gray-500 uppercase mb-2">本地伴侣任务事件流（闭环调试）</div>
+          <p className="text-[9px] text-gray-500 mb-2">
+            用于查看 `task.accepted → reply.delta → reply.completed/failed` 链路。可直接把当前页面 OBJ/贴图提交到本地伴侣并自动跟踪。
+          </p>
+          <input
+            type="text"
+            value={companionProjectId}
+            onChange={(e) => setCompanionProjectId(e.target.value)}
+            placeholder="companion projectId（例如 demo-seam）"
+            className="w-full px-3 py-2 rounded-xl bg-[#101014] border border-[#2e2e32] text-[11px] text-white placeholder-gray-600 focus:border-blue-500 focus:outline-none mb-2"
+            autoComplete="off"
+          />
+          <input
+            type="text"
+            value={companionJobId}
+            onChange={(e) => setCompanionJobId(e.target.value)}
+            placeholder="请输入 companion jobId"
+            className="w-full px-3 py-2 rounded-xl bg-[#101014] border border-[#2e2e32] text-[11px] text-white placeholder-gray-600 focus:border-blue-500 focus:outline-none"
+            autoComplete="off"
+          />
+          <div className="flex flex-wrap gap-2 mt-2">
+            <button
+              type="button"
+              onClick={() => void submitToCompanionAndTrack()}
+              disabled={companionSubmitBusy}
+              className="px-3 py-1.5 rounded-lg border border-[#3b82f6] text-[10px] font-bold text-blue-300 hover:bg-[#1d3e66] transition-colors disabled:opacity-60"
+            >
+              {companionSubmitBusy ? '提交中…' : '提交到本地伴侣并跟踪'}
+            </button>
+            <button
+              type="button"
+              onClick={() => void pullCompanionEvents(true)}
+              disabled={companionEventsBusy || companionSubmitBusy}
+              className="px-3 py-1.5 rounded-lg bg-[#26262c] hover:bg-[#383842] border border-[#2e2e32] text-[10px] font-bold text-gray-200 transition-colors disabled:opacity-60"
+            >
+              {companionEventsBusy ? '拉取中…' : '重置并拉取'}
+            </button>
+            <button
+              type="button"
+              onClick={() => void pullCompanionEvents(false)}
+              disabled={companionEventsBusy || companionSubmitBusy}
+              className="px-3 py-1.5 rounded-lg bg-[#26262c] hover:bg-[#383842] border border-[#2e2e32] text-[10px] font-bold text-gray-200 transition-colors disabled:opacity-60"
+            >
+              增量拉取
+            </button>
+            <button
+              type="button"
+              onClick={() => setCompanionEventsAuto((v) => !v)}
+              className="px-3 py-1.5 rounded-lg border border-[#2e2e32] text-[10px] font-bold text-gray-200 hover:bg-[#222228] transition-colors"
+            >
+              {companionEventsAuto ? '停止自动轮询' : '开启自动轮询'}
+            </button>
+          </div>
+          <p className="text-[9px] text-gray-500 mt-2">
+            当前 cursor：<code className="text-gray-400">{companionAfterSeq}</code>
+          </p>
+          {latestCompanionEvent ? (
+            <p className="text-[9px] text-gray-500 mt-1">
+              最新事件：<code className="text-gray-400">{latestCompanionEvent.type}</code> / seq=
+              <code className="text-gray-400">{latestCompanionEvent.seq}</code>
+            </p>
+          ) : null}
+          {companionEventsHint ? <p className="text-[10px] text-gray-300 mt-1">{companionEventsHint}</p> : null}
+          {(companionFailed || companionCompleted) ? (
+            <div className="mt-2 flex flex-wrap gap-2">
+              {companionFailed ? (
+                <button
+                  type="button"
+                  onClick={() => void submitToCompanionAndTrack()}
+                  disabled={companionSubmitBusy}
+                  className="px-3 py-1.5 rounded-lg border border-[#b45309] text-[10px] font-bold text-amber-300 hover:bg-[#3a2a12] transition-colors disabled:opacity-60"
+                >
+                  失败后重试提交
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={openCompanionConsole}
+                className="px-3 py-1.5 rounded-lg border border-[#2e2e32] text-[10px] font-bold text-gray-200 hover:bg-[#222228] transition-colors"
+              >
+                打开本地控制台排查
+              </button>
+              <button
+                type="button"
+                onClick={() => void copyCompanionDiagnostics()}
+                className="px-3 py-1.5 rounded-lg border border-[#2e2e32] text-[10px] font-bold text-gray-200 hover:bg-[#222228] transition-colors"
+              >
+                复制排障信息
+              </button>
+              {companionCompleted &&
+              typeof latestCompanionEvent?.payload?.outputKey === 'string' &&
+              latestCompanionEvent.payload.outputKey.trim() ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const latest = companionEvents.length ? companionEvents[companionEvents.length - 1] : null;
+                    const key = latest?.payload?.outputKey;
+                    if (typeof key === 'string' && key.trim() && latest) {
+                      void applyCompanionRepairOutput(key.trim(), `${latest.jobId}:${latest.seq}`, { force: true });
+                    }
+                  }}
+                  className="px-3 py-1.5 rounded-lg border border-[#3b82f6] text-[10px] font-bold text-blue-300 hover:bg-[#1d3e66] transition-colors"
+                >
+                  重新从伴侣加载输出贴图
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+          <pre className="mt-2 text-[9px] text-gray-500 whitespace-pre-wrap break-all max-h-44 overflow-y-auto">
+            {companionEvents.length ? JSON.stringify(companionEvents.slice(-80), null, 2) : '（暂无事件）'}
+          </pre>
+        </div>
       </div>
       </div>
     </div>

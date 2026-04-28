@@ -100,6 +100,11 @@ const CapabilityPresetSection: React.FC<{
       typeof parsed === 'number' ? normalizeCapabilityPresetColumnCount(parsed) : null
     )
   );
+  /** 与工作区顶栏步进器同一套列数；过窄时可拖宽能力预设列或调低列数 */
+  const presetMasonryColumnCount = useMemo(
+    () => normalizeCapabilityPresetColumnCount(presetColumnCount),
+    [presetColumnCount]
+  );
   type EmbedComposerSession = { id: string; initialSet: CapabilitySet | null; sessionKey: number };
   const [embedComposerSessions, setEmbedComposerSessions] = useState<EmbedComposerSession[]>([]);
   const [embedComposerActiveId, setEmbedComposerActiveId] = useState<string | null>(null);
@@ -1337,7 +1342,7 @@ const CapabilityPresetSection: React.FC<{
           ) : (
             <div
               className="[column-gap:0.75rem] [column-fill:_balance]"
-              style={{ columnCount: normalizeCapabilityPresetColumnCount(presetColumnCount) }}
+              style={{ columnCount: presetMasonryColumnCount }}
             >
               {sets.map((s) => (
                 <button
@@ -1355,7 +1360,7 @@ const CapabilityPresetSection: React.FC<{
                       <span className="text-[8px] font-black uppercase tracking-wide text-gray-500">能力集合</span>
                     </div>
                     <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-2">
-                      <div className="text-[10px] font-black text-white truncate">{s.label}</div>
+                      <div className="text-[10px] font-black text-white break-words line-clamp-2 leading-tight">{s.label}</div>
                       <div className="mt-1 flex items-center gap-1.5 flex-wrap">
                         <span className="px-2 py-0.5 rounded text-[8px] font-black uppercase bg-[#26262c]/95 text-gray-300">
                           组合流程
@@ -1727,7 +1732,7 @@ const CapabilityPresetSection: React.FC<{
           <>
             <div
               className="[column-gap:0.75rem] [column-fill:_balance]"
-              style={{ columnCount: normalizeCapabilityPresetColumnCount(presetColumnCount) }}
+              style={{ columnCount: presetMasonryColumnCount }}
             >
               {visiblePresets.map((p) => {
                 const src = getCardPreviewSrc(p);
@@ -1789,7 +1794,7 @@ const CapabilityPresetSection: React.FC<{
                   >
                     {isTextToTextPreset ? (
                       <div className="p-2.5 min-h-[4.5rem] flex flex-col justify-between gap-1.5">
-                        <div className="text-[10px] font-black text-white truncate">{p.label}</div>
+                        <div className="text-[10px] font-black text-white break-words line-clamp-2 leading-tight">{p.label}</div>
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <span className="px-2 py-0.5 rounded text-[8px] font-black uppercase bg-[#26262c]/95 text-gray-300">{categoryLabel}</span>
                           <span className={`px-2 py-0.5 rounded text-[8px] font-black uppercase ${p.enabled === false ? 'bg-[#4a1c1c]/95 text-red-300' : 'bg-[#166534]/95 text-green-300'}`}>
@@ -1859,7 +1864,7 @@ const CapabilityPresetSection: React.FC<{
                           );
                         })()}
                         <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-2">
-                          <div className="text-[10px] font-black text-white truncate">{p.label}</div>
+                          <div className="text-[10px] font-black text-white break-words line-clamp-2 leading-tight">{p.label}</div>
                           <div className="mt-1 flex items-center gap-1.5 flex-wrap">
                             <span className="px-2 py-0.5 rounded text-[8px] font-black uppercase bg-[#26262c]/95 text-gray-300">{categoryLabel}</span>
                             <span className={`px-2 py-0.5 rounded text-[8px] font-black uppercase ${p.enabled === false ? 'bg-[#4a1c1c]/95 text-red-300' : 'bg-[#166534]/95 text-green-300'}`}>
@@ -1951,7 +1956,7 @@ const CapabilityPresetSection: React.FC<{
             <div className="h-full overflow-y-auto rounded-2xl border border-white/10 bg-[#0f0f12]/98 p-3 md:p-4 space-y-3 shadow-xl backdrop-blur-[2px]">
               <div className="rounded-2xl bg-[#16161a] ring-1 ring-white/[0.07] p-3 space-y-2">
                 <div className="text-[9px] text-gray-500 uppercase tracking-wide">能力预览</div>
-                <div className="text-[14px] font-black text-white truncate">{detailPreset.label}</div>
+                <div className="text-[14px] font-black text-white break-words line-clamp-2 leading-tight">{detailPreset.label}</div>
                 <div className="text-[9px] text-gray-500">左侧预览对比，右侧参数与操作</div>
               </div>
               <div className="rounded-2xl bg-[#16161a] ring-1 ring-white/[0.07] p-3 space-y-2">

@@ -3,6 +3,7 @@
   "include": [
     "App.tsx",
     "types.ts",
+    "types/companion.ts",
     "vite-env.d.ts",
     "vite.config.ts",
     "components/**/*.ts",

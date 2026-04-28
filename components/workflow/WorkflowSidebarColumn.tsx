@@ -34,7 +34,7 @@ const DRAG_SCROLL_MAX_STEP_PX = 24;
 
 /** 功能区顶行拖放槽：实线 ring，与侧栏其它控件一致（替代虚线占位感） */
 const SIDEBAR_TOP_DROP_SLOT_BASE =
-  'rounded-xl h-[52px] px-1 flex flex-col items-center justify-center text-center transition-[box-shadow,background-color]';
+  'rounded-xl min-h-[52px] h-auto px-1 py-1.5 flex flex-col items-center justify-center text-center transition-[box-shadow,background-color]';
 const SIDEBAR_TOP_DROP_IDLE = `${SIDEBAR_TOP_DROP_SLOT_BASE} ring-1 ring-inset ring-white/[0.08] bg-white/[0.03] hover:bg-white/[0.06] hover:ring-white/[0.12]`;
 const SIDEBAR_TOP_DROP_ACTIVE_BLUE = `${SIDEBAR_TOP_DROP_SLOT_BASE} ring-2 ring-inset ring-blue-500/90 bg-[#152642] shadow-[inset_0_0_0_1px_rgba(59,130,246,0.28)]`;
 const SIDEBAR_TOP_DROP_DELETE_IDLE = `${SIDEBAR_TOP_DROP_SLOT_BASE} ring-1 ring-inset ring-white/[0.08] bg-white/[0.03] hover:bg-red-950/30 hover:ring-red-500/40`;
@@ -42,7 +42,7 @@ const SIDEBAR_TOP_DROP_DELETE_ACTIVE = `${SIDEBAR_TOP_DROP_SLOT_BASE} ring-2 rin
 
 /** 侧栏分组标题行：统一高度、无边框；拖入高亮用 ring */
 const SIDEBAR_GROUP_HEADER_BASE =
-  'flex items-center justify-between rounded-lg px-2.5 min-h-8 transition-[background-color,box-shadow]';
+  'flex w-full flex-wrap items-center justify-between gap-x-2 gap-y-1 rounded-lg px-2.5 min-h-8 transition-[background-color,box-shadow]';
 const SIDEBAR_GROUP_HEADER_IDLE = `${SIDEBAR_GROUP_HEADER_BASE} bg-white/[0.04]`;
 const SIDEBAR_GROUP_HEADER_DROP = `${SIDEBAR_GROUP_HEADER_BASE} bg-[#1a2a41] ring-1 ring-inset ring-blue-400/45`;
 
@@ -667,7 +667,11 @@ export function WorkflowSidebarColumn({
                 <svg viewBox="0 0 20 20" className={`w-3 h-3 mb-0.5 ${action.iconClass}`} aria-hidden>
                   <path d={action.iconPath} fill="currentColor" />
                 </svg>
-                <span className={`text-[8px] font-black uppercase ${action.textClass}`}>{action.label}</span>
+                <span
+                  className={`w-full max-w-full text-[8px] font-black uppercase break-words line-clamp-2 leading-tight ${action.textClass}`}
+                >
+                  {action.label}
+                </span>
               </div>
             );
           })}
@@ -675,7 +679,7 @@ export function WorkflowSidebarColumn({
             <div
               key={`capability-preset-action-placeholder-${idx}`}
               aria-hidden
-              className="h-[52px] pointer-events-none opacity-0"
+              className="min-h-[52px] pointer-events-none opacity-0"
             />
           ))}
         </div>
@@ -834,7 +838,9 @@ export function WorkflowSidebarColumn({
             <svg viewBox="0 0 20 20" className="w-3 h-3 text-gray-400 mb-0.5" aria-hidden>
               <path d="M3 4h6v5H3zM11 4h6v5h-6zM3 11h6v5H3zM11 11h6v5h-6z" fill="currentColor" />
             </svg>
-            <span className="text-[8px] font-black uppercase text-gray-200">组</span>
+            <span className="w-full max-w-full text-[8px] font-black uppercase text-gray-200 break-words line-clamp-2 leading-tight">
+              组
+            </span>
           </div>
           <div
             onDragOver={(e) => {
@@ -862,7 +868,9 @@ export function WorkflowSidebarColumn({
             <svg viewBox="0 0 20 20" className="w-3 h-3 text-gray-400 mb-0.5" aria-hidden>
               <path d="M7 5h10v10H7zM3 9l4-4v3h5v2H7v3z" fill="currentColor" />
             </svg>
-            <span className="text-[8px] font-black uppercase text-gray-200">移出组</span>
+            <span className="w-full max-w-full text-[8px] font-black uppercase text-gray-200 break-words line-clamp-2 leading-tight">
+              移出组
+            </span>
           </div>
           <div
             onDragOver={(e) => {
@@ -932,7 +940,9 @@ export function WorkflowSidebarColumn({
             <svg viewBox="0 0 20 20" className="w-3 h-3 text-gray-400 mb-0.5" aria-hidden>
               <path d="M6 6h9v10H6zM4 4h9v1H5v9H4z" fill="currentColor" />
             </svg>
-            <span className="text-[8px] font-black uppercase text-gray-200">复制</span>
+            <span className="w-full max-w-full text-[8px] font-black uppercase text-gray-200 break-words line-clamp-2 leading-tight">
+              复制
+            </span>
           </div>
           <div
             onDragOver={(e) => {
@@ -986,7 +996,9 @@ export function WorkflowSidebarColumn({
             <svg viewBox="0 0 20 20" className="w-3 h-3 text-red-300 mb-0.5" aria-hidden>
               <path d="M6 6h8l-.6 10H6.6L6 6zm2-2h4l1 1h3v2H4V5h3l1-1z" fill="currentColor" />
             </svg>
-            <span className="text-[8px] font-black uppercase text-red-400">删除</span>
+            <span className="w-full max-w-full text-[8px] font-black uppercase text-red-400 break-words line-clamp-2 leading-tight">
+              删除
+            </span>
           </div>
           <div
             onDragOver={(e) => {
@@ -1040,7 +1052,9 @@ export function WorkflowSidebarColumn({
             <svg viewBox="0 0 20 20" className="w-3 h-3 text-gray-400 mb-0.5" aria-hidden>
               <path d="M4 4h12v3H4zM5 8h10v8H5zM8 10h4v2H8z" fill="currentColor" />
             </svg>
-            <span className="text-[8px] font-black uppercase text-gray-200">归档</span>
+            <span className="w-full max-w-full text-[8px] font-black uppercase text-gray-200 break-words line-clamp-2 leading-tight">
+              归档
+            </span>
           </div>
           </div>
       )}
@@ -1076,12 +1090,17 @@ export function WorkflowSidebarColumn({
                       : `${SIDEBAR_GROUP_HEADER_IDLE} hover:bg-white/[0.07]`
                   }
                 >
-                  <span className="text-[8px] font-black text-blue-300 uppercase tracking-wide shrink-0">常用功能</span>
-                  <div className="flex-1 min-w-0 flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
+                  <span className="min-w-0 max-w-full text-[8px] font-black text-blue-300 uppercase tracking-wide break-words line-clamp-2 leading-tight">
+                    常用功能
+                  </span>
+                  <div
+                    className="min-w-0 w-full sm:w-auto sm:flex-1 flex flex-wrap items-center justify-end gap-1"
+                    onClick={(e) => e.stopPropagation()}
+                  >
                     {favoriteEntries.length === 0 && !showFavoritesDropBody ? (
                       <>
                         <span
-                          className="text-[8px] text-gray-500 truncate min-w-0"
+                          className="min-w-0 max-w-full flex-1 basis-[12rem] text-[8px] text-gray-500 break-words line-clamp-2 leading-tight text-left sm:text-right"
                           title="将能力卡拖到本行即可加入常用；展开后可在下方区域拖放"
                         >
                           拖到本行加入，或点展开
@@ -1352,7 +1371,7 @@ export function WorkflowSidebarColumn({
                         <div
                           key={`fav-${entry.id}`}
                           data-capability-hover-id={entry.kind === 'module' ? entry.mod?.id : undefined}
-                          className={`rounded-xl border h-[52px] min-h-[52px] flex overflow-hidden transition-all duration-150 ${
+                          className={`rounded-xl border min-h-[52px] h-auto flex overflow-hidden transition-all duration-150 ${
                             hasTweakSlot ? 'col-span-2' : 'col-span-1'
                           } ${
                             dragOverAction === entry.id
@@ -1458,7 +1477,9 @@ export function WorkflowSidebarColumn({
               }
             }}
                           >
-                            <span className="text-[8px] leading-tight font-black uppercase truncate w-full">{entry.label}</span>
+                            <span className="w-full min-w-0 text-[8px] leading-tight font-black uppercase break-words line-clamp-2 text-center">
+                              {entry.label}
+                            </span>
                           </div>
                           {hasTweakSlot && (
                             <div
@@ -1533,7 +1554,7 @@ export function WorkflowSidebarColumn({
                       setFavoriteDropActive(false);
                       tryAddActionToFavoriteFromEvent(e);
                     }}
-                    className={`mb-1 gap-1.5 ${
+                    className={`mb-1 flex w-full flex-wrap items-center justify-between gap-x-1.5 gap-y-1 ${
                       dragOverAction === `__favorite_group_header__:${category.id}`
                         ? SIDEBAR_GROUP_HEADER_DROP
                         : `${SIDEBAR_GROUP_HEADER_IDLE} hover:bg-white/[0.07]`
@@ -1542,12 +1563,15 @@ export function WorkflowSidebarColumn({
                     <button
                       type="button"
                       onClick={() => toggleSectionCollapsed(`cat:${category.id}`)}
-                      className="shrink-0 text-left inline-flex items-center gap-1 text-[8px] font-black uppercase tracking-wide text-gray-400 hover:text-gray-200 transition-colors"
+                      className="min-w-0 max-w-[min(100%,11rem)] shrink text-left inline-flex items-center gap-1 text-[8px] font-black uppercase tracking-wide text-gray-400 hover:text-gray-200 transition-colors"
                     >
-                      <span>{category.label}</span>
-                      <span className="text-[10px] text-gray-500">{collapsedSectionIds[`cat:${category.id}`] ? '▼' : '▲'}</span>
+                      <span className="min-w-0 break-words line-clamp-2 leading-tight">{category.label}</span>
+                      <span className="shrink-0 text-[10px] text-gray-500">{collapsedSectionIds[`cat:${category.id}`] ? '▼' : '▲'}</span>
                     </button>
-                    <div className="flex-1 min-w-0 flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
+                    <div
+                      className="min-w-0 w-full sm:w-auto sm:flex-1 flex flex-wrap items-center justify-end gap-1"
+                      onClick={(e) => e.stopPropagation()}
+                    >
                       {(() => {
                         const hasImageParamOptions = list.some((m) => capabilityUsesGenImageEngine(m));
                         const hasGenerateCountOptions =
@@ -1757,12 +1781,12 @@ export function WorkflowSidebarColumn({
                     </div>
                   </div>
                   {!collapsedSectionIds[`cat:${category.id}`] && (
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="grid grid-cols-2 gap-2 items-stretch">
                     {list.map((mod) => (
                       <div
                         key={mod.id}
                         data-capability-hover-id={mod.id}
-                        className={`rounded-xl border min-h-[60px] flex overflow-hidden transition-all duration-150 ${
+                        className={`rounded-xl border min-h-[60px] h-auto flex overflow-hidden transition-all duration-150 ${
                           dragOverAction === mod.id
                             ? DROP_TARGET_ACTIVE_CLASS
                             : dragOverAction === mod.id + '__tweak'
@@ -1845,7 +1869,9 @@ export function WorkflowSidebarColumn({
                             handleDropToModuleAction(mod, false, e, getGroupOverridesForCategory(category.id));
                           }}
                         >
-                          <span className="text-[9px] font-black uppercase">{mod.label}</span>
+                          <span className="w-full min-w-0 text-[9px] font-black uppercase break-words line-clamp-2 text-center leading-tight">
+                            {mod.label}
+                          </span>
                         </div>
                         {capabilityUsesGenImageEngine(mod) && (
                           <div
@@ -1916,11 +1942,11 @@ export function WorkflowSidebarColumn({
                 <span className="text-[10px] text-gray-500">{collapsedSectionIds.__all_presets__ ? '▼' : '▲'}</span>
               </button>
               {!collapsedSectionIds.__all_presets__ && (
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-2 gap-2 items-stretch">
               {visiblePresets.map((mod) => (
                 <div
                   key={mod.id}
-                  className={`rounded-xl border min-h-[60px] flex overflow-hidden transition-all duration-150 ${
+                  className={`rounded-xl border min-h-[60px] h-auto flex overflow-hidden transition-all duration-150 ${
                     dragOverAction === mod.id
                       ? DROP_TARGET_ACTIVE_CLASS
                       : dragOverAction === mod.id + '__tweak'
@@ -1985,7 +2011,9 @@ export function WorkflowSidebarColumn({
                       handleDropToModuleAction(mod, false, e);
                     }}
                   >
-                    <span className="text-[9px] font-black uppercase">{mod.label}</span>
+                    <span className="w-full min-w-0 text-[9px] font-black uppercase break-words line-clamp-2 text-center leading-tight">
+                      {mod.label}
+                    </span>
                   </div>
                   {capabilityUsesGenImageEngine(mod) && (
                     <div
@@ -2102,7 +2130,9 @@ export function WorkflowSidebarColumn({
                             : `${getSidebarCapabilityTone('set').idleBorderClass} bg-[#1c1c22] ${getSidebarCapabilityTone('set').hoverBorderClass}`
                       }`}
                     >
-                      <span className="text-[9px] font-black uppercase text-gray-200">{set.label}</span>
+                      <span className="w-full min-w-0 text-[9px] font-black uppercase text-gray-200 break-words line-clamp-2 text-center leading-tight">
+                        {set.label}
+                      </span>
                     </div>
                   );
                 })}

@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>本地伴侣 — 首次运行</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family: 'Segoe UI', system-ui, sans-serif;
+        background: #141414;
+        color: #e8e8e8;
+        line-height: 1.5;
+        padding: 28px 32px;
+        -webkit-user-select: none;
+        user-select: none;
+      }
+      h1 {
+        font-size: 1.15rem;
+        font-weight: 600;
+        margin: 0 0 8px;
+      }
+      p {
+        margin: 0 0 14px;
+        font-size: 0.9rem;
+        color: #b0b0b0;
+      }
+      ul {
+        margin: 0 0 20px;
+        padding-left: 1.2rem;
+        font-size: 0.88rem;
+        color: #c8c8c8;
+      }
+      li {
+        margin-bottom: 6px;
+      }
+      .actions {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        margin-top: 8px;
+      }
+      .pairing {
+        margin: 14px 0 6px;
+        padding: 12px;
+        border: 1px solid #2f2f33;
+        border-radius: 10px;
+        background: #17171b;
+      }
+      .pairing h3 {
+        margin: 0 0 8px;
+        font-size: 0.92rem;
+      }
+      .field {
+        margin-bottom: 8px;
+      }
+      .field label {
+        display: block;
+        margin-bottom: 4px;
+        font-size: 0.78rem;
+        color: #a7a7b2;
+      }
+      .field input {
+        width: 100%;
+        border: 1px solid #34343a;
+        background: #101014;
+        color: #e5e7eb;
+        border-radius: 8px;
+        padding: 8px 10px;
+        font-size: 0.82rem;
+      }
+      .hint {
+        margin: 8px 0 0;
+        font-size: 0.75rem;
+        color: #8f95a0;
+      }
+      button {
+        border: 1px solid #333;
+        border-radius: 8px;
+        padding: 10px 16px;
+        font-size: 0.9rem;
+        cursor: pointer;
+        background: #2a2a2a;
+        color: #eee;
+      }
+      button:hover {
+        background: #363636;
+      }
+      button.primary {
+        background: #3d5a80;
+        border-color: #4a6fa5;
+      }
+      button.primary:hover {
+        background: #4a6fa5;
+      }
+      label.row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 0.82rem;
+        color: #888;
+        margin-top: 4px;
+      }
+      label.row input {
+        cursor: not-allowed;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>欢迎使用 Asset Cutter 本地伴侣</h1>
+    <p>在 <strong>Windows</strong> 上，本窗口会在<strong>首次启动</strong>时自动打开；之后可在托盘菜单选择<strong>「欢迎向导」</strong>再次查看。伴侣已在后台运行，<strong>左键单击托盘图标</strong>可快速打开本机控制台，<strong>右键</strong>打开菜单（含退出）。</p>
+    <ul>
+      <li>托盘菜单 →「打开本机控制台」管理插件与仓库。</li>
+      <li>与网站联调前，请保持本程序运行；默认仅监听本机回环地址。</li>
+      <li>可先在本向导填写配对 Token 与站点 Origin（会持久化到本机配置）。</li>
+    </ul>
+    <div class="pairing">
+      <h3>网站配对（最小可用）</h3>
+      <div class="field">
+        <label for="pair-token">配对 Token（可选）</label>
+        <input id="pair-token" type="password" placeholder="与网站设置页填写一致（至少 8 位）" />
+      </div>
+      <div class="field">
+        <label for="pair-origin">允许站点 Origin（可选）</label>
+        <input id="pair-origin" type="text" placeholder="如 http://localhost:5173,http://127.0.0.1:*" />
+      </div>
+      <button type="button" id="save-pairing">保存配对配置</button>
+      <p class="hint" id="pairing-hint">未保存（Origin 用逗号分隔，支持 http://127.0.0.1:* 形式）</p>
+    </div>
+    <div class="actions">
+      <button type="button" class="primary" id="open-console">打开本机控制台</button>
+      <button type="button" id="complete">完成，进入托盘运行</button>
+    </div>
+    <label class="row">
+      <input type="checkbox" id="autostart" disabled />
+      开机自动启动本地伴侣（即将支持）
+    </label>
+    <script>
+      const w = window.companionWizard;
+      const tokenEl = document.getElementById('pair-token');
+      const originEl = document.getElementById('pair-origin');
+      const hintEl = document.getElementById('pairing-hint');
+      const saveBtn = document.getElementById('save-pairing');
+
+      async function loadPairing() {
+        if (!w || !w.loadPairing) return;
+        try {
+          const cfg = await w.loadPairing();
+          tokenEl.value = cfg && typeof cfg.sharedToken === 'string' ? cfg.sharedToken : '';
+          originEl.value = cfg && typeof cfg.allowedOrigins === 'string' ? cfg.allowedOrigins : '';
+          hintEl.textContent = '已加载本机配对配置';
+        } catch {
+          hintEl.textContent = '读取配置失败';
+        }
+      }
+
+      saveBtn.addEventListener('click', async () => {
+        if (!w || !w.savePairing) return;
+        saveBtn.disabled = true;
+        hintEl.textContent = '保存中...';
+        try {
+          const r = await w.savePairing({
+            sharedToken: tokenEl.value || '',
+            allowedOrigins: originEl.value || '',
+          });
+          hintEl.textContent = r && r.ok ? '保存成功（重启后生效）' : `保存失败：${(r && r.error) || 'unknown'}`;
+        } catch {
+          hintEl.textContent = '保存失败';
+        } finally {
+          saveBtn.disabled = false;
+        }
+      });
+
+      document.getElementById('open-console').addEventListener('click', () => {
+        if (w) w.openConsole();
+      });
+      document.getElementById('complete').addEventListener('click', () => {
+        if (w) w.complete();
+      });
+      loadPairing();
+    </script>
+  </body>
+</html>

@@ -1,0 +1,48 @@
+{
+  "name": "@assetcutter/companion-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "author": "AssetCutter Team",
+  "description": "本地伴侣桌面壳：托盘、Windows 首次向导骨架、启动 local-companion",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist:win": "electron-builder --win nsis",
+    "dist:portable": "electron-builder --win portable"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "electron": "^35.7.5",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.assetcutter.companion",
+    "productName": "AssetCutterCompanion",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.cjs",
+      "preload-wizard.cjs",
+      "wizard/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "npmRebuild": false,
+    "win": {
+      "signAndEditExecutable": false,
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "artifactName": "AssetCutterCompanion-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

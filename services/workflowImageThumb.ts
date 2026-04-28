@@ -62,6 +62,27 @@ export function shouldUsePreviewThumbnail(src: string): boolean {
   return true;
 }
 
+/**
+ * 用于 ProgressivePreview 的 `cacheKey` 后缀：同一资产 `displayKey` 下若 `original`/结果图替换（如 3D SVG→JPEG），
+ * 键必须变化以丢弃旧缩略 LRU，否则会一直显示占位阶段生成的微图/小图。
+ */
+export function previewSrcCacheFingerprint(src: string): string {
+  const s = src || '';
+  if (!s) return 'e0';
+  const n = s.length;
+  const head = s.slice(0, Math.min(24, n));
+  const mid = s.slice(Math.max(0, Math.floor(n / 2) - 6), Math.min(n, Math.floor(n / 2) + 6));
+  const tail = n > 48 ? s.slice(-24) : '';
+  let h = 2166136261 >>> 0;
+  for (const part of [head, mid, tail]) {
+    for (let i = 0; i < part.length; i++) {
+      h ^= part.charCodeAt(i);
+      h = Math.imul(h, 16777619) >>> 0;
+    }
+  }
+  return `${n.toString(36)}-${h.toString(36)}`;
+}
+
 /** @deprecated 使用 shouldUsePreviewThumbnail */
 export function shouldUseWorkflowGridThumb(src: string): boolean {
   return shouldUsePreviewThumbnail(src);

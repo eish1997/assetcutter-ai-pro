@@ -6,6 +6,9 @@ import { lazy, type ComponentType, type LazyExoticComponent } from 'react';
 /** 与懒加载 Viewer 对齐的最小 props（图片类）；其它类型可另建 registry 或扩展联合类型 */
 export type LazyImagePreviewViewerProps = {
   imageSrc: string;
+  modelSrc?: string;
+  /** 与 blob: 本地 URL 配合，用于推断 .fbx/.obj 等格式 */
+  modelFileName?: string;
   className?: string;
 };
 
@@ -13,6 +16,7 @@ type Loader = () => Promise<{ default: ComponentType<LazyImagePreviewViewerProps
 
 const builtInImageLoaders: Record<string, Loader> = {
   'image.equirect': () => import('./viewers/ImageEquirectViewer'),
+  'image.model3d': () => import('./viewers/ImageModel3DViewer'),
 };
 
 const customImageLoaders = new Map<string, Loader>();

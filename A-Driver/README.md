@@ -1,12 +1,23 @@
 # A-Driver（同仓分目录）
 
-本目录用于本地中转应用开发，与现有网站代码解耦。
+本目录用于 **本地伴侣（Companion）** 中 **Relay（站点中转）** 能力的可运行实现，与现有网站代码解耦。架构总览见仓库根目录 [`docs/本地伴侣-存储与计算规范.md`](../docs/本地伴侣-存储与计算规范.md)。
 
 ## 目录
 
-- `apps/local-bridge`：本地中转进程骨架
+- `apps/local-bridge`：当前即 **Companion 宿主进程内的 Relay 实现载体**（WS 中转 + 本机 HTTP `capabilities`）
 - `packages/protocol`：网站与中转之间的共享协议类型
 - `docs`：需求、设计与 AI 提示词
+
+## 本机 HTTP 能力宣告（Companion P0）
+
+`local-bridge` 启动时默认在 **`127.0.0.1:18765`** 提供（与网站编排面对接）：
+
+- `GET http://127.0.0.1:18765/v1/capabilities` — JSON：`protocolVersion`、已注册站点连接器列表、`storage`/`compute` 占位（未实现）
+- `GET http://127.0.0.1:18765/v1/health` — 存活探测
+
+环境变量：
+
+- **`COMPANION_HTTP_PORT`**：端口；设为 **`0`** 关闭 HTTP 面（仅 WS / demo）。
 
 ## 快速开始
 

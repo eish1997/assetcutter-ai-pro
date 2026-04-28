@@ -3400,77 +3400,87 @@ const MainApp: React.FC = () => {
             )}
             {mode === AppMode.TEXTURE && <TextureEngineSection />}
 
-            {mode === AppMode.WORKFLOW && (
-              <WorkflowModeShell
-                showWorkspaceIdbHydrateOverlay={showWorkspaceIdbHydrateOverlay}
-                activeWorkspaceProjectId={activeWorkspaceProjectId}
-                user={user}
-                workspaceCloudEnabled={isWorkspaceCloudEnabled()}
-                workspaceCloudUsedBytes={workspaceCloudUsedBytes}
-                workspaceCloudQuotaBytes={workspaceCloudQuotaBytes}
-                workspaceCloudUsageRatio={workspaceCloudUsageRatio}
-                workspaceCloudUsagePercent={workspaceCloudUsagePercent}
-                workspaceProjects={workspaceProjects}
-                onWorkspaceCreate={createWorkspaceProjectEntry}
-                onWorkspaceOpen={openWorkspaceProject}
-                onWorkspaceRename={renameWorkspaceProjectEntry}
-                onWorkspaceDelete={requestDeleteWorkspaceProject}
-                workspaceCloudQuotaSuspended={workspaceCloudQuotaSuspended}
-                renderWorkflowSection={() => (
-                  <WorkflowSection
-                    capabilityPresets={capabilityPresets}
-                    capabilitySets={capabilitySets}
-                    assets={workflowAssets}
-                    onAssetsChange={setWorkflowAssets}
-                    pending={workflowPending}
-                    onPendingChange={setWorkflowPending}
-                    onOpenLibraryPicker={(cb) => openPicker(undefined, cb, true)}
-                    onLog={(level, message, detail) => addGlobalLog('工作区', level, message, detail)}
-                    onAddGenerate3DJob={handleAddGenerate3DJobFromWorkflow}
-                    preferenceScope={user?.id ?? null}
-                    onboardingKey={`${user?.id ?? 'guest'}:${activeWorkspaceProjectId}`}
-                    workspaceProjectChrome={{
-                      projectOptions: workspaceProjectOptions,
-                      activeProjectId: activeWorkspaceProjectId,
-                      activeProjectName: activeWorkspaceProjectName,
-                      onBackToProjectList: () => void backToWorkspaceProjectShell(),
-                      onSelectProject: (id) => void openWorkspaceProject(id),
-                    }}
-                    registerMarqueeStartHandler={registerWorkflowMarqueeStart}
-                    registerPaneWheelHandler={registerWorkflowPaneWheel}
-                    libraryItems={library}
-                    onAddToLibrary={addToLibrary}
-                    onUpdateCapabilityPresets={(next) => {
-                      setCapabilityPresets(next);
-                      saveCapabilityPresets(next);
-                    }}
-                    onUpdateCapabilitySets={(next) => {
-                      setCapabilitySets(next);
-                      saveCapabilitySets(next);
-                    }}
-                    capabilityPresetPanel={
-                      <Suspense fallback={<LazySectionFallback label="能力预设" />}>
-                        <CapabilityPresetSection
-                          presets={capabilityPresets}
-                          onUpdate={(next) => {
-                            setCapabilityPresets(next);
-                            saveCapabilityPresets(next);
-                          }}
-                          sets={capabilitySets}
-                          onUpdateSets={(next) => {
-                            setCapabilitySets(next);
-                            saveCapabilitySets(next);
-                          }}
-                          onRunTest={runCapabilityTest}
-                          onLog={(level, message, detail) => addGlobalLog('能力', level, message, detail)}
-                          embeddedInWorkflow={true}
-                          canUploadToR2={user?.role === 'admin'}
-                        />
-                      </Suspense>
-                    }
-                  />
-                )}
-              />
+            {(activeWorkspaceProjectId || mode === AppMode.WORKFLOW) && (
+              <div
+                className={
+                  mode !== AppMode.WORKFLOW
+                    ? 'hidden'
+                    : activeWorkspaceProjectId
+                      ? 'flex min-h-0 min-w-0 w-full flex-1 flex-col'
+                      : undefined
+                }
+              >
+                <WorkflowModeShell
+                  showWorkspaceIdbHydrateOverlay={showWorkspaceIdbHydrateOverlay}
+                  activeWorkspaceProjectId={activeWorkspaceProjectId}
+                  user={user}
+                  workspaceCloudEnabled={isWorkspaceCloudEnabled()}
+                  workspaceCloudUsedBytes={workspaceCloudUsedBytes}
+                  workspaceCloudQuotaBytes={workspaceCloudQuotaBytes}
+                  workspaceCloudUsageRatio={workspaceCloudUsageRatio}
+                  workspaceCloudUsagePercent={workspaceCloudUsagePercent}
+                  workspaceProjects={workspaceProjects}
+                  onWorkspaceCreate={createWorkspaceProjectEntry}
+                  onWorkspaceOpen={openWorkspaceProject}
+                  onWorkspaceRename={renameWorkspaceProjectEntry}
+                  onWorkspaceDelete={requestDeleteWorkspaceProject}
+                  workspaceCloudQuotaSuspended={workspaceCloudQuotaSuspended}
+                  renderWorkflowSection={() => (
+                    <WorkflowSection
+                      capabilityPresets={capabilityPresets}
+                      capabilitySets={capabilitySets}
+                      assets={workflowAssets}
+                      onAssetsChange={setWorkflowAssets}
+                      pending={workflowPending}
+                      onPendingChange={setWorkflowPending}
+                      onOpenLibraryPicker={(cb) => openPicker(undefined, cb, true)}
+                      onLog={(level, message, detail) => addGlobalLog('工作区', level, message, detail)}
+                      onAddGenerate3DJob={handleAddGenerate3DJobFromWorkflow}
+                      preferenceScope={user?.id ?? null}
+                      onboardingKey={`${user?.id ?? 'guest'}:${activeWorkspaceProjectId}`}
+                      workspaceProjectChrome={{
+                        projectOptions: workspaceProjectOptions,
+                        activeProjectId: activeWorkspaceProjectId,
+                        activeProjectName: activeWorkspaceProjectName,
+                        onBackToProjectList: () => void backToWorkspaceProjectShell(),
+                        onSelectProject: (id) => void openWorkspaceProject(id),
+                      }}
+                      registerMarqueeStartHandler={registerWorkflowMarqueeStart}
+                      registerPaneWheelHandler={registerWorkflowPaneWheel}
+                      libraryItems={library}
+                      onAddToLibrary={addToLibrary}
+                      onUpdateCapabilityPresets={(next) => {
+                        setCapabilityPresets(next);
+                        saveCapabilityPresets(next);
+                      }}
+                      onUpdateCapabilitySets={(next) => {
+                        setCapabilitySets(next);
+                        saveCapabilitySets(next);
+                      }}
+                      capabilityPresetPanel={
+                        <Suspense fallback={<LazySectionFallback label="能力预设" />}>
+                          <CapabilityPresetSection
+                            presets={capabilityPresets}
+                            onUpdate={(next) => {
+                              setCapabilityPresets(next);
+                              saveCapabilityPresets(next);
+                            }}
+                            sets={capabilitySets}
+                            onUpdateSets={(next) => {
+                              setCapabilitySets(next);
+                              saveCapabilitySets(next);
+                            }}
+                            onRunTest={runCapabilityTest}
+                            onLog={(level, message, detail) => addGlobalLog('能力', level, message, detail)}
+                            embeddedInWorkflow={true}
+                            canUploadToR2={user?.role === 'admin'}
+                          />
+                        </Suspense>
+                      }
+                    />
+                  )}
+                />
+              </div>
             )}
 
             {mode === AppMode.SEAM_REPAIR && (

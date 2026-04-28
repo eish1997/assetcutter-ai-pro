@@ -8,6 +8,8 @@ type ClientOptions = {
   deviceId: string;
   authToken?: string;
   onMessage: MessageHandler;
+  /** WebSocket `open` 时调用（用于宿主 UI 状态） */
+  onOpen?: () => void;
   onDisconnected?: (reason: string) => void;
   reconnectBaseMs?: number;
   reconnectMaxMs?: number;
@@ -47,6 +49,11 @@ export class WebSocketBridgeClient {
     this.socket.send(JSON.stringify(event));
   }
 
+  /** 是否与云端 WebSocket 处于已连接状态 */
+  isConnected(): boolean {
+    return this.socket != null && this.socket.readyState === WebSocket.OPEN;
+  }
+
   private connect(): void {
     const socket = new WebSocket(this.options.wsUrl, {
       headers: {
@@ -62,6 +69,7 @@ export class WebSocketBridgeClient {
       this.reconnectAttempt = 0;
       this.startPing();
       console.log("[bridge] ws connected:", this.options.wsUrl);
+      this.options.onOpen?.();
     });
 
     socket.on("message", async (raw: RawData) => {
