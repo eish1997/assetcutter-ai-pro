@@ -8,7 +8,10 @@
  * Vertex AI：请求 JSON 带 aiBackend: "vertex" 时走 GCP（需 VERTEX_PROJECT_ID 或 GOOGLE_CLOUD_PROJECT、ADC）。
  * 详见 docs/VERTEX_AI_INTEGRATION.md
  */
+import fs from 'fs';
 import http from 'http';
+import os from 'os';
+import path from 'path';
 import { GoogleGenAI } from '@google/genai';
 import {
   GEMINI_PROXY_MAX_BODY_BYTES as MAX_BODY_BYTES,
@@ -100,6 +103,46 @@ function vertexLocation() {
 function isVertexConfigured() {
   return Boolean(vertexProjectId());
 }
+
+/**
+ * Render / 部分 PaaS 不便挂载 JSON 文件路径，可将服务账号 JSON 整段写入环境变量。
+ * 启动时写入临时文件并设置 GOOGLE_APPLICATION_CREDENTIALS，供 @google/genai ADC 使用。
+ * 优先级：已有且存在的文件路径 > 内联 JSON 环境变量。
+ */
+function ensureAdcFromJsonEnv() {
+  const existingPath = normalizeSecret(process.env.GOOGLE_APPLICATION_CREDENTIALS || '');
+  if (existingPath) {
+    try {
+      if (fs.existsSync(existingPath)) return;
+    } catch {
+      /* ignore */
+    }
+  }
+  const raw = normalizeSecret(
+    process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON ||
+      process.env.GCP_SERVICE_ACCOUNT_JSON ||
+      process.env.GOOGLE_SERVICE_ACCOUNT_JSON ||
+      ''
+  );
+  if (!raw) return;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return;
+  } catch {
+    console.warn('[gemini-proxy-api] GOOGLE_APPLICATION_CREDENTIALS_JSON / GCP_SERVICE_ACCOUNT_JSON is not valid JSON; ignoring');
+    return;
+  }
+  const tmp = path.join(os.tmpdir(), `gcp-adc-${process.pid}.json`);
+  try {
+    fs.writeFileSync(tmp, raw, 'utf8');
+    process.env.GOOGLE_APPLICATION_CREDENTIALS = tmp;
+    console.log('[gemini-proxy-api] ADC: using inline JSON env → temp file for Application Default Credentials');
+  } catch (e) {
+    console.warn('[gemini-proxy-api] ADC: could not write temp credentials file:', e?.message || e);
+  }
+}
+
+ensureAdcFromJsonEnv();
 
 /** Vertex 使用 ADC；lazy 按 project+location 重建 */
 let vertexAiClient = null;
@@ -569,7 +612,7 @@ function isRetryable(e) {
   try {
     const j = typeof msg === 'string' && msg.startsWith('{') ? JSON.parse(msg) : null;
     if (j?.error?.code === 504 || j?.error?.code === 503 || j?.error?.status === 'DEADLINE_EXCEEDED' || j?.error?.status === 'UNAVAILABLE') return true;
-  } catch (_) {
+  } catch {
     /* ignore */
   }
   return false;
@@ -809,4 +852,12 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, BIND_HOST, () => {
   console.log(`[gemini-proxy-api] http://${BIND_HOST}:${PORT}`);
+  const vp = vertexProjectId();
+  const vOk = isVertexConfigured();
+  console.log(`[gemini-proxy-api] Vertex project: ${vp || '(unset)'}  configured=${vOk}  location=${vOk ? vertexLocation() : '—'}`);
+  if (!vOk) {
+    console.warn(
+      '[gemini-proxy-api] Vertex is not configured (VERTEX_PROJECT_ID / GOOGLE_CLOUD_PROJECT empty). Requests with aiBackend:vertex will return 500. Set project id + ADC on this service — see docs/VERTEX_AI_INTEGRATION.md'
+    );
+  }
 });

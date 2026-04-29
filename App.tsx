@@ -1,9 +1,10 @@
 
 import React, { Suspense, useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from 'react';
-import { processTexture, DEFAULT_PROMPTS, normalizeApiErrorMessage, getTexturePrompt, parsePromptStructured, understandImageEditIntent } from './services/geminiService';
+import { processTexture, DEFAULT_PROMPTS, normalizeApiErrorMessage, getTexturePrompt, parsePromptStructured } from './services/geminiService';
 import { loadRecords, addRecord as addGenerationRecord, updateScore as updateGenerationScore } from './services/recordStore';
 import { loadSnippets } from './services/snippetStore';
 import { PRO_VIEW_IDS, type Submit3DProInput, type Submit3DRapidInput } from './services/tencentService';
+import { createTripoTask, getTripoTask, waitTripoTaskDone, type TripoTaskType } from './services/tripoService';
 import { AppStep, AppMode, LibraryItem, SystemConfig, AppTask, AssetCategory, DialogMessage, DialogSession, DialogTempItem, DialogImageGear, DIALOG_ASPECT_RATIO_OPTIONS, SUPPORTED_IMAGE_SIZES, DIALOG_IMAGE_GEARS, type GenerationRecord, type CustomAppModule, type CapabilitySet, type WorkflowAsset, type WorkflowPendingTask, type ArenaCurrentStep, type ArenaStepEntry, type ArenaTimelineBlock } from './types';
 import DropdownSelect from './components/DropdownSelect';
 import MultiViewUpload from './components/MultiViewUpload';
@@ -14,7 +15,7 @@ import { loadCapabilitySets, saveCapabilitySets, CAPABILITY_SETS_KEY } from './s
 import { useGenerate3DManager, type Temp3DItem } from './hooks/useGenerate3DManager';
 import { useWorkflowMainScrollCapture, type WorkflowCapabilityGutterDropConfig } from './hooks/useWorkflowMainScrollCapture';
 import { useDialogWorkspace } from './hooks/useDialogWorkspace';
-import { useDialogGeneration, getDialogUnderstandImageInput } from './hooks/useDialogGeneration';
+import { useDialogGeneration } from './hooks/useDialogGeneration';
 import { useDialogPostProcessing } from './hooks/useDialogPostProcessing';
 import { useAuth } from './components/auth/AuthContext';
 import { CustomDropdown, DROPDOWN_TRIGGER_COMPACT } from './components/ui/CustomDropdown';
@@ -40,11 +41,14 @@ import {
   createWorkspaceProject,
   getLastOpenedWorkspaceProjectId,
   loadWorkflowBundle,
+  consumeWorkspaceMigrationNotices,
   trySaveWorkflowBundle,
   removeWorkflowBundle,
   setLastOpenedWorkspaceProjectId,
   ensureWorkspaceBundlesHydratedFromIdb,
   flushWorkspaceBundleIdbWrites,
+  migrateWorkflowBundleProjectId,
+  type WorkspaceProject,
 } from './services/workspaceProjectStore';
 import {
   deleteWorkspaceProjectObjects,
@@ -56,7 +60,6 @@ import {
   pushWorkspaceIndex,
   WORKSPACE_CLOUD_DEFAULT_QUOTA_BYTES,
 } from './services/workspaceCloudSync';
-import { hydrateWorkflowBundleFromCloud } from './services/workspaceR2ImageBundle';
 import { dialogVersionHasRenderableImage, dialogVersionsForMessage, getDialogVersionImageDataUrl } from './services/dialogImageHelpers';
 import { HttpRequestError } from './services/httpClient';
 import { triggerImageDownload } from './services/imageDataUrl';
@@ -68,6 +71,7 @@ import {
   getDialogSkipUnderstand,
   getToapisApiKey,
   getToapisBaseUrl,
+  getTripoApiKey,
   getUserApiKey,
   getVectorengineApiKey,
   getVectorengineBaseUrl,
@@ -84,13 +88,77 @@ import {
   setVectorengineBaseUrl,
   setWorkspaceAutoSyncEnabled,
 } from './services/settingsStore';
-import { fetchWorkspaceUserCloudConfig, pushWorkspaceUserCloudConfig } from './services/workspaceUserCloudConfig';
+import {
+  buildCapabilityCloudRecords,
+  fetchWorkspaceUserCloudConfig,
+  mergeCapabilityCloudRecords,
+  pushWorkspaceUserCloudConfig,
+  type CapabilityCloudRecord,
+} from './services/workspaceUserCloudConfig';
 import { getUserUiPrefs, setUserUiPrefs } from './services/userUiPrefs';
 import { getDialogBridgePrefs, setDialogBridgePrefs, subscribeDialogBridgePrefs } from './services/dialogBridgePrefs';
 import { fetchBridgeUserDevices } from './services/dialogBridgeClient';
 import { WorkflowApiKeyModal } from './components/WorkflowApiKeyModal';
+import { reportClientDebugLog } from './services/clientDebugLog';
+import { getCompanionLocalBaseUrl } from './services/companionLocalPrefs';
+import {
+  createCompanionWorkspaceProject,
+  deleteCompanionWorkspaceProject,
+  fetchCompanionAssetBlob,
+  listCompanionWorkspaceProjects,
+  listCompanionWorkspaceTrashProjects,
+  putCompanionAsset,
+  renameCompanionWorkspaceProject,
+  restoreCompanionWorkspaceTrashProject,
+  getCompanionManifest,
+  reconcileCompanionManifestFromDisk,
+  type CompanionWorkspaceTrashProjectV1,
+} from './services/companionClient';
+import {
+  attemptRepairCompanionManifestKeyGaps,
+  findCompanionKeysMissingFromManifest,
+} from './services/workflowManifestCrossCheck';
 function isImagePreviewEscapeKey(e: KeyboardEvent): boolean {
   return e.key === 'Escape' || e.code === 'Escape' || e.keyCode === 27;
+}
+
+type ClipboardCopyOutcome = 'clipboard' | 'exec' | 'manual';
+
+function tryCopyTextViaExecCommand(text: string): boolean {
+  if (typeof document === 'undefined') return false;
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    ta.style.top = '0';
+    ta.style.opacity = '0';
+    ta.style.pointerEvents = 'none';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return Boolean(ok);
+  } catch {
+    return false;
+  }
+}
+
+async function copyTextToClipboardWithFallback(text: string): Promise<ClipboardCopyOutcome> {
+  if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+    try {
+      await navigator.clipboard.writeText(text);
+      return 'clipboard';
+    } catch {
+      // fall through
+    }
+  }
+  if (typeof document !== 'undefined' && tryCopyTextViaExecCommand(text)) {
+    return 'exec';
+  }
+  return 'manual';
 }
 
 /** 自动同步间隔：默认 3 分钟，减少后台上传频率；可在 .env 设 `VITE_WORKSPACE_AUTO_SYNC_INTERVAL_MS`（30000～3600000）覆盖 */
@@ -102,6 +170,94 @@ function readWorkspaceAutoSyncIntervalMs(): number {
   return Math.min(3600_000, Math.max(30_000, Math.floor(n)));
 }
 const WORKSPACE_AUTO_SYNC_INTERVAL_MS = readWorkspaceAutoSyncIntervalMs();
+
+function estimateStringBytes(value: string): number {
+  if (!value) return 0;
+  const v = String(value);
+  if (v.startsWith('data:')) {
+    const comma = v.indexOf(',');
+    if (comma >= 0 && comma < v.length - 1) {
+      const payload = v.slice(comma + 1);
+      return Math.floor((payload.length * 3) / 4);
+    }
+  }
+  return v.length;
+}
+
+function formatApproxBytes(bytes: number): string {
+  const n = Math.max(0, Number(bytes) || 0);
+  if (n >= 1024 * 1024 * 1024) return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+  if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  if (n >= 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${Math.round(n)} B`;
+}
+
+type ManualUploadMode = 'full' | 'incremental';
+type ManualUploadEstimate = {
+  assetCount: number;
+  previewCount: number;
+  modelCount: number;
+  bytesApprox: number;
+};
+
+function buildManualUploadEstimate(assets: WorkflowAsset[]): ManualUploadEstimate {
+  let previewCount = 0;
+  let modelCount = 0;
+  let bytesApprox = 0;
+  for (const asset of assets) {
+    const original = String(asset?.original || '');
+    if (original) {
+      previewCount += 1;
+      bytesApprox += estimateStringBytes(original);
+    }
+    const models = Array.isArray(asset?.modelUrls) ? asset.modelUrls : [];
+    modelCount += models.length;
+    for (const url of models) {
+      bytesApprox += estimateStringBytes(String(url || ''));
+    }
+  }
+  return {
+    assetCount: assets.length,
+    previewCount,
+    modelCount,
+    bytesApprox,
+  };
+}
+
+function normalizeModelUrls(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((it) => String(it || ''));
+}
+
+function buildAssetDiffSignature(asset: Partial<WorkflowAsset> | null | undefined): string {
+  if (!asset) return '';
+  const original = String(asset.original || '');
+  const originalObjectKey = String(asset.originalObjectKey || '');
+  const modelUrls = normalizeModelUrls(asset.modelUrls).join('|');
+  const title = String((asset as Partial<WorkflowAsset> & { title?: string }).title || '');
+  return [original, originalObjectKey, modelUrls, title].join('::');
+}
+
+function pickIncrementalAssets(localAssets: WorkflowAsset[], cloudAssets: WorkflowAsset[] | null): WorkflowAsset[] {
+  if (!Array.isArray(cloudAssets)) return [...localAssets];
+  const cloudSig = new Map<string, string>();
+  for (const asset of cloudAssets) {
+    cloudSig.set(String(asset?.id || ''), buildAssetDiffSignature(asset));
+  }
+  return localAssets.filter((asset) => {
+    const id = String(asset?.id || '');
+    if (!id) return true;
+    const prev = cloudSig.get(id);
+    const next = buildAssetDiffSignature(asset);
+    return !prev || prev !== next;
+  });
+}
+
+function pickAssetsById(localAssets: WorkflowAsset[], ids: string[]): WorkflowAsset[] {
+  if (!Array.isArray(ids) || ids.length === 0) return [];
+  const idSet = new Set(ids.map((id) => String(id || '').trim()).filter(Boolean));
+  return localAssets.filter((asset) => idSet.has(String(asset?.id || '').trim()));
+}
 
 /** 对话大图预览全景模式：与工作区 ImagePreviewOverlay 同 registry chunk */
 const LazyDialogTempEquirectViewer = getLazyImagePreviewViewer('image.equirect');
@@ -125,6 +281,7 @@ const AdminLayout = React.lazy(() => import('./components/admin/AdminLayout.js')
 const AdminPlaceholder = React.lazy(() => import('./components/admin/AdminPlaceholder.tsx'));
 const AdminUsersPanel = React.lazy(() => import('./components/admin/AdminUsersPanel'));
 const AdminAuditLogsPanel = React.lazy(() => import('./components/admin/AdminAuditLogsPanel'));
+const AdminCompanionArtifactsPanel = React.lazy(() => import('./components/admin/AdminCompanionArtifactsPanel'));
 type SourceAggregate = {
   count: number;
   rated: number;
@@ -293,7 +450,15 @@ const AdminAppShell: React.FC = () => {
   return (
     <Suspense fallback={<div className="min-h-screen bg-black text-white flex items-center justify-center text-[11px]">加载管理后台…</div>}>
       <AdminLayout currentPath={pathname} onNavigate={handleNavigate}>
-        {pathname === '/admin/users' ? <AdminUsersPanel /> : pathname === '/admin/audit-logs' ? <AdminAuditLogsPanel /> : <AdminPlaceholder />}
+        {pathname === '/admin/users' ? (
+          <AdminUsersPanel />
+        ) : pathname === '/admin/audit-logs' ? (
+          <AdminAuditLogsPanel />
+        ) : pathname === '/admin/companion-artifacts' ? (
+          <AdminCompanionArtifactsPanel />
+        ) : (
+          <AdminPlaceholder />
+        )}
       </AdminLayout>
     </Suspense>
   );
@@ -646,7 +811,7 @@ const MainApp: React.FC = () => {
   const [workspaceCloudQuotaSuspended, setWorkspaceCloudQuotaSuspended] = useState(false);
   const workspaceCloudQuotaSuspendedRef = useRef(false);
   const editedWhileQuotaSuspendedRef = useRef(false);
-  /** 离开工作区/切换项目时的整包上传中（阻塞 UI） */
+  /** 离开工作区/切换项目时的索引同步中（阻塞 UI） */
   const [workspaceCloudLeaveSyncing, setWorkspaceCloudLeaveSyncing] = useState(false);
   const [workspaceCloudLastSyncAt, setWorkspaceCloudLastSyncAt] = useState<number | null>(null);
   const [workspaceCloudNextAutoSyncAt, setWorkspaceCloudNextAutoSyncAt] = useState<number | null>(null);
@@ -657,6 +822,10 @@ const MainApp: React.FC = () => {
   const workspaceCloudAutoSyncingRef = useRef(false);
   const workspaceCloudConfigHydratedUserIdRef = useRef<string | null>(null);
   const workspaceCloudConfigHydratingUserIdRef = useRef<string | null>(null);
+  const workspaceCloudCapabilityRecordsRef = useRef<{
+    presets: CapabilityCloudRecord<CustomAppModule>[];
+    sets: CapabilityCloudRecord<CapabilitySet>[];
+  }>({ presets: [], sets: [] });
   const workspaceCloudConfigPushTimerRef = useRef<number | null>(null);
   const [apiKeyModalOpen, setApiKeyModalOpen] = useState(false);
   const [aiInvocationStatusRev, setAiInvocationStatusRev] = useState(0);
@@ -668,6 +837,48 @@ const MainApp: React.FC = () => {
   const [workspaceProjectDeletePending, setWorkspaceProjectDeletePending] = useState<{
     id: string;
     name: string;
+  } | null>(null);
+  const [workspaceProjectBindPending, setWorkspaceProjectBindPending] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
+  const [workspaceProjectUnbindPending, setWorkspaceProjectUnbindPending] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
+  const [workspaceProjectManualUploadPending, setWorkspaceProjectManualUploadPending] = useState<{
+    id: string;
+    name: string;
+    fullEstimate: ManualUploadEstimate;
+    incrementalEstimate: ManualUploadEstimate | null;
+    incrementalReady: boolean;
+  } | null>(null);
+  const [workspaceManualUploadMode, setWorkspaceManualUploadMode] = useState<ManualUploadMode>('full');
+  const [workspaceUploadingProjectId, setWorkspaceUploadingProjectId] = useState<string | null>(null);
+  const [workspaceUploadFailureDetailDialog, setWorkspaceUploadFailureDetailDialog] = useState<{
+    projectId: string;
+    projectName: string;
+    mode: ManualUploadMode;
+    attempted: number;
+    succeeded: number;
+    uploadedAt: number | null;
+    error: string;
+    failedAssetIds: string[];
+    selectedAssetIds: string[];
+  } | null>(null);
+  /** 失败详情弹层：按 assetId 关键字过滤列表（仅 UI，不入库） */
+  const [workspaceUploadFailureFilter, setWorkspaceUploadFailureFilter] = useState('');
+  /** 剪贴板 API 与 execCommand 均失败时，展示全文供用户手动复制 */
+  const [workspaceUploadFailureCopyFallback, setWorkspaceUploadFailureCopyFallback] = useState<{
+    text: string;
+    kind: 'visible' | 'selected';
+  } | null>(null);
+  const workspaceUploadFailureCopyFallbackTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const [workspaceTrashDialog, setWorkspaceTrashDialog] = useState<{
+    open: boolean;
+    loading: boolean;
+    restoringTrashId: string | null;
+    items: CompanionWorkspaceTrashProjectV1[];
   } | null>(null);
   /** 画布有未成功推送到云端的本地修改（用于关闭页面前提示） */
   const workspaceCloudDirtyRef = useRef(false);
@@ -695,6 +906,31 @@ const MainApp: React.FC = () => {
     usernameRef.current = user?.username;
   }, [user?.username]);
 
+  useLayoutEffect(() => {
+    if (!workspaceUploadFailureCopyFallback) return;
+    const el = workspaceUploadFailureCopyFallbackTextareaRef.current;
+    if (!el) return;
+    el.focus();
+    el.select();
+  }, [workspaceUploadFailureCopyFallback]);
+
+  useEffect(() => {
+    if (!workspaceUploadFailureDetailDialog && !workspaceUploadFailureCopyFallback) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!isImagePreviewEscapeKey(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (workspaceUploadFailureCopyFallback) {
+        setWorkspaceUploadFailureCopyFallback(null);
+        return;
+      }
+      setWorkspaceUploadFailureFilter('');
+      setWorkspaceUploadFailureDetailDialog(null);
+    };
+    document.addEventListener('keydown', onKeyDown, true);
+    return () => document.removeEventListener('keydown', onKeyDown, true);
+  }, [workspaceUploadFailureDetailDialog, workspaceUploadFailureCopyFallback]);
+
   useEffect(() => {
     if (!user?.id) workspaceCloudPushAllowedUserIdRef.current = null;
   }, [user?.id]);
@@ -703,6 +939,7 @@ const MainApp: React.FC = () => {
     if (!user?.id) {
       workspaceCloudConfigHydratedUserIdRef.current = null;
       workspaceCloudConfigHydratingUserIdRef.current = null;
+      workspaceCloudCapabilityRecordsRef.current = { presets: [], sets: [] };
       if (workspaceCloudConfigPushTimerRef.current != null && typeof window !== 'undefined') {
         window.clearTimeout(workspaceCloudConfigPushTimerRef.current);
         workspaceCloudConfigPushTimerRef.current = null;
@@ -716,6 +953,14 @@ const MainApp: React.FC = () => {
       editedWhileQuotaSuspendedRef.current = false;
     }
   }, [user?.id]);
+
+  function isProjectBoundToCurrentUser(projectId: string | null | undefined): boolean {
+    if (!projectId) return false;
+    const uid = userIdRef.current;
+    if (!uid) return false;
+    const p = workspaceProjectsRef.current.find((x) => x.id === projectId);
+    return Boolean(p?.boundUserId && p.boundUserId === uid);
+  }
 
   useEffect(() => {
     if (!user?.id) return;
@@ -736,19 +981,21 @@ const MainApp: React.FC = () => {
   /** 画布变更后标记未同步（云端拉取过程中不标脏） */
   useEffect(() => {
     if (authLoading || !user?.id || !user?.username || !isWorkspaceCloudEnabled() || !activeWorkspaceProjectId) return;
+    if (!isProjectBoundToCurrentUser(activeWorkspaceProjectId)) return;
     if (workspaceCloudPostPullDirtySuppressRef.current > 0) {
       workspaceCloudPostPullDirtySuppressRef.current -= 1;
       return;
     }
     if (workspaceCloudHydratingProjectId === activeWorkspaceProjectId) return;
     workspaceCloudDirtyRef.current = true;
-  }, [authLoading, user?.id, workflowAssets, workflowPending, activeWorkspaceProjectId, workspaceCloudHydratingProjectId]);
+  }, [authLoading, user?.id, user?.username, workflowAssets, workflowPending, activeWorkspaceProjectId, workspaceCloudHydratingProjectId]);
 
   useEffect(() => {
     if (!workspaceCloudQuotaSuspended) return;
     if (!user?.id || !user?.username || !isWorkspaceCloudEnabled() || !activeWorkspaceProjectId) return;
+    if (!isProjectBoundToCurrentUser(activeWorkspaceProjectId)) return;
     editedWhileQuotaSuspendedRef.current = true;
-  }, [workflowAssets, workflowPending, workspaceCloudQuotaSuspended, user?.id, activeWorkspaceProjectId]);
+  }, [workflowAssets, workflowPending, workspaceCloudQuotaSuspended, user?.id, user?.username, activeWorkspaceProjectId]);
 
   useEffect(() => {
     if (authLoading || !user?.id || !user?.username || !isWorkspaceCloudEnabled()) return;
@@ -762,10 +1009,24 @@ const MainApp: React.FC = () => {
         const cfg = await fetchWorkspaceUserCloudConfig(uid, user.username);
         if (userIdRef.current !== uid) return;
         if (cfg) {
-          setCapabilityPresets(cfg.capabilityPresets);
-          saveCapabilityPresets(cfg.capabilityPresets);
-          setCapabilitySets(cfg.capabilitySets);
-          saveCapabilitySets(cfg.capabilitySets);
+          const mergedPresets = mergeCapabilityCloudRecords<CustomAppModule>(
+            capabilityPresets,
+            workspaceCloudCapabilityRecordsRef.current.presets,
+            cfg.capabilityPresetRecords || []
+          );
+          const mergedSets = mergeCapabilityCloudRecords<CapabilitySet>(
+            capabilitySets,
+            workspaceCloudCapabilityRecordsRef.current.sets,
+            cfg.capabilitySetRecords || []
+          );
+          workspaceCloudCapabilityRecordsRef.current = {
+            presets: mergedPresets.records,
+            sets: mergedSets.records,
+          };
+          setCapabilityPresets(mergedPresets.list);
+          saveCapabilityPresets(mergedPresets.list);
+          setCapabilitySets(mergedSets.list);
+          saveCapabilitySets(mergedSets.list);
           setDialogSkipUnderstand(cfg.settings.dialogSkipUnderstand);
           setDialogSkipUnderstandState(cfg.settings.dialogSkipUnderstand);
           setWorkspaceAutoSyncEnabled(cfg.settings.workspaceAutoSyncEnabled);
@@ -797,7 +1058,7 @@ const MainApp: React.FC = () => {
         setUserUiPrefs({ displayName: rd, avatarUrl: nextAvatar });
       }
     })();
-  }, [authLoading, user?.id, user?.username]);
+  }, [authLoading, user?.id, user?.username, capabilityPresets, capabilitySets]);
 
   useEffect(() => {
     if (authLoading || !user?.id || !user?.username || !isWorkspaceCloudEnabled()) return;
@@ -812,9 +1073,19 @@ const MainApp: React.FC = () => {
     workspaceCloudConfigPushTimerRef.current = window.setTimeout(() => {
       workspaceCloudConfigPushTimerRef.current = null;
       const prefsNow = getUserUiPrefs();
+      const nextPresetRecords = buildCapabilityCloudRecords<CustomAppModule>(
+        capabilityPresets,
+        workspaceCloudCapabilityRecordsRef.current.presets
+      );
+      const nextSetRecords = buildCapabilityCloudRecords<CapabilitySet>(
+        capabilitySets,
+        workspaceCloudCapabilityRecordsRef.current.sets
+      );
       void pushWorkspaceUserCloudConfig(uid, user.username, {
         capabilityPresets,
         capabilitySets,
+        capabilityPresetRecords: nextPresetRecords,
+        capabilitySetRecords: nextSetRecords,
         settings: {
           dialogSkipUnderstand: getDialogSkipUnderstand(),
           workspaceAutoSyncEnabled,
@@ -831,7 +1102,14 @@ const MainApp: React.FC = () => {
           displayName: prefsNow.displayName,
           avatarUrl: prefsNow.avatarUrl.startsWith('data:') ? '' : prefsNow.avatarUrl,
         },
-      }).catch((e) => console.warn('[workspace cloud] user config push', e));
+      })
+        .then(() => {
+          workspaceCloudCapabilityRecordsRef.current = {
+            presets: nextPresetRecords,
+            sets: nextSetRecords,
+          };
+        })
+        .catch((e) => console.warn('[workspace cloud] user config push', e));
     }, 1200);
     return () => {
       if (workspaceCloudConfigPushTimerRef.current != null) {
@@ -864,7 +1142,8 @@ const MainApp: React.FC = () => {
       !isWorkspaceCloudEnabled() ||
       workspaceCloudQuotaSuspendedRef.current ||
       workspaceCloudPushAllowedUserIdRef.current !== uid ||
-      workspaceCloudHydratingProjectIdRef.current === projectId
+      workspaceCloudHydratingProjectIdRef.current === projectId ||
+      !isProjectBoundToCurrentUser(projectId)
     ) {
       return false;
     }
@@ -874,9 +1153,7 @@ const MainApp: React.FC = () => {
     }
     workspaceCloudAutoSyncingRef.current = true;
     setWorkspaceCloudAutoSyncing(true);
-    const bundle = { assets: workflowAssetsRef.current, pending: workflowPendingRef.current };
     try {
-      await pushWorkflowBundleToCloud(uid, projectId, bundle, usernameRef.current);
       await pushWorkspaceIndex(uid, workspaceProjectsRef.current, activeWorkspaceProjectIdRef.current, usernameRef.current);
       workspaceCloudDirtyRef.current = false;
       setWorkspaceCloudLastSyncAt(Date.now());
@@ -922,67 +1199,9 @@ const MainApp: React.FC = () => {
     return () => window.clearInterval(id);
   }, [triggerWorkspaceCloudSyncNow, workspaceAutoSyncEnabled]);
 
-  const runCloudWorkflowPull = useCallback((userId: string, projectId: string) => {
-    cloudWorkflowSyncGenRef.current += 1;
-    const gen = cloudWorkflowSyncGenRef.current;
-    setWorkspaceCloudHydratingProjectId(projectId);
-    void (async () => {
-      try {
-        const packed = await fetchWorkflowPackedFromCloud(userId, projectId, usernameRef.current);
-        if (gen !== cloudWorkflowSyncGenRef.current) return;
-        if (activeWorkspaceProjectIdRef.current !== projectId) return;
-        if (!packed) {
-          setWorkspaceCloudHydratingProjectId((cur) => (cur === projectId ? null : cur));
-          workspaceCloudPostPullDirtySuppressRef.current = 3;
-          workspaceCloudDirtyRef.current = false;
-          return;
-        }
-        setWorkflowAssets(JSON.parse(JSON.stringify(packed.assets)) as WorkflowAsset[]);
-        setWorkflowPending(JSON.parse(JSON.stringify(packed.pending)) as WorkflowPendingTask[]);
-        if (packed.version === 2) {
-          const final = await hydrateWorkflowBundleFromCloud(
-            { assets: packed.assets, pending: packed.pending },
-            {
-              onPartial: (d) => {
-                if (gen !== cloudWorkflowSyncGenRef.current) return;
-                if (activeWorkspaceProjectIdRef.current !== projectId) return;
-                setWorkflowAssets(d.assets);
-                setWorkflowPending(d.pending);
-                if (workspaceLocalIdbHydrateReadyRef.current) {
-                  trySaveWorkflowBundle(projectId, d, userId);
-                }
-              },
-            }
-          );
-          if (gen !== cloudWorkflowSyncGenRef.current) return;
-          if (activeWorkspaceProjectIdRef.current !== projectId) return;
-          setWorkflowAssets(final.assets);
-          setWorkflowPending(final.pending);
-          if (workspaceLocalIdbHydrateReadyRef.current) {
-            trySaveWorkflowBundle(projectId, final, userId);
-          }
-        } else {
-          const bundle = { assets: packed.assets, pending: packed.pending };
-          if (workspaceLocalIdbHydrateReadyRef.current) {
-            trySaveWorkflowBundle(projectId, bundle, userId);
-          }
-        }
-        workspaceCloudPostPullDirtySuppressRef.current = 3;
-        workspaceCloudDirtyRef.current = false;
-      } catch (e) {
-        console.warn('[workspace cloud] pull', e);
-      } finally {
-        setWorkspaceCloudHydratingProjectId((cur) =>
-          cur === projectId && gen === cloudWorkflowSyncGenRef.current ? null : cur
-        );
-      }
-    })();
-  }, []);
-
   const [step, setStep] = useState<AppStep>(AppStep.T_PATTERN);
   const [tasks, setTasks] = useState<AppTask[]>([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const sidebarCollapsed = false;
   /** 侧栏「实验性功能」分组：展开侧栏时默认折叠；进入实验性模块时自动展开 */
   const [experimentalNavExpanded, setExperimentalNavExpanded] = useState(false);
 
@@ -1007,8 +1226,51 @@ const MainApp: React.FC = () => {
   const [globalLogs, setGlobalLogs] = useState<Array<{ id: string; time: number; module: string; level: 'info' | 'warn' | 'error'; message: string; detail?: string }>>([]);
   const [globalLogOpen, setGlobalLogOpen] = useState(false);
   const [globalLogCopiedId, setGlobalLogCopiedId] = useState<string | null>(null);
+  const [tripoRecoveryContext, setTripoRecoveryContext] = useState<{
+    presetId: string;
+    imageBase64: string;
+    task?: WorkflowPendingTask;
+    canResumeOldTask: boolean;
+    lastError: string;
+  } | null>(null);
+  const [tripoRecoveryActionRunning, setTripoRecoveryActionRunning] = useState<'resume' | 'new' | null>(null);
   const addGlobalLog = useCallback((module: string, level: 'info' | 'warn' | 'error', message: string, detail?: string) => {
-    setGlobalLogs(prev => [...prev.slice(-199), { id: Math.random().toString(36).slice(2, 11), time: Date.now(), module, level, message, detail }]);
+    const now = Date.now();
+    setGlobalLogs(prev => [...prev.slice(-199), { id: Math.random().toString(36).slice(2, 11), time: now, module, level, message, detail }]);
+    void reportClientDebugLog({ time: now, module, level, message, ...(detail ? { detail } : {}) });
+  }, []);
+
+  useEffect(() => {
+    const notices = consumeWorkspaceMigrationNotices();
+    if (!notices.length) return;
+    for (const msg of notices) {
+      addGlobalLog('工作区', 'info', msg);
+    }
+  }, [addGlobalLog, activeWorkspaceProjectId, user?.id, workflowAssets.length, workflowPending.length]);
+
+  const pullWorkspaceProjectsFromCompanion = useCallback(async (): Promise<null | { id: string; name: string; createdAt: number; boundUserId?: string; boundAt?: number }[]> => {
+    const base = getCompanionLocalBaseUrl();
+    const res = await listCompanionWorkspaceProjects(base);
+    if (!res.ok) return null;
+    const list = Array.isArray(res.data.projects) ? res.data.projects : [];
+    const localById = new Map<string, WorkspaceProject>(
+      (workspaceProjectsRef.current || []).map((p) => [p.id, p] as const)
+    );
+    return list
+      .map((p) => {
+        const idKey = String(p.id || '').trim();
+        const local = localById.get(idKey);
+        return {
+          id: idKey,
+          name: String(p.name || '').trim(),
+          createdAt: Number(p.createdAt || Date.now()),
+          ...(typeof local?.boundUserId === 'string' && local.boundUserId.trim()
+            ? { boundUserId: local.boundUserId.trim() }
+            : {}),
+          ...(typeof local?.boundAt === 'number' ? { boundAt: local.boundAt } : {}),
+        };
+      })
+      .filter((p) => p.id && p.name);
   }, []);
 
   const workflowAssetsRef = useRef(workflowAssets);
@@ -1079,7 +1341,11 @@ const MainApp: React.FC = () => {
     void (async () => {
       await ensureWorkspaceBundlesHydratedFromIdb(null);
       if (cancelled) return;
-      setWorkspaceProjects(loadWorkspaceProjects(null));
+      const localProjects = loadWorkspaceProjects(null);
+      const remoteProjects = await pullWorkspaceProjectsFromCompanion();
+      const effectiveProjects = remoteProjects && remoteProjects.length > 0 ? remoteProjects : localProjects;
+      setWorkspaceProjects(effectiveProjects);
+      saveWorkspaceProjects(effectiveProjects, null);
       const last = getLastOpenedWorkspaceProjectId(null);
       setActiveWorkspaceProjectId(last);
       if (last) {
@@ -1095,7 +1361,7 @@ const MainApp: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [authLoading, user?.id, markWorkspaceLocalIdbHydrateReady]);
+  }, [authLoading, user?.id, markWorkspaceLocalIdbHydrateReady, pullWorkspaceProjectsFromCompanion]);
 
   /** 已登录且关闭云同步：仅使用当前用户隔离的 localStorage；IndexedDB 优先 hydrate */
   useEffect(() => {
@@ -1108,7 +1374,11 @@ const MainApp: React.FC = () => {
     void (async () => {
       await ensureWorkspaceBundlesHydratedFromIdb(uid);
       if (cancelled) return;
-      setWorkspaceProjects(loadWorkspaceProjects(uid));
+      const localProjects = loadWorkspaceProjects(uid);
+      const remoteProjects = await pullWorkspaceProjectsFromCompanion();
+      const effectiveProjects = remoteProjects && remoteProjects.length > 0 ? remoteProjects : localProjects;
+      setWorkspaceProjects(effectiveProjects);
+      saveWorkspaceProjects(effectiveProjects, uid);
       const last = getLastOpenedWorkspaceProjectId(uid);
       setActiveWorkspaceProjectId(last);
       if (last) {
@@ -1124,7 +1394,7 @@ const MainApp: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [authLoading, user?.id, markWorkspaceLocalIdbHydrateReady]);
+  }, [authLoading, user?.id, markWorkspaceLocalIdbHydrateReady, pullWorkspaceProjectsFromCompanion]);
 
   /** 已登录且开启云同步：切换账号时先清空内存态，再从 R2 hydrate；访客数据仅在「云端无索引」时迁入 */
   useEffect(() => {
@@ -1142,20 +1412,21 @@ const MainApp: React.FC = () => {
     setWorkflowPending([]);
     let cancelled = false;
 
-    const applyIndex = (index: NonNullable<Awaited<ReturnType<typeof fetchWorkspaceCloudIndex>>>) => {
+    const applyIndex = async (index: NonNullable<Awaited<ReturnType<typeof fetchWorkspaceCloudIndex>>>) => {
+      const remoteProjects = await pullWorkspaceProjectsFromCompanion();
+      const effectiveProjects = remoteProjects && remoteProjects.length > 0 ? remoteProjects : index.projects;
       const validLast =
-        index.lastOpenProjectId && index.projects.some((p) => p.id === index.lastOpenProjectId)
+        index.lastOpenProjectId && effectiveProjects.some((p) => p.id === index.lastOpenProjectId)
           ? index.lastOpenProjectId
           : null;
-      saveWorkspaceProjects(index.projects, uid);
-      setWorkspaceProjects(index.projects);
+      saveWorkspaceProjects(effectiveProjects, uid);
+      setWorkspaceProjects(effectiveProjects);
       setLastOpenedWorkspaceProjectId(validLast, uid);
       setActiveWorkspaceProjectId(validLast);
       if (validLast) {
         const local = loadWorkflowBundle(validLast, uid);
         setWorkflowAssets(local.assets);
         setWorkflowPending(local.pending);
-        runCloudWorkflowPull(uid, validLast);
       } else {
         setWorkflowAssets([]);
         setWorkflowPending([]);
@@ -1171,23 +1442,25 @@ const MainApp: React.FC = () => {
         const index = await fetchWorkspaceCloudIndex(uid, user.username);
         if (cancelled) return;
         if (index) {
-          applyIndex(index);
+          await applyIndex(index);
           return;
         }
         const migrated = await migrateLocalWorkspaceToCloud(uid, user.username);
         if (cancelled) return;
         if (migrated) {
           const { projects, lastOpenProjectId } = migrated;
+          const remoteProjects = await pullWorkspaceProjectsFromCompanion();
+          const effectiveProjects = remoteProjects && remoteProjects.length > 0 ? remoteProjects : projects;
           const validLast =
-            lastOpenProjectId && projects.some((p) => p.id === lastOpenProjectId) ? lastOpenProjectId : null;
-          setWorkspaceProjects(projects);
+            lastOpenProjectId && effectiveProjects.some((p) => p.id === lastOpenProjectId) ? lastOpenProjectId : null;
+          setWorkspaceProjects(effectiveProjects);
+          saveWorkspaceProjects(effectiveProjects, uid);
           setLastOpenedWorkspaceProjectId(validLast, uid);
           setActiveWorkspaceProjectId(validLast);
           if (validLast) {
             const local = loadWorkflowBundle(validLast, uid);
             setWorkflowAssets(local.assets);
             setWorkflowPending(local.pending);
-            runCloudWorkflowPull(uid, validLast);
           } else {
             setWorkflowAssets([]);
             setWorkflowPending([]);
@@ -1199,15 +1472,19 @@ const MainApp: React.FC = () => {
         const again = await fetchWorkspaceCloudIndex(uid, user.username);
         if (cancelled) return;
         if (again) {
-          applyIndex(again);
+          await applyIndex(again);
           return;
         }
         const localOnly = loadWorkspaceProjects(uid);
+        const remoteProjects = await pullWorkspaceProjectsFromCompanion();
+        const effectiveProjects = remoteProjects && remoteProjects.length > 0 ? remoteProjects : localOnly;
         const last = getLastOpenedWorkspaceProjectId(uid);
-        setWorkspaceProjects(localOnly);
-        setActiveWorkspaceProjectId(last);
-        if (last) {
-          const b = loadWorkflowBundle(last, uid);
+        const validLast = last && effectiveProjects.some((p) => p.id === last) ? last : null;
+        setWorkspaceProjects(effectiveProjects);
+        saveWorkspaceProjects(effectiveProjects, uid);
+        setActiveWorkspaceProjectId(validLast);
+        if (validLast) {
+          const b = loadWorkflowBundle(validLast, uid);
           setWorkflowAssets(b.assets);
           setWorkflowPending(b.pending);
         } else {
@@ -1220,11 +1497,15 @@ const MainApp: React.FC = () => {
         console.warn('[workspace cloud] hydrate', e);
         if (cancelled) return;
         const localOnly = loadWorkspaceProjects(uid);
+        const remoteProjects = await pullWorkspaceProjectsFromCompanion();
+        const effectiveProjects = remoteProjects && remoteProjects.length > 0 ? remoteProjects : localOnly;
         const last = getLastOpenedWorkspaceProjectId(uid);
-        setWorkspaceProjects(localOnly);
-        setActiveWorkspaceProjectId(last);
-        if (last) {
-          const b = loadWorkflowBundle(last, uid);
+        const validLast = last && effectiveProjects.some((p) => p.id === last) ? last : null;
+        setWorkspaceProjects(effectiveProjects);
+        saveWorkspaceProjects(effectiveProjects, uid);
+        setActiveWorkspaceProjectId(validLast);
+        if (validLast) {
+          const b = loadWorkflowBundle(validLast, uid);
           setWorkflowAssets(b.assets);
           setWorkflowPending(b.pending);
         } else {
@@ -1238,7 +1519,7 @@ const MainApp: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [authLoading, user?.id, runCloudWorkflowPull, markWorkspaceLocalIdbHydrateReady]);
+  }, [authLoading, user?.id, user?.username, markWorkspaceLocalIdbHydrateReady, pullWorkspaceProjectsFromCompanion]);
 
   useEffect(() => {
     if (!activeWorkspaceProjectId || !workspaceLocalIdbHydrateReady) return;
@@ -1275,12 +1556,152 @@ const MainApp: React.FC = () => {
       setLastOpenedWorkspaceProjectId(id, scope);
       setWorkflowAssets(local.assets);
       setWorkflowPending(local.pending);
-      const uid = userIdRef.current;
-      if (uid && usernameRef.current && isWorkspaceCloudEnabled()) {
-        runCloudWorkflowPull(uid, id);
-      }
+      const companionBase = String(getCompanionLocalBaseUrl() || '').trim();
+      if (!companionBase) return;
+      void (async () => {
+        const m = await getCompanionManifest(companionBase, id);
+        if (m.ok === false) {
+          addGlobalLog('工作区', 'warn', '本地伴侣项目 manifest 读取失败（资产从伴侣恢复可能受影响）', `${id}: ${m.error}`);
+          return;
+        }
+        let manifestData = m.data;
+        const mid = String(manifestData.projectId || '').trim();
+        if (mid && mid !== id) {
+          addGlobalLog(
+            '工作区',
+            'warn',
+            '本地伴侣 manifest.projectId 与当前项目 id 不一致',
+            `manifest=${mid} selected=${id}`
+          );
+        }
+        let gaps = findCompanionKeysMissingFromManifest(local.assets, manifestData);
+        if (gaps.length > 0) {
+          const recon = await reconcileCompanionManifestFromDisk(companionBase, id);
+          if (recon.ok && recon.data.added > 0) {
+            const kp = recon.data.keys.slice(0, 5).join(', ') + (recon.data.keys.length > 5 ? '…' : '');
+            addGlobalLog('工作区', 'info', '本地伴侣已从磁盘补全 manifest', `${recon.data.added} 项 ${kp}`);
+            const m2 = await getCompanionManifest(companionBase, id);
+            if (m2.ok) manifestData = m2.data;
+            gaps = findCompanionKeysMissingFromManifest(local.assets, manifestData);
+          } else if (recon.ok === false) {
+            addGlobalLog('工作区', 'warn', '本地伴侣 manifest 磁盘补全请求失败', String(recon.error));
+          }
+        }
+        if (gaps.length > 0) {
+          const nOrig = gaps.filter((g) => g.kind === 'original').length;
+          const nRes = gaps.filter((g) => g.kind === 'result').length;
+          const head = gaps
+            .slice(0, 5)
+            .map((g) =>
+              g.kind === 'original' ? `${g.assetId}:orig` : `${g.assetId}:res:${g.stepId}`
+            )
+            .join('; ');
+          addGlobalLog(
+            '工作区',
+            'warn',
+            '部分伴侣对象键未出现在 manifest（可能未完成写入或 manifest 未更新）',
+            `${gaps.length} 项（原图键 ${nOrig} / 步骤结果键 ${nRes}） ${head}${gaps.length > 5 ? '…' : ''}`
+          );
+          void attemptRepairCompanionManifestKeyGaps(companionBase, id, local.assets, gaps, (level, title, detail) =>
+            addGlobalLog('工作区', level, title, detail)
+          );
+        }
+      })();
     },
-    [runCloudWorkflowPull]
+    [addGlobalLog]
+  );
+
+  const openWorkspaceTrashDialog = useCallback(async () => {
+    setWorkspaceTrashDialog({
+      open: true,
+      loading: true,
+      restoringTrashId: null,
+      items: [],
+    });
+    const base = getCompanionLocalBaseUrl();
+    const listed = await listCompanionWorkspaceTrashProjects(base);
+    if (listed.ok === false) {
+      addGlobalLog('工作区', 'error', '加载回收站失败', listed.error);
+      setWorkspaceTrashDialog((prev) =>
+        prev
+          ? {
+              ...prev,
+              loading: false,
+            }
+          : prev
+      );
+      return;
+    }
+    setWorkspaceTrashDialog((prev) =>
+      prev
+        ? {
+            ...prev,
+            loading: false,
+            items: Array.isArray(listed.data.items) ? listed.data.items : [],
+          }
+        : prev
+    );
+  }, [addGlobalLog]);
+
+  const restoreWorkspaceTrashProject = useCallback(
+    async (trashId: string) => {
+      if (!workspaceTrashDialog || workspaceTrashDialog.restoringTrashId) return;
+      const scope = user?.id ?? null;
+      setWorkspaceTrashDialog((prev) => (prev ? { ...prev, restoringTrashId: trashId } : prev));
+      const base = getCompanionLocalBaseUrl();
+      const restored = await restoreCompanionWorkspaceTrashProject(base, trashId);
+      if (restored.ok === false) {
+        addGlobalLog('工作区', 'error', '恢复项目失败', restored.error);
+        setWorkspaceTrashDialog((prev) => (prev ? { ...prev, restoringTrashId: null } : prev));
+        return;
+      }
+      const restoredProjectId = restored.data.project.id;
+      const trashLegacyIdSep = trashId.lastIndexOf('__');
+      const legacyProjectId =
+        trashLegacyIdSep > 0 ? String(trashId.slice(0, trashLegacyIdSep) || '').trim() : '';
+      if (legacyProjectId && restoredProjectId !== legacyProjectId) {
+        const orphan = loadWorkflowBundle(legacyProjectId, scope);
+        const hasOrphanBundle =
+          (orphan.assets?.length ?? 0) > 0 ||
+          (orphan.pending?.length ?? 0) > 0 ||
+          (orphan.capabilityRefs?.length ?? 0) > 0;
+        if (hasOrphanBundle) {
+          await migrateWorkflowBundleProjectId(legacyProjectId, restoredProjectId, scope);
+          addGlobalLog(
+            '工作区',
+            'info',
+            '已把本地画布存储从旧项目 id 迁移到恢复后的目录名',
+            `${legacyProjectId} → ${restoredProjectId}`
+          );
+        }
+      }
+      const refreshed = await pullWorkspaceProjectsFromCompanion();
+      if (refreshed) {
+        setWorkspaceProjects(refreshed);
+        saveWorkspaceProjects(refreshed, scope);
+      }
+      setLastOpenedWorkspaceProjectId(restoredProjectId, scope);
+      setActiveWorkspaceProjectId(restoredProjectId);
+      const b = loadWorkflowBundle(restoredProjectId, scope);
+      setWorkflowAssets(b.assets);
+      setWorkflowPending(b.pending);
+      addGlobalLog(
+        '工作区',
+        'info',
+        restored.data.nameResolved ? '项目已恢复（存在同名，已自动改名）' : '项目已恢复',
+        restoredProjectId
+      );
+      setWorkspaceTrashDialog((prev) =>
+        prev
+          ? {
+              ...prev,
+              restoringTrashId: null,
+              items: prev.items.filter((it) => it.trashId !== trashId),
+            }
+          : prev
+      );
+    },
+    [addGlobalLog, pullWorkspaceProjectsFromCompanion, user?.id, workspaceTrashDialog]
   );
 
   const openWorkspaceProject = useCallback(
@@ -1302,11 +1723,11 @@ const MainApp: React.FC = () => {
           usernameRef.current &&
           isWorkspaceCloudEnabled() &&
           !workspaceCloudQuotaSuspendedRef.current &&
-          workspaceCloudPushAllowedUserIdRef.current === uid
+          workspaceCloudPushAllowedUserIdRef.current === uid &&
+          isProjectBoundToCurrentUser(curId)
         ) {
           setWorkspaceCloudLeaveSyncing(true);
           try {
-            await pushWorkflowBundleToCloud(uid, curId, prevBundle, usernameRef.current);
             await pushWorkspaceIndex(uid, workspaceProjectsRef.current, id, usernameRef.current);
             workspaceCloudDirtyRef.current = false;
             setWorkspaceCloudLastSyncAt(Date.now());
@@ -1357,11 +1778,11 @@ const MainApp: React.FC = () => {
           usernameRef.current &&
           isWorkspaceCloudEnabled() &&
           !workspaceCloudQuotaSuspendedRef.current &&
-          workspaceCloudPushAllowedUserIdRef.current === uid
+          workspaceCloudPushAllowedUserIdRef.current === uid &&
+          isProjectBoundToCurrentUser(pid)
         ) {
           setWorkspaceCloudLeaveSyncing(true);
           try {
-            await pushWorkflowBundleToCloud(uid, pid, bundle, usernameRef.current);
             const lastOpen = getLastOpenedWorkspaceProjectId(scope);
             await pushWorkspaceIndex(uid, workspaceProjectsRef.current, lastOpen, usernameRef.current);
             workspaceCloudDirtyRef.current = false;
@@ -1388,11 +1809,23 @@ const MainApp: React.FC = () => {
   );
 
   const createWorkspaceProjectEntry = useCallback(
-    (name: string) => {
-      const p = createWorkspaceProject(name);
-      const next = [...workspaceProjects, p];
+    async (name: string) => {
+      const scope = user?.id ?? null;
+      const base = getCompanionLocalBaseUrl();
+      let next = [...workspaceProjects];
+      const trimmed = String(name || '').trim();
+      /** 未填名称时伴侣会返回 workspace_project_name_required；给默认目录名避免回退成 UUID 导致 manifest project_not_found */
+      const nameForCompanion = trimmed || `proj-${Date.now().toString(36)}`;
+      const createdRemote = await createCompanionWorkspaceProject(base, nameForCompanion);
+      if (createdRemote.ok === false) {
+        const p = createWorkspaceProject(trimmed || nameForCompanion);
+        next = [...workspaceProjects, p];
+        addGlobalLog('工作区', 'warn', '本地伴侣新建项目失败，已回退浏览器侧创建', createdRemote.error);
+      } else {
+        next = [...workspaceProjects, createdRemote.data.project];
+      }
       setWorkspaceProjects(next);
-      saveWorkspaceProjects(next, user?.id ?? null);
+      saveWorkspaceProjects(next, scope);
       if (
         user?.id &&
         user?.username &&
@@ -1405,15 +1838,35 @@ const MainApp: React.FC = () => {
         );
       }
     },
-    [workspaceProjects, user?.id]
+    [addGlobalLog, workspaceProjects, user?.id, user?.username]
   );
 
   const renameWorkspaceProjectEntry = useCallback(
-    (id: string, name: string) => {
+    async (id: string, name: string) => {
       const trimmed = String(name || '').trim();
       if (!trimmed) return;
       const scope = user?.id ?? null;
-      const next = workspaceProjects.map((p) => (p.id === id ? { ...p, name: trimmed } : p));
+      const prevList = workspaceProjectsRef.current;
+      let next = prevList.map((p) => (p.id === id ? { ...p, name: trimmed } : p));
+      const base = getCompanionLocalBaseUrl();
+      const renamed = await renameCompanionWorkspaceProject(base, id, trimmed);
+      if (renamed.ok === false) {
+        addGlobalLog('工作区', 'warn', '本地伴侣重命名失败，已回退浏览器侧重命名', renamed.error);
+      } else {
+        next = prevList.map((p) => (p.id === id ? renamed.data.project : p));
+        const newId = String(renamed.data.project?.id || '').trim();
+        if (newId && newId !== id) {
+          await migrateWorkflowBundleProjectId(id, newId, scope);
+          if (activeWorkspaceProjectIdRef.current === id) {
+            const b = loadWorkflowBundle(newId, scope);
+            setActiveWorkspaceProjectId(newId);
+            setWorkflowAssets(b.assets);
+            setWorkflowPending(b.pending);
+          }
+          const lastOpen = getLastOpenedWorkspaceProjectId(scope);
+          if (lastOpen === id) setLastOpenedWorkspaceProjectId(newId, scope);
+        }
+      }
       setWorkspaceProjects(next);
       saveWorkspaceProjects(next, scope);
       if (
@@ -1428,7 +1881,7 @@ const MainApp: React.FC = () => {
         );
       }
     },
-    [workspaceProjects, user?.id]
+    [addGlobalLog, user?.id, user?.username]
   );
 
   const requestDeleteWorkspaceProject = useCallback((id: string) => {
@@ -1436,9 +1889,423 @@ const MainApp: React.FC = () => {
     setWorkspaceProjectDeletePending({ id, name: p?.name ?? '该项目' });
   }, []);
 
-  const performDeleteWorkspaceProject = useCallback((id: string) => {
+  const requestBindWorkspaceProject = useCallback((id: string) => {
+    const p = workspaceProjectsRef.current.find((q) => q.id === id);
+    if (!p) return;
+    setWorkspaceProjectBindPending({ id, name: p.name || '该项目' });
+  }, []);
+
+  const requestUnbindWorkspaceProject = useCallback((id: string) => {
+    const p = workspaceProjectsRef.current.find((q) => q.id === id);
+    if (!p) return;
+    setWorkspaceProjectUnbindPending({ id, name: p.name || '该项目' });
+  }, []);
+
+  const requestManualUploadWorkspaceProject = useCallback(async (id: string) => {
+    const p = workspaceProjectsRef.current.find((q) => q.id === id);
+    if (!p) return;
+    const scope = userIdRef.current ?? null;
+    const bundle = loadWorkflowBundle(id, scope);
+    const fullEstimate = buildManualUploadEstimate(bundle.assets);
+    setWorkspaceManualUploadMode('full');
+    setWorkspaceProjectManualUploadPending({
+      id,
+      name: p.name || '该项目',
+      fullEstimate,
+      incrementalEstimate: null,
+      incrementalReady: false,
+    });
+    const uid = userIdRef.current;
+    const uname = usernameRef.current;
+    if (!uid || !uname) {
+      setWorkspaceProjectManualUploadPending((prev) =>
+        prev && prev.id === id ? { ...prev, incrementalReady: true } : prev
+      );
+      return;
+    }
+    try {
+      const packed = await fetchWorkflowPackedFromCloud(uid, id, uname);
+      const picked = pickIncrementalAssets(bundle.assets, packed?.assets ?? null);
+      const incrementalEstimate = buildManualUploadEstimate(picked);
+      setWorkspaceProjectManualUploadPending((prev) =>
+        prev && prev.id === id
+          ? {
+              ...prev,
+              incrementalEstimate,
+              incrementalReady: true,
+            }
+          : prev
+      );
+    } catch {
+      setWorkspaceProjectManualUploadPending((prev) =>
+        prev && prev.id === id ? { ...prev, incrementalReady: true } : prev
+      );
+    }
+  }, []);
+
+  const requestOpenWorkspaceUploadFailureDetail = useCallback((id: string) => {
+    const p = workspaceProjectsRef.current.find((q) => q.id === id);
+    if (!p) return;
+    const failedAssetIds = Array.isArray(p.lastManualUploadFailedAssetIds) ? p.lastManualUploadFailedAssetIds : [];
+    if (failedAssetIds.length === 0) {
+      addGlobalLog('工作区', 'info', '该项目暂无失败项');
+      return;
+    }
+    setWorkspaceUploadFailureFilter('');
+    setWorkspaceUploadFailureDetailDialog({
+      projectId: id,
+      projectName: p.name || '该项目',
+      mode: p.lastManualUploadMode === 'incremental' ? 'incremental' : 'full',
+      attempted: Math.max(0, Number(p.lastManualUploadAttemptedCount || 0)),
+      succeeded: Math.max(0, Number(p.lastManualUploadSucceededCount || 0)),
+      uploadedAt: typeof p.lastManualUploadAt === 'number' ? p.lastManualUploadAt : null,
+      error: String(p.lastManualUploadError || ''),
+      failedAssetIds,
+      selectedAssetIds: [...failedAssetIds],
+    });
+  }, [addGlobalLog]);
+
+  const executeManualWorkflowUpload = useCallback(
+    async (id: string, opts?: { onlyAssetIds?: string[]; mode?: ManualUploadMode; reason?: 'manual' | 'retry-failed' }) => {
+      const uid = userIdRef.current;
+      const uname = usernameRef.current;
+      if (!uid || !uname) {
+        addGlobalLog('工作区', 'warn', '请先登录账号，再执行手动上传');
+        return;
+      }
+      if (!isWorkspaceCloudEnabled()) {
+        addGlobalLog('工作区', 'warn', '当前环境未开启云同步，无法上传项目资产');
+        return;
+      }
+      if (workspaceCloudPushAllowedUserIdRef.current !== uid) {
+        addGlobalLog('工作区', 'warn', '云端配置尚未就绪，请稍后再试');
+        return;
+      }
+      if (workspaceCloudQuotaSuspendedRef.current) {
+        addGlobalLog('工作区', 'warn', '云空间已满，无法上传项目资产');
+        return;
+      }
+      const project = workspaceProjectsRef.current.find((p) => p.id === id);
+      if (!project) {
+        addGlobalLog('工作区', 'warn', '未找到待上传的项目');
+        return;
+      }
+      if (project.boundUserId !== uid) {
+        addGlobalLog('工作区', 'warn', '请先将项目绑定到当前账号，再执行手动上传');
+        return;
+      }
+      if (workspaceUploadingProjectId === id) {
+        return;
+      }
+      setWorkspaceUploadingProjectId(id);
+      const mode = opts?.mode ?? workspaceManualUploadMode;
+      const onlyAssetIds = opts?.onlyAssetIds;
+      try {
+        const bundle = loadWorkflowBundle(id, uid);
+        const requestedCount = Array.isArray(onlyAssetIds) ? onlyAssetIds.length : bundle.assets.length;
+        const scopedAssets = Array.isArray(onlyAssetIds) ? pickAssetsById(bundle.assets, onlyAssetIds) : bundle.assets;
+        const skippedCount = Math.max(0, requestedCount - scopedAssets.length);
+        if (Array.isArray(onlyAssetIds) && scopedAssets.length === 0) {
+          addGlobalLog('工作区', 'warn', '重试失败项时未找到仍存在的资产，已跳过上传');
+          return;
+        }
+        let uploadBundle = { ...bundle, assets: scopedAssets };
+        if (mode === 'incremental') {
+          try {
+            const packed = await fetchWorkflowPackedFromCloud(uid, id, uname);
+            const pickedAssets = pickIncrementalAssets(scopedAssets, packed?.assets ?? null);
+            uploadBundle = {
+              ...bundle,
+              assets: pickedAssets,
+            };
+          } catch (e) {
+            addGlobalLog('工作区', 'warn', '增量基线读取失败，已回退全量上传', e instanceof Error ? e.message : String(e));
+          }
+        }
+        const attemptedCount = uploadBundle.assets.length;
+        if (attemptedCount === 0) {
+          const nextProjects = workspaceProjectsRef.current.map((p) =>
+            p.id === id
+              ? {
+                  ...p,
+                  lastManualUploadAt: Date.now(),
+                  lastManualUploadMode: mode,
+                  lastManualUploadAssetCount: 0,
+                  lastManualUploadBytesApprox: 0,
+                  lastManualUploadAttemptedCount: 0,
+                  lastManualUploadSucceededCount: 0,
+                  lastManualUploadFailedAssetIds: [],
+                  lastManualUploadError: '',
+                }
+              : p
+          );
+          setWorkspaceProjects(nextProjects);
+          saveWorkspaceProjects(nextProjects, uid);
+          addGlobalLog('工作区', 'info', '无需上传：当前选择范围内没有待上传资产');
+          return;
+        }
+        // 若 IDB 仅存 originalCompanionKey，打包时从本地伴侣读回再打 data URL 上传 R2（需设置并启动伴侣）
+        const companionBase = String(getCompanionLocalBaseUrl() || '').trim();
+        const needsCompanionHydrate = uploadBundle.assets.some((a) => {
+          const origOnlyCompanion =
+            !String(a?.original || '').trim() && String(a.originalCompanionKey || '').trim();
+          const rck = a.resultsCompanionKeys || {};
+          const resultsOnlyCompanion = Object.keys(rck).some((sid) => {
+            if (!String(rck[sid] || '').trim()) return false;
+            return !String((a.results || {})[sid] || '').trim();
+          });
+          return origOnlyCompanion || resultsOnlyCompanion;
+        });
+        if (needsCompanionHydrate && !companionBase) {
+          addGlobalLog(
+            '工作区',
+            'warn',
+            '部分原图或步骤结果仅保存在本地伴侣。请在设置中填写本地伴侣地址并启动伴侣后再上传。'
+          );
+          return;
+        }
+        // MANUAL_WORKFLOW_UPLOAD_ALLOWED
+        await pushWorkflowBundleToCloud(uid, id, uploadBundle, uname, {
+          companionHydrate: companionBase ? { baseUrl: companionBase, projectId: id } : undefined,
+        });
+        const uploadedAt = Date.now();
+        const uploadedBytesApprox = uploadBundle.assets.reduce((sum, asset) => {
+          const base = estimateStringBytes(String(asset?.original || ''));
+          const modelBytes = Array.isArray(asset?.modelUrls)
+            ? asset.modelUrls.reduce((acc, u) => acc + estimateStringBytes(String(u || '')), 0)
+            : 0;
+          return sum + base + modelBytes;
+        }, 0);
+        const nextProjects = workspaceProjectsRef.current.map((p) =>
+          p.id === id
+            ? {
+                ...p,
+                lastManualUploadAt: uploadedAt,
+                lastManualUploadMode: mode,
+                lastManualUploadAssetCount: uploadBundle.assets.length,
+                lastManualUploadBytesApprox: uploadedBytesApprox,
+                lastManualUploadAttemptedCount: attemptedCount,
+                lastManualUploadSucceededCount: attemptedCount,
+                lastManualUploadFailedAssetIds: [],
+                lastManualUploadError: '',
+              }
+            : p
+        );
+        setWorkspaceProjects(nextProjects);
+        saveWorkspaceProjects(nextProjects, uid);
+        workspaceCloudDirtyRef.current = false;
+        setWorkspaceCloudLastSyncAt(uploadedAt);
+        setWorkspaceCloudNextAutoSyncAt(uploadedAt + WORKSPACE_AUTO_SYNC_INTERVAL_MS);
+        await refreshAuthUser();
+        addGlobalLog(
+          '工作区',
+          'info',
+          `${opts?.reason === 'retry-failed' ? '重试失败项完成' : '手动上传完成'}：${project.name}`,
+          `mode=${mode}, attempted=${attemptedCount}, success=${attemptedCount}, failed=0, skipped=${skippedCount}, approx=${formatApproxBytes(uploadedBytesApprox)}`
+        );
+      } catch (e) {
+        if (e instanceof HttpRequestError && e.code === 'STORAGE_QUOTA_EXCEEDED') {
+          setWorkspaceCloudQuotaSuspended(true);
+          editedWhileQuotaSuspendedRef.current = true;
+        }
+        const bundle = loadWorkflowBundle(id, uid);
+        const scopedAssets = Array.isArray(onlyAssetIds) ? pickAssetsById(bundle.assets, onlyAssetIds) : bundle.assets;
+        const attemptedAssetIds = scopedAssets.map((asset) => String(asset?.id || '')).filter(Boolean);
+        const nextProjects = workspaceProjectsRef.current.map((p) =>
+          p.id === id
+            ? {
+                ...p,
+                lastManualUploadAt: Date.now(),
+                lastManualUploadMode: mode,
+                lastManualUploadAssetCount: scopedAssets.length,
+                lastManualUploadBytesApprox: buildManualUploadEstimate(scopedAssets).bytesApprox,
+                lastManualUploadAttemptedCount: attemptedAssetIds.length,
+                lastManualUploadSucceededCount: 0,
+                lastManualUploadFailedAssetIds: attemptedAssetIds,
+                lastManualUploadError: e instanceof Error ? e.message : String(e),
+              }
+            : p
+        );
+        setWorkspaceProjects(nextProjects);
+        saveWorkspaceProjects(nextProjects, uid);
+        addGlobalLog(
+          '工作区',
+          'error',
+          opts?.reason === 'retry-failed' ? '重试失败项上传失败' : '手动上传失败',
+          e instanceof Error ? e.message : String(e)
+        );
+      } finally {
+        setWorkspaceUploadingProjectId((prev) => (prev === id ? null : prev));
+        setWorkspaceManualUploadMode('full');
+      }
+    },
+    [addGlobalLog, refreshAuthUser, workspaceManualUploadMode, workspaceUploadingProjectId]
+  );
+
+  const performBindWorkspaceProject = useCallback(async (id: string) => {
+    const uid = userIdRef.current;
+    const uname = usernameRef.current;
+    if (!uid || !uname) {
+      addGlobalLog('工作区', 'warn', '请先登录账号，再绑定项目');
+      return;
+    }
+    const scope = uid;
+    const next = workspaceProjectsRef.current.map((p) =>
+      p.id === id ? { ...p, boundUserId: uid, boundAt: Date.now() } : p
+    );
+    setWorkspaceProjects(next);
+    saveWorkspaceProjects(next, scope);
+    if (isWorkspaceCloudEnabled() && workspaceCloudPushAllowedUserIdRef.current === uid && !workspaceCloudQuotaSuspendedRef.current) {
+      try {
+        await pushWorkspaceIndex(uid, next, getLastOpenedWorkspaceProjectId(scope), uname);
+        addGlobalLog('工作区', 'info', '项目已绑定到当前账号（仅同步索引，不上传大文件）');
+      } catch (e) {
+        addGlobalLog('工作区', 'warn', '绑定索引写入云端失败，项目已保留本地绑定状态', e instanceof Error ? e.message : String(e));
+      }
+    } else {
+      addGlobalLog('工作区', 'info', '项目已标记绑定；云同步关闭或不可用时仅保留本地状态');
+    }
+  }, [addGlobalLog]);
+
+  const performUnbindWorkspaceProject = useCallback(async (id: string) => {
+    const uid = userIdRef.current;
+    const uname = usernameRef.current;
+    if (!uid || !uname) {
+      addGlobalLog('工作区', 'warn', '请先登录账号，再解绑项目');
+      return;
+    }
+    const scope = uid;
+    const next = workspaceProjectsRef.current.map((p) => {
+      if (p.id !== id) return p;
+      const { boundUserId: _dropUserId, boundAt: _dropBoundAt, ...rest } = p;
+      return rest;
+    });
+    setWorkspaceProjects(next);
+    saveWorkspaceProjects(next, scope);
+    if (isWorkspaceCloudEnabled() && workspaceCloudPushAllowedUserIdRef.current === uid && !workspaceCloudQuotaSuspendedRef.current) {
+      try {
+        await pushWorkspaceIndex(uid, next, getLastOpenedWorkspaceProjectId(scope), uname);
+        addGlobalLog('工作区', 'info', '项目已解绑当前账号（仅更新索引）');
+      } catch (e) {
+        addGlobalLog('工作区', 'warn', '解绑索引写入云端失败，项目已保留本地解绑状态', e instanceof Error ? e.message : String(e));
+      }
+    } else {
+      addGlobalLog('工作区', 'info', '项目已解绑；云同步关闭或不可用时仅保留本地状态');
+    }
+  }, [addGlobalLog]);
+
+  const performManualUploadWorkspaceProject = useCallback(async (id: string) => {
+    await executeManualWorkflowUpload(id, { mode: workspaceManualUploadMode, reason: 'manual' });
+  }, [executeManualWorkflowUpload, workspaceManualUploadMode]);
+
+  const retryFailedManualUploadWorkspaceProject = useCallback(async (id: string) => {
+    const project = workspaceProjectsRef.current.find((p) => p.id === id);
+    const failedIds = Array.isArray(project?.lastManualUploadFailedAssetIds) ? project.lastManualUploadFailedAssetIds : [];
+    if (!project || failedIds.length === 0) {
+      addGlobalLog('工作区', 'warn', '该项目暂无可重试的失败项');
+      return;
+    }
+    await executeManualWorkflowUpload(id, { onlyAssetIds: failedIds, mode: 'incremental', reason: 'retry-failed' });
+  }, [addGlobalLog, executeManualWorkflowUpload]);
+
+  const retrySelectedFailedManualUploadWorkspaceProject = useCallback(async () => {
+    if (!workspaceUploadFailureDetailDialog) return;
+    const selectedIds = workspaceUploadFailureDetailDialog.selectedAssetIds.filter(Boolean);
+    if (selectedIds.length === 0) {
+      addGlobalLog('工作区', 'warn', '请至少选择一个失败项再重试');
+      return;
+    }
+    const uid = userIdRef.current ?? null;
+    const bundle = loadWorkflowBundle(workspaceUploadFailureDetailDialog.projectId, uid);
+    const existing = new Set(bundle.assets.map((a) => String(a?.id || '')).filter(Boolean));
+    const existingSelectedIds = selectedIds.filter((id) => existing.has(id));
+    const missingCount = Math.max(0, selectedIds.length - existingSelectedIds.length);
+    addGlobalLog(
+      '工作区',
+      'info',
+      '重试选择统计',
+      `selection_total=${selectedIds.length}, selection_existing=${existingSelectedIds.length}, selection_missing=${missingCount}`
+    );
+    if (existingSelectedIds.length === 0) {
+      addGlobalLog('工作区', 'warn', '所选失败项在本地均不存在，已跳过重试');
+      return;
+    }
+    const projectId = workspaceUploadFailureDetailDialog.projectId;
+    setWorkspaceUploadFailureFilter('');
+    setWorkspaceUploadFailureDetailDialog(null);
+    await executeManualWorkflowUpload(projectId, {
+      onlyAssetIds: existingSelectedIds,
+      mode: 'incremental',
+      reason: 'retry-failed',
+    });
+  }, [addGlobalLog, executeManualWorkflowUpload, workspaceUploadFailureDetailDialog]);
+
+  const copyWorkspaceFailureIdsToClipboard = useCallback(
+    async (kind: 'visible' | 'selected') => {
+      const d = workspaceUploadFailureDetailDialog;
+      if (!d) return;
+      const filterQ = workspaceUploadFailureFilter.trim().toLowerCase();
+      const visible = filterQ
+        ? d.failedAssetIds.filter((id) => String(id).toLowerCase().includes(filterQ))
+        : [...d.failedAssetIds];
+      const ids =
+        kind === 'visible'
+          ? visible
+          : d.selectedAssetIds.map((id) => String(id || '').trim()).filter(Boolean);
+      if (ids.length === 0) {
+        addGlobalLog('工作区', 'warn', kind === 'visible' ? '当前列表无 ID 可复制' : '请先勾选至少一项再复制');
+        return;
+      }
+      const uploadedIso = d.uploadedAt ? new Date(d.uploadedAt).toISOString() : '';
+      const header = [
+        `# project=${d.projectName}`,
+        `# projectId=${d.projectId}`,
+        `# mode=${d.mode}`,
+        uploadedIso ? `# uploadedAt=${uploadedIso}` : '',
+        '---',
+        '',
+      ]
+        .filter((line) => line.length > 0)
+        .join('\n');
+      const text = `${header}${ids.join('\n')}`;
+      const outcome = await copyTextToClipboardWithFallback(text);
+      if (outcome === 'clipboard') {
+        addGlobalLog(
+          '工作区',
+          'info',
+          kind === 'visible' ? `已复制 ${ids.length} 条失败项 ID（当前列表）` : `已复制 ${ids.length} 条失败项 ID（已勾选）`
+        );
+      } else if (outcome === 'exec') {
+        addGlobalLog(
+          '工作区',
+          'info',
+          kind === 'visible'
+            ? `已复制 ${ids.length} 条失败项 ID（当前列表，兼容模式）`
+            : `已复制 ${ids.length} 条失败项 ID（已勾选，兼容模式）`
+        );
+      } else {
+        setWorkspaceUploadFailureCopyFallback({ text, kind });
+        addGlobalLog(
+          '工作区',
+          'warn',
+          '系统剪贴板不可用',
+          '已在弹窗中展示全文，请手动全选复制（Ctrl+C / Cmd+C）'
+        );
+      }
+    },
+    [addGlobalLog, workspaceUploadFailureDetailDialog, workspaceUploadFailureFilter]
+  );
+
+  const performDeleteWorkspaceProject = useCallback(async (id: string) => {
     const scope = userIdRef.current ?? null;
     const uid = userIdRef.current;
+    const base = getCompanionLocalBaseUrl();
+    const delRemote = await deleteCompanionWorkspaceProject(base, id);
+    if (delRemote.ok === false) {
+      addGlobalLog('工作区', 'warn', '本地伴侣删除项目失败，继续执行浏览器侧删除', delRemote.error);
+    } else {
+      addGlobalLog('工作区', 'info', '项目已移入回收站', delRemote.data.id);
+    }
     removeWorkflowBundle(id, scope);
     if (uid && usernameRef.current && isWorkspaceCloudEnabled()) {
       void deleteWorkspaceProjectObjects(uid, id, usernameRef.current).catch((e) => console.warn('[workspace cloud]', e));
@@ -1465,7 +2332,7 @@ const MainApp: React.FC = () => {
         console.warn('[workspace cloud] index', e)
       );
     }
-  }, []);
+  }, [addGlobalLog]);
 
   const activeWorkspaceProjectName = useMemo(
     () => workspaceProjects.find((p) => p.id === activeWorkspaceProjectId)?.name ?? '',
@@ -1478,8 +2345,8 @@ const MainApp: React.FC = () => {
     Math.min(1, workspaceCloudQuotaBytes > 0 ? workspaceCloudUsedBytes / workspaceCloudQuotaBytes : 0)
   );
   const workspaceCloudUsagePercent = Math.round(workspaceCloudUsageRatio * 100);
-  const aiInvocationReady = useMemo(() => isAiInvocationReady(), [aiInvocationStatusRev]);
-  const aiProviderToolbarLabel = useMemo(() => getAiProviderToolbarLabel(), [aiInvocationStatusRev]);
+  const aiInvocationReady = isAiInvocationReady();
+  const aiProviderToolbarLabel = getAiProviderToolbarLabel();
   const workspaceProjectOptions = workspaceProjects.map((p) => ({ value: p.id, label: p.name }));
   const workspaceLastSyncText = formatTimestampText(workspaceCloudLastSyncAt);
 
@@ -1626,7 +2493,6 @@ const MainApp: React.FC = () => {
     updateDialogSession,
     archiveDialogSession,
     removeDialogSession,
-    handleDialogTempToggleSelect,
     handleDialogTempSelectAll,
     handleDialogTempInvertSelect,
     handleDialogTempBatchDownload,
@@ -2043,8 +2909,13 @@ const MainApp: React.FC = () => {
   };
 
   /** 工作流中拖图到「生成3D」能力时：用能力预设参数提交 3D 任务 */
-  const handleAddGenerate3DJobFromWorkflow = (preset: CustomAppModule, imageBase64: string) => {
-    if (preset.category !== 'generate_3d' || !preset.generate3D || !creds3D) return;
+  const handleAddGenerate3DJobFromWorkflow = async (
+    preset: CustomAppModule,
+    imageBase64: string,
+    task?: WorkflowPendingTask,
+    options?: { forceNewTask?: boolean }
+  ) => {
+    if (preset.category !== 'generate_3d' || !preset.generate3D) return;
     const raw = imageBase64.replace(/^data:image\/\w+;base64,/, '');
     const normalize3D = (input: NonNullable<CustomAppModule['generate3D']>) => {
       const g = { ...input };
@@ -2070,28 +2941,333 @@ const MainApp: React.FC = () => {
       return g;
     };
     const g = normalize3D(preset.generate3D);
-    const id = Math.random().toString(36).slice(2, 11);
-    const taskId = addTask('GENERATE_3D', preset.label);
-    if (g.module === 'pro') {
-      const input: Submit3DProInput = {
-        imageBase64: raw,
-        prompt: (preset.instruction?.trim() || g.prompt?.trim()) || undefined,
-        model: g.model ?? '3.0',
-        enablePBR: g.enablePBR,
-        faceCount: g.faceCount,
-        generateType: g.generateType,
-        resultFormat: g.resultFormat,
-      };
-      appendQueueItem({ id, type: 'pro', input, taskId, label: preset.label });
-    } else {
-      const input: Submit3DRapidInput = {
-        imageBase64: raw,
-        resultFormat: g.resultFormat,
-        enablePBR: g.enablePBR,
-      };
-      appendQueueItem({ id, type: 'rapid', input, taskId, label: preset.label });
+    const provider = g.provider === 'tencent' ? 'tencent' : 'tripo';
+    if (provider === 'tencent') {
+      if (!creds3D) return;
+      const id = Math.random().toString(36).slice(2, 11);
+      const taskId = addTask('GENERATE_3D', preset.label);
+      if (g.module === 'pro') {
+        const input: Submit3DProInput = {
+          imageBase64: raw,
+          prompt: (preset.instruction?.trim() || g.prompt?.trim()) || undefined,
+          model: g.model ?? '3.0',
+          enablePBR: g.enablePBR,
+          faceCount: g.faceCount,
+          generateType: g.generateType,
+          resultFormat: g.resultFormat,
+        };
+        appendQueueItem({ id, type: 'pro', input, taskId, label: preset.label });
+      } else {
+        const input: Submit3DRapidInput = {
+          imageBase64: raw,
+          resultFormat: g.resultFormat,
+          enablePBR: g.enablePBR,
+        };
+        appendQueueItem({ id, type: 'rapid', input, taskId, label: preset.label });
+      }
+      addGenerate3DLog('info', `[工作流] 已加入腾讯 3D 队列：${preset.label}`, { id });
+      return;
     }
-    addGenerate3DLog('info', `[工作流] 已加入 3D 队列：${preset.label}`, { id });
+    const tripoApiKey = getTripoApiKey();
+    if (!tripoApiKey) {
+      addGenerate3DLog('warn', '缺少 Tripo API Key，请在 API 密钥弹窗中先保存');
+      alert('缺少 Tripo API Key，请先在 API 密钥弹窗保存。');
+      return;
+    }
+    const taskId = addTask('GENERATE_3D', `${preset.label}（Tripo）`);
+    let tripoCatchTaskId = '';
+    let tripoCatchResumedFromExisting = false;
+    try {
+      const taskType: TripoTaskType = g.tripoTaskType === 'text_to_model' ? 'text_to_model' : 'image_to_model';
+      const tripoModelVersion = g.tripoModelVersion?.trim() || undefined;
+      const prompt = (preset.instruction || g.prompt || '').trim() || undefined;
+      const tripoPayloadPreview = {
+        type: taskType,
+        prompt,
+        negativePrompt: g.tripoNegativePrompt?.trim() || undefined,
+        modelVersion: tripoModelVersion,
+        texture: typeof g.tripoTexture === 'boolean' ? g.tripoTexture : undefined,
+        pbr: typeof g.tripoPbr === 'boolean' ? g.tripoPbr : undefined,
+        textureQuality: g.tripoTextureQuality || undefined,
+        geometryQuality: g.tripoGeometryQuality || undefined,
+        faceLimit: typeof g.tripoFaceLimit === 'number' ? g.tripoFaceLimit : undefined,
+        quad: typeof g.tripoQuad === 'boolean' ? g.tripoQuad : undefined,
+        smartLowPoly: typeof g.tripoSmartLowPoly === 'boolean' ? g.tripoSmartLowPoly : undefined,
+        generateParts: typeof g.tripoGenerateParts === 'boolean' ? g.tripoGenerateParts : undefined,
+        autoSize: typeof g.tripoAutoSize === 'boolean' ? g.tripoAutoSize : undefined,
+        compress: g.tripoCompress || undefined,
+        exportUv: typeof g.tripoExportUv === 'boolean' ? g.tripoExportUv : undefined,
+        enableImageAutofix: typeof g.tripoEnableImageAutofix === 'boolean' ? g.tripoEnableImageAutofix : undefined,
+        textureAlignment: g.tripoTextureAlignment || undefined,
+        orientation: g.tripoOrientation || undefined,
+        hasImageInput: taskType === 'image_to_model',
+      };
+      addGenerate3DLog('info', `[工作流] Tripo 提交任务：${preset.label}`, tripoPayloadPreview);
+      updateTask(taskId, { status: 'RUNNING', progress: 10 });
+      const forceNewTask = Boolean(options?.forceNewTask);
+      if (forceNewTask) {
+        addGenerate3DLog('warn', '[工作流] 用户选择重新提交新任务（可能计费）');
+      }
+      const recoverTaskId =
+        !forceNewTask && task?.assetId && task?.actionType
+          ? String(
+              workflowAssetsRef.current.find((a) => a.id === task.assetId)?.resultMeta?.[task.actionType]?.tripoTaskId || ''
+            ).trim()
+          : '';
+      let createdTaskId = recoverTaskId;
+      const resumedFromExistingTask = Boolean(createdTaskId);
+      tripoCatchTaskId = createdTaskId;
+      tripoCatchResumedFromExisting = resumedFromExistingTask;
+      if (createdTaskId) {
+        addGenerate3DLog('info', '[工作流] 继续查询既有 Tripo 任务（不新建，避免重复计费）', { taskId: createdTaskId });
+      } else {
+        createdTaskId = await createTripoTask({
+          apiKey: tripoApiKey,
+          type: taskType,
+          ...(prompt ? { prompt } : {}),
+          ...(g.tripoNegativePrompt?.trim() ? { negativePrompt: g.tripoNegativePrompt.trim() } : {}),
+          ...(tripoModelVersion ? { modelVersion: tripoModelVersion } : {}),
+          ...(taskType === 'image_to_model' ? { imageBase64DataUrl: imageBase64 } : {}),
+          ...(typeof g.tripoTexture === 'boolean' ? { texture: g.tripoTexture } : {}),
+          ...(typeof g.tripoPbr === 'boolean' ? { pbr: g.tripoPbr } : {}),
+          ...(g.tripoTextureQuality ? { textureQuality: g.tripoTextureQuality } : {}),
+          ...(g.tripoGeometryQuality ? { geometryQuality: g.tripoGeometryQuality } : {}),
+          ...(typeof g.tripoFaceLimit === 'number' ? { faceLimit: g.tripoFaceLimit } : {}),
+          ...(typeof g.tripoQuad === 'boolean' ? { quad: g.tripoQuad } : {}),
+          ...(typeof g.tripoSmartLowPoly === 'boolean' ? { smartLowPoly: g.tripoSmartLowPoly } : {}),
+          ...(typeof g.tripoGenerateParts === 'boolean' ? { generateParts: g.tripoGenerateParts } : {}),
+          ...(typeof g.tripoAutoSize === 'boolean' ? { autoSize: g.tripoAutoSize } : {}),
+          ...(g.tripoCompress ? { compress: g.tripoCompress } : {}),
+          ...(typeof g.tripoExportUv === 'boolean' ? { exportUv: g.tripoExportUv } : {}),
+          ...(typeof g.tripoEnableImageAutofix === 'boolean' ? { enableImageAutofix: g.tripoEnableImageAutofix } : {}),
+          ...(g.tripoTextureAlignment ? { textureAlignment: g.tripoTextureAlignment } : {}),
+          ...(g.tripoOrientation ? { orientation: g.tripoOrientation } : {}),
+        });
+        addGenerate3DLog('info', '[工作流] 已创建新 Tripo 任务（可能计费）', { taskId: createdTaskId });
+        tripoCatchTaskId = createdTaskId;
+        if (task?.assetId && task?.actionType) {
+          setWorkflowAssets((prev) =>
+            prev.map((a) => {
+              if (a.id !== task.assetId) return a;
+              const old = a.resultMeta?.[task.actionType] || { executedAt: Date.now() };
+              return {
+                ...a,
+                resultMeta: {
+                  ...(a.resultMeta || {}),
+                  [task.actionType]: {
+                    ...old,
+                    tripoTaskId: createdTaskId,
+                    tripoLastError: undefined,
+                  },
+                },
+              };
+            })
+          );
+        }
+      }
+      updateTask(taskId, { status: 'RUNNING', progress: 35 });
+      let done;
+      try {
+        done = await waitTripoTaskDone(tripoApiKey, createdTaskId, {
+          timeoutMs: 8 * 60_000,
+          intervalMs: 3000,
+          onProgress: (s) => {
+            if (s === 'queued') updateTask(taskId, { status: 'RUNNING', progress: 40 });
+            if (s === 'running') updateTask(taskId, { status: 'RUNNING', progress: 65 });
+          },
+        });
+      } catch (e) {
+        const msg = normalizeApiErrorMessage(e);
+        addGenerate3DLog('warn', '[工作流] Tripo 状态查询异常，尝试做一次兜底查询（不重建任务）', {
+          taskId: createdTaskId,
+          error: msg,
+        });
+        done = await getTripoTask(tripoApiKey, createdTaskId);
+      }
+      if (done.status !== 'success' || done.modelUrls.length === 0) {
+        throw new Error('Tripo 任务未产出可下载模型');
+      }
+      const allUrls = done.modelUrls;
+      const modelUrls = allUrls.filter((u) => /\.(glb|gltf|fbx|obj|stl|usdz?|3mf)(\?|#|$)/i.test(u));
+      const previewUrl =
+        allUrls.find((u) => /\.(png|jpe?g|webp)(\?|#|$)/i.test(u)) ||
+        String((done.raw as Record<string, any>)?.data?.output?.rendered_image || '') ||
+        String((done.raw as Record<string, any>)?.output?.rendered_image || '') ||
+        '';
+      if (modelUrls.length === 0) {
+        throw new Error('Tripo 任务完成但未识别到模型文件链接');
+      }
+      const companionBase = getCompanionLocalBaseUrl();
+      const companionProjectId = String(activeWorkspaceProjectId || '').trim() || 'default';
+      const extractExt = (url: string, contentType: string, fallback: string) => {
+        const cleanUrl = String(url || '').split('?')[0].split('#')[0];
+        const dot = cleanUrl.lastIndexOf('.');
+        if (dot >= 0 && dot < cleanUrl.length - 1) {
+          const ext = cleanUrl.slice(dot + 1).toLowerCase();
+          if (/^[a-z0-9]{2,8}$/.test(ext)) return `.${ext}`;
+        }
+        const ct = String(contentType || '').toLowerCase();
+        if (ct.includes('model/gltf+json')) return '.gltf';
+        if (ct.includes('model/gltf-binary')) return '.glb';
+        if (ct.includes('model/stl')) return '.stl';
+        if (ct.includes('model/vnd.usdz+zip')) return '.usdz';
+        if (ct.includes('model/obj') || ct.includes('text/plain')) return '.obj';
+        if (ct.includes('image/png')) return '.png';
+        if (ct.includes('image/webp')) return '.webp';
+        if (ct.includes('image/jpeg')) return '.jpg';
+        return fallback;
+      };
+      const fetchTripoFileBlob = async (url: string): Promise<Blob> => {
+        const r = await fetch('/api/tripo/fetch-file', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ apiKey: tripoApiKey, url }),
+        });
+        if (!r.ok) {
+          const txt = await r.text().catch(() => '');
+          throw new Error(`Tripo 文件拉取失败 (${r.status})：${txt || 'unknown error'}`);
+        }
+        return await r.blob();
+      };
+      const persistToCompanion = async (url: string, key: string) => {
+        const blob = await fetchTripoFileBlob(url);
+        const putRes = await putCompanionAsset(companionBase, companionProjectId, key, blob, blob.type || undefined);
+        if (putRes.ok === false) {
+          throw new Error(`写入本地伴侣失败：${putRes.error}${putRes.status != null ? ` (HTTP ${putRes.status})` : ''}`);
+        }
+        const readRes = await fetchCompanionAssetBlob(companionBase, companionProjectId, key);
+        if (readRes.ok === false) {
+          throw new Error(`读取本地伴侣文件失败：${readRes.error}${readRes.status != null ? ` (HTTP ${readRes.status})` : ''}`);
+        }
+        return URL.createObjectURL(new Blob([readRes.data], { type: blob.type || 'application/octet-stream' }));
+      };
+      const localModelUrls: string[] = [];
+      for (let i = 0; i < modelUrls.length; i++) {
+        const u = modelUrls[i];
+        const headBlob = await fetchTripoFileBlob(u);
+        const ext = extractExt(u, headBlob.type || '', '.glb');
+        const modelKey = `tripo_${createdTaskId}_model_${i + 1}${ext}`;
+        addGenerate3DLog('info', `[工作流] Tripo 本地落盘中：模型 ${i + 1}`, { modelKey });
+        const putRes = await putCompanionAsset(companionBase, companionProjectId, modelKey, headBlob, headBlob.type || undefined);
+        if (putRes.ok === false) {
+          throw new Error(`写入本地伴侣失败：${putRes.error}${putRes.status != null ? ` (HTTP ${putRes.status})` : ''}`);
+        }
+        const readRes = await fetchCompanionAssetBlob(companionBase, companionProjectId, modelKey);
+        if (readRes.ok === false) {
+          throw new Error(`读取本地伴侣文件失败：${readRes.error}${readRes.status != null ? ` (HTTP ${readRes.status})` : ''}`);
+        }
+        localModelUrls.push(URL.createObjectURL(new Blob([readRes.data], { type: headBlob.type || 'application/octet-stream' })));
+        addGenerate3DLog('info', `[工作流] Tripo 已落本地伴侣：模型 ${i + 1}`, { modelKey });
+      }
+      const localPreviewUrl = previewUrl
+        ? await (async () => {
+            const previewKey = `tripo_${createdTaskId}_preview_1${extractExt(previewUrl, '', '.png')}`;
+            addGenerate3DLog('info', '[工作流] Tripo 本地落盘中：预览图', { previewKey });
+            const local = await persistToCompanion(previewUrl, previewKey);
+            addGenerate3DLog('info', '[工作流] Tripo 已落本地伴侣：预览图', { previewKey });
+            return local;
+          })()
+        : '';
+      setWorkflowAssets((prev) => {
+        // 工作流链路：优先回填到原资产卡，而不是新建资产卡。
+        if (task?.assetId) {
+          return prev.map((a) => {
+            if (a.id !== task.assetId) return a;
+            const resultKey = task.actionType || preset.id;
+            const hasOrder = (a.resultOrder || []).includes(resultKey);
+            const nextOrder = hasOrder ? (a.resultOrder || []) : [...(a.resultOrder || []), resultKey];
+            const nextResults = localPreviewUrl ? { ...(a.results || {}), [resultKey]: localPreviewUrl } : (a.results || {});
+            return {
+              ...a,
+              results: nextResults,
+              displayKey: localPreviewUrl ? resultKey : a.displayKey,
+              resultOrder: nextOrder,
+              modelUrls: localModelUrls,
+              hiddenInGrid: false,
+            };
+          });
+        }
+        const now = Date.now();
+        const aid = `wf_tripo_${Math.random().toString(36).slice(2, 11)}`;
+        const next: WorkflowAsset = {
+          id: aid,
+          original: imageBase64,
+          displayKey: localPreviewUrl ? preset.id : 'original',
+          results: localPreviewUrl ? { [preset.id]: localPreviewUrl } : {},
+          modelUrls: localModelUrls,
+          resultOrder: localPreviewUrl ? [preset.id] : [],
+          archived: false,
+          hiddenInGrid: false,
+          createdAt: now,
+        };
+        return [next, ...prev];
+      });
+      updateTask(taskId, { status: 'SUCCESS', progress: 100 });
+      addGenerate3DLog('info', `[工作流] Tripo 生成完成，模型已落本地伴侣并回填资产卡`, {
+        modelCount: localModelUrls.length,
+        hasPreview: Boolean(localPreviewUrl),
+        companionProjectId,
+      });
+      setTripoRecoveryContext(null);
+      setTripoRecoveryActionRunning(null);
+      if (task?.assetId && task?.actionType) {
+        setWorkflowAssets((prev) =>
+          prev.map((a) => {
+            if (a.id !== task.assetId) return a;
+            const old = a.resultMeta?.[task.actionType] || { executedAt: Date.now() };
+            return {
+              ...a,
+              resultMeta: {
+                ...(a.resultMeta || {}),
+                [task.actionType]: {
+                  ...old,
+                  tripoTaskId: createdTaskId,
+                  tripoLastError: undefined,
+                },
+              },
+            };
+          })
+        );
+      }
+    } catch (e) {
+      const msg = normalizeApiErrorMessage(e);
+      updateTask(taskId, { status: 'FAILED', error: msg });
+      if (task?.assetId && task?.actionType) {
+        setWorkflowAssets((prev) =>
+          prev.map((a) => {
+            if (a.id !== task.assetId) return a;
+            const old = a.resultMeta?.[task.actionType] || { executedAt: Date.now() };
+            return {
+              ...a,
+              resultMeta: {
+                ...(a.resultMeta || {}),
+                [task.actionType]: {
+                  ...old,
+                  tripoLastError: msg,
+                },
+              },
+            };
+          })
+        );
+      }
+      const extraHint = /401|authentication failed|1002/i.test(msg)
+        ? '（请在 API 密钥中填写 Tripo Key，格式通常为 tsk_ 开头）'
+        : '';
+      const nextActionHint =
+        tripoCatchResumedFromExisting || tripoCatchTaskId
+          ? '；可选下一步：继续查询旧任务（不计费）/ 重新提交新任务（可能计费）'
+          : '';
+      addGenerate3DLog('error', `[工作流] Tripo 生成失败：${preset.label}`, `${msg}${extraHint}${nextActionHint}`);
+      setTripoRecoveryContext({
+        presetId: preset.id,
+        imageBase64,
+        task,
+        canResumeOldTask: Boolean(tripoCatchTaskId),
+        lastError: `${msg}${extraHint}`,
+      });
+      setTripoRecoveryActionRunning(null);
+      throw new Error(`${msg}${extraHint}${nextActionHint}`);
+    }
   };
 
   const handleConvert3D = () => {
@@ -3227,7 +4403,6 @@ const MainApp: React.FC = () => {
               workspaceCloudQuotaBytes={workspaceCloudQuotaBytes}
               workspaceCloudUsageRatio={workspaceCloudUsageRatio}
               workspaceCloudUsagePercent={workspaceCloudUsagePercent}
-              workspaceCloudHydratingProjectId={workspaceCloudHydratingProjectId}
               workspaceLastSyncText={workspaceLastSyncText}
               workspaceCloudAutoSyncing={workspaceCloudAutoSyncing}
               workspaceAutoSyncEnabled={workspaceAutoSyncEnabled}
@@ -3308,6 +4483,66 @@ const MainApp: React.FC = () => {
           </div>
 
           <div className="p-3 overflow-y-auto max-h-[min(48vh,340px)] no-scrollbar">
+            {tripoRecoveryContext ? (
+              <div className="mb-2 rounded-xl border border-amber-500/30 bg-amber-900/15 px-3 py-2">
+                <div className="text-[10px] font-black uppercase text-amber-200">Tripo 失败恢复</div>
+                <div className="mt-1 text-[10px] text-amber-100/90 leading-relaxed break-all">
+                  {tripoRecoveryContext.lastError}
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    disabled={!tripoRecoveryContext.canResumeOldTask || tripoRecoveryActionRunning != null}
+                    onClick={async () => {
+                      const preset = capabilityPresets.find((p) => p.id === tripoRecoveryContext.presetId);
+                      if (!preset) {
+                        addGenerate3DLog('warn', '[工作流] 恢复失败：未找到对应 Tripo 预设');
+                        return;
+                      }
+                      setTripoRecoveryActionRunning('resume');
+                      try {
+                        await handleAddGenerate3DJobFromWorkflow(
+                          preset,
+                          tripoRecoveryContext.imageBase64,
+                          tripoRecoveryContext.task,
+                          { forceNewTask: false }
+                        );
+                      } finally {
+                        setTripoRecoveryActionRunning(null);
+                      }
+                    }}
+                    className="py-1.5 rounded-lg border border-emerald-500/40 bg-emerald-900/20 text-[9px] font-black uppercase text-emerald-200 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-emerald-900/35"
+                  >
+                    继续查旧任务（不计费）
+                  </button>
+                  <button
+                    type="button"
+                    disabled={tripoRecoveryActionRunning != null}
+                    onClick={async () => {
+                      const preset = capabilityPresets.find((p) => p.id === tripoRecoveryContext.presetId);
+                      if (!preset) {
+                        addGenerate3DLog('warn', '[工作流] 重提失败：未找到对应 Tripo 预设');
+                        return;
+                      }
+                      setTripoRecoveryActionRunning('new');
+                      try {
+                        await handleAddGenerate3DJobFromWorkflow(
+                          preset,
+                          tripoRecoveryContext.imageBase64,
+                          tripoRecoveryContext.task,
+                          { forceNewTask: true }
+                        );
+                      } finally {
+                        setTripoRecoveryActionRunning(null);
+                      }
+                    }}
+                    className="py-1.5 rounded-lg border border-red-500/40 bg-red-900/20 text-[9px] font-black uppercase text-red-200 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-red-900/35"
+                  >
+                    重新提交新任务（可能计费）
+                  </button>
+                </div>
+              </div>
+            ) : null}
             {globalLogs.length === 0 ? (
               <div className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-6 text-center text-[11px] text-gray-500">
                 暂无日志
@@ -3365,6 +4600,65 @@ const MainApp: React.FC = () => {
         </div>
       )}
 
+      {workspaceTrashDialog?.open && (
+        <div
+          className="fixed inset-0 z-[2200] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => workspaceTrashDialog.restoringTrashId == null && setWorkspaceTrashDialog(null)}
+        >
+          <div
+            className="w-full max-w-2xl rounded-2xl border border-white/10 bg-[#0e0e14]/95 backdrop-blur-md shadow-2xl p-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-[12px] font-black uppercase tracking-wide text-blue-300">项目回收站</h3>
+              <button
+                type="button"
+                disabled={workspaceTrashDialog.restoringTrashId != null}
+                onClick={() => setWorkspaceTrashDialog(null)}
+                className="w-8 h-8 rounded-lg text-gray-400 hover:text-white hover:bg-[#2e2e36] disabled:opacity-50"
+                aria-label="关闭"
+              >
+                <AppIcon name="close" className="w-4 h-4" />
+              </button>
+            </div>
+            {workspaceTrashDialog.loading ? (
+              <div className="text-[11px] text-gray-400">正在加载回收站…</div>
+            ) : workspaceTrashDialog.items.length === 0 ? (
+              <div className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-[11px] text-gray-400">
+                回收站为空。
+              </div>
+            ) : (
+              <div className="max-h-[52vh] overflow-y-auto rounded-xl border border-white/10">
+                {workspaceTrashDialog.items.map((item) => {
+                  const restoring = workspaceTrashDialog.restoringTrashId === item.trashId;
+                  return (
+                    <div
+                      key={item.trashId}
+                      className="flex items-center justify-between gap-3 px-4 py-3 border-b border-white/5 last:border-b-0"
+                    >
+                      <div className="min-w-0">
+                        <div className="text-[12px] text-white truncate">{item.originalId}</div>
+                        <div className="text-[10px] text-gray-500 mt-1">
+                          删除时间：{new Date(item.deletedAt).toLocaleString()}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={workspaceTrashDialog.restoringTrashId != null}
+                        onClick={() => void restoreWorkspaceTrashProject(item.trashId)}
+                        className="shrink-0 rounded-lg border border-blue-500/40 bg-blue-950/30 px-3 py-1.5 text-[10px] font-medium text-blue-100 hover:bg-blue-900/50 disabled:opacity-50"
+                      >
+                        {restoring ? '恢复中…' : '恢复'}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       <main className="flex-1 flex flex-col h-[100dvh] overflow-hidden">
         <div
           ref={mainScrollRef}
@@ -3395,6 +4689,7 @@ const MainApp: React.FC = () => {
                   onLogout={logout}
                   onAiInvocationSurfaceChange={() => setAiInvocationStatusRev((n) => n + 1)}
                   aiSettingsSyncRev={aiInvocationStatusRev}
+                  activeWorkspaceProjectId={activeWorkspaceProjectId}
                 />
               </Suspense>
             )}
@@ -3424,6 +4719,13 @@ const MainApp: React.FC = () => {
                   onWorkspaceOpen={openWorkspaceProject}
                   onWorkspaceRename={renameWorkspaceProjectEntry}
                   onWorkspaceDelete={requestDeleteWorkspaceProject}
+                  onWorkspaceBind={requestBindWorkspaceProject}
+                  onWorkspaceUnbind={requestUnbindWorkspaceProject}
+                  onWorkspaceManualUpload={requestManualUploadWorkspaceProject}
+                  onWorkspaceRetryFailedUpload={retryFailedManualUploadWorkspaceProject}
+                  onOpenWorkspaceUploadFailureDetail={requestOpenWorkspaceUploadFailureDetail}
+                  workspaceUploadingProjectId={workspaceUploadingProjectId}
+                  onOpenWorkspaceTrash={() => void openWorkspaceTrashDialog()}
                   workspaceCloudQuotaSuspended={workspaceCloudQuotaSuspended}
                   renderWorkflowSection={() => (
                     <WorkflowSection
@@ -3528,6 +4830,7 @@ const MainApp: React.FC = () => {
                       return { ...prev, [sess.id]: minimized };
                     })
                   }
+                  companionProjectId={activeWorkspaceProjectId}
                   onSave={(set) => {
                     const next = capabilitySets.some((s) => s.id === set.id)
                       ? capabilitySets.map((s) => (s.id === set.id ? set : s))
@@ -5024,10 +6327,10 @@ const MainApp: React.FC = () => {
         >
           <div className="max-w-md rounded-2xl border border-amber-500/45 bg-[#101018] px-6 py-5 shadow-2xl text-center">
             <p className="text-[13px] font-semibold text-amber-100/95 leading-relaxed">
-              正在将当前工作区画布与图片同步到云端，请稍候…
+              正在同步当前工作区索引信息到云端，请稍候…
             </p>
             <p className="mt-2 text-[11px] text-gray-400 leading-relaxed">
-              完成前请勿关闭或刷新页面，以免未上传的数据丢失。
+              完成前请勿关闭或刷新页面，以免索引状态未及时更新。
             </p>
             <div className="mt-4 flex justify-center" aria-hidden>
               <span className="inline-block h-8 w-8 border-2 border-cyan-400/30 border-t-cyan-400 rounded-full animate-spin" />
@@ -5104,9 +6407,9 @@ const MainApp: React.FC = () => {
               删除项目
             </h2>
             <p className="mt-3 text-[12px] text-gray-300 leading-relaxed">
-              确定删除「
+              确定将「
               <span className="text-white font-medium">{workspaceProjectDeletePending.name}</span>
-              」吗？工作流画布数据将一并删除，且无法恢复。
+              」移入回收站吗？你可以在回收站中恢复该项目。
             </p>
             <div className="mt-6 flex flex-wrap items-center justify-end gap-2">
               <button
@@ -5123,9 +6426,426 @@ const MainApp: React.FC = () => {
                   setWorkspaceProjectDeletePending(null);
                   performDeleteWorkspaceProject(id);
                 }}
-                className="rounded-xl border border-red-500/40 bg-red-950/50 px-4 py-2.5 text-[11px] font-medium text-red-100 hover:bg-red-900/50 outline-none focus-visible:ring-2 focus-visible:ring-red-500/50"
+                className="rounded-xl border border-amber-500/40 bg-amber-950/40 px-4 py-2.5 text-[11px] font-medium text-amber-100 hover:bg-amber-900/50 outline-none focus-visible:ring-2 focus-visible:ring-amber-500/50"
               >
-                删除
+                移入回收站
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {workspaceProjectBindPending ? (
+        <div
+          className="fixed inset-0 z-[5600] flex items-center justify-center bg-black/70 backdrop-blur-sm px-6"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="workspace-bind-title"
+          onClick={() => setWorkspaceProjectBindPending(null)}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl border border-white/10 bg-[#0f0f0f] shadow-2xl px-6 py-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="workspace-bind-title" className="text-[14px] font-semibold text-white">
+              绑定到当前账号
+            </h2>
+            <p className="mt-3 text-[12px] text-gray-300 leading-relaxed">
+              确定将「
+              <span className="text-white font-medium">{workspaceProjectBindPending.name}</span>
+              」绑定到当前账号吗？该操作只同步项目索引，不上传本地大文件。
+            </p>
+            <div className="mt-6 flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setWorkspaceProjectBindPending(null)}
+                className="rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-[11px] font-medium text-gray-200 hover:bg-white/10 outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const id = workspaceProjectBindPending.id;
+                  setWorkspaceProjectBindPending(null);
+                  void performBindWorkspaceProject(id);
+                }}
+                className="rounded-xl border border-emerald-500/40 bg-emerald-950/40 px-4 py-2.5 text-[11px] font-medium text-emerald-100 hover:bg-emerald-900/50 outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/50"
+              >
+                绑定
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {workspaceProjectUnbindPending ? (
+        <div
+          className="fixed inset-0 z-[5600] flex items-center justify-center bg-black/70 backdrop-blur-sm px-6"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="workspace-unbind-title"
+          onClick={() => setWorkspaceProjectUnbindPending(null)}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl border border-white/10 bg-[#0f0f0f] shadow-2xl px-6 py-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="workspace-unbind-title" className="text-[14px] font-semibold text-white">
+              解绑当前账号
+            </h2>
+            <p className="mt-3 text-[12px] text-gray-300 leading-relaxed">
+              确定解除「
+              <span className="text-white font-medium">{workspaceProjectUnbindPending.name}</span>
+              」与当前账号的索引绑定吗？该操作不删除本地项目目录与内容。
+            </p>
+            <div className="mt-6 flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setWorkspaceProjectUnbindPending(null)}
+                className="rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-[11px] font-medium text-gray-200 hover:bg-white/10 outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const id = workspaceProjectUnbindPending.id;
+                  setWorkspaceProjectUnbindPending(null);
+                  void performUnbindWorkspaceProject(id);
+                }}
+                className="rounded-xl border border-amber-500/40 bg-amber-950/40 px-4 py-2.5 text-[11px] font-medium text-amber-100 hover:bg-amber-900/50 outline-none focus-visible:ring-2 focus-visible:ring-amber-500/50"
+              >
+                解绑
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {workspaceProjectManualUploadPending ? (
+        <div
+          className="fixed inset-0 z-[5600] flex items-center justify-center bg-black/70 backdrop-blur-sm px-6"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="workspace-manual-upload-title"
+          onClick={() => {
+            setWorkspaceProjectManualUploadPending(null);
+            setWorkspaceManualUploadMode('full');
+          }}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl border border-white/10 bg-[#0f0f0f] shadow-2xl px-6 py-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="workspace-manual-upload-title" className="text-[14px] font-semibold text-white">
+              手动上传项目资产
+            </h2>
+            <p className="mt-3 text-[12px] text-gray-300 leading-relaxed">
+              确定将「
+              <span className="text-white font-medium">{workspaceProjectManualUploadPending.name}</span>
+              」的工作流资产手动上传到云端吗？该操作可能耗时，并会占用账号云空间。
+            </p>
+            <div className="mt-3">
+              <div className="text-[10px] text-gray-400 mb-1">上传模式</div>
+              <CustomDropdown
+                value={workspaceManualUploadMode}
+                options={[
+                  { value: 'full', label: '全量上传' },
+                  { value: 'incremental', label: '仅上传新增/变更' },
+                ]}
+                onChange={(v) => setWorkspaceManualUploadMode(v === 'incremental' ? 'incremental' : 'full')}
+                triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+              />
+            </div>
+            {(() => {
+              const estimate =
+                workspaceManualUploadMode === 'incremental'
+                  ? workspaceProjectManualUploadPending.incrementalEstimate
+                  : workspaceProjectManualUploadPending.fullEstimate;
+              const unresolvedIncremental =
+                workspaceManualUploadMode === 'incremental' && !workspaceProjectManualUploadPending.incrementalReady;
+              return (
+                <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-gray-300 space-y-1">
+                  {unresolvedIncremental ? (
+                    <div className="text-amber-200/90">正在读取云端基线，稍后可见增量预估；若失败将按全量上传执行。</div>
+                  ) : (
+                    <>
+                      <div>资产数：{estimate?.assetCount ?? 0}</div>
+                      <div>预览图：{estimate?.previewCount ?? 0}</div>
+                      <div>模型引用：{estimate?.modelCount ?? 0}</div>
+                      <div>
+                        预估上传体积：
+                        <span className="text-cyan-200 ml-1">{formatApproxBytes(estimate?.bytesApprox ?? 0)}</span>
+                      </div>
+                    </>
+                  )}
+                </div>
+              );
+            })()}
+            <div className="mt-6 flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setWorkspaceProjectManualUploadPending(null);
+                  setWorkspaceManualUploadMode('full');
+                }}
+                className="rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-[11px] font-medium text-gray-200 hover:bg-white/10 outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const id = workspaceProjectManualUploadPending.id;
+                  setWorkspaceProjectManualUploadPending(null);
+                  void performManualUploadWorkspaceProject(id);
+                }}
+                className="rounded-xl border border-cyan-500/40 bg-cyan-950/40 px-4 py-2.5 text-[11px] font-medium text-cyan-100 hover:bg-cyan-900/50 outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50"
+              >
+                确认上传
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {workspaceUploadFailureDetailDialog ? (
+        (() => {
+          const uid = userIdRef.current ?? null;
+          const bundle = loadWorkflowBundle(workspaceUploadFailureDetailDialog.projectId, uid);
+          const existingSet = new Set(bundle.assets.map((a) => String(a?.id || '')).filter(Boolean));
+          const filterQ = workspaceUploadFailureFilter.trim().toLowerCase();
+          const allFailedIds = workspaceUploadFailureDetailDialog.failedAssetIds;
+          const visibleFailedIds = filterQ
+            ? allFailedIds.filter((id) => String(id).toLowerCase().includes(filterQ))
+            : allFailedIds;
+          const selectedExistingCount = workspaceUploadFailureDetailDialog.selectedAssetIds.filter((id) => existingSet.has(id)).length;
+          const selectedMissingCount = Math.max(0, workspaceUploadFailureDetailDialog.selectedAssetIds.length - selectedExistingCount);
+          return (
+        <div
+          className="fixed inset-0 z-[5600] flex items-center justify-center bg-black/70 backdrop-blur-sm px-6"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="workspace-upload-failure-detail-title"
+          onClick={() => {
+            setWorkspaceUploadFailureFilter('');
+            setWorkspaceUploadFailureDetailDialog(null);
+          }}
+        >
+          <div
+            className="w-full max-w-lg rounded-2xl border border-white/10 bg-[#0f0f0f] shadow-2xl px-6 py-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="workspace-upload-failure-detail-title" className="text-[14px] font-semibold text-white">
+              上传失败项详情
+            </h2>
+            <p className="mt-2 text-[12px] text-gray-300 leading-relaxed">
+              项目：<span className="text-white font-medium">{workspaceUploadFailureDetailDialog.projectName}</span>
+            </p>
+            <p className="mt-1 text-[11px] text-gray-400">
+              模式：{workspaceUploadFailureDetailDialog.mode === 'incremental' ? '仅上传新增/变更' : '全量上传'}
+              {' · '}
+              尝试 {workspaceUploadFailureDetailDialog.attempted}
+              {' · '}
+              成功 {workspaceUploadFailureDetailDialog.succeeded}
+              {' · '}
+              失败 {Math.max(0, workspaceUploadFailureDetailDialog.attempted - workspaceUploadFailureDetailDialog.succeeded)}
+            </p>
+            {workspaceUploadFailureDetailDialog.uploadedAt ? (
+              <p className="mt-1 text-[11px] text-gray-500">
+                时间：{new Date(workspaceUploadFailureDetailDialog.uploadedAt).toLocaleString()}
+              </p>
+            ) : null}
+            {workspaceUploadFailureDetailDialog.error ? (
+              <p className="mt-2 rounded-lg border border-amber-500/30 bg-amber-900/20 px-3 py-2 text-[11px] text-amber-100">
+                错误摘要：{workspaceUploadFailureDetailDialog.error}
+              </p>
+            ) : null}
+            <div className="mt-3">
+              <label htmlFor="workspace-upload-failure-filter" className="text-[10px] text-gray-500">
+                过滤 assetId
+              </label>
+              <input
+                id="workspace-upload-failure-filter"
+                type="text"
+                value={workspaceUploadFailureFilter}
+                onChange={(e) => setWorkspaceUploadFailureFilter(e.target.value)}
+                placeholder="输入片段匹配…"
+                className="mt-1 w-full rounded-xl border border-white/10 bg-[#1c1c22] px-3 py-2 text-[11px] text-white outline-none focus:border-blue-500 placeholder:text-gray-600"
+              />
+              <p className="mt-1 text-[10px] text-gray-500">
+                列表显示 {visibleFailedIds.length} / {allFailedIds.length} 项
+                {filterQ ? '（已启用过滤）' : ''}
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void copyWorkspaceFailureIdsToClipboard('visible')}
+                  className="rounded-lg border border-white/15 bg-white/5 px-2.5 py-1 text-[10px] text-gray-200 hover:bg-white/10"
+                  title="含首行注释（项目名、projectId、模式、时间）"
+                >
+                  复制当前列表
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void copyWorkspaceFailureIdsToClipboard('selected')}
+                  className="rounded-lg border border-white/15 bg-white/5 px-2.5 py-1 text-[10px] text-gray-200 hover:bg-white/10"
+                  title="仅复制当前勾选的 assetId，含首行注释"
+                >
+                  复制已勾选
+                </button>
+              </div>
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() =>
+                  setWorkspaceUploadFailureDetailDialog((prev) =>
+                    prev ? { ...prev, selectedAssetIds: [...prev.failedAssetIds] } : prev
+                  )
+                }
+                className="rounded-lg border border-white/15 bg-white/5 px-2.5 py-1 text-[10px] text-gray-200 hover:bg-white/10"
+              >
+                全选
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  setWorkspaceUploadFailureDetailDialog((prev) =>
+                    prev ? { ...prev, selectedAssetIds: [] } : prev
+                  )
+                }
+                className="rounded-lg border border-white/15 bg-white/5 px-2.5 py-1 text-[10px] text-gray-200 hover:bg-white/10"
+              >
+                全不选
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  setWorkspaceUploadFailureDetailDialog((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          selectedAssetIds: prev.failedAssetIds.filter((id) => existingSet.has(id)),
+                        }
+                      : prev
+                  )
+                }
+                className="rounded-lg border border-cyan-500/35 bg-cyan-900/20 px-2.5 py-1 text-[10px] text-cyan-200 hover:bg-cyan-900/35"
+              >
+                仅选本地仍存在
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  setWorkspaceUploadFailureDetailDialog((prev) =>
+                    prev ? { ...prev, selectedAssetIds: [...visibleFailedIds] } : prev
+                  )
+                }
+                className="rounded-lg border border-blue-500/35 bg-blue-900/20 px-2.5 py-1 text-[10px] text-blue-200 hover:bg-blue-900/35"
+                title="将勾选范围设为当前列表中的全部项"
+              >
+                仅选当前列表
+              </button>
+            </div>
+            <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.03] p-2 max-h-64 overflow-y-auto space-y-1">
+              {visibleFailedIds.length === 0 ? (
+                <p className="px-2 py-3 text-[11px] text-gray-500">无匹配项，请调整过滤关键字。</p>
+              ) : null}
+              {visibleFailedIds.map((assetId) => {
+                const selected = workspaceUploadFailureDetailDialog.selectedAssetIds.includes(assetId);
+                const exists = existingSet.has(assetId);
+                return (
+                  <label key={assetId} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-white/[0.04] cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={selected}
+                      onChange={() =>
+                        setWorkspaceUploadFailureDetailDialog((prev) => {
+                          if (!prev) return prev;
+                          const has = prev.selectedAssetIds.includes(assetId);
+                          return {
+                            ...prev,
+                            selectedAssetIds: has
+                              ? prev.selectedAssetIds.filter((id) => id !== assetId)
+                              : [...prev.selectedAssetIds, assetId],
+                          };
+                        })
+                      }
+                    />
+                    <span className="text-[11px] text-gray-200 font-mono break-all">{assetId}</span>
+                    {!exists ? <span className="text-[10px] text-amber-300/90">（本地不存在）</span> : null}
+                  </label>
+                );
+              })}
+            </div>
+            <div className="mt-2 text-[10px] text-gray-500">
+              已选择 {workspaceUploadFailureDetailDialog.selectedAssetIds.length} / {workspaceUploadFailureDetailDialog.failedAssetIds.length}
+            </div>
+            <div className="mt-1 text-[10px] text-gray-500">
+              将重试 {selectedExistingCount} 项（不可用 {selectedMissingCount} 项）
+            </div>
+            <div className="mt-5 flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setWorkspaceUploadFailureFilter('');
+                  setWorkspaceUploadFailureDetailDialog(null);
+                }}
+                className="rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-[11px] font-medium text-gray-200 hover:bg-white/10 outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
+              >
+                关闭
+              </button>
+              <button
+                type="button"
+                onClick={() => void retrySelectedFailedManualUploadWorkspaceProject()}
+                disabled={selectedExistingCount <= 0}
+                className="rounded-xl border border-amber-500/40 bg-amber-950/40 px-4 py-2.5 text-[11px] font-medium text-amber-100 hover:bg-amber-900/50 outline-none focus-visible:ring-2 focus-visible:ring-amber-500/50 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                重试所选失败项
+              </button>
+            </div>
+          </div>
+        </div>
+          );
+        })()
+      ) : null}
+      {workspaceUploadFailureCopyFallback ? (
+        <div
+          className="fixed inset-0 z-[5700] flex items-center justify-center bg-black/75 backdrop-blur-sm px-6"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="workspace-upload-copy-fallback-title"
+          onClick={() => setWorkspaceUploadFailureCopyFallback(null)}
+        >
+          <div
+            className="w-full max-w-2xl rounded-2xl border border-white/10 bg-[#0f0f0f] shadow-2xl px-6 py-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="workspace-upload-copy-fallback-title" className="text-[14px] font-semibold text-white">
+              手动复制文本
+            </h2>
+            <p className="mt-2 text-[11px] text-gray-400 leading-relaxed">
+              来源：
+              <span className="text-gray-300">
+                {workspaceUploadFailureCopyFallback.kind === 'visible' ? '当前列表' : '已勾选'}
+              </span>
+              。系统无法自动写入剪贴板（可能受浏览器权限或非安全上下文限制）；请全选下方文本后使用 Ctrl+C / Cmd+C 复制。
+            </p>
+            <textarea
+              ref={workspaceUploadFailureCopyFallbackTextareaRef}
+              readOnly
+              value={workspaceUploadFailureCopyFallback.text}
+              rows={14}
+              spellCheck={false}
+              className="mt-3 w-full resize-y rounded-xl border border-white/10 bg-[#1c1c22] px-3 py-2 font-mono text-[11px] leading-relaxed text-gray-200 outline-none focus:border-blue-500"
+            />
+            <div className="mt-4 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setWorkspaceUploadFailureCopyFallback(null)}
+                className="rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-[11px] font-medium text-gray-200 hover:bg-white/10 outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
+              >
+                关闭
               </button>
             </div>
           </div>

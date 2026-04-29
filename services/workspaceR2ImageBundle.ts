@@ -1,6 +1,7 @@
 import type { WorkflowAsset, WorkflowCutGroupItem, WorkflowPendingTask } from '../types';
 import { r2ApiUrl } from './apiBase';
 import { requestJson } from './httpClient';
+import { fetchCompanionAssetAsDataUrl } from './workflowCompanionAssets';
 
 type UploadUrlResponse = { uploadUrl: string; objectKey: string };
 type DownloadUrlResponse = { downloadUrl: string; objectKey: string };
@@ -279,6 +280,7 @@ export type WorkflowCloudBundleV2 = {
   version: 2;
   assets: WorkflowAsset[];
   pending: WorkflowPendingTask[];
+  capabilityRefs?: Array<{ kind: 'preset' | 'set'; id: string; snapshot?: unknown }>;
 };
 
 /** 从已打包的 v2 工作流 JSON 收集仍应保留的 R2 对象键（用于推送后清理孤儿） */
@@ -309,11 +311,25 @@ export function collectReferencedObjectKeysFromPackedV2(packed: { assets: Workfl
 /**
  * 将内存中的大图上传为 R2 独立对象，生成可写入 workflow.json 的瘦身副本（version: 2）
  */
+export type PackWorkflowBundleForCloudOptions = {
+  /**
+   * 若资产仅有 `originalCompanionKey` / `resultsCompanionKeys` 且无内存 data/blob，
+   * 则从本地伴侣读回再打 data URL 参与上云打包。
+   * 仅应在显式手动上传等路径传入，避免默认路径依赖伴侣。
+   */
+  companionHydrate?: { baseUrl: string; projectId: string };
+};
+
 export async function packWorkflowBundleForCloud(
   userId: string,
   projectId: string,
-  bundle: { assets: WorkflowAsset[]; pending: WorkflowPendingTask[] },
-  username?: string | null
+  bundle: {
+    assets: WorkflowAsset[];
+    pending: WorkflowPendingTask[];
+    capabilityRefs?: Array<{ kind: 'preset' | 'set'; id: string; snapshot?: unknown }>;
+  },
+  username?: string | null,
+  packOpts?: PackWorkflowBundleForCloudOptions
 ): Promise<WorkflowCloudBundleV2> {
   const assets: WorkflowAsset[] = JSON.parse(JSON.stringify(bundle.assets)) as WorkflowAsset[];
   const pending: WorkflowPendingTask[] = JSON.parse(JSON.stringify(bundle.pending)) as WorkflowPendingTask[];
@@ -325,20 +341,70 @@ export async function packWorkflowBundleForCloud(
     delete a.resultsObjectKeys;
     const base = assetBasePath(userId, projectId, a.id, username);
 
-    if (a.original && !isLikelyHttpImageUrl(a.original)) {
-      const key = await uploadDataUrlDeduped(dataUrlToKey, contentHashToKey, a.original, userId, username, (p) => `${base}/original.${mimeToExt(p.mime)}`);
+    let originalForPack = a.original;
+    const companionKey = String((a as { originalCompanionKey?: string }).originalCompanionKey || '').trim();
+    if (
+      (!originalForPack || !String(originalForPack).trim()) &&
+      companionKey &&
+      packOpts?.companionHydrate?.baseUrl?.trim() &&
+      packOpts.companionHydrate.projectId.trim()
+    ) {
+      const fromDisk = await fetchCompanionAssetAsDataUrl(
+        packOpts.companionHydrate.baseUrl,
+        packOpts.companionHydrate.projectId,
+        companionKey
+      );
+      if (fromDisk) {
+        originalForPack = fromDisk;
+      } else {
+        throw new Error(
+          `[workspace pack] 无法从本地伴侣读取原图（请检查伴侣是否运行、项目 id 与密钥）：asset=${a.id} key=${companionKey}`
+        );
+      }
+    }
+
+    if (originalForPack && !isLikelyHttpImageUrl(originalForPack)) {
+      const key = await uploadDataUrlDeduped(
+        dataUrlToKey,
+        contentHashToKey,
+        originalForPack,
+        userId,
+        username,
+        (p) => `${base}/original.${mimeToExt(p.mime)}`
+      );
       if (key) {
         a.originalObjectKey = key;
         a.original = '';
       }
     }
+    delete (a as { originalCompanionKey?: string }).originalCompanionKey;
 
     const resultsKeys: Record<string, string> = {};
+    const resultsCompanionKeysMap = { ...(a.resultsCompanionKeys || {}) };
     const nextResults: Record<string, string> = { ...a.results };
     const stepIds = Object.keys(nextResults);
     const resultPairs = await mapLimit(stepIds, CLOUD_PACK_UPLOAD_CONCURRENCY, async (stepId) => {
-      const v = nextResults[stepId];
+      let v = String(nextResults[stepId] || '').trim();
+      if (!v) {
+        const ck = String(resultsCompanionKeysMap[stepId] || '').trim();
+        if (ck && packOpts?.companionHydrate?.baseUrl?.trim() && packOpts.companionHydrate.projectId.trim()) {
+          const fromDisk = await fetchCompanionAssetAsDataUrl(
+            packOpts.companionHydrate.baseUrl,
+            packOpts.companionHydrate.projectId,
+            ck
+          );
+          if (fromDisk) v = fromDisk;
+          else {
+            throw new Error(
+              `[workspace pack] 无法从本地伴侣读取步骤结果图（请检查伴侣与项目 id）：asset=${a.id} step=${stepId} key=${ck}`
+            );
+          }
+        } else {
+          return { stepId, key: null as string | null };
+        }
+      }
       if (!v) return { stepId, key: null as string | null };
+      if (isLikelyHttpImageUrl(v)) return { stepId, key: null as string | null };
       const key = await uploadDataUrlDeduped(
         dataUrlToKey,
         contentHashToKey,
@@ -356,6 +422,7 @@ export async function packWorkflowBundleForCloud(
     }
     a.results = nextResults;
     if (Object.keys(resultsKeys).length) a.resultsObjectKeys = resultsKeys;
+    delete a.resultsCompanionKeys;
 
     if (a.cutImageGroup?.length) {
       const nextGroup = await mapLimit(a.cutImageGroup, CLOUD_PACK_UPLOAD_CONCURRENCY, async (item, idx) => {
@@ -386,7 +453,12 @@ export async function packWorkflowBundleForCloud(
     }
   });
 
-  return { version: 2, assets, pending };
+  return {
+    version: 2,
+    assets,
+    pending,
+    ...(Array.isArray(bundle.capabilityRefs) ? { capabilityRefs: bundle.capabilityRefs } : {}),
+  };
 }
 
 /** 同一 objectKey 只拉一次；多资产引用同一键时共用结果 */
@@ -428,9 +500,17 @@ export type HydrateWorkflowBundleOptions = {
  * 将云端拉下的 v2 bundle 还原为可渲染的 data URL（去掉 *ObjectKey / r2Key 占位）
  */
 export async function hydrateWorkflowBundleFromCloud(
-  bundle: { assets: WorkflowAsset[]; pending: WorkflowPendingTask[] },
+  bundle: {
+    assets: WorkflowAsset[];
+    pending: WorkflowPendingTask[];
+    capabilityRefs?: Array<{ kind: 'preset' | 'set'; id: string; snapshot?: unknown }>;
+  },
   options?: HydrateWorkflowBundleOptions
-): Promise<{ assets: WorkflowAsset[]; pending: WorkflowPendingTask[] }> {
+): Promise<{
+  assets: WorkflowAsset[];
+  pending: WorkflowPendingTask[];
+  capabilityRefs?: Array<{ kind: 'preset' | 'set'; id: string; snapshot?: unknown }>;
+}> {
   const assets: WorkflowAsset[] = JSON.parse(JSON.stringify(bundle.assets)) as WorkflowAsset[];
   const pending: WorkflowPendingTask[] = JSON.parse(JSON.stringify(bundle.pending)) as WorkflowPendingTask[];
 
@@ -504,5 +584,9 @@ export async function hydrateWorkflowBundleFromCloud(
     delete t.inputImageObjectKey;
   }
 
-  return { assets, pending };
+  return {
+    assets,
+    pending,
+    ...(Array.isArray(bundle.capabilityRefs) ? { capabilityRefs: bundle.capabilityRefs } : {}),
+  };
 }

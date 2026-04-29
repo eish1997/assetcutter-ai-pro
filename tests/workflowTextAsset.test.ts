@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import type { WorkflowAsset } from '../types';
-import { buildComposerTextAssetThumbDataUrl, workflowAssetToInputText } from '../services/workflowTextAsset';
+import {
+  buildComposerTextAssetThumbDataUrl,
+  workflowAssetAllowedForCapabilityDrop,
+  workflowAssetToInputText,
+} from '../services/workflowTextAsset';
+import type { CustomAppModule } from '../types';
 
 function makeTextAsset(partial?: Partial<WorkflowAsset>): WorkflowAsset {
   return {
@@ -55,5 +60,36 @@ describe('buildComposerTextAssetThumbDataUrl', () => {
     const decoded = decodeURIComponent(url.slice(url.indexOf(',') + 1));
     expect(decoded).toContain('a&lt;b');
     expect(decoded).toContain('c&amp;d');
+  });
+});
+
+describe('workflowAssetAllowedForCapabilityDrop', () => {
+  const hostBundlePreset: CustomAppModule = {
+    id: 'hb',
+    label: '宿主包',
+    category: 'image_to_image',
+    engine: 'builtin',
+    instruction: '',
+    companionHostBundle: { dirName: 'sample-plugin' },
+  };
+
+  it('宿主包预设允许文字卡拖入', () => {
+    const textAsset = makeTextAsset();
+    expect(workflowAssetAllowedForCapabilityDrop(textAsset, hostBundlePreset)).toBe(true);
+  });
+
+  it('宿主包预设允许图片卡拖入', () => {
+    const imageAsset: WorkflowAsset = {
+      id: 'img-1',
+      assetKind: 'image',
+      original: 'data:image/png;base64,AAA',
+      displayKey: 'original',
+      results: {},
+      resultOrder: [],
+      archived: false,
+      hiddenInGrid: false,
+      createdAt: Date.now(),
+    };
+    expect(workflowAssetAllowedForCapabilityDrop(imageAsset, hostBundlePreset)).toBe(true);
   });
 });

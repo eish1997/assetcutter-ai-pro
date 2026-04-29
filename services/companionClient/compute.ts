@@ -65,6 +65,35 @@ export async function submitCompanionSeamRepairJob(
   });
 }
 
+/** 与伴侣 `host_bundle.probe` / `host_bundle.exec` 的 `inputs` 一致 */
+export type CompanionHostBundleJobInputsV1 = { dirName: string };
+
+export async function submitCompanionHostBundleProbeJob(
+  baseUrl: string,
+  dirName: string,
+  opts?: { projectId?: string },
+) {
+  return submitCompanionJob(baseUrl, {
+    protocolVersion: 1,
+    type: 'host_bundle.probe',
+    projectId: opts?.projectId,
+    inputs: { dirName },
+  });
+}
+
+export async function submitCompanionHostBundleExecJob(
+  baseUrl: string,
+  dirName: string,
+  opts?: { projectId?: string },
+) {
+  return submitCompanionJob(baseUrl, {
+    protocolVersion: 1,
+    type: 'host_bundle.exec',
+    projectId: opts?.projectId,
+    inputs: { dirName },
+  });
+}
+
 export async function listCompanionJobs(baseUrl: string) {
   return companionFetchJson<{ jobs: CompanionJobRecordV1[] }>(baseUrl, '/v1/compute/jobs');
 }

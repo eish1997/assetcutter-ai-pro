@@ -4,18 +4,29 @@
 export { probeCompanionHealth, probeCompanionCapabilities, normalizeCompanionBaseUrl, type CompanionProbeResult } from './probe';
 export {
   listCompanionProjects,
+  listCompanionWorkspaceProjects,
+  createCompanionWorkspaceProject,
+  renameCompanionWorkspaceProject,
+  deleteCompanionWorkspaceProject,
+  listCompanionWorkspaceTrashProjects,
+  restoreCompanionWorkspaceTrashProject,
   getCompanionManifest,
+  reconcileCompanionManifestFromDisk,
   getCompanionAssetMeta,
   deleteCompanionAsset,
   putCompanionAsset,
   fetchCompanionAssetBlob,
   type CompanionProjectListV1,
+  type CompanionWorkspaceProjectV1,
+  type CompanionWorkspaceTrashProjectV1,
   type CompanionManifestV1,
   type CompanionAssetMetaV1,
 } from './storage';
 export {
   submitCompanionJob,
   submitCompanionSeamRepairJob,
+  submitCompanionHostBundleProbeJob,
+  submitCompanionHostBundleExecJob,
   listCompanionJobs,
   getCompanionJob,
   cancelCompanionJob,
@@ -25,7 +36,9 @@ export {
   type CompanionJobEventV1,
   type CompanionSubmitJobBody,
   type CompanionSeamRepairInputsV1,
+  type CompanionHostBundleJobInputsV1,
 } from './compute';
+export { listCompanionHostPluginBundles, type CompanionInstalledHostBundleV1 } from './hostPlugins';
 export { companionFetchJson, type CompanionClientResult } from './fetch';
 export {
   probeRelayFromCapabilities,

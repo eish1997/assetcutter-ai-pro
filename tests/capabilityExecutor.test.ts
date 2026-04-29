@@ -1,11 +1,34 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CapabilitySet, CustomAppModule } from '../types';
 import {
   collapseTestStopsForExecution,
+  executeCapability,
   executeCapabilitySet,
   validateCapabilitySetGraph,
 } from '../services/capabilityExecutor';
+
+const {
+  mockSubmitProbe,
+  mockSubmitExec,
+  mockGetCompanionBase,
+  mockNormalizeCompanionBaseUrl,
+} = vi.hoisted(() => ({
+  mockSubmitProbe: vi.fn(),
+  mockSubmitExec: vi.fn(),
+  mockGetCompanionBase: vi.fn(),
+  mockNormalizeCompanionBaseUrl: vi.fn(),
+}));
+
+vi.mock('../services/companionClient/compute', () => ({
+  submitCompanionHostBundleProbeJob: mockSubmitProbe,
+  submitCompanionHostBundleExecJob: mockSubmitExec,
+}));
+
+vi.mock('../services/companionLocalPrefs', () => ({
+  getCompanionLocalBaseUrl: mockGetCompanionBase,
+  normalizeCompanionBaseUrl: mockNormalizeCompanionBaseUrl,
+}));
 
 function makePreset(id: string): CustomAppModule {
   return {
@@ -25,6 +48,15 @@ function makeSet(nodes: CapabilitySet['nodes'], edges: CapabilitySet['edges']): 
     edges,
   };
 }
+
+beforeEach(() => {
+  mockSubmitProbe.mockReset();
+  mockSubmitExec.mockReset();
+  mockGetCompanionBase.mockReset();
+  mockNormalizeCompanionBaseUrl.mockReset();
+  mockGetCompanionBase.mockReturnValue('http://127.0.0.1:18765/');
+  mockNormalizeCompanionBaseUrl.mockImplementation((raw: string) => String(raw).replace(/\/+$/, ''));
+});
 
 describe('validateCapabilitySetGraph', () => {
   it('允许仅有资产输入节点而无 legacy input（与画布默认一致）', () => {
@@ -194,5 +226,77 @@ describe('executeCapabilitySet', () => {
     expect(result.image).toBe(img);
     expect(result.nodeImageOutputs?.input).toBe(img);
     expect(result.nodeImageOutputs?.ts).toBe(img);
+  });
+});
+
+describe('executeCapability: companion host bundle', () => {
+  it('phase=probe 时提交 host_bundle.probe 并返回文字结果', async () => {
+    const preset: CustomAppModule = {
+      id: 'hb-probe',
+      label: '宿主包校验',
+      category: 'image_to_image',
+      engine: 'builtin',
+      instruction: '',
+      companionHostBundle: { dirName: 'sample-plugin', phase: 'probe' },
+    };
+    mockSubmitProbe.mockResolvedValue({
+      ok: true,
+      data: { jobId: 'job-probe-1', status: 'queued', job: { jobId: 'job-probe-1' } },
+      latencyMs: 12,
+      status: 200,
+    });
+
+    const result = await executeCapability(preset, '', { companionProjectId: 'proj-1' });
+    expect(mockSubmitProbe).toHaveBeenCalledWith('http://127.0.0.1:18765', 'sample-plugin', { projectId: 'proj-1' });
+    expect(mockSubmitExec).not.toHaveBeenCalled();
+    expect(result.ok).toBe(true);
+    if (result.ok !== true || result.kind !== 'text') throw new Error('expected text success');
+    expect(result.text).toContain('host_bundle.probe');
+    expect(result.text).toContain('job-probe-1');
+  });
+
+  it('phase 缺省时默认走 host_bundle.exec', async () => {
+    const preset: CustomAppModule = {
+      id: 'hb-exec',
+      label: '宿主包执行',
+      category: 'text_to_text',
+      engine: 'builtin',
+      instruction: '',
+      companionHostBundle: { dirName: 'sample-plugin' },
+    };
+    mockSubmitExec.mockResolvedValue({
+      ok: true,
+      data: { jobId: 'job-exec-1', status: 'queued', job: { jobId: 'job-exec-1' } },
+      latencyMs: 10,
+      status: 200,
+    });
+
+    const result = await executeCapability(preset, '', {});
+    expect(mockSubmitExec).toHaveBeenCalledWith('http://127.0.0.1:18765', 'sample-plugin', { projectId: undefined });
+    expect(mockSubmitProbe).not.toHaveBeenCalled();
+    expect(result.ok).toBe(true);
+    if (result.ok !== true || result.kind !== 'text') throw new Error('expected text success');
+    expect(result.text).toContain('host_bundle.exec');
+  });
+
+  it('伴侣请求失败时返回错误', async () => {
+    const preset: CustomAppModule = {
+      id: 'hb-fail',
+      label: '宿主包失败',
+      category: 'image_to_image',
+      engine: 'builtin',
+      instruction: '',
+      companionHostBundle: { dirName: 'broken-plugin', phase: 'exec' },
+    };
+    mockSubmitExec.mockResolvedValue({
+      ok: false,
+      error: 'ECONNREFUSED',
+      latencyMs: 10,
+    });
+
+    const result = await executeCapability(preset, '', {});
+    expect(result.ok).toBe(false);
+    if (result.ok !== false) throw new Error('expected failed result');
+    expect(result.error).toContain('ECONNREFUSED');
   });
 });

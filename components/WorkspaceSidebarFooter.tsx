@@ -1,15 +1,31 @@
 import React, { useEffect, useState } from 'react';
 import { formatWorkspaceSyncCountdownRemaining } from './WorkspaceCloudSyncCountdown';
+import { getCompanionLocalBaseUrl } from '../services/companionLocalPrefs';
+import { probeCompanionHealth } from '../services/companionClient';
+import {
+  fetchCompanionArtifactLatest,
+  resolveCompanionArtifactDownload,
+  type CompanionArtifactSummary,
+} from '../services/companionArtifactsClient';
 
 function formatWorkspaceCloudMb(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function guessArtifactPlatform(): string {
+  if (typeof navigator === 'undefined') return 'win32';
+  const fromUA = (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform;
+  const p = String(fromUA || navigator.platform || '').toLowerCase();
+  if (p.includes('win')) return 'win32';
+  if (p.includes('mac')) return 'darwin';
+  return 'linux';
 }
 
 function platformAbbrev(label: string): string {
   const trimmed = label.trim();
   if (!trimmed) return '?';
   const words = trimmed.split(/\s+/).filter(Boolean);
-  if (words.length >= 2 && words.every((w) => /^[\x00-\x7F]+$/.test(w))) {
+  if (words.length >= 2 && words.every((w) => /^[ -~]+$/.test(w))) {
     return words
       .map((w) => w[0])
       .join('')
@@ -59,7 +75,7 @@ function SyncToolbarTooltipHost({
       else
         line2 = `自动同步：已开启 · 下次约 ${formatWorkspaceSyncCountdownRemaining(workspaceCloudNextAutoSyncAt - Date.now())}`;
       setTip(
-        `云同步 · 最近：${workspaceLastSyncText}\n${line2}\n开关：切换自动同步；下方按钮：立即同步一次`,
+        `云同步 · 最近：${workspaceLastSyncText}\n${line2}\n默认同步：项目索引等轻量数据；画布与大图以本机为主，换浏览器不会自动出现同一张图。\n开关：切换自动同步；下方按钮：立即同步一次`,
       );
     };
     run();
@@ -90,7 +106,6 @@ export type WorkspaceSidebarFooterProps = {
   workspaceCloudQuotaBytes: number;
   workspaceCloudUsageRatio: number;
   workspaceCloudUsagePercent: number;
-  workspaceCloudHydratingProjectId: string | null;
   workspaceLastSyncText: string;
   workspaceCloudAutoSyncing: boolean;
   workspaceAutoSyncEnabled: boolean;
@@ -114,7 +129,6 @@ const WorkspaceSidebarFooter: React.FC<WorkspaceSidebarFooterProps> = ({
   workspaceCloudQuotaBytes,
   workspaceCloudUsageRatio,
   workspaceCloudUsagePercent,
-  workspaceCloudHydratingProjectId,
   workspaceLastSyncText,
   workspaceCloudAutoSyncing,
   workspaceAutoSyncEnabled,
@@ -124,17 +138,73 @@ const WorkspaceSidebarFooter: React.FC<WorkspaceSidebarFooterProps> = ({
   onOpenApiKeyModal,
   aiInvocationReady,
   aiPlatformLabel,
-}) => (
-  <div className="flex w-full min-w-0 shrink-0 flex-col gap-2 px-1.5 py-2">
-    {workspaceCloudHydratingProjectId === activeWorkspaceProjectId ? (
-      <div
-        className="flex w-full min-w-0 items-center justify-center rounded-lg bg-white/[0.03] px-2 py-2 ring-1 ring-white/[0.06]"
-        title="正按资源分批从云端还原图像"
-      >
-        <CloudIcon className="h-4 w-4 animate-pulse text-amber-400/90" />
-      </div>
-    ) : null}
+}) => {
+  const [companionLinked, setCompanionLinked] = useState<boolean | null>(null);
+  const [latestShell, setLatestShell] = useState<CompanionArtifactSummary | null>(null);
+  const [downloadBusy, setDownloadBusy] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    let timer: number | null = null;
+    const check = async () => {
+      try {
+        const base = getCompanionLocalBaseUrl();
+        const r = await probeCompanionHealth(base);
+        if (!alive) return;
+        setCompanionLinked(r.ok);
+      } catch {
+        if (!alive) return;
+        setCompanionLinked(false);
+      }
+      if (!alive) return;
+      timer = window.setTimeout(check, 15000);
+    };
+    void check();
+    return () => {
+      alive = false;
+      if (timer != null) window.clearTimeout(timer);
+    };
+  }, []);
 
+  useEffect(() => {
+    if (!user?.id || !activeWorkspaceProjectId) {
+      setLatestShell(null);
+      return;
+    }
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetchCompanionArtifactLatest({
+          kind: 'desktop_shell',
+          platform: guessArtifactPlatform(),
+          channel: 'stable',
+        });
+        if (!alive) return;
+        setLatestShell(r.latest);
+      } catch {
+        if (!alive) return;
+        setLatestShell(null);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [user?.id, activeWorkspaceProjectId]);
+
+  const onDownloadCompanionShell = async () => {
+    if (!user?.id || !latestShell?.id) return;
+    setDownloadBusy(true);
+    try {
+      const r = await resolveCompanionArtifactDownload(latestShell.id);
+      window.open(r.downloadUrl, '_blank', 'noopener,noreferrer');
+    } catch {
+      /* 静默；可后续接 toast */
+    } finally {
+      setDownloadBusy(false);
+    }
+  };
+
+  return (
+  <div className="flex w-full min-w-0 shrink-0 flex-col gap-2 px-1.5 py-2">
     {user?.id && workspaceCloudEnabled ? (
       <>
         <SyncToolbarTooltipHost
@@ -178,7 +248,7 @@ const WorkspaceSidebarFooter: React.FC<WorkspaceSidebarFooterProps> = ({
           onClick={onTriggerWorkspaceSyncNow}
           disabled={workspaceCloudAutoSyncing}
           className="flex h-9 w-full min-w-0 shrink-0 items-center justify-center rounded-lg bg-white/[0.05] text-gray-300 ring-1 ring-white/[0.06] hover:bg-white/[0.09] disabled:cursor-not-allowed disabled:opacity-45 transition-colors"
-          title="立即同步当前工作区到云端"
+          title="立即同步：默认推送项目索引等轻量数据；画布大图需在项目列表使用「手动上传」"
           aria-label="立即同步到云端"
         >
           <svg viewBox="0 0 20 20" className="h-4 w-4 shrink-0" fill="none" aria-hidden>
@@ -236,7 +306,46 @@ const WorkspaceSidebarFooter: React.FC<WorkspaceSidebarFooterProps> = ({
         </button>
       </>
     ) : null}
+    {user?.id && activeWorkspaceProjectId ? (
+      <div
+        className="flex w-full min-w-0 flex-col gap-1 rounded-lg bg-white/[0.03] px-2 py-1.5 ring-1 ring-white/[0.06]"
+        title={
+          (latestShell ? `发行版 v${latestShell.semver} · ` : '') +
+          (companionLinked === true ? '本地伴侣已连接' : companionLinked === false ? '本地伴侣未连接' : '本地伴侣检测中')
+        }
+      >
+        <div className="flex w-full min-w-0 items-center justify-center gap-1.5">
+          <span
+            className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+              companionLinked === true
+                ? 'bg-emerald-400'
+                : companionLinked === false
+                  ? 'bg-rose-400'
+                  : 'bg-amber-300'
+            }`}
+            aria-hidden
+          />
+          <span className="text-[9px] font-bold leading-none text-gray-300">
+            {companionLinked === true ? '伴侣已连' : companionLinked === false ? '伴侣未连' : '伴侣检测中'}
+          </span>
+        </div>
+        {latestShell ? (
+          <button
+            type="button"
+            disabled={downloadBusy}
+            onClick={() => void onDownloadCompanionShell()}
+            className="w-full rounded-md bg-blue-600/90 py-1 text-[9px] font-bold text-white hover:bg-blue-500 disabled:opacity-50"
+            title={`下载桌面壳 ${latestShell.semver}（${latestShell.fileName}）`}
+          >
+            {downloadBusy ? '…' : `下载壳 v${latestShell.semver}`}
+          </button>
+        ) : (
+          <span className="text-[8px] text-center text-gray-600 leading-tight">暂无发行包</span>
+        )}
+      </div>
+    ) : null}
   </div>
-);
+  );
+};
 
 export default WorkspaceSidebarFooter;

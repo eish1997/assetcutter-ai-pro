@@ -1,0 +1,261 @@
+import type { WorkflowAsset } from '../types';
+import type { WorkflowProjectBundle } from './workspaceProjectStore';
+import { fetchCompanionAssetBlob, putCompanionAsset } from './companionClient/storage';
+import { normalizeCompanionBaseUrl } from './companionLocalPrefs';
+import { isWorkflowTextAsset } from './workflowTextAsset';
+
+function sanitizeCompanionPathSegment(s: string): string {
+  return String(s || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9_.-]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 120) || 'x';
+}
+
+/**
+ * 工作流原图在本地伴侣项目下的稳定对象键（按资产 id，便于覆盖同卡更新）。
+ * 必须与 `local-companion` 的 `isSafeIdPart` 一致：单段、无 `/`，否则 PUT 会 400 `invalid_key`。
+ */
+export function workflowOriginalCompanionStorageKey(assetId: string): string {
+  const id = sanitizeCompanionPathSegment(String(assetId || '').trim() || 'unknown');
+  return `wf-orig-${id}`.slice(0, 128);
+}
+
+/** 某资产某步骤结果图在伴侣下的键（含版本 key；长度受 128 字符上限约束） */
+export function workflowResultCompanionStorageKey(assetId: string, resultKey: string): string {
+  const a = sanitizeCompanionPathSegment(assetId).slice(0, 48);
+  const r = sanitizeCompanionPathSegment(resultKey).slice(0, 72);
+  return `wf-res-${a}-${r}`.slice(0, 128);
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result || ''));
+    r.onerror = () => reject(r.error ?? new Error('read failed'));
+    r.readAsDataURL(blob);
+  });
+}
+
+/**
+ * 将画布上可能出现的原图串（data / blob / http / 旧版裸 base64）规范为 data URL，供伴侣 PUT。
+ * http 受 CORS 限制可能失败，返回 null。
+ */
+export async function imageSrcToDataUrlForCompanion(src: string): Promise<string | null> {
+  const s = String(src || '').trim();
+  if (!s) return null;
+  if (parseDataUrlToBlob(s)) return s;
+  if (/^blob:/i.test(s)) {
+    try {
+      const res = await fetch(s);
+      const blob = await res.blob();
+      return await blobToDataUrl(blob);
+    } catch {
+      return null;
+    }
+  }
+  if (/^https?:\/\//i.test(s)) {
+    try {
+      const res = await fetch(s, { mode: 'cors', credentials: 'omit' });
+      if (!res.ok) return null;
+      const blob = await res.blob();
+      return await blobToDataUrl(blob);
+    } catch {
+      return null;
+    }
+  }
+  const stripped = s.replace(/\s/g, '');
+  if (stripped.length >= 64 && /^[A-Za-z0-9+/]+=*$/.test(stripped)) {
+    const candidate = `data:image/jpeg;base64,${stripped}`;
+    if (parseDataUrlToBlob(candidate)) return candidate;
+  }
+  return null;
+}
+
+/** 原图可为任意可解析形态，内部先转为 data URL 再上传 */
+export async function putWorkflowOriginalImageFromAnyUrl(
+  baseUrl: string,
+  projectId: string,
+  assetId: string,
+  imageSrc: string
+): Promise<{ ok: true; key: string } | { ok: false; error: string }> {
+  const dataUrl = await imageSrcToDataUrlForCompanion(imageSrc);
+  if (!dataUrl) return { ok: false, error: 'cannot_normalize_image_src' };
+  return putWorkflowOriginalImageToCompanion(baseUrl, projectId, assetId, dataUrl);
+}
+
+export function parseDataUrlToBlob(dataUrl: string): { blob: Blob; mime: string } | null {
+  const s = String(dataUrl || '').trim();
+  if (!s.startsWith('data:')) return null;
+  const headEnd = s.indexOf(',');
+  if (headEnd < 0) return null;
+  const head = s.slice(0, headEnd);
+  const mimeMatch = /^data:([^;]+)/i.exec(head);
+  const mime = (mimeMatch?.[1] || 'application/octet-stream').trim();
+  const isBase64 = /;base64/i.test(head);
+  const body = s.slice(headEnd + 1);
+  if (isBase64) {
+    try {
+      const bin = atob(body.replace(/\s/g, ''));
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      return { blob: new Blob([bytes], { type: mime }), mime };
+    } catch {
+      return null;
+    }
+  }
+  try {
+    const decoded = decodeURIComponent(body);
+    return { blob: new Blob([decoded], { type: mime }), mime };
+  } catch {
+    return null;
+  }
+}
+
+export async function putWorkflowOriginalImageToCompanion(
+  baseUrl: string,
+  projectId: string,
+  assetId: string,
+  imageBase64OrDataUrl: string
+): Promise<{ ok: true; key: string } | { ok: false; error: string }> {
+  const parsed = parseDataUrlToBlob(imageBase64OrDataUrl);
+  if (!parsed) return { ok: false, error: 'not_data_url' };
+  const key = workflowOriginalCompanionStorageKey(assetId);
+  const base = normalizeCompanionBaseUrl(baseUrl);
+  const res = await putCompanionAsset(base, projectId, key, parsed.blob, parsed.mime);
+  if (res.ok === false) {
+    return { ok: false, error: `${res.error}${res.status != null ? ` (HTTP ${res.status})` : ''}` };
+  }
+  return { ok: true, key };
+}
+
+export async function putWorkflowResultImageToCompanion(
+  baseUrl: string,
+  projectId: string,
+  assetId: string,
+  resultKey: string,
+  imageDataUrl: string
+): Promise<{ ok: true; key: string } | { ok: false; error: string }> {
+  const parsed = parseDataUrlToBlob(imageDataUrl);
+  if (!parsed) return { ok: false, error: 'not_data_url' };
+  const key = workflowResultCompanionStorageKey(assetId, resultKey);
+  const base = normalizeCompanionBaseUrl(baseUrl);
+  const res = await putCompanionAsset(base, projectId, key, parsed.blob, parsed.mime);
+  if (res.ok === false) {
+    return { ok: false, error: `${res.error}${res.status != null ? ` (HTTP ${res.status})` : ''}` };
+  }
+  return { ok: true, key };
+}
+
+function shouldStripOriginalForPersist(original: string): boolean {
+  const o = String(original || '').trim();
+  return o.startsWith('data:') || /^blob:/i.test(o) || /^https?:\/\//i.test(o);
+}
+
+function shouldStripResultUrlForPersist(url: string): boolean {
+  const u = String(url || '').trim();
+  return u.startsWith('data:') || /^blob:/i.test(u);
+}
+
+/** 写入 IndexedDB 前瘦身：已落伴侣的原图不再重复存 data/blob 串 */
+export function stripWorkflowBundleForIdbPersist(bundle: WorkflowProjectBundle): WorkflowProjectBundle {
+  const raw = JSON.stringify(bundle);
+  const out = JSON.parse(raw) as WorkflowProjectBundle;
+  for (const a of out.assets) {
+    if (String(a.originalCompanionKey || '').trim() && shouldStripOriginalForPersist(String(a.original || ''))) {
+      a.original = '';
+    }
+    const rck = a.resultsCompanionKeys;
+    if (rck && typeof a.results === 'object') {
+      const next = { ...(a.results || {}) };
+      let touched = false;
+      for (const stepId of Object.keys(rck)) {
+        const companionKey = String(rck[stepId] || '').trim();
+        if (!companionKey) continue;
+        const cur = next[stepId];
+        if (cur != null && shouldStripResultUrlForPersist(String(cur))) {
+          next[stepId] = '';
+          touched = true;
+        }
+      }
+      if (touched) a.results = next;
+    }
+  }
+  return out;
+}
+
+export function workflowAssetNeedsCompanionOriginalHydrate(a: WorkflowAsset): boolean {
+  if (isWorkflowTextAsset(a)) return false;
+  const key = String(a.originalCompanionKey || '').trim();
+  if (!key) return false;
+  return !String(a.original ?? '').trim();
+}
+
+/** 是否存在「有伴侣结果键但该步无内存图串」需从伴侣补 blob: */
+export function workflowAssetNeedsCompanionResultHydrate(a: WorkflowAsset): boolean {
+  if (isWorkflowTextAsset(a)) return false;
+  const rck = a.resultsCompanionKeys;
+  if (!rck) return false;
+  const res = a.results || {};
+  for (const stepId of Object.keys(rck)) {
+    if (!String(rck[stepId] || '').trim()) continue;
+    if (!String(res[stepId] ?? '').trim()) return true;
+  }
+  return false;
+}
+
+function sniffImageMimeFromBytes(bytes: Uint8Array): string {
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
+  if (bytes.length >= 4 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return 'image/png';
+  if (
+    bytes.length >= 12 &&
+    bytes[0] === 0x52 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x46 &&
+    bytes[8] === 0x57 &&
+    bytes[9] === 0x45 &&
+    bytes[10] === 0x42 &&
+    bytes[11] === 0x50
+  ) {
+    return 'image/webp';
+  }
+  return 'application/octet-stream';
+}
+
+/** 将伴侣对象读为 data URL，供手动上云打包等路径使用（大图会占内存，仅走显式上传） */
+export async function fetchCompanionAssetAsDataUrl(
+  baseUrl: string,
+  projectId: string,
+  key: string
+): Promise<string | null> {
+  const base = normalizeCompanionBaseUrl(baseUrl);
+  const res = await fetchCompanionAssetBlob(base, projectId, key);
+  if (res.ok === false) return null;
+  const u8 = new Uint8Array(res.data);
+  const mime = sniffImageMimeFromBytes(u8);
+  const chunk = 0x8000;
+  let binary = '';
+  for (let i = 0; i < u8.length; i += chunk) {
+    binary += String.fromCharCode.apply(null, u8.subarray(i, i + chunk) as unknown as number[]);
+  }
+  const b64 = btoa(binary);
+  return `data:${mime};base64,${b64}`;
+}
+
+export async function fetchWorkflowOriginalFromCompanionAsObjectUrl(
+  baseUrl: string,
+  projectId: string,
+  key: string
+): Promise<{ ok: true; objectUrl: string; mime: string } | { ok: false; error: string }> {
+  const base = normalizeCompanionBaseUrl(baseUrl);
+  const res = await fetchCompanionAssetBlob(base, projectId, key);
+  if (res.ok === false) {
+    return { ok: false, error: `${res.error}${res.status != null ? ` (HTTP ${res.status})` : ''}` };
+  }
+  const u8 = new Uint8Array(res.data);
+  const mime = sniffImageMimeFromBytes(u8);
+  const blob = new Blob([res.data], { type: mime });
+  return { ok: true, objectUrl: URL.createObjectURL(blob), mime };
+}

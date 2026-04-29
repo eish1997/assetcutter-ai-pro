@@ -18,10 +18,14 @@ import {
   setVectorengineApiKey,
   getVectorengineBaseUrl,
   setVectorengineBaseUrl,
+  getTripoApiKey,
+  setTripoApiKey,
   type AiProvider,
 } from '../services/settingsStore';
 import { CustomDropdown, DROPDOWN_TRIGGER_COMPACT } from './ui/CustomDropdown';
 import AppIcon from './ui/AppIcon';
+import { getCompanionLocalBaseUrl } from '../services/companionLocalPrefs';
+import { probeCompanionHealth } from '../services/companionClient';
 
 const AI_PROVIDER_OPTIONS: { value: AiProvider; label: string }[] = [
   { value: 'trial', label: '试用（代理通道）' },
@@ -46,7 +50,10 @@ export const WorkflowApiKeyModal: React.FC<{
   const [toapisBase, setToapisBase] = useState('');
   const [agBase, setAgBase] = useState('');
   const [veBase, setVeBase] = useState('');
+  const [tripoKey, setTripoKey] = useState('');
   const [savedFlash, setSavedFlash] = useState(false);
+  const [companionStatus, setCompanionStatus] = useState<'checking' | 'online' | 'offline'>('checking');
+  const [companionStatusText, setCompanionStatusText] = useState('检测中…');
 
   useEffect(() => {
     if (!open) return;
@@ -55,9 +62,43 @@ export const WorkflowApiKeyModal: React.FC<{
     setToapisKey(getToapisApiKey() ?? '');
     setAgKey(getAntigravityApiKey() ?? '');
     setVeKey(getVectorengineApiKey() ?? '');
+    setTripoKey(getTripoApiKey() ?? '');
     setToapisBase(getToapisBaseUrl());
     setAgBase(getAntigravityBaseUrl());
     setVeBase(getVectorengineBaseUrl());
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    let timer: number | null = null;
+    const run = async () => {
+      setCompanionStatus('checking');
+      setCompanionStatusText('检测中…');
+      try {
+        const base = getCompanionLocalBaseUrl();
+        const r = await probeCompanionHealth(base);
+        if (!alive) return;
+        if (r.ok) {
+          setCompanionStatus('online');
+          setCompanionStatusText(`已连接（${base}）`);
+        } else {
+          setCompanionStatus('offline');
+          setCompanionStatusText(`未连接（${base}）`);
+        }
+      } catch {
+        if (!alive) return;
+        setCompanionStatus('offline');
+        setCompanionStatusText('未连接');
+      }
+      if (!alive) return;
+      timer = window.setTimeout(run, 15000);
+    };
+    void run();
+    return () => {
+      alive = false;
+      if (timer != null) window.clearTimeout(timer);
+    };
   }, [open]);
 
   const onEscape = useCallback(
@@ -119,6 +160,7 @@ export const WorkflowApiKeyModal: React.FC<{
     setAntigravityBaseUrl(agBase.trim() || null);
     setVectorengineApiKey(veKey.trim() || null);
     setVectorengineBaseUrl(veBase.trim() || null);
+    setTripoApiKey(tripoKey.trim() || null);
     setSavedFlash(true);
     onSaved?.();
     setTimeout(() => setSavedFlash(false), 2000);
@@ -160,6 +202,20 @@ export const WorkflowApiKeyModal: React.FC<{
               triggerClassName={`${DROPDOWN_TRIGGER_COMPACT} w-full`}
               portalZIndex={{ backdrop: 2200, list: 2201 }}
             />
+            <div className="mt-2 flex items-center gap-2 text-[10px]">
+              <span
+                className={`inline-block h-2 w-2 rounded-full ${
+                  companionStatus === 'online'
+                    ? 'bg-emerald-400'
+                    : companionStatus === 'checking'
+                    ? 'bg-amber-300'
+                    : 'bg-rose-400'
+                }`}
+              />
+              <span className={companionStatus === 'online' ? 'text-emerald-300' : 'text-gray-400'}>
+                本地伴侣：{companionStatusText}
+              </span>
+            </div>
           </div>
           {provider === 'antigravity' ? (
             <div>
@@ -211,6 +267,20 @@ export const WorkflowApiKeyModal: React.FC<{
             >
               关闭
             </button>
+          </div>
+          <div className="pt-2 border-t border-white/10">
+            <span className="block text-[9px] font-black uppercase text-gray-500 mb-2">Tripo API Key（3D）</span>
+            <input
+              type="password"
+              value={tripoKey}
+              onChange={(e) => setTripoKey(e.target.value)}
+              placeholder="tsk_..."
+              autoComplete="off"
+              className="w-full min-w-0 px-4 py-3 rounded-xl bg-[#16161a] border border-[#2e2e32] text-sm text-white placeholder-gray-500 focus:border-[#3b82f6] focus:outline-none"
+            />
+            <p className="mt-2 text-[10px] text-gray-500">
+              用于工作流「生成3D」预设调用 Tripo（当前测试版为前端直连）。
+            </p>
           </div>
         </div>
       </div>

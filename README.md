@@ -56,6 +56,8 @@
 
 ## 部署成网站
 
+**合并/发布前自检与「第一版」范围说明**（含 `typecheck`、`guard:storage`、CI）：见 **[`docs/网站与发布检查清单.md`](docs/网站与发布检查清单.md)**。
+
 若要把项目发布成线上可访问的网站，按 **[DEPLOY_GUIDE.md](DEPLOY_GUIDE.md)** 操作即可（GitHub → Vercel，全程点选 + 填几处配置）。
 
 若使用 Render，仓库已提供 `render.yaml`（静态前端 + auth-api + Postgres 免费起步版）。首次部署时请在 Render Dashboard 补齐：
@@ -90,10 +92,14 @@
 | 8. R2 独立进程（可选） | `npm run dev:r2-api` | 仅高级场景，端口默认 9003；需改 Vite 代理 target 指向 9003 |
 | 9. 初始化管理员（一次性） | `npm run seed:admin` | 需先设置 `AUTH_ADMIN_EMAIL` 与 `AUTH_ADMIN_PASSWORD` |
 | 10. 迁移用户数据到 Postgres（可选） | `npm run migrate:auth-to-postgres` | 需先设置 `DATABASE_URL`，把 `server/data/auth-db.json` 导入数据库 |
-| 11. **本地伴侣**（可选） | `npm run local-companion:dev` | 本机 `127.0.0.1:18765` 浏览器管理页：**插件**（计算等占位）与 **仓库**（卷路径）；与主站「设置 → 本地伴侣」探测对齐；勿与 A-Driver `local-bridge` 同端口并行 |
+| 11. **本地伴侣**（可选） | `npm run local-companion:dev` | 本机 `127.0.0.1:18765`：**插件**（含 **seam_repair**、**host_bundle.probe/exec**）、**宿主插件包**（`host-plugins` API）、**仓库**；主站 **`companionClient`** 与「设置 → 本地伴侣」对齐；详见 **`docs/本地伴侣-本地程序开发.md`**；勿与 A-Driver `local-bridge` 同端口并行 |
 | 一键启动主站 + 修缝 | `npm run dev:all` | 同时跑主站与贴图修缝后端（两个进程） |
 
 **构建与预览：** `npm run build` 生成 `dist/`；`npm run preview` 本地预览构建结果。
+
+**TypeScript 校验：** 在仓库根执行 `npx tsc --noEmit` 可对主工程做全量类型检查。根目录 `tsconfig.json` 已将 **`示例项目/`** 排除在编译范围外（该目录为独立示例工程，依赖与主站分离）；修改主站/伴侣代码后建议本地跑通后再提交。
+
+**前端测试栈：** Vitest + jsdom + Testing Library（`@testing-library/react`、`@testing-library/user-event`），测试范围由 `vitest.config.ts` 控制为 **`tests/**/*.test.{ts,tsx}`**。
 
 **端口与代理：**
 

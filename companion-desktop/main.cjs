@@ -40,6 +40,186 @@ let statusPollTimer = null;
 let lastStatusAlertKey = null;
 /** @type {boolean} */
 let companionAutoUpdateConfigured = false;
+/** @type {boolean} */
+let isQuitting = false;
+
+function shellSettingsPath() {
+  return path.join(app.getPath('userData'), 'companion-shell-settings.json');
+}
+
+function readShellSettings() {
+  try {
+    const p = shellSettingsPath();
+    if (!fs.existsSync(p)) return { siteUrl: 'http://localhost:3000' };
+    const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+    const siteUrl =
+      typeof j.siteUrl === 'string' && j.siteUrl.trim() ? j.siteUrl.trim() : 'http://localhost:3000';
+    return { siteUrl };
+  } catch {
+    return { siteUrl: 'http://localhost:3000' };
+  }
+}
+
+function saveShellSettings(patch) {
+  const cur = readShellSettings();
+  if (patch && typeof patch.siteUrl === 'string') {
+    const t = patch.siteUrl.trim();
+    cur.siteUrl = t || 'http://localhost:3000';
+  }
+  fs.mkdirSync(path.dirname(shellSettingsPath()), { recursive: true });
+  fs.writeFileSync(shellSettingsPath(), `${JSON.stringify(cur, null, 2)}\n`, 'utf8');
+  return cur;
+}
+
+let lastDesktopReleaseNagKey = null;
+/** @type {ReturnType<typeof setInterval> | null} */
+let desktopReleaseCheckTimer = null;
+
+function readDesktopShellPackageVersion() {
+  try {
+    const p = path.join(__dirname, 'package.json');
+    const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+    return typeof j.version === 'string' && j.version.trim() ? j.version.trim() : '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+}
+
+function semverRemoteGreater(remote, local) {
+  const pa = String(remote)
+    .split('.')
+    .map((x) => parseInt(String(x).replace(/\D/g, ''), 10) || 0);
+  const pb = String(local)
+    .split('.')
+    .map((x) => parseInt(String(x).replace(/\D/g, ''), 10) || 0);
+  const n = Math.max(pa.length, pb.length, 3);
+  for (let i = 0; i < n; i++) {
+    const a = pa[i] || 0;
+    const b = pb[i] || 0;
+    if (a > b) return true;
+    if (a < b) return false;
+  }
+  return false;
+}
+
+async function checkRemoteDesktopShellReleaseOnce() {
+  const { siteUrl } = readShellSettings();
+  let origin;
+  try {
+    origin = new URL(siteUrl).origin;
+  } catch {
+    return null;
+  }
+  const plat =
+    process.platform === 'win32' ? 'win32' : process.platform === 'darwin' ? 'darwin' : 'linux';
+  const api = `${origin}/api/companion-artifacts/latest?kind=desktop_shell&platform=${encodeURIComponent(
+    plat,
+  )}&channel=stable`;
+  try {
+    const r = await fetch(api, { method: 'GET', signal: AbortSignal.timeout(15000) });
+    if (!r.ok) return null;
+    const j = await r.json();
+    const rem = j && j.latest && j.latest.semver ? String(j.latest.semver) : '';
+    if (!rem) return null;
+    const loc = readDesktopShellPackageVersion();
+    if (!semverRemoteGreater(rem, loc)) return null;
+    return { remote: rem, local: loc };
+  } catch {
+    return null;
+  }
+}
+
+function scheduleDesktopShellReleaseCheck() {
+  const tick = async () => {
+    const info = await checkRemoteDesktopShellReleaseOnce();
+    if (!info) return;
+    const key = `${info.remote}|${info.local}`;
+    if (key === lastDesktopReleaseNagKey) return;
+    lastDesktopReleaseNagKey = key;
+    companionStatusNote = `网站有新版桌面壳 v${info.remote}（当前 ${info.local}）`;
+    updateTrayTooltip();
+    if (process.platform === 'win32' && tray && !tray.isDestroyed()) {
+      tray.displayBalloon({
+        iconType: 'info',
+        title: 'Asset Cutter 本地伴侣',
+        content: `网站已发布较新的桌面壳 v${info.remote}（当前安装 ${info.local}）。可在主站工作区左下角「下载壳」获取安装包。`,
+      });
+    }
+  };
+  void tick();
+  if (desktopReleaseCheckTimer) clearInterval(desktopReleaseCheckTimer);
+  desktopReleaseCheckTimer = setInterval(() => void tick(), 4 * 60 * 60 * 1000);
+}
+
+function registerCompanionProtocol() {
+  try {
+    if (process.defaultApp) {
+      if (process.argv.length >= 2) {
+        app.setAsDefaultProtocolClient('assetcutter-companion', process.execPath, [
+          path.resolve(process.argv[1]),
+        ]);
+      }
+    } else {
+      app.setAsDefaultProtocolClient('assetcutter-companion');
+    }
+  } catch (e) {
+    console.warn('[companion-desktop] setAsDefaultProtocolClient:', e.message);
+  }
+}
+
+function peekProtocolUrl(argv) {
+  const a = argv || process.argv;
+  return a.find((x) => typeof x === 'string' && /^assetcutter-companion:/i.test(x));
+}
+
+function companionApiRequest(method, pathname, body) {
+  const m = String(method || 'GET').toUpperCase();
+  const p = String(pathname || '');
+  if (!p.startsWith('/v1/')) {
+    return Promise.resolve({ ok: false, error: 'path_not_allowed' });
+  }
+  const port = readHttpPort();
+  const token = readSharedToken();
+  const bodyStr = body != null ? (typeof body === 'string' ? body : JSON.stringify(body)) : null;
+  return new Promise((resolve, reject) => {
+    const headers = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+    if (bodyStr && m !== 'GET' && m !== 'HEAD') {
+      headers['Content-Type'] = 'application/json';
+    }
+    const req = http.request(
+      {
+        hostname: '127.0.0.1',
+        port,
+        path: p,
+        method: m,
+        timeout: 15000,
+        headers,
+      },
+      (res) => {
+        const chunks = [];
+        res.on('data', (chunk) => chunks.push(chunk));
+        res.on('end', () => {
+          const text = Buffer.concat(chunks).toString('utf8');
+          let json = null;
+          try {
+            json = JSON.parse(text);
+          } catch {
+            /* 非 JSON */
+          }
+          const ok = typeof res.statusCode === 'number' && res.statusCode >= 200 && res.statusCode < 300;
+          resolve({ ok, status: res.statusCode, json, text });
+        });
+      },
+    );
+    req.on('timeout', () => {
+      req.destroy(new Error('timeout'));
+    });
+    req.on('error', reject);
+    if (bodyStr && m !== 'GET' && m !== 'HEAD') req.write(bodyStr);
+    req.end();
+  });
+}
 
 function readHttpPort() {
   const raw = process.env.COMPANION_HTTP_PORT?.trim();
@@ -134,8 +314,15 @@ function updateTrayTooltip() {
 }
 
 function readSharedToken() {
-  const token = process.env.COMPANION_SHARED_TOKEN?.trim();
-  return token ? token : null;
+  const envTok = process.env.COMPANION_SHARED_TOKEN?.trim();
+  if (envTok) return envTok;
+  /** 与启动子进程一致：向导写入的 pairing-config 需参与本机 HTTP 客户端鉴权，否则 /v1/capabilities 等会 401 */
+  try {
+    const p = readPairingConfig().sharedToken?.trim();
+    return p || null;
+  } catch {
+    return null;
+  }
 }
 
 function restartLocalCompanionFromTray() {
@@ -149,7 +336,7 @@ function notifyCompanionFailure(message) {
     tray.displayBalloon({
       iconType: 'warning',
       title: '本地伴侣异常',
-      content: `${message}。可在托盘菜单执行“重新启动本地伴侣”或“打开本机管理页排查”。`,
+      content: `${message}。可在托盘菜单执行「重新启动本地伴侣」或打开「桌面窗口 / 浏览器管理页」排查。`,
     });
   }
 }
@@ -162,7 +349,7 @@ function notifyStatusIssue(title, message, dedupeKey) {
     tray.displayBalloon({
       iconType: 'warning',
       title,
-      content: `${message}。可在托盘菜单执行“重新启动本地伴侣”或“打开本机管理页排查”。`,
+      content: `${message}。可在托盘菜单执行「重新启动本地伴侣」或打开「桌面窗口 / 浏览器管理页」排查。`,
     });
   }
 }
@@ -424,12 +611,12 @@ function buildTrayMenu() {
     },
     { type: 'separator' },
     {
-      label: '打开本机管理页',
-      click: () => openConsole(),
+      label: '打开桌面窗口',
+      click: () => openMainWindow(),
     },
     {
-      label: '打开主窗口',
-      click: () => openMainWindow(),
+      label: '在浏览器打开本机管理页',
+      click: () => openConsole(),
     },
     {
       label: '重新启动本地伴侣',
@@ -523,39 +710,33 @@ function openMainWindow() {
   }
 
   mainWindow = new BrowserWindow({
-    width: 1220,
-    height: 860,
-    minWidth: 980,
-    minHeight: 680,
+    width: 400,
+    height: 560,
+    minWidth: 360,
+    minHeight: 480,
     autoHideMenuBar: true,
-    backgroundColor: '#121214',
+    backgroundColor: '#0c0c0e',
     title: 'Asset Cutter 本地伴侣',
     webPreferences: {
+      preload: path.join(__dirname, 'preload-shell.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
     },
   });
 
+  mainWindow.on('close', (event) => {
+    if (isQuitting) return;
+    event.preventDefault();
+    mainWindow?.hide();
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
 
-  const consoleUrl = companionConsoleUrl();
-  void mainWindow.loadURL(consoleUrl).catch(() => {
-    if (!mainWindow || mainWindow.isDestroyed()) return;
-    const fallbackHtml = [
-      '<!doctype html>',
-      '<html lang="zh-CN"><head><meta charset="utf-8"><title>本地伴侣连接失败</title></head>',
-      '<body style="margin:0;font-family:Segoe UI,Microsoft Yahei,sans-serif;background:#101012;color:#e5e7eb;">',
-      '<div style="max-width:720px;margin:64px auto;padding:24px;background:#16161a;border:1px solid #27272a;border-radius:12px;">',
-      '<h2 style="margin:0 0 12px;">本地伴侣未就绪</h2>',
-      `<p style="line-height:1.7;margin:0 0 10px;">无法打开 <code>${consoleUrl}</code>。你可以先重启本地伴侣，再点击托盘“打开主窗口”。</p>`,
-      '<p style="line-height:1.7;margin:0;color:#a1a1aa;">若持续失败，请在托盘中选择“打开本机管理页”检查状态或查看终端日志。</p>',
-      '</div></body></html>',
-    ].join('');
-    void mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(fallbackHtml)}`);
-  });
+  const shellHtml = path.join(__dirname, 'shell', 'index.html');
+  void mainWindow.loadFile(shellHtml);
 }
 
 function setupOptionalAutoUpdate() {
@@ -620,10 +801,10 @@ function buildTray() {
   tray = new Tray(createTrayIcon());
   updateTrayTooltip();
 
-  /** Windows：左键单击快速打开本机管理页（右键仍为菜单）。 */
+  /** Windows：左键单击打开桌面壳主窗口（右键仍为菜单）。 */
   if (process.platform === 'win32') {
     tray.on('click', () => {
-      openConsole();
+      openMainWindow();
     });
   }
 
@@ -643,6 +824,53 @@ if (!gotLock) {
     if (wizardWindow && !wizardWindow.isDestroyed()) {
       wizardWindow.close();
     }
+    openMainWindow();
+  });
+
+  ipcMain.handle('shell-tray-summary', async () => {
+    const port = readHttpPort();
+    const alive = await probeCompanionHealth();
+    return {
+      connected: alive,
+      port,
+      note: companionStatusNote,
+      lastError: companionLastError,
+    };
+  });
+
+  ipcMain.handle('shell-settings-load', () => readShellSettings());
+
+  ipcMain.handle('shell-settings-save', (_e, patch) => {
+    try {
+      return { ok: true, data: saveShellSettings(patch) };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  });
+
+  ipcMain.handle('shell-open-website', async (_e, url) => {
+    const u = String(url || '').trim();
+    if (!/^https?:\/\//i.test(u)) return { ok: false, error: 'invalid_url' };
+    await shell.openExternal(u);
+    return { ok: true };
+  });
+
+  ipcMain.handle('shell-open-management', () => {
+    openConsole();
+    return { ok: true };
+  });
+
+  ipcMain.handle('shell-open-wizard', () => {
+    openFirstRunWizard();
+    return { ok: true };
+  });
+
+  ipcMain.handle('companion-api', async (_e, method, pathname, body) => {
+    try {
+      return await companionApiRequest(method, pathname, body);
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
   });
 
   ipcMain.handle('wizard-load-pairing', () => {
@@ -657,7 +885,8 @@ if (!gotLock) {
     }
   });
 
-  app.on('second-instance', () => {
+  app.on('second-instance', (_event, commandLine) => {
+    void commandLine;
     if (wizardWindow && !wizardWindow.isDestroyed()) {
       wizardWindow.focus();
       return;
@@ -672,6 +901,7 @@ if (!gotLock) {
   });
 
   app.whenReady().then(() => {
+    registerCompanionProtocol();
     if (process.platform === 'darwin' && app.dock) {
       app.dock.hide();
     }
@@ -679,12 +909,34 @@ if (!gotLock) {
     buildTray();
     startStatusPolling();
     setupOptionalAutoUpdate();
+    setTimeout(() => {
+      try {
+        scheduleDesktopShellReleaseCheck();
+      } catch (e) {
+        console.warn('[companion-desktop] desktop release check:', e instanceof Error ? e.message : e);
+      }
+    }, 45000);
     if (shouldShowFirstRunWizard()) {
       openFirstRunWizard();
+    } else if (process.env.COMPANION_DESKTOP_NO_AUTO_SHELL !== '1') {
+      const delayMs = peekProtocolUrl() ? 400 : 900;
+      setTimeout(() => openMainWindow(), delayMs);
+    }
+  });
+
+  app.on('open-url', (event, url) => {
+    event.preventDefault();
+    if (url && /^assetcutter-companion:/i.test(url)) {
+      openMainWindow();
     }
   });
 
   app.on('before-quit', () => {
+    isQuitting = true;
+    if (desktopReleaseCheckTimer) {
+      clearInterval(desktopReleaseCheckTimer);
+      desktopReleaseCheckTimer = null;
+    }
     stopStatusPolling();
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.destroy();

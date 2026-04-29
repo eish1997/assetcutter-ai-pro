@@ -130,7 +130,6 @@ export function ImagePreviewOverlay({
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [lockedDominant, setLockedDominant] = useState<{ axis: 'width' | 'height'; size: number } | null>(null);
-  const [imageMeta, setImageMeta] = useState<{ width: number; height: number } | null>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
   const dragRef = useRef<{ startX: number; startY: number; startScale: number } | null>(null);
   const panRef = useRef<{ startX: number; startY: number; startOffsetX: number; startOffsetY: number } | null>(null);
@@ -154,39 +153,7 @@ export function ImagePreviewOverlay({
     zoomLastScaleRef.current = 1;
     wheelAccumRef.current = 0;
     wheelLastNavigateAtRef.current = 0;
-    setImageMeta(null);
   }, [open, resetKey]);
-
-  const parseMeta = useCallback((src: string, width: number, height: number) => {
-    const ratio = width > 0 && height > 0 ? (width / height).toFixed(3) : '-';
-    let mime = 'unknown';
-    let approxBytes = 0;
-    const m = src.match(/^data:([^;,]+);base64,(.+)$/i);
-    if (m) {
-      mime = (m[1] || 'unknown').toLowerCase();
-      const base64 = m[2] || '';
-      // Base64 payload bytes: len * 3/4 - paddings
-      const padding = (base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0);
-      approxBytes = Math.max(0, Math.floor(base64.length * 3 / 4) - padding);
-    } else if (/^https?:\/\//i.test(src)) {
-      try {
-        const u = new URL(src);
-        const ext = u.pathname.split('.').pop()?.toLowerCase() || '';
-        mime =
-          ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg'
-            : ext === 'png' ? 'image/png'
-            : ext === 'webp' ? 'image/webp'
-            : ext === 'gif' ? 'image/gif'
-            : ext === 'bmp' ? 'image/bmp'
-            : ext === 'svg' ? 'image/svg+xml'
-            : 'remote';
-      } catch {
-        mime = 'remote';
-      }
-    }
-    const kb = approxBytes > 0 ? `${(approxBytes / 1024).toFixed(1)} KB` : '-';
-    return { ratio, mime, kb };
-  }, []);
 
   useEffect(() => {
     if (!open || !innerLayoutStableKey) {
@@ -260,6 +227,17 @@ export function ImagePreviewOverlay({
       const shiftAssetNav = e.shiftKey && wheelListLength > 1;
 
       const t = e.target;
+      if (!shiftAssetNav && t instanceof Element) {
+        const scrollEl = t.closest(SCROLL) as HTMLElement | null;
+        if (scrollEl && scrollEl.scrollHeight > scrollEl.clientHeight + 1) {
+          const st = scrollEl.scrollTop;
+          const sh = scrollEl.scrollHeight;
+          const ch = scrollEl.clientHeight;
+          if ((e.deltaY < 0 && st > 0) || (e.deltaY > 0 && st + ch < sh - 1)) {
+            return;
+          }
+        }
+      }
       if (t instanceof Element && t.closest(NO_WHEEL)) {
         if (!shiftAssetNav) {
           const scrollEl = t.closest(SCROLL) as HTMLElement | null;
@@ -456,7 +434,6 @@ export function ImagePreviewOverlay({
       const nw = im.naturalWidth;
       const nh = im.naturalHeight;
       if (!nw || !nh) return;
-      setImageMeta({ width: nw, height: nh });
       const next = lockByOriginalDominantAxis(nw, nh);
       // 约定：按原始图“较大侧”对齐；若已锁定则不再被后续版本改写。
       setLockedDominant((prev) => prev ?? next);
@@ -476,7 +453,6 @@ export function ImagePreviewOverlay({
     const nw = im.naturalWidth;
     const nh = im.naturalHeight;
     if (!nw || !nh) return;
-    setImageMeta({ width: nw, height: nh });
     if (!innerLayoutStableKey) return;
     const next = lockByOriginalDominantAxis(nw, nh);
     setLockedDominant((prev) => prev ?? next);
@@ -488,7 +464,6 @@ export function ImagePreviewOverlay({
       const nw = im.naturalWidth;
       const nh = im.naturalHeight;
       if (!nw || !nh) return;
-      setImageMeta({ width: nw, height: nh });
       handleImgLoad(e);
     },
     [handleImgLoad]

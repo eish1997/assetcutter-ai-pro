@@ -18,6 +18,17 @@ function isBlobModelUrl(url: string): boolean {
   return /^blob:/i.test(url.trim());
 }
 
+function revokeBlobUrlIfOrphaned(url: string, stillReferenced: boolean): void {
+  const u = String(url || '').trim();
+  if (!isBlobModelUrl(u)) return;
+  if (stillReferenced) return;
+  try {
+    URL.revokeObjectURL(u);
+  } catch {
+    /* ignore */
+  }
+}
+
 /** 当某 blob URL 已无任何资产引用时释放，避免重复 revoke（如复制卡片共享同一 blob）。 */
 export function revokeWorkflowModelBlobUrlsIfOrphaned(url: string, assetsReferencing: WorkflowAsset[]): void {
   const u = String(url || '').trim();
@@ -39,5 +50,20 @@ export function revokeWorkflowModelBlobUrlsAfterAssetRemoved(
 ): void {
   for (const raw of removed.modelUrls || []) {
     revokeWorkflowModelBlobUrlsIfOrphaned(String(raw || ''), assetsAfterRemoval);
+  }
+  const orig = String(removed.original || '').trim();
+  if (orig) {
+    const stillOrig = assetsAfterRemoval.some((a) => String(a.original || '').trim() === orig);
+    revokeBlobUrlIfOrphaned(orig, stillOrig);
+  }
+  if (removed.results) {
+    for (const v of Object.values(removed.results)) {
+      const u = String(v || '').trim();
+      if (!u) continue;
+      const still = assetsAfterRemoval.some((a) =>
+        Object.values(a.results || {}).some((x) => String(x || '').trim() === u)
+      );
+      revokeBlobUrlIfOrphaned(u, still);
+    }
   }
 }

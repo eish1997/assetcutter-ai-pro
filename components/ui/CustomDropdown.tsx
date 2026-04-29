@@ -58,7 +58,7 @@ export function CustomDropdown({
     const MAX_LIST = 224;
     const vh = window.innerHeight;
     const vw = window.innerWidth;
-    let width = Math.max(rect.width, 96);
+    const width = Math.max(rect.width, 96);
     let left = rect.left;
     if (left + width > vw - MARGIN) left = Math.max(MARGIN, vw - width - MARGIN);
     if (left < MARGIN) left = MARGIN;

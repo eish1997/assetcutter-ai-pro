@@ -199,7 +199,12 @@ export async function fetchWorkflowPackedFromCloud(
   userId: string,
   projectId: string,
   username?: string | null
-): Promise<{ version: number; assets: WorkflowAsset[]; pending: WorkflowPendingTask[] } | null> {
+): Promise<{
+  version: number;
+  assets: WorkflowAsset[];
+  pending: WorkflowPendingTask[];
+  capabilityRefs?: Array<{ kind: 'preset' | 'set'; id: string; snapshot?: unknown }>;
+} | null> {
   let raw: string | null;
   try {
     raw = await downloadR2ObjectText(workspaceWorkflowKey(userId, projectId, username));
@@ -208,11 +213,41 @@ export async function fetchWorkflowPackedFromCloud(
   }
   if (!raw) return null;
   try {
-    const data = JSON.parse(raw) as { version?: number; assets?: WorkflowAsset[]; pending?: WorkflowPendingTask[] };
+    const data = JSON.parse(raw) as {
+      version?: number;
+      assets?: WorkflowAsset[];
+      pending?: WorkflowPendingTask[];
+      capabilityRefs?: Array<{ kind?: string; id?: string; snapshot?: unknown }>;
+      capabilityPresets?: Array<{ id?: string } & Record<string, unknown>>;
+      capabilitySets?: Array<{ id?: string } & Record<string, unknown>>;
+    };
     const assets = Array.isArray(data.assets) ? data.assets : [];
     const pending = Array.isArray(data.pending) ? data.pending : [];
+    const refs = new Map<string, { kind: 'preset' | 'set'; id: string; snapshot?: unknown }>();
+    if (Array.isArray(data.capabilityPresets)) {
+      for (const p of data.capabilityPresets) {
+        const id = String(p?.id || '').trim();
+        if (!id) continue;
+        refs.set(`preset:${id}`, { kind: 'preset', id, snapshot: p });
+      }
+    }
+    if (Array.isArray(data.capabilitySets)) {
+      for (const s of data.capabilitySets) {
+        const id = String(s?.id || '').trim();
+        if (!id) continue;
+        refs.set(`set:${id}`, { kind: 'set', id, snapshot: s });
+      }
+    }
+    if (Array.isArray(data.capabilityRefs)) {
+      for (const r of data.capabilityRefs) {
+        const kind = r?.kind === 'set' ? 'set' : r?.kind === 'preset' ? 'preset' : null;
+        const id = String(r?.id || '').trim();
+        if (!kind || !id) continue;
+        refs.set(`${kind}:${id}`, { kind, id, ...(r?.snapshot != null ? { snapshot: r.snapshot } : {}) });
+      }
+    }
     const version = data.version === 2 ? 2 : 1;
-    return { version, assets, pending };
+    return { version, assets, pending, ...(refs.size ? { capabilityRefs: Array.from(refs.values()) } : {}) };
   } catch {
     return null;
   }
@@ -222,13 +257,21 @@ export async function fetchWorkflowBundleFromCloud(
   userId: string,
   projectId: string,
   username?: string | null
-): Promise<{ assets: WorkflowAsset[]; pending: WorkflowPendingTask[] } | null> {
+): Promise<{
+  assets: WorkflowAsset[];
+  pending: WorkflowPendingTask[];
+  capabilityRefs?: Array<{ kind: 'preset' | 'set'; id: string; snapshot?: unknown }>;
+} | null> {
   const packed = await fetchWorkflowPackedFromCloud(userId, projectId, username);
   if (!packed) return null;
   if (packed.version === 2) {
     return hydrateWorkflowBundleFromCloud({ assets: packed.assets, pending: packed.pending });
   }
-  return { assets: packed.assets, pending: packed.pending };
+  return {
+    assets: packed.assets,
+    pending: packed.pending,
+    ...(Array.isArray(packed.capabilityRefs) ? { capabilityRefs: packed.capabilityRefs } : {}),
+  };
 }
 
 export async function pushWorkspaceIndex(
@@ -254,12 +297,21 @@ export async function pushWorkspaceIndex(
 export async function pushWorkflowBundleToCloud(
   userId: string,
   projectId: string,
-  bundle: { assets: WorkflowAsset[]; pending: WorkflowPendingTask[] },
+  bundle: {
+    assets: WorkflowAsset[];
+    pending: WorkflowPendingTask[];
+    capabilityRefs?: Array<{ kind: 'preset' | 'set'; id: string; snapshot?: unknown }>;
+  },
   username?: string | null,
-  options?: { pruneUnreferenced?: boolean }
+  options?: {
+    pruneUnreferenced?: boolean;
+    companionHydrate?: { baseUrl: string; projectId: string };
+  }
 ): Promise<void> {
   const prevPacked = await fetchWorkflowPackedFromCloud(userId, projectId, username);
-  const packed = await packWorkflowBundleForCloud(userId, projectId, bundle, username);
+  const packed = await packWorkflowBundleForCloud(userId, projectId, bundle, username, {
+    companionHydrate: options?.companionHydrate,
+  });
   const prevRefs = prevPacked ? collectReferencedObjectKeysFromPackedV2(prevPacked) : new Set<string>();
   const nextRefs = collectReferencedObjectKeysFromPackedV2(packed);
   const addKeys = [...nextRefs].filter((k) => !prevRefs.has(k));
@@ -301,10 +353,7 @@ export async function migrateLocalWorkspaceToCloud(
   const projects = loadWorkspaceProjects(null);
   const lastOpen = getLastOpenedWorkspaceProjectId(null);
   await pushWorkspaceIndex(userId, projects, lastOpen, username);
-  for (const p of projects) {
-    const b = loadWorkflowBundle(p.id, null);
-    await pushWorkflowBundleToCloud(userId, p.id, b, username);
-  }
+  // 架构收口：默认仅同步索引，不在迁移阶段上传 workflow 资产字节到 R2。
   saveWorkspaceProjects(projects, userId);
   setLastOpenedWorkspaceProjectId(lastOpen, userId);
   for (const p of projects) {

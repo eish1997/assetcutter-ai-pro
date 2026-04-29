@@ -7,7 +7,7 @@ import { RIGHT_DOCK_ASSISTANT_BOTTOM, RIGHT_DOCK_RIGHT } from './floatingDockCon
 const SiteAssistant: React.FC<{
   tasks?: AppTask[];
   onRemoveTask?: (id: string) => void;
-}> = ({ tasks = [], onRemoveTask }) => {
+}> = ({ tasks: _tasks = [], onRemoveTask: _onRemoveTask }) => {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<Array<{ role: 'user' | 'model'; text: string }>>([]);
   const [input, setInput] = useState('');

@@ -15,7 +15,15 @@ services:
         sync: false
       - key: PROXY_ALLOWED_ORIGINS
         sync: false
-      # 可选：GEMINI_API_KEYS、ENABLE_TOAPIS_FALLBACK、TOAPIS_API_KEY、VERTEX_PROJECT_ID、VERTEX_LOCATION、GOOGLE_APPLICATION_CREDENTIALS（Vertex）等，见 README 与 docs/VERTEX_AI_INTEGRATION.md
+      # Vertex（设置页选 Vertex 时必填，与前端 VITE_BULK_IMAGE_API 指向的**本服务**一致）
+      - key: VERTEX_PROJECT_ID
+        sync: false
+      - key: VERTEX_LOCATION
+        value: global
+      # 服务账号 JSON：Dashboard 粘贴整段 JSON 到 GOOGLE_APPLICATION_CREDENTIALS_JSON（或本机路径式 GOOGLE_APPLICATION_CREDENTIALS）
+      - key: GOOGLE_APPLICATION_CREDENTIALS_JSON
+        sync: false
+      # 可选：GEMINI_API_KEYS、ENABLE_TOAPIS_FALLBACK、TOAPIS_API_KEY 等，见 README 与 docs/VERTEX_AI_INTEGRATION.md
 
   - type: web
     name: assetcutter-auth-api

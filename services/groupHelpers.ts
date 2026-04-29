@@ -2,7 +2,7 @@
  * 组兼容辅助函数
  * 统一使用 isGroup === true 作为组的唯一判断标准
  */
-import type { WorkflowAsset, WorkflowCutGroupItem } from '../types';
+import type { WorkflowAsset } from '../types';
 import { generateGroupId } from './assetGroupMigration';
 
 /** 判断是否为组容器资产（统一标准：isGroup === true） */

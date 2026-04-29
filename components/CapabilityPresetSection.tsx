@@ -1,4 +1,4 @@
-import React, { useState, useRef, useLayoutEffect, useMemo, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useMemo, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import type { CustomAppModule, CapabilityCategory, CapabilityEngine, DialogImageGear, Generate3DPreset, CapabilitySet } from '../types';
 import { CAPABILITY_CATEGORIES, DIALOG_IMAGE_GEARS, SUPPORTED_ASPECT_RATIOS, SUPPORTED_IMAGE_SIZES } from '../types';
@@ -11,7 +11,6 @@ import {
 } from '../services/capabilityPresetStore';
 import { readLocalJson, writeLocalJson } from '../services/clientPersist';
 import { getCapabilityEngine } from '../services/capabilityExecutor';
-import { loadInstalledPacks, loadPackHistory } from '../services/storePackHistory';
 import { useStoreCatalog } from '../services/storeCatalogHook';
 import { publishPresetToUserR2Catalog } from '../services/capabilityPresetR2Publish';
 import { resolveCapabilityPreviewSrc } from '../services/capabilityPreviewUrl';
@@ -73,7 +72,25 @@ function normalizeWheelDeltaY(e: React.WheelEvent<HTMLElement>): number {
   return dy;
 }
 
-const DEFAULT_GENERATE_3D: Generate3DPreset = { module: 'pro', model: '3.0', enablePBR: false };
+const DEFAULT_GENERATE_3D: Generate3DPreset = {
+  provider: 'tripo',
+  tripoTaskType: 'image_to_model',
+  tripoTextureQuality: 'standard',
+  tripoTexture: true,
+  tripoPbr: true,
+  tripoExportUv: true,
+  module: 'pro',
+  model: '3.0',
+  enablePBR: false,
+};
+const TRIPO_MODEL_VERSION_OPTIONS = [
+  { value: '', label: '自动（不指定）' },
+  { value: 'P1-20260311', label: 'P1-20260311' },
+  { value: 'v3.1-20260211', label: 'v3.1-20260211' },
+  { value: 'v3.0-20250812', label: 'v3.0-20250812' },
+  { value: 'v2.5-20250123', label: 'v2.5-20250123（默认）' },
+  { value: 'v2.0-20240919', label: 'v2.0-20240919' },
+] as const;
 const DETAIL_DROPDOWN_PORTAL_ZINDEX = { backdrop: 10120, list: 10121 } as const;
 
 type ViewMode = 'presets' | 'image_process' | 'sets';
@@ -151,6 +168,8 @@ const CapabilityPresetSection: React.FC<{
   const [editUniformCols, setEditUniformCols] = useState(2);
   const [editSkipUnderstand, setEditSkipUnderstand] = useState(false);
   const [editRequirePromptOnTextDrop, setEditRequirePromptOnTextDrop] = useState(false);
+  const [editCompanionHostBundleDir, setEditCompanionHostBundleDir] = useState('');
+  const [editCompanionHostBundlePhase, setEditCompanionHostBundlePhase] = useState<'exec' | 'probe'>('exec');
   const [isAdding, setIsAdding] = useState(false);
   const [newLabel, setNewLabel] = useState('');
   const [newCategory, setNewCategory] = useState<CapabilityCategory>('image_to_image');
@@ -162,6 +181,8 @@ const CapabilityPresetSection: React.FC<{
   const [newInstruction, setNewInstruction] = useState('');
   const [newSkipUnderstand, setNewSkipUnderstand] = useState(false);
   const [newRequirePromptOnTextDrop, setNewRequirePromptOnTextDrop] = useState(false);
+  const [newCompanionHostBundleDir, setNewCompanionHostBundleDir] = useState('');
+  const [newCompanionHostBundlePhase, setNewCompanionHostBundlePhase] = useState<'exec' | 'probe'>('exec');
   const [testImage, setTestImage] = useState<Record<string, string>>({});
   const [testResult, setTestResult] = useState<Record<string, CapabilityTestResult | null>>({});
   const [testRunning, setTestRunning] = useState<Record<string, boolean>>({});
@@ -173,6 +194,14 @@ const CapabilityPresetSection: React.FC<{
   const fileInputRef = useRef<Record<string, HTMLInputElement | null>>({});
   const [newGenerate3D, setNewGenerate3D] = useState<Generate3DPreset>({ ...DEFAULT_GENERATE_3D });
   const [editGenerate3D, setEditGenerate3D] = useState<Generate3DPreset>({ ...DEFAULT_GENERATE_3D });
+  const newIsTripoV3Line = (newGenerate3D.tripoModelVersion ?? '').startsWith('v3.');
+  const editIsTripoV3Line = (editGenerate3D.tripoModelVersion ?? '').startsWith('v3.');
+  const newTripoGenerateParts = newGenerate3D.tripoGenerateParts === true;
+  const newTripoTextureEnabled = newGenerate3D.tripoTexture !== false;
+  const newTripoPbrEnabled = newGenerate3D.tripoPbr !== false;
+  const editTripoGenerateParts = editGenerate3D.tripoGenerateParts === true;
+  const editTripoTextureEnabled = editGenerate3D.tripoTexture !== false;
+  const editTripoPbrEnabled = editGenerate3D.tripoPbr !== false;
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
   const [lightboxCompare, setLightboxCompare] = useState<{ original: string; generated: string } | null>(null);
   const [lightboxSplitRatio, setLightboxSplitRatio] = useState(0.5);
@@ -204,8 +233,6 @@ const CapabilityPresetSection: React.FC<{
   const isBuiltinImageProcess = (p: CustomAppModule) =>
     isBuiltinImagePipelinePreset(p) &&
     BUILTIN_IMAGE_PROCESS_IDS.includes(p.id as (typeof BUILTIN_IMAGE_PROCESS_IDS)[number]);
-  const isBuiltinLockedPreset = (p: CustomAppModule) =>
-    isBuiltinImageProcess(p) && !BUILTIN_CAPABILITY_EDITABLE_IDS.includes(p.id);
 
   const {
     catalog,
@@ -225,6 +252,15 @@ const CapabilityPresetSection: React.FC<{
       setSyncAfterRefresh(true);
     }
   }, [refreshCatalog]);
+  const openNewSet = useCallback(() => {
+    if (onOpenWorkflowComposer) {
+      onOpenWorkflowComposer(null);
+      return;
+    }
+    const id = uuid();
+    setEmbedComposerSessions((prev) => [...prev, { id, initialSet: null, sessionKey: Date.now() }]);
+    setEmbedComposerActiveId(id);
+  }, [onOpenWorkflowComposer]);
 
   /** 远程能力中尚未出现在当前列表的（按能力展示为卡片，每张卡片可点安装） */
   const effectiveUninstalledPresetItems = useMemo(
@@ -258,7 +294,7 @@ const CapabilityPresetSection: React.FC<{
     return () => {
       window.removeEventListener('ac:capability-preset-toolbar-action', onToolbarAction as EventListener);
     };
-  }, [effectiveUninstalledPresetItems, installPresets, triggerRemoteRefreshSync]);
+  }, [openNewSet, triggerRemoteRefreshSync]);
 
   useEffect(() => {
     if (!syncAfterRefresh) return;
@@ -419,8 +455,16 @@ const CapabilityPresetSection: React.FC<{
         if (editCategory === 'generate_3d') {
           next.generate3D = { ...editGenerate3D };
           delete (next as CustomAppModule & { engine?: CapabilityEngine }).engine;
+          delete (next as CustomAppModule & { companionHostBundle?: unknown }).companionHostBundle;
         } else {
           delete (next as CustomAppModule & { generate3D?: Generate3DPreset }).generate3D;
+          const hbDir = editCompanionHostBundleDir.trim();
+          if (hbDir) {
+            next.companionHostBundle =
+              editCompanionHostBundlePhase === 'probe' ? { dirName: hbDir, phase: 'probe' } : { dirName: hbDir };
+          } else {
+            delete (next as CustomAppModule & { companionHostBundle?: unknown }).companionHostBundle;
+          }
         }
         return next;
       })
@@ -454,7 +498,15 @@ const CapabilityPresetSection: React.FC<{
               ? 'gen_image'
               : newEngine,
     };
-    if (newCategory === 'generate_3d') preset.generate3D = { ...newGenerate3D };
+    if (newCategory === 'generate_3d') {
+      preset.generate3D = { ...newGenerate3D };
+    } else {
+      const nHb = newCompanionHostBundleDir.trim();
+      if (nHb) {
+        preset.companionHostBundle =
+          newCompanionHostBundlePhase === 'probe' ? { dirName: nHb, phase: 'probe' } : { dirName: nHb };
+      }
+    }
     update([...presets, preset]);
     setNewLabel('');
     setNewCategory('image_to_image');
@@ -466,6 +518,8 @@ const CapabilityPresetSection: React.FC<{
     setNewInstruction('');
     setNewSkipUnderstand(false);
     setNewRequirePromptOnTextDrop(false);
+    setNewCompanionHostBundleDir('');
+    setNewCompanionHostBundlePhase('exec');
     setNewGenerate3D({ ...DEFAULT_GENERATE_3D });
     setIsAdding(false);
   };
@@ -570,13 +624,14 @@ const CapabilityPresetSection: React.FC<{
   };
 
   const runTest = async (p: CustomAppModule) => {
+    const hostBundleDir = p.companionHostBundle?.dirName?.trim();
     const img = testImage[p.id];
-    if (!img || !onRunTest) return;
+    if ((!img && !hostBundleDir) || !onRunTest) return;
     setTestRunning((prev) => ({ ...prev, [p.id]: true }));
     setTestResult((prev) => ({ ...prev, [p.id]: null }));
     onLog?.('info', `[${p.label}] 测试开始`, undefined);
     try {
-      const result = await onRunTest(p, img);
+      const result = await onRunTest(p, img || '');
       setTestResult((prev) => ({ ...prev, [p.id]: result }));
       if (result.ok) {
         if (result.resultImage) updatePresetPreviewImage(p.id, result.resultImage);
@@ -699,7 +754,7 @@ const CapabilityPresetSection: React.FC<{
   };
 
   /** 左侧大图：优先持久化预览图，其次测试结果，其次临时测试图 */
-  const getCardPreviewSrc = (p: CustomAppModule): string | null => {
+  const getCardPreviewSrc = useCallback((p: CustomAppModule): string | null => {
     const runtimeThumb = runtimePreviewThumbImage[p.id];
     if (runtimeThumb) return runtimeThumb;
     const runtime = runtimePreviewImage[p.id];
@@ -715,7 +770,7 @@ const CapabilityPresetSection: React.FC<{
     const r = testResult[p.id]?.ok ? testResult[p.id]?.resultImage : undefined;
     if (r) return r;
     return testImage[p.id] || null;
-  };
+  }, [runtimePreviewThumbImage, runtimePreviewImage, testResult, testImage]);
   const getOriginalPreviewSrc = (p: CustomAppModule): string | null => {
     const src =
       testImage[p.id] ||
@@ -838,33 +893,15 @@ const CapabilityPresetSection: React.FC<{
     } catch {
       /* ignore custom drag image errors */
     }
-  }, [clearPresetDragPreview]);
+  }, [clearPresetDragPreview, getCardPreviewSrc]);
   const onPresetCardIntrinsicSize = useCallback((presetId: string, w: number, h: number) => {
     setCardAspectByPresetId((prev) => mergeCardAspectFromIntrinsic(prev, presetId, w, h) ?? prev);
   }, []);
-  const openLightboxPreview = (p: CustomAppModule) => {
-    const original = getOriginalPreviewSrc(p) || getOriginalPreviewThumbSrc(p);
-    const generated = getGeneratedPreviewSrc(p) || getGeneratedPreviewThumbSrc(p);
-    if (original && generated) {
-      setLightboxImage(null);
-      setLightboxSplitRatio(0.5);
-      setLightboxCompare({ original, generated });
-      return;
-    }
-    const src =
-      getGeneratedPreviewSrc(p) ||
-      getOriginalPreviewSrc(p) ||
-      getGeneratedPreviewThumbSrc(p) ||
-      getOriginalPreviewThumbSrc(p);
-    if (!src) return;
-    setLightboxCompare(null);
-    setLightboxImage(src);
-  };
-  const openPresetDetail = (p: CustomAppModule) => {
+  const openPresetDetail = useCallback((p: CustomAppModule) => {
     setDetailPresetId(p.id);
     setDetailEditMode(false);
     setEditingId(null);
-  };
+  }, []);
   const detailPreset = detailPresetId ? presets.find((x) => x.id === detailPresetId) ?? null : null;
   const detailOriginalPreview = detailPreset
     ? getOriginalPreviewSrc(detailPreset) || getOriginalPreviewThumbSrc(detailPreset) || ''
@@ -874,8 +911,12 @@ const CapabilityPresetSection: React.FC<{
     : '';
   const detailMainPreview = detailPreset ? getCardPreviewSrc(detailPreset) || '' : '';
   const detailHasCompare = Boolean(detailOriginalPreview && detailGeneratedPreview);
-  const beginDetailEdit = (p: CustomAppModule) => {
-    if (isBuiltinLockedPreset(p)) return;
+  const beginDetailEdit = useCallback((p: CustomAppModule) => {
+    const isLocked =
+      isBuiltinImagePipelinePreset(p) &&
+      BUILTIN_IMAGE_PROCESS_IDS.includes(p.id as (typeof BUILTIN_IMAGE_PROCESS_IDS)[number]) &&
+      !BUILTIN_CAPABILITY_EDITABLE_IDS.includes(p.id);
+    if (isLocked) return;
     if (p.id === 'cut_image') {
       setEditingId('cut_image');
       setEditLabel(p.label);
@@ -917,14 +958,20 @@ const CapabilityPresetSection: React.FC<{
     setEditInstruction(((p as { instructionFixed?: string }).instructionFixed ?? p.instruction) || '');
     setEditSkipUnderstand(p.skipUnderstand === true);
     setEditRequirePromptOnTextDrop(p.requirePromptOnTextDrop === true);
+    setEditCompanionHostBundleDir(p.companionHostBundle?.dirName ?? '');
+    setEditCompanionHostBundlePhase(p.companionHostBundle?.phase === 'probe' ? 'probe' : 'exec');
     setEditGenerate3D(p.category === 'generate_3d' && p.generate3D ? { ...p.generate3D } : { ...DEFAULT_GENERATE_3D });
     setDetailEditMode(true);
-  };
+  }, []);
   const saveDetailEdit = () => {
     if (!editingId) return;
     saveEdit();
     setDetailEditMode(false);
   };
+  const beginDetailEditRef = useRef(beginDetailEdit);
+  useEffect(() => {
+    beginDetailEditRef.current = beginDetailEdit;
+  }, [beginDetailEdit]);
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const onOpenPresetDetail = (event: Event) => {
@@ -940,13 +987,13 @@ const CapabilityPresetSection: React.FC<{
       }
       setPendingScrollTarget({ kind: 'preset', id });
       openPresetDetail(preset);
-      if (detail?.edit === true) beginDetailEdit(preset);
+      if (detail?.edit === true) beginDetailEditRef.current(preset);
     };
     window.addEventListener('ac:capability-preset-open-detail', onOpenPresetDetail as EventListener);
     return () => {
       window.removeEventListener('ac:capability-preset-open-detail', onOpenPresetDetail as EventListener);
     };
-  }, [presets]);
+  }, [openPresetDetail, presets]);
 
   const uploadPresetToR2 = async (p: CustomAppModule, mode: 'preview' | 'preset') => {
     if (!canUploadToR2) {
@@ -1042,16 +1089,6 @@ const CapabilityPresetSection: React.FC<{
     e.target.value = '';
   };
 
-  const openNewSet = () => {
-    if (onOpenWorkflowComposer) {
-      onOpenWorkflowComposer(null);
-      return;
-    }
-    const id = uuid();
-    setEmbedComposerSessions((prev) => [...prev, { id, initialSet: null, sessionKey: Date.now() }]);
-    setEmbedComposerActiveId(id);
-  };
-
   const openEditSet = (set: CapabilitySet) => {
     if (onOpenWorkflowComposer) {
       onOpenWorkflowComposer(set);
@@ -1140,21 +1177,6 @@ const CapabilityPresetSection: React.FC<{
     }
   }, [presetColumnCount]);
 
-  /** 预设来源：presetId -> 包名（来自已安装包的为包名，否则为本地） */
-  const presetSourceMap = useMemo(() => {
-    const map = new Map<string, string>();
-    const installed = loadInstalledPacks();
-    for (const pack of installed) {
-      const history = loadPackHistory(pack.id);
-      const latest = history[0];
-      if (latest?.presets) {
-        for (const p of latest.presets) {
-          map.set(p.id, pack.name);
-        }
-      }
-    }
-    return map;
-  }, [presets]);
   const visiblePresets = useMemo(() => {
     const isBuiltinPipeline = (p: CustomAppModule) =>
       p.category === 'image_to_image' && getCapabilityEngine(p) === 'builtin';
@@ -1635,77 +1657,213 @@ const CapabilityPresetSection: React.FC<{
               <textarea value={newInstruction} onChange={(e) => setNewInstruction(e.target.value)} placeholder="留空即使用内置逻辑；或填写如：只保留上半部分、排除背景" rows={2} className="mt-1 w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 resize-none" />
             </div>
           )}
+          {newCategory !== 'generate_3d' && (
+            <div className="rounded-xl border border-emerald-900/40 bg-black/20 p-3 space-y-2">
+              <div className="text-[8px] font-black text-emerald-300/90 uppercase">本机伴侣 · 宿主包（可选）</div>
+              <p className="text-[8px] text-gray-500 leading-snug">
+                填写目录名后，本预设会向本机伴侣提交 host_bundle 任务；留空则不走宿主包。
+              </p>
+              <label className="block">
+                <span className="text-[9px] text-gray-500 uppercase">插件目录名</span>
+                <input
+                  value={newCompanionHostBundleDir}
+                  onChange={(e) => setNewCompanionHostBundleDir(e.target.value)}
+                  placeholder="host-bundles 下文件夹名"
+                  className="mt-0.5 w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/45"
+                />
+              </label>
+              <label className="flex items-center gap-2 text-[9px] text-gray-400">
+                <span className="font-black uppercase">阶段</span>
+                <CustomDropdown
+                  options={[
+                    { value: 'exec', label: 'exec（执行）' },
+                    { value: 'probe', label: 'probe（校验）' },
+                  ]}
+                  value={newCompanionHostBundlePhase}
+                  onChange={(v) => setNewCompanionHostBundlePhase(v === 'probe' ? 'probe' : 'exec')}
+                  triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                />
+              </label>
+            </div>
+          )}
           {newCategory === 'generate_3d' && (
             <>
               <div className="rounded-xl border border-[#d97706] bg-[#221c10] p-3 space-y-2">
                 <div className="text-[8px] font-black text-amber-400 uppercase">生成3D 预设（工作流拖图即按此配置提交）</div>
                 <div className="flex gap-2 flex-wrap">
+                  <label className="flex items-center gap-1.5 text-[9px]">
+                    <span>服务商</span>
+                    <CustomDropdown
+                      options={[{ value: 'tripo', label: 'Tripo' }, { value: 'tencent', label: '腾讯(兼容)' }]}
+                      value={newGenerate3D.provider ?? 'tripo'}
+                      onChange={(v) => setNewGenerate3D((g) => ({ ...g, provider: v as 'tripo' | 'tencent' }))}
+                      triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                    />
+                  </label>
+                  {newGenerate3D.provider !== 'tencent' && (
+                    <>
+                      <div className="w-full mt-1 rounded-lg border border-white/[0.08] bg-black/20 p-2 space-y-1.5">
+                        <div className="text-[8px] font-black text-cyan-300 uppercase">标准参数</div>
+                        <div className="text-[8px] text-gray-500">影响主结果质量与基础风格，建议优先配置。</div>
+                        <div className="flex gap-2 flex-wrap">
                           <label className="flex items-center gap-1.5 text-[9px]">
-                            <span>模块</span>
+                            <span>任务</span>
                             <CustomDropdown
-                              options={[{ value: 'pro', label: '专业版' }, { value: 'rapid', label: '极速版' }]}
-                              value={newGenerate3D.module}
-                              onChange={(v) => setNewGenerate3D((g) => ({ ...g, module: v as 'pro' | 'rapid' }))}
+                              options={[{ value: 'image_to_model', label: '图生3D' }, { value: 'text_to_model', label: '文生3D' }]}
+                              value={newGenerate3D.tripoTaskType ?? 'image_to_model'}
+                              onChange={(v) => setNewGenerate3D((g) => ({ ...g, tripoTaskType: v as 'text_to_model' | 'image_to_model' }))}
                               triggerClassName={DROPDOWN_TRIGGER_COMPACT}
                             />
                           </label>
-                          {newGenerate3D.module === 'pro' && (
-                            <label className="flex items-center gap-1.5 text-[9px]">
-                              <span>模型</span>
-                              <CustomDropdown
-                                options={[{ value: '3.0', label: '3.0' }, { value: '3.1', label: '3.1' }]}
-                                value={newGenerate3D.model ?? '3.0'}
-                                onChange={(v) => setNewGenerate3D((g) => ({ ...g, model: v as '3.0' | '3.1' }))}
-                                triggerClassName={DROPDOWN_TRIGGER_COMPACT}
-                              />
-                            </label>
-                          )}
-                  <label className="flex items-center gap-1.5 text-[9px]">
-                    <input type="checkbox" checked={newGenerate3D.enablePBR ?? false} onChange={(e) => setNewGenerate3D((g) => ({ ...g, enablePBR: e.target.checked }))} />
-                    <span>PBR</span>
-                  </label>
-                  {newGenerate3D.module === 'pro' && (
-                    <>
-                      <label className="flex items-center gap-1.5 text-[9px]">
-                        <span>面数</span>
-                        <input type="number" min={10000} max={1500000} value={newGenerate3D.faceCount ?? 500000} onChange={(e) => setNewGenerate3D((g) => ({ ...g, faceCount: e.target.value ? parseInt(e.target.value, 10) : undefined }))} className="w-20 rounded bg-white/[0.06] px-2 py-1 text-[9px] ring-1 ring-white/[0.08]" />
-                      </label>
-                      <label className="flex items-center gap-1.5 text-[9px]">
-                        <span>类型</span>
-                        <CustomDropdown
-                          options={[
-                            { value: 'Normal', label: 'Normal' },
-                            { value: 'LowPoly', label: 'LowPoly' },
-                            { value: 'Geometry', label: 'Geometry' },
-                            { value: 'Sketch', label: 'Sketch' },
-                          ]}
-                          value={newGenerate3D.generateType ?? 'Normal'}
-                          onChange={(v) => setNewGenerate3D((g) => ({ ...g, generateType: v as Generate3DPreset['generateType'] }))}
-                          triggerClassName={DROPDOWN_TRIGGER_COMPACT}
-                        />
-                      </label>
-                      <label className="flex items-center gap-1.5 text-[9px]">
-                        <span>格式</span>
-                        <CustomDropdown
-                          options={[{ value: '', label: '默认' }, { value: 'STL', label: 'STL' }, { value: 'USDZ', label: 'USDZ' }, { value: 'FBX', label: 'FBX' }]}
-                          value={newGenerate3D.resultFormat ?? ''}
-                          onChange={(v) => setNewGenerate3D((g) => ({ ...g, resultFormat: v || undefined }))}
-                          placeholder="默认"
-                          triggerClassName={DROPDOWN_TRIGGER_COMPACT}
-                        />
-                      </label>
+                          <label className="flex items-center gap-1.5 text-[9px]">
+                            <span>版本</span>
+                            <CustomDropdown
+                              options={TRIPO_MODEL_VERSION_OPTIONS.map((x) => ({ value: x.value, label: x.label }))}
+                              value={newGenerate3D.tripoModelVersion ?? ''}
+                              onChange={(v) => setNewGenerate3D((g) => ({ ...g, tripoModelVersion: v || undefined }))}
+                              triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                            />
+                          </label>
+                          <label className={`flex items-center gap-1.5 text-[9px] ${!newIsTripoV3Line ? 'opacity-45' : ''}`}>
+                            <span>几何质量</span>
+                            <CustomDropdown
+                              options={[{ value: '', label: '自动（不指定）' }, { value: 'standard', label: 'standard' }, { value: 'detailed', label: 'detailed' }]}
+                              value={newGenerate3D.tripoGeometryQuality ?? ''}
+                              onChange={(v) => setNewGenerate3D((g) => ({ ...g, tripoGeometryQuality: (v || undefined) as 'standard' | 'detailed' | undefined }))}
+                              triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                              disabled={!newIsTripoV3Line}
+                            />
+                          </label>
+                          <label className="flex items-center gap-1.5 text-[9px]">
+                            <span>纹理质量</span>
+                            <CustomDropdown
+                              options={[{ value: 'standard', label: 'standard' }, { value: 'detailed', label: 'detailed' }]}
+                              value={newGenerate3D.tripoTextureQuality ?? 'standard'}
+                              onChange={(v) => setNewGenerate3D((g) => ({ ...g, tripoTextureQuality: v as 'standard' | 'detailed' }))}
+                              triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                            />
+                          </label>
+                          <label className="flex items-center gap-1.5 text-[9px]">
+                            <span>面数上限</span>
+                            <input
+                              type="number"
+                              min={500}
+                              max={500000}
+                              value={newGenerate3D.tripoFaceLimit ?? 100000}
+                              onChange={(e) => setNewGenerate3D((g) => ({ ...g, tripoFaceLimit: e.target.value ? parseInt(e.target.value, 10) : undefined }))}
+                              className="w-24 rounded bg-white/[0.06] px-2 py-1 text-[9px] ring-1 ring-white/[0.08]"
+                            />
+                          </label>
+                        </div>
+                      </div>
+                      <div className="w-full rounded-lg border border-white/[0.08] bg-black/20 p-2 space-y-1.5">
+                        <div className="text-[8px] font-black text-fuchsia-300 uppercase">额外功能</div>
+                        <div className="text-[8px] text-gray-500">附加能力与高级开关，可能影响耗时与计费。</div>
+                        <div className="flex gap-2 flex-wrap">
+                          <label className="flex items-center gap-1.5 text-[9px]">
+                            <input
+                              type="checkbox"
+                              checked={newGenerate3D.tripoTexture ?? true}
+                              onChange={(e) => setNewGenerate3D((g) => ({ ...g, tripoTexture: e.target.checked }))}
+                              disabled={newTripoGenerateParts}
+                            />
+                            <span>纹理</span>
+                          </label>
+                          <label className="flex items-center gap-1.5 text-[9px]">
+                            <input
+                              type="checkbox"
+                              checked={newGenerate3D.tripoPbr ?? true}
+                              onChange={(e) => setNewGenerate3D((g) => ({ ...g, tripoPbr: e.target.checked }))}
+                              disabled={newTripoGenerateParts}
+                            />
+                            <span>PBR</span>
+                          </label>
+                          <label className="flex items-center gap-1.5 text-[9px]">
+                            <input
+                              type="checkbox"
+                              checked={newGenerate3D.tripoQuad ?? false}
+                              onChange={(e) => setNewGenerate3D((g) => ({ ...g, tripoQuad: e.target.checked }))}
+                              disabled={newTripoGenerateParts}
+                            />
+                            <span>Quad</span>
+                          </label>
+                          <label className="flex items-center gap-1.5 text-[9px]">
+                            <input type="checkbox" checked={newGenerate3D.tripoSmartLowPoly ?? false} onChange={(e) => setNewGenerate3D((g) => ({ ...g, tripoSmartLowPoly: e.target.checked }))} />
+                            <span>低模</span>
+                          </label>
+                          <label className="flex items-center gap-1.5 text-[9px]">
+                            <input
+                              type="checkbox"
+                              checked={newGenerate3D.tripoGenerateParts ?? false}
+                              onChange={(e) => setNewGenerate3D((g) => ({ ...g, tripoGenerateParts: e.target.checked }))}
+                              disabled={newTripoTextureEnabled || newTripoPbrEnabled}
+                            />
+                            <span>分部件</span>
+                          </label>
+                          <label className="flex items-center gap-1.5 text-[9px]">
+                            <input type="checkbox" checked={newGenerate3D.tripoEnableImageAutofix ?? false} onChange={(e) => setNewGenerate3D((g) => ({ ...g, tripoEnableImageAutofix: e.target.checked }))} />
+                            <span>输入图自动修复</span>
+                          </label>
+                          <label className="flex items-center gap-1.5 text-[9px]">
+                            <input type="checkbox" checked={newGenerate3D.tripoAutoSize ?? false} onChange={(e) => setNewGenerate3D((g) => ({ ...g, tripoAutoSize: e.target.checked }))} />
+                            <span>自动尺寸</span>
+                          </label>
+                          <label className="flex items-center gap-1.5 text-[9px]">
+                            <input type="checkbox" checked={newGenerate3D.tripoExportUv ?? true} onChange={(e) => setNewGenerate3D((g) => ({ ...g, tripoExportUv: e.target.checked }))} />
+                            <span>导出UV</span>
+                          </label>
+                          <label className="flex items-center gap-1.5 text-[9px]">
+                            <input type="checkbox" checked={(newGenerate3D.tripoCompress ?? undefined) === 'geometry'} onChange={(e) => setNewGenerate3D((g) => ({ ...g, tripoCompress: e.target.checked ? 'geometry' : undefined }))} />
+                            <span>几何压缩</span>
+                          </label>
+                          <label className="flex items-center gap-1.5 text-[9px]">
+                            <span>纹理对齐</span>
+                            <CustomDropdown
+                              options={[{ value: '', label: '默认' }, { value: 'original_image', label: 'original_image' }, { value: 'geometry', label: 'geometry' }]}
+                              value={newGenerate3D.tripoTextureAlignment ?? ''}
+                              onChange={(v) => setNewGenerate3D((g) => ({ ...g, tripoTextureAlignment: (v || undefined) as 'original_image' | 'geometry' | undefined }))}
+                              triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                            />
+                          </label>
+                          <label className="flex items-center gap-1.5 text-[9px]">
+                            <span>朝向</span>
+                            <CustomDropdown
+                              options={[{ value: '', label: '默认' }, { value: 'default', label: 'default' }, { value: 'align_image', label: 'align_image' }]}
+                              value={newGenerate3D.tripoOrientation ?? ''}
+                              onChange={(v) => setNewGenerate3D((g) => ({ ...g, tripoOrientation: (v || undefined) as 'default' | 'align_image' | undefined }))}
+                              triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                            />
+                          </label>
+                        </div>
+                      </div>
+                      {(newTripoTextureEnabled || newTripoPbrEnabled) && (
+                        <div className="w-full text-[8px] text-amber-300">
+                          「分部件」与「纹理/PBR」互斥：请先关闭纹理和 PBR。
+                        </div>
+                      )}
+                      {newTripoGenerateParts && (
+                        <div className="w-full text-[8px] text-amber-300">
+                          已开启分部件：Quad、纹理、PBR 已禁用。
+                        </div>
+                      )}
                     </>
                   )}
                 </div>
               </div>
               <div>
-                <span className="text-[8px] font-black text-gray-500 uppercase">可选：图生3D 补充描述</span>
+                <span className="text-[8px] font-black text-gray-500 uppercase">可选：提示词补充 / 负向提示词</span>
                 <textarea
                   value={newInstruction}
                   onChange={(e) => setNewInstruction(e.target.value)}
-                  placeholder="留空即可；需要时可对生成效果做文字补充"
+                  placeholder="正向提示词补充。文生3D未提供文字卡时，会以此作为默认 prompt。"
                   rows={1}
                   className="mt-1 w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 resize-none"
+                />
+                <input
+                  value={newGenerate3D.tripoNegativePrompt ?? ''}
+                  onChange={(e) => setNewGenerate3D((g) => ({ ...g, tripoNegativePrompt: e.target.value }))}
+                  placeholder="Negative Prompt（可选）"
+                  className="mt-2 w-full rounded-xl bg-white/[0.05] px-3 py-2 text-[11px] ring-1 ring-white/[0.06] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
                 />
               </div>
             </>
@@ -1953,7 +2111,7 @@ const CapabilityPresetSection: React.FC<{
             data-image-preview-no-wheel
             data-image-preview-scroll
           >
-            <div className="h-full overflow-y-auto rounded-2xl border border-white/10 bg-[#0f0f12]/98 p-3 md:p-4 space-y-3 shadow-xl backdrop-blur-[2px]">
+            <div className="max-h-[72vh] overflow-y-auto rounded-2xl border border-white/10 bg-[#0f0f12]/98 p-3 md:p-4 space-y-3 shadow-xl backdrop-blur-[2px]" data-image-preview-scroll>
               <div className="rounded-2xl bg-[#16161a] ring-1 ring-white/[0.07] p-3 space-y-2">
                 <div className="text-[9px] text-gray-500 uppercase tracking-wide">能力预览</div>
                 <div className="text-[14px] font-black text-white break-words line-clamp-2 leading-tight">{detailPreset.label}</div>
@@ -2144,67 +2302,205 @@ const CapabilityPresetSection: React.FC<{
                               <span className="font-black uppercase">拖拽时要求输入临时提示词</span>
                             </label>
                           ) : null}
-                          {editCategory === 'generate_3d' && (
-                            <div className="rounded-xl border border-[#2e3f5d] bg-[#141b26] p-3 space-y-2">
-                              <div className="text-[8px] font-black text-blue-300 uppercase">生成3D 预设</div>
-                              <label className="flex items-center gap-2 text-[9px]">
-                                <span>模块</span>
+                          {editCategory !== 'generate_3d' && (
+                            <div className="rounded-xl border border-emerald-900/40 bg-black/20 p-2 space-y-2">
+                              <div className="text-[8px] font-black text-emerald-300/90 uppercase">本机伴侣 · 宿主包 run.json</div>
+                              <p className="text-[8px] text-gray-500 leading-snug">
+                                填写目录名后，工作流将向本机伴侣提交 host_bundle.exec / host_bundle.probe。拖入图片或文字卡均可触发。
+                              </p>
+                              <label className="block">
+                                <span className="text-[9px] text-gray-500 uppercase">插件目录名</span>
+                                <input
+                                  value={editCompanionHostBundleDir}
+                                  onChange={(e) => setEditCompanionHostBundleDir(e.target.value)}
+                                  placeholder="host-bundles 下文件夹名"
+                                  className="mt-0.5 w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/45"
+                                />
+                              </label>
+                              <label className="flex items-center gap-2 text-[9px] text-gray-400">
+                                <span className="font-black uppercase">阶段</span>
                                 <CustomDropdown
-                                  options={[{ value: 'pro', label: '专业版' }, { value: 'rapid', label: '极速版' }]}
-                                  value={editGenerate3D.module}
-                                  onChange={(v) => setEditGenerate3D((g) => ({ ...g, module: v as 'pro' | 'rapid' }))}
+                                  options={[
+                                    { value: 'exec', label: 'exec（执行）' },
+                                    { value: 'probe', label: 'probe（校验）' },
+                                  ]}
+                                  value={editCompanionHostBundlePhase}
+                                  onChange={(v) => setEditCompanionHostBundlePhase(v === 'probe' ? 'probe' : 'exec')}
                                   triggerClassName={DROPDOWN_TRIGGER_COMPACT}
                                   portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
                                 />
                               </label>
-                              {editGenerate3D.module === 'pro' && (
+                            </div>
+                          )}
+                          {editCategory === 'generate_3d' && (
+                            <div className="rounded-xl border border-[#2e3f5d] bg-[#141b26] p-3 space-y-2">
+                              <div className="text-[8px] font-black text-blue-300 uppercase">生成3D 预设</div>
+                              <label className="flex items-center gap-2 text-[9px]">
+                                <span>服务商</span>
+                                <CustomDropdown
+                                  options={[{ value: 'tripo', label: 'Tripo' }, { value: 'tencent', label: '腾讯(兼容)' }]}
+                                  value={editGenerate3D.provider ?? 'tripo'}
+                                  onChange={(v) => setEditGenerate3D((g) => ({ ...g, provider: v as 'tripo' | 'tencent' }))}
+                                  triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                                  portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
+                                />
+                              </label>
+                              {editGenerate3D.provider !== 'tencent' && (
                                 <>
-                                  <label className="flex items-center gap-2 text-[9px]">
-                                    <span>模型</span>
-                                    <CustomDropdown
-                                      options={[{ value: '3.0', label: '3.0' }, { value: '3.1', label: '3.1' }]}
-                                      value={editGenerate3D.model ?? '3.0'}
-                                      onChange={(v) => setEditGenerate3D((g) => ({ ...g, model: v as '3.0' | '3.1' }))}
-                                      triggerClassName={DROPDOWN_TRIGGER_COMPACT}
-                                      portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
-                                    />
-                                  </label>
-                                  <label className="flex items-center gap-2 text-[9px]">
-                                    <span>面数</span>
-                                    <input type="number" min={10000} max={1500000} value={editGenerate3D.faceCount ?? 500000} onChange={(e) => setEditGenerate3D((g) => ({ ...g, faceCount: e.target.value ? parseInt(e.target.value, 10) : undefined }))} className="w-24 rounded bg-white/[0.06] px-2 py-1 text-[9px] ring-1 ring-white/[0.08]" />
-                                  </label>
-                                  <label className="flex items-center gap-2 text-[9px]">
-                                    <span>类型</span>
-                                    <CustomDropdown
-                                      options={[
-                                        { value: 'Normal', label: 'Normal' },
-                                        { value: 'LowPoly', label: 'LowPoly' },
-                                        { value: 'Geometry', label: 'Geometry' },
-                                        { value: 'Sketch', label: 'Sketch' },
-                                      ]}
-                                      value={editGenerate3D.generateType ?? 'Normal'}
-                                      onChange={(v) => setEditGenerate3D((g) => ({ ...g, generateType: v as Generate3DPreset['generateType'] }))}
-                                      triggerClassName={DROPDOWN_TRIGGER_COMPACT}
-                                      portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
-                                    />
-                                  </label>
-                                  <label className="flex items-center gap-2 text-[9px]">
-                                    <span>格式</span>
-                                    <CustomDropdown
-                                      options={[{ value: '', label: '默认' }, { value: 'STL', label: 'STL' }, { value: 'USDZ', label: 'USDZ' }, { value: 'FBX', label: 'FBX' }]}
-                                      value={editGenerate3D.resultFormat ?? ''}
-                                      onChange={(v) => setEditGenerate3D((g) => ({ ...g, resultFormat: v || undefined }))}
-                                      placeholder="默认"
-                                      triggerClassName={DROPDOWN_TRIGGER_COMPACT}
-                                      portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
+                                  <div className="w-full rounded-lg border border-white/[0.08] bg-black/20 p-2 space-y-1.5">
+                                    <div className="text-[8px] font-black text-cyan-300 uppercase">标准参数</div>
+                                    <div className="text-[8px] text-gray-500">影响主结果质量与基础风格，建议优先配置。</div>
+                                    <div className="flex gap-2 flex-wrap">
+                                      <label className="flex items-center gap-2 text-[9px]">
+                                        <span>任务</span>
+                                        <CustomDropdown
+                                          options={[{ value: 'image_to_model', label: '图生3D' }, { value: 'text_to_model', label: '文生3D' }]}
+                                          value={editGenerate3D.tripoTaskType ?? 'image_to_model'}
+                                          onChange={(v) => setEditGenerate3D((g) => ({ ...g, tripoTaskType: v as 'text_to_model' | 'image_to_model' }))}
+                                          triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                                          portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
+                                        />
+                                      </label>
+                                      <label className="flex items-center gap-2 text-[9px]">
+                                        <span>版本</span>
+                                        <CustomDropdown
+                                          options={TRIPO_MODEL_VERSION_OPTIONS.map((x) => ({ value: x.value, label: x.label }))}
+                                          value={editGenerate3D.tripoModelVersion ?? ''}
+                                          onChange={(v) => setEditGenerate3D((g) => ({ ...g, tripoModelVersion: v || undefined }))}
+                                          triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                                          portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
+                                        />
+                                      </label>
+                                      <label className="flex items-center gap-2 text-[9px]">
+                                        <span>面数上限</span>
+                                        <input type="number" min={500} max={500000} value={editGenerate3D.tripoFaceLimit ?? 100000} onChange={(e) => setEditGenerate3D((g) => ({ ...g, tripoFaceLimit: e.target.value ? parseInt(e.target.value, 10) : undefined }))} className="w-24 rounded bg-white/[0.06] px-2 py-1 text-[9px] ring-1 ring-white/[0.08]" />
+                                      </label>
+                                      <label className={`flex items-center gap-2 text-[9px] ${!editIsTripoV3Line ? 'opacity-45' : ''}`}>
+                                        <span>几何质量</span>
+                                        <CustomDropdown
+                                          options={[{ value: '', label: '自动（不指定）' }, { value: 'standard', label: 'standard' }, { value: 'detailed', label: 'detailed' }]}
+                                          value={editGenerate3D.tripoGeometryQuality ?? ''}
+                                          onChange={(v) => setEditGenerate3D((g) => ({ ...g, tripoGeometryQuality: (v || undefined) as 'standard' | 'detailed' | undefined }))}
+                                          triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                                          portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
+                                          disabled={!editIsTripoV3Line}
+                                        />
+                                      </label>
+                                      <label className="flex items-center gap-2 text-[9px]">
+                                        <span>纹理质量</span>
+                                        <CustomDropdown
+                                          options={[{ value: 'standard', label: 'standard' }, { value: 'detailed', label: 'detailed' }]}
+                                          value={editGenerate3D.tripoTextureQuality ?? 'standard'}
+                                          onChange={(v) => setEditGenerate3D((g) => ({ ...g, tripoTextureQuality: v as 'standard' | 'detailed' }))}
+                                          triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                                          portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
+                                        />
+                                      </label>
+                                    </div>
+                                  </div>
+                                  <div className="w-full rounded-lg border border-white/[0.08] bg-black/20 p-2 space-y-1.5">
+                                    <div className="text-[8px] font-black text-fuchsia-300 uppercase">额外功能</div>
+                                    <div className="text-[8px] text-gray-500">附加能力与高级开关，可能影响耗时与计费。</div>
+                                    <div className="flex gap-2 flex-wrap">
+                                      <label className="flex items-center gap-1.5 text-[9px]">
+                                        <input
+                                          type="checkbox"
+                                          checked={editGenerate3D.tripoTexture ?? true}
+                                          onChange={(e) => setEditGenerate3D((g) => ({ ...g, tripoTexture: e.target.checked }))}
+                                          disabled={editTripoGenerateParts}
+                                        />
+                                        <span>纹理</span>
+                                      </label>
+                                      <label className="flex items-center gap-1.5 text-[9px]">
+                                        <input
+                                          type="checkbox"
+                                          checked={editGenerate3D.tripoPbr ?? true}
+                                          onChange={(e) => setEditGenerate3D((g) => ({ ...g, tripoPbr: e.target.checked }))}
+                                          disabled={editTripoGenerateParts}
+                                        />
+                                        <span>PBR</span>
+                                      </label>
+                                      <label className="flex items-center gap-1.5 text-[9px]">
+                                        <input
+                                          type="checkbox"
+                                          checked={editGenerate3D.tripoQuad ?? false}
+                                          onChange={(e) => setEditGenerate3D((g) => ({ ...g, tripoQuad: e.target.checked }))}
+                                          disabled={editTripoGenerateParts}
+                                        />
+                                        <span>Quad</span>
+                                      </label>
+                                      <label className="flex items-center gap-1.5 text-[9px]">
+                                        <input type="checkbox" checked={editGenerate3D.tripoSmartLowPoly ?? false} onChange={(e) => setEditGenerate3D((g) => ({ ...g, tripoSmartLowPoly: e.target.checked }))} />
+                                        <span>低模</span>
+                                      </label>
+                                      <label className="flex items-center gap-1.5 text-[9px]">
+                                        <input
+                                          type="checkbox"
+                                          checked={editGenerate3D.tripoGenerateParts ?? false}
+                                          onChange={(e) => setEditGenerate3D((g) => ({ ...g, tripoGenerateParts: e.target.checked }))}
+                                          disabled={editTripoTextureEnabled || editTripoPbrEnabled}
+                                        />
+                                        <span>分部件</span>
+                                      </label>
+                                      <label className="flex items-center gap-1.5 text-[9px]">
+                                        <input type="checkbox" checked={editGenerate3D.tripoEnableImageAutofix ?? false} onChange={(e) => setEditGenerate3D((g) => ({ ...g, tripoEnableImageAutofix: e.target.checked }))} />
+                                        <span>输入图自动修复</span>
+                                      </label>
+                                      <label className="flex items-center gap-1.5 text-[9px]">
+                                        <input type="checkbox" checked={editGenerate3D.tripoAutoSize ?? false} onChange={(e) => setEditGenerate3D((g) => ({ ...g, tripoAutoSize: e.target.checked }))} />
+                                        <span>自动尺寸</span>
+                                      </label>
+                                      <label className="flex items-center gap-1.5 text-[9px]">
+                                        <input type="checkbox" checked={editGenerate3D.tripoExportUv ?? true} onChange={(e) => setEditGenerate3D((g) => ({ ...g, tripoExportUv: e.target.checked }))} />
+                                        <span>导出UV</span>
+                                      </label>
+                                      <label className="flex items-center gap-1.5 text-[9px]">
+                                        <input type="checkbox" checked={(editGenerate3D.tripoCompress ?? undefined) === 'geometry'} onChange={(e) => setEditGenerate3D((g) => ({ ...g, tripoCompress: e.target.checked ? 'geometry' : undefined }))} />
+                                        <span>几何压缩</span>
+                                      </label>
+                                      <label className="flex items-center gap-1.5 text-[9px]">
+                                        <span>纹理对齐</span>
+                                        <CustomDropdown
+                                          options={[{ value: '', label: '默认' }, { value: 'original_image', label: 'original_image' }, { value: 'geometry', label: 'geometry' }]}
+                                          value={editGenerate3D.tripoTextureAlignment ?? ''}
+                                          onChange={(v) => setEditGenerate3D((g) => ({ ...g, tripoTextureAlignment: (v || undefined) as 'original_image' | 'geometry' | undefined }))}
+                                          triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                                          portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
+                                        />
+                                      </label>
+                                      <label className="flex items-center gap-1.5 text-[9px]">
+                                        <span>朝向</span>
+                                        <CustomDropdown
+                                          options={[{ value: '', label: '默认' }, { value: 'default', label: 'default' }, { value: 'align_image', label: 'align_image' }]}
+                                          value={editGenerate3D.tripoOrientation ?? ''}
+                                          onChange={(v) => setEditGenerate3D((g) => ({ ...g, tripoOrientation: (v || undefined) as 'default' | 'align_image' | undefined }))}
+                                          triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                                          portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
+                                        />
+                                      </label>
+                                    </div>
+                                  </div>
+                                  {(editTripoTextureEnabled || editTripoPbrEnabled) && (
+                                    <div className="w-full text-[8px] text-amber-300">
+                                      「分部件」与「纹理/PBR」互斥：请先关闭纹理和 PBR。
+                                    </div>
+                                  )}
+                                  {editTripoGenerateParts && (
+                                    <div className="w-full text-[8px] text-amber-300">
+                                      已开启分部件：Quad、纹理、PBR 已禁用。
+                                    </div>
+                                  )}
+                                  <label className="block text-[9px] text-gray-300">
+                                    <span>Negative Prompt</span>
+                                    <input
+                                      value={editGenerate3D.tripoNegativePrompt ?? ''}
+                                      onChange={(e) => setEditGenerate3D((g) => ({ ...g, tripoNegativePrompt: e.target.value }))}
+                                      placeholder="可选"
+                                      className="mt-1 w-full rounded bg-white/[0.06] px-2 py-1 text-[9px] ring-1 ring-white/[0.08]"
                                     />
                                   </label>
                                 </>
                               )}
-                              <label className="flex items-center gap-1.5 text-[9px]">
-                                <input type="checkbox" checked={editGenerate3D.enablePBR ?? false} onChange={(e) => setEditGenerate3D((g) => ({ ...g, enablePBR: e.target.checked }))} />
-                                <span>PBR</span>
-                              </label>
                             </div>
                           )}
                           <label className="block">
@@ -2273,15 +2569,23 @@ const CapabilityPresetSection: React.FC<{
                                 : '不适用'}
                             </div>
                           </div>
+                          {detailPreset.companionHostBundle?.dirName ? (
+                            <div className="rounded-lg bg-[#1b1b21] border border-emerald-900/35 px-2 py-1.5 col-span-2">
+                              <div className="text-gray-500">本机宿主包</div>
+                              <div className="text-gray-200 mt-0.5 text-[10px]">
+                                {detailPreset.companionHostBundle.dirName} ·{' '}
+                                {detailPreset.companionHostBundle.phase === 'probe' ? 'probe' : 'exec'}
+                              </div>
+                            </div>
+                          ) : null}
                         </div>
                         {detailPreset.category === 'generate_3d' && detailPreset.generate3D && (
                           <div className="rounded-lg bg-[#1b1b21] border border-[#2a2a32] px-2 py-2 text-[9px] text-gray-300">
-                            3D：{detailPreset.generate3D.module === 'pro' ? '专业版' : '极速版'}
-                            {detailPreset.generate3D.model ? ` · ${detailPreset.generate3D.model}` : ''}
-                            {detailPreset.generate3D.generateType ? ` · ${detailPreset.generate3D.generateType}` : ''}
-                            {detailPreset.generate3D.resultFormat ? ` · ${detailPreset.generate3D.resultFormat}` : ''}
-                            {detailPreset.generate3D.faceCount ? ` · ${detailPreset.generate3D.faceCount} 面` : ''}
-                            {detailPreset.generate3D.enablePBR ? ' · PBR' : ''}
+                            3D：{detailPreset.generate3D.provider === 'tencent' ? '腾讯(兼容)' : 'Tripo'}
+                            {detailPreset.generate3D.tripoTaskType ? ` · ${detailPreset.generate3D.tripoTaskType}` : ''}
+                            {detailPreset.generate3D.tripoModelVersion ? ` · ${detailPreset.generate3D.tripoModelVersion}` : ''}
+                            {detailPreset.generate3D.tripoFaceLimit ? ` · ${detailPreset.generate3D.tripoFaceLimit} 面` : ''}
+                            {detailPreset.generate3D.tripoPbr ? ' · PBR' : ''}
                           </div>
                         )}
                         <div className="rounded-lg bg-[#1b1b21] border border-[#2a2a32] px-2 py-2">
@@ -2323,7 +2627,10 @@ const CapabilityPresetSection: React.FC<{
               {onRunTest && detailPreset.category !== 'generate_3d' && (
                 <button
                   type="button"
-                  disabled={!testImage[detailPreset.id] || testRunning[detailPreset.id]}
+                  disabled={
+                    (!testImage[detailPreset.id] && !detailPreset.companionHostBundle?.dirName?.trim()) ||
+                    !!testRunning[detailPreset.id]
+                  }
                   onClick={() => runTest(detailPreset)}
                   className="px-3 py-1.5 rounded-lg border border-[#36578f] bg-[#1d3154] text-blue-200 text-[9px] font-black uppercase hover:bg-[#264171] disabled:opacity-50 disabled:pointer-events-none"
                 >

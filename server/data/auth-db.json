@@ -523,7 +523,29 @@
       "tokenHash": "f241a6c7e4b10574401b0e93fc3e5e29fbdcae83122bf02c9c153ffc14a49c1d",
       "expiresAt": "2026-05-04T15:18:20.435Z",
       "createdAt": "2026-04-27T15:18:20.436Z",
-      "updatedAt": "2026-04-27T15:18:20.436Z",
+      "updatedAt": "2026-04-28T15:37:09.807Z",
+      "revokedAt": "2026-04-28T15:37:09.807Z",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+      "ip": "127.0.0.1"
+    },
+    {
+      "id": "48247f8e-f49f-4a79-9430-0d29ea6e5b56",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "tokenHash": "0ee8ab8f24c874f661343860e32863b9a6d2f469196d5b9e1557b5c60bb36e2f",
+      "expiresAt": "2026-05-05T15:37:09.807Z",
+      "createdAt": "2026-04-28T15:37:09.807Z",
+      "updatedAt": "2026-04-28T15:37:09.807Z",
+      "revokedAt": null,
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+      "ip": "127.0.0.1"
+    },
+    {
+      "id": "9be4ac77-30f0-4c61-a42b-affddc79e954",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "tokenHash": "4ac65b1b456bf717e8e78d07e8a7d46812ceb2db75be5a7d82b30d4f6bbb2eea",
+      "expiresAt": "2026-05-05T16:05:06.804Z",
+      "createdAt": "2026-04-28T16:05:06.804Z",
+      "updatedAt": "2026-04-28T16:05:06.804Z",
       "revokedAt": null,
       "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
       "ip": "127.0.0.1"
@@ -1310,6 +1332,17 @@
       "ip": "127.0.0.1",
       "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
       "createdAt": "2026-04-26T14:11:44.498Z"
+    },
+    {
+      "id": "769e5252-84c5-4d0b-9cdc-6e5686718088",
+      "actorUserId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "actorIdentifier": "maoer",
+      "action": "auth.login_success",
+      "targetUserId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "metaJson": null,
+      "ip": "127.0.0.1",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+      "createdAt": "2026-04-28T16:05:06.805Z"
     }
   ]
 }

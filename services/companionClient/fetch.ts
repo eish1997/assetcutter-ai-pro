@@ -2,7 +2,7 @@ import { getCompanionLocalToken, normalizeCompanionBaseUrl } from '../companionL
 
 export type CompanionClientResult<T> =
   | { ok: true; data: T; latencyMs: number; status: number }
-  | { ok: false; error: string; status?: number; latencyMs?: number };
+  | { ok: false; error: string; status?: number; latencyMs?: number; code?: string; detail?: string };
 
 function nowMs(): number {
   return typeof performance !== 'undefined' ? performance.now() : Date.now();
@@ -32,7 +32,12 @@ export async function companionFetchJson<T>(
       /* 非 JSON 时 data 保持 string */
     }
     if (!r.ok) {
-      return { ok: false as const, error: `HTTP ${r.status}`, status: r.status, latencyMs };
+      const errObj = data && typeof data === 'object' ? (data as { error?: unknown; code?: unknown; message?: unknown }) : null;
+      const errorText =
+        (errObj && (typeof errObj.error === 'string' ? errObj.error : typeof errObj.message === 'string' ? errObj.message : '')) ||
+        `HTTP ${r.status}`;
+      const codeText = errObj && typeof errObj.code === 'string' ? errObj.code : undefined;
+      return { ok: false as const, error: errorText, status: r.status, latencyMs, ...(codeText ? { code: codeText } : {}) };
     }
     return { ok: true as const, data: data as T, latencyMs, status: r.status };
   } catch (e) {

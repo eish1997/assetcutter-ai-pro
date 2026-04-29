@@ -1,7 +1,19 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync, statSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+  statSync,
+} from 'node:fs';
+import { join } from 'node:path';
 import { getAssetObjectPath, ensureProjectLayout, getProjectRoot } from './projectPaths.js';
 import { readManifestOrEmpty, writeManifestSync } from './manifestIO.js';
-import { assertSafeId, isSafeIdPart } from './safeIds.js';
+import { assertSafeId, assertSafeWorkspaceFolderName, isSafeWorkspaceFolderName } from './safeIds.js';
 import type { ManifestEntryV1, ProjectManifestV1 } from './manifestTypes.js';
 
 const DEFAULT_MIME = 'application/octet-stream';
@@ -34,7 +46,7 @@ export function putAsset(
   body: Buffer,
   contentType: string | undefined,
 ): { relPath: string; byteSize: number } {
-  const pid = assertSafeId(projectId, 'projectId');
+  const pid = assertSafeWorkspaceFolderName(projectId, 'projectId');
   const k = assertSafeId(key, 'key');
   ensureProjectLayout(pid);
   const { dir, objectFile, relPath } = getAssetObjectPath(pid, k);
@@ -73,7 +85,7 @@ export function getAssetMeta(
   | { entry: ManifestEntryV1; exists: boolean; projectId: string }
   | { error: string; code: string } {
   try {
-    const pid = assertSafeId(projectId, 'projectId');
+    const pid = assertSafeWorkspaceFolderName(projectId, 'projectId');
     const k = assertSafeId(key, 'key');
     if (!existsSync(getProjectRoot(pid))) {
       return { error: 'project_not_found', code: 'STORAGE_NOT_FOUND' };
@@ -90,7 +102,7 @@ export function getAssetMeta(
 
 export function deleteAsset(projectId: string, key: string): { ok: true } | { error: string; code: string } {
   try {
-    const pid = assertSafeId(projectId, 'projectId');
+    const pid = assertSafeWorkspaceFolderName(projectId, 'projectId');
     const k = assertSafeId(key, 'key');
     if (!existsSync(getProjectRoot(pid))) {
       return { error: 'project_not_found', code: 'STORAGE_NOT_FOUND' };
@@ -130,10 +142,92 @@ function readdirOrEmpty(dir: string): string[] {
   }
 }
 
+function sniffMimeFromHead(buf: Buffer): string {
+  if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'image/jpeg';
+  if (buf.length >= 4 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return 'image/png';
+  if (
+    buf.length >= 12 &&
+    buf[0] === 0x52 &&
+    buf[1] === 0x49 &&
+    buf[2] === 0x46 &&
+    buf[3] === 0x46 &&
+    buf[8] === 0x57 &&
+    buf[9] === 0x45 &&
+    buf[10] === 0x42 &&
+    buf[11] === 0x50
+  ) {
+    return 'image/webp';
+  }
+  if (buf.length >= 4 && buf[0] === 0x67 && buf[1] === 0x6c && buf[2] === 0x54 && buf[3] === 0x46) return 'model/gltf-binary';
+  return 'application/octet-stream';
+}
+
+/**
+ * 扫描 `assets/<key>/object`：若磁盘有对象文件但 manifest 无对应条目，则按文件大小与魔数补写 manifest。
+ * 用于修复 manifest 与磁盘不一致（例如异常中断未写 manifest）。
+ */
+export function reconcileManifestOrphansFromDisk(
+  projectId: string,
+): { ok: true; added: number; keys: string[] } | { error: string; code: string } {
+  try {
+    const pid = assertSafeWorkspaceFolderName(projectId, 'projectId');
+    if (!existsSync(getProjectRoot(pid))) {
+      return { error: 'project_not_found', code: 'STORAGE_NOT_FOUND' };
+    }
+    const m = readManifestOrEmpty(pid);
+    const existing = new Set(m.entries.map((e) => e.key));
+    const assetsDir = join(getProjectRoot(pid), 'assets');
+    if (!existsSync(assetsDir)) {
+      return { ok: true, added: 0, keys: [] };
+    }
+    const addedKeys: string[] = [];
+    for (const ent of readdirSync(assetsDir, { withFileTypes: true })) {
+      if (!ent.isDirectory()) continue;
+      let key: string;
+      try {
+        key = assertSafeId(ent.name, 'key');
+      } catch {
+        continue;
+      }
+      if (existing.has(key)) continue;
+      const { objectFile, relPath } = getAssetObjectPath(pid, key);
+      if (!existsSync(objectFile)) continue;
+      let size: number;
+      try {
+        size = statSync(objectFile).size;
+      } catch {
+        continue;
+      }
+      let mime = 'application/octet-stream';
+      try {
+        const fd = openSync(objectFile, 'r');
+        try {
+          const buf = Buffer.alloc(Math.min(512, Math.max(0, size)));
+          const n = readSync(fd, buf, 0, buf.length, 0);
+          if (n > 0) mime = sniffMimeFromHead(buf.subarray(0, n));
+        } finally {
+          closeSync(fd);
+        }
+      } catch {
+        /* keep default mime */
+      }
+      upsertEntry(m, key, relPath, size, mime);
+      existing.add(key);
+      addedKeys.push(key);
+    }
+    if (addedKeys.length > 0) {
+      writeManifestSync(m);
+    }
+    return { ok: true, added: addedKeys.length, keys: addedKeys };
+  } catch {
+    return { error: 'invalid_id', code: 'STORAGE_INVALID_ID' };
+  }
+}
+
 export function getManifestJson(
   projectId: string,
 ): { ok: true; body: ProjectManifestV1 } | { error: string; code: string } {
-  if (!isSafeIdPart(projectId)) {
+  if (!isSafeWorkspaceFolderName(projectId)) {
     return { error: 'invalid_id', code: 'STORAGE_INVALID_ID' };
   }
   if (!existsSync(getProjectRoot(projectId))) {

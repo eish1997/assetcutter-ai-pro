@@ -12,9 +12,10 @@ function envPort(): number {
 
 function shouldOpenBrowser(): boolean {
   const v = process.env.COMPANION_OPEN_BROWSER?.trim().toLowerCase();
-  if (!v) return true;
+  if (v === '1' || v === 'true' || v === 'yes') return true;
   if (v === '0' || v === 'false' || v === 'no') return false;
-  return true;
+  /** 默认不自动打开浏览器：本机管理页由桌面壳或用户手动打开；开发期可设 COMPANION_OPEN_BROWSER=1 */
+  return false;
 }
 
 async function main(): Promise<void> {
@@ -26,11 +27,14 @@ async function main(): Promise<void> {
 
   const srv = await startCompanionHttpServer(port);
   const base = `http://127.0.0.1:${srv.port}`;
-  console.log(`[local-companion] 本机管理页 ${base}/`);
+  console.log(`[local-companion] 本机管理页 ${base}/（默认不自动打开浏览器；需要时请设置 COMPANION_OPEN_BROWSER=1）`);
   console.log(`[local-companion] health ${base}/v1/health`);
   console.log(`[local-companion] 卷根 COMPANION_VOLUME_ROOT=${process.env.COMPANION_VOLUME_ROOT ?? '(默认 ~/.assetcutter-companion/volume)'}`);
   console.log('[local-companion] 存储 API: GET /v1/projects , GET|PUT /v1/projects/:id/assets/:key');
-  console.log('[local-companion] 计算 API: POST /v1/compute/jobs  body: { type, jobId?, projectId? }  试 { "type": "stub.ping" }');
+  console.log(
+    '[local-companion] 计算 API: POST /v1/compute/jobs  body: { type, jobId?, projectId?, inputs? }  试 { "type": "stub.ping" }；宿主包 { "type":"host_bundle.exec","inputs":{"dirName":"<host-bundles 目录名>"} }',
+  );
+  console.log('[local-companion] 宿主插件包: GET /v1/host-plugins/bundles , POST /v1/host-plugins/install-from-url（ZIP 将解压至 host-bundles/<ver>/extracted/）');
 
   startRelayIfConfigured();
 

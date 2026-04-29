@@ -28,6 +28,8 @@ export type WorkflowComposerOverlayProps = {
   onRequestForeground?: () => void;
   /** Dock 是否处于最小化（供父级计算堆叠） */
   onMinimizedChange?: (minimized: boolean) => void;
+  /** 工作区当前项目 id（可选），画布运行测试提交 host_bundle 时带给本机伴侣 */
+  companionProjectId?: string | null;
 };
 
 function isEscapeKey(e: KeyboardEvent): boolean {
@@ -62,13 +64,16 @@ export default function WorkflowComposerOverlay({
   dockStackCount = 1,
   onRequestForeground,
   onMinimizedChange,
+  companionProjectId = null,
 }: WorkflowComposerOverlayProps) {
   const [setLabel, setSetLabel] = useState(initialSet?.label ?? '新建工作流');
   const [dock, setDock] = useState<ComposerDock>('fullscreen');
   const shellRef = useRef<HTMLDivElement | null>(null);
   const onMinimizedChangeRef = useRef(onMinimizedChange);
-  onMinimizedChangeRef.current = onMinimizedChange;
   const prevIsForegroundRef = useRef<boolean | null>(null);
+  useEffect(() => {
+    onMinimizedChangeRef.current = onMinimizedChange;
+  }, [onMinimizedChange]);
 
   useEffect(() => {
     if (!open) return;
@@ -252,6 +257,7 @@ export default function WorkflowComposerOverlay({
                 onLog={onLog}
                 getPartialTestInputImage={getPartialTestInputImage}
                 assetCandidates={assetCandidates}
+                companionProjectId={companionProjectId}
               />
             </div>
           </div>

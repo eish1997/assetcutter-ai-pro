@@ -34,6 +34,7 @@ function migrateCapabilityCategory(input: CustomAppModule): CapabilityCategory {
 }
 
 function deriveEngineForCategory(category: CapabilityCategory, input: CustomAppModule, rawCat: string): CapabilityEngine | undefined {
+  if (input.companionHostBundle?.dirName?.trim()) return 'builtin';
   if (category === 'generate_3d') return undefined;
   if (category === 'text_to_text' || category === 'image_to_text') return 'gen_text';
   if (category === 'text_to_image') return 'gen_image';
@@ -42,6 +43,52 @@ function deriveEngineForCategory(category: CapabilityCategory, input: CustomAppM
   if (rawCat === 'image_gen') return 'gen_image';
   if (input.id === 'split_component' || input.id === 'cut_image') return 'builtin';
   return 'gen_image';
+}
+
+function normalizeGenerate3DPreset(input: NonNullable<CustomAppModule['generate3D']>): NonNullable<CustomAppModule['generate3D']> {
+  const out = { ...input };
+  const tripoVersion = String(out.tripoModelVersion || '').trim();
+  const allowedTripoVersions = new Set([
+    'P1-20260311',
+    'v3.1-20260211',
+    'v3.0-20250812',
+    'v2.5-20250123',
+    'v2.0-20240919',
+  ]);
+  if (out.module !== 'pro' && out.module !== 'rapid') out.module = 'pro';
+  if (out.provider !== 'tencent' && out.provider !== 'tripo') out.provider = 'tripo';
+  if (out.tripoTaskType !== 'text_to_model' && out.tripoTaskType !== 'image_to_model') out.tripoTaskType = 'image_to_model';
+  if (tripoVersion) {
+    if (!allowedTripoVersions.has(tripoVersion)) {
+      delete (out as NonNullable<CustomAppModule['generate3D']> & { tripoModelVersion?: string }).tripoModelVersion;
+    } else {
+      out.tripoModelVersion = tripoVersion;
+    }
+  } else {
+    delete (out as NonNullable<CustomAppModule['generate3D']> & { tripoModelVersion?: string }).tripoModelVersion;
+  }
+  if (out.tripoGeometryQuality !== 'standard' && out.tripoGeometryQuality !== 'detailed') {
+    delete (out as NonNullable<CustomAppModule['generate3D']> & { tripoGeometryQuality?: 'standard' | 'detailed' }).tripoGeometryQuality;
+  }
+  if (out.tripoTextureQuality !== 'standard' && out.tripoTextureQuality !== 'detailed') out.tripoTextureQuality = 'standard';
+  if (out.tripoTextureAlignment !== 'original_image' && out.tripoTextureAlignment !== 'geometry') {
+    delete (out as NonNullable<CustomAppModule['generate3D']> & { tripoTextureAlignment?: 'original_image' | 'geometry' }).tripoTextureAlignment;
+  }
+  if (out.tripoOrientation !== 'default' && out.tripoOrientation !== 'align_image') {
+    delete (out as NonNullable<CustomAppModule['generate3D']> & { tripoOrientation?: 'default' | 'align_image' }).tripoOrientation;
+  }
+  if (typeof out.tripoFaceLimit === 'number' && Number.isFinite(out.tripoFaceLimit)) {
+    out.tripoFaceLimit = Math.max(500, Math.min(500000, Math.floor(out.tripoFaceLimit)));
+  } else {
+    delete (out as NonNullable<CustomAppModule['generate3D']> & { tripoFaceLimit?: number }).tripoFaceLimit;
+  }
+  if (out.model !== '3.0' && out.model !== '3.1') out.model = '3.0';
+  if (typeof out.faceCount === 'number' && Number.isFinite(out.faceCount)) {
+    out.faceCount = Math.max(10000, Math.min(1500000, Math.floor(out.faceCount)));
+  } else {
+    delete (out as NonNullable<CustomAppModule['generate3D']> & { faceCount?: number }).faceCount;
+  }
+  return out;
 }
 
 export function normalizeCapabilityPreset(input: CustomAppModule, index: number): CustomAppModule {
@@ -70,6 +117,10 @@ export function normalizeCapabilityPreset(input: CustomAppModule, index: number)
     // 3D 不使用 engine / imageGear
     delete (base as any).engine;
     delete (base as any).imageGear;
+    delete (base as CustomAppModule & { companionHostBundle?: unknown }).companionHostBundle;
+    if (base.generate3D) {
+      base.generate3D = normalizeGenerate3DPreset(base.generate3D);
+    }
   } else {
     // 非 3D 不应带 generate3D
     delete (base as any).generate3D;
@@ -132,6 +183,22 @@ export function normalizeCapabilityPreset(input: CustomAppModule, index: number)
     delete (base as CustomAppModule & { cutMode?: string }).cutMode;
     delete (base as CustomAppModule & { uniformRows?: number }).uniformRows;
     delete (base as CustomAppModule & { uniformCols?: number }).uniformCols;
+  }
+  if (category === 'generate_3d' || base.id === 'cut_image') {
+    delete (base as CustomAppModule & { companionHostBundle?: unknown }).companionHostBundle;
+  } else {
+    const rawBundle = (input as CustomAppModule).companionHostBundle;
+    if (rawBundle && typeof rawBundle === 'object' && typeof rawBundle.dirName === 'string') {
+      const dirName = rawBundle.dirName.trim();
+      const phase = rawBundle.phase === 'probe' ? 'probe' : rawBundle.phase === 'exec' ? 'exec' : undefined;
+      if (dirName) {
+        base.companionHostBundle = phase === 'probe' ? { dirName, phase: 'probe' } : { dirName };
+      } else {
+        delete (base as CustomAppModule & { companionHostBundle?: unknown }).companionHostBundle;
+      }
+    } else {
+      delete (base as CustomAppModule & { companionHostBundle?: unknown }).companionHostBundle;
+    }
   }
   return base;
 }

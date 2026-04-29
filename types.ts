@@ -373,6 +373,8 @@ export type WorkflowAsset = {
   original: string;
   /** R2 对象键（users/.../assets/<id>/original.xxx），与 original 二选一存在云端 JSON */
   originalObjectKey?: string;
+  /** 本地伴侣 `PUT /v1/projects/:id/assets/:key` 下的原图键；持久化时可配合清空 `original` 中的 data/blob 以省 IndexedDB */
+  originalCompanionKey?: string;
   /** 当前展示的版本 key：'original' 或能力模块 id */
   displayKey: string;
   /** 各类型生成结果图 base64（key 为能力模块 id） */
@@ -383,6 +385,8 @@ export type WorkflowAsset = {
   modelSourceName?: string;
   /** 各步骤结果在 R2 的键，hydrate 后写回 results */
   resultsObjectKeys?: Record<string, string>;
+  /** 各步骤结果图在本地伴侣下的对象键（与 `results` 中对应 step 的 data/blob 配对；持久化时可清空该步内联串） */
+  resultsCompanionKeys?: Record<string, string>;
   /** 所属组的唯一 ID，null/undefined = 不在任何组 */
   groupId?: string | null;
   /** 组显示名称（冗余存，UI 直接用） */
@@ -391,8 +395,17 @@ export type WorkflowAsset = {
   groupOrder?: number;
   /** 生成顺序，用于拼合流程图 */
   resultOrder: string[];
-  /** 各步骤执行时间等，可追溯 */
-  resultMeta?: Record<string, { executedAt: number }>;
+  /** 各步骤执行时间等，可追溯（可附带任务恢复字段） */
+  resultMeta?: Record<
+    string,
+    {
+      executedAt: number;
+      /** 生成3D（Tripo）创建成功后记录，便于查询失败时继续查询旧任务而非重建任务 */
+      tripoTaskId?: string;
+      /** 最近一次 Tripo 查询/落盘失败信息（可选） */
+      tripoLastError?: string;
+    }
+  >;
   /** 文字能力（gen_text）等产生的文本结果，key 与 resultOrder 中步骤 id 对齐 */
   textResults?: Record<string, string>;
   /**
@@ -457,7 +470,7 @@ export const CAPABILITY_CATEGORIES = [
   { id: 'text_to_image', label: '文生图', desc: '文字入 → 图片出（拖文字卡）' },
   { id: 'image_to_image', label: '图生图', desc: '图片入 → 图片出（拖图片卡；可选内置处理或生图模型）' },
   { id: 'image_to_text', label: '图生文', desc: '图片入 → 文字出（拖图片卡）' },
-  { id: 'generate_3d', label: '生成3D', desc: '混元生3D：工作流中拖图到该能力即按预设提交 3D 任务' },
+  { id: 'generate_3d', label: '生成3D', desc: '工作流中拖图到该能力即按预设提交 3D 任务（支持 Tripo）' },
 ] as const;
 export type CapabilityCategory = (typeof CAPABILITY_CATEGORIES)[number]['id'];
 
@@ -466,6 +479,42 @@ export type CapabilityEngine = 'gen_image' | 'gen_text' | 'builtin';
 
 /** 生成3D 能力预设：在工作流中拖图即用此配置提交 */
 export type Generate3DPreset = {
+  /** 默认 tripo；保留 tencent 兼容历史预设 */
+  provider?: 'tripo' | 'tencent';
+  /** Tripo 任务类型：文生3D / 图生3D */
+  tripoTaskType?: 'text_to_model' | 'image_to_model';
+  /** Tripo 可选：模型版本（如 P1-20260311 / v3.1-20260211 / v2.5-20250123） */
+  tripoModelVersion?: string;
+  /** Tripo 可选：负向提示词 */
+  tripoNegativePrompt?: string;
+  /** Tripo 可选：几何质量 */
+  tripoGeometryQuality?: 'standard' | 'detailed';
+  /** Tripo 可选：纹理质量 */
+  tripoTextureQuality?: 'standard' | 'detailed';
+  /** Tripo 可选：目标面数 */
+  tripoFaceLimit?: number;
+  /** Tripo 可选：开启四边面重拓扑 */
+  tripoQuad?: boolean;
+  /** Tripo 可选：智能低模 */
+  tripoSmartLowPoly?: boolean;
+  /** Tripo 可选：分部件生成 */
+  tripoGenerateParts?: boolean;
+  /** Tripo 可选：自动尺寸 */
+  tripoAutoSize?: boolean;
+  /** Tripo 可选：压缩模式（当前仅 geometry） */
+  tripoCompress?: 'geometry';
+  /** Tripo 可选：是否导出 UV（默认 true） */
+  tripoExportUv?: boolean;
+  /** Tripo 可选：纹理开关 */
+  tripoTexture?: boolean;
+  /** Tripo 可选：PBR 开关 */
+  tripoPbr?: boolean;
+  /** Tripo 图生3D可选：输入图自动修复 */
+  tripoEnableImageAutofix?: boolean;
+  /** Tripo 图生3D可选：纹理对齐策略 */
+  tripoTextureAlignment?: 'original_image' | 'geometry';
+  /** Tripo 图生3D可选：模型朝向 */
+  tripoOrientation?: 'default' | 'align_image';
   /** 专业版 | 极速版 */
   module: 'pro' | 'rapid';
   /** 图生3D 时可留空；文生3D 用 instruction，能力里主要用图生 */
@@ -543,6 +592,16 @@ export type CustomAppModule = {
   uniformRows?: number;
   /** 仅 cutMode === 'uniform' 时使用：均匀分割列数 */
   uniformCols?: number;
+  /**
+   * 若填写 `dirName`：执行时向本机伴侣提交 `host_bundle.exec` / `host_bundle.probe`（命令仅来自包内 `run.json`）。
+   * 建议分类用 `image_to_image` 或 `text_to_text`；工作流拖入任意图片或文字卡均可触发（见 `workflowAssetAllowedForCapabilityDrop`）。
+   */
+  companionHostBundle?: {
+    /** 与 `host-bundles` / 已安装列表中的目录名一致 */
+    dirName: string;
+    /** 默认 `exec` */
+    phase?: 'exec' | 'probe';
+  };
 };
 
 /** 能力集合画布节点（与 React Flow 序列化兼容） */

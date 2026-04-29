@@ -964,6 +964,8 @@ type CanvasInnerProps = {
   getPartialTestInputImage?: () => string | null;
   /** 资产节点可选项（工作区/仓库） */
   assetCandidates?: CapabilityAssetCandidate[];
+  /** 工作区项目 id，随本机 `host_bundle.*` 任务提交（可选） */
+  companionProjectId?: string | null;
 };
 
 /** 不允许删除的固定节点：默认保留一个「资产输入」节点 */
@@ -986,6 +988,7 @@ function CanvasInner({
   onLog,
   getPartialTestInputImage,
   assetCandidates = [],
+  companionProjectId = null,
 }: CanvasInnerProps) {
   const { screenToFlowPosition, getNodes, getEdges } = useReactFlow();
   const updateNodeInternals = useUpdateNodeInternals();
@@ -1505,6 +1508,7 @@ function CanvasInner({
       try {
         const result = await executeCapabilitySet(set, input, {
           presets,
+          companionProjectId: companionProjectId?.trim() || undefined,
           onLog,
           assetInputs,
           assetInputTexts,
@@ -1595,6 +1599,7 @@ function CanvasInner({
       getPartialTestInputImage,
       onLog,
       presets,
+      companionProjectId,
       assetById,
       applyComposerTestPreviews,
       setNodes,
@@ -1967,6 +1972,7 @@ export type CapabilitySetCanvasProps = {
   onLog?: CanvasInnerProps['onLog'];
   getPartialTestInputImage?: CanvasInnerProps['getPartialTestInputImage'];
   assetCandidates?: CanvasInnerProps['assetCandidates'];
+  companionProjectId?: CanvasInnerProps['companionProjectId'];
 };
 
 export default function CapabilitySetCanvas(props: CapabilitySetCanvasProps) {

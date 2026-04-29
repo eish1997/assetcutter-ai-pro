@@ -8,9 +8,29 @@ type Props = {
   onOpen: (id: string) => void;
   onRename: (id: string, name: string) => void;
   onDelete: (id: string) => void;
+  onBind?: (id: string) => void;
+  onUnbind?: (id: string) => void;
+  onManualUpload?: (id: string) => void;
+  onRetryFailedUpload?: (id: string) => void;
+  onOpenUploadFailureDetail?: (id: string) => void;
+  uploadingProjectId?: string | null;
+  currentUserId?: string | null;
 };
 
-const WorkspaceProjectShell: React.FC<Props> = ({ projects, onCreate, onOpen, onRename, onDelete }) => {
+const WorkspaceProjectShell: React.FC<Props> = ({
+  projects,
+  onCreate,
+  onOpen,
+  onRename,
+  onDelete,
+  onBind,
+  onUnbind,
+  onManualUpload,
+  onRetryFailedUpload,
+  onOpenUploadFailureDetail,
+  uploadingProjectId,
+  currentUserId,
+}) => {
   const [draftName, setDraftName] = useState('');
   const [filter, setFilter] = useState('');
   const [renameTarget, setRenameTarget] = useState<WorkspaceProject | null>(null);
@@ -102,7 +122,117 @@ const WorkspaceProjectShell: React.FC<Props> = ({ projects, onCreate, onOpen, on
                   <div className="text-[9px] text-gray-500 mt-1 font-mono">
                     创建于 {new Date(p.createdAt).toLocaleString()}
                   </div>
+                  {p.lastManualUploadAt ? (
+                    <div className="text-[9px] text-cyan-300/90 mt-1 font-mono">
+                      最近手动上传 {new Date(p.lastManualUploadAt).toLocaleString()}
+                      {typeof p.lastManualUploadAssetCount === 'number' ? ` · ${p.lastManualUploadAssetCount} 项` : ''}
+                    </div>
+                  ) : null}
+                  {typeof p.lastManualUploadAttemptedCount === 'number' ? (
+                    <div className="text-[9px] mt-1">
+                      {(() => {
+                        const attempted = Math.max(0, Number(p.lastManualUploadAttemptedCount || 0));
+                        const succeeded = Math.max(0, Number(p.lastManualUploadSucceededCount || 0));
+                        const failed = Math.max(0, attempted - succeeded);
+                        return failed > 0 ? (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onOpenUploadFailureDetail?.(p.id);
+                            }}
+                            className="text-amber-300/95 hover:text-amber-200 underline decoration-dotted underline-offset-2"
+                            title="查看失败项详情"
+                          >
+                            上次上传：成功 {succeeded} / 失败 {failed}
+                          </button>
+                        ) : (
+                          <span className="text-emerald-300/95">上次上传：成功 {succeeded}</span>
+                        );
+                      })()}
+                    </div>
+                  ) : null}
+                  <div className="mt-1">
+                    {p.boundUserId && currentUserId && p.boundUserId === currentUserId ? (
+                      <span className="inline-flex items-center rounded-md border border-emerald-500/35 bg-emerald-900/25 px-1.5 py-0.5 text-[9px] text-emerald-200">
+                        已绑定当前账号
+                      </span>
+                    ) : p.boundUserId ? (
+                      <span className="inline-flex items-center rounded-md border border-amber-500/35 bg-amber-900/20 px-1.5 py-0.5 text-[9px] text-amber-200">
+                        已绑定其他账号
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center rounded-md border border-white/15 bg-white/[0.04] px-1.5 py-0.5 text-[9px] text-gray-400">
+                        未绑定
+                      </span>
+                    )}
+                    {p.boundUserId && currentUserId && p.boundUserId !== currentUserId ? (
+                      <div className="mt-1 text-[9px] text-amber-300/90">可继续本地使用；绑定当前账号请先导入为副本</div>
+                    ) : null}
+                  </div>
                 </div>
+                {onBind && currentUserId && !p.boundUserId && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onBind(p.id);
+                    }}
+                    className="shrink-0 px-2 py-1 rounded-lg text-[10px] text-emerald-200 hover:text-emerald-100 bg-emerald-900/20 hover:bg-emerald-900/35 border border-emerald-500/30 transition-colors duration-200 cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40"
+                    title="绑定到当前账号"
+                    aria-label={`绑定 ${p.name} 到当前账号`}
+                  >
+                    绑定
+                  </button>
+                )}
+                {onUnbind && currentUserId && p.boundUserId === currentUserId && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onUnbind(p.id);
+                    }}
+                    className="shrink-0 px-2 py-1 rounded-lg text-[10px] text-amber-200 hover:text-amber-100 bg-amber-900/20 hover:bg-amber-900/35 border border-amber-500/30 transition-colors duration-200 cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-amber-500/40"
+                    title="解绑当前账号"
+                    aria-label={`解绑 ${p.name} 与当前账号`}
+                  >
+                    解绑
+                  </button>
+                )}
+                {onManualUpload && currentUserId && p.boundUserId === currentUserId && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onManualUpload(p.id);
+                    }}
+                    disabled={uploadingProjectId === p.id}
+                    className="shrink-0 px-2 py-1 rounded-lg text-[10px] text-cyan-200 hover:text-cyan-100 bg-cyan-900/20 hover:bg-cyan-900/35 border border-cyan-500/30 transition-colors duration-200 cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/40 disabled:cursor-not-allowed disabled:opacity-50"
+                    title="手动上传当前项目资产到云端"
+                    aria-label={`手动上传 ${p.name} 到云端`}
+                  >
+                    {uploadingProjectId === p.id ? '上传中…' : '上传'}
+                  </button>
+                )}
+                {onRetryFailedUpload &&
+                  currentUserId &&
+                  p.boundUserId === currentUserId &&
+                  Array.isArray(p.lastManualUploadFailedAssetIds) &&
+                  p.lastManualUploadFailedAssetIds.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onRetryFailedUpload(p.id);
+                      }}
+                      disabled={uploadingProjectId === p.id}
+                      className="shrink-0 px-2 py-1 rounded-lg text-[10px] text-amber-200 hover:text-amber-100 bg-amber-900/20 hover:bg-amber-900/35 border border-amber-500/30 transition-colors duration-200 cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-amber-500/40 disabled:cursor-not-allowed disabled:opacity-50"
+                      title="仅重试上次失败项"
+                      aria-label={`重试 ${p.name} 上次失败上传项`}
+                    >
+                      重试失败项
+                    </button>
+                  )}
                 <button
                   type="button"
                   onClick={(e) => {

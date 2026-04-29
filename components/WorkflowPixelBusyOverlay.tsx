@@ -140,7 +140,7 @@ const WorkflowPixelBusyOverlay: React.FC<{
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const pixelsRef = useRef<Pixel[]>([]);
   const animationRef = useRef<number | null>(null);
-  const timePreviousRef = useRef(performance.now());
+  const timePreviousRef = useRef(0);
   const reducedMotionRef = useRef(
     typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
   );

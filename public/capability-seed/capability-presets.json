@@ -82,6 +82,19 @@
       "order": 7,
       "imageGear": "pro",
       "engine": "gen_image"
+    },
+    {
+      "id": "host_bundle_seed_template",
+      "label": "本机宿主包（模板）",
+      "category": "image_to_image",
+      "engine": "builtin",
+      "instruction": "将下方 companionHostBundle.dirName 改为你的 host-bundles 目录名后启用。",
+      "enabled": false,
+      "order": 8,
+      "companionHostBundle": {
+        "dirName": "REPLACE_WITH_HOST_BUNDLE_DIR",
+        "phase": "probe"
+      }
     }
   ]
 }

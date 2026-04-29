@@ -7,11 +7,9 @@
 import { GoogleGenAI } from '@google/genai';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
+import { bootstrap as bootstrapGlobalAgent } from 'global-agent';
 
-// 通过动态require加载CommonJS模块
-let globalAgent;
-try { globalAgent = require('global-agent'); } catch(e) {}
-if (globalAgent && globalAgent.bootstrap) { globalAgent.bootstrap(); }
+bootstrapGlobalAgent();
 
 const SERVICE_ACCOUNT_PATH = process.argv[2] || process.env.GOOGLE_APPLICATION_CREDENTIALS;
 const VERTEX_PROJECT_ID = process.env.VERTEX_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || '';

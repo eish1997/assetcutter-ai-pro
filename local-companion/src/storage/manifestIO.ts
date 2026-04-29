@@ -1,6 +1,6 @@
 import { readFileSync, renameSync, writeFileSync, existsSync } from 'node:fs';
 import { getProjectManifestPath } from './projectPaths.js';
-import { assertSafeId } from './safeIds.js';
+import { assertSafeWorkspaceFolderName } from './safeIds.js';
 import { LAYOUT_VERSION, type ProjectManifestV1, emptyManifest } from './manifestTypes.js';
 
 function parseManifest(json: string, projectId: string): ProjectManifestV1 {
@@ -21,7 +21,7 @@ function parseManifest(json: string, projectId: string): ProjectManifestV1 {
 }
 
 export function readManifestOrEmpty(projectId: string): ProjectManifestV1 {
-  const id = assertSafeId(projectId, 'projectId');
+  const id = assertSafeWorkspaceFolderName(projectId, 'projectId');
   const p = getProjectManifestPath(id);
   if (!existsSync(p)) return emptyManifest(id);
   return parseManifest(readFileSync(p, 'utf8'), id);

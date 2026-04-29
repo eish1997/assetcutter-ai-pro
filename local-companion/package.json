@@ -14,7 +14,11 @@
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
+    "@types/yauzl": "^2.10.3",
     "tsx": "^4.19.0",
     "typescript": "~5.8.2"
+  },
+  "dependencies": {
+    "yauzl": "^3.3.0"
   }
 }

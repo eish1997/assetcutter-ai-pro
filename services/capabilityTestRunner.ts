@@ -54,6 +54,14 @@ export async function runCapabilityTest(
     if (preset.category === 'generate_3d') {
       return { ok: false, error: '生成3D 请在工作流中拖图到能力框提交', durationMs: Date.now() - start };
     }
+    if (preset.companionHostBundle?.dirName?.trim()) {
+      const out = await executeCapability(preset, imageBase64 || '');
+      if (out.ok === false) return { ok: false, error: out.error, durationMs: out.durationMs };
+      if (out.kind === 'text') {
+        return { ok: true, resultImage: '', durationMs: out.durationMs, resultText: out.text };
+      }
+      return { ok: true, resultImage: out.image, durationMs: out.durationMs };
+    }
     if (preset.id === 'cut_image') {
       const cutMode = preset.cutMode || 'auto';
       let boxes: BoundingBox[] = [];

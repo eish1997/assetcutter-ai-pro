@@ -1,4 +1,4 @@
-import React, { useEffect, useState as useLocalState } from 'react';
+import React, { useCallback, useEffect, useState as useLocalState } from 'react';
 import { createPortal } from 'react-dom';
 import { AppMode, ArenaStepEntry, ArenaCurrentStep, ArenaTimelineBlock, DIALOG_IMAGE_GEARS, WinningSnippet } from '../types';
 import { dialogGenerateImage, generateArenaPrompts, optimizeLoserPrompt, generateNewChallenger, getEditPrompt, normalizeApiErrorMessage, DEFAULT_PROMPTS, translateToChinese } from '../services/geminiService';
@@ -165,11 +165,11 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
     setArenaIsOptimizing,
     arenaCompareModalOpen: _arenaCompareModalOpen,
     setArenaCompareModalOpen: _setArenaCompareModalOpen,
-    arenaReportedGaps,
+    arenaReportedGaps: _arenaReportedGaps,
     setArenaReportedGaps,
-    arenaWinnerStrength,
+    arenaWinnerStrength: _arenaWinnerStrength,
     setArenaWinnerStrength,
-    arenaLoserRemark,
+    arenaLoserRemark: _arenaLoserRemark,
     setArenaLoserRemark,
     arenaCurrentStep,
     setArenaCurrentStep,
@@ -231,7 +231,7 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
     setLightboxIndex(Math.max(0, idx));
     setLightboxOpen(true);
   };
-  const closeLightbox = () => setLightboxOpen(false);
+  const closeLightbox = useCallback(() => setLightboxOpen(false), [setLightboxOpen]);
 
   useEffect(() => {
     if (!lightboxOpen) return;
@@ -245,7 +245,7 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
       window.removeEventListener('keydown', onKeyDown);
       document.body.style.overflow = prevOverflow;
     };
-  }, [lightboxOpen]);
+  }, [closeLightbox, lightboxOpen]);
 
   const onLightboxWheel = (e: React.WheelEvent) => {
     if (!lightboxOpen) return;
@@ -280,7 +280,16 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
         });
       }
     })();
-  }, [lightboxOpen, lightboxIndex, lightboxImages, modelText]);
+  }, [
+    lightboxOpen,
+    lightboxIndex,
+    lightboxImages,
+    lightboxPromptTranslating,
+    lightboxPromptZhByKey,
+    modelText,
+    setLightboxPromptTranslating,
+    setLightboxPromptZhByKey,
+  ]);
   const [promptZhByKey, setPromptZhByKey] = useLocalState<Record<string, string>>({});
   const [promptZhLoading, setPromptZhLoading] = useLocalState<Set<string>>(new Set());
   const [expandedPromptBoxes, setExpandedPromptBoxes] = useLocalState<Set<string>>(new Set());
@@ -302,7 +311,7 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
   };
   const promptBoxClass = (boxKey: string) =>
     expandedPromptBoxes.has(boxKey) ? 'max-h-none overflow-visible' : 'max-h-40 overflow-y-auto';
-  const ensurePromptZh = async (key: string, text: string) => {
+  const ensurePromptZh = useCallback(async (key: string, text: string) => {
     const source = (text || '').trim();
     if (!source) return;
     if (promptZhByKey[key]) return;
@@ -320,7 +329,7 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
         return n;
       });
     }
-  };
+  }, [modelText, promptZhByKey, promptZhLoading, setPromptZhByKey, setPromptZhLoading]);
   const isPromptRelated = (entry: ArenaStepEntry, text: string) => {
     const label = entry.label || '';
     const merged = `${label}\n${text || ''}`;
@@ -336,7 +345,7 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
       if (input && isPromptRelated(entry, input)) ensurePromptZh(`${entry.id}_input`, input);
       if (output && isPromptRelated(entry, output)) ensurePromptZh(`${entry.id}_output`, output);
     }
-  }, [arenaStepLog]);
+  }, [arenaStepLog, ensurePromptZh]);
 
   useEffect(() => {
     if (!replaySnippet) return;
@@ -346,7 +355,7 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
       if (input && isPromptRelated(entry, input)) ensurePromptZh(`${entry.id}_input`, input);
       if (output && isPromptRelated(entry, output)) ensurePromptZh(`${entry.id}_output`, output);
     }
-  }, [replaySnippet]);
+  }, [replaySnippet, ensurePromptZh]);
 
   const renderPromptDualPane = (entry: ArenaStepEntry, key: string, text: string) => {
     if (!text) return;

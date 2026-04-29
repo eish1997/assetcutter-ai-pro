@@ -25,6 +25,10 @@ export default defineConfig(({ mode }) => {
             target: 'http://127.0.0.1:9100',
             changeOrigin: true,
           },
+          '/api/companion-artifacts': {
+            target: 'http://127.0.0.1:9100',
+            changeOrigin: true,
+          },
           '/api/bridge': {
             target: 'http://127.0.0.1:9100',
             changeOrigin: true,
@@ -48,6 +52,18 @@ export default defineConfig(({ mode }) => {
                 }
               });
             },
+          },
+          '/api/tripo': {
+            target: 'http://127.0.0.1:9100',
+            changeOrigin: true,
+          },
+          '/api/tripo/upload': {
+            target: 'http://127.0.0.1:9100',
+            changeOrigin: true,
+          },
+          '/api/debug': {
+            target: 'http://127.0.0.1:9100',
+            changeOrigin: true,
           },
           '/seam-repair-api': {
             target: 'http://127.0.0.1:8008',

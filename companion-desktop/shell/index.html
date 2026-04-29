@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'none';" />
+  <title>本地伴侣</title>
+  <style>
+    :root {
+      --bg: #0c0c0e;
+      --panel: #121214;
+      --border: #2e2e32;
+      --text: #e4e4e7;
+      --muted: #71717a;
+      --accent: #3b82f6;
+      --ok: #22c55e;
+      --warn: #eab308;
+      --bad: #f87171;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 13px;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      padding-bottom: 56px;
+    }
+    .view { flex: 1; padding: 16px 18px 12px; overflow: auto; }
+    .view.hidden { display: none; }
+    h1 { margin: 0 0 4px; font-size: 15px; font-weight: 800; letter-spacing: 0.02em; }
+    .sub { font-size: 11px; color: var(--muted); margin-bottom: 16px; line-height: 1.5; }
+    .status-card {
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: var(--panel);
+      padding: 14px 16px;
+      margin-bottom: 16px;
+    }
+    .status-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+    .status-dot {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: var(--muted);
+      flex-shrink: 0;
+    }
+    .status-dot.ok { background: var(--ok); box-shadow: 0 0 10px rgba(34,197,94,0.35); }
+    .status-dot.warn { background: var(--warn); }
+    .status-dot.bad { background: var(--bad); }
+    .status-label { font-size: 12px; font-weight: 700; }
+    .status-detail { font-size: 10px; color: var(--muted); margin-top: 8px; line-height: 1.45; word-break: break-word; }
+    .open-site-btn {
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      padding: 22px 16px;
+      border-radius: 16px;
+      border: 1px solid #2563eb;
+      background: linear-gradient(180deg, #1e40af 0%, #1d4ed8 100%);
+      color: #eff6ff;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      transition: filter 0.15s, transform 0.1s;
+    }
+    .open-site-btn:hover { filter: brightness(1.06); }
+    .open-site-btn:active { transform: scale(0.99); }
+    .open-site-btn svg { width: 40px; height: 40px; opacity: 0.95; }
+    .open-site-btn span { font-size: 11px; font-weight: 600; opacity: 0.85; }
+    .hint { font-size: 10px; color: var(--muted); margin-top: 14px; text-align: center; line-height: 1.5; }
+    nav.shell-nav {
+      position: fixed;
+      left: 0; right: 0; bottom: 0;
+      display: flex;
+      border-top: 1px solid var(--border);
+      background: #101012;
+      padding: 6px 8px 8px;
+      gap: 4px;
+      z-index: 100;
+    }
+    nav.shell-nav button {
+      flex: 1;
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 700;
+      padding: 8px 4px;
+      border-radius: 10px;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+    }
+    nav.shell-nav button.active { color: var(--accent); background: #1a1a1f; }
+    nav.shell-nav button:hover { color: var(--text); }
+    .ico { font-size: 18px; line-height: 1; }
+    table { width: 100%; border-collapse: collapse; font-size: 11px; }
+    th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
+    th { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; }
+    .role { color: #a78bfa; font-size: 10px; }
+    .health-ok { color: var(--ok); }
+    .health-degraded { color: var(--warn); }
+    .health-disabled { color: var(--muted); }
+    .set-section {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--panel);
+      padding: 12px 14px;
+      margin-bottom: 12px;
+    }
+    .set-section h3 {
+      margin: 0 0 10px;
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: #93c5fd;
+    }
+    label { display: block; font-size: 10px; color: var(--muted); margin-bottom: 4px; }
+    input[type="url"], input[type="text"] {
+      width: 100%;
+      padding: 8px 10px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: #0a0a0b;
+      color: var(--text);
+      font-size: 12px;
+    }
+    .btn-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+    .btn {
+      padding: 8px 12px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: #18181b;
+      color: #d4d4d8;
+      font-size: 10px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .btn:hover { background: #222228; }
+    .btn-primary { border-color: #2563eb; background: #1d4ed8; color: #eff6ff; }
+    .mono { font-family: ui-monospace, monospace; font-size: 10px; color: #cbd5e1; word-break: break-all; }
+    .empty { color: var(--muted); font-size: 11px; padding: 16px 0; text-align: center; }
+    h2.section-title {
+      margin: 20px 0 0;
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: #93c5fd;
+    }
+  </style>
+</head>
+<body>
+  <div id="view-home" class="view">
+    <h1>本地伴侣</h1>
+    <p class="sub">保持本窗口运行；下方为连接状态与已注册插件，大按钮可在浏览器中打开网站。</p>
+    <div class="status-card">
+      <div class="status-row">
+        <div style="display:flex;align-items:center;gap:10px;">
+          <span id="statusDot" class="status-dot"></span>
+          <span id="statusLabel" class="status-label">检查中…</span>
+        </div>
+        <span id="portHint" class="mono" style="font-size:10px;color:var(--muted);"></span>
+      </div>
+      <div id="statusDetail" class="status-detail"></div>
+    </div>
+    <button type="button" class="open-site-btn" id="btnOpenSite" title="在默认浏览器中打开下方设置的网站地址">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="10" />
+        <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+      </svg>
+      打开网站
+      <span id="siteUrlPreview">加载中…</span>
+    </button>
+    <p class="hint">网站地址在「设置」中修改。本机 HTTP 仍运行于 127.0.0.1，供网页检测与存储。</p>
+    <h2 class="section-title">插件与服务</h2>
+    <p class="sub" style="margin-top:0;margin-bottom:10px;">来自 <code>/v1/capabilities</code>，随本机进程刷新。</p>
+    <div class="status-card" style="padding:0;overflow:hidden;">
+      <table>
+        <thead>
+          <tr>
+            <th>名称</th>
+            <th>角色</th>
+            <th>健康</th>
+          </tr>
+        </thead>
+        <tbody id="pluginRows"></tbody>
+      </table>
+      <p id="pluginsEmpty" class="empty hidden">无法加载能力清单。请确认本机伴侣进程已启动。</p>
+    </div>
+  </div>
+
+  <div id="view-settings" class="view hidden">
+    <h1>设置</h1>
+    <p class="sub">常用项集中于此；高级调试仍可打开浏览器中的本机管理页。</p>
+    <div class="set-section">
+      <h3>网站</h3>
+      <label for="inpSiteUrl">点击「打开网站」时使用的地址</label>
+      <input type="url" id="inpSiteUrl" placeholder="http://localhost:3000" autocomplete="off" />
+      <div class="btn-row">
+        <button type="button" class="btn btn-primary" id="btnSaveSite">保存</button>
+      </div>
+    </div>
+    <div class="set-section">
+      <h3>本机服务</h3>
+      <p class="sub" style="margin:0 0 8px;">伴侣 HTTP（存储 / 任务 API）</p>
+      <p id="localBase" class="mono">—</p>
+      <div class="btn-row">
+        <button type="button" class="btn" id="btnCopyBase">复制地址</button>
+        <button type="button" class="btn" id="btnOpenMgmt">在浏览器打开本机管理页</button>
+      </div>
+    </div>
+    <div class="set-section" id="secWizard">
+      <h3>配对与安全</h3>
+      <p class="sub" style="margin:0 0 8px;">本机通信密码、允许的网站来源等。</p>
+      <div class="btn-row">
+        <button type="button" class="btn" id="btnWizard">打开配对向导</button>
+      </div>
+    </div>
+  </div>
+
+  <nav class="shell-nav" role="tablist">
+    <button type="button" role="tab" data-view="home" class="active" aria-selected="true">
+      <span class="ico" aria-hidden="true">⌂</span>
+      首页
+    </button>
+    <button type="button" role="tab" data-view="settings" aria-selected="false">
+      <span class="ico" aria-hidden="true">⚙</span>
+      设置
+    </button>
+  </nav>
+
+  <script>
+    (function () {
+      const $ = (id) => document.getElementById(id);
+      const shell = window.companionShell;
+      if (!shell) {
+        document.body.innerHTML = '<p style="padding:24px;color:#f87171;">preload 未加载，请从桌面壳启动。</p>';
+        return;
+      }
+
+      const views = { home: $('view-home'), settings: $('view-settings') };
+
+      document.querySelectorAll('nav.shell-nav button').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const v = btn.getAttribute('data-view');
+          document.querySelectorAll('nav.shell-nav button').forEach((b) => {
+            const on = b.getAttribute('data-view') === v;
+            b.classList.toggle('active', on);
+            b.setAttribute('aria-selected', on ? 'true' : 'false');
+          });
+          Object.keys(views).forEach((k) => views[k].classList.toggle('hidden', k !== v));
+          if (v === 'home') void loadPlugins();
+        });
+      });
+
+      let settingsCache = { siteUrl: 'http://localhost:3000' };
+
+      async function loadSettingsUi() {
+        const s = await shell.loadSettings();
+        if (s && typeof s.siteUrl === 'string' && s.siteUrl.trim()) settingsCache.siteUrl = s.siteUrl.trim();
+        $('inpSiteUrl').value = settingsCache.siteUrl;
+        $('siteUrlPreview').textContent = settingsCache.siteUrl;
+      }
+
+      function setStatusFromTray(sum) {
+        const dot = $('statusDot');
+        const label = $('statusLabel');
+        const detail = $('statusDetail');
+        const portEl = $('portHint');
+        const err = sum && sum.lastError ? String(sum.lastError) : '';
+        const note = sum && sum.note ? String(sum.note) : '—';
+        portEl.textContent = sum && sum.port ? ':' + sum.port : '';
+        detail.textContent = err ? '详情：' + err : '';
+        if (!sum || sum.connected === false) {
+          dot.className = 'status-dot bad';
+          label.textContent = '未连接本机 API';
+          return;
+        }
+        if (err && (err.includes('relay') || err.includes('site') || err.includes('token'))) {
+          dot.className = 'status-dot warn';
+          label.textContent = note;
+          return;
+        }
+        dot.className = 'status-dot ok';
+        label.textContent = note;
+      }
+
+      async function refreshTray() {
+        try {
+          const sum = await shell.traySummary();
+          setStatusFromTray(sum);
+        } catch (e) {
+          setStatusFromTray({ connected: false, note: '状态读取失败', lastError: String(e), port: null });
+        }
+      }
+
+      async function loadPlugins() {
+        const tbody = $('pluginRows');
+        const empty = $('pluginsEmpty');
+        tbody.innerHTML = '';
+        let r;
+        try {
+          r = await shell.api('GET', '/v1/capabilities', null);
+        } catch (e) {
+          empty.textContent =
+            '请求失败：' +
+            (e && e.message ? String(e.message) : String(e)) +
+            '。若已设置本机密码，请确认与向导/网站设置一致。';
+          empty.classList.remove('hidden');
+          return;
+        }
+        if (!r.ok || !r.json || !Array.isArray(r.json.plugins)) {
+          const st = r && r.status != null ? ' HTTP ' + r.status : '';
+          const hint401 =
+            r && r.status === 401
+              ? '（401：本机通信密码与伴侣不一致，请打开「设置」页核对或运行配对向导）'
+              : '';
+          empty.textContent =
+            '无法加载能力清单' +
+            st +
+            '。' +
+            hint401 +
+            (r && r.error ? ' ' + String(r.error) : '') +
+            ' 请确认本机伴侣已启动。';
+          empty.classList.remove('hidden');
+          return;
+        }
+        empty.classList.add('hidden');
+        for (const p of r.json.plugins) {
+          const tr = document.createElement('tr');
+          const h = p.health === 'ok' ? 'health-ok' : p.health === 'degraded' ? 'health-degraded' : 'health-disabled';
+          const sub = [p.id, p.semver].filter(Boolean).join(' · ');
+          tr.innerHTML =
+            '<td><div style="font-weight:700;">' +
+            (p.displayName || p.id || '—') +
+            '</div><div style="font-size:10px;color:#71717a;margin-top:4px;">' +
+            sub.replace(/</g, '&lt;') +
+            '</div></td>' +
+            '<td><span class="role">' +
+            (p.role || '—') +
+            '</span></td>' +
+            '<td class="' +
+            h +
+            '">' +
+            (p.health || '—') +
+            '</td>';
+          tbody.appendChild(tr);
+        }
+      }
+
+      $('btnOpenSite').addEventListener('click', async () => {
+        const url = settingsCache.siteUrl || $('inpSiteUrl').value.trim() || 'http://localhost:3000';
+        await shell.openWebsite(url);
+      });
+
+      $('btnSaveSite').addEventListener('click', async () => {
+        const u = $('inpSiteUrl').value.trim();
+        const res = await shell.saveSettings({ siteUrl: u });
+        if (res && res.ok) {
+          settingsCache.siteUrl = u || settingsCache.siteUrl;
+          $('siteUrlPreview').textContent = settingsCache.siteUrl;
+        }
+      });
+
+      $('btnCopyBase').addEventListener('click', async () => {
+        const sum = await shell.traySummary();
+        const port = sum && sum.port ? sum.port : 18765;
+        shell.copyText('http://127.0.0.1:' + port + '/');
+      });
+
+      $('btnOpenMgmt').addEventListener('click', () => shell.openManagementBrowser());
+
+      const secWiz = $('secWizard');
+      if (shell.platform !== 'win32') secWiz.style.display = 'none';
+      $('btnWizard').addEventListener('click', () => shell.openWizard());
+
+      async function refreshHome() {
+        await refreshTray();
+        await loadPlugins();
+      }
+
+      async function init() {
+        $('statusLabel').textContent = '连接中…';
+        $('siteUrlPreview').textContent = settingsCache.siteUrl;
+        try {
+          await Promise.race([
+            loadSettingsUi(),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('loadSettings 超时')), 8000)),
+          ]);
+        } catch {
+          $('inpSiteUrl').value = settingsCache.siteUrl;
+          $('siteUrlPreview').textContent = settingsCache.siteUrl;
+        }
+        try {
+          const sum = await shell.traySummary();
+          $('localBase').textContent = 'http://127.0.0.1:' + (sum && sum.port ? sum.port : 18765) + '/';
+        } catch {
+          $('localBase').textContent = 'http://127.0.0.1:18765/';
+        }
+        try {
+          await refreshHome();
+        } catch (e) {
+          setStatusFromTray({ connected: false, note: '刷新失败', lastError: String(e && e.message ? e.message : e), port: null });
+        }
+        setInterval(() => {
+          void refreshHome().catch(() => {});
+        }, 3000);
+      }
+
+      void init();
+    })();
+  </script>
+</body>
+</html>

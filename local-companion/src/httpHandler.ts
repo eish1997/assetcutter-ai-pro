@@ -13,7 +13,23 @@ import {
   getRepositoryShallowBytesUsed,
 } from './repositoryVolume.js';
 import { listProjectIds } from './storage/projectPaths.js';
-import { deleteAsset, getAssetMeta, getManifestJson, putAsset, readAssetObjectBytes } from './storage/assetBlob.js';
+import {
+  deleteAsset,
+  getAssetMeta,
+  getManifestJson,
+  putAsset,
+  readAssetObjectBytes,
+  reconcileManifestOrphansFromDisk,
+} from './storage/assetBlob.js';
+import { openProjectFile, saveProjectFile } from './storage/projectFileIO.js';
+import {
+  createWorkspaceProjectInRepo,
+  deleteWorkspaceProjectFromRepo,
+  listWorkspaceTrashProjectsFromRepo,
+  listWorkspaceProjectsFromRepo,
+  renameWorkspaceProjectInRepo,
+  restoreWorkspaceProjectFromTrash,
+} from './storage/workspaceProjects.js';
 import { listRecentJobs, submitJob, getJob, deleteJob, listJobEvents } from './compute/jobsStore.js';
 import { readRequestBodyRaw } from './httpReadBody.js';
 import {
@@ -23,6 +39,7 @@ import {
   parseAllowedOriginEntries,
 } from './accessGate.js';
 import { getPairingSessionSummary, revokePairingSession } from './pairingSession.js';
+import { installHostPluginBundleFromUrl, listInstalledHostPluginBundles } from './hostPluginBundles.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -176,6 +193,48 @@ export async function handleRequest(
       return;
     }
 
+    if (path === '/v1/host-plugins/bundles' && method === 'GET') {
+      const bundles = await listInstalledHostPluginBundles();
+      sendJson(res, 200, { bundles }, origin);
+      return;
+    }
+
+    if (path === '/v1/host-plugins/install-from-url' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json', code: 'BAD_JSON' }, origin);
+          return;
+        }
+      }
+      try {
+        const url = typeof body.url === 'string' ? body.url.trim() : '';
+        const semver = typeof body.semver === 'string' ? body.semver.trim() : '';
+        const sha256 = typeof body.sha256 === 'string' ? body.sha256.trim() : '';
+        const bytes = body.bytes;
+        const label = typeof body.label === 'string' ? body.label : '';
+        if (!url || !semver || !sha256) {
+          sendJson(res, 400, { error: '缺少 url / semver / sha256', code: 'BAD_BODY' }, origin);
+          return;
+        }
+        const result = await installHostPluginBundleFromUrl({
+          url,
+          semver,
+          sha256Expected: sha256,
+          bytesExpected: typeof bytes === 'number' ? bytes : Number(bytes),
+          label,
+        });
+        sendJson(res, 200, { ok: true, manifest: result.manifest, bundlePath: result.bundlePath }, origin);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        sendJson(res, 400, { error: msg, code: 'HOST_BUNDLE_INSTALL_FAILED' }, origin);
+      }
+      return;
+    }
+
     if (path === '/v1/repository/summary' && method === 'GET') {
       sendJson(
         res,
@@ -195,8 +254,134 @@ export async function handleRequest(
       return;
     }
 
+    if (path === '/v1/workspace/projects' && method === 'GET') {
+      sendJson(res, 200, { projects: listWorkspaceProjectsFromRepo() }, origin);
+      return;
+    }
+
+    if (path === '/v1/workspace/trash/projects' && method === 'GET') {
+      sendJson(res, 200, { items: listWorkspaceTrashProjectsFromRepo() }, origin);
+      return;
+    }
+
+    if (path === '/v1/workspace/projects' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let data: unknown;
+      try {
+        data = JSON.parse(raw.length ? raw.toString('utf8') : '{}') as unknown;
+      } catch {
+        sendJson(res, 400, { error: 'invalid_json', code: 'WORKSPACE_PROJECT_INVALID_BODY' }, origin);
+        return;
+      }
+      const body = (data && typeof data === 'object' ? data : {}) as { name?: string };
+      const created = createWorkspaceProjectInRepo(String(body.name || ''));
+      sendJson(res, 201, { ok: true, project: created }, origin);
+      return;
+    }
+
+    const mWorkspaceProject = path.match(/^\/v1\/workspace\/projects\/([^/]+)$/);
+    if (mWorkspaceProject && method === 'PATCH') {
+      const raw = await readRequestBodyRaw(req);
+      let data: unknown;
+      try {
+        data = JSON.parse(raw.length ? raw.toString('utf8') : '{}') as unknown;
+      } catch {
+        sendJson(res, 400, { error: 'invalid_json', code: 'WORKSPACE_PROJECT_INVALID_BODY' }, origin);
+        return;
+      }
+      const body = (data && typeof data === 'object' ? data : {}) as { name?: string };
+      const updated = renameWorkspaceProjectInRepo(decodeURIComponent(mWorkspaceProject[1]!), String(body.name || ''));
+      sendJson(res, 200, { ok: true, project: updated }, origin);
+      return;
+    }
+
+    if (mWorkspaceProject && method === 'DELETE') {
+      const out = deleteWorkspaceProjectFromRepo(decodeURIComponent(mWorkspaceProject[1]!));
+      sendJson(res, 200, out, origin);
+      return;
+    }
+
+    const mWorkspaceTrashRestore = path.match(/^\/v1\/workspace\/trash\/projects\/([^/]+)\/restore$/);
+    if (mWorkspaceTrashRestore && method === 'POST') {
+      const out = restoreWorkspaceProjectFromTrash(decodeURIComponent(mWorkspaceTrashRestore[1]!));
+      sendJson(res, 200, out, origin);
+      return;
+    }
+
     if (path === '/v1/compute/jobs' && method === 'GET') {
       sendJson(res, 200, { jobs: listRecentJobs(30) }, origin);
+      return;
+    }
+
+    if (path === '/v1/projects/save-as' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let data: unknown;
+      try {
+        data = JSON.parse(raw.length ? raw.toString('utf8') : '{}') as unknown;
+      } catch {
+        sendJson(res, 400, { error: 'invalid_json', code: 'PROJECT_FILE_INVALID_BODY' }, origin);
+        return;
+      }
+      const body = (data && typeof data === 'object' ? data : {}) as {
+        filePath?: string;
+        projectId?: string;
+        projectName?: string;
+        bundle?: unknown;
+      };
+      if (!body.bundle || typeof body.bundle !== 'object') {
+        sendJson(res, 400, { error: 'bundle_required', code: 'PROJECT_FILE_BUNDLE_REQUIRED' }, origin);
+        return;
+      }
+      const out = saveProjectFile({
+        filePath: String(body.filePath || ''),
+        ...(body.projectId ? { projectId: String(body.projectId) } : {}),
+        ...(body.projectName ? { projectName: String(body.projectName) } : {}),
+        bundle: body.bundle,
+      });
+      sendJson(
+        res,
+        200,
+        {
+          ok: true,
+          ...out,
+          deprecated: true,
+          message: 'DEPRECATED: use /v1/workspace/projects APIs instead',
+        },
+        origin,
+        {
+          Deprecation: 'true',
+          Sunset: 'Wed, 31 Dec 2026 23:59:59 GMT',
+        }
+      );
+      return;
+    }
+
+    if (path === '/v1/projects/open' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let data: unknown;
+      try {
+        data = JSON.parse(raw.length ? raw.toString('utf8') : '{}') as unknown;
+      } catch {
+        sendJson(res, 400, { error: 'invalid_json', code: 'PROJECT_FILE_INVALID_BODY' }, origin);
+        return;
+      }
+      const body = (data && typeof data === 'object' ? data : {}) as { filePath?: string };
+      const out = openProjectFile({ filePath: String(body.filePath || '') });
+      sendJson(
+        res,
+        200,
+        {
+          ok: true,
+          ...out,
+          deprecated: true,
+          message: 'DEPRECATED: use /v1/workspace/projects APIs instead',
+        },
+        origin,
+        {
+          Deprecation: 'true',
+          Sunset: 'Wed, 31 Dec 2026 23:59:59 GMT',
+        }
+      );
       return;
     }
 
@@ -211,6 +396,18 @@ export async function handleRequest(
           { error: r.error, code: r.code },
           origin,
         );
+      return;
+    }
+
+    const mManifestReconcile = path.match(/^\/v1\/projects\/([^/]+)\/manifest\/reconcile$/);
+    if (mManifestReconcile && method === 'POST') {
+      const out = reconcileManifestOrphansFromDisk(mManifestReconcile[1]!);
+      if ('error' in out) {
+        const status = out.code === 'STORAGE_NOT_FOUND' ? 404 : 400;
+        sendJson(res, status, { error: out.error, code: out.code }, origin);
+      } else {
+        sendJson(res, 200, { ok: true, added: out.added, keys: out.keys }, origin);
+      }
       return;
     }
 
@@ -423,6 +620,27 @@ export async function handleRequest(
       sendJson(res, 413, { error: 'payload_too_large', code: 'PAYLOAD_TOO_LARGE' }, origin);
     } else if (msg === 'invalid_projectId' || msg === 'invalid_key' || msg.startsWith('invalid_')) {
       sendJson(res, 400, { error: msg, code: 'STORAGE_INVALID_ID' }, origin);
+    } else if (
+      msg === 'PROJECT_FILE_PATH_REQUIRED' ||
+      msg === 'PROJECT_FILE_PATH_MUST_BE_ABSOLUTE' ||
+      msg === 'PROJECT_FILE_DIR_NOT_FOUND' ||
+      msg === 'PROJECT_FILE_FORMAT_UNSUPPORTED'
+    ) {
+      sendJson(res, 400, { error: msg.toLowerCase(), code: msg }, origin);
+    } else if (
+      msg === 'WORKSPACE_PROJECT_NAME_REQUIRED' ||
+      msg === 'WORKSPACE_PROJECT_NAME_INVALID' ||
+      msg === 'WORKSPACE_PROJECT_ID_INVALID' ||
+      msg === 'WORKSPACE_PROJECT_ALREADY_EXISTS' ||
+      msg === 'WORKSPACE_TRASH_ID_INVALID'
+    ) {
+      sendJson(res, 400, { error: msg.toLowerCase(), code: msg }, origin);
+    } else if (msg === 'WORKSPACE_PROJECT_NOT_FOUND') {
+      sendJson(res, 404, { error: 'workspace_project_not_found', code: msg }, origin);
+    } else if (msg === 'WORKSPACE_TRASH_NOT_FOUND') {
+      sendJson(res, 404, { error: 'workspace_trash_not_found', code: msg }, origin);
+    } else if (msg === 'PROJECT_FILE_NOT_FOUND') {
+      sendJson(res, 404, { error: 'project_file_not_found', code: msg }, origin);
     } else {
       sendJson(res, 500, { error: 'internal', message: msg }, origin);
     }

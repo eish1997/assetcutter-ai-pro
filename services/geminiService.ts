@@ -322,7 +322,7 @@ type ImageBatchGroupState = {
   firstEnqueueAt: number;
 };
 
-let pendingImageBatchItems: PendingImageBatchItem[] = [];
+const pendingImageBatchItems: PendingImageBatchItem[] = [];
 let imageBatchTimer: ReturnType<typeof setTimeout> | null = null;
 let imageBatchInFlight = false;
 const imageBatchGroupState = new Map<string, ImageBatchGroupState>();
@@ -1390,12 +1390,11 @@ export async function dialogGenerateImage(
 /**
  * 单次请求多图：与 dialogGenerateImage 同一请求体，但解析响应中所有 inlineData 返回 string[]。
  * 当 API 支持单次多图时一次可返回多张；否则通常为 1 张。用于批量出图执行器按批请求。
- * @param numImages 期望张数（≤10），仅作提示；实际返回数以 API 为准
  */
 export async function dialogGenerateImages(
   imageBase64: string | null,
   instruction: string,
-  numImages = 1,
+  _numImages = 1,
   model = 'gemini-2.5-flash-image',
   options?: { aspectRatio?: string; imageSize?: string },
   customSystemPrompt?: string,

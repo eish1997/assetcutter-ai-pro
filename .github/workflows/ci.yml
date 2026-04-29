@@ -1,0 +1,44 @@
+# 与 docs/网站与发布检查清单.md §3 对齐：合并前质量门禁
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: Unit tests (Vitest)
+        run: npm test
+
+      - name: local-companion typecheck
+        working-directory: local-companion
+        run: |
+          npm ci
+          npm run typecheck
+
+      - name: Storage / persistence guards
+        run: npm run guard:storage
+
+      - name: Production build
+        run: npm run build

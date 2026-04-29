@@ -277,6 +277,45 @@ function isUserScopedPrefix(sessionUser, prefixRaw) {
   return !!seg && seg.endsWith(`-${sessionUser.id}`);
 }
 
+function isWorkspaceWorkflowJsonKey(objectKey) {
+  const key = String(objectKey || '').trim().replace(/^\/+/, '');
+  return /\/workspace\/projects\/[^/]+\/workflow\.json$/i.test(key);
+}
+
+async function readS3BodyUtf8WithLimit(body, maxBytes) {
+  if (!body) return '';
+  const chunks = [];
+  let total = 0;
+  for await (const chunk of body) {
+    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    total += buf.length;
+    if (total > maxBytes) throw new Error('工作流文件过大，无法校验能力作用域');
+    chunks.push(buf);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+function assertWorkflowJsonHasNoAccountCapabilities(rawText) {
+  let parsed;
+  try {
+    parsed = JSON.parse(String(rawText || ''));
+  } catch {
+    throw new Error('workflow.json 不是合法 JSON');
+  }
+  if (!parsed || typeof parsed !== 'object') return;
+  const root = parsed;
+  if (Object.prototype.hasOwnProperty.call(root, 'capabilityPresets')) {
+    const e = new Error('项目级 workflow.json 禁止携带 capabilityPresets（能力为账号级资产）');
+    e.code = 'PROJECT_CAPABILITY_SCOPE_VIOLATION';
+    throw e;
+  }
+  if (Object.prototype.hasOwnProperty.call(root, 'capabilitySets')) {
+    const e = new Error('项目级 workflow.json 禁止携带 capabilitySets（能力为账号级资产）');
+    e.code = 'PROJECT_CAPABILITY_SCOPE_VIOLATION';
+    throw e;
+  }
+}
+
 function assertUserObjectKey(sessionUser, objectKey) {
   if (!R2_ENFORCE_USER_SCOPE()) return;
   if (!sessionUser?.id) throw new Error('未登录');
@@ -440,6 +479,31 @@ async function handleRegisterUpload(req, res, sessionUser, s3) {
   } catch {
     sendJson(res, 404, { error: '对象尚未写入或不存在，请稍后重试 register-upload' });
     return;
+  }
+  if (isWorkspaceWorkflowJsonKey(objectKey)) {
+    try {
+      const getResp = await s3.send(
+        new GetObjectCommand({
+          Bucket: bucket,
+          Key: objectKey,
+        })
+      );
+      const text = await readS3BodyUtf8WithLimit(getResp.Body, 5 * 1024 * 1024);
+      assertWorkflowJsonHasNoAccountCapabilities(text);
+    } catch (e) {
+      try {
+        await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: objectKey }));
+      } catch {
+        /* ignore */
+      }
+      const code = e && typeof e === 'object' && 'code' in e ? e.code : undefined;
+      const msg = e instanceof Error ? e.message : String(e);
+      sendJson(res, 400, {
+        error: msg || 'workflow.json 校验失败',
+        code: code || 'WORKFLOW_JSON_VALIDATION_FAILED',
+      });
+      return;
+    }
   }
   if (!isBillableWorkspaceImageKey(sessionUser?.id, objectKey)) {
     sendJson(res, 200, {
@@ -912,4 +976,67 @@ export function runWorkspaceUsageReconcileForUser(userId, options = {}) {
   const bucket = R2_BUCKET();
   if (!s3 || !bucket) throw new Error('R2 未配置');
   return reconcileUserWorkspaceBillableUsage(userId, s3, bucket, options);
+}
+
+/** 本地伴侣安装包 / 宿主插件包等发行物，与按用户作用域的 workspace 对象隔离 */
+export const COMPANION_DISTRIBUTION_PREFIX = 'public/companion-distribution/';
+
+export function assertCompanionDistributionObjectKey(objectKey) {
+  const k = String(objectKey || '').trim().replace(/^\/+/, '');
+  if (!k.startsWith(COMPANION_DISTRIBUTION_PREFIX)) {
+    throw new Error(`对象键须以 ${COMPANION_DISTRIBUTION_PREFIX} 开头`);
+  }
+  if (k.includes('..')) throw new Error('objectKey 非法');
+  return k;
+}
+
+/**
+ * 管理端直传 R2（不走用户命名空间）。仅用于已登录管理员预签名 PUT。
+ */
+export async function presignPutCompanionDistribution({ objectKey, contentType, expiresIn }) {
+  assertR2Config();
+  const s3 = getS3();
+  if (!s3) throw new Error('R2 未配置');
+  const k = assertCompanionDistributionObjectKey(objectKey);
+  const ct = String(contentType || 'application/octet-stream').trim() || 'application/octet-stream';
+  const exp = Math.min(Math.max(60, Math.floor(Number(expiresIn) || 600)), 3600);
+  const command = new PutObjectCommand({
+    Bucket: R2_BUCKET(),
+    Key: k,
+    ContentType: ct,
+  });
+  const uploadUrl = await getSignedUrl(s3, command, { expiresIn: exp });
+  return { objectKey: k, contentType: ct, expiresIn: exp, uploadUrl };
+}
+
+/**
+ * 任意键预签名 GET（仅服务端在核对 companion-artifacts 白名单后调用，勿对前端暴露任意 key）。
+ */
+export async function presignGetByKey(objectKey, expiresIn = 600) {
+  assertR2Config();
+  const s3 = getS3();
+  if (!s3) throw new Error('R2 未配置');
+  const k = safeObjectKey(objectKey);
+  const exp = Math.min(Math.max(60, Math.floor(Number(expiresIn) || 600)), 3600);
+  const command = new GetObjectCommand({
+    Bucket: R2_BUCKET(),
+    Key: k,
+  });
+  const downloadUrl = await getSignedUrl(s3, command, { expiresIn: exp });
+  return { objectKey: k, expiresIn: exp, downloadUrl };
+}
+
+/** 管理端删除发行记录时同步删除对象（与 companion-artifacts 元数据一致） */
+export async function deleteR2ObjectByKey(objectKey) {
+  assertR2Config();
+  const s3 = getS3();
+  if (!s3) throw new Error('R2 未配置');
+  const k = safeObjectKey(objectKey);
+  await s3.send(
+    new DeleteObjectCommand({
+      Bucket: R2_BUCKET(),
+      Key: k,
+    }),
+  );
+  return { ok: true, objectKey: k };
 }

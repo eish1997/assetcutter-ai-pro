@@ -197,7 +197,7 @@ function normalizeTagCandidate(raw: string): string | null {
     'pipeline',
   ]);
   if (!okPrefix.has(prefix)) return null;
-  const rhs = rest.replace(/[^a-z0-9_\-]/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');
+  const rhs = rest.replace(/[^a-z0-9_-]/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');
   if (!rhs) return null;
   return `${prefix}:${rhs}`;
 }
@@ -212,7 +212,7 @@ function normalizeSingleTagToChinese(raw: string): string | null {
   const enPrefix = PREFIX_TO_EN[p] || p;
   const zhPrefix = PREFIX_TO_ZH[enPrefix];
   if (!zhPrefix) return null;
-  const normalizedValue = r.replace(/[^a-z0-9_\-\u4e00-\u9fa5]/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');
+  const normalizedValue = r.replace(/[^a-z0-9_\u4e00-\u9fa5-]/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');
   if (!normalizedValue) return null;
   const zhValue = VALUE_TO_ZH[normalizedValue] || normalizedValue;
   return `${zhPrefix}:${zhValue}`;

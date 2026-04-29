@@ -496,7 +496,7 @@ async function toapisImageGenerateContent(args: {
     }
   }
   const userText = textPieces.join('\n').trim();
-  let prompt = clampToapisImagePrompt(systemInstruction, userText, TOAPIS_IMAGE_PROMPT_MAX_CHARS);
+  const prompt = clampToapisImagePrompt(systemInstruction, userText, TOAPIS_IMAGE_PROMPT_MAX_CHARS);
   if (!prompt) throw new Error('生图提示词为空');
 
   /**

@@ -46,9 +46,11 @@ export function useDialogWorkspace(persistUserId: string | null = null) {
   const sessionsRef = useRef(dialogSessions);
   const activeIdRef = useRef(dialogActiveSessionId);
   const tempLibRef = useRef(dialogTempLibrary);
-  sessionsRef.current = dialogSessions;
-  activeIdRef.current = dialogActiveSessionId;
-  tempLibRef.current = dialogTempLibrary;
+  useEffect(() => {
+    sessionsRef.current = dialogSessions;
+    activeIdRef.current = dialogActiveSessionId;
+    tempLibRef.current = dialogTempLibrary;
+  }, [dialogSessions, dialogActiveSessionId, dialogTempLibrary]);
 
   const dialogActiveSessionIdResolved = dialogActiveSessionId || dialogSessions[0]?.id || '';
   const activeSession = useMemo(

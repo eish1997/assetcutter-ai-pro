@@ -5,6 +5,7 @@ import { listProjectIds } from './storage/projectPaths.js';
 import { getAccessPublicSummary } from './accessGate.js';
 import { getSeamRepairApiUrl, SEAM_ADAPTER_ID } from './compute/seamRepairAdapter.js';
 import { getPairingSessionSummary } from './pairingSession.js';
+import { countHostPluginBundlesSync, listHostBundlePluginSummariesSync } from './hostPluginBundles.js';
 
 export const COMPANION_SEMVER = '0.1.0';
 
@@ -59,7 +60,7 @@ const PLUGINS: CompanionPluginDescriptor[] = [
 export function listPlugins(): CompanionPluginDescriptor[] {
   const repo = getRepositorySummary();
   const shallow = getRepositoryShallowBytesUsed();
-  return PLUGINS.map((p) => {
+  const base = PLUGINS.map((p) => {
     if (p.id === 'plugin.compute.local') {
       const has = listRecentJobs(1).length > 0;
       return {
@@ -88,7 +89,33 @@ export function listPlugins(): CompanionPluginDescriptor[] {
       ...p,
       detail: `卷根: ${repo.rootAbsolutePath}；projects: ${nProj}；卷根浅层约 ${bytes}`,
     };
+  }) as CompanionPluginDescriptor[];
+
+  const hostSummaries = listHostBundlePluginSummariesSync();
+  const hostExtras: CompanionPluginDescriptor[] = hostSummaries.map((h) => {
+    const baseDetail =
+      h.bundleFormat === 'zip' && h.extractedRelativeDir
+        ? `host-bundles/${h.dirName}/${h.extractedRelativeDir}（已解压）`
+        : `host-bundles/${h.dirName}/bundle.bin`;
+    const runHint = h.runSpec
+      ? h.runSpec.exec || h.runSpec.probe
+        ? '；run.json 已含 exec/probe'
+        : '；run.json 已解析'
+      : '';
+    const detail = `${baseDetail}${runHint}`;
+    return {
+      id: `plugin.host_bundle.${h.dirName}`,
+      displayName: h.label.trim() ? h.label : `宿主插件包 ${h.semver}`,
+      role: 'other' as const,
+      semver: h.semver,
+      enabled: true,
+      description: '主站发行的 host_plugin_bundle；计算接入见后续 Adapter。',
+      health: 'ok' as const,
+      detail,
+    };
   });
+
+  return [...base, ...hostExtras];
 }
 
 /** 与主站探测、规范对齐的聚合能力（字段可逐步与 A-Driver protocol 对齐） */
@@ -116,7 +143,8 @@ export function buildCapabilitiesPayload() {
       getJob: 'GET /v1/compute/jobs/:jobId',
       listJobs: 'GET /v1/compute/jobs',
       cancelJob: 'DELETE /v1/compute/jobs/:jobId',
-      note: 'stub.ping 同步完成；seam_repair 调用 WebSeamRepair（见 COMPANION_SEAM_REPAIR_URL）。',
+      note:
+        'stub.ping 同步完成；seam_repair 调用 WebSeamRepair（见 COMPANION_SEAM_REPAIR_URL）；host_bundle.exec/probe 按已安装包 run.json 起子进程（COMPANION_HOST_BUNDLE_EXEC_TIMEOUT_MS）。',
       seamRepair: {
         adapterId: SEAM_ADAPTER_ID,
         repairEndpoint: getSeamRepairApiUrl(),
@@ -134,6 +162,7 @@ export function buildCapabilitiesPayload() {
       projectCount: listProjectIds().length,
       listProjects: 'GET /v1/projects',
       getManifest: 'GET /v1/projects/:projectId/manifest',
+      reconcileManifest: 'POST /v1/projects/:projectId/manifest/reconcile',
       putAsset: 'PUT /v1/projects/:projectId/assets/:key',
       getAsset: 'GET /v1/projects/:projectId/assets/:key',
       getMeta: 'GET /v1/projects/:projectId/assets/:key/meta',
@@ -176,6 +205,8 @@ export type RuntimeStatusV1 = {
   };
   access: ReturnType<typeof getAccessPublicSummary>;
   uptimeSec: number;
+  /** 已落盘的宿主插件包（host-bundles 各子目录 manifest.json）数量 */
+  hostPluginBundles?: { installedCount: number };
 };
 
 const startedAt = Date.now();
@@ -237,5 +268,6 @@ export function buildRuntimeStatus(httpPort: number): RuntimeStatusV1 {
     siteAuth: buildSiteAuthSummary(relay),
     access: getAccessPublicSummary(),
     uptimeSec: Math.floor((Date.now() - startedAt) / 1000),
+    hostPluginBundles: { installedCount: countHostPluginBundlesSync() },
   };
 }

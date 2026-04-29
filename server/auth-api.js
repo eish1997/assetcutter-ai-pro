@@ -1,5 +1,8 @@
 import http from 'http';
 import crypto from 'crypto';
+import fs from 'fs/promises';
+import path from 'path';
+import { ProxyAgent, setGlobalDispatcher } from 'undici';
 import {
   createAuditLog,
   createUser,
@@ -16,7 +19,25 @@ import {
   verifyPassword,
   getWorkspaceQuotaBytesForUser,
 } from './auth-store.js';
-import { handleR2StorageRequest, isR2Configured, publishCapabilityPresetToR2Catalog, runWorkspaceUsageReconcileForUser } from './r2-storage-handlers.js';
+import {
+  handleR2StorageRequest,
+  isR2Configured,
+  presignGetByKey,
+  presignPutCompanionDistribution,
+  publishCapabilityPresetToR2Catalog,
+  runWorkspaceUsageReconcileForUser,
+  deleteR2ObjectByKey,
+  COMPANION_DISTRIBUTION_PREFIX,
+} from './r2-storage-handlers.js';
+import {
+  addCompanionArtifact,
+  deleteCompanionArtifact,
+  getCompanionArtifactById,
+  listCompanionArtifacts,
+  pickLatestArtifact,
+  toPublicSummary,
+} from './companion-artifacts-store.js';
+import { buildElectronAppUpdateYaml } from './companion-electron-feed.js';
 import { getWorkspaceUsedBytes } from './workspace-storage-usage.js';
 import {
   API_JSON_BODY_MAX_BYTES,
@@ -40,6 +61,18 @@ const LOGIN_RATE_LIMIT_MAX = Number(process.env.AUTH_LOGIN_RATE_LIMIT_MAX || 10)
 const REGISTER_RATE_LIMIT_MAX = Number(process.env.AUTH_REGISTER_RATE_LIMIT_MAX || 20);
 const CSRF_COOKIE_NAME = 'ac_csrf';
 const BRIDGE_REQUIRE_AUTH = String(process.env.BRIDGE_REQUIRE_AUTH || 'true').trim().toLowerCase() !== 'false';
+const TRIPO_TIMEOUT_MS = Number(process.env.TRIPO_TIMEOUT_MS || 45_000);
+const TRIPO_PROXY = String(process.env.TRIPO_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY || '').trim();
+const CLIENT_DEBUG_LOG_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const CLIENT_DEBUG_LOG_DIR = path.resolve(process.cwd(), '.data', 'debug');
+const CLIENT_DEBUG_LOG_FILE = path.join(CLIENT_DEBUG_LOG_DIR, 'client-runtime.ndjson');
+if (TRIPO_PROXY) {
+  try {
+    setGlobalDispatcher(new ProxyAgent(TRIPO_PROXY));
+  } catch (e) {
+    console.warn('[auth-api] tripo proxy init failed:', e instanceof Error ? e.message : String(e));
+  }
+}
 
 const allowedOrigins = AUTH_ALLOWED_ORIGINS
   ? new Set(
@@ -70,6 +103,96 @@ function json(res, status, data) {
   const body = JSON.stringify(data);
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': Buffer.byteLength(body, 'utf8') });
   res.end(body);
+}
+
+function normalizeTrimmed(input) {
+  return String(input == null ? '' : input).trim();
+}
+
+async function readJsonSafe(resp) {
+  const text = await resp.text();
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { raw: text };
+  }
+}
+
+function parseDataUrlImage(input) {
+  const raw = String(input || '').trim();
+  const m = raw.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,([a-zA-Z0-9+/=\r\n]+)$/);
+  if (!m) return null;
+  const mime = m[1].toLowerCase();
+  const base64 = m[2].replace(/\s+/g, '');
+  if (!base64) return null;
+  try {
+    const bytes = Buffer.from(base64, 'base64');
+    if (!bytes.length) return null;
+    const ext = mime.includes('png') ? 'png' : mime.includes('webp') ? 'webp' : mime.includes('gif') ? 'gif' : 'jpg';
+    return { mime, bytes, filename: `upload.${ext}` };
+  } catch {
+    return null;
+  }
+}
+
+function formatFetchError(error) {
+  const e = error;
+  const msg = e instanceof Error ? e.message : String(e);
+  const cause = e && typeof e === 'object' ? e.cause : null;
+  const causeMsg = cause && typeof cause === 'object' && 'message' in cause ? String(cause.message || '') : '';
+  const causeCode = cause && typeof cause === 'object' && 'code' in cause ? String(cause.code || '') : '';
+  return {
+    message: [msg, causeMsg && causeMsg !== msg ? `cause=${causeMsg}` : '', causeCode ? `code=${causeCode}` : '']
+      .filter(Boolean)
+      .join(' '),
+    code: causeCode || undefined,
+  };
+}
+
+function sanitizeLogText(value, maxLen) {
+  let s = String(value || '');
+  s = s.replace(/tsk_[a-zA-Z0-9_-]{8,}/g, '[REDACTED_TRIPO_KEY]');
+  s = s.replace(/AKID[a-zA-Z0-9]{8,}/g, '[REDACTED_TENCENT_ID]');
+  s = s.replace(/AIza[0-9A-Za-z\-_]{20,}/g, '[REDACTED_GEMINI_KEY]');
+  s = s.replace(/(Bearer\s+)[^\s"']+/gi, '$1[REDACTED_TOKEN]');
+  s = s.replace(/data:image\/[^;]+;base64,[a-zA-Z0-9+/=]{64,}/g, '[REDACTED_IMAGE_BASE64]');
+  if (Number.isFinite(maxLen) && maxLen > 0 && s.length > maxLen) {
+    s = `${s.slice(0, maxLen)}…(truncated)`;
+  }
+  return s;
+}
+
+async function appendClientDebugLog(body) {
+  const now = Date.now();
+  await fs.mkdir(CLIENT_DEBUG_LOG_DIR, { recursive: true });
+  const entry = {
+    receivedAt: now,
+    time: Number.isFinite(body?.time) ? Math.floor(Number(body.time)) : now,
+    module: sanitizeLogText(body?.module || '', 120),
+    level: sanitizeLogText(body?.level || 'info', 10),
+    message: sanitizeLogText(body?.message || '', 4000),
+    detail: body?.detail ? sanitizeLogText(body.detail, 8000) : undefined,
+  };
+  await fs.appendFile(CLIENT_DEBUG_LOG_FILE, `${JSON.stringify(entry)}\n`, 'utf8');
+  try {
+    const raw = await fs.readFile(CLIENT_DEBUG_LOG_FILE, 'utf8');
+    const lines = raw.split('\n').filter(Boolean);
+    const cutoff = now - CLIENT_DEBUG_LOG_RETENTION_MS;
+    const keptByTime = lines.filter((line) => {
+      try {
+        const parsed = JSON.parse(line);
+        const ts = Number(parsed?.time || parsed?.receivedAt || 0);
+        return Number.isFinite(ts) ? ts >= cutoff : false;
+      } catch {
+        return false;
+      }
+    });
+    const kept = keptByTime.slice(-5000);
+    await fs.writeFile(CLIENT_DEBUG_LOG_FILE, `${kept.join('\n')}${kept.length ? '\n' : ''}`, 'utf8');
+  } catch {
+    /* ignore prune error */
+  }
 }
 
 function parseCookie(req) {
@@ -140,7 +263,7 @@ function readCsrfFromCookie(req) {
   return parseCookie(req)[CSRF_COOKIE_NAME] || '';
 }
 
-function issueCsrfCookie(res) {
+function issueCsrfCookie(_res) {
   const token = crypto.randomBytes(18).toString('base64url');
   return { token, cookie: serializeCsrfCookie(token) };
 }
@@ -167,6 +290,8 @@ function assertCsrf(req, res) {
   /** 跨域 SPA（Vercel）无法读取 auth 域名上的 ac_csrf，无法带 X-CSRF-Token；R2 / 管理接口依赖 assertWriteOrigin 白名单 Origin + 会话 Cookie */
   const pathOnly = (req.url || '/').split('?')[0];
   if (pathOnly.startsWith('/api/r2')) return true;
+  if (pathOnly.startsWith('/api/tripo')) return true;
+  if (pathOnly.startsWith('/api/debug/client-log')) return true;
   if (pathOnly.startsWith('/api/admin')) {
     const origin = String(req.headers.origin || '');
     if (origin && isAllowedOrigin(origin)) return true;
@@ -470,6 +595,113 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (path === '/api/companion-artifacts/catalog' && req.method === 'GET') {
+      const rows = await listCompanionArtifacts();
+      json(res, 200, {
+        artifacts: rows.map((r) => toPublicSummary(r)).filter(Boolean),
+      });
+      return;
+    }
+
+    if (path === '/api/companion-artifacts/latest' && req.method === 'GET') {
+      let u;
+      try {
+        u = new URL(req.url || '/', 'http://localhost');
+      } catch {
+        u = new URL('/', 'http://localhost');
+      }
+      const kind = u.searchParams.get('kind') || 'desktop_shell';
+      const platform = u.searchParams.get('platform') || 'win32';
+      const channel = u.searchParams.get('channel') || 'stable';
+      const latest = await pickLatestArtifact({ kind, platform, channel });
+      json(res, 200, { latest: toPublicSummary(latest) });
+      return;
+    }
+
+    /** electron-updater generic：与 COMPANION_DIST_PUBLIC_HTTP_BASE + R2 公网读 URL 对齐；登记时可填 sha512（hex） */
+    if (path === '/api/companion-artifacts/electron-app-update.yml' && req.method === 'GET') {
+      let u;
+      try {
+        u = new URL(req.url || '/', 'http://localhost');
+      } catch {
+        u = new URL('/', 'http://localhost');
+      }
+      const kind = u.searchParams.get('kind') || 'desktop_shell';
+      const platform = u.searchParams.get('platform') || 'win32';
+      const channel = u.searchParams.get('channel') || 'stable';
+      const publicBase = String(process.env.COMPANION_DIST_PUBLIC_HTTP_BASE || '').trim();
+      if (!publicBase) {
+        res.statusCode = 503;
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.end(
+          '# error: 未配置 COMPANION_DIST_PUBLIC_HTTP_BASE（公网可访问的文件 URL 前缀，无尾部斜杠）\n',
+        );
+        return;
+      }
+      const latest = await pickLatestArtifact({ kind, platform, channel });
+      if (!latest) {
+        res.statusCode = 404;
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.end('# error: 无匹配的发行记录\n');
+        return;
+      }
+      try {
+        const yaml = buildElectronAppUpdateYaml(latest, publicBase);
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'text/yaml; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-store');
+        res.end(yaml);
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        res.statusCode = 500;
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.end(`# error: ${message}\n`);
+      }
+      return;
+    }
+
+    if (path === '/api/companion-artifacts/resolve-download' && req.method === 'POST') {
+      const user = await requireAuth(req, res);
+      if (!user) return;
+      if (!isR2Configured()) {
+        json(res, 503, { error: 'R2 未配置' });
+        return;
+      }
+      const body = await readBody(req);
+      const id = normalizeTrimmed(body.id);
+      if (!id) {
+        json(res, 400, { error: '缺少 id' });
+        return;
+      }
+      const rec = await getCompanionArtifactById(id);
+      if (!rec) {
+        json(res, 404, { error: '记录不存在' });
+        return;
+      }
+      try {
+        const { downloadUrl, expiresIn } = await presignGetByKey(rec.r2Key, 900);
+        await createAuditLog({
+          actorUserId: user.id,
+          actorIdentifier: user.username,
+          action: 'companion_artifact_download',
+          meta: { artifactId: id, kind: rec.kind, semver: rec.semver },
+          ip: getClientIp(req),
+          userAgent: req.headers['user-agent'],
+        });
+        json(res, 200, {
+          downloadUrl,
+          expiresIn,
+          fileName: rec.fileName,
+          semver: rec.semver,
+          kind: rec.kind,
+        });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        json(res, 502, { error: message });
+      }
+      return;
+    }
+
     if (path === '/api/admin/me' && req.method === 'GET') {
       const user = await requireAdmin(req, res);
       if (!user) return;
@@ -492,6 +724,123 @@ const server = http.createServer(async (req, res) => {
       if (!user) return;
       const limit = Number(((req.url || '').split('?')[1] || '').match(/(?:^|&)limit=(\d+)/)?.[1] || '200');
       json(res, 200, { logs: await listAuditLogs(limit) });
+      return;
+    }
+
+    if (path === '/api/admin/companion-artifacts' && req.method === 'GET') {
+      const user = await requireAdmin(req, res);
+      if (!user) return;
+      json(res, 200, { artifacts: await listCompanionArtifacts() });
+      return;
+    }
+
+    if (path === '/api/admin/companion-artifacts/upload-url' && req.method === 'POST') {
+      const user = await requireAdmin(req, res);
+      if (!user) return;
+      if (!isR2Configured()) {
+        json(res, 503, { error: 'R2 未配置' });
+        return;
+      }
+      const body = await readBody(req);
+      const fileName = normalizeTrimmed(body.fileName) || 'artifact.bin';
+      const safeBase = fileName.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 120) || 'artifact.bin';
+      const objectKey = `${COMPANION_DISTRIBUTION_PREFIX}${Date.now()}_${safeBase}`;
+      const contentType = normalizeTrimmed(body.contentType) || 'application/octet-stream';
+      try {
+        const out = await presignPutCompanionDistribution({ objectKey, contentType, expiresIn: body.expiresIn });
+        await createAuditLog({
+          actorUserId: user.id,
+          actorIdentifier: user.username,
+          action: 'admin.companion_artifact_presign_put',
+          meta: { objectKey: out.objectKey },
+          ip: getClientIp(req),
+          userAgent: req.headers['user-agent'],
+        });
+        json(res, 200, out);
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        json(res, 400, { error: message });
+      }
+      return;
+    }
+
+    if (path === '/api/admin/companion-artifacts' && req.method === 'POST') {
+      const user = await requireAdmin(req, res);
+      if (!user) return;
+      if (!isR2Configured()) {
+        json(res, 503, { error: 'R2 未配置' });
+        return;
+      }
+      const body = await readBody(req);
+      try {
+        const rec = await addCompanionArtifact({
+          kind: body.kind,
+          semver: body.semver,
+          channel: body.channel,
+          platform: body.platform,
+          fileName: body.fileName,
+          r2Key: body.r2Key,
+          sha256: body.sha256,
+          sha512: body.sha512,
+          bytes: body.bytes,
+          notes: body.notes,
+          label: body.label,
+          createdByUserId: user.id,
+        });
+        await createAuditLog({
+          actorUserId: user.id,
+          actorIdentifier: user.username,
+          action: 'admin.companion_artifact_register',
+          meta: { id: rec.id, kind: rec.kind, semver: rec.semver, r2Key: rec.r2Key },
+          ip: getClientIp(req),
+          userAgent: req.headers['user-agent'],
+        });
+        json(res, 200, { artifact: rec });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        json(res, 400, { error: message });
+      }
+      return;
+    }
+
+    if (path.startsWith('/api/admin/companion-artifacts/') && req.method === 'DELETE') {
+      const user = await requireAdmin(req, res);
+      if (!user) return;
+      const rest = path.slice('/api/admin/companion-artifacts/'.length).split('/')[0];
+      const id = decodeURIComponent(rest || '');
+      if (!id) {
+        json(res, 400, { error: '无效 id' });
+        return;
+      }
+      try {
+        const rec = await getCompanionArtifactById(id);
+        if (!rec) {
+          json(res, 404, { error: '记录不存在' });
+          return;
+        }
+        if (isR2Configured() && rec.r2Key) {
+          try {
+            await deleteR2ObjectByKey(rec.r2Key);
+          } catch (e) {
+            const message = e instanceof Error ? e.message : String(e);
+            json(res, 502, { error: `R2 对象删除失败：${message}` });
+            return;
+          }
+        }
+        await deleteCompanionArtifact(id);
+        await createAuditLog({
+          actorUserId: user.id,
+          actorIdentifier: user.username,
+          action: 'admin.companion_artifact_delete',
+          meta: { id, r2Key: rec.r2Key },
+          ip: getClientIp(req),
+          userAgent: req.headers['user-agent'],
+        });
+        json(res, 200, { ok: true });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        json(res, 400, { error: message });
+      }
       return;
     }
 
@@ -626,6 +975,179 @@ const server = http.createServer(async (req, res) => {
           };
         },
       });
+      return;
+    }
+
+    if (path === '/api/tripo/task' && req.method === 'POST') {
+      const body = await readBody(req);
+      const apiKey = normalizeTrimmed(body.apiKey);
+      if (!apiKey) {
+        json(res, 400, { error: '缺少 apiKey' });
+        return;
+      }
+      const upstreamBody = { ...body };
+      delete upstreamBody.apiKey;
+      try {
+        const upstreamResp = await fetch('https://api.tripo3d.ai/v2/openapi/task', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify(upstreamBody),
+          signal: AbortSignal.timeout(TRIPO_TIMEOUT_MS),
+        });
+        const data = await readJsonSafe(upstreamResp);
+        json(res, upstreamResp.status, data);
+      } catch (e) {
+        const detail = formatFetchError(e);
+        json(res, 502, {
+          error: `Tripo upstream fetch failed: ${detail.message}`,
+          hint: TRIPO_PROXY
+            ? '已启用 TRIPO_PROXY，请检查代理是否可用'
+            : '当前未配置 TRIPO_PROXY/HTTPS_PROXY；若网络受限请在 .env.local 配置 TRIPO_PROXY=http://127.0.0.1:7890',
+          ...(detail.code ? { code: detail.code } : {}),
+        });
+      }
+      return;
+    }
+
+    if (path === '/api/tripo/upload' && req.method === 'POST') {
+      const body = await readBody(req);
+      const apiKey = normalizeTrimmed(body.apiKey);
+      if (!apiKey) {
+        json(res, 400, { error: '缺少 apiKey' });
+        return;
+      }
+      const parsed = parseDataUrlImage(body.imageBase64DataUrl);
+      if (!parsed) {
+        json(res, 400, { error: '缺少或无效的 imageBase64DataUrl' });
+        return;
+      }
+      try {
+        const form = new FormData();
+        form.append('file', new Blob([parsed.bytes], { type: parsed.mime }), parsed.filename);
+        const upstreamResp = await fetch('https://api.tripo3d.ai/v2/openapi/upload/sts', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: form,
+          signal: AbortSignal.timeout(TRIPO_TIMEOUT_MS),
+        });
+        const data = await readJsonSafe(upstreamResp);
+        json(res, upstreamResp.status, data);
+      } catch (e) {
+        const detail = formatFetchError(e);
+        json(res, 502, {
+          error: `Tripo upload fetch failed: ${detail.message}`,
+          hint: TRIPO_PROXY
+            ? '已启用 TRIPO_PROXY，请检查代理是否可用'
+            : '当前未配置 TRIPO_PROXY/HTTPS_PROXY；若网络受限请在 .env.local 配置 TRIPO_PROXY=http://127.0.0.1:7890',
+          ...(detail.code ? { code: detail.code } : {}),
+        });
+      }
+      return;
+    }
+
+    if (path === '/api/tripo/fetch-file' && req.method === 'POST') {
+      const body = await readBody(req);
+      const apiKey = normalizeTrimmed(body.apiKey);
+      const fileUrl = normalizeTrimmed(body.url);
+      if (!apiKey) {
+        json(res, 400, { error: '缺少 apiKey' });
+        return;
+      }
+      if (!fileUrl) {
+        json(res, 400, { error: '缺少 url' });
+        return;
+      }
+      try {
+        let parsed;
+        try {
+          parsed = new URL(fileUrl);
+        } catch {
+          json(res, 400, { error: 'url 非法' });
+          return;
+        }
+        const proto = String(parsed.protocol || '').toLowerCase();
+        if (proto !== 'https:' && proto !== 'http:') {
+          json(res, 400, { error: '仅支持 http/https url' });
+          return;
+        }
+        const upstreamResp = await fetch(fileUrl, {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+          },
+          signal: AbortSignal.timeout(TRIPO_TIMEOUT_MS),
+        });
+        if (!upstreamResp.ok) {
+          const data = await readJsonSafe(upstreamResp);
+          json(res, upstreamResp.status, data);
+          return;
+        }
+        const arrayBuffer = await upstreamResp.arrayBuffer();
+        const buf = Buffer.from(arrayBuffer);
+        const contentType = normalizeTrimmed(upstreamResp.headers.get('content-type') || '') || 'application/octet-stream';
+        const contentLength = String(buf.byteLength);
+        res.writeHead(200, {
+          'Content-Type': contentType,
+          'Content-Length': contentLength,
+          'Cache-Control': 'no-store',
+        });
+        res.end(buf);
+      } catch (e) {
+        const detail = formatFetchError(e);
+        json(res, 502, {
+          error: `Tripo file fetch failed: ${detail.message}`,
+          hint: TRIPO_PROXY
+            ? '已启用 TRIPO_PROXY，请检查代理是否可用'
+            : '当前未配置 TRIPO_PROXY/HTTPS_PROXY；若网络受限请在 .env.local 配置 TRIPO_PROXY=http://127.0.0.1:7890',
+          ...(detail.code ? { code: detail.code } : {}),
+        });
+      }
+      return;
+    }
+
+    if (path === '/api/debug/client-log' && req.method === 'POST') {
+      const body = await readBody(req);
+      await appendClientDebugLog(body);
+      json(res, 200, { ok: true });
+      return;
+    }
+
+    if (path.startsWith('/api/tripo/task/') && req.method === 'GET') {
+      const taskId = decodeURIComponent(path.slice('/api/tripo/task/'.length)).trim();
+      if (!taskId) {
+        json(res, 400, { error: '缺少 taskId' });
+        return;
+      }
+      const reqUrl = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+      const apiKey = normalizeTrimmed(reqUrl.searchParams.get('apiKey') || '');
+      if (!apiKey) {
+        json(res, 400, { error: '缺少 apiKey' });
+        return;
+      }
+      try {
+        const upstreamResp = await fetch(`https://api.tripo3d.ai/v2/openapi/task/${encodeURIComponent(taskId)}`, {
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+          },
+          signal: AbortSignal.timeout(TRIPO_TIMEOUT_MS),
+        });
+        const data = await readJsonSafe(upstreamResp);
+        json(res, upstreamResp.status, data);
+      } catch (e) {
+        const detail = formatFetchError(e);
+        json(res, 502, {
+          error: `Tripo upstream fetch failed: ${detail.message}`,
+          hint: TRIPO_PROXY
+            ? '已启用 TRIPO_PROXY，请检查代理是否可用'
+            : '当前未配置 TRIPO_PROXY/HTTPS_PROXY；若网络受限请在 .env.local 配置 TRIPO_PROXY=http://127.0.0.1:7890',
+          ...(detail.code ? { code: detail.code } : {}),
+        });
+      }
       return;
     }
 

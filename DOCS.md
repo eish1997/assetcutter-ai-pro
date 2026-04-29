@@ -17,6 +17,10 @@
 
 技术栈：**React 19** + **Vite 6** + **TypeScript** + **@google/genai**，样式为 Tailwind + 内联 CSS。
 
+**发布与 CI：** 网站/部署范围、环境变量与手测清单见 [`docs/网站与发布检查清单.md`](docs/网站与发布检查清单.md)；合并默认分支前以 **GitHub Actions `CI`**（typecheck、lint、**Vitest**、`local-companion` typecheck、`guard:storage`、build）通过为准。单元测试范围见根目录 **`vitest.config.ts`**（**`tests/**/*.test.{ts,tsx}`**，含组件交互测试）。
+
+**本地开发类型检查：** 仓库根执行 `npx tsc --noEmit`；根 `tsconfig.json` 已排除 `示例项目/`，避免示例子工程缺依赖影响主仓库校验。本地伴侣存储 API、manifest 扫盘补登记与主站调用顺序见 [`docs/本地伴侣-本地程序开发.md`](docs/本地伴侣-本地程序开发.md) **§3.1** 与 [`docs/本地与云存储分层开发方案.md`](docs/本地与云存储分层开发方案.md) M2 补充。**宿主插件包**（`run.json`、ZIP 解压、**`host_bundle.probe/exec`**）与主站 **`companionClient/hostPlugins`**、设置页联调见 [`docs/本地伴侣-插件与发行.md`](docs/本地伴侣-插件与发行.md) **§4** 及 [`docs/本地伴侣-本地程序开发.md`](docs/本地伴侣-本地程序开发.md) **§3～§4.1**。
+
 ---
 
 ## 二、功能模块总览

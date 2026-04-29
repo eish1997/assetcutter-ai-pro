@@ -41,7 +41,6 @@ export function useWorkflowWorkspacePanes({
   const [spacePanEnabled, setSpacePanEnabled] = useState(false);
   const [spacePanDragging, setSpacePanDragging] = useState(false);
   const suppressClickAfterPanRef = useRef(false);
-  const wheelLockUntilRef = useRef(0);
 
   const setWorkspacePaneRaf = useCallback((next: number) => {
     const clamped = Math.max(0, Math.min(3, next));

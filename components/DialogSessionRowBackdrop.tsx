@@ -29,7 +29,7 @@ export function DialogSessionRowBackdrop({
     return () => {
       cancelled = true;
     };
-  }, [version.resultImageBase64, version.resultImageObjectKey]);
+  }, [version]);
 
   if (!dialogVersionHasRenderableImage(version)) return null;
 

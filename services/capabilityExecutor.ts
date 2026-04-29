@@ -18,6 +18,11 @@ import {
   resolveUpstreamImageModelId,
   type GeminiImageBatchGroupOptions,
 } from './geminiService';
+import {
+  submitCompanionHostBundleExecJob,
+  submitCompanionHostBundleProbeJob,
+} from './companionClient/compute';
+import { getCompanionLocalBaseUrl, normalizeCompanionBaseUrl } from './companionLocalPrefs';
 
 export type CapabilityRunProgressMeta = {
   /** 能力集合画布节点 id，用于把进度归到具体卡片 */
@@ -44,6 +49,8 @@ export type CapabilityExecuteContext = {
     targetSummary?: string;
     dimensions?: Record<string, string | undefined>;
   };
+  /** 工作区当前项目 id，随 `host_bundle.*` 任务一并提交给本机伴侣（可选） */
+  companionProjectId?: string;
 };
 
 export type CapabilityExecuteResult =
@@ -106,6 +113,7 @@ function makeVgpCapture(
 }
 
 export function getCapabilityEngine(preset: CustomAppModule): 'gen_image' | 'gen_text' | 'builtin' {
+  if (preset.companionHostBundle?.dirName?.trim()) return 'builtin';
   if (preset.engine) return preset.engine;
   const cat = preset.category;
   if (cat === 'text_to_text' || cat === 'image_to_text') return 'gen_text';
@@ -289,6 +297,50 @@ export type ExecuteCapabilityOptions = {
   inputText?: string;
 } & GeminiImageBatchGroupOptions;
 
+async function executeCompanionHostBundleCapability(
+  preset: CustomAppModule,
+  ctx: CapabilityExecuteContext,
+  start: number
+): Promise<CapabilityExecuteResult> {
+  const dirName = (preset.companionHostBundle?.dirName ?? '').trim();
+  if (!dirName) {
+    return { ok: false, kind: 'none', error: '未配置宿主包目录名', durationMs: Date.now() - start };
+  }
+  const phase = preset.companionHostBundle?.phase === 'probe' ? 'probe' : 'exec';
+  const base = normalizeCompanionBaseUrl(getCompanionLocalBaseUrl());
+  const actionLabel = preset.label || preset.id;
+  const projectId = ctx.companionProjectId?.trim() || undefined;
+  ctx.onLog?.(
+    'info',
+    `[${actionLabel}] 向本机伴侣提交 host_bundle.${phase}（${dirName}）…`,
+    projectId ? `projectId=${projectId}` : undefined
+  );
+  emitCapabilityRunProgress(ctx, `本机伴侣：提交 ${phase}（${dirName}）…`);
+  const submit =
+    phase === 'probe'
+      ? await submitCompanionHostBundleProbeJob(base, dirName, { projectId })
+      : await submitCompanionHostBundleExecJob(base, dirName, { projectId });
+  if (submit.ok === false) {
+    return { ok: false, kind: 'none', error: submit.error, durationMs: Date.now() - start };
+  }
+  const jobIdRaw =
+    submit.data && typeof submit.data === 'object' && submit.data !== null && 'jobId' in submit.data
+      ? (submit.data as { jobId?: unknown }).jobId
+      : undefined;
+  const jobId = typeof jobIdRaw === 'string' ? jobIdRaw : '';
+  ctx.onLog?.(
+    'info',
+    `[${actionLabel}] 已提交 jobId=${jobId || '（未知）'}，可在「设置 → 本地伴侣 → 任务进度」查看`,
+    undefined
+  );
+  return {
+    ok: true,
+    kind: 'text',
+    text: `已提交本机任务 ${jobId || '（未知 id）'}（host_bundle.${phase}，包「${dirName}」）。请在设置页「任务进度」查看结果。`,
+    durationMs: Date.now() - start,
+  };
+}
+
 /**
  * 执行能力：生图 / 文字 / 内置图像处理。切割图片等“多图输出/交互选择”的能力不在此处理。
  */
@@ -303,6 +355,10 @@ export async function executeCapability(
   try {
     if (preset.category === 'generate_3d') {
       return { ok: false, kind: 'none', error: '生成3D 请在工作流中拖图到能力框提交', durationMs: Date.now() - start };
+    }
+
+    if (preset.companionHostBundle?.dirName?.trim()) {
+      return executeCompanionHostBundleCapability(preset, ctx, start);
     }
 
     const engine = getCapabilityEngine(preset);

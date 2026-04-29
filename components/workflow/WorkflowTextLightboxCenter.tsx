@@ -1,4 +1,4 @@
-import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import {
   WORKFLOW_TEXT_ASSET_BODY_MAX_CHARS,
   clampWorkflowTextBody,
@@ -32,8 +32,10 @@ const WorkflowTextLightboxCenter = forwardRef<WorkflowTextLightboxCenterHandle, 
     const [editing, setEditing] = useState(true);
     const onPersistRef = useRef(onPersist);
     const onSaveAndCloseRef = useRef(onSaveAndClose);
-    onPersistRef.current = onPersist;
-    onSaveAndCloseRef.current = onSaveAndClose;
+    useEffect(() => {
+      onPersistRef.current = onPersist;
+      onSaveAndCloseRef.current = onSaveAndClose;
+    }, [onPersist, onSaveAndClose]);
 
     useEffect(() => {
       setDraftTitle(title);
@@ -41,12 +43,12 @@ const WorkflowTextLightboxCenter = forwardRef<WorkflowTextLightboxCenterHandle, 
       setEditing(true);
     }, [resetKey, title, body]);
 
-    const flush = () => {
+    const flush = useCallback(() => {
       onPersistRef.current({
         textTitle: draftTitle.trim(),
         textBody: clampWorkflowTextBody(draftBody),
       });
-    };
+    }, [draftTitle, draftBody]);
 
     useImperativeHandle(
       ref,
@@ -61,7 +63,7 @@ const WorkflowTextLightboxCenter = forwardRef<WorkflowTextLightboxCenterHandle, 
         },
         setEditingMode: (next) => setEditing(next),
       }),
-      [draftTitle, draftBody]
+      [flush]
     );
 
     return (

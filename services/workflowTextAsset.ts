@@ -50,6 +50,9 @@ function hasAnyImagePayload(asset: WorkflowAsset): boolean {
 
 /** 根资产拖入某预设时是否允许（按输入格式匹配资产类型） */
 export function workflowAssetAllowedForCapabilityDrop(asset: WorkflowAsset, mod: CustomAppModule): boolean {
+  if (mod.companionHostBundle?.dirName?.trim()) {
+    return hasAnyImagePayload(asset) || hasAnyTextPayload(asset);
+  }
   if (mod.category === 'text_to_text' || mod.category === 'text_to_image') {
     return hasAnyTextPayload(asset);
   }

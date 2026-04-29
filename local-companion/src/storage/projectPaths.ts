@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { getRepositoryRoot } from '../repositoryVolume.js';
-import { assertSafeId, isSafeIdPart } from './safeIds.js';
+import { assertSafeId, assertSafeWorkspaceFolderName, isSafeWorkspaceFolderName } from './safeIds.js';
 
 const MANIFEST_NAME = 'manifest.json';
 
@@ -10,7 +10,7 @@ export function getVolumeProjectsDir(): string {
 }
 
 export function getProjectRoot(projectId: string): string {
-  const id = assertSafeId(projectId, 'projectId');
+  const id = assertSafeWorkspaceFolderName(projectId, 'projectId');
   return join(getVolumeProjectsDir(), id);
 }
 
@@ -20,7 +20,7 @@ export function getProjectManifestPath(projectId: string): string {
 
 export function getAssetObjectPath(projectId: string, key: string): { dir: string; objectFile: string; relPath: string } {
   const k = assertSafeId(key, 'key');
-  const dir = join(getProjectRoot(assertSafeId(projectId, 'projectId')), 'assets', k);
+  const dir = join(getProjectRoot(projectId), 'assets', k);
   const objectFile = join(dir, 'object');
   const relPath = `assets/${k}/object`.replace(/\\/g, '/');
   return { dir, objectFile, relPath };
@@ -34,14 +34,14 @@ export function ensureProjectLayout(projectId: string): void {
   }
 }
 
-/** 列出已有 projectId（目录名经 safe 校验的才计入） */
+/** 列出已有 projectId（目录名经工作区安全校验的才计入） */
 export function listProjectIds(): string[] {
   const base = getVolumeProjectsDir();
   if (!existsSync(base)) return [];
   const out: string[] = [];
   for (const name of readdirSync(base, { withFileTypes: true })) {
     if (!name.isDirectory()) continue;
-    if (isSafeIdPart(name.name)) out.push(name.name);
+    if (isSafeWorkspaceFolderName(name.name)) out.push(name.name);
   }
   return out.sort();
 }

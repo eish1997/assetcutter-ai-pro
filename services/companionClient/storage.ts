@@ -2,6 +2,18 @@ import { companionFetchJson, type CompanionClientResult } from './fetch';
 import { getCompanionLocalToken, normalizeCompanionBaseUrl } from '../companionLocalPrefs';
 
 export type CompanionProjectListV1 = { projectIds: string[] };
+export type CompanionWorkspaceProjectV1 = {
+  id: string;
+  name: string;
+  createdAt: number;
+  updatedAt: number;
+};
+export type CompanionWorkspaceTrashProjectV1 = {
+  trashId: string;
+  originalId: string;
+  deletedAt: number;
+  byteSize: number;
+};
 
 export type CompanionManifestV1 = {
   layoutVersion: number;
@@ -28,13 +40,67 @@ export type CompanionAssetMetaV1 = {
   onDisk: boolean;
 };
 
+
 export async function listCompanionProjects(baseUrl: string) {
   return companionFetchJson<CompanionProjectListV1>(baseUrl, '/v1/projects');
+}
+
+export async function listCompanionWorkspaceProjects(baseUrl: string) {
+  return companionFetchJson<{ projects: CompanionWorkspaceProjectV1[] }>(baseUrl, '/v1/workspace/projects');
+}
+
+export async function createCompanionWorkspaceProject(baseUrl: string, name: string) {
+  return companionFetchJson<{ ok: true; project: CompanionWorkspaceProjectV1 }>(baseUrl, '/v1/workspace/projects', {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  });
+}
+
+export async function renameCompanionWorkspaceProject(baseUrl: string, id: string, name: string) {
+  const enc = encodeURIComponent(id);
+  return companionFetchJson<{ ok: true; project: CompanionWorkspaceProjectV1 }>(
+    baseUrl,
+    `/v1/workspace/projects/${enc}`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    },
+  );
+}
+
+export async function deleteCompanionWorkspaceProject(baseUrl: string, id: string) {
+  const enc = encodeURIComponent(id);
+  return companionFetchJson<{ ok: true; id: string; recycledTo: string }>(baseUrl, `/v1/workspace/projects/${enc}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function listCompanionWorkspaceTrashProjects(baseUrl: string) {
+  return companionFetchJson<{ items: CompanionWorkspaceTrashProjectV1[] }>(baseUrl, '/v1/workspace/trash/projects');
+}
+
+export async function restoreCompanionWorkspaceTrashProject(baseUrl: string, trashId: string) {
+  const enc = encodeURIComponent(trashId);
+  return companionFetchJson<{ ok: true; trashId: string; nameResolved: boolean; project: CompanionWorkspaceProjectV1 }>(
+    baseUrl,
+    `/v1/workspace/trash/projects/${enc}/restore`,
+    { method: 'POST' },
+  );
 }
 
 export async function getCompanionManifest(baseUrl: string, projectId: string) {
   const enc = encodeURIComponent(projectId);
   return companionFetchJson<CompanionManifestV1>(baseUrl, `/v1/projects/${enc}/manifest`);
+}
+
+/** 伴侣扫盘：将 `assets/<key>/object` 已存在但 manifest 未登记的条目补写 manifest */
+export async function reconcileCompanionManifestFromDisk(baseUrl: string, projectId: string) {
+  const enc = encodeURIComponent(projectId);
+  return companionFetchJson<{ ok: true; added: number; keys: string[] }>(
+    baseUrl,
+    `/v1/projects/${enc}/manifest/reconcile`,
+    { method: 'POST' },
+  );
 }
 
 export async function getCompanionAssetMeta(baseUrl: string, projectId: string, key: string) {

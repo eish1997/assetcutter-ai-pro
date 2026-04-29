@@ -7,11 +7,20 @@ import { workspaceRootPrefix } from './workspaceCloudSync';
 type UploadUrlResponse = { uploadUrl: string; objectKey: string };
 type DownloadUrlResponse = { downloadUrl: string; objectKey: string };
 
+export type CapabilityCloudRecord<T extends { id: string }> = {
+  id: string;
+  updatedAt: number;
+  deletedAt?: number;
+  value?: T;
+};
+
 export type WorkspaceUserCloudConfig = {
   version: 1;
   updatedAt: number;
   capabilityPresets: CustomAppModule[];
   capabilitySets: CapabilitySet[];
+  capabilityPresetRecords?: CapabilityCloudRecord<CustomAppModule>[];
+  capabilitySetRecords?: CapabilityCloudRecord<CapabilitySet>[];
   settings: {
     dialogSkipUnderstand: boolean;
     workspaceAutoSyncEnabled: boolean;
@@ -64,6 +73,112 @@ async function downloadObjectText(objectKey: string): Promise<string | null> {
   return await r.text();
 }
 
+function stableStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value) || '';
+  } catch {
+    return '';
+  }
+}
+
+function sanitizeRecord<T extends { id: string }>(
+  record: CapabilityCloudRecord<T>,
+  fallbackUpdatedAt: number
+): CapabilityCloudRecord<T> | null {
+  const id = String(record?.id || '').trim();
+  if (!id) return null;
+  const updatedAt = Number(record?.updatedAt || fallbackUpdatedAt || Date.now());
+  const deletedAtRaw = record?.deletedAt;
+  const deletedAt = deletedAtRaw != null ? Number(deletedAtRaw) : undefined;
+  const value = record?.value && typeof record.value === 'object' ? record.value : undefined;
+  return {
+    id,
+    updatedAt: Number.isFinite(updatedAt) ? updatedAt : Date.now(),
+    ...(deletedAt != null && Number.isFinite(deletedAt) ? { deletedAt } : {}),
+    ...(value ? { value } : {}),
+  };
+}
+
+function normalizeRecords<T extends { id: string }>(
+  records: CapabilityCloudRecord<T>[] | undefined,
+  fallbackUpdatedAt: number
+): CapabilityCloudRecord<T>[] {
+  if (!Array.isArray(records)) return [];
+  const out: CapabilityCloudRecord<T>[] = [];
+  const seen = new Set<string>();
+  for (const item of records) {
+    const next = sanitizeRecord<T>(item, fallbackUpdatedAt);
+    if (!next || seen.has(next.id)) continue;
+    seen.add(next.id);
+    out.push(next);
+  }
+  return out;
+}
+
+export function buildCapabilityCloudRecords<T extends { id: string }>(
+  currentList: T[],
+  previousRecords: CapabilityCloudRecord<T>[],
+  nowTs = Date.now()
+): CapabilityCloudRecord<T>[] {
+  const now = Number.isFinite(nowTs) ? nowTs : Date.now();
+  const prevMap = new Map<string, CapabilityCloudRecord<T>>();
+  for (const r of normalizeRecords(previousRecords, now)) {
+    prevMap.set(r.id, r);
+  }
+  const next: CapabilityCloudRecord<T>[] = [];
+  const presentIds = new Set<string>();
+  for (const item of Array.isArray(currentList) ? currentList : []) {
+    const id = String(item?.id || '').trim();
+    if (!id) continue;
+    presentIds.add(id);
+    const prev = prevMap.get(id);
+    const same = prev?.value != null && stableStringify(prev.value) === stableStringify(item);
+    next.push({
+      id,
+      updatedAt: same ? Number(prev?.updatedAt || now) : now,
+      value: item,
+    });
+  }
+  for (const [id, prev] of prevMap.entries()) {
+    if (presentIds.has(id)) continue;
+    const prevDel = prev.deletedAt != null ? Number(prev.deletedAt) : undefined;
+    next.push({
+      id,
+      updatedAt: Number(prev.updatedAt || now),
+      deletedAt: prevDel != null && Number.isFinite(prevDel) ? prevDel : now,
+    });
+  }
+  return next;
+}
+
+export function mergeCapabilityCloudRecords<T extends { id: string }>(
+  localCurrentList: T[],
+  localPreviousRecords: CapabilityCloudRecord<T>[],
+  cloudRecords: CapabilityCloudRecord<T>[],
+  nowTs = Date.now()
+): { list: T[]; records: CapabilityCloudRecord<T>[] } {
+  const now = Number.isFinite(nowTs) ? nowTs : Date.now();
+  const localRecords = buildCapabilityCloudRecords(localCurrentList, localPreviousRecords, now);
+  const mergedMap = new Map<string, CapabilityCloudRecord<T>>();
+  for (const r of normalizeRecords(localRecords, now)) mergedMap.set(r.id, r);
+  for (const remote of normalizeRecords(cloudRecords, now)) {
+    const local = mergedMap.get(remote.id);
+    if (!local) {
+      mergedMap.set(remote.id, remote);
+      continue;
+    }
+    const localLatest = Math.max(Number(local.updatedAt || 0), Number(local.deletedAt || 0));
+    const remoteLatest = Math.max(Number(remote.updatedAt || 0), Number(remote.deletedAt || 0));
+    if (remoteLatest > localLatest) mergedMap.set(remote.id, remote);
+  }
+  const records = Array.from(mergedMap.values());
+  const list = records
+    .filter((r) => !(r.deletedAt != null && Number(r.deletedAt) >= Number(r.updatedAt || 0)))
+    .map((r) => r.value)
+    .filter((v): v is T => Boolean(v && typeof v === 'object'));
+  return { list, records };
+}
+
 export async function fetchWorkspaceUserCloudConfig(
   userId: string,
   username?: string | null
@@ -81,11 +196,40 @@ export async function fetchWorkspaceUserCloudConfig(
             avatarUrl: sanitizeAvatarUrl(String((sp as { avatarUrl?: unknown }).avatarUrl || '')),
           }
         : undefined;
+    const fallbackUpdatedAt = Number(parsed.updatedAt || Date.now());
+    const presetRecordsFromCloud = normalizeRecords<CustomAppModule>(parsed.capabilityPresetRecords, fallbackUpdatedAt);
+    const setRecordsFromCloud = normalizeRecords<CapabilitySet>(parsed.capabilitySetRecords, fallbackUpdatedAt);
+    const capabilityPresets =
+      presetRecordsFromCloud.length > 0
+        ? presetRecordsFromCloud
+            .filter((r) => !(r.deletedAt != null && Number(r.deletedAt) >= Number(r.updatedAt || 0)))
+            .map((r) => r.value)
+            .filter((v): v is CustomAppModule => Boolean(v && typeof v === 'object'))
+        : Array.isArray(parsed.capabilityPresets)
+        ? parsed.capabilityPresets
+        : [];
+    const capabilitySets =
+      setRecordsFromCloud.length > 0
+        ? setRecordsFromCloud
+            .filter((r) => !(r.deletedAt != null && Number(r.deletedAt) >= Number(r.updatedAt || 0)))
+            .map((r) => r.value)
+            .filter((v): v is CapabilitySet => Boolean(v && typeof v === 'object'))
+        : Array.isArray(parsed.capabilitySets)
+        ? parsed.capabilitySets
+        : [];
     return {
       version: 1,
-      updatedAt: Number(parsed.updatedAt || Date.now()),
-      capabilityPresets: Array.isArray(parsed.capabilityPresets) ? parsed.capabilityPresets : [],
-      capabilitySets: Array.isArray(parsed.capabilitySets) ? parsed.capabilitySets : [],
+      updatedAt: fallbackUpdatedAt,
+      capabilityPresets,
+      capabilitySets,
+      capabilityPresetRecords:
+        presetRecordsFromCloud.length > 0
+          ? presetRecordsFromCloud
+          : capabilityPresets.map((p) => ({ id: p.id, updatedAt: fallbackUpdatedAt, value: p })),
+      capabilitySetRecords:
+        setRecordsFromCloud.length > 0
+          ? setRecordsFromCloud
+          : capabilitySets.map((s) => ({ id: s.id, updatedAt: fallbackUpdatedAt, value: s })),
       settings: {
         dialogSkipUnderstand: parsed.settings?.dialogSkipUnderstand === true,
         workspaceAutoSyncEnabled: parsed.settings?.workspaceAutoSyncEnabled !== false,
@@ -130,6 +274,11 @@ export async function pushWorkspaceUserCloudConfig(
     updatedAt: Date.now(),
     capabilityPresets: input.capabilityPresets,
     capabilitySets: input.capabilitySets,
+    capabilityPresetRecords: normalizeRecords<CustomAppModule>(
+      input.capabilityPresetRecords,
+      Date.now()
+    ),
+    capabilitySetRecords: normalizeRecords<CapabilitySet>(input.capabilitySetRecords, Date.now()),
     settings: {
       dialogSkipUnderstand: input.settings.dialogSkipUnderstand === true,
       workspaceAutoSyncEnabled: input.settings.workspaceAutoSyncEnabled !== false,

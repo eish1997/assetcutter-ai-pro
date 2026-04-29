@@ -121,6 +121,26 @@
     .path { word-break: break-all; font-family: ui-monospace, monospace; font-size: 10px; color: #cbd5e1; }
     .hidden { display: none !important; }
     code { font-size: 10px; background: #1c1c20; padding: 2px 6px; border-radius: 4px; }
+    .btn-primary {
+      padding: 9px 14px;
+      border-radius: 10px;
+      border: 1px solid #2563eb;
+      background: #1d4ed8;
+      color: #eff6ff;
+      font-size: 11px;
+      font-weight: 800;
+      cursor: pointer;
+    }
+    .btn-secondary {
+      padding: 9px 14px;
+      border-radius: 10px;
+      border: 1px solid #3f3f46;
+      background: #18181b;
+      color: #d4d4d8;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+    }
   </style>
 </head>
 <body>
@@ -132,21 +152,32 @@
     </div>
   </header>
   <nav class="tabs" role="tablist">
-    <button type="button" role="tab" data-tab="overview" class="active" aria-selected="true">总览</button>
-    <button type="button" role="tab" data-tab="plugins" aria-selected="false">插件</button>
-    <button type="button" role="tab" data-tab="repo" aria-selected="false">仓库</button>
-    <button type="button" role="tab" data-tab="apitest" aria-selected="false">联调</button>
+    <button type="button" role="tab" data-tab="overview" class="active" aria-selected="true">一键连接</button>
+    <button type="button" role="tab" data-tab="plugins" aria-selected="false">高级：插件状态</button>
+    <button type="button" role="tab" data-tab="repo" aria-selected="false">高级：本机仓库</button>
+    <button type="button" role="tab" data-tab="apitest" aria-selected="false">高级：调试工具</button>
   </nav>
   <main>
     <section id="tab-overview" class="tab-page">
       <div class="panel">
-        <h2>运行状态</h2>
-        <p class="muted">与主站「设置 → 本地伴侣」探测使用相同根地址；本页直接请求本机 <code>/v1/runtime-status</code>。</p>
-        <pre id="runtimePre">加载中…</pre>
+        <h2>快速连接</h2>
+        <p class="muted">普通用户只需要这一步：先保持本地伴侣运行，再点「一键检查连接」。</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 12px;">
+          <button type="button" id="btnQuickCheck" class="btn-primary">一键检查连接</button>
+          <button type="button" id="btnCopyBase" class="btn-secondary">复制本机地址</button>
+        </div>
+        <pre id="quickStatus">等待检查…</pre>
       </div>
       <div class="panel">
-        <h2>能力宣告摘要</h2>
-        <pre id="capsPre">加载中…</pre>
+        <h2>更多信息（可选）</h2>
+        <details style="margin-bottom:10px;">
+          <summary class="muted" style="cursor:pointer;">运行状态（原始）</summary>
+          <pre id="runtimePre" style="margin-top:8px;">加载中…</pre>
+        </details>
+        <details>
+          <summary class="muted" style="cursor:pointer;">能力清单（原始）</summary>
+          <pre id="capsPre" style="margin-top:8px;">加载中…</pre>
+        </details>
       </div>
     </section>
     <section id="tab-plugins" class="tab-page hidden">
@@ -220,6 +251,20 @@
             提交 seam_repair
           </button>
         </p>
+        <p class="muted" style="margin-top:12px">
+          <strong>host_bundle.probe / host_bundle.exec</strong>：命令仅来自已安装包内 <code>extracted/run.json</code>，请求体只能指定
+          <code>inputs.dirName</code>（与 <code>GET /v1/host-plugins/bundles</code> 返回的 <code>dirName</code> 一致）。超时
+          <code>COMPANION_HOST_BUNDLE_EXEC_TIMEOUT_MS</code>（默认 300000）。
+        </p>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px;max-width:520px;">
+          <input id="hostBundleDir" placeholder="dirName" style="flex:1;min-width:140px;padding:6px 8px;border-radius:8px;border:1px solid #333;background:#16161a;color:#e5e5e5;font-size:10px;" />
+          <button type="button" id="btnHostProbe" style="padding:8px 12px;border-radius:10px;border:1px solid #15803d;background:#14532d;color:#dcfce7;font-size:10px;font-weight:700;cursor:pointer;">
+            probe
+          </button>
+          <button type="button" id="btnHostExec" style="padding:8px 12px;border-radius:10px;border:1px solid #7c3aed;background:#3b0764;color:#ede9fe;font-size:10px;font-weight:700;cursor:pointer;">
+            exec
+          </button>
+        </div>
         <p class="muted">最近一次任务响应：</p>
         <pre id="jobPre">（点击按钮）</pre>
         <p class="muted" style="margin-top:8px">近期任务（GET /v1/compute/jobs）:</p>
@@ -263,6 +308,10 @@
         el.className = 'pill ' + (ok ? 'ok' : 'bad');
       }
 
+      function setQuickStatus(text) {
+        $('quickStatus').textContent = text;
+      }
+
       async function fetchJson(path) {
         const t0 = performance.now();
         const r = await fetch(path, { method: 'GET' });
@@ -286,10 +335,22 @@
           $('uptimePill').textContent = '运行 ' + (rt.uptimeSec ?? 0) + 's';
           const { data: caps } = await fetchJson('/v1/capabilities');
           $('capsPre').textContent = JSON.stringify(caps, null, 2);
+          const relayRunning = !!(rt && rt.relay && rt.relay.running);
+          const relayConfigured = !!(rt && rt.relay && rt.relay.configured);
+          const siteAuthState = rt && rt.siteAuth && typeof rt.siteAuth.state === 'string' ? rt.siteAuth.state : '';
+          const relayText = relayConfigured ? (relayRunning ? '站点中转：正常' : '站点中转：未运行') : '站点中转：未配置';
+          const loginText =
+            siteAuthState === 'ready'
+              ? '网站登录状态：正常'
+              : siteAuthState === 'not_logged_in'
+                ? '网站登录状态：需重新登录'
+                : '网站登录状态：待确认';
+          setQuickStatus(`连接成功（${ms}ms）\n${relayText}\n${loginText}`);
           renderPlugins(rt.plugins || []);
         } catch (e) {
           setConn(false);
           $('runtimePre').textContent = String(e);
+          setQuickStatus('连接失败：请确认本地伴侣已启动。\n如果你在网站里使用本机处理，请返回网站设置页点击「一键连接本机伴侣」。');
         }
       }
 
@@ -379,6 +440,33 @@
         }
       });
 
+      function postHostBundleJob(type) {
+        return async function () {
+          const el = $('jobPre');
+          const dirName = ($('hostBundleDir').value || '').trim();
+          if (!dirName) {
+            el.textContent = '请填写 dirName（host-bundles 下目录名）';
+            return;
+          }
+          el.textContent = type + ' 执行中…';
+          try {
+            const r = await fetch('/v1/compute/jobs', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ protocolVersion: 1, type, inputs: { dirName } }),
+            });
+            const t = await r.text();
+            el.textContent = 'HTTP ' + r.status + '\n' + t;
+            void refreshApitest();
+          } catch (e) {
+            el.textContent = String(e);
+          }
+        };
+      }
+
+      $('btnHostProbe').addEventListener('click', postHostBundleJob('host_bundle.probe'));
+      $('btnHostExec').addEventListener('click', postHostBundleJob('host_bundle.exec'));
+
       $('btnSeam').addEventListener('click', async function () {
         const el = $('jobPre');
         const projectId = ($('seamProjectId').value || '').trim();
@@ -410,6 +498,22 @@
           void refreshApitest();
         } catch (e) {
           el.textContent = String(e);
+        }
+      });
+
+      $('btnQuickCheck').addEventListener('click', function () {
+        setQuickStatus('正在检查连接…');
+        void refreshOverview();
+        void refreshRepo();
+      });
+
+      $('btnCopyBase').addEventListener('click', async function () {
+        const base = window.location.origin || 'http://127.0.0.1:18765';
+        try {
+          await navigator.clipboard.writeText(base);
+          setQuickStatus('已复制本机地址：' + base);
+        } catch (_e) {
+          setQuickStatus('复制失败，请手动复制：' + base);
         }
       });
 

@@ -269,7 +269,6 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
 
     const baseImg = imgClassName ?? '';
     const layerClass = `${baseImg} absolute inset-0 max-w-none max-h-none`;
-    const skipThumbReveal = thumbRevealSkipTransitionRef.current;
 
     const microRefActive = !!(microSrc && !(thumbReady && thumbSrc));
     const thumbRefActive = !!(thumbSrc && (thumbReady || !microSrc));
@@ -339,7 +338,7 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
             title={title}
             className={`${layerClass} z-[2] ${
               thumbReady ? 'pointer-events-auto opacity-100' : 'pointer-events-none opacity-0'
-            } ${skipThumbReveal ? '' : 'transition-opacity duration-[160ms] ease-out'}`}
+            } transition-opacity duration-[160ms] ease-out`}
             style={imgStyle}
             onLoad={(e) => {
               const el = e.currentTarget;

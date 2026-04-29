@@ -5,15 +5,14 @@ import React, {
   useRef,
   useEffect,
   useLayoutEffect,
-  startTransition,
   Suspense,
   lazy,
 } from 'react';
 import { useWorkflowWorkspacePanes } from '../hooks/useWorkflowWorkspacePanes';
 import { useWorkflowMarquee } from '../hooks/useWorkflowMarquee';
-import { createPortal } from 'react-dom';
+import { createPortal, flushSync } from 'react-dom';
 import type { WorkflowAsset, WorkflowPendingTask, CapabilitySet, VgpGenStepCapture } from '../types';
-import type { CustomAppModule, LibraryItem, WorkflowCutGroupItem } from '../types';
+import type { CustomAppModule, LibraryItem } from '../types';
 import type { BoundingBox } from '../types';
 import { getRandomGroupCodeName } from '../data/groupCodeNames';
 import { detectObjectsInImage, DEFAULT_PROMPTS } from '../services/geminiService';
@@ -26,7 +25,6 @@ import {
 } from '../services/capabilityExecutor';
 import {
   applyVgpAfterSuccessfulGen,
-  applyVgpAfterCutStep,
   attachInitialVgpToNewAsset,
 } from '../services/vgp/vgpStore';
 import { WorkflowGenerationRecordPanel } from './WorkflowGenerationRecordPanel';
@@ -78,7 +76,6 @@ import {
   collectImageLikeUrlsFromText,
   collectImageLikeUrlsFromHtml,
   dataTransferItemToString,
-  dragTransferHasPlainText,
   cloneCapabilityPresetPanelWithScrollRef,
   cropBoxes,
 } from './workflow/workflowSectionHelpers';
@@ -105,7 +102,6 @@ import {
 } from './workflow/workflowSectionUiConstants';
 import {
   sortRootWorkflowAssetsNewestFirst,
-  workflowFindGroupItemIndex,
   workflowOutlineExpandableGroupIds,
 } from './workflow/workflowOutlineUtils';
 import {
@@ -132,8 +128,23 @@ import {
   workflowLocalModelFileExceedsPreviewLimit,
 } from '../services/workflowModelBlob';
 import { captureWorkflowModelThumbnailDataUrl } from '../services/workflowModelPreviewCapture';
+import { getCompanionLocalBaseUrl } from '../services/companionLocalPrefs';
+import {
+  fetchWorkflowOriginalFromCompanionAsObjectUrl,
+  parseDataUrlToBlob,
+  putWorkflowOriginalImageFromAnyUrl,
+  putWorkflowOriginalImageToCompanion,
+  putWorkflowResultImageToCompanion,
+  workflowAssetNeedsCompanionOriginalHydrate,
+  workflowAssetNeedsCompanionResultHydrate,
+} from '../services/workflowCompanionAssets';
 
 const WORKFLOW_MODEL_EXT_RE = /\.(glb|gltf|fbx|obj)$/i;
+
+type InsertManualGroupResult = {
+  next: WorkflowAsset[];
+  createdGroup: { id: string; coverImage: string } | null;
+};
 
 function isWorkflowModelFile(file: File): boolean {
   const name = file.name || '';
@@ -275,7 +286,12 @@ const WorkflowSection: React.FC<{
   onOpenLibraryPicker?: (callback: (items: LibraryItem[]) => void) => void;
   onLog?: (level: 'info' | 'warn' | 'error', message: string, detail?: string) => void;
   /** 拖图到「生成3D」能力时调用，不进入执行队列，直接提交 3D 任务 */
-  onAddGenerate3DJob?: (preset: CustomAppModule, imageBase64: string) => void;
+  onAddGenerate3DJob?: (
+    preset: CustomAppModule,
+    imageBase64: string,
+    task?: WorkflowPendingTask,
+    options?: { forceNewTask?: boolean }
+  ) => Promise<void> | void;
   /** 用于按账号隔离常用功能偏好；未传时走 guest */
   preferenceScope?: string | null;
   /** 由 App 主滚动层注册，使列表两侧留白等网页空白处也能开始框选 */
@@ -322,9 +338,12 @@ const WorkflowSection: React.FC<{
   onboardingKey = null,
   workspaceProjectChrome,
 }) => {
-  const assets = Array.isArray(assetsProp) ? assetsProp : [];
-  const pending = Array.isArray(pendingProp) ? pendingProp : [];
-  const capabilitySets = Array.isArray(capabilitySetsProp) ? capabilitySetsProp : [];
+  const assets = useMemo(() => (Array.isArray(assetsProp) ? assetsProp : []), [assetsProp]);
+  const pending = useMemo(() => (Array.isArray(pendingProp) ? pendingProp : []), [pendingProp]);
+  const capabilitySets = useMemo(
+    () => (Array.isArray(capabilitySetsProp) ? capabilitySetsProp : []),
+    [capabilitySetsProp]
+  );
   const pendingRef = React.useRef(pending);
   pendingRef.current = pending;
   const assetsRef = React.useRef(assets);
@@ -523,7 +542,7 @@ const WorkflowSection: React.FC<{
     const ro = new ResizeObserver(update);
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  }, [setAssets]);
   const sidebarWidth = 320;
   const paneWidth = Math.max(320, workspaceViewportWidth || 0);
   const listPaneWidth = Math.max(320, paneWidth - sidebarWidth);
@@ -642,7 +661,7 @@ const WorkflowSection: React.FC<{
         cardRefs.current.get(asset.id)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
       });
     },
-    [assets]
+    [assets, setSelectedRootAssetIds]
   );
 
   const navigateOutlineToGroupItem = useCallback(
@@ -655,7 +674,7 @@ const WorkflowSection: React.FC<{
         cardRefs.current.get(`${group.id}::${itemIndex}`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
       });
     },
-    []
+    [setSelectedRootAssetIds]
   );
 
   const [dragOverAssetId, setDragOverAssetId] = useState<string | null>(null);
@@ -677,7 +696,7 @@ const WorkflowSection: React.FC<{
     });
   }, []);
 
-  const getModule = (id: string) => actionModules.find((m) => m.id === id);
+  const getModule = useCallback((id: string) => actionModules.find((m) => m.id === id), [actionModules]);
   const getModulePreviewOriginal = useCallback(
     (mod: CustomAppModule): string | null =>
       resolveCapabilityPreviewSrc(mod.previewOriginalThumbImage) ||
@@ -714,14 +733,14 @@ const WorkflowSection: React.FC<{
       window.removeEventListener('blur', onBlur);
     };
   }, [hoverPreview]);
-  const getSet = (id: string) => capabilitySets.find((s) => s.id === id);
-  const getActionLabel = (actionType: string) => {
+  const getSet = useCallback((id: string) => capabilitySets.find((s) => s.id === id), [capabilitySets]);
+  const getActionLabel = useCallback((actionType: string) => {
     if (actionType.startsWith(SET_ACTION_PREFIX)) {
       const set = getSet(actionType.slice(SET_ACTION_PREFIX.length));
       return set?.label ?? actionType;
     }
     return getModule(actionType)?.label ?? actionType;
-  };
+  }, [getModule, getSet]);
   const getGenerationRecordStepLabel = (stepKey: string) => {
     if (stepKey === 'original') return '原图';
     if (stepKey === 'cut_image') return '切割';
@@ -731,7 +750,11 @@ const WorkflowSection: React.FC<{
     }
     return getModule(baseActionId(stepKey))?.label ?? stepKey;
   };
-  const getAssetDisplayImage = (a: WorkflowAsset, assetsList: WorkflowAsset[] = assets, visited: Set<string> = new Set()): string => {
+  const getAssetDisplayImage = useCallback((
+    a: WorkflowAsset,
+    _assetsList?: WorkflowAsset[],
+    _visited?: Set<string>
+  ): string => {
     const orig = asWorkflowImageString(a.original);
     if (isWorkflowTextAsset(a)) {
       if (a.displayKey === 'original') return orig;
@@ -741,12 +764,193 @@ const WorkflowSection: React.FC<{
     if (a.displayKey === 'original') return orig;
     const fromResults = (a.results as Record<string, unknown>)[a.displayKey];
     return asWorkflowImageString(fromResults) || orig;
-  };
-  const getAssetDisplayText = (a: WorkflowAsset): string => {
+  }, []);
+
+  const companionHydrateKey = useMemo(() => {
+    return assets
+      .filter(workflowAssetNeedsCompanionOriginalHydrate)
+      .map((a) => `${a.id}:${String(a.originalCompanionKey || '').trim()}`)
+      .sort()
+      .join('|');
+  }, [assets]);
+
+  const companionResultsHydrateKey = useMemo(() => {
+    const parts: string[] = [];
+    for (const a of assets) {
+      if (!workflowAssetNeedsCompanionResultHydrate(a)) continue;
+      const rck = a.resultsCompanionKeys || {};
+      for (const sid of Object.keys(rck)) {
+        const ck = String(rck[sid] || '').trim();
+        if (!ck || String(a.results?.[sid] ?? '').trim()) continue;
+        parts.push(`${a.id}:${sid}:${ck}`);
+      }
+    }
+    return parts.sort().join('|');
+  }, [assets]);
+
+  useEffect(() => {
+    const projectId = String(workspaceProjectChrome?.activeProjectId || '').trim();
+    const base = String(getCompanionLocalBaseUrl() || '').trim();
+    if (!companionHydrateKey || !projectId || !base) return;
+    const targets = assetsRef.current.filter(workflowAssetNeedsCompanionOriginalHydrate);
+    if (targets.length === 0) return;
+    let cancelled = false;
+    void (async () => {
+      for (const a of targets) {
+        const key = String(a.originalCompanionKey || '').trim();
+        if (!key) continue;
+        const got = await fetchWorkflowOriginalFromCompanionAsObjectUrl(base, projectId, key);
+        if (cancelled) return;
+        if (got.ok === false) {
+          onLog?.('warn', '本地伴侣原图恢复失败', `${a.id}: ${got.error}`);
+          continue;
+        }
+        setAssets((prev) =>
+          prev.map((x) => {
+            if (x.id !== a.id) return x;
+            const prevO = String(x.original || '').trim();
+            if (/^blob:/i.test(prevO)) {
+              try {
+                URL.revokeObjectURL(prevO);
+              } catch {
+                /* ignore */
+              }
+            }
+            return { ...x, original: got.objectUrl };
+          })
+        );
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [companionHydrateKey, workspaceProjectChrome?.activeProjectId, setAssets, onLog]);
+
+  useEffect(() => {
+    const projectId = String(workspaceProjectChrome?.activeProjectId || '').trim();
+    const base = String(getCompanionLocalBaseUrl() || '').trim();
+    if (!companionResultsHydrateKey || !projectId || !base) return;
+    const targets = assetsRef.current.filter(workflowAssetNeedsCompanionResultHydrate);
+    if (targets.length === 0) return;
+    let cancelled = false;
+    void (async () => {
+      for (const a of targets) {
+        const rck = a.resultsCompanionKeys || {};
+        for (const stepId of Object.keys(rck)) {
+          const ck = String(rck[stepId] || '').trim();
+          if (!ck || String(a.results?.[stepId] ?? '').trim()) continue;
+          const got = await fetchWorkflowOriginalFromCompanionAsObjectUrl(base, projectId, ck);
+          if (cancelled) return;
+          if (got.ok === false) {
+            onLog?.('warn', '本地伴侣步骤结果图恢复失败', `${a.id}/${stepId}: ${got.error}`);
+            continue;
+          }
+          setAssets((prev) =>
+            prev.map((x) => {
+              if (x.id !== a.id) return x;
+              const prevV = String((x.results || {})[stepId] || '').trim();
+              if (/^blob:/i.test(prevV)) {
+                try {
+                  URL.revokeObjectURL(prevV);
+                } catch {
+                  /* ignore */
+                }
+              }
+              return {
+                ...x,
+                results: { ...(x.results || {}), [stepId]: got.objectUrl },
+              };
+            })
+          );
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [companionResultsHydrateKey, workspaceProjectChrome?.activeProjectId, setAssets, onLog]);
+
+  const scheduleCompanionPersistOriginal = useCallback(
+    (assetId: string, imageDataUrl: string) => {
+      if (!parseDataUrlToBlob(imageDataUrl)) return;
+      const base = String(getCompanionLocalBaseUrl() || '').trim();
+      const pid = String(workspaceProjectChrome?.activeProjectId || '').trim();
+      if (!base || !pid) return;
+      void (async () => {
+        const put = await putWorkflowOriginalImageToCompanion(base, pid, assetId, imageDataUrl);
+        if (put.ok === false) {
+          onLog?.('warn', '本地伴侣原图落盘失败（画布仍在内存）', put.error);
+          return;
+        }
+        setAssets((prev) =>
+          prev.some((x) => x.id === assetId)
+            ? prev.map((x) => (x.id === assetId ? { ...x, originalCompanionKey: put.key } : x))
+            : prev
+        );
+      })();
+    },
+    [onLog, setAssets, workspaceProjectChrome?.activeProjectId]
+  );
+
+  /** data / blob / http / 旧版裸 base64 → 伴侣原图键；data: 走同步路径 */
+  const scheduleCompanionPersistOriginalAny = useCallback(
+    (assetId: string, imageSrc: string) => {
+      const s = String(imageSrc || '').trim();
+      if (!s) return;
+      const base = String(getCompanionLocalBaseUrl() || '').trim();
+      const pid = String(workspaceProjectChrome?.activeProjectId || '').trim();
+      if (!base || !pid) return;
+      if (parseDataUrlToBlob(s)) {
+        scheduleCompanionPersistOriginal(assetId, s);
+        return;
+      }
+      void (async () => {
+        const put = await putWorkflowOriginalImageFromAnyUrl(base, pid, assetId, s);
+        if (put.ok === false) {
+          onLog?.('warn', '本地伴侣原图落盘失败（画布仍在内存）', put.error);
+          return;
+        }
+        setAssets((prev) =>
+          prev.some((x) => x.id === assetId)
+            ? prev.map((x) => (x.id === assetId ? { ...x, originalCompanionKey: put.key } : x))
+            : prev
+        );
+      })();
+    },
+    [onLog, scheduleCompanionPersistOriginal, setAssets, workspaceProjectChrome?.activeProjectId]
+  );
+
+  const scheduleCompanionPersistResult = useCallback(
+    (assetId: string, resultKey: string, imageDataUrl: string) => {
+      if (!parseDataUrlToBlob(imageDataUrl)) return;
+      const base = String(getCompanionLocalBaseUrl() || '').trim();
+      const pid = String(workspaceProjectChrome?.activeProjectId || '').trim();
+      if (!base || !pid) return;
+      void (async () => {
+        const put = await putWorkflowResultImageToCompanion(base, pid, assetId, resultKey, imageDataUrl);
+        if (put.ok === false) {
+          onLog?.('warn', '本地伴侣步骤结果落盘失败（画布仍在内存）', put.error);
+          return;
+        }
+        setAssets((prev) =>
+          prev.some((x) => x.id === assetId)
+            ? prev.map((x) =>
+                x.id === assetId
+                  ? { ...x, resultsCompanionKeys: { ...(x.resultsCompanionKeys || {}), [resultKey]: put.key } }
+                  : x
+              )
+            : prev
+        );
+      })();
+    },
+    [onLog, setAssets, workspaceProjectChrome?.activeProjectId]
+  );
+
+  const getAssetDisplayText = useCallback((a: WorkflowAsset): string => {
     if (!isWorkflowTextAsset(a)) return '';
     if (a.displayKey === 'original') return (a.textBody ?? '').trim();
     return ((a.textResults || {})[a.displayKey] ?? '').trim();
-  };
+  }, []);
   const getAssetDisplayTypeLabel = (a: WorkflowAsset): string => {
     if (isWorkflowTextAsset(a)) {
       const dk = (a.displayKey || 'original').trim() || 'original';
@@ -823,7 +1027,7 @@ ${lineSvg}
     const display = getAssetDisplayImage(asset).trim();
     if (display) return workflowSafeImgSrc(display);
     return buildTextLightboxPreviewDataUrl(asset.textTitle || '', getAssetDisplayText(asset));
-  }, [buildTextLightboxPreviewDataUrl]);
+  }, [buildTextLightboxPreviewDataUrl, getAssetDisplayImage, getAssetDisplayText]);
   const repositoryItems = useMemo<WorkflowAsset[]>(() => {
     const q = libraryTagQuery.trim().toLowerCase();
     const base = assets.filter((a) => {
@@ -840,7 +1044,7 @@ ${lineSvg}
       const hay = `${item.groupLabel || ''} ${tags} ${getAssetDisplayText(item)}`.toLowerCase();
       return words.every((w) => hay.includes(w));
     });
-  }, [assets, libraryFilter, libraryTagQuery]);
+  }, [assets, libraryFilter, libraryTagQuery, getAssetDisplayText]);
   useEffect(() => {
     setAssets((prev) => {
       let changed = false;
@@ -969,22 +1173,22 @@ ${lineSvg}
     setAssets((prev) => [...prev, next]);
     setLightboxAssetId(id);
     onLog?.('info', raw ? '已粘贴为文字资产' : '已添加文字资产');
-  }, [onLog]);
+  }, [onLog, setAssets]);
 
   const addTasksToPending = useCallback((tasks: WorkflowPendingTask[]) => {
     if (tasks.length === 0) return;
     setPending((prev) => [...prev, ...tasks]);
-  }, []);
+  }, [setPending]);
 
-  const removeFromPending = useCallback((taskId: string) => {
+  const _removeFromPending = useCallback((taskId: string) => {
     const task = pending.find((t) => t.id === taskId);
     setPending((prev) => prev.filter((t) => t.id !== taskId));
     if (task) {
       setAssets((prev) => prev.map((x) => (x.id === task.assetId ? { ...x, hiddenInGrid: false } : x)));
     }
-  }, [pending]);
+  }, [pending, setAssets, setPending]);
 
-  const runTask = async (
+  const runTask = useCallback(async (
     task: WorkflowPendingTask,
     batchGroup?: { key: string; expected: number }
   ): Promise<{ image: string | null; text?: string; vgpSteps?: VgpGenStepCapture[] }> => {
@@ -1018,6 +1222,7 @@ ${lineSvg}
       try {
         const result = await executeCapabilitySet(set, inputImage ?? '', {
           presets: actionModules,
+          companionProjectId: workspaceProjectChrome?.activeProjectId?.trim() || undefined,
           onLog,
           onRunProgress: (line) => {
             setCapabilitySetRunByAssetId((prev) => {
@@ -1041,6 +1246,9 @@ ${lineSvg}
           return { image: null };
         }
         setAssetError(task.assetId, null);
+        if (result.kind === 'text') {
+          return { image: null, text: result.text };
+        }
         return result.kind === 'image'
           ? { image: result.image, vgpSteps: result.vgpSteps }
           : { image: null };
@@ -1050,9 +1258,27 @@ ${lineSvg}
     }
     const module = getModule(actionType);
     if (module?.category === 'generate_3d') {
-      const msg = '生成3D 请拖图到能力框提交，不进入执行队列';
-      onLog?.('warn', msg);
-      setAssetError(task.assetId, msg);
+      if (!onAddGenerate3DJob) {
+        const msg = '未配置 3D 执行器，无法提交生成3D任务';
+        onLog?.('warn', msg);
+        setAssetError(task.assetId, msg);
+        return { image: null };
+      }
+      if (!inputImage?.trim()) {
+        const msg = '生成3D 需要图片输入';
+        onLog?.('warn', msg);
+        setAssetError(task.assetId, msg);
+        return { image: null };
+      }
+      try {
+        await onAddGenerate3DJob(module, inputImage, task);
+        setAssetError(task.assetId, null);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : safeUnknownToString(err);
+        const full = `[${getActionLabel(actionType)}] ${msg}`;
+        onLog?.('error', full);
+        setAssetError(task.assetId, full);
+      }
       return { image: null };
     }
     const actionLabel = getActionLabel(actionType);
@@ -1071,10 +1297,18 @@ ${lineSvg}
             ? { skipUnderstand: !task.overrideSkipUnderstand }
             : {}),
         };
-        const out = await executeCapability(preset, inputImage ?? '', { onLog }, {
-          inputText,
-          ...(batchGroup ? { batchGroupKey: batchGroup.key, batchGroupExpected: batchGroup.expected } : {}),
-        });
+        const out = await executeCapability(
+          preset,
+          inputImage ?? '',
+          {
+            onLog,
+            companionProjectId: workspaceProjectChrome?.activeProjectId?.trim() || undefined,
+          },
+          {
+            inputText,
+            ...(batchGroup ? { batchGroupKey: batchGroup.key, batchGroupExpected: batchGroup.expected } : {}),
+          }
+        );
         if (out.ok === false) {
           const msg = `[${actionLabel}] ${out.error}`;
           onLog?.('warn', msg);
@@ -1100,7 +1334,20 @@ ${lineSvg}
     const fallbackMsg = `[${actionLabel}] 未能获得结果（请重试或检查配置）`;
     setAssetError(task.assetId, fallbackMsg);
     return { image: null };
-  };
+  }, [
+    actionModules,
+    getActionLabel,
+    getModule,
+    getSet,
+    onAddGenerate3DJob,
+    onLog,
+    setAssetError,
+    workspaceProjectChrome?.activeProjectId,
+  ]);
+  const runTaskRef = useRef(runTask);
+  useEffect(() => {
+    runTaskRef.current = runTask;
+  }, [runTask]);
 
   /** 替换组内某项为另一个资产 */
   const replaceGroupItemWithSubAsset = useCallback((groupAssetId: string, itemIndex: number, subAssetId: string) => {
@@ -1113,7 +1360,7 @@ ${lineSvg}
         return { ...a, assetIds: next };
       })
     );
-  }, []);
+  }, [setAssets]);
 
   /** 将组内多个成员移到组外（脱离组） */
   const moveGroupItemsToUpperLevel = useCallback(
@@ -1175,7 +1422,7 @@ ${lineSvg}
     [moveGroupItemsToUpperLevel]
   );
 
-  const removeFromGroup = useCallback(
+  const _removeFromGroup = useCallback(
     (groupAssetId: string, itemIndex: number) => {
       moveGroupItemToUpperLevel(groupAssetId, itemIndex);
     },
@@ -1292,11 +1539,6 @@ ${lineSvg}
                   })
                 );
                 const assetIds = newAssets.map((x) => x.id);
-                const nextOrder = [...(taskAsset.resultOrder || []), task.actionType];
-                const nextMeta = {
-                  ...(taskAsset.resultMeta || {}),
-                  [task.actionType]: { executedAt: Date.now() },
-                };
                 const usedLabels = new Set<string>(prev.map((a) => a.groupLabel).filter((x): x is string => !!x));
                 const groupId = uuid();
                 const groupLabel = getRandomGroupCodeName(usedLabels);
@@ -1338,7 +1580,7 @@ ${lineSvg}
             }
           } else {
             onLog?.('info', `${logBatch} ${taskLabel} 执行中…`);
-            const { image: result, text: textResult, vgpSteps } = await runTask(task, batchGroup);
+            const { image: result, text: textResult, vgpSteps } = await runTaskRef.current(task, batchGroup);
             if (textResult != null && textResult !== '') {
               setAssets((prev) =>
                 prev.map((a) => {
@@ -1360,55 +1602,70 @@ ${lineSvg}
                 })
               );
             } else {
-              setAssets((prev) =>
-                prev.map((a) => {
-                  if (a.id !== task.assetId) return a;
-                  const baseId = task.actionType;
-                  const hasAnyVersion =
-                    Object.keys(a.results || {}).some((k) => baseActionId(k) === baseId) ||
-                    (a.resultOrder || []).some((k) => baseActionId(k) === baseId);
-                  const key = result ? (hasAnyVersion ? makeVersionKey(baseId) : baseId) : baseId;
-                  const nextResults = result ? { ...a.results, [key]: result } : a.results;
-                  const nextOrder = result ? [...(a.resultOrder || []), key] : a.resultOrder || [];
-                  const nextMeta = { ...(a.resultMeta || {}), [key]: { executedAt: Date.now() } };
-                  const tagList =
-                    result
-                      ? buildWorkflowImageTags({
-                          actionLabel: getActionLabel(task.actionType),
-                          actionId: baseActionId(task.actionType),
-                          presetInstruction: getModule(task.actionType)?.instruction,
-                          promptOverride: task.promptOverride,
-                          inputText: task.inputText,
-                        })
-                      : [];
-                  let next: WorkflowAsset = {
-                    ...a,
-                    results: nextResults,
-                    resultOrder: nextOrder,
-                    resultMeta: nextMeta,
-                    ...(result
-                      ? {
-                          imageTags: { ...(a.imageTags || {}), [key]: tagList },
-                          imageTagStage: { ...(a.imageTagStage || {}), [key]: 'coarse' as const },
-                        }
-                      : {}),
-                    displayKey: result ? key : a.displayKey,
-                    hiddenInGrid: a.groupId ? a.hiddenInGrid : false,
-                  };
-                  if (result) {
-                    const hadOverride = task.promptOverride != null && task.promptOverride.trim() !== '';
-                    const summaryLabel = getActionLabel(task.actionType);
-                    next = applyVgpAfterSuccessfulGen(next, {
-                      resultKey: key,
-                      vgpSteps: vgpSteps ?? [],
-                      semanticSummary: hadOverride ? `${summaryLabel}（用户微调）` : summaryLabel,
-                      hadPromptOverride: hadOverride,
-                      inputSourceDisplayKey: task.inputSourceDisplayKey,
-                    });
-                  }
-                  return next;
-                })
-              );
+              flushSync(() => {
+                setAssets((prev) =>
+                  prev.map((a) => {
+                    if (a.id !== task.assetId) return a;
+                    const baseId = task.actionType;
+                    const hasAnyVersion =
+                      Object.keys(a.results || {}).some((k) => baseActionId(k) === baseId) ||
+                      (a.resultOrder || []).some((k) => baseActionId(k) === baseId);
+                    const key = result ? (hasAnyVersion ? makeVersionKey(baseId) : baseId) : baseId;
+                    const nextResults = result ? { ...a.results, [key]: result } : a.results;
+                    const nextOrder = result ? [...(a.resultOrder || []), key] : a.resultOrder || [];
+                    const nextMeta = { ...(a.resultMeta || {}), [key]: { executedAt: Date.now() } };
+                    const tagList =
+                      result
+                        ? buildWorkflowImageTags({
+                            actionLabel: getActionLabel(task.actionType),
+                            actionId: baseActionId(task.actionType),
+                            presetInstruction: getModule(task.actionType)?.instruction,
+                            promptOverride: task.promptOverride,
+                            inputText: task.inputText,
+                          })
+                        : [];
+                    let next: WorkflowAsset = {
+                      ...a,
+                      results: nextResults,
+                      resultOrder: nextOrder,
+                      resultMeta: nextMeta,
+                      ...(result
+                        ? {
+                            imageTags: { ...(a.imageTags || {}), [key]: tagList },
+                            imageTagStage: { ...(a.imageTagStage || {}), [key]: 'coarse' as const },
+                          }
+                        : {}),
+                      displayKey: result ? key : a.displayKey,
+                      hiddenInGrid: a.groupId ? a.hiddenInGrid : false,
+                    };
+                    if (result) {
+                      const hadOverride = task.promptOverride != null && task.promptOverride.trim() !== '';
+                      const summaryLabel = getActionLabel(task.actionType);
+                      next = applyVgpAfterSuccessfulGen(next, {
+                        resultKey: key,
+                        vgpSteps: vgpSteps ?? [],
+                        semanticSummary: hadOverride ? `${summaryLabel}（用户微调）` : summaryLabel,
+                        hadPromptOverride: hadOverride,
+                        inputSourceDisplayKey: task.inputSourceDisplayKey,
+                      });
+                    }
+                    return next;
+                  })
+                );
+              });
+              const after = assetsRef.current.find((x) => x.id === task.assetId);
+              if (
+                after &&
+                result &&
+                parseDataUrlToBlob(result) &&
+                !isWorkflowTextAsset(after)
+              ) {
+                const order = after.resultOrder || [];
+                const lastKey = order[order.length - 1];
+                if (lastKey && String(after.results?.[lastKey] || '') === String(result)) {
+                  scheduleCompanionPersistResult(task.assetId, lastKey, result);
+                }
+              }
               setCompletedTaskIds((prev) => {
                 const next = new Set(prev);
                 next.add(task.id);
@@ -1491,9 +1748,10 @@ ${lineSvg}
       setPending,
       setAssets,
       getActionLabel,
+      getModule,
       replaceGroupItemWithSubAsset,
-      runTask,
-      actionModules,
+      setAssetError,
+      scheduleCompanionPersistResult,
     ]
   );
 
@@ -1511,12 +1769,6 @@ ${lineSvg}
         const mod =
           actionModules.find((m) => m.id === trimmed) ??
           capabilityPresets.find((p) => p.id === trimmed);
-        if (mod?.category === 'generate_3d' && onAddGenerate3DJob) {
-          const img = getAssetDisplayImage(targetAsset);
-          if (img) onAddGenerate3DJob(mod, img);
-          else onLog?.('warn', '无法读取图片，无法提交生成 3D');
-          return;
-        }
         if (mod && !workflowAssetAllowedForCapabilityDrop(targetAsset, mod)) {
           onLog?.('warn', '该能力与当前资产类型不匹配');
           return;
@@ -1552,7 +1804,6 @@ ${lineSvg}
       executePending,
       getAssetDisplayImage,
       makePendingTaskForAsset,
-      onAddGenerate3DJob,
       onLog,
       setPending,
     ]
@@ -1708,8 +1959,6 @@ ${lineSvg}
           })
         );
         const assetIds = newAssets.map((x) => x.id);
-        const nextOrder = [...(taskAsset.resultOrder || []), task.actionType];
-        const nextMeta = { ...(taskAsset.resultMeta || {}), [task.actionType]: { executedAt: Date.now() } };
         const usedLabels = new Set<string>(prev.map((a) => a.groupLabel).filter((x): x is string => !!x));
         const groupId = uuid();
         const groupLabel = getRandomGroupCodeName(usedLabels);
@@ -1734,6 +1983,13 @@ ${lineSvg}
           newGroup,
         ];
 
+        for (const a of newAssets) {
+          const o = String(a.original || '').trim();
+          if (o) scheduleCompanionPersistOriginalAny(a.id, o);
+        }
+        const go = String(newGroup.original || '').trim();
+        if (go) scheduleCompanionPersistOriginalAny(newGroup.id, go);
+
         revokeWorkflowModelBlobUrlsAfterAssetRemoved(taskAsset, next);
         return next;
       });
@@ -1744,7 +2000,15 @@ ${lineSvg}
       if (remaining.length > 0) executePending(remaining);
       else setExecuting(false);
     },
-    [cutSelectState, setAssets, setPending, executePending, replaceGroupItemWithSubAsset, actionModules]
+    [
+      cutSelectState,
+      setAssets,
+      setPending,
+      executePending,
+      replaceGroupItemWithSubAsset,
+      actionModules,
+      scheduleCompanionPersistOriginalAny,
+    ]
   );
 
   const addImagesFromFiles = useCallback((files: File[]) => {
@@ -1756,34 +2020,35 @@ ${lineSvg}
       reader.onload = () => {
         const base64 = reader.result as string;
         const newId = uuid();
-          const pushNewAsset = () => {
-            setAssets((prev) => {
-              // 上传时：如果当前在组内，新增资产应该成为该组的成员
-              const parentGroup = groupFilterId ? prev.find((a) => a.id === groupFilterId) : null;
-              const newAsset: WorkflowAsset = attachInitialVgpToNewAsset({
-                id: newId,
-                original: base64,
-                displayKey: 'original',
-                results: {},
-                resultOrder: [],
-                archived: false,
-                hiddenInGrid: false,
-                createdAt: batchBase + (n - 1 - fileIdx),
-                ...(parentGroup ? { groupId: parentGroup.id } : {}),
-              });
-              if (!parentGroup) {
-                return [...prev, newAsset];
-              }
-              // 将新资产添加到组的 assetIds 中（新版 isGroup 结构）
-              return prev
-                .map((a) => {
-                  if (a.id === parentGroup.id) {
-                    return { ...a, assetIds: [...(a.assetIds ?? []), newId] };
-                  }
-                  return a;
-                })
-                .concat(newAsset);
+        const pushNewAsset = () => {
+          setAssets((prev) => {
+            // 上传时：如果当前在组内，新增资产应该成为该组的成员
+            const parentGroup = groupFilterId ? prev.find((a) => a.id === groupFilterId) : null;
+            const newAsset: WorkflowAsset = attachInitialVgpToNewAsset({
+              id: newId,
+              original: base64,
+              displayKey: 'original',
+              results: {},
+              resultOrder: [],
+              archived: false,
+              hiddenInGrid: false,
+              createdAt: batchBase + (n - 1 - fileIdx),
+              ...(parentGroup ? { groupId: parentGroup.id } : {}),
             });
+            if (!parentGroup) {
+              return [...prev, newAsset];
+            }
+            // 将新资产添加到组的 assetIds 中（新版 isGroup 结构）
+            return prev
+              .map((a) => {
+                if (a.id === parentGroup.id) {
+                  return { ...a, assetIds: [...(a.assetIds ?? []), newId] };
+                }
+                return a;
+              })
+              .concat(newAsset);
+          });
+          scheduleCompanionPersistOriginalAny(newId, base64);
         };
         const im = new Image();
         im.onload = () => {
@@ -1822,7 +2087,7 @@ ${lineSvg}
       };
       reader.readAsDataURL(file);
     });
-  }, [groupFilterId, setAssets]);
+  }, [groupFilterId, setAssets, scheduleCompanionPersistOriginalAny]);
 
   const addModelsFromFiles = useCallback(
     (files: File[]) => {
@@ -1917,14 +2182,14 @@ ${lineSvg}
     [buildWorkflowModelPlaceholderDataUrl, groupFilterId, onLog, setAssets]
   );
 
-  const handleBatchUploadCorrect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleBatchUploadCorrect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files?.length) return;
     const list = Array.from(files);
     addImagesFromFiles(list);
     addModelsFromFiles(list);
     e.target.value = '';
-  };
+  }, [addImagesFromFiles, addModelsFromFiles]);
 
   const hasWorkflowDropTransfer = useCallback((dt?: DataTransfer | null) => {
     if (!dt) return false;
@@ -2550,8 +2815,8 @@ ${lineSvg}
     return () => {
       cancelled = true;
     };
-  }, [lightboxAsset, assets]);
-  const goLightbox = (delta: number) => {
+  }, [lightboxAsset, assets, getAssetDisplayImage, getAssetDisplayText]);
+  const _goLightbox = (delta: number) => {
     if (lightboxList.length === 0) return;
     const next = (lightboxIndex + delta + lightboxList.length) % lightboxList.length;
     setLightboxSourceSlot(null);
@@ -2588,7 +2853,7 @@ ${lineSvg}
       const nextIdx = ((idx + deltaSteps) % keys.length + keys.length) % keys.length;
       return prev.map((x) => (x.id === id ? { ...x, displayKey: keys[nextIdx] } : x));
     });
-  }, [lightboxAssetId]);
+  }, [lightboxAssetId, setAssets]);
 
   const setDisplayKey = (assetId: string, key: string) => {
     setAssets((prev) => prev.map((a) => (a.id === assetId ? { ...a, displayKey: key } : a)));
@@ -2694,7 +2959,6 @@ ${lineSvg}
   }, []);
 
   const discardResult = (assetId: string, actionType: string) => {
-    const baseId = baseActionId(actionType);
     setAssets((prev) =>
       prev.map((a) => {
         if (a.id !== assetId) return a;
@@ -2702,6 +2966,8 @@ ${lineSvg}
         delete nextResults[actionType];
         const nextTextResults = { ...(a.textResults || {}) };
         delete nextTextResults[actionType];
+        const nextRc = { ...(a.resultsCompanionKeys || {}) };
+        delete nextRc[actionType];
         const nextOrder = (a.resultOrder || []).filter((k) => k !== actionType);
         const nextMeta = { ...a.resultMeta };
         delete nextMeta[actionType];
@@ -2713,6 +2979,7 @@ ${lineSvg}
           resultOrder: nextOrder,
           resultMeta: nextMeta,
           displayKey,
+          resultsCompanionKeys: Object.keys(nextRc).length ? nextRc : undefined,
         };
       })
     );
@@ -2791,13 +3058,16 @@ ${lineSvg}
     if (archivedDetailAssetId === assetId) setArchivedDetailAssetId(null);
     // 如果删除的是当前查看的组，清除组筛选
     if (groupFilterId === assetId) setGroupFilterId(null);
-  }, [lightboxAssetId, archivedDetailAssetId, groupFilterId]);
+  }, [lightboxAssetId, archivedDetailAssetId, groupFilterId, setAssets, setPending]);
 
   const archivedDetailAsset = archivedDetailAssetId ? assets.find((a) => a.id === archivedDetailAssetId) : null;
 
   const currentGroupAsset = groupFilterId ? assets.find((a) => a.id === groupFilterId) : null;
-  const currentGroupMemberIds = currentGroupAsset ? getGroupMemberIds(currentGroupAsset) : [];
-  /** 兼容层：将新的 string[] 转换为旧代码期望的 WorkflowCutGroupItem[] 格式 */
+  const currentGroupMemberIds = useMemo(
+    () => (currentGroupAsset ? getGroupMemberIds(currentGroupAsset) : []),
+    [currentGroupAsset]
+  );
+  /** 兼容层：将新的 string[] 转换为旧代码期望的对象数组格式 */
   const currentGroupItems: Array<string | { assetId: string } | { r2Key: string }> = currentGroupMemberIds.map((id) => ({ assetId: id }));
   /** 组内拖到功能区/队列时以 drag state 中的组 id 为准 */
   const groupAssetForDrag = useMemo(
@@ -2807,7 +3077,7 @@ ${lineSvg}
         : null,
     [draggingGroupItems, assets]
   );
-  const dragGroupMemberIds = groupAssetForDrag ? getGroupMemberIds(groupAssetForDrag) : [];
+  const _dragGroupMemberIds = groupAssetForDrag ? getGroupMemberIds(groupAssetForDrag) : [];
 
   const flattenGroupImages = useCallback(
     (asset: WorkflowAsset, visited: Set<string> = new Set()): string[] => {
@@ -3125,8 +3395,9 @@ ${lineSvg}
             : {}),
         },
       ]);
+      scheduleCompanionPersistOriginalAny(newAsset.id, imageBase64);
     },
-    [setAssets, setPending, onLog]
+    [setAssets, setPending, onLog, scheduleCompanionPersistOriginalAny]
   );
 
   /** 在给定 `prev` 上插入手动组（供「建组」与组内拖入非组卡一次 setAssets 复用） */
@@ -3134,7 +3405,7 @@ ${lineSvg}
     prev: WorkflowAsset[],
     assetIds: string[],
     opts?: { allowTextAssets?: boolean }
-  ): WorkflowAsset[] => {
+  ): InsertManualGroupResult => {
     const allowTextAssets = opts?.allowTextAssets === true;
     const ids = [...new Set(assetIds)].filter((id) => {
       const x = prev.find((a) => a.id === id);
@@ -3142,7 +3413,7 @@ ${lineSvg}
       if (!allowTextAssets && isWorkflowTextAsset(x)) return false;
       return true;
     });
-    if (ids.length < 2) return prev;
+    if (ids.length < 2) return { next: prev, createdGroup: null };
     const first = prev.find((x) => x.id === ids[0]);
     const coverImage = first ? getAssetDisplayImage(first, prev) : '';
     const groupId = uuid();
@@ -3166,7 +3437,10 @@ ${lineSvg}
       if (ids.includes(x.id)) return { ...x, groupId, groupOrder: ids.indexOf(x.id) };
       return x;
     });
-    return [...mapped, newGroup];
+    return {
+      next: [...mapped, newGroup],
+      createdGroup: { id: groupId, coverImage },
+    };
   }, [getAssetDisplayImage]);
 
   const expandRootAssetsForGenerateCount = useCallback(
@@ -3203,25 +3477,33 @@ ${lineSvg}
         for (const plan of clonePlans) {
           const src = next.find((a) => a.id === plan.sourceId);
           if (!src) continue;
-          next.push({
+          const clone: WorkflowAsset = {
             ...src,
             id: plan.cloneId,
             parentAssetId: undefined,
             archived: false,
             hiddenInGrid: false,
             createdAt: Date.now(),
-          });
+          };
+          next.push(clone);
+          const o = String(clone.original || '').trim();
+          if (o) queueMicrotask(() => scheduleCompanionPersistOriginalAny(plan.cloneId, o));
         }
         for (const ids of groupPlans) {
-          next = insertManualGroupForAssetIds(next, ids, {
+          const r = insertManualGroupForAssetIds(next, ids, {
             allowTextAssets: opts?.allowTextAssetsForGrouping === true,
           });
+          next = r.next;
+          if (r.createdGroup) {
+            const cg = r.createdGroup;
+            queueMicrotask(() => scheduleCompanionPersistOriginalAny(cg.id, cg.coverImage));
+          }
         }
         return next;
       });
       return { rootIds, cloneTaskSeeds };
     },
-    [assets, setAssets, insertManualGroupForAssetIds]
+    [assets, setAssets, insertManualGroupForAssetIds, scheduleCompanionPersistOriginalAny]
   );
 
   /** 将资产添加到组的 assetIds 中 */
@@ -3251,10 +3533,17 @@ ${lineSvg}
   const createGroupFromAssets = useCallback(
     (assetIds: string[]) => {
       if (!assetIds.length) return;
-      setAssets((prev) => insertManualGroupForAssetIds(prev, assetIds));
+      setAssets((prev) => {
+        const r = insertManualGroupForAssetIds(prev, assetIds);
+        if (r.createdGroup) {
+          const cg = r.createdGroup;
+          queueMicrotask(() => scheduleCompanionPersistOriginalAny(cg.id, cg.coverImage));
+        }
+        return r.next;
+      });
       setSelectedAssetIds(new Set());
     },
-    [insertManualGroupForAssetIds, setAssets, setSelectedAssetIds]
+    [insertManualGroupForAssetIds, scheduleCompanionPersistOriginalAny, setAssets, setSelectedAssetIds]
   );
 
   /** 从组的 assetIds 创建嵌套组 */
@@ -3286,20 +3575,24 @@ ${lineSvg}
           createdAt: Date.now(),
         });
 
-        return prev.map((a) => {
-          if (a.id === groupAssetId && isGroupAsset(a)) {
-            const nextAssetIds = [...(a.assetIds ?? [])];
-            nextAssetIds[itemIndex] = newGroupId;
-            return { ...a, assetIds: nextAssetIds };
-          }
-          if (a.id === childId) {
-            return { ...a, groupId: newGroupId };
-          }
-          return a;
-        }).concat(newGroup);
+        const next = prev
+          .map((a) => {
+            if (a.id === groupAssetId && isGroupAsset(a)) {
+              const nextAssetIds = [...(a.assetIds ?? [])];
+              nextAssetIds[itemIndex] = newGroupId;
+              return { ...a, assetIds: nextAssetIds };
+            }
+            if (a.id === childId) {
+              return { ...a, groupId: newGroupId };
+            }
+            return a;
+          })
+          .concat(newGroup);
+        queueMicrotask(() => scheduleCompanionPersistOriginalAny(newGroupId, coverImage));
+        return next;
       });
     },
-    [getAssetDisplayImage, setAssets]
+    [getAssetDisplayImage, scheduleCompanionPersistOriginalAny, setAssets]
   );
 
   const getEffectiveAssetIdsForAction = useCallback(
@@ -3330,7 +3623,7 @@ ${lineSvg}
     },
     [assets]
   );
-  const favoriteActionSet = useMemo(() => new Set(favoriteActionIds), [favoriteActionIds]);
+  const _favoriteActionSet = useMemo(() => new Set(favoriteActionIds), [favoriteActionIds]);
   // 常用功能只做“置顶快捷入口”，不从原列表移除，避免用户误以为模块丢失
   const visibleByCategory = useMemo(() => byCategory, [byCategory]);
   const visiblePresets = useMemo(() => presets, [presets]);
@@ -3602,13 +3895,6 @@ ${lineSvg}
             }
             return true;
           });
-          if (mod.category === 'generate_3d' && onAddGenerate3DJob) {
-            const firstId = effectiveIds[0];
-            const a = firstId ? assets.find((x) => x.id === firstId) : null;
-            const img = a ? getAssetDisplayImage(a) : null;
-            if (img) onAddGenerate3DJob(mod, img);
-            continue;
-          }
           const allowTextAssetsForGenerateCount =
             mod.category === 'text_to_text' || mod.category === 'text_to_image';
           const { rootIds, cloneTaskSeeds } =
@@ -3639,18 +3925,6 @@ ${lineSvg}
         const cut = isGroupAsset(groupAssetForSrc) ? groupAssetForSrc?.assetIds : groupAssetForSrc?.cutImageGroup;
         if (!groupAssetForSrc || !cut?.length) continue;
         const groupId = groupAssetForSrc.id;
-        if (mod.category === 'generate_3d' && onAddGenerate3DJob) {
-          const firstIndex = source.itemIndexes[0];
-          const item = firstIndex !== undefined ? cut[firstIndex] : undefined;
-          let img: string | null = null;
-          if (typeof item === 'string') img = item;
-          else if (item && typeof item === 'object' && 'assetId' in item) {
-            const child = assets.find((x) => x.id === item.assetId);
-            if (child) img = getAssetDisplayImage(child);
-          }
-          if (img) onAddGenerate3DJob(mod, img);
-          continue;
-        }
         for (const itemIndex of source.itemIndexes) {
           const item = cut[itemIndex];
           if (!item) continue;
@@ -3679,7 +3953,6 @@ ${lineSvg}
       getEffectiveAssetIdsForAction,
       assets,
       getAssetDisplayImage,
-      onAddGenerate3DJob,
       addToPending,
       addImageToPending,
       makePendingTaskForAsset,
@@ -3864,7 +4137,7 @@ ${lineSvg}
       if (img.trim()) return img.trim();
     }
     return null;
-  }, [lightboxAsset, selectedAssetIds, assets]);
+  }, [lightboxAsset, selectedAssetIds, assets, getAssetDisplayImage]);
 
   const composerAssetCandidates = useMemo<CapabilityAssetCandidate[]>(() => {
     const out: CapabilityAssetCandidate[] = [];
@@ -3953,55 +4226,73 @@ ${lineSvg}
     ]
   );
 
-  function importLibraryItemsIntoWorkflow(items: Array<WorkflowAsset | LibraryItem>) {
-    const workflowIds = new Set<string>();
-    const externalImages: string[] = [];
-    items.forEach((item) => {
-      if (!item) return;
-      // LibraryItem has 'type' property, WorkflowAsset does not
-      if ('type' in item && item.type) {
-        // LibraryItem - check if it's an existing workflow asset
-        if (item.id) workflowIds.add(item.id);
-      } else if (!('inRepository' in item)) {
-        // External image with data property (should not reach here in current usage)
-      }
-    });
-    if (workflowIds.size === 0 && externalImages.length === 0) return;
-    setAssets((prev) => {
-      let next = [...prev];
+  const importLibraryItemsIntoWorkflow = useCallback(
+    (items: Array<WorkflowAsset | LibraryItem>) => {
+      const workflowIds = new Set<string>();
+      const externalImages: string[] = [];
+      items.forEach((item) => {
+        if (!item) return;
+        if ('type' in item && item.type) {
+          if (item.id) workflowIds.add(item.id);
+        } else if (!('inRepository' in item)) {
+          /* 预留：外链图等 */
+        }
+      });
+      if (workflowIds.size === 0 && externalImages.length === 0) return;
+
+      const prevSnap = assetsRef.current;
+      const clones: WorkflowAsset[] = [];
       if (workflowIds.size > 0) {
-        const sourceAssets = prev.filter((a) => workflowIds.has(a.id));
-        const clonedFromRepo: WorkflowAsset[] = sourceAssets.map((a, idx) => ({
-          ...a,
-          id: uuid(),
-          parentAssetId: undefined,
-          inRepository: false,
-          archived: false,
-          hiddenInGrid: false,
-          createdAt: Date.now() + idx,
-        }));
-        next = next.concat(clonedFromRepo);
+        const sourceAssets = prevSnap.filter((a) => workflowIds.has(a.id));
+        sourceAssets.forEach((a, idx) => {
+          clones.push({
+            ...a,
+            id: uuid(),
+            parentAssetId: undefined,
+            inRepository: false,
+            archived: false,
+            hiddenInGrid: false,
+            createdAt: Date.now() + idx,
+          });
+        });
       }
+      const createdExternal: WorkflowAsset[] = [];
       if (externalImages.length > 0) {
         const baseT = Date.now();
         const n = externalImages.length;
-        const created: WorkflowAsset[] = externalImages.map((src, idx) => ({
-          id: uuid(),
-          original: src,
-          displayKey: 'original',
-          results: {},
-          resultOrder: [],
-          archived: false,
-          hiddenInGrid: false,
-          inRepository: false,
-          createdAt: baseT + (n - 1 - idx),
-        }));
-        next = next.concat(created);
+        externalImages.forEach((src, idx) => {
+          createdExternal.push({
+            id: uuid(),
+            original: src,
+            displayKey: 'original',
+            results: {},
+            resultOrder: [],
+            archived: false,
+            hiddenInGrid: false,
+            inRepository: false,
+            createdAt: baseT + (n - 1 - idx),
+          });
+        });
       }
-      return next;
-    });
-    setWorkspacePane(2);
-  }
+
+      setAssets((prev) => {
+        let next = [...prev];
+        if (clones.length) next = next.concat(clones);
+        if (createdExternal.length) next = next.concat(createdExternal);
+        return next;
+      });
+      for (const c of clones) {
+        const o = String(c.original || '').trim();
+        if (o) scheduleCompanionPersistOriginalAny(c.id, o);
+      }
+      for (const c of createdExternal) {
+        const o = String(c.original || '').trim();
+        if (o) scheduleCompanionPersistOriginalAny(c.id, o);
+      }
+      setWorkspacePane(2);
+    },
+    [setAssets, scheduleCompanionPersistOriginalAny, setWorkspacePane]
+  );
 
   const handleOutlineDropToWorkspace = useCallback(
     (e: React.DragEvent) => {
@@ -4557,15 +4848,12 @@ ${lineSvg}
     onOpenLibraryPicker,
     pending,
     currentGroupAsset,
-    currentGroupItems,
     selectedAssetIds,
     selectedGroupItemKeys,
     showAllInGroup,
-    setArchiveHint,
-    setArchivedDetailAssetId,
     setColumnCount,
     setPending,
-    setSelectedAssetIds,
+    setSelectedRootAssetIds,
     setSelectedGroupItemKeys,
     setGroupFilterId,
     showArchived,
@@ -4575,13 +4863,14 @@ ${lineSvg}
     libraryFilter,
     repositoryOutlineMode,
     repositorySelectedTags,
-    snapWorkspacePaneToNode,
+    addWorkflowTextAsset,
+    capabilityPresetColumnCount,
+    currentGroupMemberIds,
+    libraryTagQuery,
     outlineCollapsedIds,
     outlineExpandableGroupIds,
     expandOutlineAll,
     collapseOutlineAll,
-    repositoryItems,
-    repositoryVisibleItems,
   ]);
   const sidebarOpsAllowed = workflowDragSourceAllowsSidebarOps(
     parseWorkflowDragSource(draggingAssetIds, draggingGroupItems),
@@ -5738,7 +6027,12 @@ ${lineSvg}
                             if (targetHasGroup) {
                               return mergeAssetIdsIntoGroupCardAssets(afterRemove, targetId, assetIds);
                             }
-                            return insertManualGroupForAssetIds(afterRemove, [...assetIds, targetId]);
+                            const r = insertManualGroupForAssetIds(afterRemove, [...assetIds, targetId]);
+                            if (r.createdGroup) {
+                              const cg = r.createdGroup;
+                              queueMicrotask(() => scheduleCompanionPersistOriginalAny(cg.id, cg.coverImage));
+                            }
+                            return r.next;
                           });
                           finish();
                         }}
@@ -6288,18 +6582,14 @@ ${lineSvg}
                 onClick={() => {
                   const idx = lightboxList.findIndex((a) => a.id === lightboxAsset.id);
                   const nextAsset = idx >= 0 && idx < lightboxList.length - 1 ? lightboxList[idx + 1] : null;
-                  if (mod.category === 'generate_3d' && onAddGenerate3DJob) {
-                    onAddGenerate3DJob(mod, getAssetDisplayImage(lightboxAsset));
-                  } else {
-                    addToPending(lightboxAsset.id, mod.id, {
-                      ...(lightboxSourceSlot
-                        ? {
-                            sourceGroupAssetId: lightboxSourceSlot.sourceGroupAssetId,
-                            sourceItemIndex: lightboxSourceSlot.sourceItemIndex,
-                          }
-                        : {}),
-                    });
-                  }
+                  addToPending(lightboxAsset.id, mod.id, {
+                    ...(lightboxSourceSlot
+                      ? {
+                          sourceGroupAssetId: lightboxSourceSlot.sourceGroupAssetId,
+                          sourceItemIndex: lightboxSourceSlot.sourceItemIndex,
+                        }
+                      : {}),
+                  });
                   setLightboxSourceSlot(null);
                   setLightboxAssetId(nextAsset?.id ?? null);
                 }}
@@ -6668,22 +6958,30 @@ ${lineSvg}
                 for (const plan of clonePlans) {
                   const src = next.find((a) => a.id === plan.sourceId);
                   if (!src) continue;
-                  next.push({
+                  const clone: WorkflowAsset = {
                     ...src,
                     id: plan.cloneId,
                     parentAssetId: undefined,
                     archived: false,
                     hiddenInGrid: false,
                     createdAt: Date.now(),
-                  });
+                  };
+                  next.push(clone);
+                  const o = String(clone.original || '').trim();
+                  if (o) queueMicrotask(() => scheduleCompanionPersistOriginalAny(plan.cloneId, o));
                 }
                 const allowTextAssetsForGenerateCount =
                   promptTweakModal.preset.category === 'text_to_text' ||
                   promptTweakModal.preset.category === 'text_to_image';
                 for (const ids of groupPlans) {
-                  next = insertManualGroupForAssetIds(next, ids, {
+                  const r = insertManualGroupForAssetIds(next, ids, {
                     allowTextAssets: allowTextAssetsForGenerateCount,
                   });
+                  next = r.next;
+                  if (r.createdGroup) {
+                    const cg = r.createdGroup;
+                    queueMicrotask(() => scheduleCompanionPersistOriginalAny(cg.id, cg.coverImage));
+                  }
                 }
                 return next;
               });

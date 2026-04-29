@@ -30,6 +30,8 @@ import {
   getTencentSecretKey,
   setTencentSecretKey as saveTencentSecretKey,
   subscribeAiSettingsCrossTab,
+  getDebugClientLogPersistEnabled,
+  setDebugClientLogPersistEnabled,
 } from '../services/settingsStore';
 import { isWorkspaceCloudEnabled } from '../services/workspaceCloudSync';
 import {
@@ -39,11 +41,16 @@ import {
   setCompanionLocalToken,
   normalizeCompanionBaseUrl,
 } from '../services/companionLocalPrefs';
+import { installLatestHostPluginBundleToCompanion } from '../services/hostPluginBundleClient';
 import {
   createCompanionJobEventStream,
   listCompanionProjects,
   listCompanionJobEvents,
+  listCompanionHostPluginBundles,
+  submitCompanionHostBundleProbeJob,
+  submitCompanionHostBundleExecJob,
   type CompanionJobEventV1,
+  type CompanionInstalledHostBundleV1,
   probeCompanionCapabilities,
   probeCompanionHealth,
 } from '../services/companionClient';
@@ -97,7 +104,17 @@ const SettingsSection: React.FC<{
    * 避免设置页仍显示旧的供应商/Key（与 `getAiProvider()` 真相源不一致）。
    */
   aiSettingsSyncRev?: number;
-}> = ({ currentUser = null, authLoading = false, onRefreshUser, onLogout, onAiInvocationSurfaceChange, aiSettingsSyncRev = 0 }) => {
+  /** 当前打开的工作区项目 id；写入宿主包计算任务元数据便于排查（伴侣侧可不消费） */
+  activeWorkspaceProjectId?: string | null;
+}> = ({
+  currentUser = null,
+  authLoading = false,
+  onRefreshUser,
+  onLogout,
+  onAiInvocationSurfaceChange,
+  aiSettingsSyncRev = 0,
+  activeWorkspaceProjectId = null,
+}) => {
   const contentRef = useRef<HTMLDivElement>(null);
   const [aiProvider, setAiProviderState] = useState<AiProvider>(DEFAULT_AI_PROVIDER);
   const [apiKey, setApiKey] = useState('');
@@ -134,6 +151,14 @@ const SettingsSection: React.FC<{
   const [companionJobEventsHint, setCompanionJobEventsHint] = useState('');
   const [companionJobEventsAuto, setCompanionJobEventsAuto] = useState(false);
   const [companionStreamMode, setCompanionStreamMode] = useState<'idle' | 'sse' | 'poll'>('idle');
+  const [hostBundleBusy, setHostBundleBusy] = useState(false);
+  const [hostBundleHint, setHostBundleHint] = useState('');
+  const [hostBundleListBusy, setHostBundleListBusy] = useState(false);
+  const [hostBundleRows, setHostBundleRows] = useState<CompanionInstalledHostBundleV1[]>([]);
+  const [hostBundleSelectedDir, setHostBundleSelectedDir] = useState('');
+  const [hostBundleExecBusy, setHostBundleExecBusy] = useState(false);
+  const [hostBundleExecHint, setHostBundleExecHint] = useState('');
+  const [debugLogPersistEnabled, setDebugLogPersistEnabledState] = useState(false);
 
   useEffect(() => {
     const u = userUiPrefs.avatarUrl.trim();
@@ -199,6 +224,7 @@ const SettingsSection: React.FC<{
     setVectorengineBaseUrlState(getVectorengineBaseUrl());
     setTencentSecretId(getTencentSecretId() ?? '');
     setTencentSecretKey(getTencentSecretKey() ?? '');
+    setDebugLogPersistEnabledState(getDebugClientLogPersistEnabled());
   }, []);
 
   useEffect(() => {
@@ -294,19 +320,6 @@ const SettingsSection: React.FC<{
     }
   };
 
-  const handleSaveCompanionBase = () => {
-    setCompanionLocalBaseUrl(companionBaseDraft);
-    setCompanionBaseDraft(getCompanionLocalBaseUrl());
-    setCompanionProbeHint('已保存本机探测地址');
-    setTimeout(() => setCompanionProbeHint(''), 2500);
-  };
-
-  const handleSaveCompanionToken = () => {
-    setCompanionLocalToken(companionTokenDraft);
-    setCompanionTokenDraft(getCompanionLocalToken());
-    setCompanionProbeHint('已保存。请与本机伴侣里填写的本机通信密码一致，网站才能正常调用本机。');
-    setTimeout(() => setCompanionProbeHint(''), 2500);
-  };
 
   const handleProbeCompanion = async () => {
     const base = normalizeCompanionBaseUrl(companionBaseDraft);
@@ -351,6 +364,34 @@ const SettingsSection: React.FC<{
     }
   };
 
+  const handleQuickConnectCompanion = async () => {
+    const base = normalizeCompanionBaseUrl(companionBaseDraft);
+    setCompanionLocalBaseUrl(base);
+    setCompanionBaseDraft(base);
+    if (companionTokenDraft.trim()) {
+      setCompanionLocalToken(companionTokenDraft);
+      setCompanionTokenDraft(getCompanionLocalToken());
+    }
+    setCompanionProbeHint('正在自动连接本机伴侣…');
+    await handleProbeCompanion();
+  };
+
+  const handleCompanionOneClickOff = () => {
+    setCompanionLocalToken('');
+    setCompanionTokenDraft('');
+    setCompanionProbeHint('已关闭配对密码。你仍可随时一键连接重新启用。');
+    setTimeout(() => setCompanionProbeHint(''), 2500);
+  };
+
+  const handleSaveCompanionAdvanced = () => {
+    setCompanionLocalBaseUrl(companionBaseDraft);
+    setCompanionBaseDraft(getCompanionLocalBaseUrl());
+    setCompanionLocalToken(companionTokenDraft);
+    setCompanionTokenDraft(getCompanionLocalToken());
+    setCompanionProbeHint('高级设置已保存');
+    setTimeout(() => setCompanionProbeHint(''), 2500);
+  };
+
   const companionConsoleHref = `${normalizeCompanionBaseUrl(companionBaseDraft)}/`;
 
   const handleListCompanionProjects = async () => {
@@ -371,9 +412,102 @@ const SettingsSection: React.FC<{
     }
   };
 
+  const handleRefreshHostBundles = async () => {
+    const base = normalizeCompanionBaseUrl(companionBaseDraft);
+    setHostBundleListBusy(true);
+    setHostBundleExecHint('');
+    try {
+      const r = await listCompanionHostPluginBundles(base);
+      if (r.ok === false) {
+        setHostBundleExecHint(`拉取已安装包失败：${r.error}${r.status != null ? `（HTTP ${r.status}）` : ''}`);
+        setHostBundleRows([]);
+        return;
+      }
+      const rows = Array.isArray(r.data.bundles) ? r.data.bundles : [];
+      setHostBundleRows(rows);
+      if (rows.length === 1 && rows[0]?.dirName) {
+        setHostBundleSelectedDir(rows[0].dirName);
+      }
+      setHostBundleExecHint(rows.length ? `已刷新：${rows.length} 个包` : '暂无已安装包（可先安装最新包）');
+    } catch (e) {
+      setHostBundleRows([]);
+      setHostBundleExecHint(e instanceof Error ? e.message : String(e));
+    } finally {
+      setHostBundleListBusy(false);
+    }
+  };
+
+  const handleInstallHostBundle = async () => {
+    setHostBundleBusy(true);
+    setHostBundleHint('');
+    try {
+      const { semver } = await installLatestHostPluginBundleToCompanion();
+      setHostBundleHint(`已写入本机卷 host-bundles/，版本 ${semver}。运行时状态见 /v1/runtime-status 中 hostPluginBundles。`);
+      void handleRefreshHostBundles();
+    } catch (e) {
+      setHostBundleHint(e instanceof Error ? e.message : String(e));
+    } finally {
+      setHostBundleBusy(false);
+    }
+  };
+
+  const handleHostBundleProbe = async () => {
+    const dir = hostBundleSelectedDir.trim();
+    if (!dir) {
+      setHostBundleExecHint('请先选择已安装包（或点「刷新已安装包列表」）');
+      return;
+    }
+    const base = normalizeCompanionBaseUrl(companionBaseDraft);
+    setHostBundleExecBusy(true);
+    setHostBundleExecHint('正在提交 host_bundle.probe…');
+    try {
+      const pid = activeWorkspaceProjectId?.trim() || undefined;
+      const r = await submitCompanionHostBundleProbeJob(base, dir, { projectId: pid });
+      if (r.ok === false) {
+        setHostBundleExecHint(`提交失败：${r.error}${r.status != null ? `（HTTP ${r.status}）` : ''}`);
+        return;
+      }
+      const jobId = r.data.jobId;
+      setCompanionJobIdDraft(jobId);
+      setHostBundleExecHint(`probe 已提交。任务 ${jobId} 已填入下方「任务编号」，可从头刷新或开启自动跟随。`);
+      void pullCompanionJobEvents(true, jobId);
+    } catch (e) {
+      setHostBundleExecHint(e instanceof Error ? e.message : String(e));
+    } finally {
+      setHostBundleExecBusy(false);
+    }
+  };
+
+  const handleHostBundleExec = async () => {
+    const dir = hostBundleSelectedDir.trim();
+    if (!dir) {
+      setHostBundleExecHint('请先选择已安装包（或点「刷新已安装包列表」）');
+      return;
+    }
+    const base = normalizeCompanionBaseUrl(companionBaseDraft);
+    setHostBundleExecBusy(true);
+    setHostBundleExecHint('正在提交 host_bundle.exec…');
+    try {
+      const pid = activeWorkspaceProjectId?.trim() || undefined;
+      const r = await submitCompanionHostBundleExecJob(base, dir, { projectId: pid });
+      if (r.ok === false) {
+        setHostBundleExecHint(`提交失败：${r.error}${r.status != null ? `（HTTP ${r.status}）` : ''}`);
+        return;
+      }
+      const jobId = r.data.jobId;
+      setCompanionJobIdDraft(jobId);
+      setHostBundleExecHint(`exec 已提交。任务 ${jobId} 已填入下方「任务编号」；exec 可能较久，建议开启自动跟随。`);
+      void pullCompanionJobEvents(true, jobId);
+    } catch (e) {
+      setHostBundleExecHint(e instanceof Error ? e.message : String(e));
+    } finally {
+      setHostBundleExecBusy(false);
+    }
+  };
+
   const pullCompanionJobEvents = useCallback(
-    async (resetCursor = false) => {
-      const jobId = companionJobIdDraft.trim();
+    async (resetCursor = false, jobIdOverride?: string) => {
+      const jobId = (jobIdOverride ?? companionJobIdDraft).trim();
       if (!jobId) {
         setCompanionJobEventsHint('请先填写任务编号');
         return;
@@ -738,7 +872,7 @@ const SettingsSection: React.FC<{
 
             <section id="settings-storage" className="scroll-mt-4 rounded-2xl border border-[#2e2e32] bg-[#121214] p-6">
               <h2 className="text-xs font-black uppercase tracking-wider text-blue-400/90 mb-4">数据与存储</h2>
-              <div className="rounded-xl border border-[#252528] p-4 space-y-3 text-[10px] text-gray-400 leading-relaxed">
+              <div className="rounded-xl border border-[#252528] p-4 space-y-4 text-[10px] text-gray-400 leading-relaxed">
                 <p className="text-gray-300 font-semibold">本机浏览器（localStorage）</p>
                 <ul className="list-disc list-inside space-y-1.5 text-gray-500">
                   <li>工作区项目画布、对话会话与临时库、仓库条目、能力预设等会占用<strong className="text-gray-400">当前站点在本机的存储配额</strong>（各浏览器通常共约数 MB～十余 MB，与设备有关）。</li>
@@ -746,9 +880,34 @@ const SettingsSection: React.FC<{
                 </ul>
                 <p className="text-gray-300 font-semibold pt-2">云端（登录且开启工作区云同步）</p>
                 <ul className="list-disc list-inside space-y-1.5 text-gray-500">
+                  <li>
+                    <strong className="text-gray-400">账号同步</strong>主要覆盖能力预设等账号级配置；<strong className="text-gray-400">工作区画布</strong>仍以本机（IndexedDB + 本地伴侣目录）为主。默认自动同步侧重
+                    <strong className="text-gray-400">项目索引</strong>等轻量数据，<strong className="text-gray-400">不会</strong>把整张画布自动「漫游」到另一台浏览器的同一页面。
+                  </li>
+                  <li>
+                    换电脑要继续同一项目：在本机安装并连接伴侣、使用<strong className="text-gray-400">同一工作区根目录</strong>，或使用导出 / 项目卡片「手动上传」等显式动作迁移资产。
+                  </li>
                   <li>流程图片等可走对象存储，<strong className="text-gray-400">工作区云空间</strong>有 per-user 配额（默认约 200MB，管理员可调）；与工作流 JSON 的本地缓存是两套概念。</li>
                   <li>大图以独立对象上传，不在单次 JSON 请求里塞满 base64，便于跨设备与省本地配额。</li>
                 </ul>
+                <div className="rounded-lg border border-[#2e2e32] bg-[#16161a] p-3 space-y-2">
+                  <p className="text-gray-300 font-semibold">调试模式：运行日志落盘（默认关闭）</p>
+                  <label className="inline-flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={debugLogPersistEnabled}
+                      onChange={(e) => {
+                        const next = e.target.checked;
+                        setDebugLogPersistEnabledState(next);
+                        setDebugClientLogPersistEnabled(next);
+                      }}
+                    />
+                    <span className="text-[10px] text-gray-300">开启后，脱敏运行日志会写入本地文件（7 天自动清理）</span>
+                  </label>
+                  <p className="text-[9px] text-gray-500">
+                    仅用于排障：不记录 API Key、不记录完整图片 base64。关闭后立即停止写入。
+                  </p>
+                </div>
               </div>
             </section>
 
@@ -756,53 +915,39 @@ const SettingsSection: React.FC<{
               <h2 className="text-xs font-black uppercase tracking-wider text-blue-400/90 mb-4">本地伴侣</h2>
               <div className="rounded-xl border border-[#252528] p-4 space-y-4 text-[10px] text-gray-400 leading-relaxed">
                 <p className="text-[11px] text-gray-300 leading-relaxed">
-                  在本机安装并运行「本地伴侣」后，部分处理可在本机完成，通常更快、素材也可留在本机。请先保存连接信息并点击「检测连接」。
+                  想在本机处理素材，直接点「一键连接本机伴侣」即可。只有连接失败时，才需要展开高级设置。
                 </p>
-                <div className="space-y-2">
-                  <label className="block text-[10px] text-gray-400">本机地址</label>
-                  <input
-                    type="url"
-                    value={companionBaseDraft}
-                    onChange={(e) => setCompanionBaseDraft(e.target.value)}
-                    placeholder="默认本机端口即可"
-                    className="w-full px-3 py-2 rounded-xl bg-[#16161a] border border-[#2e2e32] text-[11px] text-white placeholder-gray-600 focus:border-blue-500 focus:outline-none"
-                    autoComplete="off"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label className="block text-[10px] text-gray-400">配对密码（可选）</label>
-                  <input
-                    type="password"
-                    value={companionTokenDraft}
-                    onChange={(e) => setCompanionTokenDraft(e.target.value)}
-                    placeholder="与桌面向导或本机配置一致时填写"
-                    className="w-full px-3 py-2 rounded-xl bg-[#16161a] border border-[#2e2e32] text-[11px] text-white placeholder-gray-600 focus:border-blue-500 focus:outline-none"
-                    autoComplete="off"
-                  />
-                </div>
                 <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
-                    onClick={handleSaveCompanionBase}
-                    className="px-4 py-2 rounded-xl bg-[#26262c] hover:bg-[#383842] border border-[#2e2e32] text-[10px] font-bold text-gray-200 transition-colors"
+                    onClick={() => void handleQuickConnectCompanion()}
+                    disabled={companionProbeBusy}
+                    className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-[10px] font-black uppercase text-white transition-colors disabled:opacity-60"
                   >
-                    保存地址
+                    {companionProbeBusy ? '连接中…' : '一键连接本机伴侣'}
                   </button>
                   <button
                     type="button"
-                    onClick={handleSaveCompanionToken}
+                    onClick={handleCompanionOneClickOff}
                     className="px-4 py-2 rounded-xl bg-[#26262c] hover:bg-[#383842] border border-[#2e2e32] text-[10px] font-bold text-gray-200 transition-colors"
                   >
-                    保存配对密码
+                    一键关闭配对
                   </button>
                   <button
                     type="button"
                     onClick={() => void handleProbeCompanion()}
                     disabled={companionProbeBusy}
-                    className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-[10px] font-black uppercase text-white transition-colors disabled:opacity-60"
+                    className="px-4 py-2 rounded-xl border border-[#3f3f46] text-[10px] font-bold text-gray-300 hover:bg-[#222228] transition-colors disabled:opacity-60"
                   >
-                    {companionProbeBusy ? '检测中…' : '检测连接'}
+                    {companionProbeBusy ? '检测中…' : '重新检测'}
                   </button>
+                  <a
+                    href="assetcutter-companion://open"
+                    className="inline-flex items-center px-4 py-2 rounded-xl border border-[#3f3f46] text-[10px] font-bold text-gray-300 hover:bg-[#222228] transition-colors"
+                    title="需已安装 Asset Cutter 桌面伴侣；首次使用可能需在系统中确认协议关联"
+                  >
+                    调起桌面伴侣
+                  </a>
                   <a
                     href={companionConsoleHref}
                     target="_blank"
@@ -820,6 +965,118 @@ const SettingsSection: React.FC<{
                     {companionProjectsBusy ? '刷新中…' : '刷新本机项目列表'}
                   </button>
                 </div>
+                <div className="rounded-lg border border-dashed border-[#3f3f46] bg-[#16161a]/80 p-3 space-y-2">
+                  <p className="text-[10px] text-gray-500 leading-relaxed">
+                    <span className="text-gray-400 font-bold">宿主插件包</span>（如大模型 / Segment Anything
+                    runtime）：管理员在后台登记为 <code className="text-gray-500">host_plugin_bundle</code>{' '}
+                    后，可从此处拉取到本机卷（需已登录主站、本机伴侣可连，且下载 URL 须为 https 且主机在 R2
+                    允许域或环境变量 <code className="text-gray-500">COMPANION_HOST_BUNDLE_TRUST_HOSTS</code>）。
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => void handleInstallHostBundle()}
+                    disabled={hostBundleBusy}
+                    className="px-4 py-2 rounded-xl bg-[#1e3a5f] hover:bg-[#264f7a] border border-[#3b82f6]/40 text-[10px] font-bold text-blue-100 transition-colors disabled:opacity-60"
+                  >
+                    {hostBundleBusy ? '安装中…' : '安装最新宿主插件包到本机'}
+                  </button>
+                  {hostBundleHint ? (
+                    <p className="text-[10px] text-gray-400 whitespace-pre-wrap break-words">{hostBundleHint}</p>
+                  ) : null}
+                  <div className="mt-3 pt-3 border-t border-[#2e2e32]/80 space-y-2">
+                    <p className="text-[10px] text-gray-500 leading-relaxed">
+                      <span className="text-gray-400 font-bold">run.json 计算</span>：向本机伴侣提交{' '}
+                      <code className="text-gray-500">host_bundle.probe</code> /{' '}
+                      <code className="text-gray-500">host_bundle.exec</code>（与设置页下方「任务进度」共用）。
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void handleRefreshHostBundles()}
+                        disabled={hostBundleListBusy || hostBundleBusy}
+                        className="px-3 py-1.5 rounded-lg bg-[#26262c] hover:bg-[#383842] border border-[#2e2e32] text-[10px] font-bold text-gray-200 transition-colors disabled:opacity-60"
+                      >
+                        {hostBundleListBusy ? '刷新中…' : '刷新已安装包列表'}
+                      </button>
+                    </div>
+                    <CustomDropdown
+                      value={hostBundleSelectedDir}
+                      onChange={setHostBundleSelectedDir}
+                      disabled={hostBundleRows.length === 0}
+                      options={[
+                        { value: '', label: '请选择已安装包…' },
+                        ...hostBundleRows.map((b) => ({
+                          value: b.dirName,
+                          label: `${b.semver} · ${b.dirName}${b.runSpec ? ' · run.json' : ''}`,
+                        })),
+                      ]}
+                      placeholder="请选择…"
+                      triggerClassName="w-full max-w-lg bg-[#101014] border border-[#2e2e32] rounded-lg px-3 py-2 text-[11px] text-left text-gray-200 flex items-center justify-between outline-none focus:border-blue-500 hover:bg-[#16161a] transition-colors disabled:opacity-50"
+                    />
+                    <p className="text-[9px] text-gray-600">
+                      {activeWorkspaceProjectId?.trim()
+                        ? `当前工作区 projectId 将写入任务元数据：${activeWorkspaceProjectId.trim()}`
+                        : '未打开工作区项目时不附带 projectId（不影响执行）。'}
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void handleHostBundleProbe()}
+                        disabled={hostBundleExecBusy || hostBundleListBusy || hostBundleRows.length === 0}
+                        className="px-3 py-1.5 rounded-lg border border-[#15803d] bg-[#14532d]/80 text-[10px] font-bold text-green-100 hover:bg-[#166534]/90 transition-colors disabled:opacity-60"
+                      >
+                        {hostBundleExecBusy ? '提交中…' : '运行 probe'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleHostBundleExec()}
+                        disabled={hostBundleExecBusy || hostBundleListBusy || hostBundleRows.length === 0}
+                        className="px-3 py-1.5 rounded-lg border border-[#7c3aed] bg-[#3b0764]/80 text-[10px] font-bold text-violet-100 hover:bg-[#4c1d95]/90 transition-colors disabled:opacity-60"
+                      >
+                        {hostBundleExecBusy ? '提交中…' : '运行 exec'}
+                      </button>
+                    </div>
+                    {hostBundleExecHint ? (
+                      <p className="text-[10px] text-gray-400 whitespace-pre-wrap break-words">{hostBundleExecHint}</p>
+                    ) : null}
+                  </div>
+                </div>
+                <details className="rounded-lg border border-[#2e2e32] bg-[#16161a] group">
+                  <summary className="cursor-pointer list-none px-3 py-2.5 text-[10px] font-bold text-gray-400 marker:content-none [&::-webkit-details-marker]:hidden">
+                    高级：手动连接设置（一般无需展开）
+                  </summary>
+                  <div className="px-3 pb-3 space-y-3 border-t border-[#2e2e32] pt-2">
+                    <div className="space-y-2">
+                      <label className="block text-[10px] text-gray-400">本机地址</label>
+                      <input
+                        type="url"
+                        value={companionBaseDraft}
+                        onChange={(e) => setCompanionBaseDraft(e.target.value)}
+                        placeholder="默认本机端口即可"
+                        className="w-full px-3 py-2 rounded-xl bg-[#101014] border border-[#2e2e32] text-[11px] text-white placeholder-gray-600 focus:border-blue-500 focus:outline-none"
+                        autoComplete="off"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="block text-[10px] text-gray-400">本机通信密码（可选）</label>
+                      <input
+                        type="password"
+                        value={companionTokenDraft}
+                        onChange={(e) => setCompanionTokenDraft(e.target.value)}
+                        placeholder="仅在你手动设置过本机密码时填写"
+                        className="w-full px-3 py-2 rounded-xl bg-[#101014] border border-[#2e2e32] text-[11px] text-white placeholder-gray-600 focus:border-blue-500 focus:outline-none"
+                        autoComplete="off"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleSaveCompanionAdvanced}
+                      className="px-4 py-2 rounded-xl bg-[#26262c] hover:bg-[#383842] border border-[#2e2e32] text-[10px] font-bold text-gray-200 transition-colors"
+                    >
+                      保存高级设置
+                    </button>
+                  </div>
+                </details>
                 {companionProbeHint ? <p className="text-[10px] text-gray-300">{companionProbeHint}</p> : null}
                 <details className="rounded-lg border border-[#2e2e32] bg-[#16161a] group">
                   <summary className="cursor-pointer list-none px-3 py-2.5 text-[10px] font-bold text-gray-400 marker:content-none [&::-webkit-details-marker]:hidden">

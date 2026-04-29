@@ -1,4 +1,5 @@
 import React, {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -477,19 +478,19 @@ export function WorkflowSidebarColumn({
     }
   }, [favoriteEntries.length]);
   const showFavoritesDropBody = favoriteEntries.length > 0 || favoritesBodyExpanded;
-  const hasPresetEditorDragging = () => {
+  const hasPresetEditorDragging = useCallback(() => {
     if (typeof window === 'undefined') return false;
     try {
       return Boolean((window as Window & { __acDraggingPresetId?: string | null }).__acDraggingPresetId);
     } catch {
       return false;
     }
-  };
-  const isAnyDragActive = () =>
+  }, []);
+  const isAnyDragActive = useCallback(() =>
     Boolean(draggingAssetIds?.length) ||
     Boolean(draggingGroupItems?.itemIndexes?.length) ||
     Boolean(draggingActionIdRef.current) ||
-    hasPresetEditorDragging();
+    hasPresetEditorDragging(), [draggingAssetIds, draggingGroupItems, draggingActionIdRef, hasPresetEditorDragging]);
   useEffect(() => {
     const root = sidebarRootRef.current;
     if (!root) return;
@@ -534,7 +535,7 @@ export function WorkflowSidebarColumn({
       root.removeEventListener('wheel', onWheelNative);
       window.removeEventListener('wheel', onWindowWheelCapture, true);
     };
-  }, [draggingAssetIds, draggingGroupItems, draggingActionIdRef]);
+  }, [draggingAssetIds, draggingGroupItems, draggingActionIdRef, isAnyDragActive]);
   return (
     <div
       ref={sidebarRootRef}
@@ -546,7 +547,7 @@ export function WorkflowSidebarColumn({
         e.preventDefault();
         e.stopPropagation();
         const target = sidebarListScrollRef.current || sidebarRootRef.current || (e.currentTarget as HTMLDivElement);
-        target.scrollTop += dy;
+        target.scrollTo({ top: target.scrollTop + dy });
       }}
       onDragOverCapture={(e) => {
         autoScrollContainerOnDrag((sidebarListScrollRef.current || (e.currentTarget as HTMLElement)), e.clientY);

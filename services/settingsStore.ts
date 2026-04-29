@@ -28,8 +28,10 @@ const STORAGE_KEY_ANTIGRAVITY_API_KEY = 'ac_antigravity_api_key';
 const STORAGE_KEY_ANTIGRAVITY_BASE_URL = 'ac_antigravity_base_url';
 const STORAGE_KEY_VECTORENGINE_API_KEY = 'ac_vectorengine_api_key';
 const STORAGE_KEY_VECTORENGINE_BASE_URL = 'ac_vectorengine_base_url';
+const STORAGE_KEY_TRIPO_API_KEY = 'ac_tripo_api_key';
 const STORAGE_KEY_DIALOG_SKIP_UNDERSTAND = 'ac_dialog_skip_understand';
 const STORAGE_KEY_WORKSPACE_AUTO_SYNC = 'ac_workspace_auto_sync';
+const STORAGE_KEY_DEBUG_CLIENT_LOG_PERSIST = 'ac_debug_client_log_persist';
 
 export type AiProvider = 'trial' | 'gemini' | 'vertex' | 'toapis' | 'antigravity' | 'vectorengine';
 
@@ -73,7 +75,8 @@ export function isAiSettingsStorageKey(key: string | null): boolean {
     key === STORAGE_KEY_ANTIGRAVITY_API_KEY ||
     key === STORAGE_KEY_ANTIGRAVITY_BASE_URL ||
     key === STORAGE_KEY_VECTORENGINE_API_KEY ||
-    key === STORAGE_KEY_VECTORENGINE_BASE_URL
+    key === STORAGE_KEY_VECTORENGINE_BASE_URL ||
+    key === STORAGE_KEY_TRIPO_API_KEY
   );
 }
 
@@ -147,6 +150,14 @@ export function getVectorengineApiKey(): string | null {
 
 export function setVectorengineApiKey(value: string | null): void {
   writeLocalNonEmptyTrimmedOrRemove(STORAGE_KEY_VECTORENGINE_API_KEY, value);
+}
+
+export function getTripoApiKey(): string | null {
+  return readLocalNonEmptyTrimmed(STORAGE_KEY_TRIPO_API_KEY);
+}
+
+export function setTripoApiKey(value: string | null): void {
+  writeLocalNonEmptyTrimmedOrRemove(STORAGE_KEY_TRIPO_API_KEY, value);
 }
 
 /** 向量引擎根地址（不含 /v1beta 路径），如 https://api.vectorengine.ai */
@@ -244,6 +255,15 @@ export function setWorkspaceAutoSyncEnabled(value: boolean): void {
   } else {
     writeLocalString(STORAGE_KEY_WORKSPACE_AUTO_SYNC, '0');
   }
+}
+
+/** 调试模式：是否允许将前端运行日志脱敏后落盘（默认关闭） */
+export function getDebugClientLogPersistEnabled(): boolean {
+  return readLocalFlag(STORAGE_KEY_DEBUG_CLIENT_LOG_PERSIST);
+}
+
+export function setDebugClientLogPersistEnabled(value: boolean): void {
+  writeLocalFlag(STORAGE_KEY_DEBUG_CLIENT_LOG_PERSIST, value);
 }
 
 // ----- 混元（腾讯云） -----

@@ -4,6 +4,7 @@ import {
   runSeamRepairJob,
   SEAM_ADAPTER_ID,
 } from './seamRepairAdapter.js';
+import { HOST_BUNDLE_ADAPTER_ID, runHostBundlePhase } from './hostBundleExecAdapter.js';
 
 export type JobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 
@@ -48,6 +49,15 @@ export const REGISTERED_COMPUTE_TYPES: Record<string, { adapterId: string; descr
   seam_repair: {
     adapterId: SEAM_ADAPTER_ID,
     description: '贴图修缝：读 Volume 内 OBJ/贴图/Mask，调用 WebSeamRepair /api/repair',
+  },
+  'host_bundle.exec': {
+    adapterId: HOST_BUNDLE_ADAPTER_ID,
+    description:
+      '宿主插件包 run.json 的 exec：inputs.dirName 为 host-bundles 下目录名；命令仅来自磁盘 run.json',
+  },
+  'host_bundle.probe': {
+    adapterId: HOST_BUNDLE_ADAPTER_ID,
+    description: '宿主插件包 run.json 的 probe；inputs 同上',
   },
 };
 
@@ -155,6 +165,46 @@ export async function submitJob(
         });
       }
     }
+  } else if (type === 'host_bundle.exec' || type === 'host_bundle.probe') {
+    rec.status = 'running';
+    rec.updatedAt = Date.now();
+    jobs.set(jobId, rec);
+    emitJobEvent(jobId, 'task.running', {
+      adapterId: HOST_BUNDLE_ADAPTER_ID,
+      phase: type,
+    });
+    const phase = type === 'host_bundle.exec' ? 'exec' : 'probe';
+    const run = await runHostBundlePhase({ phase, inputs: b.inputs });
+    if ('error' in run) {
+      rec.status = 'failed';
+      rec.error = { code: run.code, message: run.error };
+      emitJobEvent(jobId, 'task.failed', { code: run.code, message: run.error });
+    } else {
+      const { exitCode, signal, stdout, stderr, bundleDir } = run.ok;
+      const okExit = exitCode === 0;
+      rec.status = okExit ? 'completed' : 'failed';
+      const tail = (s: string, n: number) => (s.length <= n ? s : `${s.slice(0, n)}…`);
+      if (okExit) {
+        rec.result = {
+          adapterId: HOST_BUNDLE_ADAPTER_ID,
+          note: `bundle=${bundleDir} exit=0 stdout=${tail(stdout, 400)}`,
+        };
+      } else {
+        rec.error = {
+          code: 'HOST_BUNDLE_NONZERO_EXIT',
+          message: tail(stderr || stdout || String(exitCode), 800),
+        };
+      }
+      emitJobEvent(jobId, okExit ? 'reply.completed' : 'task.failed', {
+        adapterId: HOST_BUNDLE_ADAPTER_ID,
+        bundleDir,
+        exitCode,
+        signal,
+        stdoutTail: tail(stdout, 2000),
+        stderrTail: tail(stderr, 2000),
+        ...(okExit ? {} : { code: rec.error?.code, message: rec.error?.message }),
+      });
+    }
   } else if (REGISTERED_COMPUTE_TYPES[type]) {
     rec.status = 'failed';
     rec.error = { code: 'COMPUTE_ADAPTER_NOT_READY', message: `type "${type}" has no runnable adapter` };
@@ -198,6 +248,7 @@ export function listAdapterIds(): string[] {
   const s = new Set<string>();
   s.add(ADAPTER_STUB);
   s.add(SEAM_ADAPTER_ID);
+  s.add(HOST_BUNDLE_ADAPTER_ID);
   for (const v of Object.values(REGISTERED_COMPUTE_TYPES)) {
     s.add(v.adapterId);
   }

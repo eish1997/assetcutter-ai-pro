@@ -15,7 +15,7 @@
 | -------------------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `VERTEX_PROJECT_ID` 或 `GOOGLE_CLOUD_PROJECT` | 选 Vertex 时必填   | GCP 项目 ID。                                                                                                                                                          |
 | `VERTEX_LOCATION`                            | 否              | 默认 `global`。预览版生图模型文档推荐使用 **global**；若你的账号/政策要求区域端点，可改为如 `us-central1`（需与 [官方区域说明](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/learn/locations) 一致）。 |
-| ADC                                          | 选 Vertex 时必填   | 任选一：`GOOGLE_APPLICATION_CREDENTIALS` 指向服务账号 JSON；或 GCE/Cloud Run 等内置身份。作用域需能调用 Vertex AI。                                                                           |
+| ADC                                          | 选 Vertex 时必填   | 任选一：`GOOGLE_APPLICATION_CREDENTIALS` 指向服务账号 JSON 文件路径；**或**（Render 等）将整段 JSON 粘贴到 `GOOGLE_APPLICATION_CREDENTIALS_JSON`（别名 `GCP_SERVICE_ACCOUNT_JSON` / `GOOGLE_SERVICE_ACCOUNT_JSON`），代理启动时会写入临时文件并设置 ADC。GCE/Cloud Run 等可用内置身份。作用域需能调用 Vertex AI。                                                                           |
 | `GEMINI_API_KEY`                             | 非 Vertex 请求仍需要 | 仅当请求**未**带 `aiBackend: "vertex"` 时，代理仍走 AI Studio Key。可同时配置：同一代理既服务 Key 用户又服务 Vertex。                                                                               |
 
 

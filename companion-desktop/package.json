@@ -27,6 +27,8 @@
     "files": [
       "main.cjs",
       "preload-wizard.cjs",
+      "preload-shell.cjs",
+      "shell/**/*",
       "wizard/**/*",
       "package.json"
     ],
