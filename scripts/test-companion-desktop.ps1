@@ -1,5 +1,5 @@
 param(
-  [ValidateSet('menu', 'install', 'normal', 'relay-fail', 'wizard-reset', 'wizard-force', 'p0-acceptance', 'cleanup')]
+  [ValidateSet('menu', 'install', 'normal', 'relay-fail', 'p0-acceptance', 'cleanup')]
   [string]$Scenario = 'menu'
 )
 
@@ -7,7 +7,6 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
-$WizardFlag = Join-Path $env:LOCALAPPDATA "AssetCutterCompanion\desktop-shell\first-run-complete"
 $AcceptanceReportPath = Join-Path $RepoRoot "docs\本地伴侣-P0验收记录.md"
 
 function Enter-RepoRoot {
@@ -17,9 +16,7 @@ function Enter-RepoRoot {
 function Clear-CompanionTestEnv {
   foreach ($name in @(
       'COMPANION_RELAY_CMD',
-      'COMPANION_SHARED_TOKEN',
-      'COMPANION_DESKTOP_FORCE_WIZARD',
-      'COMPANION_DESKTOP_SKIP_WIZARD'
+      'COMPANION_SHARED_TOKEN'
     )) {
     Remove-Item "Env:$name" -ErrorAction SilentlyContinue
   }
@@ -31,8 +28,8 @@ function Start-CompanionDesktop {
   Write-Host "Starting companion-desktop..." -ForegroundColor Cyan
   Write-Host "Checkpoints:" -ForegroundColor Yellow
   Write-Host "1) Tray icon appears"
-  Write-Host "2) Context menu has status/restart/open-console"
-  Write-Host "3) Left-click tray opens console"
+  Write-Host "2) Context menu has status/restart/open management"
+  Write-Host "3) Left-click tray opens desktop shell window"
   Write-Host ""
   & npm.cmd run companion-desktop:start
 }
@@ -65,25 +62,6 @@ function Invoke-RelayFail {
   Start-CompanionDesktop
 }
 
-function Invoke-WizardReset {
-  Clear-CompanionTestEnv
-  if (Test-Path $WizardFlag) {
-    Remove-Item $WizardFlag -Force
-    Write-Host "Deleted first-run marker: $WizardFlag" -ForegroundColor Green
-  } else {
-    Write-Host "First-run marker not found: $WizardFlag" -ForegroundColor DarkYellow
-  }
-  Write-Host "Scenario: first-run wizard reset" -ForegroundColor Green
-  Start-CompanionDesktop
-}
-
-function Invoke-WizardForce {
-  Clear-CompanionTestEnv
-  $env:COMPANION_DESKTOP_FORCE_WIZARD = '1'
-  Write-Host "Scenario: force wizard each launch (COMPANION_DESKTOP_FORCE_WIZARD=1)" -ForegroundColor Green
-  Start-CompanionDesktop
-}
-
 function Read-ChecklistAnswer {
   param(
     [string]$Prompt
@@ -111,13 +89,11 @@ function Invoke-P0Acceptance {
   Write-Host ""
 
   $results = [ordered]@{}
-  $results['Tray can open console'] = Read-ChecklistAnswer -Prompt "Tray left click and menu open console"
-  $results['Main window opens from tray'] = Read-ChecklistAnswer -Prompt "Tray menu item 'Open main window' works"
+  $results['Tray can open management page'] = Read-ChecklistAnswer -Prompt "Tray menu opens browser management page"
+  $results['Main window opens from tray'] = Read-ChecklistAnswer -Prompt "Tray menu item opens desktop shell window"
   $results['Quit stops child process'] = Read-ChecklistAnswer -Prompt "After tray quit, local-companion child process is stopped"
-  $results['Wizard reappears after deleting marker'] = Read-ChecklistAnswer -Prompt "Delete first-run marker then restart and wizard appears again"
-  $results['Wizard complete hides next launch'] = Read-ChecklistAnswer -Prompt "Click wizard complete then restart and wizard no longer auto-opens"
-  $results['Pairing config saved'] = Read-ChecklistAnswer -Prompt "Wizard token/origin save works"
-  $results['Pairing config injected'] = Read-ChecklistAnswer -Prompt "Saved token/origin affects runtime behavior after restart"
+  $results['Settings pairing save'] = Read-ChecklistAnswer -Prompt "Settings page token/origin save works (pairing-config.json)"
+  $results['Pairing config injected'] = Read-ChecklistAnswer -Prompt "Saved token/origin affects runtime after restart"
   $results['Relay warning balloon'] = Read-ChecklistAnswer -Prompt "relay-fail scenario shows tray warning balloon"
   $results['Token mismatch warning'] = Read-ChecklistAnswer -Prompt "401/token mismatch scenario shows tray warning balloon"
 
@@ -162,10 +138,8 @@ function Show-Menu {
   Write-Host "1) install      install all dependencies (first run)"
   Write-Host "2) normal       normal startup regression"
   Write-Host "3) relay-fail   relay warning scenario"
-  Write-Host "4) wizard-reset delete marker then verify first-run wizard"
-  Write-Host "5) wizard-force force wizard every launch"
-  Write-Host "6) p0-acceptance guided checklist + report"
-  Write-Host "7) cleanup      clear test env vars"
+  Write-Host "4) p0-acceptance guided checklist + report"
+  Write-Host "5) cleanup      clear test env vars"
   Write-Host "0) exit"
   Write-Host ""
 
@@ -174,10 +148,8 @@ function Show-Menu {
     '1' { Install-AllDeps }
     '2' { Invoke-Normal }
     '3' { Invoke-RelayFail }
-    '4' { Invoke-WizardReset }
-    '5' { Invoke-WizardForce }
-    '6' { Invoke-P0Acceptance }
-    '7' {
+    '4' { Invoke-P0Acceptance }
+    '5' {
       Clear-CompanionTestEnv
       Write-Host "Test env vars cleared." -ForegroundColor Green
     }
@@ -189,8 +161,6 @@ switch ($Scenario) {
   'install' { Install-AllDeps }
   'normal' { Invoke-Normal }
   'relay-fail' { Invoke-RelayFail }
-  'wizard-reset' { Invoke-WizardReset }
-  'wizard-force' { Invoke-WizardForce }
   'p0-acceptance' { Invoke-P0Acceptance }
   'cleanup' {
     Clear-CompanionTestEnv

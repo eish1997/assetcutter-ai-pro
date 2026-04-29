@@ -545,7 +545,18 @@
       "tokenHash": "4ac65b1b456bf717e8e78d07e8a7d46812ceb2db75be5a7d82b30d4f6bbb2eea",
       "expiresAt": "2026-05-05T16:05:06.804Z",
       "createdAt": "2026-04-28T16:05:06.804Z",
-      "updatedAt": "2026-04-28T16:05:06.804Z",
+      "updatedAt": "2026-04-29T16:12:40.072Z",
+      "revokedAt": "2026-04-29T16:12:40.072Z",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+      "ip": "127.0.0.1"
+    },
+    {
+      "id": "5e5256f0-b990-4f59-a97d-f900cb084c7f",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "tokenHash": "47014251292397f53e71bd832eaf77591ee0d5caced6e964009034570e17ec53",
+      "expiresAt": "2026-05-06T16:12:40.073Z",
+      "createdAt": "2026-04-29T16:12:40.073Z",
+      "updatedAt": "2026-04-29T16:12:40.073Z",
       "revokedAt": null,
       "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
       "ip": "127.0.0.1"
@@ -1343,6 +1354,50 @@
       "ip": "127.0.0.1",
       "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
       "createdAt": "2026-04-28T16:05:06.805Z"
+    },
+    {
+      "id": "c8afab9f-7245-4855-95d1-6d15bc4467ce",
+      "actorUserId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "actorIdentifier": "maoer",
+      "action": "admin.companion_artifact_presign_put",
+      "targetUserId": null,
+      "metaJson": "{\"objectKey\":\"public/companion-distribution/1777475940128_release-20260429-231104.zip\"}",
+      "ip": "127.0.0.1",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+      "createdAt": "2026-04-29T15:19:00.130Z"
+    },
+    {
+      "id": "ded8ccc4-1707-4910-9163-5db4a7a227c4",
+      "actorUserId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "actorIdentifier": "maoer",
+      "action": "admin.companion_artifact_register",
+      "targetUserId": null,
+      "metaJson": "{\"id\":\"f45012ca6cbb6ac2dc3470f9\",\"kind\":\"desktop_shell\",\"semver\":\"0.1.0\",\"r2Key\":\"public/companion-distribution/1777475940128_release-20260429-231104.zip\"}",
+      "ip": "127.0.0.1",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+      "createdAt": "2026-04-29T15:19:35.499Z"
+    },
+    {
+      "id": "8fb6983a-13bc-47d5-8f9b-e72aa8a7826d",
+      "actorUserId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "actorIdentifier": "maoer",
+      "action": "companion_artifact_download",
+      "targetUserId": null,
+      "metaJson": "{\"artifactId\":\"f45012ca6cbb6ac2dc3470f9\",\"kind\":\"desktop_shell\",\"semver\":\"0.1.0\"}",
+      "ip": "127.0.0.1",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+      "createdAt": "2026-04-29T15:20:30.506Z"
+    },
+    {
+      "id": "ef25ae62-5f61-4624-93eb-0b7433f5ab3d",
+      "actorUserId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "actorIdentifier": "maoer",
+      "action": "companion_artifact_download",
+      "targetUserId": null,
+      "metaJson": "{\"artifactId\":\"f45012ca6cbb6ac2dc3470f9\",\"kind\":\"desktop_shell\",\"semver\":\"0.1.0\"}",
+      "ip": "127.0.0.1",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+      "createdAt": "2026-04-29T17:36:46.673Z"
     }
   ]
 }

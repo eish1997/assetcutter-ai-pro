@@ -170,6 +170,28 @@ const SettingsSection: React.FC<{
     setCompanionTokenDraft(getCompanionLocalToken());
   }, []);
 
+  const suggestedSiteOrigin = typeof window !== 'undefined' ? window.location.origin : '';
+
+  const handleSaveCompanionPairing = () => {
+    setCompanionLocalToken(companionTokenDraft);
+    setCompanionTokenDraft(getCompanionLocalToken());
+    setCompanionProbeHint('配对密码已保存到本浏览器（与桌面壳一致即可连上本机）');
+    setTimeout(() => setCompanionProbeHint(''), 3200);
+  };
+
+  const handleCopySuggestedOrigin = async () => {
+    const t = suggestedSiteOrigin.trim();
+    if (!t) return;
+    try {
+      await navigator.clipboard.writeText(t);
+      setCompanionProbeHint('已复制当前站点地址，可粘贴到桌面壳「与网站配对 → 允许的网站地址」');
+      setTimeout(() => setCompanionProbeHint(''), 3200);
+    } catch {
+      setCompanionProbeHint('复制失败：请手动复制浏览器地址栏中的站点根地址');
+      setTimeout(() => setCompanionProbeHint(''), 3200);
+    }
+  };
+
   useEffect(() => {
     try {
       const raw = globalThis.localStorage?.getItem(COMPANION_SETTINGS_STREAM_STATE_KEY);
@@ -386,9 +408,7 @@ const SettingsSection: React.FC<{
   const handleSaveCompanionAdvanced = () => {
     setCompanionLocalBaseUrl(companionBaseDraft);
     setCompanionBaseDraft(getCompanionLocalBaseUrl());
-    setCompanionLocalToken(companionTokenDraft);
-    setCompanionTokenDraft(getCompanionLocalToken());
-    setCompanionProbeHint('高级设置已保存');
+    setCompanionProbeHint('本机地址已保存');
     setTimeout(() => setCompanionProbeHint(''), 2500);
   };
 
@@ -876,19 +896,7 @@ const SettingsSection: React.FC<{
                 <p className="text-gray-300 font-semibold">本机浏览器（localStorage）</p>
                 <ul className="list-disc list-inside space-y-1.5 text-gray-500">
                   <li>工作区项目画布、对话会话与临时库、仓库条目、能力预设等会占用<strong className="text-gray-400">当前站点在本机的存储配额</strong>（各浏览器通常共约数 MB～十余 MB，与设备有关）。</li>
-                  <li>配额不足时可能无法保存；可清理本站数据、减少大图与项目数量，或登录后使用云端工作区同步。</li>
-                </ul>
-                <p className="text-gray-300 font-semibold pt-2">云端（登录且开启工作区云同步）</p>
-                <ul className="list-disc list-inside space-y-1.5 text-gray-500">
-                  <li>
-                    <strong className="text-gray-400">账号同步</strong>主要覆盖能力预设等账号级配置；<strong className="text-gray-400">工作区画布</strong>仍以本机（IndexedDB + 本地伴侣目录）为主。默认自动同步侧重
-                    <strong className="text-gray-400">项目索引</strong>等轻量数据，<strong className="text-gray-400">不会</strong>把整张画布自动「漫游」到另一台浏览器的同一页面。
-                  </li>
-                  <li>
-                    换电脑要继续同一项目：在本机安装并连接伴侣、使用<strong className="text-gray-400">同一工作区根目录</strong>，或使用导出 / 项目卡片「手动上传」等显式动作迁移资产。
-                  </li>
-                  <li>流程图片等可走对象存储，<strong className="text-gray-400">工作区云空间</strong>有 per-user 配额（默认约 200MB，管理员可调）；与工作流 JSON 的本地缓存是两套概念。</li>
-                  <li>大图以独立对象上传，不在单次 JSON 请求里塞满 base64，便于跨设备与省本地配额。</li>
+                  <li>配额不足时可能无法保存；可清理本站数据、减少大图与项目数量。</li>
                 </ul>
                 <div className="rounded-lg border border-[#2e2e32] bg-[#16161a] p-3 space-y-2">
                   <p className="text-gray-300 font-semibold">调试模式：运行日志落盘（默认关闭）</p>
@@ -915,8 +923,51 @@ const SettingsSection: React.FC<{
               <h2 className="text-xs font-black uppercase tracking-wider text-blue-400/90 mb-4">本地伴侣</h2>
               <div className="rounded-xl border border-[#252528] p-4 space-y-4 text-[10px] text-gray-400 leading-relaxed">
                 <p className="text-[11px] text-gray-300 leading-relaxed">
-                  想在本机处理素材，直接点「一键连接本机伴侣」即可。只有连接失败时，才需要展开高级设置。
+                  想在本机处理素材，直接点「一键连接本机伴侣」。若本机开启了访问控制，请在下方填写与桌面壳或本机伴侣一致的
+                  <strong className="text-gray-200">通信密码</strong>；无需再打开单独向导窗口。
                 </p>
+                <div className="rounded-xl border border-blue-500/30 bg-[#0c1524]/90 p-4 space-y-3">
+                  <h3 className="text-[11px] font-bold text-blue-300/95 tracking-wide">与网站配对</h3>
+                  <p className="text-[10px] text-gray-500 leading-relaxed">
+                    网站只把密码存在本浏览器，用于请求本机时的鉴权。桌面端请在{' '}
+                    <strong className="text-gray-400">Asset Cutter 桌面伴侣 → 设置 → 与网站配对</strong>{' '}
+                    填写同一密码，并把「允许的网站地址」设为当前站点（可复制下方）。
+                  </p>
+                  <div className="space-y-1.5">
+                    <label className="block text-[10px] text-gray-400">本机通信密码</label>
+                    <input
+                      type="password"
+                      value={companionTokenDraft}
+                      onChange={(e) => setCompanionTokenDraft(e.target.value)}
+                      placeholder="与桌面壳 / 本机伴侣中设置的密码一致"
+                      className="w-full px-3 py-2 rounded-xl bg-[#101014] border border-[#2e2e32] text-[11px] text-white placeholder-gray-600 focus:border-blue-500 focus:outline-none"
+                      autoComplete="off"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="block text-[10px] text-gray-400">当前站点（供桌面壳「允许的网站地址」）</label>
+                    <div className="flex flex-wrap items-stretch gap-2">
+                      <code className="flex-1 min-w-0 px-3 py-2 rounded-lg bg-[#101014] border border-[#2e2e32] text-[10px] text-gray-300 break-all">
+                        {suggestedSiteOrigin || '—'}
+                      </code>
+                      <button
+                        type="button"
+                        onClick={() => void handleCopySuggestedOrigin()}
+                        disabled={!suggestedSiteOrigin}
+                        className="shrink-0 px-3 py-2 rounded-xl border border-[#3f3f46] text-[10px] font-bold text-gray-200 hover:bg-[#222228] transition-colors disabled:opacity-40"
+                      >
+                        复制
+                      </button>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleSaveCompanionPairing}
+                    className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-[10px] font-black uppercase text-white transition-colors"
+                  >
+                    保存配对密码
+                  </button>
+                </div>
                 <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
@@ -1043,7 +1094,7 @@ const SettingsSection: React.FC<{
                 </div>
                 <details className="rounded-lg border border-[#2e2e32] bg-[#16161a] group">
                   <summary className="cursor-pointer list-none px-3 py-2.5 text-[10px] font-bold text-gray-400 marker:content-none [&::-webkit-details-marker]:hidden">
-                    高级：手动连接设置（一般无需展开）
+                    高级：本机 HTTP 地址（一般无需展开）
                   </summary>
                   <div className="px-3 pb-3 space-y-3 border-t border-[#2e2e32] pt-2">
                     <div className="space-y-2">
@@ -1057,23 +1108,12 @@ const SettingsSection: React.FC<{
                         autoComplete="off"
                       />
                     </div>
-                    <div className="space-y-2">
-                      <label className="block text-[10px] text-gray-400">本机通信密码（可选）</label>
-                      <input
-                        type="password"
-                        value={companionTokenDraft}
-                        onChange={(e) => setCompanionTokenDraft(e.target.value)}
-                        placeholder="仅在你手动设置过本机密码时填写"
-                        className="w-full px-3 py-2 rounded-xl bg-[#101014] border border-[#2e2e32] text-[11px] text-white placeholder-gray-600 focus:border-blue-500 focus:outline-none"
-                        autoComplete="off"
-                      />
-                    </div>
                     <button
                       type="button"
                       onClick={handleSaveCompanionAdvanced}
                       className="px-4 py-2 rounded-xl bg-[#26262c] hover:bg-[#383842] border border-[#2e2e32] text-[10px] font-bold text-gray-200 transition-colors"
                     >
-                      保存高级设置
+                      保存本机地址
                     </button>
                   </div>
                 </details>

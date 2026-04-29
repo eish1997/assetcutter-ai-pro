@@ -2,14 +2,13 @@
 
 开发期 **M0**：系统托盘 + 子进程启动 `../local-companion`（`COMPANION_OPEN_BROWSER=0`）。**主窗口** 为内嵌 **`shell/index.html`** 的**两页**壳（**首页**：状态 + 打开网站 + 插件列表；**设置**），**不再**把完整本机管理页作为默认首页；需要完整 HTML 管理页时用托盘 **「在浏览器打开本机管理页」**。协议 **`assetcutter-companion://open`** 可从网站唤起壳（需已安装并注册）。
 
-**Windows 首次运行向导（骨架）**：仅 **`win32`** 且未写过完成标记时弹出说明窗口；数据目录为 **`%LOCALAPPDATA%\AssetCutterCompanion\desktop-shell`**（与产品路径一致）。调试可用 **`COMPANION_DESKTOP_SKIP_WIZARD=1`** 跳过、**`COMPANION_DESKTOP_FORCE_WIZARD=1`** 强制每次显示。
-向导支持最小可用配对：在界面保存 **本机通信密码** 与 **允许的网站地址**（落盘 `userData/pairing-config.json`，对应环境变量 `COMPANION_SHARED_TOKEN` / `COMPANION_ALLOWED_ORIGINS`）；壳在启动 `local-companion` 时会自动注入（若你未在外部显式设置同名环境变量）。
+数据目录为 **`%LOCALAPPDATA%\AssetCutterCompanion\desktop-shell`**（与产品路径一致）。**配对**：在桌面壳 **设置 → 与网站配对** 保存 **本机通信密码** 与 **允许的网站地址**（落盘 `userData/pairing-config.json`，对应环境变量 `COMPANION_SHARED_TOKEN` / `COMPANION_ALLOWED_ORIGINS`）；壳在启动 `local-companion` 时会自动注入（若你未在外部显式设置同名环境变量）。
 
-**托盘（Windows）**：**左键单击** → **打开桌面窗口**；**右键** → 菜单；菜单含 **状态行**、**「打开桌面窗口」**、**「在浏览器打开本机管理页」**、**「重新启动本地伴侣」**、**「首次设置向导」**。  
+**托盘（Windows）**：**左键单击** → **打开桌面窗口**；**右键** → 菜单；菜单含 **状态行**、**「打开桌面窗口」**、**「在浏览器打开本机管理页」**、**「重新启动本地伴侣」**。  
 壳会轮询 `GET /v1/runtime-status`：当检测到 **Relay 已配置但未运行**，或状态检查 **401（配对密码不一致）** / 超时失败时，会弹出气泡提醒并给出下一步动作（重启/打开本机管理页排查）。
 若 Relay 异常状态包含 `lastError` / `lastExitCode` / `lastSignal`，托盘状态行与提醒会附带这些诊断信息，便于快速定位。
 
-macOS / Linux 当前不弹向导（仅占位逻辑）；安装包与代码签名等仍为后续项。
+macOS / Linux 下配对同样走 **设置 → 与网站配对**（与 Windows 一致）；安装包与代码签名等仍为后续项。
 
 ## 前置
 
@@ -62,7 +61,7 @@ npm run companion-desktop:dist:retry
 
 ## 环境变量
 
-与 `local-companion` 共用：**`COMPANION_HTTP_PORT`**（默认 `18765`）等；壳会额外注入 **`COMPANION_OPEN_BROWSER=0`**。**`COMPANION_DESKTOP_NO_AUTO_SHELL=1`**：启动时不自动弹出桌面小窗口（仅托盘）。
+与 `local-companion` 共用：**`COMPANION_HTTP_PORT`**（默认 `18765`）等；壳会额外注入 **`COMPANION_OPEN_BROWSER=0`**。**`COMPANION_DESKTOP_NO_AUTO_SHELL=1`**：启动时不自动弹出桌面小窗口（仅托盘）。**安装包** 首次未保存设置时，设置/「打开网站」默认主站为 **`https://assetcutter-ai-pro.vercel.app/`**；开发 `npm start` 默认为 **`http://localhost:3000`**。
 
 发行包上架与「主站用户下载桌面壳」的元数据模型见仓库 **`docs/本地伴侣-插件与发行.md`**（与 `/v1/capabilities` 运行时插件区分）。
 

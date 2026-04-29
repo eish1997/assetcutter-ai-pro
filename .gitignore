@@ -14,6 +14,10 @@ dist-ssr
 
 # Desktop companion：打包产物体积大，由本地构建或 GitHub Releases 分发，勿入库
 companion-desktop/release/
+companion-desktop/release-*/
+
+# auth-api 运行时登记（首条上传时创建，含环境与用户相关元数据）
+server/data/companion-artifacts.json
 *.local
 .env
 

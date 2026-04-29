@@ -18,21 +18,118 @@
       --bad: #f87171;
     }
     * { box-sizing: border-box; }
+    html {
+      height: 100%;
+      overflow: hidden;
+    }
     body {
       margin: 0;
+      height: 100%;
+      min-height: 100%;
       font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
       background: var(--bg);
       color: var(--text);
       font-size: 13px;
-      min-height: 100vh;
       display: flex;
       flex-direction: column;
+      padding-top: 30px;
       padding-bottom: 56px;
+      overflow: hidden;
     }
-    .view { flex: 1; padding: 16px 18px 12px; overflow: auto; }
+    .app-titlebar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 30px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 10px 0 12px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      background: rgba(10, 10, 12, 0.78);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      z-index: 150;
+      -webkit-app-region: drag;
+      user-select: none;
+    }
+    .titlebar-leading {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      flex: 0 0 auto;
+      -webkit-app-region: no-drag;
+      padding: 2px 0;
+    }
+    .titlebar-trailing {
+      width: 68px;
+      flex-shrink: 0;
+    }
+    .app-titlebar-title {
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 11px;
+      font-weight: 500;
+      color: rgba(228, 228, 231, 0.42);
+      letter-spacing: 0.04em;
+      pointer-events: none;
+    }
+    .traffic {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      border: none;
+      padding: 0;
+      cursor: pointer;
+      flex-shrink: 0;
+      opacity: 0.42;
+      transition: opacity 0.12s ease, transform 0.12s ease, box-shadow 0.12s ease;
+      box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.25);
+    }
+    .app-titlebar:hover .traffic { opacity: 0.92; }
+    .traffic:active { transform: scale(0.94); }
+    .traffic.close { background: #ff5f57; }
+    .traffic.minimize { background: #febc2e; }
+    .traffic.zoom { background: #28c840; }
+    .traffic.close:hover { box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.2), 0 0 0 1px rgba(255, 95, 87, 0.35); }
+    .traffic.minimize:hover { box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.2), 0 0 0 1px rgba(254, 188, 46, 0.35); }
+    .traffic.zoom:hover { box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.2), 0 0 0 1px rgba(40, 200, 64, 0.35); }
+    .view {
+      flex: 1 1 auto;
+      min-height: 0;
+      padding: 14px 14px 12px 16px;
+      overflow-x: hidden;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255, 255, 255, 0.18) rgba(255, 255, 255, 0.03);
+    }
+    .view::-webkit-scrollbar {
+      width: 6px;
+    }
+    .view::-webkit-scrollbar-track {
+      background: rgba(255, 255, 255, 0.03);
+      border-radius: 100px;
+      margin: 4px 0;
+    }
+    .view::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.14);
+      border-radius: 100px;
+      border: 2px solid transparent;
+      background-clip: padding-box;
+    }
+    .view::-webkit-scrollbar-thumb:hover {
+      background: rgba(255, 255, 255, 0.28);
+      background-clip: padding-box;
+    }
+    .view::-webkit-scrollbar-corner {
+      background: transparent;
+    }
     .view.hidden { display: none; }
-    h1 { margin: 0 0 4px; font-size: 15px; font-weight: 800; letter-spacing: 0.02em; }
-    .sub { font-size: 11px; color: var(--muted); margin-bottom: 16px; line-height: 1.5; }
+    h1 { margin: 0 0 12px; font-size: 14px; font-weight: 600; letter-spacing: 0; }
+    .sub { font-size: 11px; color: var(--muted); margin-bottom: 12px; line-height: 1.45; }
     .status-card {
       border: 1px solid var(--border);
       border-radius: 14px;
@@ -49,7 +146,7 @@
     .status-dot.ok { background: var(--ok); box-shadow: 0 0 10px rgba(34,197,94,0.35); }
     .status-dot.warn { background: var(--warn); }
     .status-dot.bad { background: var(--bad); }
-    .status-label { font-size: 12px; font-weight: 700; }
+    .status-label { font-size: 12px; font-weight: 600; }
     .status-detail { font-size: 10px; color: var(--muted); margin-top: 8px; line-height: 1.45; word-break: break-word; }
     .open-site-btn {
       width: 100%;
@@ -65,8 +162,8 @@
       color: #eff6ff;
       cursor: pointer;
       font-size: 14px;
-      font-weight: 800;
-      letter-spacing: 0.04em;
+      font-weight: 600;
+      letter-spacing: 0.02em;
       transition: filter 0.15s, transform 0.1s;
     }
     .open-site-btn:hover { filter: brightness(1.06); }
@@ -104,7 +201,7 @@
     .ico { font-size: 18px; line-height: 1; }
     table { width: 100%; border-collapse: collapse; font-size: 11px; }
     th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
-    th { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; }
+    th { color: var(--muted); font-size: 10px; font-weight: 500; text-transform: none; letter-spacing: 0.02em; }
     .role { color: #a78bfa; font-size: 10px; }
     .health-ok { color: var(--ok); }
     .health-degraded { color: var(--warn); }
@@ -117,15 +214,15 @@
       margin-bottom: 12px;
     }
     .set-section h3 {
-      margin: 0 0 10px;
-      font-size: 10px;
-      font-weight: 800;
-      letter-spacing: 0.1em;
-      text-transform: uppercase;
-      color: #93c5fd;
+      margin: 0 0 8px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      text-transform: none;
+      color: rgba(228, 228, 231, 0.5);
     }
     label { display: block; font-size: 10px; color: var(--muted); margin-bottom: 4px; }
-    input[type="url"], input[type="text"] {
+    input[type="url"], input[type="text"], input[type="password"] {
       width: 100%;
       padding: 8px 10px;
       border-radius: 10px;
@@ -134,6 +231,7 @@
       color: var(--text);
       font-size: 12px;
     }
+    label.pair-label-gap { margin-top: 10px; }
     .btn-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
     .btn {
       padding: 8px 12px;
@@ -149,81 +247,126 @@
     .btn-primary { border-color: #2563eb; background: #1d4ed8; color: #eff6ff; }
     .mono { font-family: ui-monospace, monospace; font-size: 10px; color: #cbd5e1; word-break: break-all; }
     .empty { color: var(--muted); font-size: 11px; padding: 16px 0; text-align: center; }
-    h2.section-title {
-      margin: 20px 0 0;
+    .storage-hint {
       font-size: 10px;
-      font-weight: 800;
-      letter-spacing: 0.1em;
-      text-transform: uppercase;
-      color: #93c5fd;
+      color: rgba(148, 163, 184, 0.88);
+      line-height: 1.45;
+      margin: 0 0 10px;
+    }
+    h2.section-title {
+      margin: 18px 0 8px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      text-transform: none;
+      color: rgba(228, 228, 231, 0.5);
     }
   </style>
 </head>
 <body>
+  <header class="app-titlebar">
+    <div class="titlebar-leading">
+      <button type="button" class="traffic close" id="btnTrafficClose" aria-label="关闭" title="关闭"></button>
+      <button type="button" class="traffic minimize" id="btnTrafficMin" aria-label="最小化" title="最小化"></button>
+      <button type="button" class="traffic zoom" id="btnTrafficZoom" aria-label="最大化" title="最大化"></button>
+    </div>
+    <div class="app-titlebar-title">本地伴侣</div>
+    <div class="titlebar-trailing" aria-hidden="true"></div>
+  </header>
   <div id="view-home" class="view">
-    <h1>本地伴侣</h1>
-    <p class="sub">保持本窗口运行；下方为连接状态与已注册插件，大按钮可在浏览器中打开网站。</p>
     <div class="status-card">
       <div class="status-row">
         <div style="display:flex;align-items:center;gap:10px;">
           <span id="statusDot" class="status-dot"></span>
-          <span id="statusLabel" class="status-label">检查中…</span>
+          <span id="statusLabel" class="status-label">…</span>
         </div>
         <span id="portHint" class="mono" style="font-size:10px;color:var(--muted);"></span>
       </div>
       <div id="statusDetail" class="status-detail"></div>
     </div>
-    <button type="button" class="open-site-btn" id="btnOpenSite" title="在默认浏览器中打开下方设置的网站地址">
+    <button type="button" class="open-site-btn" id="btnOpenSite" title="在浏览器中打开">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <circle cx="12" cy="12" r="10" />
         <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
       </svg>
       打开网站
-      <span id="siteUrlPreview">加载中…</span>
+      <span id="siteUrlPreview">…</span>
     </button>
-    <p class="hint">网站地址在「设置」中修改。本机 HTTP 仍运行于 127.0.0.1，供网页检测与存储。</p>
-    <h2 class="section-title">插件与服务</h2>
-    <p class="sub" style="margin-top:0;margin-bottom:10px;">来自 <code>/v1/capabilities</code>，随本机进程刷新。</p>
+    <h2 class="section-title">服务</h2>
     <div class="status-card" style="padding:0;overflow:hidden;">
       <table>
         <thead>
           <tr>
-            <th>名称</th>
-            <th>角色</th>
-            <th>健康</th>
+            <th>服务</th>
+            <th>类型</th>
+            <th>状态</th>
           </tr>
         </thead>
         <tbody id="pluginRows"></tbody>
       </table>
-      <p id="pluginsEmpty" class="empty hidden">无法加载能力清单。请确认本机伴侣进程已启动。</p>
+      <p id="pluginsEmpty" class="empty hidden">暂无</p>
     </div>
   </div>
 
   <div id="view-settings" class="view hidden">
     <h1>设置</h1>
-    <p class="sub">常用项集中于此；高级调试仍可打开浏览器中的本机管理页。</p>
     <div class="set-section">
-      <h3>网站</h3>
-      <label for="inpSiteUrl">点击「打开网站」时使用的地址</label>
-      <input type="url" id="inpSiteUrl" placeholder="http://localhost:3000" autocomplete="off" />
+      <h3>主站</h3>
+      <label for="inpSiteUrl">地址</label>
+      <input type="url" id="inpSiteUrl" placeholder="https://…" autocomplete="off" />
       <div class="btn-row">
         <button type="button" class="btn btn-primary" id="btnSaveSite">保存</button>
       </div>
     </div>
     <div class="set-section">
-      <h3>本机服务</h3>
-      <p class="sub" style="margin:0 0 8px;">伴侣 HTTP（存储 / 任务 API）</p>
-      <p id="localBase" class="mono">—</p>
+      <h3>与网站配对</h3>
+      <p class="storage-hint">
+        保持本程序运行，网站「本机处理」才能连到本机。若提示连不上，请填写与网站一致的密码；允许的网站地址可留空则使用默认。
+      </p>
+      <label for="inpPairToken">本机通信密码</label>
+      <input
+        type="password"
+        id="inpPairToken"
+        placeholder="网站「设置 → 本地伴侣」中的密码，至少 8 位；可不填"
+        autocomplete="off"
+      />
+      <label for="inpPairOrigins" class="pair-label-gap">允许打开的网站地址</label>
+      <input
+        type="text"
+        id="inpPairOrigins"
+        placeholder="多个用英文逗号隔开，例如 http://localhost:5173"
+        autocomplete="off"
+      />
       <div class="btn-row">
-        <button type="button" class="btn" id="btnCopyBase">复制地址</button>
-        <button type="button" class="btn" id="btnOpenMgmt">在浏览器打开本机管理页</button>
+        <button type="button" class="btn btn-primary" id="btnSavePairing">保存配对设置</button>
+      </div>
+      <p id="pairingHint" class="mono" style="font-size:10px;color:rgba(148,163,184,0.85);margin-top:8px;line-height:1.4;"></p>
+    </div>
+    <div class="set-section">
+      <h3>存储</h3>
+      <p class="storage-hint">
+        点击「应用」或「默认」时会询问是否迁移：选「迁移并应用」将把当前存储目录下的数据整体移到新位置（会先短暂停止本机伴侣）；选「仅切换目录」则只改配置，旧目录数据保留在原处。
+      </p>
+      <label for="inpVolumeRoot">目录</label>
+      <div style="display:flex;gap:8px;align-items:stretch;">
+        <input type="text" id="inpVolumeRoot" placeholder="默认" autocomplete="off" style="flex:1;" />
+        <button type="button" class="btn" id="btnBrowseVolume">浏览</button>
+      </div>
+      <div class="btn-row">
+        <button type="button" class="btn btn-primary" id="btnSaveVolume">应用</button>
+        <button type="button" class="btn" id="btnClearVolume">默认</button>
+      </div>
+      <p id="volumeEffective" class="mono" style="font-size:10px;color:rgba(148,163,184,0.85);margin-top:8px;line-height:1.4;"></p>
+      <div class="btn-row" style="margin-top:6px;">
+        <button type="button" class="btn" id="btnOpenVolumeFolder">打开当前存储文件夹</button>
       </div>
     </div>
-    <div class="set-section" id="secWizard">
-      <h3>配对与安全</h3>
-      <p class="sub" style="margin:0 0 8px;">本机通信密码、允许的网站来源等。</p>
+    <div class="set-section">
+      <h3>本地 API</h3>
+      <p id="localBase" class="mono">—</p>
       <div class="btn-row">
-        <button type="button" class="btn" id="btnWizard">打开配对向导</button>
+        <button type="button" class="btn" id="btnCopyBase">复制</button>
+        <button type="button" class="btn" id="btnOpenMgmt">管理页</button>
       </div>
     </div>
   </div>
@@ -244,15 +387,25 @@
       const $ = (id) => document.getElementById(id);
       const shell = window.companionShell;
       if (!shell) {
-        document.body.innerHTML = '<p style="padding:24px;color:#f87171;">preload 未加载，请从桌面壳启动。</p>';
+        document.body.innerHTML = '<p style="padding:24px;color:#f87171;font-size:13px;">请从桌面应用启动。</p>';
         return;
       }
 
+      const defaultSiteUrl =
+        typeof shell.defaultSiteUrl === 'string' && shell.defaultSiteUrl.trim()
+          ? shell.defaultSiteUrl.trim()
+          : 'http://localhost:3000';
+
       const views = { home: $('view-home'), settings: $('view-settings') };
+      let activeView = 'home';
+      $('btnTrafficClose').addEventListener('click', () => void shell.closeWindow());
+      $('btnTrafficMin').addEventListener('click', () => void shell.minimizeWindow());
+      $('btnTrafficZoom').addEventListener('click', () => void shell.toggleMaximize());
 
       document.querySelectorAll('nav.shell-nav button').forEach((btn) => {
         btn.addEventListener('click', () => {
           const v = btn.getAttribute('data-view');
+          activeView = v || 'home';
           document.querySelectorAll('nav.shell-nav button').forEach((b) => {
             const on = b.getAttribute('data-view') === v;
             b.classList.toggle('active', on);
@@ -260,16 +413,50 @@
           });
           Object.keys(views).forEach((k) => views[k].classList.toggle('hidden', k !== v));
           if (v === 'home') void loadPlugins();
+          if (v === 'settings') {
+            void refreshVolumeEffectiveHint();
+            void loadPairingFields();
+          }
         });
       });
 
-      let settingsCache = { siteUrl: 'http://localhost:3000' };
+      let settingsCache = { siteUrl: defaultSiteUrl, volumeRoot: '' };
+      let pluginListSignature = '';
+      let pluginLoading = false;
 
       async function loadSettingsUi() {
         const s = await shell.loadSettings();
         if (s && typeof s.siteUrl === 'string' && s.siteUrl.trim()) settingsCache.siteUrl = s.siteUrl.trim();
+        settingsCache.volumeRoot = s && typeof s.volumeRoot === 'string' ? s.volumeRoot.trim() : '';
         $('inpSiteUrl').value = settingsCache.siteUrl;
         $('siteUrlPreview').textContent = settingsCache.siteUrl;
+        $('inpVolumeRoot').value = settingsCache.volumeRoot;
+      }
+
+      async function loadPairingFields() {
+        const hintEl = $('pairingHint');
+        if (!hintEl || !shell.loadPairing) return;
+        try {
+          const cfg = await shell.loadPairing();
+          $('inpPairToken').value = cfg && typeof cfg.sharedToken === 'string' ? cfg.sharedToken : '';
+          $('inpPairOrigins').value =
+            cfg && typeof cfg.allowedOrigins === 'string' ? cfg.allowedOrigins : '';
+          hintEl.textContent = '已读取本机已保存的配对设置';
+        } catch {
+          hintEl.textContent = '读取配对配置失败';
+        }
+      }
+
+      async function refreshVolumeEffectiveHint() {
+        const el = $('volumeEffective');
+        if (!el) return;
+        try {
+          const r = await shell.api('GET', '/v1/runtime-status', null);
+          const root = r && r.ok && r.json && r.json.repository && r.json.repository.rootAbsolutePath;
+          el.textContent = root ? String(root) : '';
+        } catch {
+          el.textContent = '';
+        }
       }
 
       function setStatusFromTray(sum) {
@@ -280,10 +467,10 @@
         const err = sum && sum.lastError ? String(sum.lastError) : '';
         const note = sum && sum.note ? String(sum.note) : '—';
         portEl.textContent = sum && sum.port ? ':' + sum.port : '';
-        detail.textContent = err ? '详情：' + err : '';
+        detail.textContent = err || '';
         if (!sum || sum.connected === false) {
           dot.className = 'status-dot bad';
-          label.textContent = '未连接本机 API';
+          label.textContent = '未连接';
           return;
         }
         if (err && (err.includes('relay') || err.includes('site') || err.includes('token'))) {
@@ -300,66 +487,72 @@
           const sum = await shell.traySummary();
           setStatusFromTray(sum);
         } catch (e) {
-          setStatusFromTray({ connected: false, note: '状态读取失败', lastError: String(e), port: null });
+          setStatusFromTray({ connected: false, note: '状态异常', lastError: String(e), port: null });
         }
       }
 
       async function loadPlugins() {
+        if (pluginLoading) return;
+        pluginLoading = true;
         const tbody = $('pluginRows');
         const empty = $('pluginsEmpty');
-        tbody.innerHTML = '';
         let r;
         try {
           r = await shell.api('GET', '/v1/capabilities', null);
         } catch (e) {
-          empty.textContent =
-            '请求失败：' +
-            (e && e.message ? String(e.message) : String(e)) +
-            '。若已设置本机密码，请确认与向导/网站设置一致。';
+          empty.textContent = '加载失败';
           empty.classList.remove('hidden');
+          pluginLoading = false;
           return;
         }
         if (!r.ok || !r.json || !Array.isArray(r.json.plugins)) {
-          const st = r && r.status != null ? ' HTTP ' + r.status : '';
-          const hint401 =
-            r && r.status === 401
-              ? '（401：本机通信密码与伴侣不一致，请打开「设置」页核对或运行配对向导）'
-              : '';
-          empty.textContent =
-            '无法加载能力清单' +
-            st +
-            '。' +
-            hint401 +
-            (r && r.error ? ' ' + String(r.error) : '') +
-            ' 请确认本机伴侣已启动。';
+          if (r && r.status === 401) empty.textContent = '验证失败';
+          else if (r && r.status != null) empty.textContent = '加载失败 · ' + r.status;
+          else empty.textContent = '加载失败';
           empty.classList.remove('hidden');
+          pluginLoading = false;
           return;
         }
+        const normalizedPlugins = r.json.plugins.map((p) => ({
+          displayName: p.displayName || p.id || '—',
+          sub: [p.id, p.semver].filter(Boolean).join(' · '),
+          role: p.role || '—',
+          health: p.health || '—',
+        }));
+        const nextSignature = JSON.stringify(normalizedPlugins);
+        if (nextSignature === pluginListSignature && empty.classList.contains('hidden')) {
+          pluginLoading = false;
+          return;
+        }
+        pluginListSignature = nextSignature;
         empty.classList.add('hidden');
-        for (const p of r.json.plugins) {
+        tbody.innerHTML = '';
+        const fragment = document.createDocumentFragment();
+        for (const p of normalizedPlugins) {
           const tr = document.createElement('tr');
           const h = p.health === 'ok' ? 'health-ok' : p.health === 'degraded' ? 'health-degraded' : 'health-disabled';
-          const sub = [p.id, p.semver].filter(Boolean).join(' · ');
           tr.innerHTML =
             '<td><div style="font-weight:700;">' +
-            (p.displayName || p.id || '—') +
+            p.displayName +
             '</div><div style="font-size:10px;color:#71717a;margin-top:4px;">' +
-            sub.replace(/</g, '&lt;') +
+            p.sub.replace(/</g, '&lt;') +
             '</div></td>' +
             '<td><span class="role">' +
-            (p.role || '—') +
+            p.role +
             '</span></td>' +
             '<td class="' +
             h +
             '">' +
-            (p.health || '—') +
+            p.health +
             '</td>';
-          tbody.appendChild(tr);
+          fragment.appendChild(tr);
         }
+        tbody.appendChild(fragment);
+        pluginLoading = false;
       }
 
       $('btnOpenSite').addEventListener('click', async () => {
-        const url = settingsCache.siteUrl || $('inpSiteUrl').value.trim() || 'http://localhost:3000';
+        const url = settingsCache.siteUrl || $('inpSiteUrl').value.trim() || defaultSiteUrl;
         await shell.openWebsite(url);
       });
 
@@ -372,6 +565,91 @@
         }
       });
 
+      $('btnBrowseVolume').addEventListener('click', async () => {
+        try {
+          const r = await shell.pickVolumeRoot();
+          if (r && r.ok && r.path) $('inpVolumeRoot').value = r.path;
+        } catch (e) {
+          $('volumeEffective').textContent = '';
+        }
+      });
+
+      $('btnSaveVolume').addEventListener('click', async () => {
+        const v = $('inpVolumeRoot').value.trim();
+        let oldRoot = '';
+        try {
+          const r = await shell.api('GET', '/v1/runtime-status', null);
+          if (r.ok && r.json && r.json.repository && r.json.repository.rootAbsolutePath) {
+            oldRoot = String(r.json.repository.rootAbsolutePath);
+          }
+        } catch {
+          /* ignore */
+        }
+        try {
+          const res = await shell.applyVolumeChange({ newVolumeRoot: v, oldVolumeRoot: oldRoot });
+          if (res && res.canceled) return;
+          if (!res || !res.ok) return;
+          settingsCache.volumeRoot = v;
+          if (res.noChange) {
+            setTimeout(() => void refreshVolumeEffectiveHint(), 800);
+            return;
+          }
+          $('volumeEffective').textContent = '';
+          setTimeout(() => void refreshVolumeEffectiveHint(), 800);
+        } catch (e) {
+          $('volumeEffective').textContent = e instanceof Error ? e.message : String(e);
+        }
+      });
+
+      $('btnClearVolume').addEventListener('click', async () => {
+        let oldRoot = '';
+        try {
+          const r = await shell.api('GET', '/v1/runtime-status', null);
+          if (r.ok && r.json && r.json.repository && r.json.repository.rootAbsolutePath) {
+            oldRoot = String(r.json.repository.rootAbsolutePath);
+          }
+        } catch {
+          /* ignore */
+        }
+        try {
+          const res = await shell.applyVolumeChange({ newVolumeRoot: '', oldVolumeRoot: oldRoot });
+          if (res && res.canceled) return;
+          if (!res || !res.ok) return;
+          settingsCache.volumeRoot = '';
+          $('inpVolumeRoot').value = '';
+          if (res.noChange) {
+            setTimeout(() => void refreshVolumeEffectiveHint(), 800);
+            return;
+          }
+          $('volumeEffective').textContent = '';
+          setTimeout(() => void refreshVolumeEffectiveHint(), 800);
+        } catch (e) {
+          $('volumeEffective').textContent = e instanceof Error ? e.message : String(e);
+        }
+      });
+
+      $('btnOpenVolumeFolder').addEventListener('click', async () => {
+        let p = '';
+        try {
+          const r = await shell.api('GET', '/v1/runtime-status', null);
+          if (r.ok && r.json && r.json.repository && r.json.repository.rootAbsolutePath) {
+            p = String(r.json.repository.rootAbsolutePath);
+          }
+        } catch {
+          /* ignore */
+        }
+        if (!p.trim()) {
+          const manual = $('inpVolumeRoot').value.trim();
+          if (manual) p = manual;
+        }
+        if (!p.trim()) return;
+        try {
+          await shell.openFolderPath(p);
+        } catch {
+          /* ignore */
+        }
+      });
+
       $('btnCopyBase').addEventListener('click', async () => {
         const sum = await shell.traySummary();
         const port = sum && sum.port ? sum.port : 18765;
@@ -380,13 +658,31 @@
 
       $('btnOpenMgmt').addEventListener('click', () => shell.openManagementBrowser());
 
-      const secWiz = $('secWizard');
-      if (shell.platform !== 'win32') secWiz.style.display = 'none';
-      $('btnWizard').addEventListener('click', () => shell.openWizard());
+      $('btnSavePairing').addEventListener('click', async () => {
+        const hintEl = $('pairingHint');
+        const btn = $('btnSavePairing');
+        if (!shell.savePairing) return;
+        btn.disabled = true;
+        hintEl.textContent = '保存中…';
+        try {
+          const r = await shell.savePairing({
+            sharedToken: $('inpPairToken').value || '',
+            allowedOrigins: $('inpPairOrigins').value || '',
+          });
+          hintEl.textContent =
+            r && r.ok ? '保存成功，一般无需重启即可生效' : '未能保存：' + ((r && r.error) || '请稍后重试');
+        } catch {
+          hintEl.textContent = '保存失败';
+        } finally {
+          btn.disabled = false;
+        }
+      });
 
       async function refreshHome() {
         await refreshTray();
-        await loadPlugins();
+        if (activeView === 'home') {
+          await loadPlugins();
+        }
       }
 
       async function init() {
@@ -400,6 +696,7 @@
         } catch {
           $('inpSiteUrl').value = settingsCache.siteUrl;
           $('siteUrlPreview').textContent = settingsCache.siteUrl;
+          $('inpVolumeRoot').value = settingsCache.volumeRoot;
         }
         try {
           const sum = await shell.traySummary();
@@ -410,11 +707,12 @@
         try {
           await refreshHome();
         } catch (e) {
-          setStatusFromTray({ connected: false, note: '刷新失败', lastError: String(e && e.message ? e.message : e), port: null });
+          setStatusFromTray({ connected: false, note: '异常', lastError: String(e && e.message ? e.message : e), port: null });
         }
+        void refreshVolumeEffectiveHint();
         setInterval(() => {
           void refreshHome().catch(() => {});
-        }, 3000);
+        }, 10000);
       }
 
       void init();

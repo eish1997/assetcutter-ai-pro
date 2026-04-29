@@ -262,11 +262,6 @@ function pickAssetsById(localAssets: WorkflowAsset[], ids: string[]): WorkflowAs
 /** 对话大图预览全景模式：与工作区 ImagePreviewOverlay 同 registry chunk */
 const LazyDialogTempEquirectViewer = getLazyImagePreviewViewer('image.equirect');
 
-function formatTimestampText(ts: number | null): string {
-  if (!ts) return '未同步';
-  return new Date(ts).toLocaleString();
-}
-
 const UnifiedModelViewer3D = React.lazy(() => import('./components/UnifiedModelViewer3D'));
 const WorkflowSection = React.lazy(() => import('./components/WorkflowSection'));
 const CapabilityPresetSection = React.lazy(() => import('./components/CapabilityPresetSection'));
@@ -815,11 +810,7 @@ const MainApp: React.FC = () => {
   const [workspaceCloudLeaveSyncing, setWorkspaceCloudLeaveSyncing] = useState(false);
   const [workspaceCloudLastSyncAt, setWorkspaceCloudLastSyncAt] = useState<number | null>(null);
   const [workspaceCloudNextAutoSyncAt, setWorkspaceCloudNextAutoSyncAt] = useState<number | null>(null);
-  const workspaceCloudNextAutoSyncAtRef = useRef<number | null>(null);
-  workspaceCloudNextAutoSyncAtRef.current = workspaceCloudNextAutoSyncAt;
-  const [workspaceCloudAutoSyncing, setWorkspaceCloudAutoSyncing] = useState(false);
   const [workspaceAutoSyncEnabled, setWorkspaceAutoSyncEnabledState] = useState<boolean>(() => getWorkspaceAutoSyncEnabled());
-  const workspaceCloudAutoSyncingRef = useRef(false);
   const workspaceCloudConfigHydratedUserIdRef = useRef<string | null>(null);
   const workspaceCloudConfigHydratingUserIdRef = useRef<string | null>(null);
   const workspaceCloudCapabilityRecordsRef = useRef<{
@@ -1127,77 +1118,6 @@ const MainApp: React.FC = () => {
     aiInvocationStatusRev,
     userUiPrefs,
   ]);
-
-  /** `force`：手动点「立即同步」时必跑；`false` 时仅在有本地未推送改动时自动同步，避免每分钟全量打包上传。 */
-  const triggerWorkspaceCloudSyncNow = useCallback(async (opts?: { force?: boolean }): Promise<boolean> => {
-    if (workspaceCloudAutoSyncingRef.current) return false;
-    if (mode !== AppMode.WORKFLOW) return false;
-    const uid = userIdRef.current;
-    const projectId = activeWorkspaceProjectIdRef.current;
-    if (!workspaceLocalIdbHydrateReadyRef.current) return false;
-    if (
-      !uid ||
-      !projectId ||
-      !usernameRef.current ||
-      !isWorkspaceCloudEnabled() ||
-      workspaceCloudQuotaSuspendedRef.current ||
-      workspaceCloudPushAllowedUserIdRef.current !== uid ||
-      workspaceCloudHydratingProjectIdRef.current === projectId ||
-      !isProjectBoundToCurrentUser(projectId)
-    ) {
-      return false;
-    }
-    if (!opts?.force && !workspaceCloudDirtyRef.current) {
-      setWorkspaceCloudNextAutoSyncAt(Date.now() + WORKSPACE_AUTO_SYNC_INTERVAL_MS);
-      return true;
-    }
-    workspaceCloudAutoSyncingRef.current = true;
-    setWorkspaceCloudAutoSyncing(true);
-    try {
-      await pushWorkspaceIndex(uid, workspaceProjectsRef.current, activeWorkspaceProjectIdRef.current, usernameRef.current);
-      workspaceCloudDirtyRef.current = false;
-      setWorkspaceCloudLastSyncAt(Date.now());
-      return true;
-    } catch (e) {
-      console.warn('[workspace cloud] auto sync', e);
-      if (e instanceof HttpRequestError && e.code === 'STORAGE_QUOTA_EXCEEDED') {
-        setWorkspaceCloudQuotaSuspended(true);
-        editedWhileQuotaSuspendedRef.current = true;
-        void refreshAuthUser();
-      }
-      return false;
-    } finally {
-      workspaceCloudAutoSyncingRef.current = false;
-      setWorkspaceCloudAutoSyncing(false);
-      setWorkspaceCloudNextAutoSyncAt(Date.now() + WORKSPACE_AUTO_SYNC_INTERVAL_MS);
-    }
-  }, [mode, refreshAuthUser]);
-
-  useEffect(() => {
-    if (
-      !workspaceAutoSyncEnabled ||
-      mode !== AppMode.WORKFLOW ||
-      !activeWorkspaceProjectId ||
-      !user?.id ||
-      !user?.username ||
-      !isWorkspaceCloudEnabled()
-    ) {
-      setWorkspaceCloudNextAutoSyncAt(null);
-      return;
-    }
-    setWorkspaceCloudNextAutoSyncAt(Date.now() + WORKSPACE_AUTO_SYNC_INTERVAL_MS);
-  }, [workspaceAutoSyncEnabled, mode, activeWorkspaceProjectId, user?.id, user?.username]);
-
-  /** 到点触发自动同步：读 ref 避免闭包拿到过期的 nextAutoSyncAt；不通过 App 根每秒 setState 刷倒计时 */
-  useEffect(() => {
-    if (!workspaceAutoSyncEnabled) return;
-    const id = window.setInterval(() => {
-      const next = workspaceCloudNextAutoSyncAtRef.current;
-      if (next == null || Date.now() < next) return;
-      void triggerWorkspaceCloudSyncNow();
-    }, 1000);
-    return () => window.clearInterval(id);
-  }, [triggerWorkspaceCloudSyncNow, workspaceAutoSyncEnabled]);
 
   const [step, setStep] = useState<AppStep>(AppStep.T_PATTERN);
   const [tasks, setTasks] = useState<AppTask[]>([]);
@@ -2338,17 +2258,9 @@ const MainApp: React.FC = () => {
     () => workspaceProjects.find((p) => p.id === activeWorkspaceProjectId)?.name ?? '',
     [workspaceProjects, activeWorkspaceProjectId]
   );
-  const workspaceCloudQuotaBytes = Number(user?.workspaceQuotaBytes ?? WORKSPACE_CLOUD_DEFAULT_QUOTA_BYTES);
-  const workspaceCloudUsedBytes = Number(user?.workspaceUsedBytes ?? 0);
-  const workspaceCloudUsageRatio = Math.max(
-    0,
-    Math.min(1, workspaceCloudQuotaBytes > 0 ? workspaceCloudUsedBytes / workspaceCloudQuotaBytes : 0)
-  );
-  const workspaceCloudUsagePercent = Math.round(workspaceCloudUsageRatio * 100);
   const aiInvocationReady = isAiInvocationReady();
   const aiProviderToolbarLabel = getAiProviderToolbarLabel();
   const workspaceProjectOptions = workspaceProjects.map((p) => ({ value: p.id, label: p.name }));
-  const workspaceLastSyncText = formatTimestampText(workspaceCloudLastSyncAt);
 
   const handleUserMenuAction = useCallback(async (action: string) => {
     if (!action) return;
@@ -4398,23 +4310,6 @@ const MainApp: React.FC = () => {
             <WorkspaceSidebarFooter
               user={user}
               activeWorkspaceProjectId={activeWorkspaceProjectId}
-              workspaceCloudEnabled={isWorkspaceCloudEnabled()}
-              workspaceCloudUsedBytes={workspaceCloudUsedBytes}
-              workspaceCloudQuotaBytes={workspaceCloudQuotaBytes}
-              workspaceCloudUsageRatio={workspaceCloudUsageRatio}
-              workspaceCloudUsagePercent={workspaceCloudUsagePercent}
-              workspaceLastSyncText={workspaceLastSyncText}
-              workspaceCloudAutoSyncing={workspaceCloudAutoSyncing}
-              workspaceAutoSyncEnabled={workspaceAutoSyncEnabled}
-              workspaceCloudNextAutoSyncAt={workspaceCloudNextAutoSyncAt}
-              onToggleWorkspaceAutoSync={() => {
-                setWorkspaceAutoSyncEnabledState((prev) => {
-                  const next = !prev;
-                  setWorkspaceAutoSyncEnabled(next);
-                  return next;
-                });
-              }}
-              onTriggerWorkspaceSyncNow={() => void triggerWorkspaceCloudSyncNow({ force: true })}
               onOpenApiKeyModal={() => setApiKeyModalOpen(true)}
               aiInvocationReady={aiInvocationReady}
               aiPlatformLabel={aiProviderToolbarLabel}
@@ -4709,11 +4604,6 @@ const MainApp: React.FC = () => {
                   showWorkspaceIdbHydrateOverlay={showWorkspaceIdbHydrateOverlay}
                   activeWorkspaceProjectId={activeWorkspaceProjectId}
                   user={user}
-                  workspaceCloudEnabled={isWorkspaceCloudEnabled()}
-                  workspaceCloudUsedBytes={workspaceCloudUsedBytes}
-                  workspaceCloudQuotaBytes={workspaceCloudQuotaBytes}
-                  workspaceCloudUsageRatio={workspaceCloudUsageRatio}
-                  workspaceCloudUsagePercent={workspaceCloudUsagePercent}
                   workspaceProjects={workspaceProjects}
                   onWorkspaceCreate={createWorkspaceProjectEntry}
                   onWorkspaceOpen={openWorkspaceProject}
@@ -4726,9 +4616,9 @@ const MainApp: React.FC = () => {
                   onOpenWorkspaceUploadFailureDetail={requestOpenWorkspaceUploadFailureDetail}
                   workspaceUploadingProjectId={workspaceUploadingProjectId}
                   onOpenWorkspaceTrash={() => void openWorkspaceTrashDialog()}
-                  workspaceCloudQuotaSuspended={workspaceCloudQuotaSuspended}
                   renderWorkflowSection={() => (
                     <WorkflowSection
+                      quickComposeShellActive={mode === AppMode.WORKFLOW}
                       capabilityPresets={capabilityPresets}
                       capabilitySets={capabilitySets}
                       assets={workflowAssets}

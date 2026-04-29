@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "author": "AssetCutter Team",
-  "description": "本地伴侣桌面壳：托盘、Windows 首次向导骨架、启动 local-companion",
+  "description": "本地伴侣桌面壳：托盘、设置内配对、启动 local-companion",
   "main": "main.cjs",
   "scripts": {
     "start": "electron .",
@@ -26,10 +26,8 @@
     },
     "files": [
       "main.cjs",
-      "preload-wizard.cjs",
       "preload-shell.cjs",
       "shell/**/*",
-      "wizard/**/*",
       "package.json"
     ],
     "asar": true,

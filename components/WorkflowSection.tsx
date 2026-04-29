@@ -85,7 +85,6 @@ import {
   TITLE_ROW_BTN_NEUTRAL,
   TITLE_ROW_BTN_ACTIVE,
   TITLE_ROW_BTN_PRIMARY,
-  TITLE_ROW_BTN_EMERALD,
   TITLE_ROW_STEPPER_SHELL,
   TITLE_ROW_STEPPER_VALUE,
   TITLE_ROW_STEPPER_BTN,
@@ -318,6 +317,11 @@ const WorkflowSection: React.FC<{
     onBackToProjectList: () => void | Promise<void>;
     onSelectProject: (id: string) => void | Promise<void>;
   };
+  /**
+   * 底部快捷输入条用 portal 挂到 body，不受侧栏/模式容器 `hidden` 影响；需由 App 在「仅工作区模式」为 true，
+   * 否则切到设置等页面时条仍会盖在最上层。
+   */
+  quickComposeShellActive?: boolean;
 }> = ({
   capabilityPresets,
   capabilitySets: capabilitySetsProp = [],
@@ -337,6 +341,7 @@ const WorkflowSection: React.FC<{
   onUpdateCapabilitySets,
   onboardingKey = null,
   workspaceProjectChrome,
+  quickComposeShellActive = true,
 }) => {
   const assets = useMemo(() => (Array.isArray(assetsProp) ? assetsProp : []), [assetsProp]);
   const pending = useMemo(() => (Array.isArray(pendingProp) ? pendingProp : []), [pendingProp]);
@@ -4500,30 +4505,6 @@ ${lineSvg}
           actions: (
             <>
               <div className="flex items-center gap-1.5 whitespace-nowrap">
-                {!showArchived && (
-                  <button type="button" onClick={() => addWorkflowTextAsset()} className={TITLE_ROW_BTN_EMERALD}>
-                    添加文字
-                  </button>
-                )}
-                <label className={`${TITLE_ROW_BTN_NEUTRAL} cursor-pointer`}>
-                  导入图片
-                  <input
-                    type="file"
-                    className="hidden"
-                    accept="image/*,.glb,.gltf,.fbx,.obj"
-                    multiple
-                    onChange={handleBatchUploadCorrect}
-                  />
-                </label>
-                {onOpenLibraryPicker && (
-                  <button
-                    type="button"
-                    onClick={() => onOpenLibraryPicker((items) => importLibraryItemsIntoWorkflow(items))}
-                    className={TITLE_ROW_BTN_NEUTRAL}
-                  >
-                    从仓库导入
-                  </button>
-                )}
                 <div className={TITLE_ROW_STEPPER_SHELL}>
                   <button
                     type="button"
@@ -5773,8 +5754,7 @@ ${lineSvg}
                 <AppIcon name="camera" className="mb-3 h-11 w-11 text-gray-500" />
                 <p className="text-[11px] font-black uppercase tracking-wide text-gray-300">画布为空</p>
                 <p className="mt-2 text-[9px] leading-relaxed text-gray-500">
-                  用顶栏或左侧能力区的<strong className="text-gray-400">导入图片</strong>放入画布，或点顶栏
-                  <strong className="text-gray-400">添加文字</strong>建卡片
+                  将图片或模型<strong className="text-gray-400">拖入画布</strong>，在左侧「仓库」拖入条目，或使用<strong className="text-gray-400">粘贴</strong>、功能区能力生成内容
                 </p>
               </div>
             </div>
@@ -7003,6 +6983,7 @@ ${lineSvg}
       ? createPortal(
           <WorkspaceQuickComposeBar
             visible={
+              quickComposeShellActive &&
               quickComposeOptions.length > 0 &&
               !lightboxAsset &&
               !cutSelectState &&

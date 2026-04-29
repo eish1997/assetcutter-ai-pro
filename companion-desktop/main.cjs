@@ -2,9 +2,11 @@
 
 const path = require('path');
 const fs = require('fs');
+const fsp = fs.promises;
+const os = require('os');
 const http = require('http');
 const { app, Tray, Menu, nativeImage, shell, BrowserWindow, ipcMain, dialog } = require('electron');
-const { spawn } = require('child_process');
+const { spawn, execSync } = require('child_process');
 
 /** Windows：与产品路径一致，数据落在 %LOCALAPPDATA%\\AssetCutterCompanion\\desktop-shell */
 if (process.platform === 'win32' && process.env.LOCALAPPDATA) {
@@ -22,12 +24,22 @@ app.setName('AssetCutterCompanion');
 
 const DEFAULT_HTTP_PORT = 18765;
 
+/** 开发：`npm start`；安装包：未保存过主站时的「打开网站」默认 */
+const DEFAULT_SHELL_SITE_DEV = 'http://localhost:3000';
+const DEFAULT_SHELL_SITE_PACKAGED = 'https://assetcutter-ai-pro.vercel.app/';
+
+function defaultShellSiteUrl() {
+  try {
+    return app.isPackaged ? DEFAULT_SHELL_SITE_PACKAGED : DEFAULT_SHELL_SITE_DEV;
+  } catch {
+    return DEFAULT_SHELL_SITE_DEV;
+  }
+}
+
 /** @type {import('child_process').ChildProcess | null} */
 let companion = null;
 /** @type {Tray | null} */
 let tray = null;
-/** @type {BrowserWindow | null} */
-let wizardWindow = null;
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
 /** @type {string} */
@@ -48,15 +60,17 @@ function shellSettingsPath() {
 }
 
 function readShellSettings() {
+  const fallbackSite = defaultShellSiteUrl();
   try {
     const p = shellSettingsPath();
-    if (!fs.existsSync(p)) return { siteUrl: 'http://localhost:3000' };
+    if (!fs.existsSync(p)) return { siteUrl: fallbackSite, volumeRoot: '' };
     const j = JSON.parse(fs.readFileSync(p, 'utf8'));
     const siteUrl =
-      typeof j.siteUrl === 'string' && j.siteUrl.trim() ? j.siteUrl.trim() : 'http://localhost:3000';
-    return { siteUrl };
+      typeof j.siteUrl === 'string' && j.siteUrl.trim() ? j.siteUrl.trim() : fallbackSite;
+    const volumeRoot = typeof j.volumeRoot === 'string' ? j.volumeRoot.trim() : '';
+    return { siteUrl, volumeRoot };
   } catch {
-    return { siteUrl: 'http://localhost:3000' };
+    return { siteUrl: fallbackSite, volumeRoot: '' };
   }
 }
 
@@ -64,11 +78,85 @@ function saveShellSettings(patch) {
   const cur = readShellSettings();
   if (patch && typeof patch.siteUrl === 'string') {
     const t = patch.siteUrl.trim();
-    cur.siteUrl = t || 'http://localhost:3000';
+    cur.siteUrl = t || defaultShellSiteUrl();
+  }
+  if (patch && typeof patch.volumeRoot === 'string') {
+    let v = patch.volumeRoot.trim();
+    if (v) {
+      try {
+        v = path.normalize(v);
+      } catch {
+        /* ignore */
+      }
+    }
+    cur.volumeRoot = v;
   }
   fs.mkdirSync(path.dirname(shellSettingsPath()), { recursive: true });
   fs.writeFileSync(shellSettingsPath(), `${JSON.stringify(cur, null, 2)}\n`, 'utf8');
   return cur;
+}
+
+/** 将设置中的卷根写入子进程环境；留空则移除变量，使 local-companion 使用默认 ~/.assetcutter-companion/volume */
+function applyShellVolumeRootToEnv(env) {
+  const sh = readShellSettings();
+  if (sh.volumeRoot) {
+    env.COMPANION_VOLUME_ROOT = sh.volumeRoot;
+  } else {
+    delete env.COMPANION_VOLUME_ROOT;
+  }
+}
+
+/** 与 local-companion `repositoryVolume.ts` 默认一致 */
+function getDefaultCompanionVolumeRoot() {
+  return path.resolve(os.homedir(), '.assetcutter-companion', 'volume');
+}
+
+function volumePathsEqual(a, b) {
+  try {
+    const x = path.resolve(a);
+    const y = path.resolve(b);
+    if (process.platform === 'win32') return x.toLowerCase() === y.toLowerCase();
+    return x === y;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 将源卷根整棵迁移到目标卷根：复制子项后删除源目录（与「移动工作区」语义一致）。
+ * 调用前应已停止占用该卷的伴侣进程。
+ */
+async function migrateCompanionVolumeTree(sourceAbs, targetAbs) {
+  const src = path.resolve(sourceAbs);
+  const dst = path.resolve(targetAbs);
+  if (volumePathsEqual(src, dst)) return { ok: true };
+  const relDstInSrc = path.relative(src, dst);
+  if (relDstInSrc === '' || (!relDstInSrc.startsWith('..') && !path.isAbsolute(relDstInSrc))) {
+    return { ok: false, error: '目标路径不能位于当前存储目录之内' };
+  }
+  const relSrcInDst = path.relative(dst, src);
+  if (relSrcInDst === '' || (!relSrcInDst.startsWith('..') && !path.isAbsolute(relSrcInDst))) {
+    return { ok: false, error: '当前存储目录不能位于目标路径之内' };
+  }
+  if (!fs.existsSync(src)) return { ok: true };
+  if (!fs.statSync(src).isDirectory()) return { ok: false, error: '当前存储路径不是文件夹' };
+  if (fs.existsSync(dst)) {
+    try {
+      if (fs.readdirSync(dst).length > 0) {
+        return { ok: false, error: '目标文件夹非空，请选择空目录或清空后再迁移' };
+      }
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  } else {
+    fs.mkdirSync(dst, { recursive: true });
+  }
+  const names = await fsp.readdir(src);
+  for (const name of names) {
+    await fsp.cp(path.join(src, name), path.join(dst, name), { recursive: true, force: true });
+  }
+  await fsp.rm(src, { recursive: true, force: true });
+  return { ok: true };
 }
 
 let lastDesktopReleaseNagKey = null;
@@ -233,10 +321,6 @@ function localCompanionDir() {
   return path.resolve(__dirname, '..', 'local-companion');
 }
 
-function wizardCompletePath() {
-  return path.join(app.getPath('userData'), 'first-run-complete');
-}
-
 function pairingConfigPath() {
   return path.join(app.getPath('userData'), 'pairing-config.json');
 }
@@ -277,30 +361,6 @@ function savePairingConfig(nextCfg) {
   return { sharedToken, allowedOrigins };
 }
 
-function hasCompletedWizard() {
-  try {
-    return fs.existsSync(wizardCompletePath());
-  } catch {
-    return false;
-  }
-}
-
-function markWizardCompleted() {
-  try {
-    fs.mkdirSync(path.dirname(wizardCompletePath()), { recursive: true });
-    fs.writeFileSync(wizardCompletePath(), `${new Date().toISOString()}\n`, 'utf8');
-  } catch (err) {
-    console.error('[companion-desktop] 无法写入向导完成标记:', err.message);
-  }
-}
-
-function shouldShowFirstRunWizard() {
-  if (process.env.COMPANION_DESKTOP_SKIP_WIZARD === '1') return false;
-  if (process.env.COMPANION_DESKTOP_FORCE_WIZARD === '1') return true;
-  if (process.platform !== 'win32') return false;
-  return !hasCompletedWizard();
-}
-
 function createTrayIcon() {
   const png1x1 =
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
@@ -316,7 +376,7 @@ function updateTrayTooltip() {
 function readSharedToken() {
   const envTok = process.env.COMPANION_SHARED_TOKEN?.trim();
   if (envTok) return envTok;
-  /** 与启动子进程一致：向导写入的 pairing-config 需参与本机 HTTP 客户端鉴权，否则 /v1/capabilities 等会 401 */
+  /** 与启动子进程一致：设置页写入的 pairing-config 需参与本机 HTTP 客户端鉴权，否则 /v1/capabilities 等会 401 */
   try {
     const p = readPairingConfig().sharedToken?.trim();
     return p || null;
@@ -325,9 +385,59 @@ function readSharedToken() {
   }
 }
 
-function restartLocalCompanionFromTray() {
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** 等待 /v1/health 不可达（子进程已退出或端口已释放） */
+async function waitUntilCompanionStopped(timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const alive = await probeCompanionHealth();
+    if (!alive) return true;
+    await sleep(120);
+  }
+  return !(await probeCompanionHealth());
+}
+
+/**
+ * Windows：结束占用伴侣 HTTP 端口的监听进程（用于切换存储目录等需强制换进程的场景）。
+ * 可能结束用户在其它终端启动的 local-companion。
+ */
+function killProcessListeningOnCompanionPort(port) {
+  if (process.platform !== 'win32') return;
+  try {
+    execSync(
+      `powershell -NoProfile -Command "$c = Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty OwningProcess; if ($c) { Stop-Process -Id $c -Force -ErrorAction SilentlyContinue }"`,
+      { stdio: 'ignore', windowsHide: true },
+    );
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * 停止本机伴侣子进程并尽量释放端口（与切换卷根、迁移前停写一致）。
+ * @param {{ aggressive?: boolean }} [options]
+ */
+async function stopCompanionForVolumeChange(options = {}) {
+  const aggressive = Boolean(options && options.aggressive);
+  const port = readHttpPort();
   stopLocalCompanion();
-  startLocalCompanion();
+  await sleep(aggressive ? 450 : 320);
+  let stopped = await waitUntilCompanionStopped(aggressive ? 8000 : 5000);
+  if (!stopped && aggressive) {
+    killProcessListeningOnCompanionPort(port);
+    await sleep(500);
+  }
+}
+
+/**
+ * @param {{ aggressive?: boolean }} [options] aggressive：为 true 时，在端口仍被占用时会尝试结束监听进程（Windows），以便新 COMPANION_VOLUME_ROOT 生效。
+ */
+async function restartLocalCompanionFromTray(options = {}) {
+  await stopCompanionForVolumeChange(options);
+  await startLocalCompanion();
 }
 
 function notifyCompanionFailure(message) {
@@ -484,7 +594,11 @@ async function pollCompanionStatus() {
       companionLastError = 'status_needs_token';
       updateTrayTooltip();
       rebuildTrayMenu();
-      notifyStatusIssue('本地伴侣提醒', '配对验证失败，请在「首次设置向导」或网站设置中检查本机通信密码是否一致', 'status_needs_token');
+      notifyStatusIssue(
+        '本地伴侣提醒',
+        '配对验证失败，请在桌面壳「设置 → 与网站配对」或网站设置中检查本机通信密码是否一致',
+        'status_needs_token',
+      );
       return;
     }
     companionStatusNote = '状态检查失败';
@@ -535,6 +649,7 @@ async function startLocalCompanion() {
   if (!env.COMPANION_ALLOWED_ORIGINS && pair.allowedOrigins) {
     env.COMPANION_ALLOWED_ORIGINS = pair.allowedOrigins;
   }
+  applyShellVolumeRootToEnv(env);
 
   const stdio = process.stdout?.isTTY ? 'inherit' : 'ignore';
 
@@ -620,16 +735,13 @@ function buildTrayMenu() {
     },
     {
       label: '重新启动本地伴侣',
-      click: () => restartLocalCompanionFromTray(),
+      click: () => {
+        void restartLocalCompanionFromTray({ aggressive: false }).catch((e) =>
+          console.error('[companion-desktop] restart companion:', e),
+        );
+      },
     },
   ];
-
-  if (process.platform === 'win32') {
-    template.push({
-      label: '首次设置向导',
-      click: () => openFirstRunWizard(),
-    });
-  }
 
   const updateFeed = process.env.COMPANION_UPDATE_FEED_URL?.trim();
   if (updateFeed) {
@@ -663,44 +775,6 @@ function rebuildTrayMenu() {
   tray.setContextMenu(buildTrayMenu());
 }
 
-function openFirstRunWizard() {
-  if (wizardWindow && !wizardWindow.isDestroyed()) {
-    wizardWindow.focus();
-    return;
-  }
-
-  const wizardTitle = hasCompletedWizard()
-    ? '本地伴侣 — 说明与设置'
-    : '本地伴侣 — 首次设置';
-
-  wizardWindow = new BrowserWindow({
-    width: 520,
-    height: 480,
-    resizable: false,
-    maximizable: false,
-    minimizable: true,
-    autoHideMenuBar: true,
-    show: false,
-    backgroundColor: '#141414',
-    title: wizardTitle,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload-wizard.cjs'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-    },
-  });
-
-  wizardWindow.on('closed', () => {
-    wizardWindow = null;
-  });
-
-  void wizardWindow.loadFile(path.join(__dirname, 'wizard', 'index.html'));
-  wizardWindow.once('ready-to-show', () => {
-    wizardWindow?.show();
-  });
-}
-
 function openMainWindow() {
   if (mainWindow && !mainWindow.isDestroyed()) {
     if (mainWindow.isMinimized()) mainWindow.restore();
@@ -714,6 +788,7 @@ function openMainWindow() {
     height: 560,
     minWidth: 360,
     minHeight: 480,
+    frame: false,
     autoHideMenuBar: true,
     backgroundColor: '#0c0c0e',
     title: 'Asset Cutter 本地伴侣',
@@ -815,18 +890,6 @@ const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
-  ipcMain.on('wizard-open-console', () => {
-    openConsole();
-  });
-
-  ipcMain.on('wizard-complete', () => {
-    markWizardCompleted();
-    if (wizardWindow && !wizardWindow.isDestroyed()) {
-      wizardWindow.close();
-    }
-    openMainWindow();
-  });
-
   ipcMain.handle('shell-tray-summary', async () => {
     const port = readHttpPort();
     const alive = await probeCompanionHealth();
@@ -848,6 +911,87 @@ if (!gotLock) {
     }
   });
 
+  ipcMain.handle('shell-pick-volume-root', async (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender) || mainWindow;
+    const r = await dialog.showOpenDialog(win || undefined, {
+      title: '选择本地伴侣仓库目录',
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    if (r.canceled || !r.filePaths[0]) return { ok: false, canceled: true };
+    return { ok: true, path: r.filePaths[0] };
+  });
+
+  ipcMain.handle('shell-apply-volume-change', async (event, payload) => {
+    const newInputRaw =
+      payload && typeof payload.newVolumeRoot === 'string' ? payload.newVolumeRoot.trim() : '';
+    const oldHint =
+      payload && typeof payload.oldVolumeRoot === 'string' ? payload.oldVolumeRoot.trim() : '';
+
+    const newAbs = newInputRaw
+      ? path.resolve(path.normalize(newInputRaw))
+      : getDefaultCompanionVolumeRoot();
+
+    let oldAbs;
+    if (oldHint) {
+      oldAbs = path.resolve(path.normalize(oldHint));
+    } else {
+      const sh = readShellSettings();
+      oldAbs = sh.volumeRoot
+        ? path.resolve(path.normalize(sh.volumeRoot))
+        : getDefaultCompanionVolumeRoot();
+    }
+
+    if (volumePathsEqual(oldAbs, newAbs)) {
+      return { ok: true, noChange: true };
+    }
+
+    const win =
+      BrowserWindow.fromWebContents(event.sender) || BrowserWindow.getFocusedWindow() || mainWindow;
+    const detail = '当前存储：' + oldAbs + '\n变更后：' + newAbs;
+    const { response } = await dialog.showMessageBox(win || undefined, {
+      type: 'question',
+      title: '更改存储位置',
+      message: '是否将现有数据迁移到新目录？',
+      detail,
+      buttons: ['迁移并应用', '仅切换目录', '取消'],
+      defaultId: 0,
+      cancelId: 2,
+    });
+    if (response === 2) return { ok: false, canceled: true };
+
+    const shouldMigrate = response === 0;
+
+    try {
+      await stopCompanionForVolumeChange({ aggressive: true });
+      if (shouldMigrate) {
+        const m = await migrateCompanionVolumeTree(oldAbs, newAbs);
+        if (!m.ok) {
+          dialog.showErrorBox('无法完成迁移', m.error || '未知错误');
+          await startLocalCompanion();
+          return { ok: false, error: m.error || 'migrate_failed' };
+        }
+      }
+      saveShellSettings({ volumeRoot: newInputRaw });
+      await startLocalCompanion();
+      return { ok: true, migrated: shouldMigrate };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      dialog.showErrorBox('应用存储位置失败', msg);
+      try {
+        await startLocalCompanion();
+      } catch {
+        /* ignore */
+      }
+      return { ok: false, error: msg };
+    }
+  });
+
+  ipcMain.handle('shell-restart-companion', async (_event, opts) => {
+    const o = opts && typeof opts === 'object' ? opts : {};
+    await restartLocalCompanionFromTray(o);
+    return { ok: true };
+  });
+
   ipcMain.handle('shell-open-website', async (_e, url) => {
     const u = String(url || '').trim();
     if (!/^https?:\/\//i.test(u)) return { ok: false, error: 'invalid_url' };
@@ -860,8 +1004,33 @@ if (!gotLock) {
     return { ok: true };
   });
 
-  ipcMain.handle('shell-open-wizard', () => {
-    openFirstRunWizard();
+  ipcMain.handle('shell-open-folder-path', async (_e, absPath) => {
+    const raw = String(absPath || '').trim();
+    if (!raw) return { ok: false, error: 'empty_path' };
+    const errMsg = await shell.openPath(raw);
+    return errMsg ? { ok: false, error: errMsg } : { ok: true };
+  });
+
+  ipcMain.handle('shell-window-minimize', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.minimize();
+      return { ok: true };
+    }
+    return { ok: false, error: 'main_window_not_found' };
+  });
+
+  ipcMain.handle('shell-window-close', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.close();
+      return { ok: true };
+    }
+    return { ok: false, error: 'main_window_not_found' };
+  });
+
+  ipcMain.handle('shell-window-toggle-maximize', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return { ok: false, error: 'main_window_not_found' };
+    if (mainWindow.isMaximized()) mainWindow.unmaximize();
+    else mainWindow.maximize();
     return { ok: true };
   });
 
@@ -873,11 +1042,9 @@ if (!gotLock) {
     }
   });
 
-  ipcMain.handle('wizard-load-pairing', () => {
-    return readPairingConfig();
-  });
+  ipcMain.handle('shell-load-pairing', () => readPairingConfig());
 
-  ipcMain.handle('wizard-save-pairing', (_event, payload) => {
+  ipcMain.handle('shell-save-pairing', (_event, payload) => {
     try {
       return { ok: true, data: savePairingConfig(payload) };
     } catch (e) {
@@ -887,10 +1054,6 @@ if (!gotLock) {
 
   app.on('second-instance', (_event, commandLine) => {
     void commandLine;
-    if (wizardWindow && !wizardWindow.isDestroyed()) {
-      wizardWindow.focus();
-      return;
-    }
     if (mainWindow && !mainWindow.isDestroyed()) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.show();
@@ -916,9 +1079,7 @@ if (!gotLock) {
         console.warn('[companion-desktop] desktop release check:', e instanceof Error ? e.message : e);
       }
     }, 45000);
-    if (shouldShowFirstRunWizard()) {
-      openFirstRunWizard();
-    } else if (process.env.COMPANION_DESKTOP_NO_AUTO_SHELL !== '1') {
+    if (process.env.COMPANION_DESKTOP_NO_AUTO_SHELL !== '1') {
       const delayMs = peekProtocolUrl() ? 400 : 900;
       setTimeout(() => openMainWindow(), delayMs);
     }
@@ -941,10 +1102,6 @@ if (!gotLock) {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.destroy();
       mainWindow = null;
-    }
-    if (wizardWindow && !wizardWindow.isDestroyed()) {
-      wizardWindow.destroy();
-      wizardWindow = null;
     }
     stopLocalCompanion();
   });
