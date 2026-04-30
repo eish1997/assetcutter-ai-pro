@@ -7,6 +7,7 @@ import {
   resolveCompanionArtifactDownload,
   type CompanionArtifactSummary,
 } from '../services/companionArtifactsClient';
+import { HttpRequestError } from '../services/httpClient';
 
 function platformAbbrev(label: string): string {
   const trimmed = label.trim();
@@ -41,6 +42,8 @@ const WorkspaceSidebarFooter: React.FC<WorkspaceSidebarFooterProps> = ({
   const [companionLinked, setCompanionLinked] = useState<boolean | null>(null);
   /** 当前仅发行 Windows 桌面壳；侧栏与弹窗均拉取 win32 latest */
   const [latestWinShell, setLatestWinShell] = useState<CompanionArtifactSummary | null>(null);
+  /** 与「库中无记录」区分：网络 / CORS / 构建未指向 auth-api 等 */
+  const [shellLatestFetchError, setShellLatestFetchError] = useState<string | null>(null);
   const [downloadBusy, setDownloadBusy] = useState(false);
   const [companionDownloadModalOpen, setCompanionDownloadModalOpen] = useState(false);
 
@@ -68,8 +71,9 @@ const WorkspaceSidebarFooter: React.FC<WorkspaceSidebarFooterProps> = ({
   }, []);
 
   useEffect(() => {
-    if (!user?.id || !activeWorkspaceProjectId) {
+    if (!user?.id) {
       setLatestWinShell(null);
+      setShellLatestFetchError(null);
       return;
     }
     let alive = true;
@@ -82,15 +86,23 @@ const WorkspaceSidebarFooter: React.FC<WorkspaceSidebarFooterProps> = ({
         });
         if (!alive) return;
         setLatestWinShell(r.latest);
-      } catch {
+        setShellLatestFetchError(null);
+      } catch (e) {
         if (!alive) return;
         setLatestWinShell(null);
+        const msg =
+          e instanceof HttpRequestError
+            ? `${e.message}（HTTP ${e.status}）`
+            : e instanceof Error
+              ? e.message
+              : '拉取发行信息失败';
+        setShellLatestFetchError(msg);
       }
     })();
     return () => {
       alive = false;
     };
-  }, [user?.id, activeWorkspaceProjectId]);
+  }, [user?.id]);
 
   const runWinShellDownload = useCallback(async (artifactId: string) => {
     if (!user?.id || !artifactId) return;
@@ -262,10 +274,14 @@ const WorkspaceSidebarFooter: React.FC<WorkspaceSidebarFooterProps> = ({
                   <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2.5">
                     <div>
                       <p className="text-[11px] font-bold text-gray-200">Windows</p>
-                      <p className="text-[9px] text-gray-500">
-                        {latestWinShell
-                          ? `当前版本 v${latestWinShell.semver} · ${latestWinShell.fileName}`
-                          : '暂无已发布的安装包'}
+                      <p
+                        className={`text-[9px] ${shellLatestFetchError ? 'text-amber-400/95' : 'text-gray-500'}`}
+                      >
+                        {shellLatestFetchError
+                          ? shellLatestFetchError
+                          : latestWinShell
+                            ? `当前版本 v${latestWinShell.semver} · ${latestWinShell.fileName}`
+                            : '暂无已发布的安装包（请管理员在「本地伴侣发行」登记 Windows stable 壳）'}
                       </p>
                     </div>
                     <button

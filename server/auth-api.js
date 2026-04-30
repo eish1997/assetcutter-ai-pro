@@ -290,6 +290,8 @@ function assertCsrf(req, res) {
   /** 跨域 SPA（Vercel）无法读取 auth 域名上的 ac_csrf，无法带 X-CSRF-Token；R2 / 管理接口依赖 assertWriteOrigin 白名单 Origin + 会话 Cookie */
   const pathOnly = (req.url || '/').split('?')[0];
   if (pathOnly.startsWith('/api/r2')) return true;
+  /** 与 R2 相同：前端经 VITE_AUTH_API_BASE_URL 跨域 POST，JS 读不到 auth 域名的 ac_csrf；由 assertWriteOrigin + requireAuth 约束 */
+  if (pathOnly === '/api/companion-artifacts/resolve-download') return true;
   if (pathOnly.startsWith('/api/tripo')) return true;
   if (pathOnly.startsWith('/api/debug/client-log')) return true;
   if (pathOnly.startsWith('/api/admin')) {
