@@ -1,4 +1,4 @@
-import React, { useCallback, useRef } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { CustomDropdown } from './ui/CustomDropdown';
 
 export type WorkspaceQuickComposeBarProps = {
@@ -39,6 +39,17 @@ export default function WorkspaceQuickComposeBar({
   onSubmit,
 }: WorkspaceQuickComposeBarProps) {
   const fileRef = useRef<HTMLInputElement>(null);
+  const barRef = useRef<HTMLDivElement>(null);
+  const dragOffsetRef = useRef<{ x: number; y: number } | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
+
+  const resetToDefaultPosition = useCallback(() => {
+    const width = Math.min(576, Math.max(300, window.innerWidth - 24));
+    const left = Math.max(8, Math.floor((window.innerWidth - width) / 2));
+    const top = Math.max(8, window.innerHeight - 92);
+    setPosition({ left, top });
+  }, []);
 
   const onPickFiles = useCallback(
     async (files: FileList | null) => {
@@ -79,6 +90,36 @@ export default function WorkspaceQuickComposeBar({
     [onAttachImage]
   );
 
+  useEffect(() => {
+    if (!visible) return;
+    if (position) return;
+    resetToDefaultPosition();
+  }, [position, resetToDefaultPosition, visible]);
+
+  useEffect(() => {
+    if (!dragging) return;
+    const onMove = (e: PointerEvent) => {
+      const offset = dragOffsetRef.current;
+      if (!offset) return;
+      const rect = barRef.current?.getBoundingClientRect();
+      const width = rect?.width ?? 520;
+      const height = rect?.height ?? 58;
+      const left = Math.max(8, Math.min(window.innerWidth - width - 8, e.clientX - offset.x));
+      const top = Math.max(8, Math.min(window.innerHeight - height - 8, e.clientY - offset.y));
+      setPosition({ left, top });
+    };
+    const onUp = () => {
+      dragOffsetRef.current = null;
+      setDragging(false);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+  }, [dragging]);
+
   if (!visible) return null;
 
   const selectedLabel = options.find((o) => o.value === actionId)?.label ?? '能力';
@@ -86,7 +127,13 @@ export default function WorkspaceQuickComposeBar({
 
   return (
     <div
-      className="pointer-events-auto fixed bottom-5 left-1/2 z-[1600] w-[min(36rem,calc(100vw-1.5rem))] max-w-[92vw] -translate-x-1/2 px-2"
+      ref={barRef}
+      className="pointer-events-auto fixed z-[1600] w-[min(36rem,calc(100vw-1.5rem))] max-w-[92vw] px-2"
+      style={
+        position
+          ? { left: `${position.left}px`, top: `${position.top}px`, userSelect: dragging ? 'none' : 'auto' }
+          : undefined
+      }
       onPaste={onPaste}
     >
       <div
@@ -100,6 +147,27 @@ export default function WorkspaceQuickComposeBar({
           className="hidden"
           onChange={(e) => void onPickFiles(e.target.files)}
         />
+        <button
+          type="button"
+          disabled={disabled}
+          onDoubleClick={() => {
+            dragOffsetRef.current = null;
+            setDragging(false);
+            resetToDefaultPosition();
+          }}
+          onPointerDown={(e) => {
+            const rect = barRef.current?.getBoundingClientRect();
+            if (!rect) return;
+            dragOffsetRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+            setDragging(true);
+          }}
+          className="flex h-9 w-7 shrink-0 cursor-grab items-center justify-center rounded-full text-gray-400 outline-none transition-colors hover:bg-white/[0.08] hover:text-white active:cursor-grabbing disabled:opacity-35 focus-visible:ring-2 focus-visible:ring-blue-500/50"
+          title="拖动输入框（双击回到默认位置）"
+          aria-label="拖动输入框"
+        >
+          <span className="select-none text-xs leading-none">⋮⋮</span>
+        </button>
+
         <button
           type="button"
           disabled={disabled}

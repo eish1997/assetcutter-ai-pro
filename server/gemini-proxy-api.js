@@ -63,7 +63,13 @@ function applyCors(req, res) {
 
 function sendJson(res, status, obj) {
   const s = JSON.stringify(obj);
-  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': Buffer.byteLength(s, 'utf8') });
+  res.writeHead(status, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Content-Length': Buffer.byteLength(s, 'utf8'),
+    /** 避免 CDN/浏览器缓存异步任务轮询的 404（否则会反复出现 Job not found or expired） */
+    'Cache-Control': 'no-store, no-cache, must-revalidate, private',
+    Pragma: 'no-cache',
+  });
   res.end(s);
 }
 

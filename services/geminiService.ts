@@ -248,6 +248,7 @@ async function bulkProxyGenerateContentAsync(args: {
       ...aiBackendExtra,
     }),
     signal: abortSignal,
+    cache: "no-store",
   });
   const createText = await createRes.text();
   if (!createRes.ok) {
@@ -282,6 +283,7 @@ async function bulkProxyGenerateContentAsync(args: {
     if (abortSignal?.aborted) throw createAbortError("请求已取消");
     const pollRes = await fetch(bulkApiUrl(`/proxy/gemini/async/${encodeURIComponent(jobId)}`), {
       signal: abortSignal,
+      cache: "no-store",
     });
     const pollText = await pollRes.text();
     if (!pollRes.ok) {
@@ -320,6 +322,7 @@ async function bulkProxyGenerateContentBatchAsync(args: {
       })),
       ...(args.aiBackend ? { aiBackend: args.aiBackend } : {}),
     }),
+    cache: "no-store",
   });
   const createText = await createRes.text();
   if (!createRes.ok) {
@@ -336,7 +339,9 @@ async function bulkProxyGenerateContentBatchAsync(args: {
 
   const deadline = Date.now() + GEMINI_ASYNC_CLIENT_MAX_POLL_MS;
   while (Date.now() < deadline) {
-    const pollRes = await fetch(bulkApiUrl(`/proxy/gemini/async-batch/${encodeURIComponent(jobId)}`));
+    const pollRes = await fetch(bulkApiUrl(`/proxy/gemini/async-batch/${encodeURIComponent(jobId)}`), {
+      cache: "no-store",
+    });
     const pollText = await pollRes.text();
     if (!pollRes.ok) {
       throw new Error(parseBulkProxyErrorBody(pollText) || `批量任务轮询失败（${pollRes.status}）`);
@@ -643,6 +648,8 @@ function extractDiagCode(raw: string): GeminiDiagCode | null {
   return (m?.[1] as GeminiDiagCode) || null;
 }
 
+const MAX_IMAGE_BYTES_PER_REQUEST = 2 * 1024 * 1024;
+
 function parseInlineImageData(input: string): { mimeType: string; data: string } {
   const raw = (input || "").trim();
   const matched = raw.match(/^data:([^;,]+);base64,(.+)$/i);
@@ -653,6 +660,60 @@ function parseInlineImageData(input: string): { mimeType: string; data: string }
     };
   }
   return { mimeType: "image/jpeg", data: raw };
+}
+
+function base64Bytes(base64: string): number {
+  const raw = (base64 || "").trim().replace(/\s+/g, "");
+  if (!raw) return 0;
+  const padding = raw.endsWith("==") ? 2 : raw.endsWith("=") ? 1 : 0;
+  return Math.floor((raw.length * 3) / 4) - padding;
+}
+
+function hasCanvasCompressSupport(): boolean {
+  return typeof window !== "undefined" && typeof document !== "undefined";
+}
+
+async function compressDataUrlToJpegMaxBytes(dataUrl: string, maxBytes: number): Promise<string> {
+  if (!hasCanvasCompressSupport()) return dataUrl;
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = img.naturalWidth || img.width;
+        canvas.height = img.naturalHeight || img.height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          resolve(dataUrl);
+          return;
+        }
+        ctx.drawImage(img, 0, 0);
+        let quality = 0.9;
+        let next = canvas.toDataURL("image/jpeg", quality);
+        while (quality > 0.45 && base64Bytes(parseInlineImageData(next).data) > maxBytes) {
+          quality = Number((quality - 0.1).toFixed(2));
+          next = canvas.toDataURL("image/jpeg", quality);
+        }
+        resolve(next);
+      } catch {
+        resolve(dataUrl);
+      }
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
+}
+
+async function prepareInlineImageData(input: string): Promise<{ mimeType: string; data: string }> {
+  const parsed = parseInlineImageData(input);
+  if (!parsed.data) return parsed;
+  if (base64Bytes(parsed.data) <= MAX_IMAGE_BYTES_PER_REQUEST) return parsed;
+  const raw = (input || "").trim();
+  if (!/^data:[^;,]+;base64,/i.test(raw)) return parsed;
+  const compressedDataUrl = await compressDataUrlToJpegMaxBytes(raw, MAX_IMAGE_BYTES_PER_REQUEST);
+  const compressedParsed = parseInlineImageData(compressedDataUrl);
+  if (base64Bytes(compressedParsed.data) >= base64Bytes(parsed.data)) return parsed;
+  return compressedParsed;
 }
 
 function collectInlineImagesFromGeminiResponse(response: any): string[] {
@@ -1315,7 +1376,7 @@ export async function understandImageEditIntent(
         ];
         const images = Array.isArray(imageBase64) ? imageBase64.filter(Boolean) : imageBase64 ? [imageBase64] : [];
         for (let i = images.length - 1; i >= 0; i--) {
-          const parsed = parseInlineImageData(images[i]);
+          const parsed = await prepareInlineImageData(images[i]);
           parts.unshift({ inlineData: { mimeType: parsed.mimeType, data: parsed.data } });
         }
         const timeoutForThisRun =
@@ -1405,10 +1466,12 @@ export async function dialogGenerateImage(
       if (options.aspectRatio) config.imageConfig.aspectRatio = options.aspectRatio;
       if (options.imageSize) config.imageConfig.imageSize = options.imageSize;
     }
+    const sourceImage = imageBase64 || "";
+    const inlineImage = !isTextToImage ? await prepareInlineImageData(sourceImage) : null;
     const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = isTextToImage
       ? [{ text: instruction }]
       : [
-          { inlineData: parseInlineImageData(imageBase64) },
+          { inlineData: inlineImage! },
           { text: instruction }
         ];
     if (!isTextToImage) {
@@ -1483,10 +1546,12 @@ export async function dialogGenerateImages(
       if (options.aspectRatio) config.imageConfig.aspectRatio = options.aspectRatio;
       if (options.imageSize) config.imageConfig.imageSize = options.imageSize;
     }
+    const sourceImage = imageBase64 || "";
+    const inlineImage = !isTextToImage ? await prepareInlineImageData(sourceImage) : null;
     const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = isTextToImage
       ? [{ text: instruction }]
       : [
-          { inlineData: parseInlineImageData(imageBase64) },
+          { inlineData: inlineImage! },
           { text: instruction }
         ];
     if (!isTextToImage) {
@@ -1551,7 +1616,7 @@ export async function dialogGenerateImageMulti(
     }
     const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [];
     for (const img of imagesBase64) {
-      parts.push({ inlineData: parseInlineImageData(img) });
+      parts.push({ inlineData: await prepareInlineImageData(img) });
     }
     if (parts.some((p) => "inlineData" in p && !p.inlineData?.data)) {
       throw new Error(buildDiagMessage("INPUT_IMAGE_EMPTY", "多图输入中存在空图片或无效 base64"));

@@ -922,6 +922,14 @@ const SettingsSection: React.FC<{
             <section id="settings-companion" className="scroll-mt-4 rounded-2xl border border-[#2e2e32] bg-[#121214] p-6">
               <h2 className="text-xs font-black uppercase tracking-wider text-blue-400/90 mb-4">本地伴侣</h2>
               <div className="rounded-xl border border-[#252528] p-4 space-y-4 text-[10px] text-gray-400 leading-relaxed">
+                <div className="rounded-lg border border-[#2e2e32] bg-[#16161a] p-3">
+                  <p className="text-[11px] text-gray-200 font-semibold mb-1">给普通用户的最短路径</p>
+                  <ol className="list-decimal ml-4 space-y-1 text-[10px] text-gray-400">
+                    <li>先在「与网站配对」里保存本机通信密码</li>
+                    <li>点击「一键连接本机伴侣」</li>
+                    <li>如果失败，再点「重新检测」看提示</li>
+                  </ol>
+                </div>
                 <p className="text-[11px] text-gray-300 leading-relaxed">
                   想在本机处理素材，直接点「一键连接本机伴侣」。若本机开启了访问控制，请在下方填写与桌面壳或本机伴侣一致的
                   <strong className="text-gray-200">通信密码</strong>；无需再打开单独向导窗口。
@@ -1016,82 +1024,85 @@ const SettingsSection: React.FC<{
                     {companionProjectsBusy ? '刷新中…' : '刷新本机项目列表'}
                   </button>
                 </div>
-                <div className="rounded-lg border border-dashed border-[#3f3f46] bg-[#16161a]/80 p-3 space-y-2">
-                  <p className="text-[10px] text-gray-500 leading-relaxed">
-                    <span className="text-gray-400 font-bold">宿主插件包</span>（如大模型 / Segment Anything
-                    runtime）：管理员在后台登记为 <code className="text-gray-500">host_plugin_bundle</code>{' '}
-                    后，可从此处拉取到本机卷（需已登录主站、本机伴侣可连，且下载 URL 须为 https 且主机在 R2
-                    允许域或环境变量 <code className="text-gray-500">COMPANION_HOST_BUNDLE_TRUST_HOSTS</code>）。
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => void handleInstallHostBundle()}
-                    disabled={hostBundleBusy}
-                    className="px-4 py-2 rounded-xl bg-[#1e3a5f] hover:bg-[#264f7a] border border-[#3b82f6]/40 text-[10px] font-bold text-blue-100 transition-colors disabled:opacity-60"
-                  >
-                    {hostBundleBusy ? '安装中…' : '安装最新宿主插件包到本机'}
-                  </button>
-                  {hostBundleHint ? (
-                    <p className="text-[10px] text-gray-400 whitespace-pre-wrap break-words">{hostBundleHint}</p>
-                  ) : null}
-                  <div className="mt-3 pt-3 border-t border-[#2e2e32]/80 space-y-2">
+                <details className="rounded-lg border border-dashed border-[#3f3f46] bg-[#16161a]/80 p-3 space-y-2">
+                  <summary className="cursor-pointer text-[10px] font-bold text-gray-300">高级：本机扩展与宿主包（普通用户可忽略）</summary>
+                  <div className="mt-3 space-y-2">
                     <p className="text-[10px] text-gray-500 leading-relaxed">
-                      <span className="text-gray-400 font-bold">run.json 计算</span>：向本机伴侣提交{' '}
-                      <code className="text-gray-500">host_bundle.probe</code> /{' '}
-                      <code className="text-gray-500">host_bundle.exec</code>（与设置页下方「任务进度」共用）。
+                      <span className="text-gray-400 font-bold">宿主插件包</span>（如大模型 / Segment Anything
+                      runtime）：管理员在后台登记为 <code className="text-gray-500">host_plugin_bundle</code>{' '}
+                      后，可从此处拉取到本机卷（需已登录主站、本机伴侣可连，且下载 URL 须为 https 且主机在 R2
+                      允许域或环境变量 <code className="text-gray-500">COMPANION_HOST_BUNDLE_TRUST_HOSTS</code>）。
                     </p>
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        onClick={() => void handleRefreshHostBundles()}
-                        disabled={hostBundleListBusy || hostBundleBusy}
-                        className="px-3 py-1.5 rounded-lg bg-[#26262c] hover:bg-[#383842] border border-[#2e2e32] text-[10px] font-bold text-gray-200 transition-colors disabled:opacity-60"
-                      >
-                        {hostBundleListBusy ? '刷新中…' : '刷新已安装包列表'}
-                      </button>
-                    </div>
-                    <CustomDropdown
-                      value={hostBundleSelectedDir}
-                      onChange={setHostBundleSelectedDir}
-                      disabled={hostBundleRows.length === 0}
-                      options={[
-                        { value: '', label: '请选择已安装包…' },
-                        ...hostBundleRows.map((b) => ({
-                          value: b.dirName,
-                          label: `${b.semver} · ${b.dirName}${b.runSpec ? ' · run.json' : ''}`,
-                        })),
-                      ]}
-                      placeholder="请选择…"
-                      triggerClassName="w-full max-w-lg bg-[#101014] border border-[#2e2e32] rounded-lg px-3 py-2 text-[11px] text-left text-gray-200 flex items-center justify-between outline-none focus:border-blue-500 hover:bg-[#16161a] transition-colors disabled:opacity-50"
-                    />
-                    <p className="text-[9px] text-gray-600">
-                      {activeWorkspaceProjectId?.trim()
-                        ? `当前工作区 projectId 将写入任务元数据：${activeWorkspaceProjectId.trim()}`
-                        : '未打开工作区项目时不附带 projectId（不影响执行）。'}
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        onClick={() => void handleHostBundleProbe()}
-                        disabled={hostBundleExecBusy || hostBundleListBusy || hostBundleRows.length === 0}
-                        className="px-3 py-1.5 rounded-lg border border-[#15803d] bg-[#14532d]/80 text-[10px] font-bold text-green-100 hover:bg-[#166534]/90 transition-colors disabled:opacity-60"
-                      >
-                        {hostBundleExecBusy ? '提交中…' : '运行 probe'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void handleHostBundleExec()}
-                        disabled={hostBundleExecBusy || hostBundleListBusy || hostBundleRows.length === 0}
-                        className="px-3 py-1.5 rounded-lg border border-[#7c3aed] bg-[#3b0764]/80 text-[10px] font-bold text-violet-100 hover:bg-[#4c1d95]/90 transition-colors disabled:opacity-60"
-                      >
-                        {hostBundleExecBusy ? '提交中…' : '运行 exec'}
-                      </button>
-                    </div>
-                    {hostBundleExecHint ? (
-                      <p className="text-[10px] text-gray-400 whitespace-pre-wrap break-words">{hostBundleExecHint}</p>
+                    <button
+                      type="button"
+                      onClick={() => void handleInstallHostBundle()}
+                      disabled={hostBundleBusy}
+                      className="px-4 py-2 rounded-xl bg-[#1e3a5f] hover:bg-[#264f7a] border border-[#3b82f6]/40 text-[10px] font-bold text-blue-100 transition-colors disabled:opacity-60"
+                    >
+                      {hostBundleBusy ? '安装中…' : '安装最新宿主插件包到本机'}
+                    </button>
+                    {hostBundleHint ? (
+                      <p className="text-[10px] text-gray-400 whitespace-pre-wrap break-words">{hostBundleHint}</p>
                     ) : null}
+                    <div className="mt-3 pt-3 border-t border-[#2e2e32]/80 space-y-2">
+                      <p className="text-[10px] text-gray-500 leading-relaxed">
+                        <span className="text-gray-400 font-bold">run.json 计算</span>：向本机伴侣提交{' '}
+                        <code className="text-gray-500">host_bundle.probe</code> /{' '}
+                        <code className="text-gray-500">host_bundle.exec</code>（与设置页下方「任务进度」共用）。
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => void handleRefreshHostBundles()}
+                          disabled={hostBundleListBusy || hostBundleBusy}
+                          className="px-3 py-1.5 rounded-lg bg-[#26262c] hover:bg-[#383842] border border-[#2e2e32] text-[10px] font-bold text-gray-200 transition-colors disabled:opacity-60"
+                        >
+                          {hostBundleListBusy ? '刷新中…' : '刷新已安装包列表'}
+                        </button>
+                      </div>
+                      <CustomDropdown
+                        value={hostBundleSelectedDir}
+                        onChange={setHostBundleSelectedDir}
+                        disabled={hostBundleRows.length === 0}
+                        options={[
+                          { value: '', label: '请选择已安装包…' },
+                          ...hostBundleRows.map((b) => ({
+                            value: b.dirName,
+                            label: `${b.semver} · ${b.dirName}${b.runSpec ? ' · run.json' : ''}`,
+                          })),
+                        ]}
+                        placeholder="请选择…"
+                        triggerClassName="w-full max-w-lg bg-[#101014] border border-[#2e2e32] rounded-lg px-3 py-2 text-[11px] text-left text-gray-200 flex items-center justify-between outline-none focus:border-blue-500 hover:bg-[#16161a] transition-colors disabled:opacity-50"
+                      />
+                      <p className="text-[9px] text-gray-600">
+                        {activeWorkspaceProjectId?.trim()
+                          ? `当前工作区 projectId 将写入任务元数据：${activeWorkspaceProjectId.trim()}`
+                          : '未打开工作区项目时不附带 projectId（不影响执行）。'}
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => void handleHostBundleProbe()}
+                          disabled={hostBundleExecBusy || hostBundleListBusy || hostBundleRows.length === 0}
+                          className="px-3 py-1.5 rounded-lg border border-[#15803d] bg-[#14532d]/80 text-[10px] font-bold text-green-100 hover:bg-[#166534]/90 transition-colors disabled:opacity-60"
+                        >
+                          {hostBundleExecBusy ? '提交中…' : '运行 probe'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void handleHostBundleExec()}
+                          disabled={hostBundleExecBusy || hostBundleListBusy || hostBundleRows.length === 0}
+                          className="px-3 py-1.5 rounded-lg border border-[#7c3aed] bg-[#3b0764]/80 text-[10px] font-bold text-violet-100 hover:bg-[#4c1d95]/90 transition-colors disabled:opacity-60"
+                        >
+                          {hostBundleExecBusy ? '提交中…' : '运行 exec'}
+                        </button>
+                      </div>
+                      {hostBundleExecHint ? (
+                        <p className="text-[10px] text-gray-400 whitespace-pre-wrap break-words">{hostBundleExecHint}</p>
+                      ) : null}
+                    </div>
                   </div>
-                </div>
+                </details>
                 <details className="rounded-lg border border-[#2e2e32] bg-[#16161a] group">
                   <summary className="cursor-pointer list-none px-3 py-2.5 text-[10px] font-bold text-gray-400 marker:content-none [&::-webkit-details-marker]:hidden">
                     高级：本机 HTTP 地址（一般无需展开）
@@ -1255,6 +1266,9 @@ const SettingsSection: React.FC<{
               <div className="space-y-8">
                 {/* AI 调用源 */}
                 <div className="rounded-xl border border-[#252528] p-4 space-y-4">
+                  <div className="rounded-lg border border-[#2e2e32] bg-[#16161a] p-3 text-[10px] text-gray-400">
+                    普通用户建议：先用「试用（代理）」；如果要自带 Key，再切到对应供应商填写一项即可。下方腾讯云等为高级选项。
+                  </div>
                   <h3 className="text-[11px] font-black uppercase tracking-wider text-blue-400/90 mb-1">AI 调用源</h3>
                   <div className="flex flex-col sm:flex-row sm:items-center gap-3">
                     <span className="text-[10px] text-gray-500 shrink-0">供应商</span>
@@ -1395,9 +1409,11 @@ const SettingsSection: React.FC<{
                 </div>
 
                 {/* 混元（腾讯云） */}
-                <div className="rounded-xl border border-[#252528] p-4">
-                  <h3 className="text-[11px] font-black uppercase tracking-wider text-blue-400/90 mb-1">混元（腾讯云）</h3>
-                  <div className="space-y-3">
+                <details className="rounded-xl border border-[#252528] p-4">
+                  <summary className="cursor-pointer text-[11px] font-black uppercase tracking-wider text-blue-400/90 mb-1">
+                    高级：混元（腾讯云）
+                  </summary>
+                  <div className="space-y-3 mt-3">
                     <div className="flex flex-col sm:flex-row gap-3">
                       <input
                         type="password"
@@ -1427,7 +1443,7 @@ const SettingsSection: React.FC<{
                     </button>
                   </div>
                   {tencentSaved && <p className="mt-2 text-[10px] text-green-400/90">已保存到当前标签页会话</p>}
-                </div>
+                </details>
               </div>
             </section>
 

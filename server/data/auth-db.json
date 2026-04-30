@@ -560,6 +560,17 @@
       "revokedAt": null,
       "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
       "ip": "127.0.0.1"
+    },
+    {
+      "id": "5413e535-beca-411a-a34f-c8f7105f722a",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "tokenHash": "406b17527f5653af3b9bcda25669851dad956d37d3ca9fe77cbc938f3ca20303",
+      "expiresAt": "2026-05-07T08:31:25.391Z",
+      "createdAt": "2026-04-30T08:31:25.391Z",
+      "updatedAt": "2026-04-30T08:31:25.391Z",
+      "revokedAt": null,
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+      "ip": "127.0.0.1"
     }
   ],
   "auditLogs": [
@@ -1420,6 +1431,17 @@
       "ip": "127.0.0.1",
       "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
       "createdAt": "2026-04-30T00:13:40.705Z"
+    },
+    {
+      "id": "b93257de-0569-4cfd-9b27-4aba8bd33205",
+      "actorUserId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "actorIdentifier": "maoer",
+      "action": "auth.login_success",
+      "targetUserId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "metaJson": null,
+      "ip": "127.0.0.1",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+      "createdAt": "2026-04-30T08:31:25.392Z"
     }
   ]
 }
