@@ -317,8 +317,61 @@ function readHttpPort() {
   return n;
 }
 
-function localCompanionDir() {
+/**
+ * 安装包：固定使用 resources/local-companion-bundle（与 electron-builder extraResources 一致），
+ * 避免缺少 bundle 入口时误解析到不存在的 resources/local-companion。
+ * 开发：仓库 ../local-companion
+ */
+function localCompanionRuntimeRoot() {
+  try {
+    if (app.isPackaged) {
+      return path.resolve(path.join(process.resourcesPath, 'local-companion-bundle'));
+    }
+  } catch {
+    /* app 未 ready 等 */
+  }
   return path.resolve(__dirname, '..', 'local-companion');
+}
+
+/** 安装包内不依赖系统 PATH 的 node：用 Electron 二进制以 Node 模式跑子进程 */
+function getNodeLauncherForLocalCompanion() {
+  const custom = process.env.COMPANION_NODE?.trim();
+  if (custom) return { cmd: custom, envExtra: {} };
+  try {
+    if (app.isPackaged) {
+      return {
+        cmd: process.execPath,
+        envExtra: { ELECTRON_RUN_AS_NODE: '1' },
+      };
+    }
+  } catch {
+    /* ignore */
+  }
+  return { cmd: 'node', envExtra: {} };
+}
+
+/**
+ * 开发：node + tsx + src/main.ts。安装包：预打包 **main.cjs**（CJS）+ public；勿用 main.mjs（ESM）：RUN_AS_NODE 下 yauzl 会 dynamic require 崩。
+ * @returns {{ cwd: string, nodeBin: string, args: string[], envExtra: Record<string, string> }}
+ */
+function bundledCompanionEntryPath(root) {
+  const cjs = path.join(root, 'main.cjs');
+  const legacyMjs = path.join(root, 'main.mjs');
+  if (fs.existsSync(cjs)) return cjs;
+  if (fs.existsSync(legacyMjs)) return legacyMjs;
+  return '';
+}
+
+function getLocalCompanionSpawnConfig() {
+  const root = localCompanionRuntimeRoot();
+  const bundledMain = bundledCompanionEntryPath(root);
+  if (bundledMain) {
+    const { cmd, envExtra } = getNodeLauncherForLocalCompanion();
+    return { cwd: root, nodeBin: cmd, args: [bundledMain], envExtra };
+  }
+  const mainTs = path.join(root, 'src', 'main.ts');
+  const nodeBin = process.env.COMPANION_NODE?.trim() || 'node';
+  return { cwd: root, nodeBin, args: ['--import', 'tsx', mainTs], envExtra: {} };
 }
 
 function pairingConfigPath() {
@@ -633,13 +686,24 @@ async function startLocalCompanion() {
     return;
   }
 
-  const companionRoot = localCompanionDir();
-  const nodeBin = process.env.COMPANION_NODE?.trim() || 'node';
-  const mainTs = path.join(companionRoot, 'src', 'main.ts');
-  const args = ['--import', 'tsx', mainTs];
+  const cfg = getLocalCompanionSpawnConfig();
+  const companionRoot = cfg.cwd;
+  const hasBundled = Boolean(bundledCompanionEntryPath(companionRoot));
+  const hasDevTree = fs.existsSync(path.join(companionRoot, 'package.json'));
+  if (!hasBundled && !hasDevTree) {
+    companionStatusNote = '伴侣异常';
+    companionLastError = app.isPackaged
+      ? '安装包缺少内置伴侣运行时（local-companion-bundle/main.cjs）。请用当前仓库的 dist 脚本重新打包安装。'
+      : '未找到 local-companion（请在仓库 local-companion 目录执行 npm ci / npm install）';
+    updateTrayTooltip();
+    rebuildTrayMenu();
+    notifyCompanionFailure(companionLastError);
+    return;
+  }
 
   const env = {
     ...process.env,
+    ...cfg.envExtra,
     COMPANION_OPEN_BROWSER: '0',
   };
   const pair = readPairingConfig();
@@ -651,14 +715,44 @@ async function startLocalCompanion() {
   }
   applyShellVolumeRootToEnv(env);
 
-  const stdio = process.stdout?.isTTY ? 'inherit' : 'ignore';
+  /** 父进程/系统环境若带 `COMPANION_HTTP_PORT=0`（常为 Relay 子进程约定），子进程会按「关闭 HTTP」立即 exit(1) */
+  if (String(env.COMPANION_HTTP_PORT ?? '').trim() === '0') {
+    delete env.COMPANION_HTTP_PORT;
+  }
 
-  companion = spawn(nodeBin, args, {
+  let stdio = process.stdout?.isTTY ? 'inherit' : 'ignore';
+  let spawnLogPath = '';
+  if (app.isPackaged && stdio === 'ignore') {
+    spawnLogPath = path.join(app.getPath('userData'), 'local-companion-spawn.log');
+    try {
+      fs.appendFileSync(
+        spawnLogPath,
+        `\n---------- ${new Date().toISOString()} spawn ${cfg.nodeBin} ${cfg.args.join(' ')} ----------\n`,
+      );
+    } catch {
+      spawnLogPath = '';
+    }
+    if (spawnLogPath) stdio = ['ignore', 'pipe', 'pipe'];
+  }
+
+  companion = spawn(cfg.nodeBin, cfg.args, {
     cwd: companionRoot,
     env,
     stdio,
     windowsHide: false,
   });
+
+  if (spawnLogPath && companion.stdout && companion.stderr) {
+    const append = (chunk) => {
+      try {
+        fs.appendFileSync(spawnLogPath, chunk);
+      } catch {
+        /* ignore */
+      }
+    };
+    companion.stdout.on('data', append);
+    companion.stderr.on('data', append);
+  }
   companionStatusNote = '伴侣运行中';
   companionLastError = null;
   lastStatusAlertKey = null;
@@ -680,6 +774,7 @@ async function startLocalCompanion() {
     updateTrayTooltip();
     rebuildTrayMenu();
     notifyCompanionFailure(companionLastError);
+    companion = null;
   });
 
   companion.on('exit', (code, signal) => {

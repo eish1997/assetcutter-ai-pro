@@ -12,8 +12,9 @@ macOS / Linux 下配对同样走 **设置 → 与网站配对**（与 Windows �
 
 ## 前置
 
-1. 在仓库根 **`local-companion/`** 已执行 `npm install`（含 `tsx`）。
-2. 本机 **`node`** 在 PATH 中（≥20）；若使用自定义 Node，可设环境变量 **`COMPANION_NODE`**。
+1. 在仓库根 **`local-companion/`** 已执行 **`npm ci`**（或 `npm install`），以便打包脚本 **esbuild** 能解析 `yauzl` 等依赖并生成 **`local-companion-bundle/`**（该目录已 `.gitignore`，由 `npm run bundle:local-companion` 生成）。
+2. **开发** `npm start`：本机 **`node`** 在 PATH 中（≥20），并用 **`tsx`** 跑 `src/main.ts`；可设 **`COMPANION_NODE`** 指定自定义 Node。
+3. **安装包**（`dist:win` / `dist:portable`）：最终用户**无需**单独安装 Node；壳用 **Electron 二进制 + `ELECTRON_RUN_AS_NODE`** 启动内置的 **`main.cjs`**（**CommonJS**）单文件伴侣进程（勿用 ESM `main.mjs`，否则 **yauzl** 会 **dynamic require** 崩）。
 
 ## 启动
 
@@ -31,12 +32,11 @@ npm run companion-desktop:start
 
 ## 打包（Windows）
 
-先安装依赖（若安装慢可重试）：
-
 ```bash
-cd companion-desktop
-npm install
+cd local-companion && npm ci && cd ../companion-desktop && npm install
 ```
+
+`dist:*` 会先执行 **`npm run bundle:local-companion`**（esbuild 产出 `local-companion-bundle/`，再随 `extraResources` 打进安装包）。若报错缺少 `yauzl`，多半是 **`local-companion` 未 `npm ci`**。
 
 然后在仓库根执行：
 
@@ -61,7 +61,7 @@ npm run companion-desktop:dist:retry
 
 ## 环境变量
 
-与 `local-companion` 共用：**`COMPANION_HTTP_PORT`**（默认 `18765`）等；壳会额外注入 **`COMPANION_OPEN_BROWSER=0`**。**`COMPANION_DESKTOP_NO_AUTO_SHELL=1`**：启动时不自动弹出桌面小窗口（仅托盘）。**安装包** 首次未保存设置时，设置/「打开网站」默认主站为 **`https://assetcutter-ai-pro.vercel.app/`**；开发 `npm start` 默认为 **`http://localhost:3000`**。
+与 `local-companion` 共用：**`COMPANION_HTTP_PORT`**（默认 `18765`）等；壳会额外注入 **`COMPANION_OPEN_BROWSER=0`**。若系统或父进程误带 **`COMPANION_HTTP_PORT=0`**（Relay 子进程约定），壳在拉起本机伴侣时会**清除该值**，避免伴侣误以为要关闭 HTTP 而立即退出。安装包排障可查看 **`%LOCALAPPDATA%\AssetCutterCompanion\desktop-shell\local-companion-spawn.log`**。**`COMPANION_DESKTOP_NO_AUTO_SHELL=1`**：启动时不自动弹出桌面小窗口（仅托盘）。**安装包** 首次未保存设置时，设置/「打开网站」默认主站为 **`https://assetcutter-ai-pro.vercel.app/`**；开发 `npm start` 默认为 **`http://localhost:3000`**。
 
 发行包上架与「主站用户下载桌面壳」的元数据模型见仓库 **`docs/本地伴侣-插件与发行.md`**（与 `/v1/capabilities` 运行时插件区分）。
 

@@ -12,18 +12,32 @@ import {
   getVectorengineBaseUrl,
 } from "./settingsStore";
 
+function readViteEnvTrim(key: string): string {
+  try {
+    return String(
+      ((import.meta as unknown as { env?: Record<string, string | undefined> }).env?.[key] || "").trim()
+    );
+  } catch {
+    return "";
+  }
+}
+
 const BULK_RAW =
   typeof import.meta !== "undefined" && (import.meta as unknown as { env?: Record<string, string | undefined> })?.env
-    ? String(
-        ((import.meta as unknown as { env?: Record<string, string | undefined> }).env?.VITE_BULK_IMAGE_API || "").trim()
-      )
+    ? readViteEnvTrim("VITE_BULK_IMAGE_API")
+    : "";
+
+/** 仅当供应商为 Vertex 时使用：可与 `VITE_BULK_IMAGE_API` 不同，用于生产站仍指向旧代理、但 Vertex 走已配 GCP 的 gemini-proxy。 */
+const VERTEX_BULK_RAW =
+  typeof import.meta !== "undefined" && (import.meta as unknown as { env?: Record<string, string | undefined> })?.env
+    ? readViteEnvTrim("VITE_BULK_IMAGE_API_VERTEX")
     : "";
 
 /** 与当前页面同源（配合 Vite `/proxy/gemini` → 本机 9002），避免跨端口 CORS */
 const BULK_SAME_ORIGIN_MARKER = "__SAME_ORIGIN__";
 
-function resolveBulkBase(): string {
-  const t = BULK_RAW;
+function resolveBulkBaseFromRaw(raw: string): string {
+  const t = (raw || "").trim();
   if (!t) return "";
   const lower = t.toLowerCase();
   if (t === "1" || lower === "true" || lower === "same-origin") {
@@ -32,7 +46,14 @@ function resolveBulkBase(): string {
   return t;
 }
 
-const BULK_BASE = resolveBulkBase();
+const BULK_BASE = resolveBulkBaseFromRaw(BULK_RAW);
+const VERTEX_BULK_BASE = resolveBulkBaseFromRaw(VERTEX_BULK_RAW);
+
+/** Vertex 且配置了 `VITE_BULK_IMAGE_API_VERTEX` 时走专用代理根地址，否则与试用/其它路径一致用 `VITE_BULK_IMAGE_API`。 */
+function effectiveBulkBase(): string {
+  if (getAiProvider() === "vertex" && VERTEX_BULK_BASE) return VERTEX_BULK_BASE;
+  return BULK_BASE;
+}
 
 /**
  * 部分第三方 Gemini 网关（尤其 VectorEngine）对 `gemini-3-flash-preview` 等预览 id 会返回含
@@ -99,21 +120,21 @@ function preferBrowserGeminiKeyFirst(): boolean {
  * 就入队，会误把请求发到 gemini-proxy（用户表现为「文字走反代正常、生图完全不走 Antigravity」）。
  */
 function shouldUseBulkImageBatchQueue(): boolean {
-  if (!BULK_BASE) return false;
   const p = getAiProvider();
-  if (p === "trial") return true;
   if (p === "toapis" || p === "antigravity" || p === "vectorengine") return false;
-  if (p === "vertex") return true;
+  if (p === "trial") return Boolean(BULK_BASE);
+  if (p === "vertex") return Boolean(effectiveBulkBase());
   return false;
 }
 
 function bulkApiUrl(path: string): string {
-  if (!BULK_BASE) return path;
+  const baseResolved = effectiveBulkBase();
+  if (!baseResolved) return path;
   const p = path.startsWith("/") ? path : `/${path}`;
-  if (BULK_BASE === BULK_SAME_ORIGIN_MARKER) {
+  if (baseResolved === BULK_SAME_ORIGIN_MARKER) {
     return p;
   }
-  const base = BULK_BASE.replace(/\/$/, "");
+  const base = baseResolved.replace(/\/$/, "");
   return `${base}${p}`;
 }
 
@@ -197,10 +218,14 @@ async function bulkProxyGenerateContentAsync(args: {
     const raw = (createText || "").trim();
     const parsedMsg = parseBulkProxyErrorBody(raw);
     if (/Use POST \/jobs/i.test(raw)) {
+      const bulkHint =
+        getAiProvider() === "vertex" && VERTEX_BULK_BASE
+          ? `VITE_BULK_IMAGE_API_VERTEX=${VERTEX_BULK_BASE || "(empty)"}`
+          : `VITE_BULK_IMAGE_API=${BULK_BASE || "(empty)"}`;
       throw new Error(
         [
           parsedMsg,
-          `当前后端代理地址不是 Gemini 代理：VITE_BULK_IMAGE_API=${BULK_BASE || "(empty)"}`,
+          `当前后端代理地址不是 Gemini 代理：${bulkHint}`,
           "请改为部署了 server/gemini-proxy-api.js 的根地址（应支持 POST /proxy/gemini/async）。",
         ].join(" ")
       );
@@ -530,9 +555,9 @@ const getAI = (): GeminiClientLike => {
   }
 
   if (provider === "vertex") {
-    if (!BULK_BASE) {
+    if (!effectiveBulkBase()) {
       throw new Error(
-        "当前供应商为 Vertex AI：请在构建环境配置 VITE_BULK_IMAGE_API（指向已部署的 gemini-proxy 或本地同源代理），并在代理服务器设置 VERTEX_PROJECT_ID 或 GOOGLE_CLOUD_PROJECT 与 GCP 凭据（ADC）。说明见 docs/VERTEX_AI_INTEGRATION.md"
+        "当前供应商为 Vertex AI：请在构建环境配置 VITE_BULK_IMAGE_API 或（推荐）VITE_BULK_IMAGE_API_VERTEX 指向已在服务器配置 Vertex 的 gemini-proxy，并在该代理上设置 VERTEX_PROJECT_ID 或 GOOGLE_CLOUD_PROJECT 与 ADC。说明见 docs/VERTEX_AI_INTEGRATION.md"
       );
     }
     return proxyClient;
@@ -1231,7 +1256,7 @@ export async function understandImageEditIntent(
   options?: GeminiRequestOptions
 ): Promise<{ instruction: string; summary?: string; shouldGenerateImage?: boolean }> {
   const innerTimeout = options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS;
-  const capabilityScale = (options?.retries != null && options.retries > 6) || BULK_BASE;
+  const capabilityScale = (options?.retries != null && options.retries > 6) || Boolean(effectiveBulkBase());
   const controlTimeout = capabilityScale
     ? Math.max(innerTimeout, BULK_PROXY_UNDERSTAND_TIMEOUT_MS)
     : innerTimeout;
@@ -1273,8 +1298,8 @@ export async function understandImageEditIntent(
         timeoutMs: controlTimeout,
         retries:
           options?.retries ??
-          (BULK_BASE ? 10 : 3),
-        retryDelayMs: options?.retryDelayMs ?? (BULK_BASE ? 6000 : 2000),
+          (effectiveBulkBase() ? 10 : 3),
+        retryDelayMs: options?.retryDelayMs ?? (effectiveBulkBase() ? 6000 : 2000),
         ...overrideOptions,
       }
     );
@@ -1402,7 +1427,9 @@ export async function dialogGenerateImages(
   requestOptions?: Omit<GeminiRequestOptions, 'abortSignal'>
 ): Promise<string[]> {
   const baseTimeout = requestOptions?.timeoutMs ?? GEMINI_IMAGE_REQUEST_TIMEOUT_MS;
-  const controlTimeoutMs = BULK_BASE ? Math.max(baseTimeout, BULK_PROXY_IMAGE_TIMEOUT_MS) : baseTimeout;
+  const controlTimeoutMs = effectiveBulkBase()
+    ? Math.max(baseTimeout, BULK_PROXY_IMAGE_TIMEOUT_MS)
+    : baseTimeout;
   return callWithRetry(async (signal) => {
     const ai = getAI();
     const provider = getAiProvider();
@@ -1467,7 +1494,9 @@ export async function dialogGenerateImageMulti(
 ): Promise<string> {
   if (imagesBase64.length === 0) throw new Error('多图生图至少需要一张图片');
   const baseTimeout = requestOptions?.timeoutMs ?? GEMINI_IMAGE_REQUEST_TIMEOUT_MS;
-  const controlTimeoutMs = BULK_BASE ? Math.max(baseTimeout, BULK_PROXY_IMAGE_TIMEOUT_MS) : baseTimeout;
+  const controlTimeoutMs = effectiveBulkBase()
+    ? Math.max(baseTimeout, BULK_PROXY_IMAGE_TIMEOUT_MS)
+    : baseTimeout;
   return callWithRetry(async (signal) => {
     const ai = getAI();
     const provider = getAiProvider();
@@ -1623,7 +1652,7 @@ export async function getSiteAssistantResponseStream(
   options?: GeminiRequestOptions
 ): Promise<string> {
   /** 走后端代理时没有 generateContentStream，统一走非流式（与 !apiKey && BULK 时行为一致） */
-  if (BULK_BASE) {
+  if (effectiveBulkBase()) {
     const full = await getSiteAssistantResponse(userMessage, history, model, options);
     onChunk(full);
     return full;

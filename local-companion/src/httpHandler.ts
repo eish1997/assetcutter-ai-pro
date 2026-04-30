@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -41,13 +41,19 @@ import {
 import { getPairingSessionSummary, revokePairingSession } from './pairingSession.js';
 import { installHostPluginBundleFromUrl, listInstalledHostPluginBundles } from './hostPluginBundles.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-
 let cachedIndexHtml: string | null = null;
+
+/** 桌面壳 spawn 的 cwd 恒为伴侣根目录；bundle 与源码布局下均为 `<根>/public/index.html` */
+function resolvePublicIndexHtmlPath(): string {
+  const fromCwd = join(process.cwd(), 'public', 'index.html');
+  if (existsSync(fromCwd)) return fromCwd;
+  const here = dirname(fileURLToPath(import.meta.url));
+  return join(here, '..', 'public', 'index.html');
+}
 
 function loadIndexHtml(): string {
   if (cachedIndexHtml) return cachedIndexHtml;
-  const p = join(__dirname, '../public/index.html');
+  const p = resolvePublicIndexHtmlPath();
   cachedIndexHtml = readFileSync(p, 'utf8');
   return cachedIndexHtml;
 }

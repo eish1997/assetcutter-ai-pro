@@ -13,6 +13,7 @@ services:
         value: production
       - key: GEMINI_API_KEY
         sync: false
+      # 逗号分隔；须含所有前端 Origin（如 app.adrazzo.com、assetcutter-web.onrender.com、*.vercel.app 预览需逐条或 Dashboard 用 * 排障）
       - key: PROXY_ALLOWED_ORIGINS
         sync: false
       # Vertex（设置页选 Vertex 时必填，与前端 VITE_BULK_IMAGE_API 指向的**本服务**一致）
@@ -87,6 +88,12 @@ services:
       # 与 auth 同源时可不填；仅当 R2 单独域名部署时再设
       - key: VITE_R2_API_BASE_URL
         sync: false
+      # 试用 / 官方 Gemini 走后端代理；须与 gemini-proxy 上 GEMINI_API_KEY、PROXY_ALLOWED_ORIGINS 一致
+      - key: VITE_BULK_IMAGE_API
+        value: https://assetcutter-gemini-proxy.onrender.com
+      # Vertex 专用（可与上一项相同）；构建产物需含 geminiService 对 VITE_BULK_IMAGE_API_VERTEX 的支持
+      - key: VITE_BULK_IMAGE_API_VERTEX
+        value: https://assetcutter-gemini-proxy.onrender.com
 
 databases:
   - name: assetcutter-auth-db

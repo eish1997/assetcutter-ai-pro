@@ -198,7 +198,7 @@ export function getApiKey(): string | undefined {
 /**
  * 当前选用的 AI 供应商是否具备调用条件：
  * - ToAPIs / Antigravity / VectorEngine：本机已填 Key
- * - Vertex：构建时配置了 VITE_BULK_IMAGE_API（与官方 Gemini 走后端代理相同；GCP 凭据仅在代理服务器）
+ * - Vertex：构建时配置了 VITE_BULK_IMAGE_API 或 VITE_BULK_IMAGE_API_VERTEX（后者优先于前者用于 Vertex 请求；GCP 凭据仅在代理服务器）
  * - Gemini：本机 Key，或构建时配置了 VITE_BULK_IMAGE_API（走后端代理；与 geminiService.getAI 优先级一致）
  */
 export function isAiInvocationReady(): boolean {
@@ -216,7 +216,8 @@ export function isAiInvocationReady(): boolean {
     try {
       const env = typeof import.meta !== 'undefined' ? (import.meta as { env?: Record<string, string | undefined> }).env : undefined;
       const bulk = env?.VITE_BULK_IMAGE_API;
-      if (bulk && String(bulk).trim()) return true;
+      const bulkVertex = env?.VITE_BULK_IMAGE_API_VERTEX;
+      if ((bulk && String(bulk).trim()) || (bulkVertex && String(bulkVertex).trim())) return true;
     } catch {
       /* ignore */
     }
