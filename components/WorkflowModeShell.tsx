@@ -16,6 +16,8 @@ export type WorkflowModeShellProps = {
   onWorkspaceBind?: (id: string) => void;
   onWorkspaceUnbind?: (id: string) => void;
   onWorkspaceManualUpload?: (id: string) => void;
+  onWorkspaceExport?: (id: string) => void;
+  onWorkspaceImport?: (payload: { file: File; mode: 'new' | 'overwrite'; targetProjectId?: string }) => void;
   onWorkspaceRetryFailedUpload?: (id: string) => void;
   onOpenWorkspaceUploadFailureDetail?: (id: string) => void;
   workspaceUploadingProjectId?: string | null;
@@ -36,6 +38,8 @@ const WorkflowModeShell: React.FC<WorkflowModeShellProps> = ({
   onWorkspaceBind,
   onWorkspaceUnbind,
   onWorkspaceManualUpload,
+  onWorkspaceExport,
+  onWorkspaceImport,
   onWorkspaceRetryFailedUpload,
   onOpenWorkspaceUploadFailureDetail,
   workspaceUploadingProjectId,
@@ -84,6 +88,8 @@ const WorkflowModeShell: React.FC<WorkflowModeShellProps> = ({
             onBind={onWorkspaceBind}
             onUnbind={onWorkspaceUnbind}
             onManualUpload={onWorkspaceManualUpload}
+            onExport={onWorkspaceExport}
+            onImport={onWorkspaceImport}
             onRetryFailedUpload={onWorkspaceRetryFailedUpload}
             onOpenUploadFailureDetail={onOpenWorkspaceUploadFailureDetail}
             uploadingProjectId={workspaceUploadingProjectId}

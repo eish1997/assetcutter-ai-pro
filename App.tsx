@@ -41,6 +41,7 @@ import {
   createWorkspaceProject,
   getLastOpenedWorkspaceProjectId,
   loadWorkflowBundle,
+  saveWorkflowBundle,
   consumeWorkspaceMigrationNotices,
   trySaveWorkflowBundle,
   removeWorkflowBundle,
@@ -118,6 +119,8 @@ import {
   attemptRepairCompanionManifestKeyGaps,
   findCompanionKeysMissingFromManifest,
 } from './services/workflowManifestCrossCheck';
+import { fetchCompanionAssetAsDataUrl } from './services/workflowCompanionAssets';
+import { collectReferencedObjectKeysFromPackedV2, hydrateWorkflowBundleFromCloud } from './services/workspaceR2ImageBundle';
 function isImagePreviewEscapeKey(e: KeyboardEvent): boolean {
   return e.key === 'Escape' || e.code === 'Escape' || e.keyCode === 27;
 }
@@ -1760,6 +1763,217 @@ const MainApp: React.FC = () => {
     },
     [addGlobalLog, workspaceProjects, user?.id, user?.username]
   );
+
+  const exportWorkspaceProjectEntry = useCallback(async (id: string) => {
+    const scope = user?.id ?? null;
+    const project = workspaceProjectsRef.current.find((p) => p.id === id);
+    if (!project) {
+      addGlobalLog('工作区', 'warn', '导出失败：项目不存在');
+      return;
+    }
+    const base = String(getCompanionLocalBaseUrl() || '').trim();
+    const projectId = String(id || '').trim();
+    const bundle = loadWorkflowBundle(projectId, scope);
+    const cloudKeyCount = collectReferencedObjectKeysFromPackedV2({
+      assets: Array.isArray(bundle.assets) ? bundle.assets : [],
+      pending: Array.isArray(bundle.pending) ? bundle.pending : [],
+    }).size;
+    let cloudHydrateAttempted = cloudKeyCount;
+    let cloudHydrateSucceeded = 0;
+    let cloudHydrateError = '';
+    let hydratedBundle = {
+      assets: Array.isArray(bundle.assets) ? bundle.assets : [],
+      pending: Array.isArray(bundle.pending) ? bundle.pending : [],
+      ...(Array.isArray(bundle.capabilityRefs) ? { capabilityRefs: bundle.capabilityRefs } : {}),
+    } as {
+      assets: WorkflowAsset[];
+      pending: WorkflowPendingTask[];
+      capabilityRefs?: Array<{ kind: 'preset' | 'set'; id: string; snapshot?: unknown }>;
+    };
+    if (cloudKeyCount > 0) {
+      try {
+        hydratedBundle = await hydrateWorkflowBundleFromCloud(hydratedBundle);
+        cloudHydrateSucceeded = cloudKeyCount;
+      } catch (e) {
+        cloudHydrateSucceeded = 0;
+        cloudHydrateError = e instanceof Error ? e.message : String(e);
+      }
+    }
+    const exportAssets = JSON.parse(JSON.stringify(Array.isArray(hydratedBundle.assets) ? hydratedBundle.assets : [])) as WorkflowAsset[];
+    const exportPending = JSON.parse(JSON.stringify(Array.isArray(hydratedBundle.pending) ? hydratedBundle.pending : [])) as WorkflowPendingTask[];
+    let hydratedCount = 0;
+    let hydrateAttempted = 0;
+    const hydrateFailures: Array<{ assetId: string; kind: 'original' | 'result'; stepId?: string; reason: string }> = [];
+    if (base && projectId) {
+      for (const asset of exportAssets) {
+        if (!String(asset.original || '').trim()) {
+          const key = String(asset.originalCompanionKey || '').trim();
+          if (key) {
+            hydrateAttempted += 1;
+            const dataUrl = await fetchCompanionAssetAsDataUrl(base, projectId, key);
+            if (dataUrl) {
+              asset.original = dataUrl;
+              hydratedCount += 1;
+            } else {
+              hydrateFailures.push({
+                assetId: String(asset.id || ''),
+                kind: 'original',
+                reason: 'not_found_in_companion_or_unauthorized',
+              });
+            }
+          }
+        }
+        const resultKeys = asset.resultsCompanionKeys || {};
+        const resultMap = { ...(asset.results || {}) };
+        for (const stepId of Object.keys(resultKeys)) {
+          if (String(resultMap[stepId] || '').trim()) continue;
+          const key = String(resultKeys[stepId] || '').trim();
+          if (!key) continue;
+          hydrateAttempted += 1;
+          const dataUrl = await fetchCompanionAssetAsDataUrl(base, projectId, key);
+          if (dataUrl) {
+            resultMap[stepId] = dataUrl;
+            hydratedCount += 1;
+          } else {
+            hydrateFailures.push({
+              assetId: String(asset.id || ''),
+              kind: 'result',
+              stepId,
+              reason: 'not_found_in_companion_or_unauthorized',
+            });
+          }
+        }
+        asset.results = resultMap;
+      }
+    }
+    const payload = {
+      version: 1,
+      exportedAt: Date.now(),
+      source: 'assetcutter-workspace-project',
+      project: { name: project.name, id: project.id },
+      exportReport: {
+        cloudHydrateAttempted,
+        cloudHydrateSucceeded,
+        cloudHydrateFailed: Math.max(0, cloudHydrateAttempted - cloudHydrateSucceeded),
+        ...(cloudHydrateError ? { cloudHydrateError } : {}),
+        companionHydrateAttempted: hydrateAttempted,
+        companionHydrateSucceeded: hydratedCount,
+        companionHydrateFailed: hydrateFailures.length,
+        companionHydrateFailures: hydrateFailures.slice(0, 50),
+      },
+      bundle: {
+        assets: exportAssets,
+        pending: exportPending,
+        ...(Array.isArray(hydratedBundle.capabilityRefs) ? { capabilityRefs: hydratedBundle.capabilityRefs } : {}),
+      },
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
+    const fileNameSafe = String(project.name || 'project')
+      .trim()
+      .replace(/[\\/:*?"<>|]/g, '_')
+      .slice(0, 64) || 'project';
+    const url = URL.createObjectURL(blob);
+    try {
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${fileNameSafe}.assetcutter-project.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      addGlobalLog(
+        '工作区',
+        'info',
+        `项目已导出：${project.name}`,
+        hydrateAttempted > 0
+          ? `云端补齐：成功 ${cloudHydrateSucceeded}/${cloudHydrateAttempted}${cloudHydrateAttempted > cloudHydrateSucceeded ? `，失败 ${cloudHydrateAttempted - cloudHydrateSucceeded}` : ''}；伴侣补齐：成功 ${hydratedCount}/${hydrateAttempted}${hydrateFailures.length ? `，失败 ${hydrateFailures.length}` : ''}`
+          : cloudHydrateAttempted > 0
+            ? `云端补齐：成功 ${cloudHydrateSucceeded}/${cloudHydrateAttempted}${cloudHydrateAttempted > cloudHydrateSucceeded ? `，失败 ${cloudHydrateAttempted - cloudHydrateSucceeded}` : ''}`
+            : undefined
+      );
+      if (cloudHydrateAttempted > cloudHydrateSucceeded) {
+        addGlobalLog(
+          '工作区',
+          'warn',
+          '导出前云端补齐未完全成功',
+          cloudHydrateError || `失败 ${cloudHydrateAttempted - cloudHydrateSucceeded} 项`
+        );
+      }
+      if (hydrateFailures.length > 0) {
+        const sample = hydrateFailures
+          .slice(0, 5)
+          .map((x) => `${x.assetId}${x.stepId ? `:${x.stepId}` : ''}`)
+          .join(', ');
+        addGlobalLog('工作区', 'warn', '导出完成，但有部分伴侣资产未打包进分享文件', `失败 ${hydrateFailures.length} 项；示例：${sample}`);
+      }
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }, [addGlobalLog, user?.id]);
+
+  const importWorkspaceProjectEntry = useCallback(async (payload: { file: File; mode: 'new' | 'overwrite'; targetProjectId?: string }) => {
+    const scope = user?.id ?? null;
+    const file = payload.file;
+    const text = await file.text();
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      addGlobalLog('工作区', 'warn', '导入失败：文件不是有效 JSON');
+      return;
+    }
+    const obj = (parsed || {}) as {
+      project?: { name?: string };
+      bundle?: { assets?: unknown; pending?: unknown; capabilityRefs?: unknown };
+    };
+    const assets = Array.isArray(obj.bundle?.assets) ? obj.bundle!.assets : null;
+    const pending = Array.isArray(obj.bundle?.pending) ? obj.bundle!.pending : null;
+    if (!assets || !pending) {
+      addGlobalLog('工作区', 'warn', '导入失败：缺少 bundle.assets 或 bundle.pending');
+      return;
+    }
+
+    const importBundle = {
+      assets: assets as WorkflowAsset[],
+      pending: pending as WorkflowPendingTask[],
+      ...(Array.isArray(obj.bundle?.capabilityRefs)
+        ? { capabilityRefs: obj.bundle?.capabilityRefs as Array<{ kind: 'preset' | 'set'; id: string; snapshot?: unknown }> }
+        : {}),
+    };
+    if (payload.mode === 'overwrite') {
+      const targetId = String(payload.targetProjectId || '').trim();
+      if (!targetId) {
+        addGlobalLog('工作区', 'warn', '导入失败：未选择覆盖目标项目');
+        return;
+      }
+      const target = workspaceProjectsRef.current.find((p) => p.id === targetId);
+      if (!target) {
+        addGlobalLog('工作区', 'warn', '导入失败：覆盖目标项目不存在');
+        return;
+      }
+      saveWorkflowBundle(targetId, importBundle, scope);
+      if (activeWorkspaceProjectIdRef.current === targetId) {
+        const b = loadWorkflowBundle(targetId, scope);
+        setWorkflowAssets(b.assets);
+        setWorkflowPending(b.pending);
+      }
+      addGlobalLog('工作区', 'info', `导入已覆盖项目：${target.name}`);
+      return;
+    }
+
+    const importNameBase = String(obj.project?.name || file.name.replace(/\.json$/i, '') || '导入项目').trim() || '导入项目';
+    const importName = `${importNameBase}（导入）`;
+    const base = getCompanionLocalBaseUrl();
+    const createdRemote = await createCompanionWorkspaceProject(base, importName);
+    const createdProject =
+      createdRemote.ok === false
+        ? createWorkspaceProject(importName)
+        : createdRemote.data.project;
+    const next = [...workspaceProjectsRef.current, createdProject];
+    setWorkspaceProjects(next);
+    saveWorkspaceProjects(next, scope);
+    saveWorkflowBundle(createdProject.id, importBundle, scope);
+    addGlobalLog('工作区', 'info', `项目导入成功：${createdProject.name}`);
+  }, [addGlobalLog, user?.id]);
 
   const renameWorkspaceProjectEntry = useCallback(
     async (id: string, name: string) => {
@@ -4612,6 +4826,8 @@ const MainApp: React.FC = () => {
                   onWorkspaceBind={requestBindWorkspaceProject}
                   onWorkspaceUnbind={requestUnbindWorkspaceProject}
                   onWorkspaceManualUpload={requestManualUploadWorkspaceProject}
+                  onWorkspaceExport={exportWorkspaceProjectEntry}
+                  onWorkspaceImport={(file) => void importWorkspaceProjectEntry(file)}
                   onWorkspaceRetryFailedUpload={retryFailedManualUploadWorkspaceProject}
                   onOpenWorkspaceUploadFailureDetail={requestOpenWorkspaceUploadFailureDetail}
                   workspaceUploadingProjectId={workspaceUploadingProjectId}

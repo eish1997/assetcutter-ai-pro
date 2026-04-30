@@ -176,8 +176,8 @@ function bulkApiUrl(path: string): string {
 
 /** Render 等对长连接常限 10～15s：走后端异步 job + 轮询，避免 503/504 */
 const GEMINI_ASYNC_POLL_MS = 1500;
-/** 与 proxy 侧 GEMINI_ASYNC_JOB_MAX_WAIT_MS（默认 590s）对齐，避免前端提前超时 */
-const GEMINI_ASYNC_CLIENT_MAX_POLL_MS = 600_000;
+/** 与 proxy 侧 GEMINI_ASYNC_JOB_MAX_WAIT_MS（默认 300s）对齐，避免前端提前超时 */
+const GEMINI_ASYNC_CLIENT_MAX_POLL_MS = 300_000;
 /** 生图阶段「盒子批处理」：凑满后一次发给 proxy（默认 Vertex=4，其它=3） */
 const GEMINI_IMAGE_BATCH_BOX_SIZE_DEFAULT = 3;
 const GEMINI_IMAGE_BATCH_BOX_SIZE_VERTEX_DEFAULT = 4;
@@ -1000,7 +1000,7 @@ export const CAPABILITY_UNDERSTAND_RETRY_OPTIONS: GeminiRequestOptions = {
 const BULK_PROXY_UNDERSTAND_TIMEOUT_MS = 120_000;
 const IMAGE_GEN_RETRY_DELAY_MS = 6000;
 /** 走 bulk 异步代理时含轮询+服务端退避，总等待需长于单次 SDK 超时 */
-const BULK_PROXY_IMAGE_TIMEOUT_MS = 600_000;
+const BULK_PROXY_IMAGE_TIMEOUT_MS = 300_000;
 
 function shouldFallbackUnderstandToBrowserGemini(error: unknown): boolean {
   if (!BULK_BASE) return false;

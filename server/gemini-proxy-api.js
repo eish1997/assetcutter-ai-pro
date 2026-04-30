@@ -103,11 +103,51 @@ function vertexProjectId() {
 }
 
 function vertexLocation() {
-  return (process.env.VERTEX_LOCATION || 'global').trim();
+  return (process.env.VERTEX_LOCATION || process.env.GOOGLE_CLOUD_LOCATION || 'global').trim();
 }
 
 function isVertexConfigured() {
   return Boolean(vertexProjectId());
+}
+
+function adcCredentialPath() {
+  return normalizeSecret(process.env.GOOGLE_APPLICATION_CREDENTIALS || '');
+}
+
+function isAdcLikelyConfigured() {
+  const adcPath = adcCredentialPath();
+  if (adcPath) {
+    try {
+      if (fs.existsSync(adcPath)) return true;
+    } catch {
+      /* ignore */
+    }
+  }
+  const inline = normalizeSecret(
+    process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON ||
+      process.env.GCP_SERVICE_ACCOUNT_JSON ||
+      process.env.GOOGLE_SERVICE_ACCOUNT_JSON ||
+      ''
+  );
+  if (inline) return true;
+  const home = process.env.HOME || process.env.USERPROFILE || '';
+  if (home) {
+    const localAdcPath = path.join(home, '.config', 'gcloud', 'application_default_credentials.json');
+    try {
+      if (fs.existsSync(localAdcPath)) return true;
+    } catch {
+      /* ignore */
+    }
+  }
+  return false;
+}
+
+function vertexConfigGuideMessage() {
+  const projectGuide = 'VERTEX_PROJECT_ID 或 GOOGLE_CLOUD_PROJECT';
+  const locationGuide = 'VERTEX_LOCATION 或 GOOGLE_CLOUD_LOCATION（可选，默认 global）';
+  const adcGuide =
+    'ADC（推荐）：GOOGLE_APPLICATION_CREDENTIALS 指向 JSON，或 GOOGLE_APPLICATION_CREDENTIALS_JSON 内联 JSON，或先执行 gcloud auth application-default login';
+  return `Vertex/Agent Platform 未完成配置：请设置 ${projectGuide}、${locationGuide}，并配置 ${adcGuide}`;
 }
 
 /**
@@ -116,7 +156,7 @@ function isVertexConfigured() {
  * 优先级：已有且存在的文件路径 > 内联 JSON 环境变量。
  */
 function ensureAdcFromJsonEnv() {
-  const existingPath = normalizeSecret(process.env.GOOGLE_APPLICATION_CREDENTIALS || '');
+  const existingPath = adcCredentialPath();
   if (existingPath) {
     try {
       if (fs.existsSync(existingPath)) return;
@@ -482,7 +522,7 @@ async function withGeminiProxySlot(fn) {
   }
 }
 
-const GEMINI_ASYNC_JOB_MAX_WAIT_MS = Number(process.env.GEMINI_ASYNC_JOB_MAX_WAIT_MS) || 590_000;
+const GEMINI_ASYNC_JOB_MAX_WAIT_MS = Number(process.env.GEMINI_ASYNC_JOB_MAX_WAIT_MS) || 300_000;
 const GEMINI_ASYNC_BATCH_MAX_ITEMS = Number(process.env.GEMINI_ASYNC_BATCH_MAX_ITEMS) || 20;
 
 function sweepGeminiAsyncJobs() {
@@ -680,11 +720,11 @@ const server = http.createServer(async (req, res) => {
       const key = normalizeSecret(process.env.GEMINI_API_KEY || '');
       if (useVertex) {
         if (!isVertexConfigured()) {
-          sendError(
-            res,
-            500,
-            'Vertex not configured: set VERTEX_PROJECT_ID or GOOGLE_CLOUD_PROJECT, VERTEX_LOCATION (optional), and ADC (e.g. GOOGLE_APPLICATION_CREDENTIALS)'
-          );
+          sendError(res, 500, vertexConfigGuideMessage());
+          return;
+        }
+        if (!isAdcLikelyConfigured()) {
+          sendError(res, 500, vertexConfigGuideMessage());
           return;
         }
       } else if (!GEMINI_API_KEY_POOL.length && !key && !(ENABLE_TOAPIS_FALLBACK && TOAPIS_API_KEY)) {
@@ -722,11 +762,11 @@ const server = http.createServer(async (req, res) => {
       const key = normalizeSecret(process.env.GEMINI_API_KEY || '');
       if (useVertex) {
         if (!isVertexConfigured()) {
-          sendError(
-            res,
-            500,
-            'Vertex not configured: set VERTEX_PROJECT_ID or GOOGLE_CLOUD_PROJECT, VERTEX_LOCATION (optional), and ADC (e.g. GOOGLE_APPLICATION_CREDENTIALS)'
-          );
+          sendError(res, 500, vertexConfigGuideMessage());
+          return;
+        }
+        if (!isAdcLikelyConfigured()) {
+          sendError(res, 500, vertexConfigGuideMessage());
           return;
         }
       } else if (!GEMINI_API_KEY_POOL.length && !key && !(ENABLE_TOAPIS_FALLBACK && TOAPIS_API_KEY)) {
@@ -813,11 +853,11 @@ const server = http.createServer(async (req, res) => {
       }
       const useVertex = aiBackend === 'vertex';
       if (useVertex && !isVertexConfigured()) {
-        sendError(
-          res,
-          500,
-          'Vertex not configured: set VERTEX_PROJECT_ID or GOOGLE_CLOUD_PROJECT, VERTEX_LOCATION (optional), and ADC'
-        );
+        sendError(res, 500, vertexConfigGuideMessage());
+        return;
+      }
+      if (useVertex && !isAdcLikelyConfigured()) {
+        sendError(res, 500, vertexConfigGuideMessage());
         return;
       }
       try {
@@ -845,6 +885,7 @@ const server = http.createServer(async (req, res) => {
       vertex: {
         configured: isVertexConfigured(),
         location: isVertexConfigured() ? vertexLocation() : null,
+        adcLikelyConfigured: isAdcLikelyConfigured(),
       },
     });
     return;

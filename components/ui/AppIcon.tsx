@@ -15,7 +15,8 @@ type AppIconName =
   | 'trash'
   | 'user'
   | 'chevron-up'
-  | 'send';
+  | 'send'
+  | 'download';
 
 const paths: Record<AppIconName, React.ReactNode> = {
   close: <path d="M5 5l10 10M15 5 5 15" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />,
@@ -76,6 +77,12 @@ const paths: Record<AppIconName, React.ReactNode> = {
       strokeWidth="1.5"
       strokeLinejoin="round"
     />
+  ),
+  download: (
+    <>
+      <path d="M10 3.5v8.2M6.7 8.8 10 12.2l3.3-3.4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M4.5 14.5h11" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </>
   ),
 };
 
