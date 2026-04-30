@@ -49,10 +49,46 @@ function resolveBulkBaseFromRaw(raw: string): string {
 const BULK_BASE = resolveBulkBaseFromRaw(BULK_RAW);
 const VERTEX_BULK_BASE = resolveBulkBaseFromRaw(VERTEX_BULK_RAW);
 
+/**
+ * 与 `assetcutter-gemini-proxy` 对照：Render 上同名第二套服务 `assetcutter-ai-pro` 及常见自定义域
+ * 默认未配 Vertex；若构建变量仍指向这些主机，选 Vertex 时会一直 500。
+ * 回退目标：`VITE_VERTEX_FALLBACK_BULK_API` 或本仓默认已配 Vertex 的代理根 URL。
+ */
+const VERTEX_FALLBACK_BULK_RAW =
+  typeof import.meta !== "undefined" && (import.meta as unknown as { env?: Record<string, string | undefined> })?.env
+    ? readViteEnvTrim("VITE_VERTEX_FALLBACK_BULK_API")
+    : "";
+const DEFAULT_VERTEX_OK_BULK = "https://assetcutter-gemini-proxy.onrender.com";
+const VERTEX_MISCONFIGURED_PROXY_HOSTS = new Set(
+  ["assetcutter-ai-pro.onrender.com", "assetcutter-ai-pro.org", "www.assetcutter-ai-pro.org"].map((h) => h.toLowerCase())
+);
+
+function vertexFallbackBulkBase(): string {
+  const v = VERTEX_FALLBACK_BULK_RAW.replace(/\/$/, "");
+  return v || DEFAULT_VERTEX_OK_BULK;
+}
+
+function redirectVertexAwayFromUnconfiguredProxy(base: string): string {
+  if (getAiProvider() !== "vertex") return base;
+  if (readViteEnvTrim("VITE_DISABLE_VERTEX_BULK_FALLBACK") === "true") return base;
+  if (!base || base === BULK_SAME_ORIGIN_MARKER) return base;
+  let host = "";
+  try {
+    const normalized = /^https?:\/\//i.test(base) ? base : `https://${base}`;
+    host = new URL(normalized).hostname.toLowerCase();
+  } catch {
+    return base;
+  }
+  if (!VERTEX_MISCONFIGURED_PROXY_HOSTS.has(host)) return base;
+  return vertexFallbackBulkBase();
+}
+
 /** Vertex 且配置了 `VITE_BULK_IMAGE_API_VERTEX` 时走专用代理根地址，否则与试用/其它路径一致用 `VITE_BULK_IMAGE_API`。 */
 function effectiveBulkBase(): string {
-  if (getAiProvider() === "vertex" && VERTEX_BULK_BASE) return VERTEX_BULK_BASE;
-  return BULK_BASE;
+  let base: string;
+  if (getAiProvider() === "vertex" && VERTEX_BULK_BASE) base = VERTEX_BULK_BASE;
+  else base = BULK_BASE;
+  return redirectVertexAwayFromUnconfiguredProxy(base);
 }
 
 /**
