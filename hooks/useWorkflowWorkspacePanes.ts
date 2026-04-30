@@ -30,8 +30,8 @@ export function useWorkflowWorkspacePanes({
   sidebarWidth,
   marqueeStartRef,
 }: UseWorkflowWorkspacePanesArgs) {
-  const [workspacePane, setWorkspacePane] = useState<number>(2);
-  const workspacePaneRef = useRef<number>(2);
+  const [workspacePane, setWorkspacePane] = useState<number>(1);
+  const workspacePaneRef = useRef<number>(1);
   const [workspaceSnapping, setWorkspaceSnapping] = useState(false);
   const workspaceSnapTimerRef = useRef<number | null>(null);
   const workspaceSwipeTouchX = useRef(0);
@@ -43,7 +43,7 @@ export function useWorkflowWorkspacePanes({
   const suppressClickAfterPanRef = useRef(false);
 
   const setWorkspacePaneRaf = useCallback((next: number) => {
-    const clamped = Math.max(0, Math.min(3, next));
+    const clamped = Math.max(0, Math.min(2, next));
     workspaceNextPaneRef.current = clamped;
     if (typeof window === 'undefined') {
       setWorkspacePane(clamped);
@@ -58,7 +58,7 @@ export function useWorkflowWorkspacePanes({
 
   const snapWorkspacePaneToNode = useCallback((rawPane?: number) => {
     const base = typeof rawPane === 'number' ? rawPane : workspacePaneRef.current;
-    const snapped = Math.max(0, Math.min(3, Math.round(base)));
+    const snapped = Math.max(0, Math.min(2, Math.round(base)));
     if (workspaceSnapTimerRef.current != null && typeof window !== 'undefined') {
       window.clearTimeout(workspaceSnapTimerRef.current);
       workspaceSnapTimerRef.current = null;
@@ -91,22 +91,16 @@ export function useWorkflowWorkspacePanes({
   }, []);
 
   /**
-   * 与 WorkflowSection 轨道 DOM 一致（左→右）：能力预设 | 功能区 | 工作区 | 大纲 | 仓库。
-   * 语义档 0–3：0 仓库、1 工作区+大纲、2 功能区+工作区、3 能力+功能区；offset 越大卷轴越左移。
-   * `workspacePane` 可为小数（滑条 step=0.01）：在相邻两档间线性插值，卷轴才跟手顺滑。
+   * 与 WorkflowSection 轨道 DOM 一致（左→右）：能力预设 | 功能区 | 工作区 | 大纲（无独立「仓库」列）。
+   * 语义档 0–2：0 工作区+大纲、1 功能区+工作区、2 能力+功能区；offset 越大卷轴越左移。
    */
   const paneToOffsetPx = useCallback(
     (pane: number) => {
       const W = sidebarWidth;
       const L = listPaneWidth;
-      const p = Math.max(0, Math.min(3, pane));
-      const o0 = 2 * L + W;
-      const o1 = L + W;
-      const o2 = L;
-      const o3 = 0;
-      if (p <= 1) return o0 + (o1 - o0) * p;
-      if (p <= 2) return o1 + (o2 - o1) * (p - 1);
-      return o2 + (o3 - o2) * (p - 2);
+      const p = Math.max(0, Math.min(2, pane));
+      if (p <= 1) return (L + W) - W * p;
+      return L * (2 - p);
     },
     [listPaneWidth, sidebarWidth]
   );
@@ -116,25 +110,18 @@ export function useWorkflowWorkspacePanes({
     (offset: number) => {
       const W = sidebarWidth;
       const L = listPaneWidth;
-      const o0 = 2 * L + W;
-      const o1 = L + W;
-      const o2 = L;
-      const o3 = 0;
-      const maxOff = Math.max(0, 2 * L + 2 * W);
-      const x = Math.max(0, Math.min(maxOff, offset));
+      const max = L + W;
+      const x = Math.max(0, Math.min(max, offset));
       const den = 1e-9;
-      if (x <= o3) return 3;
-      if (x < o2) return 3 - (x - o3) / Math.max(o2 - o3, den);
-      if (x < o1) return 2 - (x - o2) / Math.max(o1 - o2, den);
-      if (x < o0) return 1 - (x - o1) / Math.max(o0 - o1, den);
-      return 0;
+      if (x < L) return 2 - x / Math.max(L, den);
+      return 1 - (x - L) / Math.max(W, den);
     },
     [listPaneWidth, sidebarWidth]
   );
 
   const applyWorkspacePaneImmediate = useCallback(
     (next: number) => {
-      const clamped = Math.max(0, Math.min(3, next));
+      const clamped = Math.max(0, Math.min(2, next));
       workspacePaneRef.current = clamped;
       const track = workspaceTrackRef.current;
       if (track) {
@@ -268,18 +255,16 @@ export function useWorkflowWorkspacePanes({
       if (isWorkflowEditableTarget(e.target)) return;
       if (typeof document !== 'undefined' && document.querySelector('[data-ac-block-workflow-marquee]')) return;
 
-      /** 与卷轴从左到右一致：1 能力、2 功能区+工作区、3 工作区+大纲、4 仓库；0 同 1（最左） */
+      /** 与卷轴从左到右一致：1 能力+功能区、2 功能区+工作区、3 工作区+大纲；0 同 1（最左） */
       const paneByCode: Record<string, number> = {
-        Digit1: 3,
-        Digit2: 2,
-        Digit3: 1,
-        Digit4: 0,
-        Digit0: 3,
-        Numpad1: 3,
-        Numpad2: 2,
-        Numpad3: 1,
-        Numpad4: 0,
-        Numpad0: 3,
+        Digit1: 2,
+        Digit2: 1,
+        Digit3: 0,
+        Digit0: 2,
+        Numpad1: 2,
+        Numpad2: 1,
+        Numpad3: 0,
+        Numpad0: 2,
       };
       const pane = paneByCode[e.code];
       if (pane === undefined) return;

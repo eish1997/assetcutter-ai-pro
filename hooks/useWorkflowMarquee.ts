@@ -6,7 +6,6 @@ export type UseWorkflowMarqueeArgs = {
   showArchived: boolean;
   workspacePane: number;
   marqueeStartRef: RefObject<boolean>;
-  libraryCardRefs: RefObject<Map<string, HTMLElement>>;
   cardRefs: RefObject<Map<string, HTMLElement>>;
   groupFilterIdRef: RefObject<string | null>;
   pendingRef: RefObject<WorkflowPendingTask[]>;
@@ -19,7 +18,6 @@ export function useWorkflowMarquee({
   showArchived,
   workspacePane,
   marqueeStartRef,
-  libraryCardRefs,
   cardRefs,
   groupFilterIdRef,
   pendingRef,
@@ -34,20 +32,12 @@ export function useWorkflowMarquee({
   const handleMarqueeMouseDown = useCallback(
     (e: ReactMouseEvent) => {
       const pn = Math.round(workspacePane);
-      if (pn !== 0 && pn !== 1 && pn !== 2) return;
-      if (pn !== 0 && showArchived) return;
+      if (pn !== 0 && pn !== 1) return;
+      if (showArchived) return;
       if ((e.target as Element).closest('[data-workflow-toolbar]')) return;
-      if (pn === 0) {
-        if ((e.target as Element).closest('[data-workflow-library-card]')) return;
-        if ((e.target as Element).closest('[data-workflow-outline]')) return;
-        if ((e.target as Element).closest('[data-workflow-outline-footer]')) return;
-        if ((e.target as Element).closest('button, [role="button"], a, input, select, textarea, label')) return;
-        if ((e.target as Element).closest('[data-workflow-sidebar], [data-workflow-preset]')) return;
-      } else {
-        if ((e.target as Element).closest('[data-workflow-card]')) return;
-        if ((e.target as Element).closest('button, [role="button"], a, input, select, textarea, label')) return;
-        if ((e.target as Element).closest('[data-workflow-sidebar], [data-workflow-preset], [data-workflow-outline]')) return;
-      }
+      if ((e.target as Element).closest('[data-workflow-card]')) return;
+      if ((e.target as Element).closest('button, [role="button"], a, input, select, textarea, label')) return;
+      if ((e.target as Element).closest('[data-workflow-sidebar], [data-workflow-preset], [data-workflow-outline]')) return;
       marqueePaneRef.current = pn;
       marqueeStartRef.current = true;
       e.preventDefault();
@@ -110,11 +100,7 @@ export function useWorkflowMarquee({
       setMarqueeActive(false);
 
       if (isClick) {
-        if (pane === 0 && !inGroup) {
-          return;
-        } else if (pane === 0) {
-          setSelectedGroupItemKeys(new Set());
-        } else if (!inGroup) {
+        if (!inGroup) {
           setSelectedAssetIds(new Set());
         } else {
           setSelectedGroupItemKeys(new Set());
@@ -180,7 +166,6 @@ export function useWorkflowMarquee({
   }, [
     marqueeActive,
     updateMarqueeOverlayDom,
-    libraryCardRefs,
     cardRefs,
     groupFilterIdRef,
     pendingRef,

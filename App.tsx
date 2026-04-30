@@ -4841,7 +4841,6 @@ const MainApp: React.FC = () => {
                       onAssetsChange={setWorkflowAssets}
                       pending={workflowPending}
                       onPendingChange={setWorkflowPending}
-                      onOpenLibraryPicker={(cb) => openPicker(undefined, cb, true)}
                       onLog={(level, message, detail) => addGlobalLog('工作区', level, message, detail)}
                       onAddGenerate3DJob={handleAddGenerate3DJobFromWorkflow}
                       preferenceScope={user?.id ?? null}
@@ -4855,8 +4854,6 @@ const MainApp: React.FC = () => {
                       }}
                       registerMarqueeStartHandler={registerWorkflowMarqueeStart}
                       registerPaneWheelHandler={registerWorkflowPaneWheel}
-                      libraryItems={library}
-                      onAddToLibrary={addToLibrary}
                       onUpdateCapabilityPresets={(next) => {
                         setCapabilityPresets(next);
                         saveCapabilityPresets(next);

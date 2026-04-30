@@ -12,7 +12,7 @@ import { useWorkflowWorkspacePanes } from '../hooks/useWorkflowWorkspacePanes';
 import { useWorkflowMarquee } from '../hooks/useWorkflowMarquee';
 import { createPortal, flushSync } from 'react-dom';
 import type { WorkflowAsset, WorkflowPendingTask, CapabilitySet, VgpGenStepCapture } from '../types';
-import type { CustomAppModule, LibraryItem } from '../types';
+import type { CustomAppModule } from '../types';
 import type { BoundingBox } from '../types';
 import { getRandomGroupCodeName } from '../data/groupCodeNames';
 import { detectObjectsInImage, DEFAULT_PROMPTS } from '../services/geminiService';
@@ -283,7 +283,6 @@ const WorkflowSection: React.FC<{
   onAssetsChange: (value: React.SetStateAction<WorkflowAsset[]>) => void;
   pending: WorkflowPendingTask[];
   onPendingChange: (value: React.SetStateAction<WorkflowPendingTask[]>) => void;
-  onOpenLibraryPicker?: (callback: (items: LibraryItem[]) => void) => void;
   onLog?: (level: 'info' | 'warn' | 'error', message: string, detail?: string) => void;
   /** 拖图到「生成3D」能力时调用，不进入执行队列，直接提交 3D 任务 */
   onAddGenerate3DJob?: (
@@ -298,10 +297,6 @@ const WorkflowSection: React.FC<{
   registerMarqueeStartHandler?: (handler: ((e: React.MouseEvent) => void) | null) => void;
   /** 由 App 主滚动层注册：左右留白区域滚轮可横向切页 */
   registerPaneWheelHandler?: (handler: ((e: React.WheelEvent) => void) | null) => void;
-  /** 左侧「仓库」页：资产库条目（与弹窗导入同源） */
-  libraryItems?: LibraryItem[];
-  /** 大纲底部「放到仓库」：将选中工作区资产写入资产库（与 App 内 addToLibrary 同源） */
-  onAddToLibrary?: (items: Partial<LibraryItem>[]) => void;
   /** 右侧「能力」页底部：能力预设编辑区（由 App 传入 Suspense 包裹的 CapabilityPresetSection） */
   capabilityPresetPanel?: React.ReactNode;
   /** 与能力页 `onUpdate` 同源：用于从工作区侧栏启用被禁用的预设并持久化 */
@@ -310,7 +305,7 @@ const WorkflowSection: React.FC<{
   onUpdateCapabilitySets?: (next: CapabilitySet[]) => void;
   /** 首次进入项目时的导览键（同一键仅执行一次横扫导览） */
   onboardingKey?: string | null;
-  /** 顶栏左侧：返回项目列表 + 切换项目（位于 1–4 分档前）；不传则不渲染 */
+  /** 顶栏左侧：返回项目列表 + 切换项目（位于 1–3 分档前）；不传则不渲染 */
   workspaceProjectChrome?: {
     projectOptions: Array<{ value: string; label: string }>;
     activeProjectId: string;
@@ -330,13 +325,11 @@ const WorkflowSection: React.FC<{
   onAssetsChange: setAssets,
   pending: pendingProp,
   onPendingChange: setPending,
-  onOpenLibraryPicker,
   onLog,
   onAddGenerate3DJob,
   preferenceScope = null,
   registerMarqueeStartHandler,
   registerPaneWheelHandler,
-  onAddToLibrary,
   capabilityPresetPanel,
   onUpdateCapabilityPresets,
   onUpdateCapabilitySets,
@@ -457,7 +450,6 @@ const WorkflowSection: React.FC<{
   const gridRef = useRef<HTMLDivElement>(null);
   const workspaceViewportRef = useRef<HTMLDivElement>(null);
   const workspaceTrackRef = useRef<HTMLDivElement>(null);
-  const libraryScrollRef = useRef<HTMLDivElement>(null);
   const outlineScrollRef = useRef<HTMLDivElement>(null);
   /** 大纲：有 id 表示该组折叠子项；默认全展开 */
   const [outlineCollapsedIds, setOutlineCollapsedIds] = useState<Set<string>>(() => new Set());
@@ -553,7 +545,7 @@ const WorkflowSection: React.FC<{
   const paneWidth = Math.max(320, workspaceViewportWidth || 0);
   const listPaneWidth = Math.max(320, paneWidth - sidebarWidth);
   const presetPaneWidth = listPaneWidth;
-  const trackTotalWidth = listPaneWidth + sidebarWidth + listPaneWidth + sidebarWidth + presetPaneWidth;
+  const trackTotalWidth = listPaneWidth + sidebarWidth + presetPaneWidth + sidebarWidth;
   const marqueeStartRef = useRef(false);
   const {
     workspacePane,
@@ -585,16 +577,9 @@ const WorkflowSection: React.FC<{
       window.requestAnimationFrame(emitJump);
       window.setTimeout(emitJump, 220);
     }
-    snapWorkspacePaneToNode(3);
+    snapWorkspacePaneToNode(2);
   }, [snapWorkspacePaneToNode]);
-  /** 大纲底部拖入区高亮 */
-  const [outlineFooterDropOver, setOutlineFooterDropOver] = useState<'toWorkspace' | 'toLibrary' | null>(null);
-  const [libraryFilter, setLibraryFilter] = useState<'all' | 'library' | 'archived'>('all');
-  const [libraryTagQuery, setLibraryTagQuery] = useState('');
-  const [repositoryOutlineMode, setRepositoryOutlineMode] = useState<'list' | 'tags'>('list');
-  const [repositorySelectedTags, setRepositorySelectedTags] = useState<Set<string>>(new Set());
   const cardRefs = useRef<Map<string, HTMLElement>>(new Map());
-  const libraryCardRefs = useRef<Map<string, HTMLElement>>(new Map());
   const setSelectedRootAssetIds = useCallback<React.Dispatch<React.SetStateAction<Set<string>>>>(
     (value) => {
       setSelectedAssetIds((prev) => {
@@ -627,7 +612,6 @@ const WorkflowSection: React.FC<{
     showArchived,
     workspacePane,
     marqueeStartRef,
-    libraryCardRefs,
     cardRefs,
     pendingRef,
     groupFilterIdRef,
@@ -1034,23 +1018,6 @@ ${lineSvg}
     if (display) return workflowSafeImgSrc(display);
     return buildTextLightboxPreviewDataUrl(asset.textTitle || '', getAssetDisplayText(asset));
   }, [buildTextLightboxPreviewDataUrl, getAssetDisplayImage, getAssetDisplayText]);
-  const repositoryItems = useMemo<WorkflowAsset[]>(() => {
-    const q = libraryTagQuery.trim().toLowerCase();
-    const base = assets.filter((a) => {
-      if (isGroupChildAsset(a)) return false;
-      if (!a.inRepository) return false;
-      if (libraryFilter === 'library') return !a.archived;
-      if (libraryFilter === 'archived') return !!a.archived;
-      return true;
-    });
-    if (!q) return base;
-    const words = q.split(/\s+/).filter(Boolean);
-    return base.filter((item) => {
-      const tags = (item.imageTags?.[item.displayKey] || []).join(' ');
-      const hay = `${item.groupLabel || ''} ${tags} ${getAssetDisplayText(item)}`.toLowerCase();
-      return words.every((w) => hay.includes(w));
-    });
-  }, [assets, libraryFilter, libraryTagQuery, getAssetDisplayText]);
   useEffect(() => {
     setAssets((prev) => {
       let changed = false;
@@ -1063,26 +1030,6 @@ ${lineSvg}
       return changed ? next : prev;
     });
   }, [setAssets]);
-  const repositoryTagOptions = useMemo(() => {
-    const counts = new Map<string, number>();
-    repositoryItems.forEach((item) => {
-      const tags = item.imageTags?.[item.displayKey] || [];
-      tags.forEach((tag) => {
-        const t = tag.trim();
-        if (!t) return;
-        counts.set(t, (counts.get(t) ?? 0) + 1);
-      });
-    });
-    return [...counts.entries()].sort((a, b) => b[1] - a[1]);
-  }, [repositoryItems]);
-  const repositoryVisibleItems = useMemo(() => {
-    if (repositorySelectedTags.size === 0) return repositoryItems;
-    const selected = [...repositorySelectedTags];
-    return repositoryItems.filter((item) => {
-      const tags = new Set((item.imageTags?.[item.displayKey] || []).filter(Boolean));
-      return selected.every((tag) => tags.has(tag));
-    });
-  }, [repositoryItems, repositorySelectedTags]);
   const buildPendingTaskFromAssetSnapshot = useCallback(
     (
       asset: WorkflowAsset,
@@ -2644,78 +2591,6 @@ ${lineSvg}
     toggleOutlineGroupCollapsed,
   ]);
 
-    /** 第 0 页大纲列：仓库条目（与左侧仓库卡片网格同屏），非工作区资产树 */
-  const repositoryOutlineRows = useMemo(
-    () =>
-      repositoryVisibleItems.map((item) => {
-        const label =
-          item.groupLabel ||
-          (isWorkflowTextAsset(item)
-            ? workflowTextAssetOutlineLabel(item)
-            : `图片 ${item.id.slice(0, 8)}`);
-        return (
-          <div key={`repo-ol-${item.id}`} className="flex items-stretch gap-0.5 min-w-0">
-            <span className="shrink-0 w-5 h-7" aria-hidden />
-            <button
-              type="button"
-              draggable
-              onDragStart={(e) => {
-                try {
-                  const payload: AcWorkflowExportPayload = { mode: 'roots', assetIds: [item.id] };
-                  e.dataTransfer.setData(DT_AC_WORKFLOW_EXPORT, JSON.stringify(payload));
-                  e.dataTransfer.effectAllowed = 'copy';
-                } catch {
-                  /* ignore */
-                }
-              }}
-              onClick={() => {
-                // 使用 isGroupAsset 兼容新旧结构
-                if (isGroupAsset(item) && !isWorkflowTextAsset(item)) {
-                  setGroupFilterId(item.id);
-                  return;
-                }
-                setLightboxSourceSlot(null);
-                setLightboxAssetId(item.id);
-              }}
-              className="flex-1 min-w-0 text-left rounded-lg px-2 py-1.5 text-[9px] border transition-colors truncate border-white/[0.06] bg-[#141416] text-gray-300 hover:bg-white/[0.06]"
-            >
-              {label}
-            </button>
-          </div>
-        );
-      }),
-    [repositoryVisibleItems, setLightboxAssetId, setLightboxSourceSlot]
-  );
-  const repositoryOutlineTagRows = useMemo(
-    () =>
-      repositoryTagOptions.map(([tag, count]) => {
-        const active = repositorySelectedTags.has(tag);
-        return (
-          <button
-            key={`repo-tag-${tag}`}
-            type="button"
-            onClick={() =>
-              setRepositorySelectedTags((prev) => {
-                const next = new Set(prev);
-                if (next.has(tag)) next.delete(tag);
-                else next.add(tag);
-                return next;
-              })
-            }
-            className={`w-full text-left rounded-lg px-2 py-1.5 text-[9px] border transition-colors ${
-              active
-                ? 'border-blue-500 bg-[#152642] text-blue-200'
-                : 'border-white/[0.06] bg-[#141416] text-gray-300 hover:bg-white/[0.06]'
-            }`}
-          >
-            <span className="truncate">{tag}</span>
-            <span className="ml-2 text-[8px] text-gray-500">{count}</span>
-          </button>
-        );
-      }),
-    [repositoryTagOptions, repositorySelectedTags]
-  );
-
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const onModeChanged = (event: Event) => {
@@ -4255,114 +4130,7 @@ ${lineSvg}
     ]
   );
 
-  const importLibraryItemsIntoWorkflow = useCallback(
-    (items: Array<WorkflowAsset | LibraryItem>) => {
-      const workflowIds = new Set<string>();
-      const externalImages: string[] = [];
-      items.forEach((item) => {
-        if (!item) return;
-        if ('type' in item && item.type) {
-          if (item.id) workflowIds.add(item.id);
-        } else if (!('inRepository' in item)) {
-          /* 预留：外链图等 */
-        }
-      });
-      if (workflowIds.size === 0 && externalImages.length === 0) return;
-
-      const prevSnap = assetsRef.current;
-      const clones: WorkflowAsset[] = [];
-      if (workflowIds.size > 0) {
-        const sourceAssets = prevSnap.filter((a) => workflowIds.has(a.id));
-        sourceAssets.forEach((a, idx) => {
-          clones.push({
-            ...a,
-            id: uuid(),
-            parentAssetId: undefined,
-            inRepository: false,
-            archived: false,
-            hiddenInGrid: false,
-            createdAt: Date.now() + idx,
-          });
-        });
-      }
-      const createdExternal: WorkflowAsset[] = [];
-      if (externalImages.length > 0) {
-        const baseT = Date.now();
-        const n = externalImages.length;
-        externalImages.forEach((src, idx) => {
-          createdExternal.push({
-            id: uuid(),
-            original: src,
-            displayKey: 'original',
-            results: {},
-            resultOrder: [],
-            archived: false,
-            hiddenInGrid: false,
-            inRepository: false,
-            createdAt: baseT + (n - 1 - idx),
-          });
-        });
-      }
-
-      setAssets((prev) => {
-        let next = [...prev];
-        if (clones.length) next = next.concat(clones);
-        if (createdExternal.length) next = next.concat(createdExternal);
-        return next;
-      });
-      for (const c of clones) {
-        const o = String(c.original || '').trim();
-        if (o) scheduleCompanionPersistOriginalAny(c.id, o);
-      }
-      for (const c of createdExternal) {
-        const o = String(c.original || '').trim();
-        if (o) scheduleCompanionPersistOriginalAny(c.id, o);
-      }
-      setWorkspacePane(2);
-    },
-    [setAssets, scheduleCompanionPersistOriginalAny, setWorkspacePane]
-  );
-
-  const handleOutlineDropToWorkspace = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      const sources = parseAcWorkflowExportDragSources(e.dataTransfer);
-      const rootIds = new Set<string>();
-      sources.forEach((src) => {
-        if (src.kind === 'root') src.assetIds.forEach((id) => rootIds.add(id));
-      });
-      if (rootIds.size === 0) return;
-      const picked = repositoryVisibleItems.filter((i) => rootIds.has(i.id));
-      if (!picked.length) return;
-      importLibraryItemsIntoWorkflow(picked);
-    },
-    [repositoryVisibleItems, importLibraryItemsIntoWorkflow]
-  );
-
-  const handleOutlineDropToLibrary = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (!onAddToLibrary) {
-        onLog?.('warn', '未配置外部仓库写入，改为工作区内仓库切换', undefined);
-      }
-      const sources = parseAcWorkflowExportDragSources(e.dataTransfer);
-      const rootIds = new Set<string>();
-      sources.forEach((src) => {
-        if (src.kind === 'root') src.assetIds.forEach((id) => rootIds.add(id));
-      });
-      if (rootIds.size === 0) {
-        onLog?.('warn', '未写入仓库', '仅支持根资产');
-        return;
-      }
-      setAssets((prev) => prev.map((a) => (rootIds.has(a.id) ? { ...a, inRepository: true, hiddenInGrid: false } : a)));
-      onLog?.('info', `已写入仓库 ${rootIds.size} 条`, undefined);
-    },
-    [onAddToLibrary, onLog, setAssets]
-  );
-
-  const activePaneNode = Math.max(0, Math.min(3, Math.round(workspacePane)));
+  const activePaneNode = Math.max(0, Math.min(2, Math.round(workspacePane)));
   const topTitleColumns = useMemo(() => {
     const outlineExpandDisabled =
       outlineExpandableGroupIds.size === 0 || outlineCollapsedIds.size === 0;
@@ -4370,36 +4138,7 @@ ${lineSvg}
       outlineExpandableGroupIds.size === 0 ||
       [...outlineExpandableGroupIds].every((id) => outlineCollapsedIds.has(id));
 
-    /** 第 0 页：大纲列对应仓库条目列表 */
-    const outlineRepoTopBarColumn = {
-      title: '大纲',
-      desc: repositoryOutlineMode === 'tags' ? '按标签筛选仓库资产（支持多选）' : '当前筛选下的仓库条目；点击行预览大图',
-      actions: (
-        <div className="flex flex-wrap items-center gap-1.5 whitespace-nowrap">
-          <button
-            type="button"
-            onClick={() => setRepositoryOutlineMode('list')}
-            className={repositoryOutlineMode === 'list' ? TITLE_ROW_BTN_ACTIVE : TITLE_ROW_BTN_NEUTRAL}
-          >
-            列表
-          </button>
-          <button
-            type="button"
-            onClick={() => setRepositoryOutlineMode('tags')}
-            className={repositoryOutlineMode === 'tags' ? TITLE_ROW_BTN_ACTIVE : TITLE_ROW_BTN_NEUTRAL}
-          >
-            标签
-          </button>
-          {repositorySelectedTags.size > 0 && (
-            <button type="button" onClick={() => setRepositorySelectedTags(new Set())} className={TITLE_ROW_BTN_NEUTRAL}>
-              清空标签（{repositorySelectedTags.size}）
-            </button>
-          )}
-        </div>
-      ),
-    };
-
-    /** 第 1 页起：工作区资产树大纲 */
+    /** 工作区同屏时：资产树大纲 */
     const outlineWorkflowTopBarColumn = {
       title: '大纲',
       desc: '窄栏与功能区同宽；与工作区同屏时在视口右侧',
@@ -4425,69 +4164,7 @@ ${lineSvg}
       ),
     };
 
-    if (activePaneNode === 0) {
-      return [
-        {
-          title: '资产仓库',
-          desc: '筛选后点击预览；列数与工作区画布共用设置；右侧大纲支持列表/标签模式',
-          actions: (
-            <div className="flex min-w-0 flex-wrap items-center justify-end gap-1.5">
-              <span className="shrink-0 text-[8px] font-black uppercase tracking-wide text-gray-500">筛选</span>
-              <input
-                value={libraryTagQuery}
-                onChange={(e) => setLibraryTagQuery(e.target.value)}
-                placeholder="标签检索：style:anime lighting:neon"
-                className={TITLE_ROW_TAG_FILTER_INPUT}
-              />
-              <button
-                type="button"
-                onClick={() => setLibraryFilter('all')}
-                className={libraryFilter === 'all' ? TITLE_ROW_BTN_ACTIVE : TITLE_ROW_BTN_NEUTRAL}
-              >
-                全部
-              </button>
-              <button
-                type="button"
-                onClick={() => setLibraryFilter('library')}
-                className={libraryFilter === 'library' ? TITLE_ROW_BTN_ACTIVE : TITLE_ROW_BTN_NEUTRAL}
-              >
-                仓库
-              </button>
-              <button
-                type="button"
-                onClick={() => setLibraryFilter('archived')}
-                className={libraryFilter === 'archived' ? TITLE_ROW_BTN_ACTIVE : TITLE_ROW_BTN_NEUTRAL}
-              >
-                归档
-              </button>
-              <div className={TITLE_ROW_STEPPER_SHELL}>
-                <button
-                  type="button"
-                  onClick={() => setColumnCount((n) => Math.max(2, n - 1))}
-                  disabled={columnCount <= 2}
-                  className={TITLE_ROW_STEPPER_BTN}
-                  aria-label="减少列数"
-                >
-                  −
-                </button>
-                <span className={TITLE_ROW_STEPPER_VALUE}>{columnCount}</span>
-                <button
-                  type="button"
-                  onClick={() => setColumnCount((n) => Math.min(6, n + 1))}
-                  disabled={columnCount >= 6}
-                  className={TITLE_ROW_STEPPER_BTN}
-                  aria-label="增加列数"
-                >
-                  +
-                </button>
-              </div>
-            </div>
-          ),
-        },
-        outlineRepoTopBarColumn,
-      ];
-    }
-    if (activePaneNode === 1 || activePaneNode === 2) {
+    if (activePaneNode === 0 || activePaneNode === 1) {
       const selectableCount = visibleAssets.filter(
         (a) => !isGroupAsset(a) && !pending.some((t) => t.assetId === a.id)
       ).length;
@@ -4554,7 +4231,7 @@ ${lineSvg}
               {archiveHint && !showArchived && (
                 <div className="flex h-7 items-center gap-1.5 rounded-md bg-[#152642] px-2.5 text-[8px] text-blue-200 ring-1 ring-blue-500/35">
                   <span className="font-black uppercase tracking-wide">已归档</span>
-                  <span className="text-gray-300">已移入资产仓库</span>
+                  <span className="text-gray-300">已移出当前工作区画布</span>
                 </div>
               )}
               {!showArchived && (inGroupView || visibleAssets.length > 0) && (
@@ -4642,7 +4319,7 @@ ${lineSvg}
           ),
         },
       ];
-      if (activePaneNode === 1) return [workspaceAndFunctionCols[0]!, outlineWorkflowTopBarColumn];
+      if (activePaneNode === 0) return [workspaceAndFunctionCols[0]!, outlineWorkflowTopBarColumn];
       return [workspaceAndFunctionCols[1]!, workspaceAndFunctionCols[0]!];
     }
     return [
@@ -4848,9 +4525,6 @@ ${lineSvg}
     executingQueue,
     executingQueueDoneCount,
     executePending,
-    handleBatchUploadCorrect,
-    importLibraryItemsIntoWorkflow,
-    onOpenLibraryPicker,
     pending,
     currentGroupAsset,
     selectedAssetIds,
@@ -4865,13 +4539,8 @@ ${lineSvg}
     visibleAssets,
     capabilityPresetViewMode,
     capabilityPresetTypeFilter,
-    libraryFilter,
-    repositoryOutlineMode,
-    repositorySelectedTags,
-    addWorkflowTextAsset,
     capabilityPresetColumnCount,
     currentGroupMemberIds,
-    libraryTagQuery,
     outlineCollapsedIds,
     outlineExpandableGroupIds,
     expandOutlineAll,
@@ -4952,14 +4621,13 @@ ${lineSvg}
             <div
               className="flex shrink-0 items-center gap-0.5"
               role="group"
-              aria-label="卷轴分档：1 能力 2 功能区+工作区 3 工作区+大纲 4 仓库"
+              aria-label="卷轴分档：1 能力+功能区 2 功能区+工作区 3 工作区+大纲"
             >
               {(
                 [
-                  { pane: 3 as const, k: '1', t: '能力 + 功能区' },
-                  { pane: 2 as const, k: '2', t: '功能区 + 工作区' },
-                  { pane: 1 as const, k: '3', t: '工作区 + 大纲' },
-                  { pane: 0 as const, k: '4', t: '大纲 + 仓库' },
+                  { pane: 2 as const, k: '1', t: '能力 + 功能区' },
+                  { pane: 1 as const, k: '2', t: '功能区 + 工作区' },
+                  { pane: 0 as const, k: '3', t: '工作区 + 大纲' },
                 ] as const
               ).map(({ pane, k, t }) => {
                 const on = Math.round(workspacePane) === pane;
@@ -5000,7 +4668,7 @@ ${lineSvg}
             <div
               className="h-full rounded-full bg-blue-500/40 transition-[width] duration-150 ease-out"
               style={{
-                width: `${Math.max(0, Math.min(100, ((3 - workspacePane) / 3) * 100))}%`,
+                width: `${Math.max(0, Math.min(100, ((2 - workspacePane) / 2) * 100))}%`,
               }}
             />
           </div>
@@ -5024,7 +4692,7 @@ ${lineSvg}
             className="flex h-full will-change-transform motion-reduce:transition-none"
             style={{ width: `${trackTotalWidth}px` }}
           >
-        {/* 从左到右：能力预设 | 功能区 | 工作区 | 大纲 | 仓库（前两列锁在同一 flex 行内，避免被压成上下叠） */}
+        {/* 从左到右：能力预设 | 功能区 | 工作区 | 大纲（前两列锁在同一 flex 行内，避免被压成上下叠） */}
         <div
           className="flex h-full min-h-0 shrink-0 flex-row flex-nowrap"
           style={{ width: `${presetPaneWidth + sidebarWidth}px` }}
@@ -5097,7 +4765,7 @@ ${lineSvg}
             jumpToCapabilityPreset={jumpToCapabilityPreset}
             onDropPresetFromEditor={handleActivatePresetFromEditorDrop}
             onDropPresetAction={handlePresetActionDrop}
-            topActionMode={activePaneNode === 3 ? 'capabilityPreset' : 'asset'}
+            topActionMode={activePaneNode === 2 ? 'capabilityPreset' : 'asset'}
             onComposeCapabilities={handleComposeCapabilities}
           />
         </div>
@@ -6254,20 +5922,7 @@ ${lineSvg}
           style={{ width: `${sidebarWidth}px` }}
         >
           <div ref={outlineScrollRef} className="flex-1 min-h-0 overflow-y-auto no-scrollbar flex flex-col gap-0.5 px-3 pt-2 pb-2">
-            {activePaneNode === 0 ? (
-              repositoryVisibleItems.length === 0 ? (
-                <div className="my-3 flex flex-col items-center rounded-xl bg-white/[0.03] px-4 py-6 text-center ring-1 ring-white/[0.06]">
-                  <p className="text-[9px] font-black uppercase tracking-wide text-gray-500">暂无条目</p>
-                  <p className="mt-1.5 max-w-[14rem] text-[8px] leading-relaxed text-gray-600">
-                    {repositoryOutlineMode === 'tags'
-                      ? '切回列表模式或清空标签筛选后重试'
-                      : '当前筛选下没有仓库资产 · 与顶栏「资产仓库」筛选一致'}
-                  </p>
-                </div>
-              ) : (
-                repositoryOutlineMode === 'tags' ? repositoryOutlineTagRows : repositoryOutlineRows
-              )
-            ) : visibleAssets.length === 0 ? (
+            {visibleAssets.length === 0 ? (
               <div className="my-3 flex flex-col items-center rounded-xl bg-white/[0.03] px-4 py-6 text-center ring-1 ring-white/[0.06]">
                 <p className="text-[9px] font-black uppercase tracking-wide text-gray-500">大纲为空</p>
                 <p className="mt-1.5 max-w-[14rem] text-[8px] leading-relaxed text-gray-600">
@@ -6276,240 +5931,6 @@ ${lineSvg}
               </div>
             ) : (
               outlineTreeRows
-            )}
-          </div>
-          {(activePaneNode === 0 || activePaneNode === 1) && (
-            <div
-              data-workflow-outline-footer
-              className="shrink-0 border-t border-white/[0.05] pt-2 pb-2 px-3 bg-[#0a0a0c]/95"
-              onDragLeave={(e) => {
-                if (!e.currentTarget.contains(e.relatedTarget as Node)) setOutlineFooterDropOver(null);
-              }}
-            >
-              {activePaneNode === 0 ? (
-                <div
-                  className={`min-h-[5.75rem] rounded-xl border border-dashed px-3 py-3 flex flex-col items-center justify-center gap-1.5 transition-colors ${
-                    outlineFooterDropOver === 'toWorkspace'
-                      ? 'border-blue-400 bg-blue-950/45'
-                      : 'border-white/15 bg-[#0f0f12]'
-                  }`}
-                  onDragEnter={(e) => {
-                    if (Array.from(e.dataTransfer.types).includes(DT_AC_WORKFLOW_EXPORT)) {
-                      setOutlineFooterDropOver('toWorkspace');
-                    }
-                  }}
-                  onDragOver={(e) => {
-                    if (!Array.from(e.dataTransfer.types).includes(DT_AC_WORKFLOW_EXPORT)) return;
-                    e.preventDefault();
-                    e.dataTransfer.dropEffect = 'copy';
-                  }}
-                  onDrop={(e) => {
-                    setOutlineFooterDropOver(null);
-                    handleOutlineDropToWorkspace(e);
-                  }}
-                >
-                  <p className="text-[8px] text-gray-500 text-center leading-snug">
-                    从资产仓库或上方列表拖入条目
-                  </p>
-                  <span className="text-[9px] font-black uppercase text-blue-200/90">放到工作区</span>
-                </div>
-              ) : (
-                <div
-                  className={`min-h-[5.75rem] rounded-xl border border-dashed px-3 py-3 flex flex-col items-center justify-center gap-1.5 transition-colors ${
-                    outlineFooterDropOver === 'toLibrary'
-                      ? 'border-blue-400 bg-blue-950/45'
-                      : 'border-white/15 bg-[#0f0f12]'
-                  }`}
-                  onDragEnter={(e) => {
-                    if (Array.from(e.dataTransfer.types).includes(DT_AC_WORKFLOW_EXPORT)) {
-                      setOutlineFooterDropOver('toLibrary');
-                    }
-                  }}
-                  onDragOver={(e) => {
-                    if (!Array.from(e.dataTransfer.types).includes(DT_AC_WORKFLOW_EXPORT)) return;
-                    e.preventDefault();
-                    e.dataTransfer.dropEffect = 'copy';
-                  }}
-                  onDrop={(e) => {
-                    setOutlineFooterDropOver(null);
-                    handleOutlineDropToLibrary(e);
-                  }}
-                >
-                  <p className="text-[8px] text-gray-500 text-center leading-snug">
-                    从画布卡片或上方大纲拖入资产
-                  </p>
-                  <span className="text-[9px] font-black uppercase text-blue-200/90">放到仓库</span>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-        <div className="h-full min-h-0 shrink-0 flex flex-col pr-3" style={{ width: `${listPaneWidth}px` }}>
-          <div ref={libraryScrollRef} className="flex-1 min-h-0 overflow-y-auto no-scrollbar">
-            {repositoryVisibleItems.length === 0 ? (
-              <div className="mx-4 flex flex-col items-center justify-center gap-2 rounded-2xl bg-white/[0.03] px-6 py-14 text-center ring-1 ring-white/[0.07]">
-                <span className="text-[10px] font-black uppercase tracking-wide text-gray-400">暂无资产</span>
-                <span className="max-w-xs text-[8px] leading-relaxed text-gray-600">
-                  调整顶栏「筛选 / 全部·仓库·归档」后重试；对话与其它入口生成的图会进入资产库
-                </span>
-              </div>
-            ) : (
-              <div className={`min-w-0 py-6 ${WORKFLOW_EDGE_GUTTER}`}>
-                <div className="gap-4 relative" style={{ columnCount, columnFill: 'balance' as const }}>
-                  {repositoryVisibleItems.map((item) => {
-                    const itemTextDisplay = getAssetDisplayText(item);
-                    const itemHasTextPayload =
-                      !!itemTextDisplay ||
-                      !!(item.textTitle || '').trim() ||
-                      Object.values(item.textResults || {}).some((v) => String(v || '').trim() !== '');
-                    return (
-                    <div key={item.id} className="break-inside-avoid mb-6 relative">
-                      <div
-                        data-workflow-library-card
-                        ref={(el) => {
-                          if (el) libraryCardRefs.current.set(item.id, el);
-                          else libraryCardRefs.current.delete(item.id);
-                        }}
-                        draggable
-                        onDragStart={(e) => {
-                          try {
-                            const payload: AcWorkflowExportPayload = { mode: 'roots', assetIds: [item.id] };
-                            e.dataTransfer.setData(DT_AC_WORKFLOW_EXPORT, JSON.stringify(payload));
-                            e.dataTransfer.effectAllowed = 'copy';
-                          } catch {
-                            /* ignore */
-                          }
-                        }}
-                        className={`group relative rounded-2xl overflow-hidden bg-[#16161a] transition-colors ${
-                          isGroupAsset(item) && (item.assetIds?.length ?? 0) > 0
-                            ? 'border-0 ring-2 ring-blue-400/45'
-                            : WORKFLOW_CARD_SURFACE_IDLE
-                        }`}
-                        onWheel={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          if (isGroupAsset(item) && (item.assetIds?.length ?? 0) > 0) {
-                            const delta = e.deltaY > 0 ? 1 : -1;
-                            setGroupPreviewIndexById((prev) => {
-                              const current = prev[item.id] ?? 0;
-                              const len = item.assetIds?.length ?? 1;
-                              const next = ((current + delta) % len + len) % len;
-                              return { ...prev, [item.id]: next };
-                            });
-                            const direction: 'up' | 'down' = e.deltaY > 0 ? 'down' : 'up';
-                            const assetId = item.id;
-                            setGroupBounceStateById((prev) => ({ ...prev, [assetId]: direction }));
-                            window.setTimeout(() => {
-                              setGroupBounceStateById((prev) => ({ ...prev, [assetId]: 'idle' }));
-                            }, 180);
-                            return;
-                          }
-                          if (getDisplayKeysForAsset(item).length <= 1) return;
-                          cycleDisplayKey(item.id, e.deltaY);
-                        }}
-                      >
-                        {isGroupAsset(item) && (item.assetIds?.length ?? 0) > 0 && !isWorkflowTextAsset(item) && (
-                          <>
-                            <div className="absolute inset-0 rounded-2xl bg-[#16161a] border border-[#3b6fb8] translate-x-[16px] translate-y-[16px] -rotate-3 opacity-70 shadow-xl shadow-[#000000] pointer-events-none" />
-                            <div className="absolute inset-0 rounded-2xl bg-[#1a1a1e] border border-[#6090d0] translate-x-[8px] translate-y-[8px] rotate-1 opacity-90 shadow-xl shadow-[#000000] pointer-events-none" />
-                          </>
-                        )}
-                        <div
-                          className="relative cursor-pointer"
-                          role="presentation"
-                          onClick={() => {
-                            // 使用 isGroupAsset 兼容新旧结构
-                            if (isGroupAsset(item) && !isWorkflowTextAsset(item)) {
-                              setGroupFilterId(item.id);
-                              return;
-                            }
-                            setLightboxSourceSlot(null);
-                            setLightboxAssetId(item.id);
-                          }}
-                        >
-                          {!getAssetDisplayImage(item).trim() && isWorkflowTextAsset(item) ? (
-                            <div
-                              className="relative w-full bg-[#141416] flex flex-col justify-start p-3 text-left"
-                              style={{ aspectRatio: `${3 / 4}`, minHeight: '10rem' }}
-                            >
-                              {item.textTitle?.trim() ? (
-                                <p className="text-[11px] font-bold text-gray-100 line-clamp-2 mb-1.5">{item.textTitle.trim()}</p>
-                              ) : null}
-                              <p
-                                className={`text-[10px] text-gray-400 leading-snug whitespace-pre-wrap flex-1 overflow-hidden ${
-                                  item.textTitle?.trim() ? 'line-clamp-6' : 'line-clamp-8'
-                                }`}
-                              >
-                                {getAssetDisplayText(item) || '（空白，点击编辑）'}
-                              </p>
-                            </div>
-                          ) : (
-                            <div
-                              className="relative w-full bg-[#141416] flex justify-center"
-                              style={{ aspectRatio: `${cardAspectByAssetId[item.id] ?? 1}` }}
-                            >
-                              <WorkflowGridImage
-                                fullSrc={getAssetDisplayImage(item)}
-                                cacheKey={`repo:${item.id}:${item.displayKey}:fp${previewSrcCacheFingerprint(getAssetDisplayImage(item))}`}
-                                className="relative z-0 block w-full h-full min-h-[5rem]"
-                                imgClassName="relative z-0 block w-full h-full object-cover"
-                                draggable={false}
-                                onDragStart={(ev) => ev.preventDefault()}
-                                onIntrinsicSize={(w, h) => {
-                                  setCardAspectByAssetId((prev) => mergeCardAspectFromIntrinsic(prev, item.id, w, h) ?? prev);
-                                }}
-                              />
-                              <div
-                                aria-hidden
-                                className="absolute inset-0 z-[1]"
-                                draggable={false}
-                                onDragStart={(e) => e.preventDefault()}
-                              />
-                            </div>
-                          )}
-                          {isGroupAsset(item) && (item.assetIds?.length ?? 0) > 0 ? (
-                            <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg text-[8px] font-black bg-[#1d4ed8]">
-                              {(item.groupLabel ?? '组')} {item.assetIds?.length}
-                            </span>
-                          ) : !isGroupAsset(item) ? (
-                            <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg text-[8px] font-black bg-emerald-900/85 text-emerald-100">
-                              资产
-                            </span>
-                          ) : null}
-                        </div>
-                        {!isGroupAsset(item) && (!itemHasTextPayload || isWorkflowTextAsset(item)) && (
-                          <div className="p-2 flex flex-col gap-1.5 border-t border-white/[0.06] bg-[#08080b]/80">
-                            <div className="flex gap-1 flex-wrap items-center justify-between min-h-[18px]">
-                              <span className={WORKFLOW_META_PILL}>
-                                <span className="font-black text-blue-300">{getGeneratedImageCount(item)}</span>
-                                <span className="text-gray-500">·</span>
-                                <span className="text-gray-400">{getAssetDisplayTypeLabel(item)}</span>
-                              </span>
-                              {item.displayKey !== 'original' ? (
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    discardResult(item.id, item.displayKey);
-                                  }}
-                                  className="px-1.5 py-0.5 rounded text-[7px] text-red-400 hover:bg-[#4a1c1c]"
-                                  title="丢弃当前显示的版本"
-                                >
-                                  丢弃当前版本
-                                </button>
-                              ) : (
-                                <span aria-hidden className="px-1.5 py-0.5 text-[7px] opacity-0 select-none pointer-events-none">
-                                  丢弃当前版本
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  );
-                  })}
-                </div>
-              </div>
             )}
           </div>
         </div>

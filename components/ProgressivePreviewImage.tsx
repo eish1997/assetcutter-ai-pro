@@ -41,9 +41,12 @@ function microCacheKey(cacheKey: string): string {
   return `micro:${cacheKey}`;
 }
 
-/** 极小微缩边：相对小图边长，保证先出 WebP 糊脸再换 JPEG 小图 */
+/**
+ * 渐进第一层「微图」边长：过小会在卡片上被 object-cover 拉大后**长时间**显得极糊（小图在解码队列里排队时尤其明显）。
+ * 与「小图」保持合理比例，先屏仍明显轻于完整小图生成，但可读性接近以往单档缩略。
+ */
 function defaultMicroMaxEdge(thumbMaxEdge: number): number {
-  return Math.min(96, Math.max(40, Math.round(thumbMaxEdge * 0.18)));
+  return Math.min(256, Math.max(128, Math.round(thumbMaxEdge * 0.34)));
 }
 
 /** 与常见卡片图区域一致，避免纯黑「洞」感 */
@@ -207,6 +210,10 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
           setMicroSrc(microHit);
           setThumbSrc(thumbHit);
           thumbRevealSkipTransitionRef.current = false;
+          void preloadImageDataUrl(thumbHit).then(() => {
+            if (cancelled) return;
+            setThumbReady(true);
+          });
         } else {
           void preloadImageDataUrl(thumbHit).then(() => {
             if (cancelled) return;
@@ -241,6 +248,10 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
 
           if (microPaintedRef.current) {
             setThumbSrc(t);
+            // 叠化依赖 thumbReady；仅依赖 onLoad 在部分环境下可能滞后，离屏解码后显式就绪，避免一直卡在微图层
+            await preloadImageDataUrl(t);
+            if (cancelled) return;
+            setThumbReady(true);
             return;
           }
           await preloadImageDataUrl(t);

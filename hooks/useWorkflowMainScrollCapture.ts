@@ -62,7 +62,7 @@ export function useWorkflowMainScrollCapture(
       if (target?.closest('[data-ac-block-workflow-marquee]')) return;
       if (
         target?.closest(
-          '[data-workflow-sidebar], [data-workflow-preset], [data-workflow-outline], [data-workflow-card], [data-workflow-library-card]'
+          '[data-workflow-sidebar], [data-workflow-preset], [data-workflow-outline], [data-workflow-card]'
         )
       ) {
         return;
