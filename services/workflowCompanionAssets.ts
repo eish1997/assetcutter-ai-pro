@@ -185,11 +185,29 @@ export function stripWorkflowBundleForIdbPersist(bundle: WorkflowProjectBundle):
   return out;
 }
 
+/**
+ * 画布 `original` / 结果串是否为可直接用于 img 展示或已规范化的 data/blob/http。
+ * 短串（如误写入的伴侣键片段）视为不可展示，需走伴侣拉取或执行前解析。
+ */
+export function isDisplayableWorkflowImageRef(s: string): boolean {
+  const t = String(s || '').trim();
+  if (!t) return false;
+  if (t.startsWith('data:')) return parseDataUrlToBlob(t) != null;
+  if (/^blob:/i.test(t)) return true;
+  if (/^https?:\/\//i.test(t)) return true;
+  if (t.startsWith('/') && (t.includes('/api/') || t.includes('/r2/'))) return true;
+  const stripped = t.replace(/\s/g, '');
+  if (stripped.length >= 64 && /^[A-Za-z0-9+/]+=*$/.test(stripped)) return true;
+  return false;
+}
+
 export function workflowAssetNeedsCompanionOriginalHydrate(a: WorkflowAsset): boolean {
   if (isWorkflowTextAsset(a)) return false;
   const key = String(a.originalCompanionKey || '').trim();
   if (!key) return false;
-  return !String(a.original ?? '').trim();
+  const o = String(a.original ?? '').trim();
+  if (!o) return true;
+  return !isDisplayableWorkflowImageRef(o);
 }
 
 /** 是否存在「有伴侣结果键但该步无内存图串」需从伴侣补 blob: */
@@ -242,6 +260,54 @@ export async function fetchCompanionAssetAsDataUrl(
   }
   const b64 = btoa(binary);
   return `data:${mime};base64,${b64}`;
+}
+
+/**
+ * 执行能力前：将任务里的 inputImage（可能为 blob、残缺 data、或误存的键片段）规范为 data URL；
+ * 若无法从字符串解析且资产带有伴侣键，则从本机伴侣拉取。
+ */
+export async function resolveCapabilityInputImageForExecute(opts: {
+  inputImage: string;
+  asset?: WorkflowAsset | null;
+  sourceDisplayKey?: string | null;
+  companionBaseUrl: string;
+  companionProjectId: string;
+}): Promise<{ ok: true; dataUrl: string } | { ok: false; error: string }> {
+  const { inputImage, asset, sourceDisplayKey, companionBaseUrl, companionProjectId } = opts;
+  const base = normalizeCompanionBaseUrl(companionBaseUrl);
+  const projectId = String(companionProjectId || '').trim();
+  const trimmed = String(inputImage || '').trim();
+
+  const normalized = await imageSrcToDataUrlForCompanion(trimmed);
+  if (normalized) return { ok: true, dataUrl: normalized };
+
+  if (!asset || !projectId || !base) {
+    return {
+      ok: false,
+      error: '输入图无法解析（需要 data/blob 链接或已连接本机伴侣并落盘的原图）',
+    };
+  }
+
+  const dk = String(sourceDisplayKey || asset.displayKey || 'original').trim() || 'original';
+  if (dk === 'original') {
+    const key = String(asset.originalCompanionKey || '').trim();
+    if (key) {
+      const u = await fetchCompanionAssetAsDataUrl(base, projectId, key);
+      if (u) return { ok: true, dataUrl: u };
+    }
+  } else {
+    const rck = asset.resultsCompanionKeys || {};
+    const rk = String(rck[dk] || '').trim();
+    if (rk) {
+      const u = await fetchCompanionAssetAsDataUrl(base, projectId, rk);
+      if (u) return { ok: true, dataUrl: u };
+    }
+  }
+
+  return {
+    ok: false,
+    error: '输入图尚未就绪：请确认本机伴侣已连接且项目原图已从磁盘加载，或稍后重试',
+  };
 }
 
 export async function fetchWorkflowOriginalFromCompanionAsObjectUrl(

@@ -134,6 +134,7 @@ import {
   putWorkflowOriginalImageFromAnyUrl,
   putWorkflowOriginalImageToCompanion,
   putWorkflowResultImageToCompanion,
+  resolveCapabilityInputImageForExecute,
   workflowAssetNeedsCompanionOriginalHydrate,
   workflowAssetNeedsCompanionResultHydrate,
 } from '../services/workflowCompanionAssets';
@@ -1198,6 +1199,29 @@ ${lineSvg}
     batchGroup?: { key: string; expected: number }
   ): Promise<{ image: string | null; text?: string; vgpSteps?: VgpGenStepCapture[] }> => {
     const { actionType, inputImage, inputText } = task;
+    let resolvedInputImage = inputImage ?? '';
+    const inputTrimmed = String(resolvedInputImage).trim();
+    if (inputTrimmed) {
+      const companionProjectId = String(workspaceProjectChrome?.activeProjectId || '').trim();
+      const companionBaseUrl = String(getCompanionLocalBaseUrl() || '').trim();
+      const assetForInput = assetsRef.current.find((a) => a.id === task.assetId) ?? null;
+      const resolvedImg = await resolveCapabilityInputImageForExecute({
+        inputImage: inputTrimmed,
+        asset: assetForInput,
+        sourceDisplayKey: task.inputSourceDisplayKey,
+        companionBaseUrl,
+        companionProjectId,
+      });
+      if (resolvedImg.ok === false) {
+        const al = getActionLabel(actionType);
+        const msg = `[${al}] ${resolvedImg.error}`;
+        onLog?.('warn', msg);
+        setAssetError(task.assetId, msg);
+        return { image: null };
+      }
+      resolvedInputImage = resolvedImg.dataUrl;
+    }
+
     if (actionType.startsWith(SET_ACTION_PREFIX)) {
       const set = getSet(actionType.slice(SET_ACTION_PREFIX.length));
       if (!set) {
@@ -1225,7 +1249,7 @@ ${lineSvg}
         },
       }));
       try {
-        const result = await executeCapabilitySet(set, inputImage ?? '', {
+        const result = await executeCapabilitySet(set, resolvedInputImage ?? '', {
           presets: actionModules,
           companionProjectId: workspaceProjectChrome?.activeProjectId?.trim() || undefined,
           onLog,
@@ -1269,14 +1293,14 @@ ${lineSvg}
         setAssetError(task.assetId, msg);
         return { image: null };
       }
-      if (!inputImage?.trim()) {
+      if (!resolvedInputImage?.trim()) {
         const msg = '生成3D 需要图片输入';
         onLog?.('warn', msg);
         setAssetError(task.assetId, msg);
         return { image: null };
       }
       try {
-        await onAddGenerate3DJob(module, inputImage, task);
+        await onAddGenerate3DJob(module, resolvedInputImage, task);
         setAssetError(task.assetId, null);
       } catch (err) {
         const msg = err instanceof Error ? err.message : safeUnknownToString(err);
@@ -1304,7 +1328,7 @@ ${lineSvg}
         };
         const out = await executeCapability(
           preset,
-          inputImage ?? '',
+          resolvedInputImage ?? '',
           {
             onLog,
             companionProjectId: workspaceProjectChrome?.activeProjectId?.trim() || undefined,

@@ -1398,6 +1398,28 @@
       "ip": "127.0.0.1",
       "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
       "createdAt": "2026-04-29T17:36:46.673Z"
+    },
+    {
+      "id": "3a360ad2-30a0-488d-9d93-ec4f329b8335",
+      "actorUserId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "actorIdentifier": "maoer",
+      "action": "admin.companion_artifact_presign_put",
+      "targetUserId": null,
+      "metaJson": "{\"objectKey\":\"public/companion-distribution/1777508003408_AssetCutterCompanion-0.1.1-x64.exe\"}",
+      "ip": "127.0.0.1",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+      "createdAt": "2026-04-30T00:13:23.409Z"
+    },
+    {
+      "id": "25fefb05-e8c7-4383-b341-472ea51899a2",
+      "actorUserId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "actorIdentifier": "maoer",
+      "action": "admin.companion_artifact_register",
+      "targetUserId": null,
+      "metaJson": "{\"id\":\"c5d3fc20c1c23a4e03e8af74\",\"kind\":\"desktop_shell\",\"semver\":\"0.1.1\",\"r2Key\":\"public/companion-distribution/1777508003408_AssetCutterCompanion-0.1.1-x64.exe\"}",
+      "ip": "127.0.0.1",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+      "createdAt": "2026-04-30T00:13:40.705Z"
     }
   ]
 }

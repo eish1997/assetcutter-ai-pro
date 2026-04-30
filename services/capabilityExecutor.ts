@@ -85,8 +85,15 @@ function parseInlineForLlm(input: string): { mimeType: string; data: string } {
 }
 
 function hasUsableImageBase64(input: string): boolean {
-  const p = parseInlineForLlm(input);
-  return p.data.length > 8;
+  const raw = String(input || '').trim();
+  if (!raw) return false;
+  if (/^data:/i.test(raw)) {
+    const p = parseInlineForLlm(raw);
+    return Boolean(p.data?.length);
+  }
+  const stripped = raw.replace(/\s/g, '');
+  if (stripped.length >= 64 && /^[A-Za-z0-9+/]+=*$/.test(stripped)) return true;
+  return false;
 }
 
 function emitCapabilityRunProgress(ctx: CapabilityExecuteContext, message: string) {
