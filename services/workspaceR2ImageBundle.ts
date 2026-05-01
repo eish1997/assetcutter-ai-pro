@@ -304,6 +304,11 @@ export function collectReferencedObjectKeysFromPackedV2(packed: { assets: Workfl
   }
   for (const t of packed.pending) {
     if (t.inputImageObjectKey?.trim()) keys.add(t.inputImageObjectKey.trim());
+    if (t.inputImagesObjectKeys?.length) {
+      for (const k of t.inputImagesObjectKeys) {
+        if (typeof k === 'string' && k.trim()) keys.add(k.trim());
+      }
+    }
   }
   return keys;
 }
@@ -445,11 +450,48 @@ export async function packWorkflowBundleForCloud(
 
   await mapLimit(pending, CLOUD_PACK_UPLOAD_CONCURRENCY, async (t) => {
     delete t.inputImageObjectKey;
+    delete t.inputImagesObjectKeys;
     const pendBase = `users/${userStorageDirName(userId, username)}/workspace/projects/${projectId}/pending/${t.id}`;
-    const key = await uploadDataUrlDeduped(dataUrlToKey, contentHashToKey, t.inputImage, userId, username, (p) => `${pendBase}.${mimeToExt(p.mime)}`);
-    if (key) {
-      t.inputImageObjectKey = key;
-      t.inputImage = '';
+
+    if (t.inputImages && t.inputImages.length > 0) {
+      const keys: string[] = [];
+      for (let i = 0; i < t.inputImages.length; i += 1) {
+        const raw = t.inputImages[i];
+        const img = String(raw || '').trim();
+        if (!img) {
+          keys.push('');
+          continue;
+        }
+        const key = await uploadDataUrlDeduped(
+          dataUrlToKey,
+          contentHashToKey,
+          img,
+          userId,
+          username,
+          (p) => `${pendBase}-in${i}.${mimeToExt(p.mime)}`
+        );
+        keys.push(key || '');
+      }
+      const ok = keys.length > 0 && keys.every((k) => k.trim());
+      if (ok) {
+        t.inputImagesObjectKeys = keys;
+        t.inputImages = [];
+        t.inputImageObjectKey = keys[0] || undefined;
+        t.inputImage = '';
+      }
+    } else {
+      const key = await uploadDataUrlDeduped(
+        dataUrlToKey,
+        contentHashToKey,
+        t.inputImage,
+        userId,
+        username,
+        (p) => `${pendBase}.${mimeToExt(p.mime)}`
+      );
+      if (key) {
+        t.inputImageObjectKey = key;
+        t.inputImage = '';
+      }
     }
   });
 
@@ -553,6 +595,19 @@ export async function hydrateWorkflowBundleFromCloud(
   }
 
   for (const t of pending) {
+    if (t.inputImagesObjectKeys && t.inputImagesObjectKeys.length > 0) {
+      const keys = t.inputImagesObjectKeys;
+      if (!t.inputImages) t.inputImages = [];
+      for (let i = 0; i < keys.length; i += 1) {
+        const ik = keys[i];
+        if (!ik?.trim()) continue;
+        const idx = i;
+        schedule(ik, (u) => {
+          while (t.inputImages!.length <= idx) t.inputImages!.push('');
+          t.inputImages![idx] = u;
+        });
+      }
+    }
     if (t.inputImageObjectKey?.trim() && (!t.inputImage || !String(t.inputImage).trim())) {
       schedule(t.inputImageObjectKey, (u) => {
         t.inputImage = u;
@@ -582,6 +637,7 @@ export async function hydrateWorkflowBundleFromCloud(
   }
   for (const t of pending) {
     delete t.inputImageObjectKey;
+    delete t.inputImagesObjectKeys;
   }
 
   return {

@@ -29,6 +29,11 @@ import { dragTransferHasPlainText } from './workflowSectionHelpers';
 import { SET_ACTION_PREFIX, WORKFLOW_EDGE_GUTTER } from './workflowSectionUiConstants';
 import { uuid } from './workflowIds';
 import type { CapabilityCategoryGroup } from './workflowCapabilityGroups';
+import {
+  extractCapabilitySearchKeywords,
+  keywordsMatchCapabilityLabelId,
+  keywordsMatchCapabilityModule,
+} from './capabilitySearchMatch';
 
 const DRAG_SCROLL_EDGE_PX = 64;
 const DRAG_SCROLL_MAX_STEP_PX = 24;
@@ -260,6 +265,11 @@ export type WorkflowSidebarColumnProps = {
   topActionMode?: WorkflowSidebarTopActionMode;
   /** 将一能力拖到另一能力主区域：打开工作流创建 */
   onComposeCapabilities?: (sourcePresetId: string, targetPresetId: string) => void;
+  /**
+   * 底部快捷栏输入：非空时按与「搜索功能」相同规则（名称/id/分类/提示词片段）筛选本区列表，
+   * 且优先于本区搜索框内容；清空后恢复仅按本区搜索框筛选。
+   */
+  linkedComposeSearchQuery?: string;
 };
 
 export function WorkflowSidebarColumn({
@@ -314,6 +324,7 @@ export function WorkflowSidebarColumn({
   onDropPresetAction,
   topActionMode = 'asset',
   onComposeCapabilities,
+  linkedComposeSearchQuery = '',
 }: WorkflowSidebarColumnProps) {
   const [groupOverrideByCategory, setGroupOverrideByCategory] = useState<
     Record<
@@ -479,30 +490,34 @@ export function WorkflowSidebarColumn({
   }, [favoriteEntries.length]);
   const showFavoritesDropBody = favoriteEntries.length > 0 || favoritesBodyExpanded;
   const [sidebarCapabilitySearch, setSidebarCapabilitySearch] = useState('');
-  const capabilitySearchNorm = sidebarCapabilitySearch.trim().toLowerCase();
+  const linkedTrim = (typeof linkedComposeSearchQuery === 'string' ? linkedComposeSearchQuery : '').trim();
+  const sidebarTrim = sidebarCapabilitySearch.trim();
+  const rawForCapabilitySearch = linkedTrim.length > 0 ? linkedTrim : sidebarTrim;
+  const capabilitySearchKeywords = useMemo(
+    () => extractCapabilitySearchKeywords(rawForCapabilitySearch),
+    [rawForCapabilitySearch]
+  );
   const moduleMatchesSearch = useCallback(
     (mod: CustomAppModule) => {
-      if (!capabilitySearchNorm) return true;
-      const hay = `${mod.label}\n${mod.id}\n${mod.category}\n${(mod.instruction || '').slice(0, 240)}`.toLowerCase();
-      return hay.includes(capabilitySearchNorm);
+      if (capabilitySearchKeywords.length === 0) return true;
+      return keywordsMatchCapabilityModule(capabilitySearchKeywords, mod);
     },
-    [capabilitySearchNorm]
+    [capabilitySearchKeywords]
   );
+  const linkedComposeActive = linkedTrim.length > 0;
   const setMatchesSearch = useCallback(
     (set: CapabilitySet) => {
-      if (!capabilitySearchNorm) return true;
-      const hay = `${set.label}\n${set.id}`.toLowerCase();
-      return hay.includes(capabilitySearchNorm);
+      if (capabilitySearchKeywords.length === 0) return true;
+      return keywordsMatchCapabilityLabelId(capabilitySearchKeywords, set.label, set.id);
     },
-    [capabilitySearchNorm]
+    [capabilitySearchKeywords]
   );
   const favoriteMatchesSearch = useCallback(
     (entry: WorkflowSidebarFavoriteEntry) => {
-      if (!capabilitySearchNorm) return true;
-      const hay = `${entry.label}\n${entry.id}`.toLowerCase();
-      return hay.includes(capabilitySearchNorm);
+      if (capabilitySearchKeywords.length === 0) return true;
+      return keywordsMatchCapabilityLabelId(capabilitySearchKeywords, entry.label, entry.id);
     },
-    [capabilitySearchNorm]
+    [capabilitySearchKeywords]
   );
   const filteredVisiblePresets = useMemo(
     () => visiblePresets.filter(moduleMatchesSearch),
@@ -526,13 +541,18 @@ export function WorkflowSidebarColumn({
     () => favoriteEntries.filter(favoriteMatchesSearch),
     [favoriteEntries, favoriteMatchesSearch]
   );
-  const hasSidebarSearchNoMatch =
-    Boolean(capabilitySearchNorm) &&
+  /** 有检索词但无一命中时，列表回退为「全部」，避免空白 */
+  const sidebarSearchFallbackAll =
+    capabilitySearchKeywords.length > 0 &&
     (visiblePresets.length > 0 || visibleCapabilitySets.length > 0 || favoriteEntries.length > 0) &&
     filteredVisiblePresets.length === 0 &&
     filteredVisibleByCategory.length === 0 &&
     filteredVisibleCapabilitySets.length === 0 &&
     filteredFavoriteEntries.length === 0;
+  const displayFavoriteEntries = sidebarSearchFallbackAll ? favoriteEntries : filteredFavoriteEntries;
+  const displayVisibleByCategory = sidebarSearchFallbackAll ? visibleByCategory : filteredVisibleByCategory;
+  const displayVisiblePresets = sidebarSearchFallbackAll ? visiblePresets : filteredVisiblePresets;
+  const displayCapabilitySets = sidebarSearchFallbackAll ? visibleCapabilitySets : filteredVisibleCapabilitySets;
   const hasPresetEditorDragging = useCallback(() => {
     if (typeof window === 'undefined') return false;
     try {
@@ -1127,6 +1147,9 @@ export function WorkflowSidebarColumn({
           autoComplete="off"
           className="w-full rounded-lg border border-white/[0.08] bg-white/[0.04] px-2.5 py-1.5 text-[10px] text-gray-200 placeholder:text-gray-500 outline-none focus:border-blue-500/45 focus:ring-1 focus:ring-blue-500/30"
         />
+        {linkedComposeActive ? (
+          <p className="mt-0.5 text-[8px] text-gray-600 leading-tight">与底部快捷栏输入联动筛选；清空底部输入后恢复仅按上方搜索。</p>
+        ) : null}
       </div>
       </div>
           {favoriteEntries.length > 0 || visiblePresets.length > 0 ? (
@@ -1432,11 +1455,11 @@ export function WorkflowSidebarColumn({
                     <div className={`text-[8px] text-center py-1 leading-tight ${favoriteDropActive ? 'text-blue-300' : 'text-gray-500'}`}>
                       拖拽能力卡到此处加入常用（也可拖到本区标题或分类标题）
                     </div>
-                  ) : filteredFavoriteEntries.length === 0 && capabilitySearchNorm ? (
+                  ) : displayFavoriteEntries.length === 0 && capabilitySearchKeywords.length > 0 ? (
                     <div className="text-[8px] text-center py-2 leading-tight text-gray-500">无匹配的常用功能</div>
                   ) : (
                     <div className="grid grid-cols-5 gap-1.5">
-                      {filteredFavoriteEntries.map((entry) => {
+                      {displayFavoriteEntries.map((entry) => {
                         const hasTweakSlot =
                           entry.kind === 'module' && entry.mod && capabilityUsesGenImageEngine(entry.mod);
                         return (
@@ -1598,17 +1621,17 @@ export function WorkflowSidebarColumn({
               </div>
             )}
 
-            {hasSidebarSearchNoMatch && (
-              <div className="rounded-xl border border-amber-500/30 bg-[#1c1810]/95 px-3 py-2.5 text-center text-[10px] text-amber-100/90 leading-snug">
-                无匹配功能，请调整关键词或清空搜索
+            {sidebarSearchFallbackAll && (
+              <div className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-center text-[9px] text-gray-400 leading-snug">
+                未匹配关键词，已显示全部功能预设
               </div>
             )}
 
             {visiblePresets.length > 0 && (
             <div className="space-y-4">
-              {filteredVisibleByCategory.length > 0 ? (
+              {displayVisibleByCategory.length > 0 ? (
                 <>
-              {filteredVisibleByCategory.map(({ category, list }) => (
+              {displayVisibleByCategory.map(({ category, list }) => (
                 <div key={category.id}>
                   <div
                     onDragOver={(e) => {
@@ -2021,7 +2044,7 @@ export function WorkflowSidebarColumn({
               </button>
               {!collapsedSectionIds.__all_presets__ && (
             <div className="grid grid-cols-2 gap-2 items-stretch">
-              {filteredVisiblePresets.map((mod) => (
+              {displayVisiblePresets.map((mod) => (
                 <div
                   key={mod.id}
                   className={`rounded-xl border min-h-[60px] h-auto flex overflow-hidden transition-all duration-150 ${
@@ -2130,7 +2153,7 @@ export function WorkflowSidebarColumn({
             </div>
           )}
 
-          {filteredVisibleCapabilitySets.length > 0 && (
+          {displayCapabilitySets.length > 0 && (
             <div className="space-y-2">
               <button
                 type="button"
@@ -2165,7 +2188,7 @@ export function WorkflowSidebarColumn({
               </button>
               {!collapsedSectionIds.__capability_sets__ && (
               <div className="grid grid-cols-2 gap-2">
-                {filteredVisibleCapabilitySets.map((set) => {
+                {displayCapabilitySets.map((set) => {
                   const setActionId = SET_ACTION_PREFIX + set.id;
                   return (
                     <div

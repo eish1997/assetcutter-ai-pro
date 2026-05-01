@@ -12,6 +12,7 @@ import { useWorkflowWorkspacePanes } from '../hooks/useWorkflowWorkspacePanes';
 import { useWorkflowMarquee } from '../hooks/useWorkflowMarquee';
 import { createPortal, flushSync } from 'react-dom';
 import type { WorkflowAsset, WorkflowPendingTask, CapabilitySet, VgpGenStepCapture } from '../types';
+import { maxReferenceImagesForImageGear } from '../types';
 import type { CustomAppModule } from '../types';
 import type { BoundingBox } from '../types';
 import { getRandomGroupCodeName } from '../data/groupCodeNames';
@@ -117,7 +118,7 @@ import {
 } from './workflow/workflowCardAspect';
 import { groupCapabilityPresetsByCategory } from './workflow/workflowCapabilityGroups';
 import { WorkflowSidebarColumn, type WorkflowSidebarFavoriteEntry } from './workflow/WorkflowSidebarColumn';
-import WorkspaceQuickComposeBar from './WorkspaceQuickComposeBar';
+import WorkspaceQuickComposeBar, { type WorkspaceQuickComposePromptCard } from './WorkspaceQuickComposeBar';
 import { buildWorkflowComposerSeedFromTwoPresets } from './workflow/buildWorkflowComposerSeed';
 import type { CapabilityAssetCandidate } from './CapabilitySetCanvas';
 import { BUILTIN_IMAGE_PROCESS_IDS } from '../services/capabilityPresetStore';
@@ -422,8 +423,15 @@ const WorkflowSection: React.FC<{
     requireNonEmpty?: boolean;
   } | null>(null);
   const [quickComposeDraft, setQuickComposeDraft] = useState('');
-  const [quickComposeImage, setQuickComposeImage] = useState<string | null>(null);
+  /** 从功能区/能力列拖入文本框的预设提示词，以卡片展示并与输入框文案合并入队 */
+  const [quickComposePromptCards, setQuickComposePromptCards] = useState<WorkspaceQuickComposePromptCard[]>([]);
+  const [quickComposeImages, setQuickComposeImages] = useState<string[]>([]);
   const [quickComposeActionId, setQuickComposeActionId] = useState('');
+  /** 快捷栏生成设置（覆盖入队任务的档位/比例/尺寸；张数见 normalizeWorkflowGenerateCount） */
+  const [quickComposeGear, setQuickComposeGear] = useState<string>('standard');
+  const [quickComposeAspect, setQuickComposeAspect] = useState('adaptive');
+  const [quickComposeSize, setQuickComposeSize] = useState('');
+  const [quickComposeCount, setQuickComposeCount] = useState(1);
   const [showAllInGroup, setShowAllInGroup] = useState(false);
   /** 组筛选 ID：用于查看组内资产 */
   const [groupFilterId, setGroupFilterId] = useState<string | null>(null);
@@ -1147,26 +1155,58 @@ ${lineSvg}
   ): Promise<{ image: string | null; text?: string; vgpSteps?: VgpGenStepCapture[] }> => {
     const { actionType, inputImage, inputText } = task;
     let resolvedInputImage = inputImage ?? '';
-    const inputTrimmed = String(resolvedInputImage).trim();
-    if (inputTrimmed) {
+    let resolvedInputImagesForExecute: string[] | undefined;
+
+    if (task.inputImages && task.inputImages.length > 0) {
       const companionProjectId = String(workspaceProjectChrome?.activeProjectId || '').trim();
       const companionBaseUrl = String(getCompanionLocalBaseUrl() || '').trim();
       const assetForInput = assetsRef.current.find((a) => a.id === task.assetId) ?? null;
-      const resolvedImg = await resolveCapabilityInputImageForExecute({
-        inputImage: inputTrimmed,
-        asset: assetForInput,
-        sourceDisplayKey: task.inputSourceDisplayKey,
-        companionBaseUrl,
-        companionProjectId,
-      });
-      if (resolvedImg.ok === false) {
-        const al = getActionLabel(actionType);
-        const msg = `[${al}] ${resolvedImg.error}`;
-        onLog?.('warn', msg);
-        setAssetError(task.assetId, msg);
-        return { image: null };
+      const out: string[] = [];
+      for (const raw of task.inputImages) {
+        const trimmed = String(raw || '').trim();
+        if (!trimmed) continue;
+        const resolvedImg = await resolveCapabilityInputImageForExecute({
+          inputImage: trimmed,
+          asset: assetForInput,
+          sourceDisplayKey: task.inputSourceDisplayKey,
+          companionBaseUrl,
+          companionProjectId,
+        });
+        if (resolvedImg.ok === false) {
+          const al = getActionLabel(actionType);
+          const msg = `[${al}] ${resolvedImg.error}`;
+          onLog?.('warn', msg);
+          setAssetError(task.assetId, msg);
+          return { image: null };
+        }
+        out.push(resolvedImg.dataUrl);
       }
-      resolvedInputImage = resolvedImg.dataUrl;
+      if (out.length > 0) {
+        resolvedInputImage = out[0]!;
+        resolvedInputImagesForExecute = out.length >= 2 ? out : undefined;
+      }
+    } else {
+      const inputTrimmed = String(resolvedInputImage).trim();
+      if (inputTrimmed) {
+        const companionProjectId = String(workspaceProjectChrome?.activeProjectId || '').trim();
+        const companionBaseUrl = String(getCompanionLocalBaseUrl() || '').trim();
+        const assetForInput = assetsRef.current.find((a) => a.id === task.assetId) ?? null;
+        const resolvedImg = await resolveCapabilityInputImageForExecute({
+          inputImage: inputTrimmed,
+          asset: assetForInput,
+          sourceDisplayKey: task.inputSourceDisplayKey,
+          companionBaseUrl,
+          companionProjectId,
+        });
+        if (resolvedImg.ok === false) {
+          const al = getActionLabel(actionType);
+          const msg = `[${al}] ${resolvedImg.error}`;
+          onLog?.('warn', msg);
+          setAssetError(task.assetId, msg);
+          return { image: null };
+        }
+        resolvedInputImage = resolvedImg.dataUrl;
+      }
     }
 
     if (actionType.startsWith(SET_ACTION_PREFIX)) {
@@ -1282,6 +1322,7 @@ ${lineSvg}
           },
           {
             inputText,
+            ...(resolvedInputImagesForExecute ? { inputImages: resolvedInputImagesForExecute } : {}),
             ...(batchGroup ? { batchGroupKey: batchGroup.key, batchGroupExpected: batchGroup.expected } : {}),
           }
         );
@@ -1785,26 +1826,237 @@ ${lineSvg}
     ]
   );
 
+  const onQuickComposeInputCapabilityDrop = useCallback(
+    (presetId: string) => {
+      const trimmed = presetId.trim();
+      if (!trimmed) return;
+      const mod =
+        actionModules.find((m) => m.id === trimmed) ?? capabilityPresets.find((p) => p.id === trimmed);
+      if (!mod || mod.disabled) {
+        onLog?.('warn', '底部快捷栏：拖入的能力无效或已禁用');
+        return;
+      }
+      const eng = getCapabilityEngine(mod);
+      const allowed =
+        (eng === 'gen_image' || eng === 'gen_text' || (eng === 'builtin' && mod.category === 'image_to_image')) &&
+        mod.id !== 'cut_image' &&
+        mod.category !== 'generate_3d';
+      if (!allowed) {
+        onLog?.('warn', '底部快捷栏：该能力不支持拖入快捷条，请选用文生图/图生图/文生文等');
+        return;
+      }
+      setQuickComposeActionId(trimmed);
+      const ins = String(mod.instruction ?? '').trim();
+      setQuickComposePromptCards((prev) => [
+        ...prev,
+        { key: uuid(), presetId: trimmed, label: mod.label, instruction: ins },
+      ]);
+      onLog?.('info', `底部快捷栏：已加入「${mod.label}」提示词卡片，可与输入框说明一并入队`);
+    },
+    [actionModules, capabilityPresets, onLog]
+  );
+
   const submitQuickCompose = useCallback(() => {
+    const userText = quickComposeDraft.trim();
+    const imgsAll = quickComposeImages.filter((s) => String(s).trim());
+
+    const resolveQuickComposeMod = (presetId: string) =>
+      actionModules.find((m) => m.id === presetId) ?? capabilityPresets.find((p) => p.id === presetId) ?? null;
+
+    const buildQuickComposeGenOverrides = (m: CustomAppModule): WorkflowPendingTaskOptions => {
+      const o: WorkflowPendingTaskOptions = {};
+      const eng = getCapabilityEngine(m);
+      if (eng === 'gen_image') {
+        o.overrideImageGear =
+          quickComposeGear === 'fast' || quickComposeGear === 'standard' || quickComposeGear === 'pro'
+            ? quickComposeGear
+            : 'standard';
+        if (quickComposeAspect && quickComposeAspect !== 'adaptive') {
+          o.overrideImageAspectRatio = quickComposeAspect;
+        }
+        if (quickComposeSize === '1K' || quickComposeSize === '2K' || quickComposeSize === '4K') {
+          o.overrideImageSize = quickComposeSize;
+        }
+      }
+      return o;
+    };
+
+    const quickComposeCountForMod = (m: CustomAppModule) => {
+      const eng = getCapabilityEngine(m);
+      const applicable = eng === 'gen_image' || m.category === 'text_to_image' || m.category === 'text_to_text';
+      return applicable ? normalizeWorkflowGenerateCount(quickComposeCount) : 1;
+    };
+
+    /** 多张预设卡片：每张单独入队（各自 presetId + instruction；输入框文案拼到每一条） */
+    if (quickComposePromptCards.length > 0) {
+      const cardRows: Array<{ card: WorkspaceQuickComposePromptCard; mod: CustomAppModule }> = [];
+      for (const card of quickComposePromptCards) {
+        const m = resolveQuickComposeMod(card.presetId);
+        if (!m || m.disabled) {
+          onLog?.('warn', `底部快捷栏：跳过无效预设「${card.label}」(${card.presetId})`);
+          continue;
+        }
+        cardRows.push({ card, mod: m });
+      }
+      if (cardRows.length === 0) {
+        onLog?.('warn', '底部快捷栏：没有可用的预设卡片可执行');
+        return;
+      }
+
+      let totalPlanned = 0;
+      for (const { mod: m } of cardRows) {
+        totalPlanned += quickComposeCountForMod(m);
+      }
+      if (
+        totalPlanned > WORKFLOW_GROUP_GENERATE_CONFIRM_THRESHOLD &&
+        typeof window !== 'undefined' &&
+        !window.confirm(`将创建 ${totalPlanned} 条队列任务，是否继续？`)
+      ) {
+        return;
+      }
+
+      const newAssets: WorkflowAsset[] = [];
+      const newTasks: WorkflowPendingTask[] = [];
+
+      for (const { card, mod: m } of cardRows) {
+        const ins = String(card.instruction ?? '').trim();
+        const pieceText = [ins, userText].filter(Boolean).join('\n\n').trim();
+        const maxRef = maxReferenceImagesForImageGear(m.imageGear);
+        const imgs = imgsAll.slice(0, maxRef);
+        const countN = quickComposeCountForMod(m);
+        const taskOverrides = buildQuickComposeGenOverrides(m);
+
+        if (!pieceText && imgs.length === 0) {
+          onLog?.('warn', `底部快捷栏：跳过「${m.label}」（无提示词且无参考图）`);
+          continue;
+        }
+
+        if (imgs.length > 0) {
+          const first = imgs[0]!;
+          const probe = attachInitialVgpToNewAsset({
+            id: '__qc_probe__',
+            original: first,
+            displayKey: 'original',
+            results: {},
+            resultOrder: [],
+            archived: false,
+            hiddenInGrid: true,
+            createdAt: Date.now(),
+          });
+          if (!workflowAssetAllowedForCapabilityDrop(probe, m)) {
+            onLog?.('warn', `底部快捷栏：跳过「${m.label}」（参考图与该能力不匹配）`);
+            continue;
+          }
+          for (let i = 0; i < countN; i += 1) {
+            const newId = uuid();
+            newAssets.push(
+              attachInitialVgpToNewAsset({
+                id: newId,
+                original: first,
+                displayKey: 'original',
+                results: {},
+                resultOrder: [],
+                archived: false,
+                hiddenInGrid: true,
+                createdAt: Date.now(),
+              })
+            );
+            newTasks.push({
+              id: uuid(),
+              assetId: newId,
+              actionType: m.id,
+              inputImage: first,
+              addedAt: Date.now(),
+              inputSourceDisplayKey: 'original',
+              ...(imgs.length >= 2 ? { inputImages: imgs } : {}),
+              ...(pieceText ? { promptOverride: pieceText } : {}),
+              ...taskOverrides,
+            });
+          }
+        } else {
+          if (!workflowPresetAcceptsTextCardDrag(m)) {
+            onLog?.('warn', `底部快捷栏：跳过「${m.label}」（纯文字模式不支持）`);
+            continue;
+          }
+          const body = clampWorkflowTextBody(pieceText);
+          if (!body.trim()) {
+            onLog?.('warn', `底部快捷栏：跳过「${m.label}」（无有效正文）`);
+            continue;
+          }
+          for (let i = 0; i < countN; i += 1) {
+            const newId = uuid();
+            const asset = attachInitialVgpToNewAsset({
+              id: newId,
+              original: '',
+              displayKey: 'original',
+              results: {},
+              resultOrder: [],
+              archived: false,
+              hiddenInGrid: false,
+              createdAt: Date.now(),
+              assetKind: 'text',
+              textTitle: '',
+              textBody: body,
+            });
+            newAssets.push(asset);
+            const task = buildPendingTaskFromAssetSnapshot(asset, newId, m.id, taskOverrides);
+            if (task) newTasks.push(task);
+          }
+        }
+      }
+
+      if (newTasks.length === 0) {
+        onLog?.('warn', '底部快捷栏：未能创建任何任务（请检查能力与提示词）');
+        return;
+      }
+      setAssets((prev) => [...prev, ...newAssets]);
+      if (executing) {
+        setPending((prev) => [...prev, ...newTasks]);
+      } else {
+        void executePending([...newTasks, ...pendingRef.current]);
+      }
+      setQuickComposeDraft('');
+      setQuickComposeImages([]);
+      setQuickComposePromptCards([]);
+      onLog?.('info', `底部快捷栏：已加入 ${newTasks.length} 条执行队列`);
+      return;
+    }
+
     const mod =
       actionModules.find((m) => m.id === quickComposeActionId) ??
       capabilityPresets.find((p) => p.id === quickComposeActionId);
     if (!mod || mod.disabled) {
-      onLog?.('warn', '底部快捷栏：请在下拉中选择一个能力');
+      onLog?.('warn', '底部快捷栏：当前没有可用的快捷能力，请稍后在侧栏「常用」中确认已加入生图/图生图类能力');
       return;
     }
-    const text = quickComposeDraft.trim();
-    const img = quickComposeImage;
+    const text = userText;
+    const maxRef = maxReferenceImagesForImageGear(mod.imageGear);
+    const imgs = imgsAll.slice(0, maxRef);
 
-    if (!text && !img) {
+    if (!text && imgs.length === 0) {
       onLog?.('warn', '底部快捷栏：请输入文字或点击 + 添加图片');
       return;
     }
 
-    if (img) {
+    const eng = getCapabilityEngine(mod);
+    const taskOverrides = buildQuickComposeGenOverrides(mod);
+
+    const countApplicable =
+      eng === 'gen_image' || mod.category === 'text_to_image' || mod.category === 'text_to_text';
+    const countN = countApplicable ? normalizeWorkflowGenerateCount(quickComposeCount) : 1;
+    if (
+      countN > WORKFLOW_GROUP_GENERATE_CONFIRM_THRESHOLD &&
+      typeof window !== 'undefined' &&
+      !window.confirm(`当前生成数量为 ${countN}，将创建大量任务，是否继续？`)
+    ) {
+      return;
+    }
+
+    if (imgs.length > 0) {
+      const first = imgs[0]!;
       const probe = attachInitialVgpToNewAsset({
         id: '__qc_probe__',
-        original: img,
+        original: first,
         displayKey: 'original',
         results: {},
         resultOrder: [],
@@ -1819,31 +2071,38 @@ ${lineSvg}
         );
         return;
       }
-      const newId = uuid();
-      const newAsset = attachInitialVgpToNewAsset({
-        id: newId,
-        original: img,
-        displayKey: 'original',
-        results: {},
-        resultOrder: [],
-        archived: false,
-        hiddenInGrid: true,
-        createdAt: Date.now(),
-      });
-      const newTask: WorkflowPendingTask = {
-        id: uuid(),
-        assetId: newId,
-        actionType: mod.id,
-        inputImage: img,
-        addedAt: Date.now(),
-        inputSourceDisplayKey: 'original',
-        ...(text ? { promptOverride: text } : {}),
-      };
-      setAssets((prev) => [...prev, newAsset]);
+      const newAssets: WorkflowAsset[] = [];
+      const newTasks: WorkflowPendingTask[] = [];
+      for (let i = 0; i < countN; i += 1) {
+        const newId = uuid();
+        const newAsset = attachInitialVgpToNewAsset({
+          id: newId,
+          original: first,
+          displayKey: 'original',
+          results: {},
+          resultOrder: [],
+          archived: false,
+          hiddenInGrid: true,
+          createdAt: Date.now(),
+        });
+        newAssets.push(newAsset);
+        newTasks.push({
+          id: uuid(),
+          assetId: newId,
+          actionType: mod.id,
+          inputImage: first,
+          addedAt: Date.now(),
+          inputSourceDisplayKey: 'original',
+          ...(imgs.length >= 2 ? { inputImages: imgs } : {}),
+          ...(text ? { promptOverride: text } : {}),
+          ...taskOverrides,
+        });
+      }
+      setAssets((prev) => [...prev, ...newAssets]);
       if (executing) {
-        setPending((prev) => [...prev, newTask]);
+        setPending((prev) => [...prev, ...newTasks]);
       } else {
-        void executePending([newTask, ...pendingRef.current]);
+        void executePending([...newTasks, ...pendingRef.current]);
       }
     } else {
       if (!workflowPresetAcceptsTextCardDrag(mod)) {
@@ -1851,40 +2110,52 @@ ${lineSvg}
         return;
       }
       const body = clampWorkflowTextBody(text);
-      const newId = uuid();
-      const asset = attachInitialVgpToNewAsset({
-        id: newId,
-        original: '',
-        displayKey: 'original',
-        results: {},
-        resultOrder: [],
-        archived: false,
-        hiddenInGrid: false,
-        createdAt: Date.now(),
-        assetKind: 'text',
-        textTitle: '',
-        textBody: body,
-      });
-      const task = buildPendingTaskFromAssetSnapshot(asset, asset.id, mod.id);
-      if (!task) {
+      const newAssets: WorkflowAsset[] = [];
+      const newTasks: WorkflowPendingTask[] = [];
+      for (let i = 0; i < countN; i += 1) {
+        const newId = uuid();
+        const asset = attachInitialVgpToNewAsset({
+          id: newId,
+          original: '',
+          displayKey: 'original',
+          results: {},
+          resultOrder: [],
+          archived: false,
+          hiddenInGrid: false,
+          createdAt: Date.now(),
+          assetKind: 'text',
+          textTitle: '',
+          textBody: body,
+        });
+        newAssets.push(asset);
+        const task = buildPendingTaskFromAssetSnapshot(asset, newId, mod.id, taskOverrides);
+        if (task) newTasks.push(task);
+      }
+      if (newTasks.length === 0) {
         onLog?.('warn', '底部快捷栏：无法创建任务');
         return;
       }
-      setAssets((prev) => [...prev, asset]);
+      setAssets((prev) => [...prev, ...newAssets]);
       if (executing) {
-        setPending((prev) => [...prev, task]);
+        setPending((prev) => [...prev, ...newTasks]);
       } else {
-        void executePending([task, ...pendingRef.current]);
+        void executePending([...newTasks, ...pendingRef.current]);
       }
     }
 
     setQuickComposeDraft('');
-    setQuickComposeImage(null);
+    setQuickComposeImages([]);
+    setQuickComposePromptCards([]);
     onLog?.('info', '底部快捷栏：已加入执行队列');
   }, [
     quickComposeActionId,
     quickComposeDraft,
-    quickComposeImage,
+    quickComposePromptCards,
+    quickComposeImages,
+    quickComposeGear,
+    quickComposeAspect,
+    quickComposeSize,
+    quickComposeCount,
     actionModules,
     capabilityPresets,
     onLog,
@@ -3553,6 +3824,42 @@ ${lineSvg}
     [preferenceScope]
   );
 
+  const quickComposeModule = useMemo((): CustomAppModule | null => {
+    const id = quickComposeActionId;
+    if (!id) return null;
+    return (
+      actionModules.find((m) => m.id === id) ?? capabilityPresets.find((p) => p.id === id) ?? null
+    );
+  }, [quickComposeActionId, actionModules, capabilityPresets]);
+
+  const quickComposeMaxReferenceImages = maxReferenceImagesForImageGear(quickComposeModule?.imageGear);
+
+  const quickComposeShowGenImageSettings = useMemo(() => {
+    const m = quickComposeModule;
+    if (!m) return false;
+    return getCapabilityEngine(m) === 'gen_image';
+  }, [quickComposeModule]);
+
+  const quickComposeAllowBatchCount = useMemo(() => {
+    const m = quickComposeModule;
+    if (!m) return false;
+    const eng = getCapabilityEngine(m);
+    return eng === 'gen_image' || m.category === 'text_to_image' || m.category === 'text_to_text';
+  }, [quickComposeModule]);
+
+  useEffect(() => {
+    if (!quickComposeAllowBatchCount) setQuickComposeCount(1);
+  }, [quickComposeAllowBatchCount]);
+
+  useEffect(() => {
+    const g = quickComposeModule?.imageGear;
+    if (g === 'fast' || g === 'standard' || g === 'pro') {
+      setQuickComposeGear(g);
+    } else {
+      setQuickComposeGear('standard');
+    }
+  }, [quickComposeActionId, quickComposeModule?.imageGear]);
+
   const quickComposeOptions = useMemo(() => {
     const out: { value: string; label: string }[] = [];
     const seen = new Set<string>();
@@ -3598,6 +3905,110 @@ ${lineSvg}
     if (!quickComposeActionId) return;
     writeLocalJson(quickComposeStorageKey, quickComposeActionId);
   }, [quickComposeActionId, quickComposeStorageKey]);
+
+  /** 大纲 / 画布拖入底部快捷栏：参考图进「+」、文本资产内容追加到草稿 */
+  const handleQuickComposeWorkflowDrop = useCallback(
+    (e: React.DragEvent) => {
+      const sources = resolveCapabilityDropDragSources(
+        draggingAssetIds,
+        draggingGroupItems,
+        e.dataTransfer
+      );
+      if (sources.length === 0) return;
+
+      const imgsToAdd: string[] = [];
+      const textPieces: string[] = [];
+
+      for (const source of sources) {
+        if (source.kind === 'root') {
+          const effectiveIds = getEffectiveAssetIdsForAction(source.assetIds);
+          for (const id of effectiveIds) {
+            const a = assets.find((x) => x.id === id);
+            if (!a || isGroupAsset(a)) continue;
+            if (isWorkflowTextAsset(a)) {
+              const t = workflowAssetToInputText(a).trim();
+              if (t) textPieces.push(t);
+            } else {
+              const img = getAssetDisplayImage(a).trim();
+              if (img) imgsToAdd.push(img);
+            }
+          }
+        } else {
+          const group = assets.find((x) => x.id === source.groupAssetId);
+          const cut = isGroupAsset(group) ? group?.assetIds : group?.cutImageGroup;
+          if (!group || !cut?.length) continue;
+          for (const itemIndex of source.itemIndexes) {
+            const item = cut[itemIndex];
+            if (!item) continue;
+            if (typeof item === 'string') {
+              const child = assets.find((x) => x.id === item);
+              if (child && !isGroupAsset(child)) {
+                if (isWorkflowTextAsset(child)) {
+                  const t = workflowAssetToInputText(child).trim();
+                  if (t) textPieces.push(t);
+                } else {
+                  const img = getAssetDisplayImage(child).trim();
+                  if (img) imgsToAdd.push(img);
+                }
+              } else {
+                imgsToAdd.push(item);
+              }
+            } else if (item && typeof item === 'object' && 'assetId' in item) {
+              const child = assets.find((x) => x.id === (item as { assetId: string }).assetId);
+              if (!child || isGroupAsset(child)) continue;
+              if (isWorkflowTextAsset(child)) {
+                const t = workflowAssetToInputText(child).trim();
+                if (t) textPieces.push(t);
+              } else {
+                const img = getAssetDisplayImage(child).trim();
+                if (img) imgsToAdd.push(img);
+              }
+            }
+          }
+        }
+      }
+
+      if (imgsToAdd.length === 0 && textPieces.length === 0) {
+        onLog?.('warn', '底部快捷栏：拖入资产无可用图片或文本');
+        return;
+      }
+
+      const maxRef = quickComposeMaxReferenceImages;
+      if (imgsToAdd.length > 0) {
+        setQuickComposeImages((prev) => {
+          let next = [...prev];
+          for (const img of imgsToAdd) {
+            const s = img.trim();
+            if (!s) continue;
+            if (next.includes(s)) continue;
+            if (next.length >= maxRef) break;
+            next.push(s);
+          }
+          return next;
+        });
+      }
+      if (textPieces.length > 0) {
+        const add = textPieces.join('\n\n');
+        setQuickComposeDraft((d) => {
+          const cur = d.trim();
+          return cur ? `${cur}\n\n${add}` : add;
+        });
+      }
+      onLog?.(
+        'info',
+        `底部快捷栏：已附加 ${imgsToAdd.length} 张参考图${textPieces.length ? `、${textPieces.length} 段文本` : ''}`
+      );
+    },
+    [
+      draggingAssetIds,
+      draggingGroupItems,
+      assets,
+      getEffectiveAssetIdsForAction,
+      getAssetDisplayImage,
+      quickComposeMaxReferenceImages,
+      onLog,
+    ]
+  );
 
   const removeActionFromFavorite = useCallback((actionId: string) => {
     setFavoriteActionIds((prev) => prev.filter((id) => id !== actionId));
@@ -4708,6 +5119,7 @@ ${lineSvg}
             >
               {cloneCapabilityPresetPanelWithScrollRef(capabilityPresetPanel, presetScrollRef, {
                 onOpenWorkflowComposer: openUnifiedComposer,
+                workflowComposeSearchQuery: quickComposeDraft,
               })}
             </div>
           ) : (
@@ -4767,6 +5179,7 @@ ${lineSvg}
             onDropPresetAction={handlePresetActionDrop}
             topActionMode={activePaneNode === 2 ? 'capabilityPreset' : 'asset'}
             onComposeCapabilities={handleComposeCapabilities}
+            linkedComposeSearchQuery={quickComposeDraft}
           />
         </div>
         </div>
@@ -6434,15 +6847,40 @@ ${lineSvg}
               !cutSelectState &&
               !promptTweakModal
             }
-            options={quickComposeOptions}
-            actionId={quickComposeActionId}
-            onActionChange={setQuickComposeActionId}
             draft={quickComposeDraft}
             onDraftChange={setQuickComposeDraft}
-            attachedImage={quickComposeImage}
-            onAttachImage={setQuickComposeImage}
-            onClearAttachment={() => setQuickComposeImage(null)}
+            attachedImages={quickComposeImages}
+            maxAttachedImages={quickComposeMaxReferenceImages}
+            onAddImage={(url) => {
+              setQuickComposeImages((prev) => {
+                if (prev.includes(url)) return prev;
+                if (prev.length >= quickComposeMaxReferenceImages) return prev;
+                return [...prev, url];
+              });
+            }}
+            onRemoveImageAt={(index) => {
+              setQuickComposeImages((prev) => prev.filter((_, i) => i !== index));
+            }}
+            onClearAttachments={() => setQuickComposeImages([])}
             onSubmit={submitQuickCompose}
+            showGenImageSettings={quickComposeShowGenImageSettings}
+            allowBatchCount={quickComposeAllowBatchCount}
+            onComposeInputCapabilityDrop={onQuickComposeInputCapabilityDrop}
+            onComposeInputWorkflowDrop={handleQuickComposeWorkflowDrop}
+            promptCards={quickComposePromptCards}
+            onRemovePromptCard={(key) =>
+              setQuickComposePromptCards((prev) => prev.filter((c) => c.key !== key))
+            }
+            genSettings={{
+              gearId: quickComposeGear,
+              onGearId: setQuickComposeGear,
+              aspectRatio: quickComposeAspect,
+              onAspectRatio: setQuickComposeAspect,
+              imageSize: quickComposeSize,
+              onImageSize: setQuickComposeSize,
+              count: quickComposeCount,
+              onCount: setQuickComposeCount,
+            }}
           />,
           document.body
         )

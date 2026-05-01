@@ -1126,8 +1126,14 @@ export function normalizeApiErrorMessage(err: unknown): string {
     const compact = raw.replace(/【[^】]+】/g, '').trim();
     return compact.length > 140 ? compact.slice(0, 140) + "…" : compact;
   }
-  if (raw.includes('Failed to fetch sending request') || raw.includes('TypeError: Failed to fetch')) {
-    return '请求发送失败：请检查网络或稍后重试。若使用 VectorEngine 等第三方网关，多为浏览器跨域（CORS）：本地开发请用 npm run dev；线上需在服务器做同源反代并配置 VITE_VECTOR_ENGINE_PROXY。';
+  /** 浏览器 fetch 失败时 message 多为纯「Failed to fetch」，未必带「TypeError:」前缀 */
+  if (/failed to fetch/i.test(raw)) {
+    return (
+      '请求发送失败（Failed to fetch）：请检查本机网络/VPN/防火墙。' +
+      '若开发者工具 Network 里请求指向 *.onrender.com 等境外地址且状态为 ERR_CONNECTION_CLOSED，多为到该托管代理的链路被重置或不稳定（不一定是本地 Vite/auth-api 未启动）。' +
+      '本地可改 .env.local：VITE_BULK_IMAGE_API=same-origin（或 1），另开终端执行 npm run dev:gemini-proxy（9002），前端用 npm run dev 访问；修改环境变量后需重启 Vite。' +
+      '也可设 VITE_BULK_IMAGE_API=http://127.0.0.1:9002（须 gemini-proxy 的允许 Origin 含当前页面）。/api 仍依赖 auth-api（9100）。VectorEngine 等注意 CORS。'
+    );
   }
 
   const googleErr = parseGoogleStyleErrorPayload(raw);

@@ -21,6 +21,11 @@ import {
   TITLE_ROW_STEPPER_BTN,
 } from './workflow/workflowSectionUiConstants';
 import { uuid } from './workflow/workflowIds';
+import {
+  extractCapabilitySearchKeywords,
+  keywordsMatchCapabilityLabelId,
+  keywordsMatchCapabilityModule,
+} from './workflow/capabilitySearchMatch';
 import { DT_AC_CAPABILITY_FROM_EDITOR } from '../services/workflowDragPipeline';
 import WorkflowComposerOverlay from './WorkflowComposerOverlay';
 import { CapabilityPreviewImg } from './CapabilityPreviewImg';
@@ -109,7 +114,24 @@ const CapabilityPresetSection: React.FC<{
   canUploadToR2?: boolean;
   /** 工作区侧栏：挂到「仅卡片区域」的滚动容器，供外层接管滚动行为 */
   scrollContainerRef?: React.Ref<HTMLDivElement>;
-}> = ({ presets, onUpdate, sets = [], onUpdateSets, onOpenWorkflowComposer, onRunTest, onLog, embeddedInWorkflow = false, canUploadToR2 = false, scrollContainerRef }) => {
+  /**
+   * 工作区底部输入框文案：嵌入态下按与功能区搜索相同的规则（名称/id/分类/提示词片段）过滤本列预设，
+   * 便于边打字边收窄能力卡片；清空则恢复全部（仍受类型筛选与视图模式约束）。
+   */
+  workflowComposeSearchQuery?: string;
+}> = ({
+  presets,
+  onUpdate,
+  sets = [],
+  onUpdateSets,
+  onOpenWorkflowComposer,
+  onRunTest,
+  onLog,
+  embeddedInWorkflow = false,
+  canUploadToR2 = false,
+  scrollContainerRef,
+  workflowComposeSearchQuery = '',
+}) => {
   const [viewMode, setViewMode] = useState<ViewMode>('presets');
   const [presetTypeFilter, setPresetTypeFilter] = useState<PresetTypeFilter>('all');
   const [presetColumnCount, setPresetColumnCount] = useState<number>(() =>
@@ -1188,6 +1210,34 @@ const CapabilityPresetSection: React.FC<{
     });
   }, [presets, viewMode, presetTypeFilter]);
 
+  const composeSearchKeywords = useMemo(
+    () => (embeddedInWorkflow ? extractCapabilitySearchKeywords(workflowComposeSearchQuery) : []),
+    [embeddedInWorkflow, workflowComposeSearchQuery]
+  );
+
+  const presetMatchesComposeSearch = useCallback(
+    (mod: CustomAppModule) => {
+      if (composeSearchKeywords.length === 0) return true;
+      return keywordsMatchCapabilityModule(composeSearchKeywords, mod);
+    },
+    [composeSearchKeywords]
+  );
+
+  const displayPresets = useMemo(() => {
+    if (composeSearchKeywords.length === 0) return visiblePresets;
+    return visiblePresets.filter(presetMatchesComposeSearch);
+  }, [visiblePresets, composeSearchKeywords, presetMatchesComposeSearch]);
+
+  const displaySets = useMemo(() => {
+    if (!embeddedInWorkflow || composeSearchKeywords.length === 0) return sets;
+    return sets.filter((s) => keywordsMatchCapabilityLabelId(composeSearchKeywords, s.label, s.id));
+  }, [sets, embeddedInWorkflow, composeSearchKeywords]);
+
+  const displayUninstalledPresetItems = useMemo(() => {
+    if (composeSearchKeywords.length === 0) return effectiveUninstalledPresetItems;
+    return effectiveUninstalledPresetItems.filter((rp) => presetMatchesComposeSearch(rp.preset));
+  }, [composeSearchKeywords, effectiveUninstalledPresetItems, presetMatchesComposeSearch]);
+
   useEffect(() => {
     if (!pendingScrollTarget) return;
     const target = pendingScrollTarget;
@@ -1361,12 +1411,18 @@ const CapabilityPresetSection: React.FC<{
             <div className="rounded-2xl bg-[#16161a] ring-1 ring-white/[0.07] p-8 text-center text-gray-500 text-[10px]">
               暂无能力集合，点击「添加能力集合」进入画布拖拽连线。
             </div>
+          ) : displaySets.length === 0 ? (
+            <div className="rounded-2xl bg-[#16161a] ring-1 ring-white/[0.07] p-8 text-center text-gray-500 text-[10px]">
+              {composeSearchKeywords.length > 0
+                ? '输入同步检索：无匹配的能力集合，可换关键词或清空底部输入框。'
+                : '暂无可展示的能力集合。'}
+            </div>
           ) : (
             <div
               className="[column-gap:0.75rem] [column-fill:_balance]"
               style={{ columnCount: presetMasonryColumnCount }}
             >
-              {sets.map((s) => (
+              {displaySets.map((s) => (
                 <button
                   type="button"
                   key={s.id}
@@ -1880,11 +1936,15 @@ const CapabilityPresetSection: React.FC<{
       )}
 
       <div className="space-y-3">
-        {visiblePresets.length === 0 && effectiveUninstalledPresetItems.length === 0 ? (
+        {displayPresets.length === 0 && displayUninstalledPresetItems.length === 0 ? (
           <div className="rounded-2xl bg-[#16161a] ring-1 ring-white/[0.07] p-8 text-center text-gray-500 text-[10px]">
-            {viewMode === 'image_process'
-              ? '暂无图像处理能力。'
-              : '暂无基础能力预设，点击「新增能力」添加；远程能力加载后将显示在下方。'}
+            {composeSearchKeywords.length > 0 && (visiblePresets.length > 0 || effectiveUninstalledPresetItems.length > 0) ? (
+              <>输入同步检索：无匹配项，可换关键词或清空底部输入框。</>
+            ) : viewMode === 'image_process' ? (
+              '暂无图像处理能力。'
+            ) : (
+              '暂无基础能力预设，点击「新增能力」添加；远程能力加载后将显示在下方。'
+            )}
           </div>
         ) : (
           <>
@@ -1892,7 +1952,7 @@ const CapabilityPresetSection: React.FC<{
               className="[column-gap:0.75rem] [column-fill:_balance]"
               style={{ columnCount: presetMasonryColumnCount }}
             >
-              {visiblePresets.map((p) => {
+              {displayPresets.map((p) => {
                 const src = getCardPreviewSrc(p);
                 const categoryLabel = CAPABILITY_CATEGORIES.find((c) => c.id === p.category)?.label ?? p.category;
                 const iconName = p.category === 'generate_3d' ? 'cube' : isBuiltinImagePipelinePreset(p) ? 'camera' : 'image';
@@ -2037,9 +2097,9 @@ const CapabilityPresetSection: React.FC<{
               })}
             </div>
 
-            {effectiveUninstalledPresetItems.length > 0 && (
+            {displayUninstalledPresetItems.length > 0 && (
               <div className="rounded-2xl bg-[#16161a] ring-1 ring-white/[0.07] p-4 text-[9px] text-gray-400">
-                检测到 {effectiveUninstalledPresetItems.length} 条远程预设，点击上方「刷新同步」即可自动同步。
+                检测到 {displayUninstalledPresetItems.length} 条远程预设，点击上方「刷新同步」即可自动同步。
               </div>
             )}
           </>

@@ -678,12 +678,21 @@ const LibraryPickerModal: React.FC<{
 // ==========================================
 // 5. 主应用程序
 // ==========================================
+
+/** 暂时关闭「对话模式」整页（侧栏入口与主区 UI）。恢复时改为 `true`。 */
+const DIALOG_PAGE_ENABLED = false;
+
 /** 主站： hooks 必须始终在同一调用顺序下执行，不可与 /admin 分支混在同一个组件里 */
 const MainApp: React.FC = () => {
   const { user, logout, loading: authLoading, refresh: refreshAuthUser } = useAuth();
   const userUiPrefs = useUserUiPrefs();
 
   const [mode, setMode] = useState<AppMode>(AppMode.WORKFLOW);
+  useEffect(() => {
+    if (!DIALOG_PAGE_ENABLED && mode === AppMode.DIALOG) {
+      setMode(AppMode.WORKFLOW);
+    }
+  }, [mode]);
   const [capabilityPresets, setCapabilityPresets] = useState<CustomAppModule[]>(loadCapabilityPresets);
   const [capabilitySets, setCapabilitySets] = useState<CapabilitySet[]>(loadCapabilitySets);
   type GlobalComposerSession = { id: string; initialSet: CapabilitySet | null; sessionKey: number };
@@ -3915,6 +3924,10 @@ const MainApp: React.FC = () => {
   /** 根据格式将资产发送到各模块：图片可继续编辑/生成3D/贴图，3D 模型可进入生成3D 各子模块 */
   const sendLibraryItemToDialog = (item: LibraryItem) => {
     if (!item.data || item.data.includes('data:image/svg+xml')) return;
+    if (!DIALOG_PAGE_ENABLED) {
+      setIsSidebarOpen(false);
+      return;
+    }
     setDialogInputImages([{ id: item.id, data: item.data, fromTemp: true }]);
     setMode(AppMode.DIALOG);
     setDialogValidationError(null);
@@ -4463,9 +4476,11 @@ const MainApp: React.FC = () => {
             <SidebarIconButton active={mode === AppMode.WORKFLOW} label="工作区" onClick={() => { setMode(AppMode.WORKFLOW); setIsSidebarOpen(false); }}>
               <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><path d="M3.5 8.5L10 3.5l6.5 5v8H3.5v-8Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"/><path d="M8 16.5v-4h4v4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
             </SidebarIconButton>
-            <SidebarIconButton active={mode === AppMode.DIALOG} label="对话" onClick={() => { setMode(AppMode.DIALOG); setIsSidebarOpen(false); }}>
-              <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><path d="M4 5.5h12v8H9l-3.5 3v-3H4v-8Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"/></svg>
-            </SidebarIconButton>
+            {DIALOG_PAGE_ENABLED ? (
+              <SidebarIconButton active={mode === AppMode.DIALOG} label="对话" onClick={() => { setMode(AppMode.DIALOG); setIsSidebarOpen(false); }}>
+                <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><path d="M4 5.5h12v8H9l-3.5 3v-3H4v-8Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"/></svg>
+              </SidebarIconButton>
+            ) : null}
             <SidebarIconButton active={mode === AppMode.SETTINGS} label="设置" onClick={() => { setMode(AppMode.SETTINGS); setIsSidebarOpen(false); }}>
               <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><circle cx="10" cy="10" r="2.5" stroke="currentColor" strokeWidth="1.6"/><path d="M10 3v2.1M10 14.9V17M17 10h-2.1M5.1 10H3M14.9 5.1l-1.5 1.5M6.6 13.4l-1.5 1.5M14.9 14.9l-1.5-1.5M6.6 6.6 5.1 5.1" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
             </SidebarIconButton>
@@ -5349,7 +5364,7 @@ const MainApp: React.FC = () => {
               </div>
             )}
 
-            {mode === AppMode.DIALOG && (
+            {DIALOG_PAGE_ENABLED && mode === AppMode.DIALOG && (
               <div className="contents">
               <div className="flex h-[calc(100dvh-6rem)] animate-in fade-in gap-4 lg:gap-6">
                 {/* 左侧：竖向会话列表（可滚动） */}
@@ -6320,7 +6335,7 @@ const MainApp: React.FC = () => {
             )}
 
             {/* 对话生图裁切编辑器：全屏选区，确认后作为新版本显示在对话中 */}
-            {dialogCropState && (
+            {DIALOG_PAGE_ENABLED && dialogCropState && (
               <div className="fixed inset-0 z-[2000] flex flex-col items-center justify-center bg-black/60 backdrop-blur-sm p-4">
                 <div className="text-[10px] text-gray-400 mb-3">拖拽选择裁切区域，然后点击「确认裁切」</div>
                 <div
@@ -6380,7 +6395,11 @@ const MainApp: React.FC = () => {
                      <div className="flex flex-col items-center justify-center py-20 text-center">
                        <AppIcon name="package" className="w-12 h-12 mb-4 opacity-60" />
                        <p className="text-[11px] font-black uppercase tracking-widest text-gray-500 mb-2">暂无资产</p>
-                       <p className="text-[10px] text-gray-600 max-w-sm">可点击左侧「上传图片」、或从「对话」「生成3D」保存到资产库。</p>
+                       <p className="text-[10px] text-gray-600 max-w-sm">
+                         {DIALOG_PAGE_ENABLED
+                           ? '可点击左侧「上传图片」、或从「对话」「生成3D」保存到资产库。'
+                           : '可点击左侧「上传图片」、或从「生成3D」保存到资产库。'}
+                       </p>
                      </div>
                    ) : (
                      <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
@@ -6394,7 +6413,7 @@ const MainApp: React.FC = () => {
                              setLibSelectedGroupIds(prev => { const n = new Set(prev); if (n.has(gid)) n.delete(gid); else n.add(gid); return n; });
                            }}
                            onDelete={handleLibDeleteGroup}
-                           onSendToDialog={sendLibraryItemToDialog}
+                           onSendToDialog={DIALOG_PAGE_ENABLED ? sendLibraryItemToDialog : undefined}
                            onSendToTexture={sendLibraryItemToTexture}
                            onSendToGenerate3DImage={sendLibraryItemToGenerate3DImage}
                            onSendToGenerate3DModel={sendLibraryItemToGenerate3DModel}

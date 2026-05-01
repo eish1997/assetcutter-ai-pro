@@ -332,6 +332,22 @@ export const DIALOG_IMAGE_GEARS = [
 ] as const;
 export type DialogImageGear = (typeof DIALOG_IMAGE_GEARS)[number]['id'];
 
+/**
+ * 单次请求内参考图数量上限（快捷栏多图、多参考图生图等），按当前接入的生图模型 id 约束。
+ * 未列出的模型回退为 8。
+ */
+export const DIALOG_IMAGE_MODEL_MAX_REFERENCE_IMAGES: Partial<Record<(typeof DIALOG_IMAGE_GEARS)[number]['modelId'], number>> = {
+  'gemini-2.5-flash-image': 10,
+  'gemini-3.1-flash-image-preview': 10,
+  'gemini-3-pro-image-preview': 10,
+};
+
+export function maxReferenceImagesForImageGear(gear?: DialogImageGear): number {
+  const id = (gear && DIALOG_IMAGE_GEARS.some((g) => g.id === gear) ? gear : 'standard') as DialogImageGear;
+  const modelId = DIALOG_IMAGE_GEARS.find((g) => g.id === id)!.modelId;
+  return DIALOG_IMAGE_MODEL_MAX_REFERENCE_IMAGES[modelId] ?? 8;
+}
+
 // ---------- 工作流模块 ----------
 /** 工作流功能类型：拖拽到的目标框（默认 4 个，可扩展） */
 export const WORKFLOW_ACTION_TYPES = [
@@ -441,6 +457,12 @@ export type WorkflowPendingTask = {
   inputImage: string;
   /** 待处理缩略图在 R2 的键，hydrate 后写回 inputImage */
   inputImageObjectKey?: string;
+  /**
+   * 多参考图（与 `inputImage` 同序；`inputImage` 须与首图一致）。
+   * 上云打包时写入 `inputImagesObjectKeys` 并清空内联图。
+   */
+  inputImages?: string[];
+  inputImagesObjectKeys?: string[];
   addedAt: number;
   /** 从组内拖到切割时：父组 id 与项下标，用于套娃替换 */
   sourceGroupAssetId?: string;

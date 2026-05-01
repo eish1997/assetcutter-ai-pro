@@ -5,7 +5,7 @@ import type {
   CapabilitySetNode,
   CapabilitySetEdge,
 } from '../types';
-import { DIALOG_IMAGE_GEARS } from '../types';
+import { DIALOG_IMAGE_GEARS, maxReferenceImagesForImageGear } from '../types';
 import type { VgpGenStepCapture } from '../types/vgp';
 import {
   detectObjectsInImage,
@@ -230,9 +230,11 @@ async function resolveTextOnlyImagePrompt(
   return out.length > 0 ? out : null;
 }
 
+const GEN_TEXT_VISION_MAX_IMAGES = 10;
+
 async function executeGenTextPath(
   preset: CustomAppModule,
-  inputImageBase64: string,
+  imageRefs: string[],
   inputText: string | undefined,
   ctx: CapabilityExecuteContext
 ): Promise<CapabilityExecuteResult> {
@@ -240,7 +242,8 @@ async function executeGenTextPath(
   const actionLabel = preset.label || preset.id;
   const sys = (preset.instruction || '').trim() || '请根据用户输入完成任务，直接输出结果正文。';
   const userT = (inputText || '').trim();
-  const hasImg = hasUsableImageBase64(inputImageBase64);
+  const refs = imageRefs.filter((s) => hasUsableImageBase64(s)).slice(0, GEN_TEXT_VISION_MAX_IMAGES);
+  const hasImg = refs.length > 0;
   if (preset.category === 'text_to_text') {
     if (hasImg) {
       return {
@@ -277,13 +280,13 @@ async function executeGenTextPath(
   }
   ctx.onLog?.('info', `[${actionLabel}] 文字模型处理中…`, undefined);
   const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [];
-  if (hasImg) {
-    parts.push({ inlineData: parseInlineForLlm(inputImageBase64) });
+  for (const img of refs) {
+    parts.push({ inlineData: parseInlineForLlm(img) });
   }
   const body = [
     `【系统任务】\n${sys}`,
     userT && `【用户文字】\n${userT}`,
-    hasImg && '【附图】请结合图片完成上述任务。',
+    hasImg && (refs.length > 1 ? '【附图】请结合上述多张图片完成上述任务。' : '【附图】请结合图片完成上述任务。'),
   ]
     .filter(Boolean)
     .join('\n\n');
@@ -302,6 +305,11 @@ async function executeGenTextPath(
 export type ExecuteCapabilityOptions = {
   /** 来自文字资产卡片的正文 */
   inputText?: string;
+  /**
+   * 多参考图（须与主 `inputImageBase64` 同序；首图应与主参一致）。
+   * 生图/图生文等路径在多于 1 张时走多图 API。
+   */
+  inputImages?: string[];
 } & GeminiImageBatchGroupOptions;
 
 async function executeCompanionHostBundleCapability(
@@ -372,7 +380,15 @@ export async function executeCapability(
     const actionLabel = preset.label || preset.id;
 
     if (engine === 'gen_text') {
-      return executeGenTextPath(preset, inputImageBase64, inputText, ctx);
+      const extra = opts?.inputImages?.filter((s) => hasUsableImageBase64(s)) ?? [];
+      const primary = hasUsableImageBase64(inputImageBase64) ? inputImageBase64 : '';
+      const merged: string[] = [];
+      if (primary) merged.push(primary);
+      for (const s of extra) {
+        if (merged.length >= GEN_TEXT_VISION_MAX_IMAGES) break;
+        if (!merged.includes(s)) merged.push(s);
+      }
+      return executeGenTextPath(preset, merged, inputText, ctx);
     }
 
     // 内置：拆分组件（输出“首个区域裁剪图”，可选再走生图）
@@ -441,7 +457,9 @@ export async function executeCapability(
       return { ok: false, kind: 'none', error: '该能力为图像处理执行方式，但没有内置实现', durationMs: Date.now() - start };
     }
 
-    const hasImg = hasUsableImageBase64(inputImageBase64);
+    const primaryOk = hasUsableImageBase64(inputImageBase64);
+    const extras = opts?.inputImages?.filter((s) => hasUsableImageBase64(s)) ?? [];
+    const hasImg = primaryOk || extras.length > 0;
     const userT = (inputText || '').trim();
 
     if (preset.category === 'text_to_image' && hasImg) {
@@ -490,8 +508,25 @@ export async function executeCapability(
       };
     }
 
+    const rawList: string[] =
+      opts?.inputImages && opts.inputImages.length > 0
+        ? opts.inputImages.filter((s) => hasUsableImageBase64(s))
+        : primaryOk
+          ? [inputImageBase64]
+          : [];
+    const maxRef = maxReferenceImagesForImageGear(preset.imageGear);
+    const refs = rawList.slice(0, maxRef);
+    if (refs.length === 0) {
+      return {
+        ok: false,
+        kind: 'none',
+        error: '图生图需要有效图片',
+        durationMs: Date.now() - start,
+      };
+    }
+
     emitCapabilityRunProgress(ctx, `${actionLabel}：理解图片与提示词中（若失败多为网关超时或模型不可用）…`);
-    const prompt = await resolveGenImagePrompt(preset, inputImageBase64, ctx);
+    const prompt = await resolveGenImagePrompt(preset, refs[0]!, ctx);
     if (!prompt) return { ok: false, kind: 'none', error: '该能力为生图执行方式，但未填写预设提示词或理解未返回有效指令', durationMs: Date.now() - start };
     const augmented =
       userT && (preset.category === 'image_to_image' || (preset.category as string) === 'image_gen' || (preset.category as string) === 'text_llm')
@@ -501,10 +536,18 @@ export async function executeCapability(
     emitCapabilityRunProgress(ctx, `${actionLabel}：生图中（可能较慢）…`);
     const modelId = resolveImageModelId(preset.imageGear);
     const imageOptions = (preset.imageAspectRatio || preset.imageSize) ? { aspectRatio: preset.imageAspectRatio, imageSize: preset.imageSize } : undefined;
-    const result = await dialogGenerateImage(inputImageBase64, augmented, modelId, imageOptions, undefined, undefined, {
+    const batchOpts = {
       ...(opts?.batchGroupKey ? { batchGroupKey: opts.batchGroupKey } : {}),
       ...(opts?.batchGroupExpected ? { batchGroupExpected: opts.batchGroupExpected } : {}),
-    });
+    };
+    let result: string;
+    if (refs.length >= 2) {
+      ctx.onLog?.('info', `[${actionLabel}] 多参考图生图中（${refs.length} 张）…`, undefined);
+      emitCapabilityRunProgress(ctx, `${actionLabel}：多参考图生图中（${refs.length} 张）…`);
+      result = await dialogGenerateImageMulti(refs, augmented, modelId, imageOptions);
+    } else {
+      result = await dialogGenerateImage(refs[0]!, augmented, modelId, imageOptions, undefined, undefined, batchOpts);
+    }
     return {
       ok: true,
       kind: 'image',
