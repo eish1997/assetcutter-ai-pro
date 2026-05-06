@@ -13,7 +13,8 @@
  *    - 新增站内「生图模型 id」时：必须同步 DEFAULT_IMAGE_MODEL_MAP，并确认启发式仍能识别为「生图模型」。
  *
  * 2) 模型 ID
- *    - 站内仍使用内部名（如 gemini-3-flash-preview、gemini-3-pro-image-preview）。
+ *    - 站内仍使用内部名（如 gemini-3-flash-preview、gemini-3-pro-image-preview）；策略 A 下即 registryId。
+ *    - **解析顺序**：Antigravity / VectorEngine 等渠道特化先走 `services/modelRegistry/resolve.ts`；**ToAPIs 不在 resolve 中改写**，避免与下述映射双重替换。
  *    - ToAPIs 侧实际请求名见 DEFAULT_TEXT_MODEL_MAP / DEFAULT_IMAGE_MODEL_MAP；未映射则原样透传（可能 400）。
  *
  * 3) 生图请求体
@@ -93,8 +94,10 @@ export function mapToapisImageModel(internalModel: string): string {
   return DEFAULT_IMAGE_MODEL_MAP[internalModel] || internalModel;
 }
 
-function isImageGenerationModel(model: string): boolean {
+/** 文生图 / 图生图：含站内 Gemini 风格 id 与 OpenAI `gpt-image-*` / `dall-e*` */
+export function isImageGenerationModel(model: string): boolean {
   const m = model.toLowerCase();
+  if (m.includes('gpt-image') || m.includes('dall-e')) return true;
   if (m.includes('flash-image') || m.includes('pro-image')) return true;
   if (/-image$/.test(m) && !m.includes('flash-preview') && !m.includes('pro-preview')) return true;
   return false;
@@ -122,7 +125,7 @@ function partToOpenAIContent(p: GeminiPart): { type: 'text'; text: string } | { 
   return { type: 'text', text: p.text ?? '' };
 }
 
-function buildOpenAIMessages(
+export function geminiContentsToOpenAiMessages(
   contents: unknown,
   systemInstruction?: string
 ): { role: 'system' | 'user' | 'assistant'; content: unknown }[] {
@@ -353,7 +356,7 @@ function enrichOpenAiGatewayErrorMessage(msg: string): string {
 /**
  * @param rawBodyText 响应原文（非 JSON 时仍可读，如 Antigravity 纯文本错误）
  */
-function parseToapisHttpErrorJson(
+export function parseToapisHttpErrorJson(
   json: unknown,
   status: number,
   fallback: string,
@@ -599,12 +602,10 @@ async function toapisImageGenerateContent(args: {
  * 解析 OpenAI 兼容 chat/completions 的 HTTP 正文：标准 JSON，或部分网关误返回的 SSE（data: 行）。
  * 空 body 时避免裸 `JSON.parse('')`（浏览器报 Unexpected end of JSON input / Failed to execute 'json' on 'Response'）。
  */
-function parseOpenAiChatCompletionsBody(raw: string): { choices?: Array<{ message?: { content?: unknown } }> } {
+export function parseOpenAiChatCompletionsBody(raw: string): { choices?: Array<{ message?: { content?: unknown } }> } {
   const t = (raw || '').trim();
   if (!t) {
-    throw new Error(
-      'Chat 响应体为空（请确认 Antigravity 反代已启动，且 Base URL 指向 /v1/chat/completions 可达地址）'
-    );
+    throw new Error('Chat 响应体为空（请确认上游 /v1/chat/completions 可达且返回了 JSON 正文）');
   }
   try {
     return JSON.parse(t) as { choices?: Array<{ message?: { content?: unknown } }> };
@@ -653,7 +654,7 @@ async function toapisChatGenerateContent(args: {
   const cfg = args.config || {};
   const systemInstruction = typeof cfg.systemInstruction === 'string' ? cfg.systemInstruction : undefined;
   const responseMimeType = cfg.responseMimeType as string | undefined;
-  const messages = buildOpenAIMessages(args.contents, systemInstruction);
+  const messages = geminiContentsToOpenAiMessages(args.contents, systemInstruction);
   const mapTxt = args.mapTextModel ?? mapToapisTextModel;
   const mappedModel = mapTxt(args.model);
 
@@ -756,7 +757,7 @@ export function createToapisGeminiClient(
       async *generateContentStream(args) {
         const cfg = (args.config || {}) as Record<string, unknown>;
         const systemInstruction = typeof cfg.systemInstruction === 'string' ? cfg.systemInstruction : undefined;
-        const messages = buildOpenAIMessages(args.contents, systemInstruction);
+        const messages = geminiContentsToOpenAiMessages(args.contents, systemInstruction);
         const mappedModel = mapTextModel(args.model);
         const ac = new AbortController();
         const signal = cfg.abortSignal as AbortSignal | undefined;

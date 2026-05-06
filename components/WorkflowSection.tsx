@@ -16,15 +16,20 @@ import { maxReferenceImagesForImageGear } from '../types';
 import type { CustomAppModule } from '../types';
 import type { BoundingBox } from '../types';
 import { getRandomGroupCodeName } from '../data/groupCodeNames';
-import { detectObjectsInImage, DEFAULT_PROMPTS } from '../services/geminiService';
+import {
+  detectObjectsInImage,
+  DEFAULT_PROMPTS,
+  normalizeApiErrorMessage,
+  getGeminiImageBatchBoxSizeForCurrentProvider,
+} from '../services/unifiedAiGateway';
 import { detectGrid } from '../services/gridDetector';
-import { normalizeApiErrorMessage } from '../services/geminiService';
-import { getGeminiImageBatchBoxSizeForCurrentProvider } from '../services/geminiService';
+import { DEFAULT_MODEL_TEXT } from '../services/modelRegistry/constants';
 import {
   executeCapability,
   executeCapabilitySet,
   getCapabilityEngine,
 } from '../services/capabilityExecutor';
+import { classifyWorkflowRunTaskBranch } from '../services/workflowRunTaskBranch';
 import {
   applyVgpAfterSuccessfulGen,
   attachInitialVgpToNewAsset,
@@ -44,7 +49,7 @@ import { resolveCapabilityPreviewSrc } from '../services/capabilityPreviewUrl';
 import { WorkflowCapabilityHoverPreview } from './WorkflowCapabilityHoverPreview';
 import { WorkflowGridImage } from './ProgressivePreviewImage';
 import WorkflowPixelBusyOverlay from './WorkflowPixelBusyOverlay';
-import { workflowSafeImgSrc } from '../services/workflowImageDisplay';
+import { workflowResultUsesVideoPreview, workflowSafeImgSrc } from '../services/workflowImageDisplay';
 import { previewSrcCacheFingerprint } from '../services/workflowImageThumb';
 import { imageSrcToDataUrlForCompanion } from '../services/workflowCompanionAssets';
 import {
@@ -91,7 +96,6 @@ import {
   TITLE_ROW_STEPPER_SHELL,
   TITLE_ROW_STEPPER_VALUE,
   TITLE_ROW_STEPPER_BTN,
-  TITLE_ROW_TAG_FILTER_INPUT,
   TITLE_ROW_QUEUE_CHIP,
   TITLE_ROW_DROPDOWN_TRIGGER,
   WORKFLOW_CARD_SURFACE_IDLE,
@@ -301,6 +305,8 @@ const WorkflowSection: React.FC<{
     task?: WorkflowPendingTask,
     options?: { forceNewTask?: boolean }
   ) => Promise<void> | void;
+  /** 与设置页 `SystemConfig.modelText` 一致：能力理解 / gen_text / 切割视觉检测等 */
+  textModelRegistryId?: string;
   /** 用于按账号隔离常用功能偏好；未传时走 guest */
   preferenceScope?: string | null;
   /** 由 App 主滚动层注册，使列表两侧留白等网页空白处也能开始框选 */
@@ -337,6 +343,7 @@ const WorkflowSection: React.FC<{
   onPendingChange: setPending,
   onLog,
   onAddGenerate3DJob,
+  textModelRegistryId,
   preferenceScope = null,
   registerMarqueeStartHandler,
   registerPaneWheelHandler,
@@ -352,6 +359,10 @@ const WorkflowSection: React.FC<{
   const capabilitySets = useMemo(
     () => (Array.isArray(capabilitySetsProp) ? capabilitySetsProp : []),
     [capabilitySetsProp]
+  );
+  const capabilityTextModel = useMemo(
+    () => (textModelRegistryId || '').trim() || DEFAULT_MODEL_TEXT,
+    [textModelRegistryId]
   );
   const pendingRef = React.useRef(pending);
   pendingRef.current = pending;
@@ -568,7 +579,7 @@ const WorkflowSection: React.FC<{
   const marqueeStartRef = useRef(false);
   const {
     workspacePane,
-    setWorkspacePane,
+    setWorkspacePane: _setWorkspacePane,
     snapWorkspacePaneToNode,
     handlePaneWheel,
     spacePanEnabled,
@@ -1232,7 +1243,13 @@ ${lineSvg}
   const runTask = useCallback(async (
     task: WorkflowPendingTask,
     batchGroup?: { key: string; expected: number }
-  ): Promise<{ image: string | null; text?: string; vgpSteps?: VgpGenStepCapture[] }> => {
+  ): Promise<{
+    image: string | null;
+    text?: string;
+    videoUrl?: string;
+    videoMime?: string;
+    vgpSteps?: VgpGenStepCapture[];
+  }> => {
     const { actionType, inputImage, inputText } = task;
     let resolvedInputImage = inputImage ?? '';
     let resolvedInputImagesForExecute: string[] | undefined;
@@ -1289,153 +1306,178 @@ ${lineSvg}
       }
     }
 
-    if (actionType.startsWith(SET_ACTION_PREFIX)) {
-      const set = getSet(actionType.slice(SET_ACTION_PREFIX.length));
-      if (!set) {
-        const msg = `[${getActionLabel(actionType)}] 能力集合不存在`;
-        onLog?.('warn', msg);
-        setAssetError(task.assetId, msg);
-        return { image: null };
-      }
-      const assetId = task.assetId;
-      const clearSetRunUi = () => {
-        setCapabilitySetRunByAssetId((prev) => {
-          const cur = prev[assetId];
-          if (cur?.taskId !== task.id) return prev;
-          const next = { ...prev };
-          delete next[assetId];
-          return next;
-        });
-      };
-      setCapabilitySetRunByAssetId((prev) => ({
-        ...prev,
-        [assetId]: {
-          taskId: task.id,
-          progressLine: '准备执行能力集合…',
-          latestImage: null,
-        },
-      }));
-      try {
-        const result = await executeCapabilitySet(set, resolvedInputImage ?? '', {
-          presets: actionModules,
-          companionProjectId: workspaceProjectChrome?.activeProjectId?.trim() || undefined,
-          onLog,
-          onRunProgress: (line) => {
-            setCapabilitySetRunByAssetId((prev) => {
-              const cur = prev[assetId];
-              if (cur?.taskId !== task.id) return prev;
-              return { ...prev, [assetId]: { ...cur, progressLine: line } };
-            });
-          },
-          onNodeImageOutput: (_nodeId, image) => {
-            setCapabilitySetRunByAssetId((prev) => {
-              const cur = prev[assetId];
-              if (cur?.taskId !== task.id) return prev;
-              return { ...prev, [assetId]: { ...cur, latestImage: image } };
-            });
-          },
-        });
-        if (result.ok === false) {
-          const msg = `[${getActionLabel(actionType)}] ${result.error}`;
-          onLog?.('warn', msg);
-          setAssetError(task.assetId, msg);
-          return { image: null };
-        }
-        setAssetError(task.assetId, null);
-        if (result.kind === 'text') {
-          return { image: null, text: result.text };
-        }
-        return result.kind === 'image'
-          ? { image: result.image, vgpSteps: result.vgpSteps }
-          : { image: null };
-      } finally {
-        clearSetRunUi();
-      }
-    }
     const module = getModule(actionType);
-    if (module?.category === 'generate_3d') {
-      if (!onAddGenerate3DJob) {
-        const msg = '未配置 3D 执行器，无法提交生成3D任务';
-        onLog?.('warn', msg);
-        setAssetError(task.assetId, msg);
-        return { image: null };
-      }
-      if (!resolvedInputImage?.trim()) {
-        const msg = '生成3D 需要图片输入';
-        onLog?.('warn', msg);
-        setAssetError(task.assetId, msg);
-        return { image: null };
-      }
-      try {
-        await onAddGenerate3DJob(module, resolvedInputImage, task);
-        setAssetError(task.assetId, null);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : safeUnknownToString(err);
-        const full = `[${getTaskLogLabel(task)}] ${msg}`;
-        onLog?.('error', full);
-        setAssetError(task.assetId, full);
-      }
-      return { image: null };
-    }
+    const runTaskBranch = classifyWorkflowRunTaskBranch({ actionType, module });
     const actionLabel = getTaskLogLabel(task);
-    try {
-      if (module) {
-        const presetBase =
-          task.promptOverride != null && task.promptOverride.trim() !== ''
-            ? { ...module, instruction: task.promptOverride.trim() }
-            : module;
-        const preset = {
-          ...presetBase,
-          ...(task.logContext === 'quick_compose_bar_plain'
-            ? { label: WORKFLOW_QUICK_COMPOSE_PLAIN_LOG_LABEL }
-            : {}),
-          ...(task.overrideImageGear ? { imageGear: task.overrideImageGear } : {}),
-          ...(task.overrideImageAspectRatio ? { imageAspectRatio: task.overrideImageAspectRatio } : {}),
-          ...(task.overrideImageSize ? { imageSize: task.overrideImageSize } : {}),
-          ...(typeof task.overrideSkipUnderstand === 'boolean'
-            ? { skipUnderstand: !task.overrideSkipUnderstand }
-            : {}),
-        };
-        const out = await executeCapability(
-          preset,
-          resolvedInputImage ?? '',
-          {
-            onLog,
-            companionProjectId: workspaceProjectChrome?.activeProjectId?.trim() || undefined,
-          },
-          {
-            inputText,
-            ...(resolvedInputImagesForExecute ? { inputImages: resolvedInputImagesForExecute } : {}),
-            ...(batchGroup ? { batchGroupKey: batchGroup.key, batchGroupExpected: batchGroup.expected } : {}),
-          }
-        );
-        if (out.ok === false) {
-          const msg = `[${actionLabel}] ${out.error}`;
+
+    switch (runTaskBranch) {
+      case 'branch_capability_set': {
+        const set = getSet(actionType.slice(SET_ACTION_PREFIX.length));
+        if (!set) {
+          const msg = `[${getActionLabel(actionType)}] 能力集合不存在`;
           onLog?.('warn', msg);
           setAssetError(task.assetId, msg);
           return { image: null };
         }
-        setAssetError(task.assetId, null);
-        if (out.kind === 'text') {
-          return { image: null, text: out.text };
+        const assetId = task.assetId;
+        const clearSetRunUi = () => {
+          setCapabilitySetRunByAssetId((prev) => {
+            const cur = prev[assetId];
+            if (cur?.taskId !== task.id) return prev;
+            const next = { ...prev };
+            delete next[assetId];
+            return next;
+          });
+        };
+        setCapabilitySetRunByAssetId((prev) => ({
+          ...prev,
+          [assetId]: {
+            taskId: task.id,
+            progressLine: '准备执行能力集合…',
+            latestImage: null,
+          },
+        }));
+        try {
+          const result = await executeCapabilitySet(set, resolvedInputImage ?? '', {
+            presets: actionModules,
+            textModelRegistryId: capabilityTextModel,
+            companionProjectId: workspaceProjectChrome?.activeProjectId?.trim() || undefined,
+            onLog,
+            onRunProgress: (line) => {
+              setCapabilitySetRunByAssetId((prev) => {
+                const cur = prev[assetId];
+                if (cur?.taskId !== task.id) return prev;
+                return { ...prev, [assetId]: { ...cur, progressLine: line } };
+              });
+            },
+            onNodeImageOutput: (_nodeId, image) => {
+              setCapabilitySetRunByAssetId((prev) => {
+                const cur = prev[assetId];
+                if (cur?.taskId !== task.id) return prev;
+                return { ...prev, [assetId]: { ...cur, latestImage: image } };
+              });
+            },
+          });
+          if (result.ok === false) {
+            const msg = `[${getActionLabel(actionType)}] ${result.error}`;
+            onLog?.('warn', msg);
+            setAssetError(task.assetId, msg);
+            return { image: null };
+          }
+          setAssetError(task.assetId, null);
+          if (result.kind === 'text') {
+            return { image: null, text: result.text };
+          }
+          if (result.kind === 'video') {
+            return { image: null, videoUrl: result.videoUrl, videoMime: result.mimeType, vgpSteps: result.vgpSteps };
+          }
+          return result.kind === 'image'
+            ? { image: result.image, vgpSteps: result.vgpSteps }
+            : { image: null };
+        } finally {
+          clearSetRunUi();
         }
-        return { image: out.image, vgpSteps: out.vgpSteps };
       }
-      if (actionType === 'cut_image') {
+      case 'branch_generate_3d': {
+        if (!module) {
+          const fallbackMsg = `[${actionLabel}] 未能获得结果（请重试或检查配置）`;
+          setAssetError(task.assetId, fallbackMsg);
+          return { image: null };
+        }
+        if (!onAddGenerate3DJob) {
+          const msg = '未配置 3D 执行器，无法提交生成3D任务';
+          onLog?.('warn', msg);
+          setAssetError(task.assetId, msg);
+          return { image: null };
+        }
+        if (!resolvedInputImage?.trim()) {
+          const msg = '生成3D 需要图片输入';
+          onLog?.('warn', msg);
+          setAssetError(task.assetId, msg);
+          return { image: null };
+        }
+        try {
+          await onAddGenerate3DJob(module, resolvedInputImage, task);
+          setAssetError(task.assetId, null);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : safeUnknownToString(err);
+          const full = `[${getTaskLogLabel(task)}] ${msg}`;
+          onLog?.('error', full);
+          setAssetError(task.assetId, full);
+        }
         return { image: null };
       }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : safeUnknownToString(err);
-      const full = `[${actionLabel}] 失败：${msg}`;
-      onLog?.('error', full, msg);
-      setAssetError(task.assetId, full);
-      return { image: null };
+      case 'branch_preset_execute_capability': {
+        if (!module) {
+          const fallbackMsg = `[${actionLabel}] 未能获得结果（请重试或检查配置）`;
+          setAssetError(task.assetId, fallbackMsg);
+          return { image: null };
+        }
+        try {
+          const presetBase =
+            task.promptOverride != null && task.promptOverride.trim() !== ''
+              ? { ...module, instruction: task.promptOverride.trim() }
+              : module;
+          const preset = {
+            ...presetBase,
+            ...(task.logContext === 'quick_compose_bar_plain'
+              ? { label: WORKFLOW_QUICK_COMPOSE_PLAIN_LOG_LABEL }
+              : {}),
+            ...(task.overrideImageGear ? { imageGear: task.overrideImageGear } : {}),
+            ...(task.overrideImageAspectRatio ? { imageAspectRatio: task.overrideImageAspectRatio } : {}),
+            ...(task.overrideImageSize ? { imageSize: task.overrideImageSize } : {}),
+            ...(typeof task.overrideSkipUnderstand === 'boolean'
+              ? { skipUnderstand: !task.overrideSkipUnderstand }
+              : {}),
+          };
+          const out = await executeCapability(
+            preset,
+            resolvedInputImage ?? '',
+            {
+              onLog,
+              textModelRegistryId: capabilityTextModel,
+              companionProjectId: workspaceProjectChrome?.activeProjectId?.trim() || undefined,
+            },
+            {
+              inputText,
+              ...(resolvedInputImagesForExecute ? { inputImages: resolvedInputImagesForExecute } : {}),
+              ...(batchGroup ? { batchGroupKey: batchGroup.key, batchGroupExpected: batchGroup.expected } : {}),
+            }
+          );
+          if (out.ok === false) {
+            const msg = `[${actionLabel}] ${out.error}`;
+            onLog?.('warn', msg);
+            setAssetError(task.assetId, msg);
+            return { image: null };
+          }
+          setAssetError(task.assetId, null);
+          if (out.kind === 'text') {
+            return { image: null, text: out.text };
+          }
+          if (out.kind === 'video') {
+            return { image: null, videoUrl: out.videoUrl, videoMime: out.mimeType, vgpSteps: out.vgpSteps };
+          }
+          return { image: out.image, vgpSteps: out.vgpSteps };
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : safeUnknownToString(err);
+          const full = `[${actionLabel}] 失败：${msg}`;
+          onLog?.('error', full, msg);
+          setAssetError(task.assetId, full);
+          return { image: null };
+        }
+      }
+      case 'branch_cut_image_no_module':
+        return { image: null };
+      case 'branch_fallback_error':
+      default: {
+        const fallbackMsg = `[${actionLabel}] 未能获得结果（请重试或检查配置）`;
+        setAssetError(task.assetId, fallbackMsg);
+        return { image: null };
+      }
     }
-    const fallbackMsg = `[${actionLabel}] 未能获得结果（请重试或检查配置）`;
-    setAssetError(task.assetId, fallbackMsg);
-    return { image: null };
   }, [
     actionModules,
+    capabilityTextModel,
     getActionLabel,
     getTaskLogLabel,
     getModule,
@@ -1649,7 +1691,7 @@ ${lineSvg}
                 try {
                   boxes = await detectObjectsInImage(
                     inputImage,
-                    'gemini-3-flash-preview',
+                    capabilityTextModel,
                     DEFAULT_PROMPTS.detect_blocks,
                     { timeoutMs: WORKFLOW_CUT_DETECT_TIMEOUT_MS }
                   );
@@ -1746,7 +1788,11 @@ ${lineSvg}
             }
           } else {
             onLog?.('info', `${logBatch} ${taskLabel} 执行中…`);
-            const { image: result, text: textResult, vgpSteps } = await runTaskRef.current(task, batchGroup);
+            const { image: result, text: textResult, videoUrl: videoResultUrl, vgpSteps } = await runTaskRef.current(
+              task,
+              batchGroup
+            );
+            const videoUrl = videoResultUrl != null && String(videoResultUrl).trim() !== '' ? String(videoResultUrl).trim() : null;
             if (textResult != null && textResult !== '') {
               setAssets((prev) =>
                 prev.map((a) => {
@@ -1767,6 +1813,57 @@ ${lineSvg}
                   return next;
                 })
               );
+            } else if (videoUrl) {
+              flushSync(() => {
+                setAssets((prev) =>
+                  prev.map((a) => {
+                    if (a.id !== task.assetId) return a;
+                    const baseId = task.actionType;
+                    const hasAnyVersion =
+                      Object.keys(a.results || {}).some((k) => baseActionId(k) === baseId) ||
+                      (a.resultOrder || []).some((k) => baseActionId(k) === baseId);
+                    const key = hasAnyVersion ? makeVersionKey(baseId) : baseId;
+                    const nextResults = { ...a.results, [key]: videoUrl };
+                    const nextOrder = [...(a.resultOrder || []), key];
+                    const nextMeta = {
+                      ...(a.resultMeta || {}),
+                      [key]: { executedAt: Date.now(), mediaKind: 'video' as const },
+                    };
+                    const tagList = buildWorkflowImageTags({
+                      actionLabel: getTaskLogLabel(task),
+                      actionId: baseActionId(task.actionType),
+                      presetInstruction: getModule(task.actionType)?.instruction,
+                      promptOverride: task.promptOverride,
+                      inputText: task.inputText,
+                    });
+                    let next: WorkflowAsset = {
+                      ...a,
+                      results: nextResults,
+                      resultOrder: nextOrder,
+                      resultMeta: nextMeta,
+                      imageTags: { ...(a.imageTags || {}), [key]: tagList },
+                      imageTagStage: { ...(a.imageTagStage || {}), [key]: 'coarse' as const },
+                      displayKey: key,
+                      hiddenInGrid: a.groupId ? a.hiddenInGrid : false,
+                    };
+                    const hadOverride = task.promptOverride != null && task.promptOverride.trim() !== '';
+                    const summaryLabel = getTaskLogLabel(task);
+                    next = applyVgpAfterSuccessfulGen(next, {
+                      resultKey: key,
+                      vgpSteps: vgpSteps ?? [],
+                      semanticSummary: hadOverride ? `${summaryLabel}（用户微调）` : summaryLabel,
+                      hadPromptOverride: hadOverride,
+                      inputSourceDisplayKey: task.inputSourceDisplayKey,
+                    });
+                    return next;
+                  })
+                );
+              });
+              setCompletedTaskIds((prev) => {
+                const next = new Set(prev);
+                next.add(task.id);
+                return next;
+              });
             } else {
               flushSync(() => {
                 setAssets((prev) =>
@@ -1913,7 +2010,7 @@ ${lineSvg}
       onLog,
       setPending,
       setAssets,
-      getActionLabel,
+      capabilityTextModel,
       getTaskLogLabel,
       getModule,
       replaceGroupItemWithSubAsset,
@@ -1990,7 +2087,8 @@ ${lineSvg}
       const allowed =
         (eng === 'gen_image' || eng === 'gen_text' || (eng === 'builtin' && mod.category === 'image_to_image')) &&
         mod.id !== 'cut_image' &&
-        mod.category !== 'generate_3d';
+        mod.category !== 'generate_3d' &&
+        mod.category !== 'generate_video';
       if (!allowed) {
         onLog?.('warn', '底部快捷栏：该能力不支持拖入快捷条，请选用文生图/图生图/文生文等');
         return;
@@ -2620,15 +2718,6 @@ ${lineSvg}
     },
     [buildWorkflowModelPlaceholderDataUrl, groupFilterId, onLog, setAssets, workspaceProjectChrome?.activeProjectId]
   );
-
-  const handleBatchUploadCorrect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files?.length) return;
-    const list = Array.from(files);
-    addImagesFromFiles(list);
-    addModelsFromFiles(list);
-    e.target.value = '';
-  }, [addImagesFromFiles, addModelsFromFiles]);
 
   const hasWorkflowDropTransfer = useCallback((dt?: DataTransfer | null) => {
     if (!dt) return false;
@@ -3411,6 +3500,7 @@ ${lineSvg}
           actionId: baseActionId(versionKey),
           actionLabel: getActionLabel(baseActionId(versionKey)),
           promptHint: (snapshot.resultMeta && snapshot.resultMeta[versionKey]?.semanticSummary) || '',
+          textModelRegistryId: capabilityTextModel,
         });
         if (refined.length > 0) {
           setAssets((prev) =>
@@ -3471,11 +3561,12 @@ ${lineSvg}
   );
   const _dragGroupMemberIds = groupAssetForDrag ? getGroupMemberIds(groupAssetForDrag) : [];
 
+  type GroupFlattenPreview = { src: string; mediaVariant: 'image' | 'video' };
   const flattenGroupImages = useCallback(
-    (asset: WorkflowAsset, visited: Set<string> = new Set()): string[] => {
+    (asset: WorkflowAsset, visited: Set<string> = new Set()): GroupFlattenPreview[] => {
       if (visited.has(asset.id)) return [];
       visited.add(asset.id);
-      const out: string[] = [];
+      const out: GroupFlattenPreview[] = [];
 
       // 新版：使用 assetIds
       if (asset.isGroup === true && asset.assetIds?.length) {
@@ -3486,7 +3577,11 @@ ${lineSvg}
             out.push(...flattenGroupImages(child, visited));
           } else {
             const img = getAssetDisplayImage(child);
-            if (img) out.push(img);
+            if (img)
+              out.push({
+                src: img,
+                mediaVariant: workflowResultUsesVideoPreview(child) ? 'video' : 'image',
+              });
           }
         }
         return out;
@@ -3494,8 +3589,13 @@ ${lineSvg}
 
       // 旧版：使用 cutImageGroup
       for (const item of asset.cutImageGroup ?? []) {
-        if (typeof item === 'string') out.push(item);
-        else if (item && typeof item === 'object' && 'r2Key' in item) continue;
+        if (typeof item === 'string') {
+          const s = item;
+          out.push({
+            src: s,
+            mediaVariant: s.startsWith('data:video/') ? 'video' : 'image',
+          });
+        } else if (item && typeof item === 'object' && 'r2Key' in item) continue;
         else if (item && typeof item === 'object' && 'assetId' in item) {
           const child = assets.find((x) => x.id === item.assetId);
           if (!child) continue;
@@ -3503,7 +3603,11 @@ ${lineSvg}
             out.push(...flattenGroupImages(child, visited));
           } else {
             const img = getAssetDisplayImage(child);
-            if (img) out.push(img);
+            if (img)
+              out.push({
+                src: img,
+                mediaVariant: workflowResultUsesVideoPreview(child) ? 'video' : 'image',
+              });
           }
         }
       }
@@ -4090,13 +4194,13 @@ ${lineSvg}
       if (e.kind !== 'module') continue;
       const p = e.mod;
       // 底部「创作」条面向生图/文生：拆分组件走专用交互，避免队列日志误显 [拆分组件]
-      if (p.disabled || p.id === 'cut_image' || p.id === 'split_component' || p.category === 'generate_3d') continue;
+      if (p.disabled || p.id === 'cut_image' || p.id === 'split_component' || p.category === 'generate_3d' || p.category === 'generate_video') continue;
       if (!allowEngine(p)) continue;
       seen.add(p.id);
       out.push({ value: p.id, label: p.label });
     }
     for (const p of capabilityPresets) {
-      if (p.disabled || seen.has(p.id) || p.id === 'cut_image' || p.id === 'split_component' || p.category === 'generate_3d') continue;
+      if (p.disabled || seen.has(p.id) || p.id === 'cut_image' || p.id === 'split_component' || p.category === 'generate_3d' || p.category === 'generate_video') continue;
       if (!allowEngine(p)) continue;
       seen.add(p.id);
       out.push({ value: p.id, label: p.label });
@@ -4194,7 +4298,7 @@ ${lineSvg}
       const maxRef = quickComposeMaxReferenceImages;
       if (imgsToAdd.length > 0) {
         setQuickComposeImages((prev) => {
-          let next = [...prev];
+          const next = [...prev];
           for (const img of imgsToAdd) {
             const s = img.trim();
             if (!s) continue;
@@ -5463,7 +5567,8 @@ ${lineSvg}
                 {!currentGroupAsset ? (
                   <div className="py-8 text-center text-[9px] text-gray-500">该组已被删除或不存在，请返回</div>
                 ) : showAllImages
-                  ? showAllImages.map((img, idx) => {
+                  ? showAllImages.map((flat, idx) => {
+                      const img = flat.src;
                       const gallKey = `gall:${currentGroupAsset?.id ?? 'x'}:${idx}`;
                       return (
                         <div
@@ -5479,6 +5584,7 @@ ${lineSvg}
                             <WorkflowGridImage
                               fullSrc={img}
                               cacheKey={gallKey}
+                              mediaVariant={flat.mediaVariant}
                               deferThumbnail={!thumbUnlockKeys.has(gallKey)}
                               thumbDecodePriority={thumbHotKeys.has(gallKey) ? 'high' : 'low'}
                               imageFetchPriority={thumbHotKeys.has(gallKey) ? 'high' : 'auto'}
@@ -5779,6 +5885,7 @@ ${lineSvg}
                                         <WorkflowGridImage
                                           fullSrc={childGridPreviewSrcEffective}
                                           cacheKey={childGridCacheKeyEffective}
+                                          mediaVariant={workflowResultUsesVideoPreview(childAsset) ? 'video' : 'image'}
                                           deferThumbnail={!thumbUnlockKeys.has(groupKey)}
                                           thumbDecodePriority={thumbHotKeys.has(groupKey) ? 'high' : 'low'}
                                           imageFetchPriority={thumbHotKeys.has(groupKey) ? 'high' : 'auto'}
@@ -5955,6 +6062,15 @@ ${lineSvg}
                               <WorkflowGridImage
                                 fullSrc={img}
                                 cacheKey={`gstr:${currentGroupAsset?.id ?? 'x'}:${idx}`}
+                                mediaVariant={
+                                  String(img).startsWith('data:video/')
+                                    ? 'video'
+                                    : isAssetRef && childAsset
+                                      ? workflowResultUsesVideoPreview(childAsset)
+                                        ? 'video'
+                                        : 'image'
+                                    : 'image'
+                                }
                                 deferThumbnail={!thumbUnlockKeys.has(groupKey)}
                                 thumbDecodePriority={thumbHotKeys.has(groupKey) ? 'high' : 'low'}
                                 imageFetchPriority={thumbHotKeys.has(groupKey) ? 'high' : 'auto'}
@@ -6405,6 +6521,7 @@ ${lineSvg}
                               <WorkflowGridImage
                                 fullSrc={gridPreviewSrcEffective}
                                 cacheKey={gridPreviewCacheKeyEffective}
+                                mediaVariant={workflowResultUsesVideoPreview(a) ? 'video' : 'image'}
                                 thumbMaxEdge={(a.modelUrls?.length ?? 0) > 0 ? 896 : undefined}
                                 deferThumbnail={!thumbUnlockKeys.has(a.id)}
                                 thumbDecodePriority={thumbHotKeys.has(a.id) ? 'high' : 'low'}

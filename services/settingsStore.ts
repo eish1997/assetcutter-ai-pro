@@ -2,8 +2,8 @@
  * 用户设置的 API 密钥存 localStorage，键名与读写逻辑集中在此；底层经 `clientPersist` 安全访问。
  *
  * **AI 渠道（供应商）唯一真相源**：`getAiProvider()` + 各供应商对应的 Key/BaseURL（见下方 getter）。
- * 全站所有大模型调用必须走 `geminiService.getAI()`（内部**每次**调用都会读当前 `getAiProvider()`），
- * 禁止在业务组件里自行 `new GoogleGenAI`、直连 ToAPIs/VectorEngine，以免与设置里选的渠道不一致。
+ * 业务侧大模型调用须 **`import { … } from './unifiedAiGateway'`**（内部再委托 `geminiService.getAI()`，每次仍读当前 `getAiProvider()`），
+ * 禁止在组件里自行 `new GoogleGenAI`、直连 ToAPIs/VectorEngine，以免与设置里选的渠道不一致。
  * 登录后云端 `user-config.json` 会合并进同一套 localStorage 键，与设置页、工作流密钥弹窗共用。
  */
 
@@ -18,12 +18,15 @@ import {
   writeLocalString,
   writeSessionNonEmptyTrimmedOrRemove,
 } from './clientPersist';
+import { normalizeOpenAiBaseUrl } from './openaiAdapter';
 import { normalizeToapisBaseUrl } from './toapisAdapter';
 
 const STORAGE_KEY_GEMINI = 'ac_gemini_api_key';
 const STORAGE_KEY_AI_PROVIDER = 'ac_ai_provider';
 const STORAGE_KEY_TOAPIS_API_KEY = 'ac_toapis_api_key';
 const STORAGE_KEY_TOAPIS_BASE_URL = 'ac_toapis_base_url';
+const STORAGE_KEY_OPENAI_API_KEY = 'ac_openai_api_key';
+const STORAGE_KEY_OPENAI_BASE_URL = 'ac_openai_base_url';
 const STORAGE_KEY_ANTIGRAVITY_API_KEY = 'ac_antigravity_api_key';
 const STORAGE_KEY_ANTIGRAVITY_BASE_URL = 'ac_antigravity_base_url';
 const STORAGE_KEY_VECTORENGINE_API_KEY = 'ac_vectorengine_api_key';
@@ -33,7 +36,7 @@ const STORAGE_KEY_DIALOG_SKIP_UNDERSTAND = 'ac_dialog_skip_understand';
 const STORAGE_KEY_WORKSPACE_AUTO_SYNC = 'ac_workspace_auto_sync';
 const STORAGE_KEY_DEBUG_CLIENT_LOG_PERSIST = 'ac_debug_client_log_persist';
 
-export type AiProvider = 'trial' | 'gemini' | 'vertex' | 'toapis' | 'antigravity' | 'vectorengine';
+export type AiProvider = 'trial' | 'gemini' | 'vertex' | 'toapis' | 'antigravity' | 'openai' | 'vectorengine';
 
 /** 未选择或本地无记录时的默认供应商（新用户 / 清空存储后） */
 export const DEFAULT_AI_PROVIDER: AiProvider = 'trial';
@@ -55,6 +58,7 @@ export function getAiProvider(): AiProvider {
   if (v === 'vertex') return 'vertex';
   if (v === 'toapis') return 'toapis';
   if (v === 'antigravity') return 'antigravity';
+  if (v === 'openai') return 'openai';
   if (v === 'vectorengine') return 'vectorengine';
   if (v === 'gemini') return 'gemini';
   return DEFAULT_AI_PROVIDER;
@@ -62,6 +66,13 @@ export function getAiProvider(): AiProvider {
 
 export function setAiProvider(value: AiProvider): void {
   writeLocalString(STORAGE_KEY_AI_PROVIDER, value);
+  try {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('ac-ai-provider-changed'));
+    }
+  } catch {
+    /* ignore */
+  }
 }
 
 /** 另一浏览器标签页修改了下列键时，`storage` 事件会触发；用于设置页与顶栏等保持同步 */
@@ -72,6 +83,8 @@ export function isAiSettingsStorageKey(key: string | null): boolean {
     key === STORAGE_KEY_GEMINI ||
     key === STORAGE_KEY_TOAPIS_API_KEY ||
     key === STORAGE_KEY_TOAPIS_BASE_URL ||
+    key === STORAGE_KEY_OPENAI_API_KEY ||
+    key === STORAGE_KEY_OPENAI_BASE_URL ||
     key === STORAGE_KEY_ANTIGRAVITY_API_KEY ||
     key === STORAGE_KEY_ANTIGRAVITY_BASE_URL ||
     key === STORAGE_KEY_VECTORENGINE_API_KEY ||
@@ -100,6 +113,8 @@ export function getAiProviderToolbarLabel(): string {
       return 'ToAPIs';
     case 'antigravity':
       return 'Antigravity';
+    case 'openai':
+      return 'OpenAI';
     case 'vectorengine':
       return 'VectorEngine';
     default:
@@ -123,6 +138,24 @@ export function getToapisBaseUrl(): string {
 
 export function setToapisBaseUrl(value: string | null): void {
   writeLocalNonEmptyTrimmedOrRemove(STORAGE_KEY_TOAPIS_BASE_URL, value);
+}
+
+export function getOpenaiApiKey(): string | null {
+  return readLocalNonEmptyTrimmed(STORAGE_KEY_OPENAI_API_KEY);
+}
+
+export function setOpenaiApiKey(value: string | null): void {
+  writeLocalNonEmptyTrimmedOrRemove(STORAGE_KEY_OPENAI_API_KEY, value);
+}
+
+/** OpenAI API 根路径，须含 /v1，默认 https://api.openai.com/v1 */
+export function getOpenaiBaseUrl(): string {
+  const t = readLocalNonEmptyTrimmed(STORAGE_KEY_OPENAI_BASE_URL) ?? '';
+  return t.trim() ? normalizeOpenAiBaseUrl(t) : normalizeOpenAiBaseUrl('');
+}
+
+export function setOpenaiBaseUrl(value: string | null): void {
+  writeLocalNonEmptyTrimmedOrRemove(STORAGE_KEY_OPENAI_BASE_URL, value);
 }
 
 export function getAntigravityApiKey(): string | null {
@@ -186,6 +219,10 @@ export function getApiKey(): string | undefined {
     const k = getAntigravityApiKey();
     return k ?? undefined;
   }
+  if (getAiProvider() === 'openai') {
+    const k = getOpenaiApiKey();
+    return k ?? undefined;
+  }
   if (getAiProvider() === 'vectorengine') {
     const k = getVectorengineApiKey();
     return k ?? undefined;
@@ -197,9 +234,9 @@ export function getApiKey(): string | undefined {
 
 /**
  * 当前选用的 AI 供应商是否具备调用条件：
- * - ToAPIs / Antigravity / VectorEngine：本机已填 Key
+ * - ToAPIs / Antigravity / OpenAI / VectorEngine：本机已填 Key
  * - Vertex：构建时配置了 VITE_BULK_IMAGE_API 或 VITE_BULK_IMAGE_API_VERTEX（后者优先于前者用于 Vertex 请求；GCP 凭据仅在代理服务器）
- * - Gemini：本机 Key，或构建时配置了 VITE_BULK_IMAGE_API（走后端代理；与 geminiService.getAI 优先级一致）
+ * - Gemini：本机 Key，或构建时配置了 VITE_BULK_IMAGE_API（走后端代理；与 unifiedAiGateway → getAI 优先级一致）
  */
 export function isAiInvocationReady(): boolean {
   const p = getAiProvider();
@@ -225,6 +262,7 @@ export function isAiInvocationReady(): boolean {
   }
   if (p === 'toapis') return Boolean(getToapisApiKey()?.trim());
   if (p === 'antigravity') return Boolean(getAntigravityApiKey()?.trim());
+  if (p === 'openai') return Boolean(getOpenaiApiKey()?.trim());
   if (p === 'vectorengine') return Boolean(getVectorengineApiKey()?.trim());
   try {
     const env = typeof import.meta !== 'undefined' ? (import.meta as { env?: Record<string, string | undefined> }).env : undefined;

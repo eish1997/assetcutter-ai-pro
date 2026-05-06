@@ -23,7 +23,8 @@ function migrateCapabilityCategory(input: CustomAppModule): CapabilityCategory {
     raw === 'text_to_image' ||
     raw === 'image_to_image' ||
     raw === 'image_to_text' ||
-    raw === 'generate_3d'
+    raw === 'generate_3d' ||
+    raw === 'generate_video'
   ) {
     return raw as CapabilityCategory;
   }
@@ -35,7 +36,7 @@ function migrateCapabilityCategory(input: CustomAppModule): CapabilityCategory {
 
 function deriveEngineForCategory(category: CapabilityCategory, input: CustomAppModule, rawCat: string): CapabilityEngine | undefined {
   if (input.companionHostBundle?.dirName?.trim()) return 'builtin';
-  if (category === 'generate_3d') return undefined;
+  if (category === 'generate_3d' || category === 'generate_video') return undefined;
   if (category === 'text_to_text' || category === 'image_to_text') return 'gen_text';
   if (category === 'text_to_image') return 'gen_image';
   if (input.engine === 'gen_image' || input.engine === 'builtin') return input.engine;
@@ -121,6 +122,11 @@ export function normalizeCapabilityPreset(input: CustomAppModule, index: number)
     if (base.generate3D) {
       base.generate3D = normalizeGenerate3DPreset(base.generate3D);
     }
+  } else if (category === 'generate_video') {
+    delete (base as any).engine;
+    delete (base as any).imageGear;
+    delete (base as CustomAppModule & { generate3D?: unknown }).generate3D;
+    delete (base as CustomAppModule & { companionHostBundle?: unknown }).companionHostBundle;
   } else {
     // 非 3D 不应带 generate3D
     delete (base as any).generate3D;
@@ -184,7 +190,7 @@ export function normalizeCapabilityPreset(input: CustomAppModule, index: number)
     delete (base as CustomAppModule & { uniformRows?: number }).uniformRows;
     delete (base as CustomAppModule & { uniformCols?: number }).uniformCols;
   }
-  if (category === 'generate_3d' || base.id === 'cut_image') {
+  if (category === 'generate_3d' || category === 'generate_video' || base.id === 'cut_image') {
     delete (base as CustomAppModule & { companionHostBundle?: unknown }).companionHostBundle;
   } else {
     const rawBundle = (input as CustomAppModule).companionHostBundle;
@@ -204,6 +210,14 @@ export function normalizeCapabilityPreset(input: CustomAppModule, index: number)
 }
 
 const DEFAULT_PRESETS: CustomAppModule[] = [
+  {
+    id: 'generate_video',
+    label: '生成视频',
+    category: 'generate_video',
+    enabled: false,
+    order: 100,
+    instruction: '短视频，平滑镜头运动，电影感光效，高细节。',
+  },
   { id: 'split_component', label: '拆分组件', category: 'image_to_image', engine: 'builtin', enabled: true, order: 0, instruction: '' },
   { id: 'style_transfer', label: '转风格', category: 'image_to_image', engine: 'gen_image', enabled: true, order: 1, instruction: 'Convert this image to a consistent artistic style: stylized digital art, clean lines, modern flat design. Keep the same composition and main subjects.' },
   { id: 'multi_view', label: '生成多视角', category: 'image_to_image', engine: 'gen_image', enabled: true, order: 2, instruction: 'Generate a clean front view of the main object in this image, centered on white or neutral background, orthographic style, suitable as a reference sheet view.' },

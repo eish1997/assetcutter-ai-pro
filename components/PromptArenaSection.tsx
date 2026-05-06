@@ -1,11 +1,21 @@
-import React, { useCallback, useEffect, useState as useLocalState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useState as useLocalState } from 'react';
 import { createPortal } from 'react-dom';
 import { AppMode, ArenaStepEntry, ArenaCurrentStep, ArenaTimelineBlock, DIALOG_IMAGE_GEARS, WinningSnippet } from '../types';
-import { dialogGenerateImage, generateArenaPrompts, optimizeLoserPrompt, generateNewChallenger, getEditPrompt, normalizeApiErrorMessage, DEFAULT_PROMPTS, translateToChinese } from '../services/geminiService';
+import {
+  dialogGenerateImage,
+  generateArenaPrompts,
+  optimizeLoserPrompt,
+  generateNewChallenger,
+  getEditPrompt,
+  normalizeApiErrorMessage,
+  DEFAULT_PROMPTS,
+  translateToChinese,
+} from '../services/unifiedAiGateway';
 import { loadSnippets, addSnippet, removeSnippet } from '../services/snippetStore';
 import { addChoice } from '../services/abChoiceStore';
 import AppIcon from './ui/AppIcon';
 import { SiteImage } from './SiteImage';
+import { useEffectiveImageGearRows } from '../hooks/useEffectiveImageGearRows';
 
 const ARENA_SNAPSHOT_TEXT_LIMIT = 4000;
 function stepId() {
@@ -194,6 +204,16 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
     arenaImageModel,
     setArenaImageModel,
   } = props;
+
+  const { rows: arenaGearRows, coerceGearId: coerceArenaGearId } = useEffectiveImageGearRows();
+  useLayoutEffect(() => {
+    const ok = arenaGearRows.find((r) => r.modelId === arenaImageModel && !r.disabled);
+    if (ok) return;
+    const gid = DIALOG_IMAGE_GEARS.find((x) => x.modelId === arenaImageModel)?.id ?? 'standard';
+    const ng = coerceArenaGearId(gid);
+    const fb = arenaGearRows.find((r) => r.id === ng && !r.disabled);
+    if (fb && fb.modelId !== arenaImageModel) setArenaImageModel(fb.modelId);
+  }, [arenaGearRows, coerceArenaGearId, arenaImageModel, setArenaImageModel]);
 
   const [processExpanded, setProcessExpanded] = useLocalState(true);
   const copyToClipboard = (text: string) => { try { navigator.clipboard.writeText(text); addGlobalLog('提示词擂台', 'info', '已复制到剪贴板', undefined); } catch { addGlobalLog('提示词擂台', 'warn', '复制失败', undefined); } };
@@ -1026,8 +1046,25 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
           </div>
           <div className="mt-2 flex items-center gap-3 flex-wrap">
             <span className="text-[9px] text-gray-500">生图模型：</span>
-            {DIALOG_IMAGE_GEARS.map((g) => (
-              <button key={g.id} type="button" onClick={() => setArenaImageModel(g.modelId)} className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${arenaImageModel === g.modelId ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300' : 'bg-[#1c1c22] border-[#2e2e32] text-gray-500 hover:bg-[#2e2e36]'}`} title={g.modelId}>{g.label}</button>
+            {arenaGearRows.map((g) => (
+              <button
+                key={g.id}
+                type="button"
+                disabled={g.disabled}
+                title={g.disabled ? g.disabledReason : g.modelId}
+                onClick={() => {
+                  if (!g.disabled) setArenaImageModel(g.modelId);
+                }}
+                className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${
+                  arenaImageModel === g.modelId && !g.disabled
+                    ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300'
+                    : g.disabled
+                      ? 'bg-[#1c1c22] border-[#2e2e32] text-gray-600 cursor-not-allowed opacity-60'
+                      : 'bg-[#1c1c22] border-[#2e2e32] text-gray-500 hover:bg-[#2e2e36]'
+                }`}
+              >
+                {g.label}
+              </button>
             ))}
           </div>
           <button type="button" onClick={startArena} disabled={arenaIsGenerating || !arenaUserDescription.trim() || !arenaImage} className="mt-3 px-4 py-2 rounded-xl bg-blue-600 text-[9px] font-black uppercase text-white hover:bg-blue-500 disabled:opacity-50">开始擂台</button>

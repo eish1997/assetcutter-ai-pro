@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { seamRepair, normalizeSeamRepairParams } from '../services/seamRepairService';
-import { withGeminiRequestControl } from '../services/geminiService';
+import { withGeminiRequestControl } from '../services/unifiedAiGateway';
 
 const originalFetch = globalThis.fetch;
 

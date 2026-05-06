@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type MouseEvent as ReactMouseEvent, type RefObject, type SetStateAction } from 'react';
 
-import { detectObjectsInImage } from '../services/geminiService';
+import { detectObjectsInImage } from '../services/unifiedAiGateway';
 import { dialogVersionsForMessage, getDialogVersionImageDataUrl } from '../services/dialogImageHelpers';
 import type { AppTask, BoundingBox, DialogMessage, DialogMessageVersion, DialogTempItem, LibraryItem } from '../types';
 

@@ -92,4 +92,45 @@ describe('workflowAssetAllowedForCapabilityDrop', () => {
     };
     expect(workflowAssetAllowedForCapabilityDrop(imageAsset, hostBundlePreset)).toBe(true);
   });
+
+  const genVideoPreset: CustomAppModule = {
+    id: 'gv',
+    label: '生视频',
+    category: 'generate_video',
+    instruction: '',
+  };
+
+  it('生视频预设允许仅有正文的文字卡', () => {
+    expect(workflowAssetAllowedForCapabilityDrop(makeTextAsset(), genVideoPreset)).toBe(true);
+  });
+
+  it('生视频预设允许仅有图片的图片卡', () => {
+    const imageAsset: WorkflowAsset = {
+      id: 'img-2',
+      assetKind: 'image',
+      original: 'data:image/png;base64,AAA',
+      displayKey: 'original',
+      results: {},
+      resultOrder: [],
+      archived: false,
+      hiddenInGrid: false,
+      createdAt: Date.now(),
+    };
+    expect(workflowAssetAllowedForCapabilityDrop(imageAsset, genVideoPreset)).toBe(true);
+  });
+
+  it('生视频预设拒绝无图无文的空壳资产', () => {
+    const empty: WorkflowAsset = {
+      id: 'empty-1',
+      assetKind: 'image',
+      original: '',
+      displayKey: 'original',
+      results: {},
+      resultOrder: [],
+      archived: false,
+      hiddenInGrid: false,
+      createdAt: Date.now(),
+    };
+    expect(workflowAssetAllowedForCapabilityDrop(empty, genVideoPreset)).toBe(false);
+  });
 });

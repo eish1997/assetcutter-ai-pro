@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { DIALOG_IMAGE_GEARS, SUPPORTED_IMAGE_SIZES } from '../types';
+import { SUPPORTED_IMAGE_SIZES } from '../types';
+import { useEffectiveImageGearRows } from '../hooks/useEffectiveImageGearRows';
 import {
   DT_AC_CAPABILITY_ACTION,
   DT_AC_CAPABILITY_FROM_EDITOR,
@@ -124,6 +125,14 @@ export default function WorkspaceQuickComposeBar({
     top: number;
     transform: string;
   } | null>(null);
+
+  const { rows: effectiveGearRows, coerceGearId } = useEffectiveImageGearRows();
+
+  useLayoutEffect(() => {
+    if (!showGenImageSettings) return;
+    const next = coerceGearId(genSettings.gearId);
+    if (next !== genSettings.gearId) genSettings.onGearId(next);
+  }, [showGenImageSettings, effectiveGearRows, coerceGearId, genSettings]);
 
   const resetToDefaultPosition = useCallback(() => {
     const vw = window.innerWidth;
@@ -417,8 +426,9 @@ export default function WorkspaceQuickComposeBar({
       : '想创作什么？可输入文字或附图';
 
   const gearSummary =
-    DIALOG_IMAGE_GEARS.find((g) => g.id === genSettings.gearId)?.label ??
-    DIALOG_IMAGE_GEARS.find((g) => g.id === 'standard')!.label;
+    effectiveGearRows.find((g) => g.id === genSettings.gearId && !g.disabled)?.label ??
+    effectiveGearRows.find((g) => !g.disabled)?.label ??
+    '标准';
   const aspectSummary =
     genSettings.aspectRatio === 'adaptive' ? '自' : genSettings.aspectRatio || '自';
   const sizeSummary =
@@ -513,12 +523,16 @@ export default function WorkspaceQuickComposeBar({
                   <div className="table-row">
                     <div className="table-cell w-full min-w-0 p-0 align-middle">
                       <div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
-                        {DIALOG_IMAGE_GEARS.map((g) => (
+                        {effectiveGearRows.map((g) => (
                           <button
                             key={g.id}
                             type="button"
-                            onClick={() => genSettings.onGearId(g.id)}
-                            className={chipClsStretch(genSettings.gearId === g.id)}
+                            disabled={g.disabled}
+                            title={g.disabled ? g.disabledReason : undefined}
+                            onClick={() => {
+                              if (!g.disabled) genSettings.onGearId(g.id);
+                            }}
+                            className={chipClsStretch(genSettings.gearId === g.id && !g.disabled)}
                           >
                             {g.label}
                           </button>

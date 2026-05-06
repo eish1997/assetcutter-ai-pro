@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { getSiteAssistantResponseStream } from '../services/geminiService';
+import { getSiteAssistantResponseStream } from '../services/unifiedAiGateway';
 import type { AppTask } from '../types';
 import AppIcon from './ui/AppIcon';
 import { RIGHT_DOCK_ASSISTANT_BOTTOM, RIGHT_DOCK_RIGHT } from './floatingDockConstants';

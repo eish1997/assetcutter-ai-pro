@@ -1,4 +1,5 @@
-import { getDialogTextResponse } from './geminiService';
+import { workflowChat } from './unifiedAiGateway';
+import { DEFAULT_MODEL_TEXT } from './modelRegistry/constants';
 
 type TagBuildInput = {
   actionLabel: string;
@@ -175,6 +176,8 @@ type RefineInput = {
   actionId: string;
   actionLabel: string;
   promptHint?: string;
+  /** 与设置页 `modelText` 一致；未传则用全站默认 registryId */
+  textModelRegistryId?: string;
 };
 
 function normalizeTagCandidate(raw: string): string | null {
@@ -256,10 +259,8 @@ export async function refineWorkflowImageTagsLowCost(input: RefineInput): Promis
     `coarseTags=${JSON.stringify(input.coarseTags)}`,
     `promptHint=${input.promptHint || ''}`,
   ].join('\n');
-  const raw = await getDialogTextResponse(
-    [{ role: 'user', parts: [{ text: prompt }] }],
-    'gemini-3-flash-preview'
-  );
+  const textModel = (input.textModelRegistryId || '').trim() || DEFAULT_MODEL_TEXT;
+  const raw = await workflowChat([{ role: 'user', parts: [{ text: prompt }] }], textModel);
   const parsed = (() => {
     try {
       return JSON.parse(raw || '{}') as { tags?: unknown };

@@ -1,10 +1,17 @@
+/**
+ * 大模型**实现层**（`getAI()`、各 RPC）。UI / hooks / 组件请 **`import unifiedAiGateway`**，
+ * 勿直接依赖本文件，便于供应商与观测统一演进。
+ */
 import { GoogleGenAI, Type } from "@google/genai";
+import { createOpenAiGeminiClient } from "./openaiAdapter";
 import { createToapisGeminiClient } from "./toapisAdapter";
 import { createVectorengineGeminiClient } from "./vectorengineAdapter";
 import {
   getAiProvider,
   getAntigravityApiKey,
   getAntigravityBaseUrl,
+  getOpenaiApiKey,
+  getOpenaiBaseUrl,
   getToapisApiKey,
   getToapisBaseUrl,
   getUserApiKey,
@@ -91,51 +98,21 @@ function effectiveBulkBase(): string {
   return redirectVertexAwayFromUnconfiguredProxy(base);
 }
 
-/**
- * 部分第三方 Gemini 网关（尤其 VectorEngine）对 `gemini-3-flash-preview` 等预览 id 会返回含
- * “valid … user model” 类 4xx；能力与对话里的「理解 / 纯文本」在此回退到更通用的模型 id。
- * 官方 Gemini / Vertex / 本站代理仍用调用方传入的 id。
- */
-export function resolveUpstreamTextModelId(internalModel: string): string {
-  const p = getAiProvider();
-  const m = (internalModel || '').trim();
-  if (!m) return internalModel;
-  const ml = m.toLowerCase();
-  if (p === 'vectorengine') {
-    if (ml.includes('gemini-3-flash-preview')) return 'gemini-2.5-flash';
-    if (ml.includes('gemini-3-pro-preview')) return 'gemini-2.5-pro';
-  }
-  return m;
-}
+import { DEFAULT_MODEL_TEXT } from "./modelRegistry/constants";
+import {
+  resolveUpstreamImageModelId,
+  resolveUpstreamModelId,
+  resolveUpstreamModelIdForProvider,
+  resolveUpstreamTextModelId,
+} from "./modelRegistry/resolve";
 
-/**
- * 部分第三方网关不认站内「预览」生图 id（易 404 Requested entity was not found）：
- * - **VectorEngine**：官方 REST 对部分预览名不可用 → 回退 `gemini-2.5-flash-image`。
- * - **Antigravity Tools**：反代侧模型表与站内 id 不一致；`passthroughModels` 下须把挡位 id 映射到控制台「模型 ID」
- *  （与 Antigravity「API 反代」页示例一致，如 `gemini-3.1-flash-image`、`gemini-3-pro-image`）。
- * - **ToAPIs** 在 `toapisAdapter` 内单独映射，此处**不再**改写，避免双重映射。
- */
-export function resolveUpstreamImageModelId(internalModel: string): string {
-  const p = getAiProvider();
-  const m = (internalModel || '').trim();
-  if (!m) return internalModel;
-  const ml = m.toLowerCase();
-  if (p === 'antigravity') {
-    if (ml.includes('gemini-3.1-flash-image-preview')) {
-      return 'gemini-3.1-flash-image';
-    }
-    if (ml.includes('gemini-3-pro-image-preview')) {
-      return 'gemini-3-pro-image';
-    }
-    return m;
-  }
-  if (p === 'vectorengine') {
-    if (ml.includes('gemini-3.1-flash-image-preview') || ml.includes('gemini-3-pro-image-preview')) {
-      return 'gemini-2.5-flash-image';
-    }
-  }
-  return m;
-}
+export {
+  resolveUpstreamImageModelId,
+  resolveUpstreamModelId,
+  resolveUpstreamModelIdForProvider,
+  resolveUpstreamTextModelId,
+};
+export type { ModelResolveRole } from "./modelRegistry/resolve";
 
 /** 为 true 时恢复旧行为：本机 Gemini Key 优先于 VITE_BULK_IMAGE_API（浏览器直连 Google）。默认 false：有代理地址则优先走后端代理，与生产环境一致、避免本机 Key 直连触发地区限制。 */
 function preferBrowserGeminiKeyFirst(): boolean {
@@ -152,12 +129,12 @@ function preferBrowserGeminiKeyFirst(): boolean {
 
 /**
  * `dialogGenerateImage` 专用：是否走后端 `VITE_BULK_IMAGE_API` 的异步批量队列。
- * ToAPIs / Antigravity / VectorEngine 的生图必须在浏览器侧走各自 `getAI()` 适配层；若仅判断 `BULK_BASE` 为真
+ * ToAPIs / Antigravity / OpenAI / VectorEngine 的生图必须在浏览器侧走各自 `getAI()` 适配层；若仅判断 `BULK_BASE` 为真
  * 就入队，会误把请求发到 gemini-proxy（用户表现为「文字走反代正常、生图完全不走 Antigravity」）。
  */
 function shouldUseBulkImageBatchQueue(): boolean {
   const p = getAiProvider();
-  if (p === "toapis" || p === "antigravity" || p === "vectorengine") return false;
+  if (p === "toapis" || p === "antigravity" || p === "openai" || p === "vectorengine") return false;
   if (p === "trial") return Boolean(BULK_BASE);
   if (p === "vertex") return Boolean(effectiveBulkBase());
   return false;
@@ -572,6 +549,15 @@ const getAI = (): GeminiClientLike => {
       );
     }
     return createVectorengineGeminiClient(getVectorengineBaseUrl(), k) as unknown as GeminiClientLike;
+  }
+  if (provider === "openai") {
+    const k = getOpenaiApiKey();
+    if (!k) {
+      throw new Error(
+        "当前供应商为 OpenAI：请在设置中填写 OpenAI API Key（可选自定义 Base URL，默认 https://api.openai.com/v1），或改选其它供应商。"
+      );
+    }
+    return createOpenAiGeminiClient(getOpenaiBaseUrl(), k) as unknown as GeminiClientLike;
   }
 
   const proxyClient: GeminiClientLike = {
@@ -1232,7 +1218,7 @@ function parseBoundingBoxJsonArrayFromModelText(raw: string): unknown[] {
 }
 
 /** 单图物体检测，返回边界框（归一化 0-1000） */
-export async function detectObjectsInImage(base64Image: string, model = 'gemini-3-flash-preview', customPrompt?: string, options?: GeminiRequestOptions) {
+export async function detectObjectsInImage(base64Image: string, model = DEFAULT_MODEL_TEXT, customPrompt?: string, options?: GeminiRequestOptions) {
   return callWithRetry(async (signal) => {
     const ai = getAI();
     const prompt = customPrompt || DEFAULT_PROMPTS.detect_single;
@@ -1284,7 +1270,7 @@ export async function detectObjectsInImage(base64Image: string, model = 'gemini-
  */
 export async function describeImageSubject(
   base64Image: string,
-  model = 'gemini-3-flash-preview',
+  model = DEFAULT_MODEL_TEXT,
   customPrompt?: string,
   options?: GeminiRequestOptions
 ): Promise<string> {
@@ -1354,7 +1340,7 @@ export async function processTexture(base64Image, type: 'pattern' | 'tileable' |
 export async function understandImageEditIntent(
   imageBase64: string | string[] | null,
   userPrompt: string,
-  model = 'gemini-3-flash-preview',
+  model = DEFAULT_MODEL_TEXT,
   customPrompt?: string,
   options?: GeminiRequestOptions
 ): Promise<{ instruction: string; summary?: string; shouldGenerateImage?: boolean }> {
@@ -1656,7 +1642,7 @@ export async function dialogGenerateImageMulti(
  */
 export async function generateSessionTitle(
   userText: string,
-  model = 'gemini-3-flash-preview',
+  model = DEFAULT_MODEL_TEXT,
   customPrompt?: string,
   imageBase64?: string | null,
   options?: GeminiRequestOptions
@@ -1687,7 +1673,7 @@ export async function generateSessionTitle(
 /** 纯文字对话：根据历史消息 + 新用户消息，返回助手文本回复 */
 export async function getDialogTextResponse(
   contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> }>,
-  model = 'gemini-3-flash-preview',
+  model = DEFAULT_MODEL_TEXT,
   options?: GeminiRequestOptions
 ): Promise<string> {
   const resolvedModel = resolveUpstreamTextModelId(model);
@@ -1729,7 +1715,7 @@ const SITE_ASSISTANT_SYSTEM = `You are the in-app assistant for AssetCutter AI P
 export async function getSiteAssistantResponse(
   userMessage: string,
   history: Array<{ role: 'user' | 'model'; text: string }> = [],
-  model = 'gemini-3-flash-preview',
+  model = DEFAULT_MODEL_TEXT,
   options?: GeminiRequestOptions
 ): Promise<string> {
   const resolvedModel = resolveUpstreamTextModelId(model);
@@ -1755,7 +1741,7 @@ export async function getSiteAssistantResponseStream(
   userMessage: string,
   history: Array<{ role: 'user' | 'model'; text: string }>,
   onChunk: (fullText: string) => void,
-  model = 'gemini-3-flash-preview',
+  model = DEFAULT_MODEL_TEXT,
   options?: GeminiRequestOptions
 ): Promise<string> {
   /** 走后端代理时没有 generateContentStream，统一走非流式（与 !apiKey && BULK 时行为一致） */
@@ -1790,7 +1776,7 @@ export async function getSiteAssistantResponseStream(
 /** 擂台 V2：根据自然语言描述生成两条生图用英文提示词 A/B，并返回推理过程。见 docs/PROMPT_OPTIMIZATION_AB_DESIGN.md §9 */
 export async function generateArenaABPrompts(
   userDescription: string,
-  model = 'gemini-3-flash-preview',
+  model = DEFAULT_MODEL_TEXT,
   options?: GeminiRequestOptions
 ): Promise<{ reasoning?: string; promptA: string; promptB: string; rawResponse?: string }> {
   const resolvedModel = resolveUpstreamTextModelId(model);
@@ -1835,7 +1821,7 @@ export async function optimizeLoserPrompt(
   winnerPrompt: string,
   loserPrompt: string,
   userDescription?: string,
-  model = 'gemini-3-flash-preview',
+  model = DEFAULT_MODEL_TEXT,
   allPreviousPrompts?: string[],
   userReportedGaps?: string[],
   winnerStrength?: string,
@@ -1893,7 +1879,7 @@ export async function optimizeLoserPrompt(
 export async function generateArenaPrompts(
   userDescription: string,
   count: 2 | 3 | 4,
-  model = 'gemini-3-flash-preview',
+  model = DEFAULT_MODEL_TEXT,
   options?: GeminiRequestOptions
 ): Promise<{ reasoning?: string; prompts: string[]; rawResponse?: string }> {
   if (count === 2) {
@@ -1946,7 +1932,7 @@ export async function generateNewChallenger(
   userIntent: string,
   championPrompt: string,
   allPreviousPrompts: string[],
-  model = 'gemini-3-flash-preview',
+  model = DEFAULT_MODEL_TEXT,
   options?: GeminiRequestOptions
 ): Promise<{ reasoning?: string; prompt: string; rawResponse?: string }> {
   const raw = await callWithRetry(async (signal) => {
@@ -1989,7 +1975,7 @@ export async function generateNewChallenger(
 /** 结构化复现：用 LLM 将生图提示词解析为主体/场景/风格/修饰。见 PROMPT_SCORING_DESIGN §6.1 */
 export async function parsePromptStructured(
   prompt: string,
-  model = 'gemini-3-flash-preview',
+  model = DEFAULT_MODEL_TEXT,
   options?: GeminiRequestOptions
 ): Promise<{ subject: string; scene: string; style: string; modifiers: string }> {
   const resolvedModel = resolveUpstreamTextModelId(model);
@@ -2029,7 +2015,7 @@ export async function parsePromptStructured(
 /** 将英文/混合文本翻译为简体中文（保留原有结构与项目符号） */
 export async function translateToChinese(
   text: string,
-  model = 'gemini-3-flash-preview',
+  model = DEFAULT_MODEL_TEXT,
   options?: GeminiRequestOptions
 ): Promise<string> {
   const source = (text || '').trim();

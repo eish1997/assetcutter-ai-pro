@@ -92,7 +92,6 @@ export function useWorkflowMarquee({
       const width = Math.abs(d.endX - d.startX);
       const height = Math.abs(d.endY - d.startY);
       const isClick = width < 5 && height < 5;
-      const pane = marqueePaneRef.current;
       const inGroup = !!groupFilterIdRef.current;
       const altKey = e.altKey;
 

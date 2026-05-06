@@ -2,21 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import type { AppTask } from '../types';
 import {
-  convert3DFormat,
   getTencentCredsFromEnv,
   isUnsafeTencentBrowserModeEnabled,
-  startPartJob,
-  startProfileTo3DJob,
-  startReduceFaceJob,
-  startTencent3DProJob,
-  startTencent3DRapidJob,
-  startTextureTo3DJob,
-  startUVJob,
   type File3D,
-  type Submit3DProInput,
-  type Submit3DRapidInput,
   type TencentCredentials,
-} from '../services/tencentService';
+} from '../services/unifiedAiGateway';
+import { runTencentGenerate3dQueueItem, type TencentGenerate3dQueueKind } from '../services/generate3d';
 
 export interface Temp3DItem {
   id: string;
@@ -241,122 +232,78 @@ export function useGenerate3DManager({
       const shouldSkipCancelledJob = () => consumeCancelledGenerate3DQueueJob(cancelledJobIdsRef.current, jobId);
       try {
         if (shouldSkipCancelledJob()) return;
-        if (pending.type === 'pro') {
-          const input = pending.input as Submit3DProInput;
-          onLog('info', '[队列] 开始专业版任务', { jobId });
-          const files = await startTencent3DProJob(
-            input,
-            creds3D,
-            onProgress3D(taskId),
-            (msg, detail) => onLog('info', msg, detail),
-            { signal: controller.signal }
-          );
-          if (shouldSkipCancelledJob()) return;
-          const label = pending.label || (input.prompt || '').trim().slice(0, 20) || (input.imageBase64 ? '图生3D' : '3D');
-          complete3DJobWithFiles(jobId, taskId, files, label, 'pro');
-          return;
-        }
-        if (pending.type === 'rapid') {
-          const input = pending.input as Submit3DRapidInput;
-          onLog('info', '[队列] 开始极速版任务', { jobId });
-          const files = await startTencent3DRapidJob(
-            input,
-            creds3D,
-            onProgress3D(taskId),
-            (msg, detail) => onLog('info', msg, detail),
-            { signal: controller.signal }
-          );
-          if (shouldSkipCancelledJob()) return;
-          const label = pending.label || (input.prompt || '').trim().slice(0, 20) || '极速3D';
-          complete3DJobWithFiles(jobId, taskId, files, label, 'rapid');
-          return;
-        }
-        if (pending.type === 'convert') {
+
+        const kind = pending.type as TencentGenerate3dQueueKind;
+        const logLabel: Record<string, string> = {
+          pro: '[队列] 开始专业版任务',
+          rapid: '[队列] 开始极速版任务',
+          convert: '[队列] 开始格式转换',
+          topology: '[队列] 开始智能拓扑',
+          texture: '[队列] 开始纹理生成',
+          component: '[队列] 开始组件生成',
+          uv: '[队列] 开始 UV 展开',
+          profile: '[队列] 开始 3D 人物生成',
+        };
+        onLog('info', logLabel[kind] || `[队列] 开始 ${kind}`, { jobId });
+
+        const result = await runTencentGenerate3dQueueItem({
+          jobType: kind,
+          input: pending.input,
+          creds: creds3D,
+          signal: controller.signal,
+          onTaskProgress: onProgress3D(taskId),
+          onLog,
+        });
+        if (shouldSkipCancelledJob()) return;
+
+        if (result.kind === 'convert') {
           const input = pending.input as { fileUrl: string; format: string };
-          onLog('info', '[队列] 开始格式转换', { jobId });
-          const { resultUrl } = await convert3DFormat(input, creds3D, { signal: controller.signal });
-          if (shouldSkipCancelledJob()) return;
           const newItem: Temp3DItem = {
             id: jobId,
             label: pending.label || `转换 ${input.format}`,
-            files: [{ Type: input.format, Url: resultUrl }],
+            files: [{ Type: input.format, Url: result.resultUrl }],
             timestamp: Date.now(),
             source: 'convert',
           };
           setTemp3DLibrary((prev) => [...prev, newItem]);
           setSelectedTemp3DId(jobId);
-          markQueueItem(jobId, { status: 'done', result: { resultUrl } });
+          markQueueItem(jobId, { status: 'done', result: { resultUrl: result.resultUrl } });
           if (taskId) updateTask(taskId, { status: 'SUCCESS', progress: 100 });
           onLog('info', '[队列] 格式转换完成');
           return;
         }
-        if (pending.type === 'topology') {
-          const input = pending.input as { fileUrl: string };
-          onLog('info', '[队列] 开始智能拓扑', { jobId });
-          const files = await startReduceFaceJob(
-            { fileUrl: input.fileUrl },
-            creds3D,
-            onProgress3D(taskId),
-            (msg, detail) => onLog('info', msg, detail),
-            { signal: controller.signal }
-          );
-          if (shouldSkipCancelledJob()) return;
+
+        const files = result.files;
+        if (kind === 'pro') {
+          const input = pending.input as { prompt?: string; imageBase64?: string };
+          const label =
+            pending.label || (input.prompt || '').trim().slice(0, 20) || (input.imageBase64 ? '图生3D' : '3D');
+          complete3DJobWithFiles(jobId, taskId, files, label, 'pro');
+          return;
+        }
+        if (kind === 'rapid') {
+          const input = pending.input as { prompt?: string };
+          const label = pending.label || (input.prompt || '').trim().slice(0, 20) || '极速3D';
+          complete3DJobWithFiles(jobId, taskId, files, label, 'rapid');
+          return;
+        }
+        if (kind === 'topology') {
           complete3DJobWithFiles(jobId, taskId, files, pending.label || '智能拓扑', 'topology');
           return;
         }
-        if (pending.type === 'texture') {
-          const input = pending.input as { modelUrl: string; prompt: string; imageBase64?: string };
-          onLog('info', '[队列] 开始纹理生成', { jobId });
-          const files = await startTextureTo3DJob(
-            { modelUrl: input.modelUrl, prompt: input.prompt?.trim() || undefined, imageBase64: input.imageBase64 },
-            creds3D,
-            onProgress3D(taskId),
-            (msg, detail) => onLog('info', msg, detail),
-            { signal: controller.signal }
-          );
-          if (shouldSkipCancelledJob()) return;
+        if (kind === 'texture') {
           complete3DJobWithFiles(jobId, taskId, files, pending.label || '纹理生成', 'texture');
           return;
         }
-        if (pending.type === 'component') {
-          const input = pending.input as { fileUrl: string };
-          onLog('info', '[队列] 开始组件生成', { jobId });
-          const files = await startPartJob(
-            { fileUrl: input.fileUrl },
-            creds3D,
-            onProgress3D(taskId),
-            (msg, detail) => onLog('info', msg, detail),
-            { signal: controller.signal }
-          );
-          if (shouldSkipCancelledJob()) return;
+        if (kind === 'component') {
           complete3DJobWithFiles(jobId, taskId, files, pending.label || '组件生成', 'component');
           return;
         }
-        if (pending.type === 'uv') {
-          const input = pending.input as { fileUrl: string };
-          onLog('info', '[队列] 开始 UV 展开', { jobId });
-          const files = await startUVJob(
-            input.fileUrl,
-            creds3D,
-            onProgress3D(taskId),
-            (msg, detail) => onLog('info', msg, detail),
-            { signal: controller.signal }
-          );
-          if (shouldSkipCancelledJob()) return;
+        if (kind === 'uv') {
           complete3DJobWithFiles(jobId, taskId, files, pending.label || 'UV展开', 'uv');
           return;
         }
-        if (pending.type === 'profile') {
-          const input = pending.input as { imageBase64: string };
-          onLog('info', '[队列] 开始 3D 人物生成', { jobId });
-          const files = await startProfileTo3DJob(
-            { imageBase64: input.imageBase64 },
-            creds3D,
-            onProgress3D(taskId),
-            (msg, detail) => onLog('info', msg, detail),
-            { signal: controller.signal }
-          );
-          if (shouldSkipCancelledJob()) return;
+        if (kind === 'profile') {
           complete3DJobWithFiles(jobId, taskId, files, pending.label || '3D人物', 'profile');
           return;
         }

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import TextureSlot from './TextureSlot';
 import { SiteImage } from './SiteImage';
-import { generatePBRTexture } from '../services/geminiService';
+import { generatePBRTexture } from '../services/unifiedAiGateway';
 
 const PBR_TEXTURE_IDS = ['ao', 'curvature', 'normal', 'position'] as const;
 const PBR_TEXTURE_LABELS: Record<string, string> = {

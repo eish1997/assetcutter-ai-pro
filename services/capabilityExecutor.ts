@@ -8,16 +8,20 @@ import type {
 import { DIALOG_IMAGE_GEARS, maxReferenceImagesForImageGear } from '../types';
 import type { VgpGenStepCapture } from '../types/vgp';
 import {
-  detectObjectsInImage,
-  understandImageEditIntent,
-  dialogGenerateImage,
-  dialogGenerateImageMulti,
-  getDialogTextResponse,
   CAPABILITY_UNDERSTAND_RETRY_OPTIONS,
+  DEFAULT_PROMPTS,
+  detectObjectsInImage,
   normalizeApiErrorMessage,
-  resolveUpstreamImageModelId,
+  workflowChat,
+  workflowGenerateImage,
+  workflowGenerateImageMultiRefs,
+  workflowGenerateVideo,
+  workflowUnderstandForImageGen,
+  WorkflowVideoNotAvailableError,
   type GeminiImageBatchGroupOptions,
-} from './geminiService';
+} from './unifiedAiGateway';
+import { DEFAULT_MODEL_IMAGE, DEFAULT_MODEL_TEXT } from './modelRegistry/constants';
+import { resolveUpstreamImageModelId } from './modelRegistry/resolve';
 import {
   submitCompanionHostBundleExecJob,
   submitCompanionHostBundleProbeJob,
@@ -30,6 +34,11 @@ export type CapabilityRunProgressMeta = {
 };
 
 export type CapabilityExecuteContext = {
+  /**
+   * 理解 / gen_text / 物体检测等使用的文本侧 **registryId**（与设置页 `SystemConfig.modelText` 一致）；
+   * 未传则回退 `DEFAULT_MODEL_TEXT`。
+   */
+  textModelRegistryId?: string;
   /** 用于日志输出（可选） */
   onLog?: (level: 'info' | 'warn' | 'error', message: string, detail?: string) => void;
   /** 能力集合画布等：单步进度文案（可选）；meta.nodeId 归因到节点 */
@@ -63,6 +72,15 @@ export type CapabilityExecuteResult =
       /** 各节点在当次执行中的图像输出（画布测试预览用） */
       nodeImageOutputs?: Record<string, string>;
     }
+  | {
+      ok: true;
+      kind: 'video';
+      videoUrl: string;
+      mimeType?: string;
+      durationMs: number;
+      vgpSteps?: VgpGenStepCapture[];
+      nodeImageOutputs?: Record<string, string>;
+    }
   | { ok: true; kind: 'text'; text: string; durationMs: number }
   | {
       ok: false;
@@ -74,6 +92,11 @@ export type CapabilityExecuteResult =
       /** 失败所在画布节点（若有） */
       failedNodeId?: string;
     };
+
+function effectiveCapabilityTextModel(ctx: CapabilityExecuteContext): string {
+  const t = (ctx.textModelRegistryId || '').trim();
+  return t || DEFAULT_MODEL_TEXT;
+}
 
 function parseInlineForLlm(input: string): { mimeType: string; data: string } {
   const raw = (input || '').trim();
@@ -129,7 +152,7 @@ export function getCapabilityEngine(preset: CustomAppModule): 'gen_image' | 'gen
     if (preset.id === 'split_component' || preset.id === 'cut_image') return 'builtin';
     return 'gen_image';
   }
-  if (cat === 'generate_3d') return 'builtin';
+  if (cat === 'generate_3d' || cat === 'generate_video') return 'builtin';
   if (cat === 'image_gen' || (cat as string) === 'image_gen') return 'gen_image';
   if (cat === 'text_llm' || (cat as string) === 'text_llm') return 'gen_text';
   if (cat === 'image_process' || (cat as string) === 'image_process') return 'builtin';
@@ -143,7 +166,7 @@ export function capabilityUsesGenImageEngine(preset: CustomAppModule): boolean {
 
 export function resolveImageModelId(gear?: DialogImageGear): string {
   const g = gear || 'standard';
-  const internal = DIALOG_IMAGE_GEARS.find((x) => x.id === g)?.modelId || 'gemini-3.1-flash-image-preview';
+  const internal = DIALOG_IMAGE_GEARS.find((x) => x.id === g)?.modelId || DEFAULT_MODEL_IMAGE;
   return resolveUpstreamImageModelId(internal);
 }
 
@@ -162,10 +185,10 @@ async function resolveCapabilityPrompt(
     return presetPrompt;
   }
   ctx.onLog?.('info', `[${preset.label || preset.id}] 理解预设提示词中…`, undefined);
-  const { instruction } = await understandImageEditIntent(
+  const { instruction } = await workflowUnderstandForImageGen(
     inputImageBase64,
     presetPrompt,
-    'gemini-3-flash-preview',
+    effectiveCapabilityTextModel(ctx),
     undefined,
     CAPABILITY_UNDERSTAND_RETRY_OPTIONS
   );
@@ -213,7 +236,7 @@ async function resolveTextOnlyImagePrompt(
     return merged || null;
   }
   ctx.onLog?.('info', `[${preset.label || preset.id}] 整理文生图提示词中…`, undefined);
-  const fused = await getDialogTextResponse(
+  const fused = await workflowChat(
     [
       {
         role: 'user',
@@ -224,13 +247,92 @@ async function resolveTextOnlyImagePrompt(
         ],
       },
     ],
-    'gemini-3-flash-preview'
+    effectiveCapabilityTextModel(ctx)
   );
   const out = (fused || '').trim();
   return out.length > 0 ? out : null;
 }
 
 const GEN_TEXT_VISION_MAX_IMAGES = 10;
+const WORKFLOW_VIDEO_MAX_REF_IMAGES = 8;
+
+async function executeGenerateVideoPath(
+  preset: CustomAppModule,
+  inputImageBase64: string,
+  ctx: CapabilityExecuteContext,
+  opts?: ExecuteCapabilityOptions
+): Promise<CapabilityExecuteResult> {
+  const start = Date.now();
+  const actionLabel = preset.label || preset.id;
+  const extra = opts?.inputImages?.filter((s) => hasUsableImageBase64(s)) ?? [];
+  const primary = hasUsableImageBase64(inputImageBase64) ? inputImageBase64 : '';
+  const refs: string[] = [];
+  if (primary) refs.push(primary);
+  for (const s of extra) {
+    if (refs.length >= WORKFLOW_VIDEO_MAX_REF_IMAGES) break;
+    if (!refs.includes(s)) refs.push(s);
+  }
+  const userT = (opts?.inputText || '').trim();
+  const hasImg = refs.length > 0;
+  const presetInstr = (preset.instruction || '').trim();
+
+  if (!hasImg && !userT && !presetInstr) {
+    return { ok: false, kind: 'none', error: '生视频需要文字描述或参考图', durationMs: Date.now() - start };
+  }
+
+  let promptFinal: string;
+  if (hasImg) {
+    ctx.onLog?.('info', `[${actionLabel}] 整理生视频提示词…`, undefined);
+    emitCapabilityRunProgress(ctx, `${actionLabel}：理解画面与预设中…`);
+    const understood = await resolveCapabilityPrompt(preset, refs[0]!, ctx);
+    const base = (understood ?? presetInstr).trim();
+    promptFinal = userT ? `${base}\n\n【用户补充】\n${userT}` : base;
+  } else if (preset.skipUnderstand === true) {
+    promptFinal = [presetInstr, userT].filter(Boolean).join('\n\n').trim();
+  } else {
+    ctx.onLog?.('info', `[${actionLabel}] 整理生视频提示词…`, undefined);
+    const fused = await workflowChat(
+      [
+        {
+          role: 'user',
+          parts: [
+            {
+              text: `你是视频生成提示词助手。将「预设」与「用户文字」融合为一段简洁的**视频画面与镜头运动**描述（中文或英文均可，只输出正文）。\n\n【预设】\n${presetInstr || '(无)'}\n\n【用户文字】\n${userT || '(无)'}`,
+            },
+          ],
+        },
+      ],
+      effectiveCapabilityTextModel(ctx)
+    );
+    promptFinal = (fused || '').trim();
+  }
+
+  if (!promptFinal) {
+    return { ok: false, kind: 'none', error: '未能生成有效的生视频提示词', durationMs: Date.now() - start };
+  }
+
+  ctx.onLog?.('info', `[${actionLabel}] 请求生视频（HTTP 桥）…`, undefined);
+  emitCapabilityRunProgress(ctx, `${actionLabel}：生视频中（依赖后端）…`);
+
+  try {
+    const out = await workflowGenerateVideo({
+      prompt: promptFinal,
+      referenceImages: hasImg ? refs : undefined,
+    });
+    return {
+      ok: true,
+      kind: 'video',
+      videoUrl: out.videoUrl,
+      mimeType: out.mimeType,
+      durationMs: Date.now() - start,
+    };
+  } catch (e) {
+    if (e instanceof WorkflowVideoNotAvailableError) {
+      return { ok: false, kind: 'none', error: e.message, durationMs: Date.now() - start };
+    }
+    throw e;
+  }
+}
 
 async function executeGenTextPath(
   preset: CustomAppModule,
@@ -292,7 +394,7 @@ async function executeGenTextPath(
     .join('\n\n');
   parts.push({ text: body });
   try {
-    const text = await getDialogTextResponse([{ role: 'user', parts }], 'gemini-3-flash-preview');
+    const text = await workflowChat([{ role: 'user', parts }], effectiveCapabilityTextModel(ctx));
     const out = (text || '').trim();
     if (!out) return { ok: false, kind: 'none', error: '文字模型未返回内容', durationMs: Date.now() - start };
     return { ok: true, kind: 'text', text: out, durationMs: Date.now() - start };
@@ -372,6 +474,10 @@ export async function executeCapability(
       return { ok: false, kind: 'none', error: '生成3D 请在工作流中拖图到能力框提交', durationMs: Date.now() - start };
     }
 
+    if (preset.category === 'generate_video') {
+      return executeGenerateVideoPath(preset, inputImageBase64, ctx, opts);
+    }
+
     if (preset.companionHostBundle?.dirName?.trim()) {
       return executeCompanionHostBundleCapability(preset, ctx, start);
     }
@@ -395,7 +501,11 @@ export async function executeCapability(
     if (preset.id === 'split_component') {
       ctx.onLog?.('info', `[${actionLabel}] 识别物体中…`, undefined);
       emitCapabilityRunProgress(ctx, `${actionLabel}：检测物体中（视觉模型，可能需数十秒）…`);
-      const boxes = await detectObjectsInImage(inputImageBase64);
+      const boxes = await detectObjectsInImage(
+        inputImageBase64,
+        effectiveCapabilityTextModel(ctx),
+        DEFAULT_PROMPTS.detect_blocks
+      );
       if (!boxes.length) {
         return { ok: false, kind: 'none', error: '未识别到区域', durationMs: Date.now() - start };
       }
@@ -432,7 +542,7 @@ export async function executeCapability(
         emitCapabilityRunProgress(ctx, `${actionLabel}：生图中…`);
         const modelId = resolveImageModelId(preset.imageGear);
         const imageOptions = (preset.imageAspectRatio || preset.imageSize) ? { aspectRatio: preset.imageAspectRatio, imageSize: preset.imageSize } : undefined;
-        const result = await dialogGenerateImage(cropped, prompt, modelId, imageOptions, undefined, undefined, {
+        const result = await workflowGenerateImage(cropped, prompt, modelId, imageOptions, undefined, undefined, {
           ...(opts?.batchGroupKey ? { batchGroupKey: opts.batchGroupKey } : {}),
           ...(opts?.batchGroupExpected ? { batchGroupExpected: opts.batchGroupExpected } : {}),
         });
@@ -495,7 +605,7 @@ export async function executeCapability(
         preset.imageAspectRatio || preset.imageSize
           ? { aspectRatio: preset.imageAspectRatio, imageSize: preset.imageSize }
           : undefined;
-      const result = await dialogGenerateImage(null, prompt, modelId, imageOptions, undefined, undefined, {
+      const result = await workflowGenerateImage(null, prompt, modelId, imageOptions, undefined, undefined, {
         ...(opts?.batchGroupKey ? { batchGroupKey: opts.batchGroupKey } : {}),
         ...(opts?.batchGroupExpected ? { batchGroupExpected: opts.batchGroupExpected } : {}),
       });
@@ -544,9 +654,9 @@ export async function executeCapability(
     if (refs.length >= 2) {
       ctx.onLog?.('info', `[${actionLabel}] 多参考图生图中（${refs.length} 张）…`, undefined);
       emitCapabilityRunProgress(ctx, `${actionLabel}：多参考图生图中（${refs.length} 张）…`);
-      result = await dialogGenerateImageMulti(refs, augmented, modelId, imageOptions);
+      result = await workflowGenerateImageMultiRefs(refs, augmented, modelId, imageOptions);
     } else {
-      result = await dialogGenerateImage(refs[0]!, augmented, modelId, imageOptions, undefined, undefined, batchOpts);
+      result = await workflowGenerateImage(refs[0]!, augmented, modelId, imageOptions, undefined, undefined, batchOpts);
     }
     return {
       ok: true,
@@ -785,7 +895,7 @@ export async function executeCapabilitySet(
           const modelId = resolveImageModelId(preset.imageGear);
           const imageOptions = (preset.imageAspectRatio || preset.imageSize) ? { aspectRatio: preset.imageAspectRatio, imageSize: preset.imageSize } : undefined;
           try {
-            const result = await dialogGenerateImageMulti(images, instruction, modelId, imageOptions);
+            const result = await workflowGenerateImageMultiRefs(images, instruction, modelId, imageOptions);
             outputs.set(n.id, result);
             recordNodeImage(n.id, result);
             lastImage = result;
@@ -837,6 +947,14 @@ export async function executeCapabilitySet(
             done.add(n.id);
             progressed = true;
             continue;
+          }
+          if (out.kind === 'video') {
+            return capabilitySetFail(
+              `[${n.data.label}] 能力集合暂不支持生视频节点（请在工作流主区对单张卡片执行）`,
+              start,
+              nodeImageOutputs,
+              n.id
+            );
           }
           if (out.kind !== 'image') {
             return capabilitySetFail(

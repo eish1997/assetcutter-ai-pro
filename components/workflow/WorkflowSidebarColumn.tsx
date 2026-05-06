@@ -11,11 +11,8 @@ import React, {
 } from 'react';
 import { getRandomGroupCodeName } from '../../data/groupCodeNames';
 import { attachInitialVgpToNewAsset } from '../../services/vgp/vgpStore';
-import {
-  DIALOG_IMAGE_GEARS,
-  SUPPORTED_ASPECT_RATIOS,
-  SUPPORTED_IMAGE_SIZES,
-} from '../../types';
+import { DIALOG_IMAGE_GEARS, SUPPORTED_ASPECT_RATIOS, SUPPORTED_IMAGE_SIZES } from '../../types';
+import { useEffectiveImageGearRows } from '../../hooks/useEffectiveImageGearRows';
 import type { CustomAppModule, CapabilitySet, WorkflowAsset } from '../../types';
 import { capabilityUsesGenImageEngine } from '../../services/capabilityExecutor';
 import { CustomDropdown } from '../ui/CustomDropdown';
@@ -134,6 +131,9 @@ function moduleSupportsDraggedPayload(
   if (mod.category === 'image_to_image' || mod.category === 'image_to_text' || mod.category === 'generate_3d') {
     return payload.hasImage;
   }
+  if (mod.category === 'generate_video') {
+    return payload.hasText || payload.hasImage;
+  }
   return false;
 }
 
@@ -197,6 +197,12 @@ function getSidebarCapabilityTone(key: SidebarCapabilityColorKey): {
         idleBorderClass: 'border-[#6f5b49]',
         hoverBorderClass: 'hover:border-[#846b55]',
         dividerBorderClass: 'border-[#645340]',
+      };
+    case 'generate_video':
+      return {
+        idleBorderClass: 'border-[#4a5f6f]',
+        hoverBorderClass: 'hover:border-[#5a7390]',
+        dividerBorderClass: 'border-[#425566]',
       };
     case 'set':
       return {
@@ -354,6 +360,7 @@ export function WorkflowSidebarColumn({
   linkedComposeSearchQuery = '',
   onLinkHoverPresetIds,
 }: WorkflowSidebarColumnProps) {
+  const { rows: effectiveGearRows } = useEffectiveImageGearRows();
   const [groupOverrideByCategory, setGroupOverrideByCategory] = useState<
     Record<
       string,
@@ -1326,7 +1333,15 @@ export function WorkflowSidebarColumn({
                               覆
                             </button>
                             <CustomDropdown
-                              options={[{ value: '', label: '默认' }, ...DIALOG_IMAGE_GEARS.map((g) => ({ value: g.id, label: g.label }))]}
+                              options={[
+                                { value: '', label: '默认' },
+                                ...effectiveGearRows.map((g) => ({
+                                  value: g.id,
+                                  label: g.label,
+                                  disabled: g.disabled,
+                                  title: g.disabledReason,
+                                })),
+                              ]}
                               value={groupOverrideByCategory[FAVORITE_GROUP_KEY]?.imageGear || ''}
                               onChange={(v) =>
                                 setGroupOverrideByCategory((prev) => ({
@@ -1833,7 +1848,15 @@ export function WorkflowSidebarColumn({
                             覆
                           </button>
                           <CustomDropdown
-                            options={[{ value: '', label: '默认' }, ...DIALOG_IMAGE_GEARS.map((g) => ({ value: g.id, label: g.label }))]}
+                            options={[
+                                { value: '', label: '默认' },
+                                ...effectiveGearRows.map((g) => ({
+                                  value: g.id,
+                                  label: g.label,
+                                  disabled: g.disabled,
+                                  title: g.disabledReason,
+                                })),
+                              ]}
                             value={groupOverrideByCategory[category.id]?.imageGear || ''}
                             onChange={(v) =>
                               setGroupOverrideByCategory((prev) => ({

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useMemo, useEffect, useLayoutEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import type { CustomAppModule, CapabilityCategory, CapabilityEngine, DialogImageGear, Generate3DPreset, CapabilitySet } from '../types';
 import { CAPABILITY_CATEGORIES, DIALOG_IMAGE_GEARS, SUPPORTED_ASPECT_RATIOS, SUPPORTED_IMAGE_SIZES } from '../types';
@@ -32,6 +32,7 @@ import { CapabilityPreviewImg } from './CapabilityPreviewImg';
 import { ImagePreviewOverlay } from './ImagePreviewOverlay';
 import { CustomDropdown, DROPDOWN_TRIGGER_COMPACT } from './ui/CustomDropdown';
 import AppIcon from './ui/AppIcon';
+import { useEffectiveImageGearRows } from '../hooks/useEffectiveImageGearRows';
 
 const CAPABILITY_SETS_VERSION = 1;
 const CAPABILITY_PRESET_COLUMNS_KEY = 'ac_capability_preset_columns_v1';
@@ -161,6 +162,7 @@ const CapabilityPresetSection: React.FC<{
   }, [embedComposerActiveId]);
   const reindex = (list: CustomAppModule[]) => list.map((p, i) => ({ ...p, order: i }));
   const update = (list: CustomAppModule[]) => onUpdate(reindex(list));
+  const { rows: effectiveGearRows, coerceGearId } = useEffectiveImageGearRows();
   const getEngine = (p: CustomAppModule): CapabilityEngine => getCapabilityEngine(p);
   const isBuiltinImagePipelinePreset = (p: CustomAppModule) =>
     p.category === 'image_to_image' && getCapabilityEngine(p) === 'builtin';
@@ -184,6 +186,11 @@ const CapabilityPresetSection: React.FC<{
   const [editEngine, setEditEngine] = useState<CapabilityEngine>('gen_image');
   const [editEnabled, setEditEnabled] = useState(true);
   const [editImageGear, setEditImageGear] = useState<DialogImageGear>('standard');
+  useLayoutEffect(() => {
+    if (!editingId) return;
+    const next = coerceGearId(editImageGear);
+    if (next !== editImageGear) setEditImageGear(next as DialogImageGear);
+  }, [editingId, effectiveGearRows, coerceGearId, editImageGear]);
   const [editImageAspectRatio, setEditImageAspectRatio] = useState('');
   const [editImageSize, setEditImageSize] = useState('');
   const [editInstruction, setEditInstruction] = useState('');
@@ -461,19 +468,20 @@ const CapabilityPresetSection: React.FC<{
         if (p.id !== editingId) return p;
         const showGenImageFields =
           editCategory === 'text_to_image' || (editCategory === 'image_to_image' && editEngine === 'gen_image');
+        const showGenVideoFields = editCategory === 'generate_video';
         const next: CustomAppModule = {
           ...p,
           label: editLabel,
           category: editCategory,
           instruction: editInstruction,
-          skipUnderstand: showGenImageFields ? editSkipUnderstand : undefined,
+          skipUnderstand: showGenImageFields || showGenVideoFields ? editSkipUnderstand : undefined,
           requirePromptOnTextDrop: editCategory === 'text_to_text' ? editRequirePromptOnTextDrop : undefined,
           enabled: editEnabled,
           imageGear: showGenImageFields ? editImageGear : undefined,
           imageAspectRatio: showGenImageFields ? editImageAspectRatio || undefined : undefined,
           imageSize: showGenImageFields ? editImageSize || undefined : undefined,
           engine:
-            editCategory === 'generate_3d'
+            editCategory === 'generate_3d' || editCategory === 'generate_video'
               ? undefined
               : editCategory === 'text_to_text' || editCategory === 'image_to_text'
                 ? 'gen_text'
@@ -483,6 +491,10 @@ const CapabilityPresetSection: React.FC<{
         };
         if (editCategory === 'generate_3d') {
           next.generate3D = { ...editGenerate3D };
+          delete (next as CustomAppModule & { engine?: CapabilityEngine }).engine;
+          delete (next as CustomAppModule & { companionHostBundle?: unknown }).companionHostBundle;
+        } else if (editCategory === 'generate_video') {
+          delete (next as CustomAppModule & { generate3D?: Generate3DPreset }).generate3D;
           delete (next as CustomAppModule & { engine?: CapabilityEngine }).engine;
           delete (next as CustomAppModule & { companionHostBundle?: unknown }).companionHostBundle;
         } else {
@@ -506,12 +518,13 @@ const CapabilityPresetSection: React.FC<{
     const id = genId();
     const showNewGenImage =
       newCategory === 'text_to_image' || (newCategory === 'image_to_image' && newEngine === 'gen_image');
+    const showNewGenVideo = newCategory === 'generate_video';
     const preset: CustomAppModule = {
       id,
       label,
       category: newCategory,
       instruction: newInstruction,
-      skipUnderstand: showNewGenImage ? newSkipUnderstand : undefined,
+      skipUnderstand: showNewGenImage || showNewGenVideo ? newSkipUnderstand : undefined,
       requirePromptOnTextDrop: newCategory === 'text_to_text' ? newRequirePromptOnTextDrop : undefined,
       enabled: newEnabled,
       order: presets.length,
@@ -519,7 +532,7 @@ const CapabilityPresetSection: React.FC<{
       imageAspectRatio: showNewGenImage ? newImageAspectRatio || undefined : undefined,
       imageSize: showNewGenImage ? newImageSize || undefined : undefined,
       engine:
-        newCategory === 'generate_3d'
+        newCategory === 'generate_3d' || newCategory === 'generate_video'
           ? undefined
           : newCategory === 'text_to_text' || newCategory === 'image_to_text'
             ? 'gen_text'
@@ -529,7 +542,7 @@ const CapabilityPresetSection: React.FC<{
     };
     if (newCategory === 'generate_3d') {
       preset.generate3D = { ...newGenerate3D };
-    } else {
+    } else if (newCategory !== 'generate_video') {
       const nHb = newCompanionHostBundleDir.trim();
       if (nHb) {
         preset.companionHostBundle =
@@ -1584,7 +1597,12 @@ const CapabilityPresetSection: React.FC<{
                 <label className="flex items-center gap-2 text-[9px] text-gray-400">
                   <span className="font-black uppercase">生图档位</span>
                   <CustomDropdown
-                    options={DIALOG_IMAGE_GEARS.map((g) => ({ value: g.id, label: g.label }))}
+                    options={effectiveGearRows.map((g) => ({
+                      value: g.id,
+                      label: g.label,
+                      disabled: g.disabled,
+                      title: g.disabledReason,
+                    }))}
                     value={newImageGear}
                     onChange={(v) => setNewImageGear(v as DialogImageGear)}
                     triggerClassName={DROPDOWN_TRIGGER_COMPACT}
@@ -1635,6 +1653,9 @@ const CapabilityPresetSection: React.FC<{
             {newCategory === 'image_to_image' && newEngine === 'builtin' && (
               <span className="text-[8px] text-gray-500">工作流请拖入图片卡（内置处理）</span>
             )}
+            {newCategory === 'generate_video' && (
+              <span className="text-[8px] text-gray-500">工作流请拖入文字卡或图片卡（或两者）</span>
+            )}
           </div>
           <div>
             <span className="text-[8px] font-black text-gray-500 uppercase">功能名称</span>
@@ -1657,6 +1678,29 @@ const CapabilityPresetSection: React.FC<{
               className="mt-1 w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
             />
           </div>
+          {newCategory === 'generate_video' && (
+            <div>
+              <span className="text-[8px] font-black text-cyan-400/90 uppercase">生视频 · 预设说明</span>
+              <p className="text-[8px] text-gray-500 mt-0.5">
+                需构建变量 <code className="text-gray-400">VITE_WORKFLOW_VIDEO_API_URL</code>。可拖文字卡、图片卡或两者；有图时与对话生图一致可先「理解」再请求桥。
+              </p>
+              <label className="mt-1 flex items-center gap-2 text-[9px] text-gray-400 cursor-pointer" title="勾选：先由文字模型理解预设与画面，再 POST 生视频桥">
+                <input
+                  type="checkbox"
+                  checked={!newSkipUnderstand}
+                  onChange={(e) => setNewSkipUnderstand(!e.target.checked)}
+                />
+                <span className="font-black uppercase">理解</span>
+              </label>
+              <textarea
+                value={newInstruction}
+                onChange={(e) => setNewInstruction(e.target.value)}
+                placeholder="如：电影感城市夜景，镜头缓慢推进，霓虹反射在雨后路面"
+                rows={4}
+                className="mt-1 w-full resize-none rounded-xl bg-white/[0.05] px-3 py-2 text-[11px] ring-1 ring-cyan-900/35 outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/45"
+              />
+            </div>
+          )}
           {(newCategory === 'text_to_image' || (newCategory === 'image_to_image' && newEngine === 'gen_image')) && (
             <div>
               <span className="text-[8px] font-black text-blue-400/90 uppercase">预设提示词（必填）</span>
@@ -1720,7 +1764,7 @@ const CapabilityPresetSection: React.FC<{
               <textarea value={newInstruction} onChange={(e) => setNewInstruction(e.target.value)} placeholder="留空即使用内置逻辑；或填写如：只保留上半部分、排除背景" rows={2} className="mt-1 w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 resize-none" />
             </div>
           )}
-          {newCategory !== 'generate_3d' && (
+          {newCategory !== 'generate_3d' && newCategory !== 'generate_video' && (
             <div className="rounded-xl border border-emerald-900/40 bg-black/20 p-3 space-y-2">
               <div className="text-[8px] font-black text-emerald-300/90 uppercase">本机伴侣 · 宿主包（可选）</div>
               <p className="text-[8px] text-gray-500 leading-snug">
@@ -1962,7 +2006,8 @@ const CapabilityPresetSection: React.FC<{
               {displayPresets.map((p) => {
                 const src = getCardPreviewSrc(p);
                 const categoryLabel = CAPABILITY_CATEGORIES.find((c) => c.id === p.category)?.label ?? p.category;
-                const iconName = p.category === 'generate_3d' ? 'cube' : isBuiltinImagePipelinePreset(p) ? 'camera' : 'image';
+                const iconName =
+                  p.category === 'generate_3d' ? 'cube' : p.category === 'generate_video' ? 'video' : isBuiltinImagePipelinePreset(p) ? 'camera' : 'image';
                 const isTextToTextPreset = p.category === 'text_to_text';
                 const isDraggingThis = draggingPresetId === p.id;
                 const dimPresetBySidebar =
@@ -2299,6 +2344,7 @@ const CapabilityPresetSection: React.FC<{
                                   if (c.id === 'text_to_text' || c.id === 'image_to_text') setEditEngine('gen_text');
                                   if (c.id === 'text_to_image') setEditEngine('gen_image');
                                   if (c.id === 'generate_3d') setEditGenerate3D(editCategory === 'generate_3d' ? { ...editGenerate3D } : { ...DEFAULT_GENERATE_3D });
+                                  if (c.id === 'generate_video') setEditGenerate3D({ ...DEFAULT_GENERATE_3D });
                                 }}
                                 className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${editCategory === c.id ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300' : 'bg-white/[0.05] ring-1 ring-white/[0.06] text-gray-500 border-transparent'}`}
                               >
@@ -2330,7 +2376,12 @@ const CapabilityPresetSection: React.FC<{
                               <label className="flex items-center gap-2 text-[9px] text-gray-400">
                                 <span className="font-black uppercase">生图档位</span>
                                 <CustomDropdown
-                                  options={DIALOG_IMAGE_GEARS.map((g) => ({ value: g.id, label: g.label }))}
+                                  options={effectiveGearRows.map((g) => ({
+                      value: g.id,
+                      label: g.label,
+                      disabled: g.disabled,
+                      title: g.disabledReason,
+                    }))}
                                   value={editImageGear}
                                   onChange={(v) => setEditImageGear(v as DialogImageGear)}
                                   triggerClassName={DROPDOWN_TRIGGER_COMPACT}
@@ -2365,6 +2416,21 @@ const CapabilityPresetSection: React.FC<{
                               </label>
                             </div>
                           )}
+                          {editCategory === 'generate_video' && (
+                            <div className="grid grid-cols-1 gap-2">
+                              <p className="text-[8px] text-gray-500">
+                                需 <code className="text-gray-400">VITE_WORKFLOW_VIDEO_API_URL</code>。有参考图时默认先理解再请求桥。
+                              </p>
+                              <label className="flex items-center gap-2 text-[9px] text-gray-400 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={!editSkipUnderstand}
+                                  onChange={(e) => setEditSkipUnderstand(!e.target.checked)}
+                                />
+                                <span className="font-black uppercase">理解</span>
+                              </label>
+                            </div>
+                          )}
                           {editCategory === 'text_to_text' ? (
                             <label className="flex items-center gap-2 text-[9px] text-gray-400 cursor-pointer">
                               <input
@@ -2375,7 +2441,7 @@ const CapabilityPresetSection: React.FC<{
                               <span className="font-black uppercase">拖拽时要求输入临时提示词</span>
                             </label>
                           ) : null}
-                          {editCategory !== 'generate_3d' && (
+                          {editCategory !== 'generate_3d' && editCategory !== 'generate_video' && (
                             <div className="rounded-xl border border-emerald-900/40 bg-black/20 p-2 space-y-2">
                               <div className="text-[8px] font-black text-emerald-300/90 uppercase">本机伴侣 · 宿主包 run.json</div>
                               <p className="text-[8px] text-gray-500 leading-snug">
@@ -2607,6 +2673,8 @@ const CapabilityPresetSection: React.FC<{
                             <div className="text-gray-200 mt-0.5">
                               {detailPreset.category === 'generate_3d'
                                 ? '3D生成'
+                                : detailPreset.category === 'generate_video'
+                                  ? '生视频（HTTP 桥）'
                                 : detailPreset.category === 'text_to_text'
                                   ? '文字模型（文生文）'
                                   : detailPreset.category === 'image_to_text'

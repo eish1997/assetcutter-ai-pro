@@ -1,5 +1,5 @@
 {
-  "enabled": false,
+  "enabled": true,
   "wakeWord": "扁担",
   "sleepPhrase": "扁担停",
   "followupBody": "",

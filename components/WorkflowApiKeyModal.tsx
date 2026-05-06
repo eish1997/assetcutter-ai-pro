@@ -14,6 +14,10 @@ import {
   setAntigravityApiKey,
   getAntigravityBaseUrl,
   setAntigravityBaseUrl,
+  getOpenaiApiKey,
+  setOpenaiApiKey,
+  getOpenaiBaseUrl,
+  setOpenaiBaseUrl,
   getVectorengineApiKey,
   setVectorengineApiKey,
   getVectorengineBaseUrl,
@@ -33,6 +37,7 @@ const AI_PROVIDER_OPTIONS: { value: AiProvider; label: string }[] = [
   { value: 'vertex', label: 'Vertex AI（经 gemini-proxy）' },
   { value: 'toapis', label: 'ToAPIs 网关' },
   { value: 'antigravity', label: 'Antigravity Tools（本机反代）' },
+  { value: 'openai', label: 'OpenAI（官方 API）' },
   { value: 'vectorengine', label: '向量引擎 VectorEngine' },
 ];
 
@@ -46,9 +51,11 @@ export const WorkflowApiKeyModal: React.FC<{
   const [geminiKey, setGeminiKey] = useState('');
   const [toapisKey, setToapisKey] = useState('');
   const [agKey, setAgKey] = useState('');
+  const [openaiKey, setOpenaiKey] = useState('');
   const [veKey, setVeKey] = useState('');
   const [toapisBase, setToapisBase] = useState('');
   const [agBase, setAgBase] = useState('');
+  const [openaiBase, setOpenaiBase] = useState('');
   const [veBase, setVeBase] = useState('');
   const [tripoKey, setTripoKey] = useState('');
   const [savedFlash, setSavedFlash] = useState(false);
@@ -61,10 +68,12 @@ export const WorkflowApiKeyModal: React.FC<{
     setGeminiKey(getUserApiKey() ?? '');
     setToapisKey(getToapisApiKey() ?? '');
     setAgKey(getAntigravityApiKey() ?? '');
+    setOpenaiKey(getOpenaiApiKey() ?? '');
     setVeKey(getVectorengineApiKey() ?? '');
     setTripoKey(getTripoApiKey() ?? '');
     setToapisBase(getToapisBaseUrl());
     setAgBase(getAntigravityBaseUrl());
+    setOpenaiBase(getOpenaiBaseUrl());
     setVeBase(getVectorengineBaseUrl());
   }, [open]);
 
@@ -127,11 +136,14 @@ export const WorkflowApiKeyModal: React.FC<{
           ? toapisKey
           : provider === 'antigravity'
             ? agKey
+          : provider === 'openai'
+            ? openaiKey
             : veKey;
   const setKeyValue = (v: string) => {
     if (provider === 'gemini') setGeminiKey(v);
     else if (provider === 'toapis') setToapisKey(v);
     else if (provider === 'antigravity') setAgKey(v);
+    else if (provider === 'openai') setOpenaiKey(v);
     else if (provider === 'vectorengine') setVeKey(v);
   };
 
@@ -145,6 +157,8 @@ export const WorkflowApiKeyModal: React.FC<{
           ? 'toapis'
           : value === 'antigravity'
             ? 'antigravity'
+            : value === 'openai'
+              ? 'openai'
             : value === 'vectorengine'
               ? 'vectorengine'
               : 'gemini';
@@ -158,6 +172,8 @@ export const WorkflowApiKeyModal: React.FC<{
     setToapisBaseUrl(toapisBase.trim() || null);
     setAntigravityApiKey(agKey.trim() || null);
     setAntigravityBaseUrl(agBase.trim() || null);
+    setOpenaiApiKey(openaiKey.trim() || null);
+    setOpenaiBaseUrl(openaiBase.trim() || null);
     setVectorengineApiKey(veKey.trim() || null);
     setVectorengineBaseUrl(veBase.trim() || null);
     setTripoApiKey(tripoKey.trim() || null);
@@ -225,6 +241,18 @@ export const WorkflowApiKeyModal: React.FC<{
                 value={agBase}
                 onChange={(e) => setAgBase(e.target.value)}
                 placeholder="http://127.0.0.1:8045/v1"
+                autoComplete="off"
+                className="w-full min-w-0 px-4 py-3 rounded-xl bg-[#16161a] border border-[#2e2e32] text-sm text-white placeholder-gray-500 focus:border-[#3b82f6] focus:outline-none mb-3"
+              />
+            </div>
+          ) : provider === 'openai' ? (
+            <div>
+              <span className="block text-[9px] font-black uppercase text-gray-500 mb-2">Base URL（含 /v1，可留空用默认）</span>
+              <input
+                type="url"
+                value={openaiBase}
+                onChange={(e) => setOpenaiBase(e.target.value)}
+                placeholder="https://api.openai.com/v1"
                 autoComplete="off"
                 className="w-full min-w-0 px-4 py-3 rounded-xl bg-[#16161a] border border-[#2e2e32] text-sm text-white placeholder-gray-500 focus:border-[#3b82f6] focus:outline-none mb-3"
               />

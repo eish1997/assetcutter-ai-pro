@@ -1,10 +1,28 @@
 
 import React, { Suspense, useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from 'react';
-import { processTexture, DEFAULT_PROMPTS, normalizeApiErrorMessage, getTexturePrompt, parsePromptStructured } from './services/geminiService';
+import {
+  processTexture,
+  DEFAULT_PROMPTS,
+  normalizeApiErrorMessage,
+  getTexturePrompt,
+  parsePromptStructured,
+  PRO_VIEW_IDS,
+  type Submit3DProInput,
+  type Submit3DRapidInput,
+} from './services/unifiedAiGateway';
+import {
+  buildTripoCreateTaskInputFromPreset,
+  extractTripoModelAndPreviewUrls,
+  normalizeGenerate3DPresetForRun,
+  resolveGenerate3dProviderId,
+  tripoWorkflowCreateOrResumeTaskId,
+  tripoWorkflowPollUntilDone,
+} from './services/generate3d';
+import { DEFAULT_MODEL_IMAGE, DEFAULT_MODEL_PRO, DEFAULT_MODEL_TEXT } from './services/modelRegistry/constants';
+import { migrateSystemModelSlots } from './services/modelRegistry/systemConfigMigrate';
+import { useEffectiveImageGearRows } from './hooks/useEffectiveImageGearRows';
 import { loadRecords, addRecord as addGenerationRecord, updateScore as updateGenerationScore } from './services/recordStore';
 import { loadSnippets } from './services/snippetStore';
-import { PRO_VIEW_IDS, type Submit3DProInput, type Submit3DRapidInput } from './services/tencentService';
-import { createTripoTask, getTripoTask, waitTripoTaskDone, type TripoTaskType } from './services/tripoService';
 import { AppStep, AppMode, LibraryItem, SystemConfig, AppTask, AssetCategory, DialogMessage, DialogSession, DialogTempItem, DialogImageGear, DIALOG_ASPECT_RATIO_OPTIONS, SUPPORTED_IMAGE_SIZES, DIALOG_IMAGE_GEARS, type GenerationRecord, type CustomAppModule, type CapabilitySet, type WorkflowAsset, type WorkflowPendingTask, type ArenaCurrentStep, type ArenaStepEntry, type ArenaTimelineBlock } from './types';
 import DropdownSelect from './components/DropdownSelect';
 import MultiViewUpload from './components/MultiViewUpload';
@@ -69,6 +87,8 @@ import {
   getAiProviderToolbarLabel,
   getAntigravityApiKey,
   getAntigravityBaseUrl,
+  getOpenaiApiKey,
+  getOpenaiBaseUrl,
   getDialogSkipUnderstand,
   getToapisApiKey,
   getToapisBaseUrl,
@@ -81,6 +101,8 @@ import {
   setAiProvider,
   setAntigravityApiKey,
   setAntigravityBaseUrl,
+  setOpenaiApiKey,
+  setOpenaiBaseUrl,
   setDialogSkipUnderstand,
   setToapisApiKey,
   setToapisBaseUrl,
@@ -821,8 +843,8 @@ const MainApp: React.FC = () => {
   const editedWhileQuotaSuspendedRef = useRef(false);
   /** 离开工作区/切换项目时的索引同步中（阻塞 UI） */
   const [workspaceCloudLeaveSyncing, setWorkspaceCloudLeaveSyncing] = useState(false);
-  const [workspaceCloudLastSyncAt, setWorkspaceCloudLastSyncAt] = useState<number | null>(null);
-  const [workspaceCloudNextAutoSyncAt, setWorkspaceCloudNextAutoSyncAt] = useState<number | null>(null);
+  const [_workspaceCloudLastSyncAt, setWorkspaceCloudLastSyncAt] = useState<number | null>(null);
+  const [_workspaceCloudNextAutoSyncAt, setWorkspaceCloudNextAutoSyncAt] = useState<number | null>(null);
   const [workspaceAutoSyncEnabled, setWorkspaceAutoSyncEnabledState] = useState<boolean>(() => getWorkspaceAutoSyncEnabled());
   const workspaceCloudConfigHydratedUserIdRef = useRef<string | null>(null);
   const workspaceCloudConfigHydratingUserIdRef = useRef<string | null>(null);
@@ -1041,6 +1063,8 @@ const MainApp: React.FC = () => {
           setToapisBaseUrl(cfg.settings.toapisBaseUrl || null);
           setAntigravityApiKey(cfg.settings.antigravityApiKey || null);
           setAntigravityBaseUrl(cfg.settings.antigravityBaseUrl || null);
+          setOpenaiApiKey(cfg.settings.openaiApiKey || null);
+          setOpenaiBaseUrl(cfg.settings.openaiBaseUrl || null);
           setVectorengineApiKey(cfg.settings.vectorengineApiKey || null);
           setVectorengineBaseUrl(cfg.settings.vectorengineBaseUrl || null);
           setAiInvocationStatusRev((n) => n + 1);
@@ -1099,6 +1123,8 @@ const MainApp: React.FC = () => {
           toapisBaseUrl: getToapisBaseUrl() || '',
           antigravityApiKey: getAntigravityApiKey() || '',
           antigravityBaseUrl: getAntigravityBaseUrl() || '',
+          openaiApiKey: getOpenaiApiKey() || '',
+          openaiBaseUrl: getOpenaiBaseUrl() || '',
           vectorengineApiKey: getVectorengineApiKey() || '',
           vectorengineBaseUrl: getVectorengineBaseUrl() || '',
         },
@@ -1521,7 +1547,7 @@ const MainApp: React.FC = () => {
           addGlobalLog('工作区', 'warn', '本地伴侣 manifest 磁盘补全请求失败', String(recon.error));
         }
         const assetsSnap = workflowAssetsRef.current;
-        let gaps = findCompanionKeysMissingFromManifest(assetsSnap, manifestData);
+        const gaps = findCompanionKeysMissingFromManifest(assetsSnap, manifestData);
         if (gaps.length > 0) {
           const nOrig = gaps.filter((g) => g.kind === 'original').length;
           const nRes = gaps.filter((g) => g.kind === 'result').length;
@@ -1817,7 +1843,7 @@ const MainApp: React.FC = () => {
       assets: Array.isArray(bundle.assets) ? bundle.assets : [],
       pending: Array.isArray(bundle.pending) ? bundle.pending : [],
     }).size;
-    let cloudHydrateAttempted = cloudKeyCount;
+    const cloudHydrateAttempted = cloudKeyCount;
     let cloudHydrateSucceeded = 0;
     let cloudHydrateError = '';
     let hydratedBundle = {
@@ -2628,6 +2654,23 @@ const MainApp: React.FC = () => {
   const [dialogModel, setDialogModel] = useState<string>(
     () => DIALOG_IMAGE_GEARS.find((g) => g.id === 'standard')?.modelId || DIALOG_IMAGE_GEARS[0].modelId
   );
+  const { rows: effectiveImageGearRows, coerceGearId: coerceImageGearId } = useEffectiveImageGearRows();
+  useLayoutEffect(() => {
+    const ok = effectiveImageGearRows.find((r) => r.modelId === arenaImageModel && !r.disabled);
+    if (!ok) {
+      const gid = DIALOG_IMAGE_GEARS.find((x) => x.modelId === arenaImageModel)?.id ?? 'standard';
+      const ng = coerceImageGearId(gid);
+      const fb = effectiveImageGearRows.find((r) => r.id === ng && !r.disabled);
+      if (fb && fb.modelId !== arenaImageModel) setArenaImageModel(fb.modelId);
+    }
+  }, [effectiveImageGearRows, coerceImageGearId, arenaImageModel]);
+  useLayoutEffect(() => {
+    const ng = coerceImageGearId(dialogImageGear);
+    const row = effectiveImageGearRows.find((r) => r.id === ng && !r.disabled);
+    if (!row) return;
+    if (ng !== dialogImageGear) setDialogImageGear(ng as DialogImageGear);
+    if (row.modelId !== dialogModel) setDialogModel(row.modelId);
+  }, [effectiveImageGearRows, coerceImageGearId, dialogImageGear, dialogModel]);
   const [dialogAutoGenerateImage, setDialogAutoGenerateImage] = useState(true);
   const [dialogSkipUnderstand, setDialogSkipUnderstandState] = useState<boolean>(() => getDialogSkipUnderstand());
   const [dialogAspectRatio, setDialogAspectRatio] = useState<string>('adaptive');
@@ -2792,15 +2835,31 @@ const MainApp: React.FC = () => {
 
   const [library, setLibrary] = useState<LibraryItem[]>([]);
   const [config] = useState<SystemConfig>(() => {
-    const saved = localStorage.getItem('ac_config');
-    if (saved) return JSON.parse(saved);
-    return { 
-      modelText: 'gemini-3-flash-preview', 
-      modelImage: 'gemini-3.1-flash-image-preview', 
-      modelPro: 'gemini-3-pro-image-preview', 
-      customPromptSuffix: '',
-      prompts: { ...DEFAULT_PROMPTS }
+    const defaults: SystemConfig = {
+      modelText: DEFAULT_MODEL_TEXT,
+      modelImage: DEFAULT_MODEL_IMAGE,
+      modelPro: DEFAULT_MODEL_PRO,
+      customPromptSuffix: "",
+      prompts: { ...DEFAULT_PROMPTS },
     };
+    const raw = localStorage.getItem("ac_config");
+    if (!raw) return defaults;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return defaults;
+    }
+    const p = parsed && typeof parsed === "object" ? (parsed as Partial<SystemConfig>) : {};
+    const merged: SystemConfig = {
+      ...defaults,
+      ...p,
+      prompts: {
+        ...defaults.prompts,
+        ...(p.prompts && typeof p.prompts === "object" ? p.prompts : {}),
+      },
+    };
+    return { ...merged, ...migrateSystemModelSlots(merged) };
   });
 
   useEffect(() => {
@@ -3082,31 +3141,8 @@ const MainApp: React.FC = () => {
   ) => {
     if (preset.category !== 'generate_3d' || !preset.generate3D) return;
     const raw = imageBase64.replace(/^data:image\/\w+;base64,/, '');
-    const normalize3D = (input: NonNullable<CustomAppModule['generate3D']>) => {
-      const g = { ...input };
-      // module
-      if (g.module !== 'pro' && g.module !== 'rapid') g.module = 'pro';
-      // resultFormat whitelist（避免无效参数）
-      const allowed = new Set(['STL', 'USDZ', 'FBX']);
-      if (g.resultFormat && !allowed.has(g.resultFormat)) g.resultFormat = undefined;
-      // pro-only fields
-      if (g.module === 'pro') {
-        if (g.model !== '3.0' && g.model !== '3.1') g.model = '3.0';
-        if (typeof g.faceCount === 'number' && !Number.isNaN(g.faceCount)) {
-          const n = Math.floor(g.faceCount);
-          g.faceCount = Math.max(10000, Math.min(1500000, n));
-        } else {
-          g.faceCount = undefined;
-        }
-      } else {
-        g.model = undefined;
-        g.faceCount = undefined;
-        g.generateType = undefined;
-      }
-      return g;
-    };
-    const g = normalize3D(preset.generate3D);
-    const provider = g.provider === 'tencent' ? 'tencent' : 'tripo';
+    const g = normalizeGenerate3DPresetForRun(preset.generate3D);
+    const provider = resolveGenerate3dProviderId(g);
     if (provider === 'tencent') {
       if (!creds3D) return;
       const id = Math.random().toString(36).slice(2, 11);
@@ -3143,29 +3179,31 @@ const MainApp: React.FC = () => {
     let tripoCatchTaskId = '';
     let tripoCatchResumedFromExisting = false;
     try {
-      const taskType: TripoTaskType = g.tripoTaskType === 'text_to_model' ? 'text_to_model' : 'image_to_model';
-      const tripoModelVersion = g.tripoModelVersion?.trim() || undefined;
-      const prompt = (preset.instruction || g.prompt || '').trim() || undefined;
+      const previewInput = buildTripoCreateTaskInputFromPreset({
+        apiKey: tripoApiKey,
+        preset,
+        imageDataUrl: imageBase64,
+      });
       const tripoPayloadPreview = {
-        type: taskType,
-        prompt,
-        negativePrompt: g.tripoNegativePrompt?.trim() || undefined,
-        modelVersion: tripoModelVersion,
-        texture: typeof g.tripoTexture === 'boolean' ? g.tripoTexture : undefined,
-        pbr: typeof g.tripoPbr === 'boolean' ? g.tripoPbr : undefined,
-        textureQuality: g.tripoTextureQuality || undefined,
-        geometryQuality: g.tripoGeometryQuality || undefined,
-        faceLimit: typeof g.tripoFaceLimit === 'number' ? g.tripoFaceLimit : undefined,
-        quad: typeof g.tripoQuad === 'boolean' ? g.tripoQuad : undefined,
-        smartLowPoly: typeof g.tripoSmartLowPoly === 'boolean' ? g.tripoSmartLowPoly : undefined,
-        generateParts: typeof g.tripoGenerateParts === 'boolean' ? g.tripoGenerateParts : undefined,
-        autoSize: typeof g.tripoAutoSize === 'boolean' ? g.tripoAutoSize : undefined,
-        compress: g.tripoCompress || undefined,
-        exportUv: typeof g.tripoExportUv === 'boolean' ? g.tripoExportUv : undefined,
-        enableImageAutofix: typeof g.tripoEnableImageAutofix === 'boolean' ? g.tripoEnableImageAutofix : undefined,
-        textureAlignment: g.tripoTextureAlignment || undefined,
-        orientation: g.tripoOrientation || undefined,
-        hasImageInput: taskType === 'image_to_model',
+        type: previewInput.type,
+        prompt: previewInput.prompt,
+        negativePrompt: previewInput.negativePrompt,
+        modelVersion: previewInput.modelVersion,
+        texture: previewInput.texture,
+        pbr: previewInput.pbr,
+        textureQuality: previewInput.textureQuality,
+        geometryQuality: previewInput.geometryQuality,
+        faceLimit: previewInput.faceLimit,
+        quad: previewInput.quad,
+        smartLowPoly: previewInput.smartLowPoly,
+        generateParts: previewInput.generateParts,
+        autoSize: previewInput.autoSize,
+        compress: previewInput.compress,
+        exportUv: previewInput.exportUv,
+        enableImageAutofix: previewInput.enableImageAutofix,
+        textureAlignment: previewInput.textureAlignment,
+        orientation: previewInput.orientation,
+        hasImageInput: previewInput.type === 'image_to_model',
       };
       addGenerate3DLog('info', `[工作流] Tripo 提交任务：${preset.label}`, tripoPayloadPreview);
       updateTask(taskId, { status: 'RUNNING', progress: 10 });
@@ -3179,37 +3217,20 @@ const MainApp: React.FC = () => {
               workflowAssetsRef.current.find((a) => a.id === task.assetId)?.resultMeta?.[task.actionType]?.tripoTaskId || ''
             ).trim()
           : '';
-      let createdTaskId = recoverTaskId;
-      const resumedFromExistingTask = Boolean(createdTaskId);
+      const { taskId: createdTripoId, resumed: resumedFromExistingTask } = await tripoWorkflowCreateOrResumeTaskId({
+        apiKey: tripoApiKey,
+        preset,
+        imageDataUrl: imageBase64,
+        existingTaskId: recoverTaskId || undefined,
+        forceNewTask,
+      });
+      const createdTaskId = createdTripoId;
       tripoCatchTaskId = createdTaskId;
       tripoCatchResumedFromExisting = resumedFromExistingTask;
-      if (createdTaskId) {
+      if (resumedFromExistingTask) {
         addGenerate3DLog('info', '[工作流] 继续查询既有 Tripo 任务（不新建，避免重复计费）', { taskId: createdTaskId });
       } else {
-        createdTaskId = await createTripoTask({
-          apiKey: tripoApiKey,
-          type: taskType,
-          ...(prompt ? { prompt } : {}),
-          ...(g.tripoNegativePrompt?.trim() ? { negativePrompt: g.tripoNegativePrompt.trim() } : {}),
-          ...(tripoModelVersion ? { modelVersion: tripoModelVersion } : {}),
-          ...(taskType === 'image_to_model' ? { imageBase64DataUrl: imageBase64 } : {}),
-          ...(typeof g.tripoTexture === 'boolean' ? { texture: g.tripoTexture } : {}),
-          ...(typeof g.tripoPbr === 'boolean' ? { pbr: g.tripoPbr } : {}),
-          ...(g.tripoTextureQuality ? { textureQuality: g.tripoTextureQuality } : {}),
-          ...(g.tripoGeometryQuality ? { geometryQuality: g.tripoGeometryQuality } : {}),
-          ...(typeof g.tripoFaceLimit === 'number' ? { faceLimit: g.tripoFaceLimit } : {}),
-          ...(typeof g.tripoQuad === 'boolean' ? { quad: g.tripoQuad } : {}),
-          ...(typeof g.tripoSmartLowPoly === 'boolean' ? { smartLowPoly: g.tripoSmartLowPoly } : {}),
-          ...(typeof g.tripoGenerateParts === 'boolean' ? { generateParts: g.tripoGenerateParts } : {}),
-          ...(typeof g.tripoAutoSize === 'boolean' ? { autoSize: g.tripoAutoSize } : {}),
-          ...(g.tripoCompress ? { compress: g.tripoCompress } : {}),
-          ...(typeof g.tripoExportUv === 'boolean' ? { exportUv: g.tripoExportUv } : {}),
-          ...(typeof g.tripoEnableImageAutofix === 'boolean' ? { enableImageAutofix: g.tripoEnableImageAutofix } : {}),
-          ...(g.tripoTextureAlignment ? { textureAlignment: g.tripoTextureAlignment } : {}),
-          ...(g.tripoOrientation ? { orientation: g.tripoOrientation } : {}),
-        });
         addGenerate3DLog('info', '[工作流] 已创建新 Tripo 任务（可能计费）', { taskId: createdTaskId });
-        tripoCatchTaskId = createdTaskId;
         if (task?.assetId && task?.actionType) {
           setWorkflowAssets((prev) =>
             prev.map((a) => {
@@ -3231,34 +3252,24 @@ const MainApp: React.FC = () => {
         }
       }
       updateTask(taskId, { status: 'RUNNING', progress: 35 });
-      let done;
-      try {
-        done = await waitTripoTaskDone(tripoApiKey, createdTaskId, {
-          timeoutMs: 8 * 60_000,
-          intervalMs: 3000,
-          onProgress: (s) => {
-            if (s === 'queued') updateTask(taskId, { status: 'RUNNING', progress: 40 });
-            if (s === 'running') updateTask(taskId, { status: 'RUNNING', progress: 65 });
-          },
-        });
-      } catch (e) {
-        const msg = normalizeApiErrorMessage(e);
-        addGenerate3DLog('warn', '[工作流] Tripo 状态查询异常，尝试做一次兜底查询（不重建任务）', {
-          taskId: createdTaskId,
-          error: msg,
-        });
-        done = await getTripoTask(tripoApiKey, createdTaskId);
-      }
+      const done = await tripoWorkflowPollUntilDone({
+        apiKey: tripoApiKey,
+        taskId: createdTaskId,
+        normalizeApiErrorMessage,
+        onTripoStatus: (phase) => {
+          if (phase === 'queued') updateTask(taskId, { status: 'RUNNING', progress: 40 });
+          if (phase === 'running') updateTask(taskId, { status: 'RUNNING', progress: 65 });
+        },
+        onPollRecover: (errMsg) =>
+          addGenerate3DLog('warn', '[工作流] Tripo 状态查询异常，尝试做一次兜底查询（不重建任务）', {
+            taskId: createdTaskId,
+            error: errMsg,
+          }),
+      });
       if (done.status !== 'success' || done.modelUrls.length === 0) {
         throw new Error('Tripo 任务未产出可下载模型');
       }
-      const allUrls = done.modelUrls;
-      const modelUrls = allUrls.filter((u) => /\.(glb|gltf|fbx|obj|stl|usdz?|3mf)(\?|#|$)/i.test(u));
-      const previewUrl =
-        allUrls.find((u) => /\.(png|jpe?g|webp)(\?|#|$)/i.test(u)) ||
-        String((done.raw as Record<string, any>)?.data?.output?.rendered_image || '') ||
-        String((done.raw as Record<string, any>)?.output?.rendered_image || '') ||
-        '';
+      const { modelUrls, previewUrl } = extractTripoModelAndPreviewUrls(done);
       if (modelUrls.length === 0) {
         throw new Error('Tripo 任务完成但未识别到模型文件链接');
       }
@@ -4880,6 +4891,7 @@ const MainApp: React.FC = () => {
                   renderWorkflowSection={() => (
                     <WorkflowSection
                       quickComposeShellActive={mode === AppMode.WORKFLOW}
+                      textModelRegistryId={config.modelText}
                       capabilityPresets={capabilityPresets}
                       capabilitySets={capabilitySets}
                       assets={workflowAssets}
@@ -4920,7 +4932,9 @@ const MainApp: React.FC = () => {
                               setCapabilitySets(next);
                               saveCapabilitySets(next);
                             }}
-                            onRunTest={runCapabilityTest}
+                            onRunTest={(preset, imageBase64) =>
+                              runCapabilityTest(preset, imageBase64, { textModelRegistryId: config.modelText })
+                            }
                             onLog={(level, message, detail) => addGlobalLog('能力', level, message, detail)}
                             embeddedInWorkflow={true}
                             canUploadToR2={user?.role === 'admin'}
@@ -4953,7 +4967,9 @@ const MainApp: React.FC = () => {
                   sets={capabilitySets}
                   onUpdateSets={(next) => { setCapabilitySets(next); saveCapabilitySets(next); }}
                   onOpenWorkflowComposer={openGlobalWorkflowComposer}
-                  onRunTest={runCapabilityTest}
+                  onRunTest={(preset, imageBase64) =>
+                    runCapabilityTest(preset, imageBase64, { textModelRegistryId: config.modelText })
+                  }
                   onLog={(level, message, detail) => addGlobalLog('能力', level, message, detail)}
                   canUploadToR2={user?.role === 'admin'}
                 />
@@ -4979,6 +4995,7 @@ const MainApp: React.FC = () => {
                     })
                   }
                   companionProjectId={activeWorkspaceProjectId}
+                  textModelRegistryId={config.modelText}
                   onSave={(set) => {
                     const next = capabilitySets.some((s) => s.id === set.id)
                       ? capabilitySets.map((s) => (s.id === set.id ? set : s))
@@ -5909,8 +5926,28 @@ const MainApp: React.FC = () => {
                           <div className="flex items-center gap-1.5 shrink-0">
                             <span className="text-[9px] font-black text-gray-500 uppercase whitespace-nowrap">挡位</span>
                             <div className="flex rounded-lg overflow-hidden ring-1 ring-white/[0.06] shrink-0">
-                              {DIALOG_IMAGE_GEARS.map(g => (
-                                <button key={g.id} type="button" onClick={() => { setDialogImageGear(g.id); setDialogModel(g.modelId); }} className={`px-2.5 py-1.5 text-[9px] font-black uppercase transition-colors ${dialogImageGear === g.id ? 'bg-blue-600 text-white' : 'bg-[#1c1c22] text-gray-500 hover:bg-[#2e2e36]'}`} title={g.modelId}>{g.label}</button>
+                              {effectiveImageGearRows.map((g) => (
+                                <button
+                                  key={g.id}
+                                  type="button"
+                                  disabled={g.disabled}
+                                  title={g.disabled ? g.disabledReason : g.modelId}
+                                  onClick={() => {
+                                    if (!g.disabled) {
+                                      setDialogImageGear(g.id);
+                                      setDialogModel(g.modelId);
+                                    }
+                                  }}
+                                  className={`px-2.5 py-1.5 text-[9px] font-black uppercase transition-colors ${
+                                    dialogImageGear === g.id && !g.disabled
+                                      ? 'bg-blue-600 text-white'
+                                      : g.disabled
+                                        ? 'bg-[#1c1c22] text-gray-600 cursor-not-allowed opacity-60'
+                                        : 'bg-[#1c1c22] text-gray-500 hover:bg-[#2e2e36]'
+                                  }`}
+                                >
+                                  {g.label}
+                                </button>
                               ))}
                             </div>
                           </div>

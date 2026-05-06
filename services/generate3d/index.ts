@@ -1,0 +1,15 @@
+export type { Generate3dProviderId } from './types';
+export { GENERATE3D_PROVIDER_REGISTRY, listRegisteredGenerate3dProviderIds } from './registry';
+export { resolveGenerate3dProviderId } from './resolveProvider';
+export { normalizeGenerate3DPresetForRun } from './normalizePreset';
+export {
+  buildTripoCreateTaskInputFromPreset,
+  extractTripoModelAndPreviewUrls,
+  tripoWorkflowCreateOrResumeTaskId,
+  tripoWorkflowPollUntilDone,
+} from './tripoWorkflow';
+export {
+  runTencentGenerate3dQueueItem,
+  type TencentGenerate3dQueueKind,
+  type TencentQueueRunResult,
+} from './tencentQueueRunner';

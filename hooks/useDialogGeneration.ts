@@ -9,7 +9,7 @@ import {
   getEditPrompt,
   normalizeApiErrorMessage,
   understandImageEditIntent,
-} from '../services/geminiService';
+} from '../services/unifiedAiGateway';
 import { dialogVersionsForMessage } from '../services/dialogImageHelpers';
 import { uploadDialogResultImageToR2 } from '../services/dialogR2Image';
 import { pollBridgeTaskUntilDone, sendBridgeUserMessage } from '../services/dialogBridgeClient';

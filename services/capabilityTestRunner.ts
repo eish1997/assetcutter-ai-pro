@@ -2,8 +2,9 @@
  * 能力单次测试：供能力模块「测试区域」调用，与工作流 runTask 逻辑一致。
  */
 import type { CustomAppModule, BoundingBox } from '../types';
-import { DEFAULT_PROMPTS, detectObjectsInImage } from './geminiService';
-import { executeCapability } from './capabilityExecutor';
+import { DEFAULT_PROMPTS, detectObjectsInImage } from './unifiedAiGateway';
+import { executeCapability, type CapabilityExecuteContext } from './capabilityExecutor';
+import { DEFAULT_MODEL_TEXT } from './modelRegistry/constants';
 import { detectGrid } from './gridDetector';
 
 function cropBoxes(inputImage: string, boxes: BoundingBox[], indexes: number[]): Promise<string[]> {
@@ -37,6 +38,8 @@ function cropBoxes(inputImage: string, boxes: BoundingBox[], indexes: number[]):
 export type CapabilityTestResult = {
   ok: boolean;
   resultImage?: string;
+  /** 生视频（generate_video）测试结果 */
+  resultVideoUrl?: string;
   /** 文字能力（gen_text）测试结果 */
   resultText?: string;
   error?: string;
@@ -47,18 +50,26 @@ export type CapabilityTestResult = {
 
 export async function runCapabilityTest(
   preset: CustomAppModule,
-  imageBase64: string
+  imageBase64: string,
+  opts?: { textModelRegistryId?: string }
 ): Promise<CapabilityTestResult> {
   const start = Date.now();
+  const execCtx: CapabilityExecuteContext = {};
+  const tm = (opts?.textModelRegistryId || '').trim();
+  if (tm) execCtx.textModelRegistryId = tm;
+  const visionTextModel = tm || DEFAULT_MODEL_TEXT;
   try {
     if (preset.category === 'generate_3d') {
       return { ok: false, error: '生成3D 请在工作流中拖图到能力框提交', durationMs: Date.now() - start };
     }
     if (preset.companionHostBundle?.dirName?.trim()) {
-      const out = await executeCapability(preset, imageBase64 || '');
+      const out = await executeCapability(preset, imageBase64 || '', execCtx);
       if (out.ok === false) return { ok: false, error: out.error, durationMs: out.durationMs };
       if (out.kind === 'text') {
         return { ok: true, resultImage: '', durationMs: out.durationMs, resultText: out.text };
+      }
+      if (out.kind === 'video') {
+        return { ok: true, resultImage: '', durationMs: out.durationMs, resultVideoUrl: out.videoUrl };
       }
       return { ok: true, resultImage: out.image, durationMs: out.durationMs };
     }
@@ -85,7 +96,7 @@ export async function runCapabilityTest(
         // vision 模式
         try {
           boxes = await Promise.race([
-            detectObjectsInImage(imageBase64, 'gemini-3-flash-preview', DEFAULT_PROMPTS.detect_blocks),
+            detectObjectsInImage(imageBase64, visionTextModel, DEFAULT_PROMPTS.detect_blocks),
             new Promise<BoundingBox[]>((_, rej) => setTimeout(() => rej(new Error('timeout')), 10000)),
           ]);
         } catch {
@@ -102,10 +113,13 @@ export async function runCapabilityTest(
         cutCount: cropped.length,
       };
     }
-    const out = await executeCapability(preset, imageBase64);
+    const out = await executeCapability(preset, imageBase64, execCtx);
     if (out.ok === false) return { ok: false, error: out.error, durationMs: out.durationMs };
     if (out.kind === 'text') {
       return { ok: true, resultImage: '', durationMs: out.durationMs, resultText: out.text };
+    }
+    if (out.kind === 'video') {
+      return { ok: true, resultImage: '', durationMs: out.durationMs, resultVideoUrl: out.videoUrl };
     }
     return { ok: true, resultImage: out.image, durationMs: out.durationMs };
   } catch (err) {

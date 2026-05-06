@@ -30,6 +30,8 @@ export type WorkflowComposerOverlayProps = {
   onMinimizedChange?: (minimized: boolean) => void;
   /** 工作区当前项目 id（可选），画布运行测试提交 host_bundle 时带给本机伴侣 */
   companionProjectId?: string | null;
+  /** 与设置页文字模型一致，能力集合断点测试用 */
+  textModelRegistryId?: string | null;
 };
 
 function isEscapeKey(e: KeyboardEvent): boolean {
@@ -65,6 +67,7 @@ export default function WorkflowComposerOverlay({
   onRequestForeground,
   onMinimizedChange,
   companionProjectId = null,
+  textModelRegistryId = null,
 }: WorkflowComposerOverlayProps) {
   const [setLabel, setSetLabel] = useState(initialSet?.label ?? '新建工作流');
   const [dock, setDock] = useState<ComposerDock>('fullscreen');
@@ -258,6 +261,7 @@ export default function WorkflowComposerOverlay({
                 getPartialTestInputImage={getPartialTestInputImage}
                 assetCandidates={assetCandidates}
                 companionProjectId={companionProjectId}
+                textModelRegistryId={textModelRegistryId}
               />
             </div>
           </div>

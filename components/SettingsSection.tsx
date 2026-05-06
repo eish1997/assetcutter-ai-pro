@@ -20,6 +20,10 @@ import {
   setAntigravityApiKey,
   getAntigravityBaseUrl,
   setAntigravityBaseUrl,
+  getOpenaiApiKey,
+  setOpenaiApiKey,
+  getOpenaiBaseUrl,
+  setOpenaiBaseUrl,
   getVectorengineApiKey,
   setVectorengineApiKey,
   getVectorengineBaseUrl,
@@ -67,6 +71,7 @@ import {
 import { companionJobStatusHuman } from '../services/companionJobStatusHuman';
 import { CustomDropdown, DROPDOWN_TRIGGER_COMPACT } from './ui/CustomDropdown';
 import type { AuthUser } from '../services/authClient';
+import { refreshModelOpsConfig } from '../services/modelRegistry/opsConfig';
 
 const SETTINGS_NAV: { id: string; label: string }[] = [
   { id: 'settings-user', label: '用户' },
@@ -81,6 +86,7 @@ const AI_PROVIDER_OPTIONS: { value: AiProvider; label: string }[] = [
   { value: 'vertex', label: 'Vertex AI（GCP · 经本站 gemini-proxy）' },
   { value: 'toapis', label: 'ToAPIs 网关（OpenAI 兼容 + 异步生图）' },
   { value: 'antigravity', label: 'Antigravity Tools（本机 OpenAI 兼容反代）' },
+  { value: 'openai', label: 'OpenAI（官方 Chat + Images API）' },
   { value: 'vectorengine', label: '向量引擎 VectorEngine（Gemini 原生 REST）' },
 ];
 
@@ -122,6 +128,8 @@ const SettingsSection: React.FC<{
   const [toapisBaseUrl, setToapisBaseUrlState] = useState('');
   const [antigravityApiKey, setAntigravityApiKeyState] = useState('');
   const [antigravityBaseUrl, setAntigravityBaseUrlState] = useState('');
+  const [openaiApiKey, setOpenaiApiKeyState] = useState('');
+  const [openaiBaseUrl, setOpenaiBaseUrlState] = useState('');
   const [vectorengineApiKey, setVectorengineApiKeyState] = useState('');
   const [vectorengineBaseUrl, setVectorengineBaseUrlState] = useState('');
   const [tencentSecretId, setTencentSecretId] = useState('');
@@ -242,6 +250,8 @@ const SettingsSection: React.FC<{
     setToapisBaseUrlState(getToapisBaseUrl());
     setAntigravityApiKeyState(getAntigravityApiKey() ?? '');
     setAntigravityBaseUrlState(getAntigravityBaseUrl());
+    setOpenaiApiKeyState(getOpenaiApiKey() ?? '');
+    setOpenaiBaseUrlState(getOpenaiBaseUrl());
     setVectorengineApiKeyState(getVectorengineApiKey() ?? '');
     setVectorengineBaseUrlState(getVectorengineBaseUrl());
     setTencentSecretId(getTencentSecretId() ?? '');
@@ -277,6 +287,13 @@ const SettingsSection: React.FC<{
     setTimeout(() => setSaved(false), 2000);
   };
 
+  const handleSaveOpenai = () => {
+    setOpenaiApiKey(openaiApiKey.trim() || null);
+    setOpenaiBaseUrl(openaiBaseUrl.trim() || null);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  };
+
   const handleSaveVectorengine = () => {
     setVectorengineApiKey(vectorengineApiKey.trim() || null);
     setVectorengineBaseUrl(vectorengineBaseUrl.trim() || null);
@@ -294,6 +311,8 @@ const SettingsSection: React.FC<{
           ? 'toapis'
           : value === 'antigravity'
             ? 'antigravity'
+            : value === 'openai'
+              ? 'openai'
             : value === 'vectorengine'
               ? 'vectorengine'
               : 'gemini';
@@ -1279,6 +1298,19 @@ const SettingsSection: React.FC<{
                       triggerClassName={`${DROPDOWN_TRIGGER_COMPACT} flex-1 min-w-[12rem]`}
                     />
                   </div>
+                  <p className="text-[9px] text-gray-500 leading-relaxed">
+                    生图档位运营策略：可配置{' '}
+                    <code className="text-gray-400">VITE_MODEL_OPS_CONFIG_URL</code> 指向 JSON，工作区/擂台等会随策略禁用部分档位。{' '}
+                    <button
+                      type="button"
+                      className="text-blue-400 hover:text-blue-300 underline"
+                      onClick={() => {
+                        void refreshModelOpsConfig();
+                      }}
+                    >
+                      重新拉取
+                    </button>
+                  </p>
 
                   {aiProvider === 'trial' ? (
                     <>
@@ -1373,6 +1405,44 @@ const SettingsSection: React.FC<{
                           <button
                             type="button"
                             onClick={handleSaveAntigravity}
+                            className="shrink-0 px-5 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-black uppercase tracking-wider transition-colors"
+                          >
+                            {saved ? '已保存' : '保存'}
+                          </button>
+                        </div>
+                      </div>
+                    </>
+                  ) : aiProvider === 'openai' ? (
+                    <>
+                      <h4 className="text-[10px] font-bold text-white/80 uppercase tracking-wider">OpenAI</h4>
+                      <p className="text-[9px] text-gray-500 leading-relaxed">
+                        使用 OpenAI 官方 <code className="text-gray-400">/v1/chat/completions</code> 与{' '}
+                        <code className="text-gray-400">/v1/images/*</code>（浏览器直连）；默认 Base 为{' '}
+                        <code className="text-gray-400">https://api.openai.com/v1</code>。合规与账单请在 OpenAI 控制台自行管理。
+                      </p>
+                      <div className="space-y-3">
+                        <input
+                          type="url"
+                          value={openaiBaseUrl}
+                          onChange={(e) => setOpenaiBaseUrlState(e.target.value)}
+                          onBlur={handleSaveOpenai}
+                          placeholder="https://api.openai.com/v1"
+                          className="w-full min-w-0 px-4 py-3 rounded-xl bg-[#16161a] border border-[#2e2e32] text-sm text-white placeholder-gray-500 focus:border-[#3b82f6] focus:outline-none"
+                          autoComplete="off"
+                        />
+                        <div className="flex flex-col sm:flex-row gap-3">
+                          <input
+                            type="password"
+                            value={openaiApiKey}
+                            onChange={(e) => setOpenaiApiKeyState(e.target.value)}
+                            onBlur={handleSaveOpenai}
+                            placeholder="OpenAI API Key（sk-…）"
+                            className="flex-1 min-w-0 px-4 py-3 rounded-xl bg-[#16161a] border border-[#2e2e32] text-sm text-white placeholder-gray-500 focus:border-[#3b82f6] focus:outline-none"
+                            autoComplete="off"
+                          />
+                          <button
+                            type="button"
+                            onClick={handleSaveOpenai}
                             className="shrink-0 px-5 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-black uppercase tracking-wider transition-colors"
                           >
                             {saved ? '已保存' : '保存'}

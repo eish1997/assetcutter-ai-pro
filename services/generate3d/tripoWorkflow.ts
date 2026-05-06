@@ -1,0 +1,110 @@
+import { createTripoTask, getTripoTask, waitTripoTaskDone } from '../tripoService';
+import type { TripoCreateTaskInput, TripoTaskResult, TripoTaskType } from '../tripoService';
+import type { CustomAppModule } from '../../types';
+import { normalizeGenerate3DPresetForRun } from './normalizePreset';
+
+export function buildTripoCreateTaskInputFromPreset(params: {
+  apiKey: string;
+  preset: CustomAppModule;
+  imageDataUrl: string;
+}): TripoCreateTaskInput {
+  const g = normalizeGenerate3DPresetForRun(params.preset.generate3D!);
+  const taskType: TripoTaskType = g.tripoTaskType === 'text_to_model' ? 'text_to_model' : 'image_to_model';
+  const prompt =
+    (params.preset.instruction?.trim() || g.prompt?.trim() || '') || undefined;
+  return {
+    apiKey: params.apiKey,
+    type: taskType,
+    ...(prompt ? { prompt } : {}),
+    ...(g.tripoNegativePrompt?.trim() ? { negativePrompt: g.tripoNegativePrompt.trim() } : {}),
+    ...(g.tripoModelVersion?.trim() ? { modelVersion: g.tripoModelVersion.trim() } : {}),
+    ...(taskType === 'image_to_model' ? { imageBase64DataUrl: params.imageDataUrl } : {}),
+    ...(typeof g.tripoTexture === 'boolean' ? { texture: g.tripoTexture } : {}),
+    ...(typeof g.tripoPbr === 'boolean' ? { pbr: g.tripoPbr } : {}),
+    ...(g.tripoTextureQuality ? { textureQuality: g.tripoTextureQuality } : {}),
+    ...(g.tripoGeometryQuality ? { geometryQuality: g.tripoGeometryQuality } : {}),
+    ...(typeof g.tripoFaceLimit === 'number' ? { faceLimit: g.tripoFaceLimit } : {}),
+    ...(typeof g.tripoQuad === 'boolean' ? { quad: g.tripoQuad } : {}),
+    ...(typeof g.tripoSmartLowPoly === 'boolean' ? { smartLowPoly: g.tripoSmartLowPoly } : {}),
+    ...(typeof g.tripoGenerateParts === 'boolean' ? { generateParts: g.tripoGenerateParts } : {}),
+    ...(typeof g.tripoAutoSize === 'boolean' ? { autoSize: g.tripoAutoSize } : {}),
+    ...(g.tripoCompress ? { compress: g.tripoCompress } : {}),
+    ...(typeof g.tripoExportUv === 'boolean' ? { exportUv: g.tripoExportUv } : {}),
+    ...(typeof g.tripoEnableImageAutofix === 'boolean' ? { enableImageAutofix: g.tripoEnableImageAutofix } : {}),
+    ...(g.tripoTextureAlignment ? { textureAlignment: g.tripoTextureAlignment } : {}),
+    ...(g.tripoOrientation ? { orientation: g.tripoOrientation } : {}),
+  };
+}
+
+/** 从已完成任务中拆出可下载模型 URL 与预览图 URL（与 App 工作流回填逻辑一致） */
+export function extractTripoModelAndPreviewUrls(done: TripoTaskResult): {
+  modelUrls: string[];
+  previewUrl: string;
+} {
+  const allUrls = done.modelUrls;
+  const modelUrls = allUrls.filter((u) => /\.(glb|gltf|fbx|obj|stl|usdz?|3mf)(\?|#|$)/i.test(u));
+  const raw = done.raw as Record<string, unknown> | null | undefined;
+  const dataOut =
+    raw && typeof raw.data === 'object' && raw.data !== null
+      ? (raw.data as Record<string, unknown>).output
+      : undefined;
+  const dataRendered =
+    dataOut && typeof dataOut === 'object' && dataOut !== null
+      ? String((dataOut as Record<string, unknown>).rendered_image || '')
+      : '';
+  const topRendered =
+    raw && typeof raw.output === 'object' && raw.output !== null
+      ? String(((raw.output as Record<string, unknown>).rendered_image as string) || '')
+      : '';
+  const previewUrl =
+    allUrls.find((u) => /\.(png|jpe?g|webp)(\?|#|$)/i.test(u)) || dataRendered || topRendered || '';
+  return { modelUrls, previewUrl };
+}
+
+export async function tripoWorkflowCreateOrResumeTaskId(params: {
+  apiKey: string;
+  preset: CustomAppModule;
+  imageDataUrl: string;
+  existingTaskId?: string;
+  forceNewTask?: boolean;
+}): Promise<{ taskId: string; resumed: boolean }> {
+  const forceNew = Boolean(params.forceNewTask);
+  const existing = String(params.existingTaskId || '').trim();
+  if (existing && !forceNew) {
+    return { taskId: existing, resumed: true };
+  }
+  const input = buildTripoCreateTaskInputFromPreset({
+    apiKey: params.apiKey,
+    preset: params.preset,
+    imageDataUrl: params.imageDataUrl,
+  });
+  const taskId = await createTripoTask(input);
+  return { taskId, resumed: false };
+}
+
+export async function tripoWorkflowPollUntilDone(params: {
+  apiKey: string;
+  taskId: string;
+  normalizeApiErrorMessage: (e: unknown) => string;
+  onTripoStatus?: (phase: 'queued' | 'running') => void;
+  /** wait 抛错后走 getTripoTask 兜底前回调（便于打日志） */
+  onPollRecover?: (errorMessage: string) => void;
+  timeoutMs?: number;
+  intervalMs?: number;
+}): Promise<TripoTaskResult> {
+  const { apiKey, taskId, normalizeApiErrorMessage } = params;
+  try {
+    return await waitTripoTaskDone(apiKey, taskId, {
+      timeoutMs: params.timeoutMs ?? 8 * 60_000,
+      intervalMs: params.intervalMs ?? 3000,
+      onProgress: (s) => {
+        if (s === 'queued') params.onTripoStatus?.('queued');
+        if (s === 'running') params.onTripoStatus?.('running');
+      },
+    });
+  } catch (e) {
+    const msg = normalizeApiErrorMessage(e);
+    params.onPollRecover?.(msg);
+    return await getTripoTask(apiKey, taskId);
+  }
+}

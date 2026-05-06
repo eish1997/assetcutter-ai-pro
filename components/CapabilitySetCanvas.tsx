@@ -966,6 +966,8 @@ type CanvasInnerProps = {
   assetCandidates?: CapabilityAssetCandidate[];
   /** 工作区项目 id，随本机 `host_bundle.*` 任务提交（可选） */
   companionProjectId?: string | null;
+  /** 与设置页「理解 / 文字模型」一致；未传则由 `capabilityExecutor` 回退默认 registryId */
+  textModelRegistryId?: string | null;
 };
 
 /** 不允许删除的固定节点：默认保留一个「资产输入」节点 */
@@ -989,6 +991,7 @@ function CanvasInner({
   getPartialTestInputImage,
   assetCandidates = [],
   companionProjectId = null,
+  textModelRegistryId = null,
 }: CanvasInnerProps) {
   const { screenToFlowPosition, getNodes, getEdges } = useReactFlow();
   const updateNodeInternals = useUpdateNodeInternals();
@@ -1506,8 +1509,10 @@ function CanvasInner({
         onLog?.('warn', '运行测试：未配置输入图，使用占位图', undefined);
       }
       try {
+        const tm = (textModelRegistryId || '').trim();
         const result = await executeCapabilitySet(set, input, {
           presets,
+          ...(tm ? { textModelRegistryId: tm } : {}),
           companionProjectId: companionProjectId?.trim() || undefined,
           onLog,
           assetInputs,
@@ -1600,6 +1605,7 @@ function CanvasInner({
       onLog,
       presets,
       companionProjectId,
+      textModelRegistryId,
       assetById,
       applyComposerTestPreviews,
       setNodes,
@@ -1973,6 +1979,7 @@ export type CapabilitySetCanvasProps = {
   getPartialTestInputImage?: CanvasInnerProps['getPartialTestInputImage'];
   assetCandidates?: CanvasInnerProps['assetCandidates'];
   companionProjectId?: CanvasInnerProps['companionProjectId'];
+  textModelRegistryId?: CanvasInnerProps['textModelRegistryId'];
 };
 
 export default function CapabilitySetCanvas(props: CapabilitySetCanvasProps) {

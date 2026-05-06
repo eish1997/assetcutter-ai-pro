@@ -1,7 +1,7 @@
 import React, { useLayoutEffect, useState, useRef } from 'react';
 import { createPortal } from 'react-dom';
 
-type Option = { value: string; label: string };
+type Option = { value: string; label: string; disabled?: boolean; title?: string };
 
 type CustomDropdownProps = {
   options: Option[];
@@ -155,12 +155,19 @@ export function CustomDropdown({
               <li key={opt.value === '' ? '__empty__' : opt.value}>
                 <button
                   type="button"
+                  disabled={opt.disabled}
+                  title={opt.title}
                   onClick={() => {
+                    if (opt.disabled) return;
                     onChange(opt.value);
                     setOpen(false);
                   }}
                   className={`w-full px-3 py-2 text-left text-[10px] transition-colors ${
-                    value === opt.value ? 'bg-[#264670] text-blue-300' : 'text-white hover:bg-[#2e2e36]'
+                    opt.disabled
+                      ? 'text-gray-600 cursor-not-allowed opacity-60'
+                      : value === opt.value
+                        ? 'bg-[#264670] text-blue-300'
+                        : 'text-white hover:bg-[#2e2e36]'
                   }`}
                 >
                   {opt.label}

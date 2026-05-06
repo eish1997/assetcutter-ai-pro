@@ -24,12 +24,14 @@ export type WorkspaceUserCloudConfig = {
   settings: {
     dialogSkipUnderstand: boolean;
     workspaceAutoSyncEnabled: boolean;
-    aiProvider: 'trial' | 'gemini' | 'vertex' | 'toapis' | 'antigravity' | 'vectorengine';
+    aiProvider: 'trial' | 'gemini' | 'vertex' | 'toapis' | 'antigravity' | 'openai' | 'vectorengine';
     geminiApiKey: string;
     toapisApiKey: string;
     toapisBaseUrl: string;
     antigravityApiKey: string;
     antigravityBaseUrl: string;
+    openaiApiKey: string;
+    openaiBaseUrl: string;
     vectorengineApiKey: string;
     vectorengineBaseUrl: string;
   };
@@ -237,7 +239,7 @@ export async function fetchWorkspaceUserCloudConfig(
           const ap = String(parsed.settings?.aiProvider ?? '')
             .trim()
             .toLowerCase();
-          if (ap === 'trial' || ap === 'vertex' || ap === 'toapis' || ap === 'antigravity' || ap === 'vectorengine') {
+          if (ap === 'trial' || ap === 'vertex' || ap === 'toapis' || ap === 'antigravity' || ap === 'openai' || ap === 'vectorengine') {
             return ap as WorkspaceUserCloudConfig['settings']['aiProvider'];
           }
           if (ap === 'gemini') return 'gemini';
@@ -248,6 +250,8 @@ export async function fetchWorkspaceUserCloudConfig(
         toapisBaseUrl: String(parsed.settings?.toapisBaseUrl || ''),
         antigravityApiKey: String(parsed.settings?.antigravityApiKey || ''),
         antigravityBaseUrl: String(parsed.settings?.antigravityBaseUrl || ''),
+        openaiApiKey: String(parsed.settings?.openaiApiKey || ''),
+        openaiBaseUrl: String(parsed.settings?.openaiBaseUrl || ''),
         vectorengineApiKey: String(parsed.settings?.vectorengineApiKey || ''),
         vectorengineBaseUrl: String(parsed.settings?.vectorengineBaseUrl || ''),
       },
@@ -286,7 +290,7 @@ export async function pushWorkspaceUserCloudConfig(
         const ap = String(input.settings.aiProvider ?? '')
           .trim()
           .toLowerCase();
-        if (ap === 'trial' || ap === 'vertex' || ap === 'toapis' || ap === 'antigravity' || ap === 'vectorengine') {
+        if (ap === 'trial' || ap === 'vertex' || ap === 'toapis' || ap === 'antigravity' || ap === 'openai' || ap === 'vectorengine') {
           return ap as WorkspaceUserCloudConfig['settings']['aiProvider'];
         }
         if (ap === 'gemini') return 'gemini';
@@ -297,6 +301,8 @@ export async function pushWorkspaceUserCloudConfig(
       toapisBaseUrl: String(input.settings.toapisBaseUrl || ''),
       antigravityApiKey: String(input.settings.antigravityApiKey || ''),
       antigravityBaseUrl: String(input.settings.antigravityBaseUrl || ''),
+      openaiApiKey: String(input.settings.openaiApiKey || ''),
+      openaiBaseUrl: String(input.settings.openaiBaseUrl || ''),
       vectorengineApiKey: String(input.settings.vectorengineApiKey || ''),
       vectorengineBaseUrl: String(input.settings.vectorengineBaseUrl || ''),
     },

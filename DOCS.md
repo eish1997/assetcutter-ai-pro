@@ -17,20 +17,24 @@
 
 技术栈：**React 19** + **Vite 6** + **TypeScript** + **@google/genai**，样式为 Tailwind + 内联 CSS。
 
-**发布与 CI：** 网站/部署范围、环境变量与手测清单见 [`docs/网站与发布检查清单.md`](docs/网站与发布检查清单.md)；合并默认分支前以 **GitHub Actions `CI`**（typecheck、lint、**Vitest**、`local-companion` typecheck、`guard:storage`、build）通过为准。单元测试范围见根目录 **`vitest.config.ts`**（**`tests/**/*.test.{ts,tsx}`**，含组件交互测试）。
+**发布与 CI：** 网站/部署范围、环境变量与手测清单见 `[docs/网站与发布检查清单.md](docs/网站与发布检查清单.md)`；合并默认分支前以 **GitHub Actions `CI`**（typecheck、lint、**Vitest**、`local-companion` typecheck、`guard:storage`、build）通过为准。单元测试范围见根目录 `**vitest.config.ts`**（`**tests/**/*.test.{ts,tsx}**`，含组件交互测试）。
 
-**本地开发类型检查：** 仓库根执行 `npx tsc --noEmit`；根 `tsconfig.json` 已排除 `示例项目/`，避免示例子工程缺依赖影响主仓库校验。本地伴侣存储 API、manifest 扫盘补登记与主站调用顺序见 [`docs/本地伴侣-本地程序开发.md`](docs/本地伴侣-本地程序开发.md) **§3.1** 与 [`docs/本地与云存储分层开发方案.md`](docs/本地与云存储分层开发方案.md) M2 补充。**宿主插件包**（`run.json`、ZIP 解压、**`host_bundle.probe/exec`**）与主站 **`companionClient/hostPlugins`**、设置页联调见 [`docs/本地伴侣-插件与发行.md`](docs/本地伴侣-插件与发行.md) **§4** 及 [`docs/本地伴侣-本地程序开发.md`](docs/本地伴侣-本地程序开发.md) **§3～§4.1**。
+**本地开发类型检查：** 仓库根执行 `npx tsc --noEmit`；根 `tsconfig.json` 已排除 `示例项目/`，避免示例子工程缺依赖影响主仓库校验。本地伴侣存储 API、manifest 扫盘补登记与主站调用顺序见 `[docs/本地伴侣-本地程序开发.md](docs/本地伴侣-本地程序开发.md)` **§3.1** 与 `[docs/本地与云存储分层开发方案.md](docs/本地与云存储分层开发方案.md)` M2 补充。**宿主插件包**（`run.json`、ZIP 解压、`**host_bundle.probe/exec`**）与主站 `**companionClient/hostPlugins**`、设置页联调见 `[docs/本地伴侣-插件与发行.md](docs/本地伴侣-插件与发行.md)` **§4** 及 `[docs/本地伴侣-本地程序开发.md](docs/本地伴侣-本地程序开发.md)` **§3～§4.1**。
+
+**架构原则（店—仓—菜单）**：供货商 / 仓库 / 门面与编排的分层约定见 [`docs/架构宪章-店仓菜单.md`](docs/架构宪章-店仓菜单.md)；与多模型落地对照见 [`docs/多模型可运营改造计划.md`](docs/多模型可运营改造计划.md)（其中 **§1.4** 为宪章执行细则、货架地图与 PR 自检；拣货路径键值只读索引见 `services/workflowAiPickIndex.ts`）。
 
 ---
 
 ## 二、功能模块总览
 
-| 模块       | 入口/模式   | 主要功能 |
-|------------|-------------|----------|
-| 提取花纹   | `AppMode.TEXTURE`  | 图案提取、无缝循环贴图 |
-| **对话生图** | `AppMode.DIALOG` | 上传图片 + 描述需求 → AI 理解 → 生图模型按指令出图（可选模型/尺寸） |
-| **生成3D资产** | `AppMode.GENERATE_3D` | 腾讯混元生3D：文生3D / 图生3D 等 8 个模块，结果保存到资产库 |
-| 资产仓库   | `AppMode.LIBRARY`  | 按类型筛选、查看/下载、多选批量下载、删除 |
+
+| 模块         | 入口/模式                 | 主要功能                                     |
+| ---------- | --------------------- | ---------------------------------------- |
+| 提取花纹       | `AppMode.TEXTURE`     | 图案提取、无缝循环贴图                              |
+| **对话生图**   | `AppMode.DIALOG`      | 上传图片 + 描述需求 → AI 理解 → 生图模型按指令出图（可选模型/尺寸） |
+| **生成3D资产** | `AppMode.GENERATE_3D` | 腾讯混元生3D：文生3D / 图生3D 等 8 个模块，结果保存到资产库     |
+| 资产仓库       | `AppMode.LIBRARY`     | 按类型筛选、查看/下载、多选批量下载、删除                    |
+
 
 ---
 
@@ -44,20 +48,20 @@
 2. **输入需求**：在输入框用自然语言描述如何修改，如「把背景改成星空」「去掉路人，只保留建筑」。
 3. **选择生图模型**：下拉选择使用的 Gemini 生图模型（如 Gemini 2.5 Flash Image、Gemini 3 Pro Image 等）。
 4. **输出尺寸**：
-   - **比例自适应**：不传 `aspectRatio`/`imageSize`，由模型默认出图。
-   - **手动选择**：选择**画面比例**（1:1、16:9、9:16、4:3、3:4、3:2、2:3、21:9）和**输出尺寸**（1K、2K、4K）。
+  - **比例自适应**：不传 `aspectRatio`/`imageSize`，由模型默认出图。
+  - **手动选择**：选择**画面比例**（1:1、16:9、9:16、4:3、3:4、3:2、2:3、21:9）和**输出尺寸**（1K、2K、4K）。
 5. **发送**：点击「发送」后：
-   - 先调用**理解模型**（`config.modelText`）对「用户描述 + 可选图片」做理解，得到一条简洁的英文生图指令。
-   - 再调用**生图模型**（所选 `dialogModel`），传入原图 + 理解后的指令 + 可选 `aspectRatio`/`imageSize`，得到结果图。
+  - 先调用**理解模型**（`config.modelText`）对「用户描述 + 可选图片」做理解，得到一条简洁的英文生图指令。
+  - 再调用**生图模型**（所选 `dialogModel`），传入原图 + 理解后的指令 + 可选 `aspectRatio`/`imageSize`，得到结果图。
 6. **对话区**：每条用户消息显示上传的图 + 文案；助手消息显示「理解指令」+ 生成图。右下角任务中心会显示「对话生图」任务进度。
 7. **对生成结果的操作**（每条助手消息下方）：
-   - **下载图片**：将当前生成图下载为 PNG 文件。
-   - **复制图片**：将当前生成图复制到剪贴板，可粘贴到其他应用。
-   - **以此图继续**：把该生成图设为当前输入图，可在输入框继续描述并发送，生成新图（多轮优化）。
-   - **识别图中物体**：调用单图物体检测，在图上显示边界框与 **①②③** 数字标签；可多次收起/展开查看（结果会缓存），可「重新识别」再次调用检测。点击 **① ② ③** 下载对应物体（裁剪时带约 8% 边距溢出），或「下载全部」。下载文件名为 **会话标题 + 编号 + 本条消息时间**（如 `大门_①_2025-02-04_12-30-45.png`）。
-   - **保存到库**：将当前生成的图片保存到资产仓库（类别 PREVIEW_STRIP），可在「资产仓库」中查看与下载。
-   - **直接重新生成**：使用同一条用户消息的图片与文案，再次执行「理解 → 生图」，用新结果替换当前助手回复。
-   - **编辑后重新生成**：点击后在该条消息内展开输入框（预填原用户文案），修改描述后点击「确认重新生成」，以修改后的文案重新理解并生图，替换当前回复。可点击「取消」收起编辑。
+  - **下载图片**：将当前生成图下载为 PNG 文件。
+  - **复制图片**：将当前生成图复制到剪贴板，可粘贴到其他应用。
+  - **以此图继续**：把该生成图设为当前输入图，可在输入框继续描述并发送，生成新图（多轮优化）。
+  - **识别图中物体**：调用单图物体检测，在图上显示边界框与 **①②③** 数字标签；可多次收起/展开查看（结果会缓存），可「重新识别」再次调用检测。点击 **① ② ③** 下载对应物体（裁剪时带约 8% 边距溢出），或「下载全部」。下载文件名为 **会话标题 + 编号 + 本条消息时间**（如 `大门_①_2025-02-04_12-30-45.png`）。
+  - **保存到库**：将当前生成的图片保存到资产仓库（类别 PREVIEW_STRIP），可在「资产仓库」中查看与下载。
+  - **直接重新生成**：使用同一条用户消息的图片与文案，再次执行「理解 → 生图」，用新结果替换当前助手回复。
+  - **编辑后重新生成**：点击后在该条消息内展开输入框（预填原用户文案），修改描述后点击「确认重新生成」，以修改后的文案重新理解并生图，替换当前回复。可点击「取消」收起编辑。
 8. **模式切换**：输入区顶部可切换 **生图模式** / **纯文字对话**。纯文字对话下无需上传图片，直接输入文字与 AI 对话，助手仅返回文字；生图模式下需上传图片并描述修改需求。
 9. **版本历史与回滚**：每次「直接重新生成」或「编辑后重新生成」会在该条助手消息下追加一个新版本，不覆盖旧结果。当存在多版时显示 **历史版本**：**上一版** / **下一版** 与「x / 总数」，可切换查看任意一版；下载、以此图继续、识别物体、保存到库等操作均针对当前选中的版本。
 10. **生成结果元数据**：每条生成图下方会显示该版本的 **分辨率**（宽 × 高）、**宽高比**（约分后，如 16:9）、以及 **生成时间**（该版本的时间戳）。
@@ -125,16 +129,18 @@
 
 ### 8 个模块与流程
 
-| 模块 | 输入 | 说明 |
-|------|------|------|
+
+| 模块             | 输入                                                                                 | 说明                                                  |
+| -------------- | ---------------------------------------------------------------------------------- | --------------------------------------------------- |
 | **混元生3D（专业版）** | 文生：文本描述；图生：单图或多视图（2–8 张）。可选模型 3.0/3.1、生成类型（Normal/LowPoly/Geometry/Sketch）、面数、PBR。 | `startTencent3DProJob`，轮询 `QueryHunyuanTo3DProJob`。 |
-| **混元生3D（极速版）** | 文生或图生，可选输出格式、PBR。 | `startTencent3DRapidJob`。 |
-| **智能拓扑** | 高模 3D 文件 URL（OBJ/GLB）。可选多边形类型（三角/四边）、减面档位（high/medium/low）。 | `startReduceFaceJob`，Polygon 1.5 模型，输出低面数规整布线。 |
-| **纹理生成** | 几何模型 URL（OBJ/GLB）+ **文字描述** 或 **参考图** 二选一。可选 PBR。 | `startTextureTo3DJob`，单几何 + 参考图/文字 → 纹理贴图。 |
-| **组件生成** | 3D 模型 URL（官方仅支持 FBX）。可选模型版本 1.0/1.5。 | `startPartJob`，自动识别结构生成组件。 |
-| **UV 展开** | 3D 模型 URL（FBX/OBJ/GLB）。 | `startUVJob`，根据模型纹理输出 UV 贴图。 |
-| **3D 人物生成** | 人物头像（Base64 或 URL）。可选模板（如 basketball、pingpong 等）。 | `startProfileTo3DJob`，按模板生成 3D 形象。 |
-| **模型格式转换** | 模型文件 URL + 目标格式（STL/USDZ/FBX/MP4/GIF）。 | `convert3DFormat`，同步返回结果 URL。 |
+| **混元生3D（极速版）** | 文生或图生，可选输出格式、PBR。                                                                  | `startTencent3DRapidJob`。                           |
+| **智能拓扑**       | 高模 3D 文件 URL（OBJ/GLB）。可选多边形类型（三角/四边）、减面档位（high/medium/low）。                        | `startReduceFaceJob`，Polygon 1.5 模型，输出低面数规整布线。      |
+| **纹理生成**       | 几何模型 URL（OBJ/GLB）+ **文字描述** 或 **参考图** 二选一。可选 PBR。                                  | `startTextureTo3DJob`，单几何 + 参考图/文字 → 纹理贴图。          |
+| **组件生成**       | 3D 模型 URL（官方仅支持 FBX）。可选模型版本 1.0/1.5。                                               | `startPartJob`，自动识别结构生成组件。                          |
+| **UV 展开**      | 3D 模型 URL（FBX/OBJ/GLB）。                                                            | `startUVJob`，根据模型纹理输出 UV 贴图。                        |
+| **3D 人物生成**    | 人物头像（Base64 或 URL）。可选模板（如 basketball、pingpong 等）。                                  | `startProfileTo3DJob`，按模板生成 3D 形象。                  |
+| **模型格式转换**     | 模型文件 URL + 目标格式（STL/USDZ/FBX/MP4/GIF）。                                             | `convert3DFormat`，同步返回结果 URL。                       |
+
 
 提交后任务进入**生成队列**，最多 2 个并发；完成后结果写入**临时库**，可切换预览、下载、保存到资产库（`MESH_MODEL`，`modelUrls` 存下载链接）。
 
@@ -196,7 +202,8 @@ assetcutter-ai-pro/
 │   ├── ProcessingFeedback.tsx  # 占位组件（return null）
 │   └── StepIndicator.tsx    # 占位组件（return null）
 ├── services/
-│   ├── geminiService.ts     # Gemini 调用：编辑、贴图处理、对话理解与生图、物体检测、会话标题等；DEFAULT_PROMPTS；重试逻辑
+│   ├── unifiedAiGateway.ts  # **站点统一大模型 import 入口**（再导出 + 薄委托至 geminiService / Tripo）；业务勿直接 import geminiService
+│   ├── geminiService.ts     # 实现层：getAI()、各 RPC、DEFAULT_PROMPTS、重试
 │   └── tencentService.ts    # 腾讯混元生3D（ai3d）API：Submit/Query 专业版任务、轮询、TC3 签名；生成3D 模块调用
 ├── server/
 │   └── ai3d-proxy.js     # 混元生3D 本地代理（解决 CORS），npm run proxy 启动
@@ -207,33 +214,38 @@ assetcutter-ai-pro/
 
 ## 九、核心类型（types.ts）
 
-| 类型 | 说明 |
-|------|------|
-| `AppMode` | `LAB` / `TEXTURE` / `LIBRARY` / `DIALOG` / `GENERATE_3D` / `ADMIN` |
-| `AppStep` | 贴图步骤：`T_PATTERN` / `T_TILE` / `T_PBR` |
-| `LibraryItem` | 库中一条：id、type、category、label、data(base64)、sourceId、timestamp、style、groupId；3D 模型另有 modelUrls（下载链接列表） |
-| `AssetCategory` | `SCENE_OBJECT` / `PREVIEW_STRIP` / `PRODUCTION_ASSET` / `MESH_MODEL` / `TEXTURE_MAP` |
-| `BoundingBox` | id、label、ymin/xmin/ymax/xmax（0–1000 归一化） |
-| `AppTask` | 任务：type、label、status、progress、message、error、startTime |
-| `SystemConfig` | modelText / modelImage / modelPro、customPromptSuffix、prompts 各环节提示词 |
+
+| 类型              | 说明                                                                                                  |
+| --------------- | --------------------------------------------------------------------------------------------------- |
+| `AppMode`       | `LAB` / `TEXTURE` / `LIBRARY` / `DIALOG` / `GENERATE_3D` / `ADMIN`                                  |
+| `AppStep`       | 贴图步骤：`T_PATTERN` / `T_TILE` / `T_PBR`                                                               |
+| `LibraryItem`   | 库中一条：id、type、category、label、data(base64)、sourceId、timestamp、style、groupId；3D 模型另有 modelUrls（下载链接列表） |
+| `AssetCategory` | `SCENE_OBJECT` / `PREVIEW_STRIP` / `PRODUCTION_ASSET` / `MESH_MODEL` / `TEXTURE_MAP`                |
+| `BoundingBox`   | id、label、ymin/xmin/ymax/xmax（0–1000 归一化）                                                            |
+| `AppTask`       | 任务：type、label、status、progress、message、error、startTime                                               |
+| `SystemConfig`  | modelText / modelImage / modelPro、customPromptSuffix、prompts 各环节提示词                                 |
+
 
 ---
 
-## 十、AI 服务（geminiService.ts）
+## 十、AI 服务（unifiedAiGateway → geminiService）
 
+- **调用约定**：`components` / `hooks` / 业务侧 `services` 应 **`import { … } from './services/unifiedAiGateway'`**；`geminiService.ts` 仅作实现与 `getAI()`。
 - **鉴权**：`getAI()` 使用用户在设置页填写并保存在浏览器本机的 Gemini API Key。
 - **重试**：`callWithRetry(apiFn, 3, 2000)` 对 503/429/overloaded/UNAVAILABLE 自动重试，间隔递增。
 - **接口一览**：
 
-| 函数 | 用途 | 主要参数 |
-|------|------|----------|
-| `editImage` | 按自然语言指令编辑图像（对话生图等） | base64Image, editPrompt, model, customSystemPrompt |
-| `processTexture` | 贴图处理：pattern / tileable / pbr | base64Image, type, mapType, model, customPrompt |
-| `understandImageEditIntent` | 理解用户修改意图，返回生图指令 | imageBase64?, userPrompt, modelText, customPrompt? |
-| `dialogGenerateImage` | 对话生图：原图 + 指令 → 生成图 | imageBase64, instruction, model, options?, customSystemPrompt? |
-| `detectObjectsInImage` | 单图物体检测，返回 BoundingBox[] | base64Image, model?, customPrompt? |
-| `getDialogTextResponse` | 纯文字对话 | contents, model? |
-| `generateSessionTitle` | 生成会话标题（2～4 字） | userText, model?, customPrompt?, imageBase64? |
+
+| 函数                          | 用途                            | 主要参数                                                           |
+| --------------------------- | ----------------------------- | -------------------------------------------------------------- |
+| `editImage`                 | 按自然语言指令编辑图像（对话生图等）            | base64Image, editPrompt, model, customSystemPrompt             |
+| `processTexture`            | 贴图处理：pattern / tileable / pbr | base64Image, type, mapType, model, customPrompt                |
+| `understandImageEditIntent` | 理解用户修改意图，返回生图指令               | imageBase64?, userPrompt, modelText, customPrompt?             |
+| `dialogGenerateImage`       | 对话生图：原图 + 指令 → 生成图            | imageBase64, instruction, model, options?, customSystemPrompt? |
+| `detectObjectsInImage`      | 单图物体检测，返回 BoundingBox[]       | base64Image, model?, customPrompt?                             |
+| `getDialogTextResponse`     | 纯文字对话                         | contents, model?                                               |
+| `generateSessionTitle`      | 生成会话标题（2～4 字）                 | userText, model?, customPrompt?, imageBase64?                  |
+
 
 - **提示词**：所有默认提示词在 `DEFAULT_PROMPTS` 中；App 从 `localStorage.ac_config` 读 `SystemConfig`，若存在则用 `config.prompts.*` 覆盖对应环节的 customPrompt。
 
@@ -248,18 +260,34 @@ assetcutter-ai-pro/
 
 ### 11.2 更换或增加模型
 
-- 在 `SystemConfig` 中已有 `modelText`、`modelImage`、`modelPro`；若 UI 有「设置」页，可在此修改并写回 `localStorage.ac_config`。
-- `geminiService` 各函数的 `model` 参数从调用处传入（多数来自 `config.modelText` / `config.modelImage` / `config.modelPro`），直接改传入的 model 即可换模型。
+- 在 `SystemConfig` 中已有 `modelText`、`modelImage`、`modelPro`（策略 A 下与上游 Gemini 系 id 一致，作 registryId）；App 启动读 `localStorage.ac_config` 时会经 `migrateSystemModelSlots` 校验生图槽位是否仍在注册表内。
+- **默认值**：`services/modelRegistry/constants.ts`（`DEFAULT_MODEL_*`）。
+- **对话生图可选列表 / 挡位 / 参考图上限**：`services/modelRegistry/imageModels.ts`，由 `types.ts` re-export（`DIALOG_IMAGE_*`、`maxReferenceImagesForImageGear`）。
+- **各渠道实际上游 id**：`services/modelRegistry/resolve.ts`（`resolveUpstreamTextModelId` / `resolveUpstreamImageModelId`）；`geminiService` 仍 re-export 同名函数供适配层使用。
+- **ToAPIs 独有模型名映射**：仍在 `services/toapisAdapter.ts`（须在 resolve 之后应用，避免双重映射）；详见该文件头部注释。
+- **运营策略（可选）**：构建变量 `VITE_MODEL_OPS_CONFIG_URL` 指向可 CORS 访问的 JSON（字段见 `public/model-ops.example.json`），用于禁用部分生图档位；合并逻辑在 `services/modelRegistry/merge.ts`，观测日志前缀 `**[model-registry]`**；运维操作与回滚见 **`docs/model-ops-runbook.md`**。
+- 总体规划：`docs/多模型可运营改造计划.md`；能力矩阵草稿：`docs/spec/model-capability-matrix.md`。
+- **宪章与拣货路径**：原则见 `docs/架构宪章-店仓菜单.md` §2；与现状对照、闸门表、Mermaid 依赖图与 PR 自检清单见 `docs/多模型可运营改造计划.md` **§1.4**；节点/边/货物大类的键值索引见 `services/workflowAiPickIndex.ts`；**`WorkflowSection.runTask`** 分支判定见 `services/workflowRunTaskBranch.ts`（新增或变更用户可达 AI 调用链时请同步更新）。
+- **阶段 0 书面模版**（registryId 策略、盘点表、矩阵勾选）：`docs/spec/phase0-model-inventory-template.md`。
+
+### 11.2.1 工作流生视频能力（`generate_video`）
+
+- **构建变量**：`VITE_WORKFLOW_VIDEO_API_URL` 指向可 POST 的 HTTP 桥（请求体含 `prompt`，可选 `referenceImages`）；未配置时执行会失败（`WorkflowVideoNotAvailableError`）。桥接实现见 `services/workflowVideoBridge.ts`，统一入口为 `services/unifiedAiGateway.ts` 的 `workflowGenerateVideo`（详见 `docs/多模型可运营改造计划.md` §3.6）。
+- **执行链**：`services/capabilityExecutor.ts` 将分类 `generate_video` 视为内置能力并调用上述网关；**能力集合**中若某步返回视频会报错退出（当前仅支持在单卡主区执行生视频）。
+- **数据与展示**：成功时工作流资产 `results` 写入视频 data URL 或可用地址；`WorkflowAsset.resultMeta[displayKey].mediaKind === 'video'` 时，网格 `WorkflowGridImage` 使用 `<video>` 预览（`services/workflowImageDisplay.ts`）。
+- **预设与快捷条**：能力预设、侧栏拖放规则见 `CapabilityPresetSection.tsx`、`WorkflowSidebarColumn.tsx`；根资产拖入需 **有图或有文**（`services/workflowTextAsset.ts`）。底部 **快捷创作条** 不把 `generate_video` 纳入默认能力列表（与 `generate_3d` 相同策略）。
 
 ### 11.3 自定义提示词
 
-- 方式一：改 `services/geminiService.ts` 里的 `DEFAULT_PROMPTS`。
+- 方式一：改 `services/geminiService.ts` 里的 `DEFAULT_PROMPTS`（业务侧仍通过 `unifiedAiGateway` 引用 `DEFAULT_PROMPTS`）。
 - 方式二：在 App 中提供配置 UI，读写 `config.prompts` 并保存到 `localStorage.ac_config`，调用各 API 时把 `config.prompts.xxx` 作为 `customPrompt` 传入。
 
 ### 11.4 生成3D资产与腾讯混元生3D
 
 - **生成3D资产**模块（`AppMode.GENERATE_3D`）已接入腾讯云混元生3D（ai3d）全部 8 个能力：专业版、极速版、智能拓扑、纹理生成、组件生成、UV 展开、3D 人物生成、模型格式转换。任务经队列（最多 2 个并发）执行，结果进入临时库后可保存到资产库（`MESH_MODEL`，`modelUrls` 存下载链接）。凭证通过 `.env.local` 的 `TENCENT_SECRET_ID` / `TENCENT_SECRET_KEY` 或页面内临时填写。
-- 扩展：新增接口时在 `tencentService.ts` 中按现有模式实现 `submitXxx` / `queryXxx` 或 `describeXxx`，以及 `startXxxJob` 轮询封装，再在 `App.tsx` 的生成队列 `useEffect` 中为对应 `pending.type` 分支调用并写入临时库。
+- **Import 约定**：页面与 `hooks/useGenerate3DManager` 等应 **`import { … } from './services/unifiedAiGateway'`**（网关内 `export * from tencentService`），与 Tripo 相同，**勿**在 `App` / `components` / `hooks` 中直连 `tencentService.ts`（见 `eslint.config.js`）。
+- **3D 任务适配层**（`services/generate3d/`）：腾讯队列执行 **`runTencentGenerate3dQueueItem`**、工作流 Tripo **`tripoWorkflowCreateOrResumeTaskId` / `tripoWorkflowPollUntilDone`**、预设 **`normalizeGenerate3DPresetForRun`**；**`GENERATE3D_PROVIDER_REGISTRY`** 登记当前供应商，后续接新 3D 厂商时在此扩展并实现平行适配模块（实现文件可直连 `tripoService` / `tencentService`，见 `eslint.config.js` ignores）。
+- 扩展：新增接口时在 `tencentService.ts` 中按现有模式实现 `submitXxx` / `queryXxx` 或 `describeXxx`，以及 `startXxxJob` 轮询封装，并 **在 `unifiedAiGateway.ts` 中随 `export *` 自动透出**；队列侧在 **`tencentQueueRunner.ts`** 增加分支；再在 `App.tsx` 的生成队列 `useEffect` 中为对应 `pending.type` 分支调用并写入临时库。
 
 ### 11.5 新增资产类别或类型
 
@@ -299,13 +327,12 @@ assetcutter-ai-pro/
 
 ---
 
-
 ---
 
 ## 十二、环境与运行
 
 - **Gemini 密钥**：改为在设置页由当前用户填写并保存在浏览器本机，不再通过构建环境变量注入前端产物。
-- **开发**：`npm run dev`，默认 http://localhost:3000。
+- **开发**：`npm run dev`，默认 [http://localhost:3000。](http://localhost:3000。)
 - **构建**：`npm run build`；预览构建结果：`npm run preview`。
 
 ---

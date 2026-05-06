@@ -1,5 +1,7 @@
-/** 能力集拖放 / 队列：`set:<setId>` 前缀 */
-export const SET_ACTION_PREFIX = 'set:';
+import { WORKFLOW_SET_ACTION_PREFIX } from '../../services/workflowSetActionPrefix';
+
+/** 能力集拖放 / 队列：`set:<setId>` 前缀（与 `services/workflowSetActionPrefix.ts` 同源） */
+export const SET_ACTION_PREFIX = WORKFLOW_SET_ACTION_PREFIX;
 
 /** 顶栏与卷轴各列共用水平基准（12px = 1.5×8px 栅格），与「1」分档左缘、能力预设正文左缘对齐 */
 export const WORKFLOW_EDGE_GUTTER = 'px-3';

@@ -1,4 +1,5 @@
 import type { VgpAssetExtension } from './types/vgp';
+import type { DialogImageGear } from './services/modelRegistry/imageModels';
 
 export type { VgpAssetExtension, VgpGenStepCapture } from './types/vgp';
 export type {
@@ -191,7 +192,7 @@ export type SystemConfig = {
   modelPro: string;
   customPromptSuffix: string;
   prompts: {
-    /** 对话生图编辑指令用（geminiService.dialogGenerateImage） */
+    /** 对话生图编辑指令用（经 unifiedAiGateway / dialogGenerateImage） */
     edit?: string;
     texture_pattern: string;
     texture_tileable: string;
@@ -317,36 +318,14 @@ export type DialogTempItem = {
   timestamp: number;
 };
 
-/** 可选生图模型（展示名 -> 模型 id） */
-export const DIALOG_IMAGE_MODELS = [
-  { id: 'gemini-2.5-flash-image', label: 'Gemini 2.5 Flash Image' },
-  { id: 'gemini-3.1-flash-image-preview', label: 'Gemini 3.1 Flash Image' },
-  { id: 'gemini-3-pro-image-preview', label: 'Gemini 3 Pro Image' },
-] as const;
-
-/** 生图挡位（快速 / 标准 / Pro），对应支持图像输出的模型 */
-export const DIALOG_IMAGE_GEARS = [
-  { id: 'fast', label: '快速', modelId: 'gemini-2.5-flash-image' },
-  { id: 'standard', label: '标准', modelId: 'gemini-3.1-flash-image-preview' },
-  { id: 'pro', label: 'Pro', modelId: 'gemini-3-pro-image-preview' },
-] as const;
-export type DialogImageGear = (typeof DIALOG_IMAGE_GEARS)[number]['id'];
-
-/**
- * 单次请求内参考图数量上限（快捷栏多图、多参考图生图等），按当前接入的生图模型 id 约束。
- * 未列出的模型回退为 8。
- */
-export const DIALOG_IMAGE_MODEL_MAX_REFERENCE_IMAGES: Partial<Record<(typeof DIALOG_IMAGE_GEARS)[number]['modelId'], number>> = {
-  'gemini-2.5-flash-image': 10,
-  'gemini-3.1-flash-image-preview': 10,
-  'gemini-3-pro-image-preview': 10,
-};
-
-export function maxReferenceImagesForImageGear(gear?: DialogImageGear): number {
-  const id = (gear && DIALOG_IMAGE_GEARS.some((g) => g.id === gear) ? gear : 'standard') as DialogImageGear;
-  const modelId = DIALOG_IMAGE_GEARS.find((g) => g.id === id)!.modelId;
-  return DIALOG_IMAGE_MODEL_MAX_REFERENCE_IMAGES[modelId] ?? 8;
-}
+/** 对话生图模型列表 / 挡位 / 参考图上限 — 源自 `services/modelRegistry/imageModels.ts`（单一数据源） */
+export {
+  DIALOG_IMAGE_GEARS,
+  DIALOG_IMAGE_MODEL_MAX_REFERENCE_IMAGES,
+  DIALOG_IMAGE_MODELS,
+  maxReferenceImagesForImageGear,
+} from './services/modelRegistry/imageModels';
+export type { DialogImageGear };
 
 // ---------- 工作流模块 ----------
 /** 工作流功能类型：拖拽到的目标框（默认 4 个，可扩展） */
@@ -421,6 +400,8 @@ export type WorkflowAsset = {
     string,
     {
       executedAt: number;
+      /** 结果槽位媒体类型；生视频步骤写入 `video` 以便网格用 `<video>` 预览 */
+      mediaKind?: 'image' | 'video';
       /** 生成3D（Tripo）创建成功后记录，便于查询失败时继续查询旧任务而非重建任务 */
       tripoTaskId?: string;
       /** 最近一次 Tripo 查询/落盘失败信息（可选） */
@@ -502,6 +483,11 @@ export const CAPABILITY_CATEGORIES = [
   { id: 'image_to_image', label: '图生图', desc: '图片入 → 图片出（拖图片卡；可选内置处理或生图模型）' },
   { id: 'image_to_text', label: '图生文', desc: '图片入 → 文字出（拖图片卡）' },
   { id: 'generate_3d', label: '生成3D', desc: '工作流中拖图到该能力即按预设提交 3D 任务（支持 Tripo）' },
+  {
+    id: 'generate_video',
+    label: '生成视频',
+    desc: '文字与/或参考图 → 视频（需配置 VITE_WORKFLOW_VIDEO_API_URL，由后端桥接供应商）',
+  },
 ] as const;
 export type CapabilityCategory = (typeof CAPABILITY_CATEGORIES)[number]['id'];
 
@@ -562,14 +548,14 @@ export type Generate3DPreset = {
 export type CustomAppModule = {
   id: string;
   label: string;
-  /** 分类：文生文 | 文生图 | 图生图 | 图生文 | 生成3D */
+  /** 分类：文生文 | 文生图 | 图生图 | 图生文 | 生成3D | 生成视频 */
   category: CapabilityCategory;
   /**
    * 执行引擎（可选，由分类推导或显式指定）：
    * - text_to_text / image_to_text → gen_text
    * - text_to_image → gen_image
    * - image_to_image → builtin（切割/拆分等）或 gen_image（提示词生图）
-   * - generate_3d 不使用
+   * - generate_3d / generate_video 不使用
    */
   engine?: CapabilityEngine;
   /** 生图档位（可选），仅在 engine === 'gen_image' 时生效 */

@@ -11,6 +11,7 @@ type AppIconName =
   | 'image'
   | 'camera'
   | 'cube'
+  | 'video'
   | 'edit'
   | 'trash'
   | 'user'
@@ -54,6 +55,12 @@ const paths: Record<AppIconName, React.ReactNode> = {
     <>
       <path d="M10 2.8 16 6v8l-6 3.2L4 14V6l6-3.2Z" stroke="currentColor" strokeWidth="1.6" />
       <path d="M4 6l6 3.1L16 6" stroke="currentColor" strokeWidth="1.4" />
+    </>
+  ),
+  video: (
+    <>
+      <rect x="3.5" y="5" width="10.5" height="10" rx="1.5" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M14.5 7.5 17 5.8v8.4l-2.5-1.7V7.5Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
     </>
   ),
   edit: <path d="m4 14.5 6.8-6.8 2.3 2.3-6.8 6.8H4v-2.3ZM12 6.5l1.5-1.5a1.3 1.3 0 0 1 1.8 0l.7.7a1.3 1.3 0 0 1 0 1.8L14.5 9" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />,

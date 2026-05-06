@@ -68,14 +68,16 @@ Instruction: {instruction}
 
 ## 二、API 函数签名（geminiService）
 
-| 函数 | 用途 | 主要参数 |
-|------|------|----------|
-| `analyzeScene(base64Image, model?, customPrompt?)` | 场景分析，返回 objectCount、objectTypes、suggestedGrid、description | 返回 JSON：suggestedGrid 含 rows/cols |
-| `detectObjectsInAtlas(base64Image, model?, customPrompt?)` | 网格图物体检测，返回 BoundingBox[]（box_2d → ymin/xmin/ymax/xmax 0-1000） | 返回 JSON 数组，每项 id/label/box_2d |
-| `synthesizeGrid(base64Image, grid, model?, customPrompt?)` | 按 rows/cols 生成网格图，背景 #101010 | grid: { rows, cols } |
-| `synthesizeMultiView(base64Object, viewCount, style, model?, customPrompt?)` | 单物体多视角图，生成 strip | customPrompt 可含 {style} {viewCount} |
-| `enhanceMultiView(base64Object, viewCount, style, model?, customPrompt?)` | 多视角 4K 增强 | 同上 |
-| `editImage(base64Image, editPrompt, model?, customSystemPrompt?)` | 按自然语言指令编辑图像 | systemInstruction 用 edit 模板替换 {instruction} |
+
+| 函数                                                                           | 用途                                                            | 主要参数                                        |
+| ---------------------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------- |
+| `analyzeScene(base64Image, model?, customPrompt?)`                           | 场景分析，返回 objectCount、objectTypes、suggestedGrid、description     | 返回 JSON：suggestedGrid 含 rows/cols           |
+| `detectObjectsInAtlas(base64Image, model?, customPrompt?)`                   | 网格图物体检测，返回 BoundingBox[]（box_2d → ymin/xmin/ymax/xmax 0-1000） | 返回 JSON 数组，每项 id/label/box_2d               |
+| `synthesizeGrid(base64Image, grid, model?, customPrompt?)`                   | 按 rows/cols 生成网格图，背景 #101010                                  | grid: { rows, cols }                        |
+| `synthesizeMultiView(base64Object, viewCount, style, model?, customPrompt?)` | 单物体多视角图，生成 strip                                              | customPrompt 可含 {style} {viewCount}         |
+| `enhanceMultiView(base64Object, viewCount, style, model?, customPrompt?)`    | 多视角 4K 增强                                                     | 同上                                          |
+| `editImage(base64Image, editPrompt, model?, customSystemPrompt?)`            | 按自然语言指令编辑图像                                                   | systemInstruction 用 edit 模板替换 {instruction} |
+
 
 ---
 
@@ -87,7 +89,7 @@ Instruction: {instruction}
 - `P_SYNTHESIS`：视图合成  
 - `P_ENHANCE`：增强（UI 中未单独步骤）  
 - `P_TRANSFORM`：风格转换  
-- `P_EDIT`：智能编辑  
+- `P_EDIT`：智能编辑
 
 ### AssetInfo（管线当前项目状态，已移除）
 
@@ -111,7 +113,7 @@ export type AssetInfo = {
 
 ### GenerationStyle（风格枚举，管线用）
 
-- 写实、风格化、体素、低多边形、动漫、赛博朋克、素描  
+- 写实、风格化、体素、低多边形、动漫、赛博朋克、素描
 
 ### BoundingBox（仍保留于项目，用于对话生图单图检测）
 
@@ -123,26 +125,26 @@ export type AssetInfo = {
 
 ### 4.1 拓扑分析（P_ANALYZE）
 
-1. 输入：上传场景图或从资产库选图。  
-2. 一键分析：`handleP1Analyze(base64)` 依次调用 `analyzeScene()` → `synthesizeGrid()` → `detectObjectsInAtlas()`。  
+1. 输入：上传场景图或从资产库选图。
+2. 一键分析：`handleP1Analyze(base64)` 依次调用 `analyzeScene()` → `synthesizeGrid()` → `detectObjectsInAtlas()`。
 3. 结果：更新 `asset.p1InputImage`、`asset.p1SynthesizedGrid`、`asset.p1DetectedObjects`；展示 GridOverlay，可勾选框、提取选中项到 p2InputSlices 并加入资产库（SCENE_OBJECT），切到视图合成。
 
 ### 4.2 视图合成（P_SYNTHESIS）
 
-1. 输入：`asset.p2InputSlices`（上步提取或从库/上传追加）。  
-2. 开始多视图生成：`handleP2Synthesis()` 对每张切片调用 `synthesizeMultiView(slice, viewCount, style, ...)`，结果写入 `asset.p2OutputStrips` 并加入资产库（PREVIEW_STRIP）。  
+1. 输入：`asset.p2InputSlices`（上步提取或从库/上传追加）。
+2. 开始多视图生成：`handleP2Synthesis()` 对每张切片调用 `synthesizeMultiView(slice, viewCount, style, ...)`，结果写入 `asset.p2OutputStrips` 并加入资产库（PREVIEW_STRIP）。
 3. 可调参数：viewCount、style（GenerationStyle）。
 
 ### 4.3 风格转换（P_TRANSFORM）
 
-1. 输入：`transformInput`（LibraryItem），从库选或上传。  
-2. 选择目标风格：GenerationStyle 任选。  
+1. 输入：`transformInput`（LibraryItem），从库选或上传。
+2. 选择目标风格：GenerationStyle 任选。
 3. `handleStyleTransform(transformInput, transformStyle)` 调用 `synthesizeMultiView(..., newStyle, ..., config.prompts.transform)`，结果加入资产库（同 groupId）。
 
 ### 4.4 智能编辑（P_EDIT）
 
-1. 输入：`editInput`（LibraryItem），载入后为 `currentEditImage`，初始化 `editHistory`。  
-2. 对话式编辑：输入指令后 `handleImageEdit()` 调用 `editImage(currentEditImage, editPrompt, ...)`，结果更新 `currentEditImage` 并追加到对话历史。  
+1. 输入：`editInput`（LibraryItem），载入后为 `currentEditImage`，初始化 `editHistory`。
+2. 对话式编辑：输入指令后 `handleImageEdit()` 调用 `editImage(currentEditImage, editPrompt, ...)`，结果更新 `currentEditImage` 并追加到对话历史。
 3. 多轮编辑：连续输入指令，每次基于当前图再编辑。
 
 ---
@@ -158,7 +160,7 @@ export type AssetInfo = {
 ## 六、资产仓库入口（已移除）
 
 - **风格重塑**：将选中资产设为 `transformInput`，跳转生产管线 · 风格转换。  
-- **智能编辑**：将选中资产设为 `editInput`，跳转生产管线 · 智能编辑。  
+- **智能编辑**：将选中资产设为 `editInput`，跳转生产管线 · 智能编辑。
 
 上述两个入口已随管线模块一并移除；资产仓库保留筛选、多选、批量下载、删除等能力。
 

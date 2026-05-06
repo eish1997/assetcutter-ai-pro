@@ -6,9 +6,9 @@
 
 ## 已帮你完成（可直接从「第一步」的推送开始）
 
-- [x] **Git 仓库已初始化**，并做了首次提交（提交说明：准备部署到 Vercel）。
-- [x] **确认 .env.local 不会被提交**（已由 .gitignore 忽略）。
-- [x] **本地构建已跑通**：`npm run build` 成功，生成 `dist/`。
+- **Git 仓库已初始化**，并做了首次提交（提交说明：准备部署到 Vercel）。
+- **确认 .env.local 不会被提交**（已由 .gitignore 忽略）。
+- **本地构建已跑通**：`npm run build` 成功，生成 `dist/`。
 
 **请你接下来做：** 在 Cursor 里把代码推到 GitHub，再到 Vercel 导入并部署（见下面第一步、第二步）。
 
@@ -16,9 +16,9 @@
 
 ## 你需要提前准备的
 
-- [ ] **Node.js**：你已经在 Cursor 里跑过项目，说明已安装。
-- [ ] **GitHub 账号**：没有的话去 [github.com](https://github.com) 注册一个（免费）。
-- [ ] **Vercel 账号**：用 GitHub 登录即可，[vercel.com](https://vercel.com) 注册（免费）。
+- **Node.js**：你已经在 Cursor 里跑过项目，说明已安装。
+- **GitHub 账号**：没有的话去 [github.com](https://github.com) 注册一个（免费）。
+- **Vercel 账号**：用 GitHub 登录即可，[vercel.com](https://vercel.com) 注册（免费）。
 
 ---
 
@@ -39,8 +39,8 @@
 ### 1.3 推送到 GitHub
 
 1. 在 Source Control 里点 **Publish Branch**（或 **Push**）：
-   - 若让你选「Publish to GitHub」，选 **Public**，仓库名可以保持 `assetcutter-ai-pro`（或你喜欢的名字）。
-   - 用 GitHub 账号登录/授权后，代码就会出现在你的 GitHub 仓库里。
+  - 若让你选「Publish to GitHub」，选 **Public**，仓库名可以保持 `assetcutter-ai-pro`（或你喜欢的名字）。
+  - 用 GitHub 账号登录/授权后，代码就会出现在你的 GitHub 仓库里。
 
 记下你的仓库地址，形如：`https://github.com/你的用户名/assetcutter-ai-pro`。
 
@@ -58,12 +58,14 @@
 
 Vercel 一般能自动识别 Vite 项目，你只需确认：
 
-| 项 | 填什么 |
-|----|--------|
-| **Framework Preset** | Vite（自动） |
-| **Build Command** | `npm run build`（自动） |
-| **Output Directory** | `dist`（自动） |
-| **Install Command** | `npm install`（自动） |
+
+| 项                    | 填什么                 |
+| -------------------- | ------------------- |
+| **Framework Preset** | Vite（自动）            |
+| **Build Command**    | `npm run build`（自动） |
+| **Output Directory** | `dist`（自动）          |
+| **Install Command**  | `npm install`（自动）   |
+
 
 若某一项是空的，就按上表手动填。
 
@@ -79,8 +81,8 @@ Vercel 一般能自动识别 Vite 项目，你只需确认：
 ### 2.4 部署
 
 1. 点 **Deploy**。
-2. 等 1～3 分钟，页面会显示 **Congratulations** 和一个网址，例如：  
-   `https://assetcutter-ai-pro-xxxx.vercel.app`
+2. 等 1～3 分钟，页面会显示 **Congratulations** 和一个网址，例如：
+  `https://assetcutter-ai-pro-xxxx.vercel.app`
 3. 点该链接，或用手机、别的电脑打开这个网址——这就是你的线上网站。
 
 ---
@@ -102,8 +104,8 @@ Vercel 一般能自动识别 Vite 项目，你只需确认：
 1. 打开 [netlify.com](https://netlify.com)，用 GitHub 登录。
 2. **Add new site** → **Import an existing project** → 选 **GitHub**，再选你的仓库。
 3. 构建设置：
-   - **Build command**：`npm run build`
-   - **Publish directory**：`dist`
+  - **Build command**：`npm run build`
+  - **Publish directory**：`dist`
 4. 若需要腾讯 3D，再添加 `VITE_TENCENT_PROXY`；Gemini 不建议作为站点环境变量注入前端。
 5. 点 **Deploy site**，等完成后会给你一个 `xxx.netlify.app` 的网址。
 

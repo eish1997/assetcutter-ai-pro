@@ -367,8 +367,34 @@ export const ProgressivePreviewImage = forwardRef<HTMLImageElement, ProgressiveP
 );
 
 /** 工作区主网格：略大缩略边，与 ProgressivePreviewImage 同源逻辑 */
-export const WorkflowGridImage = forwardRef<HTMLImageElement, Omit<ProgressivePreviewImageProps, 'thumbMaxEdge'> & { thumbMaxEdge?: number }>(
-  function WorkflowGridImage({ thumbMaxEdge = 640, ...rest }, ref) {
-    return <ProgressivePreviewImage ref={ref} {...rest} thumbMaxEdge={thumbMaxEdge} />;
+export const WorkflowGridImage = forwardRef<
+  HTMLImageElement,
+  Omit<ProgressivePreviewImageProps, 'thumbMaxEdge'> & { thumbMaxEdge?: number; mediaVariant?: 'image' | 'video' }
+>(function WorkflowGridImage({ thumbMaxEdge = 640, mediaVariant = 'image', className, imgClassName, fullSrc, ...rest }, ref) {
+  if (mediaVariant === 'video') {
+    return (
+      <div className={className ?? 'relative w-full h-full'}>
+        <video
+          ref={ref as React.Ref<HTMLVideoElement>}
+          src={workflowSafeImgSrc(fullSrc)}
+          className={imgClassName ?? 'block w-full h-full object-cover'}
+          muted
+          playsInline
+          loop
+          autoPlay
+          preload="metadata"
+        />
+      </div>
+    );
   }
-);
+  return (
+    <ProgressivePreviewImage
+      ref={ref}
+      fullSrc={fullSrc}
+      className={className}
+      imgClassName={imgClassName}
+      {...rest}
+      thumbMaxEdge={thumbMaxEdge}
+    />
+  );
+});

@@ -56,6 +56,9 @@ export function workflowAssetAllowedForCapabilityDrop(asset: WorkflowAsset, mod:
   if (mod.category === 'text_to_text' || mod.category === 'text_to_image') {
     return hasAnyTextPayload(asset);
   }
+  if (mod.category === 'generate_video') {
+    return hasAnyImagePayload(asset) || hasAnyTextPayload(asset);
+  }
   if (mod.category === 'image_to_image' || mod.category === 'image_to_text' || mod.category === 'generate_3d') {
     return hasAnyImagePayload(asset);
   }

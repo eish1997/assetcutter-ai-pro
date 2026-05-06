@@ -2,7 +2,7 @@
  * 多视角上传：8 个视角围绕中心「物体」的轨道式交互，点击每个视角槽上传对应图片
  */
 import React, { useRef } from 'react';
-import { PRO_VIEW_IDS, PRO_VIEW_LABELS } from '../services/tencentService';
+import { PRO_VIEW_IDS, PRO_VIEW_LABELS } from '../services/unifiedAiGateway';
 import { ProgressivePreviewImage } from './ProgressivePreviewImage';
 
 export type ViewId = (typeof PRO_VIEW_IDS)[number];
