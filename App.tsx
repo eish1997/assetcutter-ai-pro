@@ -118,6 +118,7 @@ import {
 import {
   attemptRepairCompanionManifestKeyGaps,
   findCompanionKeysMissingFromManifest,
+  mergeUnlinkedManifestEntriesIntoWorkflowAssets,
 } from './services/workflowManifestCrossCheck';
 import { fetchCompanionAssetAsDataUrl } from './services/workflowCompanionAssets';
 import { collectReferencedObjectKeysFromPackedV2, hydrateWorkflowBundleFromCloud } from './services/workspaceR2ImageBundle';
@@ -1188,7 +1189,7 @@ const MainApp: React.FC = () => {
     const localById = new Map<string, WorkspaceProject>(
       (workspaceProjectsRef.current || []).map((p) => [p.id, p] as const)
     );
-    return list
+    const fromCompanion = list
       .map((p) => {
         const idKey = String(p.id || '').trim();
         const local = localById.get(idKey);
@@ -1203,6 +1204,10 @@ const MainApp: React.FC = () => {
         };
       })
       .filter((p) => p.id && p.name);
+    const companionIds = new Set(fromCompanion.map((p) => p.id));
+    const locals = workspaceProjectsRef.current || [];
+    const extras = locals.filter((p) => String(p.id || '').trim() && !companionIds.has(String(p.id || '').trim()));
+    return [...fromCompanion, ...extras];
   }, []);
 
   const workflowAssetsRef = useRef(workflowAssets);
@@ -1506,38 +1511,63 @@ const MainApp: React.FC = () => {
             `manifest=${mid} selected=${id}`
           );
         }
-        let gaps = findCompanionKeysMissingFromManifest(local.assets, manifestData);
-        if (gaps.length > 0) {
-          const recon = await reconcileCompanionManifestFromDisk(companionBase, id);
-          if (recon.ok && recon.data.added > 0) {
-            const kp = recon.data.keys.slice(0, 5).join(', ') + (recon.data.keys.length > 5 ? '…' : '');
-            addGlobalLog('工作区', 'info', '本地伴侣已从磁盘补全 manifest', `${recon.data.added} 项 ${kp}`);
-            const m2 = await getCompanionManifest(companionBase, id);
-            if (m2.ok) manifestData = m2.data;
-            gaps = findCompanionKeysMissingFromManifest(local.assets, manifestData);
-          } else if (recon.ok === false) {
-            addGlobalLog('工作区', 'warn', '本地伴侣 manifest 磁盘补全请求失败', String(recon.error));
-          }
+        const recon = await reconcileCompanionManifestFromDisk(companionBase, id);
+        if (recon.ok && recon.data.added > 0) {
+          const kp = recon.data.keys.slice(0, 5).join(', ') + (recon.data.keys.length > 5 ? '…' : '');
+          addGlobalLog('工作区', 'info', '本地伴侣已从磁盘补全 manifest', `${recon.data.added} 项 ${kp}`);
+          const m2 = await getCompanionManifest(companionBase, id);
+          if (m2.ok) manifestData = m2.data;
+        } else if (recon.ok === false) {
+          addGlobalLog('工作区', 'warn', '本地伴侣 manifest 磁盘补全请求失败', String(recon.error));
         }
+        const assetsSnap = workflowAssetsRef.current;
+        let gaps = findCompanionKeysMissingFromManifest(assetsSnap, manifestData);
         if (gaps.length > 0) {
           const nOrig = gaps.filter((g) => g.kind === 'original').length;
           const nRes = gaps.filter((g) => g.kind === 'result').length;
+          const nMdl = gaps.filter((g) => g.kind === 'model').length;
           const head = gaps
             .slice(0, 5)
             .map((g) =>
-              g.kind === 'original' ? `${g.assetId}:orig` : `${g.assetId}:res:${g.stepId}`
+              g.kind === 'original'
+                ? `${g.assetId}:orig`
+                : g.kind === 'model'
+                  ? `${g.assetId}:mdl:${g.slotIndex}`
+                  : `${g.assetId}:res:${g.stepId}`
             )
             .join('; ');
           addGlobalLog(
             '工作区',
             'warn',
             '部分伴侣对象键未出现在 manifest（可能未完成写入或 manifest 未更新）',
-            `${gaps.length} 项（原图键 ${nOrig} / 步骤结果键 ${nRes}） ${head}${gaps.length > 5 ? '…' : ''}`
+            `${gaps.length} 项（原图键 ${nOrig} / 步骤结果键 ${nRes} / 3D 模型键 ${nMdl}） ${head}${gaps.length > 5 ? '…' : ''}`
           );
-          void attemptRepairCompanionManifestKeyGaps(companionBase, id, local.assets, gaps, (level, title, detail) =>
+          void attemptRepairCompanionManifestKeyGaps(companionBase, id, assetsSnap, gaps, (level, title, detail) =>
             addGlobalLog('工作区', level, title, detail)
           );
         }
+        const newAssetId = () =>
+          typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+            ? crypto.randomUUID()
+            : `import-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+        setWorkflowAssets((prev) => {
+          const { nextAssets, importedKeys } = mergeUnlinkedManifestEntriesIntoWorkflowAssets(
+            prev,
+            manifestData,
+            newAssetId
+          );
+          if (importedKeys.length === 0) return prev;
+          const scopeInner = userIdRef.current ?? null;
+          trySaveWorkflowBundle(id, { assets: nextAssets, pending: workflowPendingRef.current }, scopeInner);
+          const head = importedKeys.slice(0, 6).join(', ') + (importedKeys.length > 6 ? '…' : '');
+          addGlobalLog(
+            '工作区',
+            'info',
+            '已根据本地伴侣 manifest 自动挂载磁盘资产到画布',
+            `${importedKeys.length} 项 ${head}`
+          );
+          return nextAssets;
+        });
       })();
     },
     [addGlobalLog]

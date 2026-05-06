@@ -29,6 +29,150 @@ export function workflowResultCompanionStorageKey(assetId: string, resultKey: st
   return `wf-res-${a}-${r}`.slice(0, 128);
 }
 
+/** 工作流 3D 模型在伴侣下的键（按资产 id + 槽位，与 `modelUrls` 下标对齐） */
+export function workflowModelCompanionStorageKey(assetId: string, slotIndex: number): string {
+  const id = sanitizeCompanionPathSegment(String(assetId || '').trim() || 'unknown');
+  const slot = Math.max(0, Math.floor(slotIndex));
+  return `wf-mdl-${id}-${slot}`.slice(0, 128);
+}
+
+function sniffModelMimeFromBytes(bytes: Uint8Array, fileName?: string): string {
+  if (bytes.length >= 4) {
+    const magic = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(0, true);
+    if (magic === 0x46546c67) return 'model/gltf-binary';
+  }
+  const lower = String(fileName || '').toLowerCase();
+  if (lower.endsWith('.glb')) return 'model/gltf-binary';
+  if (lower.endsWith('.gltf')) return 'model/gltf+json';
+  if (lower.endsWith('.fbx')) return 'application/octet-stream';
+  if (lower.endsWith('.obj')) return 'model/obj';
+  return 'application/octet-stream';
+}
+
+/** 将本地 3D 文件写入伴侣；`slotIndex` 与 `modelUrls` 下标一致 */
+export async function putWorkflowModelFileToCompanion(
+  baseUrl: string,
+  projectId: string,
+  assetId: string,
+  slotIndex: number,
+  file: File
+): Promise<{ ok: true; key: string } | { ok: false; error: string }> {
+  const key = workflowModelCompanionStorageKey(assetId, slotIndex);
+  const base = normalizeCompanionBaseUrl(baseUrl);
+  let head = new Uint8Array();
+  try {
+    head = new Uint8Array(await file.slice(0, 64).arrayBuffer());
+  } catch {
+    /* ignore */
+  }
+  const mime =
+    (file.type && file.type.split(';')[0].trim()) || sniffModelMimeFromBytes(head, file.name);
+  const res = await putCompanionAsset(base, projectId, key, file, mime);
+  if (res.ok === false) {
+    return { ok: false, error: `${res.error}${res.status != null ? ` (HTTP ${res.status})` : ''}` };
+  }
+  return { ok: true, key };
+}
+
+export async function putWorkflowModelBlobToCompanion(
+  baseUrl: string,
+  projectId: string,
+  assetId: string,
+  slotIndex: number,
+  blob: Blob,
+  fileNameHint?: string
+): Promise<{ ok: true; key: string } | { ok: false; error: string }> {
+  const key = workflowModelCompanionStorageKey(assetId, slotIndex);
+  const base = normalizeCompanionBaseUrl(baseUrl);
+  const buf = new Uint8Array(await blob.arrayBuffer());
+  const mime =
+    (blob.type && blob.type.split(';')[0].trim()) || sniffModelMimeFromBytes(buf, fileNameHint);
+  const res = await putCompanionAsset(base, projectId, key, new Blob([buf], { type: mime }), mime);
+  if (res.ok === false) {
+    return { ok: false, error: `${res.error}${res.status != null ? ` (HTTP ${res.status})` : ''}` };
+  }
+  return { ok: true, key };
+}
+
+export async function fetchWorkflowModelFromCompanionAsObjectUrl(
+  baseUrl: string,
+  projectId: string,
+  key: string,
+  fileNameHint?: string
+): Promise<{ ok: true; objectUrl: string; mime: string } | { ok: false; error: string }> {
+  const base = normalizeCompanionBaseUrl(baseUrl);
+  const res = await fetchCompanionAssetBlob(base, projectId, key);
+  if (res.ok === false) {
+    return { ok: false, error: `${res.error}${res.status != null ? ` (HTTP ${res.status})` : ''}` };
+  }
+  const u8 = new Uint8Array(res.data);
+  const mime = sniffModelMimeFromBytes(u8, fileNameHint);
+  const blob = new Blob([res.data], { type: mime });
+  return { ok: true, objectUrl: URL.createObjectURL(blob), mime };
+}
+
+/**
+ * 复制资产卡片时：从源资产的伴侣键或 blob/http 读入二进制，按新 assetId 重新 PUT，避免两卡共用一个 wf-mdl 键。
+ */
+export async function cloneWorkflowModelSlotsForDuplicatedAsset(opts: {
+  baseUrl: string;
+  projectId: string;
+  sourceAsset: WorkflowAsset;
+  newAssetId: string;
+}): Promise<{ modelCompanionKeys: string[]; modelUrls: string[] } | null> {
+  const { baseUrl, projectId, sourceAsset, newAssetId } = opts;
+  const base = normalizeCompanionBaseUrl(baseUrl);
+  const pid = String(projectId || '').trim();
+  if (!base || !pid) return null;
+  const keysIn = sourceAsset.modelCompanionKeys || [];
+  const urlsIn = sourceAsset.modelUrls || [];
+  const n = Math.max(keysIn.length, urlsIn.length, 0);
+  if (n === 0) return null;
+  const outKeys: string[] = [];
+  const outUrls: string[] = [];
+  let anyOk = false;
+  for (let i = 0; i < n; i += 1) {
+    const kOld = String(keysIn[i] || '').trim();
+    const uOld = String(urlsIn[i] || '').trim();
+    let blob: Blob | null = null;
+    if (kOld) {
+      const r = await fetchCompanionAssetBlob(base, pid, kOld);
+      if (r.ok) {
+        const u8 = new Uint8Array(r.data);
+        const mime = sniffModelMimeFromBytes(u8, sourceAsset.modelSourceName);
+        blob = new Blob([r.data], { type: mime });
+      }
+    } else if (/^blob:|^https?:|^data:/i.test(uOld)) {
+      try {
+        blob = await (await fetch(uOld)).blob();
+      } catch {
+        blob = null;
+      }
+    }
+    if (!blob) {
+      outKeys.push('');
+      outUrls.push('');
+      continue;
+    }
+    const put = await putWorkflowModelBlobToCompanion(base, pid, newAssetId, i, blob, sourceAsset.modelSourceName);
+    if (put.ok === false) {
+      outKeys.push('');
+      outUrls.push('');
+      continue;
+    }
+    anyOk = true;
+    outKeys.push(put.key);
+    const got = await fetchWorkflowModelFromCompanionAsObjectUrl(base, pid, put.key, sourceAsset.modelSourceName);
+    if (got.ok) {
+      outUrls.push(got.objectUrl);
+    } else {
+      outUrls.push('');
+    }
+  }
+  if (!anyOk) return null;
+  return { modelCompanionKeys: outKeys, modelUrls: outUrls };
+}
+
 function blobToDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const r = new FileReader();
@@ -158,6 +302,11 @@ function shouldStripResultUrlForPersist(url: string): boolean {
   return u.startsWith('data:') || /^blob:/i.test(u);
 }
 
+function shouldStripModelUrlForPersist(url: string): boolean {
+  const u = String(url || '').trim();
+  return u.startsWith('data:') || /^blob:/i.test(u);
+}
+
 /** 写入 IndexedDB 前瘦身：已落伴侣的原图不再重复存 data/blob 串 */
 export function stripWorkflowBundleForIdbPersist(bundle: WorkflowProjectBundle): WorkflowProjectBundle {
   const raw = JSON.stringify(bundle);
@@ -181,8 +330,38 @@ export function stripWorkflowBundleForIdbPersist(bundle: WorkflowProjectBundle):
       }
       if (touched) a.results = next;
     }
+    const mck = a.modelCompanionKeys;
+    if (mck && Array.isArray(mck) && Array.isArray(a.modelUrls)) {
+      const nextModelUrls = [...a.modelUrls];
+      let touchedM = false;
+      for (let i = 0; i < mck.length; i += 1) {
+        const ck = String(mck[i] || '').trim();
+        if (!ck) continue;
+        const cur = String(nextModelUrls[i] ?? '').trim();
+        if (cur && shouldStripModelUrlForPersist(cur)) {
+          nextModelUrls[i] = '';
+          touchedM = true;
+        }
+      }
+      if (touchedM) a.modelUrls = nextModelUrls;
+    }
   }
   return out;
+}
+
+/** 有伴侣模型键但对应槽位缺少可加载的 URL 时需从磁盘 hydrate */
+export function workflowAssetNeedsCompanionModelHydrate(a: WorkflowAsset): boolean {
+  const mck = a.modelCompanionKeys;
+  if (!mck || !Array.isArray(mck) || mck.length === 0) return false;
+  const urls = a.modelUrls || [];
+  for (let i = 0; i < mck.length; i += 1) {
+    const ck = String(mck[i] || '').trim();
+    if (!ck) continue;
+    const u = String(urls[i] ?? '').trim();
+    if (!u) return true;
+    if (!/^blob:/i.test(u) && !/^https?:\/\//i.test(u) && !u.startsWith('data:')) return true;
+  }
+  return false;
 }
 
 /**

@@ -22,8 +22,14 @@ server/data/companion-artifacts.json
 *.local
 .env
 
-# Cursor 本地配置（规则、skills），可不提交
-.cursor
+# Cursor 本地配置（规则、skills），可不提交；允许提交 Agent Autopilot hooks
+.cursor/*
+!.cursor/hooks.json
+!.cursor/hooks/
+!.cursor/hooks/**
+# Autopilot 完成状态仅本地，避免协作冲突与误提交
+.cursor/hooks/loop-state.json
+.cursor/hooks/autopilot.runtime.json
 
 # Editor directories and files
 .vscode/*

@@ -119,6 +119,8 @@ const CapabilityPresetSection: React.FC<{
    * 便于边打字边收窄能力卡片；清空则恢复全部（仍受类型筛选与视图模式约束）。
    */
   workflowComposeSearchQuery?: string;
+  /** 工作区：功能区悬停联动，列表内 id 之外的预设卡片压暗 */
+  sidebarLinkHoverPresetIds?: string[] | null;
 }> = ({
   presets,
   onUpdate,
@@ -131,6 +133,7 @@ const CapabilityPresetSection: React.FC<{
   canUploadToR2 = false,
   scrollContainerRef,
   workflowComposeSearchQuery = '',
+  sidebarLinkHoverPresetIds = null,
 }) => {
   const [viewMode, setViewMode] = useState<ViewMode>('presets');
   const [presetTypeFilter, setPresetTypeFilter] = useState<PresetTypeFilter>('all');
@@ -144,6 +147,10 @@ const CapabilityPresetSection: React.FC<{
     () => normalizeCapabilityPresetColumnCount(presetColumnCount),
     [presetColumnCount]
   );
+  const sidebarLinkHoverPresetIdSet = useMemo(() => {
+    if (!embeddedInWorkflow || !sidebarLinkHoverPresetIds?.length) return null;
+    return new Set(sidebarLinkHoverPresetIds);
+  }, [embeddedInWorkflow, sidebarLinkHoverPresetIds]);
   type EmbedComposerSession = { id: string; initialSet: CapabilitySet | null; sessionKey: number };
   const [embedComposerSessions, setEmbedComposerSessions] = useState<EmbedComposerSession[]>([]);
   const [embedComposerActiveId, setEmbedComposerActiveId] = useState<string | null>(null);
@@ -1957,6 +1964,10 @@ const CapabilityPresetSection: React.FC<{
                 const categoryLabel = CAPABILITY_CATEGORIES.find((c) => c.id === p.category)?.label ?? p.category;
                 const iconName = p.category === 'generate_3d' ? 'cube' : isBuiltinImagePipelinePreset(p) ? 'camera' : 'image';
                 const isTextToTextPreset = p.category === 'text_to_text';
+                const isDraggingThis = draggingPresetId === p.id;
+                const dimPresetBySidebar =
+                  !isDraggingThis &&
+                  Boolean(sidebarLinkHoverPresetIdSet && !sidebarLinkHoverPresetIdSet.has(p.id));
                 return (
                   <button
                     key={p.id}
@@ -2004,10 +2015,12 @@ const CapabilityPresetSection: React.FC<{
                       if (!getGeneratedPreviewThumbSrc(p) || !getOriginalPreviewThumbSrc(p)) return;
                       setPreviewSplitRatio((prev) => ({ ...prev, [p.id]: 0.5 }));
                     }}
-                    className={`inline-block align-top mb-3 w-full break-inside-avoid rounded-2xl border bg-[#16161a] overflow-hidden text-left transition-colors group ${
+                    className={`inline-block align-top mb-3 w-full break-inside-avoid rounded-2xl border bg-[#16161a] overflow-hidden text-left transition-[colors,opacity,filter] duration-150 group ${
                       draggingPresetId === p.id
                         ? 'border-blue-500/70 ring-1 ring-blue-500/40 opacity-70'
-                        : 'ring-1 ring-white/[0.08] hover:ring-blue-400/40 border-transparent'
+                        : dimPresetBySidebar
+                          ? 'ring-1 ring-white/[0.08] border-transparent opacity-[0.32] saturate-[0.72]'
+                          : 'ring-1 ring-white/[0.08] hover:ring-blue-400/40 border-transparent'
                     }`}
                   >
                     {isTextToTextPreset ? (

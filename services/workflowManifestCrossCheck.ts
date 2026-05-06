@@ -1,17 +1,21 @@
 import type { WorkflowAsset } from '../types';
 import type { CompanionManifestV1 } from './companionClient/storage';
+import { attachInitialVgpToNewAsset } from './vgp/vgpStore';
 import { isWorkflowTextAsset } from './workflowTextAsset';
 import {
   imageSrcToDataUrlForCompanion,
+  putWorkflowModelBlobToCompanion,
   putWorkflowOriginalImageToCompanion,
   putWorkflowResultImageToCompanion,
+  workflowModelCompanionStorageKey,
   workflowOriginalCompanionStorageKey,
   workflowResultCompanionStorageKey,
 } from './workflowCompanionAssets';
 
 export type CompanionManifestKeyGap =
   | { kind: 'original'; assetId: string; key: string }
-  | { kind: 'result'; assetId: string; stepId: string; key: string };
+  | { kind: 'result'; assetId: string; stepId: string; key: string }
+  | { kind: 'model'; assetId: string; slotIndex: number; key: string };
 
 /**
  * 打开项目后比对：画布上 `originalCompanionKey` 与各步 `resultsCompanionKeys` 是否出现在 manifest.entries。
@@ -42,6 +46,21 @@ export function findCompanionKeysMissingFromManifest(
             assetId: String(a.id || '').trim() || '?',
             stepId,
             key: rk,
+          });
+        }
+      }
+    }
+    const mck = a.modelCompanionKeys;
+    if (mck && Array.isArray(mck)) {
+      for (let slot = 0; slot < mck.length; slot += 1) {
+        const mk = String(mck[slot] || '').trim();
+        if (!mk) continue;
+        if (!keys.has(mk)) {
+          out.push({
+            kind: 'model',
+            assetId: String(a.id || '').trim() || '?',
+            slotIndex: slot,
+            key: mk,
           });
         }
       }
@@ -126,6 +145,44 @@ export async function attemptRepairCompanionManifestKeyGaps(
       continue;
     }
 
+    if (gap.kind === 'model') {
+      const expectKey = workflowModelCompanionStorageKey(gap.assetId, gap.slotIndex);
+      if (expectKey !== gap.key) {
+        onLog?.('warn', '伴侣 3D 模型键与推导不一致，跳过修复', `asset=${gap.assetId} slot=${gap.slotIndex}`);
+        skipped += 1;
+        continue;
+      }
+      const src = String((asset.modelUrls || [])[gap.slotIndex] ?? '').trim();
+      let blob: Blob | null = null;
+      try {
+        if (/^blob:|^https?:|^data:/i.test(src)) {
+          const r = await fetch(src);
+          blob = await r.blob();
+        }
+      } catch {
+        blob = null;
+      }
+      if (!blob) {
+        skipped += 1;
+        continue;
+      }
+      const put = await putWorkflowModelBlobToCompanion(
+        base,
+        pid,
+        gap.assetId,
+        gap.slotIndex,
+        blob,
+        asset.modelSourceName
+      );
+      if (put.ok) {
+        repaired += 1;
+      } else if (put.ok === false) {
+        failed += 1;
+        onLog?.('warn', 'manifest 修复：3D 模型重新 PUT 失败', `${gap.assetId}[${gap.slotIndex}]: ${put.error}`);
+      }
+      continue;
+    }
+
     const expectKey = workflowResultCompanionStorageKey(gap.assetId, gap.stepId);
     if (expectKey !== gap.key) {
       onLog?.('warn', '伴侣步骤结果键与推导不一致，跳过修复', `asset=${gap.assetId} step=${gap.stepId}`);
@@ -162,4 +219,103 @@ export async function attemptRepairCompanionManifestKeyGaps(
   }
 
   return { repaired, skipped, failed };
+}
+
+/** 画布上已引用到的伴侣对象键（原图 / 步骤结果 / 模型槽位） */
+export function collectReferencedCompanionKeys(assets: WorkflowAsset[]): Set<string> {
+  const keys = new Set<string>();
+  for (const a of assets) {
+    if (isWorkflowTextAsset(a)) continue;
+    const ok = String(a.originalCompanionKey || '').trim();
+    if (ok) keys.add(ok);
+    const rck = a.resultsCompanionKeys;
+    if (rck && typeof rck === 'object') {
+      for (const stepId of Object.keys(rck)) {
+        const rk = String(rck[stepId] || '').trim();
+        if (rk) keys.add(rk);
+      }
+    }
+    const mck = a.modelCompanionKeys;
+    if (mck && Array.isArray(mck)) {
+      for (const mk of mck) {
+        const k = String(mk || '').trim();
+        if (k) keys.add(k);
+      }
+    }
+  }
+  return keys;
+}
+
+function classifyManifestEntryForAutoImport(entry: {
+  key: string;
+  mime?: string;
+  relPath?: string;
+}): 'image' | 'model' | null {
+  const key = String(entry.key || '').trim();
+  if (!key) return null;
+  const mime = String(entry.mime || '').trim().toLowerCase();
+  if (mime.startsWith('image/')) return 'image';
+  if (mime.startsWith('model/')) return 'model';
+  if (key.includes('wf-mdl-')) return 'model';
+  if (key.includes('wf-res-') || key.includes('wf-orig-')) return 'image';
+  if (mime === 'application/octet-stream' || !mime) {
+    const rp = String(entry.relPath || '').toLowerCase();
+    if (/\.(glb|gltf|fbx|obj|stl)(\?|#|$)/.test(rp)) return 'model';
+    if (/\.(png|jpe?g|webp|gif|bmp|avif)(\?|#|$)/.test(rp)) return 'image';
+  }
+  return null;
+}
+
+/**
+ * 将 manifest 中已登记、但画布 JSON 未引用的对象自动补成工作流卡片（依赖伴侣后续 hydrate 出 blob 预览）。
+ */
+export function mergeUnlinkedManifestEntriesIntoWorkflowAssets(
+  assets: WorkflowAsset[],
+  manifest: CompanionManifestV1 | null | undefined,
+  newId: () => string
+): { nextAssets: WorkflowAsset[]; importedKeys: string[] } {
+  if (!manifest?.entries?.length) return { nextAssets: assets, importedKeys: [] };
+  const referenced = collectReferencedCompanionKeys(assets);
+  const importedKeys: string[] = [];
+  const additions: WorkflowAsset[] = [];
+  for (const e of manifest.entries) {
+    const key = String(e?.key || '').trim();
+    if (!key || referenced.has(key)) continue;
+    const kind = classifyManifestEntryForAutoImport({ key, mime: e.mime, relPath: e.relPath });
+    if (!kind) continue;
+    referenced.add(key);
+    importedKeys.push(key);
+    if (kind === 'image') {
+      additions.push(
+        attachInitialVgpToNewAsset({
+          id: newId(),
+          original: '',
+          originalCompanionKey: key,
+          displayKey: 'original',
+          results: {},
+          resultOrder: [],
+          archived: false,
+          hiddenInGrid: false,
+          createdAt: Date.now(),
+        })
+      );
+    } else {
+      additions.push(
+        attachInitialVgpToNewAsset({
+          id: newId(),
+          original: '',
+          displayKey: 'original',
+          results: {},
+          resultOrder: [],
+          modelCompanionKeys: [key],
+          modelUrls: [],
+          archived: false,
+          hiddenInGrid: false,
+          createdAt: Date.now(),
+        })
+      );
+    }
+  }
+  if (additions.length === 0) return { nextAssets: assets, importedKeys: [] };
+  return { nextAssets: [...assets, ...additions], importedKeys };
 }

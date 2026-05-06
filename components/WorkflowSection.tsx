@@ -17,6 +17,7 @@ import type { CustomAppModule } from '../types';
 import type { BoundingBox } from '../types';
 import { getRandomGroupCodeName } from '../data/groupCodeNames';
 import { detectObjectsInImage, DEFAULT_PROMPTS } from '../services/geminiService';
+import { detectGrid } from '../services/gridDetector';
 import { normalizeApiErrorMessage } from '../services/geminiService';
 import { getGeminiImageBatchBoxSizeForCurrentProvider } from '../services/geminiService';
 import {
@@ -45,6 +46,7 @@ import { WorkflowGridImage } from './ProgressivePreviewImage';
 import WorkflowPixelBusyOverlay from './WorkflowPixelBusyOverlay';
 import { workflowSafeImgSrc } from '../services/workflowImageDisplay';
 import { previewSrcCacheFingerprint } from '../services/workflowImageThumb';
+import { imageSrcToDataUrlForCompanion } from '../services/workflowCompanionAssets';
 import {
   type AcWorkflowExportPayload,
   DT_AC_CAPABILITY_ACTION,
@@ -130,12 +132,16 @@ import {
 import { captureWorkflowModelThumbnailDataUrl } from '../services/workflowModelPreviewCapture';
 import { getCompanionLocalBaseUrl } from '../services/companionLocalPrefs';
 import {
+  cloneWorkflowModelSlotsForDuplicatedAsset,
+  fetchWorkflowModelFromCompanionAsObjectUrl,
   fetchWorkflowOriginalFromCompanionAsObjectUrl,
   parseDataUrlToBlob,
+  putWorkflowModelFileToCompanion,
   putWorkflowOriginalImageFromAnyUrl,
   putWorkflowOriginalImageToCompanion,
   putWorkflowResultImageToCompanion,
   resolveCapabilityInputImageForExecute,
+  workflowAssetNeedsCompanionModelHydrate,
   workflowAssetNeedsCompanionOriginalHydrate,
   workflowAssetNeedsCompanionResultHydrate,
 } from '../services/workflowCompanionAssets';
@@ -182,6 +188,7 @@ type WorkflowPendingTaskOptions = {
   overrideImageAspectRatio?: string;
   overrideImageSize?: string;
   overrideSkipUnderstand?: boolean;
+  logContext?: WorkflowPendingTask['logContext'];
 };
 
 type WorkflowGroupOverrides = {
@@ -194,6 +201,8 @@ type WorkflowGroupOverrides = {
 
 const WORKFLOW_GROUP_GENERATE_COUNT_HARD_MAX = 999;
 const WORKFLOW_GROUP_GENERATE_CONFIRM_THRESHOLD = 20;
+/** 底部输入框仅图/文、未拖入预设卡片时，运行日志统一前缀（与当前快捷能力预设名解耦） */
+const WORKFLOW_QUICK_COMPOSE_PLAIN_LOG_LABEL = '底部输入';
 const CAPABILITY_PRESET_COLUMNS_KEY = 'ac_capability_preset_columns_v1';
 const CAPABILITY_PRESET_COLUMNS_MIN = 2;
 const CAPABILITY_PRESET_COLUMNS_MAX = 6;
@@ -423,6 +432,8 @@ const WorkflowSection: React.FC<{
     requireNonEmpty?: boolean;
   } | null>(null);
   const [quickComposeDraft, setQuickComposeDraft] = useState('');
+  /** 功能区悬停时联动左侧能力预设列：高亮对应预设 id，其余压暗 */
+  const [sidebarLinkHoverPresetIds, setSidebarLinkHoverPresetIds] = useState<string[] | null>(null);
   /** 从功能区/能力列拖入文本框的预设提示词，以卡片展示并与输入框文案合并入队 */
   const [quickComposePromptCards, setQuickComposePromptCards] = useState<WorkspaceQuickComposePromptCard[]>([]);
   const [quickComposeImages, setQuickComposeImages] = useState<string[]>([]);
@@ -739,6 +750,13 @@ const WorkflowSection: React.FC<{
     }
     return getModule(actionType)?.label ?? actionType;
   }, [getModule, getSet]);
+  const getTaskLogLabel = useCallback(
+    (task: WorkflowPendingTask) =>
+      task.logContext === 'quick_compose_bar_plain'
+        ? WORKFLOW_QUICK_COMPOSE_PLAIN_LOG_LABEL
+        : getActionLabel(task.actionType),
+    [getActionLabel]
+  );
   const getGenerationRecordStepLabel = (stepKey: string) => {
     if (stepKey === 'original') return '原图';
     if (stepKey === 'cut_image') return '切割';
@@ -781,6 +799,20 @@ const WorkflowSection: React.FC<{
         const ck = String(rck[sid] || '').trim();
         if (!ck || String(a.results?.[sid] ?? '').trim()) continue;
         parts.push(`${a.id}:${sid}:${ck}`);
+      }
+    }
+    return parts.sort().join('|');
+  }, [assets]);
+
+  const companionModelHydrateKey = useMemo(() => {
+    const parts: string[] = [];
+    for (const a of assets) {
+      if (!workflowAssetNeedsCompanionModelHydrate(a)) continue;
+      const mck = a.modelCompanionKeys || [];
+      for (let i = 0; i < mck.length; i += 1) {
+        const ck = String(mck[i] || '').trim();
+        if (!ck) continue;
+        parts.push(`${a.id}:${i}:${ck}`);
       }
     }
     return parts.sort().join('|');
@@ -867,6 +899,53 @@ const WorkflowSection: React.FC<{
       cancelled = true;
     };
   }, [companionResultsHydrateKey, workspaceProjectChrome?.activeProjectId, setAssets, onLog]);
+
+  useEffect(() => {
+    const projectId = String(workspaceProjectChrome?.activeProjectId || '').trim();
+    const base = String(getCompanionLocalBaseUrl() || '').trim();
+    if (!companionModelHydrateKey || !projectId || !base) return;
+    const targets = assetsRef.current.filter(workflowAssetNeedsCompanionModelHydrate);
+    if (targets.length === 0) return;
+    let cancelled = false;
+    void (async () => {
+      for (const a of targets) {
+        const mck = a.modelCompanionKeys || [];
+        const urls = [...(a.modelUrls || [])];
+        let changed = false;
+        for (let i = 0; i < mck.length; i += 1) {
+          const ck = String(mck[i] || '').trim();
+          if (!ck) continue;
+          const prevU = String(urls[i] ?? '').trim();
+          if (prevU && (/^blob:/i.test(prevU) || /^https?:\/\//i.test(prevU) || prevU.startsWith('data:'))) {
+            continue;
+          }
+          const got = await fetchWorkflowModelFromCompanionAsObjectUrl(base, projectId, ck, a.modelSourceName);
+          if (cancelled) return;
+          if (got.ok === false) {
+            onLog?.('warn', '本地伴侣 3D 模型恢复失败', `${a.id}[${i}]: ${got.error}`);
+            continue;
+          }
+          while (urls.length <= i) urls.push('');
+          const oldSlot = String(urls[i] ?? '').trim();
+          if (/^blob:/i.test(oldSlot)) {
+            try {
+              URL.revokeObjectURL(oldSlot);
+            } catch {
+              /* ignore */
+            }
+          }
+          urls[i] = got.objectUrl;
+          changed = true;
+        }
+        if (changed) {
+          setAssets((prev) => prev.map((x) => (x.id === a.id ? { ...x, modelUrls: urls } : x)));
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [companionModelHydrateKey, workspaceProjectChrome?.activeProjectId, setAssets, onLog]);
 
   const scheduleCompanionPersistOriginal = useCallback(
     (assetId: string, imageDataUrl: string) => {
@@ -1092,6 +1171,7 @@ ${lineSvg}
               sourceItemIndex: options!.sourceItemIndex,
             }
           : {}),
+        ...(options?.logContext ? { logContext: options.logContext } : {}),
       };
       return task;
     },
@@ -1173,7 +1253,7 @@ ${lineSvg}
           companionProjectId,
         });
         if (resolvedImg.ok === false) {
-          const al = getActionLabel(actionType);
+          const al = getTaskLogLabel(task);
           const msg = `[${al}] ${resolvedImg.error}`;
           onLog?.('warn', msg);
           setAssetError(task.assetId, msg);
@@ -1199,7 +1279,7 @@ ${lineSvg}
           companionProjectId,
         });
         if (resolvedImg.ok === false) {
-          const al = getActionLabel(actionType);
+          const al = getTaskLogLabel(task);
           const msg = `[${al}] ${resolvedImg.error}`;
           onLog?.('warn', msg);
           setAssetError(task.assetId, msg);
@@ -1291,13 +1371,13 @@ ${lineSvg}
         setAssetError(task.assetId, null);
       } catch (err) {
         const msg = err instanceof Error ? err.message : safeUnknownToString(err);
-        const full = `[${getActionLabel(actionType)}] ${msg}`;
+        const full = `[${getTaskLogLabel(task)}] ${msg}`;
         onLog?.('error', full);
         setAssetError(task.assetId, full);
       }
       return { image: null };
     }
-    const actionLabel = getActionLabel(actionType);
+    const actionLabel = getTaskLogLabel(task);
     try {
       if (module) {
         const presetBase =
@@ -1306,6 +1386,9 @@ ${lineSvg}
             : module;
         const preset = {
           ...presetBase,
+          ...(task.logContext === 'quick_compose_bar_plain'
+            ? { label: WORKFLOW_QUICK_COMPOSE_PLAIN_LOG_LABEL }
+            : {}),
           ...(task.overrideImageGear ? { imageGear: task.overrideImageGear } : {}),
           ...(task.overrideImageAspectRatio ? { imageAspectRatio: task.overrideImageAspectRatio } : {}),
           ...(task.overrideImageSize ? { imageSize: task.overrideImageSize } : {}),
@@ -1354,6 +1437,7 @@ ${lineSvg}
   }, [
     actionModules,
     getActionLabel,
+    getTaskLogLabel,
     getModule,
     getSet,
     onAddGenerate3DJob,
@@ -1475,10 +1559,9 @@ ${lineSvg}
         }
         setActiveTaskIds((prev) => new Set(prev).add(task.id));
         try {
-          const taskLabel = getActionLabel(task.actionType);
+          const taskLabel = getTaskLogLabel(task);
 
           if (task.actionType === 'cut_image') {
-            onLog?.('info', `${logBatch} ${taskLabel} 识别并切割中…`);
             let inputImage =
               task.inputImage || assetsRef.current.find((a) => a.id === task.assetId)?.original;
             if (!inputImage || typeof inputImage !== 'string') {
@@ -1487,33 +1570,99 @@ ${lineSvg}
               setAssetError(task.assetId, msg);
               setCompletedTaskIds((prev) => { const next = new Set(prev); next.add(task.id); return next; });
             } else {
-              if (!inputImage.startsWith('data:')) {
-                const fromAsset = assetsRef.current.find((a) => a.id === task.assetId)?.original;
-                if (fromAsset && fromAsset.startsWith('data:')) inputImage = fromAsset;
-                else {
-                  const msg = `[${taskLabel}] 输入图不是 data URL，尝试使用原图`;
+              let src = String(inputImage).trim();
+              if (src.startsWith('/api/') && typeof window !== 'undefined' && window.location?.origin) {
+                src = window.location.origin + src;
+              }
+              if (!src.startsWith('data:')) {
+                let normalized = await imageSrcToDataUrlForCompanion(src);
+                if (!normalized) {
+                  const altRaw = String(
+                    assetsRef.current.find((a) => a.id === task.assetId)?.original || ''
+                  ).trim();
+                  let alt = altRaw;
+                  if (alt.startsWith('/api/') && typeof window !== 'undefined' && window.location?.origin) {
+                    alt = window.location.origin + alt;
+                  }
+                  if (alt && alt !== src) normalized = await imageSrcToDataUrlForCompanion(alt);
+                }
+                if (!normalized) {
+                  const msg = `[${taskLabel}] 输入图无法转为可识别格式（blob/相对 API 地址需同源；外链需 CORS），已跳过此任务`;
                   onLog?.('warn', msg);
                   setAssetError(task.assetId, msg);
+                  setCompletedTaskIds((prev) => {
+                    const next = new Set(prev);
+                    next.add(task.id);
+                    return next;
+                  });
+                  return;
                 }
+                inputImage = normalized;
+              } else {
+                inputImage = src;
               }
+              const cutPreset = getModule(task.actionType);
+              const cutMode = cutPreset?.cutMode || 'auto';
+              onLog?.(
+                'info',
+                `${logBatch} ${taskLabel} ${
+                  cutMode === 'uniform'
+                    ? '均匀分割中…'
+                    : cutMode === 'vision'
+                      ? '视觉识别并切割中…'
+                      : '自动检测分割中…'
+                }`
+              );
               let boxes: BoundingBox[] = [];
-              try {
-                boxes = await detectObjectsInImage(
-                  inputImage,
-                  'gemini-3-flash-preview',
-                  DEFAULT_PROMPTS.detect_blocks,
-                  { timeoutMs: WORKFLOW_CUT_DETECT_TIMEOUT_MS }
-                );
-              } catch (e) {
-                const msg = e instanceof Error ? e.message : safeUnknownToString(e);
-                const full = `[${taskLabel}] 区域识别超时或失败（${msg}），将整图作为一块裁剪`;
-                onLog?.('warn', full);
-                setAssetError(task.assetId, full);
+              if (cutMode === 'uniform') {
+                const rows =
+                  typeof cutPreset?.uniformRows === 'number' && cutPreset.uniformRows > 0
+                    ? Math.max(1, Math.min(10, Math.round(cutPreset.uniformRows)))
+                    : 2;
+                const cols =
+                  typeof cutPreset?.uniformCols === 'number' && cutPreset.uniformCols > 0
+                    ? Math.max(1, Math.min(10, Math.round(cutPreset.uniformCols)))
+                    : 2;
+                try {
+                  boxes = await detectGrid(inputImage, { mode: 'uniform', config: { rows, cols } });
+                } catch (e) {
+                  const msg = e instanceof Error ? e.message : safeUnknownToString(e);
+                  const full = `[${taskLabel}] 均匀分割失败（${msg}），将整图作为一块裁剪`;
+                  onLog?.('warn', full);
+                  setAssetError(task.assetId, full);
+                }
+              } else if (cutMode === 'auto') {
+                try {
+                  boxes = await Promise.race([
+                    detectGrid(inputImage, { mode: 'auto', config: {} }),
+                    new Promise<BoundingBox[]>((_, rej) =>
+                      setTimeout(() => rej(new Error('timeout')), WORKFLOW_CUT_DETECT_TIMEOUT_MS)
+                    ),
+                  ]);
+                } catch (e) {
+                  const msg = e instanceof Error ? e.message : safeUnknownToString(e);
+                  const full = `[${taskLabel}] 自动检测超时或失败（${msg}），将整图作为一块裁剪`;
+                  onLog?.('warn', full);
+                  setAssetError(task.assetId, full);
+                }
+              } else {
+                try {
+                  boxes = await detectObjectsInImage(
+                    inputImage,
+                    'gemini-3-flash-preview',
+                    DEFAULT_PROMPTS.detect_blocks,
+                    { timeoutMs: WORKFLOW_CUT_DETECT_TIMEOUT_MS }
+                  );
+                } catch (e) {
+                  const msg = e instanceof Error ? e.message : safeUnknownToString(e);
+                  const full = `[${taskLabel}] 区域识别超时或失败（${msg}），将整图作为一块裁剪`;
+                  onLog?.('warn', full);
+                  setAssetError(task.assetId, full);
+                }
               }
               if (!boxes.length) {
                 boxes = [{ id: 'full', label: '整图', xmin: 0, ymin: 0, xmax: 1000, ymax: 1000 }];
               }
-              const cutPreset = getModule(task.actionType);
               const cutOverflowPx =
                 task.actionType === 'cut_image' && cutPreset?.cutOverflowPx != null && Number.isFinite(cutPreset.cutOverflowPx)
                   ? Math.max(0, Math.min(512, Math.round(cutPreset.cutOverflowPx)))
@@ -1634,7 +1783,7 @@ ${lineSvg}
                     const tagList =
                       result
                         ? buildWorkflowImageTags({
-                            actionLabel: getActionLabel(task.actionType),
+                            actionLabel: getTaskLogLabel(task),
                             actionId: baseActionId(task.actionType),
                             presetInstruction: getModule(task.actionType)?.instruction,
                             promptOverride: task.promptOverride,
@@ -1657,7 +1806,7 @@ ${lineSvg}
                     };
                     if (result) {
                       const hadOverride = task.promptOverride != null && task.promptOverride.trim() !== '';
-                      const summaryLabel = getActionLabel(task.actionType);
+                      const summaryLabel = getTaskLogLabel(task);
                       next = applyVgpAfterSuccessfulGen(next, {
                         resultKey: key,
                         vgpSteps: vgpSteps ?? [],
@@ -1692,7 +1841,7 @@ ${lineSvg}
           }
         } catch (e) {
           const msg = e instanceof Error ? e.message : safeUnknownToString(e);
-          const label = getActionLabel(task.actionType);
+          const label = getTaskLogLabel(task);
           onLog?.('error', `${logBatch} ${label} 失败：${msg}`);
           setAssetError(task.assetId, msg);
           setCompletedTaskIds((prev) => new Set(prev).add(task.id));
@@ -1765,6 +1914,7 @@ ${lineSvg}
       setPending,
       setAssets,
       getActionLabel,
+      getTaskLogLabel,
       getModule,
       replaceGroupItemWithSubAsset,
       setAssetError,
@@ -2096,6 +2246,7 @@ ${lineSvg}
           ...(imgs.length >= 2 ? { inputImages: imgs } : {}),
           ...(text ? { promptOverride: text } : {}),
           ...taskOverrides,
+          logContext: 'quick_compose_bar_plain',
         });
       }
       setAssets((prev) => [...prev, ...newAssets]);
@@ -2128,7 +2279,10 @@ ${lineSvg}
           textBody: body,
         });
         newAssets.push(asset);
-        const task = buildPendingTaskFromAssetSnapshot(asset, newId, mod.id, taskOverrides);
+        const task = buildPendingTaskFromAssetSnapshot(asset, newId, mod.id, {
+          ...taskOverrides,
+          logContext: 'quick_compose_bar_plain',
+        });
         if (task) newTasks.push(task);
       }
       if (newTasks.length === 0) {
@@ -2405,28 +2559,66 @@ ${lineSvg}
             })
             .concat(newAsset);
         });
-        void captureWorkflowModelThumbnailDataUrl({
-          modelSrc: blobUrl,
-          modelFileName: file.name,
-        }).then((thumb) => {
-          if (!thumb) return;
-          const thumbRatio = clampWorkflowCardAspectRatio(1280, 800);
-          setAssets((prev) => {
-            if (!prev.some((x) => x.id === newId)) return prev;
-            return prev.map((x) => {
-              if (x.id !== newId) return x;
-              const stillBlob = (x.modelUrls || []).some((u) => u === blobUrl);
-              if (!stillBlob) return x;
-              const o = String(x.original || '');
-              if (!o.includes('image/svg+xml')) return x;
-              return { ...x, original: thumb };
-            });
+        void (async () => {
+          const thumb = await captureWorkflowModelThumbnailDataUrl({
+            modelSrc: blobUrl,
+            modelFileName: file.name,
           });
-          setCardAspectByAssetId((prev) => ({ ...prev, [newId]: thumbRatio }));
-        });
+          if (thumb) {
+            const thumbRatio = clampWorkflowCardAspectRatio(1280, 800);
+            setAssets((prev) => {
+              if (!prev.some((x) => x.id === newId)) return prev;
+              return prev.map((x) => {
+                if (x.id !== newId) return x;
+                const stillBlob = (x.modelUrls || []).some((u) => u === blobUrl);
+                if (!stillBlob) return x;
+                const o = String(x.original || '');
+                if (!o.includes('image/svg+xml')) return x;
+                return { ...x, original: thumb };
+              });
+            });
+            setCardAspectByAssetId((prev) => ({ ...prev, [newId]: thumbRatio }));
+          }
+          const pid = String(workspaceProjectChrome?.activeProjectId || '').trim();
+          const base = String(getCompanionLocalBaseUrl() || '').trim();
+          if (!pid || !base) {
+            onLog?.(
+              'warn',
+              '本地伴侣未连接',
+              '3D 模型仅保存在浏览器会话内，刷新后可能无法预览；请在设置中连接本地伴侣以写入卷目录。'
+            );
+            return;
+          }
+          const put = await putWorkflowModelFileToCompanion(base, pid, newId, 0, file);
+          if (put.ok === false) {
+            onLog?.('warn', '3D 模型写入本地伴侣失败', put.error);
+            return;
+          }
+          const got = await fetchWorkflowModelFromCompanionAsObjectUrl(base, pid, put.key, file.name);
+          if (got.ok === false) {
+            setAssets((prev) =>
+              prev.map((x) => (x.id === newId ? { ...x, modelCompanionKeys: [put.key] } : x))
+            );
+            onLog?.('warn', '3D 模型落盘后读取预览失败', got.error);
+            return;
+          }
+          try {
+            URL.revokeObjectURL(blobUrl);
+          } catch {
+            /* ignore */
+          }
+          setAssets((prev) =>
+            prev.map((x) => {
+              if (x.id !== newId) return x;
+              const urls = [...(x.modelUrls || [])];
+              urls[0] = got.objectUrl;
+              return { ...x, modelUrls: urls, modelCompanionKeys: [put.key] };
+            })
+          );
+        })();
       });
     },
-    [buildWorkflowModelPlaceholderDataUrl, groupFilterId, onLog, setAssets]
+    [buildWorkflowModelPlaceholderDataUrl, groupFilterId, onLog, setAssets, workspaceProjectChrome?.activeProjectId]
   );
 
   const handleBatchUploadCorrect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -3058,23 +3250,28 @@ ${lineSvg}
 
   const duplicateAssetInPlace = useCallback(
     (sourceIds: string[], parentGroupId: string | null) => {
+      const base = String(getCompanionLocalBaseUrl() || '').trim();
+      const pid = String(workspaceProjectChrome?.activeProjectId || '').trim();
+      const plans: Array<{ src: WorkflowAsset; newId: string }> = [];
+      for (const id of sourceIds) {
+        const src = assets.find((a) => a.id === id);
+        if (!src) continue;
+        plans.push({ src, newId: uuid() });
+      }
+      if (plans.length === 0) return;
+      const newIds = plans.map((p) => p.newId);
       setAssets((prev) => {
-        const copies: WorkflowAsset[] = [];
-        const newIds: string[] = [];
-        sourceIds.forEach((id) => {
-          const src = prev.find((a) => a.id === id);
-          if (!src) return;
-          const newId = uuid();
-          newIds.push(newId);
-          copies.push({
-            ...src,
+        const copies: WorkflowAsset[] = plans.map(({ src, newId }) => {
+          const { modelCompanionKeys: _omitModelKeys, ...rest } = src;
+          return {
+            ...rest,
             id: newId,
+            modelCompanionKeys: undefined,
             archived: false,
             hiddenInGrid: false,
             createdAt: Date.now(),
-          });
+          };
         });
-        if (copies.length === 0) return prev;
         let next = [...prev, ...copies];
         if (parentGroupId) {
           const gi = next.findIndex((a) => a.id === parentGroupId);
@@ -3086,8 +3283,28 @@ ${lineSvg}
         }
         return next;
       });
+      if (!base || !pid) return;
+      for (const p of plans) {
+        const has =
+          (p.src.modelCompanionKeys?.some(Boolean) ?? false) ||
+          (p.src.modelUrls || []).some((u) => /^blob:|^https?:|^data:/i.test(String(u || '').trim()));
+        if (!has) continue;
+        void cloneWorkflowModelSlotsForDuplicatedAsset({
+          baseUrl: base,
+          projectId: pid,
+          sourceAsset: p.src,
+          newAssetId: p.newId,
+        }).then((r) => {
+          if (!r) return;
+          setAssets((prev) =>
+            prev.map((a) =>
+              a.id === p.newId ? { ...a, modelUrls: r.modelUrls, modelCompanionKeys: r.modelCompanionKeys } : a
+            )
+          );
+        });
+      }
     },
-    [setAssets]
+    [assets, setAssets, workspaceProjectChrome?.activeProjectId]
   );
 
   useEffect(() => {
@@ -3872,13 +4089,14 @@ ${lineSvg}
     for (const e of favoriteEntries) {
       if (e.kind !== 'module') continue;
       const p = e.mod;
-      if (p.disabled || p.id === 'cut_image' || p.category === 'generate_3d') continue;
+      // 底部「创作」条面向生图/文生：拆分组件走专用交互，避免队列日志误显 [拆分组件]
+      if (p.disabled || p.id === 'cut_image' || p.id === 'split_component' || p.category === 'generate_3d') continue;
       if (!allowEngine(p)) continue;
       seen.add(p.id);
       out.push({ value: p.id, label: p.label });
     }
     for (const p of capabilityPresets) {
-      if (p.disabled || seen.has(p.id) || p.id === 'cut_image' || p.category === 'generate_3d') continue;
+      if (p.disabled || seen.has(p.id) || p.id === 'cut_image' || p.id === 'split_component' || p.category === 'generate_3d') continue;
       if (!allowEngine(p)) continue;
       seen.add(p.id);
       out.push({ value: p.id, label: p.label });
@@ -5120,6 +5338,7 @@ ${lineSvg}
               {cloneCapabilityPresetPanelWithScrollRef(capabilityPresetPanel, presetScrollRef, {
                 onOpenWorkflowComposer: openUnifiedComposer,
                 workflowComposeSearchQuery: quickComposeDraft,
+                sidebarLinkHoverPresetIds,
               })}
             </div>
           ) : (
@@ -5180,6 +5399,7 @@ ${lineSvg}
             topActionMode={activePaneNode === 2 ? 'capabilityPreset' : 'asset'}
             onComposeCapabilities={handleComposeCapabilities}
             linkedComposeSearchQuery={quickComposeDraft}
+            onLinkHoverPresetIds={setSidebarLinkHoverPresetIds}
           />
         </div>
         </div>

@@ -11,7 +11,7 @@ import {
 import {
   aimWorkflowModelLightsAtBox,
   createStudioGroundMesh,
-  createWorkflowModelViewerStage,
+  createWorkflowModelViewerStageAsync,
   enhanceLoadedModelMaterials,
 } from './workflowModelViewerStage';
 
@@ -27,7 +27,7 @@ export type CaptureWorkflowModelThumbOptions = {
 
 /**
  * 离屏加载模型并渲染若干帧后导出 JPEG data URL，供工作区卡片缩略图使用。
- * 灯光与主预览一致（Room PMREM + 三光）；使用 `preserveDrawingBuffer` 以稳定 `toDataURL`。
+ * 灯光与主预览一致（HDR→PMREM，失败则 Room）；使用 `preserveDrawingBuffer` 以稳定 `toDataURL`。
  */
 export function captureWorkflowModelThumbnailDataUrl(
   opts: CaptureWorkflowModelThumbOptions
@@ -47,6 +47,7 @@ export function captureWorkflowModelThumbnailDataUrl(
     let torn = false;
     let loadedRoot: THREE.Object3D | null = null;
     let groundMesh: THREE.Mesh | null = null;
+    let stage: Awaited<ReturnType<typeof createWorkflowModelViewerStageAsync>> | null = null;
 
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(50, w / h, 0.01, 2000);
@@ -59,14 +60,11 @@ export function captureWorkflowModelThumbnailDataUrl(
     });
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 0.94;
+    renderer.toneMappingExposure = 1.02;
     renderer.setPixelRatio(1);
     renderer.setSize(w, h);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-
-    // 离屏缩略图：50% 中性灰底（#808080），便于观察光照与阴影
-    const stage = createWorkflowModelViewerStage(scene, renderer, 0x808080);
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
@@ -90,7 +88,8 @@ export function captureWorkflowModelThumbnailDataUrl(
         (groundMesh.material as THREE.Material).dispose();
         groundMesh = null;
       }
-      stage.dispose();
+      stage?.dispose();
+      stage = null;
       controls.dispose();
       renderer.dispose();
     };
@@ -114,6 +113,11 @@ export function captureWorkflowModelThumbnailDataUrl(
         disposeObjectHierarchy(object);
         return;
       }
+      if (!stage) {
+        disposeObjectHierarchy(object);
+        finish(null);
+        return;
+      }
       try {
         loadedRoot = object;
         enhanceLoadedModelMaterials(object);
@@ -126,7 +130,7 @@ export function captureWorkflowModelThumbnailDataUrl(
         scene.add(object);
         frameCameraToObject(camera, controls, object, { defaultView: '+x' });
         const box = new THREE.Box3().setFromObject(object);
-        aimWorkflowModelLightsAtBox(stage.keyLight, stage.fillLight, stage.rimLight, box);
+        aimWorkflowModelLightsAtBox(stage.keyLight, stage.fillLight, stage.rimLight, stage.bounceFill, box);
         groundMesh = createStudioGroundMesh(box);
         if (groundMesh) scene.add(groundMesh);
         for (let i = 0; i < 18; i += 1) {
@@ -142,12 +146,26 @@ export function captureWorkflowModelThumbnailDataUrl(
       }
     };
 
-    if (format === 'gltf') {
-      new GLTFLoader().load(modelSrc, (gltf) => onLoaded(gltf.scene), undefined, onError);
-    } else if (format === 'fbx') {
-      new FBXLoader().load(modelSrc, (group) => onLoaded(group), undefined, onError);
-    } else {
-      new OBJLoader().load(modelSrc, (group) => onLoaded(group), undefined, onError);
-    }
+    void (async () => {
+      try {
+        // 离屏缩略图：50% 中性灰底（#808080），便于观察光照与阴影
+        stage = await createWorkflowModelViewerStageAsync(scene, renderer, 0x808080);
+      } catch {
+        finish(null);
+        return;
+      }
+      if (settled || torn) {
+        stage?.dispose();
+        stage = null;
+        return;
+      }
+      if (format === 'gltf') {
+        new GLTFLoader().load(modelSrc, (gltf) => onLoaded(gltf.scene), undefined, onError);
+      } else if (format === 'fbx') {
+        new FBXLoader().load(modelSrc, (group) => onLoaded(group), undefined, onError);
+      } else {
+        new OBJLoader().load(modelSrc, (group) => onLoaded(group), undefined, onError);
+      }
+    })();
   });
 }

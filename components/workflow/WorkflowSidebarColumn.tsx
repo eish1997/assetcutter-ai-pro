@@ -35,6 +35,28 @@ import {
   keywordsMatchCapabilityModule,
 } from './capabilitySearchMatch';
 
+/** 复合能力内引用的预设 id，用于与左侧能力预设列联动高亮 */
+function collectPresetIdsFromCapabilitySet(set: CapabilitySet | null | undefined): string[] {
+  if (!set?.nodes?.length) return [];
+  const s = new Set<string>();
+  for (const n of set.nodes) {
+    if (n.type !== 'preset') continue;
+    const id = String(n.data?.presetId ?? '').trim();
+    if (id) s.add(id);
+  }
+  return Array.from(s);
+}
+
+function leaveSidebarRowLinkHover(
+  e: React.MouseEvent<HTMLElement>,
+  onLinkHoverPresetIds?: (ids: string[] | null) => void
+) {
+  if (!onLinkHoverPresetIds) return;
+  const next = e.relatedTarget as Node | null;
+  if (next && e.currentTarget.contains(next)) return;
+  onLinkHoverPresetIds(null);
+}
+
 const DRAG_SCROLL_EDGE_PX = 64;
 const DRAG_SCROLL_MAX_STEP_PX = 24;
 
@@ -270,6 +292,11 @@ export type WorkflowSidebarColumnProps = {
    * 且优先于本区搜索框内容；清空后恢复仅按本区搜索框筛选。
    */
   linkedComposeSearchQuery?: string;
+  /**
+   * 悬停功能区某能力块时，传入对应预设 id 列表；左侧能力预设列据此压暗其它卡片。
+   * `null` 表示不压暗。
+   */
+  onLinkHoverPresetIds?: (presetIds: string[] | null) => void;
 };
 
 export function WorkflowSidebarColumn({
@@ -325,6 +352,7 @@ export function WorkflowSidebarColumn({
   topActionMode = 'asset',
   onComposeCapabilities,
   linkedComposeSearchQuery = '',
+  onLinkHoverPresetIds,
 }: WorkflowSidebarColumnProps) {
   const [groupOverrideByCategory, setGroupOverrideByCategory] = useState<
     Record<
@@ -1483,8 +1511,13 @@ export function WorkflowSidebarColumn({
                           }`}
                           draggable
                           onMouseEnter={(e) => {
-                            if (entry.kind !== 'module' || !entry.mod) return;
-                            setHoverPreview({ mod: entry.mod, x: e.clientX, y: e.clientY });
+                            if (entry.kind === 'module' && entry.mod) {
+                              setHoverPreview({ mod: entry.mod, x: e.clientX, y: e.clientY });
+                              onLinkHoverPresetIds?.([entry.mod.id]);
+                            } else if (entry.kind === 'set') {
+                              const ids = collectPresetIdsFromCapabilitySet(entry.set);
+                              onLinkHoverPresetIds?.(ids.length ? ids : null);
+                            }
                           }}
                           onMouseMove={(e) => {
                             if (entry.kind !== 'module' || !entry.mod) return;
@@ -1494,7 +1527,13 @@ export function WorkflowSidebarColumn({
                                 : { mod: entry.mod, x: e.clientX, y: e.clientY }
                             );
                           }}
-                          onMouseLeave={() => setHoverPreview((prev) => (prev?.mod.id === entry.id ? null : prev))}
+                          onMouseLeave={(e) => {
+                            leaveSidebarRowLinkHover(e, onLinkHoverPresetIds);
+                            if (entry.kind !== 'module' || !entry.mod) return;
+                            const next = e.relatedTarget as Node | null;
+                            if (next && e.currentTarget.contains(next)) return;
+                            setHoverPreview((prev) => (prev?.mod.id === entry.mod!.id ? null : prev));
+                          }}
                           onDragStart={(e) => {
                             try {
                               e.dataTransfer.setData(DT_AC_CAPABILITY_ACTION, entry.id);
@@ -1547,7 +1586,11 @@ export function WorkflowSidebarColumn({
                                   : { mod: entry.mod, x: e.clientX, y: e.clientY }
                               );
                             }}
-                            onMouseLeave={() => setHoverPreview((prev) => (prev?.mod.id === entry.id ? null : prev))}
+                            onMouseLeave={() =>
+                              setHoverPreview((prev) =>
+                                entry.kind === 'module' && entry.mod && prev?.mod.id === entry.mod.id ? null : prev
+                              )
+                            }
             onDrop={(e) => {
               if (entry.kind === 'module' && entry.mod) {
                 if (
@@ -1899,7 +1942,10 @@ export function WorkflowSidebarColumn({
                                 : `${getSidebarCapabilityTone(mod.category).idleBorderClass} bg-[#1c1c22] ${getSidebarCapabilityTone(mod.category).hoverBorderClass}`
                         }`}
                         draggable
-                        onMouseEnter={(e) => setHoverPreview({ mod, x: e.clientX, y: e.clientY })}
+                        onMouseEnter={(e) => {
+                          setHoverPreview({ mod, x: e.clientX, y: e.clientY });
+                          onLinkHoverPresetIds?.([mod.id]);
+                        }}
                         onMouseMove={(e) =>
                           setHoverPreview((prev) =>
                             prev && prev.mod.id === mod.id
@@ -1907,7 +1953,12 @@ export function WorkflowSidebarColumn({
                               : { mod, x: e.clientX, y: e.clientY }
                           )
                         }
-                        onMouseLeave={() => setHoverPreview((prev) => (prev?.mod.id === mod.id ? null : prev))}
+                        onMouseLeave={(e) => {
+                          leaveSidebarRowLinkHover(e, onLinkHoverPresetIds);
+                          const next = e.relatedTarget as Node | null;
+                          if (next && e.currentTarget.contains(next)) return;
+                          setHoverPreview((prev) => (prev?.mod.id === mod.id ? null : prev));
+                        }}
                         onDragStart={(e) => {
                           try {
                             e.dataTransfer.setData(DT_AC_CAPABILITY_ACTION, mod.id);
@@ -2047,6 +2098,7 @@ export function WorkflowSidebarColumn({
               {displayVisiblePresets.map((mod) => (
                 <div
                   key={mod.id}
+                  data-capability-hover-id={mod.id}
                   className={`rounded-xl border min-h-[60px] h-auto flex overflow-hidden transition-all duration-150 ${
                     dragOverAction === mod.id
                       ? DROP_TARGET_ACTIVE_CLASS
@@ -2059,6 +2111,23 @@ export function WorkflowSidebarColumn({
                           : `${getSidebarCapabilityTone(mod.category).idleBorderClass} bg-[#1c1c22] ${getSidebarCapabilityTone(mod.category).hoverBorderClass}`
                   }`}
                   draggable
+                  onMouseEnter={(e) => {
+                    setHoverPreview({ mod, x: e.clientX, y: e.clientY });
+                    onLinkHoverPresetIds?.([mod.id]);
+                  }}
+                  onMouseMove={(e) =>
+                    setHoverPreview((prev) =>
+                      prev && prev.mod.id === mod.id
+                        ? { ...prev, x: e.clientX, y: e.clientY }
+                        : { mod, x: e.clientX, y: e.clientY }
+                    )
+                  }
+                  onMouseLeave={(e) => {
+                    leaveSidebarRowLinkHover(e, onLinkHoverPresetIds);
+                    const next = e.relatedTarget as Node | null;
+                    if (next && e.currentTarget.contains(next)) return;
+                    setHoverPreview((prev) => (prev?.mod.id === mod.id ? null : prev));
+                  }}
                   onDragStart={(e) => {
                     try {
                       e.dataTransfer.setData(DT_AC_CAPABILITY_ACTION, mod.id);
@@ -2194,6 +2263,11 @@ export function WorkflowSidebarColumn({
                     <div
                       key={set.id}
                       draggable
+                      onMouseEnter={() => {
+                        const ids = collectPresetIdsFromCapabilitySet(set);
+                        onLinkHoverPresetIds?.(ids.length ? ids : null);
+                      }}
+                      onMouseLeave={(e) => leaveSidebarRowLinkHover(e, onLinkHoverPresetIds)}
                       onDragStart={(e) => {
                         try {
                           e.dataTransfer.setData(DT_AC_CAPABILITY_ACTION, setActionId);

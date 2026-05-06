@@ -13,7 +13,7 @@ import {
 import {
   aimWorkflowModelLightsAtBox,
   createStudioGroundMesh,
-  createWorkflowModelViewerStage,
+  createWorkflowModelViewerStageAsync,
   enhanceLoadedModelMaterials,
 } from '../../../services/workflowModelViewerStage';
 
@@ -47,6 +47,8 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({ modelSrc, m
     let rafId = 0;
     let loadedRoot: THREE.Object3D | null = null;
     let groundMesh: THREE.Mesh | null = null;
+    let stage: Awaited<ReturnType<typeof createWorkflowModelViewerStageAsync>> | null = null;
+    const abortEnv = new AbortController();
 
     const width = Math.max(1, mount.clientWidth || root.clientWidth);
     const height = Math.max(1, mount.clientHeight || root.clientHeight || width * 0.56);
@@ -59,13 +61,11 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({ modelSrc, m
     renderer.setClearColor(0x000000, 0);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 0.94;
+    renderer.toneMappingExposure = 1.02;
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     renderer.setSize(width, height);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-
-    const stage = createWorkflowModelViewerStage(scene, renderer, null);
 
     while (mount.firstChild) mount.removeChild(mount.firstChild);
     mount.appendChild(renderer.domElement);
@@ -103,7 +103,7 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({ modelSrc, m
     };
 
     const finishLoad = (object: THREE.Object3D) => {
-      if (cancelled) return;
+      if (cancelled || !stage) return;
       loadedRoot = object;
       enhanceLoadedModelMaterials(object);
       object.traverse((child) => {
@@ -116,19 +116,36 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({ modelSrc, m
       scene.add(object);
       frameCameraToObject(camera, controls, object, { defaultView: '+x' });
       const box = new THREE.Box3().setFromObject(object);
-      aimWorkflowModelLightsAtBox(stage.keyLight, stage.fillLight, stage.rimLight, box);
+      aimWorkflowModelLightsAtBox(stage.keyLight, stage.fillLight, stage.rimLight, stage.bounceFill, box);
       groundMesh = createStudioGroundMesh(box);
       if (groundMesh) scene.add(groundMesh);
       setStatus('ready');
     };
 
-    if (format === 'gltf') {
-      new GLTFLoader().load(src, (gltf) => finishLoad(gltf.scene), undefined, onLoadError);
-    } else if (format === 'fbx') {
-      new FBXLoader().load(src, (group) => finishLoad(group), undefined, onLoadError);
-    } else {
-      new OBJLoader().load(src, (group) => finishLoad(group), undefined, onLoadError);
-    }
+    void (async () => {
+      try {
+        stage = await createWorkflowModelViewerStageAsync(scene, renderer, null, { signal: abortEnv.signal });
+      } catch (e) {
+        if (cancelled || (e instanceof DOMException && e.name === 'AbortError')) return;
+        if (!cancelled) {
+          setStatus('error');
+          setMessage('3D 环境（HDR）加载失败，请刷新重试。');
+        }
+        return;
+      }
+      if (cancelled) {
+        stage?.dispose();
+        stage = null;
+        return;
+      }
+      if (format === 'gltf') {
+        new GLTFLoader().load(src, (gltf) => finishLoad(gltf.scene), undefined, onLoadError);
+      } else if (format === 'fbx') {
+        new FBXLoader().load(src, (group) => finishLoad(group), undefined, onLoadError);
+      } else {
+        new OBJLoader().load(src, (group) => finishLoad(group), undefined, onLoadError);
+      }
+    })();
 
     const ro = new ResizeObserver(() => {
       if (cancelled || !mount) return;
@@ -150,6 +167,7 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({ modelSrc, m
 
     return () => {
       cancelled = true;
+      abortEnv.abort();
       cancelAnimationFrame(rafId);
       ro.disconnect();
       controls.dispose();
@@ -166,7 +184,7 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({ modelSrc, m
         (groundMesh.material as THREE.Material).dispose();
         groundMesh = null;
       }
-      stage.dispose();
+      stage?.dispose();
       renderer.dispose();
       if (renderer.domElement.parentNode === mount) mount.removeChild(renderer.domElement);
     };
@@ -180,7 +198,7 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({ modelSrc, m
       <div ref={mountRef} className="absolute inset-0 z-0" aria-hidden />
       {status === 'loading' ? (
         <div className="absolute inset-0 z-[2] flex items-center justify-center text-[10px] text-gray-500 pointer-events-none">
-          3D 模型加载中…
+          3D 环境与模型加载中…
         </div>
       ) : null}
       {status === 'error' || status === 'unsupported' ? (

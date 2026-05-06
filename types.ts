@@ -397,6 +397,11 @@ export type WorkflowAsset = {
   results: Record<string, string>;
   /** 关联 3D 模型下载地址（可选）；用于大图预览切换到 3D 视口 */
   modelUrls?: string[];
+  /**
+   * 与 `modelUrls` 同序：本地伴侣 `PUT .../assets/:key` 下的模型二进制键。
+   * 持久化时可配合清空对应槽位的 `blob:`/`data:` 串以省 IndexedDB。
+   */
+  modelCompanionKeys?: string[];
   /** 本地 blob 模型无 URL 后缀时，用原始文件名推断格式（.glb/.fbx/.obj 等） */
   modelSourceName?: string;
   /** 各步骤结果在 R2 的键，hydrate 后写回 results */
@@ -481,6 +486,10 @@ export type WorkflowPendingTask = {
   overrideImageAspectRatio?: string;
   overrideImageSize?: string;
   overrideSkipUnderstand?: boolean;
+  /**
+   * `quick_compose_bar_plain`：底部输入框直输图/文且未拖入预设卡片；运行日志用中性前缀，不显示底层快捷能力名。
+   */
+  logContext?: 'quick_compose_bar_plain';
 };
 
 /**

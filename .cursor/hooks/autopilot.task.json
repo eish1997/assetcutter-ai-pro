@@ -1,0 +1,9 @@
+{
+  "enabled": false,
+  "wakeWord": "扁担",
+  "sleepPhrase": "扁担停",
+  "followupBody": "",
+  "validateCommand": "npm run typecheck",
+  "validateCwd": "",
+  "validateTimeoutMs": 120000
+}

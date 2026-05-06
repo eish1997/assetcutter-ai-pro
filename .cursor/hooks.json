@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeSubmitPrompt": [
+      {
+        "command": "node .cursor/hooks/autopilot-arm.mjs"
+      }
+    ],
+    "stop": [
+      {
+        "command": "node .cursor/hooks/autopilot-stop.mjs",
+        "loop_limit": 25
+      }
+    ]
+  }
+}
