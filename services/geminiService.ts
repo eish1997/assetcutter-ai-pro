@@ -168,6 +168,7 @@ async function bulkProxyGenerateContentAsync(args: {
 
   await consumeTrialGeminiSlotBeforeProxyOrThrow();
 
+  /** 与合并前「Vertex AI」供应商一致：`gemini-proxy-api` 凭 `aiBackend:vertex` 走 GCP/ADC，而非仅 GEMINI_API_KEY。 */
   const createRes = await fetch(bulkApiUrl("/proxy/gemini/async"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -175,6 +176,7 @@ async function bulkProxyGenerateContentAsync(args: {
       model: args.model,
       contents: args.contents,
       config: safeConfig,
+      aiBackend: "vertex",
     }),
     signal: abortSignal,
     cache: "no-store",
@@ -234,10 +236,10 @@ async function bulkProxyGenerateContentAsync(args: {
 
 async function bulkProxyGenerateContentBatchAsync(args: {
   items: Array<{ model: string; contents: unknown; config?: Record<string, unknown> }>;
-  aiBackend?: "vertex";
 }): Promise<Array<{ ok: boolean; result?: { text?: string; candidates?: unknown[] }; error?: string }>> {
   if (!Array.isArray(args.items) || args.items.length === 0) return [];
   await consumeTrialGeminiSlotBeforeProxyOrThrow();
+  /** 与单任务 async 一致：试用渠道即原 Vertex 代理链路（见 `bulkProxyGenerateContentAsync`）。 */
   const createRes = await fetch(bulkApiUrl("/proxy/gemini/async-batch"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -247,6 +249,7 @@ async function bulkProxyGenerateContentBatchAsync(args: {
         contents: item.contents,
         config: item.config || {},
       })),
+      aiBackend: "vertex",
     }),
     cache: "no-store",
   });

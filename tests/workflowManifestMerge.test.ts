@@ -83,4 +83,40 @@ describe('mergeUnlinkedManifestEntriesIntoWorkflowAssets', () => {
     expect(nextAssets.length).toBe(1);
     expect(nextAssets[0]!.resultsCompanionKeys?.[STEP]).toBe(rk);
   });
+
+  it('默认不导入非 wf-* 遗留条目（避免打开项目时扫盘插入多张散卡）', () => {
+    const m = man([
+      {
+        key: 'legacy-blob-key-1',
+        relPath: 'imports/snap.png',
+        byteSize: 1,
+        tags: [],
+        lineage: null,
+        updatedAt: 1,
+        mime: 'image/png',
+      },
+    ]);
+    const { nextAssets, importedKeys } = mergeUnlinkedManifestEntriesIntoWorkflowAssets([], m, () => 'new-1');
+    expect(nextAssets.length).toBe(0);
+    expect(importedKeys.length).toBe(0);
+  });
+
+  it('importLegacyOrphans 为 true 时仍导入遗留条目', () => {
+    const m = man([
+      {
+        key: 'legacy-blob-key-1',
+        relPath: 'imports/snap.png',
+        byteSize: 1,
+        tags: [],
+        lineage: null,
+        updatedAt: 1,
+        mime: 'image/png',
+      },
+    ]);
+    const { nextAssets, importedKeys } = mergeUnlinkedManifestEntriesIntoWorkflowAssets([], m, () => 'new-1', {
+      importLegacyOrphans: true,
+    });
+    expect(nextAssets.length).toBe(1);
+    expect(importedKeys).toEqual(['legacy-blob-key-1']);
+  });
 });

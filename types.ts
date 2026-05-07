@@ -522,6 +522,11 @@ export type WorkflowAsset = {
   inRepository?: boolean;
   hiddenInGrid: boolean;
   createdAt: number;
+  /**
+   * 主网格卡片占位宽高比（宽/高，约 0.5～2），与 `workflowCardAspect` 的 clamp 一致。
+   * 入图或解码出固有尺寸时写入并随项目 bundle 持久化，重开项目可先占位，减少多列 `balance` 反复重排。
+   */
+  gridCardAspectRatio?: number;
   /** VGP：语义快照 + 版本链 + Prompt 产物（阶段 A，可选以兼容旧数据） */
   vgp?: VgpAssetExtension;
 

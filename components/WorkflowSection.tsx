@@ -174,8 +174,10 @@ import { isWorkflowEditableTarget } from './workflow/workflowDomUtils';
 import {
   clampWorkflowCardAspectRatio,
   mergeCardAspectFromIntrinsic,
+  nextGridCardAspectRatioFromIntrinsic,
   persistWorkflowCardAspects,
   readSessionWorkflowCardAspects,
+  resolveWorkflowGridCardAspect,
 } from './workflow/workflowCardAspect';
 import { groupCapabilityPresetsByCategory } from './workflow/workflowCapabilityGroups';
 import { WorkflowSidebarColumn, type WorkflowSidebarFavoriteEntry } from './workflow/WorkflowSidebarColumn';
@@ -687,9 +689,8 @@ const WorkflowSection: React.FC<{
       typeof parsed === 'number' ? normalizeCapabilityPresetColumnCount(parsed) : null
     )
   );
-  const [cardAspectByAssetId, setCardAspectByAssetId] = useState<Record<string, number>>(
-    () => readSessionWorkflowCardAspects()
-  );
+  const [cardAspectByAssetId, setCardAspectByAssetId] = useState<Record<string, number>>({});
+  const cardAspectProjectRef = useRef<string | null>(null);
   const [thumbUnlockKeys, setThumbUnlockKeys] = useState<Set<string>>(() => new Set());
   /** 当前视口内（严格 intersect）卡片：缩略解码队列 high，优先于屏外 */
   const [thumbHotKeys, setThumbHotKeys] = useState<Set<string>>(() => new Set());
@@ -772,12 +773,58 @@ const WorkflowSection: React.FC<{
     }
   }, [onboardingKey]);
 
+  useLayoutEffect(() => {
+    const pid = String(workspaceProjectChrome?.activeProjectId || '').trim();
+    const fromAssets = (): Record<string, number> => {
+      const out: Record<string, number> = {};
+      for (const a of assets) {
+        const g = a.gridCardAspectRatio;
+        if (typeof g === 'number' && Number.isFinite(g) && g > 0) {
+          out[a.id] = Math.max(0.5, Math.min(2, g));
+        }
+      }
+      return out;
+    };
+    if (cardAspectProjectRef.current !== pid) {
+      cardAspectProjectRef.current = pid;
+      const sessionMap = readSessionWorkflowCardAspects(pid);
+      setCardAspectByAssetId({ ...sessionMap, ...fromAssets() });
+      return;
+    }
+    setCardAspectByAssetId((prev) => {
+      const seed = fromAssets();
+      let changed = false;
+      const next = { ...prev };
+      for (const [k, v] of Object.entries(seed)) {
+        if (next[k] !== v) {
+          next[k] = v;
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [workspaceProjectChrome?.activeProjectId, assets]);
+
   useEffect(() => {
+    const pid = String(workspaceProjectChrome?.activeProjectId || '').trim();
     const t = window.setTimeout(() => {
-      persistWorkflowCardAspects(cardAspectByAssetId);
+      persistWorkflowCardAspects(pid || null, cardAspectByAssetId);
     }, 400);
     return () => window.clearTimeout(t);
-  }, [cardAspectByAssetId]);
+  }, [cardAspectByAssetId, workspaceProjectChrome?.activeProjectId]);
+
+  const applyIntrinsicAspectToAsset = useCallback(
+    (assetId: string, w: number, h: number) => {
+      setCardAspectByAssetId((prev) => mergeCardAspectFromIntrinsic(prev, assetId, w, h) ?? prev);
+      setAssets((prev) => {
+        const cur = prev.find((x) => x.id === assetId);
+        const nextR = nextGridCardAspectRatioFromIntrinsic(cur?.gridCardAspectRatio, w, h);
+        if (nextR == null) return prev;
+        return prev.map((x) => (x.id === assetId ? { ...x, gridCardAspectRatio: nextR } : x));
+      });
+    },
+    [setAssets]
+  );
 
   useLayoutEffect(() => {
     const el = workspaceViewportRef.current;
@@ -3130,7 +3177,7 @@ ${lineSvg}
       reader.onload = () => {
         const base64 = reader.result as string;
         const newId = uuid();
-        const pushNewAsset = () => {
+        const pushNewAsset = (aspectRatio?: number) => {
           setAssets((prev) => {
             // 上传时：如果当前在组内，新增资产应该成为该组的成员
             const parentGroup = groupFilterId ? prev.find((a) => a.id === groupFilterId) : null;
@@ -3143,6 +3190,7 @@ ${lineSvg}
               archived: false,
               hiddenInGrid: false,
               createdAt: batchBase + (n - 1 - fileIdx),
+              ...(typeof aspectRatio === 'number' && aspectRatio > 0 ? { gridCardAspectRatio: aspectRatio } : {}),
               ...(parentGroup ? { groupId: parentGroup.id } : {}),
             });
             if (!parentGroup) {
@@ -3176,7 +3224,7 @@ ${lineSvg}
             next.add(newId);
             return next;
           });
-          pushNewAsset();
+          pushNewAsset(ratio);
         };
         im.onerror = () => {
           setThumbUnlockKeys((prev) => {
@@ -3191,7 +3239,7 @@ ${lineSvg}
             next.add(newId);
             return next;
           });
-          pushNewAsset();
+          pushNewAsset(undefined);
         };
         im.src = base64;
       };
@@ -3254,6 +3302,7 @@ ${lineSvg}
             archived: false,
             hiddenInGrid: false,
             createdAt: batchBase + (n - 1 - fileIdx),
+            gridCardAspectRatio: ratio,
             ...(parentGroup ? { groupId: parentGroup.id } : {}),
           });
           if (!parentGroup) {
@@ -3283,7 +3332,7 @@ ${lineSvg}
                 if (!stillBlob) return x;
                 const o = String(x.original || '');
                 if (!o.includes('image/svg+xml')) return x;
-                return { ...x, original: thumb };
+                return { ...x, original: thumb, gridCardAspectRatio: thumbRatio };
               });
             });
             setCardAspectByAssetId((prev) => ({ ...prev, [newId]: thumbRatio }));
@@ -6554,7 +6603,9 @@ ${lineSvg}
                         >
                           <div
                             className="relative w-full bg-[#141416] flex justify-center"
-                            style={{ aspectRatio: `${cardAspectByAssetId[gallKey] ?? 1}` }}
+                            style={{
+                              aspectRatio: `${resolveWorkflowGridCardAspect(undefined, cardAspectByAssetId, gallKey, 1)}`,
+                            }}
                           >
                             <WorkflowGridImage
                               fullSrc={img}
@@ -6855,7 +6906,14 @@ ${lineSvg}
                                     ) : (
                                       <div
                                         className="relative w-full bg-[#141416] flex justify-center"
-                                        style={{ aspectRatio: `${cardAspectByAssetId[childAsset.id] ?? 1}` }}
+                                        style={{
+                                          aspectRatio: `${resolveWorkflowGridCardAspect(
+                                            childAsset,
+                                            cardAspectByAssetId,
+                                            groupKey,
+                                            1
+                                          )}`,
+                                        }}
                                       >
                                         <WorkflowGridImage
                                           fullSrc={childGridPreviewSrcEffective}
@@ -6869,9 +6927,9 @@ ${lineSvg}
                                           draggable={false}
                                           onDragStart={(e) => e.preventDefault()}
                                           onIntrinsicSize={(w, h) => {
+                                            applyIntrinsicAspectToAsset(childAsset.id, w, h);
                                             setCardAspectByAssetId(
-                                              (prev) =>
-                                                mergeCardAspectFromIntrinsic(prev, childAsset.id, w, h) ?? prev
+                                              (prev) => mergeCardAspectFromIntrinsic(prev, groupKey, w, h) ?? prev
                                             );
                                           }}
                                         />
@@ -7032,7 +7090,14 @@ ${lineSvg}
                           <div className="relative cursor-pointer" onClick={() => setGroupStringLightboxIndex(idx)}>
                             <div
                               className="relative w-full bg-[#141416] flex justify-center"
-                              style={{ aspectRatio: `${cardAspectByAssetId[groupKey] ?? 1}` }}
+                              style={{
+                                aspectRatio: `${resolveWorkflowGridCardAspect(
+                                  isAssetRef ? childAsset ?? undefined : undefined,
+                                  cardAspectByAssetId,
+                                  groupKey,
+                                  1
+                                )}`,
+                              }}
                             >
                               <WorkflowGridImage
                                 fullSrc={img}
@@ -7054,6 +7119,9 @@ ${lineSvg}
                                 draggable={false}
                                 onDragStart={(e) => e.preventDefault()}
                                 onIntrinsicSize={(w, h) => {
+                                  if (isAssetRef && childAsset) {
+                                    applyIntrinsicAspectToAsset(childAsset.id, w, h);
+                                  }
                                   setCardAspectByAssetId(
                                     (prev) => mergeCardAspectFromIntrinsic(prev, groupKey, w, h) ?? prev
                                   );
@@ -7189,7 +7257,12 @@ ${lineSvg}
                     Object.values(a.textResults || {}).some((v) => String(v || '').trim() !== '');
                   const baseDisplayImage = getAssetDisplayImage(a);
                   const hasDisplayImage = baseDisplayImage.trim() !== '';
-                  const cardAspect = hasDisplayImage ? cardAspectByAssetId[a.id] ?? 1 : 3 / 4;
+                  /** 无图时仍用已持久化的 `gridCardAspectRatio` 占位（资源未 hydrate 时不至于先方后横跳） */
+                  const cardAspect = hasDisplayImage
+                    ? resolveWorkflowGridCardAspect(a, cardAspectByAssetId, undefined, 1)
+                    : isWorkflowTextAsset(a) && hasTextPayload
+                      ? 3 / 4
+                      : resolveWorkflowGridCardAspect(a, cardAspectByAssetId, undefined, 1);
                   const isBusy = busyAssetIds.has(a.id);
                   const isPendingOnly =
                     pending.some((t) => t.assetId === a.id) && !executingQueue;
@@ -7506,9 +7579,7 @@ ${lineSvg}
                                 draggable={false}
                                 onDragStart={(e) => e.preventDefault()}
                                 onIntrinsicSize={(w, h) => {
-                                  setCardAspectByAssetId(
-                                    (prev) => mergeCardAspectFromIntrinsic(prev, a.id, w, h) ?? prev
-                                  );
+                                  applyIntrinsicAspectToAsset(a.id, w, h);
                                 }}
                               />
                               <div

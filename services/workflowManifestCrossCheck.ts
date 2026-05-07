@@ -409,6 +409,14 @@ function findExistingAssetIndexForCompanionGroup(assets: WorkflowAsset[], canoni
   });
 }
 
+export type MergeUnlinkedManifestOptions = {
+  /**
+   * manifest 里**非** `wf-orig` / `wf-res` / `wf-mdl` 规范的「遗留」条目：默认不导入（每文件一张新卡，易把组/血缘打乱）。
+   * 仅当显式开启（如 `VITE_WORKSPACE_IMPORT_LEGACY_COMPANION_ORPHANS=true`）时才插入画布。
+   */
+  importLegacyOrphans?: boolean;
+};
+
 /**
  * 将 manifest 中已登记、但画布 JSON 未引用的对象自动补成工作流卡片（依赖伴侣后续 hydrate 出 blob 预览）。
  * 工作流伴侣键 `wf-orig-*` / `wf-res-*` / `wf-mdl-*` 按 **同一资产 id** 合并为一张卡片，避免扫盘时每文件一张卡、丢失步骤关系。
@@ -416,7 +424,8 @@ function findExistingAssetIndexForCompanionGroup(assets: WorkflowAsset[], canoni
 export function mergeUnlinkedManifestEntriesIntoWorkflowAssets(
   assets: WorkflowAsset[],
   manifest: CompanionManifestV1 | null | undefined,
-  newId: () => string
+  newId: () => string,
+  options?: MergeUnlinkedManifestOptions
 ): { nextAssets: WorkflowAsset[]; importedKeys: string[] } {
   if (!manifest?.entries?.length) return { nextAssets: assets, importedKeys: [] };
   const referenced = collectReferencedCompanionKeys(assets);
@@ -510,42 +519,44 @@ export function mergeUnlinkedManifestEntriesIntoWorkflowAssets(
     }
   }
 
-  for (const e of legacyUnlinked) {
-    const key = String(e?.key || '').trim();
-    if (!key || referenced.has(key)) continue;
-    const kind = classifyManifestEntryForAutoImport({ key, mime: e.mime, relPath: e.relPath });
-    if (!kind) continue;
-    referenced.add(key);
-    importedKeys.push(key);
-    if (kind === 'image') {
-      newAssets.push(
-        attachInitialVgpToNewAsset({
-          id: newId(),
-          original: '',
-          originalCompanionKey: key,
-          displayKey: 'original',
-          results: {},
-          resultOrder: [],
-          archived: false,
-          hiddenInGrid: false,
-          createdAt: Date.now(),
-        })
-      );
-    } else {
-      newAssets.push(
-        attachInitialVgpToNewAsset({
-          id: newId(),
-          original: '',
-          displayKey: 'original',
-          results: {},
-          resultOrder: [],
-          modelCompanionKeys: [key],
-          modelUrls: [],
-          archived: false,
-          hiddenInGrid: false,
-          createdAt: Date.now(),
-        })
-      );
+  if (options?.importLegacyOrphans === true) {
+    for (const e of legacyUnlinked) {
+      const key = String(e?.key || '').trim();
+      if (!key || referenced.has(key)) continue;
+      const kind = classifyManifestEntryForAutoImport({ key, mime: e.mime, relPath: e.relPath });
+      if (!kind) continue;
+      referenced.add(key);
+      importedKeys.push(key);
+      if (kind === 'image') {
+        newAssets.push(
+          attachInitialVgpToNewAsset({
+            id: newId(),
+            original: '',
+            originalCompanionKey: key,
+            displayKey: 'original',
+            results: {},
+            resultOrder: [],
+            archived: false,
+            hiddenInGrid: false,
+            createdAt: Date.now(),
+          })
+        );
+      } else {
+        newAssets.push(
+          attachInitialVgpToNewAsset({
+            id: newId(),
+            original: '',
+            displayKey: 'original',
+            results: {},
+            resultOrder: [],
+            modelCompanionKeys: [key],
+            modelUrls: [],
+            archived: false,
+            hiddenInGrid: false,
+            createdAt: Date.now(),
+          })
+        );
+      }
     }
   }
 

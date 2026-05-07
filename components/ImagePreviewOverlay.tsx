@@ -1034,7 +1034,7 @@ export function ImagePreviewOverlay({
         ) : null}
 
         {!uiHidden ? (
-        <div className="absolute top-4 left-4 z-10 max-w-[min(300px,calc(100vw-6rem))] pointer-events-none text-left text-[8px] leading-relaxed text-gray-500/70 space-y-1 [text-shadow:0_1px_3px_rgba(0,0,0,0.75)]">
+        <div className="absolute top-4 left-4 z-10 max-w-[min(300px,calc(100vw-6rem))] pointer-events-none text-left text-[8px] leading-relaxed text-gray-500/70 space-y-1">
           {enablePanoramaMode && previewLayout === 'pano' ? (
             <>
               {showModeCycleHint ? <div>Q：循环切换显示模式（平面 / 全景 / 3D）</div> : null}

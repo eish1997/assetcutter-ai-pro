@@ -62,7 +62,13 @@ export async function consumeTrialGeminiSlotBeforeProxyOrThrow(): Promise<void> 
       body: '{}',
     });
   } catch (e) {
-    if (e instanceof HttpRequestError && e.status === 401) {
+    /** 404：多为本地 auth-api 未用当前代码重启，路由尚未挂载；与 401 一样走访客本机计数，避免能力名旁只显示「Not found」。 */
+    if (e instanceof HttpRequestError && (e.status === 401 || e.status === 404)) {
+      if (e.status === 404) {
+        console.warn(
+          '[trial-gemini] POST /api/auth/trial-gemini/consume 返回 404，已按访客额度本机计数。请确认已运行 npm run dev:auth-backend（9100）且为当前仓库版本。'
+        );
+      }
       consumeGuestTrialSlotOrThrow(limit);
       return;
     }

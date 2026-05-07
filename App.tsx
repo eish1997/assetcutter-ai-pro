@@ -197,6 +197,10 @@ function readWorkspaceAutoSyncIntervalMs(): number {
 }
 const WORKSPACE_AUTO_SYNC_INTERVAL_MS = readWorkspaceAutoSyncIntervalMs();
 
+/** 打开项目时：是否把伴侣 manifest 里非 wf-orig/wf-res/wf-mdl 的遗留文件扫成多张新卡（默认关，避免打乱组与生成关系） */
+const WORKSPACE_IMPORT_LEGACY_COMPANION_ORPHANS =
+  String(import.meta.env.VITE_WORKSPACE_IMPORT_LEGACY_COMPANION_ORPHANS || '').trim().toLowerCase() === 'true';
+
 function estimateStringBytes(value: string): number {
   if (!value) return 0;
   const v = String(value);
@@ -1580,7 +1584,8 @@ const MainApp: React.FC = () => {
           const { nextAssets, importedKeys } = mergeUnlinkedManifestEntriesIntoWorkflowAssets(
             prev,
             manifestData,
-            newAssetId
+            newAssetId,
+            { importLegacyOrphans: WORKSPACE_IMPORT_LEGACY_COMPANION_ORPHANS }
           );
           if (importedKeys.length === 0) return prev;
           const scopeInner = userIdRef.current ?? null;
