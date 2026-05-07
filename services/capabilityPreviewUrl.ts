@@ -8,7 +8,8 @@ import type { CustomAppModule } from '../types';
  * 否则保持相对路径（由 Vite 代理或同源网关处理）。
  * 解决：静态前端（Vercel/Render static）把 /api/* 回退成 index.html 时，img 收到 HTML 解码失败却无任何 JS 报错。
  */
-function mapSiteR2PathToFetchUrl(sitePath: string): string {
+/** 与 `<img src>` / `resolveCapabilityPreviewSrc` 同源：将 `/api/r2/...` 转为可 `fetch` 的绝对地址（静态站 + 外置 API 时必需） */
+export function mapSiteR2PathToFetchUrl(sitePath: string): string {
   const raw = String(sitePath || '').trim();
   if (!raw.startsWith('/api/r2')) return raw;
   try {

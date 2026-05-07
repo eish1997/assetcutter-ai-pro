@@ -2,9 +2,10 @@ import type { WorkflowAsset } from '../types';
 import type { WorkflowProjectBundle } from './workspaceProjectStore';
 import { fetchCompanionAssetBlob, putCompanionAsset } from './companionClient/storage';
 import { normalizeCompanionBaseUrl } from './companionLocalPrefs';
+import { mapSiteR2PathToFetchUrl, resolveCapabilityPreviewSrc } from './capabilityPreviewUrl';
 import { isWorkflowTextAsset } from './workflowTextAsset';
 
-function sanitizeCompanionPathSegment(s: string): string {
+export function sanitizeCompanionPathSegment(s: string): string {
   return String(s || '')
     .trim()
     .replace(/[^a-zA-Z0-9_.-]/g, '_')
@@ -193,6 +194,28 @@ export async function imageSrcToDataUrlForCompanion(src: string): Promise<string
   if (/^blob:/i.test(s)) {
     try {
       const res = await fetch(s);
+      const blob = await res.blob();
+      return await blobToDataUrl(blob);
+    } catch {
+      return null;
+    }
+  }
+  /**
+   * `./previews/…`、能力商店相对路径等：与 `<img src>` / resolveCapabilityPreviewSrc 一致后再 fetch，
+   * 否则画布能显示但伴侣落盘规范化失败（cannot_normalize_image_src）。
+   */
+  if (!/^https?:\/\//i.test(s) && !s.startsWith('/')) {
+    const resolved = resolveCapabilityPreviewSrc(s);
+    if (resolved && resolved !== s) {
+      return imageSrcToDataUrlForCompanion(resolved);
+    }
+  }
+  /** 工作区持久化瘦身后的 `original` / 结果槽位可能是站内 `/api/...`（非绝对 URL），执行前须拉取为 data URL */
+  if (s.startsWith('/') && (s.includes('/api/') || s.includes('/r2/'))) {
+    try {
+      const fetchUrl = /\/api\/r2/i.test(s) ? mapSiteR2PathToFetchUrl(s) : s;
+      const res = await fetch(fetchUrl, { mode: 'cors', credentials: 'include' });
+      if (!res.ok) return null;
       const blob = await res.blob();
       return await blobToDataUrl(blob);
     } catch {

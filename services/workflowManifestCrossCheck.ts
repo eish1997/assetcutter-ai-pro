@@ -7,6 +7,7 @@ import {
   putWorkflowModelBlobToCompanion,
   putWorkflowOriginalImageToCompanion,
   putWorkflowResultImageToCompanion,
+  sanitizeCompanionPathSegment,
   workflowModelCompanionStorageKey,
   workflowOriginalCompanionStorageKey,
   workflowResultCompanionStorageKey,
@@ -266,8 +267,151 @@ function classifyManifestEntryForAutoImport(entry: {
   return null;
 }
 
+const WF_ORIG_P = 'wf-orig-';
+const WF_RES_P = 'wf-res-';
+const WF_MDL_P = 'wf-mdl-';
+
+function parseMdlCompanionKey(key: string): { assetSanitizedId: string; slot: number } | null {
+  if (!key.startsWith(WF_MDL_P)) return null;
+  const body = key.slice(WF_MDL_P.length);
+  const lastDash = body.lastIndexOf('-');
+  if (lastDash <= 0) return null;
+  const slotStr = body.slice(lastDash + 1);
+  const slot = Number(slotStr);
+  if (!Number.isFinite(slot) || slot < 0 || String(slot) !== slotStr) return null;
+  return { assetSanitizedId: body.slice(0, lastDash), slot };
+}
+
+/** manifest 中 wf-orig 后缀（完整）→ 其前 48 字符（与 wf-res 首段对齐） */
+function buildOrigPrefix48ToFullMap(manifest: CompanionManifestV1): Map<string, string> {
+  const m = new Map<string, string>();
+  for (const e of manifest.entries) {
+    const k = String(e?.key || '').trim();
+    if (!k.startsWith(WF_ORIG_P)) continue;
+    const full = k.slice(WF_ORIG_P.length);
+    m.set(full.slice(0, 48), full);
+  }
+  return m;
+}
+
+/** wf-res 体为「标准 UUID + '-' + 步骤键…」时，无 wf-orig 也能解析出资产前缀 */
+const WF_RES_BODY_UUID_PREFIX =
+  /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})-/i;
+
+function collectResMatchPrefixes(
+  manifest: CompanionManifestV1,
+  assets: WorkflowAsset[],
+  origP48ToFull: Map<string, string>
+): string[] {
+  const S = new Set<string>();
+  for (const p of origP48ToFull.keys()) S.add(p);
+  for (const e of manifest.entries) {
+    const k = String(e?.key || '').trim();
+    const mdl = parseMdlCompanionKey(k);
+    if (mdl) S.add(mdl.assetSanitizedId.slice(0, 48));
+    if (k.startsWith(WF_RES_P)) {
+      const body = k.slice(WF_RES_P.length);
+      const um = body.match(WF_RES_BODY_UUID_PREFIX);
+      if (um?.[1]) S.add(um[1]);
+    }
+  }
+  for (const a of assets) {
+    if (isWorkflowTextAsset(a)) continue;
+    const id = String(a.id || '').trim();
+    if (id) S.add(sanitizeCompanionPathSegment(id).slice(0, 48));
+  }
+  return [...S].sort((a, b) => b.length - a.length);
+}
+
+function parseResCompanionKey(
+  fullKey: string,
+  sortedPrefixes: string[]
+): { assetPrefix48: string; resultKey: string } | null {
+  if (!fullKey.startsWith(WF_RES_P)) return null;
+  const body = fullKey.slice(WF_RES_P.length);
+  for (const p of sortedPrefixes) {
+    if (!p) continue;
+    if (body.startsWith(`${p}-`)) {
+      return { assetPrefix48: p, resultKey: body.slice(p.length + 1) };
+    }
+  }
+  return null;
+}
+
+function resolveCanonicalAssetId(
+  assetPrefix48: string,
+  fullMdlSanitizedId: string | undefined,
+  origP48ToFull: Map<string, string>
+): string {
+  const fromOrig = origP48ToFull.get(assetPrefix48);
+  if (fromOrig) return fromOrig;
+  if (fullMdlSanitizedId && fullMdlSanitizedId.slice(0, 48) === assetPrefix48) {
+    return fullMdlSanitizedId;
+  }
+  return assetPrefix48;
+}
+
+type WfUnlinkedGroup = {
+  canonicalAssetId: string;
+  origCompanionKey?: string;
+  results: Record<string, string>;
+  models: Record<number, string>;
+  importedKeys: string[];
+};
+
+function ensureGroup(map: Map<string, WfUnlinkedGroup>, canonicalAssetId: string): WfUnlinkedGroup {
+  let g = map.get(canonicalAssetId);
+  if (!g) {
+    g = { canonicalAssetId, importedKeys: [], results: {}, models: {} };
+    map.set(canonicalAssetId, g);
+  }
+  return g;
+}
+
+function mergeWorkflowCompanionGroupIntoAsset(asset: WorkflowAsset, g: WfUnlinkedGroup): WorkflowAsset {
+  let next: WorkflowAsset = { ...asset };
+  if (g.origCompanionKey && !String(next.originalCompanionKey || '').trim()) {
+    next.originalCompanionKey = g.origCompanionKey;
+  }
+  const rck = { ...(next.resultsCompanionKeys || {}) };
+  for (const [step, k] of Object.entries(g.results)) {
+    rck[step] = k;
+  }
+  next.resultsCompanionKeys = Object.keys(rck).length > 0 ? rck : undefined;
+  const ro = new Set([...(next.resultOrder || [])]);
+  for (const step of Object.keys(g.results)) ro.add(step);
+  next.resultOrder = ro.size > 0 ? Array.from(ro).sort() : next.resultOrder;
+
+  if (Object.keys(g.models).length > 0) {
+    const slots = Object.keys(g.models).map((x) => Number(x));
+    const maxSlot = Math.max(...slots, (next.modelCompanionKeys?.length ?? 0) - 1, 0);
+    const mck = [...(next.modelCompanionKeys || [])];
+    while (mck.length <= maxSlot) mck.push('');
+    for (const [slotStr, k] of Object.entries(g.models)) {
+      mck[Number(slotStr)] = k;
+    }
+    next.modelCompanionKeys = mck.some(Boolean) ? mck : undefined;
+  }
+  return attachInitialVgpToNewAsset(next);
+}
+
+function findExistingAssetIndexForCompanionGroup(assets: WorkflowAsset[], canonicalAssetId: string): number {
+  const g48 = canonicalAssetId.slice(0, 48);
+  return assets.findIndex((a) => {
+    if (isWorkflowTextAsset(a)) return false;
+    const sid = sanitizeCompanionPathSegment(String(a.id || '').trim());
+    if (sid === canonicalAssetId) return true;
+    if (sid.slice(0, 48) === g48) return true;
+    const ok = String(a.originalCompanionKey || '').trim();
+    if (ok === `${WF_ORIG_P}${canonicalAssetId}`) return true;
+    if (ok.startsWith(WF_ORIG_P) && ok.slice(WF_ORIG_P.length) === canonicalAssetId) return true;
+    return false;
+  });
+}
+
 /**
  * 将 manifest 中已登记、但画布 JSON 未引用的对象自动补成工作流卡片（依赖伴侣后续 hydrate 出 blob 预览）。
+ * 工作流伴侣键 `wf-orig-*` / `wf-res-*` / `wf-mdl-*` 按 **同一资产 id** 合并为一张卡片，避免扫盘时每文件一张卡、丢失步骤关系。
  */
 export function mergeUnlinkedManifestEntriesIntoWorkflowAssets(
   assets: WorkflowAsset[],
@@ -277,8 +421,96 @@ export function mergeUnlinkedManifestEntriesIntoWorkflowAssets(
   if (!manifest?.entries?.length) return { nextAssets: assets, importedKeys: [] };
   const referenced = collectReferencedCompanionKeys(assets);
   const importedKeys: string[] = [];
-  const additions: WorkflowAsset[] = [];
+  const origP48ToFull = buildOrigPrefix48ToFullMap(manifest);
+  const sortedPrefixes = collectResMatchPrefixes(manifest, assets, origP48ToFull);
+
+  const wfGroups = new Map<string, WfUnlinkedGroup>();
+  const legacyUnlinked: typeof manifest.entries = [];
+
   for (const e of manifest.entries) {
+    const key = String(e?.key || '').trim();
+    if (!key || referenced.has(key)) continue;
+    const kind = classifyManifestEntryForAutoImport({ key, mime: e.mime, relPath: e.relPath });
+    if (!kind) continue;
+
+    if (key.startsWith(WF_ORIG_P)) {
+      const full = key.slice(WF_ORIG_P.length);
+      const g = ensureGroup(wfGroups, full);
+      g.origCompanionKey = key;
+      g.importedKeys.push(key);
+      referenced.add(key);
+      importedKeys.push(key);
+      continue;
+    }
+
+    const mdl = parseMdlCompanionKey(key);
+    if (mdl) {
+      const canon = resolveCanonicalAssetId(
+        mdl.assetSanitizedId.slice(0, 48),
+        mdl.assetSanitizedId,
+        origP48ToFull
+      );
+      const g = ensureGroup(wfGroups, canon);
+      g.models[mdl.slot] = key;
+      g.importedKeys.push(key);
+      referenced.add(key);
+      importedKeys.push(key);
+      continue;
+    }
+
+    if (key.startsWith(WF_RES_P)) {
+      const parsed = parseResCompanionKey(key, sortedPrefixes);
+      if (parsed) {
+        const canon = resolveCanonicalAssetId(parsed.assetPrefix48, undefined, origP48ToFull);
+        const g = ensureGroup(wfGroups, canon);
+        g.results[parsed.resultKey] = key;
+        g.importedKeys.push(key);
+        referenced.add(key);
+        importedKeys.push(key);
+        continue;
+      }
+    }
+
+    legacyUnlinked.push(e);
+  }
+
+  let nextAssets = assets.map((a) => ({ ...a }));
+  const newAssets: WorkflowAsset[] = [];
+
+  for (const g of wfGroups.values()) {
+    const idx = findExistingAssetIndexForCompanionGroup(nextAssets, g.canonicalAssetId);
+    if (idx >= 0) {
+      nextAssets[idx] = mergeWorkflowCompanionGroupIntoAsset(nextAssets[idx]!, g);
+    } else {
+      const maxSlot =
+        Object.keys(g.models).length > 0 ? Math.max(...Object.keys(g.models).map((x) => Number(x))) : -1;
+      const mck =
+        maxSlot >= 0
+          ? Array.from({ length: maxSlot + 1 }, (_, i) => g.models[i] || '')
+          : undefined;
+      const resultOrder = Object.keys(g.results).sort();
+      const rck =
+        Object.keys(g.results).length > 0 ? { ...g.results } : undefined;
+      newAssets.push(
+        attachInitialVgpToNewAsset({
+          id: g.canonicalAssetId,
+          original: '',
+          originalCompanionKey: g.origCompanionKey,
+          displayKey: 'original',
+          results: {},
+          resultOrder,
+          resultsCompanionKeys: rck,
+          modelCompanionKeys: mck,
+          modelUrls: [],
+          archived: false,
+          hiddenInGrid: false,
+          createdAt: Date.now(),
+        })
+      );
+    }
+  }
+
+  for (const e of legacyUnlinked) {
     const key = String(e?.key || '').trim();
     if (!key || referenced.has(key)) continue;
     const kind = classifyManifestEntryForAutoImport({ key, mime: e.mime, relPath: e.relPath });
@@ -286,7 +518,7 @@ export function mergeUnlinkedManifestEntriesIntoWorkflowAssets(
     referenced.add(key);
     importedKeys.push(key);
     if (kind === 'image') {
-      additions.push(
+      newAssets.push(
         attachInitialVgpToNewAsset({
           id: newId(),
           original: '',
@@ -300,7 +532,7 @@ export function mergeUnlinkedManifestEntriesIntoWorkflowAssets(
         })
       );
     } else {
-      additions.push(
+      newAssets.push(
         attachInitialVgpToNewAsset({
           id: newId(),
           original: '',
@@ -316,6 +548,9 @@ export function mergeUnlinkedManifestEntriesIntoWorkflowAssets(
       );
     }
   }
-  if (additions.length === 0) return { nextAssets: assets, importedKeys: [] };
-  return { nextAssets: [...assets, ...additions], importedKeys };
+
+  if (importedKeys.length === 0) {
+    return { nextAssets: assets, importedKeys: [] };
+  }
+  return { nextAssets: [...nextAssets, ...newAssets], importedKeys };
 }

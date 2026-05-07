@@ -291,3 +291,76 @@ export function attachInitialVgpToNewAsset(asset: WorkflowAsset): WorkflowAsset 
   if (asset.vgp) return asset;
   return { ...asset, vgp: createInitialVgpForAsset(asset) };
 }
+
+function findVersionIdForDisplayKey(vgp: VgpAssetExtension, displayKey: string): string | null {
+  for (const id of vgp.versionOrder) {
+    const v = vgp.versionsById[id];
+    if (!v) continue;
+    const k = v.imageRef.kind === 'original_field' ? 'original' : v.imageRef.key;
+    if (k === displayKey) return id;
+  }
+  return null;
+}
+
+/**
+ * 丢弃某展示版本前：原始图、组预览、或仍有后续步骤以其为父节点时不可删。
+ * 无对应 VGP 节点时不拦截（仅删 results 等，兼容旧数据）。
+ */
+export function isVgpBlockingDiscardForDisplayKey(vgp: VgpAssetExtension, displayKey: string): boolean {
+  if (displayKey === 'original' || displayKey === 'group_preview') return true;
+  const vid = findVersionIdForDisplayKey(vgp, displayKey);
+  if (!vid) return false;
+  const v = vgp.versionsById[vid];
+  if (!v || v.role === 'original') return true;
+  for (const id of vgp.versionOrder) {
+    const w = vgp.versionsById[id];
+    if (w?.parentVersionId === vid) return true;
+  }
+  return false;
+}
+
+/**
+ * 从 VGP 中移除与 `displayKey` 对应的叶子版本（调用方需先 `isVgpBlockingDiscardForDisplayKey === false`）。
+ * 无匹配节点时返回 `undefined`（不修改 vgp）。
+ */
+export function pruneVgpAfterDiscard(vgp: VgpAssetExtension, displayKey: string): VgpAssetExtension | undefined {
+  if (displayKey === 'original' || displayKey === 'group_preview') return undefined;
+  const vid = findVersionIdForDisplayKey(vgp, displayKey);
+  if (!vid) return undefined;
+  const v = vgp.versionsById[vid];
+  if (!v || v.role === 'original') return undefined;
+  for (const id of vgp.versionOrder) {
+    const w = vgp.versionsById[id];
+    if (w?.parentVersionId === vid) return undefined;
+  }
+
+  const semId = v.semanticStateId;
+  const promptId = v.promptArtifactId;
+  const nextOrder = vgp.versionOrder.filter((id) => id !== vid);
+  const nextVersions = { ...vgp.versionsById };
+  delete nextVersions[vid];
+
+  const semStillUsed = nextOrder.some((id) => nextVersions[id]?.semanticStateId === semId);
+  const nextSem = { ...vgp.semanticsById };
+  if (!semStillUsed) delete nextSem[semId];
+
+  const nextPrompts = { ...vgp.promptsById };
+  if (promptId) {
+    const promptStillUsed = nextOrder.some((id) => nextVersions[id]?.promptArtifactId === promptId);
+    if (!promptStillUsed) delete nextPrompts[promptId];
+  }
+
+  let headVersionId = vgp.headVersionId;
+  if (headVersionId === vid) {
+    headVersionId = nextOrder[nextOrder.length - 1] ?? vgp.originalVersionId;
+  }
+
+  return {
+    ...vgp,
+    versionOrder: nextOrder,
+    versionsById: nextVersions,
+    semanticsById: nextSem,
+    promptsById: nextPrompts,
+    headVersionId,
+  };
+}

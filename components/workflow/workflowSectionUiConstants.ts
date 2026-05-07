@@ -46,9 +46,40 @@ export const WORKFLOW_TOPBAR_ICON_BTN = `inline-flex ${TOP_CTRL_H} w-7 shrink-0 
 /** 工作区内次要操作按钮（返回、工具条等），与顶栏同高同阶调 */
 export const WORKFLOW_CHROME_BTN_NEUTRAL = `${TOP_CTRL_H} inline-flex items-center justify-center rounded-md bg-white/[0.05] px-2.5 text-[8px] font-black uppercase tracking-wide text-gray-200 ring-1 ring-white/[0.06] hover:bg-white/[0.09] transition-colors`;
 
-/** 大图/预览底部版本切换：未选中态 */
+/** 大图/预览底部版本切换：未选中态（与 TITLE_ROW_BTN_NEUTRAL 接近；新 UI 优先直接用后者） */
 export const WORKFLOW_LIGHTBOX_TAB_IDLE =
   'bg-white/[0.06] text-gray-200 ring-1 ring-white/[0.1] hover:bg-white/[0.1] border-transparent';
+
+/**
+ * 全屏大图：与 `ImageAnnotationLightboxToolbar` 主栏同系的悬浮条（单行）。
+ * 用于平面/全景切换、关闭等顶栏控件。
+ */
+export const WORKFLOW_IMAGE_PREVIEW_RAIL =
+  'inline-flex items-center gap-1 rounded-xl border border-white/10 bg-[#0f0f12]/95 px-1.5 py-1 shadow-xl backdrop-blur-[2px] ring-1 ring-white/[0.05]';
+
+/**
+ * 工作区底部快捷输入：与 `WORKFLOW_IMAGE_PREVIEW_RAIL` 同视觉族，**实色底、无 backdrop-blur**（非毛玻璃）。
+ */
+export const WORKFLOW_QUICK_COMPOSE_BAR_SHELL =
+  'rounded-xl border border-white/10 bg-[#0f0f12] shadow-xl ring-1 ring-white/[0.05]';
+
+/**
+ * 与 `ImageAnnotationLightboxToolbar` 主栏 `ToolShell`（非 dense，h7×w7）同系。
+ * 全屏预览右上角模式切换等图标按钮使用，勿与含文字 padding 的 `TITLE_ROW_BTN_*` 混用。
+ */
+const IMAGE_LIGHTBOX_TOOL_ICON_SHELL =
+  'flex shrink-0 items-center justify-center rounded-md transition-colors outline-none focus-visible:ring-2 focus-visible:ring-blue-500/45 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0a0a0c] h-7 w-7';
+export const IMAGE_LIGHTBOX_TOOL_ICON_BTN_IDLE = `${IMAGE_LIGHTBOX_TOOL_ICON_SHELL} bg-white/[0.06] text-gray-300 ring-1 ring-white/[0.1] hover:bg-white/[0.11] hover:text-gray-100`;
+export const IMAGE_LIGHTBOX_TOOL_ICON_BTN_ACTIVE = `${IMAGE_LIGHTBOX_TOOL_ICON_SHELL} bg-blue-600 text-white ring-1 ring-blue-400/35 hover:bg-blue-500`;
+
+/** 大图预览角标：模式切换与关闭之间的竖分割线（与标注条 `RailDivider` 一致） */
+export const WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER = 'mx-0.5 h-5 w-px shrink-0 bg-white/12';
+
+/**
+ * 工作流大图底部操作条：可多行换行，视觉与标注主栏一致。
+ */
+export const WORKFLOW_LIGHTBOX_BOTTOM_RAIL =
+  'flex flex-wrap items-center justify-center gap-1 rounded-xl border border-white/10 bg-[#0f0f12]/95 px-1.5 py-1 shadow-xl backdrop-blur-[2px] ring-1 ring-white/[0.05]';
 
 /** 卡片角上「×」队列移除等：默认弱 ring，悬停红态 */
 export const WORKFLOW_CARD_DISMISS_ICON_BTN =

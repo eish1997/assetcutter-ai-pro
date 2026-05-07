@@ -348,6 +348,59 @@ export type WorkflowActionModule = {
 /** 切割图片组内一项（已废弃，改用 groupId）：直接图片 或 引用子资产（套娃）；{ r2Key } 为云端独立对象，hydrate 后通常会变回 string */
 export type WorkflowCutGroupItem = string | { assetId: string } | { r2Key: string };
 
+/** 大图预览标注：归一化到原图宽高 [0,1]，可随分辨率稳定回显 */
+export type ImageOverlayNormPoint = { x: number; y: number };
+
+export type ImageOverlayRectItem = {
+  id: string;
+  kind: 'rect';
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  stroke: string;
+  sw: number;
+};
+
+export type ImageOverlayBrushItem = {
+  id: string;
+  kind: 'brush';
+  points: ImageOverlayNormPoint[];
+  stroke: string;
+  sw: number;
+};
+
+export type ImageOverlayTextItem = {
+  id: string;
+  kind: 'text';
+  x: number;
+  y: number;
+  text: string;
+  size: number;
+  fill: string;
+};
+
+export type ImageOverlayCropRect = {
+  id: string;
+  kind: 'crop_rect';
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+};
+
+export type ImageOverlayCropPolygon = {
+  id: string;
+  kind: 'crop_polygon';
+  points: ImageOverlayNormPoint[];
+};
+
+export type ImageOverlayAnnotationDoc = {
+  v: 1;
+  items: Array<ImageOverlayRectItem | ImageOverlayBrushItem | ImageOverlayTextItem>;
+  crops: Array<ImageOverlayCropRect | ImageOverlayCropPolygon>;
+};
+
 /** 单个资产：原始图 + 各类型结果图，当前展示版本，是否已归档；归档后可按生成顺序拼流程图 */
 export type WorkflowAsset = {
   id: string;
@@ -417,6 +470,11 @@ export type WorkflowAsset = {
   imageTags?: Record<string, string[]>;
   /** 标签阶段：coarse=规则粗标，refined=低成本二段式精修 */
   imageTagStage?: Record<string, 'coarse' | 'refined'>;
+  /**
+   * 大图预览平面模式下的矢量标注与裁切选区（可再编辑）。
+   * key 与 `displayKey` 对齐（含 `original` 与各能力步骤 id）。
+   */
+  imageOverlayAnnotations?: Record<string, ImageOverlayAnnotationDoc>;
   archived: boolean;
   /** true=仅在仓库列显示；false/undefined=在工作区列显示 */
   inRepository?: boolean;

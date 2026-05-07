@@ -70,7 +70,7 @@
 
 若盘点中发现**新的用户可达 AI 调用链**（例如新增 `WorkflowSection.runTask` 分支），须同步：
 
-- `**services/workflowRunTaskBranch.ts`**（`classifyWorkflowRunTaskBranch` + `**WORKFLOW_SECTION_RUN_TASK_BRANCHES**`）  
+- `**services/workflowRunTaskBranch.ts`**（`classifyWorkflowRunTaskBranch` + `**WORKFLOW_SECTION_RUN_TASK_BRANCHES`**）  
 - `**services/workflowAiPickIndex.ts**`（节点/边/货物表，按需）  
 - 单测：`**tests/workflowRunTaskBranch.test.ts**`、`**tests/workflowAiPickIndex.test.ts**`
 

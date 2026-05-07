@@ -11,7 +11,25 @@ import React, {
 import { useWorkflowWorkspacePanes } from '../hooks/useWorkflowWorkspacePanes';
 import { useWorkflowMarquee } from '../hooks/useWorkflowMarquee';
 import { createPortal, flushSync } from 'react-dom';
-import type { WorkflowAsset, WorkflowPendingTask, CapabilitySet, VgpGenStepCapture } from '../types';
+import {
+  Download,
+  Eye,
+  Image as ImageIcon,
+  ImagePlus,
+  LayoutGrid,
+  Package,
+  Pencil,
+  Save,
+  SaveAll,
+  Trash2,
+} from 'lucide-react';
+import type {
+  WorkflowAsset,
+  WorkflowPendingTask,
+  CapabilitySet,
+  VgpGenStepCapture,
+  ImageOverlayAnnotationDoc,
+} from '../types';
 import { maxReferenceImagesForImageGear } from '../types';
 import type { CustomAppModule } from '../types';
 import type { BoundingBox } from '../types';
@@ -29,12 +47,21 @@ import {
   executeCapabilitySet,
   getCapabilityEngine,
 } from '../services/capabilityExecutor';
+import {
+  getQuickComposePlainModule,
+  QUICK_COMPOSE_PLAIN_I2I_ACTION_ID,
+  QUICK_COMPOSE_PLAIN_T2I_ACTION_ID,
+  QUICK_COMPOSE_PLAIN_TEXT_ACTION_ID,
+} from '../services/quickComposePlainPresets';
 import { classifyWorkflowRunTaskBranch } from '../services/workflowRunTaskBranch';
 import {
   applyVgpAfterSuccessfulGen,
   attachInitialVgpToNewAsset,
+  isVgpBlockingDiscardForDisplayKey,
+  pruneVgpAfterDiscard,
 } from '../services/vgp/vgpStore';
 import { WorkflowGenerationRecordPanel } from './WorkflowGenerationRecordPanel';
+import { WorkflowStepNodeGraphOverlay } from './WorkflowStepNodeGraphOverlay';
 import { triggerImageDownload } from '../services/imageDataUrl';
 import { readLocalJson, scopedStorageKey, workflowFavoritesStorageKey, writeLocalJson } from '../services/clientPersist';
 import {
@@ -44,6 +71,13 @@ import {
 } from '../services/workflowImageTags';
 import AppIcon from './ui/AppIcon';
 import { ImagePreviewOverlay } from './ImagePreviewOverlay';
+import {
+  ImageFlatAnnotationOverlay,
+  normalizeImageOverlayDoc,
+  type ImageFlatAnnotationTool,
+} from './ImageFlatAnnotationOverlay';
+import { ImageAnnotationLightboxToolbar } from './ImageAnnotationLightboxToolbar';
+import { rasterizeCropRegion, rasterizeImageWithAnnotationBakes } from '../services/imageManualCrop';
 import { CustomDropdown } from './ui/CustomDropdown';
 import { resolveCapabilityPreviewSrc } from '../services/capabilityPreviewUrl';
 import { WorkflowCapabilityHoverPreview } from './WorkflowCapabilityHoverPreview';
@@ -103,7 +137,8 @@ import {
   WORKFLOW_EDGE_GUTTER,
   WORKFLOW_CHROME_BTN_NEUTRAL,
   WORKFLOW_TOPBAR_ICON_BTN,
-  WORKFLOW_LIGHTBOX_TAB_IDLE,
+  WORKFLOW_LIGHTBOX_BOTTOM_RAIL,
+  WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER,
   WORKFLOW_CARD_DISMISS_ICON_BTN,
 } from './workflow/workflowSectionUiConstants';
 import {
@@ -124,7 +159,10 @@ import {
 } from './workflow/workflowCardAspect';
 import { groupCapabilityPresetsByCategory } from './workflow/workflowCapabilityGroups';
 import { WorkflowSidebarColumn, type WorkflowSidebarFavoriteEntry } from './workflow/WorkflowSidebarColumn';
-import WorkspaceQuickComposeBar, { type WorkspaceQuickComposePromptCard } from './WorkspaceQuickComposeBar';
+import WorkspaceQuickComposeBar, {
+  type WorkspaceQuickComposeComposeMode,
+  type WorkspaceQuickComposePromptCard,
+} from './WorkspaceQuickComposeBar';
 import { buildWorkflowComposerSeedFromTwoPresets } from './workflow/buildWorkflowComposerSeed';
 import type { CapabilityAssetCandidate } from './CapabilitySetCanvas';
 import { BUILTIN_IMAGE_PROCESS_IDS } from '../services/capabilityPresetStore';
@@ -290,6 +328,17 @@ function readCapabilityDragSource(dataTransfer: DataTransfer | null): string {
   }
 }
 
+/** 大图底部条图标（与标注工具条密度接近） */
+const LIGHTBOX_BAR_IC = { size: 16, strokeWidth: 1.75, className: 'shrink-0' as const };
+const LIGHTBOX_ICON_BTN_NEUTRAL =
+  'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-white/[0.05] text-gray-300 ring-1 ring-white/[0.06] hover:bg-white/[0.09] hover:text-gray-200 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-blue-500/45';
+const LIGHTBOX_ICON_BTN_ACTIVE =
+  'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-blue-600 text-white ring-1 ring-blue-400/40 hover:bg-blue-500 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-blue-500/45';
+const LIGHTBOX_ICON_BTN_PRIMARY =
+  'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-blue-600 text-white ring-1 ring-blue-400/40 hover:bg-blue-500 disabled:opacity-40 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-blue-500/45';
+const LIGHTBOX_ICON_BTN_VIOLET =
+  'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-white/[0.05] text-violet-200/95 ring-1 ring-violet-500/25 hover:bg-white/[0.09] hover:text-violet-50 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-blue-500/45';
+
 const WorkflowSection: React.FC<{
   capabilityPresets: CustomAppModule[];
   capabilitySets?: CapabilitySet[];
@@ -387,6 +436,8 @@ const WorkflowSection: React.FC<{
   const [archiveHint, setArchiveHint] = useState<{ assetId: string; ts: number } | null>(null);
   const [refiningTagKeys, setRefiningTagKeys] = useState<Set<string>>(new Set());
   const [lightboxAssetId, setLightboxAssetId] = useState<string | null>(null);
+  const lightboxAssetIdRef = useRef<string | null>(null);
+  lightboxAssetIdRef.current = lightboxAssetId;
   const textLightboxCenterRef = useRef<WorkflowTextLightboxCenterHandle | null>(null);
   const [lightboxMetaText, setLightboxMetaText] = useState<string>('');
   /** 从组内网格打开大图时记录槽位，预设入队可带 sourceGroup* 与拖拽一致 */
@@ -394,6 +445,68 @@ const WorkflowSection: React.FC<{
     sourceGroupAssetId: string;
     sourceItemIndex: number;
   } | null>(null);
+  const [lightboxOverlayTool, setLightboxOverlayTool] = useState<ImageFlatAnnotationTool>('off');
+  const [lightboxOverlayColor, setLightboxOverlayColor] = useState('#60a5fa');
+  const [lightboxBrushWidth, setLightboxBrushWidth] = useState(3);
+  const [lightboxOverlayDraft, setLightboxOverlayDraft] = useState<ImageOverlayAnnotationDoc>(() =>
+    normalizeImageOverlayDoc(null)
+  );
+  const lightboxOverlayDraftRef = useRef(lightboxOverlayDraft);
+  lightboxOverlayDraftRef.current = lightboxOverlayDraft;
+  const overlayHistoryPastRef = useRef<ImageOverlayAnnotationDoc[]>([]);
+  const overlayHistoryFutureRef = useRef<ImageOverlayAnnotationDoc[]>([]);
+
+  const cloneOverlayDoc = useCallback(
+    (d: ImageOverlayAnnotationDoc): ImageOverlayAnnotationDoc => JSON.parse(JSON.stringify(d)),
+    []
+  );
+
+  const pushOverlayHistory = useCallback(
+    (snapshot: ImageOverlayAnnotationDoc) => {
+      overlayHistoryPastRef.current.push(cloneOverlayDoc(snapshot));
+      if (overlayHistoryPastRef.current.length > 100) overlayHistoryPastRef.current.shift();
+      overlayHistoryFutureRef.current = [];
+    },
+    [cloneOverlayDoc]
+  );
+
+  const onLightboxOverlayPatch = useCallback(
+    (patch: (prev: ImageOverlayAnnotationDoc) => ImageOverlayAnnotationDoc, opts?: { skipHistory?: boolean }) => {
+      setLightboxOverlayDraft((prev) => {
+        const normalized = normalizeImageOverlayDoc(prev);
+        const next = normalizeImageOverlayDoc(patch(normalized));
+        if (JSON.stringify(normalized) === JSON.stringify(next)) return prev;
+        if (!opts?.skipHistory) pushOverlayHistory(normalized);
+        return next;
+      });
+    },
+    [pushOverlayHistory]
+  );
+
+  const overlayBeginDragGesture = useCallback(() => {
+    pushOverlayHistory(lightboxOverlayDraftRef.current);
+  }, [pushOverlayHistory]);
+
+  const overlayUndo = useCallback(() => {
+    const past = overlayHistoryPastRef.current;
+    if (past.length === 0) return;
+    const prevHead = past.pop()!;
+    setLightboxOverlayDraft((cur) => {
+      overlayHistoryFutureRef.current.push(cloneOverlayDoc(normalizeImageOverlayDoc(cur)));
+      return prevHead;
+    });
+  }, [cloneOverlayDoc]);
+
+  const overlayRedo = useCallback(() => {
+    const fut = overlayHistoryFutureRef.current;
+    if (fut.length === 0) return;
+    const nextHead = fut.pop()!;
+    setLightboxOverlayDraft((cur) => {
+      overlayHistoryPastRef.current.push(cloneOverlayDoc(normalizeImageOverlayDoc(cur)));
+      return nextHead;
+    });
+  }, [cloneOverlayDoc]);
+
   const [archivedDetailAssetId, setArchivedDetailAssetId] = useState<string | null>(null);
   const [executing, setExecuting] = useState(false);
   const [executingQueue, setExecutingQueue] = useState<{ total: number; tasks: WorkflowPendingTask[] } | null>(null);
@@ -448,12 +561,16 @@ const WorkflowSection: React.FC<{
   /** 从功能区/能力列拖入文本框的预设提示词，以卡片展示并与输入框文案合并入队 */
   const [quickComposePromptCards, setQuickComposePromptCards] = useState<WorkspaceQuickComposePromptCard[]>([]);
   const [quickComposeImages, setQuickComposeImages] = useState<string[]>([]);
-  const [quickComposeActionId, setQuickComposeActionId] = useState('');
+  /** 无拖入预设卡片时：文 / 图 / 3D 独立快捷逻辑（不读侧栏「上次预设」） */
+  const [quickComposeMode, setQuickComposeMode] = useState<WorkspaceQuickComposeComposeMode>('image');
   /** 快捷栏生成设置（覆盖入队任务的档位/比例/尺寸；张数见 normalizeWorkflowGenerateCount） */
   const [quickComposeGear, setQuickComposeGear] = useState<string>('standard');
   const [quickComposeAspect, setQuickComposeAspect] = useState('adaptive');
   const [quickComposeSize, setQuickComposeSize] = useState('');
   const [quickComposeCount, setQuickComposeCount] = useState(1);
+  /** 供大图预览等异步提交路径读取当前文案（与 `quickComposeDraft` 同步） */
+  const quickComposeDraftRef = useRef('');
+  quickComposeDraftRef.current = quickComposeDraft;
   const [showAllInGroup, setShowAllInGroup] = useState(false);
   /** 组筛选 ID：用于查看组内资产 */
   const [groupFilterId, setGroupFilterId] = useState<string | null>(null);
@@ -716,7 +833,10 @@ const WorkflowSection: React.FC<{
     });
   }, []);
 
-  const getModule = useCallback((id: string) => actionModules.find((m) => m.id === id), [actionModules]);
+  const getModule = useCallback(
+    (id: string) => actionModules.find((m) => m.id === id) ?? getQuickComposePlainModule(id),
+    [actionModules]
+  );
   const getModulePreviewOriginal = useCallback(
     (mod: CustomAppModule): string | null =>
       resolveCapabilityPreviewSrc(mod.previewOriginalThumbImage) ||
@@ -1137,7 +1257,8 @@ ${lineSvg}
     ): WorkflowPendingTask | null => {
       const mod =
         actionModules.find((m) => m.id === actionType) ??
-        capabilityPresets.find((p) => p.id === actionType);
+        capabilityPresets.find((p) => p.id === actionType) ??
+        getQuickComposePlainModule(actionType);
       const inputImage = getAssetDisplayImage(asset);
       if (isWorkflowTextAsset(asset)) {
         const textPresetOk = mod && workflowPresetAcceptsTextCardDrag(mod);
@@ -2093,7 +2214,6 @@ ${lineSvg}
         onLog?.('warn', '底部快捷栏：该能力不支持拖入快捷条，请选用文生图/图生图/文生文等');
         return;
       }
-      setQuickComposeActionId(trimmed);
       const ins = String(mod.instruction ?? '').trim();
       setQuickComposePromptCards((prev) => [
         ...prev,
@@ -2104,9 +2224,28 @@ ${lineSvg}
     [actionModules, capabilityPresets, onLog]
   );
 
-  const submitQuickCompose = useCallback(() => {
-    const userText = quickComposeDraft.trim();
-    const imgsAll = quickComposeImages.filter((s) => String(s).trim());
+  type QuickComposeSubmitInvokeOptions = {
+    overrideImageDataUrls?: string[];
+    overrideUserText?: string;
+    /** 带参考图时即使底部为「文」也走图/3D 链路（大图预览提交） */
+    preferImagePipelineWhenImagesAttached?: boolean;
+    /** 为 true 时不重置底部快捷栏文案与附图 */
+    preserveBottomBarDraft?: boolean;
+    /** 忽略底部拖入的预设卡片，只走「文/图/3D」内置逻辑（大图预览） */
+    skipPromptCards?: boolean;
+  };
+
+  const submitQuickCompose = useCallback((invoke?: QuickComposeSubmitInvokeOptions) => {
+    const userText = (
+      invoke?.overrideUserText !== undefined ? invoke.overrideUserText : quickComposeDraft
+    ).trim();
+    const imgsAll = (
+      invoke?.overrideImageDataUrls !== undefined ? invoke.overrideImageDataUrls : quickComposeImages
+    ).filter((s) => String(s).trim());
+    const composeMode =
+      invoke?.preferImagePipelineWhenImagesAttached && imgsAll.length > 0 && quickComposeMode === 'text'
+        ? 'image'
+        : quickComposeMode;
 
     const resolveQuickComposeMod = (presetId: string) =>
       actionModules.find((m) => m.id === presetId) ?? capabilityPresets.find((p) => p.id === presetId) ?? null;
@@ -2136,7 +2275,7 @@ ${lineSvg}
     };
 
     /** 多张预设卡片：每张单独入队（各自 presetId + instruction；输入框文案拼到每一条） */
-    if (quickComposePromptCards.length > 0) {
+    if (quickComposePromptCards.length > 0 && !invoke?.skipPromptCards) {
       const cardRows: Array<{ card: WorkspaceQuickComposePromptCard; mod: CustomAppModule }> = [];
       for (const card of quickComposePromptCards) {
         const m = resolveQuickComposeMod(card.presetId);
@@ -2263,89 +2402,23 @@ ${lineSvg}
       } else {
         void executePending([...newTasks, ...pendingRef.current]);
       }
-      setQuickComposeDraft('');
-      setQuickComposeImages([]);
+      if (!invoke?.preserveBottomBarDraft) {
+        setQuickComposeDraft('');
+        setQuickComposeImages([]);
+      }
       setQuickComposePromptCards([]);
       onLog?.('info', `底部快捷栏：已加入 ${newTasks.length} 条执行队列`);
       return;
     }
 
-    const mod =
-      actionModules.find((m) => m.id === quickComposeActionId) ??
-      capabilityPresets.find((p) => p.id === quickComposeActionId);
-    if (!mod || mod.disabled) {
-      onLog?.('warn', '底部快捷栏：当前没有可用的快捷能力，请稍后在侧栏「常用」中确认已加入生图/图生图类能力');
-      return;
-    }
-    const text = userText;
-    const maxRef = maxReferenceImagesForImageGear(mod.imageGear);
-    const imgs = imgsAll.slice(0, maxRef);
+    /** 无拖入预设：按快捷条「文 / 图 / 3D」内置逻辑，不读侧栏默认能力或「上次预设」 */
+    const plainLog: WorkflowPendingTask['logContext'] = 'quick_compose_bar_plain';
+    const plainText = userText;
 
-    if (!text && imgs.length === 0) {
-      onLog?.('warn', '底部快捷栏：请输入文字或点击 + 添加图片');
-      return;
-    }
-
-    const eng = getCapabilityEngine(mod);
-    const taskOverrides = buildQuickComposeGenOverrides(mod);
-
-    const countApplicable =
-      eng === 'gen_image' || mod.category === 'text_to_image' || mod.category === 'text_to_text';
-    const countN = countApplicable ? normalizeWorkflowGenerateCount(quickComposeCount) : 1;
-    if (
-      countN > WORKFLOW_GROUP_GENERATE_CONFIRM_THRESHOLD &&
-      typeof window !== 'undefined' &&
-      !window.confirm(`当前生成数量为 ${countN}，将创建大量任务，是否继续？`)
-    ) {
-      return;
-    }
-
-    if (imgs.length > 0) {
-      const first = imgs[0]!;
-      const probe = attachInitialVgpToNewAsset({
-        id: '__qc_probe__',
-        original: first,
-        displayKey: 'original',
-        results: {},
-        resultOrder: [],
-        archived: false,
-        hiddenInGrid: true,
-        createdAt: Date.now(),
-      });
-      if (!workflowAssetAllowedForCapabilityDrop(probe, mod)) {
-        onLog?.(
-          'warn',
-          '底部快捷栏：当前能力与图片输入不匹配（文生类需纯文字）。有图时请选图生图/图生文等；仅文字请去掉图片并选文生文/文生图'
-        );
+    const runPlainBatch = (newAssets: WorkflowAsset[], newTasks: WorkflowPendingTask[]) => {
+      if (newTasks.length === 0) {
+        onLog?.('warn', '底部快捷栏：无法创建任务');
         return;
-      }
-      const newAssets: WorkflowAsset[] = [];
-      const newTasks: WorkflowPendingTask[] = [];
-      for (let i = 0; i < countN; i += 1) {
-        const newId = uuid();
-        const newAsset = attachInitialVgpToNewAsset({
-          id: newId,
-          original: first,
-          displayKey: 'original',
-          results: {},
-          resultOrder: [],
-          archived: false,
-          hiddenInGrid: true,
-          createdAt: Date.now(),
-        });
-        newAssets.push(newAsset);
-        newTasks.push({
-          id: uuid(),
-          assetId: newId,
-          actionType: mod.id,
-          inputImage: first,
-          addedAt: Date.now(),
-          inputSourceDisplayKey: 'original',
-          ...(imgs.length >= 2 ? { inputImages: imgs } : {}),
-          ...(text ? { promptOverride: text } : {}),
-          ...taskOverrides,
-          logContext: 'quick_compose_bar_plain',
-        });
       }
       setAssets((prev) => [...prev, ...newAssets]);
       if (executing) {
@@ -2353,12 +2426,34 @@ ${lineSvg}
       } else {
         void executePending([...newTasks, ...pendingRef.current]);
       }
-    } else {
-      if (!workflowPresetAcceptsTextCardDrag(mod)) {
-        onLog?.('warn', '底部快捷栏：纯文字请选用「文生文」或「文生图」类能力');
+      if (!invoke?.preserveBottomBarDraft) {
+        setQuickComposeDraft('');
+        setQuickComposeImages([]);
+      }
+      setQuickComposePromptCards([]);
+      onLog?.('info', '底部快捷栏：已加入执行队列');
+    };
+
+    if (composeMode === 'text') {
+      if (imgsAll.length > 0) {
+        onLog?.('warn', '底部快捷栏：「文」模式不支持参考图，请切换到「图」或移除图片');
         return;
       }
-      const body = clampWorkflowTextBody(text);
+      if (!plainText) {
+        onLog?.('warn', '底部快捷栏：请输入文字');
+        return;
+      }
+      const plainMod = getQuickComposePlainModule(QUICK_COMPOSE_PLAIN_TEXT_ACTION_ID)!;
+      const taskOverrides = buildQuickComposeGenOverrides(plainMod);
+      const countN = quickComposeCountForMod(plainMod);
+      if (
+        countN > WORKFLOW_GROUP_GENERATE_CONFIRM_THRESHOLD &&
+        typeof window !== 'undefined' &&
+        !window.confirm(`当前生成数量为 ${countN}，将创建大量任务，是否继续？`)
+      ) {
+        return;
+      }
+      const body = clampWorkflowTextBody(plainText);
       const newAssets: WorkflowAsset[] = [];
       const newTasks: WorkflowPendingTask[] = [];
       for (let i = 0; i < countN; i += 1) {
@@ -2377,30 +2472,139 @@ ${lineSvg}
           textBody: body,
         });
         newAssets.push(asset);
-        const task = buildPendingTaskFromAssetSnapshot(asset, newId, mod.id, {
+        const task = buildPendingTaskFromAssetSnapshot(asset, newId, QUICK_COMPOSE_PLAIN_TEXT_ACTION_ID, {
           ...taskOverrides,
-          logContext: 'quick_compose_bar_plain',
+          logContext: plainLog,
         });
         if (task) newTasks.push(task);
       }
-      if (newTasks.length === 0) {
-        onLog?.('warn', '底部快捷栏：无法创建任务');
-        return;
-      }
-      setAssets((prev) => [...prev, ...newAssets]);
-      if (executing) {
-        setPending((prev) => [...prev, ...newTasks]);
-      } else {
-        void executePending([...newTasks, ...pendingRef.current]);
-      }
+      runPlainBatch(newAssets, newTasks);
+      return;
     }
 
-    setQuickComposeDraft('');
-    setQuickComposeImages([]);
-    setQuickComposePromptCards([]);
-    onLog?.('info', '底部快捷栏：已加入执行队列');
+    if (composeMode === '3d') {
+      const mod3d =
+        actionModules.find((m) => m.category === 'generate_3d' && m.enabled !== false) ??
+        capabilityPresets.find((m) => m.category === 'generate_3d' && m.enabled !== false) ??
+        null;
+      if (!mod3d) {
+        onLog?.('warn', '底部快捷栏：未找到已启用的「生成3D」能力，请先在能力区添加并启用');
+        return;
+      }
+      if (imgsAll.length === 0) {
+        onLog?.('warn', '底部快捷栏：生成 3D 需要附图');
+        return;
+      }
+      const first = imgsAll[0]!;
+      const taskOverrides = buildQuickComposeGenOverrides(mod3d);
+      const newId = uuid();
+      const newAsset = attachInitialVgpToNewAsset({
+        id: newId,
+        original: first,
+        displayKey: 'original',
+        results: {},
+        resultOrder: [],
+        archived: false,
+        hiddenInGrid: true,
+        createdAt: Date.now(),
+      });
+      const newTask: WorkflowPendingTask = {
+        id: uuid(),
+        assetId: newId,
+        actionType: mod3d.id,
+        inputImage: first,
+        addedAt: Date.now(),
+        inputSourceDisplayKey: 'original',
+        ...(plainText ? { promptOverride: plainText } : {}),
+        ...taskOverrides,
+        logContext: plainLog,
+      };
+      runPlainBatch([newAsset], [newTask]);
+      return;
+    }
+
+    /* composeMode === 'image' */
+    const plainImageId = imgsAll.length > 0 ? QUICK_COMPOSE_PLAIN_I2I_ACTION_ID : QUICK_COMPOSE_PLAIN_T2I_ACTION_ID;
+    const plainImgMod = getQuickComposePlainModule(plainImageId)!;
+    const taskOverrides = buildQuickComposeGenOverrides(plainImgMod);
+    const countN = quickComposeCountForMod(plainImgMod);
+    if (
+      countN > WORKFLOW_GROUP_GENERATE_CONFIRM_THRESHOLD &&
+      typeof window !== 'undefined' &&
+      !window.confirm(`当前生成数量为 ${countN}，将创建大量任务，是否继续？`)
+    ) {
+      return;
+    }
+
+    if (imgsAll.length === 0) {
+      if (!plainText) {
+        onLog?.('warn', '底部快捷栏：文生图请输入画面描述');
+        return;
+      }
+      const body = clampWorkflowTextBody(plainText);
+      const newAssets: WorkflowAsset[] = [];
+      const newTasks: WorkflowPendingTask[] = [];
+      for (let i = 0; i < countN; i += 1) {
+        const newId = uuid();
+        const asset = attachInitialVgpToNewAsset({
+          id: newId,
+          original: '',
+          displayKey: 'original',
+          results: {},
+          resultOrder: [],
+          archived: false,
+          hiddenInGrid: false,
+          createdAt: Date.now(),
+          assetKind: 'text',
+          textTitle: '',
+          textBody: body,
+        });
+        newAssets.push(asset);
+        const task = buildPendingTaskFromAssetSnapshot(asset, newId, QUICK_COMPOSE_PLAIN_T2I_ACTION_ID, {
+          ...taskOverrides,
+          logContext: plainLog,
+        });
+        if (task) newTasks.push(task);
+      }
+      runPlainBatch(newAssets, newTasks);
+      return;
+    }
+
+    const maxRef = maxReferenceImagesForImageGear(plainImgMod.imageGear);
+    const imgs = imgsAll.slice(0, maxRef);
+    const first = imgs[0]!;
+    const newAssets: WorkflowAsset[] = [];
+    const newTasks: WorkflowPendingTask[] = [];
+    for (let i = 0; i < countN; i += 1) {
+      const newId = uuid();
+      newAssets.push(
+        attachInitialVgpToNewAsset({
+          id: newId,
+          original: first,
+          displayKey: 'original',
+          results: {},
+          resultOrder: [],
+          archived: false,
+          hiddenInGrid: true,
+          createdAt: Date.now(),
+        })
+      );
+      newTasks.push({
+        id: uuid(),
+        assetId: newId,
+        actionType: QUICK_COMPOSE_PLAIN_I2I_ACTION_ID,
+        inputImage: first,
+        addedAt: Date.now(),
+        inputSourceDisplayKey: 'original',
+        ...(imgs.length >= 2 ? { inputImages: imgs } : {}),
+        ...(plainText ? { promptOverride: plainText } : {}),
+        ...taskOverrides,
+        logContext: plainLog,
+      });
+    }
+    runPlainBatch(newAssets, newTasks);
   }, [
-    quickComposeActionId,
+    quickComposeMode,
     quickComposeDraft,
     quickComposePromptCards,
     quickComposeImages,
@@ -2417,6 +2621,38 @@ ${lineSvg}
     executePending,
     buildPendingTaskFromAssetSnapshot,
   ]);
+
+  const submitLightboxQuickCompose = useCallback(async () => {
+    const id = lightboxAssetIdRef.current;
+    const asset = assetsRef.current.find((a) => a.id === id);
+    if (!asset || isWorkflowTextAsset(asset)) {
+      onLog?.('warn', '大图预览：当前无可提交的图像');
+      return;
+    }
+    const src = getLightboxPreviewImageSrc(asset).trim();
+    if (!src) {
+      onLog?.('warn', '大图预览：当前无可提交的图像');
+      return;
+    }
+    const items = lightboxOverlayDraftRef.current.items;
+    let composite = src;
+    if (items.length > 0) {
+      const baked = await rasterizeImageWithAnnotationBakes(src, items);
+      if (baked) {
+        composite = baked;
+      } else {
+        onLog?.('warn', '大图预览：标注合成失败，仍使用当前底图提交');
+      }
+    }
+    submitQuickCompose({
+      overrideImageDataUrls: [composite],
+      overrideUserText: quickComposeDraftRef.current,
+      preferImagePipelineWhenImagesAttached: true,
+      preserveBottomBarDraft: true,
+      skipPromptCards: true,
+    });
+    onLog?.('info', '大图预览：已加入队列（附图为当前显示画面，已合成平面标注）');
+  }, [getLightboxPreviewImageSrc, onLog, submitQuickCompose]);
 
   const cancelQueuedTaskInBatch = useCallback((taskId: string) => {
     if (!taskId) return;
@@ -3272,6 +3508,35 @@ ${lineSvg}
       cancelled = true;
     };
   }, [lightboxAsset, assets, getAssetDisplayImage, getAssetDisplayText]);
+
+  useEffect(() => {
+    if (!lightboxAsset || !lightboxShowsImage) return;
+    if (isWorkflowTextAsset(lightboxAsset)) return;
+    if (isGroupAsset(lightboxAsset)) return;
+    const dk = lightboxAsset.displayKey;
+    overlayHistoryPastRef.current = [];
+    overlayHistoryFutureRef.current = [];
+    setLightboxOverlayDraft(normalizeImageOverlayDoc(lightboxAsset.imageOverlayAnnotations?.[dk]));
+    setLightboxOverlayTool('off');
+  }, [lightboxAsset, lightboxShowsImage]);
+
+  useEffect(() => {
+    if (!lightboxAssetId || !lightboxShowsImage) return;
+    const a = assets.find((x) => x.id === lightboxAssetId);
+    if (!a || isWorkflowTextAsset(a) || isGroupAsset(a)) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      if (isWorkflowEditableTarget(e.target)) return;
+      if (e.key === 'z' || e.key === 'Z') {
+        e.preventDefault();
+        if (e.shiftKey) overlayRedo();
+        else overlayUndo();
+      }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [lightboxAssetId, lightboxShowsImage, assets, overlayRedo, overlayUndo]);
+
   const _goLightbox = (delta: number) => {
     if (lightboxList.length === 0) return;
     const next = (lightboxIndex + delta + lightboxList.length) % lightboxList.length;
@@ -3310,6 +3575,153 @@ ${lineSvg}
       return prev.map((x) => (x.id === id ? { ...x, displayKey: keys[nextIdx] } : x));
     });
   }, [lightboxAssetId, setAssets]);
+
+  const persistLightboxOverlayAnnotations = useCallback(() => {
+    const id = lightboxAssetId;
+    if (!id) return;
+    setAssets((prev) => {
+      const a = prev.find((x) => x.id === id);
+      if (!a) return prev;
+      const dk = a.displayKey;
+      return prev.map((x) =>
+        x.id !== id
+          ? x
+          : {
+              ...x,
+              imageOverlayAnnotations: {
+                ...(x.imageOverlayAnnotations || {}),
+                [dk]: lightboxOverlayDraft,
+              },
+            }
+      );
+    });
+    onLog?.('info', '大图标注已写入当前显示版本（随项目保存）');
+  }, [lightboxAssetId, lightboxOverlayDraft, onLog, setAssets]);
+
+  const applyLightboxManualCrops = useCallback(async () => {
+    const id = lightboxAssetId;
+    if (!id) return;
+    const srcAsset = assets.find((x) => x.id === id);
+    if (!srcAsset || isWorkflowTextAsset(srcAsset) || isGroupAsset(srcAsset)) return;
+    const src = getLightboxPreviewImageSrc(srcAsset);
+    if (!src.trim()) return;
+    const crops = lightboxOverlayDraft.crops;
+    const bakeItems = lightboxOverlayDraft.items;
+    if (crops.length === 0) {
+      onLog?.('warn', '请先添加矩形或套索裁切区域');
+      return;
+    }
+    const outs: string[] = [];
+    for (const c of crops) {
+      const u = await rasterizeCropRegion(src, c, { bakeItems });
+      if (u) outs.push(u);
+    }
+    if (outs.length === 0) {
+      onLog?.('warn', '裁切生成失败（可能为跨域图源，请改用站内或 data URL 图）');
+      return;
+    }
+
+    setAssets((prev) => {
+      const sourceAsset = prev.find((x) => x.id === id);
+      if (!sourceAsset) return prev;
+
+      const usedLabels = new Set<string>(prev.flatMap((a) => (a.groupLabel ? [a.groupLabel] : [])));
+      const newAssets: WorkflowAsset[] = outs.map((original) =>
+        attachInitialVgpToNewAsset({
+          id: uuid(),
+          original,
+          displayKey: 'original',
+          results: {},
+          resultOrder: [],
+          archived: false,
+          hiddenInGrid: false,
+          createdAt: Date.now(),
+        })
+      );
+      const newIds = newAssets.map((x) => x.id);
+
+      const existingGroupId = sourceAsset.groupId;
+      if (existingGroupId) {
+        const gi = prev.findIndex((a) => a.id === existingGroupId && isGroupAsset(a));
+        if (gi >= 0) {
+          const g = prev[gi]!;
+          const prevIds = g.assetIds ?? [];
+          const merged = [...prevIds, ...newIds];
+          const label = g.groupLabel ?? '组';
+          let next = prev.map((a, i) => (i === gi ? { ...g, assetIds: merged } : a));
+          next = [
+            ...next,
+            ...newAssets.map((a, i) => ({
+              ...a,
+              groupId: g.id,
+              groupLabel: label,
+              groupOrder: prevIds.length + i,
+            })),
+          ];
+          for (const a of newAssets) {
+            const o = String(a.original || '').trim();
+            if (o) queueMicrotask(() => scheduleCompanionPersistOriginalAny(a.id, o));
+          }
+          const go = String(g.original || '').trim();
+          if (go) queueMicrotask(() => scheduleCompanionPersistOriginalAny(g.id, go));
+          return next;
+        }
+      }
+
+      const groupId = uuid();
+      const groupLabel = getRandomGroupCodeName(usedLabels);
+      const assetIds = [sourceAsset.id, ...newIds];
+      const newGroup: WorkflowAsset = attachInitialVgpToNewAsset({
+        id: groupId,
+        isGroup: true,
+        original: sourceAsset.original,
+        displayKey: 'original',
+        results: {},
+        resultOrder: [],
+        assetIds,
+        groupLabel,
+        archived: false,
+        hiddenInGrid: false,
+        createdAt: Date.now(),
+      });
+
+      const next = [
+        ...prev.map((a) => {
+          if (a.id === sourceAsset.id) {
+            return { ...a, groupId, groupLabel, groupOrder: 0 };
+          }
+          return a;
+        }),
+        ...newAssets.map((a, i) => ({
+          ...a,
+          groupId,
+          groupLabel,
+          groupOrder: i + 1,
+        })),
+        newGroup,
+      ];
+      for (const a of newAssets) {
+        const o = String(a.original || '').trim();
+        if (o) queueMicrotask(() => scheduleCompanionPersistOriginalAny(a.id, o));
+      }
+      const go = String(newGroup.original || '').trim();
+      if (go) queueMicrotask(() => scheduleCompanionPersistOriginalAny(newGroup.id, go));
+      return next;
+    });
+
+    onLightboxOverlayPatch((d) => ({ ...d, crops: [] }));
+    onLog?.('info', `已生成 ${outs.length} 张透明 PNG 裁切并入组（已合成当前标注层）`);
+  }, [
+    assets,
+    getLightboxPreviewImageSrc,
+    lightboxAssetId,
+    lightboxOverlayDraft.crops,
+    lightboxOverlayDraft.items,
+    onLightboxOverlayPatch,
+    onLog,
+    scheduleCompanionPersistOriginalAny,
+    setAssets,
+  ]);
 
   const setDisplayKey = (assetId: string, key: string) => {
     setAssets((prev) => prev.map((a) => (a.id === assetId ? { ...a, displayKey: key } : a)));
@@ -3443,6 +3855,12 @@ ${lineSvg}
     setAssets((prev) =>
       prev.map((a) => {
         if (a.id !== assetId) return a;
+        if (actionType === 'original' || actionType === 'group_preview') return a;
+        if (a.vgp && isVgpBlockingDiscardForDisplayKey(a.vgp, actionType)) return a;
+
+        const prunedVgp = a.vgp ? pruneVgpAfterDiscard(a.vgp, actionType) : undefined;
+        const nextVgp = prunedVgp ?? a.vgp;
+
         const nextResults = { ...a.results };
         delete nextResults[actionType];
         const nextTextResults = { ...(a.textResults || {}) };
@@ -3452,15 +3870,25 @@ ${lineSvg}
         const nextOrder = (a.resultOrder || []).filter((k) => k !== actionType);
         const nextMeta = { ...a.resultMeta };
         delete nextMeta[actionType];
+        const nextOverlay = { ...(a.imageOverlayAnnotations || {}) };
+        delete nextOverlay[actionType];
+        const nextTags = { ...(a.imageTags || {}) };
+        delete nextTags[actionType];
+        const nextTagStage = { ...(a.imageTagStage || {}) };
+        delete nextTagStage[actionType];
         const displayKey = a.displayKey === actionType ? 'original' : a.displayKey;
         return {
           ...a,
+          vgp: nextVgp,
           results: nextResults,
           textResults: nextTextResults,
           resultOrder: nextOrder,
           resultMeta: nextMeta,
           displayKey,
           resultsCompanionKeys: Object.keys(nextRc).length ? nextRc : undefined,
+          imageOverlayAnnotations: Object.keys(nextOverlay).length ? nextOverlay : undefined,
+          imageTags: Object.keys(nextTags).length ? nextTags : undefined,
+          imageTagStage: Object.keys(nextTagStage).length ? nextTagStage : undefined,
         };
       })
     );
@@ -4140,93 +4568,57 @@ ${lineSvg}
       .filter((x): x is WorkflowSidebarFavoriteEntry => x != null);
   }, [favoriteActionIds, capabilitySets, actionModules]);
 
-  const quickComposeStorageKey = useMemo(
-    () => scopedStorageKey('workflow_quick_compose_action', preferenceScope),
+  const quickComposeModeStorageKey = useMemo(
+    () => scopedStorageKey('workflow_quick_compose_mode', preferenceScope),
     [preferenceScope]
   );
 
+  /** 仅用于参考图上限、生图参数条：与当前「图」模式档位一致 */
   const quickComposeModule = useMemo((): CustomAppModule | null => {
-    const id = quickComposeActionId;
-    if (!id) return null;
-    return (
-      actionModules.find((m) => m.id === id) ?? capabilityPresets.find((p) => p.id === id) ?? null
-    );
-  }, [quickComposeActionId, actionModules, capabilityPresets]);
+    if (quickComposeMode !== 'image') return null;
+    const base = getQuickComposePlainModule(QUICK_COMPOSE_PLAIN_T2I_ACTION_ID);
+    if (!base) return null;
+    const g =
+      quickComposeGear === 'fast' || quickComposeGear === 'standard' || quickComposeGear === 'pro'
+        ? quickComposeGear
+        : 'standard';
+    return { ...base, imageGear: g };
+  }, [quickComposeMode, quickComposeGear]);
 
-  const quickComposeMaxReferenceImages = maxReferenceImagesForImageGear(quickComposeModule?.imageGear);
+  const quickComposeMaxReferenceImages = useMemo(() => {
+    if (quickComposeMode === 'text') return 0;
+    if (quickComposeMode === '3d') return 1;
+    const g =
+      quickComposeGear === 'fast' || quickComposeGear === 'standard' || quickComposeGear === 'pro'
+        ? quickComposeGear
+        : 'standard';
+    return maxReferenceImagesForImageGear(g);
+  }, [quickComposeMode, quickComposeGear]);
 
-  const quickComposeShowGenImageSettings = useMemo(() => {
-    const m = quickComposeModule;
-    if (!m) return false;
-    return getCapabilityEngine(m) === 'gen_image';
-  }, [quickComposeModule]);
+  const quickComposeShowGenImageSettings = quickComposeMode === 'image';
 
-  const quickComposeAllowBatchCount = useMemo(() => {
-    const m = quickComposeModule;
-    if (!m) return false;
-    const eng = getCapabilityEngine(m);
-    return eng === 'gen_image' || m.category === 'text_to_image' || m.category === 'text_to_text';
-  }, [quickComposeModule]);
+  const quickComposeAllowBatchCount = quickComposeMode === 'text' || quickComposeMode === 'image';
 
   useEffect(() => {
     if (!quickComposeAllowBatchCount) setQuickComposeCount(1);
   }, [quickComposeAllowBatchCount]);
 
   useEffect(() => {
-    const g = quickComposeModule?.imageGear;
-    if (g === 'fast' || g === 'standard' || g === 'pro') {
-      setQuickComposeGear(g);
-    } else {
-      setQuickComposeGear('standard');
-    }
-  }, [quickComposeActionId, quickComposeModule?.imageGear]);
-
-  const quickComposeOptions = useMemo(() => {
-    const out: { value: string; label: string }[] = [];
-    const seen = new Set<string>();
-    const allowEngine = (p: CustomAppModule) => {
-      const eng = getCapabilityEngine(p);
-      if (eng === 'gen_image' || eng === 'gen_text') return true;
-      if (eng === 'builtin' && p.category === 'image_to_image') return true;
-      return false;
-    };
-    for (const e of favoriteEntries) {
-      if (e.kind !== 'module') continue;
-      const p = e.mod;
-      // 底部「创作」条面向生图/文生：拆分组件走专用交互，避免队列日志误显 [拆分组件]
-      if (p.disabled || p.id === 'cut_image' || p.id === 'split_component' || p.category === 'generate_3d' || p.category === 'generate_video') continue;
-      if (!allowEngine(p)) continue;
-      seen.add(p.id);
-      out.push({ value: p.id, label: p.label });
-    }
-    for (const p of capabilityPresets) {
-      if (p.disabled || seen.has(p.id) || p.id === 'cut_image' || p.id === 'split_component' || p.category === 'generate_3d' || p.category === 'generate_video') continue;
-      if (!allowEngine(p)) continue;
-      seen.add(p.id);
-      out.push({ value: p.id, label: p.label });
-    }
-    return out;
-  }, [favoriteEntries, capabilityPresets]);
-
-  useEffect(() => {
-    if (quickComposeOptions.length === 0) {
-      setQuickComposeActionId('');
-      return;
-    }
-    const saved = readLocalJson<string>(quickComposeStorageKey, '', (parsed) =>
-      typeof parsed === 'string' ? parsed : null
+    const saved = readLocalJson<WorkspaceQuickComposeComposeMode | ''>(
+      quickComposeModeStorageKey,
+      '',
+      (parsed) => (parsed === 'text' || parsed === 'image' || parsed === '3d' ? parsed : null)
     );
-    setQuickComposeActionId((cur) => {
-      if (cur && quickComposeOptions.some((o) => o.value === cur)) return cur;
-      if (saved && quickComposeOptions.some((o) => o.value === saved)) return saved;
-      return quickComposeOptions[0]!.value;
-    });
-  }, [quickComposeOptions, quickComposeStorageKey]);
+    if (saved) setQuickComposeMode(saved);
+  }, [quickComposeModeStorageKey]);
 
   useEffect(() => {
-    if (!quickComposeActionId) return;
-    writeLocalJson(quickComposeStorageKey, quickComposeActionId);
-  }, [quickComposeActionId, quickComposeStorageKey]);
+    writeLocalJson(quickComposeModeStorageKey, quickComposeMode);
+  }, [quickComposeMode, quickComposeModeStorageKey]);
+
+  useEffect(() => {
+    if (quickComposeMode === 'text') setQuickComposeImages([]);
+  }, [quickComposeMode]);
 
   /** 大纲 / 画布拖入底部快捷栏：参考图进「+」、文本资产内容追加到草稿 */
   const handleQuickComposeWorkflowDrop = useCallback(
@@ -4290,16 +4682,25 @@ ${lineSvg}
         }
       }
 
-      if (imgsToAdd.length === 0 && textPieces.length === 0) {
+      let imgsToAttach = imgsToAdd;
+      if (quickComposeMode === 'text' && imgsToAdd.length > 0) {
+        onLog?.(
+          'warn',
+          '底部快捷栏：「文」模式不支持参考图，已忽略拖入的图片（可切换到「图」或「3D」）'
+        );
+        imgsToAttach = [];
+      }
+
+      if (imgsToAttach.length === 0 && textPieces.length === 0) {
         onLog?.('warn', '底部快捷栏：拖入资产无可用图片或文本');
         return;
       }
 
       const maxRef = quickComposeMaxReferenceImages;
-      if (imgsToAdd.length > 0) {
+      if (imgsToAttach.length > 0) {
         setQuickComposeImages((prev) => {
           const next = [...prev];
-          for (const img of imgsToAdd) {
+          for (const img of imgsToAttach) {
             const s = img.trim();
             if (!s) continue;
             if (next.includes(s)) continue;
@@ -4318,7 +4719,7 @@ ${lineSvg}
       }
       onLog?.(
         'info',
-        `底部快捷栏：已附加 ${imgsToAdd.length} 张参考图${textPieces.length ? `、${textPieces.length} 段文本` : ''}`
+        `底部快捷栏：已附加 ${imgsToAttach.length} 张参考图${textPieces.length ? `、${textPieces.length} 段文本` : ''}`
       );
     },
     [
@@ -4328,6 +4729,7 @@ ${lineSvg}
       getEffectiveAssetIdsForAction,
       getAssetDisplayImage,
       quickComposeMaxReferenceImages,
+      quickComposeMode,
       onLog,
     ]
   );
@@ -6748,38 +7150,102 @@ ${lineSvg}
               ? workflowSafeImgSrc(lightboxAsset.original)
               : undefined
           }
-        >
-          <div className="absolute left-4 bottom-4 z-10 flex flex-col items-start gap-2" data-image-preview-no-wheel>
-            {(isWorkflowTextAsset(lightboxAsset) ? textAssetActionModules : actionModules).map((mod) => (
+          flatImageOverlay={
+            lightboxShowsImage &&
+            !isWorkflowTextAsset(lightboxAsset) &&
+            !isGroupAsset(lightboxAsset)
+              ? ({ imgRef }) => (
+                  <ImageFlatAnnotationOverlay
+                    imgRef={imgRef}
+                    layoutKey={getLightboxPreviewImageSrc(lightboxAsset)}
+                    doc={lightboxOverlayDraft}
+                    tool={lightboxOverlayTool}
+                    color={lightboxOverlayColor}
+                    brushWidth={lightboxBrushWidth}
+                    onDocPatch={onLightboxOverlayPatch}
+                    onBeginDragGesture={overlayBeginDragGesture}
+                  />
+                )
+              : undefined
+          }
+          topRightExtra={
+            <>
               <button
-                key={mod.id}
                 type="button"
                 onClick={() => {
-                  const idx = lightboxList.findIndex((a) => a.id === lightboxAsset.id);
-                  const nextAsset = idx >= 0 && idx < lightboxList.length - 1 ? lightboxList[idx + 1] : null;
-                  addToPending(lightboxAsset.id, mod.id, {
-                    ...(lightboxSourceSlot
-                      ? {
-                          sourceGroupAssetId: lightboxSourceSlot.sourceGroupAssetId,
-                          sourceItemIndex: lightboxSourceSlot.sourceItemIndex,
-                        }
-                      : {}),
-                  });
-                  setLightboxSourceSlot(null);
-                  setLightboxAssetId(nextAsset?.id ?? null);
+                  if (!lightboxShowsImage) {
+                    const title = (lightboxAsset.textTitle || '').trim();
+                    const body = getAssetDisplayText(lightboxAsset);
+                    const t = title ? `${title}\n\n${body}` : body;
+                    const blob = new Blob([t], { type: 'text/plain;charset=utf-8' });
+                    const url = URL.createObjectURL(blob);
+                    try {
+                      const a = document.createElement('a');
+                      a.href = url;
+                      a.download = `workflow-text-${lightboxAsset.id.slice(0, 6)}.txt`;
+                      a.click();
+                    } finally {
+                      URL.revokeObjectURL(url);
+                    }
+                    return;
+                  }
+                  void triggerImageDownload(
+                    getAssetDisplayImage(lightboxAsset),
+                    `workflow-preview-${lightboxAsset.id.slice(0, 6)}`
+                  );
                 }}
-                className="inline-flex w-auto rounded-lg bg-white/[0.07] px-3 py-1.5 text-[9px] font-black uppercase text-gray-200 ring-1 ring-white/[0.1] hover:bg-blue-950/50 hover:ring-blue-500/40 transition-colors"
+                className={LIGHTBOX_ICON_BTN_PRIMARY}
+                title={lightboxShowsImage ? '下载当前预览图' : '下载为文本文件'}
+                aria-label={lightboxShowsImage ? '下载当前预览图' : '下载为文本文件'}
               >
-                {mod.label}
+                <Download {...LIGHTBOX_BAR_IC} aria-hidden />
               </button>
-            ))}
-          </div>
+              {(() => {
+                const dk = lightboxAsset.displayKey;
+                const blockedByVgp = Boolean(
+                  lightboxAsset.vgp && isVgpBlockingDiscardForDisplayKey(lightboxAsset.vgp, dk)
+                );
+                const canDiscard =
+                  dk !== 'original' && dk !== 'group_preview' && !blockedByVgp;
+                const discardHint = !canDiscard
+                  ? dk === 'original'
+                    ? '原始版本不可删除'
+                    : dk === 'group_preview'
+                      ? '组预览不可删除'
+                      : blockedByVgp
+                        ? '该版本被后续生成引用，无法删除'
+                        : '不可删除'
+                  : '丢弃当前展示的版本';
+                return (
+                  <button
+                    type="button"
+                    disabled={!canDiscard}
+                    onClick={() => {
+                      if (!canDiscard) return;
+                      discardResult(lightboxAsset.id, dk);
+                    }}
+                    className={[
+                      LIGHTBOX_ICON_BTN_NEUTRAL,
+                      canDiscard
+                        ? 'text-red-400/95 hover:bg-red-950/40 hover:text-red-300'
+                        : 'cursor-not-allowed opacity-35 hover:bg-transparent',
+                    ].join(' ')}
+                    title={discardHint}
+                    aria-label={discardHint}
+                  >
+                    <Trash2 {...LIGHTBOX_BAR_IC} aria-hidden />
+                  </button>
+                );
+              })()}
+            </>
+          }
+        >
           <div
             className="absolute top-16 right-4 z-[9] w-[min(24rem,30vw)] max-h-[72vh]"
             data-image-preview-no-wheel
             data-image-preview-scroll
           >
-            <div className="h-full overflow-y-auto rounded-2xl border border-white/10 bg-[#0f0f12]/98 shadow-xl backdrop-blur-[2px]">
+            <div className="h-full overflow-y-auto rounded-2xl border border-white/10 bg-[#141418] shadow-xl ring-1 ring-black/40">
               {lightboxMetaText ? (
                 <div className="px-3 pt-3 pb-2 border-b border-white/10 text-[8px] text-gray-400">
                   {lightboxMetaText}
@@ -6818,17 +7284,6 @@ ${lineSvg}
                   </div>
                 );
               })()}
-              {isWorkflowTextAsset(lightboxAsset) && lightboxAsset.displayKey !== 'original' ? (
-                <div className="px-3 py-3 border-b border-white/10">
-                  <button
-                    type="button"
-                    onClick={() => discardResult(lightboxAsset.id, lightboxAsset.displayKey)}
-                    className="w-full px-2 py-1.5 rounded text-[9px] font-black text-red-300 border border-red-900/60 bg-red-950/25 hover:bg-red-900/30"
-                  >
-                    丢弃当前版本
-                  </button>
-                </div>
-              ) : null}
               <WorkflowGenerationRecordPanel
                 asset={lightboxAsset}
                 getStepLabel={getGenerationRecordStepLabel}
@@ -6837,131 +7292,204 @@ ${lineSvg}
               />
             </div>
           </div>
+          {!lightboxShowsImage ||
+          isWorkflowTextAsset(lightboxAsset) ||
+          isGroupAsset(lightboxAsset) ||
+          lightboxModelUrls.length > 0 ? (
           <div
-            className="absolute bottom-4 z-10 max-h-[42vh] overflow-y-auto rounded-xl border border-white/10 bg-[#0f0f12]/98 p-3 sm:p-4 space-y-3 shadow-xl backdrop-blur-[2px]"
-            style={{
-              left: '50%',
-              transform: 'translateX(-50%)',
-              width: 'min(58rem, calc(100vw - 3rem))',
-            }}
+            className={`absolute bottom-4 left-1/2 z-10 max-h-[42vh] w-max max-w-[min(58rem,calc(100vw-3rem))] -translate-x-1/2 overflow-y-auto ${WORKFLOW_LIGHTBOX_BOTTOM_RAIL}`}
             data-image-preview-no-wheel
             data-image-preview-scroll
           >
-            <div className="flex flex-wrap gap-1.5 justify-center items-center">
-              {!lightboxShowsImage ? (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => textLightboxCenterRef.current?.setEditingMode(true)}
-                    className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${WORKFLOW_LIGHTBOX_TAB_IDLE}`}
-                  >
-                    编辑
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => textLightboxCenterRef.current?.setEditingMode(false)}
-                    className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${WORKFLOW_LIGHTBOX_TAB_IDLE}`}
-                  >
-                    预览
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => textLightboxCenterRef.current?.save()}
-                    className="px-3 py-1.5 rounded-lg bg-[#1e40af] border border-[#3b6fb8] text-[9px] font-black uppercase hover:bg-blue-500"
-                  >
-                    保存
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => textLightboxCenterRef.current?.saveAndClose()}
-                    className="px-3 py-1.5 rounded-lg bg-blue-600 border border-blue-500 text-[9px] font-black uppercase text-white hover:bg-blue-500"
-                  >
-                    保存并关闭
-                  </button>
-                </>
-              ) : null}
-              <button
-                type="button"
-                onClick={() => {
-                  if (!lightboxShowsImage) {
-                    const title = (lightboxAsset.textTitle || '').trim();
-                    const body = getAssetDisplayText(lightboxAsset);
-                    const t = title ? `${title}\n\n${body}` : body;
-                    const blob = new Blob([t], { type: 'text/plain;charset=utf-8' });
-                    const url = URL.createObjectURL(blob);
-                    try {
-                      const a = document.createElement('a');
-                      a.href = url;
-                      a.download = `workflow-text-${lightboxAsset.id.slice(0, 6)}.txt`;
-                      a.click();
-                    } finally {
-                      URL.revokeObjectURL(url);
-                    }
-                    return;
-                  }
-                  void triggerImageDownload(
-                    getAssetDisplayImage(lightboxAsset),
-                    `workflow-preview-${lightboxAsset.id.slice(0, 6)}`
-                  );
-                }}
-                className="px-3 py-1.5 rounded-lg bg-[#1e40af] border border-[#3b6fb8] text-[9px] font-black uppercase hover:bg-blue-500"
-              >
-                下载
-              </button>
-              {lightboxModelUrls.map((url, idx) => (
-                <a
-                  key={`${url}:${idx}`}
-                  href={url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="px-3 py-1.5 rounded-lg bg-[#3730a3] border border-[#6366f1] text-[9px] font-black uppercase text-indigo-200 hover:bg-[#4f46e5]"
-                >
-                  下载模型{lightboxModelUrls.length > 1 ? ` ${idx + 1}` : ''}
-                </a>
-              ))}
-              <span className="text-[8px] font-black text-gray-500 uppercase mr-1">显示</span>
-              <button
-                type="button"
-                onClick={() => setDisplayKey(lightboxAsset.id, 'original')}
-                className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${lightboxAsset.displayKey === 'original' ? 'bg-blue-600 border-blue-500 text-white' : WORKFLOW_LIGHTBOX_TAB_IDLE}`}
-              >
-                原始
-              </button>
-              {isGroupAsset(lightboxAsset) && (lightboxAsset.assetIds?.length ?? 0) > 0 ? (
+            {!lightboxShowsImage ? (
+              <>
                 <button
                   type="button"
-                  onClick={() => setDisplayKey(lightboxAsset.id, 'group_preview')}
-                  className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${lightboxAsset.displayKey === 'group_preview' ? 'bg-blue-600 border-blue-500 text-white' : WORKFLOW_LIGHTBOX_TAB_IDLE}`}
+                  onClick={() => textLightboxCenterRef.current?.setEditingMode(true)}
+                  className={LIGHTBOX_ICON_BTN_NEUTRAL}
+                  title="编辑"
+                  aria-label="编辑"
                 >
-                  组预览
+                  <Pencil {...LIGHTBOX_BAR_IC} aria-hidden />
                 </button>
-              ) : null}
-              {(lightboxAsset.resultOrder || []).map((k) => {
-                if (baseActionId(k) === 'cut_image') return null;
-                const mod = getModule(baseActionId(k));
-                const label = mod?.label ?? baseActionId(k);
-                if (isWorkflowTextAsset(lightboxAsset)) {
-                  const hasText = Boolean((lightboxAsset.textResults || {})[k]);
-                  const hasImg = Boolean(asWorkflowImageString(lightboxAsset.results?.[k]).trim());
-                  if (!hasText && !hasImg) return null;
-                } else if (!lightboxAsset.results?.[k]) {
-                  return null;
-                }
-                return (
+                <button
+                  type="button"
+                  onClick={() => textLightboxCenterRef.current?.setEditingMode(false)}
+                  className={LIGHTBOX_ICON_BTN_NEUTRAL}
+                  title="预览"
+                  aria-label="预览"
+                >
+                  <Eye {...LIGHTBOX_BAR_IC} aria-hidden />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => textLightboxCenterRef.current?.save()}
+                  className={LIGHTBOX_ICON_BTN_PRIMARY}
+                  title="保存"
+                  aria-label="保存"
+                >
+                  <Save {...LIGHTBOX_BAR_IC} aria-hidden />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => textLightboxCenterRef.current?.saveAndClose()}
+                  className={LIGHTBOX_ICON_BTN_PRIMARY}
+                  title="保存并关闭"
+                  aria-label="保存并关闭"
+                >
+                  <SaveAll {...LIGHTBOX_BAR_IC} aria-hidden />
+                </button>
+              </>
+            ) : null}
+            {!(
+              lightboxShowsImage &&
+              !isWorkflowTextAsset(lightboxAsset) &&
+              !isGroupAsset(lightboxAsset)
+            ) ? (
+              <>
+                <div className={`${WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER} shrink-0`} aria-hidden />
+                <button
+                  type="button"
+                  onClick={() => setDisplayKey(lightboxAsset.id, 'original')}
+                  className={lightboxAsset.displayKey === 'original' ? LIGHTBOX_ICON_BTN_ACTIVE : LIGHTBOX_ICON_BTN_NEUTRAL}
+                  title="原始"
+                  aria-label="切换到原始版本"
+                >
+                  <ImageIcon {...LIGHTBOX_BAR_IC} aria-hidden />
+                </button>
+                {isGroupAsset(lightboxAsset) && (lightboxAsset.assetIds?.length ?? 0) > 0 ? (
                   <button
                     type="button"
-                    key={k}
-                    onClick={() => setDisplayKey(lightboxAsset.id, k)}
-                    className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${lightboxAsset.displayKey === k ? 'bg-blue-600 border-blue-500 text-white' : WORKFLOW_LIGHTBOX_TAB_IDLE}`}
+                    onClick={() => setDisplayKey(lightboxAsset.id, 'group_preview')}
+                    className={
+                      lightboxAsset.displayKey === 'group_preview' ? LIGHTBOX_ICON_BTN_ACTIVE : LIGHTBOX_ICON_BTN_NEUTRAL
+                    }
+                    title="组预览"
+                    aria-label="切换到组预览"
                   >
-                    {label}
+                    <LayoutGrid {...LIGHTBOX_BAR_IC} aria-hidden />
                   </button>
-                );
-              })}
-            </div>
+                ) : null}
+                {(lightboxAsset.resultOrder || []).map((k) => {
+                  if (baseActionId(k) === 'cut_image') return null;
+                  const mod = getModule(baseActionId(k));
+                  const label = mod?.label ?? baseActionId(k);
+                  if (isWorkflowTextAsset(lightboxAsset)) {
+                    const hasText = Boolean((lightboxAsset.textResults || {})[k]);
+                    const hasImg = Boolean(asWorkflowImageString(lightboxAsset.results?.[k]).trim());
+                    if (!hasText && !hasImg) return null;
+                  } else if (!lightboxAsset.results?.[k]) {
+                    return null;
+                  }
+                  return (
+                    <button
+                      type="button"
+                      key={k}
+                      onClick={() => setDisplayKey(lightboxAsset.id, k)}
+                      className={lightboxAsset.displayKey === k ? LIGHTBOX_ICON_BTN_ACTIVE : LIGHTBOX_ICON_BTN_NEUTRAL}
+                      title={label}
+                      aria-label={`切换到 ${label}`}
+                    >
+                      <ImagePlus {...LIGHTBOX_BAR_IC} aria-hidden />
+                    </button>
+                  );
+                })}
+              </>
+            ) : null}
+            {lightboxModelUrls.map((url, idx) => (
+              <a
+                key={`${url}:${idx}`}
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={`${LIGHTBOX_ICON_BTN_VIOLET} no-underline`}
+                title={lightboxModelUrls.length > 1 ? `下载模型 ${idx + 1}` : '下载模型'}
+                aria-label={lightboxModelUrls.length > 1 ? `下载模型 ${idx + 1}` : '下载模型'}
+              >
+                <Package {...LIGHTBOX_BAR_IC} aria-hidden />
+              </a>
+            ))}
           </div>
+          ) : null}
         </ImagePreviewOverlay>
       )}
+
+      {lightboxAsset &&
+      !showArchived &&
+      lightboxShowsImage &&
+      !isWorkflowTextAsset(lightboxAsset) &&
+      !isGroupAsset(lightboxAsset) ? (
+        <WorkflowStepNodeGraphOverlay
+          asset={lightboxAsset}
+          getStepLabel={getGenerationRecordStepLabel}
+          onSelectDisplayKey={(key) => setDisplayKey(lightboxAsset.id, key)}
+        />
+      ) : null}
+
+      {lightboxAsset &&
+        !showArchived &&
+        lightboxShowsImage &&
+        !isWorkflowTextAsset(lightboxAsset) &&
+        !isGroupAsset(lightboxAsset) &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div className="pointer-events-none fixed inset-0 z-[2200]">
+            <ImageAnnotationLightboxToolbar
+              tool={lightboxOverlayTool}
+              onToolChange={setLightboxOverlayTool}
+              color={lightboxOverlayColor}
+              onColorChange={setLightboxOverlayColor}
+              brushWidth={lightboxBrushWidth}
+              onBrushWidthChange={setLightboxBrushWidth}
+              onUndo={overlayUndo}
+              onRedo={overlayRedo}
+              onPersist={persistLightboxOverlayAnnotations}
+              onClearAnnotations={() => onLightboxOverlayPatch((d) => ({ ...d, items: [] }))}
+              onApplyCrops={() => void applyLightboxManualCrops()}
+              onClearCrops={() => onLightboxOverlayPatch((d) => ({ ...d, crops: [] }))}
+            />
+          </div>,
+          document.body
+        )}
+
+      {lightboxAsset &&
+        !showArchived &&
+        lightboxShowsImage &&
+        !isWorkflowTextAsset(lightboxAsset) &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <WorkspaceQuickComposeBar
+            visible
+            placement="lightbox"
+            placeholderOverride="描述修改意图，附图固定为当前预览（含平面标注）"
+            composeMode={quickComposeMode}
+            onComposeModeChange={setQuickComposeMode}
+            inputPresetsActive={false}
+            draft={quickComposeDraft}
+            onDraftChange={setQuickComposeDraft}
+            attachedImages={[]}
+            maxAttachedImages={quickComposeMaxReferenceImages}
+            onAddImage={() => {}}
+            onRemoveImageAt={() => {}}
+            onClearAttachments={() => {}}
+            onSubmit={() => void submitLightboxQuickCompose()}
+            showGenImageSettings={quickComposeShowGenImageSettings}
+            allowBatchCount={quickComposeAllowBatchCount}
+            promptCards={[]}
+            onRemovePromptCard={() => {}}
+            genSettings={{
+              gearId: quickComposeGear,
+              onGearId: setQuickComposeGear,
+              aspectRatio: quickComposeAspect,
+              onAspectRatio: setQuickComposeAspect,
+              imageSize: quickComposeSize,
+              onImageSize: setQuickComposeSize,
+              count: quickComposeCount,
+              onCount: setQuickComposeCount,
+            }}
+          />,
+          document.body
+        )}
 
       {hoverPreview ? (
         <WorkflowCapabilityHoverPreview
@@ -7178,12 +7706,11 @@ ${lineSvg}
       ? createPortal(
           <WorkspaceQuickComposeBar
             visible={
-              quickComposeShellActive &&
-              quickComposeOptions.length > 0 &&
-              !lightboxAsset &&
-              !cutSelectState &&
-              !promptTweakModal
+              quickComposeShellActive && !lightboxAsset && !cutSelectState && !promptTweakModal
             }
+            composeMode={quickComposeMode}
+            onComposeModeChange={setQuickComposeMode}
+            inputPresetsActive={quickComposePromptCards.length > 0}
             draft={quickComposeDraft}
             onDraftChange={setQuickComposeDraft}
             attachedImages={quickComposeImages}

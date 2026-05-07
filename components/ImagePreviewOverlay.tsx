@@ -5,11 +5,92 @@ import {
   PreviewViewerFallback,
   previewPolicyForMode,
 } from './preview';
+import { Box, Contrast, Globe2, Image as ImageIcon, X } from 'lucide-react';
+import { readLocalString, writeLocalString } from '../services/clientPersist';
+import { CustomDropdown } from './ui/CustomDropdown';
+import {
+  IMAGE_LIGHTBOX_TOOL_ICON_BTN_IDLE,
+  TITLE_ROW_STEPPER_SHELL,
+  WORKFLOW_IMAGE_PREVIEW_RAIL,
+  WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER,
+} from './workflow/workflowSectionUiConstants';
 
 const NO_WHEEL = '[data-image-preview-no-wheel]';
 const SCROLL = '[data-image-preview-scroll]';
 
+/** 与 `ImageAnnotationLightboxToolbar` 主栏图标同阶 */
+const PV_MODE_IC = { size: 17, strokeWidth: 1.75, className: 'shrink-0' as const };
+
+/** 与能力预设顶栏 `TITLE_ROW_STEPPER_SHELL` 内按钮同系 */
+const PV_MODE_SEG_BASE =
+  'h-7 w-8 flex shrink-0 items-center justify-center transition-colors outline-none focus-visible:z-[1] focus-visible:ring-2 focus-visible:ring-blue-500/50';
+const PV_MODE_SEG_ON = 'bg-blue-600 text-white ring-1 ring-inset ring-blue-400/30';
+const PV_MODE_SEG_OFF = 'text-gray-300 hover:bg-white/[0.08]';
+
 const MODEL_PREVIEW_EXT_RE = /\.(glb|gltf|fbx|obj)$/i;
+
+const LIGHTBOX_BACKDROP_STORAGE_KEY = 'ac_image_lightbox_backdrop_v1';
+
+export type ImageLightboxBackdropId = 'frosted' | 'black' | 'gray50' | 'white';
+
+const LIGHTBOX_BACKDROP_CLASS: Record<ImageLightboxBackdropId, string> = {
+  frosted: 'bg-black/72 backdrop-blur-sm',
+  black: 'bg-black',
+  gray50: 'bg-[#808080]',
+  white: 'bg-white',
+};
+
+const LIGHTBOX_BACKDROP_OPTIONS: Array<{
+  value: ImageLightboxBackdropId;
+  /** 保留给无障碍与 `title` 回退 */
+  label: string;
+  title: string;
+}> = [
+  { value: 'frosted', label: '毛玻璃', title: '预览背景：毛玻璃（暗色半透明 + 模糊）' },
+  { value: 'black', label: '黑色', title: '预览背景：纯黑' },
+  { value: 'gray50', label: '50% 灰', title: '预览背景：50% 中性灰' },
+  { value: 'white', label: '白色', title: '预览背景：纯白' },
+];
+
+function LightboxBackdropSwatch({ id }: { id: ImageLightboxBackdropId }) {
+  const shell =
+    'h-7 w-7 shrink-0 rounded-md shadow-[inset_0_0_0_1px_rgba(255,255,255,0.28)] [isolation:isolate]';
+  if (id === 'frosted') {
+    return (
+      <span className={`relative overflow-hidden ${shell}`} aria-hidden>
+        {/* 高对比棋盘格：半透明 + blur 后轮廓被抹开，更接近真实毛玻璃 */}
+        <span
+          className="absolute inset-0 scale-[1.15]"
+          style={{
+            backgroundColor: '#3d3d42',
+            backgroundImage: [
+              'linear-gradient(45deg, #1a1a1f 25%, transparent 25%)',
+              'linear-gradient(-45deg, #1a1a1f 25%, transparent 25%)',
+              'linear-gradient(45deg, transparent 75%, #1a1a1f 75%)',
+              'linear-gradient(-45deg, transparent 75%, #1a1a1f 75%)',
+            ].join(', '),
+            backgroundSize: '5px 5px',
+            backgroundPosition: '0 0, 0 2.5px, 2.5px -2.5px, -2.5px 0',
+          }}
+        />
+        <span className="absolute inset-0 bg-black/40 backdrop-blur-[6px]" />
+        <span className="pointer-events-none absolute inset-0 bg-gradient-to-br from-white/[0.22] via-white/[0.06] to-transparent" />
+      </span>
+    );
+  }
+  if (id === 'black') {
+    return <span className={`${shell} bg-black`} aria-hidden />;
+  }
+  if (id === 'gray50') {
+    return <span className={`${shell} bg-[#808080]`} aria-hidden />;
+  }
+  return <span className={`${shell} bg-white shadow-[inset_0_0_0_1px_rgba(0,0,0,0.14)]`} aria-hidden />;
+}
+
+function parseImageLightboxBackdrop(raw: string | null): ImageLightboxBackdropId {
+  if (raw === 'frosted' || raw === 'black' || raw === 'gray50' || raw === 'white') return raw;
+  return 'frosted';
+}
 
 function pickPreviewableModelUrl(modelUrls?: string[]): string | null {
   if (!Array.isArray(modelUrls) || modelUrls.length === 0) return null;
@@ -77,7 +158,14 @@ export type ImagePreviewOverlayProps = {
    * 传给 PreviewShell 的全屏层 z-index（Tailwind 类）。嵌套在更高 z 的全屏壳内（如工作流编排 `z-[2100]`）时必须高于父层，否则预览会显示在父层背后。
    */
   shellZIndexClassName?: string;
+  /** 右上角「平面/全景/关闭」左侧：额外控件（如工作流下载、丢弃版本） */
+  topRightExtra?: React.ReactNode;
   children?: React.ReactNode;
+  /**
+   * 平面预览时叠在 `<img>` 上的内容（与图同层、受同一套 scale/translate 影响）。
+   * 用于标注层等与 `object-contain` 像素对齐的覆盖物。
+   */
+  flatImageOverlay?: (ctx: { imgRef: React.RefObject<HTMLImageElement | null> }) => React.ReactNode;
 };
 
 function fitImageToPreviewViewport(nw: number, nh: number): { w: number; h: number } {
@@ -123,9 +211,14 @@ export function ImagePreviewOverlay({
   modelFileName,
   contentRightInset = '0px',
   shellZIndexClassName,
+  topRightExtra,
   children,
+  flatImageOverlay,
 }: ImagePreviewOverlayProps) {
   const [previewLayout, setPreviewLayout] = useState<'flat' | 'pano' | 'model3d'>('flat');
+  const [lightboxBackdropId, setLightboxBackdropId] = useState<ImageLightboxBackdropId>(() =>
+    parseImageLightboxBackdrop(readLocalString(LIGHTBOX_BACKDROP_STORAGE_KEY))
+  );
   const [uiHidden, setUiHidden] = useState(false);
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
@@ -490,6 +583,7 @@ export function ImagePreviewOverlay({
       onClose={onClose}
       focusKey={resetKey}
       zIndexClassName={shellZIndexClassName ?? 'z-[2000]'}
+      backdropTintClassName={LIGHTBOX_BACKDROP_CLASS[lightboxBackdropId]}
     >
         {!centerSlot && enablePanoramaMode && previewLayout === 'pano' && LazyImageEquirectViewer ? (
           <div
@@ -532,37 +626,40 @@ export function ImagePreviewOverlay({
             className={`absolute top-1/2 ${useFrameLock ? 'flex items-center justify-center' : ''}`}
             style={shellStyle}
           >
-            <img
-              key={imageSrc}
-              src={imageSrc!}
-              className={
-                useFrameLock
-                  ? 'object-contain rounded-xl shadow-2xl select-none cursor-zoom-in'
-                  : 'max-w-[92vw] max-h-[88vh] object-contain rounded-xl shadow-2xl select-none cursor-zoom-in'
-              }
-              style={lockedImgStyle}
-              alt=""
-              draggable={false}
-              onContextMenu={(e) => e.preventDefault()}
-              onLoad={handleImgLoadGeneral}
-              onDoubleClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                setScale(1);
-                setOffset({ x: 0, y: 0 });
-                dragRef.current = null;
-                panRef.current = null;
-                zoomPivotRef.current = null;
-                zoomLastScaleRef.current = 1;
-              }}
-              ref={imgRef}
-              onMouseDown={handleImgMouseDown}
-            />
+            <div className="relative inline-block max-w-full max-h-full">
+              <img
+                key={imageSrc}
+                src={imageSrc!}
+                className={
+                  useFrameLock
+                    ? 'block max-h-full max-w-full object-contain rounded-xl select-none cursor-zoom-in'
+                    : 'block max-h-[88vh] max-w-[92vw] object-contain rounded-xl select-none cursor-zoom-in'
+                }
+                style={lockedImgStyle}
+                alt=""
+                draggable={false}
+                onContextMenu={(e) => e.preventDefault()}
+                onLoad={handleImgLoadGeneral}
+                onDoubleClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setScale(1);
+                  setOffset({ x: 0, y: 0 });
+                  dragRef.current = null;
+                  panRef.current = null;
+                  zoomPivotRef.current = null;
+                  zoomLastScaleRef.current = 1;
+                }}
+                ref={imgRef}
+                onMouseDown={handleImgMouseDown}
+              />
+              {flatImageOverlay ? flatImageOverlay({ imgRef }) : null}
+            </div>
           </div>
         ) : null}
 
         {!uiHidden ? (
-        <div className="absolute top-4 left-4 z-10 max-w-[min(300px,calc(100vw-6rem))] rounded-xl border border-white/10 bg-[#0f0f12]/98 px-3 py-2 text-[9px] text-gray-300 pointer-events-none text-left leading-relaxed space-y-1 shadow-xl backdrop-blur-[2px]">
+        <div className="absolute top-4 left-4 z-10 max-w-[min(300px,calc(100vw-6rem))] pointer-events-none text-left text-[8px] leading-relaxed text-gray-500/70 space-y-1 [text-shadow:0_1px_3px_rgba(0,0,0,0.75)]">
           {enablePanoramaMode && previewLayout === 'pano' ? (
             <>
               <div>拖拽：旋转视角（360° 全景）</div>
@@ -612,58 +709,101 @@ export function ImagePreviewOverlay({
         ) : null}
 
         {!uiHidden ? (
-        <div className="absolute right-4 top-4 z-10 flex items-center gap-2">
-          {!centerSlot && (enablePanoramaMode || hasModel3DMode) ? (
-            <div
-              className="flex rounded-xl border border-[#2e2e32] overflow-hidden"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <button
-                type="button"
-                onClick={() => setPreviewLayout('flat')}
-                className={`px-3 py-2 text-[10px] font-black uppercase transition-colors ${
-                  previewLayout === 'flat'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-[#1a1a1e]/95 text-gray-300 hover:bg-[#2a2a32]'
-                }`}
-              >
-                平面
-              </button>
-              {enablePanoramaMode ? (
-                <button
-                  type="button"
-                  onClick={() => setPreviewLayout('pano')}
-                  className={`px-3 py-2 text-[10px] font-black uppercase transition-colors border-l border-[#2e2e32] ${
-                    previewLayout === 'pano'
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-[#1a1a1e]/95 text-gray-300 hover:bg-[#2a2a32]'
-                  }`}
-                >
-                  全景
-                </button>
-              ) : null}
-              {hasModel3DMode ? (
-                <button
-                  type="button"
-                  onClick={() => setPreviewLayout('model3d')}
-                  className={`px-3 py-2 text-[10px] font-black uppercase transition-colors border-l border-[#2e2e32] ${
-                    previewLayout === 'model3d'
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-[#1a1a1e]/95 text-gray-300 hover:bg-[#2a2a32]'
-                  }`}
-                >
-                  3D
-                </button>
-              ) : null}
-            </div>
-          ) : null}
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-3 py-2 rounded-xl bg-[#1a1a1e]/95 border border-[#2e2e32] text-[10px] font-black text-white hover:bg-[#2a2a32]"
+        <div
+          className="absolute right-4 z-10 flex max-w-[calc(100vw-2rem)] justify-end"
+          style={{ top: 'max(0.5rem, env(safe-area-inset-top, 0px))' }}
+        >
+          <div
+            className={WORKFLOW_IMAGE_PREVIEW_RAIL}
+            onClick={(e) => e.stopPropagation()}
+            role="toolbar"
+            aria-label="预览工具"
           >
-            关闭
-          </button>
+            {/* 显示：预览背景 */}
+            <CustomDropdown
+              value={lightboxBackdropId}
+              onChange={(v) => {
+                const next = parseImageLightboxBackdrop(v);
+                setLightboxBackdropId(next);
+                writeLocalString(LIGHTBOX_BACKDROP_STORAGE_KEY, next);
+              }}
+              options={LIGHTBOX_BACKDROP_OPTIONS}
+              listDensity="compact"
+              listClassName="border border-white/[0.12] bg-[#0c0c10]/75 backdrop-blur-xl shadow-[0_12px_36px_rgba(0,0,0,0.5)] ring-1 ring-inset ring-white/[0.06]"
+              renderListItem={(opt) => (
+                <LightboxBackdropSwatch id={parseImageLightboxBackdrop(opt.value)} />
+              )}
+              triggerAriaLabel="预览背景"
+              triggerClassName={IMAGE_LIGHTBOX_TOOL_ICON_BTN_IDLE}
+              renderTrigger={() => <Contrast {...PV_MODE_IC} aria-hidden />}
+              portalZIndex={{ backdrop: 2700, list: 2701 }}
+            />
+            {topRightExtra ? (
+              <>
+                <div className={WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER} aria-hidden />
+                <div className="inline-flex items-center gap-1">{topRightExtra}</div>
+              </>
+            ) : null}
+            {!centerSlot && (enablePanoramaMode || hasModel3DMode) ? (
+              <>
+                <div className={WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER} aria-hidden />
+                <div
+                  className={`${TITLE_ROW_STEPPER_SHELL} shrink-0`}
+                  role="group"
+                  aria-label="预览模式"
+                >
+                  <button
+                    type="button"
+                    onClick={() => setPreviewLayout('flat')}
+                    className={`${PV_MODE_SEG_BASE} ${previewLayout === 'flat' ? PV_MODE_SEG_ON : PV_MODE_SEG_OFF}`}
+                    title="平面预览"
+                    aria-label="切换到平面预览"
+                    aria-pressed={previewLayout === 'flat'}
+                  >
+                    <ImageIcon {...PV_MODE_IC} aria-hidden />
+                  </button>
+                  {enablePanoramaMode ? (
+                    <button
+                      type="button"
+                      onClick={() => setPreviewLayout('pano')}
+                      className={`${PV_MODE_SEG_BASE} border-l border-white/[0.08] ${
+                        previewLayout === 'pano' ? PV_MODE_SEG_ON : PV_MODE_SEG_OFF
+                      }`}
+                      title="全景预览"
+                      aria-label="切换到全景预览"
+                      aria-pressed={previewLayout === 'pano'}
+                    >
+                      <Globe2 {...PV_MODE_IC} aria-hidden />
+                    </button>
+                  ) : null}
+                  {hasModel3DMode ? (
+                    <button
+                      type="button"
+                      onClick={() => setPreviewLayout('model3d')}
+                      className={`${PV_MODE_SEG_BASE} border-l border-white/[0.08] ${
+                        previewLayout === 'model3d' ? PV_MODE_SEG_ON : PV_MODE_SEG_OFF
+                      }`}
+                      title="3D 预览"
+                      aria-label="切换到 3D 预览"
+                      aria-pressed={previewLayout === 'model3d'}
+                    >
+                      <Box {...PV_MODE_IC} aria-hidden />
+                    </button>
+                  ) : null}
+                </div>
+              </>
+            ) : null}
+            <div className={WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER} aria-hidden />
+            <button
+              type="button"
+              onClick={onClose}
+              className={IMAGE_LIGHTBOX_TOOL_ICON_BTN_IDLE}
+              title="关闭"
+              aria-label="关闭预览"
+            >
+              <X {...PV_MODE_IC} aria-hidden />
+            </button>
+          </div>
         </div>
         ) : null}
 

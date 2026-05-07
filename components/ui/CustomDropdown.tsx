@@ -12,6 +12,11 @@ type CustomDropdownProps = {
   triggerClassName?: string;
   /** 自定义触发区（如头像）；提供时不再渲染默认「标签 + ▼」 */
   renderTrigger?: (ctx: { open: boolean }) => React.ReactNode;
+  /**
+   * 下拉列表项自定义内容（如色块预览）。
+   * 提供时列表按钮会以 `aria-label={opt.title ?? opt.label}` 保持可读性。
+   */
+  renderListItem?: (opt: Option) => React.ReactNode;
   /** 触发按钮 aria-label（自定义触发器时常用） */
   triggerAriaLabel?: string;
   /**
@@ -19,6 +24,12 @@ type CustomDropdownProps = {
    * 默认 1002 / 1003；嵌在 z-[2100] 等弹窗内时请传入更大值，例如 { backdrop: 2200, list: 2201 }。
    */
   portalZIndex?: { backdrop: number; list: number };
+  /**
+   * `compact`：列表宽度贴触发器、去掉过宽 `minWidth`，行内边距收紧（适合色块预览菜单）。
+   */
+  listDensity?: 'default' | 'compact';
+  /** 覆盖列表容器 `border`/`background` 等（不传则保持默认实色 `#0f0f0f`） */
+  listClassName?: string;
 };
 
 /** 深色主题下拉组件：触发器 + Portal 到 body 的列表与遮罩，规范见 .cursor/rules/dropdown-ui-style.mdc */
@@ -30,8 +41,11 @@ export function CustomDropdown({
   placeholder = '默认',
   triggerClassName = 'bg-[#1c1c22] border border-[#2e2e32] rounded-xl px-4 py-3 text-[11px] text-left flex items-center justify-between outline-none focus:border-blue-500 hover:bg-[#2e2e36] transition-colors',
   renderTrigger,
+  renderListItem,
   triggerAriaLabel,
   portalZIndex = { backdrop: 1002, list: 1003 },
+  listDensity = 'default',
+  listClassName,
 }: CustomDropdownProps) {
   const [open, setOpen] = useState(false);
   const [listPosition, setListPosition] = useState<{
@@ -58,7 +72,10 @@ export function CustomDropdown({
     const MAX_LIST = 224;
     const vh = window.innerHeight;
     const vw = window.innerWidth;
-    const width = Math.max(rect.width, 96);
+    const width =
+      listDensity === 'compact'
+        ? Math.max(Math.round(rect.width), 44)
+        : Math.max(rect.width, 96);
     let left = rect.left;
     if (left + width > vw - MARGIN) left = Math.max(MARGIN, vw - width - MARGIN);
     if (left < MARGIN) left = MARGIN;
@@ -93,7 +110,7 @@ export function CustomDropdown({
     }
 
     setListPosition({ top, bottom, left, width, maxHeight });
-  }, [open, options.length]);
+  }, [open, options.length, listDensity]);
 
   useLayoutEffect(() => {
     if (!open) return;
@@ -128,6 +145,11 @@ export function CustomDropdown({
 
   const label = value ? options.find((o) => o.value === value)?.label ?? value : placeholder;
 
+  const listSurfaceClass =
+    listClassName ?? 'border border-[#2e2e32] bg-[#0f0f0f]';
+  const listPy = listDensity === 'compact' ? 'py-0.5' : 'py-1';
+  const itemPad = listDensity === 'compact' ? 'px-2 py-1.5' : 'px-3 py-2';
+
   const portalContent =
     open && typeof document !== 'undefined' ? (
       <>
@@ -140,13 +162,13 @@ export function CustomDropdown({
         {listPosition && (
           <ul
             ref={listRef}
-            className="fixed overflow-y-auto rounded-xl border border-[#2e2e32] bg-[#0f0f0f] shadow-xl py-1 text-white"
+            className={`fixed overflow-y-auto rounded-xl shadow-xl text-white ${listPy} ${listSurfaceClass}`}
             style={{
               top: listPosition.top,
               bottom: listPosition.bottom,
               left: listPosition.left,
               width: listPosition.width,
-              minWidth: '6rem',
+              ...(listDensity === 'compact' ? {} : { minWidth: '6rem' }),
               maxHeight: listPosition.maxHeight,
               zIndex: portalZIndex.list,
             }}
@@ -157,12 +179,15 @@ export function CustomDropdown({
                   type="button"
                   disabled={opt.disabled}
                   title={opt.title}
+                  aria-label={opt.title ?? opt.label}
                   onClick={() => {
                     if (opt.disabled) return;
                     onChange(opt.value);
                     setOpen(false);
                   }}
-                  className={`w-full px-3 py-2 text-left text-[10px] transition-colors ${
+                  className={`w-full ${itemPad} text-[10px] transition-colors ${
+                    renderListItem ? 'flex items-center justify-center' : 'text-left'
+                  } ${
                     opt.disabled
                       ? 'text-gray-600 cursor-not-allowed opacity-60'
                       : value === opt.value
@@ -170,7 +195,7 @@ export function CustomDropdown({
                         : 'text-white hover:bg-[#2e2e36]'
                   }`}
                 >
-                  {opt.label}
+                  {renderListItem ? renderListItem(opt) : opt.label}
                 </button>
               </li>
             ))}

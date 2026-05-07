@@ -6,7 +6,7 @@ import { ensureWorkflowAssetVgp } from '../services/vgp/migrateLegacyAsset';
 
 const PREVIEW_LEN = 120;
 
-function resolveVersionImageSrc(asset: WorkflowAsset, v: ImageVersion): string {
+export function resolveVersionImageSrc(asset: WorkflowAsset, v: ImageVersion): string {
   if (v.imageRef.kind === 'original_field') return asset.original;
   const key = v.imageRef.key;
   if (key === 'cut_image') {
@@ -42,10 +42,22 @@ export const WorkflowGenerationRecordPanel: React.FC<WorkflowGenerationRecordPan
   mode = 'modal',
   onSelectDisplayKey,
 }) => {
-  const [focusedVersionId, setFocusedVersionId] = useState<string | null>(null);
   const [promptExpandedId, setPromptExpandedId] = useState<string | null>(null);
   const displayAsset = useMemo(() => ensureWorkflowAssetVgp(asset), [asset]);
   const vgp = displayAsset.vgp;
+
+  /** 与当前 `displayKey` 对应的 VGP 版本（左侧节点图切换时同步高亮） */
+  const selectedVersionId = useMemo(() => {
+    if (!vgp) return null;
+    const dk = asset.displayKey;
+    for (const id of vgp.versionOrder) {
+      const v = vgp.versionsById[id];
+      if (!v) continue;
+      const key = v.imageRef.kind === 'original_field' ? 'original' : v.imageRef.key;
+      if (key === dk) return id;
+    }
+    return null;
+  }, [asset.displayKey, vgp]);
 
   if (!vgp) {
     if (mode === 'inline') {
@@ -120,35 +132,6 @@ export const WorkflowGenerationRecordPanel: React.FC<WorkflowGenerationRecordPan
           </div>
         ) : null}
 
-        <div className="p-4 border-b border-white/5">
-          <p className="text-[9px] font-black uppercase text-gray-500 mb-2">步骤缩略图</p>
-          <div className="overflow-x-auto overflow-y-hidden no-scrollbar">
-            <div className="inline-flex min-w-max gap-2 items-end pr-1">
-            {orderedVersions.map((v) => (
-              <button
-                key={v.id}
-                type="button"
-                onClick={() => {
-                  setFocusedVersionId(v.id);
-                  const key = v.imageRef.kind === 'original_field' ? 'original' : v.imageRef.key;
-                  onSelectDisplayKey?.(key);
-                }}
-                className={`relative rounded-lg border overflow-hidden w-16 h-16 shrink-0 ${focusedVersionId === v.id ? 'ring-2 ring-blue-500' : 'border-white/10'}`}
-              >
-                <img
-                  src={resolveVersionImageSrc(displayAsset, v)}
-                  alt=""
-                  className="w-full h-full object-cover"
-                />
-                <span className="absolute bottom-0 inset-x-0 bg-black/60 text-[7px] text-center text-white py-0.5">
-                  {v.stepIndex}
-                </span>
-              </button>
-            ))}
-            </div>
-          </div>
-        </div>
-
         <div className="p-4 space-y-4">
           <div className="flex items-center justify-between gap-2">
             <p className="text-[10px] text-gray-500">
@@ -174,7 +157,7 @@ export const WorkflowGenerationRecordPanel: React.FC<WorkflowGenerationRecordPan
               <div
                 key={v.id}
                 id={`vgp-step-${v.id}`}
-                className={`rounded-xl border p-3 ${focusedVersionId === v.id ? 'border-blue-500/40 bg-blue-500/5' : 'border-white/10 bg-white/[0.03]'}`}
+                className={`rounded-xl border p-3 ${selectedVersionId === v.id ? 'border-blue-500/40 bg-blue-500/5' : 'border-white/10 bg-white/[0.03]'}`}
               >
                 <div className="text-[10px] font-black text-blue-300/90">
                   第 {v.stepIndex} 步 · {getStepLabel(v.stepKey)}
