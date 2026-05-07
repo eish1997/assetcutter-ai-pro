@@ -4,9 +4,10 @@
  *
  * 内存：超大图 / data URL 全分辨率上传 GPU 易导致标签页 OOM，故在 CPU 侧按最长边缩小后再建纹理。
  */
-import React, { useEffect, useRef, useState } from 'react';
+import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import type { PanoramaViewportProjection, PanoLocalReprojectSnapshot } from '../services/panoViewportProjection';
 
 /** 全景贴图最长边上限（像素），控制 WebGL 显存与 mipmap 开销 */
 const PANORAMA_MAX_TEXTURE_EDGE = 4096;
@@ -72,20 +73,116 @@ function buildPanoramaTextureFromImage(img: HTMLImageElement): THREE.CanvasTextu
   return tex;
 }
 
+function wrap01(u: number): number {
+  let x = u % 1;
+  if (x < 0) x += 1;
+  return x;
+}
+
 export type EquirectangularPanoramaCanvasProps = {
   imageSrc: string;
   className?: string;
 };
 
-export const EquirectangularPanoramaCanvas: React.FC<EquirectangularPanoramaCanvasProps> = ({
-  imageSrc,
-  className = '',
-}) => {
-  /** 外层尺寸；勿在此节点上 innerHTML，以免破坏 React 管理的覆盖层 */
+export const EquirectangularPanoramaCanvas = forwardRef<
+  PanoramaViewportProjection | null,
+  EquirectangularPanoramaCanvasProps
+>(function EquirectangularPanoramaCanvas({ imageSrc, className = '' }, ref) {
   const rootRef = useRef<HTMLDivElement>(null);
-  /** 仅挂载 WebGL canvas，React 不向此节点插入其它子节点 */
   const mountRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+
+  const liveRef = useRef<{
+    camera: THREE.PerspectiveCamera | null;
+    mesh: THREE.Mesh | null;
+    renderer: THREE.WebGLRenderer | null;
+  }>({ camera: null, mesh: null, renderer: null });
+
+  const animListenersRef = useRef(new Set<() => void>());
+
+  useImperativeHandle(ref, (): PanoramaViewportProjection => {
+    return {
+      clientToEquirectNorm(clientX, clientY) {
+        const { camera, mesh, renderer } = liveRef.current;
+        if (!camera || !mesh || !renderer) return null;
+        const canvas = renderer.domElement;
+        const rect = canvas.getBoundingClientRect();
+        if (rect.width < 1 || rect.height < 1) return null;
+        const ndcX = ((clientX - rect.left) / rect.width) * 2 - 1;
+        const ndcY = -(((clientY - rect.top) / rect.height) * 2 - 1);
+        const raycaster = new THREE.Raycaster();
+        raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
+        const hits = raycaster.intersectObject(mesh, false);
+        if (!hits.length) return null;
+        const dir = hits[0]!.point.clone().normalize();
+        const lat = Math.asin(THREE.MathUtils.clamp(dir.y, -1, 1));
+        const lon = Math.atan2(dir.x, dir.z);
+        const u = wrap01(lon / (2 * Math.PI) + 0.5);
+        const v = THREE.MathUtils.clamp(0.5 - lat / Math.PI, 0, 1);
+        return { x: u, y: v };
+      },
+      equirectNormToClient(u, v) {
+        const { camera, renderer } = liveRef.current;
+        if (!camera || !renderer) return null;
+        const uu = wrap01(u);
+        const vv = THREE.MathUtils.clamp(v, 0, 1);
+        const lon = (uu - 0.5) * 2 * Math.PI;
+        const lat = (0.5 - vv) * Math.PI;
+        const wx = Math.cos(lat) * Math.sin(lon);
+        const wy = Math.sin(lat);
+        const wz = Math.cos(lat) * Math.cos(lon);
+        const worldPos = new THREE.Vector3(wx, wy, wz).multiplyScalar(500);
+        const camPos = new THREE.Vector3();
+        camera.getWorldPosition(camPos);
+        const toSurf = worldPos.clone().sub(camPos);
+        const forward = new THREE.Vector3();
+        camera.getWorldDirection(forward);
+        if (toSurf.dot(forward) < 0.02) return null;
+        const projected = worldPos.clone().project(camera);
+        if (projected.z > 1) return null;
+        const rect = renderer.domElement.getBoundingClientRect();
+        const sx = (projected.x * 0.5 + 0.5) * rect.width + rect.left;
+        const sy = (-projected.y * 0.5 + 0.5) * rect.height + rect.top;
+        return { x: sx, y: sy };
+      },
+      subscribeAnimation(fn) {
+        const s = animListenersRef.current;
+        s.add(fn);
+        return () => {
+          s.delete(fn);
+        };
+      },
+      captureViewDataUrl(mime, quality) {
+        const { renderer } = liveRef.current;
+        if (!renderer) return null;
+        try {
+          return renderer.domElement.toDataURL(mime ?? 'image/png', quality);
+        } catch {
+          return null;
+        }
+      },
+      getReprojectSnapshot(): PanoLocalReprojectSnapshot | null {
+        const { camera, renderer } = liveRef.current;
+        if (!camera || !renderer) return null;
+        const el = renderer.domElement;
+        const bw = el.width;
+        const bh = el.height;
+        if (bw < 1 || bh < 1) return null;
+        const q = new THREE.Quaternion();
+        camera.getWorldQuaternion(q);
+        const p = new THREE.Vector3();
+        camera.getWorldPosition(p);
+        return {
+          bufferW: bw,
+          bufferH: bh,
+          fovDeg: camera.fov,
+          aspect: camera.aspect,
+          cameraPosition: [p.x, p.y, p.z],
+          cameraQuaternion: [q.x, q.y, q.z, q.w],
+        };
+      },
+    };
+  }, []);
 
   useEffect(() => {
     const root = rootRef.current;
@@ -109,7 +206,8 @@ export const EquirectangularPanoramaCanvas: React.FC<EquirectangularPanoramaCanv
     const D = 0.02;
     camera.position.set(0, 0, D);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: false, alpha: false });
+    /** `preserveDrawingBuffer`：`captureViewDataUrl` / 裁切依赖 `toDataURL`，默认 false 时帧缓冲可能被清空导致透明快照 */
+    const renderer = new THREE.WebGLRenderer({ antialias: false, alpha: false, preserveDrawingBuffer: true });
     renderer.setSize(width, height);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -160,6 +258,8 @@ export const EquirectangularPanoramaCanvas: React.FC<EquirectangularPanoramaCanv
     controls.dampingFactor = 0.08;
     controls.update();
 
+    liveRef.current = { camera, mesh: null, renderer };
+
     setStatus('loading');
     void loadImageElement(imageSrc)
       .then((img) => {
@@ -179,6 +279,7 @@ export const EquirectangularPanoramaCanvas: React.FC<EquirectangularPanoramaCanv
         material = new THREE.MeshBasicMaterial({ map: texture });
         mesh = new THREE.Mesh(geometry, material);
         scene.add(mesh);
+        liveRef.current = { camera, mesh, renderer };
         setStatus('ready');
       })
       .catch(() => {
@@ -200,11 +301,19 @@ export const EquirectangularPanoramaCanvas: React.FC<EquirectangularPanoramaCanv
       animationId = requestAnimationFrame(tick);
       controls?.update();
       renderer.render(scene, camera);
+      for (const fn of animListenersRef.current) {
+        try {
+          fn();
+        } catch {
+          /* ignore */
+        }
+      }
     };
     tick();
 
     return () => {
       cancelled = true;
+      liveRef.current = { camera: null, mesh: null, renderer: null };
       cancelAnimationFrame(animationId);
       ro.disconnect();
       renderer.domElement.removeEventListener('wheel', onWheelZoom);
@@ -241,4 +350,4 @@ export const EquirectangularPanoramaCanvas: React.FC<EquirectangularPanoramaCanv
       ) : null}
     </div>
   );
-};
+});

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Image as ImageIcon } from 'lucide-react';
+import { Image as ImageIcon, Maximize2, Minimize2 } from 'lucide-react';
 import { SUPPORTED_IMAGE_SIZES } from '../types';
 import { useEffectiveImageGearRows } from '../hooks/useEffectiveImageGearRows';
 import {
@@ -35,9 +35,15 @@ export type WorkspaceQuickComposeBarProps = {
   visible: boolean;
   /**
    * `floating`：可拖动，默认贴底居中附近。
-   * `lightbox`：大图预览内固定贴底水平居中，禁用拖动 / 加图 / 拖入，附图由外层提交逻辑注入。
+   * `lightbox`：大图预览内 portal；可拖动定位（与全局相同），禁用加图 / 拖入，附图由外层提交逻辑注入。
    */
   placement?: 'floating' | 'lightbox';
+  /**
+   * 仅 `lightbox`：选区底边中点（视口 CSS 像素）。非空时输入条移到该点下方；`null` 时恢复默认贴底居中。
+   */
+  lightboxAnchorClient?: { x: number; y: number } | null;
+  /** 仅 `lightbox`：递增时强制将输入条复位到默认贴底（提交后即时归位） */
+  lightboxLayoutResetNonce?: number;
   /** 非空时覆盖根据模式推导的输入框 placeholder */
   placeholderOverride?: string;
   /** 无拖入预设卡片时生效；有卡片时提交以卡片能力为准 */
@@ -71,6 +77,8 @@ export type WorkspaceQuickComposeBarProps = {
 const QC_ASPECT_PRIMARY = ['16:9', '4:3', '1:1', '3:4', '9:16'] as const;
 
 const VIEW_MARGIN = 8;
+/** 快捷条默认贴底：底边距视口底约 28px（与旧逻辑 top≈vh−92、高≈64 一致：92−64=28） */
+const QUICK_COMPOSE_BAR_BOTTOM_GAP = 28;
 
 /** 将 fixed 定位的 left/top 限制在当前视口内（随窗口缩放更新） */
 function clampBarToViewport(
@@ -112,6 +120,8 @@ function readImageFileAsDataUrl(file: File): Promise<string> {
 export default function WorkspaceQuickComposeBar({
   visible,
   placement = 'floating',
+  lightboxAnchorClient = null,
+  lightboxLayoutResetNonce = 0,
   placeholderOverride,
   composeMode,
   onComposeModeChange,
@@ -137,9 +147,16 @@ export default function WorkspaceQuickComposeBar({
   const dragOffsetRef = useRef<{ x: number; y: number } | null>(null);
   const settingsTriggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  /** 展开输入区前记录条形容器底边（视口 Y），用于增高时固定底边、向上延伸 */
+  const expandAnchorBottomRef = useRef<number | null>(null);
+  /** 收起前记录底边，用于变矮时固定底边、向上收合（与展开对称） */
+  const collapseAnchorBottomRef = useRef<number | null>(null);
+  const prevInputExpandedRef = useRef(false);
   const [dragging, setDragging] = useState(false);
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  /** 展开：输入区变高、整条变窄，便于编辑长文案 */
+  const [inputExpanded, setInputExpanded] = useState(false);
   const [panelPos, setPanelPos] = useState<{
     /** 与触发药丸水平居中对齐：样式 left + translateX(-50%) */
     anchorX: number;
@@ -158,13 +175,23 @@ export default function WorkspaceQuickComposeBar({
   const resetToDefaultPosition = useCallback(() => {
     const vw = window.innerWidth;
     const vh = window.innerHeight;
-    const width = Math.min(576, Math.max(320, vw - 24));
-    const left = Math.max(VIEW_MARGIN, Math.floor((vw - width) / 2));
-    const topDesired = vh - 92;
-    const estH = 64;
-    const top = Math.max(VIEW_MARGIN, Math.min(vh - estH - VIEW_MARGIN, topDesired));
-    setPosition(clampBarToViewport({ left, top }, null, vw, vh));
-  }, []);
+    const el = barRef.current;
+    const maxWCollapsed = Math.min(704, Math.max(280, vw - 24));
+    const maxWExpanded = Math.min(448, Math.max(280, vw - 24));
+    let w: number;
+    let h: number;
+    if (el) {
+      const r = el.getBoundingClientRect();
+      w = r.width > 1 ? Math.round(r.width) : inputExpanded ? maxWExpanded : maxWCollapsed;
+      h = r.height > 1 ? Math.round(r.height) : inputExpanded ? 140 : 64;
+    } else {
+      w = inputExpanded ? maxWExpanded : maxWCollapsed;
+      h = inputExpanded ? 140 : 64;
+    }
+    const left = Math.max(VIEW_MARGIN, Math.floor((vw - w) / 2));
+    const top = vh - QUICK_COMPOSE_BAR_BOTTOM_GAP - h;
+    setPosition(clampBarToViewport({ left, top }, el, vw, vh));
+  }, [inputExpanded]);
 
   const canAddMore = attachedImages.length < maxAttachedImages;
   const isLightbox = placement === 'lightbox';
@@ -338,10 +365,34 @@ export default function WorkspaceQuickComposeBar({
       setSettingsOpen(false);
       return;
     }
-    if (isLightbox) return;
+    if (placement === 'lightbox') return;
     if (position) return;
     resetToDefaultPosition();
-  }, [position, resetToDefaultPosition, visible, isLightbox]);
+  }, [position, resetToDefaultPosition, visible, placement]);
+
+  useLayoutEffect(() => {
+    if (!visible || placement !== 'lightbox') return;
+    if (lightboxAnchorClient) return;
+    resetToDefaultPosition();
+  }, [visible, placement, lightboxAnchorClient, lightboxLayoutResetNonce, resetToDefaultPosition]);
+
+  useLayoutEffect(() => {
+    if (!visible || placement !== 'lightbox' || !lightboxAnchorClient) return;
+    const gap = 14;
+    const apply = () => {
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const el = barRef.current;
+      const r = el?.getBoundingClientRect();
+      const w = r && r.width > 1 ? r.width : Math.min(576, Math.max(320, vw - 24));
+      const left = lightboxAnchorClient.x - w / 2;
+      const top = lightboxAnchorClient.y + gap;
+      setPosition(clampBarToViewport({ left, top }, el ?? null, vw, vh));
+    };
+    apply();
+    const raf = requestAnimationFrame(apply);
+    return () => cancelAnimationFrame(raf);
+  }, [visible, placement, lightboxAnchorClient, resetToDefaultPosition, draft, promptCards.length, inputExpanded]);
 
   useEffect(() => {
     if (!dragging) return;
@@ -434,8 +485,46 @@ export default function WorkspaceQuickComposeBar({
     });
   }, []);
 
+  useLayoutEffect(() => {
+    if (!visible) return;
+    const el = barRef.current;
+    if (!el) return;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const wasExpanded = prevInputExpandedRef.current;
+    prevInputExpandedRef.current = inputExpanded;
+
+    if (inputExpanded && !wasExpanded) {
+      const bottom = expandAnchorBottomRef.current;
+      expandAnchorBottomRef.current = null;
+      setPosition((prev) => {
+        if (bottom == null || prev == null) return prev;
+        const h = el.getBoundingClientRect().height;
+        const nextTop = bottom - h;
+        return clampBarToViewport({ left: prev.left, top: nextTop }, el, vw, vh);
+      });
+      return;
+    }
+
+    if (!inputExpanded && wasExpanded) {
+      const bottom = collapseAnchorBottomRef.current;
+      collapseAnchorBottomRef.current = null;
+      if (bottom != null) {
+        setPosition((prev) => {
+          if (prev == null) return prev;
+          const h = el.getBoundingClientRect().height;
+          const nextTop = bottom - h;
+          return clampBarToViewport({ left: prev.left, top: nextTop }, el, vw, vh);
+        });
+        return;
+      }
+    }
+
+    clampPositionToViewport();
+  }, [inputExpanded, visible, clampPositionToViewport]);
+
   useEffect(() => {
-    if (!visible || isLightbox) return;
+    if (!visible) return;
     const scheduleClamp = () => {
       requestAnimationFrame(() => clampPositionToViewport());
     };
@@ -448,7 +537,7 @@ export default function WorkspaceQuickComposeBar({
       vv?.removeEventListener('resize', scheduleClamp);
       vv?.removeEventListener('scroll', scheduleClamp);
     };
-  }, [visible, isLightbox, clampPositionToViewport]);
+  }, [visible, clampPositionToViewport]);
 
   if (!visible) return null;
 
@@ -629,25 +718,19 @@ export default function WorkspaceQuickComposeBar({
         )
       : null;
 
-  const barPositionStyle: React.CSSProperties | undefined = isLightbox
-    ? {
-        left: '50%',
-        bottom: '1.25rem',
-        top: 'auto',
-        transform: 'translateX(-50%)',
-        userSelect: 'auto',
-      }
-    : position
-      ? { left: `${position.left}px`, top: `${position.top}px`, userSelect: dragging ? 'none' : 'auto' }
-      : undefined;
+  const barPositionStyle: React.CSSProperties | undefined = position
+    ? { left: `${position.left}px`, top: `${position.top}px`, userSelect: dragging ? 'none' : 'auto' }
+    : undefined;
 
   return (
     <>
       <div
         ref={barRef}
-        className={`pointer-events-auto fixed w-[min(44rem,calc(100vw-1.5rem))] max-w-[96vw] px-2 ${
-          isLightbox ? 'z-[2500]' : 'z-[1600]'
-        }`}
+        className={`pointer-events-auto fixed max-w-[96vw] px-2 ${
+          inputExpanded
+            ? 'w-[min(28rem,calc(100vw-1.5rem))]'
+            : 'w-[min(44rem,calc(100vw-1.5rem))]'
+        } ${isLightbox ? 'z-[2500]' : 'z-[1600]'}`}
         style={barPositionStyle}
         onPaste={isLightbox ? undefined : onPaste}
         onClick={isLightbox ? (e) => e.stopPropagation() : undefined}
@@ -692,194 +775,423 @@ export default function WorkspaceQuickComposeBar({
             </div>
           ) : null}
 
-          <div
-            className={`flex items-center gap-2 px-2 py-1.5 ${WORKFLOW_QUICK_COMPOSE_BAR_SHELL}`}
-            role="search"
-          >
-            {!isLightbox ? (
-              <input
-                ref={fileRef}
-                type="file"
-                accept="image/*"
-                multiple={maxAttachedImages >= 2}
-                className="hidden"
-                onChange={(e) => void onPickFiles(e.target.files)}
-              />
-            ) : null}
-            {isLightbox ? (
-              <div
-                className="grid h-9 w-9 shrink-0 place-items-center rounded-md text-gray-400"
-                title="附图已固定为当前大图预览（含平面标注），提交时合成"
-              >
-                <ImageIcon className="h-[1.125rem] w-[1.125rem]" strokeWidth={2.2} aria-hidden />
-              </div>
-            ) : (
-              <>
+          {inputExpanded ? (
+            <div
+              className={`flex flex-col gap-2 px-2 py-2 ${WORKFLOW_QUICK_COMPOSE_BAR_SHELL}`}
+              role="search"
+            >
+              {!isLightbox ? (
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept="image/*"
+                  multiple={maxAttachedImages >= 2}
+                  className="hidden"
+                  onChange={(e) => void onPickFiles(e.target.files)}
+                />
+              ) : null}
+
+              <div className="flex min-w-0 items-start gap-1.5">
+                <div
+                  className="min-w-0 flex-1"
+                  onDragOver={isLightbox ? undefined : handleComposeInputDragOver}
+                  onDrop={isLightbox ? undefined : handleComposeInputDrop}
+                  onPaste={isLightbox ? undefined : onPaste}
+                >
+                  <textarea
+                    value={draft}
+                    disabled={disabled}
+                    onChange={(e) => onDraftChange(e.target.value)}
+                    onPaste={isLightbox ? undefined : onPaste}
+                    onKeyDown={(e) => {
+                      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                        e.preventDefault();
+                        if (!disabled) onSubmit();
+                      }
+                    }}
+                    placeholder={placeholder}
+                    rows={5}
+                    className="max-h-40 min-h-[5.5rem] w-full resize-y bg-transparent py-1 text-[13px] leading-snug text-gray-100 placeholder:text-gray-500 outline-none disabled:opacity-45 [scrollbar-width:thin]"
+                    aria-label={isLightbox ? '大图预览快捷生成描述' : '快捷生成描述'}
+                  />
+                </div>
                 <button
                   type="button"
                   disabled={disabled}
-                  onDoubleClick={() => {
-                    dragOffsetRef.current = null;
-                    setDragging(false);
-                    resetToDefaultPosition();
+                  onClick={() => {
+                    const r = barRef.current?.getBoundingClientRect();
+                    collapseAnchorBottomRef.current = r != null && r.height > 0 ? r.bottom : null;
+                    setInputExpanded(false);
                   }}
-                  onPointerDown={(e) => {
-                    const rect = barRef.current?.getBoundingClientRect();
-                    if (!rect) return;
-                    dragOffsetRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
-                    setSettingsOpen(false);
-                    setDragging(true);
-                  }}
-                  className="flex h-9 w-7 shrink-0 cursor-grab items-center justify-center rounded-md text-gray-400 outline-none transition-colors hover:bg-white/[0.08] hover:text-white active:cursor-grabbing disabled:opacity-35 focus-visible:ring-2 focus-visible:ring-blue-500/50"
-                  title="拖动输入框（双击回到默认位置）"
-                  aria-label="拖动输入框"
+                  className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-md text-gray-400 outline-none transition-colors hover:bg-white/[0.08] hover:text-white disabled:opacity-35 focus-visible:ring-2 focus-visible:ring-blue-500/50"
+                  title="收起为单行"
+                  aria-label="收起输入区"
+                  aria-pressed
                 >
-                  <span className="select-none text-xs leading-none">⋮⋮</span>
+                  <Minimize2 className="h-4 w-4" strokeWidth={2.2} aria-hidden />
                 </button>
+              </div>
 
-                <button
-                  type="button"
-                  disabled={disabled || !canAddMore}
-                  onClick={() => fileRef.current?.click()}
-                  className="grid h-9 w-9 shrink-0 place-items-center rounded-md text-gray-300 outline-none transition-colors hover:bg-white/[0.08] hover:text-white disabled:opacity-35 focus-visible:ring-2 focus-visible:ring-blue-500/50"
-                  title={canAddMore ? '添加参考图' : `已达上限（${maxAttachedImages} 张）`}
-                  aria-label="添加参考图"
-                >
-                  <svg
-                    viewBox="0 0 24 24"
-                    className="h-[1.125rem] w-[1.125rem]"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2.2"
-                    strokeLinecap="round"
-                    aria-hidden
+              <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-2 gap-y-1.5 border-t border-white/[0.06] pt-2">
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={disabled}
+                    onDoubleClick={() => {
+                      dragOffsetRef.current = null;
+                      setDragging(false);
+                      resetToDefaultPosition();
+                    }}
+                    onPointerDown={(e) => {
+                      const rect = barRef.current?.getBoundingClientRect();
+                      if (!rect) return;
+                      dragOffsetRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+                      setSettingsOpen(false);
+                      setDragging(true);
+                    }}
+                    className="flex h-9 w-7 shrink-0 cursor-grab items-center justify-center rounded-md text-gray-400 outline-none transition-colors hover:bg-white/[0.08] hover:text-white active:cursor-grabbing disabled:opacity-35 focus-visible:ring-2 focus-visible:ring-blue-500/50"
+                    title="拖动输入框（双击回到默认位置）"
+                    aria-label="拖动输入框"
                   >
-                    <path d="M12 5v14M5 12h14" />
-                  </svg>
-                </button>
-
-                {attachedImages.length > 0 ? (
-                  <div className="flex max-w-[min(200px,28vw)] shrink-0 items-center gap-1 overflow-x-auto py-0.5 [scrollbar-width:thin]">
-                    {attachedImages.map((src, i) => (
-                      <div
-                        key={`${i}-${src.slice(0, 48)}`}
-                        className="relative h-9 w-9 shrink-0 overflow-hidden rounded-xl ring-1 ring-white/[0.12]"
+                    <span className="select-none text-xs leading-none">⋮⋮</span>
+                  </button>
+                  {isLightbox ? (
+                    <div
+                      className="grid h-9 w-9 shrink-0 place-items-center rounded-md text-gray-400"
+                      title="附图已固定为当前大图预览（含平面标注），提交时合成"
+                    >
+                      <ImageIcon className="h-[1.125rem] w-[1.125rem]" strokeWidth={2.2} aria-hidden />
+                    </div>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        disabled={disabled || !canAddMore}
+                        onClick={() => fileRef.current?.click()}
+                        className="grid h-9 w-9 shrink-0 place-items-center rounded-md text-gray-300 outline-none transition-colors hover:bg-white/[0.08] hover:text-white disabled:opacity-35 focus-visible:ring-2 focus-visible:ring-blue-500/50"
+                        title={canAddMore ? '添加参考图' : `已达上限（${maxAttachedImages} 张）`}
+                        aria-label="添加参考图"
                       >
-                        <img src={src} alt="" className="h-full w-full object-cover" />
-                        <button
-                          type="button"
-                          onClick={() => onRemoveImageAt(i)}
-                          className="absolute inset-0 flex items-center justify-center bg-black/55 text-[10px] font-bold text-white opacity-0 transition-opacity hover:opacity-100"
-                          title="移除此图"
-                          aria-label="移除此图"
+                        <svg
+                          viewBox="0 0 24 24"
+                          className="h-[1.125rem] w-[1.125rem]"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth={2.2}
+                          strokeLinecap="round"
+                          aria-hidden
                         >
-                          ×
-                        </button>
-                      </div>
+                          <path d="M12 5v14M5 12h14" />
+                        </svg>
+                      </button>
+
+                      {attachedImages.length > 0 ? (
+                        <div className="flex max-w-[min(220px,40vw)] shrink-0 items-center gap-1 overflow-x-auto py-0.5 [scrollbar-width:thin]">
+                          {attachedImages.map((src, i) => (
+                            <div
+                              key={`${i}-${src.slice(0, 48)}`}
+                              className="relative h-9 w-9 shrink-0 overflow-hidden rounded-xl ring-1 ring-white/[0.12]"
+                            >
+                              <img src={src} alt="" className="h-full w-full object-cover" />
+                              <button
+                                type="button"
+                                onClick={() => onRemoveImageAt(i)}
+                                className="absolute inset-0 flex items-center justify-center bg-black/55 text-[10px] font-bold text-white opacity-0 transition-opacity hover:opacity-100"
+                                title="移除此图"
+                                aria-label="移除此图"
+                              >
+                                ×
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                    </>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  <div
+                    className="flex shrink-0 items-center gap-0.5"
+                    title={
+                      modeLockedByInputPresets
+                        ? '已拖入预设卡片，提交时以卡片能力为准（模式切换已锁定）'
+                        : '快捷模式：文 · 图 · 3D（无拖入预设时使用）'
+                    }
+                  >
+                    {(['text', 'image', '3d'] as const).map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        disabled={disabled || modeLockedByInputPresets}
+                        onClick={() => {
+                          if (modeLockedByInputPresets) return;
+                          onComposeModeChange(m);
+                        }}
+                        className={modeChipCls(composeMode === m)}
+                      >
+                        {m === 'text' ? '文' : m === 'image' ? '图' : '3D'}
+                      </button>
                     ))}
                   </div>
-                ) : null}
-              </>
-            )}
 
+                  <button
+                    ref={settingsTriggerRef}
+                    type="button"
+                    disabled={disabled}
+                    onClick={() => setSettingsOpen((o) => !o)}
+                    className="flex max-w-[min(11rem,50vw)] shrink-0 items-center gap-1 overflow-hidden rounded-md bg-white/[0.06] py-1 pl-2 pr-1.5 text-left ring-1 ring-white/[0.08] outline-none transition-colors hover:bg-white/[0.1] focus-visible:ring-2 focus-visible:ring-blue-500/45"
+                    title="生成参数"
+                    aria-expanded={settingsOpen}
+                    aria-haspopup="dialog"
+                  >
+                    <span className="truncate text-[9px] font-semibold text-gray-200">{gearSummary}</span>
+                    <span className="shrink-0 text-[9px] text-gray-600">·</span>
+                    <span className="shrink-0 text-[9px] text-gray-400">{aspectSummary}</span>
+                    {sizeSummary ? (
+                      <>
+                        <span className="shrink-0 text-[9px] text-gray-600">·</span>
+                        <span className="shrink-0 text-[9px] font-mono text-gray-400">{sizeSummary}</span>
+                      </>
+                    ) : null}
+                    {allowBatchCount ? (
+                      <>
+                        <span className="shrink-0 text-[9px] text-gray-600">·</span>
+                        <span className="shrink-0 text-[9px] font-bold tabular-nums text-gray-400">x{countSummary}</span>
+                      </>
+                    ) : null}
+                    <span className="ml-px shrink-0 text-[8px] text-gray-600">{settingsOpen ? '▲' : '▼'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={disabled}
+                    onClick={onSubmit}
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white text-[#0a0a0c] shadow-md outline-none transition-transform hover:scale-[1.03] active:scale-[0.98] disabled:opacity-35 focus-visible:ring-2 focus-visible:ring-blue-500/55"
+                    title="加入队列并执行"
+                    aria-label="加入队列并执行"
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      className="h-5 w-5"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth={2.2}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      aria-hidden
+                    >
+                      <path d="M5 12h14M13 5l7 7-7 7" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : (
             <div
-              className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto py-0.5 [scrollbar-width:thin]"
-              onDragOver={isLightbox ? undefined : handleComposeInputDragOver}
-              onDrop={isLightbox ? undefined : handleComposeInputDrop}
-              onPaste={isLightbox ? undefined : onPaste}
+              className={`flex items-center gap-2 px-2 py-1.5 ${WORKFLOW_QUICK_COMPOSE_BAR_SHELL}`}
+              role="search"
             >
-              <input
-                type="text"
-                value={draft}
+              {!isLightbox ? (
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept="image/*"
+                  multiple={maxAttachedImages >= 2}
+                  className="hidden"
+                  onChange={(e) => void onPickFiles(e.target.files)}
+                />
+              ) : null}
+              <button
+                type="button"
                 disabled={disabled}
-                onChange={(e) => onDraftChange(e.target.value)}
-                onPaste={isLightbox ? undefined : onPaste}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    if (!disabled) onSubmit();
-                  }
+                onDoubleClick={() => {
+                  dragOffsetRef.current = null;
+                  setDragging(false);
+                  resetToDefaultPosition();
                 }}
-                placeholder={placeholder}
-                className="min-w-0 flex-1 bg-transparent py-1.5 text-[13px] text-gray-100 placeholder:text-gray-500 outline-none disabled:opacity-45"
-                aria-label={isLightbox ? '大图预览快捷生成描述' : '快捷生成描述'}
-              />
-            </div>
-
-            <div
-              className="flex shrink-0 items-center gap-0.5"
-              title={
-                modeLockedByInputPresets
-                  ? '已拖入预设卡片，提交时以卡片能力为准（模式切换已锁定）'
-                  : '快捷模式：文 · 图 · 3D（无拖入预设时使用）'
-              }
-            >
-              {(['text', 'image', '3d'] as const).map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  disabled={disabled || modeLockedByInputPresets}
-                  onClick={() => {
-                    if (modeLockedByInputPresets) return;
-                    onComposeModeChange(m);
-                  }}
-                  className={modeChipCls(composeMode === m)}
+                onPointerDown={(e) => {
+                  const rect = barRef.current?.getBoundingClientRect();
+                  if (!rect) return;
+                  dragOffsetRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+                  setSettingsOpen(false);
+                  setDragging(true);
+                }}
+                className="flex h-9 w-7 shrink-0 cursor-grab items-center justify-center rounded-md text-gray-400 outline-none transition-colors hover:bg-white/[0.08] hover:text-white active:cursor-grabbing disabled:opacity-35 focus-visible:ring-2 focus-visible:ring-blue-500/50"
+                title="拖动输入框（双击回到默认位置）"
+                aria-label="拖动输入框"
+              >
+                <span className="select-none text-xs leading-none">⋮⋮</span>
+              </button>
+              {isLightbox ? (
+                <div
+                  className="grid h-9 w-9 shrink-0 place-items-center rounded-md text-gray-400"
+                  title="附图已固定为当前大图预览（含平面标注），提交时合成"
                 >
-                  {m === 'text' ? '文' : m === 'image' ? '图' : '3D'}
-                </button>
-              ))}
+                  <ImageIcon className="h-[1.125rem] w-[1.125rem]" strokeWidth={2.2} aria-hidden />
+                </div>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    disabled={disabled || !canAddMore}
+                    onClick={() => fileRef.current?.click()}
+                    className="grid h-9 w-9 shrink-0 place-items-center rounded-md text-gray-300 outline-none transition-colors hover:bg-white/[0.08] hover:text-white disabled:opacity-35 focus-visible:ring-2 focus-visible:ring-blue-500/50"
+                    title={canAddMore ? '添加参考图' : `已达上限（${maxAttachedImages} 张）`}
+                    aria-label="添加参考图"
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      className="h-[1.125rem] w-[1.125rem]"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth={2.2}
+                      strokeLinecap="round"
+                      aria-hidden
+                    >
+                      <path d="M12 5v14M5 12h14" />
+                    </svg>
+                  </button>
+
+                  {attachedImages.length > 0 ? (
+                    <div className="flex max-w-[min(200px,28vw)] shrink-0 items-center gap-1 overflow-x-auto py-0.5 [scrollbar-width:thin]">
+                      {attachedImages.map((src, i) => (
+                        <div
+                          key={`${i}-${src.slice(0, 48)}`}
+                          className="relative h-9 w-9 shrink-0 overflow-hidden rounded-xl ring-1 ring-white/[0.12]"
+                        >
+                          <img src={src} alt="" className="h-full w-full object-cover" />
+                          <button
+                            type="button"
+                            onClick={() => onRemoveImageAt(i)}
+                            className="absolute inset-0 flex items-center justify-center bg-black/55 text-[10px] font-bold text-white opacity-0 transition-opacity hover:opacity-100"
+                            title="移除此图"
+                            aria-label="移除此图"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </>
+              )}
+
+              <div
+                className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto py-0.5 [scrollbar-width:thin]"
+                onDragOver={isLightbox ? undefined : handleComposeInputDragOver}
+                onDrop={isLightbox ? undefined : handleComposeInputDrop}
+                onPaste={isLightbox ? undefined : onPaste}
+              >
+                <input
+                  type="text"
+                  value={draft}
+                  disabled={disabled}
+                  onChange={(e) => onDraftChange(e.target.value)}
+                  onPaste={isLightbox ? undefined : onPaste}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      if (!disabled) onSubmit();
+                    }
+                  }}
+                  placeholder={placeholder}
+                  className="min-w-0 flex-1 bg-transparent py-1.5 text-[13px] text-gray-100 placeholder:text-gray-500 outline-none disabled:opacity-45"
+                  aria-label={isLightbox ? '大图预览快捷生成描述' : '快捷生成描述'}
+                />
+              </div>
+
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={() => {
+                  const r = barRef.current?.getBoundingClientRect();
+                  expandAnchorBottomRef.current = r != null && r.height > 0 ? r.bottom : null;
+                  setInputExpanded(true);
+                }}
+                className="grid h-9 w-8 shrink-0 place-items-center rounded-md text-gray-400 outline-none transition-colors hover:bg-white/[0.08] hover:text-white disabled:opacity-35 focus-visible:ring-2 focus-visible:ring-blue-500/50"
+                title="展开多行（条宽变窄）；多行时 Ctrl+Enter 提交"
+                aria-label="展开输入区"
+                aria-pressed={false}
+              >
+                <Maximize2 className="h-4 w-4" strokeWidth={2.2} aria-hidden />
+              </button>
+
+              <div
+                className="flex shrink-0 items-center gap-0.5"
+                title={
+                  modeLockedByInputPresets
+                    ? '已拖入预设卡片，提交时以卡片能力为准（模式切换已锁定）'
+                    : '快捷模式：文 · 图 · 3D（无拖入预设时使用）'
+                }
+              >
+                {(['text', 'image', '3d'] as const).map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    disabled={disabled || modeLockedByInputPresets}
+                    onClick={() => {
+                      if (modeLockedByInputPresets) return;
+                      onComposeModeChange(m);
+                    }}
+                    className={modeChipCls(composeMode === m)}
+                  >
+                    {m === 'text' ? '文' : m === 'image' ? '图' : '3D'}
+                  </button>
+                ))}
+              </div>
+
+              <button
+                ref={settingsTriggerRef}
+                type="button"
+                disabled={disabled}
+                onClick={() => setSettingsOpen((o) => !o)}
+                className="flex max-w-[min(11rem,36%)] shrink-0 items-center gap-1 overflow-hidden rounded-md bg-white/[0.06] py-1 pl-2 pr-1.5 text-left ring-1 ring-white/[0.08] outline-none transition-colors hover:bg-white/[0.1] focus-visible:ring-2 focus-visible:ring-blue-500/45"
+                title="生成参数"
+                aria-expanded={settingsOpen}
+                aria-haspopup="dialog"
+              >
+                <span className="truncate text-[9px] font-semibold text-gray-200">{gearSummary}</span>
+                <span className="shrink-0 text-[9px] text-gray-600">·</span>
+                <span className="shrink-0 text-[9px] text-gray-400">{aspectSummary}</span>
+                {sizeSummary ? (
+                  <>
+                    <span className="shrink-0 text-[9px] text-gray-600">·</span>
+                    <span className="shrink-0 text-[9px] font-mono text-gray-400">{sizeSummary}</span>
+                  </>
+                ) : null}
+                {allowBatchCount ? (
+                  <>
+                    <span className="shrink-0 text-[9px] text-gray-600">·</span>
+                    <span className="shrink-0 text-[9px] font-bold tabular-nums text-gray-400">x{countSummary}</span>
+                  </>
+                ) : null}
+                <span className="ml-px shrink-0 text-[8px] text-gray-600">{settingsOpen ? '▲' : '▼'}</span>
+              </button>
+
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={onSubmit}
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white text-[#0a0a0c] shadow-md outline-none transition-transform hover:scale-[1.03] active:scale-[0.98] disabled:opacity-35 focus-visible:ring-2 focus-visible:ring-blue-500/55"
+                title="加入队列并执行"
+                aria-label="加入队列并执行"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  className="h-5 w-5"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={2.2}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden
+                >
+                  <path d="M5 12h14M13 5l7 7-7 7" />
+                </svg>
+              </button>
             </div>
-
-            <button
-            ref={settingsTriggerRef}
-            type="button"
-            disabled={disabled}
-            onClick={() => setSettingsOpen((o) => !o)}
-            className="flex max-w-[min(11rem,36%)] shrink-0 items-center gap-1 overflow-hidden rounded-md bg-white/[0.06] py-1 pl-2 pr-1.5 text-left ring-1 ring-white/[0.08] outline-none transition-colors hover:bg-white/[0.1] focus-visible:ring-2 focus-visible:ring-blue-500/45"
-            title="生成参数"
-            aria-expanded={settingsOpen}
-            aria-haspopup="dialog"
-          >
-            <span className="truncate text-[9px] font-semibold text-gray-200">{gearSummary}</span>
-            <span className="shrink-0 text-[9px] text-gray-600">·</span>
-            <span className="shrink-0 text-[9px] text-gray-400">{aspectSummary}</span>
-            {sizeSummary ? (
-              <>
-                <span className="shrink-0 text-[9px] text-gray-600">·</span>
-                <span className="shrink-0 text-[9px] font-mono text-gray-400">{sizeSummary}</span>
-              </>
-            ) : null}
-            {allowBatchCount ? (
-              <>
-                <span className="shrink-0 text-[9px] text-gray-600">·</span>
-                <span className="shrink-0 text-[9px] font-bold tabular-nums text-gray-400">x{countSummary}</span>
-              </>
-            ) : null}
-            <span className="ml-px shrink-0 text-[8px] text-gray-600">{settingsOpen ? '▲' : '▼'}</span>
-            </button>
-
-            <button
-            type="button"
-            disabled={disabled}
-            onClick={onSubmit}
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white text-[#0a0a0c] shadow-md outline-none transition-transform hover:scale-[1.03] active:scale-[0.98] disabled:opacity-35 focus-visible:ring-2 focus-visible:ring-blue-500/55"
-            title="加入队列并执行"
-            aria-label="加入队列并执行"
-          >
-            <svg
-              viewBox="0 0 24 24"
-              className="h-5 w-5"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2.2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden
-            >
-              <path d="M5 12h14M13 5l7 7-7 7" />
-            </svg>
-            </button>
-          </div>
+          )}
         </div>
       </div>
       {settingsPanel}

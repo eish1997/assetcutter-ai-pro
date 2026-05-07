@@ -47,6 +47,7 @@ import {
   readBodyUtf8,
 } from './http-limits.js';
 import { createBridgeRelay } from './bridge-relay.js';
+import { consumeTrialGeminiSlotForUser } from './trial-gemini-quota-store.js';
 
 const PORT = Number(process.env.PORT || process.env.AUTH_PORT || 9100);
 const BIND_HOST = String(process.env.AUTH_BIND_HOST || '0.0.0.0').trim() || '0.0.0.0';
@@ -293,6 +294,7 @@ function assertCsrf(req, res) {
   /** 与 R2 相同：前端经 VITE_AUTH_API_BASE_URL 跨域 POST，JS 读不到 auth 域名的 ac_csrf；由 assertWriteOrigin + requireAuth 约束 */
   if (pathOnly === '/api/companion-artifacts/resolve-download') return true;
   if (pathOnly.startsWith('/api/tripo')) return true;
+  if (pathOnly === '/api/auth/trial-gemini/consume') return true;
   if (pathOnly.startsWith('/api/debug/client-log')) return true;
   if (pathOnly.startsWith('/api/admin')) {
     const origin = String(req.headers.origin || '');
@@ -583,6 +585,36 @@ const server = http.createServer(async (req, res) => {
       res.setHeader('Set-Cookie', cookieParts);
       await createAuditLog({ action: 'auth.logout', ip: getClientIp(req), userAgent: req.headers['user-agent'] });
       json(res, 200, { ok: true });
+      return;
+    }
+
+    if (path === '/api/auth/trial-gemini/consume' && req.method === 'POST') {
+      await readBody(req);
+      const token = parseCookie(req)[COOKIE_NAME];
+      const dailyLimit = Number(process.env.TRIAL_GEMINI_DAILY_LIMIT || 20);
+      if (token) {
+        const row = await getSessionWithUser(token);
+        if (row?.user?.id) {
+          const r = await consumeTrialGeminiSlotForUser(row.user.id, dailyLimit);
+          if (!r.ok) {
+            json(res, 429, {
+              error: `试用通道每日限 ${r.limit} 次任务，请明日再试或改用自带 API Key 的供应商。`,
+              used: r.used,
+              limit: r.limit,
+              remaining: r.remaining ?? 0,
+            });
+            return;
+          }
+          json(res, 200, {
+            ok: true,
+            used: r.used,
+            limit: r.limit,
+            remaining: r.remaining ?? 0,
+          });
+          return;
+        }
+      }
+      json(res, 401, { error: '未登录' });
       return;
     }
 

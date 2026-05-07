@@ -704,13 +704,13 @@ export function WorkflowSidebarColumn({
       }}
       className={
         variant === 'splitLeft'
-          ? `w-full min-h-0 flex-1 flex flex-col gap-3 overflow-hidden relative isolate ${WORKFLOW_EDGE_GUTTER}`
+          ? `w-full min-h-0 flex-1 flex flex-col gap-2 overflow-hidden relative isolate ${WORKFLOW_EDGE_GUTTER}`
           : wide
-            ? `w-full min-h-0 flex flex-col gap-3 overflow-hidden no-scrollbar shrink-0 max-h-[min(52vh,520px)] relative isolate ${WORKFLOW_EDGE_GUTTER}`
-            : `w-80 shrink-0 min-h-0 flex-1 flex flex-col gap-3 overflow-hidden relative isolate ${WORKFLOW_EDGE_GUTTER}`
+            ? `w-full min-h-0 flex flex-col gap-2 overflow-hidden no-scrollbar shrink-0 max-h-[min(52vh,520px)] relative isolate ${WORKFLOW_EDGE_GUTTER}`
+            : `w-80 shrink-0 min-h-0 flex-1 flex flex-col gap-2 overflow-hidden relative isolate ${WORKFLOW_EDGE_GUTTER}`
       }
     >
-      <div className="sticky top-0 z-40 bg-gradient-to-b from-[#0b0b0d]/96 via-[#0b0b0d]/90 to-transparent pt-2 pb-3">
+      <div className="sticky top-0 z-40 bg-gradient-to-b from-[#0b0b0d]/96 via-[#0b0b0d]/90 to-transparent pt-2 pb-1">
       {topActionMode === 'capabilityPreset' ? (
         <div className="grid grid-cols-5 gap-2" data-capability-preset-action-drop>
           {[
@@ -1169,7 +1169,7 @@ export function WorkflowSidebarColumn({
           </div>
           </div>
       )}
-      <div className="mt-2.5">
+      <div className="mt-1.5">
         <label className="sr-only" htmlFor="workflow-sidebar-cap-search">
           搜索功能
         </label>
@@ -1188,8 +1188,8 @@ export function WorkflowSidebarColumn({
       </div>
       </div>
           {favoriteEntries.length > 0 || visiblePresets.length > 0 ? (
-            <div className="shrink-0 space-y-2">
-              <div className="space-y-2">
+            <div className="shrink-0 space-y-1.5">
+              <div className="space-y-1.5">
                 <div
                   onDragOver={(e) => {
                     if (!draggingActionIdRef.current && !dragTransferHasPlainText(e)) return;

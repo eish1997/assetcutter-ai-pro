@@ -395,10 +395,46 @@ export type ImageOverlayCropPolygon = {
   points: ImageOverlayNormPoint[];
 };
 
+/** 大图「局部重绘」选区（Gemini：扩边裁切 → 生成 → 羽化贴回） */
+export type ImageLocalEditRect = {
+  id: string;
+  kind: 'local_rect';
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+};
+
+export type ImageLocalEditEllipse = {
+  id: string;
+  kind: 'local_ellipse';
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+};
+
+export type ImageLocalEditPolygon = {
+  id: string;
+  kind: 'local_polygon';
+  points: ImageOverlayNormPoint[];
+};
+
+export type ImageLocalEditSelection = ImageLocalEditRect | ImageLocalEditEllipse | ImageLocalEditPolygon;
+
+/** 全景透视预览下：相对 WebGL 画布（renderer 元素）的裁切框，0~1，用于「所见即所得」导出 */
+export type PanoViewportCropNorm = { x: number; y: number; w: number; h: number };
+
 export type ImageOverlayAnnotationDoc = {
   v: 1;
   items: Array<ImageOverlayRectItem | ImageOverlayBrushItem | ImageOverlayTextItem>;
   crops: Array<ImageOverlayCropRect | ImageOverlayCropPolygon>;
+  /** 仅保留一块；与裁切区独立，用于快捷栏局部重绘 */
+  localEdit?: ImageLocalEditSelection | null;
+  /** 全景模式矩形裁切：与 `crops` 二选一语义；导出时对当前透视快照按框裁切 */
+  panoViewportCrop?: PanoViewportCropNorm | null;
+  /** 全景局部重绘：相对当前透视快照画布 0~1 的轴对齐框；与 `localEdit` 互斥（全景下用本字段） */
+  panoLocalEditViewport?: PanoViewportCropNorm | null;
 };
 
 /** 单个资产：原始图 + 各类型结果图，当前展示版本，是否已归档；归档后可按生成顺序拼流程图 */
@@ -453,6 +489,8 @@ export type WorkflowAsset = {
     string,
     {
       executedAt: number;
+      /** 资产卡片/步骤条等展示用短标签（如大图局部重绘写入「局部重绘」） */
+      displayStepLabel?: string;
       /** 结果槽位媒体类型；生视频步骤写入 `video` 以便网格用 `<video>` 预览 */
       mediaKind?: 'image' | 'video';
       /** 生成3D（Tripo）创建成功后记录，便于查询失败时继续查询旧任务而非重建任务 */
@@ -471,10 +509,14 @@ export type WorkflowAsset = {
   /** 标签阶段：coarse=规则粗标，refined=低成本二段式精修 */
   imageTagStage?: Record<string, 'coarse' | 'refined'>;
   /**
-   * 大图预览平面模式下的矢量标注与裁切选区（可再编辑）。
+   * 大图预览**平面**模式下的矢量标注与裁切选区（可再编辑）；与全景分桶，互不覆盖。
    * key 与 `displayKey` 对齐（含 `original` 与各能力步骤 id）。
    */
   imageOverlayAnnotations?: Record<string, ImageOverlayAnnotationDoc>;
+  /**
+   * 大图预览**全景**模式下的标注 / 裁切 / 局部重绘 / 视口矩形裁切（key 同 `displayKey`）。
+   */
+  imageOverlayAnnotationsPano?: Record<string, ImageOverlayAnnotationDoc>;
   archived: boolean;
   /** true=仅在仓库列显示；false/undefined=在工作区列显示 */
   inRepository?: boolean;
@@ -529,6 +571,18 @@ export type WorkflowPendingTask = {
    * `quick_compose_bar_plain`：底部输入框直输图/文且未拖入预设卡片；运行日志用中性前缀，不显示底层快捷能力名。
    */
   logContext?: 'quick_compose_bar_plain';
+  /**
+   * 客户端已得到最终图（如大图局部重绘贴回后）：`runTask` 跳过 `executeCapability`，直接写入该图。
+   * 仍走同一套队列与 `executePending` 收尾，以便节点树显示执行中/完成动画。
+   */
+  clientPrefetchedImageResult?: string;
+  /**
+   * 大图快捷栏：`executePending` 立即启动以显示节点树「执行中」，实际像素在客户端异步算完后由 `WorkflowSection` 内 Promise 喂入。
+   * `runTask` 仅 `await` 该 Promise 并返回图，不再调用 `executeCapability`。
+   */
+  lightboxAwaitClientResult?: boolean;
+  /** 写入 `resultMeta[resultKey].displayStepLabel`，供卡片与大图步骤展示 */
+  displayStepLabel?: string;
 };
 
 /**

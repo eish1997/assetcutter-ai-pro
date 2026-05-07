@@ -154,6 +154,11 @@ export function applyVgpAfterSuccessfulGen(
     /** 入队时的 displayKey，用于父版本（任意图继续生图） */
     inputSourceDisplayKey?: string;
     now?: number;
+    /**
+     * 执行器未返回 `vgpSteps` 时：将用户侧可见文案写入步骤「生成说明」（输入框 / 文卡 / 预设 instruction 等）。
+     * 有 `vgpSteps` 时忽略此字段（仍以理解快照为准）。
+     */
+    userPromptRecord?: string;
   }
 ): WorkflowAsset {
   const now = params.now ?? Date.now();
@@ -186,10 +191,13 @@ export function applyVgpAfterSuccessfulGen(
     extraRules.push({ ruleId: 'capability.set', detail: params.vgpSteps.map((s) => s.presetId).join(',') });
   }
 
+  const recordTrim = String(params.userPromptRecord ?? '').trim();
   const artifact =
     params.vgpSteps.length > 0
       ? buildCombinedPromptArtifact(params.vgpSteps, now, extraRules)
-      : buildPlaceholderArtifact('（无文本步骤记录：执行器未返回提示词快照）', now, extraRules);
+      : recordTrim !== ''
+        ? buildPlaceholderArtifact(recordTrim, now, [...extraRules, { ruleId: 'user.submitted_prompt' }])
+        : buildPlaceholderArtifact('（无文本步骤记录：执行器未返回提示词快照）', now, extraRules);
 
   vgpBase.promptsById[artifact.id] = artifact;
 
@@ -299,7 +307,21 @@ function findVersionIdForDisplayKey(vgp: VgpAssetExtension, displayKey: string):
     const k = v.imageRef.kind === 'original_field' ? 'original' : v.imageRef.key;
     if (k === displayKey) return id;
   }
-  return null;
+  /** 兼容 VGP 节点 key 与 result/displayKey 后缀不一致（仅当唯一命中时回落，避免误删） */
+  const base = baseActionId(displayKey);
+  if (base === displayKey) return null;
+  let found: string | null = null;
+  for (const id of vgp.versionOrder) {
+    const v = vgp.versionsById[id];
+    if (!v) continue;
+    const k = v.imageRef.kind === 'original_field' ? 'original' : v.imageRef.key;
+    if (k === 'original' || k === 'group_preview') continue;
+    if (baseActionId(k) === base) {
+      if (found != null) return null;
+      found = id;
+    }
+  }
+  return found;
 }
 
 /**

@@ -1,6 +1,7 @@
 import type { CapabilitySet, CustomAppModule } from '../types';
 import { r2ApiUrl } from './apiBase';
 import { requestJson } from './httpClient';
+import type { AiProvider } from './settingsStore';
 import { sanitizeAvatarUrl } from './userUiPrefs';
 import { workspaceRootPrefix } from './workspaceCloudSync';
 
@@ -24,7 +25,7 @@ export type WorkspaceUserCloudConfig = {
   settings: {
     dialogSkipUnderstand: boolean;
     workspaceAutoSyncEnabled: boolean;
-    aiProvider: 'trial' | 'gemini' | 'vertex' | 'toapis' | 'antigravity' | 'openai' | 'vectorengine';
+    aiProvider: AiProvider;
     geminiApiKey: string;
     toapisApiKey: string;
     toapisBaseUrl: string;
@@ -239,8 +240,9 @@ export async function fetchWorkspaceUserCloudConfig(
           const ap = String(parsed.settings?.aiProvider ?? '')
             .trim()
             .toLowerCase();
-          if (ap === 'trial' || ap === 'vertex' || ap === 'toapis' || ap === 'antigravity' || ap === 'openai' || ap === 'vectorengine') {
-            return ap as WorkspaceUserCloudConfig['settings']['aiProvider'];
+          if (ap === 'vertex') return 'trial';
+          if (ap === 'trial' || ap === 'toapis' || ap === 'antigravity' || ap === 'openai' || ap === 'vectorengine') {
+            return ap as AiProvider;
           }
           if (ap === 'gemini') return 'gemini';
           return 'trial';
@@ -290,8 +292,9 @@ export async function pushWorkspaceUserCloudConfig(
         const ap = String(input.settings.aiProvider ?? '')
           .trim()
           .toLowerCase();
-        if (ap === 'trial' || ap === 'vertex' || ap === 'toapis' || ap === 'antigravity' || ap === 'openai' || ap === 'vectorengine') {
-          return ap as WorkspaceUserCloudConfig['settings']['aiProvider'];
+        if (ap === 'vertex') return 'trial';
+        if (ap === 'trial' || ap === 'toapis' || ap === 'antigravity' || ap === 'openai' || ap === 'vectorengine') {
+          return ap as AiProvider;
         }
         if (ap === 'gemini') return 'gemini';
         return 'trial';

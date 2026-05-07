@@ -12,7 +12,10 @@ export function resolveVersionImageSrc(asset: WorkflowAsset, v: ImageVersion): s
   if (key === 'cut_image') {
     return asset.displayKey === 'cut_image' ? asset.original : asset.results[key] ?? asset.original;
   }
-  return asset.results[key] ?? asset.original;
+  const r = asset.results[key];
+  if (r != null && String(r).trim() !== '') return r;
+  /** 已删 results 但 VGP 未同步时勿回退原图，避免「丢弃后仍像有图」 */
+  return '';
 }
 
 function parentStepLabel(

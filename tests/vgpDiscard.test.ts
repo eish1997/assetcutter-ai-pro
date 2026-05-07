@@ -92,4 +92,13 @@ describe('vgp discard guards', () => {
     expect(next!.versionsById['v1']).toBeDefined();
     expect(isVgpBlockingDiscardForDisplayKey(next!, 'gen_a')).toBe(false);
   });
+
+  it('displayKey 带版本后缀时仍可匹配仅含基类 key 的 VGP 节点（唯一命中）', () => {
+    let vgp = createInitialVgpForAsset(minimalAsset());
+    const origId = vgp.versionOrder[0]!;
+    vgp = addGenerated(vgp, { id: 'v1', key: 'gen_a', parentId: origId, stepIndex: 1 });
+    const next = pruneVgpAfterDiscard(vgp, 'gen_a__v__1');
+    expect(next).toBeDefined();
+    expect(next!.versionOrder).not.toContain('v1');
+  });
 });

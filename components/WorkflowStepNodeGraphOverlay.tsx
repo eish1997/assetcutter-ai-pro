@@ -5,6 +5,7 @@ import type { ImageVersion, VgpAssetExtension } from '../types/vgp';
 import { ensureWorkflowAssetVgp } from '../services/vgp/migrateLegacyAsset';
 import { previewSrcCacheFingerprint } from '../services/workflowImageThumb';
 import { WorkflowGridImage } from './ProgressivePreviewImage';
+import WorkflowPixelBusyOverlay from './WorkflowPixelBusyOverlay';
 import { resolveVersionImageSrc } from './WorkflowGenerationRecordPanel';
 
 const NODE = 52;
@@ -148,6 +149,8 @@ export type WorkflowStepNodeGraphOverlayProps = {
   asset: WorkflowAsset;
   getStepLabel: (stepKey: string) => string;
   onSelectDisplayKey: (key: string) => void;
+  /** 当前资产在执行队列或 pending 中：在选中步骤下方追加占位节点并显示生成动画（不盖在原缩略图上） */
+  pixelBusy?: boolean;
 };
 
 /**
@@ -157,6 +160,7 @@ export function WorkflowStepNodeGraphOverlay({
   asset,
   getStepLabel,
   onSelectDisplayKey,
+  pixelBusy = false,
 }: WorkflowStepNodeGraphOverlayProps) {
   const displayAsset = useMemo(() => ensureWorkflowAssetVgp(asset), [asset]);
   const vgp = displayAsset.vgp;
@@ -178,13 +182,55 @@ export function WorkflowStepNodeGraphOverlay({
 
   const selectedId = vgp ? versionIdForDisplayKey(asset, vgp) : null;
 
+  const generatingPlaceholder = useMemo(() => {
+    const baseW = graphW > 0 ? graphW : 80;
+    const baseH = graphH > 0 ? graphH : NODE + PAD_Y;
+    if (!pixelBusy || !vgp || ordered.length === 0 || !selectedId) {
+      return {
+        contentW: baseW,
+        contentH: baseH,
+        box: null as { x: number; y: number } | null,
+        edgeD: null as string | null,
+      };
+    }
+    const p = positions[selectedId];
+    if (!p) {
+      return { contentW: baseW, contentH: baseH, box: null, edgeD: null };
+    }
+    let x = p.x;
+    let y = p.y + V_LEVEL;
+    const nodeRects: Pos[] = Object.values(positions);
+    const overlaps = (ax: number, ay: number) => {
+      for (const r of nodeRects) {
+        if (!(ax + NODE <= r.x || r.x + NODE <= ax || ay + NODE <= r.y || r.y + NODE <= ay)) {
+          return true;
+        }
+      }
+      return false;
+    };
+    let tries = 0;
+    while (overlaps(x, y) && tries < 64) {
+      x += NODE + H_LEAF_GAP;
+      tries += 1;
+    }
+    const contentH = Math.max(baseH, y + NODE + PAD_Y);
+    const contentW = Math.max(baseW, x + NODE + PAD_X);
+    const x1 = p.x + NODE / 2;
+    const y1 = p.y + NODE;
+    const x2 = x + NODE / 2;
+    const y2 = y;
+    const midY = (y1 + y2) / 2;
+    const edgeD = `M ${x1} ${y1} C ${x1} ${midY} ${x2} ${midY} ${x2} ${y2}`;
+    return { contentW, contentH, box: { x, y }, edgeD };
+  }, [pixelBusy, vgp, ordered.length, selectedId, positions, graphW, graphH]);
+
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const [panelPos, setPanelPos] = useState<{ left: number; top: number } | null>(null);
   const [dragging, setDragging] = useState(false);
   const dragOffsetRef = useRef<{ x: number; y: number } | null>(null);
 
-  const panelW = graphW > 0 ? graphW : 80;
-  const panelH = HANDLE_H + 8 + (graphH > 0 ? graphH : NODE + PAD_Y);
+  const panelW = generatingPlaceholder.contentW > 0 ? generatingPlaceholder.contentW : 80;
+  const panelH = HANDLE_H + 8 + (generatingPlaceholder.contentH > 0 ? generatingPlaceholder.contentH : NODE + PAD_Y);
 
   const resetPosition = useCallback(() => {
     const vw = typeof window !== 'undefined' ? window.innerWidth : 1200;
@@ -303,6 +349,11 @@ export function WorkflowStepNodeGraphOverlay({
     return <path key={`${from}-${to}-${i}`} d={d} fill="none" stroke="rgba(255,255,255,0.32)" strokeWidth={1.25} vectorEffect="non-scaling-stroke" />;
   });
 
+  const gw = generatingPlaceholder.contentW;
+  const gh = generatingPlaceholder.contentH;
+  const phBox = generatingPlaceholder.box;
+  const phEdge = generatingPlaceholder.edgeD;
+
   const inner = (
     <div
       ref={wrapRef}
@@ -338,17 +389,49 @@ export function WorkflowStepNodeGraphOverlay({
         className="relative max-w-[min(92vw,22rem)] overflow-x-hidden overflow-y-auto no-scrollbar"
         style={{ width: panelW, maxHeight: GRAPH_MAX_H_CSS }}
       >
-        <div className="relative" style={{ width: panelW, height: graphH }}>
+        <div className="relative" style={{ width: panelW, height: gh }}>
           <svg
             className="pointer-events-none absolute left-0 top-0 overflow-visible"
-            width={panelW}
-            height={graphH}
+            width={gw}
+            height={gh}
             aria-hidden
           >
             {edgePaths}
+            {phEdge ? (
+              <path
+                key="generating-placeholder-edge"
+                d={phEdge}
+                fill="none"
+                stroke="rgba(59,130,246,0.5)"
+                strokeWidth={1.35}
+                strokeDasharray="5 4"
+                vectorEffect="non-scaling-stroke"
+              />
+            ) : null}
           </svg>
-          <div className="relative" style={{ width: panelW, height: graphH }}>
+          <div className="relative" style={{ width: gw, height: gh }}>
             {vgp.versionOrder.map((id) => node(id)).filter(Boolean)}
+            {phBox ? (
+              <div
+                className="absolute overflow-hidden rounded-md border border-dashed border-blue-400/45 bg-[#0c1420]/90"
+                style={{ left: phBox.x, top: phBox.y, width: NODE, height: NODE }}
+                role="status"
+                aria-label="新步骤生成中"
+                title="新步骤生成中…"
+              >
+                <WorkflowPixelBusyOverlay
+                  executing
+                  accentExecuting
+                  density="compact"
+                  progressDetail="生成中…"
+                  backdropImageSrc={null}
+                  className="pointer-events-none absolute inset-0 rounded-[inherit]"
+                />
+                <span className="pointer-events-none absolute bottom-0 inset-x-0 bg-black/55 text-[7px] font-black tabular-nums text-blue-200/95 text-center py-px">
+                  ···
+                </span>
+              </div>
+            ) : null}
           </div>
         </div>
       </div>

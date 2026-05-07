@@ -28,13 +28,10 @@ import {
 } from '../services/settingsStore';
 import { CustomDropdown, DROPDOWN_TRIGGER_COMPACT } from './ui/CustomDropdown';
 import AppIcon from './ui/AppIcon';
-import { getCompanionLocalBaseUrl } from '../services/companionLocalPrefs';
-import { probeCompanionHealth } from '../services/companionClient';
 
 const AI_PROVIDER_OPTIONS: { value: AiProvider; label: string }[] = [
   { value: 'trial', label: '试用（代理通道）' },
   { value: 'gemini', label: 'Google Gemini（官方 API）' },
-  { value: 'vertex', label: 'Vertex AI（经 gemini-proxy）' },
   { value: 'toapis', label: 'ToAPIs 网关' },
   { value: 'antigravity', label: 'Antigravity Tools（本机反代）' },
   { value: 'openai', label: 'OpenAI（官方 API）' },
@@ -59,8 +56,6 @@ export const WorkflowApiKeyModal: React.FC<{
   const [veBase, setVeBase] = useState('');
   const [tripoKey, setTripoKey] = useState('');
   const [savedFlash, setSavedFlash] = useState(false);
-  const [companionStatus, setCompanionStatus] = useState<'checking' | 'online' | 'offline'>('checking');
-  const [companionStatusText, setCompanionStatusText] = useState('检测中…');
 
   useEffect(() => {
     if (!open) return;
@@ -75,39 +70,6 @@ export const WorkflowApiKeyModal: React.FC<{
     setAgBase(getAntigravityBaseUrl());
     setOpenaiBase(getOpenaiBaseUrl());
     setVeBase(getVectorengineBaseUrl());
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    let alive = true;
-    let timer: number | null = null;
-    const run = async () => {
-      setCompanionStatus('checking');
-      setCompanionStatusText('检测中…');
-      try {
-        const base = getCompanionLocalBaseUrl();
-        const r = await probeCompanionHealth(base);
-        if (!alive) return;
-        if (r.ok) {
-          setCompanionStatus('online');
-          setCompanionStatusText(`已连接（${base}）`);
-        } else {
-          setCompanionStatus('offline');
-          setCompanionStatusText(`未连接（${base}）`);
-        }
-      } catch {
-        if (!alive) return;
-        setCompanionStatus('offline');
-        setCompanionStatusText('未连接');
-      }
-      if (!alive) return;
-      timer = window.setTimeout(run, 15000);
-    };
-    void run();
-    return () => {
-      alive = false;
-      if (timer != null) window.clearTimeout(timer);
-    };
   }, [open]);
 
   const onEscape = useCallback(
@@ -128,9 +90,7 @@ export const WorkflowApiKeyModal: React.FC<{
   const keyValue =
     provider === 'gemini'
       ? geminiKey
-      : provider === 'vertex'
-        ? ''
-        : provider === 'trial'
+      : provider === 'trial'
           ? ''
         : provider === 'toapis'
           ? toapisKey
@@ -151,8 +111,6 @@ export const WorkflowApiKeyModal: React.FC<{
     const v: AiProvider =
       value === 'trial'
         ? 'trial'
-        : value === 'vertex'
-        ? 'vertex'
         : value === 'toapis'
           ? 'toapis'
           : value === 'antigravity'
@@ -218,20 +176,6 @@ export const WorkflowApiKeyModal: React.FC<{
               triggerClassName={`${DROPDOWN_TRIGGER_COMPACT} w-full`}
               portalZIndex={{ backdrop: 2200, list: 2201 }}
             />
-            <div className="mt-2 flex items-center gap-2 text-[10px]">
-              <span
-                className={`inline-block h-2 w-2 rounded-full ${
-                  companionStatus === 'online'
-                    ? 'bg-emerald-400'
-                    : companionStatus === 'checking'
-                    ? 'bg-amber-300'
-                    : 'bg-rose-400'
-                }`}
-              />
-              <span className={companionStatus === 'online' ? 'text-emerald-300' : 'text-gray-400'}>
-                本地伴侣：{companionStatusText}
-              </span>
-            </div>
           </div>
           {provider === 'antigravity' ? (
             <div>
@@ -258,16 +202,7 @@ export const WorkflowApiKeyModal: React.FC<{
               />
             </div>
           ) : null}
-          {provider === 'trial' ? (
-            <p className="text-[10px] text-gray-500 leading-relaxed">
-              试用模式固定走代理通道（<code className="text-gray-400">VITE_BULK_IMAGE_API</code>），无需填写 Key。
-            </p>
-          ) : provider === 'vertex' ? (
-            <p className="text-[10px] text-gray-500 leading-relaxed">
-              Vertex 凭据在服务端配置（见 <code className="text-gray-400">docs/VERTEX_AI_INTEGRATION.md</code>
-              ）；站点须设置 <code className="text-gray-400">VITE_BULK_IMAGE_API</code>。此处无需填写 Key。
-            </p>
-          ) : (
+          {provider !== 'trial' ? (
             <div>
               <span className="block text-[9px] font-black uppercase text-gray-500 mb-2">API Key</span>
               <input
@@ -279,7 +214,7 @@ export const WorkflowApiKeyModal: React.FC<{
                 className="w-full min-w-0 px-4 py-3 rounded-xl bg-[#16161a] border border-[#2e2e32] text-sm text-white placeholder-gray-500 focus:border-[#3b82f6] focus:outline-none"
               />
             </div>
-          )}
+          ) : null}
           <div className="flex items-center gap-3 pt-1">
             <button
               type="button"

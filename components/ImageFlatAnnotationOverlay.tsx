@@ -1,5 +1,9 @@
+/* eslint-disable react-hooks/refs -- 标注层在 render 中与 layoutTick / 全景 subscribeAnimation 同步读取 imgRef、panoProjectionRef，以对齐 object-contain 与球面重投影 */
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type {
+  ImageLocalEditPolygon,
+  ImageLocalEditSelection,
   ImageOverlayAnnotationDoc,
   ImageOverlayBrushItem,
   ImageOverlayCropPolygon,
@@ -7,23 +11,30 @@ import type {
   ImageOverlayNormPoint,
   ImageOverlayRectItem,
   ImageOverlayTextItem,
+  PanoViewportCropNorm,
 } from '../types';
 import {
   clientPointToElementLocal,
   getImgObjectContainMetrics,
+  localEditSelectionBottomCenterClient,
   localToNaturalPoint,
   naturalToNorm,
 } from '../services/imagePreviewPointerGeometry';
+import type { PanoramaViewportProjection } from '../services/panoViewportProjection';
 import {
   hitTestOverlayAnnotation,
   translateCropByNormDelta,
   translateItemByNormDelta,
 } from '../services/imageOverlayHitTest';
+import { tightPixelBBoxForLocalEdit } from '../services/localInpaintGemini';
 import { isWorkflowEditableTarget } from './workflow/workflowDomUtils';
 import { uuid } from './workflow/workflowIds';
 
 /** 归一化坐标下视为「开始拖动」的最小位移，小于此不入撤销栈 */
 const DRAG_HISTORY_NORM_EPS = 0.002;
+
+/** 标注/裁切/局部重绘「框选或套索」时全屏十字定位线（pointer-events-none，高于大图内层 UI） */
+const IMAGE_LAYOUT_CROSSHAIR_Z = 3500;
 
 export type ImageFlatAnnotationTool =
   | 'off'
@@ -32,18 +43,106 @@ export type ImageFlatAnnotationTool =
   | 'brush'
   | 'text'
   | 'crop_rect'
-  | 'crop_lasso';
+  | 'crop_lasso'
+  | 'local_edit_rect'
+  | 'local_edit_ellipse'
+  | 'local_edit_lasso';
 
-const EMPTY_DOC: ImageOverlayAnnotationDoc = { v: 1, items: [], crops: [] };
+/** 选中即显示十字（跟指针），无需点击或开始拖拽 */
+const LAYOUT_CROSSHAIR_TOOLS = new Set<ImageFlatAnnotationTool>([
+  'annotate_rect',
+  'crop_rect',
+  'crop_lasso',
+  'local_edit_rect',
+  'local_edit_ellipse',
+  'local_edit_lasso',
+]);
+
+const EMPTY_DOC: ImageOverlayAnnotationDoc = {
+  v: 1,
+  items: [],
+  crops: [],
+  localEdit: null,
+  panoViewportCrop: undefined,
+  panoLocalEditViewport: undefined,
+};
+
+function numNorm(x: unknown, fallback = 0): number {
+  if (typeof x === 'number' && Number.isFinite(x)) return x;
+  if (typeof x === 'string' && x.trim() !== '') {
+    const n = Number(x);
+    if (Number.isFinite(n)) return n;
+  }
+  return fallback;
+}
+
+function clamp01n(v: number) {
+  return Math.min(1, Math.max(0, v));
+}
+
+function normalizeNormPointsRaw(raw: unknown): ImageOverlayNormPoint[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((p) =>
+      p && typeof p === 'object'
+        ? {
+            x: clamp01n(numNorm((p as { x?: unknown }).x)),
+            y: clamp01n(numNorm((p as { y?: unknown }).y)),
+          }
+        : null
+    )
+    .filter((x): x is ImageOverlayNormPoint => x != null);
+}
+
+function normalizeLocalEditRaw(raw: unknown): ImageLocalEditSelection | null {
+  if (raw == null || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  const id = typeof o.id === 'string' && o.id ? o.id : null;
+  if (!id) return null;
+  const k = o.kind;
+  if (k === 'local_rect' || k === 'local_ellipse') {
+    const x = clamp01n(numNorm(o.x));
+    const y = clamp01n(numNorm(o.y));
+    const w = clamp01n(numNorm(o.w));
+    const h = clamp01n(numNorm(o.h));
+    if (w < 0.0005 || h < 0.0005) return null;
+    return k === 'local_rect'
+      ? { id, kind: 'local_rect', x, y, w, h }
+      : { id, kind: 'local_ellipse', x, y, w, h };
+  }
+  if (k === 'local_polygon') {
+    const pts = normalizeNormPointsRaw(o.points);
+    if (pts.length < 3) return null;
+    return { id, kind: 'local_polygon', points: pts };
+  }
+  return null;
+}
+
+function normalizePanoViewportCrop(raw: unknown): PanoViewportCropNorm | null {
+  if (raw == null || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  const x = clamp01n(numNorm(o.x));
+  const y = clamp01n(numNorm(o.y));
+  const w = clamp01n(numNorm(o.w));
+  const h = clamp01n(numNorm(o.h));
+  if (w < 0.001 || h < 0.001) return null;
+  return { x, y, w, h };
+}
 
 export function normalizeImageOverlayDoc(raw: unknown): ImageOverlayAnnotationDoc {
   if (!raw || typeof raw !== 'object') return { ...EMPTY_DOC };
   const o = raw as Partial<ImageOverlayAnnotationDoc>;
   if (o.v !== 1) return { ...EMPTY_DOC };
+  const le = normalizeLocalEditRaw(o.localEdit);
+  const panoViewportCrop = normalizePanoViewportCrop(o.panoViewportCrop);
+  const panoLocalEditViewport = normalizePanoViewportCrop(o.panoLocalEditViewport);
   return {
     v: 1,
     items: Array.isArray(o.items) ? (o.items as ImageOverlayAnnotationDoc['items']) : [],
     crops: Array.isArray(o.crops) ? (o.crops as ImageOverlayAnnotationDoc['crops']) : [],
+    localEdit: le,
+    panoViewportCrop: panoViewportCrop ?? undefined,
+    panoLocalEditViewport: panoLocalEditViewport ?? undefined,
   };
 }
 
@@ -90,6 +189,16 @@ export type ImageFlatAnnotationOverlayProps = {
   ) => void;
   /** 选择拖动产生有效位移后、首次改 doc 前由父组件入撤销栈（避免点选占撤销步） */
   onBeginDragGesture?: () => void;
+  /** 局部重绘选区变化时：底边中点视口坐标（用于大图快捷栏锚定）；无选区传 `null` */
+  onLocalEditAnchorClientChange?: (pt: { x: number; y: number } | null) => void;
+  /**
+   * 全景 WebGL 与叠层同尺寸的容器（`absolute inset-0`），用于屏幕坐标 SVG 与 `getBoundingClientRect`。
+   * 与 `panoProjectionRef` 同时传入时启用全景映射（射线 ↔ 纹理归一化、每帧重投影）。
+   */
+  panoOverlayContainerRef?: React.RefObject<HTMLDivElement | null>;
+  panoProjectionRef?: React.RefObject<PanoramaViewportProjection | null>;
+  /** 全景 Viewer 挂载后由父级递增，用于在 `ref.current` 就绪时重跑订阅与 `ready` */
+  panoViewerBindEpoch?: number;
 };
 
 /**
@@ -105,17 +214,104 @@ export function ImageFlatAnnotationOverlay({
   brushWidth,
   onDocPatch,
   onBeginDragGesture,
+  onLocalEditAnchorClientChange,
+  panoOverlayContainerRef,
+  panoProjectionRef,
+  panoViewerBindEpoch = 0,
 }: ImageFlatAnnotationOverlayProps) {
   const [layoutTick, setLayoutTick] = useState(0);
+  const [overlayPx, setOverlayPx] = useState({ w: 320, h: 240 });
   const [brushDraft, setBrushDraft] = useState<ImageOverlayNormPoint[] | null>(null);
   const [lassoDraft, setLassoDraft] = useState<ImageOverlayNormPoint[] | null>(null);
+  const [localLassoDraft, setLocalLassoDraft] = useState<ImageOverlayNormPoint[] | null>(null);
   const [dragRect, setDragRect] = useState<DraftRect | null>(null);
+  /** 全景 + 矩形裁切：相对叠层 0~1 的拖框（所见即所得导出） */
+  const [panoCropDraft, setPanoCropDraft] = useState<DraftRect | null>(null);
+  /** 全景 + 局部重绘：视口轴对齐框（与裁切同一套 0~1 坐标） */
+  const [panoLocalEditDraft, setPanoLocalEditDraft] = useState<DraftRect | null>(null);
+  /** 全景 + 局部套索：点在叠层 0~1 坐标 */
+  const [panoLocalLassoDraft, setPanoLocalLassoDraft] = useState<ImageOverlayNormPoint[] | null>(null);
+  /** 视口 client 坐标；框选/套索类工具激活时由 window pointermove 更新 */
+  const [layoutCrosshairClient, setLayoutCrosshairClient] = useState<{ x: number; y: number } | null>(null);
+  const crosshairMoveRafRef = useRef<number | null>(null);
+  const crosshairMovePendingRef = useRef<{ x: number; y: number } | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [textEditId, setTextEditId] = useState<string | null>(null);
   const dragSelectRef = useRef<DragSelectRef | null>(null);
   const dragHistoryPrimedRef = useRef(false);
   const textEditIdRef = useRef<string | null>(null);
   const textInputRef = useRef<HTMLInputElement | null>(null);
+
+  useLayoutEffect(() => {
+    if (!onLocalEditAnchorClientChange) return;
+    const host = panoOverlayContainerRef?.current;
+    if (doc.panoLocalEditViewport && host) {
+      const r = doc.panoLocalEditViewport;
+      const br = host.getBoundingClientRect();
+      const cx = br.left + (r.x + r.w / 2) * br.width;
+      const cy = br.top + (r.y + r.h) * br.height;
+      onLocalEditAnchorClientChange({ x: cx, y: cy });
+      return;
+    }
+    const img = imgRef.current;
+    if (!doc.localEdit || !img) {
+      onLocalEditAnchorClientChange(null);
+      return;
+    }
+    const proj = panoProjectionRef?.current;
+    if (proj && host && panoOverlayContainerRef) {
+      const m = getImgObjectContainMetrics(img);
+      if (m) {
+        const tight = tightPixelBBoxForLocalEdit(doc.localEdit, m.nw, m.nh);
+        const nx = (tight.x + tight.w / 2) / m.nw;
+        const ny = (tight.y + tight.h) / m.nh;
+        const c = proj.equirectNormToClient(nx, ny);
+        if (c) {
+          onLocalEditAnchorClientChange(c);
+          return;
+        }
+      }
+    }
+    const p = localEditSelectionBottomCenterClient(img, doc.localEdit);
+    if (p) onLocalEditAnchorClientChange(p);
+  }, [
+    doc.localEdit,
+    doc.panoLocalEditViewport,
+    layoutKey,
+    layoutTick,
+    imgRef,
+    onLocalEditAnchorClientChange,
+    panoProjectionRef,
+    panoOverlayContainerRef,
+    panoViewerBindEpoch,
+  ]);
+
+  /** 父级提交后清空 localEdit 时，同步清掉套索/框选草稿，避免选区仍挂在图上 */
+  useEffect(() => {
+    if (doc.localEdit) return;
+    setLocalLassoDraft(null);
+  }, [doc.localEdit]);
+
+  useEffect(() => {
+    if (doc.panoLocalEditViewport) return;
+    setPanoLocalLassoDraft(null);
+    setPanoLocalEditDraft(null);
+  }, [doc.panoLocalEditViewport]);
+
+  useEffect(() => {
+    if (doc.localEdit) return;
+    if (tool === 'local_edit_rect' || tool === 'local_edit_ellipse') {
+      setDragRect(null);
+    }
+  }, [doc.localEdit, tool]);
+
+  useEffect(() => {
+    if (tool !== 'crop_rect') setPanoCropDraft(null);
+  }, [tool]);
+
+  useEffect(() => {
+    if (tool !== 'local_edit_rect' && tool !== 'local_edit_ellipse') setPanoLocalEditDraft(null);
+  }, [tool]);
 
   useLayoutEffect(() => {
     const img = imgRef.current;
@@ -133,6 +329,24 @@ export function ImageFlatAnnotationOverlay({
     };
   }, [imgRef, layoutKey]);
 
+  useLayoutEffect(() => {
+    const host = panoOverlayContainerRef?.current;
+    const proj = panoProjectionRef?.current;
+    if (!host || !proj) return;
+    const measure = () => {
+      setOverlayPx({ w: Math.max(1, host.clientWidth), h: Math.max(1, host.clientHeight) });
+      setLayoutTick((n) => n + 1);
+    };
+    measure();
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
+    ro?.observe(host);
+    const unsub = proj.subscribeAnimation(measure);
+    return () => {
+      ro?.disconnect();
+      unsub();
+    };
+  }, [panoOverlayContainerRef, panoProjectionRef, layoutKey, panoViewerBindEpoch]);
+
   const metrics = useMemo(() => {
     const img = imgRef.current;
     if (!img) return null;
@@ -142,7 +356,44 @@ export function ImageFlatAnnotationOverlay({
   const img = imgRef.current;
   const nw = metrics?.nw ?? 0;
   const nh = metrics?.nh ?? 0;
-  const ready = Boolean(metrics && img && nw && nh);
+  const panoProj = panoProjectionRef?.current ?? null;
+  const panoMode = Boolean(panoProj && panoOverlayContainerRef);
+  const ready = Boolean(metrics && img && nw && nh && (!panoOverlayContainerRef || panoProj));
+
+  const normToOverlayLocal = useCallback(
+    (nx: number, ny: number) => {
+      if (!panoMode || !panoProj || !panoOverlayContainerRef?.current) return null;
+      const c = panoProj.equirectNormToClient(nx, ny);
+      if (!c) return null;
+      const r = panoOverlayContainerRef.current.getBoundingClientRect();
+      return { x: c.x - r.left, y: c.y - r.top };
+    },
+    [panoMode, panoProj, panoOverlayContainerRef, layoutTick]
+  );
+
+  const pointerInPanoOverlay = useCallback(
+    (clientX: number, clientY: number) => {
+      const host = panoOverlayContainerRef?.current;
+      if (!host) return false;
+      const r = host.getBoundingClientRect();
+      return clientX >= r.left && clientX < r.right && clientY >= r.top && clientY < r.bottom;
+    },
+    [panoOverlayContainerRef]
+  );
+
+  const clientToPanoOverlayNorm = useCallback(
+    (clientX: number, clientY: number) => {
+      const host = panoOverlayContainerRef?.current;
+      if (!host) return null;
+      const r = host.getBoundingClientRect();
+      if (r.width < 1 || r.height < 1) return null;
+      return {
+        x: (clientX - r.left) / r.width,
+        y: (clientY - r.top) / r.height,
+      };
+    },
+    [panoOverlayContainerRef]
+  );
 
   useEffect(() => {
     if (!selectedId) return;
@@ -153,6 +404,64 @@ export function ImageFlatAnnotationOverlay({
 
   useEffect(() => {
     if (tool !== 'select') setSelectedId(null);
+  }, [tool]);
+
+  useEffect(() => {
+    if (tool !== 'local_edit_lasso') setLocalLassoDraft(null);
+  }, [tool]);
+
+  useEffect(() => {
+    if (!LAYOUT_CROSSHAIR_TOOLS.has(tool)) {
+      if (crosshairMoveRafRef.current != null) {
+        cancelAnimationFrame(crosshairMoveRafRef.current);
+        crosshairMoveRafRef.current = null;
+      }
+      crosshairMovePendingRef.current = null;
+      setLayoutCrosshairClient(null);
+      return;
+    }
+    const flush = () => {
+      crosshairMoveRafRef.current = null;
+      const p = crosshairMovePendingRef.current;
+      if (p) setLayoutCrosshairClient(p);
+    };
+    const onMove = (e: PointerEvent) => {
+      crosshairMovePendingRef.current = { x: e.clientX, y: e.clientY };
+      if (crosshairMoveRafRef.current == null) {
+        crosshairMoveRafRef.current = requestAnimationFrame(flush);
+      }
+    };
+    setLayoutCrosshairClient({
+      x: window.innerWidth / 2,
+      y: window.innerHeight / 2,
+    });
+    window.addEventListener('pointermove', onMove, { passive: true });
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      if (crosshairMoveRafRef.current != null) cancelAnimationFrame(crosshairMoveRafRef.current);
+      crosshairMoveRafRef.current = null;
+      crosshairMovePendingRef.current = null;
+      setLayoutCrosshairClient(null);
+    };
+  }, [tool]);
+
+  useEffect(() => {
+    if (
+      tool !== 'local_edit_rect' &&
+      tool !== 'local_edit_ellipse' &&
+      tool !== 'local_edit_lasso'
+    ) {
+      return;
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (isWorkflowEditableTarget(e.target)) return;
+      e.preventDefault();
+      setDragRect(null);
+      setLocalLassoDraft(null);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
   }, [tool]);
 
   useEffect(() => {
@@ -252,21 +561,26 @@ export function ImageFlatAnnotationOverlay({
 
   const eventToNorm = useCallback(
     (clientX: number, clientY: number) => {
+      if (panoMode && panoProj) {
+        const p = panoProj.clientToEquirectNorm(clientX, clientY);
+        return p ? { x: p.x, y: p.y } : null;
+      }
       if (!img || !metrics) return null;
       const { x: lx, y: ly } = clientPointToElementLocal(clientX, clientY, img);
       const { nx, ny } = localToNaturalPoint(lx, ly, metrics);
       return naturalToNorm(nx, ny, metrics);
     },
-    [img, metrics]
+    [panoMode, panoProj, img, metrics]
   );
 
   const isInsideContent = useCallback(
     (clientX: number, clientY: number) => {
+      if (panoMode && panoProj) return panoProj.clientToEquirectNorm(clientX, clientY) != null;
       if (!img || !metrics) return false;
       const { x: lx, y: ly } = clientPointToElementLocal(clientX, clientY, img);
       return localToNaturalPoint(lx, ly, metrics).inside;
     },
-    [img, metrics]
+    [panoMode, panoProj, img, metrics]
   );
 
   const onPointerDown = useCallback(
@@ -305,6 +619,39 @@ export function ImageFlatAnnotationOverlay({
         return;
       }
 
+      if (tool === 'crop_rect' && panoMode) {
+        if (!pointerInPanoOverlay(e.clientX, e.clientY)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+        const po = clientToPanoOverlayNorm(e.clientX, e.clientY);
+        if (!po) return;
+        setPanoCropDraft({ x0: po.x, y0: po.y, x1: po.x, y1: po.y });
+        return;
+      }
+
+      if (panoMode && (tool === 'local_edit_rect' || tool === 'local_edit_ellipse')) {
+        if (!pointerInPanoOverlay(e.clientX, e.clientY)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+        const po = clientToPanoOverlayNorm(e.clientX, e.clientY);
+        if (!po) return;
+        setPanoLocalEditDraft({ x0: po.x, y0: po.y, x1: po.x, y1: po.y });
+        return;
+      }
+
+      if (panoMode && tool === 'local_edit_lasso') {
+        if (!pointerInPanoOverlay(e.clientX, e.clientY)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+        const po = clientToPanoOverlayNorm(e.clientX, e.clientY);
+        if (!po) return;
+        setPanoLocalLassoDraft([po]);
+        return;
+      }
+
       if (!isInsideContent(e.clientX, e.clientY)) return;
 
       e.preventDefault();
@@ -322,7 +669,11 @@ export function ImageFlatAnnotationOverlay({
         setLassoDraft([p]);
         return;
       }
-      if (tool === 'annotate_rect' || tool === 'crop_rect') {
+      if (tool === 'local_edit_lasso') {
+        setLocalLassoDraft([p]);
+        return;
+      }
+      if (tool === 'annotate_rect' || tool === 'crop_rect' || tool === 'local_edit_rect' || tool === 'local_edit_ellipse') {
         setDragRect({ x0: p.x, y0: p.y, x1: p.x, y1: p.y });
         return;
       }
@@ -341,7 +692,22 @@ export function ImageFlatAnnotationOverlay({
         setTextEditId(id);
       }
     },
-    [tool, ready, eventToNorm, isInsideContent, doc, nw, nh, color, onDocPatch, finalizeTextEdit]
+    [
+      tool,
+      ready,
+      eventToNorm,
+      isInsideContent,
+      doc,
+      nw,
+      nh,
+      color,
+      onDocPatch,
+      finalizeTextEdit,
+      panoMode,
+      pointerInPanoOverlay,
+      clientToPanoOverlayNorm,
+      panoMode,
+    ]
   );
 
   const onSvgDoubleClick = useCallback(
@@ -365,6 +731,36 @@ export function ImageFlatAnnotationOverlay({
 
   const onPointerMove = useCallback(
     (e: React.PointerEvent) => {
+      if (tool === 'crop_rect' && panoCropDraft) {
+        const po = clientToPanoOverlayNorm(e.clientX, e.clientY);
+        if (!po) return;
+        e.preventDefault();
+        e.stopPropagation();
+        setPanoCropDraft((d) => (d ? { ...d, x1: po.x, y1: po.y } : d));
+        return;
+      }
+
+      if (panoMode && (tool === 'local_edit_rect' || tool === 'local_edit_ellipse') && panoLocalEditDraft) {
+        const po = clientToPanoOverlayNorm(e.clientX, e.clientY);
+        if (!po) return;
+        e.preventDefault();
+        e.stopPropagation();
+        setPanoLocalEditDraft((d) => (d ? { ...d, x1: po.x, y1: po.y } : d));
+        return;
+      }
+
+      if (panoMode && tool === 'local_edit_lasso' && panoLocalLassoDraft) {
+        const po = clientToPanoOverlayNorm(e.clientX, e.clientY);
+        if (!po) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const prev = panoLocalLassoDraft[panoLocalLassoDraft.length - 1];
+        if (!prev || Math.hypot(prev.x - po.x, prev.y - po.y) > 0.002) {
+          setPanoLocalLassoDraft((d) => (d ? [...d, po] : d));
+        }
+        return;
+      }
+
       const p = eventToNorm(e.clientX, e.clientY);
       if (!p) return;
 
@@ -415,13 +811,42 @@ export function ImageFlatAnnotationOverlay({
         }
         return;
       }
-      if ((tool === 'annotate_rect' || tool === 'crop_rect') && dragRect) {
+      if (tool === 'local_edit_lasso' && localLassoDraft) {
+        e.preventDefault();
+        e.stopPropagation();
+        const prev = localLassoDraft[localLassoDraft.length - 1];
+        if (!prev || Math.hypot(prev.x - p.x, prev.y - p.y) > 0.002) {
+          setLocalLassoDraft((d) => (d ? [...d, p] : d));
+        }
+        return;
+      }
+      if (
+        (tool === 'annotate_rect' ||
+          tool === 'crop_rect' ||
+          tool === 'local_edit_rect' ||
+          tool === 'local_edit_ellipse') &&
+        dragRect
+      ) {
         e.preventDefault();
         e.stopPropagation();
         setDragRect((d) => (d ? { ...d, x1: p.x, y1: p.y } : d));
       }
     },
-    [tool, eventToNorm, brushDraft, lassoDraft, dragRect, onDocPatch, onBeginDragGesture]
+    [
+      tool,
+      eventToNorm,
+      brushDraft,
+      lassoDraft,
+      localLassoDraft,
+      dragRect,
+      panoCropDraft,
+      panoLocalEditDraft,
+      panoLocalLassoDraft,
+      panoMode,
+      clientToPanoOverlayNorm,
+      onDocPatch,
+      onBeginDragGesture,
+    ]
   );
 
   const onPointerUp = useCallback(
@@ -429,6 +854,63 @@ export function ImageFlatAnnotationOverlay({
       if (tool === 'select') {
         dragSelectRef.current = null;
         dragHistoryPrimedRef.current = false;
+        return;
+      }
+      if (tool === 'crop_rect' && panoCropDraft) {
+        e.preventDefault();
+        e.stopPropagation();
+        const r = rectFromDrag(
+          { x: panoCropDraft.x0, y: panoCropDraft.y0 },
+          { x: panoCropDraft.x1, y: panoCropDraft.y1 }
+        );
+        setPanoCropDraft(null);
+        if (r.w < 0.002 || r.h < 0.002) return;
+        onDocPatch((prev) => ({
+          ...prev,
+          crops: [],
+          panoViewportCrop: { x: r.x, y: r.y, w: r.w, h: r.h },
+        }));
+        return;
+      }
+      if (panoMode && (tool === 'local_edit_rect' || tool === 'local_edit_ellipse') && panoLocalEditDraft) {
+        e.preventDefault();
+        e.stopPropagation();
+        const r = rectFromDrag(
+          { x: panoLocalEditDraft.x0, y: panoLocalEditDraft.y0 },
+          { x: panoLocalEditDraft.x1, y: panoLocalEditDraft.y1 }
+        );
+        setPanoLocalEditDraft(null);
+        if (r.w < 0.002 || r.h < 0.002) return;
+        onDocPatch((prev) => ({
+          ...prev,
+          localEdit: null,
+          panoLocalEditViewport: { x: r.x, y: r.y, w: r.w, h: r.h },
+        }));
+        return;
+      }
+      if (panoMode && tool === 'local_edit_lasso' && panoLocalLassoDraft) {
+        e.preventDefault();
+        e.stopPropagation();
+        const pts = panoLocalLassoDraft;
+        setPanoLocalLassoDraft(null);
+        if (pts.length < 3) return;
+        let minX = 1;
+        let minY = 1;
+        let maxX = 0;
+        let maxY = 0;
+        for (const p of pts) {
+          minX = Math.min(minX, p.x);
+          minY = Math.min(minY, p.y);
+          maxX = Math.max(maxX, p.x);
+          maxY = Math.max(maxY, p.y);
+        }
+        const r = rectFromDrag({ x: minX, y: minY }, { x: maxX, y: maxY });
+        if (r.w < 0.002 || r.h < 0.002) return;
+        onDocPatch((prev) => ({
+          ...prev,
+          localEdit: null,
+          panoLocalEditViewport: { x: r.x, y: r.y, w: r.w, h: r.h },
+        }));
         return;
       }
       if (tool === 'brush' && brushDraft) {
@@ -462,6 +944,34 @@ export function ImageFlatAnnotationOverlay({
         onDocPatch((prev) => ({ ...prev, crops: [...prev.crops, crop] }));
         return;
       }
+      if (tool === 'local_edit_lasso' && localLassoDraft) {
+        e.preventDefault();
+        e.stopPropagation();
+        const pts = localLassoDraft;
+        setLocalLassoDraft(null);
+        if (pts.length < 3) return;
+        const first = pts[0]!;
+        const last = pts[pts.length - 1]!;
+        const closed =
+          Math.hypot(first.x - last.x, first.y - last.y) < 0.004 ? pts : [...pts, { ...first }];
+        const poly: ImageLocalEditPolygon = { id: uuid(), kind: 'local_polygon', points: closed };
+        onDocPatch((prev) => ({ ...prev, localEdit: poly }));
+        return;
+      }
+      if ((tool === 'local_edit_rect' || tool === 'local_edit_ellipse') && dragRect) {
+        e.preventDefault();
+        e.stopPropagation();
+        const r = rectFromDrag({ x: dragRect.x0, y: dragRect.y0 }, { x: dragRect.x1, y: dragRect.y1 });
+        setDragRect(null);
+        if (r.w < 0.002 || r.h < 0.002) return;
+        const id = uuid();
+        if (tool === 'local_edit_rect') {
+          onDocPatch((prev) => ({ ...prev, localEdit: { id, kind: 'local_rect', ...r } }));
+        } else {
+          onDocPatch((prev) => ({ ...prev, localEdit: { id, kind: 'local_ellipse', ...r } }));
+        }
+        return;
+      }
       if ((tool === 'annotate_rect' || tool === 'crop_rect') && dragRect) {
         e.preventDefault();
         e.stopPropagation();
@@ -479,21 +989,104 @@ export function ImageFlatAnnotationOverlay({
           onDocPatch((prev) => ({ ...prev, items: [...prev.items, item] }));
         } else {
           const crop: ImageOverlayCropRect = { id: uuid(), kind: 'crop_rect', ...r };
-          onDocPatch((prev) => ({ ...prev, crops: [...prev.crops, crop] }));
+          onDocPatch((prev) => ({
+            ...prev,
+            crops: [...prev.crops, crop],
+            panoViewportCrop: undefined,
+          }));
         }
       }
     },
-    [tool, brushDraft, lassoDraft, dragRect, brushWidth, color, onDocPatch]
+    [
+      tool,
+      brushDraft,
+      lassoDraft,
+      localLassoDraft,
+      dragRect,
+      panoCropDraft,
+      panoLocalEditDraft,
+      panoLocalLassoDraft,
+      panoMode,
+      brushWidth,
+      color,
+      onDocPatch,
+    ]
   );
 
   if (!ready) return null;
 
   const pe = tool === 'off' ? 'none' : 'auto';
   const selStroke = 'rgba(34,211,238,0.95)';
+  const vx = panoMode ? overlayPx.w : nw;
+  const vy = panoMode ? overlayPx.h : nh;
   const selSw = Math.max(2, Math.min(nw, nh) * 0.005);
+  const selSwPano = Math.max(2, Math.min(vx, vy) * 0.005);
+
+  const brushPathFromNormPoints = (pts: ImageOverlayNormPoint[], strokeW: number, stroke: string, isSel: boolean) => {
+    const parts: string[] = [];
+    let penUp = true;
+    for (const q of pts) {
+      const l = panoMode ? normToOverlayLocal(q.x, q.y) : { x: q.x * nw, y: q.y * nh };
+      if (!l) {
+        penUp = true;
+        continue;
+      }
+      parts.push(`${penUp ? 'M' : 'L'} ${l.x} ${l.y}`);
+      penUp = false;
+    }
+    const d = parts.join(' ');
+    if (!d || parts.length < 2) return null;
+    return (
+      <g>
+        {isSel ? (
+          <path
+            d={d}
+            fill="none"
+            stroke={selStroke}
+            strokeWidth={strokeW + selSwPano * 2}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            opacity={0.45}
+            pointerEvents="none"
+          />
+        ) : null}
+        <path
+          d={d}
+          fill="none"
+          stroke={stroke}
+          strokeWidth={strokeW}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </g>
+    );
+  };
 
   const renderItem = (it: ImageOverlayAnnotationDoc['items'][number], isSel: boolean) => {
     if (it.kind === 'rect') {
+      if (panoMode) {
+        const c00 = normToOverlayLocal(it.x, it.y);
+        const c10 = normToOverlayLocal(it.x + it.w, it.y);
+        const c11 = normToOverlayLocal(it.x + it.w, it.y + it.h);
+        const c01 = normToOverlayLocal(it.x, it.y + it.h);
+        if (!c00 || !c10 || !c11 || !c01) return null;
+        const ptsStr = `${c00.x},${c00.y} ${c10.x},${c10.y} ${c11.x},${c11.y} ${c01.x},${c01.y}`;
+        return (
+          <g key={it.id}>
+            {isSel ? (
+              <polygon
+                points={ptsStr}
+                fill="none"
+                stroke={selStroke}
+                strokeWidth={selSwPano}
+                strokeDasharray="6 4"
+                pointerEvents="none"
+              />
+            ) : null}
+            <polygon points={ptsStr} fill="none" stroke={it.stroke} strokeWidth={it.sw} />
+          </g>
+        );
+      }
       return (
         <g key={it.id}>
           {isSel ? (
@@ -523,6 +1116,10 @@ export function ImageFlatAnnotationOverlay({
     }
     if (it.kind === 'brush') {
       if (it.points.length < 2) return null;
+      if (panoMode) {
+        const g = brushPathFromNormPoints(it.points, it.sw, it.stroke, isSel);
+        return g ? <g key={it.id}>{g}</g> : null;
+      }
       const d = it.points.map((q, i) => `${i === 0 ? 'M' : 'L'} ${q.x * nw} ${q.y * nh}`).join(' ');
       return (
         <g key={it.id}>
@@ -552,16 +1149,20 @@ export function ImageFlatAnnotationOverlay({
     const hideSvgText = it.id === textEditId;
     const hasBody = it.text.trim().length > 0;
     if (hideSvgText || !hasBody) return <g key={it.id} />;
+    const tPos = panoMode ? normToOverlayLocal(it.x, it.y) : { x: it.x * nw, y: it.y * nh };
+    if (!tPos) return <g key={it.id} />;
+    const fs = panoMode ? Math.max(10, it.size * (overlayPx.w / nw)) : it.size;
+    const swT = panoMode ? selSwPano : selSw;
     return (
       <g key={it.id}>
         {isSel ? (
           <text
-            x={it.x * nw}
-            y={it.y * nh}
+            x={tPos.x}
+            y={tPos.y}
             fill="none"
             stroke={selStroke}
-            strokeWidth={selSw}
-            fontSize={it.size}
+            strokeWidth={swT}
+            fontSize={fs}
             style={{ paintOrder: 'stroke fill', userSelect: 'none' }}
             pointerEvents="none"
           >
@@ -569,13 +1170,13 @@ export function ImageFlatAnnotationOverlay({
           </text>
         ) : null}
         <text
-          x={it.x * nw}
-          y={it.y * nh}
+          x={tPos.x}
+          y={tPos.y}
           fill={it.fill}
-          fontSize={it.size}
+          fontSize={fs}
           style={{ userSelect: 'none', paintOrder: 'stroke fill' }}
           stroke="rgba(0,0,0,0.35)"
-          strokeWidth={Math.max(1, it.size * 0.06)}
+          strokeWidth={Math.max(1, fs * 0.06)}
         >
           {it.text}
         </text>
@@ -585,6 +1186,36 @@ export function ImageFlatAnnotationOverlay({
 
   const renderCrop = (c: ImageOverlayAnnotationDoc['crops'][number], isSel: boolean) => {
     if (c.kind === 'crop_rect') {
+      if (panoMode) {
+        const c00 = normToOverlayLocal(c.x, c.y);
+        const c10 = normToOverlayLocal(c.x + c.w, c.y);
+        const c11 = normToOverlayLocal(c.x + c.w, c.y + c.h);
+        const c01 = normToOverlayLocal(c.x, c.y + c.h);
+        if (!c00 || !c10 || !c11 || !c01) return null;
+        const ptsStr = `${c00.x},${c00.y} ${c10.x},${c10.y} ${c11.x},${c11.y} ${c01.x},${c01.y}`;
+        const swO = Math.max(1, Math.min(vx, vy) * 0.004);
+        return (
+          <g key={c.id}>
+            {isSel ? (
+              <polygon
+                points={ptsStr}
+                fill="rgba(34,211,238,0.06)"
+                stroke={selStroke}
+                strokeWidth={selSwPano}
+                strokeDasharray="4 3"
+                pointerEvents="none"
+              />
+            ) : null}
+            <polygon
+              points={ptsStr}
+              fill="rgba(251,146,60,0.12)"
+              stroke="rgba(251,146,60,0.95)"
+              strokeWidth={swO}
+              strokeDasharray="6 4"
+            />
+          </g>
+        );
+      }
       return (
         <g key={c.id}>
           {isSel ? (
@@ -614,7 +1245,14 @@ export function ImageFlatAnnotationOverlay({
       );
     }
     if (c.points.length < 3) return null;
-    const pts = c.points.map((p) => `${p.x * nw},${p.y * nh}`).join(' ');
+    const pts = panoMode
+      ? c.points
+          .map((p) => normToOverlayLocal(p.x, p.y))
+          .filter((x): x is { x: number; y: number } => x != null)
+          .map((p) => `${p.x},${p.y}`)
+          .join(' ')
+      : c.points.map((p) => `${p.x * nw},${p.y * nh}`).join(' ');
+    if (panoMode && !pts.trim()) return null;
     return (
       <g key={c.id}>
         {isSel ? (
@@ -638,20 +1276,148 @@ export function ImageFlatAnnotationOverlay({
     );
   };
 
+  const renderLocalEdit = (sel: ImageLocalEditSelection) => {
+    const sw = panoMode ? Math.max(1, Math.min(vx, vy) * 0.004) : Math.max(1, Math.min(nw, nh) * 0.004);
+    const stroke = 'rgba(16,185,129,0.95)';
+    const fill = 'rgba(16,185,129,0.14)';
+    if (sel.kind === 'local_rect') {
+      if (panoMode) {
+        const c00 = normToOverlayLocal(sel.x, sel.y);
+        const c10 = normToOverlayLocal(sel.x + sel.w, sel.y);
+        const c11 = normToOverlayLocal(sel.x + sel.w, sel.y + sel.h);
+        const c01 = normToOverlayLocal(sel.x, sel.y + sel.h);
+        if (!c00 || !c10 || !c11 || !c01) return null;
+        const ptsStr = `${c00.x},${c00.y} ${c10.x},${c10.y} ${c11.x},${c11.y} ${c01.x},${c01.y}`;
+        return (
+          <g key="local-edit">
+            <polygon points={ptsStr} fill={fill} stroke={stroke} strokeWidth={sw} strokeDasharray="5 4" />
+          </g>
+        );
+      }
+      return (
+        <g key="local-edit">
+          <rect
+            x={sel.x * nw}
+            y={sel.y * nh}
+            width={sel.w * nw}
+            height={sel.h * nh}
+            fill={fill}
+            stroke={stroke}
+            strokeWidth={sw}
+            strokeDasharray="5 4"
+          />
+        </g>
+      );
+    }
+    if (sel.kind === 'local_ellipse') {
+      if (panoMode) {
+        const cxN = sel.x + sel.w / 2;
+        const cyN = sel.y + sel.h / 2;
+        const rxN = Math.abs(sel.w) / 2;
+        const ryN = Math.abs(sel.h) / 2;
+        const steps = 28;
+        const poly: string[] = [];
+        for (let i = 0; i <= steps; i += 1) {
+          const t = (i / steps) * Math.PI * 2;
+          const l = normToOverlayLocal(cxN + rxN * Math.cos(t), cyN + ryN * Math.sin(t));
+          if (l) poly.push(`${l.x},${l.y}`);
+        }
+        if (poly.length < 3) return null;
+        return (
+          <g key="local-edit">
+            <polygon points={poly.join(' ')} fill={fill} stroke={stroke} strokeWidth={sw} strokeDasharray="5 4" />
+          </g>
+        );
+      }
+      const cx = (sel.x + sel.w / 2) * nw;
+      const cy = (sel.y + sel.h / 2) * nh;
+      const rx = (Math.abs(sel.w) * nw) / 2;
+      const ry = (Math.abs(sel.h) * nh) / 2;
+      return (
+        <g key="local-edit">
+          <ellipse
+            cx={cx}
+            cy={cy}
+            rx={rx}
+            ry={ry}
+            fill={fill}
+            stroke={stroke}
+            strokeWidth={sw}
+            strokeDasharray="5 4"
+          />
+        </g>
+      );
+    }
+    if (sel.points.length < 3) return null;
+    const pts = panoMode
+      ? sel.points
+          .map((p) => normToOverlayLocal(p.x, p.y))
+          .filter((x): x is { x: number; y: number } => x != null)
+          .map((p) => `${p.x},${p.y}`)
+          .join(' ')
+      : sel.points.map((p) => `${p.x * nw},${p.y * nh}`).join(' ');
+    if (panoMode && !pts.trim()) return null;
+    return (
+      <g key="local-edit">
+        <polygon points={pts} fill={fill} stroke={stroke} strokeWidth={sw} strokeDasharray="5 4" />
+      </g>
+    );
+  };
+
   const editTextItem =
     textEditId && metrics
       ? (doc.items.find((x) => x.id === textEditId && x.kind === 'text') as ImageOverlayTextItem | undefined)
       : undefined;
   const editFontPx =
-    editTextItem && metrics ? Math.max(10, editTextItem.size * (metrics.drawW / metrics.nw)) : 12;
+    editTextItem && metrics
+      ? Math.max(
+          10,
+          panoMode ? editTextItem.size * (overlayPx.w / metrics.nw) : editTextItem.size * (metrics.drawW / metrics.nw)
+        )
+      : 12;
+
+  const layoutCrosshairPortal =
+    LAYOUT_CROSSHAIR_TOOLS.has(tool) && layoutCrosshairClient && typeof document !== 'undefined'
+      ? createPortal(
+          <div
+            className="pointer-events-none fixed inset-0"
+            style={{ zIndex: IMAGE_LAYOUT_CROSSHAIR_Z }}
+            aria-hidden
+          >
+            <div
+              className="absolute bg-white/[0.45]"
+              style={{
+                left: layoutCrosshairClient.x,
+                top: 0,
+                width: 1,
+                height: '100%',
+                transform: 'translateX(-0.5px)',
+              }}
+            />
+            <div
+              className="absolute bg-white/[0.45]"
+              style={{
+                left: 0,
+                top: layoutCrosshairClient.y,
+                width: '100%',
+                height: 1,
+                transform: 'translateY(-0.5px)',
+              }}
+            />
+          </div>,
+          document.body
+        )
+      : null;
 
   return (
-    <div className="pointer-events-none absolute inset-0" data-image-preview-no-wheel>
+    <>
+      {layoutCrosshairPortal}
+      <div className="pointer-events-none absolute inset-0" data-image-preview-no-wheel>
       <svg
         className={`h-full w-full select-none ${tool === 'select' ? 'cursor-grab active:cursor-grabbing' : ''} ${pe === 'none' ? 'pointer-events-none' : 'pointer-events-auto'}`}
         style={{ touchAction: tool === 'off' ? 'auto' : 'none' }}
-        viewBox={`0 0 ${nw} ${nh}`}
-        preserveAspectRatio="xMidYMid meet"
+        viewBox={`0 0 ${vx} ${vy}`}
+        preserveAspectRatio={panoMode ? 'none' : 'xMidYMid meet'}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
@@ -660,9 +1426,151 @@ export function ImageFlatAnnotationOverlay({
       >
         {doc.items.map((it) => renderItem(it, selectedId === it.id))}
         {doc.crops.map((c) => renderCrop(c, selectedId === c.id))}
+        {doc.localEdit ? renderLocalEdit(doc.localEdit) : null}
+        {doc.panoViewportCrop && panoMode ? (
+          <rect
+            x={doc.panoViewportCrop.x * vx}
+            y={doc.panoViewportCrop.y * vy}
+            width={doc.panoViewportCrop.w * vx}
+            height={doc.panoViewportCrop.h * vy}
+            fill="rgba(251,146,60,0.15)"
+            stroke="rgba(251,146,60,0.95)"
+            strokeWidth={Math.max(1, Math.min(vx, vy) * 0.004)}
+            strokeDasharray="6 4"
+          />
+        ) : null}
+        {doc.panoLocalEditViewport && panoMode ? (
+          <rect
+            x={doc.panoLocalEditViewport.x * vx}
+            y={doc.panoLocalEditViewport.y * vy}
+            width={doc.panoLocalEditViewport.w * vx}
+            height={doc.panoLocalEditViewport.h * vy}
+            fill="rgba(16,185,129,0.12)"
+            stroke="rgba(16,185,129,0.95)"
+            strokeWidth={Math.max(1, Math.min(vx, vy) * 0.004)}
+            strokeDasharray="5 4"
+          />
+        ) : null}
+        {panoCropDraft ? (
+          (() => {
+            const r = rectFromDrag(
+              { x: panoCropDraft.x0, y: panoCropDraft.y0 },
+              { x: panoCropDraft.x1, y: panoCropDraft.y1 }
+            );
+            const swd = Math.max(1, Math.min(vx, vy) * 0.004);
+            return (
+              <rect
+                x={r.x * vx}
+                y={r.y * vy}
+                width={r.w * vx}
+                height={r.h * vy}
+                fill="rgba(251,146,60,0.1)"
+                stroke="rgba(251,146,60,0.9)"
+                strokeWidth={swd}
+                strokeDasharray="4 3"
+              />
+            );
+          })()
+        ) : null}
+        {panoLocalEditDraft ? (
+          (() => {
+            const r = rectFromDrag(
+              { x: panoLocalEditDraft.x0, y: panoLocalEditDraft.y0 },
+              { x: panoLocalEditDraft.x1, y: panoLocalEditDraft.y1 }
+            );
+            const swd = Math.max(1, Math.min(vx, vy) * 0.004);
+            return (
+              <rect
+                x={r.x * vx}
+                y={r.y * vy}
+                width={r.w * vx}
+                height={r.h * vy}
+                fill="rgba(16,185,129,0.08)"
+                stroke="rgba(16,185,129,0.9)"
+                strokeWidth={swd}
+                strokeDasharray="4 3"
+              />
+            );
+          })()
+        ) : null}
         {dragRect ? (
           (() => {
             const r = rectFromDrag({ x: dragRect.x0, y: dragRect.y0 }, { x: dragRect.x1, y: dragRect.y1 });
+            const swd = panoMode ? Math.max(1, Math.min(vx, vy) * 0.004) : Math.max(1, Math.min(nw, nh) * 0.004);
+            if (panoMode) {
+              if (tool === 'local_edit_ellipse') {
+                const cxN = r.x + r.w / 2;
+                const cyN = r.y + r.h / 2;
+                const rxN = r.w / 2;
+                const ryN = r.h / 2;
+                const steps = 24;
+                const poly: string[] = [];
+                for (let i = 0; i <= steps; i += 1) {
+                  const t = (i / steps) * Math.PI * 2;
+                  const l = normToOverlayLocal(cxN + rxN * Math.cos(t), cyN + ryN * Math.sin(t));
+                  if (l) poly.push(`${l.x},${l.y}`);
+                }
+                if (poly.length < 3) return null;
+                return (
+                  <polygon
+                    points={poly.join(' ')}
+                    fill="rgba(16,185,129,0.1)"
+                    stroke="rgba(16,185,129,0.92)"
+                    strokeWidth={swd}
+                    strokeDasharray="4 3"
+                  />
+                );
+              }
+              if (tool === 'local_edit_rect' || tool === 'annotate_rect' || tool === 'crop_rect') {
+                const c00 = normToOverlayLocal(r.x, r.y);
+                const c10 = normToOverlayLocal(r.x + r.w, r.y);
+                const c11 = normToOverlayLocal(r.x + r.w, r.y + r.h);
+                const c01 = normToOverlayLocal(r.x, r.y + r.h);
+                if (!c00 || !c10 || !c11 || !c01) return null;
+                const ptsStr = `${c00.x},${c00.y} ${c10.x},${c10.y} ${c11.x},${c11.y} ${c01.x},${c01.y}`;
+                const fillC =
+                  tool === 'crop_rect'
+                    ? 'rgba(251,146,60,0.1)'
+                    : tool === 'local_edit_rect'
+                      ? 'rgba(16,185,129,0.1)'
+                      : 'rgba(59,130,246,0.08)';
+                const strokeC =
+                  tool === 'crop_rect' ? 'rgba(251,146,60,0.9)' : tool === 'annotate_rect' ? color : 'rgba(16,185,129,0.92)';
+                return <polygon points={ptsStr} fill={fillC} stroke={strokeC} strokeWidth={swd} strokeDasharray="4 3" />;
+              }
+            }
+            if (tool === 'local_edit_ellipse') {
+              const cx = (r.x + r.w / 2) * nw;
+              const cy = (r.y + r.h / 2) * nh;
+              const rx = (r.w * nw) / 2;
+              const ry = (r.h * nh) / 2;
+              return (
+                <ellipse
+                  cx={cx}
+                  cy={cy}
+                  rx={rx}
+                  ry={ry}
+                  fill="rgba(16,185,129,0.1)"
+                  stroke="rgba(16,185,129,0.92)"
+                  strokeWidth={swd}
+                  strokeDasharray="4 3"
+                />
+              );
+            }
+            if (tool === 'local_edit_rect') {
+              return (
+                <rect
+                  x={r.x * nw}
+                  y={r.y * nh}
+                  width={r.w * nw}
+                  height={r.h * nh}
+                  fill="rgba(16,185,129,0.1)"
+                  stroke="rgba(16,185,129,0.92)"
+                  strokeWidth={swd}
+                  strokeDasharray="4 3"
+                />
+              );
+            }
             return (
               <rect
                 x={r.x * nw}
@@ -671,28 +1579,46 @@ export function ImageFlatAnnotationOverlay({
                 height={r.h * nh}
                 fill={tool === 'crop_rect' ? 'rgba(251,146,60,0.1)' : 'rgba(59,130,246,0.08)'}
                 stroke={tool === 'crop_rect' ? 'rgba(251,146,60,0.9)' : color}
-                strokeWidth={Math.max(1, Math.min(nw, nh) * 0.004)}
+                strokeWidth={swd}
                 strokeDasharray="4 3"
               />
             );
           })()
         ) : null}
         {tool === 'brush' && brushDraft && brushDraft.length > 1 ? (
-          <path
-            d={brushDraft.map((q, i) => `${i === 0 ? 'M' : 'L'} ${q.x * nw} ${q.y * nh}`).join(' ')}
-            fill="none"
-            stroke={color}
-            strokeWidth={brushWidth}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
+          (() => {
+            const g = brushPathFromNormPoints(brushDraft, brushWidth, color, false);
+            return g ? <g>{g}</g> : null;
+          })()
         ) : null}
         {tool === 'crop_lasso' && lassoDraft && lassoDraft.length > 1 ? (
-          <path
-            d={lassoDraft.map((q, i) => `${i === 0 ? 'M' : 'L'} ${q.x * nw} ${q.y * nh}`).join(' ')}
+          (() => {
+            const g = brushPathFromNormPoints(
+              lassoDraft,
+              Math.max(1, Math.min(vx, vy) * 0.004),
+              'rgba(251,146,60,0.95)',
+              false
+            );
+            return g ? <g>{g}</g> : null;
+          })()
+        ) : null}
+        {tool === 'local_edit_lasso' && localLassoDraft && localLassoDraft.length > 1 ? (
+          (() => {
+            const g = brushPathFromNormPoints(
+              localLassoDraft,
+              Math.max(1, Math.min(vx, vy) * 0.004),
+              'rgba(16,185,129,0.95)',
+              false
+            );
+            return g ? <g>{g}</g> : null;
+          })()
+        ) : null}
+        {panoMode && tool === 'local_edit_lasso' && panoLocalLassoDraft && panoLocalLassoDraft.length > 1 ? (
+          <polyline
+            points={panoLocalLassoDraft.map((p) => `${p.x * vx},${p.y * vy}`).join(' ')}
             fill="none"
-            stroke="rgba(251,146,60,0.95)"
-            strokeWidth={Math.max(1, Math.min(nw, nh) * 0.004)}
+            stroke="rgba(16,185,129,0.95)"
+            strokeWidth={Math.max(1, Math.min(vx, vy) * 0.004)}
             strokeLinecap="round"
             strokeLinejoin="round"
           />
@@ -706,14 +1632,29 @@ export function ImageFlatAnnotationOverlay({
           defaultValue={editTextItem.text}
           placeholder="输入文字"
           className="pointer-events-auto absolute z-[30] box-border min-w-[7rem] max-w-[min(22rem,calc(55vw))] rounded-md border border-white/25 bg-black/70 px-1.5 py-0.5 text-left shadow-lg outline-none ring-0 backdrop-blur-[2px] placeholder:text-white/40"
-          style={{
-            left: metrics.offsetX + editTextItem.x * metrics.drawW,
-            top: metrics.offsetY + editTextItem.y * metrics.drawH - editFontPx * 0.78,
-            fontSize: editFontPx,
-            lineHeight: 1.25,
-            color: editTextItem.fill,
-            textShadow: '0 0 2px rgba(0,0,0,0.9), 0 1px 2px rgba(0,0,0,0.85)',
-          }}
+          style={
+            panoMode
+              ? (() => {
+                  const lp = normToOverlayLocal(editTextItem.x, editTextItem.y);
+                  if (!lp) return { display: 'none' };
+                  return {
+                    left: lp.x,
+                    top: lp.y - editFontPx * 0.78,
+                    fontSize: editFontPx,
+                    lineHeight: 1.25,
+                    color: editTextItem.fill,
+                    textShadow: '0 0 2px rgba(0,0,0,0.9), 0 1px 2px rgba(0,0,0,0.85)',
+                  };
+                })()
+              : {
+                  left: metrics.offsetX + editTextItem.x * metrics.drawW,
+                  top: metrics.offsetY + editTextItem.y * metrics.drawH - editFontPx * 0.78,
+                  fontSize: editFontPx,
+                  lineHeight: 1.25,
+                  color: editTextItem.fill,
+                  textShadow: '0 0 2px rgba(0,0,0,0.9), 0 1px 2px rgba(0,0,0,0.85)',
+                }
+          }
           autoComplete="off"
           onPointerDown={(ev) => ev.stopPropagation()}
           onClick={(ev) => ev.stopPropagation()}
@@ -739,5 +1680,6 @@ export function ImageFlatAnnotationOverlay({
         />
       ) : null}
     </div>
+    </>
   );
 }

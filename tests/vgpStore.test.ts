@@ -109,6 +109,24 @@ describe('applyVgpAfterSuccessfulGen', () => {
     expect(sem2.provenance.kind).toBe('inherited');
     expect(sem2.provenance.parentSemanticId).toBe(sem1.id);
   });
+
+  it('无 vgpSteps 时可用 userPromptRecord 写入生成说明', () => {
+    let a = makeAsset({ vgp: createInitialVgpForAsset({ id: 'asset-test-1', createdAt: 1 }) });
+    a = { ...a, results: { plain: 'data:image/png;base64,BBB' }, resultOrder: ['plain'], displayKey: 'plain' };
+    const next = applyVgpAfterSuccessfulGen(a, {
+      resultKey: 'plain',
+      vgpSteps: [],
+      semanticSummary: '底部输入',
+      hadPromptOverride: true,
+      inputSourceDisplayKey: 'original',
+      now: 3_000_000_000_000,
+      userPromptRecord: '把天空改成晚霞',
+    });
+    const head = next.vgp!.versionsById[next.vgp!.headVersionId!];
+    const art = next.vgp!.promptsById[head.promptArtifactId!];
+    expect(art.compiled_prompt).toBe('把天空改成晚霞');
+    expect(art.applied_rules.some((r) => r.ruleId === 'user.submitted_prompt')).toBe(true);
+  });
 });
 
 describe('buildCombinedPromptArtifact', () => {

@@ -18,6 +18,7 @@ import {
   getVectorengineApiKey,
   getVectorengineBaseUrl,
 } from "./settingsStore";
+import { consumeTrialGeminiSlotBeforeProxyOrThrow } from "./trialGeminiQuota";
 
 function readViteEnvTrim(key: string): string {
   try {
@@ -34,12 +35,6 @@ const BULK_RAW =
     ? readViteEnvTrim("VITE_BULK_IMAGE_API")
     : "";
 
-/** 仅当供应商为 Vertex 时使用：可与 `VITE_BULK_IMAGE_API` 不同，用于生产站仍指向旧代理、但 Vertex 走已配 GCP 的 gemini-proxy。 */
-const VERTEX_BULK_RAW =
-  typeof import.meta !== "undefined" && (import.meta as unknown as { env?: Record<string, string | undefined> })?.env
-    ? readViteEnvTrim("VITE_BULK_IMAGE_API_VERTEX")
-    : "";
-
 /** 与当前页面同源（配合 Vite `/proxy/gemini` → 本机 9002），避免跨端口 CORS */
 const BULK_SAME_ORIGIN_MARKER = "__SAME_ORIGIN__";
 
@@ -54,48 +49,10 @@ function resolveBulkBaseFromRaw(raw: string): string {
 }
 
 const BULK_BASE = resolveBulkBaseFromRaw(BULK_RAW);
-const VERTEX_BULK_BASE = resolveBulkBaseFromRaw(VERTEX_BULK_RAW);
 
-/**
- * 与 `assetcutter-gemini-proxy` 对照：Render 上同名第二套服务 `assetcutter-ai-pro` 及常见自定义域
- * 默认未配 Vertex；若构建变量仍指向这些主机，选 Vertex 时会一直 500。
- * 回退目标：`VITE_VERTEX_FALLBACK_BULK_API` 或本仓默认已配 Vertex 的代理根 URL。
- */
-const VERTEX_FALLBACK_BULK_RAW =
-  typeof import.meta !== "undefined" && (import.meta as unknown as { env?: Record<string, string | undefined> })?.env
-    ? readViteEnvTrim("VITE_VERTEX_FALLBACK_BULK_API")
-    : "";
-const DEFAULT_VERTEX_OK_BULK = "https://assetcutter-gemini-proxy.onrender.com";
-const VERTEX_MISCONFIGURED_PROXY_HOSTS = new Set(
-  ["assetcutter-ai-pro.onrender.com", "assetcutter-ai-pro.org", "www.assetcutter-ai-pro.org"].map((h) => h.toLowerCase())
-);
-
-function vertexFallbackBulkBase(): string {
-  const v = VERTEX_FALLBACK_BULK_RAW.replace(/\/$/, "");
-  return v || DEFAULT_VERTEX_OK_BULK;
-}
-
-function redirectVertexAwayFromUnconfiguredProxy(base: string): string {
-  if (getAiProvider() !== "vertex") return base;
-  if (readViteEnvTrim("VITE_DISABLE_VERTEX_BULK_FALLBACK") === "true") return base;
-  if (!base || base === BULK_SAME_ORIGIN_MARKER) return base;
-  let host = "";
-  try {
-    const normalized = /^https?:\/\//i.test(base) ? base : `https://${base}`;
-    host = new URL(normalized).hostname.toLowerCase();
-  } catch {
-    return base;
-  }
-  if (!VERTEX_MISCONFIGURED_PROXY_HOSTS.has(host)) return base;
-  return vertexFallbackBulkBase();
-}
-
-/** Vertex 且配置了 `VITE_BULK_IMAGE_API_VERTEX` 时走专用代理根地址，否则与试用/其它路径一致用 `VITE_BULK_IMAGE_API`。 */
+/** 试用通道与直连代理均使用 `VITE_BULK_IMAGE_API`（原独立 Vertex 供应商已并入试用）。 */
 function effectiveBulkBase(): string {
-  let base: string;
-  if (getAiProvider() === "vertex" && VERTEX_BULK_BASE) base = VERTEX_BULK_BASE;
-  else base = BULK_BASE;
-  return redirectVertexAwayFromUnconfiguredProxy(base);
+  return BULK_BASE;
 }
 
 import { DEFAULT_MODEL_TEXT } from "./modelRegistry/constants";
@@ -136,7 +93,6 @@ function shouldUseBulkImageBatchQueue(): boolean {
   const p = getAiProvider();
   if (p === "toapis" || p === "antigravity" || p === "openai" || p === "vectorengine") return false;
   if (p === "trial") return Boolean(BULK_BASE);
-  if (p === "vertex") return Boolean(effectiveBulkBase());
   return false;
 }
 
@@ -155,9 +111,8 @@ function bulkApiUrl(path: string): string {
 const GEMINI_ASYNC_POLL_MS = 1500;
 /** 与 proxy 侧 GEMINI_ASYNC_JOB_MAX_WAIT_MS（默认 300s）对齐，避免前端提前超时 */
 const GEMINI_ASYNC_CLIENT_MAX_POLL_MS = 300_000;
-/** 生图阶段「盒子批处理」：凑满后一次发给 proxy（默认 Vertex=4，其它=3） */
+/** 生图阶段「盒子批处理」：凑满后一次发给 proxy（默认 3，可用 VITE_GEMINI_IMAGE_BATCH_BOX_SIZE 调整） */
 const GEMINI_IMAGE_BATCH_BOX_SIZE_DEFAULT = 3;
-const GEMINI_IMAGE_BATCH_BOX_SIZE_VERTEX_DEFAULT = 4;
 const GEMINI_IMAGE_BATCH_FLUSH_MS = 30;
 const GEMINI_IMAGE_BATCH_GROUP_WAIT_MS = 8_000;
 
@@ -174,17 +129,15 @@ function readEnvNumber(key: string): number | null {
   }
 }
 
-export function resolveImageBatchBoxSize(aiBackend?: "vertex"): number {
+export function resolveImageBatchBoxSize(_legacyVertex?: "vertex"): number {
   const envGeneric = readEnvNumber('VITE_GEMINI_IMAGE_BATCH_BOX_SIZE');
   const envVertex = readEnvNumber('VITE_GEMINI_IMAGE_BATCH_BOX_SIZE_VERTEX');
-  const defaultSize =
-    aiBackend === 'vertex' ? GEMINI_IMAGE_BATCH_BOX_SIZE_VERTEX_DEFAULT : GEMINI_IMAGE_BATCH_BOX_SIZE_DEFAULT;
-  const raw = aiBackend === 'vertex' ? (envVertex ?? envGeneric ?? defaultSize) : (envGeneric ?? defaultSize);
+  const raw = envGeneric ?? envVertex ?? GEMINI_IMAGE_BATCH_BOX_SIZE_DEFAULT;
   return Math.max(1, Math.min(20, Math.floor(raw)));
 }
 
 export function getGeminiImageBatchBoxSizeForCurrentProvider(): number {
-  return resolveImageBatchBoxSize(getAiProvider() === "vertex" ? "vertex" : undefined);
+  return resolveImageBatchBoxSize();
 }
 
 function parseBulkProxyErrorBody(text: string): string {
@@ -213,7 +166,7 @@ async function bulkProxyGenerateContentAsync(args: {
   /** 服务端可对 503 多次退避，轮询上限需覆盖 */
   const maxPollMs = Math.max(httpTimeout + 240_000, GEMINI_ASYNC_CLIENT_MAX_POLL_MS);
 
-  const aiBackendExtra = getAiProvider() === "vertex" ? { aiBackend: "vertex" as const } : {};
+  await consumeTrialGeminiSlotBeforeProxyOrThrow();
 
   const createRes = await fetch(bulkApiUrl("/proxy/gemini/async"), {
     method: "POST",
@@ -222,7 +175,6 @@ async function bulkProxyGenerateContentAsync(args: {
       model: args.model,
       contents: args.contents,
       config: safeConfig,
-      ...aiBackendExtra,
     }),
     signal: abortSignal,
     cache: "no-store",
@@ -232,10 +184,7 @@ async function bulkProxyGenerateContentAsync(args: {
     const raw = (createText || "").trim();
     const parsedMsg = parseBulkProxyErrorBody(raw);
     if (/Use POST \/jobs/i.test(raw)) {
-      const bulkHint =
-        getAiProvider() === "vertex" && VERTEX_BULK_BASE
-          ? `VITE_BULK_IMAGE_API_VERTEX=${VERTEX_BULK_BASE || "(empty)"}`
-          : `VITE_BULK_IMAGE_API=${BULK_BASE || "(empty)"}`;
+      const bulkHint = `VITE_BULK_IMAGE_API=${BULK_BASE || "(empty)"}`;
       throw new Error(
         [
           parsedMsg,
@@ -288,6 +237,7 @@ async function bulkProxyGenerateContentBatchAsync(args: {
   aiBackend?: "vertex";
 }): Promise<Array<{ ok: boolean; result?: { text?: string; candidates?: unknown[] }; error?: string }>> {
   if (!Array.isArray(args.items) || args.items.length === 0) return [];
+  await consumeTrialGeminiSlotBeforeProxyOrThrow();
   const createRes = await fetch(bulkApiUrl("/proxy/gemini/async-batch"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -297,7 +247,6 @@ async function bulkProxyGenerateContentBatchAsync(args: {
         contents: item.contents,
         config: item.config || {},
       })),
-      ...(args.aiBackend ? { aiBackend: args.aiBackend } : {}),
     }),
     cache: "no-store",
   });
@@ -353,7 +302,6 @@ type PendingImageBatchItem = {
   model: string;
   contents: unknown;
   config?: Record<string, unknown>;
-  aiBackend?: "vertex";
   batchGroupKey?: string;
   resolve: (value: { text?: string; candidates?: unknown[] }) => void;
   reject: (reason?: unknown) => void;
@@ -386,8 +334,7 @@ async function flushImageBatchQueue(): Promise<void> {
     while (pendingImageBatchItems.length > 0) {
       const first = pendingImageBatchItems[0];
       if (!first) break;
-      const queueAiBackend = first.aiBackend;
-      const batchBoxSize = resolveImageBatchBoxSize(queueAiBackend);
+      const batchBoxSize = resolveImageBatchBoxSize();
       let chunk: PendingImageBatchItem[] = [];
       if (first.batchGroupKey) {
         const key = first.batchGroupKey;
@@ -414,35 +361,14 @@ async function flushImageBatchQueue(): Promise<void> {
       } else {
         chunk = pendingImageBatchItems.splice(0, batchBoxSize);
       }
-      const aiBackend = chunk[0]?.aiBackend;
-      const mixedBackend = chunk.some((item) => item.aiBackend !== aiBackend);
-      if (mixedBackend) {
-        // 理论上不会发生（provider 全局唯一），兜底回退逐个请求。
-        for (const item of chunk) {
-          try {
-            const single = await bulkProxyGenerateContentAsync({
-              model: item.model,
-              contents: item.contents,
-              config: item.config,
-            });
-            item.resolve(single);
-          } catch (e) {
-            item.reject(e);
-          }
-        }
-        continue;
-      }
       try {
-        console.info(
-          `[gemini-batch] dispatch size=${chunk.length} box=${batchBoxSize} provider=${aiBackend ?? 'gemini'}`
-        );
+        console.info(`[gemini-batch] dispatch size=${chunk.length} box=${batchBoxSize} provider=trial/bulk`);
         const results = await bulkProxyGenerateContentBatchAsync({
           items: chunk.map((item) => ({
             model: item.model,
             contents: item.contents,
             config: item.config,
           })),
-          ...(aiBackend ? { aiBackend } : {}),
         });
         chunk.forEach((item, idx) => {
           const result = results[idx];
@@ -470,8 +396,7 @@ function enqueueImageBatchGenerateContent(args: {
   batchGroupExpected?: number;
 }): Promise<{ text?: string; candidates?: unknown[] }> {
   return new Promise((resolve, reject) => {
-    const aiBackend = getAiProvider() === "vertex" ? ("vertex" as const) : undefined;
-    const batchBoxSize = resolveImageBatchBoxSize(aiBackend);
+    const batchBoxSize = resolveImageBatchBoxSize();
     const batchGroupKey = args.batchGroupKey?.trim();
     if (batchGroupKey) {
       const prev = imageBatchGroupState.get(batchGroupKey);
@@ -486,7 +411,6 @@ function enqueueImageBatchGenerateContent(args: {
       model: args.model,
       contents: args.contents,
       config: args.config,
-      aiBackend,
       ...(batchGroupKey ? { batchGroupKey } : {}),
       resolve,
       reject,
@@ -581,15 +505,6 @@ const getAI = (): GeminiClientLike => {
     return proxyClient;
   }
 
-  if (provider === "vertex") {
-    if (!effectiveBulkBase()) {
-      throw new Error(
-        "当前供应商为 Vertex AI：请在构建环境配置 VITE_BULK_IMAGE_API 或（推荐）VITE_BULK_IMAGE_API_VERTEX 指向已在服务器配置 Vertex 的 gemini-proxy，并在该代理上设置 VERTEX_PROJECT_ID 或 GOOGLE_CLOUD_PROJECT 与 ADC。说明见 docs/VERTEX_AI_INTEGRATION.md"
-      );
-    }
-    return proxyClient;
-  }
-
   const apiKey = getUserApiKey();
   if (apiKey) {
     return new GoogleGenAI({ apiKey }) as unknown as GeminiClientLike;
@@ -603,6 +518,14 @@ export interface GeminiRequestOptions {
   retries?: number;
   retryDelayMs?: number;
   maxRetryDelayMs?: number;
+  /** 提示词擂台：首轮写稿（2～4 人共用一条系统说明；具体 N 在用户消息里） */
+  arenaPromptWriter?: string;
+  /** @deprecated 使用 `arenaPromptWriter`；仍可读作回退 */
+  arenaPromptAb?: string;
+  /** @deprecated 使用 `arenaPromptWriter`；仍可读作回退 */
+  arenaPromptAbN?: string;
+  arenaPromptOptimizeLoser?: string;
+  arenaPromptNewChallenger?: string;
 }
 
 export type GeminiImageBatchGroupOptions = {
@@ -853,15 +776,18 @@ Return as a JSON array of objects with 'id', 'label', and 'box_2d' keys.`,
   detect_blocks: `Identify the major content blocks or layout sections in this image (e.g. separate panels, diagram sections, distinct views, large coherent regions). Do NOT detect every small object (tiles, doors, figures); only return 3-12 bounding boxes for the main blocks that a human would use to "cut the image into separate pictures". Each block should be one logical unit (one view, one panel, one diagram). Return as a JSON array of objects with 'id', 'label', and 'box_2d' keys. Coordinates: [ymin, xmin, ymax, xmax] normalized 0-1000.`,
   dialog_title: `用 2～4 个中文字概括成会话标题。**优先以画面中的物体、主体或场景命名**（如：大门、人物、建筑、星空），不要以操作描述命名。
 只输出标题文字，不要标点、不要解释、不要引号。`,
-  /** 擂台 V2：根据自然语言描述生成两条生图用英文提示词（每条都与用户上传图一起送生图模型，故须为「针对该图的编辑/变换」指令） */
-  arena_ab: `You are a prompt engineer for an image-generation model. The user has already uploaded ONE image and will give a short natural language description of what they want. Each prompt you output will be sent to the image model TOGETHER with that same uploaded image. Therefore every prompt MUST be an instruction to modify, transform, or edit THAT image (e.g. "transform this image into...", "based on this image, make it more...", "restyle the image to..."). Do NOT output standalone text-to-image prompts that describe a new scene from scratch and ignore the uploaded image.
+  /** 擂台：首轮写稿 — N=2/3/4 共用；具体 N 在请求用户段中给出 */
+  arena_writer: `You are a prompt engineer for an image-generation model. The user has already uploaded ONE image and will give a short natural language description of what they want. Each prompt you output will be sent to the image model TOGETHER with that same uploaded image. Therefore every prompt MUST be an instruction to modify, transform, or edit THAT image (e.g. "transform this image into...", "based on this image, make it more...", "restyle the image to..."). Do NOT output standalone text-to-image prompts that describe a new scene from scratch and ignore the uploaded image.
 
-First, in 1-3 sentences, briefly explain your reasoning and how you will create two distinct alternatives that both refer to modifying the uploaded image (e.g. different style or emphasis). Then output exactly two English prompts (promptA, promptB). Both should match the user's intent and both must be clearly instructions that use the uploaded image as the base.
+The user's next message will state N (2, 3, or 4). You must output exactly N distinct alternative prompts in English. All must match the user's intent and differ in wording, style, or emphasis — each must clearly be an edit/transform instruction for the uploaded image.
+
+First, in 1-3 sentences, briefly explain your reasoning and how you will create N distinct alternatives that all refer to modifying the uploaded image.
 
 Output ONLY a valid JSON object with these keys (all strings):
 - "reasoning": your short reasoning (required).
-- "promptA": first English prompt (must be an edit/transform instruction for the uploaded image).
-- "promptB": second English prompt (must be an edit/transform instruction for the uploaded image).
+- "promptA", "promptB": always required.
+- "promptC": required when N >= 3.
+- "promptD": required when N = 4.
 No markdown, no code fence, no other text.`,
   /** 擂台 V2：根据胜者提示词优化败者提示词。结合用户意图不跑偏、参考胜者优点、保留有意义差异；可选用户反馈败者差距与胜者优点。 */
   arena_optimize_loser: `You are a prompt engineer. You will receive: (1) a "winner" prompt the user preferred, (2) a "loser" prompt to improve, and optionally (3) the original user intent, (4) user-reported gaps in the loser (what was wrong with it), (5) user-reported strength of the winner (why it was chosen).
@@ -876,17 +802,6 @@ Rules:
 Output a valid JSON object with two keys (both strings):
 - "reasoning": 1-3 sentences explaining how you improved the loser (what you kept, what you learned from the winner, how you kept it distinct). Use the same language as the user intent if provided, else English.
 - "prompt": the new English image-generation prompt (one line).
-No markdown, no code fence, no other text.`,
-  /** 擂台：根据自然语言描述生成 N 条（2/3/4）生图用英文提示词；每条都与用户上传图一起送生图模型，故须为「针对该图的编辑/变换」指令 */
-  arena_ab_n: `You are a prompt engineer for an image-generation model. The user has already uploaded ONE image and will give a short natural language description. You must output exactly N alternative prompts in English (N will be 2, 3, or 4). Each prompt will be sent to the image model TOGETHER with that same uploaded image. Therefore every prompt MUST be an instruction to modify, transform, or edit THAT image (e.g. "transform this image into...", "based on this image..."). Do NOT output standalone text-to-image prompts that ignore the uploaded image.
-
-First, in 1-3 sentences, briefly explain your reasoning and how you will create N distinct alternatives that all refer to modifying the uploaded image. Then output exactly N prompts. All should match the user's intent and differ in wording, style, or emphasis—but each must clearly be an edit/transform instruction for the uploaded image.
-
-Output ONLY a valid JSON object. Required keys:
-- "reasoning": your short reasoning (string).
-- "promptA", "promptB": first two English prompts (always present; each must be an edit/transform instruction for the uploaded image).
-- "promptC": third English prompt (present when N>=3).
-- "promptD": fourth English prompt (present when N>=4).
 No markdown, no code fence, no other text.`,
   /** 擂台：根据全量信息生成一名新挑战者提示词（用户意图 + 当前擂主 + 已有全部提示词），并输出推理过程 */
   arena_new_challenger: `You are a prompt engineer. You will receive: (1) the original user intent, (2) the current champion (winner) prompt, (3) a list of all other prompts already seen in this arena. Your task: create ONE new image-generation prompt in English that serves as a new "challenger". It should align with user intent, learn from the champion's strengths, but be clearly distinct from the champion and from all existing prompts (do not repeat or copy). Aim for a prompt that could produce a different yet valid interpretation.
@@ -1447,7 +1362,7 @@ export async function dialogGenerateImage(
     const isTextToImage = !imageBase64;
     const systemInstruction = (customSystemPrompt || (isTextToImage ? DEFAULT_PROMPTS.dialog_text_to_image : DEFAULT_PROMPTS.edit)).replace('{instruction}', instruction);
     const timeoutMs =
-      provider === 'vertex'
+      provider === 'trial'
         ? Math.max(baseTimeout, GEMINI_VERTEX_IMAGE_TIMEOUT_MS)
         : baseTimeout;
     const config: { systemInstruction: string; imageConfig?: { aspectRatio?: string; imageSize?: string } } = {
@@ -1527,7 +1442,7 @@ export async function dialogGenerateImages(
     const isTextToImage = !imageBase64;
     const systemInstruction = (customSystemPrompt || (isTextToImage ? DEFAULT_PROMPTS.dialog_text_to_image : DEFAULT_PROMPTS.edit)).replace('{instruction}', instruction);
     const timeoutMs =
-      provider === 'vertex'
+      provider === 'trial'
         ? Math.max(baseTimeout, GEMINI_VERTEX_IMAGE_TIMEOUT_MS)
         : baseTimeout;
     const config: { systemInstruction: string; imageConfig?: { aspectRatio?: string; imageSize?: string } } = {
@@ -1595,7 +1510,7 @@ export async function dialogGenerateImageMulti(
     const provider = getAiProvider();
     const systemInstruction = (DEFAULT_PROMPTS.edit || '').replace('{instruction}', instruction);
     const timeoutMs =
-      provider === 'vertex'
+      provider === 'trial'
         ? Math.max(baseTimeout, GEMINI_VERTEX_IMAGE_TIMEOUT_MS)
         : baseTimeout;
     const config: { systemInstruction: string; imageConfig?: { aspectRatio?: string; imageSize?: string } } = {
@@ -1773,6 +1688,15 @@ export async function getSiteAssistantResponseStream(
   }, options);
 }
 
+function resolveArenaWriterSystemPrompt(options?: GeminiRequestOptions): string {
+  const fromOpt =
+    options?.arenaPromptWriter?.trim() ||
+    options?.arenaPromptAb?.trim() ||
+    options?.arenaPromptAbN?.trim();
+  const base = (fromOpt || DEFAULT_PROMPTS.arena_writer).trim();
+  return base || DEFAULT_PROMPTS.arena_writer;
+}
+
 /** 擂台 V2：根据自然语言描述生成两条生图用英文提示词 A/B，并返回推理过程。见 docs/PROMPT_OPTIMIZATION_AB_DESIGN.md §9 */
 export async function generateArenaABPrompts(
   userDescription: string,
@@ -1780,6 +1704,7 @@ export async function generateArenaABPrompts(
   options?: GeminiRequestOptions
 ): Promise<{ reasoning?: string; promptA: string; promptB: string; rawResponse?: string }> {
   const resolvedModel = resolveUpstreamTextModelId(model);
+  const sysAb = resolveArenaWriterSystemPrompt(options);
   const raw = await callWithRetry(async (signal) => {
     const ai = getAI();
     const response = await ai.models.generateContent({
@@ -1788,9 +1713,9 @@ export async function generateArenaABPrompts(
         {
           role: 'user' as const,
           parts: [
-            { text: DEFAULT_PROMPTS.arena_ab },
+            { text: sysAb },
             {
-              text: `User description: ${(userDescription || '').trim().slice(0, 500)}\n\nImportant: These prompts will be sent to the image model together with the user's uploaded image. Ensure each prompt is an instruction to modify or transform that image (not a standalone description of a new scene).`,
+              text: `User description: ${(userDescription || '').trim().slice(0, 500)}\n\nN = 2. Output exactly 2 prompts (promptA, promptB). Important: These prompts will be sent to the image model together with the user's uploaded image. Ensure each prompt is an instruction to modify or transform that image (not a standalone description of a new scene).`,
             },
           ],
         },
@@ -1847,13 +1772,16 @@ export async function optimizeLoserPrompt(
         ? `User-reported remark about the loser (one sentence, address when improving): ${loserRemark.trim()}`
         : ''
     ].filter(Boolean).join('\n\n');
+    const sysOpt =
+      (options?.arenaPromptOptimizeLoser ?? DEFAULT_PROMPTS.arena_optimize_loser).trim() ||
+      DEFAULT_PROMPTS.arena_optimize_loser;
     const resolvedModel = resolveUpstreamTextModelId(model);
     const response = await ai.models.generateContent({
       model: resolvedModel,
       contents: [
         {
           role: 'user' as const,
-          parts: [{ text: DEFAULT_PROMPTS.arena_optimize_loser }, { text: userText }],
+          parts: [{ text: sysOpt }, { text: userText }],
         },
       ],
       config: buildGeminiConfig({ responseMimeType: 'application/json' }, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)
@@ -1886,6 +1814,7 @@ export async function generateArenaPrompts(
     const out = await generateArenaABPrompts(userDescription, model, options);
     return { reasoning: out.reasoning, prompts: [out.promptA, out.promptB], rawResponse: out.rawResponse };
   }
+  const sysWriter = resolveArenaWriterSystemPrompt(options);
   const resolvedModel = resolveUpstreamTextModelId(model);
   const raw = await callWithRetry(async (signal) => {
     const ai = getAI();
@@ -1895,7 +1824,7 @@ export async function generateArenaPrompts(
         {
           role: 'user' as const,
           parts: [
-            { text: DEFAULT_PROMPTS.arena_ab_n },
+            { text: sysWriter },
             {
               text: `User description: ${(userDescription || '').trim().slice(0, 500)}\n\nN = ${count}. Output exactly ${count} prompts (promptA, promptB${count >= 3 ? ', promptC' : ''}${count >= 4 ? ', promptD' : ''}). Important: These prompts will be sent to the image model together with the user's uploaded image; ensure each prompt is an instruction to modify or transform that image (not a standalone description of a new scene).`,
             },
@@ -1944,13 +1873,16 @@ export async function generateNewChallenger(
         ? `All other prompts already in this arena (be distinct from these):\n${allPreviousPrompts.map((p, i) => `[${i + 1}] ${p}`).join('\n')}`
         : ''
     ].filter(Boolean).join('\n\n');
+    const sysNc =
+      (options?.arenaPromptNewChallenger ?? DEFAULT_PROMPTS.arena_new_challenger).trim() ||
+      DEFAULT_PROMPTS.arena_new_challenger;
     const resolvedModel = resolveUpstreamTextModelId(model);
     const response = await ai.models.generateContent({
       model: resolvedModel,
       contents: [
         {
           role: 'user' as const,
-          parts: [{ text: DEFAULT_PROMPTS.arena_new_challenger }, { text: userText }],
+          parts: [{ text: sysNc }, { text: userText }],
         },
       ],
       config: buildGeminiConfig({ responseMimeType: 'application/json' }, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)

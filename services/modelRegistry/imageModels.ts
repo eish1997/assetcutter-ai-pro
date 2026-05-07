@@ -38,6 +38,12 @@ export type DialogImageGear = (typeof DIALOG_IMAGE_GEARS)[number]["id"];
 
 export type DialogImageGearModelId = (typeof DIALOG_IMAGE_GEARS)[number]["modelId"];
 
+/** 快捷栏档位 → Gemini 生图 registryId（与 `DIALOG_IMAGE_GEARS` 一致） */
+export function resolveDialogImageModelIdForGear(gear: string): DialogImageGearModelId {
+  const g = (DIALOG_IMAGE_GEARS.some((x) => x.id === gear) ? gear : "standard") as DialogImageGear;
+  return DIALOG_IMAGE_GEARS.find((x) => x.id === g)!.modelId;
+}
+
 /**
  * 单次请求内参考图数量上限；未列出的模型回退为 8（与 types 原注释一致）。
  */

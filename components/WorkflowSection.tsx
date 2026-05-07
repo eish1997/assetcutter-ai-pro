@@ -39,9 +39,11 @@ import {
   DEFAULT_PROMPTS,
   normalizeApiErrorMessage,
   getGeminiImageBatchBoxSizeForCurrentProvider,
+  workflowGenerateImage,
 } from '../services/unifiedAiGateway';
 import { detectGrid } from '../services/gridDetector';
 import { DEFAULT_MODEL_TEXT } from '../services/modelRegistry/constants';
+import { resolveDialogImageModelIdForGear } from '../services/modelRegistry/imageModels';
 import {
   executeCapability,
   executeCapabilitySet,
@@ -65,6 +67,12 @@ import { WorkflowStepNodeGraphOverlay } from './WorkflowStepNodeGraphOverlay';
 import { triggerImageDownload } from '../services/imageDataUrl';
 import { readLocalJson, scopedStorageKey, workflowFavoritesStorageKey, writeLocalJson } from '../services/clientPersist';
 import {
+  readLightboxAnnotationPrefs,
+  writeLightboxAnnotationPrefs,
+  type LightboxAnnotationLastCropTool,
+  type LightboxAnnotationLastLocalTool,
+} from '../services/lightboxAnnotationPrefs';
+import {
   buildWorkflowImageTags,
   normalizeWorkflowTagMapToChinese,
   refineWorkflowImageTagsLowCost,
@@ -78,6 +86,18 @@ import {
 } from './ImageFlatAnnotationOverlay';
 import { ImageAnnotationLightboxToolbar } from './ImageAnnotationLightboxToolbar';
 import { rasterizeCropRegion, rasterizeImageWithAnnotationBakes } from '../services/imageManualCrop';
+import { cropDataUrlByViewportNorm } from '../services/panoViewportCapture';
+import type { PanoramaViewportProjection } from '../services/panoViewportProjection';
+import {
+  buildLocalInpaintInstruction,
+  compositeFeatheredLocalPatch,
+  rasterizeExpandedLocalEditCrop,
+} from '../services/localInpaintGemini';
+import type { PanoLocalReprojectSnapshot } from '../services/panoViewportProjection';
+import {
+  compositePanoPatchOntoEquirect,
+  rasterizePanoLocalEditCropFromSnapshot,
+} from '../services/panoLocalInpaintPano';
 import { CustomDropdown } from './ui/CustomDropdown';
 import { resolveCapabilityPreviewSrc } from '../services/capabilityPreviewUrl';
 import { WorkflowCapabilityHoverPreview } from './WorkflowCapabilityHoverPreview';
@@ -111,7 +131,7 @@ import {
   workflowPresetAcceptsTextCardDrag,
   workflowTextAssetOutlineLabel,
 } from '../services/workflowTextAsset';
-import { uuid, baseActionId, makeVersionKey } from './workflow/workflowIds';
+import { uuid, baseActionId, makeVersionKey, stripResultKeyToBaseActionId } from './workflow/workflowIds';
 import {
   asWorkflowImageString,
   safeUnknownToString,
@@ -328,6 +348,20 @@ function readCapabilityDragSource(dataTransfer: DataTransfer | null): string {
   }
 }
 
+/** 元数据「生成说明」：执行器未回 `vgpSteps` 时写入 VGP 的兜底文案（输入框 / 文卡 / 预设 instruction） */
+function buildWorkflowTaskUserPromptRecordForMetadata(
+  task: WorkflowPendingTask,
+  getModule: (actionId: string) => CustomAppModule | undefined
+): string {
+  const override = String(task.promptOverride ?? '').trim();
+  if (override) return override;
+  const inputText = String(task.inputText ?? '').trim();
+  if (inputText) return inputText;
+  const ins = String(getModule(task.actionType)?.instruction ?? '').trim();
+  if (ins) return ins;
+  return '';
+}
+
 /** 大图底部条图标（与标注工具条密度接近） */
 const LIGHTBOX_BAR_IC = { size: 16, strokeWidth: 1.75, className: 'shrink-0' as const };
 const LIGHTBOX_ICON_BTN_NEUTRAL =
@@ -338,6 +372,11 @@ const LIGHTBOX_ICON_BTN_PRIMARY =
   'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-blue-600 text-white ring-1 ring-blue-400/40 hover:bg-blue-500 disabled:opacity-40 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-blue-500/45';
 const LIGHTBOX_ICON_BTN_VIOLET =
   'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-white/[0.05] text-violet-200/95 ring-1 ring-violet-500/25 hover:bg-white/[0.09] hover:text-violet-50 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-blue-500/45';
+
+/** 平面资产字段不存 `panoViewportCrop`（全景独立桶） */
+function overlayDocForFlatAsset(doc: ImageOverlayAnnotationDoc): ImageOverlayAnnotationDoc {
+  return normalizeImageOverlayDoc({ ...doc, panoViewportCrop: null, panoLocalEditViewport: null });
+}
 
 const WorkflowSection: React.FC<{
   capabilityPresets: CustomAppModule[];
@@ -440,6 +479,7 @@ const WorkflowSection: React.FC<{
   lightboxAssetIdRef.current = lightboxAssetId;
   const textLightboxCenterRef = useRef<WorkflowTextLightboxCenterHandle | null>(null);
   const [lightboxMetaText, setLightboxMetaText] = useState<string>('');
+  const [lightboxPointerRgb, setLightboxPointerRgb] = useState<{ r: number; g: number; b: number } | null>(null);
   /** 从组内网格打开大图时记录槽位，预设入队可带 sourceGroup* 与拖拽一致 */
   const [lightboxSourceSlot, setLightboxSourceSlot] = useState<{
     sourceGroupAssetId: string;
@@ -448,13 +488,57 @@ const WorkflowSection: React.FC<{
   const [lightboxOverlayTool, setLightboxOverlayTool] = useState<ImageFlatAnnotationTool>('off');
   const [lightboxOverlayColor, setLightboxOverlayColor] = useState('#60a5fa');
   const [lightboxBrushWidth, setLightboxBrushWidth] = useState(3);
-  const [lightboxOverlayDraft, setLightboxOverlayDraft] = useState<ImageOverlayAnnotationDoc>(() =>
-    normalizeImageOverlayDoc(null)
-  );
+  const [lightboxRememberedLocal, setLightboxRememberedLocal] =
+    useState<LightboxAnnotationLastLocalTool>('local_edit_rect');
+  const [lightboxRememberedCrop, setLightboxRememberedCrop] =
+    useState<LightboxAnnotationLastCropTool>('crop_rect');
+  const [lightboxOverlayByMode, setLightboxOverlayByMode] = useState<{
+    flat: ImageOverlayAnnotationDoc;
+    pano: ImageOverlayAnnotationDoc;
+  }>(() => ({
+    flat: normalizeImageOverlayDoc(null),
+    pano: normalizeImageOverlayDoc(null),
+  }));
+  const lightboxOverlayByModeRef = useRef(lightboxOverlayByMode);
+  lightboxOverlayByModeRef.current = lightboxOverlayByMode;
+  /** 与 `ImagePreviewOverlay` 同步：平面 / 全景 / 3D（后两者编辑时写入 flat 桶） */
+  const [lightboxPreviewLayout, setLightboxPreviewLayout] = useState<'flat' | 'pano' | 'model3d'>('flat');
+  const lightboxOverlayActiveBucket: 'flat' | 'pano' =
+    lightboxPreviewLayout === 'pano' ? 'pano' : 'flat';
+  const lightboxOverlayDraft = lightboxOverlayByMode[lightboxOverlayActiveBucket];
   const lightboxOverlayDraftRef = useRef(lightboxOverlayDraft);
+  const lightboxOverlayActiveBucketRef = useRef(lightboxOverlayActiveBucket);
   lightboxOverlayDraftRef.current = lightboxOverlayDraft;
-  const overlayHistoryPastRef = useRef<ImageOverlayAnnotationDoc[]>([]);
-  const overlayHistoryFutureRef = useRef<ImageOverlayAnnotationDoc[]>([]);
+  lightboxOverlayActiveBucketRef.current = lightboxOverlayActiveBucket;
+  const lightboxPanoViewerRef = useRef<PanoramaViewportProjection | null>(null);
+  /** 大图局部重绘选区底边中点（视口），快捷栏锚在框下方 */
+  const [lightboxQuickComposeAnchor, setLightboxQuickComposeAnchor] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
+  /** 大图提交后递增，强制快捷栏回到默认贴底位置（即使 anchor 本就为 null） */
+  const [lightboxQuickComposeLayoutNonce, setLightboxQuickComposeLayoutNonce] = useState(0);
+  const onLocalEditAnchorClientChange = useCallback((pt: { x: number; y: number } | null) => {
+    setLightboxQuickComposeAnchor(pt);
+  }, []);
+  /** 大图快捷栏：任务已入队但像素仍在客户端异步计算，`runTask` 在此 Promise 上等待 */
+  const lightboxClientImageDeferredRef = useRef(
+    new Map<
+      string,
+      {
+        promise: Promise<string>;
+        resolve: (v: string) => void;
+        reject: (e: unknown) => void;
+      }
+    >()
+  );
+  const overlayHistoryPastByModeRef = useRef<{ flat: ImageOverlayAnnotationDoc[]; pano: ImageOverlayAnnotationDoc[] }>({
+    flat: [],
+    pano: [],
+  });
+  const overlayHistoryFutureByModeRef = useRef<{ flat: ImageOverlayAnnotationDoc[]; pano: ImageOverlayAnnotationDoc[] }>(
+    { flat: [], pano: [] }
+  );
 
   const cloneOverlayDoc = useCallback(
     (d: ImageOverlayAnnotationDoc): ImageOverlayAnnotationDoc => JSON.parse(JSON.stringify(d)),
@@ -463,21 +547,25 @@ const WorkflowSection: React.FC<{
 
   const pushOverlayHistory = useCallback(
     (snapshot: ImageOverlayAnnotationDoc) => {
-      overlayHistoryPastRef.current.push(cloneOverlayDoc(snapshot));
-      if (overlayHistoryPastRef.current.length > 100) overlayHistoryPastRef.current.shift();
-      overlayHistoryFutureRef.current = [];
+      const bucket = lightboxOverlayActiveBucketRef.current;
+      const past = overlayHistoryPastByModeRef.current[bucket];
+      past.push(cloneOverlayDoc(snapshot));
+      if (past.length > 100) past.shift();
+      overlayHistoryFutureByModeRef.current[bucket] = [];
     },
     [cloneOverlayDoc]
   );
 
   const onLightboxOverlayPatch = useCallback(
     (patch: (prev: ImageOverlayAnnotationDoc) => ImageOverlayAnnotationDoc, opts?: { skipHistory?: boolean }) => {
-      setLightboxOverlayDraft((prev) => {
-        const normalized = normalizeImageOverlayDoc(prev);
+      const bucket = lightboxOverlayActiveBucketRef.current;
+      setLightboxOverlayByMode((prev) => {
+        const cur = prev[bucket];
+        const normalized = normalizeImageOverlayDoc(cur);
         const next = normalizeImageOverlayDoc(patch(normalized));
         if (JSON.stringify(normalized) === JSON.stringify(next)) return prev;
         if (!opts?.skipHistory) pushOverlayHistory(normalized);
-        return next;
+        return { ...prev, [bucket]: next };
       });
     },
     [pushOverlayHistory]
@@ -488,24 +576,36 @@ const WorkflowSection: React.FC<{
   }, [pushOverlayHistory]);
 
   const overlayUndo = useCallback(() => {
-    const past = overlayHistoryPastRef.current;
+    const bucket = lightboxOverlayActiveBucketRef.current;
+    const past = overlayHistoryPastByModeRef.current[bucket];
     if (past.length === 0) return;
     const prevHead = past.pop()!;
-    setLightboxOverlayDraft((cur) => {
-      overlayHistoryFutureRef.current.push(cloneOverlayDoc(normalizeImageOverlayDoc(cur)));
-      return prevHead;
+    setLightboxOverlayByMode((cur) => {
+      const curDoc = cur[bucket];
+      overlayHistoryFutureByModeRef.current[bucket].push(cloneOverlayDoc(normalizeImageOverlayDoc(curDoc)));
+      return { ...cur, [bucket]: prevHead };
     });
   }, [cloneOverlayDoc]);
 
   const overlayRedo = useCallback(() => {
-    const fut = overlayHistoryFutureRef.current;
+    const bucket = lightboxOverlayActiveBucketRef.current;
+    const fut = overlayHistoryFutureByModeRef.current[bucket];
     if (fut.length === 0) return;
     const nextHead = fut.pop()!;
-    setLightboxOverlayDraft((cur) => {
-      overlayHistoryPastRef.current.push(cloneOverlayDoc(normalizeImageOverlayDoc(cur)));
-      return nextHead;
+    setLightboxOverlayByMode((cur) => {
+      const curDoc = cur[bucket];
+      overlayHistoryPastByModeRef.current[bucket].push(cloneOverlayDoc(normalizeImageOverlayDoc(curDoc)));
+      return { ...cur, [bucket]: nextHead };
     });
   }, [cloneOverlayDoc]);
+
+  const handleLightboxPreviewLayoutChange = useCallback((layout: 'flat' | 'pano' | 'model3d') => {
+    setLightboxPreviewLayout(layout);
+  }, []);
+
+  useEffect(() => {
+    if (!lightboxAssetId) setLightboxQuickComposeAnchor(null);
+  }, [lightboxAssetId]);
 
   const [archivedDetailAssetId, setArchivedDetailAssetId] = useState<string | null>(null);
   const [executing, setExecuting] = useState(false);
@@ -879,7 +979,8 @@ const WorkflowSection: React.FC<{
       const set = getSet(actionType.slice(SET_ACTION_PREFIX.length));
       return set?.label ?? actionType;
     }
-    return getModule(actionType)?.label ?? actionType;
+    const baseId = stripResultKeyToBaseActionId(actionType);
+    return getModule(baseId)?.label ?? baseId;
   }, [getModule, getSet]);
   const getTaskLogLabel = useCallback(
     (task: WorkflowPendingTask) =>
@@ -888,15 +989,18 @@ const WorkflowSection: React.FC<{
         : getActionLabel(task.actionType),
     [getActionLabel]
   );
-  const getGenerationRecordStepLabel = (stepKey: string) => {
+  const getGenerationRecordStepLabel = useCallback((stepKey: string, asset?: WorkflowAsset) => {
     if (stepKey === 'original') return '原图';
     if (stepKey === 'cut_image') return '切割';
     if (stepKey.startsWith(SET_ACTION_PREFIX)) {
       const s = getSet(stepKey.slice(SET_ACTION_PREFIX.length));
       return s?.label ?? stepKey;
     }
-    return getModule(baseActionId(stepKey))?.label ?? stepKey;
-  };
+    const metaL = asset?.resultMeta?.[stepKey]?.displayStepLabel?.trim();
+    if (metaL) return metaL;
+    const baseId = stripResultKeyToBaseActionId(stepKey);
+    return getModule(baseId)?.label ?? baseId;
+  }, [getSet, getModule]);
   const getAssetDisplayImage = useCallback((
     a: WorkflowAsset,
     _assetsList?: WorkflowAsset[],
@@ -1166,7 +1270,9 @@ const WorkflowSection: React.FC<{
         const img = asWorkflowImageString((a.results as Record<string, unknown>)[dk]).trim();
         if (img && !img.includes('image/svg+xml')) {
           if (dk === 'cut_image') return '切割';
-          const baseId = baseActionId(dk);
+          const metaL = a.resultMeta?.[dk]?.displayStepLabel?.trim();
+          if (metaL) return metaL;
+          const baseId = stripResultKeyToBaseActionId(dk);
           return getModule(baseId)?.label ?? baseId;
         }
       }
@@ -1175,7 +1281,10 @@ const WorkflowSection: React.FC<{
     if ((a.modelUrls?.length ?? 0) > 0 && a.displayKey === 'original') return '3D 模型';
     if (a.displayKey === 'original') return '原始';
     if (a.displayKey === 'cut_image') return '切割';
-    const baseId = baseActionId(a.displayKey);
+    const dk = a.displayKey;
+    const metaL = a.resultMeta?.[dk]?.displayStepLabel?.trim();
+    if (metaL) return metaL;
+    const baseId = stripResultKeyToBaseActionId(dk);
     return getModule(baseId)?.label ?? baseId;
   };
   const buildTextLightboxPreviewDataUrl = useCallback((titleRaw: string, bodyRaw: string): string => {
@@ -1372,6 +1481,40 @@ ${lineSvg}
     vgpSteps?: VgpGenStepCapture[];
   }> => {
     const { actionType, inputImage, inputText } = task;
+    const prefetched = String(task.clientPrefetchedImageResult || '').trim();
+    if (prefetched) {
+      setAssetError(task.assetId, null);
+      return { image: prefetched };
+    }
+    if (task.lightboxAwaitClientResult) {
+      const box = lightboxClientImageDeferredRef.current.get(task.id);
+      if (!box) {
+        const msg = `[${getTaskLogLabel(task)}] 大图提交状态异常（请重试）`;
+        onLog?.('warn', msg);
+        setAssetError(task.assetId, msg);
+        return { image: null };
+      }
+      try {
+        const img = await box.promise;
+        const s = String(img ?? '').trim();
+        if (!s) {
+          const msg = `[${getTaskLogLabel(task)}] 未能取得生成图`;
+          onLog?.('warn', msg);
+          setAssetError(task.assetId, msg);
+          return { image: null };
+        }
+        setAssetError(task.assetId, null);
+        return { image: s };
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : safeUnknownToString(err);
+        const full = `[${getTaskLogLabel(task)}] ${msg}`;
+        onLog?.('warn', full);
+        setAssetError(task.assetId, full);
+        return { image: null };
+      } finally {
+        lightboxClientImageDeferredRef.current.delete(task.id);
+      }
+    }
     let resolvedInputImage = inputImage ?? '';
     let resolvedInputImagesForExecute: string[] | undefined;
 
@@ -1922,7 +2065,13 @@ ${lineSvg}
                   const hasAnyText = Object.keys(a.textResults || {}).some((k) => baseActionId(k) === baseId);
                   const tKey = hasAnyText ? makeVersionKey(baseId) : baseId;
                   const nextOrder = [...(a.resultOrder || []), tKey];
-                  const nextMeta = { ...(a.resultMeta || {}), [tKey]: { executedAt: Date.now() } };
+                  const nextMeta = {
+                    ...(a.resultMeta || {}),
+                    [tKey]: {
+                      executedAt: Date.now(),
+                      ...(task.displayStepLabel ? { displayStepLabel: task.displayStepLabel } : {}),
+                    },
+                  };
                   const next: WorkflowAsset = {
                     ...a,
                     textResults: { ...(a.textResults || {}), [tKey]: textResult },
@@ -1948,7 +2097,11 @@ ${lineSvg}
                     const nextOrder = [...(a.resultOrder || []), key];
                     const nextMeta = {
                       ...(a.resultMeta || {}),
-                      [key]: { executedAt: Date.now(), mediaKind: 'video' as const },
+                      [key]: {
+                        executedAt: Date.now(),
+                        mediaKind: 'video' as const,
+                        ...(task.displayStepLabel ? { displayStepLabel: task.displayStepLabel } : {}),
+                      },
                     };
                     const tagList = buildWorkflowImageTags({
                       actionLabel: getTaskLogLabel(task),
@@ -1975,6 +2128,7 @@ ${lineSvg}
                       semanticSummary: hadOverride ? `${summaryLabel}（用户微调）` : summaryLabel,
                       hadPromptOverride: hadOverride,
                       inputSourceDisplayKey: task.inputSourceDisplayKey,
+                      userPromptRecord: buildWorkflowTaskUserPromptRecordForMetadata(task, getModule),
                     });
                     return next;
                   })
@@ -1997,7 +2151,13 @@ ${lineSvg}
                     const key = result ? (hasAnyVersion ? makeVersionKey(baseId) : baseId) : baseId;
                     const nextResults = result ? { ...a.results, [key]: result } : a.results;
                     const nextOrder = result ? [...(a.resultOrder || []), key] : a.resultOrder || [];
-                    const nextMeta = { ...(a.resultMeta || {}), [key]: { executedAt: Date.now() } };
+                    const nextMeta = {
+                      ...(a.resultMeta || {}),
+                      [key]: {
+                        executedAt: Date.now(),
+                        ...(task.displayStepLabel ? { displayStepLabel: task.displayStepLabel } : {}),
+                      },
+                    };
                     const tagList =
                       result
                         ? buildWorkflowImageTags({
@@ -2031,6 +2191,7 @@ ${lineSvg}
                         semanticSummary: hadOverride ? `${summaryLabel}（用户微调）` : summaryLabel,
                         hadPromptOverride: hadOverride,
                         inputSourceDisplayKey: task.inputSourceDisplayKey,
+                        userPromptRecord: buildWorkflowTaskUserPromptRecordForMetadata(task, getModule),
                       });
                     }
                     return next;
@@ -2233,6 +2394,8 @@ ${lineSvg}
     preserveBottomBarDraft?: boolean;
     /** 忽略底部拖入的预设卡片，只走「文/图/3D」内置逻辑（大图预览） */
     skipPromptCards?: boolean;
+    /** 大图预览等：任务挂在该已有图片资产上，不新建隐藏卡片 */
+    reuseAssetId?: string;
   };
 
   const submitQuickCompose = useCallback((invoke?: QuickComposeSubmitInvokeOptions) => {
@@ -2573,6 +2736,41 @@ ${lineSvg}
     const maxRef = maxReferenceImagesForImageGear(plainImgMod.imageGear);
     const imgs = imgsAll.slice(0, maxRef);
     const first = imgs[0]!;
+    const reuseId = invoke?.reuseAssetId?.trim();
+    if (reuseId) {
+      const exist = assetsRef.current.find((a) => a.id === reuseId);
+      if (!exist || isWorkflowTextAsset(exist)) {
+        onLog?.('warn', '底部快捷栏：无法将任务挂到指定资产');
+        return;
+      }
+      const newTasks: WorkflowPendingTask[] = [];
+      for (let i = 0; i < countN; i += 1) {
+        newTasks.push({
+          id: uuid(),
+          assetId: reuseId,
+          actionType: QUICK_COMPOSE_PLAIN_I2I_ACTION_ID,
+          inputImage: first,
+          addedAt: Date.now(),
+          inputSourceDisplayKey: exist.displayKey,
+          ...(imgs.length >= 2 ? { inputImages: imgs } : {}),
+          ...(plainText ? { promptOverride: plainText } : {}),
+          ...taskOverrides,
+          logContext: plainLog,
+        });
+      }
+      if (executing) {
+        setPending((prev) => [...prev, ...newTasks]);
+      } else {
+        void executePending([...newTasks, ...pendingRef.current]);
+      }
+      if (!invoke?.preserveBottomBarDraft) {
+        setQuickComposeDraft('');
+        setQuickComposeImages([]);
+      }
+      setQuickComposePromptCards([]);
+      onLog?.('info', '底部快捷栏：已加入执行队列');
+      return;
+    }
     const newAssets: WorkflowAsset[] = [];
     const newTasks: WorkflowPendingTask[] = [];
     for (let i = 0; i < countN; i += 1) {
@@ -2622,7 +2820,7 @@ ${lineSvg}
     buildPendingTaskFromAssetSnapshot,
   ]);
 
-  const submitLightboxQuickCompose = useCallback(async () => {
+  const submitLightboxQuickCompose = useCallback(() => {
     const id = lightboxAssetIdRef.current;
     const asset = assetsRef.current.find((a) => a.id === id);
     if (!asset || isWorkflowTextAsset(asset)) {
@@ -2634,25 +2832,202 @@ ${lineSvg}
       onLog?.('warn', '大图预览：当前无可提交的图像');
       return;
     }
-    const items = lightboxOverlayDraftRef.current.items;
-    let composite = src;
-    if (items.length > 0) {
-      const baked = await rasterizeImageWithAnnotationBakes(src, items);
-      if (baked) {
-        composite = baked;
-      } else {
-        onLog?.('warn', '大图预览：标注合成失败，仍使用当前底图提交');
+
+    const doc = lightboxOverlayDraftRef.current;
+    const localEditSnapshot = doc.localEdit ?? null;
+    const panoLocalVp = doc.panoLocalEditViewport ?? null;
+    const itemsSnapshot = doc.items;
+    const userText = quickComposeDraftRef.current.trim();
+
+    /** 先同步清 UI，再立即入队，节点树才能马上进入「执行中」 */
+    const nextOverlayForPersist = normalizeImageOverlayDoc({
+      ...doc,
+      localEdit: null,
+      panoLocalEditViewport: null,
+    });
+    const persistBucket = lightboxOverlayActiveBucketRef.current;
+    flushSync(() => {
+      setLightboxOverlayByMode((prev) => ({ ...prev, [persistBucket]: nextOverlayForPersist }));
+      setLightboxQuickComposeAnchor(null);
+      setLightboxQuickComposeLayoutNonce((n) => n + 1);
+      setQuickComposeDraft('');
+      setQuickComposeImages([]);
+      setQuickComposePromptCards([]);
+      setAssets((prev) =>
+        prev.map((a) => {
+          if (a.id !== asset.id) return a;
+          const dk = asset.displayKey;
+          if (persistBucket === 'pano') {
+            return {
+              ...a,
+              imageOverlayAnnotationsPano: {
+                ...(a.imageOverlayAnnotationsPano || {}),
+                [dk]: nextOverlayForPersist,
+              },
+            };
+          }
+          return {
+            ...a,
+            imageOverlayAnnotations: {
+              ...(a.imageOverlayAnnotations || {}),
+              [dk]: overlayDocForFlatAsset(nextOverlayForPersist),
+            },
+          };
+        })
+      );
+    });
+
+    const plainImgMod = getQuickComposePlainModule(QUICK_COMPOSE_PLAIN_I2I_ACTION_ID)!;
+    const taskOverrides: WorkflowPendingTaskOptions = {};
+    const eng = getCapabilityEngine(plainImgMod);
+    if (eng === 'gen_image') {
+      taskOverrides.overrideImageGear =
+        quickComposeGear === 'fast' || quickComposeGear === 'standard' || quickComposeGear === 'pro'
+          ? quickComposeGear
+          : 'standard';
+      if (quickComposeAspect && quickComposeAspect !== 'adaptive') {
+        taskOverrides.overrideImageAspectRatio = quickComposeAspect;
+      }
+      if (quickComposeSize === '1K' || quickComposeSize === '2K' || quickComposeSize === '4K') {
+        taskOverrides.overrideImageSize = quickComposeSize;
       }
     }
-    submitQuickCompose({
-      overrideImageDataUrls: [composite],
-      overrideUserText: quickComposeDraftRef.current,
-      preferImagePipelineWhenImagesAttached: true,
-      preserveBottomBarDraft: true,
-      skipPromptCards: true,
+    const plainLog: WorkflowPendingTask['logContext'] = 'quick_compose_bar_plain';
+
+    let resolveClient!: (v: string) => void;
+    let rejectClient!: (e: unknown) => void;
+    const clientPromise = new Promise<string>((res, rej) => {
+      resolveClient = res;
+      rejectClient = rej;
     });
-    onLog?.('info', '大图预览：已加入队列（附图为当前显示画面，已合成平面标注）');
-  }, [getLightboxPreviewImageSrc, onLog, submitQuickCompose]);
+    const taskId = uuid();
+    lightboxClientImageDeferredRef.current.set(taskId, {
+      promise: clientPromise,
+      resolve: resolveClient,
+      reject: rejectClient,
+    });
+
+    const task: WorkflowPendingTask = {
+      id: taskId,
+      assetId: asset.id,
+      actionType: QUICK_COMPOSE_PLAIN_I2I_ACTION_ID,
+      inputImage: src,
+      addedAt: Date.now(),
+      inputSourceDisplayKey: asset.displayKey,
+      ...(userText ? { promptOverride: userText } : {}),
+      ...taskOverrides,
+      logContext: plainLog,
+      lightboxAwaitClientResult: true,
+      ...(localEditSnapshot || panoLocalVp ? { displayStepLabel: '局部重绘' } : {}),
+    };
+
+    if (executing) {
+      setPending((prev) => [...prev, task]);
+    } else {
+      void executePending([task, ...pendingRef.current]);
+    }
+
+    void (async () => {
+      let composite = src;
+      let panoSnap: string | null = null;
+      let panoRep: PanoLocalReprojectSnapshot | null = null;
+      if (panoLocalVp) {
+        const proj = lightboxPanoViewerRef.current;
+        if (proj) {
+          panoSnap = proj.captureViewDataUrl('image/png');
+          panoRep = proj.getReprojectSnapshot();
+        }
+      }
+      try {
+        if (panoLocalVp && panoSnap && panoRep) {
+          try {
+            onLog?.('info', '大图预览：全景局部重绘中（视口快照 → 扩边 → 生成 → 贴回等距柱）…');
+            const plan = await rasterizePanoLocalEditCropFromSnapshot(panoSnap, panoLocalVp, panoRep);
+            if (!plan) {
+              onLog?.('warn', '大图预览：全景局部裁切失败，将按整图继续');
+            } else {
+              const gear =
+                quickComposeGear === 'fast' || quickComposeGear === 'standard' || quickComposeGear === 'pro'
+                  ? quickComposeGear
+                  : 'standard';
+              const modelId = resolveDialogImageModelIdForGear(gear);
+              const instruction = buildLocalInpaintInstruction(userText);
+              const genUrl = await workflowGenerateImage(plan.cropDataUrl, instruction, modelId);
+              const merged = await compositePanoPatchOntoEquirect(
+                src,
+                genUrl,
+                plan.expandedRectPx,
+                plan.reproject,
+                plan.featherPx
+              );
+              if (merged) {
+                composite = merged;
+              } else {
+                onLog?.('warn', '大图预览：全景局部贴回失败，将按当前底图继续');
+              }
+            }
+          } catch (err) {
+            onLog?.('warn', `大图预览：全景局部重绘失败 — ${normalizeApiErrorMessage(err)}`);
+          }
+        } else if (panoLocalVp) {
+          onLog?.('warn', '大图预览：全景局部重绘需要在大图「全景」模式下截取当前视口，请切换后重试');
+        } else if (localEditSnapshot) {
+          try {
+            onLog?.('info', '大图预览：局部重绘中（扩边裁切 → 生成 → 贴回）…');
+            const plan = await rasterizeExpandedLocalEditCrop(src, localEditSnapshot);
+            if (!plan) {
+              onLog?.('warn', '大图预览：局部重绘裁切失败，将按整图继续');
+            } else {
+              const gear =
+                quickComposeGear === 'fast' || quickComposeGear === 'standard' || quickComposeGear === 'pro'
+                  ? quickComposeGear
+                  : 'standard';
+              const modelId = resolveDialogImageModelIdForGear(gear);
+              const instruction = buildLocalInpaintInstruction(userText);
+              const genUrl = await workflowGenerateImage(plan.cropDataUrl, instruction, modelId);
+              const merged = await compositeFeatheredLocalPatch(src, genUrl, plan.dest, plan.featherPx);
+              if (merged) {
+                composite = merged;
+              } else {
+                onLog?.('warn', '大图预览：局部贴回合成失败，将按当前底图继续');
+              }
+            }
+          } catch (err) {
+            onLog?.('warn', `大图预览：局部重绘失败 — ${normalizeApiErrorMessage(err)}`);
+          }
+        }
+        if (itemsSnapshot.length > 0) {
+          const baked = await rasterizeImageWithAnnotationBakes(composite, itemsSnapshot);
+          if (baked) {
+            composite = baked;
+          } else {
+            onLog?.('warn', '大图预览：标注合成失败，仍使用当前底图收尾');
+          }
+        }
+        resolveClient(composite);
+      } catch (e) {
+        rejectClient(e);
+      }
+    })();
+
+    onLog?.('info', '大图预览：已入队（正在生成预览，结果写入当前卡片）');
+  }, [
+    getLightboxPreviewImageSrc,
+    onLog,
+    quickComposeGear,
+    quickComposeAspect,
+    quickComposeSize,
+    setLightboxOverlayByMode,
+    setLightboxQuickComposeAnchor,
+    setPending,
+    executing,
+    executePending,
+    setQuickComposeDraft,
+    setQuickComposeImages,
+    setQuickComposePromptCards,
+    setAssets,
+    setLightboxQuickComposeLayoutNonce,
+  ]);
 
   const cancelQueuedTaskInBatch = useCallback((taskId: string) => {
     if (!taskId) return;
@@ -3510,32 +3885,30 @@ ${lineSvg}
   }, [lightboxAsset, assets, getAssetDisplayImage, getAssetDisplayText]);
 
   useEffect(() => {
+    if (
+      !lightboxAssetId ||
+      !lightboxAsset ||
+      !lightboxShowsImage ||
+      isWorkflowTextAsset(lightboxAsset) ||
+      isGroupAsset(lightboxAsset)
+    ) {
+      setLightboxPointerRgb(null);
+    }
+  }, [lightboxAssetId, lightboxAsset, lightboxShowsImage]);
+
+  useEffect(() => {
     if (!lightboxAsset || !lightboxShowsImage) return;
     if (isWorkflowTextAsset(lightboxAsset)) return;
     if (isGroupAsset(lightboxAsset)) return;
     const dk = lightboxAsset.displayKey;
-    overlayHistoryPastRef.current = [];
-    overlayHistoryFutureRef.current = [];
-    setLightboxOverlayDraft(normalizeImageOverlayDoc(lightboxAsset.imageOverlayAnnotations?.[dk]));
+    overlayHistoryPastByModeRef.current = { flat: [], pano: [] };
+    overlayHistoryFutureByModeRef.current = { flat: [], pano: [] };
+    const legacy = normalizeImageOverlayDoc(lightboxAsset.imageOverlayAnnotations?.[dk]);
+    const flatDoc = overlayDocForFlatAsset(legacy);
+    const panoDoc = normalizeImageOverlayDoc(lightboxAsset.imageOverlayAnnotationsPano?.[dk] ?? null);
+    setLightboxOverlayByMode({ flat: flatDoc, pano: panoDoc });
     setLightboxOverlayTool('off');
   }, [lightboxAsset, lightboxShowsImage]);
-
-  useEffect(() => {
-    if (!lightboxAssetId || !lightboxShowsImage) return;
-    const a = assets.find((x) => x.id === lightboxAssetId);
-    if (!a || isWorkflowTextAsset(a) || isGroupAsset(a)) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (!e.ctrlKey && !e.metaKey) return;
-      if (isWorkflowEditableTarget(e.target)) return;
-      if (e.key === 'z' || e.key === 'Z') {
-        e.preventDefault();
-        if (e.shiftKey) overlayRedo();
-        else overlayUndo();
-      }
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [lightboxAssetId, lightboxShowsImage, assets, overlayRedo, overlayUndo]);
 
   const _goLightbox = (delta: number) => {
     if (lightboxList.length === 0) return;
@@ -3579,6 +3952,7 @@ ${lineSvg}
   const persistLightboxOverlayAnnotations = useCallback(() => {
     const id = lightboxAssetId;
     if (!id) return;
+    const snap = lightboxOverlayByModeRef.current;
     setAssets((prev) => {
       const a = prev.find((x) => x.id === id);
       if (!a) return prev;
@@ -3590,13 +3964,89 @@ ${lineSvg}
               ...x,
               imageOverlayAnnotations: {
                 ...(x.imageOverlayAnnotations || {}),
-                [dk]: lightboxOverlayDraft,
+                [dk]: overlayDocForFlatAsset(snap.flat),
+              },
+              imageOverlayAnnotationsPano: {
+                ...(x.imageOverlayAnnotationsPano || {}),
+                [dk]: snap.pano,
               },
             }
       );
     });
     onLog?.('info', '大图标注已写入当前显示版本（随项目保存）');
-  }, [lightboxAssetId, lightboxOverlayDraft, onLog, setAssets]);
+  }, [lightboxAssetId, onLog, setAssets]);
+
+  /** 关闭大图前写入资产，使再次打开仍为上次的标注/裁切/局部重绘状态 */
+  const flushLightboxOverlayToAsset = useCallback(() => {
+    const id = lightboxAssetIdRef.current;
+    if (!id) return;
+    const snap = lightboxOverlayByModeRef.current;
+    const flatW = overlayDocForFlatAsset(snap.flat);
+    const panoW = normalizeImageOverlayDoc(snap.pano);
+    setAssets((prev) => {
+      const a = prev.find((x) => x.id === id);
+      if (!a || isWorkflowTextAsset(a) || isGroupAsset(a)) return prev;
+      if (!getAssetDisplayImage(a).trim()) return prev;
+      const dk = a.displayKey;
+      return prev.map((x) =>
+        x.id !== id
+          ? x
+          : {
+              ...x,
+              imageOverlayAnnotations: {
+                ...(x.imageOverlayAnnotations || {}),
+                [dk]: flatW,
+              },
+              imageOverlayAnnotationsPano: {
+                ...(x.imageOverlayAnnotationsPano || {}),
+                [dk]: panoW,
+              },
+            }
+      );
+    });
+  }, [getAssetDisplayImage, setAssets]);
+
+  const handleLightboxClose = useCallback(() => {
+    flushLightboxOverlayToAsset();
+    setLightboxAssetId(null);
+    setLightboxSourceSlot(null);
+  }, [flushLightboxOverlayToAsset]);
+
+  const resetLightboxOverlayAll = useCallback(() => {
+    const id = lightboxAssetId;
+    if (!id || !lightboxAsset) return;
+    if (isWorkflowTextAsset(lightboxAsset) || isGroupAsset(lightboxAsset) || !lightboxShowsImage) return;
+    const bucket = lightboxOverlayActiveBucketRef.current;
+    overlayHistoryPastByModeRef.current[bucket] = [];
+    overlayHistoryFutureByModeRef.current[bucket] = [];
+    const empty = normalizeImageOverlayDoc(null);
+    setLightboxOverlayByMode((prev) => ({ ...prev, [bucket]: empty }));
+    setLightboxOverlayTool('off');
+    setLightboxQuickComposeAnchor(null);
+    const dk = lightboxAsset.displayKey;
+    setAssets((prev) =>
+      prev.map((x) => {
+        if (x.id !== id) return x;
+        if (bucket === 'pano') {
+          return {
+            ...x,
+            imageOverlayAnnotationsPano: {
+              ...(x.imageOverlayAnnotationsPano || {}),
+              [dk]: empty,
+            },
+          };
+        }
+        return {
+          ...x,
+          imageOverlayAnnotations: {
+            ...(x.imageOverlayAnnotations || {}),
+            [dk]: empty,
+          },
+        };
+      })
+    );
+    onLog?.('info', '已清空当前预览模式下的标注、裁切与局部重绘（已写入当前显示版本）');
+  }, [lightboxAssetId, lightboxAsset, lightboxShowsImage, onLog, setAssets]);
 
   const applyLightboxManualCrops = useCallback(async () => {
     const id = lightboxAssetId;
@@ -3605,19 +4055,41 @@ ${lineSvg}
     if (!srcAsset || isWorkflowTextAsset(srcAsset) || isGroupAsset(srcAsset)) return;
     const src = getLightboxPreviewImageSrc(srcAsset);
     if (!src.trim()) return;
+    const panoCrop = lightboxOverlayDraft.panoViewportCrop;
     const crops = lightboxOverlayDraft.crops;
     const bakeItems = lightboxOverlayDraft.items;
-    if (crops.length === 0) {
-      onLog?.('warn', '请先添加矩形或套索裁切区域');
+    const outs: string[] = [];
+
+    if (panoCrop) {
+      const proj = lightboxPanoViewerRef.current;
+      if (!proj) {
+        onLog?.('warn', '全景矩形裁切需要在大图预览的「全景」模式下应用，请切换到全景后再试');
+        return;
+      }
+      const snap = proj.captureViewDataUrl('image/png');
+      if (!snap) {
+        onLog?.('warn', '无法截取当前全景画面，请稍后重试');
+        return;
+      }
+      const u = await cropDataUrlByViewportNorm(snap, panoCrop);
+      if (u) outs.push(u);
+      else onLog?.('warn', '全景裁切生成失败');
+    } else if (crops.length > 0) {
+      for (const c of crops) {
+        const u = await rasterizeCropRegion(src, c, { bakeItems });
+        if (u) outs.push(u);
+      }
+      if (outs.length === 0) {
+        onLog?.('warn', '裁切生成失败（可能为跨域图源，请改用站内或 data URL 图）');
+        return;
+      }
+    } else {
+      onLog?.('warn', '请先添加矩形或套索裁切区域（全景下请用矩形裁切框选视口区域）');
       return;
     }
-    const outs: string[] = [];
-    for (const c of crops) {
-      const u = await rasterizeCropRegion(src, c, { bakeItems });
-      if (u) outs.push(u);
-    }
+
     if (outs.length === 0) {
-      onLog?.('warn', '裁切生成失败（可能为跨域图源，请改用站内或 data URL 图）');
+      onLog?.('warn', '裁切生成失败');
       return;
     }
 
@@ -3709,7 +4181,7 @@ ${lineSvg}
       return next;
     });
 
-    onLightboxOverlayPatch((d) => ({ ...d, crops: [] }));
+    onLightboxOverlayPatch((d) => ({ ...d, crops: [], panoViewportCrop: undefined }));
     onLog?.('info', `已生成 ${outs.length} 张透明 PNG 裁切并入组（已合成当前标注层）`);
   }, [
     assets,
@@ -3717,6 +4189,7 @@ ${lineSvg}
     lightboxAssetId,
     lightboxOverlayDraft.crops,
     lightboxOverlayDraft.items,
+    lightboxOverlayDraft.panoViewportCrop,
     onLightboxOverlayPatch,
     onLog,
     scheduleCompanionPersistOriginalAny,
@@ -3872,6 +4345,8 @@ ${lineSvg}
         delete nextMeta[actionType];
         const nextOverlay = { ...(a.imageOverlayAnnotations || {}) };
         delete nextOverlay[actionType];
+        const nextOverlayPano = { ...(a.imageOverlayAnnotationsPano || {}) };
+        delete nextOverlayPano[actionType];
         const nextTags = { ...(a.imageTags || {}) };
         delete nextTags[actionType];
         const nextTagStage = { ...(a.imageTagStage || {}) };
@@ -3887,6 +4362,7 @@ ${lineSvg}
           displayKey,
           resultsCompanionKeys: Object.keys(nextRc).length ? nextRc : undefined,
           imageOverlayAnnotations: Object.keys(nextOverlay).length ? nextOverlay : undefined,
+          imageOverlayAnnotationsPano: Object.keys(nextOverlayPano).length ? nextOverlayPano : undefined,
           imageTags: Object.keys(nextTags).length ? nextTags : undefined,
           imageTagStage: Object.keys(nextTagStage).length ? nextTagStage : undefined,
         };
@@ -4615,6 +5091,103 @@ ${lineSvg}
   useEffect(() => {
     writeLocalJson(quickComposeModeStorageKey, quickComposeMode);
   }, [quickComposeMode, quickComposeModeStorageKey]);
+
+  const lightboxAnnotationPrefsKey = useMemo(
+    () => scopedStorageKey('workflow_lightbox_annotation_prefs', preferenceScope),
+    [preferenceScope]
+  );
+
+  useEffect(() => {
+    const p = readLightboxAnnotationPrefs(lightboxAnnotationPrefsKey);
+    setLightboxRememberedLocal(p.lastLocalEditTool);
+    setLightboxRememberedCrop(p.lastCropTool);
+    setLightboxOverlayColor(p.overlayColor);
+    setLightboxBrushWidth(p.brushWidth);
+  }, [lightboxAnnotationPrefsKey]);
+
+  const applyLightboxToolChange = useCallback(
+    (t: ImageFlatAnnotationTool) => {
+      setLightboxOverlayTool(t);
+      const disk = readLightboxAnnotationPrefs(lightboxAnnotationPrefsKey);
+      const nextLocal =
+        t === 'local_edit_rect' || t === 'local_edit_ellipse' || t === 'local_edit_lasso'
+          ? t
+          : disk.lastLocalEditTool;
+      const nextCrop = t === 'crop_rect' || t === 'crop_lasso' ? t : disk.lastCropTool;
+      if (t === 'local_edit_rect' || t === 'local_edit_ellipse' || t === 'local_edit_lasso') {
+        setLightboxRememberedLocal(t);
+      }
+      if (t === 'crop_rect' || t === 'crop_lasso') {
+        setLightboxRememberedCrop(t);
+      }
+      writeLightboxAnnotationPrefs(lightboxAnnotationPrefsKey, {
+        v: 1,
+        lastLocalEditTool: nextLocal,
+        lastCropTool: nextCrop,
+        overlayColor: lightboxOverlayColor,
+        brushWidth: lightboxBrushWidth,
+      });
+    },
+    [lightboxAnnotationPrefsKey, lightboxOverlayColor, lightboxBrushWidth]
+  );
+
+  const onLightboxOverlayColorChange = useCallback(
+    (c: string) => {
+      setLightboxOverlayColor(c);
+      const disk = readLightboxAnnotationPrefs(lightboxAnnotationPrefsKey);
+      writeLightboxAnnotationPrefs(lightboxAnnotationPrefsKey, { ...disk, overlayColor: c });
+    },
+    [lightboxAnnotationPrefsKey]
+  );
+
+  const onLightboxBrushWidthChange = useCallback(
+    (n: number) => {
+      const clamped = Math.max(1, Math.min(80, Math.round(n)));
+      setLightboxBrushWidth(clamped);
+      const disk = readLightboxAnnotationPrefs(lightboxAnnotationPrefsKey);
+      writeLightboxAnnotationPrefs(lightboxAnnotationPrefsKey, { ...disk, brushWidth: clamped });
+    },
+    [lightboxAnnotationPrefsKey]
+  );
+
+  useEffect(() => {
+    if (!lightboxAssetId || !lightboxShowsImage) return;
+    const a = assets.find((x) => x.id === lightboxAssetId);
+    if (!a || isWorkflowTextAsset(a) || isGroupAsset(a)) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (isWorkflowEditableTarget(e.target)) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) {
+        if (e.key === 'z' || e.key === 'Z') {
+          e.preventDefault();
+          if (e.shiftKey) overlayRedo();
+          else overlayUndo();
+        }
+        return;
+      }
+      const ch = e.key;
+      if (ch === 'b' || ch === 'B') {
+        e.preventDefault();
+        applyLightboxToolChange('brush');
+      } else if (ch === 'c' || ch === 'C') {
+        e.preventDefault();
+        applyLightboxToolChange(lightboxRememberedCrop);
+      } else if (ch === 'a' || ch === 'A') {
+        e.preventDefault();
+        applyLightboxToolChange(lightboxRememberedLocal);
+      }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [
+    lightboxAssetId,
+    lightboxShowsImage,
+    assets,
+    overlayRedo,
+    overlayUndo,
+    applyLightboxToolChange,
+    lightboxRememberedCrop,
+    lightboxRememberedLocal,
+  ]);
 
   useEffect(() => {
     if (quickComposeMode === 'text') setQuickComposeImages([]);
@@ -7125,22 +7698,31 @@ ${lineSvg}
                     })
                   );
                 }}
-                onSaveAndClose={() => {
-                  setLightboxAssetId(null);
-                  setLightboxSourceSlot(null);
-                }}
+                onSaveAndClose={handleLightboxClose}
               />
             ) : undefined
           }
-          onClose={() => {
-            setLightboxAssetId(null);
-            setLightboxSourceSlot(null);
-          }}
+          onClose={handleLightboxClose}
           wheelListLength={lightboxList.length}
           onWheelNavigate={handleLightboxWheelNavigate}
           innerWheelOptionCount={getDisplayKeysForAsset(lightboxAsset).length}
           onWheelInnerNavigate={handleLightboxWheelCycleDisplay}
-          innerLayoutStableKey={lightboxShowsImage ? lightboxAsset.id : undefined}
+          innerLayoutStableKey={
+            lightboxShowsImage ? `${lightboxAsset.id}:${lightboxAsset.displayKey}` : undefined
+          }
+          onFlatImagePixelSample={
+            lightboxShowsImage &&
+            !isWorkflowTextAsset(lightboxAsset) &&
+            !isGroupAsset(lightboxAsset) &&
+            lightboxModelUrls.length === 0
+              ? setLightboxPointerRgb
+              : undefined
+          }
+          onPreviewLayoutChange={
+            lightboxShowsImage && !isWorkflowTextAsset(lightboxAsset) && !isGroupAsset(lightboxAsset)
+              ? handleLightboxPreviewLayoutChange
+              : undefined
+          }
           contentRightInset="0px"
           enablePanoramaMode={lightboxShowsImage}
           modelUrls={lightboxModelUrls}
@@ -7150,13 +7732,17 @@ ${lineSvg}
               ? workflowSafeImgSrc(lightboxAsset.original)
               : undefined
           }
+          panoViewerRef={lightboxPanoViewerRef}
           flatImageOverlay={
             lightboxShowsImage &&
             !isWorkflowTextAsset(lightboxAsset) &&
             !isGroupAsset(lightboxAsset)
-              ? ({ imgRef }) => (
+              ? ({ imgRef, panoOverlayContainerRef, panoProjectionRef, panoViewerBindEpoch }) => (
                   <ImageFlatAnnotationOverlay
                     imgRef={imgRef}
+                    panoOverlayContainerRef={panoOverlayContainerRef}
+                    panoProjectionRef={panoProjectionRef}
+                    panoViewerBindEpoch={panoViewerBindEpoch}
                     layoutKey={getLightboxPreviewImageSrc(lightboxAsset)}
                     doc={lightboxOverlayDraft}
                     tool={lightboxOverlayTool}
@@ -7164,6 +7750,7 @@ ${lineSvg}
                     brushWidth={lightboxBrushWidth}
                     onDocPatch={onLightboxOverlayPatch}
                     onBeginDragGesture={overlayBeginDragGesture}
+                    onLocalEditAnchorClientChange={onLocalEditAnchorClientChange}
                   />
                 )
               : undefined
@@ -7258,11 +7845,17 @@ ${lineSvg}
                   saved.length > 0
                     ? saved
                     : displayKey !== 'original'
-                      ? buildWorkflowImageTags({
-                          actionLabel: getActionLabel(baseActionId(displayKey)),
-                          actionId: baseActionId(displayKey),
-                          presetInstruction: getModule(baseActionId(displayKey))?.instruction,
-                        })
+                      ? (() => {
+                          const baseKey = stripResultKeyToBaseActionId(displayKey);
+                          const actionLabel =
+                            lightboxAsset.resultMeta?.[displayKey]?.displayStepLabel?.trim() ||
+                            getActionLabel(baseKey);
+                          return buildWorkflowImageTags({
+                            actionLabel,
+                            actionId: baseKey,
+                            presetInstruction: getModule(baseKey)?.instruction,
+                          });
+                        })()
                       : [];
                 return (
                   <div className="px-3 pt-3 pb-2 border-b border-white/10">
@@ -7284,9 +7877,44 @@ ${lineSvg}
                   </div>
                 );
               })()}
+              {lightboxShowsImage &&
+              !isWorkflowTextAsset(lightboxAsset) &&
+              !isGroupAsset(lightboxAsset) &&
+              lightboxModelUrls.length === 0 ? (
+                <div className="px-3 pt-2 pb-2 border-b border-white/10">
+                  <div className="text-[8px] font-black text-gray-500 uppercase mb-1">光标像素 RGB</div>
+                  <div className="flex items-center gap-2 min-h-[30px]">
+                    {lightboxPointerRgb ? (
+                      <>
+                        <span
+                          className="h-7 w-7 shrink-0 rounded border border-white/15 shadow-inner"
+                          style={{
+                            backgroundColor: `rgb(${lightboxPointerRgb.r},${lightboxPointerRgb.g},${lightboxPointerRgb.b})`,
+                          }}
+                          title={`RGB(${lightboxPointerRgb.r}, ${lightboxPointerRgb.g}, ${lightboxPointerRgb.b})`}
+                          aria-hidden
+                        />
+                        <div className="text-[9px] font-mono text-gray-200 leading-snug tabular-nums min-w-0">
+                          <div>
+                            R {lightboxPointerRgb.r} · G {lightboxPointerRgb.g} · B {lightboxPointerRgb.b}
+                          </div>
+                          <div className="text-[8px] text-gray-500">
+                            #
+                            {lightboxPointerRgb.r.toString(16).padStart(2, '0')}
+                            {lightboxPointerRgb.g.toString(16).padStart(2, '0')}
+                            {lightboxPointerRgb.b.toString(16).padStart(2, '0')}
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="text-[8px] text-gray-600">在主图内容上移动指针取样（须位于图内）</div>
+                    )}
+                  </div>
+                </div>
+              ) : null}
               <WorkflowGenerationRecordPanel
                 asset={lightboxAsset}
-                getStepLabel={getGenerationRecordStepLabel}
+                getStepLabel={(k) => getGenerationRecordStepLabel(k, lightboxAsset)}
                 mode="inline"
                 onSelectDisplayKey={(key) => setDisplayKey(lightboxAsset.id, key)}
               />
@@ -7371,9 +7999,11 @@ ${lineSvg}
                   </button>
                 ) : null}
                 {(lightboxAsset.resultOrder || []).map((k) => {
-                  if (baseActionId(k) === 'cut_image') return null;
-                  const mod = getModule(baseActionId(k));
-                  const label = mod?.label ?? baseActionId(k);
+                  if (stripResultKeyToBaseActionId(k) === 'cut_image') return null;
+                  const label =
+                    lightboxAsset.resultMeta?.[k]?.displayStepLabel?.trim() ||
+                    getModule(stripResultKeyToBaseActionId(k))?.label ||
+                    stripResultKeyToBaseActionId(k);
                   if (isWorkflowTextAsset(lightboxAsset)) {
                     const hasText = Boolean((lightboxAsset.textResults || {})[k]);
                     const hasImg = Boolean(asWorkflowImageString(lightboxAsset.results?.[k]).trim());
@@ -7421,8 +8051,9 @@ ${lineSvg}
       !isGroupAsset(lightboxAsset) ? (
         <WorkflowStepNodeGraphOverlay
           asset={lightboxAsset}
-          getStepLabel={getGenerationRecordStepLabel}
+          getStepLabel={(k) => getGenerationRecordStepLabel(k, lightboxAsset)}
           onSelectDisplayKey={(key) => setDisplayKey(lightboxAsset.id, key)}
+          pixelBusy={busyAssetIds.has(lightboxAsset.id)}
         />
       ) : null}
 
@@ -7436,17 +8067,21 @@ ${lineSvg}
           <div className="pointer-events-none fixed inset-0 z-[2200]">
             <ImageAnnotationLightboxToolbar
               tool={lightboxOverlayTool}
-              onToolChange={setLightboxOverlayTool}
+              onToolChange={applyLightboxToolChange}
               color={lightboxOverlayColor}
-              onColorChange={setLightboxOverlayColor}
+              onColorChange={onLightboxOverlayColorChange}
               brushWidth={lightboxBrushWidth}
-              onBrushWidthChange={setLightboxBrushWidth}
+              onBrushWidthChange={onLightboxBrushWidthChange}
               onUndo={overlayUndo}
               onRedo={overlayRedo}
               onPersist={persistLightboxOverlayAnnotations}
               onClearAnnotations={() => onLightboxOverlayPatch((d) => ({ ...d, items: [] }))}
               onApplyCrops={() => void applyLightboxManualCrops()}
               onClearCrops={() => onLightboxOverlayPatch((d) => ({ ...d, crops: [] }))}
+              onClearLocalEdit={() =>
+                onLightboxOverlayPatch((d) => ({ ...d, localEdit: null, panoLocalEditViewport: null }))
+              }
+              onResetAll={resetLightboxOverlayAll}
             />
           </div>,
           document.body
@@ -7461,6 +8096,8 @@ ${lineSvg}
           <WorkspaceQuickComposeBar
             visible
             placement="lightbox"
+            lightboxAnchorClient={lightboxQuickComposeAnchor}
+            lightboxLayoutResetNonce={lightboxQuickComposeLayoutNonce}
             placeholderOverride="描述修改意图，附图固定为当前预览（含平面标注）"
             composeMode={quickComposeMode}
             onComposeModeChange={setQuickComposeMode}

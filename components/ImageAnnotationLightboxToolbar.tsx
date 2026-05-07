@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from
 import type { ImageFlatAnnotationTool } from './ImageFlatAnnotationOverlay';
 import {
   ChevronDown,
+  Circle,
   Crop,
   ImagePlus,
   Lasso,
@@ -12,12 +13,13 @@ import {
   PenLine,
   Plus,
   Redo2,
+  RotateCcw,
   Save,
+  Sparkles,
   Square,
   Trash2,
   Type,
   Undo2,
-  X,
 } from 'lucide-react';
 import {
   TITLE_ROW_STEPPER_SHELL,
@@ -43,6 +45,11 @@ const TOOL_BTN_BASE =
 
 const ANNOTATE_DRAW_TOOLS = new Set<ImageFlatAnnotationTool>(['select', 'annotate_rect', 'brush', 'text']);
 const CROP_TOOLS = new Set<ImageFlatAnnotationTool>(['crop_rect', 'crop_lasso']);
+const LOCAL_EDIT_TOOLS = new Set<ImageFlatAnnotationTool>([
+  'local_edit_rect',
+  'local_edit_ellipse',
+  'local_edit_lasso',
+]);
 
 function clampBarToViewport(
   pos: { left: number; top: number },
@@ -159,6 +166,9 @@ export type ImageAnnotationLightboxToolbarProps = {
   onClearAnnotations: () => void;
   onApplyCrops: () => void;
   onClearCrops: () => void;
+  onClearLocalEdit: () => void;
+  /** 清空标注、裁切、全景视口裁切、局部重绘与撤销栈，并写入当前显示版本 */
+  onResetAll: () => void;
 };
 
 /**
@@ -177,13 +187,15 @@ export function ImageAnnotationLightboxToolbar({
   onClearAnnotations,
   onApplyCrops,
   onClearCrops,
+  onClearLocalEdit,
+  onResetAll,
 }: ImageAnnotationLightboxToolbarProps) {
   const colorInputRef = useRef<HTMLInputElement | null>(null);
   const barRef = useRef<HTMLDivElement | null>(null);
   const dragOffsetRef = useRef<{ x: number; y: number } | null>(null);
 
   /** 打开后不因点空白/滚动收起；再点同一分类或切换「标注/裁切」时收起/切换 */
-  const [openMenu, setOpenMenu] = useState<null | 'annotate' | 'crop'>(null);
+  const [openMenu, setOpenMenu] = useState<null | 'annotate' | 'crop' | 'local'>(null);
   /** 菜单相对主栏：下方或上方（按视口剩余空间） */
   const [menuPlacement, setMenuPlacement] = useState<'below' | 'above'>('below');
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
@@ -281,19 +293,27 @@ export function ImageAnnotationLightboxToolbar({
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
-  const toggleMenu = useCallback((key: 'annotate' | 'crop') => {
+  const toggleMenu = useCallback((key: 'annotate' | 'crop' | 'local') => {
     setOpenMenu((prev) => (prev === key ? null : key));
   }, []);
 
   const annotateActive = ANNOTATE_DRAW_TOOLS.has(tool);
   const cropActive = CROP_TOOLS.has(tool);
+  const localActive = LOCAL_EDIT_TOOLS.has(tool);
 
-  const categoryBtn = (which: 'annotate' | 'crop', active: boolean) => {
+  const categoryBtn = (which: 'annotate' | 'crop' | 'local', active: boolean) => {
     const open = openMenu === which;
     const chevronOpenClass = open && menuPlacement === 'above' ? 'rotate-180' : '';
+    const categoryTitle =
+      which === 'annotate'
+        ? '标注（子工具见菜单；画笔快捷键 B）'
+        : which === 'crop'
+          ? '裁切（快捷键 C，沿用上次矩形或套索）'
+          : '局部重绘（快捷键 A，沿用上次选区形状）';
     return (
       <button
         type="button"
+        title={categoryTitle}
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={(e) => {
@@ -308,8 +328,10 @@ export function ImageAnnotationLightboxToolbar({
             : 'bg-white/[0.06] text-gray-300 ring-1 ring-white/[0.1] hover:bg-white/[0.11] hover:text-gray-100',
         ].join(' ')}
       >
-        {which === 'annotate' ? <PenLine {...ic} /> : <Crop {...ic} />}
-        <span className="text-[8px] font-black uppercase tracking-wide">{which === 'annotate' ? '标注' : '裁切'}</span>
+        {which === 'annotate' ? <PenLine {...ic} /> : which === 'crop' ? <Crop {...ic} /> : <Sparkles {...ic} />}
+        <span className="text-[8px] font-black uppercase tracking-wide">
+          {which === 'annotate' ? '标注' : which === 'crop' ? '裁切' : '局部'}
+        </span>
         <ChevronDown className={`h-3 w-3 opacity-85 transition-transform ${chevronOpenClass}`} strokeWidth={2} />
       </button>
     );
@@ -329,7 +351,12 @@ export function ImageAnnotationLightboxToolbar({
         <ToolShell dense title="矩形标注" active={tool === 'annotate_rect'} onClick={() => onToolChange('annotate_rect')}>
           <Square {...icSm} />
         </ToolShell>
-        <ToolShell dense title="画笔" active={tool === 'brush'} onClick={() => onToolChange('brush')}>
+        <ToolShell
+          dense
+          title="画笔（快捷键 B）"
+          active={tool === 'brush'}
+          onClick={() => onToolChange('brush')}
+        >
           <Paintbrush {...icSm} />
         </ToolShell>
         <ToolShell dense title="文字（在图上点击后直接输入）" active={tool === 'text'} onClick={() => onToolChange('text')}>
@@ -393,10 +420,20 @@ export function ImageAnnotationLightboxToolbar({
   const cropPanel = (
     <div className="flex flex-col gap-1" role="menu">
       <div className="flex flex-wrap gap-0.5">
-        <ToolShell dense title="矩形裁切区" active={tool === 'crop_rect'} onClick={() => onToolChange('crop_rect')}>
+        <ToolShell
+          dense
+          title="矩形裁切区（快捷键 C 默认记忆上次裁切方式）"
+          active={tool === 'crop_rect'}
+          onClick={() => onToolChange('crop_rect')}
+        >
           <Crop {...icSm} />
         </ToolShell>
-        <ToolShell dense title="套索裁切" active={tool === 'crop_lasso'} onClick={() => onToolChange('crop_lasso')}>
+        <ToolShell
+          dense
+          title="套索裁切（选用后按 C 可回到套索）"
+          active={tool === 'crop_lasso'}
+          onClick={() => onToolChange('crop_lasso')}
+        >
           <Lasso {...icSm} />
         </ToolShell>
       </div>
@@ -404,8 +441,44 @@ export function ImageAnnotationLightboxToolbar({
         <ActionBtn dense title="生成裁切资产（透明 PNG，含标注合成）" onClick={onApplyCrops} variant="amber">
           <ImagePlus {...icSm} />
         </ActionBtn>
-        <ActionBtn dense title="移除全部裁切区" onClick={onClearCrops}>
-          <X {...icSm} />
+        <ActionBtn dense title="移除全部裁切区" onClick={onClearCrops} variant="danger">
+          <Trash2 {...icSm} />
+        </ActionBtn>
+      </div>
+    </div>
+  );
+
+  const localPanel = (
+    <div className="flex flex-col gap-1" role="menu">
+      <div className="flex flex-wrap gap-0.5">
+        <ToolShell
+          dense
+          title="矩形局部重绘（快捷键 A 默认记忆上次选区形状；提交时扩边裁切 → 生成 → 贴回）"
+          active={tool === 'local_edit_rect'}
+          onClick={() => onToolChange('local_edit_rect')}
+        >
+          <Square {...icSm} />
+        </ToolShell>
+        <ToolShell
+          dense
+          title="椭圆局部重绘（选用后按 A 可回到椭圆）"
+          active={tool === 'local_edit_ellipse'}
+          onClick={() => onToolChange('local_edit_ellipse')}
+        >
+          <Circle {...icSm} />
+        </ToolShell>
+        <ToolShell
+          dense
+          title="套索局部重绘（选用后按 A 可回到套索）"
+          active={tool === 'local_edit_lasso'}
+          onClick={() => onToolChange('local_edit_lasso')}
+        >
+          <Lasso {...icSm} />
+        </ToolShell>
+      </div>
+      <div className="flex flex-wrap gap-0.5 border-t border-white/[0.06] pt-1">
+        <ActionBtn dense title="清除局部重绘选区" onClick={onClearLocalEdit} variant="danger">
+          <Trash2 {...icSm} />
         </ActionBtn>
       </div>
     </div>
@@ -433,7 +506,7 @@ export function ImageAnnotationLightboxToolbar({
             ].join(' ')}
             role="presentation"
           >
-            {openMenu === 'annotate' ? annotatePanel : cropPanel}
+            {openMenu === 'annotate' ? annotatePanel : openMenu === 'crop' ? cropPanel : localPanel}
           </div>
         ) : null}
 
@@ -463,12 +536,17 @@ export function ImageAnnotationLightboxToolbar({
         <RailDivider />
         {categoryBtn('annotate', annotateActive)}
         {categoryBtn('crop', cropActive)}
+        {categoryBtn('local', localActive)}
         <RailDivider />
         <ActionBtn title="撤销 (Ctrl/⌘+Z)" onClick={onUndo}>
           <Undo2 {...ic} />
         </ActionBtn>
         <ActionBtn title="重做 (⇧Ctrl/⇧⌘+Z)" onClick={onRedo}>
           <Redo2 {...ic} />
+        </ActionBtn>
+        <RailDivider />
+        <ActionBtn title="一键清空：标注、裁切、局部重绘、全景裁切框（写入当前版本）" onClick={onResetAll} variant="danger">
+          <RotateCcw {...ic} />
         </ActionBtn>
         </div>
       </div>

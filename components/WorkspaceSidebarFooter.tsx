@@ -147,50 +147,35 @@ const WorkspaceSidebarFooter: React.FC<WorkspaceSidebarFooterProps> = ({
           <span
             role="status"
             aria-hidden
-            className={`h-2 w-2 shrink-0 rounded-full ${
+            className={`inline-block h-2 w-2 shrink-0 rounded-full align-middle ${
               aiInvocationReady ? 'bg-emerald-500' : 'bg-amber-500'
             }`}
           />
-          <span className="text-[8px] font-bold leading-snug text-gray-300">{platformAbbrev(aiPlatformLabel)}</span>
+          <span className="text-[8px] font-bold leading-[1.25] text-gray-300">{platformAbbrev(aiPlatformLabel)}</span>
         </button>
       ) : null}
 
       {user?.id && activeWorkspaceProjectId ? (
-        <div
-          className="w-full min-w-0 rounded-lg bg-white/[0.04] px-2 py-2 ring-1 ring-white/[0.07]"
-          title={companionCardTitle}
+        <button
+          type="button"
+          onClick={() => setCompanionDownloadModalOpen(true)}
+          className="flex w-full min-w-0 items-center justify-center gap-1.5 rounded-lg bg-white/[0.05] px-2 py-2 ring-1 ring-white/[0.07] hover:bg-white/[0.08]"
+          title={`${companionCardTitle} · 点击查看说明与下载`}
+          aria-label={`本地伴侣 ${companionStatusLong}，打开说明与下载`}
         >
-          <div className="flex min-w-0 items-center gap-2">
-            <span
-              className={`h-2 w-2 shrink-0 rounded-full ${
-                companionLinked === true ? 'bg-emerald-400' : companionLinked === false ? 'bg-rose-400' : 'bg-amber-300'
-              }`}
-              role="status"
-              aria-label={companionStatusLong}
-            />
-            <span className="min-w-0 truncate text-[8px] font-bold leading-snug text-gray-200">本地</span>
-          </div>
-          <button
-            type="button"
-            onClick={() => setCompanionDownloadModalOpen(true)}
-            className="mt-2 flex h-8 w-full min-w-0 items-center justify-center rounded-md bg-blue-600 text-white hover:bg-blue-500"
-            title="查看桌面伴侣说明与下载"
-            aria-label="打开桌面伴侣下载说明"
-          >
-            <svg
-              viewBox="0 0 24 24"
-              className="h-4 w-4 shrink-0"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={2}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden
-            >
-              <path d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 4v11" />
-            </svg>
-          </button>
-        </div>
+          <span
+            role="status"
+            aria-hidden
+            className={`inline-block h-2 w-2 shrink-0 rounded-full align-middle ${
+              companionLinked === true
+                ? 'bg-emerald-500'
+                : companionLinked === false
+                  ? 'bg-rose-500'
+                  : 'bg-amber-500'
+            }`}
+          />
+          <span className="min-w-0 truncate text-[8px] font-bold leading-[1.25] text-gray-300">本地</span>
+        </button>
       ) : null}
 
       {companionDownloadModalOpen && typeof document !== 'undefined'
@@ -235,35 +220,38 @@ const WorkspaceSidebarFooter: React.FC<WorkspaceSidebarFooterProps> = ({
                 </ul>
 
                 <p className="mt-4 text-[10px] font-semibold uppercase tracking-wide text-gray-500">有 / 无本地伴侣</p>
+                <p className="mt-1 text-[9px] leading-relaxed text-gray-500">
+                  无本地伴侣也可在网站内正常使用 AI 生图与工作流；下表「×」仅表示缺少对应本机目录或伴侣能力，而非不能生图。
+                </p>
                 <div className="mt-2 overflow-x-auto rounded-lg border border-white/[0.08]">
                   <table className="w-full min-w-[280px] border-collapse text-left text-[10px]">
                     <thead>
                       <tr className="border-b border-white/[0.08] bg-white/[0.04]">
-                        <th className="px-2 py-2 font-black text-gray-300">场景</th>
+                        <th className="px-2 py-2 font-black text-gray-300">功能</th>
                         <th className="px-2 py-2 font-bold text-gray-500">无本地伴侣</th>
                         <th className="px-2 py-2 font-bold text-blue-200/95">有本地伴侣</th>
                       </tr>
                     </thead>
                     <tbody className="text-gray-400">
                       <tr className="border-b border-white/[0.06]">
-                        <td className="px-2 py-2 text-gray-300">工作区与素材</td>
-                        <td className="px-2 py-2">依赖浏览器与手动导出，大项目易顶配额</td>
-                        <td className="px-2 py-2 text-gray-300">本机目录统一落盘，路径清晰、可备份</td>
+                        <td className="px-2 py-2 text-gray-300">本机目录落盘与路径备份</td>
+                        <td className="px-2 py-2 text-center text-[13px] font-semibold text-rose-400/90">×</td>
+                        <td className="px-2 py-2 text-center text-[13px] font-semibold text-emerald-400/90">√</td>
                       </tr>
                       <tr className="border-b border-white/[0.06]">
-                        <td className="px-2 py-2 text-gray-300">插件 / 本地算力</td>
-                        <td className="px-2 py-2">无法使用本机插件包与伴侣计算任务</td>
-                        <td className="px-2 py-2 text-gray-300">宿主插件、exec/probe 等可在本机执行</td>
+                        <td className="px-2 py-2 text-gray-300">宿主插件与伴侣侧算力</td>
+                        <td className="px-2 py-2 text-center text-[13px] font-semibold text-rose-400/90">×</td>
+                        <td className="px-2 py-2 text-center text-[13px] font-semibold text-emerald-400/90">√</td>
                       </tr>
                       <tr className="border-b border-white/[0.06]">
-                        <td className="px-2 py-2 text-gray-300">协作与接续</td>
-                        <td className="px-2 py-2">换机主要依赖云索引与导出，画布仍以本机为准</td>
-                        <td className="px-2 py-2 text-gray-300">同一工作区根目录可多台接续编辑</td>
+                        <td className="px-2 py-2 text-gray-300">同一本机根目录跨设备接续</td>
+                        <td className="px-2 py-2 text-center text-[13px] font-semibold text-rose-400/90">×</td>
+                        <td className="px-2 py-2 text-center text-[13px] font-semibold text-emerald-400/90">√</td>
                       </tr>
                       <tr>
-                        <td className="px-2 py-2 text-gray-300">隐私与流量</td>
-                        <td className="px-2 py-2">敏感素材多经浏览器与网络往返</td>
-                        <td className="px-2 py-2 text-gray-300">大资源可留本机，减少不必要上传</td>
+                        <td className="px-2 py-2 text-gray-300">大文件本机驻留、减少上传往返</td>
+                        <td className="px-2 py-2 text-center text-[13px] font-semibold text-rose-400/90">×</td>
+                        <td className="px-2 py-2 text-center text-[13px] font-semibold text-emerald-400/90">√</td>
                       </tr>
                     </tbody>
                   </table>

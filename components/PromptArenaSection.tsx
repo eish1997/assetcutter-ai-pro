@@ -18,6 +18,54 @@ import { SiteImage } from './SiteImage';
 import { useEffectiveImageGearRows } from '../hooks/useEffectiveImageGearRows';
 
 const ARENA_SNAPSHOT_TEXT_LIMIT = 4000;
+
+const ARENA_SYS_STORAGE_KEY = 'ac_arena_system_prompts_v1';
+
+type ArenaSysPromptsState = {
+  /** 首轮写稿：2～4 人共用一条系统说明（具体 N 在请求里附带） */
+  writer: string;
+  optimize: string;
+  newCh: string;
+};
+
+type LegacyArenaSysV1 = { ab?: string; abN?: string; writer?: string; optimize?: string; newCh?: string };
+
+function defaultArenaSysPrompts(): ArenaSysPromptsState {
+  return {
+    writer: DEFAULT_PROMPTS.arena_writer,
+    optimize: DEFAULT_PROMPTS.arena_optimize_loser,
+    newCh: DEFAULT_PROMPTS.arena_new_challenger,
+  };
+}
+
+function loadArenaSysPrompts(): ArenaSysPromptsState {
+  try {
+    const raw = localStorage.getItem(ARENA_SYS_STORAGE_KEY);
+    if (!raw) return defaultArenaSysPrompts();
+    const j = JSON.parse(raw) as LegacyArenaSysV1;
+    const d = defaultArenaSysPrompts();
+    let writer: string;
+    if (typeof j.writer === 'string') {
+      writer = j.writer;
+    } else {
+      const ab = typeof j.ab === 'string' ? j.ab : '';
+      const abN = typeof j.abN === 'string' ? j.abN : '';
+      if (ab && abN) {
+        writer = ab.trim() === abN.trim() ? ab : ab;
+      } else {
+        writer = ab || abN || d.writer;
+      }
+    }
+    return {
+      writer,
+      optimize: typeof j.optimize === 'string' ? j.optimize : d.optimize,
+      newCh: typeof j.newCh === 'string' ? j.newCh : d.newCh,
+    };
+  } catch {
+    return defaultArenaSysPrompts();
+  }
+}
+
 function stepId() {
   return `arena_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -239,6 +287,15 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
 
   const [lightboxOpen, setLightboxOpen] = useLocalState(false);
   const [lightboxImages, setLightboxImages] = useLocalState<Array<{ src: string; label: string; prompt: string }>>([]);
+  const [arenaSysPrompts, setArenaSysPrompts] = useLocalState<ArenaSysPromptsState>(() => loadArenaSysPrompts());
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(ARENA_SYS_STORAGE_KEY, JSON.stringify(arenaSysPrompts));
+    } catch {
+      /* ignore */
+    }
+  }, [arenaSysPrompts]);
   const [lightboxIndex, setLightboxIndex] = useLocalState(0);
   const [lightboxPromptZhByKey, setLightboxPromptZhByKey] = useLocalState<Record<string, string>>({});
   const [lightboxPromptTranslating, setLightboxPromptTranslating] = useLocalState<Set<string>>(new Set());
@@ -484,7 +541,7 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
     setArenaCurrentStep('generating_prompts');
     const count = arenaInitialCount;
     const taskId = addTask('DIALOG_GEN', `擂台 ${count} 选 ${count}`);
-    const sysPrompt = count === 2 ? DEFAULT_PROMPTS.arena_ab : DEFAULT_PROMPTS.arena_ab_n;
+    const sysPrompt = arenaSysPrompts.writer;
     const userMsg =
       count === 2
         ? `User description: ${desc.slice(0, 500)}\n\nImportant: These prompts will be sent to the image model together with the user's uploaded image. Ensure each prompt is an instruction to modify or transform that image (not a standalone description of a new scene).`
@@ -497,7 +554,9 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
     setArenaTimeline([{ id: blockId(), type: 'step_group', label: '首轮生成提示词', stepLogIds: [stepPromptsId], ts: Date.now() }]);
     try {
       updateTask(taskId, { status: 'RUNNING', progress: 10 });
-      const { reasoning, prompts, rawResponse } = await generateArenaPrompts(desc, count, modelText);
+      const { reasoning, prompts, rawResponse } = await generateArenaPrompts(desc, count, modelText, {
+        arenaPromptWriter: arenaSysPrompts.writer,
+      });
       const parsed = rawResponse ? parseSummaryFromRaw(rawResponse) : {};
       setArenaStepLog((prev) =>
         prev.map((s) =>
@@ -678,7 +737,7 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
       winnerStrengthVal.trim() ? `User-reported strength of the winner (preserve or learn from): ${winnerStrengthVal.trim()}` : '',
       loserRemarkVal.trim() ? `User-reported remark about the loser (one sentence, address when improving): ${loserRemarkVal.trim()}` : ''
     ].filter(Boolean).join('\n\n');
-    const inputOptimize = DEFAULT_PROMPTS.arena_optimize_loser + '\n\n' + userText;
+    const inputOptimize = arenaSysPrompts.optimize + '\n\n' + userText;
     const stepOptId = stepId();
     setArenaStepLog((prev) => [
       ...prev,
@@ -694,7 +753,8 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
         allPrevious,
         userReportedGapsVal.length > 0 ? userReportedGapsVal : undefined,
         winnerStrengthVal.trim() || undefined,
-        loserRemarkVal.trim() || undefined
+        loserRemarkVal.trim() || undefined,
+        { arenaPromptOptimizeLoser: arenaSysPrompts.optimize }
       );
       const parsed = rawResponse ? parseSummaryFromRaw(rawResponse) : {};
       setArenaStepLog((prev) =>
@@ -746,7 +806,7 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
       `Current champion (winner) prompt: ${arenaChampionPrompt}`,
       allPrevious.length > 0 ? `All other prompts already in this arena (be distinct from these):\n${allPrevious.map((p, i) => `[${i + 1}] ${p}`).join('\n')}` : ''
     ].filter(Boolean).join('\n\n');
-    const inputNewCh = DEFAULT_PROMPTS.arena_new_challenger + '\n\n' + userText;
+    const inputNewCh = arenaSysPrompts.newCh + '\n\n' + userText;
     const stepNewId = stepId();
     setArenaStepLog((prev) => [
       ...prev,
@@ -757,7 +817,8 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
         arenaUserDescription.trim(),
         arenaChampionPrompt,
         allPrevious,
-        modelText
+        modelText,
+        { arenaPromptNewChallenger: arenaSysPrompts.newCh }
       );
       const parsed = rawResponse ? parseSummaryFromRaw(rawResponse) : {};
       setArenaStepLog((prev) =>
@@ -827,7 +888,7 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
     setArenaChallenger2Prompt(null);
     setArenaChallenger2Image(null);
 
-    const inputNewCh = DEFAULT_PROMPTS.arena_new_challenger + '\n\n' + [
+    const inputNewCh = arenaSysPrompts.newCh + '\n\n' + [
       `Original user intent: ${userIntentForModel}`,
       `Current champion (winner) prompt: ${arenaChampionPrompt}`,
       allPrevious.length > 0
@@ -849,7 +910,8 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
         userIntentForModel,
         arenaChampionPrompt,
         allPrevious,
-        modelText
+        modelText,
+        { arenaPromptNewChallenger: arenaSysPrompts.newCh }
       );
       const parsed = rawResponse ? parseSummaryFromRaw(rawResponse) : {};
       setArenaStepLog((prev) =>
@@ -1016,18 +1078,77 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
         </div>
 
         <section className="glass p-4 rounded-2xl border border-[#252528] shrink-0">
-          <div className="text-[9px] font-black text-gray-500 uppercase mb-2">底图</div>
-          {!arenaImage ? (
-            <label className="block w-full h-32 cursor-pointer border-2 border-dashed border-[#2e2e32] rounded-xl hover:bg-[#222228] flex items-center justify-center text-[9px] text-gray-500">
-              上传底图
-              <input type="file" className="hidden" accept="image/*" onChange={e => onFileUpload(e, setArenaImage)} />
-            </label>
-          ) : (
-            <div className="relative inline-block">
-              <SiteImage src={arenaImage} alt="底图" className="max-h-32 rounded-xl border border-[#2e2e32]" />
-              <button type="button" onClick={() => setArenaImage('')} className="absolute top-1 right-1 w-6 h-6 rounded bg-[#b91c1c] text-white text-xs">×</button>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div className="text-[9px] font-black text-gray-500 uppercase">底图 · 系统提示词</div>
+            <button
+              type="button"
+              disabled={arenaIsGenerating || arenaIsOptimizing}
+              onClick={() => setArenaSysPrompts(defaultArenaSysPrompts())}
+              className="text-[8px] font-bold text-blue-400 hover:text-blue-300 disabled:opacity-40"
+            >
+              恢复默认提示词
+            </button>
+          </div>
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
+            <div className="shrink-0 lg:max-w-[min(100%,240px)]">
+              <div className="text-[8px] font-bold text-gray-500 uppercase mb-2">底图</div>
+              {!arenaImage ? (
+                <label className="flex h-32 w-full min-w-[160px] cursor-pointer items-center justify-center rounded-xl border-2 border-dashed border-[#2e2e32] text-[9px] text-gray-500 hover:bg-[#222228]">
+                  上传底图
+                  <input type="file" className="hidden" accept="image/*" onChange={(e) => onFileUpload(e, setArenaImage)} />
+                </label>
+              ) : (
+                <div className="relative inline-block max-w-full">
+                  <SiteImage src={arenaImage} alt="底图" className="max-h-32 rounded-xl border border-[#2e2e32]" />
+                  <button
+                    type="button"
+                    onClick={() => setArenaImage('')}
+                    className="absolute top-1 right-1 h-6 w-6 rounded bg-[#b91c1c] text-xs text-white"
+                  >
+                    ×
+                  </button>
+                </div>
+              )}
             </div>
-          )}
+            <div className="min-w-0 flex-1 space-y-2">
+              <div className="text-[8px] font-bold text-gray-500 uppercase">可编辑（送模型时的系统段）</div>
+              <div className="max-h-[min(360px,52vh)] space-y-2 overflow-y-auto pr-1 [scrollbar-width:thin]">
+                <div>
+                  <div className="mb-0.5 text-[8px] text-gray-500">写稿器（首轮 · 送模型时的系统段）</div>
+                  <div className="mb-1 text-[8px] text-gray-600">
+                    适用于 2～4 人参赛；具体要几条提示词由下方「参赛人数」在请求里指定（N=2 与 N=3/4 共用本段）。
+                  </div>
+                  <textarea
+                    value={arenaSysPrompts.writer}
+                    onChange={(e) => setArenaSysPrompts((p) => ({ ...p, writer: e.target.value }))}
+                    disabled={arenaIsGenerating || arenaIsOptimizing}
+                    spellCheck={false}
+                    className="min-h-[6rem] w-full resize-y rounded-lg border border-[#2e2e32] bg-[#16161a] p-2 font-mono text-[10px] leading-snug text-gray-200 outline-none focus:border-blue-500 disabled:opacity-50"
+                  />
+                </div>
+                <div>
+                  <div className="mb-0.5 text-[8px] text-gray-500">优化败者</div>
+                  <textarea
+                    value={arenaSysPrompts.optimize}
+                    onChange={(e) => setArenaSysPrompts((p) => ({ ...p, optimize: e.target.value }))}
+                    disabled={arenaIsGenerating || arenaIsOptimizing}
+                    spellCheck={false}
+                    className="min-h-[4.5rem] w-full resize-y rounded-lg border border-[#2e2e32] bg-[#16161a] p-2 font-mono text-[10px] leading-snug text-gray-200 outline-none focus:border-blue-500 disabled:opacity-50"
+                  />
+                </div>
+                <div>
+                  <div className="mb-0.5 text-[8px] text-gray-500">新挑战者</div>
+                  <textarea
+                    value={arenaSysPrompts.newCh}
+                    onChange={(e) => setArenaSysPrompts((p) => ({ ...p, newCh: e.target.value }))}
+                    disabled={arenaIsGenerating || arenaIsOptimizing}
+                    spellCheck={false}
+                    className="min-h-[4.5rem] w-full resize-y rounded-lg border border-[#2e2e32] bg-[#16161a] p-2 font-mono text-[10px] leading-snug text-gray-200 outline-none focus:border-blue-500 disabled:opacity-50"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
         </section>
 
         <section className="glass p-4 rounded-2xl border border-[#252528] shrink-0">

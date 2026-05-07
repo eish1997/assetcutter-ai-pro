@@ -1,16 +1,19 @@
 /**
  * 全景 Viewer：单独 chunk，供 registry 懒加载，避免未开全景时拉取 Three 相关依赖链。
  */
-import React from 'react';
+import React, { forwardRef } from 'react';
 import { EquirectangularPanoramaCanvas } from '../../EquirectangularPanoramaCanvas';
+import type { PanoramaViewportProjection } from '../../../services/panoViewportProjection';
 
 export type ImageEquirectViewerProps = {
   imageSrc: string;
   className?: string;
 };
 
-const ImageEquirectViewer: React.FC<ImageEquirectViewerProps> = ({ imageSrc, className }) => (
-  <EquirectangularPanoramaCanvas imageSrc={imageSrc} className={className ?? ''} />
+const ImageEquirectViewer = forwardRef<PanoramaViewportProjection | null, ImageEquirectViewerProps>(
+  function ImageEquirectViewer({ imageSrc, className }, ref) {
+    return <EquirectangularPanoramaCanvas ref={ref} imageSrc={imageSrc} className={className ?? ''} />;
+  }
 );
 
 export default ImageEquirectViewer;

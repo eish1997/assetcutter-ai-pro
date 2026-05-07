@@ -83,7 +83,6 @@ const SETTINGS_NAV: { id: string; label: string }[] = [
 const AI_PROVIDER_OPTIONS: { value: AiProvider; label: string }[] = [
   { value: 'trial', label: '试用（代理通道，无需本地 Key）' },
   { value: 'gemini', label: 'Google Gemini（官方 API）' },
-  { value: 'vertex', label: 'Vertex AI（GCP · 经本站 gemini-proxy）' },
   { value: 'toapis', label: 'ToAPIs 网关（OpenAI 兼容 + 异步生图）' },
   { value: 'antigravity', label: 'Antigravity Tools（本机 OpenAI 兼容反代）' },
   { value: 'openai', label: 'OpenAI（官方 Chat + Images API）' },
@@ -305,8 +304,6 @@ const SettingsSection: React.FC<{
     const v: AiProvider =
       value === 'trial'
         ? 'trial'
-        : value === 'vertex'
-        ? 'vertex'
         : value === 'toapis'
           ? 'toapis'
           : value === 'antigravity'
@@ -1316,7 +1313,8 @@ const SettingsSection: React.FC<{
                     <>
                       <h4 className="text-[10px] font-bold text-white/80 uppercase tracking-wider">试用通道（代理）</h4>
                       <p className="text-[9px] text-gray-500 leading-relaxed">
-                        试用模式固定走站点配置的 <code className="text-gray-400">VITE_BULK_IMAGE_API</code> 代理，无需在本机填写 API Key。
+                        试用模式固定走站点配置的 <code className="text-gray-400">VITE_BULK_IMAGE_API</code> 代理（Gemini API Key 路径），无需在本机填写 Key。
+                        每账号每日限 20 次代理任务（未登录为当前浏览器设备计数）；超限请明日再试、登录后使用账号额度，或切换到其它供应商填写自有 Key。
                         若代理拥堵/限流，建议切换到其它供应商并填写对应前端 Key 直连。
                       </p>
                     </>
@@ -1341,18 +1339,6 @@ const SettingsSection: React.FC<{
                           {saved ? '已保存' : '保存'}
                         </button>
                       </div>
-                    </>
-                  ) : aiProvider === 'vertex' ? (
-                    <>
-                      <h4 className="text-[10px] font-bold text-white/80 uppercase tracking-wider">Vertex AI</h4>
-                      <p className="text-[9px] text-gray-500 leading-relaxed">
-                        不在浏览器保存 GCP 密钥。请由部署方在 <strong className="text-gray-400">gemini-proxy</strong> 配置{' '}
-                        <code className="text-gray-400">VERTEX_PROJECT_ID</code> 或{' '}
-                        <code className="text-gray-400">GOOGLE_CLOUD_PROJECT</code>、可选{' '}
-                        <code className="text-gray-400">VERTEX_LOCATION</code>（默认 global）及服务账号 / ADC；前端构建需设置{' '}
-                        <code className="text-gray-400">VITE_BULK_IMAGE_API</code> 指向该代理。详见{' '}
-                        <code className="text-gray-400">docs/VERTEX_AI_INTEGRATION.md</code>。
-                      </p>
                     </>
                   ) : aiProvider === 'toapis' ? (
                     <>

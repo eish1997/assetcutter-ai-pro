@@ -1,10 +1,14 @@
-import React, { Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import React, { Suspense, forwardRef, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   getLazyImagePreviewViewer,
   PreviewShell,
   PreviewViewerFallback,
   previewPolicyForMode,
 } from './preview';
+import {
+  imageNaturalIndicesFromClientPoint,
+  readRgbFromCanvas,
+} from '../services/imagePreviewPointerGeometry';
 import { Box, Contrast, Globe2, Image as ImageIcon, X } from 'lucide-react';
 import { readLocalString, writeLocalString } from '../services/clientPersist';
 import { CustomDropdown } from './ui/CustomDropdown';
@@ -14,6 +18,7 @@ import {
   WORKFLOW_IMAGE_PREVIEW_RAIL,
   WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER,
 } from './workflow/workflowSectionUiConstants';
+import type { PanoramaViewportProjection } from '../services/panoViewportProjection';
 
 const NO_WHEEL = '[data-image-preview-no-wheel]';
 const SCROLL = '[data-image-preview-scroll]';
@@ -51,6 +56,17 @@ const LIGHTBOX_BACKDROP_OPTIONS: Array<{
   { value: 'gray50', label: '50% 灰', title: '预览背景：50% 中性灰' },
   { value: 'white', label: '白色', title: '预览背景：纯白' },
 ];
+
+/** 与 `LIGHTBOX_BACKDROP_OPTIONS` 顺序一致，对应数字键 1～4 */
+const LIGHTBOX_BACKDROP_HOTKEY_ORDER: readonly ImageLightboxBackdropId[] = LIGHTBOX_BACKDROP_OPTIONS.map(
+  (o) => o.value
+);
+
+function isKeyboardTypingTarget(t: EventTarget | null): boolean {
+  if (!(t instanceof HTMLElement)) return false;
+  if (t.isContentEditable) return true;
+  return t.closest('input, textarea, select, [contenteditable="true"]') != null;
+}
 
 function LightboxBackdropSwatch({ id }: { id: ImageLightboxBackdropId }) {
   const shell =
@@ -163,9 +179,27 @@ export type ImagePreviewOverlayProps = {
   children?: React.ReactNode;
   /**
    * 平面预览时叠在 `<img>` 上的内容（与图同层、受同一套 scale/translate 影响）。
-   * 用于标注层等与 `object-contain` 像素对齐的覆盖物。
+   * 全景 + 标注桥接时叠在与 WebGL 同矩的容器内（见 `FlatImageOverlayContext`）。
    */
-  flatImageOverlay?: (ctx: { imgRef: React.RefObject<HTMLImageElement | null> }) => React.ReactNode;
+  flatImageOverlay?: (ctx: FlatImageOverlayContext) => React.ReactNode;
+  /**
+   * 由父组件持有时，全景懒加载 Viewer 挂载后会写入，可用于 `captureViewDataUrl`（如视口矩形裁切导出）。
+   */
+  panoViewerRef?: React.RefObject<PanoramaViewportProjection | null>;
+  /** 平面模式下在主图上移动指针时回调当前像素 RGB（离开图内容区或无法采样时为 null） */
+  onFlatImagePixelSample?: (rgb: { r: number; g: number; b: number } | null) => void;
+  /** 平面 / 全景 / 3D 切换时通知父级（用于大图标注按模式分桶） */
+  onPreviewLayoutChange?: (layout: 'flat' | 'pano' | 'model3d') => void;
+};
+
+export type FlatImageOverlayContext = {
+  imgRef: React.RefObject<HTMLImageElement | null>;
+  /** 仅全景桥接时：与 WebGL 画布同尺寸的叠层根（`absolute inset-0`） */
+  panoOverlayContainerRef: React.RefObject<HTMLDivElement | null> | undefined;
+  panoProjectionRef: React.RefObject<PanoramaViewportProjection | null> | undefined;
+  /** 全景 Viewer 挂载/卸载时递增，驱动叠层在 `ref.current` 就绪后重渲染并挂上 `subscribeAnimation` */
+  panoViewerBindEpoch?: number;
+  previewLayout: 'flat' | 'pano' | 'model3d';
 };
 
 function fitImageToPreviewViewport(nw: number, nh: number): { w: number; h: number } {
@@ -191,8 +225,21 @@ const LazyImageEquirectViewer = getLazyImagePreviewViewer('image.equirect');
 /** 3D Viewer 独立 chunk（registry 懒加载） */
 const LazyImageModel3DViewer = getLazyImagePreviewViewer('image.model3d');
 
+/** `lazy()` 包一层 `Suspense`，并把 ref 交到内层 `forwardRef` Viewer */
+const PanoEquirectLazyView = forwardRef<PanoramaViewportProjection | null, { imageSrc: string; className?: string }>(
+  function PanoEquirectLazyView(props, ref) {
+    if (!LazyImageEquirectViewer) return null;
+    return (
+      <Suspense fallback={<PreviewViewerFallback label="全景模块加载中…" />}>
+        <LazyImageEquirectViewer {...props} ref={ref} />
+      </Suspense>
+    );
+  }
+);
+
 /**
  * 全屏大图预览：滚轮切图、Esc 关闭、双击复原、左键拖拽缩放（按下处为轴）、空格/Shift+左键/右键平移；多资产时 Shift+滚轮切资产。
+ * 平面模式：Q 循环平面/全景/3D（有则显）、W 移动画布模式、Z/X 缩放、R+拖拽旋转（Shift 10° 档）。
  */
 export function ImagePreviewOverlay({
   open,
@@ -214,16 +261,80 @@ export function ImagePreviewOverlay({
   topRightExtra,
   children,
   flatImageOverlay,
+  panoViewerRef: panoViewerRefProp,
+  onFlatImagePixelSample,
+  onPreviewLayoutChange,
 }: ImagePreviewOverlayProps) {
   const [previewLayout, setPreviewLayout] = useState<'flat' | 'pano' | 'model3d'>('flat');
+
+  const setPreviewLayoutAndNotify = useCallback(
+    (updater: React.SetStateAction<'flat' | 'pano' | 'model3d'>) => {
+      setPreviewLayout((cur) => {
+        const n = typeof updater === 'function' ? (updater as (c: typeof cur) => typeof cur)(cur) : updater;
+        queueMicrotask(() => onPreviewLayoutChange?.(n));
+        return n;
+      });
+    },
+    [onPreviewLayoutChange]
+  );
   const [lightboxBackdropId, setLightboxBackdropId] = useState<ImageLightboxBackdropId>(() =>
     parseImageLightboxBackdrop(readLocalString(LIGHTBOX_BACKDROP_STORAGE_KEY))
   );
   const [uiHidden, setUiHidden] = useState(false);
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
+  /** 平面画布旋转（度），作用于内层包装 + transformOrigin，R+拖拽以按下点为枢轴 */
+  const [flatRotationDeg, setFlatRotationDeg] = useState(0);
+  /** 相对内层包装左上角；null 时用 50% 50% */
+  const [rotOriginLocal, setRotOriginLocal] = useState<{ x: number; y: number } | null>(null);
+  /** W 键：左键拖移始终为平移画布（否则左键为缩放拖移；空格仍临时平移） */
+  const [canvasPanArmed, setCanvasPanArmed] = useState(false);
   const [lockedDominant, setLockedDominant] = useState<{ axis: 'width' | 'height'; size: number } | null>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
+  const internalPanoViewerRef = useRef<PanoramaViewportProjection | null>(null);
+  const panoViewerRef = panoViewerRefProp ?? internalPanoViewerRef;
+  /** 懒加载全景挂载后 `ref.current` 才可用，用 epoch 触发叠层重渲染（否则 `ready` 恒为 false） */
+  const [panoViewerBindEpoch, setPanoViewerBindEpoch] = useState(0);
+  const panoViewerLastNodeRef = useRef<PanoramaViewportProjection | null>(null);
+  const assignPanoViewerRef = useCallback(
+    (node: PanoramaViewportProjection | null) => {
+      (panoViewerRef as React.MutableRefObject<PanoramaViewportProjection | null>).current = node;
+      if (panoViewerLastNodeRef.current !== node) {
+        panoViewerLastNodeRef.current = node;
+        setPanoViewerBindEpoch((n) => n + 1);
+      }
+    },
+    [panoViewerRef]
+  );
+  const panoOverlayHostRef = useRef<HTMLDivElement | null>(null);
+  const innerWrapRef = useRef<HTMLDivElement | null>(null);
+  const rotateDragRef = useRef<{ pivotX: number; pivotY: number; lastRad: number | null } | null>(null);
+  const rKeyPressedRef = useRef(false);
+  const pixelSampleCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const pixelSampleMetaRef = useRef<string>('');
+  const syncPixelSampleBuffer = useCallback((img: HTMLImageElement): boolean => {
+    const nw = img.naturalWidth;
+    const nh = img.naturalHeight;
+    if (!nw || !nh) return false;
+    const srcKey = `${String(imageSrc ?? '')}|${nw}x${nh}`;
+    if (pixelSampleCanvasRef.current && pixelSampleMetaRef.current === srcKey) return true;
+    try {
+      const c = document.createElement('canvas');
+      c.width = nw;
+      c.height = nh;
+      const ctx = c.getContext('2d', { willReadFrequently: true });
+      if (!ctx) return false;
+      ctx.drawImage(img, 0, 0);
+      pixelSampleCanvasRef.current = c;
+      pixelSampleMetaRef.current = srcKey;
+      return true;
+    } catch {
+      pixelSampleCanvasRef.current = null;
+      pixelSampleMetaRef.current = '';
+      return false;
+    }
+  }, [imageSrc]);
+
   const dragRef = useRef<{ startX: number; startY: number; startScale: number } | null>(null);
   const panRef = useRef<{ startX: number; startY: number; startOffsetX: number; startOffsetY: number } | null>(null);
   const zoomPivotRef = useRef<{ x: number; y: number } | null>(null);
@@ -233,20 +344,105 @@ export function ImagePreviewOverlay({
   const wheelLastNavigateAtRef = useRef(0);
   const previewModelSrc = pickPreviewableModelUrl(modelUrls);
   const hasModel3DMode = Boolean(!centerSlot && previewModelSrc && LazyImageModel3DViewer);
+  const panoLayoutActive = Boolean(!centerSlot && enablePanoramaMode && previewLayout === 'pano');
+  const model3dLayoutActive = Boolean(!centerSlot && hasModel3DMode && previewLayout === 'model3d');
+  /** 全景模式下叠一层与平面一致的 object-contain 贴图 + 标注，使裁切/局部重绘等仍可用（底图透明，仍见 WebGL 全景） */
+  const panoAnnotationBridge = Boolean(panoLayoutActive && flatImageOverlay);
+  const showFlatImageColumn = Boolean(
+    !centerSlot && !model3dLayoutActive && (!panoLayoutActive || Boolean(flatImageOverlay))
+  );
+  /** 全景桥接时标注在全屏叠层，不再走中央「缩放壳」里的那条柱 */
+  const flatAnnotationColumnOutsidePanoStack = Boolean(showFlatImageColumn && !panoAnnotationBridge);
+  const flatPixelSampleActive =
+    Boolean(onFlatImagePixelSample) &&
+    open &&
+    !centerSlot &&
+    Boolean(imageSrc?.trim()) &&
+    (previewLayout === 'flat' || (panoLayoutActive && Boolean(flatImageOverlay)));
+
+  const flatNavigateCanvasOk = Boolean(
+    showFlatImageColumn && previewLayout === 'flat' && !panoAnnotationBridge && !centerSlot
+  );
+
+  const applyKeyedZoom = useCallback(
+    (grow: boolean) => {
+      if (!flatNavigateCanvasOk) return;
+      const factor = grow ? 1.12 : 1 / 1.12;
+      setScale((prevS) => {
+        const nextS = Math.max(0.2, Math.min(6, prevS * factor));
+        return Math.abs(nextS - prevS) < 1e-9 ? prevS : nextS;
+      });
+    },
+    [flatNavigateCanvasOk]
+  );
 
   useEffect(() => {
     if (!open) return;
-    setPreviewLayout('flat');
+    setPreviewLayoutAndNotify('flat');
     setUiHidden(false);
     setScale(1);
     setOffset({ x: 0, y: 0 });
+    setFlatRotationDeg(0);
+    setRotOriginLocal(null);
+    setCanvasPanArmed(false);
     dragRef.current = null;
     panRef.current = null;
     zoomPivotRef.current = null;
     zoomLastScaleRef.current = 1;
+    rotateDragRef.current = null;
+    rKeyPressedRef.current = false;
     wheelAccumRef.current = 0;
     wheelLastNavigateAtRef.current = 0;
-  }, [open, resetKey]);
+  }, [open, resetKey, setPreviewLayoutAndNotify]);
+
+  useLayoutEffect(() => {
+    pixelSampleCanvasRef.current = null;
+    pixelSampleMetaRef.current = '';
+    onFlatImagePixelSample?.(null);
+  }, [imageSrc, resetKey, innerLayoutStableKey, open, onFlatImagePixelSample]);
+
+  useEffect(() => {
+    if (!onFlatImagePixelSample) return;
+    if (!flatPixelSampleActive) {
+      onFlatImagePixelSample(null);
+    }
+  }, [flatPixelSampleActive, onFlatImagePixelSample]);
+
+  useEffect(() => {
+    if (!flatPixelSampleActive) {
+      return;
+    }
+    const onMove = (e: PointerEvent) => {
+      const img = imgRef.current;
+      if (!img) {
+        onFlatImagePixelSample(null);
+        return;
+      }
+      const r = img.getBoundingClientRect();
+      if (e.clientX < r.left || e.clientX >= r.right || e.clientY < r.top || e.clientY >= r.bottom) {
+        onFlatImagePixelSample(null);
+        return;
+      }
+      if (!syncPixelSampleBuffer(img)) {
+        onFlatImagePixelSample(null);
+        return;
+      }
+      const canvas = pixelSampleCanvasRef.current;
+      if (!canvas) {
+        onFlatImagePixelSample(null);
+        return;
+      }
+      const idx = imageNaturalIndicesFromClientPoint(img, e.clientX, e.clientY);
+      if (!idx) {
+        onFlatImagePixelSample(null);
+        return;
+      }
+      const rgb = readRgbFromCanvas(canvas, idx.ix, idx.iy);
+      onFlatImagePixelSample(rgb);
+    };
+    window.addEventListener('pointermove', onMove, { passive: true });
+    return () => window.removeEventListener('pointermove', onMove);
+  }, [flatPixelSampleActive, onFlatImagePixelSample, imageSrc, syncPixelSampleBuffer]);
 
   useEffect(() => {
     if (!open || !innerLayoutStableKey) {
@@ -273,6 +469,7 @@ export function ImagePreviewOverlay({
 
   useEffect(() => {
     if (!open) return;
+    const canCyclePreviewMode = Boolean(imageSrc?.trim() && !centerSlot);
     const onKeyDown = (e: KeyboardEvent) => {
       if (isEscapeLikeKey(e)) {
         e.preventDefault();
@@ -285,6 +482,53 @@ export function ImagePreviewOverlay({
         setUiHidden((v) => !v);
         return;
       }
+      if (!e.ctrlKey && !e.metaKey && !e.altKey && !isKeyboardTypingTarget(e.target)) {
+        if (e.code === 'KeyQ' && canCyclePreviewMode) {
+          const modes: Array<'flat' | 'pano' | 'model3d'> = ['flat'];
+          if (enablePanoramaMode) modes.push('pano');
+          if (hasModel3DMode) modes.push('model3d');
+          if (modes.length >= 2) {
+            e.preventDefault();
+            setPreviewLayoutAndNotify((cur) => {
+              const i = modes.indexOf(cur);
+              return modes[(i + 1) % modes.length] ?? 'flat';
+            });
+          }
+          return;
+        }
+        if (e.code === 'KeyW') {
+          e.preventDefault();
+          setCanvasPanArmed((v) => !v);
+          return;
+        }
+        if (e.code === 'KeyR') {
+          e.preventDefault();
+          rKeyPressedRef.current = true;
+          return;
+        }
+        if (e.code === 'KeyZ') {
+          e.preventDefault();
+          applyKeyedZoom(true);
+          return;
+        }
+        if (e.code === 'KeyX') {
+          e.preventDefault();
+          applyKeyedZoom(false);
+          return;
+        }
+      }
+      if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key === '1' || e.key === '2' || e.key === '3' || e.key === '4')) {
+        if (!isKeyboardTypingTarget(e.target)) {
+          e.preventDefault();
+          const idx = Number(e.key) - 1;
+          const next = LIGHTBOX_BACKDROP_HOTKEY_ORDER[idx];
+          if (next) {
+            setLightboxBackdropId(next);
+            writeLocalString(LIGHTBOX_BACKDROP_STORAGE_KEY, next);
+          }
+        }
+        return;
+      }
       if (e.code === 'Space') {
         e.preventDefault();
         spacePressedRef.current = true;
@@ -294,9 +538,14 @@ export function ImagePreviewOverlay({
       if (e.code === 'Space') {
         spacePressedRef.current = false;
       }
+      if (e.code === 'KeyR') {
+        rKeyPressedRef.current = false;
+      }
     };
     const onBlur = () => {
       spacePressedRef.current = false;
+      rKeyPressedRef.current = false;
+      rotateDragRef.current = null;
     };
     document.addEventListener('keydown', onKeyDown, true);
     window.addEventListener('keyup', onKeyUp);
@@ -306,7 +555,16 @@ export function ImagePreviewOverlay({
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
     };
-  }, [open, onClose]);
+  }, [
+    open,
+    onClose,
+    imageSrc,
+    centerSlot,
+    enablePanoramaMode,
+    hasModel3DMode,
+    applyKeyedZoom,
+    setPreviewLayoutAndNotify,
+  ]);
 
   useEffect(() => {
     if (!open) return;
@@ -442,6 +700,25 @@ export function ImagePreviewOverlay({
 
   useEffect(() => {
     const onMouseMove = (e: MouseEvent) => {
+      const rot = rotateDragRef.current;
+      if (rot) {
+        const a = Math.atan2(e.clientY - rot.pivotY, e.clientX - rot.pivotX);
+        if (rot.lastRad == null) {
+          rot.lastRad = a;
+          return;
+        }
+        let delta = a - rot.lastRad;
+        while (delta > Math.PI) delta -= 2 * Math.PI;
+        while (delta < -Math.PI) delta += 2 * Math.PI;
+        rot.lastRad = a;
+        const deltaDeg = (delta * 180) / Math.PI;
+        setFlatRotationDeg((prev) => {
+          let next = prev + deltaDeg;
+          if (e.shiftKey) next = Math.round(next / 10) * 10;
+          return next;
+        });
+        return;
+      }
       const drag = dragRef.current;
       if (drag) {
         const dx = e.clientX - drag.startX;
@@ -473,6 +750,7 @@ export function ImagePreviewOverlay({
       }
     };
     const onMouseUp = () => {
+      rotateDragRef.current = null;
       dragRef.current = null;
       panRef.current = null;
       zoomPivotRef.current = null;
@@ -491,7 +769,16 @@ export function ImagePreviewOverlay({
       e.preventDefault();
       e.stopPropagation();
       if (e.button === 0) {
-        const useLeftPan = e.shiftKey || spacePressedRef.current;
+        if (rKeyPressedRef.current) {
+          const wrap = innerWrapRef.current;
+          if (wrap) {
+            const r = wrap.getBoundingClientRect();
+            setRotOriginLocal({ x: e.clientX - r.left, y: e.clientY - r.top });
+          }
+          rotateDragRef.current = { pivotX: e.clientX, pivotY: e.clientY, lastRad: null };
+          return;
+        }
+        const useLeftPan = e.shiftKey || spacePressedRef.current || canvasPanArmed;
         if (useLeftPan) {
           panRef.current = {
             startX: e.clientX,
@@ -517,7 +804,7 @@ export function ImagePreviewOverlay({
         startOffsetY: offset.y,
       };
     },
-    [offset.x, offset.y, scale]
+    [offset.x, offset.y, scale, canvasPanArmed]
   );
 
   const handleImgLoad = useCallback(
@@ -571,11 +858,24 @@ export function ImagePreviewOverlay({
     transform: `translate(-50%, -50%) translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
     transformOrigin: 'center center',
   };
+  const panoFlatStackStyle: React.CSSProperties = {
+    left: `calc((100% - ${contentRightInset}) / 2)`,
+    top: '50%',
+    transform: 'translate(-50%, -50%)',
+    zIndex: 6,
+  };
   const lockedImgStyle: React.CSSProperties | undefined = useFrameLock && lockedDominant
     ? lockedDominant.axis === 'width'
       ? { width: `${lockedDominant.size}px`, height: 'auto', maxWidth: '92vw', maxHeight: '88vh' }
       : { height: `${lockedDominant.size}px`, width: 'auto', maxWidth: '92vw', maxHeight: '88vh' }
     : undefined;
+
+  const innerRotateStyle: React.CSSProperties = {
+    ...(Math.abs(flatRotationDeg) > 1e-6 ? { transform: `rotate(${flatRotationDeg}deg)` } : {}),
+    transformOrigin: rotOriginLocal ? `${rotOriginLocal.x}px ${rotOriginLocal.y}px` : '50% 50%',
+  };
+
+  const showModeCycleHint = Boolean(!centerSlot && (enablePanoramaMode || hasModel3DMode));
 
   return (
     <PreviewShell
@@ -585,7 +885,11 @@ export function ImagePreviewOverlay({
       zIndexClassName={shellZIndexClassName ?? 'z-[2000]'}
       backdropTintClassName={LIGHTBOX_BACKDROP_CLASS[lightboxBackdropId]}
     >
-        {!centerSlot && enablePanoramaMode && previewLayout === 'pano' && LazyImageEquirectViewer ? (
+        {!centerSlot &&
+        enablePanoramaMode &&
+        previewLayout === 'pano' &&
+        LazyImageEquirectViewer &&
+        !panoAnnotationBridge ? (
           <div
             className="absolute inset-0 z-[5] min-h-[200px]"
             onWheel={(e) => e.stopPropagation()}
@@ -593,6 +897,45 @@ export function ImagePreviewOverlay({
             <Suspense fallback={<PreviewViewerFallback label="全景模块加载中…" />}>
               <LazyImageEquirectViewer imageSrc={imageSrc!} className="h-full w-full rounded-none border-0" />
             </Suspense>
+          </div>
+        ) : null}
+        {panoAnnotationBridge ? (
+          <div
+            className="absolute inset-0 z-[5] min-h-[200px]"
+            onWheel={(e) => e.stopPropagation()}
+          >
+            <div className="absolute inset-0">
+              <PanoEquirectLazyView
+                ref={assignPanoViewerRef}
+                imageSrc={imageSrc!}
+                className="h-full w-full rounded-none border-0"
+              />
+              <div ref={panoOverlayHostRef} className="pointer-events-none absolute inset-0 z-[10] min-h-0">
+                <div className="relative h-full min-h-0 w-full">
+                  <img
+                    key={imageSrc}
+                    src={imageSrc!}
+                    alt=""
+                    draggable={false}
+                    className="pointer-events-none absolute left-0 top-0 opacity-0"
+                    style={{ width: 1, height: 1 }}
+                    onContextMenu={(e) => e.preventDefault()}
+                    onLoad={handleImgLoadGeneral}
+                    ref={imgRef}
+                  />
+                  {flatImageOverlay ? (
+                    // eslint-disable-next-line react-hooks/refs -- 将 ref 对象传入子 render 回调；不在此读取 .current
+                    flatImageOverlay({
+                      imgRef,
+                      panoOverlayContainerRef: panoOverlayHostRef,
+                      panoProjectionRef: panoViewerRef,
+                      panoViewerBindEpoch: panoViewerBindEpoch,
+                      previewLayout,
+                    })
+                  ) : null}
+                </div>
+              </div>
+            </div>
           </div>
         ) : null}
 
@@ -621,39 +964,71 @@ export function ImagePreviewOverlay({
           </div>
         ) : null}
 
-        {!centerSlot && !(enablePanoramaMode && previewLayout === 'pano') && !(hasModel3DMode && previewLayout === 'model3d') ? (
+        {flatAnnotationColumnOutsidePanoStack ? (
           <div
-            className={`absolute top-1/2 ${useFrameLock ? 'flex items-center justify-center' : ''}`}
-            style={shellStyle}
+            className={`absolute top-1/2 ${panoAnnotationBridge ? 'flex items-center justify-center pointer-events-none' : useFrameLock ? 'flex items-center justify-center' : ''}`}
+            style={panoAnnotationBridge ? panoFlatStackStyle : shellStyle}
           >
-            <div className="relative inline-block max-w-full max-h-full">
+            <div
+              ref={innerWrapRef}
+              className={`relative inline-block max-w-full max-h-full ${panoAnnotationBridge ? 'pointer-events-none rounded-xl ring-1 ring-white/[0.12]' : ''}`}
+              style={panoAnnotationBridge ? undefined : innerRotateStyle}
+            >
               <img
                 key={imageSrc}
                 src={imageSrc!}
                 className={
                   useFrameLock
-                    ? 'block max-h-full max-w-full object-contain rounded-xl select-none cursor-zoom-in'
-                    : 'block max-h-[88vh] max-w-[92vw] object-contain rounded-xl select-none cursor-zoom-in'
+                    ? `block max-h-full max-w-full object-contain rounded-xl select-none ${
+                        panoAnnotationBridge
+                          ? 'pointer-events-none cursor-default opacity-0'
+                          : canvasPanArmed
+                            ? 'cursor-grab active:cursor-grabbing'
+                            : 'cursor-zoom-in'
+                      }`
+                    : `block max-h-[88vh] max-w-[92vw] object-contain rounded-xl select-none ${
+                        panoAnnotationBridge
+                          ? 'pointer-events-none cursor-default opacity-0'
+                          : canvasPanArmed
+                            ? 'cursor-grab active:cursor-grabbing'
+                            : 'cursor-zoom-in'
+                      }`
                 }
                 style={lockedImgStyle}
                 alt=""
                 draggable={false}
                 onContextMenu={(e) => e.preventDefault()}
                 onLoad={handleImgLoadGeneral}
-                onDoubleClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  setScale(1);
-                  setOffset({ x: 0, y: 0 });
-                  dragRef.current = null;
-                  panRef.current = null;
-                  zoomPivotRef.current = null;
-                  zoomLastScaleRef.current = 1;
-                }}
+                onDoubleClick={
+                  panoAnnotationBridge
+                    ? undefined
+                    : (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setScale(1);
+                        setOffset({ x: 0, y: 0 });
+                        setFlatRotationDeg(0);
+                        setRotOriginLocal(null);
+                        dragRef.current = null;
+                        panRef.current = null;
+                        zoomPivotRef.current = null;
+                        zoomLastScaleRef.current = 1;
+                        rotateDragRef.current = null;
+                      }
+                }
                 ref={imgRef}
-                onMouseDown={handleImgMouseDown}
+                onMouseDown={panoAnnotationBridge ? undefined : handleImgMouseDown}
               />
-              {flatImageOverlay ? flatImageOverlay({ imgRef }) : null}
+              {flatImageOverlay ? (
+                // eslint-disable-next-line react-hooks/refs -- 将 ref 对象传入子 render 回调；不在此读取 .current
+                flatImageOverlay({
+                  imgRef,
+                  panoOverlayContainerRef: undefined,
+                  panoProjectionRef: undefined,
+                  panoViewerBindEpoch: undefined,
+                  previewLayout,
+                })
+              ) : null}
             </div>
           </div>
         ) : null}
@@ -662,18 +1037,27 @@ export function ImagePreviewOverlay({
         <div className="absolute top-4 left-4 z-10 max-w-[min(300px,calc(100vw-6rem))] pointer-events-none text-left text-[8px] leading-relaxed text-gray-500/70 space-y-1 [text-shadow:0_1px_3px_rgba(0,0,0,0.75)]">
           {enablePanoramaMode && previewLayout === 'pano' ? (
             <>
+              {showModeCycleHint ? <div>Q：循环切换显示模式（平面 / 全景 / 3D）</div> : null}
               <div>拖拽：旋转视角（360° 全景）</div>
               <div>滚轮：调整视野宽窄</div>
               <div>切回「平面」后可滚轮切图 / 缩放平移</div>
+              {flatImageOverlay ? (
+                <div>
+                  标注 / 裁切 / 局部重绘：笔迹与框随全景视角贴球面；矩形裁切为当前视口所见区域。工具为「关闭」时手势仍作用在全景上
+                </div>
+              ) : null}
               <div>Tab：隐藏/显示界面（仅看图片）</div>
+              <div>1～4：切换预览背景（毛玻璃 / 黑 / 50%灰 / 白）</div>
               <div>Esc：关闭预览</div>
             </>
           ) : hasModel3DMode && previewLayout === 'model3d' ? (
             <>
+              {showModeCycleHint ? <div>Q：循环切换显示模式（平面 / 全景 / 3D）</div> : null}
               <div>拖拽：旋转模型</div>
               <div>滚轮：缩放距离</div>
               <div>切回「平面」后可滚轮切图 / 缩放平移</div>
               <div>Tab：隐藏/显示界面（仅看图片）</div>
+              <div>1～4：切换预览背景（毛玻璃 / 黑 / 50%灰 / 白）</div>
               <div>Esc：关闭预览</div>
             </>
           ) : centerSlot ? (
@@ -681,28 +1065,49 @@ export function ImagePreviewOverlay({
               <div>滚轮：本卡片多版本时切换显示</div>
               <div>Shift+滚轮：上一资产 / 下一资产</div>
               <div>Tab：隐藏/显示界面</div>
+              <div>1～4：切换预览背景（毛玻璃 / 黑 / 50%灰 / 白）</div>
               <div>Esc：关闭预览</div>
             </>
           ) : typeof onWheelInnerNavigate === 'function' ? (
             <>
               <div>滚轮：本卡片多版本时切换显示</div>
               <div>Shift+滚轮：上一资产 / 下一资产</div>
+              {showModeCycleHint ? <div>Q：循环切换显示模式（平面 / 全景 / 3D）</div> : null}
+              <div>W：移动画布模式（开时左键拖移；再按 W 关闭）</div>
+              <div>按住空格：临时移动画布（左键拖移）</div>
+              <div>Z / X：放大 / 缩小</div>
+              <div>R 按住并拖拽：绕按下点旋转；同时 Shift：每档 10°</div>
               <div>Tab：隐藏/显示界面（仅看图片）</div>
+              <div>1～4：切换预览背景（毛玻璃 / 黑 / 50%灰 / 白）</div>
               <div>Esc：关闭预览</div>
-              <div>双击：复原缩放与位置</div>
-              <div>左键：缩放</div>
+              <div>双击：复原缩放、位置与旋转</div>
+              <div>左键：缩放拖移</div>
               <div>空格+左键 / Shift+左键 / 右键：平移画布</div>
-              <div className="text-gray-500 pt-0.5 border-t border-white/10">当前缩放 {Math.round(scale * 100)}%</div>
+              <div className="text-gray-500 pt-0.5 border-t border-white/10">
+                当前缩放 {Math.round(scale * 100)}%
+                {Math.abs(flatRotationDeg) > 0.05 ? ` · 旋转 ${Math.round(flatRotationDeg)}°` : ''}
+                {canvasPanArmed ? ' · 移动画布' : ''}
+              </div>
             </>
           ) : (
             <>
               <div>滚轮：上一张 / 下一张</div>
+              {showModeCycleHint ? <div>Q：循环切换显示模式（平面 / 全景 / 3D）</div> : null}
+              <div>W：移动画布模式（开时左键拖移；再按 W 关闭）</div>
+              <div>按住空格：临时移动画布（左键拖移）</div>
+              <div>Z / X：放大 / 缩小</div>
+              <div>R 按住并拖拽：绕按下点旋转；同时 Shift：每档 10°</div>
               <div>Tab：隐藏/显示界面（仅看图片）</div>
+              <div>1～4：切换预览背景（毛玻璃 / 黑 / 50%灰 / 白）</div>
               <div>Esc：关闭预览</div>
-              <div>双击：复原缩放与位置</div>
-              <div>左键：缩放</div>
+              <div>双击：复原缩放、位置与旋转</div>
+              <div>左键：缩放拖移</div>
               <div>空格+左键 / Shift+左键 / 右键：平移画布</div>
-              <div className="text-gray-500 pt-0.5 border-t border-white/10">当前缩放 {Math.round(scale * 100)}%</div>
+              <div className="text-gray-500 pt-0.5 border-t border-white/10">
+                当前缩放 {Math.round(scale * 100)}%
+                {Math.abs(flatRotationDeg) > 0.05 ? ` · 旋转 ${Math.round(flatRotationDeg)}°` : ''}
+                {canvasPanArmed ? ' · 移动画布' : ''}
+              </div>
             </>
           )}
         </div>
@@ -754,7 +1159,7 @@ export function ImagePreviewOverlay({
                 >
                   <button
                     type="button"
-                    onClick={() => setPreviewLayout('flat')}
+                    onClick={() => setPreviewLayoutAndNotify('flat')}
                     className={`${PV_MODE_SEG_BASE} ${previewLayout === 'flat' ? PV_MODE_SEG_ON : PV_MODE_SEG_OFF}`}
                     title="平面预览"
                     aria-label="切换到平面预览"
@@ -765,7 +1170,7 @@ export function ImagePreviewOverlay({
                   {enablePanoramaMode ? (
                     <button
                       type="button"
-                      onClick={() => setPreviewLayout('pano')}
+                      onClick={() => setPreviewLayoutAndNotify('pano')}
                       className={`${PV_MODE_SEG_BASE} border-l border-white/[0.08] ${
                         previewLayout === 'pano' ? PV_MODE_SEG_ON : PV_MODE_SEG_OFF
                       }`}
@@ -779,7 +1184,7 @@ export function ImagePreviewOverlay({
                   {hasModel3DMode ? (
                     <button
                       type="button"
-                      onClick={() => setPreviewLayout('model3d')}
+                      onClick={() => setPreviewLayoutAndNotify('model3d')}
                       className={`${PV_MODE_SEG_BASE} border-l border-white/[0.08] ${
                         previewLayout === 'model3d' ? PV_MODE_SEG_ON : PV_MODE_SEG_OFF
                       }`}
