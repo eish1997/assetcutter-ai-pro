@@ -36,7 +36,7 @@ const STORAGE_KEY_DIALOG_SKIP_UNDERSTAND = 'ac_dialog_skip_understand';
 const STORAGE_KEY_WORKSPACE_AUTO_SYNC = 'ac_workspace_auto_sync';
 const STORAGE_KEY_DEBUG_CLIENT_LOG_PERSIST = 'ac_debug_client_log_persist';
 
-export type AiProvider = 'trial' | 'gemini' | 'toapis' | 'antigravity' | 'openai' | 'vectorengine';
+export type AiProvider = 'trial' | 'gemini' | 'vertex' | 'toapis' | 'antigravity' | 'openai' | 'vectorengine';
 
 /** 未选择或本地无记录时的默认供应商（新用户 / 清空存储后） */
 export const DEFAULT_AI_PROVIDER: AiProvider = 'trial';
@@ -54,18 +54,8 @@ export function setUserApiKey(value: string | null): void {
 
 export function getAiProvider(): AiProvider {
   const v = (readLocalString(STORAGE_KEY_AI_PROVIDER) ?? '').trim().toLowerCase();
-  if (v === 'vertex') {
-    writeLocalString(STORAGE_KEY_AI_PROVIDER, 'trial');
-    try {
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('ac-ai-provider-changed'));
-      }
-    } catch {
-      /* ignore */
-    }
-    return 'trial';
-  }
   if (v === 'trial') return 'trial';
+  if (v === 'vertex') return 'vertex';
   if (v === 'toapis') return 'toapis';
   if (v === 'antigravity') return 'antigravity';
   if (v === 'openai') return 'openai';
@@ -117,6 +107,8 @@ export function getAiProviderToolbarLabel(): string {
   switch (getAiProvider()) {
     case 'trial':
       return '试用（代理）';
+    case 'vertex':
+      return 'Vertex AI';
     case 'toapis':
       return 'ToAPIs';
     case 'antigravity':
@@ -216,6 +208,9 @@ export function getApiKey(): string | undefined {
   if (getAiProvider() === 'trial') {
     return undefined;
   }
+  if (getAiProvider() === 'vertex') {
+    return undefined;
+  }
   if (getAiProvider() === 'toapis') {
     const k = getToapisApiKey();
     return k ?? undefined;
@@ -252,6 +247,17 @@ export function isAiInvocationReady(): boolean {
     } catch {
       return false;
     }
+  }
+  if (p === 'vertex') {
+    try {
+      const env = typeof import.meta !== 'undefined' ? (import.meta as { env?: Record<string, string | undefined> }).env : undefined;
+      const bulk = env?.VITE_BULK_IMAGE_API;
+      const bulkVertex = env?.VITE_BULK_IMAGE_API_VERTEX;
+      if ((bulk && String(bulk).trim()) || (bulkVertex && String(bulkVertex).trim())) return true;
+    } catch {
+      /* ignore */
+    }
+    return false;
   }
   if (p === 'toapis') return Boolean(getToapisApiKey()?.trim());
   if (p === 'antigravity') return Boolean(getAntigravityApiKey()?.trim());

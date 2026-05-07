@@ -35,6 +35,12 @@ const BULK_RAW =
     ? readViteEnvTrim("VITE_BULK_IMAGE_API")
     : "";
 
+/** 仅当供应商选「Vertex AI」时使用：可与 `VITE_BULK_IMAGE_API` 不同，指向已配 Vertex+ADC 的 gemini-proxy。 */
+const VERTEX_BULK_RAW =
+  typeof import.meta !== "undefined" && (import.meta as unknown as { env?: Record<string, string | undefined> })?.env
+    ? readViteEnvTrim("VITE_BULK_IMAGE_API_VERTEX")
+    : "";
+
 /** 与当前页面同源（配合 Vite `/proxy/gemini` → 本机 9002），避免跨端口 CORS */
 const BULK_SAME_ORIGIN_MARKER = "__SAME_ORIGIN__";
 
@@ -49,10 +55,44 @@ function resolveBulkBaseFromRaw(raw: string): string {
 }
 
 const BULK_BASE = resolveBulkBaseFromRaw(BULK_RAW);
+const VERTEX_BULK_BASE = resolveBulkBaseFromRaw(VERTEX_BULK_RAW);
 
-/** 试用通道与直连代理均使用 `VITE_BULK_IMAGE_API`（原独立 Vertex 供应商已并入试用）。 */
+/** 选 Vertex 时若 `VITE_BULK_IMAGE_API` 仍指向未配 Vertex 的旧主机会 500；可设 `VITE_VERTEX_FALLBACK_BULK_API` 或使用下方默认已配 Vertex 的代理根。 */
+const VERTEX_FALLBACK_BULK_RAW =
+  typeof import.meta !== "undefined" && (import.meta as unknown as { env?: Record<string, string | undefined> })?.env
+    ? readViteEnvTrim("VITE_VERTEX_FALLBACK_BULK_API")
+    : "";
+const DEFAULT_VERTEX_OK_BULK = "https://assetcutter-gemini-proxy.onrender.com";
+const VERTEX_MISCONFIGURED_PROXY_HOSTS = new Set(
+  ["assetcutter-ai-pro.onrender.com", "assetcutter-ai-pro.org", "www.assetcutter-ai-pro.org"].map((h) => h.toLowerCase())
+);
+
+function vertexFallbackBulkBase(): string {
+  const v = VERTEX_FALLBACK_BULK_RAW.replace(/\/$/, "");
+  return v || DEFAULT_VERTEX_OK_BULK;
+}
+
+function redirectVertexAwayFromUnconfiguredProxy(base: string): string {
+  if (getAiProvider() !== "vertex") return base;
+  if (readViteEnvTrim("VITE_DISABLE_VERTEX_BULK_FALLBACK") === "true") return base;
+  if (!base || base === BULK_SAME_ORIGIN_MARKER) return base;
+  let host = "";
+  try {
+    const normalized = /^https?:\/\//i.test(base) ? base : `https://${base}`;
+    host = new URL(normalized).hostname.toLowerCase();
+  } catch {
+    return base;
+  }
+  if (!VERTEX_MISCONFIGURED_PROXY_HOSTS.has(host)) return base;
+  return vertexFallbackBulkBase();
+}
+
+/** Vertex 且配置了 `VITE_BULK_IMAGE_API_VERTEX` 时走专用代理根；否则与试用相同用 `VITE_BULK_IMAGE_API`。 */
 function effectiveBulkBase(): string {
-  return BULK_BASE;
+  let base: string;
+  if (getAiProvider() === "vertex" && VERTEX_BULK_BASE) base = VERTEX_BULK_BASE;
+  else base = BULK_BASE;
+  return redirectVertexAwayFromUnconfiguredProxy(base);
 }
 
 import { DEFAULT_MODEL_TEXT } from "./modelRegistry/constants";
@@ -93,6 +133,7 @@ function shouldUseBulkImageBatchQueue(): boolean {
   const p = getAiProvider();
   if (p === "toapis" || p === "antigravity" || p === "openai" || p === "vectorengine") return false;
   if (p === "trial") return Boolean(BULK_BASE);
+  if (p === "vertex") return Boolean(effectiveBulkBase());
   return false;
 }
 
@@ -111,8 +152,9 @@ function bulkApiUrl(path: string): string {
 const GEMINI_ASYNC_POLL_MS = 1500;
 /** 与 proxy 侧 GEMINI_ASYNC_JOB_MAX_WAIT_MS（默认 300s）对齐，避免前端提前超时 */
 const GEMINI_ASYNC_CLIENT_MAX_POLL_MS = 300_000;
-/** 生图阶段「盒子批处理」：凑满后一次发给 proxy（默认 3，可用 VITE_GEMINI_IMAGE_BATCH_BOX_SIZE 调整） */
+/** 生图阶段「盒子批处理」：凑满后一次发给 proxy（默认试用=3、Vertex=4，可用环境变量调整） */
 const GEMINI_IMAGE_BATCH_BOX_SIZE_DEFAULT = 3;
+const GEMINI_IMAGE_BATCH_BOX_SIZE_VERTEX_DEFAULT = 4;
 const GEMINI_IMAGE_BATCH_FLUSH_MS = 30;
 const GEMINI_IMAGE_BATCH_GROUP_WAIT_MS = 8_000;
 
@@ -129,15 +171,17 @@ function readEnvNumber(key: string): number | null {
   }
 }
 
-export function resolveImageBatchBoxSize(_legacyVertex?: "vertex"): number {
-  const envGeneric = readEnvNumber('VITE_GEMINI_IMAGE_BATCH_BOX_SIZE');
-  const envVertex = readEnvNumber('VITE_GEMINI_IMAGE_BATCH_BOX_SIZE_VERTEX');
-  const raw = envGeneric ?? envVertex ?? GEMINI_IMAGE_BATCH_BOX_SIZE_DEFAULT;
+export function resolveImageBatchBoxSize(aiBackend?: "vertex"): number {
+  const envGeneric = readEnvNumber("VITE_GEMINI_IMAGE_BATCH_BOX_SIZE");
+  const envVertex = readEnvNumber("VITE_GEMINI_IMAGE_BATCH_BOX_SIZE_VERTEX");
+  const defaultSize =
+    aiBackend === "vertex" ? GEMINI_IMAGE_BATCH_BOX_SIZE_VERTEX_DEFAULT : GEMINI_IMAGE_BATCH_BOX_SIZE_DEFAULT;
+  const raw = aiBackend === "vertex" ? (envVertex ?? envGeneric ?? defaultSize) : (envGeneric ?? defaultSize);
   return Math.max(1, Math.min(20, Math.floor(raw)));
 }
 
 export function getGeminiImageBatchBoxSizeForCurrentProvider(): number {
-  return resolveImageBatchBoxSize();
+  return resolveImageBatchBoxSize(getAiProvider() === "vertex" ? "vertex" : undefined);
 }
 
 function parseBulkProxyErrorBody(text: string): string {
@@ -168,7 +212,8 @@ async function bulkProxyGenerateContentAsync(args: {
 
   await consumeTrialGeminiSlotBeforeProxyOrThrow();
 
-  /** 与合并前「Vertex AI」供应商一致：`gemini-proxy-api` 凭 `aiBackend:vertex` 走 GCP/ADC，而非仅 GEMINI_API_KEY。 */
+  const aiBackendExtra = getAiProvider() === "vertex" ? { aiBackend: "vertex" as const } : {};
+
   const createRes = await fetch(bulkApiUrl("/proxy/gemini/async"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -176,7 +221,7 @@ async function bulkProxyGenerateContentAsync(args: {
       model: args.model,
       contents: args.contents,
       config: safeConfig,
-      aiBackend: "vertex",
+      ...aiBackendExtra,
     }),
     signal: abortSignal,
     cache: "no-store",
@@ -186,7 +231,10 @@ async function bulkProxyGenerateContentAsync(args: {
     const raw = (createText || "").trim();
     const parsedMsg = parseBulkProxyErrorBody(raw);
     if (/Use POST \/jobs/i.test(raw)) {
-      const bulkHint = `VITE_BULK_IMAGE_API=${BULK_BASE || "(empty)"}`;
+      const bulkHint =
+        getAiProvider() === "vertex" && VERTEX_BULK_BASE
+          ? `VITE_BULK_IMAGE_API_VERTEX=${VERTEX_BULK_BASE || "(empty)"}`
+          : `VITE_BULK_IMAGE_API=${BULK_BASE || "(empty)"}`;
       throw new Error(
         [
           parsedMsg,
@@ -236,10 +284,10 @@ async function bulkProxyGenerateContentAsync(args: {
 
 async function bulkProxyGenerateContentBatchAsync(args: {
   items: Array<{ model: string; contents: unknown; config?: Record<string, unknown> }>;
+  aiBackend?: "vertex";
 }): Promise<Array<{ ok: boolean; result?: { text?: string; candidates?: unknown[] }; error?: string }>> {
   if (!Array.isArray(args.items) || args.items.length === 0) return [];
   await consumeTrialGeminiSlotBeforeProxyOrThrow();
-  /** 与单任务 async 一致：试用渠道即原 Vertex 代理链路（见 `bulkProxyGenerateContentAsync`）。 */
   const createRes = await fetch(bulkApiUrl("/proxy/gemini/async-batch"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -249,7 +297,7 @@ async function bulkProxyGenerateContentBatchAsync(args: {
         contents: item.contents,
         config: item.config || {},
       })),
-      aiBackend: "vertex",
+      ...(args.aiBackend ? { aiBackend: args.aiBackend } : {}),
     }),
     cache: "no-store",
   });
@@ -305,6 +353,7 @@ type PendingImageBatchItem = {
   model: string;
   contents: unknown;
   config?: Record<string, unknown>;
+  aiBackend?: "vertex";
   batchGroupKey?: string;
   resolve: (value: { text?: string; candidates?: unknown[] }) => void;
   reject: (reason?: unknown) => void;
@@ -337,7 +386,8 @@ async function flushImageBatchQueue(): Promise<void> {
     while (pendingImageBatchItems.length > 0) {
       const first = pendingImageBatchItems[0];
       if (!first) break;
-      const batchBoxSize = resolveImageBatchBoxSize();
+      const queueAiBackend = first.aiBackend;
+      const batchBoxSize = resolveImageBatchBoxSize(queueAiBackend);
       let chunk: PendingImageBatchItem[] = [];
       if (first.batchGroupKey) {
         const key = first.batchGroupKey;
@@ -364,14 +414,34 @@ async function flushImageBatchQueue(): Promise<void> {
       } else {
         chunk = pendingImageBatchItems.splice(0, batchBoxSize);
       }
+      const aiBackend = chunk[0]?.aiBackend;
+      const mixedBackend = chunk.some((item) => item.aiBackend !== aiBackend);
+      if (mixedBackend) {
+        for (const item of chunk) {
+          try {
+            const single = await bulkProxyGenerateContentAsync({
+              model: item.model,
+              contents: item.contents,
+              config: item.config,
+            });
+            item.resolve(single);
+          } catch (e) {
+            item.reject(e);
+          }
+        }
+        continue;
+      }
       try {
-        console.info(`[gemini-batch] dispatch size=${chunk.length} box=${batchBoxSize} provider=trial/bulk`);
+        console.info(
+          `[gemini-batch] dispatch size=${chunk.length} box=${batchBoxSize} provider=${aiBackend ?? "gemini"}`
+        );
         const results = await bulkProxyGenerateContentBatchAsync({
           items: chunk.map((item) => ({
             model: item.model,
             contents: item.contents,
             config: item.config,
           })),
+          ...(aiBackend ? { aiBackend } : {}),
         });
         chunk.forEach((item, idx) => {
           const result = results[idx];
@@ -399,7 +469,8 @@ function enqueueImageBatchGenerateContent(args: {
   batchGroupExpected?: number;
 }): Promise<{ text?: string; candidates?: unknown[] }> {
   return new Promise((resolve, reject) => {
-    const batchBoxSize = resolveImageBatchBoxSize();
+    const aiBackend = getAiProvider() === "vertex" ? ("vertex" as const) : undefined;
+    const batchBoxSize = resolveImageBatchBoxSize(aiBackend);
     const batchGroupKey = args.batchGroupKey?.trim();
     if (batchGroupKey) {
       const prev = imageBatchGroupState.get(batchGroupKey);
@@ -414,6 +485,7 @@ function enqueueImageBatchGenerateContent(args: {
       model: args.model,
       contents: args.contents,
       config: args.config,
+      aiBackend,
       ...(batchGroupKey ? { batchGroupKey } : {}),
       resolve,
       reject,
@@ -508,11 +580,20 @@ const getAI = (): GeminiClientLike => {
     return proxyClient;
   }
 
+  if (provider === "vertex") {
+    if (!effectiveBulkBase()) {
+      throw new Error(
+        "当前供应商为 Vertex AI：请在构建环境配置 VITE_BULK_IMAGE_API 或（推荐）VITE_BULK_IMAGE_API_VERTEX 指向已在服务器配置 Vertex+ADC 的 gemini-proxy，并在该代理上设置 VERTEX_PROJECT_ID 或 GOOGLE_CLOUD_PROJECT 与 ADC。说明见 docs/VERTEX_AI_INTEGRATION.md"
+      );
+    }
+    return proxyClient;
+  }
+
   const apiKey = getUserApiKey();
   if (apiKey) {
     return new GoogleGenAI({ apiKey }) as unknown as GeminiClientLike;
   }
-  throw new Error("当前供应商为 Google Gemini：请在设置页填写 Gemini API Key，或切换到「试用（代理）」模式。");
+  throw new Error("当前供应商为 Google Gemini：请在设置页填写 Gemini API Key，或切换到「试用（代理）」/「Vertex AI」。");
 };
 
 export interface GeminiRequestOptions {
@@ -1365,7 +1446,7 @@ export async function dialogGenerateImage(
     const isTextToImage = !imageBase64;
     const systemInstruction = (customSystemPrompt || (isTextToImage ? DEFAULT_PROMPTS.dialog_text_to_image : DEFAULT_PROMPTS.edit)).replace('{instruction}', instruction);
     const timeoutMs =
-      provider === 'trial'
+      provider === "trial" || provider === "vertex"
         ? Math.max(baseTimeout, GEMINI_VERTEX_IMAGE_TIMEOUT_MS)
         : baseTimeout;
     const config: { systemInstruction: string; imageConfig?: { aspectRatio?: string; imageSize?: string } } = {
@@ -1445,7 +1526,7 @@ export async function dialogGenerateImages(
     const isTextToImage = !imageBase64;
     const systemInstruction = (customSystemPrompt || (isTextToImage ? DEFAULT_PROMPTS.dialog_text_to_image : DEFAULT_PROMPTS.edit)).replace('{instruction}', instruction);
     const timeoutMs =
-      provider === 'trial'
+      provider === "trial" || provider === "vertex"
         ? Math.max(baseTimeout, GEMINI_VERTEX_IMAGE_TIMEOUT_MS)
         : baseTimeout;
     const config: { systemInstruction: string; imageConfig?: { aspectRatio?: string; imageSize?: string } } = {
@@ -1513,7 +1594,7 @@ export async function dialogGenerateImageMulti(
     const provider = getAiProvider();
     const systemInstruction = (DEFAULT_PROMPTS.edit || '').replace('{instruction}', instruction);
     const timeoutMs =
-      provider === 'trial'
+      provider === "trial" || provider === "vertex"
         ? Math.max(baseTimeout, GEMINI_VERTEX_IMAGE_TIMEOUT_MS)
         : baseTimeout;
     const config: { systemInstruction: string; imageConfig?: { aspectRatio?: string; imageSize?: string } } = {

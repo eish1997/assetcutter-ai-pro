@@ -82,6 +82,7 @@ const SETTINGS_NAV: { id: string; label: string }[] = [
 
 const AI_PROVIDER_OPTIONS: { value: AiProvider; label: string }[] = [
   { value: 'trial', label: '试用（代理通道，无需本地 Key）' },
+  { value: 'vertex', label: 'Vertex AI（GCP · 经站点代理，OAuth/ADC）' },
   { value: 'gemini', label: 'Google Gemini（官方 API）' },
   { value: 'toapis', label: 'ToAPIs 网关（OpenAI 兼容 + 异步生图）' },
   { value: 'antigravity', label: 'Antigravity Tools（本机 OpenAI 兼容反代）' },
@@ -304,6 +305,8 @@ const SettingsSection: React.FC<{
     const v: AiProvider =
       value === 'trial'
         ? 'trial'
+        : value === 'vertex'
+          ? 'vertex'
         : value === 'toapis'
           ? 'toapis'
           : value === 'antigravity'
@@ -1316,6 +1319,17 @@ const SettingsSection: React.FC<{
                         试用模式固定走站点配置的 <code className="text-gray-400">VITE_BULK_IMAGE_API</code> 代理（Gemini API Key 路径），无需在本机填写 Key。
                         每账号每日限 20 次代理任务（未登录为当前浏览器设备计数）；超限请明日再试、登录后使用账号额度，或切换到其它供应商填写自有 Key。
                         若代理拥堵/限流，建议切换到其它供应商并填写对应前端 Key 直连。
+                      </p>
+                    </>
+                  ) : aiProvider === 'vertex' ? (
+                    <>
+                      <h4 className="text-[10px] font-bold text-white/80 uppercase tracking-wider">Vertex AI（代理）</h4>
+                      <p className="text-[9px] text-gray-500 leading-relaxed">
+                        请求会带 <code className="text-gray-400">aiBackend:vertex</code>，由已配置{' '}
+                        <code className="text-gray-400">VERTEX_PROJECT_ID</code> / ADC 的 gemini-proxy 转发；浏览器无需填写 GCP 密钥。
+                        构建时可设 <code className="text-gray-400">VITE_BULK_IMAGE_API_VERTEX</code> 指向专用代理根（未设则与试用共用{' '}
+                        <code className="text-gray-400">VITE_BULK_IMAGE_API</code>）。详见{' '}
+                        <code className="text-gray-400">docs/VERTEX_AI_INTEGRATION.md</code>。
                       </p>
                     </>
                   ) : aiProvider === 'gemini' ? (

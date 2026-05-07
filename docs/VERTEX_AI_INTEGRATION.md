@@ -5,7 +5,7 @@
 ## 1. 架构与安全
 
 - **浏览器不持有 GCP 凭证**：Vertex 使用 **Application Default Credentials（ADC）** 或服务账号，仅在 **部署了 `gemini-proxy-api` 的服务器**上配置。
-- **前端仅多传一个字段**：在 `POST /proxy/gemini/async`（及同步 `POST /proxy/gemini/generate-content`）的 JSON 中增加 `aiBackend: "vertex"`，代理在服务端用 `@google/genai` 的 **Vertex 模式**转发，响应形状与现有 Gemini API Key 路径一致（`text` + `candidates[].content.parts`，含 `inlineData` 生图）。
+- **前端多传一个字段（可选）**：在 `POST /proxy/gemini/async`（及同步 `POST /proxy/gemini/generate-content`）的 JSON 中增加 `aiBackend: "vertex"`，代理在服务端用 `@google/genai` 的 **Vertex 模式**转发。站点设置选择 **「Vertex AI」** 供应商时，前端异步/批量请求会自动附带；选择「试用（代理）」时不附带，代理走 `GEMINI_API_KEY`。
 - **同源与 CORS**：与现有代理相同，通过 `PROXY_ALLOWED_ORIGINS` 限制前端 Origin；前端通过 `VITE_BULK_IMAGE_API` 指向代理根 URL（或本地 `same-origin` + Vite 反代）。
 
 ## 2. 环境变量（代理进程）

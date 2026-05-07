@@ -240,8 +240,7 @@ export async function fetchWorkspaceUserCloudConfig(
           const ap = String(parsed.settings?.aiProvider ?? '')
             .trim()
             .toLowerCase();
-          if (ap === 'vertex') return 'trial';
-          if (ap === 'trial' || ap === 'toapis' || ap === 'antigravity' || ap === 'openai' || ap === 'vectorengine') {
+          if (ap === 'trial' || ap === 'vertex' || ap === 'toapis' || ap === 'antigravity' || ap === 'openai' || ap === 'vectorengine') {
             return ap as AiProvider;
           }
           if (ap === 'gemini') return 'gemini';
@@ -292,8 +291,7 @@ export async function pushWorkspaceUserCloudConfig(
         const ap = String(input.settings.aiProvider ?? '')
           .trim()
           .toLowerCase();
-        if (ap === 'vertex') return 'trial';
-        if (ap === 'trial' || ap === 'toapis' || ap === 'antigravity' || ap === 'openai' || ap === 'vectorengine') {
+        if (ap === 'trial' || ap === 'vertex' || ap === 'toapis' || ap === 'antigravity' || ap === 'openai' || ap === 'vectorengine') {
           return ap as AiProvider;
         }
         if (ap === 'gemini') return 'gemini';

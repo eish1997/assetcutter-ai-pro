@@ -31,6 +31,7 @@ import AppIcon from './ui/AppIcon';
 
 const AI_PROVIDER_OPTIONS: { value: AiProvider; label: string }[] = [
   { value: 'trial', label: '试用（代理通道）' },
+  { value: 'vertex', label: 'Vertex AI（GCP · 经代理）' },
   { value: 'gemini', label: 'Google Gemini（官方 API）' },
   { value: 'toapis', label: 'ToAPIs 网关' },
   { value: 'antigravity', label: 'Antigravity Tools（本机反代）' },
@@ -90,7 +91,7 @@ export const WorkflowApiKeyModal: React.FC<{
   const keyValue =
     provider === 'gemini'
       ? geminiKey
-      : provider === 'trial'
+      : provider === 'trial' || provider === 'vertex'
           ? ''
         : provider === 'toapis'
           ? toapisKey
@@ -111,6 +112,8 @@ export const WorkflowApiKeyModal: React.FC<{
     const v: AiProvider =
       value === 'trial'
         ? 'trial'
+        : value === 'vertex'
+          ? 'vertex'
         : value === 'toapis'
           ? 'toapis'
           : value === 'antigravity'
@@ -202,7 +205,7 @@ export const WorkflowApiKeyModal: React.FC<{
               />
             </div>
           ) : null}
-          {provider !== 'trial' ? (
+          {provider !== 'trial' && provider !== 'vertex' ? (
             <div>
               <span className="block text-[9px] font-black uppercase text-gray-500 mb-2">API Key</span>
               <input

@@ -465,7 +465,10 @@ async function proxyGenerateContent(model, contents, config) {
   };
   let ai;
   try {
-    ai = new GoogleGenAI({ apiKey: key });
+    // 必须显式 vertexai:false：若 .env 里设了 GOOGLE_GENAI_USE_VERTEXAI=true（为 Vertex 调试），
+    // @google/genai 会把未声明 vertexai 的构造当成「走 Vertex」，用 AI Studio Key 调 GCP 端即报
+    // “API keys are not supported… Expected OAuth2 access token”。
+    ai = new GoogleGenAI({ apiKey: key, vertexai: false });
     const response = await ai.models.generateContent({
       model: model || 'gemini-2.5-flash',
       contents,

@@ -69,7 +69,7 @@
 - **Vertex AI（可选）**：同一代理进程可配置 `VERTEX_PROJECT_ID`（或 `GOOGLE_CLOUD_PROJECT`）、`VERTEX_LOCATION`（默认 `global`）、ADC（如 `GOOGLE_APPLICATION_CREDENTIALS`）；设置页选择「Vertex」后，前端请求体会带 `aiBackend:vertex`。详见 [docs/VERTEX_AI_INTEGRATION.md](docs/VERTEX_AI_INTEGRATION.md)。
 
 **前端（如 Vercel）+ 可选 Gemini 代理（如 Render）**  
-若浏览器未配置官方 Key，或需避免长请求被平台超时：构建时设置 `VITE_BULK_IMAGE_API` 指向 `server/gemini-proxy-api.js` 的公网地址；Gemini key 仅配置在后端（`GEMINI_API_KEY` 或 `GEMINI_API_KEYS`）。对话/网站助手等经 **`POST /proxy/gemini/async` + 轮询 `GET /proxy/gemini/async/:jobId`**（Vertex 路径在同一接口增加 `aiBackend:vertex`）。异步并发/重试可通过 `GEMINI_ASYNC_PROXY_MAX_CONCURRENT`、`GEMINI_PROXY_RETRIES`、`GEMINI_ASYNC_JOB_TTL_MS`、`GEMINI_ASYNC_JOB_MAX_WAIT_MS` 调整；跨域允许源通过 `PROXY_ALLOWED_ORIGINS` 配置。
+若浏览器未配置官方 Key，或需避免长请求被平台超时：构建时设置 `VITE_BULK_IMAGE_API` 指向 `server/gemini-proxy-api.js` 的公网地址；Gemini key 仅配置在后端（`GEMINI_API_KEY` 或 `GEMINI_API_KEYS`）。对话/网站助手等经 **`POST /proxy/gemini/async` + 轮询 `GET /proxy/gemini/async/:jobId`**。设置里选「试用」时走 API Key 代理；选 **「Vertex AI」** 时请求带 **`aiBackend:vertex`**，由已配 `VERTEX_PROJECT_ID`/ADC 的同一（或 `VITE_BULK_IMAGE_API_VERTEX` 专用）代理转发。异步并发/重试可通过 `GEMINI_ASYNC_PROXY_MAX_CONCURRENT`、`GEMINI_PROXY_RETRIES`、`GEMINI_ASYNC_JOB_TTL_MS`、`GEMINI_ASYNC_JOB_MAX_WAIT_MS` 调整；跨域允许源通过 `PROXY_ALLOWED_ORIGINS` 配置。
 
 **可选：入站密码**  
 在环境变量、`.env` 或本地开发时的 `.env.local` 中设置 `VITE_SITE_PASSWORD` 后，打开网站会先要求输入密码，正确后才进入应用；同一标签页内刷新无需重输，关闭标签页后需重新输入。不设置则无密码门控。
