@@ -35,6 +35,7 @@ function migrateCapabilityCategory(input: CustomAppModule): CapabilityCategory {
 }
 
 function deriveEngineForCategory(category: CapabilityCategory, input: CustomAppModule, rawCat: string): CapabilityEngine | undefined {
+  if (input.companionSamSegment === true) return 'builtin';
   if (input.companionHostBundle?.dirName?.trim()) return 'builtin';
   if (category === 'generate_3d' || category === 'generate_video') return undefined;
   if (category === 'text_to_text' || category === 'image_to_text') return 'gen_text';
@@ -192,6 +193,7 @@ export function normalizeCapabilityPreset(input: CustomAppModule, index: number)
   }
   if (category === 'generate_3d' || category === 'generate_video' || base.id === 'cut_image') {
     delete (base as CustomAppModule & { companionHostBundle?: unknown }).companionHostBundle;
+    delete (base as CustomAppModule & { companionSamSegment?: unknown }).companionSamSegment;
   } else {
     const rawBundle = (input as CustomAppModule).companionHostBundle;
     if (rawBundle && typeof rawBundle === 'object' && typeof rawBundle.dirName === 'string') {
@@ -205,6 +207,21 @@ export function normalizeCapabilityPreset(input: CustomAppModule, index: number)
     } else {
       delete (base as CustomAppModule & { companionHostBundle?: unknown }).companionHostBundle;
     }
+  }
+  if (base.companionSamSegment === true) {
+    delete (base as CustomAppModule & { companionHostBundle?: unknown }).companionHostBundle;
+  }
+  if (base.companionHostBundle?.dirName?.trim()) {
+    delete (base as CustomAppModule & { companionSamSegment?: unknown }).companionSamSegment;
+  }
+  if (base.id === 'companion_sam_segment') {
+    base.companionSamSegment = true;
+    base.category = 'image_to_image';
+    base.engine = 'builtin';
+    delete (base as CustomAppModule & { companionHostBundle?: unknown }).companionHostBundle;
+  }
+  if (base.companionSamSegment !== true) {
+    delete (base as CustomAppModule & { companionSamSegment?: unknown }).companionSamSegment;
   }
   return base;
 }
@@ -222,6 +239,17 @@ const DEFAULT_PRESETS: CustomAppModule[] = [
   { id: 'style_transfer', label: '转风格', category: 'image_to_image', engine: 'gen_image', enabled: true, order: 1, instruction: 'Convert this image to a consistent artistic style: stylized digital art, clean lines, modern flat design. Keep the same composition and main subjects.' },
   { id: 'multi_view', label: '生成多视角', category: 'image_to_image', engine: 'gen_image', enabled: true, order: 2, instruction: 'Generate a clean front view of the main object in this image, centered on white or neutral background, orthographic style, suitable as a reference sheet view.' },
   { id: 'cut_image', label: '切割图片', category: 'image_to_image', engine: 'builtin', enabled: true, order: 3, instruction: '', cutMode: 'auto', uniformRows: 2, uniformCols: 2 },
+  {
+    id: 'companion_sam_segment',
+    label: '本机智能分割',
+    category: 'image_to_image',
+    engine: 'builtin',
+    enabled: true,
+    order: 4,
+    instruction:
+      '队列执行时在图像中心取前景点并调用本机 SamLocal（需伴侣与 SamLocal）；精细点选请用大图「本机分割」十字工具。',
+    companionSamSegment: true,
+  },
 ];
 
 const BUILTIN_IMAGE_PROCESS_PRESETS = DEFAULT_PRESETS.filter((p) =>
@@ -255,7 +283,16 @@ export function enforceBuiltinImageProcessPresets(list: CustomAppModule[]): Cust
     );
   });
   const result = Array.from(map.values()).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-  return result.map((p, i) => ({ ...p, order: i }));
+  const ENSURE_PRESET_IDS = ['companion_sam_segment'] as const;
+  let merged = result;
+  for (const id of ENSURE_PRESET_IDS) {
+    if (!merged.some((p) => p.id === id)) {
+      const seed = DEFAULT_PRESETS.find((p) => p.id === id);
+      if (seed) merged = [...merged, normalizeCapabilityPreset({ ...seed }, merged.length)];
+    }
+  }
+  merged = merged.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  return merged.map((p, i) => ({ ...p, order: i }));
 }
 
 export function loadCapabilityPresets(): CustomAppModule[] {

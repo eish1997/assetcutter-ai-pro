@@ -27,6 +27,7 @@ import {
   submitCompanionHostBundleProbeJob,
 } from './companionClient/compute';
 import { getCompanionLocalBaseUrl, normalizeCompanionBaseUrl } from './companionLocalPrefs';
+import { naturalSizeFromImageDataUrl, runSamSegmentFromDataUrl } from './lightboxSamSegment';
 
 export type CapabilityRunProgressMeta = {
   /** 能力集合画布节点 id，用于把进度归到具体卡片 */
@@ -60,6 +61,10 @@ export type CapabilityExecuteContext = {
   };
   /** 工作区当前项目 id，随 `host_bundle.*` 任务一并提交给本机伴侣（可选） */
   companionProjectId?: string;
+  /** 本机分割等：当前队列任务对应的资产 id（能力集合单卡执行时由 WorkflowSection 注入） */
+  workflowAssetId?: string;
+  /** 与 `WorkflowPendingTask.inputSourceDisplayKey` 一致；缺省按 original */
+  workflowSourceDisplayKey?: string;
 };
 
 export type CapabilityExecuteResult =
@@ -143,6 +148,7 @@ function makeVgpCapture(
 }
 
 export function getCapabilityEngine(preset: CustomAppModule): 'gen_image' | 'gen_text' | 'builtin' {
+  if (preset.companionSamSegment === true) return 'builtin';
   if (preset.companionHostBundle?.dirName?.trim()) return 'builtin';
   if (preset.engine) return preset.engine;
   const cat = preset.category;
@@ -414,6 +420,73 @@ export type ExecuteCapabilityOptions = {
   inputImages?: string[];
 } & GeminiImageBatchGroupOptions;
 
+async function executeCompanionSamSegmentCapability(
+  preset: CustomAppModule,
+  inputImageBase64: string,
+  ctx: CapabilityExecuteContext,
+  start: number
+): Promise<CapabilityExecuteResult> {
+  const projectId = ctx.companionProjectId?.trim();
+  const assetId = ctx.workflowAssetId?.trim();
+  const actionLabel = preset.label || preset.id;
+  if (!projectId) {
+    return {
+      ok: false,
+      kind: 'none',
+      error: '未选择工作区项目，无法使用本机智能分割',
+      durationMs: Date.now() - start,
+    };
+  }
+  if (!assetId) {
+    return {
+      ok: false,
+      kind: 'none',
+      error: '本机智能分割需要工作流资产上下文（请从工作区侧栏拖图到该能力执行，勿在能力集合内单独跑该节点）',
+      durationMs: Date.now() - start,
+    };
+  }
+  if (!hasUsableImageBase64(inputImageBase64)) {
+    return { ok: false, kind: 'none', error: '需要有效的图片输入', durationMs: Date.now() - start };
+  }
+  let dataUrl = inputImageBase64.trim();
+  if (!/^data:/i.test(dataUrl)) {
+    const p = parseInlineForLlm(dataUrl);
+    dataUrl = `data:${p.mimeType};base64,${p.data}`;
+  }
+  const size = await naturalSizeFromImageDataUrl(dataUrl);
+  if (!size) {
+    return { ok: false, kind: 'none', error: '无法读取图像尺寸', durationMs: Date.now() - start };
+  }
+  const pick = {
+    ix: Math.floor(size.w / 2),
+    iy: Math.floor(size.h / 2),
+    nw: size.w,
+    nh: size.h,
+  };
+  const resultKey = `ac_internal_sam_${typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID().replace(/-/g, '').slice(0, 14) : `${Date.now().toString(36)}`}`;
+  const displayKey = (ctx.workflowSourceDisplayKey || 'original').trim() || 'original';
+  ctx.onLog?.('info', `[${actionLabel}] 本机分割（图像中心提示点）…`, undefined);
+  emitCapabilityRunProgress(ctx, `${actionLabel}：本机分割中…`);
+  const run = await runSamSegmentFromDataUrl({
+    projectId,
+    assetId,
+    displayKey,
+    dataUrl,
+    pick,
+    resultKey,
+  });
+  if (run.ok === false) {
+    return { ok: false, kind: 'none', error: run.error, durationMs: Date.now() - start };
+  }
+  emitCapabilityRunProgress(ctx, `${actionLabel}：分割完成`);
+  return {
+    ok: true,
+    kind: 'image',
+    image: run.resultDataUrl,
+    durationMs: Date.now() - start,
+  };
+}
+
 async function executeCompanionHostBundleCapability(
   preset: CustomAppModule,
   ctx: CapabilityExecuteContext,
@@ -480,6 +553,10 @@ export async function executeCapability(
 
     if (preset.companionHostBundle?.dirName?.trim()) {
       return executeCompanionHostBundleCapability(preset, ctx, start);
+    }
+
+    if (preset.companionSamSegment === true) {
+      return executeCompanionSamSegmentCapability(preset, inputImageBase64, ctx, start);
     }
 
     const engine = getCapabilityEngine(preset);

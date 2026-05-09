@@ -19,6 +19,7 @@
     "typescript": "~5.8.2"
   },
   "dependencies": {
+    "assetcutter-ai-pro": "file:..",
     "yauzl": "^3.3.0"
   }
 }

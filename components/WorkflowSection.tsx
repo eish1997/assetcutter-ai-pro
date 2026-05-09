@@ -94,6 +94,8 @@ import {
   rasterizeExpandedLocalEditCrop,
 } from '../services/localInpaintGemini';
 import type { PanoLocalReprojectSnapshot } from '../services/panoViewportProjection';
+import { snapshotViewportNormFromEquirectLoop } from '../services/panoLocalEditFootprint';
+import { readPanoLocalInpaintShrinkToBase } from '../services/lightboxPanoLocalInpaintPrefs';
 import {
   compositePanoPatchOntoEquirect,
   rasterizePanoLocalEditCropFromSnapshot,
@@ -106,6 +108,13 @@ import WorkflowPixelBusyOverlay from './WorkflowPixelBusyOverlay';
 import { workflowResultUsesVideoPreview, workflowSafeImgSrc } from '../services/workflowImageDisplay';
 import { previewSrcCacheFingerprint } from '../services/workflowImageThumb';
 import { imageSrcToDataUrlForCompanion } from '../services/workflowCompanionAssets';
+import { humanMessageForSamSegmentFailure } from '../services/companionSamSegmentMessages';
+import {
+  runLightboxSamAutoSegmentFromImageSrc,
+  runLightboxSamSegmentFromSession,
+  type LightboxSamSegmentSession,
+} from '../services/lightboxSamSegment';
+import { unionMaskDataUrlsToDataUrl } from '../services/samMaskComposite';
 import {
   type AcWorkflowExportPayload,
   DT_AC_CAPABILITY_ACTION,
@@ -194,7 +203,8 @@ import {
   workflowLocalModelFileExceedsPreviewLimit,
 } from '../services/workflowModelBlob';
 import { captureWorkflowModelThumbnailDataUrl } from '../services/workflowModelPreviewCapture';
-import { getCompanionLocalBaseUrl } from '../services/companionLocalPrefs';
+import { getCompanionLocalBaseUrl, normalizeCompanionBaseUrl } from '../services/companionLocalPrefs';
+import { probeCompanionSamSegmentHealth } from '../services/companionClient';
 import {
   cloneWorkflowModelSlotsForDuplicatedAsset,
   fetchWorkflowModelFromCompanionAsObjectUrl,
@@ -377,7 +387,18 @@ const LIGHTBOX_ICON_BTN_VIOLET =
 
 /** 平面资产字段不存 `panoViewportCrop`（全景独立桶） */
 function overlayDocForFlatAsset(doc: ImageOverlayAnnotationDoc): ImageOverlayAnnotationDoc {
-  return normalizeImageOverlayDoc({ ...doc, panoViewportCrop: null, panoLocalEditViewport: null });
+  return normalizeImageOverlayDoc({
+    ...doc,
+    panoViewportCrop: null,
+    panoLocalEditViewport: null,
+    panoLocalEditEquirect: null,
+    panoLocalEditReproject: null,
+  });
+}
+
+/** 本机分割写入的 mask 版本键：单独当 `<img>` 会显得「灰底+白点」（透明区透出预览背景） */
+function isWorkflowInternalSamMaskDisplayKey(dk: string | undefined | null): boolean {
+  return String(dk || '').trim().startsWith('ac_internal_sam_');
 }
 
 const WorkflowSection: React.FC<{
@@ -479,9 +500,58 @@ const WorkflowSection: React.FC<{
   const [lightboxAssetId, setLightboxAssetId] = useState<string | null>(null);
   const lightboxAssetIdRef = useRef<string | null>(null);
   lightboxAssetIdRef.current = lightboxAssetId;
+  const lightboxSamArmEdgeRef = useRef(false);
   const textLightboxCenterRef = useRef<WorkflowTextLightboxCenterHandle | null>(null);
   const [lightboxMetaText, setLightboxMetaText] = useState<string>('');
   const [lightboxPointerRgb, setLightboxPointerRgb] = useState<{ r: number; g: number; b: number } | null>(null);
+  /** 大图本机 SAM：十字准星点选 */
+  const [lightboxSamPickArmed, setLightboxSamPickArmed] = useState(false);
+  /** 本机下拉展开中：Esc 先交给工具条关菜单，避免与「菜单内武装」同步冲突 */
+  const lightboxSamToolbarMenuOpenRef = useRef(false);
+  const [lightboxSamBusy, setLightboxSamBusy] = useState(false);
+  const [lightboxSamPickSubmode, setLightboxSamPickSubmode] = useState<'point' | 'box'>('point');
+  const [lightboxSamSessionPoints, setLightboxSamSessionPoints] = useState<
+    Array<{ ix: number; iy: number; label: 0 | 1 }>
+  >([]);
+  const [lightboxSamBoxPx, setLightboxSamBoxPx] = useState<{
+    x1: number;
+    y1: number;
+    x2: number;
+    y2: number;
+    nw: number;
+    nh: number;
+  } | null>(null);
+  const [lightboxSamMetrics, setLightboxSamMetrics] = useState<{ nw: number; nh: number } | null>(null);
+  const [lightboxSamMultimaskChoice, setLightboxSamMultimaskChoice] = useState<{
+    dataUrls: string[];
+    companionKeys: string[];
+    resultKey: string;
+    assetId: string;
+  } | null>(null);
+  const [lightboxSamMultimaskIndex, setLightboxSamMultimaskIndex] = useState(0);
+  /** 分割预览未写入资产：`previewLayers` 为多次运行/自动选区叠层；保存时合成一张 PNG */
+  const [lightboxSamUnsaved, setLightboxSamUnsaved] = useState<{
+    assetId: string;
+    resultKey: string;
+    outputCompanionKey: string;
+    previewLayers: string[];
+  } | null>(null);
+  const lightboxSamUnsavedRef = useRef(lightboxSamUnsaved);
+  lightboxSamUnsavedRef.current = lightboxSamUnsaved;
+  const lightboxSamMultimaskChoiceRef = useRef(lightboxSamMultimaskChoice);
+  lightboxSamMultimaskChoiceRef.current = lightboxSamMultimaskChoice;
+  const [lightboxSamUxMode, setLightboxSamUxMode] = useState<'prompt' | 'auto'>('prompt');
+  const [lightboxSamAutoLayer, setLightboxSamAutoLayer] = useState<{
+    assetId: string;
+    resultKey: string;
+    dataUrls: string[];
+    companionKeys: string[];
+  } | null>(null);
+  const [lightboxSamAutoHover, setLightboxSamAutoHover] = useState<number | null>(null);
+  const [lightboxSamAutoPicked, setLightboxSamAutoPicked] = useState<number[]>([]);
+  const [lightboxSamPreviewCompositeHref, setLightboxSamPreviewCompositeHref] = useState<string | undefined>();
+  /** 经伴侣探测 SamLocal /health 的 mode：stub 仅为小圆联调，非抠物 */
+  const [lightboxSamBackendMode, setLightboxSamBackendMode] = useState<'unknown' | 'stub' | 'sam'>('unknown');
   /** 从组内网格打开大图时记录槽位，预设入队可带 sourceGroup* 与拖拽一致 */
   const [lightboxSourceSlot, setLightboxSourceSlot] = useState<{
     sourceGroupAssetId: string;
@@ -578,6 +648,28 @@ const WorkflowSection: React.FC<{
   }, [pushOverlayHistory]);
 
   const overlayUndo = useCallback(() => {
+    if (lightboxSamPickArmed && !lightboxSamBusy) {
+      if (lightboxSamSessionPoints.length > 0) {
+        setLightboxSamSessionPoints((p) => p.slice(0, -1));
+        return;
+      }
+      if (lightboxSamBoxPx != null) {
+        setLightboxSamBoxPx(null);
+        return;
+      }
+    }
+    const aid = lightboxAssetIdRef.current;
+    if (lightboxSamUnsaved && aid && lightboxSamUnsaved.assetId === aid) {
+      setLightboxSamUnsaved(null);
+      setLightboxSamMultimaskChoice(null);
+      setLightboxSamMultimaskIndex(0);
+      setLightboxSamPreviewCompositeHref(undefined);
+      setLightboxSamUxMode('prompt');
+      setLightboxSamAutoLayer(null);
+      setLightboxSamAutoPicked([]);
+      setLightboxSamAutoHover(null);
+      return;
+    }
     const bucket = lightboxOverlayActiveBucketRef.current;
     const past = overlayHistoryPastByModeRef.current[bucket];
     if (past.length === 0) return;
@@ -587,7 +679,14 @@ const WorkflowSection: React.FC<{
       overlayHistoryFutureByModeRef.current[bucket].push(cloneOverlayDoc(normalizeImageOverlayDoc(curDoc)));
       return { ...cur, [bucket]: prevHead };
     });
-  }, [cloneOverlayDoc]);
+  }, [
+    cloneOverlayDoc,
+    lightboxSamPickArmed,
+    lightboxSamBusy,
+    lightboxSamSessionPoints.length,
+    lightboxSamBoxPx,
+    lightboxSamUnsaved,
+  ]);
 
   const overlayRedo = useCallback(() => {
     const bucket = lightboxOverlayActiveBucketRef.current;
@@ -1653,6 +1752,8 @@ ${lineSvg}
             presets: actionModules,
             textModelRegistryId: capabilityTextModel,
             companionProjectId: workspaceProjectChrome?.activeProjectId?.trim() || undefined,
+            workflowAssetId: task.assetId,
+            workflowSourceDisplayKey: task.inputSourceDisplayKey,
             onLog,
             onRunProgress: (line) => {
               setCapabilitySetRunByAssetId((prev) => {
@@ -1748,6 +1849,8 @@ ${lineSvg}
               onLog,
               textModelRegistryId: capabilityTextModel,
               companionProjectId: workspaceProjectChrome?.activeProjectId?.trim() || undefined,
+              workflowAssetId: task.assetId,
+              workflowSourceDisplayKey: task.inputSourceDisplayKey,
             },
             {
               inputText,
@@ -2883,6 +2986,10 @@ ${lineSvg}
     const doc = lightboxOverlayDraftRef.current;
     const localEditSnapshot = doc.localEdit ?? null;
     const panoLocalVp = doc.panoLocalEditViewport ?? null;
+    const panoLocalEquirect = doc.panoLocalEditEquirect ?? null;
+    const panoLocalReproject = doc.panoLocalEditReproject ?? null;
+    const needsPanoLocalCapture =
+      Boolean(panoLocalVp) || Boolean(panoLocalEquirect && panoLocalEquirect.length >= 3);
     const itemsSnapshot = doc.items;
     const userText = quickComposeDraftRef.current.trim();
 
@@ -2891,6 +2998,8 @@ ${lineSvg}
       ...doc,
       localEdit: null,
       panoLocalEditViewport: null,
+      panoLocalEditEquirect: null,
+      panoLocalEditReproject: null,
     });
     const persistBucket = lightboxOverlayActiveBucketRef.current;
     flushSync(() => {
@@ -2965,7 +3074,7 @@ ${lineSvg}
       ...taskOverrides,
       logContext: plainLog,
       lightboxAwaitClientResult: true,
-      ...(localEditSnapshot || panoLocalVp ? { displayStepLabel: '局部重绘' } : {}),
+      ...(localEditSnapshot || needsPanoLocalCapture ? { displayStepLabel: '局部重绘' } : {}),
     };
 
     if (executing) {
@@ -2978,18 +3087,29 @@ ${lineSvg}
       let composite = src;
       let panoSnap: string | null = null;
       let panoRep: PanoLocalReprojectSnapshot | null = null;
-      if (panoLocalVp) {
+      if (needsPanoLocalCapture) {
         const proj = lightboxPanoViewerRef.current;
         if (proj) {
+          if (panoLocalReproject) {
+            proj.applyReprojectSnapshot(panoLocalReproject);
+          }
           panoSnap = proj.captureViewDataUrl('image/png');
           panoRep = proj.getReprojectSnapshot();
         }
       }
       try {
-        if (panoLocalVp && panoSnap && panoRep) {
+        let panoVpForCrop = panoLocalVp;
+        if (!panoLocalReproject && panoLocalEquirect && panoLocalEquirect.length >= 3) {
+          const proj = lightboxPanoViewerRef.current;
+          if (proj) {
+            const fromLoop = snapshotViewportNormFromEquirectLoop(proj, panoLocalEquirect);
+            if (fromLoop) panoVpForCrop = fromLoop;
+          }
+        }
+        if (panoVpForCrop && panoSnap && panoRep) {
           try {
             onLog?.('info', '大图预览：全景局部重绘中（视口快照 → 扩边 → 生成 → 贴回等距柱）…');
-            const plan = await rasterizePanoLocalEditCropFromSnapshot(panoSnap, panoLocalVp, panoRep);
+            const plan = await rasterizePanoLocalEditCropFromSnapshot(panoSnap, panoVpForCrop, panoRep);
             if (!plan) {
               onLog?.('warn', '大图预览：全景局部裁切失败，将按整图继续');
             } else {
@@ -3005,7 +3125,8 @@ ${lineSvg}
                 genUrl,
                 plan.expandedRectPx,
                 plan.reproject,
-                plan.featherPx
+                plan.featherPx,
+                { shrinkToBaseDimensions: readPanoLocalInpaintShrinkToBase(preferenceScope) }
               );
               if (merged) {
                 composite = merged;
@@ -3016,7 +3137,7 @@ ${lineSvg}
           } catch (err) {
             onLog?.('warn', `大图预览：全景局部重绘失败 — ${normalizeApiErrorMessage(err)}`);
           }
-        } else if (panoLocalVp) {
+        } else if (needsPanoLocalCapture) {
           onLog?.('warn', '大图预览：全景局部重绘需要在大图「全景」模式下截取当前视口，请切换后重试');
         } else if (localEditSnapshot) {
           try {
@@ -3074,6 +3195,7 @@ ${lineSvg}
     setQuickComposePromptCards,
     setAssets,
     setLightboxQuickComposeLayoutNonce,
+    preferenceScope,
   ]);
 
   const cancelQueuedTaskInBatch = useCallback((taskId: string) => {
@@ -3861,6 +3983,131 @@ ${lineSvg}
     () => (lightboxAsset?.modelUrls || []).map((u) => String(u || '').trim()).filter(Boolean),
     [lightboxAsset?.modelUrls]
   );
+  const lightboxSamSegmentUiAllowed = useMemo(
+    () =>
+      Boolean(
+        lightboxAsset &&
+          lightboxShowsImage &&
+          !isWorkflowTextAsset(lightboxAsset) &&
+          !isGroupAsset(lightboxAsset) &&
+          lightboxModelUrls.length === 0 &&
+          lightboxPreviewLayout === 'flat'
+      ),
+    [
+      lightboxAsset,
+      lightboxShowsImage,
+      lightboxModelUrls.length,
+      lightboxPreviewLayout,
+    ]
+  );
+  /** 工具条始终显示十字入口（禁用态说明原因）；仅平面无 3D 时可点选 */
+  const lightboxSamSegmentToolbarVisible = useMemo(
+    () =>
+      Boolean(
+        lightboxAsset &&
+          lightboxShowsImage &&
+          !isWorkflowTextAsset(lightboxAsset) &&
+          !isGroupAsset(lightboxAsset)
+      ),
+    [lightboxAsset, lightboxShowsImage]
+  );
+  const lightboxSamSegmentDisabledTitle = useMemo(() => {
+    if (!workspaceProjectChrome?.activeProjectId?.trim()) return '请先选择工作区项目';
+    if (lightboxModelUrls.length > 0) return '含 3D 模型入口的资产不支持分割点选';
+    if (lightboxPreviewLayout !== 'flat') return '请切换到「平面」预览后再使用分割（全景模式不支持点选）';
+    return undefined;
+  }, [
+    workspaceProjectChrome?.activeProjectId,
+    lightboxModelUrls.length,
+    lightboxPreviewLayout,
+  ]);
+
+  /** 大图 `<img>`：查看本机 mask 版本时垫原图，避免 mask 透明区透出毛玻璃/灰背景 */
+  const lightboxPreviewUnderlaySrc = useMemo(() => {
+    if (!lightboxAsset || !lightboxShowsImage) return '';
+    if (isWorkflowInternalSamMaskDisplayKey(lightboxAsset.displayKey)) {
+      const o = asWorkflowImageString(lightboxAsset.original).trim();
+      if (o) return workflowSafeImgSrc(o);
+    }
+    return getLightboxPreviewImageSrc(lightboxAsset);
+  }, [lightboxAsset, lightboxShowsImage, getLightboxPreviewImageSrc]);
+
+  /** 已保存的 mask 版本在图上叠层（不含未保存预览） */
+  const lightboxSamSavedMaskOverlayHref = useMemo(() => {
+    if (!lightboxAsset || !lightboxShowsImage) return undefined;
+    const dk = lightboxAsset.displayKey;
+    if (!isWorkflowInternalSamMaskDisplayKey(dk)) return undefined;
+    const m = lightboxAsset.results?.[dk];
+    const s = typeof m === 'string' ? m.trim() : '';
+    if (!s) return undefined;
+    return workflowSafeImgSrc(s);
+  }, [lightboxAsset, lightboxShowsImage]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const assetId = lightboxAsset?.id;
+    const unsavedSam = lightboxSamUnsaved;
+    const layers =
+      unsavedSam &&
+      unsavedSam.assetId === assetId &&
+      unsavedSam.previewLayers.length > 0
+        ? unsavedSam.previewLayers
+        : [];
+    const auto =
+      lightboxSamUxMode === 'auto' && lightboxSamAutoLayer?.assetId === assetId ? lightboxSamAutoLayer : null;
+    /** 自动拆分阶段须始终叠上全部候选，否则未勾选/未悬停时 extra 为空，画面上看不到任何分割块 */
+    const extra: string[] = [];
+    if (auto && auto.dataUrls.length) {
+      for (const u of auto.dataUrls) {
+        const s = typeof u === 'string' ? u.trim() : '';
+        if (s) extra.push(s);
+      }
+    }
+    const stack = [...layers, ...extra];
+    if (stack.length === 0) {
+      setLightboxSamPreviewCompositeHref(undefined);
+      return () => {
+        cancelled = true;
+      };
+    }
+    void unionMaskDataUrlsToDataUrl(stack).then((u) => {
+      if (cancelled || !u) return;
+      setLightboxSamPreviewCompositeHref(workflowSafeImgSrc(u));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    lightboxAsset?.id,
+    lightboxSamUnsaved?.assetId,
+    lightboxSamUnsaved?.previewLayers,
+    lightboxSamAutoLayer,
+    lightboxSamUxMode,
+  ]);
+
+  const lightboxSamFlatMaskOverlayHref =
+    lightboxSamPreviewCompositeHref ?? lightboxSamSavedMaskOverlayHref;
+
+  const lightboxSamPickMarkers = useMemo(() => {
+    if (!lightboxSamMetrics || lightboxSamSessionPoints.length === 0) return [];
+    const { nw, nh } = lightboxSamMetrics;
+    return lightboxSamSessionPoints.map((p) => ({
+      nx: p.ix / Math.max(1, nw),
+      ny: p.iy / Math.max(1, nh),
+      label: (p.label === 1 ? 1 : 0) as 1 | 0,
+    }));
+  }, [lightboxSamSessionPoints, lightboxSamMetrics]);
+
+  const lightboxSamCanRunSegment = useMemo(() => {
+    if (!lightboxSamMetrics || lightboxSamMetrics.nw < 1 || lightboxSamMetrics.nh < 1) return false;
+    if (lightboxSamSessionPoints.length > 0) return true;
+    if (!lightboxSamBoxPx) return false;
+    return (
+      Math.abs(lightboxSamBoxPx.x2 - lightboxSamBoxPx.x1) >= 1 &&
+      Math.abs(lightboxSamBoxPx.y2 - lightboxSamBoxPx.y1) >= 1
+    );
+  }, [lightboxSamMetrics, lightboxSamSessionPoints.length, lightboxSamBoxPx]);
+
   const lightboxList = useMemo(
     () =>
       sortRootWorkflowAssetsNewestFirst(
@@ -5156,6 +5403,9 @@ ${lineSvg}
 
   const applyLightboxToolChange = useCallback(
     (t: ImageFlatAnnotationTool) => {
+      if (t !== 'off') {
+        setLightboxSamPickArmed(false);
+      }
       setLightboxOverlayTool(t);
       const disk = readLightboxAnnotationPrefs(lightboxAnnotationPrefsKey);
       const nextLocal =
@@ -5179,6 +5429,453 @@ ${lineSvg}
     },
     [lightboxAnnotationPrefsKey, lightboxOverlayColor, lightboxBrushWidth]
   );
+
+  useEffect(() => {
+    if (lightboxSamPickArmed && !lightboxSamArmEdgeRef.current) {
+      applyLightboxToolChange('off');
+      if (lightboxSamBackendMode === 'stub') {
+        onLog?.(
+          'warn',
+          '分割：当前 SamLocal 为 stub，只会生成点击处小圆斑（联调用），不会按物体抠出整块区域。请设置环境变量 SAM_MODE=sam、安装 ViT-B 权重并重启 SamLocal。',
+        );
+      } else {
+        onLog?.(
+          'info',
+          lightboxSamBackendMode === 'sam'
+            ? '分割：左键前景点、右键背景点；「框」模式拖矩形。撤销与标注相同（Ctrl/⌘+Z）。菜单内「运行」提交。Esc 取消武装。'
+            : '分割：左键前景点、右键背景点；「框」模式拖矩形。若结果只是一小圆，请将 SamLocal 设为 SAM_MODE=sam（非 stub）。菜单内「运行」提交。Esc 取消武装。',
+        );
+      }
+    }
+    lightboxSamArmEdgeRef.current = lightboxSamPickArmed;
+  }, [lightboxSamPickArmed, applyLightboxToolChange, onLog, lightboxSamBackendMode]);
+
+  useEffect(() => {
+    if (!lightboxAssetId) {
+      setLightboxSamPickArmed(false);
+      setLightboxSamBusy(false);
+      setLightboxSamSessionPoints([]);
+      setLightboxSamBoxPx(null);
+      setLightboxSamMetrics(null);
+      setLightboxSamPickSubmode('point');
+      setLightboxSamMultimaskChoice(null);
+      setLightboxSamMultimaskIndex(0);
+      setLightboxSamBackendMode('unknown');
+    }
+  }, [lightboxAssetId]);
+
+  useEffect(() => {
+    if (!lightboxSamSegmentToolbarVisible || !lightboxAssetId) {
+      return;
+    }
+    const base = normalizeCompanionBaseUrl(String(getCompanionLocalBaseUrl() || '').trim());
+    if (!base) {
+      setLightboxSamBackendMode('unknown');
+      return;
+    }
+    let cancelled = false;
+    void probeCompanionSamSegmentHealth(base).then((r) => {
+      if (cancelled) return;
+      if (!r.ok || r.body == null || typeof r.body !== 'object') {
+        setLightboxSamBackendMode('unknown');
+        return;
+      }
+      const root = r.body as { samLocal?: { body?: { mode?: string } } };
+      const m = String(root.samLocal?.body?.mode ?? '').toLowerCase();
+      if (m === 'stub' || m === 'sam') setLightboxSamBackendMode(m);
+      else setLightboxSamBackendMode('unknown');
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [lightboxSamSegmentToolbarVisible, lightboxAssetId]);
+
+  useEffect(() => {
+    if (!lightboxSamPickArmed && !lightboxSamBusy) {
+      setLightboxSamSessionPoints([]);
+      setLightboxSamBoxPx(null);
+      setLightboxSamMetrics(null);
+      setLightboxSamPickSubmode('point');
+    }
+  }, [lightboxSamPickArmed, lightboxSamBusy]);
+
+  useEffect(() => {
+    setLightboxSamMultimaskChoice(null);
+    setLightboxSamMultimaskIndex(0);
+    setLightboxSamUnsaved(null);
+    setLightboxSamPreviewCompositeHref(undefined);
+    setLightboxSamUxMode('prompt');
+    setLightboxSamAutoLayer(null);
+    setLightboxSamAutoPicked([]);
+    setLightboxSamAutoHover(null);
+  }, [lightboxAssetId]);
+
+  useEffect(() => {
+    if (!lightboxSamPickArmed) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (isWorkflowEditableTarget(e.target)) return;
+      if (lightboxSamToolbarMenuOpenRef.current) return;
+      setLightboxSamPickArmed(false);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [lightboxSamPickArmed]);
+
+  useEffect(() => {
+    if (lightboxPreviewLayout !== 'flat') {
+      setLightboxSamPickArmed(false);
+    }
+  }, [lightboxPreviewLayout]);
+
+  const toggleLightboxSamArm = useCallback(() => {
+    if (lightboxSamBusy) return;
+    setLightboxSamPickArmed((prev) => {
+      const next = !prev;
+      if (next) {
+        setLightboxSamSessionPoints([]);
+        setLightboxSamBoxPx(null);
+        setLightboxSamMetrics(null);
+        setLightboxSamPickSubmode('point');
+        setLightboxSamMultimaskChoice(null);
+        setLightboxSamMultimaskIndex(0);
+      }
+      return next;
+    });
+  }, [lightboxSamBusy]);
+
+  const onLightboxSamMenuOpenChange = useCallback(
+    (open: boolean) => {
+      if (lightboxSamBusy && open) return;
+      if (!lightboxSamSegmentUiAllowed && open) return;
+      if (!open && lightboxSamUxMode === 'auto' && lightboxSamAutoLayer) {
+        return;
+      }
+      setLightboxSamPickArmed(open);
+    },
+    [lightboxSamBusy, lightboxSamSegmentUiAllowed, lightboxSamUxMode, lightboxSamAutoLayer]
+  );
+
+  const handleLightboxSamPointAdd = useCallback(
+    (pt: { ix: number; iy: number; nw: number; nh: number; label: 0 | 1 }) => {
+      if (!lightboxSamSegmentUiAllowed || lightboxSamBusy) return;
+      setLightboxSamMetrics({ nw: pt.nw, nh: pt.nh });
+      setLightboxSamSessionPoints((prev) => [...prev, { ix: pt.ix, iy: pt.iy, label: pt.label }]);
+    },
+    [lightboxSamSegmentUiAllowed, lightboxSamBusy]
+  );
+
+  const handleLightboxSamBoxCommit = useCallback(
+    (
+      box: { x1: number; y1: number; x2: number; y2: number; nw: number; nh: number } | null
+    ) => {
+      if (!lightboxSamSegmentUiAllowed || lightboxSamBusy) return;
+      if (!box) {
+        setLightboxSamBoxPx(null);
+        return;
+      }
+      setLightboxSamMetrics({ nw: box.nw, nh: box.nh });
+      setLightboxSamBoxPx(box);
+    },
+    [lightboxSamSegmentUiAllowed, lightboxSamBusy]
+  );
+
+  const clearLightboxSamPrompts = useCallback(() => {
+    if (!lightboxSamSegmentUiAllowed || lightboxSamBusy || !lightboxSamPickArmed) return;
+    setLightboxSamSessionPoints([]);
+    setLightboxSamBoxPx(null);
+  }, [lightboxSamSegmentUiAllowed, lightboxSamBusy, lightboxSamPickArmed]);
+
+  const lightboxSamHasPrompts = useMemo(
+    () =>
+      lightboxSamPickArmed &&
+      !lightboxSamBusy &&
+      (lightboxSamSessionPoints.length > 0 || lightboxSamBoxPx != null),
+    [lightboxSamPickArmed, lightboxSamBusy, lightboxSamSessionPoints.length, lightboxSamBoxPx]
+  );
+
+  const applyLightboxSamMultimaskIndex = useCallback((idx: number) => {
+    const ch = lightboxSamMultimaskChoiceRef.current;
+    if (!ch || idx < 0 || idx >= ch.dataUrls.length) return;
+    setLightboxSamMultimaskIndex(idx);
+    setLightboxSamUnsaved((p) => {
+      if (!p?.previewLayers.length) return p;
+      const u = ch.dataUrls[idx];
+      if (typeof u !== 'string' || !u.trim()) return p;
+      const next = [...p.previewLayers];
+      next[next.length - 1] = u.trim();
+      return { ...p, previewLayers: next };
+    });
+  }, []);
+
+  const executeLightboxSamSegment = useCallback(async () => {
+    if (lightboxSamBusy) return;
+    const m = lightboxSamMetrics;
+    const hasPts = lightboxSamSessionPoints.length > 0;
+    const boxOk =
+      lightboxSamBoxPx &&
+      Math.abs(lightboxSamBoxPx.x2 - lightboxSamBoxPx.x1) >= 1 &&
+      Math.abs(lightboxSamBoxPx.y2 - lightboxSamBoxPx.y1) >= 1;
+    if (!m || m.nw < 1 || m.nh < 1 || (!hasPts && !boxOk)) {
+      onLog?.('warn', '分割：请先在大图上添加点或框选区域，再点「运行」');
+      return;
+    }
+    const id = lightboxAssetIdRef.current;
+    const asset = assetsRef.current.find((a) => a.id === id);
+    const projectId = workspaceProjectChrome?.activeProjectId?.trim();
+    if (!asset || isWorkflowTextAsset(asset) || isGroupAsset(asset)) {
+      onLog?.('warn', '分割：当前无可分割的图像资产');
+      setLightboxSamPickArmed(false);
+      return;
+    }
+    if (!projectId) {
+      onLog?.('warn', '分割：请先选择工作区项目（本地伴侣按项目落盘）');
+      setLightboxSamPickArmed(false);
+      return;
+    }
+    const box =
+      lightboxSamBoxPx && boxOk
+        ? {
+            x1: Math.min(lightboxSamBoxPx.x1, lightboxSamBoxPx.x2),
+            y1: Math.min(lightboxSamBoxPx.y1, lightboxSamBoxPx.y2),
+            x2: Math.max(lightboxSamBoxPx.x1, lightboxSamBoxPx.x2),
+            y2: Math.max(lightboxSamBoxPx.y1, lightboxSamBoxPx.y2),
+          }
+        : null;
+    const session: LightboxSamSegmentSession = {
+      nw: m.nw,
+      nh: m.nh,
+      points: lightboxSamSessionPoints,
+      box,
+    };
+    setLightboxSamMultimaskChoice(null);
+    setLightboxSamMultimaskIndex(0);
+    setLightboxSamPickArmed(false);
+    setLightboxSamBusy(true);
+    onLog?.('info', '分割：正在上传当前预览图并提交分割…');
+    const prevU = lightboxSamUnsavedRef.current;
+    const resultKey =
+      prevU?.assetId === asset.id && prevU?.resultKey
+        ? prevU.resultKey
+        : `ac_internal_sam_${uuid().replace(/-/g, '').slice(0, 14)}`;
+    const src = getLightboxPreviewImageSrc(asset);
+    try {
+      const run = await runLightboxSamSegmentFromSession({
+        projectId,
+        assetId: asset.id,
+        displayKey: asset.displayKey,
+        imageSrc: src,
+        session,
+        resultKey,
+      });
+      if (run.ok === false) {
+        const zh = humanMessageForSamSegmentFailure(run.code, run.error);
+        onLog?.('error', run.code ? `${zh}（${run.code}）` : zh);
+        return;
+      }
+      const layerUrl = run.multimask?.dataUrls?.[0] ?? run.resultDataUrl;
+      setLightboxSamUnsaved((prev) => {
+        const same = prev?.assetId === asset.id && prev?.resultKey === resultKey;
+        const previewLayers = same && prev ? [...prev.previewLayers, layerUrl] : [layerUrl];
+        return {
+          assetId: asset.id,
+          resultKey,
+          outputCompanionKey: run.outputCompanionKey,
+          previewLayers,
+        };
+      });
+      if (run.multimask && run.multimask.dataUrls.length > 1) {
+        setLightboxSamMultimaskChoice({
+          dataUrls: run.multimask.dataUrls,
+          companionKeys: run.multimask.companionKeys,
+          resultKey,
+          assetId: asset.id,
+        });
+        setLightboxSamMultimaskIndex(0);
+      } else {
+        setLightboxSamMultimaskChoice(null);
+        setLightboxSamMultimaskIndex(0);
+      }
+      onLog?.(
+        'info',
+        '分割完成：已叠入预览（可再次运行叠加多区域）。满意后点「保存到资产」。',
+      );
+    } catch (e) {
+      onLog?.('error', `分割异常：${normalizeApiErrorMessage(e)}`);
+    } finally {
+      setLightboxSamBusy(false);
+    }
+  }, [
+    lightboxSamBusy,
+    lightboxSamMetrics,
+    lightboxSamSessionPoints,
+    lightboxSamBoxPx,
+    workspaceProjectChrome?.activeProjectId,
+    getLightboxPreviewImageSrc,
+    onLog,
+  ]);
+
+  const commitLightboxSamSave = useCallback(() => {
+    const pending = lightboxSamUnsaved;
+    const aid = lightboxAssetIdRef.current;
+    const projectId = workspaceProjectChrome?.activeProjectId?.trim();
+    const base = normalizeCompanionBaseUrl(String(getCompanionLocalBaseUrl() || '').trim());
+    if (!pending || !aid || pending.assetId !== aid || lightboxSamBusy) return;
+    if (!pending.previewLayers.length) return;
+    if (!projectId || !base) {
+      onLog?.('warn', '分割：请先选择工作区项目并连接本地伴侣后再保存');
+      return;
+    }
+    void (async () => {
+      const composite = await unionMaskDataUrlsToDataUrl(pending.previewLayers);
+      if (!composite) {
+        onLog?.('warn', '分割：合成 mask 失败，无法保存');
+        return;
+      }
+      const put = await putWorkflowResultImageToCompanion(
+        base,
+        projectId,
+        pending.assetId,
+        pending.resultKey,
+        composite
+      );
+      if (put.ok === false) {
+        onLog?.('error', `分割保存上传失败：${put.error}`);
+        return;
+      }
+      const now = Date.now();
+      const { resultKey } = pending;
+      setAssets((prev) =>
+        prev.map((a) => {
+          if (a.id !== pending.assetId) return a;
+          const nextResults = { ...a.results, [resultKey]: composite };
+          const order = [...(a.resultOrder || []).filter((k) => k !== resultKey), resultKey];
+          const nextRck = { ...(a.resultsCompanionKeys || {}), [resultKey]: put.key };
+          const nextMeta = {
+            ...(a.resultMeta || {}),
+            [resultKey]: { executedAt: now, displayStepLabel: '分割', mediaKind: 'image' as const },
+          };
+          return {
+            ...a,
+            results: nextResults,
+            resultOrder: order,
+            resultsCompanionKeys: nextRck,
+            resultMeta: nextMeta,
+            displayKey: resultKey,
+          };
+        })
+      );
+      setLightboxSamUnsaved(null);
+      setLightboxSamMultimaskChoice(null);
+      setLightboxSamMultimaskIndex(0);
+      setLightboxSamPreviewCompositeHref(undefined);
+      onLog?.('info', '分割已保存为新版本（PNG mask），可用滚轮在版本间切换。');
+    })();
+  }, [lightboxSamUnsaved, lightboxSamBusy, workspaceProjectChrome?.activeProjectId, setAssets, onLog]);
+
+  const exitLightboxSamAuto = useCallback(() => {
+    setLightboxSamUxMode('prompt');
+    setLightboxSamAutoLayer(null);
+    setLightboxSamAutoPicked([]);
+    setLightboxSamAutoHover(null);
+  }, []);
+
+  const clearLightboxSamPreview = useCallback(() => {
+    setLightboxSamUnsaved(null);
+    setLightboxSamMultimaskChoice(null);
+    setLightboxSamMultimaskIndex(0);
+    setLightboxSamPreviewCompositeHref(undefined);
+    exitLightboxSamAuto();
+  }, [exitLightboxSamAuto]);
+
+  const toggleLightboxSamAutoPick = useCallback((i: number) => {
+    setLightboxSamAutoPicked((prev) => {
+      const s = new Set<number>(prev);
+      if (s.has(i)) s.delete(i);
+      else s.add(i);
+      return Array.from(s).sort((a, b) => a - b);
+    });
+  }, []);
+
+  const mergeLightboxSamAutoToLayers = useCallback(() => {
+    const layer = lightboxSamAutoLayer;
+    const aid = lightboxAssetIdRef.current;
+    if (!layer || layer.assetId !== aid || lightboxSamAutoPicked.length === 0) return;
+    const urls = lightboxSamAutoPicked
+      .map((i) => layer.dataUrls[i])
+      .filter((s): s is string => typeof s === 'string' && s.trim().length > 0);
+    void unionMaskDataUrlsToDataUrl(urls).then((merged) => {
+      if (!merged) return;
+      const prevU = lightboxSamUnsavedRef.current;
+      const resultKey =
+        prevU?.assetId === layer.assetId && prevU?.resultKey
+          ? prevU.resultKey
+          : `ac_internal_sam_${uuid().replace(/-/g, '').slice(0, 14)}`;
+      setLightboxSamUnsaved((prev) => {
+        const same = prev?.assetId === layer.assetId && prev?.resultKey === resultKey;
+        const previewLayers = same && prev ? [...prev.previewLayers, merged] : [merged];
+        return {
+          assetId: layer.assetId,
+          resultKey,
+          outputCompanionKey: layer.companionKeys[0] ?? prev?.outputCompanionKey ?? '',
+          previewLayers,
+        };
+      });
+      exitLightboxSamAuto();
+      onLog?.('info', '已将勾选区域叠入预览，可继续分割或点「保存到资产」。');
+    });
+  }, [lightboxSamAutoLayer, lightboxSamAutoPicked, exitLightboxSamAuto, onLog]);
+
+  const executeLightboxSamAuto = useCallback(async () => {
+    if (lightboxSamBusy) return;
+    const id = lightboxAssetIdRef.current;
+    const asset = assetsRef.current.find((a) => a.id === id);
+    const projectId = workspaceProjectChrome?.activeProjectId?.trim();
+    if (!asset || isWorkflowTextAsset(asset) || isGroupAsset(asset) || !projectId) {
+      onLog?.('warn', '分割：当前无法执行自动拆分');
+      return;
+    }
+    setLightboxSamAutoLayer(null);
+    setLightboxSamAutoPicked([]);
+    setLightboxSamAutoHover(null);
+    setLightboxSamUxMode('auto');
+    setLightboxSamPickArmed(false);
+    setLightboxSamBusy(true);
+    onLog?.('info', '分割：正在全图自动拆分（首次可能较慢）…');
+    const resultKey = `ac_internal_sam_${uuid().replace(/-/g, '').slice(0, 14)}`;
+    const src = getLightboxPreviewImageSrc(asset);
+    try {
+      const run = await runLightboxSamAutoSegmentFromImageSrc({
+        projectId,
+        assetId: asset.id,
+        displayKey: asset.displayKey,
+        imageSrc: src,
+        resultKey,
+      });
+      if (run.ok === false) {
+        const zh = humanMessageForSamSegmentFailure(run.code, run.error);
+        onLog?.('error', run.code ? `${zh}（${run.code}）` : zh);
+        setLightboxSamUxMode('prompt');
+        return;
+      }
+      setLightboxSamAutoLayer({
+        assetId: asset.id,
+        resultKey,
+        dataUrls: run.multimask.dataUrls,
+        companionKeys: run.multimask.companionKeys,
+      });
+      setLightboxSamPickArmed(true);
+      onLog?.(
+        'info',
+        `分割：已生成 ${run.multimask.dataUrls.length} 块。悬停高亮，点击勾选后点「叠入预览」。`,
+      );
+    } catch (e) {
+      onLog?.('error', `自动拆分异常：${normalizeApiErrorMessage(e)}`);
+      setLightboxSamUxMode('prompt');
+    } finally {
+      setLightboxSamBusy(false);
+    }
+  }, [lightboxSamBusy, workspaceProjectChrome?.activeProjectId, getLightboxPreviewImageSrc, onLog]);
 
   const onLightboxOverlayColorChange = useCallback(
     (c: string) => {
@@ -5223,6 +5920,11 @@ ${lineSvg}
       } else if (ch === 'a' || ch === 'A') {
         e.preventDefault();
         applyLightboxToolChange(lightboxRememberedLocal);
+      } else if (ch === 's' || ch === 'S') {
+        e.preventDefault();
+        if (!workspaceProjectChrome?.activeProjectId?.trim() || lightboxSamBusy) return;
+        if (!lightboxSamSegmentUiAllowed) return;
+        toggleLightboxSamArm();
       }
     };
     window.addEventListener('keydown', onKey, true);
@@ -5236,6 +5938,10 @@ ${lineSvg}
     applyLightboxToolChange,
     lightboxRememberedCrop,
     lightboxRememberedLocal,
+    workspaceProjectChrome?.activeProjectId,
+    lightboxSamBusy,
+    lightboxSamSegmentUiAllowed,
+    toggleLightboxSamArm,
   ]);
 
   useEffect(() => {
@@ -7740,9 +8446,21 @@ ${lineSvg}
         <ImagePreviewOverlay
           open
           resetKey={lightboxAsset.id}
+          suppressFlatImageInteraction={
+            Boolean(
+              lightboxShowsImage &&
+                !isWorkflowTextAsset(lightboxAsset) &&
+                !isGroupAsset(lightboxAsset) &&
+                lightboxSamSegmentUiAllowed &&
+                lightboxSamPickArmed &&
+                !lightboxSamBusy
+            )
+          }
           imageSrc={
             lightboxShowsImage || !isWorkflowTextAsset(lightboxAsset)
-              ? getLightboxPreviewImageSrc(lightboxAsset)
+              ? lightboxShowsImage
+                ? lightboxPreviewUnderlaySrc || getLightboxPreviewImageSrc(lightboxAsset)
+                : getLightboxPreviewImageSrc(lightboxAsset)
               : undefined
           }
           centerSlot={
@@ -7778,9 +8496,7 @@ ${lineSvg}
           onWheelNavigate={handleLightboxWheelNavigate}
           innerWheelOptionCount={getDisplayKeysForAsset(lightboxAsset).length}
           onWheelInnerNavigate={handleLightboxWheelCycleDisplay}
-          innerLayoutStableKey={
-            lightboxShowsImage ? `${lightboxAsset.id}:${lightboxAsset.displayKey}` : undefined
-          }
+          innerLayoutStableKey={lightboxShowsImage ? lightboxAsset.id : undefined}
           onFlatImagePixelSample={
             lightboxShowsImage &&
             !isWorkflowTextAsset(lightboxAsset) &&
@@ -7814,7 +8530,7 @@ ${lineSvg}
                     panoOverlayContainerRef={panoOverlayContainerRef}
                     panoProjectionRef={panoProjectionRef}
                     panoViewerBindEpoch={panoViewerBindEpoch}
-                    layoutKey={getLightboxPreviewImageSrc(lightboxAsset)}
+                    layoutKey={`${lightboxPreviewUnderlaySrc}|${lightboxSamFlatMaskOverlayHref ?? ''}`}
                     doc={lightboxOverlayDraft}
                     tool={lightboxOverlayTool}
                     color={lightboxOverlayColor}
@@ -7822,6 +8538,35 @@ ${lineSvg}
                     onDocPatch={onLightboxOverlayPatch}
                     onBeginDragGesture={overlayBeginDragGesture}
                     onLocalEditAnchorClientChange={onLocalEditAnchorClientChange}
+                    samPickAwaiting={
+                      lightboxSamSegmentUiAllowed && lightboxSamPickArmed && !lightboxSamBusy
+                    }
+                    samPickSubmode={lightboxSamPickSubmode}
+                    onSamPointAdd={lightboxSamSegmentUiAllowed ? handleLightboxSamPointAdd : undefined}
+                    onSamBoxCommit={lightboxSamSegmentUiAllowed ? handleLightboxSamBoxCommit : undefined}
+                    onSamPickHint={
+                      lightboxSamSegmentUiAllowed ? (m) => onLog?.('warn', m) : undefined
+                    }
+                    samPickMarkers={lightboxSamPickMarkers}
+                    samBoxPixels={lightboxSamBoxPx}
+                    samPickProcessing={lightboxSamBusy}
+                    samMaskOverlayHref={lightboxSamFlatMaskOverlayHref}
+                    samAutoPick={
+                      lightboxSamSegmentUiAllowed &&
+                      lightboxSamPickArmed &&
+                      !lightboxSamBusy &&
+                      lightboxSamUxMode === 'auto' &&
+                      lightboxSamAutoLayer &&
+                      lightboxSamAutoLayer.assetId === lightboxAsset.id
+                        ? {
+                            maskDataUrls: lightboxSamAutoLayer.dataUrls,
+                            pickedIndices: lightboxSamAutoPicked,
+                            hoverIndex: lightboxSamAutoHover,
+                            onHoverIndex: setLightboxSamAutoHover,
+                            onTogglePick: toggleLightboxSamAutoPick,
+                          }
+                        : null
+                    }
                   />
                 )
               : undefined
@@ -8150,9 +8895,73 @@ ${lineSvg}
               onApplyCrops={() => void applyLightboxManualCrops()}
               onClearCrops={() => onLightboxOverlayPatch((d) => ({ ...d, crops: [] }))}
               onClearLocalEdit={() =>
-                onLightboxOverlayPatch((d) => ({ ...d, localEdit: null, panoLocalEditViewport: null }))
+                onLightboxOverlayPatch((d) => ({
+                  ...d,
+                  localEdit: null,
+                  panoLocalEditViewport: null,
+                  panoLocalEditEquirect: null,
+                  panoLocalEditReproject: null,
+                }))
               }
               onResetAll={resetLightboxOverlayAll}
+              lightboxSamToolbarMenuOpenRef={lightboxSamToolbarMenuOpenRef}
+              samSegment={
+                lightboxSamSegmentToolbarVisible
+                  ? {
+                      busy: lightboxSamBusy,
+                      armed: lightboxSamPickArmed && lightboxSamSegmentUiAllowed,
+                      disabled: !lightboxSamSegmentUiAllowed,
+                      disabledTitle: lightboxSamSegmentDisabledTitle,
+                      onSamMenuOpenChange: onLightboxSamMenuOpenChange,
+                      samBackendMode: lightboxSamBackendMode,
+                      samPickSubmode: lightboxSamPickSubmode,
+                      onSamPickSubmodeChange: setLightboxSamPickSubmode,
+                      canRunSam: lightboxSamCanRunSegment,
+                      onRunSam: () => void executeLightboxSamSegment(),
+                      canClearSamPrompts: lightboxSamHasPrompts,
+                      onSamClearPrompts: clearLightboxSamPrompts,
+                      samUxMode: lightboxSamUxMode,
+                      onAutoSegment: () => void executeLightboxSamAuto(),
+                      canMergeAutoPick:
+                        lightboxSamUxMode === 'auto' &&
+                        !!lightboxSamAutoLayer &&
+                        lightboxSamAutoLayer.assetId === lightboxAssetId &&
+                        lightboxSamAutoPicked.length > 0,
+                      onMergeAutoPick: () => void mergeLightboxSamAutoToLayers(),
+                      onExitAuto: () => void exitLightboxSamAuto(),
+                      canClearSamPreview: Boolean(
+                        (lightboxSamUnsaved?.assetId === lightboxAssetId &&
+                          (lightboxSamUnsaved?.previewLayers?.length ?? 0) > 0) ||
+                          (lightboxSamAutoLayer?.assetId === lightboxAssetId && !!lightboxSamAutoLayer)
+                      ),
+                      onClearSamPreview: () => void clearLightboxSamPreview(),
+                      canSaveSam:
+                        !!lightboxSamUnsaved &&
+                        lightboxSamUnsaved.assetId === lightboxAssetId &&
+                        (lightboxSamUnsaved.previewLayers?.length ?? 0) > 0 &&
+                        !lightboxSamBusy,
+                      onSaveSam: () => void commitLightboxSamSave(),
+                      multimask:
+                        lightboxSamMultimaskChoice && lightboxSamMultimaskChoice.dataUrls.length > 1
+                          ? {
+                              total: lightboxSamMultimaskChoice.dataUrls.length,
+                              index: lightboxSamMultimaskIndex,
+                              onPrev: () =>
+                                applyLightboxSamMultimaskIndex(
+                                  Math.max(0, lightboxSamMultimaskIndex - 1)
+                                ),
+                              onNext: () =>
+                                applyLightboxSamMultimaskIndex(
+                                  Math.min(
+                                    lightboxSamMultimaskChoice.dataUrls.length - 1,
+                                    lightboxSamMultimaskIndex + 1
+                                  )
+                                ),
+                            }
+                          : undefined,
+                    }
+                  : undefined
+              }
             />
           </div>,
           document.body

@@ -7,7 +7,7 @@ export type CompanionJobRecordV1 = {
   status: string;
   createdAt: number;
   updatedAt: number;
-  result?: { note?: string; adapterId?: string };
+  result?: { note?: string; adapterId?: string; samMultimaskKeys?: string[] };
   error?: { code: string; message?: string };
 };
 
@@ -42,6 +42,30 @@ export type CompanionSeamRepairInputsV1 = {
   outputKey?: string;
 };
 
+/** SamSegmentPromptV1 — 与 `docs/本地伴侣SAM分割-产品开发规格.md`、伴侣 `samSegmentAdapter` 一致 */
+export type CompanionSamSegmentPromptPointV1 = { x: number; y: number; label: number };
+
+export type CompanionSamSegmentPromptBoxV1 = { x1: number; y1: number; x2: number; y2: number };
+
+export type CompanionSamSegmentPromptV1 = {
+  coordSpace: 'pixel';
+  width: number;
+  height: number;
+  /** 全图自动拆分（SamAutomaticMaskGenerator） */
+  autoSegment?: boolean;
+  points?: CompanionSamSegmentPromptPointV1[];
+  box?: CompanionSamSegmentPromptBoxV1 | null;
+  multimaskOutput?: boolean;
+  /** 为 true 时 SamLocal 返回 JSON 多图，伴侣写入主键 + _m1… */
+  returnAllMasks?: boolean;
+};
+
+/** 与宿主 `sam_segment` Job 的 `inputs` 一致（`params.prompt` 必填） */
+export type CompanionSamSegmentInputsV1 = {
+  imageKey: string;
+  outputKey: string;
+};
+
 export async function submitCompanionJob(baseUrl: string, body: CompanionSubmitJobBody | { job: CompanionSubmitJobBody }) {
   return companionFetchJson<{ jobId: string; status: string; job: CompanionJobRecordV1 }>(baseUrl, '/v1/compute/jobs', {
     method: 'POST',
@@ -62,6 +86,21 @@ export async function submitCompanionSeamRepairJob(
     projectId,
     inputs,
     params: params ?? {},
+  });
+}
+
+export async function submitCompanionSamSegmentJob(
+  baseUrl: string,
+  projectId: string,
+  inputs: CompanionSamSegmentInputsV1,
+  params: { prompt: CompanionSamSegmentPromptV1 },
+) {
+  return submitCompanionJob(baseUrl, {
+    protocolVersion: 1,
+    type: 'sam_segment',
+    projectId,
+    inputs,
+    params,
   });
 }
 

@@ -292,7 +292,7 @@
       打开网站
       <span id="siteUrlPreview">…</span>
     </button>
-    <h2 class="section-title">服务</h2>
+    <h2 class="section-title">内置服务</h2>
     <div class="status-card" style="padding:0;overflow:hidden;">
       <table>
         <thead>
@@ -305,6 +305,21 @@
         <tbody id="pluginRows"></tbody>
       </table>
       <p id="pluginsEmpty" class="empty hidden">暂无</p>
+    </div>
+    <h2 class="section-title">扩展（宿主插件包）</h2>
+    <p class="storage-hint" style="margin:0 0 10px;">
+      与主站「本地伴侣发行」目录同步（<span class="mono">host_plugin_bundle</span>）。一键安装依赖主站环境变量
+      <span class="mono">COMPANION_DIST_PUBLIC_HTTP_BASE</span>；若下载域名非 R2 默认域，请在本机伴侣环境配置
+      <span class="mono">COMPANION_HOST_BUNDLE_TRUST_HOSTS</span>。
+    </p>
+    <div class="btn-row" style="margin-bottom:8px;">
+      <button type="button" class="btn" id="btnRefreshHostCatalog">刷新扩展目录</button>
+    </div>
+    <div class="status-card" style="padding:10px 12px;">
+      <p id="hostBundleCatalogStatus" class="mono" style="font-size:10px;color:rgba(148,163,184,0.9);margin:0;line-height:1.45;">
+        …
+      </p>
+      <div id="hostBundleCatalogList" style="margin-top:10px;display:flex;flex-direction:column;gap:8px;"></div>
     </div>
   </div>
 
@@ -341,6 +356,58 @@
         <button type="button" class="btn btn-primary" id="btnSavePairing">保存配对设置</button>
       </div>
       <p id="pairingHint" class="mono" style="font-size:10px;color:rgba(148,163,184,0.85);margin-top:8px;line-height:1.4;"></p>
+    </div>
+    <div class="set-section" id="section-sam-local">
+      <h3>本机分割（SamLocal）</h3>
+      <div id="samLocalWinQuick" style="display: none; margin-bottom: 12px;">
+        <p class="storage-hint">
+          网站工作区「本机分割」需要本机运行 <strong>SamLocal</strong>（<span class="mono">127.0.0.1:18081</span>）。在 Windows
+          上可点击下方按钮，由安装包<strong>自动准备 Python、依赖与模型</strong>（首次可能需较长时间，请保持网络畅通），<strong>无需打开终端</strong>。完成后本机会自动重启本地伴侣。
+        </p>
+        <p id="samLocalWinStatus" class="mono" style="font-size: 11px; color: rgba(148, 163, 184, 0.95); margin: 8px 0; line-height: 1.45; min-height: 1.2em;"></p>
+        <div class="btn-row" style="flex-wrap: wrap;">
+          <button type="button" class="btn btn-primary" id="btnSamLocalOneClick">一键安装高精度引擎</button>
+        </div>
+        <pre
+          id="samLocalBootstrapLogArea"
+          class="mono"
+          style="
+            display: none;
+            margin-top: 10px;
+            max-height: 180px;
+            overflow: auto;
+            padding: 10px;
+            font-size: 10px;
+            line-height: 1.35;
+            white-space: pre-wrap;
+            word-break: break-word;
+            background: rgba(0, 0, 0, 0.35);
+            border: 1px solid rgba(148, 163, 184, 0.2);
+            border-radius: 8px;
+            color: rgba(226, 232, 240, 0.92);
+          "
+        ></pre>
+      </div>
+      <details id="samLocalManualDetails" open>
+        <summary
+          id="samLocalManualSummary"
+          style="cursor: pointer; color: rgba(148, 163, 184, 0.95); font-size: 12px; margin-bottom: 8px; user-select: none"
+        >
+          高级：手动安装（需终端 / 克隆仓库）
+        </summary>
+        <p class="storage-hint">
+          网站工作区「本机分割」需要本机运行 <strong>SamLocal</strong>（默认 <span class="mono">127.0.0.1:18081</span>）。安装包默认不含系统级
+          Python；请在你<strong>克隆的本仓库根目录</strong>打开终端执行准备命令，并将下方环境变量写入<strong>启动伴侣的进程</strong>（系统环境变量或终端）。
+        </p>
+        <div class="btn-row" style="flex-wrap: wrap;">
+          <button type="button" class="btn btn-primary" id="btnCopySamSetup">复制：npm run setup:sam-local</button>
+          <button type="button" class="btn" id="btnCopySamEnv">复制环境变量示例</button>
+        </div>
+        <p id="samLocalSetupHint" class="mono" style="font-size:10px;color:rgba(148,163,184,0.85);margin-top:8px;line-height:1.4;min-height:1.2em;"></p>
+        <p class="storage-hint" style="margin-top:10px;">
+          详细步骤见仓库内 <span class="mono">docs/本机分割一键安装指南.md</span>；网站端「设置 → 本地伴侣」可探测 SamLocal 健康状态。
+        </p>
+      </details>
     </div>
     <div class="set-section">
       <h3>存储</h3>
@@ -398,6 +465,167 @@
 
       const views = { home: $('view-home'), settings: $('view-settings') };
       let activeView = 'home';
+
+      function normalizeDesktopPlatform() {
+        const p = String(shell.platform || '').toLowerCase();
+        if (p === 'win32') return 'win32';
+        if (p === 'darwin') return 'darwin';
+        return 'linux';
+      }
+
+      let samLocalBootstrapBusy = false;
+
+      function formatSamLocalBootstrapLine(payload) {
+        if (!payload || typeof payload !== 'object') return String(payload);
+        if (payload.type === 'bootstrap-finished') {
+          return '[完成] ' + (payload.ok ? '成功' : '失败') + (payload.exitCode != null ? ' (exit ' + payload.exitCode + ')' : '');
+        }
+        const msg = payload.msg != null ? String(payload.msg) : '';
+        const prefix = payload.type ? '[' + String(payload.type) + '] ' : '';
+        return prefix + (msg || JSON.stringify(payload));
+      }
+
+      async function refreshSamLocalWinPanel() {
+        if (normalizeDesktopPlatform() !== 'win32') return;
+        const statusEl = $('samLocalWinStatus');
+        const btn = $('btnSamLocalOneClick');
+        if (!statusEl) return;
+        if (typeof shell.samLocalDesktopState !== 'function') {
+          statusEl.textContent = '当前壳版本不支持一键安装，请更新桌面应用。';
+          if (btn) btn.disabled = true;
+          return;
+        }
+        if (samLocalBootstrapBusy) return;
+        try {
+          const r = await shell.samLocalDesktopState();
+          if (!r || !r.ok) {
+            statusEl.textContent = r && r.error ? '状态读取失败：' + r.error : '状态读取失败';
+            return;
+          }
+          if (!r.hasBundledResources) {
+            statusEl.textContent =
+              '当前构建未携带 SamLocal 资源包，无法一键安装。请使用完整桌面发行包，或展开下方「手动安装」。';
+            if (btn) btn.disabled = true;
+            return;
+          }
+          if (btn) btn.disabled = false;
+          if (r.installed && r.state && r.state.ready) {
+            statusEl.textContent =
+              '已安装。本地伴侣将随启 SamLocal（' +
+              (r.state.startScript ? '启动脚本已就绪' : '状态已就绪') +
+              '）。若异常可再次点击重新安装修复。';
+          } else {
+            statusEl.textContent = '尚未检测到本机一键安装产物，点击下方按钮开始（无需终端）。';
+          }
+        } catch (e) {
+          statusEl.textContent = '状态读取异常：' + (e && e.message ? e.message : String(e));
+        }
+      }
+
+      function applySamLocalPlatformUi() {
+        const plat = normalizeDesktopPlatform();
+        const winQuick = $('samLocalWinQuick');
+        const manualDetails = $('samLocalManualDetails');
+        const manualSummary = $('samLocalManualSummary');
+        if (plat === 'win32' && winQuick) {
+          winQuick.style.display = 'block';
+          if (manualDetails) manualDetails.open = false;
+          if (manualSummary) manualSummary.style.display = '';
+        } else {
+          if (winQuick) winQuick.style.display = 'none';
+          if (manualDetails) manualDetails.open = true;
+          if (manualSummary) manualSummary.style.display = 'none';
+        }
+      }
+
+      const SAM_LOCAL_ENV_SNIPPET = `# 本机分割：运行 local-companion 或桌面壳的进程环境中设置（默认 predict URL 与伴侣内置一致时可省略第一行）
+
+COMPANION_SAM_SEGMENT_URL=http://127.0.0.1:18081/v1/segment/predict
+
+# 可选：伴侣启动时随启 SamLocal（开发机）— 将下一行 REPO_ROOT 换成你的仓库根目录绝对路径
+COMPANION_SPAWN_SAM_LOCAL_CMD=npm run dev:sam-local
+COMPANION_SPAWN_SAM_LOCAL_CWD=REPO_ROOT
+
+# 一键栈等价：仓库根执行 npm run dev:companion-sam-stack（勿与上两行重复配置）
+# 首次真实分割环境：仓库根 npm run setup:sam-local（pip + 下载 ViT-B），见 docs/本机分割一键安装指南.md
+# SamLocal 真实分割：设置 SAM_MODE=sam，见 docs/本机分割故障排除.md
+`;
+
+      function switchToSettingsView() {
+        activeView = 'settings';
+        document.querySelectorAll('nav.shell-nav button').forEach((b) => {
+          const on = b.getAttribute('data-view') === 'settings';
+          b.classList.toggle('active', on);
+          b.setAttribute('aria-selected', on ? 'true' : 'false');
+        });
+        Object.keys(views).forEach((k) => views[k].classList.toggle('hidden', k !== 'settings'));
+        void refreshVolumeEffectiveHint();
+        void loadPairingFields();
+        void refreshSamLocalWinPanel();
+      }
+
+      function focusSamLocalSetupSection() {
+        switchToSettingsView();
+        const el = $('section-sam-local');
+        if (el) setTimeout(() => el.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
+        void refreshSamLocalWinPanel();
+      }
+
+      if (typeof shell.onSamLocalSetupFocus === 'function') {
+        shell.onSamLocalSetupFocus(focusSamLocalSetupSection);
+      }
+
+      applySamLocalPlatformUi();
+      const btnSamLocalOneClick = $('btnSamLocalOneClick');
+      const samLocalBootstrapLogArea = $('samLocalBootstrapLogArea');
+      if (btnSamLocalOneClick && typeof shell.samLocalBootstrapRun === 'function') {
+        btnSamLocalOneClick.addEventListener('click', async () => {
+          if (normalizeDesktopPlatform() !== 'win32') return;
+          btnSamLocalOneClick.disabled = true;
+          samLocalBootstrapBusy = true;
+          if (samLocalBootstrapLogArea) {
+            samLocalBootstrapLogArea.style.display = 'block';
+            samLocalBootstrapLogArea.textContent = '';
+          }
+          try {
+            const r = await shell.samLocalBootstrapRun();
+            if (!r || !r.ok) {
+              window.alert(r && r.error ? r.error : '无法启动安装');
+              samLocalBootstrapBusy = false;
+              btnSamLocalOneClick.disabled = false;
+              void refreshSamLocalWinPanel();
+              return;
+            }
+            if (samLocalBootstrapLogArea && r.started) {
+              samLocalBootstrapLogArea.textContent = '安装已启动，请稍候查看下方日志…\n';
+            }
+          } catch (e) {
+            window.alert(e && e.message ? e.message : String(e));
+            samLocalBootstrapBusy = false;
+            btnSamLocalOneClick.disabled = false;
+            void refreshSamLocalWinPanel();
+          }
+        });
+      }
+      if (typeof shell.onSamLocalBootstrapLog === 'function') {
+        shell.onSamLocalBootstrapLog((payload) => {
+          const logEl = $('samLocalBootstrapLogArea');
+          if (logEl) {
+            logEl.style.display = 'block';
+            const line = formatSamLocalBootstrapLine(payload);
+            logEl.textContent += line + '\n';
+            logEl.scrollTop = logEl.scrollHeight;
+          }
+          if (payload && payload.type === 'bootstrap-finished') {
+            samLocalBootstrapBusy = false;
+            if (btnSamLocalOneClick) btnSamLocalOneClick.disabled = false;
+            void refreshSamLocalWinPanel();
+            if (!payload.ok) {
+              window.alert('安装未成功完成，请查看日志或稍后重试。');
+            }
+          }
+        });
+      }
       $('btnTrafficClose').addEventListener('click', () => void shell.closeWindow());
       $('btnTrafficMin').addEventListener('click', () => void shell.minimizeWindow());
       $('btnTrafficZoom').addEventListener('click', () => void shell.toggleMaximize());
@@ -412,10 +640,14 @@
             b.setAttribute('aria-selected', on ? 'true' : 'false');
           });
           Object.keys(views).forEach((k) => views[k].classList.toggle('hidden', k !== v));
-          if (v === 'home') void loadPlugins();
+          if (v === 'home') {
+            void loadPlugins();
+            void loadHostBundleCatalog();
+          }
           if (v === 'settings') {
             void refreshVolumeEffectiveHint();
             void loadPairingFields();
+            void refreshSamLocalWinPanel();
           }
         });
       });
@@ -423,6 +655,224 @@
       let settingsCache = { siteUrl: defaultSiteUrl, volumeRoot: '' };
       let pluginListSignature = '';
       let pluginLoading = false;
+      let hostCatalogLoading = false;
+
+      function semverTuple(s) {
+        return String(s || '')
+          .split('.')
+          .map((x) => parseInt(String(x).replace(/[^\d].*$/, ''), 10) || 0);
+      }
+
+      function semverCompare(a, b) {
+        const ta = semverTuple(a);
+        const tb = semverTuple(b);
+        const n = Math.max(ta.length, tb.length, 3);
+        for (let i = 0; i < n; i++) {
+          const x = ta[i] || 0;
+          const y = tb[i] || 0;
+          if (x > y) return 1;
+          if (x < y) return -1;
+        }
+        return 0;
+      }
+
+      async function runInstallHostBundle(row, btn) {
+        if (!row.publicInstallUrl || !row.sha256) return;
+        btn.disabled = true;
+        const prev = btn.textContent;
+        btn.textContent = '安装中（大文件可能需数分钟）…';
+        try {
+          const r = await shell.api(
+            'POST',
+            '/v1/host-plugins/install-from-url',
+            {
+              url: row.publicInstallUrl,
+              semver: row.semver,
+              sha256: String(row.sha256).toLowerCase(),
+              bytes: row.bytes,
+              label: row.label || row.fileName || '',
+            },
+            { timeoutMs: 600000 },
+          );
+          if (!r || !r.ok) {
+            const msg = (r && r.json && r.json.error) || (r && r.text) || 'HTTP ' + (r && r.status);
+            window.alert('安装失败：' + msg);
+            btn.textContent = prev;
+            btn.disabled = false;
+            return;
+          }
+          btn.textContent = '已安装';
+          await loadPlugins();
+          await loadHostBundleCatalog();
+        } catch (e) {
+          window.alert('安装失败：' + (e instanceof Error ? e.message : String(e)));
+          btn.textContent = prev;
+          btn.disabled = false;
+        }
+      }
+
+      async function loadHostBundleCatalog() {
+        if (hostCatalogLoading) return;
+        hostCatalogLoading = true;
+        const statusEl = $('hostBundleCatalogStatus');
+        const listEl = $('hostBundleCatalogList');
+        if (!statusEl || !listEl) {
+          hostCatalogLoading = false;
+          return;
+        }
+        if (typeof shell.fetchHostBundleCatalog !== 'function') {
+          statusEl.textContent = '当前壳版本不支持扩展目录，请更新桌面应用。';
+          listEl.innerHTML = '';
+          hostCatalogLoading = false;
+          return;
+        }
+        statusEl.textContent = '正在拉取主站目录…';
+        listEl.innerHTML = '';
+        const plat = normalizeDesktopPlatform();
+        let r;
+        try {
+          r = await shell.fetchHostBundleCatalog();
+        } catch (e) {
+          statusEl.textContent = '目录拉取异常：' + (e instanceof Error ? e.message : String(e));
+          hostCatalogLoading = false;
+          return;
+        }
+        if (!r || !r.ok) {
+          statusEl.textContent = '目录拉取失败：' + (r && r.error ? r.error : '未知错误') + '（请检查「设置 → 主站」地址与网络）';
+          hostCatalogLoading = false;
+          return;
+        }
+        const all = Array.isArray(r.artifacts) ? r.artifacts : [];
+        function rowMatchesPlatform(rowPlat, currentPlat) {
+          const p = String(rowPlat || '').toLowerCase();
+          if (p === 'universal' || p === 'all') return true;
+          return p === currentPlat;
+        }
+        const rows = all.filter(function (a) {
+          return (
+            a &&
+            a.kind === 'host_plugin_bundle' &&
+            rowMatchesPlatform(a.platform, plat) &&
+            String(a.channel || 'stable') === 'stable'
+          );
+        });
+        rows.sort(function (x, y) {
+          return String(y.publishedAt || '').localeCompare(String(x.publishedAt || ''));
+        });
+
+        let bundlesRes;
+        try {
+          bundlesRes = await shell.api('GET', '/v1/host-plugins/bundles', null);
+        } catch {
+          bundlesRes = { ok: false };
+        }
+        const installed =
+          bundlesRes && bundlesRes.ok && bundlesRes.json && Array.isArray(bundlesRes.json.bundles)
+            ? bundlesRes.json.bundles
+            : [];
+
+        if (rows.length === 0) {
+          statusEl.textContent =
+            '当前平台（' +
+            plat +
+            '）暂无 stable 渠道的宿主插件包。可在主站管理后台「本地伴侣发行」登记 kind=host_plugin_bundle。';
+          hostCatalogLoading = false;
+          return;
+        }
+
+        const withUrl = rows.filter(function (x) {
+          return x.publicInstallUrl && x.sha256 && /^[a-f0-9]{64}$/i.test(String(x.sha256));
+        });
+        statusEl.textContent =
+          '共 ' +
+          rows.length +
+          ' 条' +
+          (withUrl.length < rows.length
+            ? '；其中 ' + (rows.length - withUrl.length) + ' 条无公网直链（需登录主站「设置 → 本地伴侣」用预签名安装）。'
+            : '；均已配置直链，可一键安装。');
+
+        listEl.innerHTML = '';
+        for (let i = 0; i < rows.length; i++) {
+          const row = rows[i];
+          const sha = String(row.sha256 || '').toLowerCase();
+          const inst = installed.find(function (b) {
+            return String(b.sha256 || '').toLowerCase() === sha;
+          });
+          const key = String(row.label || '').trim();
+          let badge = '未安装';
+          if (inst) badge = '已安装本包';
+          else if (key) {
+            const sub = installed.filter(function (b) {
+              return String(b.label || '').trim() === key;
+            });
+            if (sub.length) {
+              const maxSem = sub.reduce(function (m, b) {
+                return semverCompare(b.semver, m) > 0 ? b.semver : m;
+              }, sub[0].semver);
+              const c = semverCompare(row.semver, maxSem);
+              if (c > 0) badge = '可更新';
+              else if (c === 0) badge = '已有同版本（内容不同请核对 sha）';
+              else badge = '已安装更高版本';
+            }
+          }
+
+          const div = document.createElement('div');
+          div.className = 'status-card';
+          div.style.padding = '10px 12px';
+          div.style.margin = '0';
+
+          const title = document.createElement('div');
+          title.style.fontWeight = '700';
+          title.style.fontSize = '12px';
+          title.textContent = row.label || row.fileName || '宿主插件包';
+          div.appendChild(title);
+
+          const sub = document.createElement('div');
+          sub.style.fontSize = '10px';
+          sub.style.color = '#71717a';
+          sub.style.marginTop = '4px';
+          sub.textContent = [row.semver, row.fileName || '', badge].filter(Boolean).join(' · ');
+          div.appendChild(sub);
+
+          if (row.notes && String(row.notes).trim()) {
+            const note = document.createElement('div');
+            note.style.fontSize = '10px';
+            note.style.color = '#a1a1aa';
+            note.style.marginTop = '6px';
+            note.style.lineHeight = '1.35';
+            note.textContent = String(row.notes);
+            div.appendChild(note);
+          }
+
+          const btnRow = document.createElement('div');
+          btnRow.className = 'btn-row';
+          btnRow.style.marginTop = '8px';
+
+          const canInstall = Boolean(
+            row.publicInstallUrl && row.sha256 && /^[a-f0-9]{64}$/i.test(String(row.sha256)),
+          );
+          if (canInstall && !inst) {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'btn btn-primary';
+            btn.textContent = badge === '可更新' ? '安装更新' : '安装';
+            btn.addEventListener('click', function () {
+              void runInstallHostBundle(row, btn);
+            });
+            btnRow.appendChild(btn);
+          } else if (!canInstall && !inst) {
+            const hint = document.createElement('span');
+            hint.style.fontSize = '10px';
+            hint.style.color = '#a78bfa';
+            hint.textContent = '无直链或缺少 sha256：请打开主站在设置中安装';
+            btnRow.appendChild(hint);
+          }
+
+          div.appendChild(btnRow);
+          listEl.appendChild(div);
+        }
+        hostCatalogLoading = false;
+      }
 
       async function loadSettingsUi() {
         const s = await shell.loadSettings();
@@ -473,7 +923,10 @@
           label.textContent = '未连接';
           return;
         }
-        if (err && (err.includes('relay') || err.includes('site') || err.includes('token'))) {
+        if (
+          err &&
+          (err.includes('relay') || err.includes('sam_local') || err.includes('site') || err.includes('token'))
+        ) {
           dot.className = 'status-dot warn';
           label.textContent = note;
           return;
@@ -513,7 +966,10 @@
           pluginLoading = false;
           return;
         }
-        const normalizedPlugins = r.json.plugins.map((p) => ({
+        const corePlugins = r.json.plugins.filter(function (p) {
+          return !String(p.id || '').startsWith('plugin.host_bundle.');
+        });
+        const normalizedPlugins = corePlugins.map((p) => ({
           displayName: p.displayName || p.id || '—',
           sub: [p.id, p.semver].filter(Boolean).join(' · '),
           role: p.role || '—',
@@ -658,6 +1114,21 @@
 
       $('btnOpenMgmt').addEventListener('click', () => shell.openManagementBrowser());
 
+      const samHint = $('samLocalSetupHint');
+      function flashSamHint(msg) {
+        if (samHint) samHint.textContent = msg || '';
+      }
+
+      $('btnCopySamSetup').addEventListener('click', () => {
+        shell.copyText('npm run setup:sam-local');
+        flashSamHint('已复制：npm run setup:sam-local（请在仓库根目录的终端执行）');
+      });
+
+      $('btnCopySamEnv').addEventListener('click', () => {
+        shell.copyText(SAM_LOCAL_ENV_SNIPPET);
+        flashSamHint('已复制环境变量示例；请将 REPO_ROOT 换成本机仓库根路径');
+      });
+
       $('btnSavePairing').addEventListener('click', async () => {
         const hintEl = $('pairingHint');
         const btn = $('btnSavePairing');
@@ -682,8 +1153,13 @@
         await refreshTray();
         if (activeView === 'home') {
           await loadPlugins();
+          await loadHostBundleCatalog();
         }
       }
+
+      $('btnRefreshHostCatalog').addEventListener('click', function () {
+        void loadHostBundleCatalog();
+      });
 
       async function init() {
         $('statusLabel').textContent = '连接中…';

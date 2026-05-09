@@ -16,11 +16,17 @@ import type {
 import {
   clientPointToElementLocal,
   getImgObjectContainMetrics,
+  imageNaturalIndicesFromClientPoint,
   localEditSelectionBottomCenterClient,
   localToNaturalPoint,
   naturalToNorm,
 } from '../services/imagePreviewPointerGeometry';
-import type { PanoramaViewportProjection } from '../services/panoViewportProjection';
+import type { PanoramaViewportProjection, PanoLocalReprojectSnapshot } from '../services/panoViewportProjection';
+import {
+  equirectLoopFromPanoOverlayEllipse,
+  equirectLoopFromPanoOverlayPolyline,
+  equirectLoopFromPanoOverlayRect,
+} from '../services/panoLocalEditFootprint';
 import {
   hitTestOverlayAnnotation,
   translateCropByNormDelta,
@@ -65,6 +71,8 @@ const EMPTY_DOC: ImageOverlayAnnotationDoc = {
   localEdit: null,
   panoViewportCrop: undefined,
   panoLocalEditViewport: undefined,
+  panoLocalEditEquirect: undefined,
+  panoLocalEditReproject: undefined,
 };
 
 function numNorm(x: unknown, fallback = 0): number {
@@ -129,6 +137,46 @@ function normalizePanoViewportCrop(raw: unknown): PanoViewportCropNorm | null {
   return { x, y, w, h };
 }
 
+function wrap01u(u: number): number {
+  let x = u % 1;
+  if (x < 0) x += 1;
+  return x;
+}
+
+function normalizePanoLocalEditEquirect(raw: unknown): ImageOverlayAnnotationDoc['panoLocalEditEquirect'] {
+  if (!Array.isArray(raw) || raw.length < 3) return undefined;
+  const out: NonNullable<ImageOverlayAnnotationDoc['panoLocalEditEquirect']> = [];
+  for (const p of raw) {
+    if (!p || typeof p !== 'object') continue;
+    const o = p as Record<string, unknown>;
+    const u = wrap01u(numNorm(o.u));
+    const v = clamp01n(numNorm(o.v));
+    out.push({ u, v });
+  }
+  return out.length >= 3 ? out : undefined;
+}
+
+function normalizePanoLocalEditReproject(raw: unknown): PanoLocalReprojectSnapshot | undefined {
+  if (raw == null || typeof raw !== 'object') return undefined;
+  const o = raw as Record<string, unknown>;
+  const bufferW = Math.floor(numNorm(o.bufferW));
+  const bufferH = Math.floor(numNorm(o.bufferH));
+  const fovDeg = numNorm(o.fovDeg);
+  const aspect = numNorm(o.aspect);
+  const cp = o.cameraPosition;
+  const cq = o.cameraQuaternion;
+  if (!Array.isArray(cp) || cp.length !== 3 || !Array.isArray(cq) || cq.length !== 4) return undefined;
+  if (!Number.isFinite(fovDeg) || !Number.isFinite(aspect) || bufferW < 1 || bufferH < 1) return undefined;
+  return {
+    bufferW,
+    bufferH,
+    fovDeg,
+    aspect,
+    cameraPosition: [numNorm(cp[0]), numNorm(cp[1]), numNorm(cp[2])],
+    cameraQuaternion: [numNorm(cq[0]), numNorm(cq[1]), numNorm(cq[2]), numNorm(cq[3])],
+  };
+}
+
 export function normalizeImageOverlayDoc(raw: unknown): ImageOverlayAnnotationDoc {
   if (!raw || typeof raw !== 'object') return { ...EMPTY_DOC };
   const o = raw as Partial<ImageOverlayAnnotationDoc>;
@@ -136,6 +184,8 @@ export function normalizeImageOverlayDoc(raw: unknown): ImageOverlayAnnotationDo
   const le = normalizeLocalEditRaw(o.localEdit);
   const panoViewportCrop = normalizePanoViewportCrop(o.panoViewportCrop);
   const panoLocalEditViewport = normalizePanoViewportCrop(o.panoLocalEditViewport);
+  const panoLocalEditEquirect = normalizePanoLocalEditEquirect(o.panoLocalEditEquirect);
+  const panoLocalEditReproject = normalizePanoLocalEditReproject(o.panoLocalEditReproject);
   return {
     v: 1,
     items: Array.isArray(o.items) ? (o.items as ImageOverlayAnnotationDoc['items']) : [],
@@ -143,6 +193,8 @@ export function normalizeImageOverlayDoc(raw: unknown): ImageOverlayAnnotationDo
     localEdit: le,
     panoViewportCrop: panoViewportCrop ?? undefined,
     panoLocalEditViewport: panoLocalEditViewport ?? undefined,
+    panoLocalEditEquirect,
+    panoLocalEditReproject,
   };
 }
 
@@ -172,6 +224,23 @@ function rectFromDrag(a: ImageOverlayNormPoint, b: ImageOverlayNormPoint): { x: 
   return { x, y, w, h };
 }
 
+/** SAM 框选：归一化矩形 → 与点提示同源的像素索引包围盒 */
+function samNormRectToPixelBox(
+  r: { x: number; y: number; w: number; h: number },
+  nw: number,
+  nh: number
+): { x1: number; y1: number; x2: number; y2: number } {
+  const xA = Math.min(nw - 1, Math.max(0, Math.floor(r.x * nw)));
+  const yA = Math.min(nh - 1, Math.max(0, Math.floor(r.y * nh)));
+  const xB = Math.min(nw - 1, Math.max(0, Math.floor((r.x + r.w) * nw - Number.EPSILON)));
+  const yB = Math.min(nh - 1, Math.max(0, Math.floor((r.y + r.h) * nh - Number.EPSILON)));
+  const x1 = Math.min(xA, xB);
+  const y1 = Math.min(yA, yB);
+  const x2 = Math.max(xA, xB);
+  const y2 = Math.max(yA, yB);
+  return { x1, y1, x2, y2 };
+}
+
 function deepCloneEntity<T>(x: T): T {
   return JSON.parse(JSON.stringify(x)) as T;
 }
@@ -199,6 +268,32 @@ export type ImageFlatAnnotationOverlayProps = {
   panoProjectionRef?: React.RefObject<PanoramaViewportProjection | null>;
   /** 全景 Viewer 挂载后由父级递增，用于在 `ref.current` 就绪时重跑订阅与 `ready` */
   panoViewerBindEpoch?: number;
+  /** 本机 SAM：平面模式下等待用户点击原图像素 */
+  samPickAwaiting?: boolean;
+  /** 点 / 框 提示子模式 */
+  samPickSubmode?: 'point' | 'box';
+  /** 增加前景点（左键）或背景点（右键 / Alt+左键） */
+  onSamPointAdd?: (pt: { ix: number; iy: number; nw: number; nh: number; label: 0 | 1 }) => void;
+  /** 框选提示（像素坐标，与 nw/nh 同源） */
+  onSamBoxCommit?: (box: { x1: number; y1: number; x2: number; y2: number; nw: number; nh: number } | null) => void;
+  /** 点选落在留白或无法映射像素时提示（避免「点了没反应」） */
+  onSamPickHint?: (message: string) => void;
+  /** 本机 SAM：已提交的提示点（归一化 0~1，与标注 doc 同源），用于官方示例式绿/红点 */
+  samPickMarkers?: Array<{ nx: number; ny: number; label: 1 | 0 }>;
+  /** 本机 SAM：框选提示（像素矩形，与 viewBox 对齐绘制） */
+  samBoxPixels?: { x1: number; y1: number; x2: number; y2: number; nw: number; nh: number } | null;
+  /** 本机 SAM：分割请求进行中（显示角标） */
+  samPickProcessing?: boolean;
+  /** 本机 SAM：叠在底图上的 mask PNG（与 viewBox 同源）；已保存版本与未保存预览共用，绘制成描边 + 半透明填充 */
+  samMaskOverlayHref?: string;
+  /** 全图自动拆分：悬停高亮、点击切换选中（mask 与图像同像素尺寸） */
+  samAutoPick?: {
+    maskDataUrls: string[];
+    pickedIndices: readonly number[];
+    hoverIndex: number | null;
+    onHoverIndex: (i: number | null) => void;
+    onTogglePick: (i: number) => void;
+  } | null;
 };
 
 /**
@@ -218,6 +313,16 @@ export function ImageFlatAnnotationOverlay({
   panoOverlayContainerRef,
   panoProjectionRef,
   panoViewerBindEpoch = 0,
+  samPickAwaiting = false,
+  samPickSubmode = 'point',
+  onSamPointAdd,
+  onSamBoxCommit,
+  onSamPickHint,
+  samPickMarkers,
+  samBoxPixels = null,
+  samPickProcessing = false,
+  samMaskOverlayHref,
+  samAutoPick = null,
 }: ImageFlatAnnotationOverlayProps) {
   const [layoutTick, setLayoutTick] = useState(0);
   const [overlayPx, setOverlayPx] = useState({ w: 320, h: 240 });
@@ -231,6 +336,19 @@ export function ImageFlatAnnotationOverlay({
   const [panoLocalEditDraft, setPanoLocalEditDraft] = useState<DraftRect | null>(null);
   /** 全景 + 局部套索：点在叠层 0~1 坐标 */
   const [panoLocalLassoDraft, setPanoLocalLassoDraft] = useState<ImageOverlayNormPoint[] | null>(null);
+  /** 本机 SAM 框选拖拽（归一化 0~1，与 crop 矩形同源） */
+  const [samBoxDraft, setSamBoxDraft] = useState<DraftRect | null>(null);
+  /** 框选拖出 SVG 时仍跟手：`window` 级 pointer 监听 */
+  const samBoxDragLiveRef = useRef<DraftRect | null>(null);
+  const samBoxWindowCleanupRef = useRef<(() => void) | null>(null);
+  const metricsSamRef = useRef<ReturnType<typeof getImgObjectContainMetrics>>(null);
+  const eventToNormRef = useRef<(cx: number, cy: number) => { x: number; y: number } | null>(() => null);
+  const onSamBoxCommitRef = useRef<typeof onSamBoxCommit>(onSamBoxCommit);
+  const onSamPickHintRef = useRef<typeof onSamPickHint>(onSamPickHint);
+  /** 自动拆分：像素 → mask 序号（小区域优先命中） */
+  const samAutoIdMapRef = useRef<{ w: number; h: number; data: Uint8Array } | null>(null);
+  onSamBoxCommitRef.current = onSamBoxCommit;
+  onSamPickHintRef.current = onSamPickHint;
   /** 视口 client 坐标；框选/套索类工具激活时由 window pointermove 更新 */
   const [layoutCrosshairClient, setLayoutCrosshairClient] = useState<{ x: number; y: number } | null>(null);
   const crosshairMoveRafRef = useRef<number | null>(null);
@@ -293,10 +411,16 @@ export function ImageFlatAnnotationOverlay({
   }, [doc.localEdit]);
 
   useEffect(() => {
-    if (doc.panoLocalEditViewport) return;
+    if (
+      doc.panoLocalEditViewport ||
+      (doc.panoLocalEditEquirect && doc.panoLocalEditEquirect.length >= 3) ||
+      doc.panoLocalEditReproject
+    ) {
+      return;
+    }
     setPanoLocalLassoDraft(null);
     setPanoLocalEditDraft(null);
-  }, [doc.panoLocalEditViewport]);
+  }, [doc.panoLocalEditViewport, doc.panoLocalEditEquirect, doc.panoLocalEditReproject]);
 
   useEffect(() => {
     if (doc.localEdit) return;
@@ -304,6 +428,14 @@ export function ImageFlatAnnotationOverlay({
       setDragRect(null);
     }
   }, [doc.localEdit, tool]);
+
+  useEffect(() => {
+    return () => {
+      samBoxWindowCleanupRef.current?.();
+      samBoxWindowCleanupRef.current = null;
+      samBoxDragLiveRef.current = null;
+    };
+  }, []);
 
   useEffect(() => {
     if (tool !== 'crop_rect') setPanoCropDraft(null);
@@ -352,6 +484,7 @@ export function ImageFlatAnnotationOverlay({
     if (!img) return null;
     return getImgObjectContainMetrics(img);
   }, [imgRef, layoutKey, layoutTick]);
+  metricsSamRef.current = metrics;
 
   const img = imgRef.current;
   const nw = metrics?.nw ?? 0;
@@ -359,6 +492,87 @@ export function ImageFlatAnnotationOverlay({
   const panoProj = panoProjectionRef?.current ?? null;
   const panoMode = Boolean(panoProj && panoOverlayContainerRef);
   const ready = Boolean(metrics && img && nw && nh && (!panoOverlayContainerRef || panoProj));
+
+  useEffect(() => {
+    if (!samAutoPick?.maskDataUrls?.length || panoMode) {
+      samAutoIdMapRef.current = null;
+      return;
+    }
+    const urls = samAutoPick.maskDataUrls;
+    let cancelled = false;
+    const loadImg = (src: string) =>
+      new Promise<HTMLImageElement>((resolve, reject) => {
+        const im = new Image();
+        im.onload = () => resolve(im);
+        im.onerror = () => reject(new Error('sam auto mask load'));
+        const s = String(src || '').trim();
+        if (!/^data:/i.test(s) && !/^blob:/i.test(s)) {
+          im.crossOrigin = 'anonymous';
+        }
+        im.src = s;
+      });
+    void (async () => {
+      try {
+        const metas: { idx: number; area: number; data: Uint8ClampedArray; w: number; h: number }[] = [];
+        let w0 = 0;
+        let h0 = 0;
+        for (let i = 0; i < urls.length; i++) {
+          const im = await loadImg(urls[i]!);
+          const w = im.naturalWidth || im.width;
+          const h = im.naturalHeight || im.height;
+          if (!w0) {
+            w0 = w;
+            h0 = h;
+          }
+          if (w !== w0 || h !== h0) continue;
+          const c = document.createElement('canvas');
+          c.width = w;
+          c.height = h;
+          const ctx = c.getContext('2d');
+          if (!ctx) continue;
+          ctx.drawImage(im, 0, 0);
+          const idd = ctx.getImageData(0, 0, w, h);
+          const d = idd.data;
+          let a = 0;
+          for (let p = 3; p < d.length; p += 4) {
+            if (d[p]! > 127) a += 1;
+          }
+          metas.push({ idx: i, area: a, data: d, w, h });
+        }
+        if (cancelled || w0 < 1 || h0 < 1 || metas.length === 0) return;
+        metas.sort((x, y) => x.area - y.area);
+        const idmap = new Uint8Array(w0 * h0);
+        for (const m of metas) {
+          const idB = m.idx + 1;
+          if (idB > 255) continue;
+          const d = m.data;
+          for (let p = 0, j = 0; p < d.length; p += 4, j++) {
+            if (d[p + 3]! > 127) idmap[j] = idB;
+          }
+        }
+        if (!cancelled) samAutoIdMapRef.current = { w: w0, h: h0, data: idmap };
+      } catch {
+        if (!cancelled) samAutoIdMapRef.current = null;
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [samAutoPick?.maskDataUrls, panoMode]);
+
+  const samAutoHitIndex = useCallback(
+    (clientX: number, clientY: number): number | null => {
+      const map = samAutoIdMapRef.current;
+      if (!map || !img || !metrics) return null;
+      const idx = imageNaturalIndicesFromClientPoint(img, clientX, clientY);
+      if (!idx) return null;
+      if (idx.ix < 0 || idx.iy < 0 || idx.ix >= map.w || idx.iy >= map.h) return null;
+      const v = map.data[idx.iy * map.w + idx.ix]!;
+      if (!v) return null;
+      return v - 1;
+    },
+    [img, metrics]
+  );
 
   const normToOverlayLocal = useCallback(
     (nx: number, ny: number) => {
@@ -373,16 +587,24 @@ export function ImageFlatAnnotationOverlay({
 
   const pointerInPanoOverlay = useCallback(
     (clientX: number, clientY: number) => {
+      const proj = panoProjectionRef?.current;
+      const snapR = proj?.getSnapshotClientRect?.();
+      if (snapR && snapR.width >= 1 && snapR.height >= 1) {
+        return clientX >= snapR.left && clientX < snapR.right && clientY >= snapR.top && clientY < snapR.bottom;
+      }
       const host = panoOverlayContainerRef?.current;
       if (!host) return false;
       const r = host.getBoundingClientRect();
       return clientX >= r.left && clientX < r.right && clientY >= r.top && clientY < r.bottom;
     },
-    [panoOverlayContainerRef]
+    [panoOverlayContainerRef, panoProjectionRef]
   );
 
   const clientToPanoOverlayNorm = useCallback(
     (clientX: number, clientY: number) => {
+      const proj = panoProjectionRef?.current;
+      const viaCanvas = proj?.clientToSnapshotNorm?.(clientX, clientY);
+      if (viaCanvas) return viaCanvas;
       const host = panoOverlayContainerRef?.current;
       if (!host) return null;
       const r = host.getBoundingClientRect();
@@ -392,7 +614,7 @@ export function ImageFlatAnnotationOverlay({
         y: (clientY - r.top) / r.height,
       };
     },
-    [panoOverlayContainerRef]
+    [panoOverlayContainerRef, panoProjectionRef]
   );
 
   useEffect(() => {
@@ -572,6 +794,7 @@ export function ImageFlatAnnotationOverlay({
     },
     [panoMode, panoProj, img, metrics]
   );
+  eventToNormRef.current = eventToNorm;
 
   const isInsideContent = useCallback(
     (clientX: number, clientY: number) => {
@@ -585,6 +808,110 @@ export function ImageFlatAnnotationOverlay({
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
+      if (samPickAwaiting && !panoMode) {
+        if (!img || !metrics) {
+          onSamPickHint?.('分割：画布未就绪（请等待图片完全显示后再点）');
+          return;
+        }
+        if (!isInsideContent(e.clientX, e.clientY)) {
+          onSamPickHint?.('分割：请点击图内的有效区域（不要点在图片外的灰边上）');
+          return;
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        if (samAutoPick?.maskDataUrls.length) {
+          if (e.button !== 0) return;
+          const hit = samAutoHitIndex(e.clientX, e.clientY);
+          if (hit != null) samAutoPick.onTogglePick(hit);
+          return;
+        }
+        if (samPickSubmode === 'box') {
+          if (e.button !== 0) return;
+          const p = eventToNorm(e.clientX, e.clientY);
+          if (!p) {
+            onSamPickHint?.('分割：无法读取点击位置（请稍等图片加载满后再点，或重开大图）');
+            return;
+          }
+          samBoxWindowCleanupRef.current?.();
+          const pid = e.pointerId;
+          const el = e.currentTarget as HTMLElement;
+          try {
+            el.setPointerCapture?.(pid);
+          } catch {
+            /* noop */
+          }
+          const move = (ev: PointerEvent) => {
+            if (ev.pointerId !== pid) return;
+            ev.preventDefault();
+            const norm = eventToNormRef.current(ev.clientX, ev.clientY);
+            if (!norm) return;
+            const prev = samBoxDragLiveRef.current;
+            if (!prev) return;
+            const next = { ...prev, x1: clamp01(norm.x), y1: clamp01(norm.y) };
+            samBoxDragLiveRef.current = next;
+            setSamBoxDraft(next);
+          };
+          const finish = (ev: PointerEvent) => {
+            if (ev.pointerId !== pid) return;
+            ev.preventDefault();
+            window.removeEventListener('pointermove', move);
+            window.removeEventListener('pointerup', finish);
+            window.removeEventListener('pointercancel', finish);
+            samBoxWindowCleanupRef.current = null;
+            try {
+              el.releasePointerCapture?.(pid);
+            } catch {
+              /* noop */
+            }
+            const d = samBoxDragLiveRef.current;
+            samBoxDragLiveRef.current = null;
+            setSamBoxDraft(null);
+            const m = metricsSamRef.current;
+            if (!d || !m) {
+              onSamBoxCommitRef.current?.(null);
+              return;
+            }
+            const r = rectFromDrag({ x: d.x0, y: d.y0 }, { x: d.x1, y: d.y1 });
+            if (r.w < 0.002 || r.h < 0.002) {
+              onSamBoxCommitRef.current?.(null);
+              return;
+            }
+            const { x1, y1, x2, y2 } = samNormRectToPixelBox(r, m.nw, m.nh);
+            if (x2 - x1 < 1 || y2 - y1 < 1) {
+              onSamBoxCommitRef.current?.(null);
+              onSamPickHintRef.current?.('分割：框选太小，请拖大一点');
+              return;
+            }
+            onSamBoxCommitRef.current?.({ x1, y1, x2, y2, nw: m.nw, nh: m.nh });
+          };
+          const cleanup = () => {
+            window.removeEventListener('pointermove', move);
+            window.removeEventListener('pointerup', finish);
+            window.removeEventListener('pointercancel', finish);
+          };
+          samBoxWindowCleanupRef.current = cleanup;
+          window.addEventListener('pointermove', move, { passive: false });
+          window.addEventListener('pointerup', finish);
+          window.addEventListener('pointercancel', finish);
+          const d0 = { x0: p.x, y0: p.y, x1: p.x, y1: p.y };
+          samBoxDragLiveRef.current = d0;
+          setSamBoxDraft(d0);
+          return;
+        }
+        if (e.button !== 0 && e.button !== 2) return;
+        const idx = imageNaturalIndicesFromClientPoint(img, e.clientX, e.clientY);
+        if (!idx) {
+          onSamPickHint?.('分割：无法读取点击位置（请稍等图片加载满后再点，或重开大图）');
+          return;
+        }
+        if (e.button === 2) {
+          e.preventDefault();
+        }
+        const label: 0 | 1 = e.button === 2 ? 0 : 1;
+        onSamPointAdd?.({ ix: idx.ix, iy: idx.iy, nw: metrics.nw, nh: metrics.nh, label });
+        return;
+      }
+
       if (tool === 'off' || !ready) return;
 
       if (textEditIdRef.current) finalizeTextEdit();
@@ -706,7 +1033,16 @@ export function ImageFlatAnnotationOverlay({
       panoMode,
       pointerInPanoOverlay,
       clientToPanoOverlayNorm,
+      samPickAwaiting,
+      samPickSubmode,
+      onSamPointAdd,
+      onSamPickHint,
+      img,
+      metrics,
       panoMode,
+      eventToNorm,
+      samAutoPick,
+      samAutoHitIndex,
     ]
   );
 
@@ -731,6 +1067,12 @@ export function ImageFlatAnnotationOverlay({
 
   const onPointerMove = useCallback(
     (e: React.PointerEvent) => {
+      if (samPickAwaiting && samAutoPick?.maskDataUrls.length && !panoMode) {
+        const hit = samAutoHitIndex(e.clientX, e.clientY);
+        samAutoPick.onHoverIndex(hit);
+        return;
+      }
+
       if (tool === 'crop_rect' && panoCropDraft) {
         const po = clientToPanoOverlayNorm(e.clientX, e.clientY);
         if (!po) return;
@@ -846,6 +1188,9 @@ export function ImageFlatAnnotationOverlay({
       clientToPanoOverlayNorm,
       onDocPatch,
       onBeginDragGesture,
+      samPickAwaiting,
+      samAutoPick,
+      samAutoHitIndex,
     ]
   );
 
@@ -881,10 +1226,23 @@ export function ImageFlatAnnotationOverlay({
         );
         setPanoLocalEditDraft(null);
         if (r.w < 0.002 || r.h < 0.002) return;
+        const host = panoOverlayContainerRef?.current?.getBoundingClientRect();
+        const proj = panoProjectionRef?.current;
+        let equirect: ReturnType<typeof equirectLoopFromPanoOverlayRect> | undefined;
+        if (host && proj) {
+          const toUv = (cx: number, cy: number) => proj.clientToEquirectNorm(cx, cy);
+          equirect =
+            tool === 'local_edit_ellipse'
+              ? equirectLoopFromPanoOverlayEllipse(r, host, toUv)
+              : equirectLoopFromPanoOverlayRect(r, host, toUv);
+        }
+        const reproject = proj?.getReprojectSnapshot() ?? null;
         onDocPatch((prev) => ({
           ...prev,
           localEdit: null,
           panoLocalEditViewport: { x: r.x, y: r.y, w: r.w, h: r.h },
+          panoLocalEditEquirect: equirect && equirect.length >= 3 ? equirect : undefined,
+          panoLocalEditReproject: reproject ?? undefined,
         }));
         return;
       }
@@ -906,10 +1264,19 @@ export function ImageFlatAnnotationOverlay({
         }
         const r = rectFromDrag({ x: minX, y: minY }, { x: maxX, y: maxY });
         if (r.w < 0.002 || r.h < 0.002) return;
+        const host = panoOverlayContainerRef?.current?.getBoundingClientRect();
+        const proj = panoProjectionRef?.current;
+        const equirect =
+          host && proj
+            ? equirectLoopFromPanoOverlayPolyline(pts, true, host, (cx, cy) => proj.clientToEquirectNorm(cx, cy))
+            : undefined;
+        const reproject = proj?.getReprojectSnapshot() ?? null;
         onDocPatch((prev) => ({
           ...prev,
           localEdit: null,
           panoLocalEditViewport: { x: r.x, y: r.y, w: r.w, h: r.h },
+          panoLocalEditEquirect: equirect && equirect.length >= 3 ? equirect : undefined,
+          panoLocalEditReproject: reproject ?? undefined,
         }));
         return;
       }
@@ -1010,15 +1377,121 @@ export function ImageFlatAnnotationOverlay({
       brushWidth,
       color,
       onDocPatch,
+      panoOverlayContainerRef,
+      panoProjectionRef,
     ]
   );
 
-  if (!ready) return null;
+  if (!ready && !samPickAwaiting) return null;
 
-  const pe = tool === 'off' ? 'none' : 'auto';
+  const pe = tool === 'off' && !samPickAwaiting ? 'none' : 'auto';
   const selStroke = 'rgba(34,211,238,0.95)';
   const vx = panoMode ? overlayPx.w : nw;
   const vy = panoMode ? overlayPx.h : nh;
+
+  /** 武装点选但几何未就绪：占位层避免静默穿透到下层 img 触发缩放 */
+  if (!ready && samPickAwaiting && !panoMode) {
+    return (
+      <>
+        <div
+          className="absolute inset-0 z-[1] flex cursor-crosshair items-center justify-center bg-black/20 pointer-events-auto"
+          data-image-preview-no-wheel
+          onPointerDown={(ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            onSamPickHint?.('本机分割：正在同步画布尺寸，请待大图加载完成后再点击');
+          }}
+        >
+          <span className="rounded-md bg-black/75 px-3 py-2 text-xs text-white/90 shadow-lg">
+            准备画布…
+          </span>
+        </div>
+      </>
+    );
+  }
+
+  if (!ready) return null;
+
+  const samMr = Math.max(4, Math.min(vx, vy) * 0.018);
+  const samMarkersFlat =
+    !panoMode && samPickMarkers && samPickMarkers.length > 0
+      ? samPickMarkers.map((m, i) => {
+          const cx = m.nx * vx;
+          const cy = m.ny * vy;
+          const fill = m.label === 1 ? '#22c55e' : '#ef4444';
+          return (
+            <g key={`sam-m-${i}`} pointerEvents="none">
+              <circle cx={cx} cy={cy} r={samMr + 2} fill="rgba(0,0,0,0.35)" />
+              <circle
+                cx={cx}
+                cy={cy}
+                r={samMr}
+                fill={fill}
+                stroke="rgba(255,255,255,0.95)"
+                strokeWidth={Math.max(1.2, samMr * 0.12)}
+              />
+            </g>
+          );
+        })
+      : null;
+
+  const samMaskLayoutSafe = layoutKey.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const samMaskFillMaskId = `samMaskFill_${samMaskLayoutSafe}`;
+  const samOutlineFilterId = `samOutline_${samMaskLayoutSafe}`;
+  const samOutlineDilateR = Math.max(1.2, Math.min(vx, vy) * 0.0035);
+  const samOutlinePad = Math.ceil(samOutlineDilateR * 4);
+
+  const samBoxFlatOverlay =
+    !panoMode && samBoxPixels && samBoxPixels.nw > 0 && samBoxPixels.nh > 0
+      ? (() => {
+          const { x1, y1, x2, y2, nw: bw, nh: bh } = samBoxPixels;
+          const sx = vx / Math.max(1, bw);
+          const sy = vy / Math.max(1, bh);
+          const xa = Math.min(x1, x2) * sx;
+          const ya = Math.min(y1, y2) * sy;
+          const wb = Math.abs(x2 - x1) * sx;
+          const hb = Math.abs(y2 - y1) * sy;
+          const swd = Math.max(1, Math.min(vx, vy) * 0.004);
+          return (
+            <rect
+              x={xa}
+              y={ya}
+              width={wb}
+              height={hb}
+              fill="rgba(34,211,238,0.12)"
+              stroke="rgba(34,211,238,0.95)"
+              strokeWidth={swd}
+              strokeDasharray="5 4"
+              pointerEvents="none"
+            />
+          );
+        })()
+      : null;
+
+  const samBoxDraftOverlay =
+    !panoMode && samPickAwaiting && samBoxDraft
+      ? (() => {
+          const r = rectFromDrag(
+            { x: samBoxDraft.x0, y: samBoxDraft.y0 },
+            { x: samBoxDraft.x1, y: samBoxDraft.y1 }
+          );
+          const swd = Math.max(1, Math.min(vx, vy) * 0.004);
+          return (
+            <rect
+              x={r.x * vx}
+              y={r.y * vy}
+              width={r.w * vx}
+              height={r.h * vy}
+              fill="rgba(34,211,238,0.08)"
+              stroke="rgba(34,211,238,0.85)"
+              strokeWidth={swd}
+              strokeDasharray="4 3"
+              pointerEvents="none"
+            />
+          );
+        })()
+      : null;
+
   const selSw = Math.max(2, Math.min(nw, nh) * 0.005);
   const selSwPano = Math.max(2, Math.min(vx, vy) * 0.005);
 
@@ -1412,10 +1885,13 @@ export function ImageFlatAnnotationOverlay({
   return (
     <>
       {layoutCrosshairPortal}
-      <div className="pointer-events-none absolute inset-0" data-image-preview-no-wheel>
+      <div
+        className={`absolute inset-0 z-[1] ${pe === 'none' ? 'pointer-events-none' : 'pointer-events-auto'}`}
+        data-image-preview-no-wheel
+      >
       <svg
-        className={`h-full w-full select-none ${tool === 'select' ? 'cursor-grab active:cursor-grabbing' : ''} ${pe === 'none' ? 'pointer-events-none' : 'pointer-events-auto'}`}
-        style={{ touchAction: tool === 'off' ? 'auto' : 'none' }}
+        className={`h-full w-full select-none ${samPickAwaiting ? 'cursor-crosshair' : ''} ${tool === 'select' ? 'cursor-grab active:cursor-grabbing' : ''} ${pe === 'none' ? 'pointer-events-none' : 'pointer-events-auto'}`}
+        style={{ touchAction: tool === 'off' && !samPickAwaiting ? 'auto' : 'none' }}
         viewBox={`0 0 ${vx} ${vy}`}
         preserveAspectRatio={panoMode ? 'none' : 'xMidYMid meet'}
         onPointerDown={onPointerDown}
@@ -1423,7 +1899,80 @@ export function ImageFlatAnnotationOverlay({
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
         onDoubleClick={onSvgDoubleClick}
+        onPointerLeave={() => {
+          samAutoPick?.onHoverIndex(null);
+        }}
+        onContextMenu={(ev) => {
+          if (samPickAwaiting && !panoMode) {
+            ev.preventDefault();
+          }
+        }}
       >
+        {!panoMode && samMaskOverlayHref ? (
+          <defs>
+            <mask
+              id={samMaskFillMaskId}
+              maskUnits="userSpaceOnUse"
+              maskContentUnits="userSpaceOnUse"
+              x={0}
+              y={0}
+              width={vx}
+              height={vy}
+            >
+              <image
+                href={samMaskOverlayHref}
+                x={0}
+                y={0}
+                width={vx}
+                height={vy}
+                preserveAspectRatio="xMidYMid meet"
+              />
+            </mask>
+            <filter
+              id={samOutlineFilterId}
+              filterUnits="userSpaceOnUse"
+              x={-samOutlinePad}
+              y={-samOutlinePad}
+              width={vx + samOutlinePad * 2}
+              height={vy + samOutlinePad * 2}
+              colorInterpolationFilters="sRGB"
+            >
+              <feMorphology
+                in="SourceAlpha"
+                operator="dilate"
+                radius={samOutlineDilateR}
+                result="samDilated"
+              />
+              <feComposite in="samDilated" in2="SourceAlpha" operator="out" result="samRing" />
+              <feFlood floodColor="#ffffff" floodOpacity="0.92" result="samFlood" />
+              <feComposite in="samFlood" in2="samRing" operator="in" result="samStroke" />
+              <feMerge>
+                <feMergeNode in="samStroke" />
+              </feMerge>
+            </filter>
+          </defs>
+        ) : null}
+        {!panoMode && samMaskOverlayHref ? (
+          <g pointerEvents="none">
+            <rect
+              x={0}
+              y={0}
+              width={vx}
+              height={vy}
+              fill="rgba(34, 211, 238, 0.34)"
+              mask={`url(#${samMaskFillMaskId})`}
+            />
+            <image
+              href={samMaskOverlayHref}
+              x={0}
+              y={0}
+              width={vx}
+              height={vy}
+              preserveAspectRatio="xMidYMid meet"
+              filter={`url(#${samOutlineFilterId})`}
+            />
+          </g>
+        ) : null}
         {doc.items.map((it) => renderItem(it, selectedId === it.id))}
         {doc.crops.map((c) => renderCrop(c, selectedId === c.id))}
         {doc.localEdit ? renderLocalEdit(doc.localEdit) : null}
@@ -1623,7 +2172,15 @@ export function ImageFlatAnnotationOverlay({
             strokeLinejoin="round"
           />
         ) : null}
+        {samBoxFlatOverlay}
+        {samBoxDraftOverlay}
+        {samMarkersFlat}
       </svg>
+      {samPickProcessing ? (
+        <div className="pointer-events-none absolute left-2 top-2 z-[20] rounded-md border border-white/20 bg-black/75 px-2.5 py-1 text-[11px] font-medium text-emerald-200/95 shadow-lg backdrop-blur-[2px]">
+          本机分割中…
+        </div>
+      ) : null}
       {editTextItem && metrics ? (
         <input
           key={textEditId}

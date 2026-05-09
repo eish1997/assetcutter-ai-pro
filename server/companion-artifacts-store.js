@@ -8,6 +8,12 @@ import fs from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
 import pg from 'pg';
+import {
+  ALLOWED_COMPANION_PLATFORMS,
+  normalizeCompanionPlatformInput,
+  platformMatchesQuery,
+  platformRankForLatest,
+} from './companion-artifacts-platform.js';
 
 const DATA_PATH = path.resolve(process.cwd(), 'server', 'data', 'companion-artifacts.json');
 
@@ -133,7 +139,7 @@ export async function addCompanionArtifact(input) {
     kind: input.kind,
     semver: String(input.semver || '').trim(),
     channel,
-    platform: String(input.platform || '').trim(),
+    platform: normalizeCompanionPlatformInput(input.platform),
     fileName: String(input.fileName || '').trim(),
     r2Key: String(input.r2Key || '').trim(),
     sha256: String(input.sha256 || '').trim().toLowerCase(),
@@ -149,6 +155,9 @@ export async function addCompanionArtifact(input) {
   }
   if (!rec.semver) throw new Error('semver 不能为空');
   if (!rec.platform) throw new Error('platform 不能为空');
+  if (!ALLOWED_COMPANION_PLATFORMS.includes(rec.platform)) {
+    throw new Error(`platform 须为 ${ALLOWED_COMPANION_PLATFORMS.join(' | ')}`);
+  }
   if (!rec.fileName) throw new Error('fileName 不能为空');
   if (!rec.r2Key) throw new Error('r2Key 不能为空');
   if (!rec.r2Key.startsWith('public/companion-distribution/')) {
@@ -236,9 +245,15 @@ export async function pickLatestArtifact(q) {
   const filtered = rows.filter(
     (r) =>
       r.kind === kind &&
-      String(r.platform || '').toLowerCase() === platform &&
+      platformMatchesQuery(platform, r.platform) &&
       String(r.channel || 'stable') === channel
   );
+  filtered.sort((a, b) => {
+    const ra = platformRankForLatest(platform, a.platform);
+    const rb = platformRankForLatest(platform, b.platform);
+    if (ra !== rb) return ra - rb;
+    return String(b.publishedAt).localeCompare(String(a.publishedAt));
+  });
   return filtered[0] || null;
 }
 

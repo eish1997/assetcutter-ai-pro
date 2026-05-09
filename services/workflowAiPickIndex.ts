@@ -57,6 +57,17 @@ export const WORKFLOW_AI_PICK_NODES: readonly WorkflowAiPickNode[] = [
     codeRefs: ['services/capabilityExecutor.ts'],
   },
   {
+    id: 'local_companion_sam',
+    layer: 'supplier',
+    label: '本地伴侣 sam_segment → SamLocal',
+    codeRefs: [
+      'services/lightboxSamSegment.ts',
+      'services/companionClient/compute.ts',
+      'local-companion/src/compute/samSegmentAdapter.ts',
+    ],
+    notes: '不经 unifiedAiGateway；预设 companionSamSegment / 大图点选',
+  },
+  {
     id: 'app_3d_workflow_loop',
     layer: 'pick',
     label: 'App 内 3D 工作流闭环（伴侣回填等）',
@@ -117,6 +128,7 @@ export const WORKFLOW_AI_PICK_EDGES: readonly WorkflowAiPickEdge[] = [
   { id: 'edge_ws_ce', from: 'workflow_section', to: 'capability_executor' },
   { id: 'edge_ws_app3d', from: 'workflow_section', to: 'app_3d_workflow_loop' },
   { id: 'edge_ce_ug', from: 'capability_executor', to: 'unified_ai_gateway' },
+  { id: 'edge_ce_lcsam', from: 'capability_executor', to: 'local_companion_sam' },
   { id: 'edge_app_g3', from: 'app_3d_workflow_loop', to: 'generate3d_module' },
   { id: 'edge_app_ug', from: 'app_3d_workflow_loop', to: 'unified_ai_gateway' },
   { id: 'edge_ug_gem', from: 'unified_ai_gateway', to: 'gemini_service_stack' },

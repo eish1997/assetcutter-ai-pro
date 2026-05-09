@@ -18,6 +18,11 @@ export type CompanionArtifactSummary = {
   notes: string;
   label: string;
   publishedAt: string;
+  /**
+   * 仅 kind=host_plugin_bundle 且服务端配置 COMPANION_DIST_PUBLIC_HTTP_BASE 时有值；
+   * 直链 https，供桌面壳调伴侣 install-from-url（下载主机可能需在伴侣侧 COMPANION_HOST_BUNDLE_TRUST_HOSTS 白名单）。
+   */
+  publicInstallUrl?: string;
 };
 
 export type CompanionArtifactRecord = CompanionArtifactSummary & {

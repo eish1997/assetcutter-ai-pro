@@ -1,0 +1,3 @@
+# SamLocal OpenAPI 质量门禁（CI / npm run lint:openapi）
+# Windows 下 CLI 的 `-r spectral:oas` 会把冒号解析进路径，故用 extends。
+extends: spectral:oas

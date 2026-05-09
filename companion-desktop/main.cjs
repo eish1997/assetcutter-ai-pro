@@ -54,6 +54,8 @@ let lastStatusAlertKey = null;
 let companionAutoUpdateConfigured = false;
 /** @type {boolean} */
 let isQuitting = false;
+/** @type {import('child_process').ChildProcess | null} */
+let samBootstrapChild = null;
 
 function shellSettingsPath() {
   return path.join(app.getPath('userData'), 'companion-shell-settings.json');
@@ -104,6 +106,56 @@ function applyShellVolumeRootToEnv(env) {
   } else {
     delete env.COMPANION_VOLUME_ROOT;
   }
+}
+
+/** 安装包内置的 SamLocal 源码树（extraResources/sam-local-bundled） */
+function bundledSamLocalBundledPath() {
+  try {
+    if (app.isPackaged) {
+      return path.join(process.resourcesPath, 'sam-local-bundled');
+    }
+  } catch {
+    /* ignore */
+  }
+  return path.join(__dirname, 'sam-local-bundled');
+}
+
+function samLocalBootstrapScriptPath() {
+  try {
+    if (app.isPackaged) {
+      return path.join(process.resourcesPath, 'sam-local-bootstrap', 'sam-local-bootstrap.cjs');
+    }
+  } catch {
+    /* ignore */
+  }
+  return path.join(__dirname, 'sam-local-bootstrap', 'sam-local-bootstrap.cjs');
+}
+
+function readSamLocalDesktopRuntimeState() {
+  if (process.platform !== 'win32') return null;
+  try {
+    const p = path.join(app.getPath('userData'), 'sam-local-runtime', 'state.json');
+    if (!fs.existsSync(p)) return null;
+    const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+    if (!j || !j.ready || typeof j.startScript !== 'string' || !j.startScript.trim()) return null;
+    return j;
+  } catch {
+    return null;
+  }
+}
+
+/** 若用户未手动设置 COMPANION_SPAWN_SAM_LOCAL_*，则使用本应用一键安装的 SamLocal 启动脚本 */
+function applyDesktopSamLocalSpawnEnv(env) {
+  if (process.platform !== 'win32') return;
+  if (String(env.COMPANION_SPAWN_SAM_LOCAL_CMD || '').trim()) return;
+  const st = readSamLocalDesktopRuntimeState();
+  if (!st) return;
+  env.COMPANION_SPAWN_SAM_LOCAL_CMD = st.startScript.trim();
+  const cwd =
+    typeof st.startCwd === 'string' && st.startCwd.trim()
+      ? st.startCwd.trim()
+      : path.dirname(st.startScript.trim());
+  env.COMPANION_SPAWN_SAM_LOCAL_CWD = cwd;
 }
 
 /** 与 local-companion `repositoryVolume.ts` 默认一致 */
@@ -190,6 +242,26 @@ function semverRemoteGreater(remote, local) {
   return false;
 }
 
+async function fetchHostBundleCatalogFromSite() {
+  const { siteUrl } = readShellSettings();
+  let origin;
+  try {
+    origin = new URL(siteUrl).origin;
+  } catch {
+    return { ok: false, error: 'invalid_site_url' };
+  }
+  const api = `${origin}/api/companion-artifacts/catalog`;
+  try {
+    const r = await fetch(api, { method: 'GET', signal: AbortSignal.timeout(20000) });
+    if (!r.ok) return { ok: false, error: `http_${r.status}` };
+    const j = await r.json();
+    const raw = j && Array.isArray(j.artifacts) ? j.artifacts : [];
+    return { ok: true, artifacts: raw };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 async function checkRemoteDesktopShellReleaseOnce() {
   const { siteUrl } = readShellSettings();
   let origin;
@@ -260,7 +332,7 @@ function peekProtocolUrl(argv) {
   return a.find((x) => typeof x === 'string' && /^assetcutter-companion:/i.test(x));
 }
 
-function companionApiRequest(method, pathname, body) {
+function companionApiRequest(method, pathname, body, opts) {
   const m = String(method || 'GET').toUpperCase();
   const p = String(pathname || '');
   if (!p.startsWith('/v1/')) {
@@ -269,6 +341,11 @@ function companionApiRequest(method, pathname, body) {
   const port = readHttpPort();
   const token = readSharedToken();
   const bodyStr = body != null ? (typeof body === 'string' ? body : JSON.stringify(body)) : null;
+  const optObj = opts && typeof opts === 'object' ? opts : {};
+  const timeoutRaw = Number(optObj.timeoutMs);
+  const timeoutMs = Number.isFinite(timeoutRaw)
+    ? Math.min(Math.max(Math.floor(timeoutRaw), 1000), 600000)
+    : 15000;
   return new Promise((resolve, reject) => {
     const headers = {};
     if (token) headers.Authorization = `Bearer ${token}`;
@@ -281,7 +358,7 @@ function companionApiRequest(method, pathname, body) {
         port,
         path: p,
         method: m,
-        timeout: 15000,
+        timeout: timeoutMs,
         headers,
       },
       (res) => {
@@ -371,6 +448,11 @@ function getLocalCompanionSpawnConfig() {
   }
   const mainTs = path.join(root, 'src', 'main.ts');
   const nodeBin = process.env.COMPANION_NODE?.trim() || 'node';
+  /** 开发树：优先 `tsx watch`（与 `local-companion` 的 `npm run dev` 一致），源码保存后子进程自动重启 */
+  const tsxCli = path.join(root, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+  if (fs.existsSync(mainTs) && fs.existsSync(tsxCli)) {
+    return { cwd: root, nodeBin, args: [tsxCli, 'watch', path.join('src', 'main.ts')], envExtra: {} };
+  }
   return { cwd: root, nodeBin, args: ['--import', 'tsx', mainTs], envExtra: {} };
 }
 
@@ -635,6 +717,34 @@ async function pollCompanionStatus() {
       notifyStatusIssue('本地伴侣提醒', `已配置 Relay，但当前未运行${detail}`, `relay_not_running${detail}`);
       return;
     }
+    const samLocal = status && typeof status === 'object' ? status.samLocal : null;
+    const samConfigured = Boolean(samLocal && samLocal.configured);
+    const samRunning = Boolean(samLocal && samLocal.running);
+    if (samConfigured && !samRunning) {
+      const samLastError =
+        samLocal && typeof samLocal === 'object' && typeof samLocal.lastError === 'string' ? samLocal.lastError : null;
+      const samLastExitCode =
+        samLocal && typeof samLocal === 'object' && typeof samLocal.lastExitCode === 'number'
+          ? samLocal.lastExitCode
+          : null;
+      const samLastSignal =
+        samLocal && typeof samLocal === 'object' && typeof samLocal.lastSignal === 'string' ? samLocal.lastSignal : null;
+      const samParts = [];
+      if (samLastError) samParts.push(`error=${samLastError}`);
+      if (samLastExitCode != null) samParts.push(`exit=${samLastExitCode}`);
+      if (samLastSignal) samParts.push(`signal=${samLastSignal}`);
+      const samDetail = samParts.length ? ` (${samParts.join(', ')})` : '';
+      companionStatusNote = 'SamLocal 子进程未运行';
+      companionLastError = `sam_local_not_running${samDetail}`;
+      updateTrayTooltip();
+      rebuildTrayMenu();
+      notifyStatusIssue(
+        '本地伴侣提醒',
+        `已配置自动拉起 SamLocal，但当前未运行${samDetail}`,
+        `sam_local_not_running${samDetail}`,
+      );
+      return;
+    }
     companionStatusNote = '伴侣运行中';
     companionLastError = null;
     lastStatusAlertKey = null;
@@ -706,6 +816,11 @@ async function startLocalCompanion() {
     ...cfg.envExtra,
     COMPANION_OPEN_BROWSER: '0',
   };
+  /** SamLocal 走 127.0.0.1；系统 HTTP_PROXY 未排除回环时 fetch 会报 COMPUTE_SAM_BACKEND */
+  const loopNoProxy = '127.0.0.1,localhost,::1';
+  const curNo = String(env.NO_PROXY || env.no_proxy || '').trim();
+  env.NO_PROXY = !curNo ? loopNoProxy : curNo.includes('127.0.0.1') ? curNo : `${curNo},${loopNoProxy}`;
+  env.no_proxy = env.NO_PROXY;
   const pair = readPairingConfig();
   if (!env.COMPANION_SHARED_TOKEN && pair.sharedToken) {
     env.COMPANION_SHARED_TOKEN = pair.sharedToken;
@@ -714,6 +829,7 @@ async function startLocalCompanion() {
     env.COMPANION_ALLOWED_ORIGINS = pair.allowedOrigins;
   }
   applyShellVolumeRootToEnv(env);
+  applyDesktopSamLocalSpawnEnv(env);
 
   /** 父进程/系统环境若带 `COMPANION_HTTP_PORT=0`（常为 Relay 子进程约定），子进程会按「关闭 HTTP」立即 exit(1) */
   if (String(env.COMPANION_HTTP_PORT ?? '').trim() === '0') {
@@ -829,6 +945,10 @@ function buildTrayMenu() {
       click: () => openConsole(),
     },
     {
+      label: '本机分割（SamLocal）准备…',
+      click: () => openSamLocalSetupGuide(),
+    },
+    {
       label: '重新启动本地伴侣',
       click: () => {
         void restartLocalCompanionFromTray({ aggressive: false }).catch((e) =>
@@ -868,6 +988,20 @@ function buildTrayMenu() {
 function rebuildTrayMenu() {
   if (!tray || tray.isDestroyed()) return;
   tray.setContextMenu(buildTrayMenu());
+}
+
+function openSamLocalSetupGuide() {
+  openMainWindow();
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const send = () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.webContents.send('shell-focus-sam-local-setup');
+  };
+  if (mainWindow.webContents.isLoading()) {
+    mainWindow.webContents.once('did-finish-load', () => setTimeout(send, 80));
+  } else {
+    setTimeout(send, 80);
+  }
 }
 
 function openMainWindow() {
@@ -1129,12 +1263,129 @@ if (!gotLock) {
     return { ok: true };
   });
 
-  ipcMain.handle('companion-api', async (_e, method, pathname, body) => {
+  ipcMain.handle('companion-api', async (_e, method, pathname, body, opts) => {
     try {
-      return await companionApiRequest(method, pathname, body);
+      return await companionApiRequest(method, pathname, body, opts);
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
+  });
+
+  ipcMain.handle('shell-fetch-host-bundle-catalog', async () => {
+    try {
+      return await fetchHostBundleCatalogFromSite();
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e), artifacts: [] };
+    }
+  });
+
+  ipcMain.handle('shell-sam-local-desktop-state', () => {
+    if (process.platform !== 'win32') {
+      return { ok: true, platformUnsupported: true, hasBundledResources: false, installed: false };
+    }
+    const bundled = bundledSamLocalBundledPath();
+    const hasBundled = fs.existsSync(path.join(bundled, 'app', 'main.py'));
+    const st = readSamLocalDesktopRuntimeState();
+    return {
+      ok: true,
+      platformUnsupported: false,
+      hasBundledResources: hasBundled,
+      installed: Boolean(st),
+      state: st,
+    };
+  });
+
+  ipcMain.handle('shell-sam-local-bootstrap-run', async (event) => {
+    if (process.platform !== 'win32') {
+      return { ok: false, error: '仅支持 Windows' };
+    }
+    if (samBootstrapChild && samBootstrapChild.exitCode === null && !samBootstrapChild.killed) {
+      return { ok: false, error: '正在安装中，请稍候' };
+    }
+    const userRoot = path.join(app.getPath('userData'), 'sam-local-runtime');
+    const bundledSrc = bundledSamLocalBundledPath();
+    if (!fs.existsSync(path.join(bundledSrc, 'app', 'main.py'))) {
+      return {
+        ok: false,
+        error: '当前安装包未包含 SamLocal 资源。请更新桌面应用或使用完整发行构建。',
+      };
+    }
+    const scriptPath = samLocalBootstrapScriptPath();
+    if (!fs.existsSync(scriptPath)) {
+      return { ok: false, error: '缺少 sam-local-bootstrap 脚本' };
+    }
+    const win = BrowserWindow.fromWebContents(event.sender) || mainWindow;
+    const sendLog = (payload) => {
+      try {
+        if (win && !win.isDestroyed()) win.webContents.send('sam-local-bootstrap-log', payload);
+      } catch {
+        /* ignore */
+      }
+    };
+    samBootstrapChild = spawn(process.execPath, [scriptPath], {
+      env: {
+        ...process.env,
+        ELECTRON_RUN_AS_NODE: '1',
+        AC_SAM_USER_ROOT: userRoot,
+        AC_SAM_SRC: bundledSrc,
+      },
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let outCarry = '';
+    let errCarry = '';
+    const feedLines = (carry, chunk) => {
+      const s = carry + String(chunk);
+      const parts = s.split(/\r?\n/);
+      const rest = parts.pop() || '';
+      for (const line of parts) {
+        const t = line.trim();
+        if (!t) continue;
+        try {
+          sendLog(JSON.parse(t));
+        } catch {
+          sendLog({ type: 'log', msg: t });
+        }
+      }
+      return rest;
+    };
+    const flushCarry = (carry) => {
+      const t = String(carry || '').trim();
+      if (!t) return;
+      try {
+        sendLog(JSON.parse(t));
+      } catch {
+        sendLog({ type: 'log', msg: t });
+      }
+    };
+    samBootstrapChild.stdout.on('data', (b) => {
+      outCarry = feedLines(outCarry, b);
+    });
+    samBootstrapChild.stderr.on('data', (b) => {
+      errCarry = feedLines(errCarry, b);
+    });
+    samBootstrapChild.on('error', (err) => {
+      samBootstrapChild = null;
+      outCarry = '';
+      errCarry = '';
+      sendLog({ type: 'error', msg: err.message });
+      sendLog({ type: 'bootstrap-finished', ok: false });
+    });
+    samBootstrapChild.on('close', (code) => {
+      flushCarry(outCarry);
+      flushCarry(errCarry);
+      outCarry = '';
+      errCarry = '';
+      samBootstrapChild = null;
+      const ok = code === 0;
+      sendLog({ type: 'bootstrap-finished', ok, exitCode: code });
+      if (ok) {
+        void restartLocalCompanionFromTray({ aggressive: true }).catch((e) =>
+          console.error('[companion-desktop] restart after SamLocal bootstrap:', e),
+        );
+      }
+    });
+    return { ok: true, started: true };
   });
 
   ipcMain.handle('shell-load-pairing', () => readPairingConfig());

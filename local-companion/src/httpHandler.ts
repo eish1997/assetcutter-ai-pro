@@ -40,6 +40,7 @@ import {
 } from './accessGate.js';
 import { getPairingSessionSummary, revokePairingSession } from './pairingSession.js';
 import { installHostPluginBundleFromUrl, listInstalledHostPluginBundles } from './hostPluginBundles.js';
+import { probeSamSegmentBackendHealth } from './compute/samSegmentAdapter.js';
 
 let cachedIndexHtml: string | null = null;
 
@@ -166,6 +167,12 @@ export async function handleRequest(
 
     if (path === '/v1/capabilities' && method === 'GET') {
       sendJson(res, 200, buildCapabilitiesPayload(), origin);
+      return;
+    }
+
+    if (path === '/v1/debug/sam-segment-health' && method === 'GET') {
+      const payload = await probeSamSegmentBackendHealth();
+      sendJson(res, 200, payload, origin);
       return;
     }
 

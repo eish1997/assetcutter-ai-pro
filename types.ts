@@ -1,5 +1,6 @@
 import type { VgpAssetExtension } from './types/vgp';
 import type { DialogImageGear } from './services/modelRegistry/imageModels';
+import type { PanoLocalReprojectSnapshot } from './services/panoViewportProjection';
 
 export type { VgpAssetExtension, VgpGenStepCapture } from './types/vgp';
 export type {
@@ -334,6 +335,7 @@ export const WORKFLOW_ACTION_TYPES = [
   { id: 'style_transfer', label: '转风格' },
   { id: 'multi_view', label: '生成多视角' },
   { id: 'cut_image', label: '切割图片' },
+  { id: 'companion_sam_segment', label: '本机智能分割' },
 ] as const;
 export type WorkflowActionType = (typeof WORKFLOW_ACTION_TYPES)[number]['id'];
 
@@ -425,6 +427,9 @@ export type ImageLocalEditSelection = ImageLocalEditRect | ImageLocalEditEllipse
 /** 全景透视预览下：相对 WebGL 画布（renderer 元素）的裁切框，0~1，用于「所见即所得」导出 */
 export type PanoViewportCropNorm = { x: number; y: number; w: number; h: number };
 
+/** 全景局部重绘：球面选区在等距柱纹理上的采样点（u 环绕、v∈[0,1]），与当前视角无关 */
+export type PanoLocalEditEquirectSample = { u: number; v: number };
+
 export type ImageOverlayAnnotationDoc = {
   v: 1;
   items: Array<ImageOverlayRectItem | ImageOverlayBrushItem | ImageOverlayTextItem>;
@@ -435,6 +440,16 @@ export type ImageOverlayAnnotationDoc = {
   panoViewportCrop?: PanoViewportCropNorm | null;
   /** 全景局部重绘：相对当前透视快照画布 0~1 的轴对齐框；与 `localEdit` 互斥（全景下用本字段） */
   panoLocalEditViewport?: PanoViewportCropNorm | null;
+  /**
+   * 全景局部重绘：选区沿球面的 UV 闭合环（提交时投到**当前**透视快照上算裁切框）。
+   * 有本字段时优先于 `panoLocalEditViewport`，避免仅屏幕框在转头后与球面区域不一致导致贴回错位。
+   */
+  panoLocalEditEquirect?: PanoLocalEditEquirectSample[] | null;
+  /**
+   * 与 `panoLocalEditViewport` 同时刻记录：框选完成时的相机/缓冲快照。
+   * 快捷栏提交生成前会先 `applyReprojectSnapshot` 再截透视图并贴回，避免转头后姿态与屏幕框不一致。
+   */
+  panoLocalEditReproject?: PanoLocalReprojectSnapshot | null;
 };
 
 /** 单个资产：原始图 + 各类型结果图，当前展示版本，是否已归档；归档后可按生成顺序拼流程图 */
@@ -736,6 +751,11 @@ export type CustomAppModule = {
     /** 默认 `exec` */
     phase?: 'exec' | 'probe';
   };
+  /**
+   * 为 true 时：`executeCapability` 走本机伴侣 `sam_segment`（需已选工作区项目；`WorkflowSection` 传入 `workflowAssetId`）。
+   * 无大图点选时使用**图像中心**为前景点。与 `companionHostBundle` 互斥（规范化时后写者优先）。
+   */
+  companionSamSegment?: boolean;
 };
 
 /** 能力集合画布节点（与 React Flow 序列化兼容） */

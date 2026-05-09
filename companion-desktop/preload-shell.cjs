@@ -23,7 +23,10 @@ function timedInvoke(channel, ...args) {
 }
 
 contextBridge.exposeInMainWorld('companionShell', {
-  api: (method, pathname, body) => timedInvoke('companion-api', method, pathname, body),
+  api: (method, pathname, body, opts) => timedInvoke('companion-api', method, pathname, body, opts || {}),
+  fetchHostBundleCatalog: () => timedInvoke('shell-fetch-host-bundle-catalog'),
+  samLocalDesktopState: () => timedInvoke('shell-sam-local-desktop-state'),
+  samLocalBootstrapRun: () => timedInvoke('shell-sam-local-bootstrap-run'),
   traySummary: () => timedInvoke('shell-tray-summary'),
   loadSettings: () => timedInvoke('shell-settings-load'),
   saveSettings: (patch) => timedInvoke('shell-settings-save', patch),
@@ -40,6 +43,28 @@ contextBridge.exposeInMainWorld('companionShell', {
   savePairing: (payload) => timedInvoke('shell-save-pairing', payload || {}),
   copyText: (text) => {
     clipboard.writeText(String(text || ''));
+  },
+  /** 主进程在用户从托盘选择「本机分割准备」时广播，渲染进程可切换至设置并滚动到 SamLocal 区块 */
+  onSamLocalSetupFocus: (handler) => {
+    if (typeof handler !== 'function') return;
+    ipcRenderer.on('shell-focus-sam-local-setup', () => {
+      try {
+        handler();
+      } catch {
+        /* ignore */
+      }
+    });
+  },
+  /** SamLocal 一键安装进度：主进程逐行 JSON 或结束事件 */
+  onSamLocalBootstrapLog: (handler) => {
+    if (typeof handler !== 'function') return;
+    ipcRenderer.on('sam-local-bootstrap-log', (_evt, payload) => {
+      try {
+        handler(payload);
+      } catch {
+        /* ignore */
+      }
+    });
   },
   platform: process.platform,
   /** 与 main.cjs `defaultShellSiteUrl` 一致，供壳首帧与「打开网站」回退 */

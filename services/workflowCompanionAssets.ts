@@ -30,6 +30,21 @@ export function workflowResultCompanionStorageKey(assetId: string, resultKey: st
   return `wf-res-${a}-${r}`.slice(0, 128);
 }
 
+/** 与 `local-companion` `samSegmentAdapter.companionSamAltOutputKey` 一致：多 mask 备选文件键 */
+export function companionSamAltOutputKey(primaryKey: string, idx: number): string {
+  const suffix = `_m${idx}`;
+  if (primaryKey.length + suffix.length <= 128) return primaryKey + suffix;
+  return primaryKey.slice(0, 128 - suffix.length) + suffix;
+}
+
+export function workflowSamMultimaskCompanionKeys(primaryOutputKey: string, count: number): string[] {
+  const keys: string[] = [];
+  for (let i = 0; i < count; i += 1) {
+    keys.push(i === 0 ? primaryOutputKey : companionSamAltOutputKey(primaryOutputKey, i));
+  }
+  return keys;
+}
+
 /** 工作流 3D 模型在伴侣下的键（按资产 id + 槽位，与 `modelUrls` 下标对齐） */
 export function workflowModelCompanionStorageKey(assetId: string, slotIndex: number): string {
   const id = sanitizeCompanionPathSegment(String(assetId || '').trim() || 'unknown');

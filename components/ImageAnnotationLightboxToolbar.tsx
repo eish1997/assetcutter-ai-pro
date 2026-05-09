@@ -2,11 +2,16 @@ import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from
 import type { ImageFlatAnnotationTool } from './ImageFlatAnnotationOverlay';
 import {
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Circle,
+  Crosshair,
+  Grid3x3,
   Crop,
   ImagePlus,
   Lasso,
   Minus,
+  Eraser,
   MousePointer2,
   Move,
   Paintbrush,
@@ -82,12 +87,14 @@ function ToolShell({
   title,
   children,
   dense,
+  disabled,
 }: {
   active?: boolean;
   onClick: () => void;
   title: string;
   children: React.ReactNode;
   dense?: boolean;
+  disabled?: boolean;
 }) {
   const sz = dense ? 'h-6 w-6' : 'h-7 w-7';
   return (
@@ -96,16 +103,20 @@ function ToolShell({
       title={title}
       aria-label={title}
       aria-pressed={active}
+      disabled={disabled}
       onClick={(e) => {
         e.stopPropagation();
+        if (disabled) return;
         onClick();
       }}
       className={[
         TOOL_BTN_BASE,
         sz,
-        active
-          ? 'bg-blue-600 text-white ring-1 ring-blue-400/35 hover:bg-blue-500'
-          : 'bg-white/[0.06] text-gray-300 ring-1 ring-white/[0.1] hover:bg-white/[0.11] hover:text-gray-100',
+        disabled
+          ? 'cursor-not-allowed opacity-35 ring-1 ring-white/[0.06]'
+          : active
+            ? 'bg-blue-600 text-white ring-1 ring-blue-400/35 hover:bg-blue-500'
+            : 'bg-white/[0.06] text-gray-300 ring-1 ring-white/[0.1] hover:bg-white/[0.11] hover:text-gray-100',
       ].join(' ')}
     >
       {children}
@@ -119,12 +130,14 @@ function ActionBtn({
   children,
   variant = 'default',
   dense,
+  disabled,
 }: {
   onClick: () => void;
   title: string;
   children: React.ReactNode;
-  variant?: 'default' | 'amber' | 'danger';
+  variant?: 'default' | 'amber' | 'danger' | 'primary';
   dense?: boolean;
+  disabled?: boolean;
 }) {
   const sz = dense ? 'h-6 w-6' : 'h-7 w-7';
   const cls =
@@ -132,17 +145,24 @@ function ActionBtn({
       ? 'text-amber-200/95 hover:bg-amber-500/12 active:bg-amber-500/18'
       : variant === 'danger'
         ? 'text-red-400 hover:bg-red-950/45 active:bg-red-950/55'
-        : 'text-gray-300 hover:bg-white/[0.08] active:bg-white/[0.12] hover:text-white';
+        : variant === 'primary'
+          ? 'text-emerald-100 hover:bg-emerald-600/22 active:bg-emerald-600/30 ring-1 ring-emerald-400/30'
+          : 'text-gray-300 hover:bg-white/[0.08] active:bg-white/[0.12] hover:text-white';
   return (
     <button
       type="button"
       title={title}
       aria-label={title}
+      disabled={disabled}
       onClick={(e) => {
         e.stopPropagation();
+        if (disabled) return;
         onClick();
       }}
-      className={`${TOOL_BTN_BASE} ${sz} ${cls}`}
+      className={[
+        `${TOOL_BTN_BASE} ${sz} ${cls}`,
+        disabled ? 'cursor-not-allowed opacity-35 pointer-events-none' : '',
+      ].join(' ')}
     >
       {children}
     </button>
@@ -169,6 +189,38 @@ export type ImageAnnotationLightboxToolbarProps = {
   onClearLocalEdit: () => void;
   /** 清空标注、裁切、全景视口裁切、局部重绘与撤销栈，并写入当前显示版本 */
   onResetAll: () => void;
+  /** 本机菜单是否展开（供 Esc：先关菜单再解除武装） */
+  lightboxSamToolbarMenuOpenRef?: React.MutableRefObject<boolean>;
+  /** 本机伴侣 SAM 分割（平面大图） */
+  samSegment?: {
+    busy: boolean;
+    armed: boolean;
+    disabled: boolean;
+    disabledTitle?: string;
+    /** 下拉打开/关闭或其它菜单切换时同步武装（打开本机菜单即进入点选） */
+    onSamMenuOpenChange?: (open: boolean) => void;
+    /** 经伴侣探测 SamLocal：stub 时仅为小圆，非抠物 */
+    samBackendMode?: 'unknown' | 'stub' | 'sam';
+    samPickSubmode?: 'point' | 'box';
+    onSamPickSubmodeChange?: (m: 'point' | 'box') => void;
+    canRunSam?: boolean;
+    onRunSam?: () => void;
+    /** 清空全部点与框 */
+    canClearSamPrompts?: boolean;
+    onSamClearPrompts?: () => void;
+    /** 运行后有预览但未写入资产 */
+    canSaveSam?: boolean;
+    onSaveSam?: () => void;
+    /** 点选 / 自动选区 */
+    samUxMode?: 'prompt' | 'auto';
+    onAutoSegment?: () => void;
+    canMergeAutoPick?: boolean;
+    onMergeAutoPick?: () => void;
+    onExitAuto?: () => void;
+    canClearSamPreview?: boolean;
+    onClearSamPreview?: () => void;
+    multimask?: { total: number; index: number; onPrev: () => void; onNext: () => void };
+  };
 };
 
 /**
@@ -189,13 +241,15 @@ export function ImageAnnotationLightboxToolbar({
   onClearCrops,
   onClearLocalEdit,
   onResetAll,
+  lightboxSamToolbarMenuOpenRef,
+  samSegment,
 }: ImageAnnotationLightboxToolbarProps) {
   const colorInputRef = useRef<HTMLInputElement | null>(null);
   const barRef = useRef<HTMLDivElement | null>(null);
   const dragOffsetRef = useRef<{ x: number; y: number } | null>(null);
 
-  /** 打开后不因点空白/滚动收起；再点同一分类或切换「标注/裁切」时收起/切换 */
-  const [openMenu, setOpenMenu] = useState<null | 'annotate' | 'crop' | 'local'>(null);
+  /** 打开后不因点空白/滚动收起；再点同一分类或切换「标注/裁切/本机」时收起/切换 */
+  const [openMenu, setOpenMenu] = useState<null | 'annotate' | 'crop' | 'local' | 'sam'>(null);
   /** 菜单相对主栏：下方或上方（按视口剩余空间） */
   const [menuPlacement, setMenuPlacement] = useState<'below' | 'above'>('below');
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
@@ -293,9 +347,43 @@ export function ImageAnnotationLightboxToolbar({
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
-  const toggleMenu = useCallback((key: 'annotate' | 'crop' | 'local') => {
+  const toggleMenu = useCallback((key: 'annotate' | 'crop' | 'local' | 'sam') => {
     setOpenMenu((prev) => (prev === key ? null : key));
   }, []);
+
+  useLayoutEffect(() => {
+    if (lightboxSamToolbarMenuOpenRef) {
+      lightboxSamToolbarMenuOpenRef.current = openMenu === 'sam';
+    }
+  }, [openMenu, lightboxSamToolbarMenuOpenRef]);
+
+  /** 本机：仅在下拉打开/从本机切走时同步武装，避免与快捷键 S（不关菜单）打架 */
+  const samMenuPrevRef = useRef<typeof openMenu>(null);
+  useEffect(() => {
+    const prev = samMenuPrevRef.current;
+    samMenuPrevRef.current = openMenu;
+    const sync = samSegment?.onSamMenuOpenChange;
+    if (!sync) return;
+    if (samSegment.disabled) {
+      sync(false);
+      return;
+    }
+    if (openMenu === 'sam') {
+      sync(!samSegment.busy);
+    } else if (prev === 'sam') {
+      sync(false);
+    }
+  }, [openMenu, samSegment?.onSamMenuOpenChange, samSegment?.disabled, samSegment?.busy]);
+
+  useEffect(() => {
+    if (openMenu !== 'sam') return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      setOpenMenu(null);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [openMenu]);
 
   const annotateActive = ANNOTATE_DRAW_TOOLS.has(tool);
   const cropActive = CROP_TOOLS.has(tool);
@@ -336,6 +424,175 @@ export function ImageAnnotationLightboxToolbar({
       </button>
     );
   };
+
+  const samCategoryBtn = () => {
+    if (!samSegment) return null;
+    const open = openMenu === 'sam';
+    const chevronOpenClass = open && menuPlacement === 'above' ? 'rotate-180' : '';
+    const active = samSegment.armed || open;
+    return (
+      <>
+        <RailDivider />
+        <button
+          type="button"
+          title={
+            samSegment.disabled
+              ? samSegment.disabledTitle || '当前不可用'
+              : '分割（子工具见菜单；快捷键 S 切换点选；Esc 关闭菜单并退出点选）'
+          }
+          aria-haspopup="menu"
+          aria-expanded={open}
+          disabled={samSegment.disabled}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (samSegment.disabled) return;
+            toggleMenu('sam');
+          }}
+          className={[
+            'inline-flex h-7 shrink-0 items-center gap-0.5 rounded-md px-1.5 outline-none transition-colors',
+            'focus-visible:ring-2 focus-visible:ring-blue-500/45 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0a0a0c]',
+            samSegment.disabled
+              ? 'cursor-not-allowed opacity-35 ring-1 ring-white/[0.08]'
+              : open || active
+                ? 'bg-blue-600 text-white ring-1 ring-blue-400/35 hover:bg-blue-500'
+                : 'bg-white/[0.06] text-gray-300 ring-1 ring-white/[0.1] hover:bg-white/[0.11] hover:text-gray-100',
+          ].join(' ')}
+        >
+          <Crosshair {...ic} />
+          <span className="text-[8px] font-black uppercase tracking-wide">分割</span>
+          <ChevronDown className={`h-3 w-3 opacity-85 transition-transform ${chevronOpenClass}`} strokeWidth={2} />
+        </button>
+      </>
+    );
+  };
+
+  const samPanel = samSegment ? (
+    <div className="flex flex-col gap-1" role="menu">
+      {samSegment.samUxMode === 'auto' ? (
+        <div className="flex flex-wrap gap-0.5">
+          <ActionBtn
+            title="返回点/框提示分割"
+            dense
+            disabled={samSegment.disabled || samSegment.busy}
+            onClick={() => samSegment.onExitAuto?.()}
+          >
+            <RotateCcw {...icSm} />
+          </ActionBtn>
+          <ActionBtn
+            title="将勾选区域叠入预览（可多次运行叠加）"
+            dense
+            variant="amber"
+            disabled={samSegment.disabled || samSegment.busy || !samSegment.canMergeAutoPick}
+            onClick={() => samSegment.onMergeAutoPick?.()}
+          >
+            <ImagePlus {...icSm} />
+          </ActionBtn>
+        </div>
+      ) : (
+        <div className="flex flex-wrap gap-0.5">
+          <ToolShell
+            dense
+            active={samSegment.samPickSubmode === 'point'}
+            title="点提示：左键前景点、右键背景点"
+            disabled={samSegment.disabled || samSegment.busy}
+            onClick={() => samSegment.onSamPickSubmodeChange?.('point')}
+          >
+            <MousePointer2 {...icSm} />
+          </ToolShell>
+          <ToolShell
+            dense
+            active={samSegment.samPickSubmode === 'box'}
+            title="框提示：拖拽矩形"
+            disabled={samSegment.disabled || samSegment.busy}
+            onClick={() => samSegment.onSamPickSubmodeChange?.('box')}
+          >
+            <Square {...icSm} />
+          </ToolShell>
+          <ActionBtn
+            title={
+              samSegment.samBackendMode === 'stub'
+                ? samSegment.canRunSam
+                  ? '运行（stub 为小圆联调）'
+                  : '请先添加点或框'
+                : samSegment.canRunSam
+                  ? '运行提示分割'
+                  : '请先添加点或框选区域'
+            }
+            disabled={samSegment.disabled || samSegment.busy || !samSegment.canRunSam}
+            onClick={() => samSegment.onRunSam?.()}
+          >
+            <Sparkles {...ic} />
+          </ActionBtn>
+          <ActionBtn
+            title="清空提示点与框"
+            dense
+            disabled={samSegment.disabled || samSegment.busy || !samSegment.canClearSamPrompts}
+            onClick={() => samSegment.onSamClearPrompts?.()}
+          >
+            <Eraser {...icSm} />
+          </ActionBtn>
+          <ActionBtn
+            title="全图自动拆分（官方式多区域，悬停高亮、点击勾选）"
+            disabled={samSegment.disabled || samSegment.busy}
+            onClick={() => samSegment.onAutoSegment?.()}
+          >
+            <Grid3x3 {...ic} />
+          </ActionBtn>
+        </div>
+      )}
+      {samSegment.multimask && samSegment.multimask.total > 1 ? (
+        <div className="flex flex-wrap items-center gap-0.5 border-t border-white/[0.06] pt-1">
+          <span className="text-[9px] font-medium uppercase tracking-wide text-white/40">多候选</span>
+          <span
+            className="text-[10px] font-medium tabular-nums text-white/65"
+            title="当前 mask 候选序号"
+          >
+            {samSegment.multimask.index + 1} / {samSegment.multimask.total}
+          </span>
+          <ActionBtn
+            title="上一候选"
+            dense
+            disabled={samSegment.multimask.index <= 0}
+            onClick={samSegment.multimask.onPrev}
+          >
+            <ChevronLeft {...icSm} />
+          </ActionBtn>
+          <ActionBtn
+            title="下一候选"
+            dense
+            disabled={samSegment.multimask.index >= samSegment.multimask.total - 1}
+            onClick={samSegment.multimask.onNext}
+          >
+            <ChevronRight {...icSm} />
+          </ActionBtn>
+        </div>
+      ) : null}
+      <div className="flex flex-wrap gap-0.5 border-t border-white/[0.06] pt-1">
+        {samSegment.canClearSamPreview ? (
+          <ActionBtn
+            dense
+            title="清空分割预览叠层"
+            variant="danger"
+            disabled={samSegment.busy}
+            onClick={() => samSegment.onClearSamPreview?.()}
+          >
+            <Trash2 {...icSm} />
+          </ActionBtn>
+        ) : null}
+        {samSegment.canSaveSam ? (
+          <ActionBtn
+            dense
+            title="将当前预览 mask 保存为新版本（PNG）"
+            onClick={() => samSegment.onSaveSam?.()}
+            variant="primary"
+            disabled={samSegment.busy}
+          >
+            <Save {...icSm} />
+          </ActionBtn>
+        ) : null}
+      </div>
+    </div>
+  ) : null;
 
   const annotatePanel = (
     <div className="flex flex-col gap-1" role="menu">
@@ -506,7 +763,15 @@ export function ImageAnnotationLightboxToolbar({
             ].join(' ')}
             role="presentation"
           >
-            {openMenu === 'annotate' ? annotatePanel : openMenu === 'crop' ? cropPanel : localPanel}
+            {openMenu === 'annotate'
+              ? annotatePanel
+              : openMenu === 'crop'
+                ? cropPanel
+                : openMenu === 'local'
+                  ? localPanel
+                  : openMenu === 'sam'
+                    ? samPanel
+                    : null}
           </div>
         ) : null}
 
@@ -544,6 +809,7 @@ export function ImageAnnotationLightboxToolbar({
         <ActionBtn title="重做 (⇧Ctrl/⇧⌘+Z)" onClick={onRedo}>
           <Redo2 {...ic} />
         </ActionBtn>
+        {samCategoryBtn()}
         <RailDivider />
         <ActionBtn title="一键清空：标注、裁切、局部重绘、全景裁切框（写入当前版本）" onClick={onResetAll} variant="danger">
           <RotateCcw {...ic} />

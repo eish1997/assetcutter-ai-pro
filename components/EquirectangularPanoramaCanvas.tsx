@@ -8,6 +8,26 @@ import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } f
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { PanoramaViewportProjection, PanoLocalReprojectSnapshot } from '../services/panoViewportProjection';
+import {
+  equirectUvToWorldPosOnFlippedPanoSphere,
+  worldDirOnFlippedPanoSphereToEquirectUv,
+  wrap01PanoU,
+} from '../services/panoEquirectThreeMapping';
+
+const DEFAULT_ORBIT_D = 0.02;
+const DEFAULT_PANO_FOV = 70;
+
+/** OrbitControls 内部增量清零（无公开 API，与 r182 实现一致） */
+function zeroOrbitControlDeltas(controls: OrbitControls) {
+  const oc = controls as unknown as {
+    _sphericalDelta: { set: (radius: number, phi: number, theta: number) => void };
+    _panOffset: THREE.Vector3;
+    _scale: number;
+  };
+  oc._sphericalDelta.set(0, 0, 0);
+  oc._panOffset.set(0, 0, 0);
+  oc._scale = 1;
+}
 
 /** 全景贴图最长边上限（像素），控制 WebGL 显存与 mipmap 开销 */
 const PANORAMA_MAX_TEXTURE_EDGE = 4096;
@@ -73,12 +93,6 @@ function buildPanoramaTextureFromImage(img: HTMLImageElement): THREE.CanvasTextu
   return tex;
 }
 
-function wrap01(u: number): number {
-  let x = u % 1;
-  if (x < 0) x += 1;
-  return x;
-}
-
 export type EquirectangularPanoramaCanvasProps = {
   imageSrc: string;
   className?: string;
@@ -96,7 +110,9 @@ export const EquirectangularPanoramaCanvas = forwardRef<
     camera: THREE.PerspectiveCamera | null;
     mesh: THREE.Mesh | null;
     renderer: THREE.WebGLRenderer | null;
-  }>({ camera: null, mesh: null, renderer: null });
+    scene: THREE.Scene | null;
+    controls: OrbitControls | null;
+  }>({ camera: null, mesh: null, renderer: null, scene: null, controls: null });
 
   const animListenersRef = useRef(new Set<() => void>());
 
@@ -114,24 +130,17 @@ export const EquirectangularPanoramaCanvas = forwardRef<
         raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
         const hits = raycaster.intersectObject(mesh, false);
         if (!hits.length) return null;
-        const dir = hits[0]!.point.clone().normalize();
-        const lat = Math.asin(THREE.MathUtils.clamp(dir.y, -1, 1));
-        const lon = Math.atan2(dir.x, dir.z);
-        const u = wrap01(lon / (2 * Math.PI) + 0.5);
-        const v = THREE.MathUtils.clamp(0.5 - lat / Math.PI, 0, 1);
-        return { x: u, y: v };
+        const hit = hits[0]!;
+        if (hit.uv) {
+          return { x: wrap01PanoU(hit.uv.x), y: THREE.MathUtils.clamp(hit.uv.y, 0, 1) };
+        }
+        const uv = worldDirOnFlippedPanoSphereToEquirectUv(hit.point);
+        return { x: uv.u, y: uv.v };
       },
       equirectNormToClient(u, v) {
         const { camera, renderer } = liveRef.current;
         if (!camera || !renderer) return null;
-        const uu = wrap01(u);
-        const vv = THREE.MathUtils.clamp(v, 0, 1);
-        const lon = (uu - 0.5) * 2 * Math.PI;
-        const lat = (0.5 - vv) * Math.PI;
-        const wx = Math.cos(lat) * Math.sin(lon);
-        const wy = Math.sin(lat);
-        const wz = Math.cos(lat) * Math.cos(lon);
-        const worldPos = new THREE.Vector3(wx, wy, wz).multiplyScalar(500);
+        const worldPos = equirectUvToWorldPosOnFlippedPanoSphere(u, v, 500);
         const camPos = new THREE.Vector3();
         camera.getWorldPosition(camPos);
         const toSurf = worldPos.clone().sub(camPos);
@@ -144,6 +153,30 @@ export const EquirectangularPanoramaCanvas = forwardRef<
         const sx = (projected.x * 0.5 + 0.5) * rect.width + rect.left;
         const sy = (-projected.y * 0.5 + 0.5) * rect.height + rect.top;
         return { x: sx, y: sy };
+      },
+      getSnapshotClientRect() {
+        const { renderer } = liveRef.current;
+        if (!renderer) return null;
+        try {
+          return renderer.domElement.getBoundingClientRect();
+        } catch {
+          return null;
+        }
+      },
+      clientToSnapshotNorm(clientX, clientY) {
+        const { renderer } = liveRef.current;
+        if (!renderer) return null;
+        let rect: DOMRect;
+        try {
+          rect = renderer.domElement.getBoundingClientRect();
+        } catch {
+          return null;
+        }
+        if (rect.width < 1 || rect.height < 1) return null;
+        return {
+          x: (clientX - rect.left) / rect.width,
+          y: (clientY - rect.top) / rect.height,
+        };
       },
       subscribeAnimation(fn) {
         const s = animListenersRef.current;
@@ -176,10 +209,47 @@ export const EquirectangularPanoramaCanvas = forwardRef<
           bufferW: bw,
           bufferH: bh,
           fovDeg: camera.fov,
-          aspect: camera.aspect,
+          /** 与 `bufferW/H` 一致，避免逻辑宽高比与帧缓冲不完全一致时反投影偏移 */
+          aspect: bw / bh,
           cameraPosition: [p.x, p.y, p.z],
           cameraQuaternion: [q.x, q.y, q.z, q.w],
         };
+      },
+      applyReprojectSnapshot(snap: PanoLocalReprojectSnapshot) {
+        const { camera, renderer, controls, scene } = liveRef.current;
+        if (!camera || !renderer || !controls || !scene) return;
+        const el = renderer.domElement;
+        const bh = Math.max(1, el.height);
+        const bw = Math.max(1, el.width);
+        camera.position.set(snap.cameraPosition[0], snap.cameraPosition[1], snap.cameraPosition[2]);
+        camera.fov = snap.fovDeg;
+        camera.aspect = bw / bh;
+        camera.updateProjectionMatrix();
+        controls.target.set(0, 0, 0);
+        zeroOrbitControlDeltas(controls);
+        controls.update();
+        renderer.render(scene, camera);
+      },
+      resetViewToDefault() {
+        const { camera, renderer, controls, scene } = liveRef.current;
+        const mount = mountRef.current;
+        const root = rootRef.current;
+        if (!camera || !renderer || !controls || !scene || !mount || !root) return;
+        const w = Math.max(1, mount.clientWidth || root.clientWidth);
+        const h = Math.max(1, mount.clientHeight || root.clientHeight || w * 0.56);
+        /**
+         * 球体 `scale(-1,1,1)` 后，朝 +X 看正中是接缝；相机在 +X、朝 -X 看，正中为纹理 u=0.5（图水平正中）。
+         */
+        camera.position.set(DEFAULT_ORBIT_D, 0, 0);
+        camera.quaternion.identity();
+        camera.fov = DEFAULT_PANO_FOV;
+        camera.aspect = w / h;
+        camera.updateProjectionMatrix();
+        camera.updateMatrixWorld(true);
+        controls.target.set(0, 0, 0);
+        zeroOrbitControlDeltas(controls);
+        controls.update();
+        renderer.render(scene, camera);
       },
     };
   }, []);
@@ -202,9 +272,8 @@ export const EquirectangularPanoramaCanvas = forwardRef<
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x0a0a0c);
 
-    const camera = new THREE.PerspectiveCamera(70, width / height, 0.1, 2000);
-    const D = 0.02;
-    camera.position.set(0, 0, D);
+    const camera = new THREE.PerspectiveCamera(DEFAULT_PANO_FOV, width / height, 0.1, 2000);
+    camera.position.set(DEFAULT_ORBIT_D, 0, 0);
 
     /** `preserveDrawingBuffer`：`captureViewDataUrl` / 裁切依赖 `toDataURL`，默认 false 时帧缓冲可能被清空导致透明快照 */
     const renderer = new THREE.WebGLRenderer({ antialias: false, alpha: false, preserveDrawingBuffer: true });
@@ -233,6 +302,24 @@ export const EquirectangularPanoramaCanvas = forwardRef<
       renderer.domElement.style.cursor = 'grab';
     };
 
+    const onCanvasDblClick = (e: MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!controls) return;
+      const rw = Math.max(1, mount.clientWidth || root.clientWidth);
+      const rh = Math.max(1, mount.clientHeight || root.clientHeight || rw * 0.56);
+      camera.position.set(DEFAULT_ORBIT_D, 0, 0);
+      camera.quaternion.identity();
+      camera.fov = DEFAULT_PANO_FOV;
+      camera.aspect = rw / rh;
+      camera.updateProjectionMatrix();
+      camera.updateMatrixWorld(true);
+      controls.target.set(0, 0, 0);
+      zeroOrbitControlDeltas(controls);
+      controls.update();
+      renderer.render(scene, camera);
+    };
+
     while (mount.firstChild) {
       mount.removeChild(mount.firstChild);
     }
@@ -244,6 +331,7 @@ export const EquirectangularPanoramaCanvas = forwardRef<
     renderer.domElement.addEventListener('wheel', onWheelZoom, { passive: false });
     renderer.domElement.addEventListener('mousedown', onCanvasMouseDown);
     renderer.domElement.addEventListener('mouseup', onCanvasMouseUp);
+    renderer.domElement.addEventListener('dblclick', onCanvasDblClick);
 
     controls = new OrbitControls(camera, renderer.domElement);
     controls.enablePan = false;
@@ -252,13 +340,13 @@ export const EquirectangularPanoramaCanvas = forwardRef<
     controls.minPolarAngle = 0.08;
     controls.maxPolarAngle = Math.PI - 0.08;
     controls.target.set(0, 0, 0);
-    controls.minDistance = D;
-    controls.maxDistance = D;
+    controls.minDistance = DEFAULT_ORBIT_D;
+    controls.maxDistance = DEFAULT_ORBIT_D;
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
     controls.update();
 
-    liveRef.current = { camera, mesh: null, renderer };
+    liveRef.current = { camera, mesh: null, renderer, scene, controls };
 
     setStatus('loading');
     void loadImageElement(imageSrc)
@@ -279,7 +367,8 @@ export const EquirectangularPanoramaCanvas = forwardRef<
         material = new THREE.MeshBasicMaterial({ map: texture });
         mesh = new THREE.Mesh(geometry, material);
         scene.add(mesh);
-        liveRef.current = { camera, mesh, renderer };
+        liveRef.current = { camera, mesh, renderer, scene, controls };
+        controls.saveState();
         setStatus('ready');
       })
       .catch(() => {
@@ -313,12 +402,13 @@ export const EquirectangularPanoramaCanvas = forwardRef<
 
     return () => {
       cancelled = true;
-      liveRef.current = { camera: null, mesh: null, renderer: null };
+      liveRef.current = { camera: null, mesh: null, renderer: null, scene: null, controls: null };
       cancelAnimationFrame(animationId);
       ro.disconnect();
       renderer.domElement.removeEventListener('wheel', onWheelZoom);
       renderer.domElement.removeEventListener('mousedown', onCanvasMouseDown);
       renderer.domElement.removeEventListener('mouseup', onCanvasMouseUp);
+      renderer.domElement.removeEventListener('dblclick', onCanvasDblClick);
       controls?.dispose();
       if (mesh) scene.remove(mesh);
       geometry.dispose();

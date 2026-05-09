@@ -13,7 +13,7 @@ macOS / Linux 下配对同样走 **设置 → 与网站配对**（与 Windows �
 ## 前置
 
 1. 在仓库根 **`local-companion/`** 已执行 **`npm ci`**（或 `npm install`），以便打包脚本 **esbuild** 能解析 `yauzl` 等依赖并生成 **`local-companion-bundle/`**（该目录已 `.gitignore`，由 `npm run bundle:local-companion` 生成）。
-2. **开发** `npm start`：本机 **`node`** 在 PATH 中（≥20），并用 **`tsx`** 跑 `src/main.ts`；可设 **`COMPANION_NODE`** 指定自定义 Node。
+2. **开发** `npm start`：本机 **`node`** 在 PATH 中（≥20）；若 `local-companion/node_modules/tsx` 存在，壳会以 **`tsx watch src/main.ts`** 拉起伴侣（保存源码后**自动重启**进程）；否则回退为 `node --import tsx`。可设 **`COMPANION_NODE`** 指定自定义 Node。
 3. **安装包**（`dist:win` / `dist:portable`）：最终用户**无需**单独安装 Node；壳用 **Electron 二进制 + `ELECTRON_RUN_AS_NODE`** 启动内置的 **`main.cjs`**（**CommonJS**）单文件伴侣进程（勿用 ESM `main.mjs`，否则 **yauzl** 会 **dynamic require** 崩）。
 
 ## 启动

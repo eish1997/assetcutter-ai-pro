@@ -3,6 +3,9 @@
  */
 
 import type { ImageLocalEditSelection } from '../types';
+
+/** 指针取色离屏缓冲最长边上限（贴回后等距柱可达 8k+，全尺寸 buffer 会严重拖慢主线程） */
+export const IMAGE_PREVIEW_PIXEL_SAMPLE_MAX_EDGE = 2048;
 import { tightPixelBBoxForLocalEdit } from './localInpaintGemini';
 
 export type ImageContentMetrics = {
@@ -84,6 +87,29 @@ export function readRgbFromCanvas(canvas: HTMLCanvasElement, ix: number, iy: num
   } catch {
     return null;
   }
+}
+
+/**
+ * `canvas` 由整张 naturalW×naturalH 图等比缩放到 `canvas.width/height` 时，
+ * 按自然像素格 (ix,iy) 映射后取色（供缩小后的取色缓冲使用）。
+ */
+export function readRgbFromCanvasMappedNatural(
+  canvas: HTMLCanvasElement,
+  naturalW: number,
+  naturalH: number,
+  ix: number,
+  iy: number
+): ImagePixelRgb | null {
+  const tw = canvas.width;
+  const th = canvas.height;
+  if (tw < 1 || th < 1 || naturalW < 1 || naturalH < 1) return null;
+  const cix = Math.min(naturalW - 1, Math.max(0, ix));
+  const ciy = Math.min(naturalH - 1, Math.max(0, iy));
+  const x = ((cix + 0.5) / naturalW) * tw - 0.5;
+  const y = ((ciy + 0.5) / naturalH) * th - 0.5;
+  const xi = Math.min(tw - 1, Math.max(0, Math.round(x)));
+  const yi = Math.min(th - 1, Math.max(0, Math.round(y)));
+  return readRgbFromCanvas(canvas, xi, yi);
 }
 
 export function localToNaturalPoint(

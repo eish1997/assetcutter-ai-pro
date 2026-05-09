@@ -8,7 +8,8 @@
   "scripts": {
     "start": "electron .",
     "pack": "npm run bundle:local-companion && electron-builder --dir",
-    "bundle:local-companion": "node ./scripts/bundle-local-companion-runtime.cjs",
+    "copy:sam-local-bundled": "node ./scripts/copy-sam-local-for-desktop.cjs",
+    "bundle:local-companion": "node ./scripts/copy-sam-local-for-desktop.cjs && node ./scripts/bundle-local-companion-runtime.cjs",
     "dist:win": "npm run bundle:local-companion && electron-builder --win nsis",
     "dist:portable": "npm run bundle:local-companion && electron-builder --win portable"
   },
@@ -38,6 +39,16 @@
       {
         "from": "local-companion-bundle",
         "to": "local-companion-bundle",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "sam-local-bundled",
+        "to": "sam-local-bundled",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "sam-local-bootstrap",
+        "to": "sam-local-bootstrap",
         "filter": ["**/*"]
       }
     ],

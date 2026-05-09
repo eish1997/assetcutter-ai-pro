@@ -33,6 +33,23 @@ const AdminCompanionArtifactsPanel: React.FC = () => {
   const [label, setLabel] = useState('');
   const [file, setFile] = useState<File | null>(null);
 
+  const PLATFORM_OPTIONS = [
+    { value: 'win32', label: 'win32（Windows）' },
+    { value: 'darwin', label: 'darwin（macOS）' },
+    { value: 'linux', label: 'linux' },
+    { value: 'universal', label: 'universal（全平台一条，宿主 ZIP 等）' },
+    { value: 'all', label: 'all（同 universal）' },
+  ] as const;
+
+  const applySamLocalHostBundlePreset = () => {
+    setKind('host_plugin_bundle');
+    setPlatform('universal');
+    setLabel('SamLocal 宿主插件包');
+    setNotes(
+      '由仓库根 npm run pack:sam-local-bundle 生成（SamLocal-release/*.zip，须含 extracted/run.json）。详见 SamLocal/host-plugin-bundle/README.md。',
+    );
+  };
+
   const reload = useCallback(async () => {
     setLoading(true);
     setErr(null);
@@ -78,7 +95,7 @@ const AdminCompanionArtifactsPanel: React.FC = () => {
         kind,
         semver: semver.trim(),
         channel: channel.trim() || 'stable',
-        platform: platform.trim() || 'win32',
+        platform: platform.trim().toLowerCase() || 'win32',
         fileName: file.name,
         r2Key: presign.objectKey,
         sha256,
@@ -135,7 +152,12 @@ const AdminCompanionArtifactsPanel: React.FC = () => {
             <div className="mt-1">
               <CustomDropdown
                 value={kind}
-                onChange={(v) => setKind(v as CompanionArtifactKind)}
+                onChange={(v) => {
+                  const nk = v as CompanionArtifactKind;
+                  setKind(nk);
+                  if (nk === 'host_plugin_bundle') setPlatform('universal');
+                  else if (platform === 'universal' || platform === 'all') setPlatform('win32');
+                }}
                 options={[
                   { value: 'desktop_shell', label: 'desktop_shell（Electron 安装包/便携）' },
                   { value: 'host_plugin_bundle', label: 'host_plugin_bundle（宿主可热更插件包）' },
@@ -153,15 +175,17 @@ const AdminCompanionArtifactsPanel: React.FC = () => {
               className="mt-1 w-full rounded-lg border border-[#2e2e32] bg-[#0a0a0b] px-2 py-2 text-[11px] text-gray-200"
             />
           </label>
-          <label className="block text-[10px] text-gray-500">
+          <div className="block text-[10px] text-gray-500">
             平台 platform
-            <input
-              value={platform}
-              onChange={(e) => setPlatform(e.target.value)}
-              placeholder="win32"
-              className="mt-1 w-full rounded-lg border border-[#2e2e32] bg-[#0a0a0b] px-2 py-2 text-[11px] text-gray-200"
-            />
-          </label>
+            <div className="mt-1">
+              <CustomDropdown
+                value={platform}
+                onChange={(v) => setPlatform(v)}
+                options={[...PLATFORM_OPTIONS]}
+                triggerClassName="w-full bg-[#0a0a0b] border border-[#2e2e32] rounded-lg px-3 py-2 text-[11px] text-left text-gray-200 flex items-center justify-between outline-none focus:border-blue-500 hover:bg-[#121214] transition-colors"
+              />
+            </div>
+          </div>
           <label className="block text-[10px] text-gray-500">
             渠道 channel
             <input
@@ -197,14 +221,28 @@ const AdminCompanionArtifactsPanel: React.FC = () => {
             />
           </label>
         </div>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => void onUpload()}
-          className="rounded-lg border border-blue-600 bg-blue-700/80 px-4 py-2 text-[11px] font-bold text-white hover:bg-blue-600 disabled:opacity-45"
-        >
-          {busy ? '处理中…' : '预签名上传并登记'}
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void onUpload()}
+            className="rounded-lg border border-blue-600 bg-blue-700/80 px-4 py-2 text-[11px] font-bold text-white hover:bg-blue-600 disabled:opacity-45"
+          >
+            {busy ? '处理中…' : '预签名上传并登记'}
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={applySamLocalHostBundlePreset}
+            className="rounded-lg border border-[#3f3f46] bg-[#1a1a1c] px-3 py-2 text-[11px] font-bold text-violet-200 hover:bg-[#252528] disabled:opacity-45"
+          >
+            SamLocal 宿主包预设（填表）
+          </button>
+        </div>
+        <p className="text-[10px] text-gray-600 leading-relaxed">
+          全平台同一份 ZIP 选 <code className="text-gray-500">universal</code> 即可被各端扩展目录命中；若另有分平台包且时间更新，
+          <code className="text-gray-500">latest</code> 会优先当前平台的精确条目。
+        </p>
       </div>
 
       <div className="rounded-xl border border-[#2e2e32] overflow-hidden">

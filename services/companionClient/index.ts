@@ -1,7 +1,13 @@
 /**
  * 网站侧访问本机伴侣 HTTP 的统一入口（与总规范 §7 `companion-client` 对齐，P1 起集中扩展）。
  */
-export { probeCompanionHealth, probeCompanionCapabilities, normalizeCompanionBaseUrl, type CompanionProbeResult } from './probe';
+export {
+  probeCompanionHealth,
+  probeCompanionCapabilities,
+  probeCompanionSamSegmentHealth,
+  normalizeCompanionBaseUrl,
+  type CompanionProbeResult,
+} from './probe';
 export {
   listCompanionProjects,
   listCompanionWorkspaceProjects,
@@ -25,6 +31,7 @@ export {
 export {
   submitCompanionJob,
   submitCompanionSeamRepairJob,
+  submitCompanionSamSegmentJob,
   submitCompanionHostBundleProbeJob,
   submitCompanionHostBundleExecJob,
   listCompanionJobs,
@@ -36,6 +43,10 @@ export {
   type CompanionJobEventV1,
   type CompanionSubmitJobBody,
   type CompanionSeamRepairInputsV1,
+  type CompanionSamSegmentInputsV1,
+  type CompanionSamSegmentPromptV1,
+  type CompanionSamSegmentPromptPointV1,
+  type CompanionSamSegmentPromptBoxV1,
   type CompanionHostBundleJobInputsV1,
 } from './compute';
 export { listCompanionHostPluginBundles, type CompanionInstalledHostBundleV1 } from './hostPlugins';

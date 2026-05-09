@@ -31,6 +31,9 @@ jobs:
       - name: Unit tests (Vitest)
         run: npm test
 
+      - name: SamLocal OpenAPI (Spectral)
+        run: npm run lint:openapi
+
       - name: local-companion typecheck
         working-directory: local-companion
         run: |

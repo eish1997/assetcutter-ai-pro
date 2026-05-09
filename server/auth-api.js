@@ -37,7 +37,19 @@ import {
   pickLatestArtifact,
   toPublicSummary,
 } from './companion-artifacts-store.js';
-import { buildElectronAppUpdateYaml } from './companion-electron-feed.js';
+import { buildElectronAppUpdateYaml, publicFileUrlForR2Key } from './companion-electron-feed.js';
+
+/** 公开摘要；host_plugin_bundle 在配置 COMPANION_DIST_PUBLIC_HTTP_BASE 时附带直链（供桌面壳调用伴侣 install-from-url，免登录预签名） */
+function companionArtifactToPublicClient(rec) {
+  const s = toPublicSummary(rec);
+  if (!s) return null;
+  const publicBase = String(process.env.COMPANION_DIST_PUBLIC_HTTP_BASE || '').trim();
+  if (publicBase && rec.kind === 'host_plugin_bundle' && rec.r2Key) {
+    const u = publicFileUrlForR2Key(rec.r2Key, publicBase);
+    if (u) s.publicInstallUrl = u;
+  }
+  return s;
+}
 import { getWorkspaceUsedBytes } from './workspace-storage-usage.js';
 import {
   API_JSON_BODY_MAX_BYTES,
@@ -634,7 +646,7 @@ const server = http.createServer(async (req, res) => {
     if (path === '/api/companion-artifacts/catalog' && req.method === 'GET') {
       const rows = await listCompanionArtifacts();
       json(res, 200, {
-        artifacts: rows.map((r) => toPublicSummary(r)).filter(Boolean),
+        artifacts: rows.map((r) => companionArtifactToPublicClient(r)).filter(Boolean),
       });
       return;
     }
@@ -650,7 +662,7 @@ const server = http.createServer(async (req, res) => {
       const platform = u.searchParams.get('platform') || 'win32';
       const channel = u.searchParams.get('channel') || 'stable';
       const latest = await pickLatestArtifact({ kind, platform, channel });
-      json(res, 200, { latest: toPublicSummary(latest) });
+      json(res, 200, { latest: companionArtifactToPublicClient(latest) });
       return;
     }
 

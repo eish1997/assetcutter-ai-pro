@@ -339,13 +339,17 @@
           const relayConfigured = !!(rt && rt.relay && rt.relay.configured);
           const siteAuthState = rt && rt.siteAuth && typeof rt.siteAuth.state === 'string' ? rt.siteAuth.state : '';
           const relayText = relayConfigured ? (relayRunning ? '站点中转：正常' : '站点中转：未运行') : '站点中转：未配置';
+          const sam = rt && rt.samLocal;
+          const samRunning = !!(sam && sam.running);
+          const samConfigured = !!(sam && sam.configured);
+          const samText = samConfigured ? (samRunning ? 'SamLocal 随启：运行中' : 'SamLocal 随启：未运行') : 'SamLocal 随启：未配置';
           const loginText =
             siteAuthState === 'ready'
               ? '网站登录状态：正常'
               : siteAuthState === 'not_logged_in'
                 ? '网站登录状态：需重新登录'
                 : '网站登录状态：待确认';
-          setQuickStatus(`连接成功（${ms}ms）\n${relayText}\n${loginText}`);
+          setQuickStatus(`连接成功（${ms}ms）\n${relayText}\n${samText}\n${loginText}`);
           renderPlugins(rt.plugins || []);
         } catch (e) {
           setConn(false);

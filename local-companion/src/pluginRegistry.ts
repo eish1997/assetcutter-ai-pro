@@ -1,9 +1,11 @@
 import { listAdapterIds, REGISTERED_COMPUTE_TYPES, listRecentJobs } from './compute/jobsStore.js';
 import { getRelaySupervisorStatus } from './relaySupervisor.js';
+import { getSamLocalSupervisorStatus } from './samLocalSupervisor.js';
 import { getRepositoryRoot, getRepositoryShallowBytesUsed, getRepositorySummary } from './repositoryVolume.js';
 import { listProjectIds } from './storage/projectPaths.js';
 import { getAccessPublicSummary } from './accessGate.js';
 import { getSeamRepairApiUrl, SEAM_ADAPTER_ID } from './compute/seamRepairAdapter.js';
+import { getSamSegmentApiUrl, SAM_SEGMENT_ADAPTER_ID } from './compute/samSegmentAdapter.js';
 import { getPairingSessionSummary } from './pairingSession.js';
 import { countHostPluginBundlesSync, listHostBundlePluginSummariesSync } from './hostPluginBundles.js';
 
@@ -144,7 +146,7 @@ export function buildCapabilitiesPayload() {
       listJobs: 'GET /v1/compute/jobs',
       cancelJob: 'DELETE /v1/compute/jobs/:jobId',
       note:
-        'stub.ping 同步完成；seam_repair 调用 WebSeamRepair（见 COMPANION_SEAM_REPAIR_URL）；host_bundle.exec/probe 按已安装包 run.json 起子进程（COMPANION_HOST_BUNDLE_EXEC_TIMEOUT_MS）。',
+        'stub.ping 同步完成；seam_repair 调用 WebSeamRepair（COMPANION_SEAM_REPAIR_URL）；sam_segment 调用 SamLocal（COMPANION_SAM_SEGMENT_URL）；调试 GET /v1/debug/sam-segment-health（伴侣代探测 SamLocal /health）；host_bundle.exec/probe 按已安装包 run.json 起子进程（COMPANION_HOST_BUNDLE_EXEC_TIMEOUT_MS）。',
       seamRepair: {
         adapterId: SEAM_ADAPTER_ID,
         repairEndpoint: getSeamRepairApiUrl(),
@@ -152,6 +154,13 @@ export function buildCapabilitiesPayload() {
         envTimeoutMs: 'COMPANION_SEAM_REPAIR_TIMEOUT_MS',
         inputs:
           '{ objKey, textureKey, maskKey?, outputKey? } 或 inputs[]（role: mesh|texture|mask）需已 PUT 至当前 projectId',
+      },
+      samSegment: {
+        adapterId: SAM_SEGMENT_ADAPTER_ID,
+        predictEndpoint: getSamSegmentApiUrl(),
+        envUrl: 'COMPANION_SAM_SEGMENT_URL',
+        envTimeoutMs: 'COMPANION_SAM_SEGMENT_TIMEOUT_MS',
+        inputs: '{ imageKey, outputKey } + params.prompt（SamSegmentPromptV1）；资产须已 PUT 至当前 projectId',
       },
     },
     storage: {
@@ -196,6 +205,8 @@ export type RuntimeStatusV1 = {
   storage: { layoutVersion: 1; projectCount: number; projectIds: string[] };
   compute: { recentJobCount: number; recent: ReturnType<typeof listRecentJobs> };
   relay: ReturnType<typeof getRelaySupervisorStatus>;
+  /** 可选：伴侣随启 SamLocal（COMPANION_SPAWN_SAM_LOCAL_CMD） */
+  samLocal: ReturnType<typeof getSamLocalSupervisorStatus>;
   pairing: ReturnType<typeof getPairingSessionSummary>;
   siteAuth: {
     state: 'unknown' | 'ready' | 'not_logged_in' | 'relay_unavailable';
@@ -251,6 +262,7 @@ export function buildRuntimeStatus(httpPort: number): RuntimeStatusV1 {
   const pids = listProjectIds();
   const recent = listRecentJobs(8);
   const relay = getRelaySupervisorStatus();
+  const samLocal = getSamLocalSupervisorStatus();
   return {
     mode: 'standalone-gui',
     httpPort,
@@ -264,6 +276,7 @@ export function buildRuntimeStatus(httpPort: number): RuntimeStatusV1 {
     storage: { layoutVersion: 1, projectCount: pids.length, projectIds: pids },
     compute: { recentJobCount: recent.length, recent },
     relay,
+    samLocal,
     pairing: getPairingSessionSummary(),
     siteAuth: buildSiteAuthSummary(relay),
     access: getAccessPublicSummary(),

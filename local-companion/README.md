@@ -9,7 +9,7 @@
 | **插件** | 本地计算、本机仓库；Relay 可通过 **`COMPANION_RELAY_CMD`** 子进程拉起（`capabilities.relay.supervisor`）。计算含 **`stub.ping`**、**`seam_repair`**、**`host_bundle.probe`** / **`host_bundle.exec`**（读 **`host-bundles/<dir>/extracted/run.json`** 后 `spawn`）。 |
 | **宿主插件包** | **`GET /v1/host-plugins/bundles`**、**`POST /v1/host-plugins/install-from-url`**；ZIP 解压至 **`extracted/`**；列表与安装响应含 **`runSpec`**。主站 **`services/companionClient/hostPlugins.ts`**。 |
 | **仓库** | 本机 Volume 根路径（默认 `~/.assetcutter-companion/volume`）、浅层统计；与规范中的 Storage / `AssetHandle` 路线对齐。 |
-| **运行状态** | `GET /v1/runtime-status` 含 `relay` 与 `siteAuth` 摘要：用于托盘识别 Relay 未运行、Token 不一致、站点登录态异常并给出动作提示。 |
+| **运行状态** | `GET /v1/runtime-status` 含 `relay`、`samLocal`（**`COMPANION_SPAWN_SAM_LOCAL_CMD`** 随启子进程）与 `siteAuth` 摘要：用于托盘识别 Relay / SamLocal 未运行、Token 不一致、站点登录态异常并给出动作提示。 |
 | **存储读取** | `GET /v1/projects/:projectId/assets/:key` 可拉回已 PUT 的二进制（与 `meta` / `PUT` / `DELETE` 同源路径）；主站 `fetchCompanionAssetBlob` 用于修缝闭环加载输出贴图。 |
 | **manifest 扫盘补登记** | `POST /v1/projects/:projectId/manifest/reconcile`：磁盘上已有 `object` 但 `manifest.json` 缺条时补写；主站 `reconcileCompanionManifestFromDisk`，打开项目时若缺键先 reconcile 再重拉 manifest（见 `docs/本地伴侣-本地程序开发.md` **§3.1**）。 |
 | **项目文件 I/O（兼容保留，已弃用）** | `POST /v1/projects/save-as` 与 `POST /v1/projects/open`：仅为历史兼容保留；主路径已切换到 `workspace root` 目录项目 API（`/v1/workspace/projects*`）。 |

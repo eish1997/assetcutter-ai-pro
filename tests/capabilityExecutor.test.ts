@@ -13,11 +13,15 @@ const {
   mockSubmitExec,
   mockGetCompanionBase,
   mockNormalizeCompanionBaseUrl,
+  mockNaturalSizeFromImageDataUrl,
+  mockRunSamSegmentFromDataUrl,
 } = vi.hoisted(() => ({
   mockSubmitProbe: vi.fn(),
   mockSubmitExec: vi.fn(),
   mockGetCompanionBase: vi.fn(),
   mockNormalizeCompanionBaseUrl: vi.fn(),
+  mockNaturalSizeFromImageDataUrl: vi.fn(),
+  mockRunSamSegmentFromDataUrl: vi.fn(),
 }));
 
 vi.mock('../services/companionClient/compute', () => ({
@@ -28,6 +32,11 @@ vi.mock('../services/companionClient/compute', () => ({
 vi.mock('../services/companionLocalPrefs', () => ({
   getCompanionLocalBaseUrl: mockGetCompanionBase,
   normalizeCompanionBaseUrl: mockNormalizeCompanionBaseUrl,
+}));
+
+vi.mock('../services/lightboxSamSegment', () => ({
+  naturalSizeFromImageDataUrl: mockNaturalSizeFromImageDataUrl,
+  runSamSegmentFromDataUrl: mockRunSamSegmentFromDataUrl,
 }));
 
 function makePreset(id: string): CustomAppModule {
@@ -54,8 +63,11 @@ beforeEach(() => {
   mockSubmitExec.mockReset();
   mockGetCompanionBase.mockReset();
   mockNormalizeCompanionBaseUrl.mockReset();
+  mockNaturalSizeFromImageDataUrl.mockReset();
+  mockRunSamSegmentFromDataUrl.mockReset();
   mockGetCompanionBase.mockReturnValue('http://127.0.0.1:18765/');
   mockNormalizeCompanionBaseUrl.mockImplementation((raw: string) => String(raw).replace(/\/+$/, ''));
+  mockNaturalSizeFromImageDataUrl.mockResolvedValue({ w: 100, h: 80 });
 });
 
 describe('validateCapabilitySetGraph', () => {
@@ -298,5 +310,89 @@ describe('executeCapability: companion host bundle', () => {
     expect(result.ok).toBe(false);
     if (result.ok !== false) throw new Error('expected failed result');
     expect(result.error).toContain('ECONNREFUSED');
+  });
+});
+
+describe('executeCapability: companion SAM segment', () => {
+  const samPreset = (): CustomAppModule => ({
+    id: 'companion-sam',
+    label: '本机智能分割',
+    category: 'image_to_image',
+    engine: 'builtin',
+    instruction: '',
+    companionSamSegment: true,
+  });
+
+  /** 1×1 PNG，满足 hasUsableImageBase64 */
+  const tinyPng =
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+
+  it('未选择项目时返回明确错误', async () => {
+    const result = await executeCapability(samPreset(), tinyPng, {
+      workflowAssetId: 'asset-1',
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok !== false) throw new Error('expected failure');
+    expect(result.error).toContain('未选择工作区项目');
+    expect(mockRunSamSegmentFromDataUrl).not.toHaveBeenCalled();
+  });
+
+  it('缺少工作流资产 id 时返回明确错误', async () => {
+    const result = await executeCapability(samPreset(), tinyPng, { companionProjectId: 'proj-1' });
+    expect(result.ok).toBe(false);
+    if (result.ok !== false) throw new Error('expected failure');
+    expect(result.error).toContain('工作流资产上下文');
+    expect(mockRunSamSegmentFromDataUrl).not.toHaveBeenCalled();
+  });
+
+  it('无法读取图像尺寸时失败', async () => {
+    mockNaturalSizeFromImageDataUrl.mockResolvedValueOnce(null);
+    const result = await executeCapability(samPreset(), tinyPng, {
+      companionProjectId: 'proj-1',
+      workflowAssetId: 'asset-1',
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok !== false) throw new Error('expected failure');
+    expect(result.error).toContain('无法读取图像尺寸');
+    expect(mockRunSamSegmentFromDataUrl).not.toHaveBeenCalled();
+  });
+
+  it('成功时以图像中心为前景点并返回 mask', async () => {
+    const outMask = 'data:image/png;base64,QUJD';
+    mockRunSamSegmentFromDataUrl.mockResolvedValue({
+      ok: true,
+      resultDataUrl: outMask,
+      outputCompanionKey: 'wf-res/x',
+      imageCompanionKey: 'wf-orig/y',
+    });
+
+    const result = await executeCapability(samPreset(), tinyPng, {
+      companionProjectId: 'proj-1',
+      workflowAssetId: 'asset-1',
+      workflowSourceDisplayKey: 'v1',
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok !== true || result.kind !== 'image') throw new Error('expected image');
+    expect(result.image).toBe(outMask);
+    expect(mockRunSamSegmentFromDataUrl).toHaveBeenCalledTimes(1);
+    const arg = mockRunSamSegmentFromDataUrl.mock.calls[0]![0];
+    expect(arg.projectId).toBe('proj-1');
+    expect(arg.assetId).toBe('asset-1');
+    expect(arg.displayKey).toBe('v1');
+    expect(arg.pick).toEqual({ ix: 50, iy: 40, nw: 100, nh: 80 });
+    expect(arg.dataUrl).toMatch(/^data:image\/png;base64,/);
+    expect(arg.resultKey).toMatch(/^ac_internal_sam_/);
+  });
+
+  it('runSamSegmentFromDataUrl 失败时透传错误', async () => {
+    mockRunSamSegmentFromDataUrl.mockResolvedValue({ ok: false, error: '伴侣未响应' });
+    const result = await executeCapability(samPreset(), tinyPng, {
+      companionProjectId: 'proj-1',
+      workflowAssetId: 'asset-1',
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok !== false) throw new Error('expected failure');
+    expect(result.error).toContain('伴侣未响应');
   });
 });

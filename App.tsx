@@ -4860,6 +4860,7 @@ const MainApp: React.FC = () => {
                   onAiInvocationSurfaceChange={() => setAiInvocationStatusRev((n) => n + 1)}
                   aiSettingsSyncRev={aiInvocationStatusRev}
                   activeWorkspaceProjectId={activeWorkspaceProjectId}
+                  preferenceScope={user?.id ?? null}
                 />
               </Suspense>
             )}

@@ -1,6 +1,10 @@
-import { startCompanionHttpServer } from './httpServer.js';
+import { startCompanionHttpServer, type CompanionHttpServer } from './httpServer.js';
 import { openDefaultBrowser } from './openBrowser.js';
 import { startRelayIfConfigured, stopRelayChild } from './relaySupervisor.js';
+import { startSamLocalIfConfigured, stopSamLocalChild } from './samLocalSupervisor.js';
+
+/** 供信号处理里优雅关端口，避免 tsx watch 重启时 EADDRINUSE */
+let companionHttp: CompanionHttpServer | null = null;
 
 function envPort(): number {
   const raw = process.env.COMPANION_HTTP_PORT?.trim();
@@ -26,29 +30,41 @@ async function main(): Promise<void> {
   }
 
   const srv = await startCompanionHttpServer(port);
+  companionHttp = srv;
   const base = `http://127.0.0.1:${srv.port}`;
   console.log(`[local-companion] 本机管理页 ${base}/（默认不自动打开浏览器；需要时请设置 COMPANION_OPEN_BROWSER=1）`);
   console.log(`[local-companion] health ${base}/v1/health`);
   console.log(`[local-companion] 卷根 COMPANION_VOLUME_ROOT=${process.env.COMPANION_VOLUME_ROOT ?? '(默认 ~/.assetcutter-companion/volume)'}`);
   console.log('[local-companion] 存储 API: GET /v1/projects , GET|PUT /v1/projects/:id/assets/:key');
   console.log(
-    '[local-companion] 计算 API: POST /v1/compute/jobs  body: { type, jobId?, projectId?, inputs? }  试 { "type": "stub.ping" }；宿主包 { "type":"host_bundle.exec","inputs":{"dirName":"<host-bundles 目录名>"} }',
+    '[local-companion] 计算 API: POST /v1/compute/jobs  body: { type, jobId?, projectId?, inputs?, params? }  试 { "type": "stub.ping" }；sam_segment 见 COMPANION_SAM_SEGMENT_URL；调试 GET /v1/debug/sam-segment-health；宿主包 { "type":"host_bundle.exec","inputs":{"dirName":"<host-bundles 目录名>"} }',
   );
   console.log('[local-companion] 宿主插件包: GET /v1/host-plugins/bundles , POST /v1/host-plugins/install-from-url（ZIP 将解压至 host-bundles/<ver>/extracted/）');
 
   startRelayIfConfigured();
+  startSamLocalIfConfigured();
 
   if (shouldOpenBrowser()) {
     setTimeout(() => openDefaultBrowser(`${base}/`), 500);
   }
 }
 
-const onShutdown = () => {
+async function shutdown() {
   stopRelayChild();
+  stopSamLocalChild();
+  try {
+    if (companionHttp) {
+      await companionHttp.close();
+      companionHttp = null;
+    }
+  } catch (e) {
+    console.error('[local-companion] HTTP 关闭异常', e);
+  }
   process.exit(0);
-};
-process.once('SIGINT', onShutdown);
-process.once('SIGTERM', onShutdown);
+}
+
+process.once('SIGINT', () => void shutdown());
+process.once('SIGTERM', () => void shutdown());
 
 main().catch((e) => {
   console.error('[local-companion] 启动失败', e);

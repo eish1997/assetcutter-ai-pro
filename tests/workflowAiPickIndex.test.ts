@@ -27,6 +27,7 @@ describe('workflowAiPickIndex', () => {
         'tripo_service',
         'tencent_service',
         'http_video_bridge_upstream',
+        'local_companion_sam',
       ])
     );
   });
@@ -41,6 +42,12 @@ describe('workflowAiPickIndex', () => {
 
   it('与 §1.4.3 一致的 capability_executor → unified_ai_gateway', () => {
     expect(WORKFLOW_AI_PICK_EDGES.some((e) => e.from === 'capability_executor' && e.to === 'unified_ai_gateway')).toBe(
+      true
+    );
+  });
+
+  it('本机智能分割：capability_executor → local_companion_sam', () => {
+    expect(WORKFLOW_AI_PICK_EDGES.some((e) => e.from === 'capability_executor' && e.to === 'local_companion_sam')).toBe(
       true
     );
   });

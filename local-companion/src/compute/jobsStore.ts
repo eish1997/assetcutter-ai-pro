@@ -4,6 +4,11 @@ import {
   runSeamRepairJob,
   SEAM_ADAPTER_ID,
 } from './seamRepairAdapter.js';
+import {
+  resolveSamSegmentKeys,
+  runSamSegmentJob,
+  SAM_SEGMENT_ADAPTER_ID,
+} from './samSegmentAdapter.js';
 import { HOST_BUNDLE_ADAPTER_ID, runHostBundlePhase } from './hostBundleExecAdapter.js';
 
 export type JobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
@@ -15,7 +20,7 @@ export type JobRecordV1 = {
   status: JobStatus;
   createdAt: number;
   updatedAt: number;
-  result?: { note?: string; adapterId?: string };
+  result?: { note?: string; adapterId?: string; samMultimaskKeys?: string[] };
   error?: { code: string; message?: string };
 };
 
@@ -49,6 +54,10 @@ export const REGISTERED_COMPUTE_TYPES: Record<string, { adapterId: string; descr
   seam_repair: {
     adapterId: SEAM_ADAPTER_ID,
     description: '贴图修缝：读 Volume 内 OBJ/贴图/Mask，调用 WebSeamRepair /api/repair',
+  },
+  sam_segment: {
+    adapterId: SAM_SEGMENT_ADAPTER_ID,
+    description: '本机分割：读 Volume 内图像与 params.prompt，调用 SamLocal /v1/segment/predict，写回 mask PNG',
   },
   'host_bundle.exec': {
     adapterId: HOST_BUNDLE_ADAPTER_ID,
@@ -165,6 +174,46 @@ export async function submitJob(
         });
       }
     }
+  } else if (type === 'sam_segment') {
+    const resolved = resolveSamSegmentKeys(projectId, b.inputs, b.params ?? {});
+    if ('error' in resolved) {
+      rec.status = 'failed';
+      rec.error = { code: resolved.code, message: resolved.error };
+      emitJobEvent(jobId, 'task.failed', { code: resolved.code, message: resolved.error });
+    } else {
+      rec.status = 'running';
+      rec.updatedAt = Date.now();
+      jobs.set(jobId, rec);
+      emitJobEvent(jobId, 'task.running', {
+        adapterId: SAM_SEGMENT_ADAPTER_ID,
+        stage: 'start',
+      });
+      const pid = projectId as string;
+      emitJobEvent(jobId, 'reply.delta', {
+        stage: 'dispatch',
+        text: 'sam_segment dispatched to local SamLocal',
+      });
+      const run = await runSamSegmentJob(pid, resolved.ok);
+      if ('error' in run) {
+        rec.status = 'failed';
+        rec.error = { code: run.code, message: run.error };
+        emitJobEvent(jobId, 'task.failed', { code: run.code, message: run.error });
+      } else {
+        rec.status = 'completed';
+        rec.result = {
+          adapterId: SAM_SEGMENT_ADAPTER_ID,
+          note: `PNG → asset key=${run.outputKey} (${run.bytesOut} bytes)`,
+          ...(run.samMultimaskKeys?.length ? { samMultimaskKeys: run.samMultimaskKeys } : {}),
+        };
+        emitJobEvent(jobId, 'reply.completed', {
+          adapterId: SAM_SEGMENT_ADAPTER_ID,
+          outputKey: run.outputKey,
+          bytesOut: run.bytesOut,
+          note: rec.result.note ?? '',
+          ...(run.samMultimaskKeys?.length ? { samMultimaskKeys: run.samMultimaskKeys } : {}),
+        });
+      }
+    }
   } else if (type === 'host_bundle.exec' || type === 'host_bundle.probe') {
     rec.status = 'running';
     rec.updatedAt = Date.now();
@@ -248,6 +297,7 @@ export function listAdapterIds(): string[] {
   const s = new Set<string>();
   s.add(ADAPTER_STUB);
   s.add(SEAM_ADAPTER_ID);
+  s.add(SAM_SEGMENT_ADAPTER_ID);
   s.add(HOST_BUNDLE_ADAPTER_ID);
   for (const v of Object.values(REGISTERED_COMPUTE_TYPES)) {
     s.add(v.adapterId);

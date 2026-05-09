@@ -57,6 +57,7 @@ import {
   type CompanionInstalledHostBundleV1,
   probeCompanionCapabilities,
   probeCompanionHealth,
+  probeCompanionSamSegmentHealth,
 } from '../services/companionClient';
 import {
   clearCompanionJobCursor,
@@ -72,6 +73,10 @@ import { companionJobStatusHuman } from '../services/companionJobStatusHuman';
 import { CustomDropdown, DROPDOWN_TRIGGER_COMPACT } from './ui/CustomDropdown';
 import type { AuthUser } from '../services/authClient';
 import { refreshModelOpsConfig } from '../services/modelRegistry/opsConfig';
+import {
+  readPanoLocalInpaintShrinkToBase,
+  writePanoLocalInpaintShrinkToBase,
+} from '../services/lightboxPanoLocalInpaintPrefs';
 
 const SETTINGS_NAV: { id: string; label: string }[] = [
   { id: 'settings-user', label: '用户' },
@@ -91,6 +96,20 @@ const AI_PROVIDER_OPTIONS: { value: AiProvider; label: string }[] = [
 ];
 
 const COMPANION_SETTINGS_STREAM_STATE_KEY = 'ac_companion_settings_stream_state_v2';
+
+/** 供用户贴到「运行本机伴侣」的终端 / 系统环境变量（非浏览器 localStorage） */
+const SAM_LOCAL_ENV_SNIPPET = `# 本机分割：运行 local-companion 或桌面壳的进程环境中设置（默认 predict URL 与伴侣内置一致时可省略第一行）
+
+COMPANION_SAM_SEGMENT_URL=http://127.0.0.1:18081/v1/segment/predict
+
+# 可选：伴侣启动时随启 SamLocal（开发机）— 将下一行 REPO_ROOT 换成你的仓库根目录绝对路径
+COMPANION_SPAWN_SAM_LOCAL_CMD=npm run dev:sam-local
+COMPANION_SPAWN_SAM_LOCAL_CWD=REPO_ROOT
+
+# 一键栈等价：仓库根执行 npm run dev:companion-sam-stack（勿与上两行重复配置）
+# 首次真实分割环境：仓库根 npm run setup:sam-local（pip + 下载 ViT-B），见 docs/本机分割一键安装指南.md
+# SamLocal 真实分割：设置 SAM_MODE=sam，见 docs/本机分割故障排除.md
+`;
 
 const TERMINAL_JOB_EVENT_TYPES = new Set<CompanionJobEventV1['type']>([
   'reply.completed',
@@ -112,6 +131,8 @@ const SettingsSection: React.FC<{
   aiSettingsSyncRev?: number;
   /** 当前打开的工作区项目 id；写入宿主包计算任务元数据便于排查（伴侣侧可不消费） */
   activeWorkspaceProjectId?: string | null;
+  /** 与 `WorkflowSection` 一致，用于全景贴回偏好键隔离 */
+  preferenceScope?: string | null;
 }> = ({
   currentUser = null,
   authLoading = false,
@@ -120,6 +141,7 @@ const SettingsSection: React.FC<{
   onAiInvocationSurfaceChange,
   aiSettingsSyncRev = 0,
   activeWorkspaceProjectId = null,
+  preferenceScope = null,
 }) => {
   const contentRef = useRef<HTMLDivElement>(null);
   const [aiProvider, setAiProviderState] = useState<AiProvider>(DEFAULT_AI_PROVIDER);
@@ -150,6 +172,9 @@ const SettingsSection: React.FC<{
   const [companionCapSnippet, setCompanionCapSnippet] = useState('');
   const [companionRelaySnippet, setCompanionRelaySnippet] = useState('');
   const [companionSeamSnippet, setCompanionSeamSnippet] = useState('');
+  const [companionSamSnippet, setCompanionSamSnippet] = useState('');
+  const [companionSamHealthBusy, setCompanionSamHealthBusy] = useState(false);
+  const [companionSamHealthSnippet, setCompanionSamHealthSnippet] = useState('');
   const [companionProjectsBusy, setCompanionProjectsBusy] = useState(false);
   const [companionProjectsSnippet, setCompanionProjectsSnippet] = useState('');
   const [companionJobIdDraft, setCompanionJobIdDraft] = useState('');
@@ -167,6 +192,11 @@ const SettingsSection: React.FC<{
   const [hostBundleExecBusy, setHostBundleExecBusy] = useState(false);
   const [hostBundleExecHint, setHostBundleExecHint] = useState('');
   const [debugLogPersistEnabled, setDebugLogPersistEnabledState] = useState(false);
+  const [panoInpaintShrinkToBase, setPanoInpaintShrinkToBase] = useState(false);
+
+  useEffect(() => {
+    setPanoInpaintShrinkToBase(readPanoLocalInpaintShrinkToBase(preferenceScope));
+  }, [preferenceScope]);
 
   useEffect(() => {
     const u = userUiPrefs.avatarUrl.trim();
@@ -197,6 +227,17 @@ const SettingsSection: React.FC<{
     } catch {
       setCompanionProbeHint('复制失败：请手动复制浏览器地址栏中的站点根地址');
       setTimeout(() => setCompanionProbeHint(''), 3200);
+    }
+  };
+
+  const handleCopySamLocalEnvSnippet = async () => {
+    try {
+      await navigator.clipboard.writeText(SAM_LOCAL_ENV_SNIPPET);
+      setCompanionProbeHint('已复制 SamLocal 环境变量示例；请将 REPO_ROOT 换成本机仓库根路径后写入伴侣启动环境');
+      setTimeout(() => setCompanionProbeHint(''), 4200);
+    } catch {
+      setCompanionProbeHint('复制失败：请手动从 docs/本机分割故障排除.md 对照填写');
+      setTimeout(() => setCompanionProbeHint(''), 4200);
     }
   };
 
@@ -370,6 +411,8 @@ const SettingsSection: React.FC<{
     setCompanionCapSnippet('');
     setCompanionRelaySnippet('');
     setCompanionSeamSnippet('');
+    setCompanionSamSnippet('');
+    setCompanionSamHealthSnippet('');
     try {
       const [h, c] = await Promise.all([probeCompanionHealth(base), probeCompanionCapabilities(base)]);
       const parts: string[] = [];
@@ -391,9 +434,13 @@ const SettingsSection: React.FC<{
           const relay = cap.relay;
           const compute = cap.compute as Record<string, unknown> | undefined;
           const seamRepair = compute?.seamRepair;
+          const samSegment = compute?.samSegment;
           setCompanionRelaySnippet(relay != null ? JSON.stringify(relay, null, 2) : '（capabilities 无 relay）');
           setCompanionSeamSnippet(
             seamRepair != null ? JSON.stringify(seamRepair, null, 2) : '（capabilities.compute 无 seamRepair）',
+          );
+          setCompanionSamSnippet(
+            samSegment != null ? JSON.stringify(samSegment, null, 2) : '（capabilities.compute 无 samSegment）',
           );
         }
       } else {
@@ -402,6 +449,24 @@ const SettingsSection: React.FC<{
       setCompanionProbeHint(parts.join('；'));
     } finally {
       setCompanionProbeBusy(false);
+    }
+  };
+
+  const handleProbeSamSegmentHealth = async () => {
+    const base = normalizeCompanionBaseUrl(companionBaseDraft);
+    setCompanionSamHealthBusy(true);
+    setCompanionSamHealthSnippet('');
+    try {
+      const r = await probeCompanionSamSegmentHealth(base);
+      if (r.ok === false) {
+        setCompanionSamHealthSnippet(`请求失败：${r.error ?? '未知错误'}`);
+        return;
+      }
+      setCompanionSamHealthSnippet(JSON.stringify(r.body, null, 2));
+    } catch (e) {
+      setCompanionSamHealthSnippet(String(e));
+    } finally {
+      setCompanionSamHealthBusy(false);
     }
   };
 
@@ -480,8 +545,12 @@ const SettingsSection: React.FC<{
     setHostBundleBusy(true);
     setHostBundleHint('');
     try {
-      const { semver } = await installLatestHostPluginBundleToCompanion();
-      setHostBundleHint(`已写入本机卷 host-bundles/，版本 ${semver}。运行时状态见 /v1/runtime-status 中 hostPluginBundles。`);
+      const { semver, installUrlSource } = await installLatestHostPluginBundleToCompanion();
+      const via =
+        installUrlSource === 'public' ? '（经公网直链，未走预签名下载）' : '（经登录预签名下载）';
+      setHostBundleHint(
+        `已写入本机卷 host-bundles/，版本 ${semver}。${via} 运行时状态见 /v1/runtime-status 中 hostPluginBundles。`,
+      );
       void handleRefreshHostBundles();
     } catch (e) {
       setHostBundleHint(e instanceof Error ? e.message : String(e));
@@ -935,6 +1004,27 @@ const SettingsSection: React.FC<{
                     仅用于排障：不记录 API Key、不记录完整图片 base64。关闭后立即停止写入。
                   </p>
                 </div>
+                <div className="rounded-lg border border-[#2e2e32] bg-[#16161a] p-3 space-y-2">
+                  <p className="text-gray-300 font-semibold">全景局部重绘贴回</p>
+                  <label className="inline-flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={panoInpaintShrinkToBase}
+                      onChange={(e) => {
+                        const next = e.target.checked;
+                        setPanoInpaintShrinkToBase(next);
+                        writePanoLocalInpaintShrinkToBase(preferenceScope, next);
+                      }}
+                    />
+                    <span className="text-[10px] text-gray-300">
+                      固定为原图尺寸（先高分辨率贴回，再缩小到底图宽高）
+                    </span>
+                  </label>
+                  <p className="text-[9px] text-gray-500 leading-relaxed">
+                    关闭时贴回结果可与原全景分辨率不同（通常更大），局部更细。开启后输出与当前底图同宽高，仍比「始终用 1k
+                    栅格贴回」更清晰。
+                  </p>
+                </div>
               </div>
             </section>
 
@@ -948,6 +1038,42 @@ const SettingsSection: React.FC<{
                     <li>点击「一键连接本机伴侣」</li>
                     <li>如果失败，再点「重新检测」看提示</li>
                   </ol>
+                </div>
+                <div className="rounded-lg border border-violet-500/25 bg-[#14101c]/90 p-3 space-y-2">
+                  <p className="text-[11px] text-gray-200 font-semibold">本机分割（SamLocal）</p>
+                  <p className="text-[10px] text-gray-500 leading-relaxed">
+                    工作区大图「本机分割」由<strong className="text-gray-400">伴侣进程</strong>调用 SamLocal（默认{' '}
+                    <code className="text-violet-200/90">http://127.0.0.1:18081/v1/segment/predict</code>
+                    ）。请在运行伴侣的环境中设置{' '}
+                    <code className="text-violet-200/90">COMPANION_SAM_SEGMENT_URL</code>，并在本机执行仓库根目录{' '}
+                    <code className="text-violet-200/90">npm run dev:sam-local</code> 启动 SamLocal。
+                    首次在本机启用 <strong className="text-gray-400">SAM_MODE=sam</strong> 前，可在仓库根执行{' '}
+                    <code className="text-violet-200/90">npm run setup:sam-local</code>（安装 Python 依赖并下载 ViT-B 权重，约数百 MB）。
+                    企业与离线场景见 <code className="text-gray-400">docs/本机分割一键安装指南.md</code>；日常排障见{' '}
+                    <code className="text-gray-400">docs/本机分割故障排除.md</code>。
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void handleProbeSamSegmentHealth()}
+                      disabled={companionSamHealthBusy || companionProbeBusy}
+                      className="px-3 py-1.5 rounded-lg border border-violet-500/35 bg-violet-950/40 text-[10px] font-bold text-violet-100 hover:bg-violet-900/45 transition-colors disabled:opacity-50"
+                    >
+                      {companionSamHealthBusy ? '探测中…' : '探测 SamLocal（经伴侣）'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleCopySamLocalEnvSnippet()}
+                      className="px-3 py-1.5 rounded-lg border border-[#3f3f46] bg-[#1a1625] text-[10px] font-bold text-violet-200/90 hover:bg-[#252030] transition-colors"
+                    >
+                      复制环境变量示例
+                    </button>
+                  </div>
+                  {companionSamHealthSnippet ? (
+                    <pre className="text-[9px] text-gray-500 whitespace-pre-wrap break-all max-h-36 overflow-y-auto rounded border border-[#2e2e32] bg-[#101014] p-2">
+                      {companionSamHealthSnippet}
+                    </pre>
+                  ) : null}
                 </div>
                 <p className="text-[11px] text-gray-300 leading-relaxed">
                   想在本机处理素材，直接点「一键连接本机伴侣」。若本机开启了访问控制，请在下方填写与桌面壳或本机伴侣一致的
@@ -1049,8 +1175,11 @@ const SettingsSection: React.FC<{
                     <p className="text-[10px] text-gray-500 leading-relaxed">
                       <span className="text-gray-400 font-bold">宿主插件包</span>（如大模型 / Segment Anything
                       runtime）：管理员在后台登记为 <code className="text-gray-500">host_plugin_bundle</code>{' '}
-                      后，可从此处拉取到本机卷（需已登录主站、本机伴侣可连，且下载 URL 须为 https 且主机在 R2
-                      允许域或环境变量 <code className="text-gray-500">COMPANION_HOST_BUNDLE_TRUST_HOSTS</code>）。
+                      后，可从此处拉取到本机卷（本机伴侣可连；下载为 https。若主站已配置{' '}
+                      <code className="text-gray-500">COMPANION_DIST_PUBLIC_HTTP_BASE</code>，「安装最新」可优先走**公网直链**而无需预签名；否则需**已登录**以获取预签名 URL。主机须在 R2
+                      允许域或 <code className="text-gray-500">COMPANION_HOST_BUNDLE_TRUST_HOSTS</code>）。
+                      SamLocal 示例包：仓库 <code className="text-gray-500">npm run pack:sam-local-bundle</code>，见{' '}
+                      <code className="text-gray-500">SamLocal/host-plugin-bundle/README.md</code>。
                     </p>
                     <button
                       type="button"
@@ -1182,6 +1311,14 @@ const SettingsSection: React.FC<{
                         <summary className="cursor-pointer text-[9px] font-bold text-gray-500">本机修缝能力</summary>
                         <pre className="mt-2 text-[9px] text-gray-500 whitespace-pre-wrap break-all max-h-32 overflow-y-auto">
                           {companionSeamSnippet}
+                        </pre>
+                      </details>
+                    ) : null}
+                    {companionSamSnippet ? (
+                      <details className="rounded-lg border border-[#2e2e32] bg-[#101014] p-2">
+                        <summary className="cursor-pointer text-[9px] font-bold text-gray-500">本机分割能力（samSegment）</summary>
+                        <pre className="mt-2 text-[9px] text-gray-500 whitespace-pre-wrap break-all max-h-32 overflow-y-auto">
+                          {companionSamSnippet}
                         </pre>
                       </details>
                     ) : null}

@@ -6,8 +6,9 @@ import {
   previewPolicyForMode,
 } from './preview';
 import {
+  IMAGE_PREVIEW_PIXEL_SAMPLE_MAX_EDGE,
   imageNaturalIndicesFromClientPoint,
-  readRgbFromCanvas,
+  readRgbFromCanvasMappedNatural,
 } from '../services/imagePreviewPointerGeometry';
 import { Box, Contrast, Globe2, Image as ImageIcon, X } from 'lucide-react';
 import { readLocalString, writeLocalString } from '../services/clientPersist';
@@ -190,6 +191,10 @@ export type ImagePreviewOverlayProps = {
   onFlatImagePixelSample?: (rgb: { r: number; g: number; b: number } | null) => void;
   /** 平面 / 全景 / 3D 切换时通知父级（用于大图标注按模式分桶） */
   onPreviewLayoutChange?: (layout: 'flat' | 'pano' | 'model3d') => void;
+  /**
+   * 为真时：平面主图不响应缩放/平移等 `onMouseDown` 手势（如本机 SAM 武装时点选/框选需独占指针）。
+   */
+  suppressFlatImageInteraction?: boolean;
 };
 
 export type FlatImageOverlayContext = {
@@ -264,6 +269,7 @@ export function ImagePreviewOverlay({
   panoViewerRef: panoViewerRefProp,
   onFlatImagePixelSample,
   onPreviewLayoutChange,
+  suppressFlatImageInteraction = false,
 }: ImagePreviewOverlayProps) {
   const [previewLayout, setPreviewLayout] = useState<'flat' | 'pano' | 'model3d'>('flat');
 
@@ -319,12 +325,19 @@ export function ImagePreviewOverlay({
     const srcKey = `${String(imageSrc ?? '')}|${nw}x${nh}`;
     if (pixelSampleCanvasRef.current && pixelSampleMetaRef.current === srcKey) return true;
     try {
+      const maxDim = Math.max(nw, nh);
+      const scale =
+        maxDim > IMAGE_PREVIEW_PIXEL_SAMPLE_MAX_EDGE ? IMAGE_PREVIEW_PIXEL_SAMPLE_MAX_EDGE / maxDim : 1;
+      const tw = Math.max(1, Math.floor(nw * scale));
+      const th = Math.max(1, Math.floor(nh * scale));
       const c = document.createElement('canvas');
-      c.width = nw;
-      c.height = nh;
+      c.width = tw;
+      c.height = th;
       const ctx = c.getContext('2d', { willReadFrequently: true });
       if (!ctx) return false;
-      ctx.drawImage(img, 0, 0);
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(img, 0, 0, nw, nh, 0, 0, tw, th);
       pixelSampleCanvasRef.current = c;
       pixelSampleMetaRef.current = srcKey;
       return true;
@@ -437,7 +450,13 @@ export function ImagePreviewOverlay({
         onFlatImagePixelSample(null);
         return;
       }
-      const rgb = readRgbFromCanvas(canvas, idx.ix, idx.iy);
+      const nw = img.naturalWidth;
+      const nh = img.naturalHeight;
+      if (!nw || !nh) {
+        onFlatImagePixelSample(null);
+        return;
+      }
+      const rgb = readRgbFromCanvasMappedNatural(canvas, nw, nh, idx.ix, idx.iy);
       onFlatImagePixelSample(rgb);
     };
     window.addEventListener('pointermove', onMove, { passive: true });
@@ -982,16 +1001,20 @@ export function ImagePreviewOverlay({
                     ? `block max-h-full max-w-full object-contain rounded-xl select-none ${
                         panoAnnotationBridge
                           ? 'pointer-events-none cursor-default opacity-0'
-                          : canvasPanArmed
-                            ? 'cursor-grab active:cursor-grabbing'
-                            : 'cursor-zoom-in'
+                          : suppressFlatImageInteraction
+                            ? 'pointer-events-none'
+                            : canvasPanArmed
+                              ? 'cursor-grab active:cursor-grabbing'
+                              : 'cursor-zoom-in'
                       }`
                     : `block max-h-[88vh] max-w-[92vw] object-contain rounded-xl select-none ${
                         panoAnnotationBridge
                           ? 'pointer-events-none cursor-default opacity-0'
-                          : canvasPanArmed
-                            ? 'cursor-grab active:cursor-grabbing'
-                            : 'cursor-zoom-in'
+                          : suppressFlatImageInteraction
+                            ? 'pointer-events-none'
+                            : canvasPanArmed
+                              ? 'cursor-grab active:cursor-grabbing'
+                              : 'cursor-zoom-in'
                       }`
                 }
                 style={lockedImgStyle}
@@ -1000,7 +1023,7 @@ export function ImagePreviewOverlay({
                 onContextMenu={(e) => e.preventDefault()}
                 onLoad={handleImgLoadGeneral}
                 onDoubleClick={
-                  panoAnnotationBridge
+                  panoAnnotationBridge || suppressFlatImageInteraction
                     ? undefined
                     : (e) => {
                         e.preventDefault();
@@ -1017,7 +1040,9 @@ export function ImagePreviewOverlay({
                       }
                 }
                 ref={imgRef}
-                onMouseDown={panoAnnotationBridge ? undefined : handleImgMouseDown}
+                onMouseDown={
+                  panoAnnotationBridge || suppressFlatImageInteraction ? undefined : handleImgMouseDown
+                }
               />
               {flatImageOverlay ? (
                 // eslint-disable-next-line react-hooks/refs -- 将 ref 对象传入子 render 回调；不在此读取 .current
@@ -1039,6 +1064,7 @@ export function ImagePreviewOverlay({
             <>
               {showModeCycleHint ? <div>Q：循环切换显示模式（平面 / 全景 / 3D）</div> : null}
               <div>拖拽：旋转视角（360° 全景）</div>
+              <div>双击 WebGL 画面：复原默认朝向与视野（局部重绘前可先对齐视角）</div>
               <div>滚轮：调整视野宽窄</div>
               <div>切回「平面」后可滚轮切图 / 缩放平移</div>
               {flatImageOverlay ? (
