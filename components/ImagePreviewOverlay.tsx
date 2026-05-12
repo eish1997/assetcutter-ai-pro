@@ -352,6 +352,31 @@ export function ImagePreviewOverlay({
   const panRef = useRef<{ startX: number; startY: number; startOffsetX: number; startOffsetY: number } | null>(null);
   const zoomPivotRef = useRef<{ x: number; y: number } | null>(null);
   const zoomLastScaleRef = useRef(1);
+  /** 与 React state 同步；拖动手势内由 mousemove 直接改写，经 rAF 合并回写 state，避免一帧多次 setState */
+  const scaleLiveRef = useRef(1);
+  const offsetLiveRef = useRef({ x: 0, y: 0 });
+  const flatRotLiveRef = useRef(0);
+  const gestureFlushRafRef = useRef<number | null>(null);
+
+  useLayoutEffect(() => {
+    scaleLiveRef.current = scale;
+    offsetLiveRef.current = { x: offset.x, y: offset.y };
+    flatRotLiveRef.current = flatRotationDeg;
+  }, [scale, offset.x, offset.y, flatRotationDeg]);
+
+  const flushGestureToReact = useCallback(() => {
+    gestureFlushRafRef.current = null;
+    setScale(scaleLiveRef.current);
+    setOffset({ x: offsetLiveRef.current.x, y: offsetLiveRef.current.y });
+    setFlatRotationDeg(flatRotLiveRef.current);
+  }, []);
+
+  const scheduleGestureFlush = useCallback(() => {
+    if (gestureFlushRafRef.current != null) return;
+    gestureFlushRafRef.current = requestAnimationFrame(() => {
+      flushGestureToReact();
+    });
+  }, [flushGestureToReact]);
   const spacePressedRef = useRef(false);
   const wheelAccumRef = useRef(0);
   const wheelLastNavigateAtRef = useRef(0);
@@ -408,60 +433,104 @@ export function ImagePreviewOverlay({
     wheelLastNavigateAtRef.current = 0;
   }, [open, resetKey, setPreviewLayoutAndNotify]);
 
+  /** 避免每帧 pointermove 触发父级（如 WorkflowSection）setState → 整树重绘 */
+  const lastFlatPixelSampleSigRef = useRef<string | null>(null);
+  const flatPixelSampleFlushRafRef = useRef<number | null>(null);
+  const flatPixelSamplePendingRef = useRef<{ clientX: number; clientY: number } | null>(null);
+
   useLayoutEffect(() => {
     pixelSampleCanvasRef.current = null;
     pixelSampleMetaRef.current = '';
+    lastFlatPixelSampleSigRef.current = null;
+    if (flatPixelSampleFlushRafRef.current != null) {
+      cancelAnimationFrame(flatPixelSampleFlushRafRef.current);
+      flatPixelSampleFlushRafRef.current = null;
+    }
+    flatPixelSamplePendingRef.current = null;
     onFlatImagePixelSample?.(null);
   }, [imageSrc, resetKey, innerLayoutStableKey, open, onFlatImagePixelSample]);
 
   useEffect(() => {
     if (!onFlatImagePixelSample) return;
     if (!flatPixelSampleActive) {
+      lastFlatPixelSampleSigRef.current = null;
+      if (flatPixelSampleFlushRafRef.current != null) {
+        cancelAnimationFrame(flatPixelSampleFlushRafRef.current);
+        flatPixelSampleFlushRafRef.current = null;
+      }
+      flatPixelSamplePendingRef.current = null;
       onFlatImagePixelSample(null);
     }
   }, [flatPixelSampleActive, onFlatImagePixelSample]);
 
   useEffect(() => {
-    if (!flatPixelSampleActive) {
+    if (!flatPixelSampleActive || !onFlatImagePixelSample) {
       return;
     }
-    const onMove = (e: PointerEvent) => {
+    const emitIfChanged = (sig: string, payload: { r: number; g: number; b: number } | null) => {
+      if (sig === lastFlatPixelSampleSigRef.current) return;
+      lastFlatPixelSampleSigRef.current = sig;
+      onFlatImagePixelSample(payload);
+    };
+    const flush = () => {
+      flatPixelSampleFlushRafRef.current = null;
+      const pending = flatPixelSamplePendingRef.current;
+      flatPixelSamplePendingRef.current = null;
+      if (!pending) return;
       const img = imgRef.current;
       if (!img) {
-        onFlatImagePixelSample(null);
+        emitIfChanged('null', null);
         return;
       }
       const r = img.getBoundingClientRect();
-      if (e.clientX < r.left || e.clientX >= r.right || e.clientY < r.top || e.clientY >= r.bottom) {
-        onFlatImagePixelSample(null);
+      if (
+        pending.clientX < r.left ||
+        pending.clientX >= r.right ||
+        pending.clientY < r.top ||
+        pending.clientY >= r.bottom
+      ) {
+        emitIfChanged('null', null);
         return;
       }
       if (!syncPixelSampleBuffer(img)) {
-        onFlatImagePixelSample(null);
+        emitIfChanged('null', null);
         return;
       }
       const canvas = pixelSampleCanvasRef.current;
       if (!canvas) {
-        onFlatImagePixelSample(null);
+        emitIfChanged('null', null);
         return;
       }
-      const idx = imageNaturalIndicesFromClientPoint(img, e.clientX, e.clientY);
+      const idx = imageNaturalIndicesFromClientPoint(img, pending.clientX, pending.clientY);
       if (!idx) {
-        onFlatImagePixelSample(null);
+        emitIfChanged('null', null);
         return;
       }
       const nw = img.naturalWidth;
       const nh = img.naturalHeight;
       if (!nw || !nh) {
-        onFlatImagePixelSample(null);
+        emitIfChanged('null', null);
         return;
       }
       const rgb = readRgbFromCanvasMappedNatural(canvas, nw, nh, idx.ix, idx.iy);
-      onFlatImagePixelSample(rgb);
+      emitIfChanged(`${rgb.r},${rgb.g},${rgb.b}`, rgb);
+    };
+    const onMove = (e: PointerEvent) => {
+      flatPixelSamplePendingRef.current = { clientX: e.clientX, clientY: e.clientY };
+      if (flatPixelSampleFlushRafRef.current == null) {
+        flatPixelSampleFlushRafRef.current = requestAnimationFrame(flush);
+      }
     };
     window.addEventListener('pointermove', onMove, { passive: true });
-    return () => window.removeEventListener('pointermove', onMove);
-  }, [flatPixelSampleActive, onFlatImagePixelSample, imageSrc, syncPixelSampleBuffer]);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      if (flatPixelSampleFlushRafRef.current != null) {
+        cancelAnimationFrame(flatPixelSampleFlushRafRef.current);
+        flatPixelSampleFlushRafRef.current = null;
+      }
+      flatPixelSamplePendingRef.current = null;
+    };
+  }, [flatPixelSampleActive, onFlatImagePixelSample, syncPixelSampleBuffer]);
 
   useEffect(() => {
     if (!open || !innerLayoutStableKey) {
@@ -731,11 +800,10 @@ export function ImagePreviewOverlay({
         while (delta < -Math.PI) delta += 2 * Math.PI;
         rot.lastRad = a;
         const deltaDeg = (delta * 180) / Math.PI;
-        setFlatRotationDeg((prev) => {
-          let next = prev + deltaDeg;
-          if (e.shiftKey) next = Math.round(next / 10) * 10;
-          return next;
-        });
+        let next = flatRotLiveRef.current + deltaDeg;
+        if (e.shiftKey) next = Math.round(next / 10) * 10;
+        flatRotLiveRef.current = next;
+        scheduleGestureFlush();
         return;
       }
       const drag = dragRef.current;
@@ -746,29 +814,38 @@ export function ImagePreviewOverlay({
         const prevS = zoomLastScaleRef.current;
         const pivot = zoomPivotRef.current;
         const img = imgRef.current;
+        let nextOffset = offsetLiveRef.current;
         if (img && pivot && Math.abs(nextScale - prevS) > 1e-9) {
           const rect = img.getBoundingClientRect();
           const cx = rect.left + rect.width / 2;
           const cy = rect.top + rect.height / 2;
           const f = 1 - nextScale / prevS;
-          setOffset((prev) => ({
-            x: prev.x + f * (pivot.x - cx),
-            y: prev.y + f * (pivot.y - cy),
-          }));
+          nextOffset = {
+            x: offsetLiveRef.current.x + f * (pivot.x - cx),
+            y: offsetLiveRef.current.y + f * (pivot.y - cy),
+          };
           zoomLastScaleRef.current = nextScale;
         } else if (Math.abs(nextScale - prevS) > 1e-9) {
           zoomLastScaleRef.current = nextScale;
         }
-        setScale(nextScale);
+        offsetLiveRef.current = nextOffset;
+        scaleLiveRef.current = nextScale;
+        scheduleGestureFlush();
       }
       const pan = panRef.current;
       if (pan) {
         const dx = e.clientX - pan.startX;
         const dy = e.clientY - pan.startY;
-        setOffset({ x: pan.startOffsetX + dx, y: pan.startOffsetY + dy });
+        offsetLiveRef.current = { x: pan.startOffsetX + dx, y: pan.startOffsetY + dy };
+        scheduleGestureFlush();
       }
     };
     const onMouseUp = () => {
+      if (gestureFlushRafRef.current != null) {
+        cancelAnimationFrame(gestureFlushRafRef.current);
+        gestureFlushRafRef.current = null;
+        flushGestureToReact();
+      }
       rotateDragRef.current = null;
       dragRef.current = null;
       panRef.current = null;
@@ -777,10 +854,14 @@ export function ImagePreviewOverlay({
     window.addEventListener('mousemove', onMouseMove);
     window.addEventListener('mouseup', onMouseUp);
     return () => {
+      if (gestureFlushRafRef.current != null) {
+        cancelAnimationFrame(gestureFlushRafRef.current);
+        gestureFlushRafRef.current = null;
+      }
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('mouseup', onMouseUp);
     };
-  }, []);
+  }, [flushGestureToReact, scheduleGestureFlush]);
 
   const handleImgMouseDown = useCallback(
     (e: React.MouseEvent<HTMLImageElement>) => {

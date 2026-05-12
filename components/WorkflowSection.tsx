@@ -2991,6 +2991,7 @@ ${lineSvg}
     const needsPanoLocalCapture =
       Boolean(panoLocalVp) || Boolean(panoLocalEquirect && panoLocalEquirect.length >= 3);
     const itemsSnapshot = doc.items;
+    const hadLocalInpaint = Boolean(localEditSnapshot || needsPanoLocalCapture);
     const userText = quickComposeDraftRef.current.trim();
 
     /** 先同步清 UI，再立即入队，节点树才能马上进入「执行中」 */
@@ -3085,6 +3086,7 @@ ${lineSvg}
 
     void (async () => {
       let composite = src;
+      let inpaintMerged = false;
       let panoSnap: string | null = null;
       let panoRep: PanoLocalReprojectSnapshot | null = null;
       if (needsPanoLocalCapture) {
@@ -3130,6 +3132,7 @@ ${lineSvg}
               );
               if (merged) {
                 composite = merged;
+                inpaintMerged = true;
               } else {
                 onLog?.('warn', '大图预览：全景局部贴回失败，将按当前底图继续');
               }
@@ -3156,6 +3159,7 @@ ${lineSvg}
               const merged = await compositeFeatheredLocalPatch(src, genUrl, plan.dest, plan.featherPx);
               if (merged) {
                 composite = merged;
+                inpaintMerged = true;
               } else {
                 onLog?.('warn', '大图预览：局部贴回合成失败，将按当前底图继续');
               }
@@ -3164,13 +3168,45 @@ ${lineSvg}
             onLog?.('warn', `大图预览：局部重绘失败 — ${normalizeApiErrorMessage(err)}`);
           }
         }
+        let itemsBaked = false;
         if (itemsSnapshot.length > 0) {
           const baked = await rasterizeImageWithAnnotationBakes(composite, itemsSnapshot);
           if (baked) {
             composite = baked;
+            itemsBaked = true;
           } else {
             onLog?.('warn', '大图预览：标注合成失败，仍使用当前底图收尾');
           }
+        }
+        /** 贴回像素已包含选区/标注时，清掉叠层文档，避免重复绘制与多余主线程开销 */
+        const shouldWipeAnnotationOverlay =
+          hadLocalInpaint &&
+          ((inpaintMerged && (itemsSnapshot.length === 0 || itemsBaked)) ||
+            (!inpaintMerged && itemsSnapshot.length > 0 && itemsBaked));
+        if (shouldWipeAnnotationOverlay) {
+          const empty = normalizeImageOverlayDoc(null);
+          const emptyFlat = overlayDocForFlatAsset(empty);
+          const emptyPano = normalizeImageOverlayDoc(null);
+          flushSync(() => {
+            setLightboxOverlayByMode({ flat: emptyFlat, pano: emptyPano });
+            setAssets((prev) =>
+              prev.map((a) => {
+                if (a.id !== asset.id) return a;
+                const dk = asset.displayKey;
+                return {
+                  ...a,
+                  imageOverlayAnnotations: {
+                    ...(a.imageOverlayAnnotations || {}),
+                    [dk]: emptyFlat,
+                  },
+                  imageOverlayAnnotationsPano: {
+                    ...(a.imageOverlayAnnotationsPano || {}),
+                    [dk]: emptyPano,
+                  },
+                };
+              })
+            );
+          });
         }
         resolveClient(composite);
       } catch (e) {
@@ -5580,6 +5616,13 @@ ${lineSvg}
     [lightboxSamSegmentUiAllowed, lightboxSamBusy]
   );
 
+  const handleLightboxSamPickHint = useCallback(
+    (m: string) => {
+      onLog?.('warn', m);
+    },
+    [onLog]
+  );
+
   const clearLightboxSamPrompts = useCallback(() => {
     if (!lightboxSamSegmentUiAllowed || lightboxSamBusy || !lightboxSamPickArmed) return;
     setLightboxSamSessionPoints([]);
@@ -5796,6 +5839,38 @@ ${lineSvg}
       return Array.from(s).sort((a, b) => a - b);
     });
   }, []);
+
+  /** 稳定引用，配合 `ImageFlatAnnotationOverlay` 的 `React.memo`，避免父级重绘时冲掉 memo */
+  const lightboxImageFlatSamAutoPick = useMemo(() => {
+    if (
+      !lightboxSamSegmentUiAllowed ||
+      !lightboxSamPickArmed ||
+      lightboxSamBusy ||
+      lightboxSamUxMode !== 'auto' ||
+      !lightboxSamAutoLayer ||
+      !lightboxAssetId
+    ) {
+      return null;
+    }
+    if (lightboxSamAutoLayer.assetId !== lightboxAssetId) return null;
+    return {
+      maskDataUrls: lightboxSamAutoLayer.dataUrls,
+      pickedIndices: lightboxSamAutoPicked,
+      hoverIndex: lightboxSamAutoHover,
+      onHoverIndex: setLightboxSamAutoHover,
+      onTogglePick: toggleLightboxSamAutoPick,
+    };
+  }, [
+    lightboxSamSegmentUiAllowed,
+    lightboxSamPickArmed,
+    lightboxSamBusy,
+    lightboxSamUxMode,
+    lightboxSamAutoLayer,
+    lightboxAssetId,
+    lightboxSamAutoPicked,
+    lightboxSamAutoHover,
+    toggleLightboxSamAutoPick,
+  ]);
 
   const mergeLightboxSamAutoToLayers = useCallback(() => {
     const layer = lightboxSamAutoLayer;
@@ -8545,28 +8620,13 @@ ${lineSvg}
                     onSamPointAdd={lightboxSamSegmentUiAllowed ? handleLightboxSamPointAdd : undefined}
                     onSamBoxCommit={lightboxSamSegmentUiAllowed ? handleLightboxSamBoxCommit : undefined}
                     onSamPickHint={
-                      lightboxSamSegmentUiAllowed ? (m) => onLog?.('warn', m) : undefined
+                      lightboxSamSegmentUiAllowed ? handleLightboxSamPickHint : undefined
                     }
                     samPickMarkers={lightboxSamPickMarkers}
                     samBoxPixels={lightboxSamBoxPx}
                     samPickProcessing={lightboxSamBusy}
                     samMaskOverlayHref={lightboxSamFlatMaskOverlayHref}
-                    samAutoPick={
-                      lightboxSamSegmentUiAllowed &&
-                      lightboxSamPickArmed &&
-                      !lightboxSamBusy &&
-                      lightboxSamUxMode === 'auto' &&
-                      lightboxSamAutoLayer &&
-                      lightboxSamAutoLayer.assetId === lightboxAsset.id
-                        ? {
-                            maskDataUrls: lightboxSamAutoLayer.dataUrls,
-                            pickedIndices: lightboxSamAutoPicked,
-                            hoverIndex: lightboxSamAutoHover,
-                            onHoverIndex: setLightboxSamAutoHover,
-                            onTogglePick: toggleLightboxSamAutoPick,
-                          }
-                        : null
-                    }
+                    samAutoPick={lightboxImageFlatSamAutoPick}
                   />
                 )
               : undefined

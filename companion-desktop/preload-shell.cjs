@@ -39,6 +39,10 @@ contextBridge.exposeInMainWorld('companionShell', {
   minimizeWindow: () => timedInvoke('shell-window-minimize'),
   closeWindow: () => timedInvoke('shell-window-close'),
   toggleMaximize: () => timedInvoke('shell-window-toggle-maximize'),
+  setShellView: (view) => timedInvoke('shell-set-view', view),
+  workbenchReload: () => timedInvoke('shell-workbench-reload'),
+  workbenchReloadHard: () => timedInvoke('shell-workbench-reload-hard'),
+  workbenchOpenExternal: () => timedInvoke('shell-workbench-open-external'),
   loadPairing: () => timedInvoke('shell-load-pairing'),
   savePairing: (payload) => timedInvoke('shell-save-pairing', payload || {}),
   copyText: (text) => {

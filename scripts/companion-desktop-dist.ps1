@@ -50,6 +50,12 @@ function Set-MirrorEnvIfNeeded {
 
 Set-MirrorEnvIfNeeded
 
+# 同一次脚本内（尤其 both）便携 + NSIS 共用同一构建标签，产物形如 AssetCutterCompanion-<version>-<tag>-x64.exe
+if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('COMPANION_ARTIFACT_SUFFIX'))) {
+  $env:COMPANION_ARTIFACT_SUFFIX = Get-Date -Format 'yyyyMMdd-HHmmss'
+}
+Write-Host "COMPANION_ARTIFACT_SUFFIX=$($env:COMPANION_ARTIFACT_SUFFIX)" -ForegroundColor DarkCyan
+
 switch ($Target) {
   'portable' {
     Invoke-DistCommand -ScriptName 'companion-desktop:dist:portable'
@@ -64,4 +70,4 @@ switch ($Target) {
 }
 
 Write-Host ""
-Write-Host "Done. Check output in companion-desktop/release/." -ForegroundColor Green
+Write-Host "Done. Check output under companion-desktop/dist/ (portable/, installer/, pack/)." -ForegroundColor Green

@@ -5,7 +5,17 @@ const fs = require('fs');
 const fsp = fs.promises;
 const os = require('os');
 const http = require('http');
-const { app, Tray, Menu, nativeImage, shell, BrowserWindow, ipcMain, dialog } = require('electron');
+const {
+  app,
+  Tray,
+  Menu,
+  nativeImage,
+  shell,
+  BrowserWindow,
+  BrowserView,
+  ipcMain,
+  dialog,
+} = require('electron');
 const { spawn, execSync } = require('child_process');
 
 /** Windows：与产品路径一致，数据落在 %LOCALAPPDATA%\\AssetCutterCompanion\\desktop-shell */
@@ -42,6 +52,16 @@ let companion = null;
 let tray = null;
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
+/** @type {import('electron').BrowserView | null} */
+let workbenchBrowserView = null;
+/** @type {'home' | 'workbench' | 'settings'} */
+let shellMainProcessActiveView = 'home';
+
+/** 与 `shell/index.html` 布局一致（DIP），供 `BrowserView` 与主内容区对齐 */
+const SHELL_SIDEBAR_WIDTH = 56;
+const SHELL_TITLEBAR_HEIGHT = 30;
+/** 与 `shell/index.html` 一致：工作台顶栏已移除，BrowserView 从标题栏下缘起算 */
+const SHELL_WORKBENCH_TOOLBAR_HEIGHT = 0;
 /** @type {string} */
 let companionStatusNote = '伴侣运行中';
 /** @type {string | null} */
@@ -1004,6 +1024,131 @@ function openSamLocalSetupGuide() {
   }
 }
 
+function normalizeWorkbenchSiteUrl(raw) {
+  const u = String(raw || '').trim();
+  if (!/^https?:\/\//i.test(u)) return null;
+  try {
+    return new URL(u).href;
+  } catch {
+    return null;
+  }
+}
+
+function getWorkbenchAllowedOrigin() {
+  const href = normalizeWorkbenchSiteUrl(readShellSettings().siteUrl);
+  if (!href) return null;
+  try {
+    return new URL(href).origin;
+  } catch {
+    return null;
+  }
+}
+
+function layoutWorkbenchBrowserView() {
+  if (!mainWindow || mainWindow.isDestroyed() || !workbenchBrowserView) return;
+  if (shellMainProcessActiveView !== 'workbench') return;
+  const b = mainWindow.getContentBounds();
+  const x = SHELL_SIDEBAR_WIDTH;
+  const y = SHELL_TITLEBAR_HEIGHT + SHELL_WORKBENCH_TOOLBAR_HEIGHT;
+  const w = Math.max(120, b.width - SHELL_SIDEBAR_WIDTH);
+  const h = Math.max(120, b.height - y);
+  workbenchBrowserView.setBounds({ x, y, width: w, height: h });
+}
+
+function detachWorkbenchBrowserView() {
+  if (!mainWindow || mainWindow.isDestroyed() || !workbenchBrowserView) return;
+  try {
+    mainWindow.removeBrowserView(workbenchBrowserView);
+  } catch (e) {
+    console.warn('[companion-desktop] removeBrowserView', e);
+  }
+}
+
+function ensureWorkbenchBrowserView() {
+  if (workbenchBrowserView) return workbenchBrowserView;
+
+  const view = new BrowserView({
+    webPreferences: {
+      partition: 'persist:assetcutter-workbench',
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+
+  const wc = view.webContents;
+
+  wc.setWindowOpenHandler(({ url }) => {
+    void shell.openExternal(url);
+    return { action: 'deny' };
+  });
+
+  wc.on('will-navigate', (event, url) => {
+    const allowed = getWorkbenchAllowedOrigin();
+    if (!allowed) {
+      event.preventDefault();
+      return;
+    }
+    let origin;
+    try {
+      origin = new URL(url).origin;
+    } catch {
+      event.preventDefault();
+      return;
+    }
+    if (origin !== allowed) {
+      event.preventDefault();
+      void shell.openExternal(url);
+    }
+  });
+
+  workbenchBrowserView = view;
+  return view;
+}
+
+async function attachWorkbenchBrowserView() {
+  if (!mainWindow || mainWindow.isDestroyed()) return { ok: false, error: 'no_window' };
+  const target = normalizeWorkbenchSiteUrl(readShellSettings().siteUrl);
+  if (!target) return { ok: false, error: 'invalid_site_url' };
+
+  const view = ensureWorkbenchBrowserView();
+  const wc = view.webContents;
+
+  const alreadyAttached = mainWindow.getBrowserViews().indexOf(view) >= 0;
+  if (!alreadyAttached) mainWindow.addBrowserView(view);
+  layoutWorkbenchBrowserView();
+
+  let needLoad = true;
+  try {
+    const cur = wc.getURL();
+    if (cur && cur !== 'about:blank' && /^https?:\/\//i.test(cur)) {
+      needLoad = new URL(cur).href !== new URL(target).href;
+    }
+  } catch {
+    needLoad = true;
+  }
+
+  if (needLoad) {
+    try {
+      await wc.loadURL(target);
+    } catch (e) {
+      detachWorkbenchBrowserView();
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  return { ok: true };
+}
+
+function bindMainWindowWorkbenchLayoutHandlers() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const relayout = () => layoutWorkbenchBrowserView();
+  mainWindow.on('resize', relayout);
+  mainWindow.on('move', relayout);
+  mainWindow.on('maximize', relayout);
+  mainWindow.on('unmaximize', relayout);
+}
+
 function openMainWindow() {
   if (mainWindow && !mainWindow.isDestroyed()) {
     if (mainWindow.isMinimized()) mainWindow.restore();
@@ -1036,8 +1181,12 @@ function openMainWindow() {
   });
 
   mainWindow.on('closed', () => {
+    workbenchBrowserView = null;
+    shellMainProcessActiveView = 'home';
     mainWindow = null;
   });
+
+  bindMainWindowWorkbenchLayoutHandlers();
 
   const shellHtml = path.join(__dirname, 'shell', 'index.html');
   void mainWindow.loadFile(shellHtml);
@@ -1134,7 +1283,21 @@ if (!gotLock) {
 
   ipcMain.handle('shell-settings-save', (_e, patch) => {
     try {
-      return { ok: true, data: saveShellSettings(patch) };
+      const data = saveShellSettings(patch);
+      if (
+        patch &&
+        typeof patch.siteUrl === 'string' &&
+        workbenchBrowserView &&
+        shellMainProcessActiveView === 'workbench'
+      ) {
+        const target = normalizeWorkbenchSiteUrl(data.siteUrl);
+        if (target) {
+          void workbenchBrowserView.webContents.loadURL(target).catch((e) => {
+            console.error('[companion-desktop] workbench loadURL after settings save:', e);
+          });
+        }
+      }
+      return { ok: true, data };
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
@@ -1260,6 +1423,49 @@ if (!gotLock) {
     if (!mainWindow || mainWindow.isDestroyed()) return { ok: false, error: 'main_window_not_found' };
     if (mainWindow.isMaximized()) mainWindow.unmaximize();
     else mainWindow.maximize();
+    return { ok: true };
+  });
+
+  ipcMain.handle('shell-set-view', async (_e, view) => {
+    const v = view === 'workbench' || view === 'settings' || view === 'home' ? view : 'home';
+    shellMainProcessActiveView = v;
+    if (!mainWindow || mainWindow.isDestroyed()) return { ok: true, view: v };
+    if (v === 'workbench') {
+      const r = await attachWorkbenchBrowserView();
+      return { ...r, view: v };
+    }
+    detachWorkbenchBrowserView();
+    return { ok: true, view: v };
+  });
+
+  ipcMain.handle('shell-workbench-reload', () => {
+    if (!workbenchBrowserView || shellMainProcessActiveView !== 'workbench') {
+      return { ok: false, error: 'not_visible' };
+    }
+    try {
+      workbenchBrowserView.webContents.reload();
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  });
+
+  ipcMain.handle('shell-workbench-reload-hard', () => {
+    if (!workbenchBrowserView || shellMainProcessActiveView !== 'workbench') {
+      return { ok: false, error: 'not_visible' };
+    }
+    try {
+      workbenchBrowserView.webContents.reloadIgnoringCache();
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  });
+
+  ipcMain.handle('shell-workbench-open-external', async () => {
+    const u = normalizeWorkbenchSiteUrl(readShellSettings().siteUrl);
+    if (!u) return { ok: false, error: 'invalid_site_url' };
+    await shell.openExternal(u);
     return { ok: true };
   });
 

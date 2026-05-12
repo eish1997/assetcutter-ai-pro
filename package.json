@@ -15,6 +15,7 @@
     "pack:sam-local-bundle": "node scripts/pack-sam-local-host-bundle.mjs",
     "smoke:host-bundle-catalog": "node scripts/smoke-host-bundle-catalog.mjs",
     "restart:local-stack": "powershell -NoProfile -ExecutionPolicy Bypass -File \"scripts/restart-local-stack.ps1\"",
+    "restart:local-companion": "powershell -NoProfile -ExecutionPolicy Bypass -File \"scripts/restart-local-companion.ps1\"",
     "dev:all": "concurrently -n main,seam,auth -c blue,green,magenta \"npm run dev\" \"npm run dev:seam-backend\" \"npm run dev:auth-backend\"",
     "dev:with-r2": "concurrently -n vite,auth -c blue,magenta \"npm run dev\" \"node --env-file=.env.local server/auth-api.js\"",
     "build": "vite build",

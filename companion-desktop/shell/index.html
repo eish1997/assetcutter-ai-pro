@@ -33,7 +33,7 @@
       display: flex;
       flex-direction: column;
       padding-top: 30px;
-      padding-bottom: 56px;
+      padding-bottom: 0;
       overflow: hidden;
     }
     .app-titlebar {
@@ -171,33 +171,103 @@
     .open-site-btn svg { width: 40px; height: 40px; opacity: 0.95; }
     .open-site-btn span { font-size: 11px; font-weight: 600; opacity: 0.85; }
     .hint { font-size: 10px; color: var(--muted); margin-top: 14px; text-align: center; line-height: 1.5; }
-    nav.shell-nav {
-      position: fixed;
-      left: 0; right: 0; bottom: 0;
+    .shell-body {
+      flex: 1 1 auto;
+      min-height: 0;
       display: flex;
-      border-top: 1px solid var(--border);
-      background: #101012;
-      padding: 6px 8px 8px;
-      gap: 4px;
-      z-index: 100;
+      flex-direction: row;
+      align-items: stretch;
     }
-    nav.shell-nav button {
-      flex: 1;
+    nav.shell-sidebar {
+      flex: 0 0 56px;
+      width: 56px;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 6px;
+      padding: 12px 6px 10px;
+      border-right: 1px solid var(--border);
+      background: #101012;
+      z-index: 120;
+    }
+    nav.shell-sidebar .shell-sidebar-spacer {
+      flex: 1 1 auto;
+      min-height: 4px;
+    }
+    nav.shell-sidebar button {
+      flex: 0 0 auto;
+      height: 44px;
       border: none;
       background: transparent;
       color: var(--muted);
-      font-size: 10px;
-      font-weight: 700;
-      padding: 8px 4px;
+      padding: 0;
       border-radius: 10px;
       cursor: pointer;
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 4px;
+      justify-content: center;
     }
-    nav.shell-nav button.active { color: var(--accent); background: #1a1a1f; }
-    nav.shell-nav button:hover { color: var(--text); }
+    nav.shell-sidebar button.active {
+      color: var(--accent);
+      background: #1a1a1f;
+    }
+    nav.shell-sidebar button:hover {
+      color: var(--text);
+    }
+    nav.shell-sidebar button .ico {
+      font-size: 20px;
+      line-height: 1;
+    }
+    nav.shell-sidebar button svg.ico-svg {
+      width: 22px;
+      height: 22px;
+      opacity: 0.92;
+    }
+    .shell-main {
+      flex: 1 1 auto;
+      min-width: 0;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+    }
+    .sidebar-ctx-menu {
+      position: fixed;
+      z-index: 400;
+      min-width: 156px;
+      padding: 4px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: #141416;
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .sidebar-ctx-menu[hidden] {
+      display: none !important;
+    }
+    .sidebar-ctx-menu button {
+      width: 100%;
+      margin: 0;
+      padding: 8px 10px;
+      border: none;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--text);
+      font-size: 11px;
+      font-weight: 600;
+      text-align: left;
+      cursor: pointer;
+    }
+    .sidebar-ctx-menu button:hover {
+      background: #1f1f24;
+    }
+    .sidebar-ctx-menu button:focus-visible {
+      outline: 1px solid var(--accent);
+      outline-offset: 1px;
+    }
     .ico { font-size: 18px; line-height: 1; }
     table { width: 100%; border-collapse: collapse; font-size: 11px; }
     th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
@@ -273,6 +343,31 @@
     <div class="app-titlebar-title">本地伴侣</div>
     <div class="titlebar-trailing" aria-hidden="true"></div>
   </header>
+  <div class="shell-body">
+    <nav class="shell-sidebar" role="tablist" aria-label="主导航" title="在侧栏空白或图标上右键可打开工作台菜单">
+      <button type="button" role="tab" data-view="home" class="active" aria-selected="true" aria-label="首页" title="首页">
+        <span class="ico" aria-hidden="true">⌂</span>
+      </button>
+      <button type="button" role="tab" data-view="workbench" aria-selected="false" aria-label="工作台" title="工作台（侧栏右键：刷新 / 硬刷新 / 浏览器打开）">
+        <svg
+          class="ico-svg"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.65"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <rect x="2.5" y="3.5" width="19" height="15" rx="2" ry="2" />
+          <path d="M2.5 8h19M9 21h6" />
+        </svg>
+      </button>
+      <button type="button" role="tab" data-view="settings" aria-selected="false" aria-label="设置" title="设置">
+        <span class="ico" aria-hidden="true">⚙</span>
+      </button>
+    </nav>
+    <div class="shell-main" id="shell-main">
   <div id="view-home" class="view">
     <div class="status-card">
       <div class="status-row">
@@ -437,17 +532,14 @@
       </div>
     </div>
   </div>
+  </div>
+  </div>
 
-  <nav class="shell-nav" role="tablist">
-    <button type="button" role="tab" data-view="home" class="active" aria-selected="true">
-      <span class="ico" aria-hidden="true">⌂</span>
-      首页
-    </button>
-    <button type="button" role="tab" data-view="settings" aria-selected="false">
-      <span class="ico" aria-hidden="true">⚙</span>
-      设置
-    </button>
-  </nav>
+  <div id="sidebar-ctx-menu" class="sidebar-ctx-menu" role="menu" hidden>
+    <button type="button" role="menuitem" data-sidebar-act="wb-reload">刷新工作台</button>
+    <button type="button" role="menuitem" data-sidebar-act="wb-reload-hard">硬刷新（忽略缓存）</button>
+    <button type="button" role="menuitem" data-sidebar-act="wb-external">在浏览器中打开主站</button>
+  </div>
 
   <script>
     (function () {
@@ -551,24 +643,62 @@ COMPANION_SPAWN_SAM_LOCAL_CWD=REPO_ROOT
 # SamLocal 真实分割：设置 SAM_MODE=sam，见 docs/本机分割故障排除.md
 `;
 
-      function switchToSettingsView() {
-        activeView = 'settings';
-        document.querySelectorAll('nav.shell-nav button').forEach((b) => {
-          const on = b.getAttribute('data-view') === 'settings';
+      async function applyShellView(v) {
+        const viewKey = v === 'workbench' || v === 'settings' || v === 'home' ? v : 'home';
+        activeView = viewKey;
+        document.querySelectorAll('nav.shell-sidebar button[role="tab"]').forEach((b) => {
+          const on = b.getAttribute('data-view') === viewKey;
           b.classList.toggle('active', on);
           b.setAttribute('aria-selected', on ? 'true' : 'false');
         });
-        Object.keys(views).forEach((k) => views[k].classList.toggle('hidden', k !== 'settings'));
-        void refreshVolumeEffectiveHint();
-        void loadPairingFields();
-        void refreshSamLocalWinPanel();
+        if (viewKey === 'workbench') {
+          views.home.classList.add('hidden');
+          views.settings.classList.add('hidden');
+        } else {
+          Object.keys(views).forEach((k) => {
+            views[k].classList.toggle('hidden', k !== viewKey);
+          });
+        }
+        if (typeof shell.setShellView === 'function') {
+          try {
+            const r = await shell.setShellView(viewKey);
+            if (viewKey === 'workbench' && r && !r.ok) {
+              const msg =
+                r.error === 'invalid_site_url'
+                  ? '请先在「设置」填写以 http(s):// 开头的主站地址。'
+                  : r.error || '未知错误';
+              window.alert('工作台无法加载：' + msg);
+              await applyShellView('home');
+              return;
+            }
+          } catch (e) {
+            if (viewKey === 'workbench') {
+              window.alert('工作台异常：' + (e && e.message ? e.message : String(e)));
+              await applyShellView('home');
+            }
+          }
+        }
+        if (viewKey === 'home') {
+          await loadPlugins();
+          await loadHostBundleCatalog();
+        }
+        if (viewKey === 'settings') {
+          void refreshVolumeEffectiveHint();
+          void loadPairingFields();
+          void refreshSamLocalWinPanel();
+        }
+      }
+
+      async function switchToSettingsView() {
+        await applyShellView('settings');
       }
 
       function focusSamLocalSetupSection() {
-        switchToSettingsView();
-        const el = $('section-sam-local');
-        if (el) setTimeout(() => el.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
-        void refreshSamLocalWinPanel();
+        void (async () => {
+          await switchToSettingsView();
+          const el = $('section-sam-local');
+          if (el) setTimeout(() => el.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
+        })();
       }
 
       if (typeof shell.onSamLocalSetupFocus === 'function') {
@@ -630,27 +760,63 @@ COMPANION_SPAWN_SAM_LOCAL_CWD=REPO_ROOT
       $('btnTrafficMin').addEventListener('click', () => void shell.minimizeWindow());
       $('btnTrafficZoom').addEventListener('click', () => void shell.toggleMaximize());
 
-      document.querySelectorAll('nav.shell-nav button').forEach((btn) => {
+      document.querySelectorAll('nav.shell-sidebar button[role="tab"]').forEach((btn) => {
         btn.addEventListener('click', () => {
           const v = btn.getAttribute('data-view');
-          activeView = v || 'home';
-          document.querySelectorAll('nav.shell-nav button').forEach((b) => {
-            const on = b.getAttribute('data-view') === v;
-            b.classList.toggle('active', on);
-            b.setAttribute('aria-selected', on ? 'true' : 'false');
-          });
-          Object.keys(views).forEach((k) => views[k].classList.toggle('hidden', k !== v));
-          if (v === 'home') {
-            void loadPlugins();
-            void loadHostBundleCatalog();
-          }
-          if (v === 'settings') {
-            void refreshVolumeEffectiveHint();
-            void loadPairingFields();
-            void refreshSamLocalWinPanel();
-          }
+          void applyShellView(v || 'home');
         });
       });
+
+      const sidebarNav = document.querySelector('nav.shell-sidebar');
+      const sidebarCtxMenu = $('sidebar-ctx-menu');
+      function hideSidebarCtxMenu() {
+        if (!sidebarCtxMenu) return;
+        sidebarCtxMenu.hidden = true;
+      }
+      function showSidebarCtxMenu(clientX, clientY) {
+        if (!sidebarCtxMenu) return;
+        sidebarCtxMenu.hidden = false;
+        requestAnimationFrame(() => {
+          const pad = 8;
+          const r = sidebarCtxMenu.getBoundingClientRect();
+          let x = clientX;
+          let y = clientY;
+          if (x + r.width > window.innerWidth - pad) x = Math.max(pad, window.innerWidth - r.width - pad);
+          if (y + r.height > window.innerHeight - pad) y = Math.max(pad, window.innerHeight - r.height - pad);
+          if (x < pad) x = pad;
+          if (y < pad) y = pad;
+          sidebarCtxMenu.style.left = x + 'px';
+          sidebarCtxMenu.style.top = y + 'px';
+        });
+      }
+      if (sidebarNav) {
+        sidebarNav.addEventListener('contextmenu', (e) => {
+          e.preventDefault();
+          showSidebarCtxMenu(e.clientX, e.clientY);
+        });
+      }
+      document.addEventListener(
+        'mousedown',
+        (e) => {
+          if (!sidebarCtxMenu || sidebarCtxMenu.hidden) return;
+          if (!sidebarCtxMenu.contains(e.target)) hideSidebarCtxMenu();
+        },
+        true,
+      );
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') hideSidebarCtxMenu();
+      });
+      if (sidebarCtxMenu) {
+        sidebarCtxMenu.addEventListener('click', (e) => {
+          const t = e.target && e.target.closest ? e.target.closest('[data-sidebar-act]') : null;
+          if (!t) return;
+          const act = t.getAttribute('data-sidebar-act');
+          hideSidebarCtxMenu();
+          if (act === 'wb-reload' && typeof shell.workbenchReload === 'function') void shell.workbenchReload();
+          else if (act === 'wb-reload-hard' && typeof shell.workbenchReloadHard === 'function') void shell.workbenchReloadHard();
+          else if (act === 'wb-external' && typeof shell.workbenchOpenExternal === 'function') void shell.workbenchOpenExternal();
+        });
+      }
 
       let settingsCache = { siteUrl: defaultSiteUrl, volumeRoot: '' };
       let pluginListSignature = '';

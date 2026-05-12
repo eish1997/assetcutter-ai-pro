@@ -1,5 +1,13 @@
 /* eslint-disable react-hooks/refs -- 标注层在 render 中与 layoutTick / 全景 subscribeAnimation 同步读取 imgRef、panoProjectionRef，以对齐 object-contain 与球面重投影 */
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, {
+  startTransition,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { createPortal } from 'react-dom';
 import type {
   ImageLocalEditPolygon,
@@ -299,8 +307,10 @@ export type ImageFlatAnnotationOverlayProps = {
 /**
  * 叠在 `ImagePreviewOverlay` 的 `<img>` 上：与 `object-contain` + 父级 scale 对齐的 SVG 坐标系。
  * `tool==='off'` 时不拦截指针，便于原缩放/平移。
+ *
+ * `React.memo`：父级仅改 `transform`（平面缩放/平移/旋转）时 props 不变，跳过本组件整树重算（大图 + 矢量叠层很贵）。
  */
-export function ImageFlatAnnotationOverlay({
+function ImageFlatAnnotationOverlayImpl({
   imgRef,
   layoutKey,
   doc,
@@ -359,6 +369,31 @@ export function ImageFlatAnnotationOverlay({
   const dragHistoryPrimedRef = useRef(false);
   const textEditIdRef = useRef<string | null>(null);
   const textInputRef = useRef<HTMLInputElement | null>(null);
+
+  /**
+   * 全景 `subscribeAnimation` 每帧回调时：仅当叠层确有「随相机重投影」的内容才 bump `layoutTick`。
+   * 纯浏览（工具 off、无 doc、无草稿）时跳过，避免 60fps 驱动整棵 `WorkflowSection` 子树重绘。
+   */
+  const panoCameraDriveNeededRef = useRef(false);
+  panoCameraDriveNeededRef.current =
+    tool !== 'off' ||
+    samPickAwaiting ||
+    (doc.items?.length ?? 0) > 0 ||
+    (doc.crops?.length ?? 0) > 0 ||
+    doc.localEdit != null ||
+    Boolean(doc.panoViewportCrop) ||
+    ((doc.panoLocalEditEquirect?.length ?? 0) >= 3) ||
+    Boolean(doc.panoLocalEditViewport) ||
+    Boolean(doc.panoLocalEditReproject) ||
+    brushDraft != null ||
+    lassoDraft != null ||
+    localLassoDraft != null ||
+    dragRect != null ||
+    panoCropDraft != null ||
+    panoLocalEditDraft != null ||
+    panoLocalLassoDraft != null ||
+    samBoxDraft != null ||
+    (layoutCrosshairClient != null && LAYOUT_CROSSHAIR_TOOLS.has(tool));
 
   useLayoutEffect(() => {
     if (!onLocalEditAnchorClientChange) return;
@@ -465,14 +500,30 @@ export function ImageFlatAnnotationOverlay({
     const host = panoOverlayContainerRef?.current;
     const proj = panoProjectionRef?.current;
     if (!host || !proj) return;
-    const measure = () => {
-      setOverlayPx({ w: Math.max(1, host.clientWidth), h: Math.max(1, host.clientHeight) });
-      setLayoutTick((n) => n + 1);
+    const measure = (force: boolean) => {
+      if (!force && !panoCameraDriveNeededRef.current) {
+        return;
+      }
+      const w = Math.max(1, host.clientWidth);
+      const h = Math.max(1, host.clientHeight);
+      setOverlayPx((prev) => (prev.w === w && prev.h === h ? prev : { w, h }));
+      if (force) {
+        setLayoutTick((n) => n + 1);
+      } else {
+        startTransition(() => setLayoutTick((n) => n + 1));
+      }
     };
-    measure();
-    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
+    measure(true);
+    const ro =
+      typeof ResizeObserver !== 'undefined'
+        ? new ResizeObserver(() => {
+            measure(true);
+          })
+        : null;
     ro?.observe(host);
-    const unsub = proj.subscribeAnimation(measure);
+    const unsub = proj.subscribeAnimation(() => {
+      measure(false);
+    });
     return () => {
       ro?.disconnect();
       unsub();
@@ -2240,3 +2291,6 @@ export function ImageFlatAnnotationOverlay({
     </>
   );
 }
+
+export const ImageFlatAnnotationOverlay = React.memo(ImageFlatAnnotationOverlayImpl);
+ImageFlatAnnotationOverlay.displayName = 'ImageFlatAnnotationOverlay';

@@ -7,11 +7,11 @@
   "main": "main.cjs",
   "scripts": {
     "start": "electron .",
-    "pack": "npm run bundle:local-companion && electron-builder --dir",
+    "pack": "npm run bundle:local-companion && node ./scripts/electron-build-with-suffix.cjs dir",
     "copy:sam-local-bundled": "node ./scripts/copy-sam-local-for-desktop.cjs",
     "bundle:local-companion": "node ./scripts/copy-sam-local-for-desktop.cjs && node ./scripts/bundle-local-companion-runtime.cjs",
-    "dist:win": "npm run bundle:local-companion && electron-builder --win nsis",
-    "dist:portable": "npm run bundle:local-companion && electron-builder --win portable"
+    "dist:win": "npm run bundle:local-companion && node ./scripts/electron-build-with-suffix.cjs nsis",
+    "dist:portable": "npm run bundle:local-companion && node ./scripts/electron-build-with-suffix.cjs portable"
   },
   "engines": {
     "node": ">=20"
@@ -25,7 +25,7 @@
     "appId": "com.assetcutter.companion",
     "productName": "AssetCutterCompanion",
     "directories": {
-      "output": "release"
+      "output": "dist"
     },
     "files": [
       "main.cjs",

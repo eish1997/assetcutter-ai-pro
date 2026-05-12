@@ -17,6 +17,29 @@ import {
 const DEFAULT_ORBIT_D = 0.02;
 const DEFAULT_PANO_FOV = 70;
 
+/**
+ * 仅当相机/投影相对上一帧变化时通知 `subscribeAnimation`：避免 OrbitControls 每帧 render 时
+ * 连带触发大图标注整树 60fps setState（贴回高分辨率后尤为卡顿）。
+ */
+function panoramaAnimSignature(cam: THREE.PerspectiveCamera, bufferCssW: number, bufferCssH: number): string {
+  const p = cam.position;
+  const q = cam.quaternion;
+  const r = (x: number) => (Math.round(x * 2000) / 2000).toString();
+  return [
+    r(p.x),
+    r(p.y),
+    r(p.z),
+    r(q.x),
+    r(q.y),
+    r(q.z),
+    r(q.w),
+    r(cam.fov),
+    r(cam.aspect),
+    String(Math.round(bufferCssW)),
+    String(Math.round(bufferCssH)),
+  ].join('|');
+}
+
 /** OrbitControls 内部增量清零（无公开 API，与 r182 实现一致） */
 function zeroOrbitControlDeltas(controls: OrbitControls) {
   const oc = controls as unknown as {
@@ -385,16 +408,23 @@ export const EquirectangularPanoramaCanvas = forwardRef<
     });
     ro.observe(root);
 
+    let lastPanoAnimSig = '';
     const tick = () => {
       if (cancelled) return;
       animationId = requestAnimationFrame(tick);
       controls?.update();
+      const el = renderer.domElement;
+      const sig = panoramaAnimSignature(camera, el.width, el.height);
+      const animChanged = sig !== lastPanoAnimSig;
+      if (animChanged) lastPanoAnimSig = sig;
       renderer.render(scene, camera);
-      for (const fn of animListenersRef.current) {
-        try {
-          fn();
-        } catch {
-          /* ignore */
+      if (animChanged) {
+        for (const fn of animListenersRef.current) {
+          try {
+            fn();
+          } catch {
+            /* ignore */
+          }
         }
       }
     };

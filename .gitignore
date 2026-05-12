@@ -17,8 +17,11 @@ dist-ssr
 SamLocal/
 SamLocal-release/
 
+# Desktop companion：打包产物（统一 dist/ 子目录，见 companion-desktop/README）
+companion-desktop/dist/
+# 历史/脚本可能仍写在仓库根下的 release、release-*、release-dist-* 等，勿入库
 companion-desktop/release/
-companion-desktop/release-*/
+companion-desktop/release*/
 companion-desktop/local-companion-bundle/
 companion-desktop/sam-local-bundled/
 

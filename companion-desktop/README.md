@@ -1,6 +1,6 @@
 # 本地伴侣 · Electron 壳（`companion-desktop`）
 
-开发期 **M0**：系统托盘 + 子进程启动 `../local-companion`（`COMPANION_OPEN_BROWSER=0`）。**主窗口** 为内嵌 **`shell/index.html`** 的**两页**壳（**首页**：状态 + 打开网站 + 插件列表；**设置**），**不再**把完整本机管理页作为默认首页；需要完整 HTML 管理页时用托盘 **「在浏览器打开本机管理页」**。协议 **`assetcutter-companion://open`** 可从网站唤起壳（需已安装并注册）。
+开发期 **M0**：系统托盘 + 子进程启动 `../local-companion`（`COMPANION_OPEN_BROWSER=0`）。**主窗口** 为内嵌 **`shell/index.html`** 的壳：**左侧图标栏**切换 **首页**（状态 + 打开网站 + 插件列表）、**工作台**（`BrowserView` 内嵌设置中的主站 `siteUrl`；**侧栏右键** 刷新 / 硬刷新 / 浏览器打开主站）、**设置**；**不再**把完整本机管理页作为默认首页；需要完整 HTML 管理页时用托盘 **「在浏览器打开本机管理页」**。协议 **`assetcutter-companion://open`** 可从网站唤起壳（需已安装并注册）。
 
 数据目录为 **`%LOCALAPPDATA%\AssetCutterCompanion\desktop-shell`**（与产品路径一致）。**配对**：在桌面壳 **设置 → 与网站配对** 保存 **本机通信密码** 与 **允许的网站地址**（落盘 `userData/pairing-config.json`，对应环境变量 `COMPANION_SHARED_TOKEN` / `COMPANION_ALLOWED_ORIGINS`）；壳在启动 `local-companion` 时会自动注入（若你未在外部显式设置同名环境变量）。
 
@@ -54,7 +54,17 @@ npm run companion-desktop:dist:portable
 npm run companion-desktop:dist:retry
 ```
 
-产物目录：`companion-desktop/release/`。
+产物统一在 **`companion-desktop/dist/`**（不入库，见根 `.gitignore`）：
+
+| 子目录 | 命令 | 内容 |
+|--------|------|------|
+| **`dist/pack/`** | `npm run companion-desktop:pack` | `electron-builder --dir`，含 **`win-unpacked/`**（快速验链路） |
+| **`dist/portable/`** | `npm run companion-desktop:dist:portable` | 便携 **`AssetCutterCompanion-<version>-<buildTag>-x64.exe`** + 本目录下 **`win-unpacked/`** |
+| **`dist/installer/`** | `npm run companion-desktop:dist:win` | NSIS **`AssetCutterCompanion-<version>-<buildTag>-x64.exe`**、**`.blockmap`** + **`win-unpacked/`** |
+
+**文件名约定**：`<buildTag>` 默认 **`yyyyMMdd-HHmmss`**（本地时区），同 `package.json` 版本多次打包**不会互相覆盖**。可设环境变量 **`COMPANION_ARTIFACT_SUFFIX`**（仅字母数字 `._-`，≤48 字符）覆盖，例如 CI：`git-a1b2c3d` 或 `ci-42`。通过 **`scripts/companion-desktop-dist.ps1`** 打包且未预设该变量时，脚本开头会生成一条标签并写入环境变量，后续 `npm run companion-desktop:dist:*` 均沿用（**`Target both`** 时便携与 NSIS 为同一标签）。
+
+便携与安装包使用**不同输出目录**，连续执行 **`companion-desktop:dist:retry`**（先 portable 再 nsis）时**不会**再互相抢占同一 `win-unpacked/resources/app.asar`。
 
 > 说明：在网络受限环境下，`dist:win` / `dist:portable` 可能因下载 `electron-builder-binaries`（如 `nsis-resources`）失败而中断；`pack`（`--dir`）通常可先用于本地验证打包链路。
 > 可用重试脚本：`scripts/companion-desktop-dist.ps1`，支持 `-UseMirror` 自动注入镜像变量（`ELECTRON_MIRROR` / `ELECTRON_BUILDER_BINARIES_MIRROR`）。

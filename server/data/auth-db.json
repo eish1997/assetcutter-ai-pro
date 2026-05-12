@@ -666,9 +666,42 @@
       "tokenHash": "71709ff21c4771eb8ee281824cf6d05a793fd55957214354a48743dfd9cdf509",
       "expiresAt": "2026-05-16T01:56:30.860Z",
       "createdAt": "2026-05-09T01:56:30.860Z",
-      "updatedAt": "2026-05-09T01:56:30.860Z",
+      "updatedAt": "2026-05-10T11:59:34.501Z",
+      "revokedAt": "2026-05-10T11:59:34.501Z",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+      "ip": "127.0.0.1"
+    },
+    {
+      "id": "2a28cbd3-c334-4241-907f-0bb339d928c5",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "tokenHash": "1e430a97e2ebe57dcff9221ea3c5d28b1b813b99e016522912671143c4b91244",
+      "expiresAt": "2026-05-17T11:59:34.501Z",
+      "createdAt": "2026-05-10T11:59:34.501Z",
+      "updatedAt": "2026-05-11T14:11:07.690Z",
+      "revokedAt": "2026-05-11T14:11:07.690Z",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+      "ip": "127.0.0.1"
+    },
+    {
+      "id": "0e795f95-9516-43ff-960e-3eea1bde2e5f",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "tokenHash": "c4c603d08f4f3c5ff81a8ca726e790452e06dd279babe31af9f06b486a288424",
+      "expiresAt": "2026-05-18T14:11:07.690Z",
+      "createdAt": "2026-05-11T14:11:07.691Z",
+      "updatedAt": "2026-05-11T14:11:07.691Z",
       "revokedAt": null,
       "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+      "ip": "127.0.0.1"
+    },
+    {
+      "id": "d08d23bd-0704-40fb-b6ad-6705913d5fee",
+      "userId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "tokenHash": "572c155f4f6181680f9ccd501d8e1cb5ca46f7dd4ca40cd34c7555fa20ae073a",
+      "expiresAt": "2026-05-19T08:58:50.094Z",
+      "createdAt": "2026-05-12T08:58:50.094Z",
+      "updatedAt": "2026-05-12T08:58:50.094Z",
+      "revokedAt": null,
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) AssetCutterCompanion/0.1.3 Chrome/134.0.6998.205 Electron/35.7.5 Safari/537.36",
       "ip": "127.0.0.1"
     }
   ],
@@ -1585,6 +1618,17 @@
       "ip": "127.0.0.1",
       "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
       "createdAt": "2026-05-09T01:56:30.862Z"
+    },
+    {
+      "id": "f8957707-1f09-4ae7-a3d2-89ccddbdcb17",
+      "actorUserId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "actorIdentifier": "maoer",
+      "action": "auth.login_success",
+      "targetUserId": "d93ce5f5-38f9-4b66-8f40-b64028b53fae",
+      "metaJson": null,
+      "ip": "127.0.0.1",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) AssetCutterCompanion/0.1.3 Chrome/134.0.6998.205 Electron/35.7.5 Safari/537.36",
+      "createdAt": "2026-05-12T08:58:50.095Z"
     }
   ]
 }
