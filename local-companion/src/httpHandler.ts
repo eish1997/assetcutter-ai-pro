@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  augmentRuntimeStatusWithLocalEngineProbes,
   buildCapabilitiesPayload,
   buildRuntimeStatus,
   listPlugins,
@@ -41,6 +42,28 @@ import {
 import { getPairingSessionSummary, revokePairingSession } from './pairingSession.js';
 import { installHostPluginBundleFromUrl, listInstalledHostPluginBundles } from './hostPluginBundles.js';
 import { probeSamSegmentBackendHealth } from './compute/samSegmentAdapter.js';
+import { probeRembgPythonHealth } from './compute/rembgAdapter.js';
+import { parseRuntimeProbeCacheTtlMs } from './runtimeProbeCacheTtl.js';
+
+let runtimeEngineProbesCache: {
+  at: number;
+  sam: Awaited<ReturnType<typeof probeSamSegmentBackendHealth>>;
+  rembg: Awaited<ReturnType<typeof probeRembgPythonHealth>>;
+} | null = null;
+
+async function getCachedSamRembgProbes(): Promise<{
+  sam: Awaited<ReturnType<typeof probeSamSegmentBackendHealth>>;
+  rembg: Awaited<ReturnType<typeof probeRembgPythonHealth>>;
+}> {
+  const ttlMs = parseRuntimeProbeCacheTtlMs();
+  const now = Date.now();
+  if (ttlMs > 0 && runtimeEngineProbesCache && now - runtimeEngineProbesCache.at < ttlMs) {
+    return runtimeEngineProbesCache;
+  }
+  const [sam, rembg] = await Promise.all([probeSamSegmentBackendHealth(), probeRembgPythonHealth()]);
+  runtimeEngineProbesCache = { at: now, sam, rembg };
+  return runtimeEngineProbesCache;
+}
 
 let cachedIndexHtml: string | null = null;
 
@@ -176,8 +199,16 @@ export async function handleRequest(
       return;
     }
 
+    if (path === '/v1/debug/rembg-health' && method === 'GET') {
+      const payload = await probeRembgPythonHealth();
+      sendJson(res, 200, payload, origin);
+      return;
+    }
+
     if (path === '/v1/runtime-status' && method === 'GET') {
-      sendJson(res, 200, buildRuntimeStatus(httpPort), origin);
+      const base = buildRuntimeStatus(httpPort);
+      const { sam: samProbe, rembg: rembgProbe } = await getCachedSamRembgProbes();
+      sendJson(res, 200, augmentRuntimeStatusWithLocalEngineProbes(base, samProbe, rembgProbe), origin);
       return;
     }
 

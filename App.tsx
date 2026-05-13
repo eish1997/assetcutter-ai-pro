@@ -832,6 +832,8 @@ const MainApp: React.FC = () => {
   /** 供首屏 hydrate 等早于 `loadWorkspaceProjectInternal` 声明位置的 effect 调用，避免重复实现伴侣 manifest 合并 */
   const loadWorkspaceProjectInternalRef = useRef<(id: string) => void>((_id: string) => {});
   const markWorkspaceLocalIdbHydrateReady = useCallback(() => {
+    /** 须与 state 同步：紧随其后的 `loadWorkspaceProjectInternalRef` 依赖 ref，若只等 useEffect 写回会晚一帧导致首屏不加载甚至空包落盘 */
+    workspaceLocalIdbHydrateReadyRef.current = true;
     setWorkspaceLocalIdbHydrateReady(true);
   }, []);
 
@@ -1304,6 +1306,7 @@ const MainApp: React.FC = () => {
     if (authLoading) return;
     if (user?.id) return;
     if (typeof indexedDB !== 'undefined') {
+      workspaceLocalIdbHydrateReadyRef.current = false;
       setWorkspaceLocalIdbHydrateReady(false);
     }
     let cancelled = false;
@@ -1335,6 +1338,7 @@ const MainApp: React.FC = () => {
     if (authLoading || !user?.id || isWorkspaceCloudEnabled()) return;
     const uid = user.id;
     if (typeof indexedDB !== 'undefined') {
+      workspaceLocalIdbHydrateReadyRef.current = false;
       setWorkspaceLocalIdbHydrateReady(false);
     }
     let cancelled = false;
@@ -1366,6 +1370,7 @@ const MainApp: React.FC = () => {
     if (authLoading || !user?.id || !user?.username || !isWorkspaceCloudEnabled()) return;
     const uid = user.id;
     if (typeof indexedDB !== 'undefined') {
+      workspaceLocalIdbHydrateReadyRef.current = false;
       setWorkspaceLocalIdbHydrateReady(false);
     }
     workspaceCloudPushAllowedUserIdRef.current = null;
@@ -2628,6 +2633,7 @@ const MainApp: React.FC = () => {
     onMainDropCapture,
     registerMarqueeStart: registerWorkflowMarqueeStart,
     registerPaneWheel: registerWorkflowPaneWheel,
+    registerWorkflowAssetListWheel,
   } = useWorkflowMainScrollCapture(isWorkflowMarqueeWheelActive, capabilityGutterDrop);
 
   useEffect(() => {
@@ -4908,6 +4914,7 @@ const MainApp: React.FC = () => {
                       }}
                       registerMarqueeStartHandler={registerWorkflowMarqueeStart}
                       registerPaneWheelHandler={registerWorkflowPaneWheel}
+                      registerWorkflowAssetListWheelHandler={registerWorkflowAssetListWheel}
                       onUpdateCapabilityPresets={(next) => {
                         setCapabilityPresets(next);
                         saveCapabilityPresets(next);

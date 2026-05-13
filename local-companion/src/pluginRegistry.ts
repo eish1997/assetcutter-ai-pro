@@ -1,6 +1,14 @@
 import { listAdapterIds, REGISTERED_COMPUTE_TYPES, listRecentJobs } from './compute/jobsStore.js';
 import { getRelaySupervisorStatus } from './relaySupervisor.js';
 import { getSamLocalSupervisorStatus } from './samLocalSupervisor.js';
+import {
+  buildLocalCapabilityUi,
+  mergeLocalCapabilityUiWithRembgPythonProbe,
+  mergeLocalCapabilityUiWithSamHttpProbe,
+  type LocalCapabilityUiV1,
+} from './localCapabilityUi.js';
+import type { SamSegmentHealthProbeResult } from './compute/samSegmentAdapter.js';
+import type { RembgHealthProbeResult } from './compute/rembgAdapter.js';
 import { getRepositoryRoot, getRepositoryShallowBytesUsed, getRepositorySummary } from './repositoryVolume.js';
 import { listProjectIds } from './storage/projectPaths.js';
 import { getAccessPublicSummary } from './accessGate.js';
@@ -8,6 +16,10 @@ import { getSeamRepairApiUrl, SEAM_ADAPTER_ID } from './compute/seamRepairAdapte
 import { getSamSegmentApiUrl, SAM_SEGMENT_ADAPTER_ID } from './compute/samSegmentAdapter.js';
 import { getPairingSessionSummary } from './pairingSession.js';
 import { countHostPluginBundlesSync, listHostBundlePluginSummariesSync } from './hostPluginBundles.js';
+import {
+  buildRuntimeLocalEnginesStatus,
+  type RuntimeLocalEngineStatusV1,
+} from './localEnginesRegistry.js';
 
 export const COMPANION_SEMVER = '0.1.0';
 
@@ -33,7 +45,8 @@ const PLUGINS: CompanionPluginDescriptor[] = [
     role: 'compute',
     semver: '0.1.0',
     enabled: true,
-    description: '承接 Job → ComputeAdapter 的统一入口；`stub.ping` 可立即完成，其它类型在 Adapter 就绪后接入。',
+    description:
+      '本机引擎：内置 Job 统一入口（如 sam_segment、remove_bg、seam_repair、stub.ping）。与「扩展包」plugin.host_bundle.*（ZIP 下发）分列。',
     health: 'ok',
     detail: undefined,
   },
@@ -107,11 +120,12 @@ export function listPlugins(): CompanionPluginDescriptor[] {
     const detail = `${baseDetail}${runHint}`;
     return {
       id: `plugin.host_bundle.${h.dirName}`,
-      displayName: h.label.trim() ? h.label : `宿主插件包 ${h.semver}`,
+      displayName: h.label.trim() ? `扩展包：${h.label}` : `扩展包 ${h.semver}`,
       role: 'other' as const,
       semver: h.semver,
       enabled: true,
-      description: '主站发行的 host_plugin_bundle；计算接入见后续 Adapter。',
+      description:
+        '主站 host_plugin_bundle（host-bundles 落盘）；用于 probe/exec 或可选发行交付。大图分割/去背景默认走本机引擎，不必安装扩展包。',
       health: 'ok' as const,
       detail,
     };
@@ -146,7 +160,7 @@ export function buildCapabilitiesPayload() {
       listJobs: 'GET /v1/compute/jobs',
       cancelJob: 'DELETE /v1/compute/jobs/:jobId',
       note:
-        'stub.ping 同步完成；seam_repair 调用 WebSeamRepair（COMPANION_SEAM_REPAIR_URL）；sam_segment 调用 SamLocal（COMPANION_SAM_SEGMENT_URL）；调试 GET /v1/debug/sam-segment-health（伴侣代探测 SamLocal /health）；host_bundle.exec/probe 按已安装包 run.json 起子进程（COMPANION_HOST_BUNDLE_EXEC_TIMEOUT_MS）。',
+        'stub.ping 同步完成；seam_repair 调用 WebSeamRepair（COMPANION_SEAM_REPAIR_URL）；sam_segment（本机引擎）调用 SamLocal（COMPANION_SAM_SEGMENT_URL）；remove_bg（本机引擎）调用 Python rembg（COMPANION_REMBG_PYTHON）；调试 GET /v1/debug/sam-segment-health、GET /v1/debug/rembg-health；host_bundle.exec/probe 仅针对已安装扩展包 run.json（COMPANION_HOST_BUNDLE_EXEC_TIMEOUT_MS）。',
       seamRepair: {
         adapterId: SEAM_ADAPTER_ID,
         repairEndpoint: getSeamRepairApiUrl(),
@@ -218,6 +232,28 @@ export type RuntimeStatusV1 = {
   uptimeSec: number;
   /** 已落盘的宿主插件包（host-bundles 各子目录 manifest.json）数量 */
   hostPluginBundles?: { installedCount: number };
+  /** 本机能力一条主结论（网站 / 桌面壳；见 docs/本地伴侣-本机能力用户体验与产品化路线图.md） */
+  localCapabilityUi: LocalCapabilityUiV1;
+  /** 伴侣代探测 SamLocal `GET /health`（回环 URL）；用于随启未挂接但服务实际可用等场景 */
+  samSegmentHttpProbe?: {
+    ok: boolean;
+    healthUrl: string | null;
+    predictEndpoint: string;
+    latencyMs?: number;
+    error?: string;
+    code?: string;
+  };
+  /** 伴侣代探测：对 COMPANION_REMBG_PYTHON 执行 `import rembg`（子进程，约数秒超时） */
+  rembgPythonProbe?: {
+    ok: boolean;
+    pythonExecutable: string;
+    latencyMs: number;
+    exitCode?: number | null;
+    error?: string;
+    code?: string;
+  };
+  /** P2-2：由 `localEnginesRegistry` 驱动 + 当前已接线的探测（如 Sam HTTP）聚合 */
+  localEnginesStatus?: RuntimeLocalEngineStatusV1[];
 };
 
 const startedAt = Date.now();
@@ -282,5 +318,42 @@ export function buildRuntimeStatus(httpPort: number): RuntimeStatusV1 {
     access: getAccessPublicSummary(),
     uptimeSec: Math.floor((Date.now() - startedAt) / 1000),
     hostPluginBundles: { installedCount: countHostPluginBundlesSync() },
+    localCapabilityUi: buildLocalCapabilityUi(relay, samLocal),
+  };
+}
+
+export function augmentRuntimeStatusWithLocalEngineProbes(
+  base: RuntimeStatusV1,
+  samProbe: SamSegmentHealthProbeResult,
+  rembgProbe: RembgHealthProbeResult,
+): RuntimeStatusV1 {
+  const samSegmentHttpProbe = {
+    ok: samProbe.ok,
+    healthUrl: samProbe.healthUrl,
+    predictEndpoint: samProbe.predictEndpoint,
+    latencyMs: samProbe.samLocal?.latencyMs,
+    error: samProbe.error,
+    code: samProbe.code,
+  };
+  const rembgPythonProbe = {
+    ok: rembgProbe.ok,
+    pythonExecutable: rembgProbe.pythonExecutable,
+    latencyMs: rembgProbe.latencyMs,
+    exitCode: rembgProbe.exitCode,
+    error: rembgProbe.error,
+    code: rembgProbe.code,
+  };
+  return {
+    ...base,
+    samSegmentHttpProbe,
+    rembgPythonProbe,
+    localEnginesStatus: buildRuntimeLocalEnginesStatus({
+      sam: samProbe,
+      rembg: rembgProbe,
+    }),
+    localCapabilityUi: mergeLocalCapabilityUiWithRembgPythonProbe(
+      mergeLocalCapabilityUiWithSamHttpProbe(base.localCapabilityUi, samProbe),
+      rembgProbe,
+    ),
   };
 }

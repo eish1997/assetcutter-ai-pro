@@ -208,14 +208,14 @@ const WorkspaceSidebarFooter: React.FC<WorkspaceSidebarFooterProps> = ({
 
                 <p className="mt-3 text-[11px] leading-relaxed text-gray-400">
                   桌面伴侣是在<strong className="text-gray-300">本机运行</strong>的轻量程序，与网站配对后，为工作区提供<strong className="text-gray-300">可信赖的本机通道</strong>
-                  ：项目与素材可落在磁盘、对接宿主插件与本地计算，减轻浏览器存储压力，适合大图、模型与批量任务。
+                  ：项目与素材可落在磁盘；<strong className="text-gray-300">本机引擎</strong>（分割/抠图等）与可选的<strong className="text-gray-300">扩展包</strong>由伴侣承接，减轻浏览器存储压力，适合大图与批量任务。
                 </p>
 
                 <p className="mt-2 text-[10px] font-semibold uppercase tracking-wide text-gray-500">主要能力</p>
                 <ul className="mt-1.5 list-disc space-y-1 pl-4 text-[10px] leading-relaxed text-gray-400">
                   <li>工作区根目录挂载，与网站共用同一套项目与资源路径</li>
                   <li>配对鉴权后安全访问本机 HTTP 服务（能力探测、存储与任务）</li>
-                  <li>支持宿主插件包与伴侣侧计算任务（如本地命令/探测流水线）</li>
+                  <li>本机引擎（内置计算任务）与可选扩展包（主站 ZIP / probe·exec）</li>
                   <li>大文件优先走本机，降低浏览器 IndexedDB 配额与反复上传</li>
                 </ul>
 
@@ -239,7 +239,7 @@ const WorkspaceSidebarFooter: React.FC<WorkspaceSidebarFooterProps> = ({
                         <td className="px-2 py-2 text-center text-[13px] font-semibold text-emerald-400/90">√</td>
                       </tr>
                       <tr className="border-b border-white/[0.06]">
-                        <td className="px-2 py-2 text-gray-300">宿主插件与伴侣侧算力</td>
+                        <td className="px-2 py-2 text-gray-300">本机引擎与扩展包算力</td>
                         <td className="px-2 py-2 text-center text-[13px] font-semibold text-rose-400/90">×</td>
                         <td className="px-2 py-2 text-center text-[13px] font-semibold text-emerald-400/90">√</td>
                       </tr>

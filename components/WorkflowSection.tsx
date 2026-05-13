@@ -111,7 +111,9 @@ import WorkflowPixelBusyOverlay from './WorkflowPixelBusyOverlay';
 import { workflowResultUsesVideoPreview, workflowSafeImgSrc } from '../services/workflowImageDisplay';
 import { previewSrcCacheFingerprint } from '../services/workflowImageThumb';
 import { imageSrcToDataUrlForCompanion } from '../services/workflowCompanionAssets';
-import { humanMessageForSamSegmentFailure } from '../services/companionSamSegmentMessages';
+import { humanMessageForSamSegmentFailure, isSamInstallHelpCode } from '../services/companionSamSegmentMessages';
+import { humanMessageForRembgFailure, isRembgInstallHelpCode } from '../services/companionRembgMessages';
+import { runLightboxRembgFromImageSrc } from '../services/lightboxRembg';
 import {
   runLightboxSamAutoSegmentFromImageSrc,
   runLightboxSamSegmentFromSession,
@@ -435,6 +437,10 @@ const WorkflowSection: React.FC<{
   registerMarqueeStartHandler?: (handler: ((e: React.MouseEvent) => void) | null) => void;
   /** 由 App 主滚动层注册：左右留白区域滚轮可横向切页 */
   registerPaneWheelHandler?: (handler: ((e: React.WheelEvent) => void) | null) => void;
+  /** 由 App 主滚动层注册：主区内空白 / 大纲留白 / 页边留白时滚轮滚动资产列表 */
+  registerWorkflowAssetListWheelHandler?: (
+    handler: ((e: React.WheelEvent, origin: 'inner' | 'gutter') => boolean) | null
+  ) => void;
   /** 右侧「能力」页底部：能力预设编辑区（由 App 传入 Suspense 包裹的 CapabilityPresetSection） */
   capabilityPresetPanel?: React.ReactNode;
   /** 与能力页 `onUpdate` 同源：用于从工作区侧栏启用被禁用的预设并持久化 */
@@ -469,6 +475,7 @@ const WorkflowSection: React.FC<{
   preferenceScope = null,
   registerMarqueeStartHandler,
   registerPaneWheelHandler,
+  registerWorkflowAssetListWheelHandler,
   capabilityPresetPanel,
   onUpdateCapabilityPresets,
   onUpdateCapabilitySets,
@@ -563,6 +570,17 @@ const WorkflowSection: React.FC<{
   const [lightboxSamPreviewCompositeHref, setLightboxSamPreviewCompositeHref] = useState<string | undefined>();
   /** 经伴侣探测 SamLocal /health 的 mode：stub 仅为小圆联调，非抠物 */
   const [lightboxSamBackendMode, setLightboxSamBackendMode] = useState<'unknown' | 'stub' | 'sam'>('unknown');
+  const [lightboxRembgPreview, setLightboxRembgPreview] = useState<{
+    assetId: string;
+    resultKey: string;
+    dataUrl: string;
+    outputCompanionKey: string;
+  } | null>(null);
+  const lightboxRembgPreviewRef = useRef(lightboxRembgPreview);
+  lightboxRembgPreviewRef.current = lightboxRembgPreview;
+  const [lightboxRembgBusy, setLightboxRembgBusy] = useState(false);
+  const [lightboxRembgInstallModalOpen, setLightboxRembgInstallModalOpen] = useState(false);
+  const [lightboxSamInstallModalOpen, setLightboxSamInstallModalOpen] = useState(false);
   /** 从组内网格打开大图时记录槽位，预设入队可带 sourceGroup* 与拖拽一致 */
   const [lightboxSourceSlot, setLightboxSourceSlot] = useState<{
     sourceGroupAssetId: string;
@@ -870,6 +888,75 @@ const WorkflowSection: React.FC<{
     };
   }, [draggingAssetIds, draggingGroupItems]);
 
+  const handleWorkflowMainAssetListWheel = useCallback(
+    (e: React.WheelEvent, origin: 'inner' | 'gutter'): boolean => {
+      if (isWorkflowEditableTarget(e.target)) return false;
+      const t = e.target as Element | null;
+      if (t?.closest('[data-prevent-wheel-scroll]')) return false;
+      if (t?.closest('[role="dialog"]')) return false;
+      const list = centerScrollRef.current;
+      if (!list) return false;
+      const dy = normalizeWheelDeltaY(e as React.WheelEvent<HTMLElement>);
+      if (!Number.isFinite(dy) || Math.abs(dy) < 0.1) return false;
+
+      const listCol = list.parentElement;
+      const listColRect = listCol?.getBoundingClientRect();
+      if (!listColRect) return false;
+
+      const outlineEl = outlineScrollRef.current;
+      const listCanUp = list.scrollTop > 0;
+      const listCanDown = list.scrollTop + list.clientHeight < list.scrollHeight - 1;
+
+      if (origin === 'gutter') {
+        const y = e.clientY;
+        if (y < listColRect.top || y > listColRect.bottom) return false;
+        if (!listCanUp && !listCanDown) return false;
+        e.preventDefault();
+        e.stopPropagation();
+        list.scrollTop += dy;
+        return true;
+      }
+
+      if (t?.closest('[data-workflow-sidebar]') || t?.closest('[data-workflow-preset]')) {
+        return false;
+      }
+
+      if (t?.closest('[data-workflow-outline]')) {
+        if (!outlineEl) return false;
+        const oUp = outlineEl.scrollTop > 0;
+        const oDown = outlineEl.scrollTop + outlineEl.clientHeight < outlineEl.scrollHeight - 1;
+        if ((dy < 0 && oUp) || (dy > 0 && oDown)) return false;
+        e.preventDefault();
+        e.stopPropagation();
+        list.scrollTop += dy;
+        return true;
+      }
+
+      if (t && list.contains(t)) {
+        if ((dy < 0 && listCanUp) || (dy > 0 && listCanDown)) return false;
+        return false;
+      }
+
+      const px = e.clientX;
+      const py = e.clientY;
+      if (px < listColRect.left || px > listColRect.right || py < listColRect.top || py > listColRect.bottom) {
+        return false;
+      }
+      if (!listCanUp && !listCanDown) return false;
+      e.preventDefault();
+      e.stopPropagation();
+      list.scrollTop += dy;
+      return true;
+    },
+    []
+  );
+
+  useEffect(() => {
+    if (!registerWorkflowAssetListWheelHandler) return;
+    registerWorkflowAssetListWheelHandler(handleWorkflowMainAssetListWheel);
+    return () => registerWorkflowAssetListWheelHandler(null);
+  }, [registerWorkflowAssetListWheelHandler, handleWorkflowMainAssetListWheel]);
+
   useLayoutEffect(() => {
     const key = onboardingKey ?? '';
     if (thumbOnboardingRef.current === null) {
@@ -967,6 +1054,22 @@ const WorkflowSection: React.FC<{
     sidebarWidth,
     marqueeStartRef,
   });
+  /** 供 document wheel capture 读取：按住空格时不拦截滚轮，以便滚动资产列表 */
+  const spacePanEnabledRef = useRef(false);
+  useLayoutEffect(() => {
+    spacePanEnabledRef.current = spacePanEnabled;
+  }, [spacePanEnabled]);
+  /** 按住空格时：在卡片上滚轮改为滚动资产列表（不依赖浏览器默认滚动穿透） */
+  const applyWheelToAssetListWhileSpacePan = useCallback((e: React.WheelEvent) => {
+    if (!spacePanEnabled) return;
+    const list = centerScrollRef.current;
+    if (!list) return;
+    const dy = normalizeWheelDeltaY(e);
+    if (!Number.isFinite(dy) || Math.abs(dy) < 0.1) return;
+    e.preventDefault();
+    e.stopPropagation();
+    list.scrollTop += dy;
+  }, [spacePanEnabled]);
   /** 从功能区「词」进入能力页：横向滑到能力列并滚动到对应预设卡片 */
   const jumpToCapabilityPreset = useCallback((preset: CustomAppModule) => {
     const mode: 'presets' | 'image_process' =
@@ -4071,6 +4174,17 @@ ${lineSvg}
     lightboxPreviewLayout,
   ]);
 
+  /** 伴侣已配置但 SamLocal 健康探测未就绪（未安装/未启动/探测失败）— 工具条短提示用 */
+  const lightboxSamBackendUnready = useMemo(
+    () =>
+      Boolean(
+        lightboxSamSegmentUiAllowed &&
+          normalizeCompanionBaseUrl(String(getCompanionLocalBaseUrl() || '').trim()) &&
+          lightboxSamBackendMode === 'unknown'
+      ),
+    [lightboxSamSegmentUiAllowed, lightboxSamBackendMode]
+  );
+
   /** 大图 `<img>`：查看本机 mask 版本时垫原图，避免 mask 透明区透出毛玻璃/灰背景 */
   const lightboxPreviewUnderlaySrc = useMemo(() => {
     if (!lightboxAsset || !lightboxShowsImage) return '';
@@ -4355,6 +4469,8 @@ ${lineSvg}
     flushLightboxOverlayToAsset();
     setLightboxAssetId(null);
     setLightboxSourceSlot(null);
+    setLightboxRembgPreview(null);
+    setLightboxRembgInstallModalOpen(false);
   }, [flushLightboxOverlayToAsset]);
 
   const resetLightboxOverlayAll = useCallback(() => {
@@ -4733,6 +4849,7 @@ ${lineSvg}
     const handler = (e: WheelEvent) => {
       const el = e.target instanceof Element ? e.target : null;
       if (el?.closest('[data-prevent-wheel-scroll]')) {
+        if (spacePanEnabledRef.current) return;
         e.preventDefault();
       }
     };
@@ -5581,6 +5698,7 @@ ${lineSvg}
       setLightboxSamMultimaskChoice(null);
       setLightboxSamMultimaskIndex(0);
       setLightboxSamBackendMode('unknown');
+      setLightboxSamInstallModalOpen(false);
     }
   }, [lightboxAssetId]);
 
@@ -5628,7 +5746,14 @@ ${lineSvg}
     setLightboxSamAutoLayer(null);
     setLightboxSamAutoPicked([]);
     setLightboxSamAutoHover(null);
+    setLightboxRembgPreview(null);
+    setLightboxRembgBusy(false);
+    setLightboxSamInstallModalOpen(false);
   }, [lightboxAssetId]);
+
+  useEffect(() => {
+    setLightboxRembgPreview(null);
+  }, [lightboxAsset?.displayKey]);
 
   useEffect(() => {
     if (!lightboxSamPickArmed) return;
@@ -5779,6 +5904,7 @@ ${lineSvg}
     setLightboxSamMultimaskIndex(0);
     setLightboxSamPickArmed(false);
     setLightboxSamBusy(true);
+    setLightboxSamInstallModalOpen(false);
     onLog?.('info', '分割：正在上传当前预览图并提交分割…');
     const prevU = lightboxSamUnsavedRef.current;
     const resultKey =
@@ -5798,6 +5924,9 @@ ${lineSvg}
       if (run.ok === false) {
         const zh = humanMessageForSamSegmentFailure(run.code, run.error);
         onLog?.('error', run.code ? `${zh}（${run.code}）` : zh);
+        if (isSamInstallHelpCode(run.code)) {
+          setLightboxSamInstallModalOpen(true);
+        }
         return;
       }
       const layerUrl = run.multimask?.dataUrls?.[0] ?? run.resultDataUrl;
@@ -5900,6 +6029,118 @@ ${lineSvg}
     })();
   }, [lightboxSamUnsaved, lightboxSamBusy, workspaceProjectChrome?.activeProjectId, setAssets, onLog]);
 
+  const discardLightboxRembgPreview = useCallback(() => {
+    setLightboxRembgPreview(null);
+  }, []);
+
+  const commitLightboxRembgApply = useCallback(() => {
+    const pending = lightboxRembgPreview;
+    const aid = lightboxAssetIdRef.current;
+    const projectId = workspaceProjectChrome?.activeProjectId?.trim();
+    const base = normalizeCompanionBaseUrl(String(getCompanionLocalBaseUrl() || '').trim());
+    if (!pending || !aid || pending.assetId !== aid || lightboxRembgBusy) return;
+    if (!projectId || !base) {
+      onLog?.('warn', '抠图：请先选择工作区项目并连接本地伴侣后再应用');
+      return;
+    }
+    void (async () => {
+      const put = await putWorkflowResultImageToCompanion(
+        base,
+        projectId,
+        pending.assetId,
+        pending.resultKey,
+        pending.dataUrl
+      );
+      if (put.ok === false) {
+        onLog?.('error', `抠图保存上传失败：${put.error}`);
+        return;
+      }
+      const now = Date.now();
+      const { resultKey } = pending;
+      const previewUrl = pending.dataUrl;
+      setAssets((prev) =>
+        prev.map((a) => {
+          if (a.id !== pending.assetId) return a;
+          const nextResults = { ...a.results, [resultKey]: previewUrl };
+          const order = [...(a.resultOrder || []).filter((k) => k !== resultKey), resultKey];
+          const nextRck = { ...(a.resultsCompanionKeys || {}), [resultKey]: put.key };
+          const nextMeta = {
+            ...(a.resultMeta || {}),
+            [resultKey]: { executedAt: now, displayStepLabel: '抠图', mediaKind: 'image' as const },
+          };
+          return {
+            ...a,
+            results: nextResults,
+            resultOrder: order,
+            resultsCompanionKeys: nextRck,
+            resultMeta: nextMeta,
+            displayKey: resultKey,
+          };
+        })
+      );
+      setLightboxRembgPreview(null);
+      onLog?.('info', '抠图已应用为新版本（RGBA PNG），可用滚轮在版本间切换。');
+    })();
+  }, [lightboxRembgPreview, lightboxRembgBusy, workspaceProjectChrome?.activeProjectId, setAssets, onLog]);
+
+  const runLightboxRembg = useCallback(async () => {
+    const aid = lightboxAssetId;
+    const asset = aid ? assets.find((a) => a.id === aid) : null;
+    const projectId = workspaceProjectChrome?.activeProjectId?.trim();
+    const base = normalizeCompanionBaseUrl(String(getCompanionLocalBaseUrl() || '').trim());
+    if (!asset || !projectId || !base) {
+      onLog?.('warn', '抠图：请先选择工作区项目并连接本地伴侣');
+      return;
+    }
+    if (!lightboxSamSegmentUiAllowed) return;
+    if (lightboxRembgBusy) return;
+    setLightboxRembgInstallModalOpen(false);
+    setLightboxRembgBusy(true);
+    onLog?.('info', '抠图：正在上传并调用本机 rembg…');
+    const prevP = lightboxRembgPreviewRef.current;
+    const resultKey =
+      prevP?.assetId === asset.id && prevP?.resultKey
+        ? prevP.resultKey
+        : `ac_internal_rembg_${uuid().replace(/-/g, '').slice(0, 14)}`;
+    const src = getLightboxPreviewImageSrc(asset);
+    try {
+      const run = await runLightboxRembgFromImageSrc({
+        projectId,
+        assetId: asset.id,
+        displayKey: asset.displayKey,
+        imageSrc: src,
+        resultKey,
+      });
+      if (run.ok === false) {
+        const zh = humanMessageForRembgFailure(run.code, run.error);
+        onLog?.('error', run.code ? `${zh}（${run.code}）` : zh);
+        if (isRembgInstallHelpCode(run.code)) {
+          setLightboxRembgInstallModalOpen(true);
+        }
+        return;
+      }
+      setLightboxRembgPreview({
+        assetId: asset.id,
+        resultKey,
+        dataUrl: run.resultDataUrl,
+        outputCompanionKey: run.outputCompanionKey,
+      });
+      onLog?.('info', '抠图完成：已叠入预览。满意后点「应用」写入资产，或点「丢弃」。');
+    } catch (e) {
+      onLog?.('error', `抠图异常：${normalizeApiErrorMessage(e)}`);
+    } finally {
+      setLightboxRembgBusy(false);
+    }
+  }, [
+    lightboxAssetId,
+    assets,
+    workspaceProjectChrome?.activeProjectId,
+    lightboxSamSegmentUiAllowed,
+    lightboxRembgBusy,
+    getLightboxPreviewImageSrc,
+    onLog,
+  ]);
+
   const exitLightboxSamAuto = useCallback(() => {
     setLightboxSamUxMode('prompt');
     setLightboxSamAutoLayer(null);
@@ -5999,6 +6240,7 @@ ${lineSvg}
     setLightboxSamAutoHover(null);
     setLightboxSamUxMode('auto');
     setLightboxSamPickArmed(false);
+    setLightboxSamInstallModalOpen(false);
     setLightboxSamBusy(true);
     onLog?.('info', '分割：正在全图自动拆分（首次可能较慢）…');
     const resultKey = `ac_internal_sam_${uuid().replace(/-/g, '').slice(0, 14)}`;
@@ -6014,6 +6256,9 @@ ${lineSvg}
       if (run.ok === false) {
         const zh = humanMessageForSamSegmentFailure(run.code, run.error);
         onLog?.('error', run.code ? `${zh}（${run.code}）` : zh);
+        if (isSamInstallHelpCode(run.code)) {
+          setLightboxSamInstallModalOpen(true);
+        }
         setLightboxSamUxMode('prompt');
         return;
       }
@@ -7701,6 +7946,10 @@ ${lineSvg}
                                     ? { 'data-prevent-wheel-scroll': '' }
                                     : {})}
                                   onWheel={(e) => {
+                                    if (spacePanEnabled) {
+                                      applyWheelToAssetListWhileSpacePan(e);
+                                      return;
+                                    }
                                     if (isBusyGroupItem) return;
                                     e.preventDefault();
                                     e.stopPropagation();
@@ -8365,6 +8614,10 @@ ${lineSvg}
                           ? { 'data-prevent-wheel-scroll': '' }
                           : {})}
                         onWheel={(e) => {
+                          if (spacePanEnabled) {
+                            applyWheelToAssetListWhileSpacePan(e);
+                            return;
+                          }
                           if (isBusy) return;
                           e.preventDefault();
                           e.stopPropagation();
@@ -8688,7 +8941,7 @@ ${lineSvg}
                     panoOverlayContainerRef={panoOverlayContainerRef}
                     panoProjectionRef={panoProjectionRef}
                     panoViewerBindEpoch={panoViewerBindEpoch}
-                    layoutKey={`${lightboxPreviewUnderlaySrc}|${lightboxSamFlatMaskOverlayHref ?? ''}`}
+                    layoutKey={`${lightboxPreviewUnderlaySrc}|${lightboxSamFlatMaskOverlayHref ?? ''}|${lightboxRembgPreview?.assetId === lightboxAsset?.id ? (lightboxRembgPreview?.dataUrl ?? '').slice(0, 120) : ''}`}
                     doc={lightboxOverlayDraft}
                     tool={lightboxOverlayTool}
                     color={lightboxOverlayColor}
@@ -8709,6 +8962,11 @@ ${lineSvg}
                     samBoxPixels={lightboxSamBoxPx}
                     samPickProcessing={lightboxSamBusy}
                     samMaskOverlayHref={lightboxSamFlatMaskOverlayHref}
+                    rembgPreviewHref={
+                      lightboxRembgPreview && lightboxRembgPreview.assetId === lightboxAsset.id
+                        ? lightboxRembgPreview.dataUrl
+                        : undefined
+                    }
                     samAutoPick={lightboxImageFlatSamAutoPick}
                   />
                 )
@@ -9057,6 +9315,7 @@ ${lineSvg}
                       disabledTitle: lightboxSamSegmentDisabledTitle,
                       onSamMenuOpenChange: onLightboxSamMenuOpenChange,
                       samBackendMode: lightboxSamBackendMode,
+                      samBackendUnready: lightboxSamBackendUnready,
                       samPickSubmode: lightboxSamPickSubmode,
                       onSamPickSubmodeChange: setLightboxSamPickSubmode,
                       canRunSam: lightboxSamCanRunSegment,
@@ -9105,6 +9364,24 @@ ${lineSvg}
                     }
                   : undefined
               }
+              removeBg={
+                lightboxSamSegmentToolbarVisible
+                  ? {
+                      busy: lightboxRembgBusy,
+                      disabled:
+                        !lightboxSamSegmentUiAllowed ||
+                        !workspaceProjectChrome?.activeProjectId?.trim() ||
+                        !normalizeCompanionBaseUrl(String(getCompanionLocalBaseUrl() || '').trim()),
+                      disabledTitle: lightboxSamSegmentDisabledTitle,
+                      hasPreview: Boolean(
+                        lightboxRembgPreview && lightboxRembgPreview.assetId === lightboxAssetId
+                      ),
+                      onRun: () => void runLightboxRembg(),
+                      onApply: () => void commitLightboxRembgApply(),
+                      onDiscard: () => discardLightboxRembgPreview(),
+                    }
+                  : undefined
+              }
             />
           </div>,
           document.body
@@ -9148,6 +9425,132 @@ ${lineSvg}
               onCount: setQuickComposeCount,
             }}
           />,
+          document.body
+        )}
+
+      {lightboxRembgInstallModalOpen &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[2300] flex items-center justify-center bg-black/70 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="rembg-install-title"
+            onClick={() => setLightboxRembgInstallModalOpen(false)}
+          >
+            <div
+              className="max-w-lg w-full rounded-2xl border border-white/10 bg-[#121216] p-5 shadow-2xl ring-1 ring-black/40"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h2 id="rembg-install-title" className="text-sm font-black text-white tracking-wide uppercase mb-3">
+                启用本机抠图（rembg）
+              </h2>
+              <p className="text-[11px] leading-relaxed text-gray-300">
+                <strong className="text-gray-200">推荐（Windows）</strong>：打开<strong className="text-gray-200">
+                  桌面伴侣
+                </strong>
+                ，进入<strong className="text-gray-200">设置</strong> → 找到「
+                <strong className="text-gray-200">本机抠图（rembg）</strong>」→ 点击
+                <strong className="text-gray-200">一键安装抠图引擎</strong>。安装结束会自动重启本地伴侣，回到网站再点「去背景」即可。
+              </p>
+              <p className="mt-2 text-[10px] text-gray-500">
+                一键安装过程中会<strong className="text-gray-400">预取默认 u2net 权重</strong>到伴侣沙盒（与运行时一致）；若未走一键安装、自行配置 Python，首次抠图仍可能下载到本机目录（常见为 ~/.u2net），请保持网络可用。
+              </p>
+              <details className="mt-3 rounded-lg border border-white/10 bg-black/25 px-3 py-2">
+                <summary className="cursor-pointer text-[10px] font-semibold text-gray-400">
+                  高级：已有自己的 Python / 非 Windows
+                </summary>
+                <ol className="mt-2 list-decimal pl-5 space-y-2 text-[10px] leading-relaxed text-gray-400">
+                  <li>
+                    使用 <span className="font-mono text-gray-300">Python 3.11～3.13</span>，在同一解释器中执行{' '}
+                    <code className="rounded bg-black/40 px-1 py-0.5 font-mono text-emerald-200/90">
+                      pip install &quot;rembg[cpu]&quot;
+                    </code>
+                    。
+                  </li>
+                  <li>
+                    将环境变量{' '}
+                    <code className="rounded bg-black/40 px-1 py-0.5 font-mono text-sky-200/90">
+                      COMPANION_REMBG_PYTHON
+                    </code>{' '}
+                    设为该 <span className="font-mono text-gray-300">python</span> 可执行文件路径，保存后重启本地伴侣。
+                  </li>
+                </ol>
+              </details>
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  type="button"
+                  className="rounded-xl bg-blue-600 px-4 py-2 text-[10px] font-black uppercase tracking-wide text-white hover:bg-blue-500"
+                  onClick={() => setLightboxRembgInstallModalOpen(false)}
+                >
+                  知道了
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {lightboxSamInstallModalOpen &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[2300] flex items-center justify-center bg-black/70 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="sam-install-title"
+            onClick={() => setLightboxSamInstallModalOpen(false)}
+          >
+            <div
+              className="max-w-lg w-full rounded-2xl border border-white/10 bg-[#121216] p-5 shadow-2xl ring-1 ring-black/40"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h2 id="sam-install-title" className="text-sm font-black text-white tracking-wide uppercase mb-3">
+                启用本机分割（SamLocal）
+              </h2>
+              <p className="text-[11px] leading-relaxed text-gray-300">
+                <strong className="text-gray-200">推荐（Windows）</strong>：打开<strong className="text-gray-200">
+                  桌面伴侣
+                </strong>
+                ，进入<strong className="text-gray-200">设置</strong> → 找到「
+                <strong className="text-gray-200">分割引擎（SAM / SamLocal）</strong>」→ 点击
+                <strong className="text-gray-200">一键安装高精度引擎</strong>。安装结束会自动重启本地伴侣，回到网站再使用「分割」即可。
+              </p>
+              <p className="mt-2 text-[10px] text-gray-500">
+                首次安装可能下载 PyTorch 与模型（体积较大），请保持磁盘与网络可用。
+              </p>
+              <details className="mt-3 rounded-lg border border-white/10 bg-black/25 px-3 py-2">
+                <summary className="cursor-pointer text-[10px] font-semibold text-gray-400">
+                  高级：已有自己的 Python / 非 Windows
+                </summary>
+                <ol className="mt-2 list-decimal pl-5 space-y-2 text-[10px] leading-relaxed text-gray-400">
+                  <li>
+                    在仓库根目录按文档执行{' '}
+                    <code className="rounded bg-black/40 px-1 py-0.5 font-mono text-emerald-200/90">
+                      npm run setup:sam-local
+                    </code>
+                    ，并确保 SamLocal 在 <span className="font-mono text-gray-300">127.0.0.1:18081</span> 可访问。
+                  </li>
+                  <li>
+                    若伴侣无法拉起 SamLocal，可在运行伴侣的终端环境中配置文档中的环境变量（如{' '}
+                    <code className="rounded bg-black/40 px-1 py-0.5 font-mono text-sky-200/90">
+                      COMPANION_SPAWN_SAM_LOCAL_*
+                    </code>
+                    ），保存后重启本地伴侣。
+                  </li>
+                </ol>
+              </details>
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  type="button"
+                  className="rounded-xl bg-blue-600 px-4 py-2 text-[10px] font-black uppercase tracking-wide text-white hover:bg-blue-500"
+                  onClick={() => setLightboxSamInstallModalOpen(false)}
+                >
+                  知道了
+                </button>
+              </div>
+            </div>
+          </div>,
           document.body
         )}
 

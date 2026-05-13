@@ -104,6 +104,33 @@ export async function submitCompanionSamSegmentJob(
   });
 }
 
+/** 与宿主 `remove_bg` Job 的 `inputs` 一致 */
+export type CompanionRembgInputsV1 = {
+  imageKey: string;
+  outputKey: string;
+};
+
+/** 可选：`model` 为伴侣白名单内 id；`alphaMatting` 较慢但更细腻 */
+export type CompanionRembgParamsV1 = {
+  model?: string;
+  alphaMatting?: boolean;
+};
+
+export async function submitCompanionRembgJob(
+  baseUrl: string,
+  projectId: string,
+  inputs: CompanionRembgInputsV1,
+  params?: CompanionRembgParamsV1,
+) {
+  return submitCompanionJob(baseUrl, {
+    protocolVersion: 1,
+    type: 'remove_bg',
+    projectId,
+    inputs,
+    params: params ?? {},
+  });
+}
+
 /** 与伴侣 `host_bundle.probe` / `host_bundle.exec` 的 `inputs` 一致 */
 export type CompanionHostBundleJobInputsV1 = { dirName: string };
 

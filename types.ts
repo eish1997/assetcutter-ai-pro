@@ -756,6 +756,15 @@ export type CustomAppModule = {
    * 无大图点选时使用**图像中心**为前景点。与 `companionHostBundle` 互斥（规范化时后写者优先）。
    */
   companionSamSegment?: boolean;
+  /**
+   * 为 true 时：`executeCapability` 走本机伴侣 `remove_bg`（Python rembg；需本机 `pip install "rembg[cpu,cli]"` 与同解释器 `COMPANION_REMBG_PYTHON`）。
+   * 与 `companionHostBundle` / `companionSamSegment` 互斥。
+   */
+  companionRembg?: boolean;
+  /** `companionRembg` 时可选：模型 id（须与伴侣 `rembgAdapter` 白名单一致，缺省由伴侣使用 u2net） */
+  companionRembgModel?: string;
+  /** `companionRembg` 时可选：alpha matting（更慢） */
+  companionRembgAlphaMatting?: boolean;
 };
 
 /** 能力集合画布节点（与 React Flow 序列化兼容） */

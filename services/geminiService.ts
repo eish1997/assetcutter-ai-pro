@@ -619,8 +619,8 @@ export type GeminiImageBatchGroupOptions = {
 
 const GEMINI_REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_REQUEST_TIMEOUT_MS) || 45_000;
 const GEMINI_IMAGE_REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_IMAGE_REQUEST_TIMEOUT_MS) || 120_000;
-/** Vertex 生图单项常见超过 120s，默认提高下限，避免同批次部分任务被过早取消 */
-const GEMINI_VERTEX_IMAGE_TIMEOUT_MS = Number(process.env.GEMINI_VERTEX_IMAGE_TIMEOUT_MS) || 300_000;
+/** Vertex/trial 生图单项（尤其 4K）常超过 5min；默认 10min，可用 GEMINI_VERTEX_IMAGE_TIMEOUT_MS 覆盖 */
+const GEMINI_VERTEX_IMAGE_TIMEOUT_MS = Number(process.env.GEMINI_VERTEX_IMAGE_TIMEOUT_MS) || 600_000;
 
 type GeminiDiagCode =
   | "INPUT_IMAGE_EMPTY"
@@ -984,8 +984,18 @@ export const CAPABILITY_UNDERSTAND_RETRY_OPTIONS: GeminiRequestOptions = {
 };
 const BULK_PROXY_UNDERSTAND_TIMEOUT_MS = 120_000;
 const IMAGE_GEN_RETRY_DELAY_MS = 6000;
-/** 走 bulk 异步代理时含轮询+服务端退避，总等待需长于单次 SDK 超时 */
-const BULK_PROXY_IMAGE_TIMEOUT_MS = 300_000;
+/** 走 bulk 异步代理时含轮询+服务端退避，总等待需长于单次 SDK 超时（与 Vertex 4K 档位对齐） */
+const BULK_PROXY_IMAGE_TIMEOUT_MS = 600_000;
+
+/** 外层 withGeminiRequestControl 不得短于 Vertex/trial 内层 SDK 超时，否则会先被客户端掐断 */
+function effectiveImageGenControlTimeoutMs(baseTimeout: number, useLongBulkWait: boolean): number {
+  const provider = getAiProvider();
+  const vertexOrTrialFloor =
+    provider === "trial" || provider === "vertex"
+      ? Math.max(baseTimeout, GEMINI_VERTEX_IMAGE_TIMEOUT_MS)
+      : baseTimeout;
+  return useLongBulkWait ? Math.max(vertexOrTrialFloor, BULK_PROXY_IMAGE_TIMEOUT_MS) : vertexOrTrialFloor;
+}
 
 function shouldFallbackUnderstandToBrowserGemini(error: unknown): boolean {
   if (!BULK_BASE) return false;
@@ -1438,7 +1448,7 @@ export async function dialogGenerateImage(
 ): Promise<string> {
   const baseTimeout = requestOptions?.timeoutMs ?? GEMINI_IMAGE_REQUEST_TIMEOUT_MS;
   const useBulkImageQueue = shouldUseBulkImageBatchQueue();
-  const controlTimeoutMs = useBulkImageQueue ? Math.max(baseTimeout, BULK_PROXY_IMAGE_TIMEOUT_MS) : baseTimeout;
+  const controlTimeoutMs = effectiveImageGenControlTimeoutMs(baseTimeout, useBulkImageQueue);
   // 429/503/UNAVAILABLE 等自动退避重试；成功返回图片后不会再次请求。
   return callWithRetry(async (signal) => {
     const ai = getAI();
@@ -1517,9 +1527,7 @@ export async function dialogGenerateImages(
   requestOptions?: Omit<GeminiRequestOptions, 'abortSignal'>
 ): Promise<string[]> {
   const baseTimeout = requestOptions?.timeoutMs ?? GEMINI_IMAGE_REQUEST_TIMEOUT_MS;
-  const controlTimeoutMs = effectiveBulkBase()
-    ? Math.max(baseTimeout, BULK_PROXY_IMAGE_TIMEOUT_MS)
-    : baseTimeout;
+  const controlTimeoutMs = effectiveImageGenControlTimeoutMs(baseTimeout, Boolean(effectiveBulkBase()));
   return callWithRetry(async (signal) => {
     const ai = getAI();
     const provider = getAiProvider();
@@ -1586,9 +1594,7 @@ export async function dialogGenerateImageMulti(
 ): Promise<string> {
   if (imagesBase64.length === 0) throw new Error('多图生图至少需要一张图片');
   const baseTimeout = requestOptions?.timeoutMs ?? GEMINI_IMAGE_REQUEST_TIMEOUT_MS;
-  const controlTimeoutMs = effectiveBulkBase()
-    ? Math.max(baseTimeout, BULK_PROXY_IMAGE_TIMEOUT_MS)
-    : baseTimeout;
+  const controlTimeoutMs = effectiveImageGenControlTimeoutMs(baseTimeout, Boolean(effectiveBulkBase()));
   return callWithRetry(async (signal) => {
     const ai = getAI();
     const provider = getAiProvider();

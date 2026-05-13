@@ -100,7 +100,7 @@
   - Vite 默认：`http://localhost:5173`
   - 其他框架 / 端口：`http://127.0.0.1:3000` 等
   - 与浏览器能直接打开的地址 **保持一致**（含 `http://` / `https://`）；末尾 `**/` 可有可无**，若主站路由对 base 敏感，建议与日常开发习惯统一。
-- **与 `local-companion` 配对**：工作台内页面若需请求 `**127.0.0.1:<伴侣端口>`**，须保证 `**COMPANION_ALLOWED_ORIGINS`**（或设置里 「允许打开的网站地址」）包含当前 `**siteUrl` 的 origin**（例如 `http://localhost:5173`），否则伴侣 `**accessGate`** 可能拒绝跨站请求；这与在系统浏览器里打开主站联调 **同一套规则**。
+- **与 `local-companion` 配对**：进入工作台时，桌面壳会按当前 **`siteUrl` 的 origin** 自动更新 `pairing-config`（并注入与网站 `companionLocalPrefs` 一致的 `localStorage` 键），一般 **无需** 再手工在壳设置里填「允许的网站地址」。若本机另有独立启动的伴侣进程，须自行重启以使新 `COMPANION_ALLOWED_ORIGINS` 生效。工作台内页面请求 `**127.0.0.1:<伴侣端口>`** 时仍须满足 `**accessGate`** 的 Origin/Bearer 规则，与在系统浏览器里打开主站 **同一套规则**。
 - **安装包默认**：未保存过设置时，`main.cjs` 中 `**defaultShellSiteUrl()`** 的默认值仍作用于 `**siteUrl`**；工作台与「打开网站」一致使用该默认，直至用户在设置中覆盖。
 
 ### 4.4 安全（与已决模型对齐）

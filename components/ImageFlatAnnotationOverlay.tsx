@@ -294,6 +294,8 @@ export type ImageFlatAnnotationOverlayProps = {
   samPickProcessing?: boolean;
   /** 本机 SAM：叠在底图上的 mask PNG（与 viewBox 同源）；已保存版本与未保存预览共用，绘制成描边 + 半透明填充 */
   samMaskOverlayHref?: string;
+  /** rembg 抠图预览：RGBA PNG data URL，叠于 SAM mask 之上；透明区下为棋盘格 */
+  rembgPreviewHref?: string;
   /** 全图自动拆分：悬停高亮、点击切换选中（mask 与图像同像素尺寸） */
   samAutoPick?: {
     maskDataUrls: string[];
@@ -332,6 +334,7 @@ function ImageFlatAnnotationOverlayImpl({
   samBoxPixels = null,
   samPickProcessing = false,
   samMaskOverlayHref,
+  rembgPreviewHref,
   samAutoPick = null,
 }: ImageFlatAnnotationOverlayProps) {
   const [layoutTick, setLayoutTick] = useState(0);
@@ -351,6 +354,7 @@ function ImageFlatAnnotationOverlayImpl({
   /** 框选拖出 SVG 时仍跟手：`window` 级 pointer 监听 */
   const samBoxDragLiveRef = useRef<DraftRect | null>(null);
   const samBoxWindowCleanupRef = useRef<(() => void) | null>(null);
+  const rembgCheckerPatternId = useMemo(() => `rembg-chk-${uuid()}`, []);
   const metricsSamRef = useRef<ReturnType<typeof getImgObjectContainMetrics>>(null);
   const eventToNormRef = useRef<(cx: number, cy: number) => { x: number; y: number } | null>(() => null);
   const onSamBoxCommitRef = useRef<typeof onSamBoxCommit>(onSamBoxCommit);
@@ -2021,6 +2025,32 @@ function ImageFlatAnnotationOverlayImpl({
               height={vy}
               preserveAspectRatio="xMidYMid meet"
               filter={`url(#${samOutlineFilterId})`}
+            />
+          </g>
+        ) : null}
+        {!panoMode && rembgPreviewHref ? (
+          <g pointerEvents="none">
+            <defs>
+              <pattern
+                id={rembgCheckerPatternId}
+                width={16}
+                height={16}
+                patternUnits="userSpaceOnUse"
+              >
+                <rect width={8} height={8} fill="#242428" />
+                <rect width={8} height={8} x="8" y="8" fill="#242428" />
+                <rect width={8} height={8} x="8" y="0" fill="#18181c" />
+                <rect width={8} height={8} x="0" y="8" fill="#18181c" />
+              </pattern>
+            </defs>
+            <rect x={0} y={0} width={vx} height={vy} fill={`url(#${rembgCheckerPatternId})`} />
+            <image
+              href={rembgPreviewHref}
+              x={0}
+              y={0}
+              width={vx}
+              height={vy}
+              preserveAspectRatio="xMidYMid meet"
             />
           </g>
         ) : null}

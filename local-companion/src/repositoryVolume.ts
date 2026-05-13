@@ -4,10 +4,12 @@ import { join, resolve } from 'node:path';
 
 const DEFAULT_REL = join('.assetcutter-companion', 'volume');
 
-/** 仓库根目录：优先环境变量，否则用户目录下固定子目录（可写、不污染仓库根） */
+/** 仓库根目录：优先 COMPANION_VOLUME_ROOT；否则若存在 COMPANION_SANDBOX_ROOT（桌面壳注入）则用 `<沙盒>/volume`；否则用户目录下固定子目录 */
 export function getRepositoryRoot(): string {
   const raw = process.env.COMPANION_VOLUME_ROOT?.trim();
   if (raw) return resolve(raw);
+  const sb = process.env.COMPANION_SANDBOX_ROOT?.trim();
+  if (sb) return resolve(join(sb, 'volume'));
   return resolve(homedir(), DEFAULT_REL);
 }
 

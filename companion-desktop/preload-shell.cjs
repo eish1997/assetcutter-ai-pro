@@ -27,6 +27,8 @@ contextBridge.exposeInMainWorld('companionShell', {
   fetchHostBundleCatalog: () => timedInvoke('shell-fetch-host-bundle-catalog'),
   samLocalDesktopState: () => timedInvoke('shell-sam-local-desktop-state'),
   samLocalBootstrapRun: () => timedInvoke('shell-sam-local-bootstrap-run'),
+  rembgDesktopState: () => timedInvoke('shell-rembg-desktop-state'),
+  rembgBootstrapRun: () => timedInvoke('shell-rembg-bootstrap-run'),
   traySummary: () => timedInvoke('shell-tray-summary'),
   loadSettings: () => timedInvoke('shell-settings-load'),
   saveSettings: (patch) => timedInvoke('shell-settings-save', patch),
@@ -43,6 +45,7 @@ contextBridge.exposeInMainWorld('companionShell', {
   workbenchReload: () => timedInvoke('shell-workbench-reload'),
   workbenchReloadHard: () => timedInvoke('shell-workbench-reload-hard'),
   workbenchOpenExternal: () => timedInvoke('shell-workbench-open-external'),
+  setWorkbenchSidebarInsetPx: (px) => timedInvoke('shell-workbench-sidebar-inset', px),
   loadPairing: () => timedInvoke('shell-load-pairing'),
   savePairing: (payload) => timedInvoke('shell-save-pairing', payload || {}),
   copyText: (text) => {
@@ -63,6 +66,16 @@ contextBridge.exposeInMainWorld('companionShell', {
   onSamLocalBootstrapLog: (handler) => {
     if (typeof handler !== 'function') return;
     ipcRenderer.on('sam-local-bootstrap-log', (_evt, payload) => {
+      try {
+        handler(payload);
+      } catch {
+        /* ignore */
+      }
+    });
+  },
+  onRembgBootstrapLog: (handler) => {
+    if (typeof handler !== 'function') return;
+    ipcRenderer.on('rembg-bootstrap-log', (_evt, payload) => {
       try {
         handler(payload);
       } catch {

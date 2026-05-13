@@ -9,6 +9,7 @@ import {
   runSamSegmentJob,
   SAM_SEGMENT_ADAPTER_ID,
 } from './samSegmentAdapter.js';
+import { REMBG_ADAPTER_ID, resolveRembgKeys, runRembgJob } from './rembgAdapter.js';
 import { HOST_BUNDLE_ADAPTER_ID, runHostBundlePhase } from './hostBundleExecAdapter.js';
 
 export type JobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
@@ -59,14 +60,18 @@ export const REGISTERED_COMPUTE_TYPES: Record<string, { adapterId: string; descr
     adapterId: SAM_SEGMENT_ADAPTER_ID,
     description: '本机分割：读 Volume 内图像与 params.prompt，调用 SamLocal /v1/segment/predict，写回 mask PNG',
   },
+  remove_bg: {
+    adapterId: REMBG_ADAPTER_ID,
+    description: '抠图：读 Volume 内图像，调用本机 Python rembg，写回 RGBA PNG',
+  },
   'host_bundle.exec': {
     adapterId: HOST_BUNDLE_ADAPTER_ID,
     description:
-      '宿主插件包 run.json 的 exec：inputs.dirName 为 host-bundles 下目录名；命令仅来自磁盘 run.json',
+      '扩展包 run.json 的 exec：inputs.dirName 为 host-bundles 下目录名；命令仅来自磁盘 run.json',
   },
   'host_bundle.probe': {
     adapterId: HOST_BUNDLE_ADAPTER_ID,
-    description: '宿主插件包 run.json 的 probe；inputs 同上',
+    description: '扩展包 run.json 的 probe；inputs 同上',
   },
 };
 
@@ -214,6 +219,44 @@ export async function submitJob(
         });
       }
     }
+  } else if (type === 'remove_bg') {
+    const resolved = resolveRembgKeys(projectId, b.inputs, b.params ?? {});
+    if ('error' in resolved) {
+      rec.status = 'failed';
+      rec.error = { code: resolved.code, message: resolved.error };
+      emitJobEvent(jobId, 'task.failed', { code: resolved.code, message: resolved.error });
+    } else {
+      rec.status = 'running';
+      rec.updatedAt = Date.now();
+      jobs.set(jobId, rec);
+      emitJobEvent(jobId, 'task.running', {
+        adapterId: REMBG_ADAPTER_ID,
+        stage: 'start',
+      });
+      const pid = projectId as string;
+      emitJobEvent(jobId, 'reply.delta', {
+        stage: 'dispatch',
+        text: 'remove_bg running rembg (Python)',
+      });
+      const run = await runRembgJob(pid, resolved.ok);
+      if ('error' in run) {
+        rec.status = 'failed';
+        rec.error = { code: run.code, message: run.error };
+        emitJobEvent(jobId, 'task.failed', { code: run.code, message: run.error });
+      } else {
+        rec.status = 'completed';
+        rec.result = {
+          adapterId: REMBG_ADAPTER_ID,
+          note: `PNG → asset key=${run.outputKey} (${run.bytesOut} bytes)`,
+        };
+        emitJobEvent(jobId, 'reply.completed', {
+          adapterId: REMBG_ADAPTER_ID,
+          outputKey: run.outputKey,
+          bytesOut: run.bytesOut,
+          note: rec.result.note ?? '',
+        });
+      }
+    }
   } else if (type === 'host_bundle.exec' || type === 'host_bundle.probe') {
     rec.status = 'running';
     rec.updatedAt = Date.now();
@@ -298,6 +341,7 @@ export function listAdapterIds(): string[] {
   s.add(ADAPTER_STUB);
   s.add(SEAM_ADAPTER_ID);
   s.add(SAM_SEGMENT_ADAPTER_ID);
+  s.add(REMBG_ADAPTER_ID);
   s.add(HOST_BUNDLE_ADAPTER_ID);
   for (const v of Object.values(REGISTERED_COMPUTE_TYPES)) {
     s.add(v.adapterId);

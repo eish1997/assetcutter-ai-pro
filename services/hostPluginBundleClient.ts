@@ -29,7 +29,7 @@ export async function installLatestHostPluginBundleToCompanion(): Promise<{
     channel: 'stable',
   });
   if (!latest?.id || !latest.sha256?.trim()) {
-    throw new Error('暂无宿主插件包发行记录，或缺少 sha256（请重新登记发行包）');
+    throw new Error('暂无扩展包（host_plugin_bundle）发行记录，或缺少 sha256（请重新登记发行包）');
   }
 
   const direct = typeof latest.publicInstallUrl === 'string' ? latest.publicInstallUrl.trim() : '';

@@ -30,6 +30,7 @@
     "files": [
       "main.cjs",
       "preload-shell.cjs",
+      "companion-sandbox-paths.cjs",
       "shell/**/*",
       "package.json"
     ],
@@ -49,6 +50,11 @@
       {
         "from": "sam-local-bootstrap",
         "to": "sam-local-bootstrap",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "rembg-bootstrap",
+        "to": "rembg-bootstrap",
         "filter": ["**/*"]
       }
     ],

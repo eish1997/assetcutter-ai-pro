@@ -36,6 +36,10 @@ export function useWorkflowMainScrollCapture(
   const workflowMainContentRef = useRef<HTMLDivElement | null>(null);
   const workflowMarqueeStartRef = useRef<((e: ReactMouseEvent) => void) | null>(null);
   const workflowPaneWheelRef = useRef<((e: ReactWheelEvent) => void) | null>(null);
+  /** 工作区内滚轮转发到资产列表（大纲空白、主区留白等） */
+  const workflowAssetListWheelRef = useRef<
+    ((e: ReactWheelEvent, origin: 'inner' | 'gutter') => boolean) | null
+  >(null);
 
   const registerMarqueeStart = useCallback((handler: ((e: ReactMouseEvent) => void) | null) => {
     workflowMarqueeStartRef.current = handler;
@@ -44,6 +48,13 @@ export function useWorkflowMainScrollCapture(
   const registerPaneWheel = useCallback((handler: ((e: ReactWheelEvent) => void) | null) => {
     workflowPaneWheelRef.current = handler;
   }, []);
+
+  const registerWorkflowAssetListWheel = useCallback(
+    (handler: ((e: ReactWheelEvent, origin: 'inner' | 'gutter') => boolean) | null) => {
+      workflowAssetListWheelRef.current = handler;
+    },
+    []
+  );
 
   const onMainMouseDownCapture = useCallback(
     (e: ReactMouseEvent) => {
@@ -60,17 +71,18 @@ export function useWorkflowMainScrollCapture(
       if (!isWorkflowMarqueeWheelActive) return;
       const target = e.target as Element | null;
       if (target?.closest('[data-ac-block-workflow-marquee]')) return;
-      if (
-        target?.closest(
-          '[data-workflow-sidebar], [data-workflow-preset], [data-workflow-outline], [data-workflow-card]'
-        )
-      ) {
+      /** 大纲区由 registerWorkflowAssetListWheel 内处理（空白时滚动资产列） */
+      if (target?.closest('[data-workflow-sidebar], [data-workflow-preset], [data-workflow-card]')) {
         return;
       }
       const content = workflowMainContentRef.current;
       if (content) {
         const r = content.getBoundingClientRect();
-        if (e.clientX >= r.left && e.clientX <= r.right) return;
+        if (e.clientX >= r.left && e.clientX <= r.right) {
+          void workflowAssetListWheelRef.current?.(e, 'inner');
+          return;
+        }
+        if (workflowAssetListWheelRef.current?.(e, 'gutter')) return;
       } else if (target?.closest('.max-w-6xl')) {
         return;
       }
@@ -130,5 +142,6 @@ export function useWorkflowMainScrollCapture(
     onMainDropCapture,
     registerMarqueeStart,
     registerPaneWheel,
+    registerWorkflowAssetListWheel,
   };
 }

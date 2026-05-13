@@ -44,7 +44,7 @@ const AdminCompanionArtifactsPanel: React.FC = () => {
   const applySamLocalHostBundlePreset = () => {
     setKind('host_plugin_bundle');
     setPlatform('universal');
-    setLabel('SamLocal 宿主插件包');
+    setLabel('SamLocal 扩展包示例');
     setNotes(
       '由仓库根 npm run pack:sam-local-bundle 生成（SamLocal-release/*.zip，须含 extracted/run.json）。详见 SamLocal/host-plugin-bundle/README.md。',
     );
@@ -135,8 +135,9 @@ const AdminCompanionArtifactsPanel: React.FC = () => {
       <div>
         <h2 className="text-[12px] font-black uppercase tracking-[0.2em] text-gray-300">本地伴侣发行</h2>
         <p className="text-[11px] text-gray-500 mt-2 leading-relaxed">
-          上传<strong className="text-gray-400">桌面壳安装包</strong>或<strong className="text-gray-400">宿主插件包</strong>到 R2，并登记元数据。用户在工作区左下角「伴侣」旁可下载（需登录）。
-          与 <code className="text-[10px] text-gray-400">/v1/capabilities</code> 运行时插件是不同概念，勿混名。
+          上传<strong className="text-gray-400">桌面壳安装包</strong>或<strong className="text-gray-400">扩展包（host_plugin_bundle）</strong>到 R2，并登记元数据。用户在工作区左下角「伴侣」旁可下载桌面壳（需登录）。
+          扩展包与网站工作流默认使用的<strong className="text-gray-400">本机引擎</strong>不是同一路径；与{' '}
+          <code className="text-[10px] text-gray-400">/v1/capabilities</code> 里列出的核心模块也不同名，请勿混用。
         </p>
       </div>
 
@@ -160,7 +161,7 @@ const AdminCompanionArtifactsPanel: React.FC = () => {
                 }}
                 options={[
                   { value: 'desktop_shell', label: 'desktop_shell（Electron 安装包/便携）' },
-                  { value: 'host_plugin_bundle', label: 'host_plugin_bundle（宿主可热更插件包）' },
+                  { value: 'host_plugin_bundle', label: '扩展包 host_plugin_bundle（ZIP，可选）' },
                 ]}
                 triggerClassName="w-full bg-[#0a0a0b] border border-[#2e2e32] rounded-lg px-3 py-2 text-[11px] text-left text-gray-200 flex items-center justify-between outline-none focus:border-blue-500 hover:bg-[#121214] transition-colors"
               />

@@ -36,6 +36,7 @@ function migrateCapabilityCategory(input: CustomAppModule): CapabilityCategory {
 
 function deriveEngineForCategory(category: CapabilityCategory, input: CustomAppModule, rawCat: string): CapabilityEngine | undefined {
   if (input.companionSamSegment === true) return 'builtin';
+  if (input.companionRembg === true) return 'builtin';
   if (input.companionHostBundle?.dirName?.trim()) return 'builtin';
   if (category === 'generate_3d' || category === 'generate_video') return undefined;
   if (category === 'text_to_text' || category === 'image_to_text') return 'gen_text';
@@ -194,6 +195,9 @@ export function normalizeCapabilityPreset(input: CustomAppModule, index: number)
   if (category === 'generate_3d' || category === 'generate_video' || base.id === 'cut_image') {
     delete (base as CustomAppModule & { companionHostBundle?: unknown }).companionHostBundle;
     delete (base as CustomAppModule & { companionSamSegment?: unknown }).companionSamSegment;
+    delete (base as CustomAppModule & { companionRembg?: unknown }).companionRembg;
+    delete (base as CustomAppModule & { companionRembgModel?: unknown }).companionRembgModel;
+    delete (base as CustomAppModule & { companionRembgAlphaMatting?: unknown }).companionRembgAlphaMatting;
   } else {
     const rawBundle = (input as CustomAppModule).companionHostBundle;
     if (rawBundle && typeof rawBundle === 'object' && typeof rawBundle.dirName === 'string') {
@@ -210,18 +214,48 @@ export function normalizeCapabilityPreset(input: CustomAppModule, index: number)
   }
   if (base.companionSamSegment === true) {
     delete (base as CustomAppModule & { companionHostBundle?: unknown }).companionHostBundle;
+    delete (base as CustomAppModule & { companionRembg?: unknown }).companionRembg;
+    delete (base as CustomAppModule & { companionRembgModel?: unknown }).companionRembgModel;
+    delete (base as CustomAppModule & { companionRembgAlphaMatting?: unknown }).companionRembgAlphaMatting;
+  }
+  if (base.companionRembg === true) {
+    delete (base as CustomAppModule & { companionHostBundle?: unknown }).companionHostBundle;
+    delete (base as CustomAppModule & { companionSamSegment?: unknown }).companionSamSegment;
   }
   if (base.companionHostBundle?.dirName?.trim()) {
     delete (base as CustomAppModule & { companionSamSegment?: unknown }).companionSamSegment;
+    delete (base as CustomAppModule & { companionRembg?: unknown }).companionRembg;
+    delete (base as CustomAppModule & { companionRembgModel?: unknown }).companionRembgModel;
+    delete (base as CustomAppModule & { companionRembgAlphaMatting?: unknown }).companionRembgAlphaMatting;
   }
   if (base.id === 'companion_sam_segment') {
     base.companionSamSegment = true;
     base.category = 'image_to_image';
     base.engine = 'builtin';
     delete (base as CustomAppModule & { companionHostBundle?: unknown }).companionHostBundle;
+    delete (base as CustomAppModule & { companionRembg?: unknown }).companionRembg;
+    delete (base as CustomAppModule & { companionRembgModel?: unknown }).companionRembgModel;
+    delete (base as CustomAppModule & { companionRembgAlphaMatting?: unknown }).companionRembgAlphaMatting;
+  }
+  if (base.id === 'companion_remove_bg') {
+    base.companionRembg = true;
+    base.category = 'image_to_image';
+    base.engine = 'builtin';
+    delete (base as CustomAppModule & { companionHostBundle?: unknown }).companionHostBundle;
+    delete (base as CustomAppModule & { companionSamSegment?: unknown }).companionSamSegment;
+    const mm = typeof (input as CustomAppModule).companionRembgModel === 'string' ? (input as CustomAppModule).companionRembgModel!.trim() : '';
+    if (mm) base.companionRembgModel = mm.slice(0, 64);
+    else delete (base as CustomAppModule & { companionRembgModel?: unknown }).companionRembgModel;
+    if ((input as CustomAppModule).companionRembgAlphaMatting === true) base.companionRembgAlphaMatting = true;
+    else delete (base as CustomAppModule & { companionRembgAlphaMatting?: unknown }).companionRembgAlphaMatting;
   }
   if (base.companionSamSegment !== true) {
     delete (base as CustomAppModule & { companionSamSegment?: unknown }).companionSamSegment;
+  }
+  if (base.companionRembg !== true) {
+    delete (base as CustomAppModule & { companionRembg?: unknown }).companionRembg;
+    delete (base as CustomAppModule & { companionRembgModel?: unknown }).companionRembgModel;
+    delete (base as CustomAppModule & { companionRembgAlphaMatting?: unknown }).companionRembgAlphaMatting;
   }
   return base;
 }

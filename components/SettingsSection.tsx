@@ -57,7 +57,9 @@ import {
   type CompanionInstalledHostBundleV1,
   probeCompanionCapabilities,
   probeCompanionHealth,
+  fetchCompanionRuntimeStatus,
   probeCompanionSamSegmentHealth,
+  probeCompanionRembgHealth,
 } from '../services/companionClient';
 import {
   clearCompanionJobCursor,
@@ -84,6 +86,19 @@ const SETTINGS_NAV: { id: string; label: string }[] = [
   { id: 'settings-companion', label: '本地伴侣' },
   { id: 'settings-api', label: 'API' },
 ];
+
+function parseLocalCapabilityUiSnippet(json: string): { headline: string; subline: string; tone: string } {
+  try {
+    const j = JSON.parse(json) as { headline?: string; subline?: string; tone?: string };
+    return {
+      headline: typeof j.headline === 'string' ? j.headline : '',
+      subline: typeof j.subline === 'string' ? j.subline : '',
+      tone: typeof j.tone === 'string' ? j.tone : '',
+    };
+  } catch {
+    return { headline: '', subline: '', tone: '' };
+  }
+}
 
 const AI_PROVIDER_OPTIONS: { value: AiProvider; label: string }[] = [
   { value: 'trial', label: '试用（代理通道，无需本地 Key）' },
@@ -175,6 +190,17 @@ const SettingsSection: React.FC<{
   const [companionSamSnippet, setCompanionSamSnippet] = useState('');
   const [companionSamHealthBusy, setCompanionSamHealthBusy] = useState(false);
   const [companionSamHealthSnippet, setCompanionSamHealthSnippet] = useState('');
+  const [companionRembgDebugBusy, setCompanionRembgDebugBusy] = useState(false);
+  const [companionRembgDebugSnippet, setCompanionRembgDebugSnippet] = useState('');
+  /** `/v1/runtime-status` 中的 `localCapabilityUi` JSON（检测成功后刷新） */
+  const [companionRuntimeUiJson, setCompanionRuntimeUiJson] = useState('');
+  /** `/v1/runtime-status` 中的 `samSegmentHttpProbe` JSON（与伴侣内 HTTP 健康检查一致） */
+  const [companionSamProbeSnippet, setCompanionSamProbeSnippet] = useState('');
+  /** `/v1/runtime-status` 中的 `rembgPythonProbe`（伴侣内 `import rembg` 子进程探测） */
+  const [companionRembgProbeSnippet, setCompanionRembgProbeSnippet] = useState('');
+  /** `/v1/runtime-status` 中的 `localEnginesStatus`（注册表 + 已接线探测） */
+  const [companionLocalEnginesStatusJson, setCompanionLocalEnginesStatusJson] = useState('');
+  const [companionDiagCopyHint, setCompanionDiagCopyHint] = useState('');
   const [companionProjectsBusy, setCompanionProjectsBusy] = useState(false);
   const [companionProjectsSnippet, setCompanionProjectsSnippet] = useState('');
   const [companionJobIdDraft, setCompanionJobIdDraft] = useState('');
@@ -213,7 +239,7 @@ const SettingsSection: React.FC<{
   const handleSaveCompanionPairing = () => {
     setCompanionLocalToken(companionTokenDraft);
     setCompanionTokenDraft(getCompanionLocalToken());
-    setCompanionProbeHint('配对密码已保存到本浏览器（与桌面壳一致即可连上本机）');
+    setCompanionProbeHint('已保存。桌面伴侣里填同一密码即可。');
     setTimeout(() => setCompanionProbeHint(''), 3200);
   };
 
@@ -222,7 +248,7 @@ const SettingsSection: React.FC<{
     if (!t) return;
     try {
       await navigator.clipboard.writeText(t);
-      setCompanionProbeHint('已复制当前站点地址，可粘贴到桌面壳「与网站配对 → 允许的网站地址」');
+      setCompanionProbeHint('已复制站点地址，可粘贴到桌面伴侣「允许的网站」');
       setTimeout(() => setCompanionProbeHint(''), 3200);
     } catch {
       setCompanionProbeHint('复制失败：请手动复制浏览器地址栏中的站点根地址');
@@ -233,7 +259,7 @@ const SettingsSection: React.FC<{
   const handleCopySamLocalEnvSnippet = async () => {
     try {
       await navigator.clipboard.writeText(SAM_LOCAL_ENV_SNIPPET);
-      setCompanionProbeHint('已复制 SamLocal 环境变量示例；请将 REPO_ROOT 换成本机仓库根路径后写入伴侣启动环境');
+      setCompanionProbeHint('已复制环境变量示例；把 REPO_ROOT 换成你的仓库根目录后写入伴侣环境');
       setTimeout(() => setCompanionProbeHint(''), 4200);
     } catch {
       setCompanionProbeHint('复制失败：请手动从 docs/本机分割故障排除.md 对照填写');
@@ -413,8 +439,17 @@ const SettingsSection: React.FC<{
     setCompanionSeamSnippet('');
     setCompanionSamSnippet('');
     setCompanionSamHealthSnippet('');
+    setCompanionRembgDebugSnippet('');
+    setCompanionRuntimeUiJson('');
+    setCompanionSamProbeSnippet('');
+    setCompanionRembgProbeSnippet('');
+    setCompanionLocalEnginesStatusJson('');
     try {
-      const [h, c] = await Promise.all([probeCompanionHealth(base), probeCompanionCapabilities(base)]);
+      const [h, c, rt] = await Promise.all([
+        probeCompanionHealth(base),
+        probeCompanionCapabilities(base),
+        fetchCompanionRuntimeStatus(base),
+      ]);
       const parts: string[] = [];
       if (h.ok) {
         parts.push(`健康检查：成功${h.latencyMs != null ? `（${h.latencyMs}ms）` : ''}`);
@@ -446,9 +481,52 @@ const SettingsSection: React.FC<{
       } else {
         parts.push(`能力清单：失败 — ${c.error ?? '未知错误'}`);
       }
+      if (rt.ok && rt.body && typeof rt.body === 'object' && rt.body !== null) {
+        const cap = rt.body as Record<string, unknown>;
+        const ui = cap.localCapabilityUi;
+        setCompanionRuntimeUiJson(JSON.stringify(ui ?? null, null, 2));
+        const sp = cap.samSegmentHttpProbe;
+        setCompanionSamProbeSnippet(
+          sp != null && typeof sp === 'object' ? JSON.stringify(sp, null, 2) : '',
+        );
+        const rp = cap.rembgPythonProbe;
+        setCompanionRembgProbeSnippet(
+          rp != null && typeof rp === 'object' ? JSON.stringify(rp, null, 2) : '',
+        );
+        const le = cap.localEnginesStatus;
+        setCompanionLocalEnginesStatusJson(
+          Array.isArray(le) && le.length > 0 ? JSON.stringify(le, null, 2) : '',
+        );
+      } else {
+        setCompanionRuntimeUiJson('');
+        setCompanionSamProbeSnippet('');
+        setCompanionRembgProbeSnippet('');
+        setCompanionLocalEnginesStatusJson('');
+        if (!rt.ok) {
+          parts.push(`运行状态：失败 — ${rt.error ?? '未知错误'}`);
+        }
+      }
       setCompanionProbeHint(parts.join('；'));
     } finally {
       setCompanionProbeBusy(false);
+    }
+  };
+
+  const handleProbeRembgHealth = async () => {
+    const base = normalizeCompanionBaseUrl(companionBaseDraft);
+    setCompanionRembgDebugBusy(true);
+    setCompanionRembgDebugSnippet('');
+    try {
+      const r = await probeCompanionRembgHealth(base);
+      if (r.ok === false) {
+        setCompanionRembgDebugSnippet(`请求失败：${r.error ?? '未知错误'}`);
+        return;
+      }
+      setCompanionRembgDebugSnippet(JSON.stringify(r.body, null, 2));
+    } catch (e) {
+      setCompanionRembgDebugSnippet(String(e));
+    } finally {
+      setCompanionRembgDebugBusy(false);
     }
   };
 
@@ -470,6 +548,50 @@ const SettingsSection: React.FC<{
     }
   };
 
+  const handleCopyCompanionDiagnostic = async () => {
+    const base = normalizeCompanionBaseUrl(companionBaseDraft);
+    setCompanionDiagCopyHint('');
+    try {
+      const [h, c, rt] = await Promise.all([
+        probeCompanionHealth(base),
+        probeCompanionCapabilities(base),
+        fetchCompanionRuntimeStatus(base),
+      ]);
+      const ui =
+        rt.ok && rt.body && typeof rt.body === 'object' && rt.body !== null
+          ? (rt.body as Record<string, unknown>).localCapabilityUi
+          : null;
+      const samProbe =
+        rt.ok && rt.body && typeof rt.body === 'object' && rt.body !== null
+          ? (rt.body as Record<string, unknown>).samSegmentHttpProbe
+          : null;
+      const rembgProbe =
+        rt.ok && rt.body && typeof rt.body === 'object' && rt.body !== null
+          ? (rt.body as Record<string, unknown>).rembgPythonProbe
+          : null;
+      const localEngines =
+        rt.ok && rt.body && typeof rt.body === 'object' && rt.body !== null
+          ? (rt.body as Record<string, unknown>).localEnginesStatus
+          : null;
+      const payload = {
+        generatedAt: new Date().toISOString(),
+        companionBase: base,
+        localCapabilityUi: ui ?? null,
+        samSegmentHttpProbe: samProbe ?? null,
+        rembgPythonProbe: rembgProbe ?? null,
+        localEnginesStatus: localEngines ?? null,
+        health: h.ok ? { ok: true as const, latencyMs: h.latencyMs } : { ok: false as const, error: h.error },
+        capabilities: c.ok ? { ok: true as const, latencyMs: c.latencyMs } : { ok: false as const, error: c.error },
+        runtimeStatus: rt.ok ? { ok: true as const, latencyMs: rt.latencyMs } : { ok: false as const, error: rt.error },
+      };
+      await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+      setCompanionDiagCopyHint('已复制诊断摘要到剪贴板（不含通信密码）');
+      setTimeout(() => setCompanionDiagCopyHint(''), 3200);
+    } catch (e) {
+      setCompanionDiagCopyHint(`复制失败：${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
   const handleQuickConnectCompanion = async () => {
     const base = normalizeCompanionBaseUrl(companionBaseDraft);
     setCompanionLocalBaseUrl(base);
@@ -478,7 +600,7 @@ const SettingsSection: React.FC<{
       setCompanionLocalToken(companionTokenDraft);
       setCompanionTokenDraft(getCompanionLocalToken());
     }
-    setCompanionProbeHint('正在自动连接本机伴侣…');
+    setCompanionProbeHint('正在连接…');
     await handleProbeCompanion();
   };
 
@@ -1029,76 +1151,29 @@ const SettingsSection: React.FC<{
             </section>
 
             <section id="settings-companion" className="scroll-mt-4 rounded-2xl border border-[#2e2e32] bg-[#121214] p-6">
-              <h2 className="text-xs font-black uppercase tracking-wider text-blue-400/90 mb-4">本地伴侣</h2>
+              <h2 className="text-xs font-black uppercase tracking-wider text-blue-400/90 mb-2">本地伴侣</h2>
+              <p className="text-[10px] text-gray-500 leading-relaxed mb-4">
+                「本机分割」「去背景」在<strong className="text-gray-300">本机</strong>运行，需<strong className="text-gray-300">桌面伴侣</strong>并在其中打开本机引擎。文末「扩展包」为可选，日常可忽略。
+              </p>
               <div className="rounded-xl border border-[#252528] p-4 space-y-4 text-[10px] text-gray-400 leading-relaxed">
-                <div className="rounded-lg border border-[#2e2e32] bg-[#16161a] p-3">
-                  <p className="text-[11px] text-gray-200 font-semibold mb-1">给普通用户的最短路径</p>
-                  <ol className="list-decimal ml-4 space-y-1 text-[10px] text-gray-400">
-                    <li>先在「与网站配对」里保存本机通信密码</li>
-                    <li>点击「一键连接本机伴侣」</li>
-                    <li>如果失败，再点「重新检测」看提示</li>
-                  </ol>
-                </div>
-                <div className="rounded-lg border border-violet-500/25 bg-[#14101c]/90 p-3 space-y-2">
-                  <p className="text-[11px] text-gray-200 font-semibold">本机分割（SamLocal）</p>
-                  <p className="text-[10px] text-gray-500 leading-relaxed">
-                    工作区大图「本机分割」由<strong className="text-gray-400">伴侣进程</strong>调用 SamLocal（默认{' '}
-                    <code className="text-violet-200/90">http://127.0.0.1:18081/v1/segment/predict</code>
-                    ）。请在运行伴侣的环境中设置{' '}
-                    <code className="text-violet-200/90">COMPANION_SAM_SEGMENT_URL</code>，并在本机执行仓库根目录{' '}
-                    <code className="text-violet-200/90">npm run dev:sam-local</code> 启动 SamLocal。
-                    首次在本机启用 <strong className="text-gray-400">SAM_MODE=sam</strong> 前，可在仓库根执行{' '}
-                    <code className="text-violet-200/90">npm run setup:sam-local</code>（安装 Python 依赖并下载 ViT-B 权重，约数百 MB）。
-                    企业与离线场景见 <code className="text-gray-400">docs/本机分割一键安装指南.md</code>；日常排障见{' '}
-                    <code className="text-gray-400">docs/本机分割故障排除.md</code>。
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() => void handleProbeSamSegmentHealth()}
-                      disabled={companionSamHealthBusy || companionProbeBusy}
-                      className="px-3 py-1.5 rounded-lg border border-violet-500/35 bg-violet-950/40 text-[10px] font-bold text-violet-100 hover:bg-violet-900/45 transition-colors disabled:opacity-50"
-                    >
-                      {companionSamHealthBusy ? '探测中…' : '探测 SamLocal（经伴侣）'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void handleCopySamLocalEnvSnippet()}
-                      className="px-3 py-1.5 rounded-lg border border-[#3f3f46] bg-[#1a1625] text-[10px] font-bold text-violet-200/90 hover:bg-[#252030] transition-colors"
-                    >
-                      复制环境变量示例
-                    </button>
-                  </div>
-                  {companionSamHealthSnippet ? (
-                    <pre className="text-[9px] text-gray-500 whitespace-pre-wrap break-all max-h-36 overflow-y-auto rounded border border-[#2e2e32] bg-[#101014] p-2">
-                      {companionSamHealthSnippet}
-                    </pre>
-                  ) : null}
-                </div>
-                <p className="text-[11px] text-gray-300 leading-relaxed">
-                  想在本机处理素材，直接点「一键连接本机伴侣」。若本机开启了访问控制，请在下方填写与桌面壳或本机伴侣一致的
-                  <strong className="text-gray-200">通信密码</strong>；无需再打开单独向导窗口。
-                </p>
                 <div className="rounded-xl border border-blue-500/30 bg-[#0c1524]/90 p-4 space-y-3">
-                  <h3 className="text-[11px] font-bold text-blue-300/95 tracking-wide">与网站配对</h3>
-                  <p className="text-[10px] text-gray-500 leading-relaxed">
-                    网站只把密码存在本浏览器，用于请求本机时的鉴权。桌面端请在{' '}
-                    <strong className="text-gray-400">Asset Cutter 桌面伴侣 → 设置 → 与网站配对</strong>{' '}
-                    填写同一密码，并把「允许的网站地址」设为当前站点（可复制下方）。
+                  <h3 className="text-[11px] font-bold text-blue-300/95">① 与网站配对</h3>
+                  <p className="text-[10px] text-gray-500">
+                    密码只保存在本浏览器。桌面伴侣里填<strong className="text-gray-300">同一密码</strong>，并把允许的网站设为下方地址。
                   </p>
                   <div className="space-y-1.5">
-                    <label className="block text-[10px] text-gray-400">本机通信密码</label>
+                    <label className="block text-[10px] text-gray-400">通信密码</label>
                     <input
                       type="password"
                       value={companionTokenDraft}
                       onChange={(e) => setCompanionTokenDraft(e.target.value)}
-                      placeholder="与桌面壳 / 本机伴侣中设置的密码一致"
+                      placeholder="与桌面伴侣里一致"
                       className="w-full px-3 py-2 rounded-xl bg-[#101014] border border-[#2e2e32] text-[11px] text-white placeholder-gray-600 focus:border-blue-500 focus:outline-none"
                       autoComplete="off"
                     />
                   </div>
                   <div className="space-y-1.5">
-                    <label className="block text-[10px] text-gray-400">当前站点（供桌面壳「允许的网站地址」）</label>
+                    <label className="block text-[10px] text-gray-400">当前站点（粘贴到桌面伴侣）</label>
                     <div className="flex flex-wrap items-stretch gap-2">
                       <code className="flex-1 min-w-0 px-3 py-2 rounded-lg bg-[#101014] border border-[#2e2e32] text-[10px] text-gray-300 break-all">
                         {suggestedSiteOrigin || '—'}
@@ -1121,65 +1196,192 @@ const SettingsSection: React.FC<{
                     保存配对密码
                   </button>
                 </div>
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void handleQuickConnectCompanion()}
-                    disabled={companionProbeBusy}
-                    className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-[10px] font-black uppercase text-white transition-colors disabled:opacity-60"
-                  >
-                    {companionProbeBusy ? '连接中…' : '一键连接本机伴侣'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleCompanionOneClickOff}
-                    className="px-4 py-2 rounded-xl bg-[#26262c] hover:bg-[#383842] border border-[#2e2e32] text-[10px] font-bold text-gray-200 transition-colors"
-                  >
-                    一键关闭配对
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void handleProbeCompanion()}
-                    disabled={companionProbeBusy}
-                    className="px-4 py-2 rounded-xl border border-[#3f3f46] text-[10px] font-bold text-gray-300 hover:bg-[#222228] transition-colors disabled:opacity-60"
-                  >
-                    {companionProbeBusy ? '检测中…' : '重新检测'}
-                  </button>
-                  <a
-                    href="assetcutter-companion://open"
-                    className="inline-flex items-center px-4 py-2 rounded-xl border border-[#3f3f46] text-[10px] font-bold text-gray-300 hover:bg-[#222228] transition-colors"
-                    title="需已安装 Asset Cutter 桌面伴侣；首次使用可能需在系统中确认协议关联"
-                  >
-                    调起桌面伴侣
-                  </a>
-                  <a
-                    href={companionConsoleHref}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center px-4 py-2 rounded-xl border border-[#3f3f46] text-[10px] font-bold text-gray-300 hover:bg-[#222228] transition-colors"
-                  >
-                    打开本机管理页
-                  </a>
-                  <button
-                    type="button"
-                    onClick={() => void handleListCompanionProjects()}
-                    disabled={companionProjectsBusy}
-                    className="px-4 py-2 rounded-xl bg-[#26262c] hover:bg-[#383842] border border-[#2e2e32] text-[10px] font-bold text-gray-200 transition-colors disabled:opacity-60"
-                  >
-                    {companionProjectsBusy ? '刷新中…' : '刷新本机项目列表'}
-                  </button>
+                <div>
+                  <p className="text-[10px] text-gray-500 mb-2">② 连接本机</p>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void handleQuickConnectCompanion()}
+                      disabled={companionProbeBusy}
+                      className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-[10px] font-black uppercase text-white transition-colors disabled:opacity-60"
+                    >
+                      {companionProbeBusy ? '连接中…' : '一键连接'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleProbeCompanion()}
+                      disabled={companionProbeBusy}
+                      className="px-4 py-2 rounded-xl border border-[#3f3f46] text-[10px] font-bold text-gray-300 hover:bg-[#222228] transition-colors disabled:opacity-60"
+                    >
+                      {companionProbeBusy ? '检测中…' : '重新检测'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleCompanionOneClickOff}
+                      className="px-4 py-2 rounded-xl bg-[#26262c] hover:bg-[#383842] border border-[#2e2e32] text-[10px] font-bold text-gray-200 transition-colors"
+                    >
+                      关闭配对
+                    </button>
+                    <a
+                      href="assetcutter-companion://open"
+                      className="inline-flex items-center px-4 py-2 rounded-xl border border-[#3f3f46] text-[10px] font-bold text-gray-300 hover:bg-[#222228] transition-colors"
+                      title="需已安装桌面伴侣；首次可能需在系统中确认协议"
+                    >
+                      打开桌面伴侣
+                    </a>
+                    <a
+                      href={companionConsoleHref}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center px-4 py-2 rounded-xl border border-[#3f3f46] text-[10px] font-bold text-gray-300 hover:bg-[#222228] transition-colors"
+                    >
+                      本机管理页
+                    </a>
+                    <button
+                      type="button"
+                      onClick={() => void handleListCompanionProjects()}
+                      disabled={companionProjectsBusy}
+                      className="px-4 py-2 rounded-xl bg-[#26262c] hover:bg-[#383842] border border-[#2e2e32] text-[10px] font-bold text-gray-200 transition-colors disabled:opacity-60"
+                    >
+                      {companionProjectsBusy ? '刷新中…' : '刷新项目列表'}
+                    </button>
+                  </div>
+                </div>
+                {companionProbeHint ? <p className="text-[10px] text-gray-300">{companionProbeHint}</p> : null}
+                <div className="rounded-lg border border-amber-500/25 bg-[#1c1408]/90 p-3 space-y-2">
+                  <p className="text-[11px] text-amber-100/95 font-semibold">③ 本机状态</p>
+                  {companionRuntimeUiJson.trim() ? (
+                    (() => {
+                      const lc = parseLocalCapabilityUiSnippet(companionRuntimeUiJson);
+                      const warn = lc.tone === 'warn';
+                      return (
+                        <div className="space-y-1.5">
+                          <p
+                            className={`text-[11px] font-bold leading-snug ${
+                              warn ? 'text-amber-200' : 'text-emerald-200/95'
+                            }`}
+                          >
+                            {lc.headline || '（无标题）'}
+                          </p>
+                          {lc.subline ? (
+                            <p className="text-[10px] text-gray-400 leading-relaxed">{lc.subline}</p>
+                          ) : null}
+                          <details className="text-[9px] text-gray-500">
+                            <summary className="cursor-pointer text-gray-400 font-semibold">原始 JSON</summary>
+                            <pre className="mt-1 whitespace-pre-wrap break-all max-h-28 overflow-y-auto rounded border border-[#2e2e32] bg-[#101014] p-2">
+                              {companionRuntimeUiJson}
+                            </pre>
+                          </details>
+                          {companionSamProbeSnippet.trim() ? (
+                            <details className="text-[9px] text-gray-500">
+                              <summary className="cursor-pointer text-gray-400 font-semibold">分割服务</summary>
+                              <pre className="mt-1 whitespace-pre-wrap break-all max-h-24 overflow-y-auto rounded border border-[#2e2e32] bg-[#101014] p-2">
+                                {companionSamProbeSnippet}
+                              </pre>
+                            </details>
+                          ) : null}
+                          {companionRembgProbeSnippet.trim() ? (
+                            <details className="text-[9px] text-gray-500">
+                              <summary className="cursor-pointer text-gray-400 font-semibold">去背景</summary>
+                              <pre className="mt-1 whitespace-pre-wrap break-all max-h-24 overflow-y-auto rounded border border-[#2e2e32] bg-[#101014] p-2">
+                                {companionRembgProbeSnippet}
+                              </pre>
+                            </details>
+                          ) : null}
+                          {companionLocalEnginesStatusJson.trim() ? (
+                            <details className="text-[9px] text-gray-500">
+                              <summary className="cursor-pointer text-gray-400 font-semibold">各引擎一览</summary>
+                              <pre className="mt-1 whitespace-pre-wrap break-all max-h-32 overflow-y-auto rounded border border-[#2e2e32] bg-[#101014] p-2">
+                                {companionLocalEnginesStatusJson}
+                              </pre>
+                            </details>
+                          ) : null}
+                        </div>
+                      );
+                    })()
+                  ) : (
+                    <p className="text-[10px] text-gray-500 leading-relaxed">连接或「重新检测」后将显示摘要。</p>
+                  )}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void handleCopyCompanionDiagnostic()}
+                      className="px-3 py-1.5 rounded-lg border border-amber-500/40 bg-amber-950/35 text-[10px] font-bold text-amber-100 hover:bg-amber-900/40 transition-colors"
+                    >
+                      复制诊断（发给支持）
+                    </button>
+                    {companionDiagCopyHint ? (
+                      <span className="text-[9px] text-gray-400">{companionDiagCopyHint}</span>
+                    ) : null}
+                  </div>
+                </div>
+                <div className="rounded-lg border border-sky-500/20 bg-[#0c1418]/90 p-3 space-y-1">
+                  <p className="text-[11px] text-sky-200/95 font-semibold">仍异常？</p>
+                  <p className="text-[10px] text-gray-500 leading-relaxed">
+                    网站不能替您重启本机进程。请打开<strong className="text-gray-400"> 桌面伴侣</strong>，在首页用「打开本机引擎」或「重启本地伴侣」（与托盘菜单一致）。
+                  </p>
+                </div>
+                <div className="rounded-lg border border-violet-500/25 bg-[#14101c]/90 p-3 space-y-2">
+                  <p className="text-[11px] text-gray-200 font-semibold">④ 分割 / 去背景自检</p>
+                  <p className="text-[10px] text-gray-500 leading-relaxed">
+                    环境在<strong className="text-gray-400">桌面伴侣</strong>里配置。下面由本机伴侣代为检查（结果可能被短缓存，排障时可设伴侣环境变量 <code className="text-violet-200/90">COMPANION_RUNTIME_PROBE_CACHE_MS=0</code> 后重启伴侣）。
+                  </p>
+                  <details className="rounded border border-[#2e2e32] bg-[#101014]/60 p-2 text-[9px] text-gray-500">
+                    <summary className="cursor-pointer font-semibold text-gray-400">开发者参考</summary>
+                    <div className="mt-2 space-y-1.5 leading-relaxed">
+                      <p>
+                        分割默认连本机 <code className="text-violet-200/85">127.0.0.1:18081</code>；伴侣进程需{' '}
+                        <code className="text-violet-200/85">COMPANION_SAM_SEGMENT_URL</code>。仓库根可运行{' '}
+                        <code className="text-violet-200/85">npm run dev:sam-local</code>、首次环境{' '}
+                        <code className="text-violet-200/85">npm run setup:sam-local</code>。
+                      </p>
+                      <p>详细说明见仓库文档《本机分割故障排除》《本机分割一键安装指南》。</p>
+                    </div>
+                  </details>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void handleProbeSamSegmentHealth()}
+                      disabled={companionSamHealthBusy || companionProbeBusy}
+                      className="px-3 py-1.5 rounded-lg border border-violet-500/35 bg-violet-950/40 text-[10px] font-bold text-violet-100 hover:bg-violet-900/45 transition-colors disabled:opacity-50"
+                    >
+                      {companionSamHealthBusy ? '检查中…' : '检查本机分割'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleProbeRembgHealth()}
+                      disabled={companionRembgDebugBusy || companionProbeBusy}
+                      className="px-3 py-1.5 rounded-lg border border-violet-500/35 bg-violet-950/40 text-[10px] font-bold text-violet-100 hover:bg-violet-900/45 transition-colors disabled:opacity-50"
+                    >
+                      {companionRembgDebugBusy ? '检查中…' : '检查去背景'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleCopySamLocalEnvSnippet()}
+                      className="px-3 py-1.5 rounded-lg border border-[#3f3f46] bg-[#1a1625] text-[10px] font-bold text-violet-200/90 hover:bg-[#252030] transition-colors"
+                    >
+                      复制环境变量
+                    </button>
+                  </div>
+                  {(companionSamHealthSnippet || companionRembgDebugSnippet) ? (
+                    <details className="rounded border border-[#2e2e32] bg-[#101014] p-2">
+                      <summary className="cursor-pointer text-[9px] font-semibold text-gray-500">上次自检原始输出</summary>
+                      <div className="mt-2 space-y-2 max-h-48 overflow-y-auto">
+                        {companionSamHealthSnippet ? (
+                          <pre className="text-[9px] text-gray-500 whitespace-pre-wrap break-all">{companionSamHealthSnippet}</pre>
+                        ) : null}
+                        {companionRembgDebugSnippet ? (
+                          <pre className="text-[9px] text-gray-500 whitespace-pre-wrap break-all">{companionRembgDebugSnippet}</pre>
+                        ) : null}
+                      </div>
+                    </details>
+                  ) : null}
                 </div>
                 <details className="rounded-lg border border-dashed border-[#3f3f46] bg-[#16161a]/80 p-3 space-y-2">
-                  <summary className="cursor-pointer text-[10px] font-bold text-gray-300">高级：本机扩展与宿主包（普通用户可忽略）</summary>
+                  <summary className="cursor-pointer text-[10px] font-bold text-gray-300">扩展包（管理员/可选）</summary>
                   <div className="mt-3 space-y-2">
                     <p className="text-[10px] text-gray-500 leading-relaxed">
-                      <span className="text-gray-400 font-bold">宿主插件包</span>（如大模型 / Segment Anything
-                      runtime）：管理员在后台登记为 <code className="text-gray-500">host_plugin_bundle</code>{' '}
-                      后，可从此处拉取到本机卷（本机伴侣可连；下载为 https。若主站已配置{' '}
-                      <code className="text-gray-500">COMPANION_DIST_PUBLIC_HTTP_BASE</code>，「安装最新」可优先走**公网直链**而无需预签名；否则需**已登录**以获取预签名 URL。主机须在 R2
-                      允许域或 <code className="text-gray-500">COMPANION_HOST_BUNDLE_TRUST_HOSTS</code>）。
-                      SamLocal 示例包：仓库 <code className="text-gray-500">npm run pack:sam-local-bundle</code>，见{' '}
-                      <code className="text-gray-500">SamLocal/host-plugin-bundle/README.md</code>。
+                      与「本机引擎一键安装」<strong className="text-gray-400">不同路</strong>：用于后台下发的可选 ZIP。安装需已登录；直链/域名策略由部署方配置。
                     </p>
                     <button
                       type="button"
@@ -1187,16 +1389,14 @@ const SettingsSection: React.FC<{
                       disabled={hostBundleBusy}
                       className="px-4 py-2 rounded-xl bg-[#1e3a5f] hover:bg-[#264f7a] border border-[#3b82f6]/40 text-[10px] font-bold text-blue-100 transition-colors disabled:opacity-60"
                     >
-                      {hostBundleBusy ? '安装中…' : '安装最新宿主插件包到本机'}
+                      {hostBundleBusy ? '安装中…' : '安装扩展包'}
                     </button>
                     {hostBundleHint ? (
                       <p className="text-[10px] text-gray-400 whitespace-pre-wrap break-words">{hostBundleHint}</p>
                     ) : null}
                     <div className="mt-3 pt-3 border-t border-[#2e2e32]/80 space-y-2">
                       <p className="text-[10px] text-gray-500 leading-relaxed">
-                        <span className="text-gray-400 font-bold">run.json 计算</span>：向本机伴侣提交{' '}
-                        <code className="text-gray-500">host_bundle.probe</code> /{' '}
-                        <code className="text-gray-500">host_bundle.exec</code>（与设置页下方「任务进度」共用）。
+                        <span className="text-gray-400 font-bold">包内计算</span>：probe / exec，与下方「任务进度」共用。
                       </p>
                       <div className="flex flex-wrap gap-2">
                         <button
@@ -1253,7 +1453,7 @@ const SettingsSection: React.FC<{
                 </details>
                 <details className="rounded-lg border border-[#2e2e32] bg-[#16161a] group">
                   <summary className="cursor-pointer list-none px-3 py-2.5 text-[10px] font-bold text-gray-400 marker:content-none [&::-webkit-details-marker]:hidden">
-                    高级：本机 HTTP 地址（一般无需展开）
+                    本机地址（一般不用改）
                   </summary>
                   <div className="px-3 pb-3 space-y-3 border-t border-[#2e2e32] pt-2">
                     <div className="space-y-2">
@@ -1276,15 +1476,14 @@ const SettingsSection: React.FC<{
                     </button>
                   </div>
                 </details>
-                {companionProbeHint ? <p className="text-[10px] text-gray-300">{companionProbeHint}</p> : null}
                 <details className="rounded-lg border border-[#2e2e32] bg-[#16161a] group">
                   <summary className="cursor-pointer list-none px-3 py-2.5 text-[10px] font-bold text-gray-400 marker:content-none [&::-webkit-details-marker]:hidden">
-                    连接与能力详情（可选，供排障）
+                    原始接口数据
                   </summary>
                   <div className="px-3 pb-3 space-y-2 border-t border-[#2e2e32] pt-2">
                     {companionHealthSnippet ? (
                       <details className="rounded-lg border border-[#2e2e32] bg-[#101014] p-2">
-                        <summary className="cursor-pointer text-[9px] font-bold text-gray-500">健康检查</summary>
+                        <summary className="cursor-pointer text-[9px] font-bold text-gray-500">健康</summary>
                         <pre className="mt-2 text-[9px] text-gray-500 whitespace-pre-wrap break-all max-h-40 overflow-y-auto">
                           {companionHealthSnippet}
                         </pre>
@@ -1292,7 +1491,7 @@ const SettingsSection: React.FC<{
                     ) : null}
                     {companionCapSnippet ? (
                       <details className="rounded-lg border border-[#2e2e32] bg-[#101014] p-2">
-                        <summary className="cursor-pointer text-[9px] font-bold text-gray-500">能力清单</summary>
+                        <summary className="cursor-pointer text-[9px] font-bold text-gray-500">能力</summary>
                         <pre className="mt-2 text-[9px] text-gray-500 whitespace-pre-wrap break-all max-h-40 overflow-y-auto">
                           {companionCapSnippet}
                         </pre>
@@ -1300,7 +1499,7 @@ const SettingsSection: React.FC<{
                     ) : null}
                     {companionRelaySnippet ? (
                       <details className="rounded-lg border border-[#2e2e32] bg-[#101014] p-2">
-                        <summary className="cursor-pointer text-[9px] font-bold text-gray-500">站点中转（Relay）</summary>
+                        <summary className="cursor-pointer text-[9px] font-bold text-gray-500">Relay</summary>
                         <pre className="mt-2 text-[9px] text-gray-500 whitespace-pre-wrap break-all max-h-32 overflow-y-auto">
                           {companionRelaySnippet}
                         </pre>
@@ -1308,7 +1507,7 @@ const SettingsSection: React.FC<{
                     ) : null}
                     {companionSeamSnippet ? (
                       <details className="rounded-lg border border-[#2e2e32] bg-[#101014] p-2">
-                        <summary className="cursor-pointer text-[9px] font-bold text-gray-500">本机修缝能力</summary>
+                        <summary className="cursor-pointer text-[9px] font-bold text-gray-500">修缝</summary>
                         <pre className="mt-2 text-[9px] text-gray-500 whitespace-pre-wrap break-all max-h-32 overflow-y-auto">
                           {companionSeamSnippet}
                         </pre>
@@ -1316,7 +1515,7 @@ const SettingsSection: React.FC<{
                     ) : null}
                     {companionSamSnippet ? (
                       <details className="rounded-lg border border-[#2e2e32] bg-[#101014] p-2">
-                        <summary className="cursor-pointer text-[9px] font-bold text-gray-500">本机分割能力（samSegment）</summary>
+                        <summary className="cursor-pointer text-[9px] font-bold text-gray-500">分割配置</summary>
                         <pre className="mt-2 text-[9px] text-gray-500 whitespace-pre-wrap break-all max-h-32 overflow-y-auto">
                           {companionSamSnippet}
                         </pre>
@@ -1324,7 +1523,7 @@ const SettingsSection: React.FC<{
                     ) : null}
                     {companionProjectsSnippet ? (
                       <details className="rounded-lg border border-[#2e2e32] bg-[#101014] p-2">
-                        <summary className="cursor-pointer text-[9px] font-bold text-gray-500">项目列表（原始）</summary>
+                        <summary className="cursor-pointer text-[9px] font-bold text-gray-500">项目列表</summary>
                         <pre className="mt-2 text-[9px] text-gray-500 whitespace-pre-wrap break-all max-h-40 overflow-y-auto">
                           {companionProjectsSnippet}
                         </pre>
@@ -1334,14 +1533,14 @@ const SettingsSection: React.FC<{
                 </details>
                 <details className="rounded-lg border border-[#2e2e32] bg-[#16161a]">
                   <summary className="cursor-pointer list-none px-3 py-2.5 text-[10px] font-bold text-gray-400 marker:content-none [&::-webkit-details-marker]:hidden">
-                    高级：任务进度与日志（一般无需展开）
+                    任务进度（支持人员用）
                   </summary>
                   <div className="px-3 pb-3 space-y-3 border-t border-[#2e2e32] pt-2">
                     <input
                       type="text"
                       value={companionJobIdDraft}
                       onChange={(e) => setCompanionJobIdDraft(e.target.value)}
-                      placeholder="任务编号（向支持人员索取时可填）"
+                      placeholder="任务编号（选填）"
                       className="w-full px-3 py-2 rounded-xl bg-[#101014] border border-[#2e2e32] text-[11px] text-white placeholder-gray-600 focus:border-blue-500 focus:outline-none"
                       autoComplete="off"
                     />

@@ -2,14 +2,14 @@
 
 /**
  * 由桌面壳以 ELECTRON_RUN_AS_NODE=1 子进程运行：
- * - **共享运行时**（嵌入 Python + pip 大依赖）→ `%LOCALAPPDATA%\AssetCutterCompanion\runtimes\<runtimeId>\<version>\`
- * - **薄应用**（SamLocal 源码 + 权重）→ `AC_SAM_USER_ROOT`（通常为 desktop-shell\sam-local-runtime）
- *
- * 后续其它插件可复用同一 `runtimes\...` 目录，无需每个插件各压一份 PyTorch。
+ * - **沙盒根**：`AC_COMPANION_SANDBOX_ROOT`（默认 `%LOCALAPPDATA%\AssetCutterCompanion\sandbox`）
+ * - **共享运行时**（嵌入 Python + pip 大依赖）→ `<沙盒>\runtimes\<runtimeId>\<version>\`
+ * - **薄应用**（SamLocal 源码 + 权重）→ `AC_SAM_USER_ROOT`（默认 `<沙盒>\desktop-shell\sam-local-runtime`）
  *
  * 环境变量（由 main.cjs 传入）：
- *   AC_SAM_USER_ROOT  绝对路径，SamLocal 安装根（sam-app、state、启动脚本）
- *   AC_SAM_SRC        内置 sam-local-bundled 绝对路径（extraResources）
+ *   AC_COMPANION_SANDBOX_ROOT  沙盒根（必填）
+ *   AC_SAM_USER_ROOT          SamLocal 安装根
+ *   AC_SAM_SRC                内置 sam-local-bundled 绝对路径（extraResources）
  */
 
 const fs = require('fs');
@@ -30,13 +30,11 @@ const GET_PIP_URL = 'https://bootstrap.pypa.io/get-pip.py';
 const SAM_VIT_B_URL = 'https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth';
 const MIN_CHECKPOINT_BYTES = 350 * 1024 * 1024;
 
+/** pip / 部分子进程复用，在 main() 开头赋值 */
+let pipCacheDir = '';
+
 function log(type, msg) {
   process.stdout.write(`${JSON.stringify({ type, msg, t: new Date().toISOString() })}\n`);
-}
-
-function companionDataRootFromSamUserRoot(userRoot) {
-  // ...\AssetCutterCompanion\desktop-shell\sam-local-runtime → ...\AssetCutterCompanion
-  return path.resolve(path.join(userRoot, '..', '..'));
 }
 
 function downloadToFile(url, dest, onProgress) {
@@ -93,12 +91,19 @@ function downloadToFile(url, dest, onProgress) {
 
 function run(cmd, args, opts = {}) {
   log('log', `${cmd} ${args.join(' ')}`);
+  const { env: extraEnv, ...spawnRest } = opts;
+  const env = {
+    ...process.env,
+    ...(pipCacheDir ? { PIP_CACHE_DIR: pipCacheDir } : {}),
+    ...(extraEnv && typeof extraEnv === 'object' ? extraEnv : {}),
+  };
   const r = spawnSync(cmd, args, {
     encoding: 'utf8',
     shell: process.platform === 'win32',
     stdio: ['ignore', 'pipe', 'pipe'],
     maxBuffer: 64 * 1024 * 1024,
-    ...opts,
+    ...spawnRest,
+    env,
   });
   const out = `${r.stdout || ''}${r.stderr || ''}`.trim();
   if (out) log('log', out.slice(0, 8000));
@@ -135,23 +140,6 @@ async function sha256Files(paths) {
   return h.digest('hex');
 }
 
-async function tryMigrateLegacyPython(userRoot, pythonDir) {
-  const legacy = path.join(userRoot, 'python');
-  const legacyExe = path.join(legacy, 'python.exe');
-  const targetExe = path.join(pythonDir, 'python.exe');
-  if (fs.existsSync(targetExe) || !fs.existsSync(legacyExe)) return;
-  log('phase', '检测到旧版安装（python 在 sam-local-runtime 内），迁移到共享运行时目录…');
-  await fsp.mkdir(path.dirname(pythonDir), { recursive: true });
-  try {
-    await fsp.rename(legacy, pythonDir);
-  } catch (e) {
-    log(
-      'log',
-      `迁移共享目录失败（可继续使用旧路径或手动删除后重试）：${e instanceof Error ? e.message : String(e)}`,
-    );
-  }
-}
-
 async function readRuntimeManifest(runtimeRoot) {
   const p = path.join(runtimeRoot, 'manifest.json');
   try {
@@ -169,6 +157,12 @@ async function main() {
     process.exit(1);
   }
 
+  const sandboxRoot = String(process.env.AC_COMPANION_SANDBOX_ROOT || '').trim();
+  if (!sandboxRoot) {
+    log('error', '缺少环境变量 AC_COMPANION_SANDBOX_ROOT');
+    process.exit(1);
+  }
+
   const userRoot = String(process.env.AC_SAM_USER_ROOT || '').trim();
   const bundledSrc = String(process.env.AC_SAM_SRC || '').trim();
   if (!userRoot || !bundledSrc) {
@@ -180,21 +174,25 @@ async function main() {
     process.exit(1);
   }
 
-  const companionRoot = companionDataRootFromSamUserRoot(userRoot);
-  const runtimeRoot = path.join(companionRoot, 'runtimes', RUNTIME_ID, RUNTIME_VERSION);
+  pipCacheDir = path.join(sandboxRoot, 'cache', 'pip');
+  await fsp.mkdir(pipCacheDir, { recursive: true });
+  await fsp.mkdir(path.join(sandboxRoot, 'cache', 'torch'), { recursive: true });
+  await fsp.mkdir(path.join(sandboxRoot, 'cache', 'huggingface'), { recursive: true });
+  await fsp.mkdir(path.join(sandboxRoot, 'models', 'rembg'), { recursive: true });
+
+  const runtimeRoot = path.join(sandboxRoot, 'runtimes', RUNTIME_ID, RUNTIME_VERSION);
   const pythonDir = path.join(runtimeRoot, 'python');
   const samApp = path.join(userRoot, 'sam-app');
   const checkpoints = path.join(samApp, 'checkpoints');
   const embedZip = path.join(runtimeRoot, '_cache', 'python-embed.zip');
   const getPipPy = path.join(runtimeRoot, '_cache', 'get-pip.py');
 
+  log('phase', `沙盒根：${sandboxRoot}`);
   log('phase', `共享运行时：${RUNTIME_ID}@${RUNTIME_VERSION} → ${runtimeRoot}`);
 
   log('phase', '准备目录…');
   await fsp.mkdir(path.join(userRoot, '_cache'), { recursive: true });
   await fsp.mkdir(path.join(runtimeRoot, '_cache'), { recursive: true });
-
-  await tryMigrateLegacyPython(userRoot, pythonDir);
 
   log('phase', '复制 SamLocal 应用文件…');
   await fsp.rm(samApp, { recursive: true, force: true });
@@ -288,9 +286,14 @@ async function main() {
   const startBat = path.join(userRoot, 'start-sam-local.cmd');
   const RUser = path.normalize(userRoot).replace(/[/\\]+$/, '');
   const RRun = path.normalize(runtimeRoot).replace(/[/\\]+$/, '');
+  const RSan = path.normalize(sandboxRoot).replace(/[/\\]+$/, '');
   const bat =
     '@echo off\r\n' +
     'setlocal\r\n' +
+    `set "TORCH_HOME=${RSan}\\cache\\torch"\r\n` +
+    `set "HF_HOME=${RSan}\\cache\\huggingface"\r\n` +
+    `set "PIP_CACHE_DIR=${RSan}\\cache\\pip"\r\n` +
+    `set "U2NET_HOME=${RSan}\\models\\rembg"\r\n` +
     'set "SAM_MODE=sam"\r\n' +
     `set "PATH=${RRun}\\python;${RRun}\\python\\Scripts;%PATH%"\r\n` +
     `cd /d "${RUser}\\sam-app"\r\n` +
@@ -300,6 +303,7 @@ async function main() {
   const state = {
     ready: true,
     platform: 'win32',
+    sandboxRoot,
     userRoot,
     runtimeId: RUNTIME_ID,
     runtimeVersion: RUNTIME_VERSION,
@@ -310,6 +314,38 @@ async function main() {
     installedAt: new Date().toISOString(),
   };
   await fsp.writeFile(path.join(userRoot, 'state.json'), `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+
+  log('phase', '安装 rembg 抠图依赖（与 SamLocal 共享 Python）…');
+  try {
+    run(pyExe, ['-m', 'pip', 'install', '--no-warn-script-location', 'rembg[cpu]'], { cwd: samApp });
+    const u2netHome = path.join(sandboxRoot, 'models', 'rembg');
+    log('phase', '预取 rembg 默认权重 u2net 到沙盒（网站「去背景」首次无需再下）…');
+    const prefetchEnv = { ...process.env, PIP_CACHE_DIR: pipCacheDir, U2NET_HOME: u2netHome };
+    const prefetch = spawnSync(pyExe, ['-c', 'from rembg import new_session; new_session("u2net")'], {
+      encoding: 'utf8',
+      shell: false,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: prefetchEnv,
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    if (prefetch.status !== 0) {
+      const errText = `${prefetch.stderr || ''}${prefetch.stdout || ''}`.trim();
+      throw new Error(`rembg 模型预取失败: ${errText.slice(0, 1200)}`);
+    }
+    const prefetchOut = `${prefetch.stdout || ''}${prefetch.stderr || ''}`.trim();
+    if (prefetchOut) log('log', prefetchOut.slice(0, 4000));
+    await fsp.writeFile(
+      path.join(userRoot, 'rembg-python.json'),
+      `${JSON.stringify(
+        { pythonExe: pyExe, installedAt: new Date().toISOString(), via: 'sam-local-bootstrap' },
+        null,
+        2,
+      )}\n`,
+      'utf8',
+    );
+  } catch (e) {
+    log('warn', `rembg 安装失败（不影响分割）：${e instanceof Error ? e.message : String(e)}`);
+  }
 
   log('phase', '安装完成。桌面壳将尝试重启本机伴侣以加载 SamLocal。');
 }

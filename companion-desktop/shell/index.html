@@ -63,8 +63,33 @@
       padding: 2px 0;
     }
     .titlebar-trailing {
-      width: 68px;
-      flex-shrink: 0;
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      min-width: 44px;
+      -webkit-app-region: no-drag;
+    }
+    .titlebar-sidebar-toggle {
+      width: 30px;
+      height: 24px;
+      border-radius: 7px;
+      border: none;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      color: rgba(228, 228, 231, 0.52);
+      cursor: pointer;
+    }
+    .titlebar-sidebar-toggle:hover {
+      background: rgba(255, 255, 255, 0.08);
+      color: rgba(228, 228, 231, 0.92);
+    }
+    .titlebar-sidebar-toggle:focus-visible {
+      outline: 1px solid var(--accent);
+      outline-offset: 1px;
     }
     .app-titlebar-title {
       position: absolute;
@@ -148,6 +173,21 @@
     .status-dot.bad { background: var(--bad); }
     .status-label { font-size: 12px; font-weight: 600; }
     .status-detail { font-size: 10px; color: var(--muted); margin-top: 8px; line-height: 1.45; word-break: break-word; }
+    .shell-mini-action {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 7px 11px;
+      border-radius: 10px;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      background: rgba(255, 255, 255, 0.05);
+      color: #e4e4e7;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .shell-mini-action:hover {
+      background: rgba(255, 255, 255, 0.1);
+      border-color: rgba(255, 255, 255, 0.22);
+    }
     .open-site-btn {
       width: 100%;
       display: flex;
@@ -189,6 +229,25 @@
       border-right: 1px solid var(--border);
       background: #101012;
       z-index: 120;
+      transition:
+        flex-basis 0.18s ease,
+        width 0.18s ease,
+        opacity 0.16s ease,
+        padding 0.18s ease,
+        border-color 0.18s ease;
+    }
+    body.shell-sidebar-collapsed nav.shell-sidebar {
+      flex: 0 0 0;
+      width: 0;
+      min-width: 0;
+      max-width: 0;
+      padding: 0;
+      gap: 0;
+      border-right-width: 0;
+      border-right-color: transparent;
+      overflow: hidden;
+      opacity: 0;
+      pointer-events: none;
     }
     nav.shell-sidebar .shell-sidebar-spacer {
       flex: 1 1 auto;
@@ -215,13 +274,11 @@
     nav.shell-sidebar button:hover {
       color: var(--text);
     }
-    nav.shell-sidebar button .ico {
-      font-size: 20px;
-      line-height: 1;
-    }
-    nav.shell-sidebar button svg.ico-svg {
+    nav.shell-sidebar button svg.sidebar-nav-icon {
       width: 22px;
       height: 22px;
+      display: block;
+      flex-shrink: 0;
       opacity: 0.92;
     }
     .shell-main {
@@ -323,6 +380,26 @@
       line-height: 1.45;
       margin: 0 0 10px;
     }
+    details.shell-hint-details,
+    details.set-details-hint {
+      margin: 8px 0 0;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px dashed rgba(148, 163, 184, 0.22);
+      background: rgba(0, 0, 0, 0.22);
+    }
+    details.shell-hint-details summary,
+    details.set-details-hint summary {
+      cursor: pointer;
+      font-size: 10px;
+      color: rgba(148, 163, 184, 0.95);
+      user-select: none;
+      list-style: none;
+    }
+    details.shell-hint-details summary::-webkit-details-marker,
+    details.set-details-hint summary::-webkit-details-marker {
+      display: none;
+    }
     h2.section-title {
       margin: 18px 0 8px;
       font-size: 11px;
@@ -341,30 +418,88 @@
       <button type="button" class="traffic zoom" id="btnTrafficZoom" aria-label="最大化" title="最大化"></button>
     </div>
     <div class="app-titlebar-title">本地伴侣</div>
-    <div class="titlebar-trailing" aria-hidden="true"></div>
-  </header>
-  <div class="shell-body">
-    <nav class="shell-sidebar" role="tablist" aria-label="主导航" title="在侧栏空白或图标上右键可打开工作台菜单">
-      <button type="button" role="tab" data-view="home" class="active" aria-selected="true" aria-label="首页" title="首页">
-        <span class="ico" aria-hidden="true">⌂</span>
-      </button>
-      <button type="button" role="tab" data-view="workbench" aria-selected="false" aria-label="工作台" title="工作台（侧栏右键：刷新 / 硬刷新 / 浏览器打开）">
+    <div class="titlebar-trailing">
+      <button
+        type="button"
+        class="titlebar-sidebar-toggle"
+        id="btnShellSidebarToggle"
+        aria-label="收起侧栏"
+        title="收起侧栏"
+        aria-pressed="false"
+        aria-expanded="true"
+        aria-controls="shell-sidebar-nav"
+      >
         <svg
-          class="ico-svg"
+          width="16"
+          height="16"
           viewBox="0 0 24 24"
           fill="none"
           stroke="currentColor"
-          stroke-width="1.65"
+          stroke-width="2"
           stroke-linecap="round"
           stroke-linejoin="round"
           aria-hidden="true"
         >
-          <rect x="2.5" y="3.5" width="19" height="15" rx="2" ry="2" />
-          <path d="M2.5 8h19M9 21h6" />
+          <rect x="3" y="4" width="7" height="16" rx="1.5" />
+          <rect x="14" y="4" width="7" height="16" rx="1.5" opacity="0.42" />
+        </svg>
+      </button>
+    </div>
+  </header>
+  <div class="shell-body">
+    <nav
+      id="shell-sidebar-nav"
+      class="shell-sidebar"
+      role="tablist"
+      aria-label="主导航"
+      title="在侧栏空白或图标上右键可打开工作台菜单"
+    >
+      <button type="button" role="tab" data-view="home" class="active" aria-selected="true" aria-label="首页" title="首页">
+        <svg
+          class="sidebar-nav-icon"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.75"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+          <polyline points="9 22 9 12 15 12 15 22" />
+        </svg>
+      </button>
+      <button type="button" role="tab" data-view="workbench" aria-selected="false" aria-label="工作台" title="工作台（侧栏右键：刷新 / 硬刷新 / 浏览器打开）">
+        <svg
+          class="sidebar-nav-icon"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.75"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <rect x="2.5" y="4" width="19" height="14" rx="2" ry="2" />
+          <path d="M2.5 9h19M8 22h8" />
         </svg>
       </button>
       <button type="button" role="tab" data-view="settings" aria-selected="false" aria-label="设置" title="设置">
-        <span class="ico" aria-hidden="true">⚙</span>
+        <svg
+          class="sidebar-nav-icon"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.75"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <circle cx="12" cy="12" r="3" />
+          <path
+            d="M12 1v2M12 21v2M4.22 4.22l1.41 1.41M18.37 18.37l1.41 1.41M1 12h2M21 12h2M4.22 19.78l1.41-1.41M18.37 5.63l1.41-1.41"
+          />
+        </svg>
       </button>
     </nav>
     <div class="shell-main" id="shell-main">
@@ -378,6 +513,10 @@
         <span id="portHint" class="mono" style="font-size:10px;color:var(--muted);"></span>
       </div>
       <div id="statusDetail" class="status-detail"></div>
+      <div id="capabilityRepairRow" style="display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px">
+        <button type="button" id="btnFocusLocalEngines" class="shell-mini-action">打开本机引擎 / 安装</button>
+        <button type="button" id="btnRestartCompanionFromShell" class="shell-mini-action">重启本地伴侣</button>
+      </div>
     </div>
     <button type="button" class="open-site-btn" id="btnOpenSite" title="在浏览器中打开">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -387,12 +526,107 @@
       打开网站
       <span id="siteUrlPreview">…</span>
     </button>
-    <h2 class="section-title">内置服务</h2>
+    <h2 class="section-title">本地能力</h2>
+    <div class="status-card" id="section-local-engines" style="padding: 12px 14px">
+      <p class="storage-hint" style="margin: 0 0 12px; font-size: 11px; line-height: 1.45">
+        网站里的<strong>本机分割</strong>、<strong>去背景</strong>（Windows 可一键准备）。
+      </p>
+      <p id="samLocalNonWinBrief" class="storage-hint" style="display: none; margin: 0 0 10px; font-size: 11px; line-height: 1.45">
+        非 Windows：壳内暂无 Windows 同款一键安装。开发机可在仓库根执行 <span class="mono">npm run dev:companion-sam-stack</span> 同时起伴侣与分割服务；或自行启动 SamLocal 后在本机配置 <span class="mono">COMPANION_SAM_SEGMENT_URL</span>。
+      </p>
+      <div id="section-sam-local">
+        <div id="samLocalWinQuick" style="display: none">
+          <div style="display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 10px 12px">
+            <div style="min-width: 0; flex: 1 1 160px">
+              <div style="font-size: 12px; font-weight: 600; color: rgba(226, 232, 240, 0.95)">本机分割</div>
+              <p
+                id="samLocalWinStatus"
+                class="mono"
+                style="font-size: 10px; color: rgba(148, 163, 184, 0.95); margin: 6px 0 0; line-height: 1.45; min-height: 1.2em"
+              ></p>
+            </div>
+            <button type="button" class="btn btn-primary" id="btnSamLocalOneClick">一键安装</button>
+          </div>
+        </div>
+      </div>
+      <div id="section-rembg-local" style="margin-top: 14px; padding-top: 14px; border-top: 1px solid rgba(148, 163, 184, 0.12)">
+        <div id="rembgWinQuick" style="display: none">
+          <div style="display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 10px 12px">
+            <div style="min-width: 0; flex: 1 1 160px">
+              <div style="font-size: 12px; font-weight: 600; color: rgba(226, 232, 240, 0.95)">去背景</div>
+              <p
+                id="rembgWinStatus"
+                class="mono"
+                style="font-size: 10px; color: rgba(148, 163, 184, 0.95); margin: 6px 0 0; line-height: 1.45; min-height: 1.2em"
+              ></p>
+            </div>
+            <button type="button" class="btn btn-primary" id="btnRembgOneClick">一键安装</button>
+          </div>
+        </div>
+      </div>
+      <p id="rembgNonWinHint" class="storage-hint" style="display: none; margin-top: 10px; font-size: 11px; line-height: 1.45">
+        非 Windows：请安装 Python 3.11+ 后执行 <span class="mono">pip install &quot;rembg[cpu]&quot;</span>，并在启动伴侣的进程中设置
+        <span class="mono">COMPANION_REMBG_PYTHON</span> 为对应 <span class="mono">python</span> 路径。
+      </p>
+      <details id="engineInstallLogs" style="margin-top: 12px">
+        <summary style="cursor: pointer; color: rgba(148, 163, 184, 0.95); font-size: 11px; user-select: none">安装日志</summary>
+        <div style="margin-top: 10px; display: flex; flex-direction: column; gap: 10px">
+          <div>
+            <p class="mono" style="font-size: 10px; color: rgba(148, 163, 184, 0.85); margin: 0 0 4px">SamLocal</p>
+            <pre
+              id="samLocalBootstrapLogArea"
+              class="mono"
+              style="
+                display: none;
+                max-height: 140px;
+                overflow: auto;
+                padding: 10px;
+                font-size: 10px;
+                line-height: 1.35;
+                white-space: pre-wrap;
+                word-break: break-word;
+                background: rgba(0, 0, 0, 0.35);
+                border: 1px solid rgba(148, 163, 184, 0.2);
+                border-radius: 8px;
+                color: rgba(226, 232, 240, 0.92);
+                margin: 0;
+              "
+            ></pre>
+          </div>
+          <div>
+            <p class="mono" style="font-size: 10px; color: rgba(148, 163, 184, 0.85); margin: 0 0 4px">rembg</p>
+            <pre
+              id="rembgBootstrapLogArea"
+              class="mono"
+              style="
+                display: none;
+                max-height: 140px;
+                overflow: auto;
+                padding: 10px;
+                font-size: 10px;
+                line-height: 1.35;
+                white-space: pre-wrap;
+                word-break: break-word;
+                background: rgba(0, 0, 0, 0.35);
+                border: 1px solid rgba(148, 163, 184, 0.2);
+                border-radius: 8px;
+                color: rgba(226, 232, 240, 0.92);
+                margin: 0;
+              "
+            ></pre>
+          </div>
+        </div>
+      </details>
+    </div>
+    <h2 class="section-title">核心模块</h2>
+    <p class="storage-hint" style="margin: 0 0 10px">
+      伴侣内置存储与计算。<strong>分割 / 去背景</strong>依赖上方「本地能力」，<strong>不经</strong>扩展包。
+    </p>
     <div class="status-card" style="padding:0;overflow:hidden;">
       <table>
         <thead>
           <tr>
-            <th>服务</th>
+            <th>模块</th>
             <th>类型</th>
             <th>状态</th>
           </tr>
@@ -401,14 +635,19 @@
       </table>
       <p id="pluginsEmpty" class="empty hidden">暂无</p>
     </div>
-    <h2 class="section-title">扩展（宿主插件包）</h2>
-    <p class="storage-hint" style="margin:0 0 10px;">
-      与主站「本地伴侣发行」目录同步（<span class="mono">host_plugin_bundle</span>）。一键安装依赖主站环境变量
-      <span class="mono">COMPANION_DIST_PUBLIC_HTTP_BASE</span>；若下载域名非 R2 默认域，请在本机伴侣环境配置
-      <span class="mono">COMPANION_HOST_BUNDLE_TRUST_HOSTS</span>。
+    <h2 class="section-title">扩展包（可选）</h2>
+    <p class="storage-hint" style="margin: 0 0 8px">
+      主站下发的<strong>可选</strong> ZIP，与首页「本地能力」一键安装<strong>不是同一路</strong>。
     </p>
+    <details class="shell-hint-details" style="margin: 0 0 12px">
+      <summary>管理员 / 部署说明</summary>
+      <p class="storage-hint" style="margin: 8px 0 0">
+        后台 kind=<span class="mono">host_plugin_bundle</span>。公网直链依赖主站 <span class="mono">COMPANION_DIST_PUBLIC_HTTP_BASE</span>；其它下载域名需在伴侣环境配置
+        <span class="mono">COMPANION_HOST_BUNDLE_TRUST_HOSTS</span>。
+      </p>
+    </details>
     <div class="btn-row" style="margin-bottom:8px;">
-      <button type="button" class="btn" id="btnRefreshHostCatalog">刷新扩展目录</button>
+      <button type="button" class="btn" id="btnRefreshHostCatalog">刷新扩展包目录</button>
     </div>
     <div class="status-card" style="padding:10px 12px;">
       <p id="hostBundleCatalogStatus" class="mono" style="font-size:10px;color:rgba(148,163,184,0.9);margin:0;line-height:1.45;">
@@ -420,8 +659,10 @@
 
   <div id="view-settings" class="view hidden">
     <h1>设置</h1>
+    <p class="sub" style="margin-top: -4px">网站与本机对上号即可；多数项可保持默认。</p>
     <div class="set-section">
-      <h3>主站</h3>
+      <h3>① 主站地址</h3>
+      <p class="storage-hint">「打开网站」和工作台用，填以 <span class="mono">https://</span> 开头的根地址。</p>
       <label for="inpSiteUrl">地址</label>
       <input type="url" id="inpSiteUrl" placeholder="https://…" autocomplete="off" />
       <div class="btn-row">
@@ -429,106 +670,56 @@
       </div>
     </div>
     <div class="set-section">
-      <h3>与网站配对</h3>
-      <p class="storage-hint">
-        保持本程序运行，网站「本机处理」才能连到本机。若提示连不上，请填写与网站一致的密码；允许的网站地址可留空则使用默认。
-      </p>
-      <label for="inpPairToken">本机通信密码</label>
+      <h3>② 与网站配对</h3>
+      <p class="storage-hint">通信密码须与浏览器里「设置 → 本地伴侣」一致。允许的站点可填当前网站根，或留空。</p>
+      <label for="inpPairToken">通信密码</label>
       <input
         type="password"
         id="inpPairToken"
-        placeholder="网站「设置 → 本地伴侣」中的密码，至少 8 位；可不填"
+        placeholder="与网站里一致，至少 8 位；可不填"
         autocomplete="off"
       />
-      <label for="inpPairOrigins" class="pair-label-gap">允许打开的网站地址</label>
+      <label for="inpPairOrigins" class="pair-label-gap">允许的网站地址</label>
       <input
         type="text"
         id="inpPairOrigins"
-        placeholder="多个用英文逗号隔开，例如 http://localhost:5173"
+        placeholder="例 http://localhost:5173，多个用英文逗号"
         autocomplete="off"
       />
       <div class="btn-row">
-        <button type="button" class="btn btn-primary" id="btnSavePairing">保存配对设置</button>
+        <button type="button" class="btn btn-primary" id="btnSavePairing">保存配对</button>
       </div>
       <p id="pairingHint" class="mono" style="font-size:10px;color:rgba(148,163,184,0.85);margin-top:8px;line-height:1.4;"></p>
     </div>
-    <div class="set-section" id="section-sam-local">
-      <h3>本机分割（SamLocal）</h3>
-      <div id="samLocalWinQuick" style="display: none; margin-bottom: 12px;">
-        <p class="storage-hint">
-          网站工作区「本机分割」需要本机运行 <strong>SamLocal</strong>（<span class="mono">127.0.0.1:18081</span>）。在 Windows
-          上可点击下方按钮，由安装包<strong>自动准备 Python、依赖与模型</strong>（首次可能需较长时间，请保持网络畅通），<strong>无需打开终端</strong>。完成后本机会自动重启本地伴侣。
-        </p>
-        <p id="samLocalWinStatus" class="mono" style="font-size: 11px; color: rgba(148, 163, 184, 0.95); margin: 8px 0; line-height: 1.45; min-height: 1.2em;"></p>
-        <div class="btn-row" style="flex-wrap: wrap;">
-          <button type="button" class="btn btn-primary" id="btnSamLocalOneClick">一键安装高精度引擎</button>
-        </div>
-        <pre
-          id="samLocalBootstrapLogArea"
-          class="mono"
-          style="
-            display: none;
-            margin-top: 10px;
-            max-height: 180px;
-            overflow: auto;
-            padding: 10px;
-            font-size: 10px;
-            line-height: 1.35;
-            white-space: pre-wrap;
-            word-break: break-word;
-            background: rgba(0, 0, 0, 0.35);
-            border: 1px solid rgba(148, 163, 184, 0.2);
-            border-radius: 8px;
-            color: rgba(226, 232, 240, 0.92);
-          "
-        ></pre>
-      </div>
-      <details id="samLocalManualDetails" open>
-        <summary
-          id="samLocalManualSummary"
-          style="cursor: pointer; color: rgba(148, 163, 184, 0.95); font-size: 12px; margin-bottom: 8px; user-select: none"
-        >
-          高级：手动安装（需终端 / 克隆仓库）
-        </summary>
-        <p class="storage-hint">
-          网站工作区「本机分割」需要本机运行 <strong>SamLocal</strong>（默认 <span class="mono">127.0.0.1:18081</span>）。安装包默认不含系统级
-          Python；请在你<strong>克隆的本仓库根目录</strong>打开终端执行准备命令，并将下方环境变量写入<strong>启动伴侣的进程</strong>（系统环境变量或终端）。
-        </p>
-        <div class="btn-row" style="flex-wrap: wrap;">
-          <button type="button" class="btn btn-primary" id="btnCopySamSetup">复制：npm run setup:sam-local</button>
-          <button type="button" class="btn" id="btnCopySamEnv">复制环境变量示例</button>
-        </div>
-        <p id="samLocalSetupHint" class="mono" style="font-size:10px;color:rgba(148,163,184,0.85);margin-top:8px;line-height:1.4;min-height:1.2em;"></p>
-        <p class="storage-hint" style="margin-top:10px;">
-          详细步骤见仓库内 <span class="mono">docs/本机分割一键安装指南.md</span>；网站端「设置 → 本地伴侣」可探测 SamLocal 健康状态。
+    <div class="set-section">
+      <h3>③ 本机存储</h3>
+      <p class="storage-hint">留空则用系统默认目录。改路径时可选是否把已有数据迁过去。</p>
+      <details class="set-details-hint">
+        <summary>默认路径与迁移说明</summary>
+        <p class="storage-hint" style="margin: 8px 0 0">
+          Windows 默认：<span class="mono">%LOCALAPPDATA%\AssetCutterCompanion\sandbox\volume</span>（与一键安装的运行时、模型同根，便于清理）。点「应用」或「默认」时会询问：<strong>迁移并应用</strong>会把数据整体移到新位置（会短暂停止本机伴侣）；<strong>仅切换目录</strong>只改配置，旧目录文件保留在原处。
         </p>
       </details>
-    </div>
-    <div class="set-section">
-      <h3>存储</h3>
-      <p class="storage-hint">
-        点击「应用」或「默认」时会询问是否迁移：选「迁移并应用」将把当前存储目录下的数据整体移到新位置（会先短暂停止本机伴侣）；选「仅切换目录」则只改配置，旧目录数据保留在原处。
-      </p>
       <label for="inpVolumeRoot">目录</label>
       <div style="display:flex;gap:8px;align-items:stretch;">
-        <input type="text" id="inpVolumeRoot" placeholder="默认" autocomplete="off" style="flex:1;" />
+        <input type="text" id="inpVolumeRoot" placeholder="留空为默认" autocomplete="off" style="flex:1;" />
         <button type="button" class="btn" id="btnBrowseVolume">浏览</button>
       </div>
       <div class="btn-row">
         <button type="button" class="btn btn-primary" id="btnSaveVolume">应用</button>
-        <button type="button" class="btn" id="btnClearVolume">默认</button>
+        <button type="button" class="btn" id="btnClearVolume">恢复默认</button>
       </div>
       <p id="volumeEffective" class="mono" style="font-size:10px;color:rgba(148,163,184,0.85);margin-top:8px;line-height:1.4;"></p>
       <div class="btn-row" style="margin-top:6px;">
-        <button type="button" class="btn" id="btnOpenVolumeFolder">打开当前存储文件夹</button>
+        <button type="button" class="btn" id="btnOpenVolumeFolder">打开存储文件夹</button>
       </div>
     </div>
     <div class="set-section">
-      <h3>本地 API</h3>
+      <h3>本机服务地址</h3>
       <p id="localBase" class="mono">—</p>
       <div class="btn-row">
         <button type="button" class="btn" id="btnCopyBase">复制</button>
-        <button type="button" class="btn" id="btnOpenMgmt">管理页</button>
+        <button type="button" class="btn" id="btnOpenMgmt">浏览器管理页</button>
       </div>
     </div>
   </div>
@@ -550,6 +741,19 @@
         return;
       }
 
+      const STORAGE_SIDEBAR_COLLAPSED = 'ac_desktop_shell_sidebar_collapsed_v1';
+      const SHELL_SIDEBAR_EXPANDED_PX = 56;
+      function readSidebarCollapsedFromStorage() {
+        try {
+          return localStorage.getItem(STORAGE_SIDEBAR_COLLAPSED) === '1';
+        } catch {
+          return false;
+        }
+      }
+      if (readSidebarCollapsedFromStorage()) {
+        document.body.classList.add('shell-sidebar-collapsed');
+      }
+
       const defaultSiteUrl =
         typeof shell.defaultSiteUrl === 'string' && shell.defaultSiteUrl.trim()
           ? shell.defaultSiteUrl.trim()
@@ -557,6 +761,48 @@
 
       const views = { home: $('view-home'), settings: $('view-settings') };
       let activeView = 'home';
+
+      function updateShellSidebarToggleUi() {
+        const btn = $('btnShellSidebarToggle');
+        if (!btn) return;
+        const collapsed = document.body.classList.contains('shell-sidebar-collapsed');
+        btn.setAttribute('aria-pressed', collapsed ? 'true' : 'false');
+        btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+        btn.setAttribute('aria-label', collapsed ? '展开侧栏' : '收起侧栏');
+        btn.title = collapsed ? '展开侧栏' : '收起侧栏';
+      }
+
+      async function persistAndSyncShellSidebar(collapsed) {
+        try {
+          if (collapsed) localStorage.setItem(STORAGE_SIDEBAR_COLLAPSED, '1');
+          else localStorage.removeItem(STORAGE_SIDEBAR_COLLAPSED);
+        } catch {
+          /* ignore */
+        }
+        document.body.classList.toggle('shell-sidebar-collapsed', collapsed);
+        updateShellSidebarToggleUi();
+        const inset = collapsed ? 0 : SHELL_SIDEBAR_EXPANDED_PX;
+        if (typeof shell.setWorkbenchSidebarInsetPx === 'function') {
+          try {
+            await shell.setWorkbenchSidebarInsetPx(inset);
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+
+      async function syncShellWorkbenchSidebarInsetOnly() {
+        updateShellSidebarToggleUi();
+        const collapsed = document.body.classList.contains('shell-sidebar-collapsed');
+        const inset = collapsed ? 0 : SHELL_SIDEBAR_EXPANDED_PX;
+        if (typeof shell.setWorkbenchSidebarInsetPx === 'function') {
+          try {
+            await shell.setWorkbenchSidebarInsetPx(inset);
+          } catch {
+            /* ignore */
+          }
+        }
+      }
 
       function normalizeDesktopPlatform() {
         const p = String(shell.platform || '').toLowerCase();
@@ -566,6 +812,12 @@
       }
 
       let samLocalBootstrapBusy = false;
+      let rembgBootstrapBusy = false;
+
+      function openEngineInstallLogs() {
+        const d = $('engineInstallLogs');
+        if (d) d.open = true;
+      }
 
       function formatSamLocalBootstrapLine(payload) {
         if (!payload || typeof payload !== 'object') return String(payload);
@@ -575,6 +827,39 @@
         const msg = payload.msg != null ? String(payload.msg) : '';
         const prefix = payload.type ? '[' + String(payload.type) + '] ' : '';
         return prefix + (msg || JSON.stringify(payload));
+      }
+
+      async function refreshRembgWinPanel() {
+        if (normalizeDesktopPlatform() !== 'win32') return;
+        const statusEl = $('rembgWinStatus');
+        const btn = $('btnRembgOneClick');
+        if (!statusEl) return;
+        if (typeof shell.rembgDesktopState !== 'function') {
+          statusEl.textContent = '当前壳版本不支持一键安装，请更新桌面应用。';
+          if (btn) btn.disabled = true;
+          return;
+        }
+        if (rembgBootstrapBusy) return;
+        try {
+          const r = await shell.rembgDesktopState();
+          if (!r || !r.ok) {
+            statusEl.textContent = r && r.error ? '状态读取失败：' + r.error : '状态读取失败';
+            return;
+          }
+          if (!r.hasBootstrapScript) {
+            statusEl.textContent = '当前构建缺少 rembg-bootstrap 脚本，请更新桌面应用。';
+            if (btn) btn.disabled = true;
+            return;
+          }
+          if (btn) btn.disabled = false;
+          if (r.installed) {
+            statusEl.textContent = '已就绪；异常时可再次安装修复。';
+          } else {
+            statusEl.textContent = '未安装，点击一键安装。';
+          }
+        } catch (e) {
+          statusEl.textContent = '状态读取异常：' + (e && e.message ? e.message : String(e));
+        }
       }
 
       async function refreshSamLocalWinPanel() {
@@ -595,19 +880,16 @@
             return;
           }
           if (!r.hasBundledResources) {
-            statusEl.textContent =
-              '当前构建未携带 SamLocal 资源包，无法一键安装。请使用完整桌面发行包，或展开下方「手动安装」。';
+            statusEl.textContent = '缺少内置资源包，无法一键安装；请使用完整桌面发行包。';
             if (btn) btn.disabled = true;
             return;
           }
           if (btn) btn.disabled = false;
           if (r.installed && r.state && r.state.ready) {
             statusEl.textContent =
-              '已安装。本地伴侣将随启 SamLocal（' +
-              (r.state.startScript ? '启动脚本已就绪' : '状态已就绪') +
-              '）。若异常可再次点击重新安装修复。';
+              '已就绪（' + (r.state.startScript ? '启动脚本已就绪' : '状态已就绪') + '）；异常时可再次安装修复。';
           } else {
-            statusEl.textContent = '尚未检测到本机一键安装产物，点击下方按钮开始（无需终端）。';
+            statusEl.textContent = '未安装，点击一键安装。';
           }
         } catch (e) {
           statusEl.textContent = '状态读取异常：' + (e && e.message ? e.message : String(e));
@@ -617,31 +899,28 @@
       function applySamLocalPlatformUi() {
         const plat = normalizeDesktopPlatform();
         const winQuick = $('samLocalWinQuick');
-        const manualDetails = $('samLocalManualDetails');
-        const manualSummary = $('samLocalManualSummary');
+        const nw = $('samLocalNonWinBrief');
         if (plat === 'win32' && winQuick) {
           winQuick.style.display = 'block';
-          if (manualDetails) manualDetails.open = false;
-          if (manualSummary) manualSummary.style.display = '';
+          if (nw) nw.style.display = 'none';
         } else {
           if (winQuick) winQuick.style.display = 'none';
-          if (manualDetails) manualDetails.open = true;
-          if (manualSummary) manualSummary.style.display = 'none';
+          if (nw) nw.style.display = 'block';
         }
       }
 
-      const SAM_LOCAL_ENV_SNIPPET = `# 本机分割：运行 local-companion 或桌面壳的进程环境中设置（默认 predict URL 与伴侣内置一致时可省略第一行）
-
-COMPANION_SAM_SEGMENT_URL=http://127.0.0.1:18081/v1/segment/predict
-
-# 可选：伴侣启动时随启 SamLocal（开发机）— 将下一行 REPO_ROOT 换成你的仓库根目录绝对路径
-COMPANION_SPAWN_SAM_LOCAL_CMD=npm run dev:sam-local
-COMPANION_SPAWN_SAM_LOCAL_CWD=REPO_ROOT
-
-# 一键栈等价：仓库根执行 npm run dev:companion-sam-stack（勿与上两行重复配置）
-# 首次真实分割环境：仓库根 npm run setup:sam-local（pip + 下载 ViT-B），见 docs/本机分割一键安装指南.md
-# SamLocal 真实分割：设置 SAM_MODE=sam，见 docs/本机分割故障排除.md
-`;
+      function applyRembgPlatformUi() {
+        const plat = normalizeDesktopPlatform();
+        const winQuick = $('rembgWinQuick');
+        const nw = $('rembgNonWinHint');
+        if (plat === 'win32') {
+          if (winQuick) winQuick.style.display = 'block';
+          if (nw) nw.style.display = 'none';
+        } else {
+          if (winQuick) winQuick.style.display = 'none';
+          if (nw) nw.style.display = 'block';
+        }
+      }
 
       async function applyShellView(v) {
         const viewKey = v === 'workbench' || v === 'settings' || v === 'home' ? v : 'home';
@@ -681,22 +960,19 @@ COMPANION_SPAWN_SAM_LOCAL_CWD=REPO_ROOT
         if (viewKey === 'home') {
           await loadPlugins();
           await loadHostBundleCatalog();
+          void refreshSamLocalWinPanel();
+          void refreshRembgWinPanel();
         }
         if (viewKey === 'settings') {
           void refreshVolumeEffectiveHint();
           void loadPairingFields();
-          void refreshSamLocalWinPanel();
         }
-      }
-
-      async function switchToSettingsView() {
-        await applyShellView('settings');
       }
 
       function focusSamLocalSetupSection() {
         void (async () => {
-          await switchToSettingsView();
-          const el = $('section-sam-local');
+          await applyShellView('home');
+          const el = $('section-local-engines');
           if (el) setTimeout(() => el.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
         })();
       }
@@ -705,7 +981,23 @@ COMPANION_SPAWN_SAM_LOCAL_CWD=REPO_ROOT
         shell.onSamLocalSetupFocus(focusSamLocalSetupSection);
       }
 
+      const btnFocusLocalEngines = $('btnFocusLocalEngines');
+      if (btnFocusLocalEngines) {
+        btnFocusLocalEngines.addEventListener('click', () => focusSamLocalSetupSection());
+      }
+      const btnRestartCompanionFromShell = $('btnRestartCompanionFromShell');
+      if (btnRestartCompanionFromShell && typeof shell.restartCompanion === 'function') {
+        btnRestartCompanionFromShell.addEventListener('click', () => {
+          void shell.restartCompanion({ aggressive: false }).catch((e) => {
+            window.alert(e && e.message ? e.message : String(e));
+          });
+        });
+      } else if (btnRestartCompanionFromShell) {
+        btnRestartCompanionFromShell.style.display = 'none';
+      }
+
       applySamLocalPlatformUi();
+      applyRembgPlatformUi();
       const btnSamLocalOneClick = $('btnSamLocalOneClick');
       const samLocalBootstrapLogArea = $('samLocalBootstrapLogArea');
       if (btnSamLocalOneClick && typeof shell.samLocalBootstrapRun === 'function') {
@@ -727,7 +1019,8 @@ COMPANION_SPAWN_SAM_LOCAL_CWD=REPO_ROOT
               return;
             }
             if (samLocalBootstrapLogArea && r.started) {
-              samLocalBootstrapLogArea.textContent = '安装已启动，请稍候查看下方日志…\n';
+              openEngineInstallLogs();
+              samLocalBootstrapLogArea.textContent = '安装已启动，日志见「安装日志」…\n';
             }
           } catch (e) {
             window.alert(e && e.message ? e.message : String(e));
@@ -751,7 +1044,58 @@ COMPANION_SPAWN_SAM_LOCAL_CWD=REPO_ROOT
             if (btnSamLocalOneClick) btnSamLocalOneClick.disabled = false;
             void refreshSamLocalWinPanel();
             if (!payload.ok) {
-              window.alert('安装未成功完成，请查看日志或稍后重试。');
+              window.alert('安装未成功完成，请展开「安装日志」查看详情或稍后重试。');
+            }
+          }
+        });
+      }
+      const btnRembgOneClick = $('btnRembgOneClick');
+      const rembgBootstrapLogArea = $('rembgBootstrapLogArea');
+      if (btnRembgOneClick && typeof shell.rembgBootstrapRun === 'function') {
+        btnRembgOneClick.addEventListener('click', async () => {
+          if (normalizeDesktopPlatform() !== 'win32') return;
+          btnRembgOneClick.disabled = true;
+          rembgBootstrapBusy = true;
+          if (rembgBootstrapLogArea) {
+            rembgBootstrapLogArea.style.display = 'block';
+            rembgBootstrapLogArea.textContent = '';
+          }
+          try {
+            const r = await shell.rembgBootstrapRun();
+            if (!r || !r.ok) {
+              window.alert(r && r.error ? r.error : '无法启动安装');
+              rembgBootstrapBusy = false;
+              btnRembgOneClick.disabled = false;
+              void refreshRembgWinPanel();
+              return;
+            }
+            if (rembgBootstrapLogArea && r.started) {
+              openEngineInstallLogs();
+              rembgBootstrapLogArea.textContent = '安装已启动，日志见「安装日志」…\n';
+            }
+          } catch (e) {
+            window.alert(e && e.message ? e.message : String(e));
+            rembgBootstrapBusy = false;
+            btnRembgOneClick.disabled = false;
+            void refreshRembgWinPanel();
+          }
+        });
+      }
+      if (typeof shell.onRembgBootstrapLog === 'function') {
+        shell.onRembgBootstrapLog((payload) => {
+          const logEl = $('rembgBootstrapLogArea');
+          if (logEl) {
+            logEl.style.display = 'block';
+            const line = formatSamLocalBootstrapLine(payload);
+            logEl.textContent += line + '\n';
+            logEl.scrollTop = logEl.scrollHeight;
+          }
+          if (payload && payload.type === 'bootstrap-finished') {
+            rembgBootstrapBusy = false;
+            if (btnRembgOneClick) btnRembgOneClick.disabled = false;
+            void refreshRembgWinPanel();
+            if (!payload.ok) {
+              window.alert('安装未成功完成，请展开「安装日志」查看详情或稍后重试。');
             }
           }
         });
@@ -759,6 +1103,16 @@ COMPANION_SPAWN_SAM_LOCAL_CWD=REPO_ROOT
       $('btnTrafficClose').addEventListener('click', () => void shell.closeWindow());
       $('btnTrafficMin').addEventListener('click', () => void shell.minimizeWindow());
       $('btnTrafficZoom').addEventListener('click', () => void shell.toggleMaximize());
+
+      const btnShellSidebarToggle = $('btnShellSidebarToggle');
+      if (btnShellSidebarToggle) {
+        btnShellSidebarToggle.addEventListener('click', () => {
+          const next = !document.body.classList.contains('shell-sidebar-collapsed');
+          void persistAndSyncShellSidebar(next);
+        });
+      }
+      updateShellSidebarToggleUi();
+      void syncShellWorkbenchSidebarInsetOnly();
 
       document.querySelectorAll('nav.shell-sidebar button[role="tab"]').forEach((btn) => {
         btn.addEventListener('click', () => {
@@ -887,7 +1241,7 @@ COMPANION_SPAWN_SAM_LOCAL_CWD=REPO_ROOT
           return;
         }
         if (typeof shell.fetchHostBundleCatalog !== 'function') {
-          statusEl.textContent = '当前壳版本不支持扩展目录，请更新桌面应用。';
+          statusEl.textContent = '当前壳版本不支持扩展包目录，请更新桌面应用。';
           listEl.innerHTML = '';
           hostCatalogLoading = false;
           return;
@@ -941,7 +1295,7 @@ COMPANION_SPAWN_SAM_LOCAL_CWD=REPO_ROOT
           statusEl.textContent =
             '当前平台（' +
             plat +
-            '）暂无 stable 渠道的宿主插件包。可在主站管理后台「本地伴侣发行」登记 kind=host_plugin_bundle。';
+            '）暂无 stable 渠道的扩展包（host_plugin_bundle）。可在主站管理后台「本地伴侣发行」登记 kind=host_plugin_bundle。';
           hostCatalogLoading = false;
           return;
         }
@@ -990,7 +1344,7 @@ COMPANION_SPAWN_SAM_LOCAL_CWD=REPO_ROOT
           const title = document.createElement('div');
           title.style.fontWeight = '700';
           title.style.fontSize = '12px';
-          title.textContent = row.label || row.fileName || '宿主插件包';
+          title.textContent = row.label || row.fileName || '扩展包';
           div.appendChild(title);
 
           const sub = document.createElement('div');
@@ -1057,7 +1411,8 @@ COMPANION_SPAWN_SAM_LOCAL_CWD=REPO_ROOT
           $('inpPairToken').value = cfg && typeof cfg.sharedToken === 'string' ? cfg.sharedToken : '';
           $('inpPairOrigins').value =
             cfg && typeof cfg.allowedOrigins === 'string' ? cfg.allowedOrigins : '';
-          hintEl.textContent = '已读取本机已保存的配对设置';
+          hintEl.textContent =
+            '已读取本机配对。进入工作台时会按主站地址补全站点与密码（可在此改）。';
         } catch {
           hintEl.textContent = '读取配对配置失败';
         }
@@ -1082,23 +1437,29 @@ COMPANION_SPAWN_SAM_LOCAL_CWD=REPO_ROOT
         const portEl = $('portHint');
         const err = sum && sum.lastError ? String(sum.lastError) : '';
         const note = sum && sum.note ? String(sum.note) : '—';
-        portEl.textContent = sum && sum.port ? ':' + sum.port : '';
-        detail.textContent = err || '';
+        const cap = sum && sum.capabilityUi && typeof sum.capabilityUi === 'object' ? sum.capabilityUi : null;
+        const capHead = cap && typeof cap.headline === 'string' && cap.headline.trim() ? cap.headline.trim() : '';
+        const capSub = cap && typeof cap.subline === 'string' && cap.subline.trim() ? cap.subline.trim() : '';
+        const capTone = cap && typeof cap.tone === 'string' ? cap.tone : '';
+        portEl.textContent = sum && sum.port ? '伴侣已连接' : '';
         if (!sum || sum.connected === false) {
           dot.className = 'status-dot bad';
-          label.textContent = '未连接';
+          label.textContent = '离线：未连接本机伴侣';
+          detail.textContent = err || '';
           return;
         }
-        if (
+        const warnish =
           err &&
-          (err.includes('relay') || err.includes('sam_local') || err.includes('site') || err.includes('token'))
-        ) {
+          (err.includes('relay') || err.includes('sam_local') || err.includes('site') || err.includes('token'));
+        if (warnish || capTone === 'warn') {
           dot.className = 'status-dot warn';
-          label.textContent = note;
+          label.textContent = capHead || note;
+          detail.textContent = capSub || err || '';
           return;
         }
         dot.className = 'status-dot ok';
-        label.textContent = note;
+        label.textContent = capHead || note;
+        detail.textContent = capSub || (err || '');
       }
 
       async function refreshTray() {
@@ -1280,21 +1641,6 @@ COMPANION_SPAWN_SAM_LOCAL_CWD=REPO_ROOT
 
       $('btnOpenMgmt').addEventListener('click', () => shell.openManagementBrowser());
 
-      const samHint = $('samLocalSetupHint');
-      function flashSamHint(msg) {
-        if (samHint) samHint.textContent = msg || '';
-      }
-
-      $('btnCopySamSetup').addEventListener('click', () => {
-        shell.copyText('npm run setup:sam-local');
-        flashSamHint('已复制：npm run setup:sam-local（请在仓库根目录的终端执行）');
-      });
-
-      $('btnCopySamEnv').addEventListener('click', () => {
-        shell.copyText(SAM_LOCAL_ENV_SNIPPET);
-        flashSamHint('已复制环境变量示例；请将 REPO_ROOT 换成本机仓库根路径');
-      });
-
       $('btnSavePairing').addEventListener('click', async () => {
         const hintEl = $('pairingHint');
         const btn = $('btnSavePairing');
@@ -1317,9 +1663,21 @@ COMPANION_SPAWN_SAM_LOCAL_CWD=REPO_ROOT
 
       async function refreshHome() {
         await refreshTray();
+        void refreshSamLocalWinPanel();
+        void refreshRembgWinPanel();
         if (activeView === 'home') {
           await loadPlugins();
           await loadHostBundleCatalog();
+        }
+      }
+
+      /** 定时轮询：只更新托盘摘要与内置服务能力表，不反复请求主站扩展目录（避免无意义拉取）。 */
+      async function refreshHomePeriodic() {
+        await refreshTray();
+        void refreshSamLocalWinPanel();
+        void refreshRembgWinPanel();
+        if (activeView === 'home') {
+          await loadPlugins();
         }
       }
 
@@ -1353,7 +1711,7 @@ COMPANION_SPAWN_SAM_LOCAL_CWD=REPO_ROOT
         }
         void refreshVolumeEffectiveHint();
         setInterval(() => {
-          void refreshHome().catch(() => {});
+          void refreshHomePeriodic().catch(() => {});
         }, 10000);
       }
 

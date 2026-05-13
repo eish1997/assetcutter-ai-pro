@@ -2,7 +2,7 @@
 
 开发期 **M0**：系统托盘 + 子进程启动 `../local-companion`（`COMPANION_OPEN_BROWSER=0`）。**主窗口** 为内嵌 **`shell/index.html`** 的壳：**左侧图标栏**切换 **首页**（状态 + 打开网站 + 插件列表）、**工作台**（`BrowserView` 内嵌设置中的主站 `siteUrl`；**侧栏右键** 刷新 / 硬刷新 / 浏览器打开主站）、**设置**；**不再**把完整本机管理页作为默认首页；需要完整 HTML 管理页时用托盘 **「在浏览器打开本机管理页」**。协议 **`assetcutter-companion://open`** 可从网站唤起壳（需已安装并注册）。
 
-数据目录为 **`%LOCALAPPDATA%\AssetCutterCompanion\desktop-shell`**（与产品路径一致）。**配对**：在桌面壳 **设置 → 与网站配对** 保存 **本机通信密码** 与 **允许的网站地址**（落盘 `userData/pairing-config.json`，对应环境变量 `COMPANION_SHARED_TOKEN` / `COMPANION_ALLOWED_ORIGINS`）；壳在启动 `local-companion` 时会自动注入（若你未在外部显式设置同名环境变量）。
+数据目录为 **`%LOCALAPPDATA%\AssetCutterCompanion\sandbox\desktop-shell`**（Electron `userData`）；下载的运行时、模型与默认卷见 **`docs/本地伴侣-沙盒目录.md`**。进入 **工作台**（内嵌主站）时，壳会按当前主站地址 **自动写入** `pairing-config.json` 的允许 Origin 与通信密码（若尚无密码则生成），并重启由壳拉起的 `local-companion` 使 `COMPANION_SHARED_TOKEN` / `COMPANION_ALLOWED_ORIGINS` 生效，网站侧 **无需** 先到「设置 → 与网站配对」手工对齐；仍可在该页 **覆盖** 密码或增删允许的站点。落盘路径对应子进程环境变量 `COMPANION_SHARED_TOKEN` / `COMPANION_ALLOWED_ORIGINS`；若你在外部已显式设置同名环境变量，壳不会覆盖。
 
 **托盘（Windows）**：**左键单击** → **打开桌面窗口**；**右键** → 菜单；菜单含 **状态行**、**「打开桌面窗口」**、**「在浏览器打开本机管理页」**、**「重新启动本地伴侣」**。  
 壳会轮询 `GET /v1/runtime-status`：当检测到 **Relay 已配置但未运行**，或状态检查 **401（配对密码不一致）** / 超时失败时，会弹出气泡提醒并给出下一步动作（重启/打开本机管理页排查）。
@@ -71,7 +71,7 @@ npm run companion-desktop:dist:retry
 
 ## 环境变量
 
-与 `local-companion` 共用：**`COMPANION_HTTP_PORT`**（默认 `18765`）等；壳会额外注入 **`COMPANION_OPEN_BROWSER=0`**。若系统或父进程误带 **`COMPANION_HTTP_PORT=0`**（Relay 子进程约定），壳在拉起本机伴侣时会**清除该值**，避免伴侣误以为要关闭 HTTP 而立即退出。安装包排障可查看 **`%LOCALAPPDATA%\AssetCutterCompanion\desktop-shell\local-companion-spawn.log`**。**`COMPANION_DESKTOP_NO_AUTO_SHELL=1`**：启动时不自动弹出桌面小窗口（仅托盘）。**安装包** 首次未保存设置时，设置/「打开网站」默认主站为 **`https://assetcutter-ai-pro.vercel.app/`**；开发 `npm start` 默认为 **`http://localhost:3000`**。
+与 `local-companion` 共用：**`COMPANION_HTTP_PORT`**（默认 `18765`）等；壳会额外注入 **`COMPANION_OPEN_BROWSER=0`**。若系统或父进程误带 **`COMPANION_HTTP_PORT=0`**（Relay 子进程约定），壳在拉起本机伴侣时会**清除该值**，避免伴侣误以为要关闭 HTTP 而立即退出。安装包排障可查看 **`%LOCALAPPDATA%\AssetCutterCompanion\sandbox\desktop-shell\local-companion-spawn.log`**。**`COMPANION_DESKTOP_NO_AUTO_SHELL=1`**：启动时不自动弹出桌面小窗口（仅托盘）。**安装包** 首次未保存设置时，设置/「打开网站」默认主站为 **`https://assetcutter-ai-pro.vercel.app/`**；开发 `npm start` 默认为 **`http://localhost:3000`**。
 
 发行包上架与「主站用户下载桌面壳」的元数据模型见仓库 **`docs/本地伴侣-插件与发行.md`**（与 `/v1/capabilities` 运行时插件区分）。
 
@@ -84,6 +84,14 @@ npm run companion-desktop:dist:retry
 - 有新版本时弹窗提示，可选择下载并在退出后安装。
 
 未设置该变量时不启用更新检查（适合本地开发）。
+
+### 工作台 `ERR_CONNECTION_RESET`（-101）
+
+若 **系统浏览器能打开主站**，但壳内 **工作台** 报 `ERR_CONNECTION_RESET` 且加载 `https://…` 失败，常见原因包括：
+
+1. **企业网 / 防火墙拦截 HTTP/3（QUIC）**：壳已默认追加 Chromium 开关 **`--disable-quic`**，强制走 TCP TLS；请更新到包含该改动的安装包版本。
+2. **代理或安全软件改写 HTTPS**：可先在 **设置** 把主站指到可访问的镜像，或用侧栏右键 **「在浏览器打开主站」** 使用系统 Chrome 完成登录后再试壳内工作台。
+3. **仍失败**：将 **`%LOCALAPPDATA%\AssetCutterCompanion\sandbox\desktop-shell\companion-shell-settings.json`** 中 **`siteUrl`** 改为当前可直连的站点根 URL（须带 `https://`），保存后重进工作台。
 
 ### 桌面快捷方式（NSIS）
 

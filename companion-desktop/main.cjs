@@ -17,20 +17,38 @@ const {
   dialog,
 } = require('electron');
 const { spawn, execSync } = require('child_process');
+const { randomBytes } = require('node:crypto');
+const companionSandboxPaths = require('./companion-sandbox-paths.cjs');
 
-/** Windows：与产品路径一致，数据落在 %LOCALAPPDATA%\\AssetCutterCompanion\\desktop-shell */
+/** Windows：统一沙盒；首次启动将旧版 `desktop-shell` / `runtimes` 迁入沙盒后再设 userData */
 if (process.platform === 'win32' && process.env.LOCALAPPDATA) {
   try {
-    app.setPath(
-      'userData',
-      path.join(process.env.LOCALAPPDATA, 'AssetCutterCompanion', 'desktop-shell'),
-    );
+    companionSandboxPaths.migrateLegacyAssetCutterLayout();
+    const shellData = companionSandboxPaths.getDesktopShellUserDataPath();
+    if (shellData) {
+      app.setPath('userData', shellData);
+    } else {
+      app.setPath(
+        'userData',
+        path.join(process.env.LOCALAPPDATA, 'AssetCutterCompanion', 'desktop-shell'),
+      );
+    }
   } catch {
     /* app 已 ready 等情况下可能失败，忽略 */
   }
 }
 
 app.setName('AssetCutterCompanion');
+
+/**
+ * 部分网络（企业网关 / 地区出口）对 HTTP/3 QUIC 的 UDP 443 会直接 RST，Electron 工作台 loadURL 表现为 ERR_CONNECTION_RESET(-101)；
+ * 禁用 QUIC 后退化到基于 TCP 的 HTTP/2，与多数系统浏览器在「仅 TCP 放行」环境下的行为更一致。
+ */
+try {
+  app.commandLine.appendSwitch('disable-quic');
+} catch {
+  /* ignore */
+}
 
 const DEFAULT_HTTP_PORT = 18765;
 
@@ -54,11 +72,15 @@ let tray = null;
 let mainWindow = null;
 /** @type {import('electron').BrowserView | null} */
 let workbenchBrowserView = null;
+/** 避免给同一 BrowserView 重复注册 `did-finish-load` */
+const workbenchPairingInjectHooked = new WeakSet();
 /** @type {'home' | 'workbench' | 'settings'} */
 let shellMainProcessActiveView = 'home';
 
-/** 与 `shell/index.html` 布局一致（DIP），供 `BrowserView` 与主内容区对齐 */
-const SHELL_SIDEBAR_WIDTH = 56;
+/** 与 `shell/index.html` 侧栏展开宽度一致；收起时为 0（由渲染进程 IPC 同步） */
+const SHELL_SIDEBAR_WIDTH_EXPANDED = 56;
+/** @type {number} */
+let shellWorkbenchSidebarInsetPx = SHELL_SIDEBAR_WIDTH_EXPANDED;
 const SHELL_TITLEBAR_HEIGHT = 30;
 /** 与 `shell/index.html` 一致：工作台顶栏已移除，BrowserView 从标题栏下缘起算 */
 const SHELL_WORKBENCH_TOOLBAR_HEIGHT = 0;
@@ -66,6 +88,8 @@ const SHELL_WORKBENCH_TOOLBAR_HEIGHT = 0;
 let companionStatusNote = '伴侣运行中';
 /** @type {string | null} */
 let companionLastError = null;
+/** 最近一次 runtime-status.localCapabilityUi（供托盘 / shell 一条主结论） */
+let companionTrayCapabilityUi = null;
 /** @type {NodeJS.Timeout | null} */
 let statusPollTimer = null;
 /** @type {string | null} */
@@ -76,6 +100,14 @@ let companionAutoUpdateConfigured = false;
 let isQuitting = false;
 /** @type {import('child_process').ChildProcess | null} */
 let samBootstrapChild = null;
+/** @type {import('child_process').ChildProcess | null} */
+let rembgBootstrapChild = null;
+
+function anyDesktopBootstrapChildRunning() {
+  const sam = samBootstrapChild && samBootstrapChild.exitCode === null && !samBootstrapChild.killed;
+  const rem = rembgBootstrapChild && rembgBootstrapChild.exitCode === null && !rembgBootstrapChild.killed;
+  return Boolean(sam || rem);
+}
 
 function shellSettingsPath() {
   return path.join(app.getPath('userData'), 'companion-shell-settings.json');
@@ -118,7 +150,29 @@ function saveShellSettings(patch) {
   return cur;
 }
 
-/** 将设置中的卷根写入子进程环境；留空则移除变量，使 local-companion 使用默认 ~/.assetcutter-companion/volume */
+/** 创建沙盒子目录（幂等）；与 `companion-sandbox-paths.cjs` 布局一致 */
+function ensureCompanionSandboxLayout() {
+  if (process.platform !== 'win32') return;
+  const root = companionSandboxPaths.getCompanionSandboxRoot();
+  if (!root) return;
+  const dirs = [
+    path.join(root, 'runtimes'),
+    path.join(root, 'models', 'rembg'),
+    path.join(root, 'cache', 'pip'),
+    path.join(root, 'cache', 'torch'),
+    path.join(root, 'cache', 'huggingface'),
+    path.join(root, 'volume'),
+  ];
+  for (const d of dirs) {
+    try {
+      fs.mkdirSync(d, { recursive: true });
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+/** 将设置中的卷根写入子进程环境；留空则移除变量，使 local-companion 使用默认（沙盒下为 sandbox/volume） */
 function applyShellVolumeRootToEnv(env) {
   const sh = readShellSettings();
   if (sh.volumeRoot) {
@@ -178,8 +232,62 @@ function applyDesktopSamLocalSpawnEnv(env) {
   env.COMPANION_SPAWN_SAM_LOCAL_CWD = cwd;
 }
 
-/** 与 local-companion `repositoryVolume.ts` 默认一致 */
+function rembgBootstrapScriptPath() {
+  try {
+    if (app.isPackaged) {
+      return path.join(process.resourcesPath, 'rembg-bootstrap', 'rembg-bootstrap.cjs');
+    }
+  } catch {
+    /* ignore */
+  }
+  return path.join(__dirname, 'rembg-bootstrap', 'rembg-bootstrap.cjs');
+}
+
+function readRembgDesktopRuntimeState() {
+  if (process.platform !== 'win32') return null;
+  try {
+    const p = path.join(app.getPath('userData'), 'rembg-runtime', 'state.json');
+    if (!fs.existsSync(p)) return null;
+    const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+    const exe = typeof j.pythonExe === 'string' ? j.pythonExe.trim() : '';
+    if (!j || !j.ready || !exe || !fs.existsSync(exe)) return null;
+    return j;
+  } catch {
+    return null;
+  }
+}
+
+function readSamLocalRembgPythonExe() {
+  if (process.platform !== 'win32') return '';
+  try {
+    const p = path.join(app.getPath('userData'), 'sam-local-runtime', 'rembg-python.json');
+    if (!fs.existsSync(p)) return '';
+    const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+    const exe = typeof j.pythonExe === 'string' ? j.pythonExe.trim() : '';
+    return exe && fs.existsSync(exe) ? exe : '';
+  } catch {
+    return '';
+  }
+}
+
+function resolveDesktopRembgPythonExe() {
+  if (process.platform !== 'win32') return '';
+  const st = readRembgDesktopRuntimeState();
+  if (st?.pythonExe && fs.existsSync(st.pythonExe)) return st.pythonExe;
+  return readSamLocalRembgPythonExe();
+}
+
+/** 未手动设置 COMPANION_REMBG_PYTHON 时：注入桌面一键安装的 Python（与 SamLocal 共享运行时目录） */
+function applyDesktopRembgPythonToEnv(env) {
+  if (String(env.COMPANION_REMBG_PYTHON || '').trim()) return;
+  const exe = resolveDesktopRembgPythonExe();
+  if (exe) env.COMPANION_REMBG_PYTHON = exe;
+}
+
+/** 与 local-companion `repositoryVolume.ts` 默认一致（非沙盒或未设置 LOCALAPPDATA 时） */
 function getDefaultCompanionVolumeRoot() {
+  const sb = companionSandboxPaths.sandboxDefaultVolumeDir();
+  if (sb) return sb;
   return path.resolve(os.homedir(), '.assetcutter-companion', 'volume');
 }
 
@@ -516,6 +624,127 @@ function savePairingConfig(nextCfg) {
   return { sharedToken, allowedOrigins };
 }
 
+function companionWorkbenchBaseUrl() {
+  return `http://127.0.0.1:${readHttpPort()}`;
+}
+
+function sameCommaSeparatedOrigins(a, b) {
+  const sa = new Set(
+    String(a || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
+  );
+  const sb = new Set(
+    String(b || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
+  );
+  if (sa.size !== sb.size) return false;
+  for (const x of sa) {
+    if (!sb.has(x)) return false;
+  }
+  return true;
+}
+
+/**
+ * 工作台在壳内打开时：把当前主站 origin 写入 `pairing-config`（供 COMPANION_ALLOWED_ORIGINS），
+ * 若无通信密码则自动生成；再重启由壳拉起的 local-companion 使环境变量生效。
+ * 若本机另有独立启动的伴侣进程且未重启，网站仍可能 401，需用户在该进程上对齐配置。
+ */
+async function prepareWorkbenchPairingForWorkbenchUrl(targetHref) {
+  let origin = null;
+  try {
+    origin = new URL(String(targetHref || '').trim()).origin;
+  } catch {
+    return { ok: false, error: 'invalid_workbench_url' };
+  }
+
+  const pair = readPairingConfig();
+  let token = String(pair.sharedToken || '').trim();
+  const parts = String(pair.allowedOrigins || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const originSet = new Set(parts);
+  const hadOrigin = originSet.has(origin);
+  if (!hadOrigin) originSet.add(origin);
+  const mergedOrigins = [...originSet].join(',');
+
+  const needNewToken = !token || token.length < 8;
+  if (needNewToken) {
+    token = randomBytes(24).toString('hex');
+  }
+
+  if (!needNewToken && hadOrigin && sameCommaSeparatedOrigins(mergedOrigins, pair.allowedOrigins)) {
+    return { ok: true, changed: false };
+  }
+
+  savePairingConfig({ sharedToken: token, allowedOrigins: mergedOrigins });
+  await restartLocalCompanionFromTray({ aggressive: false });
+  const deadline = Date.now() + 12000;
+  while (Date.now() < deadline) {
+    if (await probeCompanionHealth()) break;
+    await sleep(180);
+  }
+  return { ok: true, changed: true };
+}
+
+/**
+ * 将 `pairing-config` 中的 token 写入工作台分区 localStorage（与网站 `companionLocalPrefs` 键一致），
+ * 若与页面此前值不同则 `reload` 一次以便 SPA 重新探测伴侣。
+ */
+async function injectWorkbenchCompanionPrefsFromPairingFile(wc) {
+  if (shellMainProcessActiveView !== 'workbench') return;
+  if (!wc || wc.isDestroyed()) return;
+  let u = '';
+  try {
+    u = wc.getURL();
+  } catch {
+    return;
+  }
+  if (!/^https?:\/\//i.test(u)) return;
+  const allowed = getWorkbenchAllowedOrigin();
+  if (!allowed) return;
+  let pageOrigin = '';
+  try {
+    pageOrigin = new URL(u).origin;
+  } catch {
+    return;
+  }
+  if (pageOrigin !== allowed) return;
+
+  const tok = String(readPairingConfig().sharedToken || '').trim();
+  if (tok.length < 8) return;
+
+  const base = companionWorkbenchBaseUrl();
+  let before = '';
+  try {
+    before = await wc.executeJavaScript(
+      `(()=>{ try { return localStorage.getItem('ac_companion_local_token_v1')||''; } catch(e){ return ''; } })()`,
+    );
+  } catch {
+    return;
+  }
+  try {
+    await wc.executeJavaScript(`(()=>{ try {
+      localStorage.setItem('ac_companion_local_base_v1', ${JSON.stringify(base)});
+      localStorage.setItem('ac_companion_local_token_v1', ${JSON.stringify(tok)});
+    } catch(e){} })()`);
+  } catch (e) {
+    console.warn('[companion-desktop] workbench inject companion prefs', e);
+    return;
+  }
+  if (String(before || '') !== tok) {
+    try {
+      wc.reload();
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
 function createTrayIcon() {
   const png1x1 =
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
@@ -702,6 +931,18 @@ async function pollCompanionStatus() {
       siteAuth && typeof siteAuth === 'object' && typeof siteAuth.detail === 'string' ? siteAuth.detail : '';
     const siteAuthNextAction =
       siteAuth && typeof siteAuth === 'object' && typeof siteAuth.nextAction === 'string' ? siteAuth.nextAction : '';
+    const uiRaw = status && typeof status === 'object' ? status.localCapabilityUi : null;
+    if (uiRaw && typeof uiRaw === 'object') {
+      companionTrayCapabilityUi = {
+        headline: typeof uiRaw.headline === 'string' ? uiRaw.headline : '',
+        subline: typeof uiRaw.subline === 'string' ? uiRaw.subline : '',
+        tone: typeof uiRaw.tone === 'string' ? uiRaw.tone : 'ok',
+        samHumanBody: typeof uiRaw.samSpawn?.humanBody === 'string' ? uiRaw.samSpawn.humanBody : '',
+        nextHint0: Array.isArray(uiRaw.samSpawn?.nextHints) ? String(uiRaw.samSpawn.nextHints[0] || '') : '',
+      };
+    } else {
+      companionTrayCapabilityUi = null;
+    }
     const relayConfigured = Boolean(relay && relay.configured);
     const relayRunning = Boolean(relay && relay.running);
     if (siteAuthState === 'not_logged_in') {
@@ -730,17 +971,29 @@ async function pollCompanionStatus() {
       if (relayLastExitCode != null) detailParts.push(`exit=${relayLastExitCode}`);
       if (relayLastSignal) detailParts.push(`signal=${relayLastSignal}`);
       const detail = detailParts.length ? ` (${detailParts.join(', ')})` : '';
-      companionStatusNote = 'Relay 子进程未运行';
+      companionStatusNote =
+        companionTrayCapabilityUi && companionTrayCapabilityUi.headline
+          ? companionTrayCapabilityUi.headline
+          : 'Relay 子进程未运行';
       companionLastError = `relay_not_running${detail}`;
       updateTrayTooltip();
       rebuildTrayMenu();
-      notifyStatusIssue('本地伴侣提醒', `已配置 Relay，但当前未运行${detail}`, `relay_not_running${detail}`);
+      const relayBalloon =
+        companionTrayCapabilityUi && companionTrayCapabilityUi.subline
+          ? `${companionTrayCapabilityUi.subline}（技术摘要：relay_not_running${detail}）`
+          : `已配置 Relay，但当前未运行${detail}`;
+      notifyStatusIssue('本地伴侣提醒', relayBalloon, `relay_not_running${detail}`);
       return;
     }
     const samLocal = status && typeof status === 'object' ? status.samLocal : null;
     const samConfigured = Boolean(samLocal && samLocal.configured);
     const samRunning = Boolean(samLocal && samLocal.running);
-    if (samConfigured && !samRunning) {
+    const samProbe = status && typeof status === 'object' ? status.samSegmentHttpProbe : null;
+    const samHttpOk =
+      samProbe && typeof samProbe === 'object' && samProbe.ok === true && samProbe.code !== 'SAM_PROBE_NOT_LOOPBACK';
+    if (samConfigured && !samRunning && samHttpOk) {
+      // 随启子进程未挂接，但伴侣已探测到本机分割 HTTP 健康：不按「需修复」阻断托盘气泡
+    } else if (samConfigured && !samRunning) {
       const samLastError =
         samLocal && typeof samLocal === 'object' && typeof samLocal.lastError === 'string' ? samLocal.lastError : null;
       const samLastExitCode =
@@ -754,23 +1007,38 @@ async function pollCompanionStatus() {
       if (samLastExitCode != null) samParts.push(`exit=${samLastExitCode}`);
       if (samLastSignal) samParts.push(`signal=${samLastSignal}`);
       const samDetail = samParts.length ? ` (${samParts.join(', ')})` : '';
-      companionStatusNote = 'SamLocal 子进程未运行';
+      companionStatusNote =
+        companionTrayCapabilityUi && companionTrayCapabilityUi.headline
+          ? companionTrayCapabilityUi.headline
+          : '本机分割引擎未保持运行';
       companionLastError = `sam_local_not_running${samDetail}`;
       updateTrayTooltip();
       rebuildTrayMenu();
-      notifyStatusIssue(
-        '本地伴侣提醒',
-        `已配置自动拉起 SamLocal，但当前未运行${samDetail}`,
-        `sam_local_not_running${samDetail}`,
-      );
+      const samLines = [];
+      if (companionTrayCapabilityUi && companionTrayCapabilityUi.subline) {
+        samLines.push(companionTrayCapabilityUi.subline);
+      }
+      if (companionTrayCapabilityUi && companionTrayCapabilityUi.samHumanBody) {
+        samLines.push(companionTrayCapabilityUi.samHumanBody);
+      }
+      if (companionTrayCapabilityUi && companionTrayCapabilityUi.nextHint0) {
+        samLines.push(`建议：${companionTrayCapabilityUi.nextHint0}`);
+      }
+      const samBalloon =
+        samLines.length > 0 ? samLines.join('\n') : `已配置自动拉起本机分割，但当前未运行${samDetail}`;
+      notifyStatusIssue('本地伴侣提醒', samBalloon, `sam_local_not_running${samDetail}`);
       return;
     }
-    companionStatusNote = '伴侣运行中';
+    companionStatusNote =
+      companionTrayCapabilityUi && companionTrayCapabilityUi.headline
+        ? companionTrayCapabilityUi.headline
+        : '伴侣运行中';
     companionLastError = null;
     lastStatusAlertKey = null;
     updateTrayTooltip();
     rebuildTrayMenu();
   } catch (err) {
+    companionTrayCapabilityUi = null;
     const msg = err instanceof Error ? err.message : String(err);
     if (msg === 'runtime_status_unauthorized') {
       companionStatusNote = '状态检查需配对 Token';
@@ -836,6 +1104,10 @@ async function startLocalCompanion() {
     ...cfg.envExtra,
     COMPANION_OPEN_BROWSER: '0',
   };
+  const sbRoot = companionSandboxPaths.getCompanionSandboxRoot();
+  if (sbRoot) {
+    env.COMPANION_SANDBOX_ROOT = sbRoot;
+  }
   /** SamLocal 走 127.0.0.1；系统 HTTP_PROXY 未排除回环时 fetch 会报 COMPUTE_SAM_BACKEND */
   const loopNoProxy = '127.0.0.1,localhost,::1';
   const curNo = String(env.NO_PROXY || env.no_proxy || '').trim();
@@ -850,6 +1122,7 @@ async function startLocalCompanion() {
   }
   applyShellVolumeRootToEnv(env);
   applyDesktopSamLocalSpawnEnv(env);
+  applyDesktopRembgPythonToEnv(env);
 
   /** 父进程/系统环境若带 `COMPANION_HTTP_PORT=0`（常为 Relay 子进程约定），子进程会按「关闭 HTTP」立即 exit(1) */
   if (String(env.COMPANION_HTTP_PORT ?? '').trim() === '0') {
@@ -965,7 +1238,7 @@ function buildTrayMenu() {
       click: () => openConsole(),
     },
     {
-      label: '本机分割（SamLocal）准备…',
+      label: '本机能力：打开本机引擎 / 安装',
       click: () => openSamLocalSetupGuide(),
     },
     {
@@ -1034,6 +1307,18 @@ function normalizeWorkbenchSiteUrl(raw) {
   }
 }
 
+/** 与当前嵌入 Chromium 的 `Chrome/x` 主版本一致，但不带 `Electron/x` 片段，减轻部分代理/WAF 对 Electron UA 的拦截或 RST。 */
+function workbenchChromeLikeUserAgent() {
+  const chrome = process.versions.chrome || '131.0.0.0';
+  let token = 'Windows NT 10.0; Win64; x64';
+  if (process.platform === 'darwin') {
+    token = 'Macintosh; Intel Mac OS X 10_15_7';
+  } else if (process.platform === 'linux') {
+    token = 'X11; Linux x86_64';
+  }
+  return `Mozilla/5.0 (${token}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chrome} Safari/537.36`;
+}
+
 function getWorkbenchAllowedOrigin() {
   const href = normalizeWorkbenchSiteUrl(readShellSettings().siteUrl);
   if (!href) return null;
@@ -1048,9 +1333,9 @@ function layoutWorkbenchBrowserView() {
   if (!mainWindow || mainWindow.isDestroyed() || !workbenchBrowserView) return;
   if (shellMainProcessActiveView !== 'workbench') return;
   const b = mainWindow.getContentBounds();
-  const x = SHELL_SIDEBAR_WIDTH;
+  const x = shellWorkbenchSidebarInsetPx;
   const y = SHELL_TITLEBAR_HEIGHT + SHELL_WORKBENCH_TOOLBAR_HEIGHT;
-  const w = Math.max(120, b.width - SHELL_SIDEBAR_WIDTH);
+  const w = Math.max(120, b.width - shellWorkbenchSidebarInsetPx);
   const h = Math.max(120, b.height - y);
   workbenchBrowserView.setBounds({ x, y, width: w, height: h });
 }
@@ -1078,6 +1363,12 @@ function ensureWorkbenchBrowserView() {
 
   const wc = view.webContents;
 
+  try {
+    wc.setUserAgent(workbenchChromeLikeUserAgent());
+  } catch (e) {
+    console.warn('[companion-desktop] workbench setUserAgent', e);
+  }
+
   wc.setWindowOpenHandler(({ url }) => {
     void shell.openExternal(url);
     return { action: 'deny' };
@@ -1102,6 +1393,13 @@ function ensureWorkbenchBrowserView() {
     }
   });
 
+  if (!workbenchPairingInjectHooked.has(view)) {
+    workbenchPairingInjectHooked.add(view);
+    wc.on('did-finish-load', () => {
+      void injectWorkbenchCompanionPrefsFromPairingFile(wc);
+    });
+  }
+
   workbenchBrowserView = view;
   return view;
 }
@@ -1110,6 +1408,12 @@ async function attachWorkbenchBrowserView() {
   if (!mainWindow || mainWindow.isDestroyed()) return { ok: false, error: 'no_window' };
   const target = normalizeWorkbenchSiteUrl(readShellSettings().siteUrl);
   if (!target) return { ok: false, error: 'invalid_site_url' };
+
+  try {
+    await prepareWorkbenchPairingForWorkbenchUrl(target);
+  } catch (e) {
+    console.warn('[companion-desktop] workbench auto-pair prepare:', e instanceof Error ? e.message : e);
+  }
 
   const view = ensureWorkbenchBrowserView();
   const wc = view.webContents;
@@ -1134,6 +1438,12 @@ async function attachWorkbenchBrowserView() {
     } catch (e) {
       detachWorkbenchBrowserView();
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  } else {
+    try {
+      await injectWorkbenchCompanionPrefsFromPairingFile(wc);
+    } catch (e) {
+      console.warn('[companion-desktop] workbench inject (same url)', e instanceof Error ? e.message : e);
     }
   }
 
@@ -1276,6 +1586,7 @@ if (!gotLock) {
       port,
       note: companionStatusNote,
       lastError: companionLastError,
+      capabilityUi: companionTrayCapabilityUi,
     };
   });
 
@@ -1292,9 +1603,14 @@ if (!gotLock) {
       ) {
         const target = normalizeWorkbenchSiteUrl(data.siteUrl);
         if (target) {
-          void workbenchBrowserView.webContents.loadURL(target).catch((e) => {
-            console.error('[companion-desktop] workbench loadURL after settings save:', e);
-          });
+          void (async () => {
+            try {
+              await prepareWorkbenchPairingForWorkbenchUrl(target);
+              await workbenchBrowserView.webContents.loadURL(target);
+            } catch (e) {
+              console.error('[companion-desktop] workbench loadURL after settings save:', e);
+            }
+          })();
         }
       }
       return { ok: true, data };
@@ -1438,6 +1754,16 @@ if (!gotLock) {
     return { ok: true, view: v };
   });
 
+  ipcMain.handle('shell-workbench-sidebar-inset', (_e, px) => {
+    const n = Number(px);
+    const inset = Number.isFinite(n)
+      ? Math.max(0, Math.min(Math.round(n), SHELL_SIDEBAR_WIDTH_EXPANDED))
+      : SHELL_SIDEBAR_WIDTH_EXPANDED;
+    shellWorkbenchSidebarInsetPx = inset;
+    layoutWorkbenchBrowserView();
+    return { ok: true, inset };
+  });
+
   ipcMain.handle('shell-workbench-reload', () => {
     if (!workbenchBrowserView || shellMainProcessActiveView !== 'workbench') {
       return { ok: false, error: 'not_visible' };
@@ -1505,7 +1831,7 @@ if (!gotLock) {
     if (process.platform !== 'win32') {
       return { ok: false, error: '仅支持 Windows' };
     }
-    if (samBootstrapChild && samBootstrapChild.exitCode === null && !samBootstrapChild.killed) {
+    if (anyDesktopBootstrapChildRunning()) {
       return { ok: false, error: '正在安装中，请稍候' };
     }
     const userRoot = path.join(app.getPath('userData'), 'sam-local-runtime');
@@ -1528,12 +1854,14 @@ if (!gotLock) {
         /* ignore */
       }
     };
+    const sbRoot = companionSandboxPaths.getCompanionSandboxRoot();
     samBootstrapChild = spawn(process.execPath, [scriptPath], {
       env: {
         ...process.env,
         ELECTRON_RUN_AS_NODE: '1',
         AC_SAM_USER_ROOT: userRoot,
         AC_SAM_SRC: bundledSrc,
+        ...(sbRoot ? { AC_COMPANION_SANDBOX_ROOT: sbRoot } : {}),
       },
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -1594,6 +1922,108 @@ if (!gotLock) {
     return { ok: true, started: true };
   });
 
+  ipcMain.handle('shell-rembg-desktop-state', () => {
+    if (process.platform !== 'win32') {
+      return { ok: true, platformUnsupported: true, installed: false };
+    }
+    const scriptPath = rembgBootstrapScriptPath();
+    const exe = resolveDesktopRembgPythonExe();
+    return {
+      ok: true,
+      platformUnsupported: false,
+      hasBootstrapScript: fs.existsSync(scriptPath),
+      installed: Boolean(exe),
+      pythonExe: exe || undefined,
+    };
+  });
+
+  ipcMain.handle('shell-rembg-bootstrap-run', async (event) => {
+    if (process.platform !== 'win32') {
+      return { ok: false, error: '仅支持 Windows' };
+    }
+    if (anyDesktopBootstrapChildRunning()) {
+      return { ok: false, error: '正在安装中，请稍候' };
+    }
+    const scriptPath = rembgBootstrapScriptPath();
+    if (!fs.existsSync(scriptPath)) {
+      return { ok: false, error: '缺少 rembg-bootstrap 脚本' };
+    }
+    const userRoot = path.join(app.getPath('userData'), 'rembg-runtime');
+    const win = BrowserWindow.fromWebContents(event.sender) || mainWindow;
+    const sendLog = (payload) => {
+      try {
+        if (win && !win.isDestroyed()) win.webContents.send('rembg-bootstrap-log', payload);
+      } catch {
+        /* ignore */
+      }
+    };
+    const sbRoot = companionSandboxPaths.getCompanionSandboxRoot();
+    rembgBootstrapChild = spawn(process.execPath, [scriptPath], {
+      env: {
+        ...process.env,
+        ELECTRON_RUN_AS_NODE: '1',
+        AC_REMBG_USER_ROOT: userRoot,
+        ...(sbRoot ? { AC_COMPANION_SANDBOX_ROOT: sbRoot } : {}),
+      },
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let outCarry = '';
+    let errCarry = '';
+    const feedLines = (carry, chunk) => {
+      const s = carry + String(chunk);
+      const parts = s.split(/\r?\n/);
+      const rest = parts.pop() || '';
+      for (const line of parts) {
+        const t = line.trim();
+        if (!t) continue;
+        try {
+          sendLog(JSON.parse(t));
+        } catch {
+          sendLog({ type: 'log', msg: t });
+        }
+      }
+      return rest;
+    };
+    const flushCarry = (carry) => {
+      const t = String(carry || '').trim();
+      if (!t) return;
+      try {
+        sendLog(JSON.parse(t));
+      } catch {
+        sendLog({ type: 'log', msg: t });
+      }
+    };
+    rembgBootstrapChild.stdout.on('data', (b) => {
+      outCarry = feedLines(outCarry, b);
+    });
+    rembgBootstrapChild.stderr.on('data', (b) => {
+      errCarry = feedLines(errCarry, b);
+    });
+    rembgBootstrapChild.on('error', (err) => {
+      rembgBootstrapChild = null;
+      outCarry = '';
+      errCarry = '';
+      sendLog({ type: 'error', msg: err.message });
+      sendLog({ type: 'bootstrap-finished', ok: false });
+    });
+    rembgBootstrapChild.on('close', (code) => {
+      flushCarry(outCarry);
+      flushCarry(errCarry);
+      outCarry = '';
+      errCarry = '';
+      rembgBootstrapChild = null;
+      const ok = code === 0;
+      sendLog({ type: 'bootstrap-finished', ok, exitCode: code });
+      if (ok) {
+        void restartLocalCompanionFromTray({ aggressive: true }).catch((e) =>
+          console.error('[companion-desktop] restart after rembg bootstrap:', e),
+        );
+      }
+    });
+    return { ok: true, started: true };
+  });
+
   ipcMain.handle('shell-load-pairing', () => readPairingConfig());
 
   ipcMain.handle('shell-save-pairing', (_event, payload) => {
@@ -1616,6 +2046,7 @@ if (!gotLock) {
   });
 
   app.whenReady().then(() => {
+    ensureCompanionSandboxLayout();
     registerCompanionProtocol();
     if (process.platform === 'darwin' && app.dock) {
       app.dock.hide();

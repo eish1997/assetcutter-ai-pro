@@ -9,6 +9,7 @@ import {
   Grid3x3,
   Crop,
   ImagePlus,
+  ImageMinus,
   Lasso,
   Minus,
   Eraser,
@@ -35,6 +36,9 @@ import {
 } from './workflow/workflowSectionUiConstants';
 
 const VIEW_MARGIN = 8;
+
+const SAM_BACKEND_UNREADY_HINT =
+  '未探测到本机分割引擎：请打开桌面伴侣 → 设置 →「分割引擎（SAM / SamLocal）」→ 一键安装高精度引擎，完成后回到网站重试。';
 
 /** 主栏图标 */
 const ic = { size: 17, strokeWidth: 1.75, className: 'shrink-0' as const };
@@ -201,6 +205,8 @@ export type ImageAnnotationLightboxToolbarProps = {
     onSamMenuOpenChange?: (open: boolean) => void;
     /** 经伴侣探测 SamLocal：stub 时仅为小圆，非抠物 */
     samBackendMode?: 'unknown' | 'stub' | 'sam';
+    /** 伴侣已连但 SamLocal 健康未就绪（未装/未起/探测失败）— 按钮短提示 */
+    samBackendUnready?: boolean;
     samPickSubmode?: 'point' | 'box';
     onSamPickSubmodeChange?: (m: 'point' | 'box') => void;
     canRunSam?: boolean;
@@ -220,6 +226,16 @@ export type ImageAnnotationLightboxToolbarProps = {
     canClearSamPreview?: boolean;
     onClearSamPreview?: () => void;
     multimask?: { total: number; index: number; onPrev: () => void; onNext: () => void };
+  };
+  /** rembg 去背景（平面大图 + 本机伴侣） */
+  removeBg?: {
+    busy: boolean;
+    disabled: boolean;
+    disabledTitle?: string;
+    hasPreview: boolean;
+    onRun: () => void;
+    onApply: () => void;
+    onDiscard: () => void;
   };
 };
 
@@ -243,6 +259,7 @@ export function ImageAnnotationLightboxToolbar({
   onResetAll,
   lightboxSamToolbarMenuOpenRef,
   samSegment,
+  removeBg,
 }: ImageAnnotationLightboxToolbarProps) {
   const colorInputRef = useRef<HTMLInputElement | null>(null);
   const barRef = useRef<HTMLDivElement | null>(null);
@@ -430,16 +447,19 @@ export function ImageAnnotationLightboxToolbar({
     const open = openMenu === 'sam';
     const chevronOpenClass = open && menuPlacement === 'above' ? 'rotate-180' : '';
     const active = samSegment.armed || open;
+    const defaultSamTitle =
+      '分割（子工具见菜单；快捷键 S 切换点选；Esc 关闭菜单并退出点选）';
+    const categoryTitle = samSegment.disabled
+      ? samSegment.disabledTitle || '当前不可用'
+      : samSegment.samBackendUnready
+        ? `${defaultSamTitle} ${SAM_BACKEND_UNREADY_HINT}`
+        : defaultSamTitle;
     return (
       <>
         <RailDivider />
         <button
           type="button"
-          title={
-            samSegment.disabled
-              ? samSegment.disabledTitle || '当前不可用'
-              : '分割（子工具见菜单；快捷键 S 切换点选；Esc 关闭菜单并退出点选）'
-          }
+          title={categoryTitle}
           aria-haspopup="menu"
           aria-expanded={open}
           disabled={samSegment.disabled}
@@ -510,13 +530,15 @@ export function ImageAnnotationLightboxToolbar({
           </ToolShell>
           <ActionBtn
             title={
-              samSegment.samBackendMode === 'stub'
-                ? samSegment.canRunSam
-                  ? '运行（stub 为小圆联调）'
-                  : '请先添加点或框'
-                : samSegment.canRunSam
-                  ? '运行提示分割'
-                  : '请先添加点或框选区域'
+              samSegment.samBackendUnready
+                ? SAM_BACKEND_UNREADY_HINT
+                : samSegment.samBackendMode === 'stub'
+                  ? samSegment.canRunSam
+                    ? '运行（stub 为小圆联调）'
+                    : '请先添加点或框'
+                  : samSegment.canRunSam
+                    ? '运行提示分割'
+                    : '请先添加点或框选区域'
             }
             disabled={samSegment.disabled || samSegment.busy || !samSegment.canRunSam}
             onClick={() => samSegment.onRunSam?.()}
@@ -532,7 +554,11 @@ export function ImageAnnotationLightboxToolbar({
             <Eraser {...icSm} />
           </ActionBtn>
           <ActionBtn
-            title="全图自动拆分（官方式多区域，悬停高亮、点击勾选）"
+            title={
+              samSegment.samBackendUnready
+                ? SAM_BACKEND_UNREADY_HINT
+                : '全图自动拆分（官方式多区域，悬停高亮、点击勾选）'
+            }
             disabled={samSegment.disabled || samSegment.busy}
             onClick={() => samSegment.onAutoSegment?.()}
           >
@@ -810,6 +836,46 @@ export function ImageAnnotationLightboxToolbar({
           <Redo2 {...ic} />
         </ActionBtn>
         {samCategoryBtn()}
+        {removeBg ? (
+          <>
+            <RailDivider />
+            <ActionBtn
+              title={
+                removeBg.disabled
+                  ? removeBg.disabledTitle || '当前不可用'
+                  : removeBg.hasPreview
+                    ? '重新运行去背景（替换当前预览）'
+                    : '去背景（本机 rembg）'
+              }
+              disabled={removeBg.disabled || removeBg.busy}
+              onClick={() => removeBg.onRun()}
+            >
+              <ImageMinus {...ic} />
+            </ActionBtn>
+            {removeBg.hasPreview ? (
+              <>
+                <ActionBtn
+                  dense
+                  title="将抠图预览写入为新版本"
+                  variant="primary"
+                  disabled={removeBg.busy || removeBg.disabled}
+                  onClick={() => removeBg.onApply()}
+                >
+                  <Save {...icSm} />
+                </ActionBtn>
+                <ActionBtn
+                  dense
+                  title="丢弃抠图预览"
+                  variant="danger"
+                  disabled={removeBg.busy}
+                  onClick={() => removeBg.onDiscard()}
+                >
+                  <Trash2 {...icSm} />
+                </ActionBtn>
+              </>
+            ) : null}
+          </>
+        ) : null}
         <RailDivider />
         <ActionBtn title="一键清空：标注、裁切、局部重绘、全景裁切框（写入当前版本）" onClick={onResetAll} variant="danger">
           <RotateCcw {...ic} />

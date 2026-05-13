@@ -4,7 +4,9 @@
 export {
   probeCompanionHealth,
   probeCompanionCapabilities,
+  fetchCompanionRuntimeStatus,
   probeCompanionSamSegmentHealth,
+  probeCompanionRembgHealth,
   normalizeCompanionBaseUrl,
   type CompanionProbeResult,
 } from './probe';
