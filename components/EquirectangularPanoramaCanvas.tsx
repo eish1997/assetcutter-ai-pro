@@ -119,12 +119,23 @@ function buildPanoramaTextureFromImage(img: HTMLImageElement): THREE.CanvasTextu
 export type EquirectangularPanoramaCanvasProps = {
   imageSrc: string;
   className?: string;
+  /**
+   * 非空且与「上次卸载前」相同时：仅换纹理时恢复相机位姿（大图全景内切换版本等）。
+   * 换资产时请使用不同 key（如 `ImagePreviewOverlay` 的 `innerLayoutStableKey` 用资产 id）。
+   */
+  preserveViewKey?: string;
+};
+
+type SavedPanoPose = {
+  pos: [number, number, number];
+  quat: [number, number, number, number];
+  fov: number;
 };
 
 export const EquirectangularPanoramaCanvas = forwardRef<
   PanoramaViewportProjection | null,
   EquirectangularPanoramaCanvasProps
->(function EquirectangularPanoramaCanvas({ imageSrc, className = '' }, ref) {
+>(function EquirectangularPanoramaCanvas({ imageSrc, className = '', preserveViewKey }, ref) {
   const rootRef = useRef<HTMLDivElement>(null);
   const mountRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
@@ -138,6 +149,8 @@ export const EquirectangularPanoramaCanvas = forwardRef<
   }>({ camera: null, mesh: null, renderer: null, scene: null, controls: null });
 
   const animListenersRef = useRef(new Set<() => void>());
+  const savedPanoPoseRef = useRef<SavedPanoPose | null>(null);
+  const lastSavedPanoPreserveKeyRef = useRef<string | undefined>(undefined);
 
   useImperativeHandle(ref, (): PanoramaViewportProjection => {
     return {
@@ -391,6 +404,25 @@ export const EquirectangularPanoramaCanvas = forwardRef<
         mesh = new THREE.Mesh(geometry, material);
         scene.add(mesh);
         liveRef.current = { camera, mesh, renderer, scene, controls };
+
+        const pose = savedPanoPoseRef.current;
+        const keyOk =
+          typeof preserveViewKey === 'string' &&
+          preserveViewKey.length > 0 &&
+          lastSavedPanoPreserveKeyRef.current === preserveViewKey;
+        if (pose && keyOk) {
+          camera.position.set(pose.pos[0], pose.pos[1], pose.pos[2]);
+          camera.quaternion.set(pose.quat[0], pose.quat[1], pose.quat[2], pose.quat[3]);
+          camera.fov = pose.fov;
+          camera.aspect = width / height;
+          camera.updateProjectionMatrix();
+          camera.updateMatrixWorld(true);
+          controls.target.set(0, 0, 0);
+          zeroOrbitControlDeltas(controls);
+          controls.update();
+          renderer.render(scene, camera);
+        }
+
         controls.saveState();
         setStatus('ready');
       })
@@ -432,6 +464,26 @@ export const EquirectangularPanoramaCanvas = forwardRef<
 
     return () => {
       cancelled = true;
+      const { camera: camCleanup } = liveRef.current;
+      if (
+        camCleanup &&
+        typeof preserveViewKey === 'string' &&
+        preserveViewKey.length > 0
+      ) {
+        const p = new THREE.Vector3();
+        camCleanup.getWorldPosition(p);
+        const q = new THREE.Quaternion();
+        camCleanup.getWorldQuaternion(q);
+        savedPanoPoseRef.current = {
+          pos: [p.x, p.y, p.z],
+          quat: [q.x, q.y, q.z, q.w],
+          fov: camCleanup.fov,
+        };
+        lastSavedPanoPreserveKeyRef.current = preserveViewKey;
+      } else {
+        savedPanoPoseRef.current = null;
+        lastSavedPanoPreserveKeyRef.current = undefined;
+      }
       liveRef.current = { camera: null, mesh: null, renderer: null, scene: null, controls: null };
       cancelAnimationFrame(animationId);
       ro.disconnect();
@@ -449,7 +501,7 @@ export const EquirectangularPanoramaCanvas = forwardRef<
         mount.removeChild(renderer.domElement);
       }
     };
-  }, [imageSrc]);
+  }, [imageSrc, preserveViewKey]);
 
   return (
     <div

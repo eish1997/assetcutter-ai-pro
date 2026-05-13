@@ -189,6 +189,61 @@ export function aimWorkflowModelLightsAtBox(
   cam.updateProjectionMatrix();
 }
 
+/**
+ * 扁平板状浮雕（高度场 MatCap）：在 `aimWorkflowModelLightsAtBox` 基础上微调灯位，
+ * 主光略抬高偏前、补光略靠前，便于顶面起伏与接触影可读。
+ */
+export function aimHeightfieldReliefLightsAtBox(
+  keyLight: THREE.DirectionalLight,
+  fillLight: THREE.DirectionalLight,
+  rimLight: THREE.DirectionalLight,
+  bounceFill: THREE.DirectionalLight,
+  box: THREE.Box3
+): void {
+  aimWorkflowModelLightsAtBox(keyLight, fillLight, rimLight, bounceFill, box);
+  if (box.isEmpty()) return;
+  const c = box.getCenter(new THREE.Vector3());
+  const s = box.getSize(new THREE.Vector3());
+  const e = Math.max(s.x, s.y, s.z, 0.08);
+
+  keyLight.position.set(c.x + e * 1.62, c.y + e * 3.45, c.z + e * 1.82);
+  fillLight.position.set(c.x - e * 2.08, c.y + e * 1.48, c.z - e * 1.22);
+  rimLight.position.set(c.x + e * 0.32, c.y + e * 2.05, c.z - e * 2.72);
+  bounceFill.position.set(c.x + e * 0.45, box.min.y - e * 2.05, c.z + e * 1.18);
+
+  keyLight.updateMatrixWorld();
+  fillLight.updateMatrixWorld();
+  rimLight.updateMatrixWorld();
+  bounceFill.updateMatrixWorld();
+}
+
+/**
+ * MatCap 浮雕场景：略抬半球/环境/平行光整体亮度，主光略暖、阴影略柔，减轻「整体发闷」
+ *（主体仍由 MatCap；灯光主要服务地面接触影与视口氛围）。
+ */
+export function applyHeightfieldMatcapSceneLighting(stage: WorkflowModelViewerStage): void {
+  stage.hemi.intensity *= 1.22;
+  stage.hemi.color.setHex(0xdce8f6);
+  stage.hemi.groundColor.setHex(0x454550);
+
+  stage.ambient.intensity *= 1.55;
+  stage.ambient.color.setHex(0xeff2f8);
+
+  stage.keyLight.intensity *= 1.28;
+  stage.keyLight.color.setHex(0xfff7f2);
+
+  stage.fillLight.intensity *= 1.14;
+  stage.fillLight.color.setHex(0xc4d4ec);
+
+  stage.rimLight.intensity *= 1.16;
+  stage.rimLight.color.setHex(0xd8e8ff);
+
+  stage.bounceFill.intensity *= 1.12;
+  stage.bounceFill.color.setHex(0xfff4eb);
+
+  stage.keyLight.shadow.radius = 4.4;
+}
+
 export function enhanceLoadedModelMaterials(root: THREE.Object3D): void {
   root.traverse((obj) => {
     if (!(obj instanceof THREE.Mesh)) return;

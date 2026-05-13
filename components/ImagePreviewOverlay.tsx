@@ -4,13 +4,14 @@ import {
   PreviewShell,
   PreviewViewerFallback,
   previewPolicyForMode,
+  type ImagePreviewLayoutMode,
 } from './preview';
 import {
   IMAGE_PREVIEW_PIXEL_SAMPLE_MAX_EDGE,
   imageNaturalIndicesFromClientPoint,
   readRgbFromCanvasMappedNatural,
 } from '../services/imagePreviewPointerGeometry';
-import { Box, Contrast, Globe2, Image as ImageIcon, X } from 'lucide-react';
+import { Box, Contrast, Globe2, GripHorizontal, Image as ImageIcon, Mountain, Scaling, X } from 'lucide-react';
 import { readLocalString, writeLocalString } from '../services/clientPersist';
 import { CustomDropdown } from './ui/CustomDropdown';
 import {
@@ -20,6 +21,10 @@ import {
   WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER,
 } from './workflow/workflowSectionUiConstants';
 import type { PanoramaViewportProjection } from '../services/panoViewportProjection';
+import { ImagePreviewSplitStretchOverlay, type ImagePreviewSplitStretchExportState } from './ImagePreviewSplitStretchOverlay';
+import { ImagePreviewSplitStretchWriteBackPopover } from './ImagePreviewSplitStretchWriteBackPopover';
+import { ImagePreviewWorkflowResizePopover } from './ImagePreviewWorkflowResizePopover';
+import type { WorkflowLightboxImageWriteBackPayload } from '../services/imagePreviewWorkflowResize';
 
 const NO_WHEEL = '[data-image-preview-no-wheel]';
 const SCROLL = '[data-image-preview-scroll]';
@@ -189,12 +194,18 @@ export type ImagePreviewOverlayProps = {
   panoViewerRef?: React.RefObject<PanoramaViewportProjection | null>;
   /** 平面模式下在主图上移动指针时回调当前像素 RGB（离开图内容区或无法采样时为 null） */
   onFlatImagePixelSample?: (rgb: { r: number; g: number; b: number } | null) => void;
-  /** 平面 / 全景 / 3D 切换时通知父级（用于大图标注按模式分桶） */
-  onPreviewLayoutChange?: (layout: 'flat' | 'pano' | 'model3d') => void;
+  /** 平面 / 全景 / 高度 3D / 3D 模型 切换时通知父级（用于大图标注按模式分桶） */
+  onPreviewLayoutChange?: (layout: ImagePreviewLayoutMode) => void;
   /**
    * 为真时：平面主图不响应缩放/平移等 `onMouseDown` 手势（如本机 SAM 武装时点选/框选需独占指针）。
    */
   suppressFlatImageInteraction?: boolean;
+  /**
+   * 工作流大图：平面下将当前预览（含线分割变形）按设定等比尺寸写回资产；非平面（全景 / 高度 3D / 模型 3D）时入口灰显。
+   */
+  imageResizeWriteBack?: {
+    onCommit: (payload: WorkflowLightboxImageWriteBackPayload) => void | Promise<void>;
+  } | null;
 };
 
 export type FlatImageOverlayContext = {
@@ -204,7 +215,7 @@ export type FlatImageOverlayContext = {
   panoProjectionRef: React.RefObject<PanoramaViewportProjection | null> | undefined;
   /** 全景 Viewer 挂载/卸载时递增，驱动叠层在 `ref.current` 就绪后重渲染并挂上 `subscribeAnimation` */
   panoViewerBindEpoch?: number;
-  previewLayout: 'flat' | 'pano' | 'model3d';
+  previewLayout: ImagePreviewLayoutMode;
 };
 
 function fitImageToPreviewViewport(nw: number, nh: number): { w: number; h: number } {
@@ -229,10 +240,14 @@ function lockByOriginalDominantAxis(nw: number, nh: number): { axis: 'width' | '
 const LazyImageEquirectViewer = getLazyImagePreviewViewer('image.equirect');
 /** 3D Viewer 独立 chunk（registry 懒加载） */
 const LazyImageModel3DViewer = getLazyImagePreviewViewer('image.model3d');
+/** 高度 3D（置换）Viewer 独立 chunk */
+const LazyImageHeightfieldViewer = getLazyImagePreviewViewer('image.heightfield');
 
 /** `lazy()` 包一层 `Suspense`，并把 ref 交到内层 `forwardRef` Viewer */
-const PanoEquirectLazyView = forwardRef<PanoramaViewportProjection | null, { imageSrc: string; className?: string }>(
-  function PanoEquirectLazyView(props, ref) {
+const PanoEquirectLazyView = forwardRef<
+  PanoramaViewportProjection | null,
+  { imageSrc: string; className?: string; panoPreserveViewKey?: string }
+>(function PanoEquirectLazyView(props, ref) {
     if (!LazyImageEquirectViewer) return null;
     return (
       <Suspense fallback={<PreviewViewerFallback label="全景模块加载中…" />}>
@@ -244,7 +259,7 @@ const PanoEquirectLazyView = forwardRef<PanoramaViewportProjection | null, { ima
 
 /**
  * 全屏大图预览：滚轮切图、Esc 关闭、双击复原、左键拖拽缩放（按下处为轴）、空格/Shift+左键/右键平移；多资产时 Shift+滚轮切资产。
- * 平面模式：Q 循环平面/全景/3D（有则显）、W 移动画布模式、Z/X 缩放、R+拖拽旋转（Shift 10° 档）。
+ * 平面模式：Q 循环平面 / 全景 / 高度 3D / 3D 模型（有则显）、W 移动画布模式、Z/X 缩放、R+拖拽旋转（Shift 10° 档）。
  */
 export function ImagePreviewOverlay({
   open,
@@ -270,11 +285,12 @@ export function ImagePreviewOverlay({
   onFlatImagePixelSample,
   onPreviewLayoutChange,
   suppressFlatImageInteraction = false,
+  imageResizeWriteBack = null,
 }: ImagePreviewOverlayProps) {
-  const [previewLayout, setPreviewLayout] = useState<'flat' | 'pano' | 'model3d'>('flat');
+  const [previewLayout, setPreviewLayout] = useState<ImagePreviewLayoutMode>('flat');
 
   const setPreviewLayoutAndNotify = useCallback(
-    (updater: React.SetStateAction<'flat' | 'pano' | 'model3d'>) => {
+    (updater: React.SetStateAction<ImagePreviewLayoutMode>) => {
       setPreviewLayout((cur) => {
         const n = typeof updater === 'function' ? (updater as (c: typeof cur) => typeof cur)(cur) : updater;
         queueMicrotask(() => onPreviewLayoutChange?.(n));
@@ -295,6 +311,11 @@ export function ImagePreviewOverlay({
   const [rotOriginLocal, setRotOriginLocal] = useState<{ x: number; y: number } | null>(null);
   /** W 键：左键拖移始终为平移画布（否则左键为缩放拖移；空格仍临时平移） */
   const [canvasPanArmed, setCanvasPanArmed] = useState(false);
+  /** 平面模式：线分割纵向变形（画布预览 + 可拖分割线） */
+  const [splitStretchEnabled, setSplitStretchEnabled] = useState(false);
+  const [splitStretchWriteBackPopOpen, setSplitStretchWriteBackPopOpen] = useState(false);
+  const [resizeWriteBackPopOpen, setResizeWriteBackPopOpen] = useState(false);
+  const splitStretchExportRef = useRef<ImagePreviewSplitStretchExportState | null>(null);
   const [lockedDominant, setLockedDominant] = useState<{ axis: 'width' | 'height'; size: number } | null>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
   const internalPanoViewerRef = useRef<PanoramaViewportProjection | null>(null);
@@ -382,12 +403,29 @@ export function ImagePreviewOverlay({
   const wheelLastNavigateAtRef = useRef(0);
   const previewModelSrc = pickPreviewableModelUrl(modelUrls);
   const hasModel3DMode = Boolean(!centerSlot && previewModelSrc && LazyImageModel3DViewer);
+  const hasHeightfieldMode = Boolean(!centerSlot && imageSrc?.trim() && LazyImageHeightfieldViewer);
   const panoLayoutActive = Boolean(!centerSlot && enablePanoramaMode && previewLayout === 'pano');
   const model3dLayoutActive = Boolean(!centerSlot && hasModel3DMode && previewLayout === 'model3d');
+  const heightfieldLayoutActive = Boolean(!centerSlot && hasHeightfieldMode && previewLayout === 'heightfield');
+  const heightfieldToolbarSlotRef = useRef<HTMLDivElement | null>(null);
+  const [heightfieldToolbarHostEl, setHeightfieldToolbarHostEl] = useState<HTMLDivElement | null>(null);
+
+  useLayoutEffect(() => {
+    if (!heightfieldLayoutActive || uiHidden) {
+      setHeightfieldToolbarHostEl((h) => (h ? null : h));
+      return;
+    }
+    const el = heightfieldToolbarSlotRef.current;
+    setHeightfieldToolbarHostEl((prev) => (prev === el ? prev : el));
+  }, [heightfieldLayoutActive, uiHidden]);
+
   /** 全景模式下叠一层与平面一致的 object-contain 贴图 + 标注，使裁切/局部重绘等仍可用（底图透明，仍见 WebGL 全景） */
   const panoAnnotationBridge = Boolean(panoLayoutActive && flatImageOverlay);
   const showFlatImageColumn = Boolean(
-    !centerSlot && !model3dLayoutActive && (!panoLayoutActive || Boolean(flatImageOverlay))
+    !centerSlot &&
+      !model3dLayoutActive &&
+      !heightfieldLayoutActive &&
+      (!panoLayoutActive || Boolean(flatImageOverlay))
   );
   /** 全景桥接时标注在全屏叠层，不再走中央「缩放壳」里的那条柱 */
   const flatAnnotationColumnOutsidePanoStack = Boolean(showFlatImageColumn && !panoAnnotationBridge);
@@ -401,6 +439,8 @@ export function ImagePreviewOverlay({
   const flatNavigateCanvasOk = Boolean(
     showFlatImageColumn && previewLayout === 'flat' && !panoAnnotationBridge && !centerSlot
   );
+  const splitStretchUiOk = Boolean(flatNavigateCanvasOk && !suppressFlatImageInteraction);
+  const resizeWriteBackUiOk = Boolean(flatNavigateCanvasOk && !centerSlot && imageResizeWriteBack);
 
   const applyKeyedZoom = useCallback(
     (grow: boolean) => {
@@ -431,7 +471,28 @@ export function ImagePreviewOverlay({
     rKeyPressedRef.current = false;
     wheelAccumRef.current = 0;
     wheelLastNavigateAtRef.current = 0;
+    setSplitStretchEnabled(false);
+    setSplitStretchWriteBackPopOpen(false);
+    setResizeWriteBackPopOpen(false);
   }, [open, resetKey, setPreviewLayoutAndNotify]);
+
+  useLayoutEffect(() => {
+    if (!splitStretchUiOk || !splitStretchEnabled) {
+      splitStretchExportRef.current = { active: false, lineFrac: 0.5, splitNaturalY: 0 };
+    }
+  }, [splitStretchUiOk, splitStretchEnabled]);
+
+  useEffect(() => {
+    if (previewLayout !== 'flat') {
+      setSplitStretchEnabled(false);
+      setSplitStretchWriteBackPopOpen(false);
+      setResizeWriteBackPopOpen(false);
+    }
+  }, [previewLayout]);
+
+  useEffect(() => {
+    if (!splitStretchEnabled) setSplitStretchWriteBackPopOpen(false);
+  }, [splitStretchEnabled]);
 
   /** 避免每帧 pointermove 触发父级（如 WorkflowSection）setState → 整树重绘 */
   const lastFlatPixelSampleSigRef = useRef<string | null>(null);
@@ -572,14 +633,16 @@ export function ImagePreviewOverlay({
       }
       if (!e.ctrlKey && !e.metaKey && !e.altKey && !isKeyboardTypingTarget(e.target)) {
         if (e.code === 'KeyQ' && canCyclePreviewMode) {
-          const modes: Array<'flat' | 'pano' | 'model3d'> = ['flat'];
+          const modes: ImagePreviewLayoutMode[] = ['flat'];
           if (enablePanoramaMode) modes.push('pano');
+          if (hasHeightfieldMode) modes.push('heightfield');
           if (hasModel3DMode) modes.push('model3d');
           if (modes.length >= 2) {
             e.preventDefault();
             setPreviewLayoutAndNotify((cur) => {
               const i = modes.indexOf(cur);
-              return modes[(i + 1) % modes.length] ?? 'flat';
+              const from = i >= 0 ? i : 0;
+              return modes[(from + 1) % modes.length] ?? 'flat';
             });
           }
           return;
@@ -650,6 +713,7 @@ export function ImagePreviewOverlay({
     centerSlot,
     enablePanoramaMode,
     hasModel3DMode,
+    hasHeightfieldMode,
     applyKeyedZoom,
     setPreviewLayoutAndNotify,
   ]);
@@ -659,7 +723,10 @@ export function ImagePreviewOverlay({
     const onWheel = (e: WheelEvent) => {
       const viewerCapturesWheel =
         (enablePanoramaMode && previewLayout === 'pano' && previewPolicyForMode('image.equirect').captureGlobalWheel) ||
-        (hasModel3DMode && previewLayout === 'model3d' && previewPolicyForMode('image.model3d').captureGlobalWheel);
+        (hasModel3DMode && previewLayout === 'model3d' && previewPolicyForMode('image.model3d').captureGlobalWheel) ||
+        (hasHeightfieldMode &&
+          previewLayout === 'heightfield' &&
+          previewPolicyForMode('image.heightfield').captureGlobalWheel);
       if (viewerCapturesWheel) return;
 
       const innerMode = typeof onWheelInnerNavigate === 'function';
@@ -780,6 +847,7 @@ export function ImagePreviewOverlay({
     previewLayout,
     enablePanoramaMode,
     hasModel3DMode,
+    hasHeightfieldMode,
     wheelListLength,
     onWheelNavigate,
     onWheelInnerNavigate,
@@ -975,7 +1043,7 @@ export function ImagePreviewOverlay({
     transformOrigin: rotOriginLocal ? `${rotOriginLocal.x}px ${rotOriginLocal.y}px` : '50% 50%',
   };
 
-  const showModeCycleHint = Boolean(!centerSlot && (enablePanoramaMode || hasModel3DMode));
+  const showModeCycleHint = Boolean(!centerSlot && (enablePanoramaMode || hasModel3DMode || hasHeightfieldMode));
 
   return (
     <PreviewShell
@@ -995,7 +1063,11 @@ export function ImagePreviewOverlay({
             onWheel={(e) => e.stopPropagation()}
           >
             <Suspense fallback={<PreviewViewerFallback label="全景模块加载中…" />}>
-              <LazyImageEquirectViewer imageSrc={imageSrc!} className="h-full w-full rounded-none border-0" />
+              <LazyImageEquirectViewer
+                imageSrc={imageSrc!}
+                className="h-full w-full rounded-none border-0"
+                panoPreserveViewKey={innerLayoutStableKey?.trim() || undefined}
+              />
             </Suspense>
           </div>
         ) : null}
@@ -1009,6 +1081,7 @@ export function ImagePreviewOverlay({
                 ref={assignPanoViewerRef}
                 imageSrc={imageSrc!}
                 className="h-full w-full rounded-none border-0"
+                panoPreserveViewKey={innerLayoutStableKey?.trim() || undefined}
               />
               <div ref={panoOverlayHostRef} className="pointer-events-none absolute inset-0 z-[10] min-h-0">
                 <div className="relative h-full min-h-0 w-full">
@@ -1052,6 +1125,18 @@ export function ImagePreviewOverlay({
           </div>
         ) : null}
 
+        {!centerSlot && hasHeightfieldMode && previewLayout === 'heightfield' ? (
+          <div className="absolute inset-0 z-[5] min-h-0" onWheel={(e) => e.stopPropagation()}>
+            <Suspense fallback={<PreviewViewerFallback label="高度 3D 模块加载中…" />}>
+              <LazyImageHeightfieldViewer
+                imageSrc={imageSrc!}
+                className="h-full w-full min-h-0"
+                toolbarPortalEl={!uiHidden ? heightfieldToolbarHostEl : null}
+              />
+            </Suspense>
+          </div>
+        ) : null}
+
         {centerSlot ? (
           <div
             className="absolute top-1/2 z-[4] flex items-center justify-center px-4 box-border w-[min(80rem,calc(100vw-3rem))] max-w-[calc(100vw-3rem)]"
@@ -1082,20 +1167,24 @@ export function ImagePreviewOverlay({
                     ? `block max-h-full max-w-full object-contain rounded-xl select-none ${
                         panoAnnotationBridge
                           ? 'pointer-events-none cursor-default opacity-0'
-                          : suppressFlatImageInteraction
-                            ? 'pointer-events-none'
-                            : canvasPanArmed
-                              ? 'cursor-grab active:cursor-grabbing'
-                              : 'cursor-zoom-in'
+                          : splitStretchEnabled
+                            ? 'pointer-events-none opacity-0'
+                            : suppressFlatImageInteraction
+                              ? 'pointer-events-none'
+                              : canvasPanArmed
+                                ? 'cursor-grab active:cursor-grabbing'
+                                : 'cursor-zoom-in'
                       }`
                     : `block max-h-[88vh] max-w-[92vw] object-contain rounded-xl select-none ${
                         panoAnnotationBridge
                           ? 'pointer-events-none cursor-default opacity-0'
-                          : suppressFlatImageInteraction
-                            ? 'pointer-events-none'
-                            : canvasPanArmed
-                              ? 'cursor-grab active:cursor-grabbing'
-                              : 'cursor-zoom-in'
+                          : splitStretchEnabled
+                            ? 'pointer-events-none opacity-0'
+                            : suppressFlatImageInteraction
+                              ? 'pointer-events-none'
+                              : canvasPanArmed
+                                ? 'cursor-grab active:cursor-grabbing'
+                                : 'cursor-zoom-in'
                       }`
                 }
                 style={lockedImgStyle}
@@ -1122,9 +1211,19 @@ export function ImagePreviewOverlay({
                 }
                 ref={imgRef}
                 onMouseDown={
-                  panoAnnotationBridge || suppressFlatImageInteraction ? undefined : handleImgMouseDown
+                  panoAnnotationBridge || suppressFlatImageInteraction || splitStretchEnabled
+                    ? undefined
+                    : handleImgMouseDown
                 }
               />
+              {splitStretchUiOk && splitStretchEnabled ? (
+                <ImagePreviewSplitStretchOverlay
+                  imgRef={imgRef}
+                  active
+                  resetKey={`${resetKey}\u001f${imageSrc ?? ''}`}
+                  exportStateRef={splitStretchExportRef}
+                />
+              ) : null}
               {flatImageOverlay ? (
                 // eslint-disable-next-line react-hooks/refs -- 将 ref 对象传入子 render 回调；不在此读取 .current
                 flatImageOverlay({
@@ -1143,7 +1242,7 @@ export function ImagePreviewOverlay({
         <div className="absolute top-4 left-4 z-10 max-w-[min(300px,calc(100vw-6rem))] pointer-events-none text-left text-[8px] leading-relaxed text-gray-500/70 space-y-1">
           {enablePanoramaMode && previewLayout === 'pano' ? (
             <>
-              {showModeCycleHint ? <div>Q：循环切换显示模式（平面 / 全景 / 3D）</div> : null}
+              {showModeCycleHint ? <div>Q：循环切换显示模式（平面 / 全景 / 高度 3D / 3D 模型，仅显示已启用的项）</div> : null}
               <div>拖拽：旋转视角（360° 全景）</div>
               <div>双击 WebGL 画面：复原默认朝向与视野（局部重绘前可先对齐视角）</div>
               <div>滚轮：调整视野宽窄</div>
@@ -1157,9 +1256,23 @@ export function ImagePreviewOverlay({
               <div>1～4：切换预览背景（毛玻璃 / 黑 / 50%灰 / 白）</div>
               <div>Esc：关闭预览</div>
             </>
+          ) : hasHeightfieldMode && previewLayout === 'heightfield' ? (
+            <>
+              {showModeCycleHint ? (
+                <div>Q：循环切换显示模式（平面 / 全景 / 高度 3D / 3D 模型，仅显示已启用的项）</div>
+              ) : null}
+              <div>拖拽：旋转视角（按图片灰度抬升表面）</div>
+              <div>滚轮：缩放视角距离</div>
+              <div>表面：灰 MatCap（ZBrush 式 sculpt 明暗，无原图着色）</div>
+              <div>顶部工具栏：性能↔画质、置换强度、「下载 GLB」导出当前网格</div>
+              <div>切回「平面」后可滚轮切图 / 缩放平移</div>
+              <div>Tab：隐藏/显示界面（仅看图片）</div>
+              <div>1～4：切换预览背景（毛玻璃 / 黑 / 50%灰 / 白）</div>
+              <div>Esc：关闭预览</div>
+            </>
           ) : hasModel3DMode && previewLayout === 'model3d' ? (
             <>
-              {showModeCycleHint ? <div>Q：循环切换显示模式（平面 / 全景 / 3D）</div> : null}
+              {showModeCycleHint ? <div>Q：循环切换显示模式（平面 / 全景 / 高度 3D / 3D 模型，仅显示已启用的项）</div> : null}
               <div>拖拽：旋转模型</div>
               <div>滚轮：缩放距离</div>
               <div>切回「平面」后可滚轮切图 / 缩放平移</div>
@@ -1179,7 +1292,7 @@ export function ImagePreviewOverlay({
             <>
               <div>滚轮：本卡片多版本时切换显示</div>
               <div>Shift+滚轮：上一资产 / 下一资产</div>
-              {showModeCycleHint ? <div>Q：循环切换显示模式（平面 / 全景 / 3D）</div> : null}
+              {showModeCycleHint ? <div>Q：循环切换显示模式（平面 / 全景 / 高度 3D / 3D 模型，仅显示已启用的项）</div> : null}
               <div>W：移动画布模式（开时左键拖移；再按 W 关闭）</div>
               <div>按住空格：临时移动画布（左键拖移）</div>
               <div>Z / X：放大 / 缩小</div>
@@ -1195,11 +1308,16 @@ export function ImagePreviewOverlay({
                 {Math.abs(flatRotationDeg) > 0.05 ? ` · 旋转 ${Math.round(flatRotationDeg)}°` : ''}
                 {canvasPanArmed ? ' · 移动画布' : ''}
               </div>
+              {splitStretchUiOk && splitStretchEnabled ? (
+                <div className="text-amber-200/90 pt-0.5 border-t border-white/10">
+                  线分割：拖蓝色条调整上下占比；琥珀虚线为垂直中线参考。写入工作流请点顶部「写回」确认；「下载 PNG」仅导出本地文件。
+                </div>
+              ) : null}
             </>
           ) : (
             <>
               <div>滚轮：上一张 / 下一张</div>
-              {showModeCycleHint ? <div>Q：循环切换显示模式（平面 / 全景 / 3D）</div> : null}
+              {showModeCycleHint ? <div>Q：循环切换显示模式（平面 / 全景 / 高度 3D / 3D 模型，仅显示已启用的项）</div> : null}
               <div>W：移动画布模式（开时左键拖移；再按 W 关闭）</div>
               <div>按住空格：临时移动画布（左键拖移）</div>
               <div>Z / X：放大 / 缩小</div>
@@ -1215,6 +1333,11 @@ export function ImagePreviewOverlay({
                 {Math.abs(flatRotationDeg) > 0.05 ? ` · 旋转 ${Math.round(flatRotationDeg)}°` : ''}
                 {canvasPanArmed ? ' · 移动画布' : ''}
               </div>
+              {splitStretchUiOk && splitStretchEnabled ? (
+                <div className="text-amber-200/90 pt-0.5 border-t border-white/10">
+                  线分割：拖蓝色条调整上下占比；琥珀虚线为垂直中线参考。写入工作流请点顶部「写回」确认；「下载 PNG」仅导出本地文件。
+                </div>
+              ) : null}
             </>
           )}
         </div>
@@ -1222,11 +1345,20 @@ export function ImagePreviewOverlay({
 
         {!uiHidden ? (
         <div
-          className="absolute right-4 z-10 flex max-w-[calc(100vw-2rem)] justify-end"
+          className="absolute right-4 z-10 flex max-w-[calc(100vw-2rem)] flex-row flex-wrap items-start justify-end gap-2"
           style={{ top: 'max(0.5rem, env(safe-area-inset-top, 0px))' }}
         >
+          {heightfieldLayoutActive ? (
+            <div
+              ref={heightfieldToolbarSlotRef}
+              className={`${WORKFLOW_IMAGE_PREVIEW_RAIL} max-w-[min(58vw,30rem)] min-w-0 shrink`}
+              role="region"
+              aria-label="高度 3D 控件"
+              onClick={(e) => e.stopPropagation()}
+            />
+          ) : null}
           <div
-            className={WORKFLOW_IMAGE_PREVIEW_RAIL}
+            className={`${WORKFLOW_IMAGE_PREVIEW_RAIL} shrink-0`}
             onClick={(e) => e.stopPropagation()}
             role="toolbar"
             aria-label="预览工具"
@@ -1250,13 +1382,77 @@ export function ImagePreviewOverlay({
               renderTrigger={() => <Contrast {...PV_MODE_IC} aria-hidden />}
               portalZIndex={{ backdrop: 2700, list: 2701 }}
             />
+            {splitStretchUiOk || resizeWriteBackUiOk ? (
+              <>
+                <div className={WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER} aria-hidden />
+                {splitStretchUiOk ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setSplitStretchEnabled((v) => !v)}
+                      className={
+                        splitStretchEnabled
+                          ? `${IMAGE_LIGHTBOX_TOOL_ICON_BTN_IDLE} bg-blue-600/35 ring-2 ring-inset ring-blue-400/40`
+                          : IMAGE_LIGHTBOX_TOOL_ICON_BTN_IDLE
+                      }
+                      title="线分割变形：拖蓝色条调整上下区域纵向比例；再次点击关闭"
+                      aria-label="线分割变形"
+                      aria-pressed={splitStretchEnabled}
+                    >
+                      <GripHorizontal {...PV_MODE_IC} aria-hidden />
+                    </button>
+                    {splitStretchEnabled && imageResizeWriteBack ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setResizeWriteBackPopOpen(false);
+                          setSplitStretchWriteBackPopOpen(true);
+                        }}
+                        className={`${IMAGE_LIGHTBOX_TOOL_ICON_BTN_IDLE} text-[9px] font-black uppercase tracking-wide px-1.5`}
+                        title="确认将线分割变形写回当前工作流版本"
+                        aria-label="线分割写回资产"
+                      >
+                        写回
+                      </button>
+                    ) : null}
+                  </>
+                ) : null}
+                {resizeWriteBackUiOk ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (previewLayout !== 'flat') return;
+                      setSplitStretchWriteBackPopOpen(false);
+                      setResizeWriteBackPopOpen((o) => !o);
+                    }}
+                    disabled={previewLayout !== 'flat'}
+                    className={
+                      previewLayout !== 'flat'
+                        ? `${IMAGE_LIGHTBOX_TOOL_ICON_BTN_IDLE} cursor-not-allowed opacity-40`
+                        : resizeWriteBackPopOpen
+                          ? `${IMAGE_LIGHTBOX_TOOL_ICON_BTN_IDLE} bg-blue-600/35 ring-2 ring-inset ring-blue-400/40`
+                          : IMAGE_LIGHTBOX_TOOL_ICON_BTN_IDLE
+                    }
+                    title={
+                      previewLayout !== 'flat'
+                        ? '请切换到「平面」预览后再改尺寸写回'
+                        : '改尺寸写回当前版本（等比缩放；写回后清除本版本标注）'
+                    }
+                    aria-label="改尺寸写回资产"
+                    aria-pressed={resizeWriteBackPopOpen}
+                  >
+                    <Scaling {...PV_MODE_IC} aria-hidden />
+                  </button>
+                ) : null}
+              </>
+            ) : null}
             {topRightExtra ? (
               <>
                 <div className={WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER} aria-hidden />
                 <div className="inline-flex items-center gap-1">{topRightExtra}</div>
               </>
             ) : null}
-            {!centerSlot && (enablePanoramaMode || hasModel3DMode) ? (
+            {!centerSlot && (enablePanoramaMode || hasModel3DMode || hasHeightfieldMode) ? (
               <>
                 <div className={WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER} aria-hidden />
                 <div
@@ -1286,6 +1482,20 @@ export function ImagePreviewOverlay({
                       aria-pressed={previewLayout === 'pano'}
                     >
                       <Globe2 {...PV_MODE_IC} aria-hidden />
+                    </button>
+                  ) : null}
+                  {hasHeightfieldMode ? (
+                    <button
+                      type="button"
+                      onClick={() => setPreviewLayoutAndNotify('heightfield')}
+                      className={`${PV_MODE_SEG_BASE} border-l border-white/[0.08] ${
+                        previewLayout === 'heightfield' ? PV_MODE_SEG_ON : PV_MODE_SEG_OFF
+                      }`}
+                      title="高度 3D：按图片亮度显示置换表面"
+                      aria-label="切换到高度 3D 预览"
+                      aria-pressed={previewLayout === 'heightfield'}
+                    >
+                      <Mountain {...PV_MODE_IC} aria-hidden />
                     </button>
                   ) : null}
                   {hasModel3DMode ? (
@@ -1320,6 +1530,34 @@ export function ImagePreviewOverlay({
         ) : null}
 
         {!uiHidden ? children : null}
+
+        {resizeWriteBackUiOk && resizeWriteBackPopOpen && imageResizeWriteBack ? (
+          <ImagePreviewWorkflowResizePopover
+            open
+            onClose={() => setResizeWriteBackPopOpen(false)}
+            flatActive={previewLayout === 'flat'}
+            imgRef={imgRef}
+            splitExportRef={splitStretchExportRef}
+            onCommit={imageResizeWriteBack.onCommit}
+          />
+        ) : null}
+        {splitStretchUiOk &&
+        splitStretchWriteBackPopOpen &&
+        imageResizeWriteBack &&
+        splitStretchEnabled ? (
+          <ImagePreviewSplitStretchWriteBackPopover
+            open
+            onClose={() => setSplitStretchWriteBackPopOpen(false)}
+            flatActive={previewLayout === 'flat'}
+            imgRef={imgRef}
+            splitExportRef={splitStretchExportRef}
+            onCommit={async (payload) => {
+              await Promise.resolve(imageResizeWriteBack.onCommit(payload));
+              setSplitStretchWriteBackPopOpen(false);
+              setSplitStretchEnabled(false);
+            }}
+          />
+        ) : null}
     </PreviewShell>
   );
 }

@@ -1,4 +1,5 @@
 export type {
+  ImagePreviewLayoutMode,
   PreviewDescriptor,
   PreviewImagePayload,
   PreviewMode,

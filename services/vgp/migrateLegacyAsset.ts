@@ -1,21 +1,37 @@
 import type { WorkflowAsset } from '../../types';
-import { VGP_SCHEMA_VERSION, type ImageVersion, type PromptArtifact, type SemanticState } from '../../types/vgp';
+import {
+  VGP_SCHEMA_VERSION,
+  type ImageVersion,
+  type PromptArtifact,
+  type SemanticState,
+  type VgpAssetExtension,
+} from '../../types/vgp';
 import { createInitialVgpForAsset, newVgpId } from './vgpStore';
+
+/** `versionOrder` 与 `versionsById` 不同步时（本地/同步损坏）会得到 0，大图左侧节点图会整段不渲染 */
+function countValidVgpOrderedVersions(vgp: VgpAssetExtension): number {
+  return vgp.versionOrder.filter((id) => Boolean(vgp.versionsById[id])).length;
+}
 
 /**
  * 无 vgp 的旧资产：补全最小合法扩展；已有 resultOrder 时尽力重建链（语义/prompt 为占位）。
+ * 若已存在 `vgp` 但 `versionOrder` 无法解析出任何版本节点，视为损坏并丢弃后按上式重建。
  */
 export function ensureWorkflowAssetVgp(asset: WorkflowAsset): WorkflowAsset {
-  if (asset.vgp) return asset;
+  if (asset.vgp && countValidVgpOrderedVersions(asset.vgp) > 0) {
+    return asset;
+  }
 
-  const base = createInitialVgpForAsset(asset);
+  const source: WorkflowAsset = asset.vgp ? { ...asset, vgp: undefined } : asset;
+
+  const base = createInitialVgpForAsset(source);
   const origId = base.originalVersionId!;
   let headId = base.headVersionId!;
   let stepIndex = 1;
 
-  const order = asset.resultOrder ?? [];
+  const order = source.resultOrder ?? [];
   if (order.length === 0) {
-    return { ...asset, vgp: base };
+    return { ...source, vgp: base };
   }
 
   const vgp = { ...base, versionsById: { ...base.versionsById }, versionOrder: [...base.versionOrder], semanticsById: { ...base.semanticsById }, promptsById: { ...base.promptsById } };
@@ -49,7 +65,7 @@ export function ensureWorkflowAssetVgp(asset: WorkflowAsset): WorkflowAsset {
     const lineageRoot = vgp.versionsById[origId]?.lineageRootId ?? origId;
     const iv: ImageVersion = {
       id: verId,
-      assetId: asset.id,
+      assetId: source.id,
       parentVersionId: headId,
       lineageRootId: lineageRoot,
       stepIndex,
@@ -67,5 +83,5 @@ export function ensureWorkflowAssetVgp(asset: WorkflowAsset): WorkflowAsset {
   }
 
   vgp.headVersionId = headId;
-  return { ...asset, vgp };
+  return { ...source, vgp };
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { expandPixelBBox } from '../services/localInpaintGemini';
+import { computeCoverUpscaleDrawParams, expandPixelBBox } from '../services/localInpaintGemini';
 import { resolveDialogImageModelIdForGear } from '../services/modelRegistry/imageModels';
 
 describe('expandPixelBBox', () => {
@@ -21,6 +21,31 @@ describe('expandPixelBBox', () => {
     expect(e.y).toBe(0);
     expect(e.w).toBeGreaterThan(0);
     expect(e.h).toBeGreaterThan(0);
+  });
+});
+
+describe('computeCoverUpscaleDrawParams', () => {
+  it('returns null when already meets min', () => {
+    expect(computeCoverUpscaleDrawParams(8000, 4000, 7680, 3840)).toBeNull();
+    expect(computeCoverUpscaleDrawParams(100, 100, 100, 100)).toBeNull();
+  });
+
+  it('uniform 2x when same aspect and half size', () => {
+    const p = computeCoverUpscaleDrawParams(3840, 2160, 7680, 4320);
+    expect(p).not.toBeNull();
+    expect(p!.dw).toBeCloseTo(7680, 5);
+    expect(p!.dh).toBeCloseTo(4320, 5);
+    expect(p!.ox).toBeCloseTo(0, 5);
+    expect(p!.oy).toBeCloseTo(0, 5);
+  });
+
+  it('uses max scale when one side is short', () => {
+    const p = computeCoverUpscaleDrawParams(100, 50, 200, 200);
+    expect(p).not.toBeNull();
+    expect(p!.dw).toBe(400);
+    expect(p!.dh).toBe(200);
+    expect(p!.ox).toBe(-100);
+    expect(p!.oy).toBe(0);
   });
 });
 

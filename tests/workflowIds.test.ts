@@ -18,4 +18,10 @@ describe('stripResultKeyToBaseActionId', () => {
   it('leaves plain capability ids unchanged', () => {
     expect(stripResultKeyToBaseActionId('cut_image')).toBe('cut_image');
   });
+
+  it('strips __v__ for lightbox write-back base ids', () => {
+    const base = 'ac_internal_lightbox_resize_writeback';
+    const k = makeVersionKey(base);
+    expect(stripResultKeyToBaseActionId(k)).toBe(base);
+  });
 });

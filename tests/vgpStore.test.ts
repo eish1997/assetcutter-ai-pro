@@ -225,4 +225,25 @@ describe('ensureWorkflowAssetVgp', () => {
       'legacy-migrated'
     );
   });
+
+  it('vgp.versionOrder 与 versionsById 不同步时丢弃并按 resultOrder 重建', () => {
+    const a = makeAsset({
+      results: { k1: 'data:image/png;base64,QQ' },
+      resultOrder: ['k1'],
+      displayKey: 'k1',
+      vgp: {
+        schema_version: 'vgp-1',
+        versionOrder: ['ghost-1', 'ghost-2'],
+        versionsById: {},
+        semanticsById: {},
+        promptsById: {},
+        headVersionId: 'ghost-1',
+        originalVersionId: 'ghost-2',
+      } as unknown as NonNullable<WorkflowAsset['vgp']>,
+    });
+    const m = ensureWorkflowAssetVgp(a);
+    const resolved = (m.vgp?.versionOrder ?? []).filter((id) => m.vgp!.versionsById[id]);
+    expect(resolved.length).toBeGreaterThan(0);
+    expect(m.vgp?.versionOrder.length).toBe(2);
+  });
 });

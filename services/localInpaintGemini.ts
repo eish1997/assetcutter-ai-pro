@@ -85,6 +85,88 @@ export function expandPixelBBox(
 
 export const LOCAL_INPAINT_EXPAND_RATIO = 0.18;
 
+/**
+ * 若 `nw×nh` 已不小于 `minW×minH` 则返回 null（无需放大）。
+ * 否则返回 cover 到至少 min 边所需的绘制参数（可能超出画布，由负偏移裁切）。
+ */
+export function computeCoverUpscaleDrawParams(
+  nw: number,
+  nh: number,
+  minW: number,
+  minH: number
+): { dw: number; dh: number; ox: number; oy: number } | null {
+  if (!Number.isFinite(nw) || !Number.isFinite(nh) || !Number.isFinite(minW) || !Number.isFinite(minH)) {
+    return null;
+  }
+  if (nw < 1 || nh < 1 || minW < 1 || minH < 1) return null;
+  if (nw >= minW && nh >= minH) return null;
+  const scale = Math.max(minW / nw, minH / nh);
+  const dw = nw * scale;
+  const dh = nh * scale;
+  const ox = (minW - dw) / 2;
+  const oy = (minH - dh) / 2;
+  return { dw, dh, ox, oy };
+}
+
+/**
+ * 局部重绘贴回后兜底：输出不得小于参考底图的像素宽高（只升不降；宽高比不变，必要时 cover + 裁切）。
+ * 失败时返回 null，调用方保留原图。
+ */
+export async function ensureDataUrlCoversMinPixelSize(
+  dataUrl: string,
+  minW: number,
+  minH: number
+): Promise<string | null> {
+  const trimmed = String(dataUrl || '').trim();
+  if (!trimmed) return null;
+  let im: HTMLImageElement;
+  try {
+    im = await loadHtmlImage(trimmed);
+  } catch {
+    return null;
+  }
+  const nw = im.naturalWidth;
+  const nh = im.naturalHeight;
+  if (!nw || !nh) return null;
+  const p = computeCoverUpscaleDrawParams(nw, nh, minW, minH);
+  if (!p) return null;
+  const { dw, dh, ox, oy } = p;
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(minW));
+  canvas.height = Math.max(1, Math.round(minH));
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  try {
+    ctx.drawImage(im, 0, 0, nw, nh, ox, oy, dw, dh);
+    return canvas.toDataURL('image/png');
+  } catch {
+    return null;
+  }
+}
+
+/** 以 `baseImageSrc` 的自然像素为下限抬升合成结果（只放大、不缩小参考底图）。 */
+export async function ensureLocalInpaintOutputPixelFloor(
+  mergedDataUrl: string,
+  baseImageSrc: string
+): Promise<string> {
+  const out = String(mergedDataUrl || '').trim();
+  const baseSrc = String(baseImageSrc || '').trim();
+  if (!out || !baseSrc) return out;
+  let base: HTMLImageElement;
+  try {
+    base = await loadHtmlImage(baseSrc);
+  } catch {
+    return out;
+  }
+  const minW = base.naturalWidth;
+  const minH = base.naturalHeight;
+  if (!minW || !minH) return out;
+  const lifted = await ensureDataUrlCoversMinPixelSize(out, minW, minH);
+  return lifted ?? out;
+}
+
 export type LocalInpaintCropPlan = {
   cropDataUrl: string;
   dest: { left: number; top: number; width: number; height: number };

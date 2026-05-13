@@ -829,6 +829,8 @@ const MainApp: React.FC = () => {
   useEffect(() => {
     workspaceLocalIdbHydrateReadyRef.current = workspaceLocalIdbHydrateReady;
   }, [workspaceLocalIdbHydrateReady]);
+  /** 供首屏 hydrate 等早于 `loadWorkspaceProjectInternal` 声明位置的 effect 调用，避免重复实现伴侣 manifest 合并 */
+  const loadWorkspaceProjectInternalRef = useRef<(id: string) => void>((_id: string) => {});
   const markWorkspaceLocalIdbHydrateReady = useCallback(() => {
     setWorkspaceLocalIdbHydrateReady(true);
   }, []);
@@ -1315,15 +1317,13 @@ const MainApp: React.FC = () => {
       saveWorkspaceProjects(effectiveProjects, null);
       const last = getLastOpenedWorkspaceProjectId(null);
       setActiveWorkspaceProjectId(last);
+      markWorkspaceLocalIdbHydrateReady();
       if (last) {
-        const b = loadWorkflowBundle(last, null);
-        setWorkflowAssets(b.assets);
-        setWorkflowPending(b.pending);
+        loadWorkspaceProjectInternalRef.current(last);
       } else {
         setWorkflowAssets([]);
         setWorkflowPending([]);
       }
-      markWorkspaceLocalIdbHydrateReady();
     })();
     return () => {
       cancelled = true;
@@ -1348,15 +1348,13 @@ const MainApp: React.FC = () => {
       saveWorkspaceProjects(effectiveProjects, uid);
       const last = getLastOpenedWorkspaceProjectId(uid);
       setActiveWorkspaceProjectId(last);
+      markWorkspaceLocalIdbHydrateReady();
       if (last) {
-        const b = loadWorkflowBundle(last, uid);
-        setWorkflowAssets(b.assets);
-        setWorkflowPending(b.pending);
+        loadWorkspaceProjectInternalRef.current(last);
       } else {
         setWorkflowAssets([]);
         setWorkflowPending([]);
       }
-      markWorkspaceLocalIdbHydrateReady();
     })();
     return () => {
       cancelled = true;
@@ -1390,16 +1388,14 @@ const MainApp: React.FC = () => {
       setWorkspaceProjects(effectiveProjects);
       setLastOpenedWorkspaceProjectId(validLast, uid);
       setActiveWorkspaceProjectId(validLast);
+      workspaceCloudPushAllowedUserIdRef.current = uid;
+      markWorkspaceLocalIdbHydrateReady();
       if (validLast) {
-        const local = loadWorkflowBundle(validLast, uid);
-        setWorkflowAssets(local.assets);
-        setWorkflowPending(local.pending);
+        loadWorkspaceProjectInternalRef.current(validLast);
       } else {
         setWorkflowAssets([]);
         setWorkflowPending([]);
       }
-      workspaceCloudPushAllowedUserIdRef.current = uid;
-      markWorkspaceLocalIdbHydrateReady();
     };
 
     void (async () => {
@@ -1424,16 +1420,14 @@ const MainApp: React.FC = () => {
           saveWorkspaceProjects(effectiveProjects, uid);
           setLastOpenedWorkspaceProjectId(validLast, uid);
           setActiveWorkspaceProjectId(validLast);
+          workspaceCloudPushAllowedUserIdRef.current = uid;
+          markWorkspaceLocalIdbHydrateReady();
           if (validLast) {
-            const local = loadWorkflowBundle(validLast, uid);
-            setWorkflowAssets(local.assets);
-            setWorkflowPending(local.pending);
+            loadWorkspaceProjectInternalRef.current(validLast);
           } else {
             setWorkflowAssets([]);
             setWorkflowPending([]);
           }
-          workspaceCloudPushAllowedUserIdRef.current = uid;
-          markWorkspaceLocalIdbHydrateReady();
           return;
         }
         const again = await fetchWorkspaceCloudIndex(uid, user.username);
@@ -1450,16 +1444,14 @@ const MainApp: React.FC = () => {
         setWorkspaceProjects(effectiveProjects);
         saveWorkspaceProjects(effectiveProjects, uid);
         setActiveWorkspaceProjectId(validLast);
+        workspaceCloudPushAllowedUserIdRef.current = uid;
+        markWorkspaceLocalIdbHydrateReady();
         if (validLast) {
-          const b = loadWorkflowBundle(validLast, uid);
-          setWorkflowAssets(b.assets);
-          setWorkflowPending(b.pending);
+          loadWorkspaceProjectInternalRef.current(validLast);
         } else {
           setWorkflowAssets([]);
           setWorkflowPending([]);
         }
-        workspaceCloudPushAllowedUserIdRef.current = uid;
-        markWorkspaceLocalIdbHydrateReady();
       } catch (e) {
         console.warn('[workspace cloud] hydrate', e);
         if (cancelled) return;
@@ -1471,16 +1463,14 @@ const MainApp: React.FC = () => {
         setWorkspaceProjects(effectiveProjects);
         saveWorkspaceProjects(effectiveProjects, uid);
         setActiveWorkspaceProjectId(validLast);
+        workspaceCloudPushAllowedUserIdRef.current = uid;
+        markWorkspaceLocalIdbHydrateReady();
         if (validLast) {
-          const b = loadWorkflowBundle(validLast, uid);
-          setWorkflowAssets(b.assets);
-          setWorkflowPending(b.pending);
+          loadWorkspaceProjectInternalRef.current(validLast);
         } else {
           setWorkflowAssets([]);
           setWorkflowPending([]);
         }
-        workspaceCloudPushAllowedUserIdRef.current = uid;
-        markWorkspaceLocalIdbHydrateReady();
       }
     })();
     return () => {
@@ -1603,6 +1593,7 @@ const MainApp: React.FC = () => {
     },
     [addGlobalLog]
   );
+  loadWorkspaceProjectInternalRef.current = loadWorkspaceProjectInternal;
 
   const openWorkspaceTrashDialog = useCallback(async () => {
     setWorkspaceTrashDialog({

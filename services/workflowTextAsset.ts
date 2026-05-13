@@ -25,6 +25,18 @@ export function workflowAssetToInputText(a: WorkflowAsset): string {
   return b || t;
 }
 
+/**
+ * 文字资产当前显示版本是否应按 **文本** 参与拖放（底部栏草稿、队列 `inputText`、微调弹窗等）。
+ * 当 `displayKey` 指向 `results` 中的图（如文生图结果）时为 false，应按 **当前图**（`getAssetDisplayImage`）处理。
+ */
+export function workflowAssetCurrentDisplayIsTextChannel(a: WorkflowAsset): boolean {
+  if (!isWorkflowTextAsset(a)) return false;
+  const dk = (a.displayKey || 'original').trim() || 'original';
+  if (dk === 'original') return true;
+  const raster = String((a.results || {})[dk] ?? '').trim();
+  return !raster;
+}
+
 /** 文字卡可拖入：文生文、文生图 */
 export function workflowPresetAcceptsTextCardDrag(mod: CustomAppModule): boolean {
   return mod.category === 'text_to_text' || mod.category === 'text_to_image';

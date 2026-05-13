@@ -1,5 +1,11 @@
 export const RESULT_VER_SEP = '__v__';
 
+/** 大图「改尺寸写回」：result key 基底（非 capability 预设 id） */
+export const WORKFLOW_LIGHTBOX_RESIZE_WRITEBACK_ACTION_ID = 'ac_internal_lightbox_resize_writeback';
+/** 大图「线分割变形」单独写回：result key 基底 */
+export const WORKFLOW_LIGHTBOX_SPLIT_STRETCH_WRITEBACK_ACTION_ID =
+  'ac_internal_lightbox_split_stretch_writeback';
+
 export const uuid = () => Math.random().toString(36).slice(2, 11);
 
 export const baseActionId = (k: string) => (k.includes(RESULT_VER_SEP) ? k.split(RESULT_VER_SEP)[0]! : k);

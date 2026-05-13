@@ -10,6 +10,13 @@ export type LazyImagePreviewViewerProps = {
   /** 与 blob: 本地 URL 配合，用于推断 .fbx/.obj 等格式 */
   modelFileName?: string;
   className?: string;
+  /** 全景：与上次卸载前相同 key 时换纹理后恢复相机位姿（如大图内切换版本，传 `innerLayoutStableKey`） */
+  panoPreserveViewKey?: string;
+  /**
+   * 高度 3D 等：将控件 portal 到宿主元素（由 `ImagePreviewOverlay` 顶栏旁槽位提供）。
+   * 未传时 Viewer 使用内置浮层布局。
+   */
+  toolbarPortalEl?: HTMLElement | null;
 };
 
 type Loader = () => Promise<{ default: ComponentType<LazyImagePreviewViewerProps> }>;
@@ -17,6 +24,7 @@ type Loader = () => Promise<{ default: ComponentType<LazyImagePreviewViewerProps
 const builtInImageLoaders: Record<string, Loader> = {
   'image.equirect': () => import('./viewers/ImageEquirectViewer'),
   'image.model3d': () => import('./viewers/ImageModel3DViewer'),
+  'image.heightfield': () => import('./viewers/ImageHeightfieldViewer'),
 };
 
 const customImageLoaders = new Map<string, Loader>();

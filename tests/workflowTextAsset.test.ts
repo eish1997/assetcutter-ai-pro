@@ -4,6 +4,7 @@ import type { WorkflowAsset } from '../types';
 import {
   buildComposerTextAssetThumbDataUrl,
   workflowAssetAllowedForCapabilityDrop,
+  workflowAssetCurrentDisplayIsTextChannel,
   workflowAssetToInputText,
 } from '../services/workflowTextAsset';
 import type { CustomAppModule } from '../types';
@@ -42,6 +43,34 @@ describe('workflowAssetToInputText', () => {
       textResults: {},
     });
     expect(workflowAssetToInputText(asset)).toBe('标题\n\n原始正文');
+  });
+});
+
+describe('workflowAssetCurrentDisplayIsTextChannel', () => {
+  it('original 显示为文本通道', () => {
+    expect(workflowAssetCurrentDisplayIsTextChannel(makeTextAsset())).toBe(true);
+  });
+
+  it('仅有文本结果版本为文本通道', () => {
+    expect(
+      workflowAssetCurrentDisplayIsTextChannel(
+        makeTextAsset({
+          displayKey: 'expand_v2',
+          textResults: { expand_v2: '扩写' },
+        })
+      )
+    ).toBe(true);
+  });
+
+  it('当前版本为 results 中的图时不是文本通道', () => {
+    expect(
+      workflowAssetCurrentDisplayIsTextChannel(
+        makeTextAsset({
+          displayKey: 'gen_v1',
+          results: { gen_v1: 'data:image/png;base64,AAA' },
+        })
+      )
+    ).toBe(false);
   });
 });
 

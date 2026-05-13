@@ -119,7 +119,7 @@ export const WorkflowGenerationRecordPanel: React.FC<WorkflowGenerationRecordPan
     <div
       className={`${
         mode === 'inline'
-          ? 'h-full rounded-none border-0 bg-transparent shadow-none'
+          ? 'min-h-0 w-full rounded-none border-0 bg-transparent shadow-none'
           : 'max-w-2xl w-full max-h-[90vh] my-4 overflow-y-auto rounded-2xl border border-white/10 bg-[#0f0f12] shadow-xl'
       }`}
     >

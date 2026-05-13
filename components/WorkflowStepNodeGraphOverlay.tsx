@@ -18,8 +18,8 @@ const PAD_Y = 8;
 const HANDLE_H = 22;
 const Z_OVERLAY = 2300;
 const VIEW_MARGIN = 8;
-/** 图形容器最大高度，避免整卡过高被夹到视口底部 */
-const GRAPH_MAX_H_CSS = 'min(72vh, 520px)';
+/** 图形容器最大高度，避免整卡过高被夹到视口底部；略抬高以容纳更深步骤树 */
+const GRAPH_MAX_H_CSS = 'min(82vh, 640px)';
 
 type Pos = { x: number; y: number };
 
@@ -386,10 +386,10 @@ export function WorkflowStepNodeGraphOverlay({
         ⋮⋮
       </button>
       <div
-        className="relative max-w-[min(92vw,22rem)] overflow-x-hidden overflow-y-auto no-scrollbar"
-        style={{ width: panelW, maxHeight: GRAPH_MAX_H_CSS }}
+        className="relative w-full max-w-[min(92vw,22rem)] overflow-auto [scrollbar-width:thin]"
+        style={{ maxHeight: GRAPH_MAX_H_CSS }}
       >
-        <div className="relative" style={{ width: panelW, height: gh }}>
+        <div className="relative" style={{ width: Math.max(panelW, gw), height: gh }}>
           <svg
             className="pointer-events-none absolute left-0 top-0 overflow-visible"
             width={gw}

@@ -65,6 +65,7 @@ import {
 import { WorkflowGenerationRecordPanel } from './WorkflowGenerationRecordPanel';
 import { WorkflowStepNodeGraphOverlay } from './WorkflowStepNodeGraphOverlay';
 import { triggerImageDownload } from '../services/imageDataUrl';
+import type { WorkflowLightboxImageWriteBackPayload } from '../services/imagePreviewWorkflowResize';
 import { readLocalJson, scopedStorageKey, workflowFavoritesStorageKey, writeLocalJson } from '../services/clientPersist';
 import {
   readLightboxAnnotationPrefs,
@@ -79,6 +80,7 @@ import {
 } from '../services/workflowImageTags';
 import AppIcon from './ui/AppIcon';
 import { ImagePreviewOverlay } from './ImagePreviewOverlay';
+import type { ImagePreviewLayoutMode } from './preview';
 import {
   ImageFlatAnnotationOverlay,
   normalizeImageOverlayDoc,
@@ -91,6 +93,7 @@ import type { PanoramaViewportProjection } from '../services/panoViewportProject
 import {
   buildLocalInpaintInstruction,
   compositeFeatheredLocalPatch,
+  ensureLocalInpaintOutputPixelFloor,
   rasterizeExpandedLocalEditCrop,
 } from '../services/localInpaintGemini';
 import type { PanoLocalReprojectSnapshot } from '../services/panoViewportProjection';
@@ -136,11 +139,19 @@ import {
   clampWorkflowTextBody,
   isWorkflowTextAsset,
   workflowAssetAllowedForCapabilityDrop,
+  workflowAssetCurrentDisplayIsTextChannel,
   workflowAssetToInputText,
   workflowPresetAcceptsTextCardDrag,
   workflowTextAssetOutlineLabel,
 } from '../services/workflowTextAsset';
-import { uuid, baseActionId, makeVersionKey, stripResultKeyToBaseActionId } from './workflow/workflowIds';
+import {
+  uuid,
+  baseActionId,
+  makeVersionKey,
+  stripResultKeyToBaseActionId,
+  WORKFLOW_LIGHTBOX_RESIZE_WRITEBACK_ACTION_ID,
+  WORKFLOW_LIGHTBOX_SPLIT_STRETCH_WRITEBACK_ACTION_ID,
+} from './workflow/workflowIds';
 import {
   asWorkflowImageString,
   safeUnknownToString,
@@ -573,8 +584,8 @@ const WorkflowSection: React.FC<{
   }));
   const lightboxOverlayByModeRef = useRef(lightboxOverlayByMode);
   lightboxOverlayByModeRef.current = lightboxOverlayByMode;
-  /** 与 `ImagePreviewOverlay` 同步：平面 / 全景 / 3D（后两者编辑时写入 flat 桶） */
-  const [lightboxPreviewLayout, setLightboxPreviewLayout] = useState<'flat' | 'pano' | 'model3d'>('flat');
+  /** 与 `ImagePreviewOverlay` 同步：平面 / 全景 / 高度 3D / 3D 模型（非平面时标注写入对应桶） */
+  const [lightboxPreviewLayout, setLightboxPreviewLayout] = useState<ImagePreviewLayoutMode>('flat');
   const lightboxOverlayActiveBucket: 'flat' | 'pano' =
     lightboxPreviewLayout === 'pano' ? 'pano' : 'flat';
   const lightboxOverlayDraft = lightboxOverlayByMode[lightboxOverlayActiveBucket];
@@ -700,7 +711,7 @@ const WorkflowSection: React.FC<{
     });
   }, [cloneOverlayDoc]);
 
-  const handleLightboxPreviewLayoutChange = useCallback((layout: 'flat' | 'pano' | 'model3d') => {
+  const handleLightboxPreviewLayoutChange = useCallback((layout: ImagePreviewLayoutMode) => {
     setLightboxPreviewLayout(layout);
   }, []);
 
@@ -1532,7 +1543,9 @@ ${lineSvg}
       }
       const inputTextFromCard =
         options?.inputText ??
-        (isWorkflowTextAsset(asset) ? workflowAssetToInputText(asset) : undefined);
+        (isWorkflowTextAsset(asset) && workflowAssetCurrentDisplayIsTextChannel(asset)
+          ? workflowAssetToInputText(asset)
+          : undefined);
       const fromGroup =
         options?.sourceGroupAssetId != null && options?.sourceItemIndex != null;
       const task: WorkflowPendingTask = {
@@ -3131,7 +3144,7 @@ ${lineSvg}
                 { shrinkToBaseDimensions: readPanoLocalInpaintShrinkToBase(preferenceScope) }
               );
               if (merged) {
-                composite = merged;
+                composite = await ensureLocalInpaintOutputPixelFloor(merged, src);
                 inpaintMerged = true;
               } else {
                 onLog?.('warn', '大图预览：全景局部贴回失败，将按当前底图继续');
@@ -3158,7 +3171,7 @@ ${lineSvg}
               const genUrl = await workflowGenerateImage(plan.cropDataUrl, instruction, modelId);
               const merged = await compositeFeatheredLocalPatch(src, genUrl, plan.dest, plan.featherPx);
               if (merged) {
-                composite = merged;
+                composite = await ensureLocalInpaintOutputPixelFloor(merged, src);
                 inpaintMerged = true;
               } else {
                 onLog?.('warn', '大图预览：局部贴回合成失败，将按当前底图继续');
@@ -4050,7 +4063,7 @@ ${lineSvg}
   const lightboxSamSegmentDisabledTitle = useMemo(() => {
     if (!workspaceProjectChrome?.activeProjectId?.trim()) return '请先选择工作区项目';
     if (lightboxModelUrls.length > 0) return '含 3D 模型入口的资产不支持分割点选';
-    if (lightboxPreviewLayout !== 'flat') return '请切换到「平面」预览后再使用分割（全景模式不支持点选）';
+    if (lightboxPreviewLayout !== 'flat') return '请切换到「平面」预览后再使用分割（全景 / 高度 3D / 模型 3D 等模式不支持点选）';
     return undefined;
   }, [
     workspaceProjectChrome?.activeProjectId,
@@ -4379,6 +4392,77 @@ ${lineSvg}
     );
     onLog?.('info', '已清空当前预览模式下的标注、裁切与局部重绘（已写入当前显示版本）');
   }, [lightboxAssetId, lightboxAsset, lightboxShowsImage, onLog, setAssets]);
+
+  const handleLightboxImageResizeWriteBack = useCallback(
+    async ({
+      dataUrl,
+      width,
+      height,
+      writeBackKind = 'resize',
+    }: WorkflowLightboxImageWriteBackPayload) => {
+      const id = lightboxAssetIdRef.current;
+      const asset = assetsRef.current.find((a) => a.id === id);
+      if (!asset || isWorkflowTextAsset(asset) || isGroupAsset(asset)) {
+        onLog?.('warn', '大图预览：改尺寸写回仅支持图像资产');
+        return;
+      }
+      if (!parseDataUrlToBlob(dataUrl)) {
+        onLog?.('warn', '大图预览：写回失败（无效图像数据）');
+        return;
+      }
+      const dk = asset.displayKey;
+      const baseId =
+        writeBackKind === 'split_stretch'
+          ? WORKFLOW_LIGHTBOX_SPLIT_STRETCH_WRITEBACK_ACTION_ID
+          : WORKFLOW_LIGHTBOX_RESIZE_WRITEBACK_ACTION_ID;
+      const displayStepLabel = writeBackKind === 'split_stretch' ? '线分割变形' : '改尺寸写回';
+      const hasAnyVersion =
+        Object.keys(asset.results || {}).some((k) => baseActionId(k) === baseId) ||
+        (asset.resultOrder || []).some((k) => baseActionId(k) === baseId);
+      const newKey = hasAnyVersion ? makeVersionKey(baseId) : baseId;
+
+      const emptyFlat = overlayDocForFlatAsset(normalizeImageOverlayDoc(null));
+      const emptyPano = normalizeImageOverlayDoc(null);
+      setLightboxOverlayByMode({ flat: emptyFlat, pano: emptyPano });
+      setLightboxOverlayTool('off');
+      setAssets((prev) =>
+        prev.map((a) => {
+          if (a.id !== id) return a;
+          const nextAnn = { ...(a.imageOverlayAnnotations || {}) };
+          const nextAnnPano = { ...(a.imageOverlayAnnotationsPano || {}) };
+          nextAnn[dk] = emptyFlat;
+          nextAnnPano[dk] = emptyPano;
+          const nextResults = { ...(a.results || {}), [newKey]: dataUrl };
+          const nextOrder = [...(a.resultOrder || []), newKey];
+          const nextMeta = {
+            ...(a.resultMeta || {}),
+            [newKey]: {
+              executedAt: Date.now(),
+              displayStepLabel,
+            },
+          };
+          return {
+            ...a,
+            results: nextResults,
+            resultOrder: nextOrder,
+            resultMeta: nextMeta,
+            imageOverlayAnnotations: nextAnn,
+            imageOverlayAnnotationsPano: nextAnnPano,
+            displayKey: newKey,
+          };
+        })
+      );
+      applyIntrinsicAspectToAsset(id, width, height);
+      scheduleCompanionPersistResult(id, newKey, dataUrl);
+      onLog?.(
+        'info',
+        writeBackKind === 'split_stretch'
+          ? `大图预览：线分割变形已写入新步骤（${width}×${height}）`
+          : `大图预览：改尺寸已写入新步骤（${width}×${height}）`
+      );
+    },
+    [applyIntrinsicAspectToAsset, onLog, scheduleCompanionPersistResult, setAssets]
+  );
 
   const applyLightboxManualCrops = useCallback(async () => {
     const id = lightboxAssetId;
@@ -6043,8 +6127,13 @@ ${lineSvg}
             const a = assets.find((x) => x.id === id);
             if (!a || isGroupAsset(a)) continue;
             if (isWorkflowTextAsset(a)) {
-              const t = workflowAssetToInputText(a).trim();
-              if (t) textPieces.push(t);
+              if (workflowAssetCurrentDisplayIsTextChannel(a)) {
+                const t = workflowAssetToInputText(a).trim();
+                if (t) textPieces.push(t);
+              } else {
+                const img = getAssetDisplayImage(a).trim();
+                if (img) imgsToAdd.push(img);
+              }
             } else {
               const img = getAssetDisplayImage(a).trim();
               if (img) imgsToAdd.push(img);
@@ -6061,8 +6150,13 @@ ${lineSvg}
               const child = assets.find((x) => x.id === item);
               if (child && !isGroupAsset(child)) {
                 if (isWorkflowTextAsset(child)) {
-                  const t = workflowAssetToInputText(child).trim();
-                  if (t) textPieces.push(t);
+                  if (workflowAssetCurrentDisplayIsTextChannel(child)) {
+                    const t = workflowAssetToInputText(child).trim();
+                    if (t) textPieces.push(t);
+                  } else {
+                    const img = getAssetDisplayImage(child).trim();
+                    if (img) imgsToAdd.push(img);
+                  }
                 } else {
                   const img = getAssetDisplayImage(child).trim();
                   if (img) imgsToAdd.push(img);
@@ -6074,8 +6168,13 @@ ${lineSvg}
               const child = assets.find((x) => x.id === (item as { assetId: string }).assetId);
               if (!child || isGroupAsset(child)) continue;
               if (isWorkflowTextAsset(child)) {
-                const t = workflowAssetToInputText(child).trim();
-                if (t) textPieces.push(t);
+                if (workflowAssetCurrentDisplayIsTextChannel(child)) {
+                  const t = workflowAssetToInputText(child).trim();
+                  if (t) textPieces.push(t);
+                } else {
+                  const img = getAssetDisplayImage(child).trim();
+                  if (img) imgsToAdd.push(img);
+                }
               } else {
                 const img = getAssetDisplayImage(child).trim();
                 if (img) imgsToAdd.push(img);
@@ -6202,7 +6301,9 @@ ${lineSvg}
                   assetId: id,
                   inputImage: getAssetDisplayImage(a),
                   inputSourceDisplayKey: a.displayKey,
-                  ...(isWorkflowTextAsset(a) ? { inputText: workflowAssetToInputText(a) } : {}),
+                  ...(isWorkflowTextAsset(a) && workflowAssetCurrentDisplayIsTextChannel(a)
+                    ? { inputText: workflowAssetToInputText(a) }
+                    : {}),
                 });
               }
             });
@@ -6230,6 +6331,9 @@ ${lineSvg}
                     inputSourceDisplayKey: child.displayKey,
                     sourceGroupAssetId: groupId,
                     sourceItemIndex: itemIndex,
+                    ...(isWorkflowTextAsset(child) && workflowAssetCurrentDisplayIsTextChannel(child)
+                      ? { inputText: workflowAssetToInputText(child) }
+                      : {}),
                   });
                 }
                 continue;
@@ -6256,7 +6360,9 @@ ${lineSvg}
                     inputSourceDisplayKey: child.displayKey,
                     sourceGroupAssetId: groupId,
                     sourceItemIndex: itemIndex,
-                    ...(isWorkflowTextAsset(child) ? { inputText: workflowAssetToInputText(child) } : {}),
+                    ...(isWorkflowTextAsset(child) && workflowAssetCurrentDisplayIsTextChannel(child)
+                      ? { inputText: workflowAssetToInputText(child) }
+                      : {}),
                   });
                 }
               }
@@ -6568,13 +6674,17 @@ ${lineSvg}
   );
 
   const getComposerPartialTestInputImage = useCallback((): string | null => {
-    if (lightboxAsset && !isWorkflowTextAsset(lightboxAsset)) {
-      const img = getAssetDisplayImage(lightboxAsset);
-      return img.trim() || null;
+    if (lightboxAsset) {
+      if (!(isWorkflowTextAsset(lightboxAsset) && workflowAssetCurrentDisplayIsTextChannel(lightboxAsset))) {
+        const img = getAssetDisplayImage(lightboxAsset);
+        const t = img.trim();
+        if (t) return t;
+      }
     }
     for (const id of Array.from(selectedAssetIds)) {
       const a = assets.find((x) => x.id === id);
-      if (!a || isWorkflowTextAsset(a)) continue;
+      if (!a) continue;
+      if (isWorkflowTextAsset(a) && workflowAssetCurrentDisplayIsTextChannel(a)) continue;
       const img = getAssetDisplayImage(a);
       if (img.trim()) return img.trim();
     }
@@ -6587,15 +6697,21 @@ ${lineSvg}
       const label = a.groupLabel?.trim() || `资产 ${a.id.slice(0, 6)}`;
       const scope = a.inRepository ? 'repository' : 'workspace';
       if (isWorkflowTextAsset(a)) {
-        const textContent = workflowAssetToInputText(a).trim();
-        if (!textContent) continue;
-        out.push({
-          id: a.id,
-          label,
-          scope,
-          image: buildComposerTextAssetThumbDataUrl(a.textTitle || '', getAssetDisplayText(a)),
-          textContent,
-        });
+        if (workflowAssetCurrentDisplayIsTextChannel(a)) {
+          const textContent = workflowAssetToInputText(a).trim();
+          if (!textContent) continue;
+          out.push({
+            id: a.id,
+            label,
+            scope,
+            image: buildComposerTextAssetThumbDataUrl(a.textTitle || '', getAssetDisplayText(a)),
+            textContent,
+          });
+        } else {
+          const img = getAssetDisplayImage(a).trim();
+          if (!img) continue;
+          out.push({ id: a.id, label, scope, image: img });
+        }
         continue;
       }
       const img = getAssetDisplayImage(a).trim();
@@ -6617,7 +6733,7 @@ ${lineSvg}
         if (source.kind === 'root') {
           const effectiveIds = getEffectiveAssetIdsForAction(source.assetIds).filter((id) => {
             const x = assets.find((a) => a.id === id);
-            return x && !isWorkflowTextAsset(x);
+            return x && !(isWorkflowTextAsset(x) && workflowAssetCurrentDisplayIsTextChannel(x));
           });
           effectiveIds.forEach((id) => addToPending(id, setActionId));
           continue;
@@ -6637,7 +6753,7 @@ ${lineSvg}
             });
           } else {
             const child = assets.find((x) => x.id === (item as { assetId: string }).assetId);
-            if (child && isWorkflowTextAsset(child)) continue;
+            if (child && isWorkflowTextAsset(child) && workflowAssetCurrentDisplayIsTextChannel(child)) continue;
             const inputImage = child ? getAssetDisplayImage(child) : '';
             setPending((prev) => [
               ...prev,
@@ -6860,49 +6976,8 @@ ${lineSvg}
       if (activePaneNode === 0) return [workspaceAndFunctionCols[0]!, outlineWorkflowTopBarColumn];
       return [workspaceAndFunctionCols[1]!, workspaceAndFunctionCols[0]!];
     }
+    /** 能力 + 功能区同屏：顶栏不重复「功能区 / 一键执行」（一键执行仅在「功能区 + 工作区」档显示） */
     return [
-      {
-        title: '功能区',
-        desc: '基础能力与复合能力',
-        actions: (
-          <div className="flex items-center gap-1.5 whitespace-nowrap">
-            <button
-              type="button"
-              onClick={() => executePending()}
-              disabled={pending.length === 0 || executing}
-              className={TITLE_ROW_BTN_PRIMARY}
-            >
-              {executing
-                ? `执行中 ${executingQueueDoneCount}/${executingQueue?.total ?? 0}`
-                : `一键执行（${pending.length}）`}
-            </button>
-            {(pending.length > 0 || executingQueue) && (
-              <div className={TITLE_ROW_QUEUE_CHIP}>
-                {executingQueue ? (
-                  <>
-                    <span className="text-[8px] font-black uppercase text-blue-300">执行中</span>
-                    <span className="text-[8px] text-gray-300">
-                      {executingQueueDoneCount} / {executingQueue.total}
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    <span className="text-[8px] font-black uppercase text-blue-300">待处理</span>
-                    <span className="text-[8px] text-gray-300">{pending.length} 项等待执行</span>
-                    <button
-                      type="button"
-                      onClick={() => setPending([])}
-                      className="text-[8px] text-blue-400 hover:text-blue-300 font-medium ml-1 leading-none"
-                    >
-                      清空
-                    </button>
-                  </>
-                )}
-              </div>
-            )}
-          </div>
-        ),
-      },
       {
         title: '能力预设',
         desc: '当前能力配置与预设编辑',
@@ -8498,7 +8573,10 @@ ${lineSvg}
           className="h-full min-h-0 shrink-0 flex flex-col pr-3 min-w-0"
           style={{ width: `${sidebarWidth}px` }}
         >
-          <div ref={outlineScrollRef} className="flex-1 min-h-0 overflow-y-auto no-scrollbar flex flex-col gap-0.5 px-3 pt-2 pb-2">
+          <div
+            ref={outlineScrollRef}
+            className="flex-1 min-h-0 overflow-x-auto overflow-y-auto [scrollbar-width:thin] flex flex-col gap-0.5 px-3 pt-2 pb-2"
+          >
             {visibleAssets.length === 0 ? (
               <div className="my-3 flex flex-col items-center rounded-xl bg-white/[0.03] px-4 py-6 text-center ring-1 ring-white/[0.06]">
                 <p className="text-[9px] font-black uppercase tracking-wide text-gray-500">大纲为空</p>
@@ -8595,6 +8673,11 @@ ${lineSvg}
               : undefined
           }
           panoViewerRef={lightboxPanoViewerRef}
+          imageResizeWriteBack={
+            lightboxShowsImage && !isWorkflowTextAsset(lightboxAsset) && !isGroupAsset(lightboxAsset)
+              ? { onCommit: handleLightboxImageResizeWriteBack }
+              : null
+          }
           flatImageOverlay={
             lightboxShowsImage &&
             !isWorkflowTextAsset(lightboxAsset) &&
@@ -8704,11 +8787,10 @@ ${lineSvg}
           }
         >
           <div
-            className="absolute top-16 right-4 z-[9] w-[min(24rem,30vw)] max-h-[72vh]"
+            className="absolute top-16 right-4 z-[9] w-[min(24rem,30vw)] max-h-[72vh] min-h-0 overflow-y-auto overscroll-y-contain rounded-2xl border border-white/10 bg-[#141418] shadow-xl ring-1 ring-black/40 [scrollbar-width:thin]"
             data-image-preview-no-wheel
             data-image-preview-scroll
           >
-            <div className="h-full overflow-y-auto rounded-2xl border border-white/10 bg-[#141418] shadow-xl ring-1 ring-black/40">
               {lightboxMetaText ? (
                 <div className="px-3 pt-3 pb-2 border-b border-white/10 text-[8px] text-gray-400">
                   {lightboxMetaText}
@@ -8794,7 +8876,6 @@ ${lineSvg}
                 mode="inline"
                 onSelectDisplayKey={(key) => setDisplayKey(lightboxAsset.id, key)}
               />
-            </div>
           </div>
           {!lightboxShowsImage ||
           isWorkflowTextAsset(lightboxAsset) ||
@@ -8925,12 +9006,14 @@ ${lineSvg}
       lightboxShowsImage &&
       !isWorkflowTextAsset(lightboxAsset) &&
       !isGroupAsset(lightboxAsset) ? (
-        <WorkflowStepNodeGraphOverlay
-          asset={lightboxAsset}
-          getStepLabel={(k) => getGenerationRecordStepLabel(k, lightboxAsset)}
-          onSelectDisplayKey={(key) => setDisplayKey(lightboxAsset.id, key)}
-          pixelBusy={busyAssetIds.has(lightboxAsset.id)}
-        />
+        <React.Fragment key={lightboxAsset.id}>
+          <WorkflowStepNodeGraphOverlay
+            asset={lightboxAsset}
+            getStepLabel={(k) => getGenerationRecordStepLabel(k, lightboxAsset)}
+            onSelectDisplayKey={(key) => setDisplayKey(lightboxAsset.id, key)}
+            pixelBusy={busyAssetIds.has(lightboxAsset.id)}
+          />
+        </React.Fragment>
       ) : null}
 
       {lightboxAsset &&

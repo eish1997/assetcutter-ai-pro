@@ -8,11 +8,19 @@ import type { PanoramaViewportProjection } from '../../../services/panoViewportP
 export type ImageEquirectViewerProps = {
   imageSrc: string;
   className?: string;
+  panoPreserveViewKey?: string;
 };
 
 const ImageEquirectViewer = forwardRef<PanoramaViewportProjection | null, ImageEquirectViewerProps>(
-  function ImageEquirectViewer({ imageSrc, className }, ref) {
-    return <EquirectangularPanoramaCanvas ref={ref} imageSrc={imageSrc} className={className ?? ''} />;
+  function ImageEquirectViewer({ imageSrc, className, panoPreserveViewKey }, ref) {
+    return (
+      <EquirectangularPanoramaCanvas
+        ref={ref}
+        imageSrc={imageSrc}
+        className={className ?? ''}
+        preserveViewKey={panoPreserveViewKey}
+      />
+    );
   }
 );
 
