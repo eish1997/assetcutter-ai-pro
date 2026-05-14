@@ -62,7 +62,14 @@ import {
   isVgpBlockingDiscardForDisplayKey,
   pruneVgpAfterDiscard,
 } from '../services/vgp/vgpStore';
+import { appendWorkflowAuditEvent, appendWorkflowRunTaskFailureAudit, hydrateWorkflowAuditRingSessionFromIdbOrLocalIfEmpty, WORKFLOW_AUDIT_CODES } from '../services/workflowAuditEvents';
+import { setWorkflowMirrorPreferenceScope } from '../services/workflowMirrorPreferenceScope';
+import { appendWorkflowOverlayCloseSnapshot, supersedeWorkflowOverlaySnapshotsForAsset, WORKFLOW_OVERLAY_PERIODIC_SNAPSHOT_MS, hydrateWorkflowOverlayRingSessionFromIdbOrLocalIfEmpty } from '../services/workflowOverlaySnapshots';
+import type { WorkflowOverlaySnapshotBucket } from '../services/workflowOverlaySnapshots';
+import { compareWorkflowOverlayDraftToPersisted } from '../services/workflowOverlayDraftCompare';
 import { WorkflowGenerationRecordPanel } from './WorkflowGenerationRecordPanel';
+import { WorkflowStepTimelinePanel } from './WorkflowStepTimelinePanel';
+import { WorkflowOverlaySnapshotRecoverPanel } from './workflow/WorkflowOverlaySnapshotRecoverPanel';
 import { WorkflowStepNodeGraphOverlay } from './WorkflowStepNodeGraphOverlay';
 import { triggerImageDownload } from '../services/imageDataUrl';
 import type { WorkflowLightboxImageWriteBackPayload } from '../services/imagePreviewWorkflowResize';
@@ -503,6 +510,30 @@ const WorkflowSection: React.FC<{
   pendingRef.current = pending;
   const assetsRef = React.useRef(assets);
   assetsRef.current = assets;
+
+  useEffect(() => {
+    setWorkflowMirrorPreferenceScope(preferenceScope);
+    return () => setWorkflowMirrorPreferenceScope(null);
+  }, [preferenceScope]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [overlayTouched] = await Promise.all([
+          hydrateWorkflowOverlayRingSessionFromIdbOrLocalIfEmpty(),
+          hydrateWorkflowAuditRingSessionFromIdbOrLocalIfEmpty(),
+        ]);
+        if (!cancelled && overlayTouched) setOverlaySnapshotRingBump((n) => n + 1);
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [preferenceScope]);
+
   const presets = useMemo(() => {
     const list = Array.isArray(capabilityPresets) ? capabilityPresets : [];
     return list
@@ -587,6 +618,12 @@ const WorkflowSection: React.FC<{
   const [lightboxRembgBusy, setLightboxRembgBusy] = useState(false);
   const [lightboxRembgInstallModalOpen, setLightboxRembgInstallModalOpen] = useState(false);
   const [lightboxSamInstallModalOpen, setLightboxSamInstallModalOpen] = useState(false);
+  /** 关大图：overlay 与资产已持久化不一致时，用 Modal 替代 `window.confirm` */
+  const [lightboxOverlayDirtyCloseDialogOpen, setLightboxOverlayDirtyCloseDialogOpen] = useState(false);
+  const lightboxOverlayDirtyCloseDialogOpenRef = useRef(false);
+  const lightboxDirtyClosePersistedRef = useRef<{ assetId: string; displayKey: string } | null>(null);
+  /** overlay 环写入 session 后递增，驱动侧栏「恢复快照」列表重读 */
+  const [, setOverlaySnapshotRingBump] = useState(0);
   /** 从组内网格打开大图时记录槽位，预设入队可带 sourceGroup* 与拖拽一致 */
   const [lightboxSourceSlot, setLightboxSourceSlot] = useState<{
     sourceGroupAssetId: string;
@@ -1776,6 +1813,9 @@ ${lineSvg}
     vgpSteps?: VgpGenStepCapture[];
   }> => {
     const { actionType, inputImage, inputText } = task;
+    const auditRunFail = (code: string, level: 'warn' | 'error', message: string, detail?: Record<string, unknown>) => {
+      appendWorkflowRunTaskFailureAudit({ task, code, level, message, detail });
+    };
     const prefetched = String(task.clientPrefetchedImageResult || '').trim();
     if (prefetched) {
       setAssetError(task.assetId, null);
@@ -1790,6 +1830,7 @@ ${lineSvg}
         const msg = `[${getTaskLogLabel(task)}] 大图提交状态异常（请重试）`;
         onLog?.('warn', msg);
         setAssetError(task.assetId, msg);
+        auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_LIGHTBOX_DEFERRED_MISSING, 'warn', msg);
         return { image: null };
       }
       try {
@@ -1799,6 +1840,7 @@ ${lineSvg}
           const msg = `[${getTaskLogLabel(task)}] 未能取得大图预览合成底图（请重试）`;
           onLog?.('warn', msg);
           setAssetError(task.assetId, msg);
+          auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_LIGHTBOX_COMPOSITE_EMPTY, 'warn', msg);
           return { image: null };
         }
         setAssetError(task.assetId, null);
@@ -1809,6 +1851,9 @@ ${lineSvg}
         const full = `[${getTaskLogLabel(task)}] ${msg}`;
         onLog?.('warn', full);
         setAssetError(task.assetId, full);
+        auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_LIGHTBOX_COMPOSITE_EXCEPTION, 'warn', full, {
+          error: msg,
+        });
         return { image: null };
       } finally {
         lightboxClientImageDeferredRef.current.delete(task.id);
@@ -1835,6 +1880,9 @@ ${lineSvg}
           const msg = `[${al}] ${resolvedImg.error}`;
           onLog?.('warn', msg);
           setAssetError(task.assetId, msg);
+          auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_INPUT_IMAGE_RESOLVE, 'warn', msg, {
+            inputIndex: task.inputImages!.indexOf(raw),
+          });
           return { image: null };
         }
         out.push(resolvedImg.dataUrl);
@@ -1861,9 +1909,9 @@ ${lineSvg}
           const msg = `[${al}] ${resolvedImg.error}`;
           onLog?.('warn', msg);
           setAssetError(task.assetId, msg);
+          auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_INPUT_IMAGE_RESOLVE, 'warn', msg);
           return { image: null };
         }
-        resolvedInputImage = resolvedImg.dataUrl;
       }
     }
 
@@ -1878,6 +1926,7 @@ ${lineSvg}
           const msg = `[${getActionLabel(actionType)}] 能力集合不存在`;
           onLog?.('warn', msg);
           setAssetError(task.assetId, msg);
+          auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_CAPABILITY_SET_NOT_FOUND, 'warn', msg);
           return { image: null };
         }
         const assetId = task.assetId;
@@ -1899,44 +1948,56 @@ ${lineSvg}
           },
         }));
         try {
-          const result = await executeCapabilitySet(set, resolvedInputImage ?? '', {
-            presets: actionModules,
-            textModelRegistryId: capabilityTextModel,
-            companionProjectId: workspaceProjectChrome?.activeProjectId?.trim() || undefined,
-            workflowAssetId: task.assetId,
-            workflowSourceDisplayKey: task.inputSourceDisplayKey,
-            onLog,
-            onRunProgress: (line) => {
-              setCapabilitySetRunByAssetId((prev) => {
-                const cur = prev[assetId];
-                if (cur?.taskId !== task.id) return prev;
-                return { ...prev, [assetId]: { ...cur, progressLine: line } };
+          try {
+            const result = await executeCapabilitySet(set, resolvedInputImage ?? '', {
+              presets: actionModules,
+              textModelRegistryId: capabilityTextModel,
+              companionProjectId: workspaceProjectChrome?.activeProjectId?.trim() || undefined,
+              workflowAssetId: task.assetId,
+              workflowSourceDisplayKey: task.inputSourceDisplayKey,
+              onLog,
+              onRunProgress: (line) => {
+                setCapabilitySetRunByAssetId((prev) => {
+                  const cur = prev[assetId];
+                  if (cur?.taskId !== task.id) return prev;
+                  return { ...prev, [assetId]: { ...cur, progressLine: line } };
+                });
+              },
+              onNodeImageOutput: (_nodeId, image) => {
+                setCapabilitySetRunByAssetId((prev) => {
+                  const cur = prev[assetId];
+                  if (cur?.taskId !== task.id) return prev;
+                  return { ...prev, [assetId]: { ...cur, latestImage: image } };
+                });
+              },
+            });
+            if (result.ok === false) {
+              const msg = `[${getActionLabel(actionType)}] ${result.error}`;
+              onLog?.('warn', msg);
+              setAssetError(task.assetId, msg);
+              auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_CAPABILITY_SET_REJECTED, 'warn', msg, {
+                error: result.error,
               });
-            },
-            onNodeImageOutput: (_nodeId, image) => {
-              setCapabilitySetRunByAssetId((prev) => {
-                const cur = prev[assetId];
-                if (cur?.taskId !== task.id) return prev;
-                return { ...prev, [assetId]: { ...cur, latestImage: image } };
-              });
-            },
-          });
-          if (result.ok === false) {
-            const msg = `[${getActionLabel(actionType)}] ${result.error}`;
-            onLog?.('warn', msg);
-            setAssetError(task.assetId, msg);
+              return { image: null };
+            }
+            setAssetError(task.assetId, null);
+            if (result.kind === 'text') {
+              return { image: null, text: result.text };
+            }
+            if (result.kind === 'video') {
+              return { image: null, videoUrl: result.videoUrl, videoMime: result.mimeType, vgpSteps: result.vgpSteps };
+            }
+            return result.kind === 'image'
+              ? { image: result.image, vgpSteps: result.vgpSteps }
+              : { image: null };
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : safeUnknownToString(err);
+            const full = `[${getActionLabel(actionType)}] 能力集合执行异常：${msg}`;
+            onLog?.('error', full, msg);
+            setAssetError(task.assetId, full);
+            auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_CAPABILITY_SET_EXCEPTION, 'error', full, { error: msg });
             return { image: null };
           }
-          setAssetError(task.assetId, null);
-          if (result.kind === 'text') {
-            return { image: null, text: result.text };
-          }
-          if (result.kind === 'video') {
-            return { image: null, videoUrl: result.videoUrl, videoMime: result.mimeType, vgpSteps: result.vgpSteps };
-          }
-          return result.kind === 'image'
-            ? { image: result.image, vgpSteps: result.vgpSteps }
-            : { image: null };
         } finally {
           clearSetRunUi();
         }
@@ -1945,18 +2006,21 @@ ${lineSvg}
         if (!module) {
           const fallbackMsg = `[${actionLabel}] 未能获得结果（请重试或检查配置）`;
           setAssetError(task.assetId, fallbackMsg);
+          auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_MODULE_NOT_CONFIGURED, 'warn', fallbackMsg);
           return { image: null };
         }
         if (!onAddGenerate3DJob) {
           const msg = '未配置 3D 执行器，无法提交生成3D任务';
           onLog?.('warn', msg);
           setAssetError(task.assetId, msg);
+          auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_GENERATE3D_NOT_CONFIGURED, 'warn', msg);
           return { image: null };
         }
         if (!resolvedInputImage?.trim()) {
           const msg = '生成3D 需要图片输入';
           onLog?.('warn', msg);
           setAssetError(task.assetId, msg);
+          auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_GENERATE3D_NO_INPUT, 'warn', msg);
           return { image: null };
         }
         try {
@@ -1967,6 +2031,7 @@ ${lineSvg}
           const full = `[${getTaskLogLabel(task)}] ${msg}`;
           onLog?.('error', full);
           setAssetError(task.assetId, full);
+          auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_GENERATE3D_EXCEPTION, 'error', full, { error: msg });
         }
         return { image: null };
       }
@@ -1974,6 +2039,9 @@ ${lineSvg}
         if (!module) {
           const fallbackMsg = `[${actionLabel}] 未能获得结果（请重试或检查配置）`;
           setAssetError(task.assetId, fallbackMsg);
+          auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_PRESET_MODULE_MISSING, 'warn', fallbackMsg, {
+            actionType,
+          });
           return { image: null };
         }
         try {
@@ -2013,6 +2081,7 @@ ${lineSvg}
             const msg = `[${actionLabel}] ${out.error}`;
             onLog?.('warn', msg);
             setAssetError(task.assetId, msg);
+            auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_CAPABILITY_REJECTED, 'warn', msg, { error: out.error });
             return { image: null };
           }
           setAssetError(task.assetId, null);
@@ -2028,15 +2097,22 @@ ${lineSvg}
           const full = `[${actionLabel}] 失败：${msg}`;
           onLog?.('error', full, msg);
           setAssetError(task.assetId, full);
+          auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_CAPABILITY_EXCEPTION, 'error', full, { error: msg });
           return { image: null };
         }
       }
-      case 'branch_cut_image_no_module':
+      case 'branch_cut_image_no_module': {
+        const m = `[${actionLabel}] 切割能力未就绪`;
+        auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_BRANCH_CUT_NO_MODULE, 'warn', m, { actionType });
         return { image: null };
+      }
       case 'branch_fallback_error':
       default: {
         const fallbackMsg = `[${actionLabel}] 未能获得结果（请重试或检查配置）`;
         setAssetError(task.assetId, fallbackMsg);
+        auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_FALLBACK_UNKNOWN, 'warn', fallbackMsg, {
+          branch: runTaskBranch,
+        });
         return { image: null };
       }
     }
@@ -4580,11 +4656,12 @@ ${lineSvg}
   const persistLightboxOverlayAnnotations = useCallback(() => {
     const id = lightboxAssetId;
     if (!id) return;
+    const dk = assetsRef.current.find((x) => x.id === id)?.displayKey;
     const snap = lightboxOverlayByModeRef.current;
     setAssets((prev) => {
       const a = prev.find((x) => x.id === id);
       if (!a) return prev;
-      const dk = a.displayKey;
+      const displayKey = a.displayKey;
       return prev.map((x) =>
         x.id !== id
           ? x
@@ -4592,15 +4669,16 @@ ${lineSvg}
               ...x,
               imageOverlayAnnotations: {
                 ...(x.imageOverlayAnnotations || {}),
-                [dk]: overlayDocForFlatAsset(snap.flat),
+                [displayKey]: overlayDocForFlatAsset(snap.flat),
               },
               imageOverlayAnnotationsPano: {
                 ...(x.imageOverlayAnnotationsPano || {}),
-                [dk]: snap.pano,
+                [displayKey]: snap.pano,
               },
             }
       );
     });
+    if (dk) supersedeWorkflowOverlaySnapshotsForAsset(id, dk);
     onLog?.('info', '大图标注已写入当前显示版本（随项目保存）');
   }, [lightboxAssetId, onLog, setAssets]);
 
@@ -4611,11 +4689,16 @@ ${lineSvg}
     const snap = lightboxOverlayByModeRef.current;
     const flatW = overlayDocForFlatAsset(snap.flat);
     const panoW = normalizeImageOverlayDoc(snap.pano);
+    const pre = assetsRef.current.find((x) => x.id === id);
+    const dk =
+      pre && !isWorkflowTextAsset(pre) && !isGroupAsset(pre) && getAssetDisplayImage(pre).trim()
+        ? pre.displayKey
+        : null;
     setAssets((prev) => {
       const a = prev.find((x) => x.id === id);
       if (!a || isWorkflowTextAsset(a) || isGroupAsset(a)) return prev;
       if (!getAssetDisplayImage(a).trim()) return prev;
-      const dk = a.displayKey;
+      const displayKey = a.displayKey;
       return prev.map((x) =>
         x.id !== id
           ? x
@@ -4623,24 +4706,156 @@ ${lineSvg}
               ...x,
               imageOverlayAnnotations: {
                 ...(x.imageOverlayAnnotations || {}),
-                [dk]: flatW,
+                [displayKey]: flatW,
               },
               imageOverlayAnnotationsPano: {
                 ...(x.imageOverlayAnnotationsPano || {}),
-                [dk]: panoW,
+                [displayKey]: panoW,
               },
             }
       );
     });
+    if (dk) supersedeWorkflowOverlaySnapshotsForAsset(id, dk);
   }, [getAssetDisplayImage, setAssets]);
 
+  const completeLightboxClose = useCallback(
+    (opts: { flush: boolean; auditDiscard: boolean }) => {
+      const r = lightboxDirtyClosePersistedRef.current;
+      if (opts.auditDiscard && r) {
+        appendWorkflowAuditEvent({
+          level: 'info',
+          code: WORKFLOW_AUDIT_CODES.LIGHTBOX_OVERLAY_CLOSE_DISCARDED,
+          assetId: r.assetId,
+          displayKey: r.displayKey,
+          message: '工作流大图：关闭时未将 overlay 写回资产（用户选择丢弃）',
+          detail: { context: 'workflow_lightbox_close' },
+        });
+      }
+      if (opts.flush) flushLightboxOverlayToAsset();
+      setLightboxAssetId(null);
+      setLightboxSourceSlot(null);
+      setLightboxRembgPreview(null);
+      setLightboxRembgInstallModalOpen(false);
+      setLightboxOverlayDirtyCloseDialogOpen(false);
+      lightboxOverlayDirtyCloseDialogOpenRef.current = false;
+      lightboxDirtyClosePersistedRef.current = null;
+    },
+    [flushLightboxOverlayToAsset]
+  );
+
+  const cancelLightboxOverlayDirtyCloseDialog = useCallback(() => {
+    lightboxDirtyClosePersistedRef.current = null;
+    lightboxOverlayDirtyCloseDialogOpenRef.current = false;
+    setLightboxOverlayDirtyCloseDialogOpen(false);
+  }, []);
+
   const handleLightboxClose = useCallback(() => {
-    flushLightboxOverlayToAsset();
-    setLightboxAssetId(null);
-    setLightboxSourceSlot(null);
-    setLightboxRembgPreview(null);
-    setLightboxRembgInstallModalOpen(false);
-  }, [flushLightboxOverlayToAsset]);
+    if (lightboxOverlayDirtyCloseDialogOpenRef.current) return;
+
+    const id = lightboxAssetIdRef.current;
+    if (id) {
+      const a = assetsRef.current.find((x) => x.id === id);
+      if (a && !isWorkflowTextAsset(a) && !isGroupAsset(a) && getAssetDisplayImage(a).trim()) {
+        const snap = lightboxOverlayByModeRef.current;
+        const bucket = lightboxOverlayActiveBucketRef.current;
+        const doc =
+          bucket === 'flat' ? overlayDocForFlatAsset(snap.flat) : normalizeImageOverlayDoc(snap.pano);
+        appendWorkflowOverlayCloseSnapshot({
+          assetId: id,
+          baseDisplayKey: a.displayKey,
+          bucket,
+          doc,
+        });
+        setOverlaySnapshotRingBump((n) => n + 1);
+      }
+    }
+
+    if (id) {
+      const a = assetsRef.current.find((x) => x.id === id);
+      if (a && !isWorkflowTextAsset(a) && !isGroupAsset(a) && getAssetDisplayImage(a).trim()) {
+        const dk = a.displayKey;
+        const snap = lightboxOverlayByModeRef.current;
+        const curFlat = overlayDocForFlatAsset(snap.flat);
+        const curPano = normalizeImageOverlayDoc(snap.pano);
+        const storedFlat = overlayDocForFlatAsset(normalizeImageOverlayDoc(a.imageOverlayAnnotations?.[dk]));
+        const storedPano = normalizeImageOverlayDoc(a.imageOverlayAnnotationsPano?.[dk]);
+        const verdict = compareWorkflowOverlayDraftToPersisted({
+          draftFlat: curFlat,
+          draftPano: curPano,
+          storedFlat,
+          storedPano,
+        });
+        if (verdict === 'dirty') {
+          lightboxDirtyClosePersistedRef.current = { assetId: id, displayKey: dk };
+          lightboxOverlayDirtyCloseDialogOpenRef.current = true;
+          setLightboxOverlayDirtyCloseDialogOpen(true);
+          return;
+        }
+      }
+    }
+    completeLightboxClose({ flush: true, auditDiscard: false });
+  }, [completeLightboxClose, getAssetDisplayImage]);
+
+  /** 大图 overlay 编辑：debounce 写入 session 环 `reason: periodic`（仅当草稿与资产已持久化 **dirty** 时），与关窗 `close` 合并规则见 `workflowOverlaySnapshots` */
+  useEffect(() => {
+    if (!lightboxAssetId || !lightboxShowsImage) return;
+    const a = assetsRef.current.find((x) => x.id === lightboxAssetId);
+    if (!a || isWorkflowTextAsset(a) || isGroupAsset(a) || !getAssetDisplayImage(a).trim()) return;
+    const id = lightboxAssetId;
+    const ms = WORKFLOW_OVERLAY_PERIODIC_SNAPSHOT_MS;
+    const t = window.setTimeout(() => {
+      const aNow = assetsRef.current.find((x) => x.id === id);
+      if (!aNow || isWorkflowTextAsset(aNow) || isGroupAsset(aNow) || !getAssetDisplayImage(aNow).trim()) return;
+      const dkNow = aNow.displayKey;
+      const snap = lightboxOverlayByModeRef.current;
+      const curFlat = overlayDocForFlatAsset(snap.flat);
+      const curPano = normalizeImageOverlayDoc(snap.pano);
+      const storedFlat = overlayDocForFlatAsset(normalizeImageOverlayDoc(aNow.imageOverlayAnnotations?.[dkNow]));
+      const storedPano = normalizeImageOverlayDoc(aNow.imageOverlayAnnotationsPano?.[dkNow]);
+      const verdict = compareWorkflowOverlayDraftToPersisted({
+        draftFlat: curFlat,
+        draftPano: curPano,
+        storedFlat,
+        storedPano,
+      });
+      if (verdict !== 'dirty') return;
+      const bucket = lightboxOverlayActiveBucketRef.current;
+      const doc =
+        bucket === 'flat' ? overlayDocForFlatAsset(snap.flat) : normalizeImageOverlayDoc(snap.pano);
+      const ent = appendWorkflowOverlayCloseSnapshot({
+        assetId: id,
+        baseDisplayKey: dkNow,
+        bucket,
+        doc,
+        reason: 'periodic',
+      });
+      if (ent) setOverlaySnapshotRingBump((n) => n + 1);
+    }, ms);
+    return () => window.clearTimeout(t);
+  }, [lightboxOverlayByMode, lightboxAssetId, lightboxShowsImage, getAssetDisplayImage]);
+
+  const restoreLightboxOverlayFromRingEntry = useCallback(
+    (bucket: WorkflowOverlaySnapshotBucket, doc: ImageOverlayAnnotationDoc) => {
+      const lid = lightboxAssetIdRef.current;
+      if (!lid) return;
+      const a = assetsRef.current.find((x) => x.id === lid);
+      const dk = a?.displayKey;
+      const norm = bucket === 'flat' ? overlayDocForFlatAsset(doc) : normalizeImageOverlayDoc(doc);
+      overlayHistoryPastByModeRef.current[bucket] = [];
+      overlayHistoryFutureByModeRef.current[bucket] = [];
+      setLightboxOverlayByMode((prev) => ({ ...prev, [bucket]: norm }));
+      appendWorkflowAuditEvent({
+        level: 'info',
+        code: WORKFLOW_AUDIT_CODES.LIGHTBOX_OVERLAY_RESTORE_FROM_RING,
+        assetId: lid,
+        displayKey: dk,
+        message: '工作流大图：从 session 快照环加载到当前草稿',
+        detail: { context: 'workflow_lightbox', bucket },
+      });
+      setOverlaySnapshotRingBump((n) => n + 1);
+    },
+    []
+  );
 
   const resetLightboxOverlayAll = useCallback(() => {
     const id = lightboxAssetId;
@@ -4745,6 +4960,7 @@ ${lineSvg}
           ? `大图预览：线分割变形已写入新步骤（${width}×${height}）`
           : `大图预览：改尺寸已写入新步骤（${width}×${height}）`
       );
+      supersedeWorkflowOverlaySnapshotsForAsset(id);
     },
     [applyIntrinsicAspectToAsset, onLog, scheduleCompanionPersistResult, setAssets]
   );
@@ -5027,11 +5243,23 @@ ${lineSvg}
   }, []);
 
   const discardResult = (assetId: string, actionType: string) => {
+    const cur = assetsRef.current.find((a) => a.id === assetId);
+    if (!cur) return;
+    if (actionType === 'original' || actionType === 'group_preview') return;
+    if (cur.vgp && isVgpBlockingDiscardForDisplayKey(cur.vgp, actionType)) {
+      appendWorkflowAuditEvent({
+        level: 'warn',
+        code: WORKFLOW_AUDIT_CODES.DISCARD_BLOCKED_VGP,
+        assetId,
+        displayKey: actionType,
+        message: '丢弃版本被 VGP 后续版本引用，已阻止',
+      });
+      onLog?.('warn', '丢弃版本被 VGP 引用链阻止（已写入会话审计环）');
+      return;
+    }
     setAssets((prev) =>
       prev.map((a) => {
         if (a.id !== assetId) return a;
-        if (actionType === 'original' || actionType === 'group_preview') return a;
-        if (a.vgp && isVgpBlockingDiscardForDisplayKey(a.vgp, actionType)) return a;
 
         const prunedVgp = a.vgp ? pruneVgpAfterDiscard(a.vgp, actionType) : undefined;
         const nextVgp = prunedVgp ?? a.vgp;
@@ -9195,8 +9423,24 @@ ${lineSvg}
                     } finally {
                       URL.revokeObjectURL(url);
                     }
+                    appendWorkflowAuditEvent({
+                      level: 'info',
+                      code: WORKFLOW_AUDIT_CODES.EXPORT_TEXT_PREVIEW,
+                      assetId: lightboxAsset.id,
+                      displayKey: lightboxAsset.displayKey,
+                      message: '工作流大图：下载文字预览为 TXT',
+                      detail: { context: 'workflow_lightbox' },
+                    });
                     return;
                   }
+                  appendWorkflowAuditEvent({
+                    level: 'info',
+                    code: WORKFLOW_AUDIT_CODES.EXPORT_IMAGE,
+                    assetId: lightboxAsset.id,
+                    displayKey: lightboxAsset.displayKey,
+                    message: '工作流大图：下载当前预览图',
+                    detail: { context: 'workflow_lightbox' },
+                  });
                   void triggerImageDownload(
                     getAssetDisplayImage(lightboxAsset),
                     `workflow-preview-${lightboxAsset.id.slice(0, 6)}`
@@ -9316,6 +9560,23 @@ ${lineSvg}
                   </div>
                 );
               })()}
+              {lightboxShowsImage &&
+              !isWorkflowTextAsset(lightboxAsset) &&
+              !isGroupAsset(lightboxAsset) ? (
+                <>
+                  <WorkflowStepTimelinePanel
+                    asset={lightboxAsset}
+                    resolveStepLabel={(k) => getGenerationRecordStepLabel(k, lightboxAsset)}
+                    currentDisplayKey={lightboxAsset.displayKey}
+                    onSelectDisplayKey={(key) => setDisplayKey(lightboxAsset.id, key)}
+                  />
+                  <WorkflowOverlaySnapshotRecoverPanel
+                    assetId={lightboxAsset.id}
+                    baseDisplayKey={lightboxAsset.displayKey}
+                    onRestore={restoreLightboxOverlayFromRingEntry}
+                  />
+                </>
+              ) : null}
               {lightboxShowsImage &&
               !isWorkflowTextAsset(lightboxAsset) &&
               !isGroupAsset(lightboxAsset) &&
@@ -9773,6 +10034,57 @@ ${lineSvg}
                   onClick={() => setLightboxSamInstallModalOpen(false)}
                 >
                   知道了
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {lightboxOverlayDirtyCloseDialogOpen &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[2350] flex items-center justify-center bg-black/70 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="lightbox-overlay-dirty-close-title"
+            onClick={cancelLightboxOverlayDirtyCloseDialog}
+          >
+            <div
+              className="max-w-lg w-full rounded-2xl border border-white/10 bg-[#121216] p-5 shadow-2xl ring-1 ring-black/40"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h2
+                id="lightbox-overlay-dirty-close-title"
+                className="text-sm font-black text-white tracking-wide uppercase mb-3"
+              >
+                关闭大图前确认
+              </h2>
+              <p className="text-[11px] leading-relaxed text-gray-300">
+                当前大图上的标注、裁切或局部选区与资产中已保存的版本不一致。请选择写入当前修改后关闭，或丢弃修改后关闭。
+              </p>
+              <div className="mt-5 flex flex-wrap justify-end gap-2">
+                <button
+                  type="button"
+                  className="rounded-xl bg-white/[0.06] px-4 py-2 text-[10px] font-black uppercase tracking-wide text-gray-200 ring-1 ring-white/10 hover:bg-white/10"
+                  onClick={cancelLightboxOverlayDirtyCloseDialog}
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  className="rounded-xl bg-amber-700/90 px-4 py-2 text-[10px] font-black uppercase tracking-wide text-white hover:bg-amber-600"
+                  onClick={() => completeLightboxClose({ flush: false, auditDiscard: true })}
+                >
+                  丢弃并关闭
+                </button>
+                <button
+                  type="button"
+                  className="rounded-xl bg-blue-600 px-4 py-2 text-[10px] font-black uppercase tracking-wide text-white hover:bg-blue-500"
+                  onClick={() => completeLightboxClose({ flush: true, auditDiscard: false })}
+                >
+                  保存并关闭
                 </button>
               </div>
             </div>

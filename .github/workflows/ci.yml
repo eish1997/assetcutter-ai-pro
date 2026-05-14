@@ -1,7 +1,8 @@
-# 与 docs/网站与发布检查清单.md §3 对齐：合并前质量门禁
+# 质量门禁：含「审计 + Overlay 环」单测（见 docs/工作流步骤时间线审计与Overlay快照.md §14）
 name: CI
 
 on:
+  workflow_dispatch:
   push:
     branches: [main, master]
   pull_request:
@@ -24,6 +25,9 @@ jobs:
 
       - name: Typecheck
         run: npm run typecheck
+
+      - name: Workflow rings (audit + overlay IDB / hydrate)
+        run: npm run test:workflow-rings
 
       - name: ESLint
         run: npm run lint

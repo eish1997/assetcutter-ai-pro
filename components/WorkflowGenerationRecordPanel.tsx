@@ -64,11 +64,8 @@ export const WorkflowGenerationRecordPanel: React.FC<WorkflowGenerationRecordPan
 
   if (!vgp) {
     if (mode === 'inline') {
-      return (
-        <div className="rounded-2xl border border-white/10 bg-[#0f0f12] p-4">
-          <p className="text-sm text-gray-300">暂无生成记录数据。</p>
-        </div>
-      );
+      /** 步骤时间线由 `WorkflowStepTimelinePanel`（resultOrder 派生）在大图侧栏展示，此处避免重复空态 */
+      return null;
     }
     return createPortal(
       <div

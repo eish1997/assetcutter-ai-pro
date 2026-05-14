@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import type { WorkflowAsset, CustomAppModule } from '../../../types';
 import { triggerImageDownload } from '../../../services/imageDataUrl';
+import { appendWorkflowAuditEvent, WORKFLOW_AUDIT_CODES } from '../../../services/workflowAuditEvents';
 import AppIcon from '../../ui/AppIcon';
 import { ProgressivePreviewImage } from '../../ProgressivePreviewImage';
 import { baseActionId } from '../workflowIds';
@@ -138,16 +139,37 @@ const ArchivedDetailModal: React.FC<{
   const [compositeUrl, setCompositeUrl] = useState<string | null>(null);
   const containerRef = React.useRef<HTMLDivElement>(null);
 
-  const downloadOne = async (image: string, label: string) => {
+  const runDownloadOne = async (image: string, label: string) => {
     await triggerImageDownload(image, `workflow-${label}-${asset.id.slice(0, 6)}`);
+  };
+
+  const downloadOne = async (image: string, label: string) => {
+    appendWorkflowAuditEvent({
+      level: 'info',
+      code: WORKFLOW_AUDIT_CODES.EXPORT_IMAGE,
+      assetId: asset.id,
+      displayKey: asset.displayKey,
+      message: `归档详情：下载单图（${label}）`,
+      detail: { context: 'archive_detail_single', label },
+    });
+    await runDownloadOne(image, label);
   };
 
   const downloadMany = (images: string[], labelPrefix: string) => {
     const intervalMs = 140;
+    if (images.length === 0) return;
+    appendWorkflowAuditEvent({
+      level: 'info',
+      code: WORKFLOW_AUDIT_CODES.EXPORT_IMAGE,
+      assetId: asset.id,
+      displayKey: asset.displayKey,
+      message: `归档详情：批量下载 ${images.length} 张（${labelPrefix}）`,
+      detail: { context: 'archive_detail_bulk', labelPrefix, count: images.length },
+    });
     images.forEach((img, idx) => {
       const label = `${labelPrefix}-${String(idx + 1).padStart(2, '0')}`;
       window.setTimeout(() => {
-        void downloadOne(img, label);
+        void runDownloadOne(img, label);
       }, idx * intervalMs);
     });
   };
@@ -214,6 +236,14 @@ const ArchivedDetailModal: React.FC<{
 
   const downloadComposite = () => {
     if (!compositeUrl) return;
+    appendWorkflowAuditEvent({
+      level: 'info',
+      code: WORKFLOW_AUDIT_CODES.EXPORT_IMAGE,
+      assetId: asset.id,
+      displayKey: asset.displayKey,
+      message: '归档详情：下载流程拼图',
+      detail: { context: 'archive_detail_flow_composite' },
+    });
     void triggerImageDownload(compositeUrl, `workflow-flow-${asset.id.slice(0, 6)}`);
   };
 
