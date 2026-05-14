@@ -2,8 +2,23 @@
  * 预览子系统类型：工作流大图 / 未来 3D、点云、3DGS、视频等统一由此扩展。
  */
 
+import type { Dispatch, SetStateAction } from 'react';
+
 /** 大图壳 `ImagePreviewOverlay` 的视图布局（平面为内联，其余多为独立 WebGL） */
 export type ImagePreviewLayoutMode = 'flat' | 'pano' | 'model3d' | 'heightfield';
+
+/**
+ * 工作流大图：线分割 / 改尺寸写回状态由 `WorkflowSection` 持有并注入 `ImagePreviewOverlay`，
+ * 以便 `ImageAnnotationLightboxToolbar` 与壳层共用同一套 state。
+ */
+export type ImagePreviewCanvasAdjustControl = {
+  splitStretchEnabled: boolean;
+  setSplitStretchEnabled: Dispatch<SetStateAction<boolean>>;
+  splitStretchWriteBackPopOpen: boolean;
+  setSplitStretchWriteBackPopOpen: Dispatch<SetStateAction<boolean>>;
+  resizeWriteBackPopOpen: boolean;
+  setResizeWriteBackPopOpen: Dispatch<SetStateAction<boolean>>;
+};
 
 /** 当前已接入注册表的图片类模式（平面仍由内联实现，不走路由懒加载） */
 export type RegisteredImagePreviewMode =

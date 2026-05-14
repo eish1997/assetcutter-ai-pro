@@ -8,6 +8,7 @@ import {
   Crosshair,
   Grid3x3,
   Crop,
+  GripHorizontal,
   ImagePlus,
   ImageMinus,
   Lasso,
@@ -21,6 +22,8 @@ import {
   Redo2,
   RotateCcw,
   Save,
+  Scaling,
+  SlidersHorizontal,
   Sparkles,
   Square,
   Trash2,
@@ -34,6 +37,15 @@ import {
   WORKFLOW_IMAGE_PREVIEW_RAIL,
   WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER,
 } from './workflow/workflowSectionUiConstants';
+import type { ImagePreviewLayoutMode } from './preview';
+
+type AnnotationToolbarMenuKey =
+  | 'annotate'
+  | 'crop'
+  | 'local'
+  | 'sam'
+  | 'removeBg'
+  | 'canvasAdjust';
 
 const VIEW_MARGIN = 8;
 
@@ -135,6 +147,7 @@ function ActionBtn({
   variant = 'default',
   dense,
   disabled,
+  ariaLabel,
 }: {
   onClick: () => void;
   title: string;
@@ -142,6 +155,8 @@ function ActionBtn({
   variant?: 'default' | 'amber' | 'danger' | 'primary';
   dense?: boolean;
   disabled?: boolean;
+  /** 读屏短名；缺省与 title 相同 */
+  ariaLabel?: string;
 }) {
   const sz = dense ? 'h-6 w-6' : 'h-7 w-7';
   const cls =
@@ -156,7 +171,7 @@ function ActionBtn({
     <button
       type="button"
       title={title}
-      aria-label={title}
+      aria-label={ariaLabel ?? title}
       disabled={disabled}
       onClick={(e) => {
         e.stopPropagation();
@@ -237,6 +252,21 @@ export type ImageAnnotationLightboxToolbarProps = {
     onApply: () => void;
     onDiscard: () => void;
   };
+  /**
+   * 由 `WorkflowSection` 注入：线分割 / 改尺寸写回（与 `ImagePreviewOverlay` 共用 state），下拉面板与「标注」同交互。
+   */
+  canvasAdjust?: {
+    splitUiOk: boolean;
+    resizeUiOk: boolean;
+    previewLayout: ImagePreviewLayoutMode;
+    splitStretchEnabled: boolean;
+    setSplitStretchEnabled: React.Dispatch<React.SetStateAction<boolean>>;
+    splitStretchWriteBackPopOpen: boolean;
+    setSplitStretchWriteBackPopOpen: React.Dispatch<React.SetStateAction<boolean>>;
+    resizeWriteBackPopOpen: boolean;
+    setResizeWriteBackPopOpen: React.Dispatch<React.SetStateAction<boolean>>;
+    imageResizeWriteBackAvailable: boolean;
+  } | null;
 };
 
 /**
@@ -260,13 +290,14 @@ export function ImageAnnotationLightboxToolbar({
   lightboxSamToolbarMenuOpenRef,
   samSegment,
   removeBg,
+  canvasAdjust,
 }: ImageAnnotationLightboxToolbarProps) {
   const colorInputRef = useRef<HTMLInputElement | null>(null);
   const barRef = useRef<HTMLDivElement | null>(null);
   const dragOffsetRef = useRef<{ x: number; y: number } | null>(null);
 
   /** 打开后不因点空白/滚动收起；再点同一分类或切换「标注/裁切/本机」时收起/切换 */
-  const [openMenu, setOpenMenu] = useState<null | 'annotate' | 'crop' | 'local' | 'sam'>(null);
+  const [openMenu, setOpenMenu] = useState<AnnotationToolbarMenuKey | null>(null);
   /** 菜单相对主栏：下方或上方（按视口剩余空间） */
   const [menuPlacement, setMenuPlacement] = useState<'below' | 'above'>('below');
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
@@ -364,7 +395,7 @@ export function ImageAnnotationLightboxToolbar({
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
-  const toggleMenu = useCallback((key: 'annotate' | 'crop' | 'local' | 'sam') => {
+  const toggleMenu = useCallback((key: AnnotationToolbarMenuKey) => {
     setOpenMenu((prev) => (prev === key ? null : key));
   }, []);
 
@@ -393,7 +424,7 @@ export function ImageAnnotationLightboxToolbar({
   }, [openMenu, samSegment?.onSamMenuOpenChange, samSegment?.disabled, samSegment?.busy]);
 
   useEffect(() => {
-    if (openMenu !== 'sam') return;
+    if (!openMenu) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       setOpenMenu(null);
@@ -419,6 +450,7 @@ export function ImageAnnotationLightboxToolbar({
       <button
         type="button"
         title={categoryTitle}
+        aria-label={which === 'annotate' ? '标注' : which === 'crop' ? '裁切' : '局部重绘'}
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={(e) => {
@@ -426,7 +458,7 @@ export function ImageAnnotationLightboxToolbar({
           toggleMenu(which);
         }}
         className={[
-          'inline-flex h-7 shrink-0 items-center gap-0.5 rounded-md px-1.5 outline-none transition-colors',
+          'inline-flex h-7 shrink-0 items-center justify-center gap-0 rounded-md px-0.5 outline-none transition-colors',
           'focus-visible:ring-2 focus-visible:ring-blue-500/45 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0a0a0c]',
           open || active
             ? 'bg-blue-600 text-white ring-1 ring-blue-400/35 hover:bg-blue-500'
@@ -434,10 +466,7 @@ export function ImageAnnotationLightboxToolbar({
         ].join(' ')}
       >
         {which === 'annotate' ? <PenLine {...ic} /> : which === 'crop' ? <Crop {...ic} /> : <Sparkles {...ic} />}
-        <span className="text-[8px] font-black uppercase tracking-wide">
-          {which === 'annotate' ? '标注' : which === 'crop' ? '裁切' : '局部'}
-        </span>
-        <ChevronDown className={`h-3 w-3 opacity-85 transition-transform ${chevronOpenClass}`} strokeWidth={2} />
+        <ChevronDown className={`h-3 w-3 shrink-0 opacity-85 transition-transform ${chevronOpenClass}`} strokeWidth={2} />
       </button>
     );
   };
@@ -455,36 +484,209 @@ export function ImageAnnotationLightboxToolbar({
         ? `${defaultSamTitle} ${SAM_BACKEND_UNREADY_HINT}`
         : defaultSamTitle;
     return (
-      <>
-        <RailDivider />
-        <button
-          type="button"
-          title={categoryTitle}
-          aria-haspopup="menu"
-          aria-expanded={open}
-          disabled={samSegment.disabled}
-          onClick={(e) => {
-            e.stopPropagation();
-            if (samSegment.disabled) return;
-            toggleMenu('sam');
-          }}
-          className={[
-            'inline-flex h-7 shrink-0 items-center gap-0.5 rounded-md px-1.5 outline-none transition-colors',
-            'focus-visible:ring-2 focus-visible:ring-blue-500/45 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0a0a0c]',
-            samSegment.disabled
-              ? 'cursor-not-allowed opacity-35 ring-1 ring-white/[0.08]'
-              : open || active
-                ? 'bg-blue-600 text-white ring-1 ring-blue-400/35 hover:bg-blue-500'
-                : 'bg-white/[0.06] text-gray-300 ring-1 ring-white/[0.1] hover:bg-white/[0.11] hover:text-gray-100',
-          ].join(' ')}
-        >
-          <Crosshair {...ic} />
-          <span className="text-[8px] font-black uppercase tracking-wide">分割</span>
-          <ChevronDown className={`h-3 w-3 opacity-85 transition-transform ${chevronOpenClass}`} strokeWidth={2} />
-        </button>
-      </>
+      <button
+        type="button"
+        title={categoryTitle}
+        aria-label="分割"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        disabled={samSegment.disabled}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (samSegment.disabled) return;
+          toggleMenu('sam');
+        }}
+        className={[
+          'inline-flex h-7 shrink-0 items-center justify-center gap-0 rounded-md px-0.5 outline-none transition-colors',
+          'focus-visible:ring-2 focus-visible:ring-blue-500/45 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0a0a0c]',
+          samSegment.disabled
+            ? 'cursor-not-allowed opacity-35 ring-1 ring-white/[0.08]'
+            : open || active
+              ? 'bg-blue-600 text-white ring-1 ring-blue-400/35 hover:bg-blue-500'
+              : 'bg-white/[0.06] text-gray-300 ring-1 ring-white/[0.1] hover:bg-white/[0.11] hover:text-gray-100',
+        ].join(' ')}
+      >
+        <Crosshair {...ic} />
+        <ChevronDown className={`h-3 w-3 shrink-0 opacity-85 transition-transform ${chevronOpenClass}`} strokeWidth={2} />
+      </button>
     );
   };
+
+  const removeBgCategoryBtn = () => {
+    if (!removeBg) return null;
+    const open = openMenu === 'removeBg';
+    const chevronOpenClass = open && menuPlacement === 'above' ? 'rotate-180' : '';
+    const active = open || removeBg.hasPreview;
+    const titleBase =
+      removeBg.disabled
+        ? removeBg.disabledTitle || '当前不可用'
+        : removeBg.hasPreview
+          ? '去背景预览中：可写入新版本或丢弃'
+          : '去背景（本机 rembg）';
+    return (
+      <button
+        type="button"
+        title={titleBase}
+        aria-label="去背景"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        disabled={removeBg.disabled && !removeBg.hasPreview}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (removeBg.disabled && !removeBg.hasPreview) return;
+          toggleMenu('removeBg');
+        }}
+        className={[
+          'inline-flex h-7 shrink-0 items-center justify-center gap-0 rounded-md px-0.5 outline-none transition-colors',
+          'focus-visible:ring-2 focus-visible:ring-blue-500/45 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0a0a0c]',
+          removeBg.disabled && !removeBg.hasPreview
+            ? 'cursor-not-allowed opacity-35 ring-1 ring-white/[0.08]'
+            : open || active
+              ? 'bg-blue-600 text-white ring-1 ring-blue-400/35 hover:bg-blue-500'
+              : 'bg-white/[0.06] text-gray-300 ring-1 ring-white/[0.1] hover:bg-white/[0.11] hover:text-gray-100',
+        ].join(' ')}
+      >
+        <ImageMinus {...ic} aria-hidden />
+        <ChevronDown className={`h-3 w-3 shrink-0 opacity-85 transition-transform ${chevronOpenClass}`} strokeWidth={2} />
+      </button>
+    );
+  };
+
+  const removeBgPanel = removeBg ? (
+    <div className="flex flex-col gap-1" role="menu">
+      <div className="flex flex-wrap gap-0.5">
+        <ActionBtn
+          title={
+            removeBg.disabled
+              ? removeBg.disabledTitle || '当前不可用'
+              : removeBg.hasPreview
+                ? '重新运行去背景（替换当前预览）'
+                : '运行去背景（本机 rembg）'
+          }
+          disabled={removeBg.disabled || removeBg.busy}
+          onClick={() => {
+            if (removeBg.disabled || removeBg.busy) return;
+            removeBg.onRun();
+          }}
+        >
+          <ImageMinus {...ic} aria-hidden />
+        </ActionBtn>
+      </div>
+      {removeBg.hasPreview ? (
+        <div className="flex flex-wrap gap-0.5 border-t border-white/[0.06] pt-1">
+          <ActionBtn
+            dense
+            title="将抠图预览写入为新版本"
+            variant="primary"
+            disabled={removeBg.busy || removeBg.disabled}
+            onClick={() => removeBg.onApply()}
+          >
+            <Save {...icSm} />
+          </ActionBtn>
+          <ActionBtn
+            dense
+            title="丢弃抠图预览"
+            variant="danger"
+            disabled={removeBg.busy}
+            onClick={() => removeBg.onDiscard()}
+          >
+            <Trash2 {...icSm} />
+          </ActionBtn>
+        </div>
+      ) : null}
+    </div>
+  ) : null;
+
+  const canvasAdjustCategoryBtn = () => {
+    if (!canvasAdjust || (!canvasAdjust.splitUiOk && !canvasAdjust.resizeUiOk)) return null;
+    const open = openMenu === 'canvasAdjust';
+    const chevronOpenClass = open && menuPlacement === 'above' ? 'rotate-180' : '';
+    const active =
+      open ||
+      canvasAdjust.splitStretchEnabled ||
+      canvasAdjust.resizeWriteBackPopOpen ||
+      canvasAdjust.splitStretchWriteBackPopOpen;
+    return (
+      <button
+        type="button"
+        title="画布调整：线分割变形 / 改尺寸写回"
+        aria-label="画布调整"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={(e) => {
+          e.stopPropagation();
+          toggleMenu('canvasAdjust');
+        }}
+        className={[
+          'inline-flex h-7 shrink-0 items-center justify-center gap-0 rounded-md px-0.5 outline-none transition-colors',
+          'focus-visible:ring-2 focus-visible:ring-blue-500/45 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0a0a0c]',
+          open || active
+            ? 'bg-blue-600 text-white ring-1 ring-blue-400/35 hover:bg-blue-500'
+            : 'bg-white/[0.06] text-gray-300 ring-1 ring-white/[0.1] hover:bg-white/[0.11] hover:text-gray-100',
+        ].join(' ')}
+      >
+        <SlidersHorizontal {...ic} aria-hidden />
+        <ChevronDown className={`h-3 w-3 shrink-0 opacity-85 transition-transform ${chevronOpenClass}`} strokeWidth={2} />
+      </button>
+    );
+  };
+
+  const canvasAdjustPanel =
+    canvasAdjust && (canvasAdjust.splitUiOk || canvasAdjust.resizeUiOk) ? (
+      <div className="flex flex-col gap-1" role="menu">
+        {canvasAdjust.splitUiOk ? (
+          <div className="flex flex-wrap gap-0.5">
+            <ToolShell
+              title="线分割变形：拖蓝色条调整上下区域纵向比例；再次点击关闭"
+              dense
+              active={canvasAdjust.splitStretchEnabled}
+              onClick={() => canvasAdjust.setSplitStretchEnabled((v) => !v)}
+            >
+              <GripHorizontal {...icSm} />
+            </ToolShell>
+            {canvasAdjust.splitStretchEnabled && canvasAdjust.imageResizeWriteBackAvailable ? (
+              <ActionBtn
+                dense
+                title="确认将线分割变形写回当前工作流版本"
+                variant="amber"
+                onClick={() => {
+                  canvasAdjust.setResizeWriteBackPopOpen(false);
+                  canvasAdjust.setSplitStretchWriteBackPopOpen(true);
+                }}
+              >
+                <Save {...icSm} />
+              </ActionBtn>
+            ) : null}
+          </div>
+        ) : null}
+        {canvasAdjust.resizeUiOk ? (
+          <div
+            className={[
+              'flex flex-wrap gap-0.5',
+              canvasAdjust.splitUiOk ? 'border-t border-white/[0.06] pt-1' : '',
+            ].join(' ')}
+          >
+            <ToolShell
+              title={
+                canvasAdjust.previewLayout !== 'flat'
+                  ? '请切换到「平面」预览后再改尺寸写回'
+                  : '改尺寸写回当前版本（等比缩放；写回后清除本版本标注）'
+              }
+              dense
+              active={canvasAdjust.resizeWriteBackPopOpen}
+              disabled={canvasAdjust.previewLayout !== 'flat'}
+              onClick={() => {
+                if (canvasAdjust.previewLayout !== 'flat') return;
+                canvasAdjust.setSplitStretchWriteBackPopOpen(false);
+                canvasAdjust.setResizeWriteBackPopOpen((o) => !o);
+              }}
+            >
+              <Scaling {...icSm} />
+            </ToolShell>
+          </div>
+        ) : null}
+      </div>
+    ) : null;
 
   const samPanel = samSegment ? (
     <div className="flex flex-col gap-1" role="menu">
@@ -797,11 +999,19 @@ export function ImageAnnotationLightboxToolbar({
                   ? localPanel
                   : openMenu === 'sam'
                     ? samPanel
-                    : null}
+                    : openMenu === 'removeBg'
+                      ? removeBgPanel
+                      : openMenu === 'canvasAdjust'
+                        ? canvasAdjustPanel
+                        : null}
           </div>
         ) : null}
 
-        <div className={WORKFLOW_IMAGE_PREVIEW_RAIL} role="toolbar" aria-label="标注与裁切">
+        <div
+          className={WORKFLOW_IMAGE_PREVIEW_RAIL.replace('gap-1', 'gap-0.5')}
+          role="toolbar"
+          aria-label="标注与裁切"
+        >
         <button
           type="button"
           onDoubleClick={() => {
@@ -825,59 +1035,45 @@ export function ImageAnnotationLightboxToolbar({
           <Move {...ic} />
         </ToolShell>
         <RailDivider />
-        {categoryBtn('annotate', annotateActive)}
-        {categoryBtn('crop', cropActive)}
-        {categoryBtn('local', localActive)}
-        <RailDivider />
-        <ActionBtn title="撤销 (Ctrl/⌘+Z)" onClick={onUndo}>
-          <Undo2 {...ic} />
-        </ActionBtn>
-        <ActionBtn title="重做 (⇧Ctrl/⇧⌘+Z)" onClick={onRedo}>
-          <Redo2 {...ic} />
-        </ActionBtn>
-        {samCategoryBtn()}
-        {removeBg ? (
+        <div className="flex items-center gap-0.5">
+          {categoryBtn('annotate', annotateActive)}
+          {categoryBtn('local', localActive)}
+          {categoryBtn('crop', cropActive)}
+        </div>
+        {samSegment ? (
           <>
-            <RailDivider />
-            <ActionBtn
-              title={
-                removeBg.disabled
-                  ? removeBg.disabledTitle || '当前不可用'
-                  : removeBg.hasPreview
-                    ? '重新运行去背景（替换当前预览）'
-                    : '去背景（本机 rembg）'
-              }
-              disabled={removeBg.disabled || removeBg.busy}
-              onClick={() => removeBg.onRun()}
-            >
-              <ImageMinus {...ic} />
-            </ActionBtn>
-            {removeBg.hasPreview ? (
-              <>
-                <ActionBtn
-                  dense
-                  title="将抠图预览写入为新版本"
-                  variant="primary"
-                  disabled={removeBg.busy || removeBg.disabled}
-                  onClick={() => removeBg.onApply()}
-                >
-                  <Save {...icSm} />
-                </ActionBtn>
-                <ActionBtn
-                  dense
-                  title="丢弃抠图预览"
-                  variant="danger"
-                  disabled={removeBg.busy}
-                  onClick={() => removeBg.onDiscard()}
-                >
-                  <Trash2 {...icSm} />
-                </ActionBtn>
-              </>
-            ) : null}
+            <div className="mx-0.5 w-px shrink-0 self-stretch bg-white/12" aria-hidden />
+            {samCategoryBtn()}
           </>
         ) : null}
+        {removeBg ? (
+          <>
+            <div className="mx-0.5 w-px shrink-0 self-stretch bg-white/12" aria-hidden />
+            {removeBgCategoryBtn()}
+          </>
+        ) : null}
+        {canvasAdjust && (canvasAdjust.splitUiOk || canvasAdjust.resizeUiOk) ? (
+          <>
+            <div className="mx-0.5 w-px shrink-0 self-stretch bg-white/12" aria-hidden />
+            {canvasAdjustCategoryBtn()}
+          </>
+        ) : null}
+        <div className="mx-0.5 w-px shrink-0 self-stretch bg-white/12" aria-hidden />
+        <div className="flex items-center gap-0.5">
+          <ActionBtn title="撤回（Ctrl/⌘+Z）" ariaLabel="撤回" onClick={onUndo}>
+            <Undo2 {...ic} />
+          </ActionBtn>
+          <ActionBtn title="重做（⇧Ctrl/⇧⌘+Z）" ariaLabel="重做" onClick={onRedo}>
+            <Redo2 {...ic} />
+          </ActionBtn>
+        </div>
         <RailDivider />
-        <ActionBtn title="一键清空：标注、裁切、局部重绘、全景裁切框（写入当前版本）" onClick={onResetAll} variant="danger">
+        <ActionBtn
+          title="一键清空：标注、裁切、局部重绘、全景裁切框（写入当前版本）"
+          ariaLabel="一键清空"
+          onClick={onResetAll}
+          variant="danger"
+        >
           <RotateCcw {...ic} />
         </ActionBtn>
         </div>

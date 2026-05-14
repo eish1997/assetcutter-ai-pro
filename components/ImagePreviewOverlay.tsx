@@ -1,9 +1,10 @@
-import React, { Suspense, forwardRef, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { Suspense, forwardRef, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   getLazyImagePreviewViewer,
   PreviewShell,
   PreviewViewerFallback,
   previewPolicyForMode,
+  type ImagePreviewCanvasAdjustControl,
   type ImagePreviewLayoutMode,
 } from './preview';
 import {
@@ -11,7 +12,7 @@ import {
   imageNaturalIndicesFromClientPoint,
   readRgbFromCanvasMappedNatural,
 } from '../services/imagePreviewPointerGeometry';
-import { Box, Contrast, Globe2, GripHorizontal, Image as ImageIcon, Mountain, Scaling, X } from 'lucide-react';
+import { Box, Contrast, Globe2, GripHorizontal, Image as ImageIcon, Mountain, Save, Scaling, X } from 'lucide-react';
 import { readLocalString, writeLocalString } from '../services/clientPersist';
 import { CustomDropdown } from './ui/CustomDropdown';
 import {
@@ -192,6 +193,14 @@ export type ImagePreviewOverlayProps = {
    * 由父组件持有时，全景懒加载 Viewer 挂载后会写入，可用于 `captureViewDataUrl`（如视口矩形裁切导出）。
    */
   panoViewerRef?: React.RefObject<PanoramaViewportProjection | null>;
+  /**
+   * 若提供：高度 3D 工具条 portal 到该元素（如工作流右侧详情列上方），不再占用顶栏旁槽位。
+   */
+  heightfieldToolbarHostRef?: React.RefObject<HTMLDivElement | null>;
+  /**
+   * 若提供：线分割 / 改尺寸写回 state 由父级持有（与 `ImageAnnotationLightboxToolbar` 下拉共用）；未提供时由壳内 state + 顶栏内联按钮承担。
+   */
+  canvasAdjustControl?: ImagePreviewCanvasAdjustControl | null;
   /** 平面模式下在主图上移动指针时回调当前像素 RGB（离开图内容区或无法采样时为 null） */
   onFlatImagePixelSample?: (rgb: { r: number; g: number; b: number } | null) => void;
   /** 平面 / 全景 / 高度 3D / 3D 模型 切换时通知父级（用于大图标注按模式分桶） */
@@ -282,6 +291,8 @@ export function ImagePreviewOverlay({
   children,
   flatImageOverlay,
   panoViewerRef: panoViewerRefProp,
+  heightfieldToolbarHostRef,
+  canvasAdjustControl,
   onFlatImagePixelSample,
   onPreviewLayoutChange,
   suppressFlatImageInteraction = false,
@@ -312,9 +323,23 @@ export function ImagePreviewOverlay({
   /** W 键：左键拖移始终为平移画布（否则左键为缩放拖移；空格仍临时平移） */
   const [canvasPanArmed, setCanvasPanArmed] = useState(false);
   /** 平面模式：线分割纵向变形（画布预览 + 可拖分割线） */
-  const [splitStretchEnabled, setSplitStretchEnabled] = useState(false);
-  const [splitStretchWriteBackPopOpen, setSplitStretchWriteBackPopOpen] = useState(false);
-  const [resizeWriteBackPopOpen, setResizeWriteBackPopOpen] = useState(false);
+  const [internalSplitStretchEnabled, setInternalSplitStretchEnabled] = useState(false);
+  const [internalSplitStretchWriteBackPopOpen, setInternalSplitStretchWriteBackPopOpen] = useState(false);
+  const [internalResizeWriteBackPopOpen, setInternalResizeWriteBackPopOpen] = useState(false);
+  const splitStretchEnabled =
+    canvasAdjustControl != null ? canvasAdjustControl.splitStretchEnabled : internalSplitStretchEnabled;
+  const setSplitStretchEnabled =
+    canvasAdjustControl?.setSplitStretchEnabled ?? setInternalSplitStretchEnabled;
+  const splitStretchWriteBackPopOpen =
+    canvasAdjustControl != null
+      ? canvasAdjustControl.splitStretchWriteBackPopOpen
+      : internalSplitStretchWriteBackPopOpen;
+  const setSplitStretchWriteBackPopOpen =
+    canvasAdjustControl?.setSplitStretchWriteBackPopOpen ?? setInternalSplitStretchWriteBackPopOpen;
+  const resizeWriteBackPopOpen =
+    canvasAdjustControl != null ? canvasAdjustControl.resizeWriteBackPopOpen : internalResizeWriteBackPopOpen;
+  const setResizeWriteBackPopOpen =
+    canvasAdjustControl?.setResizeWriteBackPopOpen ?? setInternalResizeWriteBackPopOpen;
   const splitStretchExportRef = useRef<ImagePreviewSplitStretchExportState | null>(null);
   const [lockedDominant, setLockedDominant] = useState<{ axis: 'width' | 'height'; size: number } | null>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
@@ -415,9 +440,11 @@ export function ImagePreviewOverlay({
       setHeightfieldToolbarHostEl((h) => (h ? null : h));
       return;
     }
-    const el = heightfieldToolbarSlotRef.current;
+    const external = heightfieldToolbarHostRef?.current ?? null;
+    const internal = heightfieldToolbarHostRef ? null : heightfieldToolbarSlotRef.current;
+    const el = external ?? internal;
     setHeightfieldToolbarHostEl((prev) => (prev === el ? prev : el));
-  }, [heightfieldLayoutActive, uiHidden]);
+  }, [heightfieldLayoutActive, uiHidden, heightfieldToolbarHostRef, resetKey]);
 
   /** 全景模式下叠一层与平面一致的 object-contain 贴图 + 标注，使裁切/局部重绘等仍可用（底图透明，仍见 WebGL 全景） */
   const panoAnnotationBridge = Boolean(panoLayoutActive && flatImageOverlay);
@@ -441,6 +468,149 @@ export function ImagePreviewOverlay({
   );
   const splitStretchUiOk = Boolean(flatNavigateCanvasOk && !suppressFlatImageInteraction);
   const resizeWriteBackUiOk = Boolean(flatNavigateCanvasOk && !centerSlot && imageResizeWriteBack);
+
+  const splitResizeToolbarInner = useMemo(() => {
+    if (canvasAdjustControl) return null;
+    if (!(splitStretchUiOk || resizeWriteBackUiOk)) return null;
+    return (
+      <>
+        {splitStretchUiOk ? (
+          <>
+            <button
+              type="button"
+              onClick={() => setSplitStretchEnabled((v) => !v)}
+              className={
+                splitStretchEnabled
+                  ? `${IMAGE_LIGHTBOX_TOOL_ICON_BTN_IDLE} bg-blue-600/35 ring-2 ring-inset ring-blue-400/40`
+                  : IMAGE_LIGHTBOX_TOOL_ICON_BTN_IDLE
+              }
+              title="线分割变形：拖蓝色条调整上下区域纵向比例；再次点击关闭"
+              aria-label="线分割变形"
+              aria-pressed={splitStretchEnabled}
+            >
+              <GripHorizontal {...PV_MODE_IC} aria-hidden />
+            </button>
+            {splitStretchEnabled && imageResizeWriteBack ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setResizeWriteBackPopOpen(false);
+                  setSplitStretchWriteBackPopOpen(true);
+                }}
+                className={IMAGE_LIGHTBOX_TOOL_ICON_BTN_IDLE}
+                title="确认将线分割变形写回当前工作流版本"
+                aria-label="线分割写回资产"
+              >
+                <Save {...PV_MODE_IC} aria-hidden />
+              </button>
+            ) : null}
+          </>
+        ) : null}
+        {resizeWriteBackUiOk ? (
+          <button
+            type="button"
+            onClick={() => {
+              if (previewLayout !== 'flat') return;
+              setSplitStretchWriteBackPopOpen(false);
+              setResizeWriteBackPopOpen((o) => !o);
+            }}
+            disabled={previewLayout !== 'flat'}
+            className={
+              previewLayout !== 'flat'
+                ? `${IMAGE_LIGHTBOX_TOOL_ICON_BTN_IDLE} cursor-not-allowed opacity-40`
+                : resizeWriteBackPopOpen
+                  ? `${IMAGE_LIGHTBOX_TOOL_ICON_BTN_IDLE} bg-blue-600/35 ring-2 ring-inset ring-blue-400/40`
+                  : IMAGE_LIGHTBOX_TOOL_ICON_BTN_IDLE
+            }
+            title={
+              previewLayout !== 'flat'
+                ? '请切换到「平面」预览后再改尺寸写回'
+                : '改尺寸写回当前版本（等比缩放；写回后清除本版本标注）'
+            }
+            aria-label="改尺寸写回资产"
+            aria-pressed={resizeWriteBackPopOpen}
+          >
+            <Scaling {...PV_MODE_IC} aria-hidden />
+          </button>
+        ) : null}
+      </>
+    );
+  }, [
+    canvasAdjustControl,
+    splitStretchUiOk,
+    resizeWriteBackUiOk,
+    splitStretchEnabled,
+    imageResizeWriteBack,
+    previewLayout,
+    resizeWriteBackPopOpen,
+  ]);
+
+  const modeSwitchRail = useMemo(() => {
+    if (centerSlot || (!enablePanoramaMode && !hasModel3DMode && !hasHeightfieldMode)) return null;
+    return (
+      <div className={`${TITLE_ROW_STEPPER_SHELL} shrink-0`} role="group" aria-label="预览模式">
+        <button
+          type="button"
+          onClick={() => setPreviewLayoutAndNotify('flat')}
+          className={`${PV_MODE_SEG_BASE} ${previewLayout === 'flat' ? PV_MODE_SEG_ON : PV_MODE_SEG_OFF}`}
+          title="平面预览"
+          aria-label="切换到平面预览"
+          aria-pressed={previewLayout === 'flat'}
+        >
+          <ImageIcon {...PV_MODE_IC} aria-hidden />
+        </button>
+        {enablePanoramaMode ? (
+          <button
+            type="button"
+            onClick={() => setPreviewLayoutAndNotify('pano')}
+            className={`${PV_MODE_SEG_BASE} border-l border-white/[0.08] ${
+              previewLayout === 'pano' ? PV_MODE_SEG_ON : PV_MODE_SEG_OFF
+            }`}
+            title="全景预览"
+            aria-label="切换到全景预览"
+            aria-pressed={previewLayout === 'pano'}
+          >
+            <Globe2 {...PV_MODE_IC} aria-hidden />
+          </button>
+        ) : null}
+        {hasHeightfieldMode ? (
+          <button
+            type="button"
+            onClick={() => setPreviewLayoutAndNotify('heightfield')}
+            className={`${PV_MODE_SEG_BASE} border-l border-white/[0.08] ${
+              previewLayout === 'heightfield' ? PV_MODE_SEG_ON : PV_MODE_SEG_OFF
+            }`}
+            title="高度 3D：按图片亮度显示置换表面"
+            aria-label="切换到高度 3D 预览"
+            aria-pressed={previewLayout === 'heightfield'}
+          >
+            <Mountain {...PV_MODE_IC} aria-hidden />
+          </button>
+        ) : null}
+        {hasModel3DMode ? (
+          <button
+            type="button"
+            onClick={() => setPreviewLayoutAndNotify('model3d')}
+            className={`${PV_MODE_SEG_BASE} border-l border-white/[0.08] ${
+              previewLayout === 'model3d' ? PV_MODE_SEG_ON : PV_MODE_SEG_OFF
+            }`}
+            title="3D 预览"
+            aria-label="切换到 3D 预览"
+            aria-pressed={previewLayout === 'model3d'}
+          >
+            <Box {...PV_MODE_IC} aria-hidden />
+          </button>
+        ) : null}
+      </div>
+    );
+  }, [
+    centerSlot,
+    enablePanoramaMode,
+    hasModel3DMode,
+    hasHeightfieldMode,
+    previewLayout,
+    setPreviewLayoutAndNotify,
+  ]);
 
   const applyKeyedZoom = useCallback(
     (grow: boolean) => {
@@ -1264,7 +1434,7 @@ export function ImagePreviewOverlay({
               <div>拖拽：旋转视角（按图片灰度抬升表面）</div>
               <div>滚轮：缩放视角距离</div>
               <div>表面：灰 MatCap（ZBrush 式 sculpt 明暗，无原图着色）</div>
-              <div>顶部工具栏：性能↔画质、置换强度、「下载 GLB」导出当前网格</div>
+              <div>右侧详情上方（工作流）或顶栏旁：性能↔画质、置换强度、卷成圆柱、「导出模型」选格式下载（含 FBX）</div>
               <div>切回「平面」后可滚轮切图 / 缩放平移</div>
               <div>Tab：隐藏/显示界面（仅看图片）</div>
               <div>1～4：切换预览背景（毛玻璃 / 黑 / 50%灰 / 白）</div>
@@ -1310,7 +1480,7 @@ export function ImagePreviewOverlay({
               </div>
               {splitStretchUiOk && splitStretchEnabled ? (
                 <div className="text-amber-200/90 pt-0.5 border-t border-white/10">
-                  线分割：拖蓝色条调整上下占比；琥珀虚线为垂直中线参考。写入工作流请点顶部「写回」确认；「下载 PNG」仅导出本地文件。
+                  线分割：拖蓝色条调整上下占比；琥珀虚线为垂直中线参考。写入工作流请点标注条「写回」确认；「下载 PNG」仅导出本地文件。
                 </div>
               ) : null}
             </>
@@ -1335,7 +1505,7 @@ export function ImagePreviewOverlay({
               </div>
               {splitStretchUiOk && splitStretchEnabled ? (
                 <div className="text-amber-200/90 pt-0.5 border-t border-white/10">
-                  线分割：拖蓝色条调整上下占比；琥珀虚线为垂直中线参考。写入工作流请点顶部「写回」确认；「下载 PNG」仅导出本地文件。
+                  线分割：拖蓝色条调整上下占比；琥珀虚线为垂直中线参考。写入工作流请点标注条「写回」确认；「下载 PNG」仅导出本地文件。
                 </div>
               ) : null}
             </>
@@ -1348,10 +1518,10 @@ export function ImagePreviewOverlay({
           className="absolute right-4 z-10 flex max-w-[calc(100vw-2rem)] flex-row flex-wrap items-start justify-end gap-2"
           style={{ top: 'max(0.5rem, env(safe-area-inset-top, 0px))' }}
         >
-          {heightfieldLayoutActive ? (
+          {heightfieldLayoutActive && !heightfieldToolbarHostRef ? (
             <div
               ref={heightfieldToolbarSlotRef}
-              className={`${WORKFLOW_IMAGE_PREVIEW_RAIL} max-w-[min(58vw,30rem)] min-w-0 shrink`}
+              className={`${WORKFLOW_IMAGE_PREVIEW_RAIL} max-w-[min(78vw,38rem)] min-w-0 shrink`}
               role="region"
               aria-label="高度 3D 控件"
               onClick={(e) => e.stopPropagation()}
@@ -1363,7 +1533,18 @@ export function ImagePreviewOverlay({
             role="toolbar"
             aria-label="预览工具"
           >
-            {/* 显示：预览背景 */}
+            {topRightExtra ? (
+              <>
+                <div className="inline-flex items-center gap-1">{topRightExtra}</div>
+                <div className={WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER} aria-hidden />
+              </>
+            ) : null}
+            {modeSwitchRail ? (
+              <>
+                {modeSwitchRail}
+                <div className={WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER} aria-hidden />
+              </>
+            ) : null}
             <CustomDropdown
               value={lightboxBackdropId}
               onChange={(v) => {
@@ -1377,142 +1558,15 @@ export function ImagePreviewOverlay({
               renderListItem={(opt) => (
                 <LightboxBackdropSwatch id={parseImageLightboxBackdrop(opt.value)} />
               )}
-              triggerAriaLabel="预览背景"
+              triggerAriaLabel="切换画板颜色"
               triggerClassName={IMAGE_LIGHTBOX_TOOL_ICON_BTN_IDLE}
               renderTrigger={() => <Contrast {...PV_MODE_IC} aria-hidden />}
               portalZIndex={{ backdrop: 2700, list: 2701 }}
             />
-            {splitStretchUiOk || resizeWriteBackUiOk ? (
+            {!canvasAdjustControl && (splitStretchUiOk || resizeWriteBackUiOk) ? (
               <>
                 <div className={WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER} aria-hidden />
-                {splitStretchUiOk ? (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => setSplitStretchEnabled((v) => !v)}
-                      className={
-                        splitStretchEnabled
-                          ? `${IMAGE_LIGHTBOX_TOOL_ICON_BTN_IDLE} bg-blue-600/35 ring-2 ring-inset ring-blue-400/40`
-                          : IMAGE_LIGHTBOX_TOOL_ICON_BTN_IDLE
-                      }
-                      title="线分割变形：拖蓝色条调整上下区域纵向比例；再次点击关闭"
-                      aria-label="线分割变形"
-                      aria-pressed={splitStretchEnabled}
-                    >
-                      <GripHorizontal {...PV_MODE_IC} aria-hidden />
-                    </button>
-                    {splitStretchEnabled && imageResizeWriteBack ? (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setResizeWriteBackPopOpen(false);
-                          setSplitStretchWriteBackPopOpen(true);
-                        }}
-                        className={`${IMAGE_LIGHTBOX_TOOL_ICON_BTN_IDLE} text-[9px] font-black uppercase tracking-wide px-1.5`}
-                        title="确认将线分割变形写回当前工作流版本"
-                        aria-label="线分割写回资产"
-                      >
-                        写回
-                      </button>
-                    ) : null}
-                  </>
-                ) : null}
-                {resizeWriteBackUiOk ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (previewLayout !== 'flat') return;
-                      setSplitStretchWriteBackPopOpen(false);
-                      setResizeWriteBackPopOpen((o) => !o);
-                    }}
-                    disabled={previewLayout !== 'flat'}
-                    className={
-                      previewLayout !== 'flat'
-                        ? `${IMAGE_LIGHTBOX_TOOL_ICON_BTN_IDLE} cursor-not-allowed opacity-40`
-                        : resizeWriteBackPopOpen
-                          ? `${IMAGE_LIGHTBOX_TOOL_ICON_BTN_IDLE} bg-blue-600/35 ring-2 ring-inset ring-blue-400/40`
-                          : IMAGE_LIGHTBOX_TOOL_ICON_BTN_IDLE
-                    }
-                    title={
-                      previewLayout !== 'flat'
-                        ? '请切换到「平面」预览后再改尺寸写回'
-                        : '改尺寸写回当前版本（等比缩放；写回后清除本版本标注）'
-                    }
-                    aria-label="改尺寸写回资产"
-                    aria-pressed={resizeWriteBackPopOpen}
-                  >
-                    <Scaling {...PV_MODE_IC} aria-hidden />
-                  </button>
-                ) : null}
-              </>
-            ) : null}
-            {topRightExtra ? (
-              <>
-                <div className={WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER} aria-hidden />
-                <div className="inline-flex items-center gap-1">{topRightExtra}</div>
-              </>
-            ) : null}
-            {!centerSlot && (enablePanoramaMode || hasModel3DMode || hasHeightfieldMode) ? (
-              <>
-                <div className={WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER} aria-hidden />
-                <div
-                  className={`${TITLE_ROW_STEPPER_SHELL} shrink-0`}
-                  role="group"
-                  aria-label="预览模式"
-                >
-                  <button
-                    type="button"
-                    onClick={() => setPreviewLayoutAndNotify('flat')}
-                    className={`${PV_MODE_SEG_BASE} ${previewLayout === 'flat' ? PV_MODE_SEG_ON : PV_MODE_SEG_OFF}`}
-                    title="平面预览"
-                    aria-label="切换到平面预览"
-                    aria-pressed={previewLayout === 'flat'}
-                  >
-                    <ImageIcon {...PV_MODE_IC} aria-hidden />
-                  </button>
-                  {enablePanoramaMode ? (
-                    <button
-                      type="button"
-                      onClick={() => setPreviewLayoutAndNotify('pano')}
-                      className={`${PV_MODE_SEG_BASE} border-l border-white/[0.08] ${
-                        previewLayout === 'pano' ? PV_MODE_SEG_ON : PV_MODE_SEG_OFF
-                      }`}
-                      title="全景预览"
-                      aria-label="切换到全景预览"
-                      aria-pressed={previewLayout === 'pano'}
-                    >
-                      <Globe2 {...PV_MODE_IC} aria-hidden />
-                    </button>
-                  ) : null}
-                  {hasHeightfieldMode ? (
-                    <button
-                      type="button"
-                      onClick={() => setPreviewLayoutAndNotify('heightfield')}
-                      className={`${PV_MODE_SEG_BASE} border-l border-white/[0.08] ${
-                        previewLayout === 'heightfield' ? PV_MODE_SEG_ON : PV_MODE_SEG_OFF
-                      }`}
-                      title="高度 3D：按图片亮度显示置换表面"
-                      aria-label="切换到高度 3D 预览"
-                      aria-pressed={previewLayout === 'heightfield'}
-                    >
-                      <Mountain {...PV_MODE_IC} aria-hidden />
-                    </button>
-                  ) : null}
-                  {hasModel3DMode ? (
-                    <button
-                      type="button"
-                      onClick={() => setPreviewLayoutAndNotify('model3d')}
-                      className={`${PV_MODE_SEG_BASE} border-l border-white/[0.08] ${
-                        previewLayout === 'model3d' ? PV_MODE_SEG_ON : PV_MODE_SEG_OFF
-                      }`}
-                      title="3D 预览"
-                      aria-label="切换到 3D 预览"
-                      aria-pressed={previewLayout === 'model3d'}
-                    >
-                      <Box {...PV_MODE_IC} aria-hidden />
-                    </button>
-                  ) : null}
-                </div>
+                {splitResizeToolbarInner}
               </>
             ) : null}
             <div className={WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER} aria-hidden />

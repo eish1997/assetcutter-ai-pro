@@ -80,7 +80,7 @@ import {
 } from '../services/workflowImageTags';
 import AppIcon from './ui/AppIcon';
 import { ImagePreviewOverlay } from './ImagePreviewOverlay';
-import type { ImagePreviewLayoutMode } from './preview';
+import type { ImagePreviewCanvasAdjustControl, ImagePreviewLayoutMode } from './preview';
 import {
   ImageFlatAnnotationOverlay,
   normalizeImageOverlayDoc,
@@ -180,6 +180,7 @@ import {
   WORKFLOW_CHROME_BTN_NEUTRAL,
   WORKFLOW_TOPBAR_ICON_BTN,
   WORKFLOW_LIGHTBOX_BOTTOM_RAIL,
+  WORKFLOW_IMAGE_PREVIEW_RAIL,
   WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER,
   WORKFLOW_CARD_DISMISS_ICON_BTN,
 } from './workflow/workflowSectionUiConstants';
@@ -604,6 +605,10 @@ const WorkflowSection: React.FC<{
   lightboxOverlayByModeRef.current = lightboxOverlayByMode;
   /** 与 `ImagePreviewOverlay` 同步：平面 / 全景 / 高度 3D / 3D 模型（非平面时标注写入对应桶） */
   const [lightboxPreviewLayout, setLightboxPreviewLayout] = useState<ImagePreviewLayoutMode>('flat');
+  const [lightboxCanvasSplitStretchEnabled, setLightboxCanvasSplitStretchEnabled] = useState(false);
+  const [lightboxCanvasSplitStretchWriteBackPopOpen, setLightboxCanvasSplitStretchWriteBackPopOpen] =
+    useState(false);
+  const [lightboxCanvasResizeWriteBackPopOpen, setLightboxCanvasResizeWriteBackPopOpen] = useState(false);
   const lightboxOverlayActiveBucket: 'flat' | 'pano' =
     lightboxPreviewLayout === 'pano' ? 'pano' : 'flat';
   const lightboxOverlayDraft = lightboxOverlayByMode[lightboxOverlayActiveBucket];
@@ -612,6 +617,8 @@ const WorkflowSection: React.FC<{
   lightboxOverlayDraftRef.current = lightboxOverlayDraft;
   lightboxOverlayActiveBucketRef.current = lightboxOverlayActiveBucket;
   const lightboxPanoViewerRef = useRef<PanoramaViewportProjection | null>(null);
+  /** 工作流大图：高度 3D 工具条 portal 宿主（右侧详情列上方，与详情同宽） */
+  const lightboxHeightfieldToolbarHostRef = useRef<HTMLDivElement | null>(null);
   /** 大图局部重绘选区底边中点（视口），快捷栏锚在框下方 */
   const [lightboxQuickComposeAnchor, setLightboxQuickComposeAnchor] = useState<{
     x: number;
@@ -798,9 +805,18 @@ const WorkflowSection: React.FC<{
   const [quickComposeAspect, setQuickComposeAspect] = useState('adaptive');
   const [quickComposeSize, setQuickComposeSize] = useState('');
   const [quickComposeCount, setQuickComposeCount] = useState(1);
-  /** 供大图预览等异步提交路径读取当前文案（与 `quickComposeDraft` 同步） */
+  /**
+   * 与 `quickComposeDraft` 同步；在 **setState 提交前** 即更新（见 `setQuickComposeDraftTracked`），
+   * 避免大图/底部栏「最后一笔输入后立即点生成」读到空文案。
+   */
   const quickComposeDraftRef = useRef('');
-  quickComposeDraftRef.current = quickComposeDraft;
+  const setQuickComposeDraftTracked = useCallback((value: React.SetStateAction<string>) => {
+    setQuickComposeDraft((prev) => {
+      const next = typeof value === 'function' ? (value as (p: string) => string)(prev) : value;
+      quickComposeDraftRef.current = next;
+      return next;
+    });
+  }, []);
   const [showAllInGroup, setShowAllInGroup] = useState(false);
   /** 组筛选 ID：用于查看组内资产 */
   const [groupFilterId, setGroupFilterId] = useState<string | null>(null);
@@ -2666,7 +2682,7 @@ ${lineSvg}
 
   const submitQuickCompose = useCallback((invoke?: QuickComposeSubmitInvokeOptions) => {
     const userText = (
-      invoke?.overrideUserText !== undefined ? invoke.overrideUserText : quickComposeDraft
+      invoke?.overrideUserText !== undefined ? invoke.overrideUserText : quickComposeDraftRef.current
     ).trim();
     const imgsAll = (
       invoke?.overrideImageDataUrls !== undefined ? invoke.overrideImageDataUrls : quickComposeImages
@@ -2832,7 +2848,7 @@ ${lineSvg}
         void executePending([...newTasks, ...pendingRef.current]);
       }
       if (!invoke?.preserveBottomBarDraft) {
-        setQuickComposeDraft('');
+        setQuickComposeDraftTracked('');
         setQuickComposeImages([]);
       }
       setQuickComposePromptCards([]);
@@ -2856,7 +2872,7 @@ ${lineSvg}
         void executePending([...newTasks, ...pendingRef.current]);
       }
       if (!invoke?.preserveBottomBarDraft) {
-        setQuickComposeDraft('');
+        setQuickComposeDraftTracked('');
         setQuickComposeImages([]);
       }
       setQuickComposePromptCards([]);
@@ -3030,7 +3046,7 @@ ${lineSvg}
         void executePending([...newTasks, ...pendingRef.current]);
       }
       if (!invoke?.preserveBottomBarDraft) {
-        setQuickComposeDraft('');
+        setQuickComposeDraftTracked('');
         setQuickComposeImages([]);
       }
       setQuickComposePromptCards([]);
@@ -3069,7 +3085,6 @@ ${lineSvg}
     runPlainBatch(newAssets, newTasks);
   }, [
     quickComposeMode,
-    quickComposeDraft,
     quickComposePromptCards,
     quickComposeImages,
     quickComposeGear,
@@ -3123,7 +3138,7 @@ ${lineSvg}
       setLightboxOverlayByMode((prev) => ({ ...prev, [persistBucket]: nextOverlayForPersist }));
       setLightboxQuickComposeAnchor(null);
       setLightboxQuickComposeLayoutNonce((n) => n + 1);
-      setQuickComposeDraft('');
+      setQuickComposeDraftTracked('');
       setQuickComposeImages([]);
       setQuickComposePromptCards([]);
       setAssets((prev) =>
@@ -3342,7 +3357,7 @@ ${lineSvg}
     setPending,
     executing,
     executePending,
-    setQuickComposeDraft,
+    setQuickComposeDraftTracked,
     setQuickComposeImages,
     setQuickComposePromptCards,
     setAssets,
@@ -4152,6 +4167,116 @@ ${lineSvg}
       lightboxPreviewLayout,
     ]
   );
+
+  const lightboxCanvasSuppressFlat = useMemo(
+    () =>
+      Boolean(
+        lightboxAsset &&
+          lightboxShowsImage &&
+          !isWorkflowTextAsset(lightboxAsset) &&
+          !isGroupAsset(lightboxAsset) &&
+          lightboxSamSegmentUiAllowed &&
+          lightboxSamPickArmed &&
+          !lightboxSamBusy
+      ),
+    [
+      lightboxAsset,
+      lightboxShowsImage,
+      lightboxSamSegmentUiAllowed,
+      lightboxSamPickArmed,
+      lightboxSamBusy,
+    ]
+  );
+
+  const lightboxCanvasSplitUiOk = useMemo(
+    () =>
+      Boolean(
+        lightboxAsset &&
+          lightboxShowsImage &&
+          !isWorkflowTextAsset(lightboxAsset) &&
+          !isGroupAsset(lightboxAsset) &&
+          lightboxPreviewLayout === 'flat' &&
+          !lightboxCanvasSuppressFlat
+      ),
+    [lightboxAsset, lightboxShowsImage, lightboxPreviewLayout, lightboxCanvasSuppressFlat]
+  );
+
+  /** 与 `ImagePreviewOverlay` 的 `resizeWriteBackUiOk` 对齐：平面大图即可改尺寸写回（不受 SAM 点选武装抑制） */
+  const lightboxCanvasResizeUiOk = useMemo(
+    () =>
+      Boolean(
+        lightboxAsset &&
+          lightboxShowsImage &&
+          !isWorkflowTextAsset(lightboxAsset) &&
+          !isGroupAsset(lightboxAsset) &&
+          lightboxPreviewLayout === 'flat'
+      ),
+    [lightboxAsset, lightboxShowsImage, lightboxPreviewLayout]
+  );
+
+  useEffect(() => {
+    setLightboxCanvasSplitStretchEnabled(false);
+    setLightboxCanvasSplitStretchWriteBackPopOpen(false);
+    setLightboxCanvasResizeWriteBackPopOpen(false);
+  }, [lightboxAsset?.id]);
+
+  const lightboxCanvasAdjustControl = useMemo((): ImagePreviewCanvasAdjustControl | undefined => {
+    if (
+      !lightboxAsset ||
+      !lightboxShowsImage ||
+      isWorkflowTextAsset(lightboxAsset) ||
+      isGroupAsset(lightboxAsset)
+    ) {
+      return undefined;
+    }
+    return {
+      splitStretchEnabled: lightboxCanvasSplitStretchEnabled,
+      setSplitStretchEnabled: setLightboxCanvasSplitStretchEnabled,
+      splitStretchWriteBackPopOpen: lightboxCanvasSplitStretchWriteBackPopOpen,
+      setSplitStretchWriteBackPopOpen: setLightboxCanvasSplitStretchWriteBackPopOpen,
+      resizeWriteBackPopOpen: lightboxCanvasResizeWriteBackPopOpen,
+      setResizeWriteBackPopOpen: setLightboxCanvasResizeWriteBackPopOpen,
+    };
+  }, [
+    lightboxAsset,
+    lightboxShowsImage,
+    lightboxCanvasSplitStretchEnabled,
+    lightboxCanvasSplitStretchWriteBackPopOpen,
+    lightboxCanvasResizeWriteBackPopOpen,
+  ]);
+
+  const lightboxAnnotationCanvasAdjust = useMemo(() => {
+    if (
+      !lightboxAsset ||
+      !lightboxShowsImage ||
+      isWorkflowTextAsset(lightboxAsset) ||
+      isGroupAsset(lightboxAsset)
+    ) {
+      return null;
+    }
+    return {
+      splitUiOk: lightboxCanvasSplitUiOk,
+      resizeUiOk: lightboxCanvasResizeUiOk,
+      previewLayout: lightboxPreviewLayout,
+      splitStretchEnabled: lightboxCanvasSplitStretchEnabled,
+      setSplitStretchEnabled: setLightboxCanvasSplitStretchEnabled,
+      splitStretchWriteBackPopOpen: lightboxCanvasSplitStretchWriteBackPopOpen,
+      setSplitStretchWriteBackPopOpen: setLightboxCanvasSplitStretchWriteBackPopOpen,
+      resizeWriteBackPopOpen: lightboxCanvasResizeWriteBackPopOpen,
+      setResizeWriteBackPopOpen: setLightboxCanvasResizeWriteBackPopOpen,
+      imageResizeWriteBackAvailable: lightboxCanvasResizeUiOk,
+    };
+  }, [
+    lightboxAsset,
+    lightboxShowsImage,
+    lightboxCanvasSplitUiOk,
+    lightboxCanvasResizeUiOk,
+    lightboxPreviewLayout,
+    lightboxCanvasSplitStretchEnabled,
+    lightboxCanvasSplitStretchWriteBackPopOpen,
+    lightboxCanvasResizeWriteBackPopOpen,
+  ]);
+
   /** 工具条始终显示十字入口（禁用态说明原因）；仅平面无 3D 时可点选 */
   const lightboxSamSegmentToolbarVisible = useMemo(
     () =>
@@ -6459,7 +6584,7 @@ ${lineSvg}
       }
       if (textPieces.length > 0) {
         const add = textPieces.join('\n\n');
-        setQuickComposeDraft((d) => {
+        setQuickComposeDraftTracked((d) => {
           const cur = d.trim();
           return cur ? `${cur}\n\n${add}` : add;
         });
@@ -8926,6 +9051,8 @@ ${lineSvg}
               : undefined
           }
           panoViewerRef={lightboxPanoViewerRef}
+          heightfieldToolbarHostRef={lightboxHeightfieldToolbarHostRef}
+          canvasAdjustControl={lightboxCanvasAdjustControl}
           imageResizeWriteBack={
             lightboxShowsImage && !isWorkflowTextAsset(lightboxAsset) && !isGroupAsset(lightboxAsset)
               ? { onCommit: handleLightboxImageResizeWriteBack }
@@ -9044,11 +9171,30 @@ ${lineSvg}
             </>
           }
         >
+          <>
           <div
-            className="absolute top-16 right-4 z-[9] w-[min(24rem,30vw)] max-h-[72vh] min-h-0 overflow-y-auto overscroll-y-contain rounded-2xl border border-white/10 bg-[#141418] shadow-xl ring-1 ring-black/40 [scrollbar-width:thin]"
-            data-image-preview-no-wheel
-            data-image-preview-scroll
+            className="absolute right-4 z-[9] flex w-[min(24rem,30vw)] max-h-[72vh] min-h-0 flex-col gap-2"
+            style={{ top: 'max(3.5rem, env(safe-area-inset-top, 0px))' }}
           >
+            <div
+              ref={lightboxHeightfieldToolbarHostRef}
+              className={
+                lightboxShowsImage &&
+                !isWorkflowTextAsset(lightboxAsset) &&
+                !isGroupAsset(lightboxAsset) &&
+                lightboxPreviewLayout === 'heightfield'
+                  ? `${WORKFLOW_IMAGE_PREVIEW_RAIL.replace('inline-flex', 'flex')} w-full min-w-0 shrink-0 flex-wrap pointer-events-auto`
+                  : 'hidden'
+              }
+              role="region"
+              aria-label="高度 3D 控件"
+              onClick={(e) => e.stopPropagation()}
+            />
+            <div
+              className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain rounded-2xl border border-white/10 bg-[#141418] shadow-xl ring-1 ring-black/40 [scrollbar-width:thin]"
+              data-image-preview-no-wheel
+              data-image-preview-scroll
+            >
               {lightboxMetaText ? (
                 <div className="px-3 pt-3 pb-2 border-b border-white/10 text-[8px] text-gray-400">
                   {lightboxMetaText}
@@ -9134,6 +9280,7 @@ ${lineSvg}
                 mode="inline"
                 onSelectDisplayKey={(key) => setDisplayKey(lightboxAsset.id, key)}
               />
+          </div>
           </div>
           {!lightboxShowsImage ||
           isWorkflowTextAsset(lightboxAsset) ||
@@ -9256,6 +9403,7 @@ ${lineSvg}
             ))}
           </div>
           ) : null}
+          </>
         </ImagePreviewOverlay>
       )}
 
@@ -9382,6 +9530,7 @@ ${lineSvg}
                     }
                   : undefined
               }
+              canvasAdjust={lightboxAnnotationCanvasAdjust}
             />
           </div>,
           document.body
@@ -9403,7 +9552,7 @@ ${lineSvg}
             onComposeModeChange={setQuickComposeMode}
             inputPresetsActive={false}
             draft={quickComposeDraft}
-            onDraftChange={setQuickComposeDraft}
+            onDraftChange={setQuickComposeDraftTracked}
             attachedImages={[]}
             maxAttachedImages={quickComposeMaxReferenceImages}
             onAddImage={() => {}}
@@ -9775,7 +9924,7 @@ ${lineSvg}
             onComposeModeChange={setQuickComposeMode}
             inputPresetsActive={quickComposePromptCards.length > 0}
             draft={quickComposeDraft}
-            onDraftChange={setQuickComposeDraft}
+            onDraftChange={setQuickComposeDraftTracked}
             attachedImages={quickComposeImages}
             maxAttachedImages={quickComposeMaxReferenceImages}
             onAddImage={(url) => {

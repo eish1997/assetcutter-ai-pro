@@ -79,3 +79,4 @@
 - 按环境拆分 `VERTEX_LOCATION`（开发/生产不同区域）。
 - 代理层对 Vertex 错误码做更细的中文映射（与 `normalizeApiErrorMessage` 对齐）。
 - 若需「仅 Vertex、禁止 AI Studio Key」的专用部署，可在代理侧加 `VERTEX_ONLY=true` 拒绝无 `aiBackend` 的请求（当前为可选增强）。
+- **公平排队 / 每用户限流**（多用户共单 GCP 项目时的队列公平与防刷）：规格见 **[Gemini代理-公平排队与每用户限流.md](./Gemini代理-公平排队与每用户限流.md)**；实现后本节「请求协议」「环境变量」应与之同步。

@@ -72,6 +72,12 @@ const IMAGE_LIGHTBOX_TOOL_ICON_SHELL =
 export const IMAGE_LIGHTBOX_TOOL_ICON_BTN_IDLE = `${IMAGE_LIGHTBOX_TOOL_ICON_SHELL} bg-white/[0.06] text-gray-300 ring-1 ring-white/[0.1] hover:bg-white/[0.11] hover:text-gray-100`;
 export const IMAGE_LIGHTBOX_TOOL_ICON_BTN_ACTIVE = `${IMAGE_LIGHTBOX_TOOL_ICON_SHELL} bg-blue-600 text-white ring-1 ring-blue-400/35 hover:bg-blue-500`;
 
+/**
+ * 顶栏毛玻璃带内的**文字**操作（如「导出模型」）：与图标按钮同色阶，但**不设固定 28×28**，避免竖排字与裁切。
+ */
+export const IMAGE_LIGHTBOX_TOOL_TEXT_BTN_IDLE =
+  'inline-flex shrink-0 items-center justify-center gap-1 rounded-md px-2.5 py-1.5 text-[10px] font-semibold whitespace-nowrap transition-colors outline-none focus-visible:ring-2 focus-visible:ring-blue-500/45 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0a0a0c] bg-white/[0.06] text-gray-300 ring-1 ring-white/[0.1] hover:bg-white/[0.11] hover:text-gray-100 disabled:pointer-events-none disabled:opacity-40';
+
 /** 大图预览角标：模式切换与关闭之间的竖分割线（与标注条 `RailDivider` 一致） */
 export const WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER = 'mx-0.5 h-5 w-px shrink-0 bg-white/12';
 

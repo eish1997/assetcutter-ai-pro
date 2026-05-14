@@ -11,7 +11,7 @@ import {
   createWorkflowModelViewerStageAsync,
 } from '../../../services/workflowModelViewerStage';
 import { readLocalString, writeLocalString } from '../../../services/clientPersist';
-import { downloadMeshAsGlb } from '../../../services/heightfieldGlbExport';
+import { downloadHeightfieldMesh, type HeightfieldMeshExportFormat } from '../../../services/heightfieldMeshExport';
 import {
   buildHeightfieldDisplacementCanvas,
   clampHeightfieldPlaneSegments,
@@ -20,7 +20,12 @@ import {
 } from '../../../services/imageHeightfieldLuminance';
 import { createZbrushStyleGrayMatcapTexture } from '../../../services/imageHeightfieldGrayMatcap';
 import { getHeightfieldQualitySettings } from '../../../services/imageHeightfieldQuality';
-import { IMAGE_LIGHTBOX_TOOL_ICON_BTN_IDLE } from '../../workflow/workflowSectionUiConstants';
+import { applyHeightfieldCylinderWrapPositions } from '../../../services/imageHeightfieldCylinderWrap';
+import { ChevronDown, Download, Loader2 } from 'lucide-react';
+import {
+  IMAGE_LIGHTBOX_TOOL_ICON_BTN_IDLE,
+  IMAGE_LIGHTBOX_TOOL_TEXT_BTN_IDLE,
+} from '../../workflow/workflowSectionUiConstants';
 
 const HF_QUALITY_STORAGE_KEY = 'ac_heightfield_quality01_v1';
 
@@ -50,10 +55,15 @@ const ImageHeightfieldViewer: React.FC<LazyImagePreviewViewerProps> = ({
   const [message, setMessage] = useState('');
   const [displaceMul, setDisplaceMul] = useState(DEFAULT_DISPLACE_MUL);
   const displaceMulRef = useRef(DEFAULT_DISPLACE_MUL);
+  /** 0=平面，1=左右边相接（整圈外壁） */
+  const [curl01, setCurl01] = useState(0);
+  const curl01Ref = useRef(0);
   const meshRef = useRef<THREE.Mesh | null>(null);
   const [quality01, setQuality01] = useState(() => readStoredQuality01());
   const [exportBusy, setExportBusy] = useState(false);
   const [exportErr, setExportErr] = useState('');
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const exportMenuWrapRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     writeLocalString(HF_QUALITY_STORAGE_KEY, String(quality01));
@@ -62,22 +72,23 @@ const ImageHeightfieldViewer: React.FC<LazyImagePreviewViewerProps> = ({
   useEffect(() => {
     setDisplaceMul(DEFAULT_DISPLACE_MUL);
     displaceMulRef.current = DEFAULT_DISPLACE_MUL;
+    setCurl01(0);
+    curl01Ref.current = 0;
   }, [imageSrc]);
 
   useEffect(() => {
     displaceMulRef.current = displaceMul;
-    const mesh = meshRef.current;
-    const zb = mesh?.userData?.zBase as Float32Array | undefined;
-    if (!mesh || !zb || !mesh.geometry) return;
-    const pos = mesh.geometry.attributes.position as THREE.BufferAttribute;
-    for (let i = 0; i < pos.count; i++) {
-      pos.setZ(i, zb[i] * displaceMul);
-    }
-    pos.needsUpdate = true;
-    mesh.geometry.computeVertexNormals();
-    const n = mesh.geometry.attributes.normal as THREE.BufferAttribute;
-    n.needsUpdate = true;
   }, [displaceMul]);
+
+  useEffect(() => {
+    curl01Ref.current = curl01;
+  }, [curl01]);
+
+  useEffect(() => {
+    const mesh = meshRef.current;
+    if (!mesh?.userData?.flatX) return;
+    applyHeightfieldCylinderWrapPositions(mesh, curl01, displaceMul);
+  }, [displaceMul, curl01]);
 
   useEffect(() => {
     const root = rootRef.current;
@@ -106,7 +117,8 @@ const ImageHeightfieldViewer: React.FC<LazyImagePreviewViewerProps> = ({
     const quality = getHeightfieldQualitySettings(quality01);
 
     const camera = new THREE.PerspectiveCamera(50, width / height, 0.01, 2000);
-    camera.position.set(0, 0.85, 2.2);
+    /** 首帧在 HDR 完成前：略偏上、从 +Z 朝立面看，与 `frameCameraToObject` 的 +z 一致 */
+    camera.position.set(0, 0.12, 2.35);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setClearColor(0x000000, 0);
@@ -191,12 +203,17 @@ const ImageHeightfieldViewer: React.FC<LazyImagePreviewViewerProps> = ({
       const posAttr = geo.attributes.position as THREE.BufferAttribute;
       const uvAttr = geo.attributes.uv as THREE.BufferAttribute;
       const zBase = new Float32Array(posAttr.count);
+      const flatX = new Float32Array(posAttr.count);
+      const flatY = new Float32Array(posAttr.count);
       const mul0 = displaceMulRef.current;
+      const curl0 = curl01Ref.current;
       for (let i = 0; i < posAttr.count; i++) {
         const u = uvAttr.getX(i);
         const v = uvAttr.getY(i);
         const g = sampleGrayDispBilinear(dispPx, u, v);
         zBase[i] = g * baseScale;
+        flatX[i] = posAttr.getX(i);
+        flatY[i] = posAttr.getY(i);
         posAttr.setZ(i, zBase[i] * mul0);
       }
       posAttr.needsUpdate = true;
@@ -208,12 +225,16 @@ const ImageHeightfieldViewer: React.FC<LazyImagePreviewViewerProps> = ({
       mat.side = THREE.DoubleSide;
       mat.needsUpdate = true;
       const mesh = new THREE.Mesh(geo, mat);
-      mesh.rotation.x = -Math.PI / 2;
+      /** 立面（XY）：图幅竖立在场景中，周向卷曲时圆柱轴与世界 Y 一致 */
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       mesh.userData.baseDisplacementScale = baseScale;
       mesh.userData.zBase = zBase;
+      mesh.userData.planeW = planeW;
+      mesh.userData.flatX = flatX;
+      mesh.userData.flatY = flatY;
       meshRef.current = mesh;
+      applyHeightfieldCylinderWrapPositions(mesh, curl0, mul0);
 
       void (async () => {
         try {
@@ -234,7 +255,7 @@ const ImageHeightfieldViewer: React.FC<LazyImagePreviewViewerProps> = ({
           return;
         }
         scene.add(mesh);
-        frameCameraToObject(camera, controls, mesh, { defaultView: '+x' });
+        frameCameraToObject(camera, controls, mesh, { defaultView: '+z' });
         if (cancelled) {
           scene.remove(mesh);
           mesh.geometry.dispose();
@@ -249,6 +270,12 @@ const ImageHeightfieldViewer: React.FC<LazyImagePreviewViewerProps> = ({
         applyHeightfieldMatcapSceneLighting(stage);
         groundMesh = createStudioGroundMesh(box, 8);
         if (groundMesh) scene.add(groundMesh);
+        queueMicrotask(() => {
+          const m = meshRef.current;
+          if (m && m.userData.flatX) {
+            applyHeightfieldCylinderWrapPositions(m, curl01Ref.current, displaceMulRef.current);
+          }
+        });
         setStatus('ready');
       })();
     };
@@ -300,7 +327,24 @@ const ImageHeightfieldViewer: React.FC<LazyImagePreviewViewerProps> = ({
       renderer.dispose();
       if (renderer.domElement.parentNode === mount) mount.removeChild(renderer.domElement);
     };
-  }, [imageSrc, quality01]);
+  }, [imageSrc, quality01]); // curl / 置换在 mesh 就绪后由独立 effect 与 microtask 同步
+
+  useEffect(() => {
+    if (!exportMenuOpen) return;
+    const onPtr = (e: PointerEvent) => {
+      const el = exportMenuWrapRef.current;
+      if (el && !el.contains(e.target as Node)) setExportMenuOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setExportMenuOpen(false);
+    };
+    window.addEventListener('pointerdown', onPtr, true);
+    window.addEventListener('keydown', onKey, true);
+    return () => {
+      window.removeEventListener('pointerdown', onPtr, true);
+      window.removeEventListener('keydown', onKey, true);
+    };
+  }, [exportMenuOpen]);
 
   const onQualityInput = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const v = Number(e.target.value);
@@ -308,13 +352,14 @@ const ImageHeightfieldViewer: React.FC<LazyImagePreviewViewerProps> = ({
     setQuality01(Math.max(0, Math.min(1, v / 100)));
   }, []);
 
-  const onExportGlb = useCallback(async () => {
+  const onExportPickFormat = useCallback(async (format: HeightfieldMeshExportFormat) => {
     const mesh = meshRef.current;
     if (!mesh) return;
+    setExportMenuOpen(false);
     setExportBusy(true);
     setExportErr('');
     try {
-      await downloadMeshAsGlb(mesh, `heightfield-${Date.now()}.glb`);
+      await downloadHeightfieldMesh(mesh, format, `heightfield-${Date.now()}`);
     } catch (err) {
       setExportErr(err instanceof Error ? err.message : '导出失败');
     } finally {
@@ -328,22 +373,34 @@ const ImageHeightfieldViewer: React.FC<LazyImagePreviewViewerProps> = ({
     setDisplaceMul(Math.max(0.05, Math.min(2.5, v)));
   }, []);
 
+  const onCurlInput = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const v = Number(e.target.value);
+    if (!Number.isFinite(v)) return;
+    setCurl01(Math.max(0, Math.min(1, v / 100)));
+  }, []);
+
   const stopToolbarClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
   }, []);
 
   const useTopToolbar = Boolean(toolbarPortalEl);
+  /** Portal 到侧栏时宿主较窄：滑条独占一行、全宽，避免多列挤切 */
+  const hfRangePortal = 'h-2 w-full min-w-0 shrink-0 cursor-pointer accent-blue-500';
   const readyChrome = (
     <>
       <div
         className={
           useTopToolbar
-            ? 'flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1'
+            ? 'flex w-full min-w-0 flex-col gap-1'
             : 'flex w-full items-center gap-2'
         }
         onClick={stopToolbarClick}
       >
-        <span className="shrink-0 text-gray-500">性能</span>
+        {useTopToolbar ? (
+          <span className="text-[9px] font-medium text-gray-400">画质与性能</span>
+        ) : (
+          <span className="shrink-0 text-gray-500">性能</span>
+        )}
         <input
           id="ac-heightfield-quality"
           type="range"
@@ -352,28 +409,37 @@ const ImageHeightfieldViewer: React.FC<LazyImagePreviewViewerProps> = ({
           step={1}
           value={Math.round(quality01 * 100)}
           onChange={onQualityInput}
-          className={
-            useTopToolbar
-              ? 'h-1 w-[4.25rem] shrink-0 accent-blue-500 sm:w-24'
-              : 'h-1 min-w-0 flex-1 accent-blue-500'
-          }
+          className={useTopToolbar ? hfRangePortal : 'h-1 min-w-0 flex-1 accent-blue-500'}
           aria-label="高度 3D 画质与性能"
           aria-valuemin={0}
           aria-valuemax={100}
           aria-valuenow={Math.round(quality01 * 100)}
         />
-        <span className="shrink-0 text-gray-500">画质</span>
+        {!useTopToolbar ? <span className="shrink-0 text-gray-500">画质</span> : null}
       </div>
       <div
         className={
           useTopToolbar
-            ? 'flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1'
+            ? 'flex w-full min-w-0 flex-col gap-3'
             : 'flex w-full flex-wrap items-center justify-center gap-x-3 gap-y-2'
         }
         onClick={stopToolbarClick}
       >
-        <div className="flex items-center gap-1.5">
-          <label htmlFor="ac-heightfield-displace" className="shrink-0 whitespace-nowrap text-gray-400">
+        <div
+          className={
+            useTopToolbar
+              ? 'flex w-full min-w-0 flex-col gap-1'
+              : 'flex min-w-0 flex-1 items-center gap-1.5 sm:basis-[min(45%,14rem)]'
+          }
+        >
+          <label
+            htmlFor="ac-heightfield-displace"
+            className={
+              useTopToolbar
+                ? 'text-[9px] font-medium text-gray-400'
+                : 'w-14 shrink-0 text-gray-400 sm:w-auto'
+            }
+          >
             置换强度
           </label>
           <input
@@ -386,7 +452,7 @@ const ImageHeightfieldViewer: React.FC<LazyImagePreviewViewerProps> = ({
             onChange={onDisplaceInput}
             className={
               useTopToolbar
-                ? 'h-1 w-[4.5rem] shrink-0 accent-blue-500 sm:w-20'
+                ? hfRangePortal
                 : 'h-1 w-[min(10rem,calc(100vw-10rem))] accent-blue-500'
             }
             aria-valuemin={0.05}
@@ -394,19 +460,142 @@ const ImageHeightfieldViewer: React.FC<LazyImagePreviewViewerProps> = ({
             aria-valuenow={displaceMul}
           />
         </div>
-        {!useTopToolbar ? <span className="hidden h-4 w-px bg-white/15 sm:inline-block" aria-hidden /> : null}
-        <button
-          type="button"
-          disabled={exportBusy}
-          onClick={() => void onExportGlb()}
+        <div
           className={
             useTopToolbar
-              ? `${IMAGE_LIGHTBOX_TOOL_ICON_BTN_IDLE} shrink-0 rounded-md px-2 py-1 text-[9px] font-semibold sm:text-[10px]`
-              : 'shrink-0 rounded-md bg-white/10 px-2 py-1 text-[10px] font-medium text-gray-100 ring-1 ring-white/15 transition-colors hover:bg-white/15 disabled:pointer-events-none disabled:opacity-40'
+              ? 'flex w-full min-w-0 flex-col gap-1'
+              : 'flex min-w-0 flex-1 items-center gap-1.5 sm:basis-[min(45%,14rem)]'
           }
         >
-          {exportBusy ? '导出中…' : '下载 GLB'}
-        </button>
+          <label
+            htmlFor="ac-heightfield-curl"
+            className={
+              useTopToolbar
+                ? 'text-[9px] font-medium text-gray-400'
+                : 'w-14 shrink-0 text-gray-400 sm:w-auto'
+            }
+            title="左右边沿卷成外壁圆柱，满量程时两边相接"
+          >
+            卷成圆柱
+          </label>
+          <input
+            id="ac-heightfield-curl"
+            type="range"
+            min={0}
+            max={100}
+            step={1}
+            value={Math.round(curl01 * 100)}
+            onChange={onCurlInput}
+            className={
+              useTopToolbar ? hfRangePortal : 'h-1 w-[min(8rem,calc(100vw-12rem))] accent-blue-500'
+            }
+            aria-label="高度 3D：周向卷成圆柱"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(curl01 * 100)}
+          />
+        </div>
+        {!useTopToolbar ? <span className="hidden h-4 w-px bg-white/15 sm:inline-block" aria-hidden /> : null}
+        <div
+          ref={exportMenuWrapRef}
+          className={useTopToolbar ? 'relative flex w-full shrink-0 justify-end' : 'relative shrink-0'}
+        >
+          <button
+            type="button"
+            disabled={exportBusy}
+            aria-expanded={exportMenuOpen}
+            aria-haspopup="menu"
+            aria-label={exportBusy ? '导出中' : '导出模型'}
+            title={exportBusy ? '导出中…' : '导出模型：选择格式下载'}
+            onClick={() => setExportMenuOpen((o) => !o)}
+            className={
+              useTopToolbar
+                ? `${IMAGE_LIGHTBOX_TOOL_ICON_BTN_IDLE} inline-flex items-center gap-0 px-0.5`
+                : 'inline-flex shrink-0 items-center gap-1 rounded-md bg-white/10 px-2.5 py-1.5 text-[10px] font-medium whitespace-nowrap text-gray-100 ring-1 ring-white/15 transition-colors hover:bg-white/15 disabled:pointer-events-none disabled:opacity-40'
+            }
+          >
+            {useTopToolbar ? (
+              <>
+                {exportBusy ? (
+                  <Loader2 className="size-3.5 shrink-0 animate-spin opacity-80" aria-hidden />
+                ) : (
+                  <Download className="size-3.5 shrink-0 opacity-80" aria-hidden />
+                )}
+                <ChevronDown
+                  className={`size-3 shrink-0 opacity-60 transition-transform ${exportMenuOpen ? 'rotate-180' : ''}`}
+                  aria-hidden
+                />
+              </>
+            ) : (
+              <>
+                <Download className="size-3.5 shrink-0 opacity-80" aria-hidden />
+                <span>{exportBusy ? '导出中…' : '导出模型'}</span>
+                <ChevronDown
+                  className={`size-3 shrink-0 opacity-60 transition-transform ${exportMenuOpen ? 'rotate-180' : ''}`}
+                  aria-hidden
+                />
+              </>
+            )}
+          </button>
+          {exportMenuOpen ? (
+            <div
+              role="menu"
+              className={
+                useTopToolbar
+                  ? 'absolute right-0 top-full z-[80] mt-1.5 min-w-[13rem] max-h-[min(70vh,22rem)] overflow-y-auto rounded-xl bg-[#121214] py-1 text-left text-[10px] text-gray-200 shadow-2xl ring-1 ring-white/[0.14]'
+                  : 'absolute left-1/2 bottom-full z-[80] mb-1.5 min-w-[13rem] max-h-[min(70vh,22rem)] -translate-x-1/2 overflow-y-auto rounded-xl bg-[#121214] py-1 text-left text-[10px] text-gray-200 shadow-2xl ring-1 ring-white/[0.14]'
+              }
+              onPointerDown={(e) => e.stopPropagation()}
+            >
+              <div className="px-2.5 py-1.5 text-[9px] font-medium text-gray-500">选择导出格式</div>
+              <button
+                type="button"
+                role="menuitem"
+                className="flex w-full flex-col items-start gap-0.5 px-2.5 py-2 text-left hover:bg-white/[0.07] active:bg-white/[0.04]"
+                onClick={() => void onExportPickFormat('glb')}
+              >
+                <span className="font-semibold text-gray-100">GLB</span>
+                <span className="text-[9px] leading-snug text-gray-500">二进制 glTF，兼容性好</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="flex w-full flex-col items-start gap-0.5 px-2.5 py-2 text-left hover:bg-white/[0.07] active:bg-white/[0.04]"
+                onClick={() => void onExportPickFormat('gltf')}
+              >
+                <span className="font-semibold text-gray-100">glTF（JSON）</span>
+                <span className="text-[9px] leading-snug text-gray-500">文本 + 内嵌资源</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="flex w-full flex-col items-start gap-0.5 px-2.5 py-2 text-left hover:bg-white/[0.07] active:bg-white/[0.04]"
+                onClick={() => void onExportPickFormat('obj')}
+              >
+                <span className="font-semibold text-gray-100">OBJ</span>
+                <span className="text-[9px] leading-snug text-gray-500">仅几何，无材质贴图</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="flex w-full flex-col items-start gap-0.5 px-2.5 py-2 text-left hover:bg-white/[0.07] active:bg-white/[0.04]"
+                onClick={() => void onExportPickFormat('stl')}
+              >
+                <span className="font-semibold text-gray-100">STL（二进制）</span>
+                <span className="text-[9px] leading-snug text-gray-500">3D 打印 / 布尔常用</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="flex w-full flex-col items-start gap-0.5 px-2.5 py-2 text-left hover:bg-white/[0.07] active:bg-white/[0.04]"
+                onClick={() => void onExportPickFormat('fbx')}
+              >
+                <span className="font-semibold text-gray-100">FBX（二进制）</span>
+                <span className="text-[9px] leading-snug text-gray-500">DCC / 引擎常用交换格式</span>
+              </button>
+            </div>
+          ) : null}
+        </div>
       </div>
       {exportErr ? (
         <div className={useTopToolbar ? 'w-full text-[9px] text-red-300/95' : 'text-center text-[9px] text-red-300/95'}>
@@ -420,7 +609,7 @@ const ImageHeightfieldViewer: React.FC<LazyImagePreviewViewerProps> = ({
     status === 'ready' && toolbarPortalEl ? (
       createPortal(
         <div
-          className="pointer-events-auto flex min-w-0 flex-col gap-1 text-[9px] text-gray-300 sm:text-[10px]"
+          className="pointer-events-auto flex min-w-0 flex-col gap-2 text-[9px] text-gray-300 sm:text-[10px]"
           onClick={stopToolbarClick}
         >
           {readyChrome}

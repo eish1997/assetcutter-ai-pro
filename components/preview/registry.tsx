@@ -13,7 +13,7 @@ export type LazyImagePreviewViewerProps = {
   /** 全景：与上次卸载前相同 key 时换纹理后恢复相机位姿（如大图内切换版本，传 `innerLayoutStableKey`） */
   panoPreserveViewKey?: string;
   /**
-   * 高度 3D 等：将控件 portal 到宿主元素（由 `ImagePreviewOverlay` 顶栏旁槽位提供）。
+   * 高度 3D 等：将控件 portal 到宿主元素（由 `ImagePreviewOverlay` 顶栏旁槽位或父级传入的 `heightfieldToolbarHostRef` 提供）。
    * 未传时 Viewer 使用内置浮层布局。
    */
   toolbarPortalEl?: HTMLElement | null;
