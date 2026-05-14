@@ -309,7 +309,8 @@ export function loadWorkflowBundle(projectId: string, persistUserId: WorkspacePe
     const bundle = parseBundleJson(raw);
     bundleMemoryCache.set(key, cloneBundle(bundle));
     return bundle;
-  } catch {
+  } catch (e) {
+    console.warn('[workspace] loadWorkflowBundle parse failed', key, e);
     return migrateWorkflowBundleSchema({ assets: [], pending: [] });
   }
 }

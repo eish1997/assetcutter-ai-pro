@@ -75,11 +75,15 @@ import {
   fetchWorkflowPackedFromCloud,
   fetchWorkspaceCloudIndex,
   isWorkspaceCloudEnabled,
+  isWorkspaceCloudLiteStructureSyncEnabled,
   migrateLocalWorkspaceToCloud,
   pushWorkflowBundleToCloud,
+  pushWorkflowLiteStructureToCloud,
   pushWorkspaceIndex,
   WORKSPACE_CLOUD_DEFAULT_QUOTA_BYTES,
 } from './services/workspaceCloudSync';
+import { isWorkspaceCloudBundleMergeEnabled, reconcileWorkflowBundleWithCloud } from './services/workspaceBundleCloudReconcile';
+import { computeLiteStructureLocalFingerprint } from './services/workflowBundleLiteStructure';
 import { dialogVersionHasRenderableImage, dialogVersionsForMessage, getDialogVersionImageDataUrl } from './services/dialogImageHelpers';
 import { HttpRequestError } from './services/httpClient';
 import { triggerImageDownload } from './services/imageDataUrl';
@@ -197,6 +201,16 @@ function readWorkspaceAutoSyncIntervalMs(): number {
   return Math.min(3600_000, Math.max(30_000, Math.floor(n)));
 }
 const WORKSPACE_AUTO_SYNC_INTERVAL_MS = readWorkspaceAutoSyncIntervalMs();
+
+/** 轻量结构同步防抖（毫秒）：默认 25000；`VITE_WORKSPACE_CLOUD_LITE_SYNC_MS`，合法 5000～300000 */
+function readWorkspaceLiteStructureDebounceMs(): number {
+  const raw = import.meta.env.VITE_WORKSPACE_CLOUD_LITE_SYNC_MS;
+  if (raw === undefined || raw === '') return 25_000;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return 25_000;
+  return Math.min(300_000, Math.max(5_000, Math.floor(n)));
+}
+const WORKSPACE_LITE_STRUCTURE_DEBOUNCE_MS = readWorkspaceLiteStructureDebounceMs();
 
 /** 打开项目时：是否把伴侣 manifest 里非 wf-orig/wf-res/wf-mdl 的遗留文件扫成多张新卡（默认关，避免打乱组与生成关系） */
 const WORKSPACE_IMPORT_LEGACY_COMPANION_ORPHANS =
@@ -813,7 +827,7 @@ const MainApp: React.FC = () => {
   }, []);
   const [workspaceProjects, setWorkspaceProjects] = useState(() => loadWorkspaceProjects(null));
   const [activeWorkspaceProjectId, setActiveWorkspaceProjectId] = useState<string | null>(() =>
-    getLastOpenedWorkspaceProjectId(null)
+    typeof indexedDB !== 'undefined' ? null : getLastOpenedWorkspaceProjectId(null)
   );
   const [workflowAssets, setWorkflowAssets] = useState<WorkflowAsset[]>(() => {
     if (typeof indexedDB !== 'undefined') return [];
@@ -848,6 +862,13 @@ const MainApp: React.FC = () => {
   /** 仅在该用户完成云 hydrate / 迁移后允许 push，避免切换账号时用上一账号内存态覆盖云端 */
   const workspaceCloudPushAllowedUserIdRef = useRef<string | null>(null);
   const cloudWorkflowSyncGenRef = useRef(0);
+  /** 轻量结构上云：上次成功 PUT 时的剥离后本地指纹；同项目且指纹未变则跳过 PUT */
+  const lastLiteStructureSyncRef = useRef<{ projectId: string | null; fingerprint: string | null }>({
+    projectId: null,
+    fingerprint: null,
+  });
+  /** `workflowAssets` / `workflowPending` 变化时递增，仅用于触发轻量上云防抖（空闲时不挂长定时器、不算指纹） */
+  const [liteStructureSyncScheduleSeq, setLiteStructureSyncScheduleSeq] = useState(0);
   const [workspaceCloudHydratingProjectId, setWorkspaceCloudHydratingProjectId] = useState<string | null>(null);
   const workspaceCloudHydratingProjectIdRef = useRef<string | null>(null);
   const [workspaceCloudQuotaSuspended, setWorkspaceCloudQuotaSuspended] = useState(false);
@@ -1319,15 +1340,17 @@ const MainApp: React.FC = () => {
       if (cancelled) return;
       const localProjects = loadWorkspaceProjects(null);
       const remoteProjects = await pullWorkspaceProjectsFromCompanion();
+      if (cancelled) return;
       const effectiveProjects = remoteProjects && remoteProjects.length > 0 ? remoteProjects : localProjects;
       setWorkspaceProjects(effectiveProjects);
       saveWorkspaceProjects(effectiveProjects, null);
       const last = getLastOpenedWorkspaceProjectId(null);
-      setActiveWorkspaceProjectId(last);
+      if (cancelled) return;
       markWorkspaceLocalIdbHydrateReady();
       if (last) {
         loadWorkspaceProjectInternalRef.current(last);
       } else {
+        setActiveWorkspaceProjectId(null);
         setWorkflowAssets([]);
         setWorkflowPending([]);
       }
@@ -1351,15 +1374,17 @@ const MainApp: React.FC = () => {
       if (cancelled) return;
       const localProjects = loadWorkspaceProjects(uid);
       const remoteProjects = await pullWorkspaceProjectsFromCompanion();
+      if (cancelled) return;
       const effectiveProjects = remoteProjects && remoteProjects.length > 0 ? remoteProjects : localProjects;
       setWorkspaceProjects(effectiveProjects);
       saveWorkspaceProjects(effectiveProjects, uid);
       const last = getLastOpenedWorkspaceProjectId(uid);
-      setActiveWorkspaceProjectId(last);
+      if (cancelled) return;
       markWorkspaceLocalIdbHydrateReady();
       if (last) {
         loadWorkspaceProjectInternalRef.current(last);
       } else {
+        setActiveWorkspaceProjectId(null);
         setWorkflowAssets([]);
         setWorkflowPending([]);
       }
@@ -1387,7 +1412,9 @@ const MainApp: React.FC = () => {
     let cancelled = false;
 
     const applyIndex = async (index: NonNullable<Awaited<ReturnType<typeof fetchWorkspaceCloudIndex>>>) => {
+      if (cancelled) return;
       const remoteProjects = await pullWorkspaceProjectsFromCompanion();
+      if (cancelled) return;
       const effectiveProjects = remoteProjects && remoteProjects.length > 0 ? remoteProjects : index.projects;
       const validLast =
         index.lastOpenProjectId && effectiveProjects.some((p) => p.id === index.lastOpenProjectId)
@@ -1396,12 +1423,12 @@ const MainApp: React.FC = () => {
       saveWorkspaceProjects(effectiveProjects, uid);
       setWorkspaceProjects(effectiveProjects);
       setLastOpenedWorkspaceProjectId(validLast, uid);
-      setActiveWorkspaceProjectId(validLast);
       workspaceCloudPushAllowedUserIdRef.current = uid;
       markWorkspaceLocalIdbHydrateReady();
       if (validLast) {
         loadWorkspaceProjectInternalRef.current(validLast);
       } else {
+        setActiveWorkspaceProjectId(null);
         setWorkflowAssets([]);
         setWorkflowPending([]);
       }
@@ -1422,18 +1449,19 @@ const MainApp: React.FC = () => {
         if (migrated) {
           const { projects, lastOpenProjectId } = migrated;
           const remoteProjects = await pullWorkspaceProjectsFromCompanion();
+          if (cancelled) return;
           const effectiveProjects = remoteProjects && remoteProjects.length > 0 ? remoteProjects : projects;
           const validLast =
             lastOpenProjectId && effectiveProjects.some((p) => p.id === lastOpenProjectId) ? lastOpenProjectId : null;
           setWorkspaceProjects(effectiveProjects);
           saveWorkspaceProjects(effectiveProjects, uid);
           setLastOpenedWorkspaceProjectId(validLast, uid);
-          setActiveWorkspaceProjectId(validLast);
           workspaceCloudPushAllowedUserIdRef.current = uid;
           markWorkspaceLocalIdbHydrateReady();
           if (validLast) {
             loadWorkspaceProjectInternalRef.current(validLast);
           } else {
+            setActiveWorkspaceProjectId(null);
             setWorkflowAssets([]);
             setWorkflowPending([]);
           }
@@ -1447,17 +1475,18 @@ const MainApp: React.FC = () => {
         }
         const localOnly = loadWorkspaceProjects(uid);
         const remoteProjects = await pullWorkspaceProjectsFromCompanion();
+        if (cancelled) return;
         const effectiveProjects = remoteProjects && remoteProjects.length > 0 ? remoteProjects : localOnly;
         const last = getLastOpenedWorkspaceProjectId(uid);
         const validLast = last && effectiveProjects.some((p) => p.id === last) ? last : null;
         setWorkspaceProjects(effectiveProjects);
         saveWorkspaceProjects(effectiveProjects, uid);
-        setActiveWorkspaceProjectId(validLast);
         workspaceCloudPushAllowedUserIdRef.current = uid;
         markWorkspaceLocalIdbHydrateReady();
         if (validLast) {
           loadWorkspaceProjectInternalRef.current(validLast);
         } else {
+          setActiveWorkspaceProjectId(null);
           setWorkflowAssets([]);
           setWorkflowPending([]);
         }
@@ -1466,17 +1495,18 @@ const MainApp: React.FC = () => {
         if (cancelled) return;
         const localOnly = loadWorkspaceProjects(uid);
         const remoteProjects = await pullWorkspaceProjectsFromCompanion();
+        if (cancelled) return;
         const effectiveProjects = remoteProjects && remoteProjects.length > 0 ? remoteProjects : localOnly;
         const last = getLastOpenedWorkspaceProjectId(uid);
         const validLast = last && effectiveProjects.some((p) => p.id === last) ? last : null;
         setWorkspaceProjects(effectiveProjects);
         saveWorkspaceProjects(effectiveProjects, uid);
-        setActiveWorkspaceProjectId(validLast);
         workspaceCloudPushAllowedUserIdRef.current = uid;
         markWorkspaceLocalIdbHydrateReady();
         if (validLast) {
           loadWorkspaceProjectInternalRef.current(validLast);
         } else {
+          setActiveWorkspaceProjectId(null);
           setWorkflowAssets([]);
           setWorkflowPending([]);
         }
@@ -1495,6 +1525,66 @@ const MainApp: React.FC = () => {
     }, 650);
     return () => window.clearTimeout(t);
   }, [activeWorkspaceProjectId, workflowAssets, workflowPending, user?.id, workspaceLocalIdbHydrateReady]);
+
+  /** 画布变更（且具备轻量上云前置条件）时递增序号，由下游 effect 单独防抖 PUT */
+  useEffect(() => {
+    if (!activeWorkspaceProjectId || !workspaceLocalIdbHydrateReady) return;
+    if (authLoading) return;
+    if (!isWorkspaceCloudEnabled() || !isWorkspaceCloudLiteStructureSyncEnabled()) return;
+    if (!user?.id || !user?.username) return;
+    if (workspaceCloudQuotaSuspended) return;
+    if (!isProjectBoundToCurrentUser(activeWorkspaceProjectId)) return;
+    setLiteStructureSyncScheduleSeq((n) => n + 1);
+  }, [
+    workflowAssets,
+    workflowPending,
+    activeWorkspaceProjectId,
+    workspaceLocalIdbHydrateReady,
+    authLoading,
+    user?.id,
+    user?.username,
+    workspaceCloudQuotaSuspended,
+  ]);
+
+  /** 已绑定 + 云可用：仅在画布调度序号变化时启动防抖；指纹未变则不调 PUT */
+  useEffect(() => {
+    if (liteStructureSyncScheduleSeq === 0) return;
+    if (!activeWorkspaceProjectId || !workspaceLocalIdbHydrateReady) return;
+    if (authLoading) return;
+    if (!isWorkspaceCloudEnabled() || !isWorkspaceCloudLiteStructureSyncEnabled()) return;
+    const uid = userIdRef.current;
+    const uname = usernameRef.current;
+    if (!uid || !uname) return;
+    if (workspaceCloudPushAllowedUserIdRef.current !== uid) return;
+    if (workspaceCloudQuotaSuspendedRef.current) return;
+    if (!isProjectBoundToCurrentUser(activeWorkspaceProjectId)) return;
+    if (workspaceCloudHydratingProjectIdRef.current === activeWorkspaceProjectId) return;
+
+    const pid = activeWorkspaceProjectId;
+    const gen = cloudWorkflowSyncGenRef.current;
+    const t = window.setTimeout(() => {
+      if (cloudWorkflowSyncGenRef.current !== gen) return;
+      if (activeWorkspaceProjectIdRef.current !== pid) return;
+      const bundle = { assets: workflowAssetsRef.current, pending: workflowPendingRef.current };
+      const fp = computeLiteStructureLocalFingerprint(bundle);
+      if (lastLiteStructureSyncRef.current.projectId !== pid) {
+        lastLiteStructureSyncRef.current = { projectId: pid, fingerprint: null };
+      }
+      if (fp === lastLiteStructureSyncRef.current.fingerprint) return;
+      void pushWorkflowLiteStructureToCloud(uid, pid, bundle, uname)
+        .then(() => {
+          if (activeWorkspaceProjectIdRef.current !== pid || userIdRef.current !== uid) return;
+          lastLiteStructureSyncRef.current = { projectId: pid, fingerprint: fp };
+        })
+        .catch((e) => console.warn('[workspace cloud] lite structure sync', e));
+    }, WORKSPACE_LITE_STRUCTURE_DEBOUNCE_MS);
+    return () => window.clearTimeout(t);
+  }, [
+    liteStructureSyncScheduleSeq,
+    authLoading,
+    activeWorkspaceProjectId,
+    workspaceLocalIdbHydrateReady,
+  ]);
 
   const proceedBackToWorkspaceShell = useCallback(() => {
     cloudWorkflowSyncGenRef.current += 1;
@@ -1515,92 +1605,144 @@ const MainApp: React.FC = () => {
 
   const loadWorkspaceProjectInternal = useCallback(
     (id: string) => {
-      if (typeof indexedDB !== 'undefined' && !workspaceLocalIdbHydrateReadyRef.current) return;
       const scope = userIdRef.current ?? null;
-      const local = loadWorkflowBundle(id, scope);
-      setActiveWorkspaceProjectId(id);
-      setLastOpenedWorkspaceProjectId(id, scope);
-      setWorkflowAssets(local.assets);
-      setWorkflowPending(local.pending);
-      const companionBase = String(getCompanionLocalBaseUrl() || '').trim();
-      if (!companionBase) return;
-      void (async () => {
-        const m = await getCompanionManifest(companionBase, id);
-        if (m.ok === false) {
-          addGlobalLog('工作区', 'warn', '本地伴侣项目 manifest 读取失败（资产从伴侣恢复可能受影响）', `${id}: ${m.error}`);
-          return;
+      const doLoad = () => {
+        const local = loadWorkflowBundle(id, scope);
+        setActiveWorkspaceProjectId(id);
+        setLastOpenedWorkspaceProjectId(id, scope);
+        setWorkflowAssets(local.assets);
+        setWorkflowPending(local.pending);
+
+        const uidMerge = userIdRef.current;
+        const unameMerge = usernameRef.current;
+        if (
+          uidMerge &&
+          unameMerge &&
+          scope === uidMerge &&
+          isWorkspaceCloudEnabled() &&
+          isWorkspaceCloudBundleMergeEnabled() &&
+          workspaceCloudPushAllowedUserIdRef.current === uidMerge &&
+          !workspaceCloudQuotaSuspendedRef.current &&
+          isProjectBoundToCurrentUser(id)
+        ) {
+          setWorkspaceCloudHydratingProjectId(id);
+          void reconcileWorkflowBundleWithCloud({ projectId: id, userId: uidMerge, username: unameMerge })
+            .then((r) => {
+              if (activeWorkspaceProjectIdRef.current !== id || userIdRef.current !== uidMerge) return;
+              if (!r.didMerge) return;
+              const unchanged =
+                JSON.stringify({ a: local.assets, p: local.pending }) ===
+                JSON.stringify({ a: r.bundle.assets, p: r.bundle.pending });
+              if (unchanged) return;
+              if (r.conflicts.length > 0) {
+                addGlobalLog(
+                  '工作区',
+                  'warn',
+                  `与云端工作流合并：${r.conflicts.length} 处需人工确认（已暂留本地版本，详见控制台）`
+                );
+                console.warn('[workspace cloud] bundle merge conflicts', r.conflicts);
+              }
+              setWorkflowAssets(r.bundle.assets);
+              setWorkflowPending(r.bundle.pending);
+              trySaveWorkflowBundle(id, { assets: r.bundle.assets, pending: r.bundle.pending }, uidMerge);
+              workspaceCloudPostPullDirtySuppressRef.current += 1;
+            })
+            .catch((e) => console.warn('[workspace cloud] bundle reconcile', e))
+            .finally(() => {
+              setWorkspaceCloudHydratingProjectId((cur) => (cur === id ? null : cur));
+            });
         }
-        let manifestData = m.data;
-        const mid = String(manifestData.projectId || '').trim();
-        if (mid && mid !== id) {
-          addGlobalLog(
-            '工作区',
-            'warn',
-            '本地伴侣 manifest.projectId 与当前项目 id 不一致',
-            `manifest=${mid} selected=${id}`
-          );
-        }
-        const recon = await reconcileCompanionManifestFromDisk(companionBase, id);
-        if (recon.ok && recon.data.added > 0) {
-          const kp = recon.data.keys.slice(0, 5).join(', ') + (recon.data.keys.length > 5 ? '…' : '');
-          addGlobalLog('工作区', 'info', '本地伴侣已从磁盘补全 manifest', `${recon.data.added} 项 ${kp}`);
-          const m2 = await getCompanionManifest(companionBase, id);
-          if (m2.ok) manifestData = m2.data;
-        } else if (recon.ok === false) {
-          addGlobalLog('工作区', 'warn', '本地伴侣 manifest 磁盘补全请求失败', String(recon.error));
-        }
-        const assetsSnap = workflowAssetsRef.current;
-        const gaps = findCompanionKeysMissingFromManifest(assetsSnap, manifestData);
-        if (gaps.length > 0) {
-          const nOrig = gaps.filter((g) => g.kind === 'original').length;
-          const nRes = gaps.filter((g) => g.kind === 'result').length;
-          const nMdl = gaps.filter((g) => g.kind === 'model').length;
-          const head = gaps
-            .slice(0, 5)
-            .map((g) =>
-              g.kind === 'original'
-                ? `${g.assetId}:orig`
-                : g.kind === 'model'
-                  ? `${g.assetId}:mdl:${g.slotIndex}`
-                  : `${g.assetId}:res:${g.stepId}`
-            )
-            .join('; ');
-          addGlobalLog(
-            '工作区',
-            'warn',
-            '部分伴侣对象键未出现在 manifest（可能未完成写入或 manifest 未更新）',
-            `${gaps.length} 项（原图键 ${nOrig} / 步骤结果键 ${nRes} / 3D 模型键 ${nMdl}） ${head}${gaps.length > 5 ? '…' : ''}`
-          );
-          void attemptRepairCompanionManifestKeyGaps(companionBase, id, assetsSnap, gaps, (level, title, detail) =>
-            addGlobalLog('工作区', level, title, detail)
-          );
-        }
-        const newAssetId = () =>
-          typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-            ? crypto.randomUUID()
-            : `import-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-        setWorkflowAssets((prev) => {
-          const { nextAssets, importedKeys } = mergeUnlinkedManifestEntriesIntoWorkflowAssets(
-            prev,
-            manifestData,
-            newAssetId,
-            { importLegacyOrphans: WORKSPACE_IMPORT_LEGACY_COMPANION_ORPHANS }
-          );
-          if (importedKeys.length === 0) return prev;
-          const scopeInner = userIdRef.current ?? null;
-          trySaveWorkflowBundle(id, { assets: nextAssets, pending: workflowPendingRef.current }, scopeInner);
-          const head = importedKeys.slice(0, 6).join(', ') + (importedKeys.length > 6 ? '…' : '');
-          addGlobalLog(
-            '工作区',
-            'info',
-            '已根据本地伴侣 manifest 自动挂载磁盘资产到画布',
-            `${importedKeys.length} 项 ${head}`
-          );
-          return nextAssets;
-        });
-      })();
+
+        const companionBase = String(getCompanionLocalBaseUrl() || '').trim();
+        if (!companionBase) return;
+        void (async () => {
+          const m = await getCompanionManifest(companionBase, id);
+          if (m.ok === false) {
+            addGlobalLog('工作区', 'warn', '本地伴侣项目 manifest 读取失败（资产从伴侣恢复可能受影响）', `${id}: ${m.error}`);
+            return;
+          }
+          let manifestData = m.data;
+          const mid = String(manifestData.projectId || '').trim();
+          if (mid && mid !== id) {
+            addGlobalLog(
+              '工作区',
+              'warn',
+              '本地伴侣 manifest.projectId 与当前项目 id 不一致',
+              `manifest=${mid} selected=${id}`
+            );
+          }
+          const recon = await reconcileCompanionManifestFromDisk(companionBase, id);
+          if (recon.ok && recon.data.added > 0) {
+            const kp = recon.data.keys.slice(0, 5).join(', ') + (recon.data.keys.length > 5 ? '…' : '');
+            addGlobalLog('工作区', 'info', '本地伴侣已从磁盘补全 manifest', `${recon.data.added} 项 ${kp}`);
+            const m2 = await getCompanionManifest(companionBase, id);
+            if (m2.ok) manifestData = m2.data;
+          } else if (recon.ok === false) {
+            addGlobalLog('工作区', 'warn', '本地伴侣 manifest 磁盘补全请求失败', String(recon.error));
+          }
+          const assetsSnap = workflowAssetsRef.current;
+          const gaps = findCompanionKeysMissingFromManifest(assetsSnap, manifestData);
+          if (gaps.length > 0) {
+            const nOrig = gaps.filter((g) => g.kind === 'original').length;
+            const nRes = gaps.filter((g) => g.kind === 'result').length;
+            const nMdl = gaps.filter((g) => g.kind === 'model').length;
+            const head = gaps
+              .slice(0, 5)
+              .map((g) =>
+                g.kind === 'original'
+                  ? `${g.assetId}:orig`
+                  : g.kind === 'model'
+                    ? `${g.assetId}:mdl:${g.slotIndex}`
+                    : `${g.assetId}:res:${g.stepId}`
+              )
+              .join('; ');
+            addGlobalLog(
+              '工作区',
+              'warn',
+              '部分伴侣对象键未出现在 manifest（可能未完成写入或 manifest 未更新）',
+              `${gaps.length} 项（原图键 ${nOrig} / 步骤结果键 ${nRes} / 3D 模型键 ${nMdl}） ${head}${gaps.length > 5 ? '…' : ''}`
+            );
+            void attemptRepairCompanionManifestKeyGaps(companionBase, id, assetsSnap, gaps, (level, title, detail) =>
+              addGlobalLog('工作区', level, title, detail)
+            );
+          }
+          const newAssetId = () =>
+            typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+              ? crypto.randomUUID()
+              : `import-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+          setWorkflowAssets((prev) => {
+            const { nextAssets, importedKeys } = mergeUnlinkedManifestEntriesIntoWorkflowAssets(
+              prev,
+              manifestData,
+              newAssetId,
+              { importLegacyOrphans: WORKSPACE_IMPORT_LEGACY_COMPANION_ORPHANS }
+            );
+            if (importedKeys.length === 0) return prev;
+            const scopeInner = userIdRef.current ?? null;
+            trySaveWorkflowBundle(id, { assets: nextAssets, pending: workflowPendingRef.current }, scopeInner);
+            const head = importedKeys.slice(0, 6).join(', ') + (importedKeys.length > 6 ? '…' : '');
+            addGlobalLog(
+              '工作区',
+              'info',
+              '已根据本地伴侣 manifest 自动挂载磁盘资产到画布',
+              `${importedKeys.length} 项 ${head}`
+            );
+            return nextAssets;
+          });
+        })();
+      };
+      if (typeof indexedDB !== 'undefined' && !workspaceLocalIdbHydrateReadyRef.current) {
+        void ensureWorkspaceBundlesHydratedFromIdb(scope)
+          .catch((e) => console.warn('[workspace] hydrate before loadProject', e))
+          .finally(() => {
+            markWorkspaceLocalIdbHydrateReady();
+            doLoad();
+          });
+        return;
+      }
+      doLoad();
     },
-    [addGlobalLog]
+    [addGlobalLog, markWorkspaceLocalIdbHydrateReady]
   );
   loadWorkspaceProjectInternalRef.current = loadWorkspaceProjectInternal;
 
@@ -1640,6 +1782,14 @@ const MainApp: React.FC = () => {
     async (trashId: string) => {
       if (!workspaceTrashDialog || workspaceTrashDialog.restoringTrashId) return;
       const scope = user?.id ?? null;
+      if (typeof indexedDB !== 'undefined' && !workspaceLocalIdbHydrateReadyRef.current) {
+        try {
+          await ensureWorkspaceBundlesHydratedFromIdb(scope);
+        } catch (e) {
+          console.warn('[workspace] hydrate before trash restore', e);
+        }
+        markWorkspaceLocalIdbHydrateReady();
+      }
       setWorkspaceTrashDialog((prev) => (prev ? { ...prev, restoringTrashId: trashId } : prev));
       const base = getCompanionLocalBaseUrl();
       const restored = await restoreCompanionWorkspaceTrashProject(base, trashId);
@@ -1694,13 +1844,20 @@ const MainApp: React.FC = () => {
           : prev
       );
     },
-    [addGlobalLog, pullWorkspaceProjectsFromCompanion, user?.id, workspaceTrashDialog]
+    [addGlobalLog, pullWorkspaceProjectsFromCompanion, user?.id, workspaceTrashDialog, markWorkspaceLocalIdbHydrateReady]
   );
 
   const openWorkspaceProject = useCallback(
     async (id: string) => {
-      if (typeof indexedDB !== 'undefined' && !workspaceLocalIdbHydrateReadyRef.current) return;
       const scope = userIdRef.current ?? null;
+      if (typeof indexedDB !== 'undefined' && !workspaceLocalIdbHydrateReadyRef.current) {
+        try {
+          await ensureWorkspaceBundlesHydratedFromIdb(scope);
+        } catch (e) {
+          console.warn('[workspace] hydrate before openProject', e);
+        }
+        markWorkspaceLocalIdbHydrateReady();
+      }
       const curId = activeWorkspaceProjectIdRef.current;
       if (curId && curId !== id) {
         const prevBundle = {
@@ -1742,7 +1899,7 @@ const MainApp: React.FC = () => {
       }
       loadWorkspaceProjectInternal(id);
     },
-    [loadWorkspaceProjectInternal, refreshAuthUser]
+    [loadWorkspaceProjectInternal, markWorkspaceLocalIdbHydrateReady, refreshAuthUser]
   );
 
   const backToWorkspaceProjectShell = useCallback(

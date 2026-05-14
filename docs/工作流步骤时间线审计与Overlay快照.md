@@ -11,12 +11,12 @@
 ## 0. 读者导览
 
 
-| 角色    | 建议阅读                            |
-| ----- | ------------------------------- |
-| 产品    | §3、§9、§11、附录 A                  |
-| 前端    | §4、§5、§6、§8、§10、`types.ts` 现有字段 |
-| 数据/合规 | §5.2、§9.2、§11、附录 A              |
-| **发版 / QA** | **§14**（本机四环手测）；**`docs/网站与发布检查清单.md`** §2～§3 |
+| 角色          | 建议阅读                                          |
+| ----------- | --------------------------------------------- |
+| 产品          | §3、§9、§11、附录 A                                |
+| 前端          | §4、§5、§6、§8、§10、`types.ts` 现有字段               |
+| 数据/合规       | §5.2、§9.2、§11、附录 A                            |
+| **发版 / QA** | **§14**（本机四环手测）；`**docs/网站与发布检查清单.md`** §2～§3 |
 
 
 ---
@@ -112,16 +112,16 @@ flowchart TB
 以下便于检索「应在何处收口」，**非穷尽**：
 
 
-| 主题                         | 建议锚点（仓库内）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 队列执行与写 `results`           | `components/WorkflowSection.tsx`：`executePending`、`processTask`、`runTask`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| 能力执行                       | `services/capabilityExecutor.ts`：`executeCapability`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| 丢弃版本                       | `WorkflowSection`：`discardResult`；与 VGP 阻止逻辑对齐                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| 大图写回 / 客户端合成               | `submitLightboxQuickCompose`、各写回 `onCommit`（如 `ImagePreviewWorkflowResizePopover` 等）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| 任务类型定义                     | `types.ts`：`WorkflowPendingTask`、`WorkflowAsset`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| **P0 步骤时间线（只读派生）**         | `services/workflowStepTimeline.ts`：`deriveWorkflowStepTimelineRows`、`DEFAULT_WORKFLOW_STEP_TIMELINE_ORDER`；`components/WorkflowStepTimelinePanel.tsx`；大图侧栏 `WorkflowSection`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| **P2 会话审计环（骨架）**           | `services/workflowAuditEvents.ts`：`appendWorkflowAuditEvent`（**session + scoped local + IndexedDB**（`**WORKFLOW_AUDIT_IDB_BUNDLE_BASE`** / `**workspaceBundleIdb**`）；`**hydrateWorkflowAuditRingSessionFromIdbOrLocalIfEmpty**`；`readWorkflowAuditRing` **按 id 合并** session+local）、`appendWorkflowRunTaskFailureAudit`、`WORKFLOW_AUDIT_CODES`（`**RUN_TASK_*`**、`**EXPORT_*`**、`**LIGHTBOX_OVERLAY_CLOSE_DISCARDED**`、`**LIGHTBOX_OVERLAY_RESTORE_FROM_RING**`）；`**setWorkflowMirrorPreferenceScope**` 由 `**WorkflowSection**` 绑定 `**preferenceScope**`；`**WorkflowSection**`（`discardResult` / `**runTask**` / 大图下载 / 关窗 overlay 丢弃 / 从环恢复草稿）、`**ArchivedDetailModal**`                                                                                                |
-| **P1 关大图 Overlay 快照环（骨架）** | `services/workflowOverlaySnapshots.ts`：`appendWorkflowOverlayCloseSnapshot`（`reason`：`close` 关窗时点，`periodic` 编辑 debounce）、`supersedeWorkflowOverlaySnapshotsForAsset`、`readWorkflowOverlaySnapshotRing`（**session** + `**scopedStorageKey(WORKFLOW_OVERLAY_LOCAL_BASE_KEY)`** 尽力 **local**、按 **id** 合并）；**IndexedDB 全量**：`WORKFLOW_OVERLAY_IDB_BUNDLE_BASE` 经 `**services/workspaceBundleIdb.ts`**（与 `ac_workflow_bundle_v1_*` 键隔离）；`**hydrateWorkflowOverlayRingSessionFromIdbOrLocalIfEmpty**`：`WorkflowSection` 在 `**preferenceScope**` 生效后若 **session 环为空**则先 **IDB** 再 **local** 写回 session 并 bump 侧栏；`**WORKFLOW_OVERLAY_PERIODIC_SNAPSHOT_MS`**、`**MAX_LOCAL_OVERLAY_RING_SERIALIZED_BYTES**`；`**components/workflow/WorkflowOverlaySnapshotRecoverPanel.tsx**` |
+| 主题                         | 建议锚点（仓库内）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 队列执行与写 `results`           | `components/WorkflowSection.tsx`：`executePending`、`processTask`、`runTask`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 能力执行                       | `services/capabilityExecutor.ts`：`executeCapability`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 丢弃版本                       | `WorkflowSection`：`discardResult`；与 VGP 阻止逻辑对齐                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| 大图写回 / 客户端合成               | `submitLightboxQuickCompose`、各写回 `onCommit`（如 `ImagePreviewWorkflowResizePopover` 等）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 任务类型定义                     | `types.ts`：`WorkflowPendingTask`、`WorkflowAsset`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| **P0 步骤时间线（只读派生）**         | `services/workflowStepTimeline.ts`：`deriveWorkflowStepTimelineRows`、`DEFAULT_WORKFLOW_STEP_TIMELINE_ORDER`；`components/WorkflowStepTimelinePanel.tsx`；大图侧栏 `WorkflowSection`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| **P2 会话审计环（骨架）**           | `services/workflowAuditEvents.ts`：`appendWorkflowAuditEvent`（**session + scoped local + IndexedDB**（`**WORKFLOW_AUDIT_IDB_BUNDLE_BASE`** / `**workspaceBundleIdb`**）；`**hydrateWorkflowAuditRingSessionFromIdbOrLocalIfEmpty`**；`readWorkflowAuditRing` 按 id 合并 session+local）、`appendWorkflowRunTaskFailureAudit`、`WORKFLOW_AUDIT_CODES`（`**RUN_TASK_***`、`**EXPORT_*`**、`**LIGHTBOX_OVERLAY_CLOSE_DISCARDED`**、`**LIGHTBOX_OVERLAY_RESTORE_FROM_RING**`）；`**setWorkflowMirrorPreferenceScope**` 由 `**WorkflowSection**` 绑定 `**preferenceScope**`；`**WorkflowSection**`（`discardResult` / `**runTask**` / 大图下载 / 关窗 overlay 丢弃 / 从环恢复草稿）、`**ArchivedDetailModal**`                                                                                        |
+| **P1 关大图 Overlay 快照环（骨架）** | `services/workflowOverlaySnapshots.ts`：`appendWorkflowOverlayCloseSnapshot`（`reason`：`close` 关窗时点，`periodic` 编辑 debounce）、`supersedeWorkflowOverlaySnapshotsForAsset`、`readWorkflowOverlaySnapshotRing`（**session** + `**scopedStorageKey(WORKFLOW_OVERLAY_LOCAL_BASE_KEY)`** 尽力 **local**、按 **id** 合并）；**IndexedDB 全量**：`WORKFLOW_OVERLAY_IDB_BUNDLE_BASE` 经 `**services/workspaceBundleIdb.ts`**（与 `ac_workflow_bundle_v1_*` 键隔离）；`**hydrateWorkflowOverlayRingSessionFromIdbOrLocalIfEmpty`**：`WorkflowSection` 在 `**preferenceScope**` 生效后若 session 环为空则先 IDB 再 local 写回 session 并 bump 侧栏；`**WORKFLOW_OVERLAY_PERIODIC_SNAPSHOT_MS**`、`**MAX_LOCAL_OVERLAY_RING_SERIALIZED_BYTES**`；`**components/workflow/WorkflowOverlaySnapshotRecoverPanel.tsx**` |
 
 
 **「同一事务」的可执行含义（非 DB 事务）**：
@@ -229,8 +229,8 @@ flowchart TB
 ### 7.3 云同步
 
 - **步骤 / 结果**：随现有工作区 bundle / 云同步策略（与 `assets` 一致）。  
-- **审计**：**已实现**本机 **session** + **scoped local** + **IndexedDB 全量环**（`**WORKFLOW_AUDIT_IDB_BUNDLE_BASE`**）；新标签 `**hydrateWorkflowAuditRingSessionFromIdbOrLocalIfEmpty**` 在 session 空时 **IDB → local** 回填 session；`readWorkflowAuditRing` 仍按 **id** 合并 session+local。**换设备 / 清站点数据**仍失。上云与权限模型见下条。  
-- **Overlay 快照**：**sessionStorage**（标签内热）+ `**scopedStorageKey(WORKFLOW_OVERLAY_LOCAL_BASE_KEY, preferenceScope)`** 的 **localStorage 尽力镜像**（整包超 `**MAX_LOCAL_OVERLAY_RING_SERIALIZED_BYTES`** 则跳过 local）+ **IndexedDB 全量环**（`**WORKFLOW_OVERLAY_IDB_BUNDLE_BASE`**，`**workspaceBundleIdb**`，不受 900KB 限制）；`**readWorkflowOverlaySnapshotRing`** 按 `**id`** 合并 session + local。新标签 `**hydrateWorkflowOverlayRingSessionFromIdbOrLocalIfEmpty**` 在 session 空时从 **IDB → local** 回填 session。跨设备 / 上云仍与项目权限一并设计。
+- **审计**：**已实现**本机 **session** + **scoped local** + **IndexedDB 全量环**（`**WORKFLOW_AUDIT_IDB_BUNDLE_BASE`**）；新标签 `**hydrateWorkflowAuditRingSessionFromIdbOrLocalIfEmpty`** 在 session 空时 **IDB → local** 回填 session；`readWorkflowAuditRing` 仍按 **id** 合并 session+local。**换设备 / 清站点数据**仍失。上云与权限模型见下条。  
+- **Overlay 快照**：**sessionStorage**（标签内热）+ `**scopedStorageKey(WORKFLOW_OVERLAY_LOCAL_BASE_KEY, preferenceScope)`** 的 **localStorage 尽力镜像**（整包超 `**MAX_LOCAL_OVERLAY_RING_SERIALIZED_BYTES`** 则跳过 local）+ **IndexedDB 全量环**（`**WORKFLOW_OVERLAY_IDB_BUNDLE_BASE`**，`**workspaceBundleIdb`**，不受 900KB 限制）；`**readWorkflowOverlaySnapshotRing**` 按 `**id`** 合并 session + local。新标签 `**hydrateWorkflowOverlayRingSessionFromIdbOrLocalIfEmpty`** 在 session 空时从 **IDB → local** 回填 session。跨设备 / 上云仍与项目权限一并设计。
 
 ---
 
@@ -248,18 +248,18 @@ flowchart TB
 ### 9.1 Overlay 快照配额（建议默认值，可配置）
 
 
-| 项                        | 建议                                                                                                                                                                                                             |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 单资产最大条数                  | 20～50                                                                                                                                                                                                          |
-| 单条 `doc` 大小上限            | 256KB～1MB（超出则拒绝自动快照、仅允许手动保存或裁剪）                                                                                                                                                                                |
-| 整环写入 **local** 上限（已实现）   | 默认 `**MAX_LOCAL_OVERLAY_RING_SERIALIZED_BYTES`（900KB）**；超出则跳过 local 镜像，仅 session                                                                                                                               |
-| 整环 **IndexedDB** 镜像（已实现） | `**WORKFLOW_OVERLAY_IDB_BUNDLE_BASE`** + `**idbSaveBundleJson**`（`**workspaceBundleIdb**` 同库 `**ac_workspace_bundle_v1**`，键名与 `ac_workflow_bundle_v1_*` 隔离）；**不受** 900KB 限制；与 `**append` / `supersede`** 同事务写入 |
-| 淘汰策略                     | LRU；写回成功将相关快照标 `superseded` 并参与淘汰                                                                                                                                                                              |
+| 项                        | 建议                                                                                                                                                                                                         |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 单资产最大条数                  | 20～50                                                                                                                                                                                                      |
+| 单条 `doc` 大小上限            | 256KB～1MB（超出则拒绝自动快照、仅允许手动保存或裁剪）                                                                                                                                                                            |
+| 整环写入 **local** 上限（已实现）   | 默认 `**MAX_LOCAL_OVERLAY_RING_SERIALIZED_BYTES`（900KB）**；超出则跳过 local 镜像，仅 session                                                                                                                           |
+| 整环 **IndexedDB** 镜像（已实现） | `**WORKFLOW_OVERLAY_IDB_BUNDLE_BASE`** + `**idbSaveBundleJson`**（`**workspaceBundleIdb`** 同库 `**ac_workspace_bundle_v1**`，键名与 `ac_workflow_bundle_v1_*` 隔离）；不受 900KB 限制；与 `**append` / `supersede**` 同事务写入 |
+| 淘汰策略                     | LRU；写回成功将相关快照标 `superseded` 并参与淘汰                                                                                                                                                                          |
 
 
 ### 9.2 审计与隐私
 
-- **审计环存储**：**sessionStorage** + **scoped local** 双写尾部窗口 + **IndexedDB 全量镜像**（与 Overlay 环同库、键隔离）；**关标签**后 `**hydrate...IfEmpty`** 回填 session，`**readWorkflowAuditRing**` 合并读仍可排障（仍 **本机**、**不换设备**）。  
+- **审计环存储**：**sessionStorage** + **scoped local** 双写尾部窗口 + **IndexedDB 全量镜像**（与 Overlay 环同库、键隔离）；**关标签**后 `**hydrate...IfEmpty`** 回填 session，`**readWorkflowAuditRing`** 合并读仍可排障（仍 **本机**、**不换设备**）。  
 - 导出类事件：记录 `**code`、`assetId`、`displayKey`、时间**；可选 **文件指纹（SHA-256）**；**不**默认存外站 URL 凭证。  
 - 保留天数与「用户可删审计」由产品定；开发文档只要求 **字段可支持删除策略**。
 
@@ -294,7 +294,7 @@ flowchart TB
 | ------ | ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **P0** | 时间线 **只读派生**（`resultOrder` + `resultMeta`）+ UI 面板；**列表顺序默认同 `resultOrder` 正向**（与滚轮版本链一致） | 低成本验证产品叙事                                                                                                                                                                                                                                             |
 | **P1** | Overlay **关窗 diff 提示** + **编辑 debounce 时点快照**（`reason: periodic`）+ **侧栏恢复快照**            | **diff + Modal 已上**；**periodic 仅 dirty**；`**WorkflowOverlaySnapshotRecoverPanel`**；session + scoped local 尽力镜像 + IDB 全量（`**WORKFLOW_OVERLAY_IDB_BUNDLE_BASE`**）+ `hydrate...IfEmpty`；`**close`/合并规则**见 `workflowOverlaySnapshots`；`**supersede`** 仍有效 |
-| **P2** | **结构化审计**（拒绝丢弃、导出、执行失败）                                                                  | **本机**：session + scoped **local** + **IDB 全量** + `**hydrate...IfEmpty`**（关标签回填 session）；**上云**另定；已扩：`**RUN_TASK_*`** + `**RUN_TASK_CAPABILITY_SET_EXCEPTION`** + `**EXPORT_*`** + VGP                                                                 |
+| **P2** | **结构化审计**（拒绝丢弃、导出、执行失败）                                                                  | **本机**：session + scoped **local** + **IDB 全量** + `**hydrate...IfEmpty`**（关标签回填 session）；上云另定；已扩：`**RUN_TASK_*`** + `**RUN_TASK_CAPABILITY_SET_EXCEPTION`** + `**EXPORT_*`** + VGP                                                                     |
 | **P3** | 独立 `stepTimeline[]` + 持久化队列快照（若需要）                                                       | 改动面最大；与 §7.1 二选一收敛                                                                                                                                                                                                                                    |
 
 
@@ -311,41 +311,43 @@ flowchart TB
 - **2026-05-14**：Overlay 编辑 debounce（`reason: periodic`）、侧栏 `WorkflowOverlaySnapshotRecoverPanel`、`LIGHTBOX_OVERLAY_RESTORE_FROM_RING`；periodic 仅 `dirty`。
 - **2026-05-14**：审计环 session + scoped local 双写与合并读。
 - **2026-05-14**：**共享 scope**：`services/workflowMirrorPreferenceScope.ts`（`**setWorkflowMirrorPreferenceScope`**）；Overlay 环 local 尽力镜像（`**MAX_LOCAL_OVERLAY_RING_SERIALIZED_BYTES`**）+ **按 id 合并读**。
-- **2026-05-14**：Overlay 环 **IndexedDB 全量镜像**（`**WORKFLOW_OVERLAY_IDB_BUNDLE_BASE`** + `**workspaceBundleIdb**`）+ `**hydrateWorkflowOverlayRingSessionFromIdbOrLocalIfEmpty**`（`**WorkflowSection**`）；修复 §4 表格中 P1 行被 `|` 字符截断的问题。
-- **2026-05-14**：审计环 **IndexedDB 全量镜像**（`**WORKFLOW_AUDIT_IDB_BUNDLE_BASE`**）+ `**hydrateWorkflowAuditRingSessionFromIdbOrLocalIfEmpty**`，与 Overlay 环策略对齐。
+- **2026-05-14**：Overlay 环 **IndexedDB 全量镜像**（`**WORKFLOW_OVERLAY_IDB_BUNDLE_BASE`** + `**workspaceBundleIdb`**）+ `**hydrateWorkflowOverlayRingSessionFromIdbOrLocalIfEmpty`**（`**WorkflowSection**`）；修复 §4 表格中 P1 行被 `|` 字符截断的问题。
+- **2026-05-14**：审计环 **IndexedDB 全量镜像**（`**WORKFLOW_AUDIT_IDB_BUNDLE_BASE`**）+ `**hydrateWorkflowAuditRingSessionFromIdbOrLocalIfEmpty`**，与 Overlay 环策略对齐。
 - **2026-05-14**：P0：`services/workflowStepTimeline.ts`；`resultOrder` 正向；`newest_first` 可选。
-- **2026-05-14**：§14 **本机四环手测清单**；`npm run test:workflow-rings`；CI 在 `typecheck` 后增加 **Workflow rings** 步骤；`docs/网站与发布检查清单.md` §3 与 **`.github/workflows/ci.yml`** 对齐（含 **`workflow_dispatch`**）。
+- **2026-05-14**：§14 **本机四环手测清单**；`npm run test:workflow-rings`；CI 在 `typecheck` 后增加 **Workflow rings** 步骤；`docs/网站与发布检查清单.md` §3 与 `**.github/workflows/ci.yml`** 对齐（含 `**workflow_dispatch`**）。
 
 ---
 
 ## 14. 本机四环手测清单（审计 + Overlay）
 
-**目的**：在浏览器里验证 **session → scoped local → IndexedDB → 新标签 `hydrate`** 与 **`read*Ring` 合并读** 未被改坏。发布前或改动 `workflowAuditEvents` / `workflowOverlaySnapshots` / `workflowMirrorPreferenceScope` / `WorkflowSection` hydrate 时建议跑一遍。
+**目的**：在浏览器里验证 **session → scoped local → IndexedDB → 新标签 `hydrate`** 与 `**read*Ring` 合并读** 未被改坏。发布前或改动 `workflowAuditEvents` / `workflowOverlaySnapshots` / `workflowMirrorPreferenceScope` / `WorkflowSection` hydrate 时建议跑一遍。
 
-**准备**：Chrome / Edge 打开 **开发者工具** → **Application**（存储）。同一 **Origin**、同一 **`preferenceScope`**（登录与未登录 guest 键不同，各测一轮更稳）。
+**准备**：Chrome / Edge 打开 **开发者工具** → **Application**（存储）。同一 **Origin**、同一 `**preferenceScope`**（登录与未登录 guest 键不同，各测一轮更稳）。
 
 ### 14.1 键名速查（便于在面板里搜）
 
-| 层 | 审计 | Overlay 快照 |
-| -- | ---- | -------------- |
-| **sessionStorage** | `ac_workflow_audit_ring_v1` | `ac_workflow_overlay_snapshot_ring_v1` |
-| **localStorage**（实际键带 scope 后缀） | 基键 **`ac_workflow_audit_ring_v1_local`** | 基键 **`ac_workflow_overlay_snapshot_ring_v1_local`** |
-| **IndexedDB** | 库 **`ac_workspace_bundle_v1`**，键基名 **`ac_workflow_audit_ring_idb_v1`**（与项目 bundle 键隔离） | 键基名 **`ac_workflow_overlay_ring_idb_v1`** |
 
-scope 见 **`services/workflowMirrorPreferenceScope.ts`**（`WorkflowSection` 绑定 `preferenceScope`）；guest 时 `scopedStorageKey(..., null)` 常带 **`__guest`** 后缀，以面板实际键为准。
+| 层                               | 审计                                                                                     | Overlay 快照                                          |
+| ------------------------------- | -------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| **sessionStorage**              | `ac_workflow_audit_ring_v1`                                                            | `ac_workflow_overlay_snapshot_ring_v1`              |
+| **localStorage**（实际键带 scope 后缀） | 基键 `**ac_workflow_audit_ring_v1_local`**                                               | 基键 `**ac_workflow_overlay_snapshot_ring_v1_local`** |
+| **IndexedDB**                   | 库 `**ac_workspace_bundle_v1`**，键基名 `**ac_workflow_audit_ring_idb_v1`**（与项目 bundle 键隔离） | 键基名 `**ac_workflow_overlay_ring_idb_v1**`           |
+
+
+scope 见 `**services/workflowMirrorPreferenceScope.ts**`（`WorkflowSection` 绑定 `preferenceScope`）；guest 时 `scopedStorageKey(..., null)` 常带 `**__guest**` 后缀，以面板实际键为准。
 
 ### 14.2 勾选项（核心路径）
 
-- [ ] **A. 写入**：在工作区触发至少一条 **审计**（例如大图下载触发 `EXPORT_IMAGE`）；打开大图做标注后 **关窗**（或满足 periodic 条件），确认 **session** 中对应 JSON **非空**或条数增加。
-- [ ] **B. local 镜像**：同一标签内，**localStorage** 中存在带上述 **基键** 的键，且与 session **尾部窗口**一致（审计 `events` / Overlay `entries` 条数可对齐）。
-- [ ] **C. IDB 镜像**：在 **IndexedDB** → **`ac_workspace_bundle_v1`** 中可搜到 **`audit_ring_idb`** / **`overlay_ring_idb`** 相关 bundle 键（经 `scopedStorageKey`）。
-- [ ] **D. 新标签 / 空 session**：新开标签打开同一工作区（或 DevTools **只清空 sessionStorage** 后刷新）。预期：挂载后 **`hydrate...IfEmpty`** 将 **IDB（优先）或 local** 写回 **session**；**Overlay 侧栏恢复快照**有条目时应能列出；审计可在 Console 临时调用 `readWorkflowAuditRing()` 做排障（勿把临时脚本提交进业务代码）。
-- [ ] **E. scope 切换**：登出/登入或切换账号上下文后，**旧 scope** 与 **新 scope** 的 local/IDB **互不覆盖**；回到旧 scope 数据仍在（未清站点数据前提下）。
+- **A. 写入**：在工作区触发至少一条 **审计**（例如大图下载触发 `EXPORT_IMAGE`）；打开大图做标注后 **关窗**（或满足 periodic 条件），确认 **session** 中对应 JSON **非空**或条数增加。
+- **B. local 镜像**：同一标签内，**localStorage** 中存在带上述 **基键** 的键，且与 session **尾部窗口**一致（审计 `events` / Overlay `entries` 条数可对齐）。
+- **C. IDB 镜像**：在 **IndexedDB** → `**ac_workspace_bundle_v1`** 中可搜到 `**audit_ring_idb`** / `**overlay_ring_idb**` 相关 bundle 键（经 `scopedStorageKey`）。
+- **D. 新标签 / 空 session**：新开标签打开同一工作区（或 DevTools **只清空 sessionStorage** 后刷新）。预期：挂载后 `**hydrate...IfEmpty`** 将 **IDB（优先）或 local** 写回 **session**；**Overlay 侧栏恢复快照**有条目时应能列出；审计可在 Console 临时调用 `readWorkflowAuditRing()` 做排障（勿把临时脚本提交进业务代码）。
+- **E. scope 切换**：登出/登入或切换账号上下文后，**旧 scope** 与 **新 scope** 的 local/IDB **互不覆盖**；回到旧 scope 数据仍在（未清站点数据前提下）。
 
 ### 14.3 自动化（与 CI 对齐）
 
-- 本地：**`npm run typecheck`** + **`npm run test:workflow-rings`** + 全量 **`npm test`**。
-- CI：**`docs/网站与发布检查清单.md` §3**、**`.github/workflows/ci.yml`**（`typecheck` 后 **Workflow rings**，随后 **`npm test`** 全量）。
+- 本地：`**npm run typecheck`** + `**npm run test:workflow-rings`** + 全量 `**npm test**`。
+- CI：`**docs/网站与发布检查清单.md` §3**、`**.github/workflows/ci.yml`**（`typecheck` 后 Workflow rings，随后 `**npm test`** 全量）。
 
 ---
 
@@ -362,4 +364,4 @@ scope 见 **`services/workflowMirrorPreferenceScope.ts`**（`WorkflowSection` �
 
 ---
 
-**文档版本**：v0.1.12（2026-05-14）— §4/§7.3/**§14**：`**workflowMirrorPreferenceScope`**；**审计**与 **Overlay** 环均为 session + scoped local + **IDB 全量** + **hydrate**（Overlay local 另受 `**MAX_LOCAL_OVERLAY_RING_SERIALIZED_BYTES`**）；合并读；§9.x；§13～§14；CI 见 **`docs/网站与发布检查清单.md`**。
+**文档版本**：v0.1.12（2026-05-14）— §4/§7.3/**§14**：`**workflowMirrorPreferenceScope`**；审计与 Overlay 环均为 session + scoped local + IDB 全量 + hydrate（Overlay local 另受 `**MAX_LOCAL_OVERLAY_RING_SERIALIZED_BYTES`**）；合并读；§9.x；§13～§14；CI 见 `**docs/网站与发布检查清单.md**`。

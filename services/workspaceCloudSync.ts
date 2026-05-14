@@ -5,7 +5,9 @@ import {
   collectReferencedObjectKeysFromPackedV2,
   hydrateWorkflowBundleFromCloud,
   packWorkflowBundleForCloud,
+  type WorkflowCloudBundleV2,
 } from './workspaceR2ImageBundle';
+import { mergeLiteStructurePreservingCloudObjectKeys, stripInlineMediaFromWorkflowBundleForLiteSync } from './workflowBundleLiteStructure';
 import {
   getLastOpenedWorkspaceProjectId,
   loadWorkflowBundle,
@@ -272,6 +274,48 @@ export async function fetchWorkflowBundleFromCloud(
     pending: packed.pending,
     ...(Array.isArray(packed.capabilityRefs) ? { capabilityRefs: packed.capabilityRefs } : {}),
   };
+}
+
+/** 轻量结构同步总开关：`0` / `false` / `off` 关闭；未设置则默认开启（与云同步并存时需云非 false） */
+export function isWorkspaceCloudLiteStructureSyncEnabled(): boolean {
+  const raw = import.meta.env.VITE_WORKSPACE_CLOUD_LITE_SYNC;
+  if (raw === undefined || raw === '') return true;
+  const v = String(raw).trim().toLowerCase();
+  if (v === '0' || v === 'false' || v === 'off' || v === 'no') return false;
+  return true;
+}
+
+/**
+ * 仅 PUT `workflow.json`：剥离内联像素，并合并云端已有 object key，避免轻量覆盖丢失已上传 R2 引用。
+ * **不** reconcile 删对象、**不**上传新图片字节（与 `pushWorkflowBundleToCloud` 全量路径区分）。
+ */
+export async function pushWorkflowLiteStructureToCloud(
+  userId: string,
+  projectId: string,
+  bundle: {
+    assets: WorkflowAsset[];
+    pending: WorkflowPendingTask[];
+    capabilityRefs?: Array<{ kind: 'preset' | 'set'; id: string; snapshot?: unknown }>;
+  },
+  username?: string | null
+): Promise<void> {
+  const prevPacked = await fetchWorkflowPackedFromCloud(userId, projectId, username);
+  const stripped = stripInlineMediaFromWorkflowBundleForLiteSync(bundle);
+  const merged = prevPacked
+    ? mergeLiteStructurePreservingCloudObjectKeys(
+        { assets: prevPacked.assets, pending: prevPacked.pending },
+        stripped
+      )
+    : stripped;
+  const packed: WorkflowCloudBundleV2 = {
+    version: 2,
+    assets: merged.assets,
+    pending: merged.pending,
+    ...(Array.isArray(stripped.capabilityRefs) && stripped.capabilityRefs.length
+      ? { capabilityRefs: stripped.capabilityRefs }
+      : {}),
+  };
+  await putObjectBytes(workspaceWorkflowKey(userId, projectId, username), 'application/json', JSON.stringify(packed));
 }
 
 export async function pushWorkspaceIndex(
