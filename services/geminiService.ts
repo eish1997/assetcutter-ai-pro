@@ -19,6 +19,8 @@ import {
   getVectorengineBaseUrl,
 } from "./settingsStore";
 import { consumeTrialGeminiSlotBeforeProxyOrThrow } from "./trialGeminiQuota";
+import { getGeminiFairnessRequestHeaders } from "./geminiFairnessBridge";
+import { tryParseGeminiProxyFairnessRejected, throwFairnessRejected } from "./geminiProxyFairnessError";
 
 function readViteEnvTrim(key: string): string {
   try {
@@ -184,6 +186,28 @@ export function getGeminiImageBatchBoxSizeForCurrentProvider(): number {
   return resolveImageBatchBoxSize(getAiProvider() === "vertex" ? "vertex" : undefined);
 }
 
+function parseBulkProxyCreateError(status: number, text: string): string {
+  const raw = (text || "").trim();
+  try {
+    const j = JSON.parse(raw) as { error?: string; message?: string; retryAfterSec?: number };
+    const code = typeof j.error === "string" ? j.error.trim() : "";
+    const msg = (typeof j.message === "string" && j.message.trim()) || code || raw;
+    const ra = j.retryAfterSec;
+    if (status === 429 || code === "rate_limited") {
+      return ra != null && Number.isFinite(Number(ra))
+        ? `${msg}（约 ${Math.ceil(Number(ra))} 秒后可重试）`
+        : msg;
+    }
+    if (status === 503 || code === "queue_overflow") {
+      return msg || "队列已满，请稍后重试";
+    }
+    if (code) return msg;
+  } catch {
+    /* ignore */
+  }
+  return parseBulkProxyErrorBody(raw) || `Gemini 异步任务创建失败（${status}）`;
+}
+
 function parseBulkProxyErrorBody(text: string): string {
   const raw = (text || "").trim();
   try {
@@ -216,7 +240,7 @@ async function bulkProxyGenerateContentAsync(args: {
 
   const createRes = await fetch(bulkApiUrl("/proxy/gemini/async"), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...getGeminiFairnessRequestHeaders() },
     body: JSON.stringify({
       model: args.model,
       contents: args.contents,
@@ -243,7 +267,9 @@ async function bulkProxyGenerateContentAsync(args: {
         ].join(" ")
       );
     }
-    throw new Error(parsedMsg || `Gemini 异步任务创建失败（${createRes.status}）`);
+    const fairnessErr = tryParseGeminiProxyFairnessRejected(createRes.status, raw);
+    if (fairnessErr) throwFairnessRejected(fairnessErr);
+    throw new Error(parseBulkProxyCreateError(createRes.status, raw));
   }
   let jobId: string;
   try {
@@ -263,7 +289,10 @@ async function bulkProxyGenerateContentAsync(args: {
     });
     const pollText = await pollRes.text();
     if (!pollRes.ok) {
-      throw new Error(parseBulkProxyErrorBody(pollText) || `轮询失败（${pollRes.status}）`);
+      const pt = (pollText || "").trim();
+      const fe = tryParseGeminiProxyFairnessRejected(pollRes.status, pt);
+      if (fe) throwFairnessRejected(fe);
+      throw new Error(parseBulkProxyErrorBody(pt) || `轮询失败（${pollRes.status}）`);
     }
     let j: { status?: string; result?: { text?: string; candidates?: unknown[] }; error?: string };
     try {
@@ -290,7 +319,7 @@ async function bulkProxyGenerateContentBatchAsync(args: {
   await consumeTrialGeminiSlotBeforeProxyOrThrow();
   const createRes = await fetch(bulkApiUrl("/proxy/gemini/async-batch"), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...getGeminiFairnessRequestHeaders() },
     body: JSON.stringify({
       items: args.items.map((item) => ({
         model: item.model,
@@ -303,7 +332,12 @@ async function bulkProxyGenerateContentBatchAsync(args: {
   });
   const createText = await createRes.text();
   if (!createRes.ok) {
-    throw new Error(parseBulkProxyErrorBody(createText) || `Gemini 批量异步任务创建失败（${createRes.status}）`);
+    const rawBatch = (createText || "").trim();
+    const fairnessErr = tryParseGeminiProxyFairnessRejected(createRes.status, rawBatch);
+    if (fairnessErr) throwFairnessRejected(fairnessErr);
+    throw new Error(
+      parseBulkProxyCreateError(createRes.status, rawBatch) || `Gemini 批量异步任务创建失败（${createRes.status}）`
+    );
   }
   let jobId: string;
   try {
@@ -321,7 +355,10 @@ async function bulkProxyGenerateContentBatchAsync(args: {
     });
     const pollText = await pollRes.text();
     if (!pollRes.ok) {
-      throw new Error(parseBulkProxyErrorBody(pollText) || `批量任务轮询失败（${pollRes.status}）`);
+      const pt = (pollText || "").trim();
+      const fe = tryParseGeminiProxyFairnessRejected(pollRes.status, pt);
+      if (fe) throwFairnessRejected(fe);
+      throw new Error(parseBulkProxyErrorBody(pt) || `批量任务轮询失败（${pollRes.status}）`);
     }
     let j: {
       status?: string;

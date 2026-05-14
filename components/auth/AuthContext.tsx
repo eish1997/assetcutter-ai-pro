@@ -1,5 +1,6 @@
 import React from 'react';
 import { fetchMe, loginByEmail, logoutSession, registerByEmail, type AuthUser } from '../../services/authClient';
+import { setGeminiFairnessUserId } from '../../services/geminiFairnessBridge';
 
 type AuthContextValue = {
   user: AuthUser | null;
@@ -45,6 +46,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     await logoutSession();
     setUser(null);
   }, []);
+
+  React.useEffect(() => {
+    setGeminiFairnessUserId(user?.id ?? null);
+  }, [user]);
 
   const value = React.useMemo<AuthContextValue>(() => ({
     user,

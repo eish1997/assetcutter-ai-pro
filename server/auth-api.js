@@ -79,6 +79,73 @@ const TRIPO_PROXY = String(process.env.TRIPO_PROXY || process.env.HTTPS_PROXY ||
 const CLIENT_DEBUG_LOG_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const CLIENT_DEBUG_LOG_DIR = path.resolve(process.cwd(), '.data', 'debug');
 const CLIENT_DEBUG_LOG_FILE = path.join(CLIENT_DEBUG_LOG_DIR, 'client-runtime.ndjson');
+/** 与 `server/gemini-proxy-fairness.js` 一致：`GEMINI_FAIRNESS_CONFIG_PATH` 或默认 `server/data/gemini-fairness-config.json`。 */
+const GEMINI_FAIRNESS_CONFIG_PATH = String(process.env.GEMINI_FAIRNESS_CONFIG_PATH || '').trim()
+  ? path.resolve(String(process.env.GEMINI_FAIRNESS_CONFIG_PATH || '').trim())
+  : path.resolve(process.cwd(), 'server/data/gemini-fairness-config.json');
+const GEMINI_FAIRNESS_CONFIG_KEYS = new Set([
+  'GEMINI_ASYNC_PROXY_MAX_CONCURRENT',
+  'GEMINI_FAIRNESS_USER_MAX_IN_FLIGHT',
+  'GEMINI_FAIRNESS_USER_MAX_QUEUED',
+  'GEMINI_FAIRNESS_USER_SUBMIT_RPM',
+  'GEMINI_FAIRNESS_ANON_MAX_IN_FLIGHT',
+  'GEMINI_FAIRNESS_ANON_MAX_QUEUED',
+  'GEMINI_FAIRNESS_ANON_SUBMIT_RPM',
+  'GEMINI_FAIRNESS_GLOBAL_QUEUE_MAX',
+  'GEMINI_FAIRNESS_KEY_MAX_LEN',
+  'GEMINI_FAIRNESS_HMAC_SKEW_SEC',
+]);
+
+const GEMINI_FAIRNESS_CLAMP = {
+  GEMINI_ASYNC_PROXY_MAX_CONCURRENT: [1, 64],
+  GEMINI_FAIRNESS_USER_MAX_IN_FLIGHT: [1, 32],
+  GEMINI_FAIRNESS_USER_MAX_QUEUED: [1, 200],
+  GEMINI_FAIRNESS_USER_SUBMIT_RPM: [1, 500],
+  GEMINI_FAIRNESS_ANON_MAX_IN_FLIGHT: [1, 32],
+  GEMINI_FAIRNESS_ANON_MAX_QUEUED: [1, 100],
+  GEMINI_FAIRNESS_ANON_SUBMIT_RPM: [1, 500],
+  GEMINI_FAIRNESS_GLOBAL_QUEUE_MAX: [10, 5000],
+  GEMINI_FAIRNESS_KEY_MAX_LEN: [8, 512],
+  GEMINI_FAIRNESS_HMAC_SKEW_SEC: [10, 600],
+};
+
+function clampGeminiFairnessValue(key, n) {
+  const pair = GEMINI_FAIRNESS_CLAMP[key];
+  if (!pair) return null;
+  const [lo, hi] = pair;
+  return Math.min(hi, Math.max(lo, Math.floor(n)));
+}
+
+async function readGeminiFairnessConfigFromDisk() {
+  try {
+    const raw = await fs.readFile(GEMINI_FAIRNESS_CONFIG_PATH, 'utf8');
+    const j = JSON.parse(raw);
+    return typeof j === 'object' && j && !Array.isArray(j) ? j : {};
+  } catch {
+    return {};
+  }
+}
+
+function normalizeGeminiFairnessConfig(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return { ok: false, error: 'config 须为 JSON 对象' };
+  }
+  const out = {};
+  for (const [k, v] of Object.entries(body)) {
+    if (!GEMINI_FAIRNESS_CONFIG_KEYS.has(k)) continue;
+    const n = Number(v);
+    if (!Number.isFinite(n)) return { ok: false, error: `非法数值：${k}` };
+    const c = clampGeminiFairnessValue(k, n);
+    if (c == null) return { ok: false, error: `未知键：${k}` };
+    out[k] = c;
+  }
+  return { ok: true, config: out };
+}
+
+async function writeGeminiFairnessConfigToDisk(config) {
+  await fs.mkdir(path.dirname(GEMINI_FAIRNESS_CONFIG_PATH), { recursive: true });
+  await fs.writeFile(GEMINI_FAIRNESS_CONFIG_PATH, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+}
 if (TRIPO_PROXY) {
   try {
     setGlobalDispatcher(new ProxyAgent(TRIPO_PROXY));
@@ -888,6 +955,74 @@ const server = http.createServer(async (req, res) => {
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
         json(res, 400, { error: message });
+      }
+      return;
+    }
+
+    if (path === '/api/admin/gemini-fairness-config' && req.method === 'GET') {
+      const user = await requireAdmin(req, res);
+      if (!user) return;
+      const config = await readGeminiFairnessConfigFromDisk();
+      json(res, 200, { config, path: GEMINI_FAIRNESS_CONFIG_PATH });
+      return;
+    }
+
+    if (path === '/api/admin/gemini-fairness-config' && req.method === 'PUT') {
+      const user = await requireAdmin(req, res);
+      if (!user) return;
+      let body;
+      try {
+        body = await readBody(req);
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        json(res, 400, { error: message });
+        return;
+      }
+      const norm = normalizeGeminiFairnessConfig(body);
+      if (!norm.ok) {
+        json(res, 400, { error: norm.error || '无效配置' });
+        return;
+      }
+      try {
+        const existing = await readGeminiFairnessConfigFromDisk();
+        const merged = { ...existing };
+        for (const [k, v] of Object.entries(norm.config)) {
+          merged[k] = v;
+        }
+        await writeGeminiFairnessConfigToDisk(merged);
+        await createAuditLog({
+          actorUserId: user.id,
+          actorIdentifier: user.username,
+          action: 'admin.gemini_fairness_config_put',
+          meta: { keysUpdated: Object.keys(norm.config), path: GEMINI_FAIRNESS_CONFIG_PATH },
+          ip: getClientIp(req),
+          userAgent: req.headers['user-agent'],
+        });
+        json(res, 200, { ok: true, config: merged, path: GEMINI_FAIRNESS_CONFIG_PATH });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        json(res, 500, { error: message });
+      }
+      return;
+    }
+
+    if (path === '/api/admin/gemini-fairness-config' && req.method === 'DELETE') {
+      const user = await requireAdmin(req, res);
+      if (!user) return;
+      try {
+        await writeGeminiFairnessConfigToDisk({});
+        await createAuditLog({
+          actorUserId: user.id,
+          actorIdentifier: user.username,
+          action: 'admin.gemini_fairness_config_delete',
+          meta: { path: GEMINI_FAIRNESS_CONFIG_PATH },
+          ip: getClientIp(req),
+          userAgent: req.headers['user-agent'],
+        });
+        json(res, 200, { ok: true, config: {}, path: GEMINI_FAIRNESS_CONFIG_PATH });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        json(res, 500, { error: message });
       }
       return;
     }

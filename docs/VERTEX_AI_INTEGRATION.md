@@ -17,7 +17,14 @@
 | `VERTEX_LOCATION`                            | 否              | 默认 `global`。预览版生图模型文档推荐使用 **global**；若你的账号/政策要求区域端点，可改为如 `us-central1`（需与 [官方区域说明](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/learn/locations) 一致）。 |
 | ADC                                          | 选 Vertex 时必填   | 任选一：`GOOGLE_APPLICATION_CREDENTIALS` 指向服务账号 JSON 文件路径；**或**（Render 等）将整段 JSON 粘贴到 `GOOGLE_APPLICATION_CREDENTIALS_JSON`（别名 `GCP_SERVICE_ACCOUNT_JSON` / `GOOGLE_SERVICE_ACCOUNT_JSON`），代理启动时会写入临时文件并设置 ADC。GCE/Cloud Run 等可用内置身份。作用域需能调用 Vertex AI。                                                                           |
 | `GEMINI_API_KEY`                             | 非 Vertex 请求仍需要 | 仅当请求**未**带 `aiBackend: "vertex"` 时，代理仍走 AI Studio Key。可同时配置：同一代理既服务 Key 用户又服务 Vertex。                                                                               |
+| `GEMINI_FAIRNESS_ENABLED`                    | 否              | 默认 `false`。为 `true` 时启用 **公平排队 / 每用户限流**（内存态，**单副本**有效）。详见 **[Gemini代理-公平排队与每用户限流.md](./Gemini代理-公平排队与每用户限流.md)**。 |
+| `GEMINI_PROXY_FAIRNESS_HMAC_SECRET`          | 否              | 非空时要求 `X-AC-Fairness-Signature`（与 `X-AC-Fairness-Key` 配套），公网直连代理时防伪造。内网可信转发可仅传 Key。 |
+| `GEMINI_FAIRNESS_CONFIG_PATH`                | 否              | 磁盘覆盖配置路径，默认 `server/data/gemini-fairness-config.json`；**gemini-proxy** 约 3s 重读；与 **auth-api** 管理接口写同一路径。 |
+| `GEMINI_FAIRNESS_TRUST_CLIENT_KEY_HEADER`    | 否              | 为 `true` 且无 HMAC、非内网 relay 时，可接受浏览器自带的 **`X-AC-Fairness-Key`**（公网慎用，优先 HMAC 或 BFF）。 |
 
+
+- **管理端**：站点 **`/admin/gemini-fairness`**（管理员）经 auth-api **`GET` / `PUT` / `DELETE`** **`/api/admin/gemini-fairness-config`** 读写或清空上述 JSON（仅白名单数值键；**PUT 与磁盘已有项合并**；**DELETE** 写 `{}`）。
+- **前端**：代理 JSON **`error: rate_limited` / `queue_overflow`** → **`throwFairnessRejected`** + 顶栏；经 **`workflow*`** 的 Google/上游 **429、RESOURCE_EXHAUSTED、503 过载**等 → **`ac:unified-ai-soft-notice`**（**`unifiedAiSoftNotice.ts`**，同栏展示、按类节流）；对话等直连 **`getDialogTextResponse`** 仍以页面内错误为主。
 
 无需在仓库中提交密钥文件；Render/Vercel 等用 Dashboard 注入或 Secret。
 
@@ -51,7 +58,9 @@
 
 1. `POST {BULK}/proxy/gemini/async`
   Body: `{ "model": "...", "contents": ..., "config": ..., "aiBackend": "vertex" }`
-2. `GET {BULK}/proxy/gemini/async/:jobId` 轮询直至 `completed` / `failed`。
+2. `GET {BULK}/proxy/gemini/async/:jobId` 轮询直至 `completed` / `failed`；若启用公平队列，创建后可能为 `queued` 再 `running`。
+
+**公平排队（可选）**：`GEMINI_FAIRNESS_ENABLED=true` 时，可传请求头 **`X-AC-Fairness-Key`**（如 `user:<id>`）、可选 **`X-AC-Fairness-Signature`**（HMAC）、**`X-AC-Client-Ip`**（内网 BFF 解析后的客户端 IP，用于 `anon:` 桶）。完整约定见 **[Gemini代理-公平排队与每用户限流.md](./Gemini代理-公平排队与每用户限流.md)**。
 
 **同步**
 
@@ -61,7 +70,7 @@
 
 ## 6. 健康检查
 
-`GET /healthz` 返回 JSON 中含 `vertex.configured`（是否已配置项目 ID）、`vertex.location`（解析后的区域），便于运维确认。
+`GET /healthz` 返回 JSON 中含 `vertex.configured`（是否已配置项目 ID）、`vertex.location`（解析后的区域），以及 **`fairness`**（公平队列开关与近似队列深度，见 `docs/Gemini代理-公平排队与每用户限流.md`），便于运维确认。
 
 ## 7. 排错摘要
 

@@ -18,6 +18,18 @@ import {
   BODY_TOO_LARGE_MESSAGE,
   readBodyUtf8,
 } from './http-limits.js';
+import {
+  isFairnessEnabled,
+  resolveFairnessKey,
+  fairnessTryEnqueue,
+  fairnessDequeueForRun,
+  fairnessOnAsyncJobFinished,
+  fairnessOnJobEvicted,
+  fairnessHealthSnapshot,
+  fairnessSyncEnter,
+  fairnessSyncLeave,
+  getDiskOverrideInt,
+} from './gemini-proxy-fairness.js';
 
 const PORT = Number(process.env.PORT || process.env.BULK_IMAGE_PORT || process.env.GEMINI_PROXY_PORT) || 9002;
 const BIND_HOST = (process.env.BULK_IMAGE_BIND_HOST || '0.0.0.0').trim() || '0.0.0.0';
@@ -75,6 +87,29 @@ function sendJson(res, status, obj) {
 
 function sendError(res, status, message) {
   sendJson(res, status, { error: message });
+}
+
+function sendFairnessReject(res, info) {
+  const retryAfterSec = info.retryAfterSec != null ? Number(info.retryAfterSec) : undefined;
+  const body = {
+    error: info.error || 'rate_limited',
+    message: info.reason || info.error || 'rate_limited',
+    ...(retryAfterSec != null && Number.isFinite(retryAfterSec) ? { retryAfterSec } : {}),
+  };
+  const headers = {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store, no-cache, must-revalidate, private',
+    Pragma: 'no-cache',
+  };
+  if (retryAfterSec != null && Number.isFinite(retryAfterSec) && retryAfterSec > 0) {
+    headers['Retry-After'] = String(Math.ceil(retryAfterSec));
+  }
+  const s = JSON.stringify(body);
+  res.writeHead(info.status || 429, {
+    ...headers,
+    'Content-Length': Buffer.byteLength(s, 'utf8'),
+  });
+  res.end(s);
 }
 
 function formatErrorDetail(err) {
@@ -494,12 +529,16 @@ async function proxyGenerateContent(model, contents, config) {
 
 const GEMINI_ASYNC_JOB_TTL_MS = Number(process.env.GEMINI_ASYNC_JOB_TTL_MS) || 60 * 60 * 1000;
 const geminiAsyncJobs = new Map();
-const GEMINI_ASYNC_PROXY_MAX_CONCURRENT = Number(process.env.GEMINI_ASYNC_PROXY_MAX_CONCURRENT) || 4;
+function getGeminiAsyncProxyMaxConcurrent() {
+  return getDiskOverrideInt('GEMINI_ASYNC_PROXY_MAX_CONCURRENT', 4, 1, 64);
+}
+
 let geminiProxyInFlight = 0;
 const geminiProxyWaiters = [];
 
 function acquireGeminiProxySlot() {
-  if (geminiProxyInFlight < GEMINI_ASYNC_PROXY_MAX_CONCURRENT) {
+  const cap = getGeminiAsyncProxyMaxConcurrent();
+  if (geminiProxyInFlight < cap) {
     geminiProxyInFlight++;
     return Promise.resolve();
   }
@@ -531,25 +570,39 @@ const GEMINI_ASYNC_BATCH_MAX_ITEMS = Number(process.env.GEMINI_ASYNC_BATCH_MAX_I
 function sweepGeminiAsyncJobs() {
   const now = Date.now();
   for (const [id, job] of geminiAsyncJobs) {
-    if (now - job.createdAt > GEMINI_ASYNC_JOB_TTL_MS) geminiAsyncJobs.delete(id);
+    if (now - job.createdAt > GEMINI_ASYNC_JOB_TTL_MS) {
+      fairnessOnJobEvicted(id);
+      geminiAsyncJobs.delete(id);
+    }
   }
 }
 
-function createGeminiAsyncJob(model, contents, config, useVertex) {
-  sweepGeminiAsyncJobs();
-  const id = `gasync-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-  geminiAsyncJobs.set(id, {
-    id,
-    status: 'pending',
-    createdAt: Date.now(),
-    result: null,
-    error: null,
-  });
-  const GEMINI_PROXY_MAX_ATTEMPTS = Number(process.env.GEMINI_PROXY_RETRIES) || 15;
-  setImmediate(async () => {
-    const job = geminiAsyncJobs.get(id);
-    if (!job) return;
+function pumpFairAsyncWorkers() {
+  if (!isFairnessEnabled()) return;
+  for (;;) {
+    const d = fairnessDequeueForRun((jid) => geminiAsyncJobs.has(jid));
+    if (!d) break;
+    const job = geminiAsyncJobs.get(d.jobId);
+    if (!job) {
+      fairnessOnAsyncJobFinished(d.jobId);
+      continue;
+    }
     job.status = 'running';
+    if (job.jobKind === 'batch') {
+      setImmediate(() => runGeminiAsyncBatchJobBody(d.jobId));
+    } else {
+      setImmediate(() => runGeminiAsyncJob(d.jobId));
+    }
+  }
+}
+
+async function runGeminiAsyncJob(jobId) {
+  try {
+    const job = geminiAsyncJobs.get(jobId);
+    if (!job) return;
+    if (!isFairnessEnabled()) job.status = 'running';
+    const { model, contents, config, useVertex } = job;
+    const GEMINI_PROXY_MAX_ATTEMPTS = Number(process.env.GEMINI_PROXY_RETRIES) || 15;
     const startedAt = Date.now();
     let lastErr;
     for (let attempt = 0; attempt < GEMINI_PROXY_MAX_ATTEMPTS; attempt++) {
@@ -560,7 +613,7 @@ function createGeminiAsyncJob(model, contents, config, useVertex) {
         const result = await withGeminiProxySlot(() =>
           useVertex ? proxyVertexGenerateContent(model, contents, config) : proxyGenerateContent(model, contents, config)
         );
-        const j = geminiAsyncJobs.get(id);
+        const j = geminiAsyncJobs.get(jobId);
         if (!j) return;
         j.status = 'completed';
         j.result = result;
@@ -571,18 +624,156 @@ function createGeminiAsyncJob(model, contents, config, useVertex) {
         const shouldRetry = attempt < GEMINI_PROXY_MAX_ATTEMPTS - 1 && isRetryable(e);
         if (!shouldRetry) break;
         const delay = Math.min(30_000, 5000 * Math.pow(2, attempt));
-        console.warn(`[gemini-proxy] async retry id=${id} attempt=${attempt + 1} delay=${delay}ms`);
+        console.warn(`[gemini-proxy] async retry id=${jobId} attempt=${attempt + 1} delay=${delay}ms`);
         await sleep(delay);
       }
     }
-    const j = geminiAsyncJobs.get(id);
+    const j = geminiAsyncJobs.get(jobId);
     if (!j) return;
     j.status = 'failed';
     j.error = formatErrorDetail(lastErr);
     j.updatedAt = Date.now();
-    console.error(`[gemini-proxy] async failed id=${id} error=${j.error}`);
+    console.error(`[gemini-proxy] async failed id=${jobId} error=${j.error}`);
+  } finally {
+    fairnessOnAsyncJobFinished(jobId);
+    if (isFairnessEnabled()) pumpFairAsyncWorkers();
+  }
+}
+
+function parseCostWeightFromBody(parsed) {
+  const fm = parsed && parsed.fairnessMeta;
+  if (!fm || typeof fm !== 'object') return 1;
+  const w = Number(fm.costWeight);
+  if (w === 2 || w === 5) return w;
+  return 1;
+}
+
+function createGeminiAsyncJob(model, contents, config, useVertex, fairnessKey, costWeight) {
+  sweepGeminiAsyncJobs();
+  const id = `gasync-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  if (isFairnessEnabled()) {
+    geminiAsyncJobs.set(id, {
+      id,
+      status: 'queued',
+      createdAt: Date.now(),
+      model,
+      contents,
+      config,
+      useVertex,
+      result: null,
+      error: null,
+    });
+    const enq = fairnessTryEnqueue(id, fairnessKey, costWeight);
+    if (!enq.ok) {
+      geminiAsyncJobs.delete(id);
+      return { type: 'reject', info: enq };
+    }
+    pumpFairAsyncWorkers();
+    return { type: 'ok', id };
+  }
+  geminiAsyncJobs.set(id, {
+    id,
+    status: 'pending',
+    createdAt: Date.now(),
+    model,
+    contents,
+    config,
+    useVertex,
+    result: null,
+    error: null,
   });
-  return id;
+  setImmediate(() => runGeminiAsyncJob(id));
+  return { type: 'ok', id };
+}
+
+async function runGeminiAsyncBatchJobBody(jobId) {
+  try {
+    const job = geminiAsyncJobs.get(jobId);
+    if (!job) return;
+    if (!isFairnessEnabled()) job.status = 'running';
+    const { batchItems: items, useVertex } = job;
+    let results;
+    if (isFairnessEnabled()) {
+      results = [];
+      for (let index = 0; index < items.length; index++) {
+        const item = items[index];
+        try {
+          const result = await runGeminiWithRetries(item.model, item.contents, item.config, useVertex);
+          results.push({ ok: true, result });
+        } catch (e) {
+          const error = formatErrorDetail(e);
+          console.error(`[gemini-proxy] async batch item failed id=${jobId} index=${index} error=${error}`);
+          results.push({ ok: false, error });
+        }
+      }
+    } else {
+      results = await Promise.all(
+        items.map(async (item, index) => {
+          try {
+            const result = await runGeminiWithRetries(item.model, item.contents, item.config, useVertex);
+            return { ok: true, result };
+          } catch (e) {
+            const error = formatErrorDetail(e);
+            console.error(`[gemini-proxy] async batch item failed id=${jobId} index=${index} error=${error}`);
+            return { ok: false, error };
+          }
+        })
+      );
+    }
+    const j = geminiAsyncJobs.get(jobId);
+    if (!j) return;
+    j.status = 'completed';
+    j.result = { items: results };
+    j.updatedAt = Date.now();
+  } catch (e) {
+    const j = geminiAsyncJobs.get(jobId);
+    if (!j) return;
+    j.status = 'failed';
+    j.error = formatErrorDetail(e);
+    j.updatedAt = Date.now();
+    console.error(`[gemini-proxy] async batch failed id=${jobId} error=${j.error}`);
+  } finally {
+    fairnessOnAsyncJobFinished(jobId);
+    if (isFairnessEnabled()) pumpFairAsyncWorkers();
+  }
+}
+
+function createGeminiAsyncBatchJob(normalizedItems, useVertex, fairnessKey) {
+  sweepGeminiAsyncJobs();
+  const id = `gasync-batch-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  const n = normalizedItems.length;
+  const costWeight = Math.min(10, Math.max(1, Math.ceil(n / 5)));
+  if (isFairnessEnabled()) {
+    geminiAsyncJobs.set(id, {
+      id,
+      status: 'queued',
+      createdAt: Date.now(),
+      jobKind: 'batch',
+      batchItems: normalizedItems,
+      useVertex,
+      result: null,
+      error: null,
+    });
+    const enq = fairnessTryEnqueue(id, fairnessKey, costWeight);
+    if (!enq.ok) {
+      geminiAsyncJobs.delete(id);
+      return { type: 'reject', info: enq };
+    }
+    pumpFairAsyncWorkers();
+    return { type: 'ok', id };
+  }
+  geminiAsyncJobs.set(id, {
+    id,
+    status: 'pending',
+    createdAt: Date.now(),
+    jobKind: 'batch',
+    batchItems: normalizedItems,
+    useVertex,
+    result: null,
+    error: null,
+  });
+  setImmediate(() => runGeminiAsyncBatchJobBody(id));
+  return { type: 'ok', id };
 }
 
 async function runGeminiWithRetries(model, contents, config, useVertex) {
@@ -608,49 +799,6 @@ async function runGeminiWithRetries(model, contents, config, useVertex) {
   throw lastErr instanceof Error ? lastErr : new Error(formatErrorDetail(lastErr));
 }
 
-function createGeminiAsyncBatchJob(items, useVertex) {
-  sweepGeminiAsyncJobs();
-  const id = `gasync-batch-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-  geminiAsyncJobs.set(id, {
-    id,
-    status: 'pending',
-    createdAt: Date.now(),
-    result: null,
-    error: null,
-  });
-  setImmediate(async () => {
-    const job = geminiAsyncJobs.get(id);
-    if (!job) return;
-    job.status = 'running';
-    try {
-      const results = await Promise.all(
-        items.map(async (item, index) => {
-          try {
-            const result = await runGeminiWithRetries(item.model, item.contents, item.config, useVertex);
-            return { ok: true, result };
-          } catch (e) {
-            const error = formatErrorDetail(e);
-            console.error(`[gemini-proxy] async batch item failed id=${id} index=${index} error=${error}`);
-            return { ok: false, error };
-          }
-        })
-      );
-      const j = geminiAsyncJobs.get(id);
-      if (!j) return;
-      j.status = 'completed';
-      j.result = { items: results };
-      j.updatedAt = Date.now();
-    } catch (e) {
-      const j = geminiAsyncJobs.get(id);
-      if (!j) return;
-      j.status = 'failed';
-      j.error = formatErrorDetail(e);
-      j.updatedAt = Date.now();
-      console.error(`[gemini-proxy] async batch failed id=${id} error=${j.error}`);
-    }
-  });
-  return id;
-}
 
 function isRetryable(e) {
   const msg = String((e && e.message) || e);
@@ -686,7 +834,7 @@ const GEMINI_ASYNC_BATCH_PATH = '/proxy/gemini/async-batch';
 const server = http.createServer(async (req, res) => {
   const corsOk = applyCors(req, res);
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-AC-Fairness-Key, X-AC-Fairness-Signature, X-AC-Client-Ip');
   res.setHeader('Access-Control-Max-Age', '86400');
 
   if (req.method === 'OPTIONS') {
@@ -734,8 +882,22 @@ const server = http.createServer(async (req, res) => {
         sendError(res, 500, 'No backend key. Set GEMINI_API_KEY/GEMINI_API_KEYS');
         return;
       }
-      const jobId = createGeminiAsyncJob(model, contents, config, useVertex);
-      sendJson(res, 202, { jobId, status: 'pending' });
+      let fairnessKey = 'anon:unused';
+      if (isFairnessEnabled()) {
+        const fr = resolveFairnessKey(req);
+        if (!fr.ok) {
+          sendJson(res, fr.status, { error: fr.error });
+          return;
+        }
+        fairnessKey = fr.key;
+      }
+      const costWeight = parseCostWeightFromBody(parsed);
+      const cr = createGeminiAsyncJob(model, contents, config, useVertex, fairnessKey, costWeight);
+      if (cr.type === 'reject') {
+        sendFairnessReject(res, cr.info);
+        return;
+      }
+      sendJson(res, 202, { jobId: cr.id, status: isFairnessEnabled() ? 'queued' : 'pending' });
     } catch (e) {
       sendBodyReadError(res, e);
     }
@@ -785,8 +947,21 @@ const server = http.createServer(async (req, res) => {
         sendError(res, 400, 'Each item needs model and contents');
         return;
       }
-      const jobId = createGeminiAsyncBatchJob(normalizedItems, useVertex);
-      sendJson(res, 202, { jobId, status: 'pending' });
+      let fairnessKey = 'anon:unused';
+      if (isFairnessEnabled()) {
+        const fr = resolveFairnessKey(req);
+        if (!fr.ok) {
+          sendJson(res, fr.status, { error: fr.error });
+          return;
+        }
+        fairnessKey = fr.key;
+      }
+      const cr = createGeminiAsyncBatchJob(normalizedItems, useVertex, fairnessKey);
+      if (cr.type === 'reject') {
+        sendFairnessReject(res, cr.info);
+        return;
+      }
+      sendJson(res, 202, { jobId: cr.id, status: isFairnessEnabled() ? 'queued' : 'pending' });
     } catch (e) {
       sendBodyReadError(res, e);
     }
@@ -863,10 +1038,33 @@ const server = http.createServer(async (req, res) => {
         sendError(res, 500, vertexConfigGuideMessage());
         return;
       }
+      let syncFairnessKey = null;
+      if (isFairnessEnabled()) {
+        const fr = resolveFairnessKey(req);
+        if (!fr.ok) {
+          sendJson(res, fr.status, { error: fr.error });
+          return;
+        }
+        syncFairnessKey = fr.key;
+      }
       try {
-        const response = useVertex
-          ? await proxyVertexGenerateContent(model, contents, config)
-          : await proxyGenerateContent(model, contents, config);
+        let response;
+        if (syncFairnessKey) {
+          await fairnessSyncEnter(syncFairnessKey);
+          try {
+            response = await withGeminiProxySlot(() =>
+              useVertex
+                ? proxyVertexGenerateContent(model, contents, config)
+                : proxyGenerateContent(model, contents, config)
+            );
+          } finally {
+            fairnessSyncLeave(syncFairnessKey);
+          }
+        } else {
+          response = useVertex
+            ? await proxyVertexGenerateContent(model, contents, config)
+            : await proxyGenerateContent(model, contents, config);
+        }
         sendJson(res, 200, response);
       } catch (e) {
         const msg = formatErrorDetail(e);
@@ -885,6 +1083,7 @@ const server = http.createServer(async (req, res) => {
       service: 'gemini-proxy-api',
       geminiAsyncJobs: geminiAsyncJobs.size,
       geminiProxyInFlight,
+      fairness: fairnessHealthSnapshot(),
       vertex: {
         configured: isVertexConfigured(),
         location: isVertexConfigured() ? vertexLocation() : null,
@@ -902,6 +1101,9 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, BIND_HOST, () => {
   console.log(`[gemini-proxy-api] http://${BIND_HOST}:${PORT}`);
+  console.log(
+    `[gemini-proxy-api] GEMINI_FAIRNESS_ENABLED=${isFairnessEnabled() ? 'true' : 'false'} (see docs/Gemini代理-公平排队与每用户限流.md)`
+  );
   const vp = vertexProjectId();
   const vOk = isVertexConfigured();
   console.log(`[gemini-proxy-api] Vertex project: ${vp || '(unset)'}  configured=${vOk}  location=${vOk ? vertexLocation() : '—'}`);

@@ -23,6 +23,7 @@ describe('workflowAiPickIndex', () => {
         'unified_ai_gateway',
         'generate3d_module',
         'workflow_video_bridge',
+        'gemini_proxy_fairness_chain',
         'gemini_service_stack',
         'tripo_service',
         'tencent_service',
@@ -48,6 +49,15 @@ describe('workflowAiPickIndex', () => {
 
   it('本机智能分割：capability_executor → local_companion_sam', () => {
     expect(WORKFLOW_AI_PICK_EDGES.some((e) => e.from === 'capability_executor' && e.to === 'local_companion_sam')).toBe(
+      true
+    );
+  });
+
+  it('Gemini：unified_ai_gateway → gemini_proxy_fairness_chain → gemini_service_stack', () => {
+    expect(WORKFLOW_AI_PICK_EDGES.some((e) => e.from === 'unified_ai_gateway' && e.to === 'gemini_proxy_fairness_chain')).toBe(
+      true
+    );
+    expect(WORKFLOW_AI_PICK_EDGES.some((e) => e.from === 'gemini_proxy_fairness_chain' && e.to === 'gemini_service_stack')).toBe(
       true
     );
   });

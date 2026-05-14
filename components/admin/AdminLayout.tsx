@@ -47,6 +47,7 @@ const AdminLayout: React.FC<AdminLayoutProps> = ({ children, currentPath, onNavi
           <NavButton label="用户管理" path="/admin/users" currentPath={currentPath} onNavigate={onNavigate} />
           <NavButton label="审计日志" path="/admin/audit-logs" currentPath={currentPath} onNavigate={onNavigate} />
           <NavButton label="本地伴侣发行" path="/admin/companion-artifacts" currentPath={currentPath} onNavigate={onNavigate} />
+          <NavButton label="Gemini 公平限流" path="/admin/gemini-fairness" currentPath={currentPath} onNavigate={onNavigate} />
         </nav>
         <div className="px-3 py-3 border-t border-[#2e2e32] space-y-2">
           <a

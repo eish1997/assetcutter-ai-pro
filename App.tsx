@@ -44,6 +44,7 @@ import WorkspaceSidebarFooter from './components/WorkspaceSidebarFooter';
 import { useUserUiPrefs } from './hooks/useUserUiPrefs';
 import Waves from './components/ui/Waves';
 import AppIcon from './components/ui/AppIcon';
+import GeminiFairnessFloatingNotice from './components/GeminiFairnessFloatingNotice';
 import { RIGHT_DOCK_LOG_BOTTOM, RIGHT_DOCK_LOG_PANEL_BOTTOM, RIGHT_DOCK_RIGHT } from './components/floatingDockConstants';
 import { ProgressivePreviewImage } from './components/ProgressivePreviewImage';
 import { DialogSessionRowBackdrop } from './components/DialogSessionRowBackdrop';
@@ -307,6 +308,7 @@ const AdminPlaceholder = React.lazy(() => import('./components/admin/AdminPlaceh
 const AdminUsersPanel = React.lazy(() => import('./components/admin/AdminUsersPanel'));
 const AdminAuditLogsPanel = React.lazy(() => import('./components/admin/AdminAuditLogsPanel'));
 const AdminCompanionArtifactsPanel = React.lazy(() => import('./components/admin/AdminCompanionArtifactsPanel'));
+const AdminGeminiFairnessPanel = React.lazy(() => import('./components/admin/AdminGeminiFairnessPanel'));
 type SourceAggregate = {
   count: number;
   rated: number;
@@ -481,6 +483,8 @@ const AdminAppShell: React.FC = () => {
           <AdminAuditLogsPanel />
         ) : pathname === '/admin/companion-artifacts' ? (
           <AdminCompanionArtifactsPanel />
+        ) : pathname === '/admin/gemini-fairness' ? (
+          <AdminGeminiFairnessPanel />
         ) : (
           <AdminPlaceholder />
         )}
@@ -7052,14 +7056,22 @@ const App: React.FC = () => {
   const pathname = typeof window !== 'undefined' ? window.location.pathname : '/';
   if (pathname.startsWith('/admin')) {
     return (
-      <Suspense fallback={<div className="min-h-screen bg-[#050505] flex items-center justify-center text-[11px] text-gray-500">加载中…</div>}>
-        <RequireRole role="admin">
-          <AdminAppShell />
-        </RequireRole>
-      </Suspense>
+      <>
+        <GeminiFairnessFloatingNotice />
+        <Suspense fallback={<div className="min-h-screen bg-[#050505] flex items-center justify-center text-[11px] text-gray-500">加载中…</div>}>
+          <RequireRole role="admin">
+            <AdminAppShell />
+          </RequireRole>
+        </Suspense>
+      </>
     );
   }
-  return <MainApp />;
+  return (
+    <>
+      <GeminiFairnessFloatingNotice />
+      <MainApp />
+    </>
+  );
 };
 
 export default App;

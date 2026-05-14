@@ -7,6 +7,15 @@
 - [Vertex AI 接入说明](./VERTEX_AI_INTEGRATION.md)（`aiBackend: "vertex"`、ADC、前端 `VITE_BULK_IMAGE_API` / `VITE_BULK_IMAGE_API_VERTEX`）
 - Google：**[Standard PayGo 与用量档位（TPM）](https://cloud.google.com/vertex-ai/generative-ai/docs/dynamic-shared-quota)**、**[Throughput quota / 动态共享池](https://cloud.google.com/vertex-ai/generative-ai/docs/resources/throughput-quota)**、**[Generative AI quotas](https://cloud.google.com/vertex-ai/generative-ai/docs/quotas)**、**[Vertex AI quotas](https://cloud.google.com/vertex-ai/docs/quotas)**
 
+### 全链路速查（实现后）
+
+| 位置 | 职责 |
+| --- | --- |
+| **浏览器** | `geminiFairnessBridge` 登录头；**`throwFairnessRejected`** → **`ac:gemini-proxy-fairness-rejected`**；**`traceUnifiedAiCall`**（`workflow*`）对其它限流/繁忙节流派发 **`ac:unified-ai-soft-notice`**；**`GeminiFairnessFloatingNotice`** 统一顶栏展示。 |
+| **gemini-proxy 进程** | **`server/gemini-proxy-fairness.js`** 准入与队列；**`server/gemini-proxy-api.js`** 挂接 async / async-batch / generate-content；**`/healthz.fairness`** 可观测。 |
+| **运维数值** | 默认磁盘 **`server/data/gemini-fairness-config.json`**（或 **`GEMINI_FAIRNESS_CONFIG_PATH`**）；代理约 **3s** 重读；**auth-api** **`GET` / `PUT` / `DELETE`** **`/api/admin/gemini-fairness-config`**（**DELETE** 清空为 `{}`）与站点 **`/admin/gemini-fairness`**（**PUT 与已有键合并**、**清空磁盘覆盖**按钮）。 |
+| **总开关 / 密钥** | 仍以环境变量为准（**`GEMINI_FAIRNESS_ENABLED`**、HMAC、**`GEMINI_FAIRNESS_TRUST_CLIENT_KEY_HEADER`** 等）；磁盘只覆盖数值型旋钮。 |
+
 **术语（文中简称）**
 
 | 术语 | 含义 |
