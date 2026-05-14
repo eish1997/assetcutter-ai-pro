@@ -31,7 +31,9 @@ import {
   getDiskOverrideInt,
 } from './gemini-proxy-fairness.js';
 
-const PORT = Number(process.env.PORT || process.env.BULK_IMAGE_PORT || process.env.GEMINI_PROXY_PORT) || 9002;
+/** 监听端口：优先专用变量，避免与 .env.local 里给 ai3d 等用的通用 `PORT` 冲突 */
+const PORT =
+  Number(process.env.GEMINI_PROXY_PORT || process.env.BULK_IMAGE_PORT || process.env.PORT) || 9002;
 const BIND_HOST = (process.env.BULK_IMAGE_BIND_HOST || '0.0.0.0').trim() || '0.0.0.0';
 const IMAGE_REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_IMAGE_REQUEST_TIMEOUT_MS) || 120_000;
 const VERTEX_IMAGE_REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_VERTEX_IMAGE_TIMEOUT_MS) || 600_000;
@@ -178,11 +180,10 @@ function isAdcLikelyConfigured() {
 }
 
 function vertexConfigGuideMessage() {
-  const projectGuide = 'VERTEX_PROJECT_ID 或 GOOGLE_CLOUD_PROJECT';
-  const locationGuide = 'VERTEX_LOCATION 或 GOOGLE_CLOUD_LOCATION（可选，默认 global）';
-  const adcGuide =
-    'ADC（推荐）：GOOGLE_APPLICATION_CREDENTIALS 指向 JSON，或 GOOGLE_APPLICATION_CREDENTIALS_JSON 内联 JSON，或先执行 gcloud auth application-default login';
-  return `Vertex/Agent Platform 未完成配置：请设置 ${projectGuide}、${locationGuide}，并配置 ${adcGuide}`;
+  return (
+    'Vertex 生图尚未就绪：请在运行本代理的环境中配置 Google Cloud 项目（环境变量 VERTEX_PROJECT_ID 或 GOOGLE_CLOUD_PROJECT）、区域（可选 VERTEX_LOCATION，默认 global），并完成应用默认凭据 ADC。' +
+    ' 可将服务账号 JSON 写入 GOOGLE_APPLICATION_CREDENTIALS_JSON（或设置 GOOGLE_APPLICATION_CREDENTIALS 指向密钥文件）。完整说明见仓库 docs/VERTEX_AI_INTEGRATION.md。'
+  );
 }
 
 /**

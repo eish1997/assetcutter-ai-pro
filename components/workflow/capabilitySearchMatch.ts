@@ -86,13 +86,17 @@ function instructionSegmentsForSearch(instrLower: string): string[] {
 /** 展示名较短：对其所有连续子串（长度在此区间内）做「用户句是否包含」判断，无需打全名 */
 const LOOSE_LABEL_SUB_MIN = 2;
 const LOOSE_LABEL_SUB_MAX = 32;
+/** 底部整句口语可能极长；匹配侧只取前段，避免 O(n×字段长) 拖死主线程 */
+const LOOSE_MATCH_KW_MAX = 512;
 
 function keywordContainsAnySubstringOfShortField(kw: string, fieldLower: string): boolean {
   if (!kw || fieldLower.length < LOOSE_LABEL_SUB_MIN) return false;
-  const maxLen = Math.min(fieldLower.length, LOOSE_LABEL_SUB_MAX);
+  const kwScan = kw.length > LOOSE_MATCH_KW_MAX ? kw.slice(0, LOOSE_MATCH_KW_MAX) : kw;
+  const field = fieldLower.slice(0, LOOSE_LABEL_SUB_MAX);
+  const maxLen = Math.min(field.length, LOOSE_LABEL_SUB_MAX);
   for (let len = maxLen; len >= LOOSE_LABEL_SUB_MIN; len--) {
-    for (let i = 0; i + len <= fieldLower.length; i++) {
-      if (kw.includes(fieldLower.slice(i, i + len))) return true;
+    for (let i = 0; i + len <= field.length; i++) {
+      if (kwScan.includes(field.slice(i, i + len))) return true;
     }
   }
   return false;
@@ -120,7 +124,12 @@ export function keywordsMatchCapabilityModule(
     const instrSegs = instructionSegmentsForSearch(instr);
 
     return keywords.some((rawKw) => {
-      const kw = typeof rawKw === 'string' ? rawKw : '';
+      const kw =
+        typeof rawKw === 'string'
+          ? rawKw.length > LOOSE_MATCH_KW_MAX
+            ? rawKw.slice(0, LOOSE_MATCH_KW_MAX)
+            : rawKw
+          : '';
       if (!kw) return false;
       if (hay.includes(kw)) return true;
       if (label.length >= 2 && kw.includes(label)) return true;
@@ -144,7 +153,12 @@ export function keywordsMatchCapabilityLabelId(keywords: string[], label: unknow
     const i = safeSearchLower(id);
     const hay = `${l}\n${i}`;
     return keywords.some((rawKw) => {
-      const kw = typeof rawKw === 'string' ? rawKw : '';
+      const kw =
+        typeof rawKw === 'string'
+          ? rawKw.length > LOOSE_MATCH_KW_MAX
+            ? rawKw.slice(0, LOOSE_MATCH_KW_MAX)
+            : rawKw
+          : '';
       if (!kw) return false;
       if (hay.includes(kw)) return true;
       if (l.length >= 2 && kw.includes(l)) return true;

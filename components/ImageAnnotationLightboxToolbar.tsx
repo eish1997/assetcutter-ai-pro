@@ -23,7 +23,6 @@ import {
   RotateCcw,
   Save,
   Scaling,
-  SlidersHorizontal,
   Sparkles,
   Square,
   Trash2,
@@ -39,13 +38,7 @@ import {
 } from './workflow/workflowSectionUiConstants';
 import type { ImagePreviewLayoutMode } from './preview';
 
-type AnnotationToolbarMenuKey =
-  | 'annotate'
-  | 'crop'
-  | 'local'
-  | 'sam'
-  | 'removeBg'
-  | 'canvasAdjust';
+type AnnotationToolbarMenuKey = 'annotate' | 'crop' | 'local' | 'sam' | 'removeBg';
 
 const VIEW_MARGIN = 8;
 
@@ -253,7 +246,7 @@ export type ImageAnnotationLightboxToolbarProps = {
     onDiscard: () => void;
   };
   /**
-   * 由 `WorkflowSection` 注入：线分割 / 改尺寸写回（与 `ImagePreviewOverlay` 共用 state），下拉面板与「标注」同交互。
+   * 由 `WorkflowSection` 注入：线分割变形 / 改尺寸写回（与 `ImagePreviewOverlay` 共用 state）；主栏为两颗独立图标按钮。
    */
   canvasAdjust?: {
     splitUiOk: boolean;
@@ -458,7 +451,7 @@ export function ImageAnnotationLightboxToolbar({
           toggleMenu(which);
         }}
         className={[
-          'inline-flex h-7 shrink-0 items-center justify-center gap-0 rounded-md px-0.5 outline-none transition-colors',
+          'inline-flex h-7 shrink-0 items-center justify-center gap-0.5 rounded-md px-1 outline-none transition-colors',
           'focus-visible:ring-2 focus-visible:ring-blue-500/45 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0a0a0c]',
           open || active
             ? 'bg-blue-600 text-white ring-1 ring-blue-400/35 hover:bg-blue-500'
@@ -497,7 +490,7 @@ export function ImageAnnotationLightboxToolbar({
           toggleMenu('sam');
         }}
         className={[
-          'inline-flex h-7 shrink-0 items-center justify-center gap-0 rounded-md px-0.5 outline-none transition-colors',
+          'inline-flex h-7 shrink-0 items-center justify-center gap-0.5 rounded-md px-1 outline-none transition-colors',
           'focus-visible:ring-2 focus-visible:ring-blue-500/45 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0a0a0c]',
           samSegment.disabled
             ? 'cursor-not-allowed opacity-35 ring-1 ring-white/[0.08]'
@@ -537,7 +530,7 @@ export function ImageAnnotationLightboxToolbar({
           toggleMenu('removeBg');
         }}
         className={[
-          'inline-flex h-7 shrink-0 items-center justify-center gap-0 rounded-md px-0.5 outline-none transition-colors',
+          'inline-flex h-7 shrink-0 items-center justify-center gap-0.5 rounded-md px-1 outline-none transition-colors',
           'focus-visible:ring-2 focus-visible:ring-blue-500/45 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0a0a0c]',
           removeBg.disabled && !removeBg.hasPreview
             ? 'cursor-not-allowed opacity-35 ring-1 ring-white/[0.08]'
@@ -596,97 +589,6 @@ export function ImageAnnotationLightboxToolbar({
       ) : null}
     </div>
   ) : null;
-
-  const canvasAdjustCategoryBtn = () => {
-    if (!canvasAdjust || (!canvasAdjust.splitUiOk && !canvasAdjust.resizeUiOk)) return null;
-    const open = openMenu === 'canvasAdjust';
-    const chevronOpenClass = open && menuPlacement === 'above' ? 'rotate-180' : '';
-    const active =
-      open ||
-      canvasAdjust.splitStretchEnabled ||
-      canvasAdjust.resizeWriteBackPopOpen ||
-      canvasAdjust.splitStretchWriteBackPopOpen;
-    return (
-      <button
-        type="button"
-        title="画布调整：线分割变形 / 改尺寸写回"
-        aria-label="画布调整"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={(e) => {
-          e.stopPropagation();
-          toggleMenu('canvasAdjust');
-        }}
-        className={[
-          'inline-flex h-7 shrink-0 items-center justify-center gap-0 rounded-md px-0.5 outline-none transition-colors',
-          'focus-visible:ring-2 focus-visible:ring-blue-500/45 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0a0a0c]',
-          open || active
-            ? 'bg-blue-600 text-white ring-1 ring-blue-400/35 hover:bg-blue-500'
-            : 'bg-white/[0.06] text-gray-300 ring-1 ring-white/[0.1] hover:bg-white/[0.11] hover:text-gray-100',
-        ].join(' ')}
-      >
-        <SlidersHorizontal {...ic} aria-hidden />
-        <ChevronDown className={`h-3 w-3 shrink-0 opacity-85 transition-transform ${chevronOpenClass}`} strokeWidth={2} />
-      </button>
-    );
-  };
-
-  const canvasAdjustPanel =
-    canvasAdjust && (canvasAdjust.splitUiOk || canvasAdjust.resizeUiOk) ? (
-      <div className="flex flex-col gap-1" role="menu">
-        {canvasAdjust.splitUiOk ? (
-          <div className="flex flex-wrap gap-0.5">
-            <ToolShell
-              title="线分割变形：拖蓝色条调整上下区域纵向比例；再次点击关闭"
-              dense
-              active={canvasAdjust.splitStretchEnabled}
-              onClick={() => canvasAdjust.setSplitStretchEnabled((v) => !v)}
-            >
-              <GripHorizontal {...icSm} />
-            </ToolShell>
-            {canvasAdjust.splitStretchEnabled && canvasAdjust.imageResizeWriteBackAvailable ? (
-              <ActionBtn
-                dense
-                title="确认将线分割变形写回当前工作流版本"
-                variant="amber"
-                onClick={() => {
-                  canvasAdjust.setResizeWriteBackPopOpen(false);
-                  canvasAdjust.setSplitStretchWriteBackPopOpen(true);
-                }}
-              >
-                <Save {...icSm} />
-              </ActionBtn>
-            ) : null}
-          </div>
-        ) : null}
-        {canvasAdjust.resizeUiOk ? (
-          <div
-            className={[
-              'flex flex-wrap gap-0.5',
-              canvasAdjust.splitUiOk ? 'border-t border-white/[0.06] pt-1' : '',
-            ].join(' ')}
-          >
-            <ToolShell
-              title={
-                canvasAdjust.previewLayout !== 'flat'
-                  ? '请切换到「平面」预览后再改尺寸写回'
-                  : '改尺寸写回当前版本（等比缩放；写回后清除本版本标注）'
-              }
-              dense
-              active={canvasAdjust.resizeWriteBackPopOpen}
-              disabled={canvasAdjust.previewLayout !== 'flat'}
-              onClick={() => {
-                if (canvasAdjust.previewLayout !== 'flat') return;
-                canvasAdjust.setSplitStretchWriteBackPopOpen(false);
-                canvasAdjust.setResizeWriteBackPopOpen((o) => !o);
-              }}
-            >
-              <Scaling {...icSm} />
-            </ToolShell>
-          </div>
-        ) : null}
-      </div>
-    ) : null;
 
   const samPanel = samSegment ? (
     <div className="flex flex-col gap-1" role="menu">
@@ -1001,17 +903,11 @@ export function ImageAnnotationLightboxToolbar({
                     ? samPanel
                     : openMenu === 'removeBg'
                       ? removeBgPanel
-                      : openMenu === 'canvasAdjust'
-                        ? canvasAdjustPanel
-                        : null}
+                      : null}
           </div>
         ) : null}
 
-        <div
-          className={WORKFLOW_IMAGE_PREVIEW_RAIL.replace('gap-1', 'gap-0.5')}
-          role="toolbar"
-          aria-label="标注与裁切"
-        >
+        <div className={WORKFLOW_IMAGE_PREVIEW_RAIL} role="toolbar" aria-label="标注与裁切">
         <button
           type="button"
           onDoubleClick={() => {
@@ -1035,29 +931,61 @@ export function ImageAnnotationLightboxToolbar({
           <Move {...ic} />
         </ToolShell>
         <RailDivider />
-        <div className="flex items-center gap-0.5">
+        <div className="flex flex-wrap items-center gap-1">
           {categoryBtn('annotate', annotateActive)}
           {categoryBtn('local', localActive)}
           {categoryBtn('crop', cropActive)}
+          {samSegment ? samCategoryBtn() : null}
+          {removeBg ? removeBgCategoryBtn() : null}
+          {canvasAdjust && (canvasAdjust.splitUiOk || canvasAdjust.resizeUiOk) ? (
+            <>
+              {canvasAdjust.splitUiOk ? (
+                <>
+                  <ToolShell
+                    title="线分割变形：拖蓝色条调整上下区域纵向比例；再次点击关闭"
+                    active={canvasAdjust.splitStretchEnabled}
+                    onClick={() => {
+                      canvasAdjust.setResizeWriteBackPopOpen(false);
+                      canvasAdjust.setSplitStretchEnabled((v) => !v);
+                    }}
+                  >
+                    <GripHorizontal {...ic} aria-hidden />
+                  </ToolShell>
+                  {canvasAdjust.splitStretchEnabled && canvasAdjust.imageResizeWriteBackAvailable ? (
+                    <ActionBtn
+                      title="确认将线分割变形写回当前工作流版本"
+                      variant="amber"
+                      onClick={() => {
+                        canvasAdjust.setResizeWriteBackPopOpen(false);
+                        canvasAdjust.setSplitStretchWriteBackPopOpen(true);
+                      }}
+                    >
+                      <Save {...ic} aria-hidden />
+                    </ActionBtn>
+                  ) : null}
+                </>
+              ) : null}
+              {canvasAdjust.resizeUiOk ? (
+                <ToolShell
+                  title={
+                    canvasAdjust.previewLayout !== 'flat'
+                      ? '请切换到「平面」预览后再改尺寸写回'
+                      : '改尺寸写回当前版本（等比缩放；写回后清除本版本标注）'
+                  }
+                  active={canvasAdjust.resizeWriteBackPopOpen}
+                  disabled={canvasAdjust.previewLayout !== 'flat'}
+                  onClick={() => {
+                    if (canvasAdjust.previewLayout !== 'flat') return;
+                    canvasAdjust.setSplitStretchWriteBackPopOpen(false);
+                    canvasAdjust.setResizeWriteBackPopOpen((o) => !o);
+                  }}
+                >
+                  <Scaling {...ic} aria-hidden />
+                </ToolShell>
+              ) : null}
+            </>
+          ) : null}
         </div>
-        {samSegment ? (
-          <>
-            <div className="mx-0.5 w-px shrink-0 self-stretch bg-white/12" aria-hidden />
-            {samCategoryBtn()}
-          </>
-        ) : null}
-        {removeBg ? (
-          <>
-            <div className="mx-0.5 w-px shrink-0 self-stretch bg-white/12" aria-hidden />
-            {removeBgCategoryBtn()}
-          </>
-        ) : null}
-        {canvasAdjust && (canvasAdjust.splitUiOk || canvasAdjust.resizeUiOk) ? (
-          <>
-            <div className="mx-0.5 w-px shrink-0 self-stretch bg-white/12" aria-hidden />
-            {canvasAdjustCategoryBtn()}
-          </>
-        ) : null}
         <div className="mx-0.5 w-px shrink-0 self-stretch bg-white/12" aria-hidden />
         <div className="flex items-center gap-0.5">
           <ActionBtn title="撤回（Ctrl/⌘+Z）" ariaLabel="撤回" onClick={onUndo}>

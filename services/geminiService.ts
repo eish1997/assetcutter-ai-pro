@@ -21,6 +21,22 @@ import {
 import { consumeTrialGeminiSlotBeforeProxyOrThrow } from "./trialGeminiQuota";
 import { getGeminiFairnessRequestHeaders } from "./geminiFairnessBridge";
 import { tryParseGeminiProxyFairnessRejected, throwFairnessRejected } from "./geminiProxyFairnessError";
+import { DEFAULT_MODEL_TEXT } from "./modelRegistry/constants";
+import {
+  resolveUpstreamImageModelId,
+  resolveUpstreamModelId,
+  resolveUpstreamModelIdForProvider,
+  resolveUpstreamTextModelId,
+} from "./modelRegistry/resolve";
+import { bulkForwardOriginIndex, collectRemoteBulkOriginsFromEnv } from "./geminiBulkForwardDevOrigins";
+
+export {
+  resolveUpstreamImageModelId,
+  resolveUpstreamModelId,
+  resolveUpstreamModelIdForProvider,
+  resolveUpstreamTextModelId,
+};
+export type { ModelResolveRole } from "./modelRegistry/resolve";
 
 function readViteEnvTrim(key: string): string {
   try {
@@ -45,6 +61,18 @@ const VERTEX_BULK_RAW =
 
 /** 与当前页面同源（配合 Vite `/proxy/gemini` → 本机 9002），避免跨端口 CORS */
 const BULK_SAME_ORIGIN_MARKER = "__SAME_ORIGIN__";
+
+/** 开发环境：经 Vite 同源转发到公网 bulk，避免浏览器直连 Render 触发 CORS（与 `vite.config.ts` 白名单一致） */
+const AC_BULK_FORWARD_PREFIX = "/__ac-bulk-forward";
+
+function bulkDevForwardOrigins(): string[] {
+  try {
+    const env = (import.meta as unknown as { env?: Record<string, string | undefined> }).env || {};
+    return collectRemoteBulkOriginsFromEnv(env);
+  } catch {
+    return [];
+  }
+}
 
 function resolveBulkBaseFromRaw(raw: string): string {
   const t = (raw || "").trim();
@@ -97,22 +125,6 @@ function effectiveBulkBase(): string {
   return redirectVertexAwayFromUnconfiguredProxy(base);
 }
 
-import { DEFAULT_MODEL_TEXT } from "./modelRegistry/constants";
-import {
-  resolveUpstreamImageModelId,
-  resolveUpstreamModelId,
-  resolveUpstreamModelIdForProvider,
-  resolveUpstreamTextModelId,
-} from "./modelRegistry/resolve";
-
-export {
-  resolveUpstreamImageModelId,
-  resolveUpstreamModelId,
-  resolveUpstreamModelIdForProvider,
-  resolveUpstreamTextModelId,
-};
-export type { ModelResolveRole } from "./modelRegistry/resolve";
-
 /** 为 true 时恢复旧行为：本机 Gemini Key 优先于 VITE_BULK_IMAGE_API（浏览器直连 Google）。默认 false：有代理地址则优先走后端代理，与生产环境一致、避免本机 Key 直连触发地区限制。 */
 function preferBrowserGeminiKeyFirst(): boolean {
   try {
@@ -145,6 +157,12 @@ function bulkApiUrl(path: string): string {
   const p = path.startsWith("/") ? path : `/${path}`;
   if (baseResolved === BULK_SAME_ORIGIN_MARKER) {
     return p;
+  }
+  if (import.meta.env.DEV) {
+    const idx = bulkForwardOriginIndex(baseResolved, bulkDevForwardOrigins());
+    if (idx >= 0) {
+      return `${AC_BULK_FORWARD_PREFIX}/${idx}${p}`;
+    }
   }
   const base = baseResolved.replace(/\/$/, "");
   return `${base}${p}`;
@@ -186,12 +204,28 @@ export function getGeminiImageBatchBoxSizeForCurrentProvider(): number {
   return resolveImageBatchBoxSize(getAiProvider() === "vertex" ? "vertex" : undefined);
 }
 
+/** gemini-proxy 在 Vertex 未就绪时返回；映射为工作区可读的完整短句（避免单行截断） */
+function userMessageForVertexProxyNotReady(text: string): string | null {
+  const t = (text || "").trim();
+  if (!t) return null;
+  if (
+    /Vertex\/Agent Platform 未完成配置/i.test(t) ||
+    /Vertex\s*生图尚未就绪/i.test(t) ||
+    (/VERTEX_PROJECT_ID|GOOGLE_CLOUD_PROJECT/.test(t) && /未完成配置|尚未就绪|应用默认凭据|ADC/i.test(t))
+  ) {
+    return "当前使用「Vertex」线路，但生图后台尚未完成 Google Cloud 配置。请在生图代理服务上设置云项目与身份凭据后再试，或在「设置」中暂时改用其它线路。";
+  }
+  return null;
+}
+
 function parseBulkProxyCreateError(status: number, text: string): string {
   const raw = (text || "").trim();
   try {
     const j = JSON.parse(raw) as { error?: string; message?: string; retryAfterSec?: number };
     const code = typeof j.error === "string" ? j.error.trim() : "";
     const msg = (typeof j.message === "string" && j.message.trim()) || code || raw;
+    const vertexUser = userMessageForVertexProxyNotReady(msg) || userMessageForVertexProxyNotReady(code);
+    if (status === 500 && vertexUser) return vertexUser;
     const ra = j.retryAfterSec;
     if (status === 429 || code === "rate_limited") {
       return ra != null && Number.isFinite(Number(ra))
@@ -212,11 +246,49 @@ function parseBulkProxyErrorBody(text: string): string {
   const raw = (text || "").trim();
   try {
     const j = JSON.parse(raw) as { error?: string };
-    if (typeof j.error === "string" && j.error.trim()) return j.error.trim();
+    if (typeof j.error === "string" && j.error.trim()) {
+      const e = j.error.trim();
+      return userMessageForVertexProxyNotReady(e) || e;
+    }
   } catch {
     /* ignore */
   }
-  return raw;
+  return userMessageForVertexProxyNotReady(raw) || raw;
+}
+
+function isBrowserFetchNetworkError(e: unknown): boolean {
+  const m = (e instanceof Error ? e.message : String(e ?? "")).toLowerCase();
+  return m.includes("failed to fetch") || m.includes("networkerror") || m.includes("load failed");
+}
+
+/** 不把端口/env 细节写进工作区日志；仅开发环境打到控制台 */
+function warnDevBulkImageNetwork(context: string): void {
+  try {
+    if (!import.meta.env.DEV) return;
+    const vx = getAiProvider() === "vertex";
+    console.warn(
+      `[assetcutter] ${context}：请求未送达。${vx ? "Vertex：请确认 VITE_BULK_IMAGE_API（或 VERTEX 专用地址）在浏览器侧可访问，且代理已配置 Vertex；" : ""}若使用同源 /proxy/gemini，请确认本机 gemini-proxy 在 9002 且 Vite 已反代。`
+    );
+  } catch {
+    /* ignore */
+  }
+}
+
+async function bulkFetchOrExplain(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(input, init);
+  } catch (e) {
+    if (isBrowserFetchNetworkError(e)) {
+      warnDevBulkImageNetwork("生图代理");
+      if (getAiProvider() === "vertex") {
+        throw new Error(
+          "Vertex 生图服务暂时连不上，请检查网络或稍后再试。若使用公网代理，请确认本机可访问该地址。"
+        );
+      }
+      throw new Error("无法连接生图服务，请检查网络后重试。");
+    }
+    throw e;
+  }
 }
 
 async function bulkProxyGenerateContentAsync(args: {
@@ -238,7 +310,7 @@ async function bulkProxyGenerateContentAsync(args: {
 
   const aiBackendExtra = getAiProvider() === "vertex" ? { aiBackend: "vertex" as const } : {};
 
-  const createRes = await fetch(bulkApiUrl("/proxy/gemini/async"), {
+  const createRes = await bulkFetchOrExplain(bulkApiUrl("/proxy/gemini/async"), {
     method: "POST",
     headers: { "Content-Type": "application/json", ...getGeminiFairnessRequestHeaders() },
     body: JSON.stringify({
@@ -283,7 +355,7 @@ async function bulkProxyGenerateContentAsync(args: {
   const deadline = Date.now() + maxPollMs;
   while (Date.now() < deadline) {
     if (abortSignal?.aborted) throw createAbortError("请求已取消");
-    const pollRes = await fetch(bulkApiUrl(`/proxy/gemini/async/${encodeURIComponent(jobId)}`), {
+    const pollRes = await bulkFetchOrExplain(bulkApiUrl(`/proxy/gemini/async/${encodeURIComponent(jobId)}`), {
       signal: abortSignal,
       cache: "no-store",
     });
@@ -317,7 +389,7 @@ async function bulkProxyGenerateContentBatchAsync(args: {
 }): Promise<Array<{ ok: boolean; result?: { text?: string; candidates?: unknown[] }; error?: string }>> {
   if (!Array.isArray(args.items) || args.items.length === 0) return [];
   await consumeTrialGeminiSlotBeforeProxyOrThrow();
-  const createRes = await fetch(bulkApiUrl("/proxy/gemini/async-batch"), {
+  const createRes = await bulkFetchOrExplain(bulkApiUrl("/proxy/gemini/async-batch"), {
     method: "POST",
     headers: { "Content-Type": "application/json", ...getGeminiFairnessRequestHeaders() },
     body: JSON.stringify({
@@ -350,7 +422,7 @@ async function bulkProxyGenerateContentBatchAsync(args: {
 
   const deadline = Date.now() + GEMINI_ASYNC_CLIENT_MAX_POLL_MS;
   while (Date.now() < deadline) {
-    const pollRes = await fetch(bulkApiUrl(`/proxy/gemini/async-batch/${encodeURIComponent(jobId)}`), {
+    const pollRes = await bulkFetchOrExplain(bulkApiUrl(`/proxy/gemini/async-batch/${encodeURIComponent(jobId)}`), {
       cache: "no-store",
     });
     const pollText = await pollRes.text();
@@ -1153,19 +1225,34 @@ function parseGoogleStyleErrorPayload(raw: string): { code?: number; status?: st
 /** 将 API 返回的原始错误转为用户可读的简短说明（用于界面展示） */
 export function normalizeApiErrorMessage(err: unknown): string {
   const raw = String((err as any)?.message ?? err);
+  const vertexUser = userMessageForVertexProxyNotReady(raw);
+  if (vertexUser) {
+    try {
+      if (import.meta.env.DEV && raw.length > 80) {
+        console.warn("[assetcutter] Vertex 代理返回（节选）：", raw.slice(0, 400));
+      }
+    } catch {
+      /* ignore */
+    }
+    return vertexUser;
+  }
   const diagCode = extractDiagCode(raw);
   if (diagCode) {
     const compact = raw.replace(/【[^】]+】/g, '').trim();
     return compact.length > 140 ? compact.slice(0, 140) + "…" : compact;
   }
   /** 浏览器 fetch 失败时 message 多为纯「Failed to fetch」，未必带「TypeError:」前缀 */
-  if (/failed to fetch/i.test(raw)) {
-    return (
-      '请求发送失败（Failed to fetch）：请检查本机网络/VPN/防火墙。' +
-      '若开发者工具 Network 里请求指向 *.onrender.com 等境外地址且状态为 ERR_CONNECTION_CLOSED，多为到该托管代理的链路被重置或不稳定（不一定是本地 Vite/auth-api 未启动）。' +
-      '本地可改 .env.local：VITE_BULK_IMAGE_API=same-origin（或 1），另开终端执行 npm run dev:gemini-proxy（9002），前端用 npm run dev 访问；修改环境变量后需重启 Vite。' +
-      '也可设 VITE_BULK_IMAGE_API=http://127.0.0.1:9002（须 gemini-proxy 的允许 Origin 含当前页面）。/api 仍依赖 auth-api（9100）。VectorEngine 等注意 CORS。'
-    );
+  if (/failed to fetch|networkerror|load failed/i.test(raw)) {
+    try {
+      if (import.meta.env.DEV) {
+        console.warn(
+          "[assetcutter] 网络请求失败（其它模块）。若为生图：已单独在控制台提示代理/端口；此处为通用排障入口。"
+        );
+      }
+    } catch {
+      /* ignore */
+    }
+    return "无法连接服务器，请检查网络后重试。";
   }
 
   const googleErr = parseGoogleStyleErrorPayload(raw);

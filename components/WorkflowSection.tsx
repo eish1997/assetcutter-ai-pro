@@ -80,7 +80,11 @@ import {
 } from '../services/workflowImageTags';
 import AppIcon from './ui/AppIcon';
 import { ImagePreviewOverlay } from './ImagePreviewOverlay';
-import type { ImagePreviewCanvasAdjustControl, ImagePreviewLayoutMode } from './preview';
+import type {
+  ImagePreviewCanvasAdjustControl,
+  ImagePreviewLayoutMode,
+  ImagePreviewWebCaptureApi,
+} from './preview';
 import {
   ImageFlatAnnotationOverlay,
   normalizeImageOverlayDoc,
@@ -189,6 +193,7 @@ import {
   workflowOutlineExpandableGroupIds,
 } from './workflow/workflowOutlineUtils';
 import {
+  getGroupCoverImage,
   getGroupMemberIds,
   isGroupAsset,
   isGroupChildAsset,
@@ -617,6 +622,13 @@ const WorkflowSection: React.FC<{
   lightboxOverlayDraftRef.current = lightboxOverlayDraft;
   lightboxOverlayActiveBucketRef.current = lightboxOverlayActiveBucket;
   const lightboxPanoViewerRef = useRef<PanoramaViewportProjection | null>(null);
+  /** 供 `lightboxAwaitClientResult` 异步链读取当前大图预览模式（避免闭包陈旧） */
+  const lightboxPreviewLayoutRef = useRef<ImagePreviewLayoutMode>(lightboxPreviewLayout);
+  lightboxPreviewLayoutRef.current = lightboxPreviewLayout;
+  const lightboxWebPreviewCaptureApiRef = useRef<ImagePreviewWebCaptureApi | null>(null);
+  const onLightboxWebPreviewCaptureApiChange = useCallback((api: ImagePreviewWebCaptureApi | null) => {
+    lightboxWebPreviewCaptureApiRef.current = api;
+  }, []);
   /** 工作流大图：高度 3D 工具条 portal 宿主（右侧详情列上方，与详情同宽） */
   const lightboxHeightfieldToolbarHostRef = useRef<HTMLDivElement | null>(null);
   /** 大图局部重绘选区底边中点（视口），快捷栏锚在框下方 */
@@ -627,7 +639,12 @@ const WorkflowSection: React.FC<{
   /** 大图提交后递增，强制快捷栏回到默认贴底位置（即使 anchor 本就为 null） */
   const [lightboxQuickComposeLayoutNonce, setLightboxQuickComposeLayoutNonce] = useState(0);
   const onLocalEditAnchorClientChange = useCallback((pt: { x: number; y: number } | null) => {
-    setLightboxQuickComposeAnchor(pt);
+    setLightboxQuickComposeAnchor((prev) => {
+      if (pt == null) return prev != null ? null : prev;
+      const { x, y } = pt;
+      if (prev != null && Math.abs(prev.x - x) < 1 && Math.abs(prev.y - y) < 1) return prev;
+      return { x, y };
+    });
   }, []);
   /** 大图快捷栏：任务已入队但像素仍在客户端异步计算，`runTask` 在此 Promise 上等待 */
   const lightboxClientImageDeferredRef = useRef(
@@ -1764,6 +1781,9 @@ ${lineSvg}
       setAssetError(task.assetId, null);
       return { image: prefetched };
     }
+    let resolvedInputImage = String(inputImage ?? '').trim();
+    let resolvedInputImagesForExecute: string[] | undefined;
+
     if (task.lightboxAwaitClientResult) {
       const box = lightboxClientImageDeferredRef.current.get(task.id);
       if (!box) {
@@ -1776,13 +1796,14 @@ ${lineSvg}
         const img = await box.promise;
         const s = String(img ?? '').trim();
         if (!s) {
-          const msg = `[${getTaskLogLabel(task)}] 未能取得生成图`;
+          const msg = `[${getTaskLogLabel(task)}] 未能取得大图预览合成底图（请重试）`;
           onLog?.('warn', msg);
           setAssetError(task.assetId, msg);
           return { image: null };
         }
         setAssetError(task.assetId, null);
-        return { image: s };
+        /** 客户端合成 = 当前预览所见（含标注烘焙等），作为图生图输入，后续仍走 `executeCapability` */
+        resolvedInputImage = s;
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : safeUnknownToString(err);
         const full = `[${getTaskLogLabel(task)}] ${msg}`;
@@ -1793,8 +1814,6 @@ ${lineSvg}
         lightboxClientImageDeferredRef.current.delete(task.id);
       }
     }
-    let resolvedInputImage = inputImage ?? '';
-    let resolvedInputImagesForExecute: string[] | undefined;
 
     if (task.inputImages && task.inputImages.length > 0) {
       const companionProjectId = String(workspaceProjectChrome?.activeProjectId || '').trim();
@@ -2038,20 +2057,6 @@ ${lineSvg}
     runTaskRef.current = runTask;
   }, [runTask]);
 
-  /** 替换组内某项为另一个资产 */
-  const replaceGroupItemWithSubAsset = useCallback((groupAssetId: string, itemIndex: number, subAssetId: string) => {
-    setAssets((prev) =>
-      prev.map((a) => {
-        if (a.id !== groupAssetId) return a;
-        if (!isGroupAsset(a)) return a;
-        const next = [...(a.assetIds ?? [])];
-        if (itemIndex >= 0 && itemIndex < next.length) next[itemIndex] = subAssetId;
-        return { ...a, assetIds: next };
-      })
-    );
-  }, [setAssets]);
-
-  /** 将组内多个成员移到组外（脱离组） */
   const moveGroupItemsToUpperLevel = useCallback(
     (groupAssetId: string, itemIndexes: number[]) => {
       if (itemIndexes.length === 0) return;
@@ -2294,11 +2299,11 @@ ${lineSvg}
                 );
                 const assetIds = newAssets.map((x) => x.id);
                 const usedLabels = new Set<string>(prev.map((a) => a.groupLabel).filter((x): x is string => !!x));
-                const groupId = uuid();
+                const newCutGroupId = uuid();
                 const groupLabel = getRandomGroupCodeName(usedLabels);
 
                 const newGroup: WorkflowAsset = attachInitialVgpToNewAsset({
-                  id: groupId,
+                  id: newCutGroupId,
                   isGroup: true,
                   original: taskAsset.original,
                   displayKey: 'original',
@@ -2311,19 +2316,25 @@ ${lineSvg}
                   createdAt: Date.now(),
                 });
 
-                const next = [
+                let next: WorkflowAsset[] = [
                   ...prev.filter((a) => a.id !== task.assetId),
-                  ...newAssets.map((a) => ({ ...a, groupId, groupLabel, groupOrder: assetIds.indexOf(a.id) })),
+                  ...newAssets.map((a) => ({ ...a, groupId: newCutGroupId, groupLabel, groupOrder: assetIds.indexOf(a.id) })),
                   newGroup,
                 ];
+
+                if (task.sourceGroupAssetId != null && task.sourceItemIndex != null) {
+                  const gIdx = task.sourceItemIndex;
+                  next = next.map((a) => {
+                    if (a.id !== task.sourceGroupAssetId || !isGroupAsset(a)) return a;
+                    const ids = [...(a.assetIds ?? [])];
+                    if (gIdx >= 0 && gIdx < ids.length) ids[gIdx] = newCutGroupId;
+                    return { ...a, assetIds: ids };
+                  });
+                }
 
                 revokeWorkflowModelBlobUrlsAfterAssetRemoved(taskAsset, next);
                 return next;
               });
-
-              if (task.sourceGroupAssetId != null && task.sourceItemIndex != null) {
-                replaceGroupItemWithSubAsset(task.sourceGroupAssetId, task.sourceItemIndex, task.assetId);
-              }
 
               onLog?.('info', `${logBatch} ${taskLabel} 完成（${cropped.length} 张入组）`);
               setCompletedTaskIds((prev) => {
@@ -2577,7 +2588,6 @@ ${lineSvg}
       capabilityTextModel,
       getTaskLogLabel,
       getModule,
-      replaceGroupItemWithSubAsset,
       setAssetError,
       scheduleCompanionPersistResult,
     ]
@@ -3299,6 +3309,34 @@ ${lineSvg}
             onLog?.('warn', `大图预览：局部重绘失败 — ${normalizeApiErrorMessage(err)}`);
           }
         }
+        /** 非局部重绘：全景 / 高度 3D / 模型 3D 以当前视口截图为图生图底图；平面仍用 `src`（当前预览合成） */
+        if (!needsPanoLocalCapture && !localEditSnapshot) {
+          const layout = lightboxPreviewLayoutRef.current;
+          if (layout === 'pano') {
+            try {
+              const u = lightboxPanoViewerRef.current?.captureViewDataUrl('image/png');
+              const s = String(u || '').trim();
+              if (s.startsWith('data:')) {
+                composite = s;
+              } else {
+                onLog?.('warn', '大图预览：全景视口截图为空，将按平面底图继续');
+              }
+            } catch (err) {
+              onLog?.('warn', `大图预览：全景截屏失败 — ${normalizeApiErrorMessage(err)}`);
+            }
+          } else if (layout === 'heightfield' || layout === 'model3d') {
+            try {
+              const s = lightboxWebPreviewCaptureApiRef.current?.captureCurrentViewAsDataUrl();
+              if (s && String(s).trim().startsWith('data:')) {
+                composite = s;
+              } else {
+                onLog?.('warn', '大图预览：3D 视口截图为空，将按平面底图继续');
+              }
+            } catch (err) {
+              onLog?.('warn', `大图预览：3D 截屏失败 — ${normalizeApiErrorMessage(err)}`);
+            }
+          }
+        }
         let itemsBaked = false;
         if (itemsSnapshot.length > 0) {
           const baked = await rasterizeImageWithAnnotationBakes(composite, itemsSnapshot);
@@ -3406,11 +3444,11 @@ ${lineSvg}
         );
         const assetIds = newAssets.map((x) => x.id);
         const usedLabels = new Set<string>(prev.map((a) => a.groupLabel).filter((x): x is string => !!x));
-        const groupId = uuid();
+        const newCutGroupId = uuid();
         const groupLabel = getRandomGroupCodeName(usedLabels);
 
         const newGroup: WorkflowAsset = attachInitialVgpToNewAsset({
-          id: groupId,
+          id: newCutGroupId,
           isGroup: true,
           original: taskAsset.original,
           displayKey: 'original',
@@ -3423,11 +3461,21 @@ ${lineSvg}
           createdAt: Date.now(),
         });
 
-        const next = [
+        let next: WorkflowAsset[] = [
           ...prev.filter((a) => a.id !== task.assetId),
-          ...newAssets.map((a) => ({ ...a, groupId, groupLabel, groupOrder: assetIds.indexOf(a.id) })),
+          ...newAssets.map((a) => ({ ...a, groupId: newCutGroupId, groupLabel, groupOrder: assetIds.indexOf(a.id) })),
           newGroup,
         ];
+
+        if (task.sourceGroupAssetId != null && task.sourceItemIndex != null) {
+          const gIdx = task.sourceItemIndex;
+          next = next.map((a) => {
+            if (a.id !== task.sourceGroupAssetId || !isGroupAsset(a)) return a;
+            const ids = [...(a.assetIds ?? [])];
+            if (gIdx >= 0 && gIdx < ids.length) ids[gIdx] = newCutGroupId;
+            return { ...a, assetIds: ids };
+          });
+        }
 
         for (const a of newAssets) {
           const o = String(a.original || '').trim();
@@ -3439,9 +3487,6 @@ ${lineSvg}
         revokeWorkflowModelBlobUrlsAfterAssetRemoved(taskAsset, next);
         return next;
       });
-      if (task.sourceGroupAssetId != null && task.sourceItemIndex != null) {
-        replaceGroupItemWithSubAsset(task.sourceGroupAssetId, task.sourceItemIndex, task.assetId);
-      }
       setCutSelectState(null);
       if (remaining.length > 0) executePending(remaining);
       else setExecuting(false);
@@ -3451,7 +3496,6 @@ ${lineSvg}
       setAssets,
       setPending,
       executePending,
-      replaceGroupItemWithSubAsset,
       actionModules,
       scheduleCompanionPersistOriginalAny,
     ]
@@ -6518,7 +6562,10 @@ ${lineSvg}
             if (!item) continue;
             if (typeof item === 'string') {
               const child = assets.find((x) => x.id === item);
-              if (child && !isGroupAsset(child)) {
+              if (child && isGroupAsset(child)) {
+                const cover = getGroupCoverImage(child, assets, getAssetDisplayImage).trim();
+                if (cover) imgsToAdd.push(cover);
+              } else if (child && !isGroupAsset(child)) {
                 if (isWorkflowTextAsset(child)) {
                   if (workflowAssetCurrentDisplayIsTextChannel(child)) {
                     const t = workflowAssetToInputText(child).trim();
@@ -6536,7 +6583,12 @@ ${lineSvg}
               }
             } else if (item && typeof item === 'object' && 'assetId' in item) {
               const child = assets.find((x) => x.id === (item as { assetId: string }).assetId);
-              if (!child || isGroupAsset(child)) continue;
+              if (!child) continue;
+              if (isGroupAsset(child)) {
+                const cover = getGroupCoverImage(child, assets, getAssetDisplayImage).trim();
+                if (cover) imgsToAdd.push(cover);
+                continue;
+              }
               if (isWorkflowTextAsset(child)) {
                 if (workflowAssetCurrentDisplayIsTextChannel(child)) {
                   const t = workflowAssetToInputText(child).trim();
@@ -6847,12 +6899,23 @@ ${lineSvg}
           const item = cut[itemIndex];
           if (!item) continue;
           if (typeof item === 'string') {
-            addImageToPending(item, mod.id, {
-              parentAssetId: groupId,
-              sourceGroupAssetId: groupId,
-              sourceItemIndex: itemIndex,
-              ...(queueOverrideOptions ?? {}),
-            });
+            // 新版 isGroup：`assetIds` 存子资产 id；旧版 cut 可能存内联 base64 串，二者均为 string。
+            const childById = assets.find((x) => x.id === item);
+            if (childById) {
+              if (!workflowAssetAllowedForCapabilityDrop(childById, mod)) continue;
+              addToPending(childById.id, mod.id, {
+                sourceGroupAssetId: groupId,
+                sourceItemIndex: itemIndex,
+                ...(queueOverrideOptions ?? {}),
+              });
+            } else {
+              addImageToPending(item, mod.id, {
+                parentAssetId: groupId,
+                sourceGroupAssetId: groupId,
+                sourceItemIndex: itemIndex,
+                ...(queueOverrideOptions ?? {}),
+              });
+            }
           } else {
             const child = assets.find((x) => x.id === (item as { assetId: string }).assetId);
             if (!child || !workflowAssetAllowedForCapabilityDrop(child, mod)) continue;
@@ -7116,11 +7179,20 @@ ${lineSvg}
           const item = cut[itemIndex];
           if (!item) continue;
           if (typeof item === 'string') {
-            addImageToPending(item, setActionId, {
-              parentAssetId: groupId,
-              sourceGroupAssetId: groupId,
-              sourceItemIndex: itemIndex,
-            });
+            const childById = assets.find((x) => x.id === item);
+            if (childById) {
+              if (isWorkflowTextAsset(childById) && workflowAssetCurrentDisplayIsTextChannel(childById)) continue;
+              addToPending(childById.id, setActionId, {
+                sourceGroupAssetId: groupId,
+                sourceItemIndex: itemIndex,
+              });
+            } else {
+              addImageToPending(item, setActionId, {
+                parentAssetId: groupId,
+                sourceGroupAssetId: groupId,
+                sourceItemIndex: itemIndex,
+              });
+            }
           } else {
             const child = assets.find((x) => x.id === (item as { assetId: string }).assetId);
             if (child && isWorkflowTextAsset(child) && workflowAssetCurrentDisplayIsTextChannel(child)) continue;
@@ -9051,6 +9123,11 @@ ${lineSvg}
               : undefined
           }
           panoViewerRef={lightboxPanoViewerRef}
+          onWebPreviewCaptureApiChange={
+            lightboxShowsImage && !isWorkflowTextAsset(lightboxAsset) && !isGroupAsset(lightboxAsset)
+              ? onLightboxWebPreviewCaptureApiChange
+              : undefined
+          }
           heightfieldToolbarHostRef={lightboxHeightfieldToolbarHostRef}
           canvasAdjustControl={lightboxCanvasAdjustControl}
           imageResizeWriteBack={

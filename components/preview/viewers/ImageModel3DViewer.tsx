@@ -57,7 +57,7 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({ modelSrc, m
     const camera = new THREE.PerspectiveCamera(50, width / height, 0.01, 2000);
     camera.position.set(0, 0.6, 2.4);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
     renderer.setClearColor(0x000000, 0);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;

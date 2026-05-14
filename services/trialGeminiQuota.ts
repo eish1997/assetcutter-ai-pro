@@ -75,6 +75,19 @@ export async function consumeTrialGeminiSlotBeforeProxyOrThrow(): Promise<void> 
     if (e instanceof HttpRequestError && e.status === 429) {
       throw new Error(e.message || `试用通道每日限 ${limit} 次任务`);
     }
+    const msg = String((e as Error)?.message ?? e);
+    if (/failed to fetch|networkerror|load failed/i.test(msg)) {
+      try {
+        if (import.meta.env.DEV) {
+          console.warn(
+            '[assetcutter] 试用额度接口未送达。请确认 auth-api 已监听 9100，且通过 Vite 同源访问 /api/auth（勿把 API 指到不可达地址）。'
+          );
+        }
+      } catch {
+        /* ignore */
+      }
+      throw new Error('无法连接账户服务，请检查网络后重试。');
+    }
     throw e;
   }
 }

@@ -165,12 +165,15 @@ export default function WorkspaceQuickComposeBar({
   } | null>(null);
 
   const { rows: effectiveGearRows, coerceGearId } = useEffectiveImageGearRows();
+  /** 勿将整颗 `genSettings` 放进 deps：父级每次 render 都是新对象，会导致 layout effect 每帧跑一遍并可能级联 setState → 栈溢出。 */
+  const coerceGearTargetId = genSettings.gearId;
+  const onGearIdChange = genSettings.onGearId;
 
   useLayoutEffect(() => {
     if (!showGenImageSettings) return;
-    const next = coerceGearId(genSettings.gearId);
-    if (next !== genSettings.gearId) genSettings.onGearId(next);
-  }, [showGenImageSettings, effectiveGearRows, coerceGearId, genSettings]);
+    const next = coerceGearId(coerceGearTargetId);
+    if (next !== coerceGearTargetId) onGearIdChange(next);
+  }, [showGenImageSettings, coerceGearId, coerceGearTargetId, onGearIdChange]);
 
   const resetToDefaultPosition = useCallback(() => {
     const vw = window.innerWidth;
@@ -376,23 +379,42 @@ export default function WorkspaceQuickComposeBar({
     resetToDefaultPosition();
   }, [visible, placement, lightboxAnchorClient, lightboxLayoutResetNonce, resetToDefaultPosition]);
 
+  const lightboxAnchorRef = useRef(lightboxAnchorClient);
+  lightboxAnchorRef.current = lightboxAnchorClient;
+
+  const applyLightboxBarToAnchor = useCallback(() => {
+    const anchor = lightboxAnchorRef.current;
+    if (!visible || placement !== 'lightbox' || !anchor) return;
+    const gap = 14;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const el = barRef.current;
+    const r = el?.getBoundingClientRect();
+    const w = r && r.width > 1 ? r.width : Math.min(576, Math.max(320, vw - 24));
+    const left = anchor.x - w / 2;
+    const top = anchor.y + gap;
+    const next = clampBarToViewport({ left, top }, el ?? null, vw, vh);
+    setPosition((prev) => {
+      if (prev != null && Math.abs(prev.left - next.left) < 1 && Math.abs(prev.top - next.top) < 1) return prev;
+      return next;
+    });
+  }, [visible, placement]);
+
   useLayoutEffect(() => {
     if (!visible || placement !== 'lightbox' || !lightboxAnchorClient) return;
-    const gap = 14;
-    const apply = () => {
-      const vw = window.innerWidth;
-      const vh = window.innerHeight;
-      const el = barRef.current;
-      const r = el?.getBoundingClientRect();
-      const w = r && r.width > 1 ? r.width : Math.min(576, Math.max(320, vw - 24));
-      const left = lightboxAnchorClient.x - w / 2;
-      const top = lightboxAnchorClient.y + gap;
-      setPosition(clampBarToViewport({ left, top }, el ?? null, vw, vh));
-    };
-    apply();
-    const raf = requestAnimationFrame(apply);
+    applyLightboxBarToAnchor();
+    const raf = requestAnimationFrame(() => applyLightboxBarToAnchor());
     return () => cancelAnimationFrame(raf);
-  }, [visible, placement, lightboxAnchorClient, resetToDefaultPosition, draft, promptCards.length, inputExpanded]);
+  }, [visible, placement, lightboxAnchorClient, lightboxLayoutResetNonce, inputExpanded, applyLightboxBarToAnchor]);
+
+  useEffect(() => {
+    if (!visible || placement !== 'lightbox' || !lightboxAnchorClient) return;
+    const el = barRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => applyLightboxBarToAnchor());
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [visible, placement, lightboxAnchorClient, applyLightboxBarToAnchor]);
 
   useEffect(() => {
     if (!dragging) return;

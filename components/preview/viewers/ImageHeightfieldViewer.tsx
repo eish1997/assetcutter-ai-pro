@@ -120,7 +120,7 @@ const ImageHeightfieldViewer: React.FC<LazyImagePreviewViewerProps> = ({
     /** 首帧在 HDR 完成前：略偏上、从 +Z 朝立面看，与 `frameCameraToObject` 的 +z 一致 */
     camera.position.set(0, 0.12, 2.35);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
     renderer.setClearColor(0x000000, 0);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;

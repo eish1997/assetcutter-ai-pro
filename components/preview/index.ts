@@ -1,6 +1,7 @@
 export type {
   ImagePreviewCanvasAdjustControl,
   ImagePreviewLayoutMode,
+  ImagePreviewWebCaptureApi,
   PreviewDescriptor,
   PreviewImagePayload,
   PreviewMode,

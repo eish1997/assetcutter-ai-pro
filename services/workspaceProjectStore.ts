@@ -2,6 +2,7 @@ import type { WorkflowAsset, WorkflowPendingTask } from '../types';
 import { readLocalString, removeLocalKey, safeLocalStorage, writeLocalJson, writeLocalString, writeLocalStringOrThrow } from './clientPersist';
 import { idbDeleteBundle, idbLoadBundleJson, idbSaveBundleJson } from './workspaceBundleIdb';
 import { migrateLegacyAssets } from './assetGroupMigration';
+import { sanitizeWorkflowProjectBundle } from './workflowBundleSanitize';
 import { stripWorkflowBundleForIdbPersist } from './workflowCompanionAssets';
 
 export type WorkspaceProject = {
@@ -150,6 +151,21 @@ function parseBundleJson(raw: string): WorkflowProjectBundle {
   }
   // 迁移旧数据到新结构
   bundle.assets = migrateLegacyAssets(bundle.assets);
+  const hygiene = sanitizeWorkflowProjectBundle(bundle.assets, bundle.pending);
+  bundle.assets = hygiene.assets;
+  bundle.pending = hygiene.pending;
+  const st = hygiene.stats;
+  if (st.repairedGroupRefSlots > 0 || st.demotedEmptyGroups > 0 || st.prunedPendingTasks > 0) {
+    const parts: string[] = [];
+    if (st.repairedGroupRefSlots > 0) parts.push(`修正组内引用 ${st.repairedGroupRefSlots} 处`);
+    if (st.demotedEmptyGroups > 0) parts.push(`空组降级为单卡 ${st.demotedEmptyGroups} 个`);
+    if (st.prunedPendingTasks > 0) parts.push(`移除失效队列 ${st.prunedPendingTasks} 条`);
+    const notice = `工作区已自动修复数据：${parts.join('；')}`;
+    if (!migrationNoticesSeen.has(notice)) {
+      migrationNoticesSeen.add(notice);
+      migrationNoticesQueue.push(notice);
+    }
+  }
   return migrateWorkflowBundleSchema(bundle);
 }
 

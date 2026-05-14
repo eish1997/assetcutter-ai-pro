@@ -7,6 +7,11 @@ import type { Dispatch, SetStateAction } from 'react';
 /** 大图壳 `ImagePreviewOverlay` 的视图布局（平面为内联，其余多为独立 WebGL） */
 export type ImagePreviewLayoutMode = 'flat' | 'pano' | 'model3d' | 'heightfield';
 
+/** 工作流大图：非平面模式下截取「当前所见」WebGL 画面供快捷生图入队（由 `ImagePreviewOverlay` 注册） */
+export type ImagePreviewWebCaptureApi = {
+  captureCurrentViewAsDataUrl: () => string | null;
+};
+
 /**
  * 工作流大图：线分割 / 改尺寸写回状态由 `WorkflowSection` 持有并注入 `ImagePreviewOverlay`，
  * 以便 `ImageAnnotationLightboxToolbar` 与壳层共用同一套 state。

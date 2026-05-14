@@ -6,6 +6,7 @@ import {
   previewPolicyForMode,
   type ImagePreviewCanvasAdjustControl,
   type ImagePreviewLayoutMode,
+  type ImagePreviewWebCaptureApi,
 } from './preview';
 import {
   IMAGE_PREVIEW_PIXEL_SAMPLE_MAX_EDGE,
@@ -198,13 +199,18 @@ export type ImagePreviewOverlayProps = {
    */
   heightfieldToolbarHostRef?: React.RefObject<HTMLDivElement | null>;
   /**
-   * 若提供：线分割 / 改尺寸写回 state 由父级持有（与 `ImageAnnotationLightboxToolbar` 下拉共用）；未提供时由壳内 state + 顶栏内联按钮承担。
+   * 若提供：线分割 / 改尺寸写回 state 由父级持有（与 `ImageAnnotationLightboxToolbar` 主栏按钮共用）；未提供时由壳内 state + 顶栏内联按钮承担。
    */
   canvasAdjustControl?: ImagePreviewCanvasAdjustControl | null;
   /** 平面模式下在主图上移动指针时回调当前像素 RGB（离开图内容区或无法采样时为 null） */
   onFlatImagePixelSample?: (rgb: { r: number; g: number; b: number } | null) => void;
   /** 平面 / 全景 / 高度 3D / 3D 模型 切换时通知父级（用于大图标注按模式分桶） */
   onPreviewLayoutChange?: (layout: ImagePreviewLayoutMode) => void;
+  /**
+   * 注册「截取当前预览画面」能力：全景用 `panoViewerRef`；高度 3D / 模型 3D 用宿主内 WebGL canvas。
+   * 卸载时传 `null`。
+   */
+  onWebPreviewCaptureApiChange?: (api: ImagePreviewWebCaptureApi | null) => void;
   /**
    * 为真时：平面主图不响应缩放/平移等 `onMouseDown` 手势（如本机 SAM 武装时点选/框选需独占指针）。
    */
@@ -295,6 +301,7 @@ export function ImagePreviewOverlay({
   canvasAdjustControl,
   onFlatImagePixelSample,
   onPreviewLayoutChange,
+  onWebPreviewCaptureApiChange,
   suppressFlatImageInteraction = false,
   imageResizeWriteBack = null,
 }: ImagePreviewOverlayProps) {
@@ -359,6 +366,8 @@ export function ImagePreviewOverlay({
     [panoViewerRef]
   );
   const panoOverlayHostRef = useRef<HTMLDivElement | null>(null);
+  /** 高度 3D / 模型 3D 预览根容器，用于截取 WebGL 当前帧 */
+  const webglPreviewHostRef = useRef<HTMLDivElement | null>(null);
   const innerWrapRef = useRef<HTMLDivElement | null>(null);
   const rotateDragRef = useRef<{ pivotX: number; pivotY: number; lastRad: number | null } | null>(null);
   const rKeyPressedRef = useRef(false);
@@ -445,6 +454,38 @@ export function ImagePreviewOverlay({
     const el = external ?? internal;
     setHeightfieldToolbarHostEl((prev) => (prev === el ? prev : el));
   }, [heightfieldLayoutActive, uiHidden, heightfieldToolbarHostRef, resetKey]);
+
+  const webPreviewCaptureApi = useMemo<ImagePreviewWebCaptureApi>(
+    () => ({
+      captureCurrentViewAsDataUrl: () => {
+        const layout = previewLayout;
+        if (layout === 'pano') {
+          const u = panoViewerRef.current?.captureViewDataUrl('image/png');
+          const s = String(u || '').trim();
+          return s.startsWith('data:') ? s : null;
+        }
+        if (layout === 'heightfield' || layout === 'model3d') {
+          const root = webglPreviewHostRef.current;
+          if (!root) return null;
+          const c = root.querySelector('canvas');
+          if (!(c instanceof HTMLCanvasElement) || c.width < 2 || c.height < 2) return null;
+          try {
+            return c.toDataURL('image/png');
+          } catch {
+            return null;
+          }
+        }
+        return null;
+      },
+    }),
+    [previewLayout, panoViewerRef]
+  );
+
+  useEffect(() => {
+    if (!onWebPreviewCaptureApiChange) return;
+    onWebPreviewCaptureApiChange(webPreviewCaptureApi);
+    return () => onWebPreviewCaptureApiChange(null);
+  }, [onWebPreviewCaptureApiChange, webPreviewCaptureApi]);
 
   /** 全景模式下叠一层与平面一致的 object-contain 贴图 + 标注，使裁切/局部重绘等仍可用（底图透明，仍见 WebGL 全景） */
   const panoAnnotationBridge = Boolean(panoLayoutActive && flatImageOverlay);
@@ -1283,7 +1324,7 @@ export function ImagePreviewOverlay({
         ) : null}
 
         {!centerSlot && hasModel3DMode && previewLayout === 'model3d' ? (
-          <div className="absolute inset-0 z-[5] min-h-0" onWheel={(e) => e.stopPropagation()}>
+          <div ref={webglPreviewHostRef} className="absolute inset-0 z-[5] min-h-0" onWheel={(e) => e.stopPropagation()}>
             <Suspense fallback={<PreviewViewerFallback label="3D 模块加载中…" />}>
               <LazyImageModel3DViewer
                 imageSrc={imageSrc!}
@@ -1296,7 +1337,7 @@ export function ImagePreviewOverlay({
         ) : null}
 
         {!centerSlot && hasHeightfieldMode && previewLayout === 'heightfield' ? (
-          <div className="absolute inset-0 z-[5] min-h-0" onWheel={(e) => e.stopPropagation()}>
+          <div ref={webglPreviewHostRef} className="absolute inset-0 z-[5] min-h-0" onWheel={(e) => e.stopPropagation()}>
             <Suspense fallback={<PreviewViewerFallback label="高度 3D 模块加载中…" />}>
               <LazyImageHeightfieldViewer
                 imageSrc={imageSrc!}
