@@ -12,6 +12,7 @@ import { useWorkflowWorkspacePanes } from '../hooks/useWorkflowWorkspacePanes';
 import { useWorkflowMarquee } from '../hooks/useWorkflowMarquee';
 import { createPortal, flushSync } from 'react-dom';
 import {
+  CloudDownload,
   Download,
   Eye,
   Image as ImageIcon,
@@ -67,13 +68,24 @@ import { setWorkflowMirrorPreferenceScope } from '../services/workflowMirrorPref
 import { appendWorkflowOverlayCloseSnapshot, supersedeWorkflowOverlaySnapshotsForAsset, WORKFLOW_OVERLAY_PERIODIC_SNAPSHOT_MS, hydrateWorkflowOverlayRingSessionFromIdbOrLocalIfEmpty } from '../services/workflowOverlaySnapshots';
 import type { WorkflowOverlaySnapshotBucket } from '../services/workflowOverlaySnapshots';
 import { compareWorkflowOverlayDraftToPersisted } from '../services/workflowOverlayDraftCompare';
-import { WorkflowGenerationRecordPanel } from './WorkflowGenerationRecordPanel';
+import { WorkflowStepTimelineDetailPanel } from './WorkflowStepTimelineDetailPanel';
 import { WorkflowStepTimelinePanel } from './WorkflowStepTimelinePanel';
 import { WorkflowOverlaySnapshotRecoverPanel } from './workflow/WorkflowOverlaySnapshotRecoverPanel';
 import { WorkflowStepNodeGraphOverlay } from './WorkflowStepNodeGraphOverlay';
 import { triggerImageDownload } from '../services/imageDataUrl';
 import type { WorkflowLightboxImageWriteBackPayload } from '../services/imagePreviewWorkflowResize';
 import { readLocalJson, scopedStorageKey, workflowFavoritesStorageKey, writeLocalJson } from '../services/clientPersist';
+import { getTripoApiKey } from '../services/settingsStore';
+import {
+  rehydrateWorkflowAssetModelsFromTripoTask,
+} from '../services/workflowTripoModelRehydrate';
+import {
+  resolveWorkflowStepModelUrls,
+  resolveWorkflowStepModelCompanionKeys,
+  resolveWorkflowStepModelFormats,
+} from '../services/workflowStepModels';
+import { downloadWorkflowStepModelSlot } from '../services/downloadModelFile';
+import { revokeWorkflowModelBlobUrlsIfOrphaned } from '../services/workflowModelBlob';
 import {
   readLightboxAnnotationPrefs,
   writeLightboxAnnotationPrefs,
@@ -400,6 +412,29 @@ function buildWorkflowTaskUserPromptRecordForMetadata(
   return '';
 }
 
+/** 写入 `resultMeta`：入队侧预设/用户输入快照与是否走「理解」链路，供步骤时间线详情对照 */
+function buildWorkflowStepResultMetaInputSnapshots(
+  task: WorkflowPendingTask,
+  vgpSteps: VgpGenStepCapture[] | null | undefined
+): {
+  presetActionIdSnapshot: string;
+  promptOverrideSnapshot?: string;
+  inputTextSnapshot?: string;
+  usedCapabilityUnderstand: boolean;
+  skipUnderstandSnapshot?: boolean;
+} {
+  const used = Array.isArray(vgpSteps) && vgpSteps.length > 0;
+  const po = String(task.promptOverride ?? '').trim();
+  const it = String(task.inputText ?? '').trim();
+  return {
+    presetActionIdSnapshot: baseActionId(task.actionType),
+    ...(po ? { promptOverrideSnapshot: po } : {}),
+    ...(it ? { inputTextSnapshot: it } : {}),
+    usedCapabilityUnderstand: used,
+    ...(task.overrideSkipUnderstand === true ? { skipUnderstandSnapshot: true } : {}),
+  };
+}
+
 /** 大图底部条图标（与标注工具条密度接近） */
 const LIGHTBOX_BAR_IC = { size: 16, strokeWidth: 1.75, className: 'shrink-0' as const };
 const LIGHTBOX_ICON_BTN_NEUTRAL =
@@ -555,6 +590,7 @@ const WorkflowSection: React.FC<{
   const [lightboxAssetId, setLightboxAssetId] = useState<string | null>(null);
   const lightboxAssetIdRef = useRef<string | null>(null);
   lightboxAssetIdRef.current = lightboxAssetId;
+  const [lightboxTripoPullBusy, setLightboxTripoPullBusy] = useState(false);
   const lightboxSamArmEdgeRef = useRef(false);
   const textLightboxCenterRef = useRef<WorkflowTextLightboxCenterHandle | null>(null);
   const [lightboxMetaText, setLightboxMetaText] = useState<string>('');
@@ -1373,11 +1409,20 @@ const WorkflowSection: React.FC<{
     const parts: string[] = [];
     for (const a of assets) {
       if (!workflowAssetNeedsCompanionModelHydrate(a)) continue;
+      const smck = a.stepModelCompanionKeys || {};
+      for (const stepKey of Object.keys(smck)) {
+        const keys = smck[stepKey] || [];
+        for (let i = 0; i < keys.length; i += 1) {
+          const ck = String(keys[i] || '').trim();
+          if (!ck) continue;
+          parts.push(`${a.id}:${stepKey}:${i}:${ck}`);
+        }
+      }
       const mck = a.modelCompanionKeys || [];
       for (let i = 0; i < mck.length; i += 1) {
         const ck = String(mck[i] || '').trim();
         if (!ck) continue;
-        parts.push(`${a.id}:${i}:${ck}`);
+        parts.push(`${a.id}:legacy:${i}:${ck}`);
       }
     }
     return parts.sort().join('|');
@@ -1474,9 +1519,46 @@ const WorkflowSection: React.FC<{
     let cancelled = false;
     void (async () => {
       for (const a of targets) {
+        const stepCompanion = a.stepModelCompanionKeys || {};
+        const nextStepUrls: Record<string, string[]> = { ...(a.stepModelUrls || {}) };
+        let stepChanged = false;
+        for (const stepKey of Object.keys(stepCompanion)) {
+          const mck = stepCompanion[stepKey] || [];
+          const urls = [...(nextStepUrls[stepKey] || [])];
+          let keyChanged = false;
+          for (let i = 0; i < mck.length; i += 1) {
+            const ck = String(mck[i] || '').trim();
+            if (!ck) continue;
+            const prevU = String(urls[i] ?? '').trim();
+            if (prevU && (/^blob:/i.test(prevU) || /^https?:\/\//i.test(prevU) || prevU.startsWith('data:'))) {
+              continue;
+            }
+            const got = await fetchWorkflowModelFromCompanionAsObjectUrl(base, projectId, ck, a.modelSourceName);
+            if (cancelled) return;
+            if (got.ok === false) {
+              onLog?.('warn', '本地伴侣 3D 模型恢复失败', `${a.id}/${stepKey}[${i}]: ${got.error}`);
+              continue;
+            }
+            while (urls.length <= i) urls.push('');
+            const oldSlot = String(urls[i] ?? '').trim();
+            if (/^blob:/i.test(oldSlot)) {
+              try {
+                URL.revokeObjectURL(oldSlot);
+              } catch {
+                /* ignore */
+              }
+            }
+            urls[i] = got.objectUrl;
+            keyChanged = true;
+          }
+          if (keyChanged) {
+            nextStepUrls[stepKey] = urls;
+            stepChanged = true;
+          }
+        }
         const mck = a.modelCompanionKeys || [];
         const urls = [...(a.modelUrls || [])];
-        let changed = false;
+        let legacyChanged = false;
         for (let i = 0; i < mck.length; i += 1) {
           const ck = String(mck[i] || '').trim();
           if (!ck) continue;
@@ -1500,10 +1582,20 @@ const WorkflowSection: React.FC<{
             }
           }
           urls[i] = got.objectUrl;
-          changed = true;
+          legacyChanged = true;
         }
-        if (changed) {
-          setAssets((prev) => prev.map((x) => (x.id === a.id ? { ...x, modelUrls: urls } : x)));
+        if (stepChanged || legacyChanged) {
+          setAssets((prev) =>
+            prev.map((x) =>
+              x.id === a.id
+                ? {
+                    ...x,
+                    ...(stepChanged ? { stepModelUrls: nextStepUrls } : {}),
+                    ...(legacyChanged ? { modelUrls: urls } : {}),
+                  }
+                : x
+            )
+          );
         }
       }
     })();
@@ -1608,7 +1700,7 @@ const WorkflowSection: React.FC<{
       }
       return '文字';
     }
-    if ((a.modelUrls?.length ?? 0) > 0 && a.displayKey === 'original') return '3D 模型';
+    if (resolveWorkflowStepModelUrls(a, a.displayKey).length > 0) return '3D 模型';
     if (a.displayKey === 'original') return '原始';
     if (a.displayKey === 'cut_image') return '切割';
     const dk = a.displayKey;
@@ -1912,6 +2004,7 @@ ${lineSvg}
           auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_INPUT_IMAGE_RESOLVE, 'warn', msg);
           return { image: null };
         }
+        resolvedInputImage = resolvedImg.dataUrl;
       }
     }
 
@@ -2024,6 +2117,29 @@ ${lineSvg}
           return { image: null };
         }
         try {
+          setAssets((prev) =>
+            prev.map((a) => {
+              if (a.id !== task.assetId) return a;
+              const key = task.actionType;
+              const hasOrder = (a.resultOrder || []).includes(key);
+              const old = a.resultMeta?.[key];
+              return {
+                ...a,
+                resultOrder: hasOrder ? a.resultOrder : [...(a.resultOrder || []), key],
+                resultMeta: {
+                  ...(a.resultMeta || {}),
+                  [key]: {
+                    executedAt: Date.now(),
+                    ...(old || {}),
+                    ...(task.displayStepLabel ? { displayStepLabel: task.displayStepLabel } : {}),
+                    ...buildWorkflowStepResultMetaInputSnapshots(task, null),
+                    presetActionIdSnapshot: baseActionId(task.actionType),
+                    mediaKind: 'model3d' as const,
+                  },
+                },
+              };
+            })
+          );
           await onAddGenerate3DJob(module, resolvedInputImage, task);
           setAssetError(task.assetId, null);
         } catch (err) {
@@ -2439,6 +2555,7 @@ ${lineSvg}
                     [tKey]: {
                       executedAt: Date.now(),
                       ...(task.displayStepLabel ? { displayStepLabel: task.displayStepLabel } : {}),
+                      ...buildWorkflowStepResultMetaInputSnapshots(task, vgpSteps ?? null),
                     },
                   };
                   const next: WorkflowAsset = {
@@ -2470,6 +2587,7 @@ ${lineSvg}
                         executedAt: Date.now(),
                         mediaKind: 'video' as const,
                         ...(task.displayStepLabel ? { displayStepLabel: task.displayStepLabel } : {}),
+                        ...buildWorkflowStepResultMetaInputSnapshots(task, vgpSteps ?? null),
                       },
                     };
                     const tagList = buildWorkflowImageTags({
@@ -2509,6 +2627,13 @@ ${lineSvg}
                 return next;
               });
             } else {
+              const delegatedGenerate3D =
+                !result &&
+                classifyWorkflowRunTaskBranch({
+                  actionType: task.actionType,
+                  module: getModule(task.actionType),
+                }) === 'branch_generate_3d';
+              if (!delegatedGenerate3D) {
               flushSync(() => {
                 setAssets((prev) =>
                   prev.map((a) => {
@@ -2518,13 +2643,18 @@ ${lineSvg}
                       Object.keys(a.results || {}).some((k) => baseActionId(k) === baseId) ||
                       (a.resultOrder || []).some((k) => baseActionId(k) === baseId);
                     const key = result ? (hasAnyVersion ? makeVersionKey(baseId) : baseId) : baseId;
+                    const prevStepMeta = a.resultMeta?.[key];
                     const nextResults = result ? { ...a.results, [key]: result } : a.results;
                     const nextOrder = result ? [...(a.resultOrder || []), key] : a.resultOrder || [];
                     const nextMeta = {
                       ...(a.resultMeta || {}),
                       [key]: {
-                        executedAt: Date.now(),
-                        ...(task.displayStepLabel ? { displayStepLabel: task.displayStepLabel } : {}),
+                        ...(prevStepMeta || {}),
+                        executedAt: prevStepMeta?.executedAt ?? Date.now(),
+                        ...(task.displayStepLabel && !prevStepMeta?.displayStepLabel?.trim()
+                          ? { displayStepLabel: task.displayStepLabel }
+                          : {}),
+                        ...(result ? buildWorkflowStepResultMetaInputSnapshots(task, vgpSteps ?? null) : {}),
                       },
                     };
                     const tagList =
@@ -2567,6 +2697,7 @@ ${lineSvg}
                   })
                 );
               });
+              }
               const after = assetsRef.current.find((x) => x.id === task.assetId);
               if (
                 after &&
@@ -3706,6 +3837,7 @@ ${lineSvg}
             displayKey: 'original',
             results: {},
             resultOrder: [],
+            stepModelUrls: { original: [blobUrl] },
             modelUrls: [blobUrl],
             modelSourceName: file.name,
             archived: false,
@@ -3764,7 +3896,15 @@ ${lineSvg}
           const got = await fetchWorkflowModelFromCompanionAsObjectUrl(base, pid, put.key, file.name);
           if (got.ok === false) {
             setAssets((prev) =>
-              prev.map((x) => (x.id === newId ? { ...x, modelCompanionKeys: [put.key] } : x))
+              prev.map((x) =>
+                x.id === newId
+                  ? {
+                      ...x,
+                      stepModelCompanionKeys: { original: [put.key] },
+                      modelCompanionKeys: [put.key],
+                    }
+                  : x
+              )
             );
             onLog?.('warn', '3D 模型落盘后读取预览失败', got.error);
             return;
@@ -3779,7 +3919,13 @@ ${lineSvg}
               if (x.id !== newId) return x;
               const urls = [...(x.modelUrls || [])];
               urls[0] = got.objectUrl;
-              return { ...x, modelUrls: urls, modelCompanionKeys: [put.key] };
+              return {
+                ...x,
+                modelUrls: urls,
+                modelCompanionKeys: [put.key],
+                stepModelUrls: { ...(x.stepModelUrls || {}), original: [got.objectUrl] },
+                stepModelCompanionKeys: { ...(x.stepModelCompanionKeys || {}), original: [put.key] },
+              };
             })
           );
         })();
@@ -4266,10 +4412,149 @@ ${lineSvg}
 
   const lightboxAsset = lightboxAssetId ? assets.find((a) => a.id === lightboxAssetId) : null;
   const lightboxShowsImage = Boolean(lightboxAsset && getAssetDisplayImage(lightboxAsset).trim());
-  const lightboxModelUrls = useMemo(
-    () => (lightboxAsset?.modelUrls || []).map((u) => String(u || '').trim()).filter(Boolean),
-    [lightboxAsset?.modelUrls]
+  const lightboxModelUrls = useMemo(() => {
+    if (!lightboxAsset) return [];
+    return resolveWorkflowStepModelUrls(lightboxAsset, lightboxAsset.displayKey);
+  }, [lightboxAsset]);
+  const lightboxTripoRehydrateCtx = useMemo(() => {
+    if (
+      !lightboxAsset ||
+      !lightboxShowsImage ||
+      isWorkflowTextAsset(lightboxAsset) ||
+      isGroupAsset(lightboxAsset)
+    ) {
+      return null;
+    }
+    const dk = lightboxAsset.displayKey;
+    const tripoTaskId = String(lightboxAsset.resultMeta?.[dk]?.tripoTaskId || '').trim();
+    if (!tripoTaskId) return null;
+    return { metaKey: dk, tripoTaskId };
+  }, [lightboxAsset, lightboxShowsImage]);
+  const lightboxShowTripo3DToolbar = useMemo(
+    () =>
+      Boolean(
+        lightboxAsset &&
+          lightboxShowsImage &&
+          !isWorkflowTextAsset(lightboxAsset) &&
+          !isGroupAsset(lightboxAsset) &&
+          (lightboxModelUrls.length > 0 || lightboxTripoRehydrateCtx)
+      ),
+    [lightboxAsset, lightboxShowsImage, lightboxModelUrls.length, lightboxTripoRehydrateCtx]
   );
+  const lightboxModelDownloadsOnRight = useMemo(
+    () =>
+      Boolean(
+        lightboxShowsImage &&
+          lightboxAsset &&
+          !isWorkflowTextAsset(lightboxAsset) &&
+          !isGroupAsset(lightboxAsset) &&
+          lightboxModelUrls.length > 0
+      ),
+    [lightboxShowsImage, lightboxAsset, lightboxModelUrls.length]
+  );
+
+  const handleLightboxPullTripoModels = useCallback(async () => {
+    const id = lightboxAssetIdRef.current;
+    if (!id) return;
+    const a = assetsRef.current.find((x) => x.id === id);
+    if (!a) return;
+    const dk = a.displayKey;
+    const tripoTaskId = String(a.resultMeta?.[dk]?.tripoTaskId || '').trim();
+    if (!tripoTaskId) {
+      onLog?.('warn', 'Tripo 拉取模型', '当前步骤详情中未找到 tripoTaskId，请切换到生成 3D 的步骤');
+      return;
+    }
+    const apiKey = getTripoApiKey();
+    if (!String(apiKey || '').trim()) {
+      onLog?.('error', 'Tripo 拉取模型', '缺少 Tripo API Key，请先在 API 密钥弹窗保存');
+      return;
+    }
+    setLightboxTripoPullBusy(true);
+    try {
+      const base = String(getCompanionLocalBaseUrl() || '').trim();
+      const pid = String(workspaceProjectChrome?.activeProjectId || '').trim();
+      const { nextAsset, revokeBlobUrls } = await rehydrateWorkflowAssetModelsFromTripoTask({
+        asset: a,
+        apiKey: String(apiKey).trim(),
+        companionBaseUrl: base || null,
+        companionProjectId: pid || null,
+        onLog: (level, message, detail) => onLog?.(level, message, detail),
+      });
+      if (!base || !pid) {
+        onLog?.(
+          'warn',
+          'Tripo 模型已拉取到内存',
+          '未连接本地伴侣时仅使用浏览器内 blob 预览，刷新后可能失效；连接伴侣后可再次拉取以写入卷目录。'
+        );
+      } else {
+        onLog?.('info', 'Tripo 模型已重新落地', { assetId: a.id });
+      }
+      setAssets((prev) => {
+        const next = prev.map((x) => (x.id === a.id ? nextAsset : x));
+        queueMicrotask(() => {
+          for (const u of revokeBlobUrls) {
+            revokeWorkflowModelBlobUrlsIfOrphaned(u, next);
+          }
+        });
+        return next;
+      });
+    } catch (e) {
+      onLog?.('error', 'Tripo 拉取模型失败', normalizeApiErrorMessage(e));
+    } finally {
+      setLightboxTripoPullBusy(false);
+    }
+  }, [onLog, setAssets, workspaceProjectChrome?.activeProjectId]);
+
+  const lightboxModelDownloadSlots = useMemo(() => {
+    if (!lightboxAsset) return [];
+    const dk = lightboxAsset.displayKey;
+    const urls = resolveWorkflowStepModelUrls(lightboxAsset, dk);
+    const keys = resolveWorkflowStepModelCompanionKeys(lightboxAsset, dk);
+    const formats = resolveWorkflowStepModelFormats(lightboxAsset, dk);
+    return urls.map((url, idx) => ({
+      index: idx,
+      url,
+      companionKey: keys[idx] || '',
+      format: formats[idx] || (idx === 0 ? 'glb' : 'fbx'),
+    }));
+  }, [lightboxAsset]);
+
+  const handleLightboxDownloadModel = useCallback(
+    async (slotIndex: number) => {
+      const id = lightboxAssetIdRef.current;
+      if (!id) return;
+      const a = assetsRef.current.find((x) => x.id === id);
+      if (!a) return;
+      const dk = a.displayKey;
+      const urls = resolveWorkflowStepModelUrls(a, dk);
+      const keys = resolveWorkflowStepModelCompanionKeys(a, dk);
+      const formats = resolveWorkflowStepModelFormats(a, dk);
+      const url = urls[slotIndex] || '';
+      const companionKey = keys[slotIndex] || '';
+      const format = formats[slotIndex] || (slotIndex === 0 ? 'glb' : 'fbx');
+      const base = String(getCompanionLocalBaseUrl() || '').trim();
+      const pid = String(workspaceProjectChrome?.activeProjectId || '').trim();
+      const nameBase = String(a.modelSourceName || a.id || 'model').replace(/\.[a-z0-9]+$/i, '');
+      try {
+        await downloadWorkflowStepModelSlot({
+          assetId: a.id,
+          resultKey: dk,
+          slotIndex,
+          url,
+          companionKey,
+          companionBaseUrl: base || null,
+          companionProjectId: pid || null,
+          fileNameHint: `${nameBase}.${format}`,
+          tripoApiKey: getTripoApiKey(),
+        });
+        onLog?.('info', '模型已下载', { format: format.toUpperCase(), slot: slotIndex + 1 });
+      } catch (e) {
+        onLog?.('error', '下载模型失败', normalizeApiErrorMessage(e));
+      }
+    },
+    [onLog, workspaceProjectChrome?.activeProjectId]
+  );
+
   const lightboxSamSegmentUiAllowed = useMemo(
     () =>
       Boolean(
@@ -4338,6 +4623,7 @@ ${lineSvg}
     setLightboxCanvasSplitStretchEnabled(false);
     setLightboxCanvasSplitStretchWriteBackPopOpen(false);
     setLightboxCanvasResizeWriteBackPopOpen(false);
+    setLightboxTripoPullBusy(false);
   }, [lightboxAsset?.id]);
 
   const lightboxCanvasAdjustControl = useMemo((): ImagePreviewCanvasAdjustControl | undefined => {
@@ -9104,7 +9390,9 @@ ${lineSvg}
                                 fullSrc={gridPreviewSrcEffective}
                                 cacheKey={gridPreviewCacheKeyEffective}
                                 mediaVariant={workflowResultUsesVideoPreview(a) ? 'video' : 'image'}
-                                thumbMaxEdge={(a.modelUrls?.length ?? 0) > 0 ? 896 : undefined}
+                                thumbMaxEdge={
+                                  resolveWorkflowStepModelUrls(a, a.displayKey).length > 0 ? 896 : undefined
+                                }
                                 deferThumbnail={!thumbUnlockKeys.has(a.id)}
                                 thumbDecodePriority={thumbHotKeys.has(a.id) ? 'high' : 'low'}
                                 imageFetchPriority={thumbHotKeys.has(a.id) ? 'high' : 'auto'}
@@ -9511,6 +9799,45 @@ ${lineSvg}
               aria-label="高度 3D 控件"
               onClick={(e) => e.stopPropagation()}
             />
+            {lightboxShowTripo3DToolbar ? (
+              <div
+                className={`${WORKFLOW_LIGHTBOX_BOTTOM_RAIL} w-full min-w-0 shrink-0 flex-wrap justify-start pointer-events-auto`}
+                role="toolbar"
+                aria-label="3D 模型：拉取与下载"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {lightboxTripoRehydrateCtx ? (
+                  <button
+                    type="button"
+                    disabled={lightboxTripoPullBusy}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void handleLightboxPullTripoModels();
+                    }}
+                    className={LIGHTBOX_ICON_BTN_NEUTRAL}
+                    title="按步骤详情中持久化的 Tripo 任务 id 从 Tripo 重新拉取模型并写入本地伴侣（本地预览丢失时可恢复）"
+                    aria-label="从 Tripo 拉取模型"
+                  >
+                    <CloudDownload {...LIGHTBOX_BAR_IC} aria-hidden />
+                  </button>
+                ) : null}
+                {lightboxModelDownloadSlots.map((slot) => (
+                  <button
+                    key={`${slot.format}:${slot.index}`}
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void handleLightboxDownloadModel(slot.index);
+                    }}
+                    className={LIGHTBOX_ICON_BTN_VIOLET}
+                    title={`下载 ${slot.format.toUpperCase()}`}
+                    aria-label={`下载 ${slot.format.toUpperCase()} 模型`}
+                  >
+                    <Package {...LIGHTBOX_BAR_IC} aria-hidden />
+                  </button>
+                ))}
+              </div>
+            ) : null}
             <div
               className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain rounded-2xl border border-white/10 bg-[#141418] shadow-xl ring-1 ring-black/40 [scrollbar-width:thin]"
               data-image-preview-no-wheel
@@ -9612,18 +9939,19 @@ ${lineSvg}
                   </div>
                 </div>
               ) : null}
-              <WorkflowGenerationRecordPanel
+              <WorkflowStepTimelineDetailPanel
                 asset={lightboxAsset}
                 getStepLabel={(k) => getGenerationRecordStepLabel(k, lightboxAsset)}
-                mode="inline"
-                onSelectDisplayKey={(key) => setDisplayKey(lightboxAsset.id, key)}
+                selectedResultKey={lightboxAsset.displayKey}
+                resolvePresetLabel={(pid) => capabilityPresets.find((p) => p.id === pid)?.label ?? pid}
+                getPresetInstruction={(pid) => getModule(pid)?.instruction}
               />
           </div>
           </div>
           {!lightboxShowsImage ||
           isWorkflowTextAsset(lightboxAsset) ||
           isGroupAsset(lightboxAsset) ||
-          lightboxModelUrls.length > 0 ? (
+          (lightboxModelUrls.length > 0 && !lightboxModelDownloadsOnRight) ? (
           <div
             className={`absolute bottom-4 left-1/2 z-10 max-h-[42vh] w-max max-w-[min(58rem,calc(100vw-3rem))] -translate-x-1/2 overflow-y-auto ${WORKFLOW_LIGHTBOX_BOTTOM_RAIL}`}
             data-image-preview-no-wheel
@@ -9726,19 +10054,23 @@ ${lineSvg}
                 })}
               </>
             ) : null}
-            {lightboxModelUrls.map((url, idx) => (
-              <a
-                key={`${url}:${idx}`}
-                href={url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className={`${LIGHTBOX_ICON_BTN_VIOLET} no-underline`}
-                title={lightboxModelUrls.length > 1 ? `下载模型 ${idx + 1}` : '下载模型'}
-                aria-label={lightboxModelUrls.length > 1 ? `下载模型 ${idx + 1}` : '下载模型'}
-              >
-                <Package {...LIGHTBOX_BAR_IC} aria-hidden />
-              </a>
-            ))}
+            {!lightboxModelDownloadsOnRight
+              ? lightboxModelDownloadSlots.map((slot) => (
+                  <button
+                    key={`${slot.format}:${slot.index}`}
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void handleLightboxDownloadModel(slot.index);
+                    }}
+                    className={LIGHTBOX_ICON_BTN_VIOLET}
+                    title={`下载 ${slot.format.toUpperCase()}`}
+                    aria-label={`下载 ${slot.format.toUpperCase()} 模型`}
+                  >
+                    <Package {...LIGHTBOX_BAR_IC} aria-hidden />
+                  </button>
+                ))
+              : null}
           </div>
           ) : null}
           </>

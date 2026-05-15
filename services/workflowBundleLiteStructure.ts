@@ -29,6 +29,13 @@ function stripAssetForLite(a: WorkflowAsset): WorkflowAsset {
   if (Array.isArray(out.modelUrls)) {
     out.modelUrls = out.modelUrls.map((u) => (typeof u === 'string' && isStrippableInlineMedia(u) ? '' : u));
   }
+  if (out.stepModelUrls) {
+    const next: Record<string, string[]> = {};
+    for (const [k, arr] of Object.entries(out.stepModelUrls)) {
+      next[k] = (arr || []).map((u) => (typeof u === 'string' && isStrippableInlineMedia(u) ? '' : u));
+    }
+    out.stepModelUrls = next;
+  }
 
   return out;
 }
@@ -104,6 +111,28 @@ export function mergeLiteStructurePreservingCloudObjectKeys(
     }
     if (Object.keys(rok).length) next.resultsObjectKeys = rok;
     else delete next.resultsObjectKeys;
+    const rck = { ...(next.resultsCompanionKeys || {}) };
+    if (p.resultsCompanionKeys) {
+      for (const [k, v] of Object.entries(p.resultsCompanionKeys)) {
+        if (!String(rck[k] || '').trim() && typeof v === 'string' && v.trim()) {
+          rck[k] = v.trim();
+        }
+      }
+    }
+    if (Object.keys(rck).length) next.resultsCompanionKeys = rck;
+    else delete next.resultsCompanionKeys;
+    const smck = { ...(next.stepModelCompanionKeys || {}) };
+    if (p.stepModelCompanionKeys) {
+      for (const [k, v] of Object.entries(p.stepModelCompanionKeys)) {
+        if (!Array.isArray(smck[k]) || !smck[k]!.some((x) => String(x || '').trim())) {
+          if (Array.isArray(v) && v.some((x) => String(x || '').trim())) {
+            smck[k] = [...v];
+          }
+        }
+      }
+    }
+    if (Object.keys(smck).length) next.stepModelCompanionKeys = smck;
+    else delete next.stepModelCompanionKeys;
     return next;
   });
 

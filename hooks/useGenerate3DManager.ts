@@ -8,6 +8,15 @@ import {
   type TencentCredentials,
 } from '../services/unifiedAiGateway';
 import { runTencentGenerate3dQueueItem, type TencentGenerate3dQueueKind } from '../services/generate3d';
+import { extractTripoModelAndPreviewUrls } from '../services/generate3d/tripoWorkflow';
+import { getTripoTask } from '../services/tripoService';
+
+function inferTripoModelFileType(url: string, index: number): string {
+  const u = String(url).split(/[?#]/)[0].toLowerCase();
+  const m = u.match(/\.(glb|gltf|fbx|obj|stl|usdz|usd|3mf)$/i);
+  if (m) return m[1].toUpperCase();
+  return `FILE_${index + 1}`;
+}
 
 export interface Temp3DItem {
   id: string;
@@ -15,7 +24,7 @@ export interface Temp3DItem {
   previewImageUrl?: string;
   files: File3D[];
   timestamp: number;
-  source: 'pro' | 'rapid' | 'convert' | 'topology' | 'texture' | 'component' | 'uv' | 'profile';
+  source: 'pro' | 'rapid' | 'convert' | 'topology' | 'texture' | 'component' | 'uv' | 'profile' | 'tripo_recover';
 }
 
 export interface Generate3DQueueItem {
@@ -204,6 +213,36 @@ export function useGenerate3DManager({
     onLog('info', `[队列] ${label} 完成`, { fileCount: files.length });
   }, [markQueueItem, onLog, updateTask]);
 
+  const importTripoTaskToTempLibrary = useCallback(
+    async (apiKey: string, tripoTaskId: string) => {
+      const id = String(tripoTaskId || '').trim();
+      if (!id) throw new Error('请输入有效的 tripoTaskId');
+      const k = String(apiKey || '').trim();
+      if (!k) throw new Error('缺少 Tripo API Key');
+      const done = await getTripoTask(k, id);
+      if (done.status === 'failed') {
+        throw new Error('Tripo 任务状态为 failed，无法取回模型');
+      }
+      if (done.status !== 'success') {
+        throw new Error(`Tripo 任务尚未完成，当前状态：${done.status}。请稍后重试或在 Tripo 控制台查看进度。`);
+      }
+      const { modelUrls, previewUrl } = extractTripoModelAndPreviewUrls(done);
+      if (!modelUrls.length) {
+        throw new Error('Tripo 任务已成功，但未解析到可下载的模型 URL（可能已被清理或响应结构变化）');
+      }
+      const files: File3D[] = modelUrls.map((u, i) => ({
+        Type: inferTripoModelFileType(u, i),
+        Url: u,
+        ...(i === 0 && previewUrl ? { PreviewImageUrl: previewUrl } : {}),
+      }));
+      const jobId = `tripo_recover_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 9)}`;
+      const short = id.length > 18 ? `${id.slice(0, 12)}…${id.slice(-6)}` : id;
+      complete3DJobWithFiles(jobId, undefined, files, `Tripo 恢复 ${short}`, 'tripo_recover');
+      onLog('info', '[Tripo 恢复] 已加入临时库', { taskId: id, modelCount: files.length });
+    },
+    [complete3DJobWithFiles, onLog]
+  );
+
   const onProgress3D = useCallback((taskId: string | undefined) => (task: { status: string; progress: number }) => {
     if (!taskId) return;
     const status = task.status === 'DONE' ? 'SUCCESS' : task.status === 'FAIL' ? 'FAILED' : 'RUNNING';
@@ -337,5 +376,6 @@ export function useGenerate3DManager({
     cancelQueueItem,
     retryQueueItem,
     clearInactiveQueueItems,
+    importTripoTaskToTempLibrary,
   };
 }

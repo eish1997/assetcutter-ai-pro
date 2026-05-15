@@ -34,6 +34,14 @@ export const R2_CAPABILITY_PREVIEW_MAX_BYTES = envBytes('R2_CAPABILITY_PREVIEW_M
 /** 管理端 POST 发布能力包到 R2（JSON 内可含较大 preset） */
 export const CAPABILITY_PUBLISH_ADMIN_BODY_BYTES = envBytes('CAPABILITY_PUBLISH_ADMIN_BODY_BYTES', 64 * 1024 * 1024);
 
+/**
+ * Tripo 图生 3D 上传代理：JSON 内含 base64 参考图，默认与桥接 send-message 同级放宽。
+ */
+export const TRIPO_UPLOAD_JSON_BODY_MAX_BYTES = envBytes(
+  'TRIPO_UPLOAD_JSON_BODY_MAX_BYTES',
+  16 * 1024 * 1024
+);
+
 export const BODY_TOO_LARGE_MESSAGE = 'Body too large';
 
 export function isBodyTooLargeError(err) {

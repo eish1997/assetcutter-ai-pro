@@ -214,4 +214,59 @@ describe('mergeWorkflowProjectBundles', () => {
     const p1 = merged.capabilityRefs?.find((r) => r.id === 'p1');
     expect((p1?.snapshot as { a?: number })?.a).toBe(1);
   });
+
+  it('keeps generate_3d step in resultOrder when only meta/model keys exist (no inline image)', () => {
+    const base: WorkflowProjectBundle = {
+      assets: [
+        baseAsset('a1', {
+          results: { cut: 'img-a' },
+          resultOrder: ['cut', 'generate_3d'],
+          resultMeta: {
+            cut: { executedAt: 100 },
+            generate_3d: { executedAt: 200, tripoTaskId: 'tripo-1', mediaKind: 'model3d' },
+          },
+          stepModelCompanionKeys: { generate_3d: ['wf-mdl-key'] },
+        }),
+      ],
+      pending: [],
+    };
+    const other: WorkflowProjectBundle = {
+      assets: [
+        baseAsset('a1', {
+          results: { cut: 'img-b' },
+          resultOrder: ['cut'],
+          resultMeta: { cut: { executedAt: 150 } },
+        }),
+      ],
+      pending: [],
+    };
+    const { merged } = mergeWorkflowProjectBundles(base, other, { sameKey: { kind: 'timestamp-wins' } });
+    expect(merged.assets[0].resultOrder).toContain('generate_3d');
+    expect(merged.assets[0].resultMeta?.generate_3d?.tripoTaskId).toBe('tripo-1');
+    expect(merged.assets[0].stepModelCompanionKeys?.generate_3d).toEqual(['wf-mdl-key']);
+  });
+
+  it('fills generate_3d meta-only step from other when base lacks image result', () => {
+    const base: WorkflowProjectBundle = {
+      assets: [baseAsset('a1', { results: { cut: 'img' }, resultOrder: ['cut'] })],
+      pending: [],
+    };
+    const other: WorkflowProjectBundle = {
+      assets: [
+        baseAsset('a1', {
+          results: { cut: 'img' },
+          resultOrder: ['cut', 'generate_3d'],
+          resultMeta: {
+            generate_3d: { executedAt: 300, tripoTaskId: 'tripo-2', mediaKind: 'model3d' },
+          },
+          stepModelUrls: { generate_3d: ['blob:model'] },
+        }),
+      ],
+      pending: [],
+    };
+    const { merged } = mergeWorkflowProjectBundles(base, other, { sameKey: { kind: 'prefer-base' } });
+    expect(merged.assets[0].resultOrder).toContain('generate_3d');
+    expect(merged.assets[0].resultMeta?.generate_3d?.tripoTaskId).toBe('tripo-2');
+    expect(merged.assets[0].stepModelUrls?.generate_3d).toEqual(['blob:model']);
+  });
 });

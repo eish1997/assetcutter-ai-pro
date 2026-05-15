@@ -485,6 +485,12 @@ export type WorkflowAsset = {
    * 持久化时可配合清空对应槽位的 `blob:`/`data:` 串以省 IndexedDB。
    */
   modelCompanionKeys?: string[];
+  /** 各步骤的 3D 模型 URL（key 与 `displayKey` / `resultOrder` 对齐）；仅该步大图预览出现 3D 入口 */
+  stepModelUrls?: Record<string, string[]>;
+  /** 与 `stepModelUrls` 同结构：各步骤模型在本地伴侣下的键 */
+  stepModelCompanionKeys?: Record<string, string[]>;
+  /** 与 `stepModelUrls` 同结构：各步骤模型格式（glb 预览 / fbx 归档） */
+  stepModelFormats?: Record<string, Array<'glb' | 'fbx'>>;
   /** 本地 blob 模型无 URL 后缀时，用原始文件名推断格式（.glb/.fbx/.obj 等） */
   modelSourceName?: string;
   /** 各步骤结果在 R2 的键，hydrate 后写回 results */
@@ -508,10 +514,22 @@ export type WorkflowAsset = {
       displayStepLabel?: string;
       /** 结果槽位媒体类型；生视频步骤写入 `video` 以便网格用 `<video>` 预览 */
       mediaKind?: 'image' | 'video';
-      /** 生成3D（Tripo）创建成功后记录，便于查询失败时继续查询旧任务而非重建任务 */
+      /** 生成3D（Tripo）任务 id：写入本步 resultMeta 并随工作区持久化；大图「拉取模型」与继续查询均依赖此字段，请勿手动清空 */
       tripoTaskId?: string;
       /** 最近一次 Tripo 查询/落盘失败信息（可选） */
       tripoLastError?: string;
+      /** 入队时选用的能力/预设基 id（与步骤键基 id 一致），供详情面板解析预设名称 */
+      presetActionIdSnapshot?: string;
+      /** 入队时「微调覆写」输入框原文（可与理解后提示词对照） */
+      promptOverrideSnapshot?: string;
+      /** 文卡入队等附加正文快照 */
+      inputTextSnapshot?: string;
+      /** 是否经过能力「理解」链路（执行返回 vgpSteps 非空） */
+      usedCapabilityUnderstand?: boolean;
+      /** 入队时标记跳过理解（预设 skipUnderstand 等） */
+      skipUnderstandSnapshot?: boolean;
+      /** 标签精修等扩展字段（可选） */
+      semanticSummary?: string;
     }
   >;
   /** 文字能力（gen_text）等产生的文本结果，key 与 resultOrder 中步骤 id 对齐 */

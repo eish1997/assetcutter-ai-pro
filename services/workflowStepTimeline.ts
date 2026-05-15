@@ -5,6 +5,22 @@ export type WorkflowStepTimelineOrder = 'result_order' | 'newest_first';
 /** 与 `WorkflowSection` 版本链 / 滚轮切换一致：按 `resultOrder` 正向（原图 → 最新提交） */
 export const DEFAULT_WORKFLOW_STEP_TIMELINE_ORDER: WorkflowStepTimelineOrder = 'result_order';
 
+/** 与侧栏时间线、详情面板共用 */
+export function formatWorkflowStepExecutedAt(ts: number): string {
+  if (!ts || !Number.isFinite(ts)) return '未记录';
+  try {
+    return new Date(ts).toLocaleString(undefined, {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+  } catch {
+    return '未记录';
+  }
+}
+
 export type WorkflowStepTimelineRow = {
   resultKey: string;
   label: string;

@@ -1,3 +1,5 @@
+import { prepareImageDataUrlForTripoUpload } from './tripoUploadImagePrep';
+
 export type TripoTaskType = 'text_to_model' | 'image_to_model';
 
 export type TripoCreateTaskInput = {
@@ -90,6 +92,28 @@ function normalizeModelUrlsFromTask(task: unknown): string[] {
 
 function normalizeErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message.trim()) return error.message.trim();
+  if (error && typeof error === 'object' && !Array.isArray(error)) {
+    const r = error as Record<string, unknown>;
+    const topMsg =
+      (typeof r.message === 'string' && r.message.trim()) ||
+      (typeof r.msg === 'string' && r.msg.trim()) ||
+      (typeof r.detail === 'string' && r.detail.trim());
+    if (topMsg) return topMsg;
+    const nested = r.error && typeof r.error === 'object' ? (r.error as Record<string, unknown>) : null;
+    const nestedMsg =
+      nested &&
+      ((typeof nested.message === 'string' && nested.message.trim()) ||
+        (typeof nested.msg === 'string' && nested.msg.trim()));
+    if (nestedMsg) return nestedMsg;
+    const code = r.code != null ? String(r.code) : nested && nested.code != null ? String(nested.code) : '';
+    if (code || Object.keys(r).length) {
+      try {
+        return JSON.stringify(error);
+      } catch {
+        return '请求 Tripo 失败';
+      }
+    }
+  }
   try {
     return JSON.stringify(error);
   } catch {
@@ -101,9 +125,11 @@ function isTransientQueryError(error: unknown): boolean {
   const msg = normalizeErrorMessage(error).toLowerCase();
   if (!msg) return false;
   return (
+    msg.includes('查询任务失败 (500)') ||
     msg.includes('查询任务失败 (502)') ||
     msg.includes('查询任务失败 (503)') ||
     msg.includes('查询任务失败 (504)') ||
+    msg.includes('查询任务失败 (429)') ||
     msg.includes('bad gateway') ||
     msg.includes('gateway timeout') ||
     msg.includes('fetch failed') ||
@@ -112,17 +138,30 @@ function isTransientQueryError(error: unknown): boolean {
   );
 }
 
+/** Tripo 上游瞬时错误：可安全重试「上传 / 建任务」（未拿到 task_id 前不会重复计费） */
+function isTripoTransientHttpStatus(status: number): boolean {
+  return status === 408 || status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
+}
+
 async function uploadImageToTripo(apiKey: string, imageBase64DataUrl: string): Promise<string> {
-  const resp = await fetch(`${resolveTripoProxyBase()}/upload`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ apiKey, imageBase64DataUrl }),
-  });
-  const data = await resp.json().catch(() => ({}));
-  if (!resp.ok) {
-    throw new Error(`Tripo 上传图片失败 (${resp.status})：${normalizeErrorMessage(data)}`);
+  const url = `${resolveTripoProxyBase()}/upload`;
+  const prepared = await prepareImageDataUrlForTripoUpload(imageBase64DataUrl);
+  const body = JSON.stringify({ apiKey, imageBase64DataUrl: prepared });
+  let data: Record<string, unknown> = {};
+  let lastStatus = 0;
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    });
+    lastStatus = resp.status;
+    data = (await resp.json().catch(() => ({}))) as Record<string, unknown>;
+    if (resp.ok) break;
+    if (!isTripoTransientHttpStatus(resp.status) || attempt === 4) {
+      throw new Error(`Tripo 上传图片失败 (${lastStatus})：${normalizeErrorMessage(data)}`);
+    }
+    await new Promise((r) => setTimeout(r, 1200 * attempt + Math.floor(Math.random() * 400)));
   }
   const token =
     String((data as Record<string, any>)?.file_token || '').trim() ||
@@ -131,6 +170,65 @@ async function uploadImageToTripo(apiKey: string, imageBase64DataUrl: string): P
     String((data as Record<string, any>)?.data?.image_token || '').trim();
   if (!token) throw new Error('Tripo 上传成功但未返回 file_token');
   return token;
+}
+
+export type TripoConvertFormat = 'GLTF' | 'USDZ' | 'FBX' | 'OBJ' | 'STL' | '3MF';
+
+export async function createTripoConvertModelTask(
+  apiKey: string,
+  originalTaskId: string,
+  format: TripoConvertFormat
+): Promise<string> {
+  const key = apiKey.trim();
+  const sourceId = String(originalTaskId || '').trim();
+  if (!key) throw new Error('缺少 Tripo API Key');
+  if (!sourceId) throw new Error('缺少 original_model_task_id');
+  const taskUrl = `${resolveTripoProxyBase()}/task`;
+  const taskBody = JSON.stringify({
+    apiKey: key,
+    type: 'convert_model',
+    format,
+    original_model_task_id: sourceId,
+  });
+  let data: Record<string, unknown> = {};
+  let lastStatus = 0;
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    const resp = await fetch(taskUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: taskBody,
+    });
+    lastStatus = resp.status;
+    data = (await resp.json().catch(() => ({}))) as Record<string, unknown>;
+    if (resp.ok) break;
+    if (!isTripoTransientHttpStatus(resp.status) || attempt === 4) {
+      throw new Error(`Tripo 格式转换任务创建失败 (${lastStatus})：${normalizeErrorMessage(data)}`);
+    }
+    await new Promise((r) => setTimeout(r, 1500 * attempt + Math.floor(Math.random() * 500)));
+  }
+  const taskId =
+    String(data.task_id || '').trim() ||
+    String(
+      data.data && typeof data.data === 'object'
+        ? String((data.data as Record<string, unknown>).task_id || '').trim()
+        : ''
+    ).trim() ||
+    String(data.id || '').trim();
+  if (!taskId) throw new Error('Tripo 格式转换未返回 task_id');
+  return taskId;
+}
+
+export async function fetchTripoRemoteFileBlob(apiKey: string, url: string): Promise<Blob> {
+  const r = await fetch('/api/tripo/fetch-file', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ apiKey: apiKey.trim(), url }),
+  });
+  if (!r.ok) {
+    const txt = await r.text().catch(() => '');
+    throw new Error(`Tripo 文件拉取失败 (${r.status})：${txt || 'unknown error'}`);
+  }
+  return await r.blob();
 }
 
 export async function createTripoTask(input: TripoCreateTaskInput): Promise<string> {
@@ -188,21 +286,32 @@ export async function createTripoTask(input: TripoCreateTaskInput): Promise<stri
       throw new Error('图生3D需要 imageUrl 或 imageBase64DataUrl');
     }
   }
-  const resp = await fetch(`${resolveTripoProxyBase()}/task`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ ...payload, apiKey }),
-  });
-  const data = await resp.json().catch(() => ({}));
-  if (!resp.ok) {
-    throw new Error(`Tripo 创建任务失败 (${resp.status})：${normalizeErrorMessage(data)}`);
+  const taskUrl = `${resolveTripoProxyBase()}/task`;
+  const taskBody = JSON.stringify({ ...payload, apiKey });
+  let data: Record<string, unknown> = {};
+  let lastStatus = 0;
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    const resp = await fetch(taskUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: taskBody,
+    });
+    lastStatus = resp.status;
+    data = (await resp.json().catch(() => ({}))) as Record<string, unknown>;
+    if (resp.ok) break;
+    if (!isTripoTransientHttpStatus(resp.status) || attempt === 4) {
+      throw new Error(`Tripo 创建任务失败 (${lastStatus})：${normalizeErrorMessage(data)}`);
+    }
+    await new Promise((r) => setTimeout(r, 1500 * attempt + Math.floor(Math.random() * 500)));
   }
   const taskId =
-    String((data as Record<string, unknown>)?.task_id || '').trim() ||
-    String((data as Record<string, unknown>)?.data && (data as Record<string, any>).data.task_id || '').trim() ||
-    String((data as Record<string, unknown>)?.id || '').trim();
+    String(data.task_id || '').trim() ||
+    String(
+      data.data && typeof data.data === 'object'
+        ? String((data.data as Record<string, unknown>).task_id || '').trim()
+        : ''
+    ).trim() ||
+    String(data.id || '').trim();
   if (!taskId) throw new Error('Tripo 返回中缺少 task_id');
   return taskId;
 }

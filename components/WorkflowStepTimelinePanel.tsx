@@ -3,23 +3,9 @@ import type { WorkflowAsset } from '../types';
 import {
   DEFAULT_WORKFLOW_STEP_TIMELINE_ORDER,
   deriveWorkflowStepTimelineRows,
+  formatWorkflowStepExecutedAt,
   type WorkflowStepTimelineOrder,
 } from '../services/workflowStepTimeline';
-
-function formatExecutedAt(ts: number): string {
-  if (!ts) return '时间未记录';
-  try {
-    return new Date(ts).toLocaleString(undefined, {
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-    });
-  } catch {
-    return '时间未记录';
-  }
-}
 
 export type WorkflowStepTimelinePanelProps = {
   asset: WorkflowAsset;
@@ -72,7 +58,7 @@ export const WorkflowStepTimelinePanel: React.FC<WorkflowStepTimelinePanelProps>
       <ul className="space-y-1.5 max-h-[min(40vh,16rem)] overflow-y-auto pr-1 [scrollbar-width:thin]">
         {rows.map((row) => {
           const selected = row.resultKey === currentDisplayKey;
-          const timeLine = formatExecutedAt(row.executedAt);
+          const timeLine = row.executedAt ? formatWorkflowStepExecutedAt(row.executedAt) : '时间未记录';
           const textXs = density === 'modal' ? 'text-[10px]' : 'text-[8px]';
           const canJump = Boolean(onSelectDisplayKey);
           return (

@@ -383,12 +383,46 @@ export function stripWorkflowBundleForIdbPersist(bundle: WorkflowProjectBundle):
       }
       if (touchedM) a.modelUrls = nextModelUrls;
     }
+    const smck = a.stepModelCompanionKeys;
+    if (smck && typeof smck === 'object' && a.stepModelUrls) {
+      const nextStepUrls = { ...a.stepModelUrls };
+      let touchedS = false;
+      for (const stepId of Object.keys(smck)) {
+        const keys = smck[stepId];
+        if (!Array.isArray(keys)) continue;
+        const slotUrls = [...(nextStepUrls[stepId] || [])];
+        for (let i = 0; i < keys.length; i += 1) {
+          const ck = String(keys[i] || '').trim();
+          if (!ck) continue;
+          const cur = String(slotUrls[i] ?? '').trim();
+          if (cur && shouldStripModelUrlForPersist(cur)) {
+            while (slotUrls.length <= i) slotUrls.push('');
+            slotUrls[i] = '';
+            touchedS = true;
+          }
+        }
+        if (touchedS) nextStepUrls[stepId] = slotUrls;
+      }
+      if (touchedS) a.stepModelUrls = nextStepUrls;
+    }
   }
   return out;
 }
 
 /** 有伴侣模型键但对应槽位缺少可加载的 URL 时需从磁盘 hydrate */
 export function workflowAssetNeedsCompanionModelHydrate(a: WorkflowAsset): boolean {
+  const byStep = a.stepModelCompanionKeys || {};
+  for (const stepKey of Object.keys(byStep)) {
+    const mck = byStep[stepKey] || [];
+    const urls = a.stepModelUrls?.[stepKey] || [];
+    for (let i = 0; i < mck.length; i += 1) {
+      const ck = String(mck[i] || '').trim();
+      if (!ck) continue;
+      const u = String(urls[i] ?? '').trim();
+      if (!u) return true;
+      if (!/^blob:/i.test(u) && !/^https?:\/\//i.test(u) && !u.startsWith('data:')) return true;
+    }
+  }
   const mck = a.modelCompanionKeys;
   if (!mck || !Array.isArray(mck) || mck.length === 0) return false;
   const urls = a.modelUrls || [];

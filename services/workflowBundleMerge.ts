@@ -69,6 +69,19 @@ function hasNonEmptyResult(asset: WorkflowAsset, stepId: string): boolean {
   return (typeof img === 'string' && img.trim().length > 0) || (typeof tx === 'string' && tx.trim().length > 0);
 }
 
+/** 含 3D 模型、伴侣键或 Tripo 元数据等「无平面图」步骤 */
+function stepHasPersistedContent(asset: WorkflowAsset, stepId: string): boolean {
+  if (hasNonEmptyResult(asset, stepId)) return true;
+  const modelUrls = asset.stepModelUrls?.[stepId];
+  if (Array.isArray(modelUrls) && modelUrls.some((u) => typeof u === 'string' && u.trim().length > 0)) return true;
+  const modelKeys = asset.stepModelCompanionKeys?.[stepId];
+  if (Array.isArray(modelKeys) && modelKeys.some((k) => typeof k === 'string' && k.trim().length > 0)) return true;
+  const meta = asset.resultMeta?.[stepId];
+  if (meta?.tripoTaskId?.trim()) return true;
+  if (meta?.mediaKind === 'model3d') return true;
+  return false;
+}
+
 function collectStepIdsForAsset(a: WorkflowAsset): Set<string> {
   const s = new Set<string>();
   for (const k of Object.keys(a.results || {})) {
@@ -78,6 +91,9 @@ function collectStepIdsForAsset(a: WorkflowAsset): Set<string> {
     if (k) s.add(k);
   }
   for (const k of Object.keys(a.resultMeta || {})) {
+    if (k) s.add(k);
+  }
+  for (const k of Object.keys(a.stepModelFormats || {})) {
     if (k) s.add(k);
   }
   return s;
@@ -124,6 +140,9 @@ function mergeTwoAssets(
   out.resultMeta = out.resultMeta ? { ...out.resultMeta } : {};
   out.resultsObjectKeys = out.resultsObjectKeys ? { ...out.resultsObjectKeys } : undefined;
   out.resultsCompanionKeys = out.resultsCompanionKeys ? { ...out.resultsCompanionKeys } : undefined;
+  out.stepModelUrls = out.stepModelUrls ? { ...out.stepModelUrls } : undefined;
+  out.stepModelCompanionKeys = out.stepModelCompanionKeys ? { ...out.stepModelCompanionKeys } : undefined;
+  out.stepModelFormats = out.stepModelFormats ? { ...out.stepModelFormats } : undefined;
 
   const takenResultKeys = new Set(Object.keys(out.results).concat(Object.keys(out.textResults || {})));
 
@@ -157,11 +176,32 @@ function mergeTwoAssets(
       const { [step]: _c, ...crest } = out.resultsCompanionKeys;
       out.resultsCompanionKeys = Object.keys(crest).length ? crest : undefined;
     }
+    if (otherA.stepModelUrls?.[step]?.length) {
+      out.stepModelUrls = { ...(out.stepModelUrls || {}), [step]: [...otherA.stepModelUrls[step]!] };
+    } else if (out.stepModelUrls && step in out.stepModelUrls) {
+      const { [step]: _su, ...srest } = out.stepModelUrls;
+      out.stepModelUrls = Object.keys(srest).length ? srest : undefined;
+    }
+    if (otherA.stepModelCompanionKeys?.[step]?.length) {
+      out.stepModelCompanionKeys = {
+        ...(out.stepModelCompanionKeys || {}),
+        [step]: [...otherA.stepModelCompanionKeys[step]!],
+      };
+    } else if (out.stepModelCompanionKeys && step in out.stepModelCompanionKeys) {
+      const { [step]: _sm, ...smrest } = out.stepModelCompanionKeys;
+      out.stepModelCompanionKeys = Object.keys(smrest).length ? smrest : undefined;
+    }
+    if (otherA.stepModelFormats?.[step]?.length) {
+      out.stepModelFormats = { ...(out.stepModelFormats || {}), [step]: [...otherA.stepModelFormats[step]!] };
+    } else if (out.stepModelFormats && step in out.stepModelFormats) {
+      const { [step]: _sf, ...sfrest } = out.stepModelFormats;
+      out.stepModelFormats = Object.keys(sfrest).length ? sfrest : undefined;
+    }
   };
 
   for (const stepId of stepIds) {
-    const oHas = hasNonEmptyResult(otherA, stepId);
-    const bHas = hasNonEmptyResult(out, stepId);
+    const oHas = stepHasPersistedContent(otherA, stepId);
+    const bHas = stepHasPersistedContent(out, stepId);
 
     if (oHas && !bHas) {
       applyOtherStepToOut(stepId);
@@ -229,7 +269,7 @@ function mergeTwoAssets(
     });
   }
 
-  const mergedKeys = new Set<string>([...Object.keys(out.results || {}), ...Object.keys(out.textResults || {})]);
+  const mergedKeys = collectStepIdsForAsset(out);
   out.resultOrder = mergeResultOrder(out.resultOrder, otherA.resultOrder, mergedKeys);
 
   return out;

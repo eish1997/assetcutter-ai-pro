@@ -1185,6 +1185,71 @@ function geminiPermissionDeniedHintForBuild(): string {
   );
 }
 
+/**
+ * `tripoService` 抛错格式：`Tripo 创建任务失败 (502)：{...json...}`。
+ * 若走 `normalizeApiErrorMessage` 的通用分支，会因 raw 含 `500` 被误映射成 Gemini 的笼统文案，故在此单独解析。
+ */
+function extractTripoProxyErrorDetail(raw: string): string | null {
+  const s = String(raw || "").trim();
+  if (!/Tripo (创建任务|查询任务|上传图片)失败/i.test(s)) return null;
+  const m = s.match(/\((\d{3})\)\s*[：:]\s*([\s\S]+)$/);
+  const httpSt = m?.[1] || "";
+  const tail = (m?.[2] || "").trim();
+  if (!tail) {
+    return httpSt
+      ? `Tripo 接口返回 HTTP ${httpSt}（无响应体）。多为上游或网络问题，请稍后重试；持续失败可查 Tripo 状态或尝试其它模型版本。`
+      : "Tripo 请求失败（无状态码）。请检查 auth-api 代理与 TRIPO_PROXY 配置后重试。";
+  }
+  try {
+    const parsed = JSON.parse(tail) as Record<string, unknown>;
+    const nestedErr =
+      parsed.error && typeof parsed.error === "object"
+        ? (parsed.error as Record<string, unknown>)
+        : null;
+    const msg =
+      (typeof parsed.message === "string" && parsed.message.trim()) ||
+      (typeof parsed.msg === "string" && parsed.msg.trim()) ||
+      (nestedErr && typeof nestedErr.message === "string" && nestedErr.message.trim()) ||
+      "";
+    const bizCode =
+      typeof parsed.code === "number"
+        ? parsed.code
+        : nestedErr && typeof nestedErr.code === "number"
+          ? (nestedErr.code as number)
+          : undefined;
+    const parts: string[] = [];
+    if (bizCode != null) parts.push(`业务码 ${bizCode}`);
+    if (msg) parts.push(msg.length > 140 ? msg.slice(0, 140) + "…" : msg);
+    if (parts.length) {
+      const hint =
+        httpSt === "500" || httpSt === "502" || httpSt === "503"
+          ? "（多为 Tripo 上游短暂异常，可稍后重试、换模型版本，或查看 api.tripo3d.ai 公告）"
+          : "";
+      return `Tripo：HTTP ${httpSt || "?"}，${parts.join("，")}${hint}`;
+    }
+    /** 上游返回可解析 JSON 但无 message/code（常见为 500 + `{}`） */
+    const meaningfulKeys = Object.keys(parsed).filter((k) => {
+      const v = parsed[k];
+      if (v == null) return false;
+      if (typeof v === "object") return Object.keys(v as object).length > 0;
+      return String(v).trim() !== "";
+    });
+    if (meaningfulKeys.length === 0 && (httpSt === "500" || httpSt === "502" || httpSt === "503")) {
+      return `Tripo：HTTP ${httpSt}（上游未返回具体错误字段，多为服务端短暂故障或网关超时）。请稍后重试；可尝试换 model_version（如 v3.0-20250812 / v2.5-20250123）、降低面数或暂时关闭 PBR；仍持续时请向 Tripo 支持反馈并附发生时间。`;
+    }
+    if (meaningfulKeys.length === 0 && /^4\d\d$/.test(httpSt)) {
+      return `Tripo：HTTP ${httpSt}（响应体无有效报错字段）。请核对 API Key、请求参数与图片格式；仍失败可把 Network 里 /api/tripo 的响应体发给管理员。`;
+    }
+  } catch {
+    /* 非 JSON 尾段，走下方原文缩写 */
+  }
+  const compact = tail.length > 160 ? tail.slice(0, 160) + "…" : tail;
+  if (compact === "{}" && (httpSt === "500" || httpSt === "502" || httpSt === "503")) {
+    return `Tripo：HTTP ${httpSt}（响应体为空对象）。多为 Tripo 侧内部错误，请稍后重试或更换模型版本。`;
+  }
+  return `Tripo：HTTP ${httpSt || "?"} — ${compact}`;
+}
+
 function parseGoogleStyleErrorPayload(raw: string): { code?: number; status?: string; message?: string } | null {
   const s = String(raw || "").trim();
   const tryParse = (t: string) => {
@@ -1254,6 +1319,9 @@ export function normalizeApiErrorMessage(err: unknown): string {
     }
     return "无法连接服务器，请检查网络后重试。";
   }
+
+  const tripoDetail = extractTripoProxyErrorDetail(raw);
+  if (tripoDetail) return tripoDetail;
 
   const googleErr = parseGoogleStyleErrorPayload(raw);
   if (googleErr) {

@@ -56,6 +56,7 @@ import {
   BRIDGE_SEND_MESSAGE_MAX_BODY_BYTES,
   BODY_TOO_LARGE_MESSAGE,
   CAPABILITY_PUBLISH_ADMIN_BODY_BYTES,
+  TRIPO_UPLOAD_JSON_BODY_MAX_BYTES,
   readBodyUtf8,
 } from './http-limits.js';
 import { createBridgeRelay } from './bridge-relay.js';
@@ -1196,7 +1197,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (path === '/api/tripo/upload' && req.method === 'POST') {
-      const body = await readBody(req);
+      const body = await readBody(req, { maxBytes: TRIPO_UPLOAD_JSON_BODY_MAX_BYTES });
       const apiKey = normalizeTrimmed(body.apiKey);
       if (!apiKey) {
         json(res, 400, { error: '缺少 apiKey' });

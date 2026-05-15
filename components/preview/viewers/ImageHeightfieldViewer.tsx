@@ -19,7 +19,12 @@ import {
   sampleGrayDispBilinear,
 } from '../../../services/imageHeightfieldLuminance';
 import { createZbrushStyleGrayMatcapTexture } from '../../../services/imageHeightfieldGrayMatcap';
-import { getHeightfieldQualitySettings } from '../../../services/imageHeightfieldQuality';
+import {
+  getHeightfieldQualitySettings,
+  HEIGHTFIELD_QUALITY_TIERS,
+  heightfieldQualityTierTo01,
+  type HeightfieldQualityTierId,
+} from '../../../services/imageHeightfieldQuality';
 import { applyHeightfieldCylinderWrapPositions } from '../../../services/imageHeightfieldCylinderWrap';
 import { ChevronDown, Download, Loader2 } from 'lucide-react';
 import {
@@ -27,17 +32,126 @@ import {
   IMAGE_LIGHTBOX_TOOL_TEXT_BTN_IDLE,
 } from '../../workflow/workflowSectionUiConstants';
 
-const HF_QUALITY_STORAGE_KEY = 'ac_heightfield_quality01_v1';
+const HF_QUALITY_STORAGE_KEY = 'ac_heightfield_quality_tier_v1';
+const HF_QUALITY_LEGACY_KEY = 'ac_heightfield_quality01_v1';
 
 /** 固定 MatCap 灰调乘色（已去掉材质切换 UI） */
 const DEFAULT_HEIGHTFIELD_MATCAP_COLOR = '#a3a5ab';
 
-function readStoredQuality01(): number {
-  const raw = readLocalString(HF_QUALITY_STORAGE_KEY);
-  if (raw == null || raw === '') return 0.55;
-  const n = Number(raw);
-  if (!Number.isFinite(n)) return 0.55;
-  return Math.max(0, Math.min(1, n));
+function readStoredQualityTier(): HeightfieldQualityTierId {
+  const tierRaw = readLocalString(HF_QUALITY_STORAGE_KEY);
+  if (tierRaw != null && tierRaw !== '') {
+    const n = Number(tierRaw);
+    if (Number.isFinite(n) && n >= 0 && n <= 2) return Math.round(n) as HeightfieldQualityTierId;
+  }
+  const legacy = readLocalString(HF_QUALITY_LEGACY_KEY);
+  if (legacy != null && legacy !== '') {
+    const n = Number(legacy);
+    if (Number.isFinite(n)) {
+      if (n < 0.34) return 0;
+      if (n < 0.67) return 1;
+      return 2;
+    }
+  }
+  return 1;
+}
+
+type HeightfieldRuntime = {
+  scene: THREE.Scene;
+  camera: THREE.PerspectiveCamera;
+  controls: OrbitControls;
+  renderer: THREE.WebGLRenderer;
+  stage: Awaited<ReturnType<typeof createWorkflowModelViewerStageAsync>> | null;
+  groundMesh: THREE.Mesh | null;
+  loadedImg: HTMLImageElement | null;
+  ready: boolean;
+};
+
+function disposeHeightfieldMesh(mesh: THREE.Mesh): void {
+  mesh.geometry.dispose();
+  const mat = mesh.material as THREE.MeshMatcapMaterial;
+  mat.matcap?.dispose();
+  mat.dispose();
+}
+
+function buildHeightfieldMeshFromImage(
+  img: HTMLImageElement,
+  quality01: number,
+  displaceMul: number,
+  curl01: number
+): THREE.Mesh | null {
+  const nw = img.naturalWidth;
+  const nh = img.naturalHeight;
+  if (!nw || !nh) return null;
+
+  const quality = getHeightfieldQualitySettings(quality01);
+  let dispCanvas: HTMLCanvasElement;
+  try {
+    const disp = buildHeightfieldDisplacementCanvas(img, nw, nh, { maxEdge: quality.displaceMaxEdge });
+    dispCanvas = disp.canvas;
+  } catch {
+    return null;
+  }
+
+  const dispPx = readHeightfieldDispGrayPixels(dispCanvas);
+  if (!dispPx) return null;
+
+  const ar = nw / nh;
+  const maxPlane = 2.4;
+  const planeW = ar >= 1 ? maxPlane : maxPlane * ar;
+  const planeH = ar >= 1 ? maxPlane / ar : maxPlane;
+  const { segX, segY } = clampHeightfieldPlaneSegments(dispCanvas.width, dispCanvas.height, quality.maxPlaneCells);
+
+  const geo = new THREE.PlaneGeometry(planeW, planeH, segX, segY);
+  const baseScale = Math.min(planeW, planeH) * (0.16 / 5);
+  const posAttr = geo.attributes.position as THREE.BufferAttribute;
+  const uvAttr = geo.attributes.uv as THREE.BufferAttribute;
+  const zBase = new Float32Array(posAttr.count);
+  const flatX = new Float32Array(posAttr.count);
+  const flatY = new Float32Array(posAttr.count);
+  for (let i = 0; i < posAttr.count; i++) {
+    const u = uvAttr.getX(i);
+    const v = uvAttr.getY(i);
+    const g = sampleGrayDispBilinear(dispPx, u, v);
+    zBase[i] = g * baseScale;
+    flatX[i] = posAttr.getX(i);
+    flatY[i] = posAttr.getY(i);
+    posAttr.setZ(i, zBase[i] * displaceMul);
+  }
+  posAttr.needsUpdate = true;
+  geo.computeVertexNormals();
+
+  const matcapTex = createZbrushStyleGrayMatcapTexture();
+  const mat = new THREE.MeshMatcapMaterial({ matcap: matcapTex });
+  mat.color.set(DEFAULT_HEIGHTFIELD_MATCAP_COLOR);
+  mat.side = THREE.DoubleSide;
+  mat.needsUpdate = true;
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  mesh.userData.baseDisplacementScale = baseScale;
+  mesh.userData.zBase = zBase;
+  mesh.userData.planeW = planeW;
+  mesh.userData.flatX = flatX;
+  mesh.userData.flatY = flatY;
+  applyHeightfieldCylinderWrapPositions(mesh, curl01, displaceMul);
+  return mesh;
+}
+
+function refreshHeightfieldStageLighting(rt: HeightfieldRuntime, mesh: THREE.Mesh): void {
+  const box = new THREE.Box3().setFromObject(mesh);
+  if (rt.stage) {
+    aimHeightfieldReliefLightsAtBox(rt.stage.keyLight, rt.stage.fillLight, rt.stage.rimLight, rt.stage.bounceFill, box);
+    applyHeightfieldMatcapSceneLighting(rt.stage);
+  }
+  if (rt.groundMesh) {
+    rt.scene.remove(rt.groundMesh);
+    rt.groundMesh.geometry.dispose();
+    (rt.groundMesh.material as THREE.Material).dispose();
+    rt.groundMesh = null;
+  }
+  rt.groundMesh = createStudioGroundMesh(box, 8);
+  if (rt.groundMesh) rt.scene.add(rt.groundMesh);
 }
 
 type ViewerStatus = 'loading' | 'ready' | 'error';
@@ -59,15 +173,18 @@ const ImageHeightfieldViewer: React.FC<LazyImagePreviewViewerProps> = ({
   const [curl01, setCurl01] = useState(0);
   const curl01Ref = useRef(0);
   const meshRef = useRef<THREE.Mesh | null>(null);
-  const [quality01, setQuality01] = useState(() => readStoredQuality01());
+  const runtimeRef = useRef<HeightfieldRuntime | null>(null);
+  const qualityTierRef = useRef<HeightfieldQualityTierId>(readStoredQualityTier());
+  const [qualityTier, setQualityTier] = useState<HeightfieldQualityTierId>(() => readStoredQualityTier());
+  qualityTierRef.current = qualityTier;
   const [exportBusy, setExportBusy] = useState(false);
   const [exportErr, setExportErr] = useState('');
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const exportMenuWrapRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    writeLocalString(HF_QUALITY_STORAGE_KEY, String(quality01));
-  }, [quality01]);
+    writeLocalString(HF_QUALITY_STORAGE_KEY, String(qualityTier));
+  }, [qualityTier]);
 
   useEffect(() => {
     setDisplaceMul(DEFAULT_DISPLACE_MUL);
@@ -114,6 +231,7 @@ const ImageHeightfieldViewer: React.FC<LazyImagePreviewViewerProps> = ({
     const width = Math.max(1, mount.clientWidth || root.clientWidth);
     const height = Math.max(1, mount.clientHeight || root.clientHeight || width * 0.56);
     const scene = new THREE.Scene();
+    const quality01 = heightfieldQualityTierTo01(qualityTierRef.current);
     const quality = getHeightfieldQualitySettings(quality01);
 
     const camera = new THREE.PerspectiveCamera(50, width / height, 0.01, 2000);
@@ -146,6 +264,17 @@ const ImageHeightfieldViewer: React.FC<LazyImagePreviewViewerProps> = ({
     controls.maxDistance = 24;
     controls.target.set(0, 0, 0);
 
+    runtimeRef.current = {
+      scene,
+      camera,
+      controls,
+      renderer,
+      stage: null,
+      groundMesh: null,
+      loadedImg: null,
+      ready: false,
+    };
+
     const onMouseDown = () => {
       renderer.domElement.style.cursor = 'grabbing';
     };
@@ -169,72 +298,19 @@ const ImageHeightfieldViewer: React.FC<LazyImagePreviewViewerProps> = ({
 
     img.onload = () => {
       if (cancelled) return;
-      const nw = img.naturalWidth;
-      const nh = img.naturalHeight;
-      if (!nw || !nh) {
-        fail('图片尺寸无效。');
-        return;
-      }
+      runtimeRef.current!.loadedImg = img;
 
-      let dispCanvas: HTMLCanvasElement;
-      try {
-        const disp = buildHeightfieldDisplacementCanvas(img, nw, nh, { maxEdge: quality.displaceMaxEdge });
-        dispCanvas = disp.canvas;
-      } catch {
+      const mesh = buildHeightfieldMeshFromImage(
+        img,
+        heightfieldQualityTierTo01(qualityTierRef.current),
+        displaceMulRef.current,
+        curl01Ref.current
+      );
+      if (!mesh) {
         fail('无法处理图片像素（可能被跨域策略阻止）。');
         return;
       }
-
-      const dispPx = readHeightfieldDispGrayPixels(dispCanvas);
-      if (!dispPx) {
-        fail('无法读取位移灰度像素。');
-        return;
-      }
-
-      const ar = nw / nh;
-      const maxPlane = 2.4;
-      const planeW = ar >= 1 ? maxPlane : maxPlane * ar;
-      const planeH = ar >= 1 ? maxPlane / ar : maxPlane;
-
-      const { segX, segY } = clampHeightfieldPlaneSegments(dispCanvas.width, dispCanvas.height, quality.maxPlaneCells);
-
-      const geo = new THREE.PlaneGeometry(planeW, planeH, segX, segY);
-      const baseScale = Math.min(planeW, planeH) * (0.16 / 5);
-      const posAttr = geo.attributes.position as THREE.BufferAttribute;
-      const uvAttr = geo.attributes.uv as THREE.BufferAttribute;
-      const zBase = new Float32Array(posAttr.count);
-      const flatX = new Float32Array(posAttr.count);
-      const flatY = new Float32Array(posAttr.count);
-      const mul0 = displaceMulRef.current;
-      const curl0 = curl01Ref.current;
-      for (let i = 0; i < posAttr.count; i++) {
-        const u = uvAttr.getX(i);
-        const v = uvAttr.getY(i);
-        const g = sampleGrayDispBilinear(dispPx, u, v);
-        zBase[i] = g * baseScale;
-        flatX[i] = posAttr.getX(i);
-        flatY[i] = posAttr.getY(i);
-        posAttr.setZ(i, zBase[i] * mul0);
-      }
-      posAttr.needsUpdate = true;
-      geo.computeVertexNormals();
-
-      const matcapTex = createZbrushStyleGrayMatcapTexture();
-      const mat = new THREE.MeshMatcapMaterial({ matcap: matcapTex });
-      mat.color.set(DEFAULT_HEIGHTFIELD_MATCAP_COLOR);
-      mat.side = THREE.DoubleSide;
-      mat.needsUpdate = true;
-      const mesh = new THREE.Mesh(geo, mat);
-      /** 立面（XY）：图幅竖立在场景中，周向卷曲时圆柱轴与世界 Y 一致 */
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      mesh.userData.baseDisplacementScale = baseScale;
-      mesh.userData.zBase = zBase;
-      mesh.userData.planeW = planeW;
-      mesh.userData.flatX = flatX;
-      mesh.userData.flatY = flatY;
       meshRef.current = mesh;
-      applyHeightfieldCylinderWrapPositions(mesh, curl0, mul0);
 
       void (async () => {
         try {
@@ -242,14 +318,12 @@ const ImageHeightfieldViewer: React.FC<LazyImagePreviewViewerProps> = ({
         } catch (e) {
           if (cancelled || (e instanceof DOMException && e.name === 'AbortError')) return;
           meshRef.current = null;
-          geo.dispose();
-          mat.dispose();
+          disposeHeightfieldMesh(mesh);
           if (!cancelled) fail('3D 环境（HDR）加载失败，请刷新重试。');
           return;
         }
         if (cancelled) {
-          geo.dispose();
-          mat.dispose();
+          disposeHeightfieldMesh(mesh);
           stage?.dispose();
           stage = null;
           return;
@@ -258,18 +332,21 @@ const ImageHeightfieldViewer: React.FC<LazyImagePreviewViewerProps> = ({
         frameCameraToObject(camera, controls, mesh, { defaultView: '+z' });
         if (cancelled) {
           scene.remove(mesh);
-          mesh.geometry.dispose();
-          mat.dispose();
+          disposeHeightfieldMesh(mesh);
           stage?.dispose();
           stage = null;
           meshRef.current = null;
           return;
         }
-        const box = new THREE.Box3().setFromObject(mesh);
-        aimHeightfieldReliefLightsAtBox(stage.keyLight, stage.fillLight, stage.rimLight, stage.bounceFill, box);
-        applyHeightfieldMatcapSceneLighting(stage);
-        groundMesh = createStudioGroundMesh(box, 8);
+        groundMesh = createStudioGroundMesh(new THREE.Box3().setFromObject(mesh), 8);
         if (groundMesh) scene.add(groundMesh);
+        const rt = runtimeRef.current;
+        if (rt) {
+          rt.stage = stage;
+          rt.groundMesh = groundMesh;
+          refreshHeightfieldStageLighting(rt, mesh);
+          rt.ready = true;
+        }
         queueMicrotask(() => {
           const m = meshRef.current;
           if (m && m.userData.flatX) {
@@ -313,21 +390,53 @@ const ImageHeightfieldViewer: React.FC<LazyImagePreviewViewerProps> = ({
       meshRef.current = null;
       if (mesh) {
         scene.remove(mesh);
-        mesh.geometry.dispose();
-        const m = mesh.material as THREE.MeshMatcapMaterial;
-        m.dispose();
+        disposeHeightfieldMesh(mesh);
       }
-      if (groundMesh) {
-        scene.remove(groundMesh);
-        groundMesh.geometry.dispose();
-        (groundMesh.material as THREE.Material).dispose();
-        groundMesh = null;
+      const rt = runtimeRef.current;
+      if (rt?.groundMesh) {
+        rt.scene.remove(rt.groundMesh);
+        rt.groundMesh.geometry.dispose();
+        (rt.groundMesh.material as THREE.Material).dispose();
       }
-      stage?.dispose();
+      rt?.stage?.dispose();
+      runtimeRef.current = null;
       renderer.dispose();
       if (renderer.domElement.parentNode === mount) mount.removeChild(renderer.domElement);
     };
-  }, [imageSrc, quality01]); // curl / 置换在 mesh 就绪后由独立 effect 与 microtask 同步
+  }, [imageSrc]); // 画质档位单独 effect 重建网格，不重置相机
+
+  useEffect(() => {
+    const rt = runtimeRef.current;
+    if (!rt?.ready || !rt.loadedImg) return;
+
+    const camPos = rt.camera.position.clone();
+    const camTarget = rt.controls.target.clone();
+
+    const old = meshRef.current;
+    if (old) {
+      rt.scene.remove(old);
+      disposeHeightfieldMesh(old);
+    }
+
+    const q01 = heightfieldQualityTierTo01(qualityTier);
+    const mesh = buildHeightfieldMeshFromImage(
+      rt.loadedImg,
+      q01,
+      displaceMulRef.current,
+      curl01Ref.current
+    );
+    if (!mesh) return;
+    meshRef.current = mesh;
+    rt.scene.add(mesh);
+
+    const q = getHeightfieldQualitySettings(q01);
+    rt.renderer.setPixelRatio(Math.min(window.devicePixelRatio, q.pixelRatioCap));
+    refreshHeightfieldStageLighting(rt, mesh);
+
+    rt.camera.position.copy(camPos);
+    rt.controls.target.copy(camTarget);
+    rt.controls.update();
+  }, [qualityTier]);
 
   useEffect(() => {
     if (!exportMenuOpen) return;
@@ -346,10 +455,8 @@ const ImageHeightfieldViewer: React.FC<LazyImagePreviewViewerProps> = ({
     };
   }, [exportMenuOpen]);
 
-  const onQualityInput = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const v = Number(e.target.value);
-    if (!Number.isFinite(v)) return;
-    setQuality01(Math.max(0, Math.min(1, v / 100)));
+  const onQualityTierPick = useCallback((tier: HeightfieldQualityTierId) => {
+    setQualityTier(tier);
   }, []);
 
   const onExportPickFormat = useCallback(async (format: HeightfieldMeshExportFormat) => {
@@ -383,62 +490,58 @@ const ImageHeightfieldViewer: React.FC<LazyImagePreviewViewerProps> = ({
     e.stopPropagation();
   }, []);
 
+  const hfTierChip = (active: boolean) =>
+    `min-h-[1.5rem] min-w-0 flex-1 rounded-md px-1 py-0.5 text-[9px] font-bold ring-1 transition-colors ${
+      active
+        ? 'bg-blue-500/25 text-blue-100 ring-blue-400/50'
+        : 'bg-white/[0.04] text-gray-400 ring-white/10 hover:bg-white/[0.08] hover:text-gray-200'
+    }`;
   const useTopToolbar = Boolean(toolbarPortalEl);
-  /** Portal 到侧栏时宿主较窄：滑条独占一行、全宽，避免多列挤切 */
-  const hfRangePortal = 'h-2 w-full min-w-0 shrink-0 cursor-pointer accent-blue-500';
+  /** Portal 到侧栏：标签左、滑条右占满剩余宽度 */
+  const hfRowPortal = 'flex w-full min-w-0 items-center gap-2';
+  const hfLabelPortal = 'shrink-0 w-[4.5rem] text-[9px] font-medium leading-tight text-gray-400';
+  const hfRangePortal = 'h-2 min-w-0 flex-1 cursor-pointer accent-blue-500';
   const readyChrome = (
     <>
       <div
-        className={
-          useTopToolbar
-            ? 'flex w-full min-w-0 flex-col gap-1'
-            : 'flex w-full items-center gap-2'
-        }
+        className={useTopToolbar ? hfRowPortal : 'flex w-full items-center gap-2'}
         onClick={stopToolbarClick}
       >
         {useTopToolbar ? (
-          <span className="text-[9px] font-medium text-gray-400">画质与性能</span>
+          <span className={hfLabelPortal}>画质与性能</span>
         ) : (
-          <span className="shrink-0 text-gray-500">性能</span>
+          <span className="shrink-0 text-gray-500">画质</span>
         )}
-        <input
-          id="ac-heightfield-quality"
-          type="range"
-          min={0}
-          max={100}
-          step={1}
-          value={Math.round(quality01 * 100)}
-          onChange={onQualityInput}
-          className={useTopToolbar ? hfRangePortal : 'h-1 min-w-0 flex-1 accent-blue-500'}
+        <div
+          role="group"
           aria-label="高度 3D 画质与性能"
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={Math.round(quality01 * 100)}
-        />
-        {!useTopToolbar ? <span className="shrink-0 text-gray-500">画质</span> : null}
+          className="flex min-w-0 flex-1 items-center gap-1"
+        >
+          {HEIGHTFIELD_QUALITY_TIERS.map((tier) => (
+            <button
+              key={tier.id}
+              type="button"
+              onClick={() => onQualityTierPick(tier.id)}
+              className={hfTierChip(qualityTier === tier.id)}
+              aria-pressed={qualityTier === tier.id}
+            >
+              {tier.label}
+            </button>
+          ))}
+        </div>
       </div>
       <div
         className={
           useTopToolbar
-            ? 'flex w-full min-w-0 flex-col gap-3'
+            ? 'flex w-full min-w-0 flex-col gap-2'
             : 'flex w-full flex-wrap items-center justify-center gap-x-3 gap-y-2'
         }
         onClick={stopToolbarClick}
       >
-        <div
-          className={
-            useTopToolbar
-              ? 'flex w-full min-w-0 flex-col gap-1'
-              : 'flex min-w-0 flex-1 items-center gap-1.5 sm:basis-[min(45%,14rem)]'
-          }
-        >
+        <div className={useTopToolbar ? hfRowPortal : 'flex min-w-0 flex-1 items-center gap-1.5 sm:basis-[min(45%,14rem)]'}>
           <label
             htmlFor="ac-heightfield-displace"
-            className={
-              useTopToolbar
-                ? 'text-[9px] font-medium text-gray-400'
-                : 'w-14 shrink-0 text-gray-400 sm:w-auto'
-            }
+            className={useTopToolbar ? hfLabelPortal : 'w-14 shrink-0 text-gray-400 sm:w-auto'}
           >
             置换强度
           </label>
@@ -460,20 +563,10 @@ const ImageHeightfieldViewer: React.FC<LazyImagePreviewViewerProps> = ({
             aria-valuenow={displaceMul}
           />
         </div>
-        <div
-          className={
-            useTopToolbar
-              ? 'flex w-full min-w-0 flex-col gap-1'
-              : 'flex min-w-0 flex-1 items-center gap-1.5 sm:basis-[min(45%,14rem)]'
-          }
-        >
+        <div className={useTopToolbar ? hfRowPortal : 'flex min-w-0 flex-1 items-center gap-1.5 sm:basis-[min(45%,14rem)]'}>
           <label
             htmlFor="ac-heightfield-curl"
-            className={
-              useTopToolbar
-                ? 'text-[9px] font-medium text-gray-400'
-                : 'w-14 shrink-0 text-gray-400 sm:w-auto'
-            }
+            className={useTopToolbar ? hfLabelPortal : 'w-14 shrink-0 text-gray-400 sm:w-auto'}
             title="左右边沿卷成外壁圆柱，满量程时两边相接"
           >
             卷成圆柱
@@ -498,7 +591,7 @@ const ImageHeightfieldViewer: React.FC<LazyImagePreviewViewerProps> = ({
         {!useTopToolbar ? <span className="hidden h-4 w-px bg-white/15 sm:inline-block" aria-hidden /> : null}
         <div
           ref={exportMenuWrapRef}
-          className={useTopToolbar ? 'relative flex w-full shrink-0 justify-end' : 'relative shrink-0'}
+          className={useTopToolbar ? 'relative flex w-full shrink-0 justify-center' : 'relative shrink-0'}
         >
           <button
             type="button"
@@ -542,7 +635,7 @@ const ImageHeightfieldViewer: React.FC<LazyImagePreviewViewerProps> = ({
               role="menu"
               className={
                 useTopToolbar
-                  ? 'absolute right-0 top-full z-[80] mt-1.5 min-w-[13rem] max-h-[min(70vh,22rem)] overflow-y-auto rounded-xl bg-[#121214] py-1 text-left text-[10px] text-gray-200 shadow-2xl ring-1 ring-white/[0.14]'
+                  ? 'absolute left-1/2 top-full z-[80] mt-1.5 min-w-[13rem] max-h-[min(70vh,22rem)] -translate-x-1/2 overflow-y-auto rounded-xl bg-[#121214] py-1 text-left text-[10px] text-gray-200 shadow-2xl ring-1 ring-white/[0.14]'
                   : 'absolute left-1/2 bottom-full z-[80] mb-1.5 min-w-[13rem] max-h-[min(70vh,22rem)] -translate-x-1/2 overflow-y-auto rounded-xl bg-[#121214] py-1 text-left text-[10px] text-gray-200 shadow-2xl ring-1 ring-white/[0.14]'
               }
               onPointerDown={(e) => e.stopPropagation()}
@@ -609,7 +702,7 @@ const ImageHeightfieldViewer: React.FC<LazyImagePreviewViewerProps> = ({
     status === 'ready' && toolbarPortalEl ? (
       createPortal(
         <div
-          className="pointer-events-auto flex min-w-0 flex-col gap-2 text-[9px] text-gray-300 sm:text-[10px]"
+          className="pointer-events-auto flex w-full min-w-0 flex-col gap-2 text-[9px] text-gray-300 sm:text-[10px]"
           onClick={stopToolbarClick}
         >
           {readyChrome}

@@ -62,11 +62,10 @@ export const WorkflowGenerationRecordPanel: React.FC<WorkflowGenerationRecordPan
     return null;
   }, [asset.displayKey, vgp]);
 
+  /** 大图侧栏已改用 `WorkflowStepTimelineDetailPanel`（与时间线同一选中键） */
+  if (mode === 'inline') return null;
+
   if (!vgp) {
-    if (mode === 'inline') {
-      /** 步骤时间线由 `WorkflowStepTimelinePanel`（resultOrder 派生）在大图侧栏展示，此处避免重复空态 */
-      return null;
-    }
     return createPortal(
       <div
         className="fixed inset-0 z-[2100] flex items-center justify-center bg-black/70 p-4"

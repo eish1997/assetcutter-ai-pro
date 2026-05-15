@@ -14,12 +14,41 @@ function countValidVgpOrderedVersions(vgp: VgpAssetExtension): number {
 }
 
 /**
+ * `resultOrder` 中每一步是否都能在 VGP 版本链上找到对应 `imageRef`（含 original）。
+ * 若仅有「合法但过时」的 vgp（例如仅含原图节点），右侧「步骤时间线」仍可按 resultOrder 显示，
+ * 左侧缩略图树会整段缺失；此时应丢弃并重建 vgp。
+ */
+function vgpStepKeysCoverResultOrder(asset: WorkflowAsset, vgp: VgpAssetExtension): boolean {
+  const order = asset.resultOrder ?? [];
+  if (order.length === 0) return true;
+  const keys = new Set<string>();
+  for (const id of vgp.versionOrder) {
+    const v = vgp.versionsById[id];
+    if (!v) continue;
+    if (v.imageRef.kind === 'original_field') {
+      keys.add('original');
+      continue;
+    }
+    if (v.imageRef.kind === 'result_key') {
+      keys.add(v.imageRef.key);
+    }
+  }
+  for (const k of order) {
+    if (!keys.has(k)) return false;
+  }
+  return true;
+}
+
+/**
  * 无 vgp 的旧资产：补全最小合法扩展；已有 resultOrder 时尽力重建链（语义/prompt 为占位）。
  * 若已存在 `vgp` 但 `versionOrder` 无法解析出任何版本节点，视为损坏并丢弃后按上式重建。
+ * 若 vgp 与 `resultOrder` 不同步（常见于云同步只更新了 result 而未带 vgp），亦重建以对齐左侧节点图与右侧时间线。
  */
 export function ensureWorkflowAssetVgp(asset: WorkflowAsset): WorkflowAsset {
   if (asset.vgp && countValidVgpOrderedVersions(asset.vgp) > 0) {
-    return asset;
+    if (vgpStepKeysCoverResultOrder(asset, asset.vgp)) {
+      return asset;
+    }
   }
 
   const source: WorkflowAsset = asset.vgp ? { ...asset, vgp: undefined } : asset;
