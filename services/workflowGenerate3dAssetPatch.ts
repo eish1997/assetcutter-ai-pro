@@ -1,5 +1,9 @@
 import type { WorkflowAsset } from '../types';
 import type { WorkflowModelSlotFormat } from './tripoModelPersist';
+import {
+  buildWorkflow3dPersistedSlotUrls,
+  normalizeWorkflow3dPreviewResultUrl,
+} from './workflowModelSlots';
 
 export type Workflow3dJobMetaPatch = {
   tripoTaskId?: string;
@@ -39,13 +43,19 @@ export function patchWorkflowAssetsWith3dResult(params: {
     jobMeta,
   } = params;
 
+  const persistedSlotUrls = buildWorkflow3dPersistedSlotUrls(localModelUrls, modelCompanionKeys);
+  const persistedPreviewUrl = normalizeWorkflow3dPreviewResultUrl(localPreviewUrl, previewCompanionKey);
+
   if (task?.assetId) {
     return prev.map((a) => {
       if (a.id !== task.assetId) return a;
       const key = task.actionType || preset.id;
       const hasOrder = (a.resultOrder || []).includes(key);
       const nextOrder = hasOrder ? (a.resultOrder || []) : [...(a.resultOrder || []), key];
-      const nextResults = localPreviewUrl ? { ...(a.results || {}), [key]: localPreviewUrl } : (a.results || {});
+      const nextResults =
+        persistedPreviewUrl || previewCompanionKey
+          ? { ...(a.results || {}), [key]: persistedPreviewUrl }
+          : (a.results || {});
       const nextResultsCompanionKeys = { ...(a.resultsCompanionKeys || {}) };
       if (previewCompanionKey) nextResultsCompanionKeys[key] = previewCompanionKey;
       const oldMeta = a.resultMeta?.[key] || { executedAt: Date.now() };
@@ -57,7 +67,9 @@ export function patchWorkflowAssetsWith3dResult(params: {
           ...jobMeta,
           presetActionIdSnapshot: oldMeta.presetActionIdSnapshot || preset.id,
           ...(oldMeta.displayStepLabel?.trim() ? {} : { displayStepLabel: preset.label }),
-          ...(localPreviewUrl ? { mediaKind: 'image' as const } : { mediaKind: 'model3d' as const }),
+          ...(persistedPreviewUrl || previewCompanionKey
+            ? { mediaKind: 'image' as const }
+            : { mediaKind: 'model3d' as const }),
         },
       };
       return {
@@ -65,9 +77,9 @@ export function patchWorkflowAssetsWith3dResult(params: {
         results: nextResults,
         resultsCompanionKeys:
           Object.keys(nextResultsCompanionKeys).length > 0 ? nextResultsCompanionKeys : a.resultsCompanionKeys,
-        displayKey: localPreviewUrl ? key : a.displayKey,
+        displayKey: persistedPreviewUrl || previewCompanionKey ? key : a.displayKey,
         resultOrder: nextOrder,
-        stepModelUrls: { ...(a.stepModelUrls || {}), [key]: localModelUrls },
+        stepModelUrls: { ...(a.stepModelUrls || {}), [key]: persistedSlotUrls },
         stepModelCompanionKeys:
           modelCompanionKeys.length > 0
             ? { ...(a.stepModelCompanionKeys || {}), [key]: modelCompanionKeys }
@@ -76,7 +88,7 @@ export function patchWorkflowAssetsWith3dResult(params: {
           stepModelFormats.length > 0
             ? { ...(a.stepModelFormats || {}), [key]: stepModelFormats }
             : a.stepModelFormats,
-        modelUrls: localModelUrls,
+        modelUrls: persistedSlotUrls,
         modelCompanionKeys: modelCompanionKeys.length > 0 ? modelCompanionKeys : undefined,
         modelSourceName: modelSourceName || undefined,
         resultMeta: nextMeta,
@@ -91,23 +103,23 @@ export function patchWorkflowAssetsWith3dResult(params: {
   const next: WorkflowAsset = {
     id: workflowAssetId,
     original: imageBase64,
-    displayKey: localPreviewUrl ? presetKey : 'original',
-    results: localPreviewUrl ? { [presetKey]: localPreviewUrl } : {},
+    displayKey: persistedPreviewUrl || previewCompanionKey ? presetKey : 'original',
+    results: persistedPreviewUrl ? { [presetKey]: persistedPreviewUrl } : {},
     resultsCompanionKeys: nextResultsCompanionKeys,
-    stepModelUrls: { [presetKey]: localModelUrls },
+    stepModelUrls: { [presetKey]: persistedSlotUrls },
     stepModelCompanionKeys: modelCompanionKeys.length > 0 ? { [presetKey]: modelCompanionKeys } : undefined,
     stepModelFormats: stepModelFormats.length > 0 ? { [presetKey]: stepModelFormats } : undefined,
-    modelUrls: localModelUrls,
+    modelUrls: persistedSlotUrls,
     modelCompanionKeys: modelCompanionKeys.length > 0 ? modelCompanionKeys : undefined,
     modelSourceName: modelSourceName || undefined,
-    resultOrder: localPreviewUrl ? [presetKey] : [],
+    resultOrder: persistedPreviewUrl || previewCompanionKey ? [presetKey] : [],
     resultMeta: {
       [presetKey]: {
         executedAt: now,
         ...jobMeta,
         presetActionIdSnapshot: preset.id,
         displayStepLabel: preset.label,
-        ...(localPreviewUrl ? { mediaKind: 'image' as const } : {}),
+        ...(persistedPreviewUrl || previewCompanionKey ? { mediaKind: 'image' as const } : {}),
       },
     },
     archived: false,

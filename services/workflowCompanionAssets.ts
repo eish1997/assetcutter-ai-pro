@@ -4,6 +4,10 @@ import { fetchCompanionAssetBlob, putCompanionAsset } from './companionClient/st
 import { normalizeCompanionBaseUrl } from './companionLocalPrefs';
 import { mapSiteR2PathToFetchUrl, resolveCapabilityPreviewSrc } from './capabilityPreviewUrl';
 import { isWorkflowTextAsset } from './workflowTextAsset';
+import {
+  shouldKeepExistingWorkflowModelSlotUrl,
+  workflowModelSlotMayNeedCompanionHydrate,
+} from './workflowModelBlob';
 
 export function sanitizeCompanionPathSegment(s: string): string {
   return String(s || '')
@@ -419,8 +423,7 @@ export function workflowAssetNeedsCompanionModelHydrate(a: WorkflowAsset): boole
       const ck = String(mck[i] || '').trim();
       if (!ck) continue;
       const u = String(urls[i] ?? '').trim();
-      if (!u) return true;
-      if (!/^blob:/i.test(u) && !/^https?:\/\//i.test(u) && !u.startsWith('data:')) return true;
+      if (workflowModelSlotMayNeedCompanionHydrate(u, ck)) return true;
     }
   }
   const mck = a.modelCompanionKeys;
@@ -430,8 +433,7 @@ export function workflowAssetNeedsCompanionModelHydrate(a: WorkflowAsset): boole
     const ck = String(mck[i] || '').trim();
     if (!ck) continue;
     const u = String(urls[i] ?? '').trim();
-    if (!u) return true;
-    if (!/^blob:/i.test(u) && !/^https?:\/\//i.test(u) && !u.startsWith('data:')) return true;
+    if (workflowModelSlotMayNeedCompanionHydrate(u, ck)) return true;
   }
   return false;
 }

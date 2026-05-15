@@ -41,6 +41,7 @@ import {
   normalizeApiErrorMessage,
   getGeminiImageBatchBoxSizeForCurrentProvider,
   workflowGenerateImage,
+  getTencentCredsFromEnv,
 } from '../services/unifiedAiGateway';
 import { detectGrid } from '../services/gridDetector';
 import { DEFAULT_MODEL_TEXT } from '../services/modelRegistry/constants';
@@ -79,13 +80,20 @@ import { getTripoApiKey } from '../services/settingsStore';
 import {
   rehydrateWorkflowAssetModelsFromTripoTask,
 } from '../services/workflowTripoModelRehydrate';
+import { rehydrateWorkflowAssetModelsFromTencentJob } from '../services/workflowTencentModelRehydrate';
 import {
   resolveWorkflowStepModelUrls,
   resolveWorkflowStepModelCompanionKeys,
   resolveWorkflowStepModelFormats,
+  getWorkflowStepModelPersistStatus,
+  workflowModelPersistStatusLabel,
 } from '../services/workflowStepModels';
 import { downloadWorkflowStepModelSlot } from '../services/downloadModelFile';
 import { revokeWorkflowModelBlobUrlsIfOrphaned } from '../services/workflowModelBlob';
+import {
+  hydrateWorkflowAsset3dModelsFromCompanion,
+  hydrateWorkflowAssetAfter3dPersist,
+} from '../services/workflow3dCompanionHydrate';
 import {
   readLightboxAnnotationPrefs,
   writeLightboxAnnotationPrefs,
@@ -591,6 +599,7 @@ const WorkflowSection: React.FC<{
   const lightboxAssetIdRef = useRef<string | null>(null);
   lightboxAssetIdRef.current = lightboxAssetId;
   const [lightboxTripoPullBusy, setLightboxTripoPullBusy] = useState(false);
+  const [lightboxTencentPullBusy, setLightboxTencentPullBusy] = useState(false);
   const lightboxSamArmEdgeRef = useRef(false);
   const textLightboxCenterRef = useRef<WorkflowTextLightboxCenterHandle | null>(null);
   const [lightboxMetaText, setLightboxMetaText] = useState<string>('');
@@ -1519,84 +1528,20 @@ const WorkflowSection: React.FC<{
     let cancelled = false;
     void (async () => {
       for (const a of targets) {
-        const stepCompanion = a.stepModelCompanionKeys || {};
-        const nextStepUrls: Record<string, string[]> = { ...(a.stepModelUrls || {}) };
-        let stepChanged = false;
-        for (const stepKey of Object.keys(stepCompanion)) {
-          const mck = stepCompanion[stepKey] || [];
-          const urls = [...(nextStepUrls[stepKey] || [])];
-          let keyChanged = false;
-          for (let i = 0; i < mck.length; i += 1) {
-            const ck = String(mck[i] || '').trim();
-            if (!ck) continue;
-            const prevU = String(urls[i] ?? '').trim();
-            if (prevU && (/^blob:/i.test(prevU) || /^https?:\/\//i.test(prevU) || prevU.startsWith('data:'))) {
-              continue;
-            }
-            const got = await fetchWorkflowModelFromCompanionAsObjectUrl(base, projectId, ck, a.modelSourceName);
-            if (cancelled) return;
-            if (got.ok === false) {
-              onLog?.('warn', '本地伴侣 3D 模型恢复失败', `${a.id}/${stepKey}[${i}]: ${got.error}`);
-              continue;
-            }
-            while (urls.length <= i) urls.push('');
-            const oldSlot = String(urls[i] ?? '').trim();
-            if (/^blob:/i.test(oldSlot)) {
-              try {
-                URL.revokeObjectURL(oldSlot);
-              } catch {
-                /* ignore */
-              }
-            }
-            urls[i] = got.objectUrl;
-            keyChanged = true;
+        const { nextAsset, revokeBlobUrls } = await hydrateWorkflowAsset3dModelsFromCompanion({
+          asset: a,
+          baseUrl: base,
+          projectId,
+          onLog: (level, message, detail) => onLog?.(level, message, detail),
+        });
+        if (cancelled) return;
+        if (nextAsset === a) continue;
+        setAssets((prev) => prev.map((x) => (x.id === a.id ? nextAsset : x)));
+        queueMicrotask(() => {
+          for (const u of revokeBlobUrls) {
+            revokeWorkflowModelBlobUrlsIfOrphaned(u, assetsRef.current);
           }
-          if (keyChanged) {
-            nextStepUrls[stepKey] = urls;
-            stepChanged = true;
-          }
-        }
-        const mck = a.modelCompanionKeys || [];
-        const urls = [...(a.modelUrls || [])];
-        let legacyChanged = false;
-        for (let i = 0; i < mck.length; i += 1) {
-          const ck = String(mck[i] || '').trim();
-          if (!ck) continue;
-          const prevU = String(urls[i] ?? '').trim();
-          if (prevU && (/^blob:/i.test(prevU) || /^https?:\/\//i.test(prevU) || prevU.startsWith('data:'))) {
-            continue;
-          }
-          const got = await fetchWorkflowModelFromCompanionAsObjectUrl(base, projectId, ck, a.modelSourceName);
-          if (cancelled) return;
-          if (got.ok === false) {
-            onLog?.('warn', '本地伴侣 3D 模型恢复失败', `${a.id}[${i}]: ${got.error}`);
-            continue;
-          }
-          while (urls.length <= i) urls.push('');
-          const oldSlot = String(urls[i] ?? '').trim();
-          if (/^blob:/i.test(oldSlot)) {
-            try {
-              URL.revokeObjectURL(oldSlot);
-            } catch {
-              /* ignore */
-            }
-          }
-          urls[i] = got.objectUrl;
-          legacyChanged = true;
-        }
-        if (stepChanged || legacyChanged) {
-          setAssets((prev) =>
-            prev.map((x) =>
-              x.id === a.id
-                ? {
-                    ...x,
-                    ...(stepChanged ? { stepModelUrls: nextStepUrls } : {}),
-                    ...(legacyChanged ? { modelUrls: urls } : {}),
-                  }
-                : x
-            )
-          );
-        }
+        });
       }
     })();
     return () => {
@@ -4416,6 +4361,19 @@ ${lineSvg}
     if (!lightboxAsset) return [];
     return resolveWorkflowStepModelUrls(lightboxAsset, lightboxAsset.displayKey);
   }, [lightboxAsset]);
+  /** blob: 预览 URL 常无扩展名；优先用 modelSourceName，否则用 stepModelFormats 推断，避免 3D 视口无法识别格式 */
+  const lightboxModelFileNameHint = useMemo(() => {
+    if (!lightboxAsset) return undefined;
+    const raw = String(lightboxAsset.modelSourceName || '').trim();
+    if (raw && /\.(glb|gltf|fbx|obj)$/i.test(raw.split(/[?#]/)[0] || '')) return raw;
+    const dk = lightboxAsset.displayKey;
+    const fmts = lightboxAsset.stepModelFormats?.[dk];
+    const first = fmts?.[0];
+    const stub = `workflow-${lightboxAsset.id.slice(0, 8)}`;
+    if (first === 'fbx') return `${stub}.fbx`;
+    if (first === 'glb') return `${stub}.glb`;
+    return raw || `${stub}.glb`;
+  }, [lightboxAsset]);
   const lightboxTripoRehydrateCtx = useMemo(() => {
     if (
       !lightboxAsset ||
@@ -4430,6 +4388,20 @@ ${lineSvg}
     if (!tripoTaskId) return null;
     return { metaKey: dk, tripoTaskId };
   }, [lightboxAsset, lightboxShowsImage]);
+  const lightboxTencentRehydrateCtx = useMemo(() => {
+    if (
+      !lightboxAsset ||
+      !lightboxShowsImage ||
+      isWorkflowTextAsset(lightboxAsset) ||
+      isGroupAsset(lightboxAsset)
+    ) {
+      return null;
+    }
+    const dk = lightboxAsset.displayKey;
+    const tencentJobId = String(lightboxAsset.resultMeta?.[dk]?.tencentJobId || '').trim();
+    if (!tencentJobId) return null;
+    return { metaKey: dk, tencentJobId };
+  }, [lightboxAsset, lightboxShowsImage]);
   const lightboxShowTripo3DToolbar = useMemo(
     () =>
       Boolean(
@@ -4437,9 +4409,15 @@ ${lineSvg}
           lightboxShowsImage &&
           !isWorkflowTextAsset(lightboxAsset) &&
           !isGroupAsset(lightboxAsset) &&
-          (lightboxModelUrls.length > 0 || lightboxTripoRehydrateCtx)
+          (lightboxModelUrls.length > 0 || lightboxTripoRehydrateCtx || lightboxTencentRehydrateCtx)
       ),
-    [lightboxAsset, lightboxShowsImage, lightboxModelUrls.length, lightboxTripoRehydrateCtx]
+    [
+      lightboxAsset,
+      lightboxShowsImage,
+      lightboxModelUrls.length,
+      lightboxTripoRehydrateCtx,
+      lightboxTencentRehydrateCtx,
+    ]
   );
   const lightboxModelDownloadsOnRight = useMemo(
     () =>
@@ -4473,13 +4451,23 @@ ${lineSvg}
     try {
       const base = String(getCompanionLocalBaseUrl() || '').trim();
       const pid = String(workspaceProjectChrome?.activeProjectId || '').trim();
-      const { nextAsset, revokeBlobUrls } = await rehydrateWorkflowAssetModelsFromTripoTask({
+      let { nextAsset, revokeBlobUrls } = await rehydrateWorkflowAssetModelsFromTripoTask({
         asset: a,
         apiKey: String(apiKey).trim(),
         companionBaseUrl: base || null,
         companionProjectId: pid || null,
         onLog: (level, message, detail) => onLog?.(level, message, detail),
       });
+      if (base && pid) {
+        const hydrated = await hydrateWorkflowAssetAfter3dPersist({
+          asset: nextAsset,
+          baseUrl: base,
+          projectId: pid,
+          onLog: (level, message, detail) => onLog?.(level, message, detail),
+        });
+        nextAsset = hydrated.nextAsset;
+        revokeBlobUrls = [...revokeBlobUrls, ...hydrated.revokeBlobUrls];
+      }
       if (!base || !pid) {
         onLog?.(
           'warn',
@@ -4505,19 +4493,95 @@ ${lineSvg}
     }
   }, [onLog, setAssets, workspaceProjectChrome?.activeProjectId]);
 
+  const handleLightboxPullTencentModels = useCallback(async () => {
+    const id = lightboxAssetIdRef.current;
+    if (!id) return;
+    const a = assetsRef.current.find((x) => x.id === id);
+    if (!a) return;
+    const dk = a.displayKey;
+    const tencentJobId = String(a.resultMeta?.[dk]?.tencentJobId || '').trim();
+    if (!tencentJobId) {
+      onLog?.('warn', '混元拉取模型', '当前步骤详情中未找到 tencentJobId');
+      return;
+    }
+    const creds = getTencentCredsFromEnv();
+    if (!creds) {
+      onLog?.('error', '混元拉取模型', '缺少腾讯云混元配置（VITE_TENCENT_PROXY）');
+      return;
+    }
+    setLightboxTencentPullBusy(true);
+    try {
+      const base = String(getCompanionLocalBaseUrl() || '').trim();
+      const pid = String(workspaceProjectChrome?.activeProjectId || '').trim();
+      let { nextAsset, revokeBlobUrls } = await rehydrateWorkflowAssetModelsFromTencentJob({
+        asset: a,
+        creds,
+        companionBaseUrl: base || null,
+        companionProjectId: pid || null,
+        onLog: (level, message, detail) => onLog?.(level, message, detail),
+      });
+      if (base && pid) {
+        const hydrated = await hydrateWorkflowAssetAfter3dPersist({
+          asset: nextAsset,
+          baseUrl: base,
+          projectId: pid,
+          onLog: (level, message, detail) => onLog?.(level, message, detail),
+        });
+        nextAsset = hydrated.nextAsset;
+        revokeBlobUrls = [...revokeBlobUrls, ...hydrated.revokeBlobUrls];
+      }
+      if (!base || !pid) {
+        onLog?.('warn', '混元模型已拉取到内存', '未连接本地伴侣时仅浏览器内预览，刷新后可能失效。');
+      } else {
+        onLog?.('info', '混元模型已重新落地', { assetId: a.id, tencentJobId });
+      }
+      setAssets((prev) => {
+        const next = prev.map((x) => (x.id === a.id ? nextAsset : x));
+        queueMicrotask(() => {
+          for (const u of revokeBlobUrls) {
+            revokeWorkflowModelBlobUrlsIfOrphaned(u, next);
+          }
+        });
+        return next;
+      });
+    } catch (e) {
+      onLog?.('error', '混元拉取模型失败', normalizeApiErrorMessage(e));
+    } finally {
+      setLightboxTencentPullBusy(false);
+    }
+  }, [onLog, setAssets, workspaceProjectChrome?.activeProjectId]);
+
   const lightboxModelDownloadSlots = useMemo(() => {
     if (!lightboxAsset) return [];
     const dk = lightboxAsset.displayKey;
     const urls = resolveWorkflowStepModelUrls(lightboxAsset, dk);
     const keys = resolveWorkflowStepModelCompanionKeys(lightboxAsset, dk);
     const formats = resolveWorkflowStepModelFormats(lightboxAsset, dk);
-    return urls.map((url, idx) => ({
-      index: idx,
-      url,
-      companionKey: keys[idx] || '',
-      format: formats[idx] || (idx === 0 ? 'glb' : 'fbx'),
-    }));
+    const slotCount = Math.max(urls.length, keys.length, formats.length, 1);
+    return Array.from({ length: slotCount }, (_, idx) => {
+      const format = formats[idx] || (idx === 0 ? 'glb' : 'fbx');
+      const url = urls[idx] || '';
+      const companionKey = keys[idx] || '';
+      const downloadable = Boolean(String(url).trim() || String(companionKey).trim());
+      return {
+        index: idx,
+        url,
+        companionKey,
+        format,
+        downloadable,
+      };
+    }).filter((slot) => slot.downloadable || slot.format === 'fbx');
   }, [lightboxAsset]);
+
+  const lightboxModelPersistDetail = useMemo(() => {
+    if (!lightboxAsset) return null;
+    return getWorkflowStepModelPersistStatus(lightboxAsset, lightboxAsset.displayKey);
+  }, [lightboxAsset]);
+
+  const lightboxModelPersistLabel = useMemo(() => {
+    if (!lightboxModelPersistDetail || lightboxModelPersistDetail.status === 'none') return '';
+    return workflowModelPersistStatusLabel(lightboxModelPersistDetail);
+  }, [lightboxModelPersistDetail]);
 
   const handleLightboxDownloadModel = useCallback(
     async (slotIndex: number) => {
@@ -9632,7 +9696,7 @@ ${lineSvg}
           contentRightInset="0px"
           enablePanoramaMode={lightboxShowsImage}
           modelUrls={lightboxModelUrls}
-          modelFileName={lightboxAsset.modelSourceName}
+          modelFileName={lightboxModelFileNameHint}
           layoutReferenceSrc={
             lightboxShowsImage && asWorkflowImageString(lightboxAsset.original).trim()
               ? workflowSafeImgSrc(lightboxAsset.original)
@@ -9806,6 +9870,29 @@ ${lineSvg}
                 aria-label="3D 模型：拉取与下载"
                 onClick={(e) => e.stopPropagation()}
               >
+                {lightboxModelPersistLabel ? (
+                  <span
+                    className="max-w-full truncate rounded-lg border border-white/10 bg-black/40 px-2 py-1 text-[10px] text-gray-300"
+                    title={lightboxModelPersistLabel}
+                  >
+                    {lightboxModelPersistLabel}
+                  </span>
+                ) : null}
+                {lightboxTencentRehydrateCtx ? (
+                  <button
+                    type="button"
+                    disabled={lightboxTencentPullBusy}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void handleLightboxPullTencentModels();
+                    }}
+                    className={LIGHTBOX_ICON_BTN_NEUTRAL}
+                    title="按步骤详情中的混元 JobId 从云端重新拉取模型并写入本地伴侣"
+                    aria-label="从混元拉取模型"
+                  >
+                    <CloudDownload {...LIGHTBOX_BAR_IC} aria-hidden />
+                  </button>
+                ) : null}
                 {lightboxTripoRehydrateCtx ? (
                   <button
                     type="button"
@@ -9825,13 +9912,27 @@ ${lineSvg}
                   <button
                     key={`${slot.format}:${slot.index}`}
                     type="button"
+                    disabled={!slot.downloadable}
                     onClick={(e) => {
                       e.stopPropagation();
+                      if (!slot.downloadable) return;
                       void handleLightboxDownloadModel(slot.index);
                     }}
-                    className={LIGHTBOX_ICON_BTN_VIOLET}
-                    title={`下载 ${slot.format.toUpperCase()}`}
-                    aria-label={`下载 ${slot.format.toUpperCase()} 模型`}
+                    className={
+                      slot.downloadable
+                        ? LIGHTBOX_ICON_BTN_VIOLET
+                        : `${LIGHTBOX_ICON_BTN_NEUTRAL} cursor-not-allowed opacity-40`
+                    }
+                    title={
+                      slot.downloadable
+                        ? `下载 ${slot.format.toUpperCase()}`
+                        : `${slot.format.toUpperCase()} 未归档（Tripo FBX 转换可能失败）`
+                    }
+                    aria-label={
+                      slot.downloadable
+                        ? `下载 ${slot.format.toUpperCase()} 模型`
+                        : `${slot.format.toUpperCase()} 不可用`
+                    }
                   >
                     <Package {...LIGHTBOX_BAR_IC} aria-hidden />
                   </button>
@@ -9945,6 +10046,10 @@ ${lineSvg}
                 selectedResultKey={lightboxAsset.displayKey}
                 resolvePresetLabel={(pid) => capabilityPresets.find((p) => p.id === pid)?.label ?? pid}
                 getPresetInstruction={(pid) => getModule(pid)?.instruction}
+                onPullTripoModels={lightboxTripoRehydrateCtx ? handleLightboxPullTripoModels : undefined}
+                onPullTencentModels={lightboxTencentRehydrateCtx ? handleLightboxPullTencentModels : undefined}
+                pullTripoBusy={lightboxTripoPullBusy}
+                pullTencentBusy={lightboxTencentPullBusy}
               />
           </div>
           </div>

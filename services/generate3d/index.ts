@@ -19,3 +19,4 @@ export {
   type TencentGenerate3dQueueKind,
   type TencentQueueRunResult,
 } from './tencentQueueRunner';
+export { preflightGenerate3dEnvironment } from './preflightGenerate3d';

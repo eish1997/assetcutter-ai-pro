@@ -84,9 +84,9 @@ import { dialogVersionHasRenderableImage, dialogVersionsForMessage, getDialogVer
 import { HttpRequestError } from './services/httpClient';
 import { triggerImageDownload } from './services/imageDataUrl';
 import { downloadModelFromSource } from './services/downloadModelFile';
-import { persistTripoModelsForWorkflowAsset } from './services/tripoModelPersist';
-import { persistTencentModelsForWorkflowAsset } from './services/tencentModelPersist';
-import { patchWorkflowAssetsWith3dResult } from './services/workflowGenerate3dAssetPatch';
+import { persistWorkflow3dSlots } from './services/persistWorkflow3dSlots';
+import { preflightGenerate3dEnvironment } from './services/generate3d/preflightGenerate3d';
+import { patchWorkflowAssetsWith3dResultAndHydrate } from './services/workflow3dCompanionHydrate';
 import {
   getAiProvider,
   getAiProviderToolbarLabel,
@@ -3184,6 +3184,15 @@ const MainApp: React.FC = () => {
     if (preset.category !== 'generate_3d' || !preset.generate3D) return;
     const g = normalizeGenerate3DPresetForRun(preset.generate3D);
     const provider = resolveGenerate3dProviderId(g);
+    const companionProjectIdForPreflight = String(activeWorkspaceProjectId || '').trim() || 'default';
+    const preflight = await preflightGenerate3dEnvironment({
+      companionBaseUrl: getCompanionLocalBaseUrl(),
+      companionProjectId: companionProjectIdForPreflight,
+      provider: provider === 'tencent' ? 'tencent' : 'tripo',
+    });
+    for (const w of preflight.warnings) {
+      addGenerate3DLog('warn', `[工作流] ${w}`);
+    }
     if (provider === 'tencent') {
       if (!creds3D) {
         const msg = '缺少腾讯云混元配置：请在 .env.local 配置 VITE_TENCENT_PROXY 并启动 npm run proxy';
@@ -3239,12 +3248,13 @@ const MainApp: React.FC = () => {
         const companionProjectId = String(activeWorkspaceProjectId || '').trim() || 'default';
         const workflowAssetId = task?.assetId || `wf_tencent_${Math.random().toString(36).slice(2, 11)}`;
         const resultKey = task?.actionType || preset.id;
-        const persisted = await persistTencentModelsForWorkflowAsset({
+        const persisted = await persistWorkflow3dSlots({
+          provider: 'tencent',
           creds: creds3D,
-          tencentJobId: jobId,
+          taskId: jobId,
+          files,
           assetId: workflowAssetId,
           resultKey,
-          files,
           companionBaseUrl: companionBase,
           companionProjectId,
           onLog: (level, message, detail) => addGenerate3DLog(level, message, detail),
@@ -3262,9 +3272,9 @@ const MainApp: React.FC = () => {
             '未连接本地伴侣时仅浏览器内预览，刷新可能失效；连接伴侣后可写入卷目录。'
           );
         }
-        setWorkflowAssets((prev) =>
-          patchWorkflowAssetsWith3dResult({
-            prev,
+        const { assets: hydratedAssets, revokeBlobUrls: hydrateRevokes } =
+          await patchWorkflowAssetsWith3dResultAndHydrate({
+            prev: workflowAssetsRef.current,
             task,
             preset,
             imageBase64,
@@ -3277,8 +3287,18 @@ const MainApp: React.FC = () => {
             localPreviewUrl,
             previewCompanionKey,
             jobMeta: { tencentJobId: jobId, tencentLastError: undefined },
-          })
-        );
+            companionBaseUrl: companionBase,
+            companionProjectId,
+            onLog: (level, message, detail) => addGenerate3DLog(level, message, detail),
+          });
+        for (const u of hydrateRevokes) {
+          try {
+            URL.revokeObjectURL(u);
+          } catch {
+            /* ignore */
+          }
+        }
+        setWorkflowAssets(hydratedAssets);
         updateTask(taskId, { status: 'SUCCESS', progress: 100 });
         addGenerate3DLog('info', `[工作流] 混元生成完成，模型已回填资产卡`, {
           jobId,
@@ -3422,13 +3442,14 @@ const MainApp: React.FC = () => {
       const companionProjectId = String(activeWorkspaceProjectId || '').trim() || 'default';
       const workflowAssetId = task?.assetId || `wf_tripo_${Math.random().toString(36).slice(2, 11)}`;
       const resultKey = task?.actionType || preset.id;
-      const persisted = await persistTripoModelsForWorkflowAsset({
+      const persisted = await persistWorkflow3dSlots({
+        provider: 'tripo',
         apiKey: tripoApiKey,
-        tripoTaskId: createdTaskId,
-        assetId: workflowAssetId,
-        resultKey,
+        taskId: createdTaskId,
         glbSourceUrls: modelUrls,
         previewUrl,
+        assetId: workflowAssetId,
+        resultKey,
         companionBaseUrl: companionBase,
         companionProjectId,
         onLog: (level, message, detail) => addGenerate3DLog(level, message, detail),
@@ -3446,9 +3467,9 @@ const MainApp: React.FC = () => {
           '未连接本地伴侣时仅浏览器内预览，刷新可能失效；连接伴侣后可用「从 Tripo 拉取」写入卷目录。'
         );
       }
-      setWorkflowAssets((prev) =>
-        patchWorkflowAssetsWith3dResult({
-          prev,
+      const { assets: hydratedAssets, revokeBlobUrls: hydrateRevokes } =
+        await patchWorkflowAssetsWith3dResultAndHydrate({
+          prev: workflowAssetsRef.current,
           task,
           preset,
           imageBase64,
@@ -3461,8 +3482,18 @@ const MainApp: React.FC = () => {
           localPreviewUrl,
           previewCompanionKey,
           jobMeta: { tripoTaskId: createdTaskId, tripoLastError: undefined },
-        })
-      );
+          companionBaseUrl: companionBase,
+          companionProjectId,
+          onLog: (level, message, detail) => addGenerate3DLog(level, message, detail),
+        });
+      for (const u of hydrateRevokes) {
+        try {
+          URL.revokeObjectURL(u);
+        } catch {
+          /* ignore */
+        }
+      }
+      setWorkflowAssets(hydratedAssets);
       updateTask(taskId, { status: 'SUCCESS', progress: 100 });
       addGenerate3DLog('info', `[工作流] Tripo 生成完成，模型已落本地伴侣并回填资产卡`, {
         modelCount: localModelUrls.length,

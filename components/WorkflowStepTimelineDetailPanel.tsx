@@ -9,7 +9,7 @@ import {
 } from '../services/workflowStepTimeline';
 import { ensureWorkflowAssetVgp } from '../services/vgp/migrateLegacyAsset';
 import { stripResultKeyToBaseActionId } from './workflow/workflowIds';
-import { isWorkflowGenerate3dResultStep } from '../services/workflowStepModels';
+import { isWorkflowGenerate3dResultStep, getWorkflowStepModelPersistStatus, workflowModelPersistStatusLabel } from '../services/workflowStepModels';
 
 function parentStepLabel(
   vgp: VgpAssetExtension,
@@ -93,6 +93,10 @@ export type WorkflowStepTimelineDetailPanelProps = {
   resolvePresetLabel?: (presetId: string) => string;
   /** 预设 instruction 等，用于与入队覆写对照 */
   getPresetInstruction?: (presetId: string) => string | undefined;
+  onPullTripoModels?: () => void | Promise<void>;
+  onPullTencentModels?: () => void | Promise<void>;
+  pullTripoBusy?: boolean;
+  pullTencentBusy?: boolean;
 };
 
 export const WorkflowStepTimelineDetailPanel: React.FC<WorkflowStepTimelineDetailPanelProps> = ({
@@ -102,6 +106,10 @@ export const WorkflowStepTimelineDetailPanel: React.FC<WorkflowStepTimelineDetai
   timelineOrder: timelineOrderProp,
   resolvePresetLabel,
   getPresetInstruction,
+  onPullTripoModels,
+  onPullTencentModels,
+  pullTripoBusy = false,
+  pullTencentBusy = false,
 }) => {
   const [promptExpanded, setPromptExpanded] = useState(false);
   const [presetInstrExpanded, setPresetInstrExpanded] = useState(false);
@@ -142,6 +150,11 @@ export const WorkflowStepTimelineDetailPanel: React.FC<WorkflowStepTimelineDetai
   const rCompanion = displayAsset.resultsCompanionKeys?.[selectedResultKey];
 
   const isGenerate3dStep = isWorkflowGenerate3dResultStep(displayAsset, selectedResultKey);
+  const modelPersistLabel = useMemo(() => {
+    if (!isGenerate3dStep) return '';
+    const d = getWorkflowStepModelPersistStatus(displayAsset, selectedResultKey);
+    return workflowModelPersistStatusLabel(d);
+  }, [displayAsset, isGenerate3dStep, selectedResultKey]);
 
   const exportCurrentTxt = () => {
     const lines: string[] = [
@@ -274,19 +287,36 @@ export const WorkflowStepTimelineDetailPanel: React.FC<WorkflowStepTimelineDetai
         {isGenerate3dStep ? (
           <div className="pt-2 border-t border-white/10 space-y-1.5 text-[8px]">
             <div className="font-black text-violet-300/90 uppercase text-[7px]">生成 3D</div>
+            {modelPersistLabel ? (
+              <p className="text-gray-300 leading-relaxed rounded-lg border border-white/10 bg-black/30 px-2 py-1">
+                {modelPersistLabel}
+              </p>
+            ) : null}
             {meta?.tripoTaskId ? (
               <div className="space-y-1">
                 <p className="text-gray-300 break-all leading-relaxed">
                   <span className="text-gray-500">Tripo 任务 id（已写入本步 resultMeta，刷新后仍保留）：</span>
                   <span className="font-mono text-gray-100">{meta.tripoTaskId}</span>
                 </p>
-                <button
-                  type="button"
-                  onClick={() => void navigator.clipboard.writeText(meta.tripoTaskId || '')}
-                  className="px-2 py-1 rounded-lg text-[8px] font-black uppercase border border-white/15 bg-white/5 hover:bg-white/10 text-gray-200"
-                >
-                  复制 Tripo 任务 id
-                </button>
+                <div className="flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => void navigator.clipboard.writeText(meta.tripoTaskId || '')}
+                    className="px-2 py-1 rounded-lg text-[8px] font-black uppercase border border-white/15 bg-white/5 hover:bg-white/10 text-gray-200"
+                  >
+                    复制 Tripo 任务 id
+                  </button>
+                  {onPullTripoModels ? (
+                    <button
+                      type="button"
+                      disabled={pullTripoBusy}
+                      onClick={() => void onPullTripoModels()}
+                      className="px-2 py-1 rounded-lg text-[8px] font-black uppercase border border-violet-400/30 bg-violet-950/40 hover:bg-violet-900/50 text-violet-200 disabled:opacity-50"
+                    >
+                      {pullTripoBusy ? '拉取中…' : '从 Tripo 拉取模型'}
+                    </button>
+                  ) : null}
+                </div>
               </div>
             ) : null}
             {meta?.tencentJobId ? (
@@ -295,13 +325,25 @@ export const WorkflowStepTimelineDetailPanel: React.FC<WorkflowStepTimelineDetai
                   <span className="text-gray-500">混元 JobId（已写入本步 resultMeta，刷新后仍保留）：</span>
                   <span className="font-mono text-gray-100">{meta.tencentJobId}</span>
                 </p>
-                <button
-                  type="button"
-                  onClick={() => void navigator.clipboard.writeText(meta.tencentJobId || '')}
-                  className="px-2 py-1 rounded-lg text-[8px] font-black uppercase border border-white/15 bg-white/5 hover:bg-white/10 text-gray-200"
-                >
-                  复制混元 JobId
-                </button>
+                <div className="flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => void navigator.clipboard.writeText(meta.tencentJobId || '')}
+                    className="px-2 py-1 rounded-lg text-[8px] font-black uppercase border border-white/15 bg-white/5 hover:bg-white/10 text-gray-200"
+                  >
+                    复制混元 JobId
+                  </button>
+                  {onPullTencentModels ? (
+                    <button
+                      type="button"
+                      disabled={pullTencentBusy}
+                      onClick={() => void onPullTencentModels()}
+                      className="px-2 py-1 rounded-lg text-[8px] font-black uppercase border border-violet-400/30 bg-violet-950/40 hover:bg-violet-900/50 text-violet-200 disabled:opacity-50"
+                    >
+                      {pullTencentBusy ? '拉取中…' : '从混元拉取模型'}
+                    </button>
+                  ) : null}
+                </div>
               </div>
             ) : null}
             {!meta?.tripoTaskId && !meta?.tencentJobId ? (
@@ -476,13 +518,25 @@ export const WorkflowStepTimelineDetailPanel: React.FC<WorkflowStepTimelineDetai
                   <span className="text-gray-500">Tripo 任务 id（已随本步 resultMeta 持久化，用于恢复查询 / 大图「拉取模型」）：</span>
                   <span className="font-mono text-gray-200">{meta.tripoTaskId}</span>
                 </p>
-                <button
-                  type="button"
-                  onClick={() => void navigator.clipboard.writeText(meta.tripoTaskId || '')}
-                  className="px-2 py-1 rounded-lg text-[8px] font-black uppercase border border-white/15 bg-white/5 hover:bg-white/10 text-gray-200"
-                >
-                  复制 Tripo 任务 id
-                </button>
+                <div className="flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => void navigator.clipboard.writeText(meta.tripoTaskId || '')}
+                    className="px-2 py-1 rounded-lg text-[8px] font-black uppercase border border-white/15 bg-white/5 hover:bg-white/10 text-gray-200"
+                  >
+                    复制 Tripo 任务 id
+                  </button>
+                  {onPullTripoModels ? (
+                    <button
+                      type="button"
+                      disabled={pullTripoBusy}
+                      onClick={() => void onPullTripoModels()}
+                      className="px-2 py-1 rounded-lg text-[8px] font-black uppercase border border-violet-400/30 bg-violet-950/40 hover:bg-violet-900/50 text-violet-200 disabled:opacity-50"
+                    >
+                      {pullTripoBusy ? '拉取中…' : '从 Tripo 拉取模型'}
+                    </button>
+                  ) : null}
+                </div>
               </div>
             ) : null}
             {meta?.tencentJobId ? (
@@ -491,13 +545,25 @@ export const WorkflowStepTimelineDetailPanel: React.FC<WorkflowStepTimelineDetai
                   <span className="text-gray-500">混元 JobId（已随本步 resultMeta 持久化）：</span>
                   <span className="font-mono text-gray-200">{meta.tencentJobId}</span>
                 </p>
-                <button
-                  type="button"
-                  onClick={() => void navigator.clipboard.writeText(meta.tencentJobId || '')}
-                  className="px-2 py-1 rounded-lg text-[8px] font-black uppercase border border-white/15 bg-white/5 hover:bg-white/10 text-gray-200"
-                >
-                  复制混元 JobId
-                </button>
+                <div className="flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => void navigator.clipboard.writeText(meta.tencentJobId || '')}
+                    className="px-2 py-1 rounded-lg text-[8px] font-black uppercase border border-white/15 bg-white/5 hover:bg-white/10 text-gray-200"
+                  >
+                    复制混元 JobId
+                  </button>
+                  {onPullTencentModels ? (
+                    <button
+                      type="button"
+                      disabled={pullTencentBusy}
+                      onClick={() => void onPullTencentModels()}
+                      className="px-2 py-1 rounded-lg text-[8px] font-black uppercase border border-violet-400/30 bg-violet-950/40 hover:bg-violet-900/50 text-violet-200 disabled:opacity-50"
+                    >
+                      {pullTencentBusy ? '拉取中…' : '从混元拉取模型'}
+                    </button>
+                  ) : null}
+                </div>
               </div>
             ) : null}
             {meta?.tripoLastError ? (

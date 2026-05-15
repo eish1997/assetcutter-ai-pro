@@ -73,6 +73,11 @@ export async function persistTencentModelsForWorkflowAsset(params: {
   files: File3D[];
   companionBaseUrl?: string | null;
   companionProjectId?: string | null;
+  existing?: {
+    urls?: string[];
+    companionKeys?: string[];
+    formats?: WorkflowModelSlotFormat[];
+  };
   onLog?: (level: 'info' | 'warn' | 'error', message: string, detail?: unknown) => void;
 }): Promise<PersistTencentModelsResult> {
   const tencentJobId = String(params.tencentJobId || '').trim();
@@ -87,14 +92,30 @@ export async function persistTencentModelsForWorkflowAsset(params: {
   const proxyUrl = params.creds.proxyUrl;
   const log = params.onLog;
 
+  const existingFormats = params.existing?.formats || [];
+  const existingUrls = params.existing?.urls || [];
+  const existingKeys = params.existing?.companionKeys || [];
+
   const modelUrls: string[] = [];
   const modelCompanionKeys: string[] = [];
   const stepModelFormats: WorkflowModelSlotFormat[] = [];
 
   for (let i = 0; i < orderedFiles.length; i++) {
     const file = orderedFiles[i]!;
-    const url = String(file.Url || '').trim();
     const format = inferSlotFormat(file);
+    const existingIdx = existingFormats.indexOf(format);
+    const hasExisting =
+      existingIdx >= 0 &&
+      Boolean(String(existingUrls[existingIdx] || '').trim() || String(existingKeys[existingIdx] || '').trim());
+    if (hasExisting) {
+      modelUrls.push(String(existingUrls[existingIdx] || '').trim());
+      if (existingKeys[existingIdx]) modelCompanionKeys.push(String(existingKeys[existingIdx]).trim());
+      stepModelFormats.push(format);
+      log?.('info', `[混元 归档] 已存在 ${format.toUpperCase()} 本地副本，跳过重复落盘`);
+      continue;
+    }
+
+    const url = String(file.Url || '').trim();
     log?.('info', `[混元 归档] 落盘模型槽位 ${i}`, { type: file.Type, format });
     const blob = await fetchTencentRemoteFileBlob(url, proxyUrl);
     if (useCompanion) {

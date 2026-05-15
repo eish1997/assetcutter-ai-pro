@@ -29,13 +29,21 @@ function revokeBlobUrlIfOrphaned(url: string, stillReferenced: boolean): void {
   }
 }
 
+function assetReferencesBlobUrl(a: WorkflowAsset, url: string): boolean {
+  const u = String(url || '').trim();
+  if (!u) return false;
+  if ((a.modelUrls || []).some((x) => String(x || '').trim() === u)) return true;
+  for (const arr of Object.values(a.stepModelUrls || {})) {
+    if ((arr || []).some((x) => String(x || '').trim() === u)) return true;
+  }
+  return false;
+}
+
 /** 当某 blob URL 已无任何资产引用时释放，避免重复 revoke（如复制卡片共享同一 blob）。 */
 export function revokeWorkflowModelBlobUrlsIfOrphaned(url: string, assetsReferencing: WorkflowAsset[]): void {
   const u = String(url || '').trim();
   if (!isBlobModelUrl(u)) return;
-  const still = assetsReferencing.some((a) =>
-    (a.modelUrls || []).some((x) => String(x || '').trim() === u)
-  );
+  const still = assetsReferencing.some((a) => assetReferencesBlobUrl(a, u));
   if (still) return;
   try {
     URL.revokeObjectURL(u);
@@ -50,6 +58,11 @@ export function revokeWorkflowModelBlobUrlsAfterAssetRemoved(
 ): void {
   for (const raw of removed.modelUrls || []) {
     revokeWorkflowModelBlobUrlsIfOrphaned(String(raw || ''), assetsAfterRemoval);
+  }
+  for (const arr of Object.values(removed.stepModelUrls || {})) {
+    for (const raw of arr || []) {
+      revokeWorkflowModelBlobUrlsIfOrphaned(String(raw || ''), assetsAfterRemoval);
+    }
   }
   const orig = String(removed.original || '').trim();
   if (orig) {
@@ -66,4 +79,44 @@ export function revokeWorkflowModelBlobUrlsAfterAssetRemoved(
       revokeBlobUrlIfOrphaned(u, still);
     }
   }
+}
+
+/** 探测模型预览/下载 URL 在当前文档内是否仍可读取 */
+export async function isWorkflowModelUrlReadable(url: string): Promise<boolean> {
+  const u = String(url || '').trim();
+  if (!u) return false;
+  if (/^blob:/i.test(u) || /^data:/i.test(u) || /^https?:\/\//i.test(u)) {
+    try {
+      const r = await fetch(u);
+      return r.ok;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+/** 有伴侣键时，槽位是否可能需要从伴侣 hydrate（含空 url、失效 blob） */
+export function workflowModelSlotMayNeedCompanionHydrate(url: string, companionKey: string): boolean {
+  const ck = String(companionKey || '').trim();
+  if (!ck) return false;
+  const u = String(url ?? '').trim();
+  if (!u) return true;
+  if (!/^blob:/i.test(u) && !/^https?:\/\//i.test(u) && !u.startsWith('data:')) return true;
+  if (/^blob:/i.test(u)) return true;
+  return false;
+}
+
+/** hydrate 前：若已有可读 url 则跳过伴侣拉取 */
+export async function shouldKeepExistingWorkflowModelSlotUrl(
+  url: string,
+  _companionKey: string
+): Promise<boolean> {
+  const u = String(url ?? '').trim();
+  if (!u) return false;
+  if (/^https?:\/\//i.test(u) || u.startsWith('data:')) return true;
+  if (/^blob:/i.test(u)) {
+    return await isWorkflowModelUrlReadable(u);
+  }
+  return false;
 }

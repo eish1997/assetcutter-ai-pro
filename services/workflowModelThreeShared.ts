@@ -15,7 +15,15 @@ export function inferModelFormat(url: string, fileName?: string): ModelFormat {
   };
   const a = fromPath(fileName || '');
   if (a !== 'unknown') return a;
-  return fromPath(url);
+  const fn = String(fileName || '');
+  if (/_fbx(\.|$|_)/i.test(fn)) return 'fbx';
+  if (/_glb(\.|$|_)/i.test(fn)) return 'gltf';
+  const fromUrl = fromPath(url);
+  if (fromUrl !== 'unknown') return fromUrl;
+  /** `blob:` 与部分伴侣回读 URL 不含扩展名；工作流 Tripo/混元首槽几乎恒为 GLB */
+  const u = String(url || '').trim();
+  if (/^blob:/i.test(u)) return 'gltf';
+  return 'unknown';
 }
 
 /**

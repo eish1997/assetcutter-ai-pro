@@ -119,6 +119,7 @@ function preflight(res: ServerResponse, origin: string | undefined): void {
     'Access-Control-Allow-Origin': origin ?? '*',
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Access-Control-Expose-Headers': 'Content-Disposition',
   });
   res.end();
 }
@@ -129,7 +130,25 @@ function sendSseHeaders(res: ServerResponse, origin: string | undefined): void {
     'Cache-Control': 'no-cache, no-transform',
     Connection: 'keep-alive',
     'Access-Control-Allow-Origin': origin ?? '*',
+    'Access-Control-Expose-Headers': 'Content-Disposition',
   });
+}
+
+function sanitizeCompanionDownloadFilename(name: string): string {
+  const s = String(name || '')
+    .trim()
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')
+    .slice(0, 120);
+  return s || 'model.bin';
+}
+
+function guessCompanionAssetDownloadFilename(key: string, mime: string): string {
+  const k = String(key || '').toLowerCase();
+  const ct = String(mime || '').toLowerCase();
+  if (k.includes('fbx') || ct.includes('fbx')) return 'model.fbx';
+  if (k.includes('gltf') || ct.includes('gltf+json')) return 'model.gltf';
+  if (ct.includes('gltf-binary') || ct.includes('model/gltf')) return 'model.glb';
+  return 'model.glb';
 }
 
 function writeSse(res: ServerResponse, event: string, payload: unknown): void {
@@ -501,11 +520,19 @@ export async function handleRequest(
         return;
       }
       const ct = meta.entry.mime || 'application/octet-stream';
-      res.writeHead(200, {
+      const wantDownload = u.searchParams.get('download') === '1';
+      const headers: Record<string, string> = {
         'Content-Type': ct,
         'Content-Length': String(body.body.length),
         'Access-Control-Allow-Origin': origin ?? '*',
-      });
+        'Access-Control-Expose-Headers': 'Content-Disposition',
+      };
+      if (wantDownload) {
+        const hinted = u.searchParams.get('filename');
+        const fn = sanitizeCompanionDownloadFilename(hinted || guessCompanionAssetDownloadFilename(key, ct));
+        headers['Content-Disposition'] = `attachment; filename="${fn}"`;
+      }
+      res.writeHead(200, headers);
       res.end(body.body);
       return;
     }

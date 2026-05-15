@@ -1,9 +1,12 @@
 import type { WorkflowAsset } from '../types';
 import { extractTripoModelAndPreviewUrls } from './generate3d/tripoWorkflow';
 import { getTripoTask } from './tripoService';
-import { persistTripoModelsForWorkflowAsset } from './tripoModelPersist';
-import { normalizeCompanionBaseUrl } from './companionLocalPrefs';
-import { resolveWorkflowStepModelCompanionKeys, resolveWorkflowStepModelFormats } from './workflowStepModels';
+import { persistWorkflow3dSlots } from './persistWorkflow3dSlots';
+import { applyPersisted3dSlotsToWorkflowAsset } from './workflowModelSlots';
+import {
+  resolveWorkflowStepModelCompanionKeys,
+  resolveWorkflowStepModelFormats,
+} from './workflowStepModels';
 
 /** 从资产中解析「步骤详情 / resultMeta」里持久化的 Tripo 任务 id 及其对应步骤键 */
 export function resolveWorkflowTripoMetaKeyAndTaskId(asset: WorkflowAsset): { metaKey: string; tripoTaskId: string } | null {
@@ -21,23 +24,6 @@ export function resolveWorkflowTripoMetaKeyAndTaskId(asset: WorkflowAsset): { me
     if (id) return { metaKey: k, tripoTaskId: id };
   }
   return null;
-}
-
-function collectBlobUrlsToRevoke(asset: WorkflowAsset, metaKey: string): string[] {
-  const out: string[] = [];
-  for (const u of asset.modelUrls || []) {
-    const s = String(u || '').trim();
-    if (/^blob:/i.test(s)) out.push(s);
-  }
-  for (const arr of Object.values(asset.stepModelUrls || {})) {
-    for (const u of arr || []) {
-      const s = String(u || '').trim();
-      if (/^blob:/i.test(s)) out.push(s);
-    }
-  }
-  const prevResult = String((asset.results || {})[metaKey] || '').trim();
-  if (/^blob:/i.test(prevResult)) out.push(prevResult);
-  return out;
 }
 
 export type TripoRehydrateIntoAssetResult = {
@@ -84,13 +70,14 @@ export async function rehydrateWorkflowAssetModelsFromTripoTask(params: {
   const existingUrls = asset.stepModelUrls?.[metaKey] || [];
   const existingKeys = resolveWorkflowStepModelCompanionKeys(asset, metaKey);
 
-  const persisted = await persistTripoModelsForWorkflowAsset({
+  const persisted = await persistWorkflow3dSlots({
+    provider: 'tripo',
     apiKey: k,
-    tripoTaskId,
-    assetId: asset.id,
-    resultKey: metaKey,
+    taskId: tripoTaskId,
     glbSourceUrls: modelUrls,
     previewUrl,
+    assetId: asset.id,
+    resultKey: metaKey,
     companionBaseUrl: params.companionBaseUrl,
     companionProjectId: params.companionProjectId,
     existing: {
@@ -101,49 +88,10 @@ export async function rehydrateWorkflowAssetModelsFromTripoTask(params: {
     onLog: params.onLog,
   });
 
-  const revokeBlobUrls = collectBlobUrlsToRevoke(asset, metaKey);
-
-  let nextResults: Record<string, string> = { ...(asset.results || {}) };
-  let nextResultsCompanionKeys: Record<string, string> = { ...(asset.resultsCompanionKeys || {}) };
-  if (persisted.preview?.objectUrl) {
-    nextResults = { ...nextResults, [metaKey]: persisted.preview.objectUrl };
-    if (persisted.preview.companionKey) {
-      nextResultsCompanionKeys = { ...nextResultsCompanionKeys, [metaKey]: persisted.preview.companionKey };
-    }
-  }
-
-  const oldMeta = asset.resultMeta?.[metaKey] || { executedAt: Date.now() };
-  const nextResultMeta = {
-    ...(asset.resultMeta || {}),
-    [metaKey]: {
-      ...oldMeta,
-      tripoTaskId,
-      tripoLastError: undefined,
-    },
-  };
-
-  const cleanedResultCompanionKeys = Object.fromEntries(
-    Object.entries(nextResultsCompanionKeys).filter(([, v]) => String(v || '').trim())
-  );
-
-  const nextAsset: WorkflowAsset = {
-    ...asset,
-    stepModelUrls: { ...(asset.stepModelUrls || {}), [metaKey]: persisted.modelUrls },
-    stepModelCompanionKeys:
-      persisted.modelCompanionKeys.length > 0
-        ? { ...(asset.stepModelCompanionKeys || {}), [metaKey]: persisted.modelCompanionKeys }
-        : asset.stepModelCompanionKeys,
-    stepModelFormats:
-      persisted.stepModelFormats.length > 0
-        ? { ...(asset.stepModelFormats || {}), [metaKey]: persisted.stepModelFormats }
-        : asset.stepModelFormats,
-    modelUrls: persisted.modelUrls,
-    modelCompanionKeys: persisted.modelCompanionKeys.length > 0 ? persisted.modelCompanionKeys : undefined,
-    modelSourceName: persisted.modelSourceName,
-    results: nextResults,
-    resultsCompanionKeys: Object.keys(cleanedResultCompanionKeys).length > 0 ? cleanedResultCompanionKeys : undefined,
-    resultMeta: nextResultMeta,
-  };
-
-  return { nextAsset, revokeBlobUrls };
+  return applyPersisted3dSlotsToWorkflowAsset({
+    asset,
+    metaKey,
+    persisted,
+    jobMeta: { tripoTaskId, tripoLastError: undefined },
+  });
 }

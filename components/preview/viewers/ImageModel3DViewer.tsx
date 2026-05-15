@@ -93,6 +93,20 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({ modelSrc, m
     renderer.domElement.addEventListener('mouseup', onMouseUp);
     renderer.domElement.addEventListener('mouseleave', onMouseUp);
 
+    const onGlLost = (e: Event) => {
+      try {
+        e.preventDefault();
+      } catch {
+        /* ignore */
+      }
+      if (cancelled) return;
+      setStatus('error');
+      setMessage(
+        'WebGL 上下文已丢失（常见于系统「另存为」对话框弹出时 GPU 被抢占）。请关闭弹窗后重新打开大图预览，或刷新页面。'
+      );
+    };
+    renderer.domElement.addEventListener('webglcontextlost', onGlLost);
+
     setStatus('loading');
     setMessage('');
 
@@ -160,8 +174,14 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({ modelSrc, m
     const tick = () => {
       if (cancelled) return;
       rafId = requestAnimationFrame(tick);
-      controls.update();
-      renderer.render(scene, camera);
+      try {
+        const gl = renderer.getContext() as WebGLRenderingContext | null;
+        if (gl?.isContextLost?.()) return;
+        controls.update();
+        renderer.render(scene, camera);
+      } catch {
+        /* 上下文丢失后 render 可能抛错，避免拖垮 React */
+      }
     };
     tick();
 
@@ -174,6 +194,7 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({ modelSrc, m
       renderer.domElement.removeEventListener('mousedown', onMouseDown);
       renderer.domElement.removeEventListener('mouseup', onMouseUp);
       renderer.domElement.removeEventListener('mouseleave', onMouseUp);
+      renderer.domElement.removeEventListener('webglcontextlost', onGlLost);
       if (loadedRoot) {
         scene.remove(loadedRoot);
         disposeObjectHierarchy(loadedRoot);

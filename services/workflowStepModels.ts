@@ -82,3 +82,81 @@ export function assetHasAnyWorkflowStepModels(asset: WorkflowAsset): boolean {
   if (Object.values(asset.stepModelUrls || {}).some((arr) => (arr?.length ?? 0) > 0)) return true;
   return (asset.modelUrls?.length ?? 0) > 0;
 }
+
+export type WorkflowModelPersistStatus = 'persisted' | 'memory_only' | 'failed' | 'remote_only' | 'none';
+
+export type WorkflowStepModelPersistDetail = {
+  status: WorkflowModelPersistStatus;
+  glbOnCompanion: boolean;
+  fbxOnCompanion: boolean;
+  hasPreviewUrl: boolean;
+  tripoTaskId?: string;
+  tencentJobId?: string;
+};
+
+function slotHasCompanionKey(keys: string[], formats: Array<'glb' | 'fbx'>, format: 'glb' | 'fbx'): boolean {
+  const idx = formats.indexOf(format);
+  const i = idx >= 0 ? idx : format === 'glb' ? 0 : 1;
+  return Boolean(String(keys[i] ?? '').trim());
+}
+
+/** 大图/时间线：工作流步骤 3D 落盘状态 */
+export function getWorkflowStepModelPersistStatus(
+  asset: WorkflowAsset,
+  resultKey: string
+): WorkflowStepModelPersistDetail {
+  const keys = resolveWorkflowStepModelCompanionKeys(asset, resultKey);
+  const urls = resolveWorkflowStepModelUrls(asset, resultKey);
+  const formats = resolveWorkflowStepModelFormats(asset, resultKey);
+  const meta = asset.resultMeta?.[resultKey];
+  const tripoTaskId = String(meta?.tripoTaskId || '').trim() || undefined;
+  const tencentJobId = String(meta?.tencentJobId || '').trim() || undefined;
+  const glbOnCompanion = slotHasCompanionKey(keys, formats, 'glb');
+  const fbxOnCompanion = slotHasCompanionKey(keys, formats, 'fbx');
+  const hasCompanion = keys.some((k) => String(k || '').trim());
+  const hasPreviewUrl = urls.some((u) => String(u || '').trim());
+  const hasJob = Boolean(tripoTaskId || tencentJobId);
+  const lastError = String(meta?.tripoLastError || meta?.tencentLastError || '').trim();
+
+  const base = {
+    glbOnCompanion,
+    fbxOnCompanion,
+    hasPreviewUrl,
+    tripoTaskId,
+    tencentJobId,
+  };
+
+  if (hasCompanion) {
+    return { status: 'persisted', ...base };
+  }
+  if (hasPreviewUrl) {
+    return { status: 'memory_only', ...base };
+  }
+  if (hasJob && lastError) {
+    return { status: 'failed', ...base };
+  }
+  if (hasJob) {
+    return { status: 'remote_only', ...base };
+  }
+  return { status: 'none', ...base };
+}
+
+export function workflowModelPersistStatusLabel(detail: WorkflowStepModelPersistDetail): string {
+  switch (detail.status) {
+    case 'persisted': {
+      const glb = detail.glbOnCompanion ? 'GLB ✓' : 'GLB —';
+      const fbx = detail.fbxOnCompanion ? 'FBX ✓' : 'FBX —';
+      return `已落本机伴侣 · ${glb} · ${fbx}`;
+    }
+    case 'memory_only':
+      return '仅浏览器缓存，刷新可能丢失';
+    case 'failed':
+      return '归档失败 · 可尝试从云端拉取';
+    case 'remote_only':
+      return detail.tripoTaskId
+        ? '仅云端 Tripo 任务 · 可「从 Tripo 拉取」'
+        : '仅云端混元任务 · JobId 已记录';
+    default:
+      return '';
+  }
+}

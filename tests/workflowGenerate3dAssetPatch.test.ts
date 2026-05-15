@@ -33,7 +33,8 @@ describe('patchWorkflowAssetsWith3dResult', () => {
     });
     expect(next[0]?.resultOrder).toContain('hunyuan_pro');
     expect(next[0]?.resultMeta?.hunyuan_pro?.tencentJobId).toBe('job1');
-    expect(next[0]?.stepModelUrls?.hunyuan_pro).toEqual(['blob:glb']);
-    expect(next[0]?.results?.hunyuan_pro).toBe('blob:preview');
+    expect(next[0]?.stepModelUrls?.hunyuan_pro).toEqual(['']);
+    expect(next[0]?.stepModelCompanionKeys?.hunyuan_pro).toEqual(['companion/glb']);
+    expect(next[0]?.results?.hunyuan_pro).toBe('');
   });
 });

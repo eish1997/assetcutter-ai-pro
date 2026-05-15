@@ -1,7 +1,8 @@
-import { fetchCompanionAssetBlob } from './companionClient/storage';
+import { fetchCompanionAssetBlob, fetchCompanionAssetForDownload } from './companionClient/storage';
+import { probeCompanionHealth } from './companionClient/probe';
 import { normalizeCompanionBaseUrl } from './companionLocalPrefs';
 import { resolveTripoProxyBase } from './tripoService';
-import { fetchWorkflowModelFromCompanionAsObjectUrl } from './workflowCompanionAssets';
+import { isWorkflowModelUrlReadable } from './workflowModelBlob';
 
 function triggerBlobDownload(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
@@ -12,7 +13,14 @@ function triggerBlobDownload(blob: Blob, filename: string): void {
   document.body.appendChild(a);
   a.click();
   a.remove();
-  URL.revokeObjectURL(url);
+  /** 延后 revoke：避免与系统「另存为」对话框叠加时，部分浏览器尚未完成下载握手即释放 URL */
+  window.setTimeout(() => {
+    try {
+      URL.revokeObjectURL(url);
+    } catch {
+      /* ignore */
+    }
+  }, 2500);
 }
 
 function sanitizeFilenameBase(name: string): string {
@@ -62,24 +70,81 @@ async function fetchTripoFileBlob(apiKey: string, url: string): Promise<Blob> {
   return await r.blob();
 }
 
+const companionReachableCache = new Map<string, { ok: boolean; at: number }>();
+const COMPANION_REACHABLE_CACHE_MS = 5000;
+
+async function isCompanionReachable(baseUrl: string): Promise<boolean> {
+  const base = normalizeCompanionBaseUrl(String(baseUrl || '').trim());
+  if (!base) return false;
+  const now = Date.now();
+  const cached = companionReachableCache.get(base);
+  if (cached && now - cached.at < COMPANION_REACHABLE_CACHE_MS) return cached.ok;
+  const r = await probeCompanionHealth(base);
+  companionReachableCache.set(base, { ok: r.ok, at: now });
+  return r.ok;
+}
+
+async function fetchModelBlobFromCompanion(
+  base: string,
+  pid: string,
+  companionKey: string,
+  filenameHint?: string
+): Promise<{ blob: Blob; resolvedUrl: string; filename?: string } | null> {
+  const hinted = String(filenameHint || '').trim();
+  const viaDownload = await fetchCompanionAssetForDownload(base, pid, companionKey, {
+    filenameHint: hinted || undefined,
+  });
+  if (viaDownload.ok) {
+    return {
+      blob: viaDownload.data.blob,
+      resolvedUrl: companionKey,
+      filename: viaDownload.data.filename,
+    };
+  }
+  const res = await fetchCompanionAssetBlob(base, pid, companionKey);
+  if (res.ok === false) return null;
+  return {
+    blob: new Blob([res.data], { type: 'application/octet-stream' }),
+    resolvedUrl: companionKey,
+    filename: hinted || undefined,
+  };
+}
+
 async function resolveModelBlob(params: {
   url: string;
   companionBaseUrl?: string | null;
   companionProjectId?: string | null;
   companionKey?: string;
   tripoApiKey?: string | null;
-}): Promise<{ blob: Blob; resolvedUrl: string }> {
+  fileNameHint?: string;
+}): Promise<{ blob: Blob; resolvedUrl: string; filename?: string }> {
   const url = String(params.url || '').trim();
   const companionKey = String(params.companionKey || '').trim();
   const base = normalizeCompanionBaseUrl(String(params.companionBaseUrl || '').trim());
   const pid = String(params.companionProjectId || '').trim();
   const apiKey = String(params.tripoApiKey || '').trim();
+  const fileNameHint = String(params.fileNameHint || '').trim();
+
+  const tryCompanion = async (): Promise<{ blob: Blob; resolvedUrl: string; filename?: string } | null> => {
+    if (!companionKey || !base || !pid) return null;
+    return fetchModelBlobFromCompanion(base, pid, companionKey, fileNameHint);
+  };
+
+  if (companionKey && base && pid && (await isCompanionReachable(base))) {
+    const fromCompanion = await tryCompanion();
+    if (fromCompanion) return fromCompanion;
+  }
 
   if (url) {
     if (/^blob:/i.test(url) || /^data:/i.test(url)) {
-      const resp = await fetch(url);
-      if (!resp.ok) throw new Error('读取本地预览模型失败，请尝试「从 Tripo 拉取」');
-      return { blob: await resp.blob(), resolvedUrl: url };
+      if (await isWorkflowModelUrlReadable(url)) {
+        const resp = await fetch(url);
+        if (!resp.ok) throw new Error('读取本地预览模型失败，请尝试「从 Tripo 拉取」');
+        return { blob: await resp.blob(), resolvedUrl: url };
+      }
+      const fromCompanion = await tryCompanion();
+      if (fromCompanion) return fromCompanion;
+      throw new Error('读取本地预览模型失败，请尝试「从 Tripo 拉取」');
     }
     if (/^https?:\/\//i.test(url)) {
       try {
@@ -91,21 +156,14 @@ async function resolveModelBlob(params: {
       if (apiKey) {
         return { blob: await fetchTripoFileBlob(apiKey, url), resolvedUrl: url };
       }
+      const fromCompanion = await tryCompanion();
+      if (fromCompanion) return fromCompanion;
       throw new Error('无法跨域下载 Tripo 直链，请使用「从 Tripo 拉取」或连接本地伴侣后重试');
     }
   }
 
-  if (companionKey && base && pid) {
-    const res = await fetchCompanionAssetBlob(base, pid, companionKey);
-    if (res.ok === false) {
-      throw new Error(`读取本地伴侣模型失败：${res.error}`);
-    }
-    const mime = 'application/octet-stream';
-    return {
-      blob: new Blob([res.data], { type: mime }),
-      resolvedUrl: companionKey,
-    };
-  }
+  const fromCompanion = await tryCompanion();
+  if (fromCompanion) return fromCompanion;
 
   throw new Error('无可下载的模型（预览地址已失效时请点「从 Tripo 拉取」）');
 }
@@ -119,18 +177,21 @@ export async function downloadModelFromSource(params: {
   tripoApiKey?: string | null;
   slotIndex?: number;
 }): Promise<void> {
-  const { blob, resolvedUrl } = await resolveModelBlob({
+  const { blob, resolvedUrl, filename: companionFilename } = await resolveModelBlob({
     url: params.url || '',
     companionBaseUrl: params.companionBaseUrl,
     companionProjectId: params.companionProjectId,
     companionKey: params.companionKey,
     tripoApiKey: params.tripoApiKey,
+    fileNameHint: params.fileNameHint,
   });
-  const filename = buildDownloadFilename(params.fileNameHint, resolvedUrl, blob.type, params.slotIndex ?? 0);
+  const filename =
+    companionFilename ||
+    buildDownloadFilename(params.fileNameHint, resolvedUrl, blob.type, params.slotIndex ?? 0);
   triggerBlobDownload(blob, filename);
 }
 
-/** 优先 URL，其次伴侣键；避免 `<a href="blob:" target="_blank">` 被系统当成协议打开 */
+/** 伴侣优先解析；避免 `<a href="blob:" target="_blank">` 被系统当成协议打开 */
 export async function downloadWorkflowStepModelSlot(params: {
   assetId: string;
   resultKey: string;
@@ -142,33 +203,29 @@ export async function downloadWorkflowStepModelSlot(params: {
   fileNameHint?: string;
   tripoApiKey?: string | null;
 }): Promise<void> {
-  let url = String(params.url || '').trim();
-  const companionKey = String(params.companionKey || '').trim();
   const base = normalizeCompanionBaseUrl(String(params.companionBaseUrl || '').trim());
   const pid = String(params.companionProjectId || '').trim();
 
-  if (!url && companionKey && base && pid) {
-    const got = await fetchWorkflowModelFromCompanionAsObjectUrl(base, pid, companionKey, params.fileNameHint);
-    if (got.ok === false) throw new Error(got.error);
-    try {
-      await downloadModelFromSource({
-        url: got.objectUrl,
-        fileNameHint: params.fileNameHint,
-        slotIndex: params.slotIndex,
-      });
-    } finally {
-      URL.revokeObjectURL(got.objectUrl);
-    }
-    return;
-  }
-
   await downloadModelFromSource({
-    url,
+    url: String(params.url || '').trim(),
     companionBaseUrl: base,
     companionProjectId: pid,
-    companionKey,
+    companionKey: params.companionKey,
     fileNameHint: params.fileNameHint,
     tripoApiKey: params.tripoApiKey,
     slotIndex: params.slotIndex,
   });
 }
+
+/** @internal 测试用 */
+export function clearCompanionReachableCacheForTests(): void {
+  companionReachableCache.clear();
+}
+
+/** @internal 测试用 */
+export const __downloadModelFileTest = {
+  resolveModelBlob,
+  isCompanionReachable,
+  fetchModelBlobFromCompanion,
+  clearCompanionReachableCacheForTests,
+};

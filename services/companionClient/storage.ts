@@ -121,6 +121,70 @@ function perfNowMs(): number {
   return typeof performance !== 'undefined' ? performance.now() : Date.now();
 }
 
+export function parseContentDispositionFilename(header: string | null): string | null {
+  const h = String(header || '').trim();
+  if (!h) return null;
+  const star = /filename\*=UTF-8''([^;]+)/i.exec(h);
+  if (star?.[1]) {
+    try {
+      return decodeURIComponent(star[1].trim().replace(/^["']|["']$/g, ''));
+    } catch {
+      return star[1].trim();
+    }
+  }
+  const plain = /filename="([^"]+)"/i.exec(h) || /filename=([^;]+)/i.exec(h);
+  if (plain?.[1]) return plain[1].trim().replace(/^["']|["']$/g, '');
+  return null;
+}
+
+export type CompanionAssetDownloadResult = {
+  blob: Blob;
+  filename?: string;
+  mime?: string;
+};
+
+/** 读取资产二进制；`download=1` 时解析 Content-Disposition 文件名 */
+export async function fetchCompanionAssetForDownload(
+  baseUrl: string,
+  projectId: string,
+  key: string,
+  opts?: { filenameHint?: string },
+): Promise<CompanionClientResult<CompanionAssetDownloadResult>> {
+  const base = normalizeCompanionBaseUrl(baseUrl);
+  const p = encodeURIComponent(projectId);
+  const k = encodeURIComponent(key);
+  const q = new URLSearchParams({ download: '1' });
+  const hint = String(opts?.filenameHint || '').trim();
+  if (hint) q.set('filename', hint);
+  const url = `${base}/v1/projects/${p}/assets/${k}?${q.toString()}`;
+  const t0 = perfNowMs();
+  try {
+    const headers = new Headers();
+    const token = getCompanionLocalToken();
+    if (token) headers.set('Authorization', `Bearer ${token}`);
+    const r = await fetch(url, { headers, mode: 'cors' });
+    const latencyMs = Math.round(perfNowMs() - t0);
+    if (!r.ok) {
+      return { ok: false as const, error: `HTTP ${r.status}`, status: r.status, latencyMs };
+    }
+    const data = await r.arrayBuffer();
+    const mime = r.headers.get('Content-Type') || 'application/octet-stream';
+    const filename = parseContentDispositionFilename(r.headers.get('Content-Disposition')) || hint || undefined;
+    return {
+      ok: true as const,
+      data: { blob: new Blob([data], { type: mime }), filename, mime },
+      latencyMs,
+      status: r.status,
+    };
+  } catch (e) {
+    return {
+      ok: false as const,
+      error: e instanceof Error ? e.message : String(e),
+      latencyMs: Math.round(perfNowMs() - t0),
+    };
+  }
+}
+
 /** 读取资产二进制（与 PUT 同源路径；需 Bearer 与 CORS 允许）。 */
 export async function fetchCompanionAssetBlob(
   baseUrl: string,

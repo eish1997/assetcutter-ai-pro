@@ -22,6 +22,7 @@ describe('workflowAiPickIndex', () => {
       expect.arrayContaining([
         'unified_ai_gateway',
         'generate3d_module',
+        'workflow_3d_companion_slots',
         'workflow_video_bridge',
         'gemini_proxy_fairness_chain',
         'gemini_service_stack',
