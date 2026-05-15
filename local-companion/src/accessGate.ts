@@ -21,6 +21,20 @@ export function parseAllowedOriginEntries(): string[] | null {
   return parts.length ? parts : null;
 }
 
+/** Script Hub 前端 Origin（Vite 5174 + 生产子域）；在已启用伴侣 Origin 白名单时自动并入，避免与工作台分端口后 403。 */
+const SCRIPT_HUB_COMPANION_ORIGINS = [
+  'http://localhost:5174',
+  'http://127.0.0.1:5174',
+  'https://scripts.adrazzo.com',
+];
+
+/** 白名单关闭（null）时不改行为；白名单开启时追加 Script Hub 可达 Origin。 */
+export function getEffectiveAllowedOriginEntries(): string[] | null {
+  const base = parseAllowedOriginEntries();
+  if (!base) return null;
+  return [...new Set([...base, ...SCRIPT_HUB_COMPANION_ORIGINS])];
+}
+
 function originEntryMatches(requestOrigin: string, entry: string): boolean {
   if (entry === requestOrigin) return true;
   if (entry === 'http://localhost:*' && /^http:\/\/localhost:\d+$/.test(requestOrigin)) return true;
@@ -61,7 +75,7 @@ export function isBearerExemptPath(pathname: string, method: string): boolean {
 }
 
 export function getAccessPublicSummary() {
-  const entries = parseAllowedOriginEntries();
+  const entries = getEffectiveAllowedOriginEntries();
   return {
     originAllowlistEnabled: Boolean(entries?.length),
     originAllowlistEntries: entries ?? [],

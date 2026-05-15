@@ -44,6 +44,12 @@ jobs:
           npm ci
           npm run typecheck
 
+      - name: script-hub typecheck
+        working-directory: script-hub
+        run: |
+          npm ci
+          npm run typecheck
+
       - name: Storage / persistence guards
         run: npm run guard:storage
 

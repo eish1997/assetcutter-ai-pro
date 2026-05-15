@@ -5,6 +5,14 @@ const TOKEN_KEY = 'ac_companion_local_token_v1';
 
 const DEFAULT_BASE = 'http://127.0.0.1:18765';
 
+function normalizeCompanionSharedToken(raw: string | null | undefined): string {
+  if (raw == null) return '';
+  return String(raw)
+    .replace(/\uFEFF/g, '')
+    .replace(/\r?\n/g, '')
+    .trim();
+}
+
 export function normalizeCompanionBaseUrl(raw: string): string {
   const t = raw.trim().replace(/\/$/, '');
   return t || DEFAULT_BASE;
@@ -22,11 +30,11 @@ export function setCompanionLocalBaseUrl(url: string): void {
 
 /** 与宿主 `COMPANION_SHARED_TOKEN` 对齐；网站侧 `Authorization: Bearer`（见 `companionFetchJson`）。 */
 export function getCompanionLocalToken(): string {
-  return readLocalString(TOKEN_KEY)?.trim() ?? '';
+  return normalizeCompanionSharedToken(readLocalString(TOKEN_KEY));
 }
 
 export function setCompanionLocalToken(token: string): void {
-  const t = token.trim();
+  const t = normalizeCompanionSharedToken(token);
   if (!t) {
     removeLocalKey(TOKEN_KEY);
     return;

@@ -5,6 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:script-hub-api": "node --env-file=.env.local server/script-hub-api.js",
+    "dev:script-hub-stack": "concurrently -n auth,hubapi,hub -c magenta,cyan,blue \"npm run dev:auth-backend\" \"npm run dev:script-hub-api\" \"npm run script-hub:dev\"",
+    "pg:dev:script-hub": "docker compose -f docker-compose.script-hub-dev.yml up -d",
+    "pg:dev:script-hub:down": "docker compose -f docker-compose.script-hub-dev.yml down",
+    "script-hub:dev": "npm run dev --prefix script-hub",
+    "script-hub:build": "npm run build --prefix script-hub",
+    "script-hub:typecheck": "npm run typecheck --prefix script-hub",
     "dev:auth-backend": "set PORT=9100&& node --env-file=.env.local server/auth-api.js",
     "start:auth-backend": "node server/auth-api.js",
     "dev:seam-backend": "node scripts/start-seam-backend.js",

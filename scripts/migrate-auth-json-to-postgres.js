@@ -17,8 +17,20 @@ if (!fs.existsSync(DB_FILE)) {
 
 const raw = fs.readFileSync(DB_FILE, 'utf8');
 const parsed = JSON.parse(raw || '{}');
-const users = Array.isArray(parsed.users) ? parsed.users : [];
+const usersRaw = Array.isArray(parsed.users) ? parsed.users : [];
 const sessions = Array.isArray(parsed.sessions) ? parsed.sessions : [];
+
+/** 去重：JSON 里若出现重复 username，Postgres UNIQUE 会失败；保留先出现的记录 */
+const seenUsernames = new Set();
+const users = [];
+for (const u of usersRaw) {
+  const un = String(u.username || String(u.email || '').split('@')[0] || `user_${String(u.id || '').slice(0, 8)}`)
+    .trim()
+    .toLowerCase();
+  if (seenUsernames.has(un)) continue;
+  seenUsernames.add(un);
+  users.push(u);
+}
 
 const pool = new Pool({
   connectionString: DATABASE_URL,
@@ -98,7 +110,7 @@ async function main() {
     }
 
     await pool.query('COMMIT');
-    console.log(`[migrate-auth] done: users=${users.length}, sessions=${sessions.length}`);
+    console.log(`[migrate-auth] done: users=${users.length} (from ${usersRaw.length} rows), sessions=${sessions.length}`);
   } catch (error) {
     await pool.query('ROLLBACK');
     throw error;

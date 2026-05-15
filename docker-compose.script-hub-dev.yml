@@ -1,0 +1,19 @@
+# 本地 Script Hub + auth-api 共用 Postgres（固定端口 55432，避免与本机已有 5432 冲突）
+# 启动：npm run pg:dev:script-hub
+# 停止：docker compose -f docker-compose.script-hub-dev.yml down
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: assetcutter-script-hub-pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: assetcutter
+      POSTGRES_PASSWORD: assetcutter_dev
+      POSTGRES_DB: assetcutter
+    ports:
+      - '55432:5432'
+    volumes:
+      - assetcutter-script-hub-pgdata:/var/lib/postgresql/data
+
+volumes:
+  assetcutter-script-hub-pgdata:

@@ -1114,11 +1114,14 @@ async function startLocalCompanion() {
   env.NO_PROXY = !curNo ? loopNoProxy : curNo.includes('127.0.0.1') ? curNo : `${curNo},${loopNoProxy}`;
   env.no_proxy = env.NO_PROXY;
   const pair = readPairingConfig();
-  if (!env.COMPANION_SHARED_TOKEN && pair.sharedToken) {
-    env.COMPANION_SHARED_TOKEN = pair.sharedToken;
+  /** 配对文件为「用户在壳里保存的真值」；父进程若误带旧 COMPANION_* 环境变量，不得盖过 pairing（否则网站与 Script Hub 会 bearer_invalid） */
+  const pairTok = String(pair.sharedToken ?? '').trim();
+  if (pairTok) {
+    env.COMPANION_SHARED_TOKEN = pairTok;
   }
-  if (!env.COMPANION_ALLOWED_ORIGINS && pair.allowedOrigins) {
-    env.COMPANION_ALLOWED_ORIGINS = pair.allowedOrigins;
+  const pairOrigins = String(pair.allowedOrigins ?? '').trim();
+  if (pairOrigins) {
+    env.COMPANION_ALLOWED_ORIGINS = pairOrigins;
   }
   applyShellVolumeRootToEnv(env);
   applyDesktopSamLocalSpawnEnv(env);

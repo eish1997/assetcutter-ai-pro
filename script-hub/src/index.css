@@ -1,0 +1,419 @@
+/**
+ * 与主站工作台视觉对齐：变量命名与仓库根目录 index.html 中 :root 一致。
+ * 组件前缀 sh- 避免与主站全局 class 冲突。
+ */
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  --background: #050505;
+  --accent-blue: #2563eb;
+  --accent-purple: #a855f7;
+  --surface-raised: #16161a;
+  --surface-input: #1c1c22;
+  --surface-muted: #121214;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background-color: var(--background);
+  color: #fff;
+  font-family: 'Plus Jakarta Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+.sh-mono {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+
+/* 与主站一致的深色滚动条 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.15) rgba(0, 0, 0, 0.2);
+}
+
+/* 工作台 home-bg-mesh 简化版：全站底纹 */
+.sh-mesh-bg {
+  background:
+    radial-gradient(ellipse 120% 60% at 50% -20%, rgba(59, 130, 246, 0.12), transparent),
+    radial-gradient(ellipse 90% 50% at 80% 50%, rgba(168, 85, 247, 0.08), transparent),
+    radial-gradient(ellipse 90% 50% at 20% 80%, rgba(37, 99, 235, 0.06), transparent),
+    var(--background);
+}
+
+.sh-app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.sh-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding: 0.65rem 1.25rem;
+  border-bottom: 1px solid #2e2e32;
+  background: rgba(22, 22, 26, 0.88);
+  backdrop-filter: blur(10px);
+}
+
+.sh-brand {
+  font-weight: 800;
+  font-size: 1.05rem;
+  letter-spacing: -0.02em;
+  color: #fff;
+  text-decoration: none;
+}
+
+.sh-brand:hover {
+  color: #e5e7eb;
+}
+
+.sh-nav {
+  display: flex;
+  gap: 0.5rem;
+  flex: 1;
+  flex-wrap: wrap;
+}
+
+.sh-main {
+  flex: 1;
+  width: 100%;
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 1.25rem 1.25rem 2rem;
+}
+
+.sh-footer {
+  padding: 0.65rem 1.25rem;
+  font-size: 0.8rem;
+  color: #6b7280;
+  border-top: 1px solid #1a1a1e;
+  background: rgba(18, 18, 20, 0.6);
+}
+
+.sh-panel {
+  background: var(--surface-raised);
+  border: 1px solid #2e2e32;
+  border-radius: 12px;
+  padding: 1.25rem;
+}
+
+.sh-panel-tight {
+  padding: 1rem;
+}
+
+.sh-h1 {
+  margin: 0 0 0.35rem;
+  font-size: 1.5rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+
+.sh-h2 {
+  margin: 0 0 0.35rem;
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.sh-h3 {
+  margin: 1rem 0 0.5rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #d1d5db;
+}
+
+.sh-muted {
+  color: #9ca3af;
+  font-size: 0.9rem;
+}
+
+.sh-link {
+  color: #60a5fa;
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.sh-link:hover {
+  color: #93c5fd;
+  text-decoration: underline;
+}
+
+.sh-link-quiet {
+  color: #9ca3af;
+  font-weight: 500;
+}
+
+.sh-link-quiet:hover {
+  color: #d1d5db;
+}
+
+.sh-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+
+.sh-label {
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.875rem;
+  color: #d1d5db;
+}
+
+.sh-grid-form {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.sh-input,
+.sh-textarea {
+  width: 100%;
+  padding: 0.5rem 0.65rem;
+  border-radius: 8px;
+  border: 1px solid #2e2e32;
+  background: var(--surface-input);
+  color: #e5e7eb;
+  font: inherit;
+}
+
+.sh-input:focus,
+.sh-textarea:focus {
+  outline: none;
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 1px var(--accent-blue);
+}
+
+.sh-textarea.code {
+  min-height: 8rem;
+}
+
+.sh-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0.5rem 1rem;
+  border-radius: 8px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid #3f3f46;
+  background: var(--surface-input);
+  color: #e5e7eb;
+}
+
+.sh-btn:hover:not(:disabled) {
+  background: #24242a;
+  border-color: #52525b;
+}
+
+.sh-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.sh-btn-primary {
+  border-color: var(--accent-blue);
+  background: var(--accent-blue);
+  color: #fff;
+}
+
+.sh-btn-primary:hover:not(:disabled) {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+}
+
+.sh-btn-ghost {
+  background: transparent;
+  border-color: #2e2e32;
+}
+
+.sh-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.sh-list-item {
+  border: 1px solid #2e2e32;
+  border-radius: 10px;
+  padding: 0.65rem 0.85rem;
+  background: rgba(28, 28, 34, 0.45);
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.sh-list-item:hover {
+  border-color: rgba(96, 165, 250, 0.35);
+  background: rgba(37, 99, 235, 0.06);
+}
+
+.sh-code {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.85em;
+  color: #c4b5fd;
+}
+
+.sh-alert {
+  margin-top: 0.75rem;
+  color: #f87171;
+}
+
+.sh-alert-wrap {
+  margin-top: 1rem;
+}
+
+.sh-pre {
+  margin-top: 1rem;
+  padding: 0.85rem 1rem;
+  border-radius: 10px;
+  background: var(--surface-muted);
+  border: 1px solid #2e2e32;
+  white-space: pre-wrap;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.8rem;
+  color: #d1d5db;
+}
+
+.sh-fieldset {
+  border: 1px solid #2e2e32;
+  border-radius: 10px;
+  padding: 0.65rem 0.85rem;
+  background: rgba(18, 18, 20, 0.35);
+}
+
+.sh-fieldset legend {
+  padding: 0 0.35rem;
+  color: #d1d5db;
+  font-size: 0.875rem;
+}
+
+.sh-radio-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.sh-radio-label {
+  display: inline-flex;
+  gap: 0.35rem;
+  align-items: center;
+  font-size: 0.875rem;
+  color: #e5e7eb;
+}
+
+/* 与工作台 index.html 一致的勾选框（ParamSchema bool） */
+input[type='checkbox'] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 1rem;
+  height: 1rem;
+  border: 1.5px solid #4b5563;
+  border-radius: 0.25rem;
+  background: var(--surface-input);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+input[type='checkbox']:hover {
+  border-color: #6b7280;
+  background: #24242a;
+}
+input[type='checkbox']:checked {
+  background: var(--accent-blue) !important;
+  border-color: var(--accent-blue) !important;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none' stroke='white' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='2 6 5 9 10 3'/%3E%3C/svg%3E") !important;
+  background-repeat: no-repeat !important;
+  background-position: center !important;
+}
+
+input[type='radio'] {
+  accent-color: var(--accent-blue);
+  cursor: pointer;
+}
+
+.sh-login-wrap {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.25rem;
+}
+
+.sh-login-brand {
+  text-align: center;
+  margin-bottom: 1rem;
+}
+
+.sh-login-brand .sh-h1 {
+  background: linear-gradient(135deg, #60a5fa 0%, #a78bfa 50%, #c084fc 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sh-login-brand .sh-h1 {
+    background: none;
+    -webkit-text-fill-color: #fff;
+    color: #fff;
+  }
+}
+
+.sh-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.sh-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 120px;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  max-width: 420px;
+}
+
+@media (max-width: 520px) {
+  .sh-grid-2 {
+    grid-template-columns: 1fr;
+  }
+}

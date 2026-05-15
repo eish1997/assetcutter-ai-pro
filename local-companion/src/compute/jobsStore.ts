@@ -11,6 +11,7 @@ import {
 } from './samSegmentAdapter.js';
 import { REMBG_ADAPTER_ID, resolveRembgKeys, runRembgJob } from './rembgAdapter.js';
 import { HOST_BUNDLE_ADAPTER_ID, runHostBundlePhase } from './hostBundleExecAdapter.js';
+import { runMayaScriptJob, MAYA_SCRIPT_ADAPTER_ID } from '../scriptRun/mayaScriptAdapter.js';
 
 export type JobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 
@@ -72,6 +73,11 @@ export const REGISTERED_COMPUTE_TYPES: Record<string, { adapterId: string; descr
   'host_bundle.probe': {
     adapterId: HOST_BUNDLE_ADAPTER_ID,
     description: '扩展包 run.json 的 probe；inputs 同上',
+  },
+  'script.maya': {
+    adapterId: MAYA_SCRIPT_ADAPTER_ID,
+    description:
+      'Script Hub：经 Maya Command Port 执行 Python（inputs.content 或 inputs.scriptSource=cloud + scriptId/revisionId/contentJwt）',
   },
 };
 
@@ -295,6 +301,31 @@ export async function submitJob(
         stdoutTail: tail(stdout, 2000),
         stderrTail: tail(stderr, 2000),
         ...(okExit ? {} : { code: rec.error?.code, message: rec.error?.message }),
+      });
+    }
+  } else if (type === 'script.maya') {
+    rec.status = 'running';
+    rec.updatedAt = Date.now();
+    jobs.set(jobId, rec);
+    emitJobEvent(jobId, 'task.running', {
+      adapterId: MAYA_SCRIPT_ADAPTER_ID,
+      stage: 'maya_command_port',
+    });
+    const run = await runMayaScriptJob(b.inputs, b.params ?? {});
+    if ('error' in run) {
+      rec.status = 'failed';
+      rec.error = { code: run.code, message: run.error };
+      emitJobEvent(jobId, 'task.failed', { code: run.code, message: run.error });
+    } else {
+      const tailOut = (s: string, n: number) => (s.length <= n ? s : `${s.slice(0, n)}…`);
+      rec.status = 'completed';
+      rec.result = {
+        adapterId: MAYA_SCRIPT_ADAPTER_ID,
+        note: tailOut(run.stdout, 2000),
+      };
+      emitJobEvent(jobId, 'reply.completed', {
+        adapterId: MAYA_SCRIPT_ADAPTER_ID,
+        stdoutTail: tailOut(run.stdout, 4000),
       });
     }
   } else if (REGISTERED_COMPUTE_TYPES[type]) {

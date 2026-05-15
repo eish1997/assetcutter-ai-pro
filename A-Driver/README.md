@@ -1,6 +1,6 @@
 # A-Driver（同仓分目录）
 
-本目录用于 **本地伴侣（Companion）** 中 **Relay（站点中转）** 能力的可运行实现，与现有网站代码解耦。架构总览见仓库根目录 [`docs/本地伴侣-存储与计算规范.md`](../docs/本地伴侣-存储与计算规范.md)。
+本目录用于 **本地伴侣（Companion）** 中 **Relay（站点中转）** 能力的可运行实现，与现有网站代码解耦。架构总览见仓库根目录 `[docs/本地伴侣-存储与计算规范.md](../docs/本地伴侣-存储与计算规范.md)`。
 
 ## 目录
 
@@ -10,14 +10,14 @@
 
 ## 本机 HTTP 能力宣告（Companion P0）
 
-`local-bridge` 启动时默认在 **`127.0.0.1:18765`** 提供（与网站编排面对接）：
+`local-bridge` 启动时默认在 `**127.0.0.1:18765`** 提供（与网站编排面对接）：
 
 - `GET http://127.0.0.1:18765/v1/capabilities` — JSON：`protocolVersion`、已注册站点连接器列表、`storage`/`compute` 占位（未实现）
 - `GET http://127.0.0.1:18765/v1/health` — 存活探测
 
 环境变量：
 
-- **`COMPANION_HTTP_PORT`**：端口；设为 **`0`** 关闭 HTTP 面（仅 WS / demo）。
+- `**COMPANION_HTTP_PORT**`：端口；设为 `**0**` 关闭 HTTP 面（仅 WS / demo）。
 
 ## 快速开始
 
@@ -29,7 +29,7 @@ npm run test -w @a-driver/local-bridge
 npm run dev
 ```
 
-`npm run dev` 会启动 `@a-driver/local-bridge`。网站侧 **`connectorId: gemini-web`** 时：通过 bb-browser 打开 **https://gemini.google.com/app**（可用 `BRIDGE_GEMINI_URL` 覆盖），在已登录 Chrome 的 Quill 输入框发你的提示词并读模型回复；**`connectorId: bb-site`** 时走 `bb-browser site <route>`（如 `duckduckgo/search`）。Demo 无 WS 时用 `bb-site` 跑一条搜索任务。
+`npm run dev` 会启动 `@a-driver/local-bridge`。网站侧 `**connectorId: gemini-web**` 时：通过 bb-browser 打开 **[https://gemini.google.com/app](https://gemini.google.com/app)**（可用 `BRIDGE_GEMINI_URL` 覆盖），在已登录 Chrome 的 Quill 输入框发你的提示词并读模型回复；`**connectorId: bb-site`** 时走 `bb-browser site <route>`（如 `duckduckgo/search`）。Demo 无 WS 时用 `bb-site` 跑一条搜索任务。
 
 ## 运行前准备
 

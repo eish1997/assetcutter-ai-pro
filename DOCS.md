@@ -17,11 +17,11 @@
 
 技术栈：**React 19** + **Vite 6** + **TypeScript** + **@google/genai**，样式为 Tailwind + 内联 CSS。
 
-**发布与 CI：** 网站/部署范围、环境变量与手测清单见 `[docs/网站与发布检查清单.md](docs/网站与发布检查清单.md)`；合并默认分支前以 **GitHub Actions `CI`**（typecheck、lint、**Vitest**、`local-companion` typecheck、`guard:storage`、build）通过为准。单元测试范围见根目录 `**vitest.config.ts`**（`**tests/**/*.test.{ts,tsx}**`，含组件交互测试）。
+**发布与 CI：** 网站/部署范围、环境变量与手测清单见 `[docs/网站与发布检查清单.md](docs/网站与发布检查清单.md)`；合并默认分支前以 **GitHub Actions `CI`**（typecheck、lint、**Vitest**、`local-companion` typecheck、`guard:storage`、build）通过为准。单元测试范围见根目录 `**vitest.config.ts`**（`**tests/**/*.test.{ts,tsx}`**，含组件交互测试）。
 
-**本地开发类型检查：** 仓库根执行 `npx tsc --noEmit`；根 `tsconfig.json` 已排除 `示例项目/`，避免示例子工程缺依赖影响主仓库校验。本地伴侣存储 API、manifest 扫盘补登记与主站调用顺序见 `[docs/本地伴侣-本地程序开发.md](docs/本地伴侣-本地程序开发.md)` **§3.1** 与 `[docs/本地与云存储分层开发方案.md](docs/本地与云存储分层开发方案.md)` M2 补充。**宿主插件包**（`run.json`、ZIP 解压、`**host_bundle.probe/exec`**）与主站 `**companionClient/hostPlugins**`、设置页联调见 `[docs/本地伴侣-插件与发行.md](docs/本地伴侣-插件与发行.md)` **§4** 及 `[docs/本地伴侣-本地程序开发.md](docs/本地伴侣-本地程序开发.md)` **§3～§4.1**。
+**本地开发类型检查：** 仓库根执行 `npx tsc --noEmit`；根 `tsconfig.json` 已排除 `示例项目/`，避免示例子工程缺依赖影响主仓库校验。本地伴侣存储 API、manifest 扫盘补登记与主站调用顺序见 `[docs/本地伴侣-本地程序开发.md](docs/本地伴侣-本地程序开发.md)` **§3.1** 与 `[docs/本地与云存储分层开发方案.md](docs/本地与云存储分层开发方案.md)` M2 补充。**宿主插件包**（`run.json`、ZIP 解压、`**host_bundle.probe/exec`**）与主站 `**companionClient/hostPlugins`**、设置页联调见 `[docs/本地伴侣-插件与发行.md](docs/本地伴侣-插件与发行.md)` **§4** 及 `[docs/本地伴侣-本地程序开发.md](docs/本地伴侣-本地程序开发.md)` **§3～§4.1**。
 
-**架构原则（店—仓—菜单）**：供货商 / 仓库 / 门面与编排的分层约定见 [`docs/架构宪章-店仓菜单.md`](docs/架构宪章-店仓菜单.md)；与多模型落地对照见 [`docs/多模型可运营改造计划.md`](docs/多模型可运营改造计划.md)（其中 **§1.4** 为宪章执行细则、货架地图与 PR 自检；拣货路径键值只读索引见 `services/workflowAiPickIndex.ts`）。
+**架构原则（店—仓—菜单）**：供货商 / 仓库 / 门面与编排的分层约定见 `[docs/架构宪章-店仓菜单.md](docs/架构宪章-店仓菜单.md)`；与多模型落地对照见 `[docs/多模型可运营改造计划.md](docs/多模型可运营改造计划.md)`（其中 **§1.4** 为宪章执行细则、货架地图与 PR 自检；拣货路径键值只读索引见 `services/workflowAiPickIndex.ts`）。
 
 ---
 
@@ -230,7 +230,7 @@ assetcutter-ai-pro/
 
 ## 十、AI 服务（unifiedAiGateway → geminiService）
 
-- **调用约定**：`components` / `hooks` / 业务侧 `services` 应 **`import { … } from './services/unifiedAiGateway'`**；`geminiService.ts` 仅作实现与 `getAI()`。
+- **调用约定**：`components` / `hooks` / 业务侧 `services` 应 `**import { … } from './services/unifiedAiGateway'`**；`geminiService.ts` 仅作实现与 `getAI()`。
 - **鉴权**：`getAI()` 使用用户在设置页填写并保存在浏览器本机的 Gemini API Key。
 - **重试**：`callWithRetry(apiFn, 3, 2000)` 对 503/429/overloaded/UNAVAILABLE 自动重试，间隔递增。
 - **接口一览**：
@@ -265,9 +265,9 @@ assetcutter-ai-pro/
 - **对话生图可选列表 / 挡位 / 参考图上限**：`services/modelRegistry/imageModels.ts`，由 `types.ts` re-export（`DIALOG_IMAGE_*`、`maxReferenceImagesForImageGear`）。
 - **各渠道实际上游 id**：`services/modelRegistry/resolve.ts`（`resolveUpstreamTextModelId` / `resolveUpstreamImageModelId`）；`geminiService` 仍 re-export 同名函数供适配层使用。
 - **ToAPIs 独有模型名映射**：仍在 `services/toapisAdapter.ts`（须在 resolve 之后应用，避免双重映射）；详见该文件头部注释。
-- **运营策略（可选）**：构建变量 `VITE_MODEL_OPS_CONFIG_URL` 指向可 CORS 访问的 JSON（字段见 `public/model-ops.example.json`），用于禁用部分生图档位；合并逻辑在 `services/modelRegistry/merge.ts`，观测日志前缀 `**[model-registry]`**；运维操作与回滚见 **`docs/model-ops-runbook.md`**。
+- **运营策略（可选）**：构建变量 `VITE_MODEL_OPS_CONFIG_URL` 指向可 CORS 访问的 JSON（字段见 `public/model-ops.example.json`），用于禁用部分生图档位；合并逻辑在 `services/modelRegistry/merge.ts`，观测日志前缀 `**[model-registry]`**；运维操作与回滚见 `**docs/model-ops-runbook.md`**。
 - 总体规划：`docs/多模型可运营改造计划.md`；能力矩阵草稿：`docs/spec/model-capability-matrix.md`。
-- **宪章与拣货路径**：原则见 `docs/架构宪章-店仓菜单.md` §2；与现状对照、闸门表、Mermaid 依赖图与 PR 自检清单见 `docs/多模型可运营改造计划.md` **§1.4**；节点/边/货物大类的键值索引见 `services/workflowAiPickIndex.ts`；**`WorkflowSection.runTask`** 分支判定见 `services/workflowRunTaskBranch.ts`（新增或变更用户可达 AI 调用链时请同步更新）。
+- **宪章与拣货路径**：原则见 `docs/架构宪章-店仓菜单.md` §2；与现状对照、闸门表、Mermaid 依赖图与 PR 自检清单见 `docs/多模型可运营改造计划.md` **§1.4**；节点/边/货物大类的键值索引见 `services/workflowAiPickIndex.ts`；`**WorkflowSection.runTask`** 分支判定见 `services/workflowRunTaskBranch.ts`（新增或变更用户可达 AI 调用链时请同步更新）。
 - **阶段 0 书面模版**（registryId 策略、盘点表、矩阵勾选）：`docs/spec/phase0-model-inventory-template.md`。
 
 ### 11.2.1 工作流生视频能力（`generate_video`）
@@ -285,9 +285,9 @@ assetcutter-ai-pro/
 ### 11.4 生成3D资产与腾讯混元生3D
 
 - **生成3D资产**模块（`AppMode.GENERATE_3D`）已接入腾讯云混元生3D（ai3d）全部 8 个能力：专业版、极速版、智能拓扑、纹理生成、组件生成、UV 展开、3D 人物生成、模型格式转换。任务经队列（最多 2 个并发）执行，结果进入临时库后可保存到资产库（`MESH_MODEL`，`modelUrls` 存下载链接）。凭证通过 `.env.local` 的 `TENCENT_SECRET_ID` / `TENCENT_SECRET_KEY` 或页面内临时填写。
-- **Import 约定**：页面与 `hooks/useGenerate3DManager` 等应 **`import { … } from './services/unifiedAiGateway'`**（网关内 `export * from tencentService`），与 Tripo 相同，**勿**在 `App` / `components` / `hooks` 中直连 `tencentService.ts`（见 `eslint.config.js`）。
-- **3D 任务适配层**（`services/generate3d/`）：腾讯队列执行 **`runTencentGenerate3dQueueItem`**、工作流 Tripo **`tripoWorkflowCreateOrResumeTaskId` / `tripoWorkflowPollUntilDone`**、预设 **`normalizeGenerate3DPresetForRun`**；**`GENERATE3D_PROVIDER_REGISTRY`** 登记当前供应商，后续接新 3D 厂商时在此扩展并实现平行适配模块（实现文件可直连 `tripoService` / `tencentService`，见 `eslint.config.js` ignores）。
-- 扩展：新增接口时在 `tencentService.ts` 中按现有模式实现 `submitXxx` / `queryXxx` 或 `describeXxx`，以及 `startXxxJob` 轮询封装，并 **在 `unifiedAiGateway.ts` 中随 `export *` 自动透出**；队列侧在 **`tencentQueueRunner.ts`** 增加分支；再在 `App.tsx` 的生成队列 `useEffect` 中为对应 `pending.type` 分支调用并写入临时库。
+- **Import 约定**：页面与 `hooks/useGenerate3DManager` 等应 `**import { … } from './services/unifiedAiGateway'`**（网关内 `export * from tencentService`），与 Tripo 相同，**勿**在 `App` / `components` / `hooks` 中直连 `tencentService.ts`（见 `eslint.config.js`）。
+- **3D 任务适配层**（`services/generate3d/`）：腾讯队列执行 `**runTencentGenerate3dQueueItem`**、工作流 Tripo `**tripoWorkflowCreateOrResumeTaskId` / `tripoWorkflowPollUntilDone`**、预设 `**normalizeGenerate3DPresetForRun**`；`**GENERATE3D_PROVIDER_REGISTRY**` 登记当前供应商，后续接新 3D 厂商时在此扩展并实现平行适配模块（实现文件可直连 `tripoService` / `tencentService`，见 `eslint.config.js` ignores）。
+- 扩展：新增接口时在 `tencentService.ts` 中按现有模式实现 `submitXxx` / `queryXxx` 或 `describeXxx`，以及 `startXxxJob` 轮询封装，并 **在 `unifiedAiGateway.ts` 中随 `export `* 自动透出**；队列侧在 `**tencentQueueRunner.ts`** 增加分支；再在 `App.tsx` 的生成队列 `useEffect` 中为对应 `pending.type` 分支调用并写入临时库。
 
 ### 11.5 新增资产类别或类型
 

@@ -69,6 +69,15 @@ const SESSION_TTL_MS = Number(process.env.AUTH_SESSION_TTL_MS || 1000 * 60 * 60 
 const IS_PROD = String(process.env.NODE_ENV || '').toLowerCase() === 'production';
 const COOKIE_SAME_SITE = String(process.env.AUTH_COOKIE_SAMESITE || (IS_PROD ? 'none' : 'lax')).trim().toLowerCase();
 const COOKIE_SECURE = String(process.env.AUTH_COOKIE_SECURE || (IS_PROD ? 'true' : 'false')).trim().toLowerCase() === 'true';
+/** 设 `.adrazzo.com` 时 `ac_session` / `ac_csrf` 对子域（如 app / scripts）共享；不设则仅响应当前 Host */
+const COOKIE_DOMAIN_ATTR = (() => {
+  const d = String(process.env.AUTH_COOKIE_DOMAIN || '').trim();
+  if (!d) return '';
+  if (!/^(\.[a-zA-Z0-9-]+)+$/.test(d)) {
+    throw new Error('AUTH_COOKIE_DOMAIN 须为以点开头的域后缀，例如 .adrazzo.com');
+  }
+  return `; Domain=${d}`;
+})();
 const AUTH_ALLOWED_ORIGINS = String(process.env.AUTH_ALLOWED_ORIGINS || '').trim();
 const RATE_LIMIT_WINDOW_MS = Number(process.env.AUTH_RATE_LIMIT_WINDOW_MS || 60_000);
 const LOGIN_RATE_LIMIT_MAX = Number(process.env.AUTH_LOGIN_RATE_LIMIT_MAX || 10);
@@ -291,19 +300,19 @@ function serializeSessionCookie(token, maxAgeMs) {
   const sameSite = COOKIE_SAME_SITE === 'none' ? 'None' : COOKIE_SAME_SITE === 'strict' ? 'Strict' : 'Lax';
   const secure = COOKIE_SECURE || sameSite === 'None' ? '; Secure' : '';
   const maxAgeSec = Math.max(1, Math.floor(maxAgeMs / 1000));
-  return `${COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=${maxAgeSec}${secure}`;
+  return `${COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=${maxAgeSec}${secure}${COOKIE_DOMAIN_ATTR}`;
 }
 
 function clearSessionCookie() {
   const sameSite = COOKIE_SAME_SITE === 'none' ? 'None' : COOKIE_SAME_SITE === 'strict' ? 'Strict' : 'Lax';
   const secure = COOKIE_SECURE || sameSite === 'None' ? '; Secure' : '';
-  return `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=0${secure}`;
+  return `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=0${secure}${COOKIE_DOMAIN_ATTR}`;
 }
 
 function serializeCsrfCookie(token) {
   const sameSite = COOKIE_SAME_SITE === 'none' ? 'None' : COOKIE_SAME_SITE === 'strict' ? 'Strict' : 'Lax';
   const secure = COOKIE_SECURE || sameSite === 'None' ? '; Secure' : '';
-  return `${CSRF_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; SameSite=${sameSite}; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}${secure}`;
+  return `${CSRF_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; SameSite=${sameSite}; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}${secure}${COOKIE_DOMAIN_ATTR}`;
 }
 
 function applyCors(req, res) {

@@ -37,13 +37,14 @@ import {
   checkBearerAuthorization,
   isBearerExemptPath,
   isOriginAllowed,
-  parseAllowedOriginEntries,
+  getEffectiveAllowedOriginEntries,
 } from './accessGate.js';
 import { getPairingSessionSummary, revokePairingSession } from './pairingSession.js';
 import { installHostPluginBundleFromUrl, listInstalledHostPluginBundles } from './hostPluginBundles.js';
 import { probeSamSegmentBackendHealth } from './compute/samSegmentAdapter.js';
 import { probeRembgPythonHealth } from './compute/rembgAdapter.js';
 import { parseRuntimeProbeCacheTtlMs } from './runtimeProbeCacheTtl.js';
+import { buildScriptConnectorsPayload } from './scriptRun/scriptConnectorsSnapshot.js';
 
 let runtimeEngineProbesCache: {
   at: number;
@@ -168,7 +169,7 @@ export async function handleRequest(
   const path = u.pathname;
 
   if (method === 'OPTIONS') {
-    if (!isOriginAllowed(origin, parseAllowedOriginEntries())) {
+    if (!isOriginAllowed(origin, getEffectiveAllowedOriginEntries())) {
       res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify({ error: 'origin_not_allowed', code: 'AUTH_ORIGIN_DENIED' }));
       return;
@@ -177,7 +178,7 @@ export async function handleRequest(
     return;
   }
 
-  if (!isOriginAllowed(origin, parseAllowedOriginEntries())) {
+  if (!isOriginAllowed(origin, getEffectiveAllowedOriginEntries())) {
     res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify({ error: 'origin_not_allowed', code: 'AUTH_ORIGIN_DENIED' }));
     return;
@@ -228,6 +229,18 @@ export async function handleRequest(
       const base = buildRuntimeStatus(httpPort);
       const { sam: samProbe, rembg: rembgProbe } = await getCachedSamRembgProbes();
       sendJson(res, 200, augmentRuntimeStatusWithLocalEngineProbes(base, samProbe, rembgProbe), origin);
+      return;
+    }
+
+    if (path === '/v1/script-connectors' && method === 'GET') {
+      const mayaHostRaw = u.searchParams.get('mayaHost');
+      const mayaPortRaw = u.searchParams.get('mayaPort');
+      const mayaPortParsed = mayaPortRaw != null && mayaPortRaw !== '' ? Number.parseInt(mayaPortRaw, 10) : NaN;
+      const payload = await buildScriptConnectorsPayload({
+        ...(mayaHostRaw != null && mayaHostRaw !== '' ? { mayaHost: mayaHostRaw } : {}),
+        ...(Number.isFinite(mayaPortParsed) && mayaPortParsed > 0 ? { mayaPort: mayaPortParsed } : {}),
+      });
+      sendJson(res, 200, payload, origin);
       return;
     }
 

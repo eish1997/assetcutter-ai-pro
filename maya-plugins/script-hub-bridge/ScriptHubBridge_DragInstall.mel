@@ -1,0 +1,12 @@
+// Script Hub Bridge - drag this .mel into Maya viewport or Script Editor.
+// Requires script_hub_bridge.py in the SAME folder as this file (same directory as the .mel).
+// Tested pattern: Maya 2022; avoids long single-line python() (MEL buffer / quote issues).
+
+global proc scriptHubBridge_dragInstallMain()
+{
+    print "Script Hub Bridge: installing...";
+    python("import maya.mel as mm,os,shutil,importlib;p=mm.eval('whatIs scriptHubBridge_dragInstallMain');L=[t.split()[-1] for t in [x.strip() for x in p.replace(chr(13),chr(10)).split(chr(10))] if t.lower().endswith('.mel')];mel=L[0] if L else '';assert mel,'whatIs parse failed';src=os.path.normpath(os.path.join(os.path.dirname(mel),'script_hub_bridge.py'));assert os.path.isfile(src),'missing script_hub_bridge.py next to this .mel: '+src;dst=os.path.normpath(os.path.join(mm.eval('internalVar -userScriptDir'),'script_hub_bridge.py'));shutil.copy2(src,dst);import script_hub_bridge as m;importlib.reload(m);m.show()");
+    print "Script Hub Bridge: done. Panel should open.";
+}
+
+scriptHubBridge_dragInstallMain();

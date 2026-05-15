@@ -2,7 +2,7 @@
 
 开发期 **M0**：系统托盘 + 子进程启动 `../local-companion`（`COMPANION_OPEN_BROWSER=0`）。**主窗口** 为内嵌 **`shell/index.html`** 的壳：**左侧图标栏**切换 **首页**（状态 + 打开网站 + 插件列表）、**工作台**（`BrowserView` 内嵌设置中的主站 `siteUrl`；**侧栏右键** 刷新 / 硬刷新 / 浏览器打开主站）、**设置**；**不再**把完整本机管理页作为默认首页；需要完整 HTML 管理页时用托盘 **「在浏览器打开本机管理页」**。协议 **`assetcutter-companion://open`** 可从网站唤起壳（需已安装并注册）。
 
-数据目录为 **`%LOCALAPPDATA%\AssetCutterCompanion\sandbox\desktop-shell`**（Electron `userData`）；下载的运行时、模型与默认卷见 **`docs/本地伴侣-沙盒目录.md`**。进入 **工作台**（内嵌主站）时，壳会按当前主站地址 **自动写入** `pairing-config.json` 的允许 Origin 与通信密码（若尚无密码则生成），并重启由壳拉起的 `local-companion` 使 `COMPANION_SHARED_TOKEN` / `COMPANION_ALLOWED_ORIGINS` 生效，网站侧 **无需** 先到「设置 → 与网站配对」手工对齐；仍可在该页 **覆盖** 密码或增删允许的站点。落盘路径对应子进程环境变量 `COMPANION_SHARED_TOKEN` / `COMPANION_ALLOWED_ORIGINS`；若你在外部已显式设置同名环境变量，壳不会覆盖。
+数据目录为 **`%LOCALAPPDATA%\AssetCutterCompanion\sandbox\desktop-shell`**（Electron `userData`）；下载的运行时、模型与默认卷见 **`docs/本地伴侣-沙盒目录.md`**。进入 **工作台**（内嵌主站）时，壳会按当前主站地址 **自动写入** `pairing-config.json` 的允许 Origin 与通信密码（若尚无密码则生成），并重启由壳拉起的 `local-companion` 使 `COMPANION_SHARED_TOKEN` / `COMPANION_ALLOWED_ORIGINS` 生效，网站侧 **无需** 先到「设置 → 与网站配对」手工对齐；仍可在该页 **覆盖** 密码或增删允许的站点。落盘路径对应子进程环境变量 `COMPANION_SHARED_TOKEN` / `COMPANION_ALLOWED_ORIGINS`；拉起 **local-companion** 时，若 `pairing-config.json` 里已有非空通信密码 / 允许站点，会**覆盖**父进程（Electron / 终端）里同名的旧环境变量，避免与壳内「保存配对」不一致导致网站 `bearer_invalid`。
 
 **托盘（Windows）**：**左键单击** → **打开桌面窗口**；**右键** → 菜单；菜单含 **状态行**、**「打开桌面窗口」**、**「在浏览器打开本机管理页」**、**「重新启动本地伴侣」**。  
 壳会轮询 `GET /v1/runtime-status`：当检测到 **Relay 已配置但未运行**，或状态检查 **401（配对密码不一致）** / 超时失败时，会弹出气泡提醒并给出下一步动作（重启/打开本机管理页排查）。
