@@ -1,4 +1,5 @@
 import { prepareImageDataUrlForTripoUpload } from './tripoUploadImagePrep';
+import { apiUrl } from './apiBase';
 
 export type TripoTaskType = 'text_to_model' | 'image_to_model';
 
@@ -26,7 +27,7 @@ export type TripoCreateTaskInput = {
   orientation?: 'default' | 'align_image';
 };
 
-export type TripoTaskStatus = 'queued' | 'running' | 'success' | 'failed' | 'unknown';
+export type TripoTaskStatus = 'queued' | 'running' | 'success' | 'failed' | 'expired' | 'unknown';
 
 export type TripoTaskResult = {
   taskId: string;
@@ -43,18 +44,8 @@ const TRIPO_ALLOWED_MODEL_VERSIONS = new Set([
   'v2.0-20240919',
 ]);
 
-function resolveTripoProxyBase(): string {
-  try {
-    const env =
-      typeof import.meta !== 'undefined'
-        ? (import.meta as { env?: Record<string, string | undefined> }).env
-        : undefined;
-    const raw = String(env?.VITE_AUTH_API_BASE_URL || '').trim().replace(/\/+$/, '');
-    if (raw) return `${raw}/api/tripo`;
-  } catch {
-    /* ignore */
-  }
-  return '/api/tripo';
+export function resolveTripoProxyBase(): string {
+  return apiUrl('/api/tripo');
 }
 
 function mapStatus(raw: unknown): TripoTaskStatus {
@@ -63,6 +54,7 @@ function mapStatus(raw: unknown): TripoTaskStatus {
   if (s === 'running' || s === 'processing' || s === 'in_progress') return 'running';
   if (s === 'success' || s === 'succeeded' || s === 'finished' || s === 'done') return 'success';
   if (s === 'failed' || s === 'error' || s === 'cancelled') return 'failed';
+  if (s === 'expired') return 'expired';
   return 'unknown';
 }
 
@@ -219,7 +211,7 @@ export async function createTripoConvertModelTask(
 }
 
 export async function fetchTripoRemoteFileBlob(apiKey: string, url: string): Promise<Blob> {
-  const r = await fetch('/api/tripo/fetch-file', {
+  const r = await fetch(`${resolveTripoProxyBase()}/fetch-file`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ apiKey: apiKey.trim(), url }),

@@ -6,15 +6,15 @@ import {
   normalizeApiErrorMessage,
   getTexturePrompt,
   parsePromptStructured,
-  PRO_VIEW_IDS,
-  type Submit3DProInput,
-  type Submit3DRapidInput,
+  getTencentCredsFromEnv,
 } from './services/unifiedAiGateway';
 import {
   buildTripoCreateTaskInputFromPreset,
   extractTripoModelAndPreviewUrls,
+  extractTencentModelAndPreviewUrls,
   normalizeGenerate3DPresetForRun,
   resolveGenerate3dProviderId,
+  tencentWorkflowRunImageTo3D,
   tripoWorkflowCreateOrResumeTaskId,
   tripoWorkflowPollUntilDone,
 } from './services/generate3d';
@@ -24,13 +24,9 @@ import { useEffectiveImageGearRows } from './hooks/useEffectiveImageGearRows';
 import { loadRecords, addRecord as addGenerationRecord, updateScore as updateGenerationScore } from './services/recordStore';
 import { loadSnippets } from './services/snippetStore';
 import { AppStep, AppMode, LibraryItem, SystemConfig, AppTask, AssetCategory, DialogMessage, DialogSession, DialogTempItem, DialogImageGear, DIALOG_ASPECT_RATIO_OPTIONS, SUPPORTED_IMAGE_SIZES, DIALOG_IMAGE_GEARS, type GenerationRecord, type CustomAppModule, type CapabilitySet, type WorkflowAsset, type WorkflowPendingTask, type ArenaCurrentStep, type ArenaStepEntry, type ArenaTimelineBlock } from './types';
-import DropdownSelect from './components/DropdownSelect';
-import MultiViewUpload from './components/MultiViewUpload';
-import type { ViewId } from './components/MultiViewUpload';
 import { runCapabilityTest } from './services/capabilityTestRunner';
 import { loadCapabilityPresets, saveCapabilityPresets, CAPABILITY_PRESETS_KEY } from './services/capabilityPresetStore';
 import { loadCapabilitySets, saveCapabilitySets, CAPABILITY_SETS_KEY } from './services/capabilitySetStore';
-import { useGenerate3DManager, type Temp3DItem } from './hooks/useGenerate3DManager';
 import { useWorkflowMainScrollCapture, type WorkflowCapabilityGutterDropConfig } from './hooks/useWorkflowMainScrollCapture';
 import { useDialogWorkspace } from './hooks/useDialogWorkspace';
 import { useDialogGeneration } from './hooks/useDialogGeneration';
@@ -89,6 +85,8 @@ import { HttpRequestError } from './services/httpClient';
 import { triggerImageDownload } from './services/imageDataUrl';
 import { downloadModelFromSource } from './services/downloadModelFile';
 import { persistTripoModelsForWorkflowAsset } from './services/tripoModelPersist';
+import { persistTencentModelsForWorkflowAsset } from './services/tencentModelPersist';
+import { patchWorkflowAssetsWith3dResult } from './services/workflowGenerate3dAssetPatch';
 import {
   getAiProvider,
   getAiProviderToolbarLabel,
@@ -309,7 +307,6 @@ function pickAssetsById(localAssets: WorkflowAsset[], ids: string[]): WorkflowAs
 /** 对话大图预览全景模式：与工作区 ImagePreviewOverlay 同 registry chunk */
 const LazyDialogTempEquirectViewer = getLazyImagePreviewViewer('image.equirect');
 
-const UnifiedModelViewer3D = React.lazy(() => import('./components/UnifiedModelViewer3D'));
 const WorkflowSection = React.lazy(() => import('./components/WorkflowSection'));
 const CapabilityPresetSection = React.lazy(() => import('./components/CapabilityPresetSection'));
 const WorkflowComposerOverlay = React.lazy(() => import('./components/WorkflowComposerOverlay'));
@@ -345,29 +342,6 @@ function useMainScrollBackToTop() {
   }, [mainScrollEl]);
   return { mainScrollRef: setMainScrollEl, showBackToTop, scrollToTop: () => mainScrollEl?.scrollTo({ top: 0, behavior: 'smooth' }) };
 }
-
-/** 生成3D 左侧可选模块（与已上线 API 对应） */
-export type Generate3DModule =
-  | 'pro'      // 混元生3D（专业版）
-  | 'rapid'    // 混元生3D（极速版）
-  | 'topology' // 智能拓扑
-  | 'texture'  // 纹理生成
-  | 'component'// 组件生成
-  | 'uv'       // UV展开
-  | 'profile'  // 3D人物生成
-  | 'convert'; // 模型格式转换
-
-/** 8 个模块的展示名称与简介（按已上线 API 分模块） */
-export const GENERATE_3D_MODULES: { id: Generate3DModule; name: string; desc: string }[] = [
-  { id: 'pro', name: '混元生3D（专业版）', desc: '文生 / 单图 / 多视角；白模、草图、带纹理、智能拓扑；3.1 最多 8 张视角图' },
-  { id: 'rapid', name: '混元生3D（极速版）', desc: '文或图二选一，约 90 秒内出模型，适合快速试错' },
-  { id: 'topology', name: '智能拓扑', desc: 'Polygon 1.5：高模 URL → 低面、布线更规整的模型' },
-  { id: 'texture', name: '纹理生成', desc: '已有白模 URL + 参考图或文案 → 生成贴图纹理' },
-  { id: 'component', name: '组件生成', desc: '整模 URL → 自动拆识别结构，输出 3D 组件' },
-  { id: 'uv', name: 'UV 展开', desc: '模型 URL → 自动展 UV，便于后续画贴图' },
-  { id: 'profile', name: '3D 人物生成', desc: '正脸头像 → 按模板生成可绑定的 3D 形象' },
-  { id: 'convert', name: '模型格式转换', desc: '同一模型的 URL → STL / USDZ / FBX 等目标格式' },
-];
 
 /** 资产仓库筛选中文标签（与 AssetViewer 一致） */
 const LIBRARY_CATEGORY_LABELS: Record<AssetCategory | 'ALL', string> = {
@@ -753,6 +727,9 @@ const MainApp: React.FC = () => {
   const [mode, setMode] = useState<AppMode>(AppMode.WORKFLOW);
   useEffect(() => {
     if (!DIALOG_PAGE_ENABLED && mode === AppMode.DIALOG) {
+      setMode(AppMode.WORKFLOW);
+    }
+    if (mode === AppMode.GENERATE_3D) {
       setMode(AppMode.WORKFLOW);
     }
   }, [mode]);
@@ -1216,7 +1193,6 @@ const MainApp: React.FC = () => {
   const [experimentalNavExpanded, setExperimentalNavExpanded] = useState(false);
 
   const isExperimentalMode = useCallback((m: AppMode) =>
-    m === AppMode.GENERATE_3D ||
     m === AppMode.TEXTURE ||
     m === AppMode.SEAM_REPAIR ||
     m === AppMode.PBR_TEXTURE ||
@@ -2936,37 +2912,6 @@ const MainApp: React.FC = () => {
   const dialogTempPreviewZoomLastScaleRef = useRef(1);
   const dialogTempPreviewWheelAccumRef = useRef(0);
 
-  // 生成3D资产（腾讯混元生3D）
-  const [generate3DMode, setGenerate3DMode] = useState<'text' | 'image'>('text');
-  const [generate3DPrompt, setGenerate3DPrompt] = useState('');
-  const [generate3DImage, setGenerate3DImage] = useState<string | null>(null);
-  const [generate3DImageMode, setGenerate3DImageMode] = useState<'single' | 'multi'>('single');
-  const [generate3DMultiViewImages, setGenerate3DMultiViewImages] = useState<Partial<Record<ViewId, string>>>({});
-  const [generate3DModel, setGenerate3DModel] = useState<'3.0' | '3.1'>('3.0');
-  const [generate3DType, setGenerate3DType] = useState<'Normal' | 'LowPoly' | 'Geometry' | 'Sketch'>('Normal');
-  const [generate3DPolygonType, setGenerate3DPolygonType] = useState<'triangle' | 'quadrilateral'>('triangle');
-  const [generate3DResultFormat, setGenerate3DResultFormat] = useState<'' | 'FBX' | 'STL' | 'USDZ'>('FBX');
-  const [generate3DFaceCount, setGenerate3DFaceCount] = useState(100000);
-  const [generate3DEnablePBR, setGenerate3DEnablePBR] = useState(false);
-  const [generate3DCredsOverride, setGenerate3DCredsOverride] = useState<{ secretId: string; secretKey: string } | null>(null);
-  const [rapidPrompt, setRapidPrompt] = useState('');
-  const [rapidImage, setRapidImage] = useState<string | null>(null);
-  const [rapidResultFormat, setRapidResultFormat] = useState<string>('FBX');
-  const [rapidEnablePBR, setRapidEnablePBR] = useState(false);
-  const [convertFileUrl, setConvertFileUrl] = useState('');
-  const [convertFormat, setConvertFormat] = useState<string>('FBX');
-  const [topologyFileUrl, setTopologyFileUrl] = useState('');
-  const [textureModelUrl, setTextureModelUrl] = useState('');
-  const [texturePrompt, setTexturePrompt] = useState('');
-  const [textureRefImage, setTextureRefImage] = useState<string | null>(null);
-  const [componentFileUrl, setComponentFileUrl] = useState('');
-  const [uvFileUrl, setUvFileUrl] = useState('');
-  const [profileImage, setProfileImage] = useState<string | null>(null);
-  const [generate3DModule, setGenerate3DModule] = useState<Generate3DModule>('pro');
-  const [tripoRecoverTaskIdInput, setTripoRecoverTaskIdInput] = useState('');
-  const [tripoRecoverBusy, setTripoRecoverBusy] = useState(false);
-  const [tripoRecoverErr, setTripoRecoverErr] = useState<string | null>(null);
-
   const handleDialogTempLocateMessage = (item: DialogTempItem) => {
     if (item.sourceSessionId) setDialogActiveSessionId(item.sourceSessionId);
     if (item.sourceMessageId) setTimeout(() => document.getElementById(`msg-${item.sourceMessageId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 150);
@@ -3227,117 +3172,7 @@ const MainApp: React.FC = () => {
     addGlobalLog('生成3D', level, message, detailStr);
   }, [addGlobalLog]);
 
-  const {
-    creds3D,
-    unsafeTencentBrowserCredsEnabled,
-    temp3DLibrary,
-    selectedTemp3DId,
-    setSelectedTemp3DId,
-    generate3DQueue,
-    generate3DPreview,
-    appendQueueItem,
-    cancelQueueItem,
-    retryQueueItem,
-    clearInactiveQueueItems,
-    importTripoTaskToTempLibrary,
-  } = useGenerate3DManager({
-    credsOverride: generate3DCredsOverride,
-    onLog: addGenerate3DLog,
-    updateTask,
-  });
-
-  const handleImportTripoTaskById = useCallback(async () => {
-    const apiKey = getTripoApiKey();
-    if (!apiKey?.trim()) {
-      setTripoRecoverErr('请先在 API 密钥弹窗中保存 Tripo API Key');
-      addGenerate3DLog('warn', '[Tripo 恢复] 缺少 Tripo API Key');
-      return;
-    }
-    setTripoRecoverBusy(true);
-    setTripoRecoverErr(null);
-    try {
-      await importTripoTaskToTempLibrary(apiKey, tripoRecoverTaskIdInput);
-      setTripoRecoverTaskIdInput('');
-      addGenerate3DLog('info', '[Tripo 恢复] 已根据 task id 拉取模型链接并加入右侧临时库');
-    } catch (e) {
-      const msg = normalizeApiErrorMessage(e);
-      setTripoRecoverErr(msg);
-      addGenerate3DLog('error', '[Tripo 恢复] 失败', msg);
-    } finally {
-      setTripoRecoverBusy(false);
-    }
-  }, [addGenerate3DLog, importTripoTaskToTempLibrary, tripoRecoverTaskIdInput]);
-
-  const handleGenerate3D = () => {
-    if (!creds3D) return;
-    const hasText = generate3DMode === 'text' && !!generate3DPrompt.trim();
-    const multiList = PRO_VIEW_IDS.map((id) => generate3DMultiViewImages[id]).filter(Boolean) as string[];
-    const hasMulti = generate3DMode === 'image' && generate3DImageMode === 'multi' && multiList.length >= 2;
-    const hasSingle = generate3DMode === 'image' && generate3DImageMode === 'single' && !!generate3DImage;
-    if (!hasText && !hasSingle && !hasMulti) {
-      addGenerate3DLog('warn', '请填写文本、上传单图或至少 2 张多视角图');
-      alert('请填写文本描述、上传一张图片，或多视图下至少上传 2 张不同视角图片。');
-      return;
-    }
-    const baseOpts = {
-      model: generate3DModel,
-      enablePBR: generate3DEnablePBR,
-      faceCount: generate3DFaceCount,
-      generateType: generate3DType,
-      polygonType: generate3DType === 'LowPoly' ? generate3DPolygonType : undefined,
-      resultFormat: generate3DResultFormat || undefined,
-    };
-    const input: Submit3DProInput = hasText
-      ? { prompt: generate3DPrompt.trim(), ...baseOpts }
-      : hasMulti
-        ? { multiViewImageBase64: multiList, ...baseOpts }
-        : {
-            imageBase64: generate3DImage!.replace(/^data:image\/\w+;base64,/, ''),
-            ...baseOpts,
-          };
-    const id = Math.random().toString(36).slice(2, 11);
-    const taskId = addTask('GENERATE_3D', '混元生3D');
-    appendQueueItem({ id, type: 'pro', input, taskId, label: (input.prompt || '').trim().slice(0, 20) || '图生3D' });
-    addGenerate3DLog('info', '[本地] 已加入生成队列', { id });
-  };
-
-  const handleSave3DToLibrary = async (item?: Temp3DItem | null) => {
-    const target = item ?? (selectedTemp3DId ? temp3DLibrary.find(i => i.id === selectedTemp3DId) : null) ?? (temp3DLibrary[0] ?? null);
-    if (!target || !target.files.length) return;
-    const previewImageUrl = target.previewImageUrl;
-    const dataUrl = previewImageUrl
-      ? await fetch(previewImageUrl).then(r => r.blob()).then(b => new Promise<string>((res, rej) => {
-          const reader = new FileReader();
-          reader.onload = () => res(reader.result as string);
-          reader.onerror = rej;
-          reader.readAsDataURL(b);
-        })).catch(() => '')
-      : '';
-    addToLibrary([{
-      data: dataUrl || 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect fill="#1a1a2e" width="200" height="200"/><text x="100" y="100" fill="#666" text-anchor="middle" font-size="12">3D</text></svg>'),
-      type: 'MODEL',
-      category: 'MESH_MODEL',
-      label: target.label,
-      modelUrls: target.files.map(f => f.Url).filter(Boolean) as string[],
-    }]);
-  };
-
-  const handleRapid3D = () => {
-    if (!creds3D) return;
-    const hasText = !!rapidPrompt.trim();
-    const hasImage = !!rapidImage;
-    if (!hasText && !hasImage) {
-      addGenerate3DLog('warn', '极速版：请填写文本或上传图片');
-      return;
-    }
-    const input: Submit3DRapidInput = hasText
-      ? { prompt: rapidPrompt.trim(), resultFormat: rapidResultFormat, enablePBR: rapidEnablePBR }
-      : { imageBase64: rapidImage!.replace(/^data:image\/\w+;base64,/, ''), resultFormat: rapidResultFormat, enablePBR: rapidEnablePBR };
-    const id = Math.random().toString(36).slice(2, 11);
-    const taskId = addTask('GENERATE_3D', '极速版3D');
-    appendQueueItem({ id, type: 'rapid', input, taskId, label: (input.prompt || '').trim().slice(0, 20) || '极速3D' });
-    addGenerate3DLog('info', '[极速版3D] 已加入队列', { id });
-  };
+  const creds3D = useMemo(() => getTencentCredsFromEnv(), []);
 
   /** 工作流中拖图到「生成3D」能力时：用能力预设参数提交 3D 任务 */
   const handleAddGenerate3DJobFromWorkflow = async (
@@ -3347,33 +3182,134 @@ const MainApp: React.FC = () => {
     options?: { forceNewTask?: boolean }
   ) => {
     if (preset.category !== 'generate_3d' || !preset.generate3D) return;
-    const raw = imageBase64.replace(/^data:image\/\w+;base64,/, '');
     const g = normalizeGenerate3DPresetForRun(preset.generate3D);
     const provider = resolveGenerate3dProviderId(g);
     if (provider === 'tencent') {
-      if (!creds3D) return;
-      const id = Math.random().toString(36).slice(2, 11);
-      const taskId = addTask('GENERATE_3D', preset.label);
-      if (g.module === 'pro') {
-        const input: Submit3DProInput = {
-          imageBase64: raw,
-          prompt: (preset.instruction?.trim() || g.prompt?.trim()) || undefined,
-          model: g.model ?? '3.0',
-          enablePBR: g.enablePBR,
-          faceCount: g.faceCount,
-          generateType: g.generateType,
-          resultFormat: g.resultFormat,
-        };
-        appendQueueItem({ id, type: 'pro', input, taskId, label: preset.label });
-      } else {
-        const input: Submit3DRapidInput = {
-          imageBase64: raw,
-          resultFormat: g.resultFormat,
-          enablePBR: g.enablePBR,
-        };
-        appendQueueItem({ id, type: 'rapid', input, taskId, label: preset.label });
+      if (!creds3D) {
+        const msg = '缺少腾讯云混元配置：请在 .env.local 配置 VITE_TENCENT_PROXY 并启动 npm run proxy';
+        addGenerate3DLog('warn', `[工作流] ${msg}`);
+        alert(msg);
+        throw new Error(msg);
       }
-      addGenerate3DLog('info', `[工作流] 已加入腾讯 3D 队列：${preset.label}`, { id });
+      const taskId = addTask('GENERATE_3D', `${preset.label}（混元）`);
+      const gNorm = normalizeGenerate3DPresetForRun(preset.generate3D);
+      try {
+        addGenerate3DLog('info', `[工作流] 混元提交：${preset.label}`, {
+          module: gNorm.module,
+          model: gNorm.model,
+          generateType: gNorm.generateType,
+          resultFormat: gNorm.resultFormat,
+          enablePBR: gNorm.enablePBR,
+        });
+        updateTask(taskId, { status: 'RUNNING', progress: 10 });
+        const { jobId, files } = await tencentWorkflowRunImageTo3D({
+          creds: creds3D,
+          preset,
+          imageDataUrl: imageBase64,
+          onProgress: (p) =>
+            updateTask(taskId, { status: 'RUNNING', progress: Math.max(15, Math.min(95, Math.round(p))) }),
+          onLog: (message, detail) => addGenerate3DLog('info', message, detail),
+        });
+        const { modelUrls } = extractTencentModelAndPreviewUrls(files);
+        if (!modelUrls.length) {
+          throw new Error('混元任务完成但未返回可下载模型链接');
+        }
+        if (task?.assetId && task?.actionType && jobId) {
+          setWorkflowAssets((prev) =>
+            prev.map((a) => {
+              if (a.id !== task.assetId) return a;
+              const old = a.resultMeta?.[task.actionType] || { executedAt: Date.now() };
+              return {
+                ...a,
+                resultMeta: {
+                  ...(a.resultMeta || {}),
+                  [task.actionType]: {
+                    ...old,
+                    tencentJobId: jobId,
+                    tencentLastError: undefined,
+                    presetActionIdSnapshot: preset.id,
+                    displayStepLabel: preset.label,
+                  },
+                },
+              };
+            })
+          );
+        }
+        const companionBase = getCompanionLocalBaseUrl();
+        const companionProjectId = String(activeWorkspaceProjectId || '').trim() || 'default';
+        const workflowAssetId = task?.assetId || `wf_tencent_${Math.random().toString(36).slice(2, 11)}`;
+        const resultKey = task?.actionType || preset.id;
+        const persisted = await persistTencentModelsForWorkflowAsset({
+          creds: creds3D,
+          tencentJobId: jobId,
+          assetId: workflowAssetId,
+          resultKey,
+          files,
+          companionBaseUrl: companionBase,
+          companionProjectId,
+          onLog: (level, message, detail) => addGenerate3DLog(level, message, detail),
+        });
+        const localModelUrls = persisted.modelUrls;
+        const modelCompanionKeys = persisted.modelCompanionKeys;
+        const stepModelFormats = persisted.stepModelFormats;
+        const modelSourceName = persisted.modelSourceName;
+        const localPreviewUrl = persisted.preview?.objectUrl || '';
+        const previewCompanionKey = persisted.preview?.companionKey || '';
+        if (!companionBase || !companionProjectId || companionProjectId === 'default') {
+          addGenerate3DLog(
+            'warn',
+            '[工作流] 混元模型已落内存',
+            '未连接本地伴侣时仅浏览器内预览，刷新可能失效；连接伴侣后可写入卷目录。'
+          );
+        }
+        setWorkflowAssets((prev) =>
+          patchWorkflowAssetsWith3dResult({
+            prev,
+            task,
+            preset,
+            imageBase64,
+            workflowAssetId,
+            resultKey,
+            localModelUrls,
+            modelCompanionKeys,
+            stepModelFormats,
+            modelSourceName,
+            localPreviewUrl,
+            previewCompanionKey,
+            jobMeta: { tencentJobId: jobId, tencentLastError: undefined },
+          })
+        );
+        updateTask(taskId, { status: 'SUCCESS', progress: 100 });
+        addGenerate3DLog('info', `[工作流] 混元生成完成，模型已回填资产卡`, {
+          jobId,
+          modelCount: localModelUrls.length,
+          hasPreview: Boolean(localPreviewUrl),
+          companionProjectId,
+        });
+      } catch (e) {
+        const msg = normalizeApiErrorMessage(e);
+        updateTask(taskId, { status: 'FAILED', error: msg });
+        if (task?.assetId && task?.actionType) {
+          setWorkflowAssets((prev) =>
+            prev.map((a) => {
+              if (a.id !== task.assetId) return a;
+              const old = a.resultMeta?.[task.actionType] || { executedAt: Date.now() };
+              return {
+                ...a,
+                resultMeta: {
+                  ...(a.resultMeta || {}),
+                  [task.actionType]: {
+                    ...old,
+                    tencentLastError: msg,
+                  },
+                },
+              };
+            })
+          );
+        }
+        addGenerate3DLog('error', `[工作流] 混元生成失败：${preset.label}`, msg);
+        throw new Error(msg);
+      }
       return;
     }
     const tripoApiKey = getTripoApiKey();
@@ -3510,86 +3446,23 @@ const MainApp: React.FC = () => {
           '未连接本地伴侣时仅浏览器内预览，刷新可能失效；连接伴侣后可用「从 Tripo 拉取」写入卷目录。'
         );
       }
-      setWorkflowAssets((prev) => {
-        // 工作流链路：优先回填到原资产卡，而不是新建资产卡。
-        if (task?.assetId) {
-          return prev.map((a) => {
-            if (a.id !== task.assetId) return a;
-            const resultKey = task.actionType || preset.id;
-            const hasOrder = (a.resultOrder || []).includes(resultKey);
-            const nextOrder = hasOrder ? (a.resultOrder || []) : [...(a.resultOrder || []), resultKey];
-            const nextResults = localPreviewUrl ? { ...(a.results || {}), [resultKey]: localPreviewUrl } : (a.results || {});
-            const nextResultsCompanionKeys = { ...(a.resultsCompanionKeys || {}) };
-            if (previewCompanionKey) nextResultsCompanionKeys[resultKey] = previewCompanionKey;
-            const oldMeta = a.resultMeta?.[resultKey] || { executedAt: Date.now() };
-            const nextMeta = {
-              ...(a.resultMeta || {}),
-              [resultKey]: {
-                ...oldMeta,
-                executedAt: oldMeta.executedAt ?? Date.now(),
-                tripoTaskId: createdTaskId,
-                tripoLastError: undefined,
-                presetActionIdSnapshot: oldMeta.presetActionIdSnapshot || preset.id,
-                ...(oldMeta.displayStepLabel?.trim() ? {} : { displayStepLabel: preset.label }),
-                ...(localPreviewUrl ? { mediaKind: 'image' as const } : { mediaKind: 'model3d' as const }),
-              },
-            };
-            return {
-              ...a,
-              results: nextResults,
-              resultsCompanionKeys:
-                Object.keys(nextResultsCompanionKeys).length > 0 ? nextResultsCompanionKeys : a.resultsCompanionKeys,
-              displayKey: localPreviewUrl ? resultKey : a.displayKey,
-              resultOrder: nextOrder,
-              stepModelUrls: { ...(a.stepModelUrls || {}), [resultKey]: localModelUrls },
-              stepModelCompanionKeys:
-                modelCompanionKeys.length > 0
-                  ? { ...(a.stepModelCompanionKeys || {}), [resultKey]: modelCompanionKeys }
-                  : a.stepModelCompanionKeys,
-              stepModelFormats:
-                stepModelFormats.length > 0
-                  ? { ...(a.stepModelFormats || {}), [resultKey]: stepModelFormats }
-                  : a.stepModelFormats,
-              modelUrls: localModelUrls,
-              modelCompanionKeys: modelCompanionKeys.length > 0 ? modelCompanionKeys : undefined,
-              modelSourceName: modelSourceName || undefined,
-              resultMeta: nextMeta,
-              hiddenInGrid: false,
-            };
-          });
-        }
-        const now = Date.now();
-        const aid = workflowAssetId;
-        const presetKey = preset.id;
-        const nextResultsCompanionKeys = previewCompanionKey ? { [presetKey]: previewCompanionKey } : undefined;
-        const next: WorkflowAsset = {
-          id: aid,
-          original: imageBase64,
-          displayKey: localPreviewUrl ? presetKey : 'original',
-          results: localPreviewUrl ? { [presetKey]: localPreviewUrl } : {},
-          resultsCompanionKeys: nextResultsCompanionKeys,
-          stepModelUrls: { [presetKey]: localModelUrls },
-          stepModelCompanionKeys: modelCompanionKeys.length > 0 ? { [presetKey]: modelCompanionKeys } : undefined,
-          stepModelFormats: stepModelFormats.length > 0 ? { [presetKey]: stepModelFormats } : undefined,
-          modelUrls: localModelUrls,
-          modelCompanionKeys: modelCompanionKeys.length > 0 ? modelCompanionKeys : undefined,
-          modelSourceName: modelSourceName || undefined,
-          resultOrder: localPreviewUrl ? [presetKey] : [],
-          resultMeta: {
-            [presetKey]: {
-              executedAt: now,
-              tripoTaskId: createdTaskId,
-              presetActionIdSnapshot: preset.id,
-              displayStepLabel: preset.label,
-              ...(localPreviewUrl ? { mediaKind: 'image' as const } : {}),
-            },
-          },
-          archived: false,
-          hiddenInGrid: false,
-          createdAt: now,
-        };
-        return [next, ...prev];
-      });
+      setWorkflowAssets((prev) =>
+        patchWorkflowAssetsWith3dResult({
+          prev,
+          task,
+          preset,
+          imageBase64,
+          workflowAssetId,
+          resultKey,
+          localModelUrls,
+          modelCompanionKeys,
+          stepModelFormats,
+          modelSourceName,
+          localPreviewUrl,
+          previewCompanionKey,
+          jobMeta: { tripoTaskId: createdTaskId, tripoLastError: undefined },
+        })
+      );
       updateTask(taskId, { status: 'SUCCESS', progress: 100 });
       addGenerate3DLog('info', `[工作流] Tripo 生成完成，模型已落本地伴侣并回填资产卡`, {
         modelCount: localModelUrls.length,
@@ -3637,61 +3510,6 @@ const MainApp: React.FC = () => {
       setTripoRecoveryActionRunning(null);
       throw new Error(`${msg}${extraHint}${nextActionHint}`);
     }
-  };
-
-  const handleConvert3D = () => {
-    if (!creds3D || !convertFileUrl.trim()) return;
-    const input = { fileUrl: convertFileUrl.trim(), format: convertFormat };
-    const id = Math.random().toString(36).slice(2, 11);
-    const taskId = addTask('GENERATE_3D', '格式转换');
-    appendQueueItem({ id, type: 'convert', input, taskId, label: `转换 ${convertFormat}` });
-    addGenerate3DLog('info', '[格式转换] 已加入队列', { id });
-  };
-
-  const handleTopology3D = () => {
-    if (!creds3D || !topologyFileUrl.trim()) return;
-    const input = { fileUrl: topologyFileUrl.trim() };
-    const id = Math.random().toString(36).slice(2, 11);
-    const taskId = addTask('GENERATE_3D', '智能拓扑');
-    appendQueueItem({ id, type: 'topology', input, taskId, label: '智能拓扑' });
-    addGenerate3DLog('info', '[智能拓扑] 已加入队列', { id });
-  };
-
-  const handleTexture3D = () => {
-    if (!creds3D || !textureModelUrl.trim()) return;
-    if (!texturePrompt.trim() && !textureRefImage) return;
-    const input = { modelUrl: textureModelUrl.trim(), prompt: texturePrompt.trim(), imageBase64: textureRefImage?.replace(/^data:image\/\w+;base64,/, '') };
-    const id = Math.random().toString(36).slice(2, 11);
-    const taskId = addTask('GENERATE_3D', '纹理生成');
-    appendQueueItem({ id, type: 'texture', input, taskId, label: '纹理生成' });
-    addGenerate3DLog('info', '[纹理生成] 已加入队列', { id });
-  };
-
-  const handleComponent3D = () => {
-    if (!creds3D || !componentFileUrl.trim()) return;
-    const input = { fileUrl: componentFileUrl.trim() };
-    const id = Math.random().toString(36).slice(2, 11);
-    const taskId = addTask('GENERATE_3D', '组件生成');
-    appendQueueItem({ id, type: 'component', input, taskId, label: '组件生成' });
-    addGenerate3DLog('info', '[组件生成] 已加入队列', { id });
-  };
-
-  const handleUV3D = () => {
-    if (!creds3D || !uvFileUrl.trim()) return;
-    const input = { fileUrl: uvFileUrl.trim() };
-    const id = Math.random().toString(36).slice(2, 11);
-    const taskId = addTask('GENERATE_3D', 'UV展开');
-    appendQueueItem({ id, type: 'uv', input, taskId, label: 'UV展开' });
-    addGenerate3DLog('info', '[UV展开] 已加入队列', { id });
-  };
-
-  const handleProfile3D = () => {
-    if (!creds3D || !profileImage) return;
-    const input = { imageBase64: profileImage.replace(/^data:image\/\w+;base64,/, '') };
-    const id = Math.random().toString(36).slice(2, 11);
-    const taskId = addTask('GENERATE_3D', '3D人物生成');
-    appendQueueItem({ id, type: 'profile', input, taskId, label: '3D人物' });
-    addGenerate3DLog('info', '[3D人物生成] 已加入队列', { id });
   };
 
   const openPicker = (filter?: AssetCategory, callback?: (items: LibraryItem[]) => void, multiSelect?: boolean) => {
@@ -4155,7 +3973,7 @@ const MainApp: React.FC = () => {
     setLibSelectedGroupIds(prev => { const n = new Set(prev); n.delete(groupId); return n; });
   };
 
-  /** 根据格式将资产发送到各模块：图片可继续编辑/生成3D/贴图，3D 模型可进入生成3D 各子模块 */
+  /** 根据格式将资产发送到各模块：图片可继续编辑/贴图 */
   const sendLibraryItemToDialog = (item: LibraryItem) => {
     if (!item.data || item.data.includes('data:image/svg+xml')) return;
     if (!DIALOG_PAGE_ENABLED) {
@@ -4174,28 +3992,6 @@ const MainApp: React.FC = () => {
     setStep(AppStep.T_PATTERN);
     setIsSidebarOpen(false);
   };
-  const sendLibraryItemToGenerate3DImage = (item: LibraryItem) => {
-    if (!item.data || item.data.includes('data:image/svg+xml')) return;
-    setGenerate3DMode('image');
-    setGenerate3DImageMode('single');
-    setGenerate3DImage(item.data);
-    setGenerate3DMultiViewImages({});
-    setMode(AppMode.GENERATE_3D);
-    setGenerate3DModule('pro');
-    setIsSidebarOpen(false);
-  };
-  const sendLibraryItemToGenerate3DModel = (item: LibraryItem) => {
-    const url = item.modelUrls?.[0];
-    if (!url) return;
-    setMode(AppMode.GENERATE_3D);
-    setIsSidebarOpen(false);
-    setTopologyFileUrl(url);
-    setTextureModelUrl(url);
-    setComponentFileUrl(url);
-    setUvFileUrl(url);
-    setConvertFileUrl(url);
-    setGenerate3DModule('topology');
-  };
 
   const LibraryCard: React.FC<{
     items: LibraryItem[];
@@ -4204,9 +4000,7 @@ const MainApp: React.FC = () => {
     onDelete: (groupId: string) => void;
     onSendToDialog?: (item: LibraryItem) => void;
     onSendToTexture?: (item: LibraryItem) => void;
-    onSendToGenerate3DImage?: (item: LibraryItem) => void;
-    onSendToGenerate3DModel?: (item: LibraryItem) => void;
-  }> = ({ items, isSelected, onToggleSelect, onDelete, onSendToDialog, onSendToTexture, onSendToGenerate3DImage, onSendToGenerate3DModel }) => {
+  }> = ({ items, isSelected, onToggleSelect, onDelete, onSendToDialog, onSendToTexture }) => {
     const [activeIdx, setActiveIdx] = useState(0);
     const activeItem = items[activeIdx];
     const groupId = items[0].groupId;
@@ -4239,8 +4033,6 @@ const MainApp: React.FC = () => {
               <div className="flex flex-wrap gap-1.5">
                 {hasImage && onSendToDialog && <button onClick={() => onSendToDialog(activeItem)} className="py-1.5 px-2.5 rounded-lg bg-[#1e3558] border border-[#3b6fb8] text-[8px] font-black uppercase hover:bg-[#3868a8] text-blue-300">继续编辑</button>}
                 {hasImage && onSendToTexture && <button onClick={() => onSendToTexture(activeItem)} className="py-1.5 px-2.5 rounded-lg bg-[#312e5c] border border-[#6366f1] text-[8px] font-black uppercase hover:bg-[#3d3a70] text-indigo-300">贴图</button>}
-                {hasImage && onSendToGenerate3DImage && <button onClick={() => onSendToGenerate3DImage(activeItem)} className="py-1.5 px-2.5 rounded-lg bg-[#3d2a10] border border-[#d97706] text-[8px] font-black uppercase hover:bg-[#b45309] text-amber-300">生成3D</button>}
-                {has3DModelUrl && onSendToGenerate3DModel && <button onClick={() => onSendToGenerate3DModel(activeItem)} className="py-1.5 px-2.5 rounded-lg bg-[#14532d] border border-[#34d399] text-[8px] font-black uppercase hover:bg-[#166534] text-emerald-300">生成3D 中使用</button>}
               </div>
             </div>
           )}
@@ -4748,9 +4540,6 @@ const MainApp: React.FC = () => {
 
           {experimentalNavExpanded && (
             <div className="mt-2 flex flex-col gap-2 pt-2">
-              <SidebarIconButton active={mode === AppMode.GENERATE_3D} label="生成3D" onClick={() => { setMode(AppMode.GENERATE_3D); setIsSidebarOpen(false); }}>
-                <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><path d="M10 2.8 16 6v8l-6 3.2L4 14V6l6-3.2Z" stroke="currentColor" strokeWidth="1.6"/><path d="M4 6l6 3.1L16 6M10 9.1V17" stroke="currentColor" strokeWidth="1.4"/></svg>
-              </SidebarIconButton>
               <SidebarIconButton active={mode === AppMode.TEXTURE} label="提取花纹" onClick={() => { setMode(AppMode.TEXTURE); setStep(AppStep.T_PATTERN); setIsSidebarOpen(false); }}>
                 <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" aria-hidden><rect x="3.5" y="4" width="13" height="12" rx="1.8" stroke="currentColor" strokeWidth="1.6"/><path d="M6 12l2.2-2.2 2.2 2.2 1.8-1.8L14 12" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
               </SidebarIconButton>
@@ -5285,354 +5074,6 @@ const MainApp: React.FC = () => {
                   dialogModel={dialogModel}
                 />
               </Suspense>
-            )}
-
-            {mode === AppMode.GENERATE_3D && (
-              <div className="flex h-[calc(100dvh-6rem)] gap-4 lg:gap-6 animate-in fade-in overflow-hidden">
-                <div className="w-80 lg:w-96 shrink-0 flex flex-col gap-4 overflow-y-auto no-scrollbar pr-2">
-                <div className="px-2 py-1.5 rounded-xl bg-[#3a3018] border border-[#b45309] text-[9px] font-black uppercase text-amber-400">生成3D · 腾讯云混元</div>
-                <div className="glass rounded-2xl p-4 lg:p-6 ring-1 ring-white/[0.06] bg-[#16161a]">
-                  {!creds3D ? (
-                    <div className="space-y-4 py-8">
-                      <h3 className="text-[10px] font-black text-amber-400 uppercase">配置腾讯云凭证</h3>
-                      <p className="text-[11px] text-gray-400">混元生 3D 走腾讯云 API，默认经<strong className="text-gray-300">本地代理</strong>转发（密钥不落浏览器）。请在仓库根目录 <code className="bg-[#26262c] px-1 rounded">.env.local</code> 填写 <code className="bg-[#26262c] px-1 rounded">TENCENT_SECRET_ID</code> / <code className="bg-[#26262c] px-1 rounded">TENCENT_SECRET_KEY</code>，启动 <code className="bg-[#26262c] px-1 rounded">npm run proxy</code>，并配置 <code className="bg-[#26262c] px-1 rounded">VITE_TENCENT_PROXY</code> 指向代理地址。</p>
-                      {unsafeTencentBrowserCredsEnabled ? (
-                        <>
-                          <div className="rounded-xl border border-[#b45309] bg-[#2c2412] px-3 py-2 text-[9px] text-amber-300">当前已显式开启不安全模式：浏览器可临时直持腾讯云密钥。仅建议本地排障使用，勿用于生产环境。</div>
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <input value={generate3DCredsOverride?.secretId ?? ''} onChange={e => setGenerate3DCredsOverride(p => ({ secretId: e.target.value.trim(), secretKey: p?.secretKey ?? '' }))} placeholder="SecretId" className="bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-4 py-3 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50" />
-                            <input type="password" value={generate3DCredsOverride?.secretKey ?? ''} onChange={e => setGenerate3DCredsOverride(p => ({ secretId: p?.secretId ?? '', secretKey: e.target.value }))} placeholder="SecretKey" className="bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-4 py-3 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50" />
-                          </div>
-                        </>
-                      ) : (
-                        <div className="rounded-xl ring-1 ring-white/[0.06] bg-[#1c1c22] px-3 py-2 text-[9px] text-gray-400">
-                          如确需在浏览器直接调试，可在本地临时设置 <code className="bg-[#26262c] px-1 rounded">VITE_ALLOW_UNSAFE_TENCENT_BROWSER_CREDS=true</code> 后刷新页面，再手动输入凭证。
-                        </div>
-                      )}
-                      <p className="text-[9px] text-gray-500">密钥在 <a href="https://console.cloud.tencent.com/cam/capi" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">腾讯云 API 密钥</a> 创建；混元生3D 需开通 <a href="https://cloud.tencent.com/document/product/1804" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">产品页</a>。</p>
-                    </div>
-                  ) : (
-                    <>
-                      {/* 按已上线 API 分模块：8 个模块选择 */}
-                      <div className="mb-4">
-                        <div className="text-[9px] font-black text-gray-500 uppercase mb-2">选择能力（各模块需可访问的模型 URL 时，可从资产库复制直链）</div>
-                        <div className="space-y-1.5 max-h-48 overflow-y-auto no-scrollbar">
-                          {GENERATE_3D_MODULES.map((m) => (
-                            <button
-                              key={m.id}
-                              onClick={() => setGenerate3DModule(m.id)}
-                              className={`w-full text-left px-3 py-2.5 rounded-xl border transition-colors ${generate3DModule === m.id ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300' : 'bg-white/[0.05] ring-1 ring-white/[0.06] text-gray-400 hover:bg-white/[0.09] hover:text-white border-transparent'}`}
-                            >
-                              <div className="text-[10px] font-black">{m.name}</div>
-                              <div className="text-[9px] text-gray-500 mt-0.5">{m.desc}</div>
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-
-                      {/* 当前模块表单 */}
-                      <div className="glass rounded-2xl p-4 ring-1 ring-white/[0.06] bg-[#141416]">
-                        {generate3DModule === 'pro' && (
-                          <>
-                            <p className="text-[9px] text-gray-500 mb-3">文生或图生（单张参考图 / 多视角 2～8 张）；下方「类型」切换带纹理、白模、草图、智能拓扑；多视角张数上限随版本变化。</p>
-                            <div className="flex gap-2 mb-3">
-                              <button onClick={() => setGenerate3DMode('text')} className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${generate3DMode === 'text' ? 'bg-blue-600 border-blue-500' : 'bg-white/[0.05] ring-1 ring-white/[0.06] text-gray-500 border-transparent'}`}>文生3D</button>
-                              <button onClick={() => setGenerate3DMode('image')} className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${generate3DMode === 'image' ? 'bg-blue-600 border-blue-500' : 'bg-white/[0.05] ring-1 ring-white/[0.06] text-gray-500 border-transparent'}`}>图生3D</button>
-                            </div>
-                            {generate3DMode === 'text' ? (
-                              <textarea value={generate3DPrompt} onChange={e => setGenerate3DPrompt(e.target.value)} placeholder="用自然语言写清主体、风格、材质与姿态，例如：低多边形风格的机械狐狸，站立，金属与橙色漆面…" rows={3} className="w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 resize-none mb-3" />
-                            ) : (
-                              <>
-                                <div className="flex gap-2 mb-3">
-                                  <button onClick={() => { setGenerate3DImageMode('single'); setGenerate3DMultiViewImages({}); }} className={`flex-1 py-2 rounded-xl text-[9px] font-black uppercase border ${generate3DImageMode === 'single' ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300' : 'bg-white/[0.05] ring-1 ring-white/[0.06] text-gray-500 border-transparent'}`}>单图生成</button>
-                                  <button onClick={() => { setGenerate3DImageMode('multi'); setGenerate3DImage(null); }} className={`flex-1 py-2 rounded-xl text-[9px] font-black uppercase border ${generate3DImageMode === 'multi' ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300' : 'bg-white/[0.05] ring-1 ring-white/[0.06] text-gray-500 border-transparent'}`}>多图生成</button>
-                                </div>
-                                {generate3DImageMode === 'single' ? (
-                                  <div className="mb-3">
-                                    {!generate3DImage ? (
-                                      <label className="block h-20 border-2 border-dashed border-white/[0.12] rounded-xl flex items-center justify-center cursor-pointer hover:bg-[#222228] text-[9px] text-gray-500 text-center px-2">点击上传单张参考图（JPEG / PNG / WebP）<input type="file" className="hidden" accept="image/jpeg,image/png,image/webp" onChange={e => { const f = e.target.files?.[0]; if (f) { const r = new FileReader(); r.onload = () => setGenerate3DImage(r.result as string); r.readAsDataURL(f); } }} /></label>
-                                    ) : (
-                                      <div className="relative inline-block">
-                                        <ProgressivePreviewImage
-                                          fullSrc={generate3DImage}
-                                          cacheKey={`g3d-ref:${generate3DImage.slice(0, 64)}`}
-                                          thumbMaxEdge={160}
-                                          className="relative inline-block"
-                                          imgClassName="max-h-20 rounded-xl ring-1 ring-white/[0.06]"
-                                          alt="参考"
-                                        />
-                                        <button onClick={() => setGenerate3DImage(null)} className="absolute top-1 right-1 w-5 h-5 bg-red-500 rounded text-white text-xs">×</button>
-                                      </div>
-                                    )}
-                                  </div>
-                                ) : (
-                                  <div className="mb-3 py-2 rounded-xl ring-1 ring-white/[0.06] bg-[#16161a]">
-                                    <MultiViewUpload images={generate3DMultiViewImages} onChange={setGenerate3DMultiViewImages} minCount={2} maxViews={generate3DModel === '3.1' ? 8 : 6} />
-                                  </div>
-                                )}
-                              </>
-                            )}
-                            <div className="grid grid-cols-2 gap-2 mb-3">
-                              <div><label className="block text-[8px] text-gray-500 uppercase mb-1">版本</label><DropdownSelect compact options={[{ value: '3.0', label: '3.0（多视角≤6）' }, { value: '3.1', label: '3.1（多视角≤8）' }]} value={generate3DModel} onChange={v => setGenerate3DModel(v as '3.0' | '3.1')} /></div>
-                              <div><label className="block text-[8px] text-gray-500 uppercase mb-1">类型</label><DropdownSelect compact options={[{ value: 'Normal', label: '带纹理' }, { value: 'LowPoly', label: '智能拓扑' }, { value: 'Geometry', label: '白模' }, { value: 'Sketch', label: '草图' }]} value={generate3DType} onChange={v => setGenerate3DType(v as typeof generate3DType)} /></div>
-                              <div><label className="block text-[8px] text-gray-500 uppercase mb-1" title="目标三角面数量，越大细节越多、耗时与费用通常越高">面数</label><input type="number" min={3000} max={1500000} step={10000} value={generate3DFaceCount} onChange={e => setGenerate3DFaceCount(Number(e.target.value) || 100000)} className="w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-lg px-2 py-1.5 text-[10px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50" /></div>
-                              {generate3DType === 'LowPoly' && <div><label className="block text-[8px] text-gray-500 uppercase mb-1">多边形</label><DropdownSelect compact options={[{ value: 'triangle', label: '三角' }, { value: 'quadrilateral', label: '四边' }]} value={generate3DPolygonType} onChange={v => setGenerate3DPolygonType(v as 'triangle' | 'quadrilateral')} /></div>}
-                              <div><label className="block text-[8px] text-gray-500 uppercase mb-1">格式</label><DropdownSelect compact options={[{ value: '', label: 'OBJ+GLB' }, { value: 'FBX', label: 'FBX' }, { value: 'STL', label: 'STL' }, { value: 'USDZ', label: 'USDZ' }]} value={generate3DResultFormat} onChange={v => setGenerate3DResultFormat(v as '' | 'FBX' | 'STL' | 'USDZ')} /></div>
-                              <div className="flex items-end"><label className="flex items-center gap-1.5 cursor-pointer text-[10px]" title="在接口支持时输出 PBR 工作流材质"><input type="checkbox" checked={generate3DEnablePBR} onChange={e => setGenerate3DEnablePBR(e.target.checked)} className="rounded" />PBR</label></div>
-                            </div>
-                            <button
-                              onClick={handleGenerate3D}
-                              disabled={!creds3D || (generate3DMode === 'text' ? !generate3DPrompt.trim() : generate3DImageMode === 'single' ? !generate3DImage : PRO_VIEW_IDS.filter(id => generate3DMultiViewImages[id]).length < 2)}
-                              className="w-full py-2.5 bg-blue-600 rounded-xl text-[10px] font-black uppercase electric-glow disabled:opacity-40"
-                            >
-                              加入生成队列
-                            </button>
-                          </>
-                        )}
-                        {generate3DModule === 'rapid' && (
-                          <>
-                            <p className="text-[9px] text-gray-500 mb-3">与专业版相比参数更少；文案与参考图<strong className="text-gray-400">二选一</strong>即可，约 90 秒内返回模型。</p>
-                            <textarea value={rapidPrompt} onChange={e => setRapidPrompt(e.target.value)} placeholder="仅文生时在此填写描述；若已上传右侧图片可留空" rows={2} className="w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 resize-none mb-3" />
-                            <div className="flex gap-2 mb-3">
-                              {!rapidImage ? <label className="flex-1 h-14 border border-dashed border-white/[0.12] rounded-xl flex items-center justify-center cursor-pointer text-[9px] text-gray-500">上传图片<input type="file" className="hidden" accept="image/*" onChange={e => { const f = e.target.files?.[0]; if (f) { const r = new FileReader(); r.onload = () => setRapidImage(r.result as string); r.readAsDataURL(f); } }} /></label> : <div className="relative flex-1"><ProgressivePreviewImage fullSrc={rapidImage} cacheKey={`rapid:${rapidImage.slice(0, 64)}`} thumbMaxEdge={112} className="relative h-14 w-full" imgClassName="h-14 w-full object-cover rounded-xl ring-1 ring-white/[0.06]" alt="" /><button type="button" onClick={() => setRapidImage(null)} className="absolute top-0 right-0 w-5 h-5 bg-red-500 rounded text-white text-xs">×</button></div>}
-                              <div className="w-24 shrink-0"><DropdownSelect compact options={[{ value: 'FBX', label: 'FBX' }, { value: 'OBJ', label: 'OBJ' }, { value: 'GLB', label: 'GLB' }, { value: 'STL', label: 'STL' }, { value: 'USDZ', label: 'USDZ' }, { value: 'MP4', label: 'MP4' }]} value={rapidResultFormat} onChange={setRapidResultFormat} /></div>
-                            </div>
-                            <label className="flex items-center gap-2 text-[10px] mb-3" title="在接口支持时输出 PBR 材质"><input type="checkbox" checked={rapidEnablePBR} onChange={e => setRapidEnablePBR(e.target.checked)} className="rounded" />PBR</label>
-                            <button onClick={handleRapid3D} disabled={!rapidPrompt.trim() && !rapidImage} className="w-full py-2.5 bg-indigo-600 rounded-xl text-[10px] font-black uppercase disabled:opacity-40">加入生成队列</button>
-                          </>
-                        )}
-                        {generate3DModule === 'topology' && (
-                          <>
-                            <p className="text-[9px] text-gray-500 mb-3">Polygon 1.5：粘贴<strong className="text-gray-400">可直连下载</strong>的高模 URL（GLB/FBX 等），得到面数更低、布线更规整的模型。</p>
-                            <input value={topologyFileUrl} onChange={e => setTopologyFileUrl(e.target.value)} placeholder="https://… 高模直链（需腾讯云侧可拉取）" className="w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 mb-3" />
-                            <button onClick={handleTopology3D} disabled={!topologyFileUrl.trim()} className="w-full py-2.5 bg-indigo-600 rounded-xl text-[10px] font-black uppercase disabled:opacity-40">加入生成队列</button>
-                          </>
-                        )}
-                        {generate3DModule === 'texture' && (
-                          <>
-                            <p className="text-[9px] text-gray-500 mb-3">白模或单材质几何体 URL 为必填；<strong className="text-gray-400">参考图与文案二选一</strong>，用于约束纹理风格与细节。</p>
-                            <input value={textureModelUrl} onChange={e => setTextureModelUrl(e.target.value)} placeholder="单几何模型直链 URL（必填）" className="w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 mb-2" />
-                            <textarea value={texturePrompt} onChange={e => setTexturePrompt(e.target.value)} placeholder="不写则请上传参考图；可写材质、颜色、磨损等关键词" rows={1} className="w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 resize-none mb-2" />
-                            <div className="mb-3">{!textureRefImage ? <label className="block h-14 border border-dashed border-white/[0.12] rounded-xl flex items-center justify-center cursor-pointer text-[9px] text-gray-500">上传参考图（与描述二选一）<input type="file" className="hidden" accept="image/*" onChange={e => { const f = e.target.files?.[0]; if (f) { const r = new FileReader(); r.onload = () => setTextureRefImage(r.result as string); r.readAsDataURL(f); } }} /></label> : <div className="relative inline-block"><ProgressivePreviewImage fullSrc={textureRefImage} cacheKey={`texref:${textureRefImage.slice(0, 64)}`} thumbMaxEdge={112} className="relative inline-block" imgClassName="max-h-14 rounded-xl ring-1 ring-white/[0.06]" alt="" /><button onClick={() => setTextureRefImage(null)} className="absolute top-1 right-1 w-5 h-5 bg-red-500 rounded text-white text-xs">×</button></div>}</div>
-                            <button onClick={handleTexture3D} disabled={!textureModelUrl.trim() || (!texturePrompt.trim() && !textureRefImage)} className="w-full py-2.5 bg-indigo-600 rounded-xl text-[10px] font-black uppercase disabled:opacity-40">加入生成队列</button>
-                          </>
-                        )}
-                        {generate3DModule === 'component' && (
-                          <>
-                            <p className="text-[9px] text-gray-500 mb-3">整模直链；接口将尝试<strong className="text-gray-400">拆件与结构化</strong>，便于游戏/交互里复用子部件。</p>
-                            <input value={componentFileUrl} onChange={e => setComponentFileUrl(e.target.value)} placeholder="3D 模型 URL（建议 FBX，≤100MB）" className="w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 mb-3" />
-                            <button onClick={handleComponent3D} disabled={!componentFileUrl.trim()} className="w-full py-2.5 bg-indigo-600 rounded-xl text-[10px] font-black uppercase disabled:opacity-40">加入生成队列</button>
-                          </>
-                        )}
-                        {generate3DModule === 'uv' && (
-                          <>
-                            <p className="text-[9px] text-gray-500 mb-3">为已有模型自动展 UV，便于在 DCC 或引擎里绘制贴图。</p>
-                            <input value={uvFileUrl} onChange={e => setUvFileUrl(e.target.value)} placeholder="GLB / FBX 等模型直链 URL" className="w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 mb-3" />
-                            <button onClick={handleUV3D} disabled={!uvFileUrl.trim()} className="w-full py-2.5 bg-indigo-600 rounded-xl text-[10px] font-black uppercase disabled:opacity-40">加入生成队列</button>
-                          </>
-                        )}
-                        {generate3DModule === 'profile' && (
-                          <>
-                            <p className="text-[9px] text-gray-500 mb-3">上传<strong className="text-gray-400">清晰正脸</strong>头像，按腾讯云模板生成可绑定的 3D 角色形象。</p>
-                            {!profileImage ? (
-                              <label className="block h-24 border-2 border-dashed border-white/[0.12] rounded-xl flex items-center justify-center cursor-pointer hover:bg-[#222228] text-[9px] text-gray-500 mb-3">点击上传人物头像<input type="file" className="hidden" accept="image/*" onChange={e => { const f = e.target.files?.[0]; if (f) { const r = new FileReader(); r.onload = () => setProfileImage(r.result as string); r.readAsDataURL(f); } }} /></label>
-                            ) : (
-                              <div className="relative inline-block mb-3">
-                                <ProgressivePreviewImage
-                                  fullSrc={profileImage}
-                                  cacheKey={`profile:${profileImage.slice(0, 64)}`}
-                                  thumbMaxEdge={192}
-                                  className="relative inline-block"
-                                  imgClassName="max-h-24 rounded-xl ring-1 ring-white/[0.06]"
-                                  alt="头像"
-                                />
-                                <button onClick={() => setProfileImage(null)} className="absolute top-1 right-1 w-6 h-6 bg-red-500 rounded text-white text-xs">×</button>
-                              </div>
-                            )}
-                            <button onClick={handleProfile3D} disabled={!profileImage} className="w-full py-2.5 bg-indigo-600 rounded-xl text-[10px] font-black uppercase disabled:opacity-40">加入生成队列</button>
-                          </>
-                        )}
-                        {generate3DModule === 'convert' && (
-                          <>
-                            <p className="text-[9px] text-gray-500 mb-3">同一模型的可访问直链，转换为下方所选目标格式（不改变创意，仅换容器）。</p>
-                            <input value={convertFileUrl} onChange={e => setConvertFileUrl(e.target.value)} placeholder="fbx / obj / glb 等源文件直链 URL" className="w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 mb-2" />
-                            <div className="mb-3"><DropdownSelect compact options={[{ value: 'STL', label: 'STL' }, { value: 'USDZ', label: 'USDZ' }, { value: 'FBX', label: 'FBX' }, { value: 'MP4', label: 'MP4' }, { value: 'GIF', label: 'GIF' }]} value={convertFormat} onChange={setConvertFormat} /></div>
-                            <button onClick={handleConvert3D} disabled={!convertFileUrl.trim()} className="w-full py-2.5 bg-indigo-600 rounded-xl text-[10px] font-black uppercase disabled:opacity-40">加入转换队列</button>
-                          </>
-                        )}
-                      </div>
-                    </>
-                  )}
-                </div>
-
-                </div>
-
-                {/* 中间：3D 预览常驻 */}
-                <div className="flex-1 min-w-0 flex flex-col rounded-2xl ring-1 ring-white/[0.06] bg-[#1a1a1e] overflow-hidden">
-                  <div className="px-3 py-2 text-[9px] font-black uppercase text-gray-500 border-b border-white/[0.06]">3D 预览 · OBJ / GLB；完成后自动展示，可在右侧「临时库」切换条目</div>
-                  <div className="flex-1 min-h-[280px] relative">
-                    {generate3DPreview ? (
-                    <Suspense fallback={<LazySectionFallback label="3D预览" />}>
-                      <UnifiedModelViewer3D url={generate3DPreview.url} format={generate3DPreview.format} />
-                    </Suspense>
-                    ) : (
-                      <div className="absolute inset-0 flex items-center justify-center text-gray-500 text-[11px] text-center px-6">暂无预览：完成一次生成后会自动加载；若已有结果，点击右侧「临时库」中的条目即可切换</div>
-                    )}
-                  </div>
-                </div>
-
-                {/* 右侧：临时库 */}
-                <div className="w-64 lg:w-72 shrink-0 flex flex-col rounded-2xl ring-1 ring-white/[0.06] bg-[#16161a] overflow-hidden">
-                  <div className="px-3 py-2 border-b border-white/[0.06] flex items-center justify-between">
-                    <span className="text-[9px] font-black uppercase text-blue-400">临时库</span>
-                    <span className="text-[9px] text-gray-500">队列 {generate3DQueue.length}（{generate3DQueue.filter(q => q.status === 'running').length} 运行中）</span>
-                  </div>
-                  <div className="flex-1 overflow-y-auto no-scrollbar p-2 space-y-2">
-                    <div className="rounded-xl ring-1 ring-violet-500/25 bg-violet-950/20 p-2 space-y-2">
-                      <div className="text-[8px] font-black uppercase text-violet-300/95">Tripo 旧任务</div>
-                      <p className="text-[8px] text-gray-500 leading-relaxed">
-                        粘贴 <span className="font-mono text-gray-400">tripoTaskId</span> 查询 Tripo；若任务已成功，将把模型直链加入下方临时库（与「下载模型」同一批链接）。
-                      </p>
-                      <div className="flex flex-col gap-1.5">
-                        <input
-                          type="text"
-                          value={tripoRecoverTaskIdInput}
-                          onChange={(e) => setTripoRecoverTaskIdInput(e.target.value)}
-                          placeholder="tripoTaskId"
-                          disabled={tripoRecoverBusy}
-                          className="w-full bg-white/[0.05] ring-1 ring-white/[0.08] rounded-lg px-2 py-1.5 text-[10px] font-mono text-gray-200 outline-none focus-visible:ring-2 focus-visible:ring-violet-500/45 disabled:opacity-50"
-                        />
-                        <button
-                          type="button"
-                          disabled={tripoRecoverBusy || !tripoRecoverTaskIdInput.trim()}
-                          onClick={() => void handleImportTripoTaskById()}
-                          className="w-full py-1.5 rounded-lg bg-violet-700/90 text-[9px] font-black uppercase text-white hover:bg-violet-600 disabled:opacity-40 disabled:cursor-not-allowed"
-                        >
-                          {tripoRecoverBusy ? '查询中…' : '查询并加入临时库'}
-                        </button>
-                      </div>
-                      {tripoRecoverErr ? (
-                        <p className="text-[8px] text-rose-300/95 whitespace-pre-wrap break-words">{tripoRecoverErr}</p>
-                      ) : null}
-                    </div>
-                    {generate3DQueue.length > 0 && (
-                      <div className="rounded-xl ring-1 ring-white/[0.06] bg-[#1c1c22] p-2 space-y-2">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[8px] font-black uppercase text-gray-400">任务队列</span>
-                          <div className="flex items-center gap-2">
-                            <span className="text-[8px] text-gray-500">{generate3DQueue.filter(q => q.status === 'pending' || q.status === 'running').length} 活跃</span>
-                            {generate3DQueue.some(q => q.status !== 'pending' && q.status !== 'running') && (
-                              <button
-                                onClick={clearInactiveQueueItems}
-                                className="px-1.5 py-1 rounded-md ring-1 ring-white/[0.06] text-[8px] font-black uppercase text-gray-400 hover:bg-[#2e2e36]"
-                              >
-                                清理
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                        <div className="space-y-2">
-                          {[...generate3DQueue].reverse().slice(0, 8).map((item) => {
-                            const statusText = item.status === 'pending'
-                              ? '等待中'
-                              : item.status === 'running'
-                                ? '运行中'
-                                : item.status === 'done'
-                                  ? '已完成'
-                                  : item.status === 'cancelled'
-                                    ? '已取消'
-                                    : '失败';
-                            const statusClass = item.status === 'running'
-                              ? 'bg-[#1e3a5f] text-blue-300 border-[#4b6a9e]'
-                              : item.status === 'pending'
-                                ? 'bg-[#3a3018] text-amber-300 border-[#b45309]'
-                                : item.status === 'done'
-                                  ? 'bg-[#0f3320] text-emerald-300 border-[#34d399]'
-                                  : item.status === 'cancelled'
-                                    ? 'bg-[#3a3a40] text-gray-300 border-gray-500/30'
-                                    : 'bg-[#4a2228] text-red-300 border-[#dc6b6b]';
-                            return (
-                              <div key={item.id} className="rounded-xl ring-1 ring-white/[0.06] bg-[#141416] p-2">
-                                <div className="flex items-start justify-between gap-2">
-                                  <div className="min-w-0">
-                                    <div className="text-[10px] font-black truncate">{item.label || item.type}</div>
-                                    <div className="text-[8px] text-gray-500 uppercase mt-1">{item.type}</div>
-                                  </div>
-                                  <span className={`shrink-0 px-1.5 py-0.5 rounded-md border text-[8px] font-black uppercase ${statusClass}`}>{statusText}</span>
-                                </div>
-                                {typeof item.progress === 'number' && item.status === 'running' && (
-                                  <div className="mt-2">
-                                    <div className="h-1.5 rounded-full bg-[#26262c] overflow-hidden">
-                                      <div className="h-full bg-blue-500" style={{ width: `${Math.max(0, Math.min(100, item.progress))}%` }} />
-                                    </div>
-                                  </div>
-                                )}
-                                {item.error && (
-                                  <div className="mt-2 text-[8px] text-gray-400 line-clamp-2">{item.error}</div>
-                                )}
-                                <div className="mt-2 flex gap-2">
-                                  {(item.status === 'pending' || item.status === 'running') && (
-                                    <button
-                                      onClick={() => cancelQueueItem(item.id)}
-                                      className="flex-1 py-1.5 rounded-lg border border-[#dc6b6b] bg-[#3a1818] text-[9px] font-black uppercase text-red-300 hover:bg-[#4a2228]"
-                                    >
-                                      取消任务
-                                    </button>
-                                  )}
-                                  {(item.status === 'fail' || item.status === 'cancelled') && (
-                                    <button
-                                      onClick={() => retryQueueItem(item.id)}
-                                      className="flex-1 py-1.5 rounded-lg border border-[#4b6a9e] bg-[#1a3354] text-[9px] font-black uppercase text-blue-300 hover:bg-[#1e3a5f]"
-                                    >
-                                      重试
-                                    </button>
-                                  )}
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
-                    {temp3DLibrary.length === 0 ? (
-                      <div className="text-[10px] text-gray-500 py-6 text-center">生成的 3D 资产会出现在这里<br />点击项切换预览，可保存到资产库</div>
-                    ) : (
-                      temp3DLibrary.map((item) => (
-                        <div
-                          key={item.id}
-                          onClick={() => setSelectedTemp3DId(item.id)}
-                          className={`rounded-xl border overflow-hidden cursor-pointer transition-colors ${selectedTemp3DId === item.id ? 'border-blue-500 bg-[#1a3354]' : 'ring-1 ring-white/[0.06] bg-white/[0.05] hover:bg-white/[0.09] border-transparent'}`}
-                        >
-                          <div className="aspect-square relative">
-                            {item.previewImageUrl ? (
-                              <ProgressivePreviewImage
-                                fullSrc={item.previewImageUrl}
-                                cacheKey={`temp3d-prev:${item.id}`}
-                                thumbMaxEdge={512}
-                                className="w-full h-full"
-                                imgClassName="w-full h-full object-cover"
-                                alt=""
-                              />
-                            ) : (
-                              <div className="w-full h-full flex items-center justify-center text-gray-600 text-[10px]">无预览图</div>
-                            )}
-                            <span className="absolute bottom-1 left-1 px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-[#0d0d10] text-gray-300">
-                              {item.source === 'tripo_recover' ? 'TRIPO' : item.source}
-                            </span>
-                          </div>
-                          <div className="p-2">
-                            <div className="text-[10px] font-black truncate">{item.label}</div>
-                            <div className="flex flex-wrap gap-1 mt-1">
-                              {item.files.map((f, i) => f.Url && <a key={i} href={f.Url} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} className="text-[8px] text-blue-400 hover:underline">{f.Type || '下载'}</a>)}
-                            </div>
-                            <button onClick={e => { e.stopPropagation(); handleSave3DToLibrary(item); }} className="mt-2 w-full py-1.5 rounded-lg bg-[#1e40af] text-[9px] font-black uppercase hover:bg-blue-600">保存到资产库</button>
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
-              </div>
             )}
 
             {DIALOG_PAGE_ENABLED && mode === AppMode.DIALOG && (
@@ -6688,8 +6129,8 @@ const MainApp: React.FC = () => {
                        <p className="text-[11px] font-black uppercase tracking-widest text-gray-500 mb-2">暂无资产</p>
                        <p className="text-[10px] text-gray-600 max-w-sm">
                          {DIALOG_PAGE_ENABLED
-                           ? '可点击左侧「上传图片」、或从「对话」「生成3D」保存到资产库。'
-                           : '可点击左侧「上传图片」、或从「生成3D」保存到资产库。'}
+                           ? '可点击左侧「上传图片」、或从「对话」、工作流生成结果保存到资产库。'
+                           : '可点击左侧「上传图片」、或从工作流生成结果保存到资产库。'}
                        </p>
                      </div>
                    ) : (
@@ -6706,8 +6147,6 @@ const MainApp: React.FC = () => {
                            onDelete={handleLibDeleteGroup}
                            onSendToDialog={DIALOG_PAGE_ENABLED ? sendLibraryItemToDialog : undefined}
                            onSendToTexture={sendLibraryItemToTexture}
-                           onSendToGenerate3DImage={sendLibraryItemToGenerate3DImage}
-                           onSendToGenerate3DModel={sendLibraryItemToGenerate3DModel}
                          />
                        ))}
                      </div>

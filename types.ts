@@ -513,11 +513,15 @@ export type WorkflowAsset = {
       /** 资产卡片/步骤条等展示用短标签（如大图局部重绘写入「局部重绘」） */
       displayStepLabel?: string;
       /** 结果槽位媒体类型；生视频步骤写入 `video` 以便网格用 `<video>` 预览 */
-      mediaKind?: 'image' | 'video';
+      mediaKind?: 'image' | 'video' | 'model3d';
       /** 生成3D（Tripo）任务 id：写入本步 resultMeta 并随工作区持久化；大图「拉取模型」与继续查询均依赖此字段，请勿手动清空 */
       tripoTaskId?: string;
+      /** 生成3D（腾讯混元）任务 JobId；续查与落盘追溯用 */
+      tencentJobId?: string;
       /** 最近一次 Tripo 查询/落盘失败信息（可选） */
       tripoLastError?: string;
+      /** 最近一次腾讯混元任务失败信息（可选） */
+      tencentLastError?: string;
       /** 入队时选用的能力/预设基 id（与步骤键基 id 一致），供详情面板解析预设名称 */
       presetActionIdSnapshot?: string;
       /** 入队时「微调覆写」输入框原文（可与理解后提示词对照） */
@@ -632,7 +636,7 @@ export const CAPABILITY_CATEGORIES = [
   { id: 'text_to_image', label: '文生图', desc: '文字入 → 图片出（拖文字卡）' },
   { id: 'image_to_image', label: '图生图', desc: '图片入 → 图片出（拖图片卡；可选内置处理或生图模型）' },
   { id: 'image_to_text', label: '图生文', desc: '图片入 → 文字出（拖图片卡）' },
-  { id: 'generate_3d', label: '生成3D', desc: '工作流中拖图到该能力即按预设提交 3D 任务（支持 Tripo）' },
+  { id: 'generate_3d', label: '生成3D', desc: '工作流中拖图到该能力即按预设提交 3D 任务（支持 Tripo / 腾讯混元）' },
   {
     id: 'generate_video',
     label: '生成视频',
@@ -682,7 +686,7 @@ export type Generate3DPreset = {
   tripoTextureAlignment?: 'original_image' | 'geometry';
   /** Tripo 图生3D可选：模型朝向 */
   tripoOrientation?: 'default' | 'align_image';
-  /** 专业版 | 极速版 */
+  /** 专业版 | 极速版（腾讯混元）；Tripo 忽略此字段 */
   module: 'pro' | 'rapid';
   /** 图生3D 时可留空；文生3D 用 instruction，能力里主要用图生 */
   prompt?: string;
@@ -691,6 +695,9 @@ export type Generate3DPreset = {
   enablePBR?: boolean;
   faceCount?: number;
   generateType?: 'Normal' | 'LowPoly' | 'Geometry' | 'Sketch';
+  /** LowPoly 时：triangle | quadrilateral */
+  polygonType?: 'triangle' | 'quadrilateral';
+  /** 专业版：STL | USDZ | FBX（单格式）；默认 obj+glb。极速版：OBJ/GLB/STL/USDZ/FBX/MP4 */
   resultFormat?: string;
 };
 

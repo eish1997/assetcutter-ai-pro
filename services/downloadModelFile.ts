@@ -1,5 +1,6 @@
 import { fetchCompanionAssetBlob } from './companionClient/storage';
 import { normalizeCompanionBaseUrl } from './companionLocalPrefs';
+import { resolveTripoProxyBase } from './tripoService';
 import { fetchWorkflowModelFromCompanionAsObjectUrl } from './workflowCompanionAssets';
 
 function triggerBlobDownload(blob: Blob, filename: string): void {
@@ -49,7 +50,7 @@ function buildDownloadFilename(hint: string | undefined, url: string, mime: stri
 }
 
 async function fetchTripoFileBlob(apiKey: string, url: string): Promise<Blob> {
-  const r = await fetch('/api/tripo/fetch-file', {
+  const r = await fetch(`${resolveTripoProxyBase()}/fetch-file`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ apiKey, url }),

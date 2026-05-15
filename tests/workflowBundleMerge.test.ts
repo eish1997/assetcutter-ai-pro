@@ -269,4 +269,28 @@ describe('mergeWorkflowProjectBundles', () => {
     expect(merged.assets[0].resultMeta?.generate_3d?.tripoTaskId).toBe('tripo-2');
     expect(merged.assets[0].stepModelUrls?.generate_3d).toEqual(['blob:model']);
   });
+
+  it('retains generate_3d step with tencentJobId only (no preview image)', () => {
+    const base: WorkflowProjectBundle = {
+      assets: [baseAsset('a1', { results: { cut: 'img' }, resultOrder: ['cut'] })],
+      pending: [],
+    };
+    const other: WorkflowProjectBundle = {
+      assets: [
+        baseAsset('a1', {
+          results: { cut: 'img' },
+          resultOrder: ['cut', 'hunyuan_pro'],
+          resultMeta: {
+            hunyuan_pro: { executedAt: 400, tencentJobId: 'job-abc', mediaKind: 'model3d' },
+          },
+          stepModelCompanionKeys: { hunyuan_pro: ['wf-tencent-key'] },
+        }),
+      ],
+      pending: [],
+    };
+    const { merged } = mergeWorkflowProjectBundles(base, other, { sameKey: { kind: 'prefer-base' } });
+    expect(merged.assets[0].resultOrder).toContain('hunyuan_pro');
+    expect(merged.assets[0].resultMeta?.hunyuan_pro?.tencentJobId).toBe('job-abc');
+    expect(merged.assets[0].stepModelCompanionKeys?.hunyuan_pro).toEqual(['wf-tencent-key']);
+  });
 });

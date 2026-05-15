@@ -9,6 +9,12 @@ export {
   tripoWorkflowPollUntilDone,
 } from './tripoWorkflow';
 export {
+  buildTencentProInputFromPreset,
+  buildTencentRapidInputFromPreset,
+  extractTencentModelAndPreviewUrls,
+  tencentWorkflowRunImageTo3D,
+} from './tencentWorkflow';
+export {
   runTencentGenerate3dQueueItem,
   type TencentGenerate3dQueueKind,
   type TencentQueueRunResult,

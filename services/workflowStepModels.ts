@@ -13,14 +13,16 @@ export function stripResultKeyToBaseActionId(k: string): string {
   return m?.[1] ?? k;
 }
 
-/** 遗留资产级 modelUrls 归属的步骤键（优先含 tripoTaskId 的步） */
+/** 遗留资产级 modelUrls 归属的步骤键（优先含 Tripo / 混元任务 id 的步） */
 export function inferLegacyWorkflowStepModelOwnerKey(asset: WorkflowAsset): string | null {
   const meta = asset.resultMeta || {};
+  const has3dJob = (k: string) =>
+    Boolean(String(meta[k]?.tripoTaskId || '').trim() || String(meta[k]?.tencentJobId || '').trim());
   for (const k of [...(asset.resultOrder || [])].reverse()) {
-    if (String(meta[k]?.tripoTaskId || '').trim()) return k;
+    if (has3dJob(k)) return k;
   }
   for (const k of Object.keys(meta)) {
-    if (String(meta[k]?.tripoTaskId || '').trim()) return k;
+    if (has3dJob(k)) return k;
   }
   if ((asset.modelUrls?.length ?? 0) === 0) return null;
   const dk = String(asset.displayKey || '').trim();
@@ -31,6 +33,7 @@ export function inferLegacyWorkflowStepModelOwnerKey(asset: WorkflowAsset): stri
 
 export function isWorkflowGenerate3dResultStep(asset: WorkflowAsset, resultKey: string): boolean {
   if (String(asset.resultMeta?.[resultKey]?.tripoTaskId || '').trim()) return true;
+  if (String(asset.resultMeta?.[resultKey]?.tencentJobId || '').trim()) return true;
   const base = stripResultKeyToBaseActionId(resultKey);
   if (base === 'generate_3d') return true;
   const snap = asset.resultMeta?.[resultKey]?.presetActionIdSnapshot;

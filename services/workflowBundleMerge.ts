@@ -78,6 +78,7 @@ function stepHasPersistedContent(asset: WorkflowAsset, stepId: string): boolean 
   if (Array.isArray(modelKeys) && modelKeys.some((k) => typeof k === 'string' && k.trim().length > 0)) return true;
   const meta = asset.resultMeta?.[stepId];
   if (meta?.tripoTaskId?.trim()) return true;
+  if (meta?.tencentJobId?.trim()) return true;
   if (meta?.mediaKind === 'model3d') return true;
   return false;
 }

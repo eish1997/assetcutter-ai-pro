@@ -155,6 +155,8 @@ export const WorkflowStepTimelineDetailPanel: React.FC<WorkflowStepTimelineDetai
       `媒体类型：${meta?.mediaKind ?? '—'}`,
       `Tripo 任务：${meta?.tripoTaskId ?? '—'}`,
       `Tripo 最近错误：${meta?.tripoLastError ?? '—'}`,
+      `混元 JobId：${meta?.tencentJobId ?? '—'}`,
+      `混元最近错误：${meta?.tencentLastError ?? '—'}`,
       '',
       '--- 入队侧快照（若有） ---',
       `选用预设/能力基 id：${meta?.presetActionIdSnapshot ?? '—'}`,
@@ -271,11 +273,11 @@ export const WorkflowStepTimelineDetailPanel: React.FC<WorkflowStepTimelineDetai
 
         {isGenerate3dStep ? (
           <div className="pt-2 border-t border-white/10 space-y-1.5 text-[8px]">
-            <div className="font-black text-violet-300/90 uppercase text-[7px]">Tripo 生成 3D</div>
+            <div className="font-black text-violet-300/90 uppercase text-[7px]">生成 3D</div>
             {meta?.tripoTaskId ? (
               <div className="space-y-1">
                 <p className="text-gray-300 break-all leading-relaxed">
-                  <span className="text-gray-500">任务 id（已写入本步 resultMeta，刷新后仍保留）：</span>
+                  <span className="text-gray-500">Tripo 任务 id（已写入本步 resultMeta，刷新后仍保留）：</span>
                   <span className="font-mono text-gray-100">{meta.tripoTaskId}</span>
                 </p>
                 <button
@@ -283,18 +285,40 @@ export const WorkflowStepTimelineDetailPanel: React.FC<WorkflowStepTimelineDetai
                   onClick={() => void navigator.clipboard.writeText(meta.tripoTaskId || '')}
                   className="px-2 py-1 rounded-lg text-[8px] font-black uppercase border border-white/15 bg-white/5 hover:bg-white/10 text-gray-200"
                 >
-                  复制任务 id
+                  复制 Tripo 任务 id
                 </button>
               </div>
-            ) : (
+            ) : null}
+            {meta?.tencentJobId ? (
+              <div className="space-y-1">
+                <p className="text-gray-300 break-all leading-relaxed">
+                  <span className="text-gray-500">混元 JobId（已写入本步 resultMeta，刷新后仍保留）：</span>
+                  <span className="font-mono text-gray-100">{meta.tencentJobId}</span>
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void navigator.clipboard.writeText(meta.tencentJobId || '')}
+                  className="px-2 py-1 rounded-lg text-[8px] font-black uppercase border border-white/15 bg-white/5 hover:bg-white/10 text-gray-200"
+                >
+                  复制混元 JobId
+                </button>
+              </div>
+            ) : null}
+            {!meta?.tripoTaskId && !meta?.tencentJobId ? (
               <p className="text-amber-200/90 leading-relaxed">
-                本步为生成 3D，但尚未落盘 Tripo 任务 id（可能仍在排队/生成，或历史数据未迁移）。生成开始后或完成后会写入此处。
+                本步为生成 3D，但尚未落盘任务 id（Tripo taskId 或混元 jobId；可能仍在排队/生成，或历史数据未迁移）。生成开始后或完成后会写入此处。
               </p>
-            )}
+            ) : null}
             {meta?.tripoLastError ? (
               <p className="text-rose-300/90 whitespace-pre-wrap break-words">
-                <span className="text-gray-500">最近错误：</span>
+                <span className="text-gray-500">Tripo 最近错误：</span>
                 {meta.tripoLastError}
+              </p>
+            ) : null}
+            {meta?.tencentLastError ? (
+              <p className="text-rose-300/90 whitespace-pre-wrap break-words">
+                <span className="text-gray-500">混元最近错误：</span>
+                {meta.tencentLastError}
               </p>
             ) : null}
           </div>
@@ -437,7 +461,7 @@ export const WorkflowStepTimelineDetailPanel: React.FC<WorkflowStepTimelineDetai
           </>
         )}
 
-        {(meta?.displayStepLabel?.trim() || meta?.tripoTaskId || meta?.tripoLastError) && (
+        {(meta?.displayStepLabel?.trim() || meta?.tripoTaskId || meta?.tripoLastError || meta?.tencentJobId || meta?.tencentLastError) && (
           <div className="pt-2 border-t border-white/10 space-y-1 text-[8px]">
             <div className="font-black text-gray-500 uppercase text-[7px]">执行记录扩展</div>
             {meta?.displayStepLabel?.trim() ? (
@@ -457,7 +481,22 @@ export const WorkflowStepTimelineDetailPanel: React.FC<WorkflowStepTimelineDetai
                   onClick={() => void navigator.clipboard.writeText(meta.tripoTaskId || '')}
                   className="px-2 py-1 rounded-lg text-[8px] font-black uppercase border border-white/15 bg-white/5 hover:bg-white/10 text-gray-200"
                 >
-                  复制任务 id
+                  复制 Tripo 任务 id
+                </button>
+              </div>
+            ) : null}
+            {meta?.tencentJobId ? (
+              <div className="space-y-1">
+                <p className="text-gray-300 break-all">
+                  <span className="text-gray-500">混元 JobId（已随本步 resultMeta 持久化）：</span>
+                  <span className="font-mono text-gray-200">{meta.tencentJobId}</span>
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void navigator.clipboard.writeText(meta.tencentJobId || '')}
+                  className="px-2 py-1 rounded-lg text-[8px] font-black uppercase border border-white/15 bg-white/5 hover:bg-white/10 text-gray-200"
+                >
+                  复制混元 JobId
                 </button>
               </div>
             ) : null}
@@ -465,6 +504,12 @@ export const WorkflowStepTimelineDetailPanel: React.FC<WorkflowStepTimelineDetai
               <p className="text-rose-300/90 whitespace-pre-wrap break-words">
                 <span className="text-gray-500">Tripo 最近错误：</span>
                 {meta.tripoLastError}
+              </p>
+            ) : null}
+            {meta?.tencentLastError ? (
+              <p className="text-rose-300/90 whitespace-pre-wrap break-words">
+                <span className="text-gray-500">混元最近错误：</span>
+                {meta.tencentLastError}
               </p>
             ) : null}
           </div>

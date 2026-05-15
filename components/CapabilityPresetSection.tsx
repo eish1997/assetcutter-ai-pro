@@ -21,6 +21,7 @@ import {
   TITLE_ROW_STEPPER_BTN,
 } from './workflow/workflowSectionUiConstants';
 import { uuid } from './workflow/workflowIds';
+import TencentGenerate3DPresetFields from './capability/TencentGenerate3DPresetFields';
 import {
   extractCapabilitySearchKeywords,
   keywordsMatchCapabilityLabelId,
@@ -1801,9 +1802,22 @@ const CapabilityPresetSection: React.FC<{
                   <label className="flex items-center gap-1.5 text-[9px]">
                     <span>服务商</span>
                     <CustomDropdown
-                      options={[{ value: 'tripo', label: 'Tripo' }, { value: 'tencent', label: '腾讯(兼容)' }]}
+                      options={[{ value: 'tripo', label: 'Tripo' }, { value: 'tencent', label: '腾讯混元' }]}
                       value={newGenerate3D.provider ?? 'tripo'}
-                      onChange={(v) => setNewGenerate3D((g) => ({ ...g, provider: v as 'tripo' | 'tencent' }))}
+                      onChange={(v) => {
+                        if (v === 'tencent') {
+                          setNewGenerate3D({
+                            provider: 'tencent',
+                            module: 'pro',
+                            model: '3.0',
+                            generateType: 'Normal',
+                            faceCount: 100000,
+                            enablePBR: false,
+                          });
+                        } else {
+                          setNewGenerate3D({ ...DEFAULT_GENERATE_3D });
+                        }
+                      }}
                       triggerClassName={DROPDOWN_TRIGGER_COMPACT}
                     />
                   </label>
@@ -1955,8 +1969,18 @@ const CapabilityPresetSection: React.FC<{
                       )}
                     </>
                   )}
+                  {newGenerate3D.provider === 'tencent' && (
+                    <div className="w-full mt-1 rounded-lg border border-amber-500/25 bg-black/20 p-2">
+                      <TencentGenerate3DPresetFields
+                        value={newGenerate3D}
+                        onChange={setNewGenerate3D}
+                        triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
+              {newGenerate3D.provider !== 'tencent' ? (
               <div>
                 <span className="text-[8px] font-black text-gray-500 uppercase">可选：提示词补充 / 负向提示词</span>
                 <textarea
@@ -1973,6 +1997,7 @@ const CapabilityPresetSection: React.FC<{
                   className="mt-2 w-full rounded-xl bg-white/[0.05] px-3 py-2 text-[11px] ring-1 ring-white/[0.06] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
                 />
               </div>
+              ) : null}
             </>
           )}
           <div className="flex gap-2">
@@ -2477,9 +2502,22 @@ const CapabilityPresetSection: React.FC<{
                               <label className="flex items-center gap-2 text-[9px]">
                                 <span>服务商</span>
                                 <CustomDropdown
-                                  options={[{ value: 'tripo', label: 'Tripo' }, { value: 'tencent', label: '腾讯(兼容)' }]}
+                                  options={[{ value: 'tripo', label: 'Tripo' }, { value: 'tencent', label: '腾讯混元' }]}
                                   value={editGenerate3D.provider ?? 'tripo'}
-                                  onChange={(v) => setEditGenerate3D((g) => ({ ...g, provider: v as 'tripo' | 'tencent' }))}
+                                  onChange={(v) => {
+                                    if (v === 'tencent') {
+                                      setEditGenerate3D({
+                                        provider: 'tencent',
+                                        module: 'pro',
+                                        model: '3.0',
+                                        generateType: 'Normal',
+                                        faceCount: 100000,
+                                        enablePBR: false,
+                                      });
+                                    } else {
+                                      setEditGenerate3D({ ...DEFAULT_GENERATE_3D });
+                                    }
+                                  }}
                                   triggerClassName={DROPDOWN_TRIGGER_COMPACT}
                                   portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
                                 />
@@ -2640,6 +2678,14 @@ const CapabilityPresetSection: React.FC<{
                                   </label>
                                 </>
                               )}
+                              {editGenerate3D.provider === 'tencent' && (
+                                <TencentGenerate3DPresetFields
+                                  value={editGenerate3D}
+                                  onChange={setEditGenerate3D}
+                                  triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                                  portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
+                                />
+                              )}
                             </div>
                           )}
                           <label className="block">
@@ -2722,11 +2768,24 @@ const CapabilityPresetSection: React.FC<{
                         </div>
                         {detailPreset.category === 'generate_3d' && detailPreset.generate3D && (
                           <div className="rounded-lg bg-[#1b1b21] border border-[#2a2a32] px-2 py-2 text-[9px] text-gray-300">
-                            3D：{detailPreset.generate3D.provider === 'tencent' ? '腾讯(兼容)' : 'Tripo'}
-                            {detailPreset.generate3D.tripoTaskType ? ` · ${detailPreset.generate3D.tripoTaskType}` : ''}
-                            {detailPreset.generate3D.tripoModelVersion ? ` · ${detailPreset.generate3D.tripoModelVersion}` : ''}
-                            {detailPreset.generate3D.tripoFaceLimit ? ` · ${detailPreset.generate3D.tripoFaceLimit} 面` : ''}
-                            {detailPreset.generate3D.tripoPbr ? ' · PBR' : ''}
+                            {detailPreset.generate3D.provider === 'tencent' ? (
+                              <>
+                                3D：腾讯混元 · {detailPreset.generate3D.module === 'rapid' ? '极速版' : '专业版'}
+                                {detailPreset.generate3D.model ? ` · ${detailPreset.generate3D.model}` : ''}
+                                {detailPreset.generate3D.generateType ? ` · ${detailPreset.generate3D.generateType}` : ''}
+                                {detailPreset.generate3D.faceCount ? ` · ${detailPreset.generate3D.faceCount} 面` : ''}
+                                {detailPreset.generate3D.resultFormat ? ` · ${detailPreset.generate3D.resultFormat}` : ''}
+                                {detailPreset.generate3D.enablePBR ? ' · PBR' : ''}
+                              </>
+                            ) : (
+                              <>
+                                3D：Tripo
+                                {detailPreset.generate3D.tripoTaskType ? ` · ${detailPreset.generate3D.tripoTaskType}` : ''}
+                                {detailPreset.generate3D.tripoModelVersion ? ` · ${detailPreset.generate3D.tripoModelVersion}` : ''}
+                                {detailPreset.generate3D.tripoFaceLimit ? ` · ${detailPreset.generate3D.tripoFaceLimit} 面` : ''}
+                                {detailPreset.generate3D.tripoPbr ? ' · PBR' : ''}
+                              </>
+                            )}
                           </div>
                         )}
                         <div className="rounded-lg bg-[#1b1b21] border border-[#2a2a32] px-2 py-2">
