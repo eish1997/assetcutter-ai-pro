@@ -4,25 +4,6 @@ import { normalizeCompanionBaseUrl } from './companionLocalPrefs';
 import { resolveTripoProxyBase } from './tripoService';
 import { isWorkflowModelUrlReadable } from './workflowModelBlob';
 
-function triggerBlobDownload(blob: Blob, filename: string): void {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  a.rel = 'noopener';
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  /** 延后 revoke：避免与系统「另存为」对话框叠加时，部分浏览器尚未完成下载握手即释放 URL */
-  window.setTimeout(() => {
-    try {
-      URL.revokeObjectURL(url);
-    } catch {
-      /* ignore */
-    }
-  }, 2500);
-}
-
 function sanitizeFilenameBase(name: string): string {
   const base = String(name || '')
     .trim()
@@ -30,6 +11,42 @@ function sanitizeFilenameBase(name: string): string {
     .replace(/\s+/g, '_')
     .slice(0, 80);
   return base || 'model';
+}
+
+function triggerBlobDownload(blob: Blob, filename: string): void {
+  const safeName = sanitizeFilenameBase(String(filename || '').trim()) || 'model';
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = safeName;
+  a.rel = 'noopener noreferrer';
+  a.style.display = 'none';
+  a.setAttribute('download', safeName);
+  document.body.appendChild(a);
+  /** 部分浏览器在同步 removeChild 后会中断下载握手；另存为对话框期间勿过早 revoke（易与 WebGL 丢上下文叠加观感「黑屏」） */
+  window.requestAnimationFrame(() => {
+    try {
+      a.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+    } catch {
+      try {
+        a.click();
+      } catch {
+        /* ignore */
+      }
+    }
+    window.setTimeout(() => {
+      try {
+        a.remove();
+      } catch {
+        /* ignore */
+      }
+      try {
+        URL.revokeObjectURL(url);
+      } catch {
+        /* ignore */
+      }
+    }, 30_000);
+  });
 }
 
 function extFromUrlOrMime(url: string, mime: string): string {

@@ -1291,13 +1291,27 @@ const MainApp: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    let visFlushTimer: number | null = null;
     const onVis = () => {
-      if (document.visibilityState === 'hidden') flushProjectPersistence();
+      if (document.visibilityState === 'hidden') {
+        /** 系统「另存为」、文件选择等会短暂 hidden：立即 flush 易与下载/序列化竞态并加重卡顿；关签前仍有 pagehide 兜底 */
+        if (visFlushTimer != null) window.clearTimeout(visFlushTimer);
+        visFlushTimer = window.setTimeout(() => {
+          visFlushTimer = null;
+          flushProjectPersistence();
+        }, 600);
+      } else {
+        if (visFlushTimer != null) {
+          window.clearTimeout(visFlushTimer);
+          visFlushTimer = null;
+        }
+      }
     };
     const onHide = () => flushProjectPersistence();
     document.addEventListener('visibilitychange', onVis);
     window.addEventListener('pagehide', onHide);
     return () => {
+      if (visFlushTimer != null) window.clearTimeout(visFlushTimer);
       document.removeEventListener('visibilitychange', onVis);
       window.removeEventListener('pagehide', onHide);
     };

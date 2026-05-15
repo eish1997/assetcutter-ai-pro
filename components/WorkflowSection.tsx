@@ -92,7 +92,7 @@ import { downloadWorkflowStepModelSlot } from '../services/downloadModelFile';
 import { revokeWorkflowModelBlobUrlsIfOrphaned } from '../services/workflowModelBlob';
 import {
   hydrateWorkflowAsset3dModelsFromCompanion,
-  hydrateWorkflowAssetAfter3dPersist,
+  hydrateWorkflowAssetSingle3dResultKeyFromCompanion,
 } from '../services/workflow3dCompanionHydrate';
 import {
   readLightboxAnnotationPrefs,
@@ -4459,8 +4459,9 @@ ${lineSvg}
         onLog: (level, message, detail) => onLog?.(level, message, detail),
       });
       if (base && pid) {
-        const hydrated = await hydrateWorkflowAssetAfter3dPersist({
+        const hydrated = await hydrateWorkflowAssetSingle3dResultKeyFromCompanion({
           asset: nextAsset,
+          resultKey: dk,
           baseUrl: base,
           projectId: pid,
           onLog: (level, message, detail) => onLog?.(level, message, detail),
@@ -4521,8 +4522,9 @@ ${lineSvg}
         onLog: (level, message, detail) => onLog?.(level, message, detail),
       });
       if (base && pid) {
-        const hydrated = await hydrateWorkflowAssetAfter3dPersist({
+        const hydrated = await hydrateWorkflowAssetSingle3dResultKeyFromCompanion({
           asset: nextAsset,
+          resultKey: dk,
           baseUrl: base,
           projectId: pid,
           onLog: (level, message, detail) => onLog?.(level, message, detail),

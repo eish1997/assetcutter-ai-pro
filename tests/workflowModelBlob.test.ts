@@ -18,8 +18,8 @@ describe('workflowModelBlob', () => {
     expect(workflowModelSlotMayNeedCompanionHydrate('https://x/a.glb', '')).toBe(false);
   });
 
-  it('workflowModelSlotMayNeedCompanionHydrate: https + key skips hydrate', () => {
-    expect(workflowModelSlotMayNeedCompanionHydrate('https://x/a.glb', 'wf-mdl-key')).toBe(false);
+  it('workflowModelSlotMayNeedCompanionHydrate: https + companion key may rehydrate from disk', () => {
+    expect(workflowModelSlotMayNeedCompanionHydrate('https://x/a.glb', 'wf-mdl-key')).toBe(true);
   });
 
   it('preview size limit', () => {

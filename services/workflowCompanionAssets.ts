@@ -4,10 +4,7 @@ import { fetchCompanionAssetBlob, putCompanionAsset } from './companionClient/st
 import { normalizeCompanionBaseUrl } from './companionLocalPrefs';
 import { mapSiteR2PathToFetchUrl, resolveCapabilityPreviewSrc } from './capabilityPreviewUrl';
 import { isWorkflowTextAsset } from './workflowTextAsset';
-import {
-  shouldKeepExistingWorkflowModelSlotUrl,
-  workflowModelSlotMayNeedCompanionHydrate,
-} from './workflowModelBlob';
+import { workflowModelSlotMayNeedCompanionHydrate } from './workflowModelBlob';
 
 export function sanitizeCompanionPathSegment(s: string): string {
   return String(s || '')

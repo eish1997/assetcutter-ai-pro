@@ -96,7 +96,7 @@ export async function isWorkflowModelUrlReadable(url: string): Promise<boolean> 
   return false;
 }
 
-/** 有伴侣键时，槽位是否可能需要从伴侣 hydrate（含空 url、失效 blob） */
+/** 有伴侣键时，槽位是否可能需要从伴侣 hydrate（含空 url、失效 blob、过期 https 直链） */
 export function workflowModelSlotMayNeedCompanionHydrate(url: string, companionKey: string): boolean {
   const ck = String(companionKey || '').trim();
   if (!ck) return false;
@@ -104,17 +104,24 @@ export function workflowModelSlotMayNeedCompanionHydrate(url: string, companionK
   if (!u) return true;
   if (!/^blob:/i.test(u) && !/^https?:\/\//i.test(u) && !u.startsWith('data:')) return true;
   if (/^blob:/i.test(u)) return true;
+  // Tripo/混元直链会过期；有伴侣卷备份时应进入 hydrate，由 shouldKeepExistingWorkflowModelSlotUrl 决定是否真拉卷
+  if (/^https?:\/\//i.test(u)) return true;
   return false;
 }
 
 /** hydrate 前：若已有可读 url 则跳过伴侣拉取 */
 export async function shouldKeepExistingWorkflowModelSlotUrl(
   url: string,
-  _companionKey: string
+  companionKey: string
 ): Promise<boolean> {
   const u = String(url ?? '').trim();
+  const ck = String(companionKey || '').trim();
   if (!u) return false;
-  if (/^https?:\/\//i.test(u) || u.startsWith('data:')) return true;
+  if (u.startsWith('data:')) return true;
+  if (/^https?:\/\//i.test(u)) {
+    if (!ck) return true;
+    return await isWorkflowModelUrlReadable(u);
+  }
   if (/^blob:/i.test(u)) {
     return await isWorkflowModelUrlReadable(u);
   }

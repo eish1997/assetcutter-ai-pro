@@ -3,6 +3,7 @@ import type { WorkflowAsset } from '../types';
 import {
   hydrateWorkflowAsset3dModelsFromCompanion,
   hydrateWorkflowAssetAfter3dPersist,
+  hydrateWorkflowAssetSingle3dResultKeyFromCompanion,
   patchWorkflowAssetsWith3dResultAndHydrate,
 } from '../services/workflow3dCompanionHydrate';
 import * as workflowCompanionAssets from '../services/workflowCompanionAssets';
@@ -73,15 +74,47 @@ describe('workflow3dCompanionHydrate', () => {
     expect(nextAsset.results?.gen3d).toBe('blob:preview-jpg');
   });
 
-  it('patchWorkflowAssetsWith3dResultAndHydrate patches then hydrates target asset', async () => {
+  it('hydrateWorkflowAssetSingle3dResultKeyFromCompanion does not fetch other steps', async () => {
+    vi.spyOn(workflowModelBlob, 'shouldKeepExistingWorkflowModelSlotUrl').mockResolvedValue(false);
+    const fetchModel = vi.spyOn(workflowCompanionAssets, 'fetchWorkflowModelFromCompanionAsObjectUrl').mockResolvedValue({
+      ok: true,
+      objectUrl: 'blob:only-this',
+      mime: 'model/gltf-binary',
+    });
+
+    const asset = baseAsset({
+      stepModelCompanionKeys: {
+        other_step: ['other.glb'],
+        gen3d: ['models/wf1.glb'],
+      },
+      stepModelUrls: { other_step: [''], gen3d: [''] },
+    });
+
+    const { nextAsset } = await hydrateWorkflowAssetSingle3dResultKeyFromCompanion({
+      asset,
+      resultKey: 'gen3d',
+      baseUrl: 'http://127.0.0.1:18765',
+      projectId: 'proj-1',
+    });
+
+    expect(nextAsset.stepModelUrls?.gen3d?.[0]).toBe('blob:only-this');
+    expect(nextAsset.stepModelUrls?.other_step?.[0]).toBe('');
+    expect(fetchModel).toHaveBeenCalledTimes(1);
+    expect(fetchModel.mock.calls[0]?.[2]).toBe('models/wf1.glb');
+  });
+
+  it('patchWorkflowAssetsWith3dResultAndHydrate only hydrates resultKey slots when multi-step asset', async () => {
     const patchedAsset = baseAsset({
       id: 'wf1',
-      stepModelCompanionKeys: { gen3d: ['models/wf1.glb'] },
-      stepModelUrls: { gen3d: [''] },
+      stepModelCompanionKeys: {
+        legacy_3d: ['old.glb'],
+        gen3d: ['models/wf1.glb'],
+      },
+      stepModelUrls: { legacy_3d: [''], gen3d: [''] },
     });
     vi.spyOn(workflowGenerate3dAssetPatch, 'patchWorkflowAssetsWith3dResult').mockReturnValue([patchedAsset]);
     vi.spyOn(workflowModelBlob, 'shouldKeepExistingWorkflowModelSlotUrl').mockResolvedValue(false);
-    vi.spyOn(workflowCompanionAssets, 'fetchWorkflowModelFromCompanionAsObjectUrl').mockResolvedValue({
+    const fetchModel = vi.spyOn(workflowCompanionAssets, 'fetchWorkflowModelFromCompanionAsObjectUrl').mockResolvedValue({
       ok: true,
       objectUrl: 'blob:from-companion',
       mime: 'model/gltf-binary',
@@ -105,5 +138,6 @@ describe('workflow3dCompanionHydrate', () => {
     });
 
     expect(assets[0]?.stepModelUrls?.gen3d?.[0]).toBe('blob:from-companion');
+    expect(fetchModel).toHaveBeenCalledTimes(1);
   });
 });
