@@ -83,3 +83,39 @@ export async function getComputeJob(jobId: string) {
   if (!res.ok) throw new Error(res.error);
   return res.data;
 }
+
+export type ComputeJobTerminal = CompanionComputeJobGetResponse['job'];
+
+const MAYA_JOB_STATUS_LABEL: Record<string, string> = {
+  queued: '排队中',
+  running: 'Maya 执行中',
+  completed: '已完成',
+  failed: '失败',
+  cancelled: '已取消',
+};
+
+export function formatMayaJobStatus(status: string): string {
+  return MAYA_JOB_STATUS_LABEL[status] ?? status;
+}
+
+/** 轮询伴侣 compute job 直至终态或超时 */
+export async function waitForComputeJob(
+  jobId: string,
+  opts?: {
+    timeoutMs?: number;
+    pollMs?: number;
+    onStatus?: (job: ComputeJobTerminal) => void;
+  },
+): Promise<ComputeJobTerminal> {
+  const deadline = Date.now() + (opts?.timeoutMs ?? 130_000);
+  const pollMs = opts?.pollMs ?? 400;
+  while (Date.now() < deadline) {
+    const { job } = await getComputeJob(jobId);
+    opts?.onStatus?.(job);
+    if (job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') {
+      return job;
+    }
+    await new Promise((r) => setTimeout(r, pollMs));
+  }
+  throw new Error('执行超时');
+}

@@ -71,7 +71,19 @@ const DDL_STATEMENTS = [
     finished_at TIMESTAMPTZ
   )`,
   `CREATE INDEX IF NOT EXISTS idx_script_hub_runs_user_created ON script_hub_runs(user_id, created_at DESC)`,
+  `CREATE TABLE IF NOT EXISTS script_hub_user_prefs (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    prefs_json JSONB NOT NULL DEFAULT '{}',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`,
 ];
+
+const DEFAULT_SCRIPT_HUB_PREFS = {
+  version: 1,
+  updatedAt: 0,
+  maya: { host: '127.0.0.1', port: 7001 },
+  lastParamsByScriptId: {},
+};
 
 export function isScriptHubDbConfigured() {
   return Boolean(DATABASE_URL);
@@ -295,6 +307,12 @@ export function rowToScriptApi(row) {
 
 const RUN_LOG_MAX = 16_000;
 
+/** Postgres TEXT 不允许 NUL（0x00），Maya Command Port 回包偶含该字节 */
+function sanitizePgText(value) {
+  if (value == null) return null;
+  return String(value).replace(/\0/g, '');
+}
+
 export async function assertRevisionOwnedByUser(scriptId, revisionId, ownerUserId) {
   assertScriptHubStoreReady();
   const p = getPool();
@@ -361,10 +379,16 @@ export async function patchScriptRun(runId, userId, patch) {
   if (!['queued', 'running', 'completed', 'failed', 'cancelled'].includes(status)) throw new Error('status 非法');
   const exitCode = patch.exitCode !== undefined ? patch.exitCode : cur.exit_code;
   const errorCode = patch.errorCode !== undefined ? patch.errorCode : cur.error_code;
-  const errorMessage = patch.errorMessage !== undefined ? patch.errorMessage : cur.error_message;
+  const errorMessage =
+    patch.errorMessage !== undefined ? sanitizePgText(patch.errorMessage) : cur.error_message;
   const rawLog = patch.logExcerpt !== undefined ? patch.logExcerpt : cur.log_excerpt;
+  const cleanedLog = rawLog == null ? null : sanitizePgText(rawLog);
   const logExcerpt =
-    rawLog == null ? null : String(rawLog).length <= RUN_LOG_MAX ? String(rawLog) : `${String(rawLog).slice(0, RUN_LOG_MAX)}…`;
+    cleanedLog == null
+      ? null
+      : cleanedLog.length <= RUN_LOG_MAX
+        ? cleanedLog
+        : `${cleanedLog.slice(0, RUN_LOG_MAX)}…`;
   const durationMs = patch.durationMs !== undefined ? patch.durationMs : cur.duration_ms;
   const companionJobId =
     patch.companionJobId !== undefined ? (patch.companionJobId ? String(patch.companionJobId) : null) : cur.companion_job_id;
@@ -402,4 +426,95 @@ export async function listScriptRuns(userId, { limit = 50, scriptId } = {}) {
   sql += ` ORDER BY created_at DESC LIMIT $${args.length}`;
   const { rows } = await p.query(sql, args);
   return rows.map((r) => rowToRunApi(r));
+}
+
+function normalizeScriptHubPrefs(raw) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const mayaIn = src.maya && typeof src.maya === 'object' ? src.maya : {};
+  const portNum = Number(mayaIn.port ?? 7001);
+  const lastIn = src.lastParamsByScriptId && typeof src.lastParamsByScriptId === 'object' ? src.lastParamsByScriptId : {};
+  const lastParamsByScriptId = {};
+  for (const [scriptId, entry] of Object.entries(lastIn)) {
+    const sid = String(scriptId || '').trim();
+    if (!sid || !entry || typeof entry !== 'object') continue;
+    const params =
+      entry.params && typeof entry.params === 'object' && !Array.isArray(entry.params) ? entry.params : {};
+    const updatedAt = Number(entry.updatedAt || 0);
+    const revisionId = typeof entry.revisionId === 'string' ? entry.revisionId.trim() : undefined;
+    lastParamsByScriptId[sid] = {
+      params,
+      updatedAt: Number.isFinite(updatedAt) ? updatedAt : Date.now(),
+      ...(revisionId ? { revisionId } : {}),
+    };
+  }
+  return {
+    version: 1,
+    updatedAt: Number(src.updatedAt || Date.now()),
+    maya: {
+      host: String(mayaIn.host || '127.0.0.1').trim() || '127.0.0.1',
+      port: Number.isFinite(portNum) && portNum > 0 ? Math.floor(portNum) : 7001,
+    },
+    lastParamsByScriptId,
+  };
+}
+
+function mergeScriptHubPrefs(base, patch) {
+  const a = normalizeScriptHubPrefs(base);
+  const b = patch && typeof patch === 'object' ? patch : {};
+  const out = { ...a, version: 1, updatedAt: Date.now() };
+  if (b.maya && typeof b.maya === 'object') {
+    const portNum = Number(b.maya.port ?? a.maya.port);
+    out.maya = {
+      host: String(b.maya.host ?? a.maya.host).trim() || a.maya.host,
+      port: Number.isFinite(portNum) && portNum > 0 ? Math.floor(portNum) : a.maya.port,
+    };
+  }
+  if (b.lastParamsByScriptId && typeof b.lastParamsByScriptId === 'object') {
+    const merged = { ...a.lastParamsByScriptId };
+    for (const [scriptId, entry] of Object.entries(b.lastParamsByScriptId)) {
+      const sid = String(scriptId || '').trim();
+      if (!sid || !entry || typeof entry !== 'object') continue;
+      const prev = merged[sid];
+      const nextAt = Number(entry.updatedAt || Date.now());
+      const prevAt = prev ? Number(prev.updatedAt || 0) : 0;
+      if (prev && nextAt < prevAt) continue;
+      const params =
+        entry.params && typeof entry.params === 'object' && !Array.isArray(entry.params)
+          ? entry.params
+          : prev?.params || {};
+      const revisionId =
+        typeof entry.revisionId === 'string'
+          ? entry.revisionId.trim()
+          : prev?.revisionId;
+      merged[sid] = {
+        params,
+        updatedAt: Number.isFinite(nextAt) ? nextAt : Date.now(),
+        ...(revisionId ? { revisionId } : {}),
+      };
+    }
+    out.lastParamsByScriptId = merged;
+  }
+  return normalizeScriptHubPrefs(out);
+}
+
+export async function getScriptHubUserPrefs(userId) {
+  assertScriptHubStoreReady();
+  const p = getPool();
+  const { rows } = await p.query(`SELECT prefs_json FROM script_hub_user_prefs WHERE user_id = $1`, [userId]);
+  if (!rows.length) return normalizeScriptHubPrefs(DEFAULT_SCRIPT_HUB_PREFS);
+  return normalizeScriptHubPrefs(rows[0].prefs_json);
+}
+
+export async function patchScriptHubUserPrefs(userId, patch) {
+  assertScriptHubStoreReady();
+  const current = await getScriptHubUserPrefs(userId);
+  const merged = mergeScriptHubPrefs(current, patch);
+  const p = getPool();
+  await p.query(
+    `INSERT INTO script_hub_user_prefs (user_id, prefs_json, updated_at)
+     VALUES ($1, $2::jsonb, now())
+     ON CONFLICT (user_id) DO UPDATE SET prefs_json = $2::jsonb, updated_at = now()`,
+    [userId, JSON.stringify(merged)],
+  );
+  return merged;
 }

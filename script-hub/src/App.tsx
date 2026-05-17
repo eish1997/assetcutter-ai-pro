@@ -6,6 +6,8 @@ import { LibraryPage } from './pages/LibraryPage';
 import { NewScriptPage } from './pages/NewScriptPage';
 import { ScriptDetailPage } from './pages/ScriptDetailPage';
 import { ScriptRunsPage } from './pages/ScriptRunsPage';
+import { ScriptHubPrefsProvider } from './context/ScriptHubPrefsContext';
+import { CompanionStatusBar } from './components/CompanionStatusBar';
 
 function ShellLayout() {
   const { user, logout } = useAuth();
@@ -35,6 +37,7 @@ function ShellLayout() {
         ) : null}
       </header>
       <main className="sh-main">
+        <CompanionStatusBar />
         <Outlet />
       </main>
       <footer className="sh-footer">
@@ -48,15 +51,21 @@ function AppRoutes() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
-      <Route element={<ShellLayout />}>
-        <Route element={<RequireAuth />}>
+      <Route element={<RequireAuth />}>
+        <Route
+          element={
+            <ScriptHubPrefsProvider>
+              <ShellLayout />
+            </ScriptHubPrefsProvider>
+          }
+        >
           <Route path="/library" element={<LibraryPage />} />
           <Route path="/scripts/new" element={<NewScriptPage />} />
           <Route path="/scripts/:id/runs" element={<ScriptRunsPage />} />
           <Route path="/scripts/:id" element={<ScriptDetailPage />} />
           <Route path="/" element={<Navigate to="/library" replace />} />
+          <Route path="*" element={<Navigate to="/library" replace />} />
         </Route>
-        <Route path="*" element={<Navigate to="/library" replace />} />
       </Route>
     </Routes>
   );

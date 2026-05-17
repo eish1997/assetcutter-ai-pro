@@ -1,19 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { createRevision, createScriptRun, getRevisionContent, getScript, issueRevisionContentToken, patchScriptRun, updateScript } from '../services/scriptHubApi';
-import { getComputeJob, submitScriptMayaJob } from '../services/companionJobs';
-import { fetchScriptConnectors, type ScriptConnectorsResponse } from '../services/companionScriptConnectors';
-import { getCompanionLocalToken, setCompanionLocalToken } from '../../../services/companionLocalPrefs';
+import { createRevision, getRevisionContent, getScript, updateScript } from '../services/scriptHubApi';
+import { useScriptHubPrefs } from '../context/ScriptHubPrefsContext';
+import { useRunScriptMaya } from '../hooks/useRunScriptMaya';
+import { ScriptParamsModal } from '../components/ScriptParamsModal';
 import { ParamSchemaForm } from '../components/ParamSchemaForm';
 import type { ParamSchemaV1, ScriptDetail } from '../types/scriptHub';
-
-function paramDefaultsFromSchema(sch: ParamSchemaV1): Record<string, unknown> {
-  const o: Record<string, unknown> = {};
-  for (const f of sch.fields) {
-    if (f.default !== undefined) o[f.key] = f.default;
-  }
-  return o;
-}
+import { resolveParamsForRun } from '../utils/paramDefaults';
 
 export function ScriptDetailPage() {
   const { id } = useParams();
@@ -24,15 +17,14 @@ export function ScriptDetailPage() {
   const [schemaJson, setSchemaJson] = useState('');
   const [schema, setSchema] = useState<ParamSchemaV1 | null>(null);
   const [params, setParams] = useState<Record<string, unknown>>({});
-  const [mayaHost, setMayaHost] = useState('127.0.0.1');
-  const [mayaPort, setMayaPort] = useState(7001);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [mayaRunBusy, setMayaRunBusy] = useState(false);
   const [runLog, setRunLog] = useState<string | null>(null);
-  const [connectors, setConnectors] = useState<ScriptConnectorsResponse | null>(null);
-  const [connectorsErr, setConnectorsErr] = useState<string | null>(null);
-  const [companionTokenDraft, setCompanionTokenDraft] = useState('');
-  const [companionTokenBump, setCompanionTokenBump] = useState(0);
+  const [paramsModalOpen, setParamsModalOpen] = useState(false);
+
+  const { getLastParams, saveLastParams, ready: prefsReady } = useScriptHubPrefs();
+  const { runScriptMaya } = useRunScriptMaya();
 
   const load = useCallback(async () => {
     if (!scriptId) return;
@@ -50,8 +42,9 @@ export function ScriptDetailPage() {
     setContent(rev.content);
     setSchema(rev.schema);
     setSchemaJson(JSON.stringify(rev.schema, null, 2));
-    setParams(paramDefaultsFromSchema(rev.schema));
-  }, [scriptId]);
+    const last = prefsReady ? getLastParams(scriptId) : null;
+    setParams(resolveParamsForRun(rev.schema, last));
+  }, [scriptId, getLastParams, prefsReady]);
 
   useEffect(() => {
     let cancelled = false;
@@ -67,36 +60,6 @@ export function ScriptDetailPage() {
       cancelled = true;
     };
   }, [load, scriptId]);
-
-  useEffect(() => {
-    if (!script || script.targetType !== 'maya') {
-      setConnectors(null);
-      setConnectorsErr(null);
-      return;
-    }
-    setCompanionTokenDraft(getCompanionLocalToken());
-    let cancelled = false;
-    const tick = async () => {
-      try {
-        const snap = await fetchScriptConnectors({ mayaHost, mayaPort });
-        if (!cancelled) {
-          setConnectors(snap);
-          setConnectorsErr(null);
-        }
-      } catch (e) {
-        if (!cancelled) {
-          setConnectors(null);
-          setConnectorsErr(e instanceof Error ? e.message : String(e));
-        }
-      }
-    };
-    void tick();
-    const id = window.setInterval(() => void tick(), 10_000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(id);
-    };
-  }, [script, mayaHost, mayaPort, companionTokenBump]);
 
   function parseSchemaFromEditor(): ParamSchemaV1 {
     try {
@@ -122,103 +85,33 @@ export function ScriptDetailPage() {
     }
   }
 
-  async function runMaya() {
+  async function runMaya(overrideParams?: Record<string, unknown>) {
     if (!script || script.targetType !== 'maya') return;
     if (!script.currentRevisionId) {
       setErr('当前无已保存的 revision，请先「保存为新版本」再执行。');
       return;
     }
-    setBusy(true);
+    const runParams = overrideParams ?? params;
+    setMayaRunBusy(true);
     setErr(null);
-    setRunLog(null);
-    const t0 = Date.now();
-    let runId: string | null = null;
+    setRunLog('正在提交本机任务…');
     try {
       parseSchemaFromEditor();
-      const { run } = await createScriptRun({
+      const result = await runScriptMaya({
         scriptId: script.id,
         revisionId: script.currentRevisionId,
-        targetType: 'maya',
-        params,
-      });
-      runId = run.id;
-      let mayaPayload:
-        | { content: string; params: Record<string, unknown>; mayaHost: string; mayaPort: number; timeoutMs: number }
-        | {
-            scriptSource: 'cloud';
-            scriptId: string;
-            revisionId: string;
-            contentJwt: string;
-            params: Record<string, unknown>;
-            mayaHost: string;
-            mayaPort: number;
-            timeoutMs: number;
-          } = {
+        params: runParams,
         content,
-        params,
-        mayaHost,
-        mayaPort,
-        timeoutMs: 120_000,
-      };
-      try {
-        const { token } = await issueRevisionContentToken(script.id, script.currentRevisionId);
-        if (token) {
-          mayaPayload = {
-            scriptSource: 'cloud',
-            scriptId: script.id,
-            revisionId: script.currentRevisionId,
-            contentJwt: token,
-            params,
-            mayaHost,
-            mayaPort,
-            timeoutMs: 120_000,
-          };
-        }
-      } catch {
-        /* 无 JWT 或未配置时回退内联 content */
-      }
-      const { jobId } = await submitScriptMayaJob(mayaPayload);
-      await patchScriptRun(runId, { status: 'running', companionJobId: jobId });
-      const deadline = Date.now() + 130_000;
-      let status = 'queued';
-      let note = '';
-      while (Date.now() < deadline) {
-        const j = await getComputeJob(jobId);
-        status = j.job.status;
-        if (j.job.status === 'completed') {
-          note = j.job.result?.note || '完成';
-          break;
-        }
-        if (j.job.status === 'failed') {
-          throw new Error(j.job.error?.message || j.job.error?.code || '执行失败');
-        }
-        await new Promise((r) => setTimeout(r, 400));
-      }
-      if (status !== 'completed') throw new Error('执行超时');
-      setRunLog(note);
-      await patchScriptRun(runId, {
-        status: 'completed',
-        exitCode: 0,
-        durationMs: Date.now() - t0,
-        logExcerpt: note,
+        onProgress: setRunLog,
       });
+      if (!result.ok) throw new Error(result.error);
+      setRunLog(result.log);
+      await saveLastParams(script.id, runParams, script.currentRevisionId);
+      setParams(runParams);
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      if (runId) {
-        try {
-          await patchScriptRun(runId, {
-            status: 'failed',
-            errorCode: 'SCRIPT_HUB_MAYA_RUN',
-            errorMessage: msg,
-            durationMs: Date.now() - t0,
-          });
-        } catch {
-          /* ignore */
-        }
-      }
-      setErr(msg);
+      setErr(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      setMayaRunBusy(false);
     }
   }
 
@@ -298,127 +191,38 @@ export function ScriptDetailPage() {
 
       {schema && schema.schemaVersion === 1 ? (
         <>
-          <h3 className="sh-h3">运行参数</h3>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+            <h3 className="sh-h3" style={{ margin: 0 }}>
+              运行参数
+            </h3>
+            <button type="button" className="sh-btn" style={{ fontSize: '0.8rem' }} onClick={() => setParamsModalOpen(true)}>
+              弹窗编辑…
+            </button>
+          </div>
           <ParamSchemaForm schema={schema} value={params} onChange={setParams} />
         </>
       ) : (
         <p className="sh-alert">修正 ParamSchema JSON 后可编辑参数。</p>
       )}
 
-      {script?.targetType === 'maya' ? (
-        <section className="sh-panel sh-panel-tight" style={{ marginTop: '1.25rem', marginBottom: '0.5rem' }}>
-          <h3 className="sh-h3" style={{ marginTop: 0 }}>
-            本机连接器
-          </h3>
-          {connectorsErr ? (
-            <p className="sh-alert" style={{ margin: 0 }} role="status">
-              {connectorsErr}
-            </p>
-          ) : null}
-          {connectorsErr && (connectorsErr.includes('bearer') || connectorsErr.includes('401')) ? (
-            <div style={{ marginTop: '0.65rem' }}>
-              <p className="sh-muted" style={{ margin: '0 0 0.5rem', fontSize: '0.8rem', lineHeight: 1.45 }}>
-                与 Maya 的 7001 无关：本机伴侣若启用了通信密码（环境变量里叫 <span className="sh-mono">COMPANION_SHARED_TOKEN</span>），
-                浏览器请求须带同一串值。<strong>主工作台</strong>路径：<strong>设置 → 本地伴侣 →「① 与网站配对」</strong> → 填「通信密码」→{' '}
-                <strong>「保存配对密码」</strong>。<strong>桌面伴侣</strong>：<strong>设置 →「② 与网站配对」</strong> → 同一密码 →{' '}
-                <strong>「保存配对」</strong>，且「允许的网站」须含本页 origin（如 <span className="sh-mono">http://127.0.0.1:5174</span>）。
-                工作台与 Script Hub 端口不同则 <strong>localStorage 不共享</strong>，工作台已配过时请把同一串密码复制到下方再保存。
-                Script Hub 已与工作台对齐：<strong>直连</strong>本机伴侣 HTTP 根（默认 <span className="sh-mono">http://127.0.0.1:18765</span>，与主站「设置 → 本地伴侣」里保存的根同源），<strong>不再经本站 Vite 的 /v1 代理</strong>。
-              </p>
-              <label className="sh-label" style={{ display: 'block', marginBottom: '0.35rem' }}>
-                通信密码（与伴侣「设置 → 与网站配对」一致）
-                <input
-                  className="sh-input sh-mono"
-                  type="password"
-                  autoComplete="off"
-                  value={companionTokenDraft}
-                  onChange={(e) => setCompanionTokenDraft(e.target.value)}
-                  placeholder="从伴侣设置页复制，或粘贴 .env 里同一串"
-                  style={{ marginTop: 4 }}
-                />
-              </label>
-              <button
-                type="button"
-                className="sh-btn"
-                style={{ marginTop: '0.35rem' }}
-                onClick={() => {
-                  setCompanionLocalToken(companionTokenDraft);
-                  setCompanionTokenBump((n) => n + 1);
-                }}
-              >
-                保存并重试连接
-              </button>
-            </div>
-          ) : null}
-          {!connectorsErr && !connectors ? (
-            <p className="sh-muted" style={{ margin: 0 }}>
-              正在探测本机伴侣与 Maya…
-            </p>
-          ) : null}
-          {connectors ? (
-            <>
-              <p className="sh-muted" style={{ margin: '0 0 0.5rem', fontSize: '0.8rem' }}>
-                探测时间 {new Date(connectors.probedAt).toLocaleString()}（约每 10 秒刷新；与下方 Host/Port 一致）
-              </p>
-              <ul style={{ margin: 0, paddingLeft: '1.15rem' }}>
-                {connectors.connectors.map((c) => (
-                  <li key={c.id} style={{ marginBottom: '0.35rem', color: '#d1d5db' }}>
-                    <span
-                      style={{
-                        display: 'inline-block',
-                        minWidth: '3.5rem',
-                        fontWeight: 700,
-                        color:
-                          c.status === 'ok' ? '#4ade80' : c.status === 'skipped' ? '#9ca3af' : '#f87171',
-                      }}
-                    >
-                      {c.status === 'ok' ? 'OK' : c.status === 'skipped' ? '—' : 'ERR'}
-                    </span>
-                    <span className="sh-mono" style={{ fontSize: '0.85rem' }}>
-                      {c.id}
-                    </span>
-                    {c.host != null && c.port != null ? (
-                      <span className="sh-muted" style={{ marginLeft: 6 }}>
-                        {c.host}:{c.port}
-                      </span>
-                    ) : null}
-                    <div className="sh-muted" style={{ marginTop: 2, fontSize: '0.85rem' }}>
-                      {c.message}
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </>
-          ) : null}
-        </section>
-      ) : null}
-
-      {script?.targetType === 'maya' ? (
-        <div className="sh-grid-2">
-          <label className="sh-label">
-            Maya Host
-            <input className="sh-input sh-mono" value={mayaHost} onChange={(e) => setMayaHost(e.target.value)} />
-          </label>
-          <label className="sh-label">
-            Port
-            <input
-              className="sh-input sh-mono"
-              type="number"
-              value={mayaPort}
-              onChange={(e) => setMayaPort(Number.parseInt(e.target.value, 10) || 7001)}
-            />
-          </label>
-        </div>
-      ) : null}
-
       <div className="sh-row-actions">
         <button type="button" className="sh-btn sh-btn-primary" disabled={busy} onClick={() => void saveMeta()}>
           保存为新版本
         </button>
         {script?.targetType === 'maya' ? (
-          <button type="button" className="sh-btn" disabled={busy || !schema} onClick={() => void runMaya()}>
-            本机执行（Maya）
-          </button>
+          <>
+            <button type="button" className="sh-btn" disabled={mayaRunBusy || !schema} onClick={() => void runMaya()}>
+              {mayaRunBusy ? 'Maya 执行中…' : '本机执行（Maya）'}
+            </button>
+            <button
+              type="button"
+              className="sh-btn sh-btn-ghost"
+              disabled={mayaRunBusy || !schema}
+              onClick={() => setParamsModalOpen(true)}
+            >
+              参数…
+            </button>
+          </>
         ) : null}
       </div>
 
@@ -428,6 +232,28 @@ export function ScriptDetailPage() {
         <p className="sh-alert sh-alert-wrap" role="alert">
           {err}
         </p>
+      ) : null}
+
+      {schema && script ? (
+        <ScriptParamsModal
+          open={paramsModalOpen}
+          title={script.title}
+          schema={schema}
+          initialParams={params}
+          busy={mayaRunBusy}
+          onClose={() => setParamsModalOpen(false)}
+          onSave={async (p) => {
+            setParams(p);
+            await saveLastParams(script.id, p, script.currentRevisionId ?? undefined);
+            setParamsModalOpen(false);
+          }}
+          onSaveAndRun={async (p) => {
+            setParams(p);
+            await saveLastParams(script.id, p, script.currentRevisionId ?? undefined);
+            setParamsModalOpen(false);
+            await runMaya(p);
+          }}
+        />
       ) : null}
     </div>
   );

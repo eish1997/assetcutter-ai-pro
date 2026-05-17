@@ -77,6 +77,10 @@ type SendMayaCommandOptions = {
    * 探测用：在收到任意数据后，若 idleMs 内无新数据则视为本轮输出结束。
    */
   idleMsAfterData?: number;
+  /** 探针/轻量路径：出错或超时时禁止 destroy()（RST 可能打掉 Maya 整条 Command Port） */
+  forbidRstOnError?: boolean;
+  /** idle 收尾后等待毫秒（默认探测 5000；脚本执行宜更短） */
+  postEndGraceMs?: number;
 };
 
 async function sendMayaCommand(
@@ -88,8 +92,13 @@ async function sendMayaCommand(
 ): Promise<string> {
   const payload = line.endsWith('\n') ? line : `${line}\n`;
   const idleAfter = opts?.idleMsAfterData;
-  /** 探测：end() 后等 Maya 完全释放连接；grace 内禁止 destroy（RST 会关掉整条 commandPort → ECONNREFUSED） */
-  const postEndGraceMs = idleAfter != null && idleAfter > 0 ? 5000 : 0;
+  /** end() 后 grace：探测用较长；脚本执行用较短以便网页尽快 completed */
+  const postEndGraceMs =
+    idleAfter != null && idleAfter > 0
+      ? opts?.postEndGraceMs != null && opts.postEndGraceMs >= 0
+        ? opts.postEndGraceMs
+        : 5000
+      : 0;
   /** 总预算须覆盖 idle + grace，否则先触发 MAYA_EXEC_TIMEOUT → destroy → 下一轮拒绝连接 */
   const effectiveBudgetMs =
     idleAfter != null && idleAfter > 0
@@ -100,6 +109,7 @@ async function sendMayaCommand(
 
   return new Promise((resolve, reject) => {
     const sock = net.createConnection(connectOpts);
+    const forbidRst = Boolean(opts?.forbidRstOnError);
     const chunks: Buffer[] = [];
     let settled = false;
     let idleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -124,11 +134,18 @@ async function sendMayaCommand(
       clearIdle();
       clearPostEndGrace();
       clearTimeout(timer);
-      const text = Buffer.concat(chunks).toString('utf8');
+      const text = Buffer.concat(chunks).toString('utf8').replace(/\0/g, '');
       const probeIdleMode = idleAfter != null && idleAfter > 0;
       try {
         if (err) {
-          if (probeIdleMode && sock.writableEnded) {
+          if (forbidRst) {
+            try {
+              if (!sock.destroyed && !sock.writableEnded) sock.end();
+            } catch {
+              /* ignore */
+            }
+            detachProbeSocketQuietly(sock);
+          } else if (probeIdleMode && sock.writableEnded) {
             detachProbeSocketQuietly(sock);
           } else {
             sock.destroy();
@@ -162,6 +179,9 @@ async function sendMayaCommand(
               finish();
             }
           }, postEndGraceMs);
+        } else {
+          detachProbeSocketQuietly(sock);
+          finish();
         }
       }, idleAfter);
     };
@@ -187,7 +207,10 @@ export async function probeMayaCommandPort(
   timeoutMs = 10000,
 ): Promise<{ ok: boolean; message: string }> {
   try {
-    await sendMayaCommand(host, port, 'print("SCRIPT_HUB_PING")', timeoutMs, { idleMsAfterData: 250 });
+    await sendMayaCommand(host, port, 'print("SCRIPT_HUB_PING")', timeoutMs, {
+      idleMsAfterData: 250,
+      forbidRstOnError: true,
+    });
     return { ok: true, message: `Maya Command Port 可达 ${host}:${port}` };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -240,7 +263,11 @@ export async function runMayaScriptJob(
     writeFileSync(tmp, wrapper, 'utf8');
     const fp = forwardSlashes(tmp);
     const mel = `exec(open(r'${fp}').read())`;
-    const stdout = await sendMayaCommand(host, port, mel, budget);
+    const stdout = await sendMayaCommand(host, port, mel, budget, {
+      idleMsAfterData: 500,
+      postEndGraceMs: 600,
+      forbidRstOnError: true,
+    });
     return { ok: true, stdout };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

@@ -23,6 +23,8 @@ import {
   patchScriptRun,
   listScriptRuns,
   assertRevisionOwnedByUser,
+  getScriptHubUserPrefs,
+  patchScriptHubUserPrefs,
 } from './script-hub-store.js';
 import { validateParamSchemaV1 } from './script-hub-schema.js';
 import { scriptHubR2Enabled } from './script-hub-r2.js';
@@ -394,6 +396,25 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       json(res, 200, { ok: true });
+      return;
+    }
+
+    if (path === '/api/me/script-hub-prefs' && req.method === 'GET') {
+      const user = await requireAuth(req, res);
+      if (!user) return;
+      if (!requireDb(res)) return;
+      const prefs = await getScriptHubUserPrefs(user.id);
+      json(res, 200, { prefs });
+      return;
+    }
+
+    if (path === '/api/me/script-hub-prefs' && req.method === 'PATCH') {
+      const user = await requireAuth(req, res);
+      if (!user) return;
+      if (!requireDb(res)) return;
+      const body = await readJsonBody(req);
+      const prefs = await patchScriptHubUserPrefs(user.id, body.prefs ?? body);
+      json(res, 200, { prefs });
       return;
     }
 

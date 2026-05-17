@@ -236,9 +236,12 @@ export async function handleRequest(
       const mayaHostRaw = u.searchParams.get('mayaHost');
       const mayaPortRaw = u.searchParams.get('mayaPort');
       const mayaPortParsed = mayaPortRaw != null && mayaPortRaw !== '' ? Number.parseInt(mayaPortRaw, 10) : NaN;
+      const bustCache =
+        u.searchParams.get('bustCache') === '1' || u.searchParams.get('force') === '1';
       const payload = await buildScriptConnectorsPayload({
         ...(mayaHostRaw != null && mayaHostRaw !== '' ? { mayaHost: mayaHostRaw } : {}),
         ...(Number.isFinite(mayaPortParsed) && mayaPortParsed > 0 ? { mayaPort: mayaPortParsed } : {}),
+        ...(bustCache ? { bustCache: true } : {}),
       });
       sendJson(res, 200, payload, origin);
       return;

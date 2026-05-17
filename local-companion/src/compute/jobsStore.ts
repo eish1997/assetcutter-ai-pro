@@ -12,6 +12,8 @@ import {
 import { REMBG_ADAPTER_ID, resolveRembgKeys, runRembgJob } from './rembgAdapter.js';
 import { HOST_BUNDLE_ADAPTER_ID, runHostBundlePhase } from './hostBundleExecAdapter.js';
 import { runMayaScriptJob, MAYA_SCRIPT_ADAPTER_ID } from '../scriptRun/mayaScriptAdapter.js';
+import { enqueueMayaScriptJob } from '../scriptRun/mayaScriptJobQueue.js';
+import { invalidateScriptConnectorsCache } from '../scriptRun/scriptConnectorsSuccessCache.js';
 
 export type JobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 
@@ -77,7 +79,7 @@ export const REGISTERED_COMPUTE_TYPES: Record<string, { adapterId: string; descr
   'script.maya': {
     adapterId: MAYA_SCRIPT_ADAPTER_ID,
     description:
-      'Script Hub：经 Maya Command Port 执行 Python（inputs.content 或 inputs.scriptSource=cloud + scriptId/revisionId/contentJwt）',
+      'Script Hub：经 Maya Command Port 执行 Python；POST 立即返回 queued，后台串行队列执行（inputs.content 或 cloud JWT）',
   },
 };
 
@@ -94,6 +96,50 @@ function nextSeq(jobId: string): number {
   const n = (jobSeq.get(jobId) ?? 0) + 1;
   jobSeq.set(jobId, n);
   return n;
+}
+
+const stripNul = (s: string) => s.replace(/\0/g, '');
+const tailOut = (s: string, n: number) => {
+  const t = stripNul(s);
+  return t.length <= n ? t : `${t.slice(0, n)}…`;
+};
+
+async function executeScriptMayaJob(jobId: string, inputs: unknown, params: unknown): Promise<void> {
+  const rec = jobs.get(jobId);
+  if (!rec || rec.type !== 'script.maya') return;
+
+  rec.status = 'running';
+  rec.updatedAt = Date.now();
+  jobs.set(jobId, rec);
+  emitJobEvent(jobId, 'task.running', {
+    adapterId: MAYA_SCRIPT_ADAPTER_ID,
+    stage: 'maya_command_port',
+  });
+
+  try {
+    const run = await runMayaScriptJob(inputs, params);
+    const latest = jobs.get(jobId);
+    if (!latest) return;
+    if ('error' in run) {
+      latest.status = 'failed';
+      latest.error = { code: run.code, message: run.error };
+      emitJobEvent(jobId, 'task.failed', { code: run.code, message: run.error });
+    } else {
+      latest.status = 'completed';
+      latest.result = {
+        adapterId: MAYA_SCRIPT_ADAPTER_ID,
+        note: tailOut(run.stdout, 2000),
+      };
+      emitJobEvent(jobId, 'reply.completed', {
+        adapterId: MAYA_SCRIPT_ADAPTER_ID,
+        stdoutTail: tailOut(run.stdout, 4000),
+      });
+    }
+    latest.updatedAt = Date.now();
+    jobs.set(jobId, latest);
+  } finally {
+    invalidateScriptConnectorsCache();
+  }
 }
 
 function emitJobEvent(jobId: string, type: JobEventType, payload?: Record<string, unknown>): void {
@@ -304,30 +350,10 @@ export async function submitJob(
       });
     }
   } else if (type === 'script.maya') {
-    rec.status = 'running';
-    rec.updatedAt = Date.now();
     jobs.set(jobId, rec);
-    emitJobEvent(jobId, 'task.running', {
-      adapterId: MAYA_SCRIPT_ADAPTER_ID,
-      stage: 'maya_command_port',
-    });
-    const run = await runMayaScriptJob(b.inputs, b.params ?? {});
-    if ('error' in run) {
-      rec.status = 'failed';
-      rec.error = { code: run.code, message: run.error };
-      emitJobEvent(jobId, 'task.failed', { code: run.code, message: run.error });
-    } else {
-      const tailOut = (s: string, n: number) => (s.length <= n ? s : `${s.slice(0, n)}…`);
-      rec.status = 'completed';
-      rec.result = {
-        adapterId: MAYA_SCRIPT_ADAPTER_ID,
-        note: tailOut(run.stdout, 2000),
-      };
-      emitJobEvent(jobId, 'reply.completed', {
-        adapterId: MAYA_SCRIPT_ADAPTER_ID,
-        stdoutTail: tailOut(run.stdout, 4000),
-      });
-    }
+    const inputs = b.inputs;
+    const params = b.params ?? {};
+    enqueueMayaScriptJob(() => executeScriptMayaJob(jobId, inputs, params));
   } else if (REGISTERED_COMPUTE_TYPES[type]) {
     rec.status = 'failed';
     rec.error = { code: 'COMPUTE_ADAPTER_NOT_READY', message: `type "${type}" has no runnable adapter` };
@@ -365,6 +391,14 @@ export function listRecentJobs(max = 50): JobRecordV1[] {
   return [...jobs.values()]
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .slice(0, max);
+}
+
+/** Maya Command Port 常被 script.maya 占用；执行期间不宜探针（易 ECONNREFUSED） */
+export function hasActiveScriptMayaJob(): boolean {
+  for (const j of jobs.values()) {
+    if (j.type === 'script.maya' && (j.status === 'queued' || j.status === 'running')) return true;
+  }
+  return false;
 }
 
 export function listAdapterIds(): string[] {

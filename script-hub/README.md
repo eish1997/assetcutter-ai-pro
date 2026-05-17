@@ -6,7 +6,9 @@
 
 **UI**：与主站工作台对齐 — 见根目录 `index.html` 中 CSS 变量与字体；`script-hub/src/index.css` 使用同名 `--background` / `--surface-*` / `--accent-blue` 及 `sh-*` 工具类。
 
-**伴侣**：与主工作台 **同一套客户端**：`companionFetchJson` + `getCompanionLocalBaseUrl()`（键 `ac_companion_local_base_v1`，默认 `http://127.0.0.1:18765`）+ `getCompanionLocalToken()`（`ac_companion_local_token_v1`）。浏览器 **直连** 本机伴侣，**不经 Vite `/v1` 代理**；`GET /v1/script-connectors`（可选 `mayaHost`/`mayaPort`）、`POST /v1/compute/jobs`（`script.maya`）等均走此路径。Script Hub 与工作台若不同端口，须在两侧各自保存通信密码与（若改过）伴侣 HTTP 根。桌面壳配对、伴侣白名单见 `companion-desktop/README.md` 与 `local-companion` 文档。
+**用户偏好（P0）**：`GET/PATCH /api/me/script-hub-prefs` — 按账号云同步「上次运行参数」与 Maya Host/Port；列表页 **执行 / 参数…**；顶栏 **本机环境** 状态条。
+
+**伴侣**：与主工作台 **同一套客户端**：`companionFetchJson` + `getCompanionLocalBaseUrl()`（键 `ac_companion_local_base_v1`，默认 `http://127.0.0.1:18765`）+ `getCompanionLocalToken()`（`ac_companion_local_token_v1`）。浏览器 **直连** 本机伴侣，**不经 Vite `/v1` 代理**；`GET /v1/script-connectors`（可选 `mayaHost`/`mayaPort`、**`bustCache=1`** 强制重探测；与 **`script.maya` 并行**，Maya 主线程忙时探针可能短时超时）、`POST /v1/compute/jobs`（`script.maya`）等均走此路径。Script Hub 与工作台若不同端口，须在两侧各自保存通信密码与（若改过）伴侣 HTTP 根。桌面壳配对、伴侣白名单见 `companion-desktop/README.md` 与 `local-companion` 文档。
 
 **R2**：若根 `.env.local` 已配置 `**R2_*`** 四元组且未设 `**SCRIPT_HUB_USE_R2=false**`，新 revision 正文由 **script-hub-api** 写入 R2（`script-hub/{userId}/{...}}/rev-{n}.py`）；`GET http://127.0.0.1:9101/healthz` 响应含 `**scriptHubR2`: true/false**。
 

@@ -355,13 +355,13 @@ POST /v1/compute/jobs
 { "type": "script.maya" | "script.unreal", "inputs": { ... }, "params": { ... } }
 ```
 
-在 `jobsStore.ts` 的 `REGISTERED_COMPUTE_TYPES` 注册新 type；**不**另起一套 `/v1/script-runs` 存储。
+**`script.maya`（已实现）**：HTTP **201 立即返回** `status: queued`（及 `jobId`）；伴侣在 **`mayaScriptJobQueue.ts`** 内 **串行** 后台执行 Maya Command Port。前端须 **`GET /v1/compute/jobs/:id`** 轮询至 `completed` / `failed`（Script Hub 使用 **`waitForComputeJob`**）。
 
 **辅助只读接口**（可单独加，不存 second job store）：
 
 | Method | Path | 说明 |
 |--------|------|------|
-| GET | `/v1/script-connectors` | 聚合 probe 状态（**已实现**）。可选查询参数 **`mayaHost`**、**`mayaPort`**，与 Script Hub 执行表单对齐；未传时使用 `COMPANION_MAYA_HOST` / `COMPANION_MAYA_PORT`（默认 `127.0.0.1:7001`）。短缓存 TTL 与 Sam/rembg 相同（**`COMPANION_RUNTIME_PROBE_CACHE_MS`**）。 |
+| GET | `/v1/script-connectors` | 聚合 probe 状态（**已实现**）。可选 **`mayaHost`**、**`mayaPort`**、**`bustCache=1`**；未传 host/port 时用 `COMPANION_MAYA_HOST` / `COMPANION_MAYA_PORT`（默认 `127.0.0.1:7001`）。**仅成功探测**短缓存：**`COMPANION_SCRIPT_CONNECTORS_CACHE_MS`**（默认 4s，与 `COMPANION_RUNTIME_PROBE_CACHE_MS` 独立）；与 **`script.maya` 并行探测**（Maya 主线程忙时探针可能短时超时）。 |
 | GET/PATCH | `/v1/script-connectors/config` | 读写本机连接器配置（**未实现**，仍用环境变量） |
 
 `GET /v1/runtime-status` 增加 `scriptConnectors` 切片（与 `/v1/script-connectors` 同源探测，带短缓存 TTL，对齐 Sam rembg 探测模式）。
