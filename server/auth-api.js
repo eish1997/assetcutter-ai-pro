@@ -37,19 +37,29 @@ import {
   pickLatestArtifact,
   toPublicSummary,
 } from './companion-artifacts-store.js';
-import { buildElectronAppUpdateYaml, publicFileUrlForR2Key } from './companion-electron-feed.js';
+import {
+  companionDistPublicHttpBase,
+  publicFileUrlForR2Key,
+  writeCompanionElectronUpdaterYamlResponse,
+} from './companion-electron-feed.js';
 
 /** 公开摘要；host_plugin_bundle 在配置 COMPANION_DIST_PUBLIC_HTTP_BASE 时附带直链（供桌面壳调用伴侣 install-from-url，免登录预签名） */
 function companionArtifactToPublicClient(rec) {
   const s = toPublicSummary(rec);
   if (!s) return null;
-  const publicBase = String(process.env.COMPANION_DIST_PUBLIC_HTTP_BASE || '').trim();
+  const publicBase = companionDistPublicHttpBase();
   if (publicBase && rec.kind === 'host_plugin_bundle' && rec.r2Key) {
     const u = publicFileUrlForR2Key(rec.r2Key, publicBase);
     if (u) s.publicInstallUrl = u;
   }
   return s;
 }
+
+async function respondCompanionElectronUpdaterYaml(res, { kind, platform, channel }) {
+  const latest = await pickLatestArtifact({ kind, platform, channel });
+  writeCompanionElectronUpdaterYamlResponse(res, latest);
+}
+
 import { getWorkspaceUsedBytes } from './workspace-storage-usage.js';
 import {
   API_JSON_BODY_MAX_BYTES,
@@ -743,7 +753,21 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    /** electron-updater generic：与 COMPANION_DIST_PUBLIC_HTTP_BASE + R2 公网读 URL 对齐；登记时可填 sha512（hex） */
+    const electronUpdaterYamlMatch = path.match(
+      /^\/api\/companion-artifacts\/electron-updater\/([^/]+)\/([^/]+)\/latest\.yml$/,
+    );
+    if (electronUpdaterYamlMatch && req.method === 'GET') {
+      const platform = decodeURIComponent(electronUpdaterYamlMatch[1] || 'win32');
+      const channel = decodeURIComponent(electronUpdaterYamlMatch[2] || 'stable');
+      await respondCompanionElectronUpdaterYaml(res, {
+        kind: 'desktop_shell',
+        platform,
+        channel,
+      });
+      return;
+    }
+
+    /** 兼容旧文档/手测：单文件 yml 查询参数形式 */
     if (path === '/api/companion-artifacts/electron-app-update.yml' && req.method === 'GET') {
       let u;
       try {
@@ -754,34 +778,7 @@ const server = http.createServer(async (req, res) => {
       const kind = u.searchParams.get('kind') || 'desktop_shell';
       const platform = u.searchParams.get('platform') || 'win32';
       const channel = u.searchParams.get('channel') || 'stable';
-      const publicBase = String(process.env.COMPANION_DIST_PUBLIC_HTTP_BASE || '').trim();
-      if (!publicBase) {
-        res.statusCode = 503;
-        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-        res.end(
-          '# error: 未配置 COMPANION_DIST_PUBLIC_HTTP_BASE（公网可访问的文件 URL 前缀，无尾部斜杠）\n',
-        );
-        return;
-      }
-      const latest = await pickLatestArtifact({ kind, platform, channel });
-      if (!latest) {
-        res.statusCode = 404;
-        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-        res.end('# error: 无匹配的发行记录\n');
-        return;
-      }
-      try {
-        const yaml = buildElectronAppUpdateYaml(latest, publicBase);
-        res.statusCode = 200;
-        res.setHeader('Content-Type', 'text/yaml; charset=utf-8');
-        res.setHeader('Cache-Control', 'no-store');
-        res.end(yaml);
-      } catch (e) {
-        const message = e instanceof Error ? e.message : String(e);
-        res.statusCode = 500;
-        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-        res.end(`# error: ${message}\n`);
-      }
+      await respondCompanionElectronUpdaterYaml(res, { kind, platform, channel });
       return;
     }
 
@@ -907,6 +904,8 @@ const server = http.createServer(async (req, res) => {
           r2Key: body.r2Key,
           sha256: body.sha256,
           sha512: body.sha512,
+          blockMapBytes: body.blockMapBytes,
+          blockMapR2Key: body.blockMapR2Key,
           bytes: body.bytes,
           notes: body.notes,
           label: body.label,
@@ -946,6 +945,13 @@ const server = http.createServer(async (req, res) => {
         if (isR2Configured() && rec.r2Key) {
           try {
             await deleteR2ObjectByKey(rec.r2Key);
+            if (rec.blockMapR2Key && rec.blockMapR2Key !== rec.r2Key) {
+              try {
+                await deleteR2ObjectByKey(rec.blockMapR2Key);
+              } catch {
+                /* blockmap 可能未上传，忽略 */
+              }
+            }
           } catch (e) {
             const message = e instanceof Error ? e.message : String(e);
             json(res, 502, { error: `R2 对象删除失败：${message}` });

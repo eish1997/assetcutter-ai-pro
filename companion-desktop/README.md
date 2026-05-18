@@ -75,15 +75,28 @@ npm run companion-desktop:dist:retry
 
 发行包上架与「主站用户下载桌面壳」的元数据模型见仓库 **`docs/本地伴侣-插件与发行.md`**（与 `/v1/capabilities` 运行时插件区分）。
 
-### 自动更新（可选，M2）
+### 自动更新（安装包默认启用）
 
-设置 **`COMPANION_UPDATE_FEED_URL`** 为已发布安装包的 **generic 更新根地址**（与 `latest.yml` 同级目录，参见 `electron-builder` / `electron-updater` 文档）。若由本站 **auth-api** 统一生成 YAML，可将 feed 指向形如 **`https://<站点>/api/companion-artifacts/electron-app-update.yml?kind=desktop_shell&platform=win32&channel=stable`**（服务端需配置 **`COMPANION_DIST_PUBLIC_HTTP_BASE`** 与登记 **`sha512`**，见 **`docs/本地伴侣-插件与发行.md`** §2）。启用后：
+**打包时**建议设置 **`COMPANION_BUILD_AUTH_API_ORIGIN`**（auth-api 根地址，无尾斜杠），会写入 `build-constants.json`。安装包内 **electron-updater**（generic）默认请求  
+`{origin}/api/companion-artifacts/electron-updater/{platform}/stable/latest.yml`（如 win32 → `…/electron-updater/win32/stable/latest.yml`）。服务端须配置 **`COMPANION_DIST_PUBLIC_HTTP_BASE`**（或 **`R2_PUBLIC_BASE_URL`**）与登记 **`sha512`**；部署后可在仓库根执行 **`npm run companion-desktop:verify-update-pipeline`** 校验。旧版查询参数路径 **`electron-app-update.yml?…`** 仍保留兼容。
 
-- 启动约 20 秒后会自动检查一次更新；
-- 托盘菜单出现 **「检查更新…」**；
-- 有新版本时弹窗提示，可选择下载并在退出后安装。
+也可覆盖：
 
-未设置该变量时不启用更新检查（适合本地开发）。
+| 变量 | 作用 |
+|------|------|
+| **`COMPANION_UPDATE_FEED_URL`** | 完整 generic feed URL（最高优先级） |
+| **`COMPANION_AUTH_API_ORIGIN`** | 仅指定 auth 根，运行时按平台拼 feed 路径 |
+| **`COMPANION_DISABLE_AUTO_UPDATE=1`** | 关闭自动更新 |
+| **`COMPANION_ENABLE_UPDATE_IN_DEV=1`** | 开发 `npm start` 时也启用（需能访问 feed） |
+
+**用户体验（安装包）**：
+
+- 启动约 **20s** 后自动检查；之后每 **4h** 再查；
+- 发现新版本 → **后台静默下载**（托盘提示进度）；
+- 下载完成 → 托盘气泡 + 菜单 **「安装更新并重启」**；退出应用时也可自动安装；
+- 管理后台登记 NSIS 时建议同时上传同名的 **`.blockmap`**，启用 **差分下载**（`differentialPackage: true`）。
+
+未配置任何更新源时，仅保留「轮询主站 latest → 提示去网站下载」的弱提示（适合本地开发）。
 
 ### 工作台 `ERR_CONNECTION_RESET`（-101）
 

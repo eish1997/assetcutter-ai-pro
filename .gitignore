@@ -23,6 +23,7 @@ companion-desktop/dist/
 companion-desktop/release/
 companion-desktop/release*/
 companion-desktop/local-companion-bundle/
+companion-desktop/build-constants.json
 companion-desktop/sam-local-bundled/
 
 # auth-api 运行时登记（首条上传时创建，含环境与用户相关元数据）

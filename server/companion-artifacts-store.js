@@ -50,6 +50,8 @@ async function ensureCompanionArtifactsPg() {
       r2_key TEXT NOT NULL,
       sha256 TEXT NOT NULL,
       sha512 TEXT,
+      block_map_bytes BIGINT,
+      block_map_r2_key TEXT,
       bytes BIGINT NOT NULL,
       notes TEXT NOT NULL DEFAULT '',
       label TEXT NOT NULL DEFAULT '',
@@ -57,6 +59,12 @@ async function ensureCompanionArtifactsPg() {
       created_by_user_id TEXT NOT NULL DEFAULT ''
     );
   `);
+  await p.query(
+    `ALTER TABLE companion_artifacts ADD COLUMN IF NOT EXISTS block_map_bytes BIGINT`,
+  );
+  await p.query(
+    `ALTER TABLE companion_artifacts ADD COLUMN IF NOT EXISTS block_map_r2_key TEXT`,
+  );
   await p.query(
     `CREATE INDEX IF NOT EXISTS idx_companion_artifacts_published_at ON companion_artifacts (published_at DESC);`
   );
@@ -85,6 +93,13 @@ function mapPgRow(r) {
   };
   const sp = r.sha512 != null && String(r.sha512).trim() ? String(r.sha512).trim().toLowerCase() : '';
   if (sp) out.sha512 = sp;
+  const bm = Number(r.block_map_bytes);
+  if (Number.isFinite(bm) && bm > 0) out.blockMapBytes = Math.floor(bm);
+  const bmk =
+    r.block_map_r2_key != null && String(r.block_map_r2_key).trim()
+      ? String(r.block_map_r2_key).trim()
+      : '';
+  if (bmk) out.blockMapR2Key = bmk;
   return out;
 }
 
@@ -129,11 +144,13 @@ export async function listCompanionArtifacts() {
 }
 
 /**
- * @param {{ kind: string, semver: string, channel?: string, platform: string, fileName: string, r2Key: string, sha256: string, sha512?: string, bytes: number, notes?: string, label?: string, createdByUserId: string }} input
+ * @param {{ kind: string, semver: string, channel?: string, platform: string, fileName: string, r2Key: string, sha256: string, sha512?: string, blockMapBytes?: number, blockMapR2Key?: string, bytes: number, notes?: string, label?: string, createdByUserId: string }} input
  */
 export async function addCompanionArtifact(input) {
   const channel = String(input.channel || 'stable').trim() || 'stable';
   const sha512Raw = String(input.sha512 || '').trim().toLowerCase();
+  const blockMapBytes = Math.floor(Number(input.blockMapBytes) || 0);
+  const blockMapR2Key = String(input.blockMapR2Key || '').trim();
   const rec = {
     id: makeId(),
     kind: input.kind,
@@ -144,6 +161,8 @@ export async function addCompanionArtifact(input) {
     r2Key: String(input.r2Key || '').trim(),
     sha256: String(input.sha256 || '').trim().toLowerCase(),
     ...(sha512Raw ? { sha512: sha512Raw } : {}),
+    ...(blockMapBytes > 0 ? { blockMapBytes } : {}),
+    ...(blockMapR2Key ? { blockMapR2Key } : {}),
     bytes: Math.floor(Number(input.bytes) || 0),
     notes: String(input.notes || '').trim(),
     label: String(input.label || '').trim(),
@@ -168,14 +187,20 @@ export async function addCompanionArtifact(input) {
     throw new Error('sha512 须为 128 位十六进制，或留空');
   }
   if (!Number.isFinite(rec.bytes) || rec.bytes < 1) throw new Error('bytes 无效');
+  if (rec.blockMapR2Key && !rec.blockMapR2Key.startsWith('public/companion-distribution/')) {
+    throw new Error('blockMapR2Key 须以 public/companion-distribution/ 开头');
+  }
+  if (rec.blockMapBytes && (!rec.blockMapR2Key || rec.blockMapBytes < 1)) {
+    throw new Error('blockMapBytes 须与 blockMapR2Key 同时提供');
+  }
 
   await ensureCompanionArtifactsPg();
   if (USE_COMPANION_PG) {
     const p = getCompanionPool();
     await p.query(
       `INSERT INTO companion_artifacts (
-        id, kind, semver, channel, platform, file_name, r2_key, sha256, sha512, bytes, notes, label, published_at, created_by_user_id
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::timestamptz, $14)`,
+        id, kind, semver, channel, platform, file_name, r2_key, sha256, sha512, block_map_bytes, block_map_r2_key, bytes, notes, label, published_at, created_by_user_id
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::timestamptz, $16)`,
       [
         rec.id,
         rec.kind,
@@ -186,6 +211,8 @@ export async function addCompanionArtifact(input) {
         rec.r2Key,
         rec.sha256,
         rec.sha512 || null,
+        rec.blockMapBytes || null,
+        rec.blockMapR2Key || null,
         rec.bytes,
         rec.notes,
         rec.label,

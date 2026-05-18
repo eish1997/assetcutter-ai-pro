@@ -68,6 +68,9 @@ services:
         sync: false
       - key: R2_PUBLIC_BASE_URL
         sync: false
+      # 伴侣安装包/扩展包公网直链与 electron-updater YAML；未设时回退 R2_PUBLIC_BASE_URL
+      - key: COMPANION_DIST_PUBLIC_HTTP_BASE
+        sync: false
       - key: PROXY_ALLOWED_ORIGINS
         sync: false
 

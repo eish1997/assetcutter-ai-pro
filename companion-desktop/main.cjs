@@ -19,6 +19,7 @@ const {
 const { spawn, execSync } = require('child_process');
 const { randomBytes } = require('node:crypto');
 const companionSandboxPaths = require('./companion-sandbox-paths.cjs');
+const { createCompanionAutoUpdate } = require('./companion-auto-update.cjs');
 
 /** Windows：统一沙盒；首次启动将旧版 `desktop-shell` / `runtimes` 迁入沙盒后再设 userData */
 if (process.platform === 'win32' && process.env.LOCALAPPDATA) {
@@ -95,9 +96,31 @@ let statusPollTimer = null;
 /** @type {string | null} */
 let lastStatusAlertKey = null;
 /** @type {boolean} */
-let companionAutoUpdateConfigured = false;
-/** @type {boolean} */
 let isQuitting = false;
+
+function broadcastShellUpdaterState(state) {
+  const payload = state && typeof state === 'object' ? state : { phase: 'idle', version: null, percent: 0 };
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try {
+      mainWindow.webContents.send('shell-updater-state', payload);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+const companionUpdater = createCompanionAutoUpdate({
+  app,
+  dialog,
+  readShellSettings,
+  rebuildTrayMenu,
+  updateTrayTooltip,
+  setCompanionStatusNote: (note) => {
+    companionStatusNote = note;
+  },
+  displayTrayBalloon,
+  onUpdaterUiChange: broadcastShellUpdaterState,
+});
 /** @type {import('child_process').ChildProcess | null} */
 let samBootstrapChild = null;
 /** @type {import('child_process').ChildProcess | null} */
@@ -117,14 +140,16 @@ function readShellSettings() {
   const fallbackSite = defaultShellSiteUrl();
   try {
     const p = shellSettingsPath();
-    if (!fs.existsSync(p)) return { siteUrl: fallbackSite, volumeRoot: '' };
+    if (!fs.existsSync(p)) return { siteUrl: fallbackSite, authApiOrigin: '', volumeRoot: '' };
     const j = JSON.parse(fs.readFileSync(p, 'utf8'));
     const siteUrl =
       typeof j.siteUrl === 'string' && j.siteUrl.trim() ? j.siteUrl.trim() : fallbackSite;
+    const authApiOrigin =
+      typeof j.authApiOrigin === 'string' ? j.authApiOrigin.trim().replace(/\/+$/, '') : '';
     const volumeRoot = typeof j.volumeRoot === 'string' ? j.volumeRoot.trim() : '';
-    return { siteUrl, volumeRoot };
+    return { siteUrl, authApiOrigin, volumeRoot };
   } catch {
-    return { siteUrl: fallbackSite, volumeRoot: '' };
+    return { siteUrl: fallbackSite, authApiOrigin: '', volumeRoot: '' };
   }
 }
 
@@ -353,6 +378,41 @@ function readDesktopShellPackageVersion() {
   }
 }
 
+function resolveAuthApiOriginForCompanionApi() {
+  const fromEnv = String(process.env.COMPANION_AUTH_API_ORIGIN || '').trim();
+  if (fromEnv) {
+    try {
+      return new URL(fromEnv).origin;
+    } catch {
+      /* ignore */
+    }
+  }
+  const settings = readShellSettings();
+  const fromSettings = String(settings.authApiOrigin || '').trim();
+  if (fromSettings) {
+    try {
+      return new URL(fromSettings).origin;
+    } catch {
+      /* ignore */
+    }
+  }
+  try {
+    const bakedPath = path.join(__dirname, 'build-constants.json');
+    if (fs.existsSync(bakedPath)) {
+      const j = JSON.parse(fs.readFileSync(bakedPath, 'utf8'));
+      const baked = String(j.defaultAuthApiOrigin || '').trim();
+      if (baked) return new URL(baked).origin;
+    }
+  } catch {
+    /* ignore */
+  }
+  try {
+    return new URL(readShellSettings().siteUrl).origin;
+  } catch {
+    return null;
+  }
+}
+
 function semverRemoteGreater(remote, local) {
   const pa = String(remote)
     .split('.')
@@ -371,12 +431,9 @@ function semverRemoteGreater(remote, local) {
 }
 
 async function fetchHostBundleCatalogFromSite() {
-  const { siteUrl } = readShellSettings();
-  let origin;
-  try {
-    origin = new URL(siteUrl).origin;
-  } catch {
-    return { ok: false, error: 'invalid_site_url' };
+  const origin = resolveAuthApiOriginForCompanionApi();
+  if (!origin) {
+    return { ok: false, error: 'invalid_auth_api_origin' };
   }
   const api = `${origin}/api/companion-artifacts/catalog`;
   try {
@@ -391,13 +448,8 @@ async function fetchHostBundleCatalogFromSite() {
 }
 
 async function checkRemoteDesktopShellReleaseOnce() {
-  const { siteUrl } = readShellSettings();
-  let origin;
-  try {
-    origin = new URL(siteUrl).origin;
-  } catch {
-    return null;
-  }
+  const origin = resolveAuthApiOriginForCompanionApi();
+  if (!origin) return null;
   const plat =
     process.platform === 'win32' ? 'win32' : process.platform === 'darwin' ? 'darwin' : 'linux';
   const api = `${origin}/api/companion-artifacts/latest?kind=desktop_shell&platform=${encodeURIComponent(
@@ -1214,6 +1266,15 @@ function stopLocalCompanion() {
   companion = null;
 }
 
+function displayTrayBalloon(opts) {
+  if (process.platform !== 'win32' || !tray || tray.isDestroyed()) return;
+  tray.displayBalloon({
+    iconType: opts.iconType || 'info',
+    title: opts.title,
+    content: opts.content,
+  });
+}
+
 function openConsole() {
   const port = readHttpPort();
   const url = `http://127.0.0.1:${port}/`;
@@ -1254,20 +1315,23 @@ function buildTrayMenu() {
     },
   ];
 
-  const updateFeed = process.env.COMPANION_UPDATE_FEED_URL?.trim();
-  if (updateFeed) {
+  if (app.isPackaged || companionUpdater.resolveUpdateFeedUrl()) {
+    const labels = companionUpdater.getTrayUpdateLabels();
+    if (labels.status) {
+      template.push({ label: labels.status, enabled: false });
+    }
     template.push({
-      label: '检查更新…',
-      click: async () => {
-        try {
-          const { autoUpdater } = require('electron-updater');
-          await autoUpdater.checkForUpdates();
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          void dialog.showErrorBox('检查更新失败', msg);
-        }
+      label: labels.check,
+      click: () => {
+        void companionUpdater.checkNow(true);
       },
     });
+    if (labels.install) {
+      template.push({
+        label: labels.install,
+        click: () => companionUpdater.installReadyUpdate(),
+      });
+    }
   }
 
   template.push(
@@ -1501,66 +1565,14 @@ function openMainWindow() {
 
   bindMainWindowWorkbenchLayoutHandlers();
 
-  const shellHtml = path.join(__dirname, 'shell', 'index.html');
-  void mainWindow.loadFile(shellHtml);
-}
-
-function setupOptionalAutoUpdate() {
-  const feed = process.env.COMPANION_UPDATE_FEED_URL?.trim();
-  if (!feed || companionAutoUpdateConfigured) return;
-  let autoUpdater;
-  try {
-    ({ autoUpdater } = require('electron-updater'));
-  } catch (e) {
-    console.error('[companion-desktop] electron-updater 未安装:', e.message);
-    return;
-  }
-  companionAutoUpdateConfigured = true;
-  autoUpdater.autoDownload = false;
-  autoUpdater.autoInstallOnAppQuit = true;
-  autoUpdater.setFeedURL({ provider: 'generic', url: feed });
-  autoUpdater.on('update-not-available', () => {
-    if (process.platform === 'win32' && tray && !tray.isDestroyed()) {
-      tray.displayBalloon({ title: '软件更新', content: '当前已是最新版本。' });
+  mainWindow.webContents.on('did-finish-load', () => {
+    if (companionUpdater.getUpdaterUiState) {
+      broadcastShellUpdaterState(companionUpdater.getUpdaterUiState());
     }
   });
-  autoUpdater.on('update-available', (info) => {
-    const ver = info && typeof info.version === 'string' ? info.version : '新版本';
-    void dialog
-      .showMessageBox({
-        type: 'info',
-        title: '发现新版本',
-        message: `可更新至 ${ver}`,
-        detail: '是否下载更新？下载完成后可在退出应用时安装。',
-        buttons: ['稍后', '下载更新'],
-        defaultId: 1,
-        cancelId: 0,
-      })
-      .then((r) => {
-        if (r.response === 1) void autoUpdater.downloadUpdate();
-      });
-  });
-  autoUpdater.on('update-downloaded', () => {
-    void dialog
-      .showMessageBox({
-        type: 'info',
-        title: '更新已就绪',
-        message: '更新已下载完成。',
-        detail: '需要退出应用后完成安装。是否现在退出并安装？',
-        buttons: ['稍后', '退出并安装'],
-        defaultId: 1,
-        cancelId: 0,
-      })
-      .then((r) => {
-        if (r.response === 1) autoUpdater.quitAndInstall(false, true);
-      });
-  });
-  autoUpdater.on('error', (err) => {
-    console.error('[companion-desktop][updater]', err);
-  });
-  setTimeout(() => {
-    void autoUpdater.checkForUpdates().catch((e) => console.error('[companion-desktop][updater] check', e));
-  }, 20000);
+
+  const shellHtml = path.join(__dirname, 'shell', 'index.html');
+  void mainWindow.loadFile(shellHtml);
 }
 
 function buildTray() {
@@ -1590,7 +1602,13 @@ if (!gotLock) {
       note: companionStatusNote,
       lastError: companionLastError,
       capabilityUi: companionTrayCapabilityUi,
+      updater: companionUpdater.getUpdaterUiState ? companionUpdater.getUpdaterUiState() : null,
     };
+  });
+
+  ipcMain.handle('shell-install-shell-update', () => {
+    companionUpdater.installReadyUpdate();
+    return { ok: true };
   });
 
   ipcMain.handle('shell-settings-load', () => readShellSettings());
@@ -2057,14 +2075,20 @@ if (!gotLock) {
     void startLocalCompanion();
     buildTray();
     startStatusPolling();
-    setupOptionalAutoUpdate();
-    setTimeout(() => {
-      try {
-        scheduleDesktopShellReleaseCheck();
-      } catch (e) {
-        console.warn('[companion-desktop] desktop release check:', e instanceof Error ? e.message : e);
+    void companionUpdater.setup().then((updaterOn) => {
+      if (!updaterOn) {
+        setTimeout(() => {
+          try {
+            scheduleDesktopShellReleaseCheck();
+          } catch (e) {
+            console.warn(
+              '[companion-desktop] desktop release check:',
+              e instanceof Error ? e.message : e,
+            );
+          }
+        }, 45000);
       }
-    }, 45000);
+    });
     if (process.env.COMPANION_DESKTOP_NO_AUTO_SHELL !== '1') {
       const delayMs = peekProtocolUrl() ? 400 : 900;
       setTimeout(() => openMainWindow(), delayMs);
@@ -2080,6 +2104,7 @@ if (!gotLock) {
 
   app.on('before-quit', () => {
     isQuitting = true;
+    companionUpdater.dispose();
     if (desktopReleaseCheckTimer) {
       clearInterval(desktopReleaseCheckTimer);
       desktopReleaseCheckTimer = null;

@@ -50,6 +50,8 @@
     "local-companion:start": "npm run start --prefix local-companion",
     "companion-desktop:start": "npm run start --prefix companion-desktop",
     "companion-desktop:pack": "npm run pack --prefix companion-desktop",
+    "companion-desktop:write-build-constants": "npm run write-build-constants --prefix companion-desktop",
+    "companion-desktop:verify-update-pipeline": "powershell -NoProfile -ExecutionPolicy Bypass -File \"scripts/verify-companion-update-pipeline.ps1\"",
     "companion-desktop:dist:win": "npm run dist:win --prefix companion-desktop",
     "companion-desktop:dist:portable": "npm run dist:portable --prefix companion-desktop",
     "companion-desktop:dist:retry": "powershell -NoProfile -ExecutionPolicy Bypass -File \"scripts/companion-desktop-dist.ps1\" -Target both -Retries 3",

@@ -59,10 +59,17 @@ if ($RequireSigning) {
 
 if ($RequirePublishUrl) {
   $hasPublish = Test-EnvPresent -Name 'COMPANION_UPDATE_FEED_URL'
+  $hasBuildOrigin = Test-EnvPresent -Name 'COMPANION_BUILD_AUTH_API_ORIGIN'
   $checks += [pscustomobject]@{
-    Name = 'Updater: COMPANION_UPDATE_FEED_URL'
-    Pass = $hasPublish
-    Detail = if ($hasPublish) { [Environment]::GetEnvironmentVariable('COMPANION_UPDATE_FEED_URL') } else { 'missing' }
+    Name = 'Updater: feed URL or COMPANION_BUILD_AUTH_API_ORIGIN'
+    Pass = $hasPublish -or $hasBuildOrigin
+    Detail = if ($hasPublish) {
+      "COMPANION_UPDATE_FEED_URL=$([Environment]::GetEnvironmentVariable('COMPANION_UPDATE_FEED_URL'))"
+    } elseif ($hasBuildOrigin) {
+      "COMPANION_BUILD_AUTH_API_ORIGIN=$([Environment]::GetEnvironmentVariable('COMPANION_BUILD_AUTH_API_ORIGIN'))"
+    } else {
+      'need COMPANION_UPDATE_FEED_URL or COMPANION_BUILD_AUTH_API_ORIGIN'
+    }
   }
 }
 

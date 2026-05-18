@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld('companionShell', {
   rembgDesktopState: () => timedInvoke('shell-rembg-desktop-state'),
   rembgBootstrapRun: () => timedInvoke('shell-rembg-bootstrap-run'),
   traySummary: () => timedInvoke('shell-tray-summary'),
+  installShellUpdate: () => timedInvoke('shell-install-shell-update'),
   loadSettings: () => timedInvoke('shell-settings-load'),
   saveSettings: (patch) => timedInvoke('shell-settings-save', patch),
   pickVolumeRoot: () => timedInvoke('shell-pick-volume-root'),
@@ -76,6 +77,16 @@ contextBridge.exposeInMainWorld('companionShell', {
   onRembgBootstrapLog: (handler) => {
     if (typeof handler !== 'function') return;
     ipcRenderer.on('rembg-bootstrap-log', (_evt, payload) => {
+      try {
+        handler(payload);
+      } catch {
+        /* ignore */
+      }
+    });
+  },
+  onUpdaterState: (handler) => {
+    if (typeof handler !== 'function') return;
+    ipcRenderer.on('shell-updater-state', (_evt, payload) => {
       try {
         handler(payload);
       } catch {

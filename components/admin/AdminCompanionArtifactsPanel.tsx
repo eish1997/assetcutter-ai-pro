@@ -32,6 +32,7 @@ const AdminCompanionArtifactsPanel: React.FC = () => {
   const [notes, setNotes] = useState('');
   const [label, setLabel] = useState('');
   const [file, setFile] = useState<File | null>(null);
+  const [blockMapFile, setBlockMapFile] = useState<File | null>(null);
 
   const PLATFORM_OPTIONS = [
     { value: 'win32', label: 'win32（Windows）' },
@@ -91,6 +92,27 @@ const AdminCompanionArtifactsPanel: React.FC = () => {
       if (!put.ok) {
         throw new Error(`上传到 R2 失败 HTTP ${put.status}`);
       }
+
+      let blockMapBytes: number | undefined;
+      let blockMapR2Key: string | undefined;
+      if (kind === 'desktop_shell' && blockMapFile) {
+        const bmBuf = await blockMapFile.arrayBuffer();
+        blockMapBytes = bmBuf.byteLength;
+        const bmPresign = await presignCompanionDistributionUpload(
+          blockMapFile.name,
+          blockMapFile.type || 'application/octet-stream',
+        );
+        const bmPut = await fetch(bmPresign.uploadUrl, {
+          method: 'PUT',
+          headers: { 'Content-Type': bmPresign.contentType },
+          body: new Uint8Array(bmBuf),
+        });
+        if (!bmPut.ok) {
+          throw new Error(`blockmap 上传到 R2 失败 HTTP ${bmPut.status}`);
+        }
+        blockMapR2Key = bmPresign.objectKey;
+      }
+
       await registerCompanionArtifact({
         kind,
         semver: semver.trim(),
@@ -100,11 +122,14 @@ const AdminCompanionArtifactsPanel: React.FC = () => {
         r2Key: presign.objectKey,
         sha256,
         sha512,
+        blockMapBytes,
+        blockMapR2Key,
         bytes,
         notes: notes.trim() || undefined,
         label: label.trim() || undefined,
       });
       setFile(null);
+      setBlockMapFile(null);
       setSemver('');
       setNotes('');
       setLabel('');
@@ -221,6 +246,17 @@ const AdminCompanionArtifactsPanel: React.FC = () => {
               className="mt-1 w-full text-[11px] text-gray-300 file:mr-2 file:rounded file:border-0 file:bg-[#1d4ed8] file:px-2 file:py-1 file:text-[10px] file:text-white"
             />
           </label>
+          {kind === 'desktop_shell' ? (
+            <label className="block text-[10px] text-gray-500 sm:col-span-2">
+              差分 blockmap（可选，与 NSIS 同目录的 <code className="text-gray-500">*.exe.blockmap</code>）
+              <input
+                type="file"
+                accept=".blockmap"
+                onChange={(e) => setBlockMapFile(e.target.files?.[0] || null)}
+                className="mt-1 w-full text-[11px] text-gray-300 file:mr-2 file:rounded file:border-0 file:bg-[#1d4ed8] file:px-2 file:py-1 file:text-[10px] file:text-white"
+              />
+            </label>
+          ) : null}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <button
@@ -242,7 +278,8 @@ const AdminCompanionArtifactsPanel: React.FC = () => {
         </div>
         <p className="text-[10px] text-gray-600 leading-relaxed">
           全平台同一份 ZIP 选 <code className="text-gray-500">universal</code> 即可被各端扩展目录命中；若另有分平台包且时间更新，
-          <code className="text-gray-500">latest</code> 会优先当前平台的精确条目。
+          <code className="text-gray-500">latest</code> 会优先当前平台的精确条目。桌面壳 NSIS 建议同时上传{' '}
+          <code className="text-gray-500">.blockmap</code> 以启用安装包差分更新（体积更小）。
         </p>
       </div>
 

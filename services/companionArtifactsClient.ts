@@ -15,6 +15,8 @@ export type CompanionArtifactSummary = {
   sha256?: string;
   /** 128 位十六进制 SHA-512；electron-updater feed 会转为 Base64 写入 yml */
   sha512?: string;
+  /** NSIS 差分更新用 .blockmap 体积（字节） */
+  blockMapBytes?: number;
   notes: string;
   label: string;
   publishedAt: string;
@@ -28,6 +30,7 @@ export type CompanionArtifactSummary = {
 export type CompanionArtifactRecord = CompanionArtifactSummary & {
   r2Key: string;
   sha256: string;
+  blockMapR2Key?: string;
   createdByUserId: string;
 };
 
@@ -90,6 +93,9 @@ export async function registerCompanionArtifact(body: {
   sha256: string;
   /** 可选；桌面壳 electron-updater 校验用 */
   sha512?: string;
+  /** 可选；与 blockMapR2Key 成对，用于 electron-updater 差分下载 */
+  blockMapBytes?: number;
+  blockMapR2Key?: string;
   bytes: number;
   notes?: string;
   label?: string;
