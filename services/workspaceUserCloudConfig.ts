@@ -158,15 +158,21 @@ export function mergeCapabilityCloudRecords<T extends { id: string }>(
   localCurrentList: T[],
   localPreviousRecords: CapabilityCloudRecord<T>[],
   cloudRecords: CapabilityCloudRecord<T>[],
-  nowTs = Date.now()
+  nowTs = Date.now(),
+  options?: { serverWins?: boolean }
 ): { list: T[]; records: CapabilityCloudRecord<T>[] } {
   const now = Number.isFinite(nowTs) ? nowTs : Date.now();
+  const serverWins = options?.serverWins === true;
   const localRecords = buildCapabilityCloudRecords(localCurrentList, localPreviousRecords, now);
   const mergedMap = new Map<string, CapabilityCloudRecord<T>>();
   for (const r of normalizeRecords(localRecords, now)) mergedMap.set(r.id, r);
   for (const remote of normalizeRecords(cloudRecords, now)) {
     const local = mergedMap.get(remote.id);
     if (!local) {
+      mergedMap.set(remote.id, remote);
+      continue;
+    }
+    if (serverWins) {
       mergedMap.set(remote.id, remote);
       continue;
     }

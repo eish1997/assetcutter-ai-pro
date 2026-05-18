@@ -1066,12 +1066,16 @@ const MainApp: React.FC = () => {
           const mergedPresets = mergeCapabilityCloudRecords<CustomAppModule>(
             capabilityPresets,
             workspaceCloudCapabilityRecordsRef.current.presets,
-            cfg.capabilityPresetRecords || []
+            cfg.capabilityPresetRecords || [],
+            Date.now(),
+            { serverWins: true }
           );
           const mergedSets = mergeCapabilityCloudRecords<CapabilitySet>(
             capabilitySets,
             workspaceCloudCapabilityRecordsRef.current.sets,
-            cfg.capabilitySetRecords || []
+            cfg.capabilitySetRecords || [],
+            Date.now(),
+            { serverWins: true }
           );
           workspaceCloudCapabilityRecordsRef.current = {
             presets: mergedPresets.records,

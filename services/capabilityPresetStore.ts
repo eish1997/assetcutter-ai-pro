@@ -381,9 +381,23 @@ export function saveCapabilityPresets(list: CustomAppModule[]): void {
   writeLocalJson(CAPABILITY_PRESETS_KEY, payload);
 }
 
-/** 合并覆盖：同 id 覆盖；返回完整列表（按 order 重新排序并重排 order） */
-export function mergeCapabilityPresets(existing: CustomAppModule[], next: CustomAppModule[]): CustomAppModule[] {
-  const nextFiltered = next.filter(
+/** 同 id 去重，保留列表中最后一次出现（用于多能力包目录合并） */
+export function dedupeCapabilityPresetsById(presets: CustomAppModule[]): CustomAppModule[] {
+  const map = new Map<string, CustomAppModule>();
+  for (const p of presets) {
+    const id = String(p?.id || '').trim();
+    if (!id) continue;
+    map.set(id, p);
+  }
+  return Array.from(map.values());
+}
+
+/**
+ * 合并预设列表：`incoming`（通常为服务器/R2 拉取）与 `existing`（本地）同 id 时以 incoming 为准；
+ * 仅存在于本地的 id 保留。返回完整列表（按 order 重新排序并重排 order）。
+ */
+export function mergeCapabilityPresets(existing: CustomAppModule[], incoming: CustomAppModule[]): CustomAppModule[] {
+  const incomingFiltered = incoming.filter(
     (p) => !BUILTIN_IMAGE_PROCESS_IDS.includes(p.id as (typeof BUILTIN_IMAGE_PROCESS_IDS)[number])
   );
   const map = new Map<string, CustomAppModule>();
@@ -391,7 +405,7 @@ export function mergeCapabilityPresets(existing: CustomAppModule[], next: Custom
     const n = normalizeCapabilityPreset(p, i);
     map.set(n.id, n);
   });
-  nextFiltered.forEach((p, i) => {
+  incomingFiltered.forEach((p, i) => {
     const n = normalizeCapabilityPreset(p, existing.length + i);
     map.set(n.id, n);
   });

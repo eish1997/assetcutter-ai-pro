@@ -346,21 +346,20 @@ const CapabilityPresetSection: React.FC<{
     if (allRemote.length === 0) return;
     if (allRemote.length > 0) {
       installPresets(allRemote);
-      onLog?.('info', `已同步 R2 预设（${allRemote.length} 条）`, undefined);
+      onLog?.('info', `已同步 R2 预设（${allRemote.length} 条，同 ID 以服务器为准）`, undefined);
     }
     setSyncAfterRefresh(false);
   }, [syncAfterRefresh, catalogLoading, packContentsLoading, catalog, remotePresetItems, installPresets, onLog]);
   useEffect(() => {
-    // 自动补齐公共仓库能力：仅在当前本地有缺失时执行一次，避免每次进入都覆盖本地排序
+    // 首次载入商店目录后：以服务器列表为准合并（同 ID 覆盖本地），仅执行一次
     if (autoSyncedRemoteRef.current) return;
     if (catalogLoading || packContentsLoading) return;
-    if (effectiveUninstalledPresetItems.length === 0) return;
     const allRemote = remotePresetItems.map((rp) => rp.preset);
     if (allRemote.length === 0) return;
     installPresets(allRemote);
     autoSyncedRemoteRef.current = true;
-    onLog?.('info', `已自动同步公共仓库能力（${allRemote.length} 条）`, undefined);
-  }, [catalogLoading, packContentsLoading, effectiveUninstalledPresetItems, remotePresetItems, installPresets, onLog]);
+    onLog?.('info', `已自动同步公共仓库能力（${allRemote.length} 条，同 ID 以服务器为准）`, undefined);
+  }, [catalogLoading, packContentsLoading, remotePresetItems, installPresets, onLog]);
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const onViewModeSwitch = (event: Event) => {

@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CustomAppModule, StoreCatalogItem } from '../types';
-import { BUILTIN_IMAGE_PROCESS_IDS, loadCapabilityPresets, mergeCapabilityPresets, saveCapabilityPresets } from './capabilityPresetStore';
+import {
+  BUILTIN_IMAGE_PROCESS_IDS,
+  dedupeCapabilityPresetsById,
+  loadCapabilityPresets,
+  mergeCapabilityPresets,
+  saveCapabilityPresets,
+} from './capabilityPresetStore';
 import { getCapabilityStoreCatalogSources } from './settingsStore';
 
 async function fetchJson<T>(url: string): Promise<T> {
@@ -267,7 +273,7 @@ export function useStoreCatalog(options: UseStoreCatalogOptions = {}) {
 
   /** 批量添加多个能力到当前列表（一键安装全部未安装的能力） */
   const installPresets = (presets: CustomAppModule[]) => {
-    const filtered = presets.filter(
+    const filtered = dedupeCapabilityPresetsById(presets).filter(
       (p) => !BUILTIN_IMAGE_PROCESS_IDS.includes(p.id as (typeof BUILTIN_IMAGE_PROCESS_IDS)[number])
     );
     if (filtered.length === 0) return;
@@ -276,7 +282,7 @@ export function useStoreCatalog(options: UseStoreCatalogOptions = {}) {
     const merged = mergeCapabilityPresets(loadCapabilityPresets(), filtered);
     saveCapabilityPresets(merged);
     onPresetsApplied?.(merged);
-    onLog?.('info', `已添加 ${filtered.length} 个能力`, undefined);
+    onLog?.('info', `已同步 ${filtered.length} 条预设（同 ID 以服务器版本为准）`, undefined);
     setInstallingAll(false);
   };
 
