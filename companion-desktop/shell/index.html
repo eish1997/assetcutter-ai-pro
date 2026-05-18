@@ -173,6 +173,12 @@
     .status-dot.bad { background: var(--bad); }
     .status-label { font-size: 12px; font-weight: 600; }
     .status-detail { font-size: 10px; color: var(--muted); margin-top: 8px; line-height: 1.45; word-break: break-word; }
+    .home-updater-top {
+      margin-bottom: 14px;
+    }
+    .home-updater-top .updater-progress-card {
+      margin-top: 0;
+    }
     .updater-progress-card {
       margin-top: 10px;
       padding: 10px 12px;
@@ -235,43 +241,6 @@
     }
     .updater-install-btn:hover { background: rgba(34, 197, 94, 0.22); }
     .updater-install-btn.hidden { display: none; }
-    .shell-mini-action {
-      font-size: 11px;
-      font-weight: 600;
-      padding: 7px 11px;
-      border-radius: 10px;
-      border: 1px solid rgba(255, 255, 255, 0.14);
-      background: rgba(255, 255, 255, 0.05);
-      color: #e4e4e7;
-      cursor: pointer;
-      transition: background 0.15s, border-color 0.15s;
-    }
-    .shell-mini-action:hover {
-      background: rgba(255, 255, 255, 0.1);
-      border-color: rgba(255, 255, 255, 0.22);
-    }
-    .open-site-btn {
-      width: 100%;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 10px;
-      padding: 22px 16px;
-      border-radius: 16px;
-      border: 1px solid #2563eb;
-      background: linear-gradient(180deg, #1e40af 0%, #1d4ed8 100%);
-      color: #eff6ff;
-      cursor: pointer;
-      font-size: 14px;
-      font-weight: 600;
-      letter-spacing: 0.02em;
-      transition: filter 0.15s, transform 0.1s;
-    }
-    .open-site-btn:hover { filter: brightness(1.06); }
-    .open-site-btn:active { transform: scale(0.99); }
-    .open-site-btn svg { width: 40px; height: 40px; opacity: 0.95; }
-    .open-site-btn span { font-size: 11px; font-weight: 600; opacity: 0.85; }
     .hint { font-size: 10px; color: var(--muted); margin-top: 14px; text-align: center; line-height: 1.5; }
     .shell-body {
       flex: 1 1 auto;
@@ -351,42 +320,6 @@
       flex-direction: column;
       position: relative;
     }
-    .sidebar-ctx-menu {
-      position: fixed;
-      z-index: 400;
-      min-width: 156px;
-      padding: 4px;
-      border-radius: 10px;
-      border: 1px solid var(--border);
-      background: #141416;
-      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-    }
-    .sidebar-ctx-menu[hidden] {
-      display: none !important;
-    }
-    .sidebar-ctx-menu button {
-      width: 100%;
-      margin: 0;
-      padding: 8px 10px;
-      border: none;
-      border-radius: 8px;
-      background: transparent;
-      color: var(--text);
-      font-size: 11px;
-      font-weight: 600;
-      text-align: left;
-      cursor: pointer;
-    }
-    .sidebar-ctx-menu button:hover {
-      background: #1f1f24;
-    }
-    .sidebar-ctx-menu button:focus-visible {
-      outline: 1px solid var(--accent);
-      outline-offset: 1px;
-    }
     .ico { font-size: 18px; line-height: 1; }
     table { width: 100%; border-collapse: collapse; font-size: 11px; }
     th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
@@ -403,14 +336,25 @@
       margin-bottom: 12px;
     }
     .set-section h3 {
-      margin: 0 0 8px;
-      font-size: 11px;
+      margin: 0 0 10px;
+      font-size: 12px;
       font-weight: 600;
       letter-spacing: 0.02em;
       text-transform: none;
-      color: rgba(228, 228, 231, 0.5);
+      color: rgba(228, 228, 231, 0.72);
     }
-    label { display: block; font-size: 10px; color: var(--muted); margin-bottom: 4px; }
+    label {
+      display: block;
+      font-size: 10px;
+      color: var(--muted);
+      margin-bottom: 4px;
+      cursor: default;
+    }
+    label[title],
+    input[title],
+    button[title] {
+      cursor: help;
+    }
     input[type="url"], input[type="text"], input[type="password"] {
       width: 100%;
       padding: 8px 10px;
@@ -421,6 +365,26 @@
       font-size: 12px;
     }
     label.pair-label-gap { margin-top: 10px; }
+    .set-feedback {
+      font-size: 10px;
+      color: rgba(148, 163, 184, 0.85);
+      margin-top: 8px;
+      line-height: 1.4;
+      word-break: break-all;
+    }
+    .set-feedback[hidden] {
+      display: none !important;
+    }
+    .set-readonly-url {
+      width: 100%;
+      padding: 8px 10px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: #0a0a0b;
+      color: #cbd5e1;
+      font-size: 10px;
+      font-family: ui-monospace, monospace;
+    }
     .btn-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
     .btn {
       padding: 8px 12px;
@@ -566,15 +530,7 @@
     </nav>
     <div class="shell-main" id="shell-main">
   <div id="view-home" class="view">
-    <div class="status-card">
-      <div class="status-row">
-        <div style="display:flex;align-items:center;gap:10px;">
-          <span id="statusDot" class="status-dot"></span>
-          <span id="statusLabel" class="status-label">…</span>
-        </div>
-        <span id="portHint" class="mono" style="font-size:10px;color:var(--muted);"></span>
-      </div>
-      <div id="statusDetail" class="status-detail"></div>
+    <div class="home-updater-top">
       <div id="updaterProgressCard" class="updater-progress-card hidden" aria-live="polite">
         <div class="updater-progress-head">
           <span id="updaterProgressTitle" class="updater-progress-title">正在检查更新…</span>
@@ -586,19 +542,17 @@
         <p id="updaterProgressSub" class="updater-progress-sub"></p>
         <button type="button" id="btnInstallShellUpdate" class="updater-install-btn hidden">安装更新并重启</button>
       </div>
-      <div id="capabilityRepairRow" style="display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px">
-        <button type="button" id="btnFocusLocalEngines" class="shell-mini-action">打开本机引擎 / 安装</button>
-        <button type="button" id="btnRestartCompanionFromShell" class="shell-mini-action">重启本地伴侣</button>
-      </div>
     </div>
-    <button type="button" class="open-site-btn" id="btnOpenSite" title="在浏览器中打开">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <circle cx="12" cy="12" r="10" />
-        <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
-      </svg>
-      打开网站
-      <span id="siteUrlPreview">…</span>
-    </button>
+    <div class="status-card">
+      <div class="status-row">
+        <div style="display:flex;align-items:center;gap:10px;">
+          <span id="statusDot" class="status-dot"></span>
+          <span id="statusLabel" class="status-label">…</span>
+        </div>
+        <span id="portHint" class="mono" style="font-size:10px;color:var(--muted);"></span>
+      </div>
+      <div id="statusDetail" class="status-detail"></div>
+    </div>
     <h2 class="section-title">本地能力</h2>
     <div class="status-card" id="section-local-engines" style="padding: 12px 14px">
       <p class="storage-hint" style="margin: 0 0 12px; font-size: 11px; line-height: 1.45">
@@ -692,9 +646,6 @@
       </details>
     </div>
     <h2 class="section-title">核心模块</h2>
-    <p class="storage-hint" style="margin: 0 0 10px">
-      伴侣内置存储与计算。<strong>分割 / 去背景</strong>依赖上方「本地能力」，<strong>不经</strong>扩展包。
-    </p>
     <div class="status-card" style="padding:0;overflow:hidden;">
       <table>
         <thead>
@@ -709,105 +660,115 @@
       <p id="pluginsEmpty" class="empty hidden">暂无</p>
     </div>
     <h2 class="section-title">扩展包（可选）</h2>
-    <p class="storage-hint" style="margin: 0 0 8px">
-      主站下发的<strong>可选</strong> ZIP，与首页「本地能力」一键安装<strong>不是同一路</strong>。
-    </p>
-    <details class="shell-hint-details" style="margin: 0 0 12px">
-      <summary>管理员 / 部署说明</summary>
-      <p class="storage-hint" style="margin: 8px 0 0">
-        后台 kind=<span class="mono">host_plugin_bundle</span>。公网直链依赖主站 <span class="mono">COMPANION_DIST_PUBLIC_HTTP_BASE</span>；其它下载域名需在伴侣环境配置
-        <span class="mono">COMPANION_HOST_BUNDLE_TRUST_HOSTS</span>。
-      </p>
-    </details>
-    <div class="btn-row" style="margin-bottom:8px;">
-      <button type="button" class="btn" id="btnRefreshHostCatalog">刷新扩展包目录</button>
-    </div>
-    <div class="status-card" style="padding:10px 12px;">
-      <p id="hostBundleCatalogStatus" class="mono" style="font-size:10px;color:rgba(148,163,184,0.9);margin:0;line-height:1.45;">
-        …
-      </p>
-      <div id="hostBundleCatalogList" style="margin-top:10px;display:flex;flex-direction:column;gap:8px;"></div>
+    <div class="status-card" style="padding: 12px 14px">
+      <p id="hostBundleEmptyHint" class="empty" style="margin: 0; padding: 4px 0">暂无扩展包</p>
     </div>
   </div>
 
   <div id="view-settings" class="view hidden">
     <h1>设置</h1>
-    <p class="sub" style="margin-top: -4px">网站与本机对上号即可；多数项可保持默认。</p>
     <div class="set-section">
-      <h3>① 主站地址</h3>
-      <p class="storage-hint">「打开网站」和工作台用，填以 <span class="mono">https://</span> 开头的根地址。</p>
-      <label for="inpSiteUrl">地址</label>
-      <input type="url" id="inpSiteUrl" placeholder="https://…" autocomplete="off" />
+      <h3 title="工作台内嵌主站用，填以 https:// 开头的根地址">主站地址</h3>
+      <label for="inpSiteUrl" title="工作台内嵌主站用，填以 https:// 开头的根地址">地址</label>
+      <input
+        type="url"
+        id="inpSiteUrl"
+        placeholder="https://…"
+        autocomplete="off"
+        title="工作台内嵌主站用，填以 https:// 开头的根地址"
+      />
       <div class="btn-row">
         <button type="button" class="btn btn-primary" id="btnSaveSite">保存</button>
       </div>
     </div>
     <div class="set-section">
-      <h3>② 与网站配对</h3>
-      <p class="storage-hint">通信密码须与浏览器里「设置 → 本地伴侣」一致。允许的站点可填当前网站根，或留空。</p>
-      <label for="inpPairToken">通信密码</label>
+      <h3 title="通信密码须与浏览器里「设置 → 本地伴侣」一致；允许站点可填网站根或留空">与网站配对</h3>
+      <label for="inpPairToken" title="须与浏览器「设置 → 本地伴侣」中的通信密码一致，至少 8 位；可不填">通信密码</label>
       <input
         type="password"
         id="inpPairToken"
-        placeholder="与网站里一致，至少 8 位；可不填"
+        placeholder="至少 8 位，可不填"
         autocomplete="off"
+        title="须与浏览器「设置 → 本地伴侣」中的通信密码一致"
       />
-      <label for="inpPairOrigins" class="pair-label-gap">允许的网站地址</label>
+      <label for="inpPairOrigins" class="pair-label-gap" title="多个站点用英文逗号分隔；留空则仅按主站地址配对">允许的网站地址</label>
       <input
         type="text"
         id="inpPairOrigins"
-        placeholder="例 http://localhost:5173，多个用英文逗号"
+        placeholder="http://localhost:3000，多个用逗号"
         autocomplete="off"
+        title="多个站点用英文逗号分隔；留空则仅按主站地址配对"
       />
       <div class="btn-row">
         <button type="button" class="btn btn-primary" id="btnSavePairing">保存配对</button>
       </div>
-      <p id="pairingHint" class="mono" style="font-size:10px;color:rgba(148,163,184,0.85);margin-top:8px;line-height:1.4;"></p>
+      <p id="pairingHint" class="mono set-feedback" hidden></p>
     </div>
     <div class="set-section">
-      <h3>③ 本机存储</h3>
-      <p class="storage-hint">留空则用系统默认目录。改路径时可选是否把已有数据迁过去。</p>
-      <details class="set-details-hint">
-        <summary>默认路径与迁移说明</summary>
-        <p class="storage-hint" style="margin: 8px 0 0">
-          Windows 默认：<span class="mono">%LOCALAPPDATA%\AssetCutterCompanion\sandbox\volume</span>（与一键安装的运行时、模型同根，便于清理）。点「应用」或「默认」时会询问：<strong>迁移并应用</strong>会把数据整体移到新位置（会短暂停止本机伴侣）；<strong>仅切换目录</strong>只改配置，旧目录文件保留在原处。
-        </p>
-      </details>
-      <label for="inpVolumeRoot">目录</label>
+      <h3
+        title="留空使用系统默认目录。应用或恢复默认时可选择迁移数据（会短暂停止伴侣）或仅切换配置。"
+      >
+        本机存储
+      </h3>
+      <label
+        for="inpVolumeRoot"
+        title="Windows 默认：%LOCALAPPDATA%\AssetCutterCompanion\sandbox\volume"
+      >
+        目录
+      </label>
       <div style="display:flex;gap:8px;align-items:stretch;">
-        <input type="text" id="inpVolumeRoot" placeholder="留空为默认" autocomplete="off" style="flex:1;" />
-        <button type="button" class="btn" id="btnBrowseVolume">浏览</button>
+        <input
+          type="text"
+          id="inpVolumeRoot"
+          placeholder="留空为默认"
+          autocomplete="off"
+          style="flex:1;"
+          title="留空使用系统默认目录；改路径时应用/恢复默认可询问是否迁移已有数据"
+        />
+        <button type="button" class="btn" id="btnBrowseVolume" title="选择本机存储目录">浏览</button>
       </div>
       <div class="btn-row">
-        <button type="button" class="btn btn-primary" id="btnSaveVolume">应用</button>
-        <button type="button" class="btn" id="btnClearVolume">恢复默认</button>
+        <button
+          type="button"
+          class="btn btn-primary"
+          id="btnSaveVolume"
+          title="应用目录；若与当前数据路径不同，可选择迁移或仅切换配置"
+        >
+          应用
+        </button>
+        <button type="button" class="btn" id="btnClearVolume" title="恢复为系统默认存储目录">恢复默认</button>
       </div>
-      <p id="volumeEffective" class="mono" style="font-size:10px;color:rgba(148,163,184,0.85);margin-top:8px;line-height:1.4;"></p>
+      <p id="volumeEffective" class="mono set-feedback" hidden></p>
       <div class="btn-row" style="margin-top:6px;">
-        <button type="button" class="btn" id="btnOpenVolumeFolder">打开存储文件夹</button>
+        <button type="button" class="btn" id="btnOpenVolumeFolder" title="在资源管理器中打开当前存储目录">打开存储文件夹</button>
       </div>
     </div>
     <div class="set-section">
-      <h3>本机服务地址</h3>
-      <p id="localBase" class="mono">—</p>
+      <h3 title="本机伴侣 HTTP 服务根地址，供复制或在浏览器打开管理页">本机服务地址</h3>
+      <input type="text" id="localBase" class="mono set-readonly-url" readonly value="—" title="本机伴侣 HTTP 服务地址" />
       <div class="btn-row">
-        <button type="button" class="btn" id="btnCopyBase">复制</button>
-        <button type="button" class="btn" id="btnOpenMgmt">浏览器管理页</button>
+        <button type="button" class="btn" id="btnCopyBase" title="复制本机服务地址">复制</button>
+        <button type="button" class="btn" id="btnOpenMgmt" title="在系统浏览器打开本机管理页">浏览器管理页</button>
       </div>
     </div>
   </div>
   </div>
-  </div>
-
-  <div id="sidebar-ctx-menu" class="sidebar-ctx-menu" role="menu" hidden>
-    <button type="button" role="menuitem" data-sidebar-act="wb-reload">刷新工作台</button>
-    <button type="button" role="menuitem" data-sidebar-act="wb-reload-hard">硬刷新（忽略缓存）</button>
-    <button type="button" role="menuitem" data-sidebar-act="wb-external">在浏览器中打开主站</button>
   </div>
 
   <script>
     (function () {
       const $ = (id) => document.getElementById(id);
+      function setSetFeedback(el, text) {
+        if (!el) return;
+        const t = String(text || '').trim();
+        if (!t) {
+          el.hidden = true;
+          el.textContent = '';
+        } else {
+          el.hidden = false;
+          el.textContent = t;
+        }
+      }
       const shell = window.companionShell;
       if (!shell) {
         document.body.innerHTML = '<p style="padding:24px;color:#f87171;font-size:13px;">请从桌面应用启动。</p>';
@@ -1032,7 +993,6 @@
         }
         if (viewKey === 'home') {
           await loadPlugins();
-          await loadHostBundleCatalog();
           void refreshSamLocalWinPanel();
           void refreshRembgWinPanel();
         }
@@ -1052,21 +1012,6 @@
 
       if (typeof shell.onSamLocalSetupFocus === 'function') {
         shell.onSamLocalSetupFocus(focusSamLocalSetupSection);
-      }
-
-      const btnFocusLocalEngines = $('btnFocusLocalEngines');
-      if (btnFocusLocalEngines) {
-        btnFocusLocalEngines.addEventListener('click', () => focusSamLocalSetupSection());
-      }
-      const btnRestartCompanionFromShell = $('btnRestartCompanionFromShell');
-      if (btnRestartCompanionFromShell && typeof shell.restartCompanion === 'function') {
-        btnRestartCompanionFromShell.addEventListener('click', () => {
-          void shell.restartCompanion({ aggressive: false }).catch((e) => {
-            window.alert(e && e.message ? e.message : String(e));
-          });
-        });
-      } else if (btnRestartCompanionFromShell) {
-        btnRestartCompanionFromShell.style.display = 'none';
       }
 
       applySamLocalPlatformUi();
@@ -1195,284 +1140,24 @@
       });
 
       const sidebarNav = document.querySelector('nav.shell-sidebar');
-      const sidebarCtxMenu = $('sidebar-ctx-menu');
-      function hideSidebarCtxMenu() {
-        if (!sidebarCtxMenu) return;
-        sidebarCtxMenu.hidden = true;
-      }
-      function showSidebarCtxMenu(clientX, clientY) {
-        if (!sidebarCtxMenu) return;
-        sidebarCtxMenu.hidden = false;
-        requestAnimationFrame(() => {
-          const pad = 8;
-          const r = sidebarCtxMenu.getBoundingClientRect();
-          let x = clientX;
-          let y = clientY;
-          if (x + r.width > window.innerWidth - pad) x = Math.max(pad, window.innerWidth - r.width - pad);
-          if (y + r.height > window.innerHeight - pad) y = Math.max(pad, window.innerHeight - r.height - pad);
-          if (x < pad) x = pad;
-          if (y < pad) y = pad;
-          sidebarCtxMenu.style.left = x + 'px';
-          sidebarCtxMenu.style.top = y + 'px';
-        });
-      }
       if (sidebarNav) {
         sidebarNav.addEventListener('contextmenu', (e) => {
+          if (activeView !== 'workbench') return;
           e.preventDefault();
-          showSidebarCtxMenu(e.clientX, e.clientY);
-        });
-      }
-      document.addEventListener(
-        'mousedown',
-        (e) => {
-          if (!sidebarCtxMenu || sidebarCtxMenu.hidden) return;
-          if (!sidebarCtxMenu.contains(e.target)) hideSidebarCtxMenu();
-        },
-        true,
-      );
-      document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') hideSidebarCtxMenu();
-      });
-      if (sidebarCtxMenu) {
-        sidebarCtxMenu.addEventListener('click', (e) => {
-          const t = e.target && e.target.closest ? e.target.closest('[data-sidebar-act]') : null;
-          if (!t) return;
-          const act = t.getAttribute('data-sidebar-act');
-          hideSidebarCtxMenu();
-          if (act === 'wb-reload' && typeof shell.workbenchReload === 'function') void shell.workbenchReload();
-          else if (act === 'wb-reload-hard' && typeof shell.workbenchReloadHard === 'function') void shell.workbenchReloadHard();
-          else if (act === 'wb-external' && typeof shell.workbenchOpenExternal === 'function') void shell.workbenchOpenExternal();
+          if (typeof shell.popupSidebarContextMenu === 'function') {
+            void shell.popupSidebarContextMenu();
+          }
         });
       }
 
       let settingsCache = { siteUrl: defaultSiteUrl, volumeRoot: '' };
       let pluginListSignature = '';
       let pluginLoading = false;
-      let hostCatalogLoading = false;
-
-      function semverTuple(s) {
-        return String(s || '')
-          .split('.')
-          .map((x) => parseInt(String(x).replace(/[^\d].*$/, ''), 10) || 0);
-      }
-
-      function semverCompare(a, b) {
-        const ta = semverTuple(a);
-        const tb = semverTuple(b);
-        const n = Math.max(ta.length, tb.length, 3);
-        for (let i = 0; i < n; i++) {
-          const x = ta[i] || 0;
-          const y = tb[i] || 0;
-          if (x > y) return 1;
-          if (x < y) return -1;
-        }
-        return 0;
-      }
-
-      async function runInstallHostBundle(row, btn) {
-        if (!row.publicInstallUrl || !row.sha256) return;
-        btn.disabled = true;
-        const prev = btn.textContent;
-        btn.textContent = '安装中（大文件可能需数分钟）…';
-        try {
-          const r = await shell.api(
-            'POST',
-            '/v1/host-plugins/install-from-url',
-            {
-              url: row.publicInstallUrl,
-              semver: row.semver,
-              sha256: String(row.sha256).toLowerCase(),
-              bytes: row.bytes,
-              label: row.label || row.fileName || '',
-            },
-            { timeoutMs: 600000 },
-          );
-          if (!r || !r.ok) {
-            const msg = (r && r.json && r.json.error) || (r && r.text) || 'HTTP ' + (r && r.status);
-            window.alert('安装失败：' + msg);
-            btn.textContent = prev;
-            btn.disabled = false;
-            return;
-          }
-          btn.textContent = '已安装';
-          await loadPlugins();
-          await loadHostBundleCatalog();
-        } catch (e) {
-          window.alert('安装失败：' + (e instanceof Error ? e.message : String(e)));
-          btn.textContent = prev;
-          btn.disabled = false;
-        }
-      }
-
-      async function loadHostBundleCatalog() {
-        if (hostCatalogLoading) return;
-        hostCatalogLoading = true;
-        const statusEl = $('hostBundleCatalogStatus');
-        const listEl = $('hostBundleCatalogList');
-        if (!statusEl || !listEl) {
-          hostCatalogLoading = false;
-          return;
-        }
-        if (typeof shell.fetchHostBundleCatalog !== 'function') {
-          statusEl.textContent = '当前壳版本不支持扩展包目录，请更新桌面应用。';
-          listEl.innerHTML = '';
-          hostCatalogLoading = false;
-          return;
-        }
-        statusEl.textContent = '正在拉取主站目录…';
-        listEl.innerHTML = '';
-        const plat = normalizeDesktopPlatform();
-        let r;
-        try {
-          r = await shell.fetchHostBundleCatalog();
-        } catch (e) {
-          statusEl.textContent = '目录拉取异常：' + (e instanceof Error ? e.message : String(e));
-          hostCatalogLoading = false;
-          return;
-        }
-        if (!r || !r.ok) {
-          statusEl.textContent = '目录拉取失败：' + (r && r.error ? r.error : '未知错误') + '（请检查「设置 → 主站」地址与网络）';
-          hostCatalogLoading = false;
-          return;
-        }
-        const all = Array.isArray(r.artifacts) ? r.artifacts : [];
-        function rowMatchesPlatform(rowPlat, currentPlat) {
-          const p = String(rowPlat || '').toLowerCase();
-          if (p === 'universal' || p === 'all') return true;
-          return p === currentPlat;
-        }
-        const rows = all.filter(function (a) {
-          return (
-            a &&
-            a.kind === 'host_plugin_bundle' &&
-            rowMatchesPlatform(a.platform, plat) &&
-            String(a.channel || 'stable') === 'stable'
-          );
-        });
-        rows.sort(function (x, y) {
-          return String(y.publishedAt || '').localeCompare(String(x.publishedAt || ''));
-        });
-
-        let bundlesRes;
-        try {
-          bundlesRes = await shell.api('GET', '/v1/host-plugins/bundles', null);
-        } catch {
-          bundlesRes = { ok: false };
-        }
-        const installed =
-          bundlesRes && bundlesRes.ok && bundlesRes.json && Array.isArray(bundlesRes.json.bundles)
-            ? bundlesRes.json.bundles
-            : [];
-
-        if (rows.length === 0) {
-          statusEl.textContent =
-            '当前平台（' +
-            plat +
-            '）暂无 stable 渠道的扩展包（host_plugin_bundle）。可在主站管理后台「本地伴侣发行」登记 kind=host_plugin_bundle。';
-          hostCatalogLoading = false;
-          return;
-        }
-
-        const withUrl = rows.filter(function (x) {
-          return x.publicInstallUrl && x.sha256 && /^[a-f0-9]{64}$/i.test(String(x.sha256));
-        });
-        statusEl.textContent =
-          '共 ' +
-          rows.length +
-          ' 条' +
-          (withUrl.length < rows.length
-            ? '；其中 ' + (rows.length - withUrl.length) + ' 条无公网直链（需登录主站「设置 → 本地伴侣」用预签名安装）。'
-            : '；均已配置直链，可一键安装。');
-
-        listEl.innerHTML = '';
-        for (let i = 0; i < rows.length; i++) {
-          const row = rows[i];
-          const sha = String(row.sha256 || '').toLowerCase();
-          const inst = installed.find(function (b) {
-            return String(b.sha256 || '').toLowerCase() === sha;
-          });
-          const key = String(row.label || '').trim();
-          let badge = '未安装';
-          if (inst) badge = '已安装本包';
-          else if (key) {
-            const sub = installed.filter(function (b) {
-              return String(b.label || '').trim() === key;
-            });
-            if (sub.length) {
-              const maxSem = sub.reduce(function (m, b) {
-                return semverCompare(b.semver, m) > 0 ? b.semver : m;
-              }, sub[0].semver);
-              const c = semverCompare(row.semver, maxSem);
-              if (c > 0) badge = '可更新';
-              else if (c === 0) badge = '已有同版本（内容不同请核对 sha）';
-              else badge = '已安装更高版本';
-            }
-          }
-
-          const div = document.createElement('div');
-          div.className = 'status-card';
-          div.style.padding = '10px 12px';
-          div.style.margin = '0';
-
-          const title = document.createElement('div');
-          title.style.fontWeight = '700';
-          title.style.fontSize = '12px';
-          title.textContent = row.label || row.fileName || '扩展包';
-          div.appendChild(title);
-
-          const sub = document.createElement('div');
-          sub.style.fontSize = '10px';
-          sub.style.color = '#71717a';
-          sub.style.marginTop = '4px';
-          sub.textContent = [row.semver, row.fileName || '', badge].filter(Boolean).join(' · ');
-          div.appendChild(sub);
-
-          if (row.notes && String(row.notes).trim()) {
-            const note = document.createElement('div');
-            note.style.fontSize = '10px';
-            note.style.color = '#a1a1aa';
-            note.style.marginTop = '6px';
-            note.style.lineHeight = '1.35';
-            note.textContent = String(row.notes);
-            div.appendChild(note);
-          }
-
-          const btnRow = document.createElement('div');
-          btnRow.className = 'btn-row';
-          btnRow.style.marginTop = '8px';
-
-          const canInstall = Boolean(
-            row.publicInstallUrl && row.sha256 && /^[a-f0-9]{64}$/i.test(String(row.sha256)),
-          );
-          if (canInstall && !inst) {
-            const btn = document.createElement('button');
-            btn.type = 'button';
-            btn.className = 'btn btn-primary';
-            btn.textContent = badge === '可更新' ? '安装更新' : '安装';
-            btn.addEventListener('click', function () {
-              void runInstallHostBundle(row, btn);
-            });
-            btnRow.appendChild(btn);
-          } else if (!canInstall && !inst) {
-            const hint = document.createElement('span');
-            hint.style.fontSize = '10px';
-            hint.style.color = '#a78bfa';
-            hint.textContent = '无直链或缺少 sha256：请打开主站在设置中安装';
-            btnRow.appendChild(hint);
-          }
-
-          div.appendChild(btnRow);
-          listEl.appendChild(div);
-        }
-        hostCatalogLoading = false;
-      }
-
       async function loadSettingsUi() {
         const s = await shell.loadSettings();
         if (s && typeof s.siteUrl === 'string' && s.siteUrl.trim()) settingsCache.siteUrl = s.siteUrl.trim();
         settingsCache.volumeRoot = s && typeof s.volumeRoot === 'string' ? s.volumeRoot.trim() : '';
         $('inpSiteUrl').value = settingsCache.siteUrl;
-        $('siteUrlPreview').textContent = settingsCache.siteUrl;
         $('inpVolumeRoot').value = settingsCache.volumeRoot;
       }
 
@@ -1484,10 +1169,9 @@
           $('inpPairToken').value = cfg && typeof cfg.sharedToken === 'string' ? cfg.sharedToken : '';
           $('inpPairOrigins').value =
             cfg && typeof cfg.allowedOrigins === 'string' ? cfg.allowedOrigins : '';
-          hintEl.textContent =
-            '已读取本机配对。进入工作台时会按主站地址补全站点与密码（可在此改）。';
+          setSetFeedback(hintEl, '');
         } catch {
-          hintEl.textContent = '读取配对配置失败';
+          setSetFeedback(hintEl, '读取配对配置失败');
         }
       }
 
@@ -1497,9 +1181,9 @@
         try {
           const r = await shell.api('GET', '/v1/runtime-status', null);
           const root = r && r.ok && r.json && r.json.repository && r.json.repository.rootAbsolutePath;
-          el.textContent = root ? String(root) : '';
+          setSetFeedback(el, root ? String(root) : '');
         } catch {
-          el.textContent = '';
+          setSetFeedback(el, '');
         }
       }
 
@@ -1666,17 +1350,11 @@
         pluginLoading = false;
       }
 
-      $('btnOpenSite').addEventListener('click', async () => {
-        const url = settingsCache.siteUrl || $('inpSiteUrl').value.trim() || defaultSiteUrl;
-        await shell.openWebsite(url);
-      });
-
       $('btnSaveSite').addEventListener('click', async () => {
         const u = $('inpSiteUrl').value.trim();
         const res = await shell.saveSettings({ siteUrl: u });
         if (res && res.ok) {
           settingsCache.siteUrl = u || settingsCache.siteUrl;
-          $('siteUrlPreview').textContent = settingsCache.siteUrl;
         }
       });
 
@@ -1684,8 +1362,8 @@
         try {
           const r = await shell.pickVolumeRoot();
           if (r && r.ok && r.path) $('inpVolumeRoot').value = r.path;
-        } catch (e) {
-          $('volumeEffective').textContent = '';
+        } catch {
+          setSetFeedback($('volumeEffective'), '');
         }
       });
 
@@ -1709,10 +1387,10 @@
             setTimeout(() => void refreshVolumeEffectiveHint(), 800);
             return;
           }
-          $('volumeEffective').textContent = '';
+          setSetFeedback($('volumeEffective'), '');
           setTimeout(() => void refreshVolumeEffectiveHint(), 800);
         } catch (e) {
-          $('volumeEffective').textContent = e instanceof Error ? e.message : String(e);
+          setSetFeedback($('volumeEffective'), e instanceof Error ? e.message : String(e));
         }
       });
 
@@ -1736,10 +1414,10 @@
             setTimeout(() => void refreshVolumeEffectiveHint(), 800);
             return;
           }
-          $('volumeEffective').textContent = '';
+          setSetFeedback($('volumeEffective'), '');
           setTimeout(() => void refreshVolumeEffectiveHint(), 800);
         } catch (e) {
-          $('volumeEffective').textContent = e instanceof Error ? e.message : String(e);
+          setSetFeedback($('volumeEffective'), e instanceof Error ? e.message : String(e));
         }
       });
 
@@ -1778,16 +1456,18 @@
         const btn = $('btnSavePairing');
         if (!shell.savePairing) return;
         btn.disabled = true;
-        hintEl.textContent = '保存中…';
+        setSetFeedback(hintEl, '保存中…');
         try {
           const r = await shell.savePairing({
             sharedToken: $('inpPairToken').value || '',
             allowedOrigins: $('inpPairOrigins').value || '',
           });
-          hintEl.textContent =
-            r && r.ok ? '保存成功，一般无需重启即可生效' : '未能保存：' + ((r && r.error) || '请稍后重试');
+          setSetFeedback(
+            hintEl,
+            r && r.ok ? '已保存' : '未能保存：' + ((r && r.error) || '请稍后重试'),
+          );
         } catch {
-          hintEl.textContent = '保存失败';
+          setSetFeedback(hintEl, '保存失败');
         } finally {
           btn.disabled = false;
         }
@@ -1799,11 +1479,10 @@
         void refreshRembgWinPanel();
         if (activeView === 'home') {
           await loadPlugins();
-          await loadHostBundleCatalog();
         }
       }
 
-      /** 定时轮询：只更新托盘摘要与内置服务能力表，不反复请求主站扩展目录（避免无意义拉取）。 */
+      /** 定时轮询：只更新托盘摘要与内置服务能力表。 */
       async function refreshHomePeriodic() {
         await refreshTray();
         void refreshSamLocalWinPanel();
@@ -1812,10 +1491,6 @@
           await loadPlugins();
         }
       }
-
-      $('btnRefreshHostCatalog').addEventListener('click', function () {
-        void loadHostBundleCatalog();
-      });
 
       if (shell.onUpdaterState) {
         shell.onUpdaterState(function (state) {
@@ -1829,7 +1504,6 @@
 
       async function init() {
         $('statusLabel').textContent = '连接中…';
-        $('siteUrlPreview').textContent = settingsCache.siteUrl;
         try {
           await Promise.race([
             loadSettingsUi(),
@@ -1837,14 +1511,13 @@
           ]);
         } catch {
           $('inpSiteUrl').value = settingsCache.siteUrl;
-          $('siteUrlPreview').textContent = settingsCache.siteUrl;
           $('inpVolumeRoot').value = settingsCache.volumeRoot;
         }
         try {
           const sum = await shell.traySummary();
-          $('localBase').textContent = 'http://127.0.0.1:' + (sum && sum.port ? sum.port : 18765) + '/';
+          $('localBase').value = 'http://127.0.0.1:' + (sum && sum.port ? sum.port : 18765) + '/';
         } catch {
-          $('localBase').textContent = 'http://127.0.0.1:18765/';
+          $('localBase').value = 'http://127.0.0.1:18765/';
         }
         try {
           await refreshHome();

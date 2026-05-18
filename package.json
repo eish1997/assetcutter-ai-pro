@@ -48,6 +48,7 @@
     "local-companion:typecheck": "npm run typecheck --prefix local-companion",
     "local-companion:dev": "npm run dev --prefix local-companion",
     "local-companion:start": "npm run start --prefix local-companion",
+    "companion-desktop:clean": "npm run clean --prefix companion-desktop",
     "companion-desktop:start": "npm run start --prefix companion-desktop",
     "companion-desktop:pack": "npm run pack --prefix companion-desktop",
     "companion-desktop:write-build-constants": "npm run write-build-constants --prefix companion-desktop",

@@ -1775,6 +1775,47 @@ if (!gotLock) {
     return { ok: true, view: v };
   });
 
+  ipcMain.handle('shell-sidebar-context-menu-popup', (event) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return { ok: false, error: 'no_window' };
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win) return { ok: false, error: 'no_window' };
+    const menu = Menu.buildFromTemplate([
+      {
+        label: '刷新工作台',
+        click: () => {
+          if (!workbenchBrowserView || shellMainProcessActiveView !== 'workbench') return;
+          try {
+            workbenchBrowserView.webContents.reload();
+          } catch {
+            /* ignore */
+          }
+        },
+      },
+      {
+        label: '硬刷新（忽略缓存）',
+        click: () => {
+          if (!workbenchBrowserView || shellMainProcessActiveView !== 'workbench') return;
+          try {
+            workbenchBrowserView.webContents.reloadIgnoringCache();
+          } catch {
+            /* ignore */
+          }
+        },
+      },
+      {
+        label: '在浏览器中打开主站',
+        click: () => {
+          void (async () => {
+            const u = normalizeWorkbenchSiteUrl(readShellSettings().siteUrl);
+            if (u) await shell.openExternal(u);
+          })();
+        },
+      },
+    ]);
+    menu.popup({ window: win });
+    return { ok: true };
+  });
+
   ipcMain.handle('shell-workbench-sidebar-inset', (_e, px) => {
     const n = Number(px);
     const inset = Number.isFinite(n)

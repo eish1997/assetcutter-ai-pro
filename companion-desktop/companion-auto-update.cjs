@@ -119,6 +119,34 @@ function createCompanionAutoUpdate(deps) {
     }
   }
 
+  function buildAppUpdateYamlText(feed) {
+    const url = String(feed || '').trim().replace(/\/+$/, '');
+    return ['provider: generic', `url: ${url}`, 'updaterCacheDirName: assetcutter-companion-updater', ''].join('\n');
+  }
+
+  /** 安装包内须有 app-update.yml；旧包缺失时写入 userData 兜底（electron-updater 下载阶段会读此文件） */
+  function ensurePackagedAppUpdateConfig(feed) {
+    if (!app.isPackaged || !feed) return null;
+    const resourcesYaml = path.join(process.resourcesPath, 'app-update.yml');
+    const userYaml = path.join(app.getPath('userData'), 'app-update.yml');
+    const text = buildAppUpdateYamlText(feed);
+
+    if (fs.existsSync(resourcesYaml)) {
+      if (autoUpdater) autoUpdater.updateConfigPath = resourcesYaml;
+      return resourcesYaml;
+    }
+
+    try {
+      fs.writeFileSync(userYaml, text, 'utf8');
+      if (autoUpdater) autoUpdater.updateConfigPath = userYaml;
+      logUpdater('warn', '安装包缺少 resources/app-update.yml，已写入 userData 兜底', userYaml);
+      return userYaml;
+    } catch (e) {
+      logUpdater('error', '无法写入 app-update.yml', e instanceof Error ? e.message : e);
+      return null;
+    }
+  }
+
   async function configureDifferentialDownloadFromFeed(feed) {
     if (!autoUpdater) return;
     autoUpdater.disableDifferentialDownload = true;
@@ -329,6 +357,10 @@ function createCompanionAutoUpdate(deps) {
     lastFeedUrl = feed;
     autoUpdater.forceDevUpdateConfig = false;
     autoUpdater.setFeedURL({ provider: 'generic', url: feed });
+    ensurePackagedAppUpdateConfig(feed);
+    if (typeof autoUpdater.verifyUpdateCodeSignature !== 'undefined') {
+      autoUpdater.verifyUpdateCodeSignature = () => Promise.resolve(null);
+    }
     await configureDifferentialDownloadFromFeed(feed);
     logUpdater('info', 'feed 已配置', feed);
 

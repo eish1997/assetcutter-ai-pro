@@ -43,6 +43,7 @@ contextBridge.exposeInMainWorld('companionShell', {
   closeWindow: () => timedInvoke('shell-window-close'),
   toggleMaximize: () => timedInvoke('shell-window-toggle-maximize'),
   setShellView: (view) => timedInvoke('shell-set-view', view),
+  popupSidebarContextMenu: () => timedInvoke('shell-sidebar-context-menu-popup'),
   workbenchReload: () => timedInvoke('shell-workbench-reload'),
   workbenchReloadHard: () => timedInvoke('shell-workbench-reload-hard'),
   workbenchOpenExternal: () => timedInvoke('shell-workbench-open-external'),

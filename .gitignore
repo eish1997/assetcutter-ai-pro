@@ -19,15 +19,12 @@ SamLocal-release/
 
 # Desktop companion：打包产物（统一 dist/ 子目录，见 companion-desktop/README）
 companion-desktop/dist/
-# 历史/脚本可能仍写在仓库根下的 release、release-*、release-dist-* 等，勿入库
+# 自定义输出根（COMPANION_BUILD_OUTPUT_ROOT=dist-out-xxx）与历史 release 目录
+companion-desktop/dist-out-*/
 companion-desktop/release/
 companion-desktop/release*/
 companion-desktop/local-companion-bundle/
 companion-desktop/build-constants.json
-companion-desktop/dist-out-formal/
-companion-desktop/dist-out-016/
-companion-desktop/dist-out-017/
-companion-desktop/dist-out-018/
 companion-desktop/sam-local-bundled/
 
 # auth-api 运行时登记（首条上传时创建，含环境与用户相关元数据）

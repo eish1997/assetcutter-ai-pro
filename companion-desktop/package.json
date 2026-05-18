@@ -1,13 +1,14 @@
 {
   "name": "@assetcutter/companion-desktop",
   "private": true,
-  "version": "0.1.8",
+  "version": "0.1.9",
   "author": "AssetCutter Team",
   "description": "本地伴侣桌面壳：托盘、设置内配对、启动 local-companion",
   "main": "main.cjs",
   "scripts": {
     "start": "electron .",
     "write-build-constants": "node ./scripts/write-build-constants.cjs",
+    "clean": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/clean-build-artifacts.ps1",
     "pack": "npm run write-build-constants && npm run bundle:local-companion && node ./scripts/electron-build-with-suffix.cjs dir",
     "copy:sam-local-bundled": "node ./scripts/copy-sam-local-for-desktop.cjs",
     "bundle:local-companion": "node ./scripts/copy-sam-local-for-desktop.cjs && node ./scripts/bundle-local-companion-runtime.cjs",
@@ -40,6 +41,10 @@
     "asar": true,
     "npmRebuild": false,
     "extraResources": [
+      {
+        "from": "app-update.yml",
+        "to": "app-update.yml"
+      },
       {
         "from": "local-companion-bundle",
         "to": "local-companion-bundle",

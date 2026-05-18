@@ -1,0 +1,3 @@
+provider: generic
+url: https://assetcutter-auth-api.onrender.com/api/companion-artifacts/electron-updater/win32/stable
+updaterCacheDirName: assetcutter-companion-updater

@@ -54,7 +54,15 @@ npm run companion-desktop:dist:portable
 npm run companion-desktop:dist:retry
 ```
 
-产物统一在 **`companion-desktop/dist/`**（不入库，见根 `.gitignore`）：
+清理历史打包目录（`dist`、`dist-out-*`、`release*`、`local-companion-bundle` 等，可再生成）：
+
+```bash
+npm run companion-desktop:clean
+```
+
+若提示 `app.asar` 被占用，先退出托盘伴侣与所有 Electron/开发壳，必要时关闭 Cursor 后重试。自定义输出根 **`COMPANION_BUILD_OUTPUT_ROOT=dist-out-xxx`** 的目录也会被清理。
+
+产物统一在 **`companion-desktop/dist/`**（或 `COMPANION_BUILD_OUTPUT_ROOT` 指定目录；均不入库，见根 `.gitignore`）：
 
 | 子目录 | 命令 | 内容 |
 |--------|------|------|
