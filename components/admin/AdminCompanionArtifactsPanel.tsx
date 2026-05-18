@@ -101,6 +101,7 @@ const AdminCompanionArtifactsPanel: React.FC = () => {
         const bmPresign = await presignCompanionDistributionUpload(
           blockMapFile.name,
           blockMapFile.type || 'application/octet-stream',
+          `${presign.objectKey}.blockmap`,
         );
         const bmPut = await fetch(bmPresign.uploadUrl, {
           method: 'PUT',

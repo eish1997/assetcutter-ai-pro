@@ -71,7 +71,11 @@ export async function fetchAdminCompanionArtifacts() {
   });
 }
 
-export async function presignCompanionDistributionUpload(fileName: string, contentType?: string) {
+export async function presignCompanionDistributionUpload(
+  fileName: string,
+  contentType?: string,
+  objectKey?: string,
+) {
   return requestJson<{
     objectKey: string;
     contentType: string;
@@ -79,7 +83,11 @@ export async function presignCompanionDistributionUpload(fileName: string, conte
     uploadUrl: string;
   }>(apiUrl('/api/admin/companion-artifacts/upload-url'), {
     method: 'POST',
-    body: JSON.stringify({ fileName, contentType: contentType || 'application/octet-stream' }),
+    body: JSON.stringify({
+      fileName,
+      contentType: contentType || 'application/octet-stream',
+      ...(objectKey ? { objectKey } : {}),
+    }),
   });
 }
 

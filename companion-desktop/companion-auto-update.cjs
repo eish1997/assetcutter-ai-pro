@@ -42,8 +42,21 @@ function createCompanionAutoUpdate(deps) {
   let periodicTimer = null;
   let manualCheckPending = false;
   let lastFeedUrl = '';
-  /** @type {boolean} */
-  let usesLocalDevUpdateYaml = false;
+
+  function updaterLogPath() {
+    return path.join(app.getPath('userData'), 'updater.log');
+  }
+
+  function logUpdater(level, message, detail) {
+    const line = `[${new Date().toISOString()}] [${level}] ${message}${detail ? ` ${detail}` : ''}\n`;
+    try {
+      fs.appendFileSync(updaterLogPath(), line, 'utf8');
+    } catch {
+      /* ignore */
+    }
+    const fn = level === 'error' ? console.error : console.warn;
+    fn(`[companion-desktop][updater] ${message}`, detail || '');
+  }
 
   function feedOriginFromFeedUrl(feed) {
     try {
@@ -51,20 +64,6 @@ function createCompanionAutoUpdate(deps) {
     } catch {
       return '';
     }
-  }
-
-  function legacyElectronUpdateYamlUrl(origin) {
-    const base = String(origin || '')
-      .trim()
-      .replace(/\/+$/, '');
-    if (!base) return '';
-    const plat = companionPlatformForFeed();
-    const qs = new URLSearchParams({
-      kind: 'desktop_shell',
-      platform: plat,
-      channel: 'stable',
-    });
-    return `${base}/api/companion-artifacts/electron-app-update.yml?${qs.toString()}`;
   }
 
   function yamlBodyLooksValid(text) {
@@ -86,30 +85,6 @@ function createCompanionAutoUpdate(deps) {
     }
   }
 
-  async function bootstrapLocalUpdateYamlFromOrigin(origin) {
-    const yamlUrl = legacyElectronUpdateYamlUrl(origin);
-    if (!yamlUrl) return null;
-    try {
-      const res = await fetch(yamlUrl, { method: 'GET', headers: { Accept: 'text/yaml,*/*' } });
-      if (!res.ok) {
-        console.warn('[companion-desktop][updater] legacy yaml HTTP', res.status, yamlUrl);
-        return null;
-      }
-      const text = await res.text();
-      if (!yamlBodyLooksValid(text)) {
-        console.warn('[companion-desktop][updater] legacy yaml 无效:', yamlUrl);
-        return null;
-      }
-      const devPath = path.join(app.getPath('userData'), 'dev-app-update.yml');
-      fs.writeFileSync(devPath, text, 'utf8');
-      console.log('[companion-desktop][updater] 已写入本地更新清单 →', devPath);
-      return devPath;
-    } catch (e) {
-      console.warn('[companion-desktop][updater] legacy yaml 拉取失败', e);
-      return null;
-    }
-  }
-
   function isUpdaterHttp404(err) {
     const msg = err instanceof Error ? err.message : String(err || '');
     return msg.includes('404') || msg.includes('Not Found');
@@ -117,14 +92,52 @@ function createCompanionAutoUpdate(deps) {
 
   function formatUpdaterErrorForUser(err) {
     const msg = err instanceof Error ? err.message : String(err || '');
+    if (msg.includes('checksum') || msg.includes('sha512') || msg.includes('SHA512')) {
+      return `${msg}\n\n校验失败：请确认管理后台登记的安装包与 semver 一致，且 sha512 对应完整 exe。`;
+    }
+    if (msg.includes('blockmap') || msg.includes('differential')) {
+      return `${msg}\n\n差分更新失败：请上传与 exe 同名的 .blockmap（R2 键为「exe键.blockmap」），或等待新版本壳默认走全量下载。`;
+    }
     if (!isUpdaterHttp404(err)) return msg;
     return (
       `${msg}\n\n` +
       '常见原因：线上 auth-api 尚未部署新版路由\n' +
       '  /api/companion-artifacts/electron-updater/{platform}/{channel}/latest.yml\n\n' +
-      '处理：将含该路由的 server 代码部署到 Render 后重试；\n' +
-      '开发壳会在检测到 404 时自动改用旧版 electron-app-update.yml（需重启伴侣）。'
+      '处理：将含该路由的 server 代码部署到 Render 后重试。'
     );
+  }
+
+  async function probePublicBlockMapForInstallerUrl(installerUrl) {
+    const base = String(installerUrl || '').trim();
+    if (!base) return false;
+    const mapUrl = `${base}.blockmap`;
+    try {
+      const res = await fetch(mapUrl, { method: 'HEAD' });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  async function configureDifferentialDownloadFromFeed(feed) {
+    if (!autoUpdater) return;
+    autoUpdater.disableDifferentialDownload = true;
+    try {
+      const res = await fetch(`${String(feed).replace(/\/+$/, '')}/latest.yml`);
+      if (!res.ok) return;
+      const text = await res.text();
+      const m = text.match(/^\s*-\s*url:\s*["']?([^"'\n]+)["']?/m);
+      if (!m || !m[1]) return;
+      const hasMap = await probePublicBlockMapForInstallerUrl(m[1].trim());
+      if (hasMap) {
+        autoUpdater.disableDifferentialDownload = false;
+        logUpdater('info', '差分更新已启用（已找到 .blockmap）');
+      } else {
+        logUpdater('info', '使用全量下载（未找到公网 .blockmap）', m[1].trim());
+      }
+    } catch (e) {
+      logUpdater('warn', '探测 blockmap 失败，使用全量下载', e instanceof Error ? e.message : e);
+    }
   }
 
   function companionPlatformForFeed() {
@@ -286,34 +299,38 @@ function createCompanionAutoUpdate(deps) {
     autoUpdater.autoDownload = true;
     autoUpdater.autoInstallOnAppQuit = true;
     autoUpdater.allowDowngrade = false;
+    autoUpdater.disableDifferentialDownload = true;
 
     const devUpdateMode =
       !app.isPackaged && process.env.COMPANION_ENABLE_UPDATE_IN_DEV === '1';
     const latestProbe = await probeFeedLatestYml(feed);
-    let localYamlPath = null;
+
+    if (app.isPackaged) {
+      const staleDevYaml = path.join(app.getPath('userData'), 'dev-app-update.yml');
+      if (fs.existsSync(staleDevYaml)) {
+        try {
+          fs.unlinkSync(staleDevYaml);
+          logUpdater('info', '已清除开发壳遗留 dev-app-update.yml');
+        } catch {
+          /* ignore */
+        }
+      }
+    }
 
     if (!latestProbe.ok) {
-      console.warn(
-        '[companion-desktop][updater] latest.yml 不可用',
-        latestProbe.status || latestProbe.error || '',
-        latestProbe.url || feed,
+      logUpdater(
+        'warn',
+        'latest.yml 不可用',
+        `${latestProbe.status || ''} ${latestProbe.url || feed}`,
       );
-      if (devUpdateMode) {
-        localYamlPath = await bootstrapLocalUpdateYamlFromOrigin(feedOriginFromFeedUrl(feed));
-      }
     }
 
     configured = true;
     lastFeedUrl = feed;
-    usesLocalDevUpdateYaml = Boolean(localYamlPath);
-
-    if (localYamlPath) {
-      autoUpdater.updateConfigPath = localYamlPath;
-      if (devUpdateMode) autoUpdater.forceDevUpdateConfig = true;
-    } else {
-      if (devUpdateMode) autoUpdater.forceDevUpdateConfig = true;
-      autoUpdater.setFeedURL({ provider: 'generic', url: feed });
-    }
+    autoUpdater.forceDevUpdateConfig = false;
+    autoUpdater.setFeedURL({ provider: 'generic', url: feed });
+    await configureDifferentialDownloadFromFeed(feed);
+    logUpdater('info', 'feed 已配置', feed);
 
     autoUpdater.on('checking-for-update', () => {
       setPhase('checking');
@@ -373,28 +390,20 @@ function createCompanionAutoUpdate(deps) {
     });
 
     autoUpdater.on('error', async (err) => {
-      console.error('[companion-desktop][updater]', err);
+      const errMsg = err instanceof Error ? err.message : String(err || '');
+      logUpdater('error', errMsg, err instanceof Error ? err.stack : '');
       if (
-        !usesLocalDevUpdateYaml &&
-        isUpdaterHttp404(err) &&
-        !app.isPackaged &&
-        process.env.COMPANION_ENABLE_UPDATE_IN_DEV === '1'
+        autoUpdater &&
+        !autoUpdater.disableDifferentialDownload &&
+        /blockmap|differential/i.test(errMsg)
       ) {
-        const localYamlPath = await bootstrapLocalUpdateYamlFromOrigin(
-          feedOriginFromFeedUrl(lastFeedUrl || feed),
-        );
-        if (localYamlPath && autoUpdater) {
-          usesLocalDevUpdateYaml = true;
-          autoUpdater.updateConfigPath = localYamlPath;
-          autoUpdater.forceDevUpdateConfig = true;
-          if (manualCheckPending) {
-            try {
-              await autoUpdater.checkForUpdates();
-              return;
-            } catch (retryErr) {
-              console.error('[companion-desktop][updater] retry after bootstrap', retryErr);
-            }
-          }
+        autoUpdater.disableDifferentialDownload = true;
+        logUpdater('warn', '差分下载失败，已切换为全量下载并重试');
+        try {
+          await autoUpdater.checkForUpdates();
+          return;
+        } catch (retryErr) {
+          logUpdater('error', '全量重试仍失败', retryErr instanceof Error ? retryErr.message : retryErr);
         }
       }
       setPhase('idle');
@@ -402,9 +411,10 @@ function createCompanionAutoUpdate(deps) {
       if (manualCheckPending) {
         void dialog.showErrorBox('更新失败', formatUpdaterErrorForUser(err));
       } else if (pendingVersion) {
+        const short = errMsg.length > 120 ? `${errMsg.slice(0, 120)}…` : errMsg;
         displayTrayBalloon({
           title: '更新下载未完成',
-          content: `v${pendingVersion} 后台下载失败，可稍后在托盘选择「检查更新…」重试。`,
+          content: `v${pendingVersion} 下载失败：${short}。详见 userData/updater.log`,
         });
       }
       manualCheckPending = false;

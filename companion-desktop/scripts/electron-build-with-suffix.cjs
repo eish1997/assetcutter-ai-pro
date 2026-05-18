@@ -75,7 +75,11 @@ const outputByMode = {
   nsis: 'dist/installer',
 };
 
-const outDir = outputByMode[mode];
+const outRoot = String(process.env.COMPANION_BUILD_OUTPUT_ROOT || '').trim();
+const outDir = outRoot ? `${outRoot.replace(/\\/g, '/').replace(/\/+$/, '')}/${outputByMode[mode].split('/').pop()}` : outputByMode[mode];
+if (outRoot) {
+  console.log(`[companion-desktop] output root COMPANION_BUILD_OUTPUT_ROOT → ${outDir}`);
+}
 const extraArgs =
   mode === 'dir'
     ? ['--dir', `--config.directories.output=${outDir}`, `--config.win.artifactName=${winArtifactName}`]

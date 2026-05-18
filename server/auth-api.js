@@ -866,7 +866,17 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
       const fileName = normalizeTrimmed(body.fileName) || 'artifact.bin';
       const safeBase = fileName.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 120) || 'artifact.bin';
-      const objectKey = `${COMPANION_DISTRIBUTION_PREFIX}${Date.now()}_${safeBase}`;
+      const requestedKey = normalizeTrimmed(body.objectKey);
+      let objectKey;
+      if (requestedKey) {
+        if (!requestedKey.startsWith(COMPANION_DISTRIBUTION_PREFIX)) {
+          json(res, 400, { error: `objectKey 须以 ${COMPANION_DISTRIBUTION_PREFIX} 开头` });
+          return;
+        }
+        objectKey = requestedKey;
+      } else {
+        objectKey = `${COMPANION_DISTRIBUTION_PREFIX}${Date.now()}_${safeBase}`;
+      }
       const contentType = normalizeTrimmed(body.contentType) || 'application/octet-stream';
       try {
         const out = await presignPutCompanionDistribution({ objectKey, contentType, expiresIn: body.expiresIn });

@@ -58,13 +58,17 @@ export function buildElectronAppUpdateYaml(rec, publicBase) {
   const fileName = String(rec.fileName || 'artifact.bin').trim() || 'artifact.bin';
   const releaseDate = String(rec.publishedAt || new Date().toISOString());
   const sha512B64 = hexSha512ToUpdaterBase64(rec.sha512);
-  const blockMapSize = Math.floor(Number(rec.blockMapBytes) || 0);
+  const blockMapBytes = Math.floor(Number(rec.blockMapBytes) || 0);
+  const r2Key = String(rec.r2Key || '').trim();
+  const blockMapKey = String(rec.blockMapR2Key || '').trim();
+  /** electron-updater 只认 {installerUrl}.blockmap；键名须为 r2Key + ".blockmap" */
+  const blockMapSibling = blockMapBytes > 0 && blockMapKey && blockMapKey === `${r2Key}.blockmap`;
   const lines = [`version: ${yamlScalar(version)}`, 'files:', `  - url: ${yamlScalar(url)}`, `    size: ${size}`];
   if (sha512B64) {
     lines.push(`    sha512: ${sha512B64}`);
   }
-  if (blockMapSize > 0) {
-    lines.push(`    blockMapSize: ${blockMapSize}`);
+  if (blockMapSibling) {
+    lines.push(`    blockMapSize: ${blockMapBytes}`);
   }
   lines.push(`path: ${yamlScalar(fileName)}`);
   if (sha512B64) {

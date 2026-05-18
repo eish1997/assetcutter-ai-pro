@@ -29,17 +29,52 @@ describe('companion-electron-feed', () => {
     else process.env.R2_PUBLIC_BASE_URL = prevR2;
   });
 
+  it('buildElectronAppUpdateYaml includes blockMapSize only for sibling .blockmap key', () => {
+    const hex = 'b'.repeat(128);
+    const r2Key = 'public/companion-distribution/win/app.exe';
+    const withSibling = buildElectronAppUpdateYaml(
+      {
+        semver: '1.2.3',
+        bytes: 1000,
+        fileName: 'app.exe',
+        r2Key,
+        publishedAt: '2026-05-18T00:00:00.000Z',
+        sha512: hex,
+        blockMapBytes: 4096,
+        blockMapR2Key: `${r2Key}.blockmap`,
+      },
+      'https://cdn.example.com',
+    );
+    expect(withSibling).toContain('blockMapSize: 4096');
+    const wrongKey = buildElectronAppUpdateYaml(
+      {
+        semver: '1.2.3',
+        bytes: 1000,
+        fileName: 'app.exe',
+        r2Key,
+        publishedAt: '2026-05-18T00:00:00.000Z',
+        sha512: hex,
+        blockMapBytes: 4096,
+        blockMapR2Key: 'public/companion-distribution/other.blockmap',
+      },
+      'https://cdn.example.com',
+    );
+    expect(wrongKey).not.toContain('blockMapSize:');
+  });
+
   it('buildElectronAppUpdateYaml includes blockMapSize when set', () => {
     const hex = 'b'.repeat(128);
+    const r2Key = 'public/companion-distribution/win32/app.exe';
     const yaml = buildElectronAppUpdateYaml(
       {
         semver: '1.2.3',
         bytes: 1000,
         fileName: 'AssetCutterCompanion-1.2.3-x64.exe',
-        r2Key: 'public/companion-distribution/win32/app.exe',
+        r2Key,
         publishedAt: '2026-05-18T00:00:00.000Z',
         sha512: hex,
         blockMapBytes: 4096,
+        blockMapR2Key: `${r2Key}.blockmap`,
       },
       'https://cdn.example.com',
     );
