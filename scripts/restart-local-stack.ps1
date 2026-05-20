@@ -1,6 +1,6 @@
 # Stop listeners on dev ports, then start: Vite + auth-api + local-companion + SamLocal + gemini-proxy
 # Usage: npm run restart:local-stack
-# 生图（试用/Vertex 走 bulk）：前端建议 .env.local 设 VITE_BULK_IMAGE_API=same-origin，由 Vite 反代 /proxy/gemini → 本机 9002。
+# 生图默认与线上一致（.env.development → Render gemini-proxy + Vite 转发）。仅调试本机 9002 时在 .env.local 覆盖为 same-origin。
 
 $ErrorActionPreference = 'Continue'
 $repo = Split-Path -Parent $PSScriptRoot

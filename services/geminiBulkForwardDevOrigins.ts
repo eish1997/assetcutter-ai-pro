@@ -2,7 +2,9 @@
  * 本地 `npm run dev`：浏览器直连公网 gemini-proxy 常因 CORS（PROXY_ALLOWED_ORIGINS 未含 localhost）报 Failed to fetch。
  * 与 `vite.config.ts` 共用：Vite 将 `/__ac-bulk-forward/{i}/...` 转发到 `origins[i]`。
  */
-const DEFAULT_VERTEX_FALLBACK_ORIGIN = "https://assetcutter-gemini-proxy.onrender.com";
+/** 与 render.yaml、.env.development / .env.production 中 VITE_BULK_IMAGE_API 保持一致 */
+export const DEFAULT_GEMINI_BULK_PROXY_ORIGIN = "https://assetcutter-gemini-proxy.onrender.com";
+const DEFAULT_VERTEX_FALLBACK_ORIGIN = DEFAULT_GEMINI_BULK_PROXY_ORIGIN;
 
 function pushOrigin(out: string[], raw: string | undefined): void {
   if (typeof raw !== "string") return;

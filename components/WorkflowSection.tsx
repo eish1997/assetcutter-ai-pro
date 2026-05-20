@@ -909,8 +909,8 @@ const WorkflowSection: React.FC<{
   const [quickComposeAspect, setQuickComposeAspect] = useState('adaptive');
   const [quickComposeSize, setQuickComposeSize] = useState('');
   const [quickComposeCount, setQuickComposeCount] = useState(1);
-  /** 与侧栏分组「解」一致：true = 先理解再生成 */
-  const [quickComposeUnderstand, setQuickComposeUnderstand] = useState(true);
+  /** 与内置快捷条预设一致：默认直发（skipUnderstand）；开启后才走理解 */
+  const [quickComposeUnderstand, setQuickComposeUnderstand] = useState(false);
   /**
    * 与 `quickComposeDraft` 同步；在 **setState 提交前** 即更新（见 `setQuickComposeDraftTracked`），
    * 避免大图/底部栏「最后一笔输入后立即点生成」读到空文案。
@@ -2884,7 +2884,9 @@ ${lineSvg}
         if (quickComposeSize === '1K' || quickComposeSize === '2K' || quickComposeSize === '4K') {
           o.overrideImageSize = quickComposeSize;
         }
-        o.overrideSkipUnderstand = overrideSkipUnderstandFromUnderstandEnabled(quickComposeUnderstand);
+        if (quickComposeUnderstand) {
+          o.overrideSkipUnderstand = overrideSkipUnderstandFromUnderstandEnabled(true);
+        }
       }
       return o;
     };
@@ -3356,8 +3358,9 @@ ${lineSvg}
       if (quickComposeSize === '1K' || quickComposeSize === '2K' || quickComposeSize === '4K') {
         taskOverrides.overrideImageSize = quickComposeSize;
       }
-      taskOverrides.overrideSkipUnderstand =
-        overrideSkipUnderstandFromUnderstandEnabled(quickComposeUnderstand);
+      if (quickComposeUnderstand) {
+        taskOverrides.overrideSkipUnderstand = overrideSkipUnderstandFromUnderstandEnabled(true);
+      }
     }
     const plainLog: WorkflowPendingTask['logContext'] = 'quick_compose_bar_plain';
 

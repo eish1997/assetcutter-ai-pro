@@ -28,7 +28,11 @@ import {
   resolveUpstreamModelIdForProvider,
   resolveUpstreamTextModelId,
 } from "./modelRegistry/resolve";
-import { bulkForwardOriginIndex, collectRemoteBulkOriginsFromEnv } from "./geminiBulkForwardDevOrigins";
+import {
+  bulkForwardOriginIndex,
+  collectRemoteBulkOriginsFromEnv,
+  DEFAULT_GEMINI_BULK_PROXY_ORIGIN,
+} from "./geminiBulkForwardDevOrigins";
 
 export {
   resolveUpstreamImageModelId,
@@ -92,7 +96,7 @@ const VERTEX_FALLBACK_BULK_RAW =
   typeof import.meta !== "undefined" && (import.meta as unknown as { env?: Record<string, string | undefined> })?.env
     ? readViteEnvTrim("VITE_VERTEX_FALLBACK_BULK_API")
     : "";
-const DEFAULT_VERTEX_OK_BULK = "https://assetcutter-gemini-proxy.onrender.com";
+const DEFAULT_VERTEX_OK_BULK = DEFAULT_GEMINI_BULK_PROXY_ORIGIN;
 const VERTEX_MISCONFIGURED_PROXY_HOSTS = new Set(
   ["assetcutter-ai-pro.onrender.com", "assetcutter-ai-pro.org", "www.assetcutter-ai-pro.org"].map((h) => h.toLowerCase())
 );
@@ -218,7 +222,7 @@ function userMessageForVertexProxyNotReady(text: string): string | null {
   return null;
 }
 
-function parseBulkProxyCreateError(status: number, text: string): string {
+function parseBulkProxyCreateError(status: number, text: string, requestUrl?: string): string {
   const raw = (text || "").trim();
   try {
     const j = JSON.parse(raw) as { error?: string; message?: string; retryAfterSec?: number };
@@ -239,7 +243,19 @@ function parseBulkProxyCreateError(status: number, text: string): string {
   } catch {
     /* ignore */
   }
-  return parseBulkProxyErrorBody(raw) || `Gemini 异步任务创建失败（${status}）`;
+  const base = parseBulkProxyErrorBody(raw) || `Gemini 异步任务创建失败（${status}）`;
+  if (status === 405) {
+    const urlHint = requestUrl ? ` 请求 URL：${requestUrl}。` : "";
+    const prodSameOrigin =
+      typeof import.meta !== "undefined" &&
+      (import.meta as unknown as { env?: { PROD?: boolean } }).env?.PROD &&
+      effectiveBulkBase() === BULK_SAME_ORIGIN_MARKER;
+    const fixHint = prodSameOrigin
+      ? "构建时误用了 VITE_BULK_IMAGE_API=same-origin（仅适用于本机 Vite 反代）；请改为与线上一致的 gemini-proxy 根地址并重新部署。"
+      : "请确认 VITE_BULK_IMAGE_API 指向已部署的 gemini-proxy（如 https://assetcutter-gemini-proxy.onrender.com），勿指向前端静态站域名。";
+    return `${base}${urlHint} ${fixHint}`;
+  }
+  return base;
 }
 
 function parseBulkProxyErrorBody(text: string): string {
@@ -341,7 +357,9 @@ async function bulkProxyGenerateContentAsync(args: {
     }
     const fairnessErr = tryParseGeminiProxyFairnessRejected(createRes.status, raw);
     if (fairnessErr) throwFairnessRejected(fairnessErr);
-    throw new Error(parseBulkProxyCreateError(createRes.status, raw));
+    throw new Error(
+      parseBulkProxyCreateError(createRes.status, raw, bulkApiUrl("/proxy/gemini/async"))
+    );
   }
   let jobId: string;
   try {
@@ -408,7 +426,8 @@ async function bulkProxyGenerateContentBatchAsync(args: {
     const fairnessErr = tryParseGeminiProxyFairnessRejected(createRes.status, rawBatch);
     if (fairnessErr) throwFairnessRejected(fairnessErr);
     throw new Error(
-      parseBulkProxyCreateError(createRes.status, rawBatch) || `Gemini 批量异步任务创建失败（${createRes.status}）`
+      parseBulkProxyCreateError(createRes.status, rawBatch, bulkApiUrl("/proxy/gemini/async-batch")) ||
+        `Gemini 批量异步任务创建失败（${createRes.status}）`
     );
   }
   let jobId: string;

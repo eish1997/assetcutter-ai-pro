@@ -69,14 +69,17 @@ Vercel 一般能自动识别 Vite 项目，你只需确认：
 
 若某一项是空的，就按上表手动填。
 
-### 2.3 添加环境变量（按需）
+### 2.3 添加环境变量（生图必配）
 
 在 **Environment Variables** 区域：
 
-1. 默认**不要**再添加 `GEMINI_API_KEY`。Gemini Key 改为由每个使用者在网站「设置」页自行填写，仅保存在自己的浏览器本机。
-2. 如果以后要用腾讯 3D，再在这里加 `VITE_TENCENT_PROXY`（那时再部署代理并填代理地址）。
-
-第一次部署可以不加任何 AI 相关环境变量，网站一样能打开；只是 Gemini / 3D 相关功能会在用户未填写密钥或未配置代理时不可用。
+1. **试用 / Vertex 生图（必配，与 Render 线上一致）**  
+   - `VITE_BULK_IMAGE_API` = `https://assetcutter-gemini-proxy.onrender.com`  
+   - `VITE_BULK_IMAGE_API_VERTEX` = `https://assetcutter-gemini-proxy.onrender.com`  
+   - 仓库内 `.env.production` 已含上述默认值；**若 Vercel 面板里曾填过 `same-origin` 或前端自己的域名，请删掉或改成上面地址**，否则会覆盖默认值并导致其它电脑报 **405**。  
+   - 改完后需 **Redeploy** 一次（`VITE_*` 在构建时写入 `dist`）。
+2. 默认**不要**再添加 `GEMINI_API_KEY`（试用走云端代理上的密钥）。
+3. 腾讯 3D 需要时再配 `VITE_TENCENT_PROXY`（并单独部署 `ai3d-proxy`）。
 
 ### 2.4 部署
 
