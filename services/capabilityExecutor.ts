@@ -712,7 +712,12 @@ export async function executeCapability(
       };
     }
 
-    emitCapabilityRunProgress(ctx, `${actionLabel}：理解图片与提示词中（若失败多为网关超时或模型不可用）…`);
+    emitCapabilityRunProgress(
+      ctx,
+      preset.skipUnderstand === true
+        ? `${actionLabel}：准备生图（已跳过理解）…`
+        : `${actionLabel}：理解图片与提示词中（若失败多为网关超时或模型不可用）…`
+    );
     const prompt = await resolveGenImagePrompt(preset, refs[0]!, ctx);
     if (!prompt) return { ok: false, kind: 'none', error: '该能力为生图执行方式，但未填写预设提示词或理解未返回有效指令', durationMs: Date.now() - start };
     const augmented =

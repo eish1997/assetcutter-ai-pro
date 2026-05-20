@@ -79,6 +79,12 @@ import {
   readPanoLocalInpaintShrinkToBase,
   writePanoLocalInpaintShrinkToBase,
 } from '../services/lightboxPanoLocalInpaintPrefs';
+import {
+  FLAT_LOCAL_INPAINT_COMPOSITE_LABELS,
+  readFlatLocalInpaintCompositeStrategy,
+  writeFlatLocalInpaintCompositeStrategy,
+  type FlatLocalInpaintCompositeStrategy,
+} from '../services/lightboxFlatLocalInpaintPrefs';
 
 const SETTINGS_NAV: { id: string; label: string }[] = [
   { id: 'settings-user', label: '用户' },
@@ -219,9 +225,11 @@ const SettingsSection: React.FC<{
   const [hostBundleExecHint, setHostBundleExecHint] = useState('');
   const [debugLogPersistEnabled, setDebugLogPersistEnabledState] = useState(false);
   const [panoInpaintShrinkToBase, setPanoInpaintShrinkToBase] = useState(false);
+  const [flatInpaintComposite, setFlatInpaintComposite] = useState<FlatLocalInpaintCompositeStrategy>('fit_dest');
 
   useEffect(() => {
     setPanoInpaintShrinkToBase(readPanoLocalInpaintShrinkToBase(preferenceScope));
+    setFlatInpaintComposite(readFlatLocalInpaintCompositeStrategy(preferenceScope));
   }, [preferenceScope]);
 
   useEffect(() => {
@@ -1124,6 +1132,31 @@ const SettingsSection: React.FC<{
                   </label>
                   <p className="text-[9px] text-gray-500">
                     仅用于排障：不记录 API Key、不记录完整图片 base64。关闭后立即停止写入。
+                  </p>
+                </div>
+                <div className="rounded-lg border border-[#2e2e32] bg-[#16161a] p-3 space-y-2">
+                  <p className="text-gray-300 font-semibold">平面局部重绘贴回</p>
+                  <CustomDropdown
+                    value={flatInpaintComposite}
+                    options={(
+                      ['fit_dest', 'upscale_canvas', 'detail_enhance'] as FlatLocalInpaintCompositeStrategy[]
+                    ).map((id) => ({
+                      value: id,
+                      label: FLAT_LOCAL_INPAINT_COMPOSITE_LABELS[id].title,
+                    }))}
+                    onChange={(v) => {
+                      const next = v as FlatLocalInpaintCompositeStrategy;
+                      setFlatInpaintComposite(next);
+                      writeFlatLocalInpaintCompositeStrategy(preferenceScope, next);
+                    }}
+                    triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                    className="w-full max-w-md"
+                  />
+                  <p className="text-[9px] text-gray-500 leading-relaxed">
+                    {FLAT_LOCAL_INPAINT_COMPOSITE_LABELS[flatInpaintComposite].hint}
+                  </p>
+                  <p className="text-[9px] text-gray-500 leading-relaxed">
+                    快捷栏「输出尺寸」仅作用于裁切后送模型的局部图，不会把整张底图缩到 2K/4K。
                   </p>
                 </div>
                 <div className="rounded-lg border border-[#2e2e32] bg-[#16161a] p-3 space-y-2">

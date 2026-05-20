@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { computeCoverUpscaleDrawParams, expandPixelBBox } from '../services/localInpaintGemini';
+import {
+  buildLocalInpaintGenImageOptions,
+  computeCoverUpscaleDrawParams,
+  expandPixelBBox,
+  localInpaintPatchToDestRatio,
+  planLocalInpaintComposite,
+} from '../services/localInpaintGemini';
 import { resolveDialogImageModelIdForGear } from '../services/modelRegistry/imageModels';
 
 describe('expandPixelBBox', () => {
@@ -46,6 +52,47 @@ describe('computeCoverUpscaleDrawParams', () => {
     expect(p!.dh).toBe(200);
     expect(p!.ox).toBe(-100);
     expect(p!.oy).toBe(0);
+  });
+});
+
+describe('localInpaintPatchToDestRatio', () => {
+  it('uses max axis scale', () => {
+    expect(localInpaintPatchToDestRatio(4000, 4800, 200, 240)).toBeCloseTo(20, 5);
+  });
+});
+
+describe('planLocalInpaintComposite', () => {
+  const dest = { left: 100, top: 120, width: 200, height: 240 };
+
+  it('fit_dest keeps canvas scale 1', () => {
+    const p = planLocalInpaintComposite(10000, 10000, dest, 4000, 4800, 'fit_dest');
+    expect(p.canvasScale).toBe(1);
+    expect(p.pasteW).toBe(200);
+    expect(p.pasteH).toBe(240);
+  });
+
+  it('upscale_canvas scales canvas by patch ratio (clamped)', () => {
+    const p = planLocalInpaintComposite(10000, 10000, dest, 4000, 4800, 'upscale_canvas');
+    expect(p.canvasScale).toBeGreaterThan(1);
+    expect(p.pasteW).toBe(4000);
+    expect(p.pasteLeft).toBe(100 * p.canvasScale);
+  });
+
+  it('detail_enhance uses sqrt scale and inset paste', () => {
+    const p = planLocalInpaintComposite(2000, 2000, dest, 4000, 4800, 'detail_enhance');
+    const ratio = localInpaintPatchToDestRatio(4000, 4800, 200, 240);
+    expect(p.canvasScale).toBeCloseTo(Math.sqrt(ratio), 5);
+    expect(p.pasteW).toBeLessThan(dest.width * p.canvasScale);
+  });
+});
+
+describe('buildLocalInpaintGenImageOptions', () => {
+  it('maps size and aspect', () => {
+    expect(buildLocalInpaintGenImageOptions('16:9', '4K')).toEqual({
+      aspectRatio: '16:9',
+      imageSize: '4K',
+    });
+    expect(buildLocalInpaintGenImageOptions('adaptive', '')).toBeUndefined();
   });
 });
 

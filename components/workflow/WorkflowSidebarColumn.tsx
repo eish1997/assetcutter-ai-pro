@@ -1430,13 +1430,16 @@ export function WorkflowSidebarColumn({
                               title="理解开关"
                               disabled={!groupOverrideByCategory[FAVORITE_GROUP_KEY]?.enabled}
                               onClick={() =>
-                                setGroupOverrideByCategory((prev) => ({
-                                  ...prev,
-                                  [FAVORITE_GROUP_KEY]: {
-                                    ...(prev[FAVORITE_GROUP_KEY] || {}),
-                                    understand: prev[FAVORITE_GROUP_KEY]?.understand === false,
-                                  },
-                                }))
+                                setGroupOverrideByCategory((prev) => {
+                                  const wasOn = prev[FAVORITE_GROUP_KEY]?.understand !== false;
+                                  return {
+                                    ...prev,
+                                    [FAVORITE_GROUP_KEY]: {
+                                      ...(prev[FAVORITE_GROUP_KEY] || {}),
+                                      understand: wasOn ? false : true,
+                                    },
+                                  };
+                                })
                               }
                               className={`shrink-0 w-6 h-6 rounded-full border inline-flex items-center justify-center leading-none text-[9px] font-black ${
                                 groupOverrideByCategory[FAVORITE_GROUP_KEY]?.understand !== false
@@ -1926,13 +1929,16 @@ export function WorkflowSidebarColumn({
                             title="理解开关"
                             disabled={!groupOverrideByCategory[category.id]?.enabled}
                             onClick={() =>
-                              setGroupOverrideByCategory((prev) => ({
-                                ...prev,
-                                [category.id]: {
-                                  ...(prev[category.id] || {}),
-                                  understand: prev[category.id]?.understand === false,
-                                },
-                              }))
+                              setGroupOverrideByCategory((prev) => {
+                                const wasOn = prev[category.id]?.understand !== false;
+                                return {
+                                  ...prev,
+                                  [category.id]: {
+                                    ...(prev[category.id] || {}),
+                                    understand: wasOn ? false : true,
+                                  },
+                                };
+                              })
                             }
                             className={`shrink-0 w-6 h-6 rounded-full border inline-flex items-center justify-center leading-none text-[9px] font-black ${groupOverrideByCategory[category.id]?.understand !== false ? 'border-blue-500 text-blue-300 bg-blue-950/35' : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'} disabled:opacity-50`}
                           >

@@ -17,6 +17,9 @@ export type WorkspaceQuickComposeGenSettings = {
   onAspectRatio: (v: string) => void;
   imageSize: string;
   onImageSize: (v: string) => void;
+  /** true = 先理解再生成；false = 直发提示词（与侧栏分组「解」一致） */
+  understand: boolean;
+  onUnderstand: (v: boolean) => void;
   count: number;
   onCount: (v: number) => void;
 };
@@ -592,6 +595,7 @@ export default function WorkspaceQuickComposeBar({
       ? genSettings.imageSize
       : '';
   const countSummary = allowBatchCount ? Math.min(4, Math.max(1, genSettings.count)) : 1;
+  const understandSummary = showGenImageSettings ? (genSettings.understand ? '解' : '直发') : '';
 
   /** 第一行（比例）：自然宽度，与整表同宽后作为「最宽行」基准 */
   const chipCls = (on: boolean) =>
@@ -693,6 +697,29 @@ export default function WorkspaceQuickComposeBar({
                             {g.label}
                           </button>
                         ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="table-row">
+                    <div className="table-cell w-full min-w-0 p-0 align-middle">
+                      <div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
+                        <button
+                          type="button"
+                          onClick={() => genSettings.onUnderstand(true)}
+                          className={chipClsStretch(genSettings.understand)}
+                          title="先理解用户意图，再生成画面"
+                        >
+                          理解
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => genSettings.onUnderstand(false)}
+                          className={chipClsStretch(!genSettings.understand)}
+                          title="跳过理解，直发提示词到生图"
+                        >
+                          直发
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -976,6 +1003,12 @@ export default function WorkspaceQuickComposeBar({
                         <span className="shrink-0 text-[9px] font-mono text-gray-400">{sizeSummary}</span>
                       </>
                     ) : null}
+                    {understandSummary ? (
+                      <>
+                        <span className="shrink-0 text-[9px] text-gray-600">·</span>
+                        <span className="shrink-0 text-[9px] font-semibold text-gray-400">{understandSummary}</span>
+                      </>
+                    ) : null}
                     {allowBatchCount ? (
                       <>
                         <span className="shrink-0 text-[9px] text-gray-600">·</span>
@@ -1180,6 +1213,12 @@ export default function WorkspaceQuickComposeBar({
                   <>
                     <span className="shrink-0 text-[9px] text-gray-600">·</span>
                     <span className="shrink-0 text-[9px] font-mono text-gray-400">{sizeSummary}</span>
+                  </>
+                ) : null}
+                {understandSummary ? (
+                  <>
+                    <span className="shrink-0 text-[9px] text-gray-600">·</span>
+                    <span className="shrink-0 text-[9px] font-semibold text-gray-400">{understandSummary}</span>
                   </>
                 ) : null}
                 {allowBatchCount ? (

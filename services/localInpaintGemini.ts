@@ -1,4 +1,5 @@
 import type { ImageLocalEditSelection, ImageOverlayNormPoint } from '../types';
+import type { FlatLocalInpaintCompositeStrategy } from './lightboxFlatLocalInpaintPrefs';
 
 function loadHtmlImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -213,12 +214,109 @@ export async function rasterizeExpandedLocalEditCrop(
   }
 }
 
-/** 将 patch 缩放到 dest 尺寸后，以羽化 alpha 贴到原图对应矩形 */
-export async function compositeFeatheredLocalPatch(
+/** 贴回画布单边上限（避免超大图 OOM） */
+export const LOCAL_INPAINT_COMPOSITE_MAX_LONG_EDGE = 16384;
+
+function applyFeatherAlphaToPatchCanvas(
+  pctx: CanvasRenderingContext2D,
+  pw: number,
+  ph: number,
+  featherPx: number
+): void {
+  const fMax = Math.min(featherPx, Math.floor(Math.min(pw, ph) / 4));
+  if (fMax <= 0) return;
+  const img = pctx.getImageData(0, 0, pw, ph);
+  const d = img.data;
+  for (let y = 0; y < ph; y++) {
+    for (let x = 0; x < pw; x++) {
+      const dist = Math.min(x, y, pw - 1 - x, ph - 1 - y);
+      const i = (y * pw + x) * 4 + 3;
+      if (dist < fMax) {
+        const t = dist / fMax;
+        d[i] = Math.round(d[i] * t);
+      }
+    }
+  }
+  pctx.putImageData(img, 0, 0);
+}
+
+function clampCompositeCanvasScale(nw: number, nh: number, scale: number, maxEdge = LOCAL_INPAINT_COMPOSITE_MAX_LONG_EDGE): number {
+  if (!Number.isFinite(scale) || scale <= 1) return 1;
+  const edge = Math.max(nw * scale, nh * scale);
+  if (edge <= maxEdge) return scale;
+  return maxEdge / Math.max(nw, nh);
+}
+
+/** 生成图相对选区外扩矩形的分辨率倍率 */
+export function localInpaintPatchToDestRatio(
+  patchW: number,
+  patchH: number,
+  destW: number,
+  destH: number
+): number {
+  if (destW < 1 || destH < 1 || patchW < 1 || patchH < 1) return 1;
+  return Math.max(patchW / destW, patchH / destH);
+}
+
+export type LocalInpaintCompositePlan = {
+  canvasScale: number;
+  pasteLeft: number;
+  pasteTop: number;
+  pasteW: number;
+  pasteH: number;
+};
+
+/** 按策略计算贴回画布缩放与 patch 绘制尺寸（像素，相对原图自然尺寸坐标系） */
+export function planLocalInpaintComposite(
+  nw: number,
+  nh: number,
+  dest: { left: number; top: number; width: number; height: number },
+  patchW: number,
+  patchH: number,
+  strategy: FlatLocalInpaintCompositeStrategy
+): LocalInpaintCompositePlan {
+  const ratio = Math.max(1, localInpaintPatchToDestRatio(patchW, patchH, dest.width, dest.height));
+  if (strategy === 'upscale_canvas') {
+    const canvasScale = clampCompositeCanvasScale(nw, nh, ratio);
+    return {
+      canvasScale,
+      pasteLeft: dest.left * canvasScale,
+      pasteTop: dest.top * canvasScale,
+      pasteW: patchW,
+      pasteH: patchH,
+    };
+  }
+  if (strategy === 'detail_enhance') {
+    const canvasScale = clampCompositeCanvasScale(nw, nh, Math.sqrt(ratio));
+    const destW = dest.width * canvasScale;
+    const destH = dest.height * canvasScale;
+    const shrink = 0.92;
+    const pasteW = destW * shrink;
+    const pasteH = destH * shrink;
+    return {
+      canvasScale,
+      pasteLeft: dest.left * canvasScale + (destW - pasteW) / 2,
+      pasteTop: dest.top * canvasScale + (destH - pasteH) / 2,
+      pasteW,
+      pasteH,
+    };
+  }
+  return {
+    canvasScale: 1,
+    pasteLeft: dest.left,
+    pasteTop: dest.top,
+    pasteW: dest.width,
+    pasteH: dest.height,
+  };
+}
+
+/** 将 patch 按策略羽化贴回；`fit_dest` 时输出与原图同尺寸 */
+export async function compositeLocalInpaintPatch(
   baseImageSrc: string,
   patchDataUrl: string,
   dest: { left: number; top: number; width: number; height: number },
-  featherPx: number
+  featherPx: number,
+  strategy: FlatLocalInpaintCompositeStrategy = 'fit_dest'
 ): Promise<string | null> {
   let base: HTMLImageElement;
   let patch: HTMLImageElement;
@@ -231,40 +329,32 @@ export async function compositeFeatheredLocalPatch(
   const nh = base.naturalHeight;
   if (!nw || !nh) return null;
 
+  const plan = planLocalInpaintComposite(nw, nh, dest, patch.naturalWidth, patch.naturalHeight, strategy);
+  const outW = Math.max(1, Math.round(nw * plan.canvasScale));
+  const outH = Math.max(1, Math.round(nh * plan.canvasScale));
+
   const out = document.createElement('canvas');
-  out.width = nw;
-  out.height = nh;
+  out.width = outW;
+  out.height = outH;
   const octx = out.getContext('2d');
   if (!octx) return null;
-  octx.drawImage(base, 0, 0);
+  octx.imageSmoothingEnabled = true;
+  octx.imageSmoothingQuality = 'high';
+  octx.drawImage(base, 0, 0, nw, nh, 0, 0, outW, outH);
 
-  const pw = dest.width;
-  const ph = dest.height;
+  const pw = Math.max(1, Math.round(plan.pasteW));
+  const ph = Math.max(1, Math.round(plan.pasteH));
   const pc = document.createElement('canvas');
   pc.width = pw;
   pc.height = ph;
   const pctx = pc.getContext('2d');
   if (!pctx) return null;
+  pctx.imageSmoothingEnabled = true;
+  pctx.imageSmoothingQuality = 'high';
   pctx.drawImage(patch, 0, 0, patch.naturalWidth, patch.naturalHeight, 0, 0, pw, ph);
+  applyFeatherAlphaToPatchCanvas(pctx, pw, ph, featherPx);
 
-  const fMax = Math.min(featherPx, Math.floor(Math.min(pw, ph) / 4));
-  if (fMax > 0) {
-    const img = pctx.getImageData(0, 0, pw, ph);
-    const d = img.data;
-    for (let y = 0; y < ph; y++) {
-      for (let x = 0; x < pw; x++) {
-        const dist = Math.min(x, y, pw - 1 - x, ph - 1 - y);
-        const i = (y * pw + x) * 4 + 3;
-        if (dist < fMax) {
-          const t = dist / fMax;
-          d[i] = Math.round(d[i] * t);
-        }
-      }
-    }
-    pctx.putImageData(img, 0, 0);
-  }
-
-  octx.drawImage(pc, dest.left, dest.top);
+  octx.drawImage(pc, Math.round(plan.pasteLeft), Math.round(plan.pasteTop));
 
   try {
     return out.toDataURL('image/png');
@@ -273,13 +363,37 @@ export async function compositeFeatheredLocalPatch(
   }
 }
 
+/** @deprecated 使用 {@link compositeLocalInpaintPatch} */
+export async function compositeFeatheredLocalPatch(
+  baseImageSrc: string,
+  patchDataUrl: string,
+  dest: { left: number; top: number; width: number; height: number },
+  featherPx: number
+): Promise<string | null> {
+  return compositeLocalInpaintPatch(baseImageSrc, patchDataUrl, dest, featherPx, 'fit_dest');
+}
+
+/** 大图快捷栏 → 局部重绘专用生图参数（尺寸/比例仅作用于裁切图，不作用于整图二次生图） */
+export function buildLocalInpaintGenImageOptions(
+  aspect: string | undefined,
+  size: string | undefined
+): { aspectRatio?: string; imageSize?: string } | undefined {
+  const o: { aspectRatio?: string; imageSize?: string } = {};
+  if (aspect && aspect !== 'adaptive') o.aspectRatio = aspect;
+  if (size === '1K' || size === '2K' || size === '4K') o.imageSize = size;
+  return Object.keys(o).length > 0 ? o : undefined;
+}
+
 /** 面向 Gemini 2.x/3.x 图+文的局部重绘说明（无 mask API 时的 B 方案） */
-export function buildLocalInpaintInstruction(userInstruction: string): string {
+export function buildLocalInpaintInstruction(userInstruction: string, outputSizeLabel?: string): string {
   const t = userInstruction.trim();
+  const sizeHint = outputSizeLabel
+    ? `请按请求的输出分辨率（约 ${outputSizeLabel}）生成，可与输入裁切图宽高比一致；不必与输入裁切像素同尺寸。`
+    : '请按接口请求的输出分辨率生成，可与输入裁切图宽高比一致；不必与输入裁切像素同尺寸。';
   return [
-    '【局部重绘】输入图是从完整画面裁切的矩形区域，周围像素是上下文。',
-    '请修改画面内容以符合描述，使与周边自然衔接（光影、透视、颗粒感）；不要添加画框、白边或水印。',
-    '输出必须与输入同宽高像素，便于贴回原图。',
+    '【局部重绘】输入图是从完整画面裁切的矩形区域（含少量周边上下文），仅修改选区内容。',
+    '请使与周边自然衔接（光影、透视、颗粒感）；不要添加画框、白边或水印。',
+    sizeHint,
     t ? `修改意图：${t}` : '修改意图：在保持整体一致的前提下优化画面中心区域的细节与质感。',
   ].join('\n');
 }

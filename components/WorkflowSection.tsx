@@ -51,6 +51,7 @@ import {
   executeCapabilitySet,
   getCapabilityEngine,
 } from '../services/capabilityExecutor';
+import { overrideSkipUnderstandFromUnderstandEnabled } from '../services/workflowUnderstandOverride';
 import {
   getQuickComposePlainModule,
   QUICK_COMPOSE_PLAIN_I2I_ACTION_ID,
@@ -123,10 +124,12 @@ import { cropDataUrlByViewportNorm } from '../services/panoViewportCapture';
 import type { PanoramaViewportProjection } from '../services/panoViewportProjection';
 import {
   buildLocalInpaintInstruction,
-  compositeFeatheredLocalPatch,
+  buildLocalInpaintGenImageOptions,
+  compositeLocalInpaintPatch,
   ensureLocalInpaintOutputPixelFloor,
   rasterizeExpandedLocalEditCrop,
 } from '../services/localInpaintGemini';
+import { readFlatLocalInpaintCompositeStrategy } from '../services/lightboxFlatLocalInpaintPrefs';
 import type { PanoLocalReprojectSnapshot } from '../services/panoViewportProjection';
 import { snapshotViewportNormFromEquirectLoop } from '../services/panoLocalEditFootprint';
 import { readPanoLocalInpaintShrinkToBase } from '../services/lightboxPanoLocalInpaintPrefs';
@@ -736,6 +739,8 @@ const WorkflowSection: React.FC<{
         promise: Promise<string>;
         resolve: (v: string) => void;
         reject: (e: unknown) => void;
+        /** 客户端已完成局部重绘贴回，勿再对整图 executeCapability */
+        skipCapabilityExecute?: boolean;
       }
     >()
   );
@@ -904,6 +909,8 @@ const WorkflowSection: React.FC<{
   const [quickComposeAspect, setQuickComposeAspect] = useState('adaptive');
   const [quickComposeSize, setQuickComposeSize] = useState('');
   const [quickComposeCount, setQuickComposeCount] = useState(1);
+  /** 与侧栏分组「解」一致：true = 先理解再生成 */
+  const [quickComposeUnderstand, setQuickComposeUnderstand] = useState(true);
   /**
    * 与 `quickComposeDraft` 同步；在 **setState 提交前** 即更新（见 `setQuickComposeDraftTracked`），
    * 避免大图/底部栏「最后一笔输入后立即点生成」读到空文案。
@@ -1881,6 +1888,9 @@ ${lineSvg}
           return { image: null };
         }
         setAssetError(task.assetId, null);
+        if (box.skipCapabilityExecute) {
+          return { image: s };
+        }
         /** 客户端合成 = 当前预览所见（含标注烘焙等），作为图生图输入，后续仍走 `executeCapability` */
         resolvedInputImage = s;
       } catch (err: unknown) {
@@ -2117,9 +2127,12 @@ ${lineSvg}
               : {}),
             ...(task.overrideImageGear ? { imageGear: task.overrideImageGear } : {}),
             ...(task.overrideImageAspectRatio ? { imageAspectRatio: task.overrideImageAspectRatio } : {}),
-            ...(task.overrideImageSize ? { imageSize: task.overrideImageSize } : {}),
+            ...(task.overrideImageSize &&
+            !(task.displayStepLabel === '局部重绘' && task.lightboxAwaitClientResult)
+              ? { imageSize: task.overrideImageSize }
+              : {}),
             ...(typeof task.overrideSkipUnderstand === 'boolean'
-              ? { skipUnderstand: !task.overrideSkipUnderstand }
+              ? { skipUnderstand: task.overrideSkipUnderstand }
               : {}),
           };
           const out = await executeCapability(
@@ -2871,6 +2884,7 @@ ${lineSvg}
         if (quickComposeSize === '1K' || quickComposeSize === '2K' || quickComposeSize === '4K') {
           o.overrideImageSize = quickComposeSize;
         }
+        o.overrideSkipUnderstand = overrideSkipUnderstandFromUnderstandEnabled(quickComposeUnderstand);
       }
       return o;
     };
@@ -3253,6 +3267,7 @@ ${lineSvg}
     quickComposeAspect,
     quickComposeSize,
     quickComposeCount,
+    quickComposeUnderstand,
     actionModules,
     capabilityPresets,
     onLog,
@@ -3341,6 +3356,8 @@ ${lineSvg}
       if (quickComposeSize === '1K' || quickComposeSize === '2K' || quickComposeSize === '4K') {
         taskOverrides.overrideImageSize = quickComposeSize;
       }
+      taskOverrides.overrideSkipUnderstand =
+        overrideSkipUnderstandFromUnderstandEnabled(quickComposeUnderstand);
     }
     const plainLog: WorkflowPendingTask['logContext'] = 'quick_compose_bar_plain';
 
@@ -3376,6 +3393,13 @@ ${lineSvg}
     } else {
       void executePending([task, ...pendingRef.current]);
     }
+
+    const localInpaintGenOptions = buildLocalInpaintGenImageOptions(quickComposeAspect, quickComposeSize);
+    const localInpaintSizeLabel =
+      quickComposeSize === '1K' || quickComposeSize === '2K' || quickComposeSize === '4K'
+        ? quickComposeSize
+        : undefined;
+    const flatInpaintCompositeStrategy = readFlatLocalInpaintCompositeStrategy(preferenceScope);
 
     void (async () => {
       let composite = src;
@@ -3413,8 +3437,13 @@ ${lineSvg}
                   ? quickComposeGear
                   : 'standard';
               const modelId = resolveDialogImageModelIdForGear(gear);
-              const instruction = buildLocalInpaintInstruction(userText);
-              const genUrl = await workflowGenerateImage(plan.cropDataUrl, instruction, modelId);
+              const instruction = buildLocalInpaintInstruction(userText, localInpaintSizeLabel);
+              const genUrl = await workflowGenerateImage(
+                plan.cropDataUrl,
+                instruction,
+                modelId,
+                localInpaintGenOptions
+              );
               const merged = await compositePanoPatchOntoEquirect(
                 src,
                 genUrl,
@@ -3447,11 +3476,25 @@ ${lineSvg}
                   ? quickComposeGear
                   : 'standard';
               const modelId = resolveDialogImageModelIdForGear(gear);
-              const instruction = buildLocalInpaintInstruction(userText);
-              const genUrl = await workflowGenerateImage(plan.cropDataUrl, instruction, modelId);
-              const merged = await compositeFeatheredLocalPatch(src, genUrl, plan.dest, plan.featherPx);
+              const instruction = buildLocalInpaintInstruction(userText, localInpaintSizeLabel);
+              const genUrl = await workflowGenerateImage(
+                plan.cropDataUrl,
+                instruction,
+                modelId,
+                localInpaintGenOptions
+              );
+              const merged = await compositeLocalInpaintPatch(
+                src,
+                genUrl,
+                plan.dest,
+                plan.featherPx,
+                flatInpaintCompositeStrategy
+              );
               if (merged) {
-                composite = await ensureLocalInpaintOutputPixelFloor(merged, src);
+                composite =
+                  flatInpaintCompositeStrategy === 'fit_dest'
+                    ? await ensureLocalInpaintOutputPixelFloor(merged, src)
+                    : merged;
                 inpaintMerged = true;
               } else {
                 onLog?.('warn', '大图预览：局部贴回合成失败，将按当前底图继续');
@@ -3529,6 +3572,8 @@ ${lineSvg}
             );
           });
         }
+        const box = lightboxClientImageDeferredRef.current.get(taskId);
+        if (box && inpaintMerged) box.skipCapabilityExecute = true;
         resolveClient(composite);
       } catch (e) {
         rejectClient(e);
@@ -3542,6 +3587,8 @@ ${lineSvg}
     quickComposeGear,
     quickComposeAspect,
     quickComposeSize,
+    quickComposeUnderstand,
+    preferenceScope,
     setLightboxOverlayByMode,
     setLightboxQuickComposeAnchor,
     setPending,
@@ -7416,7 +7463,11 @@ ${lineSvg}
               ...(groupOverrides.imageAspectRatio ? { overrideImageAspectRatio: groupOverrides.imageAspectRatio } : {}),
               ...(groupOverrides.imageSize ? { overrideImageSize: groupOverrides.imageSize } : {}),
               ...(typeof groupOverrides.understand === 'boolean'
-                ? { overrideSkipUnderstand: groupOverrides.understand }
+                ? {
+                    overrideSkipUnderstand: overrideSkipUnderstandFromUnderstandEnabled(
+                      groupOverrides.understand
+                    ),
+                  }
                 : {}),
             }
           : undefined;
@@ -10349,6 +10400,8 @@ ${lineSvg}
               onImageSize: setQuickComposeSize,
               count: quickComposeCount,
               onCount: setQuickComposeCount,
+              understand: quickComposeUnderstand,
+              onUnderstand: setQuickComposeUnderstand,
             }}
           />,
           document.body
@@ -10624,7 +10677,11 @@ ${lineSvg}
               ...(promptTweakModal.overrides?.imageAspectRatio ? { overrideImageAspectRatio: promptTweakModal.overrides.imageAspectRatio } : {}),
               ...(promptTweakModal.overrides?.imageSize ? { overrideImageSize: promptTweakModal.overrides.imageSize } : {}),
               ...(typeof promptTweakModal.overrides?.understand === 'boolean'
-                ? { overrideSkipUnderstand: promptTweakModal.overrides.understand }
+                ? {
+                    overrideSkipUnderstand: overrideSkipUnderstandFromUnderstandEnabled(
+                      promptTweakModal.overrides.understand
+                    ),
+                  }
                 : {}),
             };
             const tasks: WorkflowPendingTask[] = [];
@@ -10784,6 +10841,8 @@ ${lineSvg}
               onImageSize: setQuickComposeSize,
               count: quickComposeCount,
               onCount: setQuickComposeCount,
+              understand: quickComposeUnderstand,
+              onUnderstand: setQuickComposeUnderstand,
             }}
           />,
           document.body
