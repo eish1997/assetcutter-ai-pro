@@ -7,9 +7,15 @@ export function buildTripoCreateTaskInputFromPreset(params: {
   apiKey: string;
   preset: CustomAppModule;
   imageDataUrl: string;
+  multiviewImageDataUrls?: Partial<Record<'front' | 'back' | 'left' | 'right', string>>;
 }): TripoCreateTaskInput {
   const g = normalizeGenerate3DPresetForRun(params.preset.generate3D!);
-  const taskType: TripoTaskType = g.tripoTaskType === 'text_to_model' ? 'text_to_model' : 'image_to_model';
+  const taskType: TripoTaskType =
+    g.tripoTaskType === 'text_to_model'
+      ? 'text_to_model'
+      : g.tripoTaskType === 'multiview_to_model'
+        ? 'multiview_to_model'
+        : 'image_to_model';
   const prompt =
     (params.preset.instruction?.trim() || g.prompt?.trim() || '') || undefined;
   return {
@@ -17,8 +23,13 @@ export function buildTripoCreateTaskInputFromPreset(params: {
     type: taskType,
     ...(prompt ? { prompt } : {}),
     ...(g.tripoNegativePrompt?.trim() ? { negativePrompt: g.tripoNegativePrompt.trim() } : {}),
-    ...(g.tripoModelVersion?.trim() ? { modelVersion: g.tripoModelVersion.trim() } : {}),
+    ...(g.tripoModelVersion?.trim()
+      ? { modelVersion: g.tripoModelVersion.trim() }
+      : taskType === 'multiview_to_model'
+        ? { modelVersion: 'v3.1-20260211' }
+        : {}),
     ...(taskType === 'image_to_model' ? { imageBase64DataUrl: params.imageDataUrl } : {}),
+    ...(taskType === 'multiview_to_model' ? { multiviewImageBase64DataUrls: params.multiviewImageDataUrls } : {}),
     ...(typeof g.tripoTexture === 'boolean' ? { texture: g.tripoTexture } : {}),
     ...(typeof g.tripoPbr === 'boolean' ? { pbr: g.tripoPbr } : {}),
     ...(g.tripoTextureQuality ? { textureQuality: g.tripoTextureQuality } : {}),
@@ -65,6 +76,7 @@ export async function tripoWorkflowCreateOrResumeTaskId(params: {
   apiKey: string;
   preset: CustomAppModule;
   imageDataUrl: string;
+  multiviewImageDataUrls?: Partial<Record<'front' | 'back' | 'left' | 'right', string>>;
   existingTaskId?: string;
   forceNewTask?: boolean;
 }): Promise<{ taskId: string; resumed: boolean }> {
@@ -77,6 +89,7 @@ export async function tripoWorkflowCreateOrResumeTaskId(params: {
     apiKey: params.apiKey,
     preset: params.preset,
     imageDataUrl: params.imageDataUrl,
+    multiviewImageDataUrls: params.multiviewImageDataUrls,
   });
   const taskId = await createTripoTask(input);
   return { taskId, resumed: false };

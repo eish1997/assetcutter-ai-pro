@@ -312,6 +312,7 @@ type WorkflowPendingTaskOptions = {
   overrideImageSize?: string;
   overrideSkipUnderstand?: boolean;
   logContext?: WorkflowPendingTask['logContext'];
+  tripoMultiviewImages?: WorkflowPendingTask['tripoMultiviewImages'];
 };
 
 type WorkflowGroupOverrides = {
@@ -321,6 +322,19 @@ type WorkflowGroupOverrides = {
   understand?: boolean;
   generateCount?: number;
 };
+
+type TripoMultiviewSlot = 'front' | 'back' | 'left' | 'right';
+const TRIPO_MULTIVIEW_SLOTS: Array<{ key: TripoMultiviewSlot; label: string }> = [
+  { key: 'front', label: '正面' },
+  { key: 'back', label: '背面' },
+  { key: 'left', label: '左侧' },
+  { key: 'right', label: '右侧' },
+];
+
+function promptTweakTargetImage(target: PromptTweakTarget | undefined): string {
+  if (!target) return '';
+  return 'assetId' in target ? target.inputImage : target.imageBase64;
+}
 
 const WORKFLOW_GROUP_GENERATE_COUNT_HARD_MAX = 999;
 const WORKFLOW_GROUP_GENERATE_CONFIRM_THRESHOLD = 20;
@@ -486,6 +500,7 @@ const WorkflowSection: React.FC<{
     preset: CustomAppModule,
     imageBase64: string,
     task?: WorkflowPendingTask,
+    multiviewImages?: WorkflowPendingTask['tripoMultiviewImages'],
     options?: { forceNewTask?: boolean }
   ) => Promise<void> | void;
   /** 与设置页 `SystemConfig.modelText` 一致：能力理解 / gen_text / 切割视觉检测等 */
@@ -896,6 +911,15 @@ const WorkflowSection: React.FC<{
     placeholderText?: string;
     requireNonEmpty?: boolean;
   } | null>(null);
+  const [tripoMultiviewModal, setTripoMultiviewModal] = useState<{
+    preset: CustomAppModule;
+    targets: PromptTweakTarget[];
+    overrides?: WorkflowGroupOverrides;
+    slots: Partial<Record<TripoMultiviewSlot, PromptTweakTarget>>;
+  } | null>(null);
+  const [tripoMultiviewModalPos, setTripoMultiviewModalPos] = useState({ x: 720, y: 96 });
+  const tripoMultiviewModalDragRef = useRef<{ offsetX: number; offsetY: number } | null>(null);
+  const [tripoMultiviewDraggingSlot, setTripoMultiviewDraggingSlot] = useState<TripoMultiviewSlot | null>(null);
   const [quickComposeDraft, setQuickComposeDraft] = useState('');
   /** 功能区悬停时联动左侧能力预设列：高亮对应预设 id，其余压暗 */
   const [sidebarLinkHoverPresetIds, setSidebarLinkHoverPresetIds] = useState<string[] | null>(null);
@@ -1789,6 +1813,7 @@ ${lineSvg}
             }
           : {}),
         ...(options?.logContext ? { logContext: options.logContext } : {}),
+        ...(options?.tripoMultiviewImages ? { tripoMultiviewImages: options.tripoMultiviewImages } : {}),
       };
       return task;
     },
@@ -1867,6 +1892,7 @@ ${lineSvg}
     }
     let resolvedInputImage = String(inputImage ?? '').trim();
     let resolvedInputImagesForExecute: string[] | undefined;
+    let resolvedTripoMultiviewImages: WorkflowPendingTask['tripoMultiviewImages'] | undefined;
 
     if (task.lightboxAwaitClientResult) {
       const box = lightboxClientImageDeferredRef.current.get(task.id);
@@ -1905,6 +1931,33 @@ ${lineSvg}
       } finally {
         lightboxClientImageDeferredRef.current.delete(task.id);
       }
+    }
+    if (task.tripoMultiviewImages) {
+      const companionProjectId = String(workspaceProjectChrome?.activeProjectId || '').trim();
+      const companionBaseUrl = String(getCompanionLocalBaseUrl() || '').trim();
+      const assetForInput = assetsRef.current.find((a) => a.id === task.assetId) ?? null;
+      const nextSlots: WorkflowPendingTask['tripoMultiviewImages'] = {};
+      for (const slot of TRIPO_MULTIVIEW_SLOTS) {
+        const raw = String(task.tripoMultiviewImages[slot.key] || '').trim();
+        if (!raw) continue;
+        const resolvedImg = await resolveCapabilityInputImageForExecute({
+          inputImage: raw,
+          asset: assetForInput,
+          sourceDisplayKey: task.inputSourceDisplayKey,
+          companionBaseUrl,
+          companionProjectId,
+        });
+        if (resolvedImg.ok === false) {
+          const msg = `[${getTaskLogLabel(task)}] ${slot.label}图：${resolvedImg.error}`;
+          onLog?.('warn', msg);
+          setAssetError(task.assetId, msg);
+          auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_INPUT_IMAGE_RESOLVE, 'warn', msg, { slot: slot.key });
+          return { image: null };
+        }
+        nextSlots[slot.key] = resolvedImg.dataUrl;
+      }
+      resolvedTripoMultiviewImages = nextSlots;
+      if (nextSlots.front) resolvedInputImage = nextSlots.front;
     }
 
     if (task.inputImages && task.inputImages.length > 0) {
@@ -2095,7 +2148,7 @@ ${lineSvg}
               };
             })
           );
-          await onAddGenerate3DJob(module, resolvedInputImage, task);
+          await onAddGenerate3DJob(module, resolvedInputImage, task, resolvedTripoMultiviewImages);
           setAssetError(task.assetId, null);
         } catch (err) {
           const msg = err instanceof Error ? err.message : safeUnknownToString(err);
@@ -6071,6 +6124,7 @@ ${lineSvg}
         overrideImageAspectRatio?: string;
         overrideImageSize?: string;
         overrideSkipUnderstand?: boolean;
+        tripoMultiviewImages?: WorkflowPendingTask['tripoMultiviewImages'];
       }
     ) => {
       const newAsset: WorkflowAsset = attachInitialVgpToNewAsset({
@@ -6122,6 +6176,7 @@ ${lineSvg}
           ...(typeof opts?.overrideSkipUnderstand === 'boolean'
             ? { overrideSkipUnderstand: opts.overrideSkipUnderstand }
             : {}),
+          ...(opts?.tripoMultiviewImages ? { tripoMultiviewImages: opts.tripoMultiviewImages } : {}),
           ...(fromGroup
             ? { sourceGroupAssetId: opts!.sourceGroupAssetId, sourceItemIndex: opts!.sourceItemIndex }
             : {}),
@@ -7315,6 +7370,127 @@ ${lineSvg}
     return [];
   }, [showArchived, selectedAssetIds, currentGroupAsset, selectedGroupItemKeys]);
 
+  const startTripoMultiviewModalDrag = useCallback(
+    (e: React.PointerEvent<HTMLElement>) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      tripoMultiviewModalDragRef.current = {
+        offsetX: e.clientX - tripoMultiviewModalPos.x,
+        offsetY: e.clientY - tripoMultiviewModalPos.y,
+      };
+      const onMove = (ev: PointerEvent) => {
+        const drag = tripoMultiviewModalDragRef.current;
+        if (!drag) return;
+        const maxX = Math.max(12, window.innerWidth - 380);
+        const maxY = Math.max(12, window.innerHeight - 360);
+        setTripoMultiviewModalPos({
+          x: Math.min(Math.max(12, ev.clientX - drag.offsetX), maxX),
+          y: Math.min(Math.max(12, ev.clientY - drag.offsetY), maxY),
+        });
+      };
+      const onUp = () => {
+        tripoMultiviewModalDragRef.current = null;
+        window.removeEventListener('pointermove', onMove, true);
+        window.removeEventListener('pointerup', onUp, true);
+      };
+      window.addEventListener('pointermove', onMove, true);
+      window.addEventListener('pointerup', onUp, true);
+    },
+    [tripoMultiviewModalPos.x, tripoMultiviewModalPos.y]
+  );
+
+  const collectPromptTargetsForModule = useCallback(
+    (incoming: WorkflowDragSource[], mod: CustomAppModule): PromptTweakTarget[] => {
+      const targets: PromptTweakTarget[] = [];
+      for (const source of incoming) {
+        if (source.kind === 'root') {
+          const effectiveIds = getEffectiveAssetIdsForAction(source.assetIds).filter((id) => {
+            const x = assets.find((a) => a.id === id);
+            if (x == null || !workflowAssetAllowedForCapabilityDrop(x, mod)) return false;
+            if (isWorkflowTextAsset(x)) {
+              if (workflowPresetAcceptsTextCardDrag(mod)) return true;
+              return getAssetDisplayImage(x).trim() !== '';
+            }
+            return true;
+          });
+          effectiveIds.forEach((id) => {
+            const a = assets.find((x) => x.id === id);
+            if (a) {
+              targets.push({
+                assetId: id,
+                inputImage: getAssetDisplayImage(a),
+                inputSourceDisplayKey: a.displayKey,
+                ...(isWorkflowTextAsset(a) && workflowAssetCurrentDisplayIsTextChannel(a)
+                  ? { inputText: workflowAssetToInputText(a) }
+                  : {}),
+              });
+            }
+          });
+        } else {
+          const group = assets.find((x) => x.id === source.groupAssetId);
+          const cut = isGroupAsset(group) ? group?.assetIds : group?.cutImageGroup;
+          if (!group || !cut?.length) continue;
+          const groupId = group.id;
+          for (const itemIndex of source.itemIndexes) {
+            const item = cut[itemIndex];
+            if (!item) continue;
+            if (Array.isArray(cut) && typeof item === 'string') {
+              const child = assets.find((x) => x.id === item);
+              if (!child || !workflowAssetAllowedForCapabilityDrop(child, mod)) continue;
+              const passChildText =
+                !isWorkflowTextAsset(child) ||
+                workflowPresetAcceptsTextCardDrag(mod) ||
+                (workflowAssetAllowedForCapabilityDrop(child, mod) && getAssetDisplayImage(child).trim() !== '');
+              if (passChildText) {
+                targets.push({
+                  assetId: child.id,
+                  inputImage: getAssetDisplayImage(child),
+                  inputSourceDisplayKey: child.displayKey,
+                  sourceGroupAssetId: groupId,
+                  sourceItemIndex: itemIndex,
+                  ...(isWorkflowTextAsset(child) && workflowAssetCurrentDisplayIsTextChannel(child)
+                    ? { inputText: workflowAssetToInputText(child) }
+                    : {}),
+                });
+              }
+              continue;
+            }
+            if (typeof item === 'string') {
+              targets.push({
+                imageBase64: item,
+                parentAssetId: groupId,
+                sourceGroupAssetId: groupId,
+                sourceItemIndex: itemIndex,
+              });
+            } else if (item && typeof item === 'object' && 'assetId' in item) {
+              const child = assets.find((x) => x.id === (item as { assetId: string }).assetId);
+              if (!child || !workflowAssetAllowedForCapabilityDrop(child, mod)) continue;
+              const passLegacyChildText =
+                !isWorkflowTextAsset(child) ||
+                workflowPresetAcceptsTextCardDrag(mod) ||
+                (workflowAssetAllowedForCapabilityDrop(child, mod) && getAssetDisplayImage(child).trim() !== '');
+              if (passLegacyChildText) {
+                targets.push({
+                  assetId: child.id,
+                  inputImage: getAssetDisplayImage(child),
+                  inputSourceDisplayKey: child.displayKey,
+                  sourceGroupAssetId: groupId,
+                  sourceItemIndex: itemIndex,
+                  ...(isWorkflowTextAsset(child) && workflowAssetCurrentDisplayIsTextChannel(child)
+                    ? { inputText: workflowAssetToInputText(child) }
+                    : {}),
+                });
+              }
+            }
+          }
+        }
+      }
+      return targets;
+    },
+    [assets, getAssetDisplayImage, getEffectiveAssetIdsForAction]
+  );
+
   const handleDropToModuleAction = useCallback(
     (
       mod: CustomAppModule,
@@ -7476,6 +7652,34 @@ ${lineSvg}
           : undefined;
       const generateCountApplies =
         getCapabilityEngine(mod) === 'gen_image' || mod.category === 'text_to_text';
+      if (
+        mod.category === 'generate_3d' &&
+        mod.generate3D?.provider !== 'tencent' &&
+        mod.generate3D?.tripoTaskType === 'multiview_to_model'
+      ) {
+        const targets = collectPromptTargets(sources).filter((t) => promptTweakTargetImage(t).trim() !== '');
+        if (targets.length === 0) return;
+        const initialSlots: Partial<Record<TripoMultiviewSlot, PromptTweakTarget>> = {};
+        const fillOrder: TripoMultiviewSlot[] = ['front', 'back', 'left', 'right'];
+        targets.slice(0, 4).forEach((target, idx) => {
+          initialSlots[fillOrder[idx]!] = target;
+        });
+        if (typeof window !== 'undefined') {
+          const baseX = dropEvent?.clientX ?? window.innerWidth - 440;
+          const baseY = dropEvent?.clientY ?? 96;
+          setTripoMultiviewModalPos({
+            x: Math.min(Math.max(12, baseX - 24), Math.max(12, window.innerWidth - 432)),
+            y: Math.min(Math.max(12, baseY - 24), Math.max(12, window.innerHeight - 360)),
+          });
+        }
+        setTripoMultiviewModal({
+          preset: mod,
+          targets,
+          overrides: groupOverrides,
+          slots: initialSlots,
+        });
+        return;
+      }
       const generateCount =
         groupOverrides && generateCountApplies
           ? normalizeWorkflowGenerateCount(groupOverrides.generateCount)
@@ -7568,6 +7772,7 @@ ${lineSvg}
       getEffectiveAssetIdsForAction,
       assets,
       getAssetDisplayImage,
+      collectPromptTargetsForModule,
       addToPending,
       addImageToPending,
       makePendingTaskForAsset,
@@ -10648,6 +10853,203 @@ ${lineSvg}
         </Suspense>
       ))}
 
+      {tripoMultiviewModal && (
+        <div
+          className="fixed z-[2150] w-[min(420px,calc(100vw-24px))] pointer-events-none"
+          style={{ left: tripoMultiviewModalPos.x, top: tripoMultiviewModalPos.y }}
+          data-workflow-toolbar
+        >
+          <div
+            className="pointer-events-auto rounded-xl border border-white/10 bg-[#0e0e14]/95 shadow-2xl p-3"
+            onClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            <div
+              className="flex items-start justify-between gap-3 mb-3 cursor-move select-none"
+              onPointerDown={startTripoMultiviewModalDrag}
+            >
+              <div>
+                <div className="text-[10px] font-black uppercase text-amber-300">Tripo 多视图生成</div>
+                <div className="text-[9px] text-gray-500 mt-1">
+                  将图片拖入对应槽位：正面必须，至少需要两张。
+                </div>
+              </div>
+              <button
+                type="button"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setTripoMultiviewModal(null);
+                }}
+                className="w-7 h-7 flex items-center justify-center rounded-lg text-white/50 hover:text-white hover:bg-white/[0.06] cursor-pointer"
+              >
+                <AppIcon name="close" className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-2 mb-3">
+              {TRIPO_MULTIVIEW_SLOTS.map((slot) => {
+                const target = tripoMultiviewModal.slots[slot.key];
+                const src = promptTweakTargetImage(target);
+                return (
+                  <div
+                    key={slot.key}
+                    className="min-h-[122px] rounded-lg border border-dashed border-white/15 bg-white/[0.04] p-2"
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      e.dataTransfer.dropEffect = tripoMultiviewDraggingSlot ? 'move' : 'copy';
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      const raw = e.dataTransfer.getData('application/x-ac-tripo-multiview');
+                      const draggedSlot =
+                        raw.startsWith('slot:')
+                          ? (raw.slice('slot:'.length) as TripoMultiviewSlot)
+                          : tripoMultiviewDraggingSlot;
+                      const incomingTargets = raw || draggedSlot
+                        ? []
+                        : collectPromptTargetsForModule(
+                            resolveCapabilityDropDragSources(draggingAssetIds, draggingGroupItems, e.dataTransfer),
+                            tripoMultiviewModal.preset
+                          )
+                            .filter((t) => promptTweakTargetImage(t).trim() !== '');
+                      if (!raw && !draggedSlot && incomingTargets.length === 0) return;
+                      setTripoMultiviewModal((prev) => {
+                        if (!prev) return prev;
+                        const nextSlots = { ...prev.slots };
+                        if (raw.startsWith('target:')) {
+                          const idx = Number(raw.slice('target:'.length));
+                          const nextTarget = prev.targets[idx];
+                          if (nextTarget) nextSlots[slot.key] = nextTarget;
+                        } else if (draggedSlot) {
+                          if (draggedSlot === slot.key) return prev;
+                          const fromTarget = nextSlots[draggedSlot];
+                          const toTarget = nextSlots[slot.key];
+                          if (toTarget) nextSlots[draggedSlot] = toTarget;
+                          else delete nextSlots[draggedSlot];
+                          if (fromTarget) nextSlots[slot.key] = fromTarget;
+                          else delete nextSlots[slot.key];
+                        } else if (incomingTargets.length > 0) {
+                          const order = TRIPO_MULTIVIEW_SLOTS.map((s) => s.key);
+                          const start = Math.max(0, order.indexOf(slot.key));
+                          incomingTargets.slice(0, 4).forEach((nextTarget, idx) => {
+                            const targetSlot = order[(start + idx) % order.length];
+                            if (targetSlot) nextSlots[targetSlot] = nextTarget;
+                          });
+                        }
+                        return { ...prev, slots: nextSlots };
+                      });
+                      setTripoMultiviewDraggingSlot(null);
+                    }}
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-[10px] font-black text-gray-200">{slot.label}</span>
+                      {target ? (
+                        <button
+                          type="button"
+                          className="text-[9px] text-gray-500 hover:text-white"
+                          onClick={() =>
+                            setTripoMultiviewModal((prev) => {
+                              if (!prev) return prev;
+                              const nextSlots = { ...prev.slots };
+                              delete nextSlots[slot.key];
+                              return { ...prev, slots: nextSlots };
+                            })
+                          }
+                        >
+                          清空
+                        </button>
+                      ) : null}
+                    </div>
+                    {src ? (
+                      <img
+                        src={src}
+                        alt={slot.label}
+                        draggable
+                        onPointerDownCapture={(e) => e.stopPropagation()}
+                        onMouseDownCapture={(e) => e.stopPropagation()}
+                        onDragStart={(e) => {
+                          e.stopPropagation();
+                          setTripoMultiviewDraggingSlot(slot.key);
+                          e.dataTransfer.setData('application/x-ac-tripo-multiview', `slot:${slot.key}`);
+                          e.dataTransfer.effectAllowed = 'move';
+                        }}
+                        onDragEnd={() => setTripoMultiviewDraggingSlot(null)}
+                        className="h-20 w-full object-cover rounded-md border border-white/10 cursor-grab active:cursor-grabbing select-none"
+                      />
+                    ) : (
+                      <div className="h-20 rounded-md border border-white/[0.06] bg-black/25 flex items-center justify-center text-[9px] text-gray-500">
+                        拖入图片
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setTripoMultiviewModal(null)}
+                className="px-3 py-2 rounded-lg bg-white/[0.06] text-[10px] font-black text-gray-200"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                disabled={
+                  !tripoMultiviewModal.slots.front ||
+                  TRIPO_MULTIVIEW_SLOTS.filter((slot) => promptTweakTargetImage(tripoMultiviewModal.slots[slot.key]).trim()).length < 2
+                }
+                onClick={() => {
+                  const modal = tripoMultiviewModal;
+                  if (!modal) return;
+                  const slots = modal.slots;
+                  const front = slots.front;
+                  const filled = TRIPO_MULTIVIEW_SLOTS.filter((slot) => promptTweakTargetImage(slots[slot.key]).trim());
+                  if (!front || filled.length < 2) {
+                    onLog?.('warn', 'Tripo 多视图生成需要正面图，且至少需要两张图');
+                    return;
+                  }
+                  const tripoMultiviewImages: WorkflowPendingTask['tripoMultiviewImages'] = {};
+                  for (const slot of TRIPO_MULTIVIEW_SLOTS) {
+                    const src = promptTweakTargetImage(slots[slot.key]).trim();
+                    if (src) tripoMultiviewImages[slot.key] = src;
+                  }
+                  const opts: WorkflowPendingTaskOptions = { tripoMultiviewImages };
+                  let queued = false;
+                  if ('assetId' in front) {
+                    const asset = assetsRef.current.find((a) => a.id === front.assetId);
+                    if (asset) {
+                      const task = buildPendingTaskFromAssetSnapshot(asset, front.assetId, modal.preset.id, opts);
+                      if (task) {
+                        addTasksToPending([task]);
+                        queued = true;
+                      }
+                    }
+                  } else {
+                    addImageToPending(front.imageBase64, modal.preset.id, {
+                      parentAssetId: front.parentAssetId,
+                      sourceGroupAssetId: front.sourceGroupAssetId,
+                      sourceItemIndex: front.sourceItemIndex,
+                      tripoMultiviewImages,
+                    });
+                    queued = true;
+                  }
+                  if (queued) {
+                    onLog?.('info', `已加入 Tripo 多视图生成队列：${modal.preset.label}`);
+                    setTripoMultiviewModal(null);
+                  }
+                }}
+                className="px-4 py-2 rounded-lg bg-amber-600 text-[10px] font-black text-white hover:bg-amber-500 disabled:cursor-not-allowed disabled:bg-white/[0.06] disabled:text-gray-500"
+              >
+                确认加入队列
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {promptTweakModal && (
         <PromptTweakModal
           preset={promptTweakModal.preset}

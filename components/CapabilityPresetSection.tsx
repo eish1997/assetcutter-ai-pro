@@ -1829,9 +1829,9 @@ const CapabilityPresetSection: React.FC<{
                           <label className="flex items-center gap-1.5 text-[9px]">
                             <span>任务</span>
                             <CustomDropdown
-                              options={[{ value: 'image_to_model', label: '图生3D' }, { value: 'text_to_model', label: '文生3D' }]}
+                              options={[{ value: 'image_to_model', label: '图生3D' }, { value: 'multiview_to_model', label: '多视图生成3D' }, { value: 'text_to_model', label: '文生3D' }]}
                               value={newGenerate3D.tripoTaskType ?? 'image_to_model'}
-                              onChange={(v) => setNewGenerate3D((g) => ({ ...g, tripoTaskType: v as 'text_to_model' | 'image_to_model' }))}
+                              onChange={(v) => setNewGenerate3D((g) => ({ ...g, tripoTaskType: v as 'text_to_model' | 'image_to_model' | 'multiview_to_model' }))}
                               triggerClassName={DROPDOWN_TRIGGER_COMPACT}
                             />
                           </label>
@@ -2530,9 +2530,9 @@ const CapabilityPresetSection: React.FC<{
                                       <label className="flex items-center gap-2 text-[9px]">
                                         <span>任务</span>
                                         <CustomDropdown
-                                          options={[{ value: 'image_to_model', label: '图生3D' }, { value: 'text_to_model', label: '文生3D' }]}
+                                          options={[{ value: 'image_to_model', label: '图生3D' }, { value: 'multiview_to_model', label: '多视图生成3D' }, { value: 'text_to_model', label: '文生3D' }]}
                                           value={editGenerate3D.tripoTaskType ?? 'image_to_model'}
-                                          onChange={(v) => setEditGenerate3D((g) => ({ ...g, tripoTaskType: v as 'text_to_model' | 'image_to_model' }))}
+                                          onChange={(v) => setEditGenerate3D((g) => ({ ...g, tripoTaskType: v as 'text_to_model' | 'image_to_model' | 'multiview_to_model' }))}
                                           triggerClassName={DROPDOWN_TRIGGER_COMPACT}
                                           portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
                                         />

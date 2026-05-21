@@ -1,7 +1,8 @@
 import { prepareImageDataUrlForTripoUpload } from './tripoUploadImagePrep';
 import { apiUrl } from './apiBase';
 
-export type TripoTaskType = 'text_to_model' | 'image_to_model';
+export type TripoTaskType = 'text_to_model' | 'image_to_model' | 'multiview_to_model';
+export type TripoMultiviewKey = 'front' | 'back' | 'left' | 'right';
 
 export type TripoCreateTaskInput = {
   apiKey: string;
@@ -11,6 +12,7 @@ export type TripoCreateTaskInput = {
   modelVersion?: string;
   imageUrl?: string;
   imageBase64DataUrl?: string;
+  multiviewImageBase64DataUrls?: Partial<Record<TripoMultiviewKey, string>>;
   texture?: boolean;
   pbr?: boolean;
   textureQuality?: 'standard' | 'detailed';
@@ -164,6 +166,11 @@ async function uploadImageToTripo(apiKey: string, imageBase64DataUrl: string): P
   return token;
 }
 
+async function buildTripoFileFromDataUrl(apiKey: string, imageBase64DataUrl: string): Promise<{ type: 'jpg'; file_token: string }> {
+  const fileToken = await uploadImageToTripo(apiKey, imageBase64DataUrl.trim());
+  return { type: 'jpg', file_token: fileToken };
+}
+
 export type TripoConvertFormat = 'GLTF' | 'USDZ' | 'FBX' | 'OBJ' | 'STL' | '3MF';
 
 export async function createTripoConvertModelTask(
@@ -251,7 +258,12 @@ export async function createTripoTask(input: TripoCreateTaskInput): Promise<stri
   if (typeof input.autoSize === 'boolean') payload.auto_size = input.autoSize;
   if (input.compress) payload.compress = input.compress;
   if (typeof input.exportUv === 'boolean') payload.export_uv = input.exportUv;
-  if (typeof input.enableImageAutofix === 'boolean' && input.type === 'image_to_model') payload.enable_image_autofix = input.enableImageAutofix;
+  if (
+    typeof input.enableImageAutofix === 'boolean' &&
+    (input.type === 'image_to_model' || input.type === 'multiview_to_model')
+  ) {
+    payload.enable_image_autofix = input.enableImageAutofix;
+  }
   /**
    * 显式约束校验：不偷偷改用户配置，直接报错让用户感知并修正。
    */
@@ -270,13 +282,27 @@ export async function createTripoTask(input: TripoCreateTaskInput): Promise<stri
     if (input.textureAlignment) payload.texture_alignment = input.textureAlignment;
     if (input.orientation) payload.orientation = input.orientation;
     if (input.imageBase64DataUrl?.trim()) {
-      const fileToken = await uploadImageToTripo(apiKey, input.imageBase64DataUrl.trim());
-      payload.file = { type: 'jpg', file_token: fileToken };
+      payload.file = await buildTripoFileFromDataUrl(apiKey, input.imageBase64DataUrl.trim());
     } else if (input.imageUrl?.trim()) {
       payload.file = { type: 'url', url: input.imageUrl.trim() };
     } else {
       throw new Error('图生3D需要 imageUrl 或 imageBase64DataUrl');
     }
+  }
+  if (input.type === 'multiview_to_model') {
+    if (input.textureAlignment) payload.texture_alignment = input.textureAlignment;
+    if (input.orientation) payload.orientation = input.orientation;
+    const slots = input.multiviewImageBase64DataUrls || {};
+    const ordered: TripoMultiviewKey[] = ['front', 'left', 'back', 'right'];
+    const present = ordered.filter((key) => String(slots[key] || '').trim());
+    if (!String(slots.front || '').trim()) throw new Error('Tripo 多视图生成需要正面图');
+    if (present.length < 2) throw new Error('Tripo 多视图生成至少需要 2 张图（正面必填）');
+    const files: Array<Record<string, string>> = [];
+    for (const key of ordered) {
+      const dataUrl = String(slots[key] || '').trim();
+      files.push(dataUrl ? await buildTripoFileFromDataUrl(apiKey, dataUrl) : { type: 'jpg' });
+    }
+    payload.files = files;
   }
   const taskUrl = `${resolveTripoProxyBase()}/task`;
   const taskBody = JSON.stringify({ ...payload, apiKey });

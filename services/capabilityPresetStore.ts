@@ -60,7 +60,13 @@ function normalizeGenerate3DPreset(input: NonNullable<CustomAppModule['generate3
   ]);
   if (out.module !== 'pro' && out.module !== 'rapid') out.module = 'pro';
   if (out.provider !== 'tencent' && out.provider !== 'tripo') out.provider = 'tripo';
-  if (out.tripoTaskType !== 'text_to_model' && out.tripoTaskType !== 'image_to_model') out.tripoTaskType = 'image_to_model';
+  if (
+    out.tripoTaskType !== 'text_to_model' &&
+    out.tripoTaskType !== 'image_to_model' &&
+    out.tripoTaskType !== 'multiview_to_model'
+  ) {
+    out.tripoTaskType = 'image_to_model';
+  }
   if (tripoVersion) {
     if (!allowedTripoVersions.has(tripoVersion)) {
       delete (out as NonNullable<CustomAppModule['generate3D']> & { tripoModelVersion?: string }).tripoModelVersion;
@@ -412,4 +418,3 @@ export function mergeCapabilityPresets(existing: CustomAppModule[], incoming: Cu
   const list = Array.from(map.values()).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   return enforceBuiltinImageProcessPresets(list.map((p, i) => ({ ...p, order: i })));
 }
-

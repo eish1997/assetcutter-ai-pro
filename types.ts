@@ -591,6 +591,8 @@ export type WorkflowPendingTask = {
    */
   inputImages?: string[];
   inputImagesObjectKeys?: string[];
+  /** Tripo multiview slots. Submit order is front/left/back/right. */
+  tripoMultiviewImages?: Partial<Record<'front' | 'back' | 'left' | 'right', string>>;
   addedAt: number;
   /** 从组内拖到切割时：父组 id 与项下标，用于套娃替换 */
   sourceGroupAssetId?: string;
@@ -653,7 +655,7 @@ export type Generate3DPreset = {
   /** 默认 tripo；保留 tencent 兼容历史预设 */
   provider?: 'tripo' | 'tencent';
   /** Tripo 任务类型：文生3D / 图生3D */
-  tripoTaskType?: 'text_to_model' | 'image_to_model';
+  tripoTaskType?: 'text_to_model' | 'image_to_model' | 'multiview_to_model';
   /** Tripo 可选：模型版本（如 P1-20260311 / v3.1-20260211 / v2.5-20250123） */
   tripoModelVersion?: string;
   /** Tripo 可选：负向提示词 */

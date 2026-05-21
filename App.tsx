@@ -1220,6 +1220,7 @@ const MainApp: React.FC = () => {
     presetId: string;
     imageBase64: string;
     task?: WorkflowPendingTask;
+    multiviewImages?: WorkflowPendingTask['tripoMultiviewImages'];
     canResumeOldTask: boolean;
     lastError: string;
   } | null>(null);
@@ -3197,6 +3198,7 @@ const MainApp: React.FC = () => {
     preset: CustomAppModule,
     imageBase64: string,
     task?: WorkflowPendingTask,
+    multiviewImages?: WorkflowPendingTask['tripoMultiviewImages'],
     options?: { forceNewTask?: boolean }
   ) => {
     if (preset.category !== 'generate_3d' || !preset.generate3D) return;
@@ -3364,6 +3366,7 @@ const MainApp: React.FC = () => {
         apiKey: tripoApiKey,
         preset,
         imageDataUrl: imageBase64,
+        multiviewImageDataUrls: multiviewImages,
       });
       const tripoPayloadPreview = {
         type: previewInput.type,
@@ -3385,6 +3388,11 @@ const MainApp: React.FC = () => {
         textureAlignment: previewInput.textureAlignment,
         orientation: previewInput.orientation,
         hasImageInput: previewInput.type === 'image_to_model',
+        multiviewSlots: previewInput.type === 'multiview_to_model'
+          ? Object.keys(previewInput.multiviewImageBase64DataUrls || {}).filter(
+              (k) => String(previewInput.multiviewImageBase64DataUrls?.[k as keyof NonNullable<typeof previewInput.multiviewImageBase64DataUrls>] || '').trim()
+            )
+          : undefined,
       };
       addGenerate3DLog('info', `[工作流] Tripo 提交任务：${preset.label}`, tripoPayloadPreview);
       updateTask(taskId, { status: 'RUNNING', progress: 10 });
@@ -3402,6 +3410,7 @@ const MainApp: React.FC = () => {
         apiKey: tripoApiKey,
         preset,
         imageDataUrl: imageBase64,
+        multiviewImageDataUrls: multiviewImages,
         existingTaskId: recoverTaskId || undefined,
         forceNewTask,
       });
@@ -3553,6 +3562,7 @@ const MainApp: React.FC = () => {
         presetId: preset.id,
         imageBase64,
         task,
+        multiviewImages,
         canResumeOldTask: Boolean(tripoCatchTaskId),
         lastError: `${msg}${extraHint}`,
       });
@@ -4701,6 +4711,7 @@ const MainApp: React.FC = () => {
                           preset,
                           tripoRecoveryContext.imageBase64,
                           tripoRecoveryContext.task,
+                          tripoRecoveryContext.multiviewImages,
                           { forceNewTask: false }
                         );
                       } finally {
@@ -4726,6 +4737,7 @@ const MainApp: React.FC = () => {
                           preset,
                           tripoRecoveryContext.imageBase64,
                           tripoRecoveryContext.task,
+                          tripoRecoveryContext.multiviewImages,
                           { forceNewTask: true }
                         );
                       } finally {
