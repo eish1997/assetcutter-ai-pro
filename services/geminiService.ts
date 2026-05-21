@@ -165,6 +165,16 @@ function shouldUseBulkImageBatchQueue(): boolean {
   return false;
 }
 
+function isLocalDevPage(): boolean {
+  try {
+    if (typeof window === "undefined") return false;
+    const host = window.location.hostname.toLowerCase();
+    return host === "localhost" || host === "127.0.0.1" || host === "::1";
+  } catch {
+    return false;
+  }
+}
+
 function bulkApiUrl(path: string): string {
   const baseResolved = effectiveBulkBase();
   if (!baseResolved) return path;
@@ -172,7 +182,7 @@ function bulkApiUrl(path: string): string {
   if (baseResolved === BULK_SAME_ORIGIN_MARKER) {
     return p;
   }
-  if (import.meta.env.DEV) {
+  if (import.meta.env.DEV && isLocalDevPage()) {
     const idx = bulkForwardOriginIndex(baseResolved, bulkDevForwardOrigins());
     if (idx >= 0) {
       return `${AC_BULK_FORWARD_PREFIX}/${idx}${p}`;
