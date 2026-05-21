@@ -83,6 +83,7 @@ function resolveBulkBaseFromRaw(raw: string): string {
   if (!t) return "";
   const lower = t.toLowerCase();
   if (t === "1" || lower === "true" || lower === "same-origin") {
+    if (import.meta.env.PROD) return DEFAULT_GEMINI_BULK_PROXY_ORIGIN;
     return BULK_SAME_ORIGIN_MARKER;
   }
   return t;
@@ -126,6 +127,15 @@ function effectiveBulkBase(): string {
   let base: string;
   if (getAiProvider() === "vertex" && VERTEX_BULK_BASE) base = VERTEX_BULK_BASE;
   else base = BULK_BASE;
+  if (base && base !== BULK_SAME_ORIGIN_MARKER) {
+    try {
+      const normalized = /^https?:\/\//i.test(base) ? base : `https://${base}`;
+      const host = new URL(normalized).hostname.toLowerCase();
+      if (VERTEX_MISCONFIGURED_PROXY_HOSTS.has(host)) base = DEFAULT_GEMINI_BULK_PROXY_ORIGIN;
+    } catch {
+      /* keep original */
+    }
+  }
   return redirectVertexAwayFromUnconfiguredProxy(base);
 }
 
