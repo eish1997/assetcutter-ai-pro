@@ -19,11 +19,23 @@ import {
 
 type ViewerStatus = 'loading' | 'ready' | 'error' | 'unsupported';
 
-const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({ modelSrc, modelFileName, className }) => {
+const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({
+  modelSrc,
+  modelFileName,
+  model3dDisplayMode = 'material',
+  className,
+}) => {
   const rootRef = useRef<HTMLDivElement>(null);
   const mountRef = useRef<HTMLDivElement>(null);
+  const applyDisplayModeRef = useRef<((mode: NonNullable<LazyImagePreviewViewerProps['model3dDisplayMode']>) => void) | null>(null);
+  const displayModeRef = useRef<NonNullable<LazyImagePreviewViewerProps['model3dDisplayMode']>>('material');
   const [status, setStatus] = useState<ViewerStatus>('loading');
   const [message, setMessage] = useState<string>('');
+
+  useEffect(() => {
+    displayModeRef.current = model3dDisplayMode;
+    applyDisplayModeRef.current?.(model3dDisplayMode);
+  }, [model3dDisplayMode]);
 
   useEffect(() => {
     const root = rootRef.current;
@@ -48,6 +60,19 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({ modelSrc, m
     let loadedRoot: THREE.Object3D | null = null;
     let groundMesh: THREE.Mesh | null = null;
     let stage: Awaited<ReturnType<typeof createWorkflowModelViewerStageAsync>> | null = null;
+    const originalMaterials = new WeakMap<THREE.Mesh, THREE.Material | THREE.Material[]>();
+    const clayMaterial = new THREE.MeshStandardMaterial({
+      color: 0x808080,
+      roughness: 0.78,
+      metalness: 0.02,
+    });
+    const wireMaterial = new THREE.MeshBasicMaterial({
+      color: 0xcbd5e1,
+      wireframe: true,
+      transparent: true,
+      opacity: 0.96,
+    });
+    const normalMaterial = new THREE.MeshNormalMaterial();
     const abortEnv = new AbortController();
 
     const width = Math.max(1, mount.clientWidth || root.clientWidth);
@@ -110,6 +135,30 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({ modelSrc, m
     setStatus('loading');
     setMessage('');
 
+    const restoreOriginalMaterials = () => {
+      if (!loadedRoot) return;
+      loadedRoot.traverse((obj) => {
+        if (!(obj instanceof THREE.Mesh)) return;
+        const original = originalMaterials.get(obj);
+        if (original) obj.material = original;
+      });
+    };
+
+    applyDisplayModeRef.current = (mode: NonNullable<LazyImagePreviewViewerProps['model3dDisplayMode']>) => {
+      if (!loadedRoot) return;
+      restoreOriginalMaterials();
+      const useGround = mode !== 'wire' && mode !== 'normal';
+      if (groundMesh) groundMesh.visible = useGround;
+      if (mode === 'material') return;
+      loadedRoot.traverse((obj) => {
+        if (!(obj instanceof THREE.Mesh)) return;
+        if (!originalMaterials.has(obj)) originalMaterials.set(obj, obj.material);
+        if (mode === 'clay') obj.material = clayMaterial;
+        if (mode === 'wire') obj.material = wireMaterial;
+        if (mode === 'normal') obj.material = normalMaterial;
+      });
+    };
+
     const onLoadError = () => {
       if (cancelled) return;
       setStatus('error');
@@ -123,6 +172,7 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({ modelSrc, m
       object.traverse((child) => {
         const m = child as THREE.Mesh;
         if (m.isMesh) {
+          originalMaterials.set(m, m.material);
           m.castShadow = true;
           m.receiveShadow = true;
         }
@@ -133,6 +183,7 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({ modelSrc, m
       aimWorkflowModelLightsAtBox(stage.keyLight, stage.fillLight, stage.rimLight, stage.bounceFill, box);
       groundMesh = createStudioGroundMesh(box);
       if (groundMesh) scene.add(groundMesh);
+      applyDisplayModeRef.current?.(displayModeRef.current);
       setStatus('ready');
     };
 
@@ -195,6 +246,8 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({ modelSrc, m
       renderer.domElement.removeEventListener('mouseup', onMouseUp);
       renderer.domElement.removeEventListener('mouseleave', onMouseUp);
       renderer.domElement.removeEventListener('webglcontextlost', onGlLost);
+      applyDisplayModeRef.current = null;
+      restoreOriginalMaterials();
       if (loadedRoot) {
         scene.remove(loadedRoot);
         disposeObjectHierarchy(loadedRoot);
@@ -205,6 +258,9 @@ const ImageModel3DViewer: React.FC<LazyImagePreviewViewerProps> = ({ modelSrc, m
         (groundMesh.material as THREE.Material).dispose();
         groundMesh = null;
       }
+      clayMaterial.dispose();
+      wireMaterial.dispose();
+      normalMaterial.dispose();
       stage?.dispose();
       renderer.dispose();
       if (renderer.domElement.parentNode === mount) mount.removeChild(renderer.domElement);

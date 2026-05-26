@@ -75,6 +75,8 @@ let mainWindow = null;
 let workbenchBrowserView = null;
 /** 避免给同一 BrowserView 重复注册 `did-finish-load` */
 const workbenchPairingInjectHooked = new WeakSet();
+/** 避免给同一 BrowserView 重复注册下载接管 */
+const workbenchDownloadHooked = new WeakSet();
 /** @type {'home' | 'workbench' | 'settings'} */
 let shellMainProcessActiveView = 'home';
 
@@ -1416,12 +1418,72 @@ function detachWorkbenchBrowserView() {
   }
 }
 
+function sanitizeDownloadFilename(name) {
+  const raw = String(name || '').trim();
+  const safe = raw
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')
+    .replace(/\s+/g, '_')
+    .replace(/^\.+$/, '')
+    .slice(0, 180);
+  return safe || `assetcutter-download-${Date.now()}`;
+}
+
+function uniqueDownloadPath(dir, filename) {
+  const parsed = path.parse(sanitizeDownloadFilename(filename));
+  const base = parsed.name || 'assetcutter-download';
+  const ext = parsed.ext || '';
+  let candidate = path.join(dir, `${base}${ext}`);
+  for (let i = 1; fs.existsSync(candidate) && i < 1000; i += 1) {
+    candidate = path.join(dir, `${base}-${i}${ext}`);
+  }
+  return candidate;
+}
+
+function bindWorkbenchDownloadHandler(wc) {
+  if (!wc || workbenchDownloadHooked.has(wc)) return;
+  workbenchDownloadHooked.add(wc);
+
+  wc.session.on('will-download', (_event, item, webContents) => {
+    if (!workbenchBrowserView || webContents !== wc) return;
+
+    let savePath = '';
+    try {
+      const downloadsRoot = path.join(app.getPath('downloads'), 'AssetCutter');
+      fs.mkdirSync(downloadsRoot, { recursive: true });
+      savePath = uniqueDownloadPath(downloadsRoot, item.getFilename());
+      item.setSavePath(savePath);
+    } catch (e) {
+      console.warn('[companion-desktop] workbench download setSavePath:', e instanceof Error ? e.message : e);
+    }
+
+    item.once('done', (_doneEvent, state) => {
+      if (state === 'completed' && savePath) {
+        console.log('[companion-desktop] workbench download completed:', savePath);
+      } else if (state !== 'cancelled') {
+        console.warn('[companion-desktop] workbench download ended:', state);
+      }
+
+      try {
+        if (mainWindow && !mainWindow.isDestroyed() && shellMainProcessActiveView === 'workbench') {
+          const attached = mainWindow.getBrowserViews().indexOf(workbenchBrowserView) >= 0;
+          if (!attached) mainWindow.addBrowserView(workbenchBrowserView);
+          layoutWorkbenchBrowserView();
+          wc.focus();
+        }
+      } catch (e) {
+        console.warn('[companion-desktop] workbench restore after download:', e instanceof Error ? e.message : e);
+      }
+    });
+  });
+}
+
 function ensureWorkbenchBrowserView() {
   if (workbenchBrowserView) return workbenchBrowserView;
 
   const view = new BrowserView({
     webPreferences: {
       partition: 'persist:assetcutter-workbench',
+      preload: path.join(__dirname, 'preload-workbench.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -1429,6 +1491,7 @@ function ensureWorkbenchBrowserView() {
   });
 
   const wc = view.webContents;
+  bindWorkbenchDownloadHandler(wc);
 
   try {
     wc.setUserAgent(workbenchChromeLikeUserAgent());
@@ -1442,6 +1505,10 @@ function ensureWorkbenchBrowserView() {
   });
 
   wc.on('will-navigate', (event, url) => {
+    if (/^(blob|data):/i.test(String(url || ''))) {
+      event.preventDefault();
+      return;
+    }
     const allowed = getWorkbenchAllowedOrigin();
     if (!allowed) {
       event.preventDefault();
@@ -1609,6 +1676,37 @@ if (!gotLock) {
   ipcMain.handle('shell-install-shell-update', () => {
     companionUpdater.installReadyUpdate();
     return { ok: true };
+  });
+
+  ipcMain.handle('workbench-save-blob-download', async (event, payload) => {
+    if (!workbenchBrowserView || event.sender !== workbenchBrowserView.webContents) {
+      return { ok: false, error: 'not_workbench' };
+    }
+    try {
+      const rawBytes = payload && payload.bytes;
+      let bytes;
+      if (rawBytes instanceof ArrayBuffer) {
+        bytes = Buffer.from(rawBytes);
+      } else if (ArrayBuffer.isView(rawBytes)) {
+        bytes = Buffer.from(rawBytes.buffer, rawBytes.byteOffset, rawBytes.byteLength);
+      } else {
+        return { ok: false, error: 'bad_bytes' };
+      }
+      if (bytes.length < 1) return { ok: false, error: 'empty_file' };
+
+      const downloadsRoot = path.join(app.getPath('downloads'), 'AssetCutter');
+      fs.mkdirSync(downloadsRoot, { recursive: true });
+      const savePath = uniqueDownloadPath(downloadsRoot, payload && payload.filename);
+      await fsp.writeFile(savePath, bytes);
+      displayTrayBalloon({
+        iconType: 'info',
+        title: '模型已保存',
+        content: savePath,
+      });
+      return { ok: true, path: savePath, filename: path.basename(savePath) };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
   });
 
   ipcMain.handle('shell-settings-load', () => readShellSettings());

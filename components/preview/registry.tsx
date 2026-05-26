@@ -4,11 +4,15 @@
 import { lazy, type ComponentType, type LazyExoticComponent } from 'react';
 
 /** 与懒加载 Viewer 对齐的最小 props（图片类）；其它类型可另建 registry 或扩展联合类型 */
+export type Model3DDisplayMode = 'material' | 'clay' | 'wire' | 'normal';
+
 export type LazyImagePreviewViewerProps = {
   imageSrc: string;
   modelSrc?: string;
   /** 与 blob: 本地 URL 配合，用于推断 .fbx/.obj 等格式 */
   modelFileName?: string;
+  /** 3D 模型显示模式：由外层工具条控制 */
+  model3dDisplayMode?: Model3DDisplayMode;
   className?: string;
   /** 全景：与上次卸载前相同 key 时换纹理后恢复相机位姿（如大图内切换版本，传 `innerLayoutStableKey`） */
   panoPreserveViewKey?: string;

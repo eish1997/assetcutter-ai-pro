@@ -7,6 +7,7 @@ import {
   type ImagePreviewCanvasAdjustControl,
   type ImagePreviewLayoutMode,
   type ImagePreviewWebCaptureApi,
+  type Model3DDisplayMode,
 } from './preview';
 import {
   IMAGE_PREVIEW_PIXEL_SAMPLE_MAX_EDGE,
@@ -176,6 +177,8 @@ export type ImagePreviewOverlayProps = {
   modelUrls?: string[];
   /** 本地拖入模型的原始文件名（用于 blob URL 推断格式） */
   modelFileName?: string;
+  /** 3D 模型显示模式，由父级工具条控制 */
+  model3dDisplayMode?: Model3DDisplayMode;
   /** 右侧占位宽度（如常驻侧栏），用于将主图居中到左侧可用区域 */
   contentRightInset?: string;
   /**
@@ -291,6 +294,7 @@ export function ImagePreviewOverlay({
   enablePanoramaMode = true,
   modelUrls,
   modelFileName,
+  model3dDisplayMode = 'material',
   contentRightInset = '0px',
   shellZIndexClassName,
   topRightExtra,
@@ -1330,6 +1334,7 @@ export function ImagePreviewOverlay({
                 imageSrc={imageSrc!}
                 modelSrc={previewModelSrc ?? undefined}
                 modelFileName={modelFileName}
+                model3dDisplayMode={model3dDisplayMode}
                 className="h-full w-full min-h-0"
               />
             </Suspense>

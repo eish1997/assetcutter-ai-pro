@@ -10,7 +10,7 @@ export type Generate3dPreflightResult = {
 async function probeTripoProxyReachable(): Promise<boolean> {
   const base = resolveTripoProxyBase();
   try {
-    const url = base.startsWith('http') ? `${base.replace(/\/$/, '')}/health` : null;
+    const url = base.startsWith('http') ? `${new URL(base).origin}/healthz` : null;
     if (!url) {
       return true;
     }

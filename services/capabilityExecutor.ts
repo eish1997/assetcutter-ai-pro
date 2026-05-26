@@ -176,24 +176,34 @@ export function resolveImageModelId(gear?: DialogImageGear): string {
   return resolveUpstreamImageModelId(internal);
 }
 
+function refsForUnderstand(refs: string[]): string | string[] | null {
+  const usable = refs.filter((s) => hasUsableImageBase64(s));
+  if (usable.length === 0) return null;
+  if (usable.length > 1) return usable;
+  return usable[0]!;
+}
+
 /**
- * 工作流生图：先将预设提示词交给文字模型理解（与对话模式一致），再拿理解结果调用生图模型。
+ * 工作流生图：先将预设与用户说明交给文字模型理解（多参考图时传全图），再拿理解结果调用生图模型。
  */
 async function resolveCapabilityPrompt(
   preset: CustomAppModule,
-  inputImageBase64: string,
+  refs: string[],
+  userText: string,
   ctx: CapabilityExecuteContext
 ): Promise<string | null> {
   const presetPrompt = (preset.instruction || '').trim();
-  if (!presetPrompt) return null;
+  const ut = (userText || '').trim();
+  if (!presetPrompt && !ut) return null;
   if (preset.skipUnderstand === true) {
     ctx.onLog?.('info', `[${preset.label || preset.id}] 未启用理解，提示词直发生图`, undefined);
-    return presetPrompt;
+    return [presetPrompt, ut].filter(Boolean).join('\n\n').trim() || null;
   }
-  ctx.onLog?.('info', `[${preset.label || preset.id}] 理解预设提示词中…`, undefined);
+  ctx.onLog?.('info', `[${preset.label || preset.id}] 理解图片与提示词中…`, undefined);
+  const combined = [presetPrompt, ut].filter(Boolean).join('\n\n').trim();
   const { instruction } = await workflowUnderstandForImageGen(
-    inputImageBase64,
-    presetPrompt,
+    refsForUnderstand(refs),
+    combined,
     effectiveCapabilityTextModel(ctx),
     undefined,
     CAPABILITY_UNDERSTAND_RETRY_OPTIONS
@@ -204,11 +214,13 @@ async function resolveCapabilityPrompt(
 
 async function resolveGenImagePrompt(
   preset: CustomAppModule,
-  inputImageBase64: string,
+  refs: string[],
+  userText: string,
   ctx: CapabilityExecuteContext
 ): Promise<string | null> {
+  const ut = (userText || '').trim();
   if (preset.skipUnderstand === true) {
-    const directPrompt = (preset.instruction || '').trim();
+    const directPrompt = [(preset.instruction || '').trim(), ut].filter(Boolean).join('\n\n').trim();
     return directPrompt || null;
   }
   if (ctx.promptResolution === 'compiler') {
@@ -227,7 +239,7 @@ async function resolveGenImagePrompt(
       return out.compiled_prompt;
     }
   }
-  return resolveCapabilityPrompt(preset, inputImageBase64, ctx);
+  return resolveCapabilityPrompt(preset, refs, ut, ctx);
 }
 
 async function resolveTextOnlyImagePrompt(
@@ -290,7 +302,7 @@ async function executeGenerateVideoPath(
   if (hasImg) {
     ctx.onLog?.('info', `[${actionLabel}] 整理生视频提示词…`, undefined);
     emitCapabilityRunProgress(ctx, `${actionLabel}：理解画面与预设中…`);
-    const understood = await resolveCapabilityPrompt(preset, refs[0]!, ctx);
+    const understood = await resolveCapabilityPrompt(preset, refs, userT, ctx);
     const base = (understood ?? presetInstr).trim();
     promptFinal = userT ? `${base}\n\n【用户补充】\n${userT}` : base;
   } else if (preset.skipUnderstand === true) {
@@ -613,7 +625,7 @@ export async function executeCapability(
 
       if (engine === 'gen_image') {
         emitCapabilityRunProgress(ctx, `${actionLabel}：理解提示词中…`);
-        const prompt = await resolveGenImagePrompt(preset, cropped, ctx);
+        const prompt = await resolveGenImagePrompt(preset, [cropped], (inputText || '').trim(), ctx);
         if (!prompt) return { ok: false, kind: 'none', error: '该能力为生图执行方式，但未填写预设提示词或理解未返回有效指令', durationMs: Date.now() - start };
         ctx.onLog?.('info', `[${actionLabel}] 生图中…`, undefined);
         emitCapabilityRunProgress(ctx, `${actionLabel}：生图中…`);
@@ -718,12 +730,9 @@ export async function executeCapability(
         ? `${actionLabel}：准备生图（已跳过理解）…`
         : `${actionLabel}：理解图片与提示词中（若失败多为网关超时或模型不可用）…`
     );
-    const prompt = await resolveGenImagePrompt(preset, refs[0]!, ctx);
+    const prompt = await resolveGenImagePrompt(preset, refs, userT, ctx);
     if (!prompt) return { ok: false, kind: 'none', error: '该能力为生图执行方式，但未填写预设提示词或理解未返回有效指令', durationMs: Date.now() - start };
-    const augmented =
-      userT && (preset.category === 'image_to_image' || (preset.category as string) === 'image_gen' || (preset.category as string) === 'text_llm')
-        ? `${prompt}\n\n【用户补充文字】\n${userT}`
-        : prompt;
+    const augmented = prompt;
     ctx.onLog?.('info', `[${actionLabel}] 生图中…`, undefined);
     emitCapabilityRunProgress(ctx, `${actionLabel}：生图中（可能较慢）…`);
     const modelId = resolveImageModelId(preset.imageGear);

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Image as ImageIcon, Maximize2, Minimize2 } from 'lucide-react';
 import { SUPPORTED_IMAGE_SIZES } from '../types';
@@ -9,6 +9,16 @@ import {
   DT_AC_WORKFLOW_EXPORT,
 } from '../services/workflowDragPipeline';
 import { WORKFLOW_QUICK_COMPOSE_BAR_SHELL } from './workflow/workflowSectionUiConstants';
+import QuickComposeDropTray from './workflow/QuickComposeDropTray';
+import QuickComposeMentionField, {
+  type QuickComposeMentionFieldHandle,
+} from './workflow/QuickComposeMentionField';
+import type {
+  QuickComposeDropSlot,
+  QuickComposeMentionCandidate,
+  QuickComposeSegment,
+} from '../services/quickComposeMention';
+import { mentionsFromSegments, newQuickComposeTextSegment } from '../services/quickComposeMention';
 
 export type WorkspaceQuickComposeGenSettings = {
   gearId: string;
@@ -54,14 +64,14 @@ export type WorkspaceQuickComposeBarProps = {
   onComposeModeChange: (m: WorkspaceQuickComposeComposeMode) => void;
   /** 已拖入能力预设卡片（输入框预设优先） */
   inputPresetsActive: boolean;
-  draft: string;
-  onDraftChange: (v: string) => void;
-  attachedImages: string[];
-  /** 由当前快捷能力对应生图模型的参考图上限推导 */
-  maxAttachedImages: number;
-  onAddImage: (dataUrl: string) => void;
-  onRemoveImageAt: (index: number) => void;
-  onClearAttachments: () => void;
+  segments: QuickComposeSegment[];
+  onSegmentsChange: (next: QuickComposeSegment[]) => void;
+  mentionCandidates: QuickComposeMentionCandidate[];
+  /** 拖入输入区、待点击 @ 的缩略图 */
+  dropSlots: QuickComposeDropSlot[];
+  onRemoveDropSlot: (assetId: string) => void;
+  /** 参考图（@ 引用）数量上限 */
+  maxMentions: number;
   onSubmit: () => void;
   genSettings: WorkspaceQuickComposeGenSettings;
   /** 展示档位 / 比例 / 输出尺寸（生图引擎） */
@@ -108,15 +118,6 @@ function clampBarToViewport(
   };
 }
 
-function readImageFileAsDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(String(r.result || ''));
-    r.onerror = () => reject(r.error ?? new Error('read failed'));
-    r.readAsDataURL(file);
-  });
-}
-
 /**
  * 工作区底部居中：与预览工具栏同系实色条快捷输入；支持多图、生成参数摘要条与弹出设置。
  */
@@ -129,13 +130,12 @@ export default function WorkspaceQuickComposeBar({
   composeMode,
   onComposeModeChange,
   inputPresetsActive,
-  draft,
-  onDraftChange,
-  attachedImages,
-  maxAttachedImages,
-  onAddImage,
-  onRemoveImageAt,
-  onClearAttachments,
+  segments,
+  onSegmentsChange,
+  mentionCandidates,
+  dropSlots,
+  onRemoveDropSlot,
+  maxMentions,
   onSubmit,
   genSettings,
   showGenImageSettings,
@@ -145,7 +145,16 @@ export default function WorkspaceQuickComposeBar({
   promptCards,
   onRemovePromptCard,
 }: WorkspaceQuickComposeBarProps) {
-  const fileRef = useRef<HTMLInputElement>(null);
+  const mentions = useMemo(() => mentionsFromSegments(segments), [segments]);
+  const mentionFieldRef = useRef<QuickComposeMentionFieldHandle | null>(null);
+  const mentionedAssetIds = useMemo(
+    () => new Set(mentions.filter((m) => m.kind === 'asset').map((m) => m.assetId)),
+    [mentions]
+  );
+  const pendingDropSlots = useMemo(
+    () => dropSlots.filter((s) => !mentionedAssetIds.has(s.assetId)),
+    [dropSlots, mentionedAssetIds]
+  );
   const barRef = useRef<HTMLDivElement>(null);
   const dragOffsetRef = useRef<{ x: number; y: number } | null>(null);
   const settingsTriggerRef = useRef<HTMLButtonElement>(null);
@@ -199,7 +208,6 @@ export default function WorkspaceQuickComposeBar({
     setPosition(clampBarToViewport({ left, top }, el, vw, vh));
   }, [inputExpanded]);
 
-  const canAddMore = attachedImages.length < maxAttachedImages;
   const isLightbox = placement === 'lightbox';
 
   const modeLockedByInputPresets = inputPresetsActive;
@@ -296,74 +304,6 @@ export default function WorkspaceQuickComposeBar({
       onComposeInputWorkflowDrop,
       readDroppedCapabilityPresetId,
     ]
-  );
-
-  const onPickFiles = useCallback(
-    async (files: FileList | null) => {
-      if (!files?.length) return;
-      const list = Array.from(files).filter((f) => f.type.startsWith('image/'));
-      for (const f of list) {
-        try {
-          const url = await readImageFileAsDataUrl(f);
-          if (url.startsWith('data:image/')) onAddImage(url);
-        } catch {
-          /* ignore */
-        }
-      }
-      if (fileRef.current) fileRef.current.value = '';
-    },
-    [onAddImage]
-  );
-
-  const collectClipboardImageFiles = useCallback((dt: DataTransfer | null): File[] => {
-    if (!dt) return [];
-    const out: File[] = [];
-    const seen = new Set<string>();
-    const push = (f: File | null) => {
-      if (!f || !f.type.startsWith('image/')) return;
-      const k = `${f.name}:${f.size}:${f.lastModified}`;
-      if (seen.has(k)) return;
-      seen.add(k);
-      out.push(f);
-    };
-    try {
-      if (dt.files?.length) {
-        for (let i = 0; i < dt.files.length; i += 1) push(dt.files.item(i));
-      }
-    } catch {
-      /* ignore */
-    }
-    try {
-      const items = dt.items;
-      if (items?.length) {
-        for (let i = 0; i < items.length; i += 1) {
-          const it = items[i];
-          if (it?.kind !== 'file') continue;
-          push(it.getAsFile());
-        }
-      }
-    } catch {
-      /* ignore */
-    }
-    return out;
-  }, []);
-
-  const onPaste = useCallback(
-    async (e: React.ClipboardEvent) => {
-      if (!canAddMore) return;
-      const files = collectClipboardImageFiles(e.clipboardData);
-      if (files.length === 0) return;
-      e.preventDefault();
-      for (const f of files) {
-        try {
-          const url = await readImageFileAsDataUrl(f);
-          if (url.startsWith('data:image/')) onAddImage(url);
-        } catch {
-          /* ignore */
-        }
-      }
-    },
-    [canAddMore, collectClipboardImageFiles, onAddImage]
   );
 
   useEffect(() => {
@@ -572,16 +512,12 @@ export default function WorkspaceQuickComposeBar({
     ? trimmedOverride
     : (() => {
         if (composeMode === '3d') {
-          return maxAttachedImages > 1
-            ? `生成 3D：请附图，可附最多 ${maxAttachedImages} 张参考图`
-            : '生成 3D：请附图并可选填说明';
+          return '生成 3D：请 @ 引用图片资产并可选填说明';
         }
         if (composeMode === 'text') {
-          return '输入问题或指令（文模式不支持附图）';
+          return '输入问题或指令（文模式请 @ 文字资产）';
         }
-        return maxAttachedImages > 1
-          ? `想创作什么？可附最多 ${maxAttachedImages} 张参考图`
-          : '想创作什么？可输入文字或附图';
+        return `想创作什么？输入 @ 引用参考图（最多 ${maxMentions} 张）`;
       })();
 
   const gearSummary =
@@ -745,18 +681,18 @@ export default function WorkspaceQuickComposeBar({
                 </div>
               ) : null}
 
-              {attachedImages.length > 0 ? (
+              {mentions.length > 0 ? (
                 <div className="table-row">
                   <div className="table-cell p-0 align-middle">
                     <button
                       type="button"
                       onClick={() => {
-                        onClearAttachments();
+                        onSegmentsChange([newQuickComposeTextSegment('')]);
                         setSettingsOpen(false);
                       }}
                       className="mt-0.5 w-full rounded-md py-1 text-[9px] font-semibold text-gray-500 ring-1 ring-white/[0.07] hover:bg-white/[0.05] hover:text-gray-300"
                     >
-                      清图
+                      清空 @ 引用
                     </button>
                   </div>
                 </div>
@@ -781,7 +717,6 @@ export default function WorkspaceQuickComposeBar({
             : 'w-[min(44rem,calc(100vw-1.5rem))]'
         } ${isLightbox ? 'z-[2500]' : 'z-[1600]'}`}
         style={barPositionStyle}
-        onPaste={isLightbox ? undefined : onPaste}
         onClick={isLightbox ? (e) => e.stopPropagation() : undefined}
         onWheel={isLightbox ? (e) => e.stopPropagation() : undefined}
         {...(isLightbox ? ({ 'data-image-preview-no-wheel': '' } as const) : {})}
@@ -824,46 +759,53 @@ export default function WorkspaceQuickComposeBar({
             </div>
           ) : null}
 
+          {pendingDropSlots.length > 0 ? (
+            <div
+              className="pointer-events-auto absolute bottom-full left-0 right-0 z-[1] mb-2"
+              onDragOver={isLightbox ? undefined : handleComposeInputDragOver}
+              onDrop={isLightbox ? undefined : handleComposeInputDrop}
+            >
+              <QuickComposeDropTray
+                slots={pendingDropSlots}
+                disabled={disabled}
+                atMentionLimit={mentions.length >= maxMentions}
+                onActivate={(assetId) => {
+                  const slot = dropSlots.find((s) => s.assetId === assetId);
+                  if (!slot) return;
+                  mentionFieldRef.current?.insertMentionCandidate({
+                    kind: 'asset',
+                    assetId: slot.assetId,
+                    label: slot.label,
+                    previewSrc: slot.previewSrc,
+                  });
+                }}
+                onRemoveSlot={onRemoveDropSlot}
+                onStashCaret={() => mentionFieldRef.current?.stashCaretBeforeBlur()}
+              />
+            </div>
+          ) : null}
+
           {inputExpanded ? (
             <div
               className={`flex flex-col gap-2 px-2 py-2 ${WORKFLOW_QUICK_COMPOSE_BAR_SHELL}`}
               role="search"
             >
-              {!isLightbox ? (
-                <input
-                  ref={fileRef}
-                  type="file"
-                  accept="image/*"
-                  multiple={maxAttachedImages >= 2}
-                  className="hidden"
-                  onChange={(e) => void onPickFiles(e.target.files)}
-                />
-              ) : null}
-
               <div className="flex min-w-0 items-start gap-1.5">
-                <div
-                  className="min-w-0 flex-1"
-                  onDragOver={isLightbox ? undefined : handleComposeInputDragOver}
-                  onDrop={isLightbox ? undefined : handleComposeInputDrop}
-                  onPaste={isLightbox ? undefined : onPaste}
-                >
-                  <textarea
-                    value={draft}
-                    disabled={disabled}
-                    onChange={(e) => onDraftChange(e.target.value)}
-                    onPaste={isLightbox ? undefined : onPaste}
-                    onKeyDown={(e) => {
-                      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-                        e.preventDefault();
-                        if (!disabled) onSubmit();
-                      }
-                    }}
-                    placeholder={placeholder}
-                    rows={5}
-                    className="max-h-40 min-h-[5.5rem] w-full resize-y bg-transparent py-1 text-[13px] leading-snug text-gray-100 placeholder:text-gray-500 outline-none disabled:opacity-45 [scrollbar-width:thin]"
-                    aria-label={isLightbox ? '大图预览快捷生成描述' : '快捷生成描述'}
-                  />
-                </div>
+                <QuickComposeMentionField
+                  ref={mentionFieldRef}
+                  segments={segments}
+                  onSegmentsChange={onSegmentsChange}
+                  mentionCandidates={mentionCandidates}
+                  maxMentions={maxMentions}
+                  placeholder={placeholder}
+                  disabled={disabled}
+                  multiline
+                  rows={5}
+                  ariaLabel={isLightbox ? '大图预览快捷生成描述' : '快捷生成描述'}
+                  onSubmit={onSubmit}
+                  onDragOver={handleComposeInputDragOver}
+                  onDrop={handleComposeInputDrop}
+                />
                 <button
                   type="button"
                   disabled={disabled}
@@ -907,56 +849,11 @@ export default function WorkspaceQuickComposeBar({
                   {isLightbox ? (
                     <div
                       className="grid h-9 w-9 shrink-0 place-items-center rounded-md text-gray-400"
-                      title="附图已固定为当前大图预览（含平面标注），提交时合成"
+                      title="默认 @当前画面；可再 @ 其它资产作额外参考"
                     >
                       <ImageIcon className="h-[1.125rem] w-[1.125rem]" strokeWidth={2.2} aria-hidden />
                     </div>
-                  ) : (
-                    <>
-                      <button
-                        type="button"
-                        disabled={disabled || !canAddMore}
-                        onClick={() => fileRef.current?.click()}
-                        className="grid h-9 w-9 shrink-0 place-items-center rounded-md text-gray-300 outline-none transition-colors hover:bg-white/[0.08] hover:text-white disabled:opacity-35 focus-visible:ring-2 focus-visible:ring-blue-500/50"
-                        title={canAddMore ? '添加参考图' : `已达上限（${maxAttachedImages} 张）`}
-                        aria-label="添加参考图"
-                      >
-                        <svg
-                          viewBox="0 0 24 24"
-                          className="h-[1.125rem] w-[1.125rem]"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth={2.2}
-                          strokeLinecap="round"
-                          aria-hidden
-                        >
-                          <path d="M12 5v14M5 12h14" />
-                        </svg>
-                      </button>
-
-                      {attachedImages.length > 0 ? (
-                        <div className="flex max-w-[min(220px,40vw)] shrink-0 items-center gap-1 overflow-x-auto py-0.5 [scrollbar-width:thin]">
-                          {attachedImages.map((src, i) => (
-                            <div
-                              key={`${i}-${src.slice(0, 48)}`}
-                              className="relative h-9 w-9 shrink-0 overflow-hidden rounded-xl ring-1 ring-white/[0.12]"
-                            >
-                              <img src={src} alt="" className="h-full w-full object-cover" />
-                              <button
-                                type="button"
-                                onClick={() => onRemoveImageAt(i)}
-                                className="absolute inset-0 flex items-center justify-center bg-black/55 text-[10px] font-bold text-white opacity-0 transition-opacity hover:opacity-100"
-                                title="移除此图"
-                                aria-label="移除此图"
-                              >
-                                ×
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      ) : null}
-                    </>
-                  )}
+                  ) : null}
                 </div>
 
                 <div className="flex flex-wrap items-center justify-end gap-2">
@@ -1047,16 +944,6 @@ export default function WorkspaceQuickComposeBar({
               className={`flex items-center gap-2 px-2 py-1.5 ${WORKFLOW_QUICK_COMPOSE_BAR_SHELL}`}
               role="search"
             >
-              {!isLightbox ? (
-                <input
-                  ref={fileRef}
-                  type="file"
-                  accept="image/*"
-                  multiple={maxAttachedImages >= 2}
-                  className="hidden"
-                  onChange={(e) => void onPickFiles(e.target.files)}
-                />
-              ) : null}
               <button
                 type="button"
                 disabled={disabled}
@@ -1081,80 +968,25 @@ export default function WorkspaceQuickComposeBar({
               {isLightbox ? (
                 <div
                   className="grid h-9 w-9 shrink-0 place-items-center rounded-md text-gray-400"
-                  title="附图已固定为当前大图预览（含平面标注），提交时合成"
+                  title="默认 @当前画面；可再 @ 其它资产作额外参考"
                 >
                   <ImageIcon className="h-[1.125rem] w-[1.125rem]" strokeWidth={2.2} aria-hidden />
                 </div>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    disabled={disabled || !canAddMore}
-                    onClick={() => fileRef.current?.click()}
-                    className="grid h-9 w-9 shrink-0 place-items-center rounded-md text-gray-300 outline-none transition-colors hover:bg-white/[0.08] hover:text-white disabled:opacity-35 focus-visible:ring-2 focus-visible:ring-blue-500/50"
-                    title={canAddMore ? '添加参考图' : `已达上限（${maxAttachedImages} 张）`}
-                    aria-label="添加参考图"
-                  >
-                    <svg
-                      viewBox="0 0 24 24"
-                      className="h-[1.125rem] w-[1.125rem]"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth={2.2}
-                      strokeLinecap="round"
-                      aria-hidden
-                    >
-                      <path d="M12 5v14M5 12h14" />
-                    </svg>
-                  </button>
+              ) : null}
 
-                  {attachedImages.length > 0 ? (
-                    <div className="flex max-w-[min(200px,28vw)] shrink-0 items-center gap-1 overflow-x-auto py-0.5 [scrollbar-width:thin]">
-                      {attachedImages.map((src, i) => (
-                        <div
-                          key={`${i}-${src.slice(0, 48)}`}
-                          className="relative h-9 w-9 shrink-0 overflow-hidden rounded-xl ring-1 ring-white/[0.12]"
-                        >
-                          <img src={src} alt="" className="h-full w-full object-cover" />
-                          <button
-                            type="button"
-                            onClick={() => onRemoveImageAt(i)}
-                            className="absolute inset-0 flex items-center justify-center bg-black/55 text-[10px] font-bold text-white opacity-0 transition-opacity hover:opacity-100"
-                            title="移除此图"
-                            aria-label="移除此图"
-                          >
-                            ×
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-                </>
-              )}
-
-              <div
-                className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto py-0.5 [scrollbar-width:thin]"
-                onDragOver={isLightbox ? undefined : handleComposeInputDragOver}
-                onDrop={isLightbox ? undefined : handleComposeInputDrop}
-                onPaste={isLightbox ? undefined : onPaste}
-              >
-                <input
-                  type="text"
-                  value={draft}
-                  disabled={disabled}
-                  onChange={(e) => onDraftChange(e.target.value)}
-                  onPaste={isLightbox ? undefined : onPaste}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault();
-                      if (!disabled) onSubmit();
-                    }
-                  }}
-                  placeholder={placeholder}
-                  className="min-w-0 flex-1 bg-transparent py-1.5 text-[13px] text-gray-100 placeholder:text-gray-500 outline-none disabled:opacity-45"
-                  aria-label={isLightbox ? '大图预览快捷生成描述' : '快捷生成描述'}
-                />
-              </div>
+              <QuickComposeMentionField
+                ref={mentionFieldRef}
+                segments={segments}
+                onSegmentsChange={onSegmentsChange}
+                mentionCandidates={mentionCandidates}
+                maxMentions={maxMentions}
+                placeholder={placeholder}
+                disabled={disabled}
+                ariaLabel={isLightbox ? '大图预览快捷生成描述' : '快捷生成描述'}
+                onSubmit={onSubmit}
+                onDragOver={handleComposeInputDragOver}
+                onDrop={handleComposeInputDrop}
+              />
 
               <button
                 type="button"
