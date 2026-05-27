@@ -2,7 +2,7 @@
  * **站点统一大模型出口**（配电箱）
  *
  * 产品/组件/hooks **应只 import 本文件**，不直接 import `geminiService` / `tripoService`；
- * 便于换供应商、加观测、做限流时在单点演进。实现仍委托 `geminiService.getAI()` 与各 `resolveUpstream*`。
+ * 便于换供应商、加观测、做限流时在单点演进。实现委托 `geminiService.getClientForTask()` / `getAI()`（内部走 `pickBinding` + channel 凭证）。
  *
  * - **薄委托**：`workflowChat` / `workflowGenerateImage` 等与底层 API 一一对应，行为与原先一致。
  * - **直通再导出**：贴图、擂台、对话等同名函数从 `geminiService` 再导出，仅收敛 import 路径。
@@ -25,7 +25,7 @@ import {
   type GeminiImageBatchGroupOptions,
   type GeminiRequestOptions,
 } from "./geminiService";
-import { getAiProvider } from "./settingsStore";
+import { getEnabledChannels } from "./settingsStore";
 import {
   WorkflowVideoNotAvailableError,
   type WorkflowVideoJobInput,
@@ -86,8 +86,8 @@ async function traceUnifiedAiCall<T>(
 ): Promise<T> {
   const t0 = nowMs();
   const debug = isViteDebugUnifiedAi();
-  const provider = getAiProvider();
-  const fields = { provider, ...(debugFields?.() ?? {}) };
+  const channels = getEnabledChannels().join(",");
+  const fields = { channels, ...(debugFields?.() ?? {}) };
   try {
     const out = await fn();
     if (debug) console.info(`[unified-ai] ${kind} ok ${Math.round(nowMs() - t0)}ms`, fields);

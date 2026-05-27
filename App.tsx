@@ -20,10 +20,11 @@ import {
 } from './services/generate3d';
 import { DEFAULT_MODEL_IMAGE, DEFAULT_MODEL_PRO, DEFAULT_MODEL_TEXT } from './services/modelRegistry/constants';
 import { migrateSystemModelSlots } from './services/modelRegistry/systemConfigMigrate';
-import { useEffectiveImageGearRows } from './hooks/useEffectiveImageGearRows';
+import { useEffectiveImageModelRows } from './hooks/useEffectiveImageGearRows';
+import { DEFAULT_IMAGE_MODEL_REGISTRY_ID } from './services/modelRegistry/imageModels';
 import { loadRecords, addRecord as addGenerationRecord, updateScore as updateGenerationScore } from './services/recordStore';
 import { loadSnippets } from './services/snippetStore';
-import { AppStep, AppMode, LibraryItem, SystemConfig, AppTask, AssetCategory, DialogMessage, DialogSession, DialogTempItem, DialogImageGear, DIALOG_ASPECT_RATIO_OPTIONS, SUPPORTED_IMAGE_SIZES, DIALOG_IMAGE_GEARS, type GenerationRecord, type CustomAppModule, type CapabilitySet, type WorkflowAsset, type WorkflowPendingTask, type ArenaCurrentStep, type ArenaStepEntry, type ArenaTimelineBlock } from './types';
+import { AppStep, AppMode, LibraryItem, SystemConfig, AppTask, AssetCategory, DialogMessage, DialogSession, DialogTempItem, DIALOG_ASPECT_RATIO_OPTIONS, SUPPORTED_IMAGE_SIZES, type GenerationRecord, type CustomAppModule, type CapabilitySet, type WorkflowAsset, type WorkflowPendingTask, type ArenaCurrentStep, type ArenaStepEntry, type ArenaTimelineBlock } from './types';
 import { runCapabilityTest } from './services/capabilityTestRunner';
 import { loadCapabilityPresets, saveCapabilityPresets, CAPABILITY_PRESETS_KEY } from './services/capabilityPresetStore';
 import { loadCapabilitySets, saveCapabilitySets, CAPABILITY_SETS_KEY } from './services/capabilitySetStore';
@@ -101,9 +102,13 @@ import {
   getUserApiKey,
   getVectorengineApiKey,
   getVectorengineBaseUrl,
+  getEnabledAiProviders,
+  getEnabledChannels,
   getWorkspaceAutoSyncEnabled,
   isAiInvocationReady,
   setAiProvider,
+  setEnabledAiProviders,
+  setEnabledChannels,
   setAntigravityApiKey,
   setAntigravityBaseUrl,
   setOpenaiApiKey,
@@ -1089,7 +1094,13 @@ const MainApp: React.FC = () => {
           setDialogSkipUnderstandState(cfg.settings.dialogSkipUnderstand);
           setWorkspaceAutoSyncEnabled(cfg.settings.workspaceAutoSyncEnabled);
           setWorkspaceAutoSyncEnabledState(cfg.settings.workspaceAutoSyncEnabled);
-          setAiProvider(cfg.settings.aiProvider);
+          if (cfg.settings.enabledChannels && cfg.settings.enabledChannels.length > 0) {
+            setEnabledChannels(cfg.settings.enabledChannels);
+          } else if (cfg.settings.enabledAiProviders && cfg.settings.enabledAiProviders.length > 0) {
+            setEnabledAiProviders(cfg.settings.enabledAiProviders);
+          } else {
+            setAiProvider(cfg.settings.aiProvider);
+          }
           setUserApiKey(cfg.settings.geminiApiKey || null);
           setToapisApiKey(cfg.settings.toapisApiKey || null);
           setToapisBaseUrl(cfg.settings.toapisBaseUrl || null);
@@ -1150,6 +1161,8 @@ const MainApp: React.FC = () => {
           dialogSkipUnderstand: getDialogSkipUnderstand(),
           workspaceAutoSyncEnabled,
           aiProvider: getAiProvider(),
+          enabledAiProviders: getEnabledAiProviders(),
+          enabledChannels: getEnabledChannels(),
           geminiApiKey: getUserApiKey() || '',
           toapisApiKey: getToapisApiKey() || '',
           toapisBaseUrl: getToapisBaseUrl() || '',
@@ -2770,9 +2783,7 @@ const MainApp: React.FC = () => {
   const [arenaReportedGaps, setArenaReportedGaps] = useState<string[]>([]);
   const [arenaWinnerStrength, setArenaWinnerStrength] = useState('');
   const [arenaLoserRemark, setArenaLoserRemark] = useState('');
-  const [arenaImageModel, setArenaImageModel] = useState<string>(
-    () => DIALOG_IMAGE_GEARS.find((g) => g.id === 'standard')?.modelId || DIALOG_IMAGE_GEARS[0].modelId
-  );
+  const [arenaImageModel, setArenaImageModel] = useState<string>(() => DEFAULT_IMAGE_MODEL_REGISTRY_ID);
   const [arenaCurrentStep, setArenaCurrentStep] = useState<ArenaCurrentStep>('idle');
   const [arenaStepLog, setArenaStepLog] = useState<ArenaStepEntry[]>([]);
   const [arenaTimeline, setArenaTimeline] = useState<ArenaTimelineBlock[]>([]);
@@ -2826,27 +2837,22 @@ const MainApp: React.FC = () => {
   /** 对话输入条与「发送」按钮统一的单行高度（px） */
   const DIALOG_INPUT_BAR_H = 48;
   const [dialogInputImages, setDialogInputImages] = useState<Array<{ id: string; data: string; fromTemp?: boolean }>>([]);
-  const [dialogImageGear, setDialogImageGear] = useState<DialogImageGear>('standard');
-  const [dialogModel, setDialogModel] = useState<string>(
-    () => DIALOG_IMAGE_GEARS.find((g) => g.id === 'standard')?.modelId || DIALOG_IMAGE_GEARS[0].modelId
-  );
-  const { rows: effectiveImageGearRows, coerceGearId: coerceImageGearId } = useEffectiveImageGearRows();
+  const [dialogModel, setDialogModel] = useState<string>(() => DEFAULT_IMAGE_MODEL_REGISTRY_ID);
+  const { rows: effectiveImageModelRows, coerceModelId } = useEffectiveImageModelRows();
   useLayoutEffect(() => {
-    const ok = effectiveImageGearRows.find((r) => r.modelId === arenaImageModel && !r.disabled);
+    const ok = effectiveImageModelRows.find((r) => r.registryId === arenaImageModel && !r.disabled);
     if (!ok) {
-      const gid = DIALOG_IMAGE_GEARS.find((x) => x.modelId === arenaImageModel)?.id ?? 'standard';
-      const ng = coerceImageGearId(gid);
-      const fb = effectiveImageGearRows.find((r) => r.id === ng && !r.disabled);
-      if (fb && fb.modelId !== arenaImageModel) setArenaImageModel(fb.modelId);
+      const ng = coerceModelId(arenaImageModel);
+      const fb = effectiveImageModelRows.find((r) => r.registryId === ng && !r.disabled);
+      if (fb && fb.registryId !== arenaImageModel) setArenaImageModel(fb.registryId);
     }
-  }, [effectiveImageGearRows, coerceImageGearId, arenaImageModel]);
+  }, [effectiveImageModelRows, coerceModelId, arenaImageModel]);
   useLayoutEffect(() => {
-    const ng = coerceImageGearId(dialogImageGear);
-    const row = effectiveImageGearRows.find((r) => r.id === ng && !r.disabled);
+    const ng = coerceModelId(dialogModel);
+    const row = effectiveImageModelRows.find((r) => r.registryId === ng && !r.disabled);
     if (!row) return;
-    if (ng !== dialogImageGear) setDialogImageGear(ng as DialogImageGear);
-    if (row.modelId !== dialogModel) setDialogModel(row.modelId);
-  }, [effectiveImageGearRows, coerceImageGearId, dialogImageGear, dialogModel]);
+    if (ng !== dialogModel) setDialogModel(ng);
+  }, [effectiveImageModelRows, coerceModelId, dialogModel]);
   const [dialogAutoGenerateImage, setDialogAutoGenerateImage] = useState(true);
   const [dialogSkipUnderstand, setDialogSkipUnderstandState] = useState<boolean>(() => getDialogSkipUnderstand());
   const [dialogAspectRatio, setDialogAspectRatio] = useState<string>('adaptive');
@@ -5650,22 +5656,19 @@ const MainApp: React.FC = () => {
                             </button>
                           </div>
                           <div className="flex items-center gap-1.5 shrink-0">
-                            <span className="text-[9px] font-black text-gray-500 uppercase whitespace-nowrap">挡位</span>
-                            <div className="flex rounded-lg overflow-hidden ring-1 ring-white/[0.06] shrink-0">
-                              {effectiveImageGearRows.map((g) => (
+                            <span className="text-[9px] font-black text-gray-500 uppercase whitespace-nowrap">模型</span>
+                            <div className="flex rounded-lg overflow-hidden ring-1 ring-white/[0.06] shrink-0 flex-wrap max-w-[min(100%,28rem)]">
+                              {effectiveImageModelRows.map((g) => (
                                 <button
-                                  key={g.id}
+                                  key={g.registryId}
                                   type="button"
                                   disabled={g.disabled}
-                                  title={g.disabled ? g.disabledReason : g.modelId}
+                                  title={g.disabled ? g.disabledReason : g.registryId}
                                   onClick={() => {
-                                    if (!g.disabled) {
-                                      setDialogImageGear(g.id);
-                                      setDialogModel(g.modelId);
-                                    }
+                                    if (!g.disabled) setDialogModel(g.registryId);
                                   }}
-                                  className={`px-2.5 py-1.5 text-[9px] font-black uppercase transition-colors ${
-                                    dialogImageGear === g.id && !g.disabled
+                                  className={`px-2.5 py-1.5 text-[9px] font-semibold transition-colors ${
+                                    dialogModel === g.registryId && !g.disabled
                                       ? 'bg-blue-600 text-white'
                                       : g.disabled
                                         ? 'bg-[#1c1c22] text-gray-600 cursor-not-allowed opacity-60'

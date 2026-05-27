@@ -11,8 +11,9 @@ import React, {
 } from 'react';
 import { getRandomGroupCodeName } from '../../data/groupCodeNames';
 import { attachInitialVgpToNewAsset } from '../../services/vgp/vgpStore';
-import { DIALOG_IMAGE_GEARS, SUPPORTED_ASPECT_RATIOS, SUPPORTED_IMAGE_SIZES } from '../../types';
-import { useEffectiveImageGearRows } from '../../hooks/useEffectiveImageGearRows';
+import { labelForImageModelRegistryId } from '../../services/modelRegistry/imageModels';
+import { SUPPORTED_ASPECT_RATIOS, SUPPORTED_IMAGE_SIZES } from '../../types';
+import { useEffectiveImageModelRows } from '../../hooks/useEffectiveImageGearRows';
 import type { CustomAppModule, CapabilitySet, WorkflowAsset } from '../../types';
 import { capabilityUsesGenImageEngine } from '../../services/capabilityExecutor';
 import { CustomDropdown } from '../ui/CustomDropdown';
@@ -276,6 +277,8 @@ export type WorkflowSidebarColumnProps = {
     tweakPrompt: boolean,
     dropEvent?: DragEvent<HTMLElement>,
     groupOverrides?: {
+      imageModelRegistryId?: string;
+      /** @deprecated */
       imageGear?: CustomAppModule['imageGear'];
       imageAspectRatio?: string;
       imageSize?: string;
@@ -360,13 +363,15 @@ export function WorkflowSidebarColumn({
   linkedComposeSearchQuery = '',
   onLinkHoverPresetIds,
 }: WorkflowSidebarColumnProps) {
-  const { rows: effectiveGearRows } = useEffectiveImageGearRows();
+  const { rows: effectiveModelRows } = useEffectiveImageModelRows();
   const [groupOverrideByCategory, setGroupOverrideByCategory] = useState<
     Record<
       string,
       {
         enabled?: boolean;
-        imageGear?: CustomAppModule['imageGear'];
+        imageModelRegistryId?: string;
+      /** @deprecated */
+      imageGear?: CustomAppModule['imageGear'];
         imageAspectRatio?: string;
         imageSize?: string;
         understand?: boolean;
@@ -384,7 +389,11 @@ export function WorkflowSidebarColumn({
     return {
       ...(cfg?.enabled
         ? {
-            ...(cfg.imageGear ? { imageGear: cfg.imageGear } : {}),
+            ...(cfg.imageModelRegistryId || cfg.imageGear
+              ? {
+                  imageModelRegistryId: cfg.imageModelRegistryId ?? cfg.imageGear,
+                }
+              : {}),
             ...(cfg.imageAspectRatio ? { imageAspectRatio: cfg.imageAspectRatio } : {}),
             ...(cfg.imageSize ? { imageSize: cfg.imageSize } : {}),
             ...(typeof cfg.understand === 'boolean' ? { understand: cfg.understand } : {}),
@@ -402,7 +411,7 @@ export function WorkflowSidebarColumn({
   const favoriteHasGenerateCountOptions =
     favoriteHasImageParamOptions || favoriteModuleEntries.some((entry) => entry.mod.category === 'text_to_text');
   const favoriteCfg = groupOverrideByCategory[FAVORITE_GROUP_KEY] || {};
-  const favoriteGearChanged = Boolean(favoriteCfg.imageGear);
+  const favoriteModelChanged = Boolean(favoriteCfg.imageModelRegistryId || favoriteCfg.imageGear);
   const favoriteRatioChanged = Boolean(favoriteCfg.imageAspectRatio);
   const favoriteSizeChanged = Boolean(favoriteCfg.imageSize);
   const favoriteCountValue = Number.isFinite(favoriteCfg.generateCount)
@@ -423,9 +432,9 @@ export function WorkflowSidebarColumn({
     }));
     setCountCustomEditingByCategory((prev) => ({ ...prev, [FAVORITE_GROUP_KEY]: false }));
   };
-  const favoriteGearText = favoriteGearChanged
-    ? (DIALOG_IMAGE_GEARS.find((g) => g.id === favoriteCfg.imageGear)?.label || String(favoriteCfg.imageGear)).slice(0, 1)
-    : '档';
+  const favoriteModelText = favoriteModelChanged
+    ? labelForImageModelRegistryId(favoriteCfg.imageModelRegistryId ?? favoriteCfg.imageGear ?? '').slice(0, 2)
+    : '模';
   const favoriteRatioText = favoriteRatioChanged ? String(favoriteCfg.imageAspectRatio).slice(0, 1) : '比';
   const favoriteSizeText = favoriteSizeChanged ? String(favoriteCfg.imageSize).slice(0, 1) : '寸';
   const typesHasCapabilityFromEditor = (dt: DataTransfer | null) => {
@@ -1335,20 +1344,25 @@ export function WorkflowSidebarColumn({
                             <CustomDropdown
                               options={[
                                 { value: '', label: '默认' },
-                                ...effectiveGearRows.map((g) => ({
-                                  value: g.id,
+                                ...effectiveModelRows.map((g) => ({
+                                  value: g.registryId,
                                   label: g.label,
                                   disabled: g.disabled,
                                   title: g.disabledReason,
                                 })),
                               ]}
-                              value={groupOverrideByCategory[FAVORITE_GROUP_KEY]?.imageGear || ''}
+                              value={
+                                groupOverrideByCategory[FAVORITE_GROUP_KEY]?.imageModelRegistryId ||
+                                groupOverrideByCategory[FAVORITE_GROUP_KEY]?.imageGear ||
+                                ''
+                              }
                               onChange={(v) =>
                                 setGroupOverrideByCategory((prev) => ({
                                   ...prev,
                                   [FAVORITE_GROUP_KEY]: {
                                     ...(prev[FAVORITE_GROUP_KEY] || {}),
-                                    imageGear: (v || undefined) as CustomAppModule['imageGear'] | undefined,
+                                    imageModelRegistryId: v || undefined,
+                                    imageGear: undefined,
                                   },
                                 }))
                               }
@@ -1357,17 +1371,17 @@ export function WorkflowSidebarColumn({
                               renderTrigger={() => (
                                 <span
                                   title={
-                                    favoriteGearChanged
-                                      ? `档位：${DIALOG_IMAGE_GEARS.find((g) => g.id === favoriteCfg.imageGear)?.label || favoriteCfg.imageGear}`
-                                      : '档位：默认'
+                                    favoriteModelChanged
+                                      ? `模型：${labelForImageModelRegistryId(favoriteCfg.imageModelRegistryId ?? favoriteCfg.imageGear ?? '')}`
+                                      : '模型：默认'
                                   }
                                   className={`w-6 h-6 rounded-full border inline-flex items-center justify-center leading-none text-[9px] font-black ${
-                                    favoriteGearChanged
+                                    favoriteModelChanged
                                       ? 'border-blue-500 text-blue-300 bg-blue-950/35'
                                       : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'
                                   }`}
                                 >
-                                  {favoriteGearText}
+                                  {favoriteModelText}
                                 </span>
                               )}
                             />
@@ -1739,7 +1753,7 @@ export function WorkflowSidebarColumn({
                         const hasGenerateCountOptions =
                           hasImageParamOptions || category.id === 'text_to_text';
                         const cfg = groupOverrideByCategory[category.id] || {};
-                        const gearChanged = Boolean(cfg.imageGear);
+                        const modelChanged = Boolean(cfg.imageModelRegistryId || cfg.imageGear);
                         const ratioChanged = Boolean(cfg.imageAspectRatio);
                         const sizeChanged = Boolean(cfg.imageSize);
                         const countValue = Number.isFinite(cfg.generateCount)
@@ -1760,9 +1774,9 @@ export function WorkflowSidebarColumn({
                           }));
                           setCountCustomEditingByCategory((prev) => ({ ...prev, [category.id]: false }));
                         };
-                        const gearText = gearChanged
-                          ? (DIALOG_IMAGE_GEARS.find((g) => g.id === cfg.imageGear)?.label || String(cfg.imageGear)).slice(0, 1)
-                          : '档';
+                        const modelText = modelChanged
+                          ? labelForImageModelRegistryId(cfg.imageModelRegistryId ?? cfg.imageGear ?? '').slice(0, 2)
+                          : '模';
                         const ratioText = ratioChanged ? String(cfg.imageAspectRatio).slice(0, 1) : '比';
                         const sizeText = sizeChanged ? String(cfg.imageSize).slice(0, 1) : '寸';
                         return (
@@ -1853,30 +1867,42 @@ export function WorkflowSidebarColumn({
                           <CustomDropdown
                             options={[
                                 { value: '', label: '默认' },
-                                ...effectiveGearRows.map((g) => ({
-                                  value: g.id,
+                                ...effectiveModelRows.map((g) => ({
+                                  value: g.registryId,
                                   label: g.label,
                                   disabled: g.disabled,
                                   title: g.disabledReason,
                                 })),
                               ]}
-                            value={groupOverrideByCategory[category.id]?.imageGear || ''}
+                            value={
+                              groupOverrideByCategory[category.id]?.imageModelRegistryId ||
+                              groupOverrideByCategory[category.id]?.imageGear ||
+                              ''
+                            }
                             onChange={(v) =>
                               setGroupOverrideByCategory((prev) => ({
                                 ...prev,
-                                [category.id]: { ...(prev[category.id] || {}), imageGear: (v || undefined) as CustomAppModule['imageGear'] | undefined },
+                                [category.id]: {
+                                  ...(prev[category.id] || {}),
+                                  imageModelRegistryId: v || undefined,
+                                  imageGear: undefined,
+                                },
                               }))
                             }
                             disabled={!groupOverrideByCategory[category.id]?.enabled}
                             triggerClassName="p-0 w-6 h-6 inline-flex items-center justify-center bg-transparent border-0 rounded-none hover:bg-transparent align-middle"
                             renderTrigger={() => (
                               <span
-                                title={gearChanged ? `档位：${DIALOG_IMAGE_GEARS.find((g) => g.id === cfg.imageGear)?.label || cfg.imageGear}` : '档位：默认'}
+                                title={
+                                  modelChanged
+                                    ? `模型：${labelForImageModelRegistryId(cfg.imageModelRegistryId ?? cfg.imageGear ?? '')}`
+                                    : '模型：默认'
+                                }
                                 className={`w-6 h-6 rounded-full border inline-flex items-center justify-center leading-none text-[9px] font-black ${
-                                  gearChanged ? 'border-blue-500 text-blue-300 bg-blue-950/35' : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'
+                                  modelChanged ? 'border-blue-500 text-blue-300 bg-blue-950/35' : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'
                                 }`}
                               >
-                                {gearText}
+                                {modelText}
                               </span>
                             )}
                           />

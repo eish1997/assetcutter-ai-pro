@@ -319,21 +319,8 @@ export function ImageAnnotationLightboxToolbar({
 
   useLayoutEffect(() => {
     if (position !== null) return;
-    const el = barRef.current;
-    if (!el) return;
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    const r = el.getBoundingClientRect();
-    if (r.width < 2) return;
-    setPosition(
-      clampBarToViewport(
-        { left: (vw - r.width) / 2, top: VIEW_MARGIN },
-        el,
-        vw,
-        vh
-      )
-    );
-  }, [position]);
+    resetToDefaultPosition();
+  }, [position, resetToDefaultPosition]);
 
   /** 菜单打开或主栏移动后：下方空间更大则向下展开，否则向上，减少贴顶/贴底时溢出 */
   useLayoutEffect(() => {
@@ -874,7 +861,7 @@ export function ImageAnnotationLightboxToolbar({
   return (
     <div
       ref={barRef}
-      className="pointer-events-auto fixed z-[2200]"
+      className="pointer-events-auto fixed z-[2400]"
       style={
         position
           ? { left: position.left, top: position.top, userSelect: dragging ? 'none' : 'auto', opacity: 1 }

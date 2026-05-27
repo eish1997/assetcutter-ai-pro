@@ -22,12 +22,22 @@ import { consumeTrialGeminiSlotBeforeProxyOrThrow } from "./trialGeminiQuota";
 import { getGeminiFairnessRequestHeaders } from "./geminiFairnessBridge";
 import { tryParseGeminiProxyFairnessRejected, throwFairnessRejected } from "./geminiProxyFairnessError";
 import { DEFAULT_MODEL_TEXT } from "./modelRegistry/constants";
+import type { ChannelId } from "./modelRegistry/types";
+import { pickBinding } from "./modelRegistry/pickBinding";
+import {
+  bulkUsesVertexBackend,
+  pickChannel,
+  usesVertexProxyForImage,
+  usesVertexProxyForText,
+} from "./modelRegistry/bindingRuntime";
 import {
   resolveUpstreamImageModelId,
+  resolveUpstreamImageModelIdForRegistry,
   resolveUpstreamModelId,
   resolveUpstreamModelIdForProvider,
   resolveUpstreamTextModelId,
 } from "./modelRegistry/resolve";
+import { coerceImageModelRegistryId, imageModelProviderRoute } from "./modelRegistry/imageModels";
 import {
   bulkForwardOriginIndex,
   collectRemoteBulkOriginsFromEnv,
@@ -36,6 +46,7 @@ import {
 
 export {
   resolveUpstreamImageModelId,
+  resolveUpstreamImageModelIdForRegistry,
   resolveUpstreamModelId,
   resolveUpstreamModelIdForProvider,
   resolveUpstreamTextModelId,
@@ -106,8 +117,12 @@ function vertexFallbackBulkBase(): string {
   return v || DEFAULT_VERTEX_OK_BULK;
 }
 
+function usesVertexBulkEndpoint(): boolean {
+  return usesVertexProxyForImage() || usesVertexProxyForText();
+}
+
 function redirectVertexAwayFromUnconfiguredProxy(base: string): string {
-  if (getAiProvider() !== "vertex") return base;
+  if (!usesVertexBulkEndpoint()) return base;
   if (readViteEnvTrim("VITE_DISABLE_VERTEX_BULK_FALLBACK") === "true") return base;
   if (!base || base === BULK_SAME_ORIGIN_MARKER) return base;
   let host = "";
@@ -124,7 +139,7 @@ function redirectVertexAwayFromUnconfiguredProxy(base: string): string {
 /** Vertex 且配置了 `VITE_BULK_IMAGE_API_VERTEX` 时走专用代理根；否则与试用相同用 `VITE_BULK_IMAGE_API`。 */
 function effectiveBulkBase(): string {
   let base: string;
-  if (getAiProvider() === "vertex" && VERTEX_BULK_BASE) base = VERTEX_BULK_BASE;
+  if (usesVertexBulkEndpoint() && VERTEX_BULK_BASE) base = VERTEX_BULK_BASE;
   else base = BULK_BASE;
   return redirectVertexAwayFromUnconfiguredProxy(base);
 }
@@ -140,19 +155,6 @@ function preferBrowserGeminiKeyFirst(): boolean {
   } catch {
     return false;
   }
-}
-
-/**
- * `dialogGenerateImage` 专用：是否走后端 `VITE_BULK_IMAGE_API` 的异步批量队列。
- * ToAPIs / Antigravity / OpenAI / VectorEngine 的生图必须在浏览器侧走各自 `getAI()` 适配层；若仅判断 `BULK_BASE` 为真
- * 就入队，会误把请求发到 gemini-proxy（用户表现为「文字走反代正常、生图完全不走 Antigravity」）。
- */
-function shouldUseBulkImageBatchQueue(): boolean {
-  const p = getAiProvider();
-  if (p === "toapis" || p === "antigravity" || p === "openai" || p === "vectorengine") return false;
-  if (p === "trial") return Boolean(BULK_BASE);
-  if (p === "vertex") return Boolean(effectiveBulkBase());
-  return false;
 }
 
 function isLocalDevPage(): boolean {
@@ -214,8 +216,8 @@ export function resolveImageBatchBoxSize(aiBackend?: "vertex"): number {
   return Math.max(1, Math.min(20, Math.floor(raw)));
 }
 
-export function getGeminiImageBatchBoxSizeForCurrentProvider(): number {
-  return resolveImageBatchBoxSize(getAiProvider() === "vertex" ? "vertex" : undefined);
+export function getGeminiImageBatchBoxSizeForCurrentProvider(registryId?: string): number {
+  return resolveImageBatchBoxSize(usesVertexProxyForImage(registryId) ? "vertex" : undefined);
 }
 
 /** gemini-proxy 在 Vertex 未就绪时返回；映射为工作区可读的完整短句（避免单行截断） */
@@ -291,7 +293,7 @@ function isBrowserFetchNetworkError(e: unknown): boolean {
 function warnDevBulkImageNetwork(context: string): void {
   try {
     if (!import.meta.env.DEV) return;
-    const vx = getAiProvider() === "vertex";
+    const vx = usesVertexProxyForImage();
     console.warn(
       `[assetcutter] ${context}：请求未送达。${vx ? "Vertex：请确认 VITE_BULK_IMAGE_API（或 VERTEX 专用地址）在浏览器侧可访问，且代理已配置 Vertex；" : ""}若使用同源 /proxy/gemini，请确认本机 gemini-proxy 在 9002 且 Vite 已反代。`
     );
@@ -306,7 +308,7 @@ async function bulkFetchOrExplain(input: RequestInfo | URL, init?: RequestInit):
   } catch (e) {
     if (isBrowserFetchNetworkError(e)) {
       warnDevBulkImageNetwork("生图代理");
-      if (getAiProvider() === "vertex") {
+      if (usesVertexProxyForImage()) {
         throw new Error(
           "Vertex 生图服务暂时连不上，请检查网络或稍后再试。若使用公网代理，请确认本机可访问该地址。"
         );
@@ -321,6 +323,7 @@ async function bulkProxyGenerateContentAsync(args: {
   model: string;
   contents: unknown;
   config?: Record<string, unknown>;
+  registryId?: string;
 }): Promise<{ text?: string; candidates?: unknown[] }> {
   const config = (args.config || {}) as Record<string, unknown>;
   const abortSignal = config.abortSignal as AbortSignal | undefined;
@@ -334,7 +337,10 @@ async function bulkProxyGenerateContentAsync(args: {
 
   await consumeTrialGeminiSlotBeforeProxyOrThrow();
 
-  const aiBackendExtra = getAiProvider() === "vertex" ? { aiBackend: "vertex" as const } : {};
+  const bindingRegistryId = (args.registryId || args.model || "").trim();
+  const aiBackendExtra = bulkUsesVertexBackend(bindingRegistryId, "image")
+    ? { aiBackend: "vertex" as const }
+    : {};
 
   const createRes = await bulkFetchOrExplain(bulkApiUrl("/proxy/gemini/async"), {
     method: "POST",
@@ -354,7 +360,7 @@ async function bulkProxyGenerateContentAsync(args: {
     const parsedMsg = parseBulkProxyErrorBody(raw);
     if (/Use POST \/jobs/i.test(raw)) {
       const bulkHint =
-        getAiProvider() === "vertex" && VERTEX_BULK_BASE
+        usesVertexProxyForImage(bindingRegistryId) && VERTEX_BULK_BASE
           ? `VITE_BULK_IMAGE_API_VERTEX=${VERTEX_BULK_BASE || "(empty)"}`
           : `VITE_BULK_IMAGE_API=${BULK_BASE || "(empty)"}`;
       throw new Error(
@@ -607,7 +613,8 @@ function enqueueImageBatchGenerateContent(args: {
   batchGroupExpected?: number;
 }): Promise<{ text?: string; candidates?: unknown[] }> {
   return new Promise((resolve, reject) => {
-    const aiBackend = getAiProvider() === "vertex" ? ("vertex" as const) : undefined;
+    const bindingRegistryId = (args.model || "").trim();
+    const aiBackend = bulkUsesVertexBackend(bindingRegistryId, "image") ? ("vertex" as const) : undefined;
     const batchBoxSize = resolveImageBatchBoxSize(aiBackend);
     const batchGroupKey = args.batchGroupKey?.trim();
     if (batchGroupKey) {
@@ -647,57 +654,8 @@ type GeminiClientLike = {
   };
 };
 
-/**
- * 全站统一入口：对话、工作流/能力执行、贴图、擂台、站点助手等**一律**通过本函数取客户端。
- * 供应商仅由 `settingsStore.getAiProvider()`（设置页 / 工作流密钥弹窗 / 云端 user-config 写入的同一存储）决定；
- * 此处按供应商**互斥**分支返回实现，不会在 ToAPIs/VectorEngine 等网关下静默改走 Google 官方 Key。
- */
-const getAI = (): GeminiClientLike => {
-  const provider = getAiProvider();
-  /**
-   * 供应商为网关时**必须**使用对应 Key，禁止静默回退到 GoogleGenAI。
-   * 否则用户以为走 Antigravity，实际仍用浏览器内 Gemini Key，@google/genai 对空 body 调 `response.json()` 会报
-   * Failed to execute 'json' on 'Response': Unexpected end of JSON input。
-   */
-  if (provider === "toapis") {
-    const k = getToapisApiKey();
-    if (!k) {
-      throw new Error("当前供应商为 ToAPIs：请先在设置中填写 ToAPIs API Key，或改选「Google Gemini」使用官方 Key / 后端代理。");
-    }
-    return createToapisGeminiClient(getToapisBaseUrl(), k) as unknown as GeminiClientLike;
-  }
-  if (provider === "antigravity") {
-    const k = getAntigravityApiKey();
-    if (!k) {
-      throw new Error(
-        "当前供应商为 Antigravity：请填写 Antigravity 反代 API Key（并确认 Base URL，默认 http://127.0.0.1:8045/v1），或改选「Google Gemini」。"
-      );
-    }
-    return createToapisGeminiClient(getAntigravityBaseUrl(), k, {
-      passthroughModels: true,
-      skipToapisImageUpload: true,
-    }) as unknown as GeminiClientLike;
-  }
-  if (provider === "vectorengine") {
-    const k = getVectorengineApiKey();
-    if (!k) {
-      throw new Error(
-        "当前供应商为 VectorEngine：请填写 VectorEngine API Key，或改选「Google Gemini」。"
-      );
-    }
-    return createVectorengineGeminiClient(getVectorengineBaseUrl(), k) as unknown as GeminiClientLike;
-  }
-  if (provider === "openai") {
-    const k = getOpenaiApiKey();
-    if (!k) {
-      throw new Error(
-        "当前供应商为 OpenAI：请在设置中填写 OpenAI API Key（可选自定义 Base URL，默认 https://api.openai.com/v1），或改选其它供应商。"
-      );
-    }
-    return createOpenAiGeminiClient(getOpenaiBaseUrl(), k) as unknown as GeminiClientLike;
-  }
-
-  const proxyClient: GeminiClientLike = {
+function createBulkProxyGeminiClient(): GeminiClientLike {
+  return {
     models: {
       async generateContent(args) {
         return bulkProxyGenerateContentAsync({
@@ -708,31 +666,129 @@ const getAI = (): GeminiClientLike => {
       },
     },
   };
+}
 
-  if (provider === "trial") {
-    if (!BULK_BASE) {
-      throw new Error(
-        "当前供应商为试用：请配置 VITE_BULK_IMAGE_API（指向可用的 gemini-proxy）。"
-      );
+function geminiImageBulkProxyConfigured(): boolean {
+  return Boolean(BULK_BASE || effectiveBulkBase());
+}
+
+function getClientForChannel(channel: ChannelId): GeminiClientLike {
+  switch (channel) {
+    case "vertex-proxy":
+      if (!geminiImageBulkProxyConfigured()) {
+        throw new Error("Vertex 代理未配置：需站点 VITE_BULK_IMAGE_API_VERTEX 或 VITE_BULK_IMAGE_API。");
+      }
+      return createBulkProxyGeminiClient();
+    case "gemini-aistudio": {
+      const apiKey = getUserApiKey();
+      if (!apiKey?.trim()) {
+        throw new Error("使用 Gemini AI Studio 需先在设置中填写 Gemini API Key。");
+      }
+      return new GoogleGenAI({ apiKey }) as unknown as GeminiClientLike;
     }
-    return proxyClient;
-  }
-
-  if (provider === "vertex") {
-    if (!effectiveBulkBase()) {
-      throw new Error(
-        "当前供应商为 Vertex AI：请在构建环境配置 VITE_BULK_IMAGE_API 或（推荐）VITE_BULK_IMAGE_API_VERTEX 指向已在服务器配置 Vertex+ADC 的 gemini-proxy，并在该代理上设置 VERTEX_PROJECT_ID 或 GOOGLE_CLOUD_PROJECT 与 ADC。说明见 docs/VERTEX_AI_INTEGRATION.md"
-      );
+    case "toapis-gemini": {
+      const k = getToapisApiKey();
+      if (!k?.trim()) {
+        throw new Error("ToAPIs Gemini 路径需先在设置中填写 ToAPIs API Key。");
+      }
+      return createToapisGeminiClient(getToapisBaseUrl(), k) as unknown as GeminiClientLike;
     }
-    return proxyClient;
+    case "toapis-openai": {
+      const k = getToapisApiKey();
+      if (!k?.trim()) {
+        throw new Error("ToAPIs OpenAI 路径需先在设置中填写 ToAPIs API Key。");
+      }
+      return createOpenAiGeminiClient(getToapisBaseUrl(), k) as unknown as GeminiClientLike;
+    }
+    case "vectorengine": {
+      const k = getVectorengineApiKey();
+      if (!k?.trim()) {
+        throw new Error("VectorEngine 通道需先在设置中填写 API Key。");
+      }
+      return createVectorengineGeminiClient(getVectorengineBaseUrl(), k) as unknown as GeminiClientLike;
+    }
+    case "openai-official": {
+      const k = getOpenaiApiKey();
+      if (!k?.trim()) {
+        throw new Error("OpenAI 官方通道需先在设置中填写 OpenAI API Key。");
+      }
+      return createOpenAiGeminiClient(getOpenaiBaseUrl(), k) as unknown as GeminiClientLike;
+    }
   }
+}
 
+/** 生图按 registryId 的 binding 选 channel */
+function getAIForImageModel(registryId: string): GeminiClientLike {
+  const id = coerceImageModelRegistryId(registryId);
+  const picked = pickBinding(id, "image");
+  if (picked) return getClientForChannel(picked.channel);
+  const route = imageModelProviderRoute(id);
+  if (route === "openai") {
+    const k = getOpenaiApiKey();
+    if (!k) {
+      throw new Error("使用 OpenAI 生图模型需先在设置中填写 OpenAI API Key。");
+    }
+    return createOpenAiGeminiClient(getOpenaiBaseUrl(), k) as unknown as GeminiClientLike;
+  }
   const apiKey = getUserApiKey();
   if (apiKey) {
     return new GoogleGenAI({ apiKey }) as unknown as GeminiClientLike;
   }
-  throw new Error("当前供应商为 Google Gemini：请在设置页填写 Gemini API Key，或切换到「试用（代理）」/「Vertex AI」。");
-};
+  if (geminiImageBulkProxyConfigured()) {
+    return createBulkProxyGeminiClient();
+  }
+  throw new Error(
+    "使用 Gemini 生图模型需先在设置中填写 Gemini API Key，或配置 Vertex 代理（VITE_BULK_IMAGE_API）。"
+  );
+}
+
+/** 文本/理解：按 registryId + binding 取客户端 */
+export function getClientForTask(registryId: string, role: "text" | "image" = "text"): GeminiClientLike {
+  const id = (registryId || "").trim() || DEFAULT_MODEL_TEXT;
+  const picked = pickBinding(id, role);
+  if (picked) return getClientForChannel(picked.channel);
+  if (role === "image") return getAIForImageModel(id);
+  if (getAiProvider() === "trial") {
+    if (!BULK_BASE) {
+      throw new Error("试用模式需配置 VITE_BULK_IMAGE_API（指向可用的 gemini-proxy）。");
+    }
+    return createBulkProxyGeminiClient();
+  }
+  throw new Error(
+    "无可用文本通道：请在设置 → API 供应商中启用 Vertex / ToAPIs 等通道并填写密钥。"
+  );
+}
+
+function shouldUseBulkImageBatchQueueForModel(registryId: string): boolean {
+  const picked = pickBinding(coerceImageModelRegistryId(registryId), "image");
+  if (picked?.channel === "vertex-proxy" && !getUserApiKey()?.trim()) {
+    return geminiImageBulkProxyConfigured();
+  }
+  if (picked?.channel === "gemini-aistudio" && !getUserApiKey()?.trim()) {
+    return false;
+  }
+  if (!picked) {
+    if (getUserApiKey()?.trim()) return false;
+    return geminiImageBulkProxyConfigured();
+  }
+  return false;
+}
+
+function imageGenTimeoutMsForModel(registryId: string, baseTimeout: number): number {
+  if (shouldUseBulkImageBatchQueueForModel(registryId)) {
+    return Math.max(baseTimeout, GEMINI_VERTEX_IMAGE_TIMEOUT_MS);
+  }
+  const route = imageModelProviderRoute(coerceImageModelRegistryId(registryId));
+  if (route === "gemini" && !getUserApiKey()?.trim() && geminiImageBulkProxyConfigured()) {
+    return Math.max(baseTimeout, GEMINI_VERTEX_IMAGE_TIMEOUT_MS);
+  }
+  return baseTimeout;
+}
+
+/**
+ * 全站统一入口：对话、工作流/能力执行、贴图、擂台、站点助手等通过 binding 取客户端。
+ */
+const getAI = (): GeminiClientLike => getClientForTask(DEFAULT_MODEL_TEXT, "text");
 
 export interface GeminiRequestOptions {
   abortSignal?: AbortSignal;
@@ -1126,10 +1182,13 @@ const IMAGE_GEN_RETRY_DELAY_MS = 6000;
 const BULK_PROXY_IMAGE_TIMEOUT_MS = 600_000;
 
 /** 外层 withGeminiRequestControl 不得短于 Vertex/trial 内层 SDK 超时，否则会先被客户端掐断 */
-function effectiveImageGenControlTimeoutMs(baseTimeout: number, useLongBulkWait: boolean): number {
-  const provider = getAiProvider();
+function effectiveImageGenControlTimeoutMs(
+  baseTimeout: number,
+  useLongBulkWait: boolean,
+  registryId: string
+): number {
   const vertexOrTrialFloor =
-    provider === "trial" || provider === "vertex"
+    useLongBulkWait || usesVertexProxyForImage(registryId) || getAiProvider() === "trial"
       ? Math.max(baseTimeout, GEMINI_VERTEX_IMAGE_TIMEOUT_MS)
       : baseTimeout;
   return useLongBulkWait ? Math.max(vertexOrTrialFloor, BULK_PROXY_IMAGE_TIMEOUT_MS) : vertexOrTrialFloor;
@@ -1137,7 +1196,7 @@ function effectiveImageGenControlTimeoutMs(baseTimeout: number, useLongBulkWait:
 
 function shouldFallbackUnderstandToBrowserGemini(error: unknown): boolean {
   if (!BULK_BASE) return false;
-  if (getAiProvider() !== "gemini") return false;
+  if (pickChannel(DEFAULT_MODEL_TEXT, "text") !== "gemini-aistudio") return false;
   if (!getUserApiKey()) return false;
   const msg = String((error as Error)?.message ?? error ?? "");
   return (
@@ -1531,7 +1590,7 @@ export async function describeImageSubject(
 export async function processTexture(base64Image, type: 'pattern' | 'tileable' | 'pbr', mapType = '', model = 'gemini-2.5-flash-image', customPrompt?: string, options?: GeminiRequestOptions) {
   // 贴图生成属于高成本/可能计费请求，失败后不自动重放，避免重复生成。
   return callWithRetry(async (signal) => {
-    const ai = getAI();
+    const ai = getAIForImageModel(model);
     let prompt = customPrompt || '';
     
     if (type === 'pattern') prompt = prompt || DEFAULT_PROMPTS.texture_pattern;
@@ -1539,7 +1598,7 @@ export async function processTexture(base64Image, type: 'pattern' | 'tileable' |
     if (type === 'pbr') prompt = (prompt || DEFAULT_PROMPTS.texture_pbr).replace('{mapType}', mapType);
 
     const timeoutMs = options?.timeoutMs ?? GEMINI_IMAGE_REQUEST_TIMEOUT_MS;
-    const imageModel = resolveUpstreamImageModelId(model);
+    const imageModel = resolveUpstreamImageModelIdForRegistry(model);
     const response = await ai.models.generateContent({
       model: imageModel,
       contents: [
@@ -1668,18 +1727,14 @@ export async function dialogGenerateImage(
   requestOptions?: Omit<GeminiRequestOptions, 'abortSignal'> & GeminiImageBatchGroupOptions
 ): Promise<string> {
   const baseTimeout = requestOptions?.timeoutMs ?? GEMINI_IMAGE_REQUEST_TIMEOUT_MS;
-  const useBulkImageQueue = shouldUseBulkImageBatchQueue();
-  const controlTimeoutMs = effectiveImageGenControlTimeoutMs(baseTimeout, useBulkImageQueue);
+  const useBulkImageQueue = shouldUseBulkImageBatchQueueForModel(model);
+  const controlTimeoutMs = effectiveImageGenControlTimeoutMs(baseTimeout, useBulkImageQueue, model);
   // 429/503/UNAVAILABLE 等自动退避重试；成功返回图片后不会再次请求。
   return callWithRetry(async (signal) => {
-    const ai = getAI();
-    const provider = getAiProvider();
+    const ai = getAIForImageModel(model);
     const isTextToImage = !imageBase64;
     const systemInstruction = (customSystemPrompt || (isTextToImage ? DEFAULT_PROMPTS.dialog_text_to_image : DEFAULT_PROMPTS.edit)).replace('{instruction}', instruction);
-    const timeoutMs =
-      provider === "trial" || provider === "vertex"
-        ? Math.max(baseTimeout, GEMINI_VERTEX_IMAGE_TIMEOUT_MS)
-        : baseTimeout;
+    const timeoutMs = imageGenTimeoutMsForModel(model, baseTimeout);
     const config: { systemInstruction: string; imageConfig?: { aspectRatio?: string; imageSize?: string } } = {
       systemInstruction
     };
@@ -1702,7 +1757,7 @@ export async function dialogGenerateImage(
         throw new Error(buildDiagMessage("INPUT_IMAGE_EMPTY", "输入图片为空或 base64 无效"));
       }
     }
-    const resolvedImageModel = resolveUpstreamImageModelId(model);
+    const resolvedImageModel = resolveUpstreamImageModelIdForRegistry(model);
     const payload = {
       model: resolvedImageModel,
       contents: [{ role: 'user' as const, parts }],
@@ -1722,7 +1777,7 @@ export async function dialogGenerateImage(
       return images[0];
     }
     const textPart = response.candidates?.[0]?.content?.parts?.find((p: { text?: string }) => p.text);
-    const hint = textPart?.text?.slice(0, 120) ? `（模型返回了文字: ${String(textPart.text).slice(0, 120)}…）` : '（当前模型可能不支持图像输出，请换用「快速」或「Pro」挡位）';
+    const hint = textPart?.text?.slice(0, 120) ? `（模型返回了文字: ${String(textPart.text).slice(0, 120)}…）` : '（当前模型可能不支持图像输出，请换用其它生图模型）';
     throw new Error(buildDiagMessage("NO_INLINE_IMAGE_FOUND", `生图未返回图片${hint}`));
   }, {
     ...requestOptions,
@@ -1748,16 +1803,13 @@ export async function dialogGenerateImages(
   requestOptions?: Omit<GeminiRequestOptions, 'abortSignal'>
 ): Promise<string[]> {
   const baseTimeout = requestOptions?.timeoutMs ?? GEMINI_IMAGE_REQUEST_TIMEOUT_MS;
-  const controlTimeoutMs = effectiveImageGenControlTimeoutMs(baseTimeout, Boolean(effectiveBulkBase()));
+  const useBulkImageQueue = shouldUseBulkImageBatchQueueForModel(model);
+  const controlTimeoutMs = effectiveImageGenControlTimeoutMs(baseTimeout, useBulkImageQueue, model);
   return callWithRetry(async (signal) => {
-    const ai = getAI();
-    const provider = getAiProvider();
+    const ai = getAIForImageModel(model);
     const isTextToImage = !imageBase64;
     const systemInstruction = (customSystemPrompt || (isTextToImage ? DEFAULT_PROMPTS.dialog_text_to_image : DEFAULT_PROMPTS.edit)).replace('{instruction}', instruction);
-    const timeoutMs =
-      provider === "trial" || provider === "vertex"
-        ? Math.max(baseTimeout, GEMINI_VERTEX_IMAGE_TIMEOUT_MS)
-        : baseTimeout;
+    const timeoutMs = imageGenTimeoutMsForModel(model, baseTimeout);
     const config: { systemInstruction: string; imageConfig?: { aspectRatio?: string; imageSize?: string } } = {
       systemInstruction
     };
@@ -1780,7 +1832,7 @@ export async function dialogGenerateImages(
         throw new Error(buildDiagMessage("INPUT_IMAGE_EMPTY", "输入图片为空或 base64 无效"));
       }
     }
-    const resolvedImageModel = resolveUpstreamImageModelId(model);
+    const resolvedImageModel = resolveUpstreamImageModelIdForRegistry(model);
     const response = await ai.models.generateContent({
       model: resolvedImageModel,
       contents: [{ role: 'user' as const, parts }],
@@ -1814,16 +1866,14 @@ export async function dialogGenerateImageMulti(
   requestOptions?: Omit<GeminiRequestOptions, 'abortSignal'>
 ): Promise<string> {
   if (imagesBase64.length === 0) throw new Error('多图生图至少需要一张图片');
+  const modelId = 'gemini-2.5-flash-image';
   const baseTimeout = requestOptions?.timeoutMs ?? GEMINI_IMAGE_REQUEST_TIMEOUT_MS;
-  const controlTimeoutMs = effectiveImageGenControlTimeoutMs(baseTimeout, Boolean(effectiveBulkBase()));
+  const useBulkImageQueue = shouldUseBulkImageBatchQueueForModel(modelId);
+  const controlTimeoutMs = effectiveImageGenControlTimeoutMs(baseTimeout, useBulkImageQueue, model);
   return callWithRetry(async (signal) => {
-    const ai = getAI();
-    const provider = getAiProvider();
+    const ai = getAIForImageModel(modelId);
     const systemInstruction = (DEFAULT_PROMPTS.edit || '').replace('{instruction}', instruction);
-    const timeoutMs =
-      provider === "trial" || provider === "vertex"
-        ? Math.max(baseTimeout, GEMINI_VERTEX_IMAGE_TIMEOUT_MS)
-        : baseTimeout;
+    const timeoutMs = imageGenTimeoutMsForModel(modelId, baseTimeout);
     const config: { systemInstruction: string; imageConfig?: { aspectRatio?: string; imageSize?: string } } = {
       systemInstruction
     };
@@ -1840,7 +1890,7 @@ export async function dialogGenerateImageMulti(
       throw new Error(buildDiagMessage("INPUT_IMAGE_EMPTY", "多图输入中存在空图片或无效 base64"));
     }
     parts.push({ text: instruction });
-    const resolvedImageModel = resolveUpstreamImageModelId(model);
+    const resolvedImageModel = resolveUpstreamImageModelIdForRegistry(model);
     const response = await ai.models.generateContent({
       model: resolvedImageModel,
       contents: [{ role: 'user' as const, parts }],
@@ -2301,8 +2351,9 @@ export async function generatePBRTexture(
   options?: GeminiRequestOptions
 ): Promise<string> {
   return callWithRetry(async (signal) => {
-    const ai = getAI();
-    const imageModel = resolveUpstreamImageModelId('gemini-2.5-flash-image');
+    const modelId = 'gemini-2.5-flash-image';
+    const ai = getAIForImageModel(modelId);
+    const imageModel = resolveUpstreamImageModelIdForRegistry(modelId);
     const parts: { inlineData?: { mimeType: string; data: string }; text?: string }[] = [];
 
     functionalMaps.forEach((map) => {

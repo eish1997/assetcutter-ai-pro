@@ -1,6 +1,9 @@
 import type { CapabilitySet, CustomAppModule } from '../types';
 import { r2ApiUrl } from './apiBase';
 import { requestJson } from './httpClient';
+import { normalizeEnabledAiProviders, type ConfigurableAiProvider } from './aiProviderCatalog';
+import { normalizeEnabledChannels } from './modelRegistry/channelCatalog';
+import type { ChannelId } from './modelRegistry/types';
 import type { AiProvider } from './settingsStore';
 import { sanitizeAvatarUrl } from './userUiPrefs';
 import { workspaceRootPrefix } from './workspaceCloudSync';
@@ -26,6 +29,8 @@ export type WorkspaceUserCloudConfig = {
     dialogSkipUnderstand: boolean;
     workspaceAutoSyncEnabled: boolean;
     aiProvider: AiProvider;
+    enabledAiProviders: ConfigurableAiProvider[];
+    enabledChannels?: ChannelId[];
     geminiApiKey: string;
     toapisApiKey: string;
     toapisBaseUrl: string;
@@ -250,8 +255,10 @@ export async function fetchWorkspaceUserCloudConfig(
             return ap as AiProvider;
           }
           if (ap === 'gemini') return 'gemini';
-          return 'trial';
+          return 'gemini';
         })(),
+        enabledAiProviders: normalizeEnabledAiProviders(parsed.settings?.enabledAiProviders),
+        enabledChannels: normalizeEnabledChannels(parsed.settings?.enabledChannels),
         geminiApiKey: String(parsed.settings?.geminiApiKey || ''),
         toapisApiKey: String(parsed.settings?.toapisApiKey || ''),
         toapisBaseUrl: String(parsed.settings?.toapisBaseUrl || ''),
@@ -301,8 +308,10 @@ export async function pushWorkspaceUserCloudConfig(
           return ap as AiProvider;
         }
         if (ap === 'gemini') return 'gemini';
-        return 'trial';
+        return 'gemini';
       })(),
+      enabledAiProviders: normalizeEnabledAiProviders(input.settings.enabledAiProviders),
+      enabledChannels: normalizeEnabledChannels(input.settings.enabledChannels),
       geminiApiKey: String(input.settings.geminiApiKey || ''),
       toapisApiKey: String(input.settings.toapisApiKey || ''),
       toapisBaseUrl: String(input.settings.toapisBaseUrl || ''),

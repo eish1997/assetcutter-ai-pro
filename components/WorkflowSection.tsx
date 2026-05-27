@@ -31,7 +31,7 @@ import type {
   VgpGenStepCapture,
   ImageOverlayAnnotationDoc,
 } from '../types';
-import { maxReferenceImagesForImageGear } from '../types';
+import { maxReferenceImagesForImageModel } from '../types';
 import type { CustomAppModule } from '../types';
 import type { BoundingBox } from '../types';
 import { getRandomGroupCodeName } from '../data/groupCodeNames';
@@ -45,7 +45,10 @@ import {
 } from '../services/unifiedAiGateway';
 import { detectGrid } from '../services/gridDetector';
 import { DEFAULT_MODEL_TEXT } from '../services/modelRegistry/constants';
-import { resolveDialogImageModelIdForGear } from '../services/modelRegistry/imageModels';
+import {
+  coerceImageModelRegistryId,
+  DEFAULT_IMAGE_MODEL_REGISTRY_ID,
+} from '../services/modelRegistry/imageModels';
 import {
   executeCapability,
   executeCapabilitySet,
@@ -329,6 +332,8 @@ type WorkflowPendingTaskOptions = {
   sourceGroupAssetId?: string;
   sourceItemIndex?: number;
   inputText?: string;
+  overrideImageModelRegistryId?: string;
+  /** @deprecated */
   overrideImageGear?: CustomAppModule['imageGear'];
   overrideImageAspectRatio?: string;
   overrideImageSize?: string;
@@ -338,6 +343,8 @@ type WorkflowPendingTaskOptions = {
 };
 
 type WorkflowGroupOverrides = {
+  imageModelRegistryId?: string;
+  /** @deprecated */
   imageGear?: CustomAppModule['imageGear'];
   imageAspectRatio?: string;
   imageSize?: string;
@@ -956,7 +963,7 @@ const WorkflowSection: React.FC<{
   /** 无拖入预设卡片时：文 / 图 / 3D 独立快捷逻辑（不读侧栏「上次预设」） */
   const [quickComposeMode, setQuickComposeMode] = useState<WorkspaceQuickComposeComposeMode>('image');
   /** 快捷栏生成设置（覆盖入队任务的档位/比例/尺寸；张数见 normalizeWorkflowGenerateCount） */
-  const [quickComposeGear, setQuickComposeGear] = useState<string>('standard');
+  const [quickComposeImageModel, setQuickComposeImageModel] = useState<string>(DEFAULT_IMAGE_MODEL_REGISTRY_ID);
   const [quickComposeAspect, setQuickComposeAspect] = useState('adaptive');
   const [quickComposeSize, setQuickComposeSize] = useState('');
   const [quickComposeCount, setQuickComposeCount] = useState(1);
@@ -989,12 +996,8 @@ const WorkflowSection: React.FC<{
   const getQuickComposeMaxRefs = useCallback(() => {
     if (quickComposeMode === 'text') return 10;
     if (quickComposeMode === '3d') return 1;
-    const g =
-      quickComposeGear === 'fast' || quickComposeGear === 'standard' || quickComposeGear === 'pro'
-        ? quickComposeGear
-        : 'standard';
-    return maxReferenceImagesForImageGear(g);
-  }, [quickComposeMode, quickComposeGear]);
+    return maxReferenceImagesForImageModel(quickComposeImageModel);
+  }, [quickComposeMode, quickComposeImageModel]);
   const lightboxQuickComposeBootRef = useRef<string | null>(null);
   const [showAllInGroup, setShowAllInGroup] = useState(false);
   /** 组筛选 ID：用于查看组内资产 */
@@ -1846,7 +1849,13 @@ ${lineSvg}
         addedAt: Date.now(),
         inputSourceDisplayKey: asset.displayKey,
         ...(options?.promptOverride != null ? { promptOverride: options.promptOverride } : {}),
-        ...(options?.overrideImageGear ? { overrideImageGear: options.overrideImageGear } : {}),
+        ...(options?.overrideImageModelRegistryId || options?.overrideImageGear
+          ? {
+              overrideImageModelRegistryId: coerceImageModelRegistryId(
+                options.overrideImageModelRegistryId ?? options.overrideImageGear
+              ),
+            }
+          : {}),
         ...(options?.overrideImageAspectRatio ? { overrideImageAspectRatio: options.overrideImageAspectRatio } : {}),
         ...(options?.overrideImageSize ? { overrideImageSize: options.overrideImageSize } : {}),
         ...(typeof options?.overrideSkipUnderstand === 'boolean'
@@ -2234,7 +2243,13 @@ ${lineSvg}
             ...(task.logContext === 'quick_compose_bar_plain'
               ? { label: WORKFLOW_QUICK_COMPOSE_PLAIN_LOG_LABEL }
               : {}),
-            ...(task.overrideImageGear ? { imageGear: task.overrideImageGear } : {}),
+            ...(task.overrideImageModelRegistryId || task.overrideImageGear
+              ? {
+                  imageModelRegistryId: coerceImageModelRegistryId(
+                    task.overrideImageModelRegistryId ?? task.overrideImageGear
+                  ),
+                }
+              : {}),
             ...(task.overrideImageAspectRatio ? { imageAspectRatio: task.overrideImageAspectRatio } : {}),
             ...(task.overrideImageSize &&
             !(task.displayStepLabel === '局部重绘' && task.lightboxAwaitClientResult)
@@ -2995,10 +3010,7 @@ ${lineSvg}
       const o: WorkflowPendingTaskOptions = {};
       const eng = getCapabilityEngine(m);
       if (eng === 'gen_image') {
-        o.overrideImageGear =
-          quickComposeGear === 'fast' || quickComposeGear === 'standard' || quickComposeGear === 'pro'
-            ? quickComposeGear
-            : 'standard';
+        o.overrideImageModelRegistryId = coerceImageModelRegistryId(quickComposeImageModel);
         if (quickComposeAspect && quickComposeAspect !== 'adaptive') {
           o.overrideImageAspectRatio = quickComposeAspect;
         }
@@ -3052,7 +3064,7 @@ ${lineSvg}
       for (const { card, mod: m } of cardRows) {
         const ins = String(card.instruction ?? '').trim();
         const pieceText = [ins, userText].filter(Boolean).join('\n\n').trim();
-        const maxRef = maxReferenceImagesForImageGear(m.imageGear);
+        const maxRef = maxReferenceImagesForImageModel(m.imageModelRegistryId ?? m.imageGear);
         const imgs = imgsAll.slice(0, maxRef);
         const countN = quickComposeCountForMod(m);
         const taskOverrides = buildQuickComposeGenOverrides(m);
@@ -3314,7 +3326,7 @@ ${lineSvg}
       return;
     }
 
-    const maxRef = maxReferenceImagesForImageGear(plainImgMod.imageGear);
+    const maxRef = maxReferenceImagesForImageModel(plainImgMod.imageModelRegistryId ?? plainImgMod.imageGear);
     const imgs = imgsAll.slice(0, maxRef);
     const first = imgs[0]!;
     const reuseId = invoke?.reuseAssetId?.trim();
@@ -3387,7 +3399,7 @@ ${lineSvg}
     quickComposePromptCards,
     getQuickComposeMaxRefs,
     getAssetDisplayImage,
-    quickComposeGear,
+    quickComposeImageModel,
     quickComposeAspect,
     quickComposeSize,
     quickComposeCount,
@@ -3498,10 +3510,7 @@ ${lineSvg}
     const taskOverrides: WorkflowPendingTaskOptions = {};
     const eng = getCapabilityEngine(plainImgMod);
     if (eng === 'gen_image') {
-      taskOverrides.overrideImageGear =
-        quickComposeGear === 'fast' || quickComposeGear === 'standard' || quickComposeGear === 'pro'
-          ? quickComposeGear
-          : 'standard';
+      taskOverrides.overrideImageModelRegistryId = coerceImageModelRegistryId(quickComposeImageModel);
       if (quickComposeAspect && quickComposeAspect !== 'adaptive') {
         taskOverrides.overrideImageAspectRatio = quickComposeAspect;
       }
@@ -3585,11 +3594,7 @@ ${lineSvg}
             if (!plan) {
               onLog?.('warn', '大图预览：全景局部裁切失败，将按整图继续');
             } else {
-              const gear =
-                quickComposeGear === 'fast' || quickComposeGear === 'standard' || quickComposeGear === 'pro'
-                  ? quickComposeGear
-                  : 'standard';
-              const modelId = resolveDialogImageModelIdForGear(gear);
+              const modelId = coerceImageModelRegistryId(quickComposeImageModel);
               const instruction = buildLocalInpaintInstruction(partialResolved.userPrompt, localInpaintSizeLabel);
               const genUrl = await workflowGenerateImage(
                 plan.cropDataUrl,
@@ -3624,11 +3629,7 @@ ${lineSvg}
             if (!plan) {
               onLog?.('warn', '大图预览：局部重绘裁切失败，将按整图继续');
             } else {
-              const gear =
-                quickComposeGear === 'fast' || quickComposeGear === 'standard' || quickComposeGear === 'pro'
-                  ? quickComposeGear
-                  : 'standard';
-              const modelId = resolveDialogImageModelIdForGear(gear);
+              const modelId = coerceImageModelRegistryId(quickComposeImageModel);
               const instruction = buildLocalInpaintInstruction(partialResolved.userPrompt, localInpaintSizeLabel);
               const genUrl = await workflowGenerateImage(
                 plan.cropDataUrl,
@@ -3748,7 +3749,7 @@ ${lineSvg}
   }, [
     getLightboxPreviewImageSrc,
     onLog,
-    quickComposeGear,
+    quickComposeImageModel,
     quickComposeAspect,
     quickComposeSize,
     quickComposeUnderstand,
@@ -6238,6 +6239,8 @@ ${lineSvg}
         sourceGroupAssetId?: string;
         sourceItemIndex?: number;
         promptOverride?: string;
+        overrideImageModelRegistryId?: string;
+        /** @deprecated */
         overrideImageGear?: CustomAppModule['imageGear'];
         overrideImageAspectRatio?: string;
         overrideImageSize?: string;
@@ -6288,7 +6291,13 @@ ${lineSvg}
           addedAt: Date.now(),
           inputSourceDisplayKey: 'original',
           ...(opts?.promptOverride != null ? { promptOverride: opts.promptOverride } : {}),
-          ...(opts?.overrideImageGear ? { overrideImageGear: opts.overrideImageGear } : {}),
+          ...(opts?.overrideImageModelRegistryId || opts?.overrideImageGear
+            ? {
+                overrideImageModelRegistryId: coerceImageModelRegistryId(
+                  opts.overrideImageModelRegistryId ?? opts.overrideImageGear
+                ),
+              }
+            : {}),
           ...(opts?.overrideImageAspectRatio ? { overrideImageAspectRatio: opts.overrideImageAspectRatio } : {}),
           ...(opts?.overrideImageSize ? { overrideImageSize: opts.overrideImageSize } : {}),
           ...(typeof opts?.overrideSkipUnderstand === 'boolean'
@@ -6559,22 +6568,17 @@ ${lineSvg}
     if (quickComposeMode !== 'image') return null;
     const base = getQuickComposePlainModule(QUICK_COMPOSE_PLAIN_T2I_ACTION_ID);
     if (!base) return null;
-    const g =
-      quickComposeGear === 'fast' || quickComposeGear === 'standard' || quickComposeGear === 'pro'
-        ? quickComposeGear
-        : 'standard';
-    return { ...base, imageGear: g };
-  }, [quickComposeMode, quickComposeGear]);
+    return {
+      ...base,
+      imageModelRegistryId: coerceImageModelRegistryId(quickComposeImageModel),
+    };
+  }, [quickComposeMode, quickComposeImageModel]);
 
   const quickComposeMaxReferenceImages = useMemo(() => {
     if (quickComposeMode === 'text') return 10;
     if (quickComposeMode === '3d') return 1;
-    const g =
-      quickComposeGear === 'fast' || quickComposeGear === 'standard' || quickComposeGear === 'pro'
-        ? quickComposeGear
-        : 'standard';
-    return maxReferenceImagesForImageGear(g);
-  }, [quickComposeMode, quickComposeGear]);
+    return maxReferenceImagesForImageModel(quickComposeImageModel);
+  }, [quickComposeMode, quickComposeImageModel]);
 
   const lightboxCurrentViewPreviewSrc = useMemo(() => {
     if (!lightboxAssetId) return '';
@@ -7759,7 +7763,13 @@ ${lineSvg}
       const queueOverrideOptions =
         groupOverrides && getCapabilityEngine(mod) === 'gen_image'
           ? {
-              ...(groupOverrides.imageGear ? { overrideImageGear: groupOverrides.imageGear } : {}),
+              ...(groupOverrides.imageModelRegistryId || groupOverrides.imageGear
+                ? {
+                    overrideImageModelRegistryId: coerceImageModelRegistryId(
+                      groupOverrides.imageModelRegistryId ?? groupOverrides.imageGear
+                    ),
+                  }
+                : {}),
               ...(groupOverrides.imageAspectRatio ? { overrideImageAspectRatio: groupOverrides.imageAspectRatio } : {}),
               ...(groupOverrides.imageSize ? { overrideImageSize: groupOverrides.imageSize } : {}),
               ...(typeof groupOverrides.understand === 'boolean'
@@ -10614,7 +10624,7 @@ ${lineSvg}
         !isGroupAsset(lightboxAsset) &&
         typeof document !== 'undefined' &&
         createPortal(
-          <div className="pointer-events-none fixed inset-0 z-[2200]">
+          <div className="pointer-events-none fixed inset-0 z-[2400]">
             <ImageAnnotationLightboxToolbar
               tool={lightboxOverlayTool}
               onToolChange={applyLightboxToolChange}
@@ -10748,8 +10758,8 @@ ${lineSvg}
             promptCards={[]}
             onRemovePromptCard={() => {}}
             genSettings={{
-              gearId: quickComposeGear,
-              onGearId: setQuickComposeGear,
+              imageModelRegistryId: quickComposeImageModel,
+              onImageModelRegistryId: setQuickComposeImageModel,
               aspectRatio: quickComposeAspect,
               onAspectRatio: setQuickComposeAspect,
               imageSize: quickComposeSize,
@@ -11226,7 +11236,13 @@ ${lineSvg}
             }
             const taskOptions: WorkflowPendingTaskOptions = {
               ...(promptForExecution ? { promptOverride: promptForExecution } : {}),
-              ...(promptTweakModal.overrides?.imageGear ? { overrideImageGear: promptTweakModal.overrides.imageGear } : {}),
+              ...(promptTweakModal.overrides?.imageModelRegistryId || promptTweakModal.overrides?.imageGear
+                ? {
+                    overrideImageModelRegistryId: coerceImageModelRegistryId(
+                      promptTweakModal.overrides.imageModelRegistryId ?? promptTweakModal.overrides.imageGear
+                    ),
+                  }
+                : {}),
               ...(promptTweakModal.overrides?.imageAspectRatio ? { overrideImageAspectRatio: promptTweakModal.overrides.imageAspectRatio } : {}),
               ...(promptTweakModal.overrides?.imageSize ? { overrideImageSize: promptTweakModal.overrides.imageSize } : {}),
               ...(typeof promptTweakModal.overrides?.understand === 'boolean'
@@ -11250,7 +11266,13 @@ ${lineSvg}
                   addedAt: Date.now(),
                   ...(t.inputSourceDisplayKey != null ? { inputSourceDisplayKey: t.inputSourceDisplayKey } : {}),
                   ...(taskOptions.promptOverride != null ? { promptOverride: taskOptions.promptOverride } : {}),
-                  ...(taskOptions.overrideImageGear ? { overrideImageGear: taskOptions.overrideImageGear } : {}),
+                  ...(taskOptions.overrideImageModelRegistryId || taskOptions.overrideImageGear
+                    ? {
+                        overrideImageModelRegistryId: coerceImageModelRegistryId(
+                          taskOptions.overrideImageModelRegistryId ?? taskOptions.overrideImageGear
+                        ),
+                      }
+                    : {}),
                   ...(taskOptions.overrideImageAspectRatio ? { overrideImageAspectRatio: taskOptions.overrideImageAspectRatio } : {}),
                   ...(taskOptions.overrideImageSize ? { overrideImageSize: taskOptions.overrideImageSize } : {}),
                   ...(typeof taskOptions.overrideSkipUnderstand === 'boolean'
@@ -11275,7 +11297,13 @@ ${lineSvg}
                         addedAt: Date.now(),
                         ...(t.inputSourceDisplayKey != null ? { inputSourceDisplayKey: t.inputSourceDisplayKey } : {}),
                         ...(taskOptions.promptOverride != null ? { promptOverride: taskOptions.promptOverride } : {}),
-                        ...(taskOptions.overrideImageGear ? { overrideImageGear: taskOptions.overrideImageGear } : {}),
+                        ...(taskOptions.overrideImageModelRegistryId || taskOptions.overrideImageGear
+                    ? {
+                        overrideImageModelRegistryId: coerceImageModelRegistryId(
+                          taskOptions.overrideImageModelRegistryId ?? taskOptions.overrideImageGear
+                        ),
+                      }
+                    : {}),
                         ...(taskOptions.overrideImageAspectRatio ? { overrideImageAspectRatio: taskOptions.overrideImageAspectRatio } : {}),
                         ...(taskOptions.overrideImageSize ? { overrideImageSize: taskOptions.overrideImageSize } : {}),
                         ...(typeof taskOptions.overrideSkipUnderstand === 'boolean'
@@ -11295,7 +11323,13 @@ ${lineSvg}
                     sourceGroupAssetId: t.sourceGroupAssetId,
                     sourceItemIndex: t.sourceItemIndex,
                     ...(taskOptions.promptOverride != null ? { promptOverride: taskOptions.promptOverride } : {}),
-                    ...(taskOptions.overrideImageGear ? { overrideImageGear: taskOptions.overrideImageGear } : {}),
+                    ...(taskOptions.overrideImageModelRegistryId || taskOptions.overrideImageGear
+                    ? {
+                        overrideImageModelRegistryId: coerceImageModelRegistryId(
+                          taskOptions.overrideImageModelRegistryId ?? taskOptions.overrideImageGear
+                        ),
+                      }
+                    : {}),
                     ...(taskOptions.overrideImageAspectRatio ? { overrideImageAspectRatio: taskOptions.overrideImageAspectRatio } : {}),
                     ...(taskOptions.overrideImageSize ? { overrideImageSize: taskOptions.overrideImageSize } : {}),
                     ...(typeof taskOptions.overrideSkipUnderstand === 'boolean'
@@ -11377,8 +11411,8 @@ ${lineSvg}
               setQuickComposePromptCards((prev) => prev.filter((c) => c.key !== key))
             }
             genSettings={{
-              gearId: quickComposeGear,
-              onGearId: setQuickComposeGear,
+              imageModelRegistryId: quickComposeImageModel,
+              onImageModelRegistryId: setQuickComposeImageModel,
               aspectRatio: quickComposeAspect,
               onAspectRatio: setQuickComposeAspect,
               imageSize: quickComposeSize,

@@ -1,6 +1,6 @@
 # modelRegistry
 
-多模型注册表与运营合并（见 `docs/多模型可运营改造计划.md`）。工作流侧「门面→编排→闸门」键值与 **`WorkflowSection.runTask`** 分支判定见 **`services/workflowRunTaskBranch.ts`**（**`classifyWorkflowRunTaskBranch`**）；总索引见 **`services/workflowAiPickIndex.ts`**（及 **`docs/多模型可运营改造计划.md` §1.4**）。
+多模型注册表与运营合并（见 `docs/多模型可运营改造计划.md`）。**下一阶段（规划）**：模型中心 + 供应商 Binding → `docs/模型中心与供应商绑定改造清单.md`。工作流侧「门面→编排→闸门」键值与 **`WorkflowSection.runTask`** 分支判定见 **`services/workflowRunTaskBranch.ts`**（**`classifyWorkflowRunTaskBranch`**）；总索引见 **`services/workflowAiPickIndex.ts`**（及 **`docs/多模型可运营改造计划.md` §1.4**）。
 
 | 模块 | 说明 |
 |------|------|

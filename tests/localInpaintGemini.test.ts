@@ -6,7 +6,7 @@ import {
   localInpaintPatchToDestRatio,
   planLocalInpaintComposite,
 } from '../services/localInpaintGemini';
-import { resolveDialogImageModelIdForGear } from '../services/modelRegistry/imageModels';
+import { coerceImageModelRegistryId } from '../services/modelRegistry/imageModels';
 
 describe('expandPixelBBox', () => {
   it('pads by ratio and min pad, clamped to image', () => {
@@ -96,14 +96,14 @@ describe('buildLocalInpaintGenImageOptions', () => {
   });
 });
 
-describe('resolveDialogImageModelIdForGear', () => {
-  it('maps known gears and falls back for unknown', () => {
-    const fast = resolveDialogImageModelIdForGear('fast');
-    const std = resolveDialogImageModelIdForGear('standard');
-    const pro = resolveDialogImageModelIdForGear('pro');
-    expect(fast).toBeTruthy();
-    expect(std).toBeTruthy();
-    expect(pro).toBeTruthy();
-    expect(resolveDialogImageModelIdForGear('bogus')).toBe(std);
+describe('coerceImageModelRegistryId', () => {
+  it('maps legacy gears and falls back for unknown', () => {
+    const fast = coerceImageModelRegistryId('fast');
+    const std = coerceImageModelRegistryId('standard');
+    const pro = coerceImageModelRegistryId('pro');
+    expect(fast).toBe('gemini-2.5-flash-image');
+    expect(std).toBe('gemini-3.1-flash-image-preview');
+    expect(pro).toBe('gemini-3-pro-image-preview');
+    expect(coerceImageModelRegistryId('bogus')).toBe(std);
   });
 });

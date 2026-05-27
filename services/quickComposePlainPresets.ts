@@ -35,7 +35,7 @@ function plainT2IModule(): CustomAppModule {
     order: -999,
     instruction: '',
     skipUnderstand: true,
-    imageGear: 'standard',
+    imageModelRegistryId: 'gemini-3.1-flash-image-preview',
   };
 }
 
@@ -50,7 +50,7 @@ function plainI2IModule(): CustomAppModule {
     instruction:
       '根据用户文字说明调整、细化或重新生成画面，保持主体与构图合理；若用户未补充说明，则在保持内容的前提下适度增强细节与观感。',
     skipUnderstand: true,
-    imageGear: 'standard',
+    imageModelRegistryId: 'gemini-3.1-flash-image-preview',
   };
 }
 

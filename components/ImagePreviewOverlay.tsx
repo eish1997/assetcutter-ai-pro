@@ -1629,6 +1629,15 @@ export function ImagePreviewOverlay({
         </div>
         ) : null}
 
+        {uiHidden ? (
+          <div
+            className="pointer-events-none absolute left-1/2 top-4 z-20 -translate-x-1/2 rounded-lg bg-black/55 px-3 py-1.5 text-[10px] font-semibold text-gray-300 ring-1 ring-white/10"
+            aria-live="polite"
+          >
+            界面已隐藏 · 按 Tab 恢复
+          </div>
+        ) : null}
+
         {!uiHidden ? children : null}
 
         {resizeWriteBackUiOk && resizeWriteBackPopOpen && imageResizeWriteBack ? (

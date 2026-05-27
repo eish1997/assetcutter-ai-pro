@@ -1,8 +1,8 @@
 /**
  * 用户设置的 API 密钥存 localStorage，键名与读写逻辑集中在此；底层经 `clientPersist` 安全访问。
  *
- * **AI 渠道（供应商）唯一真相源**：`getAiProvider()` + 各供应商对应的 Key/BaseURL（见下方 getter）。
- * 业务侧大模型调用须 **`import { … } from './unifiedAiGateway'`**（内部再委托 `geminiService.getAI()`，每次仍读当前 `getAiProvider()`），
+ * **AI 渠道唯一真相源**：`getEnabledChannels()` + `pickBinding()` + 各 channel 凭证。
+ * legacy `getAiProvider()` / `enabledAiProviders` 仅云同步与试用模式兼容。
  * 禁止在组件里自行 `new GoogleGenAI`、直连 ToAPIs/VectorEngine，以免与设置里选的渠道不一致。
  * 登录后云端 `user-config.json` 会合并进同一套 localStorage 键，与设置页、工作流密钥弹窗共用。
  */
@@ -18,11 +18,37 @@ import {
   writeLocalString,
   writeSessionNonEmptyTrimmedOrRemove,
 } from './clientPersist';
+import {
+  isConfigurableAiProvider,
+  migrateLegacyAiProviderToEnabled,
+  normalizeEnabledAiProviders,
+  type ConfigurableAiProvider,
+} from './aiProviderCatalog';
+import {
+  isChannelId,
+  labelForChannel,
+  normalizeEnabledChannels,
+} from './modelRegistry/channelCatalog';
+import { defaultEnabledChannelIds } from './modelRegistry/providerBindings';
+import type { ChannelId } from './modelRegistry/types';
 import { normalizeOpenAiBaseUrl } from './openaiAdapter';
 import { normalizeToapisBaseUrl } from './toapisAdapter';
 
 const STORAGE_KEY_GEMINI = 'ac_gemini_api_key';
 const STORAGE_KEY_AI_PROVIDER = 'ac_ai_provider';
+const STORAGE_KEY_ENABLED_AI_PROVIDERS = 'ac_ai_enabled_providers';
+const STORAGE_KEY_ENABLED_CHANNELS = 'ac_enabled_channels';
+
+let bindingDegradedHint: string | null = null;
+
+/** merge 层全部生图模型不可用时设置；顶栏展示降级提示 */
+export function setBindingDegradedHint(hint: string | null): void {
+  bindingDegradedHint = hint?.trim() || null;
+}
+
+export function getBindingDegradedHint(): string | null {
+  return bindingDegradedHint;
+}
 const STORAGE_KEY_TOAPIS_API_KEY = 'ac_toapis_api_key';
 const STORAGE_KEY_TOAPIS_BASE_URL = 'ac_toapis_base_url';
 const STORAGE_KEY_OPENAI_API_KEY = 'ac_openai_api_key';
@@ -38,8 +64,10 @@ const STORAGE_KEY_DEBUG_CLIENT_LOG_PERSIST = 'ac_debug_client_log_persist';
 
 export type AiProvider = 'trial' | 'gemini' | 'vertex' | 'toapis' | 'antigravity' | 'openai' | 'vectorengine';
 
-/** 未选择或本地无记录时的默认供应商（新用户 / 清空存储后） */
-export const DEFAULT_AI_PROVIDER: AiProvider = 'trial';
+export type { ConfigurableAiProvider };
+
+/** 未选择或本地无记录时的默认供应商（legacy 单选字段；新 UI 以 `getEnabledAiProviders` 为准） */
+export const DEFAULT_AI_PROVIDER: AiProvider = 'gemini';
 const SESSION_KEY_TENCENT_SECRET_ID = 'ac_tencent_secret_id';
 const SESSION_KEY_TENCENT_SECRET_KEY = 'ac_tencent_secret_key';
 
@@ -52,8 +80,188 @@ export function setUserApiKey(value: string | null): void {
   writeLocalNonEmptyTrimmedOrRemove(STORAGE_KEY_GEMINI, value);
 }
 
+function readAiProviderRaw(): string {
+  return (readLocalString(STORAGE_KEY_AI_PROVIDER) ?? '').trim().toLowerCase();
+}
+
+function bulkImageProxyConfigured(): boolean {
+  try {
+    const env = typeof import.meta !== 'undefined' ? (import.meta as { env?: Record<string, string | undefined> }).env : undefined;
+    const bulk = env?.VITE_BULK_IMAGE_API;
+    return Boolean(bulk && String(bulk).trim());
+  } catch {
+    return false;
+  }
+}
+
+function bulkImageVertexProxyConfigured(): boolean {
+  try {
+    const env = typeof import.meta !== 'undefined' ? (import.meta as { env?: Record<string, string | undefined> }).env : undefined;
+    const bulk = env?.VITE_BULK_IMAGE_API;
+    const bulkVertex = env?.VITE_BULK_IMAGE_API_VERTEX;
+    return Boolean((bulk && String(bulk).trim()) || (bulkVertex && String(bulkVertex).trim()));
+  } catch {
+    return false;
+  }
+}
+
+function dispatchAiSettingsChanged(): void {
+  try {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('ac-ai-provider-changed'));
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+function syncLegacyPrimaryProviderFromEnabled(enabled: ConfigurableAiProvider[]): void {
+  const primary = enabled[0] ?? DEFAULT_AI_PROVIDER;
+  writeLocalString(STORAGE_KEY_AI_PROVIDER, primary);
+}
+
+/** @deprecated 设置 UI 已改为 channel；仅 legacy 云同步 / 顶栏兼容保留 */
+export function getEnabledAiProviders(): ConfigurableAiProvider[] {
+  const raw = readLocalString(STORAGE_KEY_ENABLED_AI_PROVIDERS);
+  if (raw != null && raw !== '') {
+    try {
+      return normalizeEnabledAiProviders(JSON.parse(raw));
+    } catch {
+      /* fall through to legacy migration */
+    }
+  }
+  return migrateLegacyAiProviderToEnabled(readLegacyAiProviderOnly());
+}
+
+function readLegacyAiProviderOnly(): AiProvider {
+  const v = readAiProviderRaw();
+  if (v === 'trial') return 'trial';
+  if (v === 'vertex') return 'vertex';
+  if (v === 'toapis') return 'toapis';
+  if (v === 'antigravity') return 'antigravity';
+  if (v === 'openai') return 'openai';
+  if (v === 'vectorengine') return 'vectorengine';
+  if (v === 'gemini') return 'gemini';
+  return DEFAULT_AI_PROVIDER;
+}
+
+export function setEnabledAiProviders(providers: ConfigurableAiProvider[]): void {
+  const next = normalizeEnabledAiProviders(providers);
+  writeLocalString(STORAGE_KEY_ENABLED_AI_PROVIDERS, JSON.stringify(next));
+  writeLocalString(STORAGE_KEY_ENABLED_CHANNELS, JSON.stringify(providersToChannels(next)));
+  syncLegacyPrimaryProviderFromEnabled(next);
+  dispatchAiSettingsChanged();
+}
+
+function providersToChannels(providers: ConfigurableAiProvider[]): ChannelId[] {
+  const out: ChannelId[] = [];
+  for (const p of providers) {
+    if (p === 'vertex' && !out.includes('vertex-proxy')) out.push('vertex-proxy');
+    if (p === 'gemini' && !out.includes('gemini-aistudio')) out.push('gemini-aistudio');
+    if (p === 'toapis') {
+      if (!out.includes('toapis-gemini')) out.push('toapis-gemini');
+      if (!out.includes('toapis-openai')) out.push('toapis-openai');
+    }
+    if (p === 'openai' && !out.includes('openai-official')) out.push('openai-official');
+    if (p === 'vectorengine' && !out.includes('vectorengine')) out.push('vectorengine');
+  }
+  return out;
+}
+
+function channelsToProviders(channels: ChannelId[]): ConfigurableAiProvider[] {
+  const out: ConfigurableAiProvider[] = [];
+  for (const ch of channels) {
+    if (ch === 'vertex-proxy' && !out.includes('vertex')) out.push('vertex');
+    if (ch === 'gemini-aistudio' && !out.includes('gemini')) out.push('gemini');
+    if ((ch === 'toapis-gemini' || ch === 'toapis-openai') && !out.includes('toapis')) out.push('toapis');
+    if (ch === 'openai-official' && !out.includes('openai')) out.push('openai');
+    if (ch === 'vectorengine' && !out.includes('vectorengine')) out.push('vectorengine');
+  }
+  return out;
+}
+
+export function getEnabledChannels(): ChannelId[] {
+  const raw = readLocalString(STORAGE_KEY_ENABLED_CHANNELS);
+  if (raw != null && raw !== '') {
+    try {
+      const parsed = normalizeEnabledChannels(JSON.parse(raw));
+      if (parsed.length > 0) return parsed;
+    } catch {
+      /* fall through */
+    }
+  }
+  const fromProviders = providersToChannels(getEnabledAiProviders());
+  if (fromProviders.length > 0) return fromProviders;
+  return defaultEnabledChannelIds();
+}
+
+export function setEnabledChannels(channels: ChannelId[]): void {
+  const next = normalizeEnabledChannels(channels);
+  writeLocalString(STORAGE_KEY_ENABLED_CHANNELS, JSON.stringify(next));
+  const providers = channelsToProviders(next);
+  writeLocalString(STORAGE_KEY_ENABLED_AI_PROVIDERS, JSON.stringify(providers));
+  syncLegacyPrimaryProviderFromEnabled(providers);
+  dispatchAiSettingsChanged();
+}
+
+export function isChannelEnabled(channel: ChannelId): boolean {
+  return getEnabledChannels().includes(channel);
+}
+
+/** 单个 channel 是否具备调用条件（与是否启用无关） */
+export function isChannelReady(channel: ChannelId): boolean {
+  if (channel === 'vertex-proxy') return bulkImageVertexProxyConfigured();
+  if (channel === 'gemini-aistudio') return Boolean(getUserApiKey()?.trim()) || bulkImageProxyConfigured();
+  if (channel === 'toapis-gemini' || channel === 'toapis-openai') return Boolean(getToapisApiKey()?.trim());
+  if (channel === 'vectorengine') return Boolean(getVectorengineApiKey()?.trim());
+  if (channel === 'openai-official') return Boolean(getOpenaiApiKey()?.trim());
+  return false;
+}
+
+export function setChannelEnabled(channel: ChannelId, enabled: boolean): void {
+  if (!isChannelId(channel)) return;
+  const current = getEnabledChannels();
+  const next = enabled
+    ? current.includes(channel)
+      ? current
+      : [...current, channel]
+    : current.filter((c) => c !== channel);
+  setEnabledChannels(next);
+}
+
+export function isAiProviderEnabled(provider: ConfigurableAiProvider): boolean {
+  return getEnabledAiProviders().includes(provider);
+}
+
+export function setAiProviderEnabled(provider: ConfigurableAiProvider, enabled: boolean): void {
+  const current = getEnabledAiProviders();
+  const next = enabled
+    ? current.includes(provider)
+      ? current
+      : [...current, provider]
+    : current.filter((p) => p !== provider);
+  setEnabledAiProviders(next);
+}
+
+/** 单个供应商是否具备调用条件（与是否启用无关，仅看凭证 / 代理） */
+export function isAiProviderReady(provider: AiProvider): boolean {
+  if (provider === 'trial') return bulkImageProxyConfigured();
+  if (provider === 'vertex') return bulkImageVertexProxyConfigured();
+  if (provider === 'toapis') return Boolean(getToapisApiKey()?.trim());
+  if (provider === 'antigravity') return Boolean(getAntigravityApiKey()?.trim());
+  if (provider === 'openai') return Boolean(getOpenaiApiKey()?.trim());
+  if (provider === 'vectorengine') return Boolean(getVectorengineApiKey()?.trim());
+  if (bulkImageProxyConfigured()) return true;
+  return Boolean(getUserApiKey()?.trim());
+}
+
+/** @deprecated 请用 `getEnabledChannels()` + `pickBinding()`；legacy 顶栏/云同步仍读此字段 */
 export function getAiProvider(): AiProvider {
-  const v = (readLocalString(STORAGE_KEY_AI_PROVIDER) ?? '').trim().toLowerCase();
+  const enabled = getEnabledAiProviders();
+  const ready = enabled.find((p) => isAiProviderReady(p));
+  if (ready) return ready;
+  if (enabled[0]) return enabled[0];
+  const v = readLegacyAiProviderOnly();
   if (v === 'trial') return 'trial';
   if (v === 'vertex') return 'vertex';
   if (v === 'toapis') return 'toapis';
@@ -65,14 +273,14 @@ export function getAiProvider(): AiProvider {
 }
 
 export function setAiProvider(value: AiProvider): void {
-  writeLocalString(STORAGE_KEY_AI_PROVIDER, value);
-  try {
-    if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('ac-ai-provider-changed'));
-    }
-  } catch {
-    /* ignore */
+  if (isConfigurableAiProvider(value)) {
+    setEnabledAiProviders([value]);
+    return;
   }
+  writeLocalString(STORAGE_KEY_AI_PROVIDER, value);
+  writeLocalString(STORAGE_KEY_ENABLED_AI_PROVIDERS, JSON.stringify([]));
+  writeLocalString(STORAGE_KEY_ENABLED_CHANNELS, JSON.stringify([]));
+  dispatchAiSettingsChanged();
 }
 
 /** 另一浏览器标签页修改了下列键时，`storage` 事件会触发；用于设置页与顶栏等保持同步 */
@@ -80,6 +288,8 @@ export function isAiSettingsStorageKey(key: string | null): boolean {
   if (key == null) return true;
   return (
     key === STORAGE_KEY_AI_PROVIDER ||
+    key === STORAGE_KEY_ENABLED_AI_PROVIDERS ||
+    key === STORAGE_KEY_ENABLED_CHANNELS ||
     key === STORAGE_KEY_GEMINI ||
     key === STORAGE_KEY_TOAPIS_API_KEY ||
     key === STORAGE_KEY_TOAPIS_BASE_URL ||
@@ -102,24 +312,18 @@ export function subscribeAiSettingsCrossTab(onChange: () => void): () => void {
   return () => window.removeEventListener('storage', handler);
 }
 
-/** 工作区顶栏等：当前选用的 AI 供应商短名称 */
+/** 工作区顶栏等：当前启用的 channel 摘要 */
 export function getAiProviderToolbarLabel(): string {
-  switch (getAiProvider()) {
-    case 'trial':
-      return '试用（代理）';
-    case 'vertex':
-      return 'Vertex AI';
-    case 'toapis':
-      return 'ToAPIs';
-    case 'antigravity':
-      return 'Antigravity';
-    case 'openai':
-      return 'OpenAI';
-    case 'vectorengine':
-      return 'VectorEngine';
-    default:
-      return 'Google Gemini';
+  const degraded = getBindingDegradedHint();
+  const channels = getEnabledChannels();
+  if (channels.length === 0) {
+    return degraded ? `未启用通道 · ${degraded}` : '未启用通道';
   }
+  const readyCount = channels.filter((ch) => isChannelReady(ch)).length;
+  const primary = channels.find((ch) => isChannelReady(ch)) ?? channels[0];
+  const base = labelForChannel(primary);
+  const summary = channels.length === 1 ? base : `${base} 等 ${readyCount}/${channels.length}`;
+  return degraded ? `${summary} · ${degraded}` : summary;
 }
 
 export function getToapisApiKey(): string | null {
@@ -233,44 +437,18 @@ export function getApiKey(): string | undefined {
 }
 
 /**
- * 当前选用的 AI 供应商是否具备调用条件：
- * - ToAPIs / Antigravity / OpenAI / VectorEngine：本机已填 Key
- * - Gemini：本机 Key，或构建时配置了 VITE_BULK_IMAGE_API（走后端代理；与 unifiedAiGateway → getAI 优先级一致）
+ * 是否至少有一个已启用供应商具备调用条件。
  */
 export function isAiInvocationReady(): boolean {
-  const p = getAiProvider();
-  if (p === 'trial') {
-    try {
-      const env = typeof import.meta !== 'undefined' ? (import.meta as { env?: Record<string, string | undefined> }).env : undefined;
-      const bulk = env?.VITE_BULK_IMAGE_API;
-      return Boolean(bulk && String(bulk).trim());
-    } catch {
-      return false;
-    }
+  const enabledChannels = getEnabledChannels();
+  if (enabledChannels.length > 0) {
+    return enabledChannels.some((ch) => isChannelReady(ch));
   }
-  if (p === 'vertex') {
-    try {
-      const env = typeof import.meta !== 'undefined' ? (import.meta as { env?: Record<string, string | undefined> }).env : undefined;
-      const bulk = env?.VITE_BULK_IMAGE_API;
-      const bulkVertex = env?.VITE_BULK_IMAGE_API_VERTEX;
-      if ((bulk && String(bulk).trim()) || (bulkVertex && String(bulkVertex).trim())) return true;
-    } catch {
-      /* ignore */
-    }
-    return false;
+  const enabled = getEnabledAiProviders();
+  if (enabled.length > 0) {
+    return enabled.some((p) => isAiProviderReady(p));
   }
-  if (p === 'toapis') return Boolean(getToapisApiKey()?.trim());
-  if (p === 'antigravity') return Boolean(getAntigravityApiKey()?.trim());
-  if (p === 'openai') return Boolean(getOpenaiApiKey()?.trim());
-  if (p === 'vectorengine') return Boolean(getVectorengineApiKey()?.trim());
-  try {
-    const env = typeof import.meta !== 'undefined' ? (import.meta as { env?: Record<string, string | undefined> }).env : undefined;
-    const bulk = env?.VITE_BULK_IMAGE_API;
-    if (bulk && String(bulk).trim()) return true;
-  } catch {
-    /* ignore */
-  }
-  return Boolean(getUserApiKey()?.trim());
+  return isAiProviderReady(getAiProvider());
 }
 
 /** 对话生图：是否跳过“理解意图”步骤，直接使用用户提示词调用生图模型 */

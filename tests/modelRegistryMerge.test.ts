@@ -1,11 +1,12 @@
-import { describe, expect, it, afterEach } from "vitest";
-import { buildEffectiveImageGearRows, pickCoercedGearId } from "../services/modelRegistry/merge";
+import { describe, expect, it, afterEach, vi } from "vitest";
+import { buildEffectiveImageModelRows, pickCoercedImageModelId } from "../services/modelRegistry/merge";
 import {
   DEFAULT_MODEL_OPS_CONFIG,
   _resetModelOpsRemoteStateForTests,
   _setModelOpsConfigForTests,
 } from "../services/modelRegistry/opsConfig";
 import type { AiProvider } from "../services/settingsStore";
+import * as settingsStore from "../services/settingsStore";
 
 describe("modelRegistry merge", () => {
   const p = "gemini" as AiProvider;
@@ -13,31 +14,66 @@ describe("modelRegistry merge", () => {
   afterEach(() => {
     _resetModelOpsRemoteStateForTests();
     _setModelOpsConfigForTests({ ...DEFAULT_MODEL_OPS_CONFIG });
+    vi.restoreAllMocks();
   });
 
-  it("allowlist null keeps all gears enabled", () => {
-    const rows = buildEffectiveImageGearRows(p, { ...DEFAULT_MODEL_OPS_CONFIG, imageRegistryAllowlist: null });
+  it("allowlist null keeps all models enabled when credentials exist", () => {
+    vi.spyOn(settingsStore, "getEnabledChannels").mockReturnValue([
+      "gemini-aistudio",
+      "openai-official",
+    ]);
+    vi.spyOn(settingsStore, "isChannelReady").mockReturnValue(true);
+    vi.spyOn(settingsStore, "getUserApiKey").mockReturnValue("gemini-key");
+    vi.spyOn(settingsStore, "getOpenaiApiKey").mockReturnValue("openai-key");
+    const rows = buildEffectiveImageModelRows(p, { ...DEFAULT_MODEL_OPS_CONFIG, imageRegistryAllowlist: null });
     expect(rows.every((r) => !r.disabled)).toBe(true);
-    expect(rows).toHaveLength(3);
+    expect(rows).toHaveLength(5);
   });
 
-  it("allowlist restricts gears", () => {
-    const rows = buildEffectiveImageGearRows(p, {
-      version: 1,
-      imageRegistryAllowlist: ["gemini-2.5-flash-image"],
-      gearPreference: ["fast", "standard"],
-    });
-    expect(rows.find((x) => x.id === "fast")?.disabled).toBe(false);
-    expect(rows.find((x) => x.id === "standard")?.disabled).toBe(true);
-    expect(rows.find((x) => x.id === "pro")?.disabled).toBe(true);
+  it("disables models when provider credentials missing", () => {
+    vi.spyOn(settingsStore, "getEnabledChannels").mockReturnValue(["gemini-aistudio", "openai-official"]);
+    vi.spyOn(settingsStore, "isChannelReady").mockImplementation(
+      (ch) => ch === "gemini-aistudio"
+    );
+    vi.spyOn(settingsStore, "getUserApiKey").mockReturnValue("gemini-key");
+    vi.spyOn(settingsStore, "getOpenaiApiKey").mockReturnValue(null);
+    const rows = buildEffectiveImageModelRows(p, { ...DEFAULT_MODEL_OPS_CONFIG, imageRegistryAllowlist: null });
+    expect(rows.find((x) => x.registryId === "gpt-image-1.5")?.disabled).toBe(true);
+    expect(rows.find((x) => x.registryId === "gpt-image-1.5")?.disabledReason).toContain("OpenAI");
+    expect(rows.find((x) => x.registryId === "gemini-2.5-flash-image")?.disabled).toBe(false);
   });
 
-  it("pickCoercedGearId falls back along preference", () => {
-    const rows = buildEffectiveImageGearRows(p, {
+  it("allowlist restricts models", () => {
+    const rows = buildEffectiveImageModelRows(p, {
       version: 1,
       imageRegistryAllowlist: ["gemini-2.5-flash-image"],
-      gearPreference: ["standard", "fast"],
+      imageModelPreference: ["gemini-3.1-flash-image-preview", "gemini-2.5-flash-image"],
     });
-    expect(pickCoercedGearId("standard", rows, ["standard", "fast"])).toBe("fast");
+    expect(rows.find((x) => x.registryId === "gemini-2.5-flash-image")?.disabled).toBe(false);
+    expect(rows.find((x) => x.registryId === "gemini-3.1-flash-image-preview")?.disabled).toBe(true);
+    expect(rows.find((x) => x.registryId === "gemini-3-pro-image-preview")?.disabled).toBe(true);
+  });
+
+  it("pickCoercedImageModelId falls back along preference", () => {
+    const rows = buildEffectiveImageModelRows(p, {
+      version: 1,
+      imageRegistryAllowlist: ["gemini-2.5-flash-image"],
+      imageModelPreference: ["gemini-3.1-flash-image-preview", "gemini-2.5-flash-image"],
+    });
+    expect(
+      pickCoercedImageModelId("gemini-3.1-flash-image-preview", rows, [
+        "gemini-3.1-flash-image-preview",
+        "gemini-2.5-flash-image",
+      ])
+    ).toBe("gemini-2.5-flash-image");
+  });
+
+  it("migrates legacy gearPreference from remote ops JSON", () => {
+    const rows = buildEffectiveImageModelRows(p, {
+      version: 1,
+      imageRegistryAllowlist: null,
+      imageModelPreference: ["gemini-2.5-flash-image"],
+    });
+    expect(pickCoercedImageModelId("fast", rows, ["fast"])).toBe("gemini-2.5-flash-image");
   });
 });

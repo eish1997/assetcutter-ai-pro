@@ -1,73 +1,60 @@
 import type { AiProvider } from "../settingsStore";
-import { getAiProvider } from "../settingsStore";
+import {
+  coerceImageModelRegistryId,
+  imageModelProviderRoute,
+  isKnownImageModelRegistryInput,
+  type ImageModelProviderRoute,
+} from "./imageModels";
+import { channelToResolveProvider, familyForRegistry } from "./channelCredentials";
+import { getBindingsForRegistry } from "./providerBindings";
+import { pickBinding } from "./pickBinding";
+import type { ModelResolveRole } from "./types";
+import { resolveUpstreamModelIdForProvider } from "./upstreamResolve";
 
-export type ModelResolveRole = "text" | "image";
+export type { ModelResolveRole } from "./types";
+export { resolveUpstreamModelIdForProvider } from "./upstreamResolve";
+
+function aiProviderForImageModelRoute(route: ImageModelProviderRoute): AiProvider {
+  return route === "openai" ? "openai" : "gemini";
+}
+
+/** 无 ready binding 时：按 family 默认 channel 映射 upstream（不读 getAiProvider） */
+function resolveUpstreamWithoutReadyBinding(registryId: string, role: ModelResolveRole): string {
+  const bindings = getBindingsForRegistry(registryId, role);
+  const first = bindings[0];
+  if (!first) return registryId;
+  const family = familyForRegistry(registryId, role);
+  const provider = channelToResolveProvider(first.channel, family);
+  return resolveUpstreamModelIdForProvider(registryId, role, provider);
+}
 
 /**
- * 统一解析：站内 registryId（策略 A 下与上游 id 同名）→ 当前渠道实际上游 model id。
- * ToAPIs 特化映射仍在 `toapisAdapter` 内；此处**不再**改写 ToAPIs，避免双重映射（geminiService 注释原约定）。
- *
- * @see docs/多模型可运营改造计划.md
+ * 按生图 registryId 的 binding 解析上游 model id。
  */
-export function resolveUpstreamModelIdForProvider(
-  registryId: string,
-  role: ModelResolveRole,
-  provider: AiProvider
-): string {
-  const m = (registryId || "").trim();
-  if (!m) return registryId;
-  const ml = m.toLowerCase();
-
-  if (role === "text") {
-    if (provider === "openai") {
-      if (ml.startsWith("gpt-") || ml.startsWith("o1") || ml.startsWith("o3") || ml.startsWith("o4")) return m;
-      if (ml.includes("pro-preview") || ml.includes("3-pro")) return "gpt-4o";
-      if (ml.includes("flash")) return "gpt-4o-mini";
-      return "gpt-4o-mini";
-    }
-    if (provider === "vectorengine") {
-      if (ml.includes("gemini-3-flash-preview")) return "gemini-2.5-flash";
-      if (ml.includes("gemini-3-pro-preview")) return "gemini-2.5-pro";
-    }
-    return m;
-  }
-
-  if (provider === "openai") {
-    if (ml.includes("gpt-image") || ml.includes("dall-e")) return m;
-    return "gpt-image-1";
-  }
-
-  if (provider === "antigravity") {
-    if (ml.includes("gemini-3.1-flash-image-preview")) return "gemini-3.1-flash-image";
-    if (ml.includes("gemini-3-pro-image-preview")) return "gemini-3-pro-image";
-    return m;
-  }
-  if (provider === "vectorengine") {
-    if (ml.includes("gemini-3.1-flash-image-preview") || ml.includes("gemini-3-pro-image-preview")) {
-      return "gemini-2.5-flash-image";
-    }
-  }
-  return m;
+export function resolveUpstreamImageModelIdForRegistry(registryId: string): string {
+  const id = coerceImageModelRegistryId(registryId);
+  const picked = pickBinding(id, "image");
+  if (picked) return picked.upstreamModelId;
+  const route = imageModelProviderRoute(id);
+  return resolveUpstreamModelIdForProvider(id, "image", aiProviderForImageModelRoute(route));
 }
 
 export function resolveUpstreamModelId(registryId: string, role: ModelResolveRole): string {
-  return resolveUpstreamModelIdForProvider(registryId, role, getAiProvider());
+  const id = (registryId || "").trim();
+  if (!id) return registryId;
+  const picked = pickBinding(id, role);
+  if (picked) return picked.upstreamModelId;
+  return resolveUpstreamWithoutReadyBinding(id, role);
 }
 
-/**
- * 部分第三方 Gemini 网关（尤其 VectorEngine）对 `gemini-3-flash-preview` 等预览 id 会返回含
- * “valid … user model” 类 4xx；能力与对话里的「理解 / 纯文本」在此回退到更通用的模型 id。
- */
 export function resolveUpstreamTextModelId(internalModel: string): string {
   return resolveUpstreamModelId(internalModel, "text");
 }
 
-/**
- * 部分第三方网关不认站内「预览」生图 id（易 404 Requested entity was not found）：
- * - VectorEngine → 回退 `gemini-2.5-flash-image`。
- * - Antigravity → 映射到控制台模型 id。
- * - ToAPIs 在 `toapisAdapter` 内单独映射，此处不再改写。
- */
 export function resolveUpstreamImageModelId(internalModel: string): string {
+  const m = (internalModel || "").trim();
+  if (isKnownImageModelRegistryInput(m)) {
+    return resolveUpstreamImageModelIdForRegistry(m);
+  }
   return resolveUpstreamModelId(internalModel, "image");
 }

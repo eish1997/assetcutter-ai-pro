@@ -7,27 +7,58 @@ export {
   refreshModelOpsConfig,
   _setModelOpsConfigForTests,
 } from "./opsConfig";
-export { buildEffectiveImageGearRows, pickCoercedGearId } from "./merge";
-export type { EffectiveImageGearRow } from "./merge";
+export {
+  buildEffectiveImageGearRows,
+  buildEffectiveImageModelRows,
+  pickCoercedGearId,
+  pickCoercedImageModelId,
+} from "./merge";
+export type { EffectiveImageGearRow, EffectiveImageModelRow } from "./merge";
 export {
   DEFAULT_MODEL_IMAGE,
   DEFAULT_MODEL_PRO,
   DEFAULT_MODEL_TEXT,
 } from "./constants";
 export {
+  coerceImageModelRegistryId,
+  DEFAULT_IMAGE_MODEL_REGISTRY_ID,
   DIALOG_IMAGE_GEARS,
   DIALOG_IMAGE_MODEL_MAX_REFERENCE_IMAGES,
   DIALOG_IMAGE_MODELS,
   DIALOG_IMAGE_REGISTRY,
+  imageModelProviderRoute,
   isRegisteredImageModelId,
+  labelForImageModelRegistryId,
   maxReferenceImagesForImageGear,
+  maxReferenceImagesForImageModel,
+  migrateImageGearToRegistryId,
+  resolveDialogImageModelIdForGear,
+  resolveImageModelRegistryId,
 } from "./imageModels";
-export type { DialogImageGear, DialogImageGearModelId } from "./imageModels";
+export type { DialogImageGear, DialogImageGearModelId, DialogImageModelRegistryId, ImageModelProviderRoute } from "./imageModels";
+export {
+  hasGeminiImageProxyConfigured,
+  imageModelRouteDisabledReason,
+  isImageModelProviderRouteReady,
+} from "./imageModelProvider";
 export {
   resolveUpstreamImageModelId,
+  resolveUpstreamImageModelIdForRegistry,
   resolveUpstreamModelId,
   resolveUpstreamModelIdForProvider,
   resolveUpstreamTextModelId,
 } from "./resolve";
 export type { ModelResolveRole } from "./resolve";
+export type { ChannelId, ModelFamily, ProviderBinding, PickedBinding } from "./types";
+export { pickBinding, hasReadyBinding } from "./pickBinding";
+export {
+  bulkUsesVertexBackend,
+  pickChannel,
+  usesVertexProxyFor,
+  usesVertexProxyForImage,
+  usesVertexProxyForText,
+} from "./bindingRuntime";
+export { CHANNEL_CATALOG, channelsForFamily, labelForChannel } from "./channelCatalog";
+export { PROVIDER_BINDINGS, getBindingsForRegistry } from "./providerBindings";
+export { DEFAULT_TEXT_MODEL_REGISTRY_ID, TEXT_MODEL_REGISTRY } from "./textModels";
 export { migrateSystemModelSlots } from "./systemConfigMigrate";

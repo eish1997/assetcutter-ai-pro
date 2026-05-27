@@ -1,11 +1,13 @@
 import type {
   CustomAppModule,
-  DialogImageGear,
   CapabilitySet,
   CapabilitySetNode,
   CapabilitySetEdge,
 } from '../types';
-import { DIALOG_IMAGE_GEARS, maxReferenceImagesForImageGear } from '../types';
+import { maxReferenceImagesForImageModel } from '../types';
+import {
+  resolveImageModelRegistryId,
+} from './modelRegistry/imageModels';
 import type { VgpGenStepCapture } from '../types/vgp';
 import {
   CAPABILITY_UNDERSTAND_RETRY_OPTIONS,
@@ -20,7 +22,7 @@ import {
   WorkflowVideoNotAvailableError,
   type GeminiImageBatchGroupOptions,
 } from './unifiedAiGateway';
-import { DEFAULT_MODEL_IMAGE, DEFAULT_MODEL_TEXT } from './modelRegistry/constants';
+import { DEFAULT_MODEL_TEXT } from './modelRegistry/constants';
 import { resolveUpstreamImageModelId } from './modelRegistry/resolve';
 import {
   submitCompanionHostBundleExecJob,
@@ -141,7 +143,7 @@ function makeVgpCapture(
     presetId: preset.id,
     presetLabel: preset.label || preset.id,
     modelId,
-    gear: preset.imageGear,
+    gear: preset.imageModelRegistryId ?? preset.imageGear,
     aspectRatio: preset.imageAspectRatio,
     imageSize: preset.imageSize,
   };
@@ -170,10 +172,16 @@ export function capabilityUsesGenImageEngine(preset: CustomAppModule): boolean {
   return getCapabilityEngine(preset) === 'gen_image';
 }
 
-export function resolveImageModelId(gear?: DialogImageGear): string {
-  const g = gear || 'standard';
-  const internal = DIALOG_IMAGE_GEARS.find((x) => x.id === g)?.modelId || DEFAULT_MODEL_IMAGE;
-  return resolveUpstreamImageModelId(internal);
+export function resolveImageModelIdFromPreset(preset: Pick<CustomAppModule, 'imageModelRegistryId' | 'imageGear'>): string {
+  const registryId = resolveImageModelRegistryId(
+    preset.imageModelRegistryId ?? preset.imageGear ?? undefined
+  );
+  return resolveUpstreamImageModelId(registryId);
+}
+
+/** @deprecated 请用 `resolveImageModelIdFromPreset` */
+export function resolveImageModelId(gearOrRegistryId?: string): string {
+  return resolveUpstreamImageModelId(resolveImageModelRegistryId(gearOrRegistryId));
 }
 
 function refsForUnderstand(refs: string[]): string | string[] | null {
@@ -629,7 +637,7 @@ export async function executeCapability(
         if (!prompt) return { ok: false, kind: 'none', error: '该能力为生图执行方式，但未填写预设提示词或理解未返回有效指令', durationMs: Date.now() - start };
         ctx.onLog?.('info', `[${actionLabel}] 生图中…`, undefined);
         emitCapabilityRunProgress(ctx, `${actionLabel}：生图中…`);
-        const modelId = resolveImageModelId(preset.imageGear);
+        const modelId = resolveImageModelIdFromPreset(preset);
         const imageOptions = (preset.imageAspectRatio || preset.imageSize) ? { aspectRatio: preset.imageAspectRatio, imageSize: preset.imageSize } : undefined;
         const result = await workflowGenerateImage(cropped, prompt, modelId, imageOptions, undefined, undefined, {
           ...(opts?.batchGroupKey ? { batchGroupKey: opts.batchGroupKey } : {}),
@@ -689,7 +697,7 @@ export async function executeCapability(
         };
       }
       ctx.onLog?.('info', `[${actionLabel}] 文生图中…`, undefined);
-      const modelId = resolveImageModelId(preset.imageGear);
+      const modelId = resolveImageModelIdFromPreset(preset);
       const imageOptions =
         preset.imageAspectRatio || preset.imageSize
           ? { aspectRatio: preset.imageAspectRatio, imageSize: preset.imageSize }
@@ -713,7 +721,9 @@ export async function executeCapability(
         : primaryOk
           ? [inputImageBase64]
           : [];
-    const maxRef = maxReferenceImagesForImageGear(preset.imageGear);
+    const maxRef = maxReferenceImagesForImageModel(
+      preset.imageModelRegistryId ?? preset.imageGear
+    );
     const refs = rawList.slice(0, maxRef);
     if (refs.length === 0) {
       return {
@@ -735,7 +745,7 @@ export async function executeCapability(
     const augmented = prompt;
     ctx.onLog?.('info', `[${actionLabel}] 生图中…`, undefined);
     emitCapabilityRunProgress(ctx, `${actionLabel}：生图中（可能较慢）…`);
-    const modelId = resolveImageModelId(preset.imageGear);
+    const modelId = resolveImageModelIdFromPreset(preset);
     const imageOptions = (preset.imageAspectRatio || preset.imageSize) ? { aspectRatio: preset.imageAspectRatio, imageSize: preset.imageSize } : undefined;
     const batchOpts = {
       ...(opts?.batchGroupKey ? { batchGroupKey: opts.batchGroupKey } : {}),
@@ -983,7 +993,7 @@ export async function executeCapabilitySet(
           ctx.onRunProgress?.(`${n.data.label || preset.label || n.id}：多图生图中（${images.length} 张参考）…`, {
             nodeId: n.id,
           });
-          const modelId = resolveImageModelId(preset.imageGear);
+          const modelId = resolveImageModelIdFromPreset(preset);
           const imageOptions = (preset.imageAspectRatio || preset.imageSize) ? { aspectRatio: preset.imageAspectRatio, imageSize: preset.imageSize } : undefined;
           try {
             const result = await workflowGenerateImageMultiRefs(images, instruction, modelId, imageOptions);

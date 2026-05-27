@@ -1,6 +1,7 @@
 import type { CapabilityCategory, CapabilityEngine, CustomAppModule } from '../types';
 import { readLocalString, removeLocalKey, writeLocalJson } from './clientPersist';
 import { normalizeCapabilityPreviewUrlForPersist } from './capabilityPreviewUrl';
+import { coerceImageModelRegistryId } from './modelRegistry/imageModels';
 
 const LEGACY_CUSTOM_MODULES_KEY = 'ac_custom_modules';
 
@@ -110,7 +111,10 @@ export function normalizeCapabilityPreset(input: CustomAppModule, index: number)
   const skipUnderstand = input.skipUnderstand === true;
   const requirePromptOnTextDrop = input.requirePromptOnTextDrop === true;
   const rawGear = (input as CustomAppModule).imageGear;
-  const imageGear = rawGear === 'pro' || rawGear === 'fast' || rawGear === 'standard' ? rawGear : 'standard';
+  const rawModel = (input as CustomAppModule).imageModelRegistryId;
+  const imageModelRegistryId = coerceImageModelRegistryId(
+    (typeof rawModel === 'string' && rawModel.trim()) || rawGear || undefined
+  );
   const base: CustomAppModule = {
     ...input,
     category,
@@ -119,13 +123,15 @@ export function normalizeCapabilityPreset(input: CustomAppModule, index: number)
     requirePromptOnTextDrop,
     enabled,
     order,
-    imageGear,
+    imageModelRegistryId,
     ...(engine ? { engine } : {}),
   };
+  delete (base as CustomAppModule & { imageGear?: string }).imageGear;
   if (category === 'generate_3d') {
-    // 3D 不使用 engine / imageGear
+    // 3D 不使用 engine / 生图模型
     delete (base as any).engine;
     delete (base as any).imageGear;
+    delete (base as any).imageModelRegistryId;
     delete (base as CustomAppModule & { companionHostBundle?: unknown }).companionHostBundle;
     if (base.generate3D) {
       base.generate3D = normalizeGenerate3DPreset(base.generate3D);
@@ -133,6 +139,7 @@ export function normalizeCapabilityPreset(input: CustomAppModule, index: number)
   } else if (category === 'generate_video') {
     delete (base as any).engine;
     delete (base as any).imageGear;
+    delete (base as any).imageModelRegistryId;
     delete (base as CustomAppModule & { generate3D?: unknown }).generate3D;
     delete (base as CustomAppModule & { companionHostBundle?: unknown }).companionHostBundle;
   } else {

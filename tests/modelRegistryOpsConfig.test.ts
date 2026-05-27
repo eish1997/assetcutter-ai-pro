@@ -38,7 +38,7 @@ describe("modelRegistry opsConfig remote fetch", () => {
         {
           version: 9,
           imageRegistryAllowlist: ["gemini-2.5-flash-image"],
-          gearPreference: ["fast"],
+          imageModelPreference: ["gemini-2.5-flash-image"],
         },
         { etag: '"ops-v1"' }
       )

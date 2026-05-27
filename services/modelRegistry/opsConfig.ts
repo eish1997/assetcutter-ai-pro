@@ -1,14 +1,18 @@
 import { modelRegistryLog } from "./log";
 import type { ModelOpsConfig } from "./opsTypes";
-import type { DialogImageGear } from "./imageModels";
-import { isRegisteredImageModelId } from "./imageModels";
+import {
+  coerceImageModelRegistryId,
+  DIALOG_IMAGE_REGISTRY,
+  isRegisteredImageModelId,
+  LEGACY_IMAGE_GEAR_TO_REGISTRY,
+} from "./imageModels";
 
-const DEFAULT_GEAR_PREFERENCE: DialogImageGear[] = ["standard", "fast", "pro"];
+const DEFAULT_IMAGE_MODEL_PREFERENCE: string[] = DIALOG_IMAGE_REGISTRY.map((e) => e.registryId);
 
 export const DEFAULT_MODEL_OPS_CONFIG: ModelOpsConfig = {
   version: 1,
   imageRegistryAllowlist: null,
-  gearPreference: DEFAULT_GEAR_PREFERENCE,
+  imageModelPreference: DEFAULT_IMAGE_MODEL_PREFERENCE,
 };
 
 function readViteEnvTrim(key: string): string {
@@ -39,16 +43,43 @@ function normalizeOpsPayload(raw: unknown): ModelOpsConfig {
       imageRegistryAllowlist = known;
     }
   }
-  let gearPreference: DialogImageGear[] | undefined;
-  if (Array.isArray(o.gearPreference)) {
-    const allowed = new Set(["fast", "standard", "pro"]);
-    const gp = o.gearPreference.filter((x): x is DialogImageGear => typeof x === "string" && allowed.has(x));
-    if (gp.length > 0) gearPreference = gp;
+  let imageModelPreference: string[] | undefined;
+  const rawPref = o.imageModelPreference ?? o.gearPreference;
+  if (Array.isArray(rawPref)) {
+    const gp = rawPref
+      .filter((x): x is string => typeof x === "string")
+      .map((x) => {
+        const t = x.trim();
+        if (isRegisteredImageModelId(t)) return t;
+        return LEGACY_IMAGE_GEAR_TO_REGISTRY[t] ?? "";
+      })
+      .filter(Boolean);
+    if (gp.length > 0) imageModelPreference = gp;
+  }
+  let bindingOverrides: ModelOpsConfig["bindingOverrides"] = undefined;
+  if (Array.isArray(o.bindingOverrides)) {
+    const rows = o.bindingOverrides
+      .filter((x): x is Record<string, unknown> => x != null && typeof x === "object")
+      .map((row) => {
+        const bindingId = String(row.bindingId ?? "").trim();
+        if (!bindingId) return null;
+        const enabled = row.enabled === undefined ? undefined : row.enabled === true;
+        const priority =
+          typeof row.priority === "number" && Number.isFinite(row.priority) ? Math.floor(row.priority) : undefined;
+        const upstreamOverride =
+          typeof row.upstreamOverride === "string" && row.upstreamOverride.trim()
+            ? row.upstreamOverride.trim()
+            : undefined;
+        return { bindingId, enabled, priority, upstreamOverride };
+      })
+      .filter((x): x is NonNullable<typeof x> => x != null);
+    if (rows.length > 0) bindingOverrides = rows;
   }
   return {
     version,
     imageRegistryAllowlist,
-    gearPreference: gearPreference ?? DEFAULT_MODEL_OPS_CONFIG.gearPreference,
+    imageModelPreference: imageModelPreference ?? DEFAULT_MODEL_OPS_CONFIG.imageModelPreference,
+    bindingOverrides,
   };
 }
 

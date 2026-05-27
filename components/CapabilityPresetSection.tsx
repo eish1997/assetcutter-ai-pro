@@ -1,7 +1,8 @@
 import React, { useState, useRef, useMemo, useEffect, useLayoutEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import type { CustomAppModule, CapabilityCategory, CapabilityEngine, DialogImageGear, Generate3DPreset, CapabilitySet } from '../types';
-import { CAPABILITY_CATEGORIES, DIALOG_IMAGE_GEARS, SUPPORTED_ASPECT_RATIOS, SUPPORTED_IMAGE_SIZES } from '../types';
+import type { CustomAppModule, CapabilityCategory, CapabilityEngine, Generate3DPreset, CapabilitySet } from '../types';
+import { coerceImageModelRegistryId, labelForImageModelRegistryId, DEFAULT_IMAGE_MODEL_REGISTRY_ID } from '../services/modelRegistry/imageModels';
+import { CAPABILITY_CATEGORIES, SUPPORTED_ASPECT_RATIOS, SUPPORTED_IMAGE_SIZES } from '../types';
 import type { CapabilityTestResult } from '../services/capabilityTestRunner';
 import {
   BUILTIN_CAPABILITY_EDITABLE_IDS,
@@ -33,7 +34,7 @@ import { CapabilityPreviewImg } from './CapabilityPreviewImg';
 import { ImagePreviewOverlay } from './ImagePreviewOverlay';
 import { CustomDropdown, DROPDOWN_TRIGGER_COMPACT } from './ui/CustomDropdown';
 import AppIcon from './ui/AppIcon';
-import { useEffectiveImageGearRows } from '../hooks/useEffectiveImageGearRows';
+import { useEffectiveImageModelRows } from '../hooks/useEffectiveImageGearRows';
 
 const CAPABILITY_SETS_VERSION = 1;
 const CAPABILITY_PRESET_COLUMNS_KEY = 'ac_capability_preset_columns_v1';
@@ -163,14 +164,12 @@ const CapabilityPresetSection: React.FC<{
   }, [embedComposerActiveId]);
   const reindex = (list: CustomAppModule[]) => list.map((p, i) => ({ ...p, order: i }));
   const update = (list: CustomAppModule[]) => onUpdate(reindex(list));
-  const { rows: effectiveGearRows, coerceGearId } = useEffectiveImageGearRows();
+  const { rows: effectiveModelRows, coerceModelId } = useEffectiveImageModelRows();
   const getEngine = (p: CustomAppModule): CapabilityEngine => getCapabilityEngine(p);
   const isBuiltinImagePipelinePreset = (p: CustomAppModule) =>
     p.category === 'image_to_image' && getCapabilityEngine(p) === 'builtin';
-  const getGear = (p: CustomAppModule): DialogImageGear => {
-    const g = (p.imageGear as DialogImageGear) || 'standard';
-    return DIALOG_IMAGE_GEARS.some((x) => x.id === g) ? g : 'standard';
-  };
+  const getImageModelRegistryId = (p: CustomAppModule): string =>
+    coerceImageModelRegistryId(p.imageModelRegistryId ?? p.imageGear);
   const genId = () => {
     try {
       const c: { randomUUID?: () => string } | null = typeof crypto !== 'undefined' ? crypto : null;
@@ -186,12 +185,12 @@ const CapabilityPresetSection: React.FC<{
   const [editCategory, setEditCategory] = useState<CapabilityCategory>('image_to_image');
   const [editEngine, setEditEngine] = useState<CapabilityEngine>('gen_image');
   const [editEnabled, setEditEnabled] = useState(true);
-  const [editImageGear, setEditImageGear] = useState<DialogImageGear>('standard');
+  const [editImageModelRegistryId, setEditImageModelRegistryId] = useState<string>(DEFAULT_IMAGE_MODEL_REGISTRY_ID);
   useLayoutEffect(() => {
     if (!editingId) return;
-    const next = coerceGearId(editImageGear);
-    if (next !== editImageGear) setEditImageGear(next as DialogImageGear);
-  }, [editingId, effectiveGearRows, coerceGearId, editImageGear]);
+    const next = coerceModelId(editImageModelRegistryId);
+    if (next !== editImageModelRegistryId) setEditImageModelRegistryId(next);
+  }, [editingId, effectiveModelRows, coerceModelId, editImageModelRegistryId]);
   const [editImageAspectRatio, setEditImageAspectRatio] = useState('');
   const [editImageSize, setEditImageSize] = useState('');
   const [editInstruction, setEditInstruction] = useState('');
@@ -212,7 +211,7 @@ const CapabilityPresetSection: React.FC<{
   const [newCategory, setNewCategory] = useState<CapabilityCategory>('image_to_image');
   const [newEngine, setNewEngine] = useState<CapabilityEngine>('gen_image');
   const [newEnabled, setNewEnabled] = useState(true);
-  const [newImageGear, setNewImageGear] = useState<DialogImageGear>('standard');
+  const [newImageModelRegistryId, setNewImageModelRegistryId] = useState<string>(DEFAULT_IMAGE_MODEL_REGISTRY_ID);
   const [newImageAspectRatio, setNewImageAspectRatio] = useState('');
   const [newImageSize, setNewImageSize] = useState('');
   const [newInstruction, setNewInstruction] = useState('');
@@ -435,12 +434,14 @@ const CapabilityPresetSection: React.FC<{
       }
       const {
         imageGear: _ig,
+        imageModelRegistryId: _im,
         imageAspectRatio: _iar,
         imageSize: _is,
         skipUnderstand: _su,
         ...prevRest
       } = prev;
       void _ig;
+      void _im;
       void _iar;
       void _is;
       void _su;
@@ -477,7 +478,7 @@ const CapabilityPresetSection: React.FC<{
           skipUnderstand: showGenImageFields || showGenVideoFields ? editSkipUnderstand : undefined,
           requirePromptOnTextDrop: editCategory === 'text_to_text' ? editRequirePromptOnTextDrop : undefined,
           enabled: editEnabled,
-          imageGear: showGenImageFields ? editImageGear : undefined,
+          imageModelRegistryId: showGenImageFields ? editImageModelRegistryId : undefined,
           imageAspectRatio: showGenImageFields ? editImageAspectRatio || undefined : undefined,
           imageSize: showGenImageFields ? editImageSize || undefined : undefined,
           engine:
@@ -528,7 +529,7 @@ const CapabilityPresetSection: React.FC<{
       requirePromptOnTextDrop: newCategory === 'text_to_text' ? newRequirePromptOnTextDrop : undefined,
       enabled: newEnabled,
       order: presets.length,
-      imageGear: showNewGenImage ? newImageGear : undefined,
+      imageModelRegistryId: showNewGenImage ? newImageModelRegistryId : undefined,
       imageAspectRatio: showNewGenImage ? newImageAspectRatio || undefined : undefined,
       imageSize: showNewGenImage ? newImageSize || undefined : undefined,
       engine:
@@ -554,7 +555,7 @@ const CapabilityPresetSection: React.FC<{
     setNewCategory('image_to_image');
     setNewEngine('gen_image');
     setNewEnabled(true);
-    setNewImageGear('standard');
+    setNewImageModelRegistryId(DEFAULT_IMAGE_MODEL_REGISTRY_ID);
     setNewImageAspectRatio('');
     setNewImageSize('');
     setNewInstruction('');
@@ -994,7 +995,7 @@ const CapabilityPresetSection: React.FC<{
     setEditCategory(p.category);
     setEditEngine(getEngine(p));
     setEditEnabled(p.enabled !== false);
-    setEditImageGear(getGear(p));
+    setEditImageModelRegistryId(getImageModelRegistryId(p));
     setEditImageAspectRatio(p.imageAspectRatio ?? '');
     setEditImageSize(p.imageSize ?? '');
     setEditInstruction(((p as { instructionFixed?: string }).instructionFixed ?? p.instruction) || '');
@@ -1595,16 +1596,16 @@ const CapabilityPresetSection: React.FC<{
             {(newCategory === 'text_to_image' || (newCategory === 'image_to_image' && newEngine === 'gen_image')) && (
               <>
                 <label className="flex items-center gap-2 text-[9px] text-gray-400">
-                  <span className="font-black uppercase">生图档位</span>
+                  <span className="font-black uppercase">生图模型</span>
                   <CustomDropdown
-                    options={effectiveGearRows.map((g) => ({
-                      value: g.id,
+                    options={effectiveModelRows.map((g) => ({
+                      value: g.registryId,
                       label: g.label,
                       disabled: g.disabled,
                       title: g.disabledReason,
                     }))}
-                    value={newImageGear}
-                    onChange={(v) => setNewImageGear(v as DialogImageGear)}
+                    value={newImageModelRegistryId}
+                    onChange={(v) => setNewImageModelRegistryId(v)}
                     triggerClassName={DROPDOWN_TRIGGER_COMPACT}
                   />
                 </label>
@@ -2398,16 +2399,16 @@ const CapabilityPresetSection: React.FC<{
                           {(editCategory === 'text_to_image' || (editCategory === 'image_to_image' && editEngine === 'gen_image')) && (
                             <div className="grid grid-cols-1 gap-2">
                               <label className="flex items-center gap-2 text-[9px] text-gray-400">
-                                <span className="font-black uppercase">生图档位</span>
+                                <span className="font-black uppercase">生图模型</span>
                                 <CustomDropdown
-                                  options={effectiveGearRows.map((g) => ({
-                      value: g.id,
-                      label: g.label,
-                      disabled: g.disabled,
-                      title: g.disabledReason,
-                    }))}
-                                  value={editImageGear}
-                                  onChange={(v) => setEditImageGear(v as DialogImageGear)}
+                                  options={effectiveModelRows.map((g) => ({
+                                    value: g.registryId,
+                                    label: g.label,
+                                    disabled: g.disabled,
+                                    title: g.disabledReason,
+                                  }))}
+                                  value={editImageModelRegistryId}
+                                  onChange={(v) => setEditImageModelRegistryId(v)}
                                   triggerClassName={DROPDOWN_TRIGGER_COMPACT}
                                   portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
                                 />
@@ -2736,8 +2737,12 @@ const CapabilityPresetSection: React.FC<{
                             </div>
                           </div>
                           <div className="rounded-lg bg-[#1b1b21] border border-[#2a2a32] px-2 py-1.5">
-                            <div className="text-gray-500">生图档位</div>
-                            <div className="text-gray-200 mt-0.5">{detailPreset.imageGear || '默认'}</div>
+                            <div className="text-gray-500">生图模型</div>
+                            <div className="text-gray-200 mt-0.5">
+                              {labelForImageModelRegistryId(
+                                getImageModelRegistryId(detailPreset)
+                              )}
+                            </div>
                           </div>
                           <div className="rounded-lg bg-[#1b1b21] border border-[#2a2a32] px-2 py-1.5">
                             <div className="text-gray-500">比例 / 尺寸</div>

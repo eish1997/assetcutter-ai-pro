@@ -7,28 +7,6 @@ import {
   MAX_AVATAR_DATA_URL_CHARS,
 } from '../services/userUiPrefs';
 import {
-  getUserApiKey,
-  setUserApiKey,
-  DEFAULT_AI_PROVIDER,
-  getAiProvider,
-  setAiProvider,
-  getToapisApiKey,
-  setToapisApiKey,
-  getToapisBaseUrl,
-  setToapisBaseUrl,
-  getAntigravityApiKey,
-  setAntigravityApiKey,
-  getAntigravityBaseUrl,
-  setAntigravityBaseUrl,
-  getOpenaiApiKey,
-  setOpenaiApiKey,
-  getOpenaiBaseUrl,
-  setOpenaiBaseUrl,
-  getVectorengineApiKey,
-  setVectorengineApiKey,
-  getVectorengineBaseUrl,
-  setVectorengineBaseUrl,
-  type AiProvider,
   getTencentSecretId,
   setTencentSecretId as saveTencentSecretId,
   getTencentSecretKey,
@@ -37,6 +15,7 @@ import {
   getDebugClientLogPersistEnabled,
   setDebugClientLogPersistEnabled,
 } from '../services/settingsStore';
+import AiProviderCredentialsPanel from './AiProviderCredentialsPanel';
 import { isWorkspaceCloudEnabled } from '../services/workspaceCloudSync';
 import {
   getCompanionLocalBaseUrl,
@@ -106,16 +85,6 @@ function parseLocalCapabilityUiSnippet(json: string): { headline: string; sublin
   }
 }
 
-const AI_PROVIDER_OPTIONS: { value: AiProvider; label: string }[] = [
-  { value: 'trial', label: '试用（代理通道，无需本地 Key）' },
-  { value: 'vertex', label: 'Vertex AI（GCP · 经站点代理，OAuth/ADC）' },
-  { value: 'gemini', label: 'Google Gemini（官方 API）' },
-  { value: 'toapis', label: 'ToAPIs 网关（OpenAI 兼容 + 异步生图）' },
-  { value: 'antigravity', label: 'Antigravity Tools（本机 OpenAI 兼容反代）' },
-  { value: 'openai', label: 'OpenAI（官方 Chat + Images API）' },
-  { value: 'vectorengine', label: '向量引擎 VectorEngine（Gemini 原生 REST）' },
-];
-
 const COMPANION_SETTINGS_STREAM_STATE_KEY = 'ac_companion_settings_stream_state_v2';
 
 /** 供用户贴到「运行本机伴侣」的终端 / 系统环境变量（非浏览器 localStorage） */
@@ -165,19 +134,8 @@ const SettingsSection: React.FC<{
   preferenceScope = null,
 }) => {
   const contentRef = useRef<HTMLDivElement>(null);
-  const [aiProvider, setAiProviderState] = useState<AiProvider>(DEFAULT_AI_PROVIDER);
-  const [apiKey, setApiKey] = useState('');
-  const [toapisApiKey, setToapisApiKeyState] = useState('');
-  const [toapisBaseUrl, setToapisBaseUrlState] = useState('');
-  const [antigravityApiKey, setAntigravityApiKeyState] = useState('');
-  const [antigravityBaseUrl, setAntigravityBaseUrlState] = useState('');
-  const [openaiApiKey, setOpenaiApiKeyState] = useState('');
-  const [openaiBaseUrl, setOpenaiBaseUrlState] = useState('');
-  const [vectorengineApiKey, setVectorengineApiKeyState] = useState('');
-  const [vectorengineBaseUrl, setVectorengineBaseUrlState] = useState('');
   const [tencentSecretId, setTencentSecretId] = useState('');
   const [tencentSecretKey, setTencentSecretKey] = useState('');
-  const [saved, setSaved] = useState(false);
   const [tencentSaved, setTencentSaved] = useState(false);
   const [userActionBusy, setUserActionBusy] = useState<'refresh' | 'logout' | null>(null);
   const [userActionMsg, setUserActionMsg] = useState<string>('');
@@ -319,16 +277,6 @@ const SettingsSection: React.FC<{
   }, [companionJobAfterSeq, companionJobEventsAuto, companionJobIdDraft]);
 
   const reloadApiSettingsFromStore = useCallback(() => {
-    setAiProviderState(getAiProvider());
-    setApiKey(getUserApiKey() ?? '');
-    setToapisApiKeyState(getToapisApiKey() ?? '');
-    setToapisBaseUrlState(getToapisBaseUrl());
-    setAntigravityApiKeyState(getAntigravityApiKey() ?? '');
-    setAntigravityBaseUrlState(getAntigravityBaseUrl());
-    setOpenaiApiKeyState(getOpenaiApiKey() ?? '');
-    setOpenaiBaseUrlState(getOpenaiBaseUrl());
-    setVectorengineApiKeyState(getVectorengineApiKey() ?? '');
-    setVectorengineBaseUrlState(getVectorengineBaseUrl());
     setTencentSecretId(getTencentSecretId() ?? '');
     setTencentSecretKey(getTencentSecretKey() ?? '');
     setDebugLogPersistEnabledState(getDebugClientLogPersistEnabled());
@@ -341,60 +289,6 @@ const SettingsSection: React.FC<{
   useEffect(() => {
     return subscribeAiSettingsCrossTab(reloadApiSettingsFromStore);
   }, [reloadApiSettingsFromStore]);
-
-  const handleSaveApiKey = () => {
-    setUserApiKey(apiKey.trim() || null);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
-  };
-
-  const handleSaveToapis = () => {
-    setToapisApiKey(toapisApiKey.trim() || null);
-    setToapisBaseUrl(toapisBaseUrl.trim() || null);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
-  };
-
-  const handleSaveAntigravity = () => {
-    setAntigravityApiKey(antigravityApiKey.trim() || null);
-    setAntigravityBaseUrl(antigravityBaseUrl.trim() || null);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
-  };
-
-  const handleSaveOpenai = () => {
-    setOpenaiApiKey(openaiApiKey.trim() || null);
-    setOpenaiBaseUrl(openaiBaseUrl.trim() || null);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
-  };
-
-  const handleSaveVectorengine = () => {
-    setVectorengineApiKey(vectorengineApiKey.trim() || null);
-    setVectorengineBaseUrl(vectorengineBaseUrl.trim() || null);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
-  };
-
-  const handleAiProviderChange = (value: string) => {
-    const v: AiProvider =
-      value === 'trial'
-        ? 'trial'
-        : value === 'vertex'
-          ? 'vertex'
-        : value === 'toapis'
-          ? 'toapis'
-          : value === 'antigravity'
-            ? 'antigravity'
-            : value === 'openai'
-              ? 'openai'
-            : value === 'vectorengine'
-              ? 'vectorengine'
-              : 'gemini';
-    setAiProviderState(v);
-    setAiProvider(v);
-    onAiInvocationSurfaceChange?.();
-  };
 
   const handleSaveTencent = () => {
     saveTencentSecretId(tencentSecretId.trim() || null);
@@ -1654,21 +1548,10 @@ const SettingsSection: React.FC<{
               <div className="space-y-8">
                 {/* AI 调用源 */}
                 <div className="rounded-xl border border-[#252528] p-4 space-y-4">
-                  <div className="rounded-lg border border-[#2e2e32] bg-[#16161a] p-3 text-[10px] text-gray-400">
-                    普通用户建议：先用「试用（代理）」；如果要自带 Key，再切到对应供应商填写一项即可。下方腾讯云等为高级选项。
-                  </div>
-                  <h3 className="text-[11px] font-black uppercase tracking-wider text-blue-400/90 mb-1">AI 调用源</h3>
-                  <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-                    <span className="text-[10px] text-gray-500 shrink-0">供应商</span>
-                    <CustomDropdown
-                      options={AI_PROVIDER_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
-                      value={aiProvider}
-                      onChange={handleAiProviderChange}
-                      triggerClassName={`${DROPDOWN_TRIGGER_COMPACT} flex-1 min-w-[12rem]`}
-                    />
-                  </div>
+                  <h3 className="text-[11px] font-black uppercase tracking-wider text-blue-400/90 mb-1">AI 供应商</h3>
+                  <AiProviderCredentialsPanel onChanged={onAiInvocationSurfaceChange} />
                   <p className="text-[9px] text-gray-500 leading-relaxed">
-                    生图档位运营策略：可配置{' '}
+                    生图模型运营策略：可配置{' '}
                     <code className="text-gray-400">VITE_MODEL_OPS_CONFIG_URL</code> 指向 JSON，工作区/擂台等会随策略禁用部分档位。{' '}
                     <button
                       type="button"
@@ -1680,171 +1563,6 @@ const SettingsSection: React.FC<{
                       重新拉取
                     </button>
                   </p>
-
-                  {aiProvider === 'trial' ? (
-                    <>
-                      <h4 className="text-[10px] font-bold text-white/80 uppercase tracking-wider">试用通道（代理）</h4>
-                      <p className="text-[9px] text-gray-500 leading-relaxed">
-                        试用模式固定走站点配置的 <code className="text-gray-400">VITE_BULK_IMAGE_API</code> 代理（Gemini API Key 路径），无需在本机填写 Key。
-                        每账号每日限 20 次代理任务（未登录为当前浏览器设备计数）；超限请明日再试、登录后使用账号额度，或切换到其它供应商填写自有 Key。
-                        若代理拥堵/限流，建议切换到其它供应商并填写对应前端 Key 直连。
-                      </p>
-                    </>
-                  ) : aiProvider === 'vertex' ? (
-                    <>
-                      <h4 className="text-[10px] font-bold text-white/80 uppercase tracking-wider">Vertex AI（代理）</h4>
-                      <p className="text-[9px] text-gray-500 leading-relaxed">
-                        请求会带 <code className="text-gray-400">aiBackend:vertex</code>，由已配置{' '}
-                        <code className="text-gray-400">VERTEX_PROJECT_ID</code> / ADC 的 gemini-proxy 转发；浏览器无需填写 GCP 密钥。
-                        构建时可设 <code className="text-gray-400">VITE_BULK_IMAGE_API_VERTEX</code> 指向专用代理根（未设则与试用共用{' '}
-                        <code className="text-gray-400">VITE_BULK_IMAGE_API</code>）。详见{' '}
-                        <code className="text-gray-400">docs/VERTEX_AI_INTEGRATION.md</code>。
-                      </p>
-                    </>
-                  ) : aiProvider === 'gemini' ? (
-                    <>
-                      <h4 className="text-[10px] font-bold text-white/80 uppercase tracking-wider">Gemini API Key</h4>
-                      <div className="flex flex-col sm:flex-row gap-3">
-                        <input
-                          type="password"
-                          value={apiKey}
-                          onChange={(e) => setApiKey(e.target.value)}
-                          onBlur={handleSaveApiKey}
-                          placeholder="Google AI Studio / Gemini API Key"
-                          className="flex-1 min-w-0 px-4 py-3 rounded-xl bg-[#16161a] border border-[#2e2e32] text-sm text-white placeholder-gray-500 focus:border-[#3b82f6] focus:outline-none"
-                          autoComplete="off"
-                        />
-                        <button
-                          type="button"
-                          onClick={handleSaveApiKey}
-                          className="shrink-0 px-5 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-black uppercase tracking-wider transition-colors"
-                        >
-                          {saved ? '已保存' : '保存'}
-                        </button>
-                      </div>
-                    </>
-                  ) : aiProvider === 'toapis' ? (
-                    <>
-                      <h4 className="text-[10px] font-bold text-white/80 uppercase tracking-wider">ToAPIs</h4>
-                      <div className="flex flex-col sm:flex-row gap-3">
-                        <input
-                          type="password"
-                          value={toapisApiKey}
-                          onChange={(e) => setToapisApiKeyState(e.target.value)}
-                          onBlur={handleSaveToapis}
-                          placeholder="ToAPIs API Key"
-                          className="flex-1 min-w-0 px-4 py-3 rounded-xl bg-[#16161a] border border-[#2e2e32] text-sm text-white placeholder-gray-500 focus:border-[#3b82f6] focus:outline-none"
-                          autoComplete="off"
-                        />
-                        <button
-                          type="button"
-                          onClick={handleSaveToapis}
-                          className="shrink-0 px-5 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-black uppercase tracking-wider transition-colors"
-                        >
-                          {saved ? '已保存' : '保存'}
-                        </button>
-                      </div>
-                    </>
-                  ) : aiProvider === 'antigravity' ? (
-                    <>
-                      <h4 className="text-[10px] font-bold text-white/80 uppercase tracking-wider">Antigravity Tools</h4>
-                      <p className="text-[9px] text-gray-500 leading-relaxed">
-                        在本机启动 Antigravity 的「API 反代」后填写；Base URL 须指向 OpenAI 兼容前缀（含 /v1），默认本机 8045 端口。若浏览器跨域失败，可在 vite 配置同源代理后再填代理路径。
-                      </p>
-                      <div className="space-y-3">
-                        <input
-                          type="url"
-                          value={antigravityBaseUrl}
-                          onChange={(e) => setAntigravityBaseUrlState(e.target.value)}
-                          onBlur={handleSaveAntigravity}
-                          placeholder="http://127.0.0.1:8045/v1"
-                          className="w-full min-w-0 px-4 py-3 rounded-xl bg-[#16161a] border border-[#2e2e32] text-sm text-white placeholder-gray-500 focus:border-[#3b82f6] focus:outline-none"
-                          autoComplete="off"
-                        />
-                        <div className="flex flex-col sm:flex-row gap-3">
-                          <input
-                            type="password"
-                            value={antigravityApiKey}
-                            onChange={(e) => setAntigravityApiKeyState(e.target.value)}
-                            onBlur={handleSaveAntigravity}
-                            placeholder="Antigravity 反代 API Key"
-                            className="flex-1 min-w-0 px-4 py-3 rounded-xl bg-[#16161a] border border-[#2e2e32] text-sm text-white placeholder-gray-500 focus:border-[#3b82f6] focus:outline-none"
-                            autoComplete="off"
-                          />
-                          <button
-                            type="button"
-                            onClick={handleSaveAntigravity}
-                            className="shrink-0 px-5 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-black uppercase tracking-wider transition-colors"
-                          >
-                            {saved ? '已保存' : '保存'}
-                          </button>
-                        </div>
-                      </div>
-                    </>
-                  ) : aiProvider === 'openai' ? (
-                    <>
-                      <h4 className="text-[10px] font-bold text-white/80 uppercase tracking-wider">OpenAI</h4>
-                      <p className="text-[9px] text-gray-500 leading-relaxed">
-                        使用 OpenAI 官方 <code className="text-gray-400">/v1/chat/completions</code> 与{' '}
-                        <code className="text-gray-400">/v1/images/*</code>（浏览器直连）；默认 Base 为{' '}
-                        <code className="text-gray-400">https://api.openai.com/v1</code>。合规与账单请在 OpenAI 控制台自行管理。
-                      </p>
-                      <div className="space-y-3">
-                        <input
-                          type="url"
-                          value={openaiBaseUrl}
-                          onChange={(e) => setOpenaiBaseUrlState(e.target.value)}
-                          onBlur={handleSaveOpenai}
-                          placeholder="https://api.openai.com/v1"
-                          className="w-full min-w-0 px-4 py-3 rounded-xl bg-[#16161a] border border-[#2e2e32] text-sm text-white placeholder-gray-500 focus:border-[#3b82f6] focus:outline-none"
-                          autoComplete="off"
-                        />
-                        <div className="flex flex-col sm:flex-row gap-3">
-                          <input
-                            type="password"
-                            value={openaiApiKey}
-                            onChange={(e) => setOpenaiApiKeyState(e.target.value)}
-                            onBlur={handleSaveOpenai}
-                            placeholder="OpenAI API Key（sk-…）"
-                            className="flex-1 min-w-0 px-4 py-3 rounded-xl bg-[#16161a] border border-[#2e2e32] text-sm text-white placeholder-gray-500 focus:border-[#3b82f6] focus:outline-none"
-                            autoComplete="off"
-                          />
-                          <button
-                            type="button"
-                            onClick={handleSaveOpenai}
-                            className="shrink-0 px-5 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-black uppercase tracking-wider transition-colors"
-                          >
-                            {saved ? '已保存' : '保存'}
-                          </button>
-                        </div>
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <h4 className="text-[10px] font-bold text-white/80 uppercase tracking-wider">VectorEngine</h4>
-                      <div className="space-y-3">
-                        <div className="flex flex-col sm:flex-row gap-3">
-                          <input
-                            type="password"
-                            value={vectorengineApiKey}
-                            onChange={(e) => setVectorengineApiKeyState(e.target.value)}
-                            onBlur={handleSaveVectorengine}
-                            placeholder="VectorEngine API Key"
-                            className="flex-1 min-w-0 px-4 py-3 rounded-xl bg-[#16161a] border border-[#2e2e32] text-sm text-white placeholder-gray-500 focus:border-[#3b82f6] focus:outline-none"
-                            autoComplete="off"
-                          />
-                          <button
-                            type="button"
-                            onClick={handleSaveVectorengine}
-                            className="shrink-0 px-5 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-black uppercase tracking-wider transition-colors"
-                          >
-                            {saved ? '已保存' : '保存'}
-                          </button>
-                        </div>
-                      </div>
-                    </>
-                  )}
-                  {saved && <p className="mt-2 text-[10px] text-green-400/90">已保存到本机</p>}
                 </div>
 
                 {/* 混元（腾讯云） */}

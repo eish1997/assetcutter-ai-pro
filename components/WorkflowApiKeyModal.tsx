@@ -1,43 +1,8 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useCallback, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import {
-  DEFAULT_AI_PROVIDER,
-  getAiProvider,
-  setAiProvider,
-  getUserApiKey,
-  setUserApiKey,
-  getToapisApiKey,
-  setToapisApiKey,
-  getToapisBaseUrl,
-  setToapisBaseUrl,
-  getAntigravityApiKey,
-  setAntigravityApiKey,
-  getAntigravityBaseUrl,
-  setAntigravityBaseUrl,
-  getOpenaiApiKey,
-  setOpenaiApiKey,
-  getOpenaiBaseUrl,
-  setOpenaiBaseUrl,
-  getVectorengineApiKey,
-  setVectorengineApiKey,
-  getVectorengineBaseUrl,
-  setVectorengineBaseUrl,
-  getTripoApiKey,
-  setTripoApiKey,
-  type AiProvider,
-} from '../services/settingsStore';
-import { CustomDropdown, DROPDOWN_TRIGGER_COMPACT } from './ui/CustomDropdown';
+import { getTripoApiKey, setTripoApiKey } from '../services/settingsStore';
+import AiProviderCredentialsPanel from './AiProviderCredentialsPanel';
 import AppIcon from './ui/AppIcon';
-
-const AI_PROVIDER_OPTIONS: { value: AiProvider; label: string }[] = [
-  { value: 'trial', label: '试用（代理通道）' },
-  { value: 'vertex', label: 'Vertex AI（GCP · 经代理）' },
-  { value: 'gemini', label: 'Google Gemini（官方 API）' },
-  { value: 'toapis', label: 'ToAPIs 网关' },
-  { value: 'antigravity', label: 'Antigravity Tools（本机反代）' },
-  { value: 'openai', label: 'OpenAI（官方 API）' },
-  { value: 'vectorengine', label: '向量引擎 VectorEngine' },
-];
 
 export const WorkflowApiKeyModal: React.FC<{
   open: boolean;
@@ -45,32 +10,11 @@ export const WorkflowApiKeyModal: React.FC<{
   /** 保存成功后回调，用于刷新外部状态信号等 */
   onSaved?: () => void;
 }> = ({ open, onClose, onSaved }) => {
-  const [provider, setProvider] = useState<AiProvider>(DEFAULT_AI_PROVIDER);
-  const [geminiKey, setGeminiKey] = useState('');
-  const [toapisKey, setToapisKey] = useState('');
-  const [agKey, setAgKey] = useState('');
-  const [openaiKey, setOpenaiKey] = useState('');
-  const [veKey, setVeKey] = useState('');
-  const [toapisBase, setToapisBase] = useState('');
-  const [agBase, setAgBase] = useState('');
-  const [openaiBase, setOpenaiBase] = useState('');
-  const [veBase, setVeBase] = useState('');
-  const [tripoKey, setTripoKey] = useState('');
-  const [savedFlash, setSavedFlash] = useState(false);
+  const [tripoKey, setTripoKey] = React.useState('');
 
   useEffect(() => {
     if (!open) return;
-    setProvider(getAiProvider());
-    setGeminiKey(getUserApiKey() ?? '');
-    setToapisKey(getToapisApiKey() ?? '');
-    setAgKey(getAntigravityApiKey() ?? '');
-    setOpenaiKey(getOpenaiApiKey() ?? '');
-    setVeKey(getVectorengineApiKey() ?? '');
     setTripoKey(getTripoApiKey() ?? '');
-    setToapisBase(getToapisBaseUrl());
-    setAgBase(getAntigravityBaseUrl());
-    setOpenaiBase(getOpenaiBaseUrl());
-    setVeBase(getVectorengineBaseUrl());
   }, [open]);
 
   const onEscape = useCallback(
@@ -88,59 +32,9 @@ export const WorkflowApiKeyModal: React.FC<{
 
   if (!open) return null;
 
-  const keyValue =
-    provider === 'gemini'
-      ? geminiKey
-      : provider === 'trial' || provider === 'vertex'
-          ? ''
-        : provider === 'toapis'
-          ? toapisKey
-          : provider === 'antigravity'
-            ? agKey
-          : provider === 'openai'
-            ? openaiKey
-            : veKey;
-  const setKeyValue = (v: string) => {
-    if (provider === 'gemini') setGeminiKey(v);
-    else if (provider === 'toapis') setToapisKey(v);
-    else if (provider === 'antigravity') setAgKey(v);
-    else if (provider === 'openai') setOpenaiKey(v);
-    else if (provider === 'vectorengine') setVeKey(v);
-  };
-
-  const handleProviderChange = (value: string) => {
-    const v: AiProvider =
-      value === 'trial'
-        ? 'trial'
-        : value === 'vertex'
-          ? 'vertex'
-        : value === 'toapis'
-          ? 'toapis'
-          : value === 'antigravity'
-            ? 'antigravity'
-            : value === 'openai'
-              ? 'openai'
-            : value === 'vectorengine'
-              ? 'vectorengine'
-              : 'gemini';
-    setProvider(v);
-  };
-
-  const handleSave = () => {
-    setAiProvider(provider);
-    setUserApiKey(geminiKey.trim() || null);
-    setToapisApiKey(toapisKey.trim() || null);
-    setToapisBaseUrl(toapisBase.trim() || null);
-    setAntigravityApiKey(agKey.trim() || null);
-    setAntigravityBaseUrl(agBase.trim() || null);
-    setOpenaiApiKey(openaiKey.trim() || null);
-    setOpenaiBaseUrl(openaiBase.trim() || null);
-    setVectorengineApiKey(veKey.trim() || null);
-    setVectorengineBaseUrl(veBase.trim() || null);
+  const handleSaveTripo = () => {
     setTripoApiKey(tripoKey.trim() || null);
-    setSavedFlash(true);
     onSaved?.();
-    setTimeout(() => setSavedFlash(false), 2000);
   };
 
   return createPortal(
@@ -150,7 +44,7 @@ export const WorkflowApiKeyModal: React.FC<{
       role="presentation"
     >
       <div
-        className="relative w-full max-w-md rounded-2xl border border-white/10 bg-[#0e0e14]/90 backdrop-blur-md shadow-xl p-5"
+        className="relative w-full max-w-lg max-h-[min(88vh,720px)] overflow-y-auto rounded-2xl border border-white/10 bg-[#0e0e14]/90 backdrop-blur-md shadow-xl p-5"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -169,84 +63,27 @@ export const WorkflowApiKeyModal: React.FC<{
             <AppIcon name="close" className="w-4 h-4" />
           </button>
         </div>
-        <div className="space-y-4">
-          <div>
-            <span className="block text-[9px] font-black uppercase text-gray-500 mb-2">供应商</span>
-            <CustomDropdown
-              options={AI_PROVIDER_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
-              value={provider}
-              onChange={handleProviderChange}
-              triggerClassName={`${DROPDOWN_TRIGGER_COMPACT} w-full`}
-              portalZIndex={{ backdrop: 2200, list: 2201 }}
-            />
-          </div>
-          {provider === 'antigravity' ? (
-            <div>
-              <span className="block text-[9px] font-black uppercase text-gray-500 mb-2">Base URL（含 /v1）</span>
-              <input
-                type="url"
-                value={agBase}
-                onChange={(e) => setAgBase(e.target.value)}
-                placeholder="http://127.0.0.1:8045/v1"
-                autoComplete="off"
-                className="w-full min-w-0 px-4 py-3 rounded-xl bg-[#16161a] border border-[#2e2e32] text-sm text-white placeholder-gray-500 focus:border-[#3b82f6] focus:outline-none mb-3"
-              />
-            </div>
-          ) : provider === 'openai' ? (
-            <div>
-              <span className="block text-[9px] font-black uppercase text-gray-500 mb-2">Base URL（含 /v1，可留空用默认）</span>
-              <input
-                type="url"
-                value={openaiBase}
-                onChange={(e) => setOpenaiBase(e.target.value)}
-                placeholder="https://api.openai.com/v1"
-                autoComplete="off"
-                className="w-full min-w-0 px-4 py-3 rounded-xl bg-[#16161a] border border-[#2e2e32] text-sm text-white placeholder-gray-500 focus:border-[#3b82f6] focus:outline-none mb-3"
-              />
-            </div>
-          ) : null}
-          {provider !== 'trial' && provider !== 'vertex' ? (
-            <div>
-              <span className="block text-[9px] font-black uppercase text-gray-500 mb-2">API Key</span>
+        <div className="space-y-5">
+          <AiProviderCredentialsPanel compact onChanged={onSaved} />
+          <div className="rounded-xl border border-[#2a2a30] bg-[#16161a] p-3 space-y-2">
+            <span className="block text-[10px] font-semibold text-gray-200">Tripo 3D（可选）</span>
+            <div className="flex flex-col sm:flex-row gap-2">
               <input
                 type="password"
-                value={keyValue}
-                onChange={(e) => setKeyValue(e.target.value)}
-                placeholder="粘贴密钥"
+                value={tripoKey}
+                onChange={(e) => setTripoKey(e.target.value)}
+                placeholder="Tripo API Key"
                 autoComplete="off"
-                className="w-full min-w-0 px-4 py-3 rounded-xl bg-[#16161a] border border-[#2e2e32] text-sm text-white placeholder-gray-500 focus:border-[#3b82f6] focus:outline-none"
+                className="flex-1 min-w-0 px-3 py-2 rounded-lg bg-[#121214] border border-[#2e2e32] text-[11px] text-white placeholder-gray-500 focus:border-[#3b82f6] focus:outline-none"
               />
+              <button
+                type="button"
+                onClick={handleSaveTripo}
+                className="shrink-0 px-3 py-2 rounded-lg bg-white/[0.08] hover:bg-white/[0.12] text-[10px] font-bold text-gray-200 ring-1 ring-white/[0.08]"
+              >
+                保存 Tripo
+              </button>
             </div>
-          ) : null}
-          <div className="flex items-center gap-3 pt-1">
-            <button
-              type="button"
-              onClick={handleSave}
-              className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-black uppercase tracking-wider transition-colors"
-            >
-              {savedFlash ? '已保存' : '保存'}
-            </button>
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-5 py-2.5 rounded-xl bg-[#26262c] border border-[#343438] text-[10px] font-black uppercase text-gray-300 hover:bg-white/15 transition-colors"
-            >
-              关闭
-            </button>
-          </div>
-          <div className="pt-2 border-t border-white/10">
-            <span className="block text-[9px] font-black uppercase text-gray-500 mb-2">Tripo API Key（3D）</span>
-            <input
-              type="password"
-              value={tripoKey}
-              onChange={(e) => setTripoKey(e.target.value)}
-              placeholder="tsk_..."
-              autoComplete="off"
-              className="w-full min-w-0 px-4 py-3 rounded-xl bg-[#16161a] border border-[#2e2e32] text-sm text-white placeholder-gray-500 focus:border-[#3b82f6] focus:outline-none"
-            />
-            <p className="mt-2 text-[10px] text-gray-500">
-              用于工作流「生成3D」预设调用 Tripo（当前测试版为前端直连）。
-            </p>
           </div>
         </div>
       </div>
@@ -254,3 +91,5 @@ export const WorkflowApiKeyModal: React.FC<{
     document.body
   );
 };
+
+export default WorkflowApiKeyModal;

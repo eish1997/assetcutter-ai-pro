@@ -28,6 +28,8 @@ type CustomDropdownProps = {
    * `compact`：列表宽度贴触发器、去掉过宽 `minWidth`，行内边距收紧（适合色块预览菜单）。
    */
   listDensity?: 'default' | 'compact';
+  /** 下拉列表最小宽度（px）；窄触发器但需展示长文案时使用 */
+  listMinWidth?: number;
   /** 覆盖列表容器 `border`/`background` 等（不传则保持默认实色 `#0f0f0f`） */
   listClassName?: string;
 };
@@ -45,6 +47,7 @@ export function CustomDropdown({
   triggerAriaLabel,
   portalZIndex = { backdrop: 1002, list: 1003 },
   listDensity = 'default',
+  listMinWidth,
   listClassName,
 }: CustomDropdownProps) {
   const [open, setOpen] = useState(false);
@@ -73,9 +76,11 @@ export function CustomDropdown({
     const vh = window.innerHeight;
     const vw = window.innerWidth;
     const width =
-      listDensity === 'compact'
-        ? Math.max(Math.round(rect.width), 44)
-        : Math.max(rect.width, 96);
+      listMinWidth != null
+        ? Math.max(Math.round(rect.width), listMinWidth)
+        : listDensity === 'compact'
+          ? Math.max(Math.round(rect.width), 44)
+          : Math.max(rect.width, 96);
     let left = rect.left;
     if (left + width > vw - MARGIN) left = Math.max(MARGIN, vw - width - MARGIN);
     if (left < MARGIN) left = MARGIN;
@@ -110,7 +115,7 @@ export function CustomDropdown({
     }
 
     setListPosition({ top, bottom, left, width, maxHeight });
-  }, [open, options.length, listDensity]);
+  }, [open, options.length, listDensity, listMinWidth]);
 
   useLayoutEffect(() => {
     if (!open) return;
@@ -149,6 +154,7 @@ export function CustomDropdown({
     listClassName ?? 'border border-[#2e2e32] bg-[#0f0f0f]';
   const listPy = listDensity === 'compact' ? 'py-0.5' : 'py-1';
   const itemPad = listDensity === 'compact' ? 'px-2 py-1.5' : 'px-3 py-2';
+  const listItemWrapClass = listMinWidth != null ? 'whitespace-nowrap' : '';
 
   const portalContent =
     open && typeof document !== 'undefined' ? (
@@ -185,7 +191,7 @@ export function CustomDropdown({
                     onChange(opt.value);
                     setOpen(false);
                   }}
-                  className={`w-full ${itemPad} text-[10px] transition-colors ${
+                  className={`w-full ${listItemWrapClass} ${itemPad} text-[10px] transition-colors ${
                     renderListItem ? 'flex items-center justify-center' : 'text-left'
                   } ${
                     opt.disabled
@@ -205,7 +211,7 @@ export function CustomDropdown({
     ) : null;
 
   return (
-    <div className="relative" ref={triggerRef}>
+    <div className="relative inline-flex items-center" ref={triggerRef}>
       <button
         type="button"
         disabled={disabled}

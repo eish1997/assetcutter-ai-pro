@@ -1,5 +1,16 @@
 {
   "version": 1,
   "imageRegistryAllowlist": null,
-  "gearPreference": ["standard", "fast", "pro"]
+  "imageModelPreference": ["gemini-3.1-flash-image-preview", "gemini-2.5-flash-image", "gemini-3-pro-image-preview"],
+  "bindingOverrides": [
+    {
+      "bindingId": "gemini-3.1-flash-image-preview:vertex-proxy:image",
+      "enabled": true,
+      "priority": 10
+    },
+    {
+      "bindingId": "gemini-3.1-flash-image-preview:toapis-gemini:image",
+      "enabled": false
+    }
+  ]
 }

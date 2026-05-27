@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useState as useLocalState } from 'react';
 import { createPortal } from 'react-dom';
-import { AppMode, ArenaStepEntry, ArenaCurrentStep, ArenaTimelineBlock, DIALOG_IMAGE_GEARS, WinningSnippet } from '../types';
+import { AppMode, ArenaStepEntry, ArenaCurrentStep, ArenaTimelineBlock, WinningSnippet } from '../types';
 import {
   dialogGenerateImage,
   generateArenaPrompts,
@@ -15,7 +15,7 @@ import { loadSnippets, addSnippet, removeSnippet } from '../services/snippetStor
 import { addChoice } from '../services/abChoiceStore';
 import AppIcon from './ui/AppIcon';
 import { SiteImage } from './SiteImage';
-import { useEffectiveImageGearRows } from '../hooks/useEffectiveImageGearRows';
+import { useEffectiveImageModelRows } from '../hooks/useEffectiveImageGearRows';
 
 const ARENA_SNAPSHOT_TEXT_LIMIT = 4000;
 
@@ -253,15 +253,14 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
     setArenaImageModel,
   } = props;
 
-  const { rows: arenaGearRows, coerceGearId: coerceArenaGearId } = useEffectiveImageGearRows();
+  const { rows: arenaModelRows, coerceModelId: coerceArenaModelId } = useEffectiveImageModelRows();
   useLayoutEffect(() => {
-    const ok = arenaGearRows.find((r) => r.modelId === arenaImageModel && !r.disabled);
+    const ok = arenaModelRows.find((r) => r.registryId === arenaImageModel && !r.disabled);
     if (ok) return;
-    const gid = DIALOG_IMAGE_GEARS.find((x) => x.modelId === arenaImageModel)?.id ?? 'standard';
-    const ng = coerceArenaGearId(gid);
-    const fb = arenaGearRows.find((r) => r.id === ng && !r.disabled);
-    if (fb && fb.modelId !== arenaImageModel) setArenaImageModel(fb.modelId);
-  }, [arenaGearRows, coerceArenaGearId, arenaImageModel, setArenaImageModel]);
+    const ng = coerceArenaModelId(arenaImageModel);
+    const fb = arenaModelRows.find((r) => r.registryId === ng && !r.disabled);
+    if (fb && fb.registryId !== arenaImageModel) setArenaImageModel(fb.registryId);
+  }, [arenaModelRows, coerceArenaModelId, arenaImageModel, setArenaImageModel]);
 
   const [processExpanded, setProcessExpanded] = useLocalState(true);
   const copyToClipboard = (text: string) => { try { navigator.clipboard.writeText(text); addGlobalLog('提示词擂台', 'info', '已复制到剪贴板', undefined); } catch { addGlobalLog('提示词擂台', 'warn', '复制失败', undefined); } };
@@ -1167,17 +1166,17 @@ const PromptArenaSection: React.FC<PromptArenaSectionProps> = (props) => {
           </div>
           <div className="mt-2 flex items-center gap-3 flex-wrap">
             <span className="text-[9px] text-gray-500">生图模型：</span>
-            {arenaGearRows.map((g) => (
+            {arenaModelRows.map((g) => (
               <button
-                key={g.id}
+                key={g.registryId}
                 type="button"
                 disabled={g.disabled}
-                title={g.disabled ? g.disabledReason : g.modelId}
+                title={g.disabled ? g.disabledReason : g.registryId}
                 onClick={() => {
-                  if (!g.disabled) setArenaImageModel(g.modelId);
+                  if (!g.disabled) setArenaImageModel(g.registryId);
                 }}
-                className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${
-                  arenaImageModel === g.modelId && !g.disabled
+                className={`px-3 py-1.5 rounded-lg text-[9px] font-semibold border ${
+                  arenaImageModel === g.registryId && !g.disabled
                     ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300'
                     : g.disabled
                       ? 'bg-[#1c1c22] border-[#2e2e32] text-gray-600 cursor-not-allowed opacity-60'

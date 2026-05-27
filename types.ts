@@ -1,5 +1,5 @@
 import type { VgpAssetExtension } from './types/vgp';
-import type { DialogImageGear } from './services/modelRegistry/imageModels';
+import type { DialogImageGear, DialogImageModelRegistryId } from './services/modelRegistry/imageModels';
 import type { PanoLocalReprojectSnapshot } from './services/panoViewportProjection';
 
 export type { VgpAssetExtension, VgpGenStepCapture } from './types/vgp';
@@ -319,14 +319,17 @@ export type DialogTempItem = {
   timestamp: number;
 };
 
-/** 对话生图模型列表 / 挡位 / 参考图上限 — 源自 `services/modelRegistry/imageModels.ts`（单一数据源） */
+/** 对话生图模型列表 / 参考图上限 — 源自 `services/modelRegistry/imageModels.ts`（单一数据源） */
 export {
   DIALOG_IMAGE_GEARS,
   DIALOG_IMAGE_MODEL_MAX_REFERENCE_IMAGES,
   DIALOG_IMAGE_MODELS,
+  DIALOG_IMAGE_REGISTRY,
+  DEFAULT_IMAGE_MODEL_REGISTRY_ID,
   maxReferenceImagesForImageGear,
+  maxReferenceImagesForImageModel,
 } from './services/modelRegistry/imageModels';
-export type { DialogImageGear };
+export type { DialogImageGear, DialogImageModelRegistryId };
 
 // ---------- 工作流模块 ----------
 /** 工作流功能类型：拖拽到的目标框（默认 4 个，可扩展） */
@@ -607,6 +610,8 @@ export type WorkflowPendingTask = {
   /** 来自文字资产卡片时的正文（标题+正文拼接），文生文/文生图时使用 */
   inputText?: string;
   /** 功能区分组覆盖参数：仅对生图执行路径生效 */
+  overrideImageModelRegistryId?: string;
+  /** @deprecated 请用 `overrideImageModelRegistryId` */
   overrideImageGear?: DialogImageGear;
   overrideImageAspectRatio?: string;
   overrideImageSize?: string;
@@ -717,7 +722,9 @@ export type CustomAppModule = {
    * - generate_3d / generate_video 不使用
    */
   engine?: CapabilityEngine;
-  /** 生图档位（可选），仅在 engine === 'gen_image' 时生效 */
+  /** 生图模型 registryId（可选），仅在 engine === 'gen_image' 时生效 */
+  imageModelRegistryId?: string;
+  /** @deprecated 请用 `imageModelRegistryId`；旧 fast/standard/pro 会在读取时迁移 */
   imageGear?: DialogImageGear;
   /** 生图输出比例（可选），如 1:1、16:9，仅 engine === 'gen_image' 时生效，对应 Gemini imageConfig.aspectRatio */
   imageAspectRatio?: string;

@@ -2,12 +2,17 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { createPortal } from 'react-dom';
 import { Image as ImageIcon, Maximize2, Minimize2 } from 'lucide-react';
 import { SUPPORTED_IMAGE_SIZES } from '../types';
-import { useEffectiveImageGearRows } from '../hooks/useEffectiveImageGearRows';
+import { useEffectiveImageModelRows } from '../hooks/useEffectiveImageGearRows';
 import {
   DT_AC_CAPABILITY_ACTION,
   DT_AC_CAPABILITY_FROM_EDITOR,
   DT_AC_WORKFLOW_EXPORT,
 } from '../services/workflowDragPipeline';
+import { CustomDropdown } from './ui/CustomDropdown';
+import {
+  labelForImageModelRegistryId,
+  shortLabelForImageModelRegistryId,
+} from '../services/modelRegistry/imageModels';
 import { WORKFLOW_QUICK_COMPOSE_BAR_SHELL } from './workflow/workflowSectionUiConstants';
 import QuickComposeDropTray from './workflow/QuickComposeDropTray';
 import QuickComposeMentionField, {
@@ -21,8 +26,8 @@ import type {
 import { mentionsFromSegments, newQuickComposeTextSegment } from '../services/quickComposeMention';
 
 export type WorkspaceQuickComposeGenSettings = {
-  gearId: string;
-  onGearId: (v: string) => void;
+  imageModelRegistryId: string;
+  onImageModelRegistryId: (v: string) => void;
   aspectRatio: string;
   onAspectRatio: (v: string) => void;
   imageSize: string;
@@ -88,6 +93,17 @@ export type WorkspaceQuickComposeBarProps = {
 
 /** 参考常见生图产品：主比例一行 */
 const QC_ASPECT_PRIMARY = ['16:9', '4:3', '1:1', '3:4', '9:16'] as const;
+
+/** 快捷条右侧控件统一高度（模式 / 模型 / 参数 pill） */
+const QUICK_COMPOSE_CTRL_H = 'h-6';
+
+/** 快捷条内 pill 按钮（模型 / 参数）统一高度与内边距 */
+const QUICK_COMPOSE_PILL_TRIGGER =
+  `inline-flex ${QUICK_COMPOSE_CTRL_H} min-h-6 max-h-6 shrink-0 items-center gap-0.5 rounded-md bg-white/[0.06] px-1.5 text-[9px] leading-none ring-1 ring-white/[0.08] outline-none transition-colors hover:bg-white/[0.1] focus-visible:ring-2 focus-visible:ring-blue-500/45`;
+
+/** 快捷条模式 chip（文 / 图 / 3D） */
+const QUICK_COMPOSE_MODE_CHIP_BASE =
+  `inline-flex ${QUICK_COMPOSE_CTRL_H} min-h-6 max-h-6 shrink-0 items-center justify-center rounded-md px-1.5 text-[9px] font-bold leading-none transition-colors box-border`;
 
 const VIEW_MARGIN = 8;
 /** 快捷条默认贴底：底边距视口底约 28px（与旧逻辑 top≈vh−92、高≈64 一致：92−64=28） */
@@ -176,16 +192,16 @@ export default function WorkspaceQuickComposeBar({
     transform: string;
   } | null>(null);
 
-  const { rows: effectiveGearRows, coerceGearId } = useEffectiveImageGearRows();
+  const { rows: effectiveModelRows, coerceModelId } = useEffectiveImageModelRows();
   /** 勿将整颗 `genSettings` 放进 deps：父级每次 render 都是新对象，会导致 layout effect 每帧跑一遍并可能级联 setState → 栈溢出。 */
-  const coerceGearTargetId = genSettings.gearId;
-  const onGearIdChange = genSettings.onGearId;
+  const coerceModelTargetId = genSettings.imageModelRegistryId;
+  const onImageModelChange = genSettings.onImageModelRegistryId;
 
   useLayoutEffect(() => {
     if (!showGenImageSettings) return;
-    const next = coerceGearId(coerceGearTargetId);
-    if (next !== coerceGearTargetId) onGearIdChange(next);
-  }, [showGenImageSettings, coerceGearId, coerceGearTargetId, onGearIdChange]);
+    const next = coerceModelId(coerceModelTargetId);
+    if (next !== coerceModelTargetId) onImageModelChange(next);
+  }, [showGenImageSettings, coerceModelId, coerceModelTargetId, onImageModelChange]);
 
   const resetToDefaultPosition = useCallback(() => {
     const vw = window.innerWidth;
@@ -212,7 +228,7 @@ export default function WorkspaceQuickComposeBar({
 
   const modeLockedByInputPresets = inputPresetsActive;
   const modeChipCls = (active: boolean) =>
-    `shrink-0 rounded-md px-2 py-0.5 text-[10px] font-bold transition-colors ${
+    `${QUICK_COMPOSE_MODE_CHIP_BASE} ${
       modeLockedByInputPresets
         ? 'cursor-not-allowed opacity-40 ring-1 ring-white/[0.06] text-gray-500'
         : active
@@ -520,10 +536,6 @@ export default function WorkspaceQuickComposeBar({
         return `想创作什么？输入 @ 引用参考图（最多 ${maxMentions} 张）`;
       })();
 
-  const gearSummary =
-    effectiveGearRows.find((g) => g.id === genSettings.gearId && !g.disabled)?.label ??
-    effectiveGearRows.find((g) => !g.disabled)?.label ??
-    '标准';
   const aspectSummary =
     genSettings.aspectRatio === 'adaptive' ? '自' : genSettings.aspectRatio || '自';
   const sizeSummary =
@@ -549,6 +561,111 @@ export default function WorkspaceQuickComposeBar({
     `flex min-h-[1.5rem] min-w-0 flex-1 items-center justify-center whitespace-nowrap rounded-md px-1 py-0.5 text-[9px] font-black ring-1 transition-colors ${
       on ? 'bg-white text-[#0a0a0c] ring-white' : 'bg-white/[0.05] text-gray-300 ring-white/[0.07] hover:bg-white/[0.1]'
     }`;
+
+  const modelShortLabel = shortLabelForImageModelRegistryId(genSettings.imageModelRegistryId);
+  const modelFullLabel = labelForImageModelRegistryId(genSettings.imageModelRegistryId);
+
+  const modelPickerControl = showGenImageSettings ? (
+    <CustomDropdown
+      options={effectiveModelRows.map((g) => ({
+        value: g.registryId,
+        label: g.label,
+        disabled: g.disabled,
+        title: g.disabled ? g.disabledReason : undefined,
+      }))}
+      value={genSettings.imageModelRegistryId}
+      onChange={(v) => {
+        const row = effectiveModelRows.find((g) => g.registryId === v);
+        if (row && !row.disabled) genSettings.onImageModelRegistryId(v);
+      }}
+      triggerClassName={`${QUICK_COMPOSE_PILL_TRIGGER} font-bold text-gray-300`}
+      portalZIndex={{ backdrop: 2602, list: 2603 }}
+      triggerAriaLabel={`生图模型：${modelFullLabel}`}
+      listMinWidth={176}
+      renderTrigger={({ open }) => (
+        <>
+          <span className="tabular-nums font-semibold text-gray-200" title={modelFullLabel}>
+            {modelShortLabel}
+          </span>
+          <span className="shrink-0 text-[7px] leading-none text-gray-600">{open ? '▲' : '▼'}</span>
+        </>
+      )}
+    />
+  ) : null;
+
+  const genParamsSummary = (
+    <>
+      {showGenImageSettings ? (
+        <>
+          <span className="shrink-0 text-[9px] text-gray-400">{aspectSummary}</span>
+          {sizeSummary ? (
+            <>
+              <span className="shrink-0 text-[9px] text-gray-600">·</span>
+              <span className="shrink-0 text-[9px] font-mono text-gray-400">{sizeSummary}</span>
+            </>
+          ) : null}
+          {understandSummary ? (
+            <>
+              <span className="shrink-0 text-[9px] text-gray-600">·</span>
+              <span className="shrink-0 text-[9px] font-semibold text-gray-400">{understandSummary}</span>
+            </>
+          ) : null}
+        </>
+      ) : null}
+      {allowBatchCount ? (
+        <>
+          {showGenImageSettings ? (
+            <span className="shrink-0 text-[9px] text-gray-600">·</span>
+          ) : null}
+          <span className="shrink-0 text-[9px] font-bold tabular-nums text-gray-400">x{countSummary}</span>
+        </>
+      ) : null}
+    </>
+  );
+
+  const genActionControls = (
+    <div className="flex shrink-0 items-center gap-2.5">
+      <div
+        className="flex shrink-0 items-center gap-0.5"
+        title={
+          modeLockedByInputPresets
+            ? '已拖入预设卡片，提交时以卡片能力为准（模式切换已锁定）'
+            : '快捷模式：文 · 图 · 3D（无拖入预设时使用）'
+        }
+      >
+        {(['text', 'image', '3d'] as const).map((m) => (
+          <button
+            key={m}
+            type="button"
+            disabled={disabled || modeLockedByInputPresets}
+            onClick={() => {
+              if (modeLockedByInputPresets) return;
+              onComposeModeChange(m);
+            }}
+            className={modeChipCls(composeMode === m)}
+          >
+            {m === 'text' ? '文' : m === 'image' ? '图' : '3D'}
+          </button>
+        ))}
+      </div>
+
+      {modelPickerControl}
+
+      <button
+        ref={settingsTriggerRef}
+        type="button"
+        disabled={disabled}
+        onClick={() => setSettingsOpen((o) => !o)}
+        className={`${QUICK_COMPOSE_PILL_TRIGGER} max-w-[min(11rem,36vw)] overflow-hidden text-left`}
+        title="生成参数"
+        aria-expanded={settingsOpen}
+        aria-haspopup="dialog"
+      >
+        {genParamsSummary}
+        <span className="ml-px shrink-0 text-[7px] leading-none text-gray-600">{settingsOpen ? '▲' : '▼'}</span>
+      </button>
+    </div>
+  );
 
   const settingsPanel =
     settingsOpen && panelPos && typeof document !== 'undefined'
@@ -610,27 +727,6 @@ export default function WorkspaceQuickComposeBar({
                             className={chipClsStretch(genSettings.imageSize === s.value)}
                           >
                             {s.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="table-row">
-                    <div className="table-cell w-full min-w-0 p-0 align-middle">
-                      <div className="flex min-w-0 w-full flex-nowrap items-stretch gap-1">
-                        {effectiveGearRows.map((g) => (
-                          <button
-                            key={g.id}
-                            type="button"
-                            disabled={g.disabled}
-                            title={g.disabled ? g.disabledReason : undefined}
-                            onClick={() => {
-                              if (!g.disabled) genSettings.onGearId(g.id);
-                            }}
-                            className={chipClsStretch(genSettings.gearId === g.id && !g.disabled)}
-                          >
-                            {g.label}
                           </button>
                         ))}
                       </div>
@@ -705,7 +801,9 @@ export default function WorkspaceQuickComposeBar({
 
   const barPositionStyle: React.CSSProperties | undefined = position
     ? { left: `${position.left}px`, top: `${position.top}px`, userSelect: dragging ? 'none' : 'auto' }
-    : undefined;
+    : isLightbox
+      ? { visibility: 'hidden' as const }
+      : undefined;
 
   return (
     <>
@@ -856,64 +954,8 @@ export default function WorkspaceQuickComposeBar({
                   ) : null}
                 </div>
 
-                <div className="flex flex-wrap items-center justify-end gap-2">
-                  <div
-                    className="flex shrink-0 items-center gap-0.5"
-                    title={
-                      modeLockedByInputPresets
-                        ? '已拖入预设卡片，提交时以卡片能力为准（模式切换已锁定）'
-                        : '快捷模式：文 · 图 · 3D（无拖入预设时使用）'
-                    }
-                  >
-                    {(['text', 'image', '3d'] as const).map((m) => (
-                      <button
-                        key={m}
-                        type="button"
-                        disabled={disabled || modeLockedByInputPresets}
-                        onClick={() => {
-                          if (modeLockedByInputPresets) return;
-                          onComposeModeChange(m);
-                        }}
-                        className={modeChipCls(composeMode === m)}
-                      >
-                        {m === 'text' ? '文' : m === 'image' ? '图' : '3D'}
-                      </button>
-                    ))}
-                  </div>
-
-                  <button
-                    ref={settingsTriggerRef}
-                    type="button"
-                    disabled={disabled}
-                    onClick={() => setSettingsOpen((o) => !o)}
-                    className="flex max-w-[min(11rem,50vw)] shrink-0 items-center gap-1 overflow-hidden rounded-md bg-white/[0.06] py-1 pl-2 pr-1.5 text-left ring-1 ring-white/[0.08] outline-none transition-colors hover:bg-white/[0.1] focus-visible:ring-2 focus-visible:ring-blue-500/45"
-                    title="生成参数"
-                    aria-expanded={settingsOpen}
-                    aria-haspopup="dialog"
-                  >
-                    <span className="truncate text-[9px] font-semibold text-gray-200">{gearSummary}</span>
-                    <span className="shrink-0 text-[9px] text-gray-600">·</span>
-                    <span className="shrink-0 text-[9px] text-gray-400">{aspectSummary}</span>
-                    {sizeSummary ? (
-                      <>
-                        <span className="shrink-0 text-[9px] text-gray-600">·</span>
-                        <span className="shrink-0 text-[9px] font-mono text-gray-400">{sizeSummary}</span>
-                      </>
-                    ) : null}
-                    {understandSummary ? (
-                      <>
-                        <span className="shrink-0 text-[9px] text-gray-600">·</span>
-                        <span className="shrink-0 text-[9px] font-semibold text-gray-400">{understandSummary}</span>
-                      </>
-                    ) : null}
-                    {allowBatchCount ? (
-                      <>
-                        <span className="shrink-0 text-[9px] text-gray-600">·</span>
-                        <span className="shrink-0 text-[9px] font-bold tabular-nums text-gray-400">x{countSummary}</span>
-                      </>
-                    ) : null}
-                    <span className="ml-px shrink-0 text-[8px] text-gray-600">{settingsOpen ? '▲' : '▼'}</span>
-                  </button>
+                <div className="flex flex-wrap items-center justify-end gap-3">
+                  {genActionControls}
 
                   <button
                     type="button"
@@ -1004,85 +1046,31 @@ export default function WorkspaceQuickComposeBar({
                 <Maximize2 className="h-4 w-4" strokeWidth={2.2} aria-hidden />
               </button>
 
-              <div
-                className="flex shrink-0 items-center gap-0.5"
-                title={
-                  modeLockedByInputPresets
-                    ? '已拖入预设卡片，提交时以卡片能力为准（模式切换已锁定）'
-                    : '快捷模式：文 · 图 · 3D（无拖入预设时使用）'
-                }
-              >
-                {(['text', 'image', '3d'] as const).map((m) => (
-                  <button
-                    key={m}
-                    type="button"
-                    disabled={disabled || modeLockedByInputPresets}
-                    onClick={() => {
-                      if (modeLockedByInputPresets) return;
-                      onComposeModeChange(m);
-                    }}
-                    className={modeChipCls(composeMode === m)}
-                  >
-                    {m === 'text' ? '文' : m === 'image' ? '图' : '3D'}
-                  </button>
-                ))}
-              </div>
+              <div className="ml-2 flex shrink-0 items-center gap-3">
+                {genActionControls}
 
-              <button
-                ref={settingsTriggerRef}
-                type="button"
-                disabled={disabled}
-                onClick={() => setSettingsOpen((o) => !o)}
-                className="flex max-w-[min(11rem,36%)] shrink-0 items-center gap-1 overflow-hidden rounded-md bg-white/[0.06] py-1 pl-2 pr-1.5 text-left ring-1 ring-white/[0.08] outline-none transition-colors hover:bg-white/[0.1] focus-visible:ring-2 focus-visible:ring-blue-500/45"
-                title="生成参数"
-                aria-expanded={settingsOpen}
-                aria-haspopup="dialog"
-              >
-                <span className="truncate text-[9px] font-semibold text-gray-200">{gearSummary}</span>
-                <span className="shrink-0 text-[9px] text-gray-600">·</span>
-                <span className="shrink-0 text-[9px] text-gray-400">{aspectSummary}</span>
-                {sizeSummary ? (
-                  <>
-                    <span className="shrink-0 text-[9px] text-gray-600">·</span>
-                    <span className="shrink-0 text-[9px] font-mono text-gray-400">{sizeSummary}</span>
-                  </>
-                ) : null}
-                {understandSummary ? (
-                  <>
-                    <span className="shrink-0 text-[9px] text-gray-600">·</span>
-                    <span className="shrink-0 text-[9px] font-semibold text-gray-400">{understandSummary}</span>
-                  </>
-                ) : null}
-                {allowBatchCount ? (
-                  <>
-                    <span className="shrink-0 text-[9px] text-gray-600">·</span>
-                    <span className="shrink-0 text-[9px] font-bold tabular-nums text-gray-400">x{countSummary}</span>
-                  </>
-                ) : null}
-                <span className="ml-px shrink-0 text-[8px] text-gray-600">{settingsOpen ? '▲' : '▼'}</span>
-              </button>
-
-              <button
-                type="button"
-                disabled={disabled}
-                onClick={onSubmit}
-                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white text-[#0a0a0c] shadow-md outline-none transition-transform hover:scale-[1.03] active:scale-[0.98] disabled:opacity-35 focus-visible:ring-2 focus-visible:ring-blue-500/55"
-                title="加入队列并执行"
-                aria-label="加入队列并执行"
-              >
-                <svg
-                  viewBox="0 0 24 24"
-                  className="h-5 w-5"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth={2.2}
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  aria-hidden
+                <button
+                  type="button"
+                  disabled={disabled}
+                  onClick={onSubmit}
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white text-[#0a0a0c] shadow-md outline-none transition-transform hover:scale-[1.03] active:scale-[0.98] disabled:opacity-35 focus-visible:ring-2 focus-visible:ring-blue-500/55"
+                  title="加入队列并执行"
+                  aria-label="加入队列并执行"
                 >
-                  <path d="M5 12h14M13 5l7 7-7 7" />
-                </svg>
-              </button>
+                  <svg
+                    viewBox="0 0 24 24"
+                    className="h-5 w-5"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth={2.2}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden
+                  >
+                    <path d="M5 12h14M13 5l7 7-7 7" />
+                  </svg>
+                </button>
+              </div>
             </div>
           )}
         </div>
