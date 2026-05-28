@@ -20,6 +20,7 @@ import {
 import {
   isChannelId,
   normalizeEnabledChannels,
+  TOAPIS_PATH_CHANNELS,
 } from './modelRegistry/channelCatalog';
 import {
   AI_CONNECTION_CATALOG,
@@ -166,6 +167,16 @@ export function setChannelEnabled(channel: ChannelId, enabled: boolean): void {
   setEnabledChannels(next);
 }
 
+export function isToapisGatewayEnabled(): boolean {
+  const enabled = getEnabledChannels();
+  return TOAPIS_PATH_CHANNELS.some((ch) => enabled.includes(ch));
+}
+
+/** 启用/禁用 ToAPIs 网关（同时开关 gemini/openai 两条内部 channel） */
+export function setToapisGatewayEnabled(enabled: boolean): void {
+  for (const ch of TOAPIS_PATH_CHANNELS) setChannelEnabled(ch, enabled);
+}
+
 /** 另一浏览器标签页修改了下列键时，`storage` 事件会触发；用于设置页与顶栏等保持同步 */
 export function isAiSettingsStorageKey(key: string | null): boolean {
   if (key == null) return true;
@@ -214,12 +225,12 @@ function summarizeConnections(connections: readonly AiConnectionCatalogRow[]): A
     }
   }
   const total = connections.length;
-  let primaryLabel = '未配置 AI 接入';
+  let primaryLabel = '未配置输出口';
   if (ready > 0) {
     const names = readyTitles.slice(0, 2).join('、');
     primaryLabel = readyTitles.length > 2 ? `已接入 · ${names} 等` : `已接入 · ${names}`;
   } else if (enabledCount > 0) {
-    primaryLabel = 'AI 待配置';
+    primaryLabel = '输出口待配置';
   }
   return { total, ready, enabled: enabledCount, anyReady: ready > 0, primaryLabel };
 }
@@ -234,10 +245,10 @@ export function getAiProviderToolbarLabel(): string {
   const degraded = getBindingDegradedHint();
   const { primaryLabel, ready, total, enabled } = summarizeConnections(AI_CONNECTION_CATALOG);
   if (enabled === 0) {
-    return degraded ? `未配置 AI 接入 · ${degraded}` : '未配置 AI 接入';
+    return degraded ? `未配置输出口 · ${degraded}` : '未配置输出口';
   }
   if (ready === 0) {
-    return degraded ? `AI 待配置 · ${degraded}` : 'AI 待配置';
+    return degraded ? `输出口待配置 · ${degraded}` : '输出口待配置';
   }
   if (ready < total) {
     const base = `${primaryLabel}（${ready}/${total}）`;

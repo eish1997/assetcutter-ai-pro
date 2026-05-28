@@ -34,3 +34,9 @@ export function coerceTextModelRegistryId(raw?: string | null): string {
   if (hit) return hit.registryId;
   return s;
 }
+
+export function labelForTextModelRegistryId(registryId: string): string {
+  const id = (registryId || "").trim();
+  const hit = TEXT_MODEL_REGISTRY.find((e) => e.registryId === id);
+  return hit?.label ?? id;
+}

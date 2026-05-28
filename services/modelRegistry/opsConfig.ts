@@ -1,5 +1,6 @@
 import { modelRegistryLog } from "./log";
 import type { ModelOpsConfig } from "./opsTypes";
+import type { SupplierId, WiringEdge } from "./hubGraph/types";
 import {
   coerceImageModelRegistryId,
   DIALOG_IMAGE_REGISTRY,
@@ -23,6 +24,50 @@ function readViteEnvTrim(key: string): string {
   } catch {
     return "";
   }
+}
+
+const SUPPLIER_IDS = new Set<SupplierId>([
+  "vertex-site",
+  "toapis",
+  "vectorengine",
+  "openai-official",
+  "gemini-aistudio",
+]);
+
+function normalizeWiringEdges(raw: unknown): WiringEdge[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const edges: WiringEdge[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as Record<string, unknown>;
+    const edgeId = String(row.edgeId ?? "").trim();
+    if (!edgeId) continue;
+    const fromRaw = row.from;
+    const toRaw = row.to;
+    if (!fromRaw || typeof fromRaw !== "object" || !toRaw || typeof toRaw !== "object") continue;
+    const from = fromRaw as Record<string, unknown>;
+    const to = toRaw as Record<string, unknown>;
+    const supplierId = String(from.supplierId ?? "").trim() as SupplierId;
+    const outletId = String(from.outletId ?? "").trim();
+    const hubInId = String(to.hubInId ?? "").trim();
+    if (!SUPPLIER_IDS.has(supplierId) || !outletId || !hubInId) continue;
+    const priority =
+      typeof row.priority === "number" && Number.isFinite(row.priority) ? Math.floor(row.priority) : 10;
+    const enabled = row.enabled === undefined ? undefined : row.enabled === true;
+    const upstreamOverride =
+      typeof row.upstreamOverride === "string" && row.upstreamOverride.trim()
+        ? row.upstreamOverride.trim()
+        : undefined;
+    edges.push({
+      edgeId,
+      from: { supplierId, outletId },
+      to: { hubInId },
+      priority,
+      enabled,
+      upstreamOverride,
+    });
+  }
+  return edges.length > 0 ? edges : undefined;
 }
 
 function normalizeOpsPayload(raw: unknown): ModelOpsConfig {
@@ -75,11 +120,13 @@ function normalizeOpsPayload(raw: unknown): ModelOpsConfig {
       .filter((x): x is NonNullable<typeof x> => x != null);
     if (rows.length > 0) bindingOverrides = rows;
   }
+  const wiringEdges = normalizeWiringEdges(o.wiringEdges);
   return {
     version,
     imageRegistryAllowlist,
     imageModelPreference: imageModelPreference ?? DEFAULT_MODEL_OPS_CONFIG.imageModelPreference,
     bindingOverrides,
+    wiringEdges,
   };
 }
 

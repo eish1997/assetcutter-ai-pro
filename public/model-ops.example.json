@@ -12,5 +12,14 @@
       "bindingId": "gemini-3.1-flash-image-preview:toapis-gemini:image",
       "enabled": false
     }
+  ],
+  "wiringEdges": [
+    {
+      "edgeId": "gemini-3.1-flash-image-preview:vertex-proxy:image",
+      "from": { "supplierId": "vertex-site", "outletId": "vertex-proxy" },
+      "to": { "hubInId": "gemini-3.1-flash-image-preview:image" },
+      "priority": 10,
+      "enabled": true
+    }
   ]
 }

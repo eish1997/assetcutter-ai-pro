@@ -91,6 +91,20 @@ export function labelForChannel(channel: ChannelId): string {
   return CHANNEL_CATALOG.find((r) => r.channel === channel)?.label ?? channel;
 }
 
+/** 型号接线面板：供应商节点 + 形态（设置主卡片不展示协议路径细节） */
+const WIRING_SUPPLIER_OUTLET_LABELS: Partial<Record<ChannelId, string>> = {
+  "vertex-proxy": "Vertex · 站点代理",
+  "gemini-aistudio": "Google AI Studio",
+  "toapis-gemini": "ToAPIs · Gemini 形态",
+  "toapis-openai": "ToAPIs · OpenAI 形态",
+  vectorengine: "VectorEngine",
+  "openai-official": "OpenAI 官方",
+};
+
+export function outletDisplayLabelForWiring(channel: ChannelId): string {
+  return WIRING_SUPPLIER_OUTLET_LABELS[channel] ?? labelForChannel(channel);
+}
+
 /** ToAPIs 双路径 channel（共用 Key，设置 UI 合并为一行） */
 export const TOAPIS_PATH_CHANNELS = ["toapis-gemini", "toapis-openai"] as const satisfies readonly ChannelId[];
 

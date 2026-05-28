@@ -1,10 +1,28 @@
 import { getEnabledChannels, isChannelReady } from "../settingsStore";
 import { resolveUpstreamForBinding } from "./channelCredentials";
+import { wiringEdgesToProviderBindings } from "./hubGraph/compile";
+import { buildHubInPorts } from "./hubGraph/hubPorts";
+import { STATIC_SUPPLIER_OUTLETS } from "./hubGraph/supplierOutlets";
 import { getModelOpsConfigSync } from "./opsConfig";
 import { modelRegistryLog } from "./log";
 import { getBindingsForRegistry } from "./providerBindings";
 import { resolveUpstreamModelIdForProvider } from "./upstreamResolve";
 import type { ModelResolveRole, PickedBinding, ProviderBinding } from "./types";
+
+let hubInPortsCache: ReturnType<typeof buildHubInPorts> | null = null;
+
+function hubInPorts(): ReturnType<typeof buildHubInPorts> {
+  if (!hubInPortsCache) hubInPortsCache = buildHubInPorts();
+  return hubInPortsCache;
+}
+
+function bindingsFromOpsWiringEdges(registryId: string, role: ModelResolveRole): ProviderBinding[] | null {
+  const opsEdges = getModelOpsConfigSync().wiringEdges;
+  if (!opsEdges?.length) return null;
+  const all = wiringEdgesToProviderBindings(opsEdges, STATIC_SUPPLIER_OUTLETS, hubInPorts());
+  const filtered = all.filter((b) => b.registryId === registryId && b.role === role);
+  return filtered.length > 0 ? filtered : null;
+}
 
 function shouldLogPickBinding(): boolean {
   try {
@@ -35,6 +53,13 @@ function applyOpsBindingOverrides(bindings: ProviderBinding[]): ProviderBinding[
   return next.sort((a, b) => a.priority - b.priority);
 }
 
+export function resolvedBindingsForRegistry(registryId: string, role: ModelResolveRole): ProviderBinding[] {
+  const id = (registryId || "").trim();
+  if (!id) return [];
+  const base = bindingsFromOpsWiringEdges(id, role) ?? getBindingsForRegistry(id, role);
+  return applyOpsBindingOverrides(base);
+}
+
 /**
  * 按 registryId + role 选第一条「已启用且 ready」的 binding。
  * Failover：固定 priority 升序，无运行时重试链；文本与生图独立选型（role=text|image）。
@@ -43,7 +68,7 @@ export function pickBinding(registryId: string, role: ModelResolveRole): PickedB
   const id = (registryId || "").trim();
   if (!id) return null;
   const enabled = new Set(getEnabledChannels());
-  const bindings = applyOpsBindingOverrides(getBindingsForRegistry(id, role));
+  const bindings = resolvedBindingsForRegistry(id, role);
   for (const binding of bindings) {
     if (!enabled.has(binding.channel)) continue;
     if (!isChannelReady(binding.channel)) continue;

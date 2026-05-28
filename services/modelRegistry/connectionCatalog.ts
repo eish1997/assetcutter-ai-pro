@@ -1,7 +1,7 @@
 import { TOAPIS_PATH_CHANNELS } from "./channelCatalog";
 import type { ChannelId } from "./types";
 
-/** 设置页「接入方」分组（用户心智），底层仍映射到 channel */
+/** 设置页「供应商输出口」分组，底层映射到 `ChannelId` */
 export type AiConnectionId =
   | "vertex-site"
   | "toapis"
@@ -13,8 +13,8 @@ export type AiConnectionCatalogRow = {
   id: AiConnectionId;
   title: string;
   subtitle: string;
-  /** 站内菜单可走的模型类型说明 */
-  modelScope: string;
+  /** 该输出口在接线中的角色（面向用户，不按 Gemini/OpenAI 族分类） */
+  outletHint: string;
   channels: readonly ChannelId[];
   credentialKind: "site" | "api-key" | "api-key-base-url" | "multi-path";
 };
@@ -24,23 +24,23 @@ export const AI_CONNECTION_CATALOG: readonly AiConnectionCatalogRow[] = [
     id: "vertex-site",
     title: "Vertex · 站点代理",
     subtitle: "由站点 gemini-proxy 转发，无需自备 Google Key",
-    modelScope: "站内已登记的 Google / Gemini 类模型",
+    outletHint: "binding 可将各 registryId 接到此站点输出口",
     channels: ["vertex-proxy"],
     credentialKind: "site",
   },
   {
     id: "toapis",
     title: "ToAPIs 中转",
-    subtitle: "一套密钥可同时走 Gemini 与 OpenAI 兼容路径",
-    modelScope: "站内已登记的 Gemini 与 OpenAI 类模型（路径可分别启用）",
+    subtitle: "一套密钥的供应商网关；具体型号接线见下方「型号接线」",
+    outletHint: "启用并填写凭证后，平台 binding 决定各 SKU 经此网关哪条路径发出",
     channels: TOAPIS_PATH_CHANNELS,
     credentialKind: "multi-path",
   },
   {
     id: "vectorengine",
     title: "VectorEngine",
-    subtitle: "Gemini REST 兼容网关",
-    modelScope: "站内已登记的 Gemini 类模型",
+    subtitle: "第三方 Gemini REST 兼容网关",
+    outletHint: "binding 指向此处的 SKU 经 VectorEngine 上游 id 映射发出",
     channels: ["vectorengine"],
     credentialKind: "api-key-base-url",
   },
@@ -48,7 +48,7 @@ export const AI_CONNECTION_CATALOG: readonly AiConnectionCatalogRow[] = [
     id: "openai-official",
     title: "OpenAI 官方",
     subtitle: "直连 OpenAI API",
-    modelScope: "站内已登记的 OpenAI 类模型",
+    outletHint: "binding 指向此处的 SKU 走 OpenAI 官方 upstream",
     channels: ["openai-official"],
     credentialKind: "api-key-base-url",
   },
@@ -56,16 +56,11 @@ export const AI_CONNECTION_CATALOG: readonly AiConnectionCatalogRow[] = [
     id: "gemini-aistudio",
     title: "Google AI Studio",
     subtitle: "Google AI Studio API Key 直连",
-    modelScope: "站内已登记的 Gemini 类模型",
+    outletHint: "binding 指向此处的 SKU 走 AI Studio 直连",
     channels: ["gemini-aistudio"],
     credentialKind: "api-key",
   },
 ] as const;
-
-export const TOAPIS_PATH_LABELS = {
-  "toapis-gemini": "Gemini 兼容路径",
-  "toapis-openai": "OpenAI 兼容路径",
-} as const satisfies Record<(typeof TOAPIS_PATH_CHANNELS)[number], string>;
 
 export type AiConnectionStatus = "disabled" | "pending" | "ready" | "site-unavailable";
 

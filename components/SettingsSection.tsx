@@ -1547,7 +1547,10 @@ const SettingsSection: React.FC<{
               <div className="space-y-8">
                 {/* AI 调用源 */}
                 <div className="rounded-xl border border-[#252528] p-4 space-y-4">
-                  <h3 className="text-[11px] font-black uppercase tracking-wider text-blue-400/90 mb-1">AI 接入</h3>
+                  <h3 className="text-[11px] font-black uppercase tracking-wider text-blue-400/90 mb-1">AI 接入 · 输出口与接线</h3>
+                  <p className="text-[9px] text-gray-500 leading-relaxed mb-3">
+                    工作流选具体模型型号；此处配置供应商输出口与凭证。型号级接线见面板内预览，运营可通过 model-ops 调整单条 binding。
+                  </p>
                   <AiProviderCredentialsPanel onChanged={onAiInvocationSurfaceChange} />
                   <p className="text-[9px] text-gray-500 leading-relaxed">
                     生图模型运营策略：可配置{' '}

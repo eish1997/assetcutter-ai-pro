@@ -1,14 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import ModelWiringPanel from './ModelWiringPanel';
 import {
   CHANNEL_CATALOG,
-  TOAPIS_PATH_CHANNELS,
   type ChannelCatalogRow,
 } from '../services/modelRegistry/channelCatalog';
 import {
   AI_CONNECTION_CATALOG,
   connectionEnabledChannels,
   connectionStatus,
-  TOAPIS_PATH_LABELS,
   type AiConnectionCatalogRow,
   type AiConnectionStatus,
 } from '../services/modelRegistry/connectionCatalog';
@@ -27,6 +26,7 @@ import {
   isChannelReady,
   isVertexSiteProxyConfigured,
   setChannelEnabled,
+  setToapisGatewayEnabled,
   setOpenaiApiKey,
   setOpenaiBaseUrl,
   setToapisApiKey,
@@ -124,15 +124,15 @@ function OverviewBar({ compact }: { compact: boolean }) {
         <div className="min-w-0 space-y-1">
           <p className="text-[11px] font-semibold text-gray-100">
             {summary.anyReady
-              ? `${summary.ready}/${summary.total} 个接入已就绪`
+              ? `${summary.ready}/${summary.total} 个输出口已就绪`
               : summary.enabled > 0
-                ? '已启用接入，尚待补全凭证'
-                : '尚未启用 AI 接入'}
+                ? '已启用输出口，尚待补全凭证'
+                : '尚未启用供应商输出口'}
           </p>
           <p className="text-[9px] text-gray-500 leading-relaxed max-w-md">
-            工作流里选的是<strong className="font-semibold text-gray-400">模型</strong>
-            ；此处配置<strong className="font-semibold text-gray-400">接入方线路</strong>。中转站模型库通常比站内菜单更全，仅
-            <strong className="font-semibold text-gray-400">已登记模型</strong>会出现在菜单；平台按优先级自动切换可用线路，文本与生图可分别选线。
+            <strong className="font-semibold text-gray-400">输入口</strong>：工作流里选具体模型型号（registryId）。{' '}
+            <strong className="font-semibold text-gray-400">输出口</strong>：下方启用供应商线路并填凭证。{' '}
+            <strong className="font-semibold text-gray-400">接线</strong>：各型号走哪条输出口由平台 binding 表决定（见下方预览）；启用多条时按优先级自动切换。文本与生图可接不同输出口。
           </p>
         </div>
       </div>
@@ -201,6 +201,7 @@ function ConnectionCard({
   expanded,
   onToggleExpand,
   onToggleChannel,
+  onSetToapisGateway,
   onUpdateDraft,
   onSaveChannel,
   onSaveToapis,
@@ -214,6 +215,7 @@ function ConnectionCard({
   expanded: boolean;
   onToggleExpand: () => void;
   onToggleChannel: (channel: ChannelId, next: boolean) => void;
+  onSetToapisGateway?: (next: boolean) => void;
   onUpdateDraft: (channel: ChannelId, patch: Partial<ChannelDraft>) => void;
   onSaveChannel: (channel: ChannelId) => void;
   onSaveToapis: () => void;
@@ -233,7 +235,7 @@ function ConnectionCard({
 
   const setConnectionEnabled = (next: boolean) => {
     if (connection.credentialKind === 'multi-path') {
-      for (const ch of TOAPIS_PATH_CHANNELS) onToggleChannel(ch, next);
+      onSetToapisGateway?.(next);
       return;
     }
     for (const ch of connection.channels) onToggleChannel(ch, next);
@@ -247,12 +249,7 @@ function ConnectionCard({
     }
     if (connection.credentialKind === 'multi-path') {
       const key = toapisDraft.apiKey.trim();
-      const paths = TOAPIS_PATH_CHANNELS.filter((ch) => enabledChannels.includes(ch))
-        .map((ch) => TOAPIS_PATH_LABELS[ch])
-        .join('、');
-      return key
-        ? `密钥 ${maskKey(key)}${paths ? ` · ${paths}` : ' · 请勾选路径'}`
-        : '填写一套密钥后可勾选 Gemini / OpenAI 路径';
+      return key ? `密钥 ${maskKey(key)}` : '填写一套密钥并启用网关';
     }
     const ch = primaryChannel;
     const d = drafts[ch] ?? readChannelDraft(ch);
@@ -280,7 +277,7 @@ function ConnectionCard({
         <span className={`shrink-0 rounded-md px-2 py-0.5 text-[9px] font-bold ring-1 ${badge.cls}`}>{badge.text}</span>
       </div>
 
-      <p className="text-[9px] text-gray-500 leading-relaxed mt-2 pl-5">{connection.modelScope}</p>
+      <p className="text-[9px] text-gray-500 leading-relaxed mt-2 pl-5">{connection.outletHint}</p>
       <p className="text-[9px] text-gray-400 mt-1 pl-5">{summaryLine}</p>
 
       {showCredentials ? (
@@ -298,28 +295,13 @@ function ConnectionCard({
       {expanded && showCredentials ? (
         <div className="mt-3 pl-5 space-y-3 border-t border-white/[0.06] pt-3">
           {connection.credentialKind === 'multi-path' ? (
-            <>
-              <CredentialFields
-                channel="toapis-gemini"
-                draft={toapisDraft}
-                disabled={false}
-                onDraftChange={onToapisDraftChange}
-                onSave={onSaveToapis}
-              />
-              <div className="flex flex-wrap gap-3">
-                {TOAPIS_PATH_CHANNELS.map((ch) => (
-                  <label key={ch} className="inline-flex items-center gap-1.5 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={enabledChannels.includes(ch)}
-                      onChange={(e) => onToggleChannel(ch, e.target.checked)}
-                      className="h-3.5 w-3.5 shrink-0 rounded border-[#3a3a40] bg-[#121214] text-blue-500 focus:ring-blue-500/40"
-                    />
-                    <span className="text-[9px] text-gray-300">{TOAPIS_PATH_LABELS[ch]}</span>
-                  </label>
-                ))}
-              </div>
-            </>
+            <CredentialFields
+              channel="toapis-gemini"
+              draft={toapisDraft}
+              disabled={!anyActive}
+              onDraftChange={onToapisDraftChange}
+              onSave={onSaveToapis}
+            />
           ) : (
             connection.channels.map((ch) => (
               <div key={ch}>
@@ -379,6 +361,12 @@ export default function AiProviderCredentialsPanel({ onChanged, compact = false 
     onChanged?.();
   };
 
+  const handleToapisGateway = (nextEnabled: boolean) => {
+    setToapisGatewayEnabled(nextEnabled);
+    setEnabledChannelsState(getEnabledChannels());
+    onChanged?.();
+  };
+
   const updateDraft = (channel: ChannelId, patch: Partial<ChannelDraft>) => {
     setDrafts((prev) => ({ ...prev, [channel]: { ...prev[channel], ...patch } }));
     if (channel === 'toapis-gemini' || channel === 'toapis-openai') {
@@ -433,6 +421,8 @@ export default function AiProviderCredentialsPanel({ onChanged, compact = false 
         </button>
       </div>
 
+      <p className="text-[9px] font-bold uppercase tracking-wider text-gray-500">供应商输出口</p>
+
       <div className="space-y-2">
         {AI_CONNECTION_CATALOG.map((connection) => (
           <div key={connection.id}>
@@ -445,6 +435,7 @@ export default function AiProviderCredentialsPanel({ onChanged, compact = false 
               expanded={isExpanded(connection)}
               onToggleExpand={() => toggleExpanded(connection.id)}
               onToggleChannel={handleToggle}
+              onSetToapisGateway={handleToapisGateway}
               onUpdateDraft={updateDraft}
               onSaveChannel={handleSaveRow}
               onSaveToapis={handleSaveToapis}
@@ -453,6 +444,12 @@ export default function AiProviderCredentialsPanel({ onChanged, compact = false 
           </div>
         ))}
       </div>
+
+      {!compact ? (
+        <div className="rounded-xl border border-[#252528] bg-[#101012]/80 p-3">
+          <ModelWiringPanel enabledChannels={enabledChannels} />
+        </div>
+      ) : null}
 
       {savedFlash ? <p className="text-[10px] text-green-400/90">已保存到本机</p> : null}
     </div>
