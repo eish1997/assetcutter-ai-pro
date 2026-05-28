@@ -1,3 +1,4 @@
+import type { ConfigurableAiProvider } from "../aiProviderCatalog";
 import type { ChannelId, ModelFamily } from "./types";
 
 export type ChannelCatalogRow = {
@@ -92,7 +93,7 @@ export function labelForChannel(channel: ChannelId): string {
 }
 
 /** ToAPIs 双路径 channel（共用 Key，设置 UI 合并为一行） */
-export const TOAPIS_PATH_CHANNELS: readonly ChannelId[] = ["toapis-gemini", "toapis-openai"] as const;
+export const TOAPIS_PATH_CHANNELS = ["toapis-gemini", "toapis-openai"] as const satisfies readonly ChannelId[];
 
 export function isToapisPathChannel(channel: ChannelId): boolean {
   return (TOAPIS_PATH_CHANNELS as readonly string[]).includes(channel);
@@ -105,4 +106,21 @@ export function channelsForFamily(family: ModelFamily): ChannelCatalogRow[] {
 /** 设置面板：按族展示，ToAPIs 路径单独成组 */
 export function channelsForFamilyPanel(family: ModelFamily): ChannelCatalogRow[] {
   return CHANNEL_CATALOG.filter((r) => r.family === family && !isToapisPathChannel(r.channel));
+}
+
+/** 云同步 legacy `aiProvider` 字段：由当前启用 channel 推导 */
+export function channelToLegacyProvider(channel: ChannelId): ConfigurableAiProvider {
+  switch (channel) {
+    case "vertex-proxy":
+      return "vertex";
+    case "gemini-aistudio":
+      return "gemini";
+    case "toapis-gemini":
+    case "toapis-openai":
+      return "toapis";
+    case "vectorengine":
+      return "vectorengine";
+    case "openai-official":
+      return "openai";
+  }
 }

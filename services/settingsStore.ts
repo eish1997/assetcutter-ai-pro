@@ -2,7 +2,7 @@
  * 用户设置的 API 密钥存 localStorage，键名与读写逻辑集中在此；底层经 `clientPersist` 安全访问。
  *
  * **AI 渠道唯一真相源**：`getEnabledChannels()` + `pickBinding()` + 各 channel 凭证。
- * legacy `getAiProvider()` / `enabledAiProviders` 仅云同步与试用模式兼容。
+ * legacy `getAiProvider()` / `enabledAiProviders` 仅云同步写回；运行时以 `getEnabledChannels()` + `pickBinding()` 为准。
  * 禁止在组件里自行 `new GoogleGenAI`、直连 ToAPIs/VectorEngine，以免与设置里选的渠道不一致。
  * 登录后云端 `user-config.json` 会合并进同一套 localStorage 键，与设置页、工作流密钥弹窗共用。
  */
@@ -25,6 +25,7 @@ import {
   type ConfigurableAiProvider,
 } from './aiProviderCatalog';
 import {
+  channelToLegacyProvider,
   isChannelId,
   labelForChannel,
   normalizeEnabledChannels,
@@ -180,6 +181,23 @@ function channelsToProviders(channels: ChannelId[]): ConfigurableAiProvider[] {
   return out;
 }
 
+/** 旧版单一 `aiProvider` / 云配置迁移为 channel 列表 */
+export function migrateLegacyAiProviderToChannels(legacy: AiProvider): ChannelId[] {
+  if (legacy === 'trial' || legacy === 'vertex') return ['vertex-proxy'];
+  if (legacy === 'antigravity') return [];
+  const enabled = migrateLegacyAiProviderToEnabled(legacy);
+  return providersToChannels(enabled);
+}
+
+/** 云同步写回 legacy `aiProvider`：取第一条 ready channel 映射 */
+export function getLegacyAiProviderForCloudSync(): AiProvider {
+  const enabled = getEnabledChannels();
+  const ready = enabled.find((ch) => isChannelReady(ch));
+  if (ready) return channelToLegacyProvider(ready);
+  if (enabled[0]) return channelToLegacyProvider(enabled[0]);
+  return 'gemini';
+}
+
 export function getEnabledChannels(): ChannelId[] {
   const raw = readLocalString(STORAGE_KEY_ENABLED_CHANNELS);
   if (raw != null && raw !== '') {
@@ -255,26 +273,35 @@ export function isAiProviderReady(provider: AiProvider): boolean {
   return Boolean(getUserApiKey()?.trim());
 }
 
-/** @deprecated 请用 `getEnabledChannels()` + `pickBinding()`；legacy 顶栏/云同步仍读此字段 */
+/** @deprecated 请用 `getEnabledChannels()` + `pickBinding()`；云同步写回仍调用 `getLegacyAiProviderForCloudSync()` */
 export function getAiProvider(): AiProvider {
-  const enabled = getEnabledAiProviders();
-  const ready = enabled.find((p) => isAiProviderReady(p));
-  if (ready) return ready;
-  if (enabled[0]) return enabled[0];
-  const v = readLegacyAiProviderOnly();
-  if (v === 'trial') return 'trial';
-  if (v === 'vertex') return 'vertex';
-  if (v === 'toapis') return 'toapis';
-  if (v === 'antigravity') return 'antigravity';
-  if (v === 'openai') return 'openai';
-  if (v === 'vectorengine') return 'vectorengine';
-  if (v === 'gemini') return 'gemini';
+  const enabled = getEnabledChannels();
+  const ready = enabled.find((ch) => isChannelReady(ch));
+  if (ready) return channelToLegacyProvider(ready);
+  if (enabled[0]) return channelToLegacyProvider(enabled[0]);
+  const legacy = readLegacyAiProviderOnly();
+  if (legacy === 'trial' || legacy === 'vertex') return 'vertex';
+  if (legacy === 'toapis') return 'toapis';
+  if (legacy === 'openai') return 'openai';
+  if (legacy === 'vectorengine') return 'vectorengine';
+  if (legacy === 'gemini') return 'gemini';
   return DEFAULT_AI_PROVIDER;
 }
 
 export function setAiProvider(value: AiProvider): void {
+  if (value === 'trial' || value === 'vertex') {
+    setEnabledChannels(['vertex-proxy']);
+    return;
+  }
   if (isConfigurableAiProvider(value)) {
     setEnabledAiProviders([value]);
+    return;
+  }
+  if (value === 'antigravity') {
+    writeLocalString(STORAGE_KEY_AI_PROVIDER, value);
+    writeLocalString(STORAGE_KEY_ENABLED_AI_PROVIDERS, JSON.stringify([]));
+    writeLocalString(STORAGE_KEY_ENABLED_CHANNELS, JSON.stringify([]));
+    dispatchAiSettingsChanged();
     return;
   }
   writeLocalString(STORAGE_KEY_AI_PROVIDER, value);
@@ -407,48 +434,39 @@ export function setVectorengineBaseUrl(value: string | null): void {
   writeLocalNonEmptyTrimmedOrRemove(STORAGE_KEY_VECTORENGINE_BASE_URL, value);
 }
 
-/** 当前选用供应商下的 API Key（Gemini 官方、ToAPIs 或 VectorEngine） */
+/** @deprecated 请用 channel 凭证；保留供极少数 legacy 调用 */
 export function getApiKey(): string | undefined {
-  if (getAiProvider() === 'trial') {
-    return undefined;
-  }
-  if (getAiProvider() === 'vertex') {
-    return undefined;
-  }
-  if (getAiProvider() === 'toapis') {
-    const k = getToapisApiKey();
-    return k ?? undefined;
-  }
-  if (getAiProvider() === 'antigravity') {
-    const k = getAntigravityApiKey();
-    return k ?? undefined;
-  }
-  if (getAiProvider() === 'openai') {
-    const k = getOpenaiApiKey();
-    return k ?? undefined;
-  }
-  if (getAiProvider() === 'vectorengine') {
-    const k = getVectorengineApiKey();
-    return k ?? undefined;
+  for (const ch of getEnabledChannels()) {
+    if (ch === 'gemini-aistudio') {
+      const k = getUserApiKey();
+      if (k?.trim()) return k;
+    }
+    if (ch === 'toapis-gemini' || ch === 'toapis-openai') {
+      const k = getToapisApiKey();
+      if (k?.trim()) return k;
+    }
+    if (ch === 'openai-official') {
+      const k = getOpenaiApiKey();
+      if (k?.trim()) return k;
+    }
+    if (ch === 'vectorengine') {
+      const k = getVectorengineApiKey();
+      if (k?.trim()) return k;
+    }
   }
   const user = getUserApiKey();
-  if (user) return user;
-  return undefined;
+  return user?.trim() ? user : undefined;
 }
 
 /**
- * 是否至少有一个已启用供应商具备调用条件。
+ * 是否至少有一个已启用 channel 具备调用条件。
  */
 export function isAiInvocationReady(): boolean {
   const enabledChannels = getEnabledChannels();
   if (enabledChannels.length > 0) {
     return enabledChannels.some((ch) => isChannelReady(ch));
   }
-  const enabled = getEnabledAiProviders();
-  if (enabled.length > 0) {
-    return enabled.some((p) => isAiProviderReady(p));
-  }
-  return isAiProviderReady(getAiProvider());
+  return bulkImageProxyConfigured() || Boolean(getUserApiKey()?.trim());
 }
 
 /** 对话生图：是否跳过“理解意图”步骤，直接使用用户提示词调用生图模型 */

@@ -89,7 +89,7 @@ import { persistWorkflow3dSlots } from './services/persistWorkflow3dSlots';
 import { preflightGenerate3dEnvironment } from './services/generate3d/preflightGenerate3d';
 import { patchWorkflowAssetsWith3dResultAndHydrate } from './services/workflow3dCompanionHydrate';
 import {
-  getAiProvider,
+  getLegacyAiProviderForCloudSync,
   getAiProviderToolbarLabel,
   getAntigravityApiKey,
   getAntigravityBaseUrl,
@@ -106,7 +106,7 @@ import {
   getEnabledChannels,
   getWorkspaceAutoSyncEnabled,
   isAiInvocationReady,
-  setAiProvider,
+  migrateLegacyAiProviderToChannels,
   setEnabledAiProviders,
   setEnabledChannels,
   setAntigravityApiKey,
@@ -1099,7 +1099,7 @@ const MainApp: React.FC = () => {
           } else if (cfg.settings.enabledAiProviders && cfg.settings.enabledAiProviders.length > 0) {
             setEnabledAiProviders(cfg.settings.enabledAiProviders);
           } else {
-            setAiProvider(cfg.settings.aiProvider);
+            setEnabledChannels(migrateLegacyAiProviderToChannels(cfg.settings.aiProvider));
           }
           setUserApiKey(cfg.settings.geminiApiKey || null);
           setToapisApiKey(cfg.settings.toapisApiKey || null);
@@ -1160,7 +1160,7 @@ const MainApp: React.FC = () => {
         settings: {
           dialogSkipUnderstand: getDialogSkipUnderstand(),
           workspaceAutoSyncEnabled,
-          aiProvider: getAiProvider(),
+          aiProvider: getLegacyAiProviderForCloudSync(),
           enabledAiProviders: getEnabledAiProviders(),
           enabledChannels: getEnabledChannels(),
           geminiApiKey: getUserApiKey() || '',

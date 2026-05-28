@@ -9,30 +9,30 @@ import {
   getModelOpsConfigSync,
   refreshModelOpsConfig,
 } from "../services/modelRegistry/opsConfig";
-import { getAiProvider, subscribeAiSettingsCrossTab } from "../services/settingsStore";
+import { getEnabledChannels, subscribeAiSettingsCrossTab } from "../services/settingsStore";
 
 /**
- * 当前 AI 渠道 + 运营配置下的有效生图模型列表（含禁用原因）。
- * 切换供应商（同标签 `setAiProvider`）或拉取运营 JSON 后会更新。
+ * 当前启用 channel + 运营配置下的有效生图模型列表（含禁用原因）。
+ * channel 或运营 JSON 变更后会更新。
  */
 export function useEffectiveImageModelRows(): {
   rows: EffectiveImageModelRow[];
   coerceModelId: (currentRegistryId: string) => string;
   opsConfig: ModelOpsConfig;
 } {
-  const [provider, setProvider] = useState(() => getAiProvider());
+  const [channelsKey, setChannelsKey] = useState(() => getEnabledChannels().join(","));
   const [ops, setOps] = useState(() => getModelOpsConfigSync());
 
   useEffect(() => {
     const syncFromStorage = () => {
-      setProvider(getAiProvider());
+      setChannelsKey(getEnabledChannels().join(","));
       setOps(getModelOpsConfigSync());
     };
-    const onProvider = () => setProvider(getAiProvider());
+    const onChannels = () => setChannelsKey(getEnabledChannels().join(","));
     const onOps = () => setOps(getModelOpsConfigSync());
 
     if (typeof window !== "undefined") {
-      window.addEventListener("ac-ai-provider-changed", onProvider);
+      window.addEventListener("ac-ai-provider-changed", onChannels);
       window.addEventListener("ac-model-ops-updated", onOps);
     }
     const unsubCrossTab = subscribeAiSettingsCrossTab(syncFromStorage);
@@ -43,14 +43,14 @@ export function useEffectiveImageModelRows(): {
 
     return () => {
       if (typeof window !== "undefined") {
-        window.removeEventListener("ac-ai-provider-changed", onProvider);
+        window.removeEventListener("ac-ai-provider-changed", onChannels);
         window.removeEventListener("ac-model-ops-updated", onOps);
       }
       unsubCrossTab();
     };
   }, []);
 
-  const rows = useMemo(() => buildEffectiveImageModelRows(provider, ops), [provider, ops]);
+  const rows = useMemo(() => buildEffectiveImageModelRows(ops), [channelsKey, ops]);
 
   const coerceModelId = useCallback(
     (currentRegistryId: string) =>

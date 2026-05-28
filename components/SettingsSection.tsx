@@ -1043,8 +1043,7 @@ const SettingsSection: React.FC<{
                       setFlatInpaintComposite(next);
                       writeFlatLocalInpaintCompositeStrategy(preferenceScope, next);
                     }}
-                    triggerClassName={DROPDOWN_TRIGGER_COMPACT}
-                    className="w-full max-w-md"
+                    triggerClassName={`${DROPDOWN_TRIGGER_COMPACT} w-full max-w-md`}
                   />
                   <p className="text-[9px] text-gray-500 leading-relaxed">
                     {FLAT_LOCAL_INPAINT_COMPOSITE_LABELS[flatInpaintComposite].hint}

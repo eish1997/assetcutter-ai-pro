@@ -105,7 +105,7 @@ describe('companion-electron-feed', () => {
         chunks.push(body);
       },
     };
-    writeCompanionElectronUpdaterYamlResponse(res, { semver: '1.0.0', r2Key: 'k', bytes: 1, fileName: 'a.exe' });
+    writeCompanionElectronUpdaterYamlResponse(res as unknown as import('node:http').ServerResponse, { semver: '1.0.0', r2Key: 'k', bytes: 1, fileName: 'a.exe' });
     expect(res.statusCode).toBe(503);
     expect(chunks.join('')).toContain('# error:');
     if (prevDist === undefined) delete process.env.COMPANION_DIST_PUBLIC_HTTP_BASE;

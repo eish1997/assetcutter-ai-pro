@@ -36,6 +36,20 @@ describe("pickBinding", () => {
     expect(picked?.channel).toBe("openai-official");
   });
 
+  it("text and image may pick different channels for the same registry family", () => {
+    vi.spyOn(settingsStore, "getEnabledChannels").mockReturnValue(["vertex-proxy", "toapis-gemini"]);
+    vi.spyOn(settingsStore, "isChannelReady").mockImplementation((ch) => {
+      if (ch === "vertex-proxy") return true;
+      if (ch === "toapis-gemini") return true;
+      return false;
+    });
+    const textId = "gemini-3-flash-preview";
+    const imageId = "gemini-3.1-flash-image-preview";
+    expect(pickBinding(textId, "text")?.channel).toBe("vertex-proxy");
+    vi.spyOn(settingsStore, "isChannelReady").mockImplementation((ch) => ch === "toapis-gemini");
+    expect(pickBinding(imageId, "image")?.channel).toBe("toapis-gemini");
+  });
+
   it("returns null when no enabled ready binding", () => {
     vi.spyOn(settingsStore, "getEnabledChannels").mockReturnValue(["vertex-proxy"]);
     vi.spyOn(settingsStore, "isChannelReady").mockReturnValue(false);

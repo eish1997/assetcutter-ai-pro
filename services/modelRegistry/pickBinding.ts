@@ -35,6 +35,10 @@ function applyOpsBindingOverrides(bindings: ProviderBinding[]): ProviderBinding[
   return next.sort((a, b) => a.priority - b.priority);
 }
 
+/**
+ * 按 registryId + role 选第一条「已启用且 ready」的 binding。
+ * Failover：固定 priority 升序，无运行时重试链；文本与生图独立选型（role=text|image）。
+ */
 export function pickBinding(registryId: string, role: ModelResolveRole): PickedBinding | null {
   const id = (registryId || "").trim();
   if (!id) return null;

@@ -23,7 +23,7 @@ import {
   type GeminiImageBatchGroupOptions,
 } from './unifiedAiGateway';
 import { DEFAULT_MODEL_TEXT } from './modelRegistry/constants';
-import { resolveUpstreamImageModelId } from './modelRegistry/resolve';
+import { resolveUpstreamImageModelId, resolveUpstreamTextModelId } from './modelRegistry/resolve';
 import {
   submitCompanionHostBundleExecJob,
   submitCompanionHostBundleProbeJob,
@@ -103,6 +103,11 @@ export type CapabilityExecuteResult =
 function effectiveCapabilityTextModel(ctx: CapabilityExecuteContext): string {
   const t = (ctx.textModelRegistryId || '').trim();
   return t || DEFAULT_MODEL_TEXT;
+}
+
+/** 文本侧 upstream model id（经 pickBinding / resolve） */
+export function resolveTextModelIdFromContext(ctx: CapabilityExecuteContext): string {
+  return resolveUpstreamTextModelId(effectiveCapabilityTextModel(ctx));
 }
 
 function parseInlineForLlm(input: string): { mimeType: string; data: string } {

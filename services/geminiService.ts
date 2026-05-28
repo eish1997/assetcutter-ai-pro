@@ -7,7 +7,6 @@ import { createOpenAiGeminiClient } from "./openaiAdapter";
 import { createToapisGeminiClient } from "./toapisAdapter";
 import { createVectorengineGeminiClient } from "./vectorengineAdapter";
 import {
-  getAiProvider,
   getAntigravityApiKey,
   getAntigravityBaseUrl,
   getOpenaiApiKey,
@@ -748,10 +747,7 @@ export function getClientForTask(registryId: string, role: "text" | "image" = "t
   const picked = pickBinding(id, role);
   if (picked) return getClientForChannel(picked.channel);
   if (role === "image") return getAIForImageModel(id);
-  if (getAiProvider() === "trial") {
-    if (!BULK_BASE) {
-      throw new Error("试用模式需配置 VITE_BULK_IMAGE_API（指向可用的 gemini-proxy）。");
-    }
+  if (geminiImageBulkProxyConfigured()) {
     return createBulkProxyGeminiClient();
   }
   throw new Error(
@@ -1181,17 +1177,17 @@ const IMAGE_GEN_RETRY_DELAY_MS = 6000;
 /** 走 bulk 异步代理时含轮询+服务端退避，总等待需长于单次 SDK 超时（与 Vertex 4K 档位对齐） */
 const BULK_PROXY_IMAGE_TIMEOUT_MS = 600_000;
 
-/** 外层 withGeminiRequestControl 不得短于 Vertex/trial 内层 SDK 超时，否则会先被客户端掐断 */
+/** 外层 withGeminiRequestControl 不得短于 Vertex/bulk 内层 SDK 超时，否则会先被客户端掐断 */
 function effectiveImageGenControlTimeoutMs(
   baseTimeout: number,
   useLongBulkWait: boolean,
   registryId: string
 ): number {
-  const vertexOrTrialFloor =
-    useLongBulkWait || usesVertexProxyForImage(registryId) || getAiProvider() === "trial"
+  const vertexOrBulkFloor =
+    useLongBulkWait || usesVertexProxyForImage(registryId)
       ? Math.max(baseTimeout, GEMINI_VERTEX_IMAGE_TIMEOUT_MS)
       : baseTimeout;
-  return useLongBulkWait ? Math.max(vertexOrTrialFloor, BULK_PROXY_IMAGE_TIMEOUT_MS) : vertexOrTrialFloor;
+  return useLongBulkWait ? Math.max(vertexOrBulkFloor, BULK_PROXY_IMAGE_TIMEOUT_MS) : vertexOrBulkFloor;
 }
 
 function shouldFallbackUnderstandToBrowserGemini(error: unknown): boolean {

@@ -7,7 +7,7 @@ import {
 } from "./imageModels";
 import { imageModelRouteDisabledReason } from "./imageModelProvider";
 import { pickBinding } from "./pickBinding";
-import type { AiProvider } from "../settingsStore";
+import { getEnabledChannels } from "../settingsStore";
 import { setBindingDegradedHint } from "../settingsStore";
 import type { ModelOpsConfig } from "./opsTypes";
 import { modelRegistryLog } from "./log";
@@ -26,8 +26,7 @@ export type EffectiveImageGearRow = EffectiveImageModelRow & { id: string; model
  * 合并：注册表模型 × 运营允许列表 ×（预留）渠道绑定。
  * 若运营规则导致「全部模型不可用」，则忽略限制并打 error 日志（避免工作流产线卡死）。
  */
-export function buildEffectiveImageModelRows(provider: AiProvider, ops: ModelOpsConfig): EffectiveImageModelRow[] {
-  void provider;
+export function buildEffectiveImageModelRows(ops: ModelOpsConfig): EffectiveImageModelRow[] {
   const allow = ops.imageRegistryAllowlist;
   const allowSet = allow == null || allow.length === 0 ? null : new Set(allow);
 
@@ -55,7 +54,7 @@ export function buildEffectiveImageModelRows(provider: AiProvider, ops: ModelOps
     modelRegistryLog(
       "error",
       "all image models disabled by ops/provider rules; falling back to full registry",
-      `provider=${provider} reason=${sampleReason}`
+      `channels=${getEnabledChannels().join(",") || "(none)"} reason=${sampleReason}`
     );
     return DIALOG_IMAGE_REGISTRY.map((e) => ({
       registryId: e.registryId,
@@ -69,8 +68,8 @@ export function buildEffectiveImageModelRows(provider: AiProvider, ops: ModelOps
 }
 
 /** @deprecated 请用 `buildEffectiveImageModelRows` */
-export function buildEffectiveImageGearRows(provider: AiProvider, ops: ModelOpsConfig): EffectiveImageGearRow[] {
-  return buildEffectiveImageModelRows(provider, ops).map((r) => ({
+export function buildEffectiveImageGearRows(_provider: unknown, ops: ModelOpsConfig): EffectiveImageGearRow[] {
+  return buildEffectiveImageModelRows(ops).map((r) => ({
     ...r,
     id: r.registryId,
     modelId: r.registryId,

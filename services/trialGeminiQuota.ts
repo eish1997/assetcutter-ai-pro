@@ -1,10 +1,11 @@
 /**
  * 试用（代理）通道配额：登录用户由 auth-api 按账号计数；未登录为设备级 localStorage（可清空）。
+ * 与 legacy `trial` 供应商解耦：凡走站点 bulk 代理且未自带 Gemini Key 时扣减。
  */
 import { apiUrl } from './apiBase';
 import { readLocalJson, scopedStorageKey, writeLocalJson } from './clientPersist';
 import { HttpRequestError, requestJson } from './httpClient';
-import { getAiProvider } from './settingsStore';
+import { getUserApiKey } from './settingsStore';
 
 /** 与 auth-api `TRIAL_GEMINI_DAILY_LIMIT` 对齐；访客提示与本地计数用同一上限（默认 20）。 */
 function trialDailyLimitClient(): number {
@@ -54,7 +55,7 @@ function consumeGuestTrialSlotOrThrow(limit: number): void {
  * 在发起 `VITE_BULK_IMAGE_API` 异步任务前调用：占用一次试用额度（登录走服务端，未登录走本机计数）。
  */
 export async function consumeTrialGeminiSlotBeforeProxyOrThrow(): Promise<void> {
-  if (getAiProvider() !== 'trial') return;
+  if (getUserApiKey()?.trim()) return;
   const limit = trialDailyLimitClient();
   try {
     await requestJson<{ ok?: boolean }>(apiUrl('/api/auth/trial-gemini/consume'), {

@@ -41,10 +41,10 @@ const FAMILY_LABELS: Record<ModelFamily, string> = {
   openai: 'OpenAI 系通道',
 };
 
-const TOAPIS_PATH_LABELS: Record<(typeof TOAPIS_PATH_CHANNELS)[number], string> = {
+const TOAPIS_PATH_LABELS = {
   'toapis-gemini': 'Gemini 路径',
   'toapis-openai': 'OpenAI 路径',
-};
+} as const satisfies Record<(typeof TOAPIS_PATH_CHANNELS)[number], string>;
 
 function readToapisDraft(): ChannelDraft {
   return { apiKey: getToapisApiKey() ?? '', baseUrl: getToapisBaseUrl() };
@@ -95,6 +95,16 @@ function channelStatusLabel(channel: ChannelId, enabled: boolean): { text: strin
   return { text: '待配置', cls: 'text-amber-300 ring-amber-500/30 bg-amber-950/25' };
 }
 
+type ChannelRowProps = {
+  row: ChannelCatalogRow;
+  enabled: boolean;
+  draft: ChannelDraft;
+  compact: boolean;
+  onToggle: (next: boolean) => void;
+  onDraftChange: (patch: Partial<ChannelDraft>) => void;
+  onSave: () => void;
+};
+
 function ChannelRow({
   row,
   enabled,
@@ -103,15 +113,7 @@ function ChannelRow({
   onToggle,
   onDraftChange,
   onSave,
-}: {
-  row: ChannelCatalogRow;
-  enabled: boolean;
-  draft: ChannelDraft;
-  compact: boolean;
-  onToggle: (next: boolean) => void;
-  onDraftChange: (patch: Partial<ChannelDraft>) => void;
-  onSave: () => void;
-}) {
+}: ChannelRowProps) {
   const status = channelStatusLabel(row.channel, enabled);
   return (
     <div
@@ -339,16 +341,17 @@ export default function AiProviderCredentialsPanel({ onChanged, compact = false 
             const enabled = enabledChannels.includes(row.channel);
             const draft = drafts[row.channel] ?? readChannelDraft(row.channel);
             return (
-              <ChannelRow
-                key={row.channel}
-                row={row}
-                enabled={enabled}
-                draft={draft}
-                compact={compact}
-                onToggle={(next) => handleToggle(row.channel, next)}
-                onDraftChange={(patch) => updateDraft(row.channel, patch)}
-                onSave={() => handleSaveRow(row.channel)}
-              />
+              <div key={row.channel}>
+                <ChannelRow
+                  row={row}
+                  enabled={enabled}
+                  draft={draft}
+                  compact={compact}
+                  onToggle={(next) => handleToggle(row.channel, next)}
+                  onDraftChange={(patch) => updateDraft(row.channel, patch)}
+                  onSave={() => handleSaveRow(row.channel)}
+                />
+              </div>
             );
           })}
         </div>
