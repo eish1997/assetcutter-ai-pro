@@ -455,14 +455,37 @@ export type ImageOverlayAnnotationDoc = {
   panoLocalEditReproject?: PanoLocalReprojectSnapshot | null;
 };
 
+/** 分镜表内单行（内嵌于 `storyboard_table` 资产，不对应独立 WorkflowAsset） */
+export type StoryboardTableRow = {
+  id: string;
+  /** 0-based 展示序号，保存前由归一化重排 */
+  index: number;
+  shotNo?: string;
+  durationSec?: number | null;
+  shotText: string;
+  /** 分镜图：data URL / blob / https；云端可仅保留 frameImageObjectKey */
+  frameImage?: string;
+  frameImageObjectKey?: string;
+  locked?: boolean;
+};
+
+export type StoryboardTableDoc = {
+  /** 表标题；缺省用 textTitle */
+  title?: string;
+  rows: StoryboardTableRow[];
+};
+
 /** 单个资产：原始图 + 各类型结果图，当前展示版本，是否已归档；归档后可按生成顺序拼流程图 */
 export type WorkflowAsset = {
   id: string;
   /**
    * 资产形态：缺省视为 `image`，兼容旧数据。
    * `text`：工作区文字卡片（无位图执行能力，不进入图像能力队列）。
+   * `storyboard_table`：分镜表容器，镜头行存于 `storyboardTable`。
    */
-  assetKind?: 'image' | 'text';
+  assetKind?: 'image' | 'text' | 'storyboard_table';
+  /** 分镜表行数据（仅 `assetKind === 'storyboard_table'`） */
+  storyboardTable?: StoryboardTableDoc;
   /** 是否为组：true=组卡片，false/undefined=普通资产卡片 */
   isGroup?: boolean;
   /** 组内关联的资产 ID 列表（组卡片时使用）；筛选时根据此字段显示直接成员 */

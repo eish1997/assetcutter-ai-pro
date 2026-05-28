@@ -16,6 +16,6 @@ export const WORKFLOW_SIDEBAR_FEATURE_GROUPS: WorkflowSidebarFeatureGroup[] = [
   {
     id: 'workflow',
     label: '工作流组',
-    items: [{ id: 'storyboard_flow', label: '分镜流程', hint: '功能开发中，敬请期待' }],
+    items: [{ id: 'storyboard_flow', label: '分镜流程', hint: '新建分镜表并打开编辑' }],
   },
 ];

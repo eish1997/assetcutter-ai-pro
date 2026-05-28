@@ -328,6 +328,8 @@ export type WorkflowSidebarColumnProps = {
    * `null` 表示不压暗。
    */
   onLinkHoverPresetIds?: (presetIds: string[] | null) => void;
+  /** 工作流组占位功能（如分镜流程）点击 */
+  onWorkflowFeatureClick?: (featureId: string) => void;
 };
 
 export function WorkflowSidebarColumn({
@@ -386,6 +388,7 @@ export function WorkflowSidebarColumn({
   onComposeCapabilities,
   linkedComposeSearchQuery = '',
   onLinkHoverPresetIds,
+  onWorkflowFeatureClick,
 }: WorkflowSidebarColumnProps) {
   const { rows: effectiveModelRows } = useEffectiveImageModelRows();
   const { rows: effectiveTextModelRows } = useEffectiveTextModelRows();
@@ -2504,18 +2507,31 @@ export function WorkflowSidebarColumn({
                   {!collapsedSectionIds[`wf:${group.id}`] && (
                     <div className="grid grid-cols-2 gap-2 items-stretch">
                       {group.items.map((item) => (
-                        <div
+                        <button
                           key={item.id}
+                          type="button"
                           title={item.hint || '功能开发中'}
-                          className={`rounded-xl border min-h-[60px] h-auto flex overflow-hidden transition-all duration-150 cursor-default opacity-80 ${getSidebarCapabilityTone('workflow').idleBorderClass} bg-[#181a1f]`}
+                          disabled={!onWorkflowFeatureClick && item.id === 'storyboard_flow'}
+                          onClick={() => onWorkflowFeatureClick?.(item.id)}
+                          className={`rounded-xl border min-h-[60px] h-auto flex overflow-hidden transition-all duration-150 text-left ${
+                            onWorkflowFeatureClick
+                              ? `cursor-pointer hover:scale-[1.01] ring-1 ring-violet-500/25 hover:ring-violet-400/45 ${getSidebarCapabilityTone('workflow').hoverBorderClass}`
+                              : 'cursor-default opacity-80'
+                          } ${getSidebarCapabilityTone('workflow').idleBorderClass} ${
+                            onWorkflowFeatureClick && item.id === 'storyboard_flow'
+                              ? 'bg-gradient-to-br from-[#1a1528] to-[#181a1f]'
+                              : 'bg-[#181a1f]'
+                          }`}
                         >
                           <div className="flex-1 p-3 flex flex-col items-center justify-center text-center min-w-0 gap-1">
                             <span className="w-full min-w-0 text-[9px] font-black uppercase break-words line-clamp-2 text-center leading-tight text-gray-200">
                               {item.label}
                             </span>
-                            <span className="text-[7px] font-bold uppercase tracking-wide text-gray-500">占位</span>
+                            <span className="text-[7px] font-bold uppercase tracking-wide text-violet-400/80">
+                              {onWorkflowFeatureClick ? '新建' : '占位'}
+                            </span>
                           </div>
-                        </div>
+                        </button>
                       ))}
                     </div>
                   )}

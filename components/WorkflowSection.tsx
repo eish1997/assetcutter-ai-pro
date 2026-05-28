@@ -201,6 +201,22 @@ import {
   workflowTextAssetOutlineLabel,
 } from '../services/workflowTextAsset';
 import {
+  createEmptyStoryboardTableAsset,
+  isWorkflowStoryboardTableAsset,
+  normalizeStoryboardTableOnAsset,
+  storyboardTableCoverImage,
+  storyboardTableOutlineLabel,
+} from '../services/storyboardTableAsset';
+import StoryboardTablePanel from './storyboard/StoryboardTablePanel';
+import StoryboardTableGridCard from './storyboard/StoryboardTableGridCard';
+import { compressStoryboardFrameDataUrl } from './storyboard/storyboardFrameImage';
+import {
+  executeStoryboardRowRedraw,
+  listStoryboardRedrawPresets,
+  pickDefaultStoryboardRedrawPresetId,
+  STORYBOARD_REDRAW_PRESET_KEY,
+} from '../services/storyboardTableRedraw';
+import {
   WORKFLOW_TEXT_CONFIRM_CHARS,
   WORKFLOW_TEXT_WARN_CHARS,
   maxWorkflowPendingInputTextChars,
@@ -667,6 +683,7 @@ const WorkflowSection: React.FC<{
   const [archiveHint, setArchiveHint] = useState<{ assetId: string; ts: number } | null>(null);
   const [refiningTagKeys, setRefiningTagKeys] = useState<Set<string>>(new Set());
   const [lightboxAssetId, setLightboxAssetId] = useState<string | null>(null);
+  const [storyboardPanelAssetId, setStoryboardPanelAssetId] = useState<string | null>(null);
   const lightboxAssetIdRef = useRef<string | null>(null);
   lightboxAssetIdRef.current = lightboxAssetId;
   const [lightboxTripoPullBusy, setLightboxTripoPullBusy] = useState(false);
@@ -1373,8 +1390,140 @@ const WorkflowSection: React.FC<{
     });
   }, []);
 
+  const addWorkflowStoryboardTableAsset = useCallback(
+    (title?: string): string => {
+      const id = uuid();
+      const newAsset = attachInitialVgpToNewAsset(createEmptyStoryboardTableAsset(id, title));
+      setAssets((prev) => [...prev, newAsset]);
+      onLog?.('info', '已新建分镜表');
+      return id;
+    },
+    [onLog, setAssets]
+  );
+
+  const openStoryboardTablePanel = useCallback((assetId: string) => {
+    setStoryboardPanelAssetId(assetId);
+    setLightboxAssetId(null);
+    setLightboxSourceSlot(null);
+  }, []);
+
+  const closeStoryboardTablePanel = useCallback(() => {
+    setStoryboardPanelAssetId(null);
+  }, []);
+
+  const handleStoryboardPanelPatch = useCallback(
+    (patch: Partial<WorkflowAsset> | ((prev: WorkflowAsset) => WorkflowAsset)) => {
+      setAssets((prev) => {
+        const id = storyboardPanelAssetId;
+        if (!id) return prev;
+        const cur = prev.find((x) => x.id === id);
+        if (!cur || !isWorkflowStoryboardTableAsset(cur)) return prev;
+        const next = typeof patch === 'function' ? patch(cur) : { ...cur, ...patch };
+        return prev.map((x) =>
+          x.id === id ? normalizeStoryboardTableOnAsset(next) : x
+        );
+      });
+    },
+    [storyboardPanelAssetId, setAssets]
+  );
+
+  const handleWorkflowFeatureClick = useCallback(
+    (featureId: string) => {
+      if (featureId !== 'storyboard_flow') return;
+      const id = addWorkflowStoryboardTableAsset();
+      openStoryboardTablePanel(id);
+    },
+    [addWorkflowStoryboardTableAsset, openStoryboardTablePanel]
+  );
+
+  const storyboardRedrawPresets = useMemo(
+    () => listStoryboardRedrawPresets(capabilityPresets),
+    [capabilityPresets]
+  );
+
+  const handleStoryboardRowRedraw = useCallback(
+    async (tableAssetId: string, rowId: string, presetId: string) => {
+      const tableAsset = assets.find((a) => a.id === tableAssetId);
+      if (!tableAsset || !isWorkflowStoryboardTableAsset(tableAsset)) return;
+      const row = tableAsset.storyboardTable?.rows.find((r) => r.id === rowId);
+      if (!row) {
+        onLog?.('warn', '分镜表：镜头行不存在');
+        return;
+      }
+      if (row.locked) {
+        onLog?.('warn', '该镜头已锁定，跳过重绘');
+        return;
+      }
+      const preset =
+        storyboardRedrawPresets.find((p) => p.id === presetId) ??
+        capabilityPresets.find((p) => p.id === presetId);
+      if (!preset || preset.disabled) {
+        onLog?.('warn', '请选择有效的文生图/图生图能力');
+        return;
+      }
+      const result = await executeStoryboardRowRedraw({
+        preset,
+        row,
+        ctx: {
+          onLog,
+          textModelRegistryId: capabilityTextModel,
+          companionProjectId: workspaceProjectChrome?.activeProjectId?.trim() || undefined,
+        },
+        companionBaseUrl: String(getCompanionLocalBaseUrl() || ''),
+        companionProjectId: String(workspaceProjectChrome?.activeProjectId || ''),
+      });
+      if (!result.ok) {
+        onLog?.('warn', `分镜重绘失败：${result.error}`);
+        return;
+      }
+      let frameImage = result.image;
+      try {
+        frameImage = await compressStoryboardFrameDataUrl(frameImage);
+      } catch {
+        /* keep raw */
+      }
+      setAssets((prev) =>
+        prev.map((a) => {
+          if (a.id !== tableAssetId || !isWorkflowStoryboardTableAsset(a)) return a;
+          const doc = a.storyboardTable;
+          if (!doc?.rows) return a;
+          return normalizeStoryboardTableOnAsset({
+            ...a,
+            storyboardTable: {
+              ...doc,
+              rows: doc.rows.map((r) =>
+                r.id === rowId
+                  ? { ...r, frameImage, frameImageObjectKey: undefined }
+                  : r
+              ),
+            },
+          });
+        })
+      );
+    },
+    [
+      assets,
+      capabilityPresets,
+      capabilityTextModel,
+      onLog,
+      setAssets,
+      storyboardRedrawPresets,
+      workspaceProjectChrome?.activeProjectId,
+    ]
+  );
+
   const navigateOutlineToAsset = useCallback(
     (asset: WorkflowAsset) => {
+      if (isWorkflowStoryboardTableAsset(asset)) {
+        setGroupFilterId(null);
+        setSelectedGroupItemKeys(new Set());
+        setSelectedRootAssetIds(new Set([asset.id]));
+        openStoryboardTablePanel(asset.id);
+        requestAnimationFrame(() => {
+          cardRefs.current.get(asset.id)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        });
+        return;
+      }
       if (asset.isGroup === true) {
         setGroupFilterId(asset.id);
         setSelectedGroupItemKeys(new Set());
@@ -1394,7 +1543,7 @@ const WorkflowSection: React.FC<{
         cardRefs.current.get(asset.id)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
       });
     },
-    [assets, setSelectedRootAssetIds]
+    [assets, openStoryboardTablePanel, setSelectedRootAssetIds]
   );
 
   const navigateOutlineToGroupItem = useCallback(
@@ -1502,6 +1651,9 @@ const WorkflowSection: React.FC<{
     _assetsList?: WorkflowAsset[],
     _visited?: Set<string>
   ): string => {
+    if (isWorkflowStoryboardTableAsset(a)) {
+      return storyboardTableCoverImage(a);
+    }
     const orig = asWorkflowImageString(a.original);
     if (isWorkflowTextAsset(a)) {
       if (a.displayKey === 'original') return orig;
@@ -1515,7 +1667,7 @@ const WorkflowSection: React.FC<{
 
   const assetLightboxRasterEligible = useCallback(
     (a: WorkflowAsset | null | undefined): boolean => {
-      if (!a || isGroupAsset(a)) return false;
+      if (!a || isGroupAsset(a) || isWorkflowStoryboardTableAsset(a)) return false;
       return workflowAssetLightboxRasterEligible(a, getAssetDisplayImage(a));
     },
     [getAssetDisplayImage]
@@ -1860,6 +2012,10 @@ ${lineSvg}
       actionType: string,
       options?: WorkflowPendingTaskOptions
     ): WorkflowPendingTask | null => {
+      if (isWorkflowStoryboardTableAsset(asset)) {
+        onLog?.('warn', '分镜表不支持拖入能力队列');
+        return null;
+      }
       const mod =
         actionModules.find((m) => m.id === actionType) ??
         capabilityPresets.find((p) => p.id === actionType) ??
@@ -2916,6 +3072,10 @@ ${lineSvg}
   /** 能力块拖到资产卡：以该卡为唯一输入立即执行（插队），不单独停留在待执行列表 */
   const runCapabilityOnAssetCardImmediate = useCallback(
     (targetAsset: WorkflowAsset, actionType: string) => {
+      if (isWorkflowStoryboardTableAsset(targetAsset)) {
+        onLog?.('warn', '分镜表请点卡片打开表格编辑');
+        return;
+      }
       const trimmed = actionType.trim();
       if (!trimmed) return;
       if (trimmed.startsWith(SET_ACTION_PREFIX)) {
@@ -4309,7 +4469,9 @@ ${lineSvg}
       visited.add(a.id);
 
       // 获取标签
-      const label = isWorkflowTextAsset(a)
+      const label = isWorkflowStoryboardTableAsset(a)
+        ? storyboardTableOutlineLabel(a)
+        : isWorkflowTextAsset(a)
         ? workflowTextAssetOutlineLabel(a)
         : a.groupLabel ||
           (isGroupAsset(a) ? (a.groupKind === 'manual' ? '组' : '切割') : null) ||
@@ -4544,6 +4706,15 @@ ${lineSvg}
   }, [lightboxAssetId, resolveActiveExecutionForAsset]);
 
   const lightboxAsset = lightboxAssetId ? assets.find((a) => a.id === lightboxAssetId) : null;
+  const storyboardPanelAsset = storyboardPanelAssetId
+    ? assets.find((a) => a.id === storyboardPanelAssetId && isWorkflowStoryboardTableAsset(a))
+    : null;
+
+  useEffect(() => {
+    if (storyboardPanelAssetId && !storyboardPanelAsset) {
+      setStoryboardPanelAssetId(null);
+    }
+  }, [storyboardPanelAsset, storyboardPanelAssetId]);
   const lightboxShowsImage = Boolean(lightboxAsset && getAssetDisplayImage(lightboxAsset).trim());
   /** 文字资产当前版本按文本通道展示（非 results 中的位图版本） */
   const lightboxTextAssetOnTextChannel = Boolean(
@@ -5021,7 +5192,14 @@ ${lineSvg}
   const lightboxList = useMemo(
     () =>
       sortRootWorkflowAssetsNewestFirst(
-        assets.filter((a) => !a.archived && !a.hiddenInGrid && !a.parentAssetId)
+        assets.filter(
+          (a) =>
+            !a.archived &&
+            !a.hiddenInGrid &&
+            !a.parentAssetId &&
+            !isWorkflowStoryboardTableAsset(a) &&
+            !isGroupAsset(a)
+        )
       ),
     [assets]
   );
@@ -5613,6 +5791,7 @@ ${lineSvg}
 
   /** 文字/图片/组内子项：统一用 resultOrder 版本链（与滚轮切换一致），不按资产类型区分 */
   const getDisplayKeysForAsset = (a: WorkflowAsset): string[] => {
+    if (isWorkflowStoryboardTableAsset(a)) return ['original'];
     const keys: string[] = ['original'];
     (a.resultOrder || []).forEach((k) => {
       if (baseActionId(k) !== 'cut_image') keys.push(k);
@@ -5648,7 +5827,7 @@ ${lineSvg}
       setAssets((prev) => {
         const copies: WorkflowAsset[] = plans.map(({ src, newId }) => {
           const { modelCompanionKeys: _omitModelKeys, ...rest } = src;
-          return {
+          const copy = {
             ...rest,
             id: newId,
             modelCompanionKeys: undefined,
@@ -5656,6 +5835,9 @@ ${lineSvg}
             hiddenInGrid: false,
             createdAt: Date.now(),
           };
+          return isWorkflowStoryboardTableAsset(copy)
+            ? normalizeStoryboardTableOnAsset(copy)
+            : copy;
         });
         let next = [...prev, ...copies];
         if (parentGroupId) {
@@ -5866,9 +6048,10 @@ ${lineSvg}
     setPending((prev) => prev.filter((t) => t.assetId !== assetId));
     if (lightboxAssetId === assetId) setLightboxAssetId(null);
     if (archivedDetailAssetId === assetId) setArchivedDetailAssetId(null);
+    if (storyboardPanelAssetId === assetId) setStoryboardPanelAssetId(null);
     // 如果删除的是当前查看的组，清除组筛选
     if (groupFilterId === assetId) setGroupFilterId(null);
-  }, [lightboxAssetId, archivedDetailAssetId, groupFilterId, setAssets, setPending]);
+  }, [lightboxAssetId, archivedDetailAssetId, groupFilterId, storyboardPanelAssetId, setAssets, setPending]);
 
   const archivedDetailAsset = archivedDetailAssetId ? assets.find((a) => a.id === archivedDetailAssetId) : null;
 
@@ -6370,9 +6553,13 @@ ${lineSvg}
 
   const createGroupFromAssets = useCallback(
     (assetIds: string[]) => {
-      if (!assetIds.length) return;
+      const members = assetIds.filter((id) => {
+        const a = assets.find((x) => x.id === id);
+        return a != null && !isWorkflowStoryboardTableAsset(a);
+      });
+      if (members.length < 2) return;
       setAssets((prev) => {
-        const r = insertManualGroupForAssetIds(prev, assetIds);
+        const r = insertManualGroupForAssetIds(prev, members);
         if (r.createdGroup) {
           const cg = r.createdGroup;
           queueMicrotask(() => scheduleCompanionPersistOriginalAny(cg.id, cg.coverImage));
@@ -6381,7 +6568,7 @@ ${lineSvg}
       });
       setSelectedAssetIds(new Set());
     },
-    [insertManualGroupForAssetIds, scheduleCompanionPersistOriginalAny, setAssets, setSelectedAssetIds]
+    [assets, insertManualGroupForAssetIds, scheduleCompanionPersistOriginalAny, setAssets, setSelectedAssetIds]
   );
 
   /** 从组的 assetIds 创建嵌套组 */
@@ -8730,6 +8917,7 @@ ${lineSvg}
             onComposeCapabilities={handleComposeCapabilities}
             linkedComposeSearchQuery={quickComposeDraft}
             onLinkHoverPresetIds={setSidebarLinkHoverPresetIds}
+            onWorkflowFeatureClick={handleWorkflowFeatureClick}
           />
         </div>
         </div>
@@ -9451,6 +9639,16 @@ ${lineSvg}
                 <p className="mt-2 text-[9px] leading-relaxed text-gray-500">
                   将图片或模型<strong className="text-gray-400">拖入画布</strong>，在左侧「仓库」拖入条目，或使用<strong className="text-gray-400">粘贴</strong>、功能区能力生成内容
                 </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const id = addWorkflowStoryboardTableAsset();
+                    openStoryboardTablePanel(id);
+                  }}
+                  className="mt-4 rounded-xl border border-violet-500/35 bg-violet-500/10 px-4 py-2 text-[10px] font-bold text-violet-200 hover:bg-violet-500/20"
+                >
+                  新建分镜表
+                </button>
               </div>
             </div>
           ) : (
@@ -9469,11 +9667,13 @@ ${lineSvg}
                   const baseDisplayImage = getAssetDisplayImage(a);
                   const hasDisplayImage = baseDisplayImage.trim() !== '';
                   /** 无图时仍用已持久化的 `gridCardAspectRatio` 占位（资源未 hydrate 时不至于先方后横跳） */
-                  const cardAspect = hasDisplayImage
-                    ? resolveWorkflowGridCardAspect(a, cardAspectByAssetId, undefined, 1)
-                    : isWorkflowTextAsset(a) && hasTextPayload
-                      ? 3 / 4
-                      : resolveWorkflowGridCardAspect(a, cardAspectByAssetId, undefined, 1);
+                  const cardAspect = isWorkflowStoryboardTableAsset(a)
+                    ? 4 / 3
+                    : hasDisplayImage
+                      ? resolveWorkflowGridCardAspect(a, cardAspectByAssetId, undefined, 1)
+                      : isWorkflowTextAsset(a) && hasTextPayload
+                        ? 3 / 4
+                        : resolveWorkflowGridCardAspect(a, cardAspectByAssetId, undefined, 1);
                   const isBusy = busyAssetIds.has(a.id);
                   const isPendingOnly =
                     pending.some((t) => t.assetId === a.id) && !executingQueue;
@@ -9564,9 +9764,9 @@ ${lineSvg}
                             ? 'border-0 ring-2 ring-blue-400/45'
                             : WORKFLOW_CARD_SURFACE_IDLE
                         } ${setRunAccentClass} ${busyClass} transition-transform duration-150 ease-out will-change-transform ${motionClass}`}
-                        draggable={!showArchived && !isBusy}
+                        draggable={!showArchived && !isBusy && !isWorkflowStoryboardTableAsset(a)}
                         onDragStart={(e) => {
-                          if (showArchived || isBusy) return;
+                          if (showArchived || isBusy || isWorkflowStoryboardTableAsset(a)) return;
                           const ids =
                             selectedAssetIds.has(a.id) && selectedAssetIds.size > 0
                               ? Array.from(selectedAssetIds)
@@ -9668,7 +9868,7 @@ ${lineSvg}
                             return;
                           }
                           const src = sources[0]!;
-                          if (isWorkflowTextAsset(a)) {
+                          if (isWorkflowTextAsset(a) || isWorkflowStoryboardTableAsset(a)) {
                             finish();
                             return;
                           }
@@ -9676,7 +9876,9 @@ ${lineSvg}
                           if (src.kind === 'root') {
                             const dragIds = Array.from(new Set(src.assetIds.filter((id) => id !== targetId))).filter((id) => {
                               const ast = assets.find((x) => x.id === id);
-                              return ast != null && !isWorkflowTextAsset(ast);
+                              return (
+                                ast != null && !isWorkflowTextAsset(ast) && !isWorkflowStoryboardTableAsset(ast)
+                              );
                             });
                             if (dragIds.length > 0) {
                               if (isGroupAsset(a)) {
@@ -9755,13 +9957,17 @@ ${lineSvg}
                               setArchivedDetailAssetId(a.id);
                             } else if (isGroupCard) {
                               setGroupFilterId(a.id);
+                            } else if (isWorkflowStoryboardTableAsset(a)) {
+                              openStoryboardTablePanel(a.id);
                             } else {
                               setLightboxSourceSlot(null);
                               setLightboxAssetId(a.id);
                             }
                           }}
                         >
-                          {!hasDisplayImage && isWorkflowTextAsset(a) ? (
+                          {isWorkflowStoryboardTableAsset(a) ? (
+                            <StoryboardTableGridCard asset={a} />
+                          ) : !hasDisplayImage && isWorkflowTextAsset(a) ? (
                             <div
                               className="relative w-full bg-[#141416] flex flex-col justify-start p-3 text-left"
                               style={{ aspectRatio: `${3 / 4}`, minHeight: '10rem' }}
@@ -9959,6 +10165,25 @@ ${lineSvg}
         </div>
       </div>
       </div>
+
+      {storyboardPanelAsset && !showArchived && (
+        <StoryboardTablePanel
+          asset={storyboardPanelAsset}
+          onClose={closeStoryboardTablePanel}
+          onNotify={(level, message) => onLog?.(level, message)}
+          redrawPresets={storyboardRedrawPresets}
+          defaultRedrawPresetId={pickDefaultStoryboardRedrawPresetId(capabilityPresets)}
+          redrawPresetStorageKey={STORYBOARD_REDRAW_PRESET_KEY}
+          readOnly={Boolean(storyboardPanelAsset.archived)}
+          onRedrawRow={
+            storyboardPanelAssetId
+              ? (rowId, presetId) =>
+                  handleStoryboardRowRedraw(storyboardPanelAssetId, rowId, presetId)
+              : undefined
+          }
+          onPatchAsset={handleStoryboardPanelPatch}
+        />
+      )}
 
       {/* 进行中：大图弹窗；外壳统一为 ImagePreviewOverlay，当前版本为纯文本时仅中央为文字编辑区 */}
       {lightboxAsset && !showArchived && (
