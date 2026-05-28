@@ -753,6 +753,18 @@ export function getClientForTask(registryId: string, role: "text" | "image" = "t
   );
 }
 
+function formatRequestTimeoutMessage(timeoutMs: number, phase?: string): string {
+  const label = phase?.trim();
+  return label ? `${label}请求超时（>${timeoutMs}ms）` : `请求超时（>${timeoutMs}ms）`;
+}
+
+function usesOpenAiRouteForImage(registryId: string): boolean {
+  const id = coerceImageModelRegistryId(registryId);
+  const picked = pickBinding(id, "image");
+  if (picked?.channel === "openai-official" || picked?.channel === "toapis-openai") return true;
+  return imageModelProviderRoute(id) === "openai";
+}
+
 function shouldUseBulkImageBatchQueueForModel(registryId: string): boolean {
   const picked = pickBinding(coerceImageModelRegistryId(registryId), "image");
   if (picked?.channel === "vertex-proxy" && !getUserApiKey()?.trim()) {
@@ -776,6 +788,9 @@ function imageGenTimeoutMsForModel(registryId: string, baseTimeout: number): num
   if (route === "gemini" && !getUserApiKey()?.trim() && geminiImageBulkProxyConfigured()) {
     return Math.max(baseTimeout, GEMINI_VERTEX_IMAGE_TIMEOUT_MS);
   }
+  if (usesOpenAiRouteForImage(registryId)) {
+    return Math.max(baseTimeout, OPENAI_IMAGE_REQUEST_TIMEOUT_MS);
+  }
   return baseTimeout;
 }
 
@@ -798,6 +813,8 @@ export interface GeminiRequestOptions {
   arenaPromptAbN?: string;
   arenaPromptOptimizeLoser?: string;
   arenaPromptNewChallenger?: string;
+  /** 超时日志用：如「生图」「理解」 */
+  requestPhase?: string;
 }
 
 export type GeminiImageBatchGroupOptions = {
@@ -807,6 +824,8 @@ export type GeminiImageBatchGroupOptions = {
 
 const GEMINI_REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_REQUEST_TIMEOUT_MS) || 45_000;
 const GEMINI_IMAGE_REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_IMAGE_REQUEST_TIMEOUT_MS) || 120_000;
+/** OpenAI GPT Image（尤其 gpt-image-2 + 4K）常超过 2min；默认 5min */
+const OPENAI_IMAGE_REQUEST_TIMEOUT_MS = Number(process.env.OPENAI_IMAGE_REQUEST_TIMEOUT_MS) || 300_000;
 /** Vertex/trial 生图单项（尤其 4K）常超过 5min；默认 10min，可用 GEMINI_VERTEX_IMAGE_TIMEOUT_MS 覆盖 */
 const GEMINI_VERTEX_IMAGE_TIMEOUT_MS = Number(process.env.GEMINI_VERTEX_IMAGE_TIMEOUT_MS) || 600_000;
 
@@ -965,6 +984,7 @@ export async function withGeminiRequestControl<T>(
   options?: GeminiRequestOptions
 ): Promise<T> {
   const timeoutMs = options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS;
+  const phase = options?.requestPhase;
   const controller = new AbortController();
   let timedOut = false;
   let externalAbortHandler: (() => void) | null = null;
@@ -979,7 +999,7 @@ export async function withGeminiRequestControl<T>(
 
   const timer = setTimeout(() => {
     timedOut = true;
-    controller.abort(createAbortError(`请求超时（>${timeoutMs}ms）`));
+    controller.abort(createAbortError(formatRequestTimeoutMessage(timeoutMs, phase)));
   }, timeoutMs);
 
   try {
@@ -993,7 +1013,7 @@ export async function withGeminiRequestControl<T>(
     ]);
   } catch (error) {
     if (options?.abortSignal?.aborted) throw createAbortError('请求已取消');
-    if (timedOut) throw new Error(buildDiagMessage("GEMINI_TIMEOUT", `请求超时（>${timeoutMs}ms）`));
+    if (timedOut) throw new Error(buildDiagMessage("GEMINI_TIMEOUT", formatRequestTimeoutMessage(timeoutMs, phase)));
     if (isAbortError(error)) throw createAbortError('请求已取消');
     throw error;
   } finally {
@@ -1169,6 +1189,7 @@ export const CAPABILITY_UNDERSTAND_RETRY_OPTIONS: GeminiRequestOptions = {
   retries: 4,
   retryDelayMs: 2500,
   maxRetryDelayMs: 12_000,
+  requestPhase: '理解',
 };
 const BULK_PROXY_UNDERSTAND_TIMEOUT_MS = 120_000;
 const IMAGE_GEN_RETRY_DELAY_MS = 6000;
@@ -1181,11 +1202,14 @@ function effectiveImageGenControlTimeoutMs(
   useLongBulkWait: boolean,
   registryId: string
 ): number {
-  const vertexOrBulkFloor =
-    useLongBulkWait || usesVertexProxyForImage(registryId)
-      ? Math.max(baseTimeout, GEMINI_VERTEX_IMAGE_TIMEOUT_MS)
-      : baseTimeout;
-  return useLongBulkWait ? Math.max(vertexOrBulkFloor, BULK_PROXY_IMAGE_TIMEOUT_MS) : vertexOrBulkFloor;
+  let floor = baseTimeout;
+  if (useLongBulkWait || usesVertexProxyForImage(registryId)) {
+    floor = Math.max(floor, GEMINI_VERTEX_IMAGE_TIMEOUT_MS);
+  }
+  if (usesOpenAiRouteForImage(registryId)) {
+    floor = Math.max(floor, OPENAI_IMAGE_REQUEST_TIMEOUT_MS);
+  }
+  return useLongBulkWait ? Math.max(floor, BULK_PROXY_IMAGE_TIMEOUT_MS) : floor;
 }
 
 function shouldFallbackUnderstandToBrowserGemini(error: unknown): boolean {
@@ -1668,6 +1692,7 @@ export async function understandImageEditIntent(
       {
         ...options,
         timeoutMs: controlTimeout,
+        requestPhase: options?.requestPhase ?? '理解',
         retries:
           options?.retries ??
           (effectiveBulkBase() ? 10 : 3),
@@ -1777,6 +1802,7 @@ export async function dialogGenerateImage(
     ...requestOptions,
     abortSignal,
     timeoutMs: controlTimeoutMs,
+    requestPhase: requestOptions?.requestPhase ?? '生图',
     retries: requestOptions?.retries ?? IMAGE_GEN_RETRIES_ON_OVERLOAD,
     retryDelayMs: requestOptions?.retryDelayMs ?? IMAGE_GEN_RETRY_DELAY_MS,
   });
@@ -1843,6 +1869,7 @@ export async function dialogGenerateImages(
     ...requestOptions,
     abortSignal,
     timeoutMs: controlTimeoutMs,
+    requestPhase: requestOptions?.requestPhase ?? '生图',
     retries: requestOptions?.retries ?? IMAGE_GEN_RETRIES_ON_OVERLOAD,
     retryDelayMs: requestOptions?.retryDelayMs ?? IMAGE_GEN_RETRY_DELAY_MS,
   });
@@ -1901,6 +1928,7 @@ export async function dialogGenerateImageMulti(
     ...requestOptions,
     abortSignal,
     timeoutMs: controlTimeoutMs,
+    requestPhase: requestOptions?.requestPhase ?? '生图',
     retries: requestOptions?.retries ?? IMAGE_GEN_RETRIES_ON_OVERLOAD,
     retryDelayMs: requestOptions?.retryDelayMs ?? IMAGE_GEN_RETRY_DELAY_MS,
   });

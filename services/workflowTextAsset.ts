@@ -37,6 +37,12 @@ export function workflowAssetCurrentDisplayIsTextChannel(a: WorkflowAsset): bool
   return !raster;
 }
 
+/** 大图预览是否应按位图处理（标注 / SAM / overlay 写回 / @当前画面 等） */
+export function workflowAssetLightboxRasterEligible(a: WorkflowAsset, displayImage: string): boolean {
+  if (isWorkflowTextAsset(a) && workflowAssetCurrentDisplayIsTextChannel(a)) return false;
+  return Boolean(String(displayImage || '').trim());
+}
+
 /** 文字卡可拖入：文生文、文生图 */
 export function workflowPresetAcceptsTextCardDrag(mod: CustomAppModule): boolean {
   return mod.category === 'text_to_text' || mod.category === 'text_to_image';

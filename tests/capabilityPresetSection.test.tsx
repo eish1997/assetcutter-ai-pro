@@ -52,7 +52,11 @@ describe('CapabilityPresetSection: add preset with companionHostBundle', () => {
       screen.getByPlaceholderText('如：转赛博朋克风格、生成多视角、写实化'),
       '宿主包能力'
     );
-    await user.type(screen.getByPlaceholderText('host-bundles 下文件夹名'), 'demo-host-bundle');
+    await user.click(screen.getByText('高级：本机扩展包（可选，一般留空）'));
+    await user.type(
+      screen.getByPlaceholderText('与设置页「已安装扩展包」列表中的名称一致'),
+      'demo-host-bundle'
+    );
     await user.click(screen.getByRole('button', { name: '添加' }));
 
     expect(onUpdate).toHaveBeenCalled();

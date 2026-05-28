@@ -2,6 +2,12 @@ import React, { useState, useRef, useMemo, useEffect, useLayoutEffect, useCallba
 import { createPortal } from 'react-dom';
 import type { CustomAppModule, CapabilityCategory, CapabilityEngine, Generate3DPreset, CapabilitySet } from '../types';
 import { coerceImageModelRegistryId, labelForImageModelRegistryId, DEFAULT_IMAGE_MODEL_REGISTRY_ID } from '../services/modelRegistry/imageModels';
+import {
+  coerceTextModelRegistryId,
+  labelForTextModelRegistryId,
+} from '../services/modelRegistry/textModels';
+import { DEFAULT_MODEL_TEXT } from '../services/modelRegistry/constants';
+import { useEffectiveTextModelRows } from '../hooks/useEffectiveTextModelRows';
 import { CAPABILITY_CATEGORIES, SUPPORTED_ASPECT_RATIOS, SUPPORTED_IMAGE_SIZES } from '../types';
 import type { CapabilityTestResult } from '../services/capabilityTestRunner';
 import {
@@ -101,6 +107,59 @@ const TRIPO_MODEL_VERSION_OPTIONS = [
 ] as const;
 const DETAIL_DROPDOWN_PORTAL_ZINDEX = { backdrop: 10120, list: 10121 } as const;
 
+/** 本机伴侣扩展包：仅高级用户需要，默认折叠避免干扰普通预设创建 */
+function CompanionHostBundleAdvancedFields({
+  dir,
+  onDirChange,
+  phase,
+  onPhaseChange,
+  portalZIndex,
+}: {
+  dir: string;
+  onDirChange: (v: string) => void;
+  phase: 'exec' | 'probe';
+  onPhaseChange: (v: 'exec' | 'probe') => void;
+  portalZIndex?: { backdrop: number; list: number };
+}) {
+  const hasValue = Boolean(dir.trim());
+  return (
+    <details open={hasValue || undefined} className="rounded-xl border border-white/[0.06] bg-black/10">
+      <summary className="cursor-pointer select-none list-none px-3 py-2.5 text-[9px] font-bold text-gray-500 transition-colors hover:text-gray-300 [&::-webkit-details-marker]:hidden">
+        高级：本机扩展包（可选，一般留空）
+      </summary>
+      <div className="space-y-2 border-t border-white/[0.06] px-3 py-2.5">
+        <p className="text-[8px] text-gray-500 leading-relaxed">
+          用于在本机运行已安装的扩展程序（需先配对<strong className="font-normal text-gray-400">本地伴侣</strong>
+          并在设置页安装扩展包）。工作流拖入资产后会提交到本机执行。
+          <strong className="font-normal text-gray-400">普通云端文生图/图生图请留空。</strong>
+        </p>
+        <label className="block">
+          <span className="text-[9px] text-gray-500 uppercase">扩展包目录名</span>
+          <input
+            value={dir}
+            onChange={(e) => onDirChange(e.target.value)}
+            placeholder="与设置页「已安装扩展包」列表中的名称一致"
+            className="mt-0.5 w-full rounded-xl bg-white/[0.05] px-3 py-2 text-[11px] ring-1 ring-white/[0.06] outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/45"
+          />
+        </label>
+        <label className="flex items-center gap-2 text-[9px] text-gray-400">
+          <span className="font-black uppercase">运行方式</span>
+          <CustomDropdown
+            options={[
+              { value: 'exec', label: '正式运行' },
+              { value: 'probe', label: '仅检测（不执行主流程）' },
+            ]}
+            value={phase}
+            onChange={(v) => onPhaseChange(v === 'probe' ? 'probe' : 'exec')}
+            triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+            portalZIndex={portalZIndex}
+          />
+        </label>
+      </div>
+    </details>
+  );
+}
+
 type ViewMode = 'presets' | 'image_process' | 'sets';
 type PresetTypeFilter = 'all' | 'text_to_text' | 'text_to_image' | 'image_to_image' | 'image_to_text';
 
@@ -165,11 +224,14 @@ const CapabilityPresetSection: React.FC<{
   const reindex = (list: CustomAppModule[]) => list.map((p, i) => ({ ...p, order: i }));
   const update = (list: CustomAppModule[]) => onUpdate(reindex(list));
   const { rows: effectiveModelRows, coerceModelId } = useEffectiveImageModelRows();
+  const { rows: effectiveTextModelRows, coerceModelId: coerceTextModelId } = useEffectiveTextModelRows();
   const getEngine = (p: CustomAppModule): CapabilityEngine => getCapabilityEngine(p);
   const isBuiltinImagePipelinePreset = (p: CustomAppModule) =>
     p.category === 'image_to_image' && getCapabilityEngine(p) === 'builtin';
   const getImageModelRegistryId = (p: CustomAppModule): string =>
     coerceImageModelRegistryId(p.imageModelRegistryId ?? p.imageGear);
+  const getTextModelRegistryId = (p: CustomAppModule): string =>
+    coerceTextModelRegistryId(p.textModelRegistryId);
   const genId = () => {
     try {
       const c: { randomUUID?: () => string } | null = typeof crypto !== 'undefined' ? crypto : null;
@@ -186,11 +248,17 @@ const CapabilityPresetSection: React.FC<{
   const [editEngine, setEditEngine] = useState<CapabilityEngine>('gen_image');
   const [editEnabled, setEditEnabled] = useState(true);
   const [editImageModelRegistryId, setEditImageModelRegistryId] = useState<string>(DEFAULT_IMAGE_MODEL_REGISTRY_ID);
+  const [editTextModelRegistryId, setEditTextModelRegistryId] = useState<string>(DEFAULT_MODEL_TEXT);
   useLayoutEffect(() => {
     if (!editingId) return;
     const next = coerceModelId(editImageModelRegistryId);
     if (next !== editImageModelRegistryId) setEditImageModelRegistryId(next);
   }, [editingId, effectiveModelRows, coerceModelId, editImageModelRegistryId]);
+  useLayoutEffect(() => {
+    if (!editingId) return;
+    const next = coerceTextModelId(editTextModelRegistryId);
+    if (next !== editTextModelRegistryId) setEditTextModelRegistryId(next);
+  }, [editingId, effectiveTextModelRows, coerceTextModelId, editTextModelRegistryId]);
   const [editImageAspectRatio, setEditImageAspectRatio] = useState('');
   const [editImageSize, setEditImageSize] = useState('');
   const [editInstruction, setEditInstruction] = useState('');
@@ -212,6 +280,7 @@ const CapabilityPresetSection: React.FC<{
   const [newEngine, setNewEngine] = useState<CapabilityEngine>('gen_image');
   const [newEnabled, setNewEnabled] = useState(true);
   const [newImageModelRegistryId, setNewImageModelRegistryId] = useState<string>(DEFAULT_IMAGE_MODEL_REGISTRY_ID);
+  const [newTextModelRegistryId, setNewTextModelRegistryId] = useState<string>(DEFAULT_MODEL_TEXT);
   const [newImageAspectRatio, setNewImageAspectRatio] = useState('');
   const [newImageSize, setNewImageSize] = useState('');
   const [newInstruction, setNewInstruction] = useState('');
@@ -469,6 +538,7 @@ const CapabilityPresetSection: React.FC<{
         if (p.id !== editingId) return p;
         const showGenImageFields =
           editCategory === 'text_to_image' || (editCategory === 'image_to_image' && editEngine === 'gen_image');
+        const showGenTextFields = editCategory === 'text_to_text' || editCategory === 'image_to_text';
         const showGenVideoFields = editCategory === 'generate_video';
         const next: CustomAppModule = {
           ...p,
@@ -479,6 +549,7 @@ const CapabilityPresetSection: React.FC<{
           requirePromptOnTextDrop: editCategory === 'text_to_text' ? editRequirePromptOnTextDrop : undefined,
           enabled: editEnabled,
           imageModelRegistryId: showGenImageFields ? editImageModelRegistryId : undefined,
+          textModelRegistryId: showGenTextFields ? editTextModelRegistryId : undefined,
           imageAspectRatio: showGenImageFields ? editImageAspectRatio || undefined : undefined,
           imageSize: showGenImageFields ? editImageSize || undefined : undefined,
           engine:
@@ -519,6 +590,7 @@ const CapabilityPresetSection: React.FC<{
     const id = genId();
     const showNewGenImage =
       newCategory === 'text_to_image' || (newCategory === 'image_to_image' && newEngine === 'gen_image');
+    const showNewGenText = newCategory === 'text_to_text' || newCategory === 'image_to_text';
     const showNewGenVideo = newCategory === 'generate_video';
     const preset: CustomAppModule = {
       id,
@@ -530,6 +602,7 @@ const CapabilityPresetSection: React.FC<{
       enabled: newEnabled,
       order: presets.length,
       imageModelRegistryId: showNewGenImage ? newImageModelRegistryId : undefined,
+      textModelRegistryId: showNewGenText ? newTextModelRegistryId : undefined,
       imageAspectRatio: showNewGenImage ? newImageAspectRatio || undefined : undefined,
       imageSize: showNewGenImage ? newImageSize || undefined : undefined,
       engine:
@@ -556,6 +629,7 @@ const CapabilityPresetSection: React.FC<{
     setNewEngine('gen_image');
     setNewEnabled(true);
     setNewImageModelRegistryId(DEFAULT_IMAGE_MODEL_REGISTRY_ID);
+    setNewTextModelRegistryId(DEFAULT_MODEL_TEXT);
     setNewImageAspectRatio('');
     setNewImageSize('');
     setNewInstruction('');
@@ -996,6 +1070,7 @@ const CapabilityPresetSection: React.FC<{
     setEditEngine(getEngine(p));
     setEditEnabled(p.enabled !== false);
     setEditImageModelRegistryId(getImageModelRegistryId(p));
+    setEditTextModelRegistryId(getTextModelRegistryId(p));
     setEditImageAspectRatio(p.imageAspectRatio ?? '');
     setEditImageSize(p.imageSize ?? '');
     setEditInstruction(((p as { instructionFixed?: string }).instructionFixed ?? p.instruction) || '');
@@ -1639,6 +1714,32 @@ const CapabilityPresetSection: React.FC<{
                 </label>
               </>
             )}
+            {(newCategory === 'text_to_text' || newCategory === 'image_to_text') && (
+              <label className="flex items-center gap-2 text-[9px] text-gray-400">
+                <span className="font-black uppercase">文字模型</span>
+                <CustomDropdown
+                  options={effectiveTextModelRows.map((g) => ({
+                    value: g.registryId,
+                    label: g.label,
+                    disabled: g.disabled,
+                    title: g.disabledReason,
+                  }))}
+                  value={newTextModelRegistryId}
+                  onChange={(v) => setNewTextModelRegistryId(v)}
+                  triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                />
+              </label>
+            )}
+            {newCategory === 'text_to_text' && (
+              <label className="flex items-center gap-2 text-[9px] text-gray-400 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={newRequirePromptOnTextDrop}
+                  onChange={(e) => setNewRequirePromptOnTextDrop(e.target.checked)}
+                />
+                <span className="font-black uppercase">拖拽临时提示词</span>
+              </label>
+            )}
             {newCategory === 'text_to_text' && (
               <span className="text-[8px] text-gray-500">工作流请拖入文字卡</span>
             )}
@@ -1746,16 +1847,6 @@ const CapabilityPresetSection: React.FC<{
                 rows={4}
                 className="mt-1 w-full rounded-xl bg-white/[0.05] px-3 py-2 text-[11px] ring-1 ring-emerald-900/35 outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/45 resize-none"
               />
-              {newCategory === 'text_to_text' ? (
-                <label className="mt-2 flex items-center gap-2 text-[9px] text-gray-400 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={newRequirePromptOnTextDrop}
-                    onChange={(e) => setNewRequirePromptOnTextDrop(e.target.checked)}
-                  />
-                  <span className="font-black uppercase">拖拽时要求输入临时提示词</span>
-                </label>
-              ) : null}
             </div>
           )}
           {newCategory === 'image_to_image' && newEngine === 'builtin' && (
@@ -1766,33 +1857,12 @@ const CapabilityPresetSection: React.FC<{
             </div>
           )}
           {newCategory !== 'generate_3d' && newCategory !== 'generate_video' && (
-            <div className="rounded-xl border border-emerald-900/40 bg-black/20 p-3 space-y-2">
-              <div className="text-[8px] font-black text-emerald-300/90 uppercase">本机伴侣 · 宿主包（可选）</div>
-              <p className="text-[8px] text-gray-500 leading-snug">
-                填写目录名后，本预设会向本机伴侣提交 host_bundle 任务；留空则不走宿主包。
-              </p>
-              <label className="block">
-                <span className="text-[9px] text-gray-500 uppercase">插件目录名</span>
-                <input
-                  value={newCompanionHostBundleDir}
-                  onChange={(e) => setNewCompanionHostBundleDir(e.target.value)}
-                  placeholder="host-bundles 下文件夹名"
-                  className="mt-0.5 w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/45"
-                />
-              </label>
-              <label className="flex items-center gap-2 text-[9px] text-gray-400">
-                <span className="font-black uppercase">阶段</span>
-                <CustomDropdown
-                  options={[
-                    { value: 'exec', label: 'exec（执行）' },
-                    { value: 'probe', label: 'probe（校验）' },
-                  ]}
-                  value={newCompanionHostBundlePhase}
-                  onChange={(v) => setNewCompanionHostBundlePhase(v === 'probe' ? 'probe' : 'exec')}
-                  triggerClassName={DROPDOWN_TRIGGER_COMPACT}
-                />
-              </label>
-            </div>
+            <CompanionHostBundleAdvancedFields
+              dir={newCompanionHostBundleDir}
+              onDirChange={setNewCompanionHostBundleDir}
+              phase={newCompanionHostBundlePhase}
+              onPhaseChange={setNewCompanionHostBundlePhase}
+            />
           )}
           {newCategory === 'generate_3d' && (
             <>
@@ -2377,72 +2447,119 @@ const CapabilityPresetSection: React.FC<{
                               </button>
                             ))}
                           </div>
-                          <label className="flex items-center gap-2 text-[10px] text-gray-300">
-                            <input type="checkbox" checked={editEnabled} onChange={(e) => setEditEnabled(e.target.checked)} />
-                            启用
-                          </label>
-                          {editCategory === 'image_to_image' && (
+                          <div className="flex flex-wrap items-center gap-4">
                             <label className="flex items-center gap-2 text-[9px] text-gray-400">
-                              <span className="font-black uppercase">图生图方式</span>
-                              <CustomDropdown
-                                options={[
-                                  { value: 'builtin', label: '内置图像处理' },
-                                  { value: 'gen_image', label: '生图模型（提示词）' },
-                                ]}
-                                value={editEngine === 'gen_image' ? 'gen_image' : 'builtin'}
-                                onChange={(v) => setEditEngine(v as CapabilityEngine)}
-                                triggerClassName={DROPDOWN_TRIGGER_COMPACT}
-                                portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
-                              />
+                              <input type="checkbox" checked={editEnabled} onChange={(e) => setEditEnabled(e.target.checked)} />
+                              <span className="font-black uppercase">启用</span>
                             </label>
-                          )}
-                          {(editCategory === 'text_to_image' || (editCategory === 'image_to_image' && editEngine === 'gen_image')) && (
-                            <div className="grid grid-cols-1 gap-2">
+                            {editCategory === 'image_to_image' && (
                               <label className="flex items-center gap-2 text-[9px] text-gray-400">
-                                <span className="font-black uppercase">生图模型</span>
+                                <span className="font-black uppercase">图生图方式</span>
                                 <CustomDropdown
-                                  options={effectiveModelRows.map((g) => ({
+                                  options={[
+                                    { value: 'builtin', label: '内置图像处理' },
+                                    { value: 'gen_image', label: '生图模型（提示词）' },
+                                  ]}
+                                  value={editEngine === 'gen_image' ? 'gen_image' : 'builtin'}
+                                  onChange={(v) => setEditEngine(v as CapabilityEngine)}
+                                  triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                                  portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
+                                />
+                              </label>
+                            )}
+                            {(editCategory === 'text_to_image' || (editCategory === 'image_to_image' && editEngine === 'gen_image')) && (
+                              <>
+                                <label className="flex items-center gap-2 text-[9px] text-gray-400">
+                                  <span className="font-black uppercase">生图模型</span>
+                                  <CustomDropdown
+                                    options={effectiveModelRows.map((g) => ({
+                                      value: g.registryId,
+                                      label: g.label,
+                                      disabled: g.disabled,
+                                      title: g.disabledReason,
+                                    }))}
+                                    value={editImageModelRegistryId}
+                                    onChange={(v) => setEditImageModelRegistryId(v)}
+                                    triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                                    portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
+                                  />
+                                </label>
+                                <label className="flex items-center gap-2 text-[9px] text-gray-400">
+                                  <span className="font-black uppercase">贴图比例</span>
+                                  <CustomDropdown
+                                    options={[{ value: '', label: '默认' }, ...SUPPORTED_ASPECT_RATIOS.map((r) => ({ value: r.value, label: r.label }))]}
+                                    value={editImageAspectRatio}
+                                    onChange={setEditImageAspectRatio}
+                                    placeholder="默认"
+                                    triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                                    portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
+                                  />
+                                </label>
+                                <label className="flex items-center gap-2 text-[9px] text-gray-400">
+                                  <span className="font-black uppercase">贴图尺寸</span>
+                                  <CustomDropdown
+                                    options={[{ value: '', label: '默认' }, ...SUPPORTED_IMAGE_SIZES.map((s) => ({ value: s.value, label: s.label }))]}
+                                    value={editImageSize}
+                                    onChange={setEditImageSize}
+                                    placeholder="默认"
+                                    triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                                    portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
+                                  />
+                                </label>
+                                <label className="flex items-center gap-2 text-[9px] text-gray-400 cursor-pointer" title="勾选：先理解再生成生图提示词；不勾选：预设提示词直发">
+                                  <input type="checkbox" checked={!editSkipUnderstand} onChange={(e) => setEditSkipUnderstand(!e.target.checked)} />
+                                  <span className="font-black uppercase">理解</span>
+                                </label>
+                              </>
+                            )}
+                            {(editCategory === 'text_to_text' || editCategory === 'image_to_text') && (
+                              <label className="flex items-center gap-2 text-[9px] text-gray-400">
+                                <span className="font-black uppercase">文字模型</span>
+                                <CustomDropdown
+                                  options={effectiveTextModelRows.map((g) => ({
                                     value: g.registryId,
                                     label: g.label,
                                     disabled: g.disabled,
                                     title: g.disabledReason,
                                   }))}
-                                  value={editImageModelRegistryId}
-                                  onChange={(v) => setEditImageModelRegistryId(v)}
+                                  value={editTextModelRegistryId}
+                                  onChange={(v) => setEditTextModelRegistryId(v)}
                                   triggerClassName={DROPDOWN_TRIGGER_COMPACT}
                                   portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
                                 />
                               </label>
-                              <label className="flex items-center gap-2 text-[9px] text-gray-400">
-                                <span className="font-black uppercase">贴图比例</span>
-                                <CustomDropdown
-                                  options={[{ value: '', label: '默认' }, ...SUPPORTED_ASPECT_RATIOS.map((r) => ({ value: r.value, label: r.label }))]}
-                                  value={editImageAspectRatio}
-                                  onChange={setEditImageAspectRatio}
-                                  placeholder="默认"
-                                  triggerClassName={DROPDOWN_TRIGGER_COMPACT}
-                                  portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
+                            )}
+                            {editCategory === 'text_to_text' && (
+                              <label className="flex items-center gap-2 text-[9px] text-gray-400 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={editRequirePromptOnTextDrop}
+                                  onChange={(e) => setEditRequirePromptOnTextDrop(e.target.checked)}
                                 />
+                                <span className="font-black uppercase">拖拽临时提示词</span>
                               </label>
-                              <label className="flex items-center gap-2 text-[9px] text-gray-400">
-                                <span className="font-black uppercase">贴图尺寸</span>
-                                <CustomDropdown
-                                  options={[{ value: '', label: '默认' }, ...SUPPORTED_IMAGE_SIZES.map((s) => ({ value: s.value, label: s.label }))]}
-                                  value={editImageSize}
-                                  onChange={setEditImageSize}
-                                  placeholder="默认"
-                                  triggerClassName={DROPDOWN_TRIGGER_COMPACT}
-                                  portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
-                                />
-                              </label>
-                              <label className="flex items-center gap-2 text-[9px] text-gray-400 cursor-pointer" title="勾选：先理解再生成生图提示词；不勾选：预设提示词直发">
-                                <input type="checkbox" checked={!editSkipUnderstand} onChange={(e) => setEditSkipUnderstand(!e.target.checked)} />
-                                <span className="font-black uppercase">理解</span>
-                              </label>
-                            </div>
-                          )}
+                            )}
+                            {editCategory === 'text_to_text' && (
+                              <span className="text-[8px] text-gray-500">工作流请拖入文字卡</span>
+                            )}
+                            {editCategory === 'text_to_image' && (
+                              <span className="text-[8px] text-gray-500">工作流请拖入文字卡</span>
+                            )}
+                            {editCategory === 'image_to_text' && (
+                              <span className="text-[8px] text-gray-500">工作流请拖入图片卡</span>
+                            )}
+                            {editCategory === 'image_to_image' && editEngine === 'gen_image' && (
+                              <span className="text-[8px] text-gray-500">工作流请拖入图片卡</span>
+                            )}
+                            {editCategory === 'image_to_image' && editEngine === 'builtin' && (
+                              <span className="text-[8px] text-gray-500">工作流请拖入图片卡（内置处理）</span>
+                            )}
+                            {editCategory === 'generate_video' && (
+                              <span className="text-[8px] text-gray-500">工作流请拖入文字卡或图片卡（或两者）</span>
+                            )}
+                          </div>
                           {editCategory === 'generate_video' && (
-                            <div className="grid grid-cols-1 gap-2">
+                            <div className="space-y-2">
                               <p className="text-[8px] text-gray-500">
                                 需 <code className="text-gray-400">VITE_WORKFLOW_VIDEO_API_URL</code>。有参考图时默认先理解再请求桥。
                               </p>
@@ -2456,45 +2573,22 @@ const CapabilityPresetSection: React.FC<{
                               </label>
                             </div>
                           )}
-                          {editCategory === 'text_to_text' ? (
-                            <label className="flex items-center gap-2 text-[9px] text-gray-400 cursor-pointer">
-                              <input
-                                type="checkbox"
-                                checked={editRequirePromptOnTextDrop}
-                                onChange={(e) => setEditRequirePromptOnTextDrop(e.target.checked)}
-                              />
-                              <span className="font-black uppercase">拖拽时要求输入临时提示词</span>
-                            </label>
-                          ) : null}
+                          <label className="block">
+                            <div className="text-[9px] text-gray-500 uppercase mb-1">功能名称</div>
+                            <input value={editLabel} onChange={(e) => setEditLabel(e.target.value)} className="w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50" />
+                          </label>
+                          <label className="block">
+                            <div className="text-[9px] text-gray-500 uppercase mb-1">提示词 / 说明</div>
+                            <textarea value={editInstruction} onChange={(e) => setEditInstruction(e.target.value)} rows={8} className="w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 resize-y" />
+                          </label>
                           {editCategory !== 'generate_3d' && editCategory !== 'generate_video' && (
-                            <div className="rounded-xl border border-emerald-900/40 bg-black/20 p-2 space-y-2">
-                              <div className="text-[8px] font-black text-emerald-300/90 uppercase">本机伴侣 · 宿主包 run.json</div>
-                              <p className="text-[8px] text-gray-500 leading-snug">
-                                填写目录名后，工作流将向本机伴侣提交 host_bundle.exec / host_bundle.probe。拖入图片或文字卡均可触发。
-                              </p>
-                              <label className="block">
-                                <span className="text-[9px] text-gray-500 uppercase">插件目录名</span>
-                                <input
-                                  value={editCompanionHostBundleDir}
-                                  onChange={(e) => setEditCompanionHostBundleDir(e.target.value)}
-                                  placeholder="host-bundles 下文件夹名"
-                                  className="mt-0.5 w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/45"
-                                />
-                              </label>
-                              <label className="flex items-center gap-2 text-[9px] text-gray-400">
-                                <span className="font-black uppercase">阶段</span>
-                                <CustomDropdown
-                                  options={[
-                                    { value: 'exec', label: 'exec（执行）' },
-                                    { value: 'probe', label: 'probe（校验）' },
-                                  ]}
-                                  value={editCompanionHostBundlePhase}
-                                  onChange={(v) => setEditCompanionHostBundlePhase(v === 'probe' ? 'probe' : 'exec')}
-                                  triggerClassName={DROPDOWN_TRIGGER_COMPACT}
-                                  portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
-                                />
-                              </label>
-                            </div>
+                            <CompanionHostBundleAdvancedFields
+                              dir={editCompanionHostBundleDir}
+                              onDirChange={setEditCompanionHostBundleDir}
+                              phase={editCompanionHostBundlePhase}
+                              onPhaseChange={setEditCompanionHostBundlePhase}
+                              portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
+                            />
                           )}
                           {editCategory === 'generate_3d' && (
                             <div className="rounded-xl border border-[#2e3f5d] bg-[#141b26] p-3 space-y-2">
@@ -2688,14 +2782,6 @@ const CapabilityPresetSection: React.FC<{
                               )}
                             </div>
                           )}
-                          <label className="block">
-                            <div className="text-[9px] text-gray-500 uppercase mb-1">功能名称</div>
-                            <input value={editLabel} onChange={(e) => setEditLabel(e.target.value)} className="w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50" />
-                          </label>
-                          <label className="block">
-                            <div className="text-[9px] text-gray-500 uppercase mb-1">提示词 / 说明</div>
-                            <textarea value={editInstruction} onChange={(e) => setEditInstruction(e.target.value)} rows={8} className="w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 resize-y" />
-                          </label>
                           <div className="flex gap-2">
                             <button type="button" onClick={saveDetailEdit} className="px-3 py-1.5 rounded-lg border border-[#36578f] bg-[#1d3154] text-blue-200 text-[9px] font-black uppercase hover:bg-[#264171]">保存</button>
                             <button type="button" onClick={() => { setDetailEditMode(false); setEditingId(null); }} className="px-3 py-1.5 rounded-lg bg-[#121214] text-[9px] font-black uppercase text-gray-200 ring-1 ring-white/[0.08] hover:bg-white/[0.06]">取消</button>
@@ -2737,21 +2823,29 @@ const CapabilityPresetSection: React.FC<{
                             </div>
                           </div>
                           <div className="rounded-lg bg-[#1b1b21] border border-[#2a2a32] px-2 py-1.5">
-                            <div className="text-gray-500">生图模型</div>
+                            <div className="text-gray-500">
+                              {detailPreset.category === 'text_to_text' || detailPreset.category === 'image_to_text'
+                                ? '文字模型'
+                                : '生图模型'}
+                            </div>
                             <div className="text-gray-200 mt-0.5">
-                              {labelForImageModelRegistryId(
-                                getImageModelRegistryId(detailPreset)
-                              )}
+                              {detailPreset.category === 'text_to_text' || detailPreset.category === 'image_to_text'
+                                ? labelForTextModelRegistryId(getTextModelRegistryId(detailPreset))
+                                : labelForImageModelRegistryId(getImageModelRegistryId(detailPreset))}
                             </div>
                           </div>
+                          {(detailPreset.category === 'text_to_text' || detailPreset.category === 'image_to_text') ? null : (
                           <div className="rounded-lg bg-[#1b1b21] border border-[#2a2a32] px-2 py-1.5">
                             <div className="text-gray-500">比例 / 尺寸</div>
                             <div className="text-gray-200 mt-0.5">{detailPreset.imageAspectRatio || '默认'} / {detailPreset.imageSize || '默认'}</div>
                           </div>
+                          )}
+                          {(detailPreset.category === 'text_to_text' || detailPreset.category === 'image_to_text') ? null : (
                           <div className="rounded-lg bg-[#1b1b21] border border-[#2a2a32] px-2 py-1.5">
                             <div className="text-gray-500">理解开关</div>
                             <div className="text-gray-200 mt-0.5">{detailPreset.skipUnderstand === true ? '直发提示词' : '先理解再生成'}</div>
                           </div>
+                          )}
                           <div className="rounded-lg bg-[#1b1b21] border border-[#2a2a32] px-2 py-1.5">
                             <div className="text-gray-500">拖拽临时提示词</div>
                             <div className="text-gray-200 mt-0.5">
@@ -2762,10 +2856,10 @@ const CapabilityPresetSection: React.FC<{
                           </div>
                           {detailPreset.companionHostBundle?.dirName ? (
                             <div className="rounded-lg bg-[#1b1b21] border border-emerald-900/35 px-2 py-1.5 col-span-2">
-                              <div className="text-gray-500">本机宿主包</div>
+                              <div className="text-gray-500">本机扩展包</div>
                               <div className="text-gray-200 mt-0.5 text-[10px]">
                                 {detailPreset.companionHostBundle.dirName} ·{' '}
-                                {detailPreset.companionHostBundle.phase === 'probe' ? 'probe' : 'exec'}
+                                {detailPreset.companionHostBundle.phase === 'probe' ? '仅检测' : '正式运行'}
                               </div>
                             </div>
                           ) : null}

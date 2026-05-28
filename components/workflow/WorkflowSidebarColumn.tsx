@@ -12,8 +12,10 @@ import React, {
 import { getRandomGroupCodeName } from '../../data/groupCodeNames';
 import { attachInitialVgpToNewAsset } from '../../services/vgp/vgpStore';
 import { labelForImageModelRegistryId } from '../../services/modelRegistry/imageModels';
+import { labelForTextModelRegistryId } from '../../services/modelRegistry/textModels';
 import { SUPPORTED_ASPECT_RATIOS, SUPPORTED_IMAGE_SIZES } from '../../types';
 import { useEffectiveImageModelRows } from '../../hooks/useEffectiveImageGearRows';
+import { useEffectiveTextModelRows } from '../../hooks/useEffectiveTextModelRows';
 import type { CustomAppModule, CapabilitySet, WorkflowAsset } from '../../types';
 import { capabilityUsesGenImageEngine } from '../../services/capabilityExecutor';
 import { CustomDropdown } from '../ui/CustomDropdown';
@@ -280,6 +282,7 @@ export type WorkflowSidebarColumnProps = {
       imageModelRegistryId?: string;
       /** @deprecated */
       imageGear?: CustomAppModule['imageGear'];
+      textModelRegistryId?: string;
       imageAspectRatio?: string;
       imageSize?: string;
       understand?: boolean;
@@ -364,6 +367,7 @@ export function WorkflowSidebarColumn({
   onLinkHoverPresetIds,
 }: WorkflowSidebarColumnProps) {
   const { rows: effectiveModelRows } = useEffectiveImageModelRows();
+  const { rows: effectiveTextModelRows } = useEffectiveTextModelRows();
   const [groupOverrideByCategory, setGroupOverrideByCategory] = useState<
     Record<
       string,
@@ -372,6 +376,7 @@ export function WorkflowSidebarColumn({
         imageModelRegistryId?: string;
       /** @deprecated */
       imageGear?: CustomAppModule['imageGear'];
+        textModelRegistryId?: string;
         imageAspectRatio?: string;
         imageSize?: string;
         understand?: boolean;
@@ -399,6 +404,7 @@ export function WorkflowSidebarColumn({
             ...(typeof cfg.understand === 'boolean' ? { understand: cfg.understand } : {}),
           }
         : {}),
+      ...(cfg?.textModelRegistryId ? { textModelRegistryId: cfg.textModelRegistryId } : {}),
       ...(generateCount > 1 ? { generateCount } : {}),
     };
   };
@@ -410,8 +416,12 @@ export function WorkflowSidebarColumn({
   const favoriteHasImageParamOptions = favoriteModuleEntries.some((entry) => capabilityUsesGenImageEngine(entry.mod));
   const favoriteHasGenerateCountOptions =
     favoriteHasImageParamOptions || favoriteModuleEntries.some((entry) => entry.mod.category === 'text_to_text');
+  const favoriteHasTextParamOptions = favoriteModuleEntries.some(
+    (entry) => entry.mod.category === 'text_to_text' || entry.mod.category === 'image_to_text'
+  );
   const favoriteCfg = groupOverrideByCategory[FAVORITE_GROUP_KEY] || {};
   const favoriteModelChanged = Boolean(favoriteCfg.imageModelRegistryId || favoriteCfg.imageGear);
+  const favoriteTextModelChanged = Boolean(favoriteCfg.textModelRegistryId);
   const favoriteRatioChanged = Boolean(favoriteCfg.imageAspectRatio);
   const favoriteSizeChanged = Boolean(favoriteCfg.imageSize);
   const favoriteCountValue = Number.isFinite(favoriteCfg.generateCount)
@@ -435,6 +445,9 @@ export function WorkflowSidebarColumn({
   const favoriteModelText = favoriteModelChanged
     ? labelForImageModelRegistryId(favoriteCfg.imageModelRegistryId ?? favoriteCfg.imageGear ?? '').slice(0, 2)
     : '模';
+  const favoriteTextModelText = favoriteTextModelChanged
+    ? labelForTextModelRegistryId(favoriteCfg.textModelRegistryId ?? '').slice(0, 2)
+    : '文';
   const favoriteRatioText = favoriteRatioChanged ? String(favoriteCfg.imageAspectRatio).slice(0, 1) : '比';
   const favoriteSizeText = favoriteSizeChanged ? String(favoriteCfg.imageSize).slice(0, 1) : '寸';
   const typesHasCapabilityFromEditor = (dt: DataTransfer | null) => {
@@ -1319,6 +1332,50 @@ export function WorkflowSidebarColumn({
                             )}
                           />
                         )}
+                        {favoriteHasTextParamOptions ? (
+                          <CustomDropdown
+                            options={[
+                              { value: '', label: '默认' },
+                              ...effectiveTextModelRows.map((g) => ({
+                                value: g.registryId,
+                                label: g.label,
+                                disabled: g.disabled,
+                                title: g.disabledReason,
+                              })),
+                            ]}
+                            value={groupOverrideByCategory[FAVORITE_GROUP_KEY]?.textModelRegistryId || ''}
+                            onChange={(v) => {
+                              if (v) {
+                                const row = effectiveTextModelRows.find((g) => g.registryId === v);
+                                if (row?.disabled) return;
+                              }
+                              setGroupOverrideByCategory((prev) => ({
+                                ...prev,
+                                [FAVORITE_GROUP_KEY]: {
+                                  ...(prev[FAVORITE_GROUP_KEY] || {}),
+                                  textModelRegistryId: v || undefined,
+                                },
+                              }));
+                            }}
+                            triggerClassName="p-0 w-6 h-6 inline-flex items-center justify-center bg-transparent border-0 rounded-none hover:bg-transparent align-middle"
+                            renderTrigger={() => (
+                              <span
+                                title={
+                                  favoriteTextModelChanged
+                                    ? `文字模型：${labelForTextModelRegistryId(favoriteCfg.textModelRegistryId ?? '')}`
+                                    : '文字模型：默认'
+                                }
+                                className={`w-6 h-6 rounded-full border inline-flex items-center justify-center leading-none text-[9px] font-black ${
+                                  favoriteTextModelChanged
+                                    ? 'border-emerald-500 text-emerald-300 bg-emerald-950/35'
+                                    : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'
+                                }`}
+                              >
+                                {favoriteTextModelText}
+                              </span>
+                            )}
+                          />
+                        ) : null}
                         {favoriteHasImageParamOptions ? (
                           <>
                             <button
@@ -1750,10 +1807,13 @@ export function WorkflowSidebarColumn({
                     >
                       {(() => {
                         const hasImageParamOptions = list.some((m) => capabilityUsesGenImageEngine(m));
+                        const hasTextParamOptions =
+                          category.id === 'text_to_text' || category.id === 'image_to_text';
                         const hasGenerateCountOptions =
                           hasImageParamOptions || category.id === 'text_to_text';
                         const cfg = groupOverrideByCategory[category.id] || {};
                         const modelChanged = Boolean(cfg.imageModelRegistryId || cfg.imageGear);
+                        const textModelChanged = Boolean(cfg.textModelRegistryId);
                         const ratioChanged = Boolean(cfg.imageAspectRatio);
                         const sizeChanged = Boolean(cfg.imageSize);
                         const countValue = Number.isFinite(cfg.generateCount)
@@ -1777,6 +1837,9 @@ export function WorkflowSidebarColumn({
                         const modelText = modelChanged
                           ? labelForImageModelRegistryId(cfg.imageModelRegistryId ?? cfg.imageGear ?? '').slice(0, 2)
                           : '模';
+                        const textModelChipText = textModelChanged
+                          ? labelForTextModelRegistryId(cfg.textModelRegistryId ?? '').slice(0, 2)
+                          : '文';
                         const ratioText = ratioChanged ? String(cfg.imageAspectRatio).slice(0, 1) : '比';
                         const sizeText = sizeChanged ? String(cfg.imageSize).slice(0, 1) : '寸';
                         return (
@@ -1846,6 +1909,50 @@ export function WorkflowSidebarColumn({
                           )}
                         />
                       )}
+                      {hasTextParamOptions ? (
+                        <CustomDropdown
+                          options={[
+                            { value: '', label: '默认' },
+                            ...effectiveTextModelRows.map((g) => ({
+                              value: g.registryId,
+                              label: g.label,
+                              disabled: g.disabled,
+                              title: g.disabledReason,
+                            })),
+                          ]}
+                          value={groupOverrideByCategory[category.id]?.textModelRegistryId || ''}
+                          onChange={(v) => {
+                            if (v) {
+                              const row = effectiveTextModelRows.find((g) => g.registryId === v);
+                              if (row?.disabled) return;
+                            }
+                            setGroupOverrideByCategory((prev) => ({
+                              ...prev,
+                              [category.id]: {
+                                ...(prev[category.id] || {}),
+                                textModelRegistryId: v || undefined,
+                              },
+                            }));
+                          }}
+                          triggerClassName="p-0 w-6 h-6 inline-flex items-center justify-center bg-transparent border-0 rounded-none hover:bg-transparent align-middle"
+                          renderTrigger={() => (
+                            <span
+                              title={
+                                textModelChanged
+                                  ? `文字模型：${labelForTextModelRegistryId(cfg.textModelRegistryId ?? '')}`
+                                  : '文字模型：默认'
+                              }
+                              className={`w-6 h-6 rounded-full border inline-flex items-center justify-center leading-none text-[9px] font-black ${
+                                textModelChanged
+                                  ? 'border-emerald-500 text-emerald-300 bg-emerald-950/35'
+                                  : 'border-[#3a3a40] text-gray-300 bg-[#1a1a20]'
+                              }`}
+                            >
+                              {textModelChipText}
+                            </span>
+                          )}
+                        />
+                      ) : null}
                       {hasImageParamOptions ? (
                         <>
                           <button

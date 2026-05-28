@@ -40,3 +40,15 @@ export function labelForTextModelRegistryId(registryId: string): string {
   const hit = TEXT_MODEL_REGISTRY.find((e) => e.registryId === id);
   return hit?.label ?? id;
 }
+
+const SHORT_TEXT_MODEL_LABELS: Record<string, string> = {
+  "gemini-3-flash-preview": "Flash",
+  "gemini-3-pro-preview": "Pro",
+  "gpt-4o-mini": "Mini",
+  "gpt-4o": "4o",
+};
+
+export function shortLabelForTextModelRegistryId(registryId: string): string {
+  const id = coerceTextModelRegistryId(registryId);
+  return SHORT_TEXT_MODEL_LABELS[id] ?? labelForTextModelRegistryId(id).slice(0, 4);
+}

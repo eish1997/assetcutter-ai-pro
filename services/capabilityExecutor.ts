@@ -23,6 +23,7 @@ import {
   type GeminiImageBatchGroupOptions,
 } from './unifiedAiGateway';
 import { DEFAULT_MODEL_TEXT } from './modelRegistry/constants';
+import { coerceTextModelRegistryId } from './modelRegistry/textModels';
 import { resolveUpstreamImageModelId, resolveUpstreamTextModelId } from './modelRegistry/resolve';
 import {
   submitCompanionHostBundleExecJob,
@@ -103,6 +104,13 @@ export type CapabilityExecuteResult =
 function effectiveCapabilityTextModel(ctx: CapabilityExecuteContext): string {
   const t = (ctx.textModelRegistryId || '').trim();
   return t || DEFAULT_MODEL_TEXT;
+}
+
+/** 预设绑定文字模型优先，否则回退执行上下文（全局默认） */
+export function resolveTextModelForPreset(preset: CustomAppModule, ctx: CapabilityExecuteContext): string {
+  const presetModel = (preset.textModelRegistryId || '').trim();
+  if (presetModel) return coerceTextModelRegistryId(presetModel);
+  return effectiveCapabilityTextModel(ctx);
 }
 
 /** 文本侧 upstream model id（经 pickBinding / resolve） */
@@ -217,7 +225,7 @@ async function resolveCapabilityPrompt(
   const { instruction } = await workflowUnderstandForImageGen(
     refsForUnderstand(refs),
     combined,
-    effectiveCapabilityTextModel(ctx),
+    resolveTextModelForPreset(preset, ctx),
     undefined,
     CAPABILITY_UNDERSTAND_RETRY_OPTIONS
   );
@@ -278,7 +286,7 @@ async function resolveTextOnlyImagePrompt(
         ],
       },
     ],
-    effectiveCapabilityTextModel(ctx)
+    resolveTextModelForPreset(preset, ctx)
   );
   const out = (fused || '').trim();
   return out.length > 0 ? out : null;
@@ -333,7 +341,7 @@ async function executeGenerateVideoPath(
           ],
         },
       ],
-      effectiveCapabilityTextModel(ctx)
+      resolveTextModelForPreset(preset, ctx)
     );
     promptFinal = (fused || '').trim();
   }
@@ -425,7 +433,7 @@ async function executeGenTextPath(
     .join('\n\n');
   parts.push({ text: body });
   try {
-    const text = await workflowChat([{ role: 'user', parts }], effectiveCapabilityTextModel(ctx));
+    const text = await workflowChat([{ role: 'user', parts }], resolveTextModelForPreset(preset, ctx));
     const out = (text || '').trim();
     if (!out) return { ok: false, kind: 'none', error: '文字模型未返回内容', durationMs: Date.now() - start };
     return { ok: true, kind: 'text', text: out, durationMs: Date.now() - start };
@@ -605,7 +613,7 @@ export async function executeCapability(
       emitCapabilityRunProgress(ctx, `${actionLabel}：检测物体中（视觉模型，可能需数十秒）…`);
       const boxes = await detectObjectsInImage(
         inputImageBase64,
-        effectiveCapabilityTextModel(ctx),
+        resolveTextModelForPreset(preset, ctx),
         DEFAULT_PROMPTS.detect_blocks
       );
       if (!boxes.length) {

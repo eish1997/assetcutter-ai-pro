@@ -2,13 +2,21 @@ import React, { useState, useRef, useEffect } from 'react';
 import { getSiteAssistantResponseStream } from '../services/unifiedAiGateway';
 import type { AppTask } from '../types';
 import AppIcon from './ui/AppIcon';
-import { RIGHT_DOCK_ASSISTANT_BOTTOM, RIGHT_DOCK_RIGHT } from './floatingDockConstants';
+import { RIGHT_DOCK_ASSISTANT_BOTTOM, RIGHT_DOCK_PANEL_BOTTOM, RIGHT_DOCK_RIGHT } from './floatingDockConstants';
 
 const SiteAssistant: React.FC<{
   tasks?: AppTask[];
   onRemoveTask?: (id: string) => void;
-}> = ({ tasks: _tasks = [], onRemoveTask: _onRemoveTask }) => {
-  const [open, setOpen] = useState(false);
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+}> = ({ tasks: _tasks = [], onRemoveTask: _onRemoveTask, open: openProp, onOpenChange }) => {
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = openProp ?? internalOpen;
+  const setOpen = (next: boolean | ((prev: boolean) => boolean)) => {
+    const resolved = typeof next === 'function' ? next(open) : next;
+    onOpenChange?.(resolved);
+    if (openProp === undefined) setInternalOpen(resolved);
+  };
   const [messages, setMessages] = useState<Array<{ role: 'user' | 'model'; text: string }>>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -86,7 +94,7 @@ const SiteAssistant: React.FC<{
       {/* 对话面板 */}
       {open && (
         <div
-          className={`fixed bottom-20 ${RIGHT_DOCK_RIGHT} z-[1998] w-[min(360px,calc(100vw-3rem))] max-h-[min(70vh,520px)] flex flex-col glass rounded-2xl bg-[#0f0f0f]/95 ring-1 ring-white/[0.1] shadow-2xl overflow-hidden animate-in slide-in-from-bottom-4 duration-200 motion-reduce:animate-none`}
+          className={`fixed ${RIGHT_DOCK_PANEL_BOTTOM} ${RIGHT_DOCK_RIGHT} z-[1998] w-[min(360px,calc(100vw-3rem))] max-h-[min(56vh,420px)] flex flex-col glass rounded-2xl bg-[#0f0f0f]/95 ring-1 ring-white/[0.1] shadow-2xl overflow-hidden animate-in slide-in-from-bottom-4 duration-200 motion-reduce:animate-none`}
           role="dialog"
           aria-label="网站助手"
         >

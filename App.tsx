@@ -20,6 +20,7 @@ import {
 } from './services/generate3d';
 import { DEFAULT_MODEL_IMAGE, DEFAULT_MODEL_PRO, DEFAULT_MODEL_TEXT } from './services/modelRegistry/constants';
 import { migrateSystemModelSlots } from './services/modelRegistry/systemConfigMigrate';
+import { coerceTextModelRegistryId } from './services/modelRegistry/textModels';
 import { useEffectiveImageModelRows } from './hooks/useEffectiveImageGearRows';
 import { DEFAULT_IMAGE_MODEL_REGISTRY_ID } from './services/modelRegistry/imageModels';
 import { loadRecords, addRecord as addGenerationRecord, updateScore as updateGenerationScore } from './services/recordStore';
@@ -42,7 +43,7 @@ import { useUserUiPrefs } from './hooks/useUserUiPrefs';
 import Waves from './components/ui/Waves';
 import AppIcon from './components/ui/AppIcon';
 import GeminiFairnessFloatingNotice from './components/GeminiFairnessFloatingNotice';
-import { RIGHT_DOCK_LOG_BOTTOM, RIGHT_DOCK_LOG_PANEL_BOTTOM, RIGHT_DOCK_RIGHT } from './components/floatingDockConstants';
+import { RIGHT_DOCK_LOG_BOTTOM, RIGHT_DOCK_PANEL_BOTTOM, RIGHT_DOCK_RIGHT } from './components/floatingDockConstants';
 import { ProgressivePreviewImage } from './components/ProgressivePreviewImage';
 import { DialogSessionRowBackdrop } from './components/DialogSessionRowBackdrop';
 import { SiteImage } from './components/SiteImage';
@@ -1208,6 +1209,7 @@ const MainApp: React.FC = () => {
   const [pickerCallback, setPickerCallback] = useState<(items: LibraryItem[]) => void>(() => {});
   const [globalLogs, setGlobalLogs] = useState<Array<{ id: string; time: number; module: string; level: 'info' | 'warn' | 'error'; message: string; detail?: string }>>([]);
   const [globalLogOpen, setGlobalLogOpen] = useState(false);
+  const [siteAssistantOpen, setSiteAssistantOpen] = useState(false);
   const [globalLogCopiedId, setGlobalLogCopiedId] = useState<string | null>(null);
   const [tripoRecoveryContext, setTripoRecoveryContext] = useState<{
     presetId: string;
@@ -2968,7 +2970,7 @@ const MainApp: React.FC = () => {
   );
 
   const [library, setLibrary] = useState<LibraryItem[]>([]);
-  const [config] = useState<SystemConfig>(() => {
+  const [config, setConfig] = useState<SystemConfig>(() => {
     const defaults: SystemConfig = {
       modelText: DEFAULT_MODEL_TEXT,
       modelImage: DEFAULT_MODEL_IMAGE,
@@ -2995,6 +2997,30 @@ const MainApp: React.FC = () => {
     };
     return { ...merged, ...migrateSystemModelSlots(merged) };
   });
+
+  const persistSystemConfig = useCallback((patch: Partial<SystemConfig>) => {
+    setConfig((prev) => {
+      const merged: SystemConfig = {
+        ...prev,
+        ...patch,
+        ...(patch.prompts ? { prompts: { ...prev.prompts, ...patch.prompts } } : {}),
+      };
+      const next: SystemConfig = { ...merged, ...migrateSystemModelSlots(merged) };
+      try {
+        localStorage.setItem("ac_config", JSON.stringify(next));
+      } catch {
+        /* quota / private mode */
+      }
+      return next;
+    });
+  }, []);
+
+  const handleModelTextChange = useCallback(
+    (modelText: string) => {
+      persistSystemConfig({ modelText: coerceTextModelRegistryId(modelText) });
+    },
+    [persistSystemConfig]
+  );
 
   useEffect(() => {
     const savedLib = localStorage.getItem('ac_library'); if (savedLib) setLibrary(JSON.parse(savedLib));
@@ -4616,14 +4642,28 @@ const MainApp: React.FC = () => {
       </div>
 
       <Suspense fallback={null}>
-        <SiteAssistant tasks={tasks} onRemoveTask={id => setTasks(p => p.filter(t => t.id !== id))} />
+        <SiteAssistant
+          tasks={tasks}
+          onRemoveTask={(id) => setTasks((p) => p.filter((t) => t.id !== id))}
+          open={siteAssistantOpen}
+          onOpenChange={(next) => {
+            setSiteAssistantOpen(next);
+            if (next) setGlobalLogOpen(false);
+          }}
+        />
       </Suspense>
 
       {/* 全局日志：悬浮图标（位于网页助手上方）+ 可开关面板 */}
       <div className={`fixed ${RIGHT_DOCK_LOG_BOTTOM} ${RIGHT_DOCK_RIGHT} z-[2001] flex items-center justify-center`}>
         <button
           type="button"
-          onClick={() => setGlobalLogOpen(v => !v)}
+          onClick={() => {
+            setGlobalLogOpen((v) => {
+              const next = !v;
+              if (next) setSiteAssistantOpen(false);
+              return next;
+            });
+          }}
           className={`relative w-12 h-12 rounded-full shadow-lg flex items-center justify-center transition-all outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 motion-reduce:transition-none ${
             globalLogOpen
               ? 'bg-[#1a3354] ring-2 ring-blue-500/45 text-blue-200'
@@ -4646,7 +4686,7 @@ const MainApp: React.FC = () => {
 
       {globalLogOpen && (
         <div
-          className={`fixed ${RIGHT_DOCK_LOG_PANEL_BOTTOM} ${RIGHT_DOCK_RIGHT} z-[2000] w-[min(420px,calc(100vw-3rem))] max-h-[min(56vh,420px)] rounded-2xl bg-[#0f0f0f] ring-1 ring-white/[0.1] shadow-2xl overflow-hidden motion-reduce:shadow-none`}
+          className={`fixed ${RIGHT_DOCK_PANEL_BOTTOM} ${RIGHT_DOCK_RIGHT} z-[2000] w-[min(420px,calc(100vw-3rem))] max-h-[min(56vh,420px)] rounded-2xl bg-[#0f0f0f] ring-1 ring-white/[0.1] shadow-2xl overflow-hidden motion-reduce:shadow-none`}
           role="dialog"
           aria-label="全局日志"
         >
@@ -4885,6 +4925,8 @@ const MainApp: React.FC = () => {
                   aiSettingsSyncRev={aiInvocationStatusRev}
                   activeWorkspaceProjectId={activeWorkspaceProjectId}
                   preferenceScope={user?.id ?? null}
+                  modelText={config.modelText}
+                  onModelTextChange={handleModelTextChange}
                 />
               </Suspense>
             )}
@@ -6206,7 +6248,7 @@ const MainApp: React.FC = () => {
         <button
           type="button"
           onClick={scrollToTop}
-          className="fixed bottom-6 right-6 z-[1000] w-10 h-10 rounded-full bg-[#26262c] border border-[#3a3a40] flex items-center justify-center text-white/90 hover:bg-[#383842] hover:border-[#484850] transition-colors duration-200 shadow-lg cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-[#3b82f6] focus-visible:ring-offset-2 focus-visible:ring-offset-[#050505]"
+          className="fixed bottom-6 left-6 z-[1000] w-10 h-10 rounded-full bg-[#26262c] border border-[#3a3a40] flex items-center justify-center text-white/90 hover:bg-[#383842] hover:border-[#484850] transition-colors duration-200 shadow-lg cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-[#3b82f6] focus-visible:ring-offset-2 focus-visible:ring-offset-[#050505]"
           title="回到顶部"
           aria-label="回到顶部"
         >

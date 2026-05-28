@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { Image as ImageIcon, Maximize2, Minimize2 } from 'lucide-react';
 import { SUPPORTED_IMAGE_SIZES } from '../types';
 import { useEffectiveImageModelRows } from '../hooks/useEffectiveImageGearRows';
+import { useEffectiveTextModelRows } from '../hooks/useEffectiveTextModelRows';
 import {
   DT_AC_CAPABILITY_ACTION,
   DT_AC_CAPABILITY_FROM_EDITOR,
@@ -13,6 +14,10 @@ import {
   labelForImageModelRegistryId,
   shortLabelForImageModelRegistryId,
 } from '../services/modelRegistry/imageModels';
+import {
+  labelForTextModelRegistryId,
+  shortLabelForTextModelRegistryId,
+} from '../services/modelRegistry/textModels';
 import { WORKFLOW_QUICK_COMPOSE_BAR_SHELL } from './workflow/workflowSectionUiConstants';
 import QuickComposeDropTray from './workflow/QuickComposeDropTray';
 import QuickComposeMentionField, {
@@ -28,6 +33,8 @@ import { mentionsFromSegments, newQuickComposeTextSegment } from '../services/qu
 export type WorkspaceQuickComposeGenSettings = {
   imageModelRegistryId: string;
   onImageModelRegistryId: (v: string) => void;
+  textModelRegistryId: string;
+  onTextModelRegistryId: (v: string) => void;
   aspectRatio: string;
   onAspectRatio: (v: string) => void;
   imageSize: string;
@@ -81,6 +88,8 @@ export type WorkspaceQuickComposeBarProps = {
   genSettings: WorkspaceQuickComposeGenSettings;
   /** 展示档位 / 比例 / 输出尺寸（生图引擎） */
   showGenImageSettings: boolean;
+  /** 展示文字模型选择（文模式） */
+  showGenTextSettings: boolean;
   /** 展示生成数量 1～4 */
   allowBatchCount: boolean;
   /** 拖入「文本框」区域时：切换快捷能力并追加预设提示词卡片（功能区/能力列 MIME） */
@@ -155,6 +164,7 @@ export default function WorkspaceQuickComposeBar({
   onSubmit,
   genSettings,
   showGenImageSettings,
+  showGenTextSettings,
   allowBatchCount,
   onComposeInputCapabilityDrop,
   onComposeInputWorkflowDrop,
@@ -193,15 +203,24 @@ export default function WorkspaceQuickComposeBar({
   } | null>(null);
 
   const { rows: effectiveModelRows, coerceModelId } = useEffectiveImageModelRows();
+  const { rows: effectiveTextModelRows, coerceModelId: coerceTextModelId } = useEffectiveTextModelRows();
   /** 勿将整颗 `genSettings` 放进 deps：父级每次 render 都是新对象，会导致 layout effect 每帧跑一遍并可能级联 setState → 栈溢出。 */
   const coerceModelTargetId = genSettings.imageModelRegistryId;
   const onImageModelChange = genSettings.onImageModelRegistryId;
+  const coerceTextModelTargetId = genSettings.textModelRegistryId;
+  const onTextModelChange = genSettings.onTextModelRegistryId;
 
   useLayoutEffect(() => {
     if (!showGenImageSettings) return;
     const next = coerceModelId(coerceModelTargetId);
     if (next !== coerceModelTargetId) onImageModelChange(next);
   }, [showGenImageSettings, coerceModelId, coerceModelTargetId, onImageModelChange]);
+
+  useLayoutEffect(() => {
+    if (!showGenTextSettings) return;
+    const next = coerceTextModelId(coerceTextModelTargetId);
+    if (next !== coerceTextModelTargetId) onTextModelChange(next);
+  }, [showGenTextSettings, coerceTextModelId, coerceTextModelTargetId, onTextModelChange]);
 
   const resetToDefaultPosition = useCallback(() => {
     const vw = window.innerWidth;
@@ -564,6 +583,8 @@ export default function WorkspaceQuickComposeBar({
 
   const modelShortLabel = shortLabelForImageModelRegistryId(genSettings.imageModelRegistryId);
   const modelFullLabel = labelForImageModelRegistryId(genSettings.imageModelRegistryId);
+  const textModelShortLabel = shortLabelForTextModelRegistryId(genSettings.textModelRegistryId);
+  const textModelFullLabel = labelForTextModelRegistryId(genSettings.textModelRegistryId);
 
   const modelPickerControl = showGenImageSettings ? (
     <CustomDropdown
@@ -586,6 +607,34 @@ export default function WorkspaceQuickComposeBar({
         <>
           <span className="tabular-nums font-semibold text-gray-200" title={modelFullLabel}>
             {modelShortLabel}
+          </span>
+          <span className="shrink-0 text-[7px] leading-none text-gray-600">{open ? '▲' : '▼'}</span>
+        </>
+      )}
+    />
+  ) : null;
+
+  const textModelPickerControl = showGenTextSettings ? (
+    <CustomDropdown
+      options={effectiveTextModelRows.map((g) => ({
+        value: g.registryId,
+        label: g.label,
+        disabled: g.disabled,
+        title: g.disabled ? g.disabledReason : undefined,
+      }))}
+      value={genSettings.textModelRegistryId}
+      onChange={(v) => {
+        const row = effectiveTextModelRows.find((g) => g.registryId === v);
+        if (row && !row.disabled) genSettings.onTextModelRegistryId(v);
+      }}
+      triggerClassName={`${QUICK_COMPOSE_PILL_TRIGGER} font-bold text-emerald-300/90`}
+      portalZIndex={{ backdrop: 2602, list: 2603 }}
+      triggerAriaLabel={`文字模型：${textModelFullLabel}`}
+      listMinWidth={176}
+      renderTrigger={({ open }) => (
+        <>
+          <span className="tabular-nums font-semibold text-emerald-200/90" title={textModelFullLabel}>
+            {textModelShortLabel}
           </span>
           <span className="shrink-0 text-[7px] leading-none text-gray-600">{open ? '▲' : '▼'}</span>
         </>
@@ -650,6 +699,7 @@ export default function WorkspaceQuickComposeBar({
       </div>
 
       {modelPickerControl}
+      {textModelPickerControl}
 
       <button
         ref={settingsTriggerRef}

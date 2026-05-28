@@ -5,6 +5,7 @@ import {
   buildComposerTextAssetThumbDataUrl,
   workflowAssetAllowedForCapabilityDrop,
   workflowAssetCurrentDisplayIsTextChannel,
+  workflowAssetLightboxRasterEligible,
   workflowAssetToInputText,
 } from '../services/workflowTextAsset';
 import type { CustomAppModule } from '../types';
@@ -71,6 +72,39 @@ describe('workflowAssetCurrentDisplayIsTextChannel', () => {
         })
       )
     ).toBe(false);
+  });
+});
+
+describe('workflowAssetLightboxRasterEligible', () => {
+  it('文字 original 通道不可走位图 chrome', () => {
+    expect(workflowAssetLightboxRasterEligible(makeTextAsset(), '')).toBe(false);
+  });
+
+  it('文字资产 results 中的图版本可走位图 chrome', () => {
+    expect(
+      workflowAssetLightboxRasterEligible(
+        makeTextAsset({
+          displayKey: 'gen_v1',
+          results: { gen_v1: 'data:image/png;base64,AAA' },
+        }),
+        'data:image/png;base64,AAA'
+      )
+    ).toBe(true);
+  });
+
+  it('普通图片资产有位图即可', () => {
+    const imageAsset: WorkflowAsset = {
+      id: 'img-1',
+      assetKind: 'image',
+      original: 'data:image/png;base64,AAA',
+      displayKey: 'original',
+      results: {},
+      resultOrder: [],
+      archived: false,
+      hiddenInGrid: false,
+      createdAt: Date.now(),
+    };
+    expect(workflowAssetLightboxRasterEligible(imageAsset, 'data:image/png;base64,AAA')).toBe(true);
   });
 });
 

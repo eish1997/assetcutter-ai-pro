@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { SidebarAccountAvatar } from './SidebarAccountAvatar';
 import { useUserUiPrefs } from '../hooks/useUserUiPrefs';
 import {
@@ -52,6 +52,8 @@ import {
 } from '../services/companionJobTerminalStore';
 import { companionJobStatusHuman } from '../services/companionJobStatusHuman';
 import { CustomDropdown, DROPDOWN_TRIGGER_COMPACT } from './ui/CustomDropdown';
+import { useEffectiveTextModelRows } from '../hooks/useEffectiveTextModelRows';
+import { coerceTextModelRegistryId, labelForTextModelRegistryId } from '../services/modelRegistry/textModels';
 import type { AuthUser } from '../services/authClient';
 import { refreshModelOpsConfig } from '../services/modelRegistry/opsConfig';
 import {
@@ -123,6 +125,9 @@ const SettingsSection: React.FC<{
   activeWorkspaceProjectId?: string | null;
   /** 与 `WorkflowSection` 一致，用于全景贴回偏好键隔离 */
   preferenceScope?: string | null;
+  /** 全站默认文字模型 registryId（`ac_config.modelText`） */
+  modelText?: string;
+  onModelTextChange?: (registryId: string) => void;
 }> = ({
   currentUser = null,
   authLoading = false,
@@ -132,7 +137,21 @@ const SettingsSection: React.FC<{
   aiSettingsSyncRev = 0,
   activeWorkspaceProjectId = null,
   preferenceScope = null,
+  modelText = '',
+  onModelTextChange,
 }) => {
+  const { rows: effectiveTextModelRows, coerceModelId: coerceTextModelId } = useEffectiveTextModelRows();
+  const resolvedModelText = coerceTextModelRegistryId(modelText);
+
+  useLayoutEffect(() => {
+    if (!onModelTextChange || !modelText) return;
+    const row = effectiveTextModelRows.find((r) => r.registryId === resolvedModelText);
+    if (row && !row.disabled) return;
+    const firstReady = effectiveTextModelRows.find((r) => !r.disabled);
+    if (firstReady && firstReady.registryId !== resolvedModelText) {
+      onModelTextChange(firstReady.registryId);
+    }
+  }, [effectiveTextModelRows, resolvedModelText, onModelTextChange, modelText, aiSettingsSyncRev]);
   const contentRef = useRef<HTMLDivElement>(null);
   const [tencentSecretId, setTencentSecretId] = useState('');
   const [tencentSecretKey, setTencentSecretKey] = useState('');
@@ -1551,6 +1570,32 @@ const SettingsSection: React.FC<{
                   <p className="text-[9px] text-gray-500 leading-relaxed mb-3">
                     工作流选具体模型型号；此处配置供应商输出口与凭证。型号级接线见面板内预览，运营可通过 model-ops 调整单条 binding。
                   </p>
+                  {onModelTextChange ? (
+                    <label className="flex flex-col gap-2 rounded-lg border border-[#2a2a32] bg-[#101014] px-3 py-2.5">
+                      <span className="text-[9px] font-black uppercase tracking-wider text-gray-400">
+                        默认文字模型
+                      </span>
+                      <CustomDropdown
+                        options={effectiveTextModelRows.map((g) => ({
+                          value: g.registryId,
+                          label: g.label,
+                          disabled: g.disabled,
+                          title: g.disabledReason,
+                        }))}
+                        value={resolvedModelText}
+                        onChange={(v) => {
+                          const row = effectiveTextModelRows.find((g) => g.registryId === v);
+                          if (row?.disabled) return;
+                          onModelTextChange(coerceTextModelId(v));
+                        }}
+                        triggerClassName={DROPDOWN_TRIGGER_COMPACT}
+                      />
+                      <p className="text-[8px] text-gray-600 leading-relaxed">
+                        工作流文生文/图生文、对话、擂台等未单独指定模型时使用（当前：
+                        {labelForTextModelRegistryId(resolvedModelText)}）。
+                      </p>
+                    </label>
+                  ) : null}
                   <AiProviderCredentialsPanel onChanged={onAiInvocationSurfaceChange} />
                   <p className="text-[9px] text-gray-500 leading-relaxed">
                     生图模型运营策略：可配置{' '}

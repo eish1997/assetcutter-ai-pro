@@ -2,6 +2,7 @@ import type { CapabilityCategory, CapabilityEngine, CustomAppModule } from '../t
 import { readLocalString, removeLocalKey, writeLocalJson } from './clientPersist';
 import { normalizeCapabilityPreviewUrlForPersist } from './capabilityPreviewUrl';
 import { coerceImageModelRegistryId } from './modelRegistry/imageModels';
+import { coerceTextModelRegistryId } from './modelRegistry/textModels';
 
 const LEGACY_CUSTOM_MODULES_KEY = 'ac_custom_modules';
 
@@ -115,6 +116,11 @@ export function normalizeCapabilityPreset(input: CustomAppModule, index: number)
   const imageModelRegistryId = coerceImageModelRegistryId(
     (typeof rawModel === 'string' && rawModel.trim()) || rawGear || undefined
   );
+  const rawTextModel = (input as CustomAppModule).textModelRegistryId;
+  const textModelRegistryId =
+    category === 'text_to_text' || category === 'image_to_text'
+      ? coerceTextModelRegistryId(typeof rawTextModel === 'string' ? rawTextModel : undefined)
+      : undefined;
   const base: CustomAppModule = {
     ...input,
     category,
@@ -124,6 +130,7 @@ export function normalizeCapabilityPreset(input: CustomAppModule, index: number)
     enabled,
     order,
     imageModelRegistryId,
+    ...(textModelRegistryId ? { textModelRegistryId } : {}),
     ...(engine ? { engine } : {}),
   };
   delete (base as CustomAppModule & { imageGear?: string }).imageGear;
@@ -132,6 +139,7 @@ export function normalizeCapabilityPreset(input: CustomAppModule, index: number)
     delete (base as any).engine;
     delete (base as any).imageGear;
     delete (base as any).imageModelRegistryId;
+    delete (base as CustomAppModule & { textModelRegistryId?: string }).textModelRegistryId;
     delete (base as CustomAppModule & { companionHostBundle?: unknown }).companionHostBundle;
     if (base.generate3D) {
       base.generate3D = normalizeGenerate3DPreset(base.generate3D);
@@ -140,11 +148,19 @@ export function normalizeCapabilityPreset(input: CustomAppModule, index: number)
     delete (base as any).engine;
     delete (base as any).imageGear;
     delete (base as any).imageModelRegistryId;
+    delete (base as CustomAppModule & { textModelRegistryId?: string }).textModelRegistryId;
     delete (base as CustomAppModule & { generate3D?: unknown }).generate3D;
     delete (base as CustomAppModule & { companionHostBundle?: unknown }).companionHostBundle;
   } else {
     // 非 3D 不应带 generate3D
     delete (base as any).generate3D;
+    if (category !== 'text_to_text' && category !== 'image_to_text') {
+      delete (base as CustomAppModule & { textModelRegistryId?: string }).textModelRegistryId;
+    }
+    if (category !== 'text_to_image' && !(category === 'image_to_image' && engine === 'gen_image')) {
+      delete (base as any).imageGear;
+      delete (base as any).imageModelRegistryId;
+    }
   }
   if (category !== 'text_to_text') {
     delete (base as CustomAppModule & { requirePromptOnTextDrop?: boolean }).requirePromptOnTextDrop;

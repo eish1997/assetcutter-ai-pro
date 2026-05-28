@@ -5,6 +5,7 @@ import {
   isRegisteredImageModelId,
   LEGACY_IMAGE_GEAR_TO_REGISTRY,
 } from "./imageModels";
+import { TEXT_MODEL_REGISTRY } from "./textModels";
 import { imageModelRouteDisabledReason } from "./imageModelProvider";
 import { pickBinding } from "./pickBinding";
 import { getEnabledChannels } from "../settingsStore";
@@ -18,6 +19,8 @@ export type EffectiveImageModelRow = {
   disabled: boolean;
   disabledReason?: string;
 };
+
+export type EffectiveTextModelRow = EffectiveImageModelRow;
 
 /** @deprecated 请用 `EffectiveImageModelRow` */
 export type EffectiveImageGearRow = EffectiveImageModelRow & { id: string; modelId: string };
@@ -65,6 +68,19 @@ export function buildEffectiveImageModelRows(ops: ModelOpsConfig): EffectiveImag
   }
   setBindingDegradedHint(null);
   return rows;
+}
+
+/** 文本 SKU × 已启用 channel 就绪态（无运营 allowlist） */
+export function buildEffectiveTextModelRows(): EffectiveTextModelRow[] {
+  return TEXT_MODEL_REGISTRY.map((e) => {
+    const blockedByCredentials = !pickBinding(e.registryId, "text");
+    return {
+      registryId: e.registryId,
+      label: e.label,
+      disabled: blockedByCredentials,
+      disabledReason: blockedByCredentials ? "未配置可用文本输出口或凭证" : undefined,
+    };
+  });
 }
 
 /** @deprecated 请用 `buildEffectiveImageModelRows` */

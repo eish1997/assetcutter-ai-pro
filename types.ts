@@ -613,6 +613,8 @@ export type WorkflowPendingTask = {
   overrideImageModelRegistryId?: string;
   /** @deprecated 请用 `overrideImageModelRegistryId` */
   overrideImageGear?: DialogImageGear;
+  /** 功能区分组覆盖：文生文 / 图生文文字模型 */
+  overrideTextModelRegistryId?: string;
   overrideImageAspectRatio?: string;
   overrideImageSize?: string;
   overrideSkipUnderstand?: boolean;
@@ -724,6 +726,8 @@ export type CustomAppModule = {
   engine?: CapabilityEngine;
   /** 生图模型 registryId（可选），仅在 engine === 'gen_image' 时生效 */
   imageModelRegistryId?: string;
+  /** 文字模型 registryId（可选），文生文 / 图生文时使用；缺省走设置页默认文字模型 */
+  textModelRegistryId?: string;
   /** @deprecated 请用 `imageModelRegistryId`；旧 fast/standard/pro 会在读取时迁移 */
   imageGear?: DialogImageGear;
   /** 生图输出比例（可选），如 1:1、16:9，仅 engine === 'gen_image' 时生效，对应 Gemini imageConfig.aspectRatio */
