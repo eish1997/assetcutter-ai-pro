@@ -87,6 +87,12 @@ export const WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER = 'mx-0.5 h-5 w-px shrink-0 bg-
 export const WORKFLOW_LIGHTBOX_BOTTOM_RAIL =
   'flex flex-wrap items-center justify-center gap-1 rounded-xl border border-white/10 bg-[#0f0f12]/95 px-1.5 py-1 shadow-xl backdrop-blur-[2px] ring-1 ring-white/[0.05]';
 
+/** 大图预览右侧详情列占位（与 `WorkflowSection` 侧栏 `w-[min(24rem,30vw)]` 一致） */
+export const WORKFLOW_LIGHTBOX_RIGHT_PANEL_INSET = 'min(24rem, 30vw)';
+
+/** 大图预览左侧 VGP 步骤节点图占位（与 `WorkflowStepNodeGraphOverlay` 最大宽度 22rem 对齐） */
+export const WORKFLOW_LIGHTBOX_VGP_GRAPH_LEFT_INSET = 'min(22rem, 28vw)';
+
 /** 卡片角上「×」队列移除等：默认弱 ring，悬停红态 */
 export const WORKFLOW_CARD_DISMISS_ICON_BTN =
   'w-8 h-8 rounded-full flex items-center justify-center bg-white/[0.08] text-gray-400 ring-1 ring-white/[0.12] hover:bg-[#4a1c1c]/90 hover:ring-red-500/35 hover:text-red-300 text-base font-medium leading-none transition-colors';

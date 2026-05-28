@@ -22,7 +22,7 @@ describe('normalizeCapabilityPreset: image_process category', () => {
     expect(normalized.engine).toBe('builtin');
   });
 
-  it('cut_image 归一化后写入 processor 与 params', () => {
+  it('cut_image 归一化后写入 processor 与 params，并清除顶层旧字段', () => {
     const input = makeBasePreset({
       id: 'cut_image',
       category: 'image_process',
@@ -30,12 +30,13 @@ describe('normalizeCapabilityPreset: image_process category', () => {
       cutMode: 'uniform',
       uniformRows: 3,
       uniformCols: 4,
-    });
+    } as CustomAppModule & { cutMode: 'uniform'; uniformRows: number; uniformCols: number });
     const normalized = normalizeCapabilityPreset(input, 0);
     expect(normalized.processor).toBe('cut_image');
     expect(normalized.params?.cutMode).toBe('uniform');
     expect(normalized.params?.uniformRows).toBe(3);
     expect(normalized.params?.uniformCols).toBe(4);
+    expect((normalized as { cutMode?: string }).cutMode).toBeUndefined();
   });
 });
 
@@ -95,12 +96,19 @@ describe('normalizeCapabilityPreset: companionHostBundle', () => {
 });
 
 describe('enforceBuiltinImageProcessPresets', () => {
-  it('内置 cut_image 保持 image_process 类目', () => {
+  it('enforceBuiltinImageProcessPresets：迁移顶层 cutMode 到 params', () => {
     const merged = enforceBuiltinImageProcessPresets([
-      makeBasePreset({ id: 'cut_image', category: 'image_to_image', engine: 'builtin', cutMode: 'auto' }),
+      makeBasePreset({
+        id: 'cut_image',
+        category: 'image_to_image',
+        engine: 'builtin',
+        cutMode: 'auto',
+      } as CustomAppModule & { cutMode: 'auto' }),
     ]);
     const cut = merged.find((p) => p.id === 'cut_image');
     expect(cut?.category).toBe('image_process');
     expect(cut?.processor).toBe('cut_image');
+    expect(cut?.params?.cutMode).toBe('auto');
+    expect((cut as { cutMode?: string } | undefined)?.cutMode).toBeUndefined();
   });
 });

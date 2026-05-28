@@ -23,7 +23,12 @@ import {
   type GeminiImageBatchGroupOptions,
 } from './unifiedAiGateway';
 import { DEFAULT_MODEL_TEXT } from './modelRegistry/constants';
-import { coerceTextModelRegistryId } from './modelRegistry/textModels';
+import { coerceTextModelRegistryId, textModelFamily } from './modelRegistry/textModels';
+import {
+  clampWorkflowTextForSend,
+  resolveWorkflowTextSendLimit,
+  type WorkflowTextSendBudgetKind,
+} from './workflowTextLimits';
 import { resolveUpstreamImageModelId, resolveUpstreamTextModelId } from './modelRegistry/resolve';
 import {
   submitCompanionHostBundleExecJob,
@@ -232,14 +237,26 @@ async function resolveCapabilityPrompt(
   ctx: CapabilityExecuteContext
 ): Promise<string | null> {
   const presetPrompt = (preset.instruction || '').trim();
-  const ut = (userText || '').trim();
+  const ut = clampInputTextForSend(
+    userText || '',
+    'pre_image_understand',
+    preset,
+    ctx,
+    refs.filter((s) => hasUsableImageBase64(s)).length
+  );
   if (!presetPrompt && !ut) return null;
   if (preset.skipUnderstand === true) {
     ctx.onLog?.('info', `[${preset.label || preset.id}] 未启用理解，提示词直发生图`, undefined);
     return [presetPrompt, ut].filter(Boolean).join('\n\n').trim() || null;
   }
   ctx.onLog?.('info', `[${preset.label || preset.id}] 理解图片与提示词中…`, undefined);
-  const combined = [presetPrompt, ut].filter(Boolean).join('\n\n').trim();
+  const combined = clampInputTextForSend(
+    [presetPrompt, ut].filter(Boolean).join('\n\n'),
+    'understand',
+    preset,
+    ctx,
+    refs.filter((s) => hasUsableImageBase64(s)).length
+  );
   const { instruction } = await workflowUnderstandForImageGen(
     refsForUnderstand(refs),
     combined,
@@ -287,7 +304,7 @@ async function resolveTextOnlyImagePrompt(
   ctx: CapabilityExecuteContext
 ): Promise<string | null> {
   const presetPrompt = (preset.instruction || '').trim();
-  const ut = (userText || '').trim();
+  const ut = clampInputTextForSend(userText || '', 'pre_image_understand', preset, ctx, 0);
   if (preset.skipUnderstand === true) {
     const merged = [presetPrompt, ut].filter(Boolean).join('\n\n').trim();
     return merged || null;
@@ -313,6 +330,34 @@ async function resolveTextOnlyImagePrompt(
 const GEN_TEXT_VISION_MAX_IMAGES = 10;
 const WORKFLOW_VIDEO_MAX_REF_IMAGES = 8;
 
+function textFamilyForPreset(preset: CustomAppModule, ctx: CapabilityExecuteContext) {
+  return textModelFamily(resolveTextModelForPreset(preset, ctx));
+}
+
+function clampInputTextForSend(
+  raw: string,
+  kind: WorkflowTextSendBudgetKind,
+  preset: CustomAppModule,
+  ctx: CapabilityExecuteContext,
+  referenceImageCount = 0
+): string {
+  const trimmed = String(raw || '').trim();
+  if (!trimmed) return '';
+  const limit = resolveWorkflowTextSendLimit(kind, {
+    modelFamily: textFamilyForPreset(preset, ctx),
+    referenceImageCount,
+  });
+  const { text, truncated, originalLength } = clampWorkflowTextForSend(trimmed, limit);
+  if (truncated) {
+    ctx.onLog?.(
+      'warn',
+      `[${preset.label || preset.id}] 输入文字 ${originalLength} 字，已按 ${limit} 字上限保留末尾后送模`,
+      undefined
+    );
+  }
+  return text;
+}
+
 async function executeGenerateVideoPath(
   preset: CustomAppModule,
   inputImageBase64: string,
@@ -329,8 +374,14 @@ async function executeGenerateVideoPath(
     if (refs.length >= WORKFLOW_VIDEO_MAX_REF_IMAGES) break;
     if (!refs.includes(s)) refs.push(s);
   }
-  const userT = (opts?.inputText || '').trim();
   const hasImg = refs.length > 0;
+  const userT = clampInputTextForSend(
+    opts?.inputText || '',
+    'pre_image_understand',
+    preset,
+    ctx,
+    refs.length
+  );
   const presetInstr = (preset.instruction || '').trim();
 
   if (!hasImg && !userT && !presetInstr) {
@@ -400,8 +451,10 @@ async function executeGenTextPath(
   const start = Date.now();
   const actionLabel = preset.label || preset.id;
   const sys = (preset.instruction || '').trim() || '请根据用户输入完成任务，直接输出结果正文。';
-  const userT = (inputText || '').trim();
   const refs = imageRefs.filter((s) => hasUsableImageBase64(s)).slice(0, GEN_TEXT_VISION_MAX_IMAGES);
+  const sendKind: WorkflowTextSendBudgetKind =
+    preset.category === 'image_to_text' ? 'image_to_text' : 'text_to_text';
+  const userT = clampInputTextForSend(inputText || '', sendKind, preset, ctx, refs.length);
   const hasImg = refs.length > 0;
   if (preset.category === 'text_to_text') {
     if (hasImg) {
@@ -806,7 +859,15 @@ export async function executeCapability(
     const primaryOk = hasUsableImageBase64(inputImageBase64);
     const extras = opts?.inputImages?.filter((s) => hasUsableImageBase64(s)) ?? [];
     const hasImg = primaryOk || extras.length > 0;
-    const userT = (inputText || '').trim();
+    const refCount =
+      (primaryOk ? 1 : 0) + extras.filter((s) => !primaryOk || s !== inputImageBase64).length;
+    const userT = clampInputTextForSend(
+      inputText || '',
+      'pre_image_understand',
+      preset,
+      ctx,
+      refCount
+    );
 
     if (preset.category === 'text_to_image' && hasImg) {
       return {

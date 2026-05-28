@@ -5,20 +5,21 @@ import { normalizeCapabilityPreset } from '../services/capabilityPresetStore';
 import {
   applyImageProcessorDraftToPreset,
   normalizeProcessorParams,
+  readCutImageParams,
   resolveImageProcessorId,
   syncImageProcessProcessorFields,
 } from '../services/capabilityProcessors/imageProcessProcessors';
 
 describe('imageProcessProcessors', () => {
-  it('resolveImageProcessorId：legacy cut_image 字段', () => {
-    const preset: CustomAppModule = {
+  it('resolveImageProcessorId：迁移顶层 cutMode 推断 cut_image', () => {
+    const preset = {
       id: 'x1',
       label: '切',
       category: 'image_process',
       cutMode: 'auto',
       engine: 'builtin',
       instruction: '',
-    };
+    } as CustomAppModule & { cutMode: 'auto' };
     expect(resolveImageProcessorId(preset)).toBe('cut_image');
   });
 
@@ -74,10 +75,10 @@ describe('imageProcessProcessors', () => {
     expect(normalized.engine).toBe('gen_text');
     expect(normalized.processor).toBeUndefined();
     expect(normalized.companionRembg).toBeUndefined();
-    expect(normalized.cutMode).toBeUndefined();
+    expect((normalized as { cutMode?: string }).cutMode).toBeUndefined();
   });
 
-  it('syncImageProcessProcessorFields：normalize 后写入 processor/params', () => {
+  it('syncImageProcessProcessorFields：normalize 后仅保留 params', () => {
     const normalized = normalizeCapabilityPreset(
       {
         id: 'cut_image',
@@ -89,12 +90,13 @@ describe('imageProcessProcessors', () => {
         instruction: '',
         enabled: true,
         order: 0,
-      },
+      } as CustomAppModule & { cutMode: 'vision'; cutOverflowPx: number },
       0
     );
     expect(normalized.processor).toBe('cut_image');
     expect(normalized.params?.cutMode).toBe('vision');
     expect(normalized.params?.cutOverflowPx).toBe(12);
-    expect(syncImageProcessProcessorFields(normalized).cutMode).toBe('vision');
+    expect((normalized as { cutMode?: string }).cutMode).toBeUndefined();
+    expect(readCutImageParams(normalized).cutOverflowPx).toBe(12);
   });
 });

@@ -127,6 +127,8 @@ const WorkflowPixelBusyOverlay: React.FC<{
    * 主标题缩小；阶段说明不叠在栅格内（悬停遮罩可看 `title`），避免小卡片大字截断。
    */
   density?: 'default' | 'compact';
+  /** 当前任务已运行秒数（仅 executing 时展示） */
+  elapsedSeconds?: number | null;
   className?: string;
 }> = ({
   executing,
@@ -134,6 +136,7 @@ const WorkflowPixelBusyOverlay: React.FC<{
   progressDetail,
   backdropImageSrc,
   density = 'default',
+  elapsedSeconds = null,
   className = '',
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -254,6 +257,8 @@ const WorkflowPixelBusyOverlay: React.FC<{
   }, [executing, accentExecuting, isCompact]);
 
   const detail = (progressDetail || '').trim();
+  const showElapsed =
+    executing && elapsedSeconds != null && Number.isFinite(elapsedSeconds) && elapsedSeconds >= 0;
   const hasBackdrop = !!backdropImageSrc && backdropImageSrc.length > 0;
   /** 小节点上不叠预览图，避免与像素层糊成一团（对齐工作区「纯栅格+执行中」主视觉） */
   const useBackdrop = hasBackdrop && !isCompact;
@@ -310,6 +315,18 @@ const WorkflowPixelBusyOverlay: React.FC<{
         >
           {executing ? '执行中' : '排队中'}
         </span>
+        {showElapsed ? (
+          <span
+            className={`text-center tabular-nums ${
+              isCompact
+                ? 'text-[7px] font-semibold text-zinc-400'
+                : 'text-[10px] font-medium text-zinc-400/95'
+            }`}
+            style={{ textShadow: '0 0 12px rgba(0,0,0,0.9)' }}
+          >
+            已运行 {Math.max(0, Math.floor(elapsedSeconds!))} 秒
+          </span>
+        ) : null}
         {detail && !isCompact ? (
           <span
             className="text-center text-[9px] font-medium text-zinc-400/95 leading-snug max-w-[95%] line-clamp-3"

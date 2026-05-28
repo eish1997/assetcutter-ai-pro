@@ -1,16 +1,14 @@
 import type { CustomAppModule, WorkflowAsset } from '../types';
 import { presetUsesHostBundleProcessor } from './capabilityProcessors/imageProcessProcessors';
+import {
+  WORKFLOW_TEXT_ASSET_BODY_MAX_CHARS,
+  clampWorkflowTextBody,
+} from './workflowTextLimits';
 
-/** 单张文字资产正文上限（字符），防止工作区 JSON 过大 */
-export const WORKFLOW_TEXT_ASSET_BODY_MAX_CHARS = 32_000;
+export { WORKFLOW_TEXT_ASSET_BODY_MAX_CHARS, clampWorkflowTextBody } from './workflowTextLimits';
 
 export function isWorkflowTextAsset(a: WorkflowAsset): boolean {
   return a.assetKind === 'text';
-}
-
-export function clampWorkflowTextBody(raw: string): string {
-  if (raw.length <= WORKFLOW_TEXT_ASSET_BODY_MAX_CHARS) return raw;
-  return raw.slice(0, WORKFLOW_TEXT_ASSET_BODY_MAX_CHARS);
 }
 
 /** 文字卡拖入能力时拼接为 inputText */
@@ -78,7 +76,12 @@ export function workflowAssetAllowedForCapabilityDrop(asset: WorkflowAsset, mod:
   if (mod.category === 'generate_video') {
     return hasAnyImagePayload(asset) || hasAnyTextPayload(asset);
   }
-  if (mod.category === 'image_process' || mod.category === 'image_to_image' || mod.category === 'image_to_text' || mod.category === 'generate_3d') {
+  if (
+    mod.category === 'image_process' ||
+    mod.category === 'image_to_image' ||
+    mod.category === 'image_to_text' ||
+    mod.category === 'generate_3d'
+  ) {
     return hasAnyImagePayload(asset);
   }
   return false;

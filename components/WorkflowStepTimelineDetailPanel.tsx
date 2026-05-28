@@ -97,6 +97,12 @@ export type WorkflowStepTimelineDetailPanelProps = {
   onPullTencentModels?: () => void | Promise<void>;
   pullTripoBusy?: boolean;
   pullTencentBusy?: boolean;
+  /** 大图预览时：该资产当前有队列任务正在执行 */
+  executionActive?: boolean;
+  /** 当前执行任务的已运行秒数 */
+  executionElapsedSeconds?: number | null;
+  /** 当前执行中的能力/步骤展示名 */
+  executionStepLabel?: string | null;
 };
 
 export const WorkflowStepTimelineDetailPanel: React.FC<WorkflowStepTimelineDetailPanelProps> = ({
@@ -110,6 +116,9 @@ export const WorkflowStepTimelineDetailPanel: React.FC<WorkflowStepTimelineDetai
   onPullTencentModels,
   pullTripoBusy = false,
   pullTencentBusy = false,
+  executionActive = false,
+  executionElapsedSeconds = null,
+  executionStepLabel = null,
 }) => {
   const [promptExpanded, setPromptExpanded] = useState(false);
   const [presetInstrExpanded, setPresetInstrExpanded] = useState(false);
@@ -247,6 +256,25 @@ export const WorkflowStepTimelineDetailPanel: React.FC<WorkflowStepTimelineDetai
         <div className="rounded-lg border border-amber-500/25 bg-amber-500/5 px-2 py-1.5 text-[8px] text-amber-200/90 leading-relaxed">
           当前展示键 <span className="font-mono text-amber-100/95">{selectedResultKey}</span> 不在本资产的步骤时间线中（
           <span className="font-mono">resultOrder</span> 未包含此键，或数据不同步）。下方仍尽量展示可用的元数据与缩略图。
+        </div>
+      ) : null}
+
+      {executionActive ? (
+        <div className="rounded-xl border border-blue-500/35 bg-blue-950/30 p-3 space-y-1.5 ring-1 ring-blue-400/15">
+          <div className="text-[8px] font-black uppercase tracking-wide text-blue-300/95">当前执行</div>
+          <p className="text-[10px] text-gray-100 leading-snug">
+            已运行{' '}
+            <span className="font-mono tabular-nums text-blue-200">
+              {Math.max(0, Math.floor(executionElapsedSeconds ?? 0))}
+            </span>{' '}
+            秒
+          </p>
+          {executionStepLabel?.trim() ? (
+            <p className="text-[8px] text-gray-400 leading-relaxed">
+              <span className="text-gray-500">任务：</span>
+              {executionStepLabel.trim()}
+            </p>
+          ) : null}
         </div>
       ) : null}
 

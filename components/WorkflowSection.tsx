@@ -10,18 +10,15 @@ import React, {
 } from 'react';
 import { useWorkflowWorkspacePanes } from '../hooks/useWorkflowWorkspacePanes';
 import { useWorkflowMarquee } from '../hooks/useWorkflowMarquee';
+import { useWorkflowAssetExecutionElapsed } from '../hooks/useWorkflowAssetExecutionElapsed';
 import { createPortal, flushSync } from 'react-dom';
 import {
   CloudDownload,
   Download,
-  Eye,
   Image as ImageIcon,
   ImagePlus,
   LayoutGrid,
   Package,
-  Pencil,
-  Save,
-  SaveAll,
   Trash2,
 } from 'lucide-react';
 import type {
@@ -33,18 +30,16 @@ import type {
 } from '../types';
 import { maxReferenceImagesForImageModel } from '../types';
 import type { CustomAppModule } from '../types';
-import type { BoundingBox } from '../types';
 import { getRandomGroupCodeName } from '../data/groupCodeNames';
 import {
-  detectObjectsInImage,
-  DEFAULT_PROMPTS,
   normalizeApiErrorMessage,
   getGeminiImageBatchBoxSizeForCurrentProvider,
   workflowGenerateImage,
   getTencentCredsFromEnv,
 } from '../services/unifiedAiGateway';
-import { detectGrid } from '../services/gridDetector';
 import { DEFAULT_MODEL_TEXT } from '../services/modelRegistry/constants';
+import { detectCutImageBoxes, FULL_IMAGE_BOX } from '../services/cutImageExecution';
+import { readCutImageParams } from '../services/capabilityProcessors/imageProcessProcessors';
 import {
   coerceImageModelRegistryId,
   DEFAULT_IMAGE_MODEL_REGISTRY_ID,
@@ -195,6 +190,11 @@ import {
   workflowTextAssetOutlineLabel,
 } from '../services/workflowTextAsset';
 import {
+  WORKFLOW_TEXT_CONFIRM_CHARS,
+  WORKFLOW_TEXT_WARN_CHARS,
+  maxWorkflowPendingInputTextChars,
+} from '../services/workflowTextLimits';
+import {
   uuid,
   baseActionId,
   makeVersionKey,
@@ -211,7 +211,7 @@ import {
   cloneCapabilityPresetPanelWithScrollRef,
   cropBoxes,
 } from './workflow/workflowSectionHelpers';
-import { CutSelectModal, PromptTweakModal, ArchivedDetailModal, type PromptTweakTarget } from './workflow/modals';
+import { PromptTweakModal, ArchivedDetailModal, type PromptTweakTarget } from './workflow/modals';
 import {
   SET_ACTION_PREFIX,
   TITLE_ROW_BTN_NEUTRAL,
@@ -228,6 +228,8 @@ import {
   WORKFLOW_CHROME_BTN_NEUTRAL,
   WORKFLOW_TOPBAR_ICON_BTN,
   WORKFLOW_LIGHTBOX_BOTTOM_RAIL,
+  WORKFLOW_LIGHTBOX_RIGHT_PANEL_INSET,
+  WORKFLOW_LIGHTBOX_VGP_GRAPH_LEFT_INSET,
   WORKFLOW_IMAGE_PREVIEW_RAIL,
   WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER,
   WORKFLOW_CARD_DISMISS_ICON_BTN,
@@ -935,12 +937,6 @@ const WorkflowSection: React.FC<{
     composerActiveIdRef.current = composerActiveId;
   }, [composerActiveId]);
   const [collapsedSectionIds, setCollapsedSectionIds] = useState<Record<string, boolean>>({});
-  const [cutSelectState, setCutSelectState] = useState<{
-    task: WorkflowPendingTask;
-    inputImage: string;
-    boxes: BoundingBox[];
-    remaining: WorkflowPendingTask[];
-  } | null>(null);
   const [promptTweakModal, setPromptTweakModal] = useState<{
     preset: CustomAppModule;
     targets: PromptTweakTarget[];
@@ -2444,6 +2440,18 @@ ${lineSvg}
       const queue = overridePending ? [...overridePending] : [...pendingRef.current];
       // 允许在 cut_image 弹窗确认后用 overridePending 继续执行剩余任务
       if (queue.length === 0 || (executing && !overridePending)) return;
+      const maxInputChars = maxWorkflowPendingInputTextChars(queue);
+      if (maxInputChars >= WORKFLOW_TEXT_CONFIRM_CHARS) {
+        const ok = window.confirm(
+          `队列中有任务含 ${maxInputChars.toLocaleString()} 字正文（建议不超过 ${WORKFLOW_TEXT_CONFIRM_CHARS.toLocaleString()} 字）。继续执行时超出部分将按模型上限截断并优先保留末尾。仍要执行？`
+        );
+        if (!ok) return;
+      } else if (maxInputChars >= WORKFLOW_TEXT_WARN_CHARS) {
+        onLog?.(
+          'warn',
+          `队列最长正文约 ${maxInputChars.toLocaleString()} 字（建议 ≤ ${WORKFLOW_TEXT_WARN_CHARS.toLocaleString()} 字），送模时可能截断`
+        );
+      }
       // 新一轮批处理前清空已完成任务标记；本批快照已写入 queue，始终清空 pending（含递归续跑），避免完成后仍误判「在队列内」
       setCompletedTaskIds(new Set());
       cancelledTaskIdsRef.current = new Set();
@@ -2509,83 +2517,32 @@ ${lineSvg}
                 inputImage = src;
               }
               const cutPreset = getModule(task.actionType);
-              const cutMode = cutPreset?.cutMode || 'auto';
+              const cutParams = readCutImageParams(
+                cutPreset ?? { id: 'cut_image', label: '切割图片', category: 'image_process', instruction: '', processor: 'cut_image' }
+              );
               onLog?.(
                 'info',
                 `${logBatch} ${taskLabel} ${
-                  cutMode === 'uniform'
+                  cutParams.cutMode === 'uniform'
                     ? '均匀分割中…'
-                    : cutMode === 'vision'
+                    : cutParams.cutMode === 'vision'
                       ? '视觉识别并切割中…'
                       : '自动检测分割中…'
                 }`
               );
-              let boxes: BoundingBox[] = [];
-              if (cutMode === 'uniform') {
-                const rows =
-                  typeof cutPreset?.uniformRows === 'number' && cutPreset.uniformRows > 0
-                    ? Math.max(1, Math.min(10, Math.round(cutPreset.uniformRows)))
-                    : 2;
-                const cols =
-                  typeof cutPreset?.uniformCols === 'number' && cutPreset.uniformCols > 0
-                    ? Math.max(1, Math.min(10, Math.round(cutPreset.uniformCols)))
-                    : 2;
-                try {
-                  boxes = await detectGrid(inputImage, { mode: 'uniform', config: { rows, cols } });
-                } catch (e) {
-                  const msg = e instanceof Error ? e.message : safeUnknownToString(e);
-                  const full = `[${taskLabel}] 均匀分割失败（${msg}），将整图作为一块裁剪`;
-                  onLog?.('warn', full);
-                  setAssetError(task.assetId, full);
-                }
-              } else if (cutMode === 'auto') {
-                try {
-                  boxes = await Promise.race([
-                    detectGrid(inputImage, { mode: 'auto', config: {} }),
-                    new Promise<BoundingBox[]>((_, rej) =>
-                      setTimeout(() => rej(new Error('timeout')), WORKFLOW_CUT_DETECT_TIMEOUT_MS)
-                    ),
-                  ]);
-                } catch (e) {
-                  const msg = e instanceof Error ? e.message : safeUnknownToString(e);
-                  const full = `[${taskLabel}] 自动检测超时或失败（${msg}），将整图作为一块裁剪`;
-                  onLog?.('warn', full);
-                  setAssetError(task.assetId, full);
-                }
-              } else {
-                try {
-                  boxes = await detectObjectsInImage(
-                    inputImage,
-                    capabilityTextModel,
-                    DEFAULT_PROMPTS.detect_blocks,
-                    { timeoutMs: WORKFLOW_CUT_DETECT_TIMEOUT_MS }
-                  );
-                } catch (e) {
-                  const msg = e instanceof Error ? e.message : safeUnknownToString(e);
-                  const full = `[${taskLabel}] 区域识别超时或失败（${msg}），将整图作为一块裁剪`;
-                  onLog?.('warn', full);
-                  setAssetError(task.assetId, full);
-                }
-              }
-              if (!boxes.length) {
-                boxes = [{ id: 'full', label: '整图', xmin: 0, ymin: 0, xmax: 1000, ymax: 1000 }];
-              }
-              const cutOverflowPx =
-                task.actionType === 'cut_image' && cutPreset?.cutOverflowPx != null && Number.isFinite(cutPreset.cutOverflowPx)
-                  ? Math.max(0, Math.min(512, Math.round(cutPreset.cutOverflowPx)))
-                  : 0;
+              const boxes = await detectCutImageBoxes(
+                inputImage,
+                cutPreset ?? { id: 'cut_image', label: '切割图片', category: 'image_process', instruction: '', processor: 'cut_image', params: cutParams },
+                { visionTextModel: capabilityTextModel, timeoutMs: WORKFLOW_CUT_DETECT_TIMEOUT_MS }
+              );
+              const cutOverflowPx = cutParams.cutOverflowPx;
               const allIndexes = boxes.map((_, j) => j);
               let cropped = await cropBoxes(inputImage, boxes, allIndexes, cutOverflowPx);
               if (cropped.length === 0 && boxes.length > 0) {
                 const msg = `[${taskLabel}] 裁剪失败，尝试整图`;
                 onLog?.('warn', msg);
                 setAssetError(task.assetId, msg);
-                cropped = await cropBoxes(
-                  inputImage,
-                  [{ id: 'full', label: '整图', xmin: 0, ymin: 0, xmax: 1000, ymax: 1000 }],
-                  [0],
-                  cutOverflowPx
-                );
+                cropped = await cropBoxes(inputImage, [FULL_IMAGE_BOX], [0], cutOverflowPx);
               }
               if (cropped.length === 0) {
                 const msg = `[${taskLabel}] 未能生成裁剪图（请检查图片格式或重试）`;
@@ -3822,98 +3779,6 @@ ${lineSvg}
     setCompletedTaskIds((prev) => new Set(prev).add(taskId));
   }, []);
 
-  const onCutConfirm = useCallback(
-    async (selectedIndexes: number[]) => {
-      if (!cutSelectState) return;
-      const { task, inputImage, boxes, remaining } = cutSelectState;
-      const cutPreset = actionModules.find((m) => m.id === task.actionType);
-      const cutOverflowPx =
-        task.actionType === 'cut_image' && cutPreset?.cutOverflowPx != null && Number.isFinite(cutPreset.cutOverflowPx)
-          ? Math.max(0, Math.min(512, Math.round(cutPreset.cutOverflowPx)))
-          : 0;
-      const cropped = await cropBoxes(inputImage, boxes, selectedIndexes, cutOverflowPx);
-      if (cropped.length === 0) {
-        setCutSelectState(null);
-        setPending(remaining);
-        setExecuting(false);
-        return;
-      }
-      setAssets((prev) => {
-        const taskAsset = prev.find((x) => x.id === task.assetId);
-        if (!taskAsset) return prev;
-        const base = taskAsset.original;
-        const imagesToAdd: string[] = base ? [base, ...cropped] : cropped;
-        const newAssets: WorkflowAsset[] = imagesToAdd.map((original) =>
-          attachInitialVgpToNewAsset({
-            id: uuid(),
-            original,
-            displayKey: 'original',
-            results: {},
-            resultOrder: [],
-            archived: false,
-            hiddenInGrid: false,
-            createdAt: Date.now(),
-          })
-        );
-        const assetIds = newAssets.map((x) => x.id);
-        const usedLabels = new Set<string>(prev.map((a) => a.groupLabel).filter((x): x is string => !!x));
-        const newCutGroupId = uuid();
-        const groupLabel = getRandomGroupCodeName(usedLabels);
-
-        const newGroup: WorkflowAsset = attachInitialVgpToNewAsset({
-          id: newCutGroupId,
-          isGroup: true,
-          original: taskAsset.original,
-          displayKey: 'original',
-          results: {},
-          resultOrder: [],
-          assetIds,
-          groupLabel,
-          archived: false,
-          hiddenInGrid: false,
-          createdAt: Date.now(),
-        });
-
-        let next: WorkflowAsset[] = [
-          ...prev.filter((a) => a.id !== task.assetId),
-          ...newAssets.map((a) => ({ ...a, groupId: newCutGroupId, groupLabel, groupOrder: assetIds.indexOf(a.id) })),
-          newGroup,
-        ];
-
-        if (task.sourceGroupAssetId != null && task.sourceItemIndex != null) {
-          const gIdx = task.sourceItemIndex;
-          next = next.map((a) => {
-            if (a.id !== task.sourceGroupAssetId || !isGroupAsset(a)) return a;
-            const ids = [...(a.assetIds ?? [])];
-            if (gIdx >= 0 && gIdx < ids.length) ids[gIdx] = newCutGroupId;
-            return { ...a, assetIds: ids };
-          });
-        }
-
-        for (const a of newAssets) {
-          const o = String(a.original || '').trim();
-          if (o) scheduleCompanionPersistOriginalAny(a.id, o);
-        }
-        const go = String(newGroup.original || '').trim();
-        if (go) scheduleCompanionPersistOriginalAny(newGroup.id, go);
-
-        revokeWorkflowModelBlobUrlsAfterAssetRemoved(taskAsset, next);
-        return next;
-      });
-      setCutSelectState(null);
-      if (remaining.length > 0) executePending(remaining);
-      else setExecuting(false);
-    },
-    [
-      cutSelectState,
-      setAssets,
-      setPending,
-      executePending,
-      actionModules,
-      scheduleCompanionPersistOriginalAny,
-    ]
-  );
-
   const addImagesFromFiles = useCallback((files: File[]) => {
     const imageFiles = files.filter((f) => f.type.startsWith('image/')).slice(0, 50);
     const batchBase = Date.now();
@@ -4617,6 +4482,27 @@ ${lineSvg}
     return executingQueue.tasks.reduce((n, t) => n + (completedTaskIds.has(t.id) ? 1 : 0), 0);
   }, [executingQueue, completedTaskIds]);
 
+  const executionElapsedByAssetId = useWorkflowAssetExecutionElapsed(executingQueue, activeTaskIds);
+
+  const resolveActiveExecutionForAsset = useCallback(
+    (assetId: string) => {
+      if (!executingQueue) return null;
+      const task = executingQueue.tasks.find((t) => t.assetId === assetId && activeTaskIds.has(t.id));
+      if (!task) return null;
+      const mod = getModule(task.actionType);
+      return {
+        elapsedSeconds: executionElapsedByAssetId.get(assetId) ?? 0,
+        stepLabel: (mod?.label || task.actionType).trim(),
+      };
+    },
+    [executingQueue, activeTaskIds, executionElapsedByAssetId, getModule]
+  );
+
+  const lightboxActiveExecution = useMemo(() => {
+    if (!lightboxAssetId) return null;
+    return resolveActiveExecutionForAsset(lightboxAssetId);
+  }, [lightboxAssetId, resolveActiveExecutionForAsset]);
+
   const lightboxAsset = lightboxAssetId ? assets.find((a) => a.id === lightboxAssetId) : null;
   const lightboxShowsImage = Boolean(lightboxAsset && getAssetDisplayImage(lightboxAsset).trim());
   /** 文字资产当前版本按文本通道展示（非 results 中的位图版本） */
@@ -5316,6 +5202,8 @@ ${lineSvg}
 
   const handleLightboxClose = useCallback(() => {
     if (lightboxOverlayDirtyCloseDialogOpenRef.current) return;
+
+    textLightboxCenterRef.current?.flush();
 
     const id = lightboxAssetIdRef.current;
     if (id) {
@@ -9247,6 +9135,11 @@ ${lineSvg}
                                           accentExecuting={showChildSetRunProgress}
                                           progressDetail={showChildSetRunProgress ? childSetRunUi?.progressLine : null}
                                           backdropImageSrc={showChildSetRunProgress ? childSetRunUi?.latestImage : null}
+                                          elapsedSeconds={
+                                            isExecutingCurrentItem
+                                              ? resolveActiveExecutionForAsset(childAsset.id)?.elapsedSeconds ?? null
+                                              : null
+                                          }
                                         />
                                         {showGroupQueueCancelBtn && (
                                           <div className="absolute inset-0 z-[11] flex items-center justify-center pointer-events-none">
@@ -9897,6 +9790,11 @@ ${lineSvg}
                                 accentExecuting={showSetRunProgress}
                                 progressDetail={showSetRunProgress ? setRunUi?.progressLine : null}
                                 backdropImageSrc={showSetRunProgress ? setRunUi?.latestImage : null}
+                                elapsedSeconds={
+                                  isExecutingCurrent
+                                    ? resolveActiveExecutionForAsset(a.id)?.elapsedSeconds ?? null
+                                    : null
+                                }
                               />
                               {showRootQueueCancelBtn && (
                                 <div className="absolute inset-0 z-[11] flex items-center justify-center pointer-events-none">
@@ -10056,7 +9954,6 @@ ${lineSvg}
                     })
                   );
                 }}
-                onSaveAndClose={handleLightboxClose}
               />
             ) : undefined
           }
@@ -10074,7 +9971,16 @@ ${lineSvg}
           onPreviewLayoutChange={
             lightboxRasterChrome ? handleLightboxPreviewLayoutChange : undefined
           }
-          contentRightInset="0px"
+          contentRightInset={
+            lightboxTextAssetOnTextChannel && !lightboxShowsImage
+              ? WORKFLOW_LIGHTBOX_RIGHT_PANEL_INSET
+              : '0px'
+          }
+          contentLeftInset={
+            lightboxTextAssetOnTextChannel && !lightboxShowsImage && lightboxStepSideChrome
+              ? WORKFLOW_LIGHTBOX_VGP_GRAPH_LEFT_INSET
+              : '0px'
+          }
           enablePanoramaMode={lightboxShowsImage}
           modelUrls={lightboxModelUrls}
           modelFileName={lightboxModelFileNameHint}
@@ -10447,6 +10353,9 @@ ${lineSvg}
                 onPullTencentModels={lightboxTencentRehydrateCtx ? handleLightboxPullTencentModels : undefined}
                 pullTripoBusy={lightboxTripoPullBusy}
                 pullTencentBusy={lightboxTencentPullBusy}
+                executionActive={lightboxActiveExecution != null}
+                executionElapsedSeconds={lightboxActiveExecution?.elapsedSeconds ?? null}
+                executionStepLabel={lightboxActiveExecution?.stepLabel ?? null}
               />
           </div>
           </div>
@@ -10457,46 +10366,6 @@ ${lineSvg}
             data-image-preview-no-wheel
             data-image-preview-scroll
           >
-            {!lightboxShowsImage ? (
-              <>
-                <button
-                  type="button"
-                  onClick={() => textLightboxCenterRef.current?.setEditingMode(true)}
-                  className={LIGHTBOX_ICON_BTN_NEUTRAL}
-                  title="编辑"
-                  aria-label="编辑"
-                >
-                  <Pencil {...LIGHTBOX_BAR_IC} aria-hidden />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => textLightboxCenterRef.current?.setEditingMode(false)}
-                  className={LIGHTBOX_ICON_BTN_NEUTRAL}
-                  title="预览"
-                  aria-label="预览"
-                >
-                  <Eye {...LIGHTBOX_BAR_IC} aria-hidden />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => textLightboxCenterRef.current?.save()}
-                  className={LIGHTBOX_ICON_BTN_PRIMARY}
-                  title="保存"
-                  aria-label="保存"
-                >
-                  <Save {...LIGHTBOX_BAR_IC} aria-hidden />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => textLightboxCenterRef.current?.saveAndClose()}
-                  className={LIGHTBOX_ICON_BTN_PRIMARY}
-                  title="保存并关闭"
-                  aria-label="保存并关闭"
-                >
-                  <SaveAll {...LIGHTBOX_BAR_IC} aria-hidden />
-                </button>
-              </>
-            ) : null}
             {!lightboxRasterChrome ? (
               <>
                 <div className={`${WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER} shrink-0`} aria-hidden />
@@ -10937,21 +10806,6 @@ ${lineSvg}
         />
       )}
 
-      {/* 切割图片：识别物体后选择区域 */}
-      {cutSelectState && (
-        <CutSelectModal
-          inputImage={cutSelectState.inputImage}
-          boxes={cutSelectState.boxes}
-          onConfirm={onCutConfirm}
-          onCancel={() => {
-            const task = cutSelectState.task;
-            setCutSelectState(null);
-            setPending(cutSelectState.remaining);
-            setAssets((prev) => prev.map((a) => (a.id === task.assetId ? { ...a, hiddenInGrid: false } : a)));
-            setExecuting(false);
-          }}
-        />
-      )}
       {composerSessions.map((sess) => (
         <Suspense key={sess.id} fallback={null}>
           <WorkflowComposerOverlay
@@ -11373,7 +11227,7 @@ ${lineSvg}
       ? createPortal(
           <WorkspaceQuickComposeBar
             visible={
-              quickComposeShellActive && !lightboxAsset && !cutSelectState && !promptTweakModal
+              quickComposeShellActive && !lightboxAsset && !promptTweakModal
             }
             composeMode={quickComposeMode}
             onComposeModeChange={setQuickComposeMode}

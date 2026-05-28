@@ -30,7 +30,47 @@ export const IMAGE_PROCESS_PROCESSORS = [
 
 export type ImageProcessorId = (typeof IMAGE_PROCESS_PROCESSORS)[number]['id'];
 
+export type CutImageMode = 'uniform' | 'auto' | 'vision';
+
+export type CutImageProcessorParams = {
+  cutMode: CutImageMode;
+  cutOverflowPx: number;
+  uniformRows: number;
+  uniformCols: number;
+};
+
 const PROCESSOR_ID_SET = new Set<string>(IMAGE_PROCESS_PROCESSORS.map((p) => p.id));
+
+/** 读取已持久化 JSON 顶层的 cut_image 旧字段（仅 normalize 迁移用） */
+function readLegacyCutImageTopLevelFields(preset: CustomAppModule): Record<string, unknown> {
+  const raw = preset as CustomAppModule & {
+    cutMode?: unknown;
+    cutOverflowPx?: unknown;
+    uniformRows?: unknown;
+    uniformCols?: unknown;
+  };
+  const out: Record<string, unknown> = {};
+  if (raw.cutMode === 'uniform' || raw.cutMode === 'auto' || raw.cutMode === 'vision') {
+    out.cutMode = raw.cutMode;
+  }
+  if (typeof raw.cutOverflowPx === 'number' && Number.isFinite(raw.cutOverflowPx)) {
+    out.cutOverflowPx = raw.cutOverflowPx;
+  }
+  if (typeof raw.uniformRows === 'number' && Number.isFinite(raw.uniformRows)) {
+    out.uniformRows = raw.uniformRows;
+  }
+  if (typeof raw.uniformCols === 'number' && Number.isFinite(raw.uniformCols)) {
+    out.uniformCols = raw.uniformCols;
+  }
+  return out;
+}
+
+export function stripCutImageLegacyTopLevelFields(base: CustomAppModule): void {
+  delete (base as CustomAppModule & { cutOverflowPx?: number }).cutOverflowPx;
+  delete (base as CustomAppModule & { cutMode?: string }).cutMode;
+  delete (base as CustomAppModule & { uniformRows?: number }).uniformRows;
+  delete (base as CustomAppModule & { uniformCols?: number }).uniformCols;
+}
 
 export const REMBG_MODEL_OPTIONS = [
   { value: '', label: '默认（u2net）' },
@@ -62,7 +102,8 @@ export function resolveImageProcessorId(preset: CustomAppModule): ImageProcessor
   if (preset.companionHostBundle?.dirName?.trim()) return 'host_bundle';
   if (preset.companionSamSegment === true || preset.id === 'companion_sam_segment') return 'sam_segment';
   if (preset.companionRembg === true || preset.id === 'companion_remove_bg') return 'remove_bg';
-  if (preset.id === 'cut_image' || preset.cutMode != null) return 'cut_image';
+  if (preset.id === 'cut_image' || preset.processor === 'cut_image') return 'cut_image';
+  if (readLegacyCutImageTopLevelFields(preset).cutMode != null) return 'cut_image';
   if (preset.id === 'split_component') return 'split_component';
   return undefined;
 }
@@ -138,10 +179,7 @@ export function extractProcessorParamsFromPreset(
   switch (processorId) {
     case 'cut_image':
       return normalizeProcessorParams('cut_image', {
-        cutMode: preset.cutMode,
-        cutOverflowPx: preset.cutOverflowPx,
-        uniformRows: preset.uniformRows,
-        uniformCols: preset.uniformCols,
+        ...readLegacyCutImageTopLevelFields(preset),
         instruction: preset.instruction,
       });
     case 'split_component':
@@ -165,10 +203,7 @@ export function extractProcessorParamsFromPreset(
 }
 
 function clearImageProcessorLegacyFields(base: CustomAppModule): void {
-  delete (base as CustomAppModule & { cutOverflowPx?: number }).cutOverflowPx;
-  delete (base as CustomAppModule & { cutMode?: string }).cutMode;
-  delete (base as CustomAppModule & { uniformRows?: number }).uniformRows;
-  delete (base as CustomAppModule & { uniformCols?: number }).uniformCols;
+  stripCutImageLegacyTopLevelFields(base);
   delete (base as CustomAppModule & { companionHostBundle?: unknown }).companionHostBundle;
   delete (base as CustomAppModule & { companionSamSegment?: unknown }).companionSamSegment;
   delete (base as CustomAppModule & { companionRembg?: unknown }).companionRembg;
@@ -184,26 +219,8 @@ export function applyProcessorLegacyFields(
 ): void {
   clearImageProcessorLegacyFields(base);
   switch (processorId) {
-    case 'cut_image': {
-      const cutMode = params.cutMode;
-      if (cutMode === 'uniform' || cutMode === 'auto' || cutMode === 'vision') {
-        base.cutMode = cutMode;
-      }
-      if (typeof params.cutOverflowPx === 'number' && Number.isFinite(params.cutOverflowPx)) {
-        base.cutOverflowPx = Math.max(0, Math.min(512, Math.round(params.cutOverflowPx)));
-      }
-      if (base.cutMode === 'uniform') {
-        base.uniformRows =
-          typeof params.uniformRows === 'number' && Number.isFinite(params.uniformRows)
-            ? Math.max(1, Math.min(10, Math.round(params.uniformRows)))
-            : 2;
-        base.uniformCols =
-          typeof params.uniformCols === 'number' && Number.isFinite(params.uniformCols)
-            ? Math.max(1, Math.min(10, Math.round(params.uniformCols)))
-            : 2;
-      }
+    case 'cut_image':
       break;
-    }
     case 'split_component':
       break;
     case 'sam_segment':
@@ -230,9 +247,23 @@ export function applyProcessorLegacyFields(
   const instr = typeof params.instruction === 'string' ? params.instruction : undefined;
   if (instr !== undefined && processorId !== 'cut_image') {
     base.instruction = instr;
-  } else if (processorId === 'cut_image' && typeof params.instruction === 'string') {
-    base.instruction = params.instruction;
   }
+}
+
+/** 执行链读取 cut_image 配置（canonical：`params`；旧 JSON 顶字段仅在 normalize 时迁移） */
+export function readCutImageParams(preset: CustomAppModule): CutImageProcessorParams {
+  const merged = { ...readLegacyCutImageTopLevelFields(preset), ...readParamsObject(preset) };
+  const params = normalizeProcessorParams('cut_image', merged);
+  const cutMode =
+    params.cutMode === 'uniform' || params.cutMode === 'auto' || params.cutMode === 'vision'
+      ? params.cutMode
+      : 'auto';
+  return {
+    cutMode,
+    cutOverflowPx: typeof params.cutOverflowPx === 'number' ? params.cutOverflowPx : 0,
+    uniformRows: typeof params.uniformRows === 'number' ? params.uniformRows : 2,
+    uniformCols: typeof params.uniformCols === 'number' ? params.uniformCols : 2,
+  };
 }
 
 /** normalize 末尾：图像处理预设统一写入 processor/params 并同步 legacy */
@@ -251,11 +282,20 @@ export function syncImageProcessProcessorFields(base: CustomAppModule): CustomAp
   }
   const fromParams = readParamsObject(base);
   const mergedRaw =
-    Object.keys(fromParams).length > 0 ? fromParams : extractProcessorParamsFromPreset(base, processorId);
+    processorId === 'cut_image'
+      ? { ...readLegacyCutImageTopLevelFields(base), ...fromParams }
+      : Object.keys(fromParams).length > 0
+        ? fromParams
+        : extractProcessorParamsFromPreset(base, processorId);
   const params = normalizeProcessorParams(processorId, mergedRaw);
   base.processor = processorId;
   base.params = Object.keys(params).length > 0 ? params : undefined;
-  applyProcessorLegacyFields(base, processorId, params);
+  if (processorId === 'cut_image' && typeof params.instruction === 'string') {
+    base.instruction = params.instruction;
+  } else {
+    applyProcessorLegacyFields(base, processorId, params);
+  }
+  stripCutImageLegacyTopLevelFields(base);
   return base;
 }
 
@@ -274,12 +314,13 @@ export function applyImageProcessorDraftToPreset(
     params: Object.keys(params).length > 0 ? params : undefined,
   };
   clearImageProcessorLegacyFields(next);
-  applyProcessorLegacyFields(next, processorId, params);
-  if (processorId === 'cut_image' && typeof params.instruction === 'string') {
-    next.instruction = params.instruction;
-  } else if (processorId !== 'cut_image') {
+  if (processorId === 'cut_image') {
+    if (typeof params.instruction === 'string') next.instruction = params.instruction;
+  } else {
+    applyProcessorLegacyFields(next, processorId, params);
     next.instruction = typeof params.instruction === 'string' ? params.instruction : '';
   }
+  stripCutImageLegacyTopLevelFields(next);
   delete (next as CustomAppModule & { imageModelRegistryId?: string }).imageModelRegistryId;
   delete (next as CustomAppModule & { imageAspectRatio?: string }).imageAspectRatio;
   delete (next as CustomAppModule & { imageSize?: string }).imageSize;

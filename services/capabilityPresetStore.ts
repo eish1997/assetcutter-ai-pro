@@ -8,7 +8,7 @@ import { coerceTextModelRegistryId } from './modelRegistry/textModels';
 const LEGACY_CUSTOM_MODULES_KEY = 'ac_custom_modules';
 
 export const CAPABILITY_PRESETS_KEY = 'ac_capability_presets';
-export const CAPABILITY_PRESETS_VERSION = 4;
+export const CAPABILITY_PRESETS_VERSION = 5;
 export const BUILTIN_IMAGE_PROCESS_IDS = ['cut_image'] as const;
 
 /** 允许在能力页修改配置的内置预设（如切割溢出）；不可删除，仍走 enforce 合并 */
@@ -210,36 +210,6 @@ export function normalizeCapabilityPreset(input: CustomAppModule, index: number)
   norm(base.previewGeneratedImage, 'previewGeneratedImage');
   norm(base.previewOriginalThumbImage, 'previewOriginalThumbImage');
   norm(base.previewGeneratedThumbImage, 'previewGeneratedThumbImage');
-  if (base.id === 'cut_image' || base.processor === 'cut_image') {
-    const rawOv = (input as CustomAppModule).cutOverflowPx;
-    if (typeof rawOv === 'number' && Number.isFinite(rawOv)) {
-      base.cutOverflowPx = Math.max(0, Math.min(512, Math.round(rawOv)));
-    } else {
-      delete (base as CustomAppModule & { cutOverflowPx?: number }).cutOverflowPx;
-    }
-    // 切割模式
-    const rawMode = (input as CustomAppModule).cutMode;
-    if (rawMode === 'uniform' || rawMode === 'auto' || rawMode === 'vision') {
-      base.cutMode = rawMode;
-    } else {
-      delete (base as CustomAppModule & { cutMode?: string }).cutMode;
-    }
-    // 均匀分割行列数
-    const rawRows = (input as CustomAppModule).uniformRows;
-    const rawCols = (input as CustomAppModule).uniformCols;
-    if (base.cutMode === 'uniform') {
-      base.uniformRows = typeof rawRows === 'number' && Number.isFinite(rawRows) ? Math.max(1, Math.min(10, Math.round(rawRows))) : 2;
-      base.uniformCols = typeof rawCols === 'number' && Number.isFinite(rawCols) ? Math.max(1, Math.min(10, Math.round(rawCols))) : 2;
-    } else {
-      delete (base as CustomAppModule & { uniformRows?: number }).uniformRows;
-      delete (base as CustomAppModule & { uniformCols?: number }).uniformCols;
-    }
-  } else {
-    delete (base as CustomAppModule & { cutOverflowPx?: number }).cutOverflowPx;
-    delete (base as CustomAppModule & { cutMode?: string }).cutMode;
-    delete (base as CustomAppModule & { uniformRows?: number }).uniformRows;
-    delete (base as CustomAppModule & { uniformCols?: number }).uniformCols;
-  }
   if (category === 'generate_3d' || category === 'generate_video' || base.id === 'cut_image') {
     delete (base as CustomAppModule & { companionHostBundle?: unknown }).companionHostBundle;
     delete (base as CustomAppModule & { companionSamSegment?: unknown }).companionSamSegment;
@@ -323,8 +293,7 @@ const DEFAULT_PRESETS: CustomAppModule[] = [
     enabled: true,
     order: 3,
     instruction: '',
-    cutMode: 'auto',
-    params: { cutMode: 'auto', uniformRows: 2, uniformCols: 2 },
+    params: { cutMode: 'auto', uniformRows: 2, uniformCols: 2, cutOverflowPx: 0 },
   },
   {
     id: 'companion_sam_segment',

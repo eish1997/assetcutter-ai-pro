@@ -1,40 +1,15 @@
 /**
  * 能力单次测试：供能力模块「测试区域」调用，与工作流 runTask 逻辑一致。
  */
-import type { CustomAppModule, BoundingBox } from '../types';
-import { DEFAULT_PROMPTS, detectObjectsInImage } from './unifiedAiGateway';
+import type { CustomAppModule } from '../types';
 import { executeCapability, type CapabilityExecuteContext } from './capabilityExecutor';
-import { presetUsesHostBundleProcessor } from './capabilityProcessors/imageProcessProcessors';
+import {
+  presetUsesHostBundleProcessor,
+  readCutImageParams,
+} from './capabilityProcessors/imageProcessProcessors';
+import { detectCutImageBoxes } from './cutImageExecution';
+import { cropBoxes } from './imageCrop';
 import { DEFAULT_MODEL_TEXT } from './modelRegistry/constants';
-import { detectGrid } from './gridDetector';
-
-function cropBoxes(inputImage: string, boxes: BoundingBox[], indexes: number[]): Promise<string[]> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.src = inputImage;
-    img.onload = () => {
-      const scaleX = img.naturalWidth / 1000;
-      const scaleY = img.naturalHeight / 1000;
-      const results: string[] = [];
-      for (const i of indexes) {
-        if (i < 0 || i >= boxes.length) continue;
-        const b = boxes[i];
-        const x = Math.max(0, b.xmin * scaleX);
-        const y = Math.max(0, b.ymin * scaleY);
-        const w = Math.min(img.naturalWidth - x, (b.xmax - b.xmin) * scaleX);
-        const h = Math.min(img.naturalHeight - y, (b.ymax - b.ymin) * scaleY);
-        const canvas = document.createElement('canvas');
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext('2d')!;
-        ctx.drawImage(img, x, y, w, h, 0, 0, w, h);
-        results.push(canvas.toDataURL('image/png'));
-      }
-      resolve(results);
-    };
-    img.onerror = () => reject(new Error('图片加载失败'));
-  });
-}
 
 export type CapabilityTestResult = {
   ok: boolean;
@@ -48,6 +23,8 @@ export type CapabilityTestResult = {
   /** 切割图片时返回裁剪张数 */
   cutCount?: number;
 };
+
+const CUT_IMAGE_TEST_TIMEOUT_MS = 10_000;
 
 export async function runCapabilityTest(
   preset: CustomAppModule,
@@ -74,39 +51,14 @@ export async function runCapabilityTest(
       }
       return { ok: true, resultImage: out.image, durationMs: out.durationMs };
     }
-    if (preset.id === 'cut_image') {
-      const cutMode = preset.cutMode || 'auto';
-      let boxes: BoundingBox[] = [];
-
-      if (cutMode === 'uniform') {
-        // 均匀分割
-        const rows = typeof preset.uniformRows === 'number' && preset.uniformRows > 0 ? preset.uniformRows : 2;
-        const cols = typeof preset.uniformCols === 'number' && preset.uniformCols > 0 ? preset.uniformCols : 2;
-        boxes = await detectGrid(imageBase64, { mode: 'uniform', config: { rows, cols } });
-      } else if (cutMode === 'auto') {
-        // 自动检测
-        try {
-          boxes = await Promise.race([
-            detectGrid(imageBase64, { mode: 'auto', config: {} }),
-            new Promise<BoundingBox[]>((_, rej) => setTimeout(() => rej(new Error('timeout')), 10000)),
-          ]);
-        } catch {
-          boxes = [];
-        }
-      } else {
-        // vision 模式
-        try {
-          boxes = await Promise.race([
-            detectObjectsInImage(imageBase64, visionTextModel, DEFAULT_PROMPTS.detect_blocks),
-            new Promise<BoundingBox[]>((_, rej) => setTimeout(() => rej(new Error('timeout')), 10000)),
-          ]);
-        } catch {
-          boxes = [];
-        }
-      }
-
-      const list = boxes.length ? boxes : [{ id: 'full', label: '整图', ymin: 0, xmin: 0, ymax: 1000, xmax: 1000 }];
-      const cropped = await cropBoxes(imageBase64, list, list.map((_, i) => i));
+    if (preset.id === 'cut_image' || preset.processor === 'cut_image') {
+      const { cutOverflowPx } = readCutImageParams(preset);
+      const boxes = await detectCutImageBoxes(imageBase64, preset, {
+        visionTextModel,
+        timeoutMs: CUT_IMAGE_TEST_TIMEOUT_MS,
+      });
+      const indexes = boxes.map((_, i) => i);
+      const cropped = await cropBoxes(imageBase64, boxes, indexes, cutOverflowPx);
       return {
         ok: cropped.length > 0,
         resultImage: cropped[0],

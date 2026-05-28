@@ -764,24 +764,10 @@ export type CustomAppModule = {
   previewGeneratedThumbImage?: string;
   /** 仅当 category === 'generate_3d' 时使用 */
   generate3D?: Generate3DPreset;
-  /** 仅 `processor === 'cut_image'` 或内置 `id === 'cut_image'` 时使用：识别框裁剪时每边向外扩展的像素（0～512），便于保留边缘内容。
-   * 规范化后亦写入 `params.cutOverflowPx`。
-   */
-  cutOverflowPx?: number;
-  /**
-   * 切割模式（legacy；canonical 见 `params.cutMode`）
-   * - uniform: 均匀分割（需配合 uniformRows/uniformCols）
-   * - auto: 自动检测（颜色跳变+边缘检测）
-   * - vision: 视觉识别（调用 Gemini）
-   */
-  cutMode?: 'uniform' | 'auto' | 'vision';
-  /** 仅 cutMode === 'uniform' 时使用：均匀分割行数 */
-  uniformRows?: number;
-  /** 仅 cutMode === 'uniform' 时使用：均匀分割列数 */
-  uniformCols?: number;
   /**
    * 图像处理处理器 id（`category === 'image_process'` 时使用）。
    * 见 `services/capabilityProcessors/imageProcessProcessors.ts`。
+   * cut_image 参数见 `params`（cutMode / uniformRows / uniformCols / cutOverflowPx）。
    */
   processor?: string;
   /** 处理器参数（JSON；normalize 时按 processor schema 校验） */

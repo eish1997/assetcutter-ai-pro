@@ -181,6 +181,8 @@ export type ImagePreviewOverlayProps = {
   model3dDisplayMode?: Model3DDisplayMode;
   /** 右侧占位宽度（如常驻侧栏），用于将主图居中到左侧可用区域 */
   contentRightInset?: string;
+  /** 左侧占位宽度（如 VGP 步骤节点图），与 contentRightInset 一起约束 centerSlot 可用区域 */
+  contentLeftInset?: string;
   /**
    * 传给 PreviewShell 的全屏层 z-index（Tailwind 类）。嵌套在更高 z 的全屏壳内（如工作流编排 `z-[2100]`）时必须高于父层，否则预览会显示在父层背后。
    */
@@ -296,6 +298,7 @@ export function ImagePreviewOverlay({
   modelFileName,
   model3dDisplayMode = 'material',
   contentRightInset = '0px',
+  contentLeftInset = '0px',
   shellZIndexClassName,
   topRightExtra,
   children,
@@ -1354,15 +1357,34 @@ export function ImagePreviewOverlay({
         ) : null}
 
         {centerSlot ? (
-          <div
-            className="absolute top-1/2 z-[4] flex items-center justify-center px-4 box-border w-[min(80rem,calc(100vw-3rem))] max-w-[calc(100vw-3rem)]"
-            style={{
-              left: `calc((100% - ${contentRightInset}) / 2)`,
-              transform: 'translate(-50%, -50%)',
-            }}
-          >
-            {centerSlot}
-          </div>
+          contentRightInset !== '0px' || contentLeftInset !== '0px' ? (
+            <div
+              className="absolute top-1/2 z-[4] box-border flex min-w-0 items-stretch justify-center px-4"
+              style={{
+                left:
+                  contentLeftInset !== '0px'
+                    ? `calc(max(1rem, env(safe-area-inset-left, 0px)) + ${contentLeftInset} + 0.75rem)`
+                    : 'max(1rem, env(safe-area-inset-left, 0px))',
+                right:
+                  contentRightInset !== '0px'
+                    ? `calc(1rem + ${contentRightInset} + 0.75rem)`
+                    : 'max(1rem, env(safe-area-inset-right, 0px))',
+                transform: 'translateY(-50%)',
+              }}
+            >
+              {centerSlot}
+            </div>
+          ) : (
+            <div
+              className="absolute top-1/2 z-[4] box-border flex w-[min(80rem,calc(100vw-3rem))] max-w-[calc(100vw-3rem)] items-center justify-center px-4"
+              style={{
+                left: '50%',
+                transform: 'translate(-50%, -50%)',
+              }}
+            >
+              {centerSlot}
+            </div>
+          )
         ) : null}
 
         {flatAnnotationColumnOutsidePanoStack ? (
