@@ -287,6 +287,9 @@ const CapabilityPresetSection: React.FC<{
   const [syncAfterRefresh, setSyncAfterRefresh] = useState(false);
   const autoSyncedRemoteRef = useRef(false);
   const [pendingScrollTarget, setPendingScrollTarget] = useState<{ kind: 'preset' | 'set'; id: string } | null>(null);
+  const [locatePulsePresetId, setLocatePulsePresetId] = useState<string | null>(null);
+  const [locatePulseSetId, setLocatePulseSetId] = useState<string | null>(null);
+  const locatePulseTimerRef = useRef<number>();
   const [draggingPresetId, setDraggingPresetId] = useState<string | null>(null);
   const dragPreviewElRef = useRef<HTMLDivElement | null>(null);
   const presetCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -451,6 +454,41 @@ const CapabilityPresetSection: React.FC<{
       window.removeEventListener('ac:capability-jump-to-preset', onJumpToPreset as EventListener);
     };
   }, [presets]);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onJumpToSet = (event: Event) => {
+      const detail = (event as CustomEvent<{ setId?: string }>).detail;
+      const id = detail?.setId;
+      if (!id) return;
+      if (!sets.some((s) => s.id === id)) return;
+      setViewMode('sets');
+      setPendingScrollTarget({ kind: 'set', id });
+    };
+    window.addEventListener('ac:capability-jump-to-set', onJumpToSet as EventListener);
+    return () => {
+      window.removeEventListener('ac:capability-jump-to-set', onJumpToSet as EventListener);
+    };
+  }, [sets]);
+  const triggerLocatePulse = useCallback((kind: 'preset' | 'set', id: string) => {
+    if (kind === 'preset') {
+      setLocatePulsePresetId(id);
+      setLocatePulseSetId(null);
+    } else {
+      setLocatePulseSetId(id);
+      setLocatePulsePresetId(null);
+    }
+    if (locatePulseTimerRef.current) window.clearTimeout(locatePulseTimerRef.current);
+    locatePulseTimerRef.current = window.setTimeout(() => {
+      setLocatePulsePresetId(null);
+      setLocatePulseSetId(null);
+    }, 2600) as unknown as number;
+  }, []);
+  useEffect(
+    () => () => {
+      if (locatePulseTimerRef.current) window.clearTimeout(locatePulseTimerRef.current);
+    },
+    []
+  );
   useEffect(() => {
     if (typeof window === 'undefined') return;
     window.dispatchEvent(new CustomEvent('ac:capability-preset-view-mode-changed', { detail: { mode: viewMode } }));
@@ -1263,6 +1301,7 @@ const CapabilityPresetSection: React.FC<{
       if (target.kind === 'preset' && (mode === 'presets' || mode === 'image_process')) {
         const el = presetCardRefs.current[target.id];
         if (el && scrollIntoPresetContentOnly(el)) {
+          triggerLocatePulse('preset', target.id);
           setPendingScrollTarget(null);
           return;
         }
@@ -1274,6 +1313,7 @@ const CapabilityPresetSection: React.FC<{
       if (target.kind === 'set' && mode === 'sets') {
         const el = setCardRefs.current[target.id];
         if (el && scrollIntoPresetContentOnly(el)) {
+          triggerLocatePulse('set', target.id);
           setPendingScrollTarget(null);
           return;
         }
@@ -1291,7 +1331,7 @@ const CapabilityPresetSection: React.FC<{
       window.cancelAnimationFrame(raf);
       if (timeoutId !== undefined) window.clearTimeout(timeoutId);
     };
-  }, [pendingScrollTarget, viewMode, visiblePresets, sets]);
+  }, [pendingScrollTarget, viewMode, visiblePresets, sets, triggerLocatePulse]);
 
   return (
     <div
@@ -1434,7 +1474,9 @@ const CapabilityPresetSection: React.FC<{
                     setCardRefs.current[s.id] = el;
                   }}
                   onClick={() => openEditSet(s)}
-                  className="inline-block align-top mb-3 w-full break-inside-avoid rounded-2xl bg-[#16161a] ring-1 ring-white/[0.07] overflow-hidden text-left hover:ring-blue-400/40 transition-colors group"
+                  className={`inline-block align-top mb-3 w-full break-inside-avoid rounded-2xl bg-[#16161a] ring-1 ring-white/[0.07] overflow-hidden text-left hover:ring-blue-400/40 transition-colors group ${
+                    locatePulseSetId === s.id ? 'ac-capability-preset-locate ring-2 ring-blue-400/70' : ''
+                  }`}
                 >
                   <div className="relative w-full bg-[#0f0f10] flex items-center justify-center min-h-[7rem]">
                     <div className="h-full w-full flex flex-col items-center justify-center gap-1 text-gray-600">
@@ -2053,6 +2095,8 @@ const CapabilityPresetSection: React.FC<{
                       setPreviewSplitRatio((prev) => ({ ...prev, [p.id]: 0.5 }));
                     }}
                     className={`inline-block align-top mb-3 w-full break-inside-avoid rounded-2xl border bg-[#16161a] overflow-hidden text-left transition-[colors,opacity,filter] duration-150 group ${
+                      locatePulsePresetId === p.id ? 'ac-capability-preset-locate ring-2 ring-blue-400/70 border-blue-400/50' : ''
+                    } ${
                       draggingPresetId === p.id
                         ? 'border-blue-500/70 ring-1 ring-blue-500/40 opacity-70'
                         : dimPresetBySidebar

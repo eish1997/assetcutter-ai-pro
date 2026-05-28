@@ -1,4 +1,5 @@
 import type { CustomAppModule } from '../types';
+import { isCutImageCapabilityPreset } from './capabilityProcessors/imageProcessProcessors';
 import { WORKFLOW_SET_ACTION_PREFIX } from './workflowSetActionPrefix';
 
 /** 与 `WorkflowSection.runTask` 判定顺序一致；勿随意改序。 */
@@ -6,6 +7,7 @@ export type WorkflowRunTaskBranchId =
   | 'branch_capability_set'
   | 'branch_generate_3d'
   | 'branch_preset_execute_capability'
+  | 'branch_cut_image'
   | 'branch_cut_image_no_module'
   | 'branch_fallback_error';
 
@@ -32,18 +34,24 @@ export const WORKFLOW_SECTION_RUN_TASK_BRANCHES: readonly WorkflowSectionRunTask
   {
     id: 'branch_preset_execute_capability',
     order: 3,
-    conditionSummary: '匹配到能力预设 `module`',
+    conditionSummary: '匹配到能力预设 `module`，且非切割图片处理器',
     handlerSummary: '`executeCapability` → `capabilityExecutor` → `unifiedAiGateway`（含 `generate_video` 等）',
   },
   {
-    id: 'branch_cut_image_no_module',
+    id: 'branch_cut_image',
     order: 4,
+    conditionSummary: '匹配到 `module` 且 `resolveImageProcessorId === "cut_image"`',
+    handlerSummary: '由 `executePending` 专用切割路径处理（多图入组）；`runTask` 不应再调 `executeCapability`',
+  },
+  {
+    id: 'branch_cut_image_no_module',
+    order: 5,
     conditionSummary: '无 `module` 且 `actionType === "cut_image"`',
     handlerSummary: '本地切割路径，立即 `return { image: null }`（结果由其它逻辑落盘）',
   },
   {
     id: 'branch_fallback_error',
-    order: 5,
+    order: 6,
     conditionSummary: '其余',
     handlerSummary: '`setAssetError` + 未能获得结果提示',
   },
@@ -63,6 +71,9 @@ export function classifyWorkflowRunTaskBranch(params: {
   }
   if (module?.category === 'generate_3d') {
     return 'branch_generate_3d';
+  }
+  if (module && isCutImageCapabilityPreset(module)) {
+    return 'branch_cut_image';
   }
   if (module) {
     return 'branch_preset_execute_capability';

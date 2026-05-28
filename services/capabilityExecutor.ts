@@ -38,6 +38,7 @@ import { getCompanionLocalBaseUrl, normalizeCompanionBaseUrl } from './companion
 import { naturalSizeFromImageDataUrl, runSamSegmentFromDataUrl } from './lightboxSamSegment';
 import { runLightboxRembgFromDataUrl } from './lightboxRembg';
 import {
+  readRemoveBgParams,
   resolveImageProcessorId,
   type ImageProcessorId,
 } from './capabilityProcessors/imageProcessProcessors';
@@ -628,14 +629,15 @@ async function executeCompanionRembgCapability(
   const displayKey = (ctx.workflowSourceDisplayKey || 'original').trim() || 'original';
   ctx.onLog?.('info', `[${actionLabel}] 本机去背景（rembg）…`, undefined);
   emitCapabilityRunProgress(ctx, `${actionLabel}：本机去背景中…`);
+  const rembgParams = readRemoveBgParams(preset);
   const run = await runLightboxRembgFromDataUrl({
     projectId,
     assetId,
     displayKey,
     dataUrl,
     resultKey,
-    model: preset.companionRembgModel,
-    alphaMatting: preset.companionRembgAlphaMatting === true,
+    model: rembgParams.model ?? preset.companionRembgModel,
+    alphaMatting: rembgParams.alphaMatting || preset.companionRembgAlphaMatting === true,
   });
   if (run.ok === false) {
     return { ok: false, kind: 'none', error: run.error, durationMs: Date.now() - start };

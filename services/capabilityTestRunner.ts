@@ -4,10 +4,11 @@
 import type { CustomAppModule } from '../types';
 import { executeCapability, type CapabilityExecuteContext } from './capabilityExecutor';
 import {
+  isCutImageCapabilityPreset,
   presetUsesHostBundleProcessor,
   readCutImageParams,
 } from './capabilityProcessors/imageProcessProcessors';
-import { detectCutImageBoxes } from './cutImageExecution';
+import { detectCutImageBoxes, FULL_IMAGE_BOX } from './cutImageExecution';
 import { cropBoxes } from './imageCrop';
 import { DEFAULT_MODEL_TEXT } from './modelRegistry/constants';
 
@@ -51,9 +52,9 @@ export async function runCapabilityTest(
       }
       return { ok: true, resultImage: out.image, durationMs: out.durationMs };
     }
-    if (preset.id === 'cut_image' || preset.processor === 'cut_image') {
+    if (isCutImageCapabilityPreset(preset)) {
       const { cutOverflowPx } = readCutImageParams(preset);
-      const boxes = await detectCutImageBoxes(imageBase64, preset, {
+      const { boxes } = await detectCutImageBoxes(imageBase64, preset, {
         visionTextModel,
         timeoutMs: CUT_IMAGE_TEST_TIMEOUT_MS,
       });

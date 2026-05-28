@@ -37,6 +37,17 @@ describe('workflowRunTaskBranch', () => {
     expect(classifyWorkflowRunTaskBranch({ actionType: 'gen', module: mod })).toBe('branch_preset_execute_capability');
   });
 
+  it('classify：image_process + processor cut_image → branch_cut_image', () => {
+    const mod = {
+      id: 'my_cut_2x2',
+      label: '切割 2*2',
+      category: 'image_process',
+      processor: 'cut_image',
+      params: { cutMode: 'uniform', uniformRows: 2, uniformCols: 2 },
+    } as CustomAppModule;
+    expect(classifyWorkflowRunTaskBranch({ actionType: 'my_cut_2x2', module: mod })).toBe('branch_cut_image');
+  });
+
   it('classify：无 module 的 cut_image', () => {
     expect(classifyWorkflowRunTaskBranch({ actionType: 'cut_image', module: undefined })).toBe(
       'branch_cut_image_no_module'
@@ -51,6 +62,6 @@ describe('workflowRunTaskBranch', () => {
 
   it('WORKFLOW_SECTION_RUN_TASK_BRANCHES 与 classify 顺序一致', () => {
     const sorted = [...WORKFLOW_SECTION_RUN_TASK_BRANCHES].sort((a, b) => a.order - b.order);
-    expect(sorted.map((b) => b.order)).toEqual([1, 2, 3, 4, 5]);
+    expect(sorted.map((b) => b.order)).toEqual([1, 2, 3, 4, 5, 6]);
   });
 });

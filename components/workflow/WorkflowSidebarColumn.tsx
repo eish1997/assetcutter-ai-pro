@@ -297,6 +297,8 @@ export type WorkflowSidebarColumnProps = {
   ) => void;
   handleDropToSetAction: (setActionId: string, e: DragEvent<HTMLElement>) => void;
   jumpToCapabilityPreset: (preset: CustomAppModule) => void;
+  /** 双击复合能力块：滑到能力列并滚动到对应能力集合 */
+  jumpToCapabilitySet?: (setId: string) => void;
   /** 能力区预设卡片拖入侧栏任意处：启用并入队当前选中资产 */
   onDropPresetFromEditor?: (presetId: string) => void;
   /** 能力页模式下：将预设拖到顶部动作块（编辑/删除等） */
@@ -365,6 +367,7 @@ export function WorkflowSidebarColumn({
   handleDropToModuleAction,
   handleDropToSetAction,
   jumpToCapabilityPreset,
+  jumpToCapabilitySet,
   onDropPresetFromEditor,
   onDropPresetAction,
   topActionMode = 'asset',
@@ -392,6 +395,42 @@ export function WorkflowSidebarColumn({
   >({});
   const [countCustomEditingByCategory, setCountCustomEditingByCategory] = useState<Record<string, boolean>>({});
   const [countCustomDraftByCategory, setCountCustomDraftByCategory] = useState<Record<string, string>>({});
+  const [jumpFlashActionId, setJumpFlashActionId] = useState<string | null>(null);
+  const jumpFlashTimerRef = useRef<number>();
+  useEffect(
+    () => () => {
+      if (jumpFlashTimerRef.current) window.clearTimeout(jumpFlashTimerRef.current);
+    },
+    []
+  );
+  const flashSidebarLocate = useCallback((actionId: string) => {
+    setJumpFlashActionId(actionId);
+    if (jumpFlashTimerRef.current) window.clearTimeout(jumpFlashTimerRef.current);
+    jumpFlashTimerRef.current = window.setTimeout(() => setJumpFlashActionId(null), 720) as unknown as number;
+  }, []);
+  const sidebarLocateFlashClass = useCallback(
+    (actionId: string) => (jumpFlashActionId === actionId ? ' ac-workflow-capability-jump-flash' : ''),
+    [jumpFlashActionId]
+  );
+  const onLocatePresetDoubleClick = useCallback(
+    (mod: CustomAppModule, e: React.MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      jumpToCapabilityPreset(mod);
+      flashSidebarLocate(mod.id);
+    },
+    [jumpToCapabilityPreset, flashSidebarLocate]
+  );
+  const onLocateSetDoubleClick = useCallback(
+    (set: CapabilitySet, e: React.MouseEvent) => {
+      if (!jumpToCapabilitySet) return;
+      e.preventDefault();
+      e.stopPropagation();
+      jumpToCapabilitySet(set.id);
+      flashSidebarLocate(SET_ACTION_PREFIX + set.id);
+    },
+    [jumpToCapabilitySet, flashSidebarLocate]
+  );
   const getGroupOverridesForCategory = (categoryId: string) => {
     const cfg = groupOverrideByCategory[categoryId];
     const countRaw = Number(cfg?.generateCount ?? 1);
@@ -1589,7 +1628,9 @@ export function WorkflowSidebarColumn({
                         <div
                           key={`fav-${entry.id}`}
                           data-capability-hover-id={entry.kind === 'module' ? entry.mod?.id : undefined}
-                          className={`rounded-xl border min-h-[52px] h-auto flex overflow-hidden transition-all duration-150 ${
+                          className={`rounded-xl border min-h-[52px] h-auto flex overflow-hidden transition-all duration-150${
+                            sidebarLocateFlashClass(entry.id)
+                          } ${
                             hasTweakSlot ? 'col-span-2' : 'col-span-1'
                           } ${
                             dragOverAction === entry.id
@@ -1653,7 +1694,7 @@ export function WorkflowSidebarColumn({
                           }}
                         >
                           <div
-                            className={`flex-1 px-1.5 py-1 flex flex-col items-center justify-center text-center min-w-0 transition-colors ${
+                            className={`flex-1 px-1.5 py-1 flex flex-col items-center justify-center text-center min-w-0 transition-colors cursor-default ${
                               entry.kind === 'module' && entry.mod && capabilityUsesGenImageEngine(entry.mod)
                                 ? `border-r ${getSidebarCapabilityTone(entry.mod.category).dividerBorderClass}`
                                 : ''
@@ -1664,6 +1705,17 @@ export function WorkflowSidebarColumn({
                                   ? 'bg-[#1a3354]'
                                   : ''
                             }`}
+                            title={
+                              entry.kind === 'module'
+                                ? '双击定位左侧预设'
+                                : entry.kind === 'set'
+                                  ? '双击定位左侧能力集合'
+                                  : undefined
+                            }
+                            onDoubleClick={(e) => {
+                              if (entry.kind === 'module' && entry.mod) onLocatePresetDoubleClick(entry.mod, e);
+                              else if (entry.kind === 'set' && entry.set) onLocateSetDoubleClick(entry.set, e);
+                            }}
                             onDragOver={(e) => {
                               e.preventDefault();
                               setDragOverAction(entry.id);
@@ -2098,7 +2150,9 @@ export function WorkflowSidebarColumn({
                       <div
                         key={mod.id}
                         data-capability-hover-id={mod.id}
-                        className={`rounded-xl border min-h-[60px] h-auto flex overflow-hidden transition-all duration-150 ${
+                        className={`rounded-xl border min-h-[60px] h-auto flex overflow-hidden transition-all duration-150${sidebarLocateFlashClass(
+                          mod.id
+                        )} ${
                           dragOverAction === mod.id
                             ? DROP_TARGET_ACTIVE_CLASS
                             : dragOverAction === mod.id + '__tweak'
@@ -2148,7 +2202,7 @@ export function WorkflowSidebarColumn({
                         }}
                       >
                         <div
-                          className={`flex-1 p-3 flex flex-col items-center justify-center text-center min-w-0 transition-colors ${
+                          className={`flex-1 p-3 flex flex-col items-center justify-center text-center min-w-0 transition-colors cursor-default ${
                             capabilityUsesGenImageEngine(mod) ? `border-r ${getSidebarCapabilityTone(mod.category).dividerBorderClass}` : ''
                           } ${
                             dragOverAction === mod.id + '__tweak'
@@ -2157,6 +2211,8 @@ export function WorkflowSidebarColumn({
                                 ? 'bg-[#1a3354]'
                                 : ''
                           }`}
+                          title="双击定位左侧预设"
+                          onDoubleClick={(e) => onLocatePresetDoubleClick(mod, e)}
                           onDragOver={(e) => {
                             e.preventDefault();
                             setDragOverAction(mod.id);
@@ -2267,7 +2323,9 @@ export function WorkflowSidebarColumn({
                 <div
                   key={mod.id}
                   data-capability-hover-id={mod.id}
-                  className={`rounded-xl border min-h-[60px] h-auto flex overflow-hidden transition-all duration-150 ${
+                  className={`rounded-xl border min-h-[60px] h-auto flex overflow-hidden transition-all duration-150${sidebarLocateFlashClass(
+                    mod.id
+                  )} ${
                     dragOverAction === mod.id
                       ? DROP_TARGET_ACTIVE_CLASS
                       : dragOverAction === mod.id + '__tweak'
@@ -2317,7 +2375,7 @@ export function WorkflowSidebarColumn({
                   }}
                 >
                   <div
-                    className={`flex-1 p-3 flex flex-col items-center justify-center text-center min-w-0 transition-colors ${
+                    className={`flex-1 p-3 flex flex-col items-center justify-center text-center min-w-0 transition-colors cursor-default ${
                       capabilityUsesGenImageEngine(mod) ? `border-r ${getSidebarCapabilityTone(mod.category).dividerBorderClass}` : ''
                     } ${
                       dragOverAction === mod.id + '__tweak'
@@ -2326,6 +2384,8 @@ export function WorkflowSidebarColumn({
                           ? 'bg-[#1a3354]'
                           : ''
                     }`}
+                    title="双击定位左侧预设"
+                    onDoubleClick={(e) => onLocatePresetDoubleClick(mod, e)}
                     onDragOver={(e) => {
                       e.preventDefault();
                       setDragOverAction(mod.id);
@@ -2430,6 +2490,8 @@ export function WorkflowSidebarColumn({
                   return (
                     <div
                       key={set.id}
+                      title="双击定位左侧能力集合"
+                      onDoubleClick={(e) => onLocateSetDoubleClick(set, e)}
                       draggable
                       onMouseEnter={() => {
                         const ids = collectPresetIdsFromCapabilitySet(set);
@@ -2465,7 +2527,9 @@ export function WorkflowSidebarColumn({
                         setDragOverAction(null);
                         handleDropToSetAction(setActionId, e);
                       }}
-                      className={`rounded-xl border p-2.5 min-h-[60px] flex flex-col items-center justify-center text-center transition-all duration-150 ${
+                      className={`rounded-xl border p-2.5 min-h-[60px] flex flex-col items-center justify-center text-center transition-all duration-150 cursor-default${sidebarLocateFlashClass(
+                        setActionId
+                      )} ${
                         dragOverAction === setActionId
                           ? DROP_TARGET_ACTIVE_CLASS
                           : isAssetPayloadDragging

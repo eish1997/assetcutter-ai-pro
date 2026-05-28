@@ -240,7 +240,25 @@ export async function imageSrcToDataUrlForCompanion(src: string): Promise<string
   }
   if (/^https?:\/\//i.test(s)) {
     try {
-      const res = await fetch(s, { mode: 'cors', credentials: 'omit' });
+      const u = new URL(s);
+      if (/\/api\/r2\//i.test(u.pathname || '')) {
+        const sitePath = `${u.pathname}${u.search}${u.hash}`;
+        const fetchUrl = mapSiteR2PathToFetchUrl(sitePath);
+        try {
+          const res = await fetch(fetchUrl, { mode: 'cors', credentials: 'include' });
+          if (res.ok) {
+            const blob = await res.blob();
+            return await blobToDataUrl(blob);
+          }
+        } catch {
+          /* fall through to direct URL */
+        }
+      }
+    } catch {
+      /* ignore URL parse */
+    }
+    try {
+      const res = await fetch(s, { mode: 'cors', credentials: 'include' });
       if (!res.ok) return null;
       const blob = await res.blob();
       return await blobToDataUrl(blob);

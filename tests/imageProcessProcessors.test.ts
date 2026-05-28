@@ -6,6 +6,7 @@ import {
   applyImageProcessorDraftToPreset,
   normalizeProcessorParams,
   readCutImageParams,
+  isCutImageCapabilityPreset,
   resolveImageProcessorId,
   syncImageProcessProcessorFields,
 } from '../services/capabilityProcessors/imageProcessProcessors';
@@ -21,6 +22,18 @@ describe('imageProcessProcessors', () => {
       instruction: '',
     } as CustomAppModule & { cutMode: 'auto' };
     expect(resolveImageProcessorId(preset)).toBe('cut_image');
+  });
+
+  it('isCutImageCapabilityPreset：自定义 id 的切割预设', () => {
+    const preset = {
+      id: 'cut_2x2',
+      label: '切割 2*2',
+      category: 'image_process',
+      processor: 'cut_image',
+      params: { cutMode: 'uniform', uniformRows: 2, uniformCols: 2 },
+    } as CustomAppModule;
+    expect(isCutImageCapabilityPreset(preset)).toBe(true);
+    expect(isCutImageCapabilityPreset({ ...preset, processor: 'split_component' })).toBe(false);
   });
 
   it('normalizeProcessorParams：cut_image uniform 行列', () => {
@@ -68,7 +81,7 @@ describe('imageProcessProcessors', () => {
         processor: 'remove_bg',
         enabled: true,
         order: 0,
-      },
+      } as CustomAppModule & { cutMode: string },
       0
     );
     expect(normalized.category).toBe('text_to_text');

@@ -108,6 +108,12 @@ export function resolveImageProcessorId(preset: CustomAppModule): ImageProcessor
   return undefined;
 }
 
+/** 是否为「切割图片」处理器（含自定义 id 的 image_process 预设） */
+export function isCutImageCapabilityPreset(preset: CustomAppModule | null | undefined): boolean {
+  if (!preset) return false;
+  return resolveImageProcessorId(preset) === 'cut_image';
+}
+
 function readParamsObject(preset: CustomAppModule): Record<string, unknown> {
   const raw = preset.params;
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
@@ -248,6 +254,23 @@ export function applyProcessorLegacyFields(
   if (instr !== undefined && processorId !== 'cut_image') {
     base.instruction = instr;
   }
+}
+
+/** 执行链读取 remove_bg 配置（canonical：`params`，兼容 legacy `companionRembg*`） */
+export function readRemoveBgParams(preset: CustomAppModule): {
+  model?: string;
+  alphaMatting: boolean;
+} {
+  const merged = {
+    ...extractProcessorParamsFromPreset(preset, 'remove_bg'),
+    ...readParamsObject(preset),
+  };
+  const params = normalizeProcessorParams('remove_bg', merged);
+  const model = typeof params.model === 'string' ? params.model.trim() : '';
+  return {
+    model: model || undefined,
+    alphaMatting: params.alphaMatting === true,
+  };
 }
 
 /** 执行链读取 cut_image 配置（canonical：`params`；旧 JSON 顶字段仅在 normalize 时迁移） */

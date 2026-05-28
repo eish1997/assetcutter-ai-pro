@@ -36,12 +36,13 @@
     {
       "id": "cut_image",
       "label": "切割图片",
-      "category": "image_to_image",
+      "category": "image_process",
+      "processor": "cut_image",
       "engine": "builtin",
       "enabled": true,
       "order": 3,
       "instruction": "",
-      "imageGear": "fast"
+      "params": { "cutMode": "auto", "uniformRows": 2, "uniformCols": 2, "cutOverflowPx": 0 }
     },
     {
       "id": "83f822d9c4",

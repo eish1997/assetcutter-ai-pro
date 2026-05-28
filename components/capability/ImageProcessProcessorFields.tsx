@@ -43,18 +43,22 @@ export default function ImageProcessProcessorFields({
       {!lockProcessor ? (
         <div>
           <span className="text-[8px] font-black text-gray-500 uppercase">处理器类型</span>
-          <div className="mt-1">
-            <CustomDropdown
-              options={IMAGE_PROCESS_PROCESSORS.map((p) => ({
-                value: p.id,
-                label: p.label,
-                title: p.desc,
-              }))}
-              value={processorId}
-              onChange={(v) => onProcessorIdChange(v as ImageProcessorId)}
-              triggerClassName={DROPDOWN_TRIGGER_COMPACT}
-              portalZIndex={portalZIndex}
-            />
+          <div className="flex flex-wrap gap-2 mt-1">
+            {IMAGE_PROCESS_PROCESSORS.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => onProcessorIdChange(p.id)}
+                className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border transition-colors ${
+                  processorId === p.id
+                    ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300'
+                    : 'bg-white/[0.05] ring-1 ring-white/[0.06] text-gray-500 hover:bg-white/[0.09] border-transparent'
+                }`}
+                title={p.desc}
+              >
+                {p.label}
+              </button>
+            ))}
           </div>
           {meta?.desc ? <p className="text-[8px] text-gray-600 mt-0.5">{meta.desc}</p> : null}
         </div>

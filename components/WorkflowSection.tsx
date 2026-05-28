@@ -38,8 +38,11 @@ import {
   getTencentCredsFromEnv,
 } from '../services/unifiedAiGateway';
 import { DEFAULT_MODEL_TEXT } from '../services/modelRegistry/constants';
-import { detectCutImageBoxes, FULL_IMAGE_BOX } from '../services/cutImageExecution';
-import { readCutImageParams } from '../services/capabilityProcessors/imageProcessProcessors';
+import { detectCutImageBoxes, FALLBACK_CUT_IMAGE_PRESET, FULL_IMAGE_BOX } from '../services/cutImageExecution';
+import {
+  isCutImageCapabilityPreset,
+  readCutImageParams,
+} from '../services/capabilityProcessors/imageProcessProcessors';
 import {
   coerceImageModelRegistryId,
   DEFAULT_IMAGE_MODEL_REGISTRY_ID,
@@ -152,7 +155,6 @@ import { WorkflowGridImage } from './ProgressivePreviewImage';
 import WorkflowPixelBusyOverlay from './WorkflowPixelBusyOverlay';
 import { workflowResultUsesVideoPreview, workflowSafeImgSrc } from '../services/workflowImageDisplay';
 import { previewSrcCacheFingerprint } from '../services/workflowImageThumb';
-import { imageSrcToDataUrlForCompanion } from '../services/workflowCompanionAssets';
 import { humanMessageForSamSegmentFailure, isSamInstallHelpCode } from '../services/companionSamSegmentMessages';
 import { humanMessageForRembgFailure, isRembgInstallHelpCode } from '../services/companionRembgMessages';
 import { runLightboxRembgFromImageSrc } from '../services/lightboxRembg';
@@ -1291,6 +1293,22 @@ const WorkflowSection: React.FC<{
     }
     snapWorkspacePaneToNode(2);
   }, [snapWorkspacePaneToNode]);
+  const jumpToCapabilitySet = useCallback(
+    (setId: string) => {
+      setCapabilityPresetViewMode('sets');
+      if (typeof window !== 'undefined') {
+        const emitJump = () => {
+          window.dispatchEvent(new CustomEvent('ac:capability-preset-view-mode', { detail: { mode: 'sets' } }));
+          window.dispatchEvent(new CustomEvent('ac:capability-jump-to-set', { detail: { setId } }));
+        };
+        emitJump();
+        window.requestAnimationFrame(emitJump);
+        window.setTimeout(emitJump, 220);
+      }
+      snapWorkspacePaneToNode(2);
+    },
+    [snapWorkspacePaneToNode]
+  );
   const cardRefs = useRef<Map<string, HTMLElement>>(new Map());
   const setSelectedRootAssetIds = useCallback<React.Dispatch<React.SetStateAction<Set<string>>>>(
     (value) => {
@@ -2335,6 +2353,13 @@ ${lineSvg}
           return { image: null };
         }
       }
+      case 'branch_cut_image': {
+        const m = `[${actionLabel}] 切割任务应由队列专用路径执行，请重试或刷新页面`;
+        onLog?.('warn', m);
+        setAssetError(task.assetId, m);
+        auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_BRANCH_CUT_NO_MODULE, 'warn', m, { actionType });
+        return { image: null };
+      }
       case 'branch_cut_image_no_module': {
         const m = `[${actionLabel}] 切割能力未就绪`;
         auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_BRANCH_CUT_NO_MODULE, 'warn', m, { actionType });
@@ -2476,7 +2501,10 @@ ${lineSvg}
         try {
           const taskLabel = getTaskLogLabel(task);
 
-          if (task.actionType === 'cut_image') {
+          const cutTaskPreset = getModule(task.actionType);
+          const isCutImageTask =
+            task.actionType === 'cut_image' || isCutImageCapabilityPreset(cutTaskPreset);
+          if (isCutImageTask) {
             let inputImage =
               task.inputImage || assetsRef.current.find((a) => a.id === task.assetId)?.original;
             if (!inputImage || typeof inputImage !== 'string') {
@@ -2485,41 +2513,29 @@ ${lineSvg}
               setAssetError(task.assetId, msg);
               setCompletedTaskIds((prev) => { const next = new Set(prev); next.add(task.id); return next; });
             } else {
-              let src = String(inputImage).trim();
-              if (src.startsWith('/api/') && typeof window !== 'undefined' && window.location?.origin) {
-                src = window.location.origin + src;
+              const assetForInput = assetsRef.current.find((a) => a.id === task.assetId) ?? null;
+              const inputTrimmed = String(inputImage).trim();
+              const resolvedImg = await resolveCapabilityInputImageForExecute({
+                inputImage: inputTrimmed,
+                asset: assetForInput,
+                sourceDisplayKey: task.inputSourceDisplayKey,
+                companionBaseUrl: String(getCompanionLocalBaseUrl() || '').trim(),
+                companionProjectId: String(workspaceProjectChrome?.activeProjectId || '').trim(),
+              });
+              if (resolvedImg.ok === false) {
+                const msg = `[${taskLabel}] ${resolvedImg.error}`;
+                onLog?.('warn', msg);
+                setAssetError(task.assetId, msg);
+                setCompletedTaskIds((prev) => {
+                  const next = new Set(prev);
+                  next.add(task.id);
+                  return next;
+                });
+                return;
               }
-              if (!src.startsWith('data:')) {
-                let normalized = await imageSrcToDataUrlForCompanion(src);
-                if (!normalized) {
-                  const altRaw = String(
-                    assetsRef.current.find((a) => a.id === task.assetId)?.original || ''
-                  ).trim();
-                  let alt = altRaw;
-                  if (alt.startsWith('/api/') && typeof window !== 'undefined' && window.location?.origin) {
-                    alt = window.location.origin + alt;
-                  }
-                  if (alt && alt !== src) normalized = await imageSrcToDataUrlForCompanion(alt);
-                }
-                if (!normalized) {
-                  const msg = `[${taskLabel}] 输入图无法转为可识别格式（blob/相对 API 地址需同源；外链需 CORS），已跳过此任务`;
-                  onLog?.('warn', msg);
-                  setAssetError(task.assetId, msg);
-                  setCompletedTaskIds((prev) => {
-                    const next = new Set(prev);
-                    next.add(task.id);
-                    return next;
-                  });
-                  return;
-                }
-                inputImage = normalized;
-              } else {
-                inputImage = src;
-              }
-              const cutPreset = getModule(task.actionType);
-              const cutParams = readCutImageParams(
-                cutPreset ?? { id: 'cut_image', label: '切割图片', category: 'image_process', instruction: '', processor: 'cut_image' }
-              );
+              inputImage = resolvedImg.dataUrl;
+              const cutPreset = cutTaskPreset ?? FALLBACK_CUT_IMAGE_PRESET;
+              const cutParams = readCutImageParams(cutPreset);
               onLog?.(
                 'info',
                 `${logBatch} ${taskLabel} ${
@@ -2530,11 +2546,15 @@ ${lineSvg}
                       : '自动检测分割中…'
                 }`
               );
-              const boxes = await detectCutImageBoxes(
-                inputImage,
-                cutPreset ?? { id: 'cut_image', label: '切割图片', category: 'image_process', instruction: '', processor: 'cut_image', params: cutParams },
-                { visionTextModel: capabilityTextModel, timeoutMs: WORKFLOW_CUT_DETECT_TIMEOUT_MS }
-              );
+              const { boxes, warn: cutDetectWarn } = await detectCutImageBoxes(inputImage, cutPreset, {
+                visionTextModel: capabilityTextModel,
+                timeoutMs: WORKFLOW_CUT_DETECT_TIMEOUT_MS,
+              });
+              if (cutDetectWarn) {
+                const full = `[${taskLabel}] ${cutDetectWarn}`;
+                onLog?.('warn', full);
+                setAssetError(task.assetId, full);
+              }
               const cutOverflowPx = cutParams.cutOverflowPx;
               const allIndexes = boxes.map((_, j) => j);
               let cropped = await cropBoxes(inputImage, boxes, allIndexes, cutOverflowPx);
@@ -2876,6 +2896,7 @@ ${lineSvg}
       getModule,
       setAssetError,
       scheduleCompanionPersistResult,
+      workspaceProjectChrome?.activeProjectId,
     ]
   );
 
@@ -8674,6 +8695,7 @@ ${lineSvg}
             handleDropToModuleAction={handleDropToModuleAction}
             handleDropToSetAction={handleDropToSetAction}
             jumpToCapabilityPreset={jumpToCapabilityPreset}
+            jumpToCapabilitySet={jumpToCapabilitySet}
             onDropPresetFromEditor={handleActivatePresetFromEditorDrop}
             onDropPresetAction={handlePresetActionDrop}
             topActionMode={activePaneNode === 2 ? 'capabilityPreset' : 'asset'}
