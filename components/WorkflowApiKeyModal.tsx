@@ -52,7 +52,7 @@ export const WorkflowApiKeyModal: React.FC<{
       >
         <div className="flex items-center justify-between mb-4">
           <h2 id="workflow-api-key-title" className="text-[11px] font-black uppercase tracking-wider text-blue-400">
-            API 密钥
+            补全 AI 接入
           </h2>
           <button
             type="button"

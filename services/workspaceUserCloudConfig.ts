@@ -1,10 +1,9 @@
-import type { CapabilitySet, CustomAppModule } from '../types';
+﻿import type { CapabilitySet, CustomAppModule } from '../types';
 import { r2ApiUrl } from './apiBase';
 import { requestJson } from './httpClient';
-import { normalizeEnabledAiProviders, type ConfigurableAiProvider } from './aiProviderCatalog';
 import { normalizeEnabledChannels } from './modelRegistry/channelCatalog';
+import { defaultEnabledChannelIds } from './modelRegistry/providerBindings';
 import type { ChannelId } from './modelRegistry/types';
-import type { AiProvider } from './settingsStore';
 import { sanitizeAvatarUrl } from './userUiPrefs';
 import { workspaceRootPrefix } from './workspaceCloudSync';
 
@@ -28,14 +27,10 @@ export type WorkspaceUserCloudConfig = {
   settings: {
     dialogSkipUnderstand: boolean;
     workspaceAutoSyncEnabled: boolean;
-    aiProvider: AiProvider;
-    enabledAiProviders: ConfigurableAiProvider[];
-    enabledChannels?: ChannelId[];
+    enabledChannels: ChannelId[];
     geminiApiKey: string;
     toapisApiKey: string;
     toapisBaseUrl: string;
-    antigravityApiKey: string;
-    antigravityBaseUrl: string;
     openaiApiKey: string;
     openaiBaseUrl: string;
     vectorengineApiKey: string;
@@ -47,6 +42,11 @@ export type WorkspaceUserCloudConfig = {
     avatarUrl: string;
   };
 };
+
+function resolveEnabledChannelsFromCloud(raw: unknown): ChannelId[] {
+  const parsed = normalizeEnabledChannels(raw);
+  return parsed.length > 0 ? parsed : defaultEnabledChannelIds();
+}
 
 function userCloudConfigKey(userId: string, username?: string | null): string {
   return `${workspaceRootPrefix(userId, username)}/user-config.json`;
@@ -247,23 +247,10 @@ export async function fetchWorkspaceUserCloudConfig(
       settings: {
         dialogSkipUnderstand: parsed.settings?.dialogSkipUnderstand === true,
         workspaceAutoSyncEnabled: parsed.settings?.workspaceAutoSyncEnabled !== false,
-        aiProvider: (() => {
-          const ap = String(parsed.settings?.aiProvider ?? '')
-            .trim()
-            .toLowerCase();
-          if (ap === 'trial' || ap === 'vertex' || ap === 'toapis' || ap === 'antigravity' || ap === 'openai' || ap === 'vectorengine') {
-            return ap as AiProvider;
-          }
-          if (ap === 'gemini') return 'gemini';
-          return 'gemini';
-        })(),
-        enabledAiProviders: normalizeEnabledAiProviders(parsed.settings?.enabledAiProviders),
-        enabledChannels: normalizeEnabledChannels(parsed.settings?.enabledChannels),
+        enabledChannels: resolveEnabledChannelsFromCloud(parsed.settings?.enabledChannels),
         geminiApiKey: String(parsed.settings?.geminiApiKey || ''),
         toapisApiKey: String(parsed.settings?.toapisApiKey || ''),
         toapisBaseUrl: String(parsed.settings?.toapisBaseUrl || ''),
-        antigravityApiKey: String(parsed.settings?.antigravityApiKey || ''),
-        antigravityBaseUrl: String(parsed.settings?.antigravityBaseUrl || ''),
         openaiApiKey: String(parsed.settings?.openaiApiKey || ''),
         openaiBaseUrl: String(parsed.settings?.openaiBaseUrl || ''),
         vectorengineApiKey: String(parsed.settings?.vectorengineApiKey || ''),
@@ -300,23 +287,10 @@ export async function pushWorkspaceUserCloudConfig(
     settings: {
       dialogSkipUnderstand: input.settings.dialogSkipUnderstand === true,
       workspaceAutoSyncEnabled: input.settings.workspaceAutoSyncEnabled !== false,
-      aiProvider: (() => {
-        const ap = String(input.settings.aiProvider ?? '')
-          .trim()
-          .toLowerCase();
-        if (ap === 'trial' || ap === 'vertex' || ap === 'toapis' || ap === 'antigravity' || ap === 'openai' || ap === 'vectorengine') {
-          return ap as AiProvider;
-        }
-        if (ap === 'gemini') return 'gemini';
-        return 'gemini';
-      })(),
-      enabledAiProviders: normalizeEnabledAiProviders(input.settings.enabledAiProviders),
-      enabledChannels: normalizeEnabledChannels(input.settings.enabledChannels),
+      enabledChannels: resolveEnabledChannelsFromCloud(input.settings.enabledChannels),
       geminiApiKey: String(input.settings.geminiApiKey || ''),
       toapisApiKey: String(input.settings.toapisApiKey || ''),
       toapisBaseUrl: String(input.settings.toapisBaseUrl || ''),
-      antigravityApiKey: String(input.settings.antigravityApiKey || ''),
-      antigravityBaseUrl: String(input.settings.antigravityBaseUrl || ''),
       openaiApiKey: String(input.settings.openaiApiKey || ''),
       openaiBaseUrl: String(input.settings.openaiBaseUrl || ''),
       vectorengineApiKey: String(input.settings.vectorengineApiKey || ''),

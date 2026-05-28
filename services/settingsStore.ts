@@ -1,10 +1,9 @@
 /**
  * 用户设置的 API 密钥存 localStorage，键名与读写逻辑集中在此；底层经 `clientPersist` 安全访问。
  *
- * **AI 渠道唯一真相源**：`getEnabledChannels()` + `pickBinding()` + 各 channel 凭证。
- * legacy `getAiProvider()` / `enabledAiProviders` 仅云同步写回；运行时以 `getEnabledChannels()` + `pickBinding()` 为准。
+ * **AI 唯一真相源**：`getEnabledChannels()` + `pickBinding()` + 各 channel 凭证。
  * 禁止在组件里自行 `new GoogleGenAI`、直连 ToAPIs/VectorEngine，以免与设置里选的渠道不一致。
- * 登录后云端 `user-config.json` 会合并进同一套 localStorage 键，与设置页、工作流密钥弹窗共用。
+ * 登录后云端 `user-config.json` 的 `enabledChannels` 会合并进同一套 localStorage 键。
  */
 
 import {
@@ -19,26 +18,24 @@ import {
   writeSessionNonEmptyTrimmedOrRemove,
 } from './clientPersist';
 import {
-  isConfigurableAiProvider,
-  migrateLegacyAiProviderToEnabled,
-  normalizeEnabledAiProviders,
-  type ConfigurableAiProvider,
-} from './aiProviderCatalog';
-import {
-  channelToLegacyProvider,
   isChannelId,
-  labelForChannel,
   normalizeEnabledChannels,
 } from './modelRegistry/channelCatalog';
+import {
+  AI_CONNECTION_CATALOG,
+  connectionStatus,
+  statusLabel,
+  type AiConnectionCatalogRow,
+} from './modelRegistry/connectionCatalog';
 import { defaultEnabledChannelIds } from './modelRegistry/providerBindings';
 import type { ChannelId } from './modelRegistry/types';
 import { normalizeOpenAiBaseUrl } from './openaiAdapter';
-import { normalizeToapisBaseUrl } from './toapisAdapter';
 
 const STORAGE_KEY_GEMINI = 'ac_gemini_api_key';
-const STORAGE_KEY_AI_PROVIDER = 'ac_ai_provider';
-const STORAGE_KEY_ENABLED_AI_PROVIDERS = 'ac_ai_enabled_providers';
 const STORAGE_KEY_ENABLED_CHANNELS = 'ac_enabled_channels';
+/** 已废弃，首次读写 channel 时清除 */
+const STORAGE_KEY_AI_PROVIDER_LEGACY = 'ac_ai_provider';
+const STORAGE_KEY_ENABLED_AI_PROVIDERS_LEGACY = 'ac_ai_enabled_providers';
 
 let bindingDegradedHint: string | null = null;
 
@@ -54,8 +51,6 @@ const STORAGE_KEY_TOAPIS_API_KEY = 'ac_toapis_api_key';
 const STORAGE_KEY_TOAPIS_BASE_URL = 'ac_toapis_base_url';
 const STORAGE_KEY_OPENAI_API_KEY = 'ac_openai_api_key';
 const STORAGE_KEY_OPENAI_BASE_URL = 'ac_openai_base_url';
-const STORAGE_KEY_ANTIGRAVITY_API_KEY = 'ac_antigravity_api_key';
-const STORAGE_KEY_ANTIGRAVITY_BASE_URL = 'ac_antigravity_base_url';
 const STORAGE_KEY_VECTORENGINE_API_KEY = 'ac_vectorengine_api_key';
 const STORAGE_KEY_VECTORENGINE_BASE_URL = 'ac_vectorengine_base_url';
 const STORAGE_KEY_TRIPO_API_KEY = 'ac_tripo_api_key';
@@ -63,12 +58,6 @@ const STORAGE_KEY_DIALOG_SKIP_UNDERSTAND = 'ac_dialog_skip_understand';
 const STORAGE_KEY_WORKSPACE_AUTO_SYNC = 'ac_workspace_auto_sync';
 const STORAGE_KEY_DEBUG_CLIENT_LOG_PERSIST = 'ac_debug_client_log_persist';
 
-export type AiProvider = 'trial' | 'gemini' | 'vertex' | 'toapis' | 'antigravity' | 'openai' | 'vectorengine';
-
-export type { ConfigurableAiProvider };
-
-/** 未选择或本地无记录时的默认供应商（legacy 单选字段；新 UI 以 `getEnabledAiProviders` 为准） */
-export const DEFAULT_AI_PROVIDER: AiProvider = 'gemini';
 const SESSION_KEY_TENCENT_SECRET_ID = 'ac_tencent_secret_id';
 const SESSION_KEY_TENCENT_SECRET_KEY = 'ac_tencent_secret_key';
 
@@ -81,8 +70,13 @@ export function setUserApiKey(value: string | null): void {
   writeLocalNonEmptyTrimmedOrRemove(STORAGE_KEY_GEMINI, value);
 }
 
-function readAiProviderRaw(): string {
-  return (readLocalString(STORAGE_KEY_AI_PROVIDER) ?? '').trim().toLowerCase();
+let legacyAiStoragePurged = false;
+
+function purgeLegacyAiProviderStorageOnce(): void {
+  if (legacyAiStoragePurged) return;
+  legacyAiStoragePurged = true;
+  removeLocalKey(STORAGE_KEY_AI_PROVIDER_LEGACY);
+  removeLocalKey(STORAGE_KEY_ENABLED_AI_PROVIDERS_LEGACY);
 }
 
 function bulkImageProxyConfigured(): boolean {
@@ -106,6 +100,10 @@ function bulkImageVertexProxyConfigured(): boolean {
   }
 }
 
+export function isVertexSiteProxyConfigured(): boolean {
+  return bulkImageVertexProxyConfigured();
+}
+
 function dispatchAiSettingsChanged(): void {
   try {
     if (typeof window !== 'undefined') {
@@ -116,89 +114,8 @@ function dispatchAiSettingsChanged(): void {
   }
 }
 
-function syncLegacyPrimaryProviderFromEnabled(enabled: ConfigurableAiProvider[]): void {
-  const primary = enabled[0] ?? DEFAULT_AI_PROVIDER;
-  writeLocalString(STORAGE_KEY_AI_PROVIDER, primary);
-}
-
-/** @deprecated 设置 UI 已改为 channel；仅 legacy 云同步 / 顶栏兼容保留 */
-export function getEnabledAiProviders(): ConfigurableAiProvider[] {
-  const raw = readLocalString(STORAGE_KEY_ENABLED_AI_PROVIDERS);
-  if (raw != null && raw !== '') {
-    try {
-      return normalizeEnabledAiProviders(JSON.parse(raw));
-    } catch {
-      /* fall through to legacy migration */
-    }
-  }
-  return migrateLegacyAiProviderToEnabled(readLegacyAiProviderOnly());
-}
-
-function readLegacyAiProviderOnly(): AiProvider {
-  const v = readAiProviderRaw();
-  if (v === 'trial') return 'trial';
-  if (v === 'vertex') return 'vertex';
-  if (v === 'toapis') return 'toapis';
-  if (v === 'antigravity') return 'antigravity';
-  if (v === 'openai') return 'openai';
-  if (v === 'vectorengine') return 'vectorengine';
-  if (v === 'gemini') return 'gemini';
-  return DEFAULT_AI_PROVIDER;
-}
-
-export function setEnabledAiProviders(providers: ConfigurableAiProvider[]): void {
-  const next = normalizeEnabledAiProviders(providers);
-  writeLocalString(STORAGE_KEY_ENABLED_AI_PROVIDERS, JSON.stringify(next));
-  writeLocalString(STORAGE_KEY_ENABLED_CHANNELS, JSON.stringify(providersToChannels(next)));
-  syncLegacyPrimaryProviderFromEnabled(next);
-  dispatchAiSettingsChanged();
-}
-
-function providersToChannels(providers: ConfigurableAiProvider[]): ChannelId[] {
-  const out: ChannelId[] = [];
-  for (const p of providers) {
-    if (p === 'vertex' && !out.includes('vertex-proxy')) out.push('vertex-proxy');
-    if (p === 'gemini' && !out.includes('gemini-aistudio')) out.push('gemini-aistudio');
-    if (p === 'toapis') {
-      if (!out.includes('toapis-gemini')) out.push('toapis-gemini');
-      if (!out.includes('toapis-openai')) out.push('toapis-openai');
-    }
-    if (p === 'openai' && !out.includes('openai-official')) out.push('openai-official');
-    if (p === 'vectorengine' && !out.includes('vectorengine')) out.push('vectorengine');
-  }
-  return out;
-}
-
-function channelsToProviders(channels: ChannelId[]): ConfigurableAiProvider[] {
-  const out: ConfigurableAiProvider[] = [];
-  for (const ch of channels) {
-    if (ch === 'vertex-proxy' && !out.includes('vertex')) out.push('vertex');
-    if (ch === 'gemini-aistudio' && !out.includes('gemini')) out.push('gemini');
-    if ((ch === 'toapis-gemini' || ch === 'toapis-openai') && !out.includes('toapis')) out.push('toapis');
-    if (ch === 'openai-official' && !out.includes('openai')) out.push('openai');
-    if (ch === 'vectorengine' && !out.includes('vectorengine')) out.push('vectorengine');
-  }
-  return out;
-}
-
-/** 旧版单一 `aiProvider` / 云配置迁移为 channel 列表 */
-export function migrateLegacyAiProviderToChannels(legacy: AiProvider): ChannelId[] {
-  if (legacy === 'trial' || legacy === 'vertex') return ['vertex-proxy'];
-  if (legacy === 'antigravity') return [];
-  const enabled = migrateLegacyAiProviderToEnabled(legacy);
-  return providersToChannels(enabled);
-}
-
-/** 云同步写回 legacy `aiProvider`：取第一条 ready channel 映射 */
-export function getLegacyAiProviderForCloudSync(): AiProvider {
-  const enabled = getEnabledChannels();
-  const ready = enabled.find((ch) => isChannelReady(ch));
-  if (ready) return channelToLegacyProvider(ready);
-  if (enabled[0]) return channelToLegacyProvider(enabled[0]);
-  return 'gemini';
-}
-
 export function getEnabledChannels(): ChannelId[] {
+  purgeLegacyAiProviderStorageOnce();
   const raw = readLocalString(STORAGE_KEY_ENABLED_CHANNELS);
   if (raw != null && raw !== '') {
     try {
@@ -208,18 +125,20 @@ export function getEnabledChannels(): ChannelId[] {
       /* fall through */
     }
   }
-  const fromProviders = providersToChannels(getEnabledAiProviders());
-  if (fromProviders.length > 0) return fromProviders;
   return defaultEnabledChannelIds();
 }
 
 export function setEnabledChannels(channels: ChannelId[]): void {
+  purgeLegacyAiProviderStorageOnce();
   const next = normalizeEnabledChannels(channels);
   writeLocalString(STORAGE_KEY_ENABLED_CHANNELS, JSON.stringify(next));
-  const providers = channelsToProviders(next);
-  writeLocalString(STORAGE_KEY_ENABLED_AI_PROVIDERS, JSON.stringify(providers));
-  syncLegacyPrimaryProviderFromEnabled(providers);
   dispatchAiSettingsChanged();
+}
+
+/** 云配置拉取：空或非法时回退默认 channel */
+export function setEnabledChannelsFromCloud(raw: unknown): void {
+  const parsed = normalizeEnabledChannels(raw);
+  setEnabledChannels(parsed.length > 0 ? parsed : defaultEnabledChannelIds());
 }
 
 export function isChannelEnabled(channel: ChannelId): boolean {
@@ -247,83 +166,16 @@ export function setChannelEnabled(channel: ChannelId, enabled: boolean): void {
   setEnabledChannels(next);
 }
 
-export function isAiProviderEnabled(provider: ConfigurableAiProvider): boolean {
-  return getEnabledAiProviders().includes(provider);
-}
-
-export function setAiProviderEnabled(provider: ConfigurableAiProvider, enabled: boolean): void {
-  const current = getEnabledAiProviders();
-  const next = enabled
-    ? current.includes(provider)
-      ? current
-      : [...current, provider]
-    : current.filter((p) => p !== provider);
-  setEnabledAiProviders(next);
-}
-
-/** 单个供应商是否具备调用条件（与是否启用无关，仅看凭证 / 代理） */
-export function isAiProviderReady(provider: AiProvider): boolean {
-  if (provider === 'trial') return bulkImageProxyConfigured();
-  if (provider === 'vertex') return bulkImageVertexProxyConfigured();
-  if (provider === 'toapis') return Boolean(getToapisApiKey()?.trim());
-  if (provider === 'antigravity') return Boolean(getAntigravityApiKey()?.trim());
-  if (provider === 'openai') return Boolean(getOpenaiApiKey()?.trim());
-  if (provider === 'vectorengine') return Boolean(getVectorengineApiKey()?.trim());
-  if (bulkImageProxyConfigured()) return true;
-  return Boolean(getUserApiKey()?.trim());
-}
-
-/** @deprecated 请用 `getEnabledChannels()` + `pickBinding()`；云同步写回仍调用 `getLegacyAiProviderForCloudSync()` */
-export function getAiProvider(): AiProvider {
-  const enabled = getEnabledChannels();
-  const ready = enabled.find((ch) => isChannelReady(ch));
-  if (ready) return channelToLegacyProvider(ready);
-  if (enabled[0]) return channelToLegacyProvider(enabled[0]);
-  const legacy = readLegacyAiProviderOnly();
-  if (legacy === 'trial' || legacy === 'vertex') return 'vertex';
-  if (legacy === 'toapis') return 'toapis';
-  if (legacy === 'openai') return 'openai';
-  if (legacy === 'vectorengine') return 'vectorengine';
-  if (legacy === 'gemini') return 'gemini';
-  return DEFAULT_AI_PROVIDER;
-}
-
-export function setAiProvider(value: AiProvider): void {
-  if (value === 'trial' || value === 'vertex') {
-    setEnabledChannels(['vertex-proxy']);
-    return;
-  }
-  if (isConfigurableAiProvider(value)) {
-    setEnabledAiProviders([value]);
-    return;
-  }
-  if (value === 'antigravity') {
-    writeLocalString(STORAGE_KEY_AI_PROVIDER, value);
-    writeLocalString(STORAGE_KEY_ENABLED_AI_PROVIDERS, JSON.stringify([]));
-    writeLocalString(STORAGE_KEY_ENABLED_CHANNELS, JSON.stringify([]));
-    dispatchAiSettingsChanged();
-    return;
-  }
-  writeLocalString(STORAGE_KEY_AI_PROVIDER, value);
-  writeLocalString(STORAGE_KEY_ENABLED_AI_PROVIDERS, JSON.stringify([]));
-  writeLocalString(STORAGE_KEY_ENABLED_CHANNELS, JSON.stringify([]));
-  dispatchAiSettingsChanged();
-}
-
 /** 另一浏览器标签页修改了下列键时，`storage` 事件会触发；用于设置页与顶栏等保持同步 */
 export function isAiSettingsStorageKey(key: string | null): boolean {
   if (key == null) return true;
   return (
-    key === STORAGE_KEY_AI_PROVIDER ||
-    key === STORAGE_KEY_ENABLED_AI_PROVIDERS ||
     key === STORAGE_KEY_ENABLED_CHANNELS ||
     key === STORAGE_KEY_GEMINI ||
     key === STORAGE_KEY_TOAPIS_API_KEY ||
     key === STORAGE_KEY_TOAPIS_BASE_URL ||
     key === STORAGE_KEY_OPENAI_API_KEY ||
     key === STORAGE_KEY_OPENAI_BASE_URL ||
-    key === STORAGE_KEY_ANTIGRAVITY_API_KEY ||
-    key === STORAGE_KEY_ANTIGRAVITY_BASE_URL ||
     key === STORAGE_KEY_VECTORENGINE_API_KEY ||
     key === STORAGE_KEY_VECTORENGINE_BASE_URL ||
     key === STORAGE_KEY_TRIPO_API_KEY
@@ -339,19 +191,62 @@ export function subscribeAiSettingsCrossTab(onChange: () => void): () => void {
   return () => window.removeEventListener('storage', handler);
 }
 
-/** 工作区顶栏等：当前启用的 channel 摘要 */
+export type AiConnectionSummary = {
+  total: number;
+  ready: number;
+  enabled: number;
+  anyReady: boolean;
+  primaryLabel: string;
+};
+
+function summarizeConnections(connections: readonly AiConnectionCatalogRow[]): AiConnectionSummary {
+  const enabled = getEnabledChannels();
+  let ready = 0;
+  let enabledCount = 0;
+  const readyTitles: string[] = [];
+  for (const row of connections) {
+    const st = connectionStatus(row, enabled, isChannelReady, isVertexSiteProxyConfigured);
+    const active = row.channels.some((ch) => enabled.includes(ch));
+    if (active) enabledCount += 1;
+    if (st === 'ready') {
+      ready += 1;
+      readyTitles.push(row.title.split(' · ')[0]!);
+    }
+  }
+  const total = connections.length;
+  let primaryLabel = '未配置 AI 接入';
+  if (ready > 0) {
+    const names = readyTitles.slice(0, 2).join('、');
+    primaryLabel = readyTitles.length > 2 ? `已接入 · ${names} 等` : `已接入 · ${names}`;
+  } else if (enabledCount > 0) {
+    primaryLabel = 'AI 待配置';
+  }
+  return { total, ready, enabled: enabledCount, anyReady: ready > 0, primaryLabel };
+}
+
+/** 设置页总览：接入方就绪情况 */
+export function getAiConnectionSummary(): AiConnectionSummary {
+  return summarizeConnections(AI_CONNECTION_CATALOG);
+}
+
+/** 工作区顶栏等：接入方摘要（保留旧导出名） */
 export function getAiProviderToolbarLabel(): string {
   const degraded = getBindingDegradedHint();
-  const channels = getEnabledChannels();
-  if (channels.length === 0) {
-    return degraded ? `未启用通道 · ${degraded}` : '未启用通道';
+  const { primaryLabel, ready, total, enabled } = summarizeConnections(AI_CONNECTION_CATALOG);
+  if (enabled === 0) {
+    return degraded ? `未配置 AI 接入 · ${degraded}` : '未配置 AI 接入';
   }
-  const readyCount = channels.filter((ch) => isChannelReady(ch)).length;
-  const primary = channels.find((ch) => isChannelReady(ch)) ?? channels[0];
-  const base = labelForChannel(primary);
-  const summary = channels.length === 1 ? base : `${base} 等 ${readyCount}/${channels.length}`;
-  return degraded ? `${summary} · ${degraded}` : summary;
+  if (ready === 0) {
+    return degraded ? `AI 待配置 · ${degraded}` : 'AI 待配置';
+  }
+  if (ready < total) {
+    const base = `${primaryLabel}（${ready}/${total}）`;
+    return degraded ? `${base} · ${degraded}` : base;
+  }
+  return degraded ? `${primaryLabel} · ${degraded}` : primaryLabel;
 }
+
+export { statusLabel as aiConnectionStatusLabel };
 
 export function getToapisApiKey(): string | null {
   return readLocalNonEmptyTrimmed(STORAGE_KEY_TOAPIS_API_KEY);
@@ -387,25 +282,6 @@ export function getOpenaiBaseUrl(): string {
 
 export function setOpenaiBaseUrl(value: string | null): void {
   writeLocalNonEmptyTrimmedOrRemove(STORAGE_KEY_OPENAI_BASE_URL, value);
-}
-
-export function getAntigravityApiKey(): string | null {
-  return readLocalNonEmptyTrimmed(STORAGE_KEY_ANTIGRAVITY_API_KEY);
-}
-
-export function setAntigravityApiKey(value: string | null): void {
-  writeLocalNonEmptyTrimmedOrRemove(STORAGE_KEY_ANTIGRAVITY_API_KEY, value);
-}
-
-/** Antigravity-Manager 反代 OpenAI 兼容根路径，默认本机 8045，如 http://127.0.0.1:8045/v1 */
-export function getAntigravityBaseUrl(): string {
-  const t = readLocalNonEmptyTrimmed(STORAGE_KEY_ANTIGRAVITY_BASE_URL) ?? '';
-  if (!t.trim()) return 'http://127.0.0.1:8045/v1';
-  return normalizeToapisBaseUrl(t);
-}
-
-export function setAntigravityBaseUrl(value: string | null): void {
-  writeLocalNonEmptyTrimmedOrRemove(STORAGE_KEY_ANTIGRAVITY_BASE_URL, value);
 }
 
 export function getVectorengineApiKey(): string | null {

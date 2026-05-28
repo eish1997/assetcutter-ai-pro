@@ -12,6 +12,15 @@ export type ChannelId =
 
 export type ModelResolveRole = "text" | "image";
 
+/** 上游 API 适配器标识（仅 resolve 层，非用户设置） */
+export type UpstreamProviderId =
+  | "gemini"
+  | "vertex"
+  | "toapis"
+  | "openai"
+  | "vectorengine"
+  | "antigravity";
+
 export type ProviderBinding = {
   bindingId: string;
   registryId: string;

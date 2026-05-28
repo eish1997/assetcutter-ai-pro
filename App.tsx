@@ -89,10 +89,7 @@ import { persistWorkflow3dSlots } from './services/persistWorkflow3dSlots';
 import { preflightGenerate3dEnvironment } from './services/generate3d/preflightGenerate3d';
 import { patchWorkflowAssetsWith3dResultAndHydrate } from './services/workflow3dCompanionHydrate';
 import {
-  getLegacyAiProviderForCloudSync,
   getAiProviderToolbarLabel,
-  getAntigravityApiKey,
-  getAntigravityBaseUrl,
   getOpenaiApiKey,
   getOpenaiBaseUrl,
   getDialogSkipUnderstand,
@@ -102,15 +99,10 @@ import {
   getUserApiKey,
   getVectorengineApiKey,
   getVectorengineBaseUrl,
-  getEnabledAiProviders,
   getEnabledChannels,
   getWorkspaceAutoSyncEnabled,
   isAiInvocationReady,
-  migrateLegacyAiProviderToChannels,
-  setEnabledAiProviders,
-  setEnabledChannels,
-  setAntigravityApiKey,
-  setAntigravityBaseUrl,
+  setEnabledChannelsFromCloud,
   setOpenaiApiKey,
   setOpenaiBaseUrl,
   setDialogSkipUnderstand,
@@ -1094,18 +1086,10 @@ const MainApp: React.FC = () => {
           setDialogSkipUnderstandState(cfg.settings.dialogSkipUnderstand);
           setWorkspaceAutoSyncEnabled(cfg.settings.workspaceAutoSyncEnabled);
           setWorkspaceAutoSyncEnabledState(cfg.settings.workspaceAutoSyncEnabled);
-          if (cfg.settings.enabledChannels && cfg.settings.enabledChannels.length > 0) {
-            setEnabledChannels(cfg.settings.enabledChannels);
-          } else if (cfg.settings.enabledAiProviders && cfg.settings.enabledAiProviders.length > 0) {
-            setEnabledAiProviders(cfg.settings.enabledAiProviders);
-          } else {
-            setEnabledChannels(migrateLegacyAiProviderToChannels(cfg.settings.aiProvider));
-          }
+          setEnabledChannelsFromCloud(cfg.settings.enabledChannels);
           setUserApiKey(cfg.settings.geminiApiKey || null);
           setToapisApiKey(cfg.settings.toapisApiKey || null);
           setToapisBaseUrl(cfg.settings.toapisBaseUrl || null);
-          setAntigravityApiKey(cfg.settings.antigravityApiKey || null);
-          setAntigravityBaseUrl(cfg.settings.antigravityBaseUrl || null);
           setOpenaiApiKey(cfg.settings.openaiApiKey || null);
           setOpenaiBaseUrl(cfg.settings.openaiBaseUrl || null);
           setVectorengineApiKey(cfg.settings.vectorengineApiKey || null);
@@ -1160,14 +1144,10 @@ const MainApp: React.FC = () => {
         settings: {
           dialogSkipUnderstand: getDialogSkipUnderstand(),
           workspaceAutoSyncEnabled,
-          aiProvider: getLegacyAiProviderForCloudSync(),
-          enabledAiProviders: getEnabledAiProviders(),
           enabledChannels: getEnabledChannels(),
           geminiApiKey: getUserApiKey() || '',
           toapisApiKey: getToapisApiKey() || '',
           toapisBaseUrl: getToapisBaseUrl() || '',
-          antigravityApiKey: getAntigravityApiKey() || '',
-          antigravityBaseUrl: getAntigravityBaseUrl() || '',
           openaiApiKey: getOpenaiApiKey() || '',
           openaiBaseUrl: getOpenaiBaseUrl() || '',
           vectorengineApiKey: getVectorengineApiKey() || '',

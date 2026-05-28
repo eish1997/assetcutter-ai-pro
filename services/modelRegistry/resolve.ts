@@ -1,4 +1,4 @@
-import type { AiProvider } from "../settingsStore";
+import type { UpstreamProviderId } from "./types";
 import {
   coerceImageModelRegistryId,
   imageModelProviderRoute,
@@ -14,7 +14,7 @@ import { resolveUpstreamModelIdForProvider } from "./upstreamResolve";
 export type { ModelResolveRole } from "./types";
 export { resolveUpstreamModelIdForProvider } from "./upstreamResolve";
 
-function aiProviderForImageModelRoute(route: ImageModelProviderRoute): AiProvider {
+function aiProviderForImageModelRoute(route: ImageModelProviderRoute): UpstreamProviderId {
   return route === "openai" ? "openai" : "gemini";
 }
 

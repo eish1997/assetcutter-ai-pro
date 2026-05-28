@@ -1,10 +1,10 @@
-import type { AiProvider } from "../settingsStore";
+import type { UpstreamProviderId } from "./types";
 import { imageModelProviderRoute } from "./imageModels";
 import { textModelFamily } from "./textModels";
 import type { ChannelId, ModelFamily, ModelResolveRole, ProviderBinding } from "./types";
 
-/** channel → resolve 层 AiProvider（用于上游 id 映射） */
-export function channelToResolveProvider(channel: ChannelId, family: ModelFamily): AiProvider {
+/** channel → resolve 层上游适配器 id */
+export function channelToResolveProvider(channel: ChannelId, family: ModelFamily): UpstreamProviderId {
   switch (channel) {
     case "vertex-proxy":
       return "vertex";
@@ -35,7 +35,7 @@ export function resolveUpstreamForBinding(
   resolveUpstreamModelIdForProvider: (
     registryId: string,
     role: ModelResolveRole,
-    provider: AiProvider
+    provider: UpstreamProviderId
   ) => string
 ): string {
   if (binding.upstreamOverride?.trim()) return binding.upstreamOverride.trim();

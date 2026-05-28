@@ -1,4 +1,3 @@
-import type { ConfigurableAiProvider } from "../aiProviderCatalog";
 import type { ChannelId, ModelFamily } from "./types";
 
 export type ChannelCatalogRow = {
@@ -17,7 +16,7 @@ export type ChannelCatalogRow = {
 export const CHANNEL_CATALOG: readonly ChannelCatalogRow[] = [
   {
     channel: "vertex-proxy",
-    label: "Vertex AI（站点代理 · 推荐）",
+    label: "Vertex AI（站点代理）",
     family: "gemini",
     needsApiKey: false,
     hint: "由 gemini-proxy 转发；需 VITE_BULK_IMAGE_API_VERTEX 或 VITE_BULK_IMAGE_API。",
@@ -108,19 +107,3 @@ export function channelsForFamilyPanel(family: ModelFamily): ChannelCatalogRow[]
   return CHANNEL_CATALOG.filter((r) => r.family === family && !isToapisPathChannel(r.channel));
 }
 
-/** 云同步 legacy `aiProvider` 字段：由当前启用 channel 推导 */
-export function channelToLegacyProvider(channel: ChannelId): ConfigurableAiProvider {
-  switch (channel) {
-    case "vertex-proxy":
-      return "vertex";
-    case "gemini-aistudio":
-      return "gemini";
-    case "toapis-gemini":
-    case "toapis-openai":
-      return "toapis";
-    case "vectorengine":
-      return "vectorengine";
-    case "openai-official":
-      return "openai";
-  }
-}

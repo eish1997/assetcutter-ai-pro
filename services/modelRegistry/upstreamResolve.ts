@@ -1,4 +1,4 @@
-import type { AiProvider } from "../settingsStore";
+import type { UpstreamProviderId } from "./types";
 import type { ModelResolveRole } from "./types";
 
 /**
@@ -8,7 +8,7 @@ import type { ModelResolveRole } from "./types";
 export function resolveUpstreamModelIdForProvider(
   registryId: string,
   role: ModelResolveRole,
-  provider: AiProvider
+  provider: UpstreamProviderId
 ): string {
   const m = (registryId || "").trim();
   if (!m) return registryId;

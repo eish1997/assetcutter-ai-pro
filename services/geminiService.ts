@@ -7,8 +7,6 @@ import { createOpenAiGeminiClient } from "./openaiAdapter";
 import { createToapisGeminiClient } from "./toapisAdapter";
 import { createVectorengineGeminiClient } from "./vectorengineAdapter";
 import {
-  getAntigravityApiKey,
-  getAntigravityBaseUrl,
   getOpenaiApiKey,
   getOpenaiBaseUrl,
   getToapisApiKey,

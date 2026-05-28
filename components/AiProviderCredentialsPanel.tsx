@@ -1,13 +1,21 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   CHANNEL_CATALOG,
-  channelsForFamilyPanel,
-  isToapisPathChannel,
   TOAPIS_PATH_CHANNELS,
   type ChannelCatalogRow,
 } from '../services/modelRegistry/channelCatalog';
-import type { ChannelId, ModelFamily } from '../services/modelRegistry/types';
 import {
+  AI_CONNECTION_CATALOG,
+  connectionEnabledChannels,
+  connectionStatus,
+  TOAPIS_PATH_LABELS,
+  type AiConnectionCatalogRow,
+  type AiConnectionStatus,
+} from '../services/modelRegistry/connectionCatalog';
+import type { ChannelId } from '../services/modelRegistry/types';
+import {
+  aiConnectionStatusLabel,
+  getAiConnectionSummary,
   getEnabledChannels,
   getOpenaiApiKey,
   getOpenaiBaseUrl,
@@ -17,6 +25,7 @@ import {
   getVectorengineApiKey,
   getVectorengineBaseUrl,
   isChannelReady,
+  isVertexSiteProxyConfigured,
   setChannelEnabled,
   setOpenaiApiKey,
   setOpenaiBaseUrl,
@@ -31,20 +40,11 @@ import {
 const INPUT_CLS =
   'w-full min-w-0 px-3 py-2 rounded-lg bg-[#16161a] border border-[#2e2e32] text-[11px] text-white placeholder-gray-500 focus:border-[#3b82f6] focus:outline-none';
 
-type ChannelDraft = {
-  apiKey: string;
-  baseUrl: string;
-};
+type ChannelDraft = { apiKey: string; baseUrl: string };
 
-const FAMILY_LABELS: Record<ModelFamily, string> = {
-  gemini: 'Gemini 系通道',
-  openai: 'OpenAI 系通道',
-};
-
-const TOAPIS_PATH_LABELS = {
-  'toapis-gemini': 'Gemini 路径',
-  'toapis-openai': 'OpenAI 路径',
-} as const satisfies Record<(typeof TOAPIS_PATH_CHANNELS)[number], string>;
+function channelRow(channel: ChannelId): ChannelCatalogRow | undefined {
+  return CHANNEL_CATALOG.find((r) => r.channel === channel);
+}
 
 function readToapisDraft(): ChannelDraft {
   return { apiKey: getToapisApiKey() ?? '', baseUrl: getToapisBaseUrl() };
@@ -89,55 +89,74 @@ function saveChannelDraft(channel: ChannelId, draft: ChannelDraft): void {
   }
 }
 
-function channelStatusLabel(channel: ChannelId, enabled: boolean): { text: string; cls: string } {
-  if (!enabled) return { text: '未启用', cls: 'text-gray-500 ring-white/[0.08] bg-white/[0.03]' };
-  if (isChannelReady(channel)) return { text: '可用', cls: 'text-emerald-300 ring-emerald-500/30 bg-emerald-950/30' };
-  return { text: '待配置', cls: 'text-amber-300 ring-amber-500/30 bg-amber-950/25' };
+function maskKey(value: string): string {
+  const t = value.trim();
+  if (!t) return '';
+  if (t.length <= 8) return '••••••••';
+  return `${t.slice(0, 4)}…${t.slice(-4)}`;
 }
 
-type ChannelRowProps = {
-  row: ChannelCatalogRow;
-  enabled: boolean;
-  draft: ChannelDraft;
-  compact: boolean;
-  onToggle: (next: boolean) => void;
-  onDraftChange: (patch: Partial<ChannelDraft>) => void;
-  onSave: () => void;
-};
+function connectionHasCredentials(connection: AiConnectionCatalogRow): boolean {
+  return connection.credentialKind !== 'site' && connection.credentialKind !== 'multi-path'
+    ? connection.channels.some((ch) => {
+        const row = channelRow(ch);
+        return row?.needsApiKey || row?.needsBaseUrl;
+      })
+    : connection.credentialKind === 'multi-path';
+}
 
-function ChannelRow({
-  row,
-  enabled,
-  draft,
-  compact,
-  onToggle,
-  onDraftChange,
-  onSave,
-}: ChannelRowProps) {
-  const status = channelStatusLabel(row.channel, enabled);
+function OverviewBar({ compact }: { compact: boolean }) {
+  const summary = getAiConnectionSummary();
+  const dotCls = summary.anyReady
+    ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.45)]'
+    : summary.enabled > 0
+      ? 'bg-amber-400'
+      : 'bg-gray-500';
+
   return (
     <div
-      className={`rounded-xl border border-[#2a2a30] bg-[#16161a] ${compact ? 'p-2.5' : 'p-3'} space-y-2 ${
-        row.deprecated ? 'opacity-60' : ''
+      className={`rounded-xl border border-[#2a2a30] bg-gradient-to-br from-[#18181c] to-[#121214] ${
+        compact ? 'p-2.5' : 'p-3.5'
       }`}
     >
-      <div className="flex flex-wrap items-center gap-2">
-        <label className="inline-flex items-center gap-2 min-w-0 flex-1 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={enabled}
-            onChange={(e) => onToggle(e.target.checked)}
-            className="h-3.5 w-3.5 shrink-0 rounded border-[#3a3a40] bg-[#121214] text-blue-500 focus:ring-blue-500/40"
-          />
-          <span className="text-[10px] font-semibold text-gray-100 leading-snug">{row.label}</span>
-        </label>
-        <span className={`shrink-0 rounded-md px-2 py-0.5 text-[9px] font-bold ring-1 ${status.cls}`}>
-          {status.text}
-        </span>
+      <div className="flex items-start gap-2.5 min-w-0">
+        <span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${dotCls}`} aria-hidden />
+        <div className="min-w-0 space-y-1">
+          <p className="text-[11px] font-semibold text-gray-100">
+            {summary.anyReady
+              ? `${summary.ready}/${summary.total} 个接入已就绪`
+              : summary.enabled > 0
+                ? '已启用接入，尚待补全凭证'
+                : '尚未启用 AI 接入'}
+          </p>
+          <p className="text-[9px] text-gray-500 leading-relaxed max-w-md">
+            工作流里选的是<strong className="font-semibold text-gray-400">模型</strong>
+            ；此处配置<strong className="font-semibold text-gray-400">接入方线路</strong>。中转站模型库通常比站内菜单更全，仅
+            <strong className="font-semibold text-gray-400">已登记模型</strong>会出现在菜单；平台按优先级自动切换可用线路，文本与生图可分别选线。
+          </p>
+        </div>
       </div>
+    </div>
+  );
+}
 
-      {row.hint ? <p className="text-[9px] text-gray-500 leading-relaxed pl-5">{row.hint}</p> : null}
-
+function CredentialFields({
+  channel,
+  draft,
+  disabled,
+  onDraftChange,
+  onSave,
+}: {
+  channel: ChannelId;
+  draft: ChannelDraft;
+  disabled: boolean;
+  onDraftChange: (patch: Partial<ChannelDraft>) => void;
+  onSave: () => void;
+}) {
+  const row = channelRow(channel);
+  if (!row) return null;
+  return (
+    <div className={`space-y-2 ${disabled ? 'opacity-45 pointer-events-none' : ''}`}>
       {row.needsBaseUrl ? (
         <input
           type="url"
@@ -146,13 +165,11 @@ function ChannelRow({
           onBlur={onSave}
           placeholder={row.baseUrlPlaceholder}
           autoComplete="off"
-          disabled={!enabled}
-          className={`${INPUT_CLS} ${!enabled ? 'opacity-45' : ''}`}
+          className={INPUT_CLS}
         />
       ) : null}
-
       {row.needsApiKey ? (
-        <div className="flex flex-col sm:flex-row gap-2 pl-0 sm:pl-5">
+        <div className="flex flex-col sm:flex-row gap-2">
           <input
             type="password"
             value={draft.apiKey}
@@ -160,14 +177,12 @@ function ChannelRow({
             onBlur={onSave}
             placeholder={row.keyPlaceholder}
             autoComplete="off"
-            disabled={!enabled}
-            className={`${INPUT_CLS} flex-1 ${!enabled ? 'opacity-45' : ''}`}
+            className={`${INPUT_CLS} flex-1`}
           />
           <button
             type="button"
-            disabled={!enabled}
             onClick={onSave}
-            className="shrink-0 px-3 py-2 rounded-lg bg-white/[0.08] hover:bg-white/[0.12] text-[10px] font-bold text-gray-200 ring-1 ring-white/[0.08] disabled:opacity-40 transition-colors"
+            className="shrink-0 px-3 py-2 rounded-lg bg-white/[0.08] hover:bg-white/[0.12] text-[10px] font-bold text-gray-200 ring-1 ring-white/[0.08] transition-colors"
           >
             保存
           </button>
@@ -177,78 +192,149 @@ function ChannelRow({
   );
 }
 
-function ToApisPathGroup({
+function ConnectionCard({
+  connection,
   enabledChannels,
-  draft,
+  drafts,
+  toapisDraft,
   compact,
-  onTogglePath,
-  onDraftChange,
-  onSave,
+  expanded,
+  onToggleExpand,
+  onToggleChannel,
+  onUpdateDraft,
+  onSaveChannel,
+  onSaveToapis,
+  onToapisDraftChange,
 }: {
+  connection: AiConnectionCatalogRow;
   enabledChannels: ChannelId[];
-  draft: ChannelDraft;
+  drafts: Record<ChannelId, ChannelDraft>;
+  toapisDraft: ChannelDraft;
   compact: boolean;
-  onTogglePath: (channel: ChannelId, next: boolean) => void;
-  onDraftChange: (patch: Partial<ChannelDraft>) => void;
-  onSave: () => void;
+  expanded: boolean;
+  onToggleExpand: () => void;
+  onToggleChannel: (channel: ChannelId, next: boolean) => void;
+  onUpdateDraft: (channel: ChannelId, patch: Partial<ChannelDraft>) => void;
+  onSaveChannel: (channel: ChannelId) => void;
+  onSaveToapis: () => void;
+  onToapisDraftChange: (patch: Partial<ChannelDraft>) => void;
 }) {
-  const anyEnabled = TOAPIS_PATH_CHANNELS.some((ch) => enabledChannels.includes(ch));
-  const anyReady = TOAPIS_PATH_CHANNELS.some((ch) => enabledChannels.includes(ch) && isChannelReady(ch));
-  const status = !anyEnabled
-    ? { text: '未启用', cls: 'text-gray-500 ring-white/[0.08] bg-white/[0.03]' }
-    : anyReady
-      ? { text: '可用', cls: 'text-emerald-300 ring-emerald-500/30 bg-emerald-950/30' }
-      : { text: '待配置', cls: 'text-amber-300 ring-amber-500/30 bg-amber-950/25' };
+  const status: AiConnectionStatus = connectionStatus(
+    connection,
+    enabledChannels,
+    isChannelReady,
+    isVertexSiteProxyConfigured
+  );
+  const badge = aiConnectionStatusLabel(status);
+  const active = connectionEnabledChannels(connection, enabledChannels);
+  const anyActive = active.length > 0;
+  const primaryChannel = connection.channels[0]!;
+  const showCredentials = connectionHasCredentials(connection);
+
+  const setConnectionEnabled = (next: boolean) => {
+    if (connection.credentialKind === 'multi-path') {
+      for (const ch of TOAPIS_PATH_CHANNELS) onToggleChannel(ch, next);
+      return;
+    }
+    for (const ch of connection.channels) onToggleChannel(ch, next);
+  };
+
+  const summaryLine = useMemo(() => {
+    if (connection.credentialKind === 'site') {
+      return status === 'site-unavailable'
+        ? '站点未配置 Vertex 代理环境，请联系管理员'
+        : '使用站点额度，无需填写 Key';
+    }
+    if (connection.credentialKind === 'multi-path') {
+      const key = toapisDraft.apiKey.trim();
+      const paths = TOAPIS_PATH_CHANNELS.filter((ch) => enabledChannels.includes(ch))
+        .map((ch) => TOAPIS_PATH_LABELS[ch])
+        .join('、');
+      return key
+        ? `密钥 ${maskKey(key)}${paths ? ` · ${paths}` : ' · 请勾选路径'}`
+        : '填写一套密钥后可勾选 Gemini / OpenAI 路径';
+    }
+    const ch = primaryChannel;
+    const d = drafts[ch] ?? readChannelDraft(ch);
+    const key = d.apiKey.trim();
+    return key ? `密钥 ${maskKey(key)}` : '需自备 API Key';
+  }, [connection.credentialKind, drafts, enabledChannels, primaryChannel, status, toapisDraft.apiKey]);
 
   return (
-    <div className={`rounded-xl border border-[#2a2a30] bg-[#16161a] ${compact ? 'p-2.5' : 'p-3'} space-y-2`}>
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-[10px] font-semibold text-gray-100 leading-snug flex-1">ToAPIs 网关（中转 · 共用密钥）</span>
-        <span className={`shrink-0 rounded-md px-2 py-0.5 text-[9px] font-bold ring-1 ${status.cls}`}>{status.text}</span>
+    <div className={`rounded-xl border border-[#2a2a30] bg-[#16161a] ${compact ? 'p-2.5' : 'p-3'}`}>
+      <div className="flex flex-wrap items-start gap-2">
+        <label className="inline-flex items-center gap-2 min-w-0 flex-1 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={anyActive}
+            onChange={(e) => setConnectionEnabled(e.target.checked)}
+            className="h-3.5 w-3.5 shrink-0 rounded border-[#3a3a40] bg-[#121214] text-blue-500 focus:ring-blue-500/40"
+          />
+          <span className="min-w-0">
+            <span className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[10px] font-semibold text-gray-100">{connection.title}</span>
+            </span>
+            <span className="block text-[9px] text-gray-500 mt-0.5 leading-relaxed">{connection.subtitle}</span>
+          </span>
+        </label>
+        <span className={`shrink-0 rounded-md px-2 py-0.5 text-[9px] font-bold ring-1 ${badge.cls}`}>{badge.text}</span>
       </div>
-      <p className="text-[9px] text-gray-500 leading-relaxed">
-        同一套 Key / Base URL；勾选已接入的路径即可挂 binding（Gemini 系 / OpenAI 系可分别启用）。
-      </p>
-      <input
-        type="url"
-        value={draft.baseUrl}
-        onChange={(e) => onDraftChange({ baseUrl: e.target.value })}
-        onBlur={onSave}
-        placeholder="https://toapis.com/v1"
-        autoComplete="off"
-        className={INPUT_CLS}
-      />
-      <div className="flex flex-col sm:flex-row gap-2">
-        <input
-          type="password"
-          value={draft.apiKey}
-          onChange={(e) => onDraftChange({ apiKey: e.target.value })}
-          onBlur={onSave}
-          placeholder="ToAPIs API Key"
-          autoComplete="off"
-          className={`${INPUT_CLS} flex-1`}
-        />
-        <button
-          type="button"
-          onClick={onSave}
-          className="shrink-0 px-3 py-2 rounded-lg bg-white/[0.08] hover:bg-white/[0.12] text-[10px] font-bold text-gray-200 ring-1 ring-white/[0.08] transition-colors"
-        >
-          保存
-        </button>
-      </div>
-      <div className="flex flex-wrap gap-3 pl-0 sm:pl-1 pt-1">
-        {TOAPIS_PATH_CHANNELS.map((ch) => (
-          <label key={ch} className="inline-flex items-center gap-1.5 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={enabledChannels.includes(ch)}
-              onChange={(e) => onTogglePath(ch, e.target.checked)}
-              className="h-3.5 w-3.5 shrink-0 rounded border-[#3a3a40] bg-[#121214] text-blue-500 focus:ring-blue-500/40"
-            />
-            <span className="text-[9px] text-gray-300">{TOAPIS_PATH_LABELS[ch]}</span>
-          </label>
-        ))}
-      </div>
+
+      <p className="text-[9px] text-gray-500 leading-relaxed mt-2 pl-5">{connection.modelScope}</p>
+      <p className="text-[9px] text-gray-400 mt-1 pl-5">{summaryLine}</p>
+
+      {showCredentials ? (
+        <div className="mt-2 pl-5 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={onToggleExpand}
+            className="text-[9px] font-bold text-blue-400/90 hover:text-blue-300"
+          >
+            {expanded ? '收起凭证' : anyActive ? '编辑凭证' : '配置凭证'}
+          </button>
+        </div>
+      ) : null}
+
+      {expanded && showCredentials ? (
+        <div className="mt-3 pl-5 space-y-3 border-t border-white/[0.06] pt-3">
+          {connection.credentialKind === 'multi-path' ? (
+            <>
+              <CredentialFields
+                channel="toapis-gemini"
+                draft={toapisDraft}
+                disabled={false}
+                onDraftChange={onToapisDraftChange}
+                onSave={onSaveToapis}
+              />
+              <div className="flex flex-wrap gap-3">
+                {TOAPIS_PATH_CHANNELS.map((ch) => (
+                  <label key={ch} className="inline-flex items-center gap-1.5 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={enabledChannels.includes(ch)}
+                      onChange={(e) => onToggleChannel(ch, e.target.checked)}
+                      className="h-3.5 w-3.5 shrink-0 rounded border-[#3a3a40] bg-[#121214] text-blue-500 focus:ring-blue-500/40"
+                    />
+                    <span className="text-[9px] text-gray-300">{TOAPIS_PATH_LABELS[ch]}</span>
+                  </label>
+                ))}
+              </div>
+            </>
+          ) : (
+            connection.channels.map((ch) => (
+              <div key={ch}>
+                <CredentialFields
+                  channel={ch}
+                  draft={drafts[ch] ?? readChannelDraft(ch)}
+                  disabled={!enabledChannels.includes(ch)}
+                  onDraftChange={(patch) => onUpdateDraft(ch, patch)}
+                  onSave={() => onSaveChannel(ch)}
+                />
+              </div>
+            ))
+          )}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -267,6 +353,7 @@ export default function AiProviderCredentialsPanel({ onChanged, compact = false 
   });
   const [toapisDraft, setToapisDraft] = useState<ChannelDraft>(() => readToapisDraft());
   const [savedFlash, setSavedFlash] = useState(false);
+  const [expandedIds, setExpandedIds] = useState<Record<string, boolean>>({});
 
   const reloadFromStore = useCallback(() => {
     setEnabledChannelsState(getEnabledChannels());
@@ -286,8 +373,6 @@ export default function AiProviderCredentialsPanel({ onChanged, compact = false 
     window.setTimeout(() => setSavedFlash(false), 1800);
   };
 
-  const families = useMemo(() => ['gemini', 'openai'] as const, []);
-
   const handleToggle = (channel: ChannelId, nextEnabled: boolean) => {
     setChannelEnabled(channel, nextEnabled);
     setEnabledChannelsState(getEnabledChannels());
@@ -296,6 +381,9 @@ export default function AiProviderCredentialsPanel({ onChanged, compact = false 
 
   const updateDraft = (channel: ChannelId, patch: Partial<ChannelDraft>) => {
     setDrafts((prev) => ({ ...prev, [channel]: { ...prev[channel], ...patch } }));
+    if (channel === 'toapis-gemini' || channel === 'toapis-openai') {
+      setToapisDraft((prev) => ({ ...prev, ...patch }));
+    }
   };
 
   const handleSaveRow = (channel: ChannelId) => {
@@ -311,7 +399,8 @@ export default function AiProviderCredentialsPanel({ onChanged, compact = false 
 
   const handleSaveAll = () => {
     for (const row of CHANNEL_CATALOG) {
-      if (isToapisPathChannel(row.channel)) continue;
+      const meta = AI_CONNECTION_CATALOG.find((c) => (c.channels as readonly string[]).includes(row.channel));
+      if (meta?.credentialKind === 'multi-path' && row.channel !== 'toapis-gemini') continue;
       if (row.needsApiKey || row.needsBaseUrl) {
         saveChannelDraft(row.channel, drafts[row.channel] ?? readChannelDraft(row.channel));
       }
@@ -319,54 +408,50 @@ export default function AiProviderCredentialsPanel({ onChanged, compact = false 
     handleSaveToapis();
   };
 
+  const toggleExpanded = (id: string) => {
+    setExpandedIds((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  const isExpanded = (connection: AiConnectionCatalogRow) => {
+    if (expandedIds[connection.id] === true) return true;
+    if (expandedIds[connection.id] === false) return false;
+    const st = connectionStatus(connection, enabledChannels, isChannelReady, isVertexSiteProxyConfigured);
+    return st === 'pending' || st === 'site-unavailable';
+  };
+
   return (
     <div className={compact ? 'space-y-2' : 'space-y-3'}>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-[9px] text-gray-500 leading-relaxed">
-          按模型族配置通道接线；同一产品模型可挂多条 binding，运行时按优先级自动 failover。
-        </p>
+      <OverviewBar compact={compact} />
+
+      <div className="flex flex-wrap items-center justify-end gap-2">
         <button
           type="button"
           onClick={handleSaveAll}
           className="shrink-0 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-bold uppercase tracking-wider transition-colors"
         >
-          保存全部
+          保存全部凭证
         </button>
       </div>
 
-      {families.map((family) => (
-        <div key={family} className="space-y-2">
-          <p className="text-[9px] font-bold uppercase tracking-wider text-gray-500">{FAMILY_LABELS[family]}</p>
-          {channelsForFamilyPanel(family).map((row) => {
-            const enabled = enabledChannels.includes(row.channel);
-            const draft = drafts[row.channel] ?? readChannelDraft(row.channel);
-            return (
-              <div key={row.channel}>
-                <ChannelRow
-                  row={row}
-                  enabled={enabled}
-                  draft={draft}
-                  compact={compact}
-                  onToggle={(next) => handleToggle(row.channel, next)}
-                  onDraftChange={(patch) => updateDraft(row.channel, patch)}
-                  onSave={() => handleSaveRow(row.channel)}
-                />
-              </div>
-            );
-          })}
-        </div>
-      ))}
-
       <div className="space-y-2">
-        <p className="text-[9px] font-bold uppercase tracking-wider text-gray-500">中转 · ToAPIs</p>
-        <ToApisPathGroup
-          enabledChannels={enabledChannels}
-          draft={toapisDraft}
-          compact={compact}
-          onTogglePath={handleToggle}
-          onDraftChange={(patch) => setToapisDraft((prev) => ({ ...prev, ...patch }))}
-          onSave={handleSaveToapis}
-        />
+        {AI_CONNECTION_CATALOG.map((connection) => (
+          <div key={connection.id}>
+            <ConnectionCard
+              connection={connection}
+              enabledChannels={enabledChannels}
+              drafts={drafts}
+              toapisDraft={toapisDraft}
+              compact={compact}
+              expanded={isExpanded(connection)}
+              onToggleExpand={() => toggleExpanded(connection.id)}
+              onToggleChannel={handleToggle}
+              onUpdateDraft={updateDraft}
+              onSaveChannel={handleSaveRow}
+              onSaveToapis={handleSaveToapis}
+              onToapisDraftChange={(patch) => setToapisDraft((prev) => ({ ...prev, ...patch }))}
+            />
+          </div>
+        ))}
       </div>
 
       {savedFlash ? <p className="text-[10px] text-green-400/90">已保存到本机</p> : null}

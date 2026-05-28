@@ -116,7 +116,7 @@ const SettingsSection: React.FC<{
   onAiInvocationSurfaceChange?: () => void;
   /**
    * 与 App 内 `aiInvocationStatusRev` 同步：云端拉取 user-config、工作流密钥弹窗保存等会递增，
-   * 避免设置页仍显示旧的供应商/Key（与 `getAiProvider()` 真相源不一致）。
+   * 避免设置页仍显示旧的 channel/Key（与 `getEnabledChannels()` 真相源不一致）。
    */
   aiSettingsSyncRev?: number;
   /** 当前打开的工作区项目 id；写入宿主包计算任务元数据便于排查（伴侣侧可不消费） */
@@ -1547,7 +1547,7 @@ const SettingsSection: React.FC<{
               <div className="space-y-8">
                 {/* AI 调用源 */}
                 <div className="rounded-xl border border-[#252528] p-4 space-y-4">
-                  <h3 className="text-[11px] font-black uppercase tracking-wider text-blue-400/90 mb-1">AI 供应商</h3>
+                  <h3 className="text-[11px] font-black uppercase tracking-wider text-blue-400/90 mb-1">AI 接入</h3>
                   <AiProviderCredentialsPanel onChanged={onAiInvocationSurfaceChange} />
                   <p className="text-[9px] text-gray-500 leading-relaxed">
                     生图模型运营策略：可配置{' '}
