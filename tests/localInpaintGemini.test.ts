@@ -5,6 +5,7 @@ import {
   expandPixelBBox,
   localInpaintPatchToDestRatio,
   planLocalInpaintComposite,
+  resolveLocalInpaintExpandPadPx,
 } from '../services/localInpaintGemini';
 import { coerceImageModelRegistryId } from '../services/modelRegistry/imageModels';
 
@@ -27,6 +28,27 @@ describe('expandPixelBBox', () => {
     expect(e.y).toBe(0);
     expect(e.w).toBeGreaterThan(0);
     expect(e.h).toBeGreaterThan(0);
+  });
+
+  it('uses override pad when provided', () => {
+    const b = { x: 50, y: 50, w: 100, h: 100 };
+    const e = expandPixelBBox(b, 1000, 1000, 0.18, 16, 32);
+    expect(e.x).toBe(18);
+    expect(e.y).toBe(18);
+    expect(e.w).toBe(164);
+    expect(e.h).toBe(164);
+  });
+});
+
+describe('resolveLocalInpaintExpandPadPx', () => {
+  it('auto uses ratio with min pad', () => {
+    expect(resolveLocalInpaintExpandPadPx(100, 'auto')).toBe(18);
+    expect(resolveLocalInpaintExpandPadPx(50, 'auto')).toBe(16);
+  });
+
+  it('fixed mode returns exact px', () => {
+    expect(resolveLocalInpaintExpandPadPx(1000, 64)).toBe(64);
+    expect(resolveLocalInpaintExpandPadPx(1000, 0)).toBe(0);
   });
 });
 

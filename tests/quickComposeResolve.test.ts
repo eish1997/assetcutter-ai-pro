@@ -9,7 +9,9 @@ import {
   orderMentionsByDraft,
   relocateMentionSegment,
   resolveQuickComposeReferences,
+  stripCurrentViewFromQuickComposeSegments,
   stripMentionTokensFromDraft,
+  ensureQuickComposeEditableBoundaries,
   workflowAssetMentionLabel,
   QUICK_COMPOSE_CURRENT_VIEW_LABEL,
 } from '../services/quickComposeMention';
@@ -111,5 +113,18 @@ describe('quickComposeMention', () => {
     expect(r.userPrompt).toBe('前面 后面');
     expect(r.referenceContextBlock).toContain('图A');
     expect(r.referenceContextBlock).toContain('后面');
+  });
+
+  it('stripCurrentViewFromQuickComposeSegments removes current_view only', () => {
+    const cv = createQuickComposeMention({ kind: 'current_view', label: QUICK_COMPOSE_CURRENT_VIEW_LABEL }, [])!;
+    const asset = createQuickComposeMention({ kind: 'asset', assetId: 'a1', label: '图A' }, [cv])!;
+    const segs = ensureQuickComposeEditableBoundaries([
+      newQuickComposeMentionSegment(cv),
+      newQuickComposeTextSegment('改光影'),
+      newQuickComposeMentionSegment(asset),
+    ]);
+    const stripped = stripCurrentViewFromQuickComposeSegments(segs);
+    expect(stripped.some((s) => s.type === 'mention' && s.mention.kind === 'current_view')).toBe(false);
+    expect(stripped.some((s) => s.type === 'mention' && s.mention.kind === 'asset')).toBe(true);
   });
 });

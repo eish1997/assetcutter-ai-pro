@@ -1,5 +1,6 @@
 import type { ImageLocalEditSelection, ImageOverlayNormPoint } from '../types';
 import type { FlatLocalInpaintCompositeStrategy } from './lightboxFlatLocalInpaintPrefs';
+import type { LocalInpaintExpandMode } from './lightboxLocalInpaintExpandPrefs';
 
 function loadHtmlImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -62,9 +63,13 @@ export function expandPixelBBox(
   nw: number,
   nh: number,
   ratio: number,
-  minPadPx = 16
+  minPadPx = 16,
+  overridePadPx?: number
 ): { x: number; y: number; w: number; h: number } {
-  const pad = Math.max(minPadPx, Math.round(ratio * Math.max(b.w, b.h)));
+  const pad =
+    overridePadPx !== undefined
+      ? Math.max(0, Math.round(overridePadPx))
+      : Math.max(minPadPx, Math.round(ratio * Math.max(b.w, b.h)));
   let x = b.x - pad;
   let y = b.y - pad;
   let w = b.w + 2 * pad;
@@ -85,6 +90,17 @@ export function expandPixelBBox(
 }
 
 export const LOCAL_INPAINT_EXPAND_RATIO = 0.18;
+
+/** 解析局部重绘四边外扩像素：`auto` 为比例 + 最小垫；数字为固定像素。 */
+export function resolveLocalInpaintExpandPadPx(
+  bboxMaxSide: number,
+  mode: LocalInpaintExpandMode = 'auto',
+  minPadPx = 16
+): number {
+  if (mode !== 'auto') return Math.max(0, Math.round(mode));
+  const side = Math.max(1, bboxMaxSide);
+  return Math.max(minPadPx, Math.round(LOCAL_INPAINT_EXPAND_RATIO * side));
+}
 
 /**
  * 若 `nw×nh` 已不小于 `minW×minH` 则返回 null（无需放大）。
@@ -178,7 +194,7 @@ export type LocalInpaintCropPlan = {
 export async function rasterizeExpandedLocalEditCrop(
   imageSrc: string,
   sel: ImageLocalEditSelection,
-  expandRatio = LOCAL_INPAINT_EXPAND_RATIO
+  expandMode: LocalInpaintExpandMode = 'auto'
 ): Promise<LocalInpaintCropPlan | null> {
   let im: HTMLImageElement;
   try {
@@ -191,7 +207,8 @@ export async function rasterizeExpandedLocalEditCrop(
   if (!nw || !nh) return null;
 
   const tight = tightPixelBBoxForLocalEdit(sel, nw, nh);
-  const exp = expandPixelBBox(tight, nw, nh, expandRatio);
+  const padPx = resolveLocalInpaintExpandPadPx(Math.max(tight.w, tight.h), expandMode);
+  const exp = expandPixelBBox(tight, nw, nh, LOCAL_INPAINT_EXPAND_RATIO, 16, padPx);
 
   const canvas = document.createElement('canvas');
   canvas.width = exp.w;

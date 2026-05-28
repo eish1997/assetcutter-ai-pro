@@ -37,6 +37,10 @@ import {
   WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER,
 } from './workflow/workflowSectionUiConstants';
 import type { ImagePreviewLayoutMode } from './preview';
+import {
+  LOCAL_INPAINT_EXPAND_PRESETS,
+  type LocalInpaintExpandMode,
+} from '../services/lightboxLocalInpaintExpandPrefs';
 
 type AnnotationToolbarMenuKey = 'annotate' | 'crop' | 'local' | 'sam' | 'removeBg';
 
@@ -199,6 +203,9 @@ export type ImageAnnotationLightboxToolbarProps = {
   onApplyCrops: () => void;
   onClearCrops: () => void;
   onClearLocalEdit: () => void;
+  /** 局部重绘裁切送生图时的四边外扩像素（`auto` = 约 18%） */
+  localInpaintExpandMode?: LocalInpaintExpandMode;
+  onLocalInpaintExpandModeChange?: (mode: LocalInpaintExpandMode) => void;
   /** 清空标注、裁切、全景视口裁切、局部重绘与撤销栈，并写入当前显示版本 */
   onResetAll: () => void;
   /** 本机菜单是否展开（供 Esc：先关菜单再解除武装） */
@@ -279,6 +286,8 @@ export function ImageAnnotationLightboxToolbar({
   onApplyCrops,
   onClearCrops,
   onClearLocalEdit,
+  localInpaintExpandMode = 'auto',
+  onLocalInpaintExpandModeChange,
   onResetAll,
   lightboxSamToolbarMenuOpenRef,
   samSegment,
@@ -824,7 +833,7 @@ export function ImageAnnotationLightboxToolbar({
 
   const localPanel = (
     <div className="flex flex-col gap-1" role="menu">
-      <div className="flex flex-wrap gap-0.5">
+      <div className="flex flex-wrap items-center gap-0.5">
         <ToolShell
           dense
           title="矩形局部重绘（快捷键 A 默认记忆上次选区形状；提交时扩边裁切 → 生成 → 贴回）"
@@ -849,6 +858,51 @@ export function ImageAnnotationLightboxToolbar({
         >
           <Lasso {...icSm} />
         </ToolShell>
+        <div className="mx-0.5 h-4 w-px shrink-0 bg-white/10" aria-hidden />
+        <div
+          className={`${TITLE_ROW_STEPPER_SHELL} !h-6 scale-[0.92] origin-left`}
+          title="裁切送生图时选区四边外扩像素（自动 ≈ 18%）"
+        >
+          <button
+            type="button"
+            title="减小扩边"
+            aria-label="减小扩边像素"
+            className={`${TITLE_ROW_STEPPER_BTN} !h-6 inline-flex shrink-0 items-center justify-center p-0`}
+            onClick={() => {
+              if (!onLocalInpaintExpandModeChange) return;
+              const idx = LOCAL_INPAINT_EXPAND_PRESETS.findIndex((p) => p.mode === localInpaintExpandMode);
+              const next =
+                LOCAL_INPAINT_EXPAND_PRESETS[
+                  (idx <= 0 ? LOCAL_INPAINT_EXPAND_PRESETS.length : idx) - 1
+                ] ?? LOCAL_INPAINT_EXPAND_PRESETS[0];
+              onLocalInpaintExpandModeChange(next.mode);
+            }}
+          >
+            <Minus size={12} strokeWidth={2} className="text-gray-300" aria-hidden />
+          </button>
+          <span
+            className={`${TITLE_ROW_STEPPER_VALUE} !h-6 !min-w-[2.25rem] !text-[8px]`}
+            title="扩边像素（四边各外扩）"
+          >
+            {LOCAL_INPAINT_EXPAND_PRESETS.find((p) => p.mode === localInpaintExpandMode)?.label ?? '自动'}
+          </span>
+          <button
+            type="button"
+            title="增大扩边"
+            aria-label="增大扩边像素"
+            className={`${TITLE_ROW_STEPPER_BTN} !h-6 inline-flex shrink-0 items-center justify-center p-0`}
+            onClick={() => {
+              if (!onLocalInpaintExpandModeChange) return;
+              const idx = LOCAL_INPAINT_EXPAND_PRESETS.findIndex((p) => p.mode === localInpaintExpandMode);
+              const next =
+                LOCAL_INPAINT_EXPAND_PRESETS[(idx + 1) % LOCAL_INPAINT_EXPAND_PRESETS.length] ??
+                LOCAL_INPAINT_EXPAND_PRESETS[0];
+              onLocalInpaintExpandModeChange(next.mode);
+            }}
+          >
+            <Plus size={12} strokeWidth={2} className="text-gray-300" aria-hidden />
+          </button>
+        </div>
       </div>
       <div className="flex flex-wrap gap-0.5 border-t border-white/[0.06] pt-1">
         <ActionBtn dense title="清除局部重绘选区" onClick={onClearLocalEdit} variant="danger">

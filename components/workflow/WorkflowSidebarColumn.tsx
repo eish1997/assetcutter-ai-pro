@@ -23,12 +23,14 @@ import {
   DT_AC_CAPABILITY_ACTION,
   DT_AC_CAPABILITY_ACTION_SOURCE,
   DT_AC_CAPABILITY_FROM_EDITOR,
+  type WorkflowDragSource,
 } from '../../services/workflowDragPipeline';
 import { isGroupAsset } from '../../services/groupHelpers';
 import { dragTransferHasPlainText } from './workflowSectionHelpers';
 import { SET_ACTION_PREFIX, WORKFLOW_EDGE_GUTTER } from './workflowSectionUiConstants';
 import { uuid } from './workflowIds';
 import type { CapabilityCategoryGroup } from './workflowCapabilityGroups';
+import { WORKFLOW_SIDEBAR_FEATURE_GROUPS } from './workflowSidebarFeatureGroups';
 import {
   extractCapabilitySearchKeywords,
   keywordsMatchCapabilityLabelId,
@@ -163,7 +165,7 @@ export type WorkflowSidebarFavoriteEntry =
   | { id: string; label: string; kind: 'module'; mod: CustomAppModule }
   | { id: string; label: string; kind: 'set'; set: CapabilitySet };
 
-type SidebarCapabilityColorKey = CustomAppModule['category'] | 'set';
+type SidebarCapabilityColorKey = CustomAppModule['category'] | 'set' | 'workflow';
 
 function getSidebarCapabilityTone(key: SidebarCapabilityColorKey): {
   idleBorderClass: string;
@@ -219,6 +221,12 @@ function getSidebarCapabilityTone(key: SidebarCapabilityColorKey): {
         hoverBorderClass: 'hover:border-[#667990]',
         dividerBorderClass: 'border-[#4b5970]',
       };
+    case 'workflow':
+      return {
+        idleBorderClass: 'border-[#4f5f72]',
+        hoverBorderClass: 'hover:border-[#5f738a]',
+        dividerBorderClass: 'border-[#455566]',
+      };
     default:
       return {
         idleBorderClass: 'border-[#3a3a40]',
@@ -262,7 +270,10 @@ export type WorkflowSidebarColumnProps = {
   removeAsset: (assetId: string) => void;
   removeGroupItems: (prev: WorkflowAsset[], groupAssetId: string, itemIndexes: number[]) => WorkflowAsset[];
   setGroupFilterId: Dispatch<SetStateAction<string | null>>;
-  markArchived: (assetId: string) => void;
+  /** 下载选中/拖入资产的当前展示内容 */
+  onDownloadWorkflowAssets: (sources: WorkflowDragSource[]) => void;
+  /** 无拖入时用当前勾选下载 */
+  onDownloadSelectedWorkflowAssets: () => void;
   visiblePresets: CustomAppModule[];
   visibleCapabilitySets: CapabilitySet[];
   visibleByCategory: CapabilityCategoryGroup[];
@@ -346,7 +357,8 @@ export function WorkflowSidebarColumn({
   removeAsset,
   removeGroupItems,
   setGroupFilterId,
-  markArchived,
+  onDownloadWorkflowAssets,
+  onDownloadSelectedWorkflowAssets,
   visiblePresets,
   visibleCapabilitySets,
   visibleByCategory,
@@ -642,6 +654,20 @@ export function WorkflowSidebarColumn({
   const filteredFavoriteEntries = useMemo(
     () => favoriteEntries.filter(favoriteMatchesSearch),
     [favoriteEntries, favoriteMatchesSearch]
+  );
+  const filteredWorkflowFeatureGroups = useMemo(
+    () =>
+      WORKFLOW_SIDEBAR_FEATURE_GROUPS.map((group) => ({
+        ...group,
+        items: group.items.filter((item) => {
+          if (capabilitySearchKeywords.length === 0) return true;
+          return (
+            keywordsMatchCapabilityLabelId(capabilitySearchKeywords, item.label, item.id) ||
+            keywordsMatchCapabilityLabelId(capabilitySearchKeywords, group.label, group.id)
+          );
+        }),
+      })).filter((group) => group.items.length > 0),
+    [capabilitySearchKeywords]
   );
   /** 有检索词但无一命中时，列表回退为「全部」，避免空白 */
   const sidebarSearchFallbackAll =
@@ -1179,59 +1205,68 @@ export function WorkflowSidebarColumn({
             </span>
           </div>
           <div
+            role="button"
+            tabIndex={sidebarOpsAllowed ? 0 : -1}
+            onClick={() => {
+              if (!sidebarOpsAllowed) return;
+              onDownloadSelectedWorkflowAssets();
+            }}
+            onKeyDown={(e) => {
+              if (!sidebarOpsAllowed) return;
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                onDownloadSelectedWorkflowAssets();
+              }
+            }}
             onDragOver={(e) => {
               if (!sidebarOpsAllowed) return;
               e.preventDefault();
-              setDragOverAction('__archive__');
+              setDragOverAction('__download__');
             }}
             onDragLeave={() => {
-              if (dragOverAction === '__archive__') setDragOverAction(null);
+              if (dragOverAction === '__download__') setDragOverAction(null);
             }}
             onDrop={(e) => {
               e.preventDefault();
-              if (dragOverAction !== '__archive__') {
+              if (dragOverAction !== '__download__') {
                 setDragOverAction(null);
                 setDraggingAssetIds(null);
                 setDraggingGroupItems(null);
                 return;
               }
               if (draggingAssetIds?.length) {
-                draggingAssetIds.forEach((id) => markArchived(id));
+                onDownloadWorkflowAssets([{ kind: 'root', assetIds: draggingAssetIds }]);
               } else if (draggingGroupItems) {
-                const { nextAssets, assetIds } = ensureGroupItemsAsAssets(
-                  assets,
-                  draggingGroupItems.groupAssetId,
-                  draggingGroupItems.itemIndexes
-                );
-                if (assetIds.length > 0) {
-                  const afterRemove = removeGroupItems(
-                    nextAssets,
-                    draggingGroupItems.groupAssetId,
-                    draggingGroupItems.itemIndexes
-                  );
-                  const groupRemoved = !afterRemove.some((a) => a.id === draggingGroupItems.groupAssetId);
-                  setAssets(afterRemove);
-                  assetIds.forEach((id) => markArchived(id));
-                  setSelectedGroupItemKeys(new Set());
-                  if (groupRemoved) {
-                    setGroupFilterId(null);
-                  }
-                }
+                onDownloadWorkflowAssets([
+                  {
+                    kind: 'group',
+                    groupAssetId: draggingGroupItems.groupAssetId,
+                    itemIndexes: draggingGroupItems.itemIndexes,
+                  },
+                ]);
               }
               setDragOverAction(null);
               setDraggingAssetIds(null);
               setDraggingGroupItems(null);
             }}
-            title="将图片拖到此处标记为已完成（组内同效）"
-            className={
-              dragOverAction === '__archive__' ? SIDEBAR_TOP_DROP_ACTIVE_BLUE : SIDEBAR_TOP_DROP_IDLE
-            }
+            title="点击或拖入：下载选中资产当前展示内容（文字/图片/3D 等）"
+            className={[
+              dragOverAction === '__download__' ? SIDEBAR_TOP_DROP_ACTIVE_BLUE : SIDEBAR_TOP_DROP_IDLE,
+              sidebarOpsAllowed ? 'cursor-pointer' : '',
+            ].join(' ')}
           >
             <svg viewBox="0 0 20 20" className="w-3 h-3 text-gray-400 mb-0.5" aria-hidden>
-              <path d="M4 4h12v3H4zM5 8h10v8H5zM8 10h4v2H8z" fill="currentColor" />
+              <path
+                d="M10 3v9m0 0l-3.5-3.5M10 12l3.5-3.5M4 14v2h12v-2"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
             </svg>
             <span className="w-full max-w-full text-[8px] font-black uppercase text-gray-200 break-words line-clamp-2 leading-tight">
-              归档
+              下载
             </span>
           </div>
           </div>
@@ -2447,6 +2482,45 @@ export function WorkflowSidebarColumn({
               )}
             </div>
               ) : null}
+            </div>
+          )}
+
+          {filteredWorkflowFeatureGroups.length > 0 && (
+            <div className="mt-4 space-y-3">
+              {filteredWorkflowFeatureGroups.map((group) => (
+                <div key={group.id}>
+                  <button
+                    type="button"
+                    onClick={() => toggleSectionCollapsed(`wf:${group.id}`)}
+                    className={`mb-1 flex w-full flex-wrap items-center justify-between gap-x-1.5 gap-y-1 text-left ${SIDEBAR_GROUP_HEADER_IDLE} hover:bg-white/[0.07]`}
+                  >
+                    <span className="min-w-0 max-w-[min(100%,11rem)] shrink text-[8px] font-black uppercase tracking-wide text-gray-400 hover:text-gray-200 transition-colors inline-flex items-center gap-1">
+                      <span className="min-w-0 break-words line-clamp-2 leading-tight">{group.label}</span>
+                      <span className="shrink-0 text-[10px] text-gray-500">
+                        {collapsedSectionIds[`wf:${group.id}`] ? '▼' : '▲'}
+                      </span>
+                    </span>
+                  </button>
+                  {!collapsedSectionIds[`wf:${group.id}`] && (
+                    <div className="grid grid-cols-2 gap-2 items-stretch">
+                      {group.items.map((item) => (
+                        <div
+                          key={item.id}
+                          title={item.hint || '功能开发中'}
+                          className={`rounded-xl border min-h-[60px] h-auto flex overflow-hidden transition-all duration-150 cursor-default opacity-80 ${getSidebarCapabilityTone('workflow').idleBorderClass} bg-[#181a1f]`}
+                        >
+                          <div className="flex-1 p-3 flex flex-col items-center justify-center text-center min-w-0 gap-1">
+                            <span className="w-full min-w-0 text-[9px] font-black uppercase break-words line-clamp-2 text-center leading-tight text-gray-200">
+                              {item.label}
+                            </span>
+                            <span className="text-[7px] font-bold uppercase tracking-wide text-gray-500">占位</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
             </div>
           )}
 

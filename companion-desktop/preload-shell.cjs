@@ -34,6 +34,8 @@ contextBridge.exposeInMainWorld('companionShell', {
   loadSettings: () => timedInvoke('shell-settings-load'),
   saveSettings: (patch) => timedInvoke('shell-settings-save', patch),
   pickVolumeRoot: () => timedInvoke('shell-pick-volume-root'),
+  pickDownloadDir: () => timedInvoke('shell-pick-download-dir'),
+  getEffectiveDownloadDir: () => timedInvoke('shell-get-effective-download-dir'),
   applyVolumeChange: (payload) => timedInvoke('shell-apply-volume-change', payload || {}),
   restartCompanion: (opts) => timedInvoke('shell-restart-companion', opts || {}),
   openWebsite: (url) => timedInvoke('shell-open-website', url),

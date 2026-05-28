@@ -93,6 +93,10 @@ import {
   workflowModelPersistStatusLabel,
 } from '../services/workflowStepModels';
 import { downloadWorkflowStepModelSlot } from '../services/downloadModelFile';
+import {
+  collectWorkflowAssetIdsFromDragSources,
+  downloadWorkflowAssetsByIds,
+} from '../services/downloadWorkflowAssetDisplay';
 import { revokeWorkflowModelBlobUrlsIfOrphaned } from '../services/workflowModelBlob';
 import {
   hydrateWorkflowAsset3dModelsFromCompanion,
@@ -137,6 +141,11 @@ import { readFlatLocalInpaintCompositeStrategy } from '../services/lightboxFlatL
 import type { PanoLocalReprojectSnapshot } from '../services/panoViewportProjection';
 import { snapshotViewportNormFromEquirectLoop } from '../services/panoLocalEditFootprint';
 import { readPanoLocalInpaintShrinkToBase } from '../services/lightboxPanoLocalInpaintPrefs';
+import {
+  readLocalInpaintExpandMode,
+  writeLocalInpaintExpandMode,
+  type LocalInpaintExpandMode,
+} from '../services/lightboxLocalInpaintExpandPrefs';
 import {
   compositePanoPatchOntoEquirect,
   rasterizePanoLocalEditCropFromSnapshot,
@@ -264,16 +273,14 @@ import WorkspaceQuickComposeBar, {
 import type { QuickComposeDropSlot, QuickComposeMention, QuickComposeSegment } from '../services/quickComposeMention';
 import {
   buildQuickComposePromptOverride,
-  createQuickComposeMention,
   draftFromSegments,
   ensureQuickComposeEditableBoundaries,
   listDropSlotMentionCandidates,
   mentionsFromSegments,
-  newQuickComposeMentionSegment,
   newQuickComposeTextSegment,
   resolveQuickComposeReferences,
+  stripCurrentViewFromQuickComposeSegments,
   workflowAssetMentionLabel,
-  QUICK_COMPOSE_CURRENT_VIEW_LABEL,
 } from '../services/quickComposeMention';
 import { buildWorkflowComposerSeedFromTwoPresets } from './workflow/buildWorkflowComposerSeed';
 import type { CapabilityAssetCandidate } from './CapabilitySetCanvas';
@@ -617,6 +624,10 @@ const WorkflowSection: React.FC<{
   useEffect(() => {
     setWorkflowMirrorPreferenceScope(preferenceScope);
     return () => setWorkflowMirrorPreferenceScope(null);
+  }, [preferenceScope]);
+
+  useEffect(() => {
+    setLocalInpaintExpandMode(readLocalInpaintExpandMode(preferenceScope));
   }, [preferenceScope]);
 
   useEffect(() => {
@@ -979,6 +990,9 @@ const WorkflowSection: React.FC<{
   const [quickComposeCount, setQuickComposeCount] = useState(1);
   /** 与内置快捷条预设一致：默认直发（skipUnderstand）；开启后才走理解 */
   const [quickComposeUnderstand, setQuickComposeUnderstand] = useState(false);
+  const [localInpaintExpandMode, setLocalInpaintExpandMode] = useState<LocalInpaintExpandMode>(() =>
+    readLocalInpaintExpandMode(preferenceScope)
+  );
   /**
    * 与 `quickComposeSegments` 同步；在 **setState 提交前** 即更新（见 `setQuickComposeSegmentsTracked`），
    * 避免大图/底部栏「最后一笔输入后立即点生成」读到空文案。
@@ -1008,7 +1022,6 @@ const WorkflowSection: React.FC<{
     if (quickComposeMode === '3d') return 1;
     return maxReferenceImagesForImageModel(quickComposeImageModel);
   }, [quickComposeMode, quickComposeImageModel]);
-  const lightboxQuickComposeBootRef = useRef<string | null>(null);
   const [showAllInGroup, setShowAllInGroup] = useState(false);
   /** 组筛选 ID：用于查看组内资产 */
   const [groupFilterId, setGroupFilterId] = useState<string | null>(null);
@@ -3615,7 +3628,12 @@ ${lineSvg}
         if (panoVpForCrop && panoSnap && panoRep) {
           try {
             onLog?.('info', '大图预览：全景局部重绘中（视口快照 → 扩边 → 生成 → 贴回等距柱）…');
-            const plan = await rasterizePanoLocalEditCropFromSnapshot(panoSnap, panoVpForCrop, panoRep);
+            const plan = await rasterizePanoLocalEditCropFromSnapshot(
+              panoSnap,
+              panoVpForCrop,
+              panoRep,
+              localInpaintExpandMode
+            );
             if (!plan) {
               onLog?.('warn', '大图预览：全景局部裁切失败，将按整图继续');
             } else {
@@ -3650,7 +3668,7 @@ ${lineSvg}
         } else if (localEditSnapshot) {
           try {
             onLog?.('info', '大图预览：局部重绘中（扩边裁切 → 生成 → 贴回）…');
-            const plan = await rasterizeExpandedLocalEditCrop(src, localEditSnapshot);
+            const plan = await rasterizeExpandedLocalEditCrop(src, localEditSnapshot, localInpaintExpandMode);
             if (!plan) {
               onLog?.('warn', '大图预览：局部重绘裁切失败，将按整图继续');
             } else {
@@ -3779,6 +3797,7 @@ ${lineSvg}
     quickComposeAspect,
     quickComposeSize,
     quickComposeUnderstand,
+    localInpaintExpandMode,
     preferenceScope,
     setLightboxOverlayByMode,
     setLightboxQuickComposeAnchor,
@@ -5204,6 +5223,7 @@ ${lineSvg}
         });
       }
       if (opts.flush) flushLightboxOverlayToAsset();
+      setQuickComposeSegmentsTracked((prev) => stripCurrentViewFromQuickComposeSegments(prev));
       setLightboxAssetId(null);
       setLightboxSourceSlot(null);
       setLightboxRembgPreview(null);
@@ -5212,7 +5232,7 @@ ${lineSvg}
       lightboxOverlayDirtyCloseDialogOpenRef.current = false;
       lightboxDirtyClosePersistedRef.current = null;
     },
-    [flushLightboxOverlayToAsset]
+    [flushLightboxOverlayToAsset, setQuickComposeSegmentsTracked]
   );
 
   const cancelLightboxOverlayDirtyCloseDialog = useCallback(() => {
@@ -7282,35 +7302,6 @@ ${lineSvg}
     toggleLightboxSamArm,
   ]);
 
-  useEffect(() => {
-    if (!lightboxAssetId) {
-      lightboxQuickComposeBootRef.current = null;
-      return;
-    }
-    const asset = assets.find((a) => a.id === lightboxAssetId);
-    if (!asset || !assetLightboxRasterEligible(asset)) return;
-    const bootKey = `${lightboxAssetId}:${asset.displayKey}`;
-    if (lightboxQuickComposeBootRef.current === bootKey) return;
-    lightboxQuickComposeBootRef.current = bootKey;
-    const previewSrc = asset ? getAssetDisplayImage(asset).trim() : '';
-    setQuickComposeSegmentsTracked((prev) => {
-      if (mentionsFromSegments(prev).some((m) => m.kind === 'current_view')) return prev;
-      const cv = createQuickComposeMention(
-        {
-          kind: 'current_view',
-          label: QUICK_COMPOSE_CURRENT_VIEW_LABEL,
-          previewSrc: previewSrc || undefined,
-        },
-        mentionsFromSegments(prev)
-      );
-      if (!cv) return prev;
-      return ensureQuickComposeEditableBoundaries([
-        newQuickComposeMentionSegment(cv),
-        newQuickComposeTextSegment(''),
-      ]);
-    });
-  }, [lightboxAssetId, assets, getAssetDisplayImage, setQuickComposeSegmentsTracked, assetLightboxRasterEligible]);
-
   /** 大纲 / 画布拖入底部快捷栏：加入待 @ 缩略图区（点击后再引用） */
   const handleQuickComposeWorkflowDrop = useCallback(
     (e: React.DragEvent) => {
@@ -7397,6 +7388,42 @@ ${lineSvg}
     }
     return [];
   }, [showArchived, selectedAssetIds, currentGroupAsset, selectedGroupItemKeys]);
+
+  const downloadWorkflowAssetsFromSources = useCallback(
+    async (sources: WorkflowDragSource[]) => {
+      if (!sources.length) {
+        onLog?.('warn', '请先选中要下载的资产');
+        return;
+      }
+      const assetIds = collectWorkflowAssetIdsFromDragSources(
+        sources,
+        assetsRef.current,
+        ensureGroupItemsAsAssets
+      );
+      if (!assetIds.length) {
+        onLog?.('warn', '没有可下载的资产');
+        return;
+      }
+      const pid = String(workspaceProjectChrome?.activeProjectId || '').trim();
+      const base = String(getCompanionLocalBaseUrl() || '').trim();
+      const { ok, failed } = await downloadWorkflowAssetsByIds(assetIds, assetsRef.current, {
+        getAssetDisplayImage,
+        getAssetDisplayText,
+        companionBaseUrl: base || null,
+        companionProjectId: pid || null,
+        tripoApiKey: getTripoApiKey(),
+      });
+      if (ok > 0) onLog?.('info', `已触发 ${ok} 个资产下载`);
+      for (const f of failed) {
+        onLog?.('warn', `下载跳过 ${f.assetId.slice(0, 8)}：${f.reason}`);
+      }
+    },
+    [ensureGroupItemsAsAssets, getAssetDisplayImage, getAssetDisplayText, onLog, workspaceProjectChrome?.activeProjectId]
+  );
+
+  const downloadSelectedWorkflowAssets = useCallback(() => {
+    void downloadWorkflowAssetsFromSources(buildWorkflowSelectionDragSources());
+  }, [buildWorkflowSelectionDragSources, downloadWorkflowAssetsFromSources]);
 
   const startTripoMultiviewModalDrag = useCallback(
     (e: React.PointerEvent<HTMLElement>) => {
@@ -8674,7 +8701,8 @@ ${lineSvg}
             removeAsset={removeAsset}
             removeGroupItems={removeGroupItems}
             setGroupFilterId={setGroupFilterId}
-            markArchived={markArchived}
+            onDownloadWorkflowAssets={(sources) => void downloadWorkflowAssetsFromSources(sources)}
+            onDownloadSelectedWorkflowAssets={downloadSelectedWorkflowAssets}
             visiblePresets={visiblePresets}
             visibleCapabilitySets={visibleCapabilitySets}
             visibleByCategory={visibleByCategory}
@@ -10503,6 +10531,11 @@ ${lineSvg}
                   panoLocalEditReproject: null,
                 }))
               }
+              localInpaintExpandMode={localInpaintExpandMode}
+              onLocalInpaintExpandModeChange={(mode) => {
+                setLocalInpaintExpandMode(mode);
+                writeLocalInpaintExpandMode(preferenceScope, mode);
+              }}
               onResetAll={resetLightboxOverlayAll}
               lightboxSamToolbarMenuOpenRef={lightboxSamToolbarMenuOpenRef}
               samSegment={
@@ -10597,7 +10630,7 @@ ${lineSvg}
             placement="lightbox"
             lightboxAnchorClient={lightboxQuickComposeAnchor}
             lightboxLayoutResetNonce={lightboxQuickComposeLayoutNonce}
-            placeholderOverride="描述修改意图；默认 @当前画面，可再 @ 其它资产"
+            placeholderOverride="描述修改意图；需要时可 @ 当前画面或其它资产"
             composeMode={quickComposeMode}
             onComposeModeChange={setQuickComposeMode}
             inputPresetsActive={false}

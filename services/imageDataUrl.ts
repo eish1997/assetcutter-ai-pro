@@ -23,13 +23,7 @@ export async function triggerImageDownload(dataUrl: string, filenameBase: string
   const mime = ext === 'jpg' ? 'image/jpeg' : srcBlob.type || `image/${ext}`;
   const bytes = await srcBlob.arrayBuffer();
   const blob = new Blob([bytes], { type: mime });
-  const url = URL.createObjectURL(blob);
-  try {
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${filenameBase}.${ext}`;
-    a.click();
-  } finally {
-    URL.revokeObjectURL(url);
-  }
+  const filename = `${filenameBase}.${ext}`;
+  const { downloadBlobPreferWorkbench } = await import('./workbenchDownloadBridge');
+  await downloadBlobPreferWorkbench(blob, filename, { noticeTitle: '图片已保存' });
 }

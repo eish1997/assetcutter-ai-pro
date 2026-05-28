@@ -46,6 +46,15 @@ export function mentionsFromSegments(segments: QuickComposeSegment[]): QuickComp
   return segments.filter((s): s is QuickComposeMentionSegment => s.type === 'mention').map((s) => s.mention);
 }
 
+/** 移除「当前画面」@ 引用（大图关闭时不污染全局快捷栏） */
+export function stripCurrentViewFromQuickComposeSegments(segments: QuickComposeSegment[]): QuickComposeSegment[] {
+  const filtered = segments.filter(
+    (s) => !(s.type === 'mention' && s.mention.kind === 'current_view')
+  );
+  if (filtered.length === 0) return [newQuickComposeTextSegment('')];
+  return ensureQuickComposeEditableBoundaries(filtered);
+}
+
 export function draftFromSegments(segments: QuickComposeSegment[]): string {
   return segments
     .filter((s): s is QuickComposeTextSegment => s.type === 'text')

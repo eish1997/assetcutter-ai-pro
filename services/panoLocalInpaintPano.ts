@@ -1,7 +1,12 @@
 import * as THREE from 'three';
 import type { PanoLocalReprojectSnapshot } from './panoViewportProjection';
 import type { PanoViewportCropNorm } from '../types';
-import { expandPixelBBox, LOCAL_INPAINT_EXPAND_RATIO } from './localInpaintGemini';
+import {
+  expandPixelBBox,
+  LOCAL_INPAINT_EXPAND_RATIO,
+  resolveLocalInpaintExpandPadPx,
+} from './localInpaintGemini';
+import type { LocalInpaintExpandMode } from './lightboxLocalInpaintExpandPrefs';
 import {
   equirectUvToWorldPosOnFlippedPanoSphere,
   wrap01PanoU,
@@ -267,7 +272,7 @@ export async function rasterizePanoLocalEditCropFromSnapshot(
   snapDataUrl: string,
   viewportNorm: PanoViewportCropNorm,
   reproject: PanoLocalReprojectSnapshot,
-  expandRatio = LOCAL_INPAINT_EXPAND_RATIO
+  expandMode: LocalInpaintExpandMode = 'auto'
 ): Promise<PanoLocalInpaintCropPlan | null> {
   let im: HTMLImageElement;
   try {
@@ -294,7 +299,8 @@ export async function rasterizePanoLocalEditCropFromSnapshot(
     w: Math.max(1, Math.round(Math.abs(x1 - x0))),
     h: Math.max(1, Math.round(Math.abs(y1 - y0))),
   };
-  const exp = expandPixelBBox(tight, iw, ih, expandRatio);
+  const padPx = resolveLocalInpaintExpandPadPx(Math.max(tight.w, tight.h), expandMode);
+  const exp = expandPixelBBox(tight, iw, ih, LOCAL_INPAINT_EXPAND_RATIO, 16, padPx);
   const featherPx = Math.max(8, Math.min(64, Math.round(0.06 * Math.min(exp.w, exp.h))));
 
   const canvas = document.createElement('canvas');

@@ -21,6 +21,25 @@ const { randomBytes } = require('node:crypto');
 const companionSandboxPaths = require('./companion-sandbox-paths.cjs');
 const { createCompanionAutoUpdate } = require('./companion-auto-update.cjs');
 
+/** 打包壳无控制台时 stdout/stderr 可能 EPIPE；避免 uncaughtException 弹窗 */
+function ignoreStreamEpipe(stream) {
+  if (!stream || typeof stream.on !== 'function') return;
+  stream.on('error', (err) => {
+    if (err && err.code === 'EPIPE') return;
+  });
+}
+ignoreStreamEpipe(process.stdout);
+ignoreStreamEpipe(process.stderr);
+
+function companionLog(level, ...args) {
+  try {
+    if (level === 'warn') console.warn(...args);
+    else console.log(...args);
+  } catch (e) {
+    if (!(e && e.code === 'EPIPE')) throw e;
+  }
+}
+
 /** Windows：统一沙盒；首次启动将旧版 `desktop-shell` / `runtimes` 迁入沙盒后再设 userData */
 if (process.platform === 'win32' && process.env.LOCALAPPDATA) {
   try {
@@ -142,16 +161,19 @@ function readShellSettings() {
   const fallbackSite = defaultShellSiteUrl();
   try {
     const p = shellSettingsPath();
-    if (!fs.existsSync(p)) return { siteUrl: fallbackSite, authApiOrigin: '', volumeRoot: '' };
+    if (!fs.existsSync(p)) {
+      return { siteUrl: fallbackSite, authApiOrigin: '', volumeRoot: '', downloadDir: '' };
+    }
     const j = JSON.parse(fs.readFileSync(p, 'utf8'));
     const siteUrl =
       typeof j.siteUrl === 'string' && j.siteUrl.trim() ? j.siteUrl.trim() : fallbackSite;
     const authApiOrigin =
       typeof j.authApiOrigin === 'string' ? j.authApiOrigin.trim().replace(/\/+$/, '') : '';
     const volumeRoot = typeof j.volumeRoot === 'string' ? j.volumeRoot.trim() : '';
-    return { siteUrl, authApiOrigin, volumeRoot };
+    const downloadDir = typeof j.downloadDir === 'string' ? j.downloadDir.trim() : '';
+    return { siteUrl, authApiOrigin, volumeRoot, downloadDir };
   } catch {
-    return { siteUrl: fallbackSite, authApiOrigin: '', volumeRoot: '' };
+    return { siteUrl: fallbackSite, authApiOrigin: '', volumeRoot: '', downloadDir: '' };
   }
 }
 
@@ -171,6 +193,18 @@ function saveShellSettings(patch) {
       }
     }
     cur.volumeRoot = v;
+  }
+  if (patch && typeof patch.downloadDir === 'string') {
+    let d = patch.downloadDir.trim();
+    if (d) {
+      try {
+        d = path.resolve(path.normalize(d));
+      } catch {
+        /* ignore */
+      }
+    }
+    cur.downloadDir = d;
+    workbenchDownloadDirPromptState = 'pending';
   }
   fs.mkdirSync(path.dirname(shellSettingsPath()), { recursive: true });
   fs.writeFileSync(shellSettingsPath(), `${JSON.stringify(cur, null, 2)}\n`, 'utf8');
@@ -1439,6 +1473,122 @@ function uniqueDownloadPath(dir, filename) {
   return candidate;
 }
 
+function defaultWorkbenchDownloadRoot() {
+  return path.join(app.getPath('downloads'), 'AssetCutter');
+}
+
+function normalizedDownloadDirFromSettings() {
+  const sh = readShellSettings();
+  const raw = typeof sh.downloadDir === 'string' ? sh.downloadDir.trim() : '';
+  if (!raw) return '';
+  try {
+    return path.resolve(path.normalize(raw));
+  } catch {
+    return '';
+  }
+}
+
+function getWorkbenchDownloadRootSync() {
+  let dir = normalizedDownloadDirFromSettings();
+  if (dir) {
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      return dir;
+    } catch {
+      dir = '';
+    }
+  }
+  const fallback = defaultWorkbenchDownloadRoot();
+  fs.mkdirSync(fallback, { recursive: true });
+  return fallback;
+}
+
+function notifyWorkbenchDownloadSaved(payload) {
+  try {
+    if (!workbenchBrowserView || workbenchBrowserView.webContents.isDestroyed()) return;
+    workbenchBrowserView.webContents.send('workbench-download-saved', payload || {});
+  } catch {
+    /* ignore */
+  }
+}
+
+function announceTrayDownloadSaved(savePath, noticeTitle) {
+  displayTrayBalloon({
+    iconType: 'info',
+    title: noticeTitle || '下载已完成',
+    content: savePath,
+  });
+}
+
+function announceWebDownloadSaved(savePath, noticeTitle) {
+  notifyWorkbenchDownloadSaved({
+    path: savePath,
+    filename: path.basename(savePath),
+    title: noticeTitle || '下载已完成',
+  });
+}
+
+async function pickWorkbenchDownloadDir(parentWin, title) {
+  const r = await dialog.showOpenDialog(parentWin || undefined, {
+    title: title || '选择下载保存文件夹',
+    message: 'AssetCutter 将把下载的图片、模型等保存到此文件夹。',
+    properties: ['openDirectory', 'createDirectory'],
+    defaultPath: normalizedDownloadDirFromSettings() || defaultWorkbenchDownloadRoot(),
+  });
+  if (r.canceled || !r.filePaths[0]) return { ok: false, canceled: true };
+  const dir = path.resolve(path.normalize(r.filePaths[0]));
+  saveShellSettings({ downloadDir: dir });
+  return { ok: true, dir };
+}
+
+/** @type {'pending' | 'declined'} */
+let workbenchDownloadDirPromptState = 'pending';
+
+async function resolveWorkbenchDownloadRoot({ interactive, parentWin }) {
+  let dir = normalizedDownloadDirFromSettings();
+  if (dir) {
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      return dir;
+    } catch {
+      dir = '';
+    }
+  }
+  if (interactive && workbenchDownloadDirPromptState === 'pending') {
+    const picked = await pickWorkbenchDownloadDir(
+      parentWin,
+      '首次下载：选择保存文件夹',
+    );
+    if (picked.ok) {
+      return picked.dir;
+    }
+    workbenchDownloadDirPromptState = 'declined';
+    return null;
+  }
+  if (interactive && workbenchDownloadDirPromptState === 'declined') {
+    return null;
+  }
+  return getWorkbenchDownloadRootSync();
+}
+
+async function writeWorkbenchDownloadFile(bytes, filename, opts) {
+  const parentWin =
+    opts && opts.parentWin
+      ? opts.parentWin
+      : mainWindow && !mainWindow.isDestroyed()
+        ? mainWindow
+        : undefined;
+  const root = await resolveWorkbenchDownloadRoot({
+    interactive: !(opts && opts.skipPrompt),
+    parentWin,
+  });
+  if (!root) return { ok: false, canceled: true };
+  const savePath = uniqueDownloadPath(root, filename);
+  await fsp.writeFile(savePath, bytes);
+  announceTrayDownloadSaved(savePath, (opts && opts.noticeTitle) || '下载已完成');
+  return { ok: true, path: savePath, filename: path.basename(savePath) };
+}
+
 function bindWorkbenchDownloadHandler(wc) {
   if (!wc || workbenchDownloadHooked.has(wc)) return;
   workbenchDownloadHooked.add(wc);
@@ -1448,19 +1598,20 @@ function bindWorkbenchDownloadHandler(wc) {
 
     let savePath = '';
     try {
-      const downloadsRoot = path.join(app.getPath('downloads'), 'AssetCutter');
-      fs.mkdirSync(downloadsRoot, { recursive: true });
+      const downloadsRoot = getWorkbenchDownloadRootSync();
       savePath = uniqueDownloadPath(downloadsRoot, item.getFilename());
       item.setSavePath(savePath);
     } catch (e) {
-      console.warn('[companion-desktop] workbench download setSavePath:', e instanceof Error ? e.message : e);
+      companionLog('warn', '[companion-desktop] workbench download setSavePath:', e instanceof Error ? e.message : e);
     }
 
     item.once('done', (_doneEvent, state) => {
       if (state === 'completed' && savePath) {
-        console.log('[companion-desktop] workbench download completed:', savePath);
+        companionLog('log', '[companion-desktop] workbench download completed:', savePath);
+        announceTrayDownloadSaved(savePath, '下载已完成');
+        announceWebDownloadSaved(savePath, '下载已完成');
       } else if (state !== 'cancelled') {
-        console.warn('[companion-desktop] workbench download ended:', state);
+        companionLog('warn', '[companion-desktop] workbench download ended:', state);
       }
 
       try {
@@ -1471,7 +1622,7 @@ function bindWorkbenchDownloadHandler(wc) {
           wc.focus();
         }
       } catch (e) {
-        console.warn('[companion-desktop] workbench restore after download:', e instanceof Error ? e.message : e);
+        companionLog('warn', '[companion-desktop] workbench restore after download:', e instanceof Error ? e.message : e);
       }
     });
   });
@@ -1694,16 +1845,19 @@ if (!gotLock) {
       }
       if (bytes.length < 1) return { ok: false, error: 'empty_file' };
 
-      const downloadsRoot = path.join(app.getPath('downloads'), 'AssetCutter');
-      fs.mkdirSync(downloadsRoot, { recursive: true });
-      const savePath = uniqueDownloadPath(downloadsRoot, payload && payload.filename);
-      await fsp.writeFile(savePath, bytes);
-      displayTrayBalloon({
-        iconType: 'info',
-        title: '模型已保存',
-        content: savePath,
+      const noticeTitle =
+        payload && typeof payload.title === 'string' && payload.title.trim()
+          ? payload.title.trim()
+          : '下载已完成';
+      const parentWin = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+      const saved = await writeWorkbenchDownloadFile(bytes, payload && payload.filename, {
+        noticeTitle,
+        parentWin,
+        skipPrompt: Boolean(payload && payload.skipPrompt),
       });
-      return { ok: true, path: savePath, filename: path.basename(savePath) };
+      if (saved.canceled) return { ok: false, canceled: true };
+      if (!saved.ok) return { ok: false, error: 'save_failed' };
+      return { ok: true, path: saved.path, filename: saved.filename };
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
@@ -1746,6 +1900,27 @@ if (!gotLock) {
     });
     if (r.canceled || !r.filePaths[0]) return { ok: false, canceled: true };
     return { ok: true, path: r.filePaths[0] };
+  });
+
+  ipcMain.handle('shell-pick-download-dir', async (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender) || mainWindow;
+    const picked = await pickWorkbenchDownloadDir(win, '选择下载保存文件夹');
+    if (!picked.ok) return { ok: false, canceled: true };
+    workbenchDownloadDirPromptState = 'pending';
+    return { ok: true, path: picked.dir };
+  });
+
+  ipcMain.handle('shell-get-effective-download-dir', () => {
+    const custom = normalizedDownloadDirFromSettings();
+    if (custom) {
+      try {
+        fs.mkdirSync(custom, { recursive: true });
+        return { ok: true, path: custom, isDefault: false };
+      } catch {
+        /* fall through */
+      }
+    }
+    return { ok: true, path: getWorkbenchDownloadRootSync(), isDefault: true };
   });
 
   ipcMain.handle('shell-apply-volume-change', async (event, payload) => {

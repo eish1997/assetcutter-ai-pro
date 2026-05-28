@@ -3,6 +3,8 @@ import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import { OBJExporter } from 'three/examples/jsm/exporters/OBJExporter.js';
 import { STLExporter } from 'three/examples/jsm/exporters/STLExporter.js';
 
+import { downloadBlobPreferWorkbench } from './workbenchDownloadBridge';
+
 export type HeightfieldMeshExportFormat = 'glb' | 'gltf' | 'obj' | 'stl' | 'fbx';
 
 /** 仅释放克隆体几何；材质/贴图可能与场景网格共享引用，不可 dispose。 */
@@ -11,18 +13,6 @@ function disposeExportCloneGeometry(root: THREE.Object3D): void {
     const mesh = obj as THREE.Mesh;
     if (mesh.isMesh) mesh.geometry?.dispose();
   });
-}
-
-function triggerBlobDownload(blob: Blob, filename: string): void {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  a.rel = 'noopener';
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
 }
 
 /**
@@ -84,7 +74,9 @@ export async function downloadHeightfieldMesh(
         if (out instanceof ArrayBuffer) buf = out;
         else if (out instanceof Uint8Array) buf = out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength);
         else throw new Error('GLB 导出未返回二进制数据');
-        triggerBlobDownload(new Blob([buf], { type: 'model/gltf-binary' }), `${safeBase}.glb`);
+        await downloadBlobPreferWorkbench(new Blob([buf], { type: 'model/gltf-binary' }), `${safeBase}.glb`, {
+          noticeTitle: '模型已导出',
+        });
         return;
       }
       case 'gltf': {
@@ -95,20 +87,26 @@ export async function downloadHeightfieldMesh(
           embedImages: true,
         });
         if (typeof out !== 'string') throw new Error('glTF 导出未返回 JSON 文本');
-        triggerBlobDownload(new Blob([out], { type: 'model/gltf+json' }), `${safeBase}.gltf`);
+        await downloadBlobPreferWorkbench(new Blob([out], { type: 'model/gltf+json' }), `${safeBase}.gltf`, {
+          noticeTitle: '模型已导出',
+        });
         return;
       }
       case 'obj': {
         const exporter = new OBJExporter();
         const str = exporter.parse(clone);
-        triggerBlobDownload(new Blob([str], { type: 'text/plain;charset=utf-8' }), `${safeBase}.obj`);
+        await downloadBlobPreferWorkbench(new Blob([str], { type: 'text/plain;charset=utf-8' }), `${safeBase}.obj`, {
+          noticeTitle: '模型已导出',
+        });
         return;
       }
       case 'stl': {
         const exporter = new STLExporter();
         const out = exporter.parse(clone, { binary: true });
         if (!(out instanceof DataView)) throw new Error('STL 二进制导出失败');
-        triggerBlobDownload(new Blob([out.buffer], { type: 'model/stl' }), `${safeBase}.stl`);
+        await downloadBlobPreferWorkbench(new Blob([out.buffer], { type: 'model/stl' }), `${safeBase}.stl`, {
+          noticeTitle: '模型已导出',
+        });
         return;
       }
       case 'fbx': {
@@ -122,7 +120,7 @@ export async function downloadHeightfieldMesh(
           typeof data === 'string'
             ? new Blob([data], { type: 'application/octet-stream' })
             : new Blob([data], { type: 'application/octet-stream' });
-        triggerBlobDownload(blob, `${safeBase}.fbx`);
+        await downloadBlobPreferWorkbench(blob, `${safeBase}.fbx`, { noticeTitle: '模型已导出' });
         return;
       }
       default: {

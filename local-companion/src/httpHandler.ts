@@ -146,10 +146,30 @@ function sanitizeCompanionDownloadFilename(name: string): string {
 function guessCompanionAssetDownloadFilename(key: string, mime: string): string {
   const k = String(key || '').toLowerCase();
   const ct = String(mime || '').toLowerCase();
+  if (ct.includes('image/jpeg') || ct.includes('image/jpg')) return 'asset.jpg';
+  if (ct.includes('image/png')) return 'asset.png';
+  if (ct.includes('image/webp')) return 'asset.webp';
+  if (ct.includes('image/gif')) return 'asset.gif';
+  if (ct.includes('image/svg')) return 'asset.svg';
+  if (ct.includes('text/plain')) return 'asset.txt';
   if (k.includes('fbx') || ct.includes('fbx')) return 'model.fbx';
   if (k.includes('gltf') || ct.includes('gltf+json')) return 'model.gltf';
   if (ct.includes('gltf-binary') || ct.includes('model/gltf')) return 'model.glb';
-  return 'model.glb';
+  return 'asset.bin';
+}
+
+function extensionFromCompanionMime(mime: string): string {
+  const guessed = guessCompanionAssetDownloadFilename('', mime);
+  const dot = guessed.lastIndexOf('.');
+  return dot >= 0 ? guessed.slice(dot) : '.bin';
+}
+
+function ensureCompanionDownloadFilename(hinted: string | null, key: string, mime: string): string {
+  const base = sanitizeCompanionDownloadFilename(
+    hinted?.trim() ? hinted : guessCompanionAssetDownloadFilename(key, mime)
+  );
+  if (/\.[a-z0-9]{2,8}$/i.test(base)) return base;
+  return `${base}${extensionFromCompanionMime(mime)}`;
 }
 
 function writeSse(res: ServerResponse, event: string, payload: unknown): void {
@@ -545,7 +565,7 @@ export async function handleRequest(
       };
       if (wantDownload) {
         const hinted = u.searchParams.get('filename');
-        const fn = sanitizeCompanionDownloadFilename(hinted || guessCompanionAssetDownloadFilename(key, ct));
+        const fn = ensureCompanionDownloadFilename(hinted, key, ct);
         headers['Content-Disposition'] = `attachment; filename="${fn}"`;
       }
       res.writeHead(200, headers);

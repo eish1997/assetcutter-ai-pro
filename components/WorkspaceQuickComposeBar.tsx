@@ -997,7 +997,7 @@ export default function WorkspaceQuickComposeBar({
                   {isLightbox ? (
                     <div
                       className="grid h-9 w-9 shrink-0 place-items-center rounded-md text-gray-400"
-                      title="默认 @当前画面；可再 @ 其它资产作额外参考"
+                      title="输入 @ 可引用当前画面或其它资产"
                     >
                       <ImageIcon className="h-[1.125rem] w-[1.125rem]" strokeWidth={2.2} aria-hidden />
                     </div>
@@ -1060,7 +1060,7 @@ export default function WorkspaceQuickComposeBar({
               {isLightbox ? (
                 <div
                   className="grid h-9 w-9 shrink-0 place-items-center rounded-md text-gray-400"
-                  title="默认 @当前画面；可再 @ 其它资产作额外参考"
+                  title="输入 @ 可引用当前画面或其它资产"
                 >
                   <ImageIcon className="h-[1.125rem] w-[1.125rem]" strokeWidth={2.2} aria-hidden />
                 </div>
