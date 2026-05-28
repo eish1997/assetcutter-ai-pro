@@ -18,6 +18,8 @@ import {
   parseOpenAiChatCompletionsBody,
   parseToapisHttpErrorJson,
 } from "./toapisAdapter";
+import { coerceImageModelRegistryId } from "./modelRegistry/imageModels";
+import { SUPPORTED_IMAGE_SIZES } from "../types";
 
 export function normalizeOpenAiBaseUrl(raw: string): string {
   const s = (raw || "").trim().replace(/\/+$/, "");
@@ -83,38 +85,208 @@ function clampOpenAiImagePrompt(systemInstruction: string, userText: string, max
   return sys ? `${sys.slice(0, budget)}${sep}${usr}` : usr;
 }
 
-/** gpt-image-1.5 等：官方标准尺寸 */
+/** gpt-image-1.5 等：官方仅支持三种固定 `size`（见 Image API 文档） */
 export function aspectRatioToGptImage15Size(aspect?: string): string {
   const a = (aspect || "1:1").trim().toLowerCase();
-  const wide = new Set(["16:9", "21:9", "4:3", "3:2"]);
+  if (a === "1:1") return "1024x1024";
+  const wide = new Set(["16:9", "21:9", "4:3", "3:2", "5:4"]);
   const tall = new Set(["9:16", "3:4", "2:3", "4:5"]);
   if (wide.has(a)) return "1536x1024";
   if (tall.has(a)) return "1024x1536";
   return "1024x1024";
 }
 
-/**
- * gpt-image-2：任意 WIDTHxHEIGHT（16 整除，宽高比 1:3～3:1）。
- * 这里为常见比例选较高分辨率默认值。
- */
-export function aspectRatioToGptImage2Size(aspect?: string): string {
-  const a = (aspect || "1:1").trim().toLowerCase();
-  const map: Record<string, string> = {
-    "1:1": "1536x1536",
-    "16:9": "1536x864",
-    "21:9": "1792x768",
-    "4:3": "1536x1152",
-    "3:2": "1536x1024",
-    "9:16": "864x1536",
-    "3:4": "1024x1536",
-    "2:3": "1024x1536",
-    "4:5": "1024x1280",
-  };
-  return map[a] ?? "1536x1536";
+/** OpenAI gpt-image-2：`size` 最长边硬上限 */
+export const GPT_IMAGE2_MAX_LONG_EDGE = 3840;
+
+/** OpenAI gpt-image-2：总像素下限 / 上限 */
+export const GPT_IMAGE2_MIN_TOTAL_PIXELS = 655_360;
+export const GPT_IMAGE2_MAX_TOTAL_PIXELS = 8_294_400;
+
+/** 未选 1K/2K/4K 时 gpt-image-2 默认长边 */
+export const GPT_IMAGE2_DEFAULT_LONG_EDGE = 1536;
+
+/** 1K/2K/4K 目标像素预算（对齐 Gemini 档位 + OpenAI 2K/4K 参考） */
+export function gptImage2TargetPixelsFromImageSize(imageSize?: string): number | null {
+  const s = (imageSize || "").trim().toUpperCase();
+  if (s === "1K") return 1_048_576;
+  if (s === "2K") return 3_686_400;
+  if (s === "4K") return GPT_IMAGE2_MAX_TOTAL_PIXELS;
+  return null;
 }
 
-export function resolveGptImageSize(model: string, aspectRatio?: string): string {
-  return isGptImage2Model(model) ? aspectRatioToGptImage2Size(aspectRatio) : aspectRatioToGptImage15Size(aspectRatio);
+/** 兼容旧引用：档位对应的大致长边上限（实际尺寸以像素预算求解为准） */
+export function gptImage2LongEdgeFromImageSize(imageSize?: string): number {
+  const s = (imageSize || "").trim().toUpperCase();
+  if (s === "1K") return 1024;
+  if (s === "2K") return 2048;
+  if (s === "4K") return GPT_IMAGE2_MAX_LONG_EDGE;
+  return GPT_IMAGE2_DEFAULT_LONG_EDGE;
+}
+
+function parseAspectRatioParts(aspect?: string): { rw: number; rh: number } {
+  const a = (aspect || "1:1").trim().toLowerCase();
+  const parts = a.split(":");
+  if (parts.length !== 2) return { rw: 1, rh: 1 };
+  const rw = Number(parts[0]);
+  const rh = Number(parts[1]);
+  if (!Number.isFinite(rw) || !Number.isFinite(rh) || rw <= 0 || rh <= 0) return { rw: 1, rh: 1 };
+  return { rw, rh };
+}
+
+function roundGptImage2Dimension(value: number): number {
+  return Math.max(16, Math.round(value / 16) * 16);
+}
+
+function dimensionsFromAspectAndPixelTarget(rw: number, rh: number, targetPixels: number): { width: number; height: number } {
+  const safeTarget = Math.max(GPT_IMAGE2_MIN_TOTAL_PIXELS, Math.min(GPT_IMAGE2_MAX_TOTAL_PIXELS, targetPixels));
+  const width = Math.sqrt((safeTarget * rw) / rh);
+  const height = Math.sqrt((safeTarget * rh) / rw);
+  return { width, height };
+}
+
+function clampGptImage2MaxLongEdge(width: number, height: number): { width: number; height: number } {
+  let w = width;
+  let h = height;
+  const maxDim = Math.max(w, h);
+  if (maxDim > GPT_IMAGE2_MAX_LONG_EDGE) {
+    const scale = GPT_IMAGE2_MAX_LONG_EDGE / maxDim;
+    w *= scale;
+    h *= scale;
+  }
+  return { width: w, height: h };
+}
+
+function enforceGptImage2PixelBounds(width: number, height: number): { width: number; height: number } {
+  let w = roundGptImage2Dimension(width);
+  let h = roundGptImage2Dimension(height);
+  let pixels = w * h;
+
+  if (pixels < GPT_IMAGE2_MIN_TOTAL_PIXELS) {
+    const scale = Math.sqrt(GPT_IMAGE2_MIN_TOTAL_PIXELS / Math.max(1, pixels));
+    w = roundGptImage2Dimension(w * scale);
+    h = roundGptImage2Dimension(h * scale);
+    pixels = w * h;
+    for (let i = 0; i < 48 && pixels < GPT_IMAGE2_MIN_TOTAL_PIXELS; i += 1) {
+      if (w <= h && w + 16 <= GPT_IMAGE2_MAX_LONG_EDGE) w += 16;
+      else if (h + 16 <= GPT_IMAGE2_MAX_LONG_EDGE) h += 16;
+      else if (w + 16 <= GPT_IMAGE2_MAX_LONG_EDGE) w += 16;
+      else break;
+      pixels = w * h;
+    }
+  }
+
+  pixels = w * h;
+  if (pixels > GPT_IMAGE2_MAX_TOTAL_PIXELS) {
+    const scale = Math.sqrt(GPT_IMAGE2_MAX_TOTAL_PIXELS / pixels);
+    w = roundGptImage2Dimension(w * scale);
+    h = roundGptImage2Dimension(h * scale);
+    pixels = w * h;
+    for (let i = 0; i < 48 && pixels > GPT_IMAGE2_MAX_TOTAL_PIXELS; i += 1) {
+      if (w >= h && w > 16) w -= 16;
+      else if (h > 16) h -= 16;
+      else break;
+      pixels = w * h;
+    }
+  }
+
+  return { width: w, height: h };
+}
+
+function finalizeGptImage2Dimensions(width: number, height: number): { width: number; height: number } {
+  let w = width;
+  let h = height;
+  for (let i = 0; i < 4; i += 1) {
+    const edgeClamped = clampGptImage2MaxLongEdge(w, h);
+    const bounded = enforceGptImage2PixelBounds(edgeClamped.width, edgeClamped.height);
+    if (bounded.width === w && bounded.height === h) {
+      return bounded;
+    }
+    w = bounded.width;
+    h = bounded.height;
+  }
+  return enforceGptImage2PixelBounds(w, h);
+}
+
+export function parseGptImage2SizeString(size: string): { width: number; height: number } {
+  const [wRaw, hRaw] = size.split("x");
+  return { width: Number(wRaw), height: Number(hRaw) };
+}
+
+/** 校验 gpt-image-2 官方 size 约束 */
+export function isValidGptImage2Size(size: string): boolean {
+  const { width, height } = parseGptImage2SizeString(size);
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width < 16 || height < 16) return false;
+  if (width % 16 !== 0 || height % 16 !== 0) return false;
+  if (Math.max(width, height) > GPT_IMAGE2_MAX_LONG_EDGE) return false;
+  const pixels = width * height;
+  if (pixels < GPT_IMAGE2_MIN_TOTAL_PIXELS || pixels > GPT_IMAGE2_MAX_TOTAL_PIXELS) return false;
+  const ratio = width / height;
+  return ratio <= 3 && ratio >= 1 / 3;
+}
+
+/**
+ * gpt-image-2：按长边与比例计算 WIDTHxHEIGHT，并自动钳制到 OpenAI 合法区间。
+ */
+export function aspectRatioToGptImage2Pixels(aspect?: string, longEdge = GPT_IMAGE2_DEFAULT_LONG_EDGE): string {
+  const { rw, rh } = parseAspectRatioParts(aspect);
+  const edge = Math.min(GPT_IMAGE2_MAX_LONG_EDGE, Math.max(16, Math.floor(longEdge)));
+  const width = rw >= rh ? edge : (edge * rw) / rh;
+  const height = rw >= rh ? (edge * rh) / rw : edge;
+  const finalized = finalizeGptImage2Dimensions(width, height);
+  return `${finalized.width}x${finalized.height}`;
+}
+
+/** gpt-image-2：按 aspectRatio + 1K/2K/4K（像素预算）或默认长边生成合法 size */
+export function aspectRatioToGptImage2Size(aspect?: string, imageSize?: string): string {
+  const { rw, rh } = parseAspectRatioParts(aspect);
+  const targetPixels = gptImage2TargetPixelsFromImageSize(imageSize);
+  const { width, height } =
+    targetPixels != null
+      ? dimensionsFromAspectAndPixelTarget(rw, rh, targetPixels)
+      : {
+          width: rw >= rh ? GPT_IMAGE2_DEFAULT_LONG_EDGE : (GPT_IMAGE2_DEFAULT_LONG_EDGE * rw) / rh,
+          height: rw >= rh ? (GPT_IMAGE2_DEFAULT_LONG_EDGE * rh) / rw : GPT_IMAGE2_DEFAULT_LONG_EDGE,
+        };
+  const finalized = finalizeGptImage2Dimensions(width, height);
+  return `${finalized.width}x${finalized.height}`;
+}
+
+export function resolveGptImageSize(model: string, aspectRatio?: string, imageSize?: string): string {
+  return isGptImage2Model(model)
+    ? aspectRatioToGptImage2Size(aspectRatio, imageSize)
+    : aspectRatioToGptImage15Size(aspectRatio);
+}
+
+/** gpt-image-1.5 仅 1536 边，UI 不应提供 2K/4K */
+export function imageSizeSelectOptionsForRegistryModel(
+  registryId?: string
+): Array<{ readonly value: string; readonly label: string }> {
+  const id = coerceImageModelRegistryId(registryId || "");
+  if (id === "gpt-image-1.5") {
+    return SUPPORTED_IMAGE_SIZES.filter((s) => s.value === "1K");
+  }
+  return SUPPORTED_IMAGE_SIZES;
+}
+
+export function imageSizeDropdownOptionsForRegistryModel(registryId?: string): Array<{ value: string; label: string }> {
+  return [
+    { value: "", label: "默认" },
+    ...imageSizeSelectOptionsForRegistryModel(registryId).map((s) => ({ value: s.value, label: s.label })),
+  ];
+}
+
+export function coerceImageSizeForOpenAiImageModel(registryId: string, imageSize?: string): string | undefined {
+  const raw = (imageSize || "").trim();
+  if (!raw) return undefined;
+  const tier = raw.toUpperCase();
+  if (coerceImageModelRegistryId(registryId) === "gpt-image-1.5" && tier !== "1K") {
+    return undefined;
+  }
+  if (isGptImage2Model(registryId) && tier !== "1K" && tier !== "2K" && tier !== "4K") {
+    return undefined;
+  }
+  return raw;
 }
 
 /** 站内 Gemini 风格 imageSize（1K/2K/4K）→ OpenAI quality */
@@ -265,8 +437,9 @@ function buildGptImageRequestBody(args: {
   inlineImages: string[];
 }): Record<string, unknown> {
   const mappedModel = mapOpenAiImageModel(args.model);
-  const size = resolveGptImageSize(mappedModel, args.imageConfig.aspectRatio);
-  const quality = gptImageQualityFromImageSize(args.imageConfig.imageSize);
+  const effectiveImageSize = coerceImageSizeForOpenAiImageModel(mappedModel, args.imageConfig.imageSize);
+  const size = resolveGptImageSize(mappedModel, args.imageConfig.aspectRatio, effectiveImageSize);
+  const quality = gptImageQualityFromImageSize(effectiveImageSize);
   const body: Record<string, unknown> = {
     model: mappedModel,
     prompt: args.prompt,

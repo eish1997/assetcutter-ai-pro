@@ -692,7 +692,7 @@ const server = http.createServer(async (req, res) => {
     if (path === '/api/auth/trial-gemini/consume' && req.method === 'POST') {
       await readBody(req);
       const token = parseCookie(req)[COOKIE_NAME];
-      const dailyLimit = Number(process.env.TRIAL_GEMINI_DAILY_LIMIT || 20);
+      const dailyLimit = Number(process.env.TRIAL_GEMINI_DAILY_LIMIT || 60);
       if (token) {
         const row = await getSessionWithUser(token);
         if (row?.user?.id) {

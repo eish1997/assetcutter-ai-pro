@@ -9,6 +9,7 @@ import {
 import { DEFAULT_MODEL_TEXT } from '../services/modelRegistry/constants';
 import { useEffectiveTextModelRows } from '../hooks/useEffectiveTextModelRows';
 import { CAPABILITY_CATEGORIES, SUPPORTED_ASPECT_RATIOS, SUPPORTED_IMAGE_SIZES } from '../types';
+import { imageSizeDropdownOptionsForRegistryModel } from '../services/openaiAdapter';
 import type { CapabilityTestResult } from '../services/capabilityTestRunner';
 import {
   BUILTIN_CAPABILITY_EDITABLE_IDS,
@@ -1620,7 +1621,11 @@ const CapabilityPresetSection: React.FC<{
                       title: g.disabledReason,
                     }))}
                     value={newImageModelRegistryId}
-                    onChange={(v) => setNewImageModelRegistryId(v)}
+                    onChange={(v) => {
+                      setNewImageModelRegistryId(v);
+                      const allowed = imageSizeDropdownOptionsForRegistryModel(v).map((o) => o.value);
+                      if (newImageSize && !allowed.includes(newImageSize)) setNewImageSize('');
+                    }}
                     triggerClassName={DROPDOWN_TRIGGER_COMPACT}
                   />
                 </label>
@@ -1637,7 +1642,7 @@ const CapabilityPresetSection: React.FC<{
                 <label className="flex items-center gap-2 text-[9px] text-gray-400">
                   <span className="font-black uppercase">贴图尺寸</span>
                   <CustomDropdown
-                    options={[{ value: '', label: '默认' }, ...SUPPORTED_IMAGE_SIZES.map((s) => ({ value: s.value, label: s.label }))]}
+                    options={imageSizeDropdownOptionsForRegistryModel(newImageModelRegistryId)}
                     value={newImageSize}
                     onChange={setNewImageSize}
                     placeholder="默认"
@@ -2342,7 +2347,11 @@ const CapabilityPresetSection: React.FC<{
                                       title: g.disabledReason,
                                     }))}
                                     value={editImageModelRegistryId}
-                                    onChange={(v) => setEditImageModelRegistryId(v)}
+                                    onChange={(v) => {
+                                      setEditImageModelRegistryId(v);
+                                      const allowed = imageSizeDropdownOptionsForRegistryModel(v).map((o) => o.value);
+                                      if (editImageSize && !allowed.includes(editImageSize)) setEditImageSize('');
+                                    }}
                                     triggerClassName={DROPDOWN_TRIGGER_COMPACT}
                                     portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
                                   />
@@ -2361,7 +2370,7 @@ const CapabilityPresetSection: React.FC<{
                                 <label className="flex items-center gap-2 text-[9px] text-gray-400">
                                   <span className="font-black uppercase">贴图尺寸</span>
                                   <CustomDropdown
-                                    options={[{ value: '', label: '默认' }, ...SUPPORTED_IMAGE_SIZES.map((s) => ({ value: s.value, label: s.label }))]}
+                                    options={imageSizeDropdownOptionsForRegistryModel(editImageModelRegistryId)}
                                     value={editImageSize}
                                     onChange={setEditImageSize}
                                     placeholder="默认"

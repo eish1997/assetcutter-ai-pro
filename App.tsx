@@ -23,6 +23,7 @@ import { migrateSystemModelSlots } from './services/modelRegistry/systemConfigMi
 import { coerceTextModelRegistryId } from './services/modelRegistry/textModels';
 import { useEffectiveImageModelRows } from './hooks/useEffectiveImageGearRows';
 import { DEFAULT_IMAGE_MODEL_REGISTRY_ID } from './services/modelRegistry/imageModels';
+import { imageSizeSelectOptionsForRegistryModel } from './services/openaiAdapter';
 import { loadRecords, addRecord as addGenerationRecord, updateScore as updateGenerationScore } from './services/recordStore';
 import { loadSnippets } from './services/snippetStore';
 import { AppStep, AppMode, LibraryItem, SystemConfig, AppTask, AssetCategory, DialogMessage, DialogSession, DialogTempItem, DIALOG_ASPECT_RATIO_OPTIONS, SUPPORTED_IMAGE_SIZES, type GenerationRecord, type CustomAppModule, type CapabilitySet, type WorkflowAsset, type WorkflowPendingTask, type ArenaCurrentStep, type ArenaStepEntry, type ArenaTimelineBlock } from './types';
@@ -2839,6 +2840,16 @@ const MainApp: React.FC = () => {
   const [dialogSkipUnderstand, setDialogSkipUnderstandState] = useState<boolean>(() => getDialogSkipUnderstand());
   const [dialogAspectRatio, setDialogAspectRatio] = useState<string>('adaptive');
   const [dialogImageSize, setDialogImageSize] = useState<string>(SUPPORTED_IMAGE_SIZES[1].value);
+  const dialogImageSizeOptions = useMemo(
+    () => imageSizeSelectOptionsForRegistryModel(dialogModel),
+    [dialogModel]
+  );
+  useLayoutEffect(() => {
+    const allowed = dialogImageSizeOptions.map((s) => s.value);
+    if (dialogImageSize && !allowed.includes(dialogImageSize)) {
+      setDialogImageSize(allowed[0] ?? SUPPORTED_IMAGE_SIZES[0].value);
+    }
+  }, [dialogModel, dialogImageSizeOptions, dialogImageSize]);
   const [dialogEditingMessageId, setDialogEditingMessageId] = useState<string | null>(null);
   const [dialogEditingText, setDialogEditingText] = useState('');
   const {
@@ -5719,7 +5730,7 @@ const MainApp: React.FC = () => {
                         <div className="flex items-center gap-1.5 shrink-0">
                           <span className="text-[9px] font-black text-gray-500 uppercase whitespace-nowrap">尺寸</span>
                           <CustomDropdown
-                            options={SUPPORTED_IMAGE_SIZES.map((s) => ({ value: s.value, label: s.label }))}
+                            options={dialogImageSizeOptions.map((s) => ({ value: s.value, label: s.label }))}
                             value={dialogImageSize}
                             onChange={setDialogImageSize}
                             triggerClassName={`${DROPDOWN_TRIGGER_COMPACT} min-w-[4.75rem]`}

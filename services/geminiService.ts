@@ -755,7 +755,11 @@ export function getClientForTask(registryId: string, role: "text" | "image" = "t
 
 function formatRequestTimeoutMessage(timeoutMs: number, phase?: string): string {
   const label = phase?.trim();
-  return label ? `${label}请求超时（>${timeoutMs}ms）` : `请求超时（>${timeoutMs}ms）`;
+  const base = label ? `${label}请求超时（>${timeoutMs}ms）` : `请求超时（>${timeoutMs}ms）`;
+  if (label === "生图") {
+    return `${base}（客户端停止等待，不代表上游已拒绝；GPT Image high 质量可能需数分钟，勿立即重试以免重复计费）`;
+  }
+  return base;
 }
 
 function usesOpenAiRouteForImage(registryId: string): boolean {
@@ -824,8 +828,8 @@ export type GeminiImageBatchGroupOptions = {
 
 const GEMINI_REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_REQUEST_TIMEOUT_MS) || 45_000;
 const GEMINI_IMAGE_REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_IMAGE_REQUEST_TIMEOUT_MS) || 120_000;
-/** OpenAI GPT Image（尤其 gpt-image-2 + 4K）常超过 2min；默认 5min */
-const OPENAI_IMAGE_REQUEST_TIMEOUT_MS = Number(process.env.OPENAI_IMAGE_REQUEST_TIMEOUT_MS) || 300_000;
+/** OpenAI GPT Image（尤其 gpt-image-2 + high quality）常超过 5min；默认 10min，与 Vertex 生图对齐 */
+const OPENAI_IMAGE_REQUEST_TIMEOUT_MS = Number(process.env.OPENAI_IMAGE_REQUEST_TIMEOUT_MS) || 600_000;
 /** Vertex/trial 生图单项（尤其 4K）常超过 5min；默认 10min，可用 GEMINI_VERTEX_IMAGE_TIMEOUT_MS 覆盖 */
 const GEMINI_VERTEX_IMAGE_TIMEOUT_MS = Number(process.env.GEMINI_VERTEX_IMAGE_TIMEOUT_MS) || 600_000;
 

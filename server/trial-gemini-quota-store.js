@@ -33,7 +33,7 @@ function utcDay() {
  */
 export async function consumeTrialGeminiSlotForUser(userId, dailyLimit) {
   const uid = String(userId || '').trim();
-  const limit = Math.max(1, Math.min(500, Math.floor(Number(dailyLimit) || 20)));
+  const limit = Math.max(1, Math.min(500, Math.floor(Number(dailyLimit) || 60)));
   if (!uid) return { ok: false, used: 0, limit };
 
   const day = utcDay();

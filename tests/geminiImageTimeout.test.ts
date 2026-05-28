@@ -23,7 +23,7 @@ function usesOpenAiRouteForImage(registryId: string): boolean {
   return imageModelProviderRoute(registryId) === "openai";
 }
 
-const OPENAI_IMAGE_REQUEST_TIMEOUT_MS = 300_000;
+const OPENAI_IMAGE_REQUEST_TIMEOUT_MS = 600_000;
 const GEMINI_IMAGE_REQUEST_TIMEOUT_MS = 120_000;
 
 function imageGenTimeoutMsForModel(registryId: string, baseTimeout: number): number {
@@ -49,8 +49,8 @@ describe("OpenAI image generation timeout", () => {
     vi.restoreAllMocks();
   });
 
-  it("extends timeout to 300s for gpt-image-2 on openai-official", () => {
-    expect(imageGenTimeoutMsForModel("gpt-image-2", GEMINI_IMAGE_REQUEST_TIMEOUT_MS)).toBe(300_000);
+  it("extends timeout to 600s for gpt-image-2 on openai-official", () => {
+    expect(imageGenTimeoutMsForModel("gpt-image-2", GEMINI_IMAGE_REQUEST_TIMEOUT_MS)).toBe(600_000);
   });
 
   it("keeps default timeout for gemini image models", () => {

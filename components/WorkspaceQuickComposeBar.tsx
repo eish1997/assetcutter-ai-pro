@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Image as ImageIcon, Maximize2, Minimize2 } from 'lucide-react';
-import { SUPPORTED_IMAGE_SIZES } from '../types';
+import { imageSizeSelectOptionsForRegistryModel } from '../services/openaiAdapter';
 import { useEffectiveImageModelRows } from '../hooks/useEffectiveImageGearRows';
 import { useEffectiveTextModelRows } from '../hooks/useEffectiveTextModelRows';
 import {
@@ -539,6 +539,19 @@ export default function WorkspaceQuickComposeBar({
     };
   }, [visible, clampPositionToViewport]);
 
+  const imageSizeOptions = useMemo(
+    () => imageSizeSelectOptionsForRegistryModel(genSettings.imageModelRegistryId),
+    [genSettings.imageModelRegistryId]
+  );
+
+  useLayoutEffect(() => {
+    if (!visible) return;
+    const allowed = imageSizeOptions.map((s) => s.value);
+    if (genSettings.imageSize && !allowed.includes(genSettings.imageSize)) {
+      genSettings.onImageSize('');
+    }
+  }, [visible, genSettings.imageModelRegistryId, genSettings.imageSize, genSettings.onImageSize, imageSizeOptions]);
+
   if (!visible) return null;
 
   const disabled = false;
@@ -558,7 +571,7 @@ export default function WorkspaceQuickComposeBar({
   const aspectSummary =
     genSettings.aspectRatio === 'adaptive' ? '自' : genSettings.aspectRatio || '自';
   const sizeSummary =
-    genSettings.imageSize && SUPPORTED_IMAGE_SIZES.some((s) => s.value === genSettings.imageSize)
+    genSettings.imageSize && imageSizeOptions.some((s) => s.value === genSettings.imageSize)
       ? genSettings.imageSize
       : '';
   const countSummary = allowBatchCount ? Math.min(4, Math.max(1, genSettings.count)) : 1;
@@ -597,7 +610,13 @@ export default function WorkspaceQuickComposeBar({
       value={genSettings.imageModelRegistryId}
       onChange={(v) => {
         const row = effectiveModelRows.find((g) => g.registryId === v);
-        if (row && !row.disabled) genSettings.onImageModelRegistryId(v);
+        if (row && !row.disabled) {
+          genSettings.onImageModelRegistryId(v);
+          const allowed = imageSizeSelectOptionsForRegistryModel(v).map((s) => s.value);
+          if (genSettings.imageSize && !allowed.includes(genSettings.imageSize)) {
+            genSettings.onImageSize('');
+          }
+        }
       }}
       triggerClassName={`${QUICK_COMPOSE_PILL_TRIGGER} font-bold text-gray-300`}
       portalZIndex={{ backdrop: 2602, list: 2603 }}
@@ -769,7 +788,7 @@ export default function WorkspaceQuickComposeBar({
                         >
                           —
                         </button>
-                        {SUPPORTED_IMAGE_SIZES.map((s) => (
+                        {imageSizeOptions.map((s) => (
                           <button
                             key={s.value}
                             type="button"

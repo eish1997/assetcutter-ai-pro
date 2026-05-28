@@ -7,7 +7,9 @@ import { readLocalJson, scopedStorageKey, writeLocalJson } from './clientPersist
 import { HttpRequestError, requestJson } from './httpClient';
 import { getUserApiKey } from './settingsStore';
 
-/** 与 auth-api `TRIAL_GEMINI_DAILY_LIMIT` 对齐；访客提示与本地计数用同一上限（默认 20）。 */
+/** 与 auth-api `TRIAL_GEMINI_DAILY_LIMIT` 对齐；访客提示与本地计数用同一上限（默认 60）。 */
+export const DEFAULT_TRIAL_GEMINI_DAILY_LIMIT = 60;
+
 function trialDailyLimitClient(): number {
   try {
     const raw = import.meta.env.VITE_TRIAL_GEMINI_DAILY_LIMIT;
@@ -16,7 +18,7 @@ function trialDailyLimitClient(): number {
   } catch {
     /* ignore */
   }
-  return 20;
+  return DEFAULT_TRIAL_GEMINI_DAILY_LIMIT;
 }
 
 function utcDay(): string {
