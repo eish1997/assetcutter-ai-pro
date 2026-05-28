@@ -4,6 +4,7 @@
 import type { CustomAppModule, BoundingBox } from '../types';
 import { DEFAULT_PROMPTS, detectObjectsInImage } from './unifiedAiGateway';
 import { executeCapability, type CapabilityExecuteContext } from './capabilityExecutor';
+import { presetUsesHostBundleProcessor } from './capabilityProcessors/imageProcessProcessors';
 import { DEFAULT_MODEL_TEXT } from './modelRegistry/constants';
 import { detectGrid } from './gridDetector';
 
@@ -62,7 +63,7 @@ export async function runCapabilityTest(
     if (preset.category === 'generate_3d') {
       return { ok: false, error: '生成3D 请在工作流中拖图到能力框提交', durationMs: Date.now() - start };
     }
-    if (preset.companionHostBundle?.dirName?.trim()) {
+    if (presetUsesHostBundleProcessor(preset)) {
       const out = await executeCapability(preset, imageBase64 || '', execCtx);
       if (out.ok === false) return { ok: false, error: out.error, durationMs: out.durationMs };
       if (out.kind === 'text') {

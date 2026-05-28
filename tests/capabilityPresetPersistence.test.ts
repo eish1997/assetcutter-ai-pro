@@ -33,7 +33,7 @@ describe('capabilityPreset persistence (mirrors CapabilityPresetSection → save
     vi.resetModules();
   });
 
-  it('companionHostBundle 经 save → load 后保持一致', async () => {
+  it('companionHostBundle 经 save → load 后归一为 image_process + host_bundle', async () => {
     const { saveCapabilityPresets, loadCapabilityPresets } = await loadStore();
 
     const custom: CustomAppModule = {
@@ -53,16 +53,20 @@ describe('capabilityPreset persistence (mirrors CapabilityPresetSection → save
     const parsed = JSON.parse(raw!) as { version: number; presets: CustomAppModule[] };
     expect(parsed.version).toBe(4);
     const written = parsed.presets.find((p) => p.id === 'ui-hb-roundtrip');
+    expect(written?.category).toBe('image_process');
+    expect(written?.processor).toBe('host_bundle');
     expect(written?.companionHostBundle).toEqual({ dirName: 'my-pack', phase: 'probe' });
     expect(written?.engine).toBe('builtin');
 
     const loaded = loadCapabilityPresets();
     const again = loaded.find((p) => p.id === 'ui-hb-roundtrip');
+    expect(again?.category).toBe('image_process');
+    expect(again?.processor).toBe('host_bundle');
     expect(again?.companionHostBundle).toEqual({ dirName: 'my-pack', phase: 'probe' });
     expect(again?.engine).toBe('builtin');
   });
 
-  it('清空 companionHostBundle.dirName 后 save → load 不再带该字段', async () => {
+  it('legacy 文生文上的 companionHostBundle 保存时迁移为 image_process', async () => {
     const { saveCapabilityPresets, loadCapabilityPresets } = await loadStore();
 
     const custom: CustomAppModule = {
@@ -76,10 +80,13 @@ describe('capabilityPreset persistence (mirrors CapabilityPresetSection → save
 
     saveCapabilityPresets([custom]);
     const once = loadCapabilityPresets().find((p) => p.id === 'ui-hb-clear');
+    expect(once?.category).toBe('image_process');
+    expect(once?.processor).toBe('host_bundle');
     expect(once?.companionHostBundle).toEqual({ dirName: 'tmp' });
 
     const cleared: CustomAppModule = {
       ...once!,
+      params: { dirName: '   ', phase: 'exec' },
       companionHostBundle: { dirName: '   ' },
     };
     saveCapabilityPresets(loadCapabilityPresets().map((p) => (p.id === 'ui-hb-clear' ? cleared : p)));

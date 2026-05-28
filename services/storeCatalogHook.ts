@@ -9,6 +9,18 @@ import {
 } from './capabilityPresetStore';
 import { getCapabilityStoreCatalogSources } from './settingsStore';
 
+const CATALOG_CACHE_MS = 15_000;
+
+type CatalogFetchResult = {
+  merged: StoreCatalogItem[];
+  baseMap: Record<string, string>;
+  sourceCount: number;
+  filteredCount: number;
+};
+
+let catalogCache: (CatalogFetchResult & { at: number }) | null = null;
+let catalogFetchPromise: Promise<CatalogFetchResult> | null = null;
+
 async function fetchJson<T>(url: string): Promise<T> {
   const res = await fetch(url, { cache: 'no-store' });
   if (!res.ok) throw new Error(`请求失败：${res.status} ${res.statusText}`);
@@ -52,7 +64,6 @@ function resolvePackUrl(itemUrl: string, baseUrl: string): string {
       const u = new URL(input);
       const isCapabilityStoreApiPath = /\/api\/r2\/capability-store(\/|$)/i.test(u.pathname || '');
       if (!isCapabilityStoreApiPath) return input;
-      // 只要目录源明确了 capability-store 的后端 origin，就统一走它，避免误打到返回 HTML 的前端域名。
       if (preferredCapabilityStoreOrigin) {
         return `${preferredCapabilityStoreOrigin}${u.pathname}${u.search}${u.hash}`;
       }
@@ -68,7 +79,6 @@ function resolvePackUrl(itemUrl: string, baseUrl: string): string {
   try {
     if (/^https?:\/\//i.test(raw)) return normalizeCapabilityStoreHost(raw);
     if (/^https?:\/\//i.test(base)) return normalizeCapabilityStoreHost(new URL(raw, base).toString());
-    // base 为同源相对路径（如 /api/r2/capability-store/catalog）时，使用当前 origin 兜底
     if (typeof window !== 'undefined' && base.startsWith('/')) {
       return new URL(raw, `${window.location.origin}${base}`).toString();
     }
@@ -114,12 +124,90 @@ function normalizePreset(x: unknown): CustomAppModule | null {
   return o as unknown as CustomAppModule;
 }
 
+async function fetchCapabilityStoreCatalog(
+  onLog?: (level: 'info' | 'warn' | 'error', message: string, detail?: string) => void,
+  options?: { force?: boolean }
+): Promise<CatalogFetchResult> {
+  if (!options?.force && catalogCache && Date.now() - catalogCache.at < CATALOG_CACHE_MS) {
+    const { merged, baseMap, sourceCount, filteredCount } = catalogCache;
+    return { merged, baseMap, sourceCount, filteredCount };
+  }
+  if (catalogFetchPromise) return catalogFetchPromise;
+
+  catalogFetchPromise = (async () => {
+    const sources = getCapabilityStoreCatalogSources();
+    if (sources.length === 0) {
+      onLog?.('warn', '未配置能力商店源地址', undefined);
+      return { merged: [], baseMap: {}, sourceCount: 0, filteredCount: 0 };
+    }
+    const merged: StoreCatalogItem[] = [];
+    const baseMap: Record<string, string> = {};
+    const seen = new Set<string>();
+    let filteredCount = 0;
+    for (const base of sources) {
+      const toFetch = base.includes('?') ? `${base}&t=${Date.now()}` : `${base}?t=${Date.now()}`;
+      try {
+        const raw = await fetchJson<unknown>(toFetch);
+        const arr = Array.isArray(raw) ? raw : [];
+        const list = arr.map(normalizeCatalogItem).filter(Boolean) as StoreCatalogItem[];
+        filteredCount += arr.length - list.length;
+        for (const item of list) {
+          if (seen.has(item.id)) continue;
+          seen.add(item.id);
+          merged.push(item);
+          baseMap[item.id] = base;
+        }
+      } catch (e) {
+        onLog?.('warn', `商店源加载失败：${base}`, e instanceof Error ? e.message : String(e));
+      }
+    }
+    if (filteredCount > 0) {
+      onLog?.('warn', `商店目录部分项被过滤（无效 ${filteredCount}）`, undefined);
+    }
+    const result = { merged, baseMap, sourceCount: sources.length, filteredCount };
+    catalogCache = { ...result, at: Date.now() };
+    return result;
+  })().finally(() => {
+    catalogFetchPromise = null;
+  });
+
+  return catalogFetchPromise;
+}
+
+/** 模块级：避免 StrictMode 重挂载重复自动同步 */
+let globalAutoRemoteSynced = false;
+
+export function resetStoreCatalogAutoSyncForTests(): void {
+  globalAutoRemoteSynced = false;
+  catalogCache = null;
+  catalogFetchPromise = null;
+}
+
+export function shouldRunStoreCatalogAutoSync(): boolean {
+  return !globalAutoRemoteSynced;
+}
+
+export function markStoreCatalogAutoSyncDone(): void {
+  globalAutoRemoteSynced = true;
+}
+
 export type UseStoreCatalogOptions = {
   onPresetsApplied?: (presets: CustomAppModule[]) => void;
   onLog?: (level: 'info' | 'warn' | 'error', message: string, detail?: string) => void;
 };
 
 export type RemotePresetItem = { preset: CustomAppModule; pack: StoreCatalogItem };
+
+export type RefreshCatalogOptions = {
+  force?: boolean;
+  /** 默认 false：目录加载成功不单独打日志，由上层合并为一条 */
+  logSuccess?: boolean;
+};
+
+export type InstallPresetsOptions = {
+  /** 默认 true；批量自动/刷新同步时可关闭，由调用方合并日志 */
+  log?: boolean;
+};
 
 export function useStoreCatalog(options: UseStoreCatalogOptions = {}) {
   const { onPresetsApplied, onLog } = options;
@@ -133,7 +221,6 @@ export function useStoreCatalog(options: UseStoreCatalogOptions = {}) {
   const [installingAll, setInstallingAll] = useState(false);
   const packBaseUrlMapRef = useRef<Record<string, string>>({});
 
-  /** 远程各包展开为「能力」列表，用于按能力展示卡片 */
   const remotePresetItems = useMemo(
     () =>
       catalog.flatMap((pack) =>
@@ -144,44 +231,18 @@ export function useStoreCatalog(options: UseStoreCatalogOptions = {}) {
     [catalog, packPresetsMap]
   );
 
-  const refresh = async () => {
+  const refresh = async (refreshOptions?: RefreshCatalogOptions) => {
     setLoading(true);
     setError(null);
     try {
-      const sources = getCapabilityStoreCatalogSources();
-      if (sources.length === 0) {
-        setCatalog([]);
-        packBaseUrlMapRef.current = {};
-        onLog?.('warn', '未配置能力商店源地址', undefined);
-        return;
-      }
-      const merged: StoreCatalogItem[] = [];
-      const baseMap: Record<string, string> = {};
-      const seen = new Set<string>();
-      let filteredCount = 0;
-      for (const base of sources) {
-        const toFetch = base.includes('?') ? `${base}&t=${Date.now()}` : `${base}?t=${Date.now()}`;
-        try {
-          const raw = await fetchJson<unknown>(toFetch);
-          const arr = Array.isArray(raw) ? raw : [];
-          const list = arr.map(normalizeCatalogItem).filter(Boolean) as StoreCatalogItem[];
-          filteredCount += arr.length - list.length;
-          for (const item of list) {
-            if (seen.has(item.id)) continue;
-            seen.add(item.id);
-            merged.push(item);
-            baseMap[item.id] = base;
-          }
-        } catch (e) {
-          onLog?.('warn', `商店源加载失败：${base}`, e instanceof Error ? e.message : String(e));
-        }
-      }
+      const { merged, baseMap, sourceCount } = await fetchCapabilityStoreCatalog(onLog, {
+        force: refreshOptions?.force,
+      });
       packBaseUrlMapRef.current = baseMap;
-      if (filteredCount > 0) {
-        onLog?.('warn', `商店目录部分项被过滤（无效 ${filteredCount}）`, undefined);
-      }
       setCatalog(merged);
-      onLog?.('info', `商店目录加载成功（${merged.length} 项，来源 ${sources.length}）`, undefined);
+      if (refreshOptions?.logSuccess) {
+        onLog?.('info', `商店目录加载成功（${merged.length} 项，来源 ${sourceCount}）`, undefined);
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setError(msg);
@@ -261,7 +322,6 @@ export function useStoreCatalog(options: UseStoreCatalogOptions = {}) {
     });
   }, [catalog]);
 
-  /** 安装单个能力到当前列表（以能力为单位，不按包） */
   const installSinglePreset = (preset: CustomAppModule) => {
     if (BUILTIN_IMAGE_PROCESS_IDS.includes(preset.id as (typeof BUILTIN_IMAGE_PROCESS_IDS)[number])) return;
     setError(null);
@@ -271,19 +331,21 @@ export function useStoreCatalog(options: UseStoreCatalogOptions = {}) {
     onLog?.('info', `已添加能力：${preset.label}`, undefined);
   };
 
-  /** 批量添加多个能力到当前列表（一键安装全部未安装的能力） */
-  const installPresets = (presets: CustomAppModule[]) => {
+  const installPresets = (presets: CustomAppModule[], installOptions?: InstallPresetsOptions) => {
     const filtered = dedupeCapabilityPresetsById(presets).filter(
       (p) => !BUILTIN_IMAGE_PROCESS_IDS.includes(p.id as (typeof BUILTIN_IMAGE_PROCESS_IDS)[number])
     );
-    if (filtered.length === 0) return;
+    if (filtered.length === 0) return 0;
     setInstallingAll(true);
     setError(null);
     const merged = mergeCapabilityPresets(loadCapabilityPresets(), filtered);
     saveCapabilityPresets(merged);
     onPresetsApplied?.(merged);
-    onLog?.('info', `已同步 ${filtered.length} 条预设（同 ID 以服务器版本为准）`, undefined);
+    if (installOptions?.log !== false) {
+      onLog?.('info', `已同步 ${filtered.length} 条预设（同 ID 以服务器版本为准）`, undefined);
+    }
     setInstallingAll(false);
+    return filtered.length;
   };
 
   return {

@@ -1,6 +1,7 @@
 import type { CapabilityCategory, CapabilityEngine, CustomAppModule } from '../types';
 import { readLocalString, removeLocalKey, writeLocalJson } from './clientPersist';
 import { normalizeCapabilityPreviewUrlForPersist } from './capabilityPreviewUrl';
+import { syncImageProcessProcessorFields } from './capabilityProcessors/imageProcessProcessors';
 import { coerceImageModelRegistryId } from './modelRegistry/imageModels';
 import { coerceTextModelRegistryId } from './modelRegistry/textModels';
 
@@ -24,6 +25,7 @@ function migrateCapabilityCategory(input: CustomAppModule): CapabilityCategory {
     raw === 'text_to_text' ||
     raw === 'text_to_image' ||
     raw === 'image_to_image' ||
+    raw === 'image_process' ||
     raw === 'image_to_text' ||
     raw === 'generate_3d' ||
     raw === 'generate_video'
@@ -31,22 +33,25 @@ function migrateCapabilityCategory(input: CustomAppModule): CapabilityCategory {
     return raw as CapabilityCategory;
   }
   if (raw === 'image_gen') return 'image_to_image';
-  if (raw === 'image_process') return 'image_to_image';
   if (raw === 'text_llm') return input.engine === 'gen_image' ? 'text_to_image' : 'text_to_text';
   return input.instruction ? 'image_to_image' : 'image_to_image';
 }
 
 function deriveEngineForCategory(category: CapabilityCategory, input: CustomAppModule, rawCat: string): CapabilityEngine | undefined {
-  if (input.companionSamSegment === true) return 'builtin';
-  if (input.companionRembg === true) return 'builtin';
-  if (input.companionHostBundle?.dirName?.trim()) return 'builtin';
   if (category === 'generate_3d' || category === 'generate_video') return undefined;
   if (category === 'text_to_text' || category === 'image_to_text') return 'gen_text';
   if (category === 'text_to_image') return 'gen_image';
+  if (category === 'image_process') return 'builtin';
+  if (category === 'image_to_image') {
+    if (input.companionSamSegment === true) return 'builtin';
+    if (input.companionRembg === true) return 'builtin';
+    if (input.engine === 'gen_image' || input.engine === 'builtin') return input.engine;
+    if (input.id === 'split_component' || input.id === 'cut_image') return 'builtin';
+    return 'gen_image';
+  }
   if (input.engine === 'gen_image' || input.engine === 'builtin') return input.engine;
   if (rawCat === 'image_process') return 'builtin';
   if (rawCat === 'image_gen') return 'gen_image';
-  if (input.id === 'split_component' || input.id === 'cut_image') return 'builtin';
   return 'gen_image';
 }
 
@@ -104,8 +109,22 @@ function normalizeGenerate3DPreset(input: NonNullable<CustomAppModule['generate3
 
 export function normalizeCapabilityPreset(input: CustomAppModule, index: number): CustomAppModule {
   const rawCat = String(input.category ?? '');
-  const category = migrateCapabilityCategory(input);
-  const engine = deriveEngineForCategory(category, input, rawCat);
+  const bundleDir =
+    typeof input.companionHostBundle?.dirName === 'string' ? input.companionHostBundle.dirName.trim() : '';
+  let category = migrateCapabilityCategory(input);
+  if (
+    bundleDir &&
+    category !== 'image_process' &&
+    category !== 'generate_3d' &&
+    category !== 'generate_video'
+  ) {
+    category = 'image_process';
+  }
+  let engine = deriveEngineForCategory(category, input, rawCat);
+  if (category === 'image_to_image' && engine === 'builtin') {
+    category = 'image_process';
+    engine = 'builtin';
+  }
   const enabled = input.enabled !== false;
   const order = typeof input.order === 'number' ? input.order : index;
   const instruction = typeof input.instruction === 'string' ? input.instruction : '';
@@ -157,7 +176,7 @@ export function normalizeCapabilityPreset(input: CustomAppModule, index: number)
     if (category !== 'text_to_text' && category !== 'image_to_text') {
       delete (base as CustomAppModule & { textModelRegistryId?: string }).textModelRegistryId;
     }
-    if (category !== 'text_to_image' && !(category === 'image_to_image' && engine === 'gen_image')) {
+    if (category !== 'text_to_image' && category !== 'image_to_image') {
       delete (base as any).imageGear;
       delete (base as any).imageModelRegistryId;
     }
@@ -191,7 +210,7 @@ export function normalizeCapabilityPreset(input: CustomAppModule, index: number)
   norm(base.previewGeneratedImage, 'previewGeneratedImage');
   norm(base.previewOriginalThumbImage, 'previewOriginalThumbImage');
   norm(base.previewGeneratedThumbImage, 'previewGeneratedThumbImage');
-  if (base.id === 'cut_image') {
+  if (base.id === 'cut_image' || base.processor === 'cut_image') {
     const rawOv = (input as CustomAppModule).cutOverflowPx;
     if (typeof rawOv === 'number' && Number.isFinite(rawOv)) {
       base.cutOverflowPx = Math.max(0, Math.min(512, Math.round(rawOv)));
@@ -227,19 +246,6 @@ export function normalizeCapabilityPreset(input: CustomAppModule, index: number)
     delete (base as CustomAppModule & { companionRembg?: unknown }).companionRembg;
     delete (base as CustomAppModule & { companionRembgModel?: unknown }).companionRembgModel;
     delete (base as CustomAppModule & { companionRembgAlphaMatting?: unknown }).companionRembgAlphaMatting;
-  } else {
-    const rawBundle = (input as CustomAppModule).companionHostBundle;
-    if (rawBundle && typeof rawBundle === 'object' && typeof rawBundle.dirName === 'string') {
-      const dirName = rawBundle.dirName.trim();
-      const phase = rawBundle.phase === 'probe' ? 'probe' : rawBundle.phase === 'exec' ? 'exec' : undefined;
-      if (dirName) {
-        base.companionHostBundle = phase === 'probe' ? { dirName, phase: 'probe' } : { dirName };
-      } else {
-        delete (base as CustomAppModule & { companionHostBundle?: unknown }).companionHostBundle;
-      }
-    } else {
-      delete (base as CustomAppModule & { companionHostBundle?: unknown }).companionHostBundle;
-    }
   }
   if (base.companionSamSegment === true) {
     delete (base as CustomAppModule & { companionHostBundle?: unknown }).companionHostBundle;
@@ -259,7 +265,7 @@ export function normalizeCapabilityPreset(input: CustomAppModule, index: number)
   }
   if (base.id === 'companion_sam_segment') {
     base.companionSamSegment = true;
-    base.category = 'image_to_image';
+    base.category = 'image_process';
     base.engine = 'builtin';
     delete (base as CustomAppModule & { companionHostBundle?: unknown }).companionHostBundle;
     delete (base as CustomAppModule & { companionRembg?: unknown }).companionRembg;
@@ -268,7 +274,7 @@ export function normalizeCapabilityPreset(input: CustomAppModule, index: number)
   }
   if (base.id === 'companion_remove_bg') {
     base.companionRembg = true;
-    base.category = 'image_to_image';
+    base.category = 'image_process';
     base.engine = 'builtin';
     delete (base as CustomAppModule & { companionHostBundle?: unknown }).companionHostBundle;
     delete (base as CustomAppModule & { companionSamSegment?: unknown }).companionSamSegment;
@@ -286,7 +292,14 @@ export function normalizeCapabilityPreset(input: CustomAppModule, index: number)
     delete (base as CustomAppModule & { companionRembgModel?: unknown }).companionRembgModel;
     delete (base as CustomAppModule & { companionRembgAlphaMatting?: unknown }).companionRembgAlphaMatting;
   }
-  return base;
+  if (category !== 'image_process') {
+    delete (base as CustomAppModule & { companionSamSegment?: unknown }).companionSamSegment;
+    delete (base as CustomAppModule & { companionRembg?: unknown }).companionRembg;
+    delete (base as CustomAppModule & { companionRembgModel?: unknown }).companionRembgModel;
+    delete (base as CustomAppModule & { companionRembgAlphaMatting?: unknown }).companionRembgAlphaMatting;
+    delete (base as CustomAppModule & { companionHostBundle?: unknown }).companionHostBundle;
+  }
+  return syncImageProcessProcessorFields(base);
 }
 
 const DEFAULT_PRESETS: CustomAppModule[] = [
@@ -298,14 +311,26 @@ const DEFAULT_PRESETS: CustomAppModule[] = [
     order: 100,
     instruction: '短视频，平滑镜头运动，电影感光效，高细节。',
   },
-  { id: 'split_component', label: '拆分组件', category: 'image_to_image', engine: 'builtin', enabled: true, order: 0, instruction: '' },
+  { id: 'split_component', label: '拆分组件', category: 'image_process', processor: 'split_component', engine: 'builtin', enabled: true, order: 0, instruction: '' },
   { id: 'style_transfer', label: '转风格', category: 'image_to_image', engine: 'gen_image', enabled: true, order: 1, instruction: 'Convert this image to a consistent artistic style: stylized digital art, clean lines, modern flat design. Keep the same composition and main subjects.' },
   { id: 'multi_view', label: '生成多视角', category: 'image_to_image', engine: 'gen_image', enabled: true, order: 2, instruction: 'Generate a clean front view of the main object in this image, centered on white or neutral background, orthographic style, suitable as a reference sheet view.' },
-  { id: 'cut_image', label: '切割图片', category: 'image_to_image', engine: 'builtin', enabled: true, order: 3, instruction: '', cutMode: 'auto', uniformRows: 2, uniformCols: 2 },
+  {
+    id: 'cut_image',
+    label: '切割图片',
+    category: 'image_process',
+    processor: 'cut_image',
+    engine: 'builtin',
+    enabled: true,
+    order: 3,
+    instruction: '',
+    cutMode: 'auto',
+    params: { cutMode: 'auto', uniformRows: 2, uniformCols: 2 },
+  },
   {
     id: 'companion_sam_segment',
     label: '本机智能分割',
-    category: 'image_to_image',
+    category: 'image_process',
+    processor: 'sam_segment',
     engine: 'builtin',
     enabled: true,
     order: 4,
@@ -339,7 +364,7 @@ export function enforceBuiltinImageProcessPresets(list: CustomAppModule[]): Cust
           id: p.id,
           enabled: true,
           engine: 'builtin',
-          category: 'image_to_image',
+          category: 'image_process',
         },
         map.size
       )

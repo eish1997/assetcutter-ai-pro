@@ -189,6 +189,12 @@ function getSidebarCapabilityTone(key: SidebarCapabilityColorKey): {
         hoverBorderClass: 'hover:border-[#5a7c75]',
         dividerBorderClass: 'border-[#425a55]',
       };
+    case 'image_process':
+      return {
+        idleBorderClass: 'border-[#4a5a66]',
+        hoverBorderClass: 'hover:border-[#5a6f7c]',
+        dividerBorderClass: 'border-[#425058]',
+      };
     case 'image_to_text':
       return {
         idleBorderClass: 'border-[#665575]',

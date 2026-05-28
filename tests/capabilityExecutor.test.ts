@@ -246,7 +246,8 @@ describe('executeCapability: companion host bundle', () => {
     const preset: CustomAppModule = {
       id: 'hb-probe',
       label: '宿主包校验',
-      category: 'image_to_image',
+      category: 'image_process',
+      processor: 'host_bundle',
       engine: 'builtin',
       instruction: '',
       companionHostBundle: { dirName: 'sample-plugin', phase: 'probe' },
@@ -271,7 +272,8 @@ describe('executeCapability: companion host bundle', () => {
     const preset: CustomAppModule = {
       id: 'hb-exec',
       label: '宿主包执行',
-      category: 'text_to_text',
+      category: 'image_process',
+      processor: 'host_bundle',
       engine: 'builtin',
       instruction: '',
       companionHostBundle: { dirName: 'sample-plugin' },
@@ -295,7 +297,8 @@ describe('executeCapability: companion host bundle', () => {
     const preset: CustomAppModule = {
       id: 'hb-fail',
       label: '宿主包失败',
-      category: 'image_to_image',
+      category: 'image_process',
+      processor: 'host_bundle',
       engine: 'builtin',
       instruction: '',
       companionHostBundle: { dirName: 'broken-plugin', phase: 'exec' },

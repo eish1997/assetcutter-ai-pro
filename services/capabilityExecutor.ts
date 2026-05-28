@@ -31,6 +31,11 @@ import {
 } from './companionClient/compute';
 import { getCompanionLocalBaseUrl, normalizeCompanionBaseUrl } from './companionLocalPrefs';
 import { naturalSizeFromImageDataUrl, runSamSegmentFromDataUrl } from './lightboxSamSegment';
+import { runLightboxRembgFromDataUrl } from './lightboxRembg';
+import {
+  resolveImageProcessorId,
+  type ImageProcessorId,
+} from './capabilityProcessors/imageProcessProcessors';
 
 export type CapabilityRunProgressMeta = {
   /** 能力集合画布节点 id，用于把进度归到具体卡片 */
@@ -163,21 +168,34 @@ function makeVgpCapture(
 }
 
 export function getCapabilityEngine(preset: CustomAppModule): 'gen_image' | 'gen_text' | 'builtin' {
-  if (preset.companionSamSegment === true) return 'builtin';
-  if (preset.companionHostBundle?.dirName?.trim()) return 'builtin';
-  if (preset.engine) return preset.engine;
   const cat = preset.category;
+  if (cat === 'image_to_image' && (preset.engine === 'gen_image' || preset.engine === 'gen_text')) {
+    return preset.engine;
+  }
+  if (cat === 'image_process') {
+    if (preset.companionSamSegment === true) return 'builtin';
+    if (preset.companionRembg === true) return 'builtin';
+    if (preset.companionHostBundle?.dirName?.trim()) return 'builtin';
+  }
+  if (preset.engine) return preset.engine;
   if (cat === 'text_to_text' || cat === 'image_to_text') return 'gen_text';
   if (cat === 'text_to_image') return 'gen_image';
+  if (cat === 'image_process' || (cat as string) === 'image_process') return 'builtin';
   if (cat === 'image_to_image') {
+    if (resolveImageProcessorId(preset)) return 'builtin';
     if (preset.id === 'split_component' || preset.id === 'cut_image') return 'builtin';
     return 'gen_image';
   }
   if (cat === 'generate_3d' || cat === 'generate_video') return 'builtin';
   if (cat === 'image_gen' || (cat as string) === 'image_gen') return 'gen_image';
   if (cat === 'text_llm' || (cat as string) === 'text_llm') return 'gen_text';
-  if (cat === 'image_process' || (cat as string) === 'image_process') return 'builtin';
   return 'builtin';
+}
+
+/** 图像处理：独立类目，或旧版 image_to_image + builtin */
+export function isImageProcessPreset(preset: CustomAppModule): boolean {
+  if (preset.category === 'image_process') return true;
+  return preset.category === 'image_to_image' && getCapabilityEngine(preset) === 'builtin';
 }
 
 /** 工作流侧栏「词」微调列：走生图模型时展示 */
@@ -520,6 +538,173 @@ async function executeCompanionSamSegmentCapability(
   };
 }
 
+async function executeCompanionRembgCapability(
+  preset: CustomAppModule,
+  inputImageBase64: string,
+  ctx: CapabilityExecuteContext,
+  start: number
+): Promise<CapabilityExecuteResult> {
+  const projectId = ctx.companionProjectId?.trim();
+  const assetId = ctx.workflowAssetId?.trim();
+  const actionLabel = preset.label || preset.id;
+  if (!projectId) {
+    return {
+      ok: false,
+      kind: 'none',
+      error: '未选择工作区项目，无法使用本机去背景',
+      durationMs: Date.now() - start,
+    };
+  }
+  if (!assetId) {
+    return {
+      ok: false,
+      kind: 'none',
+      error: '本机去背景需要工作流资产上下文（请从工作区侧栏拖图到该能力执行）',
+      durationMs: Date.now() - start,
+    };
+  }
+  if (!hasUsableImageBase64(inputImageBase64)) {
+    return { ok: false, kind: 'none', error: '需要有效的图片输入', durationMs: Date.now() - start };
+  }
+  let dataUrl = inputImageBase64.trim();
+  if (!/^data:/i.test(dataUrl)) {
+    const p = parseInlineForLlm(dataUrl);
+    dataUrl = `data:${p.mimeType};base64,${p.data}`;
+  }
+  const resultKey = `ac_internal_rembg_${typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID().replace(/-/g, '').slice(0, 14) : `${Date.now().toString(36)}`}`;
+  const displayKey = (ctx.workflowSourceDisplayKey || 'original').trim() || 'original';
+  ctx.onLog?.('info', `[${actionLabel}] 本机去背景（rembg）…`, undefined);
+  emitCapabilityRunProgress(ctx, `${actionLabel}：本机去背景中…`);
+  const run = await runLightboxRembgFromDataUrl({
+    projectId,
+    assetId,
+    displayKey,
+    dataUrl,
+    resultKey,
+    model: preset.companionRembgModel,
+    alphaMatting: preset.companionRembgAlphaMatting === true,
+  });
+  if (run.ok === false) {
+    return { ok: false, kind: 'none', error: run.error, durationMs: Date.now() - start };
+  }
+  emitCapabilityRunProgress(ctx, `${actionLabel}：去背景完成`);
+  return {
+    ok: true,
+    kind: 'image',
+    image: run.resultDataUrl,
+    durationMs: Date.now() - start,
+  };
+}
+
+async function executeSplitComponentCapability(
+  preset: CustomAppModule,
+  inputImageBase64: string,
+  inputText: string | undefined,
+  ctx: CapabilityExecuteContext,
+  opts: ExecuteCapabilityOptions | undefined,
+  start: number
+): Promise<CapabilityExecuteResult> {
+  const engine = getCapabilityEngine(preset);
+  const actionLabel = preset.label || preset.id;
+  ctx.onLog?.('info', `[${actionLabel}] 识别物体中…`, undefined);
+  emitCapabilityRunProgress(ctx, `${actionLabel}：检测物体中（视觉模型，可能需数十秒）…`);
+  const boxes = await detectObjectsInImage(
+    inputImageBase64,
+    resolveTextModelForPreset(preset, ctx),
+    DEFAULT_PROMPTS.detect_blocks
+  );
+  if (!boxes.length) {
+    return { ok: false, kind: 'none', error: '未识别到区域', durationMs: Date.now() - start };
+  }
+  const b = boxes.reduce((best, current) => {
+    const bestArea = Math.max(0, best.xmax - best.xmin) * Math.max(0, best.ymax - best.ymin);
+    const currentArea = Math.max(0, current.xmax - current.xmin) * Math.max(0, current.ymax - current.ymin);
+    return currentArea > bestArea ? current : best;
+  });
+  const img = new Image();
+  img.src = inputImageBase64;
+  await new Promise<void>((res, rej) => {
+    img.onload = () => res();
+    img.onerror = rej;
+  });
+  const scaleX = img.naturalWidth / 1000;
+  const scaleY = img.naturalHeight / 1000;
+  const x = Math.max(0, b.xmin * scaleX);
+  const y = Math.max(0, b.ymin * scaleY);
+  const w = Math.min(img.naturalWidth - x, (b.xmax - b.xmin) * scaleX);
+  const h = Math.min(img.naturalHeight - y, (b.ymax - b.ymin) * scaleY);
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const c2d = canvas.getContext('2d')!;
+  c2d.drawImage(img, x, y, w, h, 0, 0, w, h);
+  const cropped = canvas.toDataURL('image/png');
+  emitCapabilityRunProgress(ctx, `${actionLabel}：已裁剪最大区域，准备后续步骤…`);
+
+  if (engine === 'gen_image') {
+    emitCapabilityRunProgress(ctx, `${actionLabel}：理解提示词中…`);
+    const prompt = await resolveGenImagePrompt(preset, [cropped], (inputText || '').trim(), ctx);
+    if (!prompt) {
+      return {
+        ok: false,
+        kind: 'none',
+        error: '该能力为生图执行方式，但未填写预设提示词或理解未返回有效指令',
+        durationMs: Date.now() - start,
+      };
+    }
+    ctx.onLog?.('info', `[${actionLabel}] 生图中…`, undefined);
+    emitCapabilityRunProgress(ctx, `${actionLabel}：生图中…`);
+    const modelId = resolveImageModelIdFromPreset(preset);
+    const imageOptions =
+      preset.imageAspectRatio || preset.imageSize
+        ? { aspectRatio: preset.imageAspectRatio, imageSize: preset.imageSize }
+        : undefined;
+    const result = await workflowGenerateImage(cropped, prompt, modelId, imageOptions, undefined, undefined, {
+      ...(opts?.batchGroupKey ? { batchGroupKey: opts.batchGroupKey } : {}),
+      ...(opts?.batchGroupExpected ? { batchGroupExpected: opts.batchGroupExpected } : {}),
+    });
+    return {
+      ok: true,
+      kind: 'image',
+      image: result || cropped,
+      durationMs: Date.now() - start,
+      vgpSteps: [makeVgpCapture(preset, prompt, modelId)],
+    };
+  }
+
+  emitCapabilityRunProgress(ctx, `${actionLabel}：裁剪完成（未接生图）`);
+  return { ok: true, kind: 'image', image: cropped, durationMs: Date.now() - start };
+}
+
+async function executeImageProcessByProcessor(
+  processorId: ImageProcessorId,
+  preset: CustomAppModule,
+  inputImageBase64: string,
+  ctx: CapabilityExecuteContext,
+  opts: ExecuteCapabilityOptions | undefined,
+  start: number
+): Promise<CapabilityExecuteResult | null> {
+  switch (processorId) {
+    case 'host_bundle':
+      return executeCompanionHostBundleCapability(preset, ctx, start);
+    case 'sam_segment':
+      return executeCompanionSamSegmentCapability(preset, inputImageBase64, ctx, start);
+    case 'remove_bg':
+      return executeCompanionRembgCapability(preset, inputImageBase64, ctx, start);
+    case 'split_component':
+      return executeSplitComponentCapability(preset, inputImageBase64, opts?.inputText, ctx, opts, start);
+    case 'cut_image':
+      return {
+        ok: false,
+        kind: 'none',
+        error: '切割图片需要在工作流中执行（支持多图入组）',
+        durationMs: Date.now() - start,
+      };
+    default:
+      return null;
+  }
+}
+
 async function executeCompanionHostBundleCapability(
   preset: CustomAppModule,
   ctx: CapabilityExecuteContext,
@@ -584,12 +769,19 @@ export async function executeCapability(
       return executeGenerateVideoPath(preset, inputImageBase64, ctx, opts);
     }
 
-    if (preset.companionHostBundle?.dirName?.trim()) {
-      return executeCompanionHostBundleCapability(preset, ctx, start);
-    }
-
-    if (preset.companionSamSegment === true) {
-      return executeCompanionSamSegmentCapability(preset, inputImageBase64, ctx, start);
+    if (isImageProcessPreset(preset)) {
+      const processorId = resolveImageProcessorId(preset);
+      if (processorId) {
+        const processorResult = await executeImageProcessByProcessor(
+          processorId,
+          preset,
+          inputImageBase64,
+          ctx,
+          opts,
+          start
+        );
+        if (processorResult) return processorResult;
+      }
     }
 
     const engine = getCapabilityEngine(preset);
@@ -605,72 +797,6 @@ export async function executeCapability(
         if (!merged.includes(s)) merged.push(s);
       }
       return executeGenTextPath(preset, merged, inputText, ctx);
-    }
-
-    // 内置：拆分组件（输出“首个区域裁剪图”，可选再走生图）
-    if (preset.id === 'split_component') {
-      ctx.onLog?.('info', `[${actionLabel}] 识别物体中…`, undefined);
-      emitCapabilityRunProgress(ctx, `${actionLabel}：检测物体中（视觉模型，可能需数十秒）…`);
-      const boxes = await detectObjectsInImage(
-        inputImageBase64,
-        resolveTextModelForPreset(preset, ctx),
-        DEFAULT_PROMPTS.detect_blocks
-      );
-      if (!boxes.length) {
-        return { ok: false, kind: 'none', error: '未识别到区域', durationMs: Date.now() - start };
-      }
-      const b = boxes.reduce((best, current) => {
-        const bestArea = Math.max(0, best.xmax - best.xmin) * Math.max(0, best.ymax - best.ymin);
-        const currentArea = Math.max(0, current.xmax - current.xmin) * Math.max(0, current.ymax - current.ymin);
-        return currentArea > bestArea ? current : best;
-      });
-      const img = new Image();
-      img.src = inputImageBase64;
-      await new Promise<void>((res, rej) => {
-        img.onload = () => res();
-        img.onerror = rej;
-      });
-      const scaleX = img.naturalWidth / 1000;
-      const scaleY = img.naturalHeight / 1000;
-      const x = Math.max(0, b.xmin * scaleX);
-      const y = Math.max(0, b.ymin * scaleY);
-      const w = Math.min(img.naturalWidth - x, (b.xmax - b.xmin) * scaleX);
-      const h = Math.min(img.naturalHeight - y, (b.ymax - b.ymin) * scaleY);
-      const canvas = document.createElement('canvas');
-      canvas.width = w;
-      canvas.height = h;
-      const c2d = canvas.getContext('2d')!;
-      c2d.drawImage(img, x, y, w, h, 0, 0, w, h);
-      const cropped = canvas.toDataURL('image/png');
-      emitCapabilityRunProgress(ctx, `${actionLabel}：已裁剪最大区域，准备后续步骤…`);
-
-      if (engine === 'gen_image') {
-        emitCapabilityRunProgress(ctx, `${actionLabel}：理解提示词中…`);
-        const prompt = await resolveGenImagePrompt(preset, [cropped], (inputText || '').trim(), ctx);
-        if (!prompt) return { ok: false, kind: 'none', error: '该能力为生图执行方式，但未填写预设提示词或理解未返回有效指令', durationMs: Date.now() - start };
-        ctx.onLog?.('info', `[${actionLabel}] 生图中…`, undefined);
-        emitCapabilityRunProgress(ctx, `${actionLabel}：生图中…`);
-        const modelId = resolveImageModelIdFromPreset(preset);
-        const imageOptions = (preset.imageAspectRatio || preset.imageSize) ? { aspectRatio: preset.imageAspectRatio, imageSize: preset.imageSize } : undefined;
-        const result = await workflowGenerateImage(cropped, prompt, modelId, imageOptions, undefined, undefined, {
-          ...(opts?.batchGroupKey ? { batchGroupKey: opts.batchGroupKey } : {}),
-          ...(opts?.batchGroupExpected ? { batchGroupExpected: opts.batchGroupExpected } : {}),
-        });
-        return {
-          ok: true,
-          kind: 'image',
-          image: result || cropped,
-          durationMs: Date.now() - start,
-          vgpSteps: [makeVgpCapture(preset, prompt, modelId)],
-        };
-      }
-
-      emitCapabilityRunProgress(ctx, `${actionLabel}：裁剪完成（未接生图）`);
-      return { ok: true, kind: 'image', image: cropped, durationMs: Date.now() - start };
-    }
-
-    if (preset.id === 'cut_image') {
-      return { ok: false, kind: 'none', error: '切割图片需要在工作流中执行（支持多图入组）', durationMs: Date.now() - start };
     }
 
     if (engine !== 'gen_image') {

@@ -54,6 +54,7 @@ import {
   executeCapability,
   executeCapabilitySet,
   getCapabilityEngine,
+  isImageProcessPreset,
 } from '../services/capabilityExecutor';
 import { overrideSkipUnderstandFromUnderstandEnabled } from '../services/workflowUnderstandOverride';
 import {
@@ -377,12 +378,13 @@ const CAPABILITY_PRESET_COLUMNS_KEY = 'ac_capability_preset_columns_v1';
 const CAPABILITY_PRESET_COLUMNS_MIN = 2;
 const CAPABILITY_PRESET_COLUMNS_MAX = 6;
 
-type CapabilityPresetTypeFilter = 'all' | 'text_to_text' | 'text_to_image' | 'image_to_image' | 'image_to_text';
+type CapabilityPresetTypeFilter = 'all' | 'text_to_text' | 'text_to_image' | 'image_to_image' | 'image_process' | 'image_to_text';
 const CAPABILITY_PRESET_TYPE_FILTER_OPTIONS: Array<{ value: CapabilityPresetTypeFilter; label: string }> = [
   { value: 'all', label: '全部类型' },
   { value: 'text_to_text', label: '文生文' },
   { value: 'text_to_image', label: '文生图' },
   { value: 'image_to_image', label: '图生图' },
+  { value: 'image_process', label: '图像处理' },
   { value: 'image_to_text', label: '图生文' },
 ];
 const DRAG_SCROLL_EDGE_PX = 64;
@@ -1280,8 +1282,7 @@ const WorkflowSection: React.FC<{
   }, [spacePanEnabled]);
   /** 从功能区「词」进入能力页：横向滑到能力列并滚动到对应预设卡片 */
   const jumpToCapabilityPreset = useCallback((preset: CustomAppModule) => {
-    const mode: 'presets' | 'image_process' =
-      preset.category === 'image_to_image' && getCapabilityEngine(preset) === 'builtin' ? 'image_process' : 'presets';
+    const mode: 'presets' | 'image_process' = isImageProcessPreset(preset) ? 'image_process' : 'presets';
     setCapabilityPresetViewMode(mode);
     if (typeof window !== 'undefined') {
       const emitJump = () => {
@@ -4584,6 +4585,7 @@ ${lineSvg}
         filter === 'text_to_text' ||
         filter === 'text_to_image' ||
         filter === 'image_to_image' ||
+        filter === 'image_process' ||
         filter === 'image_to_text'
       ) {
         setCapabilityPresetTypeFilter(filter);

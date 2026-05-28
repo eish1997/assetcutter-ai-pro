@@ -643,7 +643,8 @@ export type WorkflowPendingTask = {
 export const CAPABILITY_CATEGORIES = [
   { id: 'text_to_text', label: '文生文', desc: '文字入 → 文字出（拖文字卡）' },
   { id: 'text_to_image', label: '文生图', desc: '文字入 → 图片出（拖文字卡）' },
-  { id: 'image_to_image', label: '图生图', desc: '图片入 → 图片出（拖图片卡；可选内置处理或生图模型）' },
+  { id: 'image_to_image', label: '图生图', desc: '图片入 → 图片出（生图模型 + 提示词，拖图片卡）' },
+  { id: 'image_process', label: '图像处理', desc: '图片入 → 图片出（内置切割/拆分等，拖图片卡）' },
   { id: 'image_to_text', label: '图生文', desc: '图片入 → 文字出（拖图片卡）' },
   { id: 'generate_3d', label: '生成3D', desc: '工作流中拖图到该能力即按预设提交 3D 任务（支持 Tripo / 腾讯混元）' },
   {
@@ -714,13 +715,13 @@ export type Generate3DPreset = {
 export type CustomAppModule = {
   id: string;
   label: string;
-  /** 分类：文生文 | 文生图 | 图生图 | 图生文 | 生成3D | 生成视频 */
+  /** 分类：文生文 | 文生图 | 图生图 | 图像处理 | 图生文 | 生成3D | 生成视频 */
   category: CapabilityCategory;
   /**
    * 执行引擎（可选，由分类推导或显式指定）：
    * - text_to_text / image_to_text → gen_text
-   * - text_to_image → gen_image
-   * - image_to_image → builtin（切割/拆分等）或 gen_image（提示词生图）
+   * - text_to_image / image_to_image → gen_image
+   * - image_process → builtin（切割/拆分等）
    * - generate_3d / generate_video 不使用
    */
   engine?: CapabilityEngine;
@@ -763,13 +764,12 @@ export type CustomAppModule = {
   previewGeneratedThumbImage?: string;
   /** 仅当 category === 'generate_3d' 时使用 */
   generate3D?: Generate3DPreset;
-  /**
-   * 仅 `id === 'cut_image'` 时使用：识别框裁剪时每边向外扩展的像素（0～512），便于保留边缘内容。
-   * 其它图像处理预设忽略此字段。
+  /** 仅 `processor === 'cut_image'` 或内置 `id === 'cut_image'` 时使用：识别框裁剪时每边向外扩展的像素（0～512），便于保留边缘内容。
+   * 规范化后亦写入 `params.cutOverflowPx`。
    */
   cutOverflowPx?: number;
   /**
-   * 仅 `id === 'cut_image'` 时使用：切割模式
+   * 切割模式（legacy；canonical 见 `params.cutMode`）
    * - uniform: 均匀分割（需配合 uniformRows/uniformCols）
    * - auto: 自动检测（颜色跳变+边缘检测）
    * - vision: 视觉识别（调用 Gemini）
@@ -780,8 +780,15 @@ export type CustomAppModule = {
   /** 仅 cutMode === 'uniform' 时使用：均匀分割列数 */
   uniformCols?: number;
   /**
-   * 若填写 `dirName`：执行时向本机伴侣提交 `host_bundle.exec` / `host_bundle.probe`（命令仅来自包内 `run.json`）。
-   * 建议分类用 `image_to_image` 或 `text_to_text`；工作流拖入任意图片或文字卡均可触发（见 `workflowAssetAllowedForCapabilityDrop`）。
+   * 图像处理处理器 id（`category === 'image_process'` 时使用）。
+   * 见 `services/capabilityProcessors/imageProcessProcessors.ts`。
+   */
+  processor?: string;
+  /** 处理器参数（JSON；normalize 时按 processor schema 校验） */
+  params?: Record<string, unknown>;
+  /**
+   * 图像处理 `host_bundle` 处理器写入；执行时向本机伴侣提交 `host_bundle.exec` / `host_bundle.probe`。
+   * 仅 `category: image_process` + `processor: host_bundle` 使用，勿在文生图/图生图等类目单独配置。
    */
   companionHostBundle?: {
     /** 与 `host-bundles` / 已安装列表中的目录名一致 */

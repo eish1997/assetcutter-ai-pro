@@ -1,4 +1,5 @@
 import type { CustomAppModule, WorkflowAsset } from '../types';
+import { presetUsesHostBundleProcessor } from './capabilityProcessors/imageProcessProcessors';
 
 /** 单张文字资产正文上限（字符），防止工作区 JSON 过大 */
 export const WORKFLOW_TEXT_ASSET_BODY_MAX_CHARS = 32_000;
@@ -68,7 +69,7 @@ function hasAnyImagePayload(asset: WorkflowAsset): boolean {
 
 /** 根资产拖入某预设时是否允许（按输入格式匹配资产类型） */
 export function workflowAssetAllowedForCapabilityDrop(asset: WorkflowAsset, mod: CustomAppModule): boolean {
-  if (mod.companionHostBundle?.dirName?.trim()) {
+  if (presetUsesHostBundleProcessor(mod)) {
     return hasAnyImagePayload(asset) || hasAnyTextPayload(asset);
   }
   if (mod.category === 'text_to_text' || mod.category === 'text_to_image') {
@@ -77,7 +78,7 @@ export function workflowAssetAllowedForCapabilityDrop(asset: WorkflowAsset, mod:
   if (mod.category === 'generate_video') {
     return hasAnyImagePayload(asset) || hasAnyTextPayload(asset);
   }
-  if (mod.category === 'image_to_image' || mod.category === 'image_to_text' || mod.category === 'generate_3d') {
+  if (mod.category === 'image_process' || mod.category === 'image_to_image' || mod.category === 'image_to_text' || mod.category === 'generate_3d') {
     return hasAnyImagePayload(asset);
   }
   return false;

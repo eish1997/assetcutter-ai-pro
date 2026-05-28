@@ -130,7 +130,8 @@ describe('workflowAssetAllowedForCapabilityDrop', () => {
   const hostBundlePreset: CustomAppModule = {
     id: 'hb',
     label: '宿主包',
-    category: 'image_to_image',
+    category: 'image_process',
+    processor: 'host_bundle',
     engine: 'builtin',
     instruction: '',
     companionHostBundle: { dirName: 'sample-plugin' },

@@ -13,6 +13,7 @@ vi.mock('../services/storePackHistory', () => ({
 }));
 
 vi.mock('../services/storeCatalogHook', () => ({
+  shouldRunStoreCatalogAutoSync: () => false,
   useStoreCatalog: () => ({
     catalog: [],
     loading: false,
@@ -29,8 +30,8 @@ vi.mock('../services/capabilityPresetR2Publish', () => ({
   publishPresetToUserR2Catalog: async () => ({ ok: true }),
 }));
 
-describe('CapabilityPresetSection: add preset with companionHostBundle', () => {
-  it('点击新增并填写宿主包目录后，会通过 onUpdate 写出 companionHostBundle', async () => {
+describe('CapabilityPresetSection: image_process host_bundle', () => {
+  it('图生图/文生图表单不再出现「高级扩展包」；扩展包仅经图像处理 → 本机扩展包', async () => {
     const user = userEvent.setup();
     const onUpdate = vi.fn();
     const basePresets: CustomAppModule[] = [
@@ -48,11 +49,17 @@ describe('CapabilityPresetSection: add preset with companionHostBundle', () => {
     render(<CapabilityPresetSection presets={basePresets} onUpdate={onUpdate} />);
 
     await user.click(screen.getByRole('button', { name: '新增能力' }));
-    await user.type(
-      screen.getByPlaceholderText('如：转赛博朋克风格、生成多视角、写实化'),
-      '宿主包能力'
+    expect(screen.queryByText('高级：本机扩展包（可选，一般留空）')).toBeNull();
+
+    const categoryButtons = screen.getAllByRole('button', { name: '图像处理' });
+    const addFormCategory = categoryButtons.find((el) =>
+      el.getAttribute('title')?.includes('内置切割')
     );
-    await user.click(screen.getByText('高级：本机扩展包（可选，一般留空）'));
+    expect(addFormCategory).toBeTruthy();
+    await user.click(addFormCategory!);
+    await user.type(screen.getByPlaceholderText('如：拆分组件、切割图片、提取主体'), '扩展包能力');
+    await user.click(screen.getByRole('button', { name: /拆分组件/ }));
+    await user.click(screen.getByRole('button', { name: /提交已安装扩展包 run\.json/ }));
     await user.type(
       screen.getByPlaceholderText('与设置页「已安装扩展包」列表中的名称一致'),
       'demo-host-bundle'
@@ -61,12 +68,11 @@ describe('CapabilityPresetSection: add preset with companionHostBundle', () => {
 
     expect(onUpdate).toHaveBeenCalled();
     const lastCallArg = onUpdate.mock.calls.at(-1)?.[0] as CustomAppModule[] | undefined;
-    expect(Array.isArray(lastCallArg)).toBe(true);
-    const added = (lastCallArg ?? []).find((p) => p.label === '宿主包能力');
+    const added = (lastCallArg ?? []).find((p) => p.label === '扩展包能力');
     expect(added).toBeTruthy();
+    expect(added?.category).toBe('image_process');
+    expect(added?.engine).toBe('builtin');
+    expect(added?.processor).toBe('host_bundle');
     expect(added?.companionHostBundle).toEqual({ dirName: 'demo-host-bundle' });
-    // 组件 onUpdate 返回编辑态数据，engine 归一化由 saveCapabilityPresets 负责
-    expect(added?.engine).toBe('gen_image');
   });
 });
-

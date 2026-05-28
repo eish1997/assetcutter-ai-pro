@@ -17,8 +17,8 @@ import {
   normalizeCapabilityPreset,
 } from '../services/capabilityPresetStore';
 import { readLocalJson, writeLocalJson } from '../services/clientPersist';
-import { getCapabilityEngine } from '../services/capabilityExecutor';
-import { useStoreCatalog } from '../services/storeCatalogHook';
+import { getCapabilityEngine, isImageProcessPreset } from '../services/capabilityExecutor';
+import { useStoreCatalog, markStoreCatalogAutoSyncDone, shouldRunStoreCatalogAutoSync } from '../services/storeCatalogHook';
 import { publishPresetToUserR2Catalog } from '../services/capabilityPresetR2Publish';
 import { resolveCapabilityPreviewSrc } from '../services/capabilityPreviewUrl';
 import { mergeCardAspectFromIntrinsic } from './workflow/workflowCardAspect';
@@ -29,6 +29,17 @@ import {
 } from './workflow/workflowSectionUiConstants';
 import { uuid } from './workflow/workflowIds';
 import TencentGenerate3DPresetFields from './capability/TencentGenerate3DPresetFields';
+import ImageProcessProcessorFields, {
+  defaultParamsForImageProcessor,
+} from './capability/ImageProcessProcessorFields';
+import {
+  applyImageProcessorDraftToPreset,
+  labelForImageProcessorId,
+  presetUsesHostBundleProcessor,
+  readImageProcessorParamsForForm,
+  resolveImageProcessorId,
+  type ImageProcessorId,
+} from '../services/capabilityProcessors/imageProcessProcessors';
 import {
   extractCapabilitySearchKeywords,
   keywordsMatchCapabilityLabelId,
@@ -107,61 +118,15 @@ const TRIPO_MODEL_VERSION_OPTIONS = [
 ] as const;
 const DETAIL_DROPDOWN_PORTAL_ZINDEX = { backdrop: 10120, list: 10121 } as const;
 
-/** 本机伴侣扩展包：仅高级用户需要，默认折叠避免干扰普通预设创建 */
-function CompanionHostBundleAdvancedFields({
-  dir,
-  onDirChange,
-  phase,
-  onPhaseChange,
-  portalZIndex,
-}: {
-  dir: string;
-  onDirChange: (v: string) => void;
-  phase: 'exec' | 'probe';
-  onPhaseChange: (v: 'exec' | 'probe') => void;
-  portalZIndex?: { backdrop: number; list: number };
-}) {
-  const hasValue = Boolean(dir.trim());
-  return (
-    <details open={hasValue || undefined} className="rounded-xl border border-white/[0.06] bg-black/10">
-      <summary className="cursor-pointer select-none list-none px-3 py-2.5 text-[9px] font-bold text-gray-500 transition-colors hover:text-gray-300 [&::-webkit-details-marker]:hidden">
-        高级：本机扩展包（可选，一般留空）
-      </summary>
-      <div className="space-y-2 border-t border-white/[0.06] px-3 py-2.5">
-        <p className="text-[8px] text-gray-500 leading-relaxed">
-          用于在本机运行已安装的扩展程序（需先配对<strong className="font-normal text-gray-400">本地伴侣</strong>
-          并在设置页安装扩展包）。工作流拖入资产后会提交到本机执行。
-          <strong className="font-normal text-gray-400">普通云端文生图/图生图请留空。</strong>
-        </p>
-        <label className="block">
-          <span className="text-[9px] text-gray-500 uppercase">扩展包目录名</span>
-          <input
-            value={dir}
-            onChange={(e) => onDirChange(e.target.value)}
-            placeholder="与设置页「已安装扩展包」列表中的名称一致"
-            className="mt-0.5 w-full rounded-xl bg-white/[0.05] px-3 py-2 text-[11px] ring-1 ring-white/[0.06] outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/45"
-          />
-        </label>
-        <label className="flex items-center gap-2 text-[9px] text-gray-400">
-          <span className="font-black uppercase">运行方式</span>
-          <CustomDropdown
-            options={[
-              { value: 'exec', label: '正式运行' },
-              { value: 'probe', label: '仅检测（不执行主流程）' },
-            ]}
-            value={phase}
-            onChange={(v) => onPhaseChange(v === 'probe' ? 'probe' : 'exec')}
-            triggerClassName={DROPDOWN_TRIGGER_COMPACT}
-            portalZIndex={portalZIndex}
-          />
-        </label>
-      </div>
-    </details>
-  );
-}
-
 type ViewMode = 'presets' | 'image_process' | 'sets';
-type PresetTypeFilter = 'all' | 'text_to_text' | 'text_to_image' | 'image_to_image' | 'image_to_text';
+type PresetTypeFilter = 'all' | 'text_to_text' | 'text_to_image' | 'image_to_image' | 'image_process' | 'image_to_text';
+
+function matchesPresetTypeFilter(p: CustomAppModule, filter: PresetTypeFilter): boolean {
+  if (filter === 'all') return true;
+  if (filter === 'image_process') return isImageProcessPreset(p);
+  if (filter === 'image_to_image') return p.category === 'image_to_image' && !isImageProcessPreset(p);
+  return p.category === filter;
+}
 
 const CapabilityPresetSection: React.FC<{
   presets: CustomAppModule[];
@@ -226,8 +191,7 @@ const CapabilityPresetSection: React.FC<{
   const { rows: effectiveModelRows, coerceModelId } = useEffectiveImageModelRows();
   const { rows: effectiveTextModelRows, coerceModelId: coerceTextModelId } = useEffectiveTextModelRows();
   const getEngine = (p: CustomAppModule): CapabilityEngine => getCapabilityEngine(p);
-  const isBuiltinImagePipelinePreset = (p: CustomAppModule) =>
-    p.category === 'image_to_image' && getCapabilityEngine(p) === 'builtin';
+  const isBuiltinImagePipelinePreset = (p: CustomAppModule) => isImageProcessPreset(p);
   const getImageModelRegistryId = (p: CustomAppModule): string =>
     coerceImageModelRegistryId(p.imageModelRegistryId ?? p.imageGear);
   const getTextModelRegistryId = (p: CustomAppModule): string =>
@@ -262,18 +226,8 @@ const CapabilityPresetSection: React.FC<{
   const [editImageAspectRatio, setEditImageAspectRatio] = useState('');
   const [editImageSize, setEditImageSize] = useState('');
   const [editInstruction, setEditInstruction] = useState('');
-  /** 仅编辑「切割图片」内置预设时使用 */
-  const [editCutOverflowPx, setEditCutOverflowPx] = useState(0);
-  /** 切割模式：uniform=均匀分割, auto=自动检测, vision=视觉识别 */
-  const [editCutMode, setEditCutMode] = useState<'uniform' | 'auto' | 'vision'>('auto');
-  /** 均匀分割行数 */
-  const [editUniformRows, setEditUniformRows] = useState(2);
-  /** 均匀分割列数 */
-  const [editUniformCols, setEditUniformCols] = useState(2);
   const [editSkipUnderstand, setEditSkipUnderstand] = useState(false);
   const [editRequirePromptOnTextDrop, setEditRequirePromptOnTextDrop] = useState(false);
-  const [editCompanionHostBundleDir, setEditCompanionHostBundleDir] = useState('');
-  const [editCompanionHostBundlePhase, setEditCompanionHostBundlePhase] = useState<'exec' | 'probe'>('exec');
   const [isAdding, setIsAdding] = useState(false);
   const [newLabel, setNewLabel] = useState('');
   const [newCategory, setNewCategory] = useState<CapabilityCategory>('image_to_image');
@@ -286,8 +240,12 @@ const CapabilityPresetSection: React.FC<{
   const [newInstruction, setNewInstruction] = useState('');
   const [newSkipUnderstand, setNewSkipUnderstand] = useState(false);
   const [newRequirePromptOnTextDrop, setNewRequirePromptOnTextDrop] = useState(false);
-  const [newCompanionHostBundleDir, setNewCompanionHostBundleDir] = useState('');
-  const [newCompanionHostBundlePhase, setNewCompanionHostBundlePhase] = useState<'exec' | 'probe'>('exec');
+  const [newImageProcessor, setNewImageProcessor] = useState<ImageProcessorId>('split_component');
+  const [newImageProcessParams, setNewImageProcessParams] = useState<Record<string, unknown>>(() =>
+    defaultParamsForImageProcessor('split_component')
+  );
+  const [editImageProcessor, setEditImageProcessor] = useState<ImageProcessorId>('split_component');
+  const [editImageProcessParams, setEditImageProcessParams] = useState<Record<string, unknown>>({});
   const [testImage, setTestImage] = useState<Record<string, string>>({});
   const [testResult, setTestResult] = useState<Record<string, CapabilityTestResult | null>>({});
   const [testRunning, setTestRunning] = useState<Record<string, boolean>>({});
@@ -351,9 +309,8 @@ const CapabilityPresetSection: React.FC<{
   } = useStoreCatalog({ onPresetsApplied: (next) => onUpdate(next), onLog });
   const triggerRemoteRefreshSync = useCallback(async () => {
     try {
-      await refreshCatalog();
+      await refreshCatalog({ force: true, logSuccess: false });
     } finally {
-      // 刷新目录后再触发同步，避免先用旧远程列表“空同步”导致看起来无反应
       setSyncAfterRefresh(true);
     }
   }, [refreshCatalog]);
@@ -410,24 +367,34 @@ const CapabilityPresetSection: React.FC<{
       return;
     }
     const allRemote = remotePresetItems.map((rp) => rp.preset);
-    // 目录已加载但远程能力尚未展开（异步时序），继续等待下一轮状态更新
     if (allRemote.length === 0) return;
-    if (allRemote.length > 0) {
-      installPresets(allRemote);
-      onLog?.('info', `已同步 R2 预设（${allRemote.length} 条，同 ID 以服务器为准）`, undefined);
+    const synced = installPresets(allRemote, { log: false });
+    if (synced > 0) {
+      onLog?.(
+        'info',
+        `已刷新并同步 ${synced} 条能力（目录 ${catalog.length} 项，同 ID 以服务器为准）`,
+        undefined
+      );
     }
     setSyncAfterRefresh(false);
   }, [syncAfterRefresh, catalogLoading, packContentsLoading, catalog, remotePresetItems, installPresets, onLog]);
   useEffect(() => {
-    // 首次载入商店目录后：以服务器列表为准合并（同 ID 覆盖本地），仅执行一次
+    if (!shouldRunStoreCatalogAutoSync()) return;
     if (autoSyncedRemoteRef.current) return;
     if (catalogLoading || packContentsLoading) return;
     const allRemote = remotePresetItems.map((rp) => rp.preset);
     if (allRemote.length === 0) return;
-    installPresets(allRemote);
-    autoSyncedRemoteRef.current = true;
-    onLog?.('info', `已自动同步公共仓库能力（${allRemote.length} 条，同 ID 以服务器为准）`, undefined);
-  }, [catalogLoading, packContentsLoading, remotePresetItems, installPresets, onLog]);
+    const synced = installPresets(allRemote, { log: false });
+    if (synced > 0) {
+      markStoreCatalogAutoSyncDone();
+      autoSyncedRemoteRef.current = true;
+      onLog?.(
+        'info',
+        `已从商店同步 ${synced} 条能力（目录 ${catalog.length} 项，同 ID 以服务器为准）`,
+        undefined
+      );
+    }
+  }, [catalogLoading, packContentsLoading, catalog.length, remotePresetItems, installPresets, onLog]);
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const onViewModeSwitch = (event: Event) => {
@@ -452,6 +419,7 @@ const CapabilityPresetSection: React.FC<{
         filter === 'text_to_text' ||
         filter === 'text_to_image' ||
         filter === 'image_to_image' ||
+        filter === 'image_process' ||
         filter === 'image_to_text'
       ) {
         setPresetTypeFilter(filter);
@@ -470,7 +438,7 @@ const CapabilityPresetSection: React.FC<{
       if (!id) return;
       const preset = presets.find((p) => p.id === id);
       if (!preset) return;
-      if (preset.category === 'image_to_image' && getCapabilityEngine(preset) === 'builtin') {
+      if (isImageProcessPreset(preset)) {
         setViewMode('image_process');
       } else {
         setViewMode('presets');
@@ -494,50 +462,29 @@ const CapabilityPresetSection: React.FC<{
 
   const saveEdit = () => {
     if (!editingId) return;
-    if (editingId === 'cut_image') {
-      const ix = presets.findIndex((x) => x.id === 'cut_image');
+    if (editCategory === 'image_process') {
+      const ix = presets.findIndex((p) => p.id === editingId);
       const prev = ix >= 0 ? presets[ix] : null;
       if (!prev) {
         setEditingId(null);
         return;
       }
-      const {
-        imageGear: _ig,
-        imageModelRegistryId: _im,
-        imageAspectRatio: _iar,
-        imageSize: _is,
-        skipUnderstand: _su,
-        ...prevRest
-      } = prev;
-      void _ig;
-      void _im;
-      void _iar;
-      void _is;
-      void _su;
-      const next = normalizeCapabilityPreset(
-        {
-          ...prevRest,
-          label: editLabel.trim() || '切割图片',
-          category: 'image_to_image',
-          engine: 'builtin',
-          instruction: editInstruction,
-          enabled: editEnabled,
-          cutOverflowPx: Math.max(0, Math.min(512, Math.round(Number(editCutOverflowPx) || 0))),
-          cutMode: editCutMode,
-          uniformRows: editCutMode === 'uniform' ? editUniformRows : undefined,
-          uniformCols: editCutMode === 'uniform' ? editUniformCols : undefined,
-        },
-        ix
+      const processorId =
+        editingId === 'cut_image' ? ('cut_image' as const) : editImageProcessor;
+      const draft = applyImageProcessorDraftToPreset(
+        { ...prev, label: editLabel.trim() || prev.label, enabled: editEnabled },
+        processorId,
+        editImageProcessParams
       );
-      update(presets.map((p) => (p.id === 'cut_image' ? next : p)));
+      const next = normalizeCapabilityPreset(draft, ix);
+      update(presets.map((p) => (p.id === editingId ? next : p)));
       setEditingId(null);
       return;
     }
     update(
-      presets.map((p) => {
+      presets.map((p, i) => {
         if (p.id !== editingId) return p;
-        const showGenImageFields =
-          editCategory === 'text_to_image' || (editCategory === 'image_to_image' && editEngine === 'gen_image');
+        const showGenImageFields = editCategory === 'text_to_image' || editCategory === 'image_to_image';
         const showGenTextFields = editCategory === 'text_to_text' || editCategory === 'image_to_text';
         const showGenVideoFields = editCategory === 'generate_video';
         const next: CustomAppModule = {
@@ -557,9 +504,11 @@ const CapabilityPresetSection: React.FC<{
               ? undefined
               : editCategory === 'text_to_text' || editCategory === 'image_to_text'
                 ? 'gen_text'
-                : editCategory === 'text_to_image'
+                : editCategory === 'text_to_image' || editCategory === 'image_to_image'
                   ? 'gen_image'
-                  : editEngine,
+                  : editCategory === 'image_process'
+                    ? 'builtin'
+                    : editEngine,
         };
         if (editCategory === 'generate_3d') {
           next.generate3D = { ...editGenerate3D };
@@ -571,15 +520,8 @@ const CapabilityPresetSection: React.FC<{
           delete (next as CustomAppModule & { companionHostBundle?: unknown }).companionHostBundle;
         } else {
           delete (next as CustomAppModule & { generate3D?: Generate3DPreset }).generate3D;
-          const hbDir = editCompanionHostBundleDir.trim();
-          if (hbDir) {
-            next.companionHostBundle =
-              editCompanionHostBundlePhase === 'probe' ? { dirName: hbDir, phase: 'probe' } : { dirName: hbDir };
-          } else {
-            delete (next as CustomAppModule & { companionHostBundle?: unknown }).companionHostBundle;
-          }
         }
-        return next;
+        return normalizeCapabilityPreset(next, i);
       })
     );
     setEditingId(null);
@@ -588,8 +530,7 @@ const CapabilityPresetSection: React.FC<{
   const addPreset = () => {
     const label = newLabel.trim() || '新功能';
     const id = genId();
-    const showNewGenImage =
-      newCategory === 'text_to_image' || (newCategory === 'image_to_image' && newEngine === 'gen_image');
+    const showNewGenImage = newCategory === 'text_to_image' || newCategory === 'image_to_image';
     const showNewGenText = newCategory === 'text_to_text' || newCategory === 'image_to_text';
     const showNewGenVideo = newCategory === 'generate_video';
     const preset: CustomAppModule = {
@@ -610,20 +551,19 @@ const CapabilityPresetSection: React.FC<{
           ? undefined
           : newCategory === 'text_to_text' || newCategory === 'image_to_text'
             ? 'gen_text'
-            : newCategory === 'text_to_image'
+            : newCategory === 'text_to_image' || newCategory === 'image_to_image'
               ? 'gen_image'
-              : newEngine,
+              : newCategory === 'image_process'
+                ? 'builtin'
+                : newEngine,
     };
     if (newCategory === 'generate_3d') {
       preset.generate3D = { ...newGenerate3D };
-    } else if (newCategory !== 'generate_video') {
-      const nHb = newCompanionHostBundleDir.trim();
-      if (nHb) {
-        preset.companionHostBundle =
-          newCompanionHostBundlePhase === 'probe' ? { dirName: nHb, phase: 'probe' } : { dirName: nHb };
-      }
+    } else if (newCategory === 'image_process') {
+      const draft = applyImageProcessorDraftToPreset(preset, newImageProcessor, newImageProcessParams);
+      Object.assign(preset, draft);
     }
-    update([...presets, preset]);
+    update([...presets, normalizeCapabilityPreset(preset, presets.length)]);
     setNewLabel('');
     setNewCategory('image_to_image');
     setNewEngine('gen_image');
@@ -635,8 +575,8 @@ const CapabilityPresetSection: React.FC<{
     setNewInstruction('');
     setNewSkipUnderstand(false);
     setNewRequirePromptOnTextDrop(false);
-    setNewCompanionHostBundleDir('');
-    setNewCompanionHostBundlePhase('exec');
+    setNewImageProcessor('split_component');
+    setNewImageProcessParams(defaultParamsForImageProcessor('split_component'));
     setNewGenerate3D({ ...DEFAULT_GENERATE_3D });
     setIsAdding(false);
   };
@@ -741,9 +681,9 @@ const CapabilityPresetSection: React.FC<{
   };
 
   const runTest = async (p: CustomAppModule) => {
-    const hostBundleDir = p.companionHostBundle?.dirName?.trim();
+    const hostBundle = presetUsesHostBundleProcessor(p);
     const img = testImage[p.id];
-    if ((!img && !hostBundleDir) || !onRunTest) return;
+    if ((!img && !hostBundle) || !onRunTest) return;
     setTestRunning((prev) => ({ ...prev, [p.id]: true }));
     setTestResult((prev) => ({ ...prev, [p.id]: null }));
     onLog?.('info', `[${p.label}] 测试开始`, undefined);
@@ -1034,41 +974,14 @@ const CapabilityPresetSection: React.FC<{
       BUILTIN_IMAGE_PROCESS_IDS.includes(p.id as (typeof BUILTIN_IMAGE_PROCESS_IDS)[number]) &&
       !BUILTIN_CAPABILITY_EDITABLE_IDS.includes(p.id);
     if (isLocked) return;
-    if (p.id === 'cut_image') {
-      setEditingId('cut_image');
-      setEditLabel(p.label);
-      setEditCategory('image_to_image');
-      setEditEngine('builtin');
-      setEditEnabled(p.enabled !== false);
-      setEditInstruction(((p as { instructionFixed?: string }).instructionFixed ?? p.instruction) || '');
-      setEditCutOverflowPx(
-        typeof p.cutOverflowPx === 'number' && Number.isFinite(p.cutOverflowPx)
-          ? Math.max(0, Math.min(512, Math.round(p.cutOverflowPx)))
-          : 0
-      );
-      setEditCutMode(
-        p.cutMode === 'uniform' || p.cutMode === 'auto' || p.cutMode === 'vision'
-          ? p.cutMode
-          : 'auto'
-      );
-      setEditUniformRows(
-        typeof p.uniformRows === 'number' && Number.isFinite(p.uniformRows)
-          ? Math.max(1, Math.min(10, Math.round(p.uniformRows)))
-          : 2
-      );
-      setEditUniformCols(
-        typeof p.uniformCols === 'number' && Number.isFinite(p.uniformCols)
-          ? Math.max(1, Math.min(10, Math.round(p.uniformCols)))
-          : 2
-      );
-      setDetailEditMode(true);
-      return;
-    }
+    const proc = resolveImageProcessorId(p) ?? 'split_component';
     setEditingId(p.id);
     setEditLabel(p.label);
-    setEditCategory(p.category);
+    setEditCategory(isImageProcessPreset(p) ? 'image_process' : p.category);
     setEditEngine(getEngine(p));
     setEditEnabled(p.enabled !== false);
+    setEditImageProcessor(proc);
+    setEditImageProcessParams(readImageProcessorParamsForForm(p, proc));
     setEditImageModelRegistryId(getImageModelRegistryId(p));
     setEditTextModelRegistryId(getTextModelRegistryId(p));
     setEditImageAspectRatio(p.imageAspectRatio ?? '');
@@ -1076,8 +989,6 @@ const CapabilityPresetSection: React.FC<{
     setEditInstruction(((p as { instructionFixed?: string }).instructionFixed ?? p.instruction) || '');
     setEditSkipUnderstand(p.skipUnderstand === true);
     setEditRequirePromptOnTextDrop(p.requirePromptOnTextDrop === true);
-    setEditCompanionHostBundleDir(p.companionHostBundle?.dirName ?? '');
-    setEditCompanionHostBundlePhase(p.companionHostBundle?.phase === 'probe' ? 'probe' : 'exec');
     setEditGenerate3D(p.category === 'generate_3d' && p.generate3D ? { ...p.generate3D } : { ...DEFAULT_GENERATE_3D });
     setDetailEditMode(true);
   }, []);
@@ -1098,7 +1009,7 @@ const CapabilityPresetSection: React.FC<{
       if (!id) return;
       const preset = presets.find((p) => p.id === id);
       if (!preset) return;
-      if (preset.category === 'image_to_image' && getCapabilityEngine(preset) === 'builtin') {
+      if (isImageProcessPreset(preset)) {
         setViewMode('image_process');
       } else {
         setViewMode('presets');
@@ -1296,13 +1207,10 @@ const CapabilityPresetSection: React.FC<{
   }, [presetColumnCount]);
 
   const visiblePresets = useMemo(() => {
-    const isBuiltinPipeline = (p: CustomAppModule) =>
-      p.category === 'image_to_image' && getCapabilityEngine(p) === 'builtin';
-    if (viewMode === 'image_process') return presets.filter(isBuiltinPipeline);
+    if (viewMode === 'image_process') return presets.filter(isImageProcessPreset);
     return presets.filter((p) => {
-      if (isBuiltinPipeline(p)) return false;
-      if (presetTypeFilter === 'all') return true;
-      return p.category === presetTypeFilter;
+      if (isImageProcessPreset(p)) return false;
+      return matchesPresetTypeFilter(p, presetTypeFilter);
     });
   }, [presets, viewMode, presetTypeFilter]);
 
@@ -1636,9 +1544,13 @@ const CapabilityPresetSection: React.FC<{
                   type="button"
                   onClick={() => {
                     setNewCategory(c.id);
-                    if (c.id === 'image_to_image') setNewEngine('gen_image');
+                    if (c.id === 'image_to_image' || c.id === 'text_to_image') setNewEngine('gen_image');
+                    if (c.id === 'image_process') {
+                      setNewEngine('builtin');
+                      setNewImageProcessor('split_component');
+                      setNewImageProcessParams(defaultParamsForImageProcessor('split_component'));
+                    }
                     if (c.id === 'text_to_text' || c.id === 'image_to_text') setNewEngine('gen_text');
-                    if (c.id === 'text_to_image') setNewEngine('gen_image');
                   }}
                   className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${newCategory === c.id ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300' : 'bg-white/[0.05] ring-1 ring-white/[0.06] text-gray-500 hover:bg-white/[0.09] border-transparent'}`}
                   title={c.desc}
@@ -1654,21 +1566,7 @@ const CapabilityPresetSection: React.FC<{
               <input type="checkbox" checked={newEnabled} onChange={(e) => setNewEnabled(e.target.checked)} />
               <span className="font-black uppercase">启用</span>
             </label>
-            {newCategory === 'image_to_image' && (
-              <label className="flex items-center gap-2 text-[9px] text-gray-400">
-                <span className="font-black uppercase">图生图方式</span>
-                <CustomDropdown
-                  options={[
-                    { value: 'builtin', label: '内置图像处理（拆分/切割等）' },
-                    { value: 'gen_image', label: '生图模型（提示词）' },
-                  ]}
-                  value={newEngine === 'gen_image' ? 'gen_image' : 'builtin'}
-                  onChange={(v) => setNewEngine(v as CapabilityEngine)}
-                  triggerClassName={DROPDOWN_TRIGGER_COMPACT}
-                />
-              </label>
-            )}
-            {(newCategory === 'text_to_image' || (newCategory === 'image_to_image' && newEngine === 'gen_image')) && (
+            {(newCategory === 'text_to_image' || newCategory === 'image_to_image') && (
               <>
                 <label className="flex items-center gap-2 text-[9px] text-gray-400">
                   <span className="font-black uppercase">生图模型</span>
@@ -1749,10 +1647,10 @@ const CapabilityPresetSection: React.FC<{
             {newCategory === 'image_to_text' && (
               <span className="text-[8px] text-gray-500">工作流请拖入图片卡</span>
             )}
-            {newCategory === 'image_to_image' && newEngine === 'gen_image' && (
+            {newCategory === 'image_to_image' && (
               <span className="text-[8px] text-gray-500">工作流请拖入图片卡</span>
             )}
-            {newCategory === 'image_to_image' && newEngine === 'builtin' && (
+            {newCategory === 'image_process' && (
               <span className="text-[8px] text-gray-500">工作流请拖入图片卡（内置处理）</span>
             )}
             {newCategory === 'generate_video' && (
@@ -1765,7 +1663,7 @@ const CapabilityPresetSection: React.FC<{
               value={newLabel}
               onChange={(e) => setNewLabel(e.target.value)}
               placeholder={
-                newCategory === 'image_to_image' && newEngine === 'gen_image'
+                newCategory === 'image_to_image'
                   ? '如：转赛博朋克风格、生成多视角、写实化'
                   : newCategory === 'text_to_text'
                     ? '如：扩写脚本、翻译、提取关键词'
@@ -1773,7 +1671,7 @@ const CapabilityPresetSection: React.FC<{
                       ? '如：描述附图中的主要物体与风格'
                       : newCategory === 'text_to_image'
                         ? '如：按描述生成概念图'
-                        : newCategory === 'image_to_image' && newEngine === 'builtin'
+                        : newCategory === 'image_process'
                           ? '如：拆分组件、切割图片、提取主体'
                           : '如：手办白模、低面数模型'
               }
@@ -1803,7 +1701,7 @@ const CapabilityPresetSection: React.FC<{
               />
             </div>
           )}
-          {(newCategory === 'text_to_image' || (newCategory === 'image_to_image' && newEngine === 'gen_image')) && (
+          {(newCategory === 'text_to_image' || newCategory === 'image_to_image') && (
             <div>
               <span className="text-[8px] font-black text-blue-400/90 uppercase">预设提示词（必填）</span>
               <p className="text-[8px] text-gray-500 mt-0.5">
@@ -1849,19 +1747,15 @@ const CapabilityPresetSection: React.FC<{
               />
             </div>
           )}
-          {newCategory === 'image_to_image' && newEngine === 'builtin' && (
-            <div>
-              <span className="text-[8px] font-black text-gray-500 uppercase">可选：补充说明或约束</span>
-              <p className="text-[8px] text-gray-600 mt-0.5">多数能力有内置逻辑（如切割按版面分块），可留空；需要时可填写额外说明。</p>
-              <textarea value={newInstruction} onChange={(e) => setNewInstruction(e.target.value)} placeholder="留空即使用内置逻辑；或填写如：只保留上半部分、排除背景" rows={2} className="mt-1 w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 resize-none" />
-            </div>
-          )}
-          {newCategory !== 'generate_3d' && newCategory !== 'generate_video' && (
-            <CompanionHostBundleAdvancedFields
-              dir={newCompanionHostBundleDir}
-              onDirChange={setNewCompanionHostBundleDir}
-              phase={newCompanionHostBundlePhase}
-              onPhaseChange={setNewCompanionHostBundlePhase}
+          {newCategory === 'image_process' && (
+            <ImageProcessProcessorFields
+              processorId={newImageProcessor}
+              params={newImageProcessParams}
+              onProcessorIdChange={(id) => {
+                setNewImageProcessor(id);
+                setNewImageProcessParams(defaultParamsForImageProcessor(id));
+              }}
+              onParamsChange={setNewImageProcessParams}
             />
           )}
           {newCategory === 'generate_3d' && (
@@ -2100,7 +1994,10 @@ const CapabilityPresetSection: React.FC<{
             >
               {displayPresets.map((p) => {
                 const src = getCardPreviewSrc(p);
-                const categoryLabel = CAPABILITY_CATEGORIES.find((c) => c.id === p.category)?.label ?? p.category;
+                const categoryLabel =
+                  p.category === 'image_process'
+                    ? labelForImageProcessorId(resolveImageProcessorId(p))
+                    : CAPABILITY_CATEGORIES.find((c) => c.id === p.category)?.label ?? p.category;
                 const iconName =
                   p.category === 'generate_3d' ? 'cube' : p.category === 'generate_video' ? 'video' : isBuiltinImagePipelinePreset(p) ? 'camera' : 'image';
                 const isTextToTextPreset = p.category === 'text_to_text';
@@ -2332,9 +2229,8 @@ const CapabilityPresetSection: React.FC<{
               </div>
               <div className="rounded-2xl bg-[#16161a] ring-1 ring-white/[0.07] p-3 space-y-2">
                     {detailEditMode ? (
-                      editingId === 'cut_image' ? (
+                      editCategory === 'image_process' ? (
                         <>
-                          <div className="text-[9px] text-blue-300/95 font-black uppercase">内置 · 切割图片</div>
                           <label className="flex items-center gap-2 text-[10px] text-gray-300">
                             <input type="checkbox" checked={editEnabled} onChange={(e) => setEditEnabled(e.target.checked)} />
                             启用
@@ -2343,83 +2239,17 @@ const CapabilityPresetSection: React.FC<{
                             <div className="text-[9px] text-gray-500 uppercase mb-1">功能名称</div>
                             <input value={editLabel} onChange={(e) => setEditLabel(e.target.value)} className="w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50" />
                           </label>
-                          {/* 切割模式选择 */}
-                          <div className="space-y-1.5">
-                            <div className="text-[9px] text-gray-400 uppercase">切割方式</div>
-                            <div className="flex gap-1.5">
-                              {([
-                                { value: 'uniform', label: '均匀' },
-                                { value: 'auto', label: '自动' },
-                                { value: 'vision', label: '视觉' },
-                              ] as const).map((mode) => (
-                                <button
-                                  key={mode.value}
-                                  type="button"
-                                  onClick={() => setEditCutMode(mode.value)}
-                                  className={`flex-1 px-2 py-1.5 rounded-lg text-[9px] font-black uppercase border transition-colors ${
-                                    editCutMode === mode.value
-                                      ? 'bg-[#1e3558] border-[#3b82f6] text-blue-300'
-                                      : 'bg-white/[0.05] ring-1 ring-white/[0.06] text-gray-500 hover:bg-white/[0.09] border-transparent'
-                                  }`}
-                                  title={
-                                    mode.value === 'uniform' ? '按行列数等分图片' :
-                                    mode.value === 'auto' ? '自动检测宫格缝隙' :
-                                    '调用视觉模型识别'
-                                  }
-                                >
-                                  {mode.label}
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-                          {/* 均匀分割配置 */}
-                          {editCutMode === 'uniform' && (
-                            <div className="flex gap-2 items-center">
-                              <label className="flex items-center gap-1.5">
-                                <span className="text-[9px] text-gray-500 uppercase">行</span>
-                                <input
-                                  type="number"
-                                  min={1}
-                                  max={10}
-                                  value={editUniformRows}
-                                  onChange={(e) => setEditUniformRows(Math.max(1, Math.min(10, Math.round(Number(e.target.value) || 2))))}
-                                  className="w-14 bg-white/[0.05] ring-1 ring-white/[0.06] rounded-lg px-2 py-1.5 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
-                                />
-                              </label>
-                              <label className="flex items-center gap-1.5">
-                                <span className="text-[9px] text-gray-500 uppercase">列</span>
-                                <input
-                                  type="number"
-                                  min={1}
-                                  max={10}
-                                  value={editUniformCols}
-                                  onChange={(e) => setEditUniformCols(Math.max(1, Math.min(10, Math.round(Number(e.target.value) || 2))))}
-                                  className="w-14 bg-white/[0.05] ring-1 ring-white/[0.06] rounded-lg px-2 py-1.5 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
-                                />
-                              </label>
-                            </div>
-                          )}
-                          {editCutMode !== 'uniform' && (
-                            <div className="text-[8px] text-gray-600 italic">
-                              {editCutMode === 'auto' ? '自动检测宫格缝隙，支持有明显分割线的图片' : '调用 Gemini 视觉模型识别区域，精度高但较慢'}
-                            </div>
-                          )}
-                          <label className="block">
-                            <div className="text-[9px] text-gray-400 uppercase mb-1">切割溢出（每边像素）</div>
-                            <input
-                              type="number"
-                              min={0}
-                              max={512}
-                              step={1}
-                              value={editCutOverflowPx}
-                              onChange={(e) => setEditCutOverflowPx(Math.max(0, Math.min(512, Math.round(Number(e.target.value) || 0))))}
-                              className="w-28 bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
-                            />
-                          </label>
-                          <label className="block">
-                            <div className="text-[9px] text-gray-500 uppercase mb-1">补充说明</div>
-                            <textarea value={editInstruction} onChange={(e) => setEditInstruction(e.target.value)} rows={4} className="w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 resize-y" />
-                          </label>
+                          <ImageProcessProcessorFields
+                            processorId={editingId === 'cut_image' ? 'cut_image' : editImageProcessor}
+                            params={editImageProcessParams}
+                            lockProcessor={editingId === 'cut_image'}
+                            onProcessorIdChange={(id) => {
+                              setEditImageProcessor(id);
+                              setEditImageProcessParams(defaultParamsForImageProcessor(id));
+                            }}
+                            onParamsChange={setEditImageProcessParams}
+                            portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
+                          />
                           <div className="flex gap-2">
                             <button type="button" onClick={saveDetailEdit} className="px-3 py-1.5 rounded-lg border border-[#36578f] bg-[#1d3154] text-blue-200 text-[9px] font-black uppercase hover:bg-[#264171]">保存</button>
                             <button type="button" onClick={() => { setDetailEditMode(false); setEditingId(null); }} className="px-3 py-1.5 rounded-lg bg-[#121214] text-[9px] font-black uppercase text-gray-200 ring-1 ring-white/[0.08] hover:bg-white/[0.06]">取消</button>
@@ -2435,9 +2265,13 @@ const CapabilityPresetSection: React.FC<{
                                 type="button"
                                 onClick={() => {
                                   setEditCategory(c.id);
-                                  if (c.id === 'image_to_image') setEditEngine('gen_image');
+                                  if (c.id === 'image_to_image' || c.id === 'text_to_image') setEditEngine('gen_image');
+                                  if (c.id === 'image_process') {
+                                    setEditEngine('builtin');
+                                    setEditImageProcessor('split_component');
+                                    setEditImageProcessParams(defaultParamsForImageProcessor('split_component'));
+                                  }
                                   if (c.id === 'text_to_text' || c.id === 'image_to_text') setEditEngine('gen_text');
-                                  if (c.id === 'text_to_image') setEditEngine('gen_image');
                                   if (c.id === 'generate_3d') setEditGenerate3D(editCategory === 'generate_3d' ? { ...editGenerate3D } : { ...DEFAULT_GENERATE_3D });
                                   if (c.id === 'generate_video') setEditGenerate3D({ ...DEFAULT_GENERATE_3D });
                                 }}
@@ -2452,22 +2286,7 @@ const CapabilityPresetSection: React.FC<{
                               <input type="checkbox" checked={editEnabled} onChange={(e) => setEditEnabled(e.target.checked)} />
                               <span className="font-black uppercase">启用</span>
                             </label>
-                            {editCategory === 'image_to_image' && (
-                              <label className="flex items-center gap-2 text-[9px] text-gray-400">
-                                <span className="font-black uppercase">图生图方式</span>
-                                <CustomDropdown
-                                  options={[
-                                    { value: 'builtin', label: '内置图像处理' },
-                                    { value: 'gen_image', label: '生图模型（提示词）' },
-                                  ]}
-                                  value={editEngine === 'gen_image' ? 'gen_image' : 'builtin'}
-                                  onChange={(v) => setEditEngine(v as CapabilityEngine)}
-                                  triggerClassName={DROPDOWN_TRIGGER_COMPACT}
-                                  portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
-                                />
-                              </label>
-                            )}
-                            {(editCategory === 'text_to_image' || (editCategory === 'image_to_image' && editEngine === 'gen_image')) && (
+                            {(editCategory === 'text_to_image' || editCategory === 'image_to_image') && (
                               <>
                                 <label className="flex items-center gap-2 text-[9px] text-gray-400">
                                   <span className="font-black uppercase">生图模型</span>
@@ -2548,10 +2367,10 @@ const CapabilityPresetSection: React.FC<{
                             {editCategory === 'image_to_text' && (
                               <span className="text-[8px] text-gray-500">工作流请拖入图片卡</span>
                             )}
-                            {editCategory === 'image_to_image' && editEngine === 'gen_image' && (
+                            {editCategory === 'image_to_image' && (
                               <span className="text-[8px] text-gray-500">工作流请拖入图片卡</span>
                             )}
-                            {editCategory === 'image_to_image' && editEngine === 'builtin' && (
+                            {editCategory === 'image_process' && (
                               <span className="text-[8px] text-gray-500">工作流请拖入图片卡（内置处理）</span>
                             )}
                             {editCategory === 'generate_video' && (
@@ -2581,15 +2400,6 @@ const CapabilityPresetSection: React.FC<{
                             <div className="text-[9px] text-gray-500 uppercase mb-1">提示词 / 说明</div>
                             <textarea value={editInstruction} onChange={(e) => setEditInstruction(e.target.value)} rows={8} className="w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 resize-y" />
                           </label>
-                          {editCategory !== 'generate_3d' && editCategory !== 'generate_video' && (
-                            <CompanionHostBundleAdvancedFields
-                              dir={editCompanionHostBundleDir}
-                              onDirChange={setEditCompanionHostBundleDir}
-                              phase={editCompanionHostBundlePhase}
-                              onPhaseChange={setEditCompanionHostBundlePhase}
-                              portalZIndex={DETAIL_DROPDOWN_PORTAL_ZINDEX}
-                            />
-                          )}
                           {editCategory === 'generate_3d' && (
                             <div className="rounded-xl border border-[#2e3f5d] bg-[#141b26] p-3 space-y-2">
                               <div className="text-[8px] font-black text-blue-300 uppercase">生成3D 预设</div>
@@ -2794,7 +2604,11 @@ const CapabilityPresetSection: React.FC<{
                         <div className="grid grid-cols-2 gap-2 text-[9px]">
                           <div className="rounded-lg bg-[#1b1b21] border border-[#2a2a32] px-2 py-1.5">
                             <div className="text-gray-500">分类</div>
-                            <div className="text-gray-200 mt-0.5">{CAPABILITY_CATEGORIES.find((c) => c.id === detailPreset.category)?.label ?? detailPreset.category}</div>
+                            <div className="text-gray-200 mt-0.5">
+                              {isImageProcessPreset(detailPreset)
+                                ? CAPABILITY_CATEGORIES.find((c) => c.id === 'image_process')?.label ?? '图像处理'
+                                : CAPABILITY_CATEGORIES.find((c) => c.id === detailPreset.category)?.label ?? detailPreset.category}
+                            </div>
                           </div>
                           <div className="rounded-lg bg-[#1b1b21] border border-[#2a2a32] px-2 py-1.5">
                             <div className="text-gray-500">启用</div>
@@ -2813,9 +2627,9 @@ const CapabilityPresetSection: React.FC<{
                                     ? '文字模型（图生文）'
                                     : detailPreset.category === 'text_to_image'
                                       ? '生图（文生图）'
-                                      : detailPreset.category === 'image_to_image' && getEngine(detailPreset) === 'builtin'
-                                        ? '图像处理（内置）'
-                                        : detailPreset.category === 'image_to_image'
+                                    : detailPreset.category === 'image_process' || isImageProcessPreset(detailPreset)
+                                      ? labelForImageProcessorId(resolveImageProcessorId(detailPreset))
+                                      : detailPreset.category === 'image_to_image'
                                           ? '生图（图生图）'
                                           : getEngine(detailPreset) === 'gen_image'
                                             ? '生图（提示词）'
@@ -2854,12 +2668,12 @@ const CapabilityPresetSection: React.FC<{
                                 : '不适用'}
                             </div>
                           </div>
-                          {detailPreset.companionHostBundle?.dirName ? (
+                          {presetUsesHostBundleProcessor(detailPreset) ? (
                             <div className="rounded-lg bg-[#1b1b21] border border-emerald-900/35 px-2 py-1.5 col-span-2">
                               <div className="text-gray-500">本机扩展包</div>
                               <div className="text-gray-200 mt-0.5 text-[10px]">
-                                {detailPreset.companionHostBundle.dirName} ·{' '}
-                                {detailPreset.companionHostBundle.phase === 'probe' ? '仅检测' : '正式运行'}
+                                {detailPreset.companionHostBundle?.dirName ?? '（未配置目录）'} ·{' '}
+                                {detailPreset.companionHostBundle?.phase === 'probe' ? '仅检测' : '正式运行'}
                               </div>
                             </div>
                           ) : null}
@@ -2926,7 +2740,7 @@ const CapabilityPresetSection: React.FC<{
                 <button
                   type="button"
                   disabled={
-                    (!testImage[detailPreset.id] && !detailPreset.companionHostBundle?.dirName?.trim()) ||
+                    (!testImage[detailPreset.id] && !presetUsesHostBundleProcessor(detailPreset)) ||
                     !!testRunning[detailPreset.id]
                   }
                   onClick={() => runTest(detailPreset)}
