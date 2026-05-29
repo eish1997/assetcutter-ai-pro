@@ -72,6 +72,8 @@ type Props = {
   /** mergedPreview 时占位文案：生成中 / 失败 */
   mergeStatus?: 'pending' | 'failed';
   showLocked?: boolean;
+  /** 分镜图网格：仅缩略图 + 镜号，不展示字段文案 */
+  compact?: boolean;
   onSelect?: () => void;
   /** 网格预览等：双击切回编辑并定位该镜 */
   onOpenInEditor?: () => void;
@@ -93,6 +95,7 @@ export default function StoryboardFrameCompositeCard({
   mergedPreview = false,
   mergeStatus,
   showLocked,
+  compact = false,
   onSelect,
   onOpenInEditor,
   onPreviewImage,
@@ -135,7 +138,17 @@ export default function StoryboardFrameCompositeCard({
         title={onOpenInEditor ? '双击进入编辑' : undefined}
         className="flex cursor-pointer flex-col text-left outline-none focus-visible:ring-2 focus-visible:ring-violet-500/35 focus-visible:ring-inset"
       >
-        <div className="relative aspect-[4/3] w-full shrink-0 overflow-hidden bg-black/40">
+        <div
+          className="relative aspect-[4/3] w-full shrink-0 overflow-hidden bg-black/40"
+          onClick={
+            compact && img
+              ? (e) => {
+                  e.stopPropagation();
+                  onPreviewImage?.(img);
+                }
+              : undefined
+          }
+        >
           {img ? (
             <img
               src={img}
@@ -154,8 +167,12 @@ export default function StoryboardFrameCompositeCard({
               </span>
             </div>
           )}
-          <div className="pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between gap-1 bg-gradient-to-b from-black/75 to-transparent px-2.5 pb-5 pt-2">
-            <span className="text-[12px] font-bold text-white/95">{title}</span>
+          <div
+            className={`pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between gap-1 bg-gradient-to-b from-black/75 to-transparent ${
+              compact ? 'px-1.5 pb-3 pt-1.5' : 'px-2.5 pb-5 pt-2'
+            }`}
+          >
+            <span className={`font-bold text-white/95 ${compact ? 'text-[10px]' : 'text-[12px]'}`}>{title}</span>
             <span className="flex shrink-0 items-center gap-1">
               {duration ? (
                 <span className="rounded-md bg-black/45 px-1.5 py-0.5 text-[8px] text-gray-300 backdrop-blur-sm">
@@ -170,16 +187,18 @@ export default function StoryboardFrameCompositeCard({
             </span>
           </div>
         </div>
-        <div className="shrink-0 border-t border-white/[0.06] bg-black/20 px-2.5 py-2">
-          <StoryboardCompositeFieldsBody
-            fieldItems={fieldItems}
-            catalog={fieldCatalog}
-            shotFields={row.shotFields}
-            fallbackText={body}
-          />
-        </div>
+        {!mergedPreview && !compact ? (
+          <div className="shrink-0 border-t border-white/[0.06] bg-black/20 px-2.5 py-2">
+            <StoryboardCompositeFieldsBody
+              fieldItems={fieldItems}
+              catalog={fieldCatalog}
+              shotFields={row.shotFields}
+              fallbackText={body}
+            />
+          </div>
+        ) : null}
       </div>
-      {img ? (
+      {img && !compact ? (
         <button
           type="button"
           onClick={() => onPreviewImage?.(img)}

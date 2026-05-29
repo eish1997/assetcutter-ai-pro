@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { StoryboardParseFieldDef } from '../../types';
 import type { StoryboardVideoLayer } from '../../services/storyboardVideoTimeline';
 import {
   computeStoryboardVideoLayersTotalDuration,
@@ -22,8 +23,18 @@ function storyboardFrameImageFingerprint(layers: StoryboardVideoLayer[]): string
 
 export function useStoryboardVideoPlayback(
   layers: StoryboardVideoLayer[],
-  canvasRef: React.RefObject<HTMLCanvasElement | null>
+  canvasRef: React.RefObject<HTMLCanvasElement | null>,
+  overlay?: {
+    fieldCatalog: StoryboardParseFieldDef[];
+  }
 ) {
+  const overlayRef = useRef(overlay);
+  overlayRef.current = overlay;
+  const overlayFingerprint = useMemo(
+    () => overlay?.fieldCatalog.map((f) => f.id).join(',') ?? '',
+    [overlay?.fieldCatalog]
+  );
+
   const totalDuration = computeStoryboardVideoLayersTotalDuration(layers);
   const frameImageFingerprint = useMemo(() => storyboardFrameImageFingerprint(layers), [layers]);
 
@@ -78,6 +89,7 @@ export function useStoryboardVideoPlayback(
         layerStates,
         globalTime: Math.min(t, totalRef.current),
         totalDuration: totalRef.current,
+        fieldCatalog: overlayRef.current?.fieldCatalog ?? [],
       });
 
       if (gen !== renderGenRef.current) return;
@@ -158,6 +170,10 @@ export function useStoryboardVideoPlayback(
   }, [frameImageFingerprint]);
 
   useEffect(() => {
+    renderAtRef.current(timeSecRef.current);
+  }, [overlayFingerprint]);
+
+  useEffect(() => {
     const clamped = Math.max(0, Math.min(timeSecRef.current, totalDuration));
     if (clamped !== timeSecRef.current) {
       timeSecRef.current = clamped;
@@ -167,7 +183,7 @@ export function useStoryboardVideoPlayback(
       }
     }
     renderAtRef.current(clamped);
-  }, [layers, totalDuration, playing]);
+  }, [layers, totalDuration, playing, overlayFingerprint]);
 
   useEffect(() => {
     const canvas = canvasRef.current;

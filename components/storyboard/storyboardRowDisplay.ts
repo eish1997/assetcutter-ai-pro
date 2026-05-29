@@ -1,5 +1,12 @@
-import type { StoryboardParseFieldDef, StoryboardTableRow } from '../../types';
+import type { StoryboardParseFieldDef, StoryboardTableRow } from '../types';
 import { compileShotText, pickPrimaryVisualField } from '../../services/storyboardTableParse';
+import {
+  storyboardGroupCompositeFieldItems as groupFieldItems,
+  storyboardShotCompositeFieldItems,
+  type StoryboardCompositeFieldItem,
+} from '../../services/storyboardCompositeFields';
+
+export type { StoryboardCompositeFieldItem };
 
 /** 大纲列表主标题 */
 export function storyboardRowOutlineTitle(row: StoryboardTableRow, index: number): string {
@@ -46,36 +53,13 @@ export function storyboardRowCompositeBodyText(
   return (row.shotRaw || '').trim();
 }
 
-export type StoryboardCompositeFieldItem = {
-  id: string;
-  label: string;
-  value: string;
-};
+/** 单镜分镜合成卡字段列表（re-export） */
+export { storyboardShotCompositeFieldItems };
 
 /** 多镜合成组：各镜字段带镜号前缀 */
 export function storyboardGroupCompositeFieldItems(
   rows: StoryboardTableRow[],
   catalog: StoryboardParseFieldDef[] = []
 ): StoryboardCompositeFieldItem[] {
-  const items: StoryboardCompositeFieldItem[] = [];
-  for (const row of rows) {
-    const shot = storyboardRowOutlineTitle(row, row.index);
-    if (catalog.length > 0) {
-      for (const def of catalog) {
-        const value = String(row.shotFields[def.id] || '').trim();
-        if (!value) continue;
-        items.push({
-          id: `${row.id}-${def.id}`,
-          label: `${shot} · ${def.label}`,
-          value,
-        });
-      }
-      continue;
-    }
-    const body = storyboardRowCompositeBodyText(row, catalog).trim();
-    if (body) {
-      items.push({ id: `${row.id}-body`, label: shot, value: body });
-    }
-  }
-  return items;
+  return groupFieldItems(rows, catalog, storyboardRowOutlineTitle);
 }

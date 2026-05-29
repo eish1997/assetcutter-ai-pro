@@ -9,6 +9,7 @@ type Props = {
   index: number;
   fieldCatalog: StoryboardParseFieldDef[];
   active: boolean;
+  compact?: boolean;
   onSelect: () => void;
   onPreviewImage: (src: string) => void;
 };
@@ -22,6 +23,7 @@ function StoryboardConnectedCompositeCardInner({
   index,
   fieldCatalog,
   active,
+  compact = false,
   onSelect,
   onPreviewImage,
 }: Props) {
@@ -34,6 +36,7 @@ function StoryboardConnectedCompositeCardInner({
       bodyText={bodyText}
       fieldCatalog={fieldCatalog}
       active={active}
+      compact={compact}
       onSelect={onSelect}
       onPreviewImage={onPreviewImage}
     />
@@ -41,7 +44,7 @@ function StoryboardConnectedCompositeCardInner({
 }
 
 function compositePropsEqual(prev: Props, next: Props): boolean {
-  if (prev.index !== next.index || prev.active !== next.active) {
+  if (prev.index !== next.index || prev.active !== next.active || prev.compact !== next.compact) {
     return false;
   }
   if (fieldCatalogSignature(prev.fieldCatalog) !== fieldCatalogSignature(next.fieldCatalog)) {

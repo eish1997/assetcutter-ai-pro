@@ -13,17 +13,32 @@ export const STORYBOARD_GRID_BAND_ESTIMATE_PX = 220;
 /** 侧栏合成卡：4:3 画幅 + 可变高度文案（实测行高） */
 export const STORYBOARD_COMPOSITE_RAIL_ESTIMATE_PX = 420;
 
-/** 网格按秒数合成：根据组内镜数估算行带高度，避免虚拟列表重叠 */
-export function storyboardGridCompositeBandHeightPx(
-  groups: ReadonlyArray<{ rows: ReadonlyArray<unknown> }>
+import { computeStoryboardMosaicGrid } from './storyboardFrameStripMerge';
+
+/** 分镜图 DOM 拼图：按组内行列估算单卡高度 */
+export function storyboardGridMosaicGroupEstimatePx(
+  rowCount: number,
+  compact = false
 ): number {
-  const base = STORYBOARD_COMPOSITE_RAIL_ESTIMATE_PX + STORYBOARD_EDIT_ROW_GAP_PX;
-  if (!groups.length) return base;
-  let maxShotBonus = 0;
+  const header = 40;
+  const pad = 12;
+  const cellEstimate = compact ? 108 : 280;
+  const gap = compact ? 6 : 8;
+  const { rows } = computeStoryboardMosaicGrid(rowCount);
+  return header + pad + rows * cellEstimate + Math.max(0, rows - 1) * gap;
+}
+
+/** 网格按秒数分组：根据组内镜数估算行带高度 */
+export function storyboardGridCompositeBandHeightPx(
+  groups: ReadonlyArray<{ rows: ReadonlyArray<unknown> }>,
+  compact = false
+): number {
+  if (!groups.length) return 360 + STORYBOARD_EDIT_ROW_GAP_PX;
+  let maxH = compact ? 200 : 360;
   for (const g of groups) {
-    maxShotBonus = Math.max(maxShotBonus, Math.max(0, g.rows.length - 1) * 28);
+    maxH = Math.max(maxH, storyboardGridMosaicGroupEstimatePx(g.rows.length, compact));
   }
-  return base + maxShotBonus;
+  return maxH + STORYBOARD_EDIT_ROW_GAP_PX;
 }
 
 export const STORYBOARD_VIRTUAL_OVERSCAN = 4;

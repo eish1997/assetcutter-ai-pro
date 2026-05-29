@@ -71,6 +71,7 @@ export default function StoryboardTableVideoPreview({
   );
   const aspect = useMemo(() => getStoryboardVideoAspectPreset(aspectId), [aspectId]);
   const fitSize = useStoryboardVideoFitBox(previewPaneRef, aspect);
+
   const layers = useMemo(
     () => buildStoryboardVideoLayers(rows, timelineLayerCount, fieldCatalog),
     [fieldCatalog, rows, timelineLayerCount]
@@ -84,12 +85,13 @@ export default function StoryboardTableVideoPreview({
     seek,
     togglePlay,
     pause,
-  } = useStoryboardVideoPlayback(layers, canvasRef);
+  } = useStoryboardVideoPlayback(layers, canvasRef, {
+    fieldCatalog,
+  });
 
   const { bodyRef, previewHeight, timelineHeight, splitterPx, onSplitterPointerDown } =
     useStoryboardVideoPaneSplit();
 
-  // 播放头所在镜头优先，避免选中态与预览不同步
   const displayActiveRowId = playbackRowId ?? activeRowId;
 
   useEffect(() => {
@@ -151,22 +153,24 @@ export default function StoryboardTableVideoPreview({
         >
           <div
             ref={previewPaneRef}
-            className="relative flex min-h-0 flex-1 items-center justify-center overflow-visible rounded-2xl border border-white/[0.08] bg-black/50"
+            className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-white/[0.08] bg-black/50 p-2"
           >
-            <div
-              className="relative overflow-hidden rounded-xl border border-white/[0.1] bg-black shadow-[0_8px_32px_-8px_rgba(0,0,0,0.65)]"
-              style={{
-                width: Math.max(1, fitSize.width),
-                height: Math.max(1, fitSize.height),
-              }}
-            >
-              <canvas ref={canvasRef} className="block h-full w-full" />
-            </div>
-            {!hasAnySegment ? (
-              <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-[11px] text-gray-600">
-                添加镜头并配图后即可预览
+            <div className="relative flex min-h-0 min-w-0 flex-1 items-center justify-center overflow-visible">
+              <div
+                className="relative overflow-hidden rounded-xl border border-white/[0.1] bg-black shadow-[0_8px_32px_-8px_rgba(0,0,0,0.65)]"
+                style={{
+                  width: Math.max(1, fitSize.width),
+                  height: Math.max(1, fitSize.height),
+                }}
+              >
+                <canvas ref={canvasRef} className="block h-full w-full" />
               </div>
-            ) : null}
+              {!hasAnySegment ? (
+                <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-[11px] text-gray-600">
+                  添加镜头并配图后即可预览
+                </div>
+              ) : null}
+            </div>
           </div>
 
           <div className="flex shrink-0 items-center gap-1.5 px-0.5">

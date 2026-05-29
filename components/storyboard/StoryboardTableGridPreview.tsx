@@ -12,7 +12,7 @@ import {
   storyboardGridBandCount,
   storyboardGridCompositeBandHeightPx,
 } from '../../services/storyboardVirtualScroll';
-import StoryboardDurationGroupCompositeCard from './StoryboardDurationGroupCompositeCard';
+import StoryboardDurationGroupMosaicCard from './StoryboardDurationGroupMosaicCard';
 import {
   STORYBOARD_BODY_SCROLL,
   STORYBOARD_GAP_STACK,
@@ -25,10 +25,12 @@ type Props = {
   fieldCatalog?: StoryboardParseFieldDef[];
   secondsPerTile: number;
   timelineLayerCount?: number;
+  gridExportWidth?: number;
   activeRowId: string | null;
   onSelect: (rowId: string) => void;
-  onOpenInEditor: (rowId: string) => void;
   onPreviewImage: (src: string) => void;
+  onPreviewMosaicError?: (message: string) => void;
+  onDownloadGroup?: (group: StoryboardDurationGroup) => void;
   scrollToRowRef?: React.MutableRefObject<((rowId: string) => void) | null>;
 };
 
@@ -37,15 +39,17 @@ export default function StoryboardTableGridPreview({
   fieldCatalog = [],
   secondsPerTile,
   timelineLayerCount = 1,
+  gridExportWidth = 2560,
   activeRowId,
   onSelect,
-  onOpenInEditor,
   onPreviewImage,
+  onPreviewMosaicError,
+  onDownloadGroup,
   scrollToRowRef,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
-  const [columns, setColumns] = useState(3);
+  const [columns, setColumns] = useState(2);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
 
@@ -57,7 +61,7 @@ export default function StoryboardTableGridPreview({
   const virtualize = groups.length >= STORYBOARD_VIRTUALIZE_MIN_ROWS;
   const bandCount = storyboardGridBandCount(groups.length, columns);
   const bandHeight = useMemo(
-    () => storyboardGridCompositeBandHeightPx(groups),
+    () => storyboardGridCompositeBandHeightPx(groups, true),
     [groups]
   );
   const totalHeight = virtualize ? Math.max(0, bandCount * bandHeight - STORYBOARD_EDIT_ROW_GAP_PX) : 0;
@@ -66,7 +70,8 @@ export default function StoryboardTableGridPreview({
     const grid = gridRef.current;
     const scroll = scrollRef.current;
     if (grid) {
-      setColumns(storyboardEditGridColumnsForWidth(grid.clientWidth));
+      const cols = storyboardEditGridColumnsForWidth(grid.clientWidth);
+      setColumns(Math.min(3, Math.max(1, cols)));
     }
     if (scroll) {
       setScrollTop(scroll.scrollTop);
@@ -123,25 +128,24 @@ export default function StoryboardTableGridPreview({
   const paddingTop = virtualize ? startBand * bandHeight : 0;
   const paddingBottom = virtualize ? Math.max(0, totalHeight - endBand * bandHeight) : 0;
 
-  const renderGroup = (group: StoryboardDurationGroup) => {
-    const active = group.rowIds.includes(activeRowId ?? '');
-    return (
-      <StoryboardDurationGroupCompositeCard
-        key={group.id}
-        group={group}
-        fieldCatalog={fieldCatalog}
-        active={active}
-        onSelect={() => onSelect(group.rowIds[0]!)}
-        onOpenInEditor={() => onOpenInEditor(group.rowIds[0]!)}
-        onPreviewImage={onPreviewImage}
-      />
-    );
-  };
+  const renderGroup = (group: StoryboardDurationGroup) => (
+    <StoryboardDurationGroupMosaicCard
+      key={group.id}
+      group={group}
+      fieldCatalog={fieldCatalog}
+      activeRowId={activeRowId}
+      previewWidth={gridExportWidth}
+      onSelectRow={onSelect}
+      onPreviewImage={onPreviewImage}
+      onPreviewMosaicError={onPreviewMosaicError}
+      onDownloadGroup={onDownloadGroup}
+    />
+  );
 
   const gridContent = (
     <div
       ref={gridRef}
-      className={STORYBOARD_GRID_PREVIEW}
+      className={`${STORYBOARD_GRID_PREVIEW} grid-cols-[repeat(auto-fill,minmax(11.5rem,1fr))] sm:grid-cols-[repeat(auto-fill,minmax(12.5rem,1fr))] lg:grid-cols-[repeat(auto-fill,minmax(13rem,1fr))]`}
       style={virtualize ? { paddingTop, paddingBottom } : undefined}
     >
       {(virtualize ? visibleGroups : groups).map((group) => renderGroup(group))}
@@ -149,7 +153,7 @@ export default function StoryboardTableGridPreview({
   );
 
   return (
-    <div className={`flex min-h-0 flex-1 flex-col ${STORYBOARD_PAD_PANEL} pt-1`}>
+    <div className={`flex min-h-0 flex-1 flex-col overflow-hidden ${STORYBOARD_PAD_PANEL} pt-1`}>
       <div
         ref={scrollRef}
         onScroll={() => readLayout()}

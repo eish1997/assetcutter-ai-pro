@@ -22,6 +22,7 @@ export type StoryboardVideoSegment = {
   durationIsEstimated: boolean;
   frameImage?: string;
   shotText: string;
+  shotFields: Record<string, string>;
   timelineLayer: number;
 };
 
@@ -93,6 +94,7 @@ export function buildStoryboardVideoSegments(
       durationIsEstimated: estimated,
       frameImage: displaySrc,
       shotText: visual || String(row.shotText || '').trim(),
+      shotFields: { ...row.shotFields },
       timelineLayer: row.timelineLayer ?? 0,
     };
   });

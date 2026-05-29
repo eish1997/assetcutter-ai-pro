@@ -35,8 +35,17 @@ import { readLocalJson, writeLocalJson } from '../../services/clientPersist';
 import {
   STORYBOARD_GRID_SECONDS_PER_TILE_KEY,
   STORYBOARD_GRID_SECONDS_PRESETS,
+  groupStoryboardRowsForGridPreview,
   normalizeStoryboardGridSecondsPerTile,
 } from '../../services/storyboardGridDurationGroups';
+import {
+  downloadAllStoryboardGroupMosaics,
+  downloadStoryboardGroupMosaic,
+  normalizeStoryboardGridExportWidth,
+  readStoryboardGridExportWidth,
+  STORYBOARD_GRID_EXPORT_WIDTH_PRESETS,
+  writeStoryboardGridExportWidth,
+} from '../../services/storyboardGridExport';
 import { readStoryboardFrameFromClipboard, readStoryboardFrameFromFile } from './storyboardFrameImage';
 import { persistStoryboardFrameImage } from '../../services/storyboardFrameCompanion';
 import { storyboardRowHasFrameRef } from '../../services/storyboardFrameImageUrl';
@@ -164,6 +173,8 @@ export default function StoryboardTablePanel({
       readLocalJson(STORYBOARD_GRID_SECONDS_PER_TILE_KEY, 5, (v) => v)
     )
   );
+  const [gridExportWidth, setGridExportWidth] = useState(() => readStoryboardGridExportWidth());
+  const [gridDownloadBusy, setGridDownloadBusy] = useState(false);
   const isGridView = viewMode === 'grid';
   const isVideoView = viewMode === 'video';
   const isEditView = viewMode === 'edit';
@@ -236,6 +247,71 @@ export default function StoryboardTablePanel({
     setGridSecondsPerTile(next);
     writeLocalJson(STORYBOARD_GRID_SECONDS_PER_TILE_KEY, next);
   }, []);
+
+  const setGridExportWidthPersisted = useCallback((raw: number) => {
+    const next = normalizeStoryboardGridExportWidth(raw);
+    setGridExportWidth(next);
+    writeStoryboardGridExportWidth(next);
+  }, []);
+
+  const gridExportWidthOptions = useMemo(
+    () =>
+      STORYBOARD_GRID_EXPORT_WIDTH_PRESETS.map((w) => ({
+        value: String(w),
+        label: `${w}px 宽`,
+      })),
+    []
+  );
+
+  const gridGroups = useMemo(
+    () =>
+      groupStoryboardRowsForGridPreview(table.rows, gridSecondsPerTile, timelineLayerCount),
+    [gridSecondsPerTile, table.rows, timelineLayerCount]
+  );
+
+  const handleDownloadGridGroup = useCallback(
+    async (group: (typeof gridGroups)[number]) => {
+      if (gridDownloadBusy) return;
+      setGridDownloadBusy(true);
+      try {
+        const filename = await downloadStoryboardGroupMosaic(
+          group,
+          table.fieldCatalog,
+          gridExportWidth
+        );
+        if (filename) {
+          onNotify?.('info', `分镜拼图已保存到浏览器下载文件夹：${filename}`);
+        } else {
+          onNotify?.('warn', '拼图导出失败');
+        }
+      } finally {
+        setGridDownloadBusy(false);
+      }
+    },
+    [gridDownloadBusy, gridExportWidth, onNotify, table.fieldCatalog]
+  );
+
+  const handleDownloadAllGridGroups = useCallback(async () => {
+    if (gridDownloadBusy || !gridGroups.length) return;
+    setGridDownloadBusy(true);
+    try {
+      const count = await downloadAllStoryboardGroupMosaics(
+        gridGroups,
+        table.fieldCatalog,
+        gridExportWidth
+      );
+      if (count > 0) {
+        onNotify?.(
+          'info',
+          `已保存 ${count} 张分镜拼图到浏览器下载文件夹（${gridExportWidth}px 宽，文件名以 storyboard- 开头）`
+        );
+      } else {
+        onNotify?.('warn', '没有可导出的拼图');
+      }
+    } finally {
+      setGridDownloadBusy(false);
+    }
+  }, [gridDownloadBusy, gridExportWidth, gridGroups, onNotify, table.fieldCatalog]);
 
   const gridSecondsOptions = useMemo(() => {
     const base = STORYBOARD_GRID_SECONDS_PRESETS.map((sec) => ({
@@ -870,7 +946,7 @@ export default function StoryboardTablePanel({
               }`}
               aria-pressed={isGridView}
             >
-              网格
+              分镜图
             </button>
             <button
               type="button"
@@ -1036,8 +1112,24 @@ export default function StoryboardTablePanel({
               <span>秒</span>
             </label>
             <span className="text-[9px] text-gray-600">
-              按镜头时长顺序合并为多镜合成图；未填时长按 2s*
+              页面内 DOM 拼图实时展示；下载时按设定宽度渲染高清图；未填时长按 2s*
             </span>
+            <span className="shrink-0 text-[10px] text-gray-500">导出宽度</span>
+            <CustomDropdown
+              value={String(gridExportWidth)}
+              options={gridExportWidthOptions}
+              onChange={(v) => setGridExportWidthPersisted(Number(v))}
+              triggerClassName="h-8 min-w-[7rem] rounded-lg bg-white/[0.04] px-2.5 text-[10px] text-gray-200 ring-1 ring-white/[0.07] hover:bg-white/[0.07]"
+              portalZIndex={STORYBOARD_PANEL_DROPDOWN_Z}
+            />
+            <button
+              type="button"
+              disabled={gridDownloadBusy || !gridGroups.length}
+              onClick={() => void handleDownloadAllGridGroups()}
+              className={STORYBOARD_TOOL_BTN_NEUTRAL}
+            >
+              {gridDownloadBusy ? '导出中…' : '下载全部拼图'}
+            </button>
           </div>
         ) : null}
 
@@ -1055,10 +1147,12 @@ export default function StoryboardTablePanel({
           fieldCatalog={table.fieldCatalog}
           secondsPerTile={gridSecondsPerTile}
           timelineLayerCount={timelineLayerCount}
+          gridExportWidth={gridExportWidth}
           activeRowId={activeRowId}
           onSelect={(rowId) => navigateToRow(rowId)}
-          onOpenInEditor={openRowInEditor}
           onPreviewImage={setLightboxSrc}
+          onPreviewMosaicError={(message) => onNotify?.('warn', message)}
+          onDownloadGroup={(group) => void handleDownloadGridGroup(group)}
           scrollToRowRef={gridScrollToRowRef}
         />
       ) : isVideoView ? (

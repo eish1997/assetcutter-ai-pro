@@ -1,87 +1,39 @@
-import type { StoryboardTableRow } from '../types';
-import { resolveStoryboardRowFrameDisplaySrc } from './storyboardFrameImageUrl';
+import type { StoryboardParseFieldDef } from '../types';
 import type { StoryboardDurationGroup } from './storyboardGridDurationGroups';
 import { storyboardDurationGroupMergeSignature } from './storyboardGridDurationGroups';
-import { resolveStoryboardShotDurationSec, storyboardRowShotLabel } from './storyboardVideoTimeline';
+import {
+  renderStoryboardShotCompositeCanvas,
+  clearStoryboardCompositeFrameImageCache,
+} from './storyboardCompositeFrameRender';
+import { clearStoryboardGridMosaicPreviewCache } from './storyboardGridMosaicPreview';
 
-const STRIP_WIDTH = 960;
-const STRIP_HEIGHT = 720;
-const MERGE_CACHE_MAX = 48;
+const DEFAULT_WIDTH = 960;
+const DEFAULT_HEIGHT = 720;
 
-const imageCache = new Map<string, Promise<HTMLImageElement | null>>();
-const mergeCache = new Map<string, Promise<string | null>>();
-
-function shouldUseCrossOrigin(src: string): boolean {
-  if (!/^https?:\/\//i.test(src) || typeof window === 'undefined') return false;
-  try {
-    return new URL(src).origin !== window.location.origin;
-  } catch {
-    return false;
-  }
+/** 将 N 个完整画面排成近似方阵（列数 ≥ 行数，优先横向） */
+export function computeStoryboardMosaicGrid(cellCount: number): { cols: number; rows: number } {
+  if (cellCount <= 0) return { cols: 1, rows: 1 };
+  if (cellCount === 1) return { cols: 1, rows: 1 };
+  const cols = Math.ceil(Math.sqrt(cellCount));
+  const rows = Math.ceil(cellCount / cols);
+  return { cols, rows };
 }
 
-function loadFrameImage(rawSrc: string): Promise<HTMLImageElement | null> {
-  const src = resolveStoryboardRowFrameDisplaySrc(rawSrc) || rawSrc;
-  const cached = imageCache.get(src);
-  if (cached) return cached;
+export type StoryboardGroupMosaicRenderOpts = {
+  width?: number;
+  height?: number;
+  jpegQuality?: number;
+};
 
-  const promise = new Promise<HTMLImageElement | null>((resolve) => {
-    const img = new Image();
-    if (shouldUseCrossOrigin(src)) img.crossOrigin = 'anonymous';
-    img.onload = () => resolve(img);
-    img.onerror = () => resolve(null);
-    img.src = src;
-  });
-  imageCache.set(src, promise);
-  return promise;
-}
-
-export function clearStoryboardStripMergeCaches(): void {
-  imageCache.clear();
-  mergeCache.clear();
-}
-
-function trimMergeCache(): void {
-  if (mergeCache.size <= MERGE_CACHE_MAX) return;
-  const drop = mergeCache.size - MERGE_CACHE_MAX;
-  const keys = mergeCache.keys();
-  for (let i = 0; i < drop; i += 1) {
-    const k = keys.next().value;
-    if (k) mergeCache.delete(k);
-  }
-}
-
-function drawPlaceholder(
+function drawContainedCanvas(
   ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  label: string
-): void {
-  ctx.fillStyle = '#141418';
-  ctx.fillRect(x, y, w, h);
-  ctx.strokeStyle = 'rgba(255,255,255,0.1)';
-  ctx.lineWidth = 1;
-  ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
-  ctx.font = `600 ${Math.max(11, Math.round(h * 0.1))}px system-ui, sans-serif`;
-  ctx.fillStyle = 'rgba(120,120,130,0.95)';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(label, x + w / 2, y + h / 2);
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'alphabetic';
-}
-
-async function drawContainedImage(
-  ctx: CanvasRenderingContext2D,
-  img: HTMLImageElement,
+  source: HTMLCanvasElement,
   x: number,
   y: number,
   w: number,
   h: number
-): Promise<void> {
-  const ir = img.width / img.height;
+): void {
+  const ir = source.width / source.height;
   const cr = w / h;
   let dw = w;
   let dh = h;
@@ -94,108 +46,112 @@ async function drawContainedImage(
     dw = h * ir;
     dx = x + (w - dw) / 2;
   }
-  ctx.drawImage(img, dx, dy, dw, dh);
+  ctx.drawImage(source, dx, dy, dw, dh);
 }
 
-function drawClippedText(
-  ctx: CanvasRenderingContext2D,
-  text: string,
-  x: number,
-  y: number,
-  maxWidth: number
-): void {
-  if (maxWidth <= 8) return;
-  let out = text;
-  while (out.length > 1 && ctx.measureText(out).width > maxWidth) {
-    out = out.slice(0, -1);
-  }
-  if (out.length < text.length) out = `${out}…`;
-  ctx.fillText(out, x, y);
-}
-
-async function drawShotCell(
-  ctx: CanvasRenderingContext2D,
-  row: StoryboardTableRow,
-  x: number,
-  y: number,
-  w: number,
-  h: number
-): Promise<void> {
-  const label = storyboardRowShotLabel(row, row.index);
-  const src = resolveStoryboardRowFrameDisplaySrc(row);
-  if (src) {
-    const img = await loadFrameImage(src);
-    if (img) {
-      await drawContainedImage(ctx, img, x, y, w, h);
-    } else {
-      drawPlaceholder(ctx, x, y, w, h, label);
-    }
-  } else {
-    drawPlaceholder(ctx, x, y, w, h, label);
-  }
-
-  const { sec, estimated } = resolveStoryboardShotDurationSec(row);
-  const meta = `${label} · ${sec}s${estimated ? '*' : ''}`;
-  const bandH = Math.max(18, Math.round(h * 0.12));
-  ctx.fillStyle = 'rgba(0,0,0,0.55)';
-  ctx.fillRect(x, y + h - bandH, w, bandH);
-  ctx.font = `500 ${Math.max(9, Math.round(bandH * 0.42))}px system-ui, sans-serif`;
-  ctx.fillStyle = 'rgba(255,255,255,0.92)';
-  drawClippedText(ctx, meta, x + 6, y + h - Math.round(bandH * 0.35), w - 12);
-}
-
-async function renderGroupStrip(group: StoryboardDurationGroup): Promise<string | null> {
+/** 离屏渲染一组镜头的拼图位图（仅下载时调用） */
+export async function renderStoryboardGroupMosaicDataUrl(
+  group: StoryboardDurationGroup,
+  fieldCatalog: StoryboardParseFieldDef[] = [],
+  opts: StoryboardGroupMosaicRenderOpts = {}
+): Promise<string | null> {
   if (typeof document === 'undefined' || group.rows.length === 0) return null;
 
+  const width = Math.max(320, Math.round(opts.width ?? DEFAULT_WIDTH));
+  const height = Math.max(240, Math.round(opts.height ?? DEFAULT_HEIGHT));
+  const jpegQuality = opts.jpegQuality ?? 0.92;
+  const scale = width / DEFAULT_WIDTH;
+
   const canvas = document.createElement('canvas');
-  canvas.width = STRIP_WIDTH;
-  canvas.height = STRIP_HEIGHT;
+  canvas.width = width;
+  canvas.height = height;
   const ctx = canvas.getContext('2d');
   if (!ctx) return null;
 
   ctx.fillStyle = '#0a0a0c';
-  ctx.fillRect(0, 0, STRIP_WIDTH, STRIP_HEIGHT);
+  ctx.fillRect(0, 0, width, height);
 
-  const pad = 6;
-  const innerW = STRIP_WIDTH - pad * 2;
-  const innerH = STRIP_HEIGHT - pad * 2;
-  const totalDur =
-    group.totalDurationSec > 0
-      ? group.totalDurationSec
-      : group.rows.reduce((s, r) => s + resolveStoryboardShotDurationSec(r).sec, 0);
+  const { cols, rows } = computeStoryboardMosaicGrid(group.rows.length);
+  const pad = Math.max(4, Math.round(6 * scale));
+  const gap = Math.max(2, Math.round(4 * scale));
+  const innerW = width - pad * 2;
+  const innerH = height - pad * 2;
+  const cellW = cols > 0 ? (innerW - gap * (cols - 1)) / cols : innerW;
+  const cellH = rows > 0 ? (innerH - gap * (rows - 1)) / rows : innerH;
+  const renderW = Math.max(480, Math.round(cellW * 2.5));
 
-  let x = pad;
   for (let i = 0; i < group.rows.length; i += 1) {
     const row = group.rows[i]!;
-    const { sec } = resolveStoryboardShotDurationSec(row);
-    const ratio = totalDur > 0 ? sec / totalDur : 1 / group.rows.length;
-    const cellW = i === group.rows.length - 1 ? pad + innerW - x : Math.max(24, innerW * ratio);
-    await drawShotCell(ctx, row, x, pad, cellW, innerH);
-    if (i < group.rows.length - 1) {
-      ctx.fillStyle = 'rgba(0,0,0,0.65)';
-      ctx.fillRect(x + cellW - 1, pad, 2, innerH);
+    const col = i % cols;
+    const rowIdx = Math.floor(i / cols);
+    const x = pad + col * (cellW + gap);
+    const y = pad + rowIdx * (cellH + gap);
+
+    const shotCanvas = await renderStoryboardShotCompositeCanvas(row, fieldCatalog, renderW);
+    if (shotCanvas) {
+      drawContainedCanvas(ctx, shotCanvas, x, y, cellW, cellH);
+    } else {
+      ctx.fillStyle = '#141418';
+      ctx.fillRect(x, y, cellW, cellH);
     }
-    x += cellW;
+
+    if (cols > 1 || rows > 1) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+      ctx.lineWidth = Math.max(1, scale);
+      ctx.strokeRect(x + 0.5, y + 0.5, cellW - 1, cellH - 1);
+    }
   }
 
   try {
-    return canvas.toDataURL('image/jpeg', 0.88);
+    return canvas.toDataURL('image/jpeg', jpegQuality);
   } catch {
     return null;
   }
 }
 
-/** 将一组镜头按秒数比例横向拼成 4:3 条带预览图（带内存缓存） */
-export function mergeStoryboardGroupPreviewDataUrl(
-  group: StoryboardDurationGroup
-): Promise<string | null> {
-  const key = storyboardDurationGroupMergeSignature(group);
-  const cached = mergeCache.get(key);
-  if (cached) return cached;
-
-  const promise = renderGroupStrip(group).finally(() => {
-    trimMergeCache();
+export async function renderStoryboardGroupMosaicBlob(
+  group: StoryboardDurationGroup,
+  fieldCatalog: StoryboardParseFieldDef[],
+  exportWidth: number
+): Promise<Blob | null> {
+  const width = Math.max(960, Math.round(exportWidth));
+  const height = Math.round((width * 3) / 4);
+  const dataUrl = await renderStoryboardGroupMosaicDataUrl(group, fieldCatalog, {
+    width,
+    height,
+    jpegQuality: 0.92,
   });
-  mergeCache.set(key, promise);
-  return promise;
+  if (!dataUrl) return null;
+  const res = await fetch(dataUrl);
+  return res.blob();
+}
+
+export function storyboardGroupMosaicExportFilename(
+  group: StoryboardDurationGroup,
+  exportWidth: number
+): string {
+  const label = group.shotRangeLabel.replace(/[^\w\u4e00-\u9fff-]+/g, '_').slice(0, 48);
+  return `storyboard-${label || group.id}-${exportWidth}px.jpg`;
+}
+
+/** @deprecated 预览已改为 DOM 拼图；保留签名供导出缓存键 */
+export function mergeStoryboardGroupPreviewDataUrl(
+  group: StoryboardDurationGroup,
+  fieldCatalog: StoryboardParseFieldDef[] = [],
+  opts?: StoryboardGroupMosaicRenderOpts
+): Promise<string | null> {
+  return renderStoryboardGroupMosaicDataUrl(group, fieldCatalog, opts);
+}
+
+export function storyboardGroupMosaicExportCacheKey(
+  group: StoryboardDurationGroup,
+  fieldCatalog: StoryboardParseFieldDef[],
+  exportWidth: number
+): string {
+  return `${storyboardDurationGroupMergeSignature(group, fieldCatalog)}@${exportWidth}`;
+}
+
+export function clearStoryboardStripMergeCaches(): void {
+  clearStoryboardCompositeFrameImageCache();
+  clearStoryboardGridMosaicPreviewCache();
 }

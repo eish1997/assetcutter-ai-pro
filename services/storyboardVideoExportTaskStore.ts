@@ -141,6 +141,7 @@ export async function startStoryboardVideoExportTask(params: {
           layerStates,
           globalTime,
           totalDuration: dur,
+          fieldCatalog,
         });
       },
       onProgress: (progress) => {

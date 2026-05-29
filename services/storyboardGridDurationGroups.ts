@@ -98,15 +98,32 @@ export function groupStoryboardRowsForGridPreview(
   return merged.sort((a, b) => a.startIndex - b.startIndex);
 }
 
-export function storyboardDurationGroupMergeSignature(group: StoryboardDurationGroup): string {
-  return group.rows
+export function storyboardFieldCatalogSignature(catalog: StoryboardParseFieldDef[]): string {
+  return [...catalog]
+    .sort((a, b) => a.order - b.order)
+    .map((f) => `${f.id}:${f.label}:${f.order}`)
+    .join('|');
+}
+
+export function storyboardDurationGroupMergeSignature(
+  group: StoryboardDurationGroup,
+  fieldCatalog: StoryboardParseFieldDef[] = []
+): string {
+  const cat = storyboardFieldCatalogSignature(fieldCatalog);
+  const rows = group.rows
     .map((row) => {
       const img = String(row.frameImage || row.frameImageObjectKey || '').trim();
       const companion = String(row.frameImageCompanionKey || '').trim();
       const { sec } = resolveStoryboardShotDurationSec(row);
-      return `${row.id}:${sec}:${img}:${companion}`;
+      const fields = Object.keys(row.shotFields)
+        .sort()
+        .map((k) => `${k}=${String(row.shotFields[k] || '').trim()}`)
+        .join(';');
+      const raw = String(row.shotRaw || row.shotText || '').trim();
+      return `${row.id}:${sec}:${img}:${companion}:${fields}:${raw}`;
     })
     .join('|');
+  return `${cat}::${rows}`;
 }
 
 export function findStoryboardGroupIndexForRow(
