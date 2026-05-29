@@ -75,6 +75,9 @@ export const STORYBOARD_OUTLINE_ITEM_IDLE = 'hover:bg-white/[0.04]';
 export const STORYBOARD_ROW_ACTION =
   'inline-flex h-7 items-center justify-center rounded-lg px-2.5 text-[10px] font-semibold transition-colors disabled:cursor-not-allowed';
 
+export const STORYBOARD_ROW_ICON_BTN =
+  'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-gray-500 transition-colors outline-none hover:bg-white/[0.06] hover:text-white focus-visible:ring-2 focus-visible:ring-violet-500/40 disabled:cursor-not-allowed disabled:opacity-30';
+
 export const STORYBOARD_ADD_ROW_DASHED =
   `flex w-full items-center justify-center ${STORYBOARD_GAP_TIGHT} rounded-xl border border-dashed border-white/[0.1] py-2 text-[10px] font-medium text-gray-500 transition-colors hover:border-violet-400/35 hover:bg-violet-500/[0.04] hover:text-violet-200/90`;
 

@@ -6,15 +6,19 @@ import {
   STORYBOARD_VIDEO_ASPECT_STORAGE_KEY,
   type StoryboardVideoAspectPresetId,
 } from './storyboardVideoAspect';
-import { drawStoryboardVideoFrame } from './storyboardVideoCanvas';
 import {
-  buildStoryboardVideoSegments,
-  computeStoryboardVideoTotalDuration,
+  drawStoryboardVideoCompositeFrame,
+} from './storyboardVideoCanvas';
+import {
+  buildStoryboardVideoLayers,
+  computeStoryboardVideoLayersTotalDuration,
+  findStoryboardLayerSegmentForComposite,
+  resolveStoryboardTimelineLayerCount,
 } from './storyboardVideoTimeline';
 import {
   describeStoryboardWebmMime,
   downloadStoryboardWebmBlob,
-  exportStoryboardVideoWebm,
+  exportStoryboardVideoWebmByTime,
   isStoryboardWebmExportAvailable,
 } from './storyboardVideoExport';
 
@@ -49,10 +53,14 @@ export function isStoryboardVideoExportRunning(): boolean {
   return activeTask?.status === 'running';
 }
 
-export function canExportStoryboardVideo(rows: StoryboardTableRow[]): boolean {
+export function canExportStoryboardVideo(
+  rows: StoryboardTableRow[],
+  timelineLayerCount?: number
+): boolean {
   if (!isStoryboardWebmExportAvailable()) return false;
-  const segments = buildStoryboardVideoSegments(rows);
-  return segments.length > 0 && computeStoryboardVideoTotalDuration(segments) > 0;
+  const count = resolveStoryboardTimelineLayerCount(rows, timelineLayerCount);
+  const layers = buildStoryboardVideoLayers(rows, count);
+  return layers.some((l) => l.segments.length > 0 && l.totalDuration > 0);
 }
 
 function readStoryboardVideoAspectId(): StoryboardVideoAspectPresetId {
@@ -75,15 +83,16 @@ export async function startStoryboardVideoExportTask(params: {
   assetId: string;
   assetTitle: string;
   rows: StoryboardTableRow[];
+  timelineLayerCount?: number;
   onNotify?: NotifyFn;
 }): Promise<void> {
-  const { assetId, assetTitle, rows, onNotify } = params;
+  const { assetId, assetTitle, rows, timelineLayerCount, onNotify } = params;
 
   if (activeTask?.status === 'running') {
     onNotify?.('warn', '已有分镜视频导出任务进行中，请稍候');
     return;
   }
-  if (!canExportStoryboardVideo(rows)) {
+  if (!canExportStoryboardVideo(rows, timelineLayerCount)) {
     if (!isStoryboardWebmExportAvailable()) {
       onNotify?.('warn', '当前浏览器不支持 WebM 导出，请使用 Chrome 或 Edge');
     } else {
@@ -92,8 +101,9 @@ export async function startStoryboardVideoExportTask(params: {
     return;
   }
 
-  const segments = buildStoryboardVideoSegments(rows);
-  const totalDuration = computeStoryboardVideoTotalDuration(segments);
+  const layerCount = resolveStoryboardTimelineLayerCount(rows, timelineLayerCount);
+  const layers = buildStoryboardVideoLayers(rows, layerCount);
+  const totalDuration = computeStoryboardVideoLayersTotalDuration(layers);
   const aspect = getStoryboardVideoAspectPreset(readStoryboardVideoAspectId());
   const taskId = `sb-export-${Date.now()}`;
 
@@ -109,12 +119,28 @@ export async function startStoryboardVideoExportTask(params: {
   let lastEmittedPct = -1;
 
   try {
-    const { blob, mimeType } = await exportStoryboardVideoWebm({
+    const { blob, mimeType } = await exportStoryboardVideoWebmByTime({
       width: aspect.width,
       height: aspect.height,
-      segments,
       totalDuration,
-      drawFrame: drawStoryboardVideoFrame,
+      drawAtTime: async (ctx, width, height, globalTime, dur) => {
+        const layerStates = layers
+          .map((layer) => {
+            const pos = findStoryboardLayerSegmentForComposite(layer, globalTime);
+            if (!pos) return null;
+            return {
+              layer: layer.layer,
+              segment: pos.segment,
+              progressInSegment: pos.offsetInSegment,
+            };
+          })
+          .filter((s): s is NonNullable<typeof s> => s != null);
+        await drawStoryboardVideoCompositeFrame(ctx, width, height, {
+          layerStates,
+          globalTime,
+          totalDuration: dur,
+        });
+      },
       onProgress: (progress) => {
         if (!activeTask || activeTask.id !== taskId) return;
         const pct = Math.floor(progress * 100);

@@ -24,8 +24,8 @@ describe('storyboardVideoExport', () => {
   it('counts export frames', () => {
     expect(
       countStoryboardExportFrames([
-        { rowId: 'a', index: 0, shotNo: '01', durationSec: 2, durationIsEstimated: false, shotText: '' },
-        { rowId: 'b', index: 1, shotNo: '02', durationSec: 1, durationIsEstimated: false, shotText: '' },
+        { rowId: 'a', index: 0, shotNo: '01', durationSec: 2, durationIsEstimated: false, shotText: '', timelineLayer: 0 },
+        { rowId: 'b', index: 1, shotNo: '02', durationSec: 1, durationIsEstimated: false, shotText: '', timelineLayer: 0 },
       ])
     ).toBe(90);
   });

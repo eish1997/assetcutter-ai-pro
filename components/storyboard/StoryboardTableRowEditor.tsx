@@ -1,5 +1,7 @@
 import React from 'react';
 import type { StoryboardTableRow } from '../../types';
+import AppIcon from '../ui/AppIcon';
+import { CustomDropdown } from '../ui/CustomDropdown';
 import { storyboardRowOutlineTitle } from './storyboardRowDisplay';
 import {
   STORYBOARD_FIELD_INPUT,
@@ -8,13 +10,14 @@ import {
   STORYBOARD_LABEL,
   STORYBOARD_PAD_CARD,
   STORYBOARD_PAD_ROW_BAR,
-  STORYBOARD_ROW_ACTION,
   STORYBOARD_ROW_ACTIVE,
+  STORYBOARD_ROW_ICON_BTN,
   STORYBOARD_ROW_IDLE,
   STORYBOARD_ROW_SHELL,
   STORYBOARD_SCROLL_MT,
-  STORYBOARD_TOOL_BTN_PRIMARY,
 } from './storyboardTableUi';
+
+const LAYER_DROPDOWN_Z = { backdrop: 2200, list: 2201 };
 
 type Props = {
   row: StoryboardTableRow;
@@ -37,6 +40,7 @@ type Props = {
   redrawDisabledReason?: string;
   onRedraw?: () => void;
   domId?: string;
+  timelineLayerCount?: number;
 };
 
 function parseDurationInput(raw: string): number | null {
@@ -71,6 +75,7 @@ export default function StoryboardTableRowEditor({
   redrawDisabledReason,
   onRedraw,
   domId,
+  timelineLayerCount = 1,
 }: Props) {
   const img = String(row.frameImage || '').trim();
   const shotLabel = storyboardRowOutlineTitle(row, index);
@@ -87,30 +92,72 @@ export default function StoryboardTableRowEditor({
           {index + 1}
         </span>
         <span className="text-[11px] font-semibold text-gray-200">镜头 {shotLabel}</span>
-        {row.locked ? (
-          <span className="rounded-md bg-amber-500/15 px-1.5 py-0.5 text-[8px] font-bold text-amber-200/90">
-            已锁定
-          </span>
-        ) : null}
         {!readOnly ? (
           <div className={`ml-auto flex items-center ${STORYBOARD_GAP_TIGHT}`}>
+            {onRedraw ? (
+              <button
+                type="button"
+                title={redrawDisabledReason || '根据镜头文本重绘分镜图'}
+                aria-label={redrawBusy ? '生成中' : '重绘'}
+                disabled={redrawDisabled || redrawBusy}
+                onClick={onRedraw}
+                className={`${STORYBOARD_ROW_ICON_BTN} ${
+                  redrawBusy
+                    ? 'bg-violet-600/25 text-violet-200 ring-1 ring-violet-400/30'
+                    : redrawDisabled
+                      ? 'text-gray-600'
+                      : 'text-violet-300 hover:bg-violet-500/15 hover:text-violet-100'
+                }`}
+              >
+                <AppIcon
+                  name="refresh"
+                  className={`h-3.5 w-3.5 ${redrawBusy ? 'animate-spin' : ''}`}
+                />
+              </button>
+            ) : null}
+            <button
+              type="button"
+              title={row.locked ? '解除锁定' : '锁定本镜'}
+              aria-label={row.locked ? '解除锁定' : '锁定本镜'}
+              onClick={() => onPatch({ locked: !row.locked })}
+              className={`${STORYBOARD_ROW_ICON_BTN} ${
+                row.locked
+                  ? 'bg-amber-500/15 text-amber-200 ring-1 ring-amber-500/35 hover:bg-amber-500/20 hover:text-amber-100'
+                  : ''
+              }`}
+            >
+              <AppIcon name={row.locked ? 'lock' : 'unlock'} className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              title="删除镜头"
+              aria-label="删除镜头"
+              disabled={rowCount <= 1}
+              onClick={onRemove}
+              className={`${STORYBOARD_ROW_ICON_BTN} hover:bg-red-500/10 hover:text-red-300`}
+            >
+              <AppIcon name="trash" className="h-3.5 w-3.5" />
+            </button>
+            <span className="mx-0.5 h-4 w-px shrink-0 bg-white/[0.08]" aria-hidden />
             <button
               type="button"
               title="上移"
+              aria-label="上移"
               disabled={index === 0}
               onClick={() => onMove(-1)}
-              className="flex h-7 w-7 items-center justify-center rounded-lg text-[10px] text-gray-500 hover:bg-white/[0.06] hover:text-white disabled:opacity-25"
+              className={STORYBOARD_ROW_ICON_BTN}
             >
-              ↑
+              <AppIcon name="chevron-up" className="h-3.5 w-3.5" />
             </button>
             <button
               type="button"
               title="下移"
+              aria-label="下移"
               disabled={index >= rowCount - 1}
               onClick={() => onMove(1)}
-              className="flex h-7 w-7 items-center justify-center rounded-lg text-[10px] text-gray-500 hover:bg-white/[0.06] hover:text-white disabled:opacity-25"
+              className={STORYBOARD_ROW_ICON_BTN}
             >
-              ↓
+              <AppIcon name="chevron-down" className="h-3.5 w-3.5" />
             </button>
           </div>
         ) : null}
@@ -152,6 +199,26 @@ export default function StoryboardTableRowEditor({
               </div>
             </label>
           </div>
+          {timelineLayerCount > 1 ? (
+            <label className="block max-w-[10rem]">
+              <span className={STORYBOARD_LABEL}>时间轴轨道</span>
+              <CustomDropdown
+                value={String(row.timelineLayer ?? 0)}
+                options={Array.from({ length: timelineLayerCount }, (_, i) => ({
+                  value: String(i),
+                  label: i === 0 ? `L${i} · 底层` : `L${i}`,
+                }))}
+                disabled={readOnly}
+                onChange={(v) =>
+                  onPatch({
+                    timelineLayer: Math.min(timelineLayerCount - 1, Math.max(0, Number(v))),
+                  })
+                }
+                triggerClassName="h-8 w-full rounded-lg bg-white/[0.04] px-2.5 text-[10px] text-gray-200 ring-1 ring-white/[0.07] hover:bg-white/[0.07]"
+                portalZIndex={LAYER_DROPDOWN_Z}
+              />
+            </label>
+          ) : null}
           <label className="block">
             <span className={STORYBOARD_LABEL}>镜头文本</span>
             <textarea
@@ -226,51 +293,6 @@ export default function StoryboardTableRowEditor({
           ) : null}
         </div>
       </div>
-
-      {!readOnly ? (
-        <div
-          className={`flex flex-wrap items-center border-t border-white/[0.05] ${STORYBOARD_PAD_ROW_BAR} ${STORYBOARD_GAP_INNER}`}
-        >
-          {onRedraw ? (
-            <button
-              type="button"
-              title={redrawDisabledReason || '根据镜头文本重绘分镜图'}
-              disabled={redrawDisabled || redrawBusy}
-              onClick={onRedraw}
-              className={`${STORYBOARD_ROW_ACTION} min-w-[4.5rem] ${
-                redrawBusy
-                  ? 'bg-violet-600/25 text-violet-100 ring-1 ring-violet-400/30'
-                  : redrawDisabled
-                    ? 'bg-white/[0.02] text-gray-600'
-                    : STORYBOARD_TOOL_BTN_PRIMARY
-              }`}
-            >
-              {redrawBusy ? '生成中…' : '重绘'}
-            </button>
-          ) : null}
-          <button
-            type="button"
-            title={row.locked ? '已锁定' : '锁定本镜'}
-            onClick={() => onPatch({ locked: !row.locked })}
-            className={`${STORYBOARD_ROW_ACTION} ${
-              row.locked
-                ? 'bg-amber-500/15 text-amber-100 ring-1 ring-amber-500/35'
-                : 'bg-white/[0.03] text-gray-400 ring-1 ring-white/[0.06] hover:bg-white/[0.06] hover:text-gray-200'
-            }`}
-          >
-            {row.locked ? '已锁定' : '锁定'}
-          </button>
-          <button
-            type="button"
-            title="删除镜头"
-            disabled={rowCount <= 1}
-            onClick={onRemove}
-            className={`${STORYBOARD_ROW_ACTION} ml-auto bg-transparent text-gray-500 hover:bg-red-500/10 hover:text-red-300 disabled:opacity-30`}
-          >
-            删除镜头
-          </button>
-        </div>
-      ) : null}
     </article>
   );
 }

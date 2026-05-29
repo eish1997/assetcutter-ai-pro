@@ -3,8 +3,6 @@ import type { StoryboardTableRow } from '../../types';
 import StoryboardFrameCompositeCard from './StoryboardFrameCompositeCard';
 import {
   STORYBOARD_BODY_SCROLL,
-  STORYBOARD_COLUMN_HEAD,
-  STORYBOARD_COLUMN_HINT,
   STORYBOARD_GRID_PREVIEW,
   STORYBOARD_PAD_PANEL,
 } from './storyboardTableUi';
@@ -26,11 +24,7 @@ export default function StoryboardTableGridPreview({
   onPreviewImage,
 }: Props) {
   return (
-    <div className={`flex min-h-0 flex-1 flex-col ${STORYBOARD_PAD_PANEL} pt-2`}>
-      <div className="mb-2 shrink-0 px-0.5">
-        <p className={`${STORYBOARD_COLUMN_HEAD} mb-0`}>分镜预览</p>
-        <p className={STORYBOARD_COLUMN_HINT}>双击某镜进入编辑</p>
-      </div>
+    <div className={`flex min-h-0 flex-1 flex-col ${STORYBOARD_PAD_PANEL} pt-1`}>
       <div className={`${STORYBOARD_BODY_SCROLL} min-h-0 flex-1 pb-1`}>
         {rows.length === 0 ? (
           <p className="py-12 text-center text-[11px] text-gray-600">暂无镜头</p>

@@ -1,6 +1,13 @@
 import type { StoryboardTableDoc, StoryboardTableRow, WorkflowAsset } from '../types';
+import { clampStoryboardRowTimelineLayer, resolveStoryboardTimelineLayerCount } from './storyboardVideoTimeline';
 
 const rowId = () => Math.random().toString(36).slice(2, 11);
+
+function normalizeTimelineLayer(value: unknown): number {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.floor(n);
+}
 
 export function isWorkflowStoryboardTableAsset(a: WorkflowAsset): boolean {
   return a.assetKind === 'storyboard_table';
@@ -16,6 +23,7 @@ export function createStoryboardTableRow(partial?: Partial<StoryboardTableRow>, 
     frameImage: partial?.frameImage,
     frameImageObjectKey: partial?.frameImageObjectKey,
     locked: Boolean(partial?.locked),
+    timelineLayer: normalizeTimelineLayer(partial?.timelineLayer ?? 0),
   };
 }
 
@@ -29,35 +37,41 @@ export function normalizeStoryboardTableDoc(raw: unknown): StoryboardTableDoc {
   }
   const doc = raw as StoryboardTableDoc;
   const rowsIn = Array.isArray(doc.rows) ? doc.rows : [];
-  const rows =
+  const parsed =
     rowsIn.length > 0
-      ? reindexStoryboardRows(
-          rowsIn.map((r, i) => {
-            const row = r && typeof r === 'object' ? (r as StoryboardTableRow) : ({} as StoryboardTableRow);
-            const durationRaw = row.durationSec;
-            let durationSec: number | null = null;
-            if (durationRaw != null && String(durationRaw).trim() !== '') {
-              const n = Number(durationRaw);
-              durationSec = Number.isFinite(n) && n >= 0 ? n : null;
-            }
-            return createStoryboardTableRow(
-              {
-                id: String(row.id || '').trim() || rowId(),
-                index: i,
-                shotNo: String(row.shotNo ?? '').trim(),
-                durationSec,
-                shotText: String(row.shotText ?? ''),
-                frameImage: String(row.frameImage || '').trim() || undefined,
-                frameImageObjectKey: String(row.frameImageObjectKey || '').trim() || undefined,
-                locked: Boolean(row.locked),
-              },
-              i
-            );
-          })
-        )
+      ? rowsIn.map((r, i) => {
+          const row = r && typeof r === 'object' ? (r as StoryboardTableRow) : ({} as StoryboardTableRow);
+          const durationRaw = row.durationSec;
+          let durationSec: number | null = null;
+          if (durationRaw != null && String(durationRaw).trim() !== '') {
+            const n = Number(durationRaw);
+            durationSec = Number.isFinite(n) && n >= 0 ? n : null;
+          }
+          return createStoryboardTableRow(
+            {
+              id: String(row.id || '').trim() || rowId(),
+              index: i,
+              shotNo: String(row.shotNo ?? '').trim(),
+              durationSec,
+              shotText: String(row.shotText ?? ''),
+              frameImage: String(row.frameImage || '').trim() || undefined,
+              frameImageObjectKey: String(row.frameImageObjectKey || '').trim() || undefined,
+              locked: Boolean(row.locked),
+              timelineLayer: normalizeTimelineLayer(row.timelineLayer ?? 0),
+            },
+            i
+          );
+        })
       : [createStoryboardTableRow({}, 0)];
+  const layerCount = resolveStoryboardTimelineLayerCount(parsed, doc.timelineLayerCount ?? 1);
+  const rows = reindexStoryboardRows(
+    parsed.map((r) => ({
+      ...r,
+      timelineLayer: clampStoryboardRowTimelineLayer(r.timelineLayer ?? 0, layerCount),
+    }))
+  );
   const title = String(doc.title ?? '').trim();
-  return { ...(title ? { title } : {}), rows };
+  return { ...(title ? { title } : {}), timelineLayerCount: layerCount, rows };
 }
 
 export function normalizeStoryboardTableOnAsset(asset: WorkflowAsset): WorkflowAsset {
@@ -170,6 +184,7 @@ export function duplicateStoryboardRow(source: StoryboardTableRow, index: number
       frameImage: source.frameImage,
       frameImageObjectKey: source.frameImageObjectKey,
       locked: false,
+      timelineLayer: source.timelineLayer ?? 0,
     },
     index
   );

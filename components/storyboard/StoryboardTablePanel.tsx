@@ -9,7 +9,7 @@ import {
   normalizeStoryboardTableDoc,
   reindexStoryboardRows,
 } from '../../services/storyboardTableAsset';
-import { reorderStoryboardRows } from '../../services/storyboardVideoTimeline';
+import { reorderStoryboardRowsInLayer, collapseStoryboardTimelineTopLayer, clampStoryboardTimelineLayerCount } from '../../services/storyboardVideoTimeline';
 import { buildStoryboardRowPromptText } from '../../services/storyboardTableRedraw';
 import { readLocalJson, writeLocalJson } from '../../services/clientPersist';
 import { readStoryboardFrameFromClipboard, readStoryboardFrameFromFile } from './storyboardFrameImage';
@@ -93,7 +93,8 @@ export default function StoryboardTablePanel({
   const isExportRunning = storyboardExportTask?.status === 'running';
   const isThisAssetExporting =
     isExportRunning && storyboardExportTask.assetId === asset.id;
-  const canExportVideo = useMemo(() => canExportStoryboardVideo(table.rows), [table.rows]);
+  const canExportVideo = useMemo(() => canExportStoryboardVideo(table.rows, table.timelineLayerCount), [table.rows, table.timelineLayerCount]);
+  const timelineLayerCount = table.timelineLayerCount ?? 1;
 
   const handleStartVideoExport = useCallback(() => {
     const title = (asset.textTitle || table.title || '分镜表').trim() || '分镜表';
@@ -101,9 +102,10 @@ export default function StoryboardTablePanel({
       assetId: asset.id,
       assetTitle: title,
       rows: table.rows,
+      timelineLayerCount,
       onNotify,
     });
-  }, [asset.id, asset.textTitle, onNotify, table.rows, table.title]);
+  }, [asset.id, asset.textTitle, onNotify, table.rows, table.title, timelineLayerCount]);
   const [viewMode, setViewMode] = useState<StoryboardPanelViewMode>(() =>
     readLocalJson(STORYBOARD_VIEW_STORAGE_KEY, 'edit', (v) =>
       v === 'grid' || v === 'edit' || v === 'video' ? v : null
@@ -276,7 +278,11 @@ export default function StoryboardTablePanel({
         return {
           ...cur,
           textTitle: t,
-          storyboardTable: { title: t, rows: nextRows },
+          storyboardTable: {
+            title: t,
+            rows: nextRows,
+            timelineLayerCount: doc.timelineLayerCount,
+          },
         };
       });
     },
@@ -388,12 +394,44 @@ export default function StoryboardTablePanel({
     [effectiveRedrawPresetId, onNotify, onRedrawRow, table.rows]
   );
 
-  const reorderRows = useCallback(
-    (fromIndex: number, toIndex: number) => {
-      patchTable((rows) => reorderStoryboardRows(rows, fromIndex, toIndex));
+  const reorderLayerRows = useCallback(
+    (layer: number, fromIndex: number, toIndex: number) => {
+      patchTable((rows) => reorderStoryboardRowsInLayer(rows, layer, fromIndex, toIndex));
     },
     [patchTable]
   );
+
+  const addTimelineLayer = useCallback(() => {
+    onPatchAsset((cur) => {
+      const doc = normalizeStoryboardTableDoc(cur.storyboardTable);
+      const t = (cur.textTitle || doc.title || '分镜表').trim() || '分镜表';
+      const nextCount = clampStoryboardTimelineLayerCount((doc.timelineLayerCount ?? 1) + 1);
+      return {
+        ...cur,
+        textTitle: t,
+        storyboardTable: { ...doc, title: t, timelineLayerCount: nextCount },
+      };
+    });
+  }, [onPatchAsset]);
+
+  const removeTimelineLayer = useCallback(() => {
+    if (timelineLayerCount <= 1) return;
+    onPatchAsset((cur) => {
+      const doc = normalizeStoryboardTableDoc(cur.storyboardTable);
+      const t = (cur.textTitle || doc.title || '分镜表').trim() || '分镜表';
+      const collapsed = collapseStoryboardTimelineTopLayer(doc.rows, doc.timelineLayerCount ?? 1);
+      return {
+        ...cur,
+        textTitle: t,
+        storyboardTable: {
+          ...doc,
+          title: t,
+          rows: reindexStoryboardRows(collapsed.rows),
+          timelineLayerCount: collapsed.layerCount,
+        },
+      };
+    });
+  }, [onPatchAsset, timelineLayerCount]);
 
   const redrawRowDisabledReason = (row: StoryboardTableRow): string | undefined => {
     if (readOnly) return '只读模式';
@@ -417,86 +455,92 @@ export default function StoryboardTablePanel({
     >
       <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={onFilePicked} />
 
-      <header className={`shrink-0 border-b border-white/[0.04] ${STORYBOARD_PAD_PANEL}`}>
-        <div className={`flex items-start ${STORYBOARD_PAD_HEADER_INNER}`}>
+      <header className={`shrink-0 border-b border-white/[0.04] ${STORYBOARD_PAD_PANEL} pb-2`}>
+        <div className={`flex items-center ${STORYBOARD_PAD_HEADER_INNER}`}>
           <button
             ref={closeBtnRef}
             type="button"
             onClick={onClose}
             title="关闭（Esc）"
-            className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/[0.05] text-gray-400 ring-1 ring-white/[0.07] transition-colors hover:bg-white/[0.08] hover:text-white outline-none focus-visible:ring-2 focus-visible:ring-violet-500/45"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/[0.05] text-gray-400 ring-1 ring-white/[0.07] transition-colors hover:bg-white/[0.08] hover:text-white outline-none focus-visible:ring-2 focus-visible:ring-violet-500/45"
             aria-label="关闭"
           >
             <AppIcon name="close" className="h-4 w-4" />
           </button>
-          <div className="min-w-0 flex-1">
-            <div className={`mb-0.5 flex flex-wrap items-center ${STORYBOARD_GAP_TIGHT}`}>
-              <div className={STORYBOARD_VIEW_TOGGLE} role="group" aria-label="分镜表视图">
-                <button
-                  type="button"
-                  onClick={() => setPanelViewMode('edit')}
-                  className={`${STORYBOARD_VIEW_TOGGLE_BTN} ${
-                    isEditView ? STORYBOARD_VIEW_TOGGLE_ACTIVE : STORYBOARD_VIEW_TOGGLE_IDLE
-                  }`}
-                  aria-pressed={isEditView}
-                >
-                  编辑
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPanelViewMode('grid')}
-                  className={`${STORYBOARD_VIEW_TOGGLE_BTN} ${
-                    isGridView ? STORYBOARD_VIEW_TOGGLE_ACTIVE : STORYBOARD_VIEW_TOGGLE_IDLE
-                  }`}
-                  aria-pressed={isGridView}
-                >
-                  网格预览
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPanelViewMode('video')}
-                  className={`${STORYBOARD_VIEW_TOGGLE_BTN} ${
-                    isVideoView ? STORYBOARD_VIEW_TOGGLE_ACTIVE : STORYBOARD_VIEW_TOGGLE_IDLE
-                  }`}
-                  aria-pressed={isVideoView}
-                >
-                  视频预览
-                </button>
-              </div>
-              <span className="text-[9px] font-bold uppercase tracking-[0.16em] text-violet-400/85">
-                {readOnly ? '只读预览' : 'Storyboard'}
-              </span>
-              <span className={STORYBOARD_STAT_CHIP}>{stats.rowCount} 镜</span>
-              <span className={STORYBOARD_STAT_CHIP}>{stats.withImageCount} 配图</span>
-              <span className={STORYBOARD_STAT_CHIP}>
-                {formatDurationLabel(stats.totalDurationSec, stats.hasGaps)}
-              </span>
-              {stats.lockedCount > 0 ? (
-                <span className={STORYBOARD_STAT_CHIP}>{stats.lockedCount} 锁定</span>
-              ) : null}
-            </div>
-            <input
-              value={title}
-              readOnly={readOnly}
-              onChange={(e) => {
-                const v = e.target.value;
-                onPatchAsset((cur) => {
-                  const doc = normalizeStoryboardTableDoc(cur.storyboardTable);
-                  return {
-                    ...cur,
-                    textTitle: v,
-                    storyboardTable: { ...doc, title: v },
-                  };
-                });
-              }}
-              className="w-full bg-transparent text-xl font-semibold tracking-tight text-white outline-none placeholder:text-gray-600 read-only:cursor-default sm:text-[1.35rem]"
-              placeholder="未命名分镜表"
-            />
+
+          <div className={STORYBOARD_VIEW_TOGGLE} role="group" aria-label="分镜表视图">
+            <button
+              type="button"
+              onClick={() => setPanelViewMode('edit')}
+              className={`${STORYBOARD_VIEW_TOGGLE_BTN} ${
+                isEditView ? STORYBOARD_VIEW_TOGGLE_ACTIVE : STORYBOARD_VIEW_TOGGLE_IDLE
+              }`}
+              aria-pressed={isEditView}
+            >
+              编辑
+            </button>
+            <button
+              type="button"
+              onClick={() => setPanelViewMode('grid')}
+              className={`${STORYBOARD_VIEW_TOGGLE_BTN} ${
+                isGridView ? STORYBOARD_VIEW_TOGGLE_ACTIVE : STORYBOARD_VIEW_TOGGLE_IDLE
+              }`}
+              aria-pressed={isGridView}
+            >
+              网格
+            </button>
+            <button
+              type="button"
+              onClick={() => setPanelViewMode('video')}
+              className={`${STORYBOARD_VIEW_TOGGLE_BTN} ${
+                isVideoView ? STORYBOARD_VIEW_TOGGLE_ACTIVE : STORYBOARD_VIEW_TOGGLE_IDLE
+              }`}
+              aria-pressed={isVideoView}
+            >
+              视频
+            </button>
+          </div>
+
+          <input
+            value={title}
+            readOnly={readOnly}
+            onChange={(e) => {
+              const v = e.target.value;
+              onPatchAsset((cur) => {
+                const doc = normalizeStoryboardTableDoc(cur.storyboardTable);
+                return {
+                  ...cur,
+                  textTitle: v,
+                  storyboardTable: { ...doc, title: v },
+                };
+              });
+            }}
+            className="min-w-0 flex-1 bg-transparent text-base font-semibold tracking-tight text-white outline-none placeholder:text-gray-600 read-only:cursor-default sm:text-lg"
+            placeholder="未命名分镜表"
+          />
+
+          <div className={`hidden shrink-0 items-center sm:flex ${STORYBOARD_GAP_TIGHT}`}>
+            <span className={STORYBOARD_STAT_CHIP}>{stats.rowCount} 镜</span>
+            <span className={STORYBOARD_STAT_CHIP}>{stats.withImageCount} 配图</span>
+            <span className={STORYBOARD_STAT_CHIP}>
+              {formatDurationLabel(stats.totalDurationSec, stats.hasGaps)}
+            </span>
+            {stats.lockedCount > 0 ? (
+              <span className={STORYBOARD_STAT_CHIP}>{stats.lockedCount} 锁定</span>
+            ) : null}
           </div>
         </div>
 
-        {!readOnly ? (
-          <div className={`flex flex-wrap items-center ${STORYBOARD_PAD_TOOLBAR}`}>
+        <div className={`mt-1.5 flex flex-wrap items-center ${STORYBOARD_GAP_TIGHT} pl-11 sm:hidden`}>
+          <span className={STORYBOARD_STAT_CHIP}>{stats.rowCount} 镜</span>
+          <span className={STORYBOARD_STAT_CHIP}>{stats.withImageCount} 配图</span>
+          <span className={STORYBOARD_STAT_CHIP}>
+            {formatDurationLabel(stats.totalDurationSec, stats.hasGaps)}
+          </span>
+        </div>
+
+        {isEditView && !readOnly ? (
+          <div className={`mt-2 flex flex-wrap items-center ${STORYBOARD_GAP_TIGHT} pl-11`}>
             <button type="button" onClick={addRow} className={STORYBOARD_TOOL_BTN_PRIMARY}>
               添加镜头
             </button>
@@ -522,7 +566,7 @@ export default function StoryboardTablePanel({
         {storyboardExportTask?.status === 'running' && storyboardExportTask.assetId === asset.id ? (
           <StoryboardVideoExportProgress
             progress={storyboardExportTask.progress}
-            className={`${STORYBOARD_PAD_TOOLBAR} mt-1`}
+            className="mt-2 pl-11"
           />
         ) : null}
       </header>
@@ -538,6 +582,7 @@ export default function StoryboardTablePanel({
       ) : isVideoView ? (
         <StoryboardTableVideoPreview
           rows={table.rows}
+          timelineLayerCount={timelineLayerCount}
           activeRowId={activeRowId}
           readOnly={readOnly}
           canExport={canExportVideo}
@@ -546,10 +591,12 @@ export default function StoryboardTablePanel({
           onExport={handleStartVideoExport}
           onSelectRow={(rowId) => setActiveRowId(rowId)}
           onActiveRowFromPlayback={setActiveRowId}
-          onReorderRows={reorderRows}
+          onReorderLayer={reorderLayerRows}
+          onAddTimelineLayer={addTimelineLayer}
+          onRemoveTimelineLayer={removeTimelineLayer}
         />
       ) : (
-      <div className={`${STORYBOARD_GRID_ROOT} ${STORYBOARD_PAD_PANEL} overflow-x-auto pt-2`}>
+      <div className={`${STORYBOARD_GRID_ROOT} ${STORYBOARD_PAD_PANEL} overflow-x-auto pt-1`}>
         <StoryboardTableOutlineSidebar
           rows={table.rows}
           activeRowId={activeRowId}
@@ -602,6 +649,7 @@ export default function StoryboardTablePanel({
                       onRedraw={
                         onRedrawRow && !readOnly ? () => void runRedraw(row.id) : undefined
                       }
+                      timelineLayerCount={timelineLayerCount}
                     />
                   );
                 })}

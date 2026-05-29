@@ -467,11 +467,15 @@ export type StoryboardTableRow = {
   frameImage?: string;
   frameImageObjectKey?: string;
   locked?: boolean;
+  /** 视频预览时间轴轨道层，0 为底层，默认 0 */
+  timelineLayer?: number;
 };
 
 export type StoryboardTableDoc = {
   /** 表标题；缺省用 textTitle */
   title?: string;
+  /** 时间轴轨道层数（含第 0 层），默认 1 */
+  timelineLayerCount?: number;
   rows: StoryboardTableRow[];
 };
 

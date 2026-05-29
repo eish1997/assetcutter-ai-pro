@@ -20,7 +20,10 @@ type AppIconName =
   | 'download'
   | 'play'
   | 'pause'
-  | 'skip-start';
+  | 'skip-start'
+  | 'lock'
+  | 'unlock'
+  | 'refresh';
 
 const paths: Record<AppIconName, React.ReactNode> = {
   close: <path d="M5 5l10 10M15 5 5 15" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />,
@@ -116,6 +119,46 @@ const paths: Record<AppIconName, React.ReactNode> = {
         strokeWidth="1.5"
         strokeLinejoin="round"
       />
+    </>
+  ),
+  lock: (
+    <>
+      <rect x="6.5" y="9" width="7" height="6.5" rx="1.2" stroke="currentColor" strokeWidth="1.6" />
+      <path
+        d="M8 9V7.2a2 2 0 0 1 4 0V9"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+    </>
+  ),
+  unlock: (
+    <>
+      <rect x="6.5" y="9" width="7" height="6.5" rx="1.2" stroke="currentColor" strokeWidth="1.6" />
+      <path
+        d="M8 9V7a2 2 0 0 1 3.2-1.6"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+    </>
+  ),
+  refresh: (
+    <>
+      <path
+        d="M14.5 6.5A5.5 5.5 0 0 0 5.8 5.2"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+      <path d="M5.5 5.5V3M5.5 5.5H8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      <path
+        d="M5.5 13.5A5.5 5.5 0 0 0 14.2 14.8"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+      <path d="M14.5 14.5V17M14.5 14.5H12" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
     </>
   ),
 };

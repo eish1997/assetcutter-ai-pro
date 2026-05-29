@@ -1,8 +1,17 @@
 import type { StoryboardTableRow } from '../types';
 import { formatStoryboardShotNo } from './storyboardTableAsset';
+import { resolveStoryboardFrameDisplaySrc } from './storyboardFrameImageUrl';
 
 /** 未填写秒数时的预览默认时长 */
 export const STORYBOARD_DEFAULT_SHOT_DURATION_SEC = 2;
+
+/** 时间轴最多轨道层数（含第 0 层） */
+export const STORYBOARD_TIMELINE_LAYER_MAX = 4;
+
+export function clampStoryboardTimelineLayerCount(count: number): number {
+  if (!Number.isFinite(count)) return 1;
+  return Math.min(STORYBOARD_TIMELINE_LAYER_MAX, Math.max(1, Math.floor(count)));
+}
 
 export type StoryboardVideoSegment = {
   rowId: string;
@@ -12,6 +21,13 @@ export type StoryboardVideoSegment = {
   durationIsEstimated: boolean;
   frameImage?: string;
   shotText: string;
+  timelineLayer: number;
+};
+
+export type StoryboardVideoLayer = {
+  layer: number;
+  segments: StoryboardVideoSegment[];
+  totalDuration: number;
 };
 
 export function resolveStoryboardShotDurationSec(row: StoryboardTableRow): {
@@ -29,20 +45,152 @@ export function storyboardRowShotLabel(row: StoryboardTableRow, index: number): 
   return no || formatStoryboardShotNo(index);
 }
 
-export function buildStoryboardVideoSegments(rows: StoryboardTableRow[]): StoryboardVideoSegment[] {
-  return rows.map((row, index) => {
+export function rowsInTimelineLayer(rows: StoryboardTableRow[], layer: number): StoryboardTableRow[] {
+  return rows
+    .filter((r) => (r.timelineLayer ?? 0) === layer)
+    .sort((a, b) => a.index - b.index);
+}
+
+export function clampStoryboardRowTimelineLayer(
+  layer: number,
+  layerCount: number
+): number {
+  const max = Math.max(0, clampStoryboardTimelineLayerCount(layerCount) - 1);
+  if (!Number.isFinite(layer)) return 0;
+  return Math.min(max, Math.max(0, Math.floor(layer)));
+}
+
+export function resolveStoryboardTimelineLayerCount(
+  rows: StoryboardTableRow[],
+  docLayerCount?: number | null
+): number {
+  let maxFromRows = 1;
+  for (const r of rows) {
+    maxFromRows = Math.max(maxFromRows, (r.timelineLayer ?? 0) + 1);
+  }
+  return clampStoryboardTimelineLayerCount(Math.max(docLayerCount ?? 1, maxFromRows));
+}
+
+export function buildStoryboardVideoSegments(
+  rows: StoryboardTableRow[],
+  layer?: number
+): StoryboardVideoSegment[] {
+  const filtered =
+    layer == null
+      ? [...rows].sort((a, b) => a.index - b.index)
+      : rowsInTimelineLayer(rows, layer);
+  return filtered.map((row, index) => {
     const { sec, estimated } = resolveStoryboardShotDurationSec(row);
-    const img = String(row.frameImage || '').trim();
+    const displaySrc = resolveStoryboardFrameDisplaySrc(row.frameImage, row.frameImageObjectKey);
     return {
       rowId: row.id,
       index,
-      shotNo: storyboardRowShotLabel(row, index),
+      shotNo: storyboardRowShotLabel(row, row.index),
       durationSec: sec,
       durationIsEstimated: estimated,
-      frameImage: img || undefined,
+      frameImage: displaySrc,
       shotText: String(row.shotText || '').trim(),
+      timelineLayer: row.timelineLayer ?? 0,
     };
   });
+}
+
+export function buildStoryboardVideoLayers(
+  rows: StoryboardTableRow[],
+  layerCount: number
+): StoryboardVideoLayer[] {
+  const count = clampStoryboardTimelineLayerCount(layerCount);
+  return Array.from({ length: count }, (_, layer) => {
+    const segments = buildStoryboardVideoSegments(rows, layer);
+    return {
+      layer,
+      segments,
+      totalDuration: computeStoryboardVideoTotalDuration(segments),
+    };
+  });
+}
+
+export function computeStoryboardVideoLayersTotalDuration(layers: StoryboardVideoLayer[]): number {
+  if (layers.length === 0) return 0;
+  return Math.max(0, ...layers.map((l) => l.totalDuration));
+}
+
+export function findStoryboardTopSegmentAtTime(
+  layers: StoryboardVideoLayer[],
+  timeSec: number
+): StoryboardPlaybackPosition | null {
+  for (let i = layers.length - 1; i >= 0; i--) {
+    const layer = layers[i]!;
+    if (layer.segments.length === 0) continue;
+    if (timeSec > layer.totalDuration + 1e-6) continue;
+    const pos = findStoryboardSegmentAtTime(layer.segments, timeSec);
+    if (pos) return pos;
+  }
+  const base = layers[0];
+  if (base?.segments.length) {
+    return findStoryboardSegmentAtTime(base.segments, timeSec);
+  }
+  return null;
+}
+
+/** 合成用：已结束的轨道保持最后一帧 */
+export function findStoryboardLayerSegmentForComposite(
+  layer: StoryboardVideoLayer,
+  timeSec: number
+): StoryboardPlaybackPosition | null {
+  if (layer.segments.length === 0) return null;
+  return findStoryboardSegmentAtTime(layer.segments, timeSec);
+}
+
+export function findStoryboardRowStartTime(
+  layers: StoryboardVideoLayer[],
+  rowId: string
+): number | null {
+  for (const layer of layers) {
+    let t = 0;
+    for (const seg of layer.segments) {
+      if (seg.rowId === rowId) return t;
+      t += seg.durationSec;
+    }
+  }
+  return null;
+}
+
+function layerRowIdsInOrder(rows: StoryboardTableRow[], layer: number): string[] {
+  return rowsInTimelineLayer(rows, layer).map((r) => r.id);
+}
+
+/** 将某轨道层内 fromIndex 拖到 toIndex（层内序号） */
+export function reorderStoryboardRowsInLayer(
+  rows: StoryboardTableRow[],
+  layer: number,
+  fromLayerIndex: number,
+  toLayerIndex: number
+): StoryboardTableRow[] {
+  const layerIds = layerRowIdsInOrder(rows, layer);
+  if (fromLayerIndex === toLayerIndex) return rows;
+  if (fromLayerIndex < 0 || fromLayerIndex >= layerIds.length) return rows;
+  if (toLayerIndex < 0 || toLayerIndex >= layerIds.length) return rows;
+
+  const fromId = layerIds[fromLayerIndex]!;
+  const toId = layerIds[toLayerIndex]!;
+  const fromGlobal = rows.findIndex((r) => r.id === fromId);
+  const toGlobal = rows.findIndex((r) => r.id === toId);
+  return reorderStoryboardRows(rows, fromGlobal, toGlobal);
+}
+
+export function collapseStoryboardTimelineTopLayer(
+  rows: StoryboardTableRow[],
+  layerCount: number
+): { rows: StoryboardTableRow[]; layerCount: number } {
+  if (layerCount <= 1) return { rows, layerCount: 1 };
+  const top = layerCount - 1;
+  const nextRows = rows.map((r) => {
+    const l = r.timelineLayer ?? 0;
+    if (l === top) return { ...r, timelineLayer: top - 1 };
+    return r;
+  });
+  return { rows: nextRows, layerCount: layerCount - 1 };
 }
 
 export function computeStoryboardVideoTotalDuration(segments: StoryboardVideoSegment[]): number {
@@ -61,17 +209,20 @@ export function findStoryboardSegmentAtTime(
   timeSec: number
 ): StoryboardPlaybackPosition | null {
   if (segments.length === 0) return null;
-  const t = Math.max(0, timeSec);
+  const total = computeStoryboardVideoTotalDuration(segments);
+  const t = Math.max(0, Math.min(timeSec, total));
   let cursor = 0;
   for (let i = 0; i < segments.length; i++) {
     const seg = segments[i]!;
     const end = cursor + seg.durationSec;
-    if (t < end || i === segments.length - 1) {
+    const isLast = i === segments.length - 1;
+    // 切点 inclusive：t === end 时仍归属当前镜，避免跳到下一镜
+    if (t <= end || isLast) {
       return {
         segment: seg,
         segmentIndex: i,
         offsetInSegment: Math.min(seg.durationSec, Math.max(0, t - cursor)),
-        globalTime: Math.min(t, computeStoryboardVideoTotalDuration(segments)),
+        globalTime: t,
       };
     }
     cursor = end;
@@ -81,7 +232,7 @@ export function findStoryboardSegmentAtTime(
     segment: last,
     segmentIndex: segments.length - 1,
     offsetInSegment: last.durationSec,
-    globalTime: computeStoryboardVideoTotalDuration(segments),
+    globalTime: total,
   };
 }
 
@@ -100,19 +251,29 @@ export function reorderStoryboardRows(
   return next;
 }
 
-/** 根据时间轴上的落点索引计算拖拽插入位置 */
+/** 将指针在轨道轴上的 X 坐标映射为全局时间（秒） */
+export function storyboardTimelineTimeFromClientX(
+  clientX: number,
+  axisRect: DOMRect,
+  totalDuration: number
+): number {
+  if (totalDuration <= 0 || axisRect.width <= 0) return 0;
+  const ratio = Math.max(0, Math.min(1, (clientX - axisRect.left) / axisRect.width));
+  return ratio * totalDuration;
+}
+
+/** 根据时间轴上的落点索引计算拖拽插入位置（按全局时间轴比例映射） */
 export function storyboardTimelineDropIndex(
   clientX: number,
-  trackRect: DOMRect,
+  axisRect: DOMRect,
   segmentCount: number,
   segmentDurations: number[],
-  draggingIndex: number
+  draggingIndex: number,
+  globalDuration: number
 ): number {
   if (segmentCount <= 1) return 0;
-  const total = segmentDurations.reduce((a, b) => a + b, 0) || 1;
-  const x = Math.max(0, Math.min(trackRect.width, clientX - trackRect.left));
-  const ratio = x / trackRect.width;
-  const targetTime = ratio * total;
+  const layerTotal = segmentDurations.reduce((a, b) => a + b, 0) || 1;
+  const targetTime = Math.min(layerTotal, storyboardTimelineTimeFromClientX(clientX, axisRect, globalDuration));
 
   let cursor = 0;
   for (let i = 0; i < segmentCount; i++) {

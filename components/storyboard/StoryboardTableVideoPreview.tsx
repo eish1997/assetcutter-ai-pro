@@ -1,7 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { StoryboardTableRow } from '../../types';
 import { readLocalJson, writeLocalJson } from '../../services/clientPersist';
-import { buildStoryboardVideoSegments } from '../../services/storyboardVideoTimeline';
+import {
+  buildStoryboardVideoLayers,
+  findStoryboardRowStartTime,
+} from '../../services/storyboardVideoTimeline';
 import {
   getStoryboardVideoAspectPreset,
   STORYBOARD_VIDEO_ASPECT_PRESETS,
@@ -16,8 +19,6 @@ import { useStoryboardVideoFitBox } from './useStoryboardVideoFitBox';
 import { useStoryboardVideoPaneSplit } from './useStoryboardVideoPaneSplit';
 import AppIcon from '../ui/AppIcon';
 import {
-  STORYBOARD_COLUMN_HEAD,
-  STORYBOARD_COLUMN_HINT,
   STORYBOARD_GAP_TIGHT,
   STORYBOARD_PAD_PANEL,
   STORYBOARD_VIDEO_ICON_BTN_NEUTRAL,
@@ -30,6 +31,7 @@ import {
 
 type Props = {
   rows: StoryboardTableRow[];
+  timelineLayerCount: number;
   activeRowId: string | null;
   readOnly?: boolean;
   canExport?: boolean;
@@ -38,11 +40,14 @@ type Props = {
   onExport?: () => void;
   onSelectRow: (rowId: string) => void;
   onActiveRowFromPlayback?: (rowId: string) => void;
-  onReorderRows: (fromIndex: number, toIndex: number) => void;
+  onReorderLayer: (layer: number, fromIndex: number, toIndex: number) => void;
+  onAddTimelineLayer: () => void;
+  onRemoveTimelineLayer: () => void;
 };
 
 export default function StoryboardTableVideoPreview({
   rows,
+  timelineLayerCount,
   activeRowId,
   readOnly = false,
   canExport = false,
@@ -51,7 +56,9 @@ export default function StoryboardTableVideoPreview({
   onExport,
   onSelectRow,
   onActiveRowFromPlayback,
-  onReorderRows,
+  onReorderLayer,
+  onAddTimelineLayer,
+  onRemoveTimelineLayer,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const previewPaneRef = useRef<HTMLDivElement>(null);
@@ -62,7 +69,11 @@ export default function StoryboardTableVideoPreview({
   );
   const aspect = useMemo(() => getStoryboardVideoAspectPreset(aspectId), [aspectId]);
   const fitSize = useStoryboardVideoFitBox(previewPaneRef, aspect);
-  const segments = useMemo(() => buildStoryboardVideoSegments(rows), [rows]);
+  const layers = useMemo(
+    () => buildStoryboardVideoLayers(rows, timelineLayerCount),
+    [rows, timelineLayerCount]
+  );
+  const hasAnySegment = layers.some((l) => l.segments.length > 0);
   const {
     playing,
     timeSec,
@@ -71,12 +82,13 @@ export default function StoryboardTableVideoPreview({
     seek,
     togglePlay,
     pause,
-  } = useStoryboardVideoPlayback(segments, canvasRef);
+  } = useStoryboardVideoPlayback(layers, canvasRef);
 
   const { bodyRef, previewHeight, timelineHeight, splitterPx, onSplitterPointerDown } =
     useStoryboardVideoPaneSplit();
 
-  const displayActiveRowId = activeRowId ?? playbackRowId;
+  // 播放头所在镜头优先，避免选中态与预览不同步
+  const displayActiveRowId = playbackRowId ?? activeRowId;
 
   useEffect(() => {
     if (playbackRowId) onActiveRowFromPlayback?.(playbackRowId);
@@ -85,35 +97,25 @@ export default function StoryboardTableVideoPreview({
   const handleSelectRow = useCallback(
     (rowId: string) => {
       onSelectRow(rowId);
-      const idx = segments.findIndex((s) => s.rowId === rowId);
-      if (idx < 0) return;
-      let t = 0;
-      for (let i = 0; i < idx; i++) t += segments[i]!.durationSec;
-      seek(t);
+      const t = findStoryboardRowStartTime(layers, rowId);
+      if (t != null) seek(t);
     },
-    [onSelectRow, seek, segments]
+    [layers, onSelectRow, seek]
   );
 
   const handleReorder = useCallback(
-    (fromIndex: number, toIndex: number) => {
+    (layer: number, fromIndex: number, toIndex: number) => {
       pause();
-      onReorderRows(fromIndex, toIndex);
+      onReorderLayer(layer, fromIndex, toIndex);
     },
-    [onReorderRows, pause]
+    [onReorderLayer, pause]
   );
 
   const exportMime = useMemo(() => pickStoryboardWebmMimeType(), []);
   const exportMimeLabel = exportMime ? describeStoryboardWebmMime(exportMime) : '';
 
   return (
-    <div className={`flex min-h-0 flex-1 flex-col overflow-hidden ${STORYBOARD_PAD_PANEL} pt-2`}>
-      <div className="mb-2 shrink-0 px-0.5">
-        <p className={`${STORYBOARD_COLUMN_HEAD} mb-0`}>视频预览</p>
-        <p className={STORYBOARD_COLUMN_HINT}>
-          画幅自适应容纳 · 关闭分镜表后导出仍在功能区「分镜导出」任务中继续
-        </p>
-      </div>
-
+    <div className={`flex min-h-0 flex-1 flex-col overflow-hidden ${STORYBOARD_PAD_PANEL} pt-1`}>
       <div className="mb-2 flex shrink-0 flex-wrap items-center gap-2 px-0.5">
         <span className="text-[9px] text-gray-600">画幅</span>
         <div className={STORYBOARD_VIEW_TOGGLE} role="group" aria-label="预览画幅">
@@ -158,7 +160,7 @@ export default function StoryboardTableVideoPreview({
             >
               <canvas ref={canvasRef} className="block h-full w-full" />
             </div>
-            {segments.length === 0 ? (
+            {!hasAnySegment ? (
               <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-[11px] text-gray-600">
                 添加镜头并配图后即可预览
               </div>
@@ -169,7 +171,7 @@ export default function StoryboardTableVideoPreview({
             <button
               type="button"
               onClick={togglePlay}
-              disabled={segments.length === 0}
+              disabled={!hasAnySegment}
               title={playing ? '暂停' : '播放'}
               aria-label={playing ? '暂停' : '播放'}
               className={STORYBOARD_VIDEO_ICON_BTN_PRIMARY}
@@ -179,7 +181,7 @@ export default function StoryboardTableVideoPreview({
             <button
               type="button"
               onClick={() => seek(0)}
-              disabled={segments.length === 0}
+              disabled={!hasAnySegment}
               title="回到开头"
               aria-label="回到开头"
               className={STORYBOARD_VIDEO_ICON_BTN_NEUTRAL}
@@ -201,7 +203,7 @@ export default function StoryboardTableVideoPreview({
             <StoryboardVideoSeekBar
               value={Math.min(timeSec, totalDuration)}
               max={Math.max(0.1, totalDuration)}
-              disabled={segments.length === 0}
+              disabled={!hasAnySegment}
               onChange={seek}
             />
             <span className="shrink-0 text-[10px] tabular-nums text-gray-500">
@@ -231,14 +233,17 @@ export default function StoryboardTableVideoPreview({
           style={{ height: timelineHeight > 0 ? timelineHeight : undefined, flex: timelineHeight > 0 ? '0 0 auto' : '0 1 8rem' }}
         >
           <StoryboardVideoTimeline
-            segments={segments}
+            layers={layers}
+            timelineLayerCount={timelineLayerCount}
             activeRowId={displayActiveRowId}
             playheadTime={timeSec}
             totalDuration={totalDuration}
             readOnly={readOnly}
             onSelectRow={handleSelectRow}
             onSeek={seek}
-            onReorder={handleReorder}
+            onReorderLayer={handleReorder}
+            onAddLayer={onAddTimelineLayer}
+            onRemoveLayer={onRemoveTimelineLayer}
           />
         </div>
       </div>

@@ -1,65 +1,134 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import type { StoryboardVideoSegment } from '../../services/storyboardVideoTimeline';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { StoryboardVideoLayer } from '../../services/storyboardVideoTimeline';
 import {
-  computeStoryboardVideoTotalDuration,
-  findStoryboardSegmentAtTime,
+  computeStoryboardVideoLayersTotalDuration,
+  findStoryboardLayerSegmentForComposite,
+  findStoryboardTopSegmentAtTime,
 } from '../../services/storyboardVideoTimeline';
-import { drawStoryboardVideoFrame } from '../../services/storyboardVideoCanvas';
+import {
+  clearStoryboardVideoImageCache,
+  drawStoryboardVideoCompositeFrame,
+} from '../../services/storyboardVideoCanvas';
+
+function storyboardFrameImageFingerprint(layers: StoryboardVideoLayer[]): string {
+  const parts: string[] = [];
+  for (const layer of layers) {
+    for (const seg of layer.segments) {
+      parts.push(`${seg.rowId}:${seg.frameImage ?? ''}`);
+    }
+  }
+  return parts.join('|');
+}
 
 export function useStoryboardVideoPlayback(
-  segments: StoryboardVideoSegment[],
+  layers: StoryboardVideoLayer[],
   canvasRef: React.RefObject<HTMLCanvasElement | null>
 ) {
-  const totalDuration = computeStoryboardVideoTotalDuration(segments);
+  const totalDuration = computeStoryboardVideoLayersTotalDuration(layers);
+  const frameImageFingerprint = useMemo(() => storyboardFrameImageFingerprint(layers), [layers]);
+
   const [playing, setPlaying] = useState(false);
   const [timeSec, setTimeSec] = useState(0);
   const [segmentIndex, setSegmentIndex] = useState(0);
+
   const rafRef = useRef(0);
   const playStartRef = useRef({ perf: 0, time: 0 });
   const timeSecRef = useRef(0);
-  const segmentsRef = useRef(segments);
+  const layersRef = useRef(layers);
   const totalRef = useRef(totalDuration);
-  segmentsRef.current = segments;
+  const renderGenRef = useRef(0);
+  const pendingRenderTimeRef = useRef<number | null>(null);
+  const renderLoopActiveRef = useRef(false);
+
+  layersRef.current = layers;
   totalRef.current = totalDuration;
   timeSecRef.current = timeSec;
 
-  const renderAt = useCallback(
-    async (t: number) => {
+  const paintFrame = useCallback(
+    async (t: number, gen: number) => {
       const canvas = canvasRef.current;
       if (!canvas) return;
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
-      const pos = findStoryboardSegmentAtTime(segmentsRef.current, t);
-      if (!pos) return;
+
+      const layerStates = layersRef.current
+        .map((layer) => {
+          const pos = findStoryboardLayerSegmentForComposite(layer, t);
+          if (!pos) return null;
+          return {
+            layer: layer.layer,
+            segment: pos.segment,
+            progressInSegment: pos.offsetInSegment,
+          };
+        })
+        .filter((s): s is NonNullable<typeof s> => s != null);
+
       const dpr = Math.min(2, window.devicePixelRatio || 1);
       const w = canvas.clientWidth;
       const h = canvas.clientHeight;
       if (w <= 0 || h <= 0) return;
+
       if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
         canvas.width = Math.round(w * dpr);
         canvas.height = Math.round(h * dpr);
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       }
-      await drawStoryboardVideoFrame(ctx, w, h, {
-        segment: pos.segment,
-        progressInSegment: pos.offsetInSegment,
-        globalTime: pos.globalTime,
+
+      await drawStoryboardVideoCompositeFrame(ctx, w, h, {
+        layerStates,
+        globalTime: Math.min(t, totalRef.current),
         totalDuration: totalRef.current,
       });
-      setSegmentIndex(pos.segmentIndex);
+
+      if (gen !== renderGenRef.current) return;
+      const top = findStoryboardTopSegmentAtTime(layersRef.current, t);
+      setSegmentIndex(top?.segmentIndex ?? 0);
     },
     [canvasRef]
   );
 
+  const flushRender = useCallback(async () => {
+    if (renderLoopActiveRef.current) return;
+    renderLoopActiveRef.current = true;
+    try {
+      while (pendingRenderTimeRef.current != null) {
+        const t = pendingRenderTimeRef.current;
+        pendingRenderTimeRef.current = null;
+        const gen = ++renderGenRef.current;
+        await paintFrame(t, gen);
+      }
+    } finally {
+      renderLoopActiveRef.current = false;
+      if (pendingRenderTimeRef.current != null) {
+        void flushRender();
+      }
+    }
+  }, [paintFrame]);
+
+  const renderAt = useCallback(
+    (t: number) => {
+      pendingRenderTimeRef.current = t;
+      void flushRender();
+    },
+    [flushRender]
+  );
+
+  const renderAtRef = useRef(renderAt);
+  renderAtRef.current = renderAt;
+
   const seek = useCallback(
     (t: number) => {
       const clamped = Math.max(0, Math.min(totalRef.current, t));
+      timeSecRef.current = clamped;
       setTimeSec(clamped);
       playStartRef.current = { perf: performance.now(), time: clamped };
-      void renderAt(clamped);
+      renderAt(clamped);
     },
     [renderAt]
   );
+
+  const seekRef = useRef(seek);
+  seekRef.current = seek;
 
   const pause = useCallback(() => {
     setPlaying(false);
@@ -70,58 +139,70 @@ export function useStoryboardVideoPlayback(
     if (totalRef.current <= 0) return;
     const t = timeSecRef.current;
     if (t >= totalRef.current - 0.02) {
-      seek(0);
-      playStartRef.current = { perf: performance.now(), time: 0 };
+      seekRef.current(0);
     } else {
       playStartRef.current = { perf: performance.now(), time: t };
     }
     setPlaying(true);
-  }, [seek]);
+  }, []);
 
   const togglePlay = useCallback(() => {
     if (playing) pause();
     else play();
   }, [pause, play, playing]);
 
+  // 分镜图变更时才清缓存；仅改时长不应反复 reload 图片
   useEffect(() => {
-    void renderAt(timeSecRef.current);
-  }, [renderAt, segments]);
+    clearStoryboardVideoImageCache();
+    renderAtRef.current(timeSecRef.current);
+  }, [frameImageFingerprint]);
+
+  useEffect(() => {
+    const clamped = Math.max(0, Math.min(timeSecRef.current, totalDuration));
+    if (clamped !== timeSecRef.current) {
+      timeSecRef.current = clamped;
+      setTimeSec(clamped);
+      if (playing) {
+        playStartRef.current = { perf: performance.now(), time: clamped };
+      }
+    }
+    renderAtRef.current(clamped);
+  }, [layers, totalDuration, playing]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ro = new ResizeObserver(() => {
-      void renderAt(timeSecRef.current);
+      renderAtRef.current(timeSecRef.current);
     });
     ro.observe(canvas);
     return () => ro.disconnect();
-  }, [canvasRef, renderAt]);
+  }, [canvasRef]);
 
   useEffect(() => {
     if (!playing) return;
+
     const tick = () => {
       const elapsed = (performance.now() - playStartRef.current.perf) / 1000;
-      const next = playStartRef.current.time + elapsed;
-      if (next >= totalRef.current) {
-        seek(totalRef.current);
-        pause();
+      const next = Math.min(totalRef.current, playStartRef.current.time + elapsed);
+
+      timeSecRef.current = next;
+      setTimeSec(next);
+      renderAtRef.current(next);
+
+      if (next >= totalRef.current - 1e-6) {
+        setPlaying(false);
         return;
       }
-      setTimeSec(next);
-      void renderAt(next);
       rafRef.current = requestAnimationFrame(tick);
     };
+
     rafRef.current = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafRef.current);
-  }, [pause, playing, renderAt, seek]);
+  }, [playing]);
 
-  useEffect(() => {
-    if (timeSec > totalDuration) {
-      seek(totalDuration);
-    }
-  }, [seek, timeSec, totalDuration]);
-
-  const activeSegment = segments[segmentIndex] ?? segments[0] ?? null;
+  const topAtTime = findStoryboardTopSegmentAtTime(layers, timeSec);
+  const activeSegment = topAtTime?.segment ?? layers[0]?.segments[segmentIndex] ?? layers[0]?.segments[0] ?? null;
 
   return {
     playing,
