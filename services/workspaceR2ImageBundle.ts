@@ -1,4 +1,5 @@
 import type { WorkflowAsset, WorkflowCutGroupItem, WorkflowPendingTask } from '../types';
+import { isWorkflowStoryboardTableAsset } from './storyboardTableAsset';
 import { r2ApiUrl } from './apiBase';
 import { requestJson } from './httpClient';
 import { fetchCompanionAssetAsDataUrl } from './workflowCompanionAssets';
@@ -301,6 +302,12 @@ export function collectReferencedObjectKeysFromPackedV2(packed: { assets: Workfl
         }
       }
     }
+    if (isWorkflowStoryboardTableAsset(a) && a.storyboardTable?.rows) {
+      for (const row of a.storyboardTable.rows) {
+        const rk = String(row.frameImageObjectKey || '').trim();
+        if (rk) keys.add(rk);
+      }
+    }
   }
   for (const t of packed.pending) {
     if (t.inputImageObjectKey?.trim()) keys.add(t.inputImageObjectKey.trim());
@@ -446,6 +453,44 @@ export async function packWorkflowBundleForCloud(
       });
       a.cutImageGroup = nextGroup;
     }
+
+    if (isWorkflowStoryboardTableAsset(a) && a.storyboardTable?.rows?.length) {
+      const rows = await mapLimit(a.storyboardTable.rows, CLOUD_PACK_UPLOAD_CONCURRENCY, async (row) => {
+        let img = String(row.frameImage || '').trim();
+        const companionKey = String(row.frameImageCompanionKey || '').trim();
+        if (
+          !img &&
+          companionKey &&
+          packOpts?.companionHydrate?.baseUrl?.trim() &&
+          packOpts.companionHydrate.projectId.trim()
+        ) {
+          const fromDisk = await fetchCompanionAssetAsDataUrl(
+            packOpts.companionHydrate.baseUrl,
+            packOpts.companionHydrate.projectId,
+            companionKey
+          );
+          if (fromDisk) img = fromDisk;
+        }
+        if (!img || isLikelyHttpImageUrl(img)) return row;
+        if (row.frameImageObjectKey?.trim()) return { ...row, frameImage: '' };
+        const key = await uploadDataUrlDeduped(
+          dataUrlToKey,
+          contentHashToKey,
+          img,
+          userId,
+          username,
+          (p) => `${base}/storyboard/${sanitizeSegment(row.id)}.${mimeToExt(p.mime)}`
+        );
+        if (!key) return row;
+        return {
+          ...row,
+          frameImage: '',
+          frameImageObjectKey: key,
+          frameImageCompanionKey: undefined,
+        };
+      });
+      a.storyboardTable = { ...a.storyboardTable, rows };
+    }
   });
 
   await mapLimit(pending, CLOUD_PACK_UPLOAD_CONCURRENCY, async (t) => {
@@ -590,6 +635,19 @@ export async function hydrateWorkflowBundleFromCloud(
             if (a.cutImageGroup) a.cutImageGroup[idx] = u;
           });
         }
+      }
+    }
+    if (isWorkflowStoryboardTableAsset(a) && a.storyboardTable?.rows?.length) {
+      for (const row of a.storyboardTable.rows) {
+        const objectKey = String(row.frameImageObjectKey || '').trim();
+        if (!objectKey || String(row.frameImage || '').trim()) continue;
+        const rowId = row.id;
+        schedule(objectKey, (u) => {
+          if (!a.storyboardTable?.rows) return;
+          a.storyboardTable.rows = a.storyboardTable.rows.map((r) =>
+            r.id === rowId ? { ...r, frameImage: u } : r
+          );
+        });
       }
     }
   }

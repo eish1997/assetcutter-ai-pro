@@ -1,5 +1,6 @@
 import React from 'react';
 import type { StoryboardTableRow } from '../../types';
+import { resolveStoryboardRowFrameDisplaySrc } from '../../services/storyboardFrameImageUrl';
 import {
   storyboardRowDurationLabel,
   storyboardRowOutlineTitle,
@@ -34,7 +35,7 @@ export default function StoryboardFrameCompositeCard({
   onOpenInEditor,
   onPreviewImage,
 }: Props) {
-  const img = String(row.frameImage || '').trim();
+  const img = resolveStoryboardRowFrameDisplaySrc(row);
   const title = storyboardRowOutlineTitle(row, index);
   const duration = storyboardRowDurationLabel(row);
   const body = (row.shotText || '').trim();

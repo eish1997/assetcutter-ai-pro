@@ -4,6 +4,7 @@ import { fetchCompanionAssetBlob, putCompanionAsset } from './companionClient/st
 import { normalizeCompanionBaseUrl } from './companionLocalPrefs';
 import { mapSiteR2PathToFetchUrl, resolveCapabilityPreviewSrc } from './capabilityPreviewUrl';
 import { isWorkflowTextAsset } from './workflowTextAsset';
+import { isWorkflowStoryboardTableAsset } from './storyboardTableAsset';
 import { workflowModelSlotMayNeedCompanionHydrate } from './workflowModelBlob';
 
 export function sanitizeCompanionPathSegment(s: string): string {
@@ -423,6 +424,22 @@ export function stripWorkflowBundleForIdbPersist(bundle: WorkflowProjectBundle):
         if (touchedS) nextStepUrls[stepId] = slotUrls;
       }
       if (touchedS) a.stepModelUrls = nextStepUrls;
+    }
+    if (isWorkflowStoryboardTableAsset(a) && a.storyboardTable?.rows?.length) {
+      let touchedSb = false;
+      const rows = a.storyboardTable.rows.map((row) => {
+        const ck = String(row.frameImageCompanionKey || '').trim();
+        if (!ck) return row;
+        const cur = String(row.frameImage || '').trim();
+        if (cur && shouldStripResultUrlForPersist(cur)) {
+          touchedSb = true;
+          return { ...row, frameImage: '' };
+        }
+        return row;
+      });
+      if (touchedSb) {
+        a.storyboardTable = { ...a.storyboardTable, rows };
+      }
     }
   }
   return out;

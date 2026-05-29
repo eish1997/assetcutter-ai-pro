@@ -1,4 +1,5 @@
 import { mapSiteR2PathToFetchUrl, resolveCapabilityPreviewSrc } from './capabilityPreviewUrl';
+import type { StoryboardTableRow } from '../types';
 
 /** 分镜图在 `<img>` / canvas 中使用的可请求地址 */
 export function resolveStoryboardFrameDisplaySrc(
@@ -19,4 +20,20 @@ export function resolveStoryboardFrameDisplaySrc(
     ? objectKey
     : `/api/r2/objects/${objectKey}`;
   return mapSiteR2PathToFetchUrl(sitePath);
+}
+
+export function storyboardRowHasFrameRef(
+  row: Pick<StoryboardTableRow, 'frameImage' | 'frameImageObjectKey' | 'frameImageCompanionKey'>
+): boolean {
+  if (String(row.frameImage || '').trim()) return true;
+  if (String(row.frameImageObjectKey || '').trim()) return true;
+  if (String(row.frameImageCompanionKey || '').trim()) return true;
+  return false;
+}
+
+/** 同步解析行内分镜图（伴侣键需先 hydrate 为 blob:） */
+export function resolveStoryboardRowFrameDisplaySrc(
+  row: Pick<StoryboardTableRow, 'frameImage' | 'frameImageObjectKey'>
+): string {
+  return resolveStoryboardFrameDisplaySrc(row.frameImage, row.frameImageObjectKey) || '';
 }

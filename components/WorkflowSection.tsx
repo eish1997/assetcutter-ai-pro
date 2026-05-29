@@ -202,6 +202,7 @@ import {
 } from '../services/workflowTextAsset';
 import {
   createEmptyStoryboardTableAsset,
+  duplicateStoryboardTableOnAsset,
   isWorkflowStoryboardTableAsset,
   normalizeStoryboardTableOnAsset,
   storyboardTableCoverImage,
@@ -211,6 +212,10 @@ import StoryboardTablePanel from './storyboard/StoryboardTablePanel';
 import StoryboardTableGridCard from './storyboard/StoryboardTableGridCard';
 import { useStoryboardVideoExportTask } from './storyboard/useStoryboardVideoExport';
 import { compressStoryboardFrameDataUrl } from './storyboard/storyboardFrameImage';
+import {
+  persistStoryboardFrameImage,
+  storyboardRowNeedsCompanionFrameHydrate,
+} from '../services/storyboardFrameCompanion';
 import {
   executeStoryboardRowRedraw,
   listStoryboardRedrawPresets,
@@ -1483,6 +1488,15 @@ const WorkflowSection: React.FC<{
       } catch {
         /* keep raw */
       }
+      const base = String(getCompanionLocalBaseUrl() || '').trim();
+      const pid = String(workspaceProjectChrome?.activeProjectId || '').trim();
+      const framePatch = await persistStoryboardFrameImage({
+        dataUrl: frameImage,
+        assetId: tableAssetId,
+        rowId,
+        companionBaseUrl: base,
+        companionProjectId: pid,
+      });
       setAssets((prev) =>
         prev.map((a) => {
           if (a.id !== tableAssetId || !isWorkflowStoryboardTableAsset(a)) return a;
@@ -1492,11 +1506,7 @@ const WorkflowSection: React.FC<{
             ...a,
             storyboardTable: {
               ...doc,
-              rows: doc.rows.map((r) =>
-                r.id === rowId
-                  ? { ...r, frameImage, frameImageObjectKey: undefined }
-                  : r
-              ),
+              rows: doc.rows.map((r) => (r.id === rowId ? { ...r, ...framePatch } : r)),
             },
           });
         })
@@ -1696,6 +1706,18 @@ const WorkflowSection: React.FC<{
     return parts.sort().join('|');
   }, [assets]);
 
+  const companionStoryboardFrameHydrateKey = useMemo(() => {
+    const parts: string[] = [];
+    for (const a of assets) {
+      if (!isWorkflowStoryboardTableAsset(a)) continue;
+      for (const row of a.storyboardTable?.rows ?? []) {
+        if (!storyboardRowNeedsCompanionFrameHydrate(row)) continue;
+        parts.push(`${a.id}:${row.id}:${String(row.frameImageCompanionKey || '').trim()}`);
+      }
+    }
+    return parts.sort().join('|');
+  }, [assets]);
+
   const companionModelHydrateKey = useMemo(() => {
     const parts: string[] = [];
     for (const a of assets) {
@@ -1800,6 +1822,57 @@ const WorkflowSection: React.FC<{
       cancelled = true;
     };
   }, [companionResultsHydrateKey, workspaceProjectChrome?.activeProjectId, setAssets, onLog]);
+
+  useEffect(() => {
+    const projectId = String(workspaceProjectChrome?.activeProjectId || '').trim();
+    const base = String(getCompanionLocalBaseUrl() || '').trim();
+    if (!companionStoryboardFrameHydrateKey || !projectId || !base) return;
+    let cancelled = false;
+    void (async () => {
+      for (const a of assetsRef.current) {
+        if (!isWorkflowStoryboardTableAsset(a)) continue;
+        for (const row of a.storyboardTable?.rows ?? []) {
+          if (!storyboardRowNeedsCompanionFrameHydrate(row)) continue;
+          const ck = String(row.frameImageCompanionKey || '').trim();
+          if (!ck) continue;
+          const got = await fetchWorkflowOriginalFromCompanionAsObjectUrl(base, projectId, ck);
+          if (cancelled) return;
+          if (got.ok === false) {
+            onLog?.('warn', '分镜图伴侣恢复失败', `${a.id}/${row.id}: ${got.error}`);
+            continue;
+          }
+          setAssets((prev) =>
+            prev.map((x) => {
+              if (x.id !== a.id || !isWorkflowStoryboardTableAsset(x)) return x;
+              const doc = x.storyboardTable;
+              if (!doc?.rows) return x;
+              return normalizeStoryboardTableOnAsset({
+                ...x,
+                storyboardTable: {
+                  ...doc,
+                  rows: doc.rows.map((r) => {
+                    if (r.id !== row.id) return r;
+                    const prevImg = String(r.frameImage || '').trim();
+                    if (/^blob:/i.test(prevImg)) {
+                      try {
+                        URL.revokeObjectURL(prevImg);
+                      } catch {
+                        /* ignore */
+                      }
+                    }
+                    return { ...r, frameImage: got.objectUrl };
+                  }),
+                },
+              });
+            })
+          );
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [companionStoryboardFrameHydrateKey, workspaceProjectChrome?.activeProjectId, setAssets, onLog]);
 
   useEffect(() => {
     const projectId = String(workspaceProjectChrome?.activeProjectId || '').trim();
@@ -5833,8 +5906,11 @@ ${lineSvg}
       const newIds = plans.map((p) => p.newId);
       setAssets((prev) => {
         const copies: WorkflowAsset[] = plans.map(({ src, newId }) => {
+          if (isWorkflowStoryboardTableAsset(src)) {
+            return duplicateStoryboardTableOnAsset(src, newId);
+          }
           const { modelCompanionKeys: _omitModelKeys, ...rest } = src;
-          const copy = {
+          return {
             ...rest,
             id: newId,
             modelCompanionKeys: undefined,
@@ -5842,9 +5918,6 @@ ${lineSvg}
             hiddenInGrid: false,
             createdAt: Date.now(),
           };
-          return isWorkflowStoryboardTableAsset(copy)
-            ? normalizeStoryboardTableOnAsset(copy)
-            : copy;
         });
         let next = [...prev, ...copies];
         if (parentGroupId) {
@@ -6560,10 +6633,7 @@ ${lineSvg}
 
   const createGroupFromAssets = useCallback(
     (assetIds: string[]) => {
-      const members = assetIds.filter((id) => {
-        const a = assets.find((x) => x.id === id);
-        return a != null && !isWorkflowStoryboardTableAsset(a);
-      });
+      const members = assetIds.filter((id) => assets.find((x) => x.id === id) != null);
       if (members.length < 2) return;
       setAssets((prev) => {
         const r = insertManualGroupForAssetIds(prev, members);
@@ -7589,14 +7659,25 @@ ${lineSvg}
         onLog?.('warn', '请先选中要下载的资产');
         return;
       }
-      const assetIds = collectWorkflowAssetIdsFromDragSources(
+      const allIds = collectWorkflowAssetIdsFromDragSources(
         sources,
         assetsRef.current,
         ensureGroupItemsAsAssets
       );
+      const assetIds = allIds.filter((id) => {
+        const a = assetsRef.current.find((x) => x.id === id);
+        return a != null && !isWorkflowStoryboardTableAsset(a);
+      });
+      const skippedStoryboard = allIds.length - assetIds.length;
       if (!assetIds.length) {
-        onLog?.('warn', '没有可下载的资产');
+        onLog?.(
+          'warn',
+          skippedStoryboard > 0 ? '分镜表暂不支持下载' : '没有可下载的资产'
+        );
         return;
+      }
+      if (skippedStoryboard > 0) {
+        onLog?.('info', `已跳过 ${skippedStoryboard} 个分镜表（暂不支持下载）`);
       }
       const pid = String(workspaceProjectChrome?.activeProjectId || '').trim();
       const base = String(getCompanionLocalBaseUrl() || '').trim();
@@ -8426,6 +8507,19 @@ ${lineSvg}
                   <span className="text-gray-300">已移出当前工作区画布</span>
                 </div>
               )}
+              {!showArchived && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const id = addWorkflowStoryboardTableAsset();
+                    openStoryboardTablePanel(id);
+                  }}
+                  className={TITLE_ROW_BTN_NEUTRAL}
+                  title="新建分镜表并打开编辑"
+                >
+                  新建分镜表
+                </button>
+              )}
               {!showArchived && (inGroupView || visibleAssets.length > 0) && (
                 <div className="flex items-center gap-1.5 whitespace-nowrap">
                   <button
@@ -8707,6 +8801,8 @@ ${lineSvg}
     storyboardExportRunning,
     storyboardExportPct,
     storyboardExportTitle,
+    addWorkflowStoryboardTableAsset,
+    openStoryboardTablePanel,
   ]);
   const sidebarOpsAllowed = workflowDragSourceAllowsSidebarOps(
     parseWorkflowDragSource(draggingAssetIds, draggingGroupItems),
@@ -9429,7 +9525,7 @@ ${lineSvg}
                                       <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg text-[8px] font-black bg-[#1d4ed8]">
                                         {(childAsset.groupLabel ?? '组')} {childAsset.assetIds?.length}
                                       </span>
-                                    ) : hasChildTextPayload ? (
+                                    ) : hasChildTextPayload && !isWorkflowStoryboardTableAsset(childAsset) ? (
                                       <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg text-[8px] font-black bg-[#1d4ed8] text-white">
                                         文本
                                       </span>
@@ -9782,9 +9878,9 @@ ${lineSvg}
                             ? 'border-0 ring-2 ring-blue-400/45'
                             : WORKFLOW_CARD_SURFACE_IDLE
                         } ${setRunAccentClass} ${busyClass} transition-transform duration-150 ease-out will-change-transform ${motionClass}`}
-                        draggable={!showArchived && !isBusy && !isWorkflowStoryboardTableAsset(a)}
+                        draggable={!showArchived && !isBusy}
                         onDragStart={(e) => {
-                          if (showArchived || isBusy || isWorkflowStoryboardTableAsset(a)) return;
+                          if (showArchived || isBusy) return;
                           const ids =
                             selectedAssetIds.has(a.id) && selectedAssetIds.size > 0
                               ? Array.from(selectedAssetIds)
@@ -9886,7 +9982,7 @@ ${lineSvg}
                             return;
                           }
                           const src = sources[0]!;
-                          if (isWorkflowTextAsset(a) || isWorkflowStoryboardTableAsset(a)) {
+                          if (isWorkflowTextAsset(a)) {
                             finish();
                             return;
                           }
@@ -9894,9 +9990,7 @@ ${lineSvg}
                           if (src.kind === 'root') {
                             const dragIds = Array.from(new Set(src.assetIds.filter((id) => id !== targetId))).filter((id) => {
                               const ast = assets.find((x) => x.id === id);
-                              return (
-                                ast != null && !isWorkflowTextAsset(ast) && !isWorkflowStoryboardTableAsset(ast)
-                              );
+                              return ast != null && !isWorkflowTextAsset(ast);
                             });
                             if (dragIds.length > 0) {
                               if (isGroupAsset(a)) {
@@ -10102,7 +10196,7 @@ ${lineSvg}
                             <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg text-[8px] font-black bg-[#1d4ed8]">
                               {(a.groupLabel ?? '组')} {a.assetIds?.length}
                             </span>
-                          ) : hasTextPayload && !isWorkflowTextAsset(a) ? (
+                          ) : hasTextPayload && !isWorkflowTextAsset(a) && !isWorkflowStoryboardTableAsset(a) ? (
                             <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg text-[8px] font-black bg-[#1d4ed8] text-white">
                               文本
                             </span>
@@ -10200,6 +10294,8 @@ ${lineSvg}
               : undefined
           }
           onPatchAsset={handleStoryboardPanelPatch}
+          companionBaseUrl={String(getCompanionLocalBaseUrl() || '')}
+          companionProjectId={String(workspaceProjectChrome?.activeProjectId || '')}
         />
       )}
 

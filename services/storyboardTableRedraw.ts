@@ -5,7 +5,14 @@ import {
   getCapabilityEngine,
   type CapabilityExecuteContext,
 } from './capabilityExecutor';
-import { imageSrcToDataUrlForCompanion } from './workflowCompanionAssets';
+import {
+  fetchWorkflowOriginalFromCompanionAsObjectUrl,
+  imageSrcToDataUrlForCompanion,
+} from './workflowCompanionAssets';
+import {
+  resolveStoryboardRowFrameDisplaySrc,
+  storyboardRowHasFrameRef,
+} from './storyboardFrameImageUrl';
 
 export const STORYBOARD_REDRAW_PRESET_KEY = 'ac_storyboard_redraw_preset_v1';
 
@@ -51,6 +58,41 @@ async function resolveRowFrameImage(
   return { ok: false, error: '参考图无法加载，请在本镜重新上传' };
 }
 
+async function resolveStoryboardRowFrameDataUrl(
+  row: StoryboardTableRow,
+  companionBaseUrl: string,
+  companionProjectId: string
+): Promise<{ ok: true; dataUrl: string } | { ok: false; error: string }> {
+  const direct = String(row.frameImage || '').trim();
+  if (direct) {
+    return resolveRowFrameImage(direct, companionBaseUrl, companionProjectId);
+  }
+
+  const display = resolveStoryboardRowFrameDisplaySrc(row);
+  if (display) {
+    const normalized = await imageSrcToDataUrlForCompanion(display);
+    if (normalized) return { ok: true, dataUrl: normalized };
+  }
+
+  const companionKey = String(row.frameImageCompanionKey || '').trim();
+  if (companionKey) {
+    const base = String(companionBaseUrl || '').trim();
+    const pid = String(companionProjectId || '').trim();
+    if (!base || !pid) {
+      return { ok: false, error: '参考图在本地伴侣中，请连接本机伴侣后重试' };
+    }
+    const got = await fetchWorkflowOriginalFromCompanionAsObjectUrl(base, pid, companionKey);
+    if (got.ok === false) {
+      return { ok: false, error: '参考图无法从伴侣加载，请重新上传' };
+    }
+    const resolved = await resolveRowFrameImage(got.objectUrl, base, pid);
+    URL.revokeObjectURL(got.objectUrl);
+    return resolved;
+  }
+
+  return { ok: false, error: '当前镜头没有参考图' };
+}
+
 export type StoryboardRowRedrawArgs = {
   preset: CustomAppModule;
   row: StoryboardTableRow;
@@ -87,12 +129,12 @@ export async function executeStoryboardRowRedraw(
   const useImageRef =
     !args.forceTextToImage &&
     preset.category === 'image_to_image' &&
-    String(row.frameImage || '').trim() !== '';
+    storyboardRowHasFrameRef(row);
 
   let inputImage = '';
   if (useImageRef) {
-    const resolved = await resolveRowFrameImage(
-      String(row.frameImage),
+    const resolved = await resolveStoryboardRowFrameDataUrl(
+      row,
       companionBaseUrl,
       companionProjectId
     );

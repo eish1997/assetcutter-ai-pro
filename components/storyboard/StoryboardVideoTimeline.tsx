@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { StoryboardVideoLayer, StoryboardVideoSegment } from '../../services/storyboardVideoTimeline';
 import {
   STORYBOARD_TIMELINE_LAYER_MAX,
@@ -6,12 +6,56 @@ import {
   storyboardTimelineTimeFromClientX,
 } from '../../services/storyboardVideoTimeline';
 import {
+  storyboardTimelineClipRenderMode,
+  type StoryboardTimelineClipRenderMode,
+} from '../../services/storyboardVirtualScroll';
+import {
   STORYBOARD_GAP_TIGHT,
   STORYBOARD_ROW_SHELL,
   STORYBOARD_TOOL_BTN_GHOST,
 } from './storyboardTableUi';
 
 const DRAG_MIME = 'application/x-ac-storyboard-row';
+
+type SegmentLayout = {
+  seg: StoryboardVideoSegment;
+  index: number;
+  leftPct: number;
+  widthPct: number;
+  widthPx: number;
+  mode: StoryboardTimelineClipRenderMode;
+};
+
+function buildSegmentLayouts(
+  segments: StoryboardVideoSegment[],
+  globalDuration: number,
+  trackWidthPx: number,
+  activeRowId: string | null,
+  draggingIndex: number | null
+): SegmentLayout[] {
+  let cursorSec = 0;
+  const out: SegmentLayout[] = [];
+  for (let i = 0; i < segments.length; i += 1) {
+    const seg = segments[i]!;
+    const leftPct = globalDuration > 0 ? (cursorSec / globalDuration) * 100 : 0;
+    const widthPct = globalDuration > 0 ? (seg.durationSec / globalDuration) * 100 : 0;
+    const widthPx = trackWidthPx > 0 ? (widthPct / 100) * trackWidthPx : 0;
+    cursorSec += seg.durationSec;
+    out.push({
+      seg,
+      index: i,
+      leftPct,
+      widthPct,
+      widthPx,
+      mode: storyboardTimelineClipRenderMode(widthPx, {
+        active: activeRowId === seg.rowId,
+        dragging: draggingIndex === i,
+        segmentCount: segments.length,
+      }),
+    });
+  }
+  return out;
+}
 
 type TrackProps = {
   layer: number;
@@ -28,6 +72,44 @@ type TrackProps = {
   onDragOver: (layer: number, clientX: number) => void;
 };
 
+function TimelineClipBody({
+  seg,
+  mode,
+}: {
+  seg: StoryboardVideoSegment;
+  mode: StoryboardTimelineClipRenderMode;
+}) {
+  if (mode === 'bar') {
+    return (
+      <div className="h-full w-full bg-white/[0.06]" title={seg.shotNo} aria-hidden />
+    );
+  }
+
+  if (mode === 'compact' || !seg.frameImage) {
+    return (
+      <div className="flex h-full items-center justify-center bg-black/40 text-[8px] font-bold text-gray-500">
+        {seg.shotNo}
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <img
+        src={seg.frameImage}
+        alt=""
+        loading="lazy"
+        decoding="async"
+        className="absolute inset-0 h-full w-full object-cover object-center"
+        draggable={false}
+      />
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/75 to-transparent px-1 pb-0.5 pt-2">
+        <span className="truncate text-[8px] font-bold text-white/95">{seg.shotNo}</span>
+      </div>
+    </>
+  );
+}
+
 function TimelineTrack({
   layer,
   segments,
@@ -42,7 +124,23 @@ function TimelineTrack({
   onDragEnd,
   onDragOver,
 }: TrackProps) {
-  let cursorSec = 0;
+  const localAxisRef = useRef<HTMLDivElement>(null);
+  const mergedRef = axisRef ?? localAxisRef;
+  const [trackWidthPx, setTrackWidthPx] = useState(0);
+
+  useLayoutEffect(() => {
+    const el = mergedRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => setTrackWidthPx(el.clientWidth));
+    ro.observe(el);
+    setTrackWidthPx(el.clientWidth);
+    return () => ro.disconnect();
+  }, [mergedRef]);
+
+  const layouts = useMemo(
+    () => buildSegmentLayouts(segments, globalDuration, trackWidthPx, activeRowId, draggingIndex),
+    [activeRowId, draggingIndex, globalDuration, segments, trackWidthPx]
+  );
 
   return (
     <div className="flex min-h-0 flex-1 items-stretch gap-1">
@@ -53,7 +151,7 @@ function TimelineTrack({
         L{layer}
       </div>
       <div
-        ref={axisRef}
+        ref={mergedRef}
         className="relative flex h-full min-h-0 min-w-0 flex-1 overflow-hidden rounded-lg bg-black/25 ring-1 ring-white/[0.05]"
         onDragOver={(e) => {
           if (readOnly || draggingIndex == null) return;
@@ -64,11 +162,7 @@ function TimelineTrack({
         {segments.length === 0 ? (
           <div className="flex h-full items-center justify-center text-[9px] text-gray-600">空轨道</div>
         ) : (
-          segments.map((seg, i) => {
-            const leftPct = globalDuration > 0 ? (cursorSec / globalDuration) * 100 : 0;
-            const widthPct = globalDuration > 0 ? (seg.durationSec / globalDuration) * 100 : 0;
-            cursorSec += seg.durationSec;
-
+          layouts.map(({ seg, index: i, leftPct, widthPct, mode }) => {
             const active = activeRowId === seg.rowId;
             const isDragging = draggingIndex === i;
             const showDropBefore =
@@ -106,29 +200,17 @@ function TimelineTrack({
                   title={`${seg.shotNo} · ${seg.durationSec.toFixed(1)}s`}
                 >
                   <div className="relative min-h-0 flex-1 overflow-hidden bg-black/40">
-                    {seg.frameImage ? (
-                      <img
-                        src={seg.frameImage}
-                        alt=""
-                        className="absolute inset-0 h-full w-full object-cover object-center"
-                        draggable={false}
-                      />
-                    ) : (
-                      <div className="flex h-full items-center justify-center text-[9px] font-bold text-gray-600">
-                        {seg.shotNo}
-                      </div>
-                    )}
-                    <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/75 to-transparent px-1 pb-0.5 pt-2">
-                      <span className="truncate text-[8px] font-bold text-white/95">{seg.shotNo}</span>
+                    <TimelineClipBody seg={seg} mode={mode} />
+                  </div>
+                  {mode !== 'bar' ? (
+                    <div
+                      className={`flex h-3.5 shrink-0 items-center justify-between ${STORYBOARD_GAP_TIGHT} px-1`}
+                    >
+                      <span className="truncate text-[7px] text-gray-500">
+                        {seg.durationSec.toFixed(1)}s{seg.durationIsEstimated ? '*' : ''}
+                      </span>
                     </div>
-                  </div>
-                  <div
-                    className={`flex h-3.5 shrink-0 items-center justify-between ${STORYBOARD_GAP_TIGHT} px-1`}
-                  >
-                    <span className="truncate text-[7px] text-gray-500">
-                      {seg.durationSec.toFixed(1)}s{seg.durationIsEstimated ? '*' : ''}
-                    </span>
-                  </div>
+                  ) : null}
                 </div>
               </React.Fragment>
             );

@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { resolveStoryboardFrameDisplaySrc } from '../services/storyboardFrameImageUrl';
+import {
+  resolveStoryboardFrameDisplaySrc,
+  resolveStoryboardRowFrameDisplaySrc,
+  storyboardRowHasFrameRef,
+} from '../services/storyboardFrameImageUrl';
 
 describe('storyboardFrameImageUrl', () => {
   it('passes through data URLs', () => {
@@ -15,5 +19,15 @@ describe('storyboardFrameImageUrl', () => {
     expect(resolveStoryboardFrameDisplaySrc('/api/r2/objects/users/x.jpg')).toBe(
       '/api/r2/objects/users/x.jpg'
     );
+  });
+
+  it('row helpers resolve object key and detect refs', () => {
+    const row = {
+      frameImage: '',
+      frameImageObjectKey: 'users/foo/bar.jpg',
+    };
+    expect(storyboardRowHasFrameRef(row)).toBe(true);
+    expect(resolveStoryboardRowFrameDisplaySrc(row)).toContain('/api/r2/objects/');
+    expect(storyboardRowHasFrameRef({ frameImageCompanionKey: 'ck' })).toBe(true);
   });
 });

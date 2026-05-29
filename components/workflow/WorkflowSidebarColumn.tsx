@@ -26,6 +26,10 @@ import {
   type WorkflowDragSource,
 } from '../../services/workflowDragPipeline';
 import { isGroupAsset } from '../../services/groupHelpers';
+import {
+  duplicateStoryboardTableOnAsset,
+  isWorkflowStoryboardTableAsset,
+} from '../../services/storyboardTableAsset';
 import { dragTransferHasPlainText } from './workflowSectionHelpers';
 import { SET_ACTION_PREFIX, WORKFLOW_EDGE_GUTTER } from './workflowSectionUiConstants';
 import { uuid } from './workflowIds';
@@ -1114,14 +1118,18 @@ export function WorkflowSidebarColumn({
                     if (!src) return;
                     const newId = uuid();
                     newIds.push(newId);
-                    copies.push({
-                      ...src,
-                      id: newId,
-                      parentAssetId: groupId,
-                      archived: false,
-                      hiddenInGrid: false,
-                      createdAt: Date.now(),
-                    });
+                    copies.push(
+                      isWorkflowStoryboardTableAsset(src)
+                        ? duplicateStoryboardTableOnAsset(src, newId)
+                        : {
+                            ...src,
+                            id: newId,
+                            parentAssetId: groupId,
+                            archived: false,
+                            hiddenInGrid: false,
+                            createdAt: Date.now(),
+                          }
+                    );
                   });
                   if (copies.length === 0) return nextAssets;
                   let next = [...nextAssets, ...copies];

@@ -7,21 +7,25 @@ import {
   createStoryboardTableRow,
   duplicateStoryboardRow,
   normalizeStoryboardTableDoc,
+  readStoryboardTableTitleRaw,
   reindexStoryboardRows,
+  resolveStoryboardTableTitle,
 } from '../../services/storyboardTableAsset';
 import { reorderStoryboardRowsInLayer, collapseStoryboardTimelineTopLayer, clampStoryboardTimelineLayerCount } from '../../services/storyboardVideoTimeline';
 import { buildStoryboardRowPromptText } from '../../services/storyboardTableRedraw';
 import { readLocalJson, writeLocalJson } from '../../services/clientPersist';
 import { readStoryboardFrameFromClipboard, readStoryboardFrameFromFile } from './storyboardFrameImage';
+import { persistStoryboardFrameImage } from '../../services/storyboardFrameCompanion';
+import { storyboardRowHasFrameRef } from '../../services/storyboardFrameImageUrl';
 import { ImagePreviewOverlay } from '../ImagePreviewOverlay';
 import AppIcon from '../ui/AppIcon';
-import StoryboardTableRowEditor from './StoryboardTableRowEditor';
-import StoryboardTableOutlineSidebar from './StoryboardTableOutlineSidebar';
-import StoryboardTableCompositeColumn from './StoryboardTableCompositeColumn';
+import StoryboardTableEditView, {
+  type StoryboardTableEditViewHandle,
+} from './StoryboardTableEditView';
+import type { StoryboardRowInteractionValue } from './StoryboardRowInteractionContext';
+import { storyboardCompositeDomId } from './storyboardTableDom';
 import StoryboardTableGridPreview from './StoryboardTableGridPreview';
 import StoryboardTableVideoPreview from './StoryboardTableVideoPreview';
-import { storyboardCompositeDomId, storyboardRowDomId } from './storyboardTableDom';
-import { useStoryboardRowHeights } from './useStoryboardRowHeights';
 import {
   canExportStoryboardVideo,
   startStoryboardVideoExportTask,
@@ -30,12 +34,6 @@ import {
 import StoryboardVideoExportProgress from './StoryboardVideoExportProgress';
 import {
   STORYBOARD_ADD_ROW_DASHED,
-  STORYBOARD_COLUMN_HEAD,
-  STORYBOARD_BODY_SCROLL,
-  STORYBOARD_GAP_STACK,
-  STORYBOARD_GRID_EDITOR_PREVIEW,
-  STORYBOARD_GRID_ROOT,
-  STORYBOARD_SIDE_RAIL,
   STORYBOARD_GAP_TIGHT,
   STORYBOARD_PAD_HEADER_INNER,
   STORYBOARD_PAD_PANEL,
@@ -66,6 +64,8 @@ type Props = {
   onPatchAsset: (
     patch: Partial<WorkflowAsset> | ((prev: WorkflowAsset) => WorkflowAsset)
   ) => void;
+  companionBaseUrl?: string;
+  companionProjectId?: string;
 };
 
 /** 高于面板 z-[2160] */
@@ -86,6 +86,8 @@ export default function StoryboardTablePanel({
   redrawPresetStorageKey = 'ac_storyboard_redraw_preset_v1',
   onRedrawRow,
   onPatchAsset,
+  companionBaseUrl = '',
+  companionProjectId = '',
 }: Props) {
   const table = useMemo(() => normalizeStoryboardTableDoc(asset.storyboardTable), [asset.storyboardTable]);
   const stats = useMemo(() => computeStoryboardTableStats(table), [table]);
@@ -97,7 +99,7 @@ export default function StoryboardTablePanel({
   const timelineLayerCount = table.timelineLayerCount ?? 1;
 
   const handleStartVideoExport = useCallback(() => {
-    const title = (asset.textTitle || table.title || '分镜表').trim() || '分镜表';
+    const title = resolveStoryboardTableTitle(asset);
     void startStoryboardVideoExportTask({
       assetId: asset.id,
       assetTitle: title,
@@ -105,7 +107,7 @@ export default function StoryboardTablePanel({
       timelineLayerCount,
       onNotify,
     });
-  }, [asset.id, asset.textTitle, onNotify, table.rows, table.title, timelineLayerCount]);
+  }, [asset, onNotify, table.rows, timelineLayerCount]);
   const [viewMode, setViewMode] = useState<StoryboardPanelViewMode>(() =>
     readLocalJson(STORYBOARD_VIEW_STORAGE_KEY, 'edit', (v) =>
       v === 'grid' || v === 'edit' || v === 'video' ? v : null
@@ -114,7 +116,6 @@ export default function StoryboardTablePanel({
   const isGridView = viewMode === 'grid';
   const isVideoView = viewMode === 'video';
   const isEditView = viewMode === 'edit';
-  const rowHeights = useStoryboardRowHeights(isEditView ? table.rows : []);
   const [activeRowId, setActiveRowId] = useState<string | null>(table.rows[0]?.id ?? null);
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   const [imageBusyRowId, setImageBusyRowId] = useState<string | null>(null);
@@ -122,46 +123,29 @@ export default function StoryboardTablePanel({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pendingRowIdRef = useRef<string | null>(null);
   const closeBtnRef = useRef<HTMLButtonElement>(null);
-  const mainScrollRef = useRef<HTMLDivElement>(null);
-  const compositeScrollRef = useRef<HTMLDivElement>(null);
+  const editViewRef = useRef<StoryboardTableEditViewHandle>(null);
+  const gridScrollToRowRef = useRef<((rowId: string) => void) | null>(null);
   const pendingEditRowIdRef = useRef<string | null>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
-
-  const scrollEditorToRow = useCallback((rowId: string) => {
-    document.getElementById(storyboardRowDomId(rowId))?.scrollIntoView({
-      behavior: 'smooth',
-      block: 'start',
-    });
-    const compositeEl = document.getElementById(storyboardCompositeDomId(rowId));
-    const container = compositeScrollRef.current;
-    if (compositeEl && container) {
-      const top =
-        compositeEl.getBoundingClientRect().top -
-        container.getBoundingClientRect().top +
-        container.scrollTop;
-      container.scrollTo({ top: Math.max(0, top - 8), behavior: 'smooth' });
-    }
-  }, []);
 
   const navigateToRow = useCallback(
     (rowId: string) => {
       setActiveRowId(rowId);
       requestAnimationFrame(() => {
         if (viewMode === 'grid') {
+          gridScrollToRowRef.current?.(rowId);
           document.getElementById(storyboardCompositeDomId(rowId))?.scrollIntoView({
             behavior: 'smooth',
             block: 'center',
           });
           return;
         }
-        if (viewMode === 'video') {
-          return;
-        }
-        scrollEditorToRow(rowId);
+        if (viewMode === 'video') return;
+        editViewRef.current?.scrollToRow(rowId);
       });
     },
-    [scrollEditorToRow, viewMode]
+    [viewMode]
   );
 
   const openRowInEditor = useCallback(
@@ -181,13 +165,13 @@ export default function StoryboardTablePanel({
     let outer = 0;
     let inner = 0;
     outer = requestAnimationFrame(() => {
-      inner = requestAnimationFrame(() => scrollEditorToRow(rowId));
+      inner = requestAnimationFrame(() => editViewRef.current?.scrollToRow(rowId));
     });
     return () => {
       cancelAnimationFrame(outer);
       cancelAnimationFrame(inner);
     };
-  }, [scrollEditorToRow, viewMode]);
+  }, [viewMode]);
 
   const setPanelViewMode = useCallback((mode: StoryboardPanelViewMode) => {
     setViewMode(mode);
@@ -195,11 +179,12 @@ export default function StoryboardTablePanel({
   }, []);
 
   useEffect(() => {
-    mainScrollRef.current?.scrollTo(0, 0);
-    compositeScrollRef.current?.scrollTo(0, 0);
-  }, [asset.id]);
+    if (viewMode !== 'edit') return;
+    const firstId = table.rows[0]?.id;
+    if (firstId) editViewRef.current?.scrollToRow(firstId);
+  }, [asset.id, viewMode]);
 
-  const title = (asset.textTitle || table.title || '分镜表').trim() || '分镜表';
+  const title = readStoryboardTableTitleRaw(asset);
 
   const effectiveRedrawPresetId = useMemo(() => {
     const stored = readLocalJson(redrawPresetStorageKey, defaultRedrawPresetId, (v) =>
@@ -244,42 +229,17 @@ export default function StoryboardTablePanel({
     return () => window.removeEventListener('keydown', onKey, true);
   }, [lightboxSrc]);
 
-  /** 中间编辑区滚动时同步当前镜（驱动左大纲 / 右合成高亮） */
-  useEffect(() => {
-    if (!isEditView) return;
-    const root = mainScrollRef.current;
-    if (!root || table.rows.length === 0) return;
-    const obs = new IntersectionObserver(
-      (entries) => {
-        const hit = entries
-          .filter((e) => e.isIntersecting)
-          .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
-        if (!hit?.target.id?.startsWith('ac-storyboard-row-')) return;
-        const rowId = hit.target.id.slice('ac-storyboard-row-'.length);
-        if (table.rows.some((r) => r.id === rowId)) {
-          setActiveRowId(rowId);
-        }
-      },
-      { root, rootMargin: '-28% 0px -48% 0px', threshold: [0.12, 0.35, 0.55, 0.75] }
-    );
-    for (const row of table.rows) {
-      const el = document.getElementById(storyboardRowDomId(row.id));
-      if (el) obs.observe(el);
-    }
-    return () => obs.disconnect();
-  }, [isEditView, table.rows]);
-
   const patchTable = useCallback(
     (mutate: (rows: StoryboardTableRow[]) => StoryboardTableRow[]) => {
       onPatchAsset((cur) => {
         const doc = normalizeStoryboardTableDoc(cur.storyboardTable);
-        const t = (cur.textTitle || doc.title || '分镜表').trim() || '分镜表';
+        const titleRaw = readStoryboardTableTitleRaw(cur);
         const nextRows = reindexStoryboardRows(mutate([...doc.rows]));
         return {
           ...cur,
-          textTitle: t,
+          textTitle: titleRaw,
           storyboardTable: {
-            title: t,
+            title: titleRaw,
             rows: nextRows,
             timelineLayerCount: doc.timelineLayerCount,
           },
@@ -356,14 +316,21 @@ export default function StoryboardTablePanel({
         if (file) dataUrl = await readStoryboardFrameFromFile(file);
         else dataUrl = await readStoryboardFrameFromClipboard(clipboard ?? null);
         if (!dataUrl) return;
-        patchRow(rowId, { frameImage: dataUrl, frameImageObjectKey: undefined });
+        const patch = await persistStoryboardFrameImage({
+          dataUrl,
+          assetId: asset.id,
+          rowId,
+          companionBaseUrl,
+          companionProjectId,
+        });
+        patchRow(rowId, patch);
       } catch (err) {
         onNotify?.('warn', err instanceof Error ? err.message : '图片处理失败');
       } finally {
         setImageBusyRowId(null);
       }
     },
-    [onNotify, patchRow]
+    [asset.id, companionBaseUrl, companionProjectId, onNotify, patchRow]
   );
 
   const runRedraw = useCallback(
@@ -404,12 +371,12 @@ export default function StoryboardTablePanel({
   const addTimelineLayer = useCallback(() => {
     onPatchAsset((cur) => {
       const doc = normalizeStoryboardTableDoc(cur.storyboardTable);
-      const t = (cur.textTitle || doc.title || '分镜表').trim() || '分镜表';
+      const titleRaw = readStoryboardTableTitleRaw(cur);
       const nextCount = clampStoryboardTimelineLayerCount((doc.timelineLayerCount ?? 1) + 1);
       return {
         ...cur,
-        textTitle: t,
-        storyboardTable: { ...doc, title: t, timelineLayerCount: nextCount },
+        textTitle: titleRaw,
+        storyboardTable: { ...doc, title: titleRaw, timelineLayerCount: nextCount },
       };
     });
   }, [onPatchAsset]);
@@ -418,14 +385,14 @@ export default function StoryboardTablePanel({
     if (timelineLayerCount <= 1) return;
     onPatchAsset((cur) => {
       const doc = normalizeStoryboardTableDoc(cur.storyboardTable);
-      const t = (cur.textTitle || doc.title || '分镜表').trim() || '分镜表';
+      const titleRaw = readStoryboardTableTitleRaw(cur);
       const collapsed = collapseStoryboardTimelineTopLayer(doc.rows, doc.timelineLayerCount ?? 1);
       return {
         ...cur,
-        textTitle: t,
+        textTitle: titleRaw,
         storyboardTable: {
           ...doc,
-          title: t,
+          title: titleRaw,
           rows: reindexStoryboardRows(collapsed.rows),
           timelineLayerCount: collapsed.layerCount,
         },
@@ -433,17 +400,64 @@ export default function StoryboardTablePanel({
     });
   }, [onPatchAsset, timelineLayerCount]);
 
-  const redrawRowDisabledReason = (row: StoryboardTableRow): string | undefined => {
-    if (readOnly) return '只读模式';
-    if (row.locked) return '已锁定';
-    if (!redrawPresets.length) return '无可用生图能力';
-    if (!buildStoryboardRowPromptText(row)) return '需填写镜头文本';
-    const preset = redrawPresets.find((p) => p.id === effectiveRedrawPresetId);
-    if (preset?.category === 'image_to_image' && !String(row.frameImage || '').trim()) {
-      return '图生图需先有分镜图，或改选文生图';
-    }
-    return undefined;
-  };
+  const redrawRowDisabledReason = useCallback(
+    (row: StoryboardTableRow): string | undefined => {
+      if (readOnly) return '只读模式';
+      if (row.locked) return '已锁定';
+      if (!redrawPresets.length) return '无可用生图能力';
+      if (!buildStoryboardRowPromptText(row)) return '需填写镜头文本';
+      const preset = redrawPresets.find((p) => p.id === effectiveRedrawPresetId);
+      if (preset?.category === 'image_to_image' && !storyboardRowHasFrameRef(row)) {
+        return '图生图需先有分镜图，或改选文生图';
+      }
+      return undefined;
+    },
+    [effectiveRedrawPresetId, readOnly, redrawPresets]
+  );
+
+  const rowInteraction = useMemo((): StoryboardRowInteractionValue => {
+    return {
+      rowCount: table.rows.length,
+      readOnly,
+      timelineLayerCount,
+      hasRedrawHandler: Boolean(onRedrawRow),
+      focusRow: setActiveRowId,
+      patchRow,
+      moveRow,
+      removeRow,
+      openFileForRow,
+      clearRowImage: (rowId) =>
+        patchRow(rowId, {
+          frameImage: undefined,
+          frameImageObjectKey: undefined,
+          frameImageCompanionKey: undefined,
+        }),
+      assignFrameImageFromDrop: (rowId, e) =>
+        void assignFrameImage(rowId, e.dataTransfer.files?.[0] ?? null, e.dataTransfer),
+      assignFrameImageFromPaste: (rowId, e) => {
+        const file = e.clipboardData.files?.[0];
+        if (file) {
+          e.preventDefault();
+          void assignFrameImage(rowId, file, e.clipboardData);
+        }
+      },
+      runRedraw,
+      previewImage: setLightboxSrc,
+      redrawDisabledReason: redrawRowDisabledReason,
+    };
+  }, [
+    assignFrameImage,
+    moveRow,
+    onRedrawRow,
+    openFileForRow,
+    patchRow,
+    readOnly,
+    redrawRowDisabledReason,
+    removeRow,
+    runRedraw,
+    table.rows.length,
+    timelineLayerCount,
+  ]);
 
   const panel = (
     <div
@@ -578,6 +592,7 @@ export default function StoryboardTablePanel({
           onSelect={(rowId) => navigateToRow(rowId)}
           onOpenInEditor={openRowInEditor}
           onPreviewImage={setLightboxSrc}
+          scrollToRowRef={gridScrollToRowRef}
         />
       ) : isVideoView ? (
         <StoryboardTableVideoPreview
@@ -596,84 +611,25 @@ export default function StoryboardTablePanel({
           onRemoveTimelineLayer={removeTimelineLayer}
         />
       ) : (
-      <div className={`${STORYBOARD_GRID_ROOT} ${STORYBOARD_PAD_PANEL} overflow-x-auto pt-1`}>
-        <StoryboardTableOutlineSidebar
+        <StoryboardTableEditView
+          key={asset.id}
           rows={table.rows}
           activeRowId={activeRowId}
-          onSelect={(rowId) => navigateToRow(rowId)}
+          imageBusyRowId={imageBusyRowId}
+          redrawBusyRowId={redrawBusyRowId}
+          interaction={rowInteraction}
+          onActiveRowIdChange={setActiveRowId}
+          redrawRowDisabledReason={redrawRowDisabledReason}
+          editScrollRef={editViewRef}
+          footerAddRow={
+            !readOnly ? (
+              <button type="button" onClick={addRow} className={STORYBOARD_ADD_ROW_DASHED}>
+                <span className="text-base leading-none text-violet-400/80">+</span>
+                添加镜头
+              </button>
+            ) : null
+          }
         />
-
-        <div className={`${STORYBOARD_GRID_EDITOR_PREVIEW} h-full`}>
-          <div className={`${STORYBOARD_SIDE_RAIL} min-w-0`}>
-            <p className={STORYBOARD_COLUMN_HEAD}>镜头编辑</p>
-            <div ref={mainScrollRef} className={`${STORYBOARD_BODY_SCROLL} pr-0.5`}>
-              <div className={`flex w-full min-w-0 flex-col ${STORYBOARD_GAP_STACK}`}>
-                {table.rows.map((row, i) => {
-                  const redrawReason = redrawRowDisabledReason(row);
-                  return (
-                    <StoryboardTableRowEditor
-                      key={row.id}
-                      domId={storyboardRowDomId(row.id)}
-                      row={row}
-                      index={i}
-                      rowCount={table.rows.length}
-                      active={activeRowId === row.id}
-                      readOnly={readOnly}
-                      imageBusy={imageBusyRowId === row.id}
-                      onFocusRow={() => setActiveRowId(row.id)}
-                      onPatch={(patch) => patchRow(row.id, patch)}
-                      onMove={(dir) => moveRow(row.id, dir)}
-                      onRemove={() => removeRow(row.id)}
-                      onPickImage={() => openFileForRow(row.id)}
-                      onClearImage={() =>
-                        patchRow(row.id, { frameImage: undefined, frameImageObjectKey: undefined })
-                      }
-                      onPreviewImage={setLightboxSrc}
-                      onImageDrop={(e) =>
-                        void assignFrameImage(
-                          row.id,
-                          e.dataTransfer.files?.[0] ?? null,
-                          e.dataTransfer
-                        )
-                      }
-                      onImagePaste={(e) => {
-                        const file = e.clipboardData.files?.[0];
-                        if (file) {
-                          e.preventDefault();
-                          void assignFrameImage(row.id, file, e.clipboardData);
-                        }
-                      }}
-                      redrawBusy={redrawBusyRowId === row.id}
-                      redrawDisabled={Boolean(redrawReason) || redrawBusyRowId != null}
-                      redrawDisabledReason={redrawReason}
-                      onRedraw={
-                        onRedrawRow && !readOnly ? () => void runRedraw(row.id) : undefined
-                      }
-                      timelineLayerCount={timelineLayerCount}
-                    />
-                  );
-                })}
-
-                {!readOnly ? (
-                  <button type="button" onClick={addRow} className={STORYBOARD_ADD_ROW_DASHED}>
-                    <span className="text-base leading-none text-violet-400/80">+</span>
-                    添加镜头
-                  </button>
-                ) : null}
-              </div>
-            </div>
-          </div>
-
-          <StoryboardTableCompositeColumn
-            rows={table.rows}
-            rowHeights={rowHeights}
-            activeRowId={activeRowId}
-            onSelect={navigateToRow}
-            onPreviewImage={setLightboxSrc}
-            scrollRef={compositeScrollRef}
-          />
-        </div>
-      </div>
       )}
 
     </div>

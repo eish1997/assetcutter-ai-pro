@@ -3,11 +3,14 @@ import {
   applyAutoShotNumbers,
   computeStoryboardTableStats,
   createEmptyStoryboardTableAsset,
+  duplicateStoryboardTableOnAsset,
   formatStoryboardShotNo,
   isWorkflowStoryboardTableAsset,
   normalizeStoryboardTableDoc,
   normalizeStoryboardTableOnAsset,
+  readStoryboardTableTitleRaw,
   reindexStoryboardRows,
+  resolveStoryboardTableTitle,
   storyboardTableCoverImage,
   storyboardTablePreviewImages,
 } from '../services/storyboardTableAsset';
@@ -30,6 +33,26 @@ describe('storyboardTableAsset', () => {
     const swapped = reindexStoryboardRows([rows[1]!, rows[0]!]);
     expect(swapped[0]?.index).toBe(0);
     expect(swapped[1]?.index).toBe(1);
+  });
+
+  it('preserves empty title while editing', () => {
+    const normalized = normalizeStoryboardTableOnAsset({
+      id: 't-empty',
+      assetKind: 'storyboard_table',
+      textTitle: '',
+      original: '',
+      displayKey: 'original',
+      results: {},
+      resultOrder: [],
+      archived: false,
+      hiddenInGrid: false,
+      createdAt: 1,
+      storyboardTable: { title: '分镜表', rows: [] },
+    });
+    expect(normalized.textTitle).toBe('');
+    expect(normalized.storyboardTable?.title).toBe('');
+    expect(resolveStoryboardTableTitle(normalized)).toBe('分镜表');
+    expect(readStoryboardTableTitleRaw(normalized)).toBe('');
   });
 
   it('strips group fields from storyboard table asset', () => {
@@ -102,5 +125,18 @@ describe('storyboardTableAsset', () => {
       },
     };
     expect(storyboardTableCoverImage(withImg)).toContain('data:image');
+  });
+
+  it('duplicateStoryboardTableOnAsset assigns new asset and row ids', () => {
+    const src = createEmptyStoryboardTableAsset('tbl-src', '源表');
+    const rowIds = (src.storyboardTable?.rows ?? []).map((r) => r.id);
+    const copy = duplicateStoryboardTableOnAsset(src, 'tbl-copy');
+    expect(copy.id).toBe('tbl-copy');
+    expect(copy.textTitle).toBe('源表');
+    const copyRowIds = (copy.storyboardTable?.rows ?? []).map((r) => r.id);
+    expect(copyRowIds).toHaveLength(rowIds.length);
+    for (const id of copyRowIds) {
+      expect(rowIds).not.toContain(id);
+    }
   });
 });

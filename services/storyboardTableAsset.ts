@@ -1,4 +1,5 @@
 import type { StoryboardTableDoc, StoryboardTableRow, WorkflowAsset } from '../types';
+import { storyboardRowHasFrameRef, resolveStoryboardRowFrameDisplaySrc } from './storyboardFrameImageUrl';
 import { clampStoryboardRowTimelineLayer, resolveStoryboardTimelineLayerCount } from './storyboardVideoTimeline';
 
 const rowId = () => Math.random().toString(36).slice(2, 11);
@@ -22,6 +23,7 @@ export function createStoryboardTableRow(partial?: Partial<StoryboardTableRow>, 
     shotText: partial?.shotText ?? '',
     frameImage: partial?.frameImage,
     frameImageObjectKey: partial?.frameImageObjectKey,
+    frameImageCompanionKey: partial?.frameImageCompanionKey,
     locked: Boolean(partial?.locked),
     timelineLayer: normalizeTimelineLayer(partial?.timelineLayer ?? 0),
   };
@@ -29,6 +31,23 @@ export function createStoryboardTableRow(partial?: Partial<StoryboardTableRow>, 
 
 export function reindexStoryboardRows(rows: StoryboardTableRow[]): StoryboardTableRow[] {
   return rows.map((r, i) => ({ ...r, index: i }));
+}
+
+/** 编辑态标题：保留用户输入的空字符串，不回落默认名 */
+export function readStoryboardTableTitleRaw(
+  asset: Pick<WorkflowAsset, 'textTitle' | 'storyboardTable'>
+): string {
+  if (typeof asset.textTitle === 'string') return asset.textTitle;
+  if (typeof asset.storyboardTable?.title === 'string') return asset.storyboardTable.title;
+  return '';
+}
+
+/** 展示/导出用标题：空白时回退「分镜表」 */
+export function resolveStoryboardTableTitle(
+  asset: Pick<WorkflowAsset, 'textTitle' | 'storyboardTable'>
+): string {
+  const raw = readStoryboardTableTitleRaw(asset).trim();
+  return raw || '分镜表';
 }
 
 export function normalizeStoryboardTableDoc(raw: unknown): StoryboardTableDoc {
@@ -56,6 +75,7 @@ export function normalizeStoryboardTableDoc(raw: unknown): StoryboardTableDoc {
               shotText: String(row.shotText ?? ''),
               frameImage: String(row.frameImage || '').trim() || undefined,
               frameImageObjectKey: String(row.frameImageObjectKey || '').trim() || undefined,
+              frameImageCompanionKey: String(row.frameImageCompanionKey || '').trim() || undefined,
               locked: Boolean(row.locked),
               timelineLayer: normalizeTimelineLayer(row.timelineLayer ?? 0),
             },
@@ -70,28 +90,36 @@ export function normalizeStoryboardTableDoc(raw: unknown): StoryboardTableDoc {
       timelineLayer: clampStoryboardRowTimelineLayer(r.timelineLayer ?? 0, layerCount),
     }))
   );
-  const title = String(doc.title ?? '').trim();
-  return { ...(title ? { title } : {}), timelineLayerCount: layerCount, rows };
+  const title =
+    doc.title !== undefined && doc.title !== null ? String(doc.title) : undefined;
+  return {
+    ...(title !== undefined ? { title } : {}),
+    timelineLayerCount: layerCount,
+    rows,
+  };
 }
 
 export function normalizeStoryboardTableOnAsset(asset: WorkflowAsset): WorkflowAsset {
   if (!isWorkflowStoryboardTableAsset(asset)) return asset;
   const table = normalizeStoryboardTableDoc(asset.storyboardTable);
-  const title = (asset.textTitle || table.title || '分镜表').trim() || '分镜表';
+  const titleRaw = readStoryboardTableTitleRaw(asset);
   const { isGroup: _ig, assetIds: _ai, cutImageGroup: _cig, parentAssetId: _pid, ...rest } = asset;
   return {
     ...rest,
     assetKind: 'storyboard_table',
-    textTitle: title,
+    textTitle: titleRaw,
     original: '',
     displayKey: 'original',
     results: rest.results ?? {},
-    storyboardTable: { ...table, title },
+    storyboardTable: {
+      ...table,
+      title: titleRaw,
+    },
   };
 }
 
 export function createEmptyStoryboardTableAsset(id: string, title?: string): WorkflowAsset {
-  const label = (title || '分镜表').trim() || '分镜表';
+  const label = title !== undefined ? title.trim() || '分镜表' : '分镜表';
   return normalizeStoryboardTableOnAsset({
     id,
     assetKind: 'storyboard_table',
@@ -111,7 +139,7 @@ export function createEmptyStoryboardTableAsset(id: string, title?: string): Wor
 }
 
 export function storyboardTableOutlineLabel(a: WorkflowAsset): string {
-  const t = (a.textTitle || a.storyboardTable?.title || '分镜表').trim() || '分镜表';
+  const t = resolveStoryboardTableTitle(a);
   const n = a.storyboardTable?.rows?.length ?? 0;
   return `${t} · ${n} 镜`;
 }
@@ -119,7 +147,7 @@ export function storyboardTableOutlineLabel(a: WorkflowAsset): string {
 export function storyboardTableCoverImage(a: WorkflowAsset): string {
   const rows = a.storyboardTable?.rows ?? [];
   for (const r of rows) {
-    const img = String(r.frameImage || '').trim();
+    const img = resolveStoryboardRowFrameDisplaySrc(r);
     if (img) return img;
   }
   return '';
@@ -130,7 +158,7 @@ export function storyboardTablePreviewImages(a: WorkflowAsset, limit = 4): strin
   const rows = a.storyboardTable?.rows ?? [];
   const out: string[] = [];
   for (const r of rows) {
-    const img = String(r.frameImage || '').trim();
+    const img = resolveStoryboardRowFrameDisplaySrc(r);
     if (!img) continue;
     out.push(img);
     if (out.length >= limit) break;
@@ -155,7 +183,7 @@ export function computeStoryboardTableStats(doc: StoryboardTableDoc): Storyboard
   let lockedCount = 0;
   for (const r of rows) {
     if (r.locked) lockedCount += 1;
-    if (String(r.frameImage || '').trim()) withImageCount += 1;
+    if (storyboardRowHasFrameRef(r)) withImageCount += 1;
     if (r.durationSec == null || !Number.isFinite(r.durationSec)) {
       hasGaps = true;
     } else {
@@ -183,11 +211,39 @@ export function duplicateStoryboardRow(source: StoryboardTableRow, index: number
       shotText: source.shotText,
       frameImage: source.frameImage,
       frameImageObjectKey: source.frameImageObjectKey,
+      frameImageCompanionKey: source.frameImageCompanionKey,
       locked: false,
       timelineLayer: source.timelineLayer ?? 0,
     },
     index
   );
+}
+
+/** 复制分镜表资产：新资产 id + 各行新 row id，避免与源表冲突 */
+export function duplicateStoryboardTableOnAsset(asset: WorkflowAsset, newAssetId: string): WorkflowAsset {
+  if (!isWorkflowStoryboardTableAsset(asset)) return asset;
+  const table = asset.storyboardTable;
+  const rows = (table?.rows ?? []).map((r, i) => duplicateStoryboardRow(r, i));
+  const {
+    isGroup: _ig,
+    assetIds: _ai,
+    cutImageGroup: _cig,
+    parentAssetId: _pid,
+    modelCompanionKeys: _mck,
+    ...rest
+  } = asset;
+  return normalizeStoryboardTableOnAsset({
+    ...rest,
+    id: newAssetId,
+    modelCompanionKeys: undefined,
+    archived: false,
+    hiddenInGrid: false,
+    createdAt: Date.now(),
+    storyboardTable: {
+      ...table,
+      rows,
+    },
+  });
 }
 
 /** 仅为空镜头号填 01、02… */

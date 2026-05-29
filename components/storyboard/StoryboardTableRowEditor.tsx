@@ -1,5 +1,6 @@
 import React from 'react';
 import type { StoryboardTableRow } from '../../types';
+import { resolveStoryboardRowFrameDisplaySrc } from '../../services/storyboardFrameImageUrl';
 import AppIcon from '../ui/AppIcon';
 import { CustomDropdown } from '../ui/CustomDropdown';
 import { storyboardRowOutlineTitle } from './storyboardRowDisplay';
@@ -77,7 +78,7 @@ export default function StoryboardTableRowEditor({
   domId,
   timelineLayerCount = 1,
 }: Props) {
-  const img = String(row.frameImage || '').trim();
+  const img = resolveStoryboardRowFrameDisplaySrc(row);
   const shotLabel = storyboardRowOutlineTitle(row, index);
   const shell = `${STORYBOARD_ROW_SHELL} ${row.locked ? 'opacity-70' : ''} ${
     active ? STORYBOARD_ROW_ACTIVE : STORYBOARD_ROW_IDLE

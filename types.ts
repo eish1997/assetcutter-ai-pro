@@ -466,6 +466,8 @@ export type StoryboardTableRow = {
   /** 分镜图：data URL / blob / https；云端可仅保留 frameImageObjectKey */
   frameImage?: string;
   frameImageObjectKey?: string;
+  /** 本地伴侣键；IDB 可 strip 行内 data URL */
+  frameImageCompanionKey?: string;
   locked?: boolean;
   /** 视频预览时间轴轨道层，0 为底层，默认 0 */
   timelineLayer?: number;
