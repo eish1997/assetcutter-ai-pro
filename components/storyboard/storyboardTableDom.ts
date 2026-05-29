@@ -10,3 +10,7 @@ export function storyboardCompositeDomId(rowId: string): string {
 export function storyboardGroupCompositeDomId(groupId: string): string {
   return `ac-storyboard-group-${groupId}`;
 }
+
+export function storyboardInputRowDomId(rowId: string): string {
+  return `ac-storyboard-input-${rowId}`;
+}

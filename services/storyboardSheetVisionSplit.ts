@@ -1,0 +1,249 @@
+import type { BoundingBox, StoryboardTableRow } from '../types';
+import { cropBoxes } from './imageCrop';
+import { detectObjectsInImage } from './unifiedAiGateway';
+import { DEFAULT_MODEL_TEXT } from './modelRegistry/constants';
+
+export const STORYBOARD_SHEET_VISION_TIMEOUT_MS = 90_000;
+
+export type StoryboardSheetVisionMatch = {
+  rowId: string;
+  shotNo: string;
+  label: string;
+  image: string;
+  box: BoundingBox;
+};
+
+export type StoryboardSheetVisionSplitResult = {
+  matches: StoryboardSheetVisionMatch[];
+  unmatchedLabels: string[];
+  warn?: string;
+};
+
+export function normalizeShotNoToken(raw: string): string {
+  return String(raw || '')
+    .trim()
+    .replace(/^(镜头号|镜号)\s*[：:]\s*/i, '')
+    .replace(/\s+/g, '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9_]/g, '');
+}
+
+export function extractShotNoToken(raw: string): string {
+  const text = String(raw || '').trim();
+  if (!text) return '';
+  const explicit = text.match(/\b(?:SC\d+[_-]?)?S?\d{2,4}\b/i);
+  if (explicit?.[0]) return normalizeShotNoToken(explicit[0]);
+  return normalizeShotNoToken(text);
+}
+
+export function buildStoryboardSheetVisionPrompt(expectedShotNos: string[]): string {
+  const expected = [...new Set(expectedShotNos.map((shot) => shot.trim()).filter(Boolean))];
+  const expectedLine = expected.length
+    ? `本图应包含下列镜号（label 必须与格内印刷镜号一致）：${expected.join('、')}。`
+    : '';
+
+  return `你是分镜表拼图切分助手。输入是一张包含多个分镜格的故事板拼图（contact sheet）。
+
+任务分两步理解每一格：
+1. 读取镜号：从该格顶部元数据条（如 SC01_SH001、景别、角度等）读取镜号，写入 label；
+2. 框选画面：box_2d 只框住中间「草图/插画」区域，用于回填分镜图。
+
+box_2d 必须排除（不要框进）：
+- 顶部元数据文字条（镜号、景别、角度、运镜、时长等）；
+- 底部说明文字条（画面描述、对白、旁白等）；
+- 左右两侧的纯文字栏（若有）。
+
+box_2d 应紧贴草图外轮廓，略留 1–2% 边距即可；不要把多格合并为一框。
+
+常见版式：
+- 竖格：上文字 / 中画面 / 下文字 → 只框中间画面；
+- 横格：左文字 / 右草图 → 只框右侧草图。
+
+label 规则：
+- 读取每格镜号文字（如 S030、SC01_SH001），原样写入 label；
+- 不要编造镜号；看不清的格可跳过；
+- 同一镜号只保留一个框（取画面最完整的一格）。
+
+${expectedLine}
+
+返回 JSON 数组，每项含 id、label、box_2d。
+box_2d 为 [ymin, xmin, ymax, xmax]，坐标归一化 0–1000。`;
+}
+
+export type ShrinkPanelVisualOptions = {
+  topRatio?: number;
+  bottomRatio?: number;
+  leftRatio?: number;
+  rightRatio?: number;
+  minSpan?: number;
+};
+
+/** 从整格 box 裁掉常见文字条，只保留中间画面区（坐标 0–1000） */
+export function shrinkStoryboardPanelBoxToVisualCore(
+  box: BoundingBox,
+  opts: ShrinkPanelVisualOptions = {}
+): BoundingBox {
+  const topRatio = opts.topRatio ?? 0.13;
+  const bottomRatio = opts.bottomRatio ?? 0.21;
+  const leftRatio = opts.leftRatio ?? 0;
+  const rightRatio = opts.rightRatio ?? 0;
+  const minSpan = opts.minSpan ?? 72;
+
+  const w = box.xmax - box.xmin;
+  const h = box.ymax - box.ymin;
+  if (w <= 0 || h <= 0) return box;
+
+  const landscapeInner = w > h * 1.12;
+  const ymin = box.ymin + Math.round(h * (landscapeInner ? Math.min(topRatio, 0.08) : topRatio));
+  const ymax = box.ymax - Math.round(h * (landscapeInner ? Math.min(bottomRatio, 0.08) : bottomRatio));
+  const xmin =
+    box.xmin + Math.round(w * (landscapeInner ? Math.max(leftRatio, 0.24) : leftRatio));
+  const xmax = box.xmax - Math.round(w * rightRatio);
+
+  if (ymax - ymin < minSpan || xmax - xmin < minSpan) return box;
+  return { ...box, ymin, xmin, ymax, xmax };
+}
+
+/** 视觉框若仍含整格高度，再裁掉上下/左右文字区 */
+export function mapStoryboardBoxesToVisualCrop(boxes: BoundingBox[]): BoundingBox[] {
+  if (!boxes.length) return boxes;
+  const heights = boxes.map((box) => box.ymax - box.ymin).sort((a, b) => a - b);
+  const medianH = heights[Math.floor(heights.length / 2)] ?? 0;
+
+  return boxes.map((box) => {
+    const h = box.ymax - box.ymin;
+    const w = box.xmax - box.xmin;
+    if (medianH > 0 && h < medianH * 0.72) return box;
+    return shrinkStoryboardPanelBoxToVisualCore(box, {
+      topRatio: w > h * 1.12 ? 0.06 : 0.13,
+      bottomRatio: w > h * 1.12 ? 0.06 : 0.21,
+      leftRatio: w > h * 1.12 ? 0.24 : 0,
+    });
+  });
+}
+
+export function matchVisionBoxToRow(
+  box: BoundingBox,
+  rows: StoryboardTableRow[]
+): StoryboardTableRow | null {
+  const labelToken = extractShotNoToken(box.label);
+  if (!labelToken) return null;
+
+  let best: StoryboardTableRow | null = null;
+  let bestScore = -1;
+
+  for (const row of rows) {
+    const rowToken = normalizeShotNoToken(row.shotNo || '');
+    if (!rowToken) continue;
+
+    let score = -1;
+    if (labelToken === rowToken) score = 100;
+    else if (labelToken.endsWith(rowToken) || rowToken.endsWith(labelToken)) score = 80;
+    else if (labelToken.includes(rowToken) || rowToken.includes(labelToken)) score = 60;
+
+    if (score > bestScore) {
+      bestScore = score;
+      best = row;
+    }
+  }
+
+  return bestScore >= 60 ? best : null;
+}
+
+function dedupeBoxesByLabel(boxes: BoundingBox[]): BoundingBox[] {
+  const byLabel = new Map<string, BoundingBox>();
+  for (const box of boxes) {
+    const key = extractShotNoToken(box.label) || box.label.trim();
+    if (!key) continue;
+    const prev = byLabel.get(key);
+    if (!prev) {
+      byLabel.set(key, box);
+      continue;
+    }
+    const prevArea = (prev.xmax - prev.xmin) * (prev.ymax - prev.ymin);
+    const nextArea = (box.xmax - box.xmin) * (box.ymax - box.ymin);
+    if (nextArea > prevArea) byLabel.set(key, box);
+  }
+  return [...byLabel.values()];
+}
+
+export async function detectStoryboardSheetPanels(
+  dataUrl: string,
+  expectedShotNos: string[],
+  textModel = DEFAULT_MODEL_TEXT,
+  options?: { timeoutMs?: number; customPrompt?: string }
+): Promise<BoundingBox[]> {
+  const prompt =
+    options?.customPrompt?.trim() ||
+    buildStoryboardSheetVisionPrompt(expectedShotNos);
+  const boxes = await detectObjectsInImage(dataUrl, textModel, prompt, {
+    timeoutMs: options?.timeoutMs ?? STORYBOARD_SHEET_VISION_TIMEOUT_MS,
+  });
+  return mapStoryboardBoxesToVisualCrop(dedupeBoxesByLabel(boxes));
+}
+
+export async function splitStoryboardSheetByVision(
+  dataUrl: string,
+  rows: StoryboardTableRow[],
+  textModel = DEFAULT_MODEL_TEXT,
+  options?: { timeoutMs?: number }
+): Promise<StoryboardSheetVisionSplitResult> {
+  const expectedShotNos = rows.map((row) => row.shotNo?.trim() || '').filter(Boolean);
+  let boxes: BoundingBox[] = [];
+  let warn: string | undefined;
+
+  try {
+    boxes = await detectStoryboardSheetPanels(dataUrl, expectedShotNos, textModel, options);
+  } catch (error) {
+    return {
+      matches: [],
+      unmatchedLabels: [],
+      warn: error instanceof Error ? error.message : '视觉识别切分失败',
+    };
+  }
+
+  if (!boxes.length) {
+    return {
+      matches: [],
+      unmatchedLabels: [],
+      warn: '视觉识别未找到分镜格，请检查生成图是否含清晰镜号与分隔线',
+    };
+  }
+
+  const usedRowIds = new Set<string>();
+  const matches: StoryboardSheetVisionMatch[] = [];
+  const unmatchedLabels: string[] = [];
+
+  const crops = await cropBoxes(
+    dataUrl,
+    boxes,
+    boxes.map((_, index) => index),
+    4
+  );
+
+  for (let i = 0; i < boxes.length; i += 1) {
+    const box = boxes[i]!;
+    const image = crops[i];
+    const row = matchVisionBoxToRow(box, rows);
+    if (!row || usedRowIds.has(row.id) || !image) {
+      unmatchedLabels.push(box.label || box.id);
+      continue;
+    }
+    usedRowIds.add(row.id);
+    matches.push({
+      rowId: row.id,
+      shotNo: row.shotNo?.trim() || box.label,
+      label: box.label,
+      image,
+      box,
+    });
+  }
+
+  if (!matches.length) {
+    warn = '已识别分镜格，但镜号与表内镜头无法匹配';
+  } else if (unmatchedLabels.length) {
+    warn = `${unmatchedLabels.length} 个识别格未能匹配镜号：${unmatchedLabels.slice(0, 4).join('、')}`;
+  }
+
+  return { matches, unmatchedLabels, warn };
+}

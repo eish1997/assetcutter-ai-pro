@@ -14,6 +14,21 @@ import {
 import { reorderStoryboardRowsInLayer, collapseStoryboardTimelineTopLayer, clampStoryboardTimelineLayerCount } from '../../services/storyboardVideoTimeline';
 import { buildStoryboardRowPromptText } from '../../services/storyboardTableRedraw';
 import {
+  executeStoryboardSheetGenBatch,
+  planStoryboardSheetGenTasks,
+  type StoryboardSheetGenBatchRequest,
+} from '../../services/storyboardTableSheetGen';
+import { splitStoryboardSheetByVision } from '../../services/storyboardSheetVisionSplit';
+import {
+  createSheetPreviewItem,
+  prependStoryboardSheetPreview,
+  readStoryboardSheetPreviews,
+  resolveSheetTaskRows,
+  updateStoryboardSheetPreview,
+  type StoryboardSheetPreviewItem,
+} from '../../services/storyboardSheetPreview';
+import { WORKFLOW_CUT_DETECT_TIMEOUT_MS } from '../workflow/workflowConstants';
+import {
   applyShotFieldsPatch,
   listStoryboardParsePresets,
   listStoryboardOptimizePresets,
@@ -46,12 +61,19 @@ import {
   STORYBOARD_GRID_EXPORT_WIDTH_PRESETS,
   writeStoryboardGridExportWidth,
 } from '../../services/storyboardGridExport';
-import { readStoryboardFrameFromClipboard, readStoryboardFrameFromFile } from './storyboardFrameImage';
+import {
+  compressStoryboardFrameDataUrl,
+  readStoryboardFrameFromClipboard,
+  readStoryboardFrameFromFile,
+} from './storyboardFrameImage';
 import { persistStoryboardFrameImage } from '../../services/storyboardFrameCompanion';
 import { storyboardRowHasFrameRef } from '../../services/storyboardFrameImageUrl';
 import { ImagePreviewOverlay } from '../ImagePreviewOverlay';
 import AppIcon from '../ui/AppIcon';
 import { CustomDropdown } from '../ui/CustomDropdown';
+import StoryboardTableInputView, {
+  type StoryboardTableInputViewHandle,
+} from './StoryboardTableInputView';
 import StoryboardTableEditView, {
   type StoryboardTableEditViewHandle,
 } from './StoryboardTableEditView';
@@ -80,7 +102,7 @@ import {
   STORYBOARD_VIEW_TOGGLE_IDLE,
 } from './storyboardTableUi';
 
-type StoryboardPanelViewMode = 'edit' | 'grid' | 'video';
+type StoryboardPanelViewMode = 'input' | 'edit' | 'grid' | 'video';
 
 const STORYBOARD_VIEW_STORAGE_KEY = 'ac_storyboard_panel_view_v1';
 
@@ -165,7 +187,7 @@ export default function StoryboardTablePanel({
   }, [asset, onNotify, table.fieldCatalog, table.rows, timelineLayerCount]);
   const [viewMode, setViewMode] = useState<StoryboardPanelViewMode>(() =>
     readLocalJson(STORYBOARD_VIEW_STORAGE_KEY, 'edit', (v) =>
-      v === 'grid' || v === 'edit' || v === 'video' ? v : null
+      v === 'input' || v === 'grid' || v === 'edit' || v === 'video' ? v : null
     )
   );
   const [gridSecondsPerTile, setGridSecondsPerTile] = useState(() =>
@@ -178,10 +200,17 @@ export default function StoryboardTablePanel({
   const isGridView = viewMode === 'grid';
   const isVideoView = viewMode === 'video';
   const isEditView = viewMode === 'edit';
+  const isInputView = viewMode === 'input';
   const [activeRowId, setActiveRowId] = useState<string | null>(table.rows[0]?.id ?? null);
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   const [imageBusyRowId, setImageBusyRowId] = useState<string | null>(null);
   const [redrawBusyRowId, setRedrawBusyRowId] = useState<string | null>(null);
+  const [sheetGenBusy, setSheetGenBusy] = useState(false);
+  const [sheetGenProgress, setSheetGenProgress] = useState<{ done: number; total: number } | null>(
+    null
+  );
+  const [sheetPreviews, setSheetPreviews] = useState<StoryboardSheetPreviewItem[]>([]);
+  const [sheetSplitBusyId, setSheetSplitBusyId] = useState<string | null>(null);
   const [parseBusyRowId, setParseBusyRowId] = useState<string | null>(null);
   const [parseAllBusy, setParseAllBusy] = useState(false);
   const [optimizeBusyRowId, setOptimizeBusyRowId] = useState<string | null>(null);
@@ -192,6 +221,7 @@ export default function StoryboardTablePanel({
   const pendingRowIdRef = useRef<string | null>(null);
   const closeBtnRef = useRef<HTMLButtonElement>(null);
   const editViewRef = useRef<StoryboardTableEditViewHandle>(null);
+  const inputViewRef = useRef<StoryboardTableInputViewHandle>(null);
   const gridScrollToRowRef = useRef<((rowId: string) => void) | null>(null);
   const pendingEditRowIdRef = useRef<string | null>(null);
   const onCloseRef = useRef(onClose);
@@ -205,12 +235,20 @@ export default function StoryboardTablePanel({
           gridScrollToRowRef.current?.(rowId);
           return;
         }
+        if (viewMode === 'input') {
+          inputViewRef.current?.scrollToRow(rowId);
+          return;
+        }
         if (viewMode === 'video') return;
         editViewRef.current?.scrollToRow(rowId);
       });
     },
     [viewMode]
   );
+
+  useEffect(() => {
+    setSheetPreviews(readStoryboardSheetPreviews(asset.id));
+  }, [asset.id]);
 
   const openRowInEditor = useCallback(
     (rowId: string) => {
@@ -333,7 +371,7 @@ export default function StoryboardTablePanel({
 
   const title = readStoryboardTableTitleRaw(asset);
 
-  const effectiveRedrawPresetId = useMemo(() => {
+  const resolvedRedrawPresetId = useMemo(() => {
     const stored = readLocalJson(redrawPresetStorageKey, defaultRedrawPresetId, (v) =>
       typeof v === 'string' ? v : null
     );
@@ -343,6 +381,22 @@ export default function StoryboardTablePanel({
     }
     return redrawPresets[0]?.id ?? '';
   }, [defaultRedrawPresetId, redrawPresets, redrawPresetStorageKey]);
+
+  const [redrawPresetId, setRedrawPresetId] = useState(resolvedRedrawPresetId);
+
+  useEffect(() => {
+    setRedrawPresetId(resolvedRedrawPresetId);
+  }, [asset.id, resolvedRedrawPresetId]);
+
+  const effectiveRedrawPresetId = redrawPresetId;
+
+  const setRedrawPresetIdPersisted = useCallback(
+    (presetId: string) => {
+      setRedrawPresetId(presetId);
+      writeLocalJson(redrawPresetStorageKey, presetId);
+    },
+    [redrawPresetStorageKey]
+  );
 
   const effectiveParsePresetId = useMemo(() => {
     const fromTable = table.parsePresetId?.trim();
@@ -526,6 +580,119 @@ export default function StoryboardTablePanel({
     [onPatchAsset]
   );
 
+  const importInputRows = useCallback(
+    (result: { catalog: StoryboardParseFieldDef[]; rows: StoryboardTableRow[] }) => {
+      patchTable(() => reindexStoryboardRows(result.rows), { fieldCatalog: result.catalog });
+      const firstId = result.rows[0]?.id;
+      if (firstId) navigateToRow(firstId);
+    },
+    [patchTable, navigateToRow]
+  );
+
+  const commitSheetVisionSplit = useCallback(
+    async (
+      sheetImage: string,
+      taskRows: StoryboardTableRow[],
+      fieldCatalog: StoryboardParseFieldDef[]
+    ) => {
+      let normalized = sheetImage;
+      try {
+        normalized = await compressStoryboardFrameDataUrl(sheetImage);
+      } catch {
+        /* keep raw */
+      }
+
+      const split = await splitStoryboardSheetByVision(
+        normalized,
+        taskRows,
+        capabilityTextModel,
+        { timeoutMs: WORKFLOW_CUT_DETECT_TIMEOUT_MS }
+      );
+
+      const rowPatches = new Map<string, Partial<StoryboardTableRow>>();
+      for (const match of split.matches) {
+        let compressed = match.image;
+        try {
+          compressed = await compressStoryboardFrameDataUrl(match.image);
+        } catch {
+          /* keep raw */
+        }
+        const patch = await persistStoryboardFrameImage({
+          dataUrl: compressed,
+          assetId: asset.id,
+          rowId: match.rowId,
+          companionBaseUrl,
+          companionProjectId,
+        });
+        rowPatches.set(match.rowId, patch);
+      }
+
+      if (rowPatches.size > 0) {
+        patchTable(
+          (rows) =>
+            rows.map((row) => (rowPatches.has(row.id) ? { ...row, ...rowPatches.get(row.id) } : row)),
+          { fieldCatalog }
+        );
+      }
+
+      return { matchedCount: split.matches.length, warn: split.warn };
+    },
+    [asset.id, capabilityTextModel, companionBaseUrl, companionProjectId, patchTable]
+  );
+
+  const applySheetPreview = useCallback(
+    async (previewId: string) => {
+      const item = sheetPreviews.find((preview) => preview.id === previewId);
+      if (!item) return;
+
+      const taskRows = resolveSheetTaskRows(table.rows, item.rowIds, item.shotNos);
+      if (!taskRows.length) {
+        onNotify?.('warn', '找不到对应镜头，请先导入分镜文本');
+        return;
+      }
+
+      setSheetSplitBusyId(previewId);
+      try {
+        const { matchedCount, warn } = await commitSheetVisionSplit(
+          item.imageDataUrl,
+          taskRows,
+          table.fieldCatalog
+        );
+        setSheetPreviews(updateStoryboardSheetPreview(asset.id, previewId, { matchedCount }).items);
+        if (matchedCount > 0) {
+          onNotify?.('info', `已切分回填 ${matchedCount} 镜`);
+        } else {
+          onNotify?.('warn', warn || '未能切分匹配到镜头，请检查拼图镜号');
+        }
+      } catch (error) {
+        onNotify?.('warn', error instanceof Error ? error.message : '切分回填失败');
+      } finally {
+        setSheetSplitBusyId(null);
+      }
+    },
+    [asset.id, commitSheetVisionSplit, onNotify, sheetPreviews, table.fieldCatalog, table.rows]
+  );
+
+  const uploadSheetPreview = useCallback(
+    (dataUrl: string) => {
+      const taskRows = table.rows.filter((row) => !row.locked);
+      const preview = createSheetPreviewItem({
+        imageDataUrl: dataUrl,
+        label: '上传拼图',
+        source: 'uploaded',
+        rowIds: taskRows.map((row) => row.id),
+        shotNos: taskRows.map((row) => row.shotNo?.trim() || '').filter(Boolean),
+      });
+      const { items, persisted } = prependStoryboardSheetPreview(asset.id, preview);
+      setSheetPreviews(items);
+      if (!persisted) {
+        onNotify?.('warn', '拼图预览过大，未能写入本地缓存（仍可切分回填）');
+      }
+      onNotify?.('info', '拼图已加入预览，可点「切分回填」写入镜头');
+    },
+    [asset.id, onNotify, table.rows]
+  );
+
   const addRow = () => {
     const row = createStoryboardTableRow({}, table.rows.length);
     patchTable((rows) => [...rows, row]);
@@ -629,6 +796,120 @@ export default function StoryboardTablePanel({
       }
     },
     [effectiveRedrawPresetId, onNotify, onRedrawRow, table.fieldCatalog, table.rows]
+  );
+
+  const runSheetGen = useCallback(
+    async (request: StoryboardSheetGenBatchRequest) => {
+      const preset = redrawPresets.find((item) => item.id === request.presetId);
+      if (!preset) {
+        onNotify?.(
+          'warn',
+          redrawPresets.length ? '请选择有效的生图能力' : '请先在功能区启用文生图/图生图能力'
+        );
+        return;
+      }
+
+      const tasks = planStoryboardSheetGenTasks(request.sourceRows, request.shotsPerSheet);
+      if (!tasks.length) {
+        onNotify?.('warn', '没有可执行的生成任务');
+        return;
+      }
+
+      const tableIdSet = new Set(table.rows.map((row) => row.id));
+      const needsImport = request.sourceRows.some((row) => !tableIdSet.has(row.id));
+      if (needsImport) {
+        patchTable(() => reindexStoryboardRows(request.sourceRows), {
+          fieldCatalog: request.fieldCatalog,
+        });
+      }
+
+      setSheetGenBusy(true);
+      setSheetGenProgress({ done: 0, total: tasks.length });
+      try {
+        const batch = await executeStoryboardSheetGenBatch({
+          preset,
+          tasks,
+          fieldCatalog: request.fieldCatalog,
+          ctx: parseCtx,
+          promptExtra: request.promptExtra,
+          referenceImageDataUrl: request.referenceImageDataUrl,
+          onTaskComplete: (done, total) => setSheetGenProgress({ done, total }),
+        });
+
+        let totalMatched = 0;
+
+        for (const result of batch.results) {
+          if (!result.ok) {
+            onNotify?.('warn', `任务 ${result.chunkIndex + 1} 失败：${result.error}`);
+            continue;
+          }
+          const task = tasks.find((item) => item.chunkIndex === result.chunkIndex);
+          if (!task) continue;
+
+          let sheetImage = result.image;
+          try {
+            sheetImage = await compressStoryboardFrameDataUrl(sheetImage);
+          } catch {
+            /* keep raw */
+          }
+
+          const preview = createSheetPreviewItem({
+            imageDataUrl: sheetImage,
+            label: `任务 ${result.chunkIndex + 1}`,
+            source: 'generated',
+            rowIds: task.rowIds,
+            shotNos: task.rows.map((row) => row.shotNo?.trim() || '').filter(Boolean),
+          });
+          const prepended = prependStoryboardSheetPreview(asset.id, preview);
+          setSheetPreviews(prepended.items);
+          if (!prepended.persisted) {
+            onNotify?.('warn', `任务 ${result.chunkIndex + 1} 拼图过大，未写入本地预览缓存`);
+          }
+
+          const { matchedCount, warn } = await commitSheetVisionSplit(
+            sheetImage,
+            task.rows,
+            request.fieldCatalog
+          );
+          totalMatched += matchedCount;
+          const updated = updateStoryboardSheetPreview(asset.id, preview.id, { matchedCount });
+          setSheetPreviews(updated.items);
+
+          if (warn) {
+            onNotify?.('warn', `任务 ${result.chunkIndex + 1}：${warn}`);
+          }
+        }
+
+        if (batch.failCount > 0) {
+          onNotify?.(
+            'warn',
+            `生图完成：成功 ${batch.okCount} 张，失败 ${batch.failCount} 张；已切分回填 ${totalMatched} 镜`
+          );
+        } else if (totalMatched > 0) {
+          onNotify?.('info', `生图完成：共 ${batch.okCount} 张，已切分回填 ${totalMatched} 镜`);
+        } else {
+          onNotify?.(
+            'warn',
+            `生图完成 ${batch.okCount} 张，但未能自动切分回填；请在下方预览中手动「切分回填」`
+          );
+        }
+      } catch (error) {
+        onNotify?.('warn', error instanceof Error ? error.message : '批量生图失败');
+      } finally {
+        setSheetGenBusy(false);
+        setSheetGenProgress(null);
+      }
+    },
+    [
+      asset.id,
+      capabilityTextModel,
+      commitSheetVisionSplit,
+      onNotify,
+      parseCtx,
+      patchTable,
+      redrawPresets,
+      table.rows,
+    ]
   );
 
   const resolveParsePreset = useCallback(() => {
@@ -930,6 +1211,16 @@ export default function StoryboardTablePanel({
           <div className={STORYBOARD_VIEW_TOGGLE} role="group" aria-label="分镜表视图">
             <button
               type="button"
+              onClick={() => setPanelViewMode('input')}
+              className={`${STORYBOARD_VIEW_TOGGLE_BTN} ${
+                isInputView ? STORYBOARD_VIEW_TOGGLE_ACTIVE : STORYBOARD_VIEW_TOGGLE_IDLE
+              }`}
+              aria-pressed={isInputView}
+            >
+              解析
+            </button>
+            <button
+              type="button"
               onClick={() => setPanelViewMode('edit')}
               className={`${STORYBOARD_VIEW_TOGGLE_BTN} ${
                 isEditView ? STORYBOARD_VIEW_TOGGLE_ACTIVE : STORYBOARD_VIEW_TOGGLE_IDLE
@@ -946,7 +1237,7 @@ export default function StoryboardTablePanel({
               }`}
               aria-pressed={isGridView}
             >
-              分镜图
+              输出
             </button>
             <button
               type="button"
@@ -956,7 +1247,7 @@ export default function StoryboardTablePanel({
               }`}
               aria-pressed={isVideoView}
             >
-              视频
+              预览
             </button>
           </div>
 
@@ -997,6 +1288,41 @@ export default function StoryboardTablePanel({
             {formatDurationLabel(stats.totalDurationSec, stats.hasGaps)}
           </span>
         </div>
+
+        {isInputView && !readOnly ? (
+          <div className={`mt-2 flex flex-wrap items-center ${STORYBOARD_GAP_TIGHT} pl-11`}>
+            {parsePresetOptions.length > 0 ? (
+              <div className="flex min-w-[10rem] max-w-xs items-center gap-1.5">
+                <span className="shrink-0 text-[10px] text-gray-500">结构化解析</span>
+                <CustomDropdown
+                  value={effectiveParsePresetId}
+                  options={parsePresetOptions}
+                  onChange={setParsePresetId}
+                  triggerClassName="h-8 min-w-[8rem] flex-1 rounded-lg bg-white/[0.04] px-2.5 text-[10px] text-gray-200 ring-1 ring-white/[0.07] hover:bg-white/[0.07]"
+                  portalZIndex={STORYBOARD_PANEL_DROPDOWN_Z}
+                />
+              </div>
+            ) : null}
+            <button type="button" onClick={addRow} className={STORYBOARD_TOOL_BTN_PRIMARY}>
+              添加镜头
+            </button>
+            <button
+              type="button"
+              disabled={parseBusyRowId != null || parseAllBusy}
+              onClick={() => void runParseAll()}
+              className={STORYBOARD_TOOL_BTN_NEUTRAL}
+            >
+              {parseAllBusy ? '批量解析中…' : '解析全表'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setPanelViewMode('edit')}
+              className={STORYBOARD_TOOL_BTN_NEUTRAL}
+            >
+              进入编辑
+            </button>
+          </div>
+        ) : null}
 
         {isEditView && !readOnly ? (
           <div className={`mt-2 flex flex-wrap items-center ${STORYBOARD_GAP_TIGHT} pl-11`}>
@@ -1141,7 +1467,32 @@ export default function StoryboardTablePanel({
         ) : null}
       </header>
 
-      {isGridView ? (
+      {isInputView ? (
+        <StoryboardTableInputView
+          ref={inputViewRef}
+          assetId={asset.id}
+          rows={table.rows}
+          fieldCatalog={table.fieldCatalog}
+          activeRowId={activeRowId}
+          readOnly={readOnly}
+          onActiveRowIdChange={setActiveRowId}
+          onImportRows={importInputRows}
+          redrawPresets={redrawPresets}
+          redrawPresetId={effectiveRedrawPresetId}
+          sheetGenBusy={sheetGenBusy}
+          sheetGenProgress={sheetGenProgress}
+          dropdownZIndex={STORYBOARD_PANEL_DROPDOWN_Z}
+          onRedrawPresetChange={setRedrawPresetIdPersisted}
+          onSheetGenRun={runSheetGen}
+          sheetPreviews={sheetPreviews}
+          sheetSplitBusyId={sheetSplitBusyId}
+          onPreviewSheetImage={setLightboxSrc}
+          onUploadSheetPreview={uploadSheetPreview}
+          onApplySheetPreview={applySheetPreview}
+          onNotify={onNotify}
+          onOpenEdit={() => setPanelViewMode('edit')}
+        />
+      ) : isGridView ? (
         <StoryboardTableGridPreview
           rows={table.rows}
           fieldCatalog={table.fieldCatalog}
