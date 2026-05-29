@@ -9,18 +9,25 @@ import {
   normalizeStoryboardTableDoc,
   reindexStoryboardRows,
 } from '../../services/storyboardTableAsset';
+import { reorderStoryboardRows } from '../../services/storyboardVideoTimeline';
 import { buildStoryboardRowPromptText } from '../../services/storyboardTableRedraw';
 import { readLocalJson, writeLocalJson } from '../../services/clientPersist';
 import { readStoryboardFrameFromClipboard, readStoryboardFrameFromFile } from './storyboardFrameImage';
 import { ImagePreviewOverlay } from '../ImagePreviewOverlay';
 import AppIcon from '../ui/AppIcon';
-import { CustomDropdown } from '../ui/CustomDropdown';
 import StoryboardTableRowEditor from './StoryboardTableRowEditor';
 import StoryboardTableOutlineSidebar from './StoryboardTableOutlineSidebar';
 import StoryboardTableCompositeColumn from './StoryboardTableCompositeColumn';
 import StoryboardTableGridPreview from './StoryboardTableGridPreview';
+import StoryboardTableVideoPreview from './StoryboardTableVideoPreview';
 import { storyboardCompositeDomId, storyboardRowDomId } from './storyboardTableDom';
 import { useStoryboardRowHeights } from './useStoryboardRowHeights';
+import {
+  canExportStoryboardVideo,
+  startStoryboardVideoExportTask,
+  useStoryboardVideoExportTask,
+} from './useStoryboardVideoExport';
+import StoryboardVideoExportProgress from './StoryboardVideoExportProgress';
 import {
   STORYBOARD_ADD_ROW_DASHED,
   STORYBOARD_COLUMN_HEAD,
@@ -43,7 +50,7 @@ import {
   STORYBOARD_VIEW_TOGGLE_IDLE,
 } from './storyboardTableUi';
 
-type StoryboardPanelViewMode = 'edit' | 'grid';
+type StoryboardPanelViewMode = 'edit' | 'grid' | 'video';
 
 const STORYBOARD_VIEW_STORAGE_KEY = 'ac_storyboard_panel_view_v1';
 
@@ -61,8 +68,7 @@ type Props = {
   ) => void;
 };
 
-const REDRAW_DROPDOWN_Z = { backdrop: 2200, list: 2201 };
-/** 高于面板 z-[2160]，低于下拉 portal */
+/** 高于面板 z-[2160] */
 const STORYBOARD_LIGHTBOX_Z = 'z-[2180]';
 
 function formatDurationLabel(sec: number, hasGaps: boolean): string {
@@ -83,22 +89,34 @@ export default function StoryboardTablePanel({
 }: Props) {
   const table = useMemo(() => normalizeStoryboardTableDoc(asset.storyboardTable), [asset.storyboardTable]);
   const stats = useMemo(() => computeStoryboardTableStats(table), [table]);
+  const storyboardExportTask = useStoryboardVideoExportTask();
+  const isExportRunning = storyboardExportTask?.status === 'running';
+  const isThisAssetExporting =
+    isExportRunning && storyboardExportTask.assetId === asset.id;
+  const canExportVideo = useMemo(() => canExportStoryboardVideo(table.rows), [table.rows]);
+
+  const handleStartVideoExport = useCallback(() => {
+    const title = (asset.textTitle || table.title || '分镜表').trim() || '分镜表';
+    void startStoryboardVideoExportTask({
+      assetId: asset.id,
+      assetTitle: title,
+      rows: table.rows,
+      onNotify,
+    });
+  }, [asset.id, asset.textTitle, onNotify, table.rows, table.title]);
   const [viewMode, setViewMode] = useState<StoryboardPanelViewMode>(() =>
     readLocalJson(STORYBOARD_VIEW_STORAGE_KEY, 'edit', (v) =>
-      v === 'grid' || v === 'edit' ? v : null
+      v === 'grid' || v === 'edit' || v === 'video' ? v : null
     )
   );
   const isGridView = viewMode === 'grid';
-  const rowHeights = useStoryboardRowHeights(isGridView ? [] : table.rows);
+  const isVideoView = viewMode === 'video';
+  const isEditView = viewMode === 'edit';
+  const rowHeights = useStoryboardRowHeights(isEditView ? table.rows : []);
   const [activeRowId, setActiveRowId] = useState<string | null>(table.rows[0]?.id ?? null);
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   const [imageBusyRowId, setImageBusyRowId] = useState<string | null>(null);
   const [redrawBusyRowId, setRedrawBusyRowId] = useState<string | null>(null);
-  const [redrawPresetId, setRedrawPresetId] = useState(() =>
-    readLocalJson(redrawPresetStorageKey, defaultRedrawPresetId, (v) =>
-      typeof v === 'string' ? v : null
-    )
-  );
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pendingRowIdRef = useRef<string | null>(null);
   const closeBtnRef = useRef<HTMLButtonElement>(null);
@@ -133,6 +151,9 @@ export default function StoryboardTablePanel({
             behavior: 'smooth',
             block: 'center',
           });
+          return;
+        }
+        if (viewMode === 'video') {
           return;
         }
         scrollEditorToRow(rowId);
@@ -178,28 +199,16 @@ export default function StoryboardTablePanel({
 
   const title = (asset.textTitle || table.title || '分镜表').trim() || '分镜表';
 
-  const redrawOptions = useMemo(
-    () =>
-      redrawPresets.map((p) => ({
-        value: p.id,
-        label: p.label || p.id,
-        title: p.category === 'image_to_image' ? '图生图（需本镜有参考图）' : '文生图',
-      })),
-    [redrawPresets]
-  );
-
   const effectiveRedrawPresetId = useMemo(() => {
-    if (redrawPresetId && redrawPresets.some((p) => p.id === redrawPresetId)) {
-      return redrawPresetId;
+    const stored = readLocalJson(redrawPresetStorageKey, defaultRedrawPresetId, (v) =>
+      typeof v === 'string' ? v : null
+    );
+    if (stored && redrawPresets.some((p) => p.id === stored)) return stored;
+    if (defaultRedrawPresetId && redrawPresets.some((p) => p.id === defaultRedrawPresetId)) {
+      return defaultRedrawPresetId;
     }
     return redrawPresets[0]?.id ?? '';
-  }, [redrawPresetId, redrawPresets]);
-
-  useEffect(() => {
-    if (effectiveRedrawPresetId && effectiveRedrawPresetId !== redrawPresetId) {
-      setRedrawPresetId(effectiveRedrawPresetId);
-    }
-  }, [effectiveRedrawPresetId, redrawPresetId]);
+  }, [defaultRedrawPresetId, redrawPresets, redrawPresetStorageKey]);
 
   useEffect(() => {
     if (!table.rows.length) {
@@ -235,7 +244,7 @@ export default function StoryboardTablePanel({
 
   /** 中间编辑区滚动时同步当前镜（驱动左大纲 / 右合成高亮） */
   useEffect(() => {
-    if (isGridView) return;
+    if (!isEditView) return;
     const root = mainScrollRef.current;
     if (!root || table.rows.length === 0) return;
     const obs = new IntersectionObserver(
@@ -256,7 +265,7 @@ export default function StoryboardTablePanel({
       if (el) obs.observe(el);
     }
     return () => obs.disconnect();
-  }, [isGridView, table.rows]);
+  }, [isEditView, table.rows]);
 
   const patchTable = useCallback(
     (mutate: (rows: StoryboardTableRow[]) => StoryboardTableRow[]) => {
@@ -379,6 +388,13 @@ export default function StoryboardTablePanel({
     [effectiveRedrawPresetId, onNotify, onRedrawRow, table.rows]
   );
 
+  const reorderRows = useCallback(
+    (fromIndex: number, toIndex: number) => {
+      patchTable((rows) => reorderStoryboardRows(rows, fromIndex, toIndex));
+    },
+    [patchTable]
+  );
+
   const redrawRowDisabledReason = (row: StoryboardTableRow): string | undefined => {
     if (readOnly) return '只读模式';
     if (row.locked) return '已锁定';
@@ -420,9 +436,9 @@ export default function StoryboardTablePanel({
                   type="button"
                   onClick={() => setPanelViewMode('edit')}
                   className={`${STORYBOARD_VIEW_TOGGLE_BTN} ${
-                    !isGridView ? STORYBOARD_VIEW_TOGGLE_ACTIVE : STORYBOARD_VIEW_TOGGLE_IDLE
+                    isEditView ? STORYBOARD_VIEW_TOGGLE_ACTIVE : STORYBOARD_VIEW_TOGGLE_IDLE
                   }`}
-                  aria-pressed={!isGridView}
+                  aria-pressed={isEditView}
                 >
                   编辑
                 </button>
@@ -435,6 +451,16 @@ export default function StoryboardTablePanel({
                   aria-pressed={isGridView}
                 >
                   网格预览
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPanelViewMode('video')}
+                  className={`${STORYBOARD_VIEW_TOGGLE_BTN} ${
+                    isVideoView ? STORYBOARD_VIEW_TOGGLE_ACTIVE : STORYBOARD_VIEW_TOGGLE_IDLE
+                  }`}
+                  aria-pressed={isVideoView}
+                >
+                  视频预览
                 </button>
               </div>
               <span className="text-[9px] font-bold uppercase tracking-[0.16em] text-violet-400/85">
@@ -490,28 +516,14 @@ export default function StoryboardTablePanel({
                 复制当前镜
               </button>
             ) : null}
-            {onRedrawRow ? (
-              <div className={`ml-auto flex min-w-[11rem] items-center ${STORYBOARD_GAP_TIGHT}`}>
-                <span className="hidden text-[9px] text-gray-600 sm:inline">重绘</span>
-                <CustomDropdown
-                  value={effectiveRedrawPresetId}
-                  options={
-                    redrawOptions.length > 0
-                      ? redrawOptions
-                      : [{ value: '', label: '无可用能力', disabled: true }]
-                  }
-                  disabled={redrawOptions.length === 0}
-                  onChange={(id) => {
-                    setRedrawPresetId(id);
-                    writeLocalJson(redrawPresetStorageKey, id);
-                  }}
-                  placeholder="文生图 / 图生图"
-                  triggerClassName="h-8 min-w-[11rem] rounded-lg bg-white/[0.04] px-2.5 text-[10px] text-gray-200 ring-1 ring-white/[0.07] hover:bg-white/[0.07]"
-                  portalZIndex={REDRAW_DROPDOWN_Z}
-                />
-              </div>
-            ) : null}
           </div>
+        ) : null}
+
+        {storyboardExportTask?.status === 'running' && storyboardExportTask.assetId === asset.id ? (
+          <StoryboardVideoExportProgress
+            progress={storyboardExportTask.progress}
+            className={`${STORYBOARD_PAD_TOOLBAR} mt-1`}
+          />
         ) : null}
       </header>
 
@@ -522,6 +534,19 @@ export default function StoryboardTablePanel({
           onSelect={(rowId) => navigateToRow(rowId)}
           onOpenInEditor={openRowInEditor}
           onPreviewImage={setLightboxSrc}
+        />
+      ) : isVideoView ? (
+        <StoryboardTableVideoPreview
+          rows={table.rows}
+          activeRowId={activeRowId}
+          readOnly={readOnly}
+          canExport={canExportVideo}
+          exporting={isThisAssetExporting}
+          exportDisabled={isExportRunning}
+          onExport={handleStartVideoExport}
+          onSelectRow={(rowId) => setActiveRowId(rowId)}
+          onActiveRowFromPlayback={setActiveRowId}
+          onReorderRows={reorderRows}
         />
       ) : (
       <div className={`${STORYBOARD_GRID_ROOT} ${STORYBOARD_PAD_PANEL} overflow-x-auto pt-2`}>

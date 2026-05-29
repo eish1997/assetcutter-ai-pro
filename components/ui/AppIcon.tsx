@@ -17,7 +17,10 @@ type AppIconName =
   | 'user'
   | 'chevron-up'
   | 'send'
-  | 'download';
+  | 'download'
+  | 'play'
+  | 'pause'
+  | 'skip-start';
 
 const paths: Record<AppIconName, React.ReactNode> = {
   close: <path d="M5 5l10 10M15 5 5 15" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />,
@@ -89,6 +92,30 @@ const paths: Record<AppIconName, React.ReactNode> = {
     <>
       <path d="M10 3.5v8.2M6.7 8.8 10 12.2l3.3-3.4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M4.5 14.5h11" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </>
+  ),
+  play: (
+    <path
+      d="M7.5 6.2 14.5 10 7.5 13.8V6.2Z"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinejoin="round"
+    />
+  ),
+  pause: (
+    <>
+      <path d="M7 6v8M13 6v8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </>
+  ),
+  'skip-start': (
+    <>
+      <path d="M5.5 5.5v9" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <path
+        d="M15 7.2 10.2 10 15 12.8V7.2Z"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+      />
     </>
   ),
 };

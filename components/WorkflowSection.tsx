@@ -209,6 +209,7 @@ import {
 } from '../services/storyboardTableAsset';
 import StoryboardTablePanel from './storyboard/StoryboardTablePanel';
 import StoryboardTableGridCard from './storyboard/StoryboardTableGridCard';
+import { useStoryboardVideoExportTask } from './storyboard/useStoryboardVideoExport';
 import { compressStoryboardFrameDataUrl } from './storyboard/storyboardFrameImage';
 import {
   executeStoryboardRowRedraw,
@@ -4709,6 +4710,12 @@ ${lineSvg}
   const storyboardPanelAsset = storyboardPanelAssetId
     ? assets.find((a) => a.id === storyboardPanelAssetId && isWorkflowStoryboardTableAsset(a))
     : null;
+  const storyboardExportTask = useStoryboardVideoExportTask();
+  const storyboardExportRunning = storyboardExportTask?.status === 'running';
+  const storyboardExportPct = storyboardExportRunning
+    ? Math.round(storyboardExportTask.progress * 100)
+    : 0;
+  const storyboardExportTitle = storyboardExportRunning ? storyboardExportTask.assetTitle : '';
 
   useEffect(() => {
     if (storyboardPanelAssetId && !storyboardPanelAsset) {
@@ -8476,6 +8483,14 @@ ${lineSvg}
                   ? `执行中 ${executingQueueDoneCount}/${executingQueue?.total ?? 0}`
                   : `一键执行（${pending.length}）`}
               </button>
+              {storyboardExportRunning ? (
+                <div className={TITLE_ROW_QUEUE_CHIP} title={storyboardExportTitle}>
+                  <span className="text-[8px] font-black uppercase text-violet-300">分镜导出</span>
+                  <span className="text-[8px] tabular-nums text-gray-300">
+                    {storyboardExportPct}%
+                  </span>
+                </div>
+              ) : null}
               {(pending.length > 0 || executingQueue) && (
                 <div className={TITLE_ROW_QUEUE_CHIP}>
                   {executingQueue ? (
@@ -8689,6 +8704,9 @@ ${lineSvg}
     outlineExpandableGroupIds,
     expandOutlineAll,
     collapseOutlineAll,
+    storyboardExportRunning,
+    storyboardExportPct,
+    storyboardExportTitle,
   ]);
   const sidebarOpsAllowed = workflowDragSourceAllowsSidebarOps(
     parseWorkflowDragSource(draggingAssetIds, draggingGroupItems),

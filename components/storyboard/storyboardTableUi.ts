@@ -93,5 +93,14 @@ export const STORYBOARD_VIEW_TOGGLE_ACTIVE = 'bg-violet-600/90 text-white shadow
 export const STORYBOARD_VIEW_TOGGLE_IDLE =
   'text-gray-500 hover:bg-white/[0.06] hover:text-gray-200';
 
+export const STORYBOARD_VIDEO_ICON_BTN =
+  'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 disabled:cursor-not-allowed disabled:opacity-40';
+
+export const STORYBOARD_VIDEO_ICON_BTN_PRIMARY =
+  `${STORYBOARD_VIDEO_ICON_BTN} bg-violet-600 text-white shadow-[0_4px_14px_-4px_rgba(124,58,237,0.55)] hover:bg-violet-500`;
+
+export const STORYBOARD_VIDEO_ICON_BTN_NEUTRAL =
+  `${STORYBOARD_VIDEO_ICON_BTN} bg-white/[0.04] text-gray-300 ring-1 ring-white/[0.07] hover:bg-white/[0.08] hover:text-white`;
+
 export const STORYBOARD_LABEL =
   'mb-0.5 block text-[9px] font-medium text-gray-500';
