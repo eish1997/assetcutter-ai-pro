@@ -96,6 +96,24 @@
         "dirName": "REPLACE_WITH_HOST_BUNDLE_DIR",
         "phase": "probe"
       }
+    },
+    {
+      "id": "storyboard_parse_structured_v1",
+      "label": "分镜结构化解析",
+      "category": "text_to_text",
+      "engine": "gen_text",
+      "enabled": true,
+      "order": 9,
+      "instruction": "你是分镜脚本结构化助手。根据用户输入的分镜文本，拆成若干语义字段。\n\n要求：\n1. 字段名（label）由你根据内容自行决定，例如：画面、对白、景别、机位、动作、音效、备注等。\n2. 没有信息的维度不要编造，不要输出空字段。\n3. 同一语义全程使用相同 label（例如始终用「对白」，不要有时写「台词」）。\n4. 保留原文措辞，不要擅自翻译或合并不同维度。\n5. 镜头号、时长若出现在原文中：label 必须用「镜头号」「时长」，value 为原文中的值；系统将填入固定列（不进入动态字段）。不要编造。\n6. 对「画面」「动作」「景别」「机位」类字段设 redrawInclude: true；对「对白」「音效」「备注」类设 false。\n\n只输出 JSON，不要 markdown 代码块：\n{\n  \"fields\": [\n    { \"label\": \"镜头号\", \"value\": \"03\" },\n    { \"label\": \"时长\", \"value\": \"2.5\" },\n    { \"label\": \"景别\", \"value\": \"中景\", \"redrawInclude\": true },\n    { \"label\": \"画面\", \"value\": \"…\", \"redrawInclude\": true, \"kind\": \"multiline\" },\n    { \"label\": \"对白\", \"value\": \"…\", \"redrawInclude\": false }\n  ]\n}"
+    },
+    {
+      "id": "storyboard_optimize_structured_v1",
+      "label": "分镜结构化优化",
+      "category": "text_to_text",
+      "engine": "gen_text",
+      "enabled": true,
+      "order": 10,
+      "instruction": "你是分镜脚本结构化优化助手。输入为已有结构化字段（JSON），请润色画面类描述，使其更适合分镜绘制与 AI 生图。\n\n约束：\n1. 只输出 JSON，不要 markdown 代码块。\n2. 输出 fields 数组，每项仅含 id 与 value；id 必须与输入完全一致。\n3. 禁止新增、删除或合并字段 id。\n4. redrawInclude 为 false 的字段（对白、音效、备注等）：必须逐字保留 value，不要改写。\n5. 仅当用户消息标明「允许润色对白」时，方可改写对白类字段。\n\n输入格式：\n{\n  \"catalog\": [{ \"id\": \"...\", \"label\": \"...\", \"redrawInclude\": true }],\n  \"fields\": [{ \"id\": \"...\", \"value\": \"...\" }]\n}\n\n输出格式：\n{\n  \"fields\": [{ \"id\": \"...\", \"value\": \"润色后…\" }]\n}"
     }
   ]
 }

@@ -455,6 +455,19 @@ export type ImageOverlayAnnotationDoc = {
   panoLocalEditReproject?: PanoLocalReprojectSnapshot | null;
 };
 
+/** 分镜表动态字段目录项（表级，解析结果并集） */
+export type StoryboardParseFieldDef = {
+  /** 稳定键，由 label 规范化生成，创建后不变 */
+  id: string;
+  /** 展示名，如「画面」「对白」 */
+  label: string;
+  /** UI 排序，越小越靠前 */
+  order: number;
+  /** 入 catalog 时推断并持久化 */
+  redrawInclude: boolean;
+  kind: 'text' | 'multiline';
+};
+
 /** 分镜表内单行（内嵌于 `storyboard_table` 资产，不对应独立 WorkflowAsset） */
 export type StoryboardTableRow = {
   id: string;
@@ -462,6 +475,11 @@ export type StoryboardTableRow = {
   index: number;
   shotNo?: string;
   durationSec?: number | null;
+  /** 解析前原文；解析后保留快照 */
+  shotRaw?: string;
+  /** 结构化真源 */
+  shotFields: Record<string, string>;
+  /** 派生：仅由 compileShotText 写入 */
   shotText: string;
   /** 分镜图：data URL / blob / https；云端可仅保留 frameImageObjectKey */
   frameImage?: string;
@@ -479,6 +497,12 @@ export type StoryboardTableDoc = {
   /** 时间轴轨道层数（含第 0 层），默认 1 */
   timelineLayerCount?: number;
   rows: StoryboardTableRow[];
+  /** 动态字段目录（全表并集） */
+  fieldCatalog: StoryboardParseFieldDef[];
+  /** 结构化解析预设 id（表级真源） */
+  parsePresetId?: string;
+  /** 结构化优化预设 id（可选） */
+  optimizePresetId?: string;
 };
 
 /** 单个资产：原始图 + 各类型结果图，当前展示版本，是否已归档；归档后可按生成顺序拼流程图 */

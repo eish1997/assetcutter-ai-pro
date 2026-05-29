@@ -15,6 +15,8 @@ export type UseStoryboardVirtualListOptions = {
   estimateHeight: number;
   gap: number;
   overscan?: number;
+  /** 变化时清空已测行高（如 fieldCatalog 变更后行高需重测） */
+  remeasureKey?: string;
   /** 显式关闭；默认 rowIds.length >= STORYBOARD_VIRTUALIZE_MIN_ROWS 时开启 */
   virtualize?: boolean;
 };
@@ -24,6 +26,8 @@ export type UseStoryboardVirtualListResult = {
   virtualize: boolean;
   range: StoryboardVirtualRange;
   heights: Record<string, number>;
+  scrollTop: number;
+  viewportHeight: number;
   measureRow: (rowId: string, height: number) => void;
   scrollToIndex: (index: number, behavior?: ScrollBehavior) => void;
   handleScroll: () => void;
@@ -46,7 +50,13 @@ export function useStoryboardVirtualList(
 
   const rowIdsKey = rowIds.join('\0');
   const prevRowIdsKeyRef = useRef(rowIdsKey);
+  const prevRemeasureKeyRef = useRef(options.remeasureKey ?? '');
   useEffect(() => {
+    if (prevRemeasureKeyRef.current !== (options.remeasureKey ?? '')) {
+      prevRemeasureKeyRef.current = options.remeasureKey ?? '';
+      setHeights({});
+      return;
+    }
     if (prevRowIdsKeyRef.current === rowIdsKey) return;
     prevRowIdsKeyRef.current = rowIdsKey;
     setHeights((prev) => {
@@ -56,7 +66,7 @@ export function useStoryboardVirtualList(
       }
       return next;
     });
-  }, [rowIds, rowIdsKey]);
+  }, [options.remeasureKey, rowIds, rowIdsKey]);
 
   const { offsets, totalHeight } = useMemo(
     () => buildStoryboardRowOffsets(rowIds, heights, estimateHeight, gap),
@@ -152,6 +162,8 @@ export function useStoryboardVirtualList(
     virtualize,
     range,
     heights,
+    scrollTop,
+    viewportHeight,
     measureRow,
     scrollToIndex,
     handleScroll,

@@ -1,5 +1,13 @@
-import type { StoryboardTableDoc, StoryboardTableRow, WorkflowAsset } from '../types';
+import type { StoryboardParseFieldDef, StoryboardTableDoc, StoryboardTableRow, WorkflowAsset } from '../types';
 import { storyboardRowHasFrameRef, resolveStoryboardRowFrameDisplaySrc } from './storyboardFrameImageUrl';
+import {
+  applyShotFieldsPatch,
+  compileShotText,
+  normalizeFieldCatalog,
+  normalizeShotFieldsRecord,
+  STORYBOARD_PARSE_DEFAULT_PRESET_ID,
+  STORYBOARD_OPTIMIZE_DEFAULT_PRESET_ID,
+} from './storyboardTableParse';
 import { clampStoryboardRowTimelineLayer, resolveStoryboardTimelineLayerCount } from './storyboardVideoTimeline';
 
 const rowId = () => Math.random().toString(36).slice(2, 11);
@@ -15,11 +23,14 @@ export function isWorkflowStoryboardTableAsset(a: WorkflowAsset): boolean {
 }
 
 export function createStoryboardTableRow(partial?: Partial<StoryboardTableRow>, index = 0): StoryboardTableRow {
+  const shotFields = normalizeShotFieldsRecord(partial?.shotFields);
   return {
     id: partial?.id || rowId(),
     index,
     shotNo: partial?.shotNo ?? '',
     durationSec: partial?.durationSec ?? null,
+    shotRaw: partial?.shotRaw,
+    shotFields,
     shotText: partial?.shotText ?? '',
     frameImage: partial?.frameImage,
     frameImageObjectKey: partial?.frameImageObjectKey,
@@ -31,6 +42,13 @@ export function createStoryboardTableRow(partial?: Partial<StoryboardTableRow>, 
 
 export function reindexStoryboardRows(rows: StoryboardTableRow[]): StoryboardTableRow[] {
   return rows.map((r, i) => ({ ...r, index: i }));
+}
+
+function finalizeStoryboardRows(
+  rows: StoryboardTableRow[],
+  catalog: StoryboardParseFieldDef[]
+): StoryboardTableRow[] {
+  return rows.map((row) => applyShotFieldsPatch(row, catalog, row.shotFields));
 }
 
 /** 编辑态标题：保留用户输入的空字符串，不回落默认名 */
@@ -52,9 +70,22 @@ export function resolveStoryboardTableTitle(
 
 export function normalizeStoryboardTableDoc(raw: unknown): StoryboardTableDoc {
   if (!raw || typeof raw !== 'object') {
-    return { rows: [createStoryboardTableRow({}, 0)] };
+    const catalog: StoryboardParseFieldDef[] = [];
+    return {
+      fieldCatalog: catalog,
+      rows: finalizeStoryboardRows([createStoryboardTableRow({}, 0)], catalog),
+    };
   }
   const doc = raw as StoryboardTableDoc;
+  const fieldCatalog = normalizeFieldCatalog(doc.fieldCatalog);
+  const parsePresetId =
+    typeof doc.parsePresetId === 'string' && doc.parsePresetId.trim()
+      ? doc.parsePresetId.trim()
+      : undefined;
+  const optimizePresetId =
+    typeof doc.optimizePresetId === 'string' && doc.optimizePresetId.trim()
+      ? doc.optimizePresetId.trim()
+      : undefined;
   const rowsIn = Array.isArray(doc.rows) ? doc.rows : [];
   const parsed =
     rowsIn.length > 0
@@ -66,13 +97,21 @@ export function normalizeStoryboardTableDoc(raw: unknown): StoryboardTableDoc {
             const n = Number(durationRaw);
             durationSec = Number.isFinite(n) && n >= 0 ? n : null;
           }
+          let shotFields = normalizeShotFieldsRecord(row.shotFields);
+          let shotRaw = typeof row.shotRaw === 'string' ? row.shotRaw : undefined;
+          const legacyShotText = String(row.shotText ?? '').trim();
+          if (!shotRaw && legacyShotText && Object.keys(shotFields).length === 0) {
+            shotRaw = legacyShotText;
+          }
           return createStoryboardTableRow(
             {
               id: String(row.id || '').trim() || rowId(),
               index: i,
               shotNo: String(row.shotNo ?? '').trim(),
               durationSec,
-              shotText: String(row.shotText ?? ''),
+              shotRaw,
+              shotFields,
+              shotText: legacyShotText,
               frameImage: String(row.frameImage || '').trim() || undefined,
               frameImageObjectKey: String(row.frameImageObjectKey || '').trim() || undefined,
               frameImageCompanionKey: String(row.frameImageCompanionKey || '').trim() || undefined,
@@ -84,17 +123,23 @@ export function normalizeStoryboardTableDoc(raw: unknown): StoryboardTableDoc {
         })
       : [createStoryboardTableRow({}, 0)];
   const layerCount = resolveStoryboardTimelineLayerCount(parsed, doc.timelineLayerCount ?? 1);
-  const rows = reindexStoryboardRows(
-    parsed.map((r) => ({
-      ...r,
-      timelineLayer: clampStoryboardRowTimelineLayer(r.timelineLayer ?? 0, layerCount),
-    }))
+  const rows = finalizeStoryboardRows(
+    reindexStoryboardRows(
+      parsed.map((r) => ({
+        ...r,
+        timelineLayer: clampStoryboardRowTimelineLayer(r.timelineLayer ?? 0, layerCount),
+      }))
+    ),
+    fieldCatalog
   );
   const title =
     doc.title !== undefined && doc.title !== null ? String(doc.title) : undefined;
   return {
     ...(title !== undefined ? { title } : {}),
     timelineLayerCount: layerCount,
+    fieldCatalog,
+    ...(parsePresetId ? { parsePresetId } : {}),
+    ...(optimizePresetId ? { optimizePresetId } : {}),
     rows,
   };
 }
@@ -114,11 +159,17 @@ export function normalizeStoryboardTableOnAsset(asset: WorkflowAsset): WorkflowA
     storyboardTable: {
       ...table,
       title: titleRaw,
+      parsePresetId: table.parsePresetId || STORYBOARD_PARSE_DEFAULT_PRESET_ID,
+      optimizePresetId: table.optimizePresetId || STORYBOARD_OPTIMIZE_DEFAULT_PRESET_ID,
     },
   };
 }
 
-export function createEmptyStoryboardTableAsset(id: string, title?: string): WorkflowAsset {
+export function createEmptyStoryboardTableAsset(
+  id: string,
+  title?: string,
+  parsePresetId: string = STORYBOARD_PARSE_DEFAULT_PRESET_ID
+): WorkflowAsset {
   const label = title !== undefined ? title.trim() || '分镜表' : '分镜表';
   return normalizeStoryboardTableOnAsset({
     id,
@@ -133,6 +184,9 @@ export function createEmptyStoryboardTableAsset(id: string, title?: string): Wor
     createdAt: Date.now(),
     storyboardTable: {
       title: label,
+      fieldCatalog: [],
+      parsePresetId,
+      optimizePresetId: STORYBOARD_OPTIMIZE_DEFAULT_PRESET_ID,
       rows: [createStoryboardTableRow({}, 0), createStoryboardTableRow({}, 1), createStoryboardTableRow({}, 2)],
     },
   });
@@ -208,6 +262,8 @@ export function duplicateStoryboardRow(source: StoryboardTableRow, index: number
     {
       shotNo: source.shotNo ? `${source.shotNo}'` : formatStoryboardShotNo(index),
       durationSec: source.durationSec ?? null,
+      shotRaw: source.shotRaw,
+      shotFields: { ...source.shotFields },
       shotText: source.shotText,
       frameImage: source.frameImage,
       frameImageObjectKey: source.frameImageObjectKey,
@@ -241,6 +297,7 @@ export function duplicateStoryboardTableOnAsset(asset: WorkflowAsset, newAssetId
     createdAt: Date.now(),
     storyboardTable: {
       ...table,
+      fieldCatalog: table?.fieldCatalog ? [...table.fieldCatalog] : [],
       rows,
     },
   });

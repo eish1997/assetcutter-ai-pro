@@ -1,4 +1,4 @@
-import type { StoryboardTableRow } from '../types';
+import type { StoryboardParseFieldDef, StoryboardTableRow } from '../types';
 import { readLocalJson } from './clientPersist';
 import {
   getStoryboardVideoAspectPreset,
@@ -55,11 +55,12 @@ export function isStoryboardVideoExportRunning(): boolean {
 
 export function canExportStoryboardVideo(
   rows: StoryboardTableRow[],
-  timelineLayerCount?: number
+  timelineLayerCount?: number,
+  fieldCatalog: StoryboardParseFieldDef[] = []
 ): boolean {
   if (!isStoryboardWebmExportAvailable()) return false;
   const count = resolveStoryboardTimelineLayerCount(rows, timelineLayerCount);
-  const layers = buildStoryboardVideoLayers(rows, count);
+  const layers = buildStoryboardVideoLayers(rows, count, fieldCatalog);
   return layers.some((l) => l.segments.length > 0 && l.totalDuration > 0);
 }
 
@@ -83,16 +84,17 @@ export async function startStoryboardVideoExportTask(params: {
   assetId: string;
   assetTitle: string;
   rows: StoryboardTableRow[];
+  fieldCatalog?: StoryboardParseFieldDef[];
   timelineLayerCount?: number;
   onNotify?: NotifyFn;
 }): Promise<void> {
-  const { assetId, assetTitle, rows, timelineLayerCount, onNotify } = params;
+  const { assetId, assetTitle, rows, fieldCatalog = [], timelineLayerCount, onNotify } = params;
 
   if (activeTask?.status === 'running') {
     onNotify?.('warn', '已有分镜视频导出任务进行中，请稍候');
     return;
   }
-  if (!canExportStoryboardVideo(rows, timelineLayerCount)) {
+  if (!canExportStoryboardVideo(rows, timelineLayerCount, fieldCatalog)) {
     if (!isStoryboardWebmExportAvailable()) {
       onNotify?.('warn', '当前浏览器不支持 WebM 导出，请使用 Chrome 或 Edge');
     } else {
@@ -102,7 +104,7 @@ export async function startStoryboardVideoExportTask(params: {
   }
 
   const layerCount = resolveStoryboardTimelineLayerCount(rows, timelineLayerCount);
-  const layers = buildStoryboardVideoLayers(rows, layerCount);
+  const layers = buildStoryboardVideoLayers(rows, layerCount, fieldCatalog);
   const totalDuration = computeStoryboardVideoLayersTotalDuration(layers);
   const aspect = getStoryboardVideoAspectPreset(readStoryboardVideoAspectId());
   const taskId = `sb-export-${Date.now()}`;

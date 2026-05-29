@@ -15,6 +15,7 @@ describe('storyboardFrameCompanion', () => {
       id: 'r1',
       index: 0,
       shotText: '',
+      shotFields: {},
       frameImageCompanionKey: 'ck-1',
     };
     expect(storyboardRowNeedsCompanionFrameHydrate(row)).toBe(true);

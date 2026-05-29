@@ -20,6 +20,8 @@ describe('storyboardTableAsset', () => {
     const a = createEmptyStoryboardTableAsset('tbl-1', '第 1 集');
     expect(isWorkflowStoryboardTableAsset(a)).toBe(true);
     expect(a.storyboardTable?.rows).toHaveLength(3);
+    expect(a.storyboardTable?.fieldCatalog).toEqual([]);
+    expect(a.storyboardTable?.rows?.[0]?.shotFields).toEqual({});
     expect(a.textTitle).toBe('第 1 集');
   });
 

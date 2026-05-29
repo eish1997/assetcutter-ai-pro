@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildStoryboardBandOffsets,
   buildStoryboardRowOffsets,
   computeStoryboardVirtualRange,
+  storyboardActiveRowIndexFromGridBands,
   storyboardActiveRowIndexFromScroll,
+  storyboardEditGridColumnsForWidth,
   storyboardGridBandCount,
   storyboardGridColumnsForWidth,
   storyboardScrollOffsetForIndex,
@@ -72,6 +75,42 @@ describe('storyboardVirtualScroll', () => {
   it('grid band count covers all rows', () => {
     expect(storyboardGridBandCount(200, 4)).toBe(50);
     expect(storyboardGridBandCount(7, 3)).toBe(3);
+  });
+
+  it('edit grid columns use wider min cell than preview grid', () => {
+    expect(storyboardEditGridColumnsForWidth(900)).toBeLessThanOrEqual(
+      storyboardGridColumnsForWidth(900)
+    );
+  });
+
+  it('builds band offsets from row heights', () => {
+    const { bandOffsets, totalHeight } = buildStoryboardBandOffsets(
+      ['a', 'b', 'c', 'd'],
+      { a: 200, c: 260 },
+      2,
+      100,
+      8
+    );
+    expect(bandOffsets).toEqual([0, 208]);
+    expect(totalHeight).toBe(468);
+  });
+
+  it('active row in edit grid resolves by band', () => {
+    const rowIds = ['a', 'b', 'c', 'd'];
+    const { bandOffsets } = buildStoryboardBandOffsets(rowIds, {}, 2, 100, 0);
+    expect(
+      storyboardActiveRowIndexFromGridBands(
+        120,
+        200,
+        rowIds.length,
+        2,
+        bandOffsets,
+        rowIds,
+        {},
+        100,
+        0
+      )
+    ).toBe(2);
   });
 
   it('timeline clip LOD skips thumbnails for narrow clips when many segments', () => {

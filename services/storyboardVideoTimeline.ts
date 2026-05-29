@@ -1,5 +1,6 @@
-import type { StoryboardTableRow } from '../types';
+import type { StoryboardParseFieldDef, StoryboardTableRow } from '../types';
 import { formatStoryboardShotNo } from './storyboardTableAsset';
+import { pickPrimaryVisualField } from './storyboardTableParse';
 import { resolveStoryboardFrameDisplaySrc } from './storyboardFrameImageUrl';
 
 /** 未填写秒数时的预览默认时长 */
@@ -73,7 +74,8 @@ export function resolveStoryboardTimelineLayerCount(
 
 export function buildStoryboardVideoSegments(
   rows: StoryboardTableRow[],
-  layer?: number
+  layer?: number,
+  fieldCatalog: StoryboardParseFieldDef[] = []
 ): StoryboardVideoSegment[] {
   const filtered =
     layer == null
@@ -82,6 +84,7 @@ export function buildStoryboardVideoSegments(
   return filtered.map((row, index) => {
     const { sec, estimated } = resolveStoryboardShotDurationSec(row);
     const displaySrc = resolveStoryboardFrameDisplaySrc(row.frameImage, row.frameImageObjectKey);
+    const visual = pickPrimaryVisualField(fieldCatalog, row.shotFields)?.value;
     return {
       rowId: row.id,
       index,
@@ -89,7 +92,7 @@ export function buildStoryboardVideoSegments(
       durationSec: sec,
       durationIsEstimated: estimated,
       frameImage: displaySrc,
-      shotText: String(row.shotText || '').trim(),
+      shotText: visual || String(row.shotText || '').trim(),
       timelineLayer: row.timelineLayer ?? 0,
     };
   });
@@ -97,11 +100,12 @@ export function buildStoryboardVideoSegments(
 
 export function buildStoryboardVideoLayers(
   rows: StoryboardTableRow[],
-  layerCount: number
+  layerCount: number,
+  fieldCatalog: StoryboardParseFieldDef[] = []
 ): StoryboardVideoLayer[] {
   const count = clampStoryboardTimelineLayerCount(layerCount);
   return Array.from({ length: count }, (_, layer) => {
-    const segments = buildStoryboardVideoSegments(rows, layer);
+    const segments = buildStoryboardVideoSegments(rows, layer, fieldCatalog);
     return {
       layer,
       segments,

@@ -81,9 +81,13 @@ export const STORYBOARD_ROW_ICON_BTN =
 export const STORYBOARD_ADD_ROW_DASHED =
   `flex w-full items-center justify-center ${STORYBOARD_GAP_TIGHT} rounded-xl border border-dashed border-white/[0.1] py-2 text-[10px] font-medium text-gray-500 transition-colors hover:border-violet-400/35 hover:bg-violet-500/[0.04] hover:text-violet-200/90`;
 
-/** 纯分镜网格预览：按容器宽度自动 N 列 × M 行 */
+/** 分镜合成卡网格（与侧栏合成卡同组件；多列自动换行、按内容增高） */
 export const STORYBOARD_GRID_PREVIEW =
-  `grid w-full min-w-0 ${STORYBOARD_GAP_STACK} grid-cols-[repeat(auto-fill,minmax(11.5rem,1fr))] sm:grid-cols-[repeat(auto-fill,minmax(13rem,1fr))] lg:grid-cols-[repeat(auto-fill,minmax(14.5rem,1fr))] xl:grid-cols-[repeat(auto-fill,minmax(16rem,1fr))]`;
+  `grid w-full min-w-0 items-start ${STORYBOARD_GAP_STACK} grid-cols-[repeat(auto-fill,minmax(15.5rem,1fr))] sm:grid-cols-[repeat(auto-fill,minmax(17rem,1fr))] lg:grid-cols-[repeat(auto-fill,minmax(18.5rem,1fr))] xl:grid-cols-[repeat(auto-fill,minmax(20rem,1fr))]`;
+
+/** 镜头编辑：多列自动换行；行内卡片按内容增高（items-start） */
+export const STORYBOARD_EDIT_GRID =
+  `grid w-full min-w-0 items-start ${STORYBOARD_GAP_STACK} grid-cols-[repeat(auto-fill,minmax(15.5rem,1fr))] sm:grid-cols-[repeat(auto-fill,minmax(17rem,1fr))] lg:grid-cols-[repeat(auto-fill,minmax(18.5rem,1fr))] xl:grid-cols-[repeat(auto-fill,minmax(20rem,1fr))]`;
 
 export const STORYBOARD_VIEW_TOGGLE =
   'inline-flex h-7 items-center rounded-lg bg-white/[0.04] p-0.5 ring-1 ring-white/[0.07]';

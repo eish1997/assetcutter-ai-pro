@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { StoryboardTableRow } from '../../types';
+import type { StoryboardParseFieldDef, StoryboardTableRow } from '../../types';
 import { readLocalJson, writeLocalJson } from '../../services/clientPersist';
 import {
   buildStoryboardVideoLayers,
@@ -31,6 +31,7 @@ import {
 
 type Props = {
   rows: StoryboardTableRow[];
+  fieldCatalog?: StoryboardParseFieldDef[];
   timelineLayerCount: number;
   activeRowId: string | null;
   readOnly?: boolean;
@@ -47,6 +48,7 @@ type Props = {
 
 export default function StoryboardTableVideoPreview({
   rows,
+  fieldCatalog = [],
   timelineLayerCount,
   activeRowId,
   readOnly = false,
@@ -70,8 +72,8 @@ export default function StoryboardTableVideoPreview({
   const aspect = useMemo(() => getStoryboardVideoAspectPreset(aspectId), [aspectId]);
   const fitSize = useStoryboardVideoFitBox(previewPaneRef, aspect);
   const layers = useMemo(
-    () => buildStoryboardVideoLayers(rows, timelineLayerCount),
-    [rows, timelineLayerCount]
+    () => buildStoryboardVideoLayers(rows, timelineLayerCount, fieldCatalog),
+    [fieldCatalog, rows, timelineLayerCount]
   );
   const hasAnySegment = layers.some((l) => l.segments.length > 0);
   const {

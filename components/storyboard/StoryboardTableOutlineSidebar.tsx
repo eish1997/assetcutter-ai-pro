@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import type { StoryboardTableRow } from '../../types';
+import type { StoryboardParseFieldDef, StoryboardTableRow } from '../../types';
 import type { UseStoryboardVirtualListResult } from '../../hooks/useStoryboardVirtualList';
 import {
   storyboardRowHasFrameRef,
@@ -27,6 +27,7 @@ import {
 
 type Props = {
   rows: StoryboardTableRow[];
+  fieldCatalog?: StoryboardParseFieldDef[];
   activeRowId: string | null;
   onSelect: (rowId: string) => void;
   virtualList?: UseStoryboardVirtualListResult;
@@ -36,17 +37,19 @@ function OutlineRowButton({
   row,
   index,
   active,
+  fieldCatalog,
   onSelect,
 }: {
   row: StoryboardTableRow;
   index: number;
   active: boolean;
+  fieldCatalog: StoryboardParseFieldDef[];
   onSelect: () => void;
 }) {
   const thumb = resolveStoryboardRowFrameDisplaySrc(row);
   const hasThumb = storyboardRowHasFrameRef(row);
   const title = storyboardRowOutlineTitle(row, index);
-  const subtitle = storyboardRowOutlineSubtitle(row);
+  const subtitle = storyboardRowOutlineSubtitle(row, fieldCatalog);
 
   return (
     <div role="listitem">
@@ -86,6 +89,7 @@ function OutlineRowButton({
 
 export default function StoryboardTableOutlineSidebar({
   rows,
+  fieldCatalog = [],
   activeRowId,
   onSelect,
   virtualList,
@@ -124,6 +128,7 @@ export default function StoryboardTableOutlineSidebar({
               row={row}
               index={row.index}
               active={activeRowId === row.id}
+              fieldCatalog={fieldCatalog}
               onSelect={() => onSelect(row.id)}
             />
           </StoryboardRowMeasureWrap>
@@ -138,6 +143,7 @@ export default function StoryboardTableOutlineSidebar({
           row={row}
           index={i}
           active={activeRowId === row.id}
+          fieldCatalog={fieldCatalog}
           onSelect={() => onSelect(row.id)}
         />
       ))}

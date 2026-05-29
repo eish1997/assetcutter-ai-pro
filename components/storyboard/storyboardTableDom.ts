@@ -6,3 +6,7 @@ export function storyboardRowDomId(rowId: string): string {
 export function storyboardCompositeDomId(rowId: string): string {
   return `ac-storyboard-composite-${rowId}`;
 }
+
+export function storyboardGroupCompositeDomId(groupId: string): string {
+  return `ac-storyboard-group-${groupId}`;
+}

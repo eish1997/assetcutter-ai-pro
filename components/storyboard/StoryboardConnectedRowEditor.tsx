@@ -1,30 +1,46 @@
 import React, { memo } from 'react';
-import type { StoryboardTableRow } from '../../types';
+import type { StoryboardParseFieldDef, StoryboardTableRow } from '../../types';
+import { shotFieldsShallowEqual, rowHasStructuredFieldValues } from '../../services/storyboardTableParse';
 import { useStoryboardRowInteraction } from './StoryboardRowInteractionContext';
 import StoryboardTableRowEditor from './StoryboardTableRowEditor';
 
 type Props = {
   row: StoryboardTableRow;
   index: number;
+  fieldCatalog: StoryboardParseFieldDef[];
   domId?: string;
   active: boolean;
   imageBusy: boolean;
   redrawBusy: boolean;
+  parseBusy: boolean;
+  optimizeBusy?: boolean;
   redrawDisabled: boolean;
   redrawDisabledReason?: string;
 };
 
+function fieldCatalogSignature(catalog: StoryboardParseFieldDef[]): string {
+  return catalog.map((f) => `${f.id}:${f.label}:${f.order}`).join('|');
+}
+
 function StoryboardConnectedRowEditorInner({
   row,
   index,
+  fieldCatalog,
   domId,
   active,
   imageBusy,
   redrawBusy,
+  parseBusy,
+  optimizeBusy = false,
   redrawDisabled,
   redrawDisabledReason,
 }: Props) {
   const ctx = useStoryboardRowInteraction();
+  const optimizeDisabledReason = !fieldCatalog.length
+    ? '请先解析出结构化字段'
+    : !rowHasStructuredFieldValues(fieldCatalog, row)
+      ? '请先填写结构化字段'
+      : undefined;
 
   return (
     <StoryboardTableRowEditor
@@ -32,6 +48,7 @@ function StoryboardConnectedRowEditorInner({
       row={row}
       index={index}
       rowCount={ctx.rowCount}
+      fieldCatalog={fieldCatalog}
       active={active}
       readOnly={ctx.readOnly}
       imageBusy={imageBusy}
@@ -44,6 +61,15 @@ function StoryboardConnectedRowEditorInner({
       onPreviewImage={ctx.previewImage}
       onImageDrop={(e) => ctx.assignFrameImageFromDrop(row.id, e)}
       onImagePaste={(e) => ctx.assignFrameImageFromPaste(row.id, e)}
+      parseBusy={parseBusy}
+      optimizeBusy={optimizeBusy}
+      onParseRow={
+        ctx.hasParseHandler && !ctx.readOnly ? () => void ctx.runParse(row.id) : undefined
+      }
+      onOptimizeRow={
+        ctx.hasOptimizeHandler && !ctx.readOnly ? () => void ctx.runOptimize(row.id) : undefined
+      }
+      optimizeDisabledReason={optimizeDisabledReason}
       redrawBusy={redrawBusy}
       redrawDisabled={redrawDisabled}
       redrawDisabledReason={redrawDisabledReason}
@@ -62,9 +88,14 @@ function rowEditorPropsEqual(prev: Props, next: Props): boolean {
     prev.active !== next.active ||
     prev.imageBusy !== next.imageBusy ||
     prev.redrawBusy !== next.redrawBusy ||
+    prev.parseBusy !== next.parseBusy ||
+    prev.optimizeBusy !== next.optimizeBusy ||
     prev.redrawDisabled !== next.redrawDisabled ||
     prev.redrawDisabledReason !== next.redrawDisabledReason
   ) {
+    return false;
+  }
+  if (fieldCatalogSignature(prev.fieldCatalog) !== fieldCatalogSignature(next.fieldCatalog)) {
     return false;
   }
   const a = prev.row;
@@ -74,6 +105,8 @@ function rowEditorPropsEqual(prev: Props, next: Props): boolean {
     a.index === b.index &&
     a.shotNo === b.shotNo &&
     a.durationSec === b.durationSec &&
+    a.shotRaw === b.shotRaw &&
+    shotFieldsShallowEqual(a.shotFields, b.shotFields) &&
     a.shotText === b.shotText &&
     a.frameImage === b.frameImage &&
     a.frameImageObjectKey === b.frameImageObjectKey &&

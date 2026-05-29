@@ -26,6 +26,11 @@ describe('storyboardTableRedraw', () => {
     { id: 'txt', label: '文', category: 'text_to_text', engine: 'builtin' },
   ] as CustomAppModule[];
 
+  const catalog = [
+    { id: 'f_visual', label: '画面', order: 0, redrawInclude: true, kind: 'text' as const },
+    { id: 'f_dialogue', label: '对白', order: 1, redrawInclude: false, kind: 'text' as const },
+  ];
+
   it('lists only gen_image text/image presets', () => {
     const list = listStoryboardRedrawPresets(presets);
     expect(list.map((p) => p.id)).toEqual(['t2i', 'i2i']);
@@ -35,16 +40,20 @@ describe('storyboardTableRedraw', () => {
     expect(pickDefaultStoryboardRedrawPresetId(presets)).toBe('t2i');
   });
 
-  it('buildStoryboardRowPromptText merges fields', () => {
-    const text = buildStoryboardRowPromptText({
-      id: '1',
-      index: 0,
-      shotNo: '03',
-      shotText: '主角推门',
-      durationSec: 2,
-    });
+  it('buildStoryboardRowPromptText merges structured fields', () => {
+    const text = buildStoryboardRowPromptText(
+      {
+        id: '1',
+        index: 0,
+        shotNo: '03',
+        shotFields: { f_visual: '主角推门', f_dialogue: '你好' },
+        shotText: '',
+        durationSec: 2,
+      },
+      catalog
+    );
     expect(text).toContain('03');
     expect(text).toContain('主角推门');
-    expect(text).not.toContain('关联：');
+    expect(text).not.toContain('你好');
   });
 });

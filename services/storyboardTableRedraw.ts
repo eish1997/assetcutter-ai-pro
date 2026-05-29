@@ -1,4 +1,5 @@
-import type { CustomAppModule, StoryboardTableRow } from '../types';
+import type { CustomAppModule, StoryboardParseFieldDef, StoryboardTableRow } from '../types';
+import { compileRedrawPrompt } from './storyboardTableParse';
 import {
   capabilityUsesGenImageEngine,
   executeCapability,
@@ -18,7 +19,7 @@ export const STORYBOARD_REDRAW_PRESET_KEY = 'ac_storyboard_redraw_preset_v1';
 
 export function listStoryboardRedrawPresets(presets: CustomAppModule[]): CustomAppModule[] {
   return presets.filter((p) => {
-    if (p.disabled) return false;
+    if (p.enabled === false) return false;
     if (!capabilityUsesGenImageEngine(p)) return false;
     return p.category === 'text_to_image' || p.category === 'image_to_image';
   });
@@ -29,16 +30,13 @@ export function pickDefaultStoryboardRedrawPresetId(presets: CustomAppModule[]):
   return list[0]?.id ?? '';
 }
 
-/** 拼接入队/理解用的镜头正文 */
-export function buildStoryboardRowPromptText(row: StoryboardTableRow, promptExtra?: string): string {
-  const parts: string[] = [];
-  const shotNo = (row.shotNo || '').trim();
-  const body = (row.shotText || '').trim();
-  const extra = (promptExtra || '').trim();
-  if (shotNo) parts.push(`【镜头号 ${shotNo}】`);
-  if (body) parts.push(body);
-  if (extra) parts.push(extra);
-  return parts.join('\n').trim();
+/** 拼接入队/理解用的镜头正文（结构化字段 + 镜头号） */
+export function buildStoryboardRowPromptText(
+  row: StoryboardTableRow,
+  catalog: StoryboardParseFieldDef[],
+  promptExtra?: string
+): string {
+  return compileRedrawPrompt(row, catalog, promptExtra);
 }
 
 async function resolveRowFrameImage(
@@ -96,6 +94,7 @@ async function resolveStoryboardRowFrameDataUrl(
 export type StoryboardRowRedrawArgs = {
   preset: CustomAppModule;
   row: StoryboardTableRow;
+  fieldCatalog: StoryboardParseFieldDef[];
   ctx: CapabilityExecuteContext;
   /** 附加在镜头文本后的微调（如 P2 批量反馈） */
   promptExtra?: string;
@@ -115,15 +114,15 @@ export type StoryboardRowRedrawResult =
 export async function executeStoryboardRowRedraw(
   args: StoryboardRowRedrawArgs
 ): Promise<StoryboardRowRedrawResult> {
-  const { preset, row, ctx, promptExtra, companionBaseUrl = '', companionProjectId = '' } = args;
+  const { preset, row, fieldCatalog, ctx, promptExtra, companionBaseUrl = '', companionProjectId = '' } = args;
 
   if (getCapabilityEngine(preset) !== 'gen_image') {
     return { ok: false, error: '请选择文生图或图生图类能力' };
   }
 
-  const inputText = buildStoryboardRowPromptText(row, promptExtra);
+  const inputText = buildStoryboardRowPromptText(row, fieldCatalog, promptExtra);
   if (!inputText) {
-    return { ok: false, error: '请先填写镜头文本' };
+    return { ok: false, error: '请先解析或填写画面类字段' };
   }
 
   const useImageRef =

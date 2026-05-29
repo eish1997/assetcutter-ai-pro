@@ -819,6 +819,8 @@ export interface GeminiRequestOptions {
   arenaPromptNewChallenger?: string;
   /** 超时日志用：如「生图」「理解」 */
   requestPhase?: string;
+  /** 结构化 JSON 输出（如分镜解析/优化） */
+  responseMimeType?: string;
 }
 
 export type GeminiImageBatchGroupOptions = {
@@ -1997,10 +1999,14 @@ export async function getDialogTextResponse(
           role: c.role === 'model' ? 'model' : 'user',
           parts: c.parts,
         }));
+    const genConfig: Record<string, unknown> = {};
+    if (options?.responseMimeType) {
+      genConfig.responseMimeType = options.responseMimeType;
+    }
     const response = await ai.models.generateContent({
       model: resolvedModel,
       contents: payload,
-      config: buildGeminiConfig({}, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)
+      config: buildGeminiConfig(genConfig, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)
     });
     const text = response.text?.trim();
     if (text == null) throw new Error('Empty text response');

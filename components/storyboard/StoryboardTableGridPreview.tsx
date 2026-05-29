@@ -1,13 +1,18 @@
 import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { StoryboardTableRow } from '../../types';
+import type { StoryboardParseFieldDef, StoryboardTableRow } from '../../types';
+import {
+  findStoryboardGroupIndexForRow,
+  groupStoryboardRowsForGridPreview,
+  type StoryboardDurationGroup,
+} from '../../services/storyboardGridDurationGroups';
 import {
   STORYBOARD_EDIT_ROW_GAP_PX,
-  STORYBOARD_GRID_BAND_ESTIMATE_PX,
   STORYBOARD_VIRTUALIZE_MIN_ROWS,
+  storyboardEditGridColumnsForWidth,
   storyboardGridBandCount,
-  storyboardGridColumnsForWidth,
+  storyboardGridCompositeBandHeightPx,
 } from '../../services/storyboardVirtualScroll';
-import StoryboardFrameCompositeCard from './StoryboardFrameCompositeCard';
+import StoryboardDurationGroupCompositeCard from './StoryboardDurationGroupCompositeCard';
 import {
   STORYBOARD_BODY_SCROLL,
   STORYBOARD_GAP_STACK,
@@ -17,6 +22,9 @@ import {
 
 type Props = {
   rows: StoryboardTableRow[];
+  fieldCatalog?: StoryboardParseFieldDef[];
+  secondsPerTile: number;
+  timelineLayerCount?: number;
   activeRowId: string | null;
   onSelect: (rowId: string) => void;
   onOpenInEditor: (rowId: string) => void;
@@ -26,6 +34,9 @@ type Props = {
 
 export default function StoryboardTableGridPreview({
   rows,
+  fieldCatalog = [],
+  secondsPerTile,
+  timelineLayerCount = 1,
   activeRowId,
   onSelect,
   onOpenInEditor,
@@ -38,16 +49,24 @@ export default function StoryboardTableGridPreview({
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
 
-  const virtualize = rows.length >= STORYBOARD_VIRTUALIZE_MIN_ROWS;
-  const bandCount = storyboardGridBandCount(rows.length, columns);
-  const bandHeight = STORYBOARD_GRID_BAND_ESTIMATE_PX + STORYBOARD_EDIT_ROW_GAP_PX;
+  const groups = useMemo(
+    () => groupStoryboardRowsForGridPreview(rows, secondsPerTile, timelineLayerCount),
+    [rows, secondsPerTile, timelineLayerCount]
+  );
+
+  const virtualize = groups.length >= STORYBOARD_VIRTUALIZE_MIN_ROWS;
+  const bandCount = storyboardGridBandCount(groups.length, columns);
+  const bandHeight = useMemo(
+    () => storyboardGridCompositeBandHeightPx(groups),
+    [groups]
+  );
   const totalHeight = virtualize ? Math.max(0, bandCount * bandHeight - STORYBOARD_EDIT_ROW_GAP_PX) : 0;
 
   const readLayout = useCallback(() => {
     const grid = gridRef.current;
     const scroll = scrollRef.current;
     if (grid) {
-      setColumns(storyboardGridColumnsForWidth(grid.clientWidth));
+      setColumns(storyboardEditGridColumnsForWidth(grid.clientWidth));
     }
     if (scroll) {
       setScrollTop(scroll.scrollTop);
@@ -64,16 +83,16 @@ export default function StoryboardTableGridPreview({
     ro.observe(grid);
     if (scroll) ro.observe(scroll);
     return () => ro.disconnect();
-  }, [readLayout, rows.length]);
+  }, [groups.length, readLayout]);
 
   const scrollToRow = useCallback(
     (rowId: string) => {
-      const index = rows.findIndex((r) => r.id === rowId);
-      if (index < 0 || !scrollRef.current) return;
-      const band = Math.floor(index / Math.max(columns, 1));
+      const groupIndex = findStoryboardGroupIndexForRow(groups, rowId);
+      if (groupIndex < 0 || !scrollRef.current) return;
+      const band = Math.floor(groupIndex / Math.max(columns, 1));
       scrollRef.current.scrollTo({ top: band * bandHeight, behavior: 'smooth' });
     },
-    [bandHeight, columns, rows]
+    [bandHeight, columns, groups]
   );
 
   React.useEffect(() => {
@@ -94,17 +113,30 @@ export default function StoryboardTableGridPreview({
     return { startBand: start, endBand: end };
   }, [bandCount, bandHeight, scrollTop, viewportHeight, virtualize]);
 
-  const visibleRows = useMemo(() => {
-    if (!virtualize) return rows;
+  const visibleGroups = useMemo(() => {
+    if (!virtualize) return groups;
     const start = startBand * columns;
-    const end = Math.min(rows.length, endBand * columns);
-    return rows.slice(start, end);
-  }, [columns, endBand, rows, startBand, virtualize]);
+    const end = Math.min(groups.length, endBand * columns);
+    return groups.slice(start, end);
+  }, [columns, endBand, groups, startBand, virtualize]);
 
   const paddingTop = virtualize ? startBand * bandHeight : 0;
-  const paddingBottom = virtualize
-    ? Math.max(0, totalHeight - endBand * bandHeight)
-    : 0;
+  const paddingBottom = virtualize ? Math.max(0, totalHeight - endBand * bandHeight) : 0;
+
+  const renderGroup = (group: StoryboardDurationGroup) => {
+    const active = group.rowIds.includes(activeRowId ?? '');
+    return (
+      <StoryboardDurationGroupCompositeCard
+        key={group.id}
+        group={group}
+        fieldCatalog={fieldCatalog}
+        active={active}
+        onSelect={() => onSelect(group.rowIds[0]!)}
+        onOpenInEditor={() => onOpenInEditor(group.rowIds[0]!)}
+        onPreviewImage={onPreviewImage}
+      />
+    );
+  };
 
   const gridContent = (
     <div
@@ -112,21 +144,7 @@ export default function StoryboardTableGridPreview({
       className={STORYBOARD_GRID_PREVIEW}
       style={virtualize ? { paddingTop, paddingBottom } : undefined}
     >
-      {(virtualize ? visibleRows : rows).map((row, i) => {
-        const index = virtualize ? startBand * columns + i : i;
-        return (
-          <StoryboardFrameCompositeCard
-            key={row.id}
-            row={row}
-            index={index}
-            layout="grid"
-            active={activeRowId === row.id}
-            onSelect={() => onSelect(row.id)}
-            onOpenInEditor={() => onOpenInEditor(row.id)}
-            onPreviewImage={onPreviewImage}
-          />
-        );
-      })}
+      {(virtualize ? visibleGroups : groups).map((group) => renderGroup(group))}
     </div>
   );
 
@@ -137,7 +155,7 @@ export default function StoryboardTableGridPreview({
         onScroll={() => readLayout()}
         className={`${STORYBOARD_BODY_SCROLL} min-h-0 flex-1 pb-1`}
       >
-        {rows.length === 0 ? (
+        {groups.length === 0 ? (
           <p className="py-12 text-center text-[11px] text-gray-600">暂无镜头</p>
         ) : virtualize ? (
           <div style={{ height: totalHeight, position: 'relative' }}>

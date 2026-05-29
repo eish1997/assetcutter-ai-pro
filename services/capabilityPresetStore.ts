@@ -1,4 +1,5 @@
 import type { CapabilityCategory, CapabilityEngine, CustomAppModule } from '../types';
+import { getBuiltinStoryboardParsePreset, STORYBOARD_PARSE_DEFAULT_PRESET_ID, getBuiltinStoryboardOptimizePreset, STORYBOARD_OPTIMIZE_DEFAULT_PRESET_ID } from './storyboardTableParse';
 import { readLocalString, removeLocalKey, writeLocalJson } from './clientPersist';
 import { normalizeCapabilityPreviewUrlForPersist } from './capabilityPreviewUrl';
 import { syncImageProcessProcessorFields } from './capabilityProcessors/imageProcessProcessors';
@@ -349,6 +350,18 @@ export function enforceBuiltinImageProcessPresets(list: CustomAppModule[]): Cust
     }
   }
   merged = merged.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  if (!merged.some((p) => p.id === STORYBOARD_PARSE_DEFAULT_PRESET_ID)) {
+    merged = [
+      ...merged,
+      normalizeCapabilityPreset(getBuiltinStoryboardParsePreset(), merged.length),
+    ];
+  }
+  if (!merged.some((p) => p.id === STORYBOARD_OPTIMIZE_DEFAULT_PRESET_ID)) {
+    merged = [
+      ...merged,
+      normalizeCapabilityPreset(getBuiltinStoryboardOptimizePreset(), merged.length),
+    ];
+  }
   return merged.map((p, i) => ({ ...p, order: i }));
 }
 

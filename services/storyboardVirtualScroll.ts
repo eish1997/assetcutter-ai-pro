@@ -1,14 +1,30 @@
 /** 编辑行 gap-2 */
 export const STORYBOARD_EDIT_ROW_GAP_PX = 8;
 
-/** 与 STORYBOARD_ROW min-h ~17.5rem + 工具栏近似 */
-export const STORYBOARD_EDIT_ROW_ESTIMATE_PX = 288;
+/** 镜头编辑卡：高度随内容（实测行高） */
+export const STORYBOARD_EDIT_ROW_ESTIMATE_PX = 360;
 
 /** 大纲单行（缩略图 + 双行文字） */
 export const STORYBOARD_OUTLINE_ROW_ESTIMATE_PX = 42;
 
 /** 网格预览：单卡带宽 + 4:3 图 + 文案区近似 */
 export const STORYBOARD_GRID_BAND_ESTIMATE_PX = 220;
+
+/** 侧栏合成卡：4:3 画幅 + 可变高度文案（实测行高） */
+export const STORYBOARD_COMPOSITE_RAIL_ESTIMATE_PX = 420;
+
+/** 网格按秒数合成：根据组内镜数估算行带高度，避免虚拟列表重叠 */
+export function storyboardGridCompositeBandHeightPx(
+  groups: ReadonlyArray<{ rows: ReadonlyArray<unknown> }>
+): number {
+  const base = STORYBOARD_COMPOSITE_RAIL_ESTIMATE_PX + STORYBOARD_EDIT_ROW_GAP_PX;
+  if (!groups.length) return base;
+  let maxShotBonus = 0;
+  for (const g of groups) {
+    maxShotBonus = Math.max(maxShotBonus, Math.max(0, g.rows.length - 1) * 28);
+  }
+  return base + maxShotBonus;
+}
 
 export const STORYBOARD_VIRTUAL_OVERSCAN = 4;
 
@@ -131,9 +147,84 @@ export function storyboardGridColumnsForWidth(width: number): number {
   return Math.max(1, Math.floor((width + STORYBOARD_EDIT_ROW_GAP_PX) / (184 + STORYBOARD_EDIT_ROW_GAP_PX)));
 }
 
+/** 与 STORYBOARD_EDIT_GRID 的 minmax 列宽对齐 */
+export function storyboardEditGridColumnsForWidth(width: number): number {
+  const gap = STORYBOARD_EDIT_ROW_GAP_PX;
+  if (width >= 1280) return Math.max(1, Math.floor((width + gap) / (320 + gap)));
+  if (width >= 1024) return Math.max(1, Math.floor((width + gap) / (296 + gap)));
+  if (width >= 640) return Math.max(1, Math.floor((width + gap) / (272 + gap)));
+  return Math.max(1, Math.floor((width + gap) / (248 + gap)));
+}
+
 export function storyboardGridBandCount(rowCount: number, columns: number): number {
   if (rowCount <= 0 || columns <= 0) return 0;
   return Math.ceil(rowCount / columns);
+}
+
+export function storyboardBandHeightAt(
+  rowIds: string[],
+  heights: Record<string, number>,
+  band: number,
+  columns: number,
+  estimate: number
+): number {
+  let maxH = estimate;
+  const start = band * columns;
+  for (let c = 0; c < columns; c += 1) {
+    const i = start + c;
+    if (i >= rowIds.length) break;
+    maxH = Math.max(maxH, resolveStoryboardRowHeight(heights, rowIds[i]!, estimate));
+  }
+  return maxH;
+}
+
+export function buildStoryboardBandOffsets(
+  rowIds: string[],
+  heights: Record<string, number>,
+  columns: number,
+  estimate: number,
+  gap: number
+): { bandOffsets: number[]; totalHeight: number } {
+  const cols = Math.max(1, columns);
+  const bandCount = storyboardGridBandCount(rowIds.length, cols);
+  const bandOffsets: number[] = new Array(bandCount);
+  let y = 0;
+  for (let b = 0; b < bandCount; b += 1) {
+    bandOffsets[b] = y;
+    y += storyboardBandHeightAt(rowIds, heights, b, cols, estimate) + gap;
+  }
+  const totalHeight = bandCount > 0 ? Math.max(0, y - gap) : 0;
+  return { bandOffsets, totalHeight };
+}
+
+/** 多列编辑网格：按行带命中当前镜 */
+export function storyboardActiveRowIndexFromGridBands(
+  scrollTop: number,
+  viewportHeight: number,
+  rowCount: number,
+  columns: number,
+  bandOffsets: number[],
+  rowIds: string[],
+  heights: Record<string, number>,
+  estimate: number,
+  gap: number
+): number {
+  if (rowCount <= 0) return -1;
+  const cols = Math.max(1, columns);
+  const probe = scrollTop + viewportHeight * 0.3;
+  const bandCount = storyboardGridBandCount(rowCount, cols);
+  let band = 0;
+  for (let b = 0; b < bandCount; b += 1) {
+    const top = bandOffsets[b] ?? 0;
+    const bottom = top + storyboardBandHeightAt(rowIds, heights, b, cols, estimate);
+    if (probe >= top && probe < bottom) {
+      band = b;
+      break;
+    }
+    if (top <= probe) band = b;
+  }
+  void gap;
+  return Math.min(rowCount - 1, band * cols);
 }
 
 /** 时间轴片段较多时启用 LOD，减少缩略图 DOM */

@@ -1,5 +1,6 @@
-import React from 'react';
-import type { StoryboardTableRow } from '../../types';
+import React, { useMemo } from 'react';
+import type { StoryboardParseFieldDef, StoryboardTableRow } from '../../types';
+import { rowHasStructuredFieldValues, resolveStoryboardParseInput } from '../../services/storyboardTableParse';
 import { resolveStoryboardRowFrameDisplaySrc } from '../../services/storyboardFrameImageUrl';
 import AppIcon from '../ui/AppIcon';
 import { CustomDropdown } from '../ui/CustomDropdown';
@@ -20,10 +21,18 @@ import {
 
 const LAYER_DROPDOWN_Z = { backdrop: 2200, list: 2201 };
 
+function textareaRowsForText(text: string, minRows = 2): number {
+  if (!text.trim()) return minRows;
+  const lines = text.split('\n').length;
+  const wrapped = Math.ceil(text.length / 34);
+  return Math.max(minRows, lines, wrapped);
+}
+
 type Props = {
   row: StoryboardTableRow;
   index: number;
   rowCount: number;
+  fieldCatalog: StoryboardParseFieldDef[];
   active: boolean;
   readOnly: boolean;
   imageBusy: boolean;
@@ -36,6 +45,11 @@ type Props = {
   onPreviewImage: (src: string) => void;
   onImageDrop: (e: React.DragEvent) => void;
   onImagePaste: (e: React.ClipboardEvent) => void;
+  onParseRow?: () => void;
+  parseBusy?: boolean;
+  onOptimizeRow?: () => void;
+  optimizeBusy?: boolean;
+  optimizeDisabledReason?: string;
   redrawBusy?: boolean;
   redrawDisabled?: boolean;
   redrawDisabledReason?: string;
@@ -59,6 +73,7 @@ export default function StoryboardTableRowEditor({
   row,
   index,
   rowCount,
+  fieldCatalog,
   active,
   readOnly,
   imageBusy,
@@ -71,6 +86,11 @@ export default function StoryboardTableRowEditor({
   onPreviewImage,
   onImageDrop,
   onImagePaste,
+  onParseRow,
+  parseBusy = false,
+  onOptimizeRow,
+  optimizeBusy = false,
+  optimizeDisabledReason,
   redrawBusy = false,
   redrawDisabled = false,
   redrawDisabledReason,
@@ -84,10 +104,62 @@ export default function StoryboardTableRowEditor({
     active ? STORYBOARD_ROW_ACTIVE : STORYBOARD_ROW_IDLE
   }`;
 
+  const patchField = (fieldId: string, value: string) => {
+    onPatch({ shotFields: { ...row.shotFields, [fieldId]: value } });
+  };
+
+  const parseInput = useMemo(
+    () => resolveStoryboardParseInput(row, fieldCatalog),
+    [row, fieldCatalog]
+  );
+  const parseHardDisabled = readOnly || parseBusy || row.locked;
+  const parseNeedsInput = !parseInput.trim();
+  const optimizeDisabled =
+    readOnly ||
+    optimizeBusy ||
+    row.locked ||
+    fieldCatalog.length === 0 ||
+    !rowHasStructuredFieldValues(fieldCatalog, row) ||
+    parseBusy;
+
+  const renderField = (def: StoryboardParseFieldDef) => {
+    const value = row.shotFields[def.id] ?? '';
+    const isMultiline = def.kind === 'multiline';
+    return (
+      <label key={def.id} className="block">
+        <span className={STORYBOARD_LABEL}>{def.label}</span>
+        {isMultiline ? (
+          <textarea
+            value={value}
+            readOnly={readOnly}
+            onChange={(e) => patchField(def.id, e.target.value)}
+            onMouseDown={stopInputFocusBubble}
+            onFocus={stopInputFocusBubble}
+            rows={textareaRowsForText(value, 2)}
+            className={`${STORYBOARD_FIELD_INPUT} resize-y leading-relaxed`}
+          />
+        ) : (
+          <input
+            value={value}
+            readOnly={readOnly}
+            onChange={(e) => patchField(def.id, e.target.value)}
+            onMouseDown={stopInputFocusBubble}
+            onFocus={stopInputFocusBubble}
+            className={STORYBOARD_FIELD_INPUT}
+          />
+        )}
+      </label>
+    );
+  };
+
   return (
-    <article id={domId} className={`${shell} ${STORYBOARD_SCROLL_MT}`} onFocusCapture={onFocusRow}>
+    <article
+      id={domId}
+      className={`${shell} ${STORYBOARD_SCROLL_MT} flex w-full min-w-0 flex-col`}
+      onFocusCapture={onFocusRow}
+    >
       <div
-        className={`flex flex-wrap items-center border-b border-white/[0.05] ${STORYBOARD_PAD_ROW_BAR} ${STORYBOARD_GAP_INNER}`}
+        className={`flex shrink-0 flex-wrap items-center border-b border-white/[0.05] ${STORYBOARD_PAD_ROW_BAR} ${STORYBOARD_GAP_INNER}`}
       >
         <span className="inline-flex h-7 min-w-[1.75rem] items-center justify-center rounded-lg bg-violet-500/15 text-[10px] font-bold text-violet-200/95 ring-1 ring-violet-400/20">
           {index + 1}
@@ -95,10 +167,52 @@ export default function StoryboardTableRowEditor({
         <span className="text-[11px] font-semibold text-gray-200">镜头 {shotLabel}</span>
         {!readOnly ? (
           <div className={`ml-auto flex items-center ${STORYBOARD_GAP_TIGHT}`}>
+            {onParseRow ? (
+              <button
+                type="button"
+                title={
+                  row.locked
+                    ? '已锁定'
+                    : parseNeedsInput
+                      ? '请先填写原文或结构化字段'
+                      : '结构化解析'
+                }
+                aria-label={parseBusy ? '解析中' : '解析本镜'}
+                disabled={parseHardDisabled}
+                onClick={onParseRow}
+                className={`${STORYBOARD_ROW_ICON_BTN} ${
+                  parseBusy
+                    ? 'bg-violet-600/25 text-violet-200 ring-1 ring-violet-400/30'
+                    : parseHardDisabled || parseNeedsInput
+                      ? 'text-gray-600'
+                      : 'text-violet-300 hover:bg-violet-500/15 hover:text-violet-100'
+                }`}
+              >
+                <AppIcon name="edit" className={`h-3.5 w-3.5 ${parseBusy ? 'animate-pulse' : ''}`} />
+              </button>
+            ) : null}
+            {onOptimizeRow ? (
+              <button
+                type="button"
+                title={optimizeDisabledReason || (row.locked ? '已锁定' : '结构化优化')}
+                aria-label={optimizeBusy ? '优化中' : '优化本镜'}
+                disabled={optimizeDisabled}
+                onClick={onOptimizeRow}
+                className={`${STORYBOARD_ROW_ICON_BTN} ${
+                  optimizeBusy
+                    ? 'bg-amber-600/25 text-amber-200 ring-1 ring-amber-400/30'
+                    : optimizeDisabled
+                      ? 'text-gray-600'
+                      : 'text-amber-300 hover:bg-amber-500/15 hover:text-amber-100'
+                }`}
+              >
+                <AppIcon name="star" className={`h-3.5 w-3.5 ${optimizeBusy ? 'animate-pulse' : ''}`} />
+              </button>
+            ) : null}
             {onRedraw ? (
               <button
                 type="button"
-                title={redrawDisabledReason || '根据镜头文本重绘分镜图'}
+                title={redrawDisabledReason || '根据结构化字段重绘分镜图'}
                 aria-label={redrawBusy ? '生成中' : '重绘'}
                 disabled={redrawDisabled || redrawBusy}
                 onClick={onRedraw}
@@ -164,11 +278,72 @@ export default function StoryboardTableRowEditor({
         ) : null}
       </div>
 
-      <div
-        className={`grid lg:grid-cols-[minmax(0,1fr)_min(16rem,34%)] lg:items-start ${STORYBOARD_PAD_CARD} ${STORYBOARD_GAP_INNER}`}
-      >
-        <div className={`min-w-0 ${STORYBOARD_GAP_INNER} flex flex-col`}>
-          <div className={`grid max-w-sm grid-cols-2 ${STORYBOARD_GAP_INNER}`}>
+      <div className={`${STORYBOARD_PAD_CARD} ${STORYBOARD_GAP_INNER} flex flex-col`}>
+          <div className="min-w-0">
+            <span className={STORYBOARD_LABEL}>分镜图</span>
+            <div
+              className={`relative aspect-video w-full overflow-hidden rounded-xl ring-1 ring-white/[0.08] ${
+                imageBusy ? 'opacity-60' : ''
+              }`}
+              onDragOver={(e) => {
+                if (readOnly) return;
+                e.preventDefault();
+              }}
+              onDrop={(e) => {
+                if (readOnly) return;
+                onImageDrop(e);
+              }}
+              onPaste={(e) => {
+                if (readOnly) return;
+                onImagePaste(e);
+              }}
+            >
+              {img ? (
+                <button type="button" className="block h-full w-full" onClick={() => onPreviewImage(img)}>
+                  <img
+                    src={img}
+                    alt=""
+                    className="h-full w-full object-contain bg-black/25"
+                    draggable={false}
+                  />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  disabled={readOnly || imageBusy}
+                  onClick={onPickImage}
+                  className="flex h-full w-full flex-col items-center justify-center gap-1 bg-black/25 text-[10px] text-gray-500 transition-colors hover:text-violet-200/90 disabled:cursor-not-allowed"
+                >
+                  {imageBusy ? '处理中…' : '点击或拖入图片'}
+                </button>
+              )}
+              {imageBusy ? (
+                <div className="absolute inset-0 flex items-center justify-center bg-black/40 text-[10px] text-gray-300">
+                  压缩入库…
+                </div>
+              ) : null}
+            </div>
+            {!readOnly && img ? (
+              <div className={`mt-1 flex ${STORYBOARD_GAP_INNER}`}>
+                <button
+                  type="button"
+                  onClick={onPickImage}
+                  className="text-[10px] text-gray-500 hover:text-gray-200"
+                >
+                  替换
+                </button>
+                <button
+                  type="button"
+                  onClick={onClearImage}
+                  className="text-[10px] text-gray-500 hover:text-red-300"
+                >
+                  清除
+                </button>
+              </div>
+            ) : null}
+          </div>
+
+          <div className={`grid grid-cols-2 ${STORYBOARD_GAP_INNER}`}>
             <label className="block">
               <span className={STORYBOARD_LABEL}>镜头号</span>
               <input
@@ -200,6 +375,7 @@ export default function StoryboardTableRowEditor({
               </div>
             </label>
           </div>
+
           {timelineLayerCount > 1 ? (
             <label className="block max-w-[10rem]">
               <span className={STORYBOARD_LABEL}>时间轴轨道</span>
@@ -220,79 +396,37 @@ export default function StoryboardTableRowEditor({
               />
             </label>
           ) : null}
+
           <label className="block">
-            <span className={STORYBOARD_LABEL}>镜头文本</span>
+            <span className={STORYBOARD_LABEL}>原文</span>
             <textarea
-              value={row.shotText}
+              value={row.shotRaw ?? ''}
               readOnly={readOnly}
-              onChange={(e) => onPatch({ shotText: e.target.value })}
+              onChange={(e) => onPatch({ shotRaw: e.target.value })}
               onMouseDown={stopInputFocusBubble}
               onFocus={stopInputFocusBubble}
-              rows={3}
-              className={`${STORYBOARD_FIELD_INPUT} min-h-[4.25rem] resize-y leading-relaxed`}
-              placeholder="画面、动作、对白…"
+              rows={textareaRowsForText(row.shotRaw ?? '', 2)}
+              className={`${STORYBOARD_FIELD_INPUT} resize-y leading-relaxed`}
+              placeholder="粘贴或输入分镜原文，然后点解析…"
             />
           </label>
-        </div>
 
-        <div className="min-w-0">
-          <span className={STORYBOARD_LABEL}>分镜图</span>
-          <div
-            className={`relative aspect-video overflow-hidden rounded-xl ring-1 ring-white/[0.08] ${
-              imageBusy ? 'opacity-60' : ''
-            }`}
-            onDragOver={(e) => {
-              if (readOnly) return;
-              e.preventDefault();
-            }}
-            onDrop={(e) => {
-              if (readOnly) return;
-              onImageDrop(e);
-            }}
-            onPaste={(e) => {
-              if (readOnly) return;
-              onImagePaste(e);
-            }}
-          >
-            {img ? (
-              <button type="button" className="block h-full w-full" onClick={() => onPreviewImage(img)}>
-                <img src={img} alt="" className="h-full w-full object-cover" draggable={false} />
-              </button>
-            ) : (
-              <button
-                type="button"
-                disabled={readOnly || imageBusy}
-                onClick={onPickImage}
-                className="flex h-full w-full flex-col items-center justify-center gap-1 bg-black/25 text-[10px] text-gray-500 transition-colors hover:text-violet-200/90 disabled:cursor-not-allowed"
-              >
-                {imageBusy ? '处理中…' : '点击或拖入图片'}
-              </button>
-            )}
-            {imageBusy ? (
-              <div className="absolute inset-0 flex items-center justify-center bg-black/40 text-[10px] text-gray-300">
-                压缩入库…
-              </div>
-            ) : null}
-          </div>
-          {!readOnly && img ? (
-            <div className={`mt-1 flex ${STORYBOARD_GAP_INNER}`}>
-              <button
-                type="button"
-                onClick={onPickImage}
-                className="text-[10px] text-gray-500 hover:text-gray-200"
-              >
-                替换
-              </button>
-              <button
-                type="button"
-                onClick={onClearImage}
-                className="text-[10px] text-gray-500 hover:text-red-300"
-              >
-                清除
-              </button>
+          {fieldCatalog.length > 0 ? (
+            <div className={`${STORYBOARD_GAP_INNER} flex flex-col`}>
+              {fieldCatalog.map(renderField)}
             </div>
-          ) : null}
-        </div>
+          ) : (
+            <p className="text-[10px] text-gray-600">
+              填写原文后点「解析」，字段将在此显示。
+            </p>
+          )}
+
+          <div className="rounded-xl ring-1 ring-white/[0.05]">
+            <span className={`${STORYBOARD_LABEL} px-3 pt-2`}>编译预览</span>
+            <pre className="whitespace-pre-wrap break-words px-3 pb-3 pt-1 text-[10px] leading-relaxed text-gray-500">
+              {(row.shotText || '').trim() || '（解析或编辑字段后自动生成）'}
+            </pre>
+          </div>
       </div>
     </article>
   );
