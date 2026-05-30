@@ -16,6 +16,7 @@ export type StoryboardRowInteractionValue = {
   removeRow: (rowId: string) => void;
   openFileForRow: (rowId: string) => void;
   clearRowImage: (rowId: string) => void;
+  restoreFrameVersion: (rowId: string, versionId: string) => void;
   assignFrameImageFromDrop: (rowId: string, e: React.DragEvent) => void;
   assignFrameImageFromPaste: (rowId: string, e: React.ClipboardEvent) => void;
   runRedraw: (rowId: string) => void;

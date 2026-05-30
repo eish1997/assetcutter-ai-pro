@@ -5,6 +5,7 @@ import {
   compileSheetRedrawPrompt,
   planStoryboardSheetGenTasks,
   resolveSheetGenSourceRows,
+  resolveStoryboardSheetGridDimensions,
   sheetGenTaskCount,
 } from '../services/storyboardTableSheetGen';
 
@@ -42,16 +43,24 @@ describe('storyboardTableSheetGen', () => {
     expect(tasks[2]?.rowIds).toEqual(['r4']);
   });
 
-  it('compiles multi-shot sheet prompt', () => {
+  it('compiles multi-shot sheet prompt with compact layout', () => {
     const rows = [
       row({ shotNo: 'SC01', shotFields: { f_visual: '夜景', f_size: '远景' } }),
       row({ shotNo: 'SC02', shotFields: { f_visual: '办公室' } }),
     ];
     const prompt = compileSheetRedrawPrompt(rows, catalog, { promptExtra: '电影感' });
     expect(prompt.startsWith('电影感')).toBe(true);
+    expect(prompt).toContain('【拼图排版·紧凑】');
+    expect(prompt).toContain('2 列 × 2 行');
     expect(prompt).toContain('--- SC01 ---');
-    expect(prompt).toContain('【画面内容】夜景');
+    expect(prompt).toContain('顶栏：SC01 | 远景');
+    expect(prompt).toContain('画面：夜景');
     expect(prompt).not.toContain('contact sheet');
+  });
+
+  it('resolves compact grid dimensions', () => {
+    expect(resolveStoryboardSheetGridDimensions(7)).toEqual({ cols: 3, rows: 3 });
+    expect(resolveStoryboardSheetGridDimensions(12)).toEqual({ cols: 4, rows: 3 });
   });
 
   it('falls back to bulk draft when table rows lack prompts', () => {

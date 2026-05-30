@@ -1,15 +1,15 @@
 /** 分镜表面板统一间距（三栏 / 卡片 / 表头） */
 export const STORYBOARD_GAP_COLS = 'gap-2';
 
-/** 解析页三栏：输入 | 生图 | 解析预览 */
+/** 解析页三栏：输入 | 生图 | 解析预览（含数据合成） */
 export const STORYBOARD_INPUT_VIEW_GRID =
-  'grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-hidden lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_17.5rem] xl:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)_19rem]';
+  'grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-hidden lg:grid-cols-[minmax(0,1fr)_minmax(0,0.95fr)_minmax(18rem,22rem)] xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(20rem,24rem)]';
 
 export const STORYBOARD_INPUT_COLUMN_SHELL =
   'flex min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-white/[0.08] bg-black/20';
 
 export const STORYBOARD_INPUT_PREVIEW_RAIL =
-  'flex min-h-0 min-w-0 max-w-full flex-col overflow-hidden lg:max-w-[17.5rem] xl:max-w-[19rem]';
+  'flex min-h-0 min-w-0 max-w-full flex-col overflow-hidden lg:max-w-none';
 
 export const STORYBOARD_GRID_ROOT = `grid min-h-0 min-w-0 flex-1 grid-cols-[14.625rem_minmax(0,1fr)] items-stretch ${STORYBOARD_GAP_COLS}`;
 export const STORYBOARD_GRID_EDITOR_PREVIEW = `grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)_auto] items-stretch ${STORYBOARD_GAP_COLS}`;
@@ -120,3 +120,11 @@ export const STORYBOARD_VIDEO_ICON_BTN_NEUTRAL =
 
 export const STORYBOARD_LABEL =
   'mb-0.5 block text-[9px] font-medium text-gray-500';
+
+/** @deprecated 使用 resolveStoryboardSheetCellFontSize(meta, canvasWidth) */
+export function storyboardSheetCellFontSize(canvasWidth?: number): string {
+  if (canvasWidth && canvasWidth > 0) {
+    return `${Math.max(8, Math.min(14, Math.round(canvasWidth * 0.011)))}px`;
+  }
+  return 'clamp(8px, 1.6vw, 13px)';
+}

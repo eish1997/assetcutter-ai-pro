@@ -112,6 +112,62 @@ export default function StoryboardFrameCompositeCard({
   const mergeFailed = Boolean(mergedPreview && mergeStatus === 'failed');
   const locked = showLocked ?? row.locked;
 
+  if (compact && !mergedPreview) {
+    return (
+      <article
+        id={domId ?? storyboardCompositeDomId(row.id)}
+        className={`scroll-mt-2 flex w-full min-w-0 flex-col overflow-hidden transition-colors ${storyboardPanelCardTone(active)}`}
+      >
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={onSelect}
+          onDoubleClick={
+            onOpenInEditor
+              ? (e) => {
+                  e.preventDefault();
+                  onOpenInEditor();
+                }
+              : undefined
+          }
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              onSelect?.();
+            }
+          }}
+          title={onOpenInEditor ? '双击进入编辑' : title}
+          className="relative cursor-pointer overflow-hidden border-2 border-black bg-white text-left outline-none focus-visible:ring-2 focus-visible:ring-violet-500/35 focus-visible:ring-inset"
+        >
+          {img ? (
+            <>
+              <img
+                src={img}
+                alt=""
+                className="block w-full shrink-0 leading-none"
+                draggable={false}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onPreviewImage?.(img);
+                }}
+              />
+              <span className="pointer-events-none absolute left-0 top-0 bg-black/80 px-1.5 py-0.5 text-[10px] font-bold leading-none text-white tabular-nums">
+                {title}
+              </span>
+            </>
+          ) : (
+            <div className="relative flex min-h-[3.5rem] items-center justify-center bg-[#f3f3f5] px-1 py-2 text-center text-[10px] text-gray-500">
+              <span className="absolute left-0 top-0 bg-black/80 px-1.5 py-0.5 text-[10px] font-bold leading-none text-white tabular-nums">
+                {title}
+              </span>
+              {pendingMerge ? '合成预览生成中…' : mergeFailed ? '合成预览失败' : '待配图'}
+            </div>
+          )}
+        </div>
+      </article>
+    );
+  }
+
   return (
     <article
       id={domId ?? storyboardCompositeDomId(row.id)}

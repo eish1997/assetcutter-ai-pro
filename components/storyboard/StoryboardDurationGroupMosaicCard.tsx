@@ -121,7 +121,7 @@ function StoryboardDurationGroupMosaicCard({
         ) : null}
       </div>
       <div
-        className="grid gap-1.5 p-1.5"
+        className="grid auto-rows-min gap-1.5 p-1.5"
         style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
       >
         {group.rows.map((row) => (

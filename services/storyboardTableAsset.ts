@@ -8,6 +8,7 @@ import {
   STORYBOARD_PARSE_DEFAULT_PRESET_ID,
   STORYBOARD_OPTIMIZE_DEFAULT_PRESET_ID,
 } from './storyboardTableParse';
+import { normalizeStoryboardFrameHistory } from './storyboardFrameHistory';
 import { clampStoryboardRowTimelineLayer, resolveStoryboardTimelineLayerCount } from './storyboardVideoTimeline';
 
 const rowId = () => Math.random().toString(36).slice(2, 11);
@@ -35,6 +36,7 @@ export function createStoryboardTableRow(partial?: Partial<StoryboardTableRow>, 
     frameImage: partial?.frameImage,
     frameImageObjectKey: partial?.frameImageObjectKey,
     frameImageCompanionKey: partial?.frameImageCompanionKey,
+    frameImageHistory: partial?.frameImageHistory,
     locked: Boolean(partial?.locked),
     timelineLayer: normalizeTimelineLayer(partial?.timelineLayer ?? 0),
   };
@@ -115,6 +117,7 @@ export function normalizeStoryboardTableDoc(raw: unknown): StoryboardTableDoc {
               frameImage: String(row.frameImage || '').trim() || undefined,
               frameImageObjectKey: String(row.frameImageObjectKey || '').trim() || undefined,
               frameImageCompanionKey: String(row.frameImageCompanionKey || '').trim() || undefined,
+              frameImageHistory: normalizeStoryboardFrameHistory(row.frameImageHistory),
               locked: Boolean(row.locked),
               timelineLayer: normalizeTimelineLayer(row.timelineLayer ?? 0),
             },

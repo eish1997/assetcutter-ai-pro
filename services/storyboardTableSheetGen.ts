@@ -106,8 +106,12 @@ export function compileSheetRedrawPrompt(
   const extra = (opts?.promptExtra || '').trim();
   if (extra) parts.push(extra);
 
+  if (rows.length > 0) {
+    parts.push(buildStoryboardSheetLayoutPrompt(rows.length));
+  }
+
   rows.forEach((row, index) => {
-    const body = compileRedrawPrompt(row, catalog).trim();
+    const body = compileSheetShotCompactBlock(row, catalog);
     if (!body) return;
     const label = row.shotNo?.trim() || `镜头 ${index + 1}`;
     parts.push(`--- ${label} ---\n${body}`);
@@ -119,6 +123,275 @@ export function compileSheetRedrawPrompt(
 export function sheetGenTaskCount(shotCount: number, shotsPerSheet: number): number {
   if (shotCount <= 0) return 0;
   return Math.ceil(shotCount / normalizeShotsPerSheet(shotsPerSheet));
+}
+
+/** 拼图列数：偏多列，减少单格高度与底部留白 */
+export function resolveStoryboardSheetGridDimensions(shotCount: number): { cols: number; rows: number } {
+  if (shotCount <= 0) return { cols: 1, rows: 1 };
+  if (shotCount === 1) return { cols: 1, rows: 1 };
+  if (shotCount <= 4) return { cols: 2, rows: 2 };
+  if (shotCount <= 6) return { cols: 3, rows: 2 };
+  if (shotCount <= 9) return { cols: 3, rows: 3 };
+  if (shotCount <= 12) return { cols: 4, rows: 3 };
+  if (shotCount <= 16) return { cols: 4, rows: 4 };
+  if (shotCount <= 20) return { cols: 5, rows: 4 };
+  const cols = 5;
+  return { cols, rows: Math.ceil(shotCount / cols) };
+}
+
+export function buildStoryboardSheetLayoutPrompt(shotCount: number): string {
+  const { cols, rows } = resolveStoryboardSheetGridDimensions(shotCount);
+  return [
+    '【拼图排版·紧凑】',
+    `整张图为 ${cols} 列 × ${rows} 行分镜表拼图，必须画满 ${shotCount} 格，格与格之间细线分隔，外边距窄，禁止大块空白背景。`,
+    '每一格自上而下三段，高度比例约 顶 8% / 中 62% / 底 30%，禁止预留空白文字区：',
+    '1. 顶栏：单行小字，镜号 | 景别 | 角度 | 运镜 | 时长（与下方镜头数据一致，字号小、行距紧）',
+    '2. 中间：分镜草图/插画（主体，尽量占满中段，不要四周大留白）',
+    '3. 底栏：画面描述一行；对白一行（无对白写「对白：-」），小字、最多两行，不要留空黑条',
+    '镜号必须与下列各镜一致；按行列顺序从左到右、从上到下排列。',
+  ].join('\n');
+}
+
+const SHEET_HEADER_SHOT_SCALE_RE = /景别/i;
+const SHEET_HEADER_DURATION_RE = /时长/i;
+const SHEET_VISUAL_FIELD_RE = /画面|内容|描述|动作/i;
+const SHEET_DIALOGUE_FIELD_RE = /对白|旁白|台词|声音|音效/i;
+/** 常见短元信息字段（无标题、合并一行） */
+const SHEET_SHORT_META_LABEL_RE =
+  /景别|角度|运镜|机位|焦距|构图|镜别|升降|摇|移|跟|推拉|旋|俯|仰|拍法|镜头类型/i;
+/** 较长补充信息，不进短元信息行 */
+const SHEET_SUPPLEMENTAL_LABEL_RE =
+  /光影|服化|道具|化妆|妆造|备注|说明|设计|氛围|色调|声音|特效/i;
+
+const SHEET_COMPACT_VALUE_MAX_LEN = 12;
+
+function normalizeSheetInlineText(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+function isSheetShortMetaField(label: string, value: string): boolean {
+  if (SHEET_HEADER_DURATION_RE.test(label)) return false;
+  if (SHEET_VISUAL_FIELD_RE.test(label)) return false;
+  if (SHEET_DIALOGUE_FIELD_RE.test(label)) return false;
+  if (SHEET_SUPPLEMENTAL_LABEL_RE.test(label)) return false;
+  if (SHEET_SHORT_META_LABEL_RE.test(label)) return true;
+  return normalizeSheetInlineText(value).length <= SHEET_COMPACT_VALUE_MAX_LEN;
+}
+
+function isSheetDescriptionField(label: string): boolean {
+  return SHEET_VISUAL_FIELD_RE.test(label) || label === '原文';
+}
+
+export type SheetShotPanelCompactLayout = {
+  /** 镜号 | 时长 */
+  headerLine: string;
+  /** 短元信息（无标题），如「大远景 · 平视 · 固定」 */
+  metaLine: string;
+  /** 主画面描述 */
+  description: string;
+  /** 其余较长字段，仅值、无标题，DOM 双列 */
+  extraLines: SheetShotPanelCompactExtra[];
+};
+
+export type SheetShotPanelCompactExtra = {
+  text: string;
+  dialogue?: boolean;
+};
+
+function isSheetPlaceholder(value: string): boolean {
+  const t = value.trim();
+  return !t || t === '-' || t === '—' || t === '–' || t === '无';
+}
+
+export type SheetShotPanelFieldLine = {
+  label: string;
+  value: string;
+};
+
+export type SheetShotPanelMeta = {
+  headerLine: string;
+  visualLine: string;
+  dialogueLine: string;
+  /** catalog 内全部非空字段（含对白等 redrawInclude:false） */
+  fieldLines: SheetShotPanelFieldLine[];
+  compactLayout: SheetShotPanelCompactLayout;
+};
+
+function resolveSheetPanelDurationLabel(
+  row: StoryboardTableRow,
+  fieldLines: SheetShotPanelFieldLine[]
+): string {
+  for (const line of fieldLines) {
+    if (SHEET_HEADER_DURATION_RE.test(line.label)) {
+      return normalizeSheetInlineText(line.value);
+    }
+  }
+  if (row.durationSec != null && Number.isFinite(row.durationSec)) {
+    const sec = row.durationSec;
+    return Number.isInteger(sec) ? `${sec}s` : `${sec.toFixed(1)}s`;
+  }
+  return '';
+}
+
+/** 紧凑排版：顶栏镜号+时长，短字段一行，描述固定，其余双列 */
+export function compileSheetShotPanelCompactLayout(
+  row: StoryboardTableRow,
+  fieldLines: SheetShotPanelFieldLine[]
+): SheetShotPanelCompactLayout {
+  const shotNo = (row.shotNo || '').trim();
+  const durationLabel = resolveSheetPanelDurationLabel(row, fieldLines);
+  const headerParts = [shotNo, durationLabel].filter(Boolean);
+  const headerLine = headerParts.join(' | ');
+
+  const pool = fieldLines.filter((line) => !SHEET_HEADER_DURATION_RE.test(line.label));
+  const descriptionParts: string[] = [];
+  for (let i = pool.length - 1; i >= 0; i -= 1) {
+    const line = pool[i]!;
+    if (isSheetDescriptionField(line.label)) {
+      descriptionParts.unshift(normalizeSheetInlineText(line.value));
+      pool.splice(i, 1);
+    }
+  }
+  let description = descriptionParts.filter(Boolean).join('；');
+  if (!description) {
+    let bestIdx = -1;
+    let bestLen = 0;
+    pool.forEach((line, idx) => {
+      if (SHEET_DIALOGUE_FIELD_RE.test(line.label)) return;
+      const len = normalizeSheetInlineText(line.value).length;
+      if (len > bestLen) {
+        bestLen = len;
+        bestIdx = idx;
+      }
+    });
+    if (bestIdx >= 0 && bestLen > SHEET_COMPACT_VALUE_MAX_LEN) {
+      description = normalizeSheetInlineText(pool[bestIdx]!.value);
+      pool.splice(bestIdx, 1);
+    }
+  }
+
+  const metaValues: string[] = [];
+  const extraLines: SheetShotPanelCompactExtra[] = [];
+  for (const line of pool) {
+    const value = normalizeSheetInlineText(line.value);
+    if (!value) continue;
+    if (isSheetShortMetaField(line.label, value)) {
+      metaValues.push(value);
+    } else {
+      const entry: SheetShotPanelCompactExtra = { text: value };
+      if (SHEET_DIALOGUE_FIELD_RE.test(line.label)) entry.dialogue = true;
+      extraLines.push(entry);
+    }
+  }
+
+  if (!description) {
+    const shotText = normalizeSheetInlineText(row.shotText || '');
+    if (shotText) description = shotText;
+  }
+
+  return {
+    headerLine,
+    metaLine: metaValues.join(' · '),
+    description,
+    extraLines,
+  };
+}
+
+/** 收集镜头全部非空结构化字段（catalog 顺序，空值跳过） */
+export function compileSheetShotPanelFieldLines(
+  row: StoryboardTableRow,
+  catalog: StoryboardParseFieldDef[]
+): SheetShotPanelFieldLine[] {
+  const lines: SheetShotPanelFieldLine[] = [];
+  let hasDurationField = false;
+
+  for (const def of [...catalog].sort((a, b) => a.order - b.order)) {
+    const label = def.label.trim();
+    const value = String(row.shotFields[def.id] || '').trim();
+    if (SHEET_HEADER_DURATION_RE.test(label) && !isSheetPlaceholder(value)) {
+      hasDurationField = true;
+    }
+    if (isSheetPlaceholder(value)) continue;
+    lines.push({ label, value });
+  }
+
+  if (
+    !hasDurationField &&
+    row.durationSec != null &&
+    Number.isFinite(row.durationSec)
+  ) {
+    lines.push({ label: '时长', value: `${row.durationSec}s` });
+  }
+
+  if (!lines.length) {
+    const shotText = (row.shotText || '').trim();
+    if (shotText) lines.push({ label: '原文', value: shotText });
+  }
+
+  return lines;
+}
+
+/** 单镜紧凑字段块（供拼图生图，避免冗长换行撑高格子） */
+export function compileSheetShotPanelMeta(
+  row: StoryboardTableRow,
+  catalog: StoryboardParseFieldDef[]
+): SheetShotPanelMeta {
+  const fieldLines = compileSheetShotPanelFieldLines(row, catalog);
+  const compactLayout = compileSheetShotPanelCompactLayout(row, fieldLines);
+  const shotNo = (row.shotNo || '').trim();
+
+  let visual = '';
+  let dialogue = '';
+
+  for (const def of [...catalog].sort((a, b) => a.order - b.order)) {
+    if (!def.redrawInclude) continue;
+    const value = String(row.shotFields[def.id] || '').trim();
+    if (isSheetPlaceholder(value)) continue;
+    const label = def.label.trim();
+    if (SHEET_DIALOGUE_FIELD_RE.test(label)) {
+      dialogue = value;
+    } else if (SHEET_VISUAL_FIELD_RE.test(label)) {
+      visual = visual ? `${visual}；${value}` : value;
+    }
+  }
+
+  if (!visual && fieldLines.length <= 1 && shotNo) {
+    const fallback = compileRedrawPrompt(row, catalog).trim();
+    if (fallback) visual = fallback.replace(/\n+/g, ' ');
+  }
+
+  return {
+    headerLine: compactLayout.headerLine || shotNo,
+    visualLine: visual.replace(/\s+/g, ' '),
+    dialogueLine:
+      dialogue && !isSheetPlaceholder(dialogue) ? dialogue.replace(/\s+/g, ' ') : '-',
+    fieldLines,
+    compactLayout,
+  };
+}
+
+function compactSheetPanelMetaLine(text: string, maxLen: number): string {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxLen) return normalized;
+  return normalized.slice(0, maxLen);
+}
+
+export function compileSheetShotCompactBlock(
+  row: StoryboardTableRow,
+  catalog: StoryboardParseFieldDef[]
+): string {
+  const meta = compileSheetShotPanelMeta(row, catalog);
+  const lines: string[] = [];
+  if (meta.headerLine) lines.push(`顶栏：${meta.headerLine}`);
+  if (meta.visualLine) lines.push(`画面：${compactSheetPanelMetaLine(meta.visualLine, 120)}`);
+  lines.push(
+    `对白：${
+      meta.dialogueLine === '-'
+        ? meta.dialogueLine
+        : compactSheetPanelMetaLine(meta.dialogueLine, 48)
+    }`
+  );
+  return lines.join('\n');
 }
 
 export function listStoryboardSheetGenPresets(presets: CustomAppModule[]): CustomAppModule[] {

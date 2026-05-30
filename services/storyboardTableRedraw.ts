@@ -56,7 +56,7 @@ async function resolveRowFrameImage(
   return { ok: false, error: '参考图无法加载，请在本镜重新上传' };
 }
 
-async function resolveStoryboardRowFrameDataUrl(
+export async function resolveStoryboardRowFrameDataUrl(
   row: StoryboardTableRow,
   companionBaseUrl: string,
   companionProjectId: string

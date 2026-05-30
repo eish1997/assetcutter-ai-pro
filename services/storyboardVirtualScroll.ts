@@ -22,7 +22,7 @@ export function storyboardGridMosaicGroupEstimatePx(
 ): number {
   const header = 40;
   const pad = 12;
-  const cellEstimate = compact ? 108 : 280;
+  const cellEstimate = compact ? 72 : 280;
   const gap = compact ? 6 : 8;
   const { rows } = computeStoryboardMosaicGrid(rowCount);
   return header + pad + rows * cellEstimate + Math.max(0, rows - 1) * gap;
@@ -34,7 +34,7 @@ export function storyboardGridCompositeBandHeightPx(
   compact = false
 ): number {
   if (!groups.length) return 360 + STORYBOARD_EDIT_ROW_GAP_PX;
-  let maxH = compact ? 200 : 360;
+  let maxH = compact ? 140 : 360;
   for (const g of groups) {
     maxH = Math.max(maxH, storyboardGridMosaicGroupEstimatePx(g.rows.length, compact));
   }

@@ -6,27 +6,18 @@ import React, {
   useState,
 } from 'react';
 import type { CustomAppModule, StoryboardParseFieldDef, StoryboardTableRow } from '../../types';
-import {
-  computeStoryboardInputCoverage,
-  storyboardInputPreviewFieldLines,
-} from '../../services/storyboardTableInput';
-import { rowHasStructuredFieldValues } from '../../services/storyboardTableParse';
-import { storyboardRowHasFrameRef } from '../../services/storyboardFrameImageUrl';
-import { storyboardRowOutlineTitle } from './storyboardRowDisplay';
+import { computeStoryboardInputCoverage } from '../../services/storyboardTableInput';
 import { storyboardInputRowDomId } from './storyboardTableDom';
 import StoryboardTableBulkInput from './StoryboardTableBulkInput';
 import StoryboardTableSheetGen from './StoryboardTableSheetGen';
+import { StoryboardInputCompositePreview } from './StoryboardSheetDomPreview';
 import type { StoryboardSheetGenBatchRequest } from '../../services/storyboardTableSheetGen';
 import type { StoryboardSheetPreviewItem } from '../../services/storyboardSheetPreview';
 import {
-  STORYBOARD_BODY_SCROLL,
-  STORYBOARD_GAP_STACK,
   STORYBOARD_INPUT_COLUMN_SHELL,
   STORYBOARD_INPUT_PREVIEW_RAIL,
   STORYBOARD_INPUT_VIEW_GRID,
   STORYBOARD_PAD_PANEL,
-  STORYBOARD_ROW_ACTIVE,
-  STORYBOARD_ROW_IDLE,
   STORYBOARD_STAT_CHIP,
 } from './storyboardTableUi';
 
@@ -158,65 +149,13 @@ const StoryboardTableInputView = forwardRef<StoryboardTableInputViewHandle, Prop
               <span className={STORYBOARD_STAT_CHIP}>图 {coverage.withImage}</span>
             </div>
           </div>
-          <div className={`${STORYBOARD_BODY_SCROLL} flex-1 px-1.5 py-1.5`}>
-            {rows.length === 0 ? (
-              <p className="py-8 text-center text-[11px] text-gray-600">导入后将在此展示结构化字段</p>
-            ) : (
-              <div className={`flex flex-col ${STORYBOARD_GAP_STACK}`}>
-                {rows.map((row) => {
-                  const active = row.id === activeRowId;
-                  const title = storyboardRowOutlineTitle(row, row.index);
-                  const parsed = rowHasStructuredFieldValues(fieldCatalog, row);
-                  const lines = storyboardInputPreviewFieldLines(row, fieldCatalog, 2);
-                  const hasImage = storyboardRowHasFrameRef(row);
-                  return (
-                    <button
-                      key={row.id}
-                      id={storyboardInputRowDomId(row.id)}
-                      type="button"
-                      onClick={() => onActiveRowIdChange(row.id)}
-                      className={`w-full rounded-xl border px-2 py-1.5 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 ${
-                        active ? STORYBOARD_ROW_ACTIVE : STORYBOARD_ROW_IDLE
-                      }`}
-                    >
-                      <div className="mb-1 flex flex-wrap items-center gap-1">
-                        <span className="text-[10px] font-bold text-white/95">{title}</span>
-                        {parsed ? (
-                          <span className="rounded bg-violet-500/20 px-1 py-px text-[7px] text-violet-100">
-                            析
-                          </span>
-                        ) : (
-                          <span className="rounded bg-white/[0.06] px-1 py-px text-[7px] text-gray-500">
-                            待
-                          </span>
-                        )}
-                        {hasImage ? (
-                          <span className="rounded bg-white/[0.06] px-1 py-px text-[7px] text-gray-400">
-                            图
-                          </span>
-                        ) : null}
-                      </div>
-                      {lines.length ? (
-                        <div className="space-y-0.5">
-                          {lines.map((line) => (
-                            <p
-                              key={`${row.id}-${line.label}`}
-                              className="line-clamp-2 text-[9px] leading-snug text-gray-300"
-                            >
-                              <span className="text-gray-500">{line.label}：</span>
-                              <span className="break-words">{line.value}</span>
-                            </p>
-                          ))}
-                        </div>
-                      ) : (
-                        <p className="text-[9px] text-gray-600">（待解析）</p>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
+          <StoryboardInputCompositePreview
+            rows={rows}
+            fieldCatalog={fieldCatalog}
+            activeRowId={activeRowId}
+            onSelectRow={onActiveRowIdChange}
+            onPreviewImage={onPreviewSheetImage}
+          />
         </section>
       </div>
     );

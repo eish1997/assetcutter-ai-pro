@@ -99,8 +99,8 @@ export default function StoryboardTableSheetGen({
     setLocalRefImage(undefined);
   }, [assetId]);
 
-  const bulkText = bulkDraft.mode === 'tsv' ? bulkDraft.tsvText : bulkDraft.pipeText;
-  const bulkMode: StoryboardBulkTextMode = bulkDraft.mode === 'tsv' ? 'tsv' : 'pipe';
+  const bulkText = bulkDraft.pipeText;
+  const bulkMode: StoryboardBulkTextMode = 'pipe';
 
   const source = useMemo(
     () => resolveSheetGenSourceRows(rows, bulkText, bulkMode, fieldCatalog),
@@ -181,7 +181,7 @@ export default function StoryboardTableSheetGen({
       return;
     }
     if (preset.category === 'image_to_image' && !referenceImage) {
-      onNotify?.('warn', '图生图需上传参考分镜图（左侧分镜图或本区参考图）');
+      onNotify?.('warn', '图生图需上传参考分镜图（本区参考图）');
       return;
     }
 
@@ -263,9 +263,9 @@ export default function StoryboardTableSheetGen({
         </button>
       </div>
 
-      <div className="flex min-h-[12rem] flex-1 flex-col overflow-hidden rounded-xl border border-white/[0.08] bg-black/30">
+      <div className="mb-2 flex min-h-[12rem] flex-1 flex-col overflow-hidden rounded-xl border border-white/[0.08] bg-black/30">
         <div className="flex shrink-0 items-center justify-between gap-2 border-b border-white/[0.06] px-2.5 py-1.5">
-          <span className="text-[10px] font-semibold text-gray-300">拼图预览</span>
+          <span className="text-[10px] font-semibold text-gray-300">AI 拼图</span>
           <div className="flex items-center gap-1.5">
             <input
               ref={sheetUploadRef}
@@ -322,8 +322,8 @@ export default function StoryboardTableSheetGen({
             </div>
           </div>
         ) : (
-          <div className="flex flex-1 items-center justify-center px-3 py-6 text-center text-[10px] text-gray-600">
-            生成或上传拼图后在此预览；切分成功会写入对应镜头
+          <div className="flex flex-1 items-center justify-center px-3 py-4 text-center text-[10px] text-gray-600">
+            AI 手绘拼图：点「执行生图」或「上传拼图」后在此预览与切分回填
           </div>
         )}
 
@@ -379,7 +379,7 @@ export default function StoryboardTableSheetGen({
             value={promptExtra}
             readOnly={readOnly || busy}
             rows={2}
-            placeholder="风格、画幅、手绘分镜表样式等补充说明…"
+            placeholder="手绘风格、画幅比例等；排版已默认紧凑（小字顶栏+底栏、少留白）"
             onChange={(event) => handlePromptChange(event.target.value)}
             className={`${STORYBOARD_FIELD_INPUT} min-h-[3rem] resize-y text-[10px]`}
           />
@@ -403,7 +403,7 @@ export default function StoryboardTableSheetGen({
             </div>
           ) : (
             <p className="mb-1.5 text-[9px] text-gray-600">
-              图生图时使用；优先本区上传，否则使用左侧「分镜图」输入中的图片。
+              图生图时使用；优先本区上传参考图。
             </p>
           )}
           <button

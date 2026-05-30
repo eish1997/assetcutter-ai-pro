@@ -2,6 +2,11 @@ import React, { useMemo } from 'react';
 import type { StoryboardParseFieldDef, StoryboardTableRow } from '../../types';
 import { rowHasStructuredFieldValues, resolveStoryboardParseInput } from '../../services/storyboardTableParse';
 import { resolveStoryboardRowFrameDisplaySrc } from '../../services/storyboardFrameImageUrl';
+import {
+  resolveStoryboardFrameVersionDisplaySrc,
+  storyboardFrameHistorySignature,
+  storyboardFrameVersionLabel,
+} from '../../services/storyboardFrameHistory';
 import AppIcon from '../ui/AppIcon';
 import { CustomDropdown } from '../ui/CustomDropdown';
 import { storyboardRowOutlineTitle } from './storyboardRowDisplay';
@@ -54,6 +59,7 @@ type Props = {
   redrawDisabled?: boolean;
   redrawDisabledReason?: string;
   onRedraw?: () => void;
+  onRestoreFrameVersion?: (versionId: string) => void;
   domId?: string;
   timelineLayerCount?: number;
 };
@@ -95,6 +101,7 @@ export default function StoryboardTableRowEditor({
   redrawDisabled = false,
   redrawDisabledReason,
   onRedraw,
+  onRestoreFrameVersion,
   domId,
   timelineLayerCount = 1,
 }: Props) {
@@ -339,6 +346,34 @@ export default function StoryboardTableRowEditor({
                 >
                   清除
                 </button>
+              </div>
+            ) : null}
+            {!readOnly && row.frameImageHistory?.length ? (
+              <div className="mt-2">
+                <span className={STORYBOARD_LABEL}>历史版本</span>
+                <div className="flex gap-1.5 overflow-x-auto pb-0.5">
+                  {row.frameImageHistory.map((version, historyIndex) => {
+                    const thumb = resolveStoryboardFrameVersionDisplaySrc(version);
+                    if (!thumb) return null;
+                    return (
+                      <button
+                        key={version.id}
+                        type="button"
+                        title={`回退：${storyboardFrameVersionLabel(version, historyIndex)}`}
+                        disabled={imageBusy}
+                        onClick={() => onRestoreFrameVersion?.(version.id)}
+                        className="shrink-0 overflow-hidden rounded-md border border-white/[0.08] transition-colors hover:border-violet-500/50 hover:ring-1 hover:ring-violet-500/25 disabled:opacity-50"
+                      >
+                        <img
+                          src={thumb}
+                          alt=""
+                          className="h-9 w-14 object-cover bg-black/30"
+                          draggable={false}
+                        />
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             ) : null}
           </div>

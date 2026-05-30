@@ -66,7 +66,11 @@ import {
   readStoryboardFrameFromClipboard,
   readStoryboardFrameFromFile,
 } from './storyboardFrameImage';
-import { persistStoryboardFrameImage } from '../../services/storyboardFrameCompanion';
+import {
+  clearStoryboardRowFrameWithHistory,
+  replaceStoryboardRowFrame,
+  restoreStoryboardRowFrameVersion,
+} from '../../services/storyboardFrameHistory';
 import { storyboardRowHasFrameRef } from '../../services/storyboardFrameImageUrl';
 import { ImagePreviewOverlay } from '../ImagePreviewOverlay';
 import AppIcon from '../ui/AppIcon';
@@ -617,12 +621,15 @@ export default function StoryboardTablePanel({
         } catch {
           /* keep raw */
         }
-        const patch = await persistStoryboardFrameImage({
+        const tableRow = taskRows.find((row) => row.id === match.rowId);
+        if (!tableRow) continue;
+        const patch = await replaceStoryboardRowFrame({
+          row: tableRow,
           dataUrl: compressed,
           assetId: asset.id,
-          rowId: match.rowId,
           companionBaseUrl,
           companionProjectId,
+          source: 'sheet_split',
         });
         rowPatches.set(match.rowId, patch);
       }
@@ -753,12 +760,13 @@ export default function StoryboardTablePanel({
         if (file) dataUrl = await readStoryboardFrameFromFile(file);
         else dataUrl = await readStoryboardFrameFromClipboard(clipboard ?? null);
         if (!dataUrl) return;
-        const patch = await persistStoryboardFrameImage({
+        const patch = await replaceStoryboardRowFrame({
+          row,
           dataUrl,
           assetId: asset.id,
-          rowId,
           companionBaseUrl,
           companionProjectId,
+          source: file ? 'upload' : 'paste',
         });
         patchRow(rowId, patch);
       } catch (err) {
@@ -768,6 +776,47 @@ export default function StoryboardTablePanel({
       }
     },
     [asset.id, companionBaseUrl, companionProjectId, onNotify, patchRow]
+  );
+
+  const restoreFrameVersion = useCallback(
+    async (rowId: string, versionId: string) => {
+      if (readOnly) return;
+      const row = table.rows.find((r) => r.id === rowId);
+      if (!row) return;
+      setImageBusyRowId(rowId);
+      try {
+        const patch = await restoreStoryboardRowFrameVersion(row, versionId, {
+          assetId: asset.id,
+          companionBaseUrl,
+          companionProjectId,
+        });
+        if (!patch) {
+          onNotify?.('warn', '找不到该历史版本');
+          return;
+        }
+        patchRow(rowId, patch);
+        onNotify?.('info', '已回退到历史分镜图');
+      } catch (error) {
+        onNotify?.('warn', error instanceof Error ? error.message : '回退失败');
+      } finally {
+        setImageBusyRowId(null);
+      }
+    },
+    [asset.id, companionBaseUrl, companionProjectId, onNotify, patchRow, readOnly, table.rows]
+  );
+
+  const clearRowImage = useCallback(
+    async (rowId: string) => {
+      const row = table.rows.find((r) => r.id === rowId);
+      if (!row) return;
+      const patch = await clearStoryboardRowFrameWithHistory(row, {
+        assetId: asset.id,
+        companionBaseUrl,
+        companionProjectId,
+      });
+      patchRow(rowId, patch);
+    },
+    [asset.id, companionBaseUrl, companionProjectId, patchRow, table.rows]
   );
 
   const runRedraw = useCallback(
@@ -1137,12 +1186,12 @@ export default function StoryboardTablePanel({
       moveRow,
       removeRow,
       openFileForRow,
-      clearRowImage: (rowId) =>
-        patchRow(rowId, {
-          frameImage: undefined,
-          frameImageObjectKey: undefined,
-          frameImageCompanionKey: undefined,
-        }),
+      clearRowImage: (rowId) => {
+        void clearRowImage(rowId);
+      },
+      restoreFrameVersion: (rowId, versionId) => {
+        void restoreFrameVersion(rowId, versionId);
+      },
       assignFrameImageFromDrop: (rowId, e) =>
         void assignFrameImage(rowId, e.dataTransfer.files?.[0] ?? null, e.dataTransfer),
       assignFrameImageFromPaste: (rowId, e) => {
@@ -1160,6 +1209,8 @@ export default function StoryboardTablePanel({
     };
   }, [
     assignFrameImage,
+    clearRowImage,
+    restoreFrameVersion,
     moveRow,
     onRedrawRow,
     openFileForRow,

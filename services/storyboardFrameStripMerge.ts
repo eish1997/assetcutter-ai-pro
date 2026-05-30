@@ -1,11 +1,17 @@
 import type { StoryboardParseFieldDef } from '../types';
+import { compileSheetShotPanelMeta } from './storyboardTableSheetGen';
+import { planStoryboardSheetGroupTypography } from './storyboardSheetCellTypography';
 import type { StoryboardDurationGroup } from './storyboardGridDurationGroups';
 import { storyboardDurationGroupMergeSignature } from './storyboardGridDurationGroups';
 import {
-  renderStoryboardShotCompositeCanvas,
+  drawCompactStoryboardCell,
   clearStoryboardCompositeFrameImageCache,
 } from './storyboardCompositeFrameRender';
 import { clearStoryboardGridMosaicPreviewCache } from './storyboardGridMosaicPreview';
+import {
+  STORYBOARD_SHEET_SKETCH_BG,
+  ensureStoryboardSheetSketchFontLoaded,
+} from './storyboardSheetSketchStyle';
 
 const DEFAULT_WIDTH = 960;
 const DEFAULT_HEIGHT = 720;
@@ -25,30 +31,6 @@ export type StoryboardGroupMosaicRenderOpts = {
   jpegQuality?: number;
 };
 
-function drawContainedCanvas(
-  ctx: CanvasRenderingContext2D,
-  source: HTMLCanvasElement,
-  x: number,
-  y: number,
-  w: number,
-  h: number
-): void {
-  const ir = source.width / source.height;
-  const cr = w / h;
-  let dw = w;
-  let dh = h;
-  let dx = x;
-  let dy = y;
-  if (ir > cr) {
-    dh = w / ir;
-    dy = y + (h - dh) / 2;
-  } else {
-    dw = h * ir;
-    dx = x + (w - dw) / 2;
-  }
-  ctx.drawImage(source, dx, dy, dw, dh);
-}
-
 /** 离屏渲染一组镜头的拼图位图（仅下载时调用） */
 export async function renderStoryboardGroupMosaicDataUrl(
   group: StoryboardDurationGroup,
@@ -56,6 +38,8 @@ export async function renderStoryboardGroupMosaicDataUrl(
   opts: StoryboardGroupMosaicRenderOpts = {}
 ): Promise<string | null> {
   if (typeof document === 'undefined' || group.rows.length === 0) return null;
+
+  await ensureStoryboardSheetSketchFontLoaded();
 
   const width = Math.max(320, Math.round(opts.width ?? DEFAULT_WIDTH));
   const height = Math.max(240, Math.round(opts.height ?? DEFAULT_HEIGHT));
@@ -68,7 +52,7 @@ export async function renderStoryboardGroupMosaicDataUrl(
   const ctx = canvas.getContext('2d');
   if (!ctx) return null;
 
-  ctx.fillStyle = '#0a0a0c';
+  ctx.fillStyle = STORYBOARD_SHEET_SKETCH_BG;
   ctx.fillRect(0, 0, width, height);
 
   const { cols, rows } = computeStoryboardMosaicGrid(group.rows.length);
@@ -78,7 +62,13 @@ export async function renderStoryboardGroupMosaicDataUrl(
   const innerH = height - pad * 2;
   const cellW = cols > 0 ? (innerW - gap * (cols - 1)) / cols : innerW;
   const cellH = rows > 0 ? (innerH - gap * (rows - 1)) / rows : innerH;
-  const renderW = Math.max(480, Math.round(cellW * 2.5));
+
+  const metas = group.rows.map((row) => compileSheetShotPanelMeta(row, fieldCatalog));
+  const groupTypography = planStoryboardSheetGroupTypography(ctx, metas, {
+    cellW,
+    cellH,
+    canvasWidth: width,
+  });
 
   for (let i = 0; i < group.rows.length; i += 1) {
     const row = group.rows[i]!;
@@ -87,19 +77,11 @@ export async function renderStoryboardGroupMosaicDataUrl(
     const x = pad + col * (cellW + gap);
     const y = pad + rowIdx * (cellH + gap);
 
-    const shotCanvas = await renderStoryboardShotCompositeCanvas(row, fieldCatalog, renderW);
-    if (shotCanvas) {
-      drawContainedCanvas(ctx, shotCanvas, x, y, cellW, cellH);
-    } else {
-      ctx.fillStyle = '#141418';
-      ctx.fillRect(x, y, cellW, cellH);
-    }
-
-    if (cols > 1 || rows > 1) {
-      ctx.strokeStyle = 'rgba(255,255,255,0.08)';
-      ctx.lineWidth = Math.max(1, scale);
-      ctx.strokeRect(x + 0.5, y + 0.5, cellW - 1, cellH - 1);
-    }
+    await drawCompactStoryboardCell(ctx, row, fieldCatalog, x, y, cellW, cellH, {
+      canvasWidth: width,
+      imageFit: 'width',
+      typographyPlan: groupTypography,
+    });
   }
 
   try {

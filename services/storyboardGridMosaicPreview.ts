@@ -7,6 +7,8 @@ import {
 
 const previewCache = new Map<string, string>();
 const PREVIEW_CACHE_MAX = 12;
+/** 布局算法变更时递增，避免旧缓存字号/留白 */
+const MOSAIC_PREVIEW_LAYOUT_VERSION = 7;
 
 /** 离屏合成组拼图预览（与导出一致，带内存缓存） */
 export async function renderStoryboardGroupMosaicPreview(
@@ -14,7 +16,7 @@ export async function renderStoryboardGroupMosaicPreview(
   fieldCatalog: StoryboardParseFieldDef[],
   previewWidth: number
 ): Promise<string | null> {
-  const cacheKey = storyboardGroupMosaicExportCacheKey(group, fieldCatalog, previewWidth);
+  const cacheKey = `${MOSAIC_PREVIEW_LAYOUT_VERSION}:${storyboardGroupMosaicExportCacheKey(group, fieldCatalog, previewWidth)}`;
   const cached = previewCache.get(cacheKey);
   if (cached) return cached;
 

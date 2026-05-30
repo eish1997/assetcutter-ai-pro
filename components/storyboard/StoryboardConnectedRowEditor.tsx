@@ -1,6 +1,7 @@
 import React, { memo } from 'react';
 import type { StoryboardParseFieldDef, StoryboardTableRow } from '../../types';
 import { shotFieldsShallowEqual, rowHasStructuredFieldValues } from '../../services/storyboardTableParse';
+import { storyboardFrameHistorySignature } from '../../services/storyboardFrameHistory';
 import { useStoryboardRowInteraction } from './StoryboardRowInteractionContext';
 import StoryboardTableRowEditor from './StoryboardTableRowEditor';
 
@@ -76,6 +77,9 @@ function StoryboardConnectedRowEditorInner({
       onRedraw={
         ctx.hasRedrawHandler && !ctx.readOnly ? () => void ctx.runRedraw(row.id) : undefined
       }
+      onRestoreFrameVersion={
+        !ctx.readOnly ? (versionId) => ctx.restoreFrameVersion(row.id, versionId) : undefined
+      }
       timelineLayerCount={ctx.timelineLayerCount}
     />
   );
@@ -111,6 +115,8 @@ function rowEditorPropsEqual(prev: Props, next: Props): boolean {
     a.frameImage === b.frameImage &&
     a.frameImageObjectKey === b.frameImageObjectKey &&
     a.frameImageCompanionKey === b.frameImageCompanionKey &&
+    storyboardFrameHistorySignature(a.frameImageHistory) ===
+      storyboardFrameHistorySignature(b.frameImageHistory) &&
     a.locked === b.locked &&
     (a.timelineLayer ?? 0) === (b.timelineLayer ?? 0)
   );

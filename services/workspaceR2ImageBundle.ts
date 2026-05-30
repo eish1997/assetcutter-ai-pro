@@ -306,6 +306,10 @@ export function collectReferencedObjectKeysFromPackedV2(packed: { assets: Workfl
       for (const row of a.storyboardTable.rows) {
         const rk = String(row.frameImageObjectKey || '').trim();
         if (rk) keys.add(rk);
+        for (const ver of row.frameImageHistory || []) {
+          const histKey = String(ver.frameImageObjectKey || '').trim();
+          if (histKey) keys.add(histKey);
+        }
       }
     }
   }
@@ -456,6 +460,7 @@ export async function packWorkflowBundleForCloud(
 
     if (isWorkflowStoryboardTableAsset(a) && a.storyboardTable?.rows?.length) {
       const rows = await mapLimit(a.storyboardTable.rows, CLOUD_PACK_UPLOAD_CONCURRENCY, async (row) => {
+        let nextRow: typeof row = { ...row };
         let img = String(row.frameImage || '').trim();
         const companionKey = String(row.frameImageCompanionKey || '').trim();
         if (
@@ -471,23 +476,55 @@ export async function packWorkflowBundleForCloud(
           );
           if (fromDisk) img = fromDisk;
         }
-        if (!img || isLikelyHttpImageUrl(img)) return row;
-        if (row.frameImageObjectKey?.trim()) return { ...row, frameImage: '' };
-        const key = await uploadDataUrlDeduped(
-          dataUrlToKey,
-          contentHashToKey,
-          img,
-          userId,
-          username,
-          (p) => `${base}/storyboard/${sanitizeSegment(row.id)}.${mimeToExt(p.mime)}`
+        if (img && !isLikelyHttpImageUrl(img) && !row.frameImageObjectKey?.trim()) {
+          const key = await uploadDataUrlDeduped(
+            dataUrlToKey,
+            contentHashToKey,
+            img,
+            userId,
+            username,
+            (p) => `${base}/storyboard/${sanitizeSegment(row.id)}.${mimeToExt(p.mime)}`
+          );
+          if (key) {
+            nextRow = {
+              ...nextRow,
+              frameImage: '',
+              frameImageObjectKey: key,
+              frameImageCompanionKey: undefined,
+            };
+          }
+        } else if (row.frameImageObjectKey?.trim()) {
+          nextRow = { ...nextRow, frameImage: '' };
+        }
+
+        const history = row.frameImageHistory;
+        if (!history?.length) return nextRow;
+        const nextHistory = await Promise.all(
+          history.map(async (ver) => {
+            let verImg = String(ver.frameImage || '').trim();
+            if (!verImg || isLikelyHttpImageUrl(verImg)) {
+              return ver.frameImageObjectKey?.trim() ? { ...ver, frameImage: '' } : ver;
+            }
+            if (ver.frameImageObjectKey?.trim()) return { ...ver, frameImage: '' };
+            const histKey = await uploadDataUrlDeduped(
+              dataUrlToKey,
+              contentHashToKey,
+              verImg,
+              userId,
+              username,
+              (p) =>
+                `${base}/storyboard/${sanitizeSegment(row.id)}-hist-${sanitizeSegment(ver.id)}.${mimeToExt(p.mime)}`
+            );
+            if (!histKey) return ver;
+            return {
+              ...ver,
+              frameImage: '',
+              frameImageObjectKey: histKey,
+              frameImageCompanionKey: undefined,
+            };
+          })
         );
-        if (!key) return row;
-        return {
-          ...row,
-          frameImage: '',
-          frameImageObjectKey: key,
-          frameImageCompanionKey: undefined,
-        };
+        return { ...nextRow, frameImageHistory: nextHistory };
       });
       a.storyboardTable = { ...a.storyboardTable, rows };
     }

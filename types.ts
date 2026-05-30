@@ -486,9 +486,28 @@ export type StoryboardTableRow = {
   frameImageObjectKey?: string;
   /** 本地伴侣键；IDB 可 strip 行内 data URL */
   frameImageCompanionKey?: string;
+  /** 分镜图历史版本（新→旧），用于重绘/替换后回退 */
+  frameImageHistory?: StoryboardFrameImageVersion[];
   locked?: boolean;
   /** 视频预览时间轴轨道层，0 为底层，默认 0 */
   timelineLayer?: number;
+};
+
+export type StoryboardFrameVersionSource =
+  | 'upload'
+  | 'redraw'
+  | 'sheet_split'
+  | 'paste'
+  | 'restore'
+  | 'clear';
+
+export type StoryboardFrameImageVersion = {
+  id: string;
+  createdAt: number;
+  source: StoryboardFrameVersionSource;
+  frameImage?: string;
+  frameImageObjectKey?: string;
+  frameImageCompanionKey?: string;
 };
 
 export type StoryboardTableDoc = {

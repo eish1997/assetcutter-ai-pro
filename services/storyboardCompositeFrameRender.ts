@@ -1,12 +1,34 @@
 import type { StoryboardParseFieldDef, StoryboardTableRow } from '../types';
 import { resolveStoryboardRowFrameDisplaySrc } from './storyboardFrameImageUrl';
-import { storyboardShotCompositeFieldItems } from './storyboardCompositeFields';
+import { compileSheetShotPanelMeta } from './storyboardTableSheetGen';
 import {
-  resolveStoryboardShotDurationSec,
-  storyboardRowShotLabel,
-} from './storyboardVideoTimeline';
+  drawPlannedSheetCellText,
+  measureSheetCellTextBlock,
+  planStoryboardSheetCellTypography,
+  type SheetCellTypography,
+} from './storyboardSheetCellTypography';
+import {
+  STORYBOARD_SHEET_SKETCH_BG,
+  STORYBOARD_SHEET_SKETCH_BORDER,
+  STORYBOARD_SHEET_SKETCH_BORDER_WIDTH,
+  STORYBOARD_SHEET_SKETCH_PLACEHOLDER_BG,
+  STORYBOARD_SHEET_SKETCH_TEXT_MUTED,
+  ensureStoryboardSheetSketchFontLoaded,
+  storyboardSheetCanvasFont,
+  storyboardSheetFooterGap,
+} from './storyboardSheetSketchStyle';
+import { storyboardRowShotLabel } from './storyboardVideoTimeline';
 
 const SHOT_CARD_WIDTH = 480;
+
+export type CompactCellLayoutOpts = {
+  /** 整张拼图/导出画布宽度 */
+  canvasWidth?: number;
+  /** width=以宽为准不裁左右；cover=铺满格（会裁切） */
+  imageFit?: 'cover' | 'width';
+  /** 整组统一字号（组拼图传入） */
+  typographyPlan?: SheetCellTypography;
+};
 
 const imageCache = new Map<string, Promise<HTMLImageElement | null>>();
 
@@ -35,44 +57,6 @@ function loadFrameImage(rawSrc: string): Promise<HTMLImageElement | null> {
   return promise;
 }
 
-function wrapTextLines(
-  ctx: CanvasRenderingContext2D,
-  text: string,
-  maxWidth: number,
-  maxLines: number
-): string[] {
-  const normalized = text.replace(/\r\n/g, '\n');
-  const paragraphs = normalized.split('\n');
-  const lines: string[] = [];
-
-  for (const para of paragraphs) {
-    let chunk = '';
-    for (const ch of para) {
-      const next = chunk + ch;
-      if (ctx.measureText(next).width > maxWidth && chunk) {
-        lines.push(chunk);
-        chunk = ch.trimStart();
-        if (lines.length >= maxLines) return lines;
-      } else {
-        chunk = next;
-      }
-    }
-    if (chunk) lines.push(chunk);
-    if (lines.length >= maxLines) break;
-  }
-
-  if (lines.length > maxLines) return lines.slice(0, maxLines);
-  if (lines.length === maxLines && lines[maxLines - 1]) {
-    const last = lines[maxLines - 1]!;
-    let out = last;
-    while (out.length > 1 && ctx.measureText(`${out}…`).width > maxWidth) {
-      out = out.slice(0, -1);
-    }
-    lines[maxLines - 1] = out.endsWith('…') ? out : `${out}…`;
-  }
-  return lines;
-}
-
 function drawPlaceholder(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -81,13 +65,13 @@ function drawPlaceholder(
   h: number,
   label: string
 ): void {
-  ctx.fillStyle = '#141418';
+  ctx.fillStyle = STORYBOARD_SHEET_SKETCH_PLACEHOLDER_BG;
   ctx.fillRect(x, y, w, h);
-  ctx.strokeStyle = 'rgba(255,255,255,0.1)';
-  ctx.lineWidth = 1;
+  ctx.strokeStyle = STORYBOARD_SHEET_SKETCH_BORDER;
+  ctx.lineWidth = STORYBOARD_SHEET_SKETCH_BORDER_WIDTH;
   ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
-  ctx.font = `600 ${Math.max(12, Math.round(h * 0.12))}px system-ui, sans-serif`;
-  ctx.fillStyle = 'rgba(120,120,130,0.95)';
+  ctx.font = storyboardSheetCanvasFont(600, Math.max(10, Math.round(h * 0.14)));
+  ctx.fillStyle = STORYBOARD_SHEET_SKETCH_TEXT_MUTED;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(label, x + w / 2, y + h / 2);
@@ -95,96 +79,100 @@ function drawPlaceholder(
   ctx.textBaseline = 'alphabetic';
 }
 
-async function drawContainedImage(
+/** 以宽为准：左右贴边，高度按比例；仅当超出槽位时才裁上下 */
+function drawImageWidthFirst(
   ctx: CanvasRenderingContext2D,
   img: HTMLImageElement,
   x: number,
   y: number,
   w: number,
-  h: number
-): Promise<void> {
-  const ir = img.width / img.height;
-  const cr = w / h;
-  let dw = w;
-  let dh = h;
-  let dx = x;
-  let dy = y;
-  if (ir > cr) {
-    dh = w / ir;
-    dy = y + (h - dh) / 2;
-  } else {
-    dw = h * ir;
-    dx = x + (w - dw) / 2;
-  }
-  ctx.drawImage(img, dx, dy, dw, dh);
-}
-
-function estimateFieldsHeight(
-  itemCount: number,
-  width: number,
-  hasFallback: boolean
+  maxH: number
 ): number {
-  if (itemCount <= 0 && !hasFallback) return 0;
-  const pad = Math.round(width * 0.05);
-  const labelSize = Math.max(8, Math.round(width * 0.017));
-  const valueSize = Math.max(9, Math.round(width * 0.021));
-  const lineGap = Math.round(valueSize * 0.35);
-  const perItem = labelSize + valueSize + lineGap + Math.round(valueSize * 1.1);
-  const count = Math.max(itemCount, hasFallback ? 1 : 0);
-  return pad * 2 + count * perItem;
+  const ir = img.width / img.height;
+  const dh = w / ir;
+  if (dh <= maxH) {
+    ctx.drawImage(img, x, y, w, dh);
+    return dh;
+  }
+  const srcH = img.height * (maxH / dh);
+  ctx.drawImage(img, 0, 0, img.width, srcH, x, y, w, maxH);
+  return maxH;
 }
 
-function drawFieldsSection(
+async function resolveImageHeight(
+  row: StoryboardTableRow,
+  width: number,
+  fallbackH: number
+): Promise<number> {
+  const src = resolveStoryboardRowFrameDisplaySrc(row);
+  if (!src) return fallbackH;
+  const img = await loadFrameImage(src);
+  if (!img) return fallbackH;
+  const ir = img.width / img.height;
+  const filled = Math.round(width / ir);
+  return Math.min(Math.max(filled, Math.round(width * 0.2)), Math.round(width * 0.58));
+}
+
+/** 在指定矩形内绘制紧凑 contact-sheet 单格（顶栏 + 宽铺满图 + 底栏，字号随密度自适应） */
+export async function drawCompactStoryboardCell(
   ctx: CanvasRenderingContext2D,
+  row: StoryboardTableRow,
+  fieldCatalog: StoryboardParseFieldDef[],
   x: number,
   y: number,
-  width: number,
-  row: StoryboardTableRow,
-  catalog: StoryboardParseFieldDef[]
-): number {
-  const items = storyboardShotCompositeFieldItems(row, catalog);
-  const pad = Math.round(width * 0.05);
-  const innerW = width - pad * 2;
-  const labelSize = Math.max(8, Math.round(width * 0.017));
-  const valueSize = Math.max(9, Math.round(width * 0.021));
-  const lineGap = Math.round(valueSize * 0.35);
-  let cy = y + pad;
+  w: number,
+  h: number,
+  opts: CompactCellLayoutOpts = {}
+): Promise<void> {
+  const meta = compileSheetShotPanelMeta(row, fieldCatalog);
+  const plan =
+    opts.typographyPlan ??
+    planStoryboardSheetCellTypography(ctx, meta, {
+      cellW: w,
+      cellH: h,
+      canvasWidth: opts.canvasWidth,
+    });
+  const label = storyboardRowShotLabel(row, row.index);
+  const textMetrics = measureSheetCellTextBlock(ctx, meta, plan, w, label);
 
-  ctx.fillStyle = 'rgba(0,0,0,0.35)';
-  ctx.fillRect(x, y, width, estimateFieldsHeight(items.length, width, false));
+  ctx.fillStyle = STORYBOARD_SHEET_SKETCH_BG;
+  ctx.fillRect(x, y, w, h);
 
-  if (!items.length) {
-    const fallback = (row.shotText || row.shotRaw || '').trim() || '（暂无镜头描述）';
-    ctx.font = `400 ${valueSize}px system-ui, sans-serif`;
-    ctx.fillStyle = 'rgba(160,160,170,0.95)';
-    const lines = wrapTextLines(ctx, fallback, innerW, 3);
-    for (const line of lines) {
-      ctx.fillText(line, x + pad, cy + valueSize);
-      cy += valueSize + lineGap;
+  const imageY = y + textMetrics.headerBlockH;
+  const footerGap = storyboardSheetFooterGap(opts.canvasWidth ?? w);
+  const maxImageH = Math.max(
+    0,
+    h - textMetrics.headerBlockH - textMetrics.footerBlockH - footerGap
+  );
+  const src = resolveStoryboardRowFrameDisplaySrc(row);
+  let textStartY = imageY + footerGap;
+
+  if (maxImageH > 0) {
+    if (src) {
+      const img = await loadFrameImage(src);
+      if (img) {
+        const drawnH = drawImageWidthFirst(ctx, img, x, imageY, w, maxImageH);
+        textStartY = imageY + drawnH + footerGap;
+      } else {
+        const ph = Math.min(maxImageH, Math.round(w * 0.22));
+        drawPlaceholder(ctx, x, imageY, w, ph, label);
+        textStartY = imageY + ph + footerGap;
+      }
+    } else {
+      const ph = Math.min(maxImageH, Math.round(w * 0.22));
+      drawPlaceholder(ctx, x, imageY, w, ph, label);
+      textStartY = imageY + ph + footerGap;
     }
-    return cy + pad - y;
   }
 
-  for (const item of items) {
-    ctx.font = `500 ${labelSize}px system-ui, sans-serif`;
-    ctx.fillStyle = 'rgba(130,130,140,0.95)';
-    ctx.fillText(item.label, x + pad, cy + labelSize);
+  drawPlannedSheetCellText(ctx, meta, plan, x, y, w, textStartY, label);
 
-    ctx.font = `400 ${valueSize}px system-ui, sans-serif`;
-    ctx.fillStyle = 'rgba(210,210,220,0.96)';
-    const lines = wrapTextLines(ctx, item.value, innerW, 3);
-    let vy = cy + labelSize + Math.round(valueSize * 0.25);
-    for (const line of lines) {
-      ctx.fillText(line, x + pad, vy + valueSize);
-      vy += valueSize + Math.round(valueSize * 0.2);
-    }
-    cy = vy + lineGap;
-  }
-
-  return cy + pad - y;
+  ctx.strokeStyle = STORYBOARD_SHEET_SKETCH_BORDER;
+  ctx.lineWidth = STORYBOARD_SHEET_SKETCH_BORDER_WIDTH;
+  ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
 }
 
-/** 将单镜分镜合成卡（4:3 图 + 字段文案）渲染为位图 */
+/** 将单镜分镜合成卡渲染为位图 */
 export async function renderStoryboardShotCompositeCanvas(
   row: StoryboardTableRow,
   fieldCatalog: StoryboardParseFieldDef[],
@@ -192,70 +180,32 @@ export async function renderStoryboardShotCompositeCanvas(
 ): Promise<HTMLCanvasElement | null> {
   if (typeof document === 'undefined') return null;
 
-  const items = storyboardShotCompositeFieldItems(row, fieldCatalog);
-  const imgH = Math.round((width * 3) / 4);
-  const fieldsH =
-    items.length > 0
-      ? estimateFieldsHeight(items.length, width, false)
-      : estimateFieldsHeight(0, width, true);
-  const height = imgH + fieldsH;
+  await ensureStoryboardSheetSketchFontLoaded();
 
   const canvas = document.createElement('canvas');
   canvas.width = width;
-  canvas.height = Math.max(height, imgH);
+  canvas.height = width;
   const ctx = canvas.getContext('2d');
   if (!ctx) return null;
 
-  ctx.fillStyle = '#0a0a0c';
-  ctx.fillRect(0, 0, width, canvas.height);
-
-  ctx.fillStyle = '#000000';
-  ctx.fillRect(0, 0, width, imgH);
-
+  const meta = compileSheetShotPanelMeta(row, fieldCatalog);
+  const fallbackImageH = Math.round(width * 0.32);
+  const imageH = await resolveImageHeight(row, width, fallbackImageH);
   const label = storyboardRowShotLabel(row, row.index);
-  const src = resolveStoryboardRowFrameDisplaySrc(row);
-  if (src) {
-    const img = await loadFrameImage(src);
-    if (img) {
-      await drawContainedImage(ctx, img, 0, 0, width, imgH);
-    } else {
-      drawPlaceholder(ctx, 0, 0, width, imgH, label);
-    }
-  } else {
-    drawPlaceholder(ctx, 0, 0, width, imgH, label);
-  }
+  const plan = planStoryboardSheetCellTypography(ctx, meta, {
+    cellW: width,
+    cellH: width,
+    canvasWidth: width,
+  });
+  const textMetrics = measureSheetCellTextBlock(ctx, meta, plan, width, label);
+  const gap = storyboardSheetFooterGap(width);
+  const height = textMetrics.headerBlockH + imageH + gap + textMetrics.footerBlockH;
 
-  const title = storyboardRowShotLabel(row, row.index);
-  const duration =
-    row.durationSec != null && Number.isFinite(row.durationSec) ? `${row.durationSec}s` : null;
-  const { sec, estimated } = resolveStoryboardShotDurationSec(row);
-  const durText = duration ?? `${sec}s${estimated ? '*' : ''}`;
-
-  const grad = ctx.createLinearGradient(0, 0, 0, Math.round(imgH * 0.28));
-  grad.addColorStop(0, 'rgba(0,0,0,0.75)');
-  grad.addColorStop(1, 'rgba(0,0,0,0)');
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, width, Math.round(imgH * 0.28));
-
-  const titleSize = Math.max(11, Math.round(width * 0.025));
-  ctx.font = `700 ${titleSize}px system-ui, sans-serif`;
-  ctx.fillStyle = 'rgba(255,255,255,0.95)';
-  ctx.fillText(title, Math.round(width * 0.05), Math.round(imgH * 0.1));
-
-  const metaSize = Math.max(8, Math.round(width * 0.017));
-  ctx.font = `500 ${metaSize}px system-ui, sans-serif`;
-  ctx.fillStyle = 'rgba(200,200,210,0.9)';
-  const metaW = ctx.measureText(durText).width;
-  ctx.fillText(durText, width - Math.round(width * 0.05) - metaW, Math.round(imgH * 0.1));
-
-  if (fieldsH > 0) {
-    drawFieldsSection(ctx, 0, imgH, width, row, fieldCatalog);
-  }
-
-  ctx.strokeStyle = 'rgba(255,255,255,0.08)';
-  ctx.lineWidth = 1;
-  ctx.strokeRect(0.5, 0.5, width - 1, canvas.height - 1);
-
+  canvas.height = height;
+  await drawCompactStoryboardCell(ctx, row, fieldCatalog, 0, 0, width, height, {
+    canvasWidth: width,
+    imageFit: 'width',
+  });
   return canvas;
 }
 

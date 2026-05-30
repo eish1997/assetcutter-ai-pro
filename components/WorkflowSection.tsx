@@ -213,9 +213,9 @@ import StoryboardTableGridCard from './storyboard/StoryboardTableGridCard';
 import { useStoryboardVideoExportTask } from './storyboard/useStoryboardVideoExport';
 import { compressStoryboardFrameDataUrl } from './storyboard/storyboardFrameImage';
 import {
-  persistStoryboardFrameImage,
   storyboardRowNeedsCompanionFrameHydrate,
 } from '../services/storyboardFrameCompanion';
+import { replaceStoryboardRowFrame } from '../services/storyboardFrameHistory';
 import {
   executeStoryboardRowRedraw,
   listStoryboardRedrawPresets,
@@ -1515,12 +1515,13 @@ const WorkflowSection: React.FC<{
       }
       const base = String(getCompanionLocalBaseUrl() || '').trim();
       const pid = String(workspaceProjectChrome?.activeProjectId || '').trim();
-      const framePatch = await persistStoryboardFrameImage({
+      const framePatch = await replaceStoryboardRowFrame({
+        row,
         dataUrl: frameImage,
         assetId: tableAssetId,
-        rowId,
         companionBaseUrl: base,
         companionProjectId: pid,
+        source: 'redraw',
       });
       setAssets((prev) =>
         prev.map((a) => {
