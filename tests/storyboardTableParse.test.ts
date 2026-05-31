@@ -15,6 +15,7 @@ import {
   mergeOptimizeResultIntoRow,
   normalizeOptimizeModelOutput,
   normalizeParseModelOutput,
+  parseDurationSecFromParsedValue,
   parseStoryboardRowsBatch,
   pickPrimaryVisualField,
   resolveFieldId,
@@ -77,6 +78,11 @@ describe('storyboardTableParse', () => {
     expect(merged.catalog).toHaveLength(1);
     expect(merged.catalog[0]?.label).toBe('画面');
     expect(compileShotText(merged.catalog, merged.row.shotFields)).toBe('【画面】雪夜');
+  });
+
+  it('parseDurationSecFromParsedValue supports frame count', () => {
+    expect(parseDurationSecFromParsedValue('24帧')).toBe(1);
+    expect(parseDurationSecFromParsedValue('48帧')).toBe(2);
   });
 
   it('merges catalog union across parses and keeps untouched fields on re-parse', () => {

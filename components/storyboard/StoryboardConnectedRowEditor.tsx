@@ -17,6 +17,7 @@ type Props = {
   optimizeBusy?: boolean;
   redrawDisabled: boolean;
   redrawDisabledReason?: string;
+  editDisplayMode?: 'full' | 'feedback';
 };
 
 function fieldCatalogSignature(catalog: StoryboardParseFieldDef[]): string {
@@ -35,6 +36,7 @@ function StoryboardConnectedRowEditorInner({
   optimizeBusy = false,
   redrawDisabled,
   redrawDisabledReason,
+  editDisplayMode = 'full',
 }: Props) {
   const ctx = useStoryboardRowInteraction();
   const optimizeDisabledReason = !fieldCatalog.length
@@ -81,6 +83,7 @@ function StoryboardConnectedRowEditorInner({
         !ctx.readOnly ? (versionId) => ctx.restoreFrameVersion(row.id, versionId) : undefined
       }
       timelineLayerCount={ctx.timelineLayerCount}
+      editDisplayMode={editDisplayMode}
     />
   );
 }
@@ -95,7 +98,8 @@ function rowEditorPropsEqual(prev: Props, next: Props): boolean {
     prev.parseBusy !== next.parseBusy ||
     prev.optimizeBusy !== next.optimizeBusy ||
     prev.redrawDisabled !== next.redrawDisabled ||
-    prev.redrawDisabledReason !== next.redrawDisabledReason
+    prev.redrawDisabledReason !== next.redrawDisabledReason ||
+    prev.editDisplayMode !== next.editDisplayMode
   ) {
     return false;
   }
@@ -118,7 +122,8 @@ function rowEditorPropsEqual(prev: Props, next: Props): boolean {
     storyboardFrameHistorySignature(a.frameImageHistory) ===
       storyboardFrameHistorySignature(b.frameImageHistory) &&
     a.locked === b.locked &&
-    (a.timelineLayer ?? 0) === (b.timelineLayer ?? 0)
+    (a.timelineLayer ?? 0) === (b.timelineLayer ?? 0) &&
+    (a.editFeedback ?? '') === (b.editFeedback ?? '')
   );
 }
 

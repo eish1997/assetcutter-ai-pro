@@ -491,6 +491,8 @@ export type StoryboardTableRow = {
   locked?: boolean;
   /** 视频预览时间轴轨道层，0 为底层，默认 0 */
   timelineLayer?: number;
+  /** 编辑页反馈模式：用户对当前分镜图的修改意见 */
+  editFeedback?: string;
 };
 
 export type StoryboardFrameVersionSource =

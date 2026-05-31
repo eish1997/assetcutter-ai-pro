@@ -16,6 +16,29 @@ import {
 } from './storyboardFrameImageUrl';
 
 export const STORYBOARD_REDRAW_PRESET_KEY = 'ac_storyboard_redraw_preset_v1';
+/** 编辑页重绘/反馈重绘专用，与解析页生图预设隔离 */
+export const STORYBOARD_EDIT_REDRAW_PRESET_KEY = 'ac_storyboard_edit_redraw_preset_v1';
+
+export function buildStoryboardEditFeedbackPromptExtra(row: StoryboardTableRow): string {
+  const text = (row.editFeedback ?? '').trim();
+  if (!text) return '';
+  return `【修改反馈】${text}`;
+}
+
+export function listStoryboardFeedbackRedrawRows(rows: StoryboardTableRow[]): StoryboardTableRow[] {
+  return rows.filter((row) => !row.locked && Boolean((row.editFeedback ?? '').trim()));
+}
+
+/** 拼接入队/理解用的镜头正文（结构化字段 + 镜头号 + 修改反馈） */
+export function buildStoryboardRowPromptText(
+  row: StoryboardTableRow,
+  catalog: StoryboardParseFieldDef[],
+  promptExtra?: string
+): string {
+  const feedback = buildStoryboardEditFeedbackPromptExtra(row);
+  const mergedExtra = [promptExtra, feedback].filter(Boolean).join('\n').trim();
+  return compileRedrawPrompt(row, catalog, mergedExtra || undefined);
+}
 
 export function listStoryboardRedrawPresets(presets: CustomAppModule[]): CustomAppModule[] {
   return presets.filter((p) => {
@@ -28,15 +51,6 @@ export function listStoryboardRedrawPresets(presets: CustomAppModule[]): CustomA
 export function pickDefaultStoryboardRedrawPresetId(presets: CustomAppModule[]): string {
   const list = listStoryboardRedrawPresets(presets);
   return list[0]?.id ?? '';
-}
-
-/** 拼接入队/理解用的镜头正文（结构化字段 + 镜头号） */
-export function buildStoryboardRowPromptText(
-  row: StoryboardTableRow,
-  catalog: StoryboardParseFieldDef[],
-  promptExtra?: string
-): string {
-  return compileRedrawPrompt(row, catalog, promptExtra);
 }
 
 async function resolveRowFrameImage(

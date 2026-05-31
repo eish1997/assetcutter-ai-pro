@@ -1,4 +1,4 @@
-import type { StoryboardParseFieldDef, StoryboardTableRow } from '../types';
+import type { StoryboardParseFieldDef, StoryboardTableRow } from '../../types';
 import { compileShotText, pickPrimaryVisualField } from '../../services/storyboardTableParse';
 import {
   storyboardGroupCompositeFieldItems as groupFieldItems,

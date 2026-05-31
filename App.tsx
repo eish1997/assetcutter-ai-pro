@@ -146,7 +146,8 @@ import {
   findCompanionKeysMissingFromManifest,
   mergeUnlinkedManifestEntriesIntoWorkflowAssets,
 } from './services/workflowManifestCrossCheck';
-import { fetchCompanionAssetAsDataUrl } from './services/workflowCompanionAssets';
+import { fetchCompanionAssetAsDataUrl, workflowBundleNeedsCompanionHydrateForCloudPack } from './services/workflowCompanionAssets';
+import { isWorkflowStoryboardTableAsset } from './services/storyboardTableAsset';
 import { collectReferencedObjectKeysFromPackedV2, hydrateWorkflowBundleFromCloud } from './services/workspaceR2ImageBundle';
 function isImagePreviewEscapeKey(e: KeyboardEvent): boolean {
   return e.key === 'Escape' || e.code === 'Escape' || e.keyCode === 27;
@@ -2080,6 +2081,58 @@ const MainApp: React.FC = () => {
           }
         }
         asset.results = resultMap;
+        if (isWorkflowStoryboardTableAsset(asset) && asset.storyboardTable?.rows?.length) {
+          asset.storyboardTable = {
+            ...asset.storyboardTable,
+            rows: await Promise.all(
+              asset.storyboardTable.rows.map(async (row) => {
+                let nextRow = { ...row };
+                if (!String(row.frameImage || '').trim()) {
+                  const frameKey = String(row.frameImageCompanionKey || '').trim();
+                  if (frameKey) {
+                    hydrateAttempted += 1;
+                    const dataUrl = await fetchCompanionAssetAsDataUrl(base, projectId, frameKey);
+                    if (dataUrl) {
+                      nextRow = { ...nextRow, frameImage: dataUrl };
+                      hydratedCount += 1;
+                    } else {
+                      hydrateFailures.push({
+                        assetId: String(asset.id || ''),
+                        kind: 'result',
+                        stepId: `storyboard:${row.id}`,
+                        reason: 'not_found_in_companion_or_unauthorized',
+                      });
+                    }
+                  }
+                }
+                if (!row.frameImageHistory?.length) return nextRow;
+                const nextHistory = await Promise.all(
+                  row.frameImageHistory.map(async (ver) => {
+                    if (String(ver.frameImage || '').trim() || String(ver.frameImageObjectKey || '').trim()) {
+                      return ver;
+                    }
+                    const histKey = String(ver.frameImageCompanionKey || '').trim();
+                    if (!histKey) return ver;
+                    hydrateAttempted += 1;
+                    const dataUrl = await fetchCompanionAssetAsDataUrl(base, projectId, histKey);
+                    if (dataUrl) {
+                      hydratedCount += 1;
+                      return { ...ver, frameImage: dataUrl };
+                    }
+                    hydrateFailures.push({
+                      assetId: String(asset.id || ''),
+                      kind: 'result',
+                      stepId: `storyboard:${row.id}:hist:${ver.id}`,
+                      reason: 'not_found_in_companion_or_unauthorized',
+                    });
+                    return ver;
+                  })
+                );
+                return { ...nextRow, frameImageHistory: nextHistory };
+              })
+            ),
+          };
+        }
       }
     }
     const payload = {
@@ -2416,16 +2469,7 @@ const MainApp: React.FC = () => {
         }
         // 若 IDB 仅存 originalCompanionKey，打包时从本地伴侣读回再打 data URL 上传 R2（需设置并启动伴侣）
         const companionBase = String(getCompanionLocalBaseUrl() || '').trim();
-        const needsCompanionHydrate = uploadBundle.assets.some((a) => {
-          const origOnlyCompanion =
-            !String(a?.original || '').trim() && String(a.originalCompanionKey || '').trim();
-          const rck = a.resultsCompanionKeys || {};
-          const resultsOnlyCompanion = Object.keys(rck).some((sid) => {
-            if (!String(rck[sid] || '').trim()) return false;
-            return !String((a.results || {})[sid] || '').trim();
-          });
-          return origOnlyCompanion || resultsOnlyCompanion;
-        });
+        const needsCompanionHydrate = workflowBundleNeedsCompanionHydrateForCloudPack(uploadBundle);
         if (needsCompanionHydrate && !companionBase) {
           addGlobalLog(
             '工作区',

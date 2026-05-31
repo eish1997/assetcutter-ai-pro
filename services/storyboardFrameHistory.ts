@@ -4,6 +4,7 @@ import type {
   StoryboardTableRow,
 } from '../types';
 import { compressStoryboardFrameDataUrl } from '../components/storyboard/storyboardFrameImage';
+import { companionRasterSlotNeedsHydrate } from './workflowCompanionAssets';
 import {
   persistStoryboardFrameImage,
   storyboardFrameCompanionResultKey,
@@ -79,6 +80,16 @@ export function trimStoryboardFrameHistory(
   history: StoryboardFrameImageVersion[]
 ): StoryboardFrameImageVersion[] {
   return history.slice(0, STORYBOARD_FRAME_HISTORY_LIMIT);
+}
+
+export function storyboardFrameHistoryVersionNeedsCompanionHydrate(
+  version: StoryboardFrameImageVersion
+): boolean {
+  if (String(version.frameImageObjectKey || '').trim()) return false;
+  return companionRasterSlotNeedsHydrate(
+    String(version.frameImage || ''),
+    String(version.frameImageCompanionKey || '')
+  );
 }
 
 export function storyboardFrameHistorySignature(history: StoryboardFrameImageVersion[] | undefined): string {

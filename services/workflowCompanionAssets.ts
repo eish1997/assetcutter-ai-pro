@@ -5,7 +5,7 @@ import { normalizeCompanionBaseUrl } from './companionLocalPrefs';
 import { mapSiteR2PathToFetchUrl, resolveCapabilityPreviewSrc } from './capabilityPreviewUrl';
 import { isWorkflowTextAsset } from './workflowTextAsset';
 import { isWorkflowStoryboardTableAsset } from './storyboardTableAsset';
-import { workflowModelSlotMayNeedCompanionHydrate } from './workflowModelBlob';
+import { workflowModelSlotMayNeedCompanionHydrate, isWorkflowModelUrlReadable } from './workflowModelBlob';
 
 export function sanitizeCompanionPathSegment(s: string): string {
   return String(s || '')
@@ -357,7 +357,11 @@ function shouldStripOriginalForPersist(original: string): boolean {
 
 function shouldStripResultUrlForPersist(url: string): boolean {
   const u = String(url || '').trim();
-  return u.startsWith('data:') || /^blob:/i.test(u);
+  return u.startsWith('data:') || /^blob:/i.test(u) || /^https?:\/\//i.test(u);
+}
+
+function shouldStripPendingImageForPersist(url: string): boolean {
+  return /^blob:/i.test(String(url || '').trim());
 }
 
 function shouldStripModelUrlForPersist(url: string): boolean {
@@ -428,18 +432,72 @@ export function stripWorkflowBundleForIdbPersist(bundle: WorkflowProjectBundle):
     if (isWorkflowStoryboardTableAsset(a) && a.storyboardTable?.rows?.length) {
       let touchedSb = false;
       const rows = a.storyboardTable.rows.map((row) => {
+        let nextRow = row;
         const ck = String(row.frameImageCompanionKey || '').trim();
-        if (!ck) return row;
-        const cur = String(row.frameImage || '').trim();
-        if (cur && shouldStripResultUrlForPersist(cur)) {
-          touchedSb = true;
-          return { ...row, frameImage: '' };
+        if (ck) {
+          const cur = String(row.frameImage || '').trim();
+          if (cur && shouldStripResultUrlForPersist(cur)) {
+            touchedSb = true;
+            nextRow = { ...nextRow, frameImage: '' };
+          }
         }
-        return row;
+        const history = nextRow.frameImageHistory;
+        if (!history?.length) return nextRow;
+        let touchedHist = false;
+        const nextHistory = history.map((ver) => {
+          const histObjectKey = String(ver.frameImageObjectKey || '').trim();
+          if (histObjectKey) {
+            const cur = String(ver.frameImage || '').trim();
+            if (cur && shouldStripResultUrlForPersist(cur)) {
+              touchedHist = true;
+              return { ...ver, frameImage: '' };
+            }
+            return ver;
+          }
+          const hck = String(ver.frameImageCompanionKey || '').trim();
+          if (!hck) return ver;
+          const cur = String(ver.frameImage || '').trim();
+          if (cur && shouldStripResultUrlForPersist(cur)) {
+            touchedHist = true;
+            return { ...ver, frameImage: '' };
+          }
+          return ver;
+        });
+        if (touchedHist) {
+          touchedSb = true;
+          nextRow = { ...nextRow, frameImageHistory: nextHistory };
+        }
+        return nextRow;
       });
       if (touchedSb) {
         a.storyboardTable = { ...a.storyboardTable, rows };
       }
+    }
+  }
+  if (Array.isArray(out.pending)) {
+    for (const t of out.pending) {
+      if (shouldStripPendingImageForPersist(String(t.inputImage || ''))) {
+        t.inputImage = '';
+      }
+      if (Array.isArray(t.inputImages) && t.inputImages.length > 0) {
+        t.inputImages = t.inputImages.map((img) =>
+          shouldStripPendingImageForPersist(String(img || '')) ? '' : img
+        );
+      }
+    }
+  }
+  for (const a of out.assets) {
+    if (!Array.isArray(a.cutImageGroup) || a.cutImageGroup.length === 0) continue;
+    let touchedCut = false;
+    a.cutImageGroup = a.cutImageGroup.map((item) => {
+      if (typeof item === 'string' && shouldStripPendingImageForPersist(item)) {
+        touchedCut = true;
+        return '';
+      }
+      return item;
+    });
+    if (touchedCut) {
+      /* cutImageGroup updated in place */
     }
   }
   return out;
@@ -473,6 +531,7 @@ export function workflowAssetNeedsCompanionModelHydrate(a: WorkflowAsset): boole
 /**
  * 画布 `original` / 结果串是否为可直接用于 img 展示或已规范化的 data/blob/http。
  * 短串（如误写入的伴侣键片段）视为不可展示，需走伴侣拉取或执行前解析。
+ * 注意：`blob:` 仅在当前文档会话内有效，持久化 bundle 刷新后须走伴侣 hydrate。
  */
 export function isDisplayableWorkflowImageRef(s: string): boolean {
   const t = String(s || '').trim();
@@ -486,13 +545,80 @@ export function isDisplayableWorkflowImageRef(s: string): boolean {
   return false;
 }
 
+/** 有伴侣键时，内存图槽是否需从伴侣重新拉取（含空串、不可展示短串、可能过期的 https；会话内 blob 视为已 hydrate） */
+export function companionRasterSlotNeedsHydrate(url: string, companionKey: string): boolean {
+  const ck = String(companionKey || '').trim();
+  if (!ck) return false;
+  const u = String(url ?? '').trim();
+  if (!u) return true;
+  if (/^blob:/i.test(u)) return false;
+  if (/^https?:\/\//i.test(u)) return true;
+  return !isDisplayableWorkflowImageRef(u);
+}
+
+/** 读盘 / 云同步后：去掉已落伴侣的 data/blob 等易失效串，刷新后走伴侣 hydrate */
+export function prepareWorkflowBundleAfterLoad(bundle: WorkflowProjectBundle): WorkflowProjectBundle {
+  return stripWorkflowBundleForIdbPersist(bundle);
+}
+
+/** hydrate 前：当前会话内仍可读的 data/blob 可跳过伴侣拉取 */
+export async function shouldKeepExistingCompanionRasterUrl(
+  url: string,
+  companionKey: string
+): Promise<boolean> {
+  const u = String(url ?? '').trim();
+  const ck = String(companionKey || '').trim();
+  if (!u || !ck) return false;
+  if (u.startsWith('data:')) return isDisplayableWorkflowImageRef(u);
+  if (/^blob:/i.test(u)) {
+    try {
+      const r = await fetch(u);
+      return r.ok;
+    } catch {
+      return false;
+    }
+  }
+  if (/^https?:\/\//i.test(u)) {
+    if (!ck) return isDisplayableWorkflowImageRef(u);
+    return await isWorkflowModelUrlReadable(u);
+  }
+  return isDisplayableWorkflowImageRef(u);
+}
+
+/** 手动上云打包前：是否存在仅伴侣键、无内存图串的资产/分镜/历史项 */
+export function workflowAssetNeedsCompanionHydrateForCloudPack(a: WorkflowAsset): boolean {
+  if (isWorkflowTextAsset(a)) return false;
+  if (!String(a.original || '').trim() && String(a.originalCompanionKey || '').trim()) return true;
+  const rck = a.resultsCompanionKeys || {};
+  for (const sid of Object.keys(rck)) {
+    if (!String(rck[sid] || '').trim()) continue;
+    if (!String((a.results || {})[sid] || '').trim()) return true;
+  }
+  if (isWorkflowStoryboardTableAsset(a) && a.storyboardTable?.rows?.length) {
+    for (const row of a.storyboardTable.rows) {
+      if (!String(row.frameImage || '').trim() && String(row.frameImageCompanionKey || '').trim()) {
+        return true;
+      }
+      for (const ver of row.frameImageHistory || []) {
+        if (String(ver.frameImageObjectKey || '').trim()) continue;
+        if (!String(ver.frameImage || '').trim() && String(ver.frameImageCompanionKey || '').trim()) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+export function workflowBundleNeedsCompanionHydrateForCloudPack(bundle: {
+  assets: WorkflowAsset[];
+}): boolean {
+  return bundle.assets.some(workflowAssetNeedsCompanionHydrateForCloudPack);
+}
+
 export function workflowAssetNeedsCompanionOriginalHydrate(a: WorkflowAsset): boolean {
   if (isWorkflowTextAsset(a)) return false;
-  const key = String(a.originalCompanionKey || '').trim();
-  if (!key) return false;
-  const o = String(a.original ?? '').trim();
-  if (!o) return true;
-  return !isDisplayableWorkflowImageRef(o);
+  return companionRasterSlotNeedsHydrate(String(a.original ?? ''), String(a.originalCompanionKey || ''));
 }
 
 /** 是否存在「有伴侣结果键但该步无内存图串」需从伴侣补 blob: */
@@ -502,8 +628,9 @@ export function workflowAssetNeedsCompanionResultHydrate(a: WorkflowAsset): bool
   if (!rck) return false;
   const res = a.results || {};
   for (const stepId of Object.keys(rck)) {
-    if (!String(rck[stepId] || '').trim()) continue;
-    if (!String(res[stepId] ?? '').trim()) return true;
+    if (companionRasterSlotNeedsHydrate(String(res[stepId] ?? ''), String(rck[stepId] || ''))) {
+      return true;
+    }
   }
   return false;
 }

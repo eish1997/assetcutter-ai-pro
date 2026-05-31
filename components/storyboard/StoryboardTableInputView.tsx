@@ -7,6 +7,7 @@ import React, {
 } from 'react';
 import type { CustomAppModule, StoryboardParseFieldDef, StoryboardTableRow } from '../../types';
 import { computeStoryboardInputCoverage } from '../../services/storyboardTableInput';
+import type { CapabilityExecuteContext } from '../../services/capabilityExecutor';
 import { storyboardInputRowDomId } from './storyboardTableDom';
 import StoryboardTableBulkInput from './StoryboardTableBulkInput';
 import StoryboardTableSheetGen from './StoryboardTableSheetGen';
@@ -29,6 +30,8 @@ type Props = {
   assetId: string;
   rows: StoryboardTableRow[];
   fieldCatalog: StoryboardParseFieldDef[];
+  parsePreset?: CustomAppModule | null;
+  parseCtx?: CapabilityExecuteContext;
   activeRowId: string | null;
   readOnly?: boolean;
   onActiveRowIdChange: (rowId: string) => void;
@@ -58,6 +61,8 @@ const StoryboardTableInputView = forwardRef<StoryboardTableInputViewHandle, Prop
       assetId,
       rows,
       fieldCatalog,
+      parsePreset,
+      parseCtx,
       activeRowId,
       readOnly = false,
       onActiveRowIdChange,
@@ -100,6 +105,8 @@ const StoryboardTableInputView = forwardRef<StoryboardTableInputViewHandle, Prop
             assetId={assetId}
             rows={rows}
             fieldCatalog={fieldCatalog}
+            parsePreset={parsePreset}
+            parseCtx={parseCtx}
             readOnly={readOnly}
             onImport={onImportRows}
             onDraftChange={() => setDraftTick((tick) => tick + 1)}

@@ -5,7 +5,7 @@ import {
   compileSheetShotPanelFieldLines,
   compileSheetShotPanelMeta,
 } from '../services/storyboardTableSheetGen';
-import { planStoryboardSheetGroupTypography } from '../services/storyboardSheetCellTypography';
+import { planStoryboardSheetGroupTypography, planStoryboardSheetGroupTypographyUnbounded } from '../services/storyboardSheetCellTypography';
 
 const catalog: StoryboardParseFieldDef[] = [
   { id: 'f_visual', label: '画面内容', order: 0, redrawInclude: true, kind: 'text' },
@@ -150,5 +150,75 @@ describe('planStoryboardSheetGroupTypography', () => {
     });
 
     expect(group.bodySize).toBeLessThanOrEqual(aloneSparse.bodySize);
+  });
+
+  it('unbounded typography keeps readable minimum for dense panels', () => {
+    if (typeof document === 'undefined') return;
+
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    expect(ctx).toBeTruthy();
+    if (!ctx) return;
+
+    const dense = compileSheetShotPanelMeta(
+      row({
+        shotNo: 'SC01_SH001',
+        shotFields: {
+          f_size: '大远景',
+          f_visual:
+            '办公室内景，昏暗光线，奢华陈设，林峰独自站在巨大的落地窗前，俯瞰着脚下川流不息的城市夜景，手中端着一杯未动的威士忌。',
+          f_light: '低照度侧光',
+          f_costume: '黑色职业套装',
+        },
+      }),
+      catalog
+    );
+
+    const plan = planStoryboardSheetGroupTypographyUnbounded(ctx, [dense], {
+      cellW: 820,
+      cellH: 2000,
+      canvasWidth: 2560,
+    });
+
+    expect(plan.bodySize).toBeGreaterThanOrEqual(9);
+    expect(plan.bodySize).toBeGreaterThanOrEqual(Math.round(820 * 0.024 * 0.88));
+  });
+
+  it('unbounded typography does not shrink only because of fixed cell height budget', () => {
+    if (typeof document === 'undefined') return;
+
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    expect(ctx).toBeTruthy();
+    if (!ctx) return;
+
+    const sparse = compileSheetShotPanelMeta(
+      row({ shotNo: 'A', shotFields: { f_visual: '短', f_size: '近景' } }),
+      catalog
+    );
+    const dense = compileSheetShotPanelMeta(
+      row({
+        shotNo: 'SC01_SH001',
+        shotFields: {
+          f_size: '大远景',
+          f_visual:
+            '办公室内景，昏暗光线，奢华陈设，林峰独自站在巨大的落地窗前，俯瞰着脚下川流不息的城市夜景，手中端着一杯未动的威士忌。',
+        },
+      }),
+      catalog
+    );
+
+    const fixed = planStoryboardSheetGroupTypography(ctx, [sparse, dense], {
+      cellW: 300,
+      cellH: 220,
+      canvasWidth: 960,
+    });
+    const unbounded = planStoryboardSheetGroupTypographyUnbounded(ctx, [sparse, dense], {
+      cellW: 300,
+      cellH: 220,
+      canvasWidth: 960,
+    });
+
+    expect(unbounded.bodySize).toBeGreaterThanOrEqual(fixed.bodySize);
   });
 });

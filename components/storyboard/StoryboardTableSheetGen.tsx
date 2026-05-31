@@ -236,12 +236,13 @@ export default function StoryboardTableSheetGen({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-3 py-2.5">
+      {/* 顶栏：标题 + 执行 */}
       <div className="mb-2 flex shrink-0 flex-wrap items-center gap-2">
         <span className="text-[10px] font-semibold text-gray-400">生图</span>
         {source.rows.length > 0 ? (
           <span className="rounded-md bg-white/[0.06] px-1.5 py-0.5 text-[9px] text-gray-400">
             {source.rows.length} 镜 ÷ {shotsPerSheet} = {taskTotal} 张图
-            {source.source === 'draft' ? ' · 来自草稿' : ''}
+            {source.source === 'draft' ? ' · 草稿' : ''}
           </span>
         ) : (
           <span className="rounded-md bg-white/[0.06] px-1.5 py-0.5 text-[9px] text-gray-600">
@@ -249,7 +250,7 @@ export default function StoryboardTableSheetGen({
           </span>
         )}
         {busy && progress ? (
-          <span className="text-[9px] text-violet-300/90">
+          <span className="rounded-md bg-violet-500/10 px-1.5 py-0.5 text-[9px] text-violet-300/90 ring-1 ring-violet-400/15">
             生成中 {progress.done}/{progress.total}
           </span>
         ) : null}
@@ -263,10 +264,125 @@ export default function StoryboardTableSheetGen({
         </button>
       </div>
 
-      <div className="mb-2 flex min-h-[12rem] flex-1 flex-col overflow-hidden rounded-xl border border-white/[0.08] bg-black/30">
+      {/* 设置区：置顶 */}
+      <div className="mb-2 shrink-0 overflow-y-auto rounded-xl border border-white/[0.08] bg-black/25 no-scrollbar">
+        <div className="border-b border-white/[0.06] px-2.5 py-1.5">
+          <span className="text-[10px] font-semibold text-gray-300">生成设置</span>
+        </div>
+        <div className="space-y-2.5 p-2.5">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <div>
+              <label className={STORYBOARD_LABEL}>每张图镜头数</label>
+              <CustomDropdown
+                value={String(shotsPerSheet)}
+                options={shotsOptions}
+                onChange={handleShotsChange}
+                disabled={readOnly || busy}
+                triggerClassName="h-8 w-full rounded-lg bg-white/[0.04] px-2.5 text-[10px] text-gray-200 ring-1 ring-white/[0.07] hover:bg-white/[0.07]"
+                portalZIndex={dropdownZIndex}
+              />
+            </div>
+            <div>
+              <label className={STORYBOARD_LABEL}>生图能力</label>
+              <CustomDropdown
+                value={effectiveRedrawPresetId}
+                options={presetOptions}
+                onChange={handlePresetChange}
+                disabled={readOnly || busy || !presetOptions.length}
+                triggerClassName="h-8 w-full rounded-lg bg-white/[0.04] px-2.5 text-[10px] text-gray-200 ring-1 ring-white/[0.07] hover:bg-white/[0.07]"
+                portalZIndex={dropdownZIndex}
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className={STORYBOARD_LABEL}>附加提示词</label>
+            <textarea
+              value={promptExtra}
+              readOnly={readOnly || busy}
+              rows={2}
+              placeholder="手绘风格、画幅比例等；排版已默认紧凑（小字顶栏+底栏、少留白）"
+              onChange={(event) => handlePromptChange(event.target.value)}
+              className={`${STORYBOARD_FIELD_INPUT} min-h-[2.75rem] resize-none text-[10px] leading-relaxed`}
+            />
+          </div>
+
+          <div>
+            <label className={STORYBOARD_LABEL}>参考图</label>
+            <p className="mb-1.5 text-[9px] leading-snug text-gray-600">
+              图生图时使用；可选，叠加在分镜拼图之上。
+            </p>
+            <input
+              ref={refFileInput}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(event) => {
+                handleRefFile(event.target.files?.[0]);
+                event.target.value = '';
+              }}
+            />
+            <div className="flex items-center gap-2">
+              {referenceImage ? (
+                <button
+                  type="button"
+                  disabled={readOnly || busy}
+                  onClick={() => onPreviewImage?.(referenceImage)}
+                  className="h-14 w-20 shrink-0 overflow-hidden rounded-lg border border-white/[0.08] bg-black/40 ring-1 ring-white/[0.06] transition hover:ring-violet-400/25"
+                >
+                  <img src={referenceImage} alt="生图参考" className="h-full w-full object-cover" />
+                </button>
+              ) : (
+                <div className="flex h-14 w-20 shrink-0 items-center justify-center rounded-lg border border-dashed border-white/[0.1] bg-white/[0.02] text-[9px] text-gray-600">
+                  无
+                </div>
+              )}
+              <button
+                type="button"
+                disabled={readOnly || busy}
+                onClick={() => refFileInput.current?.click()}
+                className={`${STORYBOARD_TOOL_BTN_NEUTRAL} h-7 shrink-0 px-2.5 text-[10px]`}
+              >
+                {referenceImage ? '更换' : '上传参考图'}
+              </button>
+              {localRefImage ? (
+                <button
+                  type="button"
+                  disabled={readOnly || busy}
+                  onClick={() => setLocalRefImage(undefined)}
+                  className={`${STORYBOARD_TOOL_BTN_NEUTRAL} h-7 shrink-0 px-2 text-[10px] text-gray-500`}
+                >
+                  清除
+                </button>
+              ) : null}
+            </div>
+          </div>
+
+          {tasks.length > 0 ? (
+            <details className="rounded-lg border border-white/[0.06] bg-white/[0.02] px-2 py-1.5">
+              <summary className="cursor-pointer select-none text-[9px] font-semibold text-gray-500">
+                任务预览（{tasks.length} 批）
+              </summary>
+              <div className="mt-1.5 flex max-h-20 flex-col gap-0.5 overflow-y-auto no-scrollbar">
+                {tasks.map((task) => (
+                  <p key={task.chunkIndex} className="text-[9px] leading-snug text-gray-400">
+                    批 {task.chunkIndex + 1}：
+                    {task.rows
+                      .map((row) => row.shotNo?.trim() || `${row.index + 1}`)
+                      .join('、')}
+                  </p>
+                ))}
+              </div>
+            </details>
+          ) : null}
+        </div>
+      </div>
+
+      {/* 拼图预览：置底，占满剩余高度 */}
+      <div className="flex min-h-[10rem] flex-1 flex-col overflow-hidden rounded-xl border border-white/[0.08] bg-black/30">
         <div className="flex shrink-0 items-center justify-between gap-2 border-b border-white/[0.06] px-2.5 py-1.5">
           <span className="text-[10px] font-semibold text-gray-300">AI 拼图</span>
-          <div className="flex items-center gap-1.5">
+          <div className="flex flex-wrap items-center justify-end gap-1.5">
             <input
               ref={sheetUploadRef}
               type="file"
@@ -314,121 +430,38 @@ export default function StoryboardTableSheetGen({
               alt={activePreview.label}
               className="h-full w-full object-contain"
             />
-            <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-2 bg-gradient-to-t from-black/80 to-transparent px-2.5 py-1.5">
-              <span className="text-[9px] text-gray-200">{activePreview.label}</span>
-              <span className="text-[9px] text-gray-400">
+            <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-2 bg-gradient-to-t from-black/85 via-black/50 to-transparent px-2.5 py-2">
+              <span className="truncate text-[9px] text-gray-200">{activePreview.label}</span>
+              <span className="shrink-0 text-[9px] text-gray-400">
                 回填 {activePreview.matchedCount}/{activePreview.shotNos.length || activePreview.rowIds.length} 镜
               </span>
             </div>
           </div>
         ) : (
-          <div className="flex flex-1 items-center justify-center px-3 py-4 text-center text-[10px] text-gray-600">
-            AI 手绘拼图：点「执行生图」或「上传拼图」后在此预览与切分回填
+          <div className="flex flex-1 flex-col items-center justify-center gap-1.5 px-4 py-6 text-center">
+            <span className="text-[10px] font-medium text-gray-500">暂无拼图</span>
+            <span className="max-w-[16rem] text-[9px] leading-relaxed text-gray-600">
+              配置上方参数后点「执行生图」，或上传已有拼图进行切分回填
+            </span>
           </div>
         )}
 
         {sheetPreviews.length > 0 ? (
-          <div className="flex shrink-0 gap-1.5 overflow-x-auto border-t border-white/[0.06] px-2 py-1.5">
+          <div className="flex shrink-0 gap-1.5 overflow-x-auto border-t border-white/[0.06] px-2 py-1.5 no-scrollbar">
             {sheetPreviews.map((item) => (
               <button
                 key={item.id}
                 type="button"
                 onClick={() => setSelectedPreviewId(item.id)}
-                className={`shrink-0 overflow-hidden rounded-md border ${
+                className={`shrink-0 overflow-hidden rounded-md border transition ${
                   activePreview?.id === item.id
                     ? 'border-violet-500/60 ring-1 ring-violet-500/30'
-                    : 'border-white/[0.08]'
+                    : 'border-white/[0.08] opacity-80 hover:opacity-100'
                 }`}
               >
-                <img src={item.imageDataUrl} alt={item.label} className="h-10 w-16 object-cover" />
+                <img src={item.imageDataUrl} alt={item.label} className="h-11 w-[4.5rem] object-cover" />
               </button>
             ))}
-          </div>
-        ) : null}
-      </div>
-
-      <div className="min-h-0 max-h-[min(42%,16rem)] shrink-0 overflow-y-auto border-t border-white/[0.06] pt-2 no-scrollbar">
-        <div className="flex flex-col gap-2">
-          <div>
-            <label className={STORYBOARD_LABEL}>每张图镜头数</label>
-            <CustomDropdown
-              value={String(shotsPerSheet)}
-              options={shotsOptions}
-              onChange={handleShotsChange}
-              disabled={readOnly || busy}
-              triggerClassName="h-8 w-full rounded-lg bg-white/[0.04] px-2.5 text-[10px] text-gray-200 ring-1 ring-white/[0.07] hover:bg-white/[0.07]"
-              portalZIndex={dropdownZIndex}
-            />
-          </div>
-          <div>
-            <label className={STORYBOARD_LABEL}>生图能力</label>
-            <CustomDropdown
-              value={effectiveRedrawPresetId}
-              options={presetOptions}
-              onChange={handlePresetChange}
-              disabled={readOnly || busy || !presetOptions.length}
-              triggerClassName="h-8 w-full rounded-lg bg-white/[0.04] px-2.5 text-[10px] text-gray-200 ring-1 ring-white/[0.07] hover:bg-white/[0.07]"
-              portalZIndex={dropdownZIndex}
-            />
-          </div>
-        </div>
-
-        <div>
-          <label className={STORYBOARD_LABEL}>附加提示词</label>
-          <textarea
-            value={promptExtra}
-            readOnly={readOnly || busy}
-            rows={2}
-            placeholder="手绘风格、画幅比例等；排版已默认紧凑（小字顶栏+底栏、少留白）"
-            onChange={(event) => handlePromptChange(event.target.value)}
-            className={`${STORYBOARD_FIELD_INPUT} min-h-[3rem] resize-y text-[10px]`}
-          />
-        </div>
-
-        <div>
-          <label className={STORYBOARD_LABEL}>参考图（可选，叠加在上方分镜图之上）</label>
-          <input
-            ref={refFileInput}
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={(event) => {
-              handleRefFile(event.target.files?.[0]);
-              event.target.value = '';
-            }}
-          />
-          {referenceImage ? (
-            <div className="mb-1.5 overflow-hidden rounded-lg border border-white/[0.08] bg-black/30">
-              <img src={referenceImage} alt="生图参考" className="max-h-24 w-full object-contain" />
-            </div>
-          ) : (
-            <p className="mb-1.5 text-[9px] text-gray-600">
-              图生图时使用；优先本区上传参考图。
-            </p>
-          )}
-          <button
-            type="button"
-            disabled={readOnly || busy}
-            onClick={() => refFileInput.current?.click()}
-            className={`${STORYBOARD_TOOL_BTN_NEUTRAL} h-7 px-2.5 text-[10px]`}
-          >
-            {referenceImage ? '更换参考图' : '上传参考图'}
-          </button>
-        </div>
-
-        {tasks.length > 0 ? (
-          <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-2.5 py-2">
-            <p className="mb-1 text-[9px] font-semibold text-gray-500">任务预览</p>
-            <div className="flex flex-col gap-1">
-              {tasks.map((task) => (
-                <p key={task.chunkIndex} className="text-[9px] text-gray-400">
-                  任务 {task.chunkIndex + 1}：镜头{' '}
-                  {task.rows
-                    .map((row) => row.shotNo?.trim() || `${row.index + 1}`)
-                    .join('、')}
-                </p>
-              ))}
-            </div>
           </div>
         ) : null}
       </div>

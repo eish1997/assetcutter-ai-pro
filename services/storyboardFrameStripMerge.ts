@@ -1,10 +1,11 @@
 import type { StoryboardParseFieldDef } from '../types';
 import { compileSheetShotPanelMeta } from './storyboardTableSheetGen';
-import { planStoryboardSheetGroupTypography } from './storyboardSheetCellTypography';
+import { planStoryboardSheetGroupTypographyUnbounded } from './storyboardSheetCellTypography';
 import type { StoryboardDurationGroup } from './storyboardGridDurationGroups';
 import { storyboardDurationGroupMergeSignature } from './storyboardGridDurationGroups';
 import {
   drawCompactStoryboardCell,
+  measureCompactStoryboardCellHeight,
   clearStoryboardCompositeFrameImageCache,
 } from './storyboardCompositeFrameRender';
 import { clearStoryboardGridMosaicPreviewCache } from './storyboardGridMosaicPreview';
@@ -14,7 +15,6 @@ import {
 } from './storyboardSheetSketchStyle';
 
 const DEFAULT_WIDTH = 960;
-const DEFAULT_HEIGHT = 720;
 
 /** 将 N 个完整画面排成近似方阵（列数 ≥ 行数，优先横向） */
 export function computeStoryboardMosaicGrid(cellCount: number): { cols: number; rows: number } {
@@ -27,11 +27,26 @@ export function computeStoryboardMosaicGrid(cellCount: number): { cols: number; 
 
 export type StoryboardGroupMosaicRenderOpts = {
   width?: number;
+  /** @deprecated 高度随内容自适应；传入值将被忽略 */
   height?: number;
   jpegQuality?: number;
 };
 
-/** 离屏渲染一组镜头的拼图位图（仅下载时调用） */
+function computeMosaicRowHeights(cellHeights: number[], cols: number, gridRows: number): number[] {
+  const rowHeights: number[] = [];
+  for (let rowIdx = 0; rowIdx < gridRows; rowIdx += 1) {
+    let maxH = 0;
+    for (let col = 0; col < cols; col += 1) {
+      const index = rowIdx * cols + col;
+      if (index >= cellHeights.length) break;
+      maxH = Math.max(maxH, cellHeights[index] ?? 0);
+    }
+    rowHeights.push(maxH);
+  }
+  return rowHeights;
+}
+
+/** 离屏渲染一组镜头的拼图位图（可变行高，不裁切图/字） */
 export async function renderStoryboardGroupMosaicDataUrl(
   group: StoryboardDurationGroup,
   fieldCatalog: StoryboardParseFieldDef[] = [],
@@ -42,9 +57,41 @@ export async function renderStoryboardGroupMosaicDataUrl(
   await ensureStoryboardSheetSketchFontLoaded();
 
   const width = Math.max(320, Math.round(opts.width ?? DEFAULT_WIDTH));
-  const height = Math.max(240, Math.round(opts.height ?? DEFAULT_HEIGHT));
   const jpegQuality = opts.jpegQuality ?? 0.92;
   const scale = width / DEFAULT_WIDTH;
+
+  const { cols, rows: gridRows } = computeStoryboardMosaicGrid(group.rows.length);
+  const pad = Math.max(4, Math.round(6 * scale));
+  const gap = Math.max(2, Math.round(4 * scale));
+  const innerW = width - pad * 2;
+  const cellW = cols > 0 ? (innerW - gap * (cols - 1)) / cols : innerW;
+
+  const measureCanvas = document.createElement('canvas');
+  const measureCtx = measureCanvas.getContext('2d');
+  if (!measureCtx) return null;
+
+  const metas = group.rows.map((row) => compileSheetShotPanelMeta(row, fieldCatalog));
+  const groupTypography = planStoryboardSheetGroupTypographyUnbounded(measureCtx, metas, {
+    cellW,
+    cellH: Math.round(cellW * 2.5),
+    canvasWidth: width,
+  });
+
+  const cellHeights: number[] = [];
+  for (const row of group.rows) {
+    cellHeights.push(
+      await measureCompactStoryboardCellHeight(measureCtx, row, fieldCatalog, cellW, {
+        canvasWidth: width,
+        typographyPlan: groupTypography,
+        variableHeight: true,
+      })
+    );
+  }
+
+  const rowHeights = computeMosaicRowHeights(cellHeights, cols, gridRows);
+  const innerH =
+    rowHeights.reduce((sum, rowH) => sum + rowH, 0) + Math.max(0, gridRows - 1) * gap;
+  const height = Math.max(240, Math.round(innerH + pad * 2));
 
   const canvas = document.createElement('canvas');
   canvas.width = width;
@@ -55,33 +102,23 @@ export async function renderStoryboardGroupMosaicDataUrl(
   ctx.fillStyle = STORYBOARD_SHEET_SKETCH_BG;
   ctx.fillRect(0, 0, width, height);
 
-  const { cols, rows } = computeStoryboardMosaicGrid(group.rows.length);
-  const pad = Math.max(4, Math.round(6 * scale));
-  const gap = Math.max(2, Math.round(4 * scale));
-  const innerW = width - pad * 2;
-  const innerH = height - pad * 2;
-  const cellW = cols > 0 ? (innerW - gap * (cols - 1)) / cols : innerW;
-  const cellH = rows > 0 ? (innerH - gap * (rows - 1)) / rows : innerH;
+  let y = pad;
+  for (let rowIdx = 0; rowIdx < gridRows; rowIdx += 1) {
+    const rowH = rowHeights[rowIdx] ?? 0;
+    for (let col = 0; col < cols; col += 1) {
+      const index = rowIdx * cols + col;
+      if (index >= group.rows.length) break;
+      const row = group.rows[index]!;
+      const x = pad + col * (cellW + gap);
 
-  const metas = group.rows.map((row) => compileSheetShotPanelMeta(row, fieldCatalog));
-  const groupTypography = planStoryboardSheetGroupTypography(ctx, metas, {
-    cellW,
-    cellH,
-    canvasWidth: width,
-  });
-
-  for (let i = 0; i < group.rows.length; i += 1) {
-    const row = group.rows[i]!;
-    const col = i % cols;
-    const rowIdx = Math.floor(i / cols);
-    const x = pad + col * (cellW + gap);
-    const y = pad + rowIdx * (cellH + gap);
-
-    await drawCompactStoryboardCell(ctx, row, fieldCatalog, x, y, cellW, cellH, {
-      canvasWidth: width,
-      imageFit: 'width',
-      typographyPlan: groupTypography,
-    });
+      await drawCompactStoryboardCell(ctx, row, fieldCatalog, x, y, cellW, rowH, {
+        canvasWidth: width,
+        imageFit: 'width',
+        typographyPlan: groupTypography,
+        variableHeight: true,
+      });
+    }
+    y += rowH + gap;
   }
 
   try {
@@ -97,10 +134,8 @@ export async function renderStoryboardGroupMosaicBlob(
   exportWidth: number
 ): Promise<Blob | null> {
   const width = Math.max(960, Math.round(exportWidth));
-  const height = Math.round((width * 3) / 4);
   const dataUrl = await renderStoryboardGroupMosaicDataUrl(group, fieldCatalog, {
     width,
-    height,
     jpegQuality: 0.92,
   });
   if (!dataUrl) return null;

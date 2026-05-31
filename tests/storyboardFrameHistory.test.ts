@@ -4,9 +4,12 @@ import {
   appendStoryboardFrameHistory,
   normalizeStoryboardFrameHistory,
   restoreStoryboardRowFrameVersion,
+  storyboardFrameHistoryVersionNeedsCompanionHydrate,
   storyboardFrameRefsEqual,
   trimStoryboardFrameHistory,
 } from '../services/storyboardFrameHistory';
+import { prepareWorkflowBundleAfterLoad } from '../services/workflowCompanionAssets';
+import type { WorkflowAsset } from '../types';
 
 const row = (partial: Partial<StoryboardTableRow>): StoryboardTableRow => ({
   id: partial.id || 'r1',
@@ -86,5 +89,54 @@ describe('storyboardFrameHistory', () => {
       frameImage: `data:${i}`,
     }));
     expect(trimStoryboardFrameHistory(long)).toHaveLength(12);
+  });
+
+  it('detects history versions needing companion hydrate after load strip', () => {
+    const version = {
+      id: 'v1',
+      createdAt: 1,
+      source: 'redraw' as const,
+      frameImageCompanionKey: 'hist-ck-1',
+    };
+    expect(storyboardFrameHistoryVersionNeedsCompanionHydrate(version)).toBe(true);
+    expect(
+      storyboardFrameHistoryVersionNeedsCompanionHydrate({
+        ...version,
+        frameImage: 'blob:http://localhost/x',
+      })
+    ).toBe(false);
+  });
+
+  it('prepareWorkflowBundleAfterLoad strips history inline refs when companion key exists', () => {
+    const asset: WorkflowAsset = {
+      id: 'sb1',
+      assetKind: 'storyboard_table',
+      displayKey: 'original',
+      original: '',
+      storyboardTable: {
+        fieldCatalog: [],
+        rows: [
+          {
+            id: 'r1',
+            index: 0,
+            shotFields: {},
+            shotText: '',
+            frameImageHistory: [
+              {
+                id: 'v1',
+                createdAt: 1,
+                source: 'redraw',
+                frameImage: 'data:image/png;base64,abc',
+                frameImageCompanionKey: 'hist-ck',
+              },
+            ],
+          },
+        ],
+      },
+    };
+    const out = prepareWorkflowBundleAfterLoad({ assets: [asset], pending: [] });
+    const hist = out.assets[0]?.storyboardTable?.rows[0]?.frameImageHistory?.[0];
+    expect(hist?.frameImage).toBe('');
+    expect(hist?.frameImageCompanionKey).toBe('hist-ck');
   });
 });

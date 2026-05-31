@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { CustomAppModule } from '../types';
 import {
   buildStoryboardRowPromptText,
+  listStoryboardFeedbackRedrawRows,
   listStoryboardRedrawPresets,
   pickDefaultStoryboardRedrawPresetId,
 } from '../services/storyboardTableRedraw';
@@ -55,5 +56,30 @@ describe('storyboardTableRedraw', () => {
     expect(text).toContain('03');
     expect(text).toContain('主角推门');
     expect(text).not.toContain('你好');
+  });
+
+  it('buildStoryboardRowPromptText appends edit feedback', () => {
+    const text = buildStoryboardRowPromptText(
+      {
+        id: '1',
+        index: 0,
+        shotNo: '03',
+        shotFields: { f_visual: '主角推门', f_dialogue: '你好' },
+        shotText: '',
+        durationSec: 2,
+        editFeedback: '门把手再大一点',
+      },
+      catalog
+    );
+    expect(text).toContain('【修改反馈】门把手再大一点');
+  });
+
+  it('listStoryboardFeedbackRedrawRows skips locked and empty feedback', () => {
+    const rows = [
+      { id: 'a', index: 0, shotFields: {}, shotText: '', editFeedback: '改构图', locked: false },
+      { id: 'b', index: 1, shotFields: {}, shotText: '', editFeedback: '  ', locked: false },
+      { id: 'c', index: 2, shotFields: {}, shotText: '', editFeedback: '保留', locked: true },
+    ];
+    expect(listStoryboardFeedbackRedrawRows(rows).map((r) => r.id)).toEqual(['a']);
   });
 });

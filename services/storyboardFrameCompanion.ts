@@ -1,4 +1,5 @@
 import {
+  companionRasterSlotNeedsHydrate,
   fetchWorkflowOriginalFromCompanionAsObjectUrl,
   putWorkflowResultImageToCompanion,
 } from './workflowCompanionAssets';
@@ -74,11 +75,10 @@ export async function persistStoryboardFrameImage(
 
 export function storyboardRowNeedsCompanionFrameHydrate(row: StoryboardTableRow): boolean {
   if (String(row.frameImageObjectKey || '').trim()) return false;
-  const key = String(row.frameImageCompanionKey || '').trim();
-  if (!key) return false;
-  const img = String(row.frameImage || '').trim();
-  if (!img) return true;
-  return !img.startsWith('data:') && !/^blob:/i.test(img) && !/^https?:\/\//i.test(img);
+  return companionRasterSlotNeedsHydrate(
+    String(row.frameImage || ''),
+    String(row.frameImageCompanionKey || '')
+  );
 }
 
 export function storyboardTableHasCompanionFrameHydrateGaps(

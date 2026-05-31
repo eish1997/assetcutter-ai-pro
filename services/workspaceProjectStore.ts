@@ -3,7 +3,7 @@ import { readLocalString, removeLocalKey, safeLocalStorage, writeLocalJson, writ
 import { idbDeleteBundle, idbLoadBundleJson, idbSaveBundleJson } from './workspaceBundleIdb';
 import { migrateLegacyAssets } from './assetGroupMigration';
 import { sanitizeWorkflowProjectBundle } from './workflowBundleSanitize';
-import { stripWorkflowBundleForIdbPersist } from './workflowCompanionAssets';
+import { stripWorkflowBundleForIdbPersist, prepareWorkflowBundleAfterLoad } from './workflowCompanionAssets';
 
 export type WorkspaceProject = {
   id: string;
@@ -306,7 +306,7 @@ export function loadWorkflowBundle(projectId: string, persistUserId: WorkspacePe
   try {
     const raw = readLocalString(key);
     if (!raw) return migrateWorkflowBundleSchema({ assets: [], pending: [] });
-    const bundle = parseBundleJson(raw);
+    const bundle = prepareWorkflowBundleAfterLoad(parseBundleJson(raw));
     bundleMemoryCache.set(key, cloneBundle(bundle));
     return bundle;
   } catch (e) {
@@ -363,15 +363,15 @@ export async function ensureWorkspaceBundlesHydratedFromIdb(persistUserId: Works
     try {
       const fromIdb = await idbLoadBundleJson(key);
       if (fromIdb) {
-        const bundle = parseBundleJson(fromIdb);
+        const bundle = prepareWorkflowBundleAfterLoad(parseBundleJson(fromIdb));
         bundleMemoryCache.set(key, cloneBundle(bundle));
         continue;
       }
       const raw = readLocalString(key);
       if (raw) {
-        const bundle = parseBundleJson(raw);
+        const bundle = prepareWorkflowBundleAfterLoad(parseBundleJson(raw));
         bundleMemoryCache.set(key, cloneBundle(bundle));
-        await idbSaveBundleJson(key, raw).catch(() => {});
+        await idbSaveBundleJson(key, JSON.stringify(stripWorkflowBundleForIdbPersist(bundle))).catch(() => {});
         removeLocalKey(key);
       }
     } catch (e) {

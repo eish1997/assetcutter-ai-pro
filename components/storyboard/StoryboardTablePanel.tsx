@@ -12,7 +12,11 @@ import {
   resolveStoryboardTableTitle,
 } from '../../services/storyboardTableAsset';
 import { reorderStoryboardRowsInLayer, collapseStoryboardTimelineTopLayer, clampStoryboardTimelineLayerCount } from '../../services/storyboardVideoTimeline';
-import { buildStoryboardRowPromptText } from '../../services/storyboardTableRedraw';
+import {
+  buildStoryboardRowPromptText,
+  listStoryboardFeedbackRedrawRows,
+  STORYBOARD_EDIT_REDRAW_PRESET_KEY,
+} from '../../services/storyboardTableRedraw';
 import {
   executeStoryboardSheetGenBatch,
   planStoryboardSheetGenTasks,
@@ -209,6 +213,11 @@ export default function StoryboardTablePanel({
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   const [imageBusyRowId, setImageBusyRowId] = useState<string | null>(null);
   const [redrawBusyRowId, setRedrawBusyRowId] = useState<string | null>(null);
+  const [feedbackBatchBusy, setFeedbackBatchBusy] = useState(false);
+  const [feedbackBatchProgress, setFeedbackBatchProgress] = useState<{
+    done: number;
+    total: number;
+  } | null>(null);
   const [sheetGenBusy, setSheetGenBusy] = useState(false);
   const [sheetGenProgress, setSheetGenProgress] = useState<{ done: number; total: number } | null>(
     null
@@ -394,6 +403,35 @@ export default function StoryboardTablePanel({
 
   const effectiveRedrawPresetId = redrawPresetId;
 
+  const resolvedEditRedrawPresetId = useMemo(() => {
+    const stored = readLocalJson(STORYBOARD_EDIT_REDRAW_PRESET_KEY, defaultRedrawPresetId, (v) =>
+      typeof v === 'string' ? v : null
+    );
+    if (stored && redrawPresets.some((p) => p.id === stored)) return stored;
+    if (defaultRedrawPresetId && redrawPresets.some((p) => p.id === defaultRedrawPresetId)) {
+      return defaultRedrawPresetId;
+    }
+    return redrawPresets[0]?.id ?? '';
+  }, [defaultRedrawPresetId, redrawPresets]);
+
+  const [editRedrawPresetId, setEditRedrawPresetId] = useState(resolvedEditRedrawPresetId);
+
+  useEffect(() => {
+    setEditRedrawPresetId(resolvedEditRedrawPresetId);
+  }, [asset.id, resolvedEditRedrawPresetId]);
+
+  const effectiveEditRedrawPresetId = editRedrawPresetId;
+
+  const setEditRedrawPresetIdPersisted = useCallback((presetId: string) => {
+    setEditRedrawPresetId(presetId);
+    writeLocalJson(STORYBOARD_EDIT_REDRAW_PRESET_KEY, presetId);
+  }, []);
+
+  const redrawPresetOptions = useMemo(
+    () => redrawPresets.map((preset) => ({ value: preset.id, label: preset.label || preset.id })),
+    [redrawPresets]
+  );
+
   const setRedrawPresetIdPersisted = useCallback(
     (presetId: string) => {
       setRedrawPresetId(presetId);
@@ -436,6 +474,14 @@ export default function StoryboardTablePanel({
     () => effectiveParsePresets.map((p) => ({ value: p.id, label: p.label || p.id })),
     [effectiveParsePresets]
   );
+
+  const activeParsePreset = useMemo(() => {
+    if (effectiveParsePresetId) {
+      const matched = effectiveParsePresets.find((preset) => preset.id === effectiveParsePresetId);
+      if (matched) return matched;
+    }
+    return effectiveParsePresets[0] ?? getBuiltinStoryboardParsePreset();
+  }, [effectiveParsePresetId, effectiveParsePresets]);
 
   const optimizePresetOptions = useMemo(
     () => effectiveOptimizePresets.map((p) => ({ value: p.id, label: p.label || p.id })),
@@ -760,6 +806,8 @@ export default function StoryboardTablePanel({
         if (file) dataUrl = await readStoryboardFrameFromFile(file);
         else dataUrl = await readStoryboardFrameFromClipboard(clipboard ?? null);
         if (!dataUrl) return;
+        const row = table.rows.find((r) => r.id === rowId);
+        if (!row) return;
         const patch = await replaceStoryboardRowFrame({
           row,
           dataUrl,
@@ -775,7 +823,7 @@ export default function StoryboardTablePanel({
         setImageBusyRowId(null);
       }
     },
-    [asset.id, companionBaseUrl, companionProjectId, onNotify, patchRow]
+    [asset.id, companionBaseUrl, companionProjectId, onNotify, patchRow, table.rows]
   );
 
   const restoreFrameVersion = useCallback(
@@ -821,8 +869,8 @@ export default function StoryboardTablePanel({
 
   const runRedraw = useCallback(
     async (rowId: string) => {
-      if (!onRedrawRow || !effectiveRedrawPresetId) {
-        onNotify?.('warn', '请先在功能区启用文生图/图生图能力');
+      if (!onRedrawRow || !effectiveEditRedrawPresetId) {
+        onNotify?.('warn', '请先在编辑页选择重绘模型');
         return;
       }
       const row = table.rows.find((r) => r.id === rowId);
@@ -832,20 +880,68 @@ export default function StoryboardTablePanel({
         return;
       }
       if (!buildStoryboardRowPromptText(row, table.fieldCatalog)) {
-        onNotify?.('warn', '请先解析或填写画面类字段');
+        onNotify?.('warn', '请先解析、填写画面类字段或修改反馈');
         return;
       }
       setRedrawBusyRowId(rowId);
       try {
-        await onRedrawRow(rowId, effectiveRedrawPresetId);
+        await onRedrawRow(rowId, effectiveEditRedrawPresetId);
       } catch (e) {
         onNotify?.('warn', e instanceof Error ? e.message : '重绘失败');
       } finally {
         setRedrawBusyRowId(null);
       }
     },
-    [effectiveRedrawPresetId, onNotify, onRedrawRow, table.fieldCatalog, table.rows]
+    [effectiveEditRedrawPresetId, onNotify, onRedrawRow, table.fieldCatalog, table.rows]
   );
+
+  const runFeedbackBatchRedraw = useCallback(async () => {
+    if (!onRedrawRow || !effectiveEditRedrawPresetId) {
+      onNotify?.('warn', '请先在编辑页选择重绘模型');
+      return;
+    }
+    const preset = redrawPresets.find((p) => p.id === effectiveEditRedrawPresetId);
+    const eligible = listStoryboardFeedbackRedrawRows(table.rows).filter((row) => {
+      if (!buildStoryboardRowPromptText(row, table.fieldCatalog)) return false;
+      if (preset?.category === 'image_to_image' && !storyboardRowHasFrameRef(row)) return false;
+      return true;
+    });
+    if (!eligible.length) {
+      onNotify?.('warn', '没有可重绘的镜头（需填写修改反馈，且满足生图条件）');
+      return;
+    }
+    if (!window.confirm(`按修改反馈重绘 ${eligible.length} 镜？将调用生图模型。`)) return;
+
+    setFeedbackBatchBusy(true);
+    setFeedbackBatchProgress({ done: 0, total: eligible.length });
+    let ok = 0;
+    let fail = 0;
+    for (const row of eligible) {
+      setRedrawBusyRowId(row.id);
+      try {
+        await onRedrawRow(row.id, effectiveEditRedrawPresetId);
+        ok += 1;
+      } catch {
+        fail += 1;
+      } finally {
+        setFeedbackBatchProgress({ done: ok + fail, total: eligible.length });
+      }
+    }
+    setRedrawBusyRowId(null);
+    setFeedbackBatchBusy(false);
+    setFeedbackBatchProgress(null);
+    onNotify?.(
+      'info',
+      fail > 0 ? `反馈重绘完成：成功 ${ok}，失败 ${fail}` : `反馈重绘完成：${ok} 镜`
+    );
+  }, [
+    effectiveEditRedrawPresetId,
+    onNotify,
+    onRedrawRow,
+    redrawPresets,
+    table.fieldCatalog,
+    table.rows,
+  ]);
 
   const runSheetGen = useCallback(
     async (request: StoryboardSheetGenBatchRequest) => {
@@ -1161,15 +1257,26 @@ export default function StoryboardTablePanel({
       if (readOnly) return '只读模式';
       if (row.locked) return '已锁定';
       if (!redrawPresets.length) return '无可用生图能力';
-      if (!buildStoryboardRowPromptText(row, table.fieldCatalog)) return '需先解析或填写画面类字段';
-      const preset = redrawPresets.find((p) => p.id === effectiveRedrawPresetId);
+      if (!buildStoryboardRowPromptText(row, table.fieldCatalog)) {
+        return '需先解析、填写画面类字段或修改反馈';
+      }
+      const preset = redrawPresets.find((p) => p.id === effectiveEditRedrawPresetId);
       if (preset?.category === 'image_to_image' && !storyboardRowHasFrameRef(row)) {
         return '图生图需先有分镜图，或改选文生图';
       }
       return undefined;
     },
-    [effectiveRedrawPresetId, readOnly, redrawPresets, table.fieldCatalog]
+    [effectiveEditRedrawPresetId, readOnly, redrawPresets, table.fieldCatalog]
   );
+
+  const feedbackRedrawEligibleCount = useMemo(() => {
+    const preset = redrawPresets.find((p) => p.id === effectiveEditRedrawPresetId);
+    return listStoryboardFeedbackRedrawRows(table.rows).filter((row) => {
+      if (!buildStoryboardRowPromptText(row, table.fieldCatalog)) return false;
+      if (preset?.category === 'image_to_image' && !storyboardRowHasFrameRef(row)) return false;
+      return true;
+    }).length;
+  }, [effectiveEditRedrawPresetId, redrawPresets, table.fieldCatalog, table.rows]);
 
   const rowInteraction = useMemo((): StoryboardRowInteractionValue => {
     return {
@@ -1401,6 +1508,18 @@ export default function StoryboardTablePanel({
                 />
               </div>
             ) : null}
+            {redrawPresetOptions.length > 0 ? (
+              <div className="flex min-w-[10rem] max-w-xs items-center gap-1.5">
+                <span className="shrink-0 text-[10px] text-gray-500">重绘模型</span>
+                <CustomDropdown
+                  value={effectiveEditRedrawPresetId}
+                  options={redrawPresetOptions}
+                  onChange={setEditRedrawPresetIdPersisted}
+                  triggerClassName="h-8 min-w-[8rem] flex-1 rounded-lg bg-white/[0.04] px-2.5 text-[10px] text-gray-200 ring-1 ring-white/[0.07] hover:bg-white/[0.07]"
+                  portalZIndex={STORYBOARD_PANEL_DROPDOWN_Z}
+                />
+              </div>
+            ) : null}
             <button type="button" onClick={addRow} className={STORYBOARD_TOOL_BTN_PRIMARY}>
               添加镜头
             </button>
@@ -1524,6 +1643,8 @@ export default function StoryboardTablePanel({
           assetId={asset.id}
           rows={table.rows}
           fieldCatalog={table.fieldCatalog}
+          parsePreset={activeParsePreset}
+          parseCtx={parseCtx}
           activeRowId={activeRowId}
           readOnly={readOnly}
           onActiveRowIdChange={setActiveRowId}
@@ -1581,6 +1702,12 @@ export default function StoryboardTablePanel({
           activeRowId={activeRowId}
           imageBusyRowId={imageBusyRowId}
           redrawBusyRowId={redrawBusyRowId}
+          feedbackBatchBusy={feedbackBatchBusy}
+          feedbackBatchProgress={feedbackBatchProgress}
+          feedbackRedrawEligibleCount={feedbackRedrawEligibleCount}
+          onFeedbackBatchRedraw={
+            !readOnly && onRedrawRow ? () => void runFeedbackBatchRedraw() : undefined
+          }
           parseBusyRowId={parseBusyRowId}
           parseAllBusy={parseAllBusy}
           optimizeBusyRowId={optimizeBusyRowId}

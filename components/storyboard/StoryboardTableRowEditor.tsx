@@ -62,6 +62,7 @@ type Props = {
   onRestoreFrameVersion?: (versionId: string) => void;
   domId?: string;
   timelineLayerCount?: number;
+  editDisplayMode?: 'full' | 'feedback';
 };
 
 function parseDurationInput(raw: string): number | null {
@@ -104,7 +105,9 @@ export default function StoryboardTableRowEditor({
   onRestoreFrameVersion,
   domId,
   timelineLayerCount = 1,
+  editDisplayMode = 'full',
 }: Props) {
+  const feedbackMode = editDisplayMode === 'feedback';
   const img = resolveStoryboardRowFrameDisplaySrc(row);
   const shotLabel = storyboardRowOutlineTitle(row, index);
   const shell = `${STORYBOARD_ROW_SHELL} ${row.locked ? 'opacity-70' : ''} ${
@@ -378,90 +381,108 @@ export default function StoryboardTableRowEditor({
             ) : null}
           </div>
 
-          <div className={`grid grid-cols-2 ${STORYBOARD_GAP_INNER}`}>
+          {feedbackMode ? (
             <label className="block">
-              <span className={STORYBOARD_LABEL}>镜头号</span>
-              <input
-                value={row.shotNo ?? ''}
+              <span className={STORYBOARD_LABEL}>修改反馈</span>
+              <textarea
+                value={row.editFeedback ?? ''}
                 readOnly={readOnly}
-                onChange={(e) => onPatch({ shotNo: e.target.value })}
+                onChange={(e) => onPatch({ editFeedback: e.target.value })}
                 onMouseDown={stopInputFocusBubble}
                 onFocus={stopInputFocusBubble}
-                className={STORYBOARD_FIELD_INPUT}
-                placeholder="01"
+                rows={textareaRowsForText(row.editFeedback ?? '', 4)}
+                className={`${STORYBOARD_FIELD_INPUT} min-h-[6rem] resize-y leading-relaxed`}
+                placeholder="描述需要修改的画面、构图、动作等问题…"
               />
             </label>
-            <label className="block">
-              <span className={STORYBOARD_LABEL}>时长</span>
-              <div className="relative">
-                <input
-                  value={row.durationSec != null ? String(row.durationSec) : ''}
+          ) : (
+            <>
+              <div className={`grid grid-cols-2 ${STORYBOARD_GAP_INNER}`}>
+                <label className="block">
+                  <span className={STORYBOARD_LABEL}>镜头号</span>
+                  <input
+                    value={row.shotNo ?? ''}
+                    readOnly={readOnly}
+                    onChange={(e) => onPatch({ shotNo: e.target.value })}
+                    onMouseDown={stopInputFocusBubble}
+                    onFocus={stopInputFocusBubble}
+                    className={STORYBOARD_FIELD_INPUT}
+                    placeholder="01"
+                  />
+                </label>
+                <label className="block">
+                  <span className={STORYBOARD_LABEL}>时长</span>
+                  <div className="relative">
+                    <input
+                      value={row.durationSec != null ? String(row.durationSec) : ''}
+                      readOnly={readOnly}
+                      onChange={(e) => onPatch({ durationSec: parseDurationInput(e.target.value) })}
+                      onMouseDown={stopInputFocusBubble}
+                      onFocus={stopInputFocusBubble}
+                      className={`${STORYBOARD_FIELD_INPUT} pr-6`}
+                      placeholder="—"
+                      inputMode="decimal"
+                    />
+                    <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-[9px] text-gray-600">
+                      秒
+                    </span>
+                  </div>
+                </label>
+              </div>
+
+              {timelineLayerCount > 1 ? (
+                <label className="block max-w-[10rem]">
+                  <span className={STORYBOARD_LABEL}>时间轴轨道</span>
+                  <CustomDropdown
+                    value={String(row.timelineLayer ?? 0)}
+                    options={Array.from({ length: timelineLayerCount }, (_, i) => ({
+                      value: String(i),
+                      label: i === 0 ? `L${i} · 底层` : `L${i}`,
+                    }))}
+                    disabled={readOnly}
+                    onChange={(v) =>
+                      onPatch({
+                        timelineLayer: Math.min(timelineLayerCount - 1, Math.max(0, Number(v))),
+                      })
+                    }
+                    triggerClassName="h-8 w-full rounded-lg bg-white/[0.04] px-2.5 text-[10px] text-gray-200 ring-1 ring-white/[0.07] hover:bg-white/[0.07]"
+                    portalZIndex={LAYER_DROPDOWN_Z}
+                  />
+                </label>
+              ) : null}
+
+              <label className="block">
+                <span className={STORYBOARD_LABEL}>原文</span>
+                <textarea
+                  value={row.shotRaw ?? ''}
                   readOnly={readOnly}
-                  onChange={(e) => onPatch({ durationSec: parseDurationInput(e.target.value) })}
+                  onChange={(e) => onPatch({ shotRaw: e.target.value })}
                   onMouseDown={stopInputFocusBubble}
                   onFocus={stopInputFocusBubble}
-                  className={`${STORYBOARD_FIELD_INPUT} pr-6`}
-                  placeholder="—"
-                  inputMode="decimal"
+                  rows={textareaRowsForText(row.shotRaw ?? '', 2)}
+                  className={`${STORYBOARD_FIELD_INPUT} resize-y leading-relaxed`}
+                  placeholder="粘贴或输入分镜原文，然后点解析…"
                 />
-                <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-[9px] text-gray-600">
-                  秒
-                </span>
+              </label>
+
+              {fieldCatalog.length > 0 ? (
+                <div className={`${STORYBOARD_GAP_INNER} flex flex-col`}>
+                  {fieldCatalog.map(renderField)}
+                </div>
+              ) : (
+                <p className="text-[10px] text-gray-600">
+                  填写原文后点「解析」，字段将在此显示。
+                </p>
+              )}
+
+              <div className="rounded-xl ring-1 ring-white/[0.05]">
+                <span className={`${STORYBOARD_LABEL} px-3 pt-2`}>编译预览</span>
+                <pre className="whitespace-pre-wrap break-words px-3 pb-3 pt-1 text-[10px] leading-relaxed text-gray-500">
+                  {(row.shotText || '').trim() || '（解析或编辑字段后自动生成）'}
+                </pre>
               </div>
-            </label>
-          </div>
-
-          {timelineLayerCount > 1 ? (
-            <label className="block max-w-[10rem]">
-              <span className={STORYBOARD_LABEL}>时间轴轨道</span>
-              <CustomDropdown
-                value={String(row.timelineLayer ?? 0)}
-                options={Array.from({ length: timelineLayerCount }, (_, i) => ({
-                  value: String(i),
-                  label: i === 0 ? `L${i} · 底层` : `L${i}`,
-                }))}
-                disabled={readOnly}
-                onChange={(v) =>
-                  onPatch({
-                    timelineLayer: Math.min(timelineLayerCount - 1, Math.max(0, Number(v))),
-                  })
-                }
-                triggerClassName="h-8 w-full rounded-lg bg-white/[0.04] px-2.5 text-[10px] text-gray-200 ring-1 ring-white/[0.07] hover:bg-white/[0.07]"
-                portalZIndex={LAYER_DROPDOWN_Z}
-              />
-            </label>
-          ) : null}
-
-          <label className="block">
-            <span className={STORYBOARD_LABEL}>原文</span>
-            <textarea
-              value={row.shotRaw ?? ''}
-              readOnly={readOnly}
-              onChange={(e) => onPatch({ shotRaw: e.target.value })}
-              onMouseDown={stopInputFocusBubble}
-              onFocus={stopInputFocusBubble}
-              rows={textareaRowsForText(row.shotRaw ?? '', 2)}
-              className={`${STORYBOARD_FIELD_INPUT} resize-y leading-relaxed`}
-              placeholder="粘贴或输入分镜原文，然后点解析…"
-            />
-          </label>
-
-          {fieldCatalog.length > 0 ? (
-            <div className={`${STORYBOARD_GAP_INNER} flex flex-col`}>
-              {fieldCatalog.map(renderField)}
-            </div>
-          ) : (
-            <p className="text-[10px] text-gray-600">
-              填写原文后点「解析」，字段将在此显示。
-            </p>
+            </>
           )}
-
-          <div className="rounded-xl ring-1 ring-white/[0.05]">
-            <span className={`${STORYBOARD_LABEL} px-3 pt-2`}>编译预览</span>
-            <pre className="whitespace-pre-wrap break-words px-3 pb-3 pt-1 text-[10px] leading-relaxed text-gray-500">
-              {(row.shotText || '').trim() || '（解析或编辑字段后自动生成）'}
-            </pre>
-          </div>
       </div>
     </article>
   );

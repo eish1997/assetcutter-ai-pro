@@ -7,8 +7,8 @@ import {
 
 const previewCache = new Map<string, string>();
 const PREVIEW_CACHE_MAX = 12;
-/** 布局算法变更时递增，避免旧缓存字号/留白 */
-const MOSAIC_PREVIEW_LAYOUT_VERSION = 7;
+/** 布局算法变更时递增，避免旧缓存字号/留白/行高 */
+const MOSAIC_PREVIEW_LAYOUT_VERSION = 9;
 
 /** 离屏合成组拼图预览（与导出一致，带内存缓存） */
 export async function renderStoryboardGroupMosaicPreview(
@@ -23,7 +23,6 @@ export async function renderStoryboardGroupMosaicPreview(
   const width = Math.max(960, Math.round(previewWidth));
   const dataUrl = await renderStoryboardGroupMosaicDataUrl(group, fieldCatalog, {
     width,
-    height: Math.round((width * 3) / 4),
     jpegQuality: 0.9,
   });
   if (dataUrl) {

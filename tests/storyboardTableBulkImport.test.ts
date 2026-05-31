@@ -43,4 +43,32 @@ A01\t远景\t2s\t城市夜景`;
     expect(rows[1]?.shotNo).toBe('SC01_SH002');
     expect(rows[1]?.shotFields[catalog.find((field) => field.label === '景别')!.id]).toBe('远景');
   });
+
+  it('recognizes header with 音效 column name', () => {
+    const text = `音效 | 时长 | 画面
+-10dB (窗外城市远景的低频嗡鸣) | 24帧 | 城市夜景`;
+    const parsed = parseStoryboardBulkText(text, 'pipe');
+    expect(parsed.errors).toHaveLength(0);
+    expect(parsed.rows).toHaveLength(1);
+    expect(parsed.rows[0]?.durationSec).toBe(1);
+    expect(parsed.rows[0]?.fields.find((field) => field.label === '音效')?.value).toContain('-10dB');
+  });
+
+  it('infers columns when pasted without header row', () => {
+    const text = `-10dB (窗外城市远景的低频嗡鸣) | 24帧 | 城市夜景全景
+-6dB (室内空调低频) | 48帧 | 办公室内景`;
+    const parsed = parseStoryboardBulkText(text, 'pipe');
+    expect(parsed.rows).toHaveLength(2);
+    expect(parsed.headers.some((header) => header === '音效' || header === '时长')).toBe(true);
+    expect(parsed.rows[0]?.durationSec).toBe(1);
+    expect(parsed.rows[1]?.durationSec).toBe(2);
+  });
+
+  it('accepts short generic column headers', () => {
+    const text = `编号 | 景 | 内容
+01 | 远景 | 城市夜景`;
+    const parsed = parseStoryboardBulkText(text, 'pipe');
+    expect(parsed.rows).toHaveLength(1);
+    expect(parsed.rows[0]?.fields.some((field) => field.label === '景' && field.value === '远景')).toBe(true);
+  });
 });

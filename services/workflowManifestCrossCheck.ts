@@ -1,7 +1,7 @@
 import type { WorkflowAsset } from '../types';
 import type { CompanionManifestV1 } from './companionClient/storage';
 import { attachInitialVgpToNewAsset } from './vgp/vgpStore';
-import { isWorkflowTextAsset } from './workflowTextAsset';
+import { isWorkflowStoryboardTableAsset } from './storyboardTableAsset';
 import {
   imageSrcToDataUrlForCompanion,
   putWorkflowModelBlobToCompanion,
@@ -16,7 +16,9 @@ import {
 export type CompanionManifestKeyGap =
   | { kind: 'original'; assetId: string; key: string }
   | { kind: 'result'; assetId: string; stepId: string; key: string }
-  | { kind: 'model'; assetId: string; slotIndex: number; key: string };
+  | { kind: 'model'; assetId: string; slotIndex: number; key: string }
+  | { kind: 'storyboard_frame'; assetId: string; rowId: string; key: string }
+  | { kind: 'storyboard_history'; assetId: string; rowId: string; versionId: string; key: string };
 
 /**
  * 打开项目后比对：画布上 `originalCompanionKey` 与各步 `resultsCompanionKeys` 是否出现在 manifest.entries。
@@ -62,6 +64,27 @@ export function findCompanionKeysMissingFromManifest(
             assetId: String(a.id || '').trim() || '?',
             slotIndex: slot,
             key: mk,
+          });
+        }
+      }
+    }
+    if (isWorkflowStoryboardTableAsset(a) && a.storyboardTable?.rows?.length) {
+      const assetId = String(a.id || '').trim() || '?';
+      for (const row of a.storyboardTable.rows) {
+        const rowId = String(row.id || '').trim();
+        const frameKey = String(row.frameImageCompanionKey || '').trim();
+        if (frameKey && !keys.has(frameKey)) {
+          out.push({ kind: 'storyboard_frame', assetId, rowId, key: frameKey });
+        }
+        for (const ver of row.frameImageHistory || []) {
+          const histKey = String(ver.frameImageCompanionKey || '').trim();
+          if (!histKey || keys.has(histKey)) continue;
+          out.push({
+            kind: 'storyboard_history',
+            assetId,
+            rowId,
+            versionId: String(ver.id || '').trim(),
+            key: histKey,
           });
         }
       }
@@ -241,6 +264,16 @@ export function collectReferencedCompanionKeys(assets: WorkflowAsset[]): Set<str
       for (const mk of mck) {
         const k = String(mk || '').trim();
         if (k) keys.add(k);
+      }
+    }
+    if (isWorkflowStoryboardTableAsset(a) && a.storyboardTable?.rows?.length) {
+      for (const row of a.storyboardTable.rows) {
+        const fk = String(row.frameImageCompanionKey || '').trim();
+        if (fk) keys.add(fk);
+        for (const ver of row.frameImageHistory || []) {
+          const hk = String(ver.frameImageCompanionKey || '').trim();
+          if (hk) keys.add(hk);
+        }
       }
     }
   }

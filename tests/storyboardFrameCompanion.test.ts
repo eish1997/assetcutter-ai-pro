@@ -20,5 +20,8 @@ describe('storyboardFrameCompanion', () => {
     };
     expect(storyboardRowNeedsCompanionFrameHydrate(row)).toBe(true);
     expect(storyboardRowNeedsCompanionFrameHydrate({ ...row, frameImage: 'blob:x' })).toBe(false);
+    expect(storyboardRowNeedsCompanionFrameHydrate({ ...row, frameImage: 'data:image/png;base64,abc' })).toBe(
+      false
+    );
   });
 });

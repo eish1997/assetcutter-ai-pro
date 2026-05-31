@@ -502,6 +502,20 @@ export async function packWorkflowBundleForCloud(
         const nextHistory = await Promise.all(
           history.map(async (ver) => {
             let verImg = String(ver.frameImage || '').trim();
+            const histCompanionKey = String(ver.frameImageCompanionKey || '').trim();
+            if (
+              (!verImg || isLikelyHttpImageUrl(verImg)) &&
+              histCompanionKey &&
+              packOpts?.companionHydrate?.baseUrl?.trim() &&
+              packOpts.companionHydrate.projectId.trim()
+            ) {
+              const fromDisk = await fetchCompanionAssetAsDataUrl(
+                packOpts.companionHydrate.baseUrl,
+                packOpts.companionHydrate.projectId,
+                histCompanionKey
+              );
+              if (fromDisk) verImg = fromDisk;
+            }
             if (!verImg || isLikelyHttpImageUrl(verImg)) {
               return ver.frameImageObjectKey?.trim() ? { ...ver, frameImage: '' } : ver;
             }
@@ -677,14 +691,35 @@ export async function hydrateWorkflowBundleFromCloud(
     if (isWorkflowStoryboardTableAsset(a) && a.storyboardTable?.rows?.length) {
       for (const row of a.storyboardTable.rows) {
         const objectKey = String(row.frameImageObjectKey || '').trim();
-        if (!objectKey || String(row.frameImage || '').trim()) continue;
-        const rowId = row.id;
-        schedule(objectKey, (u) => {
-          if (!a.storyboardTable?.rows) return;
-          a.storyboardTable.rows = a.storyboardTable.rows.map((r) =>
-            r.id === rowId ? { ...r, frameImage: u } : r
-          );
-        });
+        if (objectKey && !String(row.frameImage || '').trim()) {
+          const rowId = row.id;
+          schedule(objectKey, (u) => {
+            if (!a.storyboardTable?.rows) return;
+            a.storyboardTable.rows = a.storyboardTable.rows.map((r) =>
+              r.id === rowId ? { ...r, frameImage: u } : r
+            );
+          });
+        }
+        const history = row.frameImageHistory;
+        if (!history?.length) continue;
+        for (const ver of history) {
+          const histObjectKey = String(ver.frameImageObjectKey || '').trim();
+          if (!histObjectKey || String(ver.frameImage || '').trim()) continue;
+          const rowId = row.id;
+          const verId = ver.id;
+          schedule(histObjectKey, (u) => {
+            if (!a.storyboardTable?.rows) return;
+            a.storyboardTable.rows = a.storyboardTable.rows.map((r) => {
+              if (r.id !== rowId || !r.frameImageHistory?.length) return r;
+              return {
+                ...r,
+                frameImageHistory: r.frameImageHistory.map((item) =>
+                  item.id === verId ? { ...item, frameImage: u } : item
+                ),
+              };
+            });
+          });
+        }
       }
     }
   }

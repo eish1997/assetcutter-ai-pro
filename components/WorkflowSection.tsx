@@ -215,7 +215,10 @@ import { compressStoryboardFrameDataUrl } from './storyboard/storyboardFrameImag
 import {
   storyboardRowNeedsCompanionFrameHydrate,
 } from '../services/storyboardFrameCompanion';
-import { replaceStoryboardRowFrame } from '../services/storyboardFrameHistory';
+import {
+  replaceStoryboardRowFrame,
+  storyboardFrameHistoryVersionNeedsCompanionHydrate,
+} from '../services/storyboardFrameHistory';
 import {
   executeStoryboardRowRedraw,
   listStoryboardRedrawPresets,
@@ -324,6 +327,7 @@ import { getCompanionLocalBaseUrl, normalizeCompanionBaseUrl } from '../services
 import { probeCompanionSamSegmentHealth } from '../services/companionClient';
 import {
   cloneWorkflowModelSlotsForDuplicatedAsset,
+  companionRasterSlotNeedsHydrate,
   fetchWorkflowModelFromCompanionAsObjectUrl,
   fetchWorkflowOriginalFromCompanionAsObjectUrl,
   parseDataUrlToBlob,
@@ -332,6 +336,7 @@ import {
   putWorkflowOriginalImageToCompanion,
   putWorkflowResultImageToCompanion,
   resolveCapabilityInputImageForExecute,
+  shouldKeepExistingCompanionRasterUrl,
   workflowAssetNeedsCompanionModelHydrate,
   workflowAssetNeedsCompanionOriginalHydrate,
   workflowAssetNeedsCompanionResultHydrate,
@@ -649,6 +654,8 @@ const WorkflowSection: React.FC<{
   pendingRef.current = pending;
   const assetsRef = React.useRef(assets);
   assetsRef.current = assets;
+  const onLogRef = React.useRef(onLog);
+  onLogRef.current = onLog;
 
   useEffect(() => {
     setWorkflowMirrorPreferenceScope(preferenceScope);
@@ -1725,7 +1732,8 @@ const WorkflowSection: React.FC<{
       const rck = a.resultsCompanionKeys || {};
       for (const sid of Object.keys(rck)) {
         const ck = String(rck[sid] || '').trim();
-        if (!ck || String(a.results?.[sid] ?? '').trim()) continue;
+        if (!ck) continue;
+        if (!companionRasterSlotNeedsHydrate(String(a.results?.[sid] ?? ''), ck)) continue;
         parts.push(`${a.id}:${sid}:${ck}`);
       }
     }
@@ -1739,6 +1747,22 @@ const WorkflowSection: React.FC<{
       for (const row of a.storyboardTable?.rows ?? []) {
         if (!storyboardRowNeedsCompanionFrameHydrate(row)) continue;
         parts.push(`${a.id}:${row.id}:${String(row.frameImageCompanionKey || '').trim()}`);
+      }
+    }
+    return parts.sort().join('|');
+  }, [assets]);
+
+  const companionStoryboardFrameHistoryHydrateKey = useMemo(() => {
+    const parts: string[] = [];
+    for (const a of assets) {
+      if (!isWorkflowStoryboardTableAsset(a)) continue;
+      for (const row of a.storyboardTable?.rows ?? []) {
+        for (const ver of row.frameImageHistory ?? []) {
+          if (!storyboardFrameHistoryVersionNeedsCompanionHydrate(ver)) continue;
+          parts.push(
+            `${a.id}:${row.id}:${ver.id}:${String(ver.frameImageCompanionKey || '').trim()}`
+          );
+        }
       }
     }
     return parts.sort().join('|');
@@ -1778,10 +1802,12 @@ const WorkflowSection: React.FC<{
       for (const a of targets) {
         const key = String(a.originalCompanionKey || '').trim();
         if (!key) continue;
+        const prevO = String(a.original || '').trim();
+        if (await shouldKeepExistingCompanionRasterUrl(prevO, key)) continue;
         const got = await fetchWorkflowOriginalFromCompanionAsObjectUrl(base, projectId, key);
         if (cancelled) return;
         if (got.ok === false) {
-          onLog?.('warn', '本地伴侣原图恢复失败', `${a.id}: ${got.error}`);
+          onLogRef.current?.('warn', '本地伴侣原图恢复失败', `${a.id}: ${got.error}`);
           continue;
         }
         setAssets((prev) =>
@@ -1803,7 +1829,7 @@ const WorkflowSection: React.FC<{
     return () => {
       cancelled = true;
     };
-  }, [companionHydrateKey, workspaceProjectChrome?.activeProjectId, setAssets, onLog]);
+  }, [companionHydrateKey, workspaceProjectChrome?.activeProjectId, setAssets]);
 
   useEffect(() => {
     const projectId = String(workspaceProjectChrome?.activeProjectId || '').trim();
@@ -1817,11 +1843,14 @@ const WorkflowSection: React.FC<{
         const rck = a.resultsCompanionKeys || {};
         for (const stepId of Object.keys(rck)) {
           const ck = String(rck[stepId] || '').trim();
-          if (!ck || String(a.results?.[stepId] ?? '').trim()) continue;
+          if (!ck) continue;
+          const prevV = String(a.results?.[stepId] ?? '').trim();
+          if (!companionRasterSlotNeedsHydrate(prevV, ck)) continue;
+          if (await shouldKeepExistingCompanionRasterUrl(prevV, ck)) continue;
           const got = await fetchWorkflowOriginalFromCompanionAsObjectUrl(base, projectId, ck);
           if (cancelled) return;
           if (got.ok === false) {
-            onLog?.('warn', '本地伴侣步骤结果图恢复失败', `${a.id}/${stepId}: ${got.error}`);
+            onLogRef.current?.('warn', '本地伴侣步骤结果图恢复失败', `${a.id}/${stepId}: ${got.error}`);
             continue;
           }
           setAssets((prev) =>
@@ -1847,7 +1876,7 @@ const WorkflowSection: React.FC<{
     return () => {
       cancelled = true;
     };
-  }, [companionResultsHydrateKey, workspaceProjectChrome?.activeProjectId, setAssets, onLog]);
+  }, [companionResultsHydrateKey, workspaceProjectChrome?.activeProjectId, setAssets]);
 
   useEffect(() => {
     const projectId = String(workspaceProjectChrome?.activeProjectId || '').trim();
@@ -1861,10 +1890,12 @@ const WorkflowSection: React.FC<{
           if (!storyboardRowNeedsCompanionFrameHydrate(row)) continue;
           const ck = String(row.frameImageCompanionKey || '').trim();
           if (!ck) continue;
+          const prevImg = String(row.frameImage || '').trim();
+          if (await shouldKeepExistingCompanionRasterUrl(prevImg, ck)) continue;
           const got = await fetchWorkflowOriginalFromCompanionAsObjectUrl(base, projectId, ck);
           if (cancelled) return;
           if (got.ok === false) {
-            onLog?.('warn', '分镜图伴侣恢复失败', `${a.id}/${row.id}: ${got.error}`);
+            onLogRef.current?.('warn', '分镜图伴侣恢复失败', `${a.id}/${row.id}: ${got.error}`);
             continue;
           }
           setAssets((prev) =>
@@ -1898,7 +1929,68 @@ const WorkflowSection: React.FC<{
     return () => {
       cancelled = true;
     };
-  }, [companionStoryboardFrameHydrateKey, workspaceProjectChrome?.activeProjectId, setAssets, onLog]);
+  }, [companionStoryboardFrameHydrateKey, workspaceProjectChrome?.activeProjectId, setAssets]);
+
+  useEffect(() => {
+    const projectId = String(workspaceProjectChrome?.activeProjectId || '').trim();
+    const base = String(getCompanionLocalBaseUrl() || '').trim();
+    if (!companionStoryboardFrameHistoryHydrateKey || !projectId || !base) return;
+    let cancelled = false;
+    void (async () => {
+      for (const a of assetsRef.current) {
+        if (!isWorkflowStoryboardTableAsset(a)) continue;
+        for (const row of a.storyboardTable?.rows ?? []) {
+          for (const ver of row.frameImageHistory ?? []) {
+            if (!storyboardFrameHistoryVersionNeedsCompanionHydrate(ver)) continue;
+            const ck = String(ver.frameImageCompanionKey || '').trim();
+            if (!ck) continue;
+            const prevImg = String(ver.frameImage || '').trim();
+            if (await shouldKeepExistingCompanionRasterUrl(prevImg, ck)) continue;
+            const got = await fetchWorkflowOriginalFromCompanionAsObjectUrl(base, projectId, ck);
+            if (cancelled) return;
+            if (got.ok === false) {
+              onLogRef.current?.('warn', '分镜历史图伴侣恢复失败', `${a.id}/${row.id}/${ver.id}: ${got.error}`);
+              continue;
+            }
+            setAssets((prev) =>
+              prev.map((x) => {
+                if (x.id !== a.id || !isWorkflowStoryboardTableAsset(x)) return x;
+                const doc = x.storyboardTable;
+                if (!doc?.rows) return x;
+                return normalizeStoryboardTableOnAsset({
+                  ...x,
+                  storyboardTable: {
+                    ...doc,
+                    rows: doc.rows.map((r) => {
+                      if (r.id !== row.id || !r.frameImageHistory?.length) return r;
+                      return {
+                        ...r,
+                        frameImageHistory: r.frameImageHistory.map((item) => {
+                          if (item.id !== ver.id) return item;
+                          const prevHistImg = String(item.frameImage || '').trim();
+                          if (/^blob:/i.test(prevHistImg)) {
+                            try {
+                              URL.revokeObjectURL(prevHistImg);
+                            } catch {
+                              /* ignore */
+                            }
+                          }
+                          return { ...item, frameImage: got.objectUrl };
+                        }),
+                      };
+                    }),
+                  },
+                });
+              })
+            );
+          }
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [companionStoryboardFrameHistoryHydrateKey, workspaceProjectChrome?.activeProjectId, setAssets]);
 
   useEffect(() => {
     const projectId = String(workspaceProjectChrome?.activeProjectId || '').trim();
@@ -1913,7 +2005,7 @@ const WorkflowSection: React.FC<{
           asset: a,
           baseUrl: base,
           projectId,
-          onLog: (level, message, detail) => onLog?.(level, message, detail),
+          onLog: (level, message, detail) => onLogRef.current?.(level, message, detail),
         });
         if (cancelled) return;
         if (nextAsset === a) continue;
@@ -1928,7 +2020,7 @@ const WorkflowSection: React.FC<{
     return () => {
       cancelled = true;
     };
-  }, [companionModelHydrateKey, workspaceProjectChrome?.activeProjectId, setAssets, onLog]);
+  }, [companionModelHydrateKey, workspaceProjectChrome?.activeProjectId, setAssets]);
 
   const scheduleCompanionPersistOriginal = useCallback(
     (assetId: string, imageDataUrl: string) => {

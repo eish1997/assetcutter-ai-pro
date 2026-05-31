@@ -5,6 +5,7 @@ import {
   drawPlannedSheetCellText,
   measureSheetCellTextBlock,
   planStoryboardSheetCellTypography,
+  planStoryboardSheetGroupTypographyUnbounded,
   type SheetCellTypography,
 } from './storyboardSheetCellTypography';
 import {
@@ -28,6 +29,8 @@ export type CompactCellLayoutOpts = {
   imageFit?: 'cover' | 'width';
   /** 整组统一字号（组拼图传入） */
   typographyPlan?: SheetCellTypography;
+  /** 可变行高：图片按自然比例、文字完整显示，不挤压 maxImageH */
+  variableHeight?: boolean;
 };
 
 const imageCache = new Map<string, Promise<HTMLImageElement | null>>();
@@ -79,6 +82,20 @@ function drawPlaceholder(
   ctx.textBaseline = 'alphabetic';
 }
 
+/** 以宽为准完整显示，不裁切上下 */
+function drawImageNaturalWidth(
+  ctx: CanvasRenderingContext2D,
+  img: HTMLImageElement,
+  x: number,
+  y: number,
+  w: number
+): number {
+  const ir = img.width / img.height;
+  const dh = w / ir;
+  ctx.drawImage(img, x, y, w, dh);
+  return dh;
+}
+
 /** 以宽为准：左右贴边，高度按比例；仅当超出槽位时才裁上下 */
 function drawImageWidthFirst(
   ctx: CanvasRenderingContext2D,
@@ -99,18 +116,43 @@ function drawImageWidthFirst(
   return maxH;
 }
 
+async function resolveNaturalImageHeight(row: StoryboardTableRow, width: number): Promise<number> {
+  const placeholderH = Math.round(width * 0.22);
+  const src = resolveStoryboardRowFrameDisplaySrc(row);
+  if (!src) return placeholderH;
+  const img = await loadFrameImage(src);
+  if (!img?.width || !img.height) return placeholderH;
+  return Math.max(1, Math.round(width / (img.width / img.height)));
+}
+
 async function resolveImageHeight(
   row: StoryboardTableRow,
   width: number,
   fallbackH: number
 ): Promise<number> {
-  const src = resolveStoryboardRowFrameDisplaySrc(row);
-  if (!src) return fallbackH;
-  const img = await loadFrameImage(src);
-  if (!img) return fallbackH;
-  const ir = img.width / img.height;
-  const filled = Math.round(width / ir);
-  return Math.min(Math.max(filled, Math.round(width * 0.2)), Math.round(width * 0.58));
+  return resolveNaturalImageHeight(row, width).catch(() => fallbackH);
+}
+
+export async function measureCompactStoryboardCellHeight(
+  ctx: CanvasRenderingContext2D,
+  row: StoryboardTableRow,
+  fieldCatalog: StoryboardParseFieldDef[],
+  w: number,
+  opts: CompactCellLayoutOpts = {}
+): Promise<number> {
+  const meta = compileSheetShotPanelMeta(row, fieldCatalog);
+  const plan =
+    opts.typographyPlan ??
+    planStoryboardSheetGroupTypographyUnbounded(ctx, [meta], {
+      cellW: w,
+      cellH: Math.round(w * 2.5),
+      canvasWidth: opts.canvasWidth ?? w,
+    });
+  const label = storyboardRowShotLabel(row, row.index);
+  const textMetrics = measureSheetCellTextBlock(ctx, meta, plan, w, label);
+  const footerGap = storyboardSheetFooterGap(opts.canvasWidth ?? w);
+  const imageH = await resolveNaturalImageHeight(row, w);
+  return textMetrics.headerBlockH + imageH + footerGap + textMetrics.footerBlockH;
 }
 
 /** 在指定矩形内绘制紧凑 contact-sheet 单格（顶栏 + 宽铺满图 + 底栏，字号随密度自适应） */
@@ -127,11 +169,17 @@ export async function drawCompactStoryboardCell(
   const meta = compileSheetShotPanelMeta(row, fieldCatalog);
   const plan =
     opts.typographyPlan ??
-    planStoryboardSheetCellTypography(ctx, meta, {
-      cellW: w,
-      cellH: h,
-      canvasWidth: opts.canvasWidth,
-    });
+    (opts.variableHeight
+      ? planStoryboardSheetGroupTypographyUnbounded(ctx, [meta], {
+          cellW: w,
+          cellH: Math.round(w * 2.5),
+          canvasWidth: opts.canvasWidth,
+        })
+      : planStoryboardSheetCellTypography(ctx, meta, {
+          cellW: w,
+          cellH: h,
+          canvasWidth: opts.canvasWidth,
+        }));
   const label = storyboardRowShotLabel(row, row.index);
   const textMetrics = measureSheetCellTextBlock(ctx, meta, plan, w, label);
 
@@ -140,10 +188,10 @@ export async function drawCompactStoryboardCell(
 
   const imageY = y + textMetrics.headerBlockH;
   const footerGap = storyboardSheetFooterGap(opts.canvasWidth ?? w);
-  const maxImageH = Math.max(
-    0,
-    h - textMetrics.headerBlockH - textMetrics.footerBlockH - footerGap
-  );
+  const variableHeight = opts.variableHeight === true;
+  const maxImageH = variableHeight
+    ? Number.MAX_SAFE_INTEGER
+    : Math.max(0, h - textMetrics.headerBlockH - textMetrics.footerBlockH - footerGap);
   const src = resolveStoryboardRowFrameDisplaySrc(row);
   let textStartY = imageY + footerGap;
 
@@ -151,15 +199,21 @@ export async function drawCompactStoryboardCell(
     if (src) {
       const img = await loadFrameImage(src);
       if (img) {
-        const drawnH = drawImageWidthFirst(ctx, img, x, imageY, w, maxImageH);
+        const drawnH = variableHeight
+          ? drawImageNaturalWidth(ctx, img, x, imageY, w)
+          : drawImageWidthFirst(ctx, img, x, imageY, w, maxImageH);
         textStartY = imageY + drawnH + footerGap;
       } else {
-        const ph = Math.min(maxImageH, Math.round(w * 0.22));
+        const ph = variableHeight
+          ? Math.round(w * 0.22)
+          : Math.min(maxImageH, Math.round(w * 0.22));
         drawPlaceholder(ctx, x, imageY, w, ph, label);
         textStartY = imageY + ph + footerGap;
       }
     } else {
-      const ph = Math.min(maxImageH, Math.round(w * 0.22));
+      const ph = variableHeight
+        ? Math.round(w * 0.22)
+        : Math.min(maxImageH, Math.round(w * 0.22));
       drawPlaceholder(ctx, x, imageY, w, ph, label);
       textStartY = imageY + ph + footerGap;
     }
@@ -192,9 +246,9 @@ export async function renderStoryboardShotCompositeCanvas(
   const fallbackImageH = Math.round(width * 0.32);
   const imageH = await resolveImageHeight(row, width, fallbackImageH);
   const label = storyboardRowShotLabel(row, row.index);
-  const plan = planStoryboardSheetCellTypography(ctx, meta, {
+  const plan = planStoryboardSheetGroupTypographyUnbounded(ctx, [meta], {
     cellW: width,
-    cellH: width,
+    cellH: Math.round(width * 2.5),
     canvasWidth: width,
   });
   const textMetrics = measureSheetCellTextBlock(ctx, meta, plan, width, label);
@@ -205,6 +259,8 @@ export async function renderStoryboardShotCompositeCanvas(
   await drawCompactStoryboardCell(ctx, row, fieldCatalog, 0, 0, width, height, {
     canvasWidth: width,
     imageFit: 'width',
+    variableHeight: true,
+    typographyPlan: plan,
   });
   return canvas;
 }

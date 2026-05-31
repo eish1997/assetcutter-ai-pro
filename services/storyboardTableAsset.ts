@@ -39,6 +39,8 @@ export function createStoryboardTableRow(partial?: Partial<StoryboardTableRow>, 
     frameImageHistory: partial?.frameImageHistory,
     locked: Boolean(partial?.locked),
     timelineLayer: normalizeTimelineLayer(partial?.timelineLayer ?? 0),
+    editFeedback:
+      typeof partial?.editFeedback === 'string' ? partial.editFeedback : undefined,
   };
 }
 
@@ -120,6 +122,7 @@ export function normalizeStoryboardTableDoc(raw: unknown): StoryboardTableDoc {
               frameImageHistory: normalizeStoryboardFrameHistory(row.frameImageHistory),
               locked: Boolean(row.locked),
               timelineLayer: normalizeTimelineLayer(row.timelineLayer ?? 0),
+              editFeedback: typeof row.editFeedback === 'string' ? row.editFeedback : undefined,
             },
             i
           );

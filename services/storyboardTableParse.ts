@@ -20,8 +20,8 @@ const STORYBOARD_LLM_JSON_OPTIONS = { responseMimeType: 'application/json' as co
 
 const EXCLUDE_REDRAW_LABEL = /对白|台词|音效|备注|音乐|旁白/;
 
-const SHOT_NO_LABEL_RE = /^(镜头号|镜号|shot\s*(?:no|number)?\.?)$/i;
-const DURATION_LABEL_RE = /^(时长|持续时间|duration)$/i;
+const SHOT_NO_LABEL_RE = /^(镜头号|镜号|镜次|分镜号?|序号|编号|scene|seq(?:uence)?|shot\s*(?:no|number|id)?\.?)$/i;
+const DURATION_LABEL_RE = /^(时长|持续时间|时间|长度|帧数?|frames?|duration|dur\.?)$/i;
 
 export function isSystemShotNoLabel(label: string): boolean {
   return SHOT_NO_LABEL_RE.test(label.trim());
@@ -46,6 +46,11 @@ export function parseShotNoFromParsedValue(raw: string): string {
 export function parseDurationSecFromParsedValue(raw: string): number | null {
   const t = raw.trim();
   if (!t) return null;
+  const frameMatch = t.match(/^(\d+(?:\.\d+)?)\s*帧$/);
+  if (frameMatch) {
+    const frames = Number(frameMatch[1]);
+    return Number.isFinite(frames) && frames >= 0 ? frames / 24 : null;
+  }
   const withoutUnit = t.replace(/[秒sS]+$/, '').trim();
   const n = Number(withoutUnit);
   return Number.isFinite(n) && n >= 0 ? n : null;

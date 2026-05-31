@@ -299,7 +299,13 @@ export function WorkflowStepNodeGraphOverlay({
     const key = v.imageRef.kind === 'original_field' ? 'original' : v.imageRef.key;
     const active = selectedId === id;
     const verSrc = resolveVersionImageSrc(displayAsset, v);
-    const thumbCacheKey = `${displayAsset.id}:vgp-step-graph:${v.id}:fp${previewSrcCacheFingerprint(verSrc)}`;
+    const companionKey =
+      key === 'original'
+        ? String(displayAsset.originalCompanionKey || '').trim()
+        : String(displayAsset.resultsCompanionKeys?.[key] || '').trim();
+    const thumbCacheKey = companionKey
+      ? `${displayAsset.id}:vgp-step-graph:${v.id}:ck:${companionKey}`
+      : `${displayAsset.id}:vgp-step-graph:${v.id}:fp${previewSrcCacheFingerprint(verSrc)}`;
     return (
       <button
         key={id}
