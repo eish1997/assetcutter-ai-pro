@@ -1,85 +1,97 @@
 import { describe, expect, it } from 'vitest';
-import type { CustomAppModule } from '../types';
+import type { CustomAppModule, StoryboardTableRow } from '../types';
 import {
-  buildStoryboardRowPromptText,
-  listStoryboardFeedbackRedrawRows,
-  listStoryboardRedrawPresets,
-  pickDefaultStoryboardRedrawPresetId,
+  buildStoryboardFeedbackRedrawInputText,
+  isStoryboardFeedbackRedrawEligible,
+  pickStoryboardEditRedrawPreset,
+  pickStoryboardFeedbackRedrawPreset,
 } from '../services/storyboardTableRedraw';
 
-describe('storyboardTableRedraw', () => {
-  const presets: CustomAppModule[] = [
-    {
-      id: 't2i',
-      label: '文生图',
-      category: 'text_to_image',
-      engine: 'gen_image',
-      instruction: 'cinematic',
-    },
-    {
-      id: 'i2i',
-      label: '图生图',
-      category: 'image_to_image',
-      engine: 'gen_image',
-      instruction: 'refine',
-    },
-    { id: 'cut', label: '切图', category: 'image_process', processor: 'cut_image', engine: 'builtin' },
-    { id: 'txt', label: '文', category: 'text_to_text', engine: 'builtin' },
-  ] as CustomAppModule[];
+function mockPreset(id: string, category: 'text_to_image' | 'image_to_image'): CustomAppModule {
+  return {
+    id,
+    label: id,
+    category,
+    enabled: true,
+    instruction: 'test',
+  } as CustomAppModule;
+}
 
-  const catalog = [
-    { id: 'f_visual', label: '画面', order: 0, redrawInclude: true, kind: 'text' as const },
-    { id: 'f_dialogue', label: '对白', order: 1, redrawInclude: false, kind: 'text' as const },
-  ];
+function mockRow(overrides: Partial<StoryboardTableRow> = {}): StoryboardTableRow {
+  return {
+    id: 'row-1',
+    index: 0,
+    shotNo: '1',
+    locked: false,
+    fields: {},
+    ...overrides,
+  } as StoryboardTableRow;
+}
 
-  it('lists only gen_image text/image presets', () => {
-    const list = listStoryboardRedrawPresets(presets);
-    expect(list.map((p) => p.id)).toEqual(['t2i', 'i2i']);
+describe('pickStoryboardEditRedrawPreset', () => {
+  const presets = [mockPreset('t2i', 'text_to_image'), mockPreset('i2i', 'image_to_image')];
+
+  it('picks text_to_image when row has no frame ref', () => {
+    const preset = pickStoryboardEditRedrawPreset(presets, mockRow());
+    expect(preset?.id).toBe('t2i');
   });
 
-  it('pickDefaultStoryboardRedrawPresetId returns first', () => {
-    expect(pickDefaultStoryboardRedrawPresetId(presets)).toBe('t2i');
-  });
-
-  it('buildStoryboardRowPromptText merges structured fields', () => {
-    const text = buildStoryboardRowPromptText(
-      {
-        id: '1',
-        index: 0,
-        shotNo: '03',
-        shotFields: { f_visual: '主角推门', f_dialogue: '你好' },
-        shotText: '',
-        durationSec: 2,
-      },
-      catalog
+  it('picks image_to_image when row has frame image', () => {
+    const preset = pickStoryboardEditRedrawPreset(
+      presets,
+      mockRow({ frameImage: 'data:image/png;base64,abc' })
     );
-    expect(text).toContain('03');
-    expect(text).toContain('主角推门');
-    expect(text).not.toContain('你好');
+    expect(preset?.id).toBe('i2i');
   });
 
-  it('buildStoryboardRowPromptText appends edit feedback', () => {
-    const text = buildStoryboardRowPromptText(
-      {
-        id: '1',
-        index: 0,
-        shotNo: '03',
-        shotFields: { f_visual: '主角推门', f_dialogue: '你好' },
-        shotText: '',
-        durationSec: 2,
-        editFeedback: '门把手再大一点',
-      },
-      catalog
+  it('forceTextToImage keeps text_to_image even with frame', () => {
+    const preset = pickStoryboardEditRedrawPreset(
+      presets,
+      mockRow({ frameImage: 'data:image/png;base64,abc' }),
+      { forceTextToImage: true }
     );
-    expect(text).toContain('【修改反馈】门把手再大一点');
+    expect(preset?.id).toBe('t2i');
+  });
+});
+
+describe('feedback batch redraw helpers', () => {
+  const i2iPresets = [mockPreset('i2i', 'image_to_image')];
+
+  it('pickStoryboardFeedbackRedrawPreset uses image_to_image only', () => {
+    const preset = pickStoryboardFeedbackRedrawPreset([
+      mockPreset('t2i', 'text_to_image'),
+      mockPreset('i2i', 'image_to_image'),
+    ]);
+    expect(preset?.id).toBe('i2i');
   });
 
-  it('listStoryboardFeedbackRedrawRows skips locked and empty feedback', () => {
-    const rows = [
-      { id: 'a', index: 0, shotFields: {}, shotText: '', editFeedback: '改构图', locked: false },
-      { id: 'b', index: 1, shotFields: {}, shotText: '', editFeedback: '  ', locked: false },
-      { id: 'c', index: 2, shotFields: {}, shotText: '', editFeedback: '保留', locked: true },
-    ];
-    expect(listStoryboardFeedbackRedrawRows(rows).map((r) => r.id)).toEqual(['a']);
+  it('buildStoryboardFeedbackRedrawInputText returns raw feedback only', () => {
+    expect(
+      buildStoryboardFeedbackRedrawInputText(
+        mockRow({ editFeedback: '  把天空改蓝  ' } as StoryboardTableRow)
+      )
+    ).toBe('把天空改蓝');
+  });
+
+  it('isStoryboardFeedbackRedrawEligible requires feedback and frame', () => {
+    expect(isStoryboardFeedbackRedrawEligible(mockRow({ editFeedback: '改色' }))).toBe(false);
+    expect(
+      isStoryboardFeedbackRedrawEligible(
+        mockRow({ editFeedback: '改色', frameImage: 'data:image/png;base64,x' })
+      )
+    ).toBe(true);
+    expect(
+      isStoryboardFeedbackRedrawEligible(
+        mockRow({ locked: true, editFeedback: '改色', frameImage: 'data:image/png;base64,x' })
+      )
+    ).toBe(false);
+  });
+
+  it('returns null when no image_to_image preset', () => {
+    expect(pickStoryboardFeedbackRedrawPreset([mockPreset('t2i', 'text_to_image')])).toBeNull();
+  });
+
+  it('i2i preset list sanity', () => {
+    expect(pickStoryboardFeedbackRedrawPreset(i2iPresets)?.id).toBe('i2i');
   });
 });

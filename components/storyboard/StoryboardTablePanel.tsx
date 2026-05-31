@@ -14,8 +14,11 @@ import {
 import { reorderStoryboardRowsInLayer, collapseStoryboardTimelineTopLayer, clampStoryboardTimelineLayerCount } from '../../services/storyboardVideoTimeline';
 import {
   buildStoryboardRowPromptText,
+  isStoryboardFeedbackRedrawEligible,
   listStoryboardFeedbackRedrawRows,
-  STORYBOARD_EDIT_REDRAW_PRESET_KEY,
+  STORYBOARD_EDIT_FEEDBACK_REDRAW_UNDERSTAND_KEY,
+  STORYBOARD_EDIT_REDRAW_MODEL_KEY,
+  type StoryboardRowRedrawInvokeOptions,
 } from '../../services/storyboardTableRedraw';
 import {
   executeStoryboardSheetGenBatch,
@@ -52,6 +55,11 @@ import {
 } from '../../services/storyboardTableParse';
 import { readLocalJson, writeLocalJson } from '../../services/clientPersist';
 import {
+  coerceImageModelRegistryId,
+  DEFAULT_IMAGE_MODEL_REGISTRY_ID,
+  DIALOG_IMAGE_MODELS,
+} from '../../services/modelRegistry/imageModels';
+import {
   STORYBOARD_GRID_SECONDS_PER_TILE_KEY,
   STORYBOARD_GRID_SECONDS_PRESETS,
   groupStoryboardRowsForGridPreview,
@@ -75,7 +83,6 @@ import {
   replaceStoryboardRowFrame,
   restoreStoryboardRowFrameVersion,
 } from '../../services/storyboardFrameHistory';
-import { storyboardRowHasFrameRef } from '../../services/storyboardFrameImageUrl';
 import { ImagePreviewOverlay } from '../ImagePreviewOverlay';
 import AppIcon from '../ui/AppIcon';
 import { CustomDropdown } from '../ui/CustomDropdown';
@@ -127,7 +134,11 @@ type Props = {
   optimizePresets?: CustomAppModule[];
   defaultOptimizePresetId?: string;
   capabilityTextModel?: string;
-  onRedrawRow?: (rowId: string, presetId: string) => Promise<void>;
+  onRedrawRow?: (
+    rowId: string,
+    imageModelRegistryId: string,
+    options?: StoryboardRowRedrawInvokeOptions
+  ) => Promise<void>;
   onPatchAsset: (
     patch: Partial<WorkflowAsset> | ((prev: WorkflowAsset) => WorkflowAsset)
   ) => void;
@@ -213,6 +224,19 @@ export default function StoryboardTablePanel({
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   const [imageBusyRowId, setImageBusyRowId] = useState<string | null>(null);
   const [redrawBusyRowId, setRedrawBusyRowId] = useState<string | null>(null);
+  const [feedbackRedrawUnderstand, setFeedbackRedrawUnderstand] = useState(() =>
+    readLocalJson(STORYBOARD_EDIT_FEEDBACK_REDRAW_UNDERSTAND_KEY, true, (v) =>
+      typeof v === 'boolean' ? v : null
+    )
+  );
+
+  const toggleFeedbackRedrawUnderstand = useCallback(() => {
+    setFeedbackRedrawUnderstand((prev) => {
+      const next = !prev;
+      writeLocalJson(STORYBOARD_EDIT_FEEDBACK_REDRAW_UNDERSTAND_KEY, next);
+      return next;
+    });
+  }, []);
   const [feedbackBatchBusy, setFeedbackBatchBusy] = useState(false);
   const [feedbackBatchProgress, setFeedbackBatchProgress] = useState<{
     done: number;
@@ -403,29 +427,31 @@ export default function StoryboardTablePanel({
 
   const effectiveRedrawPresetId = redrawPresetId;
 
-  const resolvedEditRedrawPresetId = useMemo(() => {
-    const stored = readLocalJson(STORYBOARD_EDIT_REDRAW_PRESET_KEY, defaultRedrawPresetId, (v) =>
+  const resolvedEditRedrawModelId = useMemo(() => {
+    const stored = readLocalJson(STORYBOARD_EDIT_REDRAW_MODEL_KEY, DEFAULT_IMAGE_MODEL_REGISTRY_ID, (v) =>
       typeof v === 'string' ? v : null
     );
-    if (stored && redrawPresets.some((p) => p.id === stored)) return stored;
-    if (defaultRedrawPresetId && redrawPresets.some((p) => p.id === defaultRedrawPresetId)) {
-      return defaultRedrawPresetId;
-    }
-    return redrawPresets[0]?.id ?? '';
-  }, [defaultRedrawPresetId, redrawPresets]);
+    return coerceImageModelRegistryId(stored);
+  }, []);
 
-  const [editRedrawPresetId, setEditRedrawPresetId] = useState(resolvedEditRedrawPresetId);
+  const [editRedrawModelId, setEditRedrawModelId] = useState(resolvedEditRedrawModelId);
 
   useEffect(() => {
-    setEditRedrawPresetId(resolvedEditRedrawPresetId);
-  }, [asset.id, resolvedEditRedrawPresetId]);
+    setEditRedrawModelId(resolvedEditRedrawModelId);
+  }, [asset.id, resolvedEditRedrawModelId]);
 
-  const effectiveEditRedrawPresetId = editRedrawPresetId;
+  const effectiveEditRedrawModelId = editRedrawModelId;
 
-  const setEditRedrawPresetIdPersisted = useCallback((presetId: string) => {
-    setEditRedrawPresetId(presetId);
-    writeLocalJson(STORYBOARD_EDIT_REDRAW_PRESET_KEY, presetId);
+  const setEditRedrawModelIdPersisted = useCallback((modelId: string) => {
+    const coerced = coerceImageModelRegistryId(modelId);
+    setEditRedrawModelId(coerced);
+    writeLocalJson(STORYBOARD_EDIT_REDRAW_MODEL_KEY, coerced);
   }, []);
+
+  const editRedrawModelOptions = useMemo(
+    () => DIALOG_IMAGE_MODELS.map((m) => ({ value: m.id, label: m.label })),
+    []
+  );
 
   const redrawPresetOptions = useMemo(
     () => redrawPresets.map((preset) => ({ value: preset.id, label: preset.label || preset.id })),
@@ -869,7 +895,7 @@ export default function StoryboardTablePanel({
 
   const runRedraw = useCallback(
     async (rowId: string) => {
-      if (!onRedrawRow || !effectiveEditRedrawPresetId) {
+      if (!onRedrawRow || !effectiveEditRedrawModelId) {
         onNotify?.('warn', '请先在编辑页选择重绘模型');
         return;
       }
@@ -885,32 +911,28 @@ export default function StoryboardTablePanel({
       }
       setRedrawBusyRowId(rowId);
       try {
-        await onRedrawRow(rowId, effectiveEditRedrawPresetId);
+        await onRedrawRow(rowId, effectiveEditRedrawModelId);
       } catch (e) {
         onNotify?.('warn', e instanceof Error ? e.message : '重绘失败');
       } finally {
         setRedrawBusyRowId(null);
       }
     },
-    [effectiveEditRedrawPresetId, onNotify, onRedrawRow, table.fieldCatalog, table.rows]
+    [effectiveEditRedrawModelId, onNotify, onRedrawRow, table.fieldCatalog, table.rows]
   );
 
   const runFeedbackBatchRedraw = useCallback(async () => {
-    if (!onRedrawRow || !effectiveEditRedrawPresetId) {
+    if (!onRedrawRow || !effectiveEditRedrawModelId) {
       onNotify?.('warn', '请先在编辑页选择重绘模型');
       return;
     }
-    const preset = redrawPresets.find((p) => p.id === effectiveEditRedrawPresetId);
-    const eligible = listStoryboardFeedbackRedrawRows(table.rows).filter((row) => {
-      if (!buildStoryboardRowPromptText(row, table.fieldCatalog)) return false;
-      if (preset?.category === 'image_to_image' && !storyboardRowHasFrameRef(row)) return false;
-      return true;
-    });
+    const eligible = listStoryboardFeedbackRedrawRows(table.rows).filter(isStoryboardFeedbackRedrawEligible);
     if (!eligible.length) {
-      onNotify?.('warn', '没有可重绘的镜头（需填写修改反馈，且满足生图条件）');
+      onNotify?.('warn', '没有可重绘的镜头（需填写修改反馈且已有分镜图）');
       return;
     }
-    if (!window.confirm(`按修改反馈重绘 ${eligible.length} 镜？将调用生图模型。`)) return;
+    const understandLabel = feedbackRedrawUnderstand ? '理解后生图' : '直发反馈';
+    if (!window.confirm(`按修改反馈重绘 ${eligible.length} 镜？（图生图 · ${understandLabel}）`)) return;
 
     setFeedbackBatchBusy(true);
     setFeedbackBatchProgress({ done: 0, total: eligible.length });
@@ -919,7 +941,10 @@ export default function StoryboardTablePanel({
     for (const row of eligible) {
       setRedrawBusyRowId(row.id);
       try {
-        await onRedrawRow(row.id, effectiveEditRedrawPresetId);
+        await onRedrawRow(row.id, effectiveEditRedrawModelId, {
+          feedbackOnly: true,
+          understand: feedbackRedrawUnderstand,
+        });
         ok += 1;
       } catch {
         fail += 1;
@@ -935,11 +960,10 @@ export default function StoryboardTablePanel({
       fail > 0 ? `反馈重绘完成：成功 ${ok}，失败 ${fail}` : `反馈重绘完成：${ok} 镜`
     );
   }, [
-    effectiveEditRedrawPresetId,
+    effectiveEditRedrawModelId,
+    feedbackRedrawUnderstand,
     onNotify,
     onRedrawRow,
-    redrawPresets,
-    table.fieldCatalog,
     table.rows,
   ]);
 
@@ -1260,23 +1284,14 @@ export default function StoryboardTablePanel({
       if (!buildStoryboardRowPromptText(row, table.fieldCatalog)) {
         return '需先解析、填写画面类字段或修改反馈';
       }
-      const preset = redrawPresets.find((p) => p.id === effectiveEditRedrawPresetId);
-      if (preset?.category === 'image_to_image' && !storyboardRowHasFrameRef(row)) {
-        return '图生图需先有分镜图，或改选文生图';
-      }
       return undefined;
     },
-    [effectiveEditRedrawPresetId, readOnly, redrawPresets, table.fieldCatalog]
+    [readOnly, redrawPresets, table.fieldCatalog]
   );
 
   const feedbackRedrawEligibleCount = useMemo(() => {
-    const preset = redrawPresets.find((p) => p.id === effectiveEditRedrawPresetId);
-    return listStoryboardFeedbackRedrawRows(table.rows).filter((row) => {
-      if (!buildStoryboardRowPromptText(row, table.fieldCatalog)) return false;
-      if (preset?.category === 'image_to_image' && !storyboardRowHasFrameRef(row)) return false;
-      return true;
-    }).length;
-  }, [effectiveEditRedrawPresetId, redrawPresets, table.fieldCatalog, table.rows]);
+    return listStoryboardFeedbackRedrawRows(table.rows).filter(isStoryboardFeedbackRedrawEligible).length;
+  }, [table.rows]);
 
   const rowInteraction = useMemo((): StoryboardRowInteractionValue => {
     return {
@@ -1508,13 +1523,13 @@ export default function StoryboardTablePanel({
                 />
               </div>
             ) : null}
-            {redrawPresetOptions.length > 0 ? (
+            {editRedrawModelOptions.length > 0 && redrawPresets.length > 0 ? (
               <div className="flex min-w-[10rem] max-w-xs items-center gap-1.5">
                 <span className="shrink-0 text-[10px] text-gray-500">重绘模型</span>
                 <CustomDropdown
-                  value={effectiveEditRedrawPresetId}
-                  options={redrawPresetOptions}
-                  onChange={setEditRedrawPresetIdPersisted}
+                  value={effectiveEditRedrawModelId}
+                  options={editRedrawModelOptions}
+                  onChange={setEditRedrawModelIdPersisted}
                   triggerClassName="h-8 min-w-[8rem] flex-1 rounded-lg bg-white/[0.04] px-2.5 text-[10px] text-gray-200 ring-1 ring-white/[0.07] hover:bg-white/[0.07]"
                   portalZIndex={STORYBOARD_PANEL_DROPDOWN_Z}
                 />
@@ -1705,6 +1720,8 @@ export default function StoryboardTablePanel({
           feedbackBatchBusy={feedbackBatchBusy}
           feedbackBatchProgress={feedbackBatchProgress}
           feedbackRedrawEligibleCount={feedbackRedrawEligibleCount}
+          feedbackRedrawUnderstand={feedbackRedrawUnderstand}
+          onToggleFeedbackRedrawUnderstand={toggleFeedbackRedrawUnderstand}
           onFeedbackBatchRedraw={
             !readOnly && onRedrawRow ? () => void runFeedbackBatchRedraw() : undefined
           }

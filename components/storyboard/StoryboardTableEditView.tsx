@@ -51,6 +51,8 @@ type Props = {
   feedbackBatchBusy?: boolean;
   feedbackBatchProgress?: { done: number; total: number } | null;
   feedbackRedrawEligibleCount?: number;
+  feedbackRedrawUnderstand?: boolean;
+  onToggleFeedbackRedrawUnderstand?: () => void;
   onFeedbackBatchRedraw?: () => void;
   parseBusyRowId: string | null;
   parseAllBusy?: boolean;
@@ -70,6 +72,8 @@ export default function StoryboardTableEditView({
   feedbackBatchBusy = false,
   feedbackBatchProgress = null,
   feedbackRedrawEligibleCount = 0,
+  feedbackRedrawUnderstand = true,
+  onToggleFeedbackRedrawUnderstand,
   onFeedbackBatchRedraw,
   parseBusyRowId,
   parseAllBusy = false,
@@ -378,23 +382,38 @@ export default function StoryboardTableEditView({
               <p className={`${STORYBOARD_COLUMN_HEAD} !mb-0`}>镜头编辑</p>
               <div className="flex flex-wrap items-center justify-end gap-1.5">
                 {editDisplayMode === 'feedback' && onFeedbackBatchRedraw ? (
-                  <button
-                    type="button"
-                    title="按各镜「修改反馈」批量重绘（跳过锁定镜）"
-                    disabled={
-                      feedbackBatchBusy ||
-                      feedbackRedrawEligibleCount <= 0 ||
-                      redrawBusyRowId != null
-                    }
-                    onClick={onFeedbackBatchRedraw}
-                    className={`${STORYBOARD_TOOL_BTN_PRIMARY} shrink-0 !px-2.5 ${
-                      feedbackBatchBusy ? 'opacity-80' : ''
-                    }`}
-                  >
-                    {feedbackBatchBusy && feedbackBatchProgress
-                      ? `反馈重绘 ${feedbackBatchProgress.done}/${feedbackBatchProgress.total}`
-                      : `反馈重绘${feedbackRedrawEligibleCount > 0 ? ` (${feedbackRedrawEligibleCount})` : ''}`}
-                  </button>
+                  <>
+                    <label
+                      className="inline-flex shrink-0 cursor-pointer items-center gap-1.5 text-[10px] text-gray-500"
+                      title="开启：参考图 + 反馈先经理解 LLM；关闭：直发反馈文本生图"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={feedbackRedrawUnderstand}
+                        onChange={() => onToggleFeedbackRedrawUnderstand?.()}
+                        disabled={feedbackBatchBusy}
+                        className="h-3.5 w-3.5 rounded border-white/20 bg-white/5 text-violet-500"
+                      />
+                      理解
+                    </label>
+                    <button
+                      type="button"
+                      title="图生图 · 仅当前分镜图 + 修改反馈（不含结构化字段）"
+                      disabled={
+                        feedbackBatchBusy ||
+                        feedbackRedrawEligibleCount <= 0 ||
+                        redrawBusyRowId != null
+                      }
+                      onClick={onFeedbackBatchRedraw}
+                      className={`${STORYBOARD_TOOL_BTN_PRIMARY} shrink-0 !px-2.5 ${
+                        feedbackBatchBusy ? 'opacity-80' : ''
+                      }`}
+                    >
+                      {feedbackBatchBusy && feedbackBatchProgress
+                        ? `反馈重绘 ${feedbackBatchProgress.done}/${feedbackBatchProgress.total}`
+                        : `反馈重绘${feedbackRedrawEligibleCount > 0 ? ` (${feedbackRedrawEligibleCount})` : ''}`}
+                    </button>
+                  </>
                 ) : null}
                 <button
                   type="button"

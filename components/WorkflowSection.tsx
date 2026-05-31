@@ -221,6 +221,9 @@ import {
 } from '../services/storyboardFrameHistory';
 import {
   executeStoryboardRowRedraw,
+  pickStoryboardEditRedrawPreset,
+  pickStoryboardFeedbackRedrawPreset,
+  type StoryboardRowRedrawInvokeOptions,
   listStoryboardRedrawPresets,
   pickDefaultStoryboardRedrawPresetId,
   STORYBOARD_REDRAW_PRESET_KEY,
@@ -1479,7 +1482,12 @@ const WorkflowSection: React.FC<{
   );
 
   const handleStoryboardRowRedraw = useCallback(
-    async (tableAssetId: string, rowId: string, presetId: string) => {
+    async (
+      tableAssetId: string,
+      rowId: string,
+      imageModelRegistryId: string,
+      options?: StoryboardRowRedrawInvokeOptions
+    ) => {
       const tableAsset = assets.find((a) => a.id === tableAssetId);
       if (!tableAsset || !isWorkflowStoryboardTableAsset(tableAsset)) return;
       const row = tableAsset.storyboardTable?.rows.find((r) => r.id === rowId);
@@ -1491,17 +1499,25 @@ const WorkflowSection: React.FC<{
         onLog?.('warn', '该镜头已锁定，跳过重绘');
         return;
       }
-      const preset =
-        storyboardRedrawPresets.find((p) => p.id === presetId) ??
-        capabilityPresets.find((p) => p.id === presetId);
+      const preset = options?.feedbackOnly
+        ? pickStoryboardFeedbackRedrawPreset(storyboardRedrawPresets)
+        : pickStoryboardEditRedrawPreset(storyboardRedrawPresets, row);
       if (!preset || preset.disabled) {
-        onLog?.('warn', '请选择有效的文生图/图生图能力');
+        onLog?.(
+          'warn',
+          options?.feedbackOnly
+            ? '无可用图生图能力，请在能力预设中启用'
+            : '无可用文生图/图生图能力，请在能力预设中启用'
+        );
         return;
       }
       const result = await executeStoryboardRowRedraw({
         preset,
         row,
         fieldCatalog: tableAsset.storyboardTable?.fieldCatalog ?? [],
+        imageModelRegistryId,
+        feedbackOnly: options?.feedbackOnly,
+        understand: options?.understand,
         ctx: {
           onLog,
           textModelRegistryId: capabilityTextModel,
@@ -1547,7 +1563,6 @@ const WorkflowSection: React.FC<{
     },
     [
       assets,
-      capabilityPresets,
       capabilityTextModel,
       onLog,
       setAssets,
@@ -10412,8 +10427,8 @@ ${lineSvg}
           readOnly={Boolean(storyboardPanelAsset.archived)}
           onRedrawRow={
             storyboardPanelAssetId
-              ? (rowId, presetId) =>
-                  handleStoryboardRowRedraw(storyboardPanelAssetId, rowId, presetId)
+              ? (rowId, imageModelRegistryId, options) =>
+                  handleStoryboardRowRedraw(storyboardPanelAssetId, rowId, imageModelRegistryId, options)
               : undefined
           }
           onPatchAsset={handleStoryboardPanelPatch}
