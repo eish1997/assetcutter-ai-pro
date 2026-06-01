@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { describe, expect, it } from 'vitest';
 import type { BoundingBox, StoryboardTableRow } from '../types';
 import {
   extractShotNoToken,
+  filterStoryboardRowsByExpectedShots,
+  isStoryboardShotNoInExpectedScope,
   mapStoryboardBoxesToVisualCrop,
   matchVisionBoxToRow,
   normalizeShotNoToken,
@@ -38,6 +39,18 @@ describe('storyboardSheetVisionSplit', () => {
       ymax: 100,
     };
     expect(matchVisionBoxToRow(box, rows)?.id).toBe('b');
+  });
+
+  it('filterStoryboardRowsByExpectedShots limits matching to one sheet batch', () => {
+    const rows = [
+      row({ id: 'r1', shotNo: '01' }),
+      row({ id: 'r2', shotNo: '02' }),
+      row({ id: 'r3', shotNo: '03' }),
+      row({ id: 'r4', shotNo: '04' }),
+    ];
+    const scoped = filterStoryboardRowsByExpectedShots(rows, ['01', '02']);
+    expect(scoped.map((item) => item.id)).toEqual(['r1', 'r2']);
+    expect(isStoryboardShotNoInExpectedScope('03', ['01', '02'])).toBe(false);
   });
 
   it('shrinks full panel box to visual core (top/bottom text stripped)', () => {

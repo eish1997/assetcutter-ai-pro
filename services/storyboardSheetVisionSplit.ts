@@ -190,6 +190,47 @@ export function visionLabelToShotNo(label: string): string {
   return text.replace(/^(镜头号|镜号)\s*[：:]\s*/i, '').trim() || extractShotNoToken(text);
 }
 
+/** 切分回填时只匹配本拼图镜号范围内的镜头，避免误填全表 */
+export function filterStoryboardRowsByExpectedShots(
+  rows: StoryboardTableRow[],
+  expectedShotNos: string[]
+): StoryboardTableRow[] {
+  const normalizedExpected = expectedShotNos.map((shot) => shot.trim()).filter(Boolean);
+  if (!normalizedExpected.length) return rows;
+
+  const expectedTokens = new Set(
+    normalizedExpected.map((shot) => normalizeShotNoToken(shot)).filter(Boolean)
+  );
+
+  const scoped = rows.filter((row) => {
+    const shotNo = row.shotNo?.trim() || '';
+    if (!shotNo) return false;
+    const token = normalizeShotNoToken(shotNo);
+    return (
+      normalizedExpected.includes(shotNo) ||
+      (token ? expectedTokens.has(token) : false)
+    );
+  });
+
+  return scoped.length ? scoped : rows;
+}
+
+export function isStoryboardShotNoInExpectedScope(
+  shotNo: string,
+  expectedShotNos: string[]
+): boolean {
+  const normalized = String(shotNo || '').trim();
+  if (!normalized) return false;
+  const token = normalizeShotNoToken(normalized);
+  const expectedTokens = new Set(
+    expectedShotNos.map((shot) => normalizeShotNoToken(shot)).filter(Boolean)
+  );
+  return (
+    expectedShotNos.some((shot) => shot.trim() === normalized) ||
+    (token ? expectedTokens.has(token) : false)
+  );
+}
+
 export async function splitStoryboardSheetByVision(
   dataUrl: string,
   rows: StoryboardTableRow[],
@@ -220,7 +261,7 @@ export async function splitStoryboardSheetByVision(
     };
   }
 
-  const workingRows = [...rows];
+  const workingRows = filterStoryboardRowsByExpectedShots([...rows], expectedShotNos);
   const createdRows: StoryboardTableRow[] = [];
   const usedRowIds = new Set<string>();
   const matches: StoryboardSheetVisionMatch[] = [];
@@ -243,7 +284,7 @@ export async function splitStoryboardSheetByVision(
 
     if (!row && options?.autoCreateRows) {
       const shotNo = visionLabelToShotNo(box.label);
-      if (shotNo) {
+      if (shotNo && isStoryboardShotNoInExpectedScope(shotNo, expectedShotNos)) {
         row = createStoryboardTableRow({ shotNo }, workingRows.length);
         workingRows.push(row);
         createdRows.push(row);

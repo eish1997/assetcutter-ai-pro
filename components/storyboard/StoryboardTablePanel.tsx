@@ -1216,7 +1216,7 @@ export default function StoryboardTablePanel({
         ? await splitStoryboardFeedbackCollageByLayout(normalized, feedbackLayout, taskRows)
         : await splitStoryboardSheetByVision(
             normalized,
-            lookupRows,
+            taskRows,
             capabilityTextModel,
             {
               timeoutMs: WORKFLOW_CUT_DETECT_TIMEOUT_MS,
@@ -1377,7 +1377,6 @@ export default function StoryboardTablePanel({
         table.fieldCatalog,
         undefined,
         {
-          allRows: workingRows,
           expectedShotNos: item.shotNos,
           autoCreateRows: true,
         }
