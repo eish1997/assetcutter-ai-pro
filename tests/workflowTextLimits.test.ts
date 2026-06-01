@@ -34,7 +34,8 @@ describe('resolveWorkflowTextSendLimit', () => {
     expect(heavy).toBeLessThan(base);
   });
 
-  it('生图理解前用户段上限', () => {
+  it('生图理解前用户段上限为官方 32k 的 90%', () => {
+    expect(WORKFLOW_TEXT_PRE_IMAGE_UNDERSTAND_MAX_CHARS).toBe(28_800);
     expect(resolveWorkflowTextSendLimit('pre_image_understand', { modelFamily: 'gemini' })).toBe(
       WORKFLOW_TEXT_PRE_IMAGE_UNDERSTAND_MAX_CHARS
     );

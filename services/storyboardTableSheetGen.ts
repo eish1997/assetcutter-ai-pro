@@ -8,11 +8,143 @@ import {
   getCapabilityEngine,
   type CapabilityExecuteContext,
 } from './capabilityExecutor';
+import {
+  WORKFLOW_IMAGE_GEN_PROMPT_OFFICIAL_MAX_CHARS,
+  WORKFLOW_IMAGE_GEN_PROMPT_RECOMMENDED_MAX_CHARS,
+} from './workflowTextLimits';
 import { imageSrcToDataUrlForCompanion } from './workflowCompanionAssets';
 
 export const STORYBOARD_SHEET_SHOTS_PER_IMAGE_KEY = 'ac_storyboard_sheet_shots_per_image_v1';
 export const STORYBOARD_SHEET_GEN_EXTRA_PROMPT_KEY = 'ac_storyboard_sheet_gen_extra_prompt_v1';
 export const STORYBOARD_SHEET_GEN_BATCH_CONCURRENCY = 2;
+
+export type StoryboardSheetGenPromptStats = {
+  compiledChars: number;
+  presetChars: number;
+  mergedChars: number;
+  sendLimit: number;
+  officialApiMax: number;
+};
+
+/** 直发提示词时，与生图模型收到的正文一致（预设 instruction + 编译正文） */
+export function buildStoryboardSheetGenMergedSendPrompt(
+  compiledPrompt: string,
+  preset: CustomAppModule
+): string {
+  const compiled = String(compiledPrompt ?? '').trim();
+  const presetText = (preset.instruction || '').trim();
+  return presetText ? `${presetText}\n\n${compiled}` : compiled;
+}
+
+export type StoryboardSheetGenBatchPreview = {
+  chunkIndex: number;
+  shotCount: number;
+  shotLabels: string;
+  compiledPrompt: string;
+  /** 直发时与生图模型一致；理解模式下为空 */
+  mergedImagePrompt: string;
+  directSend: boolean;
+  stats: StoryboardSheetGenPromptStats;
+  validationOk: boolean;
+  validationError?: string;
+};
+
+export function buildStoryboardSheetGenBatchPreviews(args: {
+  tasks: StoryboardSheetGenTask[];
+  fieldCatalog: StoryboardParseFieldDef[];
+  promptExtra: string;
+  preset: CustomAppModule;
+}): StoryboardSheetGenBatchPreview[] {
+  return args.tasks.map((task) => {
+    const compiledPrompt = compileSheetRedrawPrompt(task.rows, args.fieldCatalog, {
+      promptExtra: args.promptExtra,
+    });
+    const stats = measureStoryboardSheetGenPrompt(compiledPrompt, args.preset);
+    const validation = validateStoryboardSheetGenPromptLength(compiledPrompt, args.preset, {}, {
+      shotCount: task.rows.length,
+    });
+    const directSend = args.preset.skipUnderstand === true;
+    return {
+      chunkIndex: task.chunkIndex,
+      shotCount: task.rows.length,
+      shotLabels: task.rows
+        .map((row) => row.shotNo?.trim() || `${row.index + 1}`)
+        .join('、'),
+      compiledPrompt,
+      mergedImagePrompt: directSend
+        ? buildStoryboardSheetGenMergedSendPrompt(compiledPrompt, args.preset)
+        : '',
+      directSend,
+      stats,
+      validationOk: validation.ok,
+      validationError: validation.ok ? undefined : validation.error,
+    };
+  });
+}
+
+/** 编译后镜头正文 + 预设提示词合并后的送模字数（不截断、不改写） */
+export function measureStoryboardSheetGenPrompt(
+  compiledPrompt: string,
+  preset: CustomAppModule
+): StoryboardSheetGenPromptStats {
+  const compiled = String(compiledPrompt ?? '').trim();
+  const presetText = (preset.instruction || '').trim();
+  const mergedChars = presetText ? `${presetText}\n\n${compiled}`.length : compiled.length;
+  return {
+    compiledChars: compiled.length,
+    presetChars: presetText.length,
+    mergedChars,
+    sendLimit: WORKFLOW_IMAGE_GEN_PROMPT_RECOMMENDED_MAX_CHARS,
+    officialApiMax: WORKFLOW_IMAGE_GEN_PROMPT_OFFICIAL_MAX_CHARS,
+  };
+}
+
+function formatStoryboardSheetGenLimitError(stats: StoryboardSheetGenPromptStats): string {
+  return (
+    `拼图送模约 ${stats.mergedChars} 字（镜头正文 ${stats.compiledChars} + 预设 ${stats.presetChars}），` +
+    `超过推荐上限 ${stats.sendLimit} 字。请减少「每图镜头数」或缩短镜头描述；系统不会截断后代为生成。`
+  );
+}
+
+/** 送模前校验：超长则拒绝执行，不截断、不改写 */
+export function validateStoryboardSheetGenPromptLength(
+  compiledPrompt: string,
+  preset: CustomAppModule,
+  _ctx: CapabilityExecuteContext,
+  opts?: { shotCount?: number }
+): { ok: true; stats: StoryboardSheetGenPromptStats } | { ok: false; error: string; stats: StoryboardSheetGenPromptStats } {
+  const text = String(compiledPrompt ?? '').trim();
+  const stats = measureStoryboardSheetGenPrompt(text, preset);
+  if (!text) {
+    return { ok: false, error: '请先填写或导入分镜内容', stats };
+  }
+
+  const shotCount = opts?.shotCount ?? 0;
+  if (shotCount > 1 && preset.skipUnderstand !== true) {
+    return {
+      ok: false,
+      stats,
+      error:
+        `本批 ${shotCount} 镜拼图：预设「${preset.label || preset.id}」已启用「理解」，会把多镜提示词改写为单段描述，无法稳定生成网格分镜表。` +
+        `请在功能区将该预设设为「直发提示词」后再试。`,
+    };
+  }
+
+  if (stats.mergedChars > stats.sendLimit) {
+    return { ok: false, error: formatStoryboardSheetGenLimitError(stats), stats };
+  }
+
+  if (stats.mergedChars > stats.officialApiMax) {
+    return {
+      ok: false,
+      stats,
+      error:
+        `拼图送模约 ${stats.mergedChars} 字，超过生图 API 硬顶 ${stats.officialApiMax} 字。请减少每图镜头数或缩短描述。`,
+    };
+  }
+
+  return { ok: true, stats };
+}
 
 export const STORYBOARD_SHEET_SHOTS_PER_IMAGE_OPTIONS = [4, 6, 9, 12, 16, 20, 25, 30, 36] as const;
 
@@ -373,10 +505,8 @@ export function compileSheetShotPanelMeta(
   };
 }
 
-function compactSheetPanelMetaLine(text: string, maxLen: number): string {
-  const normalized = text.replace(/\s+/g, ' ').trim();
-  if (normalized.length <= maxLen) return normalized;
-  return normalized.slice(0, maxLen);
+function compactSheetPanelMetaLine(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
 }
 
 export function compileSheetShotCompactBlock(
@@ -386,12 +516,12 @@ export function compileSheetShotCompactBlock(
   const meta = compileSheetShotPanelMeta(row, catalog);
   const lines: string[] = [];
   if (meta.headerLine) lines.push(`顶栏：${meta.headerLine}`);
-  if (meta.visualLine) lines.push(`画面：${compactSheetPanelMetaLine(meta.visualLine, 120)}`);
+  if (meta.visualLine) lines.push(`画面：${compactSheetPanelMetaLine(meta.visualLine)}`);
   lines.push(
     `对白：${
       meta.dialogueLine === '-'
         ? meta.dialogueLine
-        : compactSheetPanelMetaLine(meta.dialogueLine, 48)
+        : compactSheetPanelMetaLine(meta.dialogueLine)
     }`
   );
   return lines.join('\n');
@@ -446,9 +576,27 @@ export async function executeStoryboardSheetGen(
     return { ok: false, error: '本任务没有可用镜头' };
   }
 
-  const inputText = compileSheetRedrawPrompt(rows, fieldCatalog, { promptExtra });
-  if (!inputText) {
-    return { ok: false, error: '请先填写或导入分镜内容' };
+  const compiledPrompt = compileSheetRedrawPrompt(rows, fieldCatalog, { promptExtra });
+  const lengthCheck = validateStoryboardSheetGenPromptLength(compiledPrompt, preset, ctx, {
+    shotCount: rows.length,
+  });
+  if (!lengthCheck.ok) {
+    return { ok: false, error: lengthCheck.error };
+  }
+  const inputText = compiledPrompt;
+  const { stats } = lengthCheck;
+  ctx.onLog?.(
+    'info',
+    `分镜表 · 批 ${args.chunkIndex != null ? args.chunkIndex + 1 : 1} · ${rows.length} 镜 · 送模约 ${stats.mergedChars} 字（正文 ${stats.compiledChars} + 预设 ${stats.presetChars}，上限 ${stats.sendLimit}）`,
+    undefined
+  );
+
+  if (preset.skipUnderstand !== true) {
+    ctx.onLog?.(
+      'info',
+      `分镜表 · ${preset.label || preset.id} · 预设已启用「理解」：将按能力预设改写提示词后再生图`,
+      undefined
+    );
   }
 
   const ref = String(referenceImageDataUrl || '').trim();
@@ -472,7 +620,10 @@ export async function executeStoryboardSheetGen(
   const label = preset.label || preset.id;
   ctx.onLog?.('info', `分镜表 · ${label} · ${chunkLabel} 生图中…`);
 
-  const result = await executeCapability(preset, inputImage, ctx, { inputText });
+  const result = await executeCapability(preset, inputImage, ctx, {
+    inputText,
+    rejectTextTruncation: true,
+  });
   if (!result.ok) {
     return { ok: false, error: result.error || '生图失败' };
   }

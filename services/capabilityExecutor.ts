@@ -302,10 +302,14 @@ async function resolveGenImagePrompt(
 async function resolveTextOnlyImagePrompt(
   preset: CustomAppModule,
   userText: string,
-  ctx: CapabilityExecuteContext
+  ctx: CapabilityExecuteContext,
+  textSendBudgetKind: WorkflowTextSendBudgetKind = 'pre_image_understand',
+  skipTextClamp = false
 ): Promise<string | null> {
   const presetPrompt = (preset.instruction || '').trim();
-  const ut = clampInputTextForSend(userText || '', 'pre_image_understand', preset, ctx, 0);
+  const ut = skipTextClamp
+    ? String(userText || '').trim()
+    : clampInputTextForSend(userText || '', textSendBudgetKind, preset, ctx, 0);
   if (preset.skipUnderstand === true) {
     const merged = [presetPrompt, ut].filter(Boolean).join('\n\n').trim();
     return merged || null;
@@ -523,6 +527,12 @@ export type ExecuteCapabilityOptions = {
    * 生图/图生文等路径在多于 1 张时走多图 API。
    */
   inputImages?: string[];
+  /** 生图/理解前正文截断预算；分镜拼图等长提示可设为 `understand` */
+  textSendBudgetKind?: WorkflowTextSendBudgetKind;
+  /** 覆盖文生图/图生图的 systemInstruction 模板（须含 `{instruction}` 占位） */
+  imageSystemPrompt?: string;
+  /** 为 true 时：正文超过送模上限则拒绝执行，不截断 */
+  rejectTextTruncation?: boolean;
 } & GeminiImageBatchGroupOptions;
 
 async function executeCompanionSamSegmentCapability(
@@ -863,13 +873,26 @@ export async function executeCapability(
     const hasImg = primaryOk || extras.length > 0;
     const refCount =
       (primaryOk ? 1 : 0) + extras.filter((s) => !primaryOk || s !== inputImageBase64).length;
-    const userT = clampInputTextForSend(
-      inputText || '',
-      'pre_image_understand',
-      preset,
-      ctx,
-      refCount
-    );
+    const textSendBudgetKind = opts?.textSendBudgetKind ?? 'pre_image_understand';
+    const rawInputText = String(inputText || '').trim();
+    if (opts?.rejectTextTruncation && rawInputText) {
+      const limit = resolveWorkflowTextSendLimit(textSendBudgetKind, {
+        modelFamily: textFamilyForPreset(preset, ctx),
+        referenceImageCount: refCount,
+      });
+      const { truncated, originalLength } = clampWorkflowTextForSend(rawInputText, limit);
+      if (truncated) {
+        return {
+          ok: false,
+          kind: 'none',
+          error: `输入文字 ${originalLength} 字，超过送模上限 ${limit} 字，已拒绝执行（不会截断后代为生成）`,
+          durationMs: Date.now() - start,
+        };
+      }
+    }
+    const userT = opts?.rejectTextTruncation
+      ? rawInputText
+      : clampInputTextForSend(inputText || '', textSendBudgetKind, preset, ctx, refCount);
 
     if (preset.category === 'text_to_image' && hasImg) {
       return {
@@ -889,7 +912,13 @@ export async function executeCapability(
           durationMs: Date.now() - start,
         };
       }
-      const prompt = await resolveTextOnlyImagePrompt(preset, userT, ctx);
+      const prompt = await resolveTextOnlyImagePrompt(
+        preset,
+        userT,
+        ctx,
+        textSendBudgetKind,
+        opts?.rejectTextTruncation === true
+      );
       if (!prompt) {
         return {
           ok: false,
@@ -904,10 +933,18 @@ export async function executeCapability(
         preset.imageAspectRatio || preset.imageSize
           ? { aspectRatio: preset.imageAspectRatio, imageSize: preset.imageSize }
           : undefined;
-      const result = await workflowGenerateImage(null, prompt, modelId, imageOptions, undefined, undefined, {
-        ...(opts?.batchGroupKey ? { batchGroupKey: opts.batchGroupKey } : {}),
-        ...(opts?.batchGroupExpected ? { batchGroupExpected: opts.batchGroupExpected } : {}),
-      });
+      const result = await workflowGenerateImage(
+        null,
+        prompt,
+        modelId,
+        imageOptions,
+        opts?.imageSystemPrompt,
+        undefined,
+        {
+          ...(opts?.batchGroupKey ? { batchGroupKey: opts.batchGroupKey } : {}),
+          ...(opts?.batchGroupExpected ? { batchGroupExpected: opts.batchGroupExpected } : {}),
+        }
+      );
       return {
         ok: true,
         kind: 'image',

@@ -343,10 +343,14 @@ export async function executeStoryboardRowRedraw(
     };
   }
 
-  const label = textPreset.label || textPreset.id;
+  const textPresetForRun = textPreset;
+  const label = textPresetForRun.label || textPresetForRun.id;
   ctx.onLog?.('info', `分镜表 · ${label} · 镜头 ${row.shotNo || row.index + 1} 重绘中…`);
 
-  const result = await executeCapability(textPreset, '', ctx, { inputText });
+  const result = await executeCapability(textPresetForRun, '', ctx, {
+    inputText,
+    rejectTextTruncation: true,
+  });
 
   if (!result.ok) {
     return { ok: false, error: result.error || '生图失败' };

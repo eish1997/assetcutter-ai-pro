@@ -19,8 +19,20 @@ export const WORKFLOW_TEXT_SEND_MAX_CHARS_GEMINI = 48_000;
 /** 图生文（含附图）送模硬顶 */
 export const WORKFLOW_TEXT_VISION_SEND_MAX_CHARS = 12_000;
 
-/** 生图 / 生视频前「用户段」送理解硬顶 */
-export const WORKFLOW_TEXT_PRE_IMAGE_UNDERSTAND_MAX_CHARS = 8_000;
+/** 生图 API prompt 官方硬顶（gpt-image-1.5 / gpt-image-2 等 OpenAI Image 系列 32k） */
+export const WORKFLOW_IMAGE_GEN_PROMPT_OFFICIAL_MAX_CHARS = 32_000;
+
+/** 平台送模推荐上限：官方硬顶的 90%，预留合并预设词等余量 */
+export const WORKFLOW_IMAGE_GEN_PROMPT_RECOMMENDED_MAX_CHARS = Math.floor(
+  WORKFLOW_IMAGE_GEN_PROMPT_OFFICIAL_MAX_CHARS * 0.9
+);
+
+/** @deprecated 使用 OFFICIAL / RECOMMENDED；保留别名供 openaiAdapter 等引用官方硬顶 */
+export const WORKFLOW_IMAGE_GEN_PROMPT_MAX_CHARS = WORKFLOW_IMAGE_GEN_PROMPT_OFFICIAL_MAX_CHARS;
+
+/** 生图 / 生视频前「用户段」送模推荐上限（官方 32k 的 90% ≈ 28.8k） */
+export const WORKFLOW_TEXT_PRE_IMAGE_UNDERSTAND_MAX_CHARS =
+  WORKFLOW_IMAGE_GEN_PROMPT_RECOMMENDED_MAX_CHARS;
 
 /** 多参考图时缩小文本预算的阈值与张数 */
 export const WORKFLOW_TEXT_VISION_HEAVY_IMAGE_COUNT = 5;

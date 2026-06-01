@@ -15,6 +15,9 @@ import {
   storyboardBulkDraftStorageKey,
 } from '../../services/storyboardTableInput';
 import {
+  buildStoryboardSheetGenBatchPreviews,
+  compileSheetRedrawPrompt,
+  measureStoryboardSheetGenPrompt,
   normalizeShotsPerSheet,
   planStoryboardSheetGenTasks,
   resolveSheetGenSourceRows,
@@ -23,6 +26,7 @@ import {
   STORYBOARD_SHEET_SHOTS_PER_IMAGE_KEY,
   STORYBOARD_SHEET_SHOTS_PER_IMAGE_OPTIONS,
 } from '../../services/storyboardTableSheetGen';
+import StoryboardSheetGenConfirmModal from './StoryboardSheetGenConfirmModal';
 import {
   STORYBOARD_FIELD_INPUT,
   STORYBOARD_LABEL,
@@ -86,6 +90,7 @@ export default function StoryboardTableSheetGen({
   const sheetUploadRef = useRef<HTMLInputElement>(null);
   const [shotsPerSheet, setShotsPerSheet] = useState(25);
   const [promptExtra, setPromptExtra] = useState('');
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const bulkDraft = useMemo(() => readBulkDraft(assetId), [assetId, draftTick]);
 
   useEffect(() => {
@@ -107,6 +112,36 @@ export default function StoryboardTableSheetGen({
     () => planStoryboardSheetGenTasks(source.rows, shotsPerSheet),
     [shotsPerSheet, source.rows]
   );
+
+  const activePreset = useMemo(
+    () => redrawPresets.find((item) => item.id === effectiveRedrawPresetId) ?? null,
+    [effectiveRedrawPresetId, redrawPresets]
+  );
+
+  const taskPromptStats = useMemo(() => {
+    if (!activePreset) return [];
+    return tasks.map((task) => {
+      const compiled = compileSheetRedrawPrompt(task.rows, source.catalog, { promptExtra });
+      const stats = measureStoryboardSheetGenPrompt(compiled, activePreset);
+      return {
+        chunkIndex: task.chunkIndex,
+        shotCount: task.rows.length,
+        stats,
+        overLimit: stats.mergedChars > stats.sendLimit,
+        needsDirectPrompt: task.rows.length > 1 && activePreset.skipUnderstand !== true,
+      };
+    });
+  }, [activePreset, promptExtra, source.catalog, tasks]);
+
+  const batchPreviews = useMemo(() => {
+    if (!activePreset || !tasks.length) return [];
+    return buildStoryboardSheetGenBatchPreviews({
+      tasks,
+      fieldCatalog: source.catalog,
+      promptExtra,
+      preset: activePreset,
+    });
+  }, [activePreset, promptExtra, source.catalog, tasks]);
 
   const presetOptions = useMemo(
     () => redrawPresets.map((preset) => ({ value: preset.id, label: preset.label || preset.id })),
@@ -137,7 +172,7 @@ export default function StoryboardTableSheetGen({
     onPresetChange(value);
   };
 
-  const handleRun = useCallback(async () => {
+  const handleRun = useCallback(() => {
     if (readOnly || busy) return;
     if (!effectiveRedrawPresetId) {
       onNotify?.('warn', '请选择生图能力');
@@ -151,32 +186,42 @@ export default function StoryboardTableSheetGen({
       onNotify?.('warn', '没有可执行的生成任务');
       return;
     }
-
-    const preset = redrawPresets.find((item) => item.id === effectiveRedrawPresetId);
-    if (!preset) {
+    if (!activePreset) {
       onNotify?.('warn', '生图能力无效');
       return;
     }
+    setConfirmOpen(true);
+  }, [
+    activePreset,
+    busy,
+    effectiveRedrawPresetId,
+    onNotify,
+    readOnly,
+    source.rows.length,
+    tasks.length,
+  ]);
+
+  const handleConfirmRun = useCallback(async () => {
+    if (readOnly || busy || !activePreset) return;
+    setConfirmOpen(false);
     await onRun({
       presetId: effectiveRedrawPresetId,
       shotsPerSheet,
       promptExtra,
-      forceTextToImage: preset.category === 'image_to_image',
+      forceTextToImage: activePreset.category === 'image_to_image',
       sourceRows: source.rows,
       fieldCatalog: source.catalog,
     });
   }, [
+    activePreset,
     busy,
     effectiveRedrawPresetId,
-    onNotify,
     onRun,
     promptExtra,
     readOnly,
-    redrawPresets,
     shotsPerSheet,
     source.catalog,
     source.rows,
-    tasks.length,
   ]);
 
   const [selectedPreviewId, setSelectedPreviewId] = useState<string | null>(null);
@@ -228,12 +273,25 @@ export default function StoryboardTableSheetGen({
         <button
           type="button"
           disabled={readOnly || busy || !tasks.length || !redrawPresets.length}
-          onClick={() => void handleRun()}
+          onClick={handleRun}
           className={`${STORYBOARD_TOOL_BTN_PRIMARY} ml-auto h-7 px-2.5 text-[10px]`}
         >
           {busy ? '生成中…' : `执行 ${tasks.length || taskTotal} 个任务`}
         </button>
       </div>
+
+      <StoryboardSheetGenConfirmModal
+        open={confirmOpen}
+        busy={busy}
+        presetLabel={activePreset?.label || activePreset?.id || ''}
+        presetInstruction={activePreset?.instruction || ''}
+        directSend={activePreset?.skipUnderstand === true}
+        shotsPerSheet={shotsPerSheet}
+        taskCount={tasks.length}
+        batches={batchPreviews}
+        onClose={() => setConfirmOpen(false)}
+        onConfirm={() => void handleConfirmRun()}
+      />
 
       {/* 设置区：置顶 */}
       <div className="mb-2 shrink-0 overflow-y-auto rounded-xl border border-white/[0.08] bg-black/25 no-scrollbar">
@@ -267,12 +325,12 @@ export default function StoryboardTableSheetGen({
           </div>
 
           <div>
-            <label className={STORYBOARD_LABEL}>附加提示词</label>
+            <label className={STORYBOARD_LABEL}>附加提示词（可选）</label>
             <textarea
               value={promptExtra}
               readOnly={readOnly || busy}
               rows={2}
-              placeholder="手绘风格、画幅比例等；排版已默认紧凑（小字顶栏+底栏、少留白）"
+              placeholder="风格/画幅等补充；镜头正文由左侧脚本自动编译，此处为空也会生图"
               onChange={(event) => handlePromptChange(event.target.value)}
               className={`${STORYBOARD_FIELD_INPUT} min-h-[2.75rem] resize-none text-[10px] leading-relaxed`}
             />
@@ -283,15 +341,33 @@ export default function StoryboardTableSheetGen({
               <summary className="cursor-pointer select-none text-[9px] font-semibold text-gray-500">
                 任务预览（{tasks.length} 批）
               </summary>
-              <div className="mt-1.5 flex max-h-20 flex-col gap-0.5 overflow-y-auto no-scrollbar">
-                {tasks.map((task) => (
-                  <p key={task.chunkIndex} className="text-[9px] leading-snug text-gray-400">
-                    批 {task.chunkIndex + 1}：
-                    {task.rows
-                      .map((row) => row.shotNo?.trim() || `${row.index + 1}`)
-                      .join('、')}
-                  </p>
-                ))}
+              <div className="mt-1.5 flex max-h-28 flex-col gap-0.5 overflow-y-auto no-scrollbar">
+                {tasks.map((task) => {
+                  const stat = taskPromptStats.find((item) => item.chunkIndex === task.chunkIndex);
+                  return (
+                    <p key={task.chunkIndex} className="text-[9px] leading-snug text-gray-400">
+                      批 {task.chunkIndex + 1} · {task.rows.length} 镜：
+                      {task.rows
+                        .map((row) => row.shotNo?.trim() || `${row.index + 1}`)
+                        .join('、')}
+                      {stat ? (
+                        <span
+                          className={
+                            stat.overLimit || stat.needsDirectPrompt
+                              ? ' text-amber-300/90'
+                              : ' text-gray-500'
+                          }
+                        >
+                          {' '}
+                          · 送模约 {stat.stats.mergedChars} 字（正文 {stat.stats.compiledChars} + 预设{' '}
+                          {stat.stats.presetChars}，上限 {stat.stats.sendLimit}）
+                          {stat.needsDirectPrompt ? ' · 需直发提示词' : ''}
+                          {stat.overLimit ? ' · 超限' : ''}
+                        </span>
+                      ) : null}
+                    </p>
+                  );
+                })}
               </div>
             </details>
           ) : null}

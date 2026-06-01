@@ -20,6 +20,7 @@ import {
 } from "./toapisAdapter";
 import { coerceImageModelRegistryId } from "./modelRegistry/imageModels";
 import { SUPPORTED_IMAGE_SIZES } from "../types";
+import { WORKFLOW_IMAGE_GEN_PROMPT_OFFICIAL_MAX_CHARS } from "./workflowTextLimits";
 
 export function normalizeOpenAiBaseUrl(raw: string): string {
   const s = (raw || "").trim().replace(/\/+$/, "");
@@ -68,7 +69,7 @@ function parseContents(contents: unknown): GeminiTurn[] {
 }
 
 /** GPT Image 官方 prompt 上限 32000 字符 */
-const GPT_IMAGE_PROMPT_MAX_CHARS = 32000;
+const GPT_IMAGE_PROMPT_MAX_CHARS = WORKFLOW_IMAGE_GEN_PROMPT_OFFICIAL_MAX_CHARS;
 const GPT_IMAGE_MAX_REFERENCE_IMAGES = 16;
 
 function clampOpenAiImagePrompt(systemInstruction: string, userText: string, max: number): string {
