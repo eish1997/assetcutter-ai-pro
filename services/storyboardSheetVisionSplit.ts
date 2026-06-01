@@ -1,4 +1,5 @@
 import type { BoundingBox, StoryboardTableRow } from '../types';
+import { createStoryboardTableRow } from './storyboardTableAsset';
 import { cropBoxes } from './imageCrop';
 import { detectObjectsInImage } from './unifiedAiGateway';
 import { DEFAULT_MODEL_TEXT } from './modelRegistry/constants';
@@ -17,6 +18,7 @@ export type StoryboardSheetVisionSplitResult = {
   matches: StoryboardSheetVisionMatch[];
   unmatchedLabels: string[];
   warn?: string;
+  createdRows?: StoryboardTableRow[];
 };
 
 export function normalizeShotNoToken(raw: string): string {
@@ -182,13 +184,21 @@ export async function detectStoryboardSheetPanels(
   return mapStoryboardBoxesToVisualCrop(dedupeBoxesByLabel(boxes));
 }
 
+export function visionLabelToShotNo(label: string): string {
+  const text = String(label || '').trim();
+  if (!text) return '';
+  return text.replace(/^(镜头号|镜号)\s*[：:]\s*/i, '').trim() || extractShotNoToken(text);
+}
+
 export async function splitStoryboardSheetByVision(
   dataUrl: string,
   rows: StoryboardTableRow[],
   textModel = DEFAULT_MODEL_TEXT,
-  options?: { timeoutMs?: number }
+  options?: { timeoutMs?: number; autoCreateRows?: boolean; expectedShotNos?: string[] }
 ): Promise<StoryboardSheetVisionSplitResult> {
-  const expectedShotNos = rows.map((row) => row.shotNo?.trim() || '').filter(Boolean);
+  const expectedShotNos =
+    options?.expectedShotNos?.map((shot) => shot.trim()).filter(Boolean) ??
+    rows.map((row) => row.shotNo?.trim() || '').filter(Boolean);
   let boxes: BoundingBox[] = [];
   let warn: string | undefined;
 
@@ -210,6 +220,8 @@ export async function splitStoryboardSheetByVision(
     };
   }
 
+  const workingRows = [...rows];
+  const createdRows: StoryboardTableRow[] = [];
   const usedRowIds = new Set<string>();
   const matches: StoryboardSheetVisionMatch[] = [];
   const unmatchedLabels: string[] = [];
@@ -224,7 +236,20 @@ export async function splitStoryboardSheetByVision(
   for (let i = 0; i < boxes.length; i += 1) {
     const box = boxes[i]!;
     const image = crops[i];
-    const row = matchVisionBoxToRow(box, rows);
+    let row = matchVisionBoxToRow(
+      box,
+      workingRows.filter((item) => !usedRowIds.has(item.id))
+    );
+
+    if (!row && options?.autoCreateRows) {
+      const shotNo = visionLabelToShotNo(box.label);
+      if (shotNo) {
+        row = createStoryboardTableRow({ shotNo }, workingRows.length);
+        workingRows.push(row);
+        createdRows.push(row);
+      }
+    }
+
     if (!row || usedRowIds.has(row.id) || !image) {
       unmatchedLabels.push(box.label || box.id);
       continue;
@@ -232,7 +257,7 @@ export async function splitStoryboardSheetByVision(
     usedRowIds.add(row.id);
     matches.push({
       rowId: row.id,
-      shotNo: row.shotNo?.trim() || box.label,
+      shotNo: row.shotNo?.trim() || visionLabelToShotNo(box.label),
       label: box.label,
       image,
       box,
@@ -245,5 +270,10 @@ export async function splitStoryboardSheetByVision(
     warn = `${unmatchedLabels.length} 个识别格未能匹配镜号：${unmatchedLabels.slice(0, 4).join('、')}`;
   }
 
-  return { matches, unmatchedLabels, warn };
+  return {
+    matches,
+    unmatchedLabels,
+    warn,
+    createdRows: createdRows.length ? createdRows : undefined,
+  };
 }

@@ -12,6 +12,7 @@ import {
   WORKFLOW_IMAGE_GEN_PROMPT_OFFICIAL_MAX_CHARS,
   WORKFLOW_IMAGE_GEN_PROMPT_RECOMMENDED_MAX_CHARS,
 } from './workflowTextLimits';
+import { probeCompanionHealth } from './companionClient/probe';
 import { imageSrcToDataUrlForCompanion } from './workflowCompanionAssets';
 
 export const STORYBOARD_SHEET_SHOTS_PER_IMAGE_KEY = 'ac_storyboard_sheet_shots_per_image_v1';
@@ -158,6 +159,8 @@ export type StoryboardSheetGenBatchRequest = {
   forceTextToImage?: boolean;
   sourceRows: StoryboardTableRow[];
   fieldCatalog: StoryboardParseFieldDef[];
+  /** 仅生成这些 chunkIndex；缺省或空数组表示全部 */
+  selectedChunkIndexes?: number[];
 };
 
 export type StoryboardSheetGenTask = {
@@ -168,7 +171,30 @@ export type StoryboardSheetGenTask = {
 
 export type StoryboardSheetGenChunkResult =
   | { chunkIndex: number; rowIds: string[]; ok: true; image: string }
-  | { chunkIndex: number; rowIds: string[]; ok: false; error: string };
+  | { chunkIndex: number; rowIds: string[]; ok: false; error: string; cancelled?: boolean };
+
+export class StoryboardSheetGenBatchController {
+  private cancelled = new Set<number>();
+  private abortAll = false;
+
+  cancelChunk(chunkIndex: number): void {
+    this.cancelled.add(chunkIndex);
+  }
+
+  cancelPendingChunks(chunkIndexes: number[]): void {
+    for (const chunkIndex of chunkIndexes) {
+      this.cancelled.add(chunkIndex);
+    }
+  }
+
+  abort(): void {
+    this.abortAll = true;
+  }
+
+  isCancelled(chunkIndex: number): boolean {
+    return this.abortAll || this.cancelled.has(chunkIndex);
+  }
+}
 
 export type StoryboardSheetGenBatchResult = {
   tasks: StoryboardSheetGenTask[];
@@ -538,14 +564,17 @@ export function listStoryboardSheetGenPresets(presets: CustomAppModule[]): Custo
 async function mapLimit<T, R>(
   items: T[],
   concurrency: number,
-  mapper: (item: T, index: number) => Promise<R>
+  mapper: (item: T, index: number) => Promise<R>,
+  shouldSkip?: (item: T, index: number) => boolean
 ): Promise<R[]> {
   const results: R[] = new Array(items.length);
   let nextIndex = 0;
   async function worker() {
     while (nextIndex < items.length) {
       const i = nextIndex++;
-      results[i] = await mapper(items[i]!, i);
+      const item = items[i]!;
+      if (shouldSkip?.(item, i)) continue;
+      results[i] = await mapper(item, i);
     }
   }
   const workers = Array.from({ length: Math.min(concurrency, items.length) }, () => worker());
@@ -644,29 +673,69 @@ export async function executeStoryboardSheetGenBatch(args: {
   referenceImageDataUrl?: string;
   forceTextToImage?: boolean;
   onTaskComplete?: (done: number, total: number) => void;
+  onTaskStart?: (chunkIndex: number) => void;
+  onChunkReady?: (result: StoryboardSheetGenChunkResult) => void | Promise<void>;
   concurrency?: number;
+  controller?: StoryboardSheetGenBatchController;
 }): Promise<StoryboardSheetGenBatchResult> {
   const concurrency = args.concurrency ?? STORYBOARD_SHEET_GEN_BATCH_CONCURRENCY;
   const total = args.tasks.length;
   let done = 0;
-  const results = await mapLimit(args.tasks, concurrency, async (task): Promise<StoryboardSheetGenChunkResult> => {
-    const outcome = await executeStoryboardSheetGen({
-      preset: args.preset,
-      rows: task.rows,
-      fieldCatalog: args.fieldCatalog,
-      ctx: args.ctx,
-      promptExtra: args.promptExtra,
-      referenceImageDataUrl: args.referenceImageDataUrl,
-      forceTextToImage: args.forceTextToImage,
-      chunkIndex: task.chunkIndex,
-    });
+  const bumpDone = () => {
     done += 1;
     args.onTaskComplete?.(done, total);
-    if (!outcome.ok) {
-      return { chunkIndex: task.chunkIndex, rowIds: task.rowIds, ok: false, error: outcome.error };
+  };
+
+  const results = await mapLimit(
+    args.tasks,
+    concurrency,
+    async (task): Promise<StoryboardSheetGenChunkResult> => {
+      if (args.controller?.isCancelled(task.chunkIndex)) {
+        const cancelled: StoryboardSheetGenChunkResult = {
+          chunkIndex: task.chunkIndex,
+          rowIds: task.rowIds,
+          ok: false,
+          error: '已取消',
+          cancelled: true,
+        };
+        bumpDone();
+        await args.onChunkReady?.(cancelled);
+        return cancelled;
+      }
+
+      args.onTaskStart?.(task.chunkIndex);
+
+      const outcome = await executeStoryboardSheetGen({
+        preset: args.preset,
+        rows: task.rows,
+        fieldCatalog: args.fieldCatalog,
+        ctx: args.ctx,
+        promptExtra: args.promptExtra,
+        referenceImageDataUrl: args.referenceImageDataUrl,
+        forceTextToImage: args.forceTextToImage,
+        chunkIndex: task.chunkIndex,
+      });
+      bumpDone();
+      if (!outcome.ok) {
+        const failed: StoryboardSheetGenChunkResult = {
+          chunkIndex: task.chunkIndex,
+          rowIds: task.rowIds,
+          ok: false,
+          error: outcome.error,
+        };
+        await args.onChunkReady?.(failed);
+        return failed;
+      }
+      const ready: StoryboardSheetGenChunkResult = {
+        chunkIndex: task.chunkIndex,
+        rowIds: task.rowIds,
+        ok: true,
+        image: outcome.image,
+      };
+      await args.onChunkReady?.(ready);
+      return ready;
     }
-    return { chunkIndex: task.chunkIndex, rowIds: task.rowIds, ok: true, image: outcome.image };
-  });
+  );
 
   let okCount = 0;
   let failCount = 0;
@@ -676,4 +745,36 @@ export async function executeStoryboardSheetGenBatch(args: {
   }
 
   return { tasks: args.tasks, results, okCount, failCount };
+}
+
+export type StoryboardSheetGenCompanionProbeReason = 'missing_config' | 'unreachable';
+
+export type StoryboardSheetGenCompanionProbeResult =
+  | { ok: true }
+  | { ok: false; reason: StoryboardSheetGenCompanionProbeReason };
+
+/** 拼图生成前检查本地伴侣是否可用（拼图预览落盘依赖伴侣） */
+export async function probeStoryboardSheetGenCompanionReady(
+  companionBaseUrl: string,
+  companionProjectId: string
+): Promise<StoryboardSheetGenCompanionProbeResult> {
+  const base = String(companionBaseUrl || '').trim();
+  const pid = String(companionProjectId || '').trim();
+  if (!base || !pid) {
+    return { ok: false, reason: 'missing_config' };
+  }
+  const health = await probeCompanionHealth(base);
+  if (!health.ok) {
+    return { ok: false, reason: 'unreachable' };
+  }
+  return { ok: true };
+}
+
+export function storyboardSheetGenCompanionProbeMessage(
+  reason: StoryboardSheetGenCompanionProbeReason
+): string {
+  if (reason === 'unreachable') {
+    return '本地伴侣不可达。请确认桌面伴侣已启动，并在设置中测试连接后再生成拼图。';
+  }
+  return '未连接本地伴侣或未打开工作区项目。拼图会保存到本地伴侣，请先在侧栏连接伴侣并进入项目后再生成。';
 }

@@ -54,19 +54,54 @@ import {
 } from '../../services/storyboardRoleReplaceRedraw';
 import { storyboardRowHasFrameRef } from '../../services/storyboardFrameImageUrl';
 import {
+  executeStoryboardSheetGen,
   executeStoryboardSheetGenBatch,
   planStoryboardSheetGenTasks,
+  probeStoryboardSheetGenCompanionReady,
+  storyboardSheetGenCompanionProbeMessage,
+  StoryboardSheetGenBatchController,
   type StoryboardSheetGenBatchRequest,
 } from '../../services/storyboardTableSheetGen';
 import { splitStoryboardSheetByVision } from '../../services/storyboardSheetVisionSplit';
 import {
+  buildSheetPreviewLabel,
+  commitStoryboardSheetPreviewList,
   createSheetPreviewItem,
+  createSheetGenPlaceholderItems,
+  cleanupStoryboardSheetPreviewAssets,
+  ensureStoryboardRowsForShotNos,
+  formatSheetPreviewShotLabel,
+  hydrateStoryboardSheetPreviews,
+  isStoryboardSheetPreviewSplittable,
+  listSplittableStoryboardSheetPreviews,
+  loadStoryboardSheetPreviewsStored,
+  mergeStoryboardSheetPreviews,
+  parseSheetPreviewShotRange,
   prependStoryboardSheetPreview,
+  prepareStoryboardSheetPreviewForSave,
   readStoryboardSheetPreviews,
+  removeStoryboardSheetPreview,
   resolveSheetTaskRows,
+  resolveStoryboardSheetPreviewDataUrl,
   updateStoryboardSheetPreview,
+  upsertStoryboardSheetPreview,
+  writeStoryboardSheetPreviewsToCompanion,
   type StoryboardSheetPreviewItem,
 } from '../../services/storyboardSheetPreview';
+import {
+  activateSheetPreviewHistoryVersion,
+  replaceSheetPreviewActiveImage,
+} from '../../services/storyboardSheetPreviewHistory';
+import {
+  clearStoryboardSheetGenSessionBusy,
+  findStoryboardSheetGenSessionPreview,
+  getStoryboardSheetGenSession,
+  isStoryboardSheetGenSessionBusy,
+  mergeStoryboardSheetGenSessionPreviews,
+  patchStoryboardSheetGenSession,
+  syncStoryboardSheetGenSessionPreviews,
+  subscribeStoryboardSheetGenSession,
+} from '../../services/storyboardSheetGenSession';
 import { WORKFLOW_CUT_DETECT_TIMEOUT_MS } from '../workflow/workflowConstants';
 import {
   applyShotFieldsPatch,
@@ -117,6 +152,9 @@ import {
   restoreStoryboardRowFrameVersion,
 } from '../../services/storyboardFrameHistory';
 import { ImagePreviewOverlay } from '../ImagePreviewOverlay';
+import { Download } from 'lucide-react';
+import { triggerImageDownload } from '../../services/imageDataUrl';
+import { IMAGE_LIGHTBOX_TOOL_ICON_BTN_IDLE } from '../workflow/workflowSectionUiConstants';
 import AppIcon from '../ui/AppIcon';
 import { CustomDropdown } from '../ui/CustomDropdown';
 import StoryboardTableInputView, {
@@ -255,6 +293,7 @@ export default function StoryboardTablePanel({
   const isInputView = viewMode === 'input';
   const [activeRowId, setActiveRowId] = useState<string | null>(table.rows[0]?.id ?? null);
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+  const [lightboxSheetPreviewId, setLightboxSheetPreviewId] = useState<string | null>(null);
   const [imageBusyRowId, setImageBusyRowId] = useState<string | null>(null);
   const [roleAssetBusyId, setRoleAssetBusyId] = useState<string | null>(null);
   const [roleReplaceBatchBusy, setRoleReplaceBatchBusy] = useState(false);
@@ -307,7 +346,18 @@ export default function StoryboardTablePanel({
     null
   );
   const [sheetPreviews, setSheetPreviews] = useState<StoryboardSheetPreviewItem[]>([]);
+  const sheetPreviewsRef = useRef<StoryboardSheetPreviewItem[]>([]);
+  const sheetGenBusyRef = useRef(false);
+  const sheetSplitBatchBusyRef = useRef(false);
+  const sheetPreviewSaveChainRef = useRef(Promise.resolve());
+  const sheetGenControllerRef = useRef<StoryboardSheetGenBatchController | null>(null);
+  const sheetGenPlaceholderIdsRef = useRef<Map<number, string>>(new Map());
   const [sheetSplitBusyId, setSheetSplitBusyId] = useState<string | null>(null);
+  const [sheetRegenBusyId, setSheetRegenBusyId] = useState<string | null>(null);
+  const [sheetSplitBatchBusy, setSheetSplitBatchBusy] = useState(false);
+  const [sheetSplitProgress, setSheetSplitProgress] = useState<{ done: number; total: number } | null>(
+    null
+  );
   const [parseBusyRowId, setParseBusyRowId] = useState<string | null>(null);
   const [parseAllBusy, setParseAllBusy] = useState(false);
   const [optimizeBusyRowId, setOptimizeBusyRowId] = useState<string | null>(null);
@@ -343,9 +393,175 @@ export default function StoryboardTablePanel({
     [viewMode]
   );
 
+  const syncSheetPreviewListToCompanion = useCallback(
+    async (items: StoryboardSheetPreviewItem[]) => {
+      if (!companionBaseUrl.trim() || !companionProjectId.trim()) return false;
+      return writeStoryboardSheetPreviewsToCompanion(
+        asset.id,
+        items,
+        companionBaseUrl,
+        companionProjectId
+      );
+    },
+    [asset.id, companionBaseUrl, companionProjectId]
+  );
+
+  const commitSheetPreviews = useCallback(
+    (updater: (prev: StoryboardSheetPreviewItem[]) => StoryboardSheetPreviewItem[], persist = false) => {
+      const next = updater(sheetPreviewsRef.current);
+      sheetPreviewsRef.current = next;
+      setSheetPreviews(next);
+      syncStoryboardSheetGenSessionPreviews(asset.id, next);
+      if (persist) {
+        const result = commitStoryboardSheetPreviewList(asset.id, next);
+        void syncSheetPreviewListToCompanion(result.items).then((persistedCompanion) => {
+          if (!result.persisted && !persistedCompanion) {
+            onNotify?.('warn', '拼图列表未能持久化，请连接本地伴侣或清理浏览器存储');
+          } else if (!persistedCompanion && companionBaseUrl.trim() && companionProjectId.trim()) {
+            onNotify?.('warn', '拼图列表仅缓存在浏览器内，建议保持本地伴侣连接');
+          }
+        });
+      }
+      return next;
+    },
+    [asset.id, companionBaseUrl, companionProjectId, onNotify, syncSheetPreviewListToCompanion]
+  );
+
+  const sheetPreviewWheelItems = useMemo(
+    () => sheetPreviews.filter((item) => String(item.imageDataUrl || '').trim()),
+    [sheetPreviews]
+  );
+
+  const openStoryboardLightbox = useCallback((src: string) => {
+    setLightboxSrc(src);
+    setLightboxSheetPreviewId(null);
+  }, []);
+
+  const openSheetPreviewLightbox = useCallback(
+    (preview: StoryboardSheetPreviewItem) => {
+      const src = String(preview.imageDataUrl || '').trim();
+      if (!src) {
+        onNotify?.('warn', '拼图仍在加载，请稍后再试');
+        return;
+      }
+      setLightboxSrc(src);
+      setLightboxSheetPreviewId(preview.id);
+    },
+    [onNotify]
+  );
+
+  const navigateSheetPreviewLightbox = useCallback(
+    (delta: number) => {
+      if (!lightboxSheetPreviewId || sheetPreviewWheelItems.length <= 1) return;
+      const idx = sheetPreviewWheelItems.findIndex((item) => item.id === lightboxSheetPreviewId);
+      if (idx < 0) return;
+      const next =
+        sheetPreviewWheelItems[
+          (idx + delta + sheetPreviewWheelItems.length) % sheetPreviewWheelItems.length
+        ];
+      if (!next) return;
+      setLightboxSrc(next.imageDataUrl);
+      setLightboxSheetPreviewId(next.id);
+    },
+    [lightboxSheetPreviewId, sheetPreviewWheelItems]
+  );
+
+  const closeStoryboardLightbox = useCallback(() => {
+    setLightboxSrc(null);
+    setLightboxSheetPreviewId(null);
+  }, []);
+
+  const rehydrateSheetPreviews = useCallback(async () => {
+    if (isStoryboardSheetGenSessionBusy(asset.id) || sheetSplitBatchBusyRef.current) return;
+    const stored = await loadStoryboardSheetPreviewsStored(
+      asset.id,
+      companionBaseUrl,
+      companionProjectId
+    );
+    const hydrated = await hydrateStoryboardSheetPreviews(
+      stored,
+      asset.id,
+      companionBaseUrl,
+      companionProjectId
+    );
+    if (isStoryboardSheetGenSessionBusy(asset.id) || sheetSplitBatchBusyRef.current) return;
+    commitSheetPreviews((prev) => {
+      const inFlight = prev.filter(
+        (item) => item.genStatus === 'pending' || item.genStatus === 'generating'
+      );
+      return mergeStoryboardSheetPreviews(hydrated, inFlight, prev);
+    });
+  }, [asset.id, commitSheetPreviews, companionBaseUrl, companionProjectId]);
+
   useEffect(() => {
-    setSheetPreviews(readStoryboardSheetPreviews(asset.id));
-  }, [asset.id]);
+    let cancelled = false;
+
+    const applySessionState = (session: NonNullable<ReturnType<typeof getStoryboardSheetGenSession>>) => {
+      sheetGenBusyRef.current = session.busy;
+      setSheetGenBusy(session.busy);
+      setSheetGenProgress(session.progress);
+      sheetGenControllerRef.current = session.controller;
+      sheetGenPlaceholderIdsRef.current = session.placeholderIdByChunk;
+
+      if (session.busy) {
+        sheetPreviewsRef.current = session.previews;
+        setSheetPreviews(session.previews);
+        return;
+      }
+
+      if (session.previews.length > 0) {
+        const merged = mergeStoryboardSheetPreviews(session.previews, sheetPreviewsRef.current);
+        sheetPreviewsRef.current = merged;
+        setSheetPreviews(merged);
+      }
+    };
+
+    const unsubscribe = subscribeStoryboardSheetGenSession(asset.id, (session) => {
+      if (cancelled) return;
+      applySessionState(session);
+    });
+
+    void (async () => {
+      const genBusy = isStoryboardSheetGenSessionBusy(asset.id);
+
+      const stored = await loadStoryboardSheetPreviewsStored(
+        asset.id,
+        companionBaseUrl,
+        companionProjectId
+      );
+      if (cancelled) return;
+
+      const hydrated = await hydrateStoryboardSheetPreviews(
+        stored,
+        asset.id,
+        companionBaseUrl,
+        companionProjectId
+      );
+      if (cancelled) return;
+
+      const sessionPreviews = getStoryboardSheetGenSession(asset.id)?.previews ?? [];
+
+      if (isStoryboardSheetGenSessionBusy(asset.id) || genBusy) {
+        mergeStoryboardSheetGenSessionPreviews(asset.id, hydrated, sessionPreviews);
+        return;
+      }
+
+      if (sheetSplitBatchBusyRef.current) return;
+      commitSheetPreviews((prev) =>
+        mergeStoryboardSheetPreviews(hydrated, sessionPreviews, prev)
+      );
+    })();
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [asset.id, commitSheetPreviews, companionBaseUrl, companionProjectId]);
+
+  useEffect(() => {
+    if (sheetGenBusy || sheetSplitBatchBusy) return;
+    void rehydrateSheetPreviews();
+  }, [sheetGenBusy, sheetSplitBatchBusy, rehydrateSheetPreviews]);
 
   useEffect(() => {
     setFeedbackRedrawHistory(readStoryboardFeedbackRedrawHistory(asset.id));
@@ -981,7 +1197,12 @@ export default function StoryboardTablePanel({
       sheetImage: string,
       taskRows: StoryboardTableRow[],
       fieldCatalog: StoryboardParseFieldDef[],
-      feedbackLayout?: FeedbackCollageLayout
+      feedbackLayout?: FeedbackCollageLayout,
+      opts?: {
+        allRows?: StoryboardTableRow[];
+        expectedShotNos?: string[];
+        autoCreateRows?: boolean;
+      }
     ) => {
       let normalized = sheetImage;
       try {
@@ -990,14 +1211,35 @@ export default function StoryboardTablePanel({
         /* keep raw */
       }
 
+      const lookupRows = opts?.allRows ?? taskRows;
       const split = feedbackLayout
         ? await splitStoryboardFeedbackCollageByLayout(normalized, feedbackLayout, taskRows)
         : await splitStoryboardSheetByVision(
             normalized,
-            taskRows,
+            lookupRows,
             capabilityTextModel,
-            { timeoutMs: WORKFLOW_CUT_DETECT_TIMEOUT_MS }
+            {
+              timeoutMs: WORKFLOW_CUT_DETECT_TIMEOUT_MS,
+              autoCreateRows: opts?.autoCreateRows,
+              expectedShotNos: opts?.expectedShotNos,
+            }
           );
+
+      if (split.createdRows?.length) {
+        patchTable(
+          (rows) => {
+            const existing = new Set(rows.map((row) => row.id));
+            const added = split.createdRows!.filter((row) => !existing.has(row.id));
+            return added.length ? reindexStoryboardRows([...rows, ...added]) : rows;
+          },
+          { fieldCatalog }
+        );
+      }
+
+      const rowLookup = new Map<string, StoryboardTableRow>();
+      for (const row of [...lookupRows, ...(split.createdRows ?? [])]) {
+        rowLookup.set(row.id, row);
+      }
 
       const rowPatches = new Map<string, Partial<StoryboardTableRow>>();
       const rowImages: Record<string, string> = {};
@@ -1008,7 +1250,7 @@ export default function StoryboardTablePanel({
         } catch {
           /* keep raw */
         }
-        const tableRow = taskRows.find((row) => row.id === match.rowId);
+        const tableRow = rowLookup.get(match.rowId) ?? taskRows.find((row) => row.id === match.rowId);
         if (!tableRow) continue;
         rowImages[match.rowId] = compressed;
         const patch = await replaceStoryboardRowFrame({
@@ -1035,29 +1277,145 @@ export default function StoryboardTablePanel({
     [asset.id, capabilityTextModel, companionBaseUrl, companionProjectId, patchTable]
   );
 
-  const applySheetPreview = useCallback(
-    async (previewId: string) => {
-      const item = sheetPreviews.find((preview) => preview.id === previewId);
-      if (!item) return;
+  const saveSheetPreviewItem = useCallback(
+    async (
+      partial: Omit<StoryboardSheetPreviewItem, 'id' | 'createdAt' | 'matchedCount'> & {
+        matchedCount?: number;
+        id?: string;
+      }
+    ): Promise<StoryboardSheetPreviewItem> => {
+      const run = async (): Promise<StoryboardSheetPreviewItem> => {
+        const existingId = String(partial.id || '').trim();
+        const existing = existingId
+          ? sheetPreviewsRef.current.find((item) => item.id === existingId) ??
+            findStoryboardSheetGenSessionPreview(asset.id, existingId)
+          : undefined;
+        const draft = existing
+          ? { ...existing, ...partial, id: existing.id }
+          : createSheetPreviewItem(partial);
+        const prepared = await prepareStoryboardSheetPreviewForSave({
+          assetId: asset.id,
+          preview: draft,
+          companionBaseUrl,
+          companionProjectId,
+        });
 
-      const taskRows = resolveSheetTaskRows(table.rows, item.rowIds, item.shotNos);
-      if (!taskRows.length) {
-        onNotify?.('warn', '找不到对应镜头，请先导入分镜文本');
-        return;
+        commitSheetPreviews((prev) => {
+          const result = existing
+            ? upsertStoryboardSheetPreview(asset.id, prepared.preview, prev)
+            : prependStoryboardSheetPreview(asset.id, prepared.preview, prev);
+          if (!result.persisted) {
+            if (prepared.persistedImage === 'companion' || prepared.persistedImage === 'idb') {
+              onNotify?.('warn', '拼图元数据写入失败，图片已落盘但刷新后可能无法恢复列表');
+            } else if (prepared.persistedImage === 'inline') {
+              onNotify?.('warn', '拼图未能持久化，请连接本地伴侣或清理浏览器存储');
+            }
+          } else if (prepared.persistedImage === 'inline') {
+            onNotify?.('warn', '拼图仅缓存在浏览器内，建议连接本地伴侣');
+          }
+          void syncSheetPreviewListToCompanion(result.items);
+          return result.items;
+        });
+        return prepared.preview;
+      };
+
+      const next = sheetPreviewSaveChainRef.current.then(run, run);
+      sheetPreviewSaveChainRef.current = next.then(
+        () => undefined,
+        () => undefined
+      );
+      return next;
+    },
+    [asset.id, commitSheetPreviews, companionBaseUrl, companionProjectId, onNotify, syncSheetPreviewListToCompanion]
+  );
+
+  const patchSheetPreviewInMemory = useCallback(
+    (previewId: string, patch: Partial<StoryboardSheetPreviewItem>) => {
+      commitSheetPreviews((prev) =>
+        prev.map((item) => (item.id === previewId ? { ...item, ...patch } : item))
+      );
+    },
+    [commitSheetPreviews]
+  );
+
+  const splitSheetPreviewById = useCallback(
+    async (
+      previewId: string
+    ): Promise<{ matchedCount: number; warn?: string; label: string } | null> => {
+      const item = sheetPreviewsRef.current.find((preview) => preview.id === previewId);
+      if (!item) return null;
+
+      let workingRows = table.rows;
+      if (item.shotNos.length) {
+        const ensured = ensureStoryboardRowsForShotNos(workingRows, item.shotNos);
+        if (ensured.createdIds.length) {
+          patchTable(() => reindexStoryboardRows(ensured.nextTableRows), {
+            fieldCatalog: table.fieldCatalog,
+          });
+          workingRows = ensured.nextTableRows;
+        }
       }
 
+      const taskRows = resolveSheetTaskRows(workingRows, item.rowIds, item.shotNos);
+      if (!taskRows.length) {
+        return { matchedCount: 0, warn: '找不到对应镜头，请检查镜号范围', label: item.label };
+      }
+
+      const resolved = await resolveStoryboardSheetPreviewDataUrl(
+        item,
+        asset.id,
+        companionBaseUrl,
+        companionProjectId
+      );
+      if (!resolved.ok) {
+        return { matchedCount: 0, warn: resolved.error, label: item.label };
+      }
+
+      const { matchedCount, warn } = await commitSheetVisionSplit(
+        resolved.dataUrl,
+        taskRows,
+        table.fieldCatalog,
+        undefined,
+        {
+          allRows: workingRows,
+          expectedShotNos: item.shotNos,
+          autoCreateRows: true,
+        }
+      );
+      const nextRowIds = taskRows.map((row) => row.id);
+      const updateResult = updateStoryboardSheetPreview(
+        asset.id,
+        previewId,
+        { matchedCount, rowIds: nextRowIds },
+        sheetPreviewsRef.current
+      );
+      commitSheetPreviews(() => updateResult.items);
+      void syncSheetPreviewListToCompanion(updateResult.items);
+      return { matchedCount, warn, label: item.label };
+    },
+    [
+      asset.id,
+      commitSheetVisionSplit,
+      companionBaseUrl,
+      companionProjectId,
+      commitSheetPreviews,
+      patchTable,
+      syncSheetPreviewListToCompanion,
+      table.fieldCatalog,
+      table.rows,
+    ]
+  );
+
+  const applySheetPreview = useCallback(
+    async (previewId: string) => {
       setSheetSplitBusyId(previewId);
       try {
-        const { matchedCount, warn } = await commitSheetVisionSplit(
-          item.imageDataUrl,
-          taskRows,
-          table.fieldCatalog
-        );
-        setSheetPreviews(updateStoryboardSheetPreview(asset.id, previewId, { matchedCount }).items);
-        if (matchedCount > 0) {
-          onNotify?.('info', `已切分回填 ${matchedCount} 镜`);
+        const result = await splitSheetPreviewById(previewId);
+        if (!result) return;
+        if (result.matchedCount > 0) {
+          onNotify?.('info', `已切分回填 ${result.matchedCount} 镜`);
         } else {
-          onNotify?.('warn', warn || '未能切分匹配到镜头，请检查拼图镜号');
+          onNotify?.('warn', result.warn || '未能切分匹配到镜头，请检查拼图镜号');
         }
       } catch (error) {
         onNotify?.('warn', error instanceof Error ? error.message : '切分回填失败');
@@ -1065,27 +1423,321 @@ export default function StoryboardTablePanel({
         setSheetSplitBusyId(null);
       }
     },
-    [asset.id, commitSheetVisionSplit, onNotify, sheetPreviews, table.fieldCatalog, table.rows]
+    [onNotify, splitSheetPreviewById]
+  );
+
+  const activateSheetPreviewVersion = useCallback(
+    async (previewId: string, versionId: string) => {
+      const item = sheetPreviewsRef.current.find((preview) => preview.id === previewId);
+      if (!item) return;
+      try {
+        const next = await activateSheetPreviewHistoryVersion(item, versionId, {
+          assetId: asset.id,
+          companionBaseUrl,
+          companionProjectId,
+        });
+        const updateResult = updateStoryboardSheetPreview(
+          asset.id,
+          previewId,
+          {
+            imageDataUrl: next.imageDataUrl,
+            imageCompanionKey: next.imageCompanionKey,
+            imageIdbKey: next.imageIdbKey,
+            imageHistory: next.imageHistory,
+            matchedCount: next.matchedCount,
+          },
+          sheetPreviewsRef.current
+        );
+        commitSheetPreviews(() => updateResult.items);
+        void syncSheetPreviewListToCompanion(updateResult.items);
+      } catch (error) {
+        onNotify?.('warn', error instanceof Error ? error.message : '切换历史版本失败');
+      }
+    },
+    [asset.id, commitSheetPreviews, companionBaseUrl, companionProjectId, onNotify, syncSheetPreviewListToCompanion]
+  );
+
+  const regenerateSheetPreview = useCallback(
+    async (previewId: string) => {
+      const probe = await probeStoryboardSheetGenCompanionReady(
+        companionBaseUrl,
+        companionProjectId
+      );
+      if (!probe.ok) {
+        onNotify?.('warn', storyboardSheetGenCompanionProbeMessage(probe.reason));
+        return;
+      }
+
+      const item = sheetPreviewsRef.current.find((preview) => preview.id === previewId);
+      if (!item || item.source !== 'generated') return;
+      if (item.genStatus === 'pending' || item.genStatus === 'generating') return;
+
+      const preset = redrawPresets.find((entry) => entry.id === effectiveRedrawPresetId);
+      if (!preset) {
+        onNotify?.('warn', redrawPresets.length ? '请选择有效的生图能力' : '请先在功能区启用文生图/图生图能力');
+        return;
+      }
+
+      let workingRows = table.rows;
+      if (item.shotNos.length) {
+        const ensured = ensureStoryboardRowsForShotNos(workingRows, item.shotNos);
+        if (ensured.createdIds.length) {
+          patchTable(() => reindexStoryboardRows(ensured.nextTableRows), {
+            fieldCatalog: table.fieldCatalog,
+          });
+          workingRows = ensured.nextTableRows;
+        }
+      }
+
+      const taskRows = resolveSheetTaskRows(workingRows, item.rowIds, item.shotNos);
+      if (!taskRows.length) {
+        onNotify?.('warn', '找不到对应镜头，无法重生成');
+        return;
+      }
+
+      setSheetRegenBusyId(previewId);
+      patchSheetPreviewInMemory(previewId, { genStatus: 'generating', genError: undefined });
+      try {
+        const result = await executeStoryboardSheetGen({
+          preset,
+          rows: taskRows,
+          fieldCatalog: table.fieldCatalog,
+          ctx: parseCtx,
+          forceTextToImage: preset.category === 'image_to_image',
+          chunkIndex: item.chunkIndex,
+        });
+        if (!result.ok) {
+          patchSheetPreviewInMemory(previewId, { genStatus: 'failed', genError: result.error });
+          onNotify?.('warn', result.error);
+          return;
+        }
+
+        let sheetImage = result.image;
+        try {
+          sheetImage = await compressStoryboardFrameDataUrl(sheetImage);
+        } catch {
+          /* keep raw */
+        }
+
+        const current = sheetPreviewsRef.current.find((preview) => preview.id === previewId);
+        if (!current) return;
+        const replaced = await replaceSheetPreviewActiveImage(current, sheetImage, 'regenerate', {
+          assetId: asset.id,
+          companionBaseUrl,
+          companionProjectId,
+        });
+        const updateResult = updateStoryboardSheetPreview(
+          asset.id,
+          previewId,
+          {
+            imageDataUrl: replaced.imageDataUrl,
+            imageCompanionKey: replaced.imageCompanionKey,
+            imageIdbKey: replaced.imageIdbKey,
+            imageHistory: replaced.imageHistory,
+            matchedCount: replaced.matchedCount,
+            genStatus: replaced.genStatus,
+            genError: replaced.genError,
+          },
+          sheetPreviewsRef.current
+        );
+        commitSheetPreviews(() => updateResult.items);
+        void syncSheetPreviewListToCompanion(updateResult.items);
+        onNotify?.('info', '拼图已重新生成，可切分当前版本');
+      } catch (error) {
+        patchSheetPreviewInMemory(previewId, {
+          genStatus: 'failed',
+          genError: error instanceof Error ? error.message : '重生成失败',
+        });
+        onNotify?.('warn', error instanceof Error ? error.message : '重生成失败');
+      } finally {
+        setSheetRegenBusyId(null);
+      }
+    },
+    [
+      asset.id,
+      companionBaseUrl,
+      companionProjectId,
+      effectiveRedrawPresetId,
+      onNotify,
+      parseCtx,
+      commitSheetPreviews,
+      patchSheetPreviewInMemory,
+      patchTable,
+      redrawPresets,
+      syncSheetPreviewListToCompanion,
+      table.fieldCatalog,
+      table.rows,
+    ]
+  );
+
+  const batchSplitSheetPreviews = useCallback(async () => {
+    const candidates = listSplittableStoryboardSheetPreviews(sheetPreviewsRef.current).sort(
+      (a, b) => (a.chunkIndex ?? 0) - (b.chunkIndex ?? 0) || a.createdAt - b.createdAt
+    );
+    if (!candidates.length) {
+      onNotify?.('warn', '没有可切分的拼图，请先生成或上传');
+      return;
+    }
+
+    setSheetSplitBatchBusy(true);
+    sheetSplitBatchBusyRef.current = true;
+    setSheetSplitProgress({ done: 0, total: candidates.length });
+    let totalMatched = 0;
+    let okSheets = 0;
+
+    try {
+      for (let i = 0; i < candidates.length; i += 1) {
+        const item = candidates[i]!;
+        setSheetSplitBusyId(item.id);
+        const result = await splitSheetPreviewById(item.id);
+        if (result?.matchedCount) {
+          totalMatched += result.matchedCount;
+          okSheets += 1;
+        } else if (result?.warn) {
+          onNotify?.('warn', `${result.label}：${result.warn}`);
+        }
+        setSheetSplitProgress({ done: i + 1, total: candidates.length });
+      }
+
+      if (totalMatched > 0) {
+        onNotify?.('info', `切分完成：${okSheets}/${candidates.length} 张拼图，共回填 ${totalMatched} 镜`);
+      } else {
+        onNotify?.('warn', '切分完成，但未能匹配到镜头，请检查拼图镜号与表内 shotNo');
+      }
+    } catch (error) {
+      onNotify?.('warn', error instanceof Error ? error.message : '批量切分失败');
+    } finally {
+      setSheetSplitBusyId(null);
+      sheetSplitBatchBusyRef.current = false;
+      setSheetSplitBatchBusy(false);
+      setSheetSplitProgress(null);
+    }
+  }, [onNotify, splitSheetPreviewById]);
+
+  const cancelSheetGen = useCallback(() => {
+    const controller = sheetGenControllerRef.current;
+    if (!controller || !sheetGenBusyRef.current) return;
+
+    const pendingChunks = sheetPreviewsRef.current
+      .filter((item) => item.genStatus === 'pending' && item.chunkIndex != null)
+      .map((item) => item.chunkIndex as number);
+    if (!pendingChunks.length) {
+      onNotify?.('info', '没有可取消的排队任务');
+      return;
+    }
+
+    controller.cancelPendingChunks(pendingChunks);
+    commitSheetPreviews((prev) =>
+      prev.filter((item) => item.genStatus !== 'pending')
+    );
+    onNotify?.('info', `已取消 ${pendingChunks.length} 个排队任务`);
+  }, [commitSheetPreviews, onNotify]);
+
+  const cancelSheetGenTask = useCallback(
+    (previewId: string) => {
+      const controller = sheetGenControllerRef.current;
+      if (!controller || !sheetGenBusyRef.current) return;
+      const item = sheetPreviewsRef.current.find((preview) => preview.id === previewId);
+      if (!item || item.genStatus !== 'pending' || item.chunkIndex == null) return;
+
+      controller.cancelChunk(item.chunkIndex);
+      commitSheetPreviews((prev) => prev.filter((preview) => preview.id !== previewId));
+    },
+    [commitSheetPreviews]
   );
 
   const uploadSheetPreview = useCallback(
-    (dataUrl: string) => {
-      const taskRows = table.rows.filter((row) => !row.locked);
-      const preview = createSheetPreviewItem({
-        imageDataUrl: dataUrl,
-        label: '上传拼图',
-        source: 'uploaded',
-        rowIds: taskRows.map((row) => row.id),
-        shotNos: taskRows.map((row) => row.shotNo?.trim() || '').filter(Boolean),
-      });
-      const { items, persisted } = prependStoryboardSheetPreview(asset.id, preview);
-      setSheetPreviews(items);
-      if (!persisted) {
-        onNotify?.('warn', '拼图预览过大，未能写入本地缓存（仍可切分回填）');
+    async (dataUrl: string, range: { shotFrom: string; shotTo: string }) => {
+      const parsed = parseSheetPreviewShotRange(range.shotFrom, range.shotTo);
+      if (!parsed.ok) {
+        onNotify?.('warn', parsed.error);
+        return;
       }
-      onNotify?.('info', '拼图已加入预览，可点「切分回填」写入镜头');
+      await saveSheetPreviewItem({
+        imageDataUrl: dataUrl,
+        label: buildSheetPreviewLabel('上传拼图', parsed.shotNos),
+        source: 'uploaded',
+        genStatus: 'done',
+        rowIds: [],
+        shotNos: parsed.shotNos,
+      });
+      onNotify?.(
+        'info',
+        `拼图已加入预览（${formatSheetPreviewShotLabel(parsed.shotNos)}），可点「切分」写入镜头`
+      );
     },
-    [asset.id, onNotify, table.rows]
+    [onNotify, saveSheetPreviewItem]
+  );
+
+  const updateSheetPreviewShotRange = useCallback(
+    async (previewId: string, range: { shotFrom: string; shotTo: string }) => {
+      const parsed = parseSheetPreviewShotRange(range.shotFrom, range.shotTo);
+      if (!parsed.ok) {
+        onNotify?.('warn', parsed.error);
+        return;
+      }
+      const item = sheetPreviewsRef.current.find((preview) => preview.id === previewId);
+      if (!item || item.source !== 'uploaded') return;
+
+      await saveSheetPreviewItem({
+        id: previewId,
+        imageDataUrl: item.imageDataUrl,
+        imageCompanionKey: item.imageCompanionKey,
+        imageIdbKey: item.imageIdbKey,
+        label: buildSheetPreviewLabel('上传拼图', parsed.shotNos),
+        source: 'uploaded',
+        genStatus: item.genStatus,
+        rowIds: [],
+        shotNos: parsed.shotNos,
+        matchedCount: 0,
+      });
+      onNotify?.('info', `镜号范围已更新为 ${formatSheetPreviewShotLabel(parsed.shotNos)}`);
+    },
+    [onNotify, saveSheetPreviewItem]
+  );
+
+  const removeSheetPreview = useCallback(
+    (previewId: string) => {
+      if (readOnly) return;
+      const item = sheetPreviewsRef.current.find((preview) => preview.id === previewId);
+      if (!item || item.source !== 'uploaded') return;
+
+      const { items, persisted, removed } = removeStoryboardSheetPreview(
+        asset.id,
+        previewId,
+        sheetPreviewsRef.current
+      );
+      commitSheetPreviews(() => items);
+      void syncSheetPreviewListToCompanion(items);
+
+      if (lightboxSheetPreviewId === previewId) {
+        setLightboxSrc(null);
+        setLightboxSheetPreviewId(null);
+      }
+
+      if (!persisted) {
+        onNotify?.('warn', '拼图已从列表移除，但元数据写入失败');
+      }
+
+      if (removed) {
+        void cleanupStoryboardSheetPreviewAssets({
+          assetId: asset.id,
+          preview: removed,
+          companionBaseUrl,
+          companionProjectId,
+        });
+      }
+    },
+    [
+      asset.id,
+      companionBaseUrl,
+      companionProjectId,
+      lightboxSheetPreviewId,
+      onNotify,
+      commitSheetPreviews,
+      readOnly,
+      syncSheetPreviewListToCompanion,
+    ]
   );
 
   const addRow = () => {
@@ -1567,6 +2219,11 @@ export default function StoryboardTablePanel({
 
   const runSheetGen = useCallback(
     async (request: StoryboardSheetGenBatchRequest) => {
+      if (isStoryboardSheetGenSessionBusy(asset.id)) {
+        onNotify?.('warn', '已有批次正在生图，请等待完成或先取消排队任务');
+        return;
+      }
+
       const preset = redrawPresets.find((item) => item.id === request.presetId);
       if (!preset) {
         onNotify?.(
@@ -1576,9 +2233,16 @@ export default function StoryboardTablePanel({
         return;
       }
 
-      const tasks = planStoryboardSheetGenTasks(request.sourceRows, request.shotsPerSheet);
+      const allTasks = planStoryboardSheetGenTasks(request.sourceRows, request.shotsPerSheet);
+      const selectedSet =
+        request.selectedChunkIndexes && request.selectedChunkIndexes.length > 0
+          ? new Set(request.selectedChunkIndexes)
+          : null;
+      const tasks = selectedSet
+        ? allTasks.filter((task) => selectedSet.has(task.chunkIndex))
+        : allTasks;
       if (!tasks.length) {
-        onNotify?.('warn', '没有可执行的生成任务');
+        onNotify?.('warn', '请至少选择一个批次');
         return;
       }
 
@@ -1590,91 +2254,150 @@ export default function StoryboardTablePanel({
         });
       }
 
+      const controller = new StoryboardSheetGenBatchController();
+      sheetGenControllerRef.current = controller;
+      const placeholders = createSheetGenPlaceholderItems(tasks);
+      const placeholderIdByChunk = new Map<number, string>();
+      for (const placeholder of placeholders) {
+        if (placeholder.chunkIndex != null) {
+          placeholderIdByChunk.set(placeholder.chunkIndex, placeholder.id);
+        }
+      }
+      sheetGenPlaceholderIdsRef.current = placeholderIdByChunk;
+
       setSheetGenBusy(true);
+      sheetGenBusyRef.current = true;
       setSheetGenProgress({ done: 0, total: tasks.length });
+      commitSheetPreviews((prev) => mergeStoryboardSheetPreviews(placeholders, prev));
+      patchStoryboardSheetGenSession(asset.id, {
+        busy: true,
+        progress: { done: 0, total: tasks.length },
+        controller,
+        placeholderIdByChunk,
+      });
+
+      let okCount = 0;
+      let failCount = 0;
+      let cancelCount = 0;
+
       try {
-        const batch = await executeStoryboardSheetGenBatch({
+        await executeStoryboardSheetGenBatch({
           preset,
           tasks,
           fieldCatalog: request.fieldCatalog,
           ctx: parseCtx,
           promptExtra: request.promptExtra,
           forceTextToImage: request.forceTextToImage,
-          onTaskComplete: (done, total) => setSheetGenProgress({ done, total }),
+          controller,
+          onTaskComplete: (done, total) => {
+            const progress = { done, total };
+            setSheetGenProgress(progress);
+            patchStoryboardSheetGenSession(asset.id, { progress });
+          },
+          onTaskStart: (chunkIndex) => {
+            const previewId = placeholderIdByChunk.get(chunkIndex);
+            if (!previewId) return;
+            patchSheetPreviewInMemory(previewId, { genStatus: 'generating' });
+          },
+          onChunkReady: async (result) => {
+            const previewId = placeholderIdByChunk.get(result.chunkIndex);
+            if (!previewId) return;
+
+            if (result.cancelled) {
+              cancelCount += 1;
+              patchSheetPreviewInMemory(previewId, {
+                genStatus: 'cancelled',
+                genError: '已取消',
+              });
+              return;
+            }
+
+            if (!result.ok) {
+              failCount += 1;
+              patchSheetPreviewInMemory(previewId, {
+                genStatus: 'failed',
+                genError: result.error,
+              });
+              onNotify?.('warn', `任务 ${result.chunkIndex + 1} 失败：${result.error}`);
+              return;
+            }
+
+            okCount += 1;
+            const task = tasks.find((item) => item.chunkIndex === result.chunkIndex);
+            if (!task) return;
+
+            let sheetImage = result.image;
+            try {
+              sheetImage = await compressStoryboardFrameDataUrl(sheetImage);
+            } catch {
+              /* keep raw */
+            }
+
+            patchSheetPreviewInMemory(previewId, {
+              imageDataUrl: sheetImage,
+              genStatus: 'generating',
+            });
+
+            const shotNos = task.rows.map((row) => row.shotNo?.trim() || '').filter(Boolean);
+            await saveSheetPreviewItem({
+              id: previewId,
+              imageDataUrl: sheetImage,
+              label: buildSheetPreviewLabel(`任务 ${result.chunkIndex + 1}`, shotNos),
+              source: 'generated',
+              rowIds: task.rowIds,
+              shotNos,
+              chunkIndex: result.chunkIndex,
+              genStatus: 'done',
+              matchedCount: 0,
+            });
+          },
         });
 
-        let totalMatched = 0;
+        commitSheetPreviews(
+          (prev) =>
+            prev.filter(
+              (item) =>
+                item.genStatus !== 'cancelled' &&
+                !(item.genStatus === 'pending' && item.chunkIndex != null)
+            ),
+          true
+        );
 
-        for (const result of batch.results) {
-          if (!result.ok) {
-            onNotify?.('warn', `任务 ${result.chunkIndex + 1} 失败：${result.error}`);
-            continue;
-          }
-          const task = tasks.find((item) => item.chunkIndex === result.chunkIndex);
-          if (!task) continue;
-
-          let sheetImage = result.image;
-          try {
-            sheetImage = await compressStoryboardFrameDataUrl(sheetImage);
-          } catch {
-            /* keep raw */
-          }
-
-          const preview = createSheetPreviewItem({
-            imageDataUrl: sheetImage,
-            label: `任务 ${result.chunkIndex + 1}`,
-            source: 'generated',
-            rowIds: task.rowIds,
-            shotNos: task.rows.map((row) => row.shotNo?.trim() || '').filter(Boolean),
-          });
-          const prepended = prependStoryboardSheetPreview(asset.id, preview);
-          setSheetPreviews(prepended.items);
-          if (!prepended.persisted) {
-            onNotify?.('warn', `任务 ${result.chunkIndex + 1} 拼图过大，未写入本地预览缓存`);
-          }
-
-          const { matchedCount, warn } = await commitSheetVisionSplit(
-            sheetImage,
-            task.rows,
-            request.fieldCatalog
-          );
-          totalMatched += matchedCount;
-          const updated = updateStoryboardSheetPreview(asset.id, preview.id, { matchedCount });
-          setSheetPreviews(updated.items);
-
-          if (warn) {
-            onNotify?.('warn', `任务 ${result.chunkIndex + 1}：${warn}`);
-          }
-        }
-
-        if (batch.failCount > 0) {
+        if (cancelCount > 0 && okCount === 0 && failCount === 0) {
+          onNotify?.('info', `已取消 ${cancelCount} 个任务`);
+        } else if (failCount > 0) {
           onNotify?.(
             'warn',
-            `生图完成：成功 ${batch.okCount} 张，失败 ${batch.failCount} 张；已切分回填 ${totalMatched} 镜`
+            `生图完成：成功 ${okCount} 张，失败 ${failCount} 张${cancelCount ? `，取消 ${cancelCount} 张` : ''}；可点「切分」回填镜头`
           );
-        } else if (totalMatched > 0) {
-          onNotify?.('info', `生图完成：共 ${batch.okCount} 张，已切分回填 ${totalMatched} 镜`);
-        } else {
+        } else if (okCount > 0) {
           onNotify?.(
-            'warn',
-            `生图完成 ${batch.okCount} 张，但未能自动切分回填；请在下方预览中手动「切分回填」`
+            'info',
+            `生图完成：共 ${okCount} 张${cancelCount ? `，取消 ${cancelCount} 张` : ''}；可点「切分」回填镜头`
           );
         }
       } catch (error) {
         onNotify?.('warn', error instanceof Error ? error.message : '批量生图失败');
       } finally {
+        sheetGenControllerRef.current = null;
+        sheetGenPlaceholderIdsRef.current = new Map();
+        sheetGenBusyRef.current = false;
         setSheetGenBusy(false);
         setSheetGenProgress(null);
+        clearStoryboardSheetGenSessionBusy(asset.id);
+        void rehydrateSheetPreviews();
       }
     },
     [
       asset.id,
-      capabilityTextModel,
-      commitSheetVisionSplit,
+      commitSheetPreviews,
       onNotify,
       parseCtx,
+      patchSheetPreviewInMemory,
       patchTable,
       redrawPresets,
+      rehydrateSheetPreviews,
+      saveSheetPreviewItem,
       table.rows,
     ]
   );
@@ -1725,6 +2448,17 @@ export default function StoryboardTablePanel({
           { fieldCatalog: merged.catalog }
         );
         notifyCatalogSize(merged.catalog);
+        const filledCount = Object.values(merged.row.shotFields ?? {}).filter((value) =>
+          String(value ?? '').trim()
+        ).length;
+        const shotLabel = merged.row.shotNo?.trim() || row.shotNo?.trim();
+        const shotSuffix = shotLabel ? `（镜 ${shotLabel}）` : '';
+        onNotify?.(
+          filledCount > 0 ? 'info' : 'warn',
+          filledCount > 0
+            ? `解析完成：已填入 ${filledCount} 个字段${shotSuffix}`
+            : `解析完成，但未识别到有效字段${shotSuffix}`
+        );
       } catch (e) {
         onNotify?.('warn', e instanceof Error ? e.message : '解析失败');
       } finally {
@@ -1929,7 +2663,7 @@ export default function StoryboardTablePanel({
       runRedraw,
       runParse,
       runOptimize,
-      previewImage: setLightboxSrc,
+      previewImage: openStoryboardLightbox,
       redrawDisabledReason: redrawRowDisabledReason,
     };
   }, [
@@ -1946,6 +2680,7 @@ export default function StoryboardTablePanel({
     runOptimize,
     runParse,
     runRedraw,
+    openStoryboardLightbox,
     allowOptimizeDialogue,
     table.fieldCatalog,
     table.rows.length,
@@ -2290,30 +3025,40 @@ export default function StoryboardTablePanel({
           roleAssetBusyId={roleAssetBusyId}
           parsePreset={activeParsePreset}
           parseCtx={parseCtx}
-          activeRowId={activeRowId}
           readOnly={readOnly}
-          onActiveRowIdChange={setActiveRowId}
           onImportRows={importInputRows}
           redrawPresets={redrawPresets}
           redrawPresetId={effectiveRedrawPresetId}
           sheetGenBusy={sheetGenBusy}
           sheetGenProgress={sheetGenProgress}
-          dropdownZIndex={STORYBOARD_PANEL_DROPDOWN_Z}
           onRedrawPresetChange={setRedrawPresetIdPersisted}
           onSheetGenRun={runSheetGen}
+          companionBaseUrl={companionBaseUrl}
+          companionProjectId={companionProjectId}
           sheetPreviews={sheetPreviews}
           sheetSplitBusyId={sheetSplitBusyId}
-          onPreviewSheetImage={setLightboxSrc}
+          sheetRegenBusyId={sheetRegenBusyId}
+          sheetSplitBatchBusy={sheetSplitBatchBusy}
+          sheetSplitProgress={sheetSplitProgress}
+          splittableSheetCount={sheetPreviews.filter(isStoryboardSheetPreviewSplittable).length}
+          onPreviewSheetImage={openSheetPreviewLightbox}
           onUploadSheetPreview={uploadSheetPreview}
+          onUpdateSheetPreviewShotRange={updateSheetPreviewShotRange}
           onApplySheetPreview={applySheetPreview}
+          onRegenerateSheetPreview={regenerateSheetPreview}
+          onActivateSheetPreviewVersion={activateSheetPreviewVersion}
+          onBatchSplitSheetPreviews={batchSplitSheetPreviews}
+          onDeleteSheetPreview={removeSheetPreview}
+          onCancelSheetGen={cancelSheetGen}
+          onCancelSheetGenTask={cancelSheetGenTask}
+          onGoToEdit={() => setPanelViewMode('edit')}
           onNotify={onNotify}
-          onOpenEdit={() => setPanelViewMode('edit')}
           onAddRoleAsset={addRoleAsset}
           onRemoveRoleAsset={removeRoleAsset}
           onRenameRoleAsset={renameRoleAsset}
           onAssignRoleAssetImage={assignRoleAssetImage}
           onClearRoleAssetImage={clearRoleAssetImage}
-          onPreviewRoleAssetImage={setLightboxSrc}
+          onPreviewRoleAssetImage={openStoryboardLightbox}
         />
       ) : isGridView ? (
         <StoryboardTableGridPreview
@@ -2324,7 +3069,7 @@ export default function StoryboardTablePanel({
           gridExportWidth={gridExportWidth}
           activeRowId={activeRowId}
           onSelect={(rowId) => navigateToRow(rowId)}
-          onPreviewImage={setLightboxSrc}
+          onPreviewImage={openStoryboardLightbox}
           onPreviewMosaicError={(message) => onNotify?.('warn', message)}
           onDownloadGroup={(group) => void handleDownloadGridGroup(group)}
           scrollToRowRef={gridScrollToRowRef}
@@ -2400,8 +3145,32 @@ export default function StoryboardTablePanel({
       {lightboxSrc ? (
         <ImagePreviewOverlay
           open
+          resetKey={lightboxSheetPreviewId ?? lightboxSrc}
           imageSrc={lightboxSrc}
-          onClose={() => setLightboxSrc(null)}
+          onClose={closeStoryboardLightbox}
+          wheelListLength={lightboxSheetPreviewId ? sheetPreviewWheelItems.length : 1}
+          onWheelNavigate={(delta) => {
+            if (lightboxSheetPreviewId) navigateSheetPreviewLightbox(delta);
+          }}
+          topRightExtra={
+            <button
+              type="button"
+              onClick={() => {
+                const preview = lightboxSheetPreviewId
+                  ? sheetPreviewWheelItems.find((item) => item.id === lightboxSheetPreviewId)
+                  : null;
+                const base =
+                  preview?.label?.replace(/[^\w\u4e00-\u9fff-]+/g, '-').trim() ||
+                  'storyboard-sheet';
+                void triggerImageDownload(lightboxSrc, base || 'storyboard-sheet');
+              }}
+              className={IMAGE_LIGHTBOX_TOOL_ICON_BTN_IDLE}
+              title="下载图片"
+              aria-label="下载图片"
+            >
+              <Download size={17} strokeWidth={1.75} aria-hidden />
+            </button>
+          }
           shellZIndexClassName={STORYBOARD_LIGHTBOX_Z}
         />
       ) : null}

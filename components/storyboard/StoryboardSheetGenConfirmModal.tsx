@@ -1,49 +1,105 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { StoryboardSheetGenBatchPreview } from '../../services/storyboardTableSheetGen';
+import { CustomDropdown } from '../ui/CustomDropdown';
 import {
   STORYBOARD_FIELD_INPUT,
+  STORYBOARD_LABEL,
   STORYBOARD_TOOL_BTN_NEUTRAL,
   STORYBOARD_TOOL_BTN_PRIMARY,
 } from './storyboardTableUi';
 import AppIcon from '../ui/AppIcon';
 
+type DropdownOption = { value: string; label: string };
+
+/** 须高于本弹窗 `z-[2175]`，否则 Portal 列表落在遮罩下方不可见 */
+const SHEET_GEN_CONFIRM_DROPDOWN_Z = { backdrop: 2182, list: 2183 };
+
 type Props = {
   open: boolean;
   busy?: boolean;
+  readOnly?: boolean;
   presetLabel: string;
   presetInstruction: string;
   directSend: boolean;
   shotsPerSheet: number;
+  shotsOptions: DropdownOption[];
+  onShotsPerSheetChange: (value: string) => void;
+  presetId: string;
+  presetOptions: DropdownOption[];
+  onPresetChange: (value: string) => void;
+  shotCount: number;
   taskCount: number;
   batches: StoryboardSheetGenBatchPreview[];
   onClose: () => void;
-  onConfirm: () => void;
+  onConfirm: (selectedChunkIndexes: number[]) => void;
 };
 
 export default function StoryboardSheetGenConfirmModal({
   open,
   busy = false,
+  readOnly = false,
   presetLabel,
   presetInstruction,
   directSend,
   shotsPerSheet,
+  shotsOptions,
+  onShotsPerSheetChange,
+  presetId,
+  presetOptions,
+  onPresetChange,
+  shotCount,
   taskCount,
   batches,
   onClose,
   onConfirm,
 }: Props) {
   const [activeBatchIndex, setActiveBatchIndex] = useState(0);
+  const [selectedChunkIndexes, setSelectedChunkIndexes] = useState<Set<number>>(() => new Set());
+
+  const selectedCount = selectedChunkIndexes.size;
+
+  const selectedBatches = useMemo(
+    () => batches.filter((item) => selectedChunkIndexes.has(item.chunkIndex)),
+    [batches, selectedChunkIndexes]
+  );
 
   const canConfirm = useMemo(
-    () => batches.length > 0 && batches.every((item) => item.validationOk),
+    () => selectedBatches.length > 0 && selectedBatches.every((item) => item.validationOk),
+    [selectedBatches]
+  );
+
+  const batchSelectionKey = useMemo(
+    () => batches.map((item) => item.chunkIndex).join(','),
     [batches]
   );
 
   useEffect(() => {
     if (!open) return;
+    setSelectedChunkIndexes(new Set(batches.map((item) => item.chunkIndex)));
     setActiveBatchIndex(0);
-  }, [open, batches.length]);
+  }, [open, batchSelectionKey, shotsPerSheet, presetId, batches]);
+
+  const toggleBatchSelection = useCallback((chunkIndex: number) => {
+    setSelectedChunkIndexes((prev) => {
+      const next = new Set(prev);
+      if (next.has(chunkIndex)) next.delete(chunkIndex);
+      else next.add(chunkIndex);
+      return next;
+    });
+  }, []);
+
+  const selectAllBatches = useCallback(() => {
+    setSelectedChunkIndexes(new Set(batches.map((item) => item.chunkIndex)));
+  }, [batches]);
+
+  const clearBatchSelection = useCallback(() => {
+    setSelectedChunkIndexes(new Set());
+  }, []);
+
+  const handleConfirm = useCallback(() => {
+    onConfirm([...selectedChunkIndexes].sort((a, b) => a - b));
+  }, [onConfirm, selectedChunkIndexes]);
 
   const onEscape = useCallback(
     (event: KeyboardEvent) => {
@@ -87,7 +143,7 @@ export default function StoryboardSheetGenConfirmModal({
               确认执行任务
             </h2>
             <p className="mt-1 text-[9px] leading-relaxed text-gray-500">
-              以下为按「每图 {shotsPerSheet} 镜」切分后编译的正文；直发模式下第二段即为送生图模型的完整提示词。
+              调整参数并勾选要生成的批次，预览编译正文后确认执行。
             </p>
           </div>
           <button
@@ -101,17 +157,38 @@ export default function StoryboardSheetGenConfirmModal({
           </button>
         </div>
 
-        <div className="shrink-0 space-y-2 border-b border-white/[0.06] px-4 py-2.5">
-          <div className="flex flex-wrap gap-1.5">
-            <span className="rounded-md bg-white/[0.06] px-2 py-0.5 text-[9px] text-gray-300">
-              预设：{presetLabel || '—'}
-            </span>
-            <span className="rounded-md bg-white/[0.06] px-2 py-0.5 text-[9px] text-gray-300">
-              每图 {shotsPerSheet} 镜
-            </span>
-            <span className="rounded-md bg-white/[0.06] px-2 py-0.5 text-[9px] text-gray-300">
-              共 {taskCount} 批
-            </span>
+        <div className="shrink-0 border-b border-white/[0.08] bg-white/[0.04] px-4 py-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <label className={`${STORYBOARD_LABEL} text-gray-300`}>每张图镜头数</label>
+              <CustomDropdown
+                value={String(shotsPerSheet)}
+                options={shotsOptions}
+                onChange={onShotsPerSheetChange}
+                disabled={readOnly || busy}
+                triggerClassName="h-9 w-full rounded-xl bg-white/[0.06] px-3 text-[11px] font-medium text-gray-100 ring-1 ring-white/[0.12] hover:bg-white/[0.09] flex items-center justify-between"
+                portalZIndex={SHEET_GEN_CONFIRM_DROPDOWN_Z}
+              />
+            </div>
+            <div>
+              <label className={`${STORYBOARD_LABEL} text-gray-300`}>生图能力</label>
+              <CustomDropdown
+                value={presetId}
+                options={presetOptions}
+                onChange={onPresetChange}
+                disabled={readOnly || busy || !presetOptions.length}
+                triggerClassName="h-9 w-full rounded-xl bg-white/[0.06] px-3 text-[11px] font-medium text-gray-100 ring-1 ring-white/[0.12] hover:bg-white/[0.09] flex items-center justify-between"
+                portalZIndex={SHEET_GEN_CONFIRM_DROPDOWN_Z}
+              />
+            </div>
+          </div>
+          <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+            {shotCount > 0 ? (
+              <span className="text-[10px] font-medium text-gray-300">
+                {shotCount} 镜 ÷ {shotsPerSheet} = {taskCount} 张拼图
+                {batches.length > 1 ? ` · 已选 ${selectedCount}/${batches.length} 批` : ''}
+              </span>
+            ) : null}
             <span
               className={`rounded-md px-2 py-0.5 text-[9px] ${
                 directSend
@@ -121,7 +198,13 @@ export default function StoryboardSheetGenConfirmModal({
             >
               {directSend ? '直发提示词' : '理解后送模'}
             </span>
+            {presetLabel ? (
+              <span className="truncate text-[9px] text-gray-500">当前：{presetLabel}</span>
+            ) : null}
           </div>
+        </div>
+
+        <div className="shrink-0 space-y-2 border-b border-white/[0.06] px-4 py-2.5">
           {presetInstructionTrimmed ? (
             <div className="rounded-lg border border-white/[0.06] bg-black/30 px-2.5 py-2">
               <p className="mb-1 text-[9px] font-semibold text-gray-500">预设 instruction</p>
@@ -137,29 +220,77 @@ export default function StoryboardSheetGenConfirmModal({
           ) : null}
           {!canConfirm ? (
             <p className="text-[9px] leading-relaxed text-red-300/90">
-              存在无法执行的任务（超限或未直发），请调整参数后重试。
+              {selectedCount === 0
+                ? '请至少勾选一个批次。'
+                : '所选批次中存在无法执行的任务（超限或未直发），请调整参数或取消勾选后重试。'}
             </p>
           ) : null}
         </div>
 
-        {batches.length > 1 ? (
-          <div className="flex shrink-0 gap-1 overflow-x-auto border-b border-white/[0.06] px-3 py-2 no-scrollbar">
-            {batches.map((batch, index) => (
-              <button
-                key={batch.chunkIndex}
-                type="button"
-                onClick={() => setActiveBatchIndex(index)}
-                className={`shrink-0 rounded-md px-2 py-1 text-[9px] transition ${
-                  activeBatchIndex === index
-                    ? 'bg-white/[0.10] text-gray-200 ring-1 ring-white/15'
-                    : batch.validationOk
-                      ? 'bg-white/[0.04] text-gray-400 hover:bg-white/[0.07]'
-                      : 'bg-red-500/10 text-red-300/90 ring-1 ring-red-400/15'
-                }`}
-              >
-                批 {batch.chunkIndex + 1}
-              </button>
-            ))}
+        {batches.length > 0 ? (
+          <div className="shrink-0 border-b border-white/[0.06] px-3 py-2">
+            <div className="mb-1.5 flex items-center justify-between gap-2">
+              <span className="text-[9px] text-gray-500">勾选要生成的批次</span>
+              {batches.length > 1 ? (
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={selectAllBatches}
+                    className="text-[9px] text-gray-400 transition-colors hover:text-gray-200 disabled:opacity-40"
+                  >
+                    全选
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={clearBatchSelection}
+                    className="text-[9px] text-gray-400 transition-colors hover:text-gray-200 disabled:opacity-40"
+                  >
+                    清空
+                  </button>
+                </div>
+              ) : null}
+            </div>
+            <div className="flex gap-1 overflow-x-auto no-scrollbar">
+              {batches.map((batch, index) => {
+                const selected = selectedChunkIndexes.has(batch.chunkIndex);
+                return (
+                  <div
+                    key={batch.chunkIndex}
+                    className={`flex shrink-0 items-center gap-1 rounded-md pr-1 transition ${
+                      activeBatchIndex === index ? 'bg-white/[0.08] ring-1 ring-white/15' : 'bg-white/[0.03]'
+                    } ${!selected ? 'opacity-55' : ''}`}
+                  >
+                    <button
+                      type="button"
+                      aria-label={selected ? `取消勾选批 ${batch.chunkIndex + 1}` : `勾选批 ${batch.chunkIndex + 1}`}
+                      disabled={busy}
+                      onClick={() => toggleBatchSelection(batch.chunkIndex)}
+                      className={`ml-1 flex h-5 w-5 shrink-0 items-center justify-center rounded border text-[9px] transition ${
+                        selected
+                          ? 'border-emerald-400/40 bg-emerald-500/15 text-emerald-300'
+                          : 'border-white/15 bg-black/20 text-transparent hover:border-white/25'
+                      } disabled:opacity-40`}
+                    >
+                      ✓
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveBatchIndex(index)}
+                      className={`shrink-0 rounded-md px-1.5 py-1 text-[9px] transition ${
+                        batch.validationOk
+                          ? 'text-gray-300 hover:text-white'
+                          : 'text-red-300/90'
+                      }`}
+                    >
+                      批 {batch.chunkIndex + 1}
+                      {!batch.validationOk ? ' !' : ''}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         ) : null}
 
@@ -227,10 +358,12 @@ export default function StoryboardSheetGenConfirmModal({
           <button
             type="button"
             disabled={busy || !canConfirm}
-            onClick={onConfirm}
+            onClick={handleConfirm}
             className={`${STORYBOARD_TOOL_BTN_PRIMARY} h-8 px-3 text-[10px] disabled:opacity-40`}
           >
-            {busy ? '生成中…' : `确认执行 ${taskCount} 个任务`}
+            {busy
+              ? '生成中…'
+              : `确认执行 ${selectedCount || taskCount} 个任务`}
           </button>
         </div>
       </div>

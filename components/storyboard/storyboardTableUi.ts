@@ -1,15 +1,16 @@
 /** 分镜表面板统一间距（三栏 / 卡片 / 表头） */
 export const STORYBOARD_GAP_COLS = 'gap-2';
 
-/** 解析页三栏：输入 | 生图 | 解析预览（含数据合成） */
+/** 解析页：单列居中主操作区 */
 export const STORYBOARD_INPUT_VIEW_GRID =
-  'grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-hidden lg:grid-cols-[minmax(0,1fr)_minmax(0,0.95fr)_minmax(18rem,22rem)] xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(20rem,24rem)]';
+  'flex min-h-0 flex-1 flex-col overflow-hidden';
 
-export const STORYBOARD_INPUT_COLUMN_SHELL =
-  'flex min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-white/[0.08] bg-white/[0.05]';
+/** 解析页主操作区：垂直居中，溢出可滚动 */
+export const STORYBOARD_INPUT_MAIN =
+  'flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto no-scrollbar';
 
-export const STORYBOARD_INPUT_PREVIEW_RAIL =
-  'flex min-h-0 min-w-0 max-w-full flex-col overflow-hidden lg:max-w-none';
+export const STORYBOARD_INPUT_MAIN_INNER =
+  'm-auto flex w-full max-w-2xl flex-col gap-4 px-1 py-4 sm:px-2';
 
 export const STORYBOARD_GRID_ROOT = `grid min-h-0 min-w-0 flex-1 grid-cols-[14.625rem_minmax(0,1fr)] items-stretch ${STORYBOARD_GAP_COLS}`;
 
