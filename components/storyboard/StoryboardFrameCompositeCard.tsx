@@ -237,7 +237,7 @@ export default function StoryboardFrameCompositeCard({
               ) : null}
               {locked ? (
                 <span className="rounded-md bg-amber-500/25 px-1.5 py-0.5 text-[8px] font-bold text-amber-100">
-                  锁
+                  过
                 </span>
               ) : null}
             </span>

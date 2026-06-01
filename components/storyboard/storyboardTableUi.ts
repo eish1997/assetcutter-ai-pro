@@ -62,6 +62,10 @@ export const STORYBOARD_ROW_HISTORY_HIGHLIGHT =
 export const STORYBOARD_ROW_ACTIVE_HISTORY_HIGHLIGHT =
   'border-amber-400/55 ring-2 ring-amber-400/55 shadow-[0_0_0_1px_rgba(251,191,36,0.4),0_12px_32px_-12px_rgba(124,58,237,0.35)]';
 
+/** 画板框选多选时的镜头高亮 */
+export const STORYBOARD_ROW_CANVAS_MULTI_SELECTED =
+  'border-teal-400/70 bg-teal-500/[0.07] ring-2 ring-teal-400/55 shadow-[0_0_0_1px_rgba(45,212,191,0.35)]';
+
 export const STORYBOARD_TOOL_BTN =
   'inline-flex h-7 items-center justify-center rounded-lg px-2.5 text-[10px] font-semibold transition-colors outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40';
 

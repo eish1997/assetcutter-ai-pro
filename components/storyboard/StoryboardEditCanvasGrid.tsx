@@ -1,38 +1,64 @@
-import React from 'react';
+import React, { useCallback, useRef } from 'react';
 import type { StoryboardTableRow } from '../../types';
 import { resolveStoryboardRowFrameDisplaySrc } from '../../services/storyboardFrameImageUrl';
 import { storyboardRowOutlineTitle, storyboardRowHasEditFeedback } from './storyboardRowDisplay';
 import StoryboardEditFeedbackMark from './StoryboardEditFeedbackMark';
 import { storyboardCanvasTileDomId } from './storyboardTableDom';
+import { useStoryboardCanvasMarqueeSelect } from '../../hooks/useStoryboardCanvasMarqueeSelect';
 import {
   STORYBOARD_EDIT_CANVAS_GRID,
-  STORYBOARD_ROW_ACTIVE,
-  STORYBOARD_ROW_ACTIVE_HISTORY_HIGHLIGHT,
+  STORYBOARD_ROW_CANVAS_MULTI_SELECTED,
   STORYBOARD_ROW_HISTORY_HIGHLIGHT,
   STORYBOARD_ROW_IDLE,
   STORYBOARD_ROW_SHELL,
 } from './storyboardTableUi';
 
+export type StoryboardCanvasSelectModifiers = {
+  additive?: boolean;
+  range?: boolean;
+};
+
 type Props = {
   rows: StoryboardTableRow[];
   activeRowId: string | null;
+  selectedRowIds: ReadonlySet<string>;
   imageBusyRowId?: string | null;
   highlightedRowIds?: ReadonlySet<string> | null;
-  /** 选中历史批次时，覆盖画板各镜预览图（取消选中后恢复当前版本） */
   previewRowImages?: Readonly<Record<string, string>> | null;
-  onSelect: (rowId: string) => void;
+  readOnly?: boolean;
+  onSelectRow: (rowId: string, modifiers?: StoryboardCanvasSelectModifiers) => void;
+  onMarqueeSelect: (rowIds: string[], additive: boolean) => void;
   onPreviewImage?: (src: string) => void;
 };
 
 export default function StoryboardEditCanvasGrid({
   rows,
   activeRowId,
+  selectedRowIds,
   imageBusyRowId = null,
   highlightedRowIds = null,
   previewRowImages = null,
-  onSelect,
+  readOnly = false,
+  onSelectRow,
+  onMarqueeSelect,
   onPreviewImage,
 }: Props) {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const handleMarqueeComplete = useCallback(
+    (rowIds: string[], additive: boolean) => {
+      onMarqueeSelect(rowIds, additive);
+    },
+    [onMarqueeSelect]
+  );
+
+  const { marqueeRect, onContainerPointerDown } = useStoryboardCanvasMarqueeSelect({
+    containerRef,
+    disabled: readOnly,
+    onMarqueeComplete: handleMarqueeComplete,
+    onTileSelect: onSelectRow,
+  });
+
   if (!rows.length) {
     return (
       <div className="flex flex-1 items-center justify-center px-4 py-10 text-center text-[10px] text-gray-600">
@@ -41,10 +67,31 @@ export default function StoryboardEditCanvasGrid({
     );
   }
 
+  const containerRect = containerRef.current?.getBoundingClientRect();
+  const marqueeStyle =
+    marqueeRect && containerRect
+      ? {
+          left: marqueeRect.left - containerRect.left,
+          top: marqueeRect.top - containerRect.top,
+          width: marqueeRect.width,
+          height: marqueeRect.height,
+        }
+      : null;
+
   return (
-    <div className={STORYBOARD_EDIT_CANVAS_GRID}>
+    <div
+      ref={containerRef}
+      className={`relative touch-none select-none ${STORYBOARD_EDIT_CANVAS_GRID}`}
+      onPointerDown={onContainerPointerDown}
+    >
+      {marqueeStyle ? (
+        <div
+          className="pointer-events-none absolute z-20 rounded border border-violet-400/70 bg-violet-500/10 ring-1 ring-violet-400/40"
+          style={marqueeStyle}
+        />
+      ) : null}
       {rows.map((row, index) => {
-        const active = activeRowId === row.id;
+        const canvasSelected = selectedRowIds.has(row.id);
         const previewImg = previewRowImages?.[row.id];
         const img = previewImg || resolveStoryboardRowFrameDisplaySrc(row);
         const label = storyboardRowOutlineTitle(row, index);
@@ -53,10 +100,12 @@ export default function StoryboardEditCanvasGrid({
         const historyHighlight = highlightedRowIds?.has(row.id) ?? false;
 
         const shellTone = (() => {
-          if (active && historyHighlight) {
-            return `${STORYBOARD_ROW_ACTIVE} ${STORYBOARD_ROW_ACTIVE_HISTORY_HIGHLIGHT}`;
+          if (canvasSelected && historyHighlight) {
+            return `${STORYBOARD_ROW_IDLE} ${STORYBOARD_ROW_CANVAS_MULTI_SELECTED} ${STORYBOARD_ROW_HISTORY_HIGHLIGHT}`;
           }
-          if (active) return STORYBOARD_ROW_ACTIVE;
+          if (canvasSelected) {
+            return `${STORYBOARD_ROW_IDLE} ${STORYBOARD_ROW_CANVAS_MULTI_SELECTED}`;
+          }
           if (historyHighlight) {
             return `${STORYBOARD_ROW_IDLE} ${STORYBOARD_ROW_HISTORY_HIGHLIGHT}`;
           }
@@ -67,12 +116,20 @@ export default function StoryboardEditCanvasGrid({
         })();
 
         return (
-          <button
+          <div
             key={row.id}
-            type="button"
             id={storyboardCanvasTileDomId(row.id)}
-            onClick={() => onSelect(row.id)}
-            className={`${STORYBOARD_ROW_SHELL} flex min-w-0 flex-col overflow-hidden text-left transition ${shellTone}`}
+            data-canvas-row-id={row.id}
+            role="button"
+            tabIndex={0}
+            aria-selected={activeRowId === row.id}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                onSelectRow(row.id);
+              }
+            }}
+            className={`${STORYBOARD_ROW_SHELL} flex min-w-0 cursor-pointer flex-col overflow-hidden text-left transition ${shellTone}`}
           >
             <div className="flex items-center justify-between gap-1 border-b border-white/[0.06] px-2 py-1">
               <span className="flex min-w-0 items-center gap-1 truncate">
@@ -86,7 +143,7 @@ export default function StoryboardEditCanvasGrid({
                   <StoryboardEditFeedbackMark row={row} label="反馈中..." />
                 ) : null}
                 {row.locked ? (
-                  <span className="shrink-0 text-[8px] text-gray-500">锁定</span>
+                  <span className="shrink-0 text-[8px] text-gray-500">已通过</span>
                 ) : null}
               </span>
             </div>
@@ -96,7 +153,12 @@ export default function StoryboardEditCanvasGrid({
               }`}
             >
               {img ? (
-                <img src={img} alt="" className="h-full w-full object-cover" draggable={false} />
+                <img
+                  src={img}
+                  alt=""
+                  className="pointer-events-none h-full w-full object-cover"
+                  draggable={false}
+                />
               ) : (
                 <div className="flex h-full w-full items-center justify-center text-[9px] text-gray-600">
                   待配图
@@ -111,17 +173,18 @@ export default function StoryboardEditCanvasGrid({
                 <button
                   type="button"
                   title="放大"
+                  onPointerDown={(event) => event.stopPropagation()}
                   onClick={(event) => {
                     event.stopPropagation();
                     onPreviewImage(img);
                   }}
-                  className="absolute bottom-1 right-1 rounded bg-black/65 px-1.5 py-0.5 text-[8px] text-gray-200 hover:bg-black/80"
+                  className="absolute bottom-1 right-1 z-10 rounded bg-black/65 px-1.5 py-0.5 text-[8px] text-gray-200 hover:bg-black/80"
                 >
                   放大
                 </button>
               ) : null}
             </div>
-          </button>
+          </div>
         );
       })}
     </div>

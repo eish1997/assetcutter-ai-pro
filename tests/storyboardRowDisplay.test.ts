@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  canPatchStoryboardPassedRow,
   storyboardRowCompositeBodyText,
+  storyboardRowIsPassed,
   storyboardRowOutlineSubtitle,
   storyboardRowOutlineTitle,
 } from '../components/storyboard/storyboardRowDisplay';
@@ -38,6 +40,18 @@ describe('storyboardRowDisplay', () => {
         catalog
       )
     ).toBe('推门 进屋');
+  });
+
+  it('storyboardRowIsPassed reflects locked flag', () => {
+    expect(storyboardRowIsPassed({ locked: true })).toBe(true);
+    expect(storyboardRowIsPassed({ locked: false })).toBe(false);
+    expect(storyboardRowIsPassed({})).toBe(false);
+  });
+
+  it('canPatchStoryboardPassedRow only allows locked changes', () => {
+    expect(canPatchStoryboardPassedRow({ locked: false })).toBe(true);
+    expect(canPatchStoryboardPassedRow({ editFeedback: 'x' })).toBe(false);
+    expect(canPatchStoryboardPassedRow({ locked: true, editFeedback: '' })).toBe(false);
   });
 
   it('storyboardRowCompositeBodyText includes all structured fields', () => {

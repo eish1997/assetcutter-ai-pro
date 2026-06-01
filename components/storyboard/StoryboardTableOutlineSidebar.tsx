@@ -80,7 +80,7 @@ function OutlineRowButton({
           <span className="flex items-center gap-1">
             <span className="truncate text-[10px] font-semibold text-gray-100">{title}</span>
             {row.locked ? (
-              <span className="shrink-0 text-[8px] text-amber-400/90">锁</span>
+              <span className="shrink-0 text-[8px] text-amber-400/90">过</span>
             ) : null}
             <StoryboardEditFeedbackMark row={row} />
           </span>

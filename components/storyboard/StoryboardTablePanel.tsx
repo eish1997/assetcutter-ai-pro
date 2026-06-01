@@ -34,6 +34,7 @@ import {
   buildStoryboardRowPromptText,
   isStoryboardFeedbackRedrawEligible,
   listStoryboardFeedbackRedrawRows,
+  listStoryboardRowsWithEditFeedback,
   listStoryboardFeedbackCollageRedrawPresets,
   pickDefaultStoryboardFeedbackCollagePresetId,
   resolveStoryboardFeedbackCollagePreset,
@@ -43,6 +44,7 @@ import {
   STORYBOARD_EDIT_REDRAW_MODEL_KEY,
   type StoryboardRowRedrawInvokeOptions,
 } from '../../services/storyboardTableRedraw';
+import { canPatchStoryboardPassedRow, storyboardRowIsPassed } from './storyboardRowDisplay';
 import { storyboardRowHasFrameRef } from '../../services/storyboardFrameImageUrl';
 import {
   executeStoryboardSheetGenBatch,
@@ -789,6 +791,7 @@ export default function StoryboardTablePanel({
         const titleRaw = readStoryboardTableTitleRaw(cur);
         const rows = doc.rows.map((r) => {
           if (r.id !== rowId) return r;
+          if (storyboardRowIsPassed(r) && !canPatchStoryboardPassedRow(patch)) return r;
           if (patch.shotFields) {
             return applyShotFieldsPatch(
               { ...r, ...patch },
@@ -808,6 +811,58 @@ export default function StoryboardTablePanel({
     },
     [onPatchAsset]
   );
+
+  const patchRows = useCallback(
+    (rowIds: string[], patch: Partial<StoryboardTableRow>) => {
+      const idSet = new Set(rowIds);
+      if (!idSet.size) return;
+      onPatchAsset((cur) => {
+        const doc = normalizeStoryboardTableDoc(cur.storyboardTable);
+        const titleRaw = readStoryboardTableTitleRaw(cur);
+        const rows = doc.rows.map((r) => {
+          if (!idSet.has(r.id)) return r;
+          if (storyboardRowIsPassed(r) && !canPatchStoryboardPassedRow(patch)) return r;
+          if (patch.shotFields) {
+            return applyShotFieldsPatch(
+              { ...r, ...patch },
+              doc.fieldCatalog,
+              { ...r.shotFields, ...patch.shotFields }
+            );
+          }
+          const next = { ...r, ...patch };
+          return applyShotFieldsPatch(next, doc.fieldCatalog, next.shotFields);
+        });
+        return {
+          ...cur,
+          textTitle: titleRaw,
+          storyboardTable: { ...doc, title: titleRaw, rows },
+        };
+      });
+    },
+    [onPatchAsset]
+  );
+
+  const clearEditFeedbackForRows = useCallback(
+    (rowIds: string[]) => {
+      const ids = [...new Set(rowIds.filter(Boolean))];
+      if (!ids.length) return;
+      patchRows(ids, { editFeedback: '' });
+    },
+    [patchRows]
+  );
+
+  const clearAllEditFeedback = useCallback(() => {
+    const rowIds = listStoryboardRowsWithEditFeedback(table.rows)
+      .filter((row) => !storyboardRowIsPassed(row))
+      .map((row) => row.id);
+    if (!rowIds.length) {
+      onNotify?.('warn', '没有可清除的修改反馈');
+      return;
+    }
+    if (!window.confirm(`清除全部 ${rowIds.length} 镜的修改反馈？`)) return;
+    clearEditFeedbackForRows(rowIds);
+    onNotify?.('info', `已清除 ${rowIds.length} 镜修改反馈`);
+  }, [clearEditFeedbackForRows, onNotify, table.rows]);
 
   const importInputRows = useCallback(
     (result: { catalog: StoryboardParseFieldDef[]; rows: StoryboardTableRow[] }) => {
@@ -950,12 +1005,22 @@ export default function StoryboardTablePanel({
 
   const removeRow = (rowId: string) => {
     if (table.rows.length <= 1) return;
+    const row = table.rows.find((r) => r.id === rowId);
+    if (row && storyboardRowIsPassed(row)) {
+      onNotify?.('warn', '该镜头已通过，请先取消通过');
+      return;
+    }
     if (!window.confirm('删除该镜头行？')) return;
     patchTable((rows) => rows.filter((r) => r.id !== rowId));
     if (activeRowId === rowId) setActiveRowId(null);
   };
 
   const moveRow = (rowId: string, dir: -1 | 1) => {
+    const row = table.rows.find((r) => r.id === rowId);
+    if (row && storyboardRowIsPassed(row)) {
+      onNotify?.('warn', '该镜头已通过，请先取消通过');
+      return;
+    }
     patchTable((rows) => {
       const i = rows.findIndex((r) => r.id === rowId);
       if (i < 0) return rows;
@@ -969,6 +1034,11 @@ export default function StoryboardTablePanel({
   };
 
   const openFileForRow = (rowId: string) => {
+    const row = table.rows.find((r) => r.id === rowId);
+    if (row && storyboardRowIsPassed(row)) {
+      onNotify?.('warn', '该镜头已通过，请先取消通过');
+      return;
+    }
     pendingRowIdRef.current = rowId;
     fileInputRef.current?.click();
   };
@@ -992,6 +1062,10 @@ export default function StoryboardTablePanel({
         if (!dataUrl) return;
         const row = table.rows.find((r) => r.id === rowId);
         if (!row) return;
+        if (storyboardRowIsPassed(row)) {
+          onNotify?.('warn', '该镜头已通过，请先取消通过');
+          return;
+        }
         const patch = await replaceStoryboardRowFrame({
           row,
           dataUrl,
@@ -1015,6 +1089,10 @@ export default function StoryboardTablePanel({
       if (readOnly) return;
       const row = table.rows.find((r) => r.id === rowId);
       if (!row) return;
+      if (storyboardRowIsPassed(row)) {
+        onNotify?.('warn', '该镜头已通过，请先取消通过');
+        return;
+      }
       setImageBusyRowId(rowId);
       try {
         const patch = await restoreStoryboardRowFrameVersion(row, versionId, {
@@ -1041,6 +1119,10 @@ export default function StoryboardTablePanel({
     async (rowId: string) => {
       const row = table.rows.find((r) => r.id === rowId);
       if (!row) return;
+      if (storyboardRowIsPassed(row)) {
+        onNotify?.('warn', '该镜头已通过，请先取消通过');
+        return;
+      }
       const patch = await clearStoryboardRowFrameWithHistory(row, {
         assetId: asset.id,
         companionBaseUrl,
@@ -1048,7 +1130,7 @@ export default function StoryboardTablePanel({
       });
       patchRow(rowId, patch);
     },
-    [asset.id, companionBaseUrl, companionProjectId, patchRow, table.rows]
+    [asset.id, companionBaseUrl, companionProjectId, onNotify, patchRow, table.rows]
   );
 
   const runRedraw = useCallback(
@@ -1056,7 +1138,7 @@ export default function StoryboardTablePanel({
       const row = table.rows.find((r) => r.id === rowId);
       if (!row) return;
       if (row.locked) {
-        onNotify?.('warn', '该镜头已锁定');
+        onNotify?.('warn', '该镜头已通过');
         return;
       }
       if (!buildStoryboardRowPromptText(row, table.fieldCatalog)) {
@@ -1155,6 +1237,7 @@ export default function StoryboardTablePanel({
     let failTasks = 0;
     let totalMatched = 0;
     let batchRowImages: Record<string, string> = {};
+    const feedbackClearedRowIds = new Set<string>();
 
     try {
       for (const task of tasks) {
@@ -1191,6 +1274,9 @@ export default function StoryboardTablePanel({
           totalMatched += matchedCount;
           if (rowImages && Object.keys(rowImages).length) {
             batchRowImages = { ...batchRowImages, ...rowImages };
+            for (const rowId of Object.keys(rowImages)) {
+              feedbackClearedRowIds.add(rowId);
+            }
           }
           okTasks += 1;
           if (warn) {
@@ -1240,6 +1326,10 @@ export default function StoryboardTablePanel({
       } else {
         onNotify?.('warn', `拼图改图 ${okTasks} 张完成，但未能自动切分回填，请检查镜号`);
       }
+
+      if (feedbackClearedRowIds.size > 0) {
+        clearEditFeedbackForRows([...feedbackClearedRowIds]);
+      }
     } finally {
       setRedrawBusyRowId(null);
       setFeedbackBatchBusy(false);
@@ -1247,6 +1337,7 @@ export default function StoryboardTablePanel({
     }
   }, [
     activeFeedbackCollagePreset,
+    clearEditFeedbackForRows,
     commitSheetVisionSplit,
     commitFeedbackRedrawHistory,
     effectiveFeedbackCollageModelId,
@@ -1399,7 +1490,7 @@ export default function StoryboardTablePanel({
       const row = table.rows.find((r) => r.id === rowId);
       if (!row) return;
       if (row.locked) {
-        onNotify?.('warn', '该镜头已锁定');
+        onNotify?.('warn', '该镜头已通过');
         return;
       }
       if (!(resolveStoryboardParseInput(row, table.fieldCatalog) || '').trim()) {
@@ -1446,7 +1537,7 @@ export default function StoryboardTablePanel({
       const row = table.rows.find((r) => r.id === rowId);
       if (!row) return;
       if (row.locked) {
-        onNotify?.('warn', '该镜头已锁定');
+        onNotify?.('warn', '该镜头已通过');
         return;
       }
       if (!table.fieldCatalog.length) {
@@ -1490,7 +1581,7 @@ export default function StoryboardTablePanel({
       (r) => !r.locked && (resolveStoryboardParseInput(r, table.fieldCatalog) || '').trim()
     );
     if (!eligible.length) {
-      onNotify?.('warn', '没有可解析的镜头（需原文/结构化内容且未锁定）');
+      onNotify?.('warn', '没有可解析的镜头（需原文/结构化内容且未通过）');
       return;
     }
     if (!window.confirm(`解析全表 ${eligible.length} 镜？将调用文字模型。`)) return;
@@ -1571,7 +1662,7 @@ export default function StoryboardTablePanel({
   const redrawRowDisabledReason = useCallback(
     (row: StoryboardTableRow): string | undefined => {
       if (readOnly) return '只读模式';
-      if (row.locked) return '已锁定';
+      if (row.locked) return '已通过';
       if (!redrawPresets.length) return '无可用生图能力';
       if (!buildStoryboardRowPromptText(row, table.fieldCatalog)) {
         return '需先解析、填写画面类字段或修改反馈';
@@ -1741,7 +1832,7 @@ export default function StoryboardTablePanel({
               {formatDurationLabel(stats.totalDurationSec, stats.hasGaps)}
             </span>
             {stats.lockedCount > 0 ? (
-              <span className={STORYBOARD_STAT_CHIP}>{stats.lockedCount} 锁定</span>
+              <span className={STORYBOARD_STAT_CHIP}>{stats.lockedCount} 已通过</span>
             ) : null}
           </div>
         </div>
@@ -2040,6 +2131,7 @@ export default function StoryboardTablePanel({
           feedbackRedrawUnderstand={feedbackRedrawUnderstand}
           onToggleFeedbackRedrawUnderstand={toggleFeedbackRedrawUnderstand}
           onFeedbackBatchRedraw={!readOnly ? () => void runFeedbackBatchRedraw() : undefined}
+          onClearAllFeedback={!readOnly ? clearAllEditFeedback : undefined}
           feedbackCollageLimit={feedbackCollageLimit}
           onFeedbackCollageLimitChange={setFeedbackCollageLimitPersisted}
           feedbackRedrawHistory={feedbackRedrawHistory}
@@ -2050,6 +2142,8 @@ export default function StoryboardTablePanel({
           optimizeBusyRowId={optimizeBusyRowId}
           interaction={rowInteraction}
           onActiveRowIdChange={setActiveRowId}
+          onPatchRows={patchRows}
+          readOnly={readOnly}
           redrawRowDisabledReason={redrawRowDisabledReason}
           editScrollRef={editViewRef}
           footerAddRow={

@@ -69,6 +69,10 @@ export function listStoryboardFeedbackRedrawRows(rows: StoryboardTableRow[]): St
   return rows.filter((row) => !row.locked && Boolean((row.editFeedback ?? '').trim()));
 }
 
+export function listStoryboardRowsWithEditFeedback(rows: StoryboardTableRow[]): StoryboardTableRow[] {
+  return rows.filter((row) => Boolean((row.editFeedback ?? '').trim()));
+}
+
 /** 拼接入队/理解用的镜头正文（结构化字段 + 镜头号 + 修改反馈） */
 export function buildStoryboardRowPromptText(
   row: StoryboardTableRow,

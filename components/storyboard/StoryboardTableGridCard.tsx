@@ -77,7 +77,7 @@ export default function StoryboardTableGridCard({ asset, className = '' }: Props
             {stats.hasGaps ? '时长未填齐' : `${stats.totalDurationSec.toFixed(1)}s`}
           </span>
         ) : null}
-        {stats && stats.lockedCount > 0 ? <span>{stats.lockedCount} 镜已锁</span> : null}
+        {stats && stats.lockedCount > 0 ? <span>{stats.lockedCount} 镜已通过</span> : null}
       </div>
     </div>
   );

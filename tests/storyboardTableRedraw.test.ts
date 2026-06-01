@@ -11,6 +11,7 @@ import {
   DEFAULT_STORYBOARD_FEEDBACK_COLLAGE_INSTRUCTION,
   getBuiltinStoryboardFeedbackCollagePreset,
   listStoryboardFeedbackCollageRedrawPresets,
+  listStoryboardRowsWithEditFeedback,
 } from '../services/storyboardTableRedraw';
 
 function mockPreset(id: string, category: 'text_to_image' | 'image_to_image'): CustomAppModule {
@@ -155,5 +156,14 @@ describe('feedback batch redraw helpers', () => {
     const preset = getBuiltinStoryboardFeedbackCollagePreset();
     expect(preset.instruction).toBe(DEFAULT_STORYBOARD_FEEDBACK_COLLAGE_INSTRUCTION);
     expect(preset.instruction).toContain('禁止添加 Scene Info');
+  });
+
+  it('lists rows with edit feedback including locked rows', () => {
+    const rows = [
+      mockRow({ editFeedback: 'a' }),
+      mockRow({ locked: true, editFeedback: 'b' }),
+      mockRow({ editFeedback: '' }),
+    ];
+    expect(listStoryboardRowsWithEditFeedback(rows)).toHaveLength(2);
   });
 });

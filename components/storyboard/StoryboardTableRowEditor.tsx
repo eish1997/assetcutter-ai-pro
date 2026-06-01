@@ -9,7 +9,7 @@ import {
 } from '../../services/storyboardFrameHistory';
 import AppIcon from '../ui/AppIcon';
 import { CustomDropdown } from '../ui/CustomDropdown';
-import { storyboardRowOutlineTitle, storyboardRowHasEditFeedback } from './storyboardRowDisplay';
+import { storyboardRowOutlineTitle, storyboardRowHasEditFeedback, storyboardRowIsPassed } from './storyboardRowDisplay';
 import StoryboardEditFeedbackMark from './StoryboardEditFeedbackMark';
 import {
   STORYBOARD_FIELD_INPUT,
@@ -109,9 +109,11 @@ export default function StoryboardTableRowEditor({
   editDisplayMode = 'full',
 }: Props) {
   const feedbackMode = editDisplayMode === 'feedback';
+  const passed = storyboardRowIsPassed(row);
+  const fieldsReadOnly = readOnly || passed;
   const img = resolveStoryboardRowFrameDisplaySrc(row);
   const shotLabel = storyboardRowOutlineTitle(row, index);
-  const shell = `${STORYBOARD_ROW_SHELL} ${row.locked ? 'opacity-70' : ''} ${
+  const shell = `${STORYBOARD_ROW_SHELL} ${passed ? 'opacity-70' : ''} ${
     active ? STORYBOARD_ROW_ACTIVE : STORYBOARD_ROW_IDLE
   }`;
 
@@ -123,12 +125,11 @@ export default function StoryboardTableRowEditor({
     () => resolveStoryboardParseInput(row, fieldCatalog),
     [row, fieldCatalog]
   );
-  const parseHardDisabled = readOnly || parseBusy || row.locked;
+  const parseHardDisabled = fieldsReadOnly || parseBusy;
   const parseNeedsInput = !parseInput.trim();
   const optimizeDisabled =
-    readOnly ||
+    fieldsReadOnly ||
     optimizeBusy ||
-    row.locked ||
     fieldCatalog.length === 0 ||
     !rowHasStructuredFieldValues(fieldCatalog, row) ||
     parseBusy;
@@ -142,7 +143,7 @@ export default function StoryboardTableRowEditor({
         {isMultiline ? (
           <textarea
             value={value}
-            readOnly={readOnly}
+            readOnly={fieldsReadOnly}
             onChange={(e) => patchField(def.id, e.target.value)}
             onMouseDown={stopInputFocusBubble}
             onFocus={stopInputFocusBubble}
@@ -152,7 +153,7 @@ export default function StoryboardTableRowEditor({
         ) : (
           <input
             value={value}
-            readOnly={readOnly}
+            readOnly={fieldsReadOnly}
             onChange={(e) => patchField(def.id, e.target.value)}
             onMouseDown={stopInputFocusBubble}
             onFocus={stopInputFocusBubble}
@@ -177,14 +178,31 @@ export default function StoryboardTableRowEditor({
         </span>
         <span className="text-[11px] font-semibold text-gray-200">镜头 {shotLabel}</span>
         {storyboardRowHasEditFeedback(row) ? <StoryboardEditFeedbackMark row={row} /> : null}
+        {passed ? (
+          <span className="rounded-md bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-300/90 ring-1 ring-emerald-400/25">
+            已通过
+          </span>
+        ) : null}
         {!readOnly ? (
           <div className={`ml-auto flex items-center ${STORYBOARD_GAP_TIGHT}`}>
+            {passed ? (
+              <button
+                type="button"
+                title="取消通过"
+                aria-label="取消通过"
+                onClick={() => onPatch({ locked: false })}
+                className={`${STORYBOARD_ROW_ICON_BTN} bg-emerald-500/15 text-emerald-300 ring-1 ring-emerald-400/30 hover:bg-emerald-500/20 hover:text-emerald-200`}
+              >
+                <AppIcon name="check" className="h-3.5 w-3.5" />
+              </button>
+            ) : (
+              <>
             {onParseRow ? (
               <button
                 type="button"
                 title={
-                  row.locked
-                    ? '已锁定'
+                  passed
+                    ? '已通过'
                     : parseNeedsInput
                       ? '请先填写原文或结构化字段'
                       : '结构化解析'
@@ -206,7 +224,7 @@ export default function StoryboardTableRowEditor({
             {onOptimizeRow ? (
               <button
                 type="button"
-                title={optimizeDisabledReason || (row.locked ? '已锁定' : '结构化优化')}
+                title={optimizeDisabledReason || (passed ? '已通过' : '结构化优化')}
                 aria-label={optimizeBusy ? '优化中' : '优化本镜'}
                 disabled={optimizeDisabled}
                 onClick={onOptimizeRow}
@@ -244,16 +262,12 @@ export default function StoryboardTableRowEditor({
             ) : null}
             <button
               type="button"
-              title={row.locked ? '解除锁定' : '锁定本镜'}
-              aria-label={row.locked ? '解除锁定' : '锁定本镜'}
-              onClick={() => onPatch({ locked: !row.locked })}
-              className={`${STORYBOARD_ROW_ICON_BTN} ${
-                row.locked
-                  ? 'bg-amber-500/15 text-amber-200 ring-1 ring-amber-500/35 hover:bg-amber-500/20 hover:text-amber-100'
-                  : ''
-              }`}
+              title="通过本镜"
+              aria-label="通过本镜"
+              onClick={() => onPatch({ locked: true })}
+              className={STORYBOARD_ROW_ICON_BTN}
             >
-              <AppIcon name={row.locked ? 'lock' : 'unlock'} className="h-3.5 w-3.5" />
+              <AppIcon name="check" className="h-3.5 w-3.5" />
             </button>
             <button
               type="button"
@@ -286,6 +300,8 @@ export default function StoryboardTableRowEditor({
             >
               <AppIcon name="chevron-down" className="h-3.5 w-3.5" />
             </button>
+              </>
+            )}
           </div>
         ) : null}
       </div>
@@ -298,15 +314,15 @@ export default function StoryboardTableRowEditor({
                 imageBusy ? 'opacity-60' : ''
               }`}
               onDragOver={(e) => {
-                if (readOnly) return;
+                if (fieldsReadOnly) return;
                 e.preventDefault();
               }}
               onDrop={(e) => {
-                if (readOnly) return;
+                if (fieldsReadOnly) return;
                 onImageDrop(e);
               }}
               onPaste={(e) => {
-                if (readOnly) return;
+                if (fieldsReadOnly) return;
                 onImagePaste(e);
               }}
             >
@@ -322,7 +338,7 @@ export default function StoryboardTableRowEditor({
               ) : (
                 <button
                   type="button"
-                  disabled={readOnly || imageBusy}
+                  disabled={fieldsReadOnly || imageBusy}
                   onClick={onPickImage}
                   className="flex h-full w-full flex-col items-center justify-center gap-1 bg-black/25 text-[10px] text-gray-500 transition-colors hover:text-violet-200/90 disabled:cursor-not-allowed"
                 >
@@ -335,7 +351,7 @@ export default function StoryboardTableRowEditor({
                 </div>
               ) : null}
             </div>
-            {!readOnly && img ? (
+            {!fieldsReadOnly && img ? (
               <div className={`mt-1 flex ${STORYBOARD_GAP_INNER}`}>
                 <button
                   type="button"
@@ -353,7 +369,7 @@ export default function StoryboardTableRowEditor({
                 </button>
               </div>
             ) : null}
-            {!readOnly && row.frameImageHistory?.length ? (
+            {!fieldsReadOnly && row.frameImageHistory?.length ? (
               <div className="mt-2">
                 <span className={STORYBOARD_LABEL}>历史版本</span>
                 <div className="flex gap-1.5 overflow-x-auto pb-0.5">
@@ -388,7 +404,7 @@ export default function StoryboardTableRowEditor({
               <span className={STORYBOARD_LABEL}>修改反馈</span>
               <textarea
                 value={row.editFeedback ?? ''}
-                readOnly={readOnly}
+                readOnly={fieldsReadOnly}
                 onChange={(e) => onPatch({ editFeedback: e.target.value })}
                 onMouseDown={stopInputFocusBubble}
                 onFocus={stopInputFocusBubble}
@@ -404,7 +420,7 @@ export default function StoryboardTableRowEditor({
                   <span className={STORYBOARD_LABEL}>镜头号</span>
                   <input
                     value={row.shotNo ?? ''}
-                    readOnly={readOnly}
+                    readOnly={fieldsReadOnly}
                     onChange={(e) => onPatch({ shotNo: e.target.value })}
                     onMouseDown={stopInputFocusBubble}
                     onFocus={stopInputFocusBubble}
@@ -417,7 +433,7 @@ export default function StoryboardTableRowEditor({
                   <div className="relative">
                     <input
                       value={row.durationSec != null ? String(row.durationSec) : ''}
-                      readOnly={readOnly}
+                      readOnly={fieldsReadOnly}
                       onChange={(e) => onPatch({ durationSec: parseDurationInput(e.target.value) })}
                       onMouseDown={stopInputFocusBubble}
                       onFocus={stopInputFocusBubble}
@@ -441,7 +457,7 @@ export default function StoryboardTableRowEditor({
                       value: String(i),
                       label: i === 0 ? `L${i} · 底层` : `L${i}`,
                     }))}
-                    disabled={readOnly}
+                    disabled={fieldsReadOnly}
                     onChange={(v) =>
                       onPatch({
                         timelineLayer: Math.min(timelineLayerCount - 1, Math.max(0, Number(v))),
@@ -457,7 +473,7 @@ export default function StoryboardTableRowEditor({
                 <span className={STORYBOARD_LABEL}>原文</span>
                 <textarea
                   value={row.shotRaw ?? ''}
-                  readOnly={readOnly}
+                  readOnly={fieldsReadOnly}
                   onChange={(e) => onPatch({ shotRaw: e.target.value })}
                   onMouseDown={stopInputFocusBubble}
                   onFocus={stopInputFocusBubble}

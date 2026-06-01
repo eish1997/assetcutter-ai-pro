@@ -6,9 +6,12 @@ import {
 } from '../../services/storyboardVirtualScroll';
 import { useStoryboardVirtualList } from '../../hooks/useStoryboardVirtualList';
 import StoryboardConnectedRowEditor from './StoryboardConnectedRowEditor';
-import StoryboardEditCanvasGrid from './StoryboardEditCanvasGrid';
+import StoryboardEditCanvasGrid, {
+  type StoryboardCanvasSelectModifiers,
+} from './StoryboardEditCanvasGrid';
+import StoryboardCanvasSelectionBar from './StoryboardCanvasSelectionBar';
 import StoryboardFeedbackRedrawHistoryBar from './StoryboardFeedbackRedrawHistoryBar';
-import { storyboardRowHasEditFeedback } from './storyboardRowDisplay';
+import { storyboardRowHasEditFeedback, storyboardRowIsPassed } from './storyboardRowDisplay';
 import { CustomDropdown } from '../ui/CustomDropdown';
 import type { StoryboardFeedbackRedrawBatchRecord } from '../../services/storyboardFeedbackSheetRedraw';
 import { STORYBOARD_FEEDBACK_COLLAGE_LIMIT_OPTIONS } from '../../services/storyboardFeedbackSheetRedraw';
@@ -47,6 +50,7 @@ type Props = {
   feedbackRedrawUnderstand?: boolean;
   onToggleFeedbackRedrawUnderstand?: () => void;
   onFeedbackBatchRedraw?: () => void;
+  onClearAllFeedback?: () => void;
   feedbackCollageLimit?: number;
   onFeedbackCollageLimitChange?: (limit: number) => void;
   feedbackRedrawHistory?: StoryboardFeedbackRedrawBatchRecord[];
@@ -57,6 +61,8 @@ type Props = {
   optimizeBusyRowId?: string | null;
   interaction: StoryboardRowInteractionValue;
   onActiveRowIdChange: (rowId: string) => void;
+  onPatchRows?: (rowIds: string[], patch: Partial<StoryboardTableRow>) => void;
+  readOnly?: boolean;
   redrawRowDisabledReason: (row: StoryboardTableRow) => string | undefined;
   footerAddRow?: React.ReactNode;
   editScrollRef?: React.Ref<StoryboardTableEditViewHandle>;
@@ -73,6 +79,7 @@ export default function StoryboardTableEditView({
   feedbackRedrawUnderstand = true,
   onToggleFeedbackRedrawUnderstand,
   onFeedbackBatchRedraw,
+  onClearAllFeedback,
   feedbackCollageLimit = 9,
   onFeedbackCollageLimitChange,
   feedbackRedrawHistory = [],
@@ -83,6 +90,8 @@ export default function StoryboardTableEditView({
   optimizeBusyRowId = null,
   interaction,
   onActiveRowIdChange,
+  onPatchRows,
+  readOnly = false,
   redrawRowDisabledReason,
   footerAddRow,
   editScrollRef,
@@ -119,6 +128,125 @@ export default function StoryboardTableEditView({
     )
   );
   const canvasScrollRef = useRef<HTMLDivElement>(null);
+  const selectionAnchorRef = useRef<string | null>(activeRowId);
+  const [canvasSelectedRowIds, setCanvasSelectedRowIds] = useState<Set<string>>(() =>
+    activeRowId ? new Set([activeRowId]) : new Set()
+  );
+
+  useEffect(() => {
+    if (!activeRowId) return;
+    setCanvasSelectedRowIds((prev) => {
+      if (prev.size === 0 || (prev.size === 1 && prev.has(activeRowId))) {
+        return new Set([activeRowId]);
+      }
+      return prev;
+    });
+    selectionAnchorRef.current = activeRowId;
+  }, [activeRowId]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || canvasSelectedRowIds.size <= 1) return;
+      if (activeRowId) {
+        setCanvasSelectedRowIds(new Set([activeRowId]));
+      } else {
+        setCanvasSelectedRowIds(new Set());
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [activeRowId, canvasSelectedRowIds.size]);
+
+  const handleOutlineSelect = useCallback(
+    (rowId: string) => {
+      onActiveRowIdChange(rowId);
+      setCanvasSelectedRowIds(new Set([rowId]));
+      selectionAnchorRef.current = rowId;
+    },
+    [onActiveRowIdChange]
+  );
+
+  const handleCanvasSelectRow = useCallback(
+    (rowId: string, modifiers?: StoryboardCanvasSelectModifiers) => {
+      onActiveRowIdChange(rowId);
+
+      if (modifiers?.range && selectionAnchorRef.current) {
+        const anchorIndex = rows.findIndex((row) => row.id === selectionAnchorRef.current);
+        const targetIndex = rows.findIndex((row) => row.id === rowId);
+        if (anchorIndex >= 0 && targetIndex >= 0) {
+          const lo = Math.min(anchorIndex, targetIndex);
+          const hi = Math.max(anchorIndex, targetIndex);
+          const rangeIds = rows.slice(lo, hi + 1).map((row) => row.id);
+          setCanvasSelectedRowIds((prev) => {
+            if (modifiers.additive) {
+              const next = new Set(prev);
+              for (const id of rangeIds) next.add(id);
+              return next;
+            }
+            return new Set(rangeIds);
+          });
+          return;
+        }
+      }
+
+      if (modifiers?.additive) {
+        setCanvasSelectedRowIds((prev) => {
+          const next = new Set(prev);
+          if (next.has(rowId)) next.delete(rowId);
+          else next.add(rowId);
+          return next;
+        });
+      } else {
+        setCanvasSelectedRowIds(new Set([rowId]));
+      }
+      selectionAnchorRef.current = rowId;
+    },
+    [onActiveRowIdChange, rows]
+  );
+
+  const handleMarqueeSelect = useCallback(
+    (rowIds: string[], additive: boolean) => {
+      if (!rowIds.length) return;
+      const lastId = rowIds[rowIds.length - 1]!;
+      onActiveRowIdChange(lastId);
+      setCanvasSelectedRowIds((prev) => {
+        if (additive) {
+          const next = new Set(prev);
+          for (const id of rowIds) next.add(id);
+          return next;
+        }
+        return new Set(rowIds);
+      });
+      selectionAnchorRef.current = lastId;
+    },
+    [onActiveRowIdChange]
+  );
+
+  const selectedRowIdList = useMemo(
+    () => [...canvasSelectedRowIds],
+    [canvasSelectedRowIds]
+  );
+
+  const batchLock = useCallback(
+    (locked: boolean) => {
+      if (!selectedRowIdList.length || !onPatchRows) return;
+      onPatchRows(selectedRowIdList, { locked });
+    },
+    [onPatchRows, selectedRowIdList]
+  );
+
+  const batchApplyFeedback = useCallback(
+    (text: string) => {
+      if (!selectedRowIdList.length || !onPatchRows) return;
+      const editableIds = selectedRowIdList.filter((id) => {
+        const row = rows.find((r) => r.id === id);
+        return row && !storyboardRowIsPassed(row);
+      });
+      if (!editableIds.length) return;
+      onPatchRows(editableIds, { editFeedback: text });
+    },
+    [onPatchRows, rows, selectedRowIdList]
+  );
 
   const outlineVirtual = useStoryboardVirtualList({
     rowIds,
@@ -167,14 +295,6 @@ export default function StoryboardTableEditView({
     }
   }, [activeRowId, onActiveRowIdChange, rows]);
 
-  const selectRow = useCallback(
-    (rowId: string, behavior: ScrollBehavior = 'auto') => {
-      onActiveRowIdChange(rowId);
-      scrollToRow(rowId, behavior);
-    },
-    [onActiveRowIdChange, scrollToRow]
-  );
-
   const redrawReason = activeRow ? redrawRowDisabledReason(activeRow) : undefined;
   const redrawDisabled =
     !activeRow || Boolean(redrawReason) || redrawBusyRowId != null || feedbackBatchBusy;
@@ -186,7 +306,7 @@ export default function StoryboardTableEditView({
           rows={rows}
           fieldCatalog={interaction.fieldCatalog}
           activeRowId={activeRowId}
-          onSelect={(rowId) => selectRow(rowId, 'auto')}
+          onSelect={handleOutlineSelect}
           virtualList={outlineVirtual}
         />
 
@@ -207,15 +327,25 @@ export default function StoryboardTableEditView({
                   </span>
                 ) : null}
               </p>
+              <StoryboardCanvasSelectionBar
+                count={canvasSelectedRowIds.size}
+                readOnly={readOnly || interaction.readOnly}
+                onLock={() => batchLock(true)}
+                onUnlock={() => batchLock(false)}
+                onApplyFeedback={batchApplyFeedback}
+              />
             </div>
             <div ref={canvasScrollRef} className={`${STORYBOARD_BODY_SCROLL} min-h-0 flex-1 pr-0.5`}>
               <StoryboardEditCanvasGrid
                 rows={rows}
                 activeRowId={activeRowId}
+                selectedRowIds={canvasSelectedRowIds}
                 imageBusyRowId={imageBusyRowId}
                 highlightedRowIds={highlightedRowIds}
                 previewRowImages={previewRowImages}
-                onSelect={(rowId) => selectRow(rowId, 'auto')}
+                readOnly={readOnly || interaction.readOnly}
+                onSelectRow={handleCanvasSelectRow}
+                onMarqueeSelect={handleMarqueeSelect}
                 onPreviewImage={interaction.previewImage}
               />
               {footerAddRow ? <div className="mt-2">{footerAddRow}</div> : null}
@@ -267,6 +397,17 @@ export default function StoryboardTableEditView({
                         : `拼图改图${feedbackRedrawEligibleCount > 0 ? ` (${feedbackRedrawEligibleCount})` : ''}`}
                     </button>
                   </>
+                ) : null}
+                {onClearAllFeedback && feedbackWrittenCount > 0 ? (
+                  <button
+                    type="button"
+                    title="清除全表所有镜头的修改反馈"
+                    disabled={feedbackBatchBusy || redrawBusyRowId != null}
+                    onClick={onClearAllFeedback}
+                    className={`${STORYBOARD_TOOL_BTN_NEUTRAL} shrink-0 !px-2.5`}
+                  >
+                    清除全部反馈
+                  </button>
                 ) : null}
                 <button
                   type="button"

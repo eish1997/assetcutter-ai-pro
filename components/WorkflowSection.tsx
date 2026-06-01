@@ -1498,7 +1498,7 @@ const WorkflowSection: React.FC<{
         return;
       }
       if (row.locked) {
-        onLog?.('warn', '该镜头已锁定，跳过重绘');
+        onLog?.('warn', '该镜头已通过，跳过重绘');
         return;
       }
       const hasFrame = storyboardRowHasFrameRef(row);

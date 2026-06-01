@@ -32,6 +32,17 @@ export function storyboardRowHasEditFeedback(row: StoryboardTableRow): boolean {
   return Boolean((row.editFeedback ?? '').trim());
 }
 
+/** 已通过（locked）镜头 */
+export function storyboardRowIsPassed(row: Pick<StoryboardTableRow, 'locked'>): boolean {
+  return Boolean(row.locked);
+}
+
+/** 已通过镜头仅允许修改 locked（通过 / 取消通过） */
+export function canPatchStoryboardPassedRow(patch: Partial<StoryboardTableRow>): boolean {
+  const keys = Object.keys(patch);
+  return keys.length === 1 && keys[0] === 'locked';
+}
+
 /** 大纲/画板用的反馈摘要 */
 export function storyboardRowEditFeedbackPreview(
   row: StoryboardTableRow,
