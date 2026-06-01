@@ -30,19 +30,19 @@ export default function StoryboardTableGridCard({ asset, className = '' }: Props
 
   return (
     <div
-      className={`relative flex h-full min-h-[10rem] w-full flex-col justify-between overflow-hidden bg-gradient-to-br from-[#14121c] to-[#0e1016] p-3 text-left ring-1 ring-inset ring-violet-500/30 ${className}`}
+      className={`relative flex h-full min-h-[10rem] w-full flex-col justify-between overflow-hidden bg-gradient-to-br from-[#121212] to-[#0a0a0a] p-3 text-left ring-1 ring-inset ring-white/15 ${className}`}
     >
-      <div className="pointer-events-none absolute -right-6 -top-6 h-24 w-24 rounded-full bg-violet-600/10 blur-2xl" />
+      <div className="pointer-events-none absolute -right-6 -top-6 h-24 w-24 rounded-full bg-white/[0.06] blur-2xl" />
 
       <div className="relative flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
-            <span className="inline-block h-1.5 w-1.5 rounded-full bg-violet-400 shadow-[0_0_8px_rgba(167,139,250,0.8)]" />
-            <p className="text-[8px] font-black uppercase tracking-[0.18em] text-violet-300/90">分镜表</p>
+            <span className="inline-block h-1.5 w-1.5 rounded-full bg-white/70 shadow-[0_0_8px_rgba(255,255,255,0.35)]" />
+            <p className="text-[8px] font-black uppercase tracking-[0.18em] text-gray-300">分镜表</p>
           </div>
           <p className="mt-1.5 text-[12px] font-bold leading-snug text-gray-50 line-clamp-2">{title}</p>
         </div>
-        <span className="shrink-0 rounded-lg bg-violet-500/20 px-2 py-1 text-[9px] font-black text-violet-100 ring-1 ring-violet-400/25">
+        <span className="shrink-0 rounded-lg bg-white/[0.10] px-2 py-1 text-[9px] font-black text-gray-100 ring-1 ring-white/15">
           {stats?.rowCount ?? 0} 镜
         </span>
       </div>
@@ -59,7 +59,7 @@ export default function StoryboardTableGridCard({ asset, className = '' }: Props
           ))
         ) : (
           <div className="flex flex-1 flex-col items-center justify-center gap-1 text-[9px] text-gray-500">
-            <span className="text-violet-400/60">▤</span>
+            <span className="text-white/40">▤</span>
             <span>点击编辑镜头</span>
           </div>
         )}

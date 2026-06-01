@@ -173,7 +173,7 @@ export default function StoryboardTableRowEditor({
       <div
         className={`flex shrink-0 flex-wrap items-center border-b border-white/[0.05] ${STORYBOARD_PAD_ROW_BAR} ${STORYBOARD_GAP_INNER}`}
       >
-        <span className="inline-flex h-7 min-w-[1.75rem] items-center justify-center rounded-lg bg-violet-500/15 text-[10px] font-bold text-violet-200/95 ring-1 ring-violet-400/20">
+        <span className="inline-flex h-7 min-w-[1.75rem] items-center justify-center rounded-lg bg-white/[0.08] text-[10px] font-bold text-gray-200 ring-1 ring-white/12">
           {index + 1}
         </span>
         <span className="text-[11px] font-semibold text-gray-200">镜头 {shotLabel}</span>
@@ -212,10 +212,10 @@ export default function StoryboardTableRowEditor({
                 onClick={onParseRow}
                 className={`${STORYBOARD_ROW_ICON_BTN} ${
                   parseBusy
-                    ? 'bg-violet-600/25 text-violet-200 ring-1 ring-violet-400/30'
+                    ? 'bg-white/[0.12] text-gray-200 ring-1 ring-white/15'
                     : parseHardDisabled || parseNeedsInput
                       ? 'text-gray-600'
-                      : 'text-violet-300 hover:bg-violet-500/15 hover:text-violet-100'
+                      : 'text-gray-300 hover:bg-white/[0.08] hover:text-white'
                 }`}
               >
                 <AppIcon name="edit" className={`h-3.5 w-3.5 ${parseBusy ? 'animate-pulse' : ''}`} />
@@ -248,10 +248,10 @@ export default function StoryboardTableRowEditor({
                 onClick={onRedraw}
                 className={`${STORYBOARD_ROW_ICON_BTN} ${
                   redrawBusy
-                    ? 'bg-violet-600/25 text-violet-200 ring-1 ring-violet-400/30'
+                    ? 'bg-white/[0.12] text-gray-200 ring-1 ring-white/15'
                     : redrawDisabled
                       ? 'text-gray-600'
-                      : 'text-violet-300 hover:bg-violet-500/15 hover:text-violet-100'
+                      : 'text-gray-300 hover:bg-white/[0.08] hover:text-white'
                 }`}
               >
                 <AppIcon
@@ -340,7 +340,7 @@ export default function StoryboardTableRowEditor({
                   type="button"
                   disabled={fieldsReadOnly || imageBusy}
                   onClick={onPickImage}
-                  className="flex h-full w-full flex-col items-center justify-center gap-1 bg-black/25 text-[10px] text-gray-500 transition-colors hover:text-violet-200/90 disabled:cursor-not-allowed"
+                  className="flex h-full w-full flex-col items-center justify-center gap-1 bg-black/25 text-[10px] text-gray-500 transition-colors hover:text-white/90 disabled:cursor-not-allowed"
                 >
                   {imageBusy ? '处理中…' : '点击或拖入图片'}
                 </button>
@@ -383,7 +383,7 @@ export default function StoryboardTableRowEditor({
                         title={`回退：${storyboardFrameVersionLabel(version, historyIndex)}`}
                         disabled={imageBusy}
                         onClick={() => onRestoreFrameVersion?.(version.id)}
-                        className="shrink-0 overflow-hidden rounded-md border border-white/[0.08] transition-colors hover:border-violet-500/50 hover:ring-1 hover:ring-violet-500/25 disabled:opacity-50"
+                        className="shrink-0 overflow-hidden rounded-md border border-white/[0.08] transition-colors hover:border-white/25 hover:ring-1 hover:ring-white/15 disabled:opacity-50"
                       >
                         <img
                           src={thumb}

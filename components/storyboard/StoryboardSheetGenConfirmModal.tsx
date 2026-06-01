@@ -151,7 +151,7 @@ export default function StoryboardSheetGenConfirmModal({
                 onClick={() => setActiveBatchIndex(index)}
                 className={`shrink-0 rounded-md px-2 py-1 text-[9px] transition ${
                   activeBatchIndex === index
-                    ? 'bg-violet-500/20 text-violet-200 ring-1 ring-violet-400/25'
+                    ? 'bg-white/[0.10] text-gray-200 ring-1 ring-white/15'
                     : batch.validationOk
                       ? 'bg-white/[0.04] text-gray-400 hover:bg-white/[0.07]'
                       : 'bg-red-500/10 text-red-300/90 ring-1 ring-red-400/15'
@@ -207,7 +207,7 @@ export default function StoryboardSheetGenConfirmModal({
                     readOnly
                     value={activeBatch.mergedImagePrompt}
                     rows={12}
-                    className={`${STORYBOARD_FIELD_INPUT} min-h-[12rem] resize-none font-mono text-[9px] leading-relaxed text-violet-100/90`}
+                    className={`${STORYBOARD_FIELD_INPUT} min-h-[12rem] resize-none font-mono text-[9px] leading-relaxed text-gray-200`}
                   />
                 </div>
               ) : null}

@@ -33,7 +33,7 @@ export default function StoryboardCanvasSelectionBar({
 
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-1.5 rounded-xl bg-white/[0.03] px-2 py-1.5 ring-1 ring-white/[0.06]">
-      <span className="shrink-0 text-[10px] font-semibold text-violet-200/90">已选 {count} 镜</span>
+      <span className="shrink-0 text-[10px] font-semibold text-gray-200">已选 {count} 镜</span>
       {readOnly ? null : (
         <>
           <button type="button" onClick={onLock} className={`${STORYBOARD_TOOL_BTN_NEUTRAL} !h-7 !px-2`}>

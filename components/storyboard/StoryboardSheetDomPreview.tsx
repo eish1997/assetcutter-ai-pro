@@ -66,8 +66,8 @@ export function StoryboardSheetDomCell({
           : undefined
       }
       className={`flex min-w-0 flex-col overflow-hidden border-2 border-black transition-[box-shadow,ring-color] ${
-        interactive ? 'cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40' : ''
-      } ${selected ? 'ring-2 ring-violet-500/55 ring-offset-1 ring-offset-[#0a0a0c]' : ''}`}
+        interactive ? 'cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-white/25' : ''
+      } ${selected ? 'ring-2 ring-white/30 ring-offset-1 ring-offset-[#0a0a0c]' : ''}`}
       style={{ ...storyboardSheetSketchDomStyle, fontSize: `${groupTypography.fontSizePx}px` }}
     >
       <div
@@ -244,14 +244,14 @@ export function StoryboardInputCompositePreview({
                   id={storyboardInputRowDomId(row.id)}
                   type="button"
                   onClick={() => onSelectRow(row.id)}
-                  className={`w-full rounded-xl border px-2 py-1.5 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 ${
+                  className={`w-full rounded-xl border px-2 py-1.5 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-white/25 ${
                     active ? STORYBOARD_ROW_ACTIVE : STORYBOARD_ROW_IDLE
                   }`}
                 >
                   <div className="mb-1 flex flex-wrap items-center gap-1">
                     <span className="text-[10px] font-bold text-white/95">{title}</span>
                     {parsed ? (
-                      <span className="rounded bg-violet-500/20 px-1 py-px text-[7px] text-violet-100">
+                      <span className="rounded bg-white/[0.10] px-1 py-px text-[7px] text-gray-100">
                         析
                       </span>
                     ) : (

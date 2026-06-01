@@ -137,7 +137,7 @@ export default function StoryboardFrameCompositeCard({
             }
           }}
           title={onOpenInEditor ? '双击进入编辑' : title}
-          className="relative cursor-pointer overflow-hidden border-2 border-black bg-white text-left outline-none focus-visible:ring-2 focus-visible:ring-violet-500/35 focus-visible:ring-inset"
+          className="relative cursor-pointer overflow-hidden border-2 border-black bg-white text-left outline-none focus-visible:ring-2 focus-visible:ring-white/25 focus-visible:ring-inset"
         >
           {img ? (
             <>
@@ -192,7 +192,7 @@ export default function StoryboardFrameCompositeCard({
           }
         }}
         title={onOpenInEditor ? '双击进入编辑' : undefined}
-        className="flex cursor-pointer flex-col text-left outline-none focus-visible:ring-2 focus-visible:ring-violet-500/35 focus-visible:ring-inset"
+        className="flex cursor-pointer flex-col text-left outline-none focus-visible:ring-2 focus-visible:ring-white/25 focus-visible:ring-inset"
       >
         <div
           className="relative aspect-[4/3] w-full shrink-0 overflow-hidden bg-black/40"
@@ -244,7 +244,7 @@ export default function StoryboardFrameCompositeCard({
           </div>
         </div>
         {!mergedPreview && !compact ? (
-          <div className="shrink-0 border-t border-white/[0.06] bg-black/20 px-2.5 py-2">
+          <div className="shrink-0 border-t border-white/[0.06] bg-white/[0.05] px-2.5 py-2">
             <StoryboardCompositeFieldsBody
               fieldItems={fieldItems}
               catalog={fieldCatalog}

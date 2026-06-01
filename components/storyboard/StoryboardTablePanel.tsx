@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { CustomAppModule, StoryboardParseFieldDef, StoryboardTableRow, WorkflowAsset } from '../../types';
+import type { CustomAppModule, StoryboardParseFieldDef, StoryboardRoleAsset, StoryboardTableRow, WorkflowAsset } from '../../types';
 import {
   applyAutoShotNumbers,
   computeStoryboardTableStats,
@@ -45,6 +45,13 @@ import {
   type StoryboardRowRedrawInvokeOptions,
 } from '../../services/storyboardTableRedraw';
 import { canPatchStoryboardPassedRow, storyboardRowIsPassed } from './storyboardRowDisplay';
+import { createStoryboardRoleAsset } from '../../services/storyboardRoleAssets';
+import { appendStoryboardFrameRoleMark } from '../../services/storyboardFrameRoleMarks';
+import {
+  executeStoryboardRoleReplaceCollageBatch,
+  listStoryboardRoleReplaceEligibleRows,
+  planStoryboardRoleReplaceTasks,
+} from '../../services/storyboardRoleReplaceRedraw';
 import { storyboardRowHasFrameRef } from '../../services/storyboardFrameImageUrl';
 import {
   executeStoryboardSheetGenBatch,
@@ -249,6 +256,12 @@ export default function StoryboardTablePanel({
   const [activeRowId, setActiveRowId] = useState<string | null>(table.rows[0]?.id ?? null);
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   const [imageBusyRowId, setImageBusyRowId] = useState<string | null>(null);
+  const [roleAssetBusyId, setRoleAssetBusyId] = useState<string | null>(null);
+  const [roleReplaceBatchBusy, setRoleReplaceBatchBusy] = useState(false);
+  const [roleReplaceBatchProgress, setRoleReplaceBatchProgress] = useState<{
+    done: number;
+    total: number;
+  } | null>(null);
   const [redrawBusyRowId, setRedrawBusyRowId] = useState<string | null>(null);
   const [feedbackRedrawUnderstand, setFeedbackRedrawUnderstand] = useState(() =>
     readLocalJson(STORYBOARD_EDIT_FEEDBACK_REDRAW_UNDERSTAND_KEY, true, (v) =>
@@ -812,6 +825,96 @@ export default function StoryboardTablePanel({
     [onPatchAsset]
   );
 
+  const patchRoleAssets = useCallback(
+    (mutate: (assets: StoryboardRoleAsset[]) => StoryboardRoleAsset[]) => {
+      onPatchAsset((cur) => {
+        const doc = normalizeStoryboardTableDoc(cur.storyboardTable);
+        const titleRaw = readStoryboardTableTitleRaw(cur);
+        const nextAssets = mutate([...(doc.roleAssets ?? [])]);
+        return {
+          ...cur,
+          textTitle: titleRaw,
+          storyboardTable: {
+            ...doc,
+            title: titleRaw,
+            roleAssets: nextAssets.length ? nextAssets : undefined,
+          },
+        };
+      });
+    },
+    [onPatchAsset]
+  );
+
+  const addRoleAsset = useCallback(() => {
+    if (readOnly) return;
+    patchRoleAssets((assets) => [...assets, createStoryboardRoleAsset(undefined, assets.length)]);
+  }, [patchRoleAssets, readOnly]);
+
+  const removeRoleAsset = useCallback(
+    (id: string) => {
+      if (readOnly) return;
+      patchRoleAssets((assets) => assets.filter((item) => item.id !== id));
+    },
+    [patchRoleAssets, readOnly]
+  );
+
+  const renameRoleAsset = useCallback(
+    (id: string, name: string) => {
+      if (readOnly) return;
+      patchRoleAssets((assets) =>
+        assets.map((item) => (item.id === id ? { ...item, name } : item))
+      );
+    },
+    [patchRoleAssets, readOnly]
+  );
+
+  const assignRoleAssetImage = useCallback(
+    async (id: string, file: File) => {
+      if (readOnly) return;
+      setRoleAssetBusyId(id);
+      try {
+        const dataUrl = await readStoryboardFrameFromFile(file);
+        patchRoleAssets((assets) =>
+          assets.map((item) => (item.id === id ? { ...item, image: dataUrl } : item))
+        );
+      } catch (err) {
+        onNotify?.('warn', err instanceof Error ? err.message : '图片处理失败');
+      } finally {
+        setRoleAssetBusyId(null);
+      }
+    },
+    [onNotify, patchRoleAssets, readOnly]
+  );
+
+  const clearRoleAssetImage = useCallback(
+    (id: string) => {
+      if (readOnly) return;
+      patchRoleAssets((assets) =>
+        assets.map((item) => (item.id === id ? { ...item, image: undefined } : item))
+      );
+    },
+    [patchRoleAssets, readOnly]
+  );
+
+  const addFrameRoleMark = useCallback(
+    (
+      rowId: string,
+      mark: { name: string; x: number; y: number; roleAssetId?: string }
+    ) => {
+      if (readOnly) return;
+      const row = table.rows.find((item) => item.id === rowId);
+      if (!row) return;
+      if (storyboardRowIsPassed(row)) {
+        onNotify?.('warn', '该镜头已通过，无法标注角色');
+        return;
+      }
+      patchRow(rowId, {
+        frameRoleMarks: appendStoryboardFrameRoleMark(row.frameRoleMarks, mark),
+      });
+    },
+    [onNotify, patchRow, readOnly, table.rows]
+  );
+
   const patchRows = useCallback(
     (rowIds: string[], patch: Partial<StoryboardTableRow>) => {
       const idSet = new Set(rowIds);
@@ -1350,6 +1453,118 @@ export default function StoryboardTablePanel({
     table.rows,
   ]);
 
+  const runRoleReplaceBatch = useCallback(async () => {
+    if (readOnly) return;
+    const preset = activeFeedbackCollagePreset;
+    if (!preset) {
+      onNotify?.('warn', '请先在编辑页选择拼图改图/角色替换能力（图生图）');
+      return;
+    }
+    if (!effectiveFeedbackCollageModelId) {
+      onNotify?.('warn', '请先在编辑页选择拼图改图模型');
+      return;
+    }
+    const roleAssets = table.roleAssets ?? [];
+    const eligible = listStoryboardRoleReplaceEligibleRows(table.rows, roleAssets);
+    if (!eligible.length) {
+      onNotify?.(
+        'warn',
+        '没有可替换的镜头（需有分镜图、画板角色标注，且解析页有对应参考图）'
+      );
+      return;
+    }
+    const tasks = planStoryboardRoleReplaceTasks(table.rows, roleAssets, feedbackCollageLimit);
+    if (!tasks.length) {
+      onNotify?.('warn', '没有可执行的拼图任务');
+      return;
+    }
+    const understandLabel = feedbackRedrawUnderstand ? '理解后生图' : '直发拼图提示';
+    if (
+      !window.confirm(
+        `按角色标注拼图替换 ${eligible.length} 镜？（每批最多 ${feedbackCollageLimit} 镜 · ${tasks.length} 张拼图 · ${understandLabel}）`
+      )
+    ) {
+      return;
+    }
+
+    setRoleReplaceBatchBusy(true);
+    setRoleReplaceBatchProgress({ done: 0, total: tasks.length });
+
+    let okTasks = 0;
+    let failTasks = 0;
+    let totalMatched = 0;
+
+    try {
+      for (const task of tasks) {
+        setRedrawBusyRowId(task.rowIds[0] ?? null);
+        try {
+          const outcome = await executeStoryboardRoleReplaceCollageBatch({
+            preset,
+            rows: task.rows,
+            roleAssets,
+            fieldCatalog: table.fieldCatalog,
+            ctx: parseCtx,
+            imageModelRegistryId: effectiveFeedbackCollageModelId,
+            understand: feedbackRedrawUnderstand,
+            chunkIndex: task.chunkIndex,
+          });
+          if (!outcome.ok) {
+            failTasks += 1;
+            onNotify?.('warn', `角色替换拼图 ${task.chunkIndex + 1} 失败：${outcome.error}`);
+            continue;
+          }
+
+          const { matchedCount, warn } = await commitSheetVisionSplit(
+            outcome.image,
+            task.rows,
+            table.fieldCatalog,
+            outcome.layout
+          );
+          totalMatched += matchedCount;
+          okTasks += 1;
+          if (warn) {
+            onNotify?.('warn', `角色替换拼图 ${task.chunkIndex + 1}：${warn}`);
+          }
+        } catch (error) {
+          failTasks += 1;
+          onNotify?.(
+            'warn',
+            error instanceof Error ? error.message : `角色替换拼图 ${task.chunkIndex + 1} 失败`
+          );
+        } finally {
+          setRoleReplaceBatchProgress({ done: okTasks + failTasks, total: tasks.length });
+        }
+      }
+
+      if (failTasks > 0) {
+        onNotify?.(
+          'warn',
+          `角色替换完成：成功 ${okTasks} 张，失败 ${failTasks} 张；已切分回填 ${totalMatched} 镜`
+        );
+      } else if (totalMatched > 0) {
+        onNotify?.('info', `角色替换完成：${okTasks} 张拼图，已切分回填 ${totalMatched} 镜`);
+      } else {
+        onNotify?.('warn', `角色替换 ${okTasks} 张完成，但未能自动切分回填，请检查镜号`);
+      }
+    } finally {
+      setRedrawBusyRowId(null);
+      setRoleReplaceBatchBusy(false);
+      setRoleReplaceBatchProgress(null);
+    }
+  }, [
+    activeFeedbackCollagePreset,
+    commitSheetVisionSplit,
+    effectiveFeedbackCollageModelId,
+    feedbackCollageLimit,
+    feedbackRedrawUnderstand,
+    onNotify,
+    parseCtx,
+    readOnly,
+    table.fieldCatalog,
+    table.roleAssets,
+    table.rows,
+  ]);
+
   const runSheetGen = useCallback(
     async (request: StoryboardSheetGenBatchRequest) => {
       const preset = redrawPresets.find((item) => item.id === request.presetId);
@@ -1676,6 +1891,11 @@ export default function StoryboardTablePanel({
     return listStoryboardFeedbackRedrawRows(table.rows).filter(isStoryboardFeedbackRedrawEligible).length;
   }, [table.rows]);
 
+  const roleReplaceEligibleCount = useMemo(
+    () => listStoryboardRoleReplaceEligibleRows(table.rows, table.roleAssets ?? []).length,
+    [table.roleAssets, table.rows]
+  );
+
   const rowInteraction = useMemo((): StoryboardRowInteractionValue => {
     return {
       rowCount: table.rows.length,
@@ -1758,7 +1978,7 @@ export default function StoryboardTablePanel({
             type="button"
             onClick={onClose}
             title="关闭（Esc）"
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/[0.05] text-gray-400 ring-1 ring-white/[0.07] transition-colors hover:bg-white/[0.08] hover:text-white outline-none focus-visible:ring-2 focus-visible:ring-violet-500/45"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/[0.05] text-gray-400 ring-1 ring-white/[0.07] transition-colors hover:bg-white/[0.08] hover:text-white outline-none focus-visible:ring-2 focus-visible:ring-white/25"
             aria-label="关闭"
           >
             <AppIcon name="close" className="h-4 w-4" />
@@ -1983,7 +2203,7 @@ export default function StoryboardTablePanel({
                 type="checkbox"
                 checked={allowOptimizeDialogue}
                 onChange={toggleAllowOptimizeDialogue}
-                className="h-3.5 w-3.5 rounded border-white/20 bg-white/5 text-violet-500"
+                className="h-3.5 w-3.5 rounded border-white/20 bg-white/5 text-white/80"
               />
               可改对白
             </label>
@@ -2025,7 +2245,7 @@ export default function StoryboardTablePanel({
                 step={0.5}
                 value={gridSecondsPerTile}
                 onChange={(e) => setGridSecondsPerTilePersisted(Number(e.target.value))}
-                className="h-8 w-[4.5rem] rounded-lg border border-white/[0.08] bg-black/20 px-2 text-[10px] text-gray-100 outline-none focus:border-violet-500/40 focus:ring-2 focus:ring-violet-500/15"
+                className="h-8 w-[4.5rem] rounded-lg bg-white/[0.05] ring-1 ring-white/[0.06] px-2 text-[10px] text-gray-100 outline-none focus-visible:ring-2 focus-visible:ring-white/25"
               />
               <span>秒</span>
             </label>
@@ -2066,6 +2286,8 @@ export default function StoryboardTablePanel({
           assetId={asset.id}
           rows={table.rows}
           fieldCatalog={table.fieldCatalog}
+          roleAssets={table.roleAssets ?? []}
+          roleAssetBusyId={roleAssetBusyId}
           parsePreset={activeParsePreset}
           parseCtx={parseCtx}
           activeRowId={activeRowId}
@@ -2086,6 +2308,12 @@ export default function StoryboardTablePanel({
           onApplySheetPreview={applySheetPreview}
           onNotify={onNotify}
           onOpenEdit={() => setPanelViewMode('edit')}
+          onAddRoleAsset={addRoleAsset}
+          onRemoveRoleAsset={removeRoleAsset}
+          onRenameRoleAsset={renameRoleAsset}
+          onAssignRoleAssetImage={assignRoleAssetImage}
+          onClearRoleAssetImage={clearRoleAssetImage}
+          onPreviewRoleAssetImage={setLightboxSrc}
         />
       ) : isGridView ? (
         <StoryboardTableGridPreview
@@ -2122,6 +2350,7 @@ export default function StoryboardTablePanel({
         <StoryboardTableEditView
           key={asset.id}
           rows={table.rows}
+          roleAssets={table.roleAssets ?? []}
           activeRowId={activeRowId}
           imageBusyRowId={imageBusyRowId}
           redrawBusyRowId={redrawBusyRowId}
@@ -2143,13 +2372,18 @@ export default function StoryboardTablePanel({
           interaction={rowInteraction}
           onActiveRowIdChange={setActiveRowId}
           onPatchRows={patchRows}
+          onAddFrameRoleMark={!readOnly ? addFrameRoleMark : undefined}
+          roleReplaceEligibleCount={roleReplaceEligibleCount}
+          roleReplaceBatchBusy={roleReplaceBatchBusy}
+          roleReplaceBatchProgress={roleReplaceBatchProgress}
+          onRoleReplaceBatch={!readOnly ? () => void runRoleReplaceBatch() : undefined}
           readOnly={readOnly}
           redrawRowDisabledReason={redrawRowDisabledReason}
           editScrollRef={editViewRef}
           footerAddRow={
             !readOnly ? (
               <button type="button" onClick={addRow} className={STORYBOARD_ADD_ROW_DASHED}>
-                <span className="text-base leading-none text-violet-400/80">+</span>
+                <span className="text-base leading-none text-white/60">+</span>
                 添加镜头
               </button>
             ) : null

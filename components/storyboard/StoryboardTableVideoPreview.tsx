@@ -226,11 +226,11 @@ export default function StoryboardTableVideoPreview({
           className="group relative flex shrink-0 cursor-ns-resize items-center justify-center touch-none py-1"
           style={{ height: splitterPx }}
         >
-          <div className="absolute inset-x-3 top-1/2 h-px -translate-y-1/2 bg-white/[0.06] transition-colors group-hover:bg-violet-400/25" />
-          <div className="relative flex items-center gap-0.5 rounded-full border border-white/[0.08] bg-[#121218]/90 px-2 py-0.5 shadow-sm transition-colors group-hover:border-violet-400/30 group-active:border-violet-400/45">
-            <span className="h-0.5 w-0.5 rounded-full bg-gray-500 group-hover:bg-violet-300" />
-            <span className="h-0.5 w-0.5 rounded-full bg-gray-500 group-hover:bg-violet-300" />
-            <span className="h-0.5 w-0.5 rounded-full bg-gray-500 group-hover:bg-violet-300" />
+          <div className="absolute inset-x-3 top-1/2 h-px -translate-y-1/2 bg-white/[0.06] transition-colors group-hover:bg-white/15" />
+          <div className="relative flex items-center gap-0.5 rounded-full border border-white/[0.08] bg-[#121218]/90 px-2 py-0.5 shadow-sm transition-colors group-hover:border-white/20 group-active:border-white/30">
+            <span className="h-0.5 w-0.5 rounded-full bg-gray-500 group-hover:bg-white/70" />
+            <span className="h-0.5 w-0.5 rounded-full bg-gray-500 group-hover:bg-white/70" />
+            <span className="h-0.5 w-0.5 rounded-full bg-gray-500 group-hover:bg-white/70" />
           </div>
         </div>
 

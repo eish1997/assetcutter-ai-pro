@@ -18,23 +18,32 @@ import {
   parseStoryboardBulkTextWithAiFallback,
 } from '../../services/storyboardTableBulkAiDetect';
 import type { CapabilityExecuteContext } from '../../services/capabilityExecutor';
-import type { CustomAppModule, StoryboardParseFieldDef, StoryboardTableRow } from '../../types';
+import type { CustomAppModule, StoryboardParseFieldDef, StoryboardRoleAsset, StoryboardTableRow } from '../../types';
 import {
   STORYBOARD_FIELD_INPUT,
   STORYBOARD_TOOL_BTN_NEUTRAL,
   STORYBOARD_TOOL_BTN_PRIMARY,
 } from './storyboardTableUi';
+import StoryboardRoleAssetStrip from './StoryboardRoleAssetStrip';
 
 type Props = {
   assetId: string;
   rows: StoryboardTableRow[];
   fieldCatalog: StoryboardParseFieldDef[];
+  roleAssets: StoryboardRoleAsset[];
+  roleAssetBusyId?: string | null;
   parsePreset?: CustomAppModule | null;
   parseCtx?: CapabilityExecuteContext;
   readOnly?: boolean;
   onImport: (result: { catalog: StoryboardParseFieldDef[]; rows: StoryboardTableRow[] }) => void;
   onDraftChange?: () => void;
   onNotify?: (level: 'info' | 'warn' | 'error', message: string) => void;
+  onAddRoleAsset: () => void;
+  onRemoveRoleAsset: (id: string) => void;
+  onRenameRoleAsset: (id: string, name: string) => void;
+  onAssignRoleAssetImage: (id: string, file: File) => void;
+  onClearRoleAssetImage: (id: string) => void;
+  onPreviewRoleAssetImage?: (src: string) => void;
 };
 
 const PIPE_PLACEHOLDER = `可直接粘贴任意格式分镜文本，点「AI 识别」会先判定是否为分镜脚本，再规范化为表格。
@@ -55,12 +64,20 @@ export default function StoryboardTableBulkInput({
   assetId,
   rows,
   fieldCatalog,
+  roleAssets,
+  roleAssetBusyId = null,
   parsePreset = null,
   parseCtx,
   readOnly = false,
   onImport,
   onDraftChange,
   onNotify,
+  onAddRoleAsset,
+  onRemoveRoleAsset,
+  onRenameRoleAsset,
+  onAssignRoleAssetImage,
+  onClearRoleAssetImage,
+  onPreviewRoleAssetImage,
 }: Props) {
   const [pipeText, setPipeText] = useState('');
   const [importBusy, setImportBusy] = useState(false);
@@ -216,7 +233,7 @@ export default function StoryboardTableBulkInput({
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-3 py-2.5">
       <div className="mb-2 flex shrink-0 flex-wrap items-center gap-2">
         <span className="text-[10px] font-semibold text-gray-400">解析</span>
-        <span className="rounded-md bg-violet-500/15 px-1.5 py-0.5 text-[9px] font-medium text-violet-200/90 ring-1 ring-violet-400/20">
+        <span className="rounded-md bg-white/[0.08] px-1.5 py-0.5 text-[9px] font-medium text-gray-200 ring-1 ring-white/12">
           分镜文本
         </span>
         {preview?.rows.length ? (
@@ -245,26 +262,48 @@ export default function StoryboardTableBulkInput({
         </button>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col space-y-1.5">
-        <textarea
-          value={pipeText}
-          readOnly={readOnly}
-          placeholder={PIPE_PLACEHOLDER}
-          onChange={(event) => handleTextChange(event.target.value)}
-          className={`${STORYBOARD_FIELD_INPUT} min-h-[10rem] flex-1 resize-none font-mono text-[10px] leading-relaxed`}
-        />
-        {aiRejectReason ? (
-          <p className="text-[9px] text-amber-300/90">{aiRejectReason}</p>
-        ) : preview?.errors.length ? (
-          <p className="text-[9px] text-amber-300/90">{preview.errors[0]}</p>
-        ) : null}
-        {canUseAi ? (
-          <p className="text-[9px] text-gray-600">
-            「AI 识别」：先判定是否为分镜脚本，是则规范化为管道符表格；已是标准表格可直接导入。导入时若规则未识别会自动走 AI。
-          </p>
-        ) : (
-          <p className="text-[9px] text-gray-600">管道符分隔；首行可为列名；「-」视为空。</p>
-        )}
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div className="flex min-h-0 flex-1 flex-col space-y-1.5 overflow-hidden">
+          <textarea
+            value={pipeText}
+            readOnly={readOnly}
+            placeholder={PIPE_PLACEHOLDER}
+            onChange={(event) => handleTextChange(event.target.value)}
+            className={`${STORYBOARD_FIELD_INPUT} min-h-[8rem] flex-1 resize-none font-mono text-[10px] leading-relaxed`}
+          />
+          {aiRejectReason ? (
+            <p className="shrink-0 text-[9px] text-amber-300/90">{aiRejectReason}</p>
+          ) : preview?.errors.length ? (
+            <p className="shrink-0 text-[9px] text-amber-300/90">{preview.errors[0]}</p>
+          ) : null}
+          {canUseAi ? (
+            <p className="shrink-0 text-[9px] text-gray-600">
+              「AI 识别」：先判定是否为分镜脚本，是则规范化为管道符表格；已是标准表格可直接导入。导入时若规则未识别会自动走 AI。
+            </p>
+          ) : (
+            <p className="shrink-0 text-[9px] text-gray-600">管道符分隔；首行可为列名；「-」视为空。</p>
+          )}
+        </div>
+
+        <div className="mt-2 shrink-0 border-t border-white/[0.06] pt-2">
+          <div className="mb-1.5 flex items-center gap-1.5">
+            <span className="text-[10px] font-semibold text-gray-400">角色资产</span>
+            <span className="rounded-md bg-white/[0.06] px-1.5 py-0.5 text-[9px] text-gray-400">
+              {roleAssets.length} 个
+            </span>
+          </div>
+          <StoryboardRoleAssetStrip
+            roleAssets={roleAssets}
+            readOnly={readOnly}
+            busyId={roleAssetBusyId}
+            onAdd={onAddRoleAsset}
+            onRemove={onRemoveRoleAsset}
+            onRename={onRenameRoleAsset}
+            onAssignImage={onAssignRoleAssetImage}
+            onClearImage={onClearRoleAssetImage}
+            onPreviewImage={onPreviewRoleAssetImage}
+          />
+        </div>
       </div>
     </div>
   );

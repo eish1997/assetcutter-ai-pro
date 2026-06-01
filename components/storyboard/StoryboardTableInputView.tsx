@@ -5,7 +5,7 @@ import React, {
   useMemo,
   useState,
 } from 'react';
-import type { CustomAppModule, StoryboardParseFieldDef, StoryboardTableRow } from '../../types';
+import type { CustomAppModule, StoryboardParseFieldDef, StoryboardRoleAsset, StoryboardTableRow } from '../../types';
 import { computeStoryboardInputCoverage } from '../../services/storyboardTableInput';
 import type { CapabilityExecuteContext } from '../../services/capabilityExecutor';
 import { storyboardInputRowDomId } from './storyboardTableDom';
@@ -30,6 +30,8 @@ type Props = {
   assetId: string;
   rows: StoryboardTableRow[];
   fieldCatalog: StoryboardParseFieldDef[];
+  roleAssets: StoryboardRoleAsset[];
+  roleAssetBusyId?: string | null;
   parsePreset?: CustomAppModule | null;
   parseCtx?: CapabilityExecuteContext;
   activeRowId: string | null;
@@ -53,6 +55,12 @@ type Props = {
   onApplySheetPreview?: (previewId: string) => Promise<void>;
   onNotify?: (level: 'info' | 'warn' | 'error', message: string) => void;
   onOpenEdit: () => void;
+  onAddRoleAsset: () => void;
+  onRemoveRoleAsset: (id: string) => void;
+  onRenameRoleAsset: (id: string, name: string) => void;
+  onAssignRoleAssetImage: (id: string, file: File) => void;
+  onClearRoleAssetImage: (id: string) => void;
+  onPreviewRoleAssetImage?: (src: string) => void;
 };
 
 const StoryboardTableInputView = forwardRef<StoryboardTableInputViewHandle, Props>(
@@ -61,6 +69,8 @@ const StoryboardTableInputView = forwardRef<StoryboardTableInputViewHandle, Prop
       assetId,
       rows,
       fieldCatalog,
+      roleAssets,
+      roleAssetBusyId = null,
       parsePreset,
       parseCtx,
       activeRowId,
@@ -81,6 +91,12 @@ const StoryboardTableInputView = forwardRef<StoryboardTableInputViewHandle, Prop
       onApplySheetPreview,
       onNotify,
       onOpenEdit,
+      onAddRoleAsset,
+      onRemoveRoleAsset,
+      onRenameRoleAsset,
+      onAssignRoleAssetImage,
+      onClearRoleAssetImage,
+      onPreviewRoleAssetImage,
     },
     ref
   ) {
@@ -105,12 +121,20 @@ const StoryboardTableInputView = forwardRef<StoryboardTableInputViewHandle, Prop
             assetId={assetId}
             rows={rows}
             fieldCatalog={fieldCatalog}
+            roleAssets={roleAssets}
+            roleAssetBusyId={roleAssetBusyId}
             parsePreset={parsePreset}
             parseCtx={parseCtx}
             readOnly={readOnly}
             onImport={onImportRows}
             onDraftChange={() => setDraftTick((tick) => tick + 1)}
             onNotify={onNotify}
+            onAddRoleAsset={onAddRoleAsset}
+            onRemoveRoleAsset={onRemoveRoleAsset}
+            onRenameRoleAsset={onRenameRoleAsset}
+            onAssignRoleAssetImage={onAssignRoleAssetImage}
+            onClearRoleAssetImage={onClearRoleAssetImage}
+            onPreviewRoleAssetImage={onPreviewRoleAssetImage}
           />
         </section>
 
@@ -137,14 +161,14 @@ const StoryboardTableInputView = forwardRef<StoryboardTableInputViewHandle, Prop
           />
         </section>
 
-        <section className={`${STORYBOARD_INPUT_PREVIEW_RAIL} rounded-2xl border border-white/[0.08] bg-black/20`}>
+        <section className={`${STORYBOARD_INPUT_PREVIEW_RAIL} rounded-2xl border border-white/[0.08] bg-white/[0.05]`}>
           <div className="flex shrink-0 flex-col gap-1 border-b border-white/[0.06] px-2.5 py-2">
             <div className="flex items-center gap-1.5">
               <h2 className="text-[10px] font-semibold text-gray-200">解析预览</h2>
               <button
                 type="button"
                 onClick={onOpenEdit}
-                className="ml-auto text-[9px] font-semibold text-violet-300/90 transition-colors hover:text-violet-200"
+                className="ml-auto text-[9px] font-semibold text-gray-300 transition-colors hover:text-white"
               >
                 编辑 →
               </button>

@@ -6,7 +6,7 @@ export const STORYBOARD_INPUT_VIEW_GRID =
   'grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-hidden lg:grid-cols-[minmax(0,1fr)_minmax(0,0.95fr)_minmax(18rem,22rem)] xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(20rem,24rem)]';
 
 export const STORYBOARD_INPUT_COLUMN_SHELL =
-  'flex min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-white/[0.08] bg-black/20';
+  'flex min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-white/[0.08] bg-white/[0.05]';
 
 export const STORYBOARD_INPUT_PREVIEW_RAIL =
   'flex min-h-0 min-w-0 max-w-full flex-col overflow-hidden lg:max-w-none';
@@ -43,14 +43,15 @@ export const STORYBOARD_PAD_ROW_BAR = 'px-2.5 py-1.5';
 export const STORYBOARD_COLUMN_HEAD = 'mb-1 px-0.5 text-[10px] font-semibold text-gray-300';
 export const STORYBOARD_SCROLL_MT = 'scroll-mt-2';
 
+/** 与全局输入框一致的白色底样式 */
 export const STORYBOARD_FIELD_INPUT =
-  'w-full rounded-lg border border-white/[0.08] bg-black/20 px-2 py-1.5 text-[11px] text-gray-100 outline-none transition-[border-color,box-shadow] placeholder:text-gray-600 focus:border-violet-500/40 focus:ring-2 focus:ring-violet-500/15';
+  'w-full rounded-lg bg-white/[0.05] ring-1 ring-white/[0.06] px-2 py-1.5 text-[11px] text-gray-100 outline-none transition-[box-shadow] placeholder:text-gray-600 focus-visible:ring-2 focus-visible:ring-white/25';
 
 export const STORYBOARD_ROW_SHELL =
   'rounded-2xl border transition-[border-color,background-color,box-shadow] duration-200';
 
 export const STORYBOARD_ROW_ACTIVE =
-  'border-violet-400/30 bg-violet-500/[0.06] shadow-[0_0_0_1px_rgba(167,139,250,0.22),0_12px_32px_-12px_rgba(124,58,237,0.35)]';
+  'border-white/20 bg-white/[0.06] shadow-[0_0_0_1px_rgba(255,255,255,0.12),0_12px_32px_-12px_rgba(0,0,0,0.35)]';
 
 export const STORYBOARD_ROW_IDLE =
   'border-white/[0.06] bg-white/[0.025] shadow-[0_4px_24px_-8px_rgba(0,0,0,0.45)] hover:border-white/[0.1] hover:bg-white/[0.035]';
@@ -60,20 +61,20 @@ export const STORYBOARD_ROW_HISTORY_HIGHLIGHT =
   'border-amber-400/75 bg-amber-500/[0.08] ring-2 ring-amber-400/60 shadow-[0_0_0_1px_rgba(251,191,36,0.45),0_0_20px_-6px_rgba(251,191,36,0.35)]';
 
 export const STORYBOARD_ROW_ACTIVE_HISTORY_HIGHLIGHT =
-  'border-amber-400/55 ring-2 ring-amber-400/55 shadow-[0_0_0_1px_rgba(251,191,36,0.4),0_12px_32px_-12px_rgba(124,58,237,0.35)]';
+  'border-amber-400/55 ring-2 ring-amber-400/55 shadow-[0_0_0_1px_rgba(251,191,36,0.4),0_12px_32px_-12px_rgba(0,0,0,0.35)]';
 
 /** 画板框选多选时的镜头高亮 */
 export const STORYBOARD_ROW_CANVAS_MULTI_SELECTED =
   'border-teal-400/70 bg-teal-500/[0.07] ring-2 ring-teal-400/55 shadow-[0_0_0_1px_rgba(45,212,191,0.35)]';
 
 export const STORYBOARD_TOOL_BTN =
-  'inline-flex h-7 items-center justify-center rounded-lg px-2.5 text-[10px] font-semibold transition-colors outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40';
+  'inline-flex h-7 items-center justify-center rounded-lg px-2.5 text-[10px] font-semibold transition-colors outline-none focus-visible:ring-2 focus-visible:ring-white/25';
 
 export const STORYBOARD_TOOL_BTN_NEUTRAL =
   `${STORYBOARD_TOOL_BTN} bg-white/[0.04] text-gray-300 ring-1 ring-white/[0.07] hover:bg-white/[0.08] hover:text-white`;
 
 export const STORYBOARD_TOOL_BTN_PRIMARY =
-  `${STORYBOARD_TOOL_BTN} bg-violet-600 text-white shadow-[0_4px_14px_-4px_rgba(124,58,237,0.55)] hover:bg-violet-500`;
+  `${STORYBOARD_TOOL_BTN} bg-white/[0.12] text-white ring-1 ring-white/[0.12] hover:bg-white/[0.18]`;
 
 export const STORYBOARD_TOOL_BTN_GHOST =
   `${STORYBOARD_TOOL_BTN} text-gray-500 hover:bg-white/[0.05] hover:text-gray-200`;
@@ -96,7 +97,7 @@ export const STORYBOARD_OUTLINE_ITEM =
   'flex w-full text-left transition-colors';
 
 export const STORYBOARD_OUTLINE_ITEM_ACTIVE =
-  'bg-violet-500/12 ring-1 ring-violet-400/25';
+  'bg-white/[0.08] ring-1 ring-white/15';
 
 export const STORYBOARD_OUTLINE_ITEM_IDLE = 'hover:bg-white/[0.04]';
 
@@ -104,10 +105,10 @@ export const STORYBOARD_ROW_ACTION =
   'inline-flex h-7 items-center justify-center rounded-lg px-2.5 text-[10px] font-semibold transition-colors disabled:cursor-not-allowed';
 
 export const STORYBOARD_ROW_ICON_BTN =
-  'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-gray-500 transition-colors outline-none hover:bg-white/[0.06] hover:text-white focus-visible:ring-2 focus-visible:ring-violet-500/40 disabled:cursor-not-allowed disabled:opacity-30';
+  'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-gray-500 transition-colors outline-none hover:bg-white/[0.06] hover:text-white focus-visible:ring-2 focus-visible:ring-white/25 disabled:cursor-not-allowed disabled:opacity-30';
 
 export const STORYBOARD_ADD_ROW_DASHED =
-  `flex w-full items-center justify-center ${STORYBOARD_GAP_TIGHT} rounded-xl border border-dashed border-white/[0.1] py-2 text-[10px] font-medium text-gray-500 transition-colors hover:border-violet-400/35 hover:bg-violet-500/[0.04] hover:text-violet-200/90`;
+  `flex w-full items-center justify-center ${STORYBOARD_GAP_TIGHT} rounded-xl border border-dashed border-white/[0.1] py-2 text-[10px] font-medium text-gray-500 transition-colors hover:border-white/25 hover:bg-white/[0.04] hover:text-white/90`;
 
 /** 分镜合成卡网格（与侧栏合成卡同组件；多列自动换行、按内容增高） */
 export const STORYBOARD_GRID_PREVIEW =
@@ -125,18 +126,18 @@ export const STORYBOARD_VIEW_TOGGLE =
   'inline-flex h-7 items-center rounded-lg bg-white/[0.04] p-0.5 ring-1 ring-white/[0.07]';
 
 export const STORYBOARD_VIEW_TOGGLE_BTN =
-  'rounded-md px-2.5 py-1 text-[10px] font-semibold transition-colors outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40';
+  'rounded-md px-2.5 py-1 text-[10px] font-semibold transition-colors outline-none focus-visible:ring-2 focus-visible:ring-white/25';
 
-export const STORYBOARD_VIEW_TOGGLE_ACTIVE = 'bg-violet-600/90 text-white shadow-sm';
+export const STORYBOARD_VIEW_TOGGLE_ACTIVE = 'bg-white/10 text-white ring-1 ring-white/15 shadow-sm';
 
 export const STORYBOARD_VIEW_TOGGLE_IDLE =
   'text-gray-500 hover:bg-white/[0.06] hover:text-gray-200';
 
 export const STORYBOARD_VIDEO_ICON_BTN =
-  'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 disabled:cursor-not-allowed disabled:opacity-40';
+  'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors outline-none focus-visible:ring-2 focus-visible:ring-white/25 disabled:cursor-not-allowed disabled:opacity-40';
 
 export const STORYBOARD_VIDEO_ICON_BTN_PRIMARY =
-  `${STORYBOARD_VIDEO_ICON_BTN} bg-violet-600 text-white shadow-[0_4px_14px_-4px_rgba(124,58,237,0.55)] hover:bg-violet-500`;
+  `${STORYBOARD_VIDEO_ICON_BTN} bg-white/[0.12] text-white ring-1 ring-white/[0.12] hover:bg-white/[0.18]`;
 
 export const STORYBOARD_VIDEO_ICON_BTN_NEUTRAL =
   `${STORYBOARD_VIDEO_ICON_BTN} bg-white/[0.04] text-gray-300 ring-1 ring-white/[0.07] hover:bg-white/[0.08] hover:text-white`;

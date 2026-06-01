@@ -59,17 +59,17 @@ export default function StoryboardVideoSeekBar({ value, max, disabled, onChange 
         window.addEventListener('pointermove', onMove);
         window.addEventListener('pointerup', onUp);
       }}
-      className={`group relative h-3 flex-1 min-w-[6rem] cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-violet-500/35 ${
+      className={`group relative h-3 flex-1 min-w-[6rem] cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-white/25 ${
         disabled ? 'cursor-not-allowed opacity-40' : ''
       }`}
     >
       <div className="absolute inset-x-0 top-1/2 h-0.5 -translate-y-1/2 rounded-full bg-white/[0.08]" />
       <div
-        className="absolute left-0 top-1/2 h-0.5 -translate-y-1/2 rounded-full bg-gradient-to-r from-violet-600/90 to-violet-400/80"
+        className="absolute left-0 top-1/2 h-0.5 -translate-y-1/2 rounded-full bg-gradient-to-r from-white/70 to-white/50"
         style={{ width: `${pct}%` }}
       />
       <div
-        className="absolute top-1/2 h-2.5 w-0.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-violet-300 shadow-[0_0_6px_rgba(167,139,250,0.55)] opacity-80 transition-opacity group-hover:opacity-100"
+        className="absolute top-1/2 h-2.5 w-0.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white/70 shadow-[0_0_6px_rgba(255,255,255,0.35)] opacity-80 transition-opacity group-hover:opacity-100"
         style={{ left: `${pct}%` }}
       />
     </div>

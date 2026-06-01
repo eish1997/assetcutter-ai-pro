@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { StoryboardParseFieldDef, StoryboardTableRow } from '../types';
 import {
   ensureShotCharacterFieldOnRow,
+  extractCharacterNamesFromVisualDescription,
   extractSpeakerFromStoryboardLine,
   inferCharacterNamesFromFieldItems,
   inferCharacterNamesFromShotRow,
@@ -69,20 +70,49 @@ describe('inferCharacterNamesFromFieldItems', () => {
       ])
     ).toEqual([]);
   });
+
+  it('extracts characters from visual description actions', () => {
+    expect(
+      inferCharacterNamesFromFieldItems([
+        { label: '画面内容', value: '张三走向窗口，李四坐在桌旁' },
+      ])
+    ).toEqual(['张三', '李四']);
+  });
+});
+
+describe('extractCharacterNamesFromVisualDescription', () => {
+  it('reads subject-action and paired names', () => {
+    expect(
+      extractCharacterNamesFromVisualDescription('张三走向窗口，李四和王五在对话').sort()
+    ).toEqual(['张三', '李四', '王五']);
+  });
 });
 
 describe('inferCharacterNamesFromShotRow', () => {
-  it('reads from shot character column when present', () => {
+  it('merges shot character column with visual description', () => {
     const cat: StoryboardParseFieldDef[] = [
       ...catalog,
       { id: 'f_shot_char', label: STORYBOARD_SHOT_CHARACTER_FIELD_LABEL, order: 5, redrawInclude: false, kind: 'text' },
     ];
     expect(
       inferCharacterNamesFromShotRow(
-        mockRow({ f_shot_char: '小明、小红', f_dialogue: '张三：你好' }),
+        mockRow({
+          f_shot_char: '小明、小红',
+          f_dialogue: '张三：你好',
+          f_visual: '张三走向门口',
+        }),
         cat
       )
-    ).toEqual(['小明', '小红']);
+    ).toEqual(['小明', '小红', '张三']);
+  });
+
+  it('falls back to visual description when no dedicated column', () => {
+    expect(
+      inferCharacterNamesFromShotRow(
+        mockRow({ f_visual: '叶不凡站在天台边缘' }),
+        catalog
+      )
+    ).toEqual(['叶不凡']);
   });
 });
 

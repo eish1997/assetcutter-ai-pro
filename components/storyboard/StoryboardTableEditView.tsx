@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
-import type { StoryboardTableRow } from '../../types';
+import type { StoryboardRoleAsset, StoryboardTableRow } from '../../types';
 import { readLocalJson, writeLocalJson } from '../../services/clientPersist';
 import {
   STORYBOARD_OUTLINE_ROW_ESTIMATE_PX,
@@ -41,6 +41,7 @@ export type StoryboardTableEditViewHandle = {
 
 type Props = {
   rows: StoryboardTableRow[];
+  roleAssets?: StoryboardRoleAsset[];
   activeRowId: string | null;
   imageBusyRowId: string | null;
   redrawBusyRowId: string | null;
@@ -62,6 +63,14 @@ type Props = {
   interaction: StoryboardRowInteractionValue;
   onActiveRowIdChange: (rowId: string) => void;
   onPatchRows?: (rowIds: string[], patch: Partial<StoryboardTableRow>) => void;
+  onAddFrameRoleMark?: (
+    rowId: string,
+    mark: { name: string; x: number; y: number; roleAssetId?: string }
+  ) => void;
+  roleReplaceEligibleCount?: number;
+  roleReplaceBatchBusy?: boolean;
+  roleReplaceBatchProgress?: { done: number; total: number } | null;
+  onRoleReplaceBatch?: () => void;
   readOnly?: boolean;
   redrawRowDisabledReason: (row: StoryboardTableRow) => string | undefined;
   footerAddRow?: React.ReactNode;
@@ -70,6 +79,7 @@ type Props = {
 
 export default function StoryboardTableEditView({
   rows,
+  roleAssets = [],
   activeRowId,
   imageBusyRowId,
   redrawBusyRowId,
@@ -91,6 +101,11 @@ export default function StoryboardTableEditView({
   interaction,
   onActiveRowIdChange,
   onPatchRows,
+  onAddFrameRoleMark,
+  roleReplaceEligibleCount = 0,
+  roleReplaceBatchBusy = false,
+  roleReplaceBatchProgress = null,
+  onRoleReplaceBatch,
   readOnly = false,
   redrawRowDisabledReason,
   footerAddRow,
@@ -297,7 +312,11 @@ export default function StoryboardTableEditView({
 
   const redrawReason = activeRow ? redrawRowDisabledReason(activeRow) : undefined;
   const redrawDisabled =
-    !activeRow || Boolean(redrawReason) || redrawBusyRowId != null || feedbackBatchBusy;
+    !activeRow ||
+    Boolean(redrawReason) ||
+    redrawBusyRowId != null ||
+    feedbackBatchBusy ||
+    roleReplaceBatchBusy;
 
   return (
     <StoryboardRowInteractionProvider value={interaction}>
@@ -334,56 +353,36 @@ export default function StoryboardTableEditView({
                 onUnlock={() => batchLock(false)}
                 onApplyFeedback={batchApplyFeedback}
               />
-            </div>
-            <div ref={canvasScrollRef} className={`${STORYBOARD_BODY_SCROLL} min-h-0 flex-1 pr-0.5`}>
-              <StoryboardEditCanvasGrid
-                rows={rows}
-                activeRowId={activeRowId}
-                selectedRowIds={canvasSelectedRowIds}
-                imageBusyRowId={imageBusyRowId}
-                highlightedRowIds={highlightedRowIds}
-                previewRowImages={previewRowImages}
-                readOnly={readOnly || interaction.readOnly}
-                onSelectRow={handleCanvasSelectRow}
-                onMarqueeSelect={handleMarqueeSelect}
-                onPreviewImage={interaction.previewImage}
-              />
-              {footerAddRow ? <div className="mt-2">{footerAddRow}</div> : null}
-            </div>
-          </div>
-
-          <aside className={`${STORYBOARD_SIDE_RAIL} ${STORYBOARD_EDIT_EDITOR_RAIL_W} shrink-0`}>
-            <div className="mb-1 flex shrink-0 flex-wrap items-center justify-between gap-2 px-0.5">
-              <p className={`${STORYBOARD_COLUMN_HEAD} !mb-0`}>镜头编辑</p>
-              <div className="flex flex-wrap items-center justify-end gap-1.5">
-                {editDisplayMode === 'feedback' && onFeedbackBatchRedraw ? (
-                  <>
-                    <CustomDropdown
-                      value={String(feedbackCollageLimit)}
-                      options={collageLimitOptions}
-                      disabled={feedbackBatchBusy}
-                      onChange={(value) => onFeedbackCollageLimitChange?.(Number(value))}
-                      triggerClassName="!h-7 !min-w-[5.5rem] !px-2 !text-[10px]"
-                      triggerAriaLabel="每批拼图镜头上限"
+              {onFeedbackBatchRedraw || onRoleReplaceBatch ? (
+                <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                  <CustomDropdown
+                    value={String(feedbackCollageLimit)}
+                    options={collageLimitOptions}
+                    disabled={roleReplaceBatchBusy || feedbackBatchBusy}
+                    onChange={(value) => onFeedbackCollageLimitChange?.(Number(value))}
+                    triggerClassName="!h-7 !min-w-[5.5rem] !px-2 !text-[10px]"
+                    triggerAriaLabel="每批拼图镜头上限"
+                  />
+                  <label
+                    className="inline-flex shrink-0 cursor-pointer items-center gap-1.5 text-[10px] text-gray-500"
+                    title="开启：拼图提示先经理解 LLM；关闭：直发拼图改图/替换提示"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={feedbackRedrawUnderstand}
+                      onChange={() => onToggleFeedbackRedrawUnderstand?.()}
+                      disabled={roleReplaceBatchBusy || feedbackBatchBusy}
+                      className="h-3.5 w-3.5 rounded border-white/20 bg-white/5 text-white/80"
                     />
-                    <label
-                      className="inline-flex shrink-0 cursor-pointer items-center gap-1.5 text-[10px] text-gray-500"
-                      title="开启：拼图 + 反馈先经理解 LLM；关闭：直发拼图改图提示"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={feedbackRedrawUnderstand}
-                        onChange={() => onToggleFeedbackRedrawUnderstand?.()}
-                        disabled={feedbackBatchBusy}
-                        className="h-3.5 w-3.5 rounded border-white/20 bg-white/5 text-violet-500"
-                      />
-                      理解
-                    </label>
+                    理解
+                  </label>
+                  {onFeedbackBatchRedraw ? (
                     <button
                       type="button"
-                      title={`拼图改图：每 ${feedbackCollageLimit} 镜拼一张，改完再切分回填`}
+                      title={`拼图改图：每 ${feedbackCollageLimit} 镜拼一张，按修改反馈改图并切分回填`}
                       disabled={
                         feedbackBatchBusy ||
+                        roleReplaceBatchBusy ||
                         feedbackRedrawEligibleCount <= 0 ||
                         redrawBusyRowId != null
                       }
@@ -396,13 +395,60 @@ export default function StoryboardTableEditView({
                         ? `拼图改图 ${feedbackBatchProgress.done}/${feedbackBatchProgress.total}`
                         : `拼图改图${feedbackRedrawEligibleCount > 0 ? ` (${feedbackRedrawEligibleCount})` : ''}`}
                     </button>
-                  </>
-                ) : null}
+                  ) : null}
+                  {onRoleReplaceBatch ? (
+                    <button
+                      type="button"
+                      title={`拼图替换：每 ${feedbackCollageLimit} 镜拼一张，用解析页角色参考图替换标注位置并切分回填`}
+                      disabled={
+                        roleReplaceBatchBusy ||
+                        feedbackBatchBusy ||
+                        roleReplaceEligibleCount <= 0 ||
+                        redrawBusyRowId != null
+                      }
+                      onClick={onRoleReplaceBatch}
+                      className={`${STORYBOARD_TOOL_BTN_PRIMARY} shrink-0 !px-2.5 ${
+                        roleReplaceBatchBusy ? 'opacity-80' : ''
+                      }`}
+                    >
+                      {roleReplaceBatchBusy && roleReplaceBatchProgress
+                        ? `拼图替换 ${roleReplaceBatchProgress.done}/${roleReplaceBatchProgress.total}`
+                        : `拼图替换角色${roleReplaceEligibleCount > 0 ? ` (${roleReplaceEligibleCount})` : ''}`}
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+            <div ref={canvasScrollRef} className={`${STORYBOARD_BODY_SCROLL} min-h-0 flex-1 pr-0.5`}>
+              <StoryboardEditCanvasGrid
+                rows={rows}
+                activeRowId={activeRowId}
+                selectedRowIds={canvasSelectedRowIds}
+                imageBusyRowId={imageBusyRowId}
+                highlightedRowIds={highlightedRowIds}
+                previewRowImages={previewRowImages}
+                roleAssets={roleAssets}
+                readOnly={readOnly || interaction.readOnly}
+                onSelectRow={handleCanvasSelectRow}
+                onMarqueeSelect={handleMarqueeSelect}
+                onPreviewImage={interaction.previewImage}
+                onAddFrameRoleMark={onAddFrameRoleMark}
+              />
+              {footerAddRow ? <div className="mt-2">{footerAddRow}</div> : null}
+            </div>
+          </div>
+
+          <aside className={`${STORYBOARD_SIDE_RAIL} ${STORYBOARD_EDIT_EDITOR_RAIL_W} shrink-0`}>
+            <div className="mb-1 flex shrink-0 flex-wrap items-center justify-between gap-2 px-0.5">
+              <p className={`${STORYBOARD_COLUMN_HEAD} !mb-0`}>镜头编辑</p>
+              <div className="flex flex-wrap items-center justify-end gap-1.5">
                 {onClearAllFeedback && feedbackWrittenCount > 0 ? (
                   <button
                     type="button"
                     title="清除全表所有镜头的修改反馈"
-                    disabled={feedbackBatchBusy || redrawBusyRowId != null}
+                    disabled={
+                      feedbackBatchBusy || roleReplaceBatchBusy || redrawBusyRowId != null
+                    }
                     onClick={onClearAllFeedback}
                     className={`${STORYBOARD_TOOL_BTN_NEUTRAL} shrink-0 !px-2.5`}
                   >
@@ -420,7 +466,7 @@ export default function StoryboardTableEditView({
                   onClick={toggleEditDisplayMode}
                   className={`${STORYBOARD_TOOL_BTN_NEUTRAL} shrink-0 !px-2 ${
                     editDisplayMode === 'feedback'
-                      ? 'bg-violet-500/15 text-violet-200 ring-violet-400/30'
+                      ? 'bg-white/[0.08] text-gray-200 ring-white/15'
                       : ''
                   }`}
                 >

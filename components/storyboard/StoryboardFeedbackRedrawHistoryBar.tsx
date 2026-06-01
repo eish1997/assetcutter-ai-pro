@@ -25,7 +25,7 @@ export default function StoryboardFeedbackRedrawHistoryBar({
             const active = selectedId === record.id;
             const statusTone =
               record.status === 'running'
-                ? 'text-violet-300 ring-violet-400/35 bg-violet-500/12'
+                ? 'text-gray-300 ring-white/18 bg-white/[0.08]'
                 : record.status === 'failed'
                   ? 'text-rose-300/90 ring-rose-400/30 bg-rose-500/10'
                   : record.status === 'partial'
@@ -46,7 +46,7 @@ export default function StoryboardFeedbackRedrawHistoryBar({
                 className={`inline-flex h-7 shrink-0 items-center gap-1 rounded-lg px-2.5 text-[10px] font-semibold ring-1 transition ${statusTone}`}
               >
                 {record.status === 'running' ? (
-                  <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-violet-400" />
+                  <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-white/70" />
                 ) : null}
                 {record.label}
               </button>

@@ -74,7 +74,7 @@ function StoryboardDurationGroupMosaicCard({
         <button
           type="button"
           onClick={() => group.rowIds[0] && onSelectRow(group.rowIds[0])}
-          className="min-w-0 flex-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-violet-500/35"
+          className="min-w-0 flex-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-white/25"
         >
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="text-[11px] font-bold text-white/95">{group.shotRangeLabel}</span>

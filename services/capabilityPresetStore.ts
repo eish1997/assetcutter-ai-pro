@@ -5,6 +5,11 @@ import {
   STORYBOARD_FEEDBACK_COLLAGE_DEFAULT_PRESET_ID,
   DEFAULT_STORYBOARD_FEEDBACK_COLLAGE_INSTRUCTION,
 } from './storyboardTableRedraw';
+import {
+  STORYBOARD_ROLE_REPLACE_DEFAULT_PRESET_ID,
+  DEFAULT_STORYBOARD_ROLE_REPLACE_INSTRUCTION,
+  getBuiltinStoryboardRoleReplacePreset,
+} from './storyboardRoleReplaceRedraw';
 import { readLocalString, removeLocalKey, writeLocalJson } from './clientPersist';
 import { normalizeCapabilityPreviewUrlForPersist } from './capabilityPreviewUrl';
 import { syncImageProcessProcessorFields } from './capabilityProcessors/imageProcessProcessors';
@@ -376,6 +381,18 @@ export function enforceBuiltinImageProcessPresets(list: CustomAppModule[]): Cust
     merged = merged.map((p) =>
       p.id === STORYBOARD_FEEDBACK_COLLAGE_DEFAULT_PRESET_ID && !(p.instruction || '').trim()
         ? { ...p, instruction: DEFAULT_STORYBOARD_FEEDBACK_COLLAGE_INSTRUCTION }
+        : p
+    );
+  }
+  if (!merged.some((p) => p.id === STORYBOARD_ROLE_REPLACE_DEFAULT_PRESET_ID)) {
+    merged = [
+      ...merged,
+      normalizeCapabilityPreset(getBuiltinStoryboardRoleReplacePreset(), merged.length),
+    ];
+  } else {
+    merged = merged.map((p) =>
+      p.id === STORYBOARD_ROLE_REPLACE_DEFAULT_PRESET_ID && !(p.instruction || '').trim()
+        ? { ...p, instruction: DEFAULT_STORYBOARD_ROLE_REPLACE_INSTRUCTION }
         : p
     );
   }

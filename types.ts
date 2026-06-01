@@ -493,6 +493,17 @@ export type StoryboardTableRow = {
   timelineLayer?: number;
   /** 编辑页反馈模式：用户对当前分镜图的修改意见 */
   editFeedback?: string;
+  /** 画板分镜图上的角色名标注（相对坐标 0–1） */
+  frameRoleMarks?: StoryboardFrameRoleMark[];
+};
+
+export type StoryboardFrameRoleMark = {
+  id: string;
+  name: string;
+  /** 0–1，相对分镜图显示区域左上角 */
+  x: number;
+  y: number;
+  roleAssetId?: string;
 };
 
 export type StoryboardFrameVersionSource =
@@ -512,6 +523,13 @@ export type StoryboardFrameImageVersion = {
   frameImageCompanionKey?: string;
 };
 
+/** 解析页角色参考图（名称 + 可选配图） */
+export type StoryboardRoleAsset = {
+  id: string;
+  name: string;
+  image?: string;
+};
+
 export type StoryboardTableDoc = {
   /** 表标题；缺省用 textTitle */
   title?: string;
@@ -524,6 +542,8 @@ export type StoryboardTableDoc = {
   parsePresetId?: string;
   /** 结构化优化预设 id（可选） */
   optimizePresetId?: string;
+  /** 解析页角色参考资产 */
+  roleAssets?: StoryboardRoleAsset[];
 };
 
 /** 单个资产：原始图 + 各类型结果图，当前展示版本，是否已归档；归档后可按生成顺序拼流程图 */

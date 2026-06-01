@@ -266,7 +266,7 @@ export default function StoryboardTableSheetGen({
           </span>
         )}
         {busy && progress ? (
-          <span className="rounded-md bg-violet-500/10 px-1.5 py-0.5 text-[9px] text-violet-300/90 ring-1 ring-violet-400/15">
+          <span className="rounded-md bg-white/[0.06] px-1.5 py-0.5 text-[9px] text-gray-300 ring-1 ring-white/10">
             生成中 {progress.done}/{progress.total}
           </span>
         ) : null}
@@ -451,7 +451,7 @@ export default function StoryboardTableSheetGen({
                 onClick={() => setSelectedPreviewId(item.id)}
                 className={`shrink-0 overflow-hidden rounded-md border transition ${
                   activePreview?.id === item.id
-                    ? 'border-violet-500/60 ring-1 ring-violet-500/30'
+                    ? 'border-white/30 ring-1 ring-white/18'
                     : 'border-white/[0.08] opacity-80 hover:opacity-100'
                 }`}
               >

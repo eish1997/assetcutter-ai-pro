@@ -20,6 +20,10 @@ import {
   resolveStoryboardRowFrameDisplaySrc,
   storyboardRowHasFrameRef,
 } from './storyboardFrameImageUrl';
+import {
+  STORYBOARD_ROLE_REPLACE_DEFAULT_PRESET_ID,
+  getBuiltinStoryboardRoleReplacePreset,
+} from './storyboardRoleReplaceRedraw';
 
 export const STORYBOARD_REDRAW_PRESET_KEY = 'ac_storyboard_redraw_preset_v1';
 /** @deprecated 编辑页已改为模型选择；保留键名供旧数据只读 */
@@ -133,7 +137,11 @@ export function listStoryboardFeedbackCollageRedrawPresets(
     if (p.enabled === false) return false;
     if (p.category !== 'image_to_image') return false;
     if (!capabilityUsesGenImageEngine(p)) return false;
-    return p.id.startsWith('storyboard_collage_') || p.id === builtin.id;
+    return (
+      p.id.startsWith('storyboard_collage_') ||
+      p.id === builtin.id ||
+      p.id === STORYBOARD_ROLE_REPLACE_DEFAULT_PRESET_ID
+    );
   });
   const byId = new Map<string, CustomAppModule>();
   for (const p of tagged) byId.set(p.id, p);
@@ -142,13 +150,27 @@ export function listStoryboardFeedbackCollageRedrawPresets(
   } else if (storedBuiltin.enabled !== false) {
     byId.set(builtin.id, { ...builtin, ...storedBuiltin });
   }
+  const roleBuiltin = getBuiltinStoryboardRoleReplacePreset();
+  const storedRole = presets.find((p) => p.id === roleBuiltin.id);
+  if (!storedRole) {
+    byId.set(roleBuiltin.id, roleBuiltin);
+  } else if (storedRole.enabled !== false) {
+    byId.set(roleBuiltin.id, { ...roleBuiltin, ...storedRole });
+  }
   const list = [...byId.values()].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   if (list.length > 0) return list;
   return listStoryboardRedrawPresets(presets).filter((p) => p.category === 'image_to_image');
 }
 
+function listStoryboardFeedbackCollageOnlyPresets(presets: CustomAppModule[]): CustomAppModule[] {
+  return listStoryboardFeedbackCollageRedrawPresets(presets).filter(
+    (p) =>
+      p.id === STORYBOARD_FEEDBACK_COLLAGE_DEFAULT_PRESET_ID || p.id.startsWith('storyboard_collage_')
+  );
+}
+
 export function pickDefaultStoryboardFeedbackCollagePresetId(presets: CustomAppModule[]): string {
-  const list = listStoryboardFeedbackCollageRedrawPresets(presets);
+  const list = listStoryboardFeedbackCollageOnlyPresets(presets);
   const seeded = list.find((p) => p.id === STORYBOARD_FEEDBACK_COLLAGE_DEFAULT_PRESET_ID);
   if (seeded) return seeded.id;
   return list[0]?.id ?? '';
@@ -165,8 +187,10 @@ export function resolveStoryboardFeedbackCollagePreset(
     const matched = list.find((p) => p.id === id);
     if (matched) return matched;
   }
+  const collageOnly = listStoryboardFeedbackCollageOnlyPresets(presets);
+  if (!collageOnly.length) return null;
   const defaultId = pickDefaultStoryboardFeedbackCollagePresetId(presets);
-  return list.find((p) => p.id === defaultId) ?? list[0] ?? null;
+  return collageOnly.find((p) => p.id === defaultId) ?? collageOnly[0] ?? null;
 }
 
 /** @deprecated 使用 resolveStoryboardFeedbackCollagePreset */

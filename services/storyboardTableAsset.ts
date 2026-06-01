@@ -9,7 +9,18 @@ import {
   STORYBOARD_OPTIMIZE_DEFAULT_PRESET_ID,
 } from './storyboardTableParse';
 import { normalizeStoryboardFrameHistory } from './storyboardFrameHistory';
-import { clampStoryboardRowTimelineLayer, resolveStoryboardTimelineLayerCount } from './storyboardVideoTimeline';
+import {
+  clampStoryboardRowTimelineLayer,
+  resolveStoryboardTimelineLayerCount,
+} from './storyboardVideoTimeline';
+import {
+  duplicateStoryboardFrameRoleMarks,
+  normalizeStoryboardFrameRoleMarks,
+} from './storyboardFrameRoleMarks';
+import {
+  duplicateStoryboardRoleAssets,
+  normalizeStoryboardRoleAssets,
+} from './storyboardRoleAssets';
 
 const rowId = () => Math.random().toString(36).slice(2, 11);
 
@@ -41,6 +52,9 @@ export function createStoryboardTableRow(partial?: Partial<StoryboardTableRow>, 
     timelineLayer: normalizeTimelineLayer(partial?.timelineLayer ?? 0),
     editFeedback:
       typeof partial?.editFeedback === 'string' ? partial.editFeedback : undefined,
+    frameRoleMarks: partial?.frameRoleMarks
+      ? normalizeStoryboardFrameRoleMarks(partial.frameRoleMarks)
+      : undefined,
   };
 }
 
@@ -123,6 +137,7 @@ export function normalizeStoryboardTableDoc(raw: unknown): StoryboardTableDoc {
               locked: Boolean(row.locked),
               timelineLayer: normalizeTimelineLayer(row.timelineLayer ?? 0),
               editFeedback: typeof row.editFeedback === 'string' ? row.editFeedback : undefined,
+              frameRoleMarks: normalizeStoryboardFrameRoleMarks(row.frameRoleMarks),
             },
             i
           );
@@ -140,12 +155,14 @@ export function normalizeStoryboardTableDoc(raw: unknown): StoryboardTableDoc {
   );
   const title =
     doc.title !== undefined && doc.title !== null ? String(doc.title) : undefined;
+  const roleAssets = normalizeStoryboardRoleAssets(doc.roleAssets);
   return {
     ...(title !== undefined ? { title } : {}),
     timelineLayerCount: layerCount,
     fieldCatalog,
     ...(parsePresetId ? { parsePresetId } : {}),
     ...(optimizePresetId ? { optimizePresetId } : {}),
+    ...(roleAssets.length ? { roleAssets } : {}),
     rows,
   };
 }
@@ -276,6 +293,7 @@ export function duplicateStoryboardRow(source: StoryboardTableRow, index: number
       frameImageCompanionKey: source.frameImageCompanionKey,
       locked: false,
       timelineLayer: source.timelineLayer ?? 0,
+      frameRoleMarks: duplicateStoryboardFrameRoleMarks(source.frameRoleMarks),
     },
     index
   );
@@ -304,6 +322,7 @@ export function duplicateStoryboardTableOnAsset(asset: WorkflowAsset, newAssetId
     storyboardTable: {
       ...table,
       fieldCatalog: table?.fieldCatalog ? [...table.fieldCatalog] : [],
+      roleAssets: duplicateStoryboardRoleAssets(table?.roleAssets ?? []),
       rows,
     },
   });

@@ -172,7 +172,7 @@ function TimelineTrack({
               <React.Fragment key={seg.rowId}>
                 {showDropBefore ? (
                   <div
-                    className="pointer-events-none absolute inset-y-0 z-20 w-1 -translate-x-1/2 bg-violet-400/90 shadow-[0_0_8px_rgba(167,139,250,0.8)]"
+                    className="pointer-events-none absolute inset-y-0 z-20 w-1 -translate-x-1/2 bg-white/80 shadow-[0_0_8px_rgba(255,255,255,0.35)]"
                     style={{ left: `${leftPct}%` }}
                   />
                 ) : null}
@@ -196,7 +196,7 @@ function TimelineTrack({
                   }}
                   className={`group absolute inset-y-0 flex min-w-0 flex-col overflow-hidden border-r border-white/[0.06] transition-opacity last:border-r-0 ${
                     isDragging ? 'z-10 opacity-40' : 'z-0 opacity-100'
-                  } ${active ? 'bg-violet-500/10 ring-1 ring-inset ring-violet-400/35' : 'hover:bg-white/[0.03]'}`}
+                  } ${active ? 'bg-white/[0.06] ring-1 ring-inset ring-white/18' : 'hover:bg-white/[0.03]'}`}
                   title={`${seg.shotNo} · ${seg.durationSec.toFixed(1)}s`}
                 >
                   <div className="relative min-h-0 flex-1 overflow-hidden bg-black/40">
@@ -372,7 +372,7 @@ export default function StoryboardVideoTimeline({
               aria-hidden
             >
               <div
-                className="absolute inset-y-0 w-px -translate-x-1/2 bg-violet-300/80"
+                className="absolute inset-y-0 w-px -translate-x-1/2 bg-white/60"
                 style={{ left: `${playheadPct}%` }}
               />
             </div>
