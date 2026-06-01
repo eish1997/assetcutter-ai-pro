@@ -222,12 +222,13 @@ import {
 import {
   executeStoryboardRowRedraw,
   pickStoryboardEditRedrawPreset,
-  pickStoryboardFeedbackRedrawPreset,
+  resolveStoryboardFeedbackCollagePreset,
   type StoryboardRowRedrawInvokeOptions,
   listStoryboardRedrawPresets,
   pickDefaultStoryboardRedrawPresetId,
   STORYBOARD_REDRAW_PRESET_KEY,
 } from '../services/storyboardTableRedraw';
+import { storyboardRowHasFrameRef } from '../services/storyboardFrameImageUrl';
 import {
   listStoryboardParsePresets,
   pickDefaultStoryboardParsePresetId,
@@ -1154,6 +1155,7 @@ const WorkflowSection: React.FC<{
       if (isWorkflowEditableTarget(e.target)) return false;
       const t = e.target as Element | null;
       if (t?.closest('[data-prevent-wheel-scroll]')) return false;
+      if (t?.closest('[data-ac-dropdown-overlay], [data-ac-dropdown-list]')) return false;
       if (t?.closest('[role="dialog"]')) return false;
       const list = centerScrollRef.current;
       if (!list) return false;
@@ -1499,20 +1501,30 @@ const WorkflowSection: React.FC<{
         onLog?.('warn', '该镜头已锁定，跳过重绘');
         return;
       }
+      const hasFrame = storyboardRowHasFrameRef(row);
+      const collagePreset = hasFrame
+        ? resolveStoryboardFeedbackCollagePreset(
+            storyboardRedrawPresets,
+            options?.collagePresetId
+          )
+        : null;
       const preset = options?.feedbackOnly
-        ? pickStoryboardFeedbackRedrawPreset(storyboardRedrawPresets)
-        : pickStoryboardEditRedrawPreset(storyboardRedrawPresets, row);
+        ? collagePreset
+        : hasFrame
+          ? collagePreset
+          : pickStoryboardEditRedrawPreset(storyboardRedrawPresets, row);
       if (!preset || preset.disabled) {
         onLog?.(
           'warn',
-          options?.feedbackOnly
-            ? '无可用图生图能力，请在能力预设中启用'
+          options?.feedbackOnly || hasFrame
+            ? '请选择拼图改图能力（图生图），或在能力预设中启用'
             : '无可用文生图/图生图能力，请在能力预设中启用'
         );
         return;
       }
       const result = await executeStoryboardRowRedraw({
         preset,
+        collagePreset: hasFrame ? collagePreset ?? undefined : undefined,
         row,
         fieldCatalog: tableAsset.storyboardTable?.fieldCatalog ?? [],
         imageModelRegistryId,

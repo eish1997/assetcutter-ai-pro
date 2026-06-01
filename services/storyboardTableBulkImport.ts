@@ -13,6 +13,7 @@ import {
   resolveFieldId,
   type StoryboardParseFieldItem,
 } from './storyboardTableParse';
+import { ensureShotCharacterFieldOnRow } from './storyboardShotCharacters';
 
 export type StoryboardBulkTextMode = 'pipe' | 'tsv';
 
@@ -309,7 +310,10 @@ export function applyStoryboardBulkImport(
       },
       importedRows.length
     );
-    importedRows.push(applyShotFieldsPatch(base, nextCatalog, shotFields));
+    const patched = applyShotFieldsPatch(base, nextCatalog, shotFields);
+    const ensured = ensureShotCharacterFieldOnRow(nextCatalog, patched, item.fields);
+    nextCatalog = ensured.catalog;
+    importedRows.push(ensured.row);
   }
 
   const baseRows = mode === 'append' ? [...existingRows] : [];

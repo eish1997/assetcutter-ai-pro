@@ -3,6 +3,7 @@ import type {
   StoryboardParseFieldDef,
   StoryboardTableRow,
 } from '../types';
+import { ensureShotCharacterFieldOnRow } from './storyboardShotCharacters';
 import { resolveTextModelForPreset, type CapabilityExecuteContext } from './capabilityExecutor';
 import { workflowChat } from './unifiedAiGateway';
 
@@ -116,6 +117,8 @@ export const DEFAULT_STORYBOARD_PARSE_INSTRUCTION = `你是分镜脚本结构化
 4. 保留原文措辞，不要擅自翻译或合并不同维度。
 5. 镜头号、时长若出现在原文中：label 必须用「镜头号」「时长」，value 为原文中的值；系统将填入固定列（不进入动态字段）。不要编造。
 6. 对「画面」「动作」「景别」「机位」类字段设 redrawInclude: true；对「对白」「音效」「备注」类设 false。
+7. 若本镜出现具名角色（人物姓名，非道具/场景/光影/服化描述）：额外输出 label「镜头内角色」，value 为角色名，多个用顿号「、」分隔；无具名角色则不输出该字段。
+8. 「镜头内角色」必须设 redrawInclude: false。
 
 只输出 JSON，不要 markdown 代码块：
 {
@@ -238,6 +241,7 @@ export function maybeWarnLargeFieldCatalog(
 }
 
 export function inferRedrawInclude(label: string, explicit?: boolean): boolean {
+  if (/^(镜头内角色|出镜角色|镜头角色|本镜角色)$/.test(label.trim())) return false;
   if (typeof explicit === 'boolean') return explicit;
   return !EXCLUDE_REDRAW_LABEL.test(label.trim());
 }
@@ -459,11 +463,12 @@ export function mergeParseResultIntoRow(
     nextFields[id] = clampFieldValue(item.value.trim(), kind);
   }
   nextFields = purgeSystemFieldValuesFromShotFields(nextCatalog, nextFields);
-  const patched = applyShotFieldsPatch(row, nextCatalog, nextFields);
+  let patched = applyShotFieldsPatch(row, nextCatalog, nextFields);
+  const ensured = ensureShotCharacterFieldOnRow(nextCatalog, patched, dynamic);
   return {
-    catalog: nextCatalog,
+    catalog: ensured.catalog,
     row: {
-      ...patched,
+      ...ensured.row,
       shotRaw: rawInput.trim(),
       ...(shotNo !== undefined ? { shotNo } : {}),
       ...(durationSec !== undefined ? { durationSec } : {}),

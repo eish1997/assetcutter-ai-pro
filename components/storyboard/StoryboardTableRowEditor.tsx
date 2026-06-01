@@ -9,7 +9,8 @@ import {
 } from '../../services/storyboardFrameHistory';
 import AppIcon from '../ui/AppIcon';
 import { CustomDropdown } from '../ui/CustomDropdown';
-import { storyboardRowOutlineTitle } from './storyboardRowDisplay';
+import { storyboardRowOutlineTitle, storyboardRowHasEditFeedback } from './storyboardRowDisplay';
+import StoryboardEditFeedbackMark from './StoryboardEditFeedbackMark';
 import {
   STORYBOARD_FIELD_INPUT,
   STORYBOARD_GAP_INNER,
@@ -175,6 +176,7 @@ export default function StoryboardTableRowEditor({
           {index + 1}
         </span>
         <span className="text-[11px] font-semibold text-gray-200">镜头 {shotLabel}</span>
+        {storyboardRowHasEditFeedback(row) ? <StoryboardEditFeedbackMark row={row} /> : null}
         {!readOnly ? (
           <div className={`ml-auto flex items-center ${STORYBOARD_GAP_TIGHT}`}>
             {onParseRow ? (

@@ -13,13 +13,37 @@ import {
 } from '../../services/storyboardTableAsset';
 import { reorderStoryboardRowsInLayer, collapseStoryboardTimelineTopLayer, clampStoryboardTimelineLayerCount } from '../../services/storyboardVideoTimeline';
 import {
+  executeStoryboardFeedbackSheetRedraw,
+  formatStoryboardFeedbackBatchLabel,
+  listStoryboardFeedbackRedrawEligibleRows,
+  normalizeFeedbackCollageLimit,
+  planStoryboardFeedbackRedrawTasks,
+  STORYBOARD_EDIT_FEEDBACK_COLLAGE_LIMIT_KEY,
+  STORYBOARD_FEEDBACK_COLLAGE_LIMIT_DEFAULT,
+  splitStoryboardFeedbackCollageByLayout,
+  type FeedbackCollageLayout,
+  type StoryboardFeedbackRedrawBatchRecord,
+} from '../../services/storyboardFeedbackSheetRedraw';
+import {
+  readStoryboardFeedbackRedrawHistory,
+  readStoryboardFeedbackRedrawHistorySelection,
+  writeStoryboardFeedbackRedrawHistory,
+  writeStoryboardFeedbackRedrawHistorySelection,
+} from '../../services/storyboardFeedbackRedrawHistory';
+import {
   buildStoryboardRowPromptText,
   isStoryboardFeedbackRedrawEligible,
   listStoryboardFeedbackRedrawRows,
+  listStoryboardFeedbackCollageRedrawPresets,
+  pickDefaultStoryboardFeedbackCollagePresetId,
+  resolveStoryboardFeedbackCollagePreset,
+  STORYBOARD_EDIT_FEEDBACK_COLLAGE_MODEL_KEY,
+  STORYBOARD_EDIT_FEEDBACK_COLLAGE_PRESET_KEY,
   STORYBOARD_EDIT_FEEDBACK_REDRAW_UNDERSTAND_KEY,
   STORYBOARD_EDIT_REDRAW_MODEL_KEY,
   type StoryboardRowRedrawInvokeOptions,
 } from '../../services/storyboardTableRedraw';
+import { storyboardRowHasFrameRef } from '../../services/storyboardFrameImageUrl';
 import {
   executeStoryboardSheetGenBatch,
   planStoryboardSheetGenTasks,
@@ -242,6 +266,27 @@ export default function StoryboardTablePanel({
     done: number;
     total: number;
   } | null>(null);
+  const [feedbackRedrawHistory, setFeedbackRedrawHistory] = useState<
+    StoryboardFeedbackRedrawBatchRecord[]
+  >(() => readStoryboardFeedbackRedrawHistory(asset.id));
+  const [selectedFeedbackHistoryId, setSelectedFeedbackHistoryId] = useState<string | null>(() =>
+    readStoryboardFeedbackRedrawHistorySelection(asset.id)
+  );
+  const [feedbackCollageLimit, setFeedbackCollageLimit] = useState(() =>
+    normalizeFeedbackCollageLimit(
+      readLocalJson(
+        STORYBOARD_EDIT_FEEDBACK_COLLAGE_LIMIT_KEY,
+        STORYBOARD_FEEDBACK_COLLAGE_LIMIT_DEFAULT,
+        (v) => (typeof v === 'number' ? v : null)
+      )
+    )
+  );
+
+  const setFeedbackCollageLimitPersisted = useCallback((limit: number) => {
+    const normalized = normalizeFeedbackCollageLimit(limit);
+    setFeedbackCollageLimit(normalized);
+    writeLocalJson(STORYBOARD_EDIT_FEEDBACK_COLLAGE_LIMIT_KEY, normalized);
+  }, []);
   const [sheetGenBusy, setSheetGenBusy] = useState(false);
   const [sheetGenProgress, setSheetGenProgress] = useState<{ done: number; total: number } | null>(
     null
@@ -286,6 +331,41 @@ export default function StoryboardTablePanel({
   useEffect(() => {
     setSheetPreviews(readStoryboardSheetPreviews(asset.id));
   }, [asset.id]);
+
+  useEffect(() => {
+    setFeedbackRedrawHistory(readStoryboardFeedbackRedrawHistory(asset.id));
+    setSelectedFeedbackHistoryId(readStoryboardFeedbackRedrawHistorySelection(asset.id));
+  }, [asset.id]);
+
+  const commitFeedbackRedrawHistory = useCallback(
+    (
+      updater: (
+        prev: StoryboardFeedbackRedrawBatchRecord[]
+      ) => StoryboardFeedbackRedrawBatchRecord[]
+    ) => {
+      setFeedbackRedrawHistory((prev) => {
+        const next = updater(prev);
+        writeStoryboardFeedbackRedrawHistory(asset.id, next);
+        return next;
+      });
+    },
+    [asset.id]
+  );
+
+  const onSelectFeedbackHistory = useCallback(
+    (id: string | null) => {
+      setSelectedFeedbackHistoryId(id);
+      writeStoryboardFeedbackRedrawHistorySelection(asset.id, id);
+    },
+    [asset.id]
+  );
+
+  useEffect(() => {
+    if (!selectedFeedbackHistoryId) return;
+    if (!feedbackRedrawHistory.some((r) => r.id === selectedFeedbackHistoryId)) {
+      onSelectFeedbackHistory(null);
+    }
+  }, [feedbackRedrawHistory, selectedFeedbackHistoryId, onSelectFeedbackHistory]);
 
   const openRowInEditor = useCallback(
     (rowId: string) => {
@@ -447,6 +527,79 @@ export default function StoryboardTablePanel({
     setEditRedrawModelId(coerced);
     writeLocalJson(STORYBOARD_EDIT_REDRAW_MODEL_KEY, coerced);
   }, []);
+
+  const feedbackCollagePresetList = useMemo(
+    () => listStoryboardFeedbackCollageRedrawPresets(redrawPresets),
+    [redrawPresets]
+  );
+
+  const resolvedFeedbackCollagePresetId = useMemo(() => {
+    const stored = readLocalJson(
+      STORYBOARD_EDIT_FEEDBACK_COLLAGE_PRESET_KEY,
+      pickDefaultStoryboardFeedbackCollagePresetId(redrawPresets),
+      (v) => (typeof v === 'string' ? v : null)
+    );
+    if (stored && feedbackCollagePresetList.some((p) => p.id === stored)) return stored;
+    return pickDefaultStoryboardFeedbackCollagePresetId(redrawPresets);
+  }, [feedbackCollagePresetList, redrawPresets]);
+
+  const [feedbackCollagePresetId, setFeedbackCollagePresetId] = useState(
+    resolvedFeedbackCollagePresetId
+  );
+
+  useEffect(() => {
+    setFeedbackCollagePresetId(resolvedFeedbackCollagePresetId);
+  }, [asset.id, resolvedFeedbackCollagePresetId]);
+
+  const effectiveFeedbackCollagePresetId = feedbackCollagePresetId;
+
+  const activeFeedbackCollagePreset = useMemo(
+    () => resolveStoryboardFeedbackCollagePreset(redrawPresets, effectiveFeedbackCollagePresetId),
+    [effectiveFeedbackCollagePresetId, redrawPresets]
+  );
+
+  const setFeedbackCollagePresetIdPersisted = useCallback((presetId: string) => {
+    setFeedbackCollagePresetId(presetId);
+    writeLocalJson(STORYBOARD_EDIT_FEEDBACK_COLLAGE_PRESET_KEY, presetId);
+  }, []);
+
+  const feedbackCollagePresetOptions = useMemo(
+    () =>
+      feedbackCollagePresetList.map((preset) => ({
+        value: preset.id,
+        label: preset.label || preset.id,
+      })),
+    [feedbackCollagePresetList]
+  );
+
+  const resolvedFeedbackCollageModelId = useMemo(() => {
+    const fallback = readLocalJson(STORYBOARD_EDIT_REDRAW_MODEL_KEY, DEFAULT_IMAGE_MODEL_REGISTRY_ID, (v) =>
+      typeof v === 'string' ? v : null
+    );
+    const stored = readLocalJson(STORYBOARD_EDIT_FEEDBACK_COLLAGE_MODEL_KEY, fallback, (v) =>
+      typeof v === 'string' ? v : null
+    );
+    return coerceImageModelRegistryId(stored);
+  }, []);
+
+  const [feedbackCollageModelId, setFeedbackCollageModelId] = useState(resolvedFeedbackCollageModelId);
+
+  useEffect(() => {
+    setFeedbackCollageModelId(resolvedFeedbackCollageModelId);
+  }, [asset.id, resolvedFeedbackCollageModelId]);
+
+  const effectiveFeedbackCollageModelId = feedbackCollageModelId;
+
+  const setFeedbackCollageModelIdPersisted = useCallback((modelId: string) => {
+    const coerced = coerceImageModelRegistryId(modelId);
+    setFeedbackCollageModelId(coerced);
+    writeLocalJson(STORYBOARD_EDIT_FEEDBACK_COLLAGE_MODEL_KEY, coerced);
+  }, []);
+
+  const feedbackCollageModelOptions = useMemo(
+    () => DIALOG_IMAGE_MODELS.map((m) => ({ value: m.id, label: m.label })),
+    []
+  );
 
   const editRedrawModelOptions = useMemo(
     () => DIALOG_IMAGE_MODELS.map((m) => ({ value: m.id, label: m.label })),
@@ -669,7 +822,8 @@ export default function StoryboardTablePanel({
     async (
       sheetImage: string,
       taskRows: StoryboardTableRow[],
-      fieldCatalog: StoryboardParseFieldDef[]
+      fieldCatalog: StoryboardParseFieldDef[],
+      feedbackLayout?: FeedbackCollageLayout
     ) => {
       let normalized = sheetImage;
       try {
@@ -678,14 +832,17 @@ export default function StoryboardTablePanel({
         /* keep raw */
       }
 
-      const split = await splitStoryboardSheetByVision(
-        normalized,
-        taskRows,
-        capabilityTextModel,
-        { timeoutMs: WORKFLOW_CUT_DETECT_TIMEOUT_MS }
-      );
+      const split = feedbackLayout
+        ? await splitStoryboardFeedbackCollageByLayout(normalized, feedbackLayout, taskRows)
+        : await splitStoryboardSheetByVision(
+            normalized,
+            taskRows,
+            capabilityTextModel,
+            { timeoutMs: WORKFLOW_CUT_DETECT_TIMEOUT_MS }
+          );
 
       const rowPatches = new Map<string, Partial<StoryboardTableRow>>();
+      const rowImages: Record<string, string> = {};
       for (const match of split.matches) {
         let compressed = match.image;
         try {
@@ -695,6 +852,7 @@ export default function StoryboardTablePanel({
         }
         const tableRow = taskRows.find((row) => row.id === match.rowId);
         if (!tableRow) continue;
+        rowImages[match.rowId] = compressed;
         const patch = await replaceStoryboardRowFrame({
           row: tableRow,
           dataUrl: compressed,
@@ -714,7 +872,7 @@ export default function StoryboardTablePanel({
         );
       }
 
-      return { matchedCount: split.matches.length, warn: split.warn };
+      return { matchedCount: split.matches.length, warn: split.warn, rowImages };
     },
     [asset.id, capabilityTextModel, companionBaseUrl, companionProjectId, patchTable]
   );
@@ -895,10 +1053,6 @@ export default function StoryboardTablePanel({
 
   const runRedraw = useCallback(
     async (rowId: string) => {
-      if (!onRedrawRow || !effectiveEditRedrawModelId) {
-        onNotify?.('warn', '请先在编辑页选择重绘模型');
-        return;
-      }
       const row = table.rows.find((r) => r.id === rowId);
       if (!row) return;
       if (row.locked) {
@@ -909,61 +1063,199 @@ export default function StoryboardTablePanel({
         onNotify?.('warn', '请先解析、填写画面类字段或修改反馈');
         return;
       }
+      const useCollage = storyboardRowHasFrameRef(row);
+      if (useCollage) {
+        if (!activeFeedbackCollagePreset) {
+          onNotify?.('warn', '请先在编辑页选择拼图改图能力（图生图）');
+          return;
+        }
+        if (!effectiveFeedbackCollageModelId) {
+          onNotify?.('warn', '请先在编辑页选择拼图改图模型');
+          return;
+        }
+      } else if (!onRedrawRow || !effectiveEditRedrawModelId) {
+        onNotify?.('warn', '请先在编辑页选择重绘模型');
+        return;
+      }
+      if (!onRedrawRow) {
+        onNotify?.('warn', '无法重绘');
+        return;
+      }
       setRedrawBusyRowId(rowId);
       try {
-        await onRedrawRow(rowId, effectiveEditRedrawModelId);
+        await onRedrawRow(
+          rowId,
+          useCollage ? effectiveFeedbackCollageModelId : effectiveEditRedrawModelId,
+          useCollage ? { collagePresetId: effectiveFeedbackCollagePresetId } : undefined
+        );
       } catch (e) {
         onNotify?.('warn', e instanceof Error ? e.message : '重绘失败');
       } finally {
         setRedrawBusyRowId(null);
       }
     },
-    [effectiveEditRedrawModelId, onNotify, onRedrawRow, table.fieldCatalog, table.rows]
+    [
+      activeFeedbackCollagePreset,
+      effectiveEditRedrawModelId,
+      effectiveFeedbackCollageModelId,
+      effectiveFeedbackCollagePresetId,
+      onNotify,
+      onRedrawRow,
+      table.fieldCatalog,
+      table.rows,
+    ]
   );
 
   const runFeedbackBatchRedraw = useCallback(async () => {
-    if (!onRedrawRow || !effectiveEditRedrawModelId) {
-      onNotify?.('warn', '请先在编辑页选择重绘模型');
+    const preset = activeFeedbackCollagePreset;
+    if (!preset) {
+      onNotify?.('warn', '请先在编辑页选择拼图改图能力（图生图）');
       return;
     }
-    const eligible = listStoryboardFeedbackRedrawRows(table.rows).filter(isStoryboardFeedbackRedrawEligible);
+    if (!effectiveFeedbackCollageModelId) {
+      onNotify?.('warn', '请先在编辑页选择拼图改图模型');
+      return;
+    }
+    const eligible = listStoryboardFeedbackRedrawEligibleRows(table.rows);
     if (!eligible.length) {
-      onNotify?.('warn', '没有可重绘的镜头（需填写修改反馈且已有分镜图）');
+      onNotify?.('warn', '没有可改图的镜头（需填写修改反馈且已有分镜图）');
       return;
     }
-    const understandLabel = feedbackRedrawUnderstand ? '理解后生图' : '直发反馈';
-    if (!window.confirm(`按修改反馈重绘 ${eligible.length} 镜？（图生图 · ${understandLabel}）`)) return;
-
-    setFeedbackBatchBusy(true);
-    setFeedbackBatchProgress({ done: 0, total: eligible.length });
-    let ok = 0;
-    let fail = 0;
-    for (const row of eligible) {
-      setRedrawBusyRowId(row.id);
-      try {
-        await onRedrawRow(row.id, effectiveEditRedrawModelId, {
-          feedbackOnly: true,
-          understand: feedbackRedrawUnderstand,
-        });
-        ok += 1;
-      } catch {
-        fail += 1;
-      } finally {
-        setFeedbackBatchProgress({ done: ok + fail, total: eligible.length });
-      }
+    const tasks = planStoryboardFeedbackRedrawTasks(table.rows, feedbackCollageLimit);
+    if (!tasks.length) {
+      onNotify?.('warn', '没有可执行的拼图任务');
+      return;
     }
-    setRedrawBusyRowId(null);
-    setFeedbackBatchBusy(false);
-    setFeedbackBatchProgress(null);
-    onNotify?.(
-      'info',
-      fail > 0 ? `反馈重绘完成：成功 ${ok}，失败 ${fail}` : `反馈重绘完成：${ok} 镜`
-    );
+    const understandLabel = feedbackRedrawUnderstand ? '理解后生图' : '直发拼图提示';
+    if (
+      !window.confirm(
+        `按修改反馈拼图改图 ${eligible.length} 镜？（每批最多 ${feedbackCollageLimit} 镜 · ${tasks.length} 张拼图 · ${understandLabel}）`
+      )
+    ) {
+      return;
+    }
+
+    const batchId = `fbr_${Date.now()}`;
+    const createdAt = Date.now();
+    const batchRecord: StoryboardFeedbackRedrawBatchRecord = {
+      id: batchId,
+      createdAt,
+      label: formatStoryboardFeedbackBatchLabel(createdAt, eligible.length),
+      rowIds: eligible.map((row) => row.id),
+      status: 'running',
+      totalTasks: tasks.length,
+      matchedCount: 0,
+    };
+    commitFeedbackRedrawHistory((prev) => [batchRecord, ...prev].slice(0, 24));
+    onSelectFeedbackHistory(batchId);
+    setFeedbackBatchBusy(true);
+    setFeedbackBatchProgress({ done: 0, total: tasks.length });
+
+    let okTasks = 0;
+    let failTasks = 0;
+    let totalMatched = 0;
+    let batchRowImages: Record<string, string> = {};
+
+    try {
+      for (const task of tasks) {
+        setRedrawBusyRowId(task.rowIds[0] ?? null);
+        try {
+          const outcome = await executeStoryboardFeedbackSheetRedraw({
+            preset,
+            rows: task.rows,
+            fieldCatalog: table.fieldCatalog,
+            ctx: parseCtx,
+            imageModelRegistryId: effectiveFeedbackCollageModelId,
+            understand: feedbackRedrawUnderstand,
+            chunkIndex: task.chunkIndex,
+          });
+          if (!outcome.ok) {
+            failTasks += 1;
+            onNotify?.('warn', `拼图 ${task.chunkIndex + 1} 失败：${outcome.error}`);
+            continue;
+          }
+
+          let sheetImage = outcome.image;
+          try {
+            sheetImage = await compressStoryboardFrameDataUrl(sheetImage);
+          } catch {
+            /* keep raw */
+          }
+
+          const { matchedCount, warn, rowImages } = await commitSheetVisionSplit(
+            sheetImage,
+            task.rows,
+            table.fieldCatalog,
+            outcome.layout
+          );
+          totalMatched += matchedCount;
+          if (rowImages && Object.keys(rowImages).length) {
+            batchRowImages = { ...batchRowImages, ...rowImages };
+          }
+          okTasks += 1;
+          if (warn) {
+            onNotify?.('warn', `拼图 ${task.chunkIndex + 1}：${warn}`);
+          }
+        } catch (error) {
+          failTasks += 1;
+          onNotify?.(
+            'warn',
+            error instanceof Error ? error.message : `拼图 ${task.chunkIndex + 1} 失败`
+          );
+        } finally {
+          setFeedbackBatchProgress({ done: okTasks + failTasks, total: tasks.length });
+          commitFeedbackRedrawHistory((prev) =>
+            prev.map((item) =>
+              item.id === batchId
+                ? { ...item, matchedCount: totalMatched, rowImages: batchRowImages }
+                : item
+            )
+          );
+        }
+      }
+
+      const status: StoryboardFeedbackRedrawBatchRecord['status'] =
+        failTasks > 0 ? (okTasks > 0 ? 'partial' : 'failed') : 'done';
+      commitFeedbackRedrawHistory((prev) =>
+        prev.map((item) =>
+          item.id === batchId
+            ? {
+                ...item,
+                status,
+                matchedCount: totalMatched,
+                totalTasks: tasks.length,
+                rowImages: batchRowImages,
+              }
+            : item
+        )
+      );
+
+      if (failTasks > 0) {
+        onNotify?.(
+          'warn',
+          `拼图改图完成：成功 ${okTasks} 张，失败 ${failTasks} 张；已切分回填 ${totalMatched} 镜`
+        );
+      } else if (totalMatched > 0) {
+        onNotify?.('info', `拼图改图完成：${okTasks} 张拼图，已切分回填 ${totalMatched} 镜`);
+      } else {
+        onNotify?.('warn', `拼图改图 ${okTasks} 张完成，但未能自动切分回填，请检查镜号`);
+      }
+    } finally {
+      setRedrawBusyRowId(null);
+      setFeedbackBatchBusy(false);
+      setFeedbackBatchProgress(null);
+    }
   }, [
-    effectiveEditRedrawModelId,
+    activeFeedbackCollagePreset,
+    commitSheetVisionSplit,
+    commitFeedbackRedrawHistory,
+    effectiveFeedbackCollageModelId,
+    feedbackCollageLimit,
     feedbackRedrawUnderstand,
     onNotify,
-    onRedrawRow,
+    onSelectFeedbackHistory,
+    parseCtx,
+    table.fieldCatalog,
     table.rows,
   ]);
 
@@ -1001,7 +1293,7 @@ export default function StoryboardTablePanel({
           fieldCatalog: request.fieldCatalog,
           ctx: parseCtx,
           promptExtra: request.promptExtra,
-          referenceImageDataUrl: request.referenceImageDataUrl,
+          forceTextToImage: request.forceTextToImage,
           onTaskComplete: (done, total) => setSheetGenProgress({ done, total }),
         });
 
@@ -1535,6 +1827,30 @@ export default function StoryboardTablePanel({
                 />
               </div>
             ) : null}
+            {feedbackCollagePresetOptions.length > 0 ? (
+              <div className="flex min-w-[10rem] max-w-xs items-center gap-1.5">
+                <span className="shrink-0 text-[10px] text-gray-500">拼图改图</span>
+                <CustomDropdown
+                  value={effectiveFeedbackCollagePresetId}
+                  options={feedbackCollagePresetOptions}
+                  onChange={setFeedbackCollagePresetIdPersisted}
+                  triggerClassName="h-8 min-w-[8rem] flex-1 rounded-lg bg-white/[0.04] px-2.5 text-[10px] text-gray-200 ring-1 ring-white/[0.07] hover:bg-white/[0.07]"
+                  portalZIndex={STORYBOARD_PANEL_DROPDOWN_Z}
+                />
+              </div>
+            ) : null}
+            {feedbackCollageModelOptions.length > 0 && feedbackCollagePresetOptions.length > 0 ? (
+              <div className="flex min-w-[10rem] max-w-xs items-center gap-1.5">
+                <span className="shrink-0 text-[10px] text-gray-500">拼图模型</span>
+                <CustomDropdown
+                  value={effectiveFeedbackCollageModelId}
+                  options={feedbackCollageModelOptions}
+                  onChange={setFeedbackCollageModelIdPersisted}
+                  triggerClassName="h-8 min-w-[8rem] flex-1 rounded-lg bg-white/[0.04] px-2.5 text-[10px] text-gray-200 ring-1 ring-white/[0.07] hover:bg-white/[0.07]"
+                  portalZIndex={STORYBOARD_PANEL_DROPDOWN_Z}
+                />
+              </div>
+            ) : null}
             <button type="button" onClick={addRow} className={STORYBOARD_TOOL_BTN_PRIMARY}>
               添加镜头
             </button>
@@ -1650,6 +1966,7 @@ export default function StoryboardTablePanel({
             className="mt-2 pl-11"
           />
         ) : null}
+
       </header>
 
       {isInputView ? (
@@ -1722,9 +2039,12 @@ export default function StoryboardTablePanel({
           feedbackRedrawEligibleCount={feedbackRedrawEligibleCount}
           feedbackRedrawUnderstand={feedbackRedrawUnderstand}
           onToggleFeedbackRedrawUnderstand={toggleFeedbackRedrawUnderstand}
-          onFeedbackBatchRedraw={
-            !readOnly && onRedrawRow ? () => void runFeedbackBatchRedraw() : undefined
-          }
+          onFeedbackBatchRedraw={!readOnly ? () => void runFeedbackBatchRedraw() : undefined}
+          feedbackCollageLimit={feedbackCollageLimit}
+          onFeedbackCollageLimitChange={setFeedbackCollageLimitPersisted}
+          feedbackRedrawHistory={feedbackRedrawHistory}
+          selectedFeedbackHistoryId={selectedFeedbackHistoryId}
+          onSelectFeedbackHistory={onSelectFeedbackHistory}
           parseBusyRowId={parseBusyRowId}
           parseAllBusy={parseAllBusy}
           optimizeBusyRowId={optimizeBusyRowId}

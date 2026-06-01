@@ -6,6 +6,7 @@ import {
   measureSheetCellTextBlock,
   planStoryboardSheetCellTypography,
   planStoryboardSheetGroupTypographyUnbounded,
+  type SheetCellTextMeta,
   type SheetCellTypography,
 } from './storyboardSheetCellTypography';
 import {
@@ -31,6 +32,8 @@ export type CompactCellLayoutOpts = {
   typographyPlan?: SheetCellTypography;
   /** 可变行高：图片按自然比例、文字完整显示，不挤压 maxImageH */
   variableHeight?: boolean;
+  /** 覆盖单格文案（反馈拼图等） */
+  cellMeta?: SheetCellTextMeta;
 };
 
 const imageCache = new Map<string, Promise<HTMLImageElement | null>>();
@@ -140,7 +143,7 @@ export async function measureCompactStoryboardCellHeight(
   w: number,
   opts: CompactCellLayoutOpts = {}
 ): Promise<number> {
-  const meta = compileSheetShotPanelMeta(row, fieldCatalog);
+  const meta = opts.cellMeta ?? compileSheetShotPanelMeta(row, fieldCatalog);
   const plan =
     opts.typographyPlan ??
     planStoryboardSheetGroupTypographyUnbounded(ctx, [meta], {
@@ -155,6 +158,35 @@ export async function measureCompactStoryboardCellHeight(
   return textMetrics.headerBlockH + imageH + footerGap + textMetrics.footerBlockH;
 }
 
+/** 反馈拼图切分：测量单格内分镜图区域（像素坐标，与 drawCompactStoryboardCell 一致） */
+export async function measureCompactStoryboardCellImageRect(
+  ctx: CanvasRenderingContext2D,
+  row: StoryboardTableRow,
+  fieldCatalog: StoryboardParseFieldDef[],
+  x: number,
+  y: number,
+  cellW: number,
+  opts: CompactCellLayoutOpts = {}
+): Promise<{ x: number; y: number; w: number; h: number }> {
+  const meta = opts.cellMeta ?? compileSheetShotPanelMeta(row, fieldCatalog);
+  const plan =
+    opts.typographyPlan ??
+    planStoryboardSheetGroupTypographyUnbounded(ctx, [meta], {
+      cellW,
+      cellH: Math.round(cellW * 2.5),
+      canvasWidth: opts.canvasWidth ?? cellW,
+    });
+  const label = storyboardRowShotLabel(row, row.index);
+  const textMetrics = measureSheetCellTextBlock(ctx, meta, plan, cellW, label);
+  const imageY = y + textMetrics.headerBlockH;
+  const placeholderH = Math.round(cellW * 0.22);
+  const src = resolveStoryboardRowFrameDisplaySrc(row);
+  const drawnH = src
+    ? await resolveNaturalImageHeight(row, cellW).catch(() => placeholderH)
+    : placeholderH;
+  return { x, y: imageY, w: cellW, h: Math.max(1, drawnH) };
+}
+
 /** 在指定矩形内绘制紧凑 contact-sheet 单格（顶栏 + 宽铺满图 + 底栏，字号随密度自适应） */
 export async function drawCompactStoryboardCell(
   ctx: CanvasRenderingContext2D,
@@ -166,7 +198,7 @@ export async function drawCompactStoryboardCell(
   h: number,
   opts: CompactCellLayoutOpts = {}
 ): Promise<void> {
-  const meta = compileSheetShotPanelMeta(row, fieldCatalog);
+  const meta = opts.cellMeta ?? compileSheetShotPanelMeta(row, fieldCatalog);
   const plan =
     opts.typographyPlan ??
     (opts.variableHeight
@@ -224,6 +256,88 @@ export async function drawCompactStoryboardCell(
   ctx.strokeStyle = STORYBOARD_SHEET_SKETCH_BORDER;
   ctx.lineWidth = STORYBOARD_SHEET_SKETCH_BORDER_WIDTH;
   ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+}
+
+/** 反馈改图拼图：单格纯插画区与整格区域（像素坐标） */
+export function measureFeedbackCollageImageOnlyRects(
+  x: number,
+  y: number,
+  cellW: number,
+  cellH: number
+): {
+  cellRect: { x: number; y: number; w: number; h: number };
+  visualRect: { x: number; y: number; w: number; h: number };
+} {
+  const labelH = Math.max(12, Math.round(cellH * 0.08));
+  const margin = Math.max(2, Math.round(cellW * 0.025));
+  return {
+    cellRect: { x, y, w: cellW, h: cellH },
+    visualRect: {
+      x: x + margin,
+      y: y + labelH + margin,
+      w: Math.max(1, cellW - margin * 2),
+      h: Math.max(1, cellH - labelH - margin * 2),
+    },
+  };
+}
+
+/** 反馈改图拼图：按源图比例计算实际绘制区域（不含下方留白） */
+export async function measureFeedbackCollageImageDrawRect(
+  row: StoryboardTableRow,
+  visualRect: { x: number; y: number; w: number; h: number }
+): Promise<{ x: number; y: number; w: number; h: number }> {
+  const placeholderH = Math.min(visualRect.h, Math.round(visualRect.w * 0.22));
+  const src = resolveStoryboardRowFrameDisplaySrc(row);
+  if (!src) {
+    return { ...visualRect, h: placeholderH };
+  }
+  const img = await loadFrameImage(src);
+  if (!img?.width || !img.height) {
+    return { ...visualRect, h: placeholderH };
+  }
+  const drawnH = Math.min(
+    visualRect.h,
+    Math.max(1, Math.round(visualRect.w / (img.width / img.height)))
+  );
+  return { x: visualRect.x, y: visualRect.y, w: visualRect.w, h: drawnH };
+}
+
+/** 反馈改图拼图：仅镜号 + 插画，不在图内写入修改反馈等文字 */
+export async function drawFeedbackCollageImageOnlyCell(
+  ctx: CanvasRenderingContext2D,
+  row: StoryboardTableRow,
+  x: number,
+  y: number,
+  cellW: number,
+  cellH: number,
+  shotNo: string
+): Promise<void> {
+  const { visualRect } = measureFeedbackCollageImageOnlyRects(x, y, cellW, cellH);
+  ctx.fillStyle = STORYBOARD_SHEET_SKETCH_BG;
+  ctx.fillRect(x, y, cellW, cellH);
+
+  const src = resolveStoryboardRowFrameDisplaySrc(row);
+  if (src) {
+    const img = await loadFrameImage(src);
+    if (img) {
+      drawImageNaturalWidth(ctx, img, visualRect.x, visualRect.y, visualRect.w);
+    } else {
+      drawPlaceholder(ctx, visualRect.x, visualRect.y, visualRect.w, visualRect.h, shotNo);
+    }
+  } else {
+    drawPlaceholder(ctx, visualRect.x, visualRect.y, visualRect.w, visualRect.h, shotNo);
+  }
+
+  const labelH = Math.max(12, Math.round(cellH * 0.08));
+  ctx.font = storyboardSheetCanvasFont(600, Math.max(9, Math.round(cellH * 0.09)));
+  ctx.fillStyle = STORYBOARD_SHEET_SKETCH_TEXT_MUTED;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillText(shotNo, x + Math.max(3, Math.round(cellW * 0.03)), y + labelH - 2);
+
+  ctx.strokeStyle = STORYBOARD_SHEET_SKETCH_BORDER;
+  ctx.lineWidth = STORYBOARD_SHEET_SKETCH_BORDER_WIDTH;
+  ctx.strokeRect(x + 0.5, y + 0.5, cellW - 1, cellH - 1);
 }
 
 /** 将单镜分镜合成卡渲染为位图 */

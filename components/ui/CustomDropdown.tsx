@@ -125,6 +125,12 @@ export function CustomDropdown({
       if (!targetNode) return;
       if (triggerRef.current?.contains(targetNode)) return;
       if (listRef.current?.contains(targetNode)) return;
+      if (
+        targetNode instanceof Element &&
+        targetNode.closest('[data-ac-dropdown-overlay], [data-ac-dropdown-list]')
+      ) {
+        return;
+      }
       close();
     };
     const onKeyDown = (e: KeyboardEvent) => {
@@ -138,13 +144,40 @@ export function CustomDropdown({
         close();
       }
     };
+    const onWheelCapture = (e: WheelEvent) => {
+      const target = e.target as Node | null;
+      if (!target) return;
+      const list = listRef.current;
+      if (list && list.contains(target)) {
+        const { scrollTop, scrollHeight, clientHeight } = list;
+        if (scrollHeight <= clientHeight + 1) {
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
+        const delta = e.deltaY;
+        const atTop = scrollTop <= 0 && delta < 0;
+        const atBottom = scrollTop + clientHeight >= scrollHeight - 1 && delta > 0;
+        if (atTop || atBottom) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+        return;
+      }
+      if (target instanceof Element && target.closest('[data-ac-dropdown-overlay]')) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
     window.addEventListener('scroll', onScroll, true);
     window.addEventListener('resize', close);
     document.addEventListener('keydown', onKeyDown);
+    window.addEventListener('wheel', onWheelCapture, { capture: true, passive: false });
     return () => {
       window.removeEventListener('scroll', onScroll, true);
       window.removeEventListener('resize', close);
       document.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('wheel', onWheelCapture, true);
     };
   }, [open]);
 
@@ -163,12 +196,16 @@ export function CustomDropdown({
           className="fixed inset-0"
           style={{ zIndex: portalZIndex.backdrop }}
           aria-hidden
+          data-prevent-wheel-scroll
+          data-ac-dropdown-overlay
           onClick={() => setOpen(false)}
         />
         {listPosition && (
           <ul
             ref={listRef}
             className={`fixed overflow-y-auto rounded-xl shadow-xl text-white ${listPy} ${listSurfaceClass}`}
+            data-prevent-wheel-scroll
+            data-ac-dropdown-list
             style={{
               top: listPosition.top,
               bottom: listPosition.bottom,

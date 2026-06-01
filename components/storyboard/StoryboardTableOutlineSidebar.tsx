@@ -12,9 +12,11 @@ import {
 } from '../../services/storyboardVirtualScroll';
 import { StoryboardRowMeasureWrap } from './StoryboardRowMeasureWrap';
 import {
+  storyboardRowEditFeedbackPreview,
   storyboardRowOutlineSubtitle,
   storyboardRowOutlineTitle,
 } from './storyboardRowDisplay';
+import StoryboardEditFeedbackMark from './StoryboardEditFeedbackMark';
 import {
   STORYBOARD_COLUMN_HEAD,
   STORYBOARD_OUTLINE_ITEM,
@@ -49,7 +51,8 @@ function OutlineRowButton({
   const thumb = resolveStoryboardRowFrameDisplaySrc(row);
   const hasThumb = storyboardRowHasFrameRef(row);
   const title = storyboardRowOutlineTitle(row, index);
-  const subtitle = storyboardRowOutlineSubtitle(row, fieldCatalog);
+  const feedbackPreview = storyboardRowEditFeedbackPreview(row);
+  const subtitle = feedbackPreview ?? storyboardRowOutlineSubtitle(row, fieldCatalog);
 
   return (
     <div role="listitem">
@@ -79,8 +82,15 @@ function OutlineRowButton({
             {row.locked ? (
               <span className="shrink-0 text-[8px] text-amber-400/90">锁</span>
             ) : null}
+            <StoryboardEditFeedbackMark row={row} />
           </span>
-          <span className="mt-px block truncate text-[8px] text-gray-600">{subtitle}</span>
+          <span
+            className={`mt-px block truncate text-[8px] ${
+              feedbackPreview ? 'text-sky-300/80' : 'text-gray-600'
+            }`}
+          >
+            {feedbackPreview ? `反馈：${subtitle}` : subtitle}
+          </span>
         </span>
       </button>
     </div>

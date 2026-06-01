@@ -70,6 +70,9 @@ export function useWorkflowMainScrollCapture(
     (e: ReactWheelEvent) => {
       if (!isWorkflowMarqueeWheelActive) return;
       const target = e.target as Element | null;
+      if (target?.closest('[data-prevent-wheel-scroll], [data-ac-dropdown-overlay], [data-ac-dropdown-list]')) {
+        return;
+      }
       if (target?.closest('[data-ac-block-workflow-marquee]')) return;
       /** 大纲区由 registerWorkflowAssetListWheel 内处理（空白时滚动资产列） */
       if (target?.closest('[data-workflow-sidebar], [data-workflow-preset], [data-workflow-card]')) {

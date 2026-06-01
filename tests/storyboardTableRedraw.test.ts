@@ -5,6 +5,12 @@ import {
   isStoryboardFeedbackRedrawEligible,
   pickStoryboardEditRedrawPreset,
   pickStoryboardFeedbackRedrawPreset,
+  pickDefaultStoryboardFeedbackCollagePresetId,
+  resolveStoryboardFeedbackCollagePreset,
+  STORYBOARD_FEEDBACK_COLLAGE_DEFAULT_PRESET_ID,
+  DEFAULT_STORYBOARD_FEEDBACK_COLLAGE_INSTRUCTION,
+  getBuiltinStoryboardFeedbackCollagePreset,
+  listStoryboardFeedbackCollageRedrawPresets,
 } from '../services/storyboardTableRedraw';
 
 function mockPreset(id: string, category: 'text_to_image' | 'image_to_image'): CustomAppModule {
@@ -57,12 +63,12 @@ describe('pickStoryboardEditRedrawPreset', () => {
 describe('feedback batch redraw helpers', () => {
   const i2iPresets = [mockPreset('i2i', 'image_to_image')];
 
-  it('pickStoryboardFeedbackRedrawPreset uses image_to_image only', () => {
+  it('pickStoryboardFeedbackRedrawPreset prefers builtin collage preset', () => {
     const preset = pickStoryboardFeedbackRedrawPreset([
       mockPreset('t2i', 'text_to_image'),
       mockPreset('i2i', 'image_to_image'),
     ]);
-    expect(preset?.id).toBe('i2i');
+    expect(preset?.id).toBe(STORYBOARD_FEEDBACK_COLLAGE_DEFAULT_PRESET_ID);
   });
 
   it('buildStoryboardFeedbackRedrawInputText returns raw feedback only', () => {
@@ -87,11 +93,67 @@ describe('feedback batch redraw helpers', () => {
     ).toBe(false);
   });
 
-  it('returns null when no image_to_image preset', () => {
-    expect(pickStoryboardFeedbackRedrawPreset([mockPreset('t2i', 'text_to_image')])).toBeNull();
+  it('still resolves builtin when user presets lack image_to_image', () => {
+    expect(pickStoryboardFeedbackRedrawPreset([mockPreset('t2i', 'text_to_image')])?.id).toBe(
+      STORYBOARD_FEEDBACK_COLLAGE_DEFAULT_PRESET_ID
+    );
   });
 
-  it('i2i preset list sanity', () => {
-    expect(pickStoryboardFeedbackRedrawPreset(i2iPresets)?.id).toBe('i2i');
+  it('injects builtin collage preset when not stored', () => {
+    expect(pickStoryboardFeedbackRedrawPreset(i2iPresets)?.id).toBe(
+      STORYBOARD_FEEDBACK_COLLAGE_DEFAULT_PRESET_ID
+    );
+  });
+
+  it('respects disabled builtin collage preset in capability store', () => {
+    const presets = [
+      {
+        ...mockPreset(STORYBOARD_FEEDBACK_COLLAGE_DEFAULT_PRESET_ID, 'image_to_image'),
+        label: '分镜拼图改图',
+        enabled: false,
+      },
+    ];
+    const list = listStoryboardFeedbackCollageRedrawPresets(presets);
+    expect(list.some((p) => p.id === STORYBOARD_FEEDBACK_COLLAGE_DEFAULT_PRESET_ID)).toBe(false);
+    expect(pickStoryboardFeedbackRedrawPreset(presets)).toBeNull();
+  });
+
+  it('resolveStoryboardFeedbackCollagePreset respects stored id', () => {
+    const presets = [
+      mockPreset('storyboard_collage_alt', 'image_to_image'),
+      {
+        ...mockPreset(STORYBOARD_FEEDBACK_COLLAGE_DEFAULT_PRESET_ID, 'image_to_image'),
+        label: '分镜拼图改图',
+      },
+    ];
+    expect(resolveStoryboardFeedbackCollagePreset(presets, 'storyboard_collage_alt')?.id).toBe(
+      'storyboard_collage_alt'
+    );
+    expect(resolveStoryboardFeedbackCollagePreset(presets, 'missing')?.id).toBe(
+      STORYBOARD_FEEDBACK_COLLAGE_DEFAULT_PRESET_ID
+    );
+  });
+
+  it('defaults collage redraw to builtin storyboard_collage_redraw_v1', () => {
+    const presets = [
+      mockPreset('style_transfer', 'image_to_image'),
+      {
+        ...mockPreset('storyboard_collage_redraw_v1', 'image_to_image'),
+        id: STORYBOARD_FEEDBACK_COLLAGE_DEFAULT_PRESET_ID,
+        label: '分镜拼图改图',
+      },
+    ];
+    expect(pickDefaultStoryboardFeedbackCollagePresetId(presets)).toBe(
+      STORYBOARD_FEEDBACK_COLLAGE_DEFAULT_PRESET_ID
+    );
+    expect(resolveStoryboardFeedbackCollagePreset(presets, null)?.id).toBe(
+      STORYBOARD_FEEDBACK_COLLAGE_DEFAULT_PRESET_ID
+    );
+  });
+
+  it('builtin collage preset includes default instruction', () => {
+    const preset = getBuiltinStoryboardFeedbackCollagePreset();
+    expect(preset.instruction).toBe(DEFAULT_STORYBOARD_FEEDBACK_COLLAGE_INSTRUCTION);
+    expect(preset.instruction).toContain('禁止添加 Scene Info');
   });
 });

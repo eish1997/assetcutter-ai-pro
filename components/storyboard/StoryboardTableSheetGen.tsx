@@ -13,7 +13,6 @@ import type { StoryboardBulkTextMode } from '../../services/storyboardTableBulkI
 import {
   defaultStoryboardBulkDraft,
   storyboardBulkDraftStorageKey,
-  type StoryboardBulkDraft,
 } from '../../services/storyboardTableInput';
 import {
   normalizeShotsPerSheet,
@@ -60,7 +59,7 @@ type Props = {
   onNotify?: (level: 'info' | 'warn' | 'error', message: string) => void;
 };
 
-function readBulkDraft(assetId: string): StoryboardBulkDraft {
+function readBulkDraft(assetId: string) {
   return readLocalJson(storyboardBulkDraftStorageKey(assetId), defaultStoryboardBulkDraft());
 }
 
@@ -84,11 +83,9 @@ export default function StoryboardTableSheetGen({
   onApplySheet,
   onNotify,
 }: Props) {
-  const refFileInput = useRef<HTMLInputElement>(null);
   const sheetUploadRef = useRef<HTMLInputElement>(null);
   const [shotsPerSheet, setShotsPerSheet] = useState(25);
   const [promptExtra, setPromptExtra] = useState('');
-  const [localRefImage, setLocalRefImage] = useState<string | undefined>();
   const bulkDraft = useMemo(() => readBulkDraft(assetId), [assetId, draftTick]);
 
   useEffect(() => {
@@ -96,7 +93,6 @@ export default function StoryboardTableSheetGen({
       normalizeShotsPerSheet(readLocalJson(sheetShotsStorageKey(assetId), 25, (v) => v))
     );
     setPromptExtra(readLocalJson(sheetPromptStorageKey(assetId), '', (v) => (typeof v === 'string' ? v : null)));
-    setLocalRefImage(undefined);
   }, [assetId]);
 
   const bulkText = bulkDraft.pipeText;
@@ -111,8 +107,6 @@ export default function StoryboardTableSheetGen({
     () => planStoryboardSheetGenTasks(source.rows, shotsPerSheet),
     [shotsPerSheet, source.rows]
   );
-
-  const referenceImage = localRefImage || bulkDraft.imageDataUrl;
 
   const presetOptions = useMemo(
     () => redrawPresets.map((preset) => ({ value: preset.id, label: preset.label || preset.id })),
@@ -143,23 +137,6 @@ export default function StoryboardTableSheetGen({
     onPresetChange(value);
   };
 
-  const handleRefFile = (file: File | undefined) => {
-    if (!file || !file.type.startsWith('image/')) {
-      onNotify?.('warn', '请选择图片文件');
-      return;
-    }
-    if (file.size > 12 * 1024 * 1024) {
-      onNotify?.('warn', '图片过大，请小于 12MB');
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = typeof reader.result === 'string' ? reader.result : '';
-      if (dataUrl) setLocalRefImage(dataUrl);
-    };
-    reader.readAsDataURL(file);
-  };
-
   const handleRun = useCallback(async () => {
     if (readOnly || busy) return;
     if (!effectiveRedrawPresetId) {
@@ -180,16 +157,11 @@ export default function StoryboardTableSheetGen({
       onNotify?.('warn', '生图能力无效');
       return;
     }
-    if (preset.category === 'image_to_image' && !referenceImage) {
-      onNotify?.('warn', '图生图需上传参考分镜图（本区参考图）');
-      return;
-    }
-
     await onRun({
       presetId: effectiveRedrawPresetId,
       shotsPerSheet,
       promptExtra,
-      referenceImageDataUrl: referenceImage,
+      forceTextToImage: preset.category === 'image_to_image',
       sourceRows: source.rows,
       fieldCatalog: source.catalog,
     });
@@ -201,7 +173,6 @@ export default function StoryboardTableSheetGen({
     promptExtra,
     readOnly,
     redrawPresets,
-    referenceImage,
     shotsPerSheet,
     source.catalog,
     source.rows,
@@ -235,7 +206,7 @@ export default function StoryboardTableSheetGen({
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-3 py-2.5">
+    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-3 py-2.5 no-scrollbar">
       {/* 顶栏：标题 + 执行 */}
       <div className="mb-2 flex shrink-0 flex-wrap items-center gap-2">
         <span className="text-[10px] font-semibold text-gray-400">生图</span>
@@ -307,57 +278,6 @@ export default function StoryboardTableSheetGen({
             />
           </div>
 
-          <div>
-            <label className={STORYBOARD_LABEL}>参考图</label>
-            <p className="mb-1.5 text-[9px] leading-snug text-gray-600">
-              图生图时使用；可选，叠加在分镜拼图之上。
-            </p>
-            <input
-              ref={refFileInput}
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={(event) => {
-                handleRefFile(event.target.files?.[0]);
-                event.target.value = '';
-              }}
-            />
-            <div className="flex items-center gap-2">
-              {referenceImage ? (
-                <button
-                  type="button"
-                  disabled={readOnly || busy}
-                  onClick={() => onPreviewImage?.(referenceImage)}
-                  className="h-14 w-20 shrink-0 overflow-hidden rounded-lg border border-white/[0.08] bg-black/40 ring-1 ring-white/[0.06] transition hover:ring-violet-400/25"
-                >
-                  <img src={referenceImage} alt="生图参考" className="h-full w-full object-cover" />
-                </button>
-              ) : (
-                <div className="flex h-14 w-20 shrink-0 items-center justify-center rounded-lg border border-dashed border-white/[0.1] bg-white/[0.02] text-[9px] text-gray-600">
-                  无
-                </div>
-              )}
-              <button
-                type="button"
-                disabled={readOnly || busy}
-                onClick={() => refFileInput.current?.click()}
-                className={`${STORYBOARD_TOOL_BTN_NEUTRAL} h-7 shrink-0 px-2.5 text-[10px]`}
-              >
-                {referenceImage ? '更换' : '上传参考图'}
-              </button>
-              {localRefImage ? (
-                <button
-                  type="button"
-                  disabled={readOnly || busy}
-                  onClick={() => setLocalRefImage(undefined)}
-                  className={`${STORYBOARD_TOOL_BTN_NEUTRAL} h-7 shrink-0 px-2 text-[10px] text-gray-500`}
-                >
-                  清除
-                </button>
-              ) : null}
-            </div>
-          </div>
-
           {tasks.length > 0 ? (
             <details className="rounded-lg border border-white/[0.06] bg-white/[0.02] px-2 py-1.5">
               <summary className="cursor-pointer select-none text-[9px] font-semibold text-gray-500">
@@ -379,7 +299,7 @@ export default function StoryboardTableSheetGen({
       </div>
 
       {/* 拼图预览：置底，占满剩余高度 */}
-      <div className="flex min-h-[10rem] flex-1 flex-col overflow-hidden rounded-xl border border-white/[0.08] bg-black/30">
+      <div className="mb-2 flex min-h-[8rem] flex-1 flex-col overflow-hidden rounded-xl border border-white/[0.08] bg-black/30">
         <div className="flex shrink-0 items-center justify-between gap-2 border-b border-white/[0.06] px-2.5 py-1.5">
           <span className="text-[10px] font-semibold text-gray-300">AI 拼图</span>
           <div className="flex flex-wrap items-center justify-end gap-1.5">

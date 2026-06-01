@@ -20,7 +20,10 @@ export type StoryboardSheetGenBatchRequest = {
   presetId: string;
   shotsPerSheet: number;
   promptExtra: string;
+  /** @deprecated 改图资产已移至 AI 拼图下方；初次生图不再使用 */
   referenceImageDataUrl?: string;
+  /** 图生图预设初次批量生图时强制走文生图 */
+  forceTextToImage?: boolean;
   sourceRows: StoryboardTableRow[];
   fieldCatalog: StoryboardParseFieldDef[];
 };

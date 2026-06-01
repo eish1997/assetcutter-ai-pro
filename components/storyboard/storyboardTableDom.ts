@@ -3,6 +3,10 @@ export function storyboardRowDomId(rowId: string): string {
   return `ac-storyboard-row-${rowId}`;
 }
 
+export function storyboardCanvasTileDomId(rowId: string): string {
+  return `ac-storyboard-canvas-${rowId}`;
+}
+
 export function storyboardCompositeDomId(rowId: string): string {
   return `ac-storyboard-composite-${rowId}`;
 }

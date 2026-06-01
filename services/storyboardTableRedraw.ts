@@ -2,6 +2,11 @@ import type { CustomAppModule, StoryboardParseFieldDef, StoryboardTableRow } fro
 import { coerceImageModelRegistryId } from './modelRegistry/imageModels';
 import { compileRedrawPrompt } from './storyboardTableParse';
 import {
+  executeStoryboardCollageRedraw,
+  type StoryboardCollageRedrawMode,
+} from './storyboardFeedbackSheetRedraw';
+import { splitStoryboardFeedbackCollageByLayout } from './storyboardFeedbackCollageSplit';
+import {
   capabilityUsesGenImageEngine,
   executeCapability,
   getCapabilityEngine,
@@ -21,6 +26,25 @@ export const STORYBOARD_REDRAW_PRESET_KEY = 'ac_storyboard_redraw_preset_v1';
 export const STORYBOARD_EDIT_REDRAW_PRESET_KEY = 'ac_storyboard_edit_redraw_preset_v1';
 /** 编辑页重绘/反馈重绘选用的生图 registryId，与解析页生图预设隔离 */
 export const STORYBOARD_EDIT_REDRAW_MODEL_KEY = 'ac_storyboard_edit_redraw_model_v1';
+/** 编辑页拼图改图（批量/单镜有图）选用的图生图能力预设 */
+export const STORYBOARD_EDIT_FEEDBACK_COLLAGE_PRESET_KEY = 'ac_storyboard_edit_feedback_collage_preset_v1';
+/** 内置拼图改图能力预设 id（与 capability-seed / enforce 合并一致） */
+export const STORYBOARD_FEEDBACK_COLLAGE_DEFAULT_PRESET_ID = 'storyboard_collage_redraw_v1';
+
+/** 分镜拼图改图预设默认提示词（能力页展示；运行时与本次拼图镜头说明拼接） */
+export const DEFAULT_STORYBOARD_FEEDBACK_COLLAGE_INSTRUCTION = `你是分镜表拼图改图助手。
+
+输入是一张多镜纯分镜插画网格（每格仅含镜号与插画，不含画面描述/对白/修改反馈等文字条）。
+
+请按用户消息中各镜说明（画面描述和/或修改反馈）调整对应格内的插画内容。
+
+硬性要求：
+- 保持与输入相同的格数、格线、排列顺序与整体尺寸；
+- 每格输出只能是修改后的插画/草图；
+- 禁止添加 Scene Info、Dialogue、画面描述、修改反馈或任何文字说明条。`;
+
+/** 编辑页拼图改图选用的生图 registryId */
+export const STORYBOARD_EDIT_FEEDBACK_COLLAGE_MODEL_KEY = 'ac_storyboard_edit_feedback_collage_model_v1';
 /** 反馈批量重绘是否走理解 LLM（关则直发反馈文本） */
 export const STORYBOARD_EDIT_FEEDBACK_REDRAW_UNDERSTAND_KEY = 'ac_storyboard_edit_feedback_redraw_understand_v1';
 
@@ -82,10 +106,68 @@ export function pickStoryboardEditRedrawPreset(
   return list.find((p) => p.category === category) ?? list[0] ?? null;
 }
 
-/** 反馈批量重绘：固定图生图预设 */
+/** 拼图改图可选能力：已启用的图生图预设 */
+export function getBuiltinStoryboardFeedbackCollagePreset(): CustomAppModule {
+  return {
+    id: STORYBOARD_FEEDBACK_COLLAGE_DEFAULT_PRESET_ID,
+    label: '分镜拼图改图',
+    category: 'image_to_image',
+    engine: 'gen_image',
+    enabled: true,
+    order: 0,
+    instruction: DEFAULT_STORYBOARD_FEEDBACK_COLLAGE_INSTRUCTION,
+    imageGear: 'pro',
+  };
+}
+
+export function listStoryboardFeedbackCollageRedrawPresets(
+  presets: CustomAppModule[]
+): CustomAppModule[] {
+  const builtin = getBuiltinStoryboardFeedbackCollagePreset();
+  const storedBuiltin = presets.find((p) => p.id === builtin.id);
+  const tagged = presets.filter((p) => {
+    if (p.enabled === false) return false;
+    if (p.category !== 'image_to_image') return false;
+    if (!capabilityUsesGenImageEngine(p)) return false;
+    return p.id.startsWith('storyboard_collage_') || p.id === builtin.id;
+  });
+  const byId = new Map<string, CustomAppModule>();
+  for (const p of tagged) byId.set(p.id, p);
+  if (!storedBuiltin) {
+    byId.set(builtin.id, builtin);
+  } else if (storedBuiltin.enabled !== false) {
+    byId.set(builtin.id, { ...builtin, ...storedBuiltin });
+  }
+  const list = [...byId.values()].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  if (list.length > 0) return list;
+  return listStoryboardRedrawPresets(presets).filter((p) => p.category === 'image_to_image');
+}
+
+export function pickDefaultStoryboardFeedbackCollagePresetId(presets: CustomAppModule[]): string {
+  const list = listStoryboardFeedbackCollageRedrawPresets(presets);
+  const seeded = list.find((p) => p.id === STORYBOARD_FEEDBACK_COLLAGE_DEFAULT_PRESET_ID);
+  if (seeded) return seeded.id;
+  return list[0]?.id ?? '';
+}
+
+export function resolveStoryboardFeedbackCollagePreset(
+  presets: CustomAppModule[],
+  presetId?: string | null
+): CustomAppModule | null {
+  const list = listStoryboardFeedbackCollageRedrawPresets(presets);
+  if (!list.length) return null;
+  const id = String(presetId ?? '').trim();
+  if (id) {
+    const matched = list.find((p) => p.id === id);
+    if (matched) return matched;
+  }
+  const defaultId = pickDefaultStoryboardFeedbackCollagePresetId(presets);
+  return list.find((p) => p.id === defaultId) ?? list[0] ?? null;
+}
+
+/** @deprecated 使用 resolveStoryboardFeedbackCollagePreset */
 export function pickStoryboardFeedbackRedrawPreset(presets: CustomAppModule[]): CustomAppModule | null {
-  const list = listStoryboardRedrawPresets(presets).filter((p) => p.category === 'image_to_image');
-  return list[0] ?? null;
+  return resolveStoryboardFeedbackCollagePreset(presets, null);
 }
 
 async function resolveRowFrameImage(
@@ -142,6 +224,8 @@ export async function resolveStoryboardRowFrameDataUrl(
 
 export type StoryboardRowRedrawArgs = {
   preset: CustomAppModule;
+  /** 有分镜图拼图重绘时优先使用（应与 preset 一致） */
+  collagePreset?: CustomAppModule;
   row: StoryboardTableRow;
   fieldCatalog: StoryboardParseFieldDef[];
   ctx: CapabilityExecuteContext;
@@ -164,6 +248,8 @@ export type StoryboardRowRedrawInvokeOptions = {
   feedbackOnly?: boolean;
   /** 反馈批量重绘：是否走理解 LLM */
   understand?: boolean;
+  /** 拼图改图能力预设 id（编辑页选择，缺省取持久化默认） */
+  collagePresetId?: string;
 };
 
 export type StoryboardRowRedrawResult =
@@ -171,7 +257,7 @@ export type StoryboardRowRedrawResult =
   | { ok: false; error: string };
 
 /**
- * 单行分镜重绘：走能力执行器（文生图 / 图生图），不写回独立 WorkflowAsset。
+ * 单行分镜重绘：有分镜图时走拼图改图（1 镜拼 1 张 + 布局切分）；否则文生图直出。
  */
 export async function executeStoryboardRowRedraw(
   args: StoryboardRowRedrawArgs
@@ -182,8 +268,6 @@ export async function executeStoryboardRowRedraw(
     fieldCatalog,
     ctx,
     promptExtra,
-    companionBaseUrl = '',
-    companionProjectId = '',
   } = args;
   const presetBase =
     args.imageModelRegistryId != null && String(args.imageModelRegistryId).trim()
@@ -193,18 +277,18 @@ export async function executeStoryboardRowRedraw(
         }
       : rawPreset;
   const understand = args.feedbackOnly ? args.understand !== false : true;
-  const preset = args.feedbackOnly
-    ? {
-        ...presetBase,
-        category: 'image_to_image' as const,
-        instruction: '',
-        skipUnderstand: !understand,
-      }
-    : presetBase;
 
-  if (getCapabilityEngine(preset) !== 'gen_image') {
+  if (getCapabilityEngine(presetBase) !== 'gen_image') {
     return { ok: false, error: '请选择文生图或图生图类能力' };
   }
+
+  const useImageRef =
+    !args.forceTextToImage &&
+    (args.feedbackOnly || presetBase.category === 'image_to_image') &&
+    storyboardRowHasFrameRef(row);
+
+  const collageCap = args.collagePreset ?? (useImageRef ? presetBase : null);
+  const textPreset = pickStoryboardEditRedrawPreset([presetBase], row) ?? presetBase;
 
   const inputText = args.feedbackOnly
     ? buildStoryboardFeedbackRedrawInputText(row)
@@ -216,33 +300,49 @@ export async function executeStoryboardRowRedraw(
     };
   }
 
-  const useImageRef =
-    !args.forceTextToImage &&
-    (args.feedbackOnly || preset.category === 'image_to_image') &&
-    storyboardRowHasFrameRef(row);
-
-  let inputImage = '';
   if (useImageRef) {
-    const resolved = await resolveStoryboardRowFrameDataUrl(
-      row,
-      companionBaseUrl,
-      companionProjectId
+    if (!collageCap || collageCap.disabled) {
+      return { ok: false, error: '请选择拼图改图能力（图生图）' };
+    }
+    const collageMode: StoryboardCollageRedrawMode = args.feedbackOnly ? 'feedback' : 'edit';
+    const collageOutcome = await executeStoryboardCollageRedraw({
+      preset: collageCap,
+      rows: [row],
+      fieldCatalog,
+      ctx,
+      imageModelRegistryId: args.imageModelRegistryId,
+      understand,
+      mode: collageMode,
+    });
+    if (!collageOutcome.ok) {
+      return { ok: false, error: collageOutcome.error };
+    }
+
+    const split = await splitStoryboardFeedbackCollageByLayout(
+      collageOutcome.image,
+      collageOutcome.layout,
+      [row]
     );
-    if (resolved.ok === false) return { ok: false, error: resolved.error };
-    inputImage = resolved.dataUrl;
+    const match = split.matches[0];
+    if (!match?.image) {
+      return { ok: false, error: split.warn || '拼图切分回填失败' };
+    }
+
+    ctx.onLog?.('info', `分镜表 · 镜头 ${row.shotNo || row.index + 1} 重绘完成`);
+    return { ok: true, image: match.image };
   }
 
-  if ((args.feedbackOnly || preset.category === 'image_to_image') && !useImageRef && !args.forceTextToImage) {
+  if ((args.feedbackOnly || presetBase.category === 'image_to_image') && !useImageRef && !args.forceTextToImage) {
     return {
       ok: false,
       error: args.feedbackOnly ? '反馈重绘需要本镜已有分镜图' : '图生图重绘需要本镜已有分镜图，或改选文生图能力',
     };
   }
 
-  const label = preset.label || preset.id;
+  const label = textPreset.label || textPreset.id;
   ctx.onLog?.('info', `分镜表 · ${label} · 镜头 ${row.shotNo || row.index + 1} 重绘中…`);
 
-  const result = await executeCapability(preset, inputImage, ctx, { inputText });
+  const result = await executeCapability(textPreset, '', ctx, { inputText });
 
   if (!result.ok) {
     return { ok: false, error: result.error || '生图失败' };

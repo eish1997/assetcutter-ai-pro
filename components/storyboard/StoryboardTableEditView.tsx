@@ -1,29 +1,26 @@
-import React, { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { StoryboardParseFieldDef, StoryboardTableRow } from '../../types';
+import React, { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import type { StoryboardTableRow } from '../../types';
 import { readLocalJson, writeLocalJson } from '../../services/clientPersist';
 import {
-  STORYBOARD_EDIT_ROW_ESTIMATE_PX,
-  STORYBOARD_EDIT_ROW_GAP_PX,
   STORYBOARD_OUTLINE_ROW_ESTIMATE_PX,
-  buildStoryboardBandOffsets,
-  storyboardActiveRowIndexFromGridBands,
-  storyboardEditGridColumnsForWidth,
-  storyboardGridBandCount,
 } from '../../services/storyboardVirtualScroll';
 import { useStoryboardVirtualList } from '../../hooks/useStoryboardVirtualList';
 import StoryboardConnectedRowEditor from './StoryboardConnectedRowEditor';
-import StoryboardConnectedCompositeCard from './StoryboardConnectedCompositeCard';
+import StoryboardEditCanvasGrid from './StoryboardEditCanvasGrid';
+import StoryboardFeedbackRedrawHistoryBar from './StoryboardFeedbackRedrawHistoryBar';
+import { storyboardRowHasEditFeedback } from './storyboardRowDisplay';
+import { CustomDropdown } from '../ui/CustomDropdown';
+import type { StoryboardFeedbackRedrawBatchRecord } from '../../services/storyboardFeedbackSheetRedraw';
+import { STORYBOARD_FEEDBACK_COLLAGE_LIMIT_OPTIONS } from '../../services/storyboardFeedbackSheetRedraw';
 import { StoryboardRowInteractionProvider } from './StoryboardRowInteractionContext';
 import type { StoryboardRowInteractionValue } from './StoryboardRowInteractionContext';
 import StoryboardTableOutlineSidebar from './StoryboardTableOutlineSidebar';
-import { StoryboardRowMeasureWrap } from './StoryboardRowMeasureWrap';
-import { storyboardRowDomId } from './storyboardTableDom';
+import { storyboardCanvasTileDomId, storyboardRowDomId } from './storyboardTableDom';
 import {
   STORYBOARD_BODY_SCROLL,
   STORYBOARD_COLUMN_HEAD,
-  STORYBOARD_COMPOSITE_RAIL_W,
-  STORYBOARD_EDIT_GRID,
-  STORYBOARD_GRID_EDITOR_PREVIEW,
+  STORYBOARD_EDIT_EDITOR_RAIL_W,
+  STORYBOARD_EDIT_VIEW_LAYOUT,
   STORYBOARD_GRID_ROOT,
   STORYBOARD_PAD_PANEL,
   STORYBOARD_SIDE_RAIL,
@@ -39,10 +36,6 @@ export type StoryboardTableEditViewHandle = {
   scrollToRow: (rowId: string, behavior?: ScrollBehavior) => void;
 };
 
-function fieldCatalogSignature(catalog: StoryboardParseFieldDef[]): string {
-  return catalog.map((f) => `${f.id}:${f.label}:${f.order}`).join('|');
-}
-
 type Props = {
   rows: StoryboardTableRow[];
   activeRowId: string | null;
@@ -54,6 +47,11 @@ type Props = {
   feedbackRedrawUnderstand?: boolean;
   onToggleFeedbackRedrawUnderstand?: () => void;
   onFeedbackBatchRedraw?: () => void;
+  feedbackCollageLimit?: number;
+  onFeedbackCollageLimitChange?: (limit: number) => void;
+  feedbackRedrawHistory?: StoryboardFeedbackRedrawBatchRecord[];
+  selectedFeedbackHistoryId?: string | null;
+  onSelectFeedbackHistory?: (id: string | null) => void;
   parseBusyRowId: string | null;
   parseAllBusy?: boolean;
   optimizeBusyRowId?: string | null;
@@ -75,6 +73,11 @@ export default function StoryboardTableEditView({
   feedbackRedrawUnderstand = true,
   onToggleFeedbackRedrawUnderstand,
   onFeedbackBatchRedraw,
+  feedbackCollageLimit = 9,
+  onFeedbackCollageLimitChange,
+  feedbackRedrawHistory = [],
+  selectedFeedbackHistoryId = null,
+  onSelectFeedbackHistory,
   parseBusyRowId,
   parseAllBusy = false,
   optimizeBusyRowId = null,
@@ -85,33 +88,44 @@ export default function StoryboardTableEditView({
   editScrollRef,
 }: Props) {
   const rowIds = useMemo(() => rows.map((r) => r.id), [rows]);
+  const feedbackWrittenCount = useMemo(
+    () => rows.filter((row) => storyboardRowHasEditFeedback(row)).length,
+    [rows]
+  );
+  const highlightedRowIds = useMemo(() => {
+    if (!selectedFeedbackHistoryId) return null;
+    const record = feedbackRedrawHistory.find((item) => item.id === selectedFeedbackHistoryId);
+    if (!record) return null;
+    return new Set(record.rowIds);
+  }, [feedbackRedrawHistory, selectedFeedbackHistoryId]);
+  const previewRowImages = useMemo(() => {
+    if (!selectedFeedbackHistoryId) return null;
+    const record = feedbackRedrawHistory.find((item) => item.id === selectedFeedbackHistoryId);
+    if (!record?.rowImages) return null;
+    const hasPreview = record.rowIds.some((rowId) => record.rowImages?.[rowId]);
+    return hasPreview ? record.rowImages : null;
+  }, [feedbackRedrawHistory, selectedFeedbackHistoryId]);
+  const collageLimitOptions = useMemo(
+    () =>
+      STORYBOARD_FEEDBACK_COLLAGE_LIMIT_OPTIONS.map((n) => ({
+        value: String(n),
+        label: `${n} 镜/张`,
+      })),
+    []
+  );
   const [editDisplayMode, setEditDisplayMode] = useState<StoryboardEditDisplayMode>(() =>
     readLocalJson(STORYBOARD_EDIT_DISPLAY_MODE_KEY, 'full', (v) =>
       v === 'full' || v === 'feedback' ? v : null
     )
   );
-  const catalogRemeasureKey = useMemo(
-    () => `${fieldCatalogSignature(interaction.fieldCatalog)}|${editDisplayMode}`,
-    [interaction.fieldCatalog, editDisplayMode]
-  );
-  const editorVirtual = useStoryboardVirtualList({
-    rowIds,
-    estimateHeight: STORYBOARD_EDIT_ROW_ESTIMATE_PX,
-    gap: STORYBOARD_EDIT_ROW_GAP_PX,
-    remeasureKey: catalogRemeasureKey,
-  });
+  const canvasScrollRef = useRef<HTMLDivElement>(null);
+
   const outlineVirtual = useStoryboardVirtualList({
     rowIds,
     estimateHeight: STORYBOARD_OUTLINE_ROW_ESTIMATE_PX,
     gap: 1,
     overscan: 8,
   });
-
-  const editorGridRef = useRef<HTMLDivElement>(null);
-  const [editorColumns, setEditorColumns] = useState(1);
-  const scrollActiveTimerRef = useRef(0);
-  /** 大纲/程序定位后短暂忽略滚动反推 activeRow，避免 smooth 滚动期间乱跳 */
-  const explicitSelectLockRef = useRef(0);
 
   const toggleEditDisplayMode = useCallback(() => {
     setEditDisplayMode((prev) => {
@@ -121,245 +135,49 @@ export default function StoryboardTableEditView({
     });
   }, []);
 
-  const lockActiveFromScroll = useCallback((ms = 200) => {
-    explicitSelectLockRef.current = performance.now() + ms;
-  }, []);
-
-  const shouldIgnoreActiveFromScroll = useCallback(() => {
-    return performance.now() < explicitSelectLockRef.current;
-  }, []);
-
-  const readEditorGridColumns = useCallback(() => {
-    const grid = editorGridRef.current;
-    if (grid) setEditorColumns(storyboardEditGridColumnsForWidth(grid.clientWidth));
-  }, []);
-
-  useLayoutEffect(() => {
-    readEditorGridColumns();
-    const grid = editorGridRef.current;
-    if (!grid || typeof ResizeObserver === 'undefined') return;
-    const ro = new ResizeObserver(() => readEditorGridColumns());
-    ro.observe(grid);
-    return () => ro.disconnect();
-  }, [readEditorGridColumns, rowIds.length]);
-
-  const editorBandLayout = useMemo(
-    () =>
-      buildStoryboardBandOffsets(
-        rowIds,
-        editorVirtual.heights,
-        editorColumns,
-        STORYBOARD_EDIT_ROW_ESTIMATE_PX,
-        STORYBOARD_EDIT_ROW_GAP_PX
-      ),
-    [editorColumns, editorVirtual.heights, rowIds]
-  );
-
-  const editorBandCount = storyboardGridBandCount(rows.length, editorColumns);
-
-  const editorBandWindow = useMemo(() => {
-    if (!editorVirtual.virtualize) {
-      return { startBand: 0, endBand: editorBandCount, paddingTop: 0, paddingBottom: 0 };
+  const activeRow = useMemo(() => {
+    if (!rows.length) return null;
+    if (activeRowId) {
+      const matched = rows.find((row) => row.id === activeRowId);
+      if (matched) return matched;
     }
-    const bandHeight =
-      editorBandCount > 0
-        ? editorBandLayout.totalHeight / editorBandCount
-        : STORYBOARD_EDIT_ROW_ESTIMATE_PX + STORYBOARD_EDIT_ROW_GAP_PX;
-    const overscan = 2;
-    const startBand = Math.max(
-      0,
-      Math.floor(editorVirtual.scrollTop / bandHeight) - overscan
-    );
-    const endBand = Math.min(
-      editorBandCount,
-      Math.ceil((editorVirtual.scrollTop + editorVirtual.viewportHeight) / bandHeight) + overscan
-    );
-    return {
-      startBand,
-      endBand,
-      paddingTop: startBand * bandHeight,
-      paddingBottom: Math.max(0, editorBandLayout.totalHeight - endBand * bandHeight),
-    };
-  }, [
-    editorBandCount,
-    editorBandLayout.totalHeight,
-    editorVirtual.scrollTop,
-    editorVirtual.viewportHeight,
-    editorVirtual.virtualize,
-  ]);
+    return rows[0] ?? null;
+  }, [activeRowId, rows]);
+
+  const activeRowIndex = activeRow?.index ?? 0;
 
   const scrollToRow = useCallback(
     (rowId: string, behavior: ScrollBehavior = 'auto') => {
       const index = rows.findIndex((r) => r.id === rowId);
       if (index < 0) return;
-      lockActiveFromScroll(behavior === 'smooth' ? 700 : 220);
-      const band = Math.floor(index / Math.max(editorColumns, 1));
-      const editorEl = editorVirtual.scrollRef.current;
-      if (editorEl) {
-        const top = editorBandLayout.bandOffsets[band] ?? 0;
-        editorEl.scrollTo({ top: Math.max(0, top - 8), behavior });
-        if (behavior === 'auto') editorVirtual.handleScroll();
-      }
       outlineVirtual.scrollToIndex(index, behavior);
+      document.getElementById(storyboardCanvasTileDomId(rowId))?.scrollIntoView({
+        block: 'nearest',
+        behavior,
+      });
     },
-    [
-      editorBandLayout.bandOffsets,
-      editorColumns,
-      editorVirtual,
-      lockActiveFromScroll,
-      outlineVirtual,
-      rows,
-    ]
+    [outlineVirtual, rows]
   );
 
   useImperativeHandle(editScrollRef, () => ({ scrollToRow }), [scrollToRow]);
 
-  const scheduleActiveFromScroll = useCallback(() => {
-    if (shouldIgnoreActiveFromScroll()) return;
-    window.clearTimeout(scrollActiveTimerRef.current);
-    scrollActiveTimerRef.current = window.setTimeout(() => {
-      if (shouldIgnoreActiveFromScroll()) return;
-      const idx = storyboardActiveRowIndexFromGridBands(
-        editorVirtual.scrollTop,
-        editorVirtual.viewportHeight,
-        rows.length,
-        editorColumns,
-        editorBandLayout.bandOffsets,
-        rowIds,
-        editorVirtual.heights,
-        STORYBOARD_EDIT_ROW_ESTIMATE_PX,
-        STORYBOARD_EDIT_ROW_GAP_PX
-      );
-      const row = rows[idx];
-      if (row && row.id !== activeRowId) onActiveRowIdChange(row.id);
-    }, 80);
-  }, [
-    activeRowId,
-    editorBandLayout.bandOffsets,
-    editorColumns,
-    editorVirtual.heights,
-    editorVirtual.scrollTop,
-    editorVirtual.viewportHeight,
-    onActiveRowIdChange,
-    rowIds,
-    rows,
-    shouldIgnoreActiveFromScroll,
-  ]);
-
   useEffect(() => {
-    return () => window.clearTimeout(scrollActiveTimerRef.current);
-  }, []);
-
-  const onEditorScroll = useCallback(() => {
-    editorVirtual.handleScroll();
-    scheduleActiveFromScroll();
-  }, [editorVirtual, scheduleActiveFromScroll]);
-
-  const activeCompositeRow = useMemo(() => {
-    if (!rows.length) return null;
-    if (activeRowId) {
-      const matched = rows.find((row) => row.id === activeRowId);
-      if (matched) return { row: matched, index: matched.index };
+    if (!activeRowId || !rows.some((row) => row.id === activeRowId)) {
+      if (rows[0]) onActiveRowIdChange(rows[0].id);
     }
-    const first = rows[0]!;
-    return { row: first, index: first.index };
-  }, [activeRowId, rows]);
+  }, [activeRowId, onActiveRowIdChange, rows]);
 
-  const renderEditorRow = (row: StoryboardTableRow, index: number) => {
-    const redrawReason = redrawRowDisabledReason(row);
-    const redrawDisabled =
-      Boolean(redrawReason) || redrawBusyRowId != null || feedbackBatchBusy;
-    const inner = (
-      <StoryboardConnectedRowEditor
-        domId={storyboardRowDomId(row.id)}
-        row={row}
-        index={index}
-        fieldCatalog={interaction.fieldCatalog}
-        active={activeRowId === row.id}
-        imageBusy={imageBusyRowId === row.id}
-        redrawBusy={redrawBusyRowId === row.id}
-        parseBusy={parseBusyRowId === row.id || parseAllBusy}
-        optimizeBusy={optimizeBusyRowId === row.id}
-        redrawDisabled={redrawDisabled}
-        redrawDisabledReason={redrawReason}
-        editDisplayMode={editDisplayMode}
-      />
-    );
-
-    if (!editorVirtual.virtualize) {
-      return (
-        <StoryboardRowMeasureWrap
-          key={row.id}
-          rowId={row.id}
-          measureRow={editorVirtual.measureRow}
-        >
-          {inner}
-        </StoryboardRowMeasureWrap>
-      );
-    }
-
-    return (
-      <StoryboardRowMeasureWrap
-        key={row.id}
-        rowId={row.id}
-        measureRow={editorVirtual.measureRow}
-      >
-        {inner}
-      </StoryboardRowMeasureWrap>
-    );
-  };
-
-  const visibleEditorRows = useMemo(() => {
-    if (!editorVirtual.virtualize) return rows.map((row, i) => ({ row, index: i }));
-    const start = editorBandWindow.startBand * editorColumns;
-    const end = Math.min(rows.length, editorBandWindow.endBand * editorColumns);
-    return rows.slice(start, end).map((row, i) => ({ row, index: start + i }));
-  }, [
-    editorBandWindow.endBand,
-    editorBandWindow.startBand,
-    editorColumns,
-    editorVirtual.virtualize,
-    rows,
-  ]);
-
-  const editorList = (
-    <div
-      ref={editorGridRef}
-      className={STORYBOARD_EDIT_GRID}
-      style={
-        editorVirtual.virtualize
-          ? {
-              paddingTop: editorBandWindow.paddingTop,
-              paddingBottom: editorBandWindow.paddingBottom,
-            }
-          : undefined
-      }
-    >
-      {visibleEditorRows.map(({ row, index }) => renderEditorRow(row, index))}
-    </div>
+  const selectRow = useCallback(
+    (rowId: string, behavior: ScrollBehavior = 'auto') => {
+      onActiveRowIdChange(rowId);
+      scrollToRow(rowId, behavior);
+    },
+    [onActiveRowIdChange, scrollToRow]
   );
 
-  const editorScrollBody = editorVirtual.virtualize ? (
-    <div className="relative w-full" style={{ height: editorBandLayout.totalHeight }}>
-      <div className="absolute inset-x-0 top-0">{editorList}</div>
-    </div>
-  ) : (
-    editorList
-  );
-
-  const compositePanel = activeCompositeRow ? (
-    <StoryboardConnectedCompositeCard
-      key={activeCompositeRow.row.id}
-      row={activeCompositeRow.row}
-      index={activeCompositeRow.index}
-      fieldCatalog={interaction.fieldCatalog}
-      active
-      onSelect={() => onActiveRowIdChange(activeCompositeRow.row.id)}
-      onPreviewImage={interaction.previewImage}
-    />
-  ) : (
-    <p className="px-1 py-6 text-center text-[10px] text-gray-600">暂无镜头</p>
-  );
+  const redrawReason = activeRow ? redrawRowDisabledReason(activeRow) : undefined;
+  const redrawDisabled =
+    !activeRow || Boolean(redrawReason) || redrawBusyRowId != null || feedbackBatchBusy;
 
   return (
     <StoryboardRowInteractionProvider value={interaction}>
@@ -368,24 +186,59 @@ export default function StoryboardTableEditView({
           rows={rows}
           fieldCatalog={interaction.fieldCatalog}
           activeRowId={activeRowId}
-          onSelect={(rowId) => {
-            lockActiveFromScroll(280);
-            onActiveRowIdChange(rowId);
-            scrollToRow(rowId, 'auto');
-          }}
+          onSelect={(rowId) => selectRow(rowId, 'auto')}
           virtualList={outlineVirtual}
         />
 
-        <div className={`${STORYBOARD_GRID_EDITOR_PREVIEW} h-full`}>
-          <div className={`${STORYBOARD_SIDE_RAIL} min-w-0`}>
-            <div className="mb-1 flex flex-wrap items-center justify-between gap-2 px-0.5">
+        <div className={STORYBOARD_EDIT_VIEW_LAYOUT}>
+          <div className={`${STORYBOARD_SIDE_RAIL} flex min-h-0 min-w-0 flex-col`}>
+            <div className="mb-1 shrink-0 space-y-1 px-0.5">
+              <StoryboardFeedbackRedrawHistoryBar
+                records={feedbackRedrawHistory}
+                selectedId={selectedFeedbackHistoryId}
+                onSelect={(id) => onSelectFeedbackHistory?.(id)}
+                busy={feedbackBatchBusy}
+              />
+              <p className={`${STORYBOARD_COLUMN_HEAD} !mb-0`}>
+                画板
+                {feedbackWrittenCount > 0 ? (
+                  <span className="ml-1.5 font-normal text-sky-300/85">
+                    · 已反馈 {feedbackWrittenCount}
+                  </span>
+                ) : null}
+              </p>
+            </div>
+            <div ref={canvasScrollRef} className={`${STORYBOARD_BODY_SCROLL} min-h-0 flex-1 pr-0.5`}>
+              <StoryboardEditCanvasGrid
+                rows={rows}
+                activeRowId={activeRowId}
+                imageBusyRowId={imageBusyRowId}
+                highlightedRowIds={highlightedRowIds}
+                previewRowImages={previewRowImages}
+                onSelect={(rowId) => selectRow(rowId, 'auto')}
+                onPreviewImage={interaction.previewImage}
+              />
+              {footerAddRow ? <div className="mt-2">{footerAddRow}</div> : null}
+            </div>
+          </div>
+
+          <aside className={`${STORYBOARD_SIDE_RAIL} ${STORYBOARD_EDIT_EDITOR_RAIL_W} shrink-0`}>
+            <div className="mb-1 flex shrink-0 flex-wrap items-center justify-between gap-2 px-0.5">
               <p className={`${STORYBOARD_COLUMN_HEAD} !mb-0`}>镜头编辑</p>
               <div className="flex flex-wrap items-center justify-end gap-1.5">
                 {editDisplayMode === 'feedback' && onFeedbackBatchRedraw ? (
                   <>
+                    <CustomDropdown
+                      value={String(feedbackCollageLimit)}
+                      options={collageLimitOptions}
+                      disabled={feedbackBatchBusy}
+                      onChange={(value) => onFeedbackCollageLimitChange?.(Number(value))}
+                      triggerClassName="!h-7 !min-w-[5.5rem] !px-2 !text-[10px]"
+                      triggerAriaLabel="每批拼图镜头上限"
+                    />
                     <label
                       className="inline-flex shrink-0 cursor-pointer items-center gap-1.5 text-[10px] text-gray-500"
-                      title="开启：参考图 + 反馈先经理解 LLM；关闭：直发反馈文本生图"
+                      title="开启：拼图 + 反馈先经理解 LLM；关闭：直发拼图改图提示"
                     >
                       <input
                         type="checkbox"
@@ -398,7 +251,7 @@ export default function StoryboardTableEditView({
                     </label>
                     <button
                       type="button"
-                      title="图生图 · 仅当前分镜图 + 修改反馈（不含结构化字段）"
+                      title={`拼图改图：每 ${feedbackCollageLimit} 镜拼一张，改完再切分回填`}
                       disabled={
                         feedbackBatchBusy ||
                         feedbackRedrawEligibleCount <= 0 ||
@@ -410,8 +263,8 @@ export default function StoryboardTableEditView({
                       }`}
                     >
                       {feedbackBatchBusy && feedbackBatchProgress
-                        ? `反馈重绘 ${feedbackBatchProgress.done}/${feedbackBatchProgress.total}`
-                        : `反馈重绘${feedbackRedrawEligibleCount > 0 ? ` (${feedbackRedrawEligibleCount})` : ''}`}
+                        ? `拼图改图 ${feedbackBatchProgress.done}/${feedbackBatchProgress.total}`
+                        : `拼图改图${feedbackRedrawEligibleCount > 0 ? ` (${feedbackRedrawEligibleCount})` : ''}`}
                     </button>
                   </>
                 ) : null}
@@ -434,23 +287,26 @@ export default function StoryboardTableEditView({
                 </button>
               </div>
             </div>
-            <div
-              ref={editorVirtual.scrollRef}
-              onScroll={onEditorScroll}
-              className={`${STORYBOARD_BODY_SCROLL} pr-0.5`}
-            >
-              {editorScrollBody}
-              {footerAddRow ? (
-                <div className={editorVirtual.virtualize ? 'mt-2' : ''}>{footerAddRow}</div>
-              ) : null}
+            <div className={`${STORYBOARD_BODY_SCROLL} pr-0.5`}>
+              {activeRow ? (
+                <StoryboardConnectedRowEditor
+                  domId={storyboardRowDomId(activeRow.id)}
+                  row={activeRow}
+                  index={activeRowIndex}
+                  fieldCatalog={interaction.fieldCatalog}
+                  active
+                  imageBusy={imageBusyRowId === activeRow.id}
+                  redrawBusy={redrawBusyRowId === activeRow.id}
+                  parseBusy={parseBusyRowId === activeRow.id || parseAllBusy}
+                  optimizeBusy={optimizeBusyRowId === activeRow.id}
+                  redrawDisabled={redrawDisabled}
+                  redrawDisabledReason={redrawReason}
+                  editDisplayMode={editDisplayMode}
+                />
+              ) : (
+                <p className="px-1 py-6 text-center text-[10px] text-gray-600">暂无镜头</p>
+              )}
             </div>
-          </div>
-
-          <aside className={`${STORYBOARD_SIDE_RAIL} ${STORYBOARD_COMPOSITE_RAIL_W} shrink-0`}>
-            <div className="shrink-0 px-0.5">
-              <p className={STORYBOARD_COLUMN_HEAD}>分镜合成</p>
-            </div>
-            <div className={`${STORYBOARD_BODY_SCROLL} flex flex-col pr-0.5`}>{compositePanel}</div>
           </aside>
         </div>
       </div>

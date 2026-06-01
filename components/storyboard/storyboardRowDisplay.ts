@@ -27,6 +27,21 @@ export function storyboardRowOutlineSubtitle(
   return '（未填写）';
 }
 
+/** 是否已填写修改反馈（非空 trim） */
+export function storyboardRowHasEditFeedback(row: StoryboardTableRow): boolean {
+  return Boolean((row.editFeedback ?? '').trim());
+}
+
+/** 大纲/画板用的反馈摘要 */
+export function storyboardRowEditFeedbackPreview(
+  row: StoryboardTableRow,
+  maxLen = 48
+): string | null {
+  const text = (row.editFeedback ?? '').trim().replace(/\s+/g, ' ');
+  if (!text) return null;
+  return text.length > maxLen ? `${text.slice(0, maxLen)}…` : text;
+}
+
 export function storyboardRowDurationLabel(row: StoryboardTableRow): string | null {
   if (row.durationSec == null || !Number.isFinite(row.durationSec)) return null;
   return `${row.durationSec}s`;

@@ -12,7 +12,15 @@ export const STORYBOARD_INPUT_PREVIEW_RAIL =
   'flex min-h-0 min-w-0 max-w-full flex-col overflow-hidden lg:max-w-none';
 
 export const STORYBOARD_GRID_ROOT = `grid min-h-0 min-w-0 flex-1 grid-cols-[14.625rem_minmax(0,1fr)] items-stretch ${STORYBOARD_GAP_COLS}`;
-export const STORYBOARD_GRID_EDITOR_PREVIEW = `grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)_auto] items-stretch ${STORYBOARD_GAP_COLS}`;
+
+/** 编辑页：画板 | 单镜编辑侧栏 */
+export const STORYBOARD_EDIT_VIEW_LAYOUT = `grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)_auto] items-stretch ${STORYBOARD_GAP_COLS}`;
+
+/** @deprecated 编辑页已改为画板 + 单镜侧栏 */
+export const STORYBOARD_GRID_EDITOR_PREVIEW = STORYBOARD_EDIT_VIEW_LAYOUT;
+
+/** 编辑页右侧单镜编辑栏 */
+export const STORYBOARD_EDIT_EDITOR_RAIL_W = 'w-[22rem] sm:w-[24rem] xl:w-[26rem]';
 
 /** 侧栏列：撑满网格行高，内部再 flex 滚动 */
 export const STORYBOARD_SIDE_RAIL = 'flex h-full min-h-0 flex-col';
@@ -46,6 +54,13 @@ export const STORYBOARD_ROW_ACTIVE =
 
 export const STORYBOARD_ROW_IDLE =
   'border-white/[0.06] bg-white/[0.025] shadow-[0_4px_24px_-8px_rgba(0,0,0,0.45)] hover:border-white/[0.1] hover:bg-white/[0.035]';
+
+/** 反馈改图历史批次选中时，画板涉及镜头的边框高亮 */
+export const STORYBOARD_ROW_HISTORY_HIGHLIGHT =
+  'border-amber-400/75 bg-amber-500/[0.08] ring-2 ring-amber-400/60 shadow-[0_0_0_1px_rgba(251,191,36,0.45),0_0_20px_-6px_rgba(251,191,36,0.35)]';
+
+export const STORYBOARD_ROW_ACTIVE_HISTORY_HIGHLIGHT =
+  'border-amber-400/55 ring-2 ring-amber-400/55 shadow-[0_0_0_1px_rgba(251,191,36,0.4),0_12px_32px_-12px_rgba(124,58,237,0.35)]';
 
 export const STORYBOARD_TOOL_BTN =
   'inline-flex h-7 items-center justify-center rounded-lg px-2.5 text-[10px] font-semibold transition-colors outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40';
@@ -93,6 +108,10 @@ export const STORYBOARD_ADD_ROW_DASHED =
 /** 分镜合成卡网格（与侧栏合成卡同组件；多列自动换行、按内容增高） */
 export const STORYBOARD_GRID_PREVIEW =
   `grid w-full min-w-0 items-start ${STORYBOARD_GAP_STACK} grid-cols-[repeat(auto-fill,minmax(15.5rem,1fr))] sm:grid-cols-[repeat(auto-fill,minmax(17rem,1fr))] lg:grid-cols-[repeat(auto-fill,minmax(18.5rem,1fr))] xl:grid-cols-[repeat(auto-fill,minmax(20rem,1fr))]`;
+
+/** 编辑画板：分镜图网格 */
+export const STORYBOARD_EDIT_CANVAS_GRID =
+  `grid w-full min-w-0 items-start ${STORYBOARD_GAP_STACK} grid-cols-[repeat(auto-fill,minmax(9rem,1fr))] sm:grid-cols-[repeat(auto-fill,minmax(10rem,1fr))] lg:grid-cols-[repeat(auto-fill,minmax(11rem,1fr))] xl:grid-cols-[repeat(auto-fill,minmax(12rem,1fr))]`;
 
 /** 镜头编辑：多列自动换行；行内卡片按内容增高（items-start） */
 export const STORYBOARD_EDIT_GRID =
