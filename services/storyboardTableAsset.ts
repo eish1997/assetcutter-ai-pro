@@ -5,6 +5,7 @@ import {
   compileShotText,
   normalizeFieldCatalog,
   normalizeShotFieldsRecord,
+  normalizeStoryboardShotNoInput,
   STORYBOARD_PARSE_DEFAULT_PRESET_ID,
   STORYBOARD_OPTIMIZE_DEFAULT_PRESET_ID,
 } from './storyboardTableParse';
@@ -34,12 +35,41 @@ export function isWorkflowStoryboardTableAsset(a: WorkflowAsset): boolean {
   return a.assetKind === 'storyboard_table';
 }
 
+/** 合并导入/解析时保留已有分镜图与标注 */
+export function preserveStoryboardRowFrameFields(
+  row: Pick<
+    StoryboardTableRow,
+    | 'frameImage'
+    | 'frameImageObjectKey'
+    | 'frameImageCompanionKey'
+    | 'frameImageHistory'
+    | 'frameRoleMarks'
+  >
+): Pick<
+  StoryboardTableRow,
+  | 'frameImage'
+  | 'frameImageObjectKey'
+  | 'frameImageCompanionKey'
+  | 'frameImageHistory'
+  | 'frameRoleMarks'
+> {
+  return {
+    frameImage: row.frameImage,
+    frameImageObjectKey: row.frameImageObjectKey,
+    frameImageCompanionKey: row.frameImageCompanionKey,
+    frameImageHistory: row.frameImageHistory,
+    frameRoleMarks: row.frameRoleMarks,
+  };
+}
+
 export function createStoryboardTableRow(partial?: Partial<StoryboardTableRow>, index = 0): StoryboardTableRow {
   const shotFields = normalizeShotFieldsRecord(partial?.shotFields);
+  const rawShotNo = String(partial?.shotNo ?? '').trim();
+  const shotNo = rawShotNo ? normalizeStoryboardShotNoInput(rawShotNo) : '';
   return {
     id: partial?.id || rowId(),
     index,
-    shotNo: partial?.shotNo ?? '',
+    shotNo,
     durationSec: partial?.durationSec ?? null,
     shotRaw: partial?.shotRaw,
     shotFields,

@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import type { StoryboardParseFieldDef, StoryboardTableRow } from '../../types';
-import { rowHasStructuredFieldValues, resolveStoryboardParseInput } from '../../services/storyboardTableParse';
+import { rowHasStructuredFieldValues, resolveStoryboardParseInput, normalizeStoryboardShotNoInput } from '../../services/storyboardTableParse';
 import { resolveStoryboardRowFrameDisplaySrc } from '../../services/storyboardFrameImageUrl';
 import {
   resolveStoryboardFrameVersionDisplaySrc,
@@ -422,10 +422,16 @@ export default function StoryboardTableRowEditor({
                     value={row.shotNo ?? ''}
                     readOnly={fieldsReadOnly}
                     onChange={(e) => onPatch({ shotNo: e.target.value })}
+                    onBlur={(e) => {
+                      const normalized = normalizeStoryboardShotNoInput(e.target.value);
+                      if (normalized && normalized !== (row.shotNo ?? '')) {
+                        onPatch({ shotNo: normalized });
+                      }
+                    }}
                     onMouseDown={stopInputFocusBubble}
                     onFocus={stopInputFocusBubble}
                     className={STORYBOARD_FIELD_INPUT}
-                    placeholder="01"
+                    placeholder="041"
                   />
                 </label>
                 <label className="block">

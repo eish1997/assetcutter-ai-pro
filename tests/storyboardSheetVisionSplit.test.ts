@@ -3,11 +3,13 @@ import type { BoundingBox, StoryboardTableRow } from '../types';
 import {
   extractShotNoToken,
   filterStoryboardRowsByExpectedShots,
+  buildUniformSheetGridBoxes,
   isStoryboardShotNoInExpectedScope,
   mapStoryboardBoxesToVisualCrop,
   matchVisionBoxToRow,
   normalizeShotNoToken,
   shrinkStoryboardPanelBoxToVisualCore,
+  storyboardShotNosMatch,
 } from '../services/storyboardSheetVisionSplit';
 
 const row = (partial: Partial<StoryboardTableRow>): StoryboardTableRow => ({
@@ -51,6 +53,19 @@ describe('storyboardSheetVisionSplit', () => {
     const scoped = filterStoryboardRowsByExpectedShots(rows, ['01', '02']);
     expect(scoped.map((item) => item.id)).toEqual(['r1', 'r2']);
     expect(isStoryboardShotNoInExpectedScope('03', ['01', '02'])).toBe(false);
+  });
+
+  it('storyboardShotNosMatch treats numeric shot numbers with different padding as equal', () => {
+    expect(storyboardShotNosMatch('131', '0131')).toBe(true);
+    expect(storyboardShotNosMatch('01', '1')).toBe(true);
+    expect(storyboardShotNosMatch('131', '132')).toBe(false);
+  });
+
+  it('buildUniformSheetGridBoxes creates one box per cell', () => {
+    const boxes = buildUniformSheetGridBoxes(6);
+    expect(boxes).toHaveLength(6);
+    expect(boxes[0]!.xmin).toBeGreaterThanOrEqual(0);
+    expect(boxes[5]!.ymax).toBeLessThanOrEqual(1000);
   });
 
   it('shrinks full panel box to visual core (top/bottom text stripped)', () => {

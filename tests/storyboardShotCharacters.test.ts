@@ -117,14 +117,30 @@ describe('inferCharacterNamesFromShotRow', () => {
 });
 
 describe('ensureShotCharacterFieldOnRow', () => {
-  it('adds shot character field when inferred from dialogue', () => {
+  it('does not add shot character field from dialogue inference', () => {
     const row = mockRow({ f_dialogue: '张三：台词' });
     const result = ensureShotCharacterFieldOnRow(catalog, row, [
       { label: '对白', value: '张三：台词' },
     ]);
+    expect(result.catalog.some((f) => f.label === STORYBOARD_SHOT_CHARACTER_FIELD_LABEL)).toBe(false);
+  });
+
+  it('adds shot character field when input explicitly provides it', () => {
+    const row = mockRow({});
+    const result = ensureShotCharacterFieldOnRow(catalog, row, [
+      { label: STORYBOARD_SHOT_CHARACTER_FIELD_LABEL, value: '张三、李四' },
+    ]);
     const def = result.catalog.find((f) => f.label === STORYBOARD_SHOT_CHARACTER_FIELD_LABEL);
     expect(def).toBeTruthy();
-    expect(result.row.shotFields[def!.id]).toBe('张三');
+    expect(result.row.shotFields[def!.id]).toBe('张三、李四');
+  });
+});
+
+describe('inputHasExplicitShotCharacterField', () => {
+  it('detects tagged shot character field in source text', async () => {
+    const { inputHasExplicitShotCharacterField } = await import('../services/storyboardShotCharacters');
+    expect(inputHasExplicitShotCharacterField('131 | 【镜头内角色】张三')).toBe(true);
+    expect(inputHasExplicitShotCharacterField('131 | 【画面描述】张三走向窗口')).toBe(false);
   });
 });
 

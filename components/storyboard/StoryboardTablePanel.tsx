@@ -1225,17 +1225,6 @@ export default function StoryboardTablePanel({
             }
           );
 
-      if (split.createdRows?.length) {
-        patchTable(
-          (rows) => {
-            const existing = new Set(rows.map((row) => row.id));
-            const added = split.createdRows!.filter((row) => !existing.has(row.id));
-            return added.length ? reindexStoryboardRows([...rows, ...added]) : rows;
-          },
-          { fieldCatalog }
-        );
-      }
-
       const rowLookup = new Map<string, StoryboardTableRow>();
       for (const row of [...lookupRows, ...(split.createdRows ?? [])]) {
         rowLookup.set(row.id, row);
@@ -1264,10 +1253,25 @@ export default function StoryboardTablePanel({
         rowPatches.set(match.rowId, patch);
       }
 
-      if (rowPatches.size > 0) {
+      const createdRowsToAdd = (split.createdRows ?? []).filter(
+        (row) => !lookupRows.some((item) => item.id === row.id)
+      );
+      if (rowPatches.size > 0 || createdRowsToAdd.length > 0) {
         patchTable(
-          (rows) =>
-            rows.map((row) => (rowPatches.has(row.id) ? { ...row, ...rowPatches.get(row.id) } : row)),
+          (rows) => {
+            const existing = new Set(rows.map((row) => row.id));
+            let next = [...rows];
+            for (const row of createdRowsToAdd) {
+              if (!existing.has(row.id)) {
+                next.push(row);
+                existing.add(row.id);
+              }
+            }
+            next = reindexStoryboardRows(next);
+            return next.map((row) =>
+              rowPatches.has(row.id) ? { ...row, ...rowPatches.get(row.id) } : row
+            );
+          },
           { fieldCatalog }
         );
       }
@@ -1406,16 +1410,16 @@ export default function StoryboardTablePanel({
   );
 
   const applySheetPreview = useCallback(
-    async (previewId: string) => {
+    async (previewId: string): Promise<{ matchedCount: number } | void> => {
       setSheetSplitBusyId(previewId);
       try {
         const result = await splitSheetPreviewById(previewId);
         if (!result) return;
         if (result.matchedCount > 0) {
           onNotify?.('info', `已切分回填 ${result.matchedCount} 镜`);
-        } else {
-          onNotify?.('warn', result.warn || '未能切分匹配到镜头，请检查拼图镜号');
+          return { matchedCount: result.matchedCount };
         }
+        onNotify?.('warn', result.warn || '未能切分匹配到镜头，请检查拼图镜号');
       } catch (error) {
         onNotify?.('warn', error instanceof Error ? error.message : '切分回填失败');
       } finally {
@@ -1569,7 +1573,7 @@ export default function StoryboardTablePanel({
     ]
   );
 
-  const batchSplitSheetPreviews = useCallback(async () => {
+  const batchSplitSheetPreviews = useCallback(async (): Promise<{ matchedCount: number } | void> => {
     const candidates = listSplittableStoryboardSheetPreviews(sheetPreviewsRef.current).sort(
       (a, b) => (a.chunkIndex ?? 0) - (b.chunkIndex ?? 0) || a.createdAt - b.createdAt
     );
@@ -1600,9 +1604,9 @@ export default function StoryboardTablePanel({
 
       if (totalMatched > 0) {
         onNotify?.('info', `切分完成：${okSheets}/${candidates.length} 张拼图，共回填 ${totalMatched} 镜`);
-      } else {
-        onNotify?.('warn', '切分完成，但未能匹配到镜头，请检查拼图镜号与表内 shotNo');
+        return { matchedCount: totalMatched };
       }
+      onNotify?.('warn', '切分完成，但未能匹配到镜头，请检查拼图镜号与表内 shotNo');
     } catch (error) {
       onNotify?.('warn', error instanceof Error ? error.message : '批量切分失败');
     } finally {
@@ -1652,12 +1656,18 @@ export default function StoryboardTablePanel({
         onNotify?.('warn', parsed.error);
         return;
       }
+      const ensured = ensureStoryboardRowsForShotNos(table.rows, parsed.shotNos);
+      if (ensured.createdIds.length) {
+        patchTable(() => reindexStoryboardRows(ensured.nextTableRows), {
+          fieldCatalog: table.fieldCatalog,
+        });
+      }
       await saveSheetPreviewItem({
         imageDataUrl: dataUrl,
         label: buildSheetPreviewLabel('上传拼图', parsed.shotNos),
         source: 'uploaded',
         genStatus: 'done',
-        rowIds: [],
+        rowIds: ensured.rows.map((row) => row.id),
         shotNos: parsed.shotNos,
       });
       onNotify?.(
@@ -1665,7 +1675,7 @@ export default function StoryboardTablePanel({
         `拼图已加入预览（${formatSheetPreviewShotLabel(parsed.shotNos)}），可点「切分」写入镜头`
       );
     },
-    [onNotify, saveSheetPreviewItem]
+    [onNotify, patchTable, saveSheetPreviewItem, table.fieldCatalog, table.rows]
   );
 
   const updateSheetPreviewShotRange = useCallback(

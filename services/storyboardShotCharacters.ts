@@ -231,7 +231,22 @@ export function inferCharacterNamesFromShotRow(
   return names;
 }
 
-/** 解析/导入后：若识别到角色名则写入「镜头内角色」列 */
+/** 原文是否显式标注了「镜头内角色」类字段（【标签】或列名） */
+export function inputHasExplicitShotCharacterField(raw: string): boolean {
+  const text = String(raw || '');
+  if (/【\s*(?:镜头内角色|出镜角色|镜头角色|本镜角色)\s*】/.test(text)) return true;
+  return /(?:^|[|\n\t])(?:镜头内角色|出镜角色|镜头角色|本镜角色)\s*(?:[：:|\|]|$)/m.test(text);
+}
+
+export function shouldRetainShotCharacterParseField(
+  catalog: StoryboardParseFieldDef[],
+  rawInput: string
+): boolean {
+  if (inputHasExplicitShotCharacterField(rawInput)) return true;
+  return catalog.some((def) => isShotCharacterFieldLabel(def.label));
+}
+
+/** 解析/导入后：仅当输入显式提供「镜头内角色」时写入该列，不做推断 */
 export function ensureShotCharacterFieldOnRow(
   catalog: StoryboardParseFieldDef[],
   row: StoryboardTableRow,
@@ -240,20 +255,16 @@ export function ensureShotCharacterFieldOnRow(
   let nextCatalog = [...catalog];
 
   const existingDef = findShotCharacterFieldDef(nextCatalog);
+  const explicitItem = parsedItems?.find((item) => isShotCharacterFieldLabel(item.label.trim()));
   const existingValue = existingDef ? String(row.shotFields[existingDef.id] || '').trim() : '';
-  if (existingValue) {
-    const validated = parseCharacterNamesFromListText(existingValue);
-    if (validated.length && existingDef) {
-      const shotFields = { ...row.shotFields, [existingDef.id]: validated.join('、') };
-      return { catalog: nextCatalog, row: applyShotFieldsPatch(row, nextCatalog, shotFields) };
-    }
+  const explicitValue = (explicitItem?.value || existingValue).trim();
+
+  if (!explicitValue) {
+    return { catalog: nextCatalog, row };
   }
 
-  const inferred = parsedItems?.length
-    ? inferCharacterNamesFromFieldItems(parsedItems)
-    : inferCharacterNamesFromShotRow(row, nextCatalog);
-
-  if (!inferred.length) {
+  const validated = parseCharacterNamesFromListText(explicitValue);
+  if (!validated.length) {
     return { catalog: nextCatalog, row };
   }
 
@@ -274,7 +285,7 @@ export function ensureShotCharacterFieldOnRow(
 
   const shotFields = {
     ...row.shotFields,
-    [fieldId]: inferred.join('、'),
+    [fieldId]: validated.join('、'),
   };
   return {
     catalog: nextCatalog,

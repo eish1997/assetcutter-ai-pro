@@ -33,6 +33,12 @@ export type StoryboardTableInputViewHandle = {
   scrollToRow: (rowId: string) => void;
 };
 
+type InputCompletionGuide =
+  | { kind: 'parse'; rowCount: number; appended: boolean }
+  | { kind: 'split'; rowCount: number };
+
+type SplitSheetPreviewResult = { matchedCount: number } | void;
+
 type Props = {
   assetId: string;
   rows: StoryboardTableRow[];
@@ -69,10 +75,10 @@ type Props = {
     previewId: string,
     range: { shotFrom: string; shotTo: string }
   ) => void | Promise<void>;
-  onApplySheetPreview?: (previewId: string) => Promise<void>;
+  onApplySheetPreview?: (previewId: string) => Promise<SplitSheetPreviewResult>;
   onRegenerateSheetPreview?: (previewId: string) => Promise<void>;
   onActivateSheetPreviewVersion?: (previewId: string, versionId: string) => Promise<void>;
-  onBatchSplitSheetPreviews?: () => Promise<void>;
+  onBatchSplitSheetPreviews?: () => Promise<SplitSheetPreviewResult>;
   onDeleteSheetPreview?: (previewId: string) => void;
   onCancelSheetGen?: () => void;
   onCancelSheetGenTask?: (previewId: string) => void;
@@ -135,9 +141,7 @@ const StoryboardTableInputView = forwardRef<StoryboardTableInputViewHandle, Prop
   ) {
     const [draftTick, setDraftTick] = useState(0);
     const [parseBusy, setParseBusy] = useState(false);
-    const [parseGuide, setParseGuide] = useState<{ rowCount: number; appended: boolean } | null>(
-      null
-    );
+    const [completionGuide, setCompletionGuide] = useState<InputCompletionGuide | null>(null);
     const [uploadDraft, setUploadDraft] = useState<{ dataUrl: string } | null>(null);
     const [editPreviewId, setEditPreviewId] = useState<string | null>(null);
     const bulkInputRef = useRef<StoryboardTableBulkInputHandle>(null);
@@ -176,39 +180,64 @@ const StoryboardTableInputView = forwardRef<StoryboardTableInputViewHandle, Prop
       editingPreview?.shotNos[editingPreview.shotNos.length - 1] ?? defaultShotTo;
     const modalPreviewSrc = uploadDraft?.dataUrl ?? editingPreview?.imageDataUrl ?? null;
 
+    const showSplitGuide = useCallback((result: SplitSheetPreviewResult) => {
+      if (result && result.matchedCount > 0) {
+        setCompletionGuide({ kind: 'split', rowCount: result.matchedCount });
+      }
+    }, []);
+
+    const handleBatchSplit = useCallback(async () => {
+      setCompletionGuide(null);
+      showSplitGuide(await onBatchSplitSheetPreviews?.());
+    }, [onBatchSplitSheetPreviews, showSplitGuide]);
+
+    const handleApplySheet = useCallback(
+      async (previewId: string) => {
+        setCompletionGuide(null);
+        showSplitGuide(await onApplySheetPreview?.(previewId));
+      },
+      [onApplySheetPreview, showSplitGuide]
+    );
+
+    const guideMessage =
+      completionGuide?.kind === 'split'
+        ? `切分完成 · 已回填 ${completionGuide.rowCount} 镜`
+        : completionGuide?.kind === 'parse'
+          ? `解析完成 · ${completionGuide.appended ? '已合并' : '已写入'} ${completionGuide.rowCount} 镜`
+          : '';
+
     return (
       <div className={`${STORYBOARD_INPUT_VIEW_GRID} ${STORYBOARD_PAD_PANEL} pt-1`}>
-        {parseGuide ? (
-          <div
-            className={`${STORYBOARD_PAD_PANEL} shrink-0 border-b border-emerald-400/15 bg-emerald-500/[0.08] py-2`}
-            role="status"
-          >
-            <div className="flex flex-wrap items-center justify-between gap-2 sm:gap-3">
-              <p className="min-w-0 text-[11px] leading-relaxed text-emerald-100/90">
-                解析完成，已{parseGuide.appended ? '追加' : '写入'} {parseGuide.rowCount}{' '}
-                镜。请切换到「编辑」页查看并调整各镜结构化字段。
-              </p>
-              <div className="flex shrink-0 items-center gap-2">
-                {onGoToEdit ? (
+        {completionGuide ? (
+          <div className="flex shrink-0 justify-center px-1 pt-2 sm:px-2">
+            <div className={`${STORYBOARD_INPUT_MAIN_INNER} !gap-0 !py-0`}>
+              <div
+                className="flex items-center justify-between gap-3 rounded-xl border border-emerald-400/15 bg-emerald-500/[0.08] px-3 py-2"
+                role="status"
+              >
+                <p className="truncate text-[11px] text-emerald-100/90">{guideMessage}</p>
+                <div className="flex shrink-0 items-center gap-2">
+                  {onGoToEdit ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCompletionGuide(null);
+                        onGoToEdit();
+                      }}
+                      className={`${STORYBOARD_TOOL_BTN_PRIMARY} h-7 px-3 text-[10px]`}
+                    >
+                      前往编辑
+                    </button>
+                  ) : null}
                   <button
                     type="button"
-                    onClick={() => {
-                      setParseGuide(null);
-                      onGoToEdit();
-                    }}
-                    className={`${STORYBOARD_TOOL_BTN_PRIMARY} h-7 px-3 text-[10px]`}
+                    onClick={() => setCompletionGuide(null)}
+                    className="text-[10px] text-emerald-200/70 transition-colors hover:text-emerald-100"
+                    aria-label="关闭提示"
                   >
-                    前往编辑
+                    关闭
                   </button>
-                ) : null}
-                <button
-                  type="button"
-                  onClick={() => setParseGuide(null)}
-                  className="text-[10px] text-emerald-200/70 transition-colors hover:text-emerald-100"
-                  aria-label="关闭提示"
-                >
-                  关闭
-                </button>
+                </div>
               </div>
             </div>
           </div>
@@ -244,7 +273,9 @@ const StoryboardTableInputView = forwardRef<StoryboardTableInputViewHandle, Prop
               onImport={onImportRows}
               onDraftChange={() => setDraftTick((tick) => tick + 1)}
               onBusyChange={setParseBusy}
-              onParseComplete={setParseGuide}
+              onParseComplete={(detail) =>
+                setCompletionGuide({ kind: 'parse', rowCount: detail.rowCount, appended: detail.appended })
+              }
               onNotify={onNotify}
             />
 
@@ -253,7 +284,7 @@ const StoryboardTableInputView = forwardRef<StoryboardTableInputViewHandle, Prop
                 type="button"
                 disabled={readOnly || actionBusy}
                 onClick={() => {
-                  setParseGuide(null);
+                  setCompletionGuide(null);
                   void bulkInputRef.current?.parseAndFill();
                 }}
                 className={`${STORYBOARD_TOOL_BTN_PRIMARY} h-9 flex-1 px-4 text-[11px] sm:min-w-[6.5rem] sm:max-w-[10rem] sm:flex-none`}
@@ -271,7 +302,7 @@ const StoryboardTableInputView = forwardRef<StoryboardTableInputViewHandle, Prop
               <button
                 type="button"
                 disabled={readOnly || actionBusy || splittableSheetCount <= 0}
-                onClick={() => void onBatchSplitSheetPreviews?.()}
+                onClick={() => void handleBatchSplit()}
                 className={`${STORYBOARD_TOOL_BTN_NEUTRAL} h-9 flex-1 px-4 text-[11px] sm:min-w-[6.5rem] sm:max-w-[10rem] sm:flex-none`}
               >
                 {sheetSplitBatchBusy
@@ -306,7 +337,7 @@ const StoryboardTableInputView = forwardRef<StoryboardTableInputViewHandle, Prop
               onEditShotRange={
                 onUpdateSheetPreviewShotRange ? (previewId) => setEditPreviewId(previewId) : undefined
               }
-              onApplySheet={(previewId) => void onApplySheetPreview?.(previewId)}
+              onApplySheet={(previewId) => void handleApplySheet(previewId)}
               onRegenerateSheet={(previewId) => void onRegenerateSheetPreview?.(previewId)}
               onSelectSheetVersion={(previewId, versionId) =>
                 void onActivateSheetPreviewVersion?.(previewId, versionId)

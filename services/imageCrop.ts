@@ -7,7 +7,7 @@ export function cropBoxes(
   selectedIndexes: number[],
   overflowPx = 0
 ): Promise<string[]> {
-  const results: string[] = [];
+  const results: (string | null)[] = boxes.map(() => null);
   const img = new Image();
   img.src = inputImage;
   const pad = Math.max(0, Math.min(512, Math.round(overflowPx)));
@@ -34,10 +34,10 @@ export function cropBoxes(
         canvas.height = h;
         const ctx = canvas.getContext('2d')!;
         ctx.drawImage(img, x, y, w, h, 0, 0, w, h);
-        results.push(canvas.toDataURL('image/png'));
+        results[i] = canvas.toDataURL('image/png');
       }
-      resolve(results);
+      resolve(results.map((item) => item ?? ''));
     };
-    img.onerror = () => resolve([]);
+    img.onerror = () => resolve(boxes.map(() => ''));
   });
 }

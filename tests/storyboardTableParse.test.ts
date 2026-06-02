@@ -11,11 +11,15 @@ import {
   compileRedrawPrompt,
   compileShotText,
   listStoryboardParsePresets,
+  mergeBulkStructuredParseIntoTable,
   mergeParseResultIntoRow,
   mergeOptimizeResultIntoRow,
+  normalizeBulkParseModelOutput,
   normalizeOptimizeModelOutput,
   normalizeParseModelOutput,
   parseDurationSecFromParsedValue,
+  parseShotNoFromParsedValue,
+  parseStoryboardBulkStructuredWithPreset,
   parseStoryboardRowsBatch,
   pickPrimaryVisualField,
   resolveFieldId,
@@ -59,6 +63,29 @@ describe('storyboardTableParse', () => {
     expect(merged.row.shotFields.f_dialogue).toBe('你好呀');
   });
 
+  it('mergeParseResultIntoRow drops inferred shot character unless input has the field', () => {
+    const row = createStoryboardTableRow({ shotRaw: '张三走向窗口' });
+    const merged = mergeParseResultIntoRow(
+      [],
+      row,
+      {
+        fields: [
+          { label: '画面', value: '张三走向窗口' },
+          { label: '镜头内角色', value: '张三' },
+        ],
+      },
+      '张三走向窗口'
+    );
+    expect(merged.catalog).toHaveLength(1);
+    expect(merged.catalog[0]?.label).toBe('画面');
+  });
+
+  it('parseShotNoFromParsedValue pads bare numeric shot no to 3 digits', () => {
+    expect(parseShotNoFromParsedValue('41')).toBe('041');
+    expect(parseShotNoFromParsedValue('131')).toBe('131');
+    expect(parseShotNoFromParsedValue('A-03')).toBe('A-03');
+  });
+
   it('mergeParseResultIntoRow maps 镜头号/时长 to fixed columns', () => {
     const row = createStoryboardTableRow({ shotRaw: 'x' });
     const merged = mergeParseResultIntoRow(
@@ -78,6 +105,19 @@ describe('storyboardTableParse', () => {
     expect(merged.catalog).toHaveLength(1);
     expect(merged.catalog[0]?.label).toBe('画面');
     expect(compileShotText(merged.catalog, merged.row.shotFields)).toBe('【画面】雪夜');
+  });
+
+  it('mergeParseResultIntoRow normalizes bare numeric 镜头号 to 3 digits', () => {
+    const row = createStoryboardTableRow({ shotRaw: 'x' });
+    const merged = mergeParseResultIntoRow(
+      [],
+      row,
+      {
+        fields: [{ label: '镜头号', value: '41' }],
+      },
+      'raw'
+    );
+    expect(merged.row.shotNo).toBe('041');
   });
 
   it('parseDurationSecFromParsedValue supports frame count', () => {
@@ -138,7 +178,7 @@ describe('storyboardTableParse', () => {
       shotFields: { f_visual: '室内', f_dialogue: '台词' },
     });
     const prompt = compileRedrawPrompt(row, catalog);
-    expect(prompt).toContain('镜头号 03');
+    expect(prompt).toContain('镜头号 003');
     expect(prompt).toContain('室内');
     expect(prompt).not.toContain('台词');
   });
@@ -264,6 +304,64 @@ describe('storyboardTableParse', () => {
     expect(batch.rows[0]?.shotFields[dialogueId]).toBe('d1');
     const sfxId = resolveFieldId(batch.catalog, '音效');
     expect(batch.rows[1]?.shotFields[sfxId]).toBe('sfx');
+  });
+
+  it('parseStoryboardBulkStructuredWithPreset uses one LLM call for multi-shot text', async () => {
+    workflowChatMock.mockResolvedValueOnce(
+      JSON.stringify({
+        rows: [
+          {
+            shotNo: '131',
+            fields: [
+              { label: '景别', value: '中景' },
+              { label: '画面', value: '杀气复苏' },
+            ],
+          },
+          {
+            shotNo: '132',
+            fields: [{ label: '画面', value: '后拉' }],
+          },
+        ],
+      })
+    );
+
+    const preset = { id: 'p', label: 't', category: 'text_to_text' as const, instruction: '' };
+    const out = await parseStoryboardBulkStructuredWithPreset(
+      '131 | 中景\n132 | 后拉',
+      preset,
+      {}
+    );
+    expect(workflowChatMock).toHaveBeenCalledTimes(1);
+    expect(out.rows).toHaveLength(2);
+    workflowChatMock.mockReset();
+  });
+
+  it('mergeBulkStructuredParseIntoTable maps rows by shot number', () => {
+    const catalog = [
+      { id: 'f_visual', label: '画面', order: 0, redrawInclude: true, kind: 'text' as const },
+    ];
+    const rows = [
+      createStoryboardTableRow({ id: 'a', shotNo: '131', shotRaw: '131 原文' }),
+      createStoryboardTableRow({ id: 'b', shotNo: '132', shotRaw: '132 原文' }),
+    ];
+    const merged = mergeBulkStructuredParseIntoTable(
+      rows,
+      catalog,
+      {
+        rows: [
+          { shotNo: '131', fields: [{ label: '画面', value: 'A' }] },
+          { shotNo: '132', fields: [{ label: '画面', value: 'B' }] },
+        ],
+      },
+      { targetRowIds: new Set(['a', 'b']) }
+    );
+    expect(merged.results.every((item) => item.ok)).toBe(true);
+    expect(merged.rows[0]?.shotFields.f_visual).toBe('A');
+    expect(merged.rows[1]?.shotFields.f_visual).toBe('B');
+  });
+
+  it('normalizeBulkParseModelOutput rejects empty rows', () => {
+    expect(() => normalizeBulkParseModelOutput(JSON.stringify({ rows: [] }))).toThrow();
   });
 
   it('normalizeOptimizeModelOutput rejects output without valid ids', () => {

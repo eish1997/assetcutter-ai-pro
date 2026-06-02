@@ -18,7 +18,12 @@ import type { StoryboardTableRow } from '../types';
 import { createStoryboardTableRow } from './storyboardTableAsset';
 import type { StoryboardSheetPreviewImageVersion } from './storyboardSheetPreviewHistory';
 import { cleanupSheetPreviewHistoryAssets, normalizeSheetPreviewImageHistory } from './storyboardSheetPreviewHistory';
-import { normalizeShotNoToken } from './storyboardSheetVisionSplit';
+import { storyboardShotNosMatch } from './storyboardSheetVisionSplit';
+import {
+  STORYBOARD_NUMERIC_SHOT_NO_WIDTH,
+  formatStoryboardNumericShotNo,
+  normalizeStoryboardShotNoInput,
+} from './storyboardTableParse';
 
 export const STORYBOARD_SHEET_PREVIEW_KEY = 'ac_storyboard_sheet_preview_v1';
 export const STORYBOARD_SHEET_PREVIEW_LIST_COMPANION_RESULT_KEY = 'sheet-previews-index';
@@ -495,33 +500,40 @@ export function resolveSheetTaskRows(
   rowIds: string[],
   shotNos: string[]
 ): StoryboardTableRow[] {
+  const normalizedShots = shotNos.map((shot) => shot.trim()).filter(Boolean);
+
+  const resolveOrderedByShots = (): StoryboardTableRow[] => {
+    const ordered: StoryboardTableRow[] = [];
+    const usedIds = new Set<string>();
+    for (const shot of normalizedShots) {
+      const row =
+        tableRows.find((item) => {
+          if (usedIds.has(item.id)) return false;
+          const rowShot = item.shotNo?.trim() || '';
+          if (!rowShot) return false;
+          return storyboardShotNosMatch(shot, rowShot);
+        }) ?? null;
+      if (!row) continue;
+      usedIds.add(row.id);
+      ordered.push(row);
+    }
+    return ordered;
+  };
+
+  if (normalizedShots.length) {
+    const byShots = resolveOrderedByShots();
+    if (byShots.length) return byShots;
+  }
+
   const byId = tableRows.filter((row) => rowIds.includes(row.id));
   if (byId.length > 0) return byId;
 
-  const normalizedShots = shotNos.map((shot) => shot.trim()).filter(Boolean);
   if (!normalizedShots.length) return [];
 
-  const ordered: StoryboardTableRow[] = [];
-  const usedIds = new Set<string>();
-  for (const shot of normalizedShots) {
-    const token = normalizeShotNoToken(shot);
-    const row =
-      tableRows.find((item) => {
-        if (usedIds.has(item.id)) return false;
-        const rowShot = item.shotNo?.trim() || '';
-        return rowShot === shot || (token && normalizeShotNoToken(rowShot) === token);
-      }) ?? null;
-    if (!row) continue;
-    usedIds.add(row.id);
-    ordered.push(row);
-  }
-  return ordered.length ? ordered : tableRows.filter((row) => {
+  return tableRows.filter((row) => {
     const shotNo = row.shotNo?.trim();
     if (!shotNo) return false;
-    const token = normalizeShotNoToken(shotNo);
-    return normalizedShots.some(
-      (shot) => shot === shotNo || normalizeShotNoToken(shot) === token
-    );
+    return normalizedShots.some((shot) => storyboardShotNosMatch(shot, shotNo));
   });
 }
 
@@ -531,18 +543,20 @@ export function expandStoryboardShotNoRange(fromRaw: string, toRaw: string): str
   const from = String(fromRaw || '').trim();
   const to = String(toRaw || '').trim();
   if (!from || !to) return [];
-  if (from === to) return [from];
+  if (from === to) return [normalizeStoryboardShotNoInput(from)];
 
   const fromMatch = from.match(/^(\D*)(\d+)$/);
   const toMatch = to.match(/^(\D*)(\d+)$/);
   if (!fromMatch || !toMatch || fromMatch[1] !== toMatch[1]) {
-    return [...new Set([from, to])];
+    return [...new Set([normalizeStoryboardShotNoInput(from), normalizeStoryboardShotNoInput(to)])];
   }
 
   const prefix = fromMatch[1] ?? '';
   const start = Number.parseInt(fromMatch[2] ?? '', 10);
   const end = Number.parseInt(toMatch[2] ?? '', 10);
-  const pad = (fromMatch[2] ?? '').length;
+  const pad = prefix
+    ? (fromMatch[2] ?? '').length
+    : Math.max(STORYBOARD_NUMERIC_SHOT_NO_WIDTH, (fromMatch[2] ?? '').length);
   if (!Number.isFinite(start) || !Number.isFinite(end)) return [];
 
   const lo = Math.min(start, end);
@@ -551,7 +565,8 @@ export function expandStoryboardShotNoRange(fromRaw: string, toRaw: string): str
 
   const result: string[] = [];
   for (let n = lo; n <= hi; n += 1) {
-    result.push(`${prefix}${String(n).padStart(pad, '0')}`);
+    const token = prefix ? `${prefix}${String(n).padStart(pad, '0')}` : formatStoryboardNumericShotNo(String(n));
+    result.push(token);
   }
   return result;
 }
@@ -598,11 +613,11 @@ export function ensureStoryboardRowsForShotNos(
   const usedIds = new Set<string>();
 
   for (const shot of shotNos.map((item) => item.trim()).filter(Boolean)) {
-    const token = normalizeShotNoToken(shot);
     let row =
       next.find((item) => {
         const rowShot = item.shotNo?.trim() || '';
-        return rowShot === shot || (token && normalizeShotNoToken(rowShot) === token);
+        if (!rowShot) return false;
+        return storyboardShotNosMatch(shot, rowShot);
       }) ?? null;
 
     if (!row) {

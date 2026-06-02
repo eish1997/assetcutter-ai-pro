@@ -3,7 +3,7 @@ import type {
   StoryboardParseFieldDef,
   StoryboardTableRow,
 } from '../types';
-import { ensureShotCharacterFieldOnRow } from './storyboardShotCharacters';
+import { ensureShotCharacterFieldOnRow, isShotCharacterFieldLabel, shouldRetainShotCharacterParseField } from './storyboardShotCharacters';
 import { resolveTextModelForPreset, type CapabilityExecuteContext } from './capabilityExecutor';
 import { workflowChat } from './unifiedAiGateway';
 
@@ -24,6 +24,81 @@ const EXCLUDE_REDRAW_LABEL = /对白|台词|音效|备注|音乐|旁白/;
 const SHOT_NO_LABEL_RE = /^(镜头号|镜号|镜次|分镜号?|序号|编号|scene|seq(?:uence)?|shot\s*(?:no|number|id)?\.?)$/i;
 const DURATION_LABEL_RE = /^(时长|持续时间|时间|长度|帧数?|frames?|duration|dur\.?)$/i;
 
+const SHOT_NO_VALUE_RE =
+  /^(?:SC|S)\d+(?:[_-]SH?\d+)?$|^[A-Z]\d+(?:[_-]\d+)?$|^[A-Z]-?\d{1,3}$|^\d{1,3}$/i;
+
+/** 镜号列取值是否像合法镜头编号（非章节标题/说明行） */
+export function isStoryboardShotNoValue(value: string): boolean {
+  const t = value.trim();
+  if (!t || t.length > 32) return false;
+  if (SHOT_NO_VALUE_RE.test(t)) return true;
+  if (/^SC\d+_SH\d+$/i.test(t)) return true;
+  return false;
+}
+
+/** 镜号去重键：忽略大小写、空格与「镜号：」前缀 */
+export function normalizeStoryboardShotNoKey(raw: string): string {
+  return String(raw || '')
+    .trim()
+    .replace(/^(镜头号|镜号)\s*[：:]\s*/i, '')
+    .replace(/\s+/g, '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9_]/g, '');
+}
+
+/** 镜号排序：纯数字按数值，其余按 localeCompare(numeric) */
+export function compareStoryboardShotNos(a: string, b: string): number {
+  const keyA = normalizeStoryboardShotNoKey(a);
+  const keyB = normalizeStoryboardShotNoKey(b);
+  if (!keyA && !keyB) return 0;
+  if (!keyA) return 1;
+  if (!keyB) return -1;
+  if (/^\d+$/.test(keyA) && /^\d+$/.test(keyB)) {
+    return Number(keyA) - Number(keyB);
+  }
+  return keyA.localeCompare(keyB, undefined, { numeric: true, sensitivity: 'base' });
+}
+
+/** 返回出现 2 次及以上的镜号（各键只列一次展示值） */
+export function findDuplicateStoryboardShotNos(shotNos: string[]): string[] {
+  const counts = new Map<string, { display: string; count: number }>();
+  for (const raw of shotNos) {
+    const trimmed = raw.trim();
+    if (!trimmed) continue;
+    const key = normalizeStoryboardShotNoKey(trimmed) || trimmed.toLowerCase();
+    const entry = counts.get(key);
+    if (entry) {
+      entry.count += 1;
+    } else {
+      counts.set(key, { display: trimmed, count: 1 });
+    }
+  }
+  return [...counts.values()]
+    .filter((entry) => entry.count > 1)
+    .map((entry) => entry.display)
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+}
+
+/** 追加导入时，与表内已有镜号冲突的 incoming 镜号 */
+export function findStoryboardShotNoCollisions(
+  existing: Array<{ shotNo?: string }>,
+  incoming: Array<{ shotNo?: string }>
+): string[] {
+  const existingKeys = new Set(
+    existing
+      .map((row) => normalizeStoryboardShotNoKey(row.shotNo || ''))
+      .filter(Boolean)
+  );
+  const collisions = new Set<string>();
+  for (const row of incoming) {
+    const trimmed = (row.shotNo || '').trim();
+    if (!trimmed) continue;
+    const key = normalizeStoryboardShotNoKey(trimmed);
+    if (key && existingKeys.has(key)) collisions.add(trimmed);
+  }
+  return [...collisions].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+}
+
 export function isSystemShotNoLabel(label: string): boolean {
   return SHOT_NO_LABEL_RE.test(label.trim());
 }
@@ -36,12 +111,38 @@ export function isSystemParseFieldLabel(label: string): boolean {
   return isSystemShotNoLabel(label) || isSystemDurationLabel(label);
 }
 
+export const STORYBOARD_NUMERIC_SHOT_NO_WIDTH = 3;
+
+/** 纯数字镜号补齐为 3 位（41 → 041）；带前缀/字母的镜号保持原样 */
+export function formatStoryboardNumericShotNo(value: string): string {
+  const trimmed = value.trim();
+  if (/^\d+$/.test(trimmed)) {
+    return trimmed.padStart(STORYBOARD_NUMERIC_SHOT_NO_WIDTH, '0');
+  }
+  return trimmed;
+}
+
 export function parseShotNoFromParsedValue(raw: string): string {
   const t = raw
     .trim()
     .replace(/^(镜头号|镜号)\s*[：:]\s*/i, '')
-    .trim();
-  return t.slice(0, 32);
+    .trim()
+    .slice(0, 32);
+  if (!isStoryboardShotNoValue(t)) return '';
+  return formatStoryboardNumericShotNo(t);
+}
+
+/** 用户输入/持久化前的镜号规范化 */
+export function normalizeStoryboardShotNoInput(raw: string): string {
+  const trimmed = String(raw || '')
+    .trim()
+    .replace(/^(镜头号|镜号)\s*[：:]\s*/i, '')
+    .trim()
+    .slice(0, 32);
+  if (!trimmed) return '';
+  const parsed = parseShotNoFromParsedValue(trimmed);
+  if (parsed) return parsed;
+  return formatStoryboardNumericShotNo(trimmed);
 }
 
 export function parseDurationSecFromParsedValue(raw: string): number | null {
@@ -117,8 +218,7 @@ export const DEFAULT_STORYBOARD_PARSE_INSTRUCTION = `你是分镜脚本结构化
 4. 保留原文措辞，不要擅自翻译或合并不同维度。
 5. 镜头号、时长若出现在原文中：label 必须用「镜头号」「时长」，value 为原文中的值；系统将填入固定列（不进入动态字段）。不要编造。
 6. 对「画面」「动作」「景别」「机位」类字段设 redrawInclude: true；对「对白」「音效」「备注」类设 false。
-7. 若本镜出现具名角色（人物姓名，非道具/场景/光影/服化描述）：额外输出 label「镜头内角色」，value 为角色名，多个用顿号「、」分隔；无具名角色则不输出该字段。
-8. 「镜头内角色」必须设 redrawInclude: false。
+7. 不要输出「镜头内角色」字段，除非原文已显式标注该列或【镜头内角色】标签。
 
 只输出 JSON，不要 markdown 代码块：
 {
@@ -339,6 +439,85 @@ export function normalizeParseModelOutput(raw: string): StoryboardParseModelOutp
   return { fields };
 }
 
+export const STORYBOARD_BULK_PARSE_MAX_CHARS = 24000;
+
+export type StoryboardBulkParseModelRow = {
+  shotNo: string;
+  fields: StoryboardParseFieldItem[];
+};
+
+export type StoryboardBulkParseModelOutput = {
+  rows: StoryboardBulkParseModelRow[];
+};
+
+export const DEFAULT_STORYBOARD_BULK_PARSE_INSTRUCTION = `${DEFAULT_STORYBOARD_PARSE_INSTRUCTION}
+
+补充（多镜批量）：
+9. 输入可能含多镜（管道符表格或连续脚本），按镜号逐镜输出 rows。
+10. shotNo 与原文镜号一致；只输出有字段内容的镜，不要重复镜号。
+
+只输出 JSON：
+{
+  "rows": [
+    {
+      "shotNo": "131",
+      "fields": [
+        { "label": "景别", "value": "中景", "redrawInclude": true },
+        { "label": "画面", "value": "…", "redrawInclude": true, "kind": "multiline" }
+      ]
+    }
+  ]
+}`;
+
+function normalizeParseFieldItems(items: unknown[]): StoryboardParseFieldItem[] {
+  const fields: StoryboardParseFieldItem[] = [];
+  for (const item of items) {
+    if (!item || typeof item !== 'object') continue;
+    const label = String((item as StoryboardParseFieldItem).label || '').trim();
+    const value = String((item as StoryboardParseFieldItem).value || '').trim();
+    if (!label || !value) continue;
+    const kind = (item as StoryboardParseFieldItem).kind === 'multiline' ? 'multiline' : 'text';
+    fields.push({
+      label,
+      value: clampFieldValue(value, kind),
+      kind,
+      redrawInclude:
+        typeof (item as StoryboardParseFieldItem).redrawInclude === 'boolean'
+          ? (item as StoryboardParseFieldItem).redrawInclude
+          : undefined,
+    });
+    if (fields.length >= STORYBOARD_PARSE_MAX_FIELDS) break;
+  }
+  return fields;
+}
+
+export function normalizeBulkParseModelOutput(raw: string): StoryboardBulkParseModelOutput {
+  const cleaned = raw
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim();
+  let obj: unknown;
+  try {
+    obj = JSON.parse(cleaned);
+  } catch (e) {
+    throw new Error('批量结构化解析返回非 JSON：' + String(e));
+  }
+  if (!obj || typeof obj !== 'object' || !Array.isArray((obj as StoryboardBulkParseModelOutput).rows)) {
+    throw new Error('批量结构化解析 JSON 缺少 rows 数组');
+  }
+  const rows: StoryboardBulkParseModelRow[] = [];
+  for (const row of (obj as StoryboardBulkParseModelOutput).rows) {
+    if (!row || typeof row !== 'object') continue;
+    const shotNo = parseShotNoFromParsedValue(String(row.shotNo || ''));
+    if (!shotNo) continue;
+    const fields = normalizeParseFieldItems(Array.isArray(row.fields) ? row.fields : []);
+    if (!fields.length) continue;
+    rows.push({ shotNo, fields });
+  }
+  if (!rows.length) throw new Error('批量结构化解析未返回有效镜头');
+  return { rows };
+}
+
 export function resolveStoryboardParseInput(
   row: StoryboardTableRow,
   catalog: StoryboardParseFieldDef[]
@@ -355,6 +534,26 @@ export function buildCatalogParseHint(catalog: StoryboardParseFieldDef[]): strin
     .filter(Boolean);
   if (!labels.length) return '';
   return `\n\n【本表已有字段】输出时必须优先使用下列 label（字面一致）：${labels.join('、')}。可补充新维度，但不要改已有字段名。`;
+}
+
+/** 合并导入/解析时禁止新增列，只允许写入已有 label */
+export function buildStrictCatalogParseHint(catalog: StoryboardParseFieldDef[]): string {
+  const labels = catalog
+    .filter((f) => !isSystemParseFieldLabel(f.label))
+    .map((f) => f.label.trim())
+    .filter(Boolean);
+  if (!labels.length) return '';
+  return `\n\n【本表已有字段 · 严格模式】只能使用下列 label（字面完全一致），禁止新增字段：${labels.join('、')}。无对应维度时合并进最相近的已有字段。`;
+}
+
+export function filterParseFieldsToCatalog(
+  catalog: StoryboardParseFieldDef[],
+  fields: StoryboardParseFieldItem[]
+): StoryboardParseFieldItem[] {
+  const allowed = new Set(
+    catalog.filter((f) => !isSystemParseFieldLabel(f.label)).map((f) => f.label.trim())
+  );
+  return fields.filter((field) => allowed.has(field.label.trim()));
 }
 
 export function compileShotText(
@@ -449,14 +648,22 @@ export function mergeParseResultIntoRow(
   catalog: StoryboardParseFieldDef[],
   row: StoryboardTableRow,
   parsed: StoryboardParseModelOutput,
-  rawInput: string
+  rawInput: string,
+  options?: { preserveCatalog?: boolean }
 ): { catalog: StoryboardParseFieldDef[]; row: StoryboardTableRow } {
-  const { shotNo, durationSec, dynamic } = partitionParsedFields(parsed.fields);
-  const nextCatalog = mergeParseFieldsIntoCatalog(catalog, dynamic);
+  const filteredFields = shouldRetainShotCharacterParseField(catalog, rawInput)
+    ? parsed.fields
+    : parsed.fields.filter((field) => !isShotCharacterFieldLabel(field.label.trim()));
+  const { shotNo, durationSec, dynamic } = partitionParsedFields(filteredFields);
+  const preserveCatalog = Boolean(options?.preserveCatalog && catalog.length);
+  const dynamicFields = preserveCatalog ? filterParseFieldsToCatalog(catalog, dynamic) : dynamic;
+  const nextCatalog = preserveCatalog
+    ? catalog
+    : mergeParseFieldsIntoCatalog(catalog, dynamicFields);
   let nextFields = purgeSystemFieldValuesFromShotFields(nextCatalog, {
     ...row.shotFields,
   });
-  for (const item of dynamic) {
+  for (const item of dynamicFields) {
     const id = resolveFieldId(nextCatalog, item.label.trim());
     const def = nextCatalog.find((f) => f.id === id);
     const kind = def?.kind === 'multiline' ? 'multiline' : 'text';
@@ -464,9 +671,12 @@ export function mergeParseResultIntoRow(
   }
   nextFields = purgeSystemFieldValuesFromShotFields(nextCatalog, nextFields);
   let patched = applyShotFieldsPatch(row, nextCatalog, nextFields);
-  const ensured = ensureShotCharacterFieldOnRow(nextCatalog, patched, dynamic);
+  const ensured = ensureShotCharacterFieldOnRow(nextCatalog, patched, dynamicFields);
+  const addedShotCharacterColumn =
+    !catalog.some((def) => isShotCharacterFieldLabel(def.label)) &&
+    ensured.catalog.some((def) => isShotCharacterFieldLabel(def.label));
   return {
-    catalog: ensured.catalog,
+    catalog: preserveCatalog && !addedShotCharacterColumn ? nextCatalog : ensured.catalog,
     row: {
       ...ensured.row,
       shotRaw: rawInput.trim(),
@@ -480,13 +690,15 @@ export async function parseStoryboardTextWithPreset(
   input: string,
   preset: CustomAppModule,
   ctx: CapabilityExecuteContext,
-  options?: { fieldCatalog?: StoryboardParseFieldDef[] }
+  options?: { fieldCatalog?: StoryboardParseFieldDef[]; strictCatalog?: boolean }
 ): Promise<StoryboardParseModelOutput> {
   const trimmed = input.trim();
   if (!trimmed) throw new Error('请先填写原文或结构化内容');
   const sys = (preset.instruction || '').trim() || DEFAULT_STORYBOARD_PARSE_INSTRUCTION;
   const catalogHint = options?.fieldCatalog?.length
-    ? buildCatalogParseHint(options.fieldCatalog)
+    ? options.strictCatalog
+      ? buildStrictCatalogParseHint(options.fieldCatalog)
+      : buildCatalogParseHint(options.fieldCatalog)
     : '';
   const body = `${sys}${catalogHint}\n\n---\n\n${trimmed.slice(0, 8000)}`;
   const label = preset.label || preset.id;
@@ -499,6 +711,99 @@ export async function parseStoryboardTextWithPreset(
   const out = normalizeParseModelOutput(raw);
   ctx.onLog?.('info', `分镜表 · 结构化解析完成（${out.fields.length} 个字段）`);
   return out;
+}
+
+export async function parseStoryboardBulkStructuredWithPreset(
+  text: string,
+  preset: CustomAppModule,
+  ctx: CapabilityExecuteContext,
+  options?: { fieldCatalog?: StoryboardParseFieldDef[]; strictCatalog?: boolean }
+): Promise<StoryboardBulkParseModelOutput> {
+  const trimmed = text.trim();
+  if (!trimmed) throw new Error('请先填写分镜文本');
+  const sys =
+    (preset.instruction || '').trim() || DEFAULT_STORYBOARD_BULK_PARSE_INSTRUCTION;
+  const catalogHint = options?.fieldCatalog?.length
+    ? options.strictCatalog
+      ? buildStrictCatalogParseHint(options.fieldCatalog)
+      : buildCatalogParseHint(options.fieldCatalog)
+    : '';
+  const body = `${sys}${catalogHint}\n\n---\n\n${trimmed.slice(0, STORYBOARD_BULK_PARSE_MAX_CHARS)}`;
+  const label = preset.label || preset.id;
+  ctx.onLog?.('info', `分镜表 · ${label} · 批量结构化解析中（单次请求）…`);
+  const raw = await workflowChat(
+    [{ role: 'user', parts: [{ text: body }] }],
+    resolveTextModelForPreset(preset, ctx),
+    STORYBOARD_LLM_JSON_OPTIONS
+  );
+  const out = normalizeBulkParseModelOutput(raw);
+  ctx.onLog?.('info', `分镜表 · 批量结构化解析完成（${out.rows.length} 镜）`);
+  return out;
+}
+
+export function mergeBulkStructuredParseIntoTable(
+  rows: StoryboardTableRow[],
+  catalog: StoryboardParseFieldDef[],
+  parsed: StoryboardBulkParseModelOutput,
+  options?: {
+    targetRowIds?: Set<string>;
+    preserveCatalog?: boolean;
+    skipIfHasStructuredFields?: boolean;
+  }
+): {
+  catalog: StoryboardParseFieldDef[];
+  rows: StoryboardTableRow[];
+  results: StoryboardBatchParseRowResult[];
+} {
+  const parsedByKey = new Map<string, StoryboardBulkParseModelRow>();
+  for (const row of parsed.rows) {
+    const key = normalizeStoryboardShotNoKey(row.shotNo);
+    if (key && !parsedByKey.has(key)) parsedByKey.set(key, row);
+  }
+
+  const rowMap = new Map(rows.map((row) => [row.id, row]));
+  let nextCatalog = catalog;
+  const results: StoryboardBatchParseRowResult[] = [];
+
+  for (const row of rows) {
+    if (options?.targetRowIds && !options.targetRowIds.has(row.id)) continue;
+    if (options?.skipIfHasStructuredFields && rowHasStructuredFieldValues(nextCatalog, row)) {
+      continue;
+    }
+    const rawInput = (row.shotRaw || '').trim();
+    if (!rawInput) continue;
+
+    const key = normalizeStoryboardShotNoKey(row.shotNo || '');
+    const parsedRow = key ? parsedByKey.get(key) : undefined;
+    if (!parsedRow) {
+      results.push({ rowId: row.id, ok: false, error: '批量解析结果中未找到该镜号' });
+      continue;
+    }
+    try {
+      const merged = mergeParseResultIntoRow(
+        nextCatalog,
+        row,
+        { fields: parsedRow.fields },
+        rawInput,
+        { preserveCatalog: options?.preserveCatalog }
+      );
+      nextCatalog = merged.catalog;
+      rowMap.set(merged.row.id, merged.row);
+      results.push({ rowId: row.id, ok: true });
+    } catch (e) {
+      results.push({
+        rowId: row.id,
+        ok: false,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
+  return {
+    catalog: nextCatalog,
+    rows: rows.map((row) => rowMap.get(row.id) ?? row),
+    results,
+  };
 }
 
 export async function parseStoryboardRowWithPreset(
@@ -540,7 +845,11 @@ export async function parseStoryboardRowsBatch(
   catalog: StoryboardParseFieldDef[],
   preset: CustomAppModule,
   ctx: CapabilityExecuteContext,
-  options?: { concurrency?: number; shouldSkip?: (row: StoryboardTableRow) => boolean }
+  options?: {
+    concurrency?: number;
+    shouldSkip?: (row: StoryboardTableRow) => boolean;
+    strictCatalog?: boolean;
+  }
 ): Promise<{
   catalog: StoryboardParseFieldDef[];
   rows: StoryboardTableRow[];
@@ -558,7 +867,10 @@ export async function parseStoryboardRowsBatch(
     try {
       const input = resolveStoryboardParseInput(row, catalog);
       if (!input) throw new Error('请先填写原文或结构化内容');
-      const parsed = await parseStoryboardTextWithPreset(input, preset, ctx, { fieldCatalog: catalog });
+      const parsed = await parseStoryboardTextWithPreset(input, preset, ctx, {
+        fieldCatalog: catalog,
+        strictCatalog: options?.strictCatalog,
+      });
       return { rowId: row.id, ok: true, parsed, input };
     } catch (e) {
       return {
@@ -581,7 +893,9 @@ export async function parseStoryboardRowsBatch(
       continue;
     }
     try {
-      const merged = mergeParseResultIntoRow(nextCatalog, row, outcome.parsed, outcome.input);
+      const merged = mergeParseResultIntoRow(nextCatalog, row, outcome.parsed, outcome.input, {
+        preserveCatalog: options?.strictCatalog,
+      });
       nextCatalog = merged.catalog;
       rowMap.set(merged.row.id, merged.row);
       results.push({ rowId: row.id, ok: true });

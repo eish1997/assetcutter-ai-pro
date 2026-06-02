@@ -1,5 +1,7 @@
 import type { BoundingBox, StoryboardTableRow } from '../types';
 import { createStoryboardTableRow } from './storyboardTableAsset';
+import { normalizeStoryboardShotNoInput } from './storyboardTableParse';
+import { computeStoryboardMosaicGrid } from './storyboardFrameStripMerge';
 import { cropBoxes } from './imageCrop';
 import { detectObjectsInImage } from './unifiedAiGateway';
 import { DEFAULT_MODEL_TEXT } from './modelRegistry/constants';
@@ -35,7 +37,27 @@ export function extractShotNoToken(raw: string): string {
   if (!text) return '';
   const explicit = text.match(/\b(?:SC\d+[_-]?)?S?\d{2,4}\b/i);
   if (explicit?.[0]) return normalizeShotNoToken(explicit[0]);
+  const leadingDigits = text.match(/^(\d{1,4})/);
+  if (leadingDigits?.[1]) return normalizeShotNoToken(leadingDigits[1]);
   return normalizeShotNoToken(text);
+}
+
+/** 镜号是否指向同一镜头（含 131 与 0131 等数值等价） */
+export function storyboardShotNosMatch(a: string, b: string): boolean {
+  const left = String(a || '').trim();
+  const right = String(b || '').trim();
+  if (!left || !right) return false;
+  if (left === right) return true;
+
+  const tokenA = normalizeShotNoToken(left);
+  const tokenB = normalizeShotNoToken(right);
+  if (!tokenA || !tokenB) return false;
+  if (tokenA === tokenB) return true;
+  if (/^\d+$/.test(tokenA) && /^\d+$/.test(tokenB)) {
+    return Number(tokenA) === Number(tokenB);
+  }
+  if (tokenA.endsWith(tokenB) || tokenB.endsWith(tokenA)) return true;
+  return tokenA.includes(tokenB) || tokenB.includes(tokenA);
 }
 
 export function buildStoryboardSheetVisionPrompt(expectedShotNos: string[]): string {
@@ -128,20 +150,27 @@ export function matchVisionBoxToRow(
   box: BoundingBox,
   rows: StoryboardTableRow[]
 ): StoryboardTableRow | null {
-  const labelToken = extractShotNoToken(box.label);
-  if (!labelToken) return null;
+  const labelCandidates = [box.label, extractShotNoToken(box.label)].filter(Boolean);
+  if (!labelCandidates.length) return null;
 
   let best: StoryboardTableRow | null = null;
   let bestScore = -1;
 
   for (const row of rows) {
-    const rowToken = normalizeShotNoToken(row.shotNo || '');
-    if (!rowToken) continue;
+    const rowShot = row.shotNo?.trim() || '';
+    if (!rowShot) continue;
 
     let score = -1;
-    if (labelToken === rowToken) score = 100;
-    else if (labelToken.endsWith(rowToken) || rowToken.endsWith(labelToken)) score = 80;
-    else if (labelToken.includes(rowToken) || rowToken.includes(labelToken)) score = 60;
+    for (const candidate of labelCandidates) {
+      if (storyboardShotNosMatch(candidate, rowShot)) {
+        const tokenA = normalizeShotNoToken(candidate);
+        const tokenB = normalizeShotNoToken(rowShot);
+        if (candidate === rowShot || tokenA === tokenB) score = Math.max(score, 100);
+        else if (/^\d+$/.test(tokenA) && /^\d+$/.test(tokenB) && Number(tokenA) === Number(tokenB)) {
+          score = Math.max(score, 95);
+        } else score = Math.max(score, 80);
+      }
+    }
 
     if (score > bestScore) {
       bestScore = score;
@@ -149,7 +178,7 @@ export function matchVisionBoxToRow(
     }
   }
 
-  return bestScore >= 60 ? best : null;
+  return bestScore >= 80 ? best : null;
 }
 
 function dedupeBoxesByLabel(boxes: BoundingBox[]): BoundingBox[] {
@@ -187,7 +216,8 @@ export async function detectStoryboardSheetPanels(
 export function visionLabelToShotNo(label: string): string {
   const text = String(label || '').trim();
   if (!text) return '';
-  return text.replace(/^(镜头号|镜号)\s*[：:]\s*/i, '').trim() || extractShotNoToken(text);
+  const stripped = text.replace(/^(镜头号|镜号)\s*[：:]\s*/i, '').trim();
+  return normalizeStoryboardShotNoInput(stripped || extractShotNoToken(text));
 }
 
 /** 切分回填时只匹配本拼图镜号范围内的镜头，避免误填全表 */
@@ -198,18 +228,10 @@ export function filterStoryboardRowsByExpectedShots(
   const normalizedExpected = expectedShotNos.map((shot) => shot.trim()).filter(Boolean);
   if (!normalizedExpected.length) return rows;
 
-  const expectedTokens = new Set(
-    normalizedExpected.map((shot) => normalizeShotNoToken(shot)).filter(Boolean)
-  );
-
   const scoped = rows.filter((row) => {
     const shotNo = row.shotNo?.trim() || '';
     if (!shotNo) return false;
-    const token = normalizeShotNoToken(shotNo);
-    return (
-      normalizedExpected.includes(shotNo) ||
-      (token ? expectedTokens.has(token) : false)
-    );
+    return normalizedExpected.some((expected) => storyboardShotNosMatch(expected, shotNo));
   });
 
   return scoped.length ? scoped : rows;
@@ -221,14 +243,67 @@ export function isStoryboardShotNoInExpectedScope(
 ): boolean {
   const normalized = String(shotNo || '').trim();
   if (!normalized) return false;
-  const token = normalizeShotNoToken(normalized);
-  const expectedTokens = new Set(
-    expectedShotNos.map((shot) => normalizeShotNoToken(shot)).filter(Boolean)
+  return expectedShotNos.some((shot) => storyboardShotNosMatch(shot, normalized));
+}
+
+export function buildUniformSheetGridBoxes(cellCount: number): BoundingBox[] {
+  const { cols, rows: gridRows } = computeStoryboardMosaicGrid(cellCount);
+  const margin = 4;
+  const boxes: BoundingBox[] = [];
+  const cellW = 1000 / cols;
+  const cellH = 1000 / gridRows;
+  for (let index = 0; index < cellCount; index += 1) {
+    const col = index % cols;
+    const rowIdx = Math.floor(index / cols);
+    boxes.push({
+      id: `grid-${index}`,
+      label: String(index + 1),
+      xmin: Math.max(0, Math.round(col * cellW + margin)),
+      ymin: Math.max(0, Math.round(rowIdx * cellH + margin)),
+      xmax: Math.min(1000, Math.round((col + 1) * cellW - margin)),
+      ymax: Math.min(1000, Math.round((rowIdx + 1) * cellH - margin)),
+    });
+  }
+  return boxes;
+}
+
+export async function splitStoryboardSheetByUniformGrid(
+  dataUrl: string,
+  rows: StoryboardTableRow[]
+): Promise<StoryboardSheetVisionSplitResult> {
+  if (!rows.length) return { matches: [], unmatchedLabels: [] };
+
+  const boxes = buildUniformSheetGridBoxes(rows.length);
+  const crops = await cropBoxes(
+    dataUrl,
+    boxes,
+    boxes.map((_, index) => index),
+    2
   );
-  return (
-    expectedShotNos.some((shot) => shot.trim() === normalized) ||
-    (token ? expectedTokens.has(token) : false)
-  );
+
+  const matches: StoryboardSheetVisionMatch[] = [];
+  const unmatchedLabels: string[] = [];
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index]!;
+    const image = crops[index];
+    if (!image) {
+      unmatchedLabels.push(row.shotNo?.trim() || `row-${index + 1}`);
+      continue;
+    }
+    matches.push({
+      rowId: row.id,
+      shotNo: row.shotNo?.trim() || '',
+      label: row.shotNo?.trim() || boxes[index]!.label,
+      image,
+      box: boxes[index]!,
+    });
+  }
+
+  return {
+    matches,
+    unmatchedLabels,
+    warn: unmatchedLabels.length ? `网格切分 ${matches.length}/${rows.length} 镜` : undefined,
+  };
 }
 
 export async function splitStoryboardSheetByVision(
@@ -309,6 +384,22 @@ export async function splitStoryboardSheetByVision(
     warn = '已识别分镜格，但镜号与表内镜头无法匹配';
   } else if (unmatchedLabels.length) {
     warn = `${unmatchedLabels.length} 个识别格未能匹配镜号：${unmatchedLabels.slice(0, 4).join('、')}`;
+  }
+
+  const initialMatchCount = matches.length;
+  if (workingRows.length > 0 && matches.length < workingRows.length) {
+    const grid = await splitStoryboardSheetByUniformGrid(dataUrl, workingRows);
+    const matchedIds = new Set(matches.map((match) => match.rowId));
+    for (const gridMatch of grid.matches) {
+      if (matchedIds.has(gridMatch.rowId)) continue;
+      matches.push(gridMatch);
+      matchedIds.add(gridMatch.rowId);
+    }
+    if (matches.length > initialMatchCount) {
+      const gridFilled = matches.length - initialMatchCount;
+      const gridWarn = `视觉切分 ${initialMatchCount}/${workingRows.length} 镜，其余 ${gridFilled} 镜已按均匀网格回填`;
+      warn = warn ? `${warn}；${gridWarn}` : gridWarn;
+    }
   }
 
   return {

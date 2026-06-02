@@ -12,6 +12,7 @@ import {
   prependStoryboardSheetPreview,
   readStoryboardSheetPreviews,
   removeStoryboardSheetPreview,
+  resolveSheetTaskRows,
   storyboardSheetPreviewListCompanionKey,
   writeStoryboardSheetPreviews,
 } from '../services/storyboardSheetPreview';
@@ -293,21 +294,47 @@ describe('storyboardSheetPreview', () => {
   });
 
   it('expands shot ranges and formats preview labels', () => {
-    expect(expandStoryboardShotNoRange('01', '04')).toEqual(['01', '02', '03', '04']);
-    expect(formatSheetPreviewShotLabel(['01', '02', '03', '04'])).toBe('01–04');
-    expect(buildSheetPreviewLabel('任务 1', ['01', '02'])).toBe('任务 1 · 01–02');
+    expect(expandStoryboardShotNoRange('01', '04')).toEqual(['001', '002', '003', '004']);
+    expect(expandStoryboardShotNoRange('41', '45')).toEqual(['041', '042', '043', '044', '045']);
+    expect(formatSheetPreviewShotLabel(['001', '002', '003', '004'])).toBe('001–004');
+    expect(buildSheetPreviewLabel('任务 1', ['01', '02'])).toBe('任务 1 · 01、02');
     expect(parseSheetPreviewShotRange('01', '04')).toEqual({
       ok: true,
-      shotNos: ['01', '02', '03', '04'],
+      shotNos: ['001', '002', '003', '004'],
     });
   });
 
   it('creates missing rows for preview shot numbers', () => {
     const existing = [createStoryboardTableRow({ id: 'r1', shotNo: '01' }, 0)];
     const ensured = ensureStoryboardRowsForShotNos(existing, ['01', '02', '03']);
-    expect(ensured.rows.map((row) => row.shotNo)).toEqual(['01', '02', '03']);
+    expect(ensured.rows.map((row) => row.shotNo)).toEqual(['001', '002', '003']);
     expect(ensured.createdIds).toHaveLength(2);
     expect(ensured.nextTableRows).toHaveLength(3);
+  });
+
+  it('resolveSheetTaskRows prefers shotNos over stale rowIds', () => {
+    const rows = [
+      createStoryboardTableRow({ id: 'r1', shotNo: '131' }, 0),
+      createStoryboardTableRow({ id: 'r2', shotNo: '132' }, 1),
+      createStoryboardTableRow({ id: 'r3', shotNo: '133' }, 2),
+    ];
+    const resolved = resolveSheetTaskRows(rows, ['stale-id'], ['131', '132', '133']);
+    expect(resolved.map((row) => row.shotNo)).toEqual(['131', '132', '133']);
+  });
+
+  it('resolveSheetTaskRows matches padded shot numbers', () => {
+    const rows = [createStoryboardTableRow({ id: 'r1', shotNo: '0131' }, 0)];
+    const resolved = resolveSheetTaskRows(rows, [], ['131']);
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0]?.id).toBe('r1');
+  });
+
+  it('ensureStoryboardRowsForShotNos reuses padded existing rows instead of duplicating', () => {
+    const existing = [createStoryboardTableRow({ id: 'r1', shotNo: '0131' }, 0)];
+    const ensured = ensureStoryboardRowsForShotNos(existing, ['131']);
+    expect(ensured.createdIds).toHaveLength(0);
+    expect(ensured.rows).toHaveLength(1);
+    expect(ensured.rows[0]?.id).toBe('r1');
   });
 
   it('merge prefers in-memory imageDataUrl and newer matchedCount', () => {
