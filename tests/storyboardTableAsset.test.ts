@@ -21,6 +21,7 @@ describe('storyboardTableAsset', () => {
     expect(isWorkflowStoryboardTableAsset(a)).toBe(true);
     expect(a.storyboardTable?.rows).toHaveLength(3);
     expect(a.storyboardTable?.fieldCatalog).toEqual([]);
+    expect(a.storyboardTable?.rows?.map((row) => row.shotNo)).toEqual(['001', '002', '003']);
     expect(a.storyboardTable?.rows?.[0]?.shotFields).toEqual({});
     expect(a.textTitle).toBe('第 1 集');
   });
@@ -90,13 +91,15 @@ describe('storyboardTableAsset', () => {
     expect(stats.hasGaps).toBe(true);
   });
 
-  it('applyAutoShotNumbers fills empty shotNo', () => {
+  it('applyAutoShotNumbers fills empty shotNo and normalizes numeric padding', () => {
     const rows = applyAutoShotNumbers([
       { id: 'a', index: 0, shotText: '', shotNo: '' },
       { id: 'b', index: 1, shotText: '', shotNo: '自定义' },
+      { id: 'c', index: 2, shotText: '', shotNo: '01' },
     ] as never);
-    expect(rows[0]?.shotNo).toBe(formatStoryboardShotNo(0));
+    expect(rows[0]?.shotNo).toBe('001');
     expect(rows[1]?.shotNo).toBe('自定义');
+    expect(rows[2]?.shotNo).toBe('001');
   });
 
   it('preview images capped', () => {

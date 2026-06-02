@@ -5,6 +5,7 @@ import {
   compileShotText,
   normalizeFieldCatalog,
   normalizeShotFieldsRecord,
+  formatStoryboardNumericShotNo,
   normalizeStoryboardShotNoInput,
   STORYBOARD_PARSE_DEFAULT_PRESET_ID,
   STORYBOARD_OPTIMIZE_DEFAULT_PRESET_ID,
@@ -22,6 +23,7 @@ import {
   duplicateStoryboardRoleAssets,
   normalizeStoryboardRoleAssets,
 } from './storyboardRoleAssets';
+import { storyboardShotNosMatch } from './storyboardSheetVisionSplit';
 
 const rowId = () => Math.random().toString(36).slice(2, 11);
 
@@ -65,7 +67,7 @@ export function preserveStoryboardRowFrameFields(
 export function createStoryboardTableRow(partial?: Partial<StoryboardTableRow>, index = 0): StoryboardTableRow {
   const shotFields = normalizeShotFieldsRecord(partial?.shotFields);
   const rawShotNo = String(partial?.shotNo ?? '').trim();
-  const shotNo = rawShotNo ? normalizeStoryboardShotNoInput(rawShotNo) : '';
+  const shotNo = rawShotNo ? normalizeStoryboardShotNoInput(rawShotNo) : formatStoryboardShotNo(index);
   return {
     id: partial?.id || rowId(),
     index,
@@ -197,6 +199,118 @@ export function normalizeStoryboardTableDoc(raw: unknown): StoryboardTableDoc {
   };
 }
 
+function storyboardRowHasImportText(row: StoryboardTableRow): boolean {
+  if ((row.shotRaw || '').trim()) return true;
+  return Object.values(row.shotFields || {}).some((value) => String(value || '').trim());
+}
+
+function mergeStoryboardImportShotFields(
+  base: Record<string, string> | undefined,
+  other: Record<string, string> | undefined
+): Record<string, string> {
+  const out: Record<string, string> = { ...(base || {}) };
+  for (const [key, value] of Object.entries(other || {})) {
+    const next = String(value || '').trim();
+    if (!next) continue;
+    const cur = String(out[key] || '').trim();
+    if (!cur) out[key] = next;
+  }
+  return out;
+}
+
+function mergeStoryboardTableRowPair(
+  base: StoryboardTableRow,
+  other: StoryboardTableRow,
+  fieldCatalog: StoryboardParseFieldDef[]
+): StoryboardTableRow {
+  const frameSource = storyboardRowHasFrameRef(base)
+    ? base
+    : storyboardRowHasFrameRef(other)
+      ? other
+      : base;
+  const textSource = storyboardRowHasImportText(base)
+    ? base
+    : storyboardRowHasImportText(other)
+      ? other
+      : base;
+  const shotFields = mergeStoryboardImportShotFields(base.shotFields, other.shotFields);
+  const merged = {
+    ...base,
+    ...other,
+    id: base.id,
+    shotNo: base.shotNo?.trim() ? base.shotNo : other.shotNo,
+    durationSec: base.durationSec ?? other.durationSec,
+    shotRaw: textSource.shotRaw ?? base.shotRaw ?? other.shotRaw,
+    shotFields,
+    locked: Boolean(base.locked || other.locked),
+    timelineLayer: base.timelineLayer ?? other.timelineLayer,
+    editFeedback: base.editFeedback ?? other.editFeedback,
+    frameRoleMarks: base.frameRoleMarks?.length ? base.frameRoleMarks : other.frameRoleMarks,
+    ...preserveStoryboardRowFrameFields(frameSource),
+    frameImageHistory:
+      (base.frameImageHistory?.length ? base.frameImageHistory : undefined) ??
+      other.frameImageHistory,
+  };
+  return applyShotFieldsPatch(merged, fieldCatalog, merged.shotFields);
+}
+
+/** 云同步 / bundle 合并：按 row.id、镜号对齐，分镜图与文本取「有内容的一侧」 */
+export function mergeStoryboardTableDocs(
+  baseRaw: unknown,
+  otherRaw: unknown
+): StoryboardTableDoc {
+  const base = normalizeStoryboardTableDoc(baseRaw);
+  const other = normalizeStoryboardTableDoc(otherRaw);
+  const fieldCatalog = base.fieldCatalog.length ? base.fieldCatalog : other.fieldCatalog;
+  const mergedById = new Map<string, StoryboardTableRow>();
+  const order: string[] = [];
+
+  const remember = (row: StoryboardTableRow) => {
+    if (!row.id || mergedById.has(row.id)) return;
+    mergedById.set(row.id, row);
+    order.push(row.id);
+  };
+
+  for (const row of base.rows) {
+    remember(row);
+  }
+
+  for (const otherRow of other.rows) {
+    const existingById = mergedById.get(otherRow.id);
+    if (existingById) {
+      mergedById.set(otherRow.id, mergeStoryboardTableRowPair(existingById, otherRow, fieldCatalog));
+      continue;
+    }
+    const existingByShot = [...mergedById.values()].find(
+      (row) =>
+        row.shotNo?.trim() &&
+        otherRow.shotNo?.trim() &&
+        storyboardShotNosMatch(row.shotNo, otherRow.shotNo)
+    );
+    if (existingByShot) {
+      mergedById.set(
+        existingByShot.id,
+        mergeStoryboardTableRowPair(existingByShot, otherRow, fieldCatalog)
+      );
+      continue;
+    }
+    remember(otherRow);
+  }
+
+  const rows = reindexStoryboardRows(order.map((id) => mergedById.get(id)!));
+  return {
+    ...base,
+    ...other,
+    title: base.title?.trim() ? base.title : other.title,
+    fieldCatalog,
+    timelineLayerCount: Math.max(base.timelineLayerCount ?? 1, other.timelineLayerCount ?? 1),
+    parsePresetId: base.parsePresetId || other.parsePresetId,
+    optimizePresetId: base.optimizePresetId || other.optimizePresetId,
+    roleAssets: base.roleAssets?.length ? base.roleAssets : other.roleAssets,
+    rows: finalizeStoryboardRows(rows, fieldCatalog),
+  };
+}
+
 export function normalizeStoryboardTableOnAsset(asset: WorkflowAsset): WorkflowAsset {
   if (!isWorkflowStoryboardTableAsset(asset)) return asset;
   const table = normalizeStoryboardTableDoc(asset.storyboardTable);
@@ -307,7 +421,7 @@ export function computeStoryboardTableStats(doc: StoryboardTableDoc): Storyboard
 }
 
 export function formatStoryboardShotNo(index: number): string {
-  return String(Math.max(0, index) + 1).padStart(2, '0');
+  return formatStoryboardNumericShotNo(String(Math.max(0, index) + 1));
 }
 
 export function duplicateStoryboardRow(source: StoryboardTableRow, index: number): StoryboardTableRow {
@@ -358,10 +472,11 @@ export function duplicateStoryboardTableOnAsset(asset: WorkflowAsset, newAssetId
   });
 }
 
-/** 仅为空镜头号填 01、02… */
+/** 为空镜头号填 001、002…；已有纯数字镜号统一补齐为三位 */
 export function applyAutoShotNumbers(rows: StoryboardTableRow[]): StoryboardTableRow[] {
-  return rows.map((r, i) => ({
-    ...r,
-    shotNo: (r.shotNo || '').trim() || formatStoryboardShotNo(i),
-  }));
+  return rows.map((r, i) => {
+    const current = (r.shotNo || '').trim();
+    const shotNo = current ? normalizeStoryboardShotNoInput(current) : formatStoryboardShotNo(i);
+    return { ...r, shotNo };
+  });
 }

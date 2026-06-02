@@ -5,11 +5,22 @@ import {
   parseSheetPreviewShotRange,
 } from '../../services/storyboardSheetPreview';
 import {
+  parseStoryboardSheetLayoutGrid,
+  suggestStoryboardSheetLayoutGrid,
+} from '../../services/storyboardSheetVisionSplit';
+import {
   STORYBOARD_FIELD_INPUT,
   STORYBOARD_TOOL_BTN_NEUTRAL,
   STORYBOARD_TOOL_BTN_PRIMARY,
 } from './storyboardTableUi';
 import AppIcon from '../ui/AppIcon';
+
+export type StoryboardSheetUploadConfirmPayload = {
+  shotFrom: string;
+  shotTo: string;
+  layoutCols?: number;
+  layoutRows?: number;
+};
 
 type Props = {
   open: boolean;
@@ -17,18 +28,22 @@ type Props = {
   previewSrc?: string | null;
   defaultFrom?: string;
   defaultTo?: string;
+  defaultLayoutCols?: number;
+  defaultLayoutRows?: number;
   title?: string;
   confirmLabel?: string;
   onClose: () => void;
-  onConfirm: (range: { shotFrom: string; shotTo: string }) => void;
+  onConfirm: (payload: StoryboardSheetUploadConfirmPayload) => void;
 };
 
 export default function StoryboardSheetUploadModal({
   open,
   busy = false,
   previewSrc = null,
-  defaultFrom = '01',
-  defaultTo = '01',
+  defaultFrom = '001',
+  defaultTo = '001',
+  defaultLayoutCols,
+  defaultLayoutRows,
   title = '上传拼图',
   confirmLabel = '加入预览',
   onClose,
@@ -36,18 +51,36 @@ export default function StoryboardSheetUploadModal({
 }: Props) {
   const [shotFrom, setShotFrom] = useState(defaultFrom);
   const [shotTo, setShotTo] = useState(defaultTo);
+  const [layoutCols, setLayoutCols] = useState(
+    defaultLayoutCols != null ? String(defaultLayoutCols) : ''
+  );
+  const [layoutRows, setLayoutRows] = useState(
+    defaultLayoutRows != null ? String(defaultLayoutRows) : ''
+  );
 
   useEffect(() => {
     if (!open) return;
     setShotFrom(defaultFrom);
     setShotTo(defaultTo);
-  }, [defaultFrom, defaultTo, open]);
+    setLayoutCols(defaultLayoutCols != null ? String(defaultLayoutCols) : '');
+    setLayoutRows(defaultLayoutRows != null ? String(defaultLayoutRows) : '');
+  }, [defaultFrom, defaultTo, defaultLayoutCols, defaultLayoutRows, open]);
 
   const parsed = useMemo(
     () => parseSheetPreviewShotRange(shotFrom, shotTo),
     [shotFrom, shotTo]
   );
   const shotLabel = parsed.ok ? formatSheetPreviewShotLabel(parsed.shotNos) : '';
+  const suggestedLayout = parsed.ok
+    ? suggestStoryboardSheetLayoutGrid(parsed.shotNos.length)
+    : null;
+  const layoutParsed = useMemo(() => {
+    if (!parsed.ok) return null;
+    if (!layoutCols.trim() && !layoutRows.trim()) return { ok: true as const, layout: undefined };
+    return parseStoryboardSheetLayoutGrid(layoutCols, layoutRows, parsed.shotNos.length);
+  }, [layoutCols, layoutRows, parsed]);
+
+  const canConfirm = parsed.ok && (layoutParsed == null || layoutParsed.ok);
 
   const onEscape = useCallback(
     (event: KeyboardEvent) => {
@@ -107,7 +140,9 @@ export default function StoryboardSheetUploadModal({
           ) : null}
 
           <div>
-            <p className="mb-2 text-[11px] text-gray-400">填写拼图包含的镜号范围，切分时会回填到对应镜头；缺失镜头会自动新建。</p>
+            <p className="mb-2 text-[11px] text-gray-400">
+              填写拼图包含的镜号范围；切分时优先 AI 识别每格，未识别到的镜头不会用盲目网格硬切（除非填写下方行列布局）。
+            </p>
             <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
               <label className="space-y-1">
                 <span className="text-[10px] text-gray-500">从</span>
@@ -115,7 +150,7 @@ export default function StoryboardSheetUploadModal({
                   value={shotFrom}
                   onChange={(event) => setShotFrom(event.target.value)}
                   disabled={busy}
-                  placeholder="01"
+                  placeholder="001"
                   className={STORYBOARD_FIELD_INPUT}
                 />
               </label>
@@ -137,6 +172,40 @@ export default function StoryboardSheetUploadModal({
               <p className="mt-2 text-[10px] text-red-300/80">{parsed.error}</p>
             )}
           </div>
+
+          <div>
+            <p className="mb-2 text-[11px] text-gray-400">
+              可选：填写拼图列×行（从左到右、从上到下对应镜号顺序）。AI 识别不全时，仅对已填布局做网格回填。
+              {suggestedLayout
+                ? ` 参考建议：${suggestedLayout.cols} 列 × ${suggestedLayout.rows} 行。`
+                : ''}
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              <label className="space-y-1">
+                <span className="text-[10px] text-gray-500">列数</span>
+                <input
+                  value={layoutCols}
+                  onChange={(event) => setLayoutCols(event.target.value)}
+                  disabled={busy}
+                  placeholder={suggestedLayout ? String(suggestedLayout.cols) : '留空'}
+                  className={STORYBOARD_FIELD_INPUT}
+                />
+              </label>
+              <label className="space-y-1">
+                <span className="text-[10px] text-gray-500">行数</span>
+                <input
+                  value={layoutRows}
+                  onChange={(event) => setLayoutRows(event.target.value)}
+                  disabled={busy}
+                  placeholder={suggestedLayout ? String(suggestedLayout.rows) : '留空'}
+                  className={STORYBOARD_FIELD_INPUT}
+                />
+              </label>
+            </div>
+            {layoutParsed && !layoutParsed.ok ? (
+              <p className="mt-2 text-[10px] text-red-300/80">{layoutParsed.error}</p>
+            ) : null}
+          </div>
         </div>
 
         <div className="flex justify-end gap-2 border-t border-white/[0.08] px-4 py-3">
@@ -150,8 +219,19 @@ export default function StoryboardSheetUploadModal({
           </button>
           <button
             type="button"
-            disabled={busy || !parsed.ok}
-            onClick={() => onConfirm({ shotFrom: shotFrom.trim(), shotTo: shotTo.trim() })}
+            disabled={busy || !canConfirm}
+            onClick={() => {
+              if (!parsed.ok) return;
+              const payload: StoryboardSheetUploadConfirmPayload = {
+                shotFrom: shotFrom.trim(),
+                shotTo: shotTo.trim(),
+              };
+              if (layoutParsed?.ok && layoutParsed.layout) {
+                payload.layoutCols = layoutParsed.layout.cols;
+                payload.layoutRows = layoutParsed.layout.rows;
+              }
+              onConfirm(payload);
+            }}
             className={STORYBOARD_TOOL_BTN_PRIMARY}
           >
             {confirmLabel}

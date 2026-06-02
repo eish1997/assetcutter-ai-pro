@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { WorkflowAsset, WorkflowPendingTask } from '../types';
 import type { WorkflowProjectBundle } from '../services/workspaceProjectStore';
 import { mergeWorkflowProjectBundles } from '../services/workflowBundleMerge';
+import { createStoryboardTableRow } from '../services/storyboardTableAsset';
 
 const baseAsset = (id: string, overrides: Partial<WorkflowAsset> = {}): WorkflowAsset => ({
   id,
@@ -292,5 +293,56 @@ describe('mergeWorkflowProjectBundles', () => {
     expect(merged.assets[0].resultOrder).toContain('hunyuan_pro');
     expect(merged.assets[0].resultMeta?.hunyuan_pro?.tencentJobId).toBe('job-abc');
     expect(merged.assets[0].stepModelCompanionKeys?.hunyuan_pro).toEqual(['wf-tencent-key']);
+  });
+
+  it('merges storyboard table rows so remote frame refs survive local text-only rows', () => {
+    const base: WorkflowProjectBundle = {
+      assets: [
+        baseAsset('sb1', {
+          assetKind: 'storyboard_table',
+          textTitle: '分镜表',
+          storyboardTable: {
+            fieldCatalog: [],
+            rows: [
+              createStoryboardTableRow(
+                {
+                  id: 'row-1',
+                  shotNo: '131',
+                  shotRaw: '本地文本',
+                },
+                0
+              ),
+            ],
+          },
+        }),
+      ],
+      pending: [],
+    };
+    const other: WorkflowProjectBundle = {
+      assets: [
+        baseAsset('sb1', {
+          assetKind: 'storyboard_table',
+          textTitle: '分镜表',
+          storyboardTable: {
+            fieldCatalog: [],
+            rows: [
+              createStoryboardTableRow(
+                {
+                  id: 'row-1',
+                  shotNo: '131',
+                  frameImageCompanionKey: 'remote-frame-key',
+                },
+                0
+              ),
+            ],
+          },
+        }),
+      ],
+      pending: [],
+    };
+    const { merged } = mergeWorkflowProjectBundles(base, other, { sameKey: { kind: 'prefer-base' } });
+    const row = merged.assets[0].storyboardTable?.rows[0];
+    expect(row?.shotRaw).toContain('本地文本');
+    expect(row?.frameImageCompanionKey).toBe('remote-frame-key');
   });
 });

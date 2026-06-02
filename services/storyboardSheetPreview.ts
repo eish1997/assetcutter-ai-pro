@@ -4,6 +4,7 @@ import {
   fetchWorkflowOriginalFromCompanionAsObjectUrl,
   putWorkflowResultImageToCompanion,
   imageSrcToDataUrlForCompanion,
+  shouldKeepExistingCompanionRasterUrl,
   workflowResultCompanionStorageKey,
 } from './workflowCompanionAssets';
 import { deleteCompanionAsset } from './companionClient/storage';
@@ -22,6 +23,7 @@ import { storyboardShotNosMatch } from './storyboardSheetVisionSplit';
 import {
   STORYBOARD_NUMERIC_SHOT_NO_WIDTH,
   formatStoryboardNumericShotNo,
+  normalizeStoryboardShotNoInput,
   normalizeStoryboardShotNoInput,
 } from './storyboardTableParse';
 
@@ -54,6 +56,10 @@ export type StoryboardSheetPreviewItem = {
   genError?: string;
   /** 历史版本（不含当前显示图）；当前显示始终为顶层 image* 字段 */
   imageHistory?: StoryboardSheetPreviewImageVersion[];
+  /** 上传拼图可选：切分网格列数（与 layoutRows 同时填写时生效） */
+  layoutCols?: number;
+  /** 上传拼图可选：切分网格行数 */
+  layoutRows?: number;
 };
 
 export type StoryboardSheetPreviewPersistImageKind = 'companion' | 'idb' | 'inline' | 'memory';
@@ -107,6 +113,14 @@ function normalizePreviewItem(raw: unknown): StoryboardSheetPreviewItem | null {
         : undefined,
     genError: typeof item.genError === 'string' ? item.genError : undefined,
     imageHistory: normalizeSheetPreviewImageHistory(item.imageHistory),
+    layoutCols:
+      typeof item.layoutCols === 'number' && item.layoutCols > 0
+        ? Math.round(item.layoutCols)
+        : undefined,
+    layoutRows:
+      typeof item.layoutRows === 'number' && item.layoutRows > 0
+        ? Math.round(item.layoutRows)
+        : undefined,
   };
 }
 
@@ -415,15 +429,42 @@ async function hydrateFromIdb(
   return { ...item, imageDataUrl: objectUrl };
 }
 
+export function applyHydratedSheetPreviewImages(
+  items: StoryboardSheetPreviewItem[],
+  hydrated: StoryboardSheetPreviewItem[]
+): StoryboardSheetPreviewItem[] {
+  const byId = new Map(hydrated.map((item) => [item.id, item]));
+  return items.map((item) => {
+    const fresh = byId.get(item.id);
+    if (!fresh?.imageDataUrl) return item;
+    return {
+      ...item,
+      imageDataUrl: fresh.imageDataUrl,
+      imageCompanionKey: fresh.imageCompanionKey ?? item.imageCompanionKey,
+      imageIdbKey: fresh.imageIdbKey ?? item.imageIdbKey,
+    };
+  });
+}
+
 export async function hydrateStoryboardSheetPreviewItem(
   item: StoryboardSheetPreviewItem,
   assetId: string,
   companionBaseUrl: string,
   companionProjectId: string
 ): Promise<StoryboardSheetPreviewItem> {
-  if (String(item.imageDataUrl || '').trim()) return item;
-
+  const existing = String(item.imageDataUrl || '').trim();
   const companionKey = String(item.imageCompanionKey || '').trim();
+  if (existing && (await shouldKeepExistingCompanionRasterUrl(existing, companionKey))) {
+    return item;
+  }
+  if (existing.startsWith('blob:')) {
+    try {
+      URL.revokeObjectURL(existing);
+    } catch {
+      /* ignore */
+    }
+  }
+
   const base = String(companionBaseUrl || '').trim();
   const pid = String(companionProjectId || '').trim();
   if (companionKey && base && pid) {
@@ -433,7 +474,30 @@ export async function hydrateStoryboardSheetPreviewItem(
     }
   }
 
-  return hydrateFromIdb(item, assetId);
+  return hydrateFromIdb({ ...item, imageDataUrl: '' }, assetId);
+}
+
+export const STORYBOARD_SHEET_PREVIEW_HYDRATE_CONCURRENCY = 8;
+
+async function mapLimit<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  if (!items.length) return [];
+  const limit = Math.max(1, Math.min(concurrency, items.length));
+  const out = new Array<R>(items.length);
+  let cursor = 0;
+  await Promise.all(
+    Array.from({ length: limit }, async () => {
+      for (;;) {
+        const i = cursor++;
+        if (i >= items.length) break;
+        out[i] = await mapper(items[i]!, i);
+      }
+    })
+  );
+  return out;
 }
 
 export async function hydrateStoryboardSheetPreviews(
@@ -442,10 +506,8 @@ export async function hydrateStoryboardSheetPreviews(
   companionBaseUrl: string,
   companionProjectId: string
 ): Promise<StoryboardSheetPreviewItem[]> {
-  return Promise.all(
-    items.map((item) =>
-      hydrateStoryboardSheetPreviewItem(item, assetId, companionBaseUrl, companionProjectId)
-    )
+  return mapLimit(items, STORYBOARD_SHEET_PREVIEW_HYDRATE_CONCURRENCY, (item) =>
+    hydrateStoryboardSheetPreviewItem(item, assetId, companionBaseUrl, companionProjectId)
   );
 }
 
@@ -612,13 +674,19 @@ export function ensureStoryboardRowsForShotNos(
   const createdIds: string[] = [];
   const usedIds = new Set<string>();
 
-  for (const shot of shotNos.map((item) => item.trim()).filter(Boolean)) {
-    let row =
-      next.find((item) => {
-        const rowShot = item.shotNo?.trim() || '';
-        if (!rowShot) return false;
-        return storyboardShotNosMatch(shot, rowShot);
-      }) ?? null;
+  for (const rawShot of shotNos.map((item) => item.trim()).filter(Boolean)) {
+    const shot = normalizeStoryboardShotNoInput(rawShot) || rawShot;
+    let rowIndex = next.findIndex((item) => {
+      const rowShot = item.shotNo?.trim() || '';
+      if (!rowShot) return false;
+      return storyboardShotNosMatch(shot, rowShot);
+    });
+    let row = rowIndex >= 0 ? next[rowIndex]! : null;
+
+    if (row && row.shotNo !== shot) {
+      row = { ...row, shotNo: shot };
+      next[rowIndex] = row;
+    }
 
     if (!row) {
       row = createStoryboardTableRow({ shotNo: shot }, next.length);

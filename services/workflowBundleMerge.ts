@@ -1,6 +1,7 @@
 import type { WorkflowAsset, WorkflowPendingTask } from '../types';
 import type { WorkflowProjectBundle } from './workspaceProjectStore';
 import { sanitizeWorkflowProjectBundle } from './workflowBundleSanitize';
+import { isWorkflowStoryboardTableAsset, mergeStoryboardTableDocs } from './storyboardTableAsset';
 
 /** 同一步骤键（能力 id / 步骤 id）上双方均有非空内容时的处理 */
 export type WorkflowBundleMergeSameKeyPolicy =
@@ -272,6 +273,13 @@ function mergeTwoAssets(
 
   const mergedKeys = collectStepIdsForAsset(out);
   out.resultOrder = mergeResultOrder(out.resultOrder, otherA.resultOrder, mergedKeys);
+
+  if (isWorkflowStoryboardTableAsset(out) && isWorkflowStoryboardTableAsset(otherA)) {
+    out.storyboardTable = mergeStoryboardTableDocs(out.storyboardTable, otherA.storyboardTable);
+    if (otherA.textTitle?.trim() && !out.textTitle?.trim()) {
+      out.textTitle = otherA.textTitle;
+    }
+  }
 
   return out;
 }

@@ -22,7 +22,7 @@ describe('storyboardRowDisplay', () => {
     ).toBe('A3');
     expect(
       storyboardRowOutlineTitle({ id: '1', index: 2, shotText: '', shotFields: {} }, 2)
-    ).toBe('03');
+    ).toBe('003');
   });
 
   it('storyboardRowOutlineSubtitle uses primary visual field', () => {

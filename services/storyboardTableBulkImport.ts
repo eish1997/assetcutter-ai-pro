@@ -41,15 +41,45 @@ function findExistingRowIndexForImport(
   return rows.findIndex((row) => storyboardShotNosMatch(row.shotNo || '', trimmed));
 }
 
-function findExistingRowWithFrameForImport(
+function sortedUnusedFrameRows(
   rows: StoryboardTableRow[],
-  shotNo: string
+  usedIds: Set<string>
+): StoryboardTableRow[] {
+  return rows
+    .filter((row) => !usedIds.has(row.id) && storyboardRowHasFrameRef(row))
+    .sort((a, b) => a.index - b.index);
+}
+
+/** 镜号匹配优先；镜号缺失或不一致时按已有分镜图行顺序与导入顺序对齐 */
+export function resolveFrameSourceForStoryboardImport(
+  existingRows: StoryboardTableRow[],
+  shotNo: string,
+  _importIndex: number,
+  usedFrameRowIds: Set<string>
 ): StoryboardTableRow | undefined {
   const trimmed = shotNo.trim();
-  if (!trimmed) return undefined;
-  return rows.find(
-    (row) => storyboardShotNosMatch(row.shotNo || '', trimmed) && storyboardRowHasFrameRef(row)
-  );
+  if (trimmed) {
+    const byShot = existingRows.find(
+      (row) =>
+        !usedFrameRowIds.has(row.id) &&
+        storyboardRowHasFrameRef(row) &&
+        storyboardShotNosMatch(row.shotNo || '', trimmed)
+    );
+    if (byShot) {
+      usedFrameRowIds.add(byShot.id);
+      return byShot;
+    }
+  }
+  const pool = sortedUnusedFrameRows(existingRows, usedFrameRowIds);
+  const pick = pool[0];
+  if (!pick) return undefined;
+  usedFrameRowIds.add(pick.id);
+  return pick;
+}
+
+function storyboardRowHasImportText(row: StoryboardTableRow): boolean {
+  if ((row.shotRaw || '').trim()) return true;
+  return Object.values(row.shotFields || {}).some((value) => String(value || '').trim());
 }
 
 export type StoryboardBulkTextMode = 'pipe' | 'tsv';
@@ -832,10 +862,17 @@ export function applyStoryboardBulkImport(
 
   if (mode === 'replace') {
     const importedRows: StoryboardTableRow[] = [];
-    for (const item of imports) {
+    const usedFrameRowIds = new Set<string>();
+    for (let importIndex = 0; importIndex < imports.length; importIndex += 1) {
+      const item = imports[importIndex]!;
       const result = importRowToTableRow(item, nextCatalog, importedRows.length);
       nextCatalog = result.catalog;
-      const frameSource = findExistingRowWithFrameForImport(existingRows, item.shotNo || '');
+      const frameSource = resolveFrameSourceForStoryboardImport(
+        existingRows,
+        item.shotNo || '',
+        importIndex,
+        usedFrameRowIds
+      );
       importedRows.push({
         ...result.row,
         ...(frameSource ? preserveStoryboardRowFrameFields(frameSource) : {}),
@@ -866,13 +903,18 @@ export function applyStoryboardBulkImport(
   };
 
   const preserveCatalog = catalog.length > 0;
+  const usedFrameRowIds = new Set<string>();
 
-  for (const item of imports) {
+  for (let importIndex = 0; importIndex < imports.length; importIndex += 1) {
+    const item = imports[importIndex]!;
     const shotKey = normalizeStoryboardShotNoKey(item.shotNo || '');
     const existingIndex = item.shotNo ? findRowIndexByShotKey(item.shotNo) : -1;
     const existing = existingIndex >= 0 ? mergedRows[existingIndex] : undefined;
 
     if (existing) {
+      if (storyboardRowHasFrameRef(existing)) {
+        usedFrameRowIds.add(existing.id);
+      }
       const result = importRowToTableRow(
         item,
         nextCatalog,
@@ -888,7 +930,7 @@ export function applyStoryboardBulkImport(
         ...preserveStoryboardRowFrameFields(existing),
         shotFields: result.row.shotFields,
         shotRaw: item.shotRaw || result.row.shotRaw,
-        shotNo: item.shotNo ?? existing.shotNo,
+        shotNo: normalizeStoryboardShotNoInput(item.shotNo || existing.shotNo || ''),
         durationSec: item.durationSec ?? existing.durationSec,
       };
       mergedRows[existingIndex] = updated;
@@ -898,11 +940,52 @@ export function applyStoryboardBulkImport(
     }
 
     const insertAt = findInsertIndexByShotNo(item.shotNo || '');
+    const frameSource = resolveFrameSourceForStoryboardImport(
+      mergedRows,
+      item.shotNo || '',
+      importIndex,
+      usedFrameRowIds
+    );
+    const frameRowIndex =
+      frameSource && !storyboardRowHasImportText(frameSource)
+        ? mergedRows.findIndex((row) => row.id === frameSource.id)
+        : -1;
+
+    if (frameRowIndex >= 0) {
+      const frameRow = mergedRows[frameRowIndex]!;
+      const result = importRowToTableRow(
+        item,
+        nextCatalog,
+        frameRow.index,
+        frameRow.shotFields || {},
+        { preserveCatalog }
+      );
+      nextCatalog = result.catalog;
+      const updated: StoryboardTableRow = {
+        ...frameRow,
+        ...result.row,
+        id: frameRow.id,
+        ...preserveStoryboardRowFrameFields(frameRow),
+        shotFields: result.row.shotFields,
+        shotRaw: item.shotRaw || result.row.shotRaw,
+        shotNo: normalizeStoryboardShotNoInput(item.shotNo || frameRow.shotNo || ''),
+        durationSec: item.durationSec ?? frameRow.durationSec,
+      };
+      mergedRows[frameRowIndex] = updated;
+      if (shotKey) rowByShotKey.set(shotKey, updated);
+      touchedRowIds.push(frameRow.id);
+      continue;
+    }
+
     const result = importRowToTableRow(item, nextCatalog, insertAt, undefined, { preserveCatalog });
     nextCatalog = result.catalog;
-    mergedRows.splice(insertAt, 0, result.row);
-    if (shotKey) rowByShotKey.set(shotKey, result.row);
-    touchedRowIds.push(result.row.id);
+    const inserted: StoryboardTableRow = {
+      ...result.row,
+      ...(frameSource ? preserveStoryboardRowFrameFields(frameSource) : {}),
+    };
+    mergedRows.splice(insertAt, 0, inserted);
+    if (shotKey) rowByShotKey.set(shotKey, inserted);
+    touchedRowIds.push(inserted.id);
   }
 
   const rows = mergedRows.map((row, index) => ({ ...row, index }));

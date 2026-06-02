@@ -63,6 +63,7 @@ type Props = {
   interaction: StoryboardRowInteractionValue;
   onActiveRowIdChange: (rowId: string) => void;
   onPatchRows?: (rowIds: string[], patch: Partial<StoryboardTableRow>) => void;
+  onRemoveRows?: (rowIds: string[]) => boolean;
   onAddFrameRoleMark?: (
     rowId: string,
     mark: { name: string; x: number; y: number; roleAssetId?: string }
@@ -101,6 +102,7 @@ export default function StoryboardTableEditView({
   interaction,
   onActiveRowIdChange,
   onPatchRows,
+  onRemoveRows,
   onAddFrameRoleMark,
   roleReplaceEligibleCount = 0,
   roleReplaceBatchBusy = false,
@@ -263,6 +265,14 @@ export default function StoryboardTableEditView({
     [onPatchRows, rows, selectedRowIdList]
   );
 
+  const batchRemove = useCallback(() => {
+    if (!selectedRowIdList.length || !onRemoveRows) return;
+    if (onRemoveRows(selectedRowIdList)) {
+      setCanvasSelectedRowIds(new Set());
+      selectionAnchorRef.current = null;
+    }
+  }, [onRemoveRows, selectedRowIdList]);
+
   const outlineVirtual = useStoryboardVirtualList({
     rowIds,
     estimateHeight: STORYBOARD_OUTLINE_ROW_ESTIMATE_PX,
@@ -352,6 +362,7 @@ export default function StoryboardTableEditView({
                 onLock={() => batchLock(true)}
                 onUnlock={() => batchLock(false)}
                 onApplyFeedback={batchApplyFeedback}
+                onRemove={batchRemove}
               />
               {onFeedbackBatchRedraw || onRoleReplaceBatch ? (
                 <div className="flex flex-wrap items-center gap-1.5 pt-0.5">

@@ -4,6 +4,7 @@ import type {
   StoryboardTableRow,
 } from '../types';
 import { ensureShotCharacterFieldOnRow, isShotCharacterFieldLabel, shouldRetainShotCharacterParseField } from './storyboardShotCharacters';
+import { preserveStoryboardRowFrameFields } from './storyboardTableAsset';
 import { resolveTextModelForPreset, type CapabilityExecuteContext } from './capabilityExecutor';
 import { workflowChat } from './unifiedAiGateway';
 
@@ -223,7 +224,7 @@ export const DEFAULT_STORYBOARD_PARSE_INSTRUCTION = `你是分镜脚本结构化
 只输出 JSON，不要 markdown 代码块：
 {
   "fields": [
-    { "label": "镜头号", "value": "03" },
+    { "label": "镜头号", "value": "003" },
     { "label": "时长", "value": "2.5" },
     { "label": "景别", "value": "中景", "redrawInclude": true },
     { "label": "画面", "value": "…", "redrawInclude": true, "kind": "multiline" },
@@ -454,7 +455,7 @@ export const DEFAULT_STORYBOARD_BULK_PARSE_INSTRUCTION = `${DEFAULT_STORYBOARD_P
 
 补充（多镜批量）：
 9. 输入可能含多镜（管道符表格或连续脚本），按镜号逐镜输出 rows。
-10. shotNo 与原文镜号一致；只输出有字段内容的镜，不要重复镜号。
+10. shotNo 与原文镜号一致；纯数字镜号统一三位（如 1→001、41→041）；只输出有字段内容的镜，不要重复镜号。
 
 只输出 JSON：
 {
@@ -679,6 +680,7 @@ export function mergeParseResultIntoRow(
     catalog: preserveCatalog && !addedShotCharacterColumn ? nextCatalog : ensured.catalog,
     row: {
       ...ensured.row,
+      ...preserveStoryboardRowFrameFields(row),
       shotRaw: rawInput.trim(),
       ...(shotNo !== undefined ? { shotNo } : {}),
       ...(durationSec !== undefined ? { durationSec } : {}),

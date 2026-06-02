@@ -69,11 +69,21 @@ type Props = {
   onPreviewSheetImage?: (preview: StoryboardSheetPreviewItem) => void;
   onUploadSheetPreview?: (
     dataUrl: string,
-    range: { shotFrom: string; shotTo: string }
+    payload: {
+      shotFrom: string;
+      shotTo: string;
+      layoutCols?: number;
+      layoutRows?: number;
+    }
   ) => void | Promise<void>;
   onUpdateSheetPreviewShotRange?: (
     previewId: string,
-    range: { shotFrom: string; shotTo: string }
+    payload: {
+      shotFrom: string;
+      shotTo: string;
+      layoutCols?: number;
+      layoutRows?: number;
+    }
   ) => void | Promise<void>;
   onApplySheetPreview?: (previewId: string) => Promise<SplitSheetPreviewResult>;
   onRegenerateSheetPreview?: (previewId: string) => Promise<void>;
@@ -161,7 +171,7 @@ const StoryboardTableInputView = forwardRef<StoryboardTableInputViewHandle, Prop
     const defaultShotFrom = useMemo(() => {
       const unlocked = rows.filter((row) => !row.locked);
       const first = unlocked.find((row) => row.shotNo?.trim()) ?? unlocked[0];
-      return first?.shotNo?.trim() || '01';
+      return first?.shotNo?.trim() || '001';
     }, [rows]);
 
     const defaultShotTo = useMemo(() => {
@@ -178,6 +188,8 @@ const StoryboardTableInputView = forwardRef<StoryboardTableInputViewHandle, Prop
     const modalDefaultFrom = editingPreview?.shotNos[0] ?? defaultShotFrom;
     const modalDefaultTo =
       editingPreview?.shotNos[editingPreview.shotNos.length - 1] ?? defaultShotTo;
+    const modalDefaultLayoutCols = editingPreview?.layoutCols;
+    const modalDefaultLayoutRows = editingPreview?.layoutRows;
     const modalPreviewSrc = uploadDraft?.dataUrl ?? editingPreview?.imageDataUrl ?? null;
 
     const showSplitGuide = useCallback((result: SplitSheetPreviewResult) => {
@@ -371,22 +383,24 @@ const StoryboardTableInputView = forwardRef<StoryboardTableInputViewHandle, Prop
           previewSrc={modalPreviewSrc}
           defaultFrom={modalDefaultFrom}
           defaultTo={modalDefaultTo}
+          defaultLayoutCols={modalDefaultLayoutCols}
+          defaultLayoutRows={modalDefaultLayoutRows}
           title={editingPreview ? '修改镜号范围' : '上传拼图'}
           confirmLabel={editingPreview ? '保存' : '加入预览'}
           onClose={() => {
             setUploadDraft(null);
             setEditPreviewId(null);
           }}
-          onConfirm={(range) => {
+          onConfirm={(payload) => {
             if (uploadDraft) {
-              void Promise.resolve(onUploadSheetPreview?.(uploadDraft.dataUrl, range)).finally(() => {
+              void Promise.resolve(onUploadSheetPreview?.(uploadDraft.dataUrl, payload)).finally(() => {
                 setUploadDraft(null);
               });
               return;
             }
             if (editPreviewId) {
               void Promise.resolve(
-                onUpdateSheetPreviewShotRange?.(editPreviewId, range)
+                onUpdateSheetPreviewShotRange?.(editPreviewId, payload)
               ).finally(() => {
                 setEditPreviewId(null);
               });

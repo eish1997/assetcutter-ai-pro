@@ -2,11 +2,27 @@ import type { BoundingBox, StoryboardTableRow } from '../types';
 import { createStoryboardTableRow } from './storyboardTableAsset';
 import { normalizeStoryboardShotNoInput } from './storyboardTableParse';
 import { computeStoryboardMosaicGrid } from './storyboardFrameStripMerge';
-import { cropBoxes } from './imageCrop';
+import { cropBoxes, trimImageDataUrlContentBounds } from './imageCrop';
 import { detectObjectsInImage } from './unifiedAiGateway';
 import { DEFAULT_MODEL_TEXT } from './modelRegistry/constants';
 
 export const STORYBOARD_SHEET_VISION_TIMEOUT_MS = 90_000;
+
+export type StoryboardSheetLayoutGrid = {
+  cols: number;
+  rows: number;
+};
+
+export type StoryboardSheetVisionSplitOptions = {
+  timeoutMs?: number;
+  autoCreateRows?: boolean;
+  expectedShotNos?: string[];
+  customPrompt?: string;
+  /** false = 视觉不全时不做网格回填（上传拼图推荐） */
+  allowGridFallback?: boolean;
+  /** 指定列行时，网格回填按此布局从左到右、从上到下对应镜号顺序 */
+  layoutGrid?: StoryboardSheetLayoutGrid;
+};
 
 export type StoryboardSheetVisionMatch = {
   rowId: string;
@@ -66,25 +82,27 @@ export function buildStoryboardSheetVisionPrompt(expectedShotNos: string[]): str
     ? `本图应包含下列镜号（label 必须与格内印刷镜号一致）：${expected.join('、')}。`
     : '';
 
-  return `你是分镜表拼图切分助手。输入是一张包含多个分镜格的故事板拼图（contact sheet）。
+  return `你是分镜表拼图切分助手。输入是一张包含多个分镜格的故事板拼图页（contact sheet 或手绘分镜页）。
 
 任务分两步理解每一格：
-1. 读取镜号：从该格顶部元数据条（如 SC01_SH001、景别、角度等）读取镜号，写入 label；
-2. 框选画面：box_2d 只框住中间「草图/插画」区域，用于回填分镜图。
+1. 读取镜号：从该格内可读位置读取镜号（顶部元数据条、左上角/右上角角标如 002/010、SC01_SH001 等），写入 label；
+2. 框选画面：box_2d 只框住该格的「草图/插画」主体区域，用于回填分镜图。
 
 box_2d 必须排除（不要框进）：
-- 顶部元数据文字条（镜号、景别、角度、运镜、时长等）；
-- 底部说明文字条（画面描述、对白、旁白等）；
-- 左右两侧的纯文字栏（若有）。
+- 顶部/底部元数据与说明文字条（景别、角度、运镜、时长、对白、旁白等）；
+- 左右两侧的纯文字栏（若有）；
+- 相邻分镜格的内容（严禁跨格合并）；
+- 标注箭头、运动线等辅助线若在外围可略去，但不得裁到下一格。
 
-box_2d 应紧贴草图外轮廓，略留 1–2% 边距即可；不要把多格合并为一框。
+box_2d 应紧贴草图外轮廓，略留 1–2% 边距；每格单独一框，宽高比例应接近该格真实画面（禁止输出极窄竖条或极扁横条）。
 
 常见版式：
 - 竖格：上文字 / 中画面 / 下文字 → 只框中间画面；
-- 横格：左文字 / 右草图 → 只框右侧草图。
+- 横格：左文字 / 右草图 → 只框右侧草图；
+- 不规则手绘页：按黑色/白色分隔线识别独立分镜格，每格一个框。
 
 label 规则：
-- 读取每格镜号文字（如 S030、SC01_SH001），原样写入 label；
+- 读取每格镜号文字（如 002、S030、SC01_SH001），原样写入 label；
 - 不要编造镜号；看不清的格可跳过；
 - 同一镜号只保留一个框（取画面最完整的一格）。
 
@@ -146,6 +164,32 @@ export function mapStoryboardBoxesToVisualCrop(boxes: BoundingBox[]): BoundingBo
   });
 }
 
+/** 过滤 AI 误检的窄条/过小框，避免切出竖条污染回填 */
+export function filterVisionBoxesByQuality(boxes: BoundingBox[]): BoundingBox[] {
+  if (boxes.length <= 1) return boxes;
+
+  const widths = boxes.map((box) => box.xmax - box.xmin).sort((a, b) => a - b);
+  const heights = boxes.map((box) => box.ymax - box.ymin).sort((a, b) => a - b);
+  const areas = boxes
+    .map((box) => (box.xmax - box.xmin) * (box.ymax - box.ymin))
+    .sort((a, b) => a - b);
+  const medianW = widths[Math.floor(widths.length / 2)] ?? 0;
+  const medianH = heights[Math.floor(heights.length / 2)] ?? 0;
+  const medianArea = areas[Math.floor(areas.length / 2)] ?? 0;
+  if (medianW <= 0 || medianH <= 0 || medianArea <= 0) return boxes;
+
+  return boxes.filter((box) => {
+    const w = box.xmax - box.xmin;
+    const h = box.ymax - box.ymin;
+    const area = w * h;
+    if (w < medianW * 0.18 || h < medianH * 0.18) return false;
+    if (area < medianArea * 0.14) return false;
+    const aspect = w / Math.max(h, 1);
+    if (aspect < 0.12 || aspect > 8.5) return false;
+    return true;
+  });
+}
+
 export function matchVisionBoxToRow(
   box: BoundingBox,
   rows: StoryboardTableRow[]
@@ -198,6 +242,157 @@ function dedupeBoxesByLabel(boxes: BoundingBox[]): BoundingBox[] {
   return [...byLabel.values()];
 }
 
+export function newStoryboardSheetSplitBoxId(): string {
+  return `box-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+}
+
+export function normalizeStoryboardSheetSplitBox(raw: BoundingBox): BoundingBox {
+  const xmin = Math.max(0, Math.min(1000, Math.min(raw.xmin, raw.xmax)));
+  const xmax = Math.max(0, Math.min(1000, Math.max(raw.xmin, raw.xmax)));
+  const ymin = Math.max(0, Math.min(1000, Math.min(raw.ymin, raw.ymax)));
+  const ymax = Math.max(0, Math.min(1000, Math.max(raw.ymin, raw.ymax)));
+  return {
+    id: String(raw.id || '').trim() || newStoryboardSheetSplitBoxId(),
+    label: String(raw.label || '').trim() || '',
+    xmin,
+    ymin,
+    xmax,
+    ymax,
+  };
+}
+
+export function clampStoryboardSheetSplitBox(box: BoundingBox, minSpan = 24): BoundingBox {
+  const normalized = normalizeStoryboardSheetSplitBox(box);
+  if (normalized.xmax - normalized.xmin < minSpan) {
+    const mid = (normalized.xmin + normalized.xmax) / 2;
+    normalized.xmin = Math.max(0, mid - minSpan / 2);
+    normalized.xmax = Math.min(1000, mid + minSpan / 2);
+  }
+  if (normalized.ymax - normalized.ymin < minSpan) {
+    const mid = (normalized.ymin + normalized.ymax) / 2;
+    normalized.ymin = Math.max(0, mid - minSpan / 2);
+    normalized.ymax = Math.min(1000, mid + minSpan / 2);
+  }
+  return normalized;
+}
+
+export async function splitStoryboardSheetFromBoxes(
+  dataUrl: string,
+  rows: StoryboardTableRow[],
+  inputBoxes: BoundingBox[],
+  options?: StoryboardSheetVisionSplitOptions
+): Promise<StoryboardSheetVisionSplitResult> {
+  const expectedShotNos =
+    options?.expectedShotNos?.map((shot) => shot.trim()).filter(Boolean) ??
+    rows.map((row) => row.shotNo?.trim() || '').filter(Boolean);
+  const boxes = inputBoxes.map((box) => clampStoryboardSheetSplitBox(box));
+  if (!boxes.length) {
+    return {
+      matches: [],
+      unmatchedLabels: [],
+      warn: '未提供切分框，请至少框选一个分镜格',
+    };
+  }
+
+  const workingRows = filterStoryboardRowsByExpectedShots([...rows], expectedShotNos);
+  const createdRows: StoryboardTableRow[] = [];
+  const usedRowIds = new Set<string>();
+  const matches: StoryboardSheetVisionMatch[] = [];
+  const unmatchedLabels: string[] = [];
+  let warn: string | undefined;
+
+  const crops = await trimVisionSplitCrops(
+    await cropBoxes(
+      dataUrl,
+      boxes,
+      boxes.map((_, index) => index),
+      4
+    )
+  );
+
+  for (let i = 0; i < boxes.length; i += 1) {
+    const box = boxes[i]!;
+    const image = crops[i];
+    let row = matchVisionBoxToRow(
+      box,
+      workingRows.filter((item) => !usedRowIds.has(item.id))
+    );
+
+    if (!row && options?.autoCreateRows) {
+      const shotNo = visionLabelToShotNo(box.label);
+      if (shotNo) {
+        row =
+          workingRows.find(
+            (item) =>
+              !usedRowIds.has(item.id) &&
+              item.shotNo?.trim() &&
+              storyboardShotNosMatch(item.shotNo, shotNo)
+          ) ?? null;
+      }
+      if (
+        !row &&
+        shotNo &&
+        isStoryboardShotNoInExpectedScope(shotNo, expectedShotNos)
+      ) {
+        row = createStoryboardTableRow({ shotNo }, workingRows.length);
+        workingRows.push(row);
+        createdRows.push(row);
+      }
+    }
+
+    if (!row || usedRowIds.has(row.id) || !image) {
+      unmatchedLabels.push(box.label || box.id);
+      continue;
+    }
+    usedRowIds.add(row.id);
+    matches.push({
+      rowId: row.id,
+      shotNo: row.shotNo?.trim() || visionLabelToShotNo(box.label),
+      label: box.label,
+      image,
+      box,
+    });
+  }
+
+  if (!matches.length) {
+    warn = '已识别分镜格，但镜号与表内镜头无法匹配';
+  } else if (unmatchedLabels.length) {
+    warn = `${unmatchedLabels.length} 个识别格未能匹配镜号：${unmatchedLabels.slice(0, 4).join('、')}`;
+  }
+
+  const initialMatchCount = matches.length;
+  const allowGridFallback = options?.allowGridFallback !== false;
+
+  if (workingRows.length > 0 && matches.length < workingRows.length && allowGridFallback) {
+    const grid = options?.layoutGrid
+      ? await splitStoryboardSheetByLayoutGrid(dataUrl, workingRows, options.layoutGrid)
+      : await splitStoryboardSheetByUniformGrid(dataUrl, workingRows);
+    const matchedIds = new Set(matches.map((match) => match.rowId));
+    for (const gridMatch of grid.matches) {
+      if (matchedIds.has(gridMatch.rowId)) continue;
+      matches.push(gridMatch);
+      matchedIds.add(gridMatch.rowId);
+    }
+    if (matches.length > initialMatchCount) {
+      const gridFilled = matches.length - initialMatchCount;
+      const gridLabel = options?.layoutGrid ? '指定行列布局' : '均匀网格';
+      const gridWarn = `视觉切分 ${initialMatchCount}/${workingRows.length} 镜，其余 ${gridFilled} 镜已按${gridLabel}回填`;
+      warn = warn ? `${warn}；${gridWarn}` : gridWarn;
+    }
+  } else if (workingRows.length > 0 && matches.length < workingRows.length && !allowGridFallback) {
+    const missing = workingRows.length - matches.length;
+    const partialWarn = `切分 ${matches.length}/${workingRows.length} 镜，${missing} 镜未匹配（可在弹窗中增删框后重切，或在编辑页手动补图）`;
+    warn = warn ? `${warn}；${partialWarn}` : partialWarn;
+  }
+
+  return {
+    matches,
+    unmatchedLabels,
+    warn,
+    createdRows: createdRows.length ? createdRows : undefined,
+  };
+}
+
 export async function detectStoryboardSheetPanels(
   dataUrl: string,
   expectedShotNos: string[],
@@ -210,7 +405,9 @@ export async function detectStoryboardSheetPanels(
   const boxes = await detectObjectsInImage(dataUrl, textModel, prompt, {
     timeoutMs: options?.timeoutMs ?? STORYBOARD_SHEET_VISION_TIMEOUT_MS,
   });
-  return mapStoryboardBoxesToVisualCrop(dedupeBoxesByLabel(boxes));
+  const deduped = dedupeBoxesByLabel(boxes);
+  const quality = filterVisionBoxesByQuality(deduped);
+  return mapStoryboardBoxesToVisualCrop(quality.length ? quality : deduped);
 }
 
 export function visionLabelToShotNo(label: string): string {
@@ -246,15 +443,52 @@ export function isStoryboardShotNoInExpectedScope(
   return expectedShotNos.some((shot) => storyboardShotNosMatch(shot, normalized));
 }
 
-export function buildUniformSheetGridBoxes(cellCount: number): BoundingBox[] {
-  const { cols, rows: gridRows } = computeStoryboardMosaicGrid(cellCount);
+export function suggestStoryboardSheetLayoutGrid(cellCount: number): StoryboardSheetLayoutGrid {
+  const { cols, rows } = computeStoryboardMosaicGrid(cellCount);
+  return { cols, rows };
+}
+
+export function parseStoryboardSheetLayoutGrid(
+  colsRaw: string,
+  rowsRaw: string,
+  shotCount: number
+): { ok: true; layout: StoryboardSheetLayoutGrid } | { ok: false; error: string } {
+  const colsText = String(colsRaw || '').trim();
+  const rowsText = String(rowsRaw || '').trim();
+  if (!colsText && !rowsText) {
+    return { ok: false, error: '未填写行列' };
+  }
+  if (!colsText || !rowsText) {
+    return { ok: false, error: '请同时填写列数与行数' };
+  }
+  const cols = Number.parseInt(colsText, 10);
+  const rows = Number.parseInt(rowsText, 10);
+  if (!Number.isFinite(cols) || !Number.isFinite(rows) || cols < 1 || rows < 1) {
+    return { ok: false, error: '列数与行数须为正整数' };
+  }
+  if (cols > 12 || rows > 12) {
+    return { ok: false, error: '列数与行数不能超过 12' };
+  }
+  if (cols * rows < shotCount) {
+    return { ok: false, error: `列×行（${cols * rows}）须 ≥ 镜数（${shotCount}）` };
+  }
+  return { ok: true, layout: { cols, rows } };
+}
+
+export function buildLayoutSheetGridBoxes(
+  layout: StoryboardSheetLayoutGrid,
+  cellCount: number
+): BoundingBox[] {
+  const cols = Math.max(1, Math.min(12, Math.round(layout.cols)));
+  const gridRows = Math.max(1, Math.min(12, Math.round(layout.rows)));
   const margin = 4;
-  const boxes: BoundingBox[] = [];
   const cellW = 1000 / cols;
   const cellH = 1000 / gridRows;
+  const boxes: BoundingBox[] = [];
   for (let index = 0; index < cellCount; index += 1) {
     const col = index % cols;
     const rowIdx = Math.floor(index / cols);
+    if (rowIdx >= gridRows) break;
     boxes.push({
       id: `grid-${index}`,
       label: String(index + 1),
@@ -267,18 +501,33 @@ export function buildUniformSheetGridBoxes(cellCount: number): BoundingBox[] {
   return boxes;
 }
 
-export async function splitStoryboardSheetByUniformGrid(
+export function buildUniformSheetGridBoxes(cellCount: number): BoundingBox[] {
+  return buildLayoutSheetGridBoxes(suggestStoryboardSheetLayoutGrid(cellCount), cellCount);
+}
+
+async function trimVisionSplitCrops(crops: string[]): Promise<string[]> {
+  const trimmed: string[] = [];
+  for (const crop of crops) {
+    trimmed.push(crop ? await trimImageDataUrlContentBounds(crop) : '');
+  }
+  return trimmed;
+}
+
+async function splitStoryboardSheetByGridBoxes(
   dataUrl: string,
-  rows: StoryboardTableRow[]
+  rows: StoryboardTableRow[],
+  boxes: BoundingBox[],
+  warnPrefix: string
 ): Promise<StoryboardSheetVisionSplitResult> {
   if (!rows.length) return { matches: [], unmatchedLabels: [] };
 
-  const boxes = buildUniformSheetGridBoxes(rows.length);
-  const crops = await cropBoxes(
-    dataUrl,
-    boxes,
-    boxes.map((_, index) => index),
-    2
+  const crops = await trimVisionSplitCrops(
+    await cropBoxes(
+      dataUrl,
+      boxes,
+      boxes.map((_, index) => index),
+      2
+    )
   );
 
   const matches: StoryboardSheetVisionMatch[] = [];
@@ -302,15 +551,32 @@ export async function splitStoryboardSheetByUniformGrid(
   return {
     matches,
     unmatchedLabels,
-    warn: unmatchedLabels.length ? `网格切分 ${matches.length}/${rows.length} 镜` : undefined,
+    warn: unmatchedLabels.length ? `${warnPrefix} ${matches.length}/${rows.length} 镜` : undefined,
   };
+}
+
+export async function splitStoryboardSheetByLayoutGrid(
+  dataUrl: string,
+  rows: StoryboardTableRow[],
+  layout: StoryboardSheetLayoutGrid
+): Promise<StoryboardSheetVisionSplitResult> {
+  const boxes = buildLayoutSheetGridBoxes(layout, rows.length);
+  return splitStoryboardSheetByGridBoxes(dataUrl, rows, boxes, '布局网格切分');
+}
+
+export async function splitStoryboardSheetByUniformGrid(
+  dataUrl: string,
+  rows: StoryboardTableRow[]
+): Promise<StoryboardSheetVisionSplitResult> {
+  const boxes = buildUniformSheetGridBoxes(rows.length);
+  return splitStoryboardSheetByGridBoxes(dataUrl, rows, boxes, '均匀网格切分');
 }
 
 export async function splitStoryboardSheetByVision(
   dataUrl: string,
   rows: StoryboardTableRow[],
   textModel = DEFAULT_MODEL_TEXT,
-  options?: { timeoutMs?: number; autoCreateRows?: boolean; expectedShotNos?: string[] }
+  options?: StoryboardSheetVisionSplitOptions
 ): Promise<StoryboardSheetVisionSplitResult> {
   const expectedShotNos =
     options?.expectedShotNos?.map((shot) => shot.trim()).filter(Boolean) ??
@@ -329,83 +595,20 @@ export async function splitStoryboardSheetByVision(
   }
 
   if (!boxes.length) {
+    if (options?.layoutGrid && options.allowGridFallback !== false) {
+      const workingRows = filterStoryboardRowsByExpectedShots([...rows], expectedShotNos);
+      const grid = await splitStoryboardSheetByLayoutGrid(dataUrl, workingRows, options.layoutGrid);
+      return {
+        ...grid,
+        warn: grid.warn ?? '视觉识别未找到分镜格，已按指定行列布局切分',
+      };
+    }
     return {
       matches: [],
       unmatchedLabels: [],
-      warn: '视觉识别未找到分镜格，请检查生成图是否含清晰镜号与分隔线',
+      warn: '视觉识别未找到分镜格，请检查拼图是否含清晰镜号与分隔线，或填写行列布局后重切',
     };
   }
 
-  const workingRows = filterStoryboardRowsByExpectedShots([...rows], expectedShotNos);
-  const createdRows: StoryboardTableRow[] = [];
-  const usedRowIds = new Set<string>();
-  const matches: StoryboardSheetVisionMatch[] = [];
-  const unmatchedLabels: string[] = [];
-
-  const crops = await cropBoxes(
-    dataUrl,
-    boxes,
-    boxes.map((_, index) => index),
-    4
-  );
-
-  for (let i = 0; i < boxes.length; i += 1) {
-    const box = boxes[i]!;
-    const image = crops[i];
-    let row = matchVisionBoxToRow(
-      box,
-      workingRows.filter((item) => !usedRowIds.has(item.id))
-    );
-
-    if (!row && options?.autoCreateRows) {
-      const shotNo = visionLabelToShotNo(box.label);
-      if (shotNo && isStoryboardShotNoInExpectedScope(shotNo, expectedShotNos)) {
-        row = createStoryboardTableRow({ shotNo }, workingRows.length);
-        workingRows.push(row);
-        createdRows.push(row);
-      }
-    }
-
-    if (!row || usedRowIds.has(row.id) || !image) {
-      unmatchedLabels.push(box.label || box.id);
-      continue;
-    }
-    usedRowIds.add(row.id);
-    matches.push({
-      rowId: row.id,
-      shotNo: row.shotNo?.trim() || visionLabelToShotNo(box.label),
-      label: box.label,
-      image,
-      box,
-    });
-  }
-
-  if (!matches.length) {
-    warn = '已识别分镜格，但镜号与表内镜头无法匹配';
-  } else if (unmatchedLabels.length) {
-    warn = `${unmatchedLabels.length} 个识别格未能匹配镜号：${unmatchedLabels.slice(0, 4).join('、')}`;
-  }
-
-  const initialMatchCount = matches.length;
-  if (workingRows.length > 0 && matches.length < workingRows.length) {
-    const grid = await splitStoryboardSheetByUniformGrid(dataUrl, workingRows);
-    const matchedIds = new Set(matches.map((match) => match.rowId));
-    for (const gridMatch of grid.matches) {
-      if (matchedIds.has(gridMatch.rowId)) continue;
-      matches.push(gridMatch);
-      matchedIds.add(gridMatch.rowId);
-    }
-    if (matches.length > initialMatchCount) {
-      const gridFilled = matches.length - initialMatchCount;
-      const gridWarn = `视觉切分 ${initialMatchCount}/${workingRows.length} 镜，其余 ${gridFilled} 镜已按均匀网格回填`;
-      warn = warn ? `${warn}；${gridWarn}` : gridWarn;
-    }
-  }
-
-  return {
-    matches,
-    unmatchedLabels,
-    warn,
-    createdRows: createdRows.length ? createdRows : undefined,
-  };
+  return splitStoryboardSheetFromBoxes(dataUrl, rows, boxes, options);
 }

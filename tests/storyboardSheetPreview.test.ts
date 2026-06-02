@@ -337,6 +337,17 @@ describe('storyboardSheetPreview', () => {
     expect(ensured.rows[0]?.id).toBe('r1');
   });
 
+  it('ensureStoryboardRowsForShotNos upgrades two-digit rows to three-digit and avoids duplicates', () => {
+    const existing = [
+      { ...createStoryboardTableRow({ id: 'r1' }, 0), shotNo: '01' },
+      { ...createStoryboardTableRow({ id: 'r2' }, 1), shotNo: '02' },
+    ];
+    const ensured = ensureStoryboardRowsForShotNos(existing, ['001', '002', '003']);
+    expect(ensured.createdIds).toHaveLength(1);
+    expect(ensured.nextTableRows.map((row) => row.shotNo)).toEqual(['001', '002', '003']);
+    expect(ensured.nextTableRows).toHaveLength(3);
+  });
+
   it('merge prefers in-memory imageDataUrl and newer matchedCount', () => {
     const stored = createSheetPreviewItem({
       imageDataUrl: '',
@@ -372,5 +383,24 @@ describe('storyboardSheetPreview', () => {
     });
     expect(writeStoryboardSheetPreviews(assetId, [pending])).toBe(true);
     writeSpy.mockRestore();
+  });
+
+  it('applyHydratedSheetPreviewImages overlays fresh display urls', async () => {
+    const { applyHydratedSheetPreviewImages } = await import('../services/storyboardSheetPreview');
+    const stale = createSheetPreviewItem({
+      id: 'p-stale',
+      imageDataUrl: 'blob:http://localhost/dead',
+      label: '上传拼图',
+      source: 'uploaded',
+      rowIds: [],
+      shotNos: ['01'],
+      genStatus: 'done',
+    });
+    const fresh = {
+      ...stale,
+      imageDataUrl: 'blob:http://localhost/fresh',
+    };
+    const merged = applyHydratedSheetPreviewImages([stale], [fresh]);
+    expect(merged[0]?.imageDataUrl).toBe('blob:http://localhost/fresh');
   });
 });

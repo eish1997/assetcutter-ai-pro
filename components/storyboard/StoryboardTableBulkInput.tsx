@@ -205,6 +205,11 @@ const StoryboardTableBulkInput = forwardRef<StoryboardTableBulkInputHandle, Prop
     const [aiRejectReason, setAiRejectReason] = useState<string | null>(null);
     const [pendingImport, setPendingImport] = useState<PendingBulkImport | null>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const rowsRef = useRef(rows);
+
+    useEffect(() => {
+      rowsRef.current = rows;
+    }, [rows]);
 
     useEffect(() => {
       const draft = readLocalJson(draftStorageKey(assetId), defaultDraft());
@@ -308,9 +313,10 @@ const StoryboardTableBulkInput = forwardRef<StoryboardTableBulkInputHandle, Prop
     const commitImport = useCallback(
       async (parsed: PendingBulkImport, mode: 'replace' | 'append') => {
         const replace = mode === 'replace';
+        const latestRows = rowsRef.current;
         let result = applyStoryboardBulkImport(
           fieldCatalog,
-          rows,
+          latestRows,
           parsed.rows,
           replace ? 'replace' : 'append'
         );
@@ -413,7 +419,7 @@ const StoryboardTableBulkInput = forwardRef<StoryboardTableBulkInputHandle, Prop
         );
         queueMicrotask(() => onParseComplete?.(detail));
       },
-      [fieldCatalog, onImport, onNotify, onParseComplete, parseCtx, parsePreset, pipeText, rows]
+      [fieldCatalog, onImport, onNotify, onParseComplete, parseCtx, parsePreset, pipeText]
     );
 
     const parseAndFill = useCallback(async () => {
@@ -437,19 +443,20 @@ const StoryboardTableBulkInput = forwardRef<StoryboardTableBulkInputHandle, Prop
           return;
         }
 
-        const hasTextBaseline = rows.some(
+        const latestRows = rowsRef.current;
+        const hasTextBaseline = latestRows.some(
           (row) =>
             (row.shotRaw || '').trim() ||
             Object.values(row.shotFields || {}).some((value) => String(value || '').trim())
         );
-        const hasFrameBaseline = rows.some(storyboardRowHasFrameRef);
-        const hasExisting = rows.some(rowHasStoryboardBulkImportBaseline);
+        const hasFrameBaseline = latestRows.some(storyboardRowHasFrameRef);
+        const hasExisting = latestRows.some(rowHasStoryboardBulkImportBaseline);
 
         if (hasTextBaseline) {
           setPendingImport(parsed);
           return;
         }
-        if (hasFrameBaseline && rows.length > 0) {
+        if (hasFrameBaseline && latestRows.length > 0) {
           await commitImport(parsed, 'append');
           return;
         }
@@ -470,7 +477,6 @@ const StoryboardTableBulkInput = forwardRef<StoryboardTableBulkInputHandle, Prop
       onNotify,
       readOnly,
       resolveParsedForImport,
-      rows,
       runAiNormalize,
       pipeText,
     ]);

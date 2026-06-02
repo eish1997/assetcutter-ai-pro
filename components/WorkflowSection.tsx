@@ -213,11 +213,18 @@ import StoryboardTableGridCard from './storyboard/StoryboardTableGridCard';
 import { useStoryboardVideoExportTask } from './storyboard/useStoryboardVideoExport';
 import { compressStoryboardFrameDataUrl } from './storyboard/storyboardFrameImage';
 import {
-  storyboardRowNeedsCompanionFrameHydrate,
+  applyStoryboardFrameCompanionHydrateResults,
+  applyStoryboardFrameHistoryCompanionHydrateResults,
+  buildStoryboardFrameCompanionHydrateKey,
+  buildStoryboardFrameHistoryCompanionHydrateKey,
+  hydrateStoryboardFrameCompanionTasks,
+  hydrateStoryboardFrameHistoryCompanionTasks,
+  listStoryboardFrameCompanionHydrateTasks,
+  listStoryboardFrameHistoryCompanionHydrateTasks,
+  revokeStoryboardFrameCompanionHydrateUrls,
 } from '../services/storyboardFrameCompanion';
 import {
   replaceStoryboardRowFrame,
-  storyboardFrameHistoryVersionNeedsCompanionHydrate,
 } from '../services/storyboardFrameHistory';
 import {
   executeStoryboardRowRedraw,
@@ -1443,11 +1450,14 @@ const WorkflowSection: React.FC<{
     setStoryboardPanelAssetId(null);
   }, []);
 
-  const handleStoryboardPanelPatch = useCallback(
-    (patch: Partial<WorkflowAsset> | ((prev: WorkflowAsset) => WorkflowAsset)) => {
+  const handleStoryboardAssetPatch = useCallback(
+    (
+      assetId: string,
+      patch: Partial<WorkflowAsset> | ((prev: WorkflowAsset) => WorkflowAsset)
+    ) => {
+      const id = String(assetId || '').trim();
+      if (!id) return;
       setAssets((prev) => {
-        const id = storyboardPanelAssetId;
-        if (!id) return prev;
         const cur = prev.find((x) => x.id === id);
         if (!cur || !isWorkflowStoryboardTableAsset(cur)) return prev;
         const next = typeof patch === 'function' ? patch(cur) : { ...cur, ...patch };
@@ -1456,7 +1466,7 @@ const WorkflowSection: React.FC<{
         );
       });
     },
-    [storyboardPanelAssetId, setAssets]
+    [setAssets]
   );
 
   const handleWorkflowFeatureClick = useCallback(
@@ -1767,33 +1777,15 @@ const WorkflowSection: React.FC<{
     return parts.sort().join('|');
   }, [assets]);
 
-  const companionStoryboardFrameHydrateKey = useMemo(() => {
-    const parts: string[] = [];
-    for (const a of assets) {
-      if (!isWorkflowStoryboardTableAsset(a)) continue;
-      for (const row of a.storyboardTable?.rows ?? []) {
-        if (!storyboardRowNeedsCompanionFrameHydrate(row)) continue;
-        parts.push(`${a.id}:${row.id}:${String(row.frameImageCompanionKey || '').trim()}`);
-      }
-    }
-    return parts.sort().join('|');
-  }, [assets]);
+  const companionStoryboardFrameHydrateKey = useMemo(
+    () => buildStoryboardFrameCompanionHydrateKey(assets),
+    [assets]
+  );
 
-  const companionStoryboardFrameHistoryHydrateKey = useMemo(() => {
-    const parts: string[] = [];
-    for (const a of assets) {
-      if (!isWorkflowStoryboardTableAsset(a)) continue;
-      for (const row of a.storyboardTable?.rows ?? []) {
-        for (const ver of row.frameImageHistory ?? []) {
-          if (!storyboardFrameHistoryVersionNeedsCompanionHydrate(ver)) continue;
-          parts.push(
-            `${a.id}:${row.id}:${ver.id}:${String(ver.frameImageCompanionKey || '').trim()}`
-          );
-        }
-      }
-    }
-    return parts.sort().join('|');
-  }, [assets]);
+  const companionStoryboardFrameHistoryHydrateKey = useMemo(
+    () => buildStoryboardFrameHistoryCompanionHydrateKey(assets),
+    [assets]
+  );
 
   const companionModelHydrateKey = useMemo(() => {
     const parts: string[] = [];
@@ -1911,47 +1903,26 @@ const WorkflowSection: React.FC<{
     if (!companionStoryboardFrameHydrateKey || !projectId || !base) return;
     let cancelled = false;
     void (async () => {
-      for (const a of assetsRef.current) {
-        if (!isWorkflowStoryboardTableAsset(a)) continue;
-        for (const row of a.storyboardTable?.rows ?? []) {
-          if (!storyboardRowNeedsCompanionFrameHydrate(row)) continue;
-          const ck = String(row.frameImageCompanionKey || '').trim();
-          if (!ck) continue;
-          const prevImg = String(row.frameImage || '').trim();
-          if (await shouldKeepExistingCompanionRasterUrl(prevImg, ck)) continue;
-          const got = await fetchWorkflowOriginalFromCompanionAsObjectUrl(base, projectId, ck);
-          if (cancelled) return;
-          if (got.ok === false) {
-            onLogRef.current?.('warn', '分镜图伴侣恢复失败', `${a.id}/${row.id}: ${got.error}`);
-            continue;
-          }
-          setAssets((prev) =>
-            prev.map((x) => {
-              if (x.id !== a.id || !isWorkflowStoryboardTableAsset(x)) return x;
-              const doc = x.storyboardTable;
-              if (!doc?.rows) return x;
-              return normalizeStoryboardTableOnAsset({
-                ...x,
-                storyboardTable: {
-                  ...doc,
-                  rows: doc.rows.map((r) => {
-                    if (r.id !== row.id) return r;
-                    const prevImg = String(r.frameImage || '').trim();
-                    if (/^blob:/i.test(prevImg)) {
-                      try {
-                        URL.revokeObjectURL(prevImg);
-                      } catch {
-                        /* ignore */
-                      }
-                    }
-                    return { ...r, frameImage: got.objectUrl };
-                  }),
-                },
-              });
-            })
-          );
-        }
+      const tasks = listStoryboardFrameCompanionHydrateTasks(assetsRef.current);
+      const { hydrated, failures } = await hydrateStoryboardFrameCompanionTasks(
+        tasks,
+        base,
+        projectId
+      );
+      if (cancelled) {
+        revokeStoryboardFrameCompanionHydrateUrls(hydrated);
+        return;
       }
+      for (const failure of failures) {
+        const task = failure.task;
+        onLogRef.current?.(
+          'warn',
+          '分镜图伴侣恢复失败',
+          `${task.assetId}/${'rowId' in task ? task.rowId : ''}: ${failure.error}`
+        );
+      }
+      if (!hydrated.length) return;
+      setAssets((prev) => applyStoryboardFrameCompanionHydrateResults(prev, hydrated));
     })();
     return () => {
       cancelled = true;
@@ -1964,55 +1935,26 @@ const WorkflowSection: React.FC<{
     if (!companionStoryboardFrameHistoryHydrateKey || !projectId || !base) return;
     let cancelled = false;
     void (async () => {
-      for (const a of assetsRef.current) {
-        if (!isWorkflowStoryboardTableAsset(a)) continue;
-        for (const row of a.storyboardTable?.rows ?? []) {
-          for (const ver of row.frameImageHistory ?? []) {
-            if (!storyboardFrameHistoryVersionNeedsCompanionHydrate(ver)) continue;
-            const ck = String(ver.frameImageCompanionKey || '').trim();
-            if (!ck) continue;
-            const prevImg = String(ver.frameImage || '').trim();
-            if (await shouldKeepExistingCompanionRasterUrl(prevImg, ck)) continue;
-            const got = await fetchWorkflowOriginalFromCompanionAsObjectUrl(base, projectId, ck);
-            if (cancelled) return;
-            if (got.ok === false) {
-              onLogRef.current?.('warn', '分镜历史图伴侣恢复失败', `${a.id}/${row.id}/${ver.id}: ${got.error}`);
-              continue;
-            }
-            setAssets((prev) =>
-              prev.map((x) => {
-                if (x.id !== a.id || !isWorkflowStoryboardTableAsset(x)) return x;
-                const doc = x.storyboardTable;
-                if (!doc?.rows) return x;
-                return normalizeStoryboardTableOnAsset({
-                  ...x,
-                  storyboardTable: {
-                    ...doc,
-                    rows: doc.rows.map((r) => {
-                      if (r.id !== row.id || !r.frameImageHistory?.length) return r;
-                      return {
-                        ...r,
-                        frameImageHistory: r.frameImageHistory.map((item) => {
-                          if (item.id !== ver.id) return item;
-                          const prevHistImg = String(item.frameImage || '').trim();
-                          if (/^blob:/i.test(prevHistImg)) {
-                            try {
-                              URL.revokeObjectURL(prevHistImg);
-                            } catch {
-                              /* ignore */
-                            }
-                          }
-                          return { ...item, frameImage: got.objectUrl };
-                        }),
-                      };
-                    }),
-                  },
-                });
-              })
-            );
-          }
-        }
+      const tasks = listStoryboardFrameHistoryCompanionHydrateTasks(assetsRef.current);
+      const { hydrated, failures } = await hydrateStoryboardFrameHistoryCompanionTasks(
+        tasks,
+        base,
+        projectId
+      );
+      if (cancelled) {
+        revokeStoryboardFrameCompanionHydrateUrls(hydrated);
+        return;
       }
+      for (const failure of failures) {
+        const task = failure.task;
+        onLogRef.current?.(
+          'warn',
+          '分镜历史图伴侣恢复失败',
+          `${task.assetId}/${'rowId' in task ? task.rowId : ''}/${'versionId' in task ? task.versionId : ''}: ${failure.error}`
+        );
+      }
+      if (!hydrated.length) return;
+      setAssets((prev) => applyStoryboardFrameHistoryCompanionHydrateResults(prev, hydrated));
     })();
     return () => {
       cancelled = true;
@@ -10443,7 +10385,7 @@ ${lineSvg}
                   handleStoryboardRowRedraw(storyboardPanelAssetId, rowId, imageModelRegistryId, options)
               : undefined
           }
-          onPatchAsset={handleStoryboardPanelPatch}
+          onPatchAsset={(patch) => handleStoryboardAssetPatch(storyboardPanelAsset.id, patch)}
           companionBaseUrl={String(getCompanionLocalBaseUrl() || '')}
           companionProjectId={String(workspaceProjectChrome?.activeProjectId || '')}
         />

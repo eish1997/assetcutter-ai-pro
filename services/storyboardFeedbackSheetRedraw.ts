@@ -1,4 +1,5 @@
 import type { CustomAppModule, StoryboardParseFieldDef, StoryboardTableRow } from '../types';
+import { formatStoryboardShotNo } from './storyboardTableAsset';
 import { coerceImageModelRegistryId } from './modelRegistry/imageModels';
 import {
   capabilityUsesGenImageEngine,
@@ -171,7 +172,7 @@ export async function renderStoryboardFeedbackCollage(
       if (index >= rows.length) break;
       const row = rows[index]!;
       const x = pad + col * (cellW + gap);
-      const shotNo = (row.shotNo || '').trim() || String(index + 1).padStart(2, '0');
+      const shotNo = (row.shotNo || '').trim() || formatStoryboardShotNo(index);
       const { visualRect } = measureFeedbackCollageImageOnlyRects(x, y, cellW, cellH);
       const drawRect = await measureFeedbackCollageImageDrawRect(row, visualRect);
       layoutCells.push({

@@ -312,4 +312,57 @@ A01\t远景\t2s\t城市夜景`;
     const { rows } = applyStoryboardBulkImport([], existing, incoming.rows, 'replace');
     expect(rows[0]?.frameImage).toBe('data:image/png;base64,split');
   });
+
+  it('replace import carries frame images by row order when shot numbers mismatch', () => {
+    const existing = [
+      createStoryboardTableRow(
+        {
+          id: 'row-a',
+          shotNo: '002',
+          frameImage: 'data:image/png;base64,first',
+        },
+        0
+      ),
+      createStoryboardTableRow(
+        {
+          id: 'row-b',
+          shotNo: '010',
+          frameImage: 'data:image/png;base64,second',
+        },
+        1
+      ),
+    ];
+    const incoming = parseStoryboardBulkText(
+      `镜号 | 画面
+SC01 | 描述一
+SC02 | 描述二`,
+      'pipe'
+    );
+    const { rows } = applyStoryboardBulkImport([], existing, incoming.rows, 'replace');
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.frameImage).toBe('data:image/png;base64,first');
+    expect(rows[1]?.frameImage).toBe('data:image/png;base64,second');
+  });
+
+  it('append import attaches frame-only rows by order when shot numbers mismatch', () => {
+    const existing = [
+      createStoryboardTableRow(
+        {
+          id: 'row-frame',
+          shotNo: '002',
+          frameImage: 'data:image/png;base64,split',
+        },
+        0
+      ),
+    ];
+    const incoming = parseStoryboardBulkText(
+      `镜号 | 画面
+SC01 | 新描述`,
+      'pipe'
+    );
+    const { rows } = applyStoryboardBulkImport([], existing, incoming.rows, 'append');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.frameImage).toBe('data:image/png;base64,split');
+    expect(rows[0]?.shotRaw).toContain('SC01');
+  });
 });

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { CustomAppModule, StoryboardParseFieldDef, StoryboardRoleAsset, StoryboardTableRow, WorkflowAsset } from '../../types';
+import type { BoundingBox, CustomAppModule, StoryboardParseFieldDef, StoryboardRoleAsset, StoryboardTableRow, WorkflowAsset } from '../../types';
 import {
   applyAutoShotNumbers,
   computeStoryboardTableStats,
@@ -62,8 +62,15 @@ import {
   StoryboardSheetGenBatchController,
   type StoryboardSheetGenBatchRequest,
 } from '../../services/storyboardTableSheetGen';
-import { splitStoryboardSheetByVision } from '../../services/storyboardSheetVisionSplit';
 import {
+  buildLayoutSheetGridBoxes,
+  detectStoryboardSheetPanels,
+  splitStoryboardSheetByVision,
+  splitStoryboardSheetFromBoxes,
+  type StoryboardSheetVisionSplitResult,
+} from '../../services/storyboardSheetVisionSplit';
+import {
+  applyHydratedSheetPreviewImages,
   buildSheetPreviewLabel,
   commitStoryboardSheetPreviewList,
   createSheetPreviewItem,
@@ -102,6 +109,14 @@ import {
   syncStoryboardSheetGenSessionPreviews,
   subscribeStoryboardSheetGenSession,
 } from '../../services/storyboardSheetGenSession';
+import {
+  clearStoryboardSheetSplitSessionBusy,
+  getStoryboardSheetSplitSession,
+  isStoryboardSheetSplitSessionBusy,
+  patchStoryboardSheetSplitSession,
+  subscribeStoryboardSheetSplitSession,
+  type StoryboardSheetSplitSessionState,
+} from '../../services/storyboardSheetSplitSession';
 import { WORKFLOW_CUT_DETECT_TIMEOUT_MS } from '../workflow/workflowConstants';
 import {
   applyShotFieldsPatch,
@@ -163,6 +178,7 @@ import StoryboardTableInputView, {
 import StoryboardTableEditView, {
   type StoryboardTableEditViewHandle,
 } from './StoryboardTableEditView';
+import StoryboardSheetSplitAdjustModal from './StoryboardSheetSplitAdjustModal';
 import type { StoryboardRowInteractionValue } from './StoryboardRowInteractionContext';
 import StoryboardTableGridPreview from './StoryboardTableGridPreview';
 import StoryboardTableVideoPreview from './StoryboardTableVideoPreview';
@@ -348,15 +364,43 @@ export default function StoryboardTablePanel({
   const [sheetPreviews, setSheetPreviews] = useState<StoryboardSheetPreviewItem[]>([]);
   const sheetPreviewsRef = useRef<StoryboardSheetPreviewItem[]>([]);
   const sheetGenBusyRef = useRef(false);
-  const sheetSplitBatchBusyRef = useRef(false);
+  const sheetSplitBatchBusyRef = useRef(
+    getStoryboardSheetSplitSession(asset.id)?.batchBusy ?? false
+  );
   const sheetPreviewSaveChainRef = useRef(Promise.resolve());
   const sheetGenControllerRef = useRef<StoryboardSheetGenBatchController | null>(null);
   const sheetGenPlaceholderIdsRef = useRef<Map<number, string>>(new Map());
-  const [sheetSplitBusyId, setSheetSplitBusyId] = useState<string | null>(null);
+  const [sheetSplitBusyId, setSheetSplitBusyId] = useState<string | null>(
+    () => getStoryboardSheetSplitSession(asset.id)?.busyPreviewId ?? null
+  );
   const [sheetRegenBusyId, setSheetRegenBusyId] = useState<string | null>(null);
-  const [sheetSplitBatchBusy, setSheetSplitBatchBusy] = useState(false);
+  const [sheetSplitBatchBusy, setSheetSplitBatchBusy] = useState(
+    () => getStoryboardSheetSplitSession(asset.id)?.batchBusy ?? false
+  );
   const [sheetSplitProgress, setSheetSplitProgress] = useState<{ done: number; total: number } | null>(
-    null
+    () => getStoryboardSheetSplitSession(asset.id)?.progress ?? null
+  );
+  const splitAdjustResolverRef = useRef<((boxes: BoundingBox[] | null) => void) | null>(null);
+  const [splitAdjustDraft, setSplitAdjustDraft] = useState<{
+    previewId: string;
+    imageSrc: string;
+    boxes: BoundingBox[];
+    expectedShotNos: string[];
+    sheetLabel: string;
+    detecting: boolean;
+    applying: boolean;
+  } | null>(null);
+
+  const syncSheetSplitSession = useCallback(
+    (patch: Partial<StoryboardSheetSplitSessionState>) => {
+      const next = patchStoryboardSheetSplitSession(asset.id, patch);
+      sheetSplitBatchBusyRef.current = next.batchBusy;
+      setSheetSplitBatchBusy(next.batchBusy);
+      setSheetSplitProgress(next.progress);
+      setSheetSplitBusyId(next.busyPreviewId);
+      return next;
+    },
+    [asset.id]
   );
   const [parseBusyRowId, setParseBusyRowId] = useState<string | null>(null);
   const [parseAllBusy, setParseAllBusy] = useState(false);
@@ -472,7 +516,6 @@ export default function StoryboardTablePanel({
   }, []);
 
   const rehydrateSheetPreviews = useCallback(async () => {
-    if (isStoryboardSheetGenSessionBusy(asset.id) || sheetSplitBatchBusyRef.current) return;
     const stored = await loadStoryboardSheetPreviewsStored(
       asset.id,
       companionBaseUrl,
@@ -484,12 +527,12 @@ export default function StoryboardTablePanel({
       companionBaseUrl,
       companionProjectId
     );
-    if (isStoryboardSheetGenSessionBusy(asset.id) || sheetSplitBatchBusyRef.current) return;
     commitSheetPreviews((prev) => {
       const inFlight = prev.filter(
         (item) => item.genStatus === 'pending' || item.genStatus === 'generating'
       );
-      return mergeStoryboardSheetPreviews(hydrated, inFlight, prev);
+      const merged = mergeStoryboardSheetPreviews(hydrated, inFlight, prev);
+      return applyHydratedSheetPreviewImages(merged, hydrated);
     });
   }, [asset.id, commitSheetPreviews, companionBaseUrl, companionProjectId]);
 
@@ -546,10 +589,10 @@ export default function StoryboardTablePanel({
         return;
       }
 
-      if (sheetSplitBatchBusyRef.current) return;
-      commitSheetPreviews((prev) =>
-        mergeStoryboardSheetPreviews(hydrated, sessionPreviews, prev)
-      );
+      commitSheetPreviews((prev) => {
+        const merged = mergeStoryboardSheetPreviews(hydrated, sessionPreviews, prev);
+        return applyHydratedSheetPreviewImages(merged, hydrated);
+      });
     })();
 
     return () => {
@@ -559,9 +602,19 @@ export default function StoryboardTablePanel({
   }, [asset.id, commitSheetPreviews, companionBaseUrl, companionProjectId]);
 
   useEffect(() => {
-    if (sheetGenBusy || sheetSplitBatchBusy) return;
+    const unsubscribe = subscribeStoryboardSheetSplitSession(asset.id, (session) => {
+      sheetSplitBatchBusyRef.current = session.batchBusy;
+      setSheetSplitBatchBusy(session.batchBusy);
+      setSheetSplitProgress(session.progress);
+      setSheetSplitBusyId(session.busyPreviewId);
+    });
+    return unsubscribe;
+  }, [asset.id]);
+
+  useEffect(() => {
+    if (sheetGenBusy) return;
     void rehydrateSheetPreviews();
-  }, [sheetGenBusy, sheetSplitBatchBusy, rehydrateSheetPreviews]);
+  }, [sheetGenBusy, rehydrateSheetPreviews]);
 
   useEffect(() => {
     setFeedbackRedrawHistory(readStoryboardFeedbackRedrawHistory(asset.id));
@@ -1192,39 +1245,13 @@ export default function StoryboardTablePanel({
     [patchTable, navigateToRow]
   );
 
-  const commitSheetVisionSplit = useCallback(
+  const applySheetVisionSplitResult = useCallback(
     async (
-      sheetImage: string,
+      split: StoryboardSheetVisionSplitResult,
       taskRows: StoryboardTableRow[],
       fieldCatalog: StoryboardParseFieldDef[],
-      feedbackLayout?: FeedbackCollageLayout,
-      opts?: {
-        allRows?: StoryboardTableRow[];
-        expectedShotNos?: string[];
-        autoCreateRows?: boolean;
-      }
+      lookupRows: StoryboardTableRow[]
     ) => {
-      let normalized = sheetImage;
-      try {
-        normalized = await compressStoryboardFrameDataUrl(sheetImage);
-      } catch {
-        /* keep raw */
-      }
-
-      const lookupRows = opts?.allRows ?? taskRows;
-      const split = feedbackLayout
-        ? await splitStoryboardFeedbackCollageByLayout(normalized, feedbackLayout, taskRows)
-        : await splitStoryboardSheetByVision(
-            normalized,
-            taskRows,
-            capabilityTextModel,
-            {
-              timeoutMs: WORKFLOW_CUT_DETECT_TIMEOUT_MS,
-              autoCreateRows: opts?.autoCreateRows,
-              expectedShotNos: opts?.expectedShotNos,
-            }
-          );
-
       const rowLookup = new Map<string, StoryboardTableRow>();
       for (const row of [...lookupRows, ...(split.createdRows ?? [])]) {
         rowLookup.set(row.id, row);
@@ -1278,8 +1305,89 @@ export default function StoryboardTablePanel({
 
       return { matchedCount: split.matches.length, warn: split.warn, rowImages };
     },
-    [asset.id, capabilityTextModel, companionBaseUrl, companionProjectId, patchTable]
+    [asset.id, companionBaseUrl, companionProjectId, patchTable]
   );
+
+  const commitSheetVisionSplit = useCallback(
+    async (
+      sheetImage: string,
+      taskRows: StoryboardTableRow[],
+      fieldCatalog: StoryboardParseFieldDef[],
+      feedbackLayout?: FeedbackCollageLayout,
+      opts?: {
+        allRows?: StoryboardTableRow[];
+        expectedShotNos?: string[];
+        autoCreateRows?: boolean;
+        allowGridFallback?: boolean;
+        layoutGrid?: { cols: number; rows: number };
+      }
+    ) => {
+      let normalized = sheetImage;
+      try {
+        normalized = await compressStoryboardFrameDataUrl(sheetImage);
+      } catch {
+        /* keep raw */
+      }
+
+      const lookupRows = opts?.allRows ?? taskRows;
+      const split = feedbackLayout
+        ? await splitStoryboardFeedbackCollageByLayout(normalized, feedbackLayout, taskRows)
+        : await splitStoryboardSheetByVision(
+            normalized,
+            taskRows,
+            capabilityTextModel,
+            {
+              timeoutMs: WORKFLOW_CUT_DETECT_TIMEOUT_MS,
+              autoCreateRows: opts?.autoCreateRows,
+              expectedShotNos: opts?.expectedShotNos,
+              allowGridFallback: opts?.allowGridFallback,
+              layoutGrid: opts?.layoutGrid,
+            }
+          );
+
+      return applySheetVisionSplitResult(split, taskRows, fieldCatalog, lookupRows);
+    },
+    [applySheetVisionSplitResult, capabilityTextModel]
+  );
+
+  const promptSheetSplitBoxAdjust = useCallback(
+    (
+      draft: Omit<NonNullable<typeof splitAdjustDraft>, 'detecting' | 'applying'>,
+      detectBoxes: () => Promise<BoundingBox[]>
+    ) =>
+      new Promise<BoundingBox[] | null>((resolve) => {
+        splitAdjustResolverRef.current = resolve;
+        setSplitAdjustDraft({ ...draft, detecting: true, applying: false });
+        void detectBoxes()
+          .then((boxes) => {
+            setSplitAdjustDraft((prev) =>
+              prev?.previewId === draft.previewId ? { ...prev, boxes, detecting: false } : prev
+            );
+          })
+          .catch((error) => {
+            setSplitAdjustDraft((prev) =>
+              prev?.previewId === draft.previewId ? { ...prev, detecting: false } : prev
+            );
+            onNotify?.(
+              'warn',
+              error instanceof Error ? error.message : '识别切分框失败，可手动框选后确认'
+            );
+          });
+      }),
+    [onNotify]
+  );
+
+  const closeSheetSplitBoxAdjust = useCallback(() => {
+    splitAdjustResolverRef.current?.(null);
+    splitAdjustResolverRef.current = null;
+    setSplitAdjustDraft(null);
+  }, []);
+
+  const confirmSheetSplitBoxAdjust = useCallback((boxes: BoundingBox[]) => {
+    splitAdjustResolverRef.current?.(boxes);
+    splitAdjustResolverRef.current = null;
+    setSplitAdjustDraft((prev) => (prev ? { ...prev, applying: true, detecting: false } : prev));
+  }, []);
 
   const saveSheetPreviewItem = useCallback(
     async (
@@ -1375,34 +1483,82 @@ export default function StoryboardTablePanel({
         return { matchedCount: 0, warn: resolved.error, label: item.label };
       }
 
-      const { matchedCount, warn } = await commitSheetVisionSplit(
-        resolved.dataUrl,
-        taskRows,
-        table.fieldCatalog,
-        undefined,
-        {
+      const layoutGrid =
+        item.layoutCols != null && item.layoutRows != null
+          ? { cols: item.layoutCols, rows: item.layoutRows }
+          : undefined;
+
+      let normalized = resolved.dataUrl;
+      try {
+        normalized = await compressStoryboardFrameDataUrl(resolved.dataUrl);
+      } catch {
+        /* keep raw */
+      }
+
+      try {
+        const adjustedBoxes = await promptSheetSplitBoxAdjust(
+          {
+            previewId,
+            imageSrc: normalized,
+            boxes: [],
+            expectedShotNos: item.shotNos,
+            sheetLabel: item.label,
+          },
+          async () => {
+            let boxes = await detectStoryboardSheetPanels(
+              normalized,
+              item.shotNos,
+              capabilityTextModel,
+              { timeoutMs: WORKFLOW_CUT_DETECT_TIMEOUT_MS }
+            );
+            if (!boxes.length && layoutGrid) {
+              boxes = buildLayoutSheetGridBoxes(
+                layoutGrid,
+                Math.max(taskRows.length, item.shotNos.length || 1)
+              );
+            }
+            return boxes;
+          }
+        );
+        if (!adjustedBoxes) {
+          return null;
+        }
+
+        const split = await splitStoryboardSheetFromBoxes(normalized, taskRows, adjustedBoxes, {
           expectedShotNos: item.shotNos,
           autoCreateRows: true,
-        }
-      );
-      const nextRowIds = taskRows.map((row) => row.id);
-      const updateResult = updateStoryboardSheetPreview(
-        asset.id,
-        previewId,
-        { matchedCount, rowIds: nextRowIds },
-        sheetPreviewsRef.current
-      );
-      commitSheetPreviews(() => updateResult.items);
-      void syncSheetPreviewListToCompanion(updateResult.items);
-      return { matchedCount, warn, label: item.label };
+          allowGridFallback: false,
+          layoutGrid,
+        });
+        const { matchedCount, warn } = await applySheetVisionSplitResult(
+          split,
+          taskRows,
+          table.fieldCatalog,
+          workingRows
+        );
+        const nextRowIds = taskRows.map((row) => row.id);
+        const updateResult = updateStoryboardSheetPreview(
+          asset.id,
+          previewId,
+          { matchedCount, rowIds: nextRowIds },
+          sheetPreviewsRef.current
+        );
+        commitSheetPreviews(() => updateResult.items);
+        void syncSheetPreviewListToCompanion(updateResult.items);
+        return { matchedCount, warn, label: item.label };
+      } finally {
+        setSplitAdjustDraft(null);
+      }
     },
     [
+      applySheetVisionSplitResult,
       asset.id,
-      commitSheetVisionSplit,
+      capabilityTextModel,
+      commitSheetPreviews,
       companionBaseUrl,
       companionProjectId,
-      commitSheetPreviews,
       patchTable,
+      promptSheetSplitBoxAdjust,
       syncSheetPreviewListToCompanion,
       table.fieldCatalog,
       table.rows,
@@ -1411,7 +1567,16 @@ export default function StoryboardTablePanel({
 
   const applySheetPreview = useCallback(
     async (previewId: string): Promise<{ matchedCount: number } | void> => {
-      setSheetSplitBusyId(previewId);
+      if (isStoryboardSheetSplitSessionBusy(asset.id)) {
+        onNotify?.('info', '切分仍在进行中，请稍候');
+        return;
+      }
+      syncSheetSplitSession({
+        busy: true,
+        batchBusy: false,
+        progress: null,
+        busyPreviewId: previewId,
+      });
       try {
         const result = await splitSheetPreviewById(previewId);
         if (!result) return;
@@ -1423,10 +1588,10 @@ export default function StoryboardTablePanel({
       } catch (error) {
         onNotify?.('warn', error instanceof Error ? error.message : '切分回填失败');
       } finally {
-        setSheetSplitBusyId(null);
+        clearStoryboardSheetSplitSessionBusy(asset.id);
       }
     },
-    [onNotify, splitSheetPreviewById]
+    [asset.id, onNotify, splitSheetPreviewById, syncSheetSplitSession]
   );
 
   const activateSheetPreviewVersion = useCallback(
@@ -1574,6 +1739,11 @@ export default function StoryboardTablePanel({
   );
 
   const batchSplitSheetPreviews = useCallback(async (): Promise<{ matchedCount: number } | void> => {
+    if (isStoryboardSheetSplitSessionBusy(asset.id)) {
+      onNotify?.('info', '切分仍在进行中，请稍候');
+      return;
+    }
+
     const candidates = listSplittableStoryboardSheetPreviews(sheetPreviewsRef.current).sort(
       (a, b) => (a.chunkIndex ?? 0) - (b.chunkIndex ?? 0) || a.createdAt - b.createdAt
     );
@@ -1582,24 +1752,34 @@ export default function StoryboardTablePanel({
       return;
     }
 
-    setSheetSplitBatchBusy(true);
-    sheetSplitBatchBusyRef.current = true;
-    setSheetSplitProgress({ done: 0, total: candidates.length });
+    syncSheetSplitSession({
+      busy: true,
+      batchBusy: true,
+      progress: { done: 0, total: candidates.length },
+      busyPreviewId: null,
+    });
     let totalMatched = 0;
     let okSheets = 0;
 
     try {
       for (let i = 0; i < candidates.length; i += 1) {
         const item = candidates[i]!;
-        setSheetSplitBusyId(item.id);
+        syncSheetSplitSession({
+          busyPreviewId: item.id,
+          progress: { done: i, total: candidates.length },
+        });
         const result = await splitSheetPreviewById(item.id);
-        if (result?.matchedCount) {
+        if (result === null) {
+          onNotify?.('info', '已取消切分');
+          break;
+        }
+        if (result.matchedCount) {
           totalMatched += result.matchedCount;
           okSheets += 1;
         } else if (result?.warn) {
           onNotify?.('warn', `${result.label}：${result.warn}`);
         }
-        setSheetSplitProgress({ done: i + 1, total: candidates.length });
+        syncSheetSplitSession({ progress: { done: i + 1, total: candidates.length } });
       }
 
       if (totalMatched > 0) {
@@ -1610,12 +1790,9 @@ export default function StoryboardTablePanel({
     } catch (error) {
       onNotify?.('warn', error instanceof Error ? error.message : '批量切分失败');
     } finally {
-      setSheetSplitBusyId(null);
-      sheetSplitBatchBusyRef.current = false;
-      setSheetSplitBatchBusy(false);
-      setSheetSplitProgress(null);
+      clearStoryboardSheetSplitSessionBusy(asset.id);
     }
-  }, [onNotify, splitSheetPreviewById]);
+  }, [asset.id, onNotify, splitSheetPreviewById, syncSheetSplitSession]);
 
   const cancelSheetGen = useCallback(() => {
     const controller = sheetGenControllerRef.current;
@@ -1650,8 +1827,16 @@ export default function StoryboardTablePanel({
   );
 
   const uploadSheetPreview = useCallback(
-    async (dataUrl: string, range: { shotFrom: string; shotTo: string }) => {
-      const parsed = parseSheetPreviewShotRange(range.shotFrom, range.shotTo);
+    async (
+      dataUrl: string,
+      payload: {
+        shotFrom: string;
+        shotTo: string;
+        layoutCols?: number;
+        layoutRows?: number;
+      }
+    ) => {
+      const parsed = parseSheetPreviewShotRange(payload.shotFrom, payload.shotTo);
       if (!parsed.ok) {
         onNotify?.('warn', parsed.error);
         return;
@@ -1669,6 +1854,8 @@ export default function StoryboardTablePanel({
         genStatus: 'done',
         rowIds: ensured.rows.map((row) => row.id),
         shotNos: parsed.shotNos,
+        layoutCols: payload.layoutCols,
+        layoutRows: payload.layoutRows,
       });
       onNotify?.(
         'info',
@@ -1679,8 +1866,16 @@ export default function StoryboardTablePanel({
   );
 
   const updateSheetPreviewShotRange = useCallback(
-    async (previewId: string, range: { shotFrom: string; shotTo: string }) => {
-      const parsed = parseSheetPreviewShotRange(range.shotFrom, range.shotTo);
+    async (
+      previewId: string,
+      payload: {
+        shotFrom: string;
+        shotTo: string;
+        layoutCols?: number;
+        layoutRows?: number;
+      }
+    ) => {
+      const parsed = parseSheetPreviewShotRange(payload.shotFrom, payload.shotTo);
       if (!parsed.ok) {
         onNotify?.('warn', parsed.error);
         return;
@@ -1699,6 +1894,8 @@ export default function StoryboardTablePanel({
         rowIds: [],
         shotNos: parsed.shotNos,
         matchedCount: 0,
+        layoutCols: payload.layoutCols,
+        layoutRows: payload.layoutRows,
       });
       onNotify?.('info', `镜号范围已更新为 ${formatSheetPreviewShotLabel(parsed.shotNos)}`);
     },
@@ -1767,16 +1964,30 @@ export default function StoryboardTablePanel({
     navigateToRow(copy.id);
   };
 
+  const removeRows = useCallback(
+    (rowIds: string[]): boolean => {
+      const ids = [...new Set(rowIds.map((id) => String(id || '').trim()).filter(Boolean))];
+      if (!ids.length) return false;
+      if (table.rows.some((row) => ids.includes(row.id) && storyboardRowIsPassed(row))) {
+        onNotify?.('warn', '所选镜头含已通过项，请先取消通过');
+        return false;
+      }
+      const deletingAll = ids.length >= table.rows.length;
+      const message = deletingAll
+        ? '删除全部镜头？表将变为空，可再添加或导入。'
+        : ids.length === 1
+          ? '删除该镜头行？'
+          : `删除选中的 ${ids.length} 镜？`;
+      if (!window.confirm(message)) return false;
+      patchTable((rows) => rows.filter((row) => !ids.includes(row.id)));
+      if (activeRowId && ids.includes(activeRowId)) setActiveRowId(null);
+      return true;
+    },
+    [activeRowId, onNotify, patchTable, table.rows]
+  );
+
   const removeRow = (rowId: string) => {
-    if (table.rows.length <= 1) return;
-    const row = table.rows.find((r) => r.id === rowId);
-    if (row && storyboardRowIsPassed(row)) {
-      onNotify?.('warn', '该镜头已通过，请先取消通过');
-      return;
-    }
-    if (!window.confirm('删除该镜头行？')) return;
-    patchTable((rows) => rows.filter((r) => r.id !== rowId));
-    if (activeRowId === rowId) setActiveRowId(null);
+    removeRows([rowId]);
   };
 
   const moveRow = (rowId: string, dir: -1 | 1) => {
@@ -3126,6 +3337,7 @@ export default function StoryboardTablePanel({
           interaction={rowInteraction}
           onActiveRowIdChange={setActiveRowId}
           onPatchRows={patchRows}
+          onRemoveRows={!readOnly ? removeRows : undefined}
           onAddFrameRoleMark={!readOnly ? addFrameRoleMark : undefined}
           roleReplaceEligibleCount={roleReplaceEligibleCount}
           roleReplaceBatchBusy={roleReplaceBatchBusy}
@@ -3181,6 +3393,19 @@ export default function StoryboardTablePanel({
             </button>
           }
           shellZIndexClassName={STORYBOARD_LIGHTBOX_Z}
+        />
+      ) : null}
+      {splitAdjustDraft ? (
+        <StoryboardSheetSplitAdjustModal
+          open
+          busy={splitAdjustDraft.applying}
+          detecting={splitAdjustDraft.detecting}
+          imageSrc={splitAdjustDraft.imageSrc}
+          boxes={splitAdjustDraft.boxes}
+          expectedShotNos={splitAdjustDraft.expectedShotNos}
+          sheetLabel={splitAdjustDraft.sheetLabel}
+          onClose={closeSheetSplitBoxAdjust}
+          onConfirm={confirmSheetSplitBoxAdjust}
         />
       ) : null}
     </>

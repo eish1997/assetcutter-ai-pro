@@ -1,5 +1,6 @@
 import type { StoryboardParseFieldDef, StoryboardTableRow } from '../../types';
 import { compileShotText, pickPrimaryVisualField } from '../../services/storyboardTableParse';
+import { formatStoryboardShotNo } from '../../services/storyboardTableAsset';
 import {
   storyboardGroupCompositeFieldItems as groupFieldItems,
   storyboardShotCompositeFieldItems,
@@ -12,7 +13,7 @@ export type { StoryboardCompositeFieldItem };
 export function storyboardRowOutlineTitle(row: StoryboardTableRow, index: number): string {
   const no = (row.shotNo || '').trim();
   if (no) return no;
-  return String(index + 1).padStart(2, '0');
+  return formatStoryboardShotNo(index);
 }
 
 /** 大纲副文案（单行截断） */

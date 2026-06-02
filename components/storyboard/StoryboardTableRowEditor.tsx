@@ -273,7 +273,6 @@ export default function StoryboardTableRowEditor({
               type="button"
               title="删除镜头"
               aria-label="删除镜头"
-              disabled={rowCount <= 1}
               onClick={onRemove}
               className={`${STORYBOARD_ROW_ICON_BTN} hover:bg-red-500/10 hover:text-red-300`}
             >

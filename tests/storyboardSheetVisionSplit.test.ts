@@ -3,13 +3,17 @@ import type { BoundingBox, StoryboardTableRow } from '../types';
 import {
   extractShotNoToken,
   filterStoryboardRowsByExpectedShots,
+  buildLayoutSheetGridBoxes,
   buildUniformSheetGridBoxes,
+  filterVisionBoxesByQuality,
   isStoryboardShotNoInExpectedScope,
   mapStoryboardBoxesToVisualCrop,
   matchVisionBoxToRow,
   normalizeShotNoToken,
+  parseStoryboardSheetLayoutGrid,
   shrinkStoryboardPanelBoxToVisualCore,
   storyboardShotNosMatch,
+  suggestStoryboardSheetLayoutGrid,
 } from '../services/storyboardSheetVisionSplit';
 
 const row = (partial: Partial<StoryboardTableRow>): StoryboardTableRow => ({
@@ -104,5 +108,41 @@ describe('storyboardSheetVisionSplit', () => {
     const mapped = mapStoryboardBoxesToVisualCrop([full, tight, { ...full, id: 'f2', label: 'SC01_SH003' }]);
     expect(mapped[1]).toEqual(tight);
     expect(mapped[0]!.ymax - mapped[0]!.ymin).toBeLessThan(full.ymax - full.ymin);
+  });
+
+  it('filterVisionBoxesByQuality removes narrow sliver boxes', () => {
+    const good: BoundingBox = {
+      id: 'g1',
+      label: '010',
+      xmin: 100,
+      ymin: 100,
+      xmax: 300,
+      ymax: 400,
+    };
+    const sliver: BoundingBox = {
+      id: 's1',
+      label: '011',
+      xmin: 320,
+      ymin: 100,
+      xmax: 340,
+      ymax: 400,
+    };
+    const filtered = filterVisionBoxesByQuality([good, sliver]);
+    expect(filtered).toHaveLength(1);
+    expect(filtered[0]!.id).toBe('g1');
+  });
+
+  it('parseStoryboardSheetLayoutGrid validates cols x rows against shot count', () => {
+    expect(parseStoryboardSheetLayoutGrid('3', '4', 10)).toEqual({
+      ok: true,
+      layout: { cols: 3, rows: 4 },
+    });
+    expect(parseStoryboardSheetLayoutGrid('2', '2', 10).ok).toBe(false);
+  });
+
+  it('buildLayoutSheetGridBoxes respects explicit layout', () => {
+    const boxes = buildLayoutSheetGridBoxes({ cols: 3, rows: 2 }, 5);
+    expect(boxes).toHaveLength(5);
+    expect(suggestStoryboardSheetLayoutGrid(6)).toEqual({ cols: 3, rows: 2 });
   });
 });
