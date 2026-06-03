@@ -27,6 +27,8 @@ type Props = {
   boxes: BoundingBox[];
   expectedShotNos?: string[];
   sheetLabel?: string;
+  /** 打开时默认选中的框（如当前镜头 rowId） */
+  initialSelectedId?: string | null;
   onClose: () => void;
   onConfirm: (boxes: BoundingBox[]) => void;
 };
@@ -91,11 +93,14 @@ export default function StoryboardSheetSplitAdjustModal({
   boxes: initialBoxes,
   expectedShotNos = [],
   sheetLabel,
+  initialSelectedId = null,
   onClose,
   onConfirm,
 }: Props) {
   const [boxes, setBoxes] = useState<BoundingBox[]>(initialBoxes);
-  const [selectedId, setSelectedId] = useState<string | null>(initialBoxes[0]?.id ?? null);
+  const [selectedId, setSelectedId] = useState<string | null>(
+    initialSelectedId ?? initialBoxes[0]?.id ?? null
+  );
   const [drawMode, setDrawMode] = useState(false);
   const [draftRect, setDraftRect] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(
     null
@@ -123,7 +128,11 @@ export default function StoryboardSheetSplitAdjustModal({
 
     if (justOpened) {
       setBoxes(initialBoxes.map((box) => clampStoryboardSheetSplitBox(box)));
-      setSelectedId(initialBoxes[0]?.id ?? null);
+      setSelectedId(
+        initialSelectedId && initialBoxes.some((box) => box.id === initialSelectedId)
+          ? initialSelectedId
+          : initialBoxes[0]?.id ?? null
+      );
       setDrawMode(false);
       setDraftRect(null);
       return;

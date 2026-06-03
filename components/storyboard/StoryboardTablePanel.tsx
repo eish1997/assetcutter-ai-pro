@@ -21,7 +21,8 @@ import {
   planStoryboardFeedbackRedrawTasks,
   STORYBOARD_EDIT_FEEDBACK_COLLAGE_LIMIT_KEY,
   STORYBOARD_FEEDBACK_COLLAGE_LIMIT_DEFAULT,
-  splitStoryboardFeedbackCollageByLayout,
+  feedbackCollageLayoutToBoxes,
+  splitStoryboardFeedbackCollageWithBoxes,
   type FeedbackCollageLayout,
   type StoryboardFeedbackRedrawBatchRecord,
 } from '../../services/storyboardFeedbackSheetRedraw';
@@ -64,7 +65,10 @@ import {
   listStoryboardRoleReplaceEligibleRows,
   planStoryboardRoleReplaceTasks,
 } from '../../services/storyboardRoleReplaceRedraw';
-import { storyboardRowHasFrameRef } from '../../services/storyboardFrameImageUrl';
+import {
+  resolveStoryboardRowFrameDisplaySrc,
+  storyboardRowHasFrameRef,
+} from '../../services/storyboardFrameImageUrl';
 import {
   executeStoryboardSheetGen,
   executeStoryboardSheetGenBatch,
@@ -408,6 +412,15 @@ export default function StoryboardTablePanel({
     sheetLabel: string;
     detecting: boolean;
     applying: boolean;
+    initialSelectedId?: string | null;
+  } | null>(null);
+  const [frameCollageSplitCtx, setFrameCollageSplitCtx] = useState<{
+    previewId: string;
+    sheetImage: string;
+    layout: FeedbackCollageLayout;
+    boxes: BoundingBox[];
+    rowIds: string[];
+    sheetLabel: string;
   } | null>(null);
 
   const syncSheetSplitSession = useCallback(
@@ -1483,25 +1496,32 @@ export default function StoryboardTablePanel({
 
       const rowPatches = new Map<string, Partial<StoryboardTableRow>>();
       const rowImages: Record<string, string> = {};
-      for (const match of split.matches) {
-        let compressed = match.image;
-        try {
-          compressed = await compressStoryboardFrameDataUrl(match.image);
-        } catch {
-          /* keep raw */
-        }
-        const tableRow = rowLookup.get(match.rowId) ?? taskRows.find((row) => row.id === match.rowId);
-        if (!tableRow) continue;
-        rowImages[match.rowId] = compressed;
-        const patch = await replaceStoryboardRowFrame({
-          row: tableRow,
-          dataUrl: compressed,
-          assetId: asset.id,
-          companionBaseUrl,
-          companionProjectId,
-          source: 'sheet_split',
-        });
-        rowPatches.set(match.rowId, patch);
+      const patchResults = await Promise.all(
+        split.matches.map(async (match) => {
+          let compressed = match.image;
+          try {
+            compressed = await compressStoryboardFrameDataUrl(match.image);
+          } catch {
+            /* keep raw */
+          }
+          const tableRow =
+            rowLookup.get(match.rowId) ?? taskRows.find((row) => row.id === match.rowId);
+          if (!tableRow) return null;
+          const patch = await replaceStoryboardRowFrame({
+            row: tableRow,
+            dataUrl: compressed,
+            assetId: asset.id,
+            companionBaseUrl,
+            companionProjectId,
+            source: 'sheet_split',
+          });
+          return { rowId: match.rowId, compressed, patch };
+        })
+      );
+      for (const item of patchResults) {
+        if (!item) continue;
+        rowImages[item.rowId] = item.compressed;
+        rowPatches.set(item.rowId, item.patch);
       }
 
       const createdRowsToAdd = (split.createdRows ?? []).filter(
@@ -1544,6 +1564,7 @@ export default function StoryboardTablePanel({
         autoCreateRows?: boolean;
         allowGridFallback?: boolean;
         layoutGrid?: { cols: number; rows: number };
+        adjustedBoxes?: BoundingBox[];
       }
     ) => {
       let normalized = sheetImage;
@@ -1555,7 +1576,19 @@ export default function StoryboardTablePanel({
 
       const lookupRows = opts?.allRows ?? taskRows;
       const split = feedbackLayout
-        ? await splitStoryboardFeedbackCollageByLayout(normalized, feedbackLayout, taskRows)
+        ? opts?.adjustedBoxes?.length
+          ? await splitStoryboardFeedbackCollageWithBoxes(
+              normalized,
+              feedbackLayout,
+              opts.adjustedBoxes,
+              taskRows
+            )
+          : await splitStoryboardFeedbackCollageWithBoxes(
+              normalized,
+              feedbackLayout,
+              feedbackCollageLayoutToBoxes(feedbackLayout),
+              taskRows
+            )
         : await splitStoryboardSheetByVision(
             normalized,
             taskRows,
@@ -1608,10 +1641,101 @@ export default function StoryboardTablePanel({
   }, []);
 
   const confirmSheetSplitBoxAdjust = useCallback((boxes: BoundingBox[]) => {
-    splitAdjustResolverRef.current?.(boxes);
+    const resolve = splitAdjustResolverRef.current;
     splitAdjustResolverRef.current = null;
-    setSplitAdjustDraft((prev) => (prev ? { ...prev, applying: true, detecting: false } : prev));
+    setSplitAdjustDraft(null);
+    resolve?.(boxes);
   }, []);
+
+  const promptFeedbackCollageSplitAdjust = useCallback(
+    async (args: {
+      previewId: string;
+      sheetImage: string;
+      layout: FeedbackCollageLayout;
+      rowIds: string[];
+      sheetLabel: string;
+      focusRowId?: string | null;
+    }) => {
+      const expectedShotNos = args.rowIds
+        .map((id) => table.rows.find((r) => r.id === id)?.shotNo?.trim())
+        .filter((s): s is string => Boolean(s));
+      const initialBoxes = feedbackCollageLayoutToBoxes(args.layout);
+      return promptSheetSplitBoxAdjust(
+        {
+          previewId: args.previewId,
+          imageSrc: args.sheetImage,
+          boxes: initialBoxes,
+          expectedShotNos,
+          sheetLabel: args.sheetLabel,
+          initialSelectedId: args.focusRowId ?? null,
+        },
+        async () => initialBoxes
+      );
+    },
+    [promptSheetSplitBoxAdjust, table.rows]
+  );
+
+  const previewRowFrame = useCallback(
+    (row: StoryboardTableRow) => {
+      const ctx = frameCollageSplitCtx;
+      if (ctx?.rowIds.includes(row.id)) {
+        void (async () => {
+          const adjusted = await promptFeedbackCollageSplitAdjust({
+            previewId: ctx.previewId,
+            sheetImage: ctx.sheetImage,
+            layout: ctx.layout,
+            rowIds: ctx.rowIds,
+            sheetLabel: ctx.sheetLabel,
+            focusRowId: row.id,
+          });
+          if (!adjusted) return;
+          setFrameCollageSplitCtx({ ...ctx, boxes: adjusted });
+          const taskRows = table.rows.filter((r) => ctx.rowIds.includes(r.id));
+          const split = await splitStoryboardFeedbackCollageWithBoxes(
+            ctx.sheetImage,
+            ctx.layout,
+            adjusted,
+            taskRows
+          );
+          const match = split.matches.find((m) => m.rowId === row.id);
+          if (!match?.image) {
+            onNotify?.('warn', split.warn || '裁切回填失败');
+            return;
+          }
+          let compressed = match.image;
+          try {
+            compressed = await compressStoryboardFrameDataUrl(match.image);
+          } catch {
+            /* keep raw */
+          }
+          const framePatch = await replaceStoryboardRowFrame({
+            row,
+            dataUrl: compressed,
+            assetId: asset.id,
+            companionBaseUrl,
+            companionProjectId,
+            source: 'sheet_split',
+          });
+          patchRow(row.id, framePatch);
+          onNotify?.('info', '已按裁切框更新本镜分镜图');
+        })();
+        return;
+      }
+      const src = resolveStoryboardRowFrameDisplaySrc(row);
+      if (src) openStoryboardLightbox(src);
+    },
+    [
+      asset.id,
+      companionBaseUrl,
+      companionProjectId,
+      frameCollageSplitCtx,
+      onNotify,
+      openStoryboardLightbox,
+      patchRow,
+      promptFeedbackCollageSplitAdjust,
+      table.rows,
+    ]
+  );
 
   const saveSheetPreviewItem = useCallback(
     async (
@@ -2340,12 +2464,12 @@ export default function StoryboardTablePanel({
         onNotify?.('warn', '该镜头已通过');
         return;
       }
-      if (!buildStoryboardRowPromptText(row, table.fieldCatalog)) {
-        onNotify?.('warn', '请先解析、填写画面类字段或修改反馈');
-        return;
-      }
       const useCollage = storyboardRowHasFrameRef(row);
       if (useCollage) {
+        if (!(row.editFeedback ?? '').trim()) {
+          onNotify?.('warn', '拼图改图请先填写修改反馈');
+          return;
+        }
         if (!activeFeedbackCollagePreset) {
           onNotify?.('warn', '请先在编辑页选择拼图改图能力（图生图）');
           return;
@@ -2354,6 +2478,9 @@ export default function StoryboardTablePanel({
           onNotify?.('warn', '请先在编辑页选择拼图改图模型');
           return;
         }
+      } else if (!buildStoryboardRowPromptText(row, table.fieldCatalog)) {
+        onNotify?.('warn', '请先解析、填写画面类字段或修改反馈');
+        return;
       } else if (!onRedrawRow || !effectiveEditRedrawModelId) {
         onNotify?.('warn', '请先在编辑页选择重绘模型');
         return;
@@ -2367,7 +2494,12 @@ export default function StoryboardTablePanel({
         await onRedrawRow(
           rowId,
           useCollage ? effectiveFeedbackCollageModelId : effectiveEditRedrawModelId,
-          useCollage ? { collagePresetId: effectiveFeedbackCollagePresetId } : undefined
+          useCollage
+            ? {
+                collagePresetId: effectiveFeedbackCollagePresetId,
+                feedbackOnly: true,
+              }
+            : undefined
         );
       } catch (e) {
         onNotify?.('warn', e instanceof Error ? e.message : '重绘失败');
@@ -2450,6 +2582,8 @@ export default function StoryboardTablePanel({
             imageModelRegistryId: effectiveFeedbackCollageModelId,
             understand: feedbackRedrawUnderstand,
             chunkIndex: task.chunkIndex,
+            companionBaseUrl,
+            companionProjectId,
           });
           if (!outcome.ok) {
             failTasks += 1;
@@ -2464,22 +2598,58 @@ export default function StoryboardTablePanel({
             /* keep raw */
           }
 
-          const { matchedCount, warn, rowImages } = await commitSheetVisionSplit(
+          const previewId = `collage-feedback-${task.chunkIndex}`;
+          const adjusted = await promptFeedbackCollageSplitAdjust({
+            previewId,
             sheetImage,
-            task.rows,
-            table.fieldCatalog,
-            outcome.layout
-          );
-          totalMatched += matchedCount;
-          if (rowImages && Object.keys(rowImages).length) {
-            batchRowImages = { ...batchRowImages, ...rowImages };
-            for (const rowId of Object.keys(rowImages)) {
-              feedbackClearedRowIds.add(rowId);
-            }
+            layout: outcome.layout,
+            rowIds: task.rowIds,
+            sheetLabel: `拼图改图 ${task.chunkIndex + 1}`,
+          });
+          if (!adjusted) {
+            failTasks += 1;
+            onNotify?.('warn', `拼图 ${task.chunkIndex + 1}：已取消裁切确认`);
+            continue;
           }
-          okTasks += 1;
-          if (warn) {
-            onNotify?.('warn', `拼图 ${task.chunkIndex + 1}：${warn}`);
+
+          setFrameCollageSplitCtx({
+            previewId,
+            sheetImage,
+            layout: outcome.layout,
+            boxes: adjusted,
+            rowIds: task.rowIds,
+            sheetLabel: `拼图改图 ${task.chunkIndex + 1}`,
+          });
+
+          try {
+            const { matchedCount, warn, rowImages } = await commitSheetVisionSplit(
+              sheetImage,
+              task.rows,
+              table.fieldCatalog,
+              outcome.layout,
+              { adjustedBoxes: adjusted }
+            );
+            totalMatched += matchedCount;
+            if (rowImages && Object.keys(rowImages).length) {
+              batchRowImages = { ...batchRowImages, ...rowImages };
+              for (const rowId of Object.keys(rowImages)) {
+                feedbackClearedRowIds.add(rowId);
+              }
+            }
+            okTasks += 1;
+            if (warn) {
+              onNotify?.('warn', `拼图 ${task.chunkIndex + 1}：${warn}`);
+            }
+          } catch (splitError) {
+            failTasks += 1;
+            onNotify?.(
+              'warn',
+              splitError instanceof Error
+                ? splitError.message
+                : `拼图 ${task.chunkIndex + 1} 切分回填失败`
+            );
+          } finally {
+            setSplitAdjustDraft(null);
           }
         } catch (error) {
           failTasks += 1;
@@ -2487,6 +2657,7 @@ export default function StoryboardTablePanel({
             'warn',
             error instanceof Error ? error.message : `拼图 ${task.chunkIndex + 1} 失败`
           );
+          setSplitAdjustDraft(null);
         } finally {
           setFeedbackBatchProgress({ done: okTasks + failTasks, total: tasks.length });
           commitFeedbackRedrawHistory((prev) =>
@@ -2539,12 +2710,15 @@ export default function StoryboardTablePanel({
     clearEditFeedbackForRows,
     commitSheetVisionSplit,
     commitFeedbackRedrawHistory,
+    companionBaseUrl,
+    companionProjectId,
     effectiveFeedbackCollageModelId,
     feedbackCollageLimit,
     feedbackRedrawUnderstand,
     onNotify,
     onSelectFeedbackHistory,
     parseCtx,
+    promptFeedbackCollageSplitAdjust,
     table.fieldCatalog,
     table.rows,
   ]);
@@ -2571,13 +2745,13 @@ export default function StoryboardTablePanel({
     }
     const tasks = planStoryboardRoleReplaceTasks(table.rows, roleAssets, feedbackCollageLimit);
     if (!tasks.length) {
-      onNotify?.('warn', '没有可执行的拼图任务');
+      onNotify?.('warn', '没有可执行的角色替换任务');
       return;
     }
     const understandLabel = feedbackRedrawUnderstand ? '理解后生图' : '直发拼图提示';
     if (
       !window.confirm(
-        `按角色标注拼图替换 ${eligible.length} 镜？（每批最多 ${feedbackCollageLimit} 镜 · ${tasks.length} 张拼图 · ${understandLabel}）`
+        `按角色标注拼图替换 ${eligible.length} 镜？（每批最多 ${feedbackCollageLimit} 镜 · ${tasks.length} 张拼图 · 参考图 1=拼图 2+=角色资产 · ${understandLabel}）`
       )
     ) {
       return;
@@ -2608,27 +2782,71 @@ export default function StoryboardTablePanel({
           });
           if (!outcome.ok) {
             failTasks += 1;
-            onNotify?.('warn', `角色替换拼图 ${task.chunkIndex + 1} 失败：${outcome.error}`);
+            onNotify?.('warn', `拼图替换 ${task.chunkIndex + 1} 失败：${outcome.error}`);
             continue;
           }
 
-          const { matchedCount, warn } = await commitSheetVisionSplit(
-            outcome.image,
-            task.rows,
-            table.fieldCatalog,
-            outcome.layout
-          );
-          totalMatched += matchedCount;
-          okTasks += 1;
-          if (warn) {
-            onNotify?.('warn', `角色替换拼图 ${task.chunkIndex + 1}：${warn}`);
+          let sheetImage = outcome.image;
+          try {
+            sheetImage = await compressStoryboardFrameDataUrl(sheetImage);
+          } catch {
+            /* keep raw */
+          }
+
+          const previewId = `collage-role-replace-${task.chunkIndex}`;
+          const adjusted = await promptFeedbackCollageSplitAdjust({
+            previewId,
+            sheetImage,
+            layout: outcome.layout,
+            rowIds: task.rowIds,
+            sheetLabel: `拼图替换 ${task.chunkIndex + 1}`,
+          });
+          if (!adjusted) {
+            failTasks += 1;
+            onNotify?.('warn', `拼图替换 ${task.chunkIndex + 1}：已取消裁切确认`);
+            continue;
+          }
+
+          setFrameCollageSplitCtx({
+            previewId,
+            sheetImage,
+            layout: outcome.layout,
+            boxes: adjusted,
+            rowIds: task.rowIds,
+            sheetLabel: `拼图替换 ${task.chunkIndex + 1}`,
+          });
+
+          try {
+            const { matchedCount, warn } = await commitSheetVisionSplit(
+              sheetImage,
+              task.rows,
+              table.fieldCatalog,
+              outcome.layout,
+              { adjustedBoxes: adjusted }
+            );
+            totalMatched += matchedCount;
+            okTasks += 1;
+            if (warn) {
+              onNotify?.('warn', `拼图替换 ${task.chunkIndex + 1}：${warn}`);
+            }
+          } catch (splitError) {
+            failTasks += 1;
+            onNotify?.(
+              'warn',
+              splitError instanceof Error
+                ? splitError.message
+                : `拼图替换 ${task.chunkIndex + 1} 切分回填失败`
+            );
+          } finally {
+            setSplitAdjustDraft(null);
           }
         } catch (error) {
           failTasks += 1;
           onNotify?.(
             'warn',
-            error instanceof Error ? error.message : `角色替换拼图 ${task.chunkIndex + 1} 失败`
+            error instanceof Error ? error.message : `拼图替换 ${task.chunkIndex + 1} 失败`
           );
+          setSplitAdjustDraft(null);
         } finally {
           setRoleReplaceBatchProgress({ done: okTasks + failTasks, total: tasks.length });
         }
@@ -2637,12 +2855,12 @@ export default function StoryboardTablePanel({
       if (failTasks > 0) {
         onNotify?.(
           'warn',
-          `角色替换完成：成功 ${okTasks} 张，失败 ${failTasks} 张；已切分回填 ${totalMatched} 镜`
+          `拼图替换完成：成功 ${okTasks} 张，失败 ${failTasks} 张；已切分回填 ${totalMatched} 镜`
         );
       } else if (totalMatched > 0) {
-        onNotify?.('info', `角色替换完成：${okTasks} 张拼图，已切分回填 ${totalMatched} 镜`);
+        onNotify?.('info', `拼图替换完成：${okTasks} 张拼图，已切分回填 ${totalMatched} 镜`);
       } else {
-        onNotify?.('warn', `角色替换 ${okTasks} 张完成，但未能自动切分回填，请检查镜号`);
+        onNotify?.('warn', `拼图替换 ${okTasks} 张完成，但未能自动切分回填，请检查镜号`);
       }
     } finally {
       setRedrawBusyRowId(null);
@@ -2659,6 +2877,7 @@ export default function StoryboardTablePanel({
     feedbackRedrawUnderstand,
     onNotify,
     parseCtx,
+    promptFeedbackCollageSplitAdjust,
     readOnly,
     table.fieldCatalog,
     table.roleAssets,
@@ -3061,6 +3280,10 @@ export default function StoryboardTablePanel({
       if (readOnly) return '只读模式';
       if (row.locked) return '已通过';
       if (!redrawPresets.length) return '无可用生图能力';
+      if (storyboardRowHasFrameRef(row)) {
+        if (!(row.editFeedback ?? '').trim()) return '拼图改图需先填写修改反馈';
+        return undefined;
+      }
       if (!buildStoryboardRowPromptText(row, table.fieldCatalog)) {
         return '需先解析、填写画面类字段或修改反馈';
       }
@@ -3112,7 +3335,7 @@ export default function StoryboardTablePanel({
       runRedraw,
       runParse,
       runOptimize,
-      previewImage: openStoryboardLightbox,
+      previewImage: previewRowFrame,
       redrawDisabledReason: redrawRowDisabledReason,
     };
   }, [
@@ -3130,7 +3353,7 @@ export default function StoryboardTablePanel({
     runOptimize,
     runParse,
     runRedraw,
-    openStoryboardLightbox,
+    previewRowFrame,
     allowOptimizeDialogue,
     table.fieldCatalog,
     table.rows.length,
@@ -3657,6 +3880,7 @@ export default function StoryboardTablePanel({
           boxes={splitAdjustDraft.boxes}
           expectedShotNos={splitAdjustDraft.expectedShotNos}
           sheetLabel={splitAdjustDraft.sheetLabel}
+          initialSelectedId={splitAdjustDraft.initialSelectedId}
           onClose={closeSheetSplitBoxAdjust}
           onConfirm={confirmSheetSplitBoxAdjust}
         />

@@ -50,22 +50,46 @@ export function refineFeedbackCollageCropBox(box: BoundingBox): BoundingBox {
   });
 }
 
-/** 按拼图渲染时记录的分镜图区域切分（避免视觉框选裁成窄条） */
-export async function splitStoryboardFeedbackCollageByLayout(
+export function feedbackCollageLayoutToBoxes(layout: FeedbackCollageLayout): BoundingBox[] {
+  return layout.cells.map((cell) => ({
+    ...refineFeedbackCollageCropBox(cell.imageBox),
+    id: cell.rowId,
+    label: cell.shotNo,
+  }));
+}
+
+/** 手动调整后的裁切框（按 layout.cells 顺序与 rowId 对齐） */
+export async function splitStoryboardFeedbackCollageWithBoxes(
   dataUrl: string,
   layout: FeedbackCollageLayout,
+  boxes: BoundingBox[],
   rows: StoryboardTableRow[]
 ): Promise<StoryboardSheetVisionSplitResult> {
   if (!layout.cells.length) {
     return { matches: [], unmatchedLabels: [], warn: '缺少拼图布局信息，无法切分' };
   }
 
+  const boxById = new Map(boxes.map((box) => [String(box.id || '').trim(), box]));
+  const ordered: BoundingBox[] = layout.cells.map((cell, index) => {
+    const picked = boxById.get(cell.rowId) ?? boxes[index];
+    const base = picked && 'xmin' in picked ? picked : cell.imageBox;
+    return {
+      ...refineFeedbackCollageCropBox(base),
+      id: cell.rowId,
+      label: cell.shotNo,
+    };
+  });
+
+  return splitStoryboardFeedbackCollageWithOrderedBoxes(dataUrl, layout, ordered, rows);
+}
+
+async function splitStoryboardFeedbackCollageWithOrderedBoxes(
+  dataUrl: string,
+  layout: FeedbackCollageLayout,
+  boxes: BoundingBox[],
+  rows: StoryboardTableRow[]
+): Promise<StoryboardSheetVisionSplitResult> {
   const rowById = new Map(rows.map((row) => [row.id, row]));
-  const boxes: BoundingBox[] = layout.cells.map((cell) => ({
-    ...refineFeedbackCollageCropBox(cell.imageBox),
-    id: cell.rowId,
-    label: cell.shotNo,
-  }));
 
   const crops = await cropBoxes(
     dataUrl,
@@ -105,4 +129,18 @@ export async function splitStoryboardFeedbackCollageByLayout(
   }
 
   return { matches, unmatchedLabels, warn };
+}
+
+/** 按拼图渲染时记录的分镜图区域切分（避免视觉框选裁成窄条） */
+export async function splitStoryboardFeedbackCollageByLayout(
+  dataUrl: string,
+  layout: FeedbackCollageLayout,
+  rows: StoryboardTableRow[]
+): Promise<StoryboardSheetVisionSplitResult> {
+  return splitStoryboardFeedbackCollageWithOrderedBoxes(
+    dataUrl,
+    layout,
+    feedbackCollageLayoutToBoxes(layout),
+    rows
+  );
 }

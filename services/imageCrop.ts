@@ -1,45 +1,74 @@
 import type { BoundingBox } from '../types';
 
+const TRIM_MAX_PIXELS = 2_500_000;
+
+/** 避免 data URL 已缓存时 onload 在赋值前触发导致 Promise 永不 resolve */
+function loadHtmlImage(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    if (typeof Image === 'undefined') {
+      reject(new Error('Image not available'));
+      return;
+    }
+    const img = new Image();
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      resolve(img);
+    };
+    const fail = () => {
+      if (settled) return;
+      settled = true;
+      reject(new Error('image_load_failed'));
+    };
+    img.onload = done;
+    img.onerror = fail;
+    img.src = src;
+    if (img.complete && img.naturalWidth > 0) {
+      queueMicrotask(done);
+    }
+  });
+}
+
 /** 裁剪图片：根据框选裁剪出多张图；`overflowPx` 为每边向外扩展的像素（基于原图像素，不超出图幅） */
-export function cropBoxes(
+export async function cropBoxes(
   inputImage: string,
   boxes: BoundingBox[],
   selectedIndexes: number[],
   overflowPx = 0
 ): Promise<string[]> {
   const results: (string | null)[] = boxes.map(() => null);
-  const img = new Image();
-  img.src = inputImage;
   const pad = Math.max(0, Math.min(512, Math.round(overflowPx)));
-  return new Promise<string[]>((resolve) => {
-    img.onload = () => {
-      const nw = img.naturalWidth;
-      const nh = img.naturalHeight;
-      const scaleX = nw / 1000;
-      const scaleY = nh / 1000;
-      for (const i of selectedIndexes) {
-        if (i < 0 || i >= boxes.length) continue;
-        const b = boxes[i];
-        let x = Math.round(b.xmin * scaleX - pad);
-        let y = Math.round(b.ymin * scaleY - pad);
-        let w = Math.round((b.xmax - b.xmin) * scaleX + 2 * pad);
-        let h = Math.round((b.ymax - b.ymin) * scaleY + 2 * pad);
-        x = Math.max(0, x);
-        y = Math.max(0, y);
-        w = Math.min(nw - x, w);
-        h = Math.min(nh - y, h);
-        if (w < 1 || h < 1) continue;
-        const canvas = document.createElement('canvas');
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext('2d')!;
-        ctx.drawImage(img, x, y, w, h, 0, 0, w, h);
-        results[i] = canvas.toDataURL('image/png');
-      }
-      resolve(results.map((item) => item ?? ''));
-    };
-    img.onerror = () => resolve(boxes.map(() => ''));
-  });
+  try {
+    const img = await loadHtmlImage(inputImage);
+    const nw = img.naturalWidth;
+    const nh = img.naturalHeight;
+    const scaleX = nw / 1000;
+    const scaleY = nh / 1000;
+    for (const i of selectedIndexes) {
+      if (i < 0 || i >= boxes.length) continue;
+      const b = boxes[i];
+      let x = Math.round(b.xmin * scaleX - pad);
+      let y = Math.round(b.ymin * scaleY - pad);
+      let w = Math.round((b.xmax - b.xmin) * scaleX + 2 * pad);
+      let h = Math.round((b.ymax - b.ymin) * scaleY + 2 * pad);
+      x = Math.max(0, x);
+      y = Math.max(0, y);
+      w = Math.min(nw - x, w);
+      h = Math.min(nh - y, h);
+      if (w < 1 || h < 1) continue;
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) continue;
+      ctx.drawImage(img, x, y, w, h, 0, 0, w, h);
+      results[i] = canvas.toDataURL('image/png');
+    }
+  } catch {
+    /* fall through */
+  }
+  return results.map((item) => item ?? '');
 }
 
 function isBlankStoryboardPixel(r: number, g: number, b: number, a: number): boolean {
@@ -49,22 +78,30 @@ function isBlankStoryboardPixel(r: number, g: number, b: number, a: number): boo
 }
 
 /** 裁掉切分结果四周近白/近黑留白 */
-export function trimImageDataUrlContentBounds(
+export async function trimImageDataUrlContentBounds(
   dataUrl: string,
   padding = 2
 ): Promise<string> {
-  if (typeof document === 'undefined') return Promise.resolve(dataUrl);
+  if (typeof document === 'undefined') return dataUrl;
+
+  let img: HTMLImageElement;
+  try {
+    img = await loadHtmlImage(dataUrl);
+  } catch {
+    return dataUrl;
+  }
+
+  const nw = img.naturalWidth;
+  const nh = img.naturalHeight;
+  if (nw < 2 || nh < 2) {
+    return dataUrl;
+  }
+  if (nw * nh > TRIM_MAX_PIXELS) {
+    return dataUrl;
+  }
 
   return new Promise((resolve) => {
-    const img = new Image();
-    img.onload = () => {
-      const nw = img.naturalWidth;
-      const nh = img.naturalHeight;
-      if (nw < 2 || nh < 2) {
-        resolve(dataUrl);
-        return;
-      }
-
+    const runTrim = () => {
       const canvas = document.createElement('canvas');
       canvas.width = nw;
       canvas.height = nh;
@@ -138,7 +175,6 @@ export function trimImageDataUrlContentBounds(
         resolve(dataUrl);
       }
     };
-    img.onerror = () => resolve(dataUrl);
-    img.src = dataUrl;
+    queueMicrotask(runTrim);
   });
 }

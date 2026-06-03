@@ -1,28 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import {
-  compileStoryboardRoleReplaceCollagePrompt,
+  compileStoryboardRoleReplaceCollageSheetPrompt,
   compileStoryboardRoleReplacePrompt,
   isStoryboardRoleReplaceEligible,
   planStoryboardRoleReplace,
+  planStoryboardRoleReplaceChunkReferences,
   planStoryboardRoleReplaceTasks,
   resolveRoleAssetForMark,
 } from '../services/storyboardRoleReplaceRedraw';
-import type { StoryboardRoleAsset, StoryboardTableRow, StoryboardParseFieldDef } from '../types';
+import type { StoryboardRoleAsset, StoryboardTableRow } from '../types';
 
 const roleAssets: StoryboardRoleAsset[] = [
   { id: 'r1', name: '张三', image: 'data:image/jpeg;base64,abc' },
   { id: 'r2', name: '李四', image: 'data:image/jpeg;base64,def' },
-];
-
-const catalog: StoryboardParseFieldDef[] = [
-  {
-    id: 'visual',
-    label: '画面描述',
-    order: 0,
-    redrawInclude: true,
-    parseInclude: true,
-    maxLen: 500,
-  },
 ];
 
 const row: StoryboardTableRow = {
@@ -67,40 +57,56 @@ describe('storyboardRoleReplaceRedraw', () => {
     expect(isStoryboardRoleReplaceEligible(marksOnlyById, roleAssets)).toBe(true);
   });
 
-  it('builds replace prompt with reference indices', async () => {
-    const planned = await planStoryboardRoleReplace(row, roleAssets, 'data:image/jpeg;base64,frame');
+  it('builds replace prompt with reference indices only (no storyboard text)', async () => {
+    const planned = await planStoryboardRoleReplace(row, roleAssets, {
+      frameDataUrl: 'data:image/jpeg;base64,frame',
+    });
     expect(planned.ok).toBe(true);
     if (!planned.ok) return;
+    expect(planned.plan.referenceImages[0]).toContain('frame');
     expect(planned.plan.referenceImages).toHaveLength(3);
-    const prompt = compileStoryboardRoleReplacePrompt(row, planned.plan, catalog);
+    const prompt = compileStoryboardRoleReplacePrompt(planned.plan);
     expect(prompt).toContain('张三');
     expect(prompt).toContain('参考图 2');
     expect(prompt).toContain('参考图 3');
-    expect(prompt).toContain('画面说明');
-    expect(prompt).toContain('雨夜街头');
+    expect(prompt).toContain('当前分镜图');
+    expect(prompt).not.toContain('画面说明');
+    expect(prompt).not.toContain('雨夜街头');
+    expect(prompt).not.toContain('【画面');
   });
 
-  it('plans collage batch tasks by limit', () => {
+  it('plans collage tasks chunked by limit', () => {
     const rows = [
       row,
       { ...row, id: 'row2', index: 1, shotNo: '2' },
       { ...row, id: 'row3', index: 2, shotNo: '3' },
     ];
-    const tasks = planStoryboardRoleReplaceTasks(rows, roleAssets, 2);
+    const tasks = planStoryboardRoleReplaceTasks(rows, roleAssets, 9);
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]?.rows).toHaveLength(3);
+  });
+
+  it('splits into multiple collage tasks when over limit', () => {
+    const rows = Array.from({ length: 10 }, (_, i) => ({
+      ...row,
+      id: `row${i}`,
+      index: i,
+      shotNo: String(i + 1).padStart(2, '0'),
+    }));
+    const tasks = planStoryboardRoleReplaceTasks(rows, roleAssets, 9);
     expect(tasks).toHaveLength(2);
-    expect(tasks[0]?.rows).toHaveLength(2);
+    expect(tasks[0]?.rows).toHaveLength(9);
     expect(tasks[1]?.rows).toHaveLength(1);
   });
 
-  it('builds collage replace prompt with grid hint', async () => {
-    const planned = await planStoryboardRoleReplace(row, roleAssets, 'data:image/jpeg;base64,frame');
+  it('builds collage sheet prompt with per-cell refs', async () => {
+    const planned = await planStoryboardRoleReplaceChunkReferences([row], roleAssets);
     expect(planned.ok).toBe(true);
     if (!planned.ok) return;
-    const rowMarkPlans = new Map([[row.id, planned.plan.marks]]);
-    const prompt = compileStoryboardRoleReplaceCollagePrompt([row], rowMarkPlans, catalog);
-    expect(prompt).toContain('参考图 1 为本拼图');
+    const prompt = compileStoryboardRoleReplaceCollageSheetPrompt([row], planned.rowMarkPlans);
+    expect(prompt).toContain('参考图 1');
+    expect(prompt).toContain('参考图 2');
     expect(prompt).toContain('张三');
-    expect(prompt).toContain('画面说明');
-    expect(prompt).toContain('雨夜街头');
+    expect(prompt).not.toContain('雨夜街头');
   });
 });

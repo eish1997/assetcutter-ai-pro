@@ -3,9 +3,7 @@ import { coerceImageModelRegistryId } from './modelRegistry/imageModels';
 import { compileRedrawPrompt } from './storyboardTableParse';
 import {
   executeStoryboardCollageRedraw,
-  type StoryboardCollageRedrawMode,
 } from './storyboardFeedbackSheetRedraw';
-import { splitStoryboardFeedbackCollageByLayout } from './storyboardFeedbackCollageSplit';
 import {
   capabilityUsesGenImageEngine,
   executeCapability,
@@ -39,16 +37,16 @@ export const STORYBOARD_EDIT_FEEDBACK_COLLAGE_PRESET_KEY = 'ac_storyboard_edit_f
 export const STORYBOARD_FEEDBACK_COLLAGE_DEFAULT_PRESET_ID = 'storyboard_collage_redraw_v1';
 
 /** 分镜拼图改图预设默认提示词（能力页展示；运行时与本次拼图镜头说明拼接） */
-export const DEFAULT_STORYBOARD_FEEDBACK_COLLAGE_INSTRUCTION = `你是分镜表拼图改图助手。
+export const DEFAULT_STORYBOARD_FEEDBACK_COLLAGE_INSTRUCTION = `你是分镜拼图改图助手（无需阅读分镜表文字）。
 
-输入是一张多镜纯分镜插画网格（每格仅含镜号与插画，不含画面描述/对白/修改反馈等文字条）。
+输入为分镜插画拼图（每格仅插画与格线，无画面描述/对白等文字条）。用户消息仅含各格的「修改反馈」。
 
-请按用户消息中各镜说明（画面描述和/或修改反馈）调整对应格内的插画内容。
+按反馈修改对应格内画面；整体画风、线稿/上色方式、笔触与色彩氛围须与输入图保持一致。
 
 硬性要求：
 - 保持与输入相同的格数、格线、排列顺序与整体尺寸；
-- 每格输出只能是修改后的插画/草图；
-- 禁止添加 Scene Info、Dialogue、画面描述、修改反馈或任何文字说明条。`;
+- 每格输出只能是修改后的插画；
+- 禁止添加任何文字说明条、Scene Info、Dialogue 或边框。`;
 
 /** 编辑页拼图改图选用的生图 registryId */
 export const STORYBOARD_EDIT_FEEDBACK_COLLAGE_MODEL_KEY = 'ac_storyboard_edit_feedback_collage_model_v1';
@@ -329,7 +327,10 @@ export async function executeStoryboardRowRedraw(
     if (!collageCap || collageCap.disabled) {
       return { ok: false, error: '请选择拼图改图能力（图生图）' };
     }
-    const collageMode: StoryboardCollageRedrawMode = args.feedbackOnly ? 'feedback' : 'edit';
+    const feedback = (row.editFeedback ?? '').trim();
+    if (!feedback) {
+      return { ok: false, error: '拼图改图请先填写修改反馈' };
+    }
     const collageOutcome = await executeStoryboardCollageRedraw({
       preset: collageCap,
       rows: [row],
@@ -337,24 +338,15 @@ export async function executeStoryboardRowRedraw(
       ctx,
       imageModelRegistryId: args.imageModelRegistryId,
       understand,
-      mode: collageMode,
+      companionBaseUrl: args.companionBaseUrl,
+      companionProjectId: args.companionProjectId,
     });
     if (!collageOutcome.ok) {
       return { ok: false, error: collageOutcome.error };
     }
 
-    const split = await splitStoryboardFeedbackCollageByLayout(
-      collageOutcome.image,
-      collageOutcome.layout,
-      [row]
-    );
-    const match = split.matches[0];
-    if (!match?.image) {
-      return { ok: false, error: split.warn || '拼图切分回填失败' };
-    }
-
     ctx.onLog?.('info', `分镜表 · 镜头 ${row.shotNo || row.index + 1} 重绘完成`);
-    return { ok: true, image: match.image };
+    return { ok: true, image: collageOutcome.image };
   }
 
   if ((args.feedbackOnly || presetBase.category === 'image_to_image') && !useImageRef && !args.forceTextToImage) {

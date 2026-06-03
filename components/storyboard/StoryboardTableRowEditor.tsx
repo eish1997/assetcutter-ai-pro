@@ -6,7 +6,10 @@ import {
   normalizeStoryboardShotNoInput,
   parseDurationSecFromParsedValue,
 } from '../../services/storyboardTableParse';
-import { resolveStoryboardRowFrameDisplaySrc } from '../../services/storyboardFrameImageUrl';
+import {
+  resolveStoryboardRowFrameDisplaySrc,
+  storyboardRowHasFrameRef,
+} from '../../services/storyboardFrameImageUrl';
 import {
   resolveStoryboardFrameVersionDisplaySrc,
   storyboardFrameHistorySignature,
@@ -250,7 +253,12 @@ export default function StoryboardTableRowEditor({
             {onRedraw ? (
               <button
                 type="button"
-                title={redrawDisabledReason || '根据结构化字段重绘分镜图'}
+                title={
+                  redrawDisabledReason ||
+                  (storyboardRowHasFrameRef(row)
+                    ? '拼图改图：按修改反馈改图（保持画风）'
+                    : '根据画面字段文生图重绘')
+                }
                 aria-label={redrawBusy ? '生成中' : '重绘'}
                 disabled={redrawDisabled || redrawBusy}
                 onClick={onRedraw}

@@ -12,16 +12,19 @@ import {
   getCapabilityEngine,
   type CapabilityExecuteContext,
 } from './capabilityExecutor';
+import { chunkStoryboardRowsByCount, type StoryboardSheetGenTask } from './storyboardTableSheetGen';
 import { computeStoryboardMosaicGrid } from './storyboardFrameStripMerge';
-import type { FeedbackCollageLayout } from './storyboardFeedbackCollageSplit';
 import {
   renderStoryboardFeedbackCollage,
+  type StoryboardFeedbackCollageRenderResult,
 } from './storyboardFeedbackSheetRedraw';
-import { chunkStoryboardRowsByCount } from './storyboardTableSheetGen';
-import type { StoryboardSheetGenTask } from './storyboardTableSheetGen';
+import type { FeedbackCollageLayout } from './storyboardFeedbackCollageSplit';
 import { storyboardRowHasFrameRef } from './storyboardFrameImageUrl';
-import { type StoryboardRowRedrawResult } from './storyboardTableRedraw';
-import { compileRedrawPrompt } from './storyboardTableParse';
+import { resolveStoryboardRowFrameAspectRatio } from './storyboardFrameAspect';
+import {
+  resolveStoryboardRowFrameDataUrl,
+  type StoryboardRowRedrawResult,
+} from './storyboardTableRedraw';
 import {
   resolveStoryboardNamedAssetImageDataUrl,
   storyboardNamedAssetHasImageRef,
@@ -31,32 +34,26 @@ import { isStoryboardRoleReplaceEligible } from './storyboardEditEligibility';
 export { isStoryboardRoleReplaceEligible };
 
 export const STORYBOARD_ROLE_REPLACE_DEFAULT_PRESET_ID = 'storyboard_role_replace_v1';
-export const DEFAULT_STORYBOARD_ROLE_REPLACE_INSTRUCTION = `你是分镜表角色替换改图助手。
+export const DEFAULT_STORYBOARD_ROLE_REPLACE_INSTRUCTION = `你是分镜角色替换助手（多图参考，无需阅读任何分镜文字）。
 
-输入包含多张参考图：第 1 张为多镜拼图或当前镜头分镜图；其余各张为对应角色的外貌/造型参考。
+参考图 1：当前镜头分镜图（画风、构图、姿态、表情、动作的唯一样板）。
+参考图 2 起：角色资产参考图（仅提供被替换人物的外貌/造型）。
 
-请按用户消息中的「角色替换」说明，在指定格内/画面位置把人物替换为参考图中该角色的外貌，同时保持：
-- 用户消息中各镜「画面说明」所描述的场景、动作、构图、背景、光影、景别与整体画风；
-- 拼图时保持格数、格线、排列顺序与整体尺寸；
-- 未提及替换的区域不被改动；
-- 输出完整分镜插画，不要添加文字说明条或边框。`;
+按用户消息中的位置清单，把参考图 1 里对应位置的人物外貌换成相应参考图的角色造型；姿态、表情、动作、景别、背景与整体画风必须与参考图 1 一致。未列入清单的区域不要改动。
+
+禁止：改动作/表情、重绘场景、添加文字或边框、输出多格画面。`;
 
 export type StoryboardRoleReplaceMarkPlan = {
   mark: StoryboardFrameRoleMark;
   asset: StoryboardRoleAsset;
   assetImage: string;
-  /** 在 referenceImages 中的序号（0 为拼图/分镜图） */
+  /** 在 referenceImages 中的序号（0 为原始分镜图） */
   refIndex: number;
 };
 
 export type StoryboardRoleReplacePlan = {
   marks: StoryboardRoleReplaceMarkPlan[];
   referenceImages: string[];
-};
-
-export type StoryboardRoleReplaceChunkRefs = {
-  referenceImages: string[];
-  rowMarkPlans: Map<string, StoryboardRoleReplaceMarkPlan[]>;
 };
 
 export function getBuiltinStoryboardRoleReplacePreset(): CustomAppModule {
@@ -102,6 +99,7 @@ export function listStoryboardRoleReplaceEligibleRows(
   return rows.filter((row) => isStoryboardRoleReplaceEligible(row, roleAssets));
 }
 
+/** 按每批镜头上限拆分拼图角色替换任务 */
 export function planStoryboardRoleReplaceTasks(
   rows: StoryboardTableRow[],
   roleAssets: StoryboardRoleAsset[],
@@ -122,64 +120,95 @@ function formatRoleReplacePosition(mark: StoryboardFrameRoleMark): string {
   return `横向约 ${x}%、纵向约 ${y}%`;
 }
 
-/** 本镜结构化画面描述（redrawInclude 字段），用于锚定场景避免改偏 */
-export function compileStoryboardRoleReplaceSceneBlock(
-  row: StoryboardTableRow,
-  fieldCatalog: StoryboardParseFieldDef[]
-): string {
-  const text = compileRedrawPrompt(row, fieldCatalog).trim();
-  if (!text) return '';
-  return `画面说明（须保持，勿改偏）：\n${text}`;
-}
-
 function compileStoryboardRoleReplaceMarkLines(
   markPlans: StoryboardRoleReplaceMarkPlan[],
-  collageCell: boolean
+  refIndexOffset: number
 ): string[] {
   return markPlans.map((item) => {
     const pos = formatRoleReplacePosition(item.mark);
-    const where = collageCell ? '在本格画面' : '在画面';
-    return `- ${where} ${pos} 附近，将角色「${item.mark.name}」替换为参考图 ${item.refIndex + 1} 中的人物外貌与造型。`;
+    const name = String(item.asset.name || item.mark.name || '').trim() || '角色';
+    return `- 画面 ${pos} → 参考图 ${item.refIndex + refIndexOffset}（${name}）`;
   });
 }
 
-export function compileStoryboardRoleReplacePrompt(
-  row: StoryboardTableRow,
-  plan: StoryboardRoleReplacePlan,
-  fieldCatalog: StoryboardParseFieldDef[] = []
-): string {
-  const shotLabel = (row.shotNo || '').trim() || `镜头 ${row.index + 1}`;
-  const sceneBlock = compileStoryboardRoleReplaceSceneBlock(row, fieldCatalog);
-  const replaceLines = compileStoryboardRoleReplaceMarkLines(plan.marks, false);
-  const parts = [`【${shotLabel} · 角色替换】`];
-  if (sceneBlock) parts.push(sceneBlock);
-  parts.push('角色替换：', ...replaceLines);
-  return parts.join('\n');
+/** 单镜多图参考：参考图 1 = 原分镜图 */
+export function compileStoryboardRoleReplacePrompt(plan: StoryboardRoleReplacePlan): string {
+  const replaceLines = compileStoryboardRoleReplaceMarkLines(plan.marks, 1);
+  return [
+    '将参考图 1（当前分镜图）中下列位置的人物，替换为对应参考图的角色资产外貌；画风、构图、姿态、表情、动作与参考图 1 保持一致。',
+    '',
+    ...replaceLines,
+  ].join('\n');
 }
 
-export function compileStoryboardRoleReplaceCollagePrompt(
+function compileStoryboardRoleReplaceCollageMarkLines(
+  markPlans: StoryboardRoleReplaceMarkPlan[],
+  refIndexOffset: number
+): string[] {
+  return markPlans.map((item) => {
+    const pos = formatRoleReplacePosition(item.mark);
+    const name = String(item.asset.name || item.mark.name || '').trim() || '角色';
+    return `- 格内画面 ${pos} → 参考图 ${item.refIndex + refIndexOffset}（${name}）`;
+  });
+}
+
+/** 拼图批处理：参考图 1 = 拼图，2+ = 角色资产 */
+export function compileStoryboardRoleReplaceCollageSheetPrompt(
   rows: StoryboardTableRow[],
-  rowMarkPlans: Map<string, StoryboardRoleReplaceMarkPlan[]>,
-  fieldCatalog: StoryboardParseFieldDef[] = []
+  rowMarkPlans: Map<string, StoryboardRoleReplaceMarkPlan[]>
 ): string {
   const { cols, rows: gridRows } = computeStoryboardMosaicGrid(rows.length);
   const parts = [
-    `【本次拼图】约 ${cols} 列 × ${gridRows} 行，共 ${rows.length} 格，从左到右、从上到下对应下列镜号。`,
-    '参考图 1 为本拼图；参考图 2 起为各角色外貌/造型参考。',
-    '替换角色时须严格保持各镜「画面说明」中的场景与构图，仅替换标注位置的人物外貌。',
+    rows.length === 1
+      ? '输入为当前镜头分镜拼图（参考图 1）。'
+      : `输入为多格拼图（约 ${cols} 列 × ${gridRows} 行，共 ${rows.length} 格，从左到右、从上到下；参考图 1）。`,
+    '参考图 2 起为角色资产。在各格内按下列位置替换人物外貌；画风、构图、姿态、表情、动作须与该格原图一致。未列入清单的格位与区域不要改动。',
   ];
 
-  rows.forEach((row, index) => {
-    const label = (row.shotNo || '').trim() || `镜头 ${index + 1}`;
-    const markPlans = rowMarkPlans.get(row.id) ?? [];
-    if (!markPlans.length) return;
-    const sceneBlock = compileStoryboardRoleReplaceSceneBlock(row, fieldCatalog);
-    const replaceLines = compileStoryboardRoleReplaceMarkLines(markPlans, true);
-    const section = [sceneBlock, '角色替换：', ...replaceLines].filter(Boolean).join('\n');
-    parts.push(`--- ${label} ---\n${section}`);
+  rows.forEach((row) => {
+    const marks = rowMarkPlans.get(row.id) ?? [];
+    if (!marks.length) return;
+    const label = row.shotNo?.trim() || String(row.index + 1);
+    const lines = compileStoryboardRoleReplaceCollageMarkLines(marks, 2);
+    if (rows.length === 1) {
+      parts.push('', ...lines);
+    } else {
+      parts.push('', `格 ${label}：`, ...lines);
+    }
   });
 
-  return parts.join('\n\n').trim();
+  return parts.join('\n');
+}
+
+export async function planStoryboardRoleReplaceChunkReferences(
+  rows: StoryboardTableRow[],
+  roleAssets: StoryboardRoleAsset[],
+  companion?: { companionBaseUrl?: string; companionProjectId?: string }
+): Promise<
+  | { ok: true; rowMarkPlans: Map<string, StoryboardRoleReplaceMarkPlan[]>; referenceImages: string[] }
+  | { ok: false; error: string }
+> {
+  const referenceImages: string[] = [];
+  const imageKeyToRefIndex = new Map<string, number>();
+  const rowMarkPlans = new Map<string, StoryboardRoleReplaceMarkPlan[]>();
+
+  for (const row of rows) {
+    const appended = await appendRowMarksToChunkRefs(
+      row,
+      roleAssets,
+      referenceImages,
+      imageKeyToRefIndex,
+      rowMarkPlans,
+      companion
+    );
+    if (!appended.ok) return appended;
+    if (!(rowMarkPlans.get(row.id)?.length ?? 0)) {
+      const shot = row.shotNo?.trim() || `镜头 ${row.index + 1}`;
+      return { ok: false, error: `${shot} 没有可替换的角色标注` };
+    }
+  }
+
+  return { ok: true, rowMarkPlans, referenceImages };
 }
 
 async function resolveRoleAssetImage(
@@ -231,47 +260,58 @@ async function appendRowMarksToChunkRefs(
   return { ok: true };
 }
 
-export async function buildStoryboardRoleReplaceChunkRefs(
-  collageDataUrl: string,
-  rows: StoryboardTableRow[],
+async function buildStoryboardRoleReplacePlanFromFrame(
+  frameDataUrl: string,
+  row: StoryboardTableRow,
   roleAssets: StoryboardRoleAsset[],
   companion?: { companionBaseUrl?: string; companionProjectId?: string }
-): Promise<{ ok: true; refs: StoryboardRoleReplaceChunkRefs } | { ok: false; error: string }> {
-  const referenceImages: string[] = [collageDataUrl];
+): Promise<{ ok: true; plan: StoryboardRoleReplacePlan } | { ok: false; error: string }> {
+  const referenceImages: string[] = [frameDataUrl];
   const imageKeyToRefIndex = new Map<string, number>();
   const rowMarkPlans = new Map<string, StoryboardRoleReplaceMarkPlan[]>();
 
-  for (const row of rows) {
-    const appended = await appendRowMarksToChunkRefs(
-      row,
-      roleAssets,
-      referenceImages,
-      imageKeyToRefIndex,
-      rowMarkPlans,
-      companion
-    );
-    if (!appended.ok) return appended;
+  const appended = await appendRowMarksToChunkRefs(
+    row,
+    roleAssets,
+    referenceImages,
+    imageKeyToRefIndex,
+    rowMarkPlans,
+    companion
+  );
+  if (!appended.ok) return appended;
+
+  const marks = rowMarkPlans.get(row.id) ?? [];
+  if (!marks.length) {
+    return { ok: false, error: '本镜没有可替换的角色标注' };
   }
 
-  if (rowMarkPlans.size === 0) {
-    return { ok: false, error: '本批没有可替换的角色标注' };
-  }
-
-  return { ok: true, refs: { referenceImages, rowMarkPlans } };
+  return { ok: true, plan: { marks, referenceImages } };
 }
 
 export async function planStoryboardRoleReplace(
   row: StoryboardTableRow,
   roleAssets: StoryboardRoleAsset[],
-  frameDataUrl: string
+  companion?: {
+    companionBaseUrl?: string;
+    companionProjectId?: string;
+    /** 已解析的分镜图 data URL（测试或调用方预加载时传入） */
+    frameDataUrl?: string;
+  }
 ): Promise<{ ok: true; plan: StoryboardRoleReplacePlan } | { ok: false; error: string }> {
-  const built = await buildStoryboardRoleReplaceChunkRefs(frameDataUrl, [row], roleAssets);
-  if (!built.ok) return built;
-  const marks = built.refs.rowMarkPlans.get(row.id) ?? [];
-  return {
-    ok: true,
-    plan: { marks, referenceImages: built.refs.referenceImages },
-  };
+  if (!storyboardRowHasFrameRef(row)) {
+    return { ok: false, error: '当前镜头没有分镜图' };
+  }
+  const presetFrame = String(companion?.frameDataUrl || '').trim();
+  if (presetFrame) {
+    return buildStoryboardRoleReplacePlanFromFrame(presetFrame, row, roleAssets, companion);
+  }
+  const frame = await resolveStoryboardRowFrameDataUrl(
+    row,
+    companion?.companionBaseUrl ?? '',
+    companion?.companionProjectId ?? ''
+  );
+  if (!frame.ok) return frame;
+  return buildStoryboardRoleReplacePlanFromFrame(frame.dataUrl, row, roleAssets, companion);
 }
 
 export type StoryboardRoleReplaceRedrawArgs = {
@@ -319,12 +359,84 @@ function buildRoleReplacePreset(
   };
 }
 
+/** 单镜：参考图 1 = 原始分镜图，参考图 2+ = 角色资产，多图参考生图 */
+export async function executeStoryboardRoleReplaceRow(
+  args: StoryboardRoleReplaceRedrawArgs
+): Promise<StoryboardRowRedrawResult> {
+  const { row, roleAssets, ctx, understand = true } = args;
+
+  if (getCapabilityEngine(args.preset) !== 'gen_image') {
+    return { ok: false, error: '请选择图生图类能力' };
+  }
+  if (!capabilityUsesGenImageEngine(args.preset)) {
+    return { ok: false, error: '当前能力不支持生图' };
+  }
+  if (!isStoryboardRoleReplaceEligible(row, roleAssets)) {
+    return { ok: false, error: `镜头 ${row.shotNo || row.index + 1} 不满足角色替换条件` };
+  }
+
+  const companion = {
+    companionBaseUrl: args.companionBaseUrl,
+    companionProjectId: args.companionProjectId ?? args.ctx.companionProjectId,
+  };
+  const planned = await planStoryboardRoleReplace(row, roleAssets, companion);
+  if (!planned.ok) {
+    return { ok: false, error: planned.error };
+  }
+
+  const inputText = compileStoryboardRoleReplacePrompt(planned.plan);
+  if (!inputText) {
+    return { ok: false, error: '未能生成角色替换说明' };
+  }
+
+  const aspectRatio = await resolveStoryboardRowFrameAspectRatio(row, {
+    companionBaseUrl: args.companionBaseUrl,
+    companionProjectId: args.companionProjectId ?? args.ctx.companionProjectId,
+    frameDataUrl: planned.plan.referenceImages[0],
+  });
+  const presetBase = buildRoleReplacePreset(args.preset, args.imageModelRegistryId, understand);
+  const preset: CustomAppModule = {
+    ...presetBase,
+    ...(aspectRatio ? { imageAspectRatio: aspectRatio } : {}),
+  };
+  const shotLabel = row.shotNo?.trim() || `镜头 ${row.index + 1}`;
+  const label = preset.label || preset.id;
+  const refCount = planned.plan.referenceImages.length;
+  ctx.onLog?.('info', `分镜表 · ${label} · ${shotLabel} 多图参考替换（${refCount} 张）…`);
+
+  const result = await executeCapability(preset, planned.plan.referenceImages[0]!, ctx, {
+    inputText,
+    inputImages: planned.plan.referenceImages,
+    rejectTextTruncation: true,
+  });
+
+  if (!result.ok) {
+    return { ok: false, error: result.error || '角色替换失败' };
+  }
+  if (result.kind !== 'image' || !String(result.image || '').trim()) {
+    return { ok: false, error: '模型未返回有效图片' };
+  }
+
+  ctx.onLog?.('info', `分镜表 · ${shotLabel} 角色替换完成`);
+  return { ok: true, image: result.image };
+}
+
+function roleReplaceCollageChunkLabel(rows: StoryboardTableRow[], chunkIndex?: number): string {
+  if (rows.length === 1) {
+    const row = rows[0]!;
+    return `镜头 ${row.shotNo || row.index + 1} 拼图替换`;
+  }
+  return chunkIndex != null ? `拼图替换 ${chunkIndex + 1}` : `拼图替换 ${rows.length} 镜`;
+}
+
+/** 批量：多镜拼 contact sheet → 多图参考生图 → 切分回填 */
 export async function executeStoryboardRoleReplaceCollageBatch(
   args: StoryboardRoleReplaceCollageBatchArgs
 ): Promise<
-  { ok: true; image: string; layout: FeedbackCollageLayout } | { ok: false; error: string }
+  | { ok: true; image: string; layout: FeedbackCollageLayout; rowIds: string[] }
+  | { ok: false; error: string }
 > {
-  const { rows, roleAssets, ctx, understand = true } = args;
+  const { rows, roleAssets, fieldCatalog, ctx, understand = true } = args;
 
   if (getCapabilityEngine(args.preset) !== 'gen_image') {
     return { ok: false, error: '请选择图生图类能力' };
@@ -336,47 +448,53 @@ export async function executeStoryboardRoleReplaceCollageBatch(
     return { ok: false, error: '本任务没有可用镜头' };
   }
 
-  for (const row of rows) {
-    if (!isStoryboardRoleReplaceEligible(row, roleAssets)) {
-      return { ok: false, error: `镜头 ${row.shotNo || row.index + 1} 不满足角色替换条件` };
-    }
+  const companion = {
+    companionBaseUrl: args.companionBaseUrl,
+    companionProjectId: args.companionProjectId ?? args.ctx.companionProjectId,
+  };
+
+  const chunkRefs = await planStoryboardRoleReplaceChunkReferences(rows, roleAssets, companion);
+  if (!chunkRefs.ok) {
+    return { ok: false, error: chunkRefs.error };
   }
 
-  const collage = await renderStoryboardFeedbackCollage(rows, []);
+  let collage: StoryboardFeedbackCollageRenderResult | null = null;
+  try {
+    collage = await renderStoryboardFeedbackCollage(rows, fieldCatalog);
+  } catch {
+    collage = null;
+  }
   if (!collage) {
     return { ok: false, error: '拼图失败，请确认各镜已有分镜图' };
   }
 
-  const built = await buildStoryboardRoleReplaceChunkRefs(collage.dataUrl, rows, roleAssets, {
-    companionBaseUrl: args.companionBaseUrl,
-    companionProjectId: args.companionProjectId ?? args.ctx.companionProjectId,
-  });
-  if (!built.ok) {
-    return { ok: false, error: built.error };
-  }
-
-  const inputText = compileStoryboardRoleReplaceCollagePrompt(
-    rows,
-    built.refs.rowMarkPlans,
-    args.fieldCatalog
-  );
-  if (!inputText) {
+  const inputText = compileStoryboardRoleReplaceCollageSheetPrompt(rows, chunkRefs.rowMarkPlans);
+  if (!inputText.trim()) {
     return { ok: false, error: '未能生成角色替换说明' };
   }
 
-  const preset = buildRoleReplacePreset(args.preset, args.imageModelRegistryId, understand);
-  const chunkLabel =
-    args.chunkIndex != null
-      ? `角色替换拼图 ${args.chunkIndex + 1}`
-      : rows.length === 1
-        ? `镜头 ${rows[0]!.shotNo || rows[0]!.index + 1} 角色替换`
-        : `角色替换拼图 ${rows.length} 镜`;
-  const label = preset.label || preset.id;
-  ctx.onLog?.('info', `分镜表 · ${label} · ${chunkLabel} 改图中…`);
+  const referenceImages = [collage.dataUrl, ...chunkRefs.referenceImages];
+  const aspectRow = rows[0];
+  const aspectRatio = aspectRow
+    ? await resolveStoryboardRowFrameAspectRatio(aspectRow, companion)
+    : undefined;
 
-  const result = await executeCapability(preset, built.refs.referenceImages[0]!, ctx, {
+  const presetBase = buildRoleReplacePreset(args.preset, args.imageModelRegistryId, understand);
+  const preset: CustomAppModule = {
+    ...presetBase,
+    ...(aspectRatio ? { imageAspectRatio: aspectRatio } : {}),
+  };
+
+  const chunkLabel = roleReplaceCollageChunkLabel(rows, args.chunkIndex);
+  const label = preset.label || preset.id;
+  ctx.onLog?.(
+    'info',
+    `分镜表 · ${label} · ${chunkLabel} 拼图替换（${referenceImages.length} 张参考）…`
+  );
+
+  const result = await executeCapability(preset, collage.dataUrl, ctx, {
     inputText,
-    inputImages: built.refs.referenceImages,
+    inputImages: referenceImages,
     rejectTextTruncation: true,
   });
 
@@ -387,26 +505,17 @@ export async function executeStoryboardRoleReplaceCollageBatch(
     return { ok: false, error: '模型未返回有效图片' };
   }
 
-  ctx.onLog?.('info', `分镜表 · ${chunkLabel} 角色替换完成`);
-  return { ok: true, image: result.image, layout: collage.layout };
+  ctx.onLog?.('info', `分镜表 · ${chunkLabel} 拼图替换完成`);
+  return {
+    ok: true,
+    image: result.image,
+    layout: collage.layout,
+    rowIds: rows.map((row) => row.id),
+  };
 }
 
 export async function executeStoryboardRoleReplaceRedraw(
   args: StoryboardRoleReplaceRedrawArgs
 ): Promise<StoryboardRowRedrawResult> {
-  const outcome = await executeStoryboardRoleReplaceCollageBatch({
-    preset: args.preset,
-    rows: [args.row],
-    roleAssets: args.roleAssets,
-    fieldCatalog: args.fieldCatalog,
-    ctx: args.ctx,
-    imageModelRegistryId: args.imageModelRegistryId,
-    understand: args.understand,
-    companionBaseUrl: args.companionBaseUrl,
-    companionProjectId: args.companionProjectId ?? args.ctx.companionProjectId,
-  });
-  if (!outcome.ok) {
-    return { ok: false, error: outcome.error };
-  }
-  return { ok: true, image: outcome.image };
+  return executeStoryboardRoleReplaceRow(args);
 }

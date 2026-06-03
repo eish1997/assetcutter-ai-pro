@@ -155,7 +155,8 @@ describe('feedback batch redraw helpers', () => {
   it('builtin collage preset includes default instruction', () => {
     const preset = getBuiltinStoryboardFeedbackCollagePreset();
     expect(preset.instruction).toBe(DEFAULT_STORYBOARD_FEEDBACK_COLLAGE_INSTRUCTION);
-    expect(preset.instruction).toContain('禁止添加 Scene Info');
+    expect(preset.instruction).toContain('修改反馈');
+    expect(preset.instruction).toContain('画风');
   });
 
   it('lists rows with edit feedback including locked rows', () => {

@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import type { StoryboardTableRow } from '../types';
 import {
   compileFeedbackSheetShotPanelMeta,
-  compileStoryboardEditCollagePrompt,
   compileStoryboardFeedbackSheetPrompt,
   normalizeFeedbackCollageLimit,
   planStoryboardFeedbackRedrawTasks,
@@ -14,7 +13,7 @@ function mockRow(overrides: Partial<StoryboardTableRow> = {}): StoryboardTableRo
     id: 'row-1',
     index: 0,
     shotNo: '001',
-    shotFields: {},
+    shotFields: { visual: '雨夜街头' },
     shotText: '',
     locked: false,
     editFeedback: '把天空改蓝',
@@ -39,29 +38,29 @@ describe('storyboardFeedbackSheetRedraw', () => {
     expect(tasks[1]?.rowIds).toHaveLength(1);
   });
 
-  it('includes feedback in sheet prompt', () => {
+  it('includes only feedback in sheet prompt (no storyboard text)', () => {
     const prompt = compileStoryboardFeedbackSheetPrompt([mockRow()]);
-    expect(prompt).toContain('本次拼图');
-    expect(prompt).toContain('修改反馈：把天空改蓝');
+    expect(prompt).toContain('把天空改蓝');
+    expect(prompt).toContain('画风');
+    expect(prompt).not.toContain('雨夜街头');
+    expect(prompt).not.toContain('画面描述');
+    expect(prompt).not.toContain('顶栏：');
+    expect(prompt).not.toContain('修改反馈：');
   });
 
-  it('includes structured fields in edit collage prompt', () => {
-    const prompt = compileStoryboardEditCollagePrompt(
-      [mockRow({ editFeedback: '' })],
-      [{ id: 'visual', label: '画面', order: 0, redrawInclude: true }]
-    );
-    expect(prompt).toContain('本次拼图');
-    expect(prompt).not.toContain('禁止添加 Scene Info');
+  it('uses grid labels for multi-row collage prompt', () => {
+    const prompt = compileStoryboardFeedbackSheetPrompt([
+      mockRow({ shotNo: '001', editFeedback: '改 A' }),
+      mockRow({ id: 'r2', index: 1, shotNo: '002', editFeedback: '改 B' }),
+    ]);
+    expect(prompt).toContain('多格拼图');
+    expect(prompt).toContain('格 001：改 A');
+    expect(prompt).toContain('格 002：改 B');
   });
 
   it('builds feedback cell meta without embedded feedback text', () => {
     const meta = compileFeedbackSheetShotPanelMeta(mockRow());
     expect(meta.compactLayout?.extraLines).toEqual([]);
-  });
-
-  it('prompt forbids text bars and omits sheet layout template', () => {
-    const prompt = compileStoryboardFeedbackSheetPrompt([mockRow()]);
-    expect(prompt).not.toContain('顶栏：');
   });
 
   it('normalizes pixel rect to 0-1000 box', () => {

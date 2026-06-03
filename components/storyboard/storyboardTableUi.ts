@@ -1,3 +1,6 @@
+/** 编辑页工具条 CustomDropdown Portal 层级（须高于画板滚动层） */
+export const STORYBOARD_EDIT_DROPDOWN_Z = { backdrop: 2200, list: 2201 };
+
 /** 分镜表面板统一间距（三栏 / 卡片 / 表头） */
 export const STORYBOARD_GAP_COLS = 'gap-2';
 

@@ -12,6 +12,7 @@ import {
 import {
   STORYBOARD_OUTLINE_ROW_ESTIMATE_PX,
 } from '../../services/storyboardVirtualScroll';
+import { normalizeFeedbackCollageLimit } from '../../services/storyboardFeedbackSheetRedraw';
 import { useStoryboardVirtualList } from '../../hooks/useStoryboardVirtualList';
 import StoryboardConnectedRowEditor from './StoryboardConnectedRowEditor';
 import StoryboardEditCanvasGrid, {
@@ -39,6 +40,7 @@ import {
   STORYBOARD_SIDE_RAIL,
   STORYBOARD_TOOL_BTN_NEUTRAL,
   STORYBOARD_TOOL_BTN_PRIMARY,
+  STORYBOARD_EDIT_DROPDOWN_Z,
 } from './storyboardTableUi';
 
 export type StoryboardEditDisplayMode = 'full' | 'feedback';
@@ -521,16 +523,18 @@ export default function StoryboardTableEditView({
               {onFeedbackBatchRedraw || onRoleReplaceBatch ? (
                 <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
                   <CustomDropdown
-                    value={String(feedbackCollageLimit)}
+                    value={String(normalizeFeedbackCollageLimit(feedbackCollageLimit))}
                     options={collageLimitOptions}
                     disabled={roleReplaceBatchBusy || feedbackBatchBusy}
                     onChange={(value) => onFeedbackCollageLimitChange?.(Number(value))}
                     triggerClassName="!h-7 !min-w-[5.5rem] !px-2 !text-[10px]"
                     triggerAriaLabel="每批拼图镜头上限"
+                    portalZIndex={STORYBOARD_EDIT_DROPDOWN_Z}
+                    listMinWidth={96}
                   />
                   <label
                     className="inline-flex shrink-0 cursor-pointer items-center gap-1.5 text-[10px] text-gray-500"
-                    title="开启：拼图提示先经理解 LLM；关闭：直发拼图改图/替换提示"
+                    title="开启：拼图提示先经理解 LLM；关闭：直发拼图改图/拼图替换提示"
                   >
                     <input
                       type="checkbox"
@@ -564,7 +568,7 @@ export default function StoryboardTableEditView({
                   {onRoleReplaceBatch ? (
                     <button
                       type="button"
-                      title={`拼图替换：每 ${feedbackCollageLimit} 镜拼一张，用解析页角色参考图替换标注位置并切分回填${roleReplaceBatchTitleSuffix}`}
+                      title={`拼图替换：每 ${feedbackCollageLimit} 镜拼一张，参考图 1=拼图 2+=角色资产，改完后切分回填${roleReplaceBatchTitleSuffix}`}
                       disabled={
                         roleReplaceBatchBusy ||
                         feedbackBatchBusy ||
@@ -577,8 +581,8 @@ export default function StoryboardTableEditView({
                       }`}
                     >
                       {roleReplaceBatchBusy && roleReplaceBatchProgress
-                        ? `拼图替换 ${roleReplaceBatchProgress.done}/${roleReplaceBatchProgress.total}`
-                        : `拼图替换角色${roleReplaceEligibleCount > 0 ? ` (${roleReplaceEligibleCount})` : ''}`}
+                        ? `替换角色 ${roleReplaceBatchProgress.done}/${roleReplaceBatchProgress.total}`
+                        : `替换角色${roleReplaceEligibleCount > 0 ? ` (${roleReplaceEligibleCount})` : ''}`}
                     </button>
                   ) : null}
                 </div>

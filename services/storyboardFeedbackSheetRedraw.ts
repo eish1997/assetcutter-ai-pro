@@ -16,16 +16,17 @@ import {
   measureFeedbackCollageImageDrawRect,
   measureFeedbackCollageImageOnlyRects,
 } from './storyboardCompositeFrameRender';
-import {
-  pixelRectToNormBox,
-  splitStoryboardFeedbackCollageByLayout,
-  type FeedbackCollageLayout,
-} from './storyboardFeedbackCollageSplit';
+import { pixelRectToNormBox, type FeedbackCollageLayout } from './storyboardFeedbackCollageSplit';
+import { resolveStoryboardRowFrameAspectRatio } from './storyboardFrameAspect';
 export type { FeedbackCollageLayout, FeedbackCollageLayoutCell } from './storyboardFeedbackCollageSplit';
-export { splitStoryboardFeedbackCollageByLayout, pixelRectToNormBox };
+export {
+  splitStoryboardFeedbackCollageByLayout,
+  splitStoryboardFeedbackCollageWithBoxes,
+  feedbackCollageLayoutToBoxes,
+  pixelRectToNormBox,
+} from './storyboardFeedbackCollageSplit';
 import {
   chunkStoryboardRowsByCount,
-  compileSheetShotCompactBlock,
   normalizeShotsPerSheet,
   type StoryboardSheetGenTask,
 } from './storyboardTableSheetGen';
@@ -60,7 +61,19 @@ export type StoryboardFeedbackRedrawBatchRecord = {
 export function normalizeFeedbackCollageLimit(value: unknown): number {
   const n = Number(value);
   if (!Number.isFinite(n)) return STORYBOARD_FEEDBACK_COLLAGE_LIMIT_DEFAULT;
-  return normalizeShotsPerSheet(n, STORYBOARD_FEEDBACK_COLLAGE_LIMIT_DEFAULT);
+  const rounded = normalizeShotsPerSheet(n, STORYBOARD_FEEDBACK_COLLAGE_LIMIT_DEFAULT);
+  const options = STORYBOARD_FEEDBACK_COLLAGE_LIMIT_OPTIONS as readonly number[];
+  if (options.includes(rounded as (typeof options)[number])) return rounded;
+  let best = options[0]!;
+  let bestDist = Math.abs(rounded - best);
+  for (const opt of options) {
+    const dist = Math.abs(rounded - opt);
+    if (dist < bestDist) {
+      best = opt;
+      bestDist = dist;
+    }
+  }
+  return best;
 }
 
 export function compileFeedbackSheetShotPanelMeta(row: StoryboardTableRow): SheetCellTextMeta {
@@ -78,54 +91,31 @@ export function compileFeedbackSheetShotPanelMeta(row: StoryboardTableRow): Shee
   };
 }
 
-export type StoryboardCollageRedrawMode = 'feedback' | 'edit';
+/** @deprecated 拼图改图统一为仅修改反馈 */
+export type StoryboardCollageRedrawMode = 'feedback';
 
-export function compileStoryboardEditCollagePrompt(
-  rows: StoryboardTableRow[],
-  catalog: StoryboardParseFieldDef[]
-): string {
-  const { cols, rows: gridRows } = computeStoryboardMosaicGrid(rows.length);
-  const parts: string[] = [
-    `【本次拼图】约 ${cols} 列 × ${gridRows} 行，共 ${rows.length} 格，从左到右、从上到下对应下列镜号。`,
-  ];
-
-  rows.forEach((row, index) => {
-    const label = row.shotNo?.trim() || `镜头 ${index + 1}`;
-    const body = compileSheetShotCompactBlock(row, catalog);
-    const feedback = (row.editFeedback ?? '').trim();
-    const shotBlock = [body, feedback ? `修改反馈：${feedback}` : ''].filter(Boolean).join('\n');
-    if (!shotBlock) return;
-    parts.push(`--- ${label} ---\n${shotBlock}`);
-  });
-
-  return parts.join('\n\n').trim();
+export function compileStoryboardCollageRedrawPrompt(rows: StoryboardTableRow[]): string {
+  return compileStoryboardFeedbackSheetPrompt(rows);
 }
 
-export function compileStoryboardCollageRedrawPrompt(
-  rows: StoryboardTableRow[],
-  fieldCatalog: StoryboardParseFieldDef[],
-  mode: StoryboardCollageRedrawMode
-): string {
-  return mode === 'feedback'
-    ? compileStoryboardFeedbackSheetPrompt(rows)
-    : compileStoryboardEditCollagePrompt(rows, fieldCatalog);
-}
-
+/** 仅含拼图格位与修改反馈，不含分镜表结构化文本 */
 export function compileStoryboardFeedbackSheetPrompt(rows: StoryboardTableRow[]): string {
   const { cols, rows: gridRows } = computeStoryboardMosaicGrid(rows.length);
-  const parts: string[] = [
-    `【本次拼图】约 ${cols} 列 × ${gridRows} 行，共 ${rows.length} 格，从左到右、从上到下对应下列镜号。`,
-    '请按下列各镜「修改反馈」调整对应格内的插画内容。',
+  const parts = [
+    rows.length === 1
+      ? '输入为当前镜头分镜图。'
+      : `输入为多格拼图（约 ${cols} 列 × ${gridRows} 行，共 ${rows.length} 格，从左到右、从上到下）。`,
+    '按下列修改反馈调整画面；画风、线稿/上色方式须与输入图保持一致。',
   ];
 
   rows.forEach((row, index) => {
-    const label = row.shotNo?.trim() || `镜头 ${index + 1}`;
     const feedback = (row.editFeedback ?? '').trim();
     if (!feedback) return;
-    parts.push(`--- ${label} ---\n修改反馈：${feedback}`);
+    const label = row.shotNo?.trim() || String(index + 1);
+    parts.push(rows.length === 1 ? feedback : `格 ${label}：${feedback}`);
   });
 
-  return parts.join('\n\n').trim();
+  return parts.join('\n');
 }
 
 export type StoryboardFeedbackCollageRenderResult = {
@@ -241,25 +231,21 @@ export type StoryboardCollageRedrawArgs = {
   imageModelRegistryId?: string;
   understand?: boolean;
   chunkIndex?: number;
+  /** @deprecated 已统一为仅修改反馈 */
   mode?: StoryboardCollageRedrawMode;
+  companionBaseUrl?: string;
+  companionProjectId?: string;
 };
 
 /** @deprecated 使用 StoryboardCollageRedrawArgs */
 export type StoryboardFeedbackSheetRedrawArgs = StoryboardCollageRedrawArgs;
 
-function collageRedrawChunkLabel(
-  rows: StoryboardTableRow[],
-  mode: StoryboardCollageRedrawMode,
-  chunkIndex?: number
-): string {
-  if (mode === 'feedback') {
-    return chunkIndex != null ? `反馈拼图 ${chunkIndex + 1}` : `反馈拼图 ${rows.length} 镜`;
-  }
+function collageRedrawChunkLabel(rows: StoryboardTableRow[], chunkIndex?: number): string {
   if (rows.length === 1) {
     const row = rows[0]!;
-    return `镜头 ${row.shotNo || row.index + 1} 拼图重绘`;
+    return `镜头 ${row.shotNo || row.index + 1} 拼图改图`;
   }
-  return chunkIndex != null ? `拼图重绘 ${chunkIndex + 1}` : `拼图重绘 ${rows.length} 镜`;
+  return chunkIndex != null ? `拼图改图 ${chunkIndex + 1}` : `拼图改图 ${rows.length} 镜`;
 }
 
 export async function executeStoryboardCollageRedraw(
@@ -267,7 +253,7 @@ export async function executeStoryboardCollageRedraw(
 ): Promise<
   { ok: true; image: string; layout: FeedbackCollageLayout } | { ok: false; error: string }
 > {
-  const { rows, fieldCatalog, ctx, understand = true, mode = 'feedback' } = args;
+  const { rows, fieldCatalog, ctx, understand = true } = args;
 
   if (getCapabilityEngine(args.preset) !== 'gen_image') {
     return { ok: false, error: '请选择图生图类能力' };
@@ -284,12 +270,9 @@ export async function executeStoryboardCollageRedraw(
     return { ok: false, error: '拼图失败，请确认各镜已有分镜图' };
   }
 
-  const inputText = compileStoryboardCollageRedrawPrompt(rows, fieldCatalog, mode);
+  const inputText = compileStoryboardCollageRedrawPrompt(rows);
   if (!inputText) {
-    return {
-      ok: false,
-      error: mode === 'feedback' ? '请先填写修改反馈' : '请先解析或填写画面类字段',
-    };
+    return { ok: false, error: '请先填写修改反馈' };
   }
 
   const presetBase =
@@ -300,15 +283,24 @@ export async function executeStoryboardCollageRedraw(
         }
       : args.preset;
 
+  const aspectRow = rows[0];
+  const aspectRatio = aspectRow
+    ? await resolveStoryboardRowFrameAspectRatio(aspectRow, {
+        companionBaseUrl: args.companionBaseUrl,
+        companionProjectId: args.companionProjectId ?? args.ctx.companionProjectId,
+      })
+    : undefined;
+
   const preset: CustomAppModule = {
     ...presetBase,
     category: 'image_to_image',
     instruction:
       (presetBase.instruction || '').trim() || DEFAULT_STORYBOARD_FEEDBACK_COLLAGE_INSTRUCTION,
     skipUnderstand: !understand,
+    ...(aspectRatio ? { imageAspectRatio: aspectRatio } : {}),
   };
 
-  const chunkLabel = collageRedrawChunkLabel(rows, mode, args.chunkIndex);
+  const chunkLabel = collageRedrawChunkLabel(rows, args.chunkIndex);
   const label = preset.label || preset.id;
   ctx.onLog?.('info', `分镜表 · ${label} · ${chunkLabel} 改图中…`);
 
@@ -329,7 +321,7 @@ export async function executeStoryboardFeedbackSheetRedraw(
 ): Promise<
   { ok: true; image: string; layout: FeedbackCollageLayout } | { ok: false; error: string }
 > {
-  return executeStoryboardCollageRedraw({ ...args, mode: 'feedback' });
+  return executeStoryboardCollageRedraw(args);
 }
 
 export function pickFeedbackSheetRedrawPreset(
