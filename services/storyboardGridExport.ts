@@ -7,6 +7,7 @@ import {
 } from './storyboardFrameStripMerge';
 
 export const STORYBOARD_GRID_EXPORT_WIDTH_KEY = 'ac_storyboard_grid_export_width_v1';
+export const STORYBOARD_GRID_OVERLAY_ROLE_MARKS_KEY = 'ac_storyboard_grid_overlay_role_marks_v1';
 
 export const STORYBOARD_GRID_EXPORT_WIDTH_PRESETS = [1920, 2560, 3840] as const;
 
@@ -26,6 +27,16 @@ export function writeStoryboardGridExportWidth(width: number): void {
   writeLocalJson(STORYBOARD_GRID_EXPORT_WIDTH_KEY, normalizeStoryboardGridExportWidth(width));
 }
 
+export function readStoryboardGridOverlayRoleMarks(): boolean {
+  return readLocalJson(STORYBOARD_GRID_OVERLAY_ROLE_MARKS_KEY, false, (v) =>
+    typeof v === 'boolean' ? v : null
+  );
+}
+
+export function writeStoryboardGridOverlayRoleMarks(enabled: boolean): void {
+  writeLocalJson(STORYBOARD_GRID_OVERLAY_ROLE_MARKS_KEY, enabled);
+}
+
 function triggerBlobDownload(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -41,9 +52,15 @@ function triggerBlobDownload(blob: Blob, filename: string): void {
 export async function downloadStoryboardGroupMosaic(
   group: StoryboardDurationGroup,
   fieldCatalog: StoryboardParseFieldDef[],
-  exportWidth: number
+  exportWidth: number,
+  overlayRoleMarks = false
 ): Promise<string | null> {
-  const blob = await renderStoryboardGroupMosaicBlob(group, fieldCatalog, exportWidth);
+  const blob = await renderStoryboardGroupMosaicBlob(
+    group,
+    fieldCatalog,
+    exportWidth,
+    overlayRoleMarks
+  );
   if (!blob) return null;
   const filename = storyboardGroupMosaicExportFilename(group, exportWidth);
   triggerBlobDownload(blob, filename);
@@ -54,12 +71,18 @@ export async function downloadAllStoryboardGroupMosaics(
   groups: StoryboardDurationGroup[],
   fieldCatalog: StoryboardParseFieldDef[],
   exportWidth: number,
+  overlayRoleMarks = false,
   onProgress?: (done: number, total: number) => void
 ): Promise<number> {
   let count = 0;
   for (let i = 0; i < groups.length; i += 1) {
     const group = groups[i]!;
-    const ok = await downloadStoryboardGroupMosaic(group, fieldCatalog, exportWidth);
+    const ok = await downloadStoryboardGroupMosaic(
+      group,
+      fieldCatalog,
+      exportWidth,
+      overlayRoleMarks
+    );
     if (ok) count += 1;
     onProgress?.(i + 1, groups.length);
     if (i < groups.length - 1) {

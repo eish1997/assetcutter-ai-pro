@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { BoundingBox, CustomAppModule, StoryboardParseFieldDef, StoryboardRoleAsset, StoryboardTableRow, WorkflowAsset } from '../../types';
+import type { BoundingBox, CustomAppModule, StoryboardParseFieldDef, StoryboardRoleAsset, StoryboardSceneAsset, StoryboardTableRow, WorkflowAsset } from '../../types';
 import {
   applyAutoShotNumbers,
   computeStoryboardTableStats,
@@ -10,6 +10,7 @@ import {
   readStoryboardTableTitleRaw,
   reindexStoryboardRows,
   resolveStoryboardTableTitle,
+  sortStoryboardRowsByShotNo,
 } from '../../services/storyboardTableAsset';
 import { reorderStoryboardRowsInLayer, collapseStoryboardTimelineTopLayer, clampStoryboardTimelineLayerCount } from '../../services/storyboardVideoTimeline';
 import {
@@ -46,7 +47,18 @@ import {
 } from '../../services/storyboardTableRedraw';
 import { canPatchStoryboardPassedRow, storyboardRowIsPassed } from './storyboardRowDisplay';
 import { createStoryboardRoleAsset } from '../../services/storyboardRoleAssets';
-import { appendStoryboardFrameRoleMark } from '../../services/storyboardFrameRoleMarks';
+import { createStoryboardSceneAsset } from '../../services/storyboardSceneAssets';
+import {
+  appendStoryboardFrameRoleMark,
+  rebindStoryboardFrameRoleMark,
+  removeStoryboardFrameRoleMark,
+  setStoryboardFrameRoleMarkCustomName,
+  updateStoryboardFrameRoleMark,
+} from '../../services/storyboardFrameRoleMarks';
+import {
+  clearStoryboardNamedAssetImageFields,
+  persistStoryboardNamedAssetImage,
+} from '../../services/storyboardNamedAssetImage';
 import {
   executeStoryboardRoleReplaceCollageBatch,
   listStoryboardRoleReplaceEligibleRows,
@@ -130,6 +142,7 @@ import {
   getBuiltinStoryboardParsePreset,
   getBuiltinStoryboardOptimizePreset,
   maybeWarnLargeFieldCatalog,
+  normalizeStoryboardShotNoInput,
   rowHasStructuredFieldValues,
   resolveStoryboardParseInput,
   STORYBOARD_PARSE_PRESET_KEY,
@@ -153,8 +166,10 @@ import {
   downloadStoryboardGroupMosaic,
   normalizeStoryboardGridExportWidth,
   readStoryboardGridExportWidth,
+  readStoryboardGridOverlayRoleMarks,
   STORYBOARD_GRID_EXPORT_WIDTH_PRESETS,
   writeStoryboardGridExportWidth,
+  writeStoryboardGridOverlayRoleMarks,
 } from '../../services/storyboardGridExport';
 import {
   compressStoryboardFrameDataUrl,
@@ -302,6 +317,9 @@ export default function StoryboardTablePanel({
     )
   );
   const [gridExportWidth, setGridExportWidth] = useState(() => readStoryboardGridExportWidth());
+  const [gridOverlayRoleMarks, setGridOverlayRoleMarks] = useState(() =>
+    readStoryboardGridOverlayRoleMarks()
+  );
   const [gridDownloadBusy, setGridDownloadBusy] = useState(false);
   const isGridView = viewMode === 'grid';
   const isVideoView = viewMode === 'video';
@@ -312,6 +330,7 @@ export default function StoryboardTablePanel({
   const [lightboxSheetPreviewId, setLightboxSheetPreviewId] = useState<string | null>(null);
   const [imageBusyRowId, setImageBusyRowId] = useState<string | null>(null);
   const [roleAssetBusyId, setRoleAssetBusyId] = useState<string | null>(null);
+  const [sceneAssetBusyId, setSceneAssetBusyId] = useState<string | null>(null);
   const [roleReplaceBatchBusy, setRoleReplaceBatchBusy] = useState(false);
   const [roleReplaceBatchProgress, setRoleReplaceBatchProgress] = useState<{
     done: number;
@@ -693,6 +712,14 @@ export default function StoryboardTablePanel({
     writeStoryboardGridExportWidth(next);
   }, []);
 
+  const toggleGridOverlayRoleMarks = useCallback(() => {
+    setGridOverlayRoleMarks((prev) => {
+      const next = !prev;
+      writeStoryboardGridOverlayRoleMarks(next);
+      return next;
+    });
+  }, []);
+
   const gridExportWidthOptions = useMemo(
     () =>
       STORYBOARD_GRID_EXPORT_WIDTH_PRESETS.map((w) => ({
@@ -716,7 +743,8 @@ export default function StoryboardTablePanel({
         const filename = await downloadStoryboardGroupMosaic(
           group,
           table.fieldCatalog,
-          gridExportWidth
+          gridExportWidth,
+          gridOverlayRoleMarks
         );
         if (filename) {
           onNotify?.('info', `分镜拼图已保存到浏览器下载文件夹：${filename}`);
@@ -727,7 +755,7 @@ export default function StoryboardTablePanel({
         setGridDownloadBusy(false);
       }
     },
-    [gridDownloadBusy, gridExportWidth, onNotify, table.fieldCatalog]
+    [gridDownloadBusy, gridExportWidth, gridOverlayRoleMarks, onNotify, table.fieldCatalog]
   );
 
   const handleDownloadAllGridGroups = useCallback(async () => {
@@ -737,12 +765,15 @@ export default function StoryboardTablePanel({
       const count = await downloadAllStoryboardGroupMosaics(
         gridGroups,
         table.fieldCatalog,
-        gridExportWidth
+        gridExportWidth,
+        gridOverlayRoleMarks
       );
       if (count > 0) {
         onNotify?.(
           'info',
-          `已保存 ${count} 张分镜拼图到浏览器下载文件夹（${gridExportWidth}px 宽，文件名以 storyboard- 开头）`
+          `已保存 ${count} 张分镜拼图到浏览器下载文件夹（${gridExportWidth}px 宽${
+            gridOverlayRoleMarks ? '，含人名标签' : ''
+          }，文件名以 storyboard- 开头）`
         );
       } else {
         onNotify?.('warn', '没有可导出的拼图');
@@ -750,7 +781,7 @@ export default function StoryboardTablePanel({
     } finally {
       setGridDownloadBusy(false);
     }
-  }, [gridDownloadBusy, gridExportWidth, gridGroups, onNotify, table.fieldCatalog]);
+  }, [gridDownloadBusy, gridExportWidth, gridGroups, gridOverlayRoleMarks, onNotify, table.fieldCatalog]);
 
   const gridSecondsOptions = useMemo(() => {
     const base = STORYBOARD_GRID_SECONDS_PRESETS.map((sec) => ({
@@ -1069,20 +1100,25 @@ export default function StoryboardTablePanel({
   const patchRow = useCallback(
     (rowId: string, patch: Partial<StoryboardTableRow>) => {
       onPatchAsset((cur) => {
-        const doc = normalizeStoryboardTableDoc(cur.storyboardTable);
+        const doc = cur.storyboardTable;
+        if (!doc?.rows?.length) return cur;
         const titleRaw = readStoryboardTableTitleRaw(cur);
+        const fieldCatalog = doc.fieldCatalog ?? [];
         const rows = doc.rows.map((r) => {
           if (r.id !== rowId) return r;
           if (storyboardRowIsPassed(r) && !canPatchStoryboardPassedRow(patch)) return r;
           if (patch.shotFields) {
             return applyShotFieldsPatch(
               { ...r, ...patch },
-              doc.fieldCatalog,
+              fieldCatalog,
               { ...r.shotFields, ...patch.shotFields }
             );
           }
           const next = { ...r, ...patch };
-          return applyShotFieldsPatch(next, doc.fieldCatalog, next.shotFields);
+          if ('shotNo' in patch && !String(patch.shotNo ?? '').trim()) {
+            next.shotNo = undefined;
+          }
+          return applyShotFieldsPatch(next, fieldCatalog, next.shotFields);
         });
         return {
           ...cur,
@@ -1092,6 +1128,35 @@ export default function StoryboardTablePanel({
       });
     },
     [onPatchAsset]
+  );
+
+  const commitRowShotNo = useCallback(
+    (rowId: string, raw: string) => {
+      if (readOnly) return;
+      const trimmed = raw.trim();
+      const shotNo = trimmed ? normalizeStoryboardShotNoInput(trimmed) : '';
+      onPatchAsset((cur) => {
+        const doc = cur.storyboardTable;
+        if (!doc?.rows?.length) return cur;
+        const titleRaw = readStoryboardTableTitleRaw(cur);
+        const rows = sortStoryboardRowsByShotNo(
+          doc.rows.map((r) => {
+            if (r.id !== rowId) return r;
+            if (storyboardRowIsPassed(r)) return r;
+            return { ...r, shotNo: shotNo || undefined };
+          })
+        );
+        return {
+          ...cur,
+          textTitle: titleRaw,
+          storyboardTable: { ...doc, title: titleRaw, rows },
+        };
+      });
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => navigateToRow(rowId));
+      });
+    },
+    [navigateToRow, onPatchAsset, readOnly]
   );
 
   const patchRoleAssets = useCallback(
@@ -1107,6 +1172,26 @@ export default function StoryboardTablePanel({
             ...doc,
             title: titleRaw,
             roleAssets: nextAssets.length ? nextAssets : undefined,
+          },
+        };
+      });
+    },
+    [onPatchAsset]
+  );
+
+  const patchSceneAssets = useCallback(
+    (mutate: (assets: StoryboardSceneAsset[]) => StoryboardSceneAsset[]) => {
+      onPatchAsset((cur) => {
+        const doc = normalizeStoryboardTableDoc(cur.storyboardTable);
+        const titleRaw = readStoryboardTableTitleRaw(cur);
+        const nextAssets = mutate([...(doc.sceneAssets ?? [])]);
+        return {
+          ...cur,
+          textTitle: titleRaw,
+          storyboardTable: {
+            ...doc,
+            title: titleRaw,
+            sceneAssets: nextAssets.length ? nextAssets : undefined,
           },
         };
       });
@@ -1143,26 +1228,109 @@ export default function StoryboardTablePanel({
       setRoleAssetBusyId(id);
       try {
         const dataUrl = await readStoryboardFrameFromFile(file);
+        const imagePatch = await persistStoryboardNamedAssetImage({
+          dataUrl,
+          tableAssetId: asset.id,
+          namedAssetId: id,
+          kind: 'role',
+          companionBaseUrl,
+          companionProjectId,
+        });
         patchRoleAssets((assets) =>
-          assets.map((item) => (item.id === id ? { ...item, image: dataUrl } : item))
+          assets.map((item) => (item.id === id ? { ...item, ...imagePatch } : item))
         );
+        if (!imagePatch.imageCompanionKey && dataUrl.startsWith('data:')) {
+          onNotify?.(
+            'warn',
+            companionBaseUrl.trim() && companionProjectId.trim()
+              ? '角色图已暂存于浏览器；伴侣写入失败，换设备前请确认云同步'
+              : '角色图已写入分镜表；连接本地伴侣后可落盘，便于跨设备恢复'
+          );
+        }
       } catch (err) {
         onNotify?.('warn', err instanceof Error ? err.message : '图片处理失败');
       } finally {
         setRoleAssetBusyId(null);
       }
     },
-    [onNotify, patchRoleAssets, readOnly]
+    [asset.id, companionBaseUrl, companionProjectId, onNotify, patchRoleAssets, readOnly]
   );
 
   const clearRoleAssetImage = useCallback(
     (id: string) => {
       if (readOnly) return;
       patchRoleAssets((assets) =>
-        assets.map((item) => (item.id === id ? { ...item, image: undefined } : item))
+        assets.map((item) => (item.id === id ? { ...item, ...clearStoryboardNamedAssetImageFields() } : item))
       );
     },
     [patchRoleAssets, readOnly]
+  );
+
+  const addSceneAsset = useCallback(() => {
+    if (readOnly) return;
+    patchSceneAssets((assets) => [...assets, createStoryboardSceneAsset(undefined, assets.length)]);
+  }, [patchSceneAssets, readOnly]);
+
+  const removeSceneAsset = useCallback(
+    (id: string) => {
+      if (readOnly) return;
+      patchSceneAssets((assets) => assets.filter((item) => item.id !== id));
+    },
+    [patchSceneAssets, readOnly]
+  );
+
+  const renameSceneAsset = useCallback(
+    (id: string, name: string) => {
+      if (readOnly) return;
+      patchSceneAssets((assets) =>
+        assets.map((item) => (item.id === id ? { ...item, name } : item))
+      );
+    },
+    [patchSceneAssets, readOnly]
+  );
+
+  const assignSceneAssetImage = useCallback(
+    async (id: string, file: File) => {
+      if (readOnly) return;
+      setSceneAssetBusyId(id);
+      try {
+        const dataUrl = await readStoryboardFrameFromFile(file);
+        const imagePatch = await persistStoryboardNamedAssetImage({
+          dataUrl,
+          tableAssetId: asset.id,
+          namedAssetId: id,
+          kind: 'scene',
+          companionBaseUrl,
+          companionProjectId,
+        });
+        patchSceneAssets((assets) =>
+          assets.map((item) => (item.id === id ? { ...item, ...imagePatch } : item))
+        );
+        if (!imagePatch.imageCompanionKey && dataUrl.startsWith('data:')) {
+          onNotify?.(
+            'warn',
+            companionBaseUrl.trim() && companionProjectId.trim()
+              ? '场景图已暂存于浏览器；伴侣写入失败，换设备前请确认云同步'
+              : '场景图已写入分镜表；连接本地伴侣后可落盘，便于跨设备恢复'
+          );
+        }
+      } catch (err) {
+        onNotify?.('warn', err instanceof Error ? err.message : '图片处理失败');
+      } finally {
+        setSceneAssetBusyId(null);
+      }
+    },
+    [asset.id, companionBaseUrl, companionProjectId, onNotify, patchSceneAssets, readOnly]
+  );
+
+  const clearSceneAssetImage = useCallback(
+    (id: string) => {
+      if (readOnly) return;
+      patchSceneAssets((assets) =>
+        assets.map((item) => (item.id === id ? { ...item, ...clearStoryboardNamedAssetImageFields() } : item))
+      );
+    },
+    [patchSceneAssets, readOnly]
   );
 
   const addFrameRoleMark = useCallback(
@@ -1182,6 +1350,62 @@ export default function StoryboardTablePanel({
       });
     },
     [onNotify, patchRow, readOnly, table.rows]
+  );
+
+  const updateFrameRoleMark = useCallback(
+    (
+      rowId: string,
+      markId: string,
+      patch: { x?: number; y?: number }
+    ) => {
+      if (readOnly) return;
+      const row = table.rows.find((item) => item.id === rowId);
+      if (!row) return;
+      if (storyboardRowIsPassed(row)) return;
+      patchRow(rowId, {
+        frameRoleMarks: updateStoryboardFrameRoleMark(row.frameRoleMarks, markId, patch),
+      });
+    },
+    [patchRow, readOnly, table.rows]
+  );
+
+  const removeFrameRoleMark = useCallback(
+    (rowId: string, markId: string) => {
+      if (readOnly) return;
+      const row = table.rows.find((item) => item.id === rowId);
+      if (!row) return;
+      if (storyboardRowIsPassed(row)) return;
+      patchRow(rowId, {
+        frameRoleMarks: removeStoryboardFrameRoleMark(row.frameRoleMarks, markId),
+      });
+    },
+    [patchRow, readOnly, table.rows]
+  );
+
+  const rebindFrameRoleMark = useCallback(
+    (rowId: string, markId: string, asset: { id: string; name: string }) => {
+      if (readOnly) return;
+      const row = table.rows.find((item) => item.id === rowId);
+      if (!row) return;
+      if (storyboardRowIsPassed(row)) return;
+      patchRow(rowId, {
+        frameRoleMarks: rebindStoryboardFrameRoleMark(row.frameRoleMarks, markId, asset),
+      });
+    },
+    [patchRow, readOnly, table.rows]
+  );
+
+  const setFrameRoleMarkCustomName = useCallback(
+    (rowId: string, markId: string, name: string) => {
+      if (readOnly) return;
+      const row = table.rows.find((item) => item.id === rowId);
+      if (!row) return;
+      if (storyboardRowIsPassed(row)) return;
+      patchRow(rowId, {
+        frameRoleMarks: setStoryboardFrameRoleMarkCustomName(row.frameRoleMarks, markId, name),
+      });
+    },
+    [patchRow, readOnly, table.rows]
   );
 
   const patchRows = useCallback(
@@ -1947,8 +2171,8 @@ export default function StoryboardTablePanel({
   );
 
   const addRow = () => {
-    const row = createStoryboardTableRow({}, table.rows.length);
-    patchTable((rows) => [...rows, row]);
+    const row = createStoryboardTableRow({ shotNo: '' }, 0);
+    patchTable((rows) => sortStoryboardRowsByShotNo([row, ...rows]));
     navigateToRow(row.id);
   };
 
@@ -2379,6 +2603,8 @@ export default function StoryboardTablePanel({
             imageModelRegistryId: effectiveFeedbackCollageModelId,
             understand: feedbackRedrawUnderstand,
             chunkIndex: task.chunkIndex,
+            companionBaseUrl,
+            companionProjectId,
           });
           if (!outcome.ok) {
             failTasks += 1;
@@ -2426,6 +2652,8 @@ export default function StoryboardTablePanel({
   }, [
     activeFeedbackCollagePreset,
     commitSheetVisionSplit,
+    companionBaseUrl,
+    companionProjectId,
     effectiveFeedbackCollageModelId,
     feedbackCollageLimit,
     feedbackRedrawUnderstand,
@@ -2862,6 +3090,7 @@ export default function StoryboardTablePanel({
       allowOptimizeDialogue,
       focusRow: setActiveRowId,
       patchRow,
+      commitRowShotNo,
       moveRow,
       removeRow,
       openFileForRow,
@@ -2894,6 +3123,7 @@ export default function StoryboardTablePanel({
     onRedrawRow,
     openFileForRow,
     patchRow,
+    commitRowShotNo,
     readOnly,
     redrawRowDisabledReason,
     removeRow,
@@ -3215,6 +3445,15 @@ export default function StoryboardTablePanel({
               triggerClassName="h-8 min-w-[7rem] rounded-lg bg-white/[0.04] px-2.5 text-[10px] text-gray-200 ring-1 ring-white/[0.07] hover:bg-white/[0.07]"
               portalZIndex={STORYBOARD_PANEL_DROPDOWN_Z}
             />
+            <label className="inline-flex cursor-pointer items-center gap-1.5 text-[10px] text-gray-500">
+              <input
+                type="checkbox"
+                checked={gridOverlayRoleMarks}
+                onChange={toggleGridOverlayRoleMarks}
+                className="h-3.5 w-3.5 rounded border-white/20 bg-white/5 text-white/80"
+              />
+              叠加人名标签
+            </label>
             <button
               type="button"
               disabled={gridDownloadBusy || !gridGroups.length}
@@ -3243,6 +3482,8 @@ export default function StoryboardTablePanel({
           fieldCatalog={table.fieldCatalog}
           roleAssets={table.roleAssets ?? []}
           roleAssetBusyId={roleAssetBusyId}
+          sceneAssets={table.sceneAssets ?? []}
+          sceneAssetBusyId={sceneAssetBusyId}
           parsePreset={activeParsePreset}
           parseCtx={parseCtx}
           readOnly={readOnly}
@@ -3279,6 +3520,12 @@ export default function StoryboardTablePanel({
           onAssignRoleAssetImage={assignRoleAssetImage}
           onClearRoleAssetImage={clearRoleAssetImage}
           onPreviewRoleAssetImage={openStoryboardLightbox}
+          onAddSceneAsset={addSceneAsset}
+          onRemoveSceneAsset={removeSceneAsset}
+          onRenameSceneAsset={renameSceneAsset}
+          onAssignSceneAssetImage={assignSceneAssetImage}
+          onClearSceneAssetImage={clearSceneAssetImage}
+          onPreviewSceneAssetImage={openStoryboardLightbox}
         />
       ) : isGridView ? (
         <StoryboardTableGridPreview
@@ -3287,6 +3534,8 @@ export default function StoryboardTablePanel({
           secondsPerTile={gridSecondsPerTile}
           timelineLayerCount={timelineLayerCount}
           gridExportWidth={gridExportWidth}
+          overlayRoleMarks={gridOverlayRoleMarks}
+          roleAssets={table.roleAssets ?? []}
           activeRowId={activeRowId}
           onSelect={(rowId) => navigateToRow(rowId)}
           onPreviewImage={openStoryboardLightbox}
@@ -3339,6 +3588,10 @@ export default function StoryboardTablePanel({
           onPatchRows={patchRows}
           onRemoveRows={!readOnly ? removeRows : undefined}
           onAddFrameRoleMark={!readOnly ? addFrameRoleMark : undefined}
+          onUpdateFrameRoleMark={!readOnly ? updateFrameRoleMark : undefined}
+          onRemoveFrameRoleMark={!readOnly ? removeFrameRoleMark : undefined}
+          onRebindFrameRoleMark={!readOnly ? rebindFrameRoleMark : undefined}
+          onSetFrameRoleMarkCustomName={!readOnly ? setFrameRoleMarkCustomName : undefined}
           roleReplaceEligibleCount={roleReplaceEligibleCount}
           roleReplaceBatchBusy={roleReplaceBatchBusy}
           roleReplaceBatchProgress={roleReplaceBatchProgress}

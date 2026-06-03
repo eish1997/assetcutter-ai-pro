@@ -6,7 +6,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import type { CustomAppModule, StoryboardParseFieldDef, StoryboardRoleAsset, StoryboardTableRow } from '../../types';
+import type { CustomAppModule, StoryboardParseFieldDef, StoryboardRoleAsset, StoryboardSceneAsset, StoryboardTableRow } from '../../types';
 import type { CapabilityExecuteContext } from '../../services/capabilityExecutor';
 import { storyboardInputRowDomId } from './storyboardTableDom';
 import StoryboardTableBulkInput, {
@@ -20,6 +20,7 @@ import StoryboardSheetPreviewStrip from './StoryboardSheetPreviewStrip';
 import StoryboardSheetUploadModal from './StoryboardSheetUploadModal';
 import { readStoryboardFrameFromFile } from './storyboardFrameImage';
 import type { StoryboardSheetPreviewItem } from '../../services/storyboardSheetPreview';
+import { resolveStoryboardSceneAssetDisplaySrc } from '../../services/storyboardSceneAssets';
 import {
   STORYBOARD_INPUT_MAIN,
   STORYBOARD_INPUT_MAIN_INNER,
@@ -45,6 +46,8 @@ type Props = {
   fieldCatalog: StoryboardParseFieldDef[];
   roleAssets: StoryboardRoleAsset[];
   roleAssetBusyId?: string | null;
+  sceneAssets: StoryboardSceneAsset[];
+  sceneAssetBusyId?: string | null;
   parsePreset?: CustomAppModule | null;
   parseCtx?: CapabilityExecuteContext;
   readOnly?: boolean;
@@ -100,6 +103,12 @@ type Props = {
   onAssignRoleAssetImage: (id: string, file: File) => void;
   onClearRoleAssetImage: (id: string) => void;
   onPreviewRoleAssetImage?: (src: string) => void;
+  onAddSceneAsset: () => void;
+  onRemoveSceneAsset: (id: string) => void;
+  onRenameSceneAsset: (id: string, name: string) => void;
+  onAssignSceneAssetImage: (id: string, file: File) => void;
+  onClearSceneAssetImage: (id: string) => void;
+  onPreviewSceneAssetImage?: (src: string) => void;
 };
 
 const StoryboardTableInputView = forwardRef<StoryboardTableInputViewHandle, Props>(
@@ -110,6 +119,8 @@ const StoryboardTableInputView = forwardRef<StoryboardTableInputViewHandle, Prop
       fieldCatalog,
       roleAssets,
       roleAssetBusyId = null,
+      sceneAssets,
+      sceneAssetBusyId = null,
       parsePreset,
       parseCtx,
       readOnly = false,
@@ -146,6 +157,12 @@ const StoryboardTableInputView = forwardRef<StoryboardTableInputViewHandle, Prop
       onAssignRoleAssetImage,
       onClearRoleAssetImage,
       onPreviewRoleAssetImage,
+      onAddSceneAsset,
+      onRemoveSceneAsset,
+      onRenameSceneAsset,
+      onAssignSceneAssetImage,
+      onClearSceneAssetImage,
+      onPreviewSceneAssetImage,
     },
     ref
   ) {
@@ -256,24 +273,6 @@ const StoryboardTableInputView = forwardRef<StoryboardTableInputViewHandle, Prop
         ) : null}
         <div className={STORYBOARD_INPUT_MAIN}>
           <div className={STORYBOARD_INPUT_MAIN_INNER}>
-            <div className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-3">
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <span className="text-[10px] font-semibold text-gray-300">角色资产</span>
-                <span className="text-[9px] text-gray-500">{roleAssets.length} 个</span>
-              </div>
-              <StoryboardRoleAssetStrip
-                roleAssets={roleAssets}
-                readOnly={readOnly}
-                busyId={roleAssetBusyId}
-                onAdd={onAddRoleAsset}
-                onRemove={onRemoveRoleAsset}
-                onRename={onRenameRoleAsset}
-                onAssignImage={onAssignRoleAssetImage}
-                onClearImage={onClearRoleAssetImage}
-                onPreviewImage={onPreviewRoleAssetImage}
-              />
-            </div>
-
             <StoryboardTableBulkInput
               ref={bulkInputRef}
               assetId={assetId}
@@ -358,6 +357,46 @@ const StoryboardTableInputView = forwardRef<StoryboardTableInputViewHandle, Prop
               onCancelGen={onCancelSheetGen}
               onCancelGenTask={onCancelSheetGenTask}
             />
+
+            <div className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-3">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <span className="text-[10px] font-semibold text-gray-300">角色资产</span>
+                <span className="text-[9px] text-gray-500">{roleAssets.length} 个</span>
+              </div>
+              <StoryboardRoleAssetStrip
+                assets={roleAssets}
+                readOnly={readOnly}
+                busyId={roleAssetBusyId}
+                onAdd={onAddRoleAsset}
+                onRemove={onRemoveRoleAsset}
+                onRename={onRenameRoleAsset}
+                onAssignImage={onAssignRoleAssetImage}
+                onClearImage={onClearRoleAssetImage}
+                onPreviewImage={onPreviewRoleAssetImage}
+              />
+            </div>
+
+            <div className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-3">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <span className="text-[10px] font-semibold text-gray-300">场景资产</span>
+                <span className="text-[9px] text-gray-500">{sceneAssets.length} 个</span>
+              </div>
+              <StoryboardRoleAssetStrip
+                assets={sceneAssets}
+                readOnly={readOnly}
+                busyId={sceneAssetBusyId}
+                namePlaceholder="场景名"
+                addLabel="添加场景"
+                removeAriaLabel="删除场景"
+                resolveDisplaySrc={resolveStoryboardSceneAssetDisplaySrc}
+                onAdd={onAddSceneAsset}
+                onRemove={onRemoveSceneAsset}
+                onRename={onRenameSceneAsset}
+                onAssignImage={onAssignSceneAssetImage}
+                onClearImage={onClearSceneAssetImage}
+                onPreviewImage={onPreviewSceneAssetImage}
+              />
+            </div>
 
             <StoryboardTableSheetGen
               ref={sheetGenRef}

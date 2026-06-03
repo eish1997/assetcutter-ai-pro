@@ -51,6 +51,22 @@ describe('storyboardRoleReplaceRedraw', () => {
     expect(isStoryboardRoleReplaceEligible({ ...row, frameRoleMarks: [] }, roleAssets)).toBe(false);
   });
 
+  it('detects eligible rows when role asset only has companion key', () => {
+    const companionOnlyAssets: StoryboardRoleAsset[] = [
+      { id: 'r1', name: '张三', imageCompanionKey: 'wf-res/storyboard-role-asset-r1' },
+      { id: 'r2', name: '李四', imageCompanionKey: 'wf-res/storyboard-role-asset-r2' },
+    ];
+    expect(isStoryboardRoleReplaceEligible(row, companionOnlyAssets)).toBe(true);
+  });
+
+  it('detects eligible rows when mark binds roleAssetId without inline name', () => {
+    const marksOnlyById = {
+      ...row,
+      frameRoleMarks: [{ id: 'm1', name: '', x: 0.2, y: 0.4, roleAssetId: 'r1' }],
+    };
+    expect(isStoryboardRoleReplaceEligible(marksOnlyById, roleAssets)).toBe(true);
+  });
+
   it('builds replace prompt with reference indices', async () => {
     const planned = await planStoryboardRoleReplace(row, roleAssets, 'data:image/jpeg;base64,frame');
     expect(planned.ok).toBe(true);

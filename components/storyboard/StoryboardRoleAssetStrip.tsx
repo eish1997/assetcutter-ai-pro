@@ -1,5 +1,4 @@
 import React, { useRef } from 'react';
-import type { StoryboardRoleAsset } from '../../types';
 import { resolveStoryboardRoleAssetDisplaySrc } from '../../services/storyboardRoleAssets';
 import AppIcon from '../ui/AppIcon';
 import {
@@ -8,9 +7,13 @@ import {
 } from './storyboardTableUi';
 
 type Props = {
-  roleAssets: StoryboardRoleAsset[];
+  assets: Array<{ id: string; name: string; image?: string }>;
   readOnly?: boolean;
   busyId?: string | null;
+  namePlaceholder?: string;
+  addLabel?: string;
+  removeAriaLabel?: string;
+  resolveDisplaySrc?: (asset: { id: string; name: string; image?: string }) => string;
   onAdd: () => void;
   onRemove: (id: string) => void;
   onRename: (id: string, name: string) => void;
@@ -20,9 +23,13 @@ type Props = {
 };
 
 export default function StoryboardRoleAssetStrip({
-  roleAssets,
+  assets,
   readOnly = false,
   busyId = null,
+  namePlaceholder = '角色名',
+  addLabel = '添加角色',
+  removeAriaLabel = '删除角色',
+  resolveDisplaySrc = resolveStoryboardRoleAssetDisplaySrc,
   onAdd,
   onRemove,
   onRename,
@@ -58,8 +65,8 @@ export default function StoryboardRoleAssetStrip({
         onChange={onFilePicked}
       />
       <div className={`flex items-start ${STORYBOARD_GAP_TIGHT} overflow-x-auto pb-0.5 no-scrollbar`}>
-        {roleAssets.map((asset) => {
-          const img = resolveStoryboardRoleAssetDisplaySrc(asset);
+        {assets.map((asset) => {
+          const img = resolveDisplaySrc(asset);
           const busy = busyId === asset.id;
           return (
             <div key={asset.id} className="flex w-[4.75rem] shrink-0 flex-col gap-1">
@@ -94,10 +101,10 @@ export default function StoryboardRoleAssetStrip({
                     压缩中…
                   </div>
                 ) : null}
-                {!readOnly && roleAssets.length > 1 ? (
+                {!readOnly && assets.length > 1 ? (
                   <button
                     type="button"
-                    aria-label="删除角色"
+                    aria-label={removeAriaLabel}
                     onClick={() => onRemove(asset.id)}
                     className="absolute right-0.5 top-0.5 rounded-md bg-black/55 p-0.5 text-gray-300 opacity-0 transition-opacity hover:text-white group-hover:opacity-100"
                   >
@@ -119,7 +126,7 @@ export default function StoryboardRoleAssetStrip({
                 value={asset.name}
                 readOnly={readOnly}
                 onChange={(event) => onRename(asset.id, event.target.value)}
-                placeholder="角色名"
+                placeholder={namePlaceholder}
                 className={`${STORYBOARD_FIELD_INPUT} h-7 px-1.5 text-center text-[9px]`}
               />
             </div>
@@ -132,7 +139,7 @@ export default function StoryboardRoleAssetStrip({
             className="flex h-[4.75rem] w-[4.75rem] shrink-0 flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-white/[0.12] bg-white/[0.02] text-[9px] text-gray-500 transition-colors hover:border-white/25 hover:bg-white/[0.04] hover:text-gray-300"
           >
             <span className="text-base leading-none text-white/60">+</span>
-            <span>添加角色</span>
+            <span>{addLabel}</span>
           </button>
         ) : null}
       </div>

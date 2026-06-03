@@ -12,12 +12,20 @@ export const STORYBOARD_SHEET_SKETCH_TEXT_MUTED = 'rgba(100,100,108,0.75)';
 export const STORYBOARD_SHEET_SKETCH_FONT_STACK =
   '"Ma Shan Zheng", "KaiTi", "STKaiti", "FangSong", "Segoe Print", "Bradley Hand", cursive';
 
+/** 镜号/时长顶栏：黑体，与正文手写字体区分 */
+export const STORYBOARD_SHEET_HEADER_FONT_STACK =
+  '"SimHei", "Heiti SC", "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif';
+
 const SKETCH_FONT_LINK_ID = 'storyboard-sheet-sketch-font';
 
 let sketchFontLoadPromise: Promise<void> | null = null;
 
 export function storyboardSheetCanvasFont(weight: 400 | 500 | 600, sizePx: number): string {
   return `${weight} ${sizePx}px ${STORYBOARD_SHEET_SKETCH_FONT_STACK}`;
+}
+
+export function storyboardSheetCanvasHeaderFont(sizePx: number): string {
+  return `700 ${sizePx}px ${STORYBOARD_SHEET_HEADER_FONT_STACK}`;
 }
 
 /** Canvas 绘制前加载手写字体（Google Fonts，失败则回退 KaiTi 等系统字体） */
@@ -66,4 +74,9 @@ export const storyboardSheetSketchDomStyle = {
   fontFamily: STORYBOARD_SHEET_SKETCH_FONT_STACK,
   backgroundColor: STORYBOARD_SHEET_SKETCH_BG,
   color: STORYBOARD_SHEET_SKETCH_TEXT_BODY,
+} as const;
+
+export const storyboardSheetHeaderDomStyle = {
+  fontFamily: STORYBOARD_SHEET_HEADER_FONT_STACK,
+  fontWeight: 700,
 } as const;

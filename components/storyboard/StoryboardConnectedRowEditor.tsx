@@ -57,6 +57,7 @@ function StoryboardConnectedRowEditorInner({
       imageBusy={imageBusy}
       onFocusRow={() => ctx.focusRow(row.id)}
       onPatch={(patch) => ctx.patchRow(row.id, patch)}
+      onCommitShotNo={!ctx.readOnly ? (raw) => ctx.commitRowShotNo(row.id, raw) : undefined}
       onMove={(dir) => ctx.moveRow(row.id, dir)}
       onRemove={() => ctx.removeRow(row.id)}
       onPickImage={() => ctx.openFileForRow(row.id)}
@@ -123,7 +124,8 @@ function rowEditorPropsEqual(prev: Props, next: Props): boolean {
       storyboardFrameHistorySignature(b.frameImageHistory) &&
     a.locked === b.locked &&
     (a.timelineLayer ?? 0) === (b.timelineLayer ?? 0) &&
-    (a.editFeedback ?? '') === (b.editFeedback ?? '')
+    (a.editFeedback ?? '') === (b.editFeedback ?? '') &&
+    a.frameRoleMarks === b.frameRoleMarks
   );
 }
 

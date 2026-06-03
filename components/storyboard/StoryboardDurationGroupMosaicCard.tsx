@@ -1,5 +1,5 @@
 import React, { memo, useCallback, useMemo, useRef, useState } from 'react';
-import type { StoryboardParseFieldDef } from '../../types';
+import type { StoryboardParseFieldDef, StoryboardRoleAsset } from '../../types';
 import type { StoryboardDurationGroup } from '../../services/storyboardGridDurationGroups';
 import { renderStoryboardGroupMosaicPreview } from '../../services/storyboardGridMosaicPreview';
 import { computeStoryboardMosaicGrid } from '../../services/storyboardFrameStripMerge';
@@ -13,6 +13,8 @@ type Props = {
   fieldCatalog: StoryboardParseFieldDef[];
   activeRowId: string | null;
   previewWidth: number;
+  overlayRoleMarks?: boolean;
+  roleAssets?: StoryboardRoleAsset[];
   onSelectRow: (rowId: string) => void;
   onPreviewImage: (src: string) => void;
   onPreviewMosaicError?: (message: string) => void;
@@ -24,6 +26,8 @@ function StoryboardDurationGroupMosaicCard({
   fieldCatalog,
   activeRowId,
   previewWidth,
+  overlayRoleMarks = false,
+  roleAssets = [],
   onSelectRow,
   onPreviewImage,
   onPreviewMosaicError,
@@ -50,7 +54,8 @@ function StoryboardDurationGroupMosaicCard({
       const dataUrl = await renderStoryboardGroupMosaicPreview(
         group,
         fieldCatalog,
-        previewWidth
+        previewWidth,
+        overlayRoleMarks
       );
       if (dataUrl) {
         onPreviewImage(dataUrl);
@@ -63,7 +68,7 @@ function StoryboardDurationGroupMosaicCard({
       previewBusyRef.current = false;
       setPreviewBusy(false);
     }
-  }, [fieldCatalog, group, onPreviewImage, onPreviewMosaicError, previewWidth]);
+  }, [fieldCatalog, group, onPreviewImage, onPreviewMosaicError, overlayRoleMarks, previewWidth]);
 
   return (
     <article
@@ -132,6 +137,8 @@ function StoryboardDurationGroupMosaicCard({
             fieldCatalog={fieldCatalog}
             active={activeRowId === row.id}
             compact
+            overlayRoleMarks={overlayRoleMarks}
+            roleAssets={roleAssets}
             onSelect={() => onSelectRow(row.id)}
             onPreviewImage={onPreviewImage}
           />
@@ -142,7 +149,11 @@ function StoryboardDurationGroupMosaicCard({
 }
 
 function mosaicCardPropsEqual(prev: Props, next: Props): boolean {
-  if (prev.activeRowId !== next.activeRowId || prev.previewWidth !== next.previewWidth) {
+  if (
+    prev.activeRowId !== next.activeRowId ||
+    prev.previewWidth !== next.previewWidth ||
+    prev.overlayRoleMarks !== next.overlayRoleMarks
+  ) {
     return false;
   }
   if (prev.group.id !== next.group.id) return false;

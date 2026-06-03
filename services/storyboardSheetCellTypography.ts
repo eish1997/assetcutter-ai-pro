@@ -3,7 +3,18 @@ import {
   STORYBOARD_SHEET_SKETCH_TEXT_DIALOGUE,
   STORYBOARD_SHEET_SKETCH_TEXT_HEADER,
   storyboardSheetCanvasFont,
+  storyboardSheetCanvasHeaderFont,
 } from './storyboardSheetSketchStyle';
+
+export function resolveStoryboardSheetHeaderSize(
+  bodySize: number,
+  maxHeader?: number,
+  minHeader = 10
+): number {
+  const target = Math.max(bodySize + 2, Math.round(bodySize * 1.18));
+  const clamped = Math.max(minHeader, target);
+  return maxHeader != null ? Math.min(maxHeader, clamped) : clamped;
+}
 
 export type SheetCellTextMeta = {
   headerLine: string;
@@ -182,7 +193,7 @@ export function measureSheetCellTextBlock(
   const innerW = cellW - plan.pad * 2;
   const headerText = resolveSheetPanelHeaderText(meta, headerFallback);
 
-  ctx.font = storyboardSheetCanvasFont(500, plan.headerSize);
+  ctx.font = storyboardSheetCanvasHeaderFont(plan.headerSize);
   const headerLineH = Math.round(plan.headerSize * 1.05);
   const headerLines = wrapSheetCanvasTextLines(ctx, headerText, innerW);
   const headerBlockH = headerLines.length * headerLineH + plan.pad;
@@ -293,7 +304,7 @@ export function planStoryboardSheetGroupTypographyUnbounded(
     bodySize = Math.round(bounds.maxBody * Math.max(0.88, shrink));
   }
   bodySize = Math.max(bounds.minBody, Math.min(bounds.maxBody, bodySize));
-  const headerSize = Math.min(bounds.maxHeader, Math.max(bodySize + 1, bounds.minHeader));
+  const headerSize = resolveStoryboardSheetHeaderSize(bodySize, bounds.maxHeader, bounds.minHeader);
   return buildTypographyFromSizes(bounds, headerSize, bodySize, anyDialogue);
 }
 
@@ -312,7 +323,7 @@ export function planStoryboardSheetGroupTypography(
   }
 
   for (let bodySize = bounds.maxBody; bodySize >= bounds.minBody; bodySize -= 1) {
-    const headerSize = Math.min(bounds.maxHeader, bodySize + 1);
+    const headerSize = resolveStoryboardSheetHeaderSize(bodySize, bounds.maxHeader, bounds.minHeader);
     const plan = buildTypographyFromSizes(bounds, headerSize, bodySize, anyDialogue);
     const allFit = metas.every((meta) => metaFitsInCell(ctx, meta, plan, layout.cellW, layout.cellH, minImageH));
     if (allFit) return plan;
@@ -343,9 +354,10 @@ export function resolveStoryboardSheetGroupFontSize(
     }
   }
   const sizes = metas.map((meta) => resolveStoryboardSheetCellFontSize(meta, canvasWidth));
+  const fontSizePx = Math.min(...sizes.map((s) => s.fontSizePx));
   return {
-    fontSizePx: Math.min(...sizes.map((s) => s.fontSizePx)),
-    headerSizePx: Math.min(...sizes.map((s) => s.fontSizePx)) + 1,
+    fontSizePx,
+    headerSizePx: resolveStoryboardSheetHeaderSize(fontSizePx),
     anyDialogue: sizes.some((s) => s.showDialogue),
   };
 }
@@ -407,7 +419,7 @@ export function drawPlannedSheetCellText(
   const headerText = resolveSheetPanelHeaderText(meta, headerFallback);
   const headerLineH = Math.round(plan.headerSize * 1.05);
 
-  ctx.font = storyboardSheetCanvasFont(500, plan.headerSize);
+  ctx.font = storyboardSheetCanvasHeaderFont(plan.headerSize);
   ctx.fillStyle = STORYBOARD_SHEET_SKETCH_TEXT_HEADER;
   const headerLines = wrapSheetCanvasTextLines(ctx, headerText, innerW);
   let hy = y + plan.pad;

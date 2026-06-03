@@ -14,9 +14,10 @@ const MOSAIC_PREVIEW_LAYOUT_VERSION = 9;
 export async function renderStoryboardGroupMosaicPreview(
   group: StoryboardDurationGroup,
   fieldCatalog: StoryboardParseFieldDef[],
-  previewWidth: number
+  previewWidth: number,
+  overlayRoleMarks = false
 ): Promise<string | null> {
-  const cacheKey = `${MOSAIC_PREVIEW_LAYOUT_VERSION}:${storyboardGroupMosaicExportCacheKey(group, fieldCatalog, previewWidth)}`;
+  const cacheKey = `${MOSAIC_PREVIEW_LAYOUT_VERSION}:${storyboardGroupMosaicExportCacheKey(group, fieldCatalog, previewWidth, overlayRoleMarks)}`;
   const cached = previewCache.get(cacheKey);
   if (cached) return cached;
 
@@ -24,6 +25,7 @@ export async function renderStoryboardGroupMosaicPreview(
   const dataUrl = await renderStoryboardGroupMosaicDataUrl(group, fieldCatalog, {
     width,
     jpegQuality: 0.9,
+    overlayRoleMarks,
   });
   if (dataUrl) {
     if (previewCache.size >= PREVIEW_CACHE_MAX) {

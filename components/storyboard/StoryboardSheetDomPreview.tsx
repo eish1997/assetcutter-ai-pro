@@ -9,9 +9,12 @@ import { rowHasStructuredFieldValues } from '../../services/storyboardTableParse
 import { compileSheetShotPanelMeta } from '../../services/storyboardTableSheetGen';
 import {
   resolveStoryboardSheetGroupFontSize,
+  resolveStoryboardSheetHeaderSize,
 } from '../../services/storyboardSheetCellTypography';
 import {
   ensureStoryboardSheetSketchFontLoaded,
+  STORYBOARD_SHEET_SKETCH_TEXT_HEADER,
+  storyboardSheetHeaderDomStyle,
   storyboardSheetSketchDomStyle,
 } from '../../services/storyboardSheetSketchStyle';
 import { storyboardRowOutlineTitle } from './storyboardRowDisplay';
@@ -25,6 +28,7 @@ import {
 
 type GroupTypography = {
   fontSizePx: number;
+  headerSizePx?: number;
 };
 
 export function StoryboardSheetDomCell({
@@ -48,6 +52,8 @@ export function StoryboardSheetDomCell({
   const { compactLayout } = meta;
   const img = resolveStoryboardRowFrameDisplaySrc(row);
   const interactive = Boolean(onSelect);
+  const headerSizePx =
+    groupTypography.headerSizePx ?? resolveStoryboardSheetHeaderSize(groupTypography.fontSizePx);
 
   return (
     <div
@@ -71,8 +77,12 @@ export function StoryboardSheetDomCell({
       style={{ ...storyboardSheetSketchDomStyle, fontSize: `${groupTypography.fontSizePx}px` }}
     >
       <div
-        className="shrink-0 px-1 py-0.5 text-[0.95em] leading-tight break-words"
-        style={{ color: 'rgba(35,35,42,0.88)' }}
+        className="shrink-0 px-1 py-0.5 leading-tight break-words"
+        style={{
+          ...storyboardSheetHeaderDomStyle,
+          fontSize: `${headerSizePx}px`,
+          color: STORYBOARD_SHEET_SKETCH_TEXT_HEADER,
+        }}
         title={compactLayout.headerLine}
       >
         {compactLayout.headerLine || row.shotNo || `#${row.index + 1}`}
@@ -181,7 +191,7 @@ export function StoryboardInputCompositePreview({
   );
 
   const largeTypography = useMemo(() => {
-    if (!activeRow) return { fontSizePx: 11 };
+    if (!activeRow) return { fontSizePx: 11, headerSizePx: resolveStoryboardSheetHeaderSize(11) };
     const meta = compileSheetShotPanelMeta(activeRow, fieldCatalog);
     return resolveStoryboardSheetGroupFontSize([meta], 960, 240);
   }, [activeRow, fieldCatalog]);

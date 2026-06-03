@@ -30,6 +30,7 @@ export type StoryboardGroupMosaicRenderOpts = {
   /** @deprecated 高度随内容自适应；传入值将被忽略 */
   height?: number;
   jpegQuality?: number;
+  overlayRoleMarks?: boolean;
 };
 
 function computeMosaicRowHeights(cellHeights: number[], cols: number, gridRows: number): number[] {
@@ -116,6 +117,7 @@ export async function renderStoryboardGroupMosaicDataUrl(
         imageFit: 'width',
         typographyPlan: groupTypography,
         variableHeight: true,
+        overlayRoleMarks: opts.overlayRoleMarks,
       });
     }
     y += rowH + gap;
@@ -131,12 +133,14 @@ export async function renderStoryboardGroupMosaicDataUrl(
 export async function renderStoryboardGroupMosaicBlob(
   group: StoryboardDurationGroup,
   fieldCatalog: StoryboardParseFieldDef[],
-  exportWidth: number
+  exportWidth: number,
+  overlayRoleMarks = false
 ): Promise<Blob | null> {
   const width = Math.max(960, Math.round(exportWidth));
   const dataUrl = await renderStoryboardGroupMosaicDataUrl(group, fieldCatalog, {
     width,
     jpegQuality: 0.92,
+    overlayRoleMarks,
   });
   if (!dataUrl) return null;
   const res = await fetch(dataUrl);
@@ -163,9 +167,10 @@ export function mergeStoryboardGroupPreviewDataUrl(
 export function storyboardGroupMosaicExportCacheKey(
   group: StoryboardDurationGroup,
   fieldCatalog: StoryboardParseFieldDef[],
-  exportWidth: number
+  exportWidth: number,
+  overlayRoleMarks = false
 ): string {
-  return `${storyboardDurationGroupMergeSignature(group, fieldCatalog)}@${exportWidth}`;
+  return `${storyboardDurationGroupMergeSignature(group, fieldCatalog)}@${exportWidth}@marks${overlayRoleMarks ? 1 : 0}`;
 }
 
 export function clearStoryboardStripMergeCaches(): void {

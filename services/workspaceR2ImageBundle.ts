@@ -1,4 +1,5 @@
-import type { WorkflowAsset, WorkflowCutGroupItem, WorkflowPendingTask } from '../types';
+import type { StoryboardRoleAsset, StoryboardSceneAsset, WorkflowAsset, WorkflowCutGroupItem, WorkflowPendingTask } from '../types';
+import type { StoryboardNamedAssetImageFields } from './storyboardNamedAssetImage';
 import { isWorkflowStoryboardTableAsset } from './storyboardTableAsset';
 import { r2ApiUrl } from './apiBase';
 import { requestJson } from './httpClient';
@@ -311,6 +312,14 @@ export function collectReferencedObjectKeysFromPackedV2(packed: { assets: Workfl
           if (histKey) keys.add(histKey);
         }
       }
+      for (const item of a.storyboardTable.roleAssets ?? []) {
+        const rk = String(item.imageObjectKey || '').trim();
+        if (rk) keys.add(rk);
+      }
+      for (const item of a.storyboardTable.sceneAssets ?? []) {
+        const rk = String(item.imageObjectKey || '').trim();
+        if (rk) keys.add(rk);
+      }
     }
   }
   for (const t of packed.pending) {
@@ -335,6 +344,57 @@ export type PackWorkflowBundleForCloudOptions = {
    */
   companionHydrate?: { baseUrl: string; projectId: string };
 };
+
+async function packStoryboardNamedAssetsForCloud<T extends StoryboardNamedAssetImageFields & { id: string }>(
+  items: T[] | undefined,
+  pathPrefix: string,
+  packOpts: PackWorkflowBundleForCloudOptions | undefined,
+  dataUrlToKey: Map<string, string>,
+  contentHashToKey: Map<string, string>,
+  userId: string,
+  username?: string | null
+): Promise<T[] | undefined> {
+  if (!items?.length) return items;
+  return mapLimit(items, CLOUD_PACK_UPLOAD_CONCURRENCY, async (item) => {
+    let img = String(item.image || '').trim();
+    const companionKey = String(item.imageCompanionKey || '').trim();
+    if (
+      !img &&
+      companionKey &&
+      packOpts?.companionHydrate?.baseUrl?.trim() &&
+      packOpts.companionHydrate.projectId.trim()
+    ) {
+      const fromDisk = await fetchCompanionAssetAsDataUrl(
+        packOpts.companionHydrate.baseUrl,
+        packOpts.companionHydrate.projectId,
+        companionKey
+      );
+      if (fromDisk) img = fromDisk;
+    }
+    if (img && !isLikelyHttpImageUrl(img) && !item.imageObjectKey?.trim()) {
+      const key = await uploadDataUrlDeduped(
+        dataUrlToKey,
+        contentHashToKey,
+        img,
+        userId,
+        username,
+        (p) => `${pathPrefix}/${sanitizeSegment(item.id)}.${mimeToExt(p.mime)}`
+      );
+      if (key) {
+        return {
+          ...item,
+          image: '',
+          imageObjectKey: key,
+          imageCompanionKey: undefined,
+        };
+      }
+    }
+    if (item.imageObjectKey?.trim()) {
+      return { ...item, image: '' };
+    }
+    return item;
+  });
+}
 
 export async function packWorkflowBundleForCloud(
   userId: string,
@@ -458,8 +518,8 @@ export async function packWorkflowBundleForCloud(
       a.cutImageGroup = nextGroup;
     }
 
-    if (isWorkflowStoryboardTableAsset(a) && a.storyboardTable?.rows?.length) {
-      const rows = await mapLimit(a.storyboardTable.rows, CLOUD_PACK_UPLOAD_CONCURRENCY, async (row) => {
+    if (isWorkflowStoryboardTableAsset(a) && a.storyboardTable) {
+      const rows = await mapLimit(a.storyboardTable.rows ?? [], CLOUD_PACK_UPLOAD_CONCURRENCY, async (row) => {
         let nextRow: typeof row = { ...row };
         let img = String(row.frameImage || '').trim();
         const companionKey = String(row.frameImageCompanionKey || '').trim();
@@ -540,7 +600,30 @@ export async function packWorkflowBundleForCloud(
         );
         return { ...nextRow, frameImageHistory: nextHistory };
       });
-      a.storyboardTable = { ...a.storyboardTable, rows };
+      const roleAssets = await packStoryboardNamedAssetsForCloud<StoryboardRoleAsset>(
+        a.storyboardTable.roleAssets,
+        `${base}/storyboard/role-asset`,
+        packOpts,
+        dataUrlToKey,
+        contentHashToKey,
+        userId,
+        username
+      );
+      const sceneAssets = await packStoryboardNamedAssetsForCloud<StoryboardSceneAsset>(
+        a.storyboardTable.sceneAssets,
+        `${base}/storyboard/scene-asset`,
+        packOpts,
+        dataUrlToKey,
+        contentHashToKey,
+        userId,
+        username
+      );
+      a.storyboardTable = {
+        ...a.storyboardTable,
+        rows,
+        ...(roleAssets?.length ? { roleAssets } : {}),
+        ...(sceneAssets?.length ? { sceneAssets } : {}),
+      };
     }
   });
 
@@ -688,8 +771,8 @@ export async function hydrateWorkflowBundleFromCloud(
         }
       }
     }
-    if (isWorkflowStoryboardTableAsset(a) && a.storyboardTable?.rows?.length) {
-      for (const row of a.storyboardTable.rows) {
+    if (isWorkflowStoryboardTableAsset(a) && a.storyboardTable) {
+      for (const row of a.storyboardTable.rows ?? []) {
         const objectKey = String(row.frameImageObjectKey || '').trim();
         if (objectKey && !String(row.frameImage || '').trim()) {
           const rowId = row.id;
@@ -718,6 +801,30 @@ export async function hydrateWorkflowBundleFromCloud(
                 ),
               };
             });
+          });
+        }
+      }
+      for (const item of a.storyboardTable.roleAssets ?? []) {
+        const objectKey = String(item.imageObjectKey || '').trim();
+        if (objectKey && !String(item.image || '').trim()) {
+          const namedAssetId = item.id;
+          schedule(objectKey, (u) => {
+            if (!a.storyboardTable?.roleAssets?.length) return;
+            a.storyboardTable.roleAssets = a.storyboardTable.roleAssets.map((entry) =>
+              entry.id === namedAssetId ? { ...entry, image: u } : entry
+            );
+          });
+        }
+      }
+      for (const item of a.storyboardTable.sceneAssets ?? []) {
+        const objectKey = String(item.imageObjectKey || '').trim();
+        if (objectKey && !String(item.image || '').trim()) {
+          const namedAssetId = item.id;
+          schedule(objectKey, (u) => {
+            if (!a.storyboardTable?.sceneAssets?.length) return;
+            a.storyboardTable.sceneAssets = a.storyboardTable.sceneAssets.map((entry) =>
+              entry.id === namedAssetId ? { ...entry, image: u } : entry
+            );
           });
         }
       }

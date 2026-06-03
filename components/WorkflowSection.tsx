@@ -215,12 +215,16 @@ import { compressStoryboardFrameDataUrl } from './storyboard/storyboardFrameImag
 import {
   applyStoryboardFrameCompanionHydrateResults,
   applyStoryboardFrameHistoryCompanionHydrateResults,
+  applyStoryboardNamedAssetCompanionHydrateResults,
   buildStoryboardFrameCompanionHydrateKey,
   buildStoryboardFrameHistoryCompanionHydrateKey,
+  buildStoryboardNamedAssetCompanionHydrateKey,
   hydrateStoryboardFrameCompanionTasks,
   hydrateStoryboardFrameHistoryCompanionTasks,
+  hydrateStoryboardNamedAssetCompanionTasks,
   listStoryboardFrameCompanionHydrateTasks,
   listStoryboardFrameHistoryCompanionHydrateTasks,
+  listStoryboardNamedAssetCompanionHydrateTasks,
   revokeStoryboardFrameCompanionHydrateUrls,
 } from '../services/storyboardFrameCompanion';
 import {
@@ -583,6 +587,8 @@ const WorkflowSection: React.FC<{
   capabilitySets?: CapabilitySet[];
   assets: WorkflowAsset[];
   onAssetsChange: (value: React.SetStateAction<WorkflowAsset[]>) => void;
+  /** 用户显式删除分镜表资产时通知 App，以便 autosave 允许移除 */
+  onStoryboardTableAssetRemoved?: (assetId: string) => void;
   pending: WorkflowPendingTask[];
   onPendingChange: (value: React.SetStateAction<WorkflowPendingTask[]>) => void;
   onLog?: (level: 'info' | 'warn' | 'error', message: string, detail?: string) => void;
@@ -632,6 +638,7 @@ const WorkflowSection: React.FC<{
   capabilitySets: capabilitySetsProp = [],
   assets: assetsProp,
   onAssetsChange: setAssets,
+  onStoryboardTableAssetRemoved,
   pending: pendingProp,
   onPendingChange: setPending,
   onLog,
@@ -1787,6 +1794,11 @@ const WorkflowSection: React.FC<{
     [assets]
   );
 
+  const companionStoryboardNamedAssetHydrateKey = useMemo(
+    () => buildStoryboardNamedAssetCompanionHydrateKey(assets),
+    [assets]
+  );
+
   const companionModelHydrateKey = useMemo(() => {
     const parts: string[] = [];
     for (const a of assets) {
@@ -1960,6 +1972,38 @@ const WorkflowSection: React.FC<{
       cancelled = true;
     };
   }, [companionStoryboardFrameHistoryHydrateKey, workspaceProjectChrome?.activeProjectId, setAssets]);
+
+  useEffect(() => {
+    const projectId = String(workspaceProjectChrome?.activeProjectId || '').trim();
+    const base = String(getCompanionLocalBaseUrl() || '').trim();
+    if (!companionStoryboardNamedAssetHydrateKey || !projectId || !base) return;
+    let cancelled = false;
+    void (async () => {
+      const tasks = listStoryboardNamedAssetCompanionHydrateTasks(assetsRef.current);
+      const { hydrated, failures } = await hydrateStoryboardNamedAssetCompanionTasks(
+        tasks,
+        base,
+        projectId
+      );
+      if (cancelled) {
+        revokeStoryboardFrameCompanionHydrateUrls(hydrated);
+        return;
+      }
+      for (const failure of failures) {
+        const task = failure.task;
+        onLogRef.current?.(
+          'warn',
+          '角色/场景资产图伴侣恢复失败',
+          `${task.tableAssetId}/${task.kind}/${task.namedAssetId}: ${failure.error}`
+        );
+      }
+      if (!hydrated.length) return;
+      setAssets((prev) => applyStoryboardNamedAssetCompanionHydrateResults(prev, hydrated));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [companionStoryboardNamedAssetHydrateKey, workspaceProjectChrome?.activeProjectId, setAssets]);
 
   useEffect(() => {
     const projectId = String(workspaceProjectChrome?.activeProjectId || '').trim();
@@ -6209,7 +6253,12 @@ ${lineSvg}
     setAssets((prev) => {
       const removed = prev.find((a) => a.id === assetId);
       const next = prev.filter((a) => a.id !== assetId);
-      if (removed) revokeWorkflowModelBlobUrlsAfterAssetRemoved(removed, next);
+      if (removed) {
+        if (isWorkflowStoryboardTableAsset(removed)) {
+          onStoryboardTableAssetRemoved?.(assetId);
+        }
+        revokeWorkflowModelBlobUrlsAfterAssetRemoved(removed, next);
+      }
       return next;
     });
     setPending((prev) => prev.filter((t) => t.assetId !== assetId));
@@ -6218,7 +6267,7 @@ ${lineSvg}
     if (storyboardPanelAssetId === assetId) setStoryboardPanelAssetId(null);
     // 如果删除的是当前查看的组，清除组筛选
     if (groupFilterId === assetId) setGroupFilterId(null);
-  }, [lightboxAssetId, archivedDetailAssetId, groupFilterId, storyboardPanelAssetId, setAssets, setPending]);
+  }, [lightboxAssetId, archivedDetailAssetId, groupFilterId, storyboardPanelAssetId, onStoryboardTableAssetRemoved, setAssets, setPending]);
 
   const archivedDetailAsset = archivedDetailAssetId ? assets.find((a) => a.id === archivedDetailAssetId) : null;
 

@@ -345,4 +345,27 @@ describe('mergeWorkflowProjectBundles', () => {
     expect(row?.shotRaw).toContain('本地文本');
     expect(row?.frameImageCompanionKey).toBe('remote-frame-key');
   });
+
+  it('keeps local-only storyboard assets when remote bundle lacks them', () => {
+    const base: WorkflowProjectBundle = {
+      assets: [
+        baseAsset('img-1', { original: 'local-img' }),
+        baseAsset('sb-local', {
+          assetKind: 'storyboard_table',
+          storyboardTable: {
+            fieldCatalog: [],
+            rows: [createStoryboardTableRow({ id: 'row-1', shotNo: '001' }, 0)],
+          },
+        }),
+      ],
+      pending: [],
+    };
+    const other: WorkflowProjectBundle = {
+      assets: [baseAsset('img-1', { original: 'remote-img' })],
+      pending: [],
+    };
+    const { merged } = mergeWorkflowProjectBundles(base, other, { sameKey: { kind: 'prefer-base' } });
+    expect(merged.assets.map((a) => a.id).sort()).toEqual(['img-1', 'sb-local']);
+    expect(merged.assets.find((a) => a.id === 'sb-local')?.storyboardTable?.rows).toHaveLength(1);
+  });
 });

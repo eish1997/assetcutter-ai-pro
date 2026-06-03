@@ -5,6 +5,7 @@ import { normalizeCompanionBaseUrl } from './companionLocalPrefs';
 import { mapSiteR2PathToFetchUrl, resolveCapabilityPreviewSrc } from './capabilityPreviewUrl';
 import { isWorkflowTextAsset } from './workflowTextAsset';
 import { isWorkflowStoryboardTableAsset } from './storyboardTableAsset';
+import type { StoryboardNamedAssetImageFields } from './storyboardNamedAssetImage';
 import { workflowModelSlotMayNeedCompanionHydrate, isWorkflowModelUrlReadable } from './workflowModelBlob';
 
 export function sanitizeCompanionPathSegment(s: string): string {
@@ -429,9 +430,9 @@ export function stripWorkflowBundleForIdbPersist(bundle: WorkflowProjectBundle):
       }
       if (touchedS) a.stepModelUrls = nextStepUrls;
     }
-    if (isWorkflowStoryboardTableAsset(a) && a.storyboardTable?.rows?.length) {
+    if (isWorkflowStoryboardTableAsset(a) && a.storyboardTable) {
       let touchedSb = false;
-      const rows = a.storyboardTable.rows.map((row) => {
+      const rows = (a.storyboardTable.rows ?? []).map((row) => {
         let nextRow = row;
         const ck = String(row.frameImageCompanionKey || '').trim();
         if (ck) {
@@ -469,6 +470,36 @@ export function stripWorkflowBundleForIdbPersist(bundle: WorkflowProjectBundle):
         }
         return nextRow;
       });
+      const stripNamedAssetInline = <T extends StoryboardNamedAssetImageFields>(
+        items: T[] | undefined
+      ): T[] | undefined => {
+        if (!items?.length) return items;
+        let touchedNamed = false;
+        const nextItems = items.map((item) => {
+          const ck = String(item.imageCompanionKey || '').trim();
+          if (!ck) return item;
+          const cur = String(item.image || '').trim();
+          if (cur && shouldStripResultUrlForPersist(cur)) {
+            touchedNamed = true;
+            return { ...item, image: '' };
+          }
+          return item;
+        });
+        return touchedNamed ? nextItems : items;
+      };
+      const nextRoleAssets = stripNamedAssetInline(a.storyboardTable.roleAssets);
+      const nextSceneAssets = stripNamedAssetInline(a.storyboardTable.sceneAssets);
+      if (
+        nextRoleAssets !== a.storyboardTable.roleAssets ||
+        nextSceneAssets !== a.storyboardTable.sceneAssets
+      ) {
+        touchedSb = true;
+        a.storyboardTable = {
+          ...a.storyboardTable,
+          ...(nextRoleAssets?.length ? { roleAssets: nextRoleAssets } : {}),
+          ...(nextSceneAssets?.length ? { sceneAssets: nextSceneAssets } : {}),
+        };
+      }
       if (touchedSb) {
         a.storyboardTable = { ...a.storyboardTable, rows };
       }

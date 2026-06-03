@@ -1,3 +1,8 @@
+import type { StoryboardNamedAssetCompanionHydrateTask } from './storyboardNamedAssetImage';
+import {
+  applyStoryboardNamedAssetCompanionHydrate,
+  listStoryboardNamedAssetCompanionHydrateTasks as listNamedAssetCompanionHydrateTasksForTable,
+} from './storyboardNamedAssetImage';
 import {
   companionRasterSlotNeedsHydrate,
   fetchWorkflowOriginalFromCompanionAsObjectUrl,
@@ -373,4 +378,100 @@ export function storyboardTableHasCompanionFrameHydrateGaps(
 ): boolean {
   if (!rows?.length) return false;
   return rows.some(storyboardRowNeedsCompanionFrameHydrate);
+}
+
+export function listStoryboardNamedAssetCompanionHydrateTasks(
+  assets: WorkflowAsset[]
+): StoryboardNamedAssetCompanionHydrateTask[] {
+  const tasks: StoryboardNamedAssetCompanionHydrateTask[] = [];
+  for (const asset of assets) {
+    if (!isWorkflowStoryboardTableAsset(asset)) continue;
+    tasks.push(
+      ...listNamedAssetCompanionHydrateTasksForTable(asset.id, 'role', asset.storyboardTable?.roleAssets),
+      ...listNamedAssetCompanionHydrateTasksForTable(asset.id, 'scene', asset.storyboardTable?.sceneAssets)
+    );
+  }
+  return tasks;
+}
+
+export function buildStoryboardNamedAssetCompanionHydrateKey(assets: WorkflowAsset[]): string {
+  return listStoryboardNamedAssetCompanionHydrateTasks(assets)
+    .map((task) => `${task.tableAssetId}:${task.kind}:${task.namedAssetId}:${task.companionKey}`)
+    .sort()
+    .join('|');
+}
+
+export async function hydrateStoryboardNamedAssetCompanionTasks(
+  tasks: StoryboardNamedAssetCompanionHydrateTask[],
+  companionBaseUrl: string,
+  companionProjectId: string,
+  options?: { concurrency?: number }
+): Promise<{
+  hydrated: Array<{ task: StoryboardNamedAssetCompanionHydrateTask; objectUrl: string }>;
+  failures: Array<{ task: StoryboardNamedAssetCompanionHydrateTask; error: string }>;
+}> {
+  const base = String(companionBaseUrl || '').trim();
+  const pid = String(companionProjectId || '').trim();
+  const concurrency = options?.concurrency ?? STORYBOARD_FRAME_COMPANION_HYDRATE_CONCURRENCY;
+  const eligible: StoryboardNamedAssetCompanionHydrateTask[] = [];
+  for (const task of tasks) {
+    if (await shouldKeepExistingCompanionRasterUrl(task.prevImg, task.companionKey)) continue;
+    eligible.push(task);
+  }
+  if (!eligible.length || !base || !pid) {
+    return { hydrated: [], failures: [] };
+  }
+
+  const outcomes = await mapLimit(eligible, concurrency, async (task) => {
+    const got = await fetchWorkflowOriginalFromCompanionAsObjectUrl(base, pid, task.companionKey);
+    if (got.ok === false) {
+      return { task, error: got.error } as const;
+    }
+    return { task, objectUrl: got.objectUrl } as const;
+  });
+
+  const hydrated: Array<{ task: StoryboardNamedAssetCompanionHydrateTask; objectUrl: string }> = [];
+  const failures: Array<{ task: StoryboardNamedAssetCompanionHydrateTask; error: string }> = [];
+  for (const outcome of outcomes) {
+    if ('objectUrl' in outcome) {
+      hydrated.push(outcome);
+    } else {
+      failures.push(outcome);
+    }
+  }
+  return { hydrated, failures };
+}
+
+export function applyStoryboardNamedAssetCompanionHydrateResults(
+  assets: WorkflowAsset[],
+  hydrated: Array<{ task: StoryboardNamedAssetCompanionHydrateTask; objectUrl: string }>
+): WorkflowAsset[] {
+  if (!hydrated.length) return assets;
+  const byTable = new Map<string, Array<{ task: StoryboardNamedAssetCompanionHydrateTask; objectUrl: string }>>();
+  for (const item of hydrated) {
+    const list = byTable.get(item.task.tableAssetId) ?? [];
+    list.push(item);
+    byTable.set(item.task.tableAssetId, list);
+  }
+  return assets.map((asset) => {
+    const batch = byTable.get(asset.id);
+    if (!batch?.length || !isWorkflowStoryboardTableAsset(asset) || !asset.storyboardTable) return asset;
+    let roleAssets = asset.storyboardTable.roleAssets;
+    let sceneAssets = asset.storyboardTable.sceneAssets;
+    for (const { task, objectUrl } of batch) {
+      if (task.kind === 'role') {
+        roleAssets = applyStoryboardNamedAssetCompanionHydrate(roleAssets, task.namedAssetId, objectUrl);
+      } else {
+        sceneAssets = applyStoryboardNamedAssetCompanionHydrate(sceneAssets, task.namedAssetId, objectUrl);
+      }
+    }
+    return {
+      ...asset,
+      storyboardTable: {
+        ...asset.storyboardTable,
+        ...(roleAssets?.length ? { roleAssets } : {}),
+        ...(sceneAssets?.length ? { sceneAssets } : {}),
+      },
+    };
+  });
 }

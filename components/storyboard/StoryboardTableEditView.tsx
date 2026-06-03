@@ -2,6 +2,14 @@ import React, { useCallback, useEffect, useImperativeHandle, useMemo, useRef, us
 import type { StoryboardRoleAsset, StoryboardTableRow } from '../../types';
 import { readLocalJson, writeLocalJson } from '../../services/clientPersist';
 import {
+  STORYBOARD_EDIT_CANVAS_FILTER_KEY,
+  computeStoryboardEditCanvasFilterState,
+  parseStoryboardEditCanvasFilterPill,
+  storyboardEditCanvasFilterEmptyHint,
+  type StoryboardEditCanvasFilterCounts,
+  type StoryboardEditCanvasFilterPill,
+} from '../../services/storyboardEditCanvasFilter';
+import {
   STORYBOARD_OUTLINE_ROW_ESTIMATE_PX,
 } from '../../services/storyboardVirtualScroll';
 import { useStoryboardVirtualList } from '../../hooks/useStoryboardVirtualList';
@@ -18,6 +26,8 @@ import { STORYBOARD_FEEDBACK_COLLAGE_LIMIT_OPTIONS } from '../../services/storyb
 import { StoryboardRowInteractionProvider } from './StoryboardRowInteractionContext';
 import type { StoryboardRowInteractionValue } from './StoryboardRowInteractionContext';
 import StoryboardTableOutlineSidebar from './StoryboardTableOutlineSidebar';
+import StoryboardFrameRoleMarkPanel from './StoryboardFrameRoleMarkPanel';
+import StoryboardEditCanvasFilterBar from './StoryboardEditCanvasFilterBar';
 import { storyboardCanvasTileDomId, storyboardRowDomId } from './storyboardTableDom';
 import {
   STORYBOARD_BODY_SCROLL,
@@ -68,6 +78,18 @@ type Props = {
     rowId: string,
     mark: { name: string; x: number; y: number; roleAssetId?: string }
   ) => void;
+  onUpdateFrameRoleMark?: (
+    rowId: string,
+    markId: string,
+    patch: { x?: number; y?: number }
+  ) => void;
+  onRemoveFrameRoleMark?: (rowId: string, markId: string) => void;
+  onRebindFrameRoleMark?: (
+    rowId: string,
+    markId: string,
+    asset: StoryboardRoleAsset
+  ) => void;
+  onSetFrameRoleMarkCustomName?: (rowId: string, markId: string, name: string) => void;
   roleReplaceEligibleCount?: number;
   roleReplaceBatchBusy?: boolean;
   roleReplaceBatchProgress?: { done: number; total: number } | null;
@@ -104,6 +126,10 @@ export default function StoryboardTableEditView({
   onPatchRows,
   onRemoveRows,
   onAddFrameRoleMark,
+  onUpdateFrameRoleMark,
+  onRemoveFrameRoleMark,
+  onRebindFrameRoleMark,
+  onSetFrameRoleMarkCustomName,
   roleReplaceEligibleCount = 0,
   roleReplaceBatchBusy = false,
   roleReplaceBatchProgress = null,
@@ -144,11 +170,76 @@ export default function StoryboardTableEditView({
       v === 'full' || v === 'feedback' ? v : null
     )
   );
+  const [canvasFilterPill, setCanvasFilterPill] = useState<StoryboardEditCanvasFilterPill>(() =>
+    readLocalJson(STORYBOARD_EDIT_CANVAS_FILTER_KEY, 'all', parseStoryboardEditCanvasFilterPill)
+  );
   const canvasScrollRef = useRef<HTMLDivElement>(null);
   const selectionAnchorRef = useRef<string | null>(activeRowId);
+  const outlineFlashTimerRef = useRef<number | null>(null);
+  const [outlineFlashRowId, setOutlineFlashRowId] = useState<string | null>(null);
   const [canvasSelectedRowIds, setCanvasSelectedRowIds] = useState<Set<string>>(() =>
     activeRowId ? new Set([activeRowId]) : new Set()
   );
+  const [selectedFrameRoleMarkId, setSelectedFrameRoleMarkId] = useState<string | null>(null);
+
+  const filterState = useMemo(
+    () => computeStoryboardEditCanvasFilterState(rows, canvasFilterPill, roleAssets),
+    [canvasFilterPill, roleAssets, rows]
+  );
+  const filterMatchedRowIds = filterState.matchedRowIds;
+  const filterMatchCount = filterMatchedRowIds?.size ?? rows.length;
+  const roleReplaceEligibleRowIds = filterState.roleReplaceEligibleRowIds;
+  const filterCountsForBar = useMemo((): StoryboardEditCanvasFilterCounts => {
+    return {
+      ...filterState.counts,
+      feedback: feedbackWrittenCount,
+      feedbackRedraw: feedbackRedrawEligibleCount,
+      roleReplace: roleReplaceEligibleCount,
+    };
+  }, [
+    feedbackRedrawEligibleCount,
+    feedbackWrittenCount,
+    filterState.counts,
+    roleReplaceEligibleCount,
+  ]);
+
+  const handleCanvasFilterChange = useCallback((pill: StoryboardEditCanvasFilterPill) => {
+    setCanvasFilterPill(pill);
+    writeLocalJson(STORYBOARD_EDIT_CANVAS_FILTER_KEY, pill);
+  }, []);
+
+  const flashOutlineRow = useCallback((rowId: string) => {
+    if (outlineFlashTimerRef.current != null) {
+      window.clearTimeout(outlineFlashTimerRef.current);
+    }
+    setOutlineFlashRowId(rowId);
+    outlineFlashTimerRef.current = window.setTimeout(() => {
+      setOutlineFlashRowId(null);
+      outlineFlashTimerRef.current = null;
+    }, 1200);
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (outlineFlashTimerRef.current != null) {
+        window.clearTimeout(outlineFlashTimerRef.current);
+      }
+    },
+    []
+  );
+
+  const feedbackBatchTitleSuffix =
+    canvasFilterPill !== 'all' &&
+    filterMatchCount !== feedbackRedrawEligibleCount &&
+    feedbackRedrawEligibleCount > 0
+      ? `（当前筛选 ${filterMatchCount} 镜，全表 ${feedbackRedrawEligibleCount} 镜可改图）`
+      : '';
+  const roleReplaceBatchTitleSuffix =
+    canvasFilterPill !== 'all' &&
+    filterMatchCount !== roleReplaceEligibleCount &&
+    roleReplaceEligibleCount > 0
+      ? `（当前筛选 ${filterMatchCount} 镜，全表 ${roleReplaceEligibleCount} 镜可换角色）`
+      : '';
 
   useEffect(() => {
     if (!activeRowId) return;
@@ -160,6 +251,41 @@ export default function StoryboardTableEditView({
     });
     selectionAnchorRef.current = activeRowId;
   }, [activeRowId]);
+
+  useEffect(() => {
+    if (!activeRowId) {
+      setSelectedFrameRoleMarkId(null);
+      return;
+    }
+    if (!selectedFrameRoleMarkId) return;
+    const row = rows.find((item) => item.id === activeRowId);
+    if (!row?.frameRoleMarks?.some((mark) => mark.id === selectedFrameRoleMarkId)) {
+      setSelectedFrameRoleMarkId(null);
+    }
+  }, [activeRowId, rows, selectedFrameRoleMarkId]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Delete' && event.key !== 'Backspace') return;
+      const target = event.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      if (!activeRowId || !selectedFrameRoleMarkId || !onRemoveFrameRoleMark) return;
+      const row = rows.find((item) => item.id === activeRowId);
+      if (!row || storyboardRowIsPassed(row)) return;
+      event.preventDefault();
+      onRemoveFrameRoleMark(activeRowId, selectedFrameRoleMarkId);
+      setSelectedFrameRoleMarkId(null);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [activeRowId, onRemoveFrameRoleMark, rows, selectedFrameRoleMarkId]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -179,6 +305,7 @@ export default function StoryboardTableEditView({
       onActiveRowIdChange(rowId);
       setCanvasSelectedRowIds(new Set([rowId]));
       selectionAnchorRef.current = rowId;
+      setSelectedFrameRoleMarkId(null);
     },
     [onActiveRowIdChange]
   );
@@ -215,6 +342,7 @@ export default function StoryboardTableEditView({
         });
       } else {
         setCanvasSelectedRowIds(new Set([rowId]));
+        setSelectedFrameRoleMarkId(null);
       }
       selectionAnchorRef.current = rowId;
     },
@@ -308,8 +436,19 @@ export default function StoryboardTableEditView({
         block: 'nearest',
         behavior,
       });
+      if (filterMatchedRowIds && !filterMatchedRowIds.has(rowId)) {
+        flashOutlineRow(rowId);
+      }
     },
-    [outlineVirtual, rows]
+    [filterMatchedRowIds, flashOutlineRow, outlineVirtual, rows]
+  );
+
+  const handleOutlineSelectWithScroll = useCallback(
+    (rowId: string) => {
+      handleOutlineSelect(rowId);
+      scrollToRow(rowId, 'smooth');
+    },
+    [handleOutlineSelect, scrollToRow]
   );
 
   useImperativeHandle(editScrollRef, () => ({ scrollToRow }), [scrollToRow]);
@@ -335,8 +474,11 @@ export default function StoryboardTableEditView({
           rows={rows}
           fieldCatalog={interaction.fieldCatalog}
           activeRowId={activeRowId}
-          onSelect={handleOutlineSelect}
+          onSelect={handleOutlineSelectWithScroll}
           virtualList={outlineVirtual}
+          filterMatchedRowIds={filterMatchedRowIds}
+          filterPill={canvasFilterPill}
+          outlineFlashRowId={outlineFlashRowId}
         />
 
         <div className={STORYBOARD_EDIT_VIEW_LAYOUT}>
@@ -356,6 +498,18 @@ export default function StoryboardTableEditView({
                   </span>
                 ) : null}
               </p>
+              <StoryboardEditCanvasFilterBar
+                activePill={canvasFilterPill}
+                counts={filterCountsForBar}
+                total={rows.length}
+                matchCount={filterMatchCount}
+                onChange={handleCanvasFilterChange}
+              />
+              {canvasFilterPill !== 'all' && filterMatchCount === 0 ? (
+                <p className="rounded-lg border border-white/[0.06] bg-white/[0.03] px-2 py-1.5 text-[9px] leading-snug text-gray-500">
+                  {storyboardEditCanvasFilterEmptyHint(canvasFilterPill)}
+                </p>
+              ) : null}
               <StoryboardCanvasSelectionBar
                 count={canvasSelectedRowIds.size}
                 readOnly={readOnly || interaction.readOnly}
@@ -390,7 +544,7 @@ export default function StoryboardTableEditView({
                   {onFeedbackBatchRedraw ? (
                     <button
                       type="button"
-                      title={`拼图改图：每 ${feedbackCollageLimit} 镜拼一张，按修改反馈改图并切分回填`}
+                      title={`拼图改图：每 ${feedbackCollageLimit} 镜拼一张，按修改反馈改图并切分回填${feedbackBatchTitleSuffix}`}
                       disabled={
                         feedbackBatchBusy ||
                         roleReplaceBatchBusy ||
@@ -410,7 +564,7 @@ export default function StoryboardTableEditView({
                   {onRoleReplaceBatch ? (
                     <button
                       type="button"
-                      title={`拼图替换：每 ${feedbackCollageLimit} 镜拼一张，用解析页角色参考图替换标注位置并切分回填`}
+                      title={`拼图替换：每 ${feedbackCollageLimit} 镜拼一张，用解析页角色参考图替换标注位置并切分回填${roleReplaceBatchTitleSuffix}`}
                       disabled={
                         roleReplaceBatchBusy ||
                         feedbackBatchBusy ||
@@ -439,11 +593,25 @@ export default function StoryboardTableEditView({
                 highlightedRowIds={highlightedRowIds}
                 previewRowImages={previewRowImages}
                 roleAssets={roleAssets}
+                selectedFrameRoleMarkId={selectedFrameRoleMarkId}
                 readOnly={readOnly || interaction.readOnly}
                 onSelectRow={handleCanvasSelectRow}
                 onMarqueeSelect={handleMarqueeSelect}
                 onPreviewImage={interaction.previewImage}
+                onSelectFrameRoleMark={(_, markId) => setSelectedFrameRoleMarkId(markId)}
                 onAddFrameRoleMark={onAddFrameRoleMark}
+                onUpdateFrameRoleMark={onUpdateFrameRoleMark}
+                onRemoveFrameRoleMark={(rowId, markId) => {
+                  onRemoveFrameRoleMark?.(rowId, markId);
+                  if (selectedFrameRoleMarkId === markId) {
+                    setSelectedFrameRoleMarkId(null);
+                  }
+                }}
+                onRebindFrameRoleMark={onRebindFrameRoleMark}
+                onSetFrameRoleMarkCustomName={onSetFrameRoleMarkCustomName}
+                filterMatchedRowIds={filterMatchedRowIds}
+                filterFlashRowId={outlineFlashRowId}
+                roleReplaceEligibleRowIds={roleReplaceEligibleRowIds}
               />
               {footerAddRow ? <div className="mt-2">{footerAddRow}</div> : null}
             </div>
@@ -487,7 +655,31 @@ export default function StoryboardTableEditView({
             </div>
             <div className={`${STORYBOARD_BODY_SCROLL} pr-0.5`}>
               {activeRow ? (
-                <StoryboardConnectedRowEditor
+                <>
+                  <StoryboardFrameRoleMarkPanel
+                    row={activeRow}
+                    roleAssets={roleAssets}
+                    selectedMarkId={selectedFrameRoleMarkId}
+                    readOnly={readOnly || interaction.readOnly}
+                    onSelectMark={setSelectedFrameRoleMarkId}
+                    onAddMark={(mark) => onAddFrameRoleMark?.(activeRow.id, mark)}
+                    onRemoveMark={(markId) => {
+                      onRemoveFrameRoleMark?.(activeRow.id, markId);
+                      if (selectedFrameRoleMarkId === markId) {
+                        setSelectedFrameRoleMarkId(null);
+                      }
+                    }}
+                    onFocusMark={(markId) => {
+                      setSelectedFrameRoleMarkId(markId);
+                      scrollToRow(activeRow.id, 'smooth');
+                      requestAnimationFrame(() => {
+                        document
+                          .querySelector(`[data-storyboard-role-mark="${markId}"]`)
+                          ?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+                      });
+                    }}
+                  />
+                  <StoryboardConnectedRowEditor
                   domId={storyboardRowDomId(activeRow.id)}
                   row={activeRow}
                   index={activeRowIndex}
@@ -501,6 +693,7 @@ export default function StoryboardTableEditView({
                   redrawDisabledReason={redrawReason}
                   editDisplayMode={editDisplayMode}
                 />
+                </>
               ) : (
                 <p className="px-1 py-6 text-center text-[10px] text-gray-600">暂无镜头</p>
               )}

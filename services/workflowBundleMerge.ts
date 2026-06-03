@@ -460,5 +460,18 @@ export function mergeWorkflowProjectBundles(
   merged.assets = hygiene.assets;
   merged.pending = hygiene.pending;
 
+  const mergedStoryboardIds = new Set(
+    merged.assets
+      .filter(isWorkflowStoryboardTableAsset)
+      .map((a) => String(a.id || '').trim())
+      .filter(Boolean)
+  );
+  for (const a of base.assets) {
+    if (!isWorkflowStoryboardTableAsset(a)) continue;
+    const id = String(a.id || '').trim();
+    if (!id || mergedStoryboardIds.has(id)) continue;
+    merged.assets.push(cloneDeep(a));
+  }
+
   return { merged, conflicts };
 }

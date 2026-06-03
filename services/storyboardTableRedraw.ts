@@ -20,10 +20,13 @@ import {
   resolveStoryboardRowFrameDisplaySrc,
   storyboardRowHasFrameRef,
 } from './storyboardFrameImageUrl';
+import { isStoryboardFeedbackRedrawEligible } from './storyboardEditEligibility';
 import {
   STORYBOARD_ROLE_REPLACE_DEFAULT_PRESET_ID,
   getBuiltinStoryboardRoleReplacePreset,
 } from './storyboardRoleReplaceRedraw';
+
+export { isStoryboardFeedbackRedrawEligible };
 
 export const STORYBOARD_REDRAW_PRESET_KEY = 'ac_storyboard_redraw_preset_v1';
 /** @deprecated 编辑页已改为模型选择；保留键名供旧数据只读 */
@@ -61,12 +64,6 @@ export function buildStoryboardEditFeedbackPromptExtra(row: StoryboardTableRow):
 /** 反馈批量重绘专用：仅修改反馈正文，不含结构化字段 */
 export function buildStoryboardFeedbackRedrawInputText(row: StoryboardTableRow): string {
   return (row.editFeedback ?? '').trim();
-}
-
-export function isStoryboardFeedbackRedrawEligible(row: StoryboardTableRow): boolean {
-  if (row.locked) return false;
-  if (!buildStoryboardFeedbackRedrawInputText(row)) return false;
-  return storyboardRowHasFrameRef(row);
 }
 
 export function listStoryboardFeedbackRedrawRows(rows: StoryboardTableRow[]): StoryboardTableRow[] {

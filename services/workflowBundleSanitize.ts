@@ -1,6 +1,10 @@
 import type { WorkflowAsset, WorkflowPendingTask } from '../types';
 import { isGroupAsset } from './groupHelpers';
-import { isWorkflowStoryboardTableAsset, normalizeStoryboardTableOnAsset } from './storyboardTableAsset';
+import {
+  isWorkflowStoryboardTableAsset,
+  normalizeStoryboardTableOnAsset,
+  upgradeLegacyWorkflowStoryboardTableAsset,
+} from './storyboardTableAsset';
 
 export type WorkflowBundleSanitizeStats = {
   /** 从组 assetIds 中移除的无效或重复引用条数 */
@@ -32,8 +36,16 @@ export function sanitizeWorkflowProjectBundle(
   const validIds = new Set(assets.map((a) => a.id));
 
   const nextAssets = assets.map((a) => {
-    if (isWorkflowStoryboardTableAsset(a)) {
-      return normalizeStoryboardTableOnAsset(a);
+    const upgraded = upgradeLegacyWorkflowStoryboardTableAsset(a);
+    if (isWorkflowStoryboardTableAsset(upgraded)) {
+      try {
+        return normalizeStoryboardTableOnAsset(upgraded);
+      } catch (e) {
+        console.warn('[workspace] storyboard_table normalize failed, keeping raw asset', upgraded.id, e);
+        return upgraded.assetKind === 'storyboard_table'
+          ? upgraded
+          : { ...upgraded, assetKind: 'storyboard_table' as const };
+      }
     }
     if (!isGroupAsset(a) || !Array.isArray(a.assetIds)) {
       if (!isGroupAsset(a) && a.assetIds != null) {

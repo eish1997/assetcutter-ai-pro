@@ -1,6 +1,11 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import type { StoryboardParseFieldDef, StoryboardTableRow } from '../../types';
-import { rowHasStructuredFieldValues, resolveStoryboardParseInput, normalizeStoryboardShotNoInput } from '../../services/storyboardTableParse';
+import {
+  rowHasStructuredFieldValues,
+  resolveStoryboardParseInput,
+  normalizeStoryboardShotNoInput,
+  parseDurationSecFromParsedValue,
+} from '../../services/storyboardTableParse';
 import { resolveStoryboardRowFrameDisplaySrc } from '../../services/storyboardFrameImageUrl';
 import {
   resolveStoryboardFrameVersionDisplaySrc,
@@ -44,6 +49,7 @@ type Props = {
   imageBusy: boolean;
   onFocusRow: () => void;
   onPatch: (patch: Partial<StoryboardTableRow>) => void;
+  onCommitShotNo?: (raw: string) => void;
   onMove: (dir: -1 | 1) => void;
   onRemove: () => void;
   onPickImage: () => void;
@@ -66,13 +72,6 @@ type Props = {
   editDisplayMode?: 'full' | 'feedback';
 };
 
-function parseDurationInput(raw: string): number | null {
-  const t = raw.trim();
-  if (!t) return null;
-  const n = Number(t);
-  return Number.isFinite(n) && n >= 0 ? n : null;
-}
-
 function stopInputFocusBubble(e: React.SyntheticEvent) {
   e.stopPropagation();
 }
@@ -87,6 +86,7 @@ export default function StoryboardTableRowEditor({
   imageBusy,
   onFocusRow,
   onPatch,
+  onCommitShotNo,
   onMove,
   onRemove,
   onPickImage,
@@ -108,6 +108,7 @@ export default function StoryboardTableRowEditor({
   timelineLayerCount = 1,
   editDisplayMode = 'full',
 }: Props) {
+  const [durationDraft, setDurationDraft] = useState<string | null>(null);
   const feedbackMode = editDisplayMode === 'feedback';
   const passed = storyboardRowIsPassed(row);
   const fieldsReadOnly = readOnly || passed;
@@ -116,6 +117,13 @@ export default function StoryboardTableRowEditor({
   const shell = `${STORYBOARD_ROW_SHELL} ${passed ? 'opacity-70' : ''} ${
     active ? STORYBOARD_ROW_ACTIVE : STORYBOARD_ROW_IDLE
   }`;
+
+  useEffect(() => {
+    setDurationDraft(null);
+  }, [row.id]);
+
+  const durationInputValue =
+    durationDraft ?? (row.durationSec != null ? String(row.durationSec) : '');
 
   const patchField = (fieldId: string, value: string) => {
     onPatch({ shotFields: { ...row.shotFields, [fieldId]: value } });
@@ -422,6 +430,10 @@ export default function StoryboardTableRowEditor({
                     readOnly={fieldsReadOnly}
                     onChange={(e) => onPatch({ shotNo: e.target.value })}
                     onBlur={(e) => {
+                      if (onCommitShotNo) {
+                        onCommitShotNo(e.target.value);
+                        return;
+                      }
                       const normalized = normalizeStoryboardShotNoInput(e.target.value);
                       if (normalized && normalized !== (row.shotNo ?? '')) {
                         onPatch({ shotNo: normalized });
@@ -430,21 +442,31 @@ export default function StoryboardTableRowEditor({
                     onMouseDown={stopInputFocusBubble}
                     onFocus={stopInputFocusBubble}
                     className={STORYBOARD_FIELD_INPUT}
-                    placeholder="041"
+                    placeholder="041 或留空待编号"
                   />
                 </label>
                 <label className="block">
                   <span className={STORYBOARD_LABEL}>时长</span>
                   <div className="relative">
                     <input
-                      value={row.durationSec != null ? String(row.durationSec) : ''}
+                      value={durationInputValue}
                       readOnly={fieldsReadOnly}
-                      onChange={(e) => onPatch({ durationSec: parseDurationInput(e.target.value) })}
+                      onChange={(e) => setDurationDraft(e.target.value)}
+                      onFocus={() => {
+                        setDurationDraft(
+                          row.durationSec != null ? String(row.durationSec) : ''
+                        );
+                      }}
+                      onBlur={(e) => {
+                        const parsed = parseDurationSecFromParsedValue(e.target.value);
+                        onPatch({ durationSec: parsed });
+                        setDurationDraft(null);
+                      }}
                       onMouseDown={stopInputFocusBubble}
-                      onFocus={stopInputFocusBubble}
                       className={`${STORYBOARD_FIELD_INPUT} pr-6`}
                       placeholder="—"
                       inputMode="decimal"
+                      step="any"
                     />
                     <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-[9px] text-gray-600">
                       秒

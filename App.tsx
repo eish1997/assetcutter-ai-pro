@@ -61,12 +61,15 @@ import {
   loadWorkflowBundle,
   saveWorkflowBundle,
   consumeWorkspaceMigrationNotices,
+  consumeWorkflowBundleLoadDegraded,
   trySaveWorkflowBundle,
   removeWorkflowBundle,
   setLastOpenedWorkspaceProjectId,
   ensureWorkspaceBundlesHydratedFromIdb,
   flushWorkspaceBundleIdbWrites,
   migrateWorkflowBundleProjectId,
+  mergeRestoredStoryboardAssetsIntoList,
+  type SaveWorkflowBundleResult,
   type WorkspaceProject,
 } from './services/workspaceProjectStore';
 import {
@@ -844,6 +847,21 @@ const MainApp: React.FC = () => {
   }, [workspaceLocalIdbHydrateReady]);
   /** 供首屏 hydrate 等早于 `loadWorkspaceProjectInternal` 声明位置的 effect 调用，避免重复实现伴侣 manifest 合并 */
   const loadWorkspaceProjectInternalRef = useRef<(id: string) => void>((_id: string) => {});
+  /** 加载降级且资产为空时，跳过一次空包 autosave，避免覆盖 IDB 内仍存在的旧数据 */
+  const skipEmptyWorkflowAutosaveOnceRef = useRef(false);
+  /** 本会话是否已成功加载/展示过非空画布（用于区分「用户删光」与「加载失败假空」） */
+  const workflowSessionHadNonEmptyAssetsRef = useRef(false);
+  /** 本会话用户显式删除的分镜表资产 id，保存时允许从 bundle 移除 */
+  const explicitlyRemovedStoryboardIdsRef = useRef<Set<string>>(new Set());
+
+  const workflowBundleSaveOpts = useCallback(
+    () => ({
+      allowEmptyOverwrite: workflowSessionHadNonEmptyAssetsRef.current,
+      explicitlyRemovedStoryboardIds: explicitlyRemovedStoryboardIdsRef.current,
+    }),
+    []
+  );
+
   const markWorkspaceLocalIdbHydrateReady = useCallback(() => {
     /** 须与 state 同步：紧随其后的 `loadWorkspaceProjectInternalRef` 依赖 ref，若只等 useEffect 写回会晚一帧导致首屏不加载甚至空包落盘 */
     workspaceLocalIdbHydrateReadyRef.current = true;
@@ -1228,6 +1246,21 @@ const MainApp: React.FC = () => {
     void reportClientDebugLog({ time: now, module, level, message, ...(detail ? { detail } : {}) });
   }, []);
 
+  const applyStoryboardRestoresFromSave = useCallback(
+    (assets: WorkflowAsset[], result: SaveWorkflowBundleResult): WorkflowAsset[] => {
+      const next = mergeRestoredStoryboardAssetsIntoList(assets, result.restoredStoryboardAssets);
+      if (next.length === assets.length) return assets;
+      addGlobalLog(
+        '工作区',
+        'warn',
+        `已自动恢复 ${next.length - assets.length} 个意外丢失的分镜表`,
+        result.restoredStoryboardAssets.map((a) => a.id).join(', ')
+      );
+      return next;
+    },
+    [addGlobalLog]
+  );
+
   useEffect(() => {
     const notices = consumeWorkspaceMigrationNotices();
     if (!notices.length) return;
@@ -1277,10 +1310,15 @@ const MainApp: React.FC = () => {
       const pid = activeWorkspaceProjectIdRef.current;
       const scope = userIdRef.current ?? null;
       if (pid && workspaceLocalIdbHydrateReadyRef.current) {
-        trySaveWorkflowBundle(pid, {
-          assets: workflowAssetsRef.current,
-          pending: workflowPendingRef.current,
-        }, scope);
+        trySaveWorkflowBundle(
+          pid,
+          {
+            assets: workflowAssetsRef.current,
+            pending: workflowPendingRef.current,
+          },
+          scope,
+          workflowBundleSaveOpts()
+        );
       }
       await flushWorkspaceBundleIdbWrites();
       try {
@@ -1290,7 +1328,7 @@ const MainApp: React.FC = () => {
       }
       /** 云同步改为仅在离开工作区/切换项目时整包上传，避免与渐进拉取竞态导致云端被不完整状态覆盖 */
     })();
-  }, []);
+  }, [workflowBundleSaveOpts]);
 
   useEffect(() => {
     let visFlushTimer: number | null = null;
@@ -1528,13 +1566,44 @@ const MainApp: React.FC = () => {
   }, [authLoading, user?.id, user?.username, markWorkspaceLocalIdbHydrateReady, pullWorkspaceProjectsFromCompanion]);
 
   useEffect(() => {
+    workflowSessionHadNonEmptyAssetsRef.current = false;
+    explicitlyRemovedStoryboardIdsRef.current.clear();
+  }, [activeWorkspaceProjectId]);
+
+  useEffect(() => {
+    if (workflowAssets.length > 0) {
+      workflowSessionHadNonEmptyAssetsRef.current = true;
+    }
+  }, [workflowAssets]);
+
+  useEffect(() => {
     if (!activeWorkspaceProjectId || !workspaceLocalIdbHydrateReady) return;
+    if (skipEmptyWorkflowAutosaveOnceRef.current && workflowAssets.length === 0) {
+      skipEmptyWorkflowAutosaveOnceRef.current = false;
+      return;
+    }
     const scope = user?.id ?? null;
     const t = window.setTimeout(() => {
-      trySaveWorkflowBundle(activeWorkspaceProjectId, { assets: workflowAssets, pending: workflowPending }, scope);
+      const result = trySaveWorkflowBundle(
+        activeWorkspaceProjectId,
+        { assets: workflowAssets, pending: workflowPending },
+        scope,
+        workflowBundleSaveOpts()
+      );
+      if (result.restoredStoryboardAssets.length > 0) {
+        setWorkflowAssets((prev) => applyStoryboardRestoresFromSave(prev, result));
+      }
     }, 650);
     return () => window.clearTimeout(t);
-  }, [activeWorkspaceProjectId, workflowAssets, workflowPending, user?.id, workspaceLocalIdbHydrateReady]);
+  }, [
+    activeWorkspaceProjectId,
+    workflowAssets,
+    workflowPending,
+    user?.id,
+    workspaceLocalIdbHydrateReady,
+    workflowBundleSaveOpts,
+    applyStoryboardRestoresFromSave,
+  ]);
 
   /** 画布变更（且具备轻量上云前置条件）时递增序号，由下游 effect 单独防抖 PUT */
   useEffect(() => {
@@ -1605,19 +1674,30 @@ const MainApp: React.FC = () => {
       trySaveWorkflowBundle(
         pid,
         { assets: workflowAssetsRef.current, pending: workflowPendingRef.current },
-        scope
+        scope,
+        workflowBundleSaveOpts()
       );
     }
     setActiveWorkspaceProjectId(null);
     setWorkflowAssets([]);
     setWorkflowPending([]);
-  }, []);
+  }, [workflowBundleSaveOpts]);
 
   const loadWorkspaceProjectInternal = useCallback(
     (id: string) => {
       const scope = userIdRef.current ?? null;
       const doLoad = () => {
         const local = loadWorkflowBundle(id, scope);
+        if (consumeWorkflowBundleLoadDegraded() && local.assets.length === 0) {
+          skipEmptyWorkflowAutosaveOnceRef.current = true;
+          addGlobalLog(
+            '工作区',
+            'warn',
+            '项目数据加载异常，已跳过空列表自动保存。请刷新或从 IndexedDB/云端恢复备份。'
+          );
+        } else if (local.assets.length > 0) {
+          workflowSessionHadNonEmptyAssetsRef.current = true;
+        }
         setActiveWorkspaceProjectId(id);
         setLastOpenedWorkspaceProjectId(id, scope);
         setWorkflowAssets(local.assets);
@@ -1652,9 +1732,10 @@ const MainApp: React.FC = () => {
                 );
                 console.warn('[workspace cloud] bundle merge conflicts', r.conflicts);
               }
-              setWorkflowAssets(r.bundle.assets);
+              const bundlePayload = { assets: r.bundle.assets, pending: r.bundle.pending };
+              const saveResult = trySaveWorkflowBundle(id, bundlePayload, uidMerge, workflowBundleSaveOpts());
+              setWorkflowAssets(applyStoryboardRestoresFromSave(bundlePayload.assets, saveResult));
               setWorkflowPending(r.bundle.pending);
-              trySaveWorkflowBundle(id, { assets: r.bundle.assets, pending: r.bundle.pending }, uidMerge);
               workspaceCloudPostPullDirtySuppressRef.current += 1;
             })
             .catch((e) => console.warn('[workspace cloud] bundle reconcile', e))
@@ -1729,7 +1810,13 @@ const MainApp: React.FC = () => {
             );
             if (importedKeys.length === 0) return prev;
             const scopeInner = userIdRef.current ?? null;
-            trySaveWorkflowBundle(id, { assets: nextAssets, pending: workflowPendingRef.current }, scopeInner);
+            const saveResult = trySaveWorkflowBundle(
+              id,
+              { assets: nextAssets, pending: workflowPendingRef.current },
+              scopeInner,
+              workflowBundleSaveOpts()
+            );
+            const mergedAssets = applyStoryboardRestoresFromSave(nextAssets, saveResult);
             const head = importedKeys.slice(0, 6).join(', ') + (importedKeys.length > 6 ? '…' : '');
             addGlobalLog(
               '工作区',
@@ -1737,7 +1824,7 @@ const MainApp: React.FC = () => {
               '已根据本地伴侣 manifest 自动挂载磁盘资产到画布',
               `${importedKeys.length} 项 ${head}`
             );
-            return nextAssets;
+            return mergedAssets;
           });
         })();
       };
@@ -1752,7 +1839,7 @@ const MainApp: React.FC = () => {
       }
       doLoad();
     },
-    [addGlobalLog, markWorkspaceLocalIdbHydrateReady]
+    [addGlobalLog, applyStoryboardRestoresFromSave, markWorkspaceLocalIdbHydrateReady, workflowBundleSaveOpts]
   );
   loadWorkspaceProjectInternalRef.current = loadWorkspaceProjectInternal;
 
@@ -5023,6 +5110,10 @@ const MainApp: React.FC = () => {
                       capabilitySets={capabilitySets}
                       assets={workflowAssets}
                       onAssetsChange={setWorkflowAssets}
+                      onStoryboardTableAssetRemoved={(assetId) => {
+                        const id = String(assetId || '').trim();
+                        if (id) explicitlyRemovedStoryboardIdsRef.current.add(id);
+                      }}
                       pending={workflowPending}
                       onPendingChange={setWorkflowPending}
                       onLog={(level, message, detail) => addGlobalLog('工作区', level, message, detail)}

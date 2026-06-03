@@ -10,18 +10,29 @@ import {
   buildStoryboardRowOffsets,
   storyboardScrollOffsetForIndex,
 } from '../../services/storyboardVirtualScroll';
+import {
+  collectStoryboardDuplicateShotRowIds,
+  findDuplicateStoryboardShotNos,
+} from '../../services/storyboardTableParse';
 import { StoryboardRowMeasureWrap } from './StoryboardRowMeasureWrap';
 import {
   storyboardRowEditFeedbackPreview,
+  storyboardRowHasAssignedShotNo,
   storyboardRowOutlineSubtitle,
   storyboardRowOutlineTitle,
 } from './storyboardRowDisplay';
+import {
+  storyboardEditCanvasFilterAccentClass,
+  type StoryboardEditCanvasFilterPill,
+} from '../../services/storyboardEditCanvasFilter';
 import StoryboardEditFeedbackMark from './StoryboardEditFeedbackMark';
 import {
   STORYBOARD_COLUMN_HEAD,
   STORYBOARD_OUTLINE_ITEM,
   STORYBOARD_OUTLINE_ITEM_ACTIVE,
   STORYBOARD_OUTLINE_ITEM_IDLE,
+  STORYBOARD_OUTLINE_ITEM_UNNUMBERED,
+  STORYBOARD_OUTLINE_ITEM_DUPLICATE,
   STORYBOARD_BODY_SCROLL,
   STORYBOARD_SIDE_DOCK,
   STORYBOARD_SIDE_RAIL,
@@ -33,39 +44,70 @@ type Props = {
   activeRowId: string | null;
   onSelect: (rowId: string) => void;
   virtualList?: UseStoryboardVirtualListResult;
+  filterMatchedRowIds?: ReadonlySet<string> | null;
+  filterPill?: StoryboardEditCanvasFilterPill;
+  outlineFlashRowId?: string | null;
 };
 
 function OutlineRowButton({
   row,
   index,
   active,
+  duplicate,
   fieldCatalog,
   onSelect,
+  filterMatch = true,
+  filterAccentClass = '',
+  flash = false,
 }: {
   row: StoryboardTableRow;
   index: number;
   active: boolean;
+  duplicate: boolean;
   fieldCatalog: StoryboardParseFieldDef[];
   onSelect: () => void;
+  filterMatch?: boolean;
+  filterAccentClass?: string;
+  flash?: boolean;
 }) {
   const thumb = resolveStoryboardRowFrameDisplaySrc(row);
   const hasThumb = storyboardRowHasFrameRef(row);
   const title = storyboardRowOutlineTitle(row, index);
   const feedbackPreview = storyboardRowEditFeedbackPreview(row);
   const subtitle = feedbackPreview ?? storyboardRowOutlineSubtitle(row, fieldCatalog);
+  const unnumbered = !storyboardRowHasAssignedShotNo(row);
 
   return (
-    <div role="listitem">
+    <div
+      role="listitem"
+      className={`${filterMatch ? '' : 'opacity-50'} ${flash ? 'rounded-lg ring-1 ring-amber-400/50' : ''}`}
+    >
       <button
         type="button"
         onClick={onSelect}
-        className={`${STORYBOARD_OUTLINE_ITEM} gap-1 rounded-lg px-1 py-0.5 ${
-          active ? STORYBOARD_OUTLINE_ITEM_ACTIVE : STORYBOARD_OUTLINE_ITEM_IDLE
+        className={`${STORYBOARD_OUTLINE_ITEM} relative gap-1 rounded-lg px-1 py-0.5 ${
+          active
+            ? STORYBOARD_OUTLINE_ITEM_ACTIVE
+            : duplicate
+              ? STORYBOARD_OUTLINE_ITEM_DUPLICATE
+              : unnumbered
+                ? STORYBOARD_OUTLINE_ITEM_UNNUMBERED
+                : STORYBOARD_OUTLINE_ITEM_IDLE
         }`}
       >
+        {filterAccentClass ? (
+          <span
+            aria-hidden
+            className={`absolute bottom-1 left-0 top-1 w-0.5 rounded-full ${filterAccentClass}`}
+          />
+        ) : null}
         <span
           className={`flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-md text-[9px] font-bold ${
-            hasThumb ? 'bg-black/25 ring-1 ring-white/[0.08]' : 'bg-white/[0.04] text-gray-500'
+            hasThumb
+              ? 'bg-black/25 ring-1 ring-white/[0.08]'
+              : unnumbered
+                ? 'bg-amber-500/15 text-amber-200/90 ring-1 ring-amber-500/25'
+                : 'bg-white/[0.04] text-gray-500'
           }`}
         >
           {thumb ? (
@@ -78,7 +120,23 @@ function OutlineRowButton({
         </span>
         <span className="min-w-0 flex-1 leading-tight">
           <span className="flex items-center gap-1">
-            <span className="truncate text-[10px] font-semibold text-gray-100">{title}</span>
+            <span
+              className={`truncate text-[10px] font-semibold ${
+                unnumbered ? 'text-amber-100/95' : 'text-gray-100'
+              }`}
+            >
+              {title}
+            </span>
+            {unnumbered ? (
+              <span className="shrink-0 rounded bg-amber-500/20 px-1 py-px text-[7px] font-semibold text-amber-200/90">
+                待编号
+              </span>
+            ) : null}
+            {duplicate ? (
+              <span className="shrink-0 rounded bg-rose-500/25 px-1 py-px text-[7px] font-semibold text-rose-200/95">
+                重复
+              </span>
+            ) : null}
             {row.locked ? (
               <span className="shrink-0 text-[8px] text-amber-400/90">过</span>
             ) : null}
@@ -103,9 +161,17 @@ export default function StoryboardTableOutlineSidebar({
   activeRowId,
   onSelect,
   virtualList,
+  filterMatchedRowIds = null,
+  filterPill = 'all',
+  outlineFlashRowId = null,
 }: Props) {
   const virtualize = virtualList?.virtualize ?? false;
   const range = virtualList?.range;
+  const duplicateRowIds = useMemo(() => collectStoryboardDuplicateShotRowIds(rows), [rows]);
+  const duplicateShotLabels = useMemo(
+    () => findDuplicateStoryboardShotNos(rows.map((row) => row.shotNo ?? '')),
+    [rows]
+  );
   const offsets = useMemo(() => {
     if (!virtualList || !virtualize) return [];
     const rowIds = rows.map((r) => r.id);
@@ -122,6 +188,25 @@ export default function StoryboardTableOutlineSidebar({
     return rows.slice(range.startIndex, range.endIndex);
   }, [rows, virtualize, range]);
 
+  const filterActive = filterMatchedRowIds != null;
+  const filterAccent =
+    filterPill !== 'all' ? storyboardEditCanvasFilterAccentClass(filterPill) : '';
+
+  const outlineRowProps = (row: StoryboardTableRow, index: number) => {
+    const filterMatch = !filterActive || filterMatchedRowIds.has(row.id);
+    return {
+      row,
+      index,
+      active: activeRowId === row.id,
+      duplicate: duplicateRowIds.has(row.id),
+      fieldCatalog,
+      onSelect: () => onSelect(row.id),
+      filterMatch,
+      filterAccentClass: filterMatch && filterAccent ? filterAccent : '',
+      flash: outlineFlashRowId === row.id,
+    };
+  };
+
   const listBody = virtualize && range && virtualList ? (
     <div className="relative w-full" style={{ height: range.totalHeight }}>
       {visibleRows.map((row) => {
@@ -134,13 +219,7 @@ export default function StoryboardTableOutlineSidebar({
             className="absolute left-0 right-0"
             style={{ top }}
           >
-            <OutlineRowButton
-              row={row}
-              index={row.index}
-              active={activeRowId === row.id}
-              fieldCatalog={fieldCatalog}
-              onSelect={() => onSelect(row.id)}
-            />
+            <OutlineRowButton {...outlineRowProps(row, row.index)} />
           </StoryboardRowMeasureWrap>
         );
       })}
@@ -148,14 +227,7 @@ export default function StoryboardTableOutlineSidebar({
   ) : (
     <div className="flex flex-col gap-px" role="list">
       {rows.map((row, i) => (
-        <OutlineRowButton
-          key={row.id}
-          row={row}
-          index={i}
-          active={activeRowId === row.id}
-          fieldCatalog={fieldCatalog}
-          onSelect={() => onSelect(row.id)}
-        />
+        <OutlineRowButton key={row.id} {...outlineRowProps(row, i)} />
       ))}
     </div>
   );
@@ -167,6 +239,14 @@ export default function StoryboardTableOutlineSidebar({
           <p className={`${STORYBOARD_COLUMN_HEAD} !mb-0 text-[9px]`}>
             大纲 <span className="font-normal text-gray-600">· {rows.length}</span>
           </p>
+          {duplicateShotLabels.length ? (
+            <p
+              className="mt-1 rounded-md border border-rose-500/35 bg-rose-500/10 px-1.5 py-1 text-[8px] leading-snug text-rose-200/90"
+              title={`重复镜号：${duplicateShotLabels.join('、')}`}
+            >
+              镜号重复：{duplicateShotLabels.join('、')}
+            </p>
+          ) : null}
         </div>
         <nav
           ref={virtualList?.scrollRef}

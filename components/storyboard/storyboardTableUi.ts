@@ -102,6 +102,12 @@ export const STORYBOARD_OUTLINE_ITEM_ACTIVE =
 
 export const STORYBOARD_OUTLINE_ITEM_IDLE = 'hover:bg-white/[0.04]';
 
+export const STORYBOARD_OUTLINE_ITEM_UNNUMBERED =
+  'border border-dashed border-amber-500/30 bg-amber-500/[0.06] hover:bg-amber-500/[0.10]';
+
+export const STORYBOARD_OUTLINE_ITEM_DUPLICATE =
+  'border border-rose-500/40 bg-rose-500/[0.08] hover:bg-rose-500/[0.12]';
+
 export const STORYBOARD_ROW_ACTION =
   'inline-flex h-7 items-center justify-center rounded-lg px-2.5 text-[10px] font-semibold transition-colors disabled:cursor-not-allowed';
 

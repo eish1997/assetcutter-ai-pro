@@ -528,6 +528,19 @@ export type StoryboardRoleAsset = {
   id: string;
   name: string;
   image?: string;
+  /** 本地伴侣键（与分镜图 frameImageCompanionKey 同类持久化） */
+  imageCompanionKey?: string;
+  /** 云同步 R2 objectKey */
+  imageObjectKey?: string;
+};
+
+/** 解析页场景参考图（名称 + 可选配图） */
+export type StoryboardSceneAsset = {
+  id: string;
+  name: string;
+  image?: string;
+  imageCompanionKey?: string;
+  imageObjectKey?: string;
 };
 
 export type StoryboardTableDoc = {
@@ -544,6 +557,8 @@ export type StoryboardTableDoc = {
   optimizePresetId?: string;
   /** 解析页角色参考资产 */
   roleAssets?: StoryboardRoleAsset[];
+  /** 解析页场景参考资产 */
+  sceneAssets?: StoryboardSceneAsset[];
 };
 
 /** 单个资产：原始图 + 各类型结果图，当前展示版本，是否已归档；归档后可按生成顺序拼流程图 */
@@ -890,6 +905,8 @@ export type CustomAppModule = {
   companionRembgModel?: string;
   /** `companionRembg` 时可选：alpha matting（更慢） */
   companionRembgAlphaMatting?: boolean;
+  /** 功能区筛选标签（可选，最多 10 条） */
+  tags?: string[];
 };
 
 /** 能力集合画布节点（与 React Flow 序列化兼容） */

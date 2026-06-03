@@ -3,6 +3,7 @@ import { storyboardRowHasFrameRef, resolveStoryboardRowFrameDisplaySrc } from '.
 import {
   applyShotFieldsPatch,
   compileShotText,
+  compareStoryboardShotNos,
   normalizeFieldCatalog,
   normalizeShotFieldsRecord,
   formatStoryboardNumericShotNo,
@@ -23,6 +24,11 @@ import {
   duplicateStoryboardRoleAssets,
   normalizeStoryboardRoleAssets,
 } from './storyboardRoleAssets';
+import {
+  duplicateStoryboardSceneAssets,
+  normalizeStoryboardSceneAssets,
+} from './storyboardSceneAssets';
+import { mergeStoryboardNamedAssets } from './storyboardNamedAssetImage';
 import { storyboardShotNosMatch } from './storyboardSheetVisionSplit';
 
 const rowId = () => Math.random().toString(36).slice(2, 11);
@@ -33,8 +39,21 @@ function normalizeTimelineLayer(value: unknown): number {
   return Math.floor(n);
 }
 
+export function hasWorkflowStoryboardTablePayload(a: WorkflowAsset): boolean {
+  const table = a.storyboardTable;
+  return Boolean(table && typeof table === 'object' && Array.isArray(table.rows));
+}
+
+/** 显式 kind 或旧数据内嵌 storyboardTable 均视为分镜表资产 */
 export function isWorkflowStoryboardTableAsset(a: WorkflowAsset): boolean {
-  return a.assetKind === 'storyboard_table';
+  return a.assetKind === 'storyboard_table' || hasWorkflowStoryboardTablePayload(a);
+}
+
+/** 加载/自愈：补齐旧数据缺失的 assetKind，并规范化分镜表结构 */
+export function upgradeLegacyWorkflowStoryboardTableAsset(asset: WorkflowAsset): WorkflowAsset {
+  if (!hasWorkflowStoryboardTablePayload(asset)) return asset;
+  if (asset.assetKind === 'storyboard_table') return normalizeStoryboardTableOnAsset(asset);
+  return normalizeStoryboardTableOnAsset({ ...asset, assetKind: 'storyboard_table' });
 }
 
 /** 合并导入/解析时保留已有分镜图与标注 */
@@ -66,8 +85,16 @@ export function preserveStoryboardRowFrameFields(
 
 export function createStoryboardTableRow(partial?: Partial<StoryboardTableRow>, index = 0): StoryboardTableRow {
   const shotFields = normalizeShotFieldsRecord(partial?.shotFields);
+  const shotNoExplicit = partial != null && Object.prototype.hasOwnProperty.call(partial, 'shotNo');
   const rawShotNo = String(partial?.shotNo ?? '').trim();
-  const shotNo = rawShotNo ? normalizeStoryboardShotNoInput(rawShotNo) : formatStoryboardShotNo(index);
+  let shotNo: string | undefined;
+  if (rawShotNo) {
+    shotNo = rawShotNo.slice(0, 32);
+  } else if (shotNoExplicit) {
+    shotNo = undefined;
+  } else {
+    shotNo = formatStoryboardShotNo(index);
+  }
   return {
     id: partial?.id || rowId(),
     index,
@@ -92,6 +119,24 @@ export function createStoryboardTableRow(partial?: Partial<StoryboardTableRow>, 
 
 export function reindexStoryboardRows(rows: StoryboardTableRow[]): StoryboardTableRow[] {
   return rows.map((r, i) => ({ ...r, index: i }));
+}
+
+export function storyboardRowHasAssignedShotNo(row: Pick<StoryboardTableRow, 'shotNo'>): boolean {
+  return Boolean(String(row.shotNo ?? '').trim());
+}
+
+/** 编辑页：无镜号镜头保持在前，有镜号按镜号升序 */
+export function sortStoryboardRowsByShotNo(rows: StoryboardTableRow[]): StoryboardTableRow[] {
+  const unnumbered: StoryboardTableRow[] = [];
+  const numbered: StoryboardTableRow[] = [];
+  for (const row of rows) {
+    if (storyboardRowHasAssignedShotNo(row)) numbered.push(row);
+    else unnumbered.push(row);
+  }
+  numbered.sort((a, b) =>
+    compareStoryboardShotNos(String(a.shotNo ?? ''), String(b.shotNo ?? ''))
+  );
+  return reindexStoryboardRows([...unnumbered, ...numbered]);
 }
 
 function finalizeStoryboardRows(
@@ -188,6 +233,7 @@ export function normalizeStoryboardTableDoc(raw: unknown): StoryboardTableDoc {
   const title =
     doc.title !== undefined && doc.title !== null ? String(doc.title) : undefined;
   const roleAssets = normalizeStoryboardRoleAssets(doc.roleAssets);
+  const sceneAssets = normalizeStoryboardSceneAssets(doc.sceneAssets);
   return {
     ...(title !== undefined ? { title } : {}),
     timelineLayerCount: layerCount,
@@ -195,6 +241,7 @@ export function normalizeStoryboardTableDoc(raw: unknown): StoryboardTableDoc {
     ...(parsePresetId ? { parsePresetId } : {}),
     ...(optimizePresetId ? { optimizePresetId } : {}),
     ...(roleAssets.length ? { roleAssets } : {}),
+    ...(sceneAssets.length ? { sceneAssets } : {}),
     rows,
   };
 }
@@ -306,7 +353,8 @@ export function mergeStoryboardTableDocs(
     timelineLayerCount: Math.max(base.timelineLayerCount ?? 1, other.timelineLayerCount ?? 1),
     parsePresetId: base.parsePresetId || other.parsePresetId,
     optimizePresetId: base.optimizePresetId || other.optimizePresetId,
-    roleAssets: base.roleAssets?.length ? base.roleAssets : other.roleAssets,
+    roleAssets: mergeStoryboardNamedAssets(base.roleAssets, other.roleAssets, normalizeStoryboardRoleAssets),
+    sceneAssets: mergeStoryboardNamedAssets(base.sceneAssets, other.sceneAssets, normalizeStoryboardSceneAssets),
     rows: finalizeStoryboardRows(rows, fieldCatalog),
   };
 }
@@ -467,6 +515,7 @@ export function duplicateStoryboardTableOnAsset(asset: WorkflowAsset, newAssetId
       ...table,
       fieldCatalog: table?.fieldCatalog ? [...table.fieldCatalog] : [],
       roleAssets: duplicateStoryboardRoleAssets(table?.roleAssets ?? []),
+      sceneAssets: duplicateStoryboardSceneAssets(table?.sceneAssets ?? []),
       rows,
     },
   });

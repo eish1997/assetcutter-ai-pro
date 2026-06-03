@@ -40,6 +40,10 @@ import {
   keywordsMatchCapabilityLabelId,
   keywordsMatchCapabilityModule,
 } from './capabilitySearchMatch';
+import {
+  capabilityPresetHasTag,
+  collectCapabilityPresetTags,
+} from '../../services/capabilityPresetTags';
 
 /** 复合能力内引用的预设 id，用于与左侧能力预设列联动高亮 */
 function collectPresetIdsFromCapabilitySet(set: CapabilitySet | null | undefined): string[] {
@@ -611,6 +615,7 @@ export function WorkflowSidebarColumn({
   }, [favoriteEntries.length]);
   const showFavoritesDropBody = favoriteEntries.length > 0 || favoritesBodyExpanded;
   const [sidebarCapabilitySearch, setSidebarCapabilitySearch] = useState('');
+  const [selectedPresetTag, setSelectedPresetTag] = useState<string | null>(null);
   const linkedTrim = (typeof linkedComposeSearchQuery === 'string' ? linkedComposeSearchQuery : '').trim();
   const sidebarTrim = sidebarCapabilitySearch.trim();
   const rawForCapabilitySearch = linkedTrim.length > 0 ? linkedTrim : sidebarTrim;
@@ -640,27 +645,65 @@ export function WorkflowSidebarColumn({
     },
     [capabilitySearchKeywords]
   );
+  const presetMatchesTag = useCallback(
+    (mod: CustomAppModule) => {
+      if (!selectedPresetTag) return true;
+      return capabilityPresetHasTag(mod, selectedPresetTag);
+    },
+    [selectedPresetTag]
+  );
+  const favoriteMatchesTag = useCallback(
+    (entry: WorkflowSidebarFavoriteEntry) => {
+      if (!selectedPresetTag) return true;
+      return entry.kind === 'module' && capabilityPresetHasTag(entry.mod, selectedPresetTag);
+    },
+    [selectedPresetTag]
+  );
+  const presetSidebarTags = useMemo(() => collectCapabilityPresetTags(visiblePresets), [visiblePresets]);
+  useEffect(() => {
+    if (selectedPresetTag && !presetSidebarTags.includes(selectedPresetTag)) {
+      setSelectedPresetTag(null);
+    }
+  }, [selectedPresetTag, presetSidebarTags]);
+  const tagScopedVisiblePresets = useMemo(
+    () => visiblePresets.filter(presetMatchesTag),
+    [visiblePresets, presetMatchesTag]
+  );
+  const tagScopedVisibleByCategory = useMemo(
+    () =>
+      visibleByCategory
+        .map(({ category, list }) => ({
+          category,
+          list: list.filter(presetMatchesTag),
+        }))
+        .filter((g) => g.list.length > 0),
+    [visibleByCategory, presetMatchesTag]
+  );
+  const tagScopedFavoriteEntries = useMemo(
+    () => favoriteEntries.filter(favoriteMatchesTag),
+    [favoriteEntries, favoriteMatchesTag]
+  );
   const filteredVisiblePresets = useMemo(
-    () => visiblePresets.filter(moduleMatchesSearch),
-    [visiblePresets, moduleMatchesSearch]
+    () => tagScopedVisiblePresets.filter(moduleMatchesSearch),
+    [tagScopedVisiblePresets, moduleMatchesSearch]
   );
   const filteredVisibleByCategory = useMemo(
     () =>
-      visibleByCategory
+      tagScopedVisibleByCategory
         .map(({ category, list }) => ({
           category,
           list: list.filter(moduleMatchesSearch),
         }))
         .filter((g) => g.list.length > 0),
-    [visibleByCategory, moduleMatchesSearch]
+    [tagScopedVisibleByCategory, moduleMatchesSearch]
   );
   const filteredVisibleCapabilitySets = useMemo(
     () => visibleCapabilitySets.filter(setMatchesSearch),
     [visibleCapabilitySets, setMatchesSearch]
   );
   const filteredFavoriteEntries = useMemo(
-    () => favoriteEntries.filter(favoriteMatchesSearch),
-    [favoriteEntries, favoriteMatchesSearch]
+    () => tagScopedFavoriteEntries.filter(favoriteMatchesSearch),
+    [tagScopedFavoriteEntries, favoriteMatchesSearch]
   );
   const filteredWorkflowFeatureGroups = useMemo(
     () =>
@@ -676,8 +719,9 @@ export function WorkflowSidebarColumn({
       })).filter((group) => group.items.length > 0),
     [capabilitySearchKeywords]
   );
-  /** 有检索词但无一命中时，列表回退为「全部」，避免空白 */
+  /** 有检索词但无一命中时，列表回退为「全部」，避免空白（标签筛选不参与回退） */
   const sidebarSearchFallbackAll =
+    !selectedPresetTag &&
     capabilitySearchKeywords.length > 0 &&
     (visiblePresets.length > 0 || visibleCapabilitySets.length > 0 || favoriteEntries.length > 0) &&
     filteredVisiblePresets.length === 0 &&
@@ -687,7 +731,8 @@ export function WorkflowSidebarColumn({
   const displayFavoriteEntries = sidebarSearchFallbackAll ? favoriteEntries : filteredFavoriteEntries;
   const displayVisibleByCategory = sidebarSearchFallbackAll ? visibleByCategory : filteredVisibleByCategory;
   const displayVisiblePresets = sidebarSearchFallbackAll ? visiblePresets : filteredVisiblePresets;
-  const displayCapabilitySets = sidebarSearchFallbackAll ? visibleCapabilitySets : filteredVisibleCapabilitySets;
+  const displayCapabilitySets =
+    selectedPresetTag ? [] : sidebarSearchFallbackAll ? visibleCapabilitySets : filteredVisibleCapabilitySets;
   const hasPresetEditorDragging = useCallback(() => {
     if (typeof window === 'undefined') return false;
     try {
@@ -1297,6 +1342,35 @@ export function WorkflowSidebarColumn({
         />
         {linkedComposeActive ? (
           <p className="mt-0.5 text-[8px] text-gray-600 leading-tight">与底部快捷栏输入联动筛选；清空底部输入后恢复仅按上方搜索。</p>
+        ) : null}
+        {presetSidebarTags.length > 0 ? (
+          <div className="mt-1.5 flex flex-wrap gap-1">
+            <button
+              type="button"
+              onClick={() => setSelectedPresetTag(null)}
+              className={`px-2 py-0.5 rounded-md text-[8px] font-black uppercase border transition-colors ${
+                selectedPresetTag == null
+                  ? 'border-blue-500/60 bg-blue-950/35 text-blue-200'
+                  : 'border-white/[0.08] bg-white/[0.03] text-gray-400 hover:bg-white/[0.06] hover:text-gray-300'
+              }`}
+            >
+              全部
+            </button>
+            {presetSidebarTags.map((tag) => (
+              <button
+                key={tag}
+                type="button"
+                onClick={() => setSelectedPresetTag((prev) => (prev === tag ? null : tag))}
+                className={`px-2 py-0.5 rounded-md text-[8px] font-black border transition-colors ${
+                  selectedPresetTag === tag
+                    ? 'border-blue-500/60 bg-blue-950/35 text-blue-200'
+                    : 'border-[#314767] bg-[#182235] text-blue-200/90 hover:border-blue-400/45'
+                }`}
+              >
+                {tag}
+              </button>
+            ))}
+          </div>
         ) : null}
       </div>
       </div>

@@ -4,6 +4,7 @@ import { idbDeleteBundle, idbLoadBundleJson, idbSaveBundleJson } from './workspa
 import { migrateLegacyAssets } from './assetGroupMigration';
 import { sanitizeWorkflowProjectBundle } from './workflowBundleSanitize';
 import { stripWorkflowBundleForIdbPersist, prepareWorkflowBundleAfterLoad } from './workflowCompanionAssets';
+import { isWorkflowStoryboardTableAsset } from './storyboardTableAsset';
 
 export type WorkspaceProject = {
   id: string;
@@ -80,14 +81,124 @@ function migrateWorkflowBundleSchema(bundle: WorkflowProjectBundle): WorkflowPro
 const bundleMemoryCache = new Map<string, WorkflowProjectBundle>();
 const migrationNoticesQueue: string[] = [];
 const migrationNoticesSeen = new Set<string>();
+/** 最近一次 loadWorkflowBundle 是否降级（解析/规范化失败），供 App 避免空包覆盖落盘 */
+let lastWorkflowBundleLoadDegraded = false;
+
+export function consumeWorkflowBundleLoadDegraded(): boolean {
+  const degraded = lastWorkflowBundleLoadDegraded;
+  lastWorkflowBundleLoadDegraded = false;
+  return degraded;
+}
 /** 同一 bundle 连续保存时只保留待写入 JSON，避免排队多次完整 IDB 写入 */
-const pendingIdbPayloadByKey = new Map<string, string>();
+const pendingIdbPayloadByKey = new Map<string, { json: string; opts?: SaveWorkflowBundleOptions }>();
 const pendingIdbWrites = new Map<string, Promise<void>>();
 /** removeWorkflowBundle 后跳过已在队列中的写入，避免删项又被写回 IDB */
 const cancelledIdbBundleKeys = new Set<string>();
 
 function cloneBundle(b: WorkflowProjectBundle): WorkflowProjectBundle {
   return JSON.parse(JSON.stringify(b)) as WorkflowProjectBundle;
+}
+
+export type SaveWorkflowBundleOptions = {
+  /** 本会话用户已见过非空画布，允许将本地 bundle 覆盖为空（删光资产） */
+  allowEmptyOverwrite?: boolean;
+  /** 用户在本会话显式删除的分镜表资产 id，保存时允许从 bundle 中移除 */
+  explicitlyRemovedStoryboardIds?: ReadonlySet<string>;
+};
+
+export function listStoryboardTableAssetIds(assets: WorkflowAsset[]): string[] {
+  const out: string[] = [];
+  for (const a of assets) {
+    if (!isWorkflowStoryboardTableAsset(a)) continue;
+    const id = String(a.id || '').trim();
+    if (id) out.push(id);
+  }
+  return out;
+}
+
+/** 保存前：若 incoming 意外缺少已有分镜表资产，从 existing 补回（除非用户本会话已显式删除） */
+export function mergePreservingStoryboardTableAssets(
+  incoming: WorkflowProjectBundle,
+  existingAssets: WorkflowAsset[],
+  opts?: Pick<SaveWorkflowBundleOptions, 'explicitlyRemovedStoryboardIds'>
+): { bundle: WorkflowProjectBundle; restoredStoryboardAssets: WorkflowAsset[] } {
+  if (!existingAssets.length) return { bundle: incoming, restoredStoryboardAssets: [] };
+  const incomingIds = new Set(
+    incoming.assets.map((a) => String(a.id || '').trim()).filter(Boolean)
+  );
+  const removed = opts?.explicitlyRemovedStoryboardIds;
+  const restore = existingAssets.filter((a) => {
+    if (!isWorkflowStoryboardTableAsset(a)) return false;
+    const id = String(a.id || '').trim();
+    if (!id || incomingIds.has(id)) return false;
+    if (removed?.has(id)) return false;
+    return true;
+  });
+  if (!restore.length) return { bundle: incoming, restoredStoryboardAssets: [] };
+  console.warn(
+    '[workspace] restored storyboard_table assets that would have been lost',
+    restore.map((a) => a.id)
+  );
+  const restoredStoryboardAssets = restore.map(
+    (a) => cloneBundle({ assets: [a], pending: [] }).assets[0]!
+  );
+  return {
+    bundle: { ...incoming, assets: [...incoming.assets, ...restoredStoryboardAssets] },
+    restoredStoryboardAssets,
+  };
+}
+
+export type SaveWorkflowBundleResult = {
+  saved: boolean;
+  restoredStoryboardAssets: WorkflowAsset[];
+};
+
+/** 统计持久化 JSON 中的资产条数；解析失败返回 0 */
+export function countWorkflowBundleAssetsInJson(raw: string | null | undefined): number {
+  if (!raw) return 0;
+  try {
+    const data = JSON.parse(raw) as Partial<WorkflowProjectBundle>;
+    return Array.isArray(data.assets) ? data.assets.length : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** 解析失败时的最小恢复：保留 assets/pending，不跑 sanitize */
+export function recoverWorkflowBundleFromRawJson(raw: string): WorkflowProjectBundle {
+  const data = JSON.parse(raw) as Partial<WorkflowProjectBundle>;
+  return migrateWorkflowBundleSchema({
+    assets: Array.isArray(data.assets) ? data.assets : [],
+    pending: Array.isArray(data.pending) ? data.pending : [],
+    ...(Array.isArray(data.capabilityRefs) ? { capabilityRefs: data.capabilityRefs } : {}),
+    ...(typeof data.workflowBundleSchemaVersion === 'number' &&
+    Number.isFinite(data.workflowBundleSchemaVersion)
+      ? { workflowBundleSchemaVersion: data.workflowBundleSchemaVersion }
+      : {}),
+  });
+}
+
+export function shouldBlockEmptyWorkflowBundlePersist(
+  incoming: WorkflowProjectBundle,
+  opts: { existingAssetCount: number; allowEmptyOverwrite?: boolean }
+): boolean {
+  if ((incoming.assets?.length ?? 0) > 0) return false;
+  if (opts.allowEmptyOverwrite) return false;
+  return opts.existingAssetCount > 0;
+}
+
+function loadBundleIntoMemoryCache(key: string, raw: string): WorkflowProjectBundle {
+  try {
+    const bundle = prepareWorkflowBundleAfterLoad(parseBundleJson(raw));
+    bundleMemoryCache.set(key, cloneBundle(bundle));
+    return bundle;
+  } catch (e) {
+    console.warn('[workspace] bundle load failed, raw recover', key, e);
+    lastWorkflowBundleLoadDegraded = true;
+    const recovered = recoverWorkflowBundleFromRawJson(raw);
+    bundleMemoryCache.set(key, cloneBundle(recovered));
+    return recovered;
+  }
 }
 
 function parseBundleJson(raw: string): WorkflowProjectBundle {
@@ -151,16 +262,26 @@ function parseBundleJson(raw: string): WorkflowProjectBundle {
   }
   // 迁移旧数据到新结构
   bundle.assets = migrateLegacyAssets(bundle.assets);
-  const hygiene = sanitizeWorkflowProjectBundle(bundle.assets, bundle.pending);
-  bundle.assets = hygiene.assets;
-  bundle.pending = hygiene.pending;
-  const st = hygiene.stats;
-  if (st.repairedGroupRefSlots > 0 || st.demotedEmptyGroups > 0 || st.prunedPendingTasks > 0) {
-    const parts: string[] = [];
-    if (st.repairedGroupRefSlots > 0) parts.push(`修正组内引用 ${st.repairedGroupRefSlots} 处`);
-    if (st.demotedEmptyGroups > 0) parts.push(`空组降级为单卡 ${st.demotedEmptyGroups} 个`);
-    if (st.prunedPendingTasks > 0) parts.push(`移除失效队列 ${st.prunedPendingTasks} 条`);
-    const notice = `工作区已自动修复数据：${parts.join('；')}`;
+  try {
+    const hygiene = sanitizeWorkflowProjectBundle(bundle.assets, bundle.pending);
+    bundle.assets = hygiene.assets;
+    bundle.pending = hygiene.pending;
+    const st = hygiene.stats;
+    if (st.repairedGroupRefSlots > 0 || st.demotedEmptyGroups > 0 || st.prunedPendingTasks > 0) {
+      const parts: string[] = [];
+      if (st.repairedGroupRefSlots > 0) parts.push(`修正组内引用 ${st.repairedGroupRefSlots} 处`);
+      if (st.demotedEmptyGroups > 0) parts.push(`空组降级为单卡 ${st.demotedEmptyGroups} 个`);
+      if (st.prunedPendingTasks > 0) parts.push(`移除失效队列 ${st.prunedPendingTasks} 条`);
+      const notice = `工作区已自动修复数据：${parts.join('；')}`;
+      if (!migrationNoticesSeen.has(notice)) {
+        migrationNoticesSeen.add(notice);
+        migrationNoticesQueue.push(notice);
+      }
+    }
+  } catch (e) {
+    console.warn('[workspace] bundle sanitize failed, keeping migrated raw assets', e);
+    lastWorkflowBundleLoadDegraded = true;
+    const notice = '工作区数据规范化失败，已保留原始资产列表（请尽快导出备份）';
     if (!migrationNoticesSeen.has(notice)) {
       migrationNoticesSeen.add(notice);
       migrationNoticesQueue.push(notice);
@@ -169,16 +290,37 @@ function parseBundleJson(raw: string): WorkflowProjectBundle {
   return migrateWorkflowBundleSchema(bundle);
 }
 
+/** 供测试与外部诊断：完整 parse 流程（含 sanitize） */
+export function parseWorkflowBundleJson(raw: string): WorkflowProjectBundle {
+  return parseBundleJson(raw);
+}
+
 export function consumeWorkspaceMigrationNotices(): string[] {
   if (migrationNoticesQueue.length === 0) return [];
   return migrationNoticesQueue.splice(0, migrationNoticesQueue.length);
 }
 
-function schedulePersistToIdb(bundleKey: string, json: string): void {
+function schedulePersistToIdb(
+  bundleKey: string,
+  json: string,
+  opts?: SaveWorkflowBundleOptions
+): void {
   if (typeof indexedDB === 'undefined') {
     const st = safeLocalStorage();
     if (st) {
       try {
+        if (
+          shouldBlockEmptyWorkflowBundlePersist(
+            JSON.parse(json) as WorkflowProjectBundle,
+            {
+              existingAssetCount: countWorkflowBundleAssetsInJson(readLocalString(bundleKey)),
+              allowEmptyOverwrite: opts?.allowEmptyOverwrite,
+            }
+          )
+        ) {
+          console.warn('[workspace] blocked empty localStorage overwrite', bundleKey);
+          return;
+        }
         st.setItem(bundleKey, json);
       } catch (e) {
         const name = typeof DOMException !== 'undefined' && e instanceof DOMException ? e.name : '';
@@ -194,17 +336,38 @@ function schedulePersistToIdb(bundleKey: string, json: string): void {
     return;
   }
 
-  pendingIdbPayloadByKey.set(bundleKey, json);
+  pendingIdbPayloadByKey.set(bundleKey, { json, opts });
   cancelledIdbBundleKeys.delete(bundleKey);
   if (pendingIdbWrites.has(bundleKey)) return;
 
   const drain = async (): Promise<void> => {
     try {
       while (pendingIdbPayloadByKey.has(bundleKey)) {
-        const payload = pendingIdbPayloadByKey.get(bundleKey)!;
+        const pending = pendingIdbPayloadByKey.get(bundleKey)!;
         pendingIdbPayloadByKey.delete(bundleKey);
+        const payload = pending.json;
+        const persistOpts = pending.opts;
         if (cancelledIdbBundleKeys.has(bundleKey)) {
           cancelledIdbBundleKeys.delete(bundleKey);
+          continue;
+        }
+        let incoming: WorkflowProjectBundle;
+        try {
+          incoming = JSON.parse(payload) as WorkflowProjectBundle;
+        } catch {
+          incoming = { assets: [], pending: [] };
+        }
+        const existingRaw = (await idbLoadBundleJson(bundleKey)) ?? readLocalString(bundleKey);
+        if (
+          shouldBlockEmptyWorkflowBundlePersist(incoming, {
+            existingAssetCount: countWorkflowBundleAssetsInJson(existingRaw),
+            allowEmptyOverwrite: persistOpts?.allowEmptyOverwrite,
+          })
+        ) {
+          console.warn('[workspace] blocked empty IndexedDB overwrite', bundleKey);
+          if (existingRaw) {
+            loadBundleIntoMemoryCache(bundleKey, existingRaw);
+          }
           continue;
         }
         try {
@@ -301,31 +464,109 @@ export function setLastOpenedWorkspaceProjectId(id: string | null, persistUserId
 
 export function loadWorkflowBundle(projectId: string, persistUserId: WorkspacePersistUserId = null): WorkflowProjectBundle {
   const key = workflowBundleStorageKey(projectId, persistUserId);
+  lastWorkflowBundleLoadDegraded = false;
   const cached = bundleMemoryCache.get(key);
   if (cached) return cloneBundle(cached);
-  try {
-    const raw = readLocalString(key);
-    if (!raw) return migrateWorkflowBundleSchema({ assets: [], pending: [] });
-    const bundle = prepareWorkflowBundleAfterLoad(parseBundleJson(raw));
-    bundleMemoryCache.set(key, cloneBundle(bundle));
-    return bundle;
-  } catch (e) {
-    console.warn('[workspace] loadWorkflowBundle parse failed', key, e);
+  const raw = readLocalString(key);
+  if (!raw) {
+    if (typeof indexedDB !== 'undefined') {
+      lastWorkflowBundleLoadDegraded = true;
+    }
     return migrateWorkflowBundleSchema({ assets: [], pending: [] });
   }
+  return cloneBundle(loadBundleIntoMemoryCache(key, raw));
+}
+
+function resolveExistingAssetsForPersistGuard(
+  key: string,
+  cached: WorkflowProjectBundle | undefined
+): WorkflowAsset[] {
+  const fromCache = cached?.assets ?? [];
+  const raw = readLocalString(key);
+  if (!raw) return fromCache;
+  let fromRaw: WorkflowAsset[] = [];
+  try {
+    const data = JSON.parse(raw) as Partial<WorkflowProjectBundle>;
+    fromRaw = Array.isArray(data.assets) ? data.assets : [];
+  } catch {
+    return fromCache;
+  }
+  if (!fromRaw.length) return fromCache;
+  if (!fromCache.length) return fromRaw;
+
+  const merged = [...fromCache];
+  const seen = new Set(
+    fromCache.map((a) => String(a.id || '').trim()).filter(Boolean)
+  );
+  for (const asset of fromRaw) {
+    if (!isWorkflowStoryboardTableAsset(asset)) continue;
+    const id = String(asset.id || '').trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    merged.push(asset);
+  }
+  return merged;
+}
+
+/** 将 save 阶段补回的分镜表合并进当前 assets 列表（去重） */
+export function mergeRestoredStoryboardAssetsIntoList(
+  assets: WorkflowAsset[],
+  restored: WorkflowAsset[]
+): WorkflowAsset[] {
+  if (!restored.length) return assets;
+  const ids = new Set(assets.map((a) => String(a.id || '').trim()).filter(Boolean));
+  const add: WorkflowAsset[] = [];
+  for (const asset of restored) {
+    const id = String(asset.id || '').trim();
+    if (!id || ids.has(id)) continue;
+    ids.add(id);
+    add.push(asset);
+  }
+  if (!add.length) return assets;
+  return [...assets, ...add];
 }
 
 export function saveWorkflowBundle(
   projectId: string,
   bundle: WorkflowProjectBundle,
-  persistUserId: WorkspacePersistUserId = null
-): void {
+  persistUserId: WorkspacePersistUserId = null,
+  opts?: SaveWorkflowBundleOptions
+): SaveWorkflowBundleResult {
   const key = workflowBundleStorageKey(projectId, persistUserId);
-  const snapshot = cloneBundle(bundle);
+  const cached = bundleMemoryCache.get(key);
+  const existingAssets = resolveExistingAssetsForPersistGuard(key, cached);
+  const { bundle: snapshot, restoredStoryboardAssets } = mergePreservingStoryboardTableAssets(
+    cloneBundle(bundle),
+    existingAssets,
+    opts
+  );
   snapshot.workflowBundleSchemaVersion = WORKFLOW_BUNDLE_SCHEMA_CURRENT;
+  if (
+    shouldBlockEmptyWorkflowBundlePersist(snapshot, {
+      existingAssetCount: Math.max(
+        cached?.assets.length ?? 0,
+        countWorkflowBundleAssetsInJson(readLocalString(key))
+      ),
+      allowEmptyOverwrite: opts?.allowEmptyOverwrite,
+    })
+  ) {
+    console.warn('[workspace] refused in-memory empty save over known non-empty bundle', key);
+    if (cached) {
+      return { saved: false, restoredStoryboardAssets: restoredStoryboardAssets };
+    }
+    if (rawHasAssets(readLocalString(key))) {
+      loadWorkflowBundle(projectId, persistUserId);
+      return { saved: false, restoredStoryboardAssets: restoredStoryboardAssets };
+    }
+  }
   bundleMemoryCache.set(key, snapshot);
   const payload = JSON.stringify(stripWorkflowBundleForIdbPersist(snapshot));
-  schedulePersistToIdb(key, payload);
+  schedulePersistToIdb(key, payload, opts);
+  return { saved: true, restoredStoryboardAssets };
+}
+
+function rawHasAssets(raw: string | null): boolean {
+  return countWorkflowBundleAssetsInJson(raw) > 0;
 }
 
 /** 等待正在进行的 IndexedDB 写入完成（供 pagehide / 关页前尽力落盘） */
@@ -363,19 +604,31 @@ export async function ensureWorkspaceBundlesHydratedFromIdb(persistUserId: Works
     try {
       const fromIdb = await idbLoadBundleJson(key);
       if (fromIdb) {
-        const bundle = prepareWorkflowBundleAfterLoad(parseBundleJson(fromIdb));
-        bundleMemoryCache.set(key, cloneBundle(bundle));
+        loadBundleIntoMemoryCache(key, fromIdb);
         continue;
       }
       const raw = readLocalString(key);
       if (raw) {
-        const bundle = prepareWorkflowBundleAfterLoad(parseBundleJson(raw));
-        bundleMemoryCache.set(key, cloneBundle(bundle));
-        await idbSaveBundleJson(key, JSON.stringify(stripWorkflowBundleForIdbPersist(bundle))).catch(() => {});
+        loadBundleIntoMemoryCache(key, raw);
+        const cached = bundleMemoryCache.get(key);
+        if (cached) {
+          await idbSaveBundleJson(
+            key,
+            JSON.stringify(stripWorkflowBundleForIdbPersist(cached))
+          ).catch(() => {});
+        }
         removeLocalKey(key);
       }
     } catch (e) {
-      console.warn('[workspace] hydrate bundle', key, e);
+      console.warn('[workspace] hydrate bundle failed', key, e);
+      lastWorkflowBundleLoadDegraded = true;
+      try {
+        const fromIdb = await idbLoadBundleJson(key);
+        const raw = fromIdb ?? readLocalString(key);
+        if (raw) loadBundleIntoMemoryCache(key, raw);
+      } catch (recoverErr) {
+        console.warn('[workspace] hydrate bundle raw recover failed', key, recoverErr);
+      }
     }
   }
 }
@@ -384,13 +637,13 @@ export async function ensureWorkspaceBundlesHydratedFromIdb(persistUserId: Works
 export function trySaveWorkflowBundle(
   projectId: string,
   bundle: WorkflowProjectBundle,
-  persistUserId: WorkspacePersistUserId = null
-): boolean {
+  persistUserId: WorkspacePersistUserId = null,
+  opts?: SaveWorkflowBundleOptions
+): SaveWorkflowBundleResult {
   try {
-    saveWorkflowBundle(projectId, bundle, persistUserId);
-    return true;
+    return saveWorkflowBundle(projectId, bundle, persistUserId, opts);
   } catch {
-    return false;
+    return { saved: false, restoredStoryboardAssets: [] };
   }
 }
 

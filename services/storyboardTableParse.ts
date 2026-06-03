@@ -80,6 +80,27 @@ export function findDuplicateStoryboardShotNos(shotNos: string[]): string[] {
     .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 }
 
+/** 镜号重复时，参与重复的所有 row id（按 normalizeStoryboardShotNoKey 分组） */
+export function collectStoryboardDuplicateShotRowIds(
+  rows: Array<Pick<StoryboardTableRow, 'id' | 'shotNo'>>
+): Set<string> {
+  const byKey = new Map<string, string[]>();
+  for (const row of rows) {
+    const trimmed = String(row.shotNo ?? '').trim();
+    if (!trimmed) continue;
+    const key = normalizeStoryboardShotNoKey(trimmed) || trimmed.toLowerCase();
+    const ids = byKey.get(key) ?? [];
+    ids.push(row.id);
+    byKey.set(key, ids);
+  }
+  const duplicateIds = new Set<string>();
+  for (const ids of byKey.values()) {
+    if (ids.length <= 1) continue;
+    for (const id of ids) duplicateIds.add(id);
+  }
+  return duplicateIds;
+}
+
 /** 追加导入时，与表内已有镜号冲突的 incoming 镜号 */
 export function findStoryboardShotNoCollisions(
   existing: Array<{ shotNo?: string }>,

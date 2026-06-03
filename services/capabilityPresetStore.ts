@@ -13,6 +13,7 @@ import {
 import { readLocalString, removeLocalKey, writeLocalJson } from './clientPersist';
 import { normalizeCapabilityPreviewUrlForPersist } from './capabilityPreviewUrl';
 import { syncImageProcessProcessorFields } from './capabilityProcessors/imageProcessProcessors';
+import { normalizeCapabilityPresetTags } from './capabilityPresetTags';
 import { coerceImageModelRegistryId } from './modelRegistry/imageModels';
 import { coerceTextModelRegistryId } from './modelRegistry/textModels';
 
@@ -280,6 +281,9 @@ export function normalizeCapabilityPreset(input: CustomAppModule, index: number)
     delete (base as CustomAppModule & { companionRembgAlphaMatting?: unknown }).companionRembgAlphaMatting;
     delete (base as CustomAppModule & { companionHostBundle?: unknown }).companionHostBundle;
   }
+  const tags = normalizeCapabilityPresetTags(input.tags);
+  if (tags) base.tags = tags;
+  else delete (base as CustomAppModule & { tags?: string[] }).tags;
   return syncImageProcessProcessorFields(base);
 }
 

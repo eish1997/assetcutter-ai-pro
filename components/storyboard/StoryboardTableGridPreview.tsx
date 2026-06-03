@@ -1,5 +1,5 @@
 import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { StoryboardParseFieldDef, StoryboardTableRow } from '../../types';
+import type { StoryboardParseFieldDef, StoryboardTableRow, StoryboardRoleAsset } from '../../types';
 import {
   findStoryboardGroupIndexForRow,
   groupStoryboardRowsForGridPreview,
@@ -26,6 +26,8 @@ type Props = {
   secondsPerTile: number;
   timelineLayerCount?: number;
   gridExportWidth?: number;
+  overlayRoleMarks?: boolean;
+  roleAssets?: StoryboardRoleAsset[];
   activeRowId: string | null;
   onSelect: (rowId: string) => void;
   onPreviewImage: (src: string) => void;
@@ -40,6 +42,8 @@ export default function StoryboardTableGridPreview({
   secondsPerTile,
   timelineLayerCount = 1,
   gridExportWidth = 2560,
+  overlayRoleMarks = false,
+  roleAssets = [],
   activeRowId,
   onSelect,
   onPreviewImage,
@@ -135,6 +139,8 @@ export default function StoryboardTableGridPreview({
       fieldCatalog={fieldCatalog}
       activeRowId={activeRowId}
       previewWidth={gridExportWidth}
+      overlayRoleMarks={overlayRoleMarks}
+      roleAssets={roleAssets}
       onSelectRow={onSelect}
       onPreviewImage={onPreviewImage}
       onPreviewMosaicError={onPreviewMosaicError}

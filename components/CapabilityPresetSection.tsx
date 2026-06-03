@@ -51,6 +51,7 @@ import WorkflowComposerOverlay from './WorkflowComposerOverlay';
 import { CapabilityPreviewImg } from './CapabilityPreviewImg';
 import { ImagePreviewOverlay } from './ImagePreviewOverlay';
 import { CustomDropdown, DROPDOWN_TRIGGER_COMPACT } from './ui/CustomDropdown';
+import { CapabilityPresetTagsEditor } from './ui/CapabilityPresetTagsEditor';
 import AppIcon from './ui/AppIcon';
 import { useEffectiveImageModelRows } from '../hooks/useEffectiveImageGearRows';
 
@@ -229,6 +230,7 @@ const CapabilityPresetSection: React.FC<{
   const [editInstruction, setEditInstruction] = useState('');
   const [editSkipUnderstand, setEditSkipUnderstand] = useState(false);
   const [editRequirePromptOnTextDrop, setEditRequirePromptOnTextDrop] = useState(false);
+  const [editTags, setEditTags] = useState<string[]>([]);
   const [isAdding, setIsAdding] = useState(false);
   const [newLabel, setNewLabel] = useState('');
   const [newCategory, setNewCategory] = useState<CapabilityCategory>('image_to_image');
@@ -241,6 +243,7 @@ const CapabilityPresetSection: React.FC<{
   const [newInstruction, setNewInstruction] = useState('');
   const [newSkipUnderstand, setNewSkipUnderstand] = useState(false);
   const [newRequirePromptOnTextDrop, setNewRequirePromptOnTextDrop] = useState(false);
+  const [newTags, setNewTags] = useState<string[]>([]);
   const [newImageProcessor, setNewImageProcessor] = useState<ImageProcessorId>('split_component');
   const [newImageProcessParams, setNewImageProcessParams] = useState<Record<string, unknown>>(() =>
     defaultParamsForImageProcessor('split_component')
@@ -511,7 +514,7 @@ const CapabilityPresetSection: React.FC<{
       const processorId =
         editingId === 'cut_image' ? ('cut_image' as const) : editImageProcessor;
       const draft = applyImageProcessorDraftToPreset(
-        { ...prev, label: editLabel.trim() || prev.label, enabled: editEnabled },
+        { ...prev, label: editLabel.trim() || prev.label, enabled: editEnabled, tags: editTags.length > 0 ? editTags : undefined },
         processorId,
         editImageProcessParams
       );
@@ -531,6 +534,7 @@ const CapabilityPresetSection: React.FC<{
           label: editLabel,
           category: editCategory,
           instruction: editInstruction,
+          tags: editTags.length > 0 ? editTags : undefined,
           skipUnderstand: showGenImageFields || showGenVideoFields ? editSkipUnderstand : undefined,
           requirePromptOnTextDrop: editCategory === 'text_to_text' ? editRequirePromptOnTextDrop : undefined,
           enabled: editEnabled,
@@ -577,6 +581,7 @@ const CapabilityPresetSection: React.FC<{
       label,
       category: newCategory,
       instruction: newInstruction,
+      tags: newTags.length > 0 ? newTags : undefined,
       skipUnderstand: showNewGenImage || showNewGenVideo ? newSkipUnderstand : undefined,
       requirePromptOnTextDrop: newCategory === 'text_to_text' ? newRequirePromptOnTextDrop : undefined,
       enabled: newEnabled,
@@ -614,6 +619,7 @@ const CapabilityPresetSection: React.FC<{
     setNewInstruction('');
     setNewSkipUnderstand(false);
     setNewRequirePromptOnTextDrop(false);
+    setNewTags([]);
     setNewImageProcessor('split_component');
     setNewImageProcessParams(defaultParamsForImageProcessor('split_component'));
     setNewGenerate3D({ ...DEFAULT_GENERATE_3D });
@@ -1028,6 +1034,7 @@ const CapabilityPresetSection: React.FC<{
     setEditInstruction(((p as { instructionFixed?: string }).instructionFixed ?? p.instruction) || '');
     setEditSkipUnderstand(p.skipUnderstand === true);
     setEditRequirePromptOnTextDrop(p.requirePromptOnTextDrop === true);
+    setEditTags(Array.isArray(p.tags) ? [...p.tags] : []);
     setEditGenerate3D(p.category === 'generate_3d' && p.generate3D ? { ...p.generate3D } : { ...DEFAULT_GENERATE_3D });
     setDetailEditMode(true);
   }, []);
@@ -1725,6 +1732,12 @@ const CapabilityPresetSection: React.FC<{
               className="mt-1 w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
             />
           </div>
+          <div>
+            <span className="text-[8px] font-black text-gray-500 uppercase">标签</span>
+            <div className="mt-1">
+              <CapabilityPresetTagsEditor tags={newTags} onChange={setNewTags} />
+            </div>
+          </div>
           {newCategory === 'generate_video' && (
             <div>
               <span className="text-[8px] font-black text-cyan-400/90 uppercase">生视频 · 预设说明</span>
@@ -2288,6 +2301,10 @@ const CapabilityPresetSection: React.FC<{
                             <div className="text-[9px] text-gray-500 uppercase mb-1">功能名称</div>
                             <input value={editLabel} onChange={(e) => setEditLabel(e.target.value)} className="w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50" />
                           </label>
+                          <label className="block">
+                            <div className="text-[9px] text-gray-500 uppercase mb-1">标签</div>
+                            <CapabilityPresetTagsEditor tags={editTags} onChange={setEditTags} />
+                          </label>
                           <ImageProcessProcessorFields
                             processorId={editingId === 'cut_image' ? 'cut_image' : editImageProcessor}
                             params={editImageProcessParams}
@@ -2448,6 +2465,10 @@ const CapabilityPresetSection: React.FC<{
                           <label className="block">
                             <div className="text-[9px] text-gray-500 uppercase mb-1">功能名称</div>
                             <input value={editLabel} onChange={(e) => setEditLabel(e.target.value)} className="w-full bg-white/[0.05] ring-1 ring-white/[0.06] rounded-xl px-3 py-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50" />
+                          </label>
+                          <label className="block">
+                            <div className="text-[9px] text-gray-500 uppercase mb-1">标签</div>
+                            <CapabilityPresetTagsEditor tags={editTags} onChange={setEditTags} />
                           </label>
                           <label className="block">
                             <div className="text-[9px] text-gray-500 uppercase mb-1">提示词 / 说明</div>

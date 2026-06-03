@@ -3,6 +3,7 @@ import {
   applyAutoShotNumbers,
   computeStoryboardTableStats,
   createEmptyStoryboardTableAsset,
+  createStoryboardTableRow,
   duplicateStoryboardTableOnAsset,
   formatStoryboardShotNo,
   isWorkflowStoryboardTableAsset,
@@ -11,6 +12,7 @@ import {
   readStoryboardTableTitleRaw,
   reindexStoryboardRows,
   resolveStoryboardTableTitle,
+  sortStoryboardRowsByShotNo,
   storyboardTableCoverImage,
   storyboardTablePreviewImages,
 } from '../services/storyboardTableAsset';
@@ -24,6 +26,22 @@ describe('storyboardTableAsset', () => {
     expect(a.storyboardTable?.rows?.map((row) => row.shotNo)).toEqual(['001', '002', '003']);
     expect(a.storyboardTable?.rows?.[0]?.shotFields).toEqual({});
     expect(a.textTitle).toBe('第 1 集');
+  });
+
+  it('recognizes legacy storyboard payload without assetKind', () => {
+    const legacy = {
+      id: 'tbl-legacy',
+      original: '',
+      displayKey: 'original',
+      results: {},
+      storyboardTable: {
+        rows: [{ id: 'r1', index: 0, shotText: 'hello' }],
+      },
+    } as import('../types').WorkflowAsset;
+    expect(isWorkflowStoryboardTableAsset(legacy)).toBe(true);
+    const upgraded = normalizeStoryboardTableOnAsset({ ...legacy, assetKind: 'storyboard_table' });
+    expect(upgraded.assetKind).toBe('storyboard_table');
+    expect(upgraded.storyboardTable?.rows).toHaveLength(1);
   });
 
   it('reindexes rows after reorder', () => {
@@ -100,6 +118,22 @@ describe('storyboardTableAsset', () => {
     expect(rows[0]?.shotNo).toBe('001');
     expect(rows[1]?.shotNo).toBe('自定义');
     expect(rows[2]?.shotNo).toBe('001');
+  });
+
+  it('sortStoryboardRowsByShotNo keeps unnumbered rows first then sorts numbered rows', () => {
+    const sorted = sortStoryboardRowsByShotNo([
+      { id: 'c', index: 0, shotText: '', shotNo: '010' },
+      { id: 'a', index: 1, shotText: '', shotNo: '' },
+      { id: 'b', index: 2, shotText: '', shotNo: '002' },
+      { id: 'd', index: 3, shotText: '', shotNo: '' },
+    ] as never);
+    expect(sorted.map((row) => row.id)).toEqual(['a', 'd', 'b', 'c']);
+    expect(sorted.map((row) => row.index)).toEqual([0, 1, 2, 3]);
+  });
+
+  it('createStoryboardTableRow with blank shotNo stays unnumbered', () => {
+    const row = createStoryboardTableRow({ shotNo: '' }, 2);
+    expect(row.shotNo).toBeUndefined();
   });
 
   it('preview images capped', () => {

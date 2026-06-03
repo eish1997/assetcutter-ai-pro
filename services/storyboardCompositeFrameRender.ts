@@ -19,6 +19,7 @@ import {
   storyboardSheetCanvasFont,
   storyboardSheetFooterGap,
 } from './storyboardSheetSketchStyle';
+import { drawStoryboardFrameRoleMarksOnCanvas } from './storyboardFrameRoleMarks';
 import { storyboardRowShotLabel } from './storyboardVideoTimeline';
 
 const SHOT_CARD_WIDTH = 480;
@@ -34,6 +35,8 @@ export type CompactCellLayoutOpts = {
   variableHeight?: boolean;
   /** 覆盖单格文案（反馈拼图等） */
   cellMeta?: SheetCellTextMeta;
+  /** 叠加编辑页标注的人名标签 */
+  overlayRoleMarks?: boolean;
 };
 
 const imageCache = new Map<string, Promise<HTMLImageElement | null>>();
@@ -226,6 +229,7 @@ export async function drawCompactStoryboardCell(
     : Math.max(0, h - textMetrics.headerBlockH - textMetrics.footerBlockH - footerGap);
   const src = resolveStoryboardRowFrameDisplaySrc(row);
   let textStartY = imageY + footerGap;
+  let imageDrawRect: { x: number; y: number; w: number; h: number } | null = null;
 
   if (maxImageH > 0) {
     if (src) {
@@ -235,6 +239,7 @@ export async function drawCompactStoryboardCell(
           ? drawImageNaturalWidth(ctx, img, x, imageY, w)
           : drawImageWidthFirst(ctx, img, x, imageY, w, maxImageH);
         textStartY = imageY + drawnH + footerGap;
+        imageDrawRect = { x, y: imageY, w, h: drawnH };
       } else {
         const ph = variableHeight
           ? Math.round(w * 0.22)
@@ -249,6 +254,10 @@ export async function drawCompactStoryboardCell(
       drawPlaceholder(ctx, x, imageY, w, ph, label);
       textStartY = imageY + ph + footerGap;
     }
+  }
+
+  if (opts.overlayRoleMarks && imageDrawRect) {
+    drawStoryboardFrameRoleMarksOnCanvas(ctx, row.frameRoleMarks, imageDrawRect);
   }
 
   drawPlannedSheetCellText(ctx, meta, plan, x, y, w, textStartY, label);

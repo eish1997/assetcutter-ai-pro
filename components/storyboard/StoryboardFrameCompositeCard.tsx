@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import type { StoryboardParseFieldDef, StoryboardTableRow } from '../../types';
+import type { StoryboardParseFieldDef, StoryboardTableRow, StoryboardRoleAsset } from '../../types';
 import { resolveStoryboardRowFrameDisplaySrc } from '../../services/storyboardFrameImageUrl';
 import {
   storyboardRowDurationLabel,
@@ -8,6 +8,7 @@ import {
 } from './storyboardRowDisplay';
 import { storyboardCompositeDomId } from './storyboardTableDom';
 import { storyboardPanelCardTone } from './storyboardTableUi';
+import StoryboardFrameRoleMarkOverlays from './StoryboardFrameRoleMarkOverlays';
 
 function StoryboardCompositeFieldsBody({
   fieldItems,
@@ -74,6 +75,9 @@ type Props = {
   showLocked?: boolean;
   /** 分镜图网格：仅缩略图 + 镜号，不展示字段文案 */
   compact?: boolean;
+  /** 叠加编辑页人名标签 */
+  overlayRoleMarks?: boolean;
+  roleAssets?: StoryboardRoleAsset[];
   onSelect?: () => void;
   /** 网格预览等：双击切回编辑并定位该镜 */
   onOpenInEditor?: () => void;
@@ -96,6 +100,8 @@ export default function StoryboardFrameCompositeCard({
   mergeStatus,
   showLocked,
   compact = false,
+  overlayRoleMarks = false,
+  roleAssets,
   onSelect,
   onOpenInEditor,
   onPreviewImage,
@@ -151,6 +157,9 @@ export default function StoryboardFrameCompositeCard({
                   onPreviewImage?.(img);
                 }}
               />
+              {overlayRoleMarks ? (
+                <StoryboardFrameRoleMarkOverlays marks={row.frameRoleMarks} roleAssets={roleAssets} />
+              ) : null}
               <span className="pointer-events-none absolute left-0 top-0 bg-black/80 px-1.5 py-0.5 text-[10px] font-bold leading-none text-white tabular-nums">
                 {title}
               </span>
@@ -206,12 +215,17 @@ export default function StoryboardFrameCompositeCard({
           }
         >
           {img ? (
-            <img
-              src={img}
-              alt=""
-              className="absolute inset-0 h-full w-full object-contain"
-              draggable={false}
-            />
+            <>
+              <img
+                src={img}
+                alt=""
+                className="absolute inset-0 h-full w-full object-contain"
+                draggable={false}
+              />
+              {overlayRoleMarks ? (
+                <StoryboardFrameRoleMarkOverlays marks={row.frameRoleMarks} roleAssets={roleAssets} />
+              ) : null}
+            </>
           ) : (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 px-3 text-center">
               <span className="text-[10px] font-medium text-gray-600">

@@ -1,5 +1,5 @@
 import React, { memo } from 'react';
-import type { StoryboardParseFieldDef, StoryboardTableRow } from '../../types';
+import type { StoryboardParseFieldDef, StoryboardTableRow, StoryboardRoleAsset } from '../../types';
 import { shotFieldsShallowEqual } from '../../services/storyboardTableParse';
 import { storyboardRowCompositeBodyText } from './storyboardRowDisplay';
 import StoryboardFrameCompositeCard from './StoryboardFrameCompositeCard';
@@ -10,6 +10,8 @@ type Props = {
   fieldCatalog: StoryboardParseFieldDef[];
   active: boolean;
   compact?: boolean;
+  overlayRoleMarks?: boolean;
+  roleAssets?: StoryboardRoleAsset[];
   onSelect: () => void;
   onPreviewImage: (src: string) => void;
 };
@@ -24,6 +26,8 @@ function StoryboardConnectedCompositeCardInner({
   fieldCatalog,
   active,
   compact = false,
+  overlayRoleMarks = false,
+  roleAssets,
   onSelect,
   onPreviewImage,
 }: Props) {
@@ -37,6 +41,8 @@ function StoryboardConnectedCompositeCardInner({
       fieldCatalog={fieldCatalog}
       active={active}
       compact={compact}
+      overlayRoleMarks={overlayRoleMarks}
+      roleAssets={roleAssets}
       onSelect={onSelect}
       onPreviewImage={onPreviewImage}
     />
@@ -44,7 +50,12 @@ function StoryboardConnectedCompositeCardInner({
 }
 
 function compositePropsEqual(prev: Props, next: Props): boolean {
-  if (prev.index !== next.index || prev.active !== next.active || prev.compact !== next.compact) {
+  if (
+    prev.index !== next.index ||
+    prev.active !== next.active ||
+    prev.compact !== next.compact ||
+    prev.overlayRoleMarks !== next.overlayRoleMarks
+  ) {
     return false;
   }
   if (fieldCatalogSignature(prev.fieldCatalog) !== fieldCatalogSignature(next.fieldCatalog)) {
@@ -62,7 +73,8 @@ function compositePropsEqual(prev: Props, next: Props): boolean {
     a.frameImage === b.frameImage &&
     a.frameImageObjectKey === b.frameImageObjectKey &&
     a.frameImageCompanionKey === b.frameImageCompanionKey &&
-    a.locked === b.locked
+    a.locked === b.locked &&
+    a.frameRoleMarks === b.frameRoleMarks
   );
 }
 

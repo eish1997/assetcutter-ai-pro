@@ -1,4 +1,5 @@
 import type { StoryboardRoleAsset } from '../types';
+import { pickStoryboardNamedAssetImageFields } from './storyboardNamedAssetImage';
 
 const roleAssetId = () => Math.random().toString(36).slice(2, 11);
 
@@ -14,7 +15,7 @@ export function createStoryboardRoleAsset(partial?: Partial<StoryboardRoleAsset>
   return {
     id: partial?.id?.trim() || roleAssetId(),
     name,
-    image: String(partial?.image || '').trim() || undefined,
+    ...pickStoryboardNamedAssetImageFields(partial),
   };
 }
 
@@ -29,12 +30,22 @@ export function normalizeStoryboardRoleAssets(raw: unknown): StoryboardRoleAsset
     .filter((item): item is StoryboardRoleAsset => Boolean(item));
 }
 
+import { resolveStoryboardNamedAssetDisplaySrc } from './storyboardNamedAssetImage';
+
 export function resolveStoryboardRoleAssetDisplaySrc(asset: StoryboardRoleAsset): string {
-  return String(asset.image || '').trim();
+  return resolveStoryboardNamedAssetDisplaySrc(asset);
 }
 
 export function duplicateStoryboardRoleAssets(source: StoryboardRoleAsset[]): StoryboardRoleAsset[] {
   return source.map((item, index) =>
-    createStoryboardRoleAsset({ name: item.name, image: item.image }, index)
+    createStoryboardRoleAsset(
+      {
+        name: item.name,
+        image: item.image,
+        imageCompanionKey: item.imageCompanionKey,
+        imageObjectKey: item.imageObjectKey,
+      },
+      index
+    )
   );
 }

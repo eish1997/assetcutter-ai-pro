@@ -15,6 +15,8 @@ import {
   mergeParseResultIntoRow,
   mergeOptimizeResultIntoRow,
   normalizeBulkParseModelOutput,
+  collectStoryboardDuplicateShotRowIds,
+  findDuplicateStoryboardShotNos,
   normalizeOptimizeModelOutput,
   normalizeParseModelOutput,
   parseDurationSecFromParsedValue,
@@ -374,5 +376,16 @@ describe('storyboardTableParse', () => {
         catalog
       )
     ).toThrow();
+  });
+
+  it('collectStoryboardDuplicateShotRowIds groups rows by normalized shot key', () => {
+    const rows = [
+      createStoryboardTableRow({ id: 'a', shotNo: '041' }, 0),
+      createStoryboardTableRow({ id: 'b', shotNo: '041' }, 1),
+      createStoryboardTableRow({ id: 'c', shotNo: '042' }, 2),
+      createStoryboardTableRow({ id: 'd', shotNo: '' }, 3),
+    ];
+    expect(findDuplicateStoryboardShotNos(rows.map((row) => row.shotNo ?? ''))).toEqual(['041']);
+    expect([...collectStoryboardDuplicateShotRowIds(rows)].sort()).toEqual(['a', 'b']);
   });
 });

@@ -12,6 +12,7 @@ export type StoryboardRowInteractionValue = {
   allowOptimizeDialogue: boolean;
   focusRow: (rowId: string) => void;
   patchRow: (rowId: string, patch: Partial<StoryboardTableRow>) => void;
+  commitRowShotNo: (rowId: string, raw: string) => void;
   moveRow: (rowId: string, dir: -1 | 1) => void;
   removeRow: (rowId: string) => void;
   openFileForRow: (rowId: string) => void;
