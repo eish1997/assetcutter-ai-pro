@@ -31,6 +31,8 @@ export type StoryboardGroupMosaicRenderOpts = {
   height?: number;
   jpegQuality?: number;
   overlayRoleMarks?: boolean;
+  /** 是否在拼图内绘制分镜字段文案；默认 false */
+  includeShotText?: boolean;
 };
 
 function computeMosaicRowHeights(cellHeights: number[], cols: number, gridRows: number): number[] {
@@ -72,11 +74,14 @@ export async function renderStoryboardGroupMosaicDataUrl(
   if (!measureCtx) return null;
 
   const metas = group.rows.map((row) => compileSheetShotPanelMeta(row, fieldCatalog));
-  const groupTypography = planStoryboardSheetGroupTypographyUnbounded(measureCtx, metas, {
-    cellW,
-    cellH: Math.round(cellW * 2.5),
-    canvasWidth: width,
-  });
+  const includeShotText = opts.includeShotText === true;
+  const groupTypography = includeShotText
+    ? planStoryboardSheetGroupTypographyUnbounded(measureCtx, metas, {
+        cellW,
+        cellH: Math.round(cellW * 2.5),
+        canvasWidth: width,
+      })
+    : undefined;
 
   const cellHeights: number[] = [];
   for (const row of group.rows) {
@@ -85,6 +90,7 @@ export async function renderStoryboardGroupMosaicDataUrl(
         canvasWidth: width,
         typographyPlan: groupTypography,
         variableHeight: true,
+        includeShotText,
       })
     );
   }
@@ -118,6 +124,7 @@ export async function renderStoryboardGroupMosaicDataUrl(
         typographyPlan: groupTypography,
         variableHeight: true,
         overlayRoleMarks: opts.overlayRoleMarks,
+        includeShotText,
       });
     }
     y += rowH + gap;
@@ -134,13 +141,15 @@ export async function renderStoryboardGroupMosaicBlob(
   group: StoryboardDurationGroup,
   fieldCatalog: StoryboardParseFieldDef[],
   exportWidth: number,
-  overlayRoleMarks = false
+  overlayRoleMarks = false,
+  includeShotText = false
 ): Promise<Blob | null> {
   const width = Math.max(960, Math.round(exportWidth));
   const dataUrl = await renderStoryboardGroupMosaicDataUrl(group, fieldCatalog, {
     width,
     jpegQuality: 0.92,
     overlayRoleMarks,
+    includeShotText,
   });
   if (!dataUrl) return null;
   const res = await fetch(dataUrl);
@@ -168,9 +177,10 @@ export function storyboardGroupMosaicExportCacheKey(
   group: StoryboardDurationGroup,
   fieldCatalog: StoryboardParseFieldDef[],
   exportWidth: number,
-  overlayRoleMarks = false
+  overlayRoleMarks = false,
+  includeShotText = false
 ): string {
-  return `${storyboardDurationGroupMergeSignature(group, fieldCatalog)}@${exportWidth}@marks${overlayRoleMarks ? 1 : 0}`;
+  return `${storyboardDurationGroupMergeSignature(group, fieldCatalog)}@${exportWidth}@marks${overlayRoleMarks ? 1 : 0}@text${includeShotText ? 1 : 0}`;
 }
 
 export function clearStoryboardStripMergeCaches(): void {

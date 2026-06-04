@@ -2,6 +2,7 @@ import { startCompanionHttpServer, type CompanionHttpServer } from './httpServer
 import { openDefaultBrowser } from './openBrowser.js';
 import { startRelayIfConfigured, stopRelayChild } from './relaySupervisor.js';
 import { startSamLocalIfConfigured, stopSamLocalChild } from './samLocalSupervisor.js';
+import { startPaddleOcrIfConfigured, stopPaddleOcrChild } from './paddleOcrSupervisor.js';
 
 /** 供信号处理里优雅关端口，避免 tsx watch 重启时 EADDRINUSE */
 let companionHttp: CompanionHttpServer | null = null;
@@ -43,6 +44,7 @@ async function main(): Promise<void> {
 
   startRelayIfConfigured();
   startSamLocalIfConfigured();
+  startPaddleOcrIfConfigured();
 
   if (shouldOpenBrowser()) {
     setTimeout(() => openDefaultBrowser(`${base}/`), 500);
@@ -52,6 +54,7 @@ async function main(): Promise<void> {
 async function shutdown() {
   stopRelayChild();
   stopSamLocalChild();
+  stopPaddleOcrChild();
   try {
     if (companionHttp) {
       await companionHttp.close();

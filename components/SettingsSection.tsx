@@ -39,6 +39,7 @@ import {
   fetchCompanionRuntimeStatus,
   probeCompanionSamSegmentHealth,
   probeCompanionRembgHealth,
+  probeCompanionPaddleOcrHealth,
 } from '../services/companionClient';
 import {
   clearCompanionJobCursor,
@@ -175,12 +176,16 @@ const SettingsSection: React.FC<{
   const [companionSamHealthSnippet, setCompanionSamHealthSnippet] = useState('');
   const [companionRembgDebugBusy, setCompanionRembgDebugBusy] = useState(false);
   const [companionRembgDebugSnippet, setCompanionRembgDebugSnippet] = useState('');
+  const [companionPaddleOcrDebugBusy, setCompanionPaddleOcrDebugBusy] = useState(false);
+  const [companionPaddleOcrDebugSnippet, setCompanionPaddleOcrDebugSnippet] = useState('');
   /** `/v1/runtime-status` 中的 `localCapabilityUi` JSON（检测成功后刷新） */
   const [companionRuntimeUiJson, setCompanionRuntimeUiJson] = useState('');
   /** `/v1/runtime-status` 中的 `samSegmentHttpProbe` JSON（与伴侣内 HTTP 健康检查一致） */
   const [companionSamProbeSnippet, setCompanionSamProbeSnippet] = useState('');
   /** `/v1/runtime-status` 中的 `rembgPythonProbe`（伴侣内 `import rembg` 子进程探测） */
   const [companionRembgProbeSnippet, setCompanionRembgProbeSnippet] = useState('');
+  /** `/v1/runtime-status` 中的 `paddleOcrHttpProbe` */
+  const [companionPaddleOcrProbeSnippet, setCompanionPaddleOcrProbeSnippet] = useState('');
   /** `/v1/runtime-status` 中的 `localEnginesStatus`（注册表 + 已接线探测） */
   const [companionLocalEnginesStatusJson, setCompanionLocalEnginesStatusJson] = useState('');
   const [companionDiagCopyHint, setCompanionDiagCopyHint] = useState('');
@@ -414,6 +419,10 @@ const SettingsSection: React.FC<{
         setCompanionRembgProbeSnippet(
           rp != null && typeof rp === 'object' ? JSON.stringify(rp, null, 2) : '',
         );
+        const po = cap.paddleOcrHttpProbe;
+        setCompanionPaddleOcrProbeSnippet(
+          po != null && typeof po === 'object' ? JSON.stringify(po, null, 2) : '',
+        );
         const le = cap.localEnginesStatus;
         setCompanionLocalEnginesStatusJson(
           Array.isArray(le) && le.length > 0 ? JSON.stringify(le, null, 2) : '',
@@ -422,6 +431,7 @@ const SettingsSection: React.FC<{
         setCompanionRuntimeUiJson('');
         setCompanionSamProbeSnippet('');
         setCompanionRembgProbeSnippet('');
+        setCompanionPaddleOcrProbeSnippet('');
         setCompanionLocalEnginesStatusJson('');
         if (!rt.ok) {
           parts.push(`运行状态：失败 — ${rt.error ?? '未知错误'}`);
@@ -448,6 +458,24 @@ const SettingsSection: React.FC<{
       setCompanionRembgDebugSnippet(String(e));
     } finally {
       setCompanionRembgDebugBusy(false);
+    }
+  };
+
+  const handleProbePaddleOcrHealth = async () => {
+    const base = normalizeCompanionBaseUrl(companionBaseDraft);
+    setCompanionPaddleOcrDebugBusy(true);
+    setCompanionPaddleOcrDebugSnippet('');
+    try {
+      const r = await probeCompanionPaddleOcrHealth(base);
+      if (r.ok === false) {
+        setCompanionPaddleOcrDebugSnippet(`请求失败：${r.error ?? '未知错误'}`);
+        return;
+      }
+      setCompanionPaddleOcrDebugSnippet(JSON.stringify(r.body, null, 2));
+    } catch (e) {
+      setCompanionPaddleOcrDebugSnippet(String(e));
+    } finally {
+      setCompanionPaddleOcrDebugBusy(false);
     }
   };
 
@@ -490,6 +518,10 @@ const SettingsSection: React.FC<{
         rt.ok && rt.body && typeof rt.body === 'object' && rt.body !== null
           ? (rt.body as Record<string, unknown>).rembgPythonProbe
           : null;
+      const paddleOcrProbe =
+        rt.ok && rt.body && typeof rt.body === 'object' && rt.body !== null
+          ? (rt.body as Record<string, unknown>).paddleOcrHttpProbe
+          : null;
       const localEngines =
         rt.ok && rt.body && typeof rt.body === 'object' && rt.body !== null
           ? (rt.body as Record<string, unknown>).localEnginesStatus
@@ -500,6 +532,7 @@ const SettingsSection: React.FC<{
         localCapabilityUi: ui ?? null,
         samSegmentHttpProbe: samProbe ?? null,
         rembgPythonProbe: rembgProbe ?? null,
+        paddleOcrHttpProbe: paddleOcrProbe ?? null,
         localEnginesStatus: localEngines ?? null,
         health: h.ok ? { ok: true as const, latencyMs: h.latencyMs } : { ok: false as const, error: h.error },
         capabilities: c.ok ? { ok: true as const, latencyMs: c.latencyMs } : { ok: false as const, error: c.error },
@@ -1098,7 +1131,7 @@ const SettingsSection: React.FC<{
             <section id="settings-companion" className="scroll-mt-4 rounded-2xl border border-[#2e2e32] bg-[#121214] p-6">
               <h2 className="text-xs font-black uppercase tracking-wider text-blue-400/90 mb-2">本地伴侣</h2>
               <p className="text-[10px] text-gray-500 leading-relaxed mb-4">
-                「本机分割」「去背景」在<strong className="text-gray-300">本机</strong>运行，需<strong className="text-gray-300">桌面伴侣</strong>并在其中打开本机引擎。文末「扩展包」为可选，日常可忽略。
+                「本机分割」「去背景」「OCR / 文档解析」在<strong className="text-gray-300">本机</strong>运行，需<strong className="text-gray-300">桌面伴侣</strong>并在其中打开本机引擎。文末「扩展包」为可选，日常可忽略。
               </p>
               <div className="rounded-xl border border-[#252528] p-4 space-y-4 text-[10px] text-gray-400 leading-relaxed">
                 <div className="rounded-xl border border-blue-500/30 bg-[#0c1524]/90 p-4 space-y-3">
@@ -1233,6 +1266,14 @@ const SettingsSection: React.FC<{
                               </pre>
                             </details>
                           ) : null}
+                          {companionPaddleOcrProbeSnippet.trim() ? (
+                            <details className="text-[9px] text-gray-500">
+                              <summary className="cursor-pointer text-gray-400 font-semibold">OCR / 文档解析</summary>
+                              <pre className="mt-1 whitespace-pre-wrap break-all max-h-24 overflow-y-auto rounded border border-[#2e2e32] bg-[#101014] p-2">
+                                {companionPaddleOcrProbeSnippet}
+                              </pre>
+                            </details>
+                          ) : null}
                           {companionLocalEnginesStatusJson.trim() ? (
                             <details className="text-[9px] text-gray-500">
                               <summary className="cursor-pointer text-gray-400 font-semibold">各引擎一览</summary>
@@ -1267,7 +1308,7 @@ const SettingsSection: React.FC<{
                   </p>
                 </div>
                 <div className="rounded-lg border border-violet-500/25 bg-[#14101c]/90 p-3 space-y-2">
-                  <p className="text-[11px] text-gray-200 font-semibold">④ 分割 / 去背景自检</p>
+                  <p className="text-[11px] text-gray-200 font-semibold">④ 分割 / 去背景 / OCR 自检</p>
                   <p className="text-[10px] text-gray-500 leading-relaxed">
                     环境在<strong className="text-gray-400">桌面伴侣</strong>里配置。下面由本机伴侣代为检查（结果可能被短缓存，排障时可设伴侣环境变量 <code className="text-violet-200/90">COMPANION_RUNTIME_PROBE_CACHE_MS=0</code> 后重启伴侣）。
                   </p>
@@ -1302,13 +1343,21 @@ const SettingsSection: React.FC<{
                     </button>
                     <button
                       type="button"
+                      onClick={() => void handleProbePaddleOcrHealth()}
+                      disabled={companionPaddleOcrDebugBusy || companionProbeBusy}
+                      className="px-3 py-1.5 rounded-lg border border-violet-500/35 bg-violet-950/40 text-[10px] font-bold text-violet-100 hover:bg-violet-900/45 transition-colors disabled:opacity-50"
+                    >
+                      {companionPaddleOcrDebugBusy ? '检查中…' : '检查 OCR'}
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => void handleCopySamLocalEnvSnippet()}
                       className="px-3 py-1.5 rounded-lg border border-[#3f3f46] bg-[#1a1625] text-[10px] font-bold text-violet-200/90 hover:bg-[#252030] transition-colors"
                     >
                       复制环境变量
                     </button>
                   </div>
-                  {(companionSamHealthSnippet || companionRembgDebugSnippet) ? (
+                  {(companionSamHealthSnippet || companionRembgDebugSnippet || companionPaddleOcrDebugSnippet) ? (
                     <details className="rounded border border-[#2e2e32] bg-[#101014] p-2">
                       <summary className="cursor-pointer text-[9px] font-semibold text-gray-500">上次自检原始输出</summary>
                       <div className="mt-2 space-y-2 max-h-48 overflow-y-auto">
@@ -1317,6 +1366,9 @@ const SettingsSection: React.FC<{
                         ) : null}
                         {companionRembgDebugSnippet ? (
                           <pre className="text-[9px] text-gray-500 whitespace-pre-wrap break-all">{companionRembgDebugSnippet}</pre>
+                        ) : null}
+                        {companionPaddleOcrDebugSnippet ? (
+                          <pre className="text-[9px] text-gray-500 whitespace-pre-wrap break-all">{companionPaddleOcrDebugSnippet}</pre>
                         ) : null}
                       </div>
                     </details>

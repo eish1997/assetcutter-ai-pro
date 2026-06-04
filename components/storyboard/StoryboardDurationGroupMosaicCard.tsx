@@ -14,6 +14,7 @@ type Props = {
   activeRowId: string | null;
   previewWidth: number;
   overlayRoleMarks?: boolean;
+  includeShotText?: boolean;
   roleAssets?: StoryboardRoleAsset[];
   onSelectRow: (rowId: string) => void;
   onPreviewImage: (src: string) => void;
@@ -27,6 +28,7 @@ function StoryboardDurationGroupMosaicCard({
   activeRowId,
   previewWidth,
   overlayRoleMarks = false,
+  includeShotText = false,
   roleAssets = [],
   onSelectRow,
   onPreviewImage,
@@ -55,7 +57,8 @@ function StoryboardDurationGroupMosaicCard({
         group,
         fieldCatalog,
         previewWidth,
-        overlayRoleMarks
+        overlayRoleMarks,
+        includeShotText
       );
       if (dataUrl) {
         onPreviewImage(dataUrl);
@@ -68,7 +71,7 @@ function StoryboardDurationGroupMosaicCard({
       previewBusyRef.current = false;
       setPreviewBusy(false);
     }
-  }, [fieldCatalog, group, onPreviewImage, onPreviewMosaicError, overlayRoleMarks, previewWidth]);
+  }, [fieldCatalog, group, includeShotText, onPreviewImage, onPreviewMosaicError, overlayRoleMarks, previewWidth]);
 
   return (
     <article
@@ -137,6 +140,7 @@ function StoryboardDurationGroupMosaicCard({
             fieldCatalog={fieldCatalog}
             active={activeRowId === row.id}
             compact
+            includeShotText={includeShotText}
             overlayRoleMarks={overlayRoleMarks}
             roleAssets={roleAssets}
             onSelect={() => onSelectRow(row.id)}
@@ -152,7 +156,8 @@ function mosaicCardPropsEqual(prev: Props, next: Props): boolean {
   if (
     prev.activeRowId !== next.activeRowId ||
     prev.previewWidth !== next.previewWidth ||
-    prev.overlayRoleMarks !== next.overlayRoleMarks
+    prev.overlayRoleMarks !== next.overlayRoleMarks ||
+    prev.includeShotText !== next.includeShotText
   ) {
     return false;
   }

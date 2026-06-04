@@ -1,6 +1,7 @@
 import { listAdapterIds, REGISTERED_COMPUTE_TYPES, listRecentJobs } from './compute/jobsStore.js';
 import { getRelaySupervisorStatus } from './relaySupervisor.js';
 import { getSamLocalSupervisorStatus } from './samLocalSupervisor.js';
+import { getPaddleOcrSupervisorStatus } from './paddleOcrSupervisor.js';
 import {
   buildLocalCapabilityUi,
   mergeLocalCapabilityUiWithRembgPythonProbe,
@@ -9,6 +10,8 @@ import {
 } from './localCapabilityUi.js';
 import type { SamSegmentHealthProbeResult } from './compute/samSegmentAdapter.js';
 import type { RembgHealthProbeResult } from './compute/rembgAdapter.js';
+import type { PaddleOcrHealthProbeResult } from './compute/paddleOcrAdapter.js';
+import { getPaddleOcrApiUrl, PADDLE_OCR_ADAPTER_ID } from './compute/paddleOcrAdapter.js';
 import { getRepositoryRoot, getRepositoryShallowBytesUsed, getRepositorySummary } from './repositoryVolume.js';
 import { listProjectIds } from './storage/projectPaths.js';
 import { getAccessPublicSummary } from './accessGate.js';
@@ -160,7 +163,7 @@ export function buildCapabilitiesPayload() {
       listJobs: 'GET /v1/compute/jobs',
       cancelJob: 'DELETE /v1/compute/jobs/:jobId',
       note:
-        'stub.ping 同步完成；seam_repair 调用 WebSeamRepair（COMPANION_SEAM_REPAIR_URL）；sam_segment（本机引擎）调用 SamLocal（COMPANION_SAM_SEGMENT_URL）；remove_bg（本机引擎）调用 Python rembg（COMPANION_REMBG_PYTHON）；调试 GET /v1/debug/sam-segment-health、GET /v1/debug/rembg-health；host_bundle.exec/probe 仅针对已安装扩展包 run.json（COMPANION_HOST_BUNDLE_EXEC_TIMEOUT_MS）。',
+      'stub.ping 同步完成；seam_repair 调用 WebSeamRepair（COMPANION_SEAM_REPAIR_URL）；sam_segment（本机引擎）调用 SamLocal（COMPANION_SAM_SEGMENT_URL）；remove_bg（本机引擎）调用 Python rembg（COMPANION_REMBG_PYTHON）；paddle_ocr 调用 PaddleOCR 服务（COMPANION_PADDLEOCR_URL，默认 127.0.0.1:18082）；调试 GET /v1/debug/sam-segment-health、GET /v1/debug/rembg-health、GET /v1/debug/paddleocr-health；host_bundle.exec/probe 仅针对已安装扩展包 run.json（COMPANION_HOST_BUNDLE_EXEC_TIMEOUT_MS）。',
       seamRepair: {
         adapterId: SEAM_ADAPTER_ID,
         repairEndpoint: getSeamRepairApiUrl(),
@@ -175,6 +178,16 @@ export function buildCapabilitiesPayload() {
         envUrl: 'COMPANION_SAM_SEGMENT_URL',
         envTimeoutMs: 'COMPANION_SAM_SEGMENT_TIMEOUT_MS',
         inputs: '{ imageKey, outputKey } + params.prompt（SamSegmentPromptV1）；资产须已 PUT 至当前 projectId',
+      },
+      paddleOcr: {
+        adapterId: PADDLE_OCR_ADAPTER_ID,
+        serviceUrl: getPaddleOcrApiUrl(),
+        envUrl: 'COMPANION_PADDLEOCR_URL',
+        envDevice: 'COMPANION_PADDLEOCR_DEVICE',
+        envTimeoutMs: 'COMPANION_PADDLEOCR_TIMEOUT_MS',
+        pipelines: ['pp_ocr_v5', 'pp_structure_v3'],
+        inputs:
+          '{ fileKey|imageKey, outputKey, markdownOutputKey? } + params.pipeline/lang/returnFormat；资产须已 PUT 至当前 projectId',
       },
     },
     storage: {
@@ -221,6 +234,8 @@ export type RuntimeStatusV1 = {
   relay: ReturnType<typeof getRelaySupervisorStatus>;
   /** 可选：伴侣随启 SamLocal（COMPANION_SPAWN_SAM_LOCAL_CMD） */
   samLocal: ReturnType<typeof getSamLocalSupervisorStatus>;
+  /** 可选：伴侣随启 PaddleOCR 服务（COMPANION_SPAWN_PADDLEOCR_CMD / COMPANION_PADDLEOCR_PYTHON） */
+  paddleOcr: ReturnType<typeof getPaddleOcrSupervisorStatus>;
   pairing: ReturnType<typeof getPairingSessionSummary>;
   siteAuth: {
     state: 'unknown' | 'ready' | 'not_logged_in' | 'relay_unavailable';
@@ -249,6 +264,16 @@ export type RuntimeStatusV1 = {
     pythonExecutable: string;
     latencyMs: number;
     exitCode?: number | null;
+    error?: string;
+    code?: string;
+  };
+  /** 伴侣代探测 PaddleOCR `GET /health` */
+  paddleOcrHttpProbe?: {
+    ok: boolean;
+    serviceUrl: string;
+    healthUrl: string | null;
+    latencyMs?: number;
+    device?: string;
     error?: string;
     code?: string;
   };
@@ -299,6 +324,7 @@ export function buildRuntimeStatus(httpPort: number): RuntimeStatusV1 {
   const recent = listRecentJobs(8);
   const relay = getRelaySupervisorStatus();
   const samLocal = getSamLocalSupervisorStatus();
+  const paddleOcr = getPaddleOcrSupervisorStatus();
   return {
     mode: 'standalone-gui',
     httpPort,
@@ -313,6 +339,7 @@ export function buildRuntimeStatus(httpPort: number): RuntimeStatusV1 {
     compute: { recentJobCount: recent.length, recent },
     relay,
     samLocal,
+    paddleOcr,
     pairing: getPairingSessionSummary(),
     siteAuth: buildSiteAuthSummary(relay),
     access: getAccessPublicSummary(),
@@ -326,6 +353,7 @@ export function augmentRuntimeStatusWithLocalEngineProbes(
   base: RuntimeStatusV1,
   samProbe: SamSegmentHealthProbeResult,
   rembgProbe: RembgHealthProbeResult,
+  paddleOcrProbe: PaddleOcrHealthProbeResult,
 ): RuntimeStatusV1 {
   const samSegmentHttpProbe = {
     ok: samProbe.ok,
@@ -343,13 +371,29 @@ export function augmentRuntimeStatusWithLocalEngineProbes(
     error: rembgProbe.error,
     code: rembgProbe.code,
   };
+  const paddleOcrHttpProbe = {
+    ok: paddleOcrProbe.ok,
+    serviceUrl: paddleOcrProbe.serviceUrl,
+    healthUrl: paddleOcrProbe.healthUrl,
+    latencyMs: paddleOcrProbe.paddleOcr?.latencyMs,
+    device: paddleOcrProbe.device,
+    error: paddleOcrProbe.error ?? paddleOcrProbe.paddleOcr?.error,
+    code: paddleOcrProbe.code,
+  };
   return {
     ...base,
     samSegmentHttpProbe,
     rembgPythonProbe,
+    paddleOcrHttpProbe,
     localEnginesStatus: buildRuntimeLocalEnginesStatus({
       sam: samProbe,
       rembg: rembgProbe,
+      paddleOcr: {
+        ok: paddleOcrProbe.ok,
+        latencyMs: paddleOcrProbe.paddleOcr?.latencyMs,
+        error: paddleOcrProbe.error ?? paddleOcrProbe.paddleOcr?.error,
+        code: paddleOcrProbe.code,
+      },
     }),
     localCapabilityUi: mergeLocalCapabilityUiWithRembgPythonProbe(
       mergeLocalCapabilityUiWithSamHttpProbe(base.localCapabilityUi, samProbe),

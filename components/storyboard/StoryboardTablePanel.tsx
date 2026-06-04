@@ -170,9 +170,11 @@ import {
   downloadStoryboardGroupMosaic,
   normalizeStoryboardGridExportWidth,
   readStoryboardGridExportWidth,
+  readStoryboardGridIncludeShotText,
   readStoryboardGridOverlayRoleMarks,
   STORYBOARD_GRID_EXPORT_WIDTH_PRESETS,
   writeStoryboardGridExportWidth,
+  writeStoryboardGridIncludeShotText,
   writeStoryboardGridOverlayRoleMarks,
 } from '../../services/storyboardGridExport';
 import {
@@ -323,6 +325,9 @@ export default function StoryboardTablePanel({
   const [gridExportWidth, setGridExportWidth] = useState(() => readStoryboardGridExportWidth());
   const [gridOverlayRoleMarks, setGridOverlayRoleMarks] = useState(() =>
     readStoryboardGridOverlayRoleMarks()
+  );
+  const [gridIncludeShotText, setGridIncludeShotText] = useState(() =>
+    readStoryboardGridIncludeShotText()
   );
   const [gridDownloadBusy, setGridDownloadBusy] = useState(false);
   const isGridView = viewMode === 'grid';
@@ -733,6 +738,14 @@ export default function StoryboardTablePanel({
     });
   }, []);
 
+  const toggleGridIncludeShotText = useCallback(() => {
+    setGridIncludeShotText((prev) => {
+      const next = !prev;
+      writeStoryboardGridIncludeShotText(next);
+      return next;
+    });
+  }, []);
+
   const gridExportWidthOptions = useMemo(
     () =>
       STORYBOARD_GRID_EXPORT_WIDTH_PRESETS.map((w) => ({
@@ -757,7 +770,8 @@ export default function StoryboardTablePanel({
           group,
           table.fieldCatalog,
           gridExportWidth,
-          gridOverlayRoleMarks
+          gridOverlayRoleMarks,
+          gridIncludeShotText
         );
         if (filename) {
           onNotify?.('info', `分镜拼图已保存到浏览器下载文件夹：${filename}`);
@@ -768,7 +782,7 @@ export default function StoryboardTablePanel({
         setGridDownloadBusy(false);
       }
     },
-    [gridDownloadBusy, gridExportWidth, gridOverlayRoleMarks, onNotify, table.fieldCatalog]
+    [gridDownloadBusy, gridExportWidth, gridIncludeShotText, gridOverlayRoleMarks, onNotify, table.fieldCatalog]
   );
 
   const handleDownloadAllGridGroups = useCallback(async () => {
@@ -779,13 +793,17 @@ export default function StoryboardTablePanel({
         gridGroups,
         table.fieldCatalog,
         gridExportWidth,
-        gridOverlayRoleMarks
+        gridOverlayRoleMarks,
+        gridIncludeShotText
       );
       if (count > 0) {
+        const extras: string[] = [];
+        if (gridOverlayRoleMarks) extras.push('含人名标签');
+        if (gridIncludeShotText) extras.push('含分镜文本');
         onNotify?.(
           'info',
           `已保存 ${count} 张分镜拼图到浏览器下载文件夹（${gridExportWidth}px 宽${
-            gridOverlayRoleMarks ? '，含人名标签' : ''
+            extras.length ? `，${extras.join('、')}` : ''
           }，文件名以 storyboard- 开头）`
         );
       } else {
@@ -794,7 +812,7 @@ export default function StoryboardTablePanel({
     } finally {
       setGridDownloadBusy(false);
     }
-  }, [gridDownloadBusy, gridExportWidth, gridGroups, gridOverlayRoleMarks, onNotify, table.fieldCatalog]);
+  }, [gridDownloadBusy, gridExportWidth, gridGroups, gridIncludeShotText, gridOverlayRoleMarks, onNotify, table.fieldCatalog]);
 
   const gridSecondsOptions = useMemo(() => {
     const base = STORYBOARD_GRID_SECONDS_PRESETS.map((sec) => ({
@@ -3677,6 +3695,15 @@ export default function StoryboardTablePanel({
               />
               叠加人名标签
             </label>
+            <label className="inline-flex cursor-pointer items-center gap-1.5 text-[10px] text-gray-500">
+              <input
+                type="checkbox"
+                checked={gridIncludeShotText}
+                onChange={toggleGridIncludeShotText}
+                className="h-3.5 w-3.5 rounded border-white/20 bg-white/5 text-white/80"
+              />
+              叠加分镜文本
+            </label>
             <button
               type="button"
               disabled={gridDownloadBusy || !gridGroups.length}
@@ -3758,6 +3785,7 @@ export default function StoryboardTablePanel({
           timelineLayerCount={timelineLayerCount}
           gridExportWidth={gridExportWidth}
           overlayRoleMarks={gridOverlayRoleMarks}
+          includeShotText={gridIncludeShotText}
           roleAssets={table.roleAssets ?? []}
           activeRowId={activeRowId}
           onSelect={(rowId) => navigateToRow(rowId)}

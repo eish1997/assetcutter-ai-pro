@@ -43,6 +43,7 @@ import { getPairingSessionSummary, revokePairingSession } from './pairingSession
 import { installHostPluginBundleFromUrl, listInstalledHostPluginBundles } from './hostPluginBundles.js';
 import { probeSamSegmentBackendHealth } from './compute/samSegmentAdapter.js';
 import { probeRembgPythonHealth } from './compute/rembgAdapter.js';
+import { probePaddleOcrBackendHealth } from './compute/paddleOcrAdapter.js';
 import { parseRuntimeProbeCacheTtlMs } from './runtimeProbeCacheTtl.js';
 import { buildScriptConnectorsPayload } from './scriptRun/scriptConnectorsSnapshot.js';
 
@@ -50,19 +51,25 @@ let runtimeEngineProbesCache: {
   at: number;
   sam: Awaited<ReturnType<typeof probeSamSegmentBackendHealth>>;
   rembg: Awaited<ReturnType<typeof probeRembgPythonHealth>>;
+  paddleOcr: Awaited<ReturnType<typeof probePaddleOcrBackendHealth>>;
 } | null = null;
 
-async function getCachedSamRembgProbes(): Promise<{
+async function getCachedEngineProbes(): Promise<{
   sam: Awaited<ReturnType<typeof probeSamSegmentBackendHealth>>;
   rembg: Awaited<ReturnType<typeof probeRembgPythonHealth>>;
+  paddleOcr: Awaited<ReturnType<typeof probePaddleOcrBackendHealth>>;
 }> {
   const ttlMs = parseRuntimeProbeCacheTtlMs();
   const now = Date.now();
   if (ttlMs > 0 && runtimeEngineProbesCache && now - runtimeEngineProbesCache.at < ttlMs) {
     return runtimeEngineProbesCache;
   }
-  const [sam, rembg] = await Promise.all([probeSamSegmentBackendHealth(), probeRembgPythonHealth()]);
-  runtimeEngineProbesCache = { at: now, sam, rembg };
+  const [sam, rembg, paddleOcr] = await Promise.all([
+    probeSamSegmentBackendHealth(),
+    probeRembgPythonHealth(),
+    probePaddleOcrBackendHealth(),
+  ]);
+  runtimeEngineProbesCache = { at: now, sam, rembg, paddleOcr };
   return runtimeEngineProbesCache;
 }
 
@@ -190,8 +197,7 @@ export async function handleRequest(
 
   if (method === 'OPTIONS') {
     if (!isOriginAllowed(origin, getEffectiveAllowedOriginEntries())) {
-      res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ error: 'origin_not_allowed', code: 'AUTH_ORIGIN_DENIED' }));
+      sendJson(res, 403, { error: 'origin_not_allowed', code: 'AUTH_ORIGIN_DENIED' }, origin);
       return;
     }
     preflight(res, origin);
@@ -199,8 +205,7 @@ export async function handleRequest(
   }
 
   if (!isOriginAllowed(origin, getEffectiveAllowedOriginEntries())) {
-    res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({ error: 'origin_not_allowed', code: 'AUTH_ORIGIN_DENIED' }));
+    sendJson(res, 403, { error: 'origin_not_allowed', code: 'AUTH_ORIGIN_DENIED' }, origin);
     return;
   }
 
@@ -245,10 +250,16 @@ export async function handleRequest(
       return;
     }
 
+    if (path === '/v1/debug/paddleocr-health' && method === 'GET') {
+      const payload = await probePaddleOcrBackendHealth();
+      sendJson(res, 200, payload, origin);
+      return;
+    }
+
     if (path === '/v1/runtime-status' && method === 'GET') {
       const base = buildRuntimeStatus(httpPort);
-      const { sam: samProbe, rembg: rembgProbe } = await getCachedSamRembgProbes();
-      sendJson(res, 200, augmentRuntimeStatusWithLocalEngineProbes(base, samProbe, rembgProbe), origin);
+      const { sam: samProbe, rembg: rembgProbe, paddleOcr: paddleOcrProbe } = await getCachedEngineProbes();
+      sendJson(res, 200, augmentRuntimeStatusWithLocalEngineProbes(base, samProbe, rembgProbe, paddleOcrProbe), origin);
       return;
     }
 

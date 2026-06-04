@@ -10,6 +10,7 @@ import {
   SAM_SEGMENT_ADAPTER_ID,
 } from './samSegmentAdapter.js';
 import { REMBG_ADAPTER_ID, resolveRembgKeys, runRembgJob } from './rembgAdapter.js';
+import { PADDLE_OCR_ADAPTER_ID, resolvePaddleOcrKeys, runPaddleOcrJob } from './paddleOcrAdapter.js';
 import { HOST_BUNDLE_ADAPTER_ID, runHostBundlePhase } from './hostBundleExecAdapter.js';
 import { runMayaScriptJob, MAYA_SCRIPT_ADAPTER_ID } from '../scriptRun/mayaScriptAdapter.js';
 import { enqueueMayaScriptJob } from '../scriptRun/mayaScriptJobQueue.js';
@@ -66,6 +67,11 @@ export const REGISTERED_COMPUTE_TYPES: Record<string, { adapterId: string; descr
   remove_bg: {
     adapterId: REMBG_ADAPTER_ID,
     description: '抠图：读 Volume 内图像，调用本机 Python rembg，写回 RGBA PNG',
+  },
+  paddle_ocr: {
+    adapterId: PADDLE_OCR_ADAPTER_ID,
+    description:
+      'OCR/文档解析：读 Volume 内图像或 PDF，调用本机 PaddleOCR 服务（pp_ocr_v5 / pp_structure_v3），写回 JSON 与可选 Markdown',
   },
   'host_bundle.exec': {
     adapterId: HOST_BUNDLE_ADAPTER_ID,
@@ -309,6 +315,50 @@ export async function submitJob(
         });
       }
     }
+  } else if (type === 'paddle_ocr') {
+    const resolved = resolvePaddleOcrKeys(projectId, b.inputs, b.params ?? {});
+    if ('error' in resolved) {
+      rec.status = 'failed';
+      rec.error = { code: resolved.code, message: resolved.error };
+      emitJobEvent(jobId, 'task.failed', { code: resolved.code, message: resolved.error });
+    } else {
+      rec.status = 'running';
+      rec.updatedAt = Date.now();
+      jobs.set(jobId, rec);
+      emitJobEvent(jobId, 'task.running', {
+        adapterId: PADDLE_OCR_ADAPTER_ID,
+        stage: 'start',
+      });
+      const pid = projectId as string;
+      emitJobEvent(jobId, 'reply.delta', {
+        stage: 'dispatch',
+        text: `paddle_ocr dispatched (${resolved.ok.pipeline})`,
+      });
+      const run = await runPaddleOcrJob(pid, resolved.ok);
+      if ('error' in run) {
+        rec.status = 'failed';
+        rec.error = { code: run.code, message: run.error };
+        emitJobEvent(jobId, 'task.failed', { code: run.code, message: run.error });
+      } else {
+        rec.status = 'completed';
+        rec.result = {
+          adapterId: PADDLE_OCR_ADAPTER_ID,
+          note: run.markdownOutputKey
+            ? `JSON → ${run.outputKey} (${run.bytesOut} B), Markdown → ${run.markdownOutputKey}`
+            : `JSON → ${run.outputKey} (${run.bytesOut} B)`,
+        };
+        emitJobEvent(jobId, 'reply.completed', {
+          adapterId: PADDLE_OCR_ADAPTER_ID,
+          outputKey: run.outputKey,
+          markdownOutputKey: run.markdownOutputKey ?? null,
+          blockCount: run.blockCount ?? null,
+          elapsedMs: run.elapsedMs ?? null,
+          bytesOut: run.bytesOut,
+          markdownBytesOut: run.markdownBytesOut ?? null,
+          note: rec.result.note ?? '',
+        });
+      }
+    }
   } else if (type === 'host_bundle.exec' || type === 'host_bundle.probe') {
     rec.status = 'running';
     rec.updatedAt = Date.now();
@@ -407,6 +457,7 @@ export function listAdapterIds(): string[] {
   s.add(SEAM_ADAPTER_ID);
   s.add(SAM_SEGMENT_ADAPTER_ID);
   s.add(REMBG_ADAPTER_ID);
+  s.add(PADDLE_OCR_ADAPTER_ID);
   s.add(HOST_BUNDLE_ADAPTER_ID);
   for (const v of Object.values(REGISTERED_COMPUTE_TYPES)) {
     s.add(v.adapterId);

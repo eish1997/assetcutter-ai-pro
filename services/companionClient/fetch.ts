@@ -1,4 +1,5 @@
 import { getCompanionLocalToken, normalizeCompanionBaseUrl } from '../companionLocalPrefs';
+import { humanMessageForCompanionClientFailure } from '../companionNetworkErrors';
 
 export type CompanionClientResult<T> =
   | { ok: true; data: T; latencyMs: number; status: number }
@@ -37,13 +38,20 @@ export async function companionFetchJson<T>(
         (errObj && (typeof errObj.error === 'string' ? errObj.error : typeof errObj.message === 'string' ? errObj.message : '')) ||
         `HTTP ${r.status}`;
       const codeText = errObj && typeof errObj.code === 'string' ? errObj.code : undefined;
-      return { ok: false as const, error: errorText, status: r.status, latencyMs, ...(codeText ? { code: codeText } : {}) };
+      return {
+        ok: false as const,
+        error: humanMessageForCompanionClientFailure(codeText, errorText),
+        status: r.status,
+        latencyMs,
+        ...(codeText ? { code: codeText } : {}),
+      };
     }
     return { ok: true as const, data: data as T, latencyMs, status: r.status };
   } catch (e) {
+    const raw = e instanceof Error ? e.message : String(e);
     return {
       ok: false as const,
-      error: e instanceof Error ? e.message : String(e),
+      error: humanMessageForCompanionClientFailure(undefined, raw),
       latencyMs: Math.round(nowMs() - t0),
     };
   }

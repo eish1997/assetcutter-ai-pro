@@ -146,11 +146,15 @@ const companionUpdater = createCompanionAutoUpdate({
 let samBootstrapChild = null;
 /** @type {import('child_process').ChildProcess | null} */
 let rembgBootstrapChild = null;
+/** @type {import('child_process').ChildProcess | null} */
+let paddleOcrBootstrapChild = null;
 
 function anyDesktopBootstrapChildRunning() {
   const sam = samBootstrapChild && samBootstrapChild.exitCode === null && !samBootstrapChild.killed;
   const rem = rembgBootstrapChild && rembgBootstrapChild.exitCode === null && !rembgBootstrapChild.killed;
-  return Boolean(sam || rem);
+  const ocr =
+    paddleOcrBootstrapChild && paddleOcrBootstrapChild.exitCode === null && !paddleOcrBootstrapChild.killed;
+  return Boolean(sam || rem || ocr);
 }
 
 function shellSettingsPath() {
@@ -219,6 +223,7 @@ function ensureCompanionSandboxLayout() {
   const dirs = [
     path.join(root, 'runtimes'),
     path.join(root, 'models', 'rembg'),
+    path.join(root, 'models', 'paddleocr'),
     path.join(root, 'cache', 'pip'),
     path.join(root, 'cache', 'torch'),
     path.join(root, 'cache', 'huggingface'),
@@ -343,6 +348,66 @@ function applyDesktopRembgPythonToEnv(env) {
   if (String(env.COMPANION_REMBG_PYTHON || '').trim()) return;
   const exe = resolveDesktopRembgPythonExe();
   if (exe) env.COMPANION_REMBG_PYTHON = exe;
+}
+
+function paddleOcrBootstrapScriptPath() {
+  try {
+    if (app.isPackaged) {
+      return path.join(process.resourcesPath, 'paddleocr-bootstrap', 'paddleocr-bootstrap.cjs');
+    }
+  } catch {
+    /* ignore */
+  }
+  return path.join(__dirname, 'paddleocr-bootstrap', 'paddleocr-bootstrap.cjs');
+}
+
+function readPaddleOcrDesktopRuntimeState() {
+  if (process.platform !== 'win32') return null;
+  try {
+    const p = path.join(app.getPath('userData'), 'paddleocr-runtime', 'state.json');
+    if (!fs.existsSync(p)) return null;
+    const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+    const exe = typeof j.pythonExe === 'string' ? j.pythonExe.trim() : '';
+    if (!j || !j.ready || !exe || !fs.existsSync(exe)) return null;
+    return j;
+  } catch {
+    return null;
+  }
+}
+
+function resolvePaddleOcrServiceDir() {
+  const st = readPaddleOcrDesktopRuntimeState();
+  if (st?.serviceDir && fs.existsSync(st.serviceDir)) return st.serviceDir;
+  if (app.isPackaged) {
+    try {
+      const packaged = path.join(process.resourcesPath, 'paddleocr-service');
+      if (fs.existsSync(packaged)) return packaged;
+    } catch {
+      /* ignore */
+    }
+  }
+  return path.join(__dirname, '..', 'local-companion', 'paddleocr-service');
+}
+
+/** 注入 PaddleOCR Python / 服务目录 / 设备（默认 CPU；state.json 或 AC_PADDLEOCR_GPU 可设 gpu） */
+function applyDesktopPaddleOcrToEnv(env) {
+  const st = readPaddleOcrDesktopRuntimeState();
+  if (!String(env.COMPANION_PADDLEOCR_PYTHON || '').trim()) {
+    const exe =
+      (st?.pythonExe && fs.existsSync(st.pythonExe) ? st.pythonExe : '') || resolveDesktopRembgPythonExe();
+    if (exe) env.COMPANION_PADDLEOCR_PYTHON = exe;
+  }
+  if (!String(env.COMPANION_PADDLEOCR_SERVICE_DIR || '').trim()) {
+    env.COMPANION_PADDLEOCR_SERVICE_DIR = resolvePaddleOcrServiceDir();
+  }
+  if (!String(env.COMPANION_PADDLEOCR_DEVICE || '').trim()) {
+    const device = typeof st?.device === 'string' ? st.device.trim().toLowerCase() : 'cpu';
+    env.COMPANION_PADDLEOCR_DEVICE = device === 'gpu' ? 'gpu' : 'cpu';
+  }
+  const bundledOcr = path.join(resolvePaddleOcrServiceDir(), 'server.py');
+  if (fs.existsSync(bundledOcr) && !String(env.COMPANION_PADDLEOCR_SERVER_SCRIPT || '').trim()) {
+    env.COMPANION_PADDLEOCR_SERVER_SCRIPT = bundledOcr;
+  }
 }
 
 /** 与 local-companion `repositoryVolume.ts` 默认一致（非沙盒或未设置 LOCALAPPDATA 时） */
@@ -1214,6 +1279,7 @@ async function startLocalCompanion() {
   applyShellVolumeRootToEnv(env);
   applyDesktopSamLocalSpawnEnv(env);
   applyDesktopRembgPythonToEnv(env);
+  applyDesktopPaddleOcrToEnv(env);
 
   /** 父进程/系统环境若带 `COMPANION_HTTP_PORT=0`（常为 Relay 子进程约定），子进程会按「关闭 HTTP」立即 exit(1) */
   if (String(env.COMPANION_HTTP_PORT ?? '').trim() === '0') {
@@ -2353,6 +2419,112 @@ if (!gotLock) {
       if (ok) {
         void restartLocalCompanionFromTray({ aggressive: true }).catch((e) =>
           console.error('[companion-desktop] restart after rembg bootstrap:', e),
+        );
+      }
+    });
+    return { ok: true, started: true };
+  });
+
+  ipcMain.handle('shell-paddleocr-desktop-state', () => {
+    if (process.platform !== 'win32') {
+      return { ok: true, platformUnsupported: true, installed: false };
+    }
+    const scriptPath = paddleOcrBootstrapScriptPath();
+    const st = readPaddleOcrDesktopRuntimeState();
+    return {
+      ok: true,
+      platformUnsupported: false,
+      hasBootstrapScript: fs.existsSync(scriptPath),
+      installed: Boolean(st?.ready),
+      device: typeof st?.device === 'string' ? st.device : 'cpu',
+      pythonExe: typeof st?.pythonExe === 'string' ? st.pythonExe : undefined,
+    };
+  });
+
+  ipcMain.handle('shell-paddleocr-bootstrap-run', async (event, payload) => {
+    if (process.platform !== 'win32') {
+      return { ok: false, error: '仅支持 Windows' };
+    }
+    if (anyDesktopBootstrapChildRunning()) {
+      return { ok: false, error: '正在安装中，请稍候' };
+    }
+    const scriptPath = paddleOcrBootstrapScriptPath();
+    if (!fs.existsSync(scriptPath)) {
+      return { ok: false, error: '缺少 paddleocr-bootstrap 脚本' };
+    }
+    const useGpu =
+      payload && typeof payload === 'object' && payload.useGpu === true ? '1' : '0';
+    const userRoot = path.join(app.getPath('userData'), 'paddleocr-runtime');
+    const win = BrowserWindow.fromWebContents(event.sender) || mainWindow;
+    const sendLog = (logPayload) => {
+      try {
+        if (win && !win.isDestroyed()) win.webContents.send('paddleocr-bootstrap-log', logPayload);
+      } catch {
+        /* ignore */
+      }
+    };
+    const sbRoot = companionSandboxPaths.getCompanionSandboxRoot();
+    paddleOcrBootstrapChild = spawn(process.execPath, [scriptPath], {
+      env: {
+        ...process.env,
+        ELECTRON_RUN_AS_NODE: '1',
+        AC_PADDLEOCR_USER_ROOT: userRoot,
+        AC_PADDLEOCR_GPU: useGpu,
+        ...(sbRoot ? { AC_COMPANION_SANDBOX_ROOT: sbRoot } : {}),
+      },
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let outCarry = '';
+    let errCarry = '';
+    const feedLines = (carry, chunk) => {
+      const s = carry + String(chunk);
+      const parts = s.split(/\r?\n/);
+      const rest = parts.pop() || '';
+      for (const line of parts) {
+        const t = line.trim();
+        if (!t) continue;
+        try {
+          sendLog(JSON.parse(t));
+        } catch {
+          sendLog({ type: 'log', msg: t });
+        }
+      }
+      return rest;
+    };
+    const flushCarry = (carry) => {
+      const t = String(carry || '').trim();
+      if (!t) return;
+      try {
+        sendLog(JSON.parse(t));
+      } catch {
+        sendLog({ type: 'log', msg: t });
+      }
+    };
+    paddleOcrBootstrapChild.stdout.on('data', (b) => {
+      outCarry = feedLines(outCarry, b);
+    });
+    paddleOcrBootstrapChild.stderr.on('data', (b) => {
+      errCarry = feedLines(errCarry, b);
+    });
+    paddleOcrBootstrapChild.on('error', (err) => {
+      paddleOcrBootstrapChild = null;
+      outCarry = '';
+      errCarry = '';
+      sendLog({ type: 'error', msg: err.message });
+      sendLog({ type: 'bootstrap-finished', ok: false });
+    });
+    paddleOcrBootstrapChild.on('close', (code) => {
+      flushCarry(outCarry);
+      flushCarry(errCarry);
+      outCarry = '';
+      errCarry = '';
+      paddleOcrBootstrapChild = null;
+      const ok = code === 0;
+      sendLog({ type: 'bootstrap-finished', ok, exitCode: code });
+      if (ok) {
+        void restartLocalCompanionFromTray({ aggressive: true }).catch((e) =>
+          console.error('[companion-desktop] restart after PaddleOCR bootstrap:', e),
         );
       }
     });

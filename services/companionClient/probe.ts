@@ -49,4 +49,13 @@ export async function probeCompanionRembgHealth(baseUrl: string): Promise<Compan
   return { ok: true, latencyMs: r.latencyMs, body: r.data };
 }
 
+/** 经伴侣转发探测 PaddleOCR `GET /health` */
+export async function probeCompanionPaddleOcrHealth(baseUrl: string): Promise<CompanionProbeResult> {
+  const r = await companionFetchJson<unknown>(baseUrl, '/v1/debug/paddleocr-health');
+  if (r.ok === false) {
+    return { ok: false, latencyMs: r.latencyMs, error: r.error, body: undefined };
+  }
+  return { ok: true, latencyMs: r.latencyMs, body: r.data };
+}
+
 export { normalizeCompanionBaseUrl } from '../companionLocalPrefs';

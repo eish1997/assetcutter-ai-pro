@@ -4,7 +4,11 @@
  * 新增引擎时：在 `LOCAL_ENGINES_REGISTRY` 追加条目，在 `buildRuntimeLocalEnginesStatus` 中为对应 `healthStrategy` 接线探测（Sam HTTP、rembg Python 等）。
  */
 
-export type LocalEngineHealthStrategy = 'companion_http_probe_sam' | 'companion_python_probe_rembg' | 'none';
+export type LocalEngineHealthStrategy =
+  | 'companion_http_probe_sam'
+  | 'companion_http_probe_paddleocr'
+  | 'companion_python_probe_rembg'
+  | 'none';
 
 export type LocalEngineRegistryEntryV1 = {
   id: string;
@@ -28,6 +32,12 @@ export const LOCAL_ENGINES_REGISTRY: readonly LocalEngineRegistryEntryV1[] = [
     displayName: '去背景（Python rembg）',
     primaryEnvKey: 'COMPANION_REMBG_PYTHON',
     healthStrategy: 'companion_python_probe_rembg',
+  },
+  {
+    id: 'paddle_ocr',
+    displayName: 'OCR / 文档解析（PaddleOCR）',
+    primaryEnvKey: 'COMPANION_PADDLEOCR_URL',
+    healthStrategy: 'companion_http_probe_paddleocr',
   },
 ] as const;
 
@@ -61,9 +71,17 @@ export type RembgProbeLike = {
   code?: string;
 };
 
+export type PaddleOcrProbeLike = {
+  ok: boolean;
+  latencyMs?: number;
+  error?: string;
+  code?: string;
+};
+
 export type LocalEnginesProbesInput = {
   sam: SamHttpProbeLike;
   rembg: RembgProbeLike;
+  paddleOcr: PaddleOcrProbeLike;
 };
 
 export function buildRuntimeLocalEnginesStatus(probes: LocalEnginesProbesInput): RuntimeLocalEngineStatusV1[] {
@@ -95,6 +113,21 @@ export function buildRuntimeLocalEnginesStatus(probes: LocalEnginesProbesInput):
           latencyMs: probes.rembg.latencyMs,
           code: probes.rembg.code,
           error: probes.rembg.error,
+        },
+      };
+    }
+    if (e.healthStrategy === 'companion_http_probe_paddleocr') {
+      return {
+        id: e.id,
+        displayName: e.displayName,
+        primaryEnvKey: e.primaryEnvKey,
+        healthStrategy: e.healthStrategy,
+        health: {
+          checked: true,
+          ok: probes.paddleOcr.ok,
+          latencyMs: probes.paddleOcr.latencyMs,
+          code: probes.paddleOcr.code,
+          error: probes.paddleOcr.error,
         },
       };
     }

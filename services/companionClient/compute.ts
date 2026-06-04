@@ -131,6 +131,41 @@ export async function submitCompanionRembgJob(
   });
 }
 
+export type CompanionPaddleOcrPipeline = 'pp_ocr_v5' | 'pp_structure_v3';
+export type CompanionPaddleOcrReturnFormat = 'json' | 'markdown' | 'both';
+
+/** 与宿主 `paddle_ocr` Job 的 `inputs` 一致 */
+export type CompanionPaddleOcrInputsV1 = {
+  /** 图像或 PDF（须已 PUT） */
+  fileKey?: string;
+  /** 兼容旧字段名 */
+  imageKey?: string;
+  outputKey: string;
+  /** pp_structure_v3 且 returnFormat=markdown|both 时必填 */
+  markdownOutputKey?: string;
+};
+
+export type CompanionPaddleOcrParamsV1 = {
+  pipeline?: CompanionPaddleOcrPipeline;
+  lang?: string;
+  returnFormat?: CompanionPaddleOcrReturnFormat;
+};
+
+export async function submitCompanionPaddleOcrJob(
+  baseUrl: string,
+  projectId: string,
+  inputs: CompanionPaddleOcrInputsV1,
+  params?: CompanionPaddleOcrParamsV1,
+) {
+  return submitCompanionJob(baseUrl, {
+    protocolVersion: 1,
+    type: 'paddle_ocr',
+    projectId,
+    inputs,
+    params: params ?? {},
+  });
+}
+
 /** 与伴侣 `host_bundle.probe` / `host_bundle.exec` 的 `inputs` 一致 */
 export type CompanionHostBundleJobInputsV1 = { dirName: string };
 

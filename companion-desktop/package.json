@@ -65,6 +65,16 @@
         "from": "rembg-bootstrap",
         "to": "rembg-bootstrap",
         "filter": ["**/*"]
+      },
+      {
+        "from": "paddleocr-bootstrap",
+        "to": "paddleocr-bootstrap",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "../local-companion/paddleocr-service",
+        "to": "paddleocr-service",
+        "filter": ["**/*"]
       }
     ],
     "win": {

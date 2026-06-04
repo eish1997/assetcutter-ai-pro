@@ -7,6 +7,7 @@ export {
   fetchCompanionRuntimeStatus,
   probeCompanionSamSegmentHealth,
   probeCompanionRembgHealth,
+  probeCompanionPaddleOcrHealth,
   normalizeCompanionBaseUrl,
   type CompanionProbeResult,
 } from './probe';
@@ -37,6 +38,8 @@ export {
   submitCompanionJob,
   submitCompanionSeamRepairJob,
   submitCompanionSamSegmentJob,
+  submitCompanionRembgJob,
+  submitCompanionPaddleOcrJob,
   submitCompanionHostBundleProbeJob,
   submitCompanionHostBundleExecJob,
   listCompanionJobs,
@@ -52,6 +55,12 @@ export {
   type CompanionSamSegmentPromptV1,
   type CompanionSamSegmentPromptPointV1,
   type CompanionSamSegmentPromptBoxV1,
+  type CompanionRembgInputsV1,
+  type CompanionRembgParamsV1,
+  type CompanionPaddleOcrInputsV1,
+  type CompanionPaddleOcrParamsV1,
+  type CompanionPaddleOcrPipeline,
+  type CompanionPaddleOcrReturnFormat,
   type CompanionHostBundleJobInputsV1,
 } from './compute';
 export { listCompanionHostPluginBundles, type CompanionInstalledHostBundleV1 } from './hostPlugins';

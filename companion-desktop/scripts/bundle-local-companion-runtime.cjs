@@ -52,6 +52,12 @@ async function main() {
   }
   fs.cpSync(pubFrom, pubTo, { recursive: true });
 
+  const ocrFrom = path.join(repoRoot, 'local-companion', 'paddleocr-service');
+  const ocrTo = path.join(outDir, 'paddleocr-service');
+  if (fs.existsSync(ocrFrom)) {
+    fs.cpSync(ocrFrom, ocrTo, { recursive: true });
+  }
+
   const st = fs.statSync(outFile);
   if (!st.isFile() || st.size < 1024) {
     throw new Error(`bundle 异常（过小或不存在）: ${outFile}`);

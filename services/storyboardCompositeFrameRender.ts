@@ -37,6 +37,8 @@ export type CompactCellLayoutOpts = {
   cellMeta?: SheetCellTextMeta;
   /** 叠加编辑页标注的人名标签 */
   overlayRoleMarks?: boolean;
+  /** 是否绘制分镜字段文案；默认 false（仅镜号 + 分镜图） */
+  includeShotText?: boolean;
 };
 
 const imageCache = new Map<string, Promise<HTMLImageElement | null>>();
@@ -131,6 +133,29 @@ async function resolveNaturalImageHeight(row: StoryboardTableRow, width: number)
   return Math.max(1, Math.round(width / (img.width / img.height)));
 }
 
+function drawCompactShotLabelOverlay(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  label: string,
+  canvasWidth: number
+): void {
+  const fontSize = Math.max(10, Math.round(canvasWidth / 96));
+  const padX = Math.max(4, Math.round(fontSize * 0.35));
+  const padY = Math.max(2, Math.round(fontSize * 0.25));
+  ctx.font = storyboardSheetCanvasFont(700, fontSize);
+  const metrics = ctx.measureText(label);
+  const bgW = metrics.width + padX * 2;
+  const bgH = fontSize + padY * 2;
+  ctx.fillStyle = 'rgba(0,0,0,0.8)';
+  ctx.fillRect(x, y, bgW, bgH);
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillText(label, x + padX, y + padY);
+  ctx.textBaseline = 'alphabetic';
+}
+
 async function resolveImageHeight(
   row: StoryboardTableRow,
   width: number,
@@ -146,6 +171,12 @@ export async function measureCompactStoryboardCellHeight(
   w: number,
   opts: CompactCellLayoutOpts = {}
 ): Promise<number> {
+  const label = storyboardRowShotLabel(row, row.index);
+  if (opts.includeShotText !== true) {
+    const imageH = await resolveNaturalImageHeight(row, w);
+    return imageH + STORYBOARD_SHEET_SKETCH_BORDER_WIDTH * 2;
+  }
+
   const meta = opts.cellMeta ?? compileSheetShotPanelMeta(row, fieldCatalog);
   const plan =
     opts.typographyPlan ??
@@ -154,7 +185,6 @@ export async function measureCompactStoryboardCellHeight(
       cellH: Math.round(w * 2.5),
       canvasWidth: opts.canvasWidth ?? w,
     });
-  const label = storyboardRowShotLabel(row, row.index);
   const textMetrics = measureSheetCellTextBlock(ctx, meta, plan, w, label);
   const footerGap = storyboardSheetFooterGap(opts.canvasWidth ?? w);
   const imageH = await resolveNaturalImageHeight(row, w);
@@ -201,6 +231,42 @@ export async function drawCompactStoryboardCell(
   h: number,
   opts: CompactCellLayoutOpts = {}
 ): Promise<void> {
+  const label = storyboardRowShotLabel(row, row.index);
+  const includeShotText = opts.includeShotText === true;
+
+  ctx.fillStyle = STORYBOARD_SHEET_SKETCH_BG;
+  ctx.fillRect(x, y, w, h);
+
+  if (!includeShotText) {
+    const src = resolveStoryboardRowFrameDisplaySrc(row);
+    let imageDrawRect: { x: number; y: number; w: number; h: number } | null = null;
+    const placeholderH = Math.round(w * 0.22);
+
+    if (src) {
+      const img = await loadFrameImage(src);
+      if (img) {
+        const drawnH = drawImageNaturalWidth(ctx, img, x, y, w);
+        imageDrawRect = { x, y, w, h: drawnH };
+      } else {
+        drawPlaceholder(ctx, x, y, w, placeholderH, label);
+        imageDrawRect = { x, y, w, h: placeholderH };
+      }
+    } else {
+      drawPlaceholder(ctx, x, y, w, placeholderH, label);
+      imageDrawRect = { x, y, w, h: placeholderH };
+    }
+
+    drawCompactShotLabelOverlay(ctx, x, y, label, opts.canvasWidth ?? w);
+    if (opts.overlayRoleMarks && imageDrawRect) {
+      drawStoryboardFrameRoleMarksOnCanvas(ctx, row.frameRoleMarks, imageDrawRect);
+    }
+
+    ctx.strokeStyle = STORYBOARD_SHEET_SKETCH_BORDER;
+    ctx.lineWidth = STORYBOARD_SHEET_SKETCH_BORDER_WIDTH;
+    ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+    return;
+  }
+
   const meta = opts.cellMeta ?? compileSheetShotPanelMeta(row, fieldCatalog);
   const plan =
     opts.typographyPlan ??
@@ -215,11 +281,7 @@ export async function drawCompactStoryboardCell(
           cellH: h,
           canvasWidth: opts.canvasWidth,
         }));
-  const label = storyboardRowShotLabel(row, row.index);
   const textMetrics = measureSheetCellTextBlock(ctx, meta, plan, w, label);
-
-  ctx.fillStyle = STORYBOARD_SHEET_SKETCH_BG;
-  ctx.fillRect(x, y, w, h);
 
   const imageY = y + textMetrics.headerBlockH;
   const footerGap = storyboardSheetFooterGap(opts.canvasWidth ?? w);

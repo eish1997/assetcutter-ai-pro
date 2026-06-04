@@ -565,7 +565,7 @@
     <h2 class="section-title">本地能力</h2>
     <div class="status-card" id="section-local-engines" style="padding: 12px 14px">
       <p class="storage-hint" style="margin: 0 0 12px; font-size: 11px; line-height: 1.45">
-        网站里的<strong>本机分割</strong>、<strong>去背景</strong>（Windows 可一键准备）。
+        网站里的<strong>本机分割</strong>、<strong>去背景</strong>、<strong>OCR / 文档解析</strong>（Windows 可一键准备）。
       </p>
       <p id="samLocalNonWinBrief" class="storage-hint" style="display: none; margin: 0 0 10px; font-size: 11px; line-height: 1.45">
         非 Windows：壳内暂无 Windows 同款一键安装。开发机可在仓库根执行 <span class="mono">npm run dev:companion-sam-stack</span> 同时起伴侣与分割服务；或自行启动 SamLocal 后在本机配置 <span class="mono">COMPANION_SAM_SEGMENT_URL</span>。
@@ -600,6 +600,29 @@
           </div>
         </div>
       </div>
+      <div id="section-paddleocr-local" style="margin-top: 14px; padding-top: 14px; border-top: 1px solid rgba(148, 163, 184, 0.12)">
+        <div id="paddleOcrWinQuick" style="display: none">
+          <div style="display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 10px 12px">
+            <div style="min-width: 0; flex: 1 1 160px">
+              <div style="font-size: 12px; font-weight: 600; color: rgba(226, 232, 240, 0.95)">OCR / 文档解析</div>
+              <p
+                id="paddleOcrWinStatus"
+                class="mono"
+                style="font-size: 10px; color: rgba(148, 163, 184, 0.95); margin: 6px 0 0; line-height: 1.45; min-height: 1.2em"
+              ></p>
+              <label style="display: flex; align-items: center; gap: 6px; margin-top: 8px; font-size: 10px; color: rgba(148, 163, 184, 0.9); cursor: pointer">
+                <input type="checkbox" id="paddleOcrUseGpu" style="accent-color: #3b82f6" />
+                使用 GPU（需已安装 CUDA；默认 CPU）
+              </label>
+            </div>
+            <button type="button" class="btn btn-primary" id="btnPaddleOcrOneClick">一键安装</button>
+          </div>
+        </div>
+      </div>
+      <p id="paddleOcrNonWinHint" class="storage-hint" style="display: none; margin-top: 10px; font-size: 11px; line-height: 1.45">
+        非 Windows：请安装 Python 3.11+ 后执行 <span class="mono">pip install paddlepaddle paddleocr</span>（GPU 版用
+        <span class="mono">paddlepaddle-gpu</span>），设置 <span class="mono">COMPANION_PADDLEOCR_PYTHON</span> 并重启伴侣。
+      </p>
       <p id="rembgNonWinHint" class="storage-hint" style="display: none; margin-top: 10px; font-size: 11px; line-height: 1.45">
         非 Windows：请安装 Python 3.11+ 后执行 <span class="mono">pip install &quot;rembg[cpu]&quot;</span>，并在启动伴侣的进程中设置
         <span class="mono">COMPANION_REMBG_PYTHON</span> 为对应 <span class="mono">python</span> 路径。
@@ -633,6 +656,28 @@
             <p class="mono" style="font-size: 10px; color: rgba(148, 163, 184, 0.85); margin: 0 0 4px">rembg</p>
             <pre
               id="rembgBootstrapLogArea"
+              class="mono"
+              style="
+                display: none;
+                max-height: 140px;
+                overflow: auto;
+                padding: 10px;
+                font-size: 10px;
+                line-height: 1.35;
+                white-space: pre-wrap;
+                word-break: break-word;
+                background: rgba(0, 0, 0, 0.35);
+                border: 1px solid rgba(148, 163, 184, 0.2);
+                border-radius: 8px;
+                color: rgba(226, 232, 240, 0.92);
+                margin: 0;
+              "
+            ></pre>
+          </div>
+          <div>
+            <p class="mono" style="font-size: 10px; color: rgba(148, 163, 184, 0.85); margin: 0 0 4px">PaddleOCR</p>
+            <pre
+              id="paddleOcrBootstrapLogArea"
               class="mono"
               style="
                 display: none;
@@ -881,6 +926,7 @@
 
       let samLocalBootstrapBusy = false;
       let rembgBootstrapBusy = false;
+      let paddleOcrBootstrapBusy = false;
 
       function openEngineInstallLogs() {
         const d = $('engineInstallLogs');
@@ -927,6 +973,53 @@
           }
         } catch (e) {
           statusEl.textContent = '状态读取异常：' + (e && e.message ? e.message : String(e));
+        }
+      }
+
+      async function refreshPaddleOcrWinPanel() {
+        if (normalizeDesktopPlatform() !== 'win32') return;
+        const statusEl = $('paddleOcrWinStatus');
+        const btn = $('btnPaddleOcrOneClick');
+        if (!statusEl) return;
+        if (typeof shell.paddleOcrDesktopState !== 'function') {
+          statusEl.textContent = '当前壳版本不支持一键安装，请更新桌面应用。';
+          if (btn) btn.disabled = true;
+          return;
+        }
+        if (paddleOcrBootstrapBusy) return;
+        try {
+          const r = await shell.paddleOcrDesktopState();
+          if (!r || !r.ok) {
+            statusEl.textContent = r && r.error ? '状态读取失败：' + r.error : '状态读取失败';
+            return;
+          }
+          if (!r.hasBootstrapScript) {
+            statusEl.textContent = '当前构建缺少 paddleocr-bootstrap 脚本，请更新桌面应用。';
+            if (btn) btn.disabled = true;
+            return;
+          }
+          if (btn) btn.disabled = false;
+          if (r.installed) {
+            const dev = r.device === 'gpu' ? 'GPU' : 'CPU';
+            statusEl.textContent = '已就绪（' + dev + '）；异常时可再次安装修复。需先完成 SamLocal/rembg 安装以共用 Python。';
+          } else {
+            statusEl.textContent = '未安装。需先完成 SamLocal 或 rembg 的一键安装（共用 Python），再安装 OCR。';
+          }
+        } catch (e) {
+          statusEl.textContent = '状态读取异常：' + (e && e.message ? e.message : String(e));
+        }
+      }
+
+      function applyPaddleOcrPlatformUi() {
+        const plat = normalizeDesktopPlatform();
+        const winQuick = $('paddleOcrWinQuick');
+        const nw = $('paddleOcrNonWinHint');
+        if (plat === 'win32') {
+          if (winQuick) winQuick.style.display = 'block';
+          if (nw) nw.style.display = 'none';
+        } else {
+          if (winQuick) winQuick.style.display = 'none';
+          if (nw) nw.style.display = 'block';
         }
       }
 
@@ -1029,6 +1122,7 @@
           await loadPlugins();
           void refreshSamLocalWinPanel();
           void refreshRembgWinPanel();
+          void refreshPaddleOcrWinPanel();
         }
         if (viewKey === 'settings') {
           void refreshVolumeEffectiveHint();
@@ -1050,6 +1144,7 @@
 
       applySamLocalPlatformUi();
       applyRembgPlatformUi();
+      applyPaddleOcrPlatformUi();
       const btnSamLocalOneClick = $('btnSamLocalOneClick');
       const samLocalBootstrapLogArea = $('samLocalBootstrapLogArea');
       if (btnSamLocalOneClick && typeof shell.samLocalBootstrapRun === 'function') {
@@ -1101,6 +1196,61 @@
           }
         });
       }
+      const btnPaddleOcrOneClick = $('btnPaddleOcrOneClick');
+      const paddleOcrBootstrapLogArea = $('paddleOcrBootstrapLogArea');
+      const paddleOcrUseGpu = $('paddleOcrUseGpu');
+      if (btnPaddleOcrOneClick && typeof shell.paddleOcrBootstrapRun === 'function') {
+        btnPaddleOcrOneClick.addEventListener('click', async () => {
+          if (normalizeDesktopPlatform() !== 'win32') return;
+          btnPaddleOcrOneClick.disabled = true;
+          paddleOcrBootstrapBusy = true;
+          if (paddleOcrBootstrapLogArea) {
+            paddleOcrBootstrapLogArea.style.display = 'block';
+            paddleOcrBootstrapLogArea.textContent = '';
+          }
+          try {
+            const useGpu = paddleOcrUseGpu && paddleOcrUseGpu.checked;
+            const r = await shell.paddleOcrBootstrapRun({ useGpu: Boolean(useGpu) });
+            if (!r || !r.ok) {
+              window.alert(r && r.error ? r.error : '无法启动安装');
+              paddleOcrBootstrapBusy = false;
+              btnPaddleOcrOneClick.disabled = false;
+              void refreshPaddleOcrWinPanel();
+              return;
+            }
+            if (paddleOcrBootstrapLogArea && r.started) {
+              openEngineInstallLogs();
+              paddleOcrBootstrapLogArea.textContent = '安装已启动，日志见「安装日志」…\n';
+            }
+          } catch (e) {
+            window.alert(e && e.message ? e.message : String(e));
+            paddleOcrBootstrapBusy = false;
+            btnPaddleOcrOneClick.disabled = false;
+            void refreshPaddleOcrWinPanel();
+          }
+        });
+      }
+      if (typeof shell.onPaddleOcrBootstrapLog === 'function') {
+        shell.onPaddleOcrBootstrapLog((payload) => {
+          const logEl = $('paddleOcrBootstrapLogArea');
+          if (logEl) {
+            logEl.style.display = 'block';
+            const line = formatSamLocalBootstrapLine(payload);
+            logEl.textContent += line + '\n';
+            logEl.scrollTop = logEl.scrollHeight;
+          }
+          if (payload && payload.type === 'bootstrap-finished') {
+            paddleOcrBootstrapBusy = false;
+            if (btnPaddleOcrOneClick) btnPaddleOcrOneClick.disabled = false;
+            void refreshPaddleOcrWinPanel();
+            if (!payload.ok) {
+              window.alert('PaddleOCR 安装未成功完成，请展开「安装日志」查看详情或稍后重试。');
+            }
+          }
+        });
+      }
+      void refreshPaddleOcrWinPanel();
+
       const btnRembgOneClick = $('btnRembgOneClick');
       const rembgBootstrapLogArea = $('rembgBootstrapLogArea');
       if (btnRembgOneClick && typeof shell.rembgBootstrapRun === 'function') {

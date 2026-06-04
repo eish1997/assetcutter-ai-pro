@@ -10,6 +10,7 @@ type Props = {
   fieldCatalog: StoryboardParseFieldDef[];
   active: boolean;
   compact?: boolean;
+  includeShotText?: boolean;
   overlayRoleMarks?: boolean;
   roleAssets?: StoryboardRoleAsset[];
   onSelect: () => void;
@@ -26,6 +27,7 @@ function StoryboardConnectedCompositeCardInner({
   fieldCatalog,
   active,
   compact = false,
+  includeShotText = false,
   overlayRoleMarks = false,
   roleAssets,
   onSelect,
@@ -41,6 +43,7 @@ function StoryboardConnectedCompositeCardInner({
       fieldCatalog={fieldCatalog}
       active={active}
       compact={compact}
+      includeShotText={includeShotText}
       overlayRoleMarks={overlayRoleMarks}
       roleAssets={roleAssets}
       onSelect={onSelect}
@@ -54,6 +57,7 @@ function compositePropsEqual(prev: Props, next: Props): boolean {
     prev.index !== next.index ||
     prev.active !== next.active ||
     prev.compact !== next.compact ||
+    prev.includeShotText !== next.includeShotText ||
     prev.overlayRoleMarks !== next.overlayRoleMarks
   ) {
     return false;

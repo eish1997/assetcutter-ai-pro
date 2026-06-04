@@ -29,6 +29,8 @@ contextBridge.exposeInMainWorld('companionShell', {
   samLocalBootstrapRun: () => timedInvoke('shell-sam-local-bootstrap-run'),
   rembgDesktopState: () => timedInvoke('shell-rembg-desktop-state'),
   rembgBootstrapRun: () => timedInvoke('shell-rembg-bootstrap-run'),
+  paddleOcrDesktopState: () => timedInvoke('shell-paddleocr-desktop-state'),
+  paddleOcrBootstrapRun: (opts) => timedInvoke('shell-paddleocr-bootstrap-run', opts || {}),
   traySummary: () => timedInvoke('shell-tray-summary'),
   installShellUpdate: () => timedInvoke('shell-install-shell-update'),
   loadSettings: () => timedInvoke('shell-settings-load'),
@@ -80,6 +82,16 @@ contextBridge.exposeInMainWorld('companionShell', {
   onRembgBootstrapLog: (handler) => {
     if (typeof handler !== 'function') return;
     ipcRenderer.on('rembg-bootstrap-log', (_evt, payload) => {
+      try {
+        handler(payload);
+      } catch {
+        /* ignore */
+      }
+    });
+  },
+  onPaddleOcrBootstrapLog: (handler) => {
+    if (typeof handler !== 'function') return;
+    ipcRenderer.on('paddleocr-bootstrap-log', (_evt, payload) => {
       try {
         handler(payload);
       } catch {

@@ -27,6 +27,7 @@ type Props = {
   timelineLayerCount?: number;
   gridExportWidth?: number;
   overlayRoleMarks?: boolean;
+  includeShotText?: boolean;
   roleAssets?: StoryboardRoleAsset[];
   activeRowId: string | null;
   onSelect: (rowId: string) => void;
@@ -43,6 +44,7 @@ export default function StoryboardTableGridPreview({
   timelineLayerCount = 1,
   gridExportWidth = 2560,
   overlayRoleMarks = false,
+  includeShotText = false,
   roleAssets = [],
   activeRowId,
   onSelect,
@@ -140,6 +142,7 @@ export default function StoryboardTableGridPreview({
       activeRowId={activeRowId}
       previewWidth={gridExportWidth}
       overlayRoleMarks={overlayRoleMarks}
+      includeShotText={includeShotText}
       roleAssets={roleAssets}
       onSelectRow={onSelect}
       onPreviewImage={onPreviewImage}

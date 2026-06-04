@@ -39,6 +39,7 @@ import {
   rowHasStructuredFieldValues,
   STORYBOARD_BULK_PARSE_MAX_CHARS,
 } from '../../services/storyboardTableParse';
+import { importStoryboardTextFromCompanionFile } from '../../services/storyboardCompanionOcrImport';
 import type { CustomAppModule, StoryboardParseFieldDef, StoryboardTableRow } from '../../types';
 import { STORYBOARD_FIELD_INPUT, STORYBOARD_TOOL_BTN_NEUTRAL, STORYBOARD_TOOL_BTN_PRIMARY } from './storyboardTableUi';
 
@@ -58,6 +59,8 @@ type Props = {
   onBusyChange?: (busy: boolean) => void;
   onParseComplete?: (detail: { rowCount: number; appended: boolean }) => void;
   onNotify?: (level: 'info' | 'warn' | 'error', message: string) => void;
+  companionBaseUrl?: string;
+  companionProjectId?: string;
 };
 
 type PendingBulkImport = StoryboardBulkParseResult & { source?: 'local' | 'ai' };
@@ -195,16 +198,20 @@ const StoryboardTableBulkInput = forwardRef<StoryboardTableBulkInputHandle, Prop
       onBusyChange,
       onParseComplete,
       onNotify,
+      companionBaseUrl = '',
+      companionProjectId = '',
     },
     ref
   ) {
     const [pipeText, setPipeText] = useState('');
     const [importBusy, setImportBusy] = useState(false);
+    const [ocrImportBusy, setOcrImportBusy] = useState(false);
     const [aiBusy, setAiBusy] = useState(false);
     const [normalizedByAi, setNormalizedByAi] = useState(false);
     const [aiRejectReason, setAiRejectReason] = useState<string | null>(null);
     const [pendingImport, setPendingImport] = useState<PendingBulkImport | null>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const ocrFileInputRef = useRef<HTMLInputElement>(null);
     const rowsRef = useRef(rows);
 
     useEffect(() => {
@@ -246,7 +253,8 @@ const StoryboardTableBulkInput = forwardRef<StoryboardTableBulkInputHandle, Prop
     };
 
     const canUseAi = Boolean(parsePreset && parseCtx);
-    const busy = importBusy || aiBusy || Boolean(pendingImport);
+    const canUseCompanionOcr = Boolean(companionProjectId.trim());
+    const busy = importBusy || aiBusy || ocrImportBusy || Boolean(pendingImport);
 
     useEffect(() => {
       onBusyChange?.(busy);
@@ -496,6 +504,43 @@ const StoryboardTableBulkInput = forwardRef<StoryboardTableBulkInputHandle, Prop
 
     useImperativeHandle(ref, () => ({ parseAndFill }), [parseAndFill]);
 
+    const handleOcrFilePicked = useCallback(
+      async (file: File | null) => {
+        if (!file || readOnly || ocrImportBusy) return;
+        const pid = companionProjectId.trim();
+        if (!pid) {
+          onNotify?.('warn', '本机 OCR 需要工作区项目；请先在网站连接本地伴侣并选择项目');
+          return;
+        }
+        setOcrImportBusy(true);
+        try {
+          onNotify?.('info', file.name.toLowerCase().endsWith('.pdf') ? 'PDF 解析中…' : '图片 OCR 中…');
+          const res = await importStoryboardTextFromCompanionFile({
+            projectId: pid,
+            file,
+            companionBaseUrl,
+          });
+          if (res.ok === false) {
+            onNotify?.('warn', res.error);
+            return;
+          }
+          setPipeText(res.text);
+          setNormalizedByAi(false);
+          setAiRejectReason(null);
+          persistDraft({ pipeText: res.text });
+          onNotify?.(
+            'info',
+            res.source === 'pdf'
+              ? 'PDF 已转为文本，请点击「解析」写入分镜表'
+              : `图片 OCR 完成（${res.blockCount ?? 0} 段），请点击「解析」写入分镜表`,
+          );
+        } finally {
+          setOcrImportBusy(false);
+        }
+      },
+      [companionBaseUrl, companionProjectId, ocrImportBusy, onNotify, persistDraft, readOnly],
+    );
+
     const statusHint = preview?.rows.length
       ? `已识别 ${preview.rows.length} 镜${normalizedByAi ? ' · AI' : ''}${
           preview.duplicateShotNos.length
@@ -510,6 +555,35 @@ const StoryboardTableBulkInput = forwardRef<StoryboardTableBulkInputHandle, Prop
 
     return (
       <>
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          <input
+            ref={ocrFileInputRef}
+            type="file"
+            accept=".pdf,application/pdf,image/*"
+            className="hidden"
+            onChange={(event) => {
+              const f = event.target.files?.[0] ?? null;
+              event.target.value = '';
+              void handleOcrFilePicked(f);
+            }}
+          />
+          <button
+            type="button"
+            disabled={readOnly || busy || !canUseCompanionOcr}
+            onClick={() => ocrFileInputRef.current?.click()}
+            className={`${STORYBOARD_TOOL_BTN_NEUTRAL} h-8 px-3 text-[10px]`}
+            title={
+              canUseCompanionOcr
+                ? '经本地伴侣 PaddleOCR：PDF 用文档解析，图片用 OCR'
+                : '需要工作区项目与本地伴侣 OCR 服务'
+            }
+          >
+            {ocrImportBusy ? '识别中…' : '导入 PDF/图片'}
+          </button>
+          {!canUseCompanionOcr ? (
+            <span className="text-[9px] text-gray-500">本机 OCR 需已配对伴侣并选择工作区项目</span>
+          ) : null}
+        </div>
         <div className="relative">
           <textarea
             ref={textareaRef}

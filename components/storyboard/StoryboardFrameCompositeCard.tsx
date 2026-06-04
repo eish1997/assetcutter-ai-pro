@@ -73,8 +73,10 @@ type Props = {
   /** mergedPreview 时占位文案：生成中 / 失败 */
   mergeStatus?: 'pending' | 'failed';
   showLocked?: boolean;
-  /** 分镜图网格：仅缩略图 + 镜号，不展示字段文案 */
+  /** 分镜图网格：仅缩略图 + 镜号，不展示字段文案（除非 includeShotText） */
   compact?: boolean;
+  /** 输出页：在 compact 模式下叠加分镜字段文案 */
+  includeShotText?: boolean;
   /** 叠加编辑页人名标签 */
   overlayRoleMarks?: boolean;
   roleAssets?: StoryboardRoleAsset[];
@@ -100,6 +102,7 @@ export default function StoryboardFrameCompositeCard({
   mergeStatus,
   showLocked,
   compact = false,
+  includeShotText = false,
   overlayRoleMarks = false,
   roleAssets,
   onSelect,
@@ -143,7 +146,9 @@ export default function StoryboardFrameCompositeCard({
             }
           }}
           title={onOpenInEditor ? '双击进入编辑' : title}
-          className="relative cursor-pointer overflow-hidden border-2 border-black bg-white text-left outline-none focus-visible:ring-2 focus-visible:ring-white/25 focus-visible:ring-inset"
+          className={`relative cursor-pointer overflow-hidden border-2 border-black bg-white text-left outline-none focus-visible:ring-2 focus-visible:ring-white/25 focus-visible:ring-inset ${
+            includeShotText ? 'flex flex-col' : ''
+          }`}
         >
           {img ? (
             <>
@@ -172,6 +177,16 @@ export default function StoryboardFrameCompositeCard({
               {pendingMerge ? '合成预览生成中…' : mergeFailed ? '合成预览失败' : '待配图'}
             </div>
           )}
+          {includeShotText ? (
+            <div className="shrink-0 border-t border-black/10 bg-[#f8f8fa] px-2 py-1.5">
+              <StoryboardCompositeFieldsBody
+                fieldItems={fieldItems}
+                catalog={fieldCatalog}
+                shotFields={row.shotFields}
+                fallbackText={body}
+              />
+            </div>
+          ) : null}
         </div>
       </article>
     );

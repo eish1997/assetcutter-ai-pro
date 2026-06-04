@@ -8,16 +8,17 @@ import {
 const previewCache = new Map<string, string>();
 const PREVIEW_CACHE_MAX = 12;
 /** 布局算法变更时递增，避免旧缓存字号/留白/行高 */
-const MOSAIC_PREVIEW_LAYOUT_VERSION = 9;
+const MOSAIC_PREVIEW_LAYOUT_VERSION = 10;
 
 /** 离屏合成组拼图预览（与导出一致，带内存缓存） */
 export async function renderStoryboardGroupMosaicPreview(
   group: StoryboardDurationGroup,
   fieldCatalog: StoryboardParseFieldDef[],
   previewWidth: number,
-  overlayRoleMarks = false
+  overlayRoleMarks = false,
+  includeShotText = false
 ): Promise<string | null> {
-  const cacheKey = `${MOSAIC_PREVIEW_LAYOUT_VERSION}:${storyboardGroupMosaicExportCacheKey(group, fieldCatalog, previewWidth, overlayRoleMarks)}`;
+  const cacheKey = `${MOSAIC_PREVIEW_LAYOUT_VERSION}:${storyboardGroupMosaicExportCacheKey(group, fieldCatalog, previewWidth, overlayRoleMarks, includeShotText)}`;
   const cached = previewCache.get(cacheKey);
   if (cached) return cached;
 
@@ -26,6 +27,7 @@ export async function renderStoryboardGroupMosaicPreview(
     width,
     jpegQuality: 0.9,
     overlayRoleMarks,
+    includeShotText,
   });
   if (dataUrl) {
     if (previewCache.size >= PREVIEW_CACHE_MAX) {

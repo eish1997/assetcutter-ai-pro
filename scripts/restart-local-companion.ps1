@@ -8,7 +8,14 @@ Set-Location $repo
 
 Get-Process electron, AssetCutterCompanion -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 
-foreach ($port in @(18765)) {
+Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
+  Where-Object { $_.CommandLine -like '*paddleocr-service*server.py*' } |
+  ForEach-Object {
+    Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+    Write-Host "[restart-local-companion] Stopped OCR server PID $($_.ProcessId)"
+  }
+
+foreach ($port in @(18765, 18082)) {
   $pids = @(
     Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
       Select-Object -ExpandProperty OwningProcess -Unique

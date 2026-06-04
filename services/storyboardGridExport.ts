@@ -8,6 +8,7 @@ import {
 
 export const STORYBOARD_GRID_EXPORT_WIDTH_KEY = 'ac_storyboard_grid_export_width_v1';
 export const STORYBOARD_GRID_OVERLAY_ROLE_MARKS_KEY = 'ac_storyboard_grid_overlay_role_marks_v1';
+export const STORYBOARD_GRID_INCLUDE_SHOT_TEXT_KEY = 'ac_storyboard_grid_include_shot_text_v1';
 
 export const STORYBOARD_GRID_EXPORT_WIDTH_PRESETS = [1920, 2560, 3840] as const;
 
@@ -37,6 +38,16 @@ export function writeStoryboardGridOverlayRoleMarks(enabled: boolean): void {
   writeLocalJson(STORYBOARD_GRID_OVERLAY_ROLE_MARKS_KEY, enabled);
 }
 
+export function readStoryboardGridIncludeShotText(): boolean {
+  return readLocalJson(STORYBOARD_GRID_INCLUDE_SHOT_TEXT_KEY, false, (v) =>
+    typeof v === 'boolean' ? v : null
+  );
+}
+
+export function writeStoryboardGridIncludeShotText(enabled: boolean): void {
+  writeLocalJson(STORYBOARD_GRID_INCLUDE_SHOT_TEXT_KEY, enabled);
+}
+
 function triggerBlobDownload(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -53,13 +64,15 @@ export async function downloadStoryboardGroupMosaic(
   group: StoryboardDurationGroup,
   fieldCatalog: StoryboardParseFieldDef[],
   exportWidth: number,
-  overlayRoleMarks = false
+  overlayRoleMarks = false,
+  includeShotText = false
 ): Promise<string | null> {
   const blob = await renderStoryboardGroupMosaicBlob(
     group,
     fieldCatalog,
     exportWidth,
-    overlayRoleMarks
+    overlayRoleMarks,
+    includeShotText
   );
   if (!blob) return null;
   const filename = storyboardGroupMosaicExportFilename(group, exportWidth);
@@ -72,6 +85,7 @@ export async function downloadAllStoryboardGroupMosaics(
   fieldCatalog: StoryboardParseFieldDef[],
   exportWidth: number,
   overlayRoleMarks = false,
+  includeShotText = false,
   onProgress?: (done: number, total: number) => void
 ): Promise<number> {
   let count = 0;
@@ -81,7 +95,8 @@ export async function downloadAllStoryboardGroupMosaics(
       group,
       fieldCatalog,
       exportWidth,
-      overlayRoleMarks
+      overlayRoleMarks,
+      includeShotText
     );
     if (ok) count += 1;
     onProgress?.(i + 1, groups.length);

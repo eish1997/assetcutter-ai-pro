@@ -288,6 +288,8 @@ const StoryboardTableInputView = forwardRef<StoryboardTableInputViewHandle, Prop
                 setCompletionGuide({ kind: 'parse', rowCount: detail.rowCount, appended: detail.appended })
               }
               onNotify={onNotify}
+              companionBaseUrl={companionBaseUrl}
+              companionProjectId={companionProjectId}
             />
 
             <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-center">
