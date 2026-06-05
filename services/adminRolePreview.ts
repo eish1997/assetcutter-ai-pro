@@ -1,4 +1,5 @@
-import type { AdminStaffRole } from '../services/adminMeClient';
+import { readSessionJson, writeSessionJson, removeSessionKey } from './clientPersist';
+import type { AdminStaffRole } from './adminMeClient';
 
 export const ADMIN_ROLE_PREVIEW_STORAGE_KEY = 'ac_admin_role_preview_v1';
 
@@ -10,25 +11,18 @@ export type AdminRolePreviewSession = {
 };
 
 export function readAdminRolePreviewSession(): AdminRolePreviewSession | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    const raw = sessionStorage.getItem(ADMIN_ROLE_PREVIEW_STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as AdminRolePreviewSession;
-    if (!parsed?.roleId || !parsed.slug || !Array.isArray(parsed.permissions)) return null;
-    return parsed;
-  } catch {
-    return null;
-  }
+  const parsed = readSessionJson<AdminRolePreviewSession>(ADMIN_ROLE_PREVIEW_STORAGE_KEY);
+  if (!parsed?.roleId || !parsed.slug || !Array.isArray(parsed.permissions)) return null;
+  return parsed;
 }
 
 export function writeAdminRolePreviewSession(data: AdminRolePreviewSession): void {
-  sessionStorage.setItem(ADMIN_ROLE_PREVIEW_STORAGE_KEY, JSON.stringify(data));
+  writeSessionJson(ADMIN_ROLE_PREVIEW_STORAGE_KEY, data);
   window.dispatchEvent(new Event('ac-admin-role-preview-changed'));
 }
 
 export function clearAdminRolePreviewSession(): void {
-  sessionStorage.removeItem(ADMIN_ROLE_PREVIEW_STORAGE_KEY);
+  removeSessionKey(ADMIN_ROLE_PREVIEW_STORAGE_KEY);
   window.dispatchEvent(new Event('ac-admin-role-preview-changed'));
 }
 

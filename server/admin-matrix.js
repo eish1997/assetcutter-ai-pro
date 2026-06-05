@@ -10,9 +10,15 @@ import {
 export const MATRIX_COLUMNS = [
   {
     id: 'dashboard',
-    label: 'Dashboard',
+    label: '运营首页',
     kind: 'toggle',
     permissions: [PERMISSIONS.DASHBOARD_READ],
+  },
+  {
+    id: 'systemStatus',
+    label: '系统状态',
+    kind: 'toggle',
+    permissions: [PERMISSIONS.SYSTEM_STATUS_READ],
   },
   {
     id: 'users',
@@ -23,7 +29,7 @@ export const MATRIX_COLUMNS = [
   },
   {
     id: 'usersRole',
-    label: '改用户角色',
+    label: '成员邀请/改角色',
     kind: 'toggle',
     permissions: [PERMISSIONS.USERS_ROLE_WRITE],
     superOnly: true,
@@ -36,9 +42,15 @@ export const MATRIX_COLUMNS = [
   },
   {
     id: 'audit',
-    label: '审计',
+    label: '审计日志',
     kind: 'toggle',
     permissions: [PERMISSIONS.AUDIT_READ],
+  },
+  {
+    id: 'taskEvents',
+    label: '任务执行',
+    kind: 'toggle',
+    permissions: [PERMISSIONS.TASK_EVENTS_READ],
   },
   {
     id: 'companion',
@@ -121,14 +133,8 @@ export function matrixToPermissions(matrix, roleSlug) {
       if (v === 'write') set.add(col.write);
     }
   }
-  if (set.has(PERMISSIONS.USERS_WRITE) || set.has(PERMISSIONS.USERS_ROLE_WRITE) || set.has(PERMISSIONS.USERS_RECONCILE)) {
+  if (set.has(PERMISSIONS.USERS_WRITE) || set.has(PERMISSIONS.USERS_ROLE_WRITE)) {
     set.add(PERMISSIONS.USERS_READ);
-  }
-  if (set.has(PERMISSIONS.COMPANION_WRITE) || set.has(PERMISSIONS.COMPANION_DELETE)) {
-    set.add(PERMISSIONS.COMPANION_READ);
-  }
-  if (set.has(PERMISSIONS.GEMINI_FAIRNESS_WRITE) || set.has(PERMISSIONS.GEMINI_FAIRNESS_STRICT)) {
-    set.add(PERMISSIONS.GEMINI_FAIRNESS_READ);
   }
   if (set.has(PERMISSIONS.ROLES_WRITE)) set.add(PERMISSIONS.ROLES_READ);
   return filterPermissionsForRoleSlug(roleSlug, [...set]);

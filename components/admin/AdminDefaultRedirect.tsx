@@ -1,11 +1,11 @@
 import React from 'react';
-import { ADMIN_NAV_ITEMS, PERMISSIONS } from '../../services/adminPermissions';
+import { resolveAdminLandingPath } from '../../services/adminPermissions';
 import { navigateAdmin } from '../../services/adminNavigate';
 import { useAdminStaff } from './AdminStaffContext';
 
 /** 无 dashboard 权限时从 /admin 重定向到首个可访问页面（如 auditor → 审计） */
 const AdminDefaultRedirect: React.FC<{ pathname: string }> = ({ pathname }) => {
-  const { can } = useAdminStaff();
+  const { permissions } = useAdminStaff();
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -17,10 +17,9 @@ const AdminDefaultRedirect: React.FC<{ pathname: string }> = ({ pathname }) => {
       return;
     }
     if (pathname !== '/admin') return;
-    if (can(PERMISSIONS.DASHBOARD_READ)) return;
-    const first = ADMIN_NAV_ITEMS.find((item) => item.path !== '/admin' && can(item.permission));
-    if (first) navigateAdmin(first.path);
-  }, [pathname, can]);
+    const landing = resolveAdminLandingPath(permissions);
+    if (landing !== '/admin') navigateAdmin(landing);
+  }, [pathname, permissions]);
 
   return null;
 };

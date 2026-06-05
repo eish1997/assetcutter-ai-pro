@@ -108,13 +108,13 @@ const AdminDashboardPanel: React.FC = () => {
             <StatCard
               label="近 7 日任务事件"
               value={data.stats.taskEvents7d}
-              onClick={can(PERMISSIONS.AUDIT_READ) ? () => navigateAdmin('/admin/task-events') : undefined}
+              onClick={can(PERMISSIONS.TASK_EVENTS_READ) ? () => navigateAdmin('/admin/task-events') : undefined}
             />
             <StatCard label="后台人员" value={data.stats.staffUsers} />
           </div>
 
           <div className="flex flex-wrap gap-2">
-            <QuickLink label="系统状态" path="/admin/system-status" />
+            {can(PERMISSIONS.SYSTEM_STATUS_READ) ? <QuickLink label="系统状态" path="/admin/system-status" /> : null}
             {can(PERMISSIONS.USERS_ROLE_WRITE) ? <QuickLink label="成员邀请" path="/admin/staff-invites" /> : null}
             {can(PERMISSIONS.COMPANION_READ) ? <QuickLink label="伴侣发行" path="/admin/companion-artifacts" /> : null}
             {can(PERMISSIONS.GEMINI_FAIRNESS_READ) ? (

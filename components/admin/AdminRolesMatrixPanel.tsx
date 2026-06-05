@@ -10,13 +10,13 @@ import {
 } from '../../services/adminRolesClient';
 import type { MatrixCellValue } from '../../services/adminMatrix';
 import { cellLabel, matrixToPermissions, nextRwCell, nextToggleCell } from '../../services/adminMatrix';
-import { PERMISSIONS } from '../../services/adminPermissions';
+import { PERMISSIONS, resolveAdminLandingPath } from '../../services/adminPermissions';
 import { blockIfRolePreview, writeAdminRolePreviewSession } from '../../services/adminRolePreview';
 import { navigateAdmin } from '../../services/adminNavigate';
 import { useAdminStaff } from './AdminStaffContext';
 
 const AdminRolesMatrixPanel: React.FC = () => {
-  const { can, isRolePreview } = useAdminStaff();
+  const { can, isRolePreview, me, reload } = useAdminStaff();
   const canWrite = can(PERMISSIONS.ROLES_WRITE);
   const [roles, setRoles] = React.useState<AdminRoleRow[]>([]);
   const [columns, setColumns] = React.useState<MatrixColumnMeta[]>([]);
@@ -73,6 +73,9 @@ const AdminRolesMatrixPanel: React.FC = () => {
       const res = await saveAdminRolePermissions(roleId, drafts[roleId] || {});
       setRoles((prev) => prev.map((r) => (r.id === roleId ? res.role : r)));
       setDrafts((prev) => ({ ...prev, [roleId]: { ...res.role.matrix } }));
+      if (me?.staffRole?.id === roleId) {
+        await reload();
+      }
       setMessage('权限已保存');
     } catch (err) {
       setError(err instanceof Error ? err.message : '保存失败');
@@ -119,6 +122,8 @@ const AdminRolesMatrixPanel: React.FC = () => {
         <h2 className="text-[12px] font-black uppercase tracking-[0.2em] text-gray-300">角色与权限矩阵</h2>
         <p className="mt-1 text-[10px] text-gray-500 max-w-3xl leading-relaxed">
           仅超级管理员可编辑。super 行锁定；admin 系统模板可改列权限但不可删除。带「高危」标记的列不可授予非 super 角色（保存时服务端会剔除）。
+          矩阵列与侧栏一一对应；「用户管理」与「用量同步」可独立开关。开启「用户写/改角色」时会自动附带用户列表只读。
+          保存后若改的是当前登录账号所属角色，侧栏会立即刷新。
         </p>
       </div>
 
@@ -230,13 +235,14 @@ const AdminRolesMatrixPanel: React.FC = () => {
                         type="button"
                         onClick={() => {
                           const matrix = rowDraft;
+                          const permissions = matrixToPermissions(matrix, role.slug);
                           writeAdminRolePreviewSession({
                             roleId: role.id,
                             slug: role.slug,
                             displayName: role.displayName,
-                            permissions: matrixToPermissions(matrix, role.slug),
+                            permissions,
                           });
-                          navigateAdmin('/admin');
+                          navigateAdmin(resolveAdminLandingPath(permissions));
                         }}
                         className="px-2 py-1 rounded-lg border border-[#2e2e32] bg-[#1c1c22] text-gray-300 hover:bg-[#2e2e36]"
                         title="以该角色权限模拟完整管理后台界面"

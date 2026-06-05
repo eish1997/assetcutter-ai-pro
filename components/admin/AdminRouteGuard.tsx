@@ -1,5 +1,5 @@
 import React from 'react';
-import { ADMIN_NAV_ITEMS, PERMISSIONS, type AdminPermission } from '../../services/adminPermissions';
+import { ADMIN_NAV_ITEMS, PERMISSIONS, resolveAdminLandingPath, type AdminPermission } from '../../services/adminPermissions';
 import { useAdminStaff } from './AdminStaffContext';
 
 const ROUTE_PERMISSIONS: Record<string, AdminPermission> = {
@@ -11,10 +11,22 @@ export const AdminRouteGuard: React.FC<{ pathname: string; children: React.React
   pathname,
   children,
 }) => {
-  const { can } = useAdminStaff();
+  const { can, permissions } = useAdminStaff();
   const permission =
     ROUTE_PERMISSIONS[pathname] ??
     (pathname.startsWith('/admin/users/') ? PERMISSIONS.USERS_READ : PERMISSIONS.DASHBOARD_READ);
+
+  if (pathname === '/admin' && !can(PERMISSIONS.DASHBOARD_READ)) {
+    const landing = resolveAdminLandingPath(permissions);
+    if (landing !== '/admin') {
+      return (
+        <div className="rounded-2xl border border-[#2e2e32] bg-[#121214] p-8 max-w-lg">
+          <p className="text-[11px] text-gray-400">正在跳转到该角色可访问的首页…</p>
+        </div>
+      );
+    }
+  }
+
   if (!can(permission)) {
     return (
       <div className="rounded-2xl border border-[#2e2e32] bg-[#121214] p-8 max-w-lg">

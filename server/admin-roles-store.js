@@ -189,6 +189,39 @@ async function migrateLegacyStaffUsers(roleIds) {
   if (changed) writeDb(db);
 }
 
+/** 已有角色补全侧栏拆分后的权限（audit→任务执行、dashboard→系统状态）。 */
+async function migrateSidebarPermissionKeys() {
+  const rules = [
+    { ifHas: 'audit.read', add: 'task_events.read' },
+    { ifHas: 'dashboard.read', add: 'system_status.read' },
+  ];
+  if (USE_POSTGRES) {
+    const p = getPool();
+    for (const role of await listAllRoles()) {
+      const raw = await listPermissionKeysForRoleId(role.id);
+      const toAdd = rules.filter((r) => raw.includes(r.ifHas) && !raw.includes(r.add)).map((r) => r.add);
+      for (const key of toAdd) {
+        await p.query('INSERT INTO role_permissions (role_id, permission_key) VALUES ($1,$2) ON CONFLICT DO NOTHING', [
+          role.id,
+          key,
+        ]);
+      }
+    }
+    return;
+  }
+  const db = readDb();
+  let changed = false;
+  for (const role of db.adminRoles || []) {
+    const raw = (db.rolePermissions || []).filter((rp) => rp.roleId === role.id).map((rp) => rp.permissionKey);
+    for (const rule of rules) {
+      if (!raw.includes(rule.ifHas) || raw.includes(rule.add)) continue;
+      db.rolePermissions.push({ roleId: role.id, permissionKey: rule.add });
+      changed = true;
+    }
+  }
+  if (changed) writeDb(db);
+}
+
 export async function ensureAdminRbac() {
   if (rbacReady) return;
   if (USE_POSTGRES) {
@@ -199,6 +232,7 @@ export async function ensureAdminRbac() {
   }
   const roleIds = await seedSystemRoles();
   await migrateLegacyStaffUsers(roleIds);
+  await migrateSidebarPermissionKeys();
   resetRoleCache();
   rbacReady = true;
 }

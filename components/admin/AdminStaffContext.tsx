@@ -126,14 +126,18 @@ export function useAdminStaff() {
   const preview = useAdminRolePreviewOverride();
   if (!ctx) throw new Error('useAdminStaff 必须在 AdminStaffProvider 内使用');
 
-  if (!preview) return ctx;
+  const effectivePermissions = preview?.permissions ?? ctx.permissions;
 
-  const permissions = preview.permissions;
-  const can = (key: AdminPermission) => hasAdminPermission(permissions, key);
+  const can = React.useCallback(
+    (key: AdminPermission) => hasAdminPermission(effectivePermissions, key),
+    [effectivePermissions]
+  );
+
+  if (!preview) return { ...ctx, can };
 
   return {
     ...ctx,
-    permissions,
+    permissions: preview.permissions,
     staffRole: previewSessionToStaffRole(preview),
     can,
     isRolePreview: true,

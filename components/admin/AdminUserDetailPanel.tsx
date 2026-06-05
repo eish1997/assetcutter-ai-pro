@@ -52,6 +52,7 @@ const AdminUserDetailPanel: React.FC<Props> = ({ userId }) => {
   const canRoleWrite = can(PERMISSIONS.USERS_ROLE_WRITE);
   const canReconcile = can(PERMISSIONS.USERS_RECONCILE);
   const canAudit = can(PERMISSIONS.AUDIT_READ);
+  const canTaskEvents = can(PERMISSIONS.TASK_EVENTS_READ);
 
   const [user, setUser] = React.useState<AuthUser | null>(null);
   const [roles, setRoles] = React.useState<AdminRoleRow[]>([]);
@@ -125,7 +126,7 @@ const AdminUserDetailPanel: React.FC<Props> = ({ userId }) => {
   }, [canAudit, tab, userId]);
 
   React.useEffect(() => {
-    if (!canAudit || tab !== 'tasks') return;
+    if (!canTaskEvents || tab !== 'tasks') return;
     let cancelled = false;
     setTasksLoading(true);
     setTasksError('');
@@ -145,7 +146,7 @@ const AdminUserDetailPanel: React.FC<Props> = ({ userId }) => {
     return () => {
       cancelled = true;
     };
-  }, [canAudit, tab, userId]);
+  }, [canTaskEvents, tab, userId]);
 
   const applyUser = (next: AuthUser) => {
     setUser(next);
@@ -475,7 +476,7 @@ const AdminUserDetailPanel: React.FC<Props> = ({ userId }) => {
                 平台审计
               </button>
             ) : null}
-            {canAudit ? (
+            {canTaskEvents ? (
               <button
                 type="button"
                 onClick={() => setTab('tasks')}
@@ -498,7 +499,7 @@ const AdminUserDetailPanel: React.FC<Props> = ({ userId }) => {
               在审计页查看全部
             </button>
           ) : null}
-          {canAudit && tab === 'tasks' ? (
+          {canTaskEvents && tab === 'tasks' ? (
             <button
               type="button"
               className="text-[10px] text-blue-300 hover:underline"
@@ -533,7 +534,7 @@ const AdminUserDetailPanel: React.FC<Props> = ({ userId }) => {
           )
         ) : null}
 
-        {tab === 'tasks' && canAudit ? (
+        {tab === 'tasks' && canTaskEvents ? (
           tasksLoading ? (
             <p className="px-4 py-6 text-[11px] text-gray-500">加载任务记录…</p>
           ) : tasksError ? (

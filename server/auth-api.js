@@ -887,7 +887,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (path === '/api/admin/system-status' && req.method === 'GET') {
-      const staff = await requirePermission(req, res, PERMISSIONS.DASHBOARD_READ);
+      const staff = await requirePermission(req, res, PERMISSIONS.SYSTEM_STATUS_READ);
       if (!staff) return;
       try {
         json(res, 200, await buildAdminSystemStatus());
@@ -1279,7 +1279,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (path === '/api/admin/task-events' && req.method === 'GET') {
-      const staff = await requirePermission(req, res, PERMISSIONS.AUDIT_READ);
+      const staff = await requirePermission(req, res, PERMISSIONS.TASK_EVENTS_READ);
       if (!staff) return;
       const u = new URL(req.url || '/', 'http://local');
       const query = parseAdminTaskEventsQuery(u.searchParams);

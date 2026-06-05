@@ -19,6 +19,8 @@ const ALL_PERMISSION_VALUES = [
   'users.role.write',
   'users.reconcile',
   'audit.read',
+  'task_events.read',
+  'system_status.read',
   'companion.read',
   'companion.write',
   'companion.delete',
@@ -42,11 +44,13 @@ export type MatrixColumnDef = {
 
 /** 与 server/admin-matrix.js MATRIX_COLUMNS 同步 */
 export const MATRIX_COLUMN_DEFS: MatrixColumnDef[] = [
-  { id: 'dashboard', label: 'Dashboard', kind: 'toggle', permissions: ['dashboard.read'] },
+  { id: 'dashboard', label: '运营首页', kind: 'toggle', permissions: ['dashboard.read'] },
+  { id: 'systemStatus', label: '系统状态', kind: 'toggle', permissions: ['system_status.read'] },
   { id: 'users', label: '用户管理', kind: 'rw', read: 'users.read', write: 'users.write' },
-  { id: 'usersRole', label: '改用户角色', kind: 'toggle', permissions: ['users.role.write'], superOnly: true },
+  { id: 'usersRole', label: '成员邀请/改角色', kind: 'toggle', permissions: ['users.role.write'], superOnly: true },
   { id: 'usersReconcile', label: '用量同步', kind: 'toggle', permissions: ['users.reconcile'] },
-  { id: 'audit', label: '审计', kind: 'toggle', permissions: ['audit.read'] },
+  { id: 'audit', label: '审计日志', kind: 'toggle', permissions: ['audit.read'] },
+  { id: 'taskEvents', label: '任务执行', kind: 'toggle', permissions: ['task_events.read'] },
   { id: 'companion', label: '伴侣发行', kind: 'rw', read: 'companion.read', write: 'companion.write' },
   { id: 'companionDelete', label: '伴侣删除', kind: 'toggle', permissions: ['companion.delete'] },
   {
@@ -74,6 +78,8 @@ export const PERMISSION_LABELS: Record<string, string> = {
   'users.role.write': '指定用户后台角色',
   'users.reconcile': 'R2 用量同步',
   'audit.read': '审计日志查看',
+  'task_events.read': '任务执行查看',
+  'system_status.read': '系统状态查看',
   'companion.read': '伴侣发行列表',
   'companion.write': '伴侣发行登记/上传',
   'companion.delete': '伴侣发行删除',
@@ -109,12 +115,8 @@ export function matrixToPermissions(matrix: Record<string, MatrixCellValue>, rol
       if (v === 'write' && col.write) set.add(col.write);
     }
   }
-  if (set.has('users.write') || set.has('users.role.write') || set.has('users.reconcile')) {
+  if (set.has('users.write') || set.has('users.role.write')) {
     set.add('users.read');
-  }
-  if (set.has('companion.write') || set.has('companion.delete')) set.add('companion.read');
-  if (set.has('gemini_fairness.write') || set.has('gemini_fairness.strict')) {
-    set.add('gemini_fairness.read');
   }
   if (set.has('roles.write')) set.add('roles.read');
   return filterPermissionsForRoleSlug(roleSlug, [...set]);
@@ -122,10 +124,12 @@ export function matrixToPermissions(matrix: Record<string, MatrixCellValue>, rol
 
 export const MATRIX_COLUMN_IDS = [
   'dashboard',
+  'systemStatus',
   'users',
   'usersRole',
   'usersReconcile',
   'audit',
+  'taskEvents',
   'companion',
   'companionDelete',
   'geminiFairness',
