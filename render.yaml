@@ -13,6 +13,18 @@ services:
         value: production
       - key: GEMINI_API_KEY
         sync: false
+      # 公平排队总开关（数值旋钮在管理页 /admin/gemini-fairness 写入 Postgres，与 auth-api 共享）
+      - key: GEMINI_FAIRNESS_ENABLED
+        value: "true"
+      - key: GEMINI_FAIRNESS_CONFIG_SOURCE
+        value: db
+      - key: DATABASE_URL
+        fromDatabase:
+          name: assetcutter-auth-db
+          property: connectionString
+      # 浏览器直连本代理时接受登录态 X-AC-Fairness-Key（公网无 HMAC 时的生产默认）
+      - key: GEMINI_FAIRNESS_TRUST_CLIENT_KEY_HEADER
+        value: "true"
       # 逗号分隔；须含所有前端 Origin（如 app.adrazzo.com、assetcutter-web.onrender.com、*.vercel.app 预览需逐条或 Dashboard 用 * 排障）
       - key: PROXY_ALLOWED_ORIGINS
         sync: false
@@ -57,6 +69,9 @@ services:
         fromDatabase:
           name: assetcutter-auth-db
           property: connectionString
+      # Dashboard 拉取 gemini-proxy /healthz.fairness（勿浏览器直打 proxy）
+      - key: GEMINI_PROXY_HEALTH_URL
+        value: https://assetcutter-gemini-proxy.onrender.com
       # 工作区云同步（R2）：与 auth 同源挂载 /api/r2，无需单独 R2 服务
       - key: R2_ACCOUNT_ID
         sync: false
@@ -97,6 +112,11 @@ services:
       # Vertex 专用（可与上一项相同）；构建产物需含 geminiService 对 VITE_BULK_IMAGE_API_VERTEX 的支持
       - key: VITE_BULK_IMAGE_API_VERTEX
         value: https://assetcutter-gemini-proxy.onrender.com
+      # 20 人共享单账号：降低浏览器侧并发尖峰
+      - key: VITE_WORKFLOW_MAX_CONCURRENCY
+        value: "2"
+      - key: VITE_GEMINI_IMAGE_BATCH_BOX_SIZE_VERTEX
+        value: "2"
 
 databases:
   - name: assetcutter-auth-db
