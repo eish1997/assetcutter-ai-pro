@@ -197,12 +197,14 @@ async function migrateSidebarPermissionKeys() {
   ];
   if (USE_POSTGRES) {
     const p = getPool();
-    for (const role of await listAllRoles()) {
-      const raw = await listPermissionKeysForRoleId(role.id);
+    const res = await p.query('SELECT id FROM admin_roles');
+    for (const row of res.rows) {
+      const permRes = await p.query('SELECT permission_key FROM role_permissions WHERE role_id = $1', [row.id]);
+      const raw = permRes.rows.map((r) => r.permission_key);
       const toAdd = rules.filter((r) => raw.includes(r.ifHas) && !raw.includes(r.add)).map((r) => r.add);
       for (const key of toAdd) {
         await p.query('INSERT INTO role_permissions (role_id, permission_key) VALUES ($1,$2) ON CONFLICT DO NOTHING', [
-          role.id,
+          row.id,
           key,
         ]);
       }

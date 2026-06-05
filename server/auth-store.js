@@ -26,6 +26,7 @@ function getPool() {
     pool = new Pool({
       connectionString: DATABASE_URL,
       ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : undefined,
+      connectionTimeoutMillis: Number(process.env.PG_CONNECTION_TIMEOUT_MS || 15_000),
     });
   }
   return pool;
