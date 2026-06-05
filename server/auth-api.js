@@ -115,6 +115,7 @@ import {
 
 const PORT = Number(process.env.PORT || process.env.AUTH_PORT || 9100);
 const BIND_HOST = String(process.env.AUTH_BIND_HOST || '0.0.0.0').trim() || '0.0.0.0';
+let storeReady = false;
 const COOKIE_NAME = 'ac_session';
 const SESSION_TTL_MS = Number(process.env.AUTH_SESSION_TTL_MS || 1000 * 60 * 60 * 24 * 7);
 const IS_PROD = String(process.env.NODE_ENV || '').toLowerCase() === 'production';
@@ -476,7 +477,12 @@ const server = http.createServer(async (req, res) => {
   const path = rawPath.replace(/\/+$/, '') || '/';
   try {
     if (path === '/healthz' && req.method === 'GET') {
-      json(res, 200, { ok: true, service: 'auth-api' });
+      json(res, 200, { ok: true, service: 'auth-api', ready: storeReady });
+      return;
+    }
+
+    if (!storeReady) {
+      json(res, 503, { error: 'Service starting' });
       return;
     }
 
@@ -1922,41 +1928,44 @@ const bridgeRelay = createBridgeRelay({
   },
 });
 
-initAuthStore()
-  .then(async () => {
-    assertProductionConfig();
-    const adminEmail = String(process.env.AUTH_ADMIN_EMAIL || '').trim().toLowerCase();
-    const adminPassword = String(process.env.AUTH_ADMIN_PASSWORD || '');
-    const adminUsername = String(process.env.AUTH_ADMIN_USERNAME || '').trim().toLowerCase();
-    if (adminEmail && adminPassword) {
-      if (adminUsername) process.env.AUTH_ADMIN_USERNAME = adminUsername;
-      try {
-        const admin = await upsertAdminUser({ email: adminEmail, password: adminPassword });
-        console.log(`[auth-api] admin ensured: ${admin.username}/${admin.email}`);
-      } catch (error) {
-        console.error('[auth-api] ensure admin failed:', error instanceof Error ? error.message : String(error));
-      }
+server.on('upgrade', async (req, socket, head) => {
+  try {
+    const handled = await bridgeRelay.handleUpgrade(req, socket, head);
+    if (!handled) {
+      socket.destroy();
     }
-    server.on('upgrade', async (req, socket, head) => {
-      try {
-        const handled = await bridgeRelay.handleUpgrade(req, socket, head);
-        if (!handled) {
-          socket.destroy();
-        }
-      } catch (error) {
-        socket.write('HTTP/1.1 500 Internal Server Error\r\n\r\n');
-        socket.destroy();
-        console.error('[bridge-relay] upgrade error:', error instanceof Error ? error.message : String(error));
-      }
-    });
+  } catch (error) {
+    socket.write('HTTP/1.1 500 Internal Server Error\r\n\r\n');
+    socket.destroy();
+    console.error('[bridge-relay] upgrade error:', error instanceof Error ? error.message : String(error));
+  }
+});
 
-    server.listen(PORT, BIND_HOST, () => {
-      console.log(`[auth-api] http://${BIND_HOST}:${PORT}${isR2Configured() ? ' (R2 /api/r2 enabled)' : ''}`);
-      console.log(`[bridge-relay] ws://${BIND_HOST}:${PORT}/ws/bridge auth=${BRIDGE_REQUIRE_AUTH ? 'required' : 'disabled'}`);
+server.listen(PORT, BIND_HOST, () => {
+  console.log(`[auth-api] http://${BIND_HOST}:${PORT}${isR2Configured() ? ' (R2 /api/r2 enabled)' : ''}`);
+  console.log(`[bridge-relay] ws://${BIND_HOST}:${PORT}/ws/bridge auth=${BRIDGE_REQUIRE_AUTH ? 'required' : 'disabled'}`);
+
+  initAuthStore()
+    .then(async () => {
+      assertProductionConfig();
+      const adminEmail = String(process.env.AUTH_ADMIN_EMAIL || '').trim().toLowerCase();
+      const adminPassword = String(process.env.AUTH_ADMIN_PASSWORD || '');
+      const adminUsername = String(process.env.AUTH_ADMIN_USERNAME || '').trim().toLowerCase();
+      if (adminEmail && adminPassword) {
+        if (adminUsername) process.env.AUTH_ADMIN_USERNAME = adminUsername;
+        try {
+          const admin = await upsertAdminUser({ email: adminEmail, password: adminPassword });
+          console.log(`[auth-api] admin ensured: ${admin.username}/${admin.email}`);
+        } catch (error) {
+          console.error('[auth-api] ensure admin failed:', error instanceof Error ? error.message : String(error));
+        }
+      }
+      storeReady = true;
+      console.log('[auth-api] store ready');
+    })
+    .catch((error) => {
+      console.error('[auth-api] init failed:', error instanceof Error ? error.message : String(error));
+      process.exit(1);
     });
-  })
-  .catch((error) => {
-    console.error('[auth-api] init failed:', error instanceof Error ? error.message : String(error));
-    process.exit(1);
-  });
+});
 
