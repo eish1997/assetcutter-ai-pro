@@ -62,6 +62,7 @@ import {
   QUICK_COMPOSE_PLAIN_TEXT_ACTION_ID,
 } from '../services/quickComposePlainPresets';
 import { classifyWorkflowRunTaskBranch } from '../services/workflowRunTaskBranch';
+import { getWorkflowMaxConcurrency } from '../services/workflowConcurrency';
 import {
   applyVgpAfterSuccessfulGen,
   attachInitialVgpToNewAsset,
@@ -2832,7 +2833,7 @@ ${lineSvg}
     [moveGroupItemToUpperLevel]
   );
 
-  const BASE_MAX_CONCURRENCY = 3;
+  const BASE_MAX_CONCURRENCY = getWorkflowMaxConcurrency();
 
   const executePending = useCallback(
     async (overridePending?: WorkflowPendingTask[]) => {
@@ -2858,11 +2859,15 @@ ${lineSvg}
       setActiveTaskIds(new Set());
       setExecuting(true);
       setExecutingQueue({ total: queue.length, tasks: [...queue] });
+      const workflowMaxConcurrency = getWorkflowMaxConcurrency();
       const imageBatchWorkers = getGeminiImageBatchBoxSizeForCurrentProvider();
-      onLog?.('info', `开始执行队列（${queue.length} 项，常规并发 ${BASE_MAX_CONCURRENCY}，生图理解并发 ${imageBatchWorkers}）`);
+      onLog?.(
+        'info',
+        `开始执行队列（${queue.length} 项，常规并发 ${workflowMaxConcurrency}，生图理解并发 ${imageBatchWorkers}）`
+      );
 
       const total = queue.length;
-      const logBatch = `[${total}项·常规≤${BASE_MAX_CONCURRENCY}/生图理解≤${imageBatchWorkers}]`;
+      const logBatch = `[${total}项·常规≤${workflowMaxConcurrency}/生图理解≤${imageBatchWorkers}]`;
 
       const processTask = async (
         task: WorkflowPendingTask,

@@ -28,6 +28,7 @@ import {
   fairnessHealthSnapshot,
   fairnessSyncEnter,
   fairnessSyncLeave,
+  fairnessQueueMetaForJob,
   getDiskOverrideInt,
 } from './gemini-proxy-fairness.js';
 import { initGeminiFairnessConfigLoader, resolveGeminiFairnessConfigSource } from './gemini-fairness-config-store.js';
@@ -569,6 +570,15 @@ async function withGeminiProxySlot(fn) {
 const GEMINI_ASYNC_JOB_MAX_WAIT_MS = Number(process.env.GEMINI_ASYNC_JOB_MAX_WAIT_MS) || 300_000;
 const GEMINI_ASYNC_BATCH_MAX_ITEMS = Number(process.env.GEMINI_ASYNC_BATCH_MAX_ITEMS) || 20;
 
+function asyncJobPollPayload(job, jobId) {
+  const payload = { status: job.status };
+  if (job.status === 'queued' || job.status === 'running') {
+    const queueMeta = fairnessQueueMetaForJob(jobId, job.status);
+    if (queueMeta) payload.queueMeta = queueMeta;
+  }
+  return payload;
+}
+
 function sweepGeminiAsyncJobs() {
   const now = Date.now();
   for (const [id, job] of geminiAsyncJobs) {
@@ -989,7 +999,7 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 200, { status: 'failed', error: job.error || 'Unknown error' });
       return;
     }
-    sendJson(res, 200, { status: job.status });
+    sendJson(res, 200, asyncJobPollPayload(job, jobId));
     return;
   }
 
@@ -1012,7 +1022,7 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 200, { status: 'failed', error: job.error || 'Unknown error' });
       return;
     }
-    sendJson(res, 200, { status: job.status });
+    sendJson(res, 200, asyncJobPollPayload(job, jobId));
     return;
   }
 

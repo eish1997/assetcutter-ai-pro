@@ -18,6 +18,11 @@ import {
 import { consumeTrialGeminiSlotBeforeProxyOrThrow } from "./trialGeminiQuota";
 import { getGeminiFairnessRequestHeaders } from "./geminiFairnessBridge";
 import { tryParseGeminiProxyFairnessRejected, throwFairnessRejected } from "./geminiProxyFairnessError";
+import {
+  dispatchGeminiFairnessRetryWait,
+  dispatchGeminiQueueProgress,
+  type GeminiQueueMeta,
+} from "./geminiQueueProgress";
 import { DEFAULT_MODEL_TEXT } from "./modelRegistry/constants";
 import type { ChannelId } from "./modelRegistry/types";
 import { pickBinding } from "./modelRegistry/pickBinding";
@@ -183,6 +188,10 @@ function bulkApiUrl(path: string): string {
 
 /** Render 等对长连接常限 10～15s：走后端异步 job + 轮询，避免 503/504 */
 const GEMINI_ASYNC_POLL_MS = 1500;
+/** 轮询排队进度写入用户日志的最小间隔 */
+const GEMINI_QUEUE_PROGRESS_DISPATCH_MS = 8000;
+/** POST 创建遭公平拒绝时的自动重试次数 */
+const FAIRNESS_CREATE_MAX_RETRIES = 5;
 /** 与 proxy 侧 GEMINI_ASYNC_JOB_MAX_WAIT_MS（默认 300s）对齐，避免前端提前超时 */
 const GEMINI_ASYNC_CLIENT_MAX_POLL_MS = 300_000;
 /** 生图阶段「盒子批处理」：凑满后一次发给 proxy（默认试用=3、Vertex=4，可用环境变量调整） */
@@ -316,6 +325,68 @@ async function bulkFetchOrExplain(input: RequestInfo | URL, init?: RequestInit):
   }
 }
 
+async function bulkFetchCreateWithFairnessRetry(
+  url: string,
+  init: RequestInit
+): Promise<{ ok: true; text: string } | { ok: false; status: number; text: string }> {
+  const abortSignal = init.signal ?? undefined;
+  for (let attempt = 1; attempt <= FAIRNESS_CREATE_MAX_RETRIES; attempt += 1) {
+    const response = await bulkFetchOrExplain(url, init);
+    const text = await response.text();
+    if (response.ok) return { ok: true, text };
+    const fairnessErr = tryParseGeminiProxyFairnessRejected(response.status, text);
+    if (!fairnessErr || attempt >= FAIRNESS_CREATE_MAX_RETRIES) {
+      return { ok: false, status: response.status, text };
+    }
+    const waitSec = fairnessErr.retryAfterSec ?? Math.min(30, 5 + attempt * 2);
+    dispatchGeminiFairnessRetryWait({
+      retryAfterSec: waitSec,
+      attempt,
+      maxAttempts: FAIRNESS_CREATE_MAX_RETRIES,
+    });
+    const jitterMs = Math.floor(Math.random() * 400);
+    await sleepWithAbort(waitSec * 1000 + jitterMs, abortSignal);
+  }
+  return { ok: false, status: 429, text: '{"error":"rate_limited","message":"公平队列重试耗尽"}' };
+}
+
+type GeminiAsyncPollBody = {
+  status?: string;
+  result?: { text?: string; candidates?: unknown[]; items?: unknown[] };
+  error?: string;
+  queueMeta?: GeminiQueueMeta;
+};
+
+function emitThrottledQueueProgress(args: {
+  jobId: string;
+  status: "queued" | "running";
+  queueMeta: GeminiQueueMeta;
+  queueWaitStartedAt: number;
+  lastProgressAtRef: { t: number };
+  runningLoggedRef: { v: boolean };
+}): void {
+  const now = Date.now();
+  if (args.status === "running") {
+    if (args.runningLoggedRef.v) return;
+    args.runningLoggedRef.v = true;
+    dispatchGeminiQueueProgress({
+      jobId: args.jobId,
+      status: "running",
+      queueMeta: args.queueMeta,
+      waitedMs: now - args.queueWaitStartedAt,
+    });
+    return;
+  }
+  if (now - args.lastProgressAtRef.t < GEMINI_QUEUE_PROGRESS_DISPATCH_MS) return;
+  args.lastProgressAtRef.t = now;
+  dispatchGeminiQueueProgress({
+    jobId: args.jobId,
+    status: "queued",
+    queueMeta: args.queueMeta,
+    waitedMs: now - args.queueWaitStartedAt,
+  });
+}
+
 async function bulkProxyGenerateContentAsync(args: {
   model: string;
   contents: unknown;
@@ -339,7 +410,7 @@ async function bulkProxyGenerateContentAsync(args: {
     ? { aiBackend: "vertex" as const }
     : {};
 
-  const createRes = await bulkFetchOrExplain(bulkApiUrl("/proxy/gemini/async"), {
+  const create = await bulkFetchCreateWithFairnessRetry(bulkApiUrl("/proxy/gemini/async"), {
     method: "POST",
     headers: { "Content-Type": "application/json", ...getGeminiFairnessRequestHeaders() },
     body: JSON.stringify({
@@ -351,9 +422,8 @@ async function bulkProxyGenerateContentAsync(args: {
     signal: abortSignal,
     cache: "no-store",
   });
-  const createText = await createRes.text();
-  if (!createRes.ok) {
-    const raw = (createText || "").trim();
+  if (!create.ok) {
+    const raw = (create.text || "").trim();
     const parsedMsg = parseBulkProxyErrorBody(raw);
     if (/Use POST \/jobs/i.test(raw)) {
       const bulkHint =
@@ -368,15 +438,15 @@ async function bulkProxyGenerateContentAsync(args: {
         ].join(" ")
       );
     }
-    const fairnessErr = tryParseGeminiProxyFairnessRejected(createRes.status, raw);
+    const fairnessErr = tryParseGeminiProxyFairnessRejected(create.status, raw);
     if (fairnessErr) throwFairnessRejected(fairnessErr);
     throw new Error(
-      parseBulkProxyCreateError(createRes.status, raw, bulkApiUrl("/proxy/gemini/async"))
+      parseBulkProxyCreateError(create.status, raw, bulkApiUrl("/proxy/gemini/async"))
     );
   }
   let jobId: string;
   try {
-    const parsed = JSON.parse(createText) as { jobId?: string };
+    const parsed = JSON.parse(create.text) as { jobId?: string };
     jobId = String(parsed.jobId || "");
   } catch {
     throw new Error("异步任务响应无效");
@@ -384,6 +454,9 @@ async function bulkProxyGenerateContentAsync(args: {
   if (!jobId) throw new Error("未返回 jobId");
 
   const deadline = Date.now() + maxPollMs;
+  const queueWaitStartedAt = Date.now();
+  const lastProgressAtRef = { t: 0 };
+  const runningLoggedRef = { v: false };
   while (Date.now() < deadline) {
     if (abortSignal?.aborted) throw createAbortError("请求已取消");
     const pollRes = await bulkFetchOrExplain(bulkApiUrl(`/proxy/gemini/async/${encodeURIComponent(jobId)}`), {
@@ -397,9 +470,9 @@ async function bulkProxyGenerateContentAsync(args: {
       if (fe) throwFairnessRejected(fe);
       throw new Error(parseBulkProxyErrorBody(pt) || `轮询失败（${pollRes.status}）`);
     }
-    let j: { status?: string; result?: { text?: string; candidates?: unknown[] }; error?: string };
+    let j: GeminiAsyncPollBody;
     try {
-      j = JSON.parse(pollText) as typeof j;
+      j = JSON.parse(pollText) as GeminiAsyncPollBody;
     } catch {
       throw new Error("轮询响应无效");
     }
@@ -408,6 +481,16 @@ async function bulkProxyGenerateContentAsync(args: {
     }
     if (j.status === "failed") {
       throw new Error(j.error || "Gemini 任务失败");
+    }
+    if ((j.status === "queued" || j.status === "running") && j.queueMeta) {
+      emitThrottledQueueProgress({
+        jobId,
+        status: j.status,
+        queueMeta: j.queueMeta,
+        queueWaitStartedAt,
+        lastProgressAtRef,
+        runningLoggedRef,
+      });
     }
     await sleepWithAbort(GEMINI_ASYNC_POLL_MS, abortSignal);
   }
@@ -420,7 +503,7 @@ async function bulkProxyGenerateContentBatchAsync(args: {
 }): Promise<Array<{ ok: boolean; result?: { text?: string; candidates?: unknown[] }; error?: string }>> {
   if (!Array.isArray(args.items) || args.items.length === 0) return [];
   await consumeTrialGeminiSlotBeforeProxyOrThrow();
-  const createRes = await bulkFetchOrExplain(bulkApiUrl("/proxy/gemini/async-batch"), {
+  const create = await bulkFetchCreateWithFairnessRetry(bulkApiUrl("/proxy/gemini/async-batch"), {
     method: "POST",
     headers: { "Content-Type": "application/json", ...getGeminiFairnessRequestHeaders() },
     body: JSON.stringify({
@@ -433,19 +516,18 @@ async function bulkProxyGenerateContentBatchAsync(args: {
     }),
     cache: "no-store",
   });
-  const createText = await createRes.text();
-  if (!createRes.ok) {
-    const rawBatch = (createText || "").trim();
-    const fairnessErr = tryParseGeminiProxyFairnessRejected(createRes.status, rawBatch);
+  if (!create.ok) {
+    const rawBatch = (create.text || "").trim();
+    const fairnessErr = tryParseGeminiProxyFairnessRejected(create.status, rawBatch);
     if (fairnessErr) throwFairnessRejected(fairnessErr);
     throw new Error(
-      parseBulkProxyCreateError(createRes.status, rawBatch, bulkApiUrl("/proxy/gemini/async-batch")) ||
-        `Gemini 批量异步任务创建失败（${createRes.status}）`
+      parseBulkProxyCreateError(create.status, rawBatch, bulkApiUrl("/proxy/gemini/async-batch")) ||
+        `Gemini 批量异步任务创建失败（${create.status}）`
     );
   }
   let jobId: string;
   try {
-    const parsed = JSON.parse(createText) as { jobId?: string };
+    const parsed = JSON.parse(create.text) as { jobId?: string };
     jobId = String(parsed.jobId || "");
   } catch {
     throw new Error("批量异步任务响应无效");
@@ -453,6 +535,9 @@ async function bulkProxyGenerateContentBatchAsync(args: {
   if (!jobId) throw new Error("批量异步任务未返回 jobId");
 
   const deadline = Date.now() + GEMINI_ASYNC_CLIENT_MAX_POLL_MS;
+  const queueWaitStartedAt = Date.now();
+  const lastProgressAtRef = { t: 0 };
+  const runningLoggedRef = { v: false };
   while (Date.now() < deadline) {
     const pollRes = await bulkFetchOrExplain(bulkApiUrl(`/proxy/gemini/async-batch/${encodeURIComponent(jobId)}`), {
       cache: "no-store",
@@ -464,26 +549,35 @@ async function bulkProxyGenerateContentBatchAsync(args: {
       if (fe) throwFairnessRejected(fe);
       throw new Error(parseBulkProxyErrorBody(pt) || `批量任务轮询失败（${pollRes.status}）`);
     }
-    let j: {
-      status?: string;
-      result?: { items?: Array<{ ok?: boolean; result?: { text?: string; candidates?: unknown[] }; error?: string }> };
-      error?: string;
-    };
+    let j: GeminiAsyncPollBody;
     try {
-      j = JSON.parse(pollText) as typeof j;
+      j = JSON.parse(pollText) as GeminiAsyncPollBody;
     } catch {
       throw new Error("批量轮询响应无效");
     }
     if (j.status === "completed") {
       const items = Array.isArray(j.result?.items) ? j.result!.items! : [];
-      return items.map((it) => ({
-        ok: it?.ok === true,
-        ...(it?.result ? { result: it.result } : {}),
-        ...(it?.error ? { error: String(it.error) } : {}),
-      }));
+      return items.map((it) => {
+        const row = it as { ok?: boolean; result?: { text?: string; candidates?: unknown[] }; error?: string };
+        return {
+          ok: row?.ok === true,
+          ...(row?.result ? { result: row.result } : {}),
+          ...(row?.error ? { error: String(row.error) } : {}),
+        };
+      });
     }
     if (j.status === "failed") {
       throw new Error(j.error || "Gemini 批量任务失败");
+    }
+    if ((j.status === "queued" || j.status === "running") && j.queueMeta) {
+      emitThrottledQueueProgress({
+        jobId,
+        status: j.status,
+        queueMeta: j.queueMeta,
+        queueWaitStartedAt,
+        lastProgressAtRef,
+        runningLoggedRef,
+      });
     }
     await sleepWithAbort(GEMINI_ASYNC_POLL_MS);
   }

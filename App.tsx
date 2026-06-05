@@ -46,6 +46,14 @@ import Waves from './components/ui/Waves';
 import AppIcon from './components/ui/AppIcon';
 import GeminiFairnessFloatingNotice from './components/GeminiFairnessFloatingNotice';
 import {
+  AC_GEMINI_QUEUE_PROGRESS_EVENT,
+  AC_GEMINI_QUEUE_RETRY_WAIT_EVENT,
+  formatGeminiFairnessRetryWaitLog,
+  formatGeminiQueueProgressLog,
+  type AcGeminiQueueProgressDetail,
+  type AcGeminiQueueRetryWaitDetail,
+} from './services/geminiQueueProgress';
+import {
   RIGHT_DOCK_LOG_BOTTOM,
   RIGHT_DOCK_LOG_PANEL_Z_INDEX,
   RIGHT_DOCK_LOG_Z_INDEX,
@@ -1286,6 +1294,25 @@ const MainApp: React.FC = () => {
     setGlobalLogs(prev => [...prev.slice(-199), { id: Math.random().toString(36).slice(2, 11), time: now, module, level, message, detail }]);
     void reportClientDebugLog({ time: now, module, level, message, ...(detail ? { detail } : {}) });
   }, []);
+
+  useEffect(() => {
+    const onQueueProgress = (ev: Event) => {
+      const d = (ev as CustomEvent<AcGeminiQueueProgressDetail>).detail;
+      if (!d?.queueMeta) return;
+      addGlobalLog('AI代理', 'info', formatGeminiQueueProgressLog(d));
+    };
+    const onRetryWait = (ev: Event) => {
+      const d = (ev as CustomEvent<AcGeminiQueueRetryWaitDetail>).detail;
+      if (!d || !Number.isFinite(d.retryAfterSec)) return;
+      addGlobalLog('AI代理', 'info', formatGeminiFairnessRetryWaitLog(d));
+    };
+    window.addEventListener(AC_GEMINI_QUEUE_PROGRESS_EVENT, onQueueProgress);
+    window.addEventListener(AC_GEMINI_QUEUE_RETRY_WAIT_EVENT, onRetryWait);
+    return () => {
+      window.removeEventListener(AC_GEMINI_QUEUE_PROGRESS_EVENT, onQueueProgress);
+      window.removeEventListener(AC_GEMINI_QUEUE_RETRY_WAIT_EVENT, onRetryWait);
+    };
+  }, [addGlobalLog]);
 
   const applyStoryboardRestoresFromSave = useCallback(
     (assets: WorkflowAsset[], result: SaveWorkflowBundleResult): WorkflowAsset[] => {

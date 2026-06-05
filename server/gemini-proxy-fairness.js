@@ -421,6 +421,49 @@ export function fairnessOnJobEvicted(jobId) {
   }
 }
 
+/**
+ * 轮询 job 时在 `queued` / `running` 态附带排队快照（仅 fairness 开启且 job 已登记时有效）。
+ * @returns {null | { userAhead: number, globalQueuedApprox: number, globalRunning: number, userQueued: number, userRunning: number, waitSecEstimate: number }}
+ */
+export function fairnessQueueMetaForJob(jobId, jobStatus) {
+  if (!isFairnessEnabled()) return null;
+  const key = jobFairnessKey.get(jobId);
+  if (!key) return null;
+  const st = keyState.get(key);
+  if (!st) return null;
+
+  const status = String(jobStatus || '').trim();
+  let userAhead = 0;
+  const qi = st.queue.indexOf(jobId);
+  if (qi >= 0) userAhead = qi;
+
+  let globalQueued = 0;
+  let globalRunning = 0;
+  for (const s of keyState.values()) {
+    globalQueued += s.queue.length;
+    globalRunning += s.running;
+  }
+
+  const globalCap = getDiskOverrideInt('GEMINI_ASYNC_PROXY_MAX_CONCURRENT', 4, 1, 64);
+  const globalQueuedApprox = globalQueued + globalRunning;
+  /** 粗估：每槽约 45s，考虑全站排队超出并发部分 */
+  const backlogSlots = Math.max(0, globalQueuedApprox - globalCap);
+  let waitSecEstimate = 0;
+  if (status === 'queued') {
+    waitSecEstimate = Math.ceil(((userAhead + backlogSlots) / Math.max(1, globalCap)) * 45);
+    waitSecEstimate = Math.min(3600, Math.max(5, waitSecEstimate));
+  }
+
+  return {
+    userAhead,
+    globalQueuedApprox,
+    globalRunning,
+    userQueued: st.queue.length,
+    userRunning: st.running,
+    waitSecEstimate,
+  };
+}
+
 export function fairnessHealthSnapshot() {
   const configSource = resolveGeminiFairnessConfigSource();
   if (!isFairnessEnabled()) {
