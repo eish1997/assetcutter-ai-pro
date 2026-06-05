@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   formatGeminiFairnessRetryWaitLog,
+  formatGeminiQueueHintLog,
   formatGeminiQueueProgressLog,
   type AcGeminiQueueProgressDetail,
 } from '../services/geminiQueueProgress';
@@ -34,6 +35,36 @@ describe('formatGeminiQueueProgressLog', () => {
     const msg = formatGeminiQueueProgressLog({ ...base, status: 'running' });
     expect(msg).toContain('已开始执行上游请求');
     expect(msg).not.toContain('你前面约');
+  });
+
+  it('formats immediate running without queue wait', () => {
+    const msg = formatGeminiQueueProgressLog({ ...base, status: 'running', waitedMs: 0 });
+    expect(msg).toContain('当前无需排队');
+  });
+});
+
+describe('formatGeminiQueueHintLog', () => {
+  it('formats session hint when fairness enabled', () => {
+    const msg = formatGeminiQueueHintLog({
+      kind: 'proxy_session',
+      fairnessEnabled: true,
+      globalQueuedApprox: 5,
+    });
+    expect(msg).toContain('公平排队已启用');
+    expect(msg).toContain('全站当前约 5');
+  });
+
+  it('formats job submitted queued', () => {
+    const msg = formatGeminiQueueHintLog({
+      kind: 'job_submitted',
+      jobId: 'gasync-1234567890',
+      createStatus: 'queued',
+    });
+    expect(msg).toContain('已入公平队列');
+  });
+
+  it('formats job done without queue', () => {
+    expect(formatGeminiQueueHintLog({ kind: 'job_done_no_queue', waitedMs: 2100 })).toContain('全程未排队');
   });
 });
 

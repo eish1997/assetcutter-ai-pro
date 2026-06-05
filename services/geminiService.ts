@@ -20,6 +20,7 @@ import { getGeminiFairnessRequestHeaders } from "./geminiFairnessBridge";
 import { tryParseGeminiProxyFairnessRejected, throwFairnessRejected } from "./geminiProxyFairnessError";
 import {
   dispatchGeminiFairnessRetryWait,
+  dispatchGeminiQueueHint,
   dispatchGeminiQueueProgress,
   type GeminiQueueMeta,
 } from "./geminiQueueProgress";
@@ -350,6 +351,55 @@ async function bulkFetchCreateWithFairnessRetry(
   return { ok: false, status: 429, text: '{"error":"rate_limited","message":"公平队列重试耗尽"}' };
 }
 
+let geminiProxySessionHintDone = false;
+let geminiProxyFairnessProbe: Promise<{ enabled: boolean; globalQueuedApprox?: number } | null> | null = null;
+
+async function probeGeminiProxyFairnessOnce(): Promise<{ enabled: boolean; globalQueuedApprox?: number } | null> {
+  if (!effectiveBulkBase()) return null;
+  try {
+    const res = await bulkFetchOrExplain(bulkApiUrl("/healthz"), { cache: "no-store" });
+    if (!res.ok) return null;
+    const j = (await res.json()) as {
+      fairness?: { enabled?: boolean; globalQueuedApprox?: number };
+    };
+    const f = j.fairness;
+    if (!f || typeof f !== "object") return { enabled: false };
+    return {
+      enabled: f.enabled === true,
+      globalQueuedApprox:
+        f.globalQueuedApprox != null && Number.isFinite(Number(f.globalQueuedApprox))
+          ? Math.floor(Number(f.globalQueuedApprox))
+          : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function ensureGeminiProxySessionHint(): Promise<void> {
+  if (typeof window === "undefined" || geminiProxySessionHintDone) return;
+  geminiProxySessionHintDone = true;
+  geminiProxyFairnessProbe ??= probeGeminiProxyFairnessOnce();
+  const info = await geminiProxyFairnessProbe;
+  dispatchGeminiQueueHint({
+    kind: "proxy_session",
+    fairnessEnabled: info?.enabled === true,
+    globalQueuedApprox: info?.globalQueuedApprox,
+  });
+}
+
+function parseAsyncCreateBody(text: string): { jobId: string; createStatus: string } {
+  try {
+    const parsed = JSON.parse(text) as { jobId?: string; status?: string };
+    return {
+      jobId: String(parsed.jobId || ""),
+      createStatus: String(parsed.status || "pending").trim() || "pending",
+    };
+  } catch {
+    return { jobId: "", createStatus: "pending" };
+  }
+}
+
 type GeminiAsyncPollBody = {
   status?: string;
   result?: { text?: string; candidates?: unknown[]; items?: unknown[] };
@@ -387,6 +437,78 @@ function emitThrottledQueueProgress(args: {
   });
 }
 
+type GeminiAsyncPollTracker = {
+  queueWaitStartedAt: number;
+  lastProgressAtRef: { t: number };
+  runningLoggedRef: { v: boolean };
+  sawQueuedRef: { v: boolean };
+  directHintRef: { v: boolean };
+  waitingHintRef: { v: boolean };
+};
+
+function createGeminiAsyncPollTracker(): GeminiAsyncPollTracker {
+  return {
+    queueWaitStartedAt: Date.now(),
+    lastProgressAtRef: { t: 0 },
+    runningLoggedRef: { v: false },
+    sawQueuedRef: { v: false },
+    directHintRef: { v: false },
+    waitingHintRef: { v: false },
+  };
+}
+
+function handleGeminiAsyncPollWaitState(
+  jobId: string,
+  j: GeminiAsyncPollBody,
+  tracker: GeminiAsyncPollTracker
+): void {
+  if (j.status === "queued") {
+    tracker.sawQueuedRef.v = true;
+    if (j.queueMeta) {
+      emitThrottledQueueProgress({
+        jobId,
+        status: "queued",
+        queueMeta: j.queueMeta,
+        queueWaitStartedAt: tracker.queueWaitStartedAt,
+        lastProgressAtRef: tracker.lastProgressAtRef,
+        runningLoggedRef: tracker.runningLoggedRef,
+      });
+      return;
+    }
+    const now = Date.now();
+    if (!tracker.waitingHintRef.v && now - tracker.lastProgressAtRef.t >= GEMINI_QUEUE_PROGRESS_DISPATCH_MS) {
+      tracker.waitingHintRef.v = true;
+      tracker.lastProgressAtRef.t = now;
+      dispatchGeminiQueueHint({ kind: "job_waiting", jobId });
+    }
+    return;
+  }
+  if (j.status === "running") {
+    if (j.queueMeta) {
+      emitThrottledQueueProgress({
+        jobId,
+        status: "running",
+        queueMeta: j.queueMeta,
+        queueWaitStartedAt: tracker.queueWaitStartedAt,
+        lastProgressAtRef: tracker.lastProgressAtRef,
+        runningLoggedRef: tracker.runningLoggedRef,
+      });
+    } else if (!tracker.directHintRef.v && !tracker.sawQueuedRef.v) {
+      tracker.directHintRef.v = true;
+      dispatchGeminiQueueHint({ kind: "job_direct", jobId });
+    }
+  }
+}
+
+function emitGeminiAsyncDoneNoQueueHint(jobId: string, tracker: GeminiAsyncPollTracker): void {
+  if (tracker.sawQueuedRef.v || tracker.runningLoggedRef.v || tracker.directHintRef.v) return;
+  dispatchGeminiQueueHint({
+    kind: "job_done_no_queue",
+    jobId,
+    waitedMs: Date.now() - tracker.queueWaitStartedAt,
+  });
+}
+
 async function bulkProxyGenerateContentAsync(args: {
   model: string;
   contents: unknown;
@@ -404,6 +526,7 @@ async function bulkProxyGenerateContentAsync(args: {
   const maxPollMs = Math.max(httpTimeout + 240_000, GEMINI_ASYNC_CLIENT_MAX_POLL_MS);
 
   await consumeTrialGeminiSlotBeforeProxyOrThrow();
+  await ensureGeminiProxySessionHint();
 
   const bindingRegistryId = (args.registryId || args.model || "").trim();
   const aiBackendExtra = bulkUsesVertexBackend(bindingRegistryId, "image")
@@ -445,18 +568,19 @@ async function bulkProxyGenerateContentAsync(args: {
     );
   }
   let jobId: string;
+  let createStatus: string;
   try {
-    const parsed = JSON.parse(create.text) as { jobId?: string };
-    jobId = String(parsed.jobId || "");
+    const parsed = parseAsyncCreateBody(create.text);
+    jobId = parsed.jobId;
+    createStatus = parsed.createStatus;
   } catch {
     throw new Error("异步任务响应无效");
   }
   if (!jobId) throw new Error("未返回 jobId");
+  dispatchGeminiQueueHint({ kind: "job_submitted", jobId, createStatus });
 
   const deadline = Date.now() + maxPollMs;
-  const queueWaitStartedAt = Date.now();
-  const lastProgressAtRef = { t: 0 };
-  const runningLoggedRef = { v: false };
+  const tracker = createGeminiAsyncPollTracker();
   while (Date.now() < deadline) {
     if (abortSignal?.aborted) throw createAbortError("请求已取消");
     const pollRes = await bulkFetchOrExplain(bulkApiUrl(`/proxy/gemini/async/${encodeURIComponent(jobId)}`), {
@@ -477,21 +601,13 @@ async function bulkProxyGenerateContentAsync(args: {
       throw new Error("轮询响应无效");
     }
     if (j.status === "completed" && j.result != null) {
+      emitGeminiAsyncDoneNoQueueHint(jobId, tracker);
       return j.result;
     }
     if (j.status === "failed") {
       throw new Error(j.error || "Gemini 任务失败");
     }
-    if ((j.status === "queued" || j.status === "running") && j.queueMeta) {
-      emitThrottledQueueProgress({
-        jobId,
-        status: j.status,
-        queueMeta: j.queueMeta,
-        queueWaitStartedAt,
-        lastProgressAtRef,
-        runningLoggedRef,
-      });
-    }
+    handleGeminiAsyncPollWaitState(jobId, j, tracker);
     await sleepWithAbort(GEMINI_ASYNC_POLL_MS, abortSignal);
   }
   throw new Error(`等待 Gemini 结果超时（>${maxPollMs}ms），请稍后重试`);
@@ -503,6 +619,7 @@ async function bulkProxyGenerateContentBatchAsync(args: {
 }): Promise<Array<{ ok: boolean; result?: { text?: string; candidates?: unknown[] }; error?: string }>> {
   if (!Array.isArray(args.items) || args.items.length === 0) return [];
   await consumeTrialGeminiSlotBeforeProxyOrThrow();
+  await ensureGeminiProxySessionHint();
   const create = await bulkFetchCreateWithFairnessRetry(bulkApiUrl("/proxy/gemini/async-batch"), {
     method: "POST",
     headers: { "Content-Type": "application/json", ...getGeminiFairnessRequestHeaders() },
@@ -526,18 +643,24 @@ async function bulkProxyGenerateContentBatchAsync(args: {
     );
   }
   let jobId: string;
+  let createStatus: string;
   try {
-    const parsed = JSON.parse(create.text) as { jobId?: string };
-    jobId = String(parsed.jobId || "");
+    const parsed = parseAsyncCreateBody(create.text);
+    jobId = parsed.jobId;
+    createStatus = parsed.createStatus;
   } catch {
     throw new Error("批量异步任务响应无效");
   }
   if (!jobId) throw new Error("批量异步任务未返回 jobId");
+  dispatchGeminiQueueHint({
+    kind: "job_submitted",
+    jobId,
+    createStatus,
+    batchSize: args.items.length,
+  });
 
   const deadline = Date.now() + GEMINI_ASYNC_CLIENT_MAX_POLL_MS;
-  const queueWaitStartedAt = Date.now();
-  const lastProgressAtRef = { t: 0 };
-  const runningLoggedRef = { v: false };
+  const tracker = createGeminiAsyncPollTracker();
   while (Date.now() < deadline) {
     const pollRes = await bulkFetchOrExplain(bulkApiUrl(`/proxy/gemini/async-batch/${encodeURIComponent(jobId)}`), {
       cache: "no-store",
@@ -557,6 +680,7 @@ async function bulkProxyGenerateContentBatchAsync(args: {
     }
     if (j.status === "completed") {
       const items = Array.isArray(j.result?.items) ? j.result!.items! : [];
+      emitGeminiAsyncDoneNoQueueHint(jobId, tracker);
       return items.map((it) => {
         const row = it as { ok?: boolean; result?: { text?: string; candidates?: unknown[] }; error?: string };
         return {
@@ -569,16 +693,7 @@ async function bulkProxyGenerateContentBatchAsync(args: {
     if (j.status === "failed") {
       throw new Error(j.error || "Gemini 批量任务失败");
     }
-    if ((j.status === "queued" || j.status === "running") && j.queueMeta) {
-      emitThrottledQueueProgress({
-        jobId,
-        status: j.status,
-        queueMeta: j.queueMeta,
-        queueWaitStartedAt,
-        lastProgressAtRef,
-        runningLoggedRef,
-      });
-    }
+    handleGeminiAsyncPollWaitState(jobId, j, tracker);
     await sleepWithAbort(GEMINI_ASYNC_POLL_MS);
   }
   throw new Error(`等待 Gemini 批量结果超时（>${GEMINI_ASYNC_CLIENT_MAX_POLL_MS}ms），请稍后重试`);

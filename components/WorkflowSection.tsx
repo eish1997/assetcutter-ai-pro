@@ -2865,6 +2865,10 @@ ${lineSvg}
         'info',
         `开始执行队列（${queue.length} 项，常规并发 ${workflowMaxConcurrency}，生图理解并发 ${imageBatchWorkers}）`
       );
+      onLog?.(
+        'info',
+        '生图/理解走 AI 代理时，右侧日志「AI代理」会显示公平排队、限流重试与是否排队；当前不排队也会提示状态。'
+      );
 
       const total = queue.length;
       const logBatch = `[${total}项·常规≤${workflowMaxConcurrency}/生图理解≤${imageBatchWorkers}]`;

@@ -46,10 +46,13 @@ import Waves from './components/ui/Waves';
 import AppIcon from './components/ui/AppIcon';
 import GeminiFairnessFloatingNotice from './components/GeminiFairnessFloatingNotice';
 import {
+  AC_GEMINI_QUEUE_HINT_EVENT,
   AC_GEMINI_QUEUE_PROGRESS_EVENT,
   AC_GEMINI_QUEUE_RETRY_WAIT_EVENT,
   formatGeminiFairnessRetryWaitLog,
+  formatGeminiQueueHintLog,
   formatGeminiQueueProgressLog,
+  type AcGeminiQueueHintDetail,
   type AcGeminiQueueProgressDetail,
   type AcGeminiQueueRetryWaitDetail,
 } from './services/geminiQueueProgress';
@@ -1306,11 +1309,18 @@ const MainApp: React.FC = () => {
       if (!d || !Number.isFinite(d.retryAfterSec)) return;
       addGlobalLog('AI代理', 'info', formatGeminiFairnessRetryWaitLog(d));
     };
+    const onQueueHint = (ev: Event) => {
+      const d = (ev as CustomEvent<AcGeminiQueueHintDetail>).detail;
+      if (!d?.kind) return;
+      addGlobalLog('AI代理', 'info', formatGeminiQueueHintLog(d));
+    };
     window.addEventListener(AC_GEMINI_QUEUE_PROGRESS_EVENT, onQueueProgress);
     window.addEventListener(AC_GEMINI_QUEUE_RETRY_WAIT_EVENT, onRetryWait);
+    window.addEventListener(AC_GEMINI_QUEUE_HINT_EVENT, onQueueHint);
     return () => {
       window.removeEventListener(AC_GEMINI_QUEUE_PROGRESS_EVENT, onQueueProgress);
       window.removeEventListener(AC_GEMINI_QUEUE_RETRY_WAIT_EVENT, onRetryWait);
+      window.removeEventListener(AC_GEMINI_QUEUE_HINT_EVENT, onQueueHint);
     };
   }, [addGlobalLog]);
 
