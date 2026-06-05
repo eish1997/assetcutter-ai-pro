@@ -222,7 +222,7 @@ const AdminTaskEventsPanel: React.FC = () => {
           <div>
             <h2 className="text-[12px] font-black uppercase tracking-[0.2em] text-gray-300">任务执行记录</h2>
             <p className="mt-1 text-[10px] text-gray-600">
-              工作流队列任务执行；客户端 RUN_TASK 事件上云后可见
+              工作流队列 RUN_TASK 与分镜表 STORYBOARD 大模型/生图任务（须用户已登录执行）
             </p>
             {redactedView ? (
               <p className="mt-1 text-[10px] text-amber-500/90">当前为审计员脱敏视图</p>
@@ -294,7 +294,7 @@ const AdminTaskEventsPanel: React.FC = () => {
           />
           <input
             type="text"
-            placeholder="用户 ID"
+            placeholder="用户 ID 或用户名"
             value={draft.userId}
             onChange={(e) => setDraft((p) => ({ ...p, userId: e.target.value }))}
             className="rounded-xl border border-[#343438] bg-[#1c1c22] px-3 py-2 text-[11px] text-white outline-none focus:border-[#3b82f6]"
@@ -338,8 +338,8 @@ const AdminTaskEventsPanel: React.FC = () => {
           </div>
           <div className="md:hidden">{events.map(renderCard)}</div>
           {!events.length ? (
-            <p className="px-3 py-4 text-[11px] text-gray-500">
-              暂无记录{isAuditor ? '' : '；用户执行工作流任务后将自动上报'}
+            <p className="px-3 py-4 text-[11px] text-gray-500 leading-relaxed">
+              暂无记录{isAuditor ? '' : '。请确认：① 用户已登录 ② 通过工作区队列执行任务 ③ 时间范围覆盖执行日；可尝试「近 30 天」并清空用户筛选后点查询'}
             </p>
           ) : null}
           <div className="flex items-center justify-between px-3 py-3 border-t border-[#252528] text-[10px] text-gray-500">

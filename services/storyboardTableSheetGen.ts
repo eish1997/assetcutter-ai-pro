@@ -8,6 +8,7 @@ import {
   getCapabilityEngine,
   type CapabilityExecuteContext,
 } from './capabilityExecutor';
+import { auditStoryboardGenFromCtx } from './storyboardTaskAuditEvents';
 import {
   WORKFLOW_IMAGE_GEN_PROMPT_OFFICIAL_MAX_CHARS,
   WORKFLOW_IMAGE_GEN_PROMPT_RECOMMENDED_MAX_CHARS,
@@ -654,13 +655,25 @@ export async function executeStoryboardSheetGen(
     rejectTextTruncation: true,
   });
   if (!result.ok) {
+    auditStoryboardGenFromCtx(ctx, 'sheet_gen', false, `分镜表 · ${chunkLabel} 生图失败：${result.error || '生图失败'}`, {
+      taskId: args.chunkIndex != null ? `sheet_chunk_${args.chunkIndex}` : undefined,
+      detail: { presetId: preset.id, shotCount: rows.length, chunkIndex: args.chunkIndex ?? null },
+    });
     return { ok: false, error: result.error || '生图失败' };
   }
   if (result.kind !== 'image' || !String(result.image || '').trim()) {
+    auditStoryboardGenFromCtx(ctx, 'sheet_gen', false, `分镜表 · ${chunkLabel} 生图失败：模型未返回有效图片`, {
+      taskId: args.chunkIndex != null ? `sheet_chunk_${args.chunkIndex}` : undefined,
+      detail: { presetId: preset.id, shotCount: rows.length, chunkIndex: args.chunkIndex ?? null },
+    });
     return { ok: false, error: '模型未返回有效图片' };
   }
 
   ctx.onLog?.('info', `分镜表 · ${chunkLabel} 生图完成`);
+  auditStoryboardGenFromCtx(ctx, 'sheet_gen', true, `分镜表 · ${chunkLabel} 生图完成`, {
+    taskId: args.chunkIndex != null ? `sheet_chunk_${args.chunkIndex}` : undefined,
+    detail: { presetId: preset.id, presetLabel: label, shotCount: rows.length, chunkIndex: args.chunkIndex ?? null },
+  });
   return { ok: true, image: result.image };
 }
 

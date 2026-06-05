@@ -1,5 +1,6 @@
 import type { CustomAppModule } from '../types';
 import { resolveTextModelForPreset, type CapabilityExecuteContext } from './capabilityExecutor';
+import { auditStoryboardTaskOutcome, storyboardAssetIdFromCtx } from './storyboardTaskAuditEvents';
 import { workflowChat } from './unifiedAiGateway';
 import {
   parseStoryboardBulkText,
@@ -90,27 +91,91 @@ export async function normalizeStoryboardBulkWithAi(
   const label = preset.label || preset.id;
   ctx.onLog?.('info', `分镜表 · ${label} · AI 判定与规范化中…`);
 
-  const raw = await workflowChat(
-    [{ role: 'user', parts: [{ text: body }] }],
-    resolveTextModelForPreset(preset, ctx),
-    BULK_AI_JSON_OPTIONS
-  );
+  const assetId = storyboardAssetIdFromCtx(ctx);
+  let raw: string;
+  try {
+    raw = await workflowChat(
+      [{ role: 'user', parts: [{ text: body }] }],
+      resolveTextModelForPreset(preset, ctx),
+      BULK_AI_JSON_OPTIONS
+    );
+  } catch (err) {
+    if (assetId) {
+      auditStoryboardTaskOutcome({
+        kind: 'llm',
+        ok: false,
+        assetId,
+        operation: 'bulk_normalize',
+        message: `分镜表 · 批量导入 AI 失败：${err instanceof Error ? err.message : String(err)}`,
+        level: 'error',
+        detail: { presetId: preset.id },
+      });
+    }
+    throw err;
+  }
 
-  const payload = normalizeBulkAiNormalizeOutput(raw);
+  let payload: BulkAiNormalizeModelOutput;
+  try {
+    payload = normalizeBulkAiNormalizeOutput(raw);
+  } catch (err) {
+    if (assetId) {
+      auditStoryboardTaskOutcome({
+        kind: 'llm',
+        ok: false,
+        assetId,
+        operation: 'bulk_normalize',
+        message: `分镜表 · 批量导入 AI 返回无效：${err instanceof Error ? err.message : String(err)}`,
+        level: 'error',
+        detail: { presetId: preset.id },
+      });
+    }
+    throw err;
+  }
   if (payload.isStoryboard !== true) {
     const reason = String(payload.reason || '').trim() || '未识别为分镜脚本文本';
     ctx.onLog?.('warn', `分镜表 · AI 判定：非分镜文本（${reason}）`);
+    if (assetId) {
+      auditStoryboardTaskOutcome({
+        kind: 'llm',
+        ok: true,
+        assetId,
+        operation: 'bulk_normalize',
+        message: `分镜表 · AI 判定：非分镜文本（${reason}）`,
+        level: 'warn',
+        detail: { presetId: preset.id, isStoryboard: false },
+      });
+    }
     return { isStoryboard: false, reason, source: 'ai' };
   }
 
   const normalizedText = String(payload.normalizedText || '').trim();
   if (!normalizedText) {
+    if (assetId) {
+      auditStoryboardTaskOutcome({
+        kind: 'llm',
+        ok: false,
+        assetId,
+        operation: 'bulk_normalize',
+        message: '分镜表 · AI 未返回可解析的规范化表格',
+        detail: { presetId: preset.id },
+      });
+    }
     return { isStoryboard: false, reason: 'AI 未返回可解析的规范化表格', source: 'ai' };
   }
 
   const mode = options?.mode ?? 'pipe';
   const parsed = parseStoryboardBulkText(normalizedText, mode);
   if (!parsed.rows.length) {
+    if (assetId) {
+      auditStoryboardTaskOutcome({
+        kind: 'llm',
+        ok: false,
+        assetId,
+        operation: 'bulk_normalize',
+        message: parsed.errors[0] || '规范化结果未能解析为有效镜头',
+        detail: { presetId: preset.id },
+      });
+    }
     return {
       isStoryboard: false,
       reason: parsed.errors[0] || '规范化结果未能解析为有效镜头',
@@ -119,6 +184,16 @@ export async function normalizeStoryboardBulkWithAi(
   }
 
   ctx.onLog?.('info', `分镜表 · AI 规范化完成（${parsed.rows.length} 镜）`);
+  if (assetId) {
+    auditStoryboardTaskOutcome({
+      kind: 'llm',
+      ok: true,
+      assetId,
+      operation: 'bulk_normalize',
+      message: `分镜表 · AI 规范化完成（${parsed.rows.length} 镜）`,
+      detail: { presetId: preset.id, rowCount: parsed.rows.length },
+    });
+  }
   return { isStoryboard: true, normalizedText, parsed, source: 'ai' };
 }
 

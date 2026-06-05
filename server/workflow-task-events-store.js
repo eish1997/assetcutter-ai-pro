@@ -2,9 +2,14 @@
  * 工作流任务执行事件 — Postgres 或 auth-db.json 镜像。
  */
 import { readDb, writeDb, USE_POSTGRES, getPool, ensurePostgres } from './auth-store.js';
+import { isSyncableTaskEventCode } from '../shared/taskEventSyncPrefixes.js';
 
 const MAX_JSON_EVENTS = 10000;
 const MAX_BATCH = 50;
+
+function isWorkflowTaskEventCode(code) {
+  return isSyncableTaskEventCode(code);
+}
 
 function normalizeEventInput(userId, raw) {
   const id = String(raw?.id || '').trim();
@@ -15,6 +20,7 @@ function normalizeEventInput(userId, raw) {
   if (!id || !Number.isFinite(ts) || ts < 1) return null;
   if (!['info', 'warn', 'error'].includes(level)) return null;
   if (!code || code.length > 120) return null;
+  if (!isWorkflowTaskEventCode(code)) return null;
   if (!message) return null;
   const detail =
     raw?.detail && typeof raw.detail === 'object' && !Array.isArray(raw.detail) ? raw.detail : null;
@@ -155,9 +161,56 @@ export async function insertWorkflowTaskEvents(userId, events) {
   return { inserted, skipped: list.length - inserted };
 }
 
+function usernameForUserId(db, userId) {
+  const uid = String(userId || '').trim();
+  if (!uid) return '';
+  const u = (db.users || []).find((row) => String(row.id) === uid);
+  return u?.username ? String(u.username) : '';
+}
+
+function buildPostgresTaskEventListQuery(query = {}) {
+  const userFilter = String(query.userId || '').trim();
+  const level = String(query.level || '').trim();
+  const code = String(query.code || '').trim();
+  const fromMs = query.from ? new Date(query.from).getTime() : NaN;
+  const toMs = query.to ? new Date(query.to).getTime() : NaN;
+  const cursor = query.cursor || null;
+  const clauses = [];
+  const params = [];
+  let i = 1;
+  if (userFilter) {
+    clauses.push(`(e.user_id = $${i} OR u.username ILIKE $${i + 1})`);
+    params.push(userFilter, `%${userFilter}%`);
+    i += 2;
+  }
+  if (level && ['info', 'warn', 'error'].includes(level)) {
+    clauses.push(`e.level = $${i++}`);
+    params.push(level);
+  }
+  if (code) {
+    clauses.push(`e.code ILIKE $${i++}`);
+    params.push(`%${code}%`);
+  }
+  if (Number.isFinite(fromMs)) {
+    clauses.push(`e.ts >= $${i++}`);
+    params.push(Math.floor(fromMs));
+  }
+  if (Number.isFinite(toMs)) {
+    clauses.push(`e.ts <= $${i++}`);
+    params.push(Math.floor(toMs));
+  }
+  if (cursor?.tsMs != null && cursor?.id) {
+    clauses.push(`(e.ts, e.id) < ($${i++}, $${i++})`);
+    params.push(Math.floor(cursor.tsMs), String(cursor.id));
+  }
+  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+  const fromSql = `FROM workflow_task_events e LEFT JOIN users u ON u.id = e.user_id ${where}`;
+  return { fromSql, params, nextParamIndex: i };
+}
+
 export async function listWorkflowTaskEventsForAdmin(query = {}) {
   const max = Math.min(100, Math.max(1, Number.parseInt(String(query.limit ?? '50'), 10) || 50));
-  const userId = String(query.userId || '').trim();
+  const userFilter = String(query.userId || '').trim();
   const level = String(query.level || '').trim();
   const code = String(query.code || '').trim();
   const fromMs = query.from ? new Date(query.from).getTime() : NaN;
@@ -167,61 +220,39 @@ export async function listWorkflowTaskEventsForAdmin(query = {}) {
   if (USE_POSTGRES) {
     await ensureWorkflowTaskEventsStore();
     const p = getPool();
-    const clauses = [];
-    const params = [];
-    let i = 1;
-    if (userId) {
-      clauses.push(`e.user_id = $${i++}`);
-      params.push(userId);
-    }
-    if (level && ['info', 'warn', 'error'].includes(level)) {
-      clauses.push(`e.level = $${i++}`);
-      params.push(level);
-    }
-    if (code) {
-      clauses.push(`e.code ILIKE $${i++}`);
-      params.push(`%${code}%`);
-    }
-    if (Number.isFinite(fromMs)) {
-      clauses.push(`e.ts >= $${i++}`);
-      params.push(Math.floor(fromMs));
-    }
-    if (Number.isFinite(toMs)) {
-      clauses.push(`e.ts <= $${i++}`);
-      params.push(Math.floor(toMs));
-    }
-    if (cursor?.tsMs != null && cursor?.id) {
-      clauses.push(`(e.ts, e.id) < ($${i++}, $${i++})`);
-      params.push(Math.floor(cursor.tsMs), String(cursor.id));
-    }
-    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
-    const countRes = await p.query(
-      `SELECT COUNT(*)::int AS c FROM workflow_task_events e ${where}`,
-      params
-    );
+    const { fromSql, params, nextParamIndex } = buildPostgresTaskEventListQuery(query);
+    const countRes = await p.query(`SELECT COUNT(*)::int AS c ${fromSql}`, params);
     const total = Number(countRes.rows[0]?.c || 0);
-    params.push(max);
+    const listParams = [...params, max + 1];
     const res = await p.query(
       `SELECT e.*, u.username
-       FROM workflow_task_events e
-       LEFT JOIN users u ON u.id = e.user_id
-       ${where}
+       ${fromSql}
        ORDER BY e.ts DESC, e.id DESC
-       LIMIT $${i++}`,
-      params
+       LIMIT $${nextParamIndex}`,
+      listParams
     );
-    const logs = res.rows.map((r) => mapRow(r));
-    const nextCursor =
-      logs.length >= max
-        ? encodeTaskEventCursor(logs[logs.length - 1])
-        : null;
+    let logs = res.rows.map((r) => mapRow(r));
+    let nextCursor = null;
+    if (logs.length > max) {
+      logs = logs.slice(0, max);
+      nextCursor = encodeTaskEventCursor(logs[logs.length - 1]);
+    }
     return { events: logs, total, limit: max, nextCursor };
   }
 
   const db = readDb();
-  let rows = (db.workflowTaskEvents || []).map((r) => mapRow(r));
+  let rows = (db.workflowTaskEvents || []).map((r) => {
+    const row = mapRow(r);
+    if (!row.username) row.username = usernameForUserId(db, row.userId);
+    return row;
+  });
   rows = rows.filter((r) => {
-    if (userId && r.userId !== userId) return false;
+    if (userFilter) {
+      const term = userFilter.toLowerCase();
+      const idMatch = String(r.userId) === userFilter;
+      const nameMatch = String(r.username || '').toLowerCase().includes(term);
+      if (!idMatch && !nameMatch) return false;
+    }
     if (level && r.level !== level) return false;
     if (code && !String(r.code).toLowerCase().includes(code.toLowerCase())) return false;
     if (Number.isFinite(fromMs) && r.tsMs < fromMs) return false;
@@ -240,13 +271,13 @@ export async function listWorkflowTaskEventsForAdmin(query = {}) {
   const total = rows.length;
   const events = rows.slice(0, max);
   const nextCursor =
-    events.length >= max && events.length < total
+    events.length >= max && rows.length > max
       ? encodeTaskEventCursor(events[events.length - 1])
-      : events.length >= max
-        ? encodeTaskEventCursor(events[events.length - 1])
-        : null;
+      : null;
   return { events, total, limit: max, nextCursor };
 }
+
+export { isWorkflowTaskEventCode, isSyncableTaskEventCode };
 
 export function encodeTaskEventCursor(row) {
   if (!row?.tsMs || !row?.id) return null;

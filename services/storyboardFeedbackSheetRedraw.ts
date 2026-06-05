@@ -7,6 +7,7 @@ import {
   getCapabilityEngine,
   type CapabilityExecuteContext,
 } from './capabilityExecutor';
+import { auditStoryboardGenFromCtx, resolveStoryboardCollageAuditOperation, type StoryboardTaskOperation } from './storyboardTaskAuditEvents';
 import {
   computeStoryboardMosaicGrid,
   type StoryboardGroupMosaicRenderOpts,
@@ -235,6 +236,10 @@ export type StoryboardCollageRedrawArgs = {
   mode?: StoryboardCollageRedrawMode;
   companionBaseUrl?: string;
   companionProjectId?: string;
+  /** 审计：反馈批量/单行反馈改图（默认由 executeStoryboardFeedbackSheetRedraw 设为 true） */
+  feedbackRedraw?: boolean;
+  /** 审计：显式指定 operation（优先于 feedbackRedraw / rowCount 推断） */
+  auditOperation?: StoryboardTaskOperation;
 };
 
 /** @deprecated 使用 StoryboardCollageRedrawArgs */
@@ -305,14 +310,31 @@ export async function executeStoryboardCollageRedraw(
   ctx.onLog?.('info', `分镜表 · ${label} · ${chunkLabel} 改图中…`);
 
   const result = await executeCapability(preset, collage.dataUrl, ctx, { inputText });
+  const operation = resolveStoryboardCollageAuditOperation({
+    auditOperation: args.auditOperation,
+    feedbackRedraw: args.feedbackRedraw,
+    rowCount: rows.length,
+  });
   if (!result.ok) {
+    auditStoryboardGenFromCtx(ctx, operation, false, `分镜表 · ${chunkLabel} 改图失败：${result.error || '改图失败'}`, {
+      taskId: args.chunkIndex != null ? `collage_chunk_${args.chunkIndex}` : undefined,
+      detail: { presetId: preset.id, rowIds: rows.map((r) => r.id), chunkIndex: args.chunkIndex ?? null },
+    });
     return { ok: false, error: result.error || '改图失败' };
   }
   if (result.kind !== 'image' || !String(result.image || '').trim()) {
+    auditStoryboardGenFromCtx(ctx, operation, false, `分镜表 · ${chunkLabel} 改图失败：模型未返回有效图片`, {
+      taskId: args.chunkIndex != null ? `collage_chunk_${args.chunkIndex}` : undefined,
+      detail: { presetId: preset.id, rowIds: rows.map((r) => r.id), chunkIndex: args.chunkIndex ?? null },
+    });
     return { ok: false, error: '模型未返回有效图片' };
   }
 
   ctx.onLog?.('info', `分镜表 · ${chunkLabel} 改图完成`);
+  auditStoryboardGenFromCtx(ctx, operation, true, `分镜表 · ${chunkLabel} 改图完成`, {
+    taskId: args.chunkIndex != null ? `collage_chunk_${args.chunkIndex}` : undefined,
+    detail: { presetId: preset.id, presetLabel: label, rowIds: rows.map((r) => r.id), chunkIndex: args.chunkIndex ?? null },
+  });
   return { ok: true, image: result.image, layout: collage.layout };
 }
 
@@ -321,7 +343,11 @@ export async function executeStoryboardFeedbackSheetRedraw(
 ): Promise<
   { ok: true; image: string; layout: FeedbackCollageLayout } | { ok: false; error: string }
 > {
-  return executeStoryboardCollageRedraw(args);
+  return executeStoryboardCollageRedraw({
+    ...args,
+    feedbackRedraw: args.feedbackRedraw ?? true,
+    auditOperation: args.auditOperation ?? 'feedback_redraw',
+  });
 }
 
 export function pickFeedbackSheetRedrawPreset(

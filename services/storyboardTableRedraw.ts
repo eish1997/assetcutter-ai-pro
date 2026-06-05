@@ -10,6 +10,7 @@ import {
   getCapabilityEngine,
   type CapabilityExecuteContext,
 } from './capabilityExecutor';
+import { auditStoryboardGenFromCtx } from './storyboardTaskAuditEvents';
 import {
   fetchWorkflowOriginalFromCompanionAsObjectUrl,
   imageSrcToDataUrlForCompanion,
@@ -340,6 +341,7 @@ export async function executeStoryboardRowRedraw(
       understand,
       companionBaseUrl: args.companionBaseUrl,
       companionProjectId: args.companionProjectId,
+      auditOperation: args.feedbackOnly ? 'feedback_redraw' : 'row_redraw',
     });
     if (!collageOutcome.ok) {
       return { ok: false, error: collageOutcome.error };
@@ -365,13 +367,26 @@ export async function executeStoryboardRowRedraw(
     rejectTextTruncation: true,
   });
 
+  const shotLabel = row.shotNo || String(row.index + 1);
   if (!result.ok) {
+    auditStoryboardGenFromCtx(ctx, args.feedbackOnly ? 'feedback_redraw' : 'row_redraw', false, `分镜表 · 镜头 ${shotLabel} 重绘失败：${result.error || '生图失败'}`, {
+      rowId: row.id,
+      detail: { presetId: textPresetForRun.id },
+    });
     return { ok: false, error: result.error || '生图失败' };
   }
   if (result.kind !== 'image' || !String(result.image || '').trim()) {
+    auditStoryboardGenFromCtx(ctx, args.feedbackOnly ? 'feedback_redraw' : 'row_redraw', false, `分镜表 · 镜头 ${shotLabel} 重绘失败：模型未返回有效图片`, {
+      rowId: row.id,
+      detail: { presetId: textPresetForRun.id },
+    });
     return { ok: false, error: '模型未返回有效图片' };
   }
 
-  ctx.onLog?.('info', `分镜表 · 镜头 ${row.shotNo || row.index + 1} 重绘完成`);
+  ctx.onLog?.('info', `分镜表 · 镜头 ${shotLabel} 重绘完成`);
+  auditStoryboardGenFromCtx(ctx, args.feedbackOnly ? 'feedback_redraw' : 'row_redraw', true, `分镜表 · 镜头 ${shotLabel} 重绘完成`, {
+    rowId: row.id,
+    detail: { presetId: textPresetForRun.id, presetLabel: label },
+  });
   return { ok: true, image: result.image };
 }

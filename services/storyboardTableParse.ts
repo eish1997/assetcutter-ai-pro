@@ -6,6 +6,7 @@ import type {
 import { ensureShotCharacterFieldOnRow, isShotCharacterFieldLabel, shouldRetainShotCharacterParseField } from './storyboardShotCharacters';
 import { preserveStoryboardRowFrameFields } from './storyboardTableAsset';
 import { resolveTextModelForPreset, type CapabilityExecuteContext } from './capabilityExecutor';
+import { runStoryboardLlmAudited } from './storyboardTaskAuditEvents';
 import { workflowChat } from './unifiedAiGateway';
 
 export const STORYBOARD_PARSE_PRESET_KEY = 'ac_storyboard_parse_preset_v1';
@@ -713,7 +714,7 @@ export async function parseStoryboardTextWithPreset(
   input: string,
   preset: CustomAppModule,
   ctx: CapabilityExecuteContext,
-  options?: { fieldCatalog?: StoryboardParseFieldDef[]; strictCatalog?: boolean }
+  options?: { fieldCatalog?: StoryboardParseFieldDef[]; strictCatalog?: boolean; rowId?: string }
 ): Promise<StoryboardParseModelOutput> {
   const trimmed = input.trim();
   if (!trimmed) throw new Error('请先填写原文或结构化内容');
@@ -726,14 +727,26 @@ export async function parseStoryboardTextWithPreset(
   const body = `${sys}${catalogHint}\n\n---\n\n${trimmed.slice(0, 8000)}`;
   const label = preset.label || preset.id;
   ctx.onLog?.('info', `分镜表 · ${label} · 结构化解析中…`);
-  const raw = await workflowChat(
-    [{ role: 'user', parts: [{ text: body }] }],
-    resolveTextModelForPreset(preset, ctx),
-    STORYBOARD_LLM_JSON_OPTIONS
+  return runStoryboardLlmAudited(
+    ctx,
+    options?.rowId ? 'parse_row' : 'parse_text',
+    async () => {
+      const raw = await workflowChat(
+        [{ role: 'user', parts: [{ text: body }] }],
+        resolveTextModelForPreset(preset, ctx),
+        STORYBOARD_LLM_JSON_OPTIONS
+      );
+      const out = normalizeParseModelOutput(raw);
+      ctx.onLog?.('info', `分镜表 · 结构化解析完成（${out.fields.length} 个字段）`);
+      return out;
+    },
+    {
+      success: (out) => `分镜表 · 结构化解析完成（${out.fields.length} 个字段）`,
+      failure: (err) => `分镜表 · 结构化解析失败：${err instanceof Error ? err.message : String(err)}`,
+      detail: (out) => ({ presetId: preset.id, fieldCount: out.fields.length }),
+      rowId: options?.rowId,
+    }
   );
-  const out = normalizeParseModelOutput(raw);
-  ctx.onLog?.('info', `分镜表 · 结构化解析完成（${out.fields.length} 个字段）`);
-  return out;
 }
 
 export async function parseStoryboardBulkStructuredWithPreset(
@@ -754,14 +767,25 @@ export async function parseStoryboardBulkStructuredWithPreset(
   const body = `${sys}${catalogHint}\n\n---\n\n${trimmed.slice(0, STORYBOARD_BULK_PARSE_MAX_CHARS)}`;
   const label = preset.label || preset.id;
   ctx.onLog?.('info', `分镜表 · ${label} · 批量结构化解析中（单次请求）…`);
-  const raw = await workflowChat(
-    [{ role: 'user', parts: [{ text: body }] }],
-    resolveTextModelForPreset(preset, ctx),
-    STORYBOARD_LLM_JSON_OPTIONS
+  return runStoryboardLlmAudited(
+    ctx,
+    'parse_bulk',
+    async () => {
+      const raw = await workflowChat(
+        [{ role: 'user', parts: [{ text: body }] }],
+        resolveTextModelForPreset(preset, ctx),
+        STORYBOARD_LLM_JSON_OPTIONS
+      );
+      const out = normalizeBulkParseModelOutput(raw);
+      ctx.onLog?.('info', `分镜表 · 批量结构化解析完成（${out.rows.length} 镜）`);
+      return out;
+    },
+    {
+      success: (out) => `分镜表 · 批量结构化解析完成（${out.rows.length} 镜）`,
+      failure: (err) => `分镜表 · 批量结构化解析失败：${err instanceof Error ? err.message : String(err)}`,
+      detail: (out) => ({ presetId: preset.id, rowCount: out.rows.length }),
+    }
   );
-  const out = normalizeBulkParseModelOutput(raw);
-  ctx.onLog?.('info', `分镜表 · 批量结构化解析完成（${out.rows.length} 镜）`);
-  return out;
 }
 
 export function mergeBulkStructuredParseIntoTable(
@@ -837,7 +861,7 @@ export async function parseStoryboardRowWithPreset(
 ): Promise<{ catalog: StoryboardParseFieldDef[]; row: StoryboardTableRow }> {
   const input = resolveStoryboardParseInput(row, catalog);
   if (!input) throw new Error('请先填写原文或结构化内容');
-  const parsed = await parseStoryboardTextWithPreset(input, preset, ctx, { fieldCatalog: catalog });
+  const parsed = await parseStoryboardTextWithPreset(input, preset, ctx, { fieldCatalog: catalog, rowId: row.id });
   return mergeParseResultIntoRow(catalog, row, parsed, input);
 }
 
@@ -893,6 +917,7 @@ export async function parseStoryboardRowsBatch(
       const parsed = await parseStoryboardTextWithPreset(input, preset, ctx, {
         fieldCatalog: catalog,
         strictCatalog: options?.strictCatalog,
+        rowId: row.id,
       });
       return { rowId: row.id, ok: true, parsed, input };
     } catch (e) {
@@ -1028,14 +1053,26 @@ export async function optimizeStoryboardTextWithPreset(
   const body = `${sys}\n\n---\n\n${JSON.stringify(payload)}${allowLine}`;
   const label = preset.label || preset.id;
   ctx.onLog?.('info', `分镜表 · ${label} · 结构化优化中…`);
-  const raw = await workflowChat(
-    [{ role: 'user', parts: [{ text: body }] }],
-    resolveTextModelForPreset(preset, ctx),
-    STORYBOARD_LLM_JSON_OPTIONS
+  return runStoryboardLlmAudited(
+    ctx,
+    'optimize_row',
+    async () => {
+      const raw = await workflowChat(
+        [{ role: 'user', parts: [{ text: body }] }],
+        resolveTextModelForPreset(preset, ctx),
+        STORYBOARD_LLM_JSON_OPTIONS
+      );
+      const out = normalizeOptimizeModelOutput(raw, catalog);
+      ctx.onLog?.('info', `分镜表 · 结构化优化完成（${out.fields.length} 个字段）`);
+      return out;
+    },
+    {
+      success: (out) => `分镜表 · 结构化优化完成（${out.fields.length} 个字段）`,
+      failure: (err) => `分镜表 · 结构化优化失败：${err instanceof Error ? err.message : String(err)}`,
+      detail: (out) => ({ presetId: preset.id, fieldCount: out.fields.length, rowId: row.id }),
+      rowId: row.id,
+    }
   );
-  const out = normalizeOptimizeModelOutput(raw, catalog);
-  ctx.onLog?.('info', `分镜表 · 结构化优化完成（${out.fields.length} 个字段）`);
-  return out;
 }
 
 export async function optimizeStoryboardRowWithPreset(

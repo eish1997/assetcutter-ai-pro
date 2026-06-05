@@ -5,6 +5,7 @@ import { computeStoryboardMosaicGrid } from './storyboardFrameStripMerge';
 import { cropBoxes, trimImageDataUrlContentBounds } from './imageCrop';
 import { detectObjectsInImage } from './unifiedAiGateway';
 import { DEFAULT_MODEL_TEXT } from './modelRegistry/constants';
+import { auditStoryboardTaskOutcome } from './storyboardTaskAuditEvents';
 
 export const STORYBOARD_SHEET_VISION_TIMEOUT_MS = 90_000;
 
@@ -22,6 +23,8 @@ export type StoryboardSheetVisionSplitOptions = {
   allowGridFallback?: boolean;
   /** 指定列行时，网格回填按此布局从左到右、从上到下对应镜号顺序 */
   layoutGrid?: StoryboardSheetLayoutGrid;
+  /** 分镜表资产 id：视觉识别任务审计上报管理端 */
+  storyboardAssetId?: string;
 };
 
 export type StoryboardSheetVisionMatch = {
@@ -397,17 +400,47 @@ export async function detectStoryboardSheetPanels(
   dataUrl: string,
   expectedShotNos: string[],
   textModel = DEFAULT_MODEL_TEXT,
-  options?: { timeoutMs?: number; customPrompt?: string }
+  options?: { timeoutMs?: number; customPrompt?: string; storyboardAssetId?: string }
 ): Promise<BoundingBox[]> {
   const prompt =
     options?.customPrompt?.trim() ||
     buildStoryboardSheetVisionPrompt(expectedShotNos);
-  const boxes = await detectObjectsInImage(dataUrl, textModel, prompt, {
-    timeoutMs: options?.timeoutMs ?? STORYBOARD_SHEET_VISION_TIMEOUT_MS,
-  });
-  const deduped = dedupeBoxesByLabel(boxes);
-  const quality = filterVisionBoxesByQuality(deduped);
-  return mapStoryboardBoxesToVisualCrop(quality.length ? quality : deduped);
+  const assetId = String(options?.storyboardAssetId || '').trim();
+  try {
+    const boxes = await detectObjectsInImage(dataUrl, textModel, prompt, {
+      timeoutMs: options?.timeoutMs ?? STORYBOARD_SHEET_VISION_TIMEOUT_MS,
+    });
+    const deduped = dedupeBoxesByLabel(boxes);
+    const quality = filterVisionBoxesByQuality(deduped);
+    const mapped = mapStoryboardBoxesToVisualCrop(quality.length ? quality : deduped);
+    if (assetId) {
+      auditStoryboardTaskOutcome({
+        kind: 'llm',
+        ok: true,
+        assetId,
+        operation: 'vision_detect',
+        message:
+          mapped.length > 0
+            ? `分镜表 · 视觉识别 ${mapped.length} 个分镜格`
+            : '分镜表 · 视觉识别未找到分镜格',
+        level: mapped.length > 0 ? 'info' : 'warn',
+        detail: { expectedShots: expectedShotNos.length, boxCount: mapped.length },
+      });
+    }
+    return mapped;
+  } catch (error) {
+    if (assetId) {
+      auditStoryboardTaskOutcome({
+        kind: 'llm',
+        ok: false,
+        assetId,
+        operation: 'vision_detect',
+        message: `分镜表 · 视觉识别失败：${error instanceof Error ? error.message : String(error)}`,
+        level: 'error',
+      });
+    }
+    throw error;
+  }
 }
 
 export function visionLabelToShotNo(label: string): string {

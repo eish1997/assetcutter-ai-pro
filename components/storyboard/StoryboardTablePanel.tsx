@@ -1105,8 +1105,9 @@ export default function StoryboardTablePanel({
       onLog: (level: 'info' | 'warn', message: string) =>
         onNotify?.(level === 'warn' ? 'warn' : 'info', message),
       textModelRegistryId: capabilityTextModel,
+      storyboardAssetId: asset.id,
     }),
-    [capabilityTextModel, onNotify]
+    [asset.id, capabilityTextModel, onNotify]
   );
 
   useEffect(() => {
@@ -1719,12 +1720,13 @@ export default function StoryboardTablePanel({
               expectedShotNos: opts?.expectedShotNos,
               allowGridFallback: opts?.allowGridFallback,
               layoutGrid: opts?.layoutGrid,
+              storyboardAssetId: asset.id,
             }
           );
 
       return applySheetVisionSplitResult(split, taskRows, fieldCatalog, lookupRows);
     },
-    [applySheetVisionSplitResult, capabilityTextModel]
+    [applySheetVisionSplitResult, asset.id, capabilityTextModel]
   );
 
   const promptSheetSplitBoxAdjust = useCallback(
@@ -1997,7 +1999,7 @@ export default function StoryboardTablePanel({
             normalized,
             [],
             capabilityTextModel,
-            { timeoutMs: WORKFLOW_CUT_DETECT_TIMEOUT_MS }
+            { timeoutMs: WORKFLOW_CUT_DETECT_TIMEOUT_MS, storyboardAssetId: asset.id }
           );
           const boxes = rawBoxes.map((box) => clampStoryboardSheetSplitBox(box));
           const shotNos = shotNosFromSheetSplitBoxes(boxes);
@@ -2222,7 +2224,7 @@ export default function StoryboardTablePanel({
               normalized,
               effectiveShotNos,
               capabilityTextModel,
-              { timeoutMs: WORKFLOW_CUT_DETECT_TIMEOUT_MS }
+              { timeoutMs: WORKFLOW_CUT_DETECT_TIMEOUT_MS, storyboardAssetId: asset.id }
             );
             if (!boxes.length && layoutGrid) {
               boxes = buildLayoutSheetGridBoxes(

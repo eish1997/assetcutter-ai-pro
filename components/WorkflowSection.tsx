@@ -1552,6 +1552,7 @@ const WorkflowSection: React.FC<{
           onLog,
           textModelRegistryId: capabilityTextModel,
           companionProjectId: workspaceProjectChrome?.activeProjectId?.trim() || undefined,
+          storyboardAssetId: tableAssetId,
         },
         companionBaseUrl: String(getCompanionLocalBaseUrl() || ''),
         companionProjectId: String(workspaceProjectChrome?.activeProjectId || ''),

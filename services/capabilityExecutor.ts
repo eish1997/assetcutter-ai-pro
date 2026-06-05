@@ -75,6 +75,8 @@ export type CapabilityExecuteContext = {
   };
   /** 工作区当前项目 id，随 `host_bundle.*` 任务一并提交给本机伴侣（可选） */
   companionProjectId?: string;
+  /** 分镜表资产 id：分镜内 AI 生图/LLM 任务审计上报管理端（可选） */
+  storyboardAssetId?: string;
   /** 本机分割等：当前队列任务对应的资产 id（能力集合单卡执行时由 WorkflowSection 注入） */
   workflowAssetId?: string;
   /** 与 `WorkflowPendingTask.inputSourceDisplayKey` 一致；缺省按 original */

@@ -12,6 +12,7 @@ import {
   getCapabilityEngine,
   type CapabilityExecuteContext,
 } from './capabilityExecutor';
+import { auditStoryboardGenFromCtx } from './storyboardTaskAuditEvents';
 import { chunkStoryboardRowsByCount, type StoryboardSheetGenTask } from './storyboardTableSheetGen';
 import { computeStoryboardMosaicGrid } from './storyboardFrameStripMerge';
 import {
@@ -411,13 +412,25 @@ export async function executeStoryboardRoleReplaceRow(
   });
 
   if (!result.ok) {
+    auditStoryboardGenFromCtx(ctx, 'role_replace_row', false, `分镜表 · ${shotLabel} 角色替换失败：${result.error || '角色替换失败'}`, {
+      rowId: row.id,
+      detail: { presetId: preset.id, refCount },
+    });
     return { ok: false, error: result.error || '角色替换失败' };
   }
   if (result.kind !== 'image' || !String(result.image || '').trim()) {
+    auditStoryboardGenFromCtx(ctx, 'role_replace_row', false, `分镜表 · ${shotLabel} 角色替换失败：模型未返回有效图片`, {
+      rowId: row.id,
+      detail: { presetId: preset.id, refCount },
+    });
     return { ok: false, error: '模型未返回有效图片' };
   }
 
   ctx.onLog?.('info', `分镜表 · ${shotLabel} 角色替换完成`);
+  auditStoryboardGenFromCtx(ctx, 'role_replace_row', true, `分镜表 · ${shotLabel} 角色替换完成`, {
+    rowId: row.id,
+    detail: { presetId: preset.id, presetLabel: label, refCount },
+  });
   return { ok: true, image: result.image };
 }
 
@@ -499,13 +512,25 @@ export async function executeStoryboardRoleReplaceCollageBatch(
   });
 
   if (!result.ok) {
+    auditStoryboardGenFromCtx(ctx, 'role_replace_collage', false, `分镜表 · ${chunkLabel} 拼图替换失败：${result.error || '角色替换失败'}`, {
+      taskId: args.chunkIndex != null ? `role_collage_${args.chunkIndex}` : undefined,
+      detail: { presetId: preset.id, rowIds: rows.map((r) => r.id), refCount: referenceImages.length, chunkIndex: args.chunkIndex ?? null },
+    });
     return { ok: false, error: result.error || '角色替换失败' };
   }
   if (result.kind !== 'image' || !String(result.image || '').trim()) {
+    auditStoryboardGenFromCtx(ctx, 'role_replace_collage', false, `分镜表 · ${chunkLabel} 拼图替换失败：模型未返回有效图片`, {
+      taskId: args.chunkIndex != null ? `role_collage_${args.chunkIndex}` : undefined,
+      detail: { presetId: preset.id, rowIds: rows.map((r) => r.id), refCount: referenceImages.length, chunkIndex: args.chunkIndex ?? null },
+    });
     return { ok: false, error: '模型未返回有效图片' };
   }
 
   ctx.onLog?.('info', `分镜表 · ${chunkLabel} 拼图替换完成`);
+  auditStoryboardGenFromCtx(ctx, 'role_replace_collage', true, `分镜表 · ${chunkLabel} 拼图替换完成`, {
+    taskId: args.chunkIndex != null ? `role_collage_${args.chunkIndex}` : undefined,
+    detail: { presetId: preset.id, presetLabel: label, rowIds: rows.map((r) => r.id), refCount: referenceImages.length, chunkIndex: args.chunkIndex ?? null },
+  });
   return {
     ok: true,
     image: result.image,

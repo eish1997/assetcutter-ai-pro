@@ -25,12 +25,39 @@ const CODE_LABELS: Record<string, string> = {
   RUN_TASK_CAPABILITY_EXCEPTION: '能力异常',
   RUN_TASK_FALLBACK_UNKNOWN: '未知分支',
   RUN_TASK_BRANCH_CUT_NO_MODULE: '切图模块缺失',
+  STORYBOARD_GEN_SUCCESS: '分镜生图成功',
+  STORYBOARD_GEN_FAILED: '分镜生图失败',
+  STORYBOARD_LLM_SUCCESS: '分镜 LLM 成功',
+  STORYBOARD_LLM_FAILED: '分镜 LLM 失败',
+};
+
+const STORYBOARD_OPERATION_LABELS: Record<string, string> = {
+  sheet_gen: '批量生图',
+  row_redraw: '单行重绘',
+  collage_redraw: '拼图改图',
+  feedback_redraw: '反馈改图',
+  role_replace_row: '角色替换',
+  role_replace_collage: '拼图角色替换',
+  bulk_normalize: '批量规范化',
+  parse_text: '结构化解析',
+  parse_bulk: '批量解析',
+  parse_row: '单行解析',
+  optimize_text: '结构化优化',
+  optimize_row: '单行优化',
+  vision_detect: '视觉切分识别',
+  vision_split: '视觉切分',
 };
 
 export function taskEventCodeLabel(code: string): string {
   const c = String(code || '').trim();
   if (CODE_LABELS[c]) return CODE_LABELS[c];
   return c;
+}
+
+function storyboardOperationLabel(detail?: Record<string, unknown> | null): string {
+  const op = detail?.operation;
+  if (typeof op !== 'string' || !op) return '';
+  return STORYBOARD_OPERATION_LABELS[op] || op;
 }
 
 export function taskEventLevelDot(level: string): string {
@@ -47,7 +74,9 @@ export function taskEventSummary(event: {
 }): string {
   const user = event.username ? `@${event.username}` : '';
   const action = event.detail?.actionType ? String(event.detail.actionType) : '';
-  const parts = [user, taskEventCodeLabel(event.code), action].filter(Boolean);
+  const storyboardOp =
+    String(event.code || '').startsWith('STORYBOARD_') ? storyboardOperationLabel(event.detail) : '';
+  const parts = [user, taskEventCodeLabel(event.code), storyboardOp, action].filter(Boolean);
   const head = parts.length ? parts.join(' · ') : taskEventCodeLabel(event.code);
   const msg = String(event.message || '').trim();
   if (!msg || msg === head) return head;

@@ -405,6 +405,7 @@ function assertCsrf(req, res) {
   if (pathOnly === '/api/companion-artifacts/resolve-download') return true;
   if (pathOnly.startsWith('/api/tripo')) return true;
   if (pathOnly === '/api/auth/trial-gemini/consume') return true;
+  if (pathOnly === '/api/workflow/task-events') return true;
   if (pathOnly.startsWith('/api/debug/client-log')) return true;
   if (pathOnly.startsWith('/api/admin')) {
     const origin = String(req.headers.origin || '');
