@@ -324,11 +324,20 @@ const PromptArenaSection = React.lazy(() => import('./components/PromptArenaSect
 const SeamRepairSection = React.lazy(() => import('./components/SeamRepairSection'));
 const GenerateTextureSection = React.lazy(() => import('./components/GenerateTextureSection'));
 const SettingsSection = React.lazy(() => import('./components/SettingsSection'));
-const RequireRole = React.lazy(() => import('./components/auth/RequireRole'));
-const AdminLayout = React.lazy(() => import('./components/admin/AdminLayout.js'));
-const AdminPlaceholder = React.lazy(() => import('./components/admin/AdminPlaceholder.tsx'));
+const AdminStaffProvider = React.lazy(() => import('./components/admin/AdminStaffContext'));
+const AdminRolePreviewBridge = React.lazy(() => import('./components/admin/AdminRolePreviewBridge'));
+const AdminLayout = React.lazy(() => import('./components/admin/AdminLayout'));
+const AdminRouteGuard = React.lazy(() => import('./components/admin/AdminRouteGuard'));
+const AdminDefaultRedirect = React.lazy(() => import('./components/admin/AdminDefaultRedirect'));
+const AdminDashboardPanel = React.lazy(() => import('./components/admin/AdminDashboardPanel'));
+const AdminRolesMatrixPanel = React.lazy(() => import('./components/admin/AdminRolesMatrixPanel'));
 const AdminUsersPanel = React.lazy(() => import('./components/admin/AdminUsersPanel'));
+const AdminUserDetailPanel = React.lazy(() => import('./components/admin/AdminUserDetailPanel'));
 const AdminAuditLogsPanel = React.lazy(() => import('./components/admin/AdminAuditLogsPanel'));
+const AdminTaskEventsPanel = React.lazy(() => import('./components/admin/AdminTaskEventsPanel'));
+const AdminCapabilityPresetsPanel = React.lazy(() => import('./components/admin/AdminCapabilityPresetsPanel'));
+const AdminSystemStatusPanel = React.lazy(() => import('./components/admin/AdminSystemStatusPanel'));
+const AdminStaffInvitesPanel = React.lazy(() => import('./components/admin/AdminStaffInvitesPanel'));
 const AdminCompanionArtifactsPanel = React.lazy(() => import('./components/admin/AdminCompanionArtifactsPanel'));
 const AdminGeminiFairnessPanel = React.lazy(() => import('./components/admin/AdminGeminiFairnessPanel'));
 type SourceAggregate = {
@@ -485,6 +494,16 @@ const AdminAppShell: React.FC = () => {
   const fullPath = usePathname();
   const pathname = fullPath.split('?')[0];
 
+  const adminUserIdFromPath = React.useMemo(() => {
+    if (!pathname.startsWith('/admin/users/')) return '';
+    const segment = pathname.slice('/admin/users/'.length).split('/')[0] || '';
+    try {
+      return decodeURIComponent(segment).trim();
+    } catch {
+      return segment.trim();
+    }
+  }, [pathname]);
+
   const handleNavigate = useCallback((path: string) => {
     navigateTo(path);
   }, []);
@@ -492,17 +511,32 @@ const AdminAppShell: React.FC = () => {
   return (
     <Suspense fallback={<div className="min-h-screen bg-black text-white flex items-center justify-center text-[11px]">加载管理后台…</div>}>
       <AdminLayout currentPath={pathname} onNavigate={handleNavigate}>
-        {pathname === '/admin/users' ? (
-          <AdminUsersPanel />
-        ) : pathname === '/admin/audit-logs' ? (
-          <AdminAuditLogsPanel />
-        ) : pathname === '/admin/companion-artifacts' ? (
-          <AdminCompanionArtifactsPanel />
-        ) : pathname === '/admin/gemini-fairness' ? (
-          <AdminGeminiFairnessPanel />
-        ) : (
-          <AdminPlaceholder />
-        )}
+        <AdminDefaultRedirect pathname={pathname} />
+        <AdminRouteGuard pathname={pathname}>
+          {adminUserIdFromPath ? (
+            <AdminUserDetailPanel userId={adminUserIdFromPath} />
+          ) : pathname === '/admin/users' ? (
+            <AdminUsersPanel />
+          ) : pathname === '/admin/roles' ? (
+            <AdminRolesMatrixPanel />
+          ) : pathname === '/admin/audit-logs' ? (
+            <AdminAuditLogsPanel />
+          ) : pathname === '/admin/task-events' ? (
+            <AdminTaskEventsPanel />
+          ) : pathname === '/admin/capability-presets' ? (
+            <AdminCapabilityPresetsPanel />
+          ) : pathname === '/admin/system-status' ? (
+            <AdminSystemStatusPanel />
+          ) : pathname === '/admin/staff-invites' ? (
+            <AdminStaffInvitesPanel />
+          ) : pathname === '/admin/companion-artifacts' ? (
+            <AdminCompanionArtifactsPanel />
+          ) : pathname === '/admin/gemini-fairness' ? (
+            <AdminGeminiFairnessPanel />
+          ) : (
+            <AdminDashboardPanel />
+          )}
+        </AdminRouteGuard>
       </AdminLayout>
     </Suspense>
   );
@@ -6950,9 +6984,11 @@ const App: React.FC = () => {
       <>
         <GeminiFairnessFloatingNotice />
         <Suspense fallback={<div className="min-h-screen bg-[#050505] flex items-center justify-center text-[11px] text-gray-500">加载中…</div>}>
-          <RequireRole role="admin">
-            <AdminAppShell />
-          </RequireRole>
+          <AdminStaffProvider>
+            <AdminRolePreviewBridge>
+              <AdminAppShell />
+            </AdminRolePreviewBridge>
+          </AdminStaffProvider>
         </Suspense>
       </>
     );

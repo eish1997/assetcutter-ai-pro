@@ -3,14 +3,22 @@ import { requestJson } from './httpClient';
 
 export type GeminiFairnessConfig = Record<string, number>;
 
+export type GeminiFairnessConfigResponse = {
+  config: GeminiFairnessConfig;
+  source?: 'db' | 'disk' | 'env_only';
+  storage?: string;
+  path?: string | null;
+  updatedAt?: string | null;
+};
+
 export async function fetchAdminGeminiFairnessConfig() {
-  return requestJson<{ config: GeminiFairnessConfig; path: string }>(apiUrl('/api/admin/gemini-fairness-config'), {
+  return requestJson<GeminiFairnessConfigResponse>(apiUrl('/api/admin/gemini-fairness-config'), {
     cache: 'no-store',
   });
 }
 
 export async function saveAdminGeminiFairnessConfig(config: GeminiFairnessConfig) {
-  return requestJson<{ ok: boolean; config: GeminiFairnessConfig; path: string }>(
+  return requestJson<GeminiFairnessConfigResponse & { ok: boolean }>(
     apiUrl('/api/admin/gemini-fairness-config'),
     {
       method: 'PUT',
@@ -20,7 +28,7 @@ export async function saveAdminGeminiFairnessConfig(config: GeminiFairnessConfig
 }
 
 export async function clearAdminGeminiFairnessConfig() {
-  return requestJson<{ ok: boolean; config: GeminiFairnessConfig; path: string }>(
+  return requestJson<GeminiFairnessConfigResponse & { ok: boolean }>(
     apiUrl('/api/admin/gemini-fairness-config'),
     { method: 'DELETE' }
   );

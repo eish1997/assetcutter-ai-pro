@@ -1,0 +1,2 @@
+-- Auditor system role (permissions seeded on auth-api startup via seedSystemRoles)
+-- slug: auditor — users.read + audit.read only

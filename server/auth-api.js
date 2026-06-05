@@ -7,10 +7,12 @@ import {
   createAuditLog,
   createUser,
   createSession,
+  findUserById,
   findUserByLogin,
   getSessionWithUser,
   initAuthStore,
   listUsers,
+  listUsersForAdmin,
   listAuditLogs,
   revokeSessionByToken,
   rotateSession,
@@ -19,6 +21,38 @@ import {
   verifyPassword,
   getWorkspaceQuotaBytesForUser,
 } from './auth-store.js';
+import { PERMISSIONS, GEMINI_FAIRNESS_STRICT_CONFIG_KEYS, hasPermission } from './admin-permissions.js';
+import { createAdminAuthHelpers } from './admin-auth.js';
+import { enrichPublicUserWithStaff, getRoleById, listRolesWithPermissions, createCustomRole, deleteCustomRole, setRolePermissions } from './admin-roles-store.js';
+import { buildAdminDashboard } from './admin-dashboard.js';
+import { MATRIX_COLUMNS, auditActionLabel } from './admin-matrix.js';
+import { buildAuditLogsCsv, parseAdminAuditQuery } from './admin-audit-export.js';
+import { getAdminCapabilityPresetsPayload } from './admin-capability-presets.js';
+import { buildAdminUserInsights } from './admin-user-insights.js';
+import { buildUsersCsv, parseAdminUsersExportQuery } from './admin-users-export.js';
+import {
+  getAdminAlertWebhookConfig,
+  maybeNotifyLoginFailedAlert,
+  sendAdminAlertWebhookTest,
+  updateAdminAlertWebhookConfig,
+} from './admin-alert-webhook.js';
+import { buildAdminSystemStatus } from './admin-system-status.js';
+import {
+  createStaffInvite,
+  listStaffInvites,
+  revokeStaffInvite,
+  consumeStaffInviteToken,
+  peekStaffInviteToken,
+} from './admin-staff-invites.js';
+import { createAdminRateLimitHelpers } from './admin-rate-limit.js';
+import { isAuditorStaff, redactAuditLogs, redactUserInsights } from './admin-audit-redact.js';
+import { getAuditLogRetentionMeta } from './admin-audit-retention.js';
+import {
+  listAdminTaskExecutionEvents,
+  parseAdminTaskEventsQuery,
+  redactTaskEvents,
+} from './admin-task-events.js';
+import { insertWorkflowTaskEvents } from './workflow-task-events-store.js';
 import {
   handleR2StorageRequest,
   isR2Configured,
@@ -71,6 +105,13 @@ import {
 } from './http-limits.js';
 import { createBridgeRelay } from './bridge-relay.js';
 import { consumeTrialGeminiSlotForUser } from './trial-gemini-quota-store.js';
+import {
+  clearGeminiFairnessConfig,
+  getGeminiFairnessConfigMeta,
+  normalizeGeminiFairnessConfig,
+  readGeminiFairnessConfig,
+  writeGeminiFairnessConfig,
+} from './gemini-fairness-config-store.js';
 
 const PORT = Number(process.env.PORT || process.env.AUTH_PORT || 9100);
 const BIND_HOST = String(process.env.AUTH_BIND_HOST || '0.0.0.0').trim() || '0.0.0.0';
@@ -99,73 +140,7 @@ const TRIPO_PROXY = String(process.env.TRIPO_PROXY || process.env.HTTPS_PROXY ||
 const CLIENT_DEBUG_LOG_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const CLIENT_DEBUG_LOG_DIR = path.resolve(process.cwd(), '.data', 'debug');
 const CLIENT_DEBUG_LOG_FILE = path.join(CLIENT_DEBUG_LOG_DIR, 'client-runtime.ndjson');
-/** 与 `server/gemini-proxy-fairness.js` 一致：`GEMINI_FAIRNESS_CONFIG_PATH` 或默认 `server/data/gemini-fairness-config.json`。 */
-const GEMINI_FAIRNESS_CONFIG_PATH = String(process.env.GEMINI_FAIRNESS_CONFIG_PATH || '').trim()
-  ? path.resolve(String(process.env.GEMINI_FAIRNESS_CONFIG_PATH || '').trim())
-  : path.resolve(process.cwd(), 'server/data/gemini-fairness-config.json');
-const GEMINI_FAIRNESS_CONFIG_KEYS = new Set([
-  'GEMINI_ASYNC_PROXY_MAX_CONCURRENT',
-  'GEMINI_FAIRNESS_USER_MAX_IN_FLIGHT',
-  'GEMINI_FAIRNESS_USER_MAX_QUEUED',
-  'GEMINI_FAIRNESS_USER_SUBMIT_RPM',
-  'GEMINI_FAIRNESS_ANON_MAX_IN_FLIGHT',
-  'GEMINI_FAIRNESS_ANON_MAX_QUEUED',
-  'GEMINI_FAIRNESS_ANON_SUBMIT_RPM',
-  'GEMINI_FAIRNESS_GLOBAL_QUEUE_MAX',
-  'GEMINI_FAIRNESS_KEY_MAX_LEN',
-  'GEMINI_FAIRNESS_HMAC_SKEW_SEC',
-]);
 
-const GEMINI_FAIRNESS_CLAMP = {
-  GEMINI_ASYNC_PROXY_MAX_CONCURRENT: [1, 64],
-  GEMINI_FAIRNESS_USER_MAX_IN_FLIGHT: [1, 32],
-  GEMINI_FAIRNESS_USER_MAX_QUEUED: [1, 200],
-  GEMINI_FAIRNESS_USER_SUBMIT_RPM: [1, 500],
-  GEMINI_FAIRNESS_ANON_MAX_IN_FLIGHT: [1, 32],
-  GEMINI_FAIRNESS_ANON_MAX_QUEUED: [1, 100],
-  GEMINI_FAIRNESS_ANON_SUBMIT_RPM: [1, 500],
-  GEMINI_FAIRNESS_GLOBAL_QUEUE_MAX: [10, 5000],
-  GEMINI_FAIRNESS_KEY_MAX_LEN: [8, 512],
-  GEMINI_FAIRNESS_HMAC_SKEW_SEC: [10, 600],
-};
-
-function clampGeminiFairnessValue(key, n) {
-  const pair = GEMINI_FAIRNESS_CLAMP[key];
-  if (!pair) return null;
-  const [lo, hi] = pair;
-  return Math.min(hi, Math.max(lo, Math.floor(n)));
-}
-
-async function readGeminiFairnessConfigFromDisk() {
-  try {
-    const raw = await fs.readFile(GEMINI_FAIRNESS_CONFIG_PATH, 'utf8');
-    const j = JSON.parse(raw);
-    return typeof j === 'object' && j && !Array.isArray(j) ? j : {};
-  } catch {
-    return {};
-  }
-}
-
-function normalizeGeminiFairnessConfig(body) {
-  if (!body || typeof body !== 'object' || Array.isArray(body)) {
-    return { ok: false, error: 'config 须为 JSON 对象' };
-  }
-  const out = {};
-  for (const [k, v] of Object.entries(body)) {
-    if (!GEMINI_FAIRNESS_CONFIG_KEYS.has(k)) continue;
-    const n = Number(v);
-    if (!Number.isFinite(n)) return { ok: false, error: `非法数值：${k}` };
-    const c = clampGeminiFairnessValue(k, n);
-    if (c == null) return { ok: false, error: `未知键：${k}` };
-    out[k] = c;
-  }
-  return { ok: true, config: out };
-}
-
-async function writeGeminiFairnessConfigToDisk(config) {
-  await fs.mkdir(path.dirname(GEMINI_FAIRNESS_CONFIG_PATH), { recursive: true });
-  await fs.writeFile(GEMINI_FAIRNESS_CONFIG_PATH, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
-}
 if (TRIPO_PROXY) {
   try {
     setGlobalDispatcher(new ProxyAgent(TRIPO_PROXY));
@@ -475,15 +450,13 @@ async function requireAuth(req, res) {
   return row.user;
 }
 
-async function requireAdmin(req, res) {
-  const user = await requireAuth(req, res);
-  if (!user) return null;
-  if (user.role !== 'admin') {
-    json(res, 403, { error: '无管理员权限' });
-    return null;
-  }
-  return user;
-}
+const { requireStaff, requirePermission, requireAdminMe } = createAdminAuthHelpers({ requireAuth, json });
+const assertAdminApiRateLimit = createAdminRateLimitHelpers({
+  parseCookie,
+  cookieName: COOKIE_NAME,
+  getClientIp,
+  json,
+});
 
 const server = http.createServer(async (req, res) => {
   applyCors(req, res);
@@ -562,8 +535,8 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (path === '/api/bridge/devices' && req.method === 'GET') {
-      const admin = await requireAdmin(req, res);
-      if (!admin) return;
+      const staff = await requireStaff(req, res);
+      if (!staff) return;
       json(res, 200, {
         devices: bridgeRelay.listDevices(),
         authRequired: BRIDGE_REQUIRE_AUTH,
@@ -572,8 +545,8 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (path === '/api/bridge/tasks/send-message' && req.method === 'POST') {
-      const admin = await requireAdmin(req, res);
-      if (!admin) return;
+      const staff = await requireStaff(req, res);
+      if (!staff) return;
       const body = await readBody(req, { maxBytes: BRIDGE_SEND_MESSAGE_MAX_BODY_BYTES });
       const result = bridgeRelay.sendTask({
         deviceId: body.deviceId,
@@ -598,8 +571,8 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (path.startsWith('/api/bridge/tasks/') && path.endsWith('/events') && req.method === 'GET') {
-      const admin = await requireAdmin(req, res);
-      if (!admin) return;
+      const staff = await requireStaff(req, res);
+      if (!staff) return;
       const rawTaskId = path.slice('/api/bridge/tasks/'.length, -'/events'.length);
       const taskId = decodeURIComponent(rawTaskId || '').trim();
       if (!taskId) {
@@ -623,7 +596,54 @@ const server = http.createServer(async (req, res) => {
         json(res, 429, { error: '请求过于频繁，请稍后再试' });
         return;
       }
+      const inviteToken = String(body.staffInviteToken || body.staffInvite || '').trim();
+      if (inviteToken) {
+        const peek = await peekStaffInviteToken(inviteToken);
+        if (!peek.ok) {
+          const reason =
+            peek.reason === 'expired'
+              ? '邀请链接已过期'
+              : peek.reason === 'used'
+                ? '邀请链接已使用'
+                : peek.reason === 'revoked'
+                  ? '邀请链接已撤销'
+                  : peek.reason === 'role_missing'
+                    ? '邀请角色已失效'
+                    : '邀请链接无效';
+          json(res, 400, { error: reason });
+          return;
+        }
+      }
       const user = await createUser({ username, email, password, role: 'user' });
+      let outUser = user;
+      if (inviteToken) {
+        const redeemed = await consumeStaffInviteToken(inviteToken, user.id, {
+          ip: getClientIp(req),
+          userAgent: req.headers['user-agent'],
+        });
+        if (!redeemed.ok) {
+          json(res, 409, {
+            error: '邀请已被使用或失效，账号已创建，请直接登录',
+            code: 'INVITE_RACE',
+          });
+          return;
+        }
+        const refreshed = await findUserById(user.id);
+        if (refreshed) {
+          outUser = {
+            id: refreshed.id,
+            username: refreshed.username,
+            email: refreshed.email,
+            role: refreshed.role,
+            status: refreshed.status,
+            createdAt: refreshed.createdAt,
+            updatedAt: refreshed.updatedAt,
+            workspaceQuotaBytes: getWorkspaceQuotaBytesForUser(refreshed),
+            staffRoleId: refreshed.staffRoleId || null,
+          };
+          outUser = await enrichPublicUserWithStaff(outUser);
+        }
+      }
       const token = makeSessionToken();
       await createSession({
         userId: user.id,
@@ -635,7 +655,7 @@ const server = http.createServer(async (req, res) => {
       const csrf = issueCsrfCookie(res);
       res.setHeader('Set-Cookie', [serializeSessionCookie(token, SESSION_TTL_MS), csrf.cookie]);
       await createAuditLog({ actorUserId: user.id, actorIdentifier: user.username, action: 'auth.register', targetUserId: user.id, ip: getClientIp(req), userAgent: req.headers['user-agent'] });
-      sendAuthUser(res, user, 201, { workspaceUsedBytes: getWorkspaceUsedBytes(user.id) });
+      sendAuthUser(res, outUser, 201, { workspaceUsedBytes: getWorkspaceUsedBytes(user.id) });
       return;
     }
 
@@ -651,6 +671,7 @@ const server = http.createServer(async (req, res) => {
       const row = await findUserByLogin(identifier);
       if (!row || !verifyPassword(password, row.passwordHash)) {
         await createAuditLog({ actorIdentifier: identifier, action: 'auth.login_failed', ip: getClientIp(req), userAgent: req.headers['user-agent'] });
+        void maybeNotifyLoginFailedAlert();
         json(res, 401, { error: '用户名/邮箱或密码错误' });
         return;
       }
@@ -681,10 +702,22 @@ const server = http.createServer(async (req, res) => {
 
     if (path === '/api/auth/logout' && req.method === 'POST') {
       const token = parseCookie(req)[COOKIE_NAME];
-      if (token) await revokeSessionByToken(token);
+      let logoutUser = null;
+      if (token) {
+        const row = await getSessionWithUser(token);
+        if (row?.user) logoutUser = row.user;
+        await revokeSessionByToken(token);
+      }
       const cookieParts = [clearSessionCookie(), `${CSRF_COOKIE_NAME}=; Path=/; Max-Age=0`];
       res.setHeader('Set-Cookie', cookieParts);
-      await createAuditLog({ action: 'auth.logout', ip: getClientIp(req), userAgent: req.headers['user-agent'] });
+      await createAuditLog({
+        actorUserId: logoutUser?.id ?? null,
+        actorIdentifier: logoutUser?.username ?? '',
+        action: 'auth.logout',
+        targetUserId: logoutUser?.id ?? null,
+        ip: getClientIp(req),
+        userAgent: req.headers['user-agent'],
+      });
       json(res, 200, { ok: true });
       return;
     }
@@ -824,41 +857,468 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (path === '/api/admin/me' && req.method === 'GET') {
-      const user = await requireAdmin(req, res);
-      if (!user) return;
-      sendAuthUser(res, user, 200, { workspaceUsedBytes: getWorkspaceUsedBytes(user.id) });
-      return;
+    if (path.startsWith('/api/admin')) {
+      if (!(await assertAdminApiRateLimit(req, res))) return;
     }
 
-    if (path === '/api/admin/users' && req.method === 'GET') {
-      const user = await requireAdmin(req, res);
-      if (!user) return;
-      const users = await listUsers();
+    if (path === '/api/admin/me' && req.method === 'GET') {
+      const payload = await requireAdminMe(req, res);
+      if (!payload) return;
       json(res, 200, {
-        users: users.map((u) => ({ ...u, workspaceUsedBytes: getWorkspaceUsedBytes(u.id) })),
+        ...payload,
+        user: {
+          ...payload.user,
+          workspaceUsedBytes: getWorkspaceUsedBytes(payload.user.id),
+        },
       });
       return;
     }
 
+    if (path === '/api/admin/dashboard' && req.method === 'GET') {
+      const staff = await requirePermission(req, res, PERMISSIONS.DASHBOARD_READ);
+      if (!staff) return;
+      try {
+        json(res, 200, await buildAdminDashboard());
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        json(res, 500, { error: message });
+      }
+      return;
+    }
+
+    if (path === '/api/admin/system-status' && req.method === 'GET') {
+      const staff = await requirePermission(req, res, PERMISSIONS.DASHBOARD_READ);
+      if (!staff) return;
+      try {
+        json(res, 200, await buildAdminSystemStatus());
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        json(res, 500, { error: message });
+      }
+      return;
+    }
+
+    if (path === '/api/admin/alert-webhook' && req.method === 'GET') {
+      const staff = await requirePermission(req, res, PERMISSIONS.ROLES_WRITE);
+      if (!staff) return;
+      json(res, 200, { config: await getAdminAlertWebhookConfig() });
+      return;
+    }
+
+    if (path === '/api/admin/alert-webhook' && req.method === 'PUT') {
+      const staff = await requirePermission(req, res, PERMISSIONS.ROLES_WRITE);
+      if (!staff) return;
+      const body = await readBody(req);
+      try {
+        const config = await updateAdminAlertWebhookConfig(body || {});
+        await createAuditLog({
+          actorUserId: staff.user.id,
+          actorIdentifier: staff.user.username,
+          action: 'admin.alert_webhook_update',
+          meta: {
+            enabled: config.enabled,
+            loginFailedThreshold: config.loginFailedThreshold,
+            loginFailedWindowMinutes: config.loginFailedWindowMinutes,
+            urlMasked: config.urlMasked,
+          },
+          ip: getClientIp(req),
+          userAgent: req.headers['user-agent'],
+        });
+        json(res, 200, { config });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        json(res, 400, { error: message });
+      }
+      return;
+    }
+
+    if (path === '/api/admin/alert-webhook/test' && req.method === 'POST') {
+      const staff = await requirePermission(req, res, PERMISSIONS.ROLES_WRITE);
+      if (!staff) return;
+      try {
+        json(res, 200, await sendAdminAlertWebhookTest());
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        json(res, 400, { error: message });
+      }
+      return;
+    }
+
+    if (path === '/api/admin/staff-invites' && req.method === 'GET') {
+      const staff = await requirePermission(req, res, PERMISSIONS.USERS_ROLE_WRITE);
+      if (!staff) return;
+      json(res, 200, { invites: await listStaffInvites() });
+      return;
+    }
+
+    if (path === '/api/admin/staff-invites' && req.method === 'POST') {
+      const staff = await requirePermission(req, res, PERMISSIONS.USERS_ROLE_WRITE);
+      if (!staff) return;
+      const body = await readBody(req);
+      try {
+        const result = await createStaffInvite({
+          staffRoleId: body.staffRoleId,
+          note: body.note,
+          ttlDays: body.ttlDays,
+          actor: { userId: staff.user.id, identifier: staff.user.username },
+        });
+        await createAuditLog({
+          actorUserId: staff.user.id,
+          actorIdentifier: staff.user.username,
+          action: 'admin.staff_invite_create',
+          meta: {
+            inviteId: result.invite.id,
+            staffRoleId: result.invite.staffRoleId,
+            staffRoleSlug: result.invite.staffRoleSlug,
+            expiresAt: result.invite.expiresAt,
+          },
+          ip: getClientIp(req),
+          userAgent: req.headers['user-agent'],
+        });
+        json(res, 200, result);
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        json(res, 400, { error: message });
+      }
+      return;
+    }
+
+    if (path.startsWith('/api/admin/staff-invites/') && req.method === 'DELETE') {
+      const staff = await requirePermission(req, res, PERMISSIONS.USERS_ROLE_WRITE);
+      if (!staff) return;
+      const inviteId = decodeURIComponent(path.slice('/api/admin/staff-invites/'.length).split('/')[0] || '');
+      if (!inviteId) {
+        json(res, 400, { error: '无效邀请 id' });
+        return;
+      }
+      try {
+        const invite = await revokeStaffInvite(inviteId);
+        await createAuditLog({
+          actorUserId: staff.user.id,
+          actorIdentifier: staff.user.username,
+          action: 'admin.staff_invite_revoke',
+          meta: { inviteId: invite.id, staffRoleSlug: invite.staffRoleSlug },
+          ip: getClientIp(req),
+          userAgent: req.headers['user-agent'],
+        });
+        json(res, 200, { invite });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        json(res, 400, { error: message });
+      }
+      return;
+    }
+
+    if (path === '/api/admin/permissions' && req.method === 'GET') {
+      const staff = await requirePermission(req, res, PERMISSIONS.ROLES_READ);
+      if (!staff) return;
+      json(res, 200, { columns: MATRIX_COLUMNS });
+      return;
+    }
+
+    if (path === '/api/admin/roles' && req.method === 'GET') {
+      const staff = await requirePermission(req, res, PERMISSIONS.ROLES_READ);
+      if (!staff) return;
+      json(res, 200, { roles: await listRolesWithPermissions() });
+      return;
+    }
+
+    if (path === '/api/admin/roles' && req.method === 'POST') {
+      const staff = await requirePermission(req, res, PERMISSIONS.ROLES_WRITE);
+      if (!staff) return;
+      const body = await readBody(req);
+      try {
+        const role = await createCustomRole({
+          slug: body.slug,
+          displayName: body.displayName,
+          description: body.description,
+          copyFromRoleId: body.copyFromRoleId,
+        });
+        await createAuditLog({
+          actorUserId: staff.user.id,
+          actorIdentifier: staff.user.username,
+          action: 'admin.role_create',
+          meta: { roleId: role?.id, slug: role?.slug },
+          ip: getClientIp(req),
+          userAgent: req.headers['user-agent'],
+        });
+        json(res, 201, { role });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        json(res, 400, { error: message });
+      }
+      return;
+    }
+
+    if (path.startsWith('/api/admin/roles/') && req.method === 'DELETE') {
+      const staff = await requirePermission(req, res, PERMISSIONS.ROLES_WRITE);
+      if (!staff) return;
+      const roleId = path.slice('/api/admin/roles/'.length).split('/')[0];
+      if (!roleId) {
+        json(res, 400, { error: '缺少 role id' });
+        return;
+      }
+      try {
+        await deleteCustomRole(roleId);
+        await createAuditLog({
+          actorUserId: staff.user.id,
+          actorIdentifier: staff.user.username,
+          action: 'admin.role_delete',
+          meta: { roleId },
+          ip: getClientIp(req),
+          userAgent: req.headers['user-agent'],
+        });
+        json(res, 200, { ok: true });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        json(res, 400, { error: message });
+      }
+      return;
+    }
+
+    if (path.startsWith('/api/admin/roles/') && path.endsWith('/permissions') && req.method === 'PUT') {
+      const staff = await requirePermission(req, res, PERMISSIONS.ROLES_WRITE);
+      if (!staff) return;
+      const parts = path.slice('/api/admin/roles/'.length).split('/');
+      const roleId = parts[0];
+      if (!roleId) {
+        json(res, 400, { error: '缺少 role id' });
+        return;
+      }
+      const body = await readBody(req);
+      try {
+        const out = await setRolePermissions({
+          actorRoleSlug: staff.staffRole.slug,
+          roleId,
+          matrix: body.matrix,
+        });
+        await createAuditLog({
+          actorUserId: staff.user.id,
+          actorIdentifier: staff.user.username,
+          action: 'admin.role_permissions_update',
+          meta: { roleId, before: out.before, after: out.after },
+          ip: getClientIp(req),
+          userAgent: req.headers['user-agent'],
+        });
+        json(res, 200, { role: out.role });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        json(res, 400, { error: message });
+      }
+      return;
+    }
+
+    if (path === '/api/admin/users' && req.method === 'GET') {
+      const staff = await requirePermission(req, res, PERMISSIONS.USERS_READ);
+      if (!staff) return;
+      const u = new URL(req.url || '/', 'http://local');
+      const singleUserId = String(u.searchParams.get('userId') || '').trim();
+      if (singleUserId) {
+        const userRow = await findUserById(singleUserId);
+        if (!userRow) {
+          json(res, 404, { error: '用户不存在' });
+          return;
+        }
+        const enriched = await enrichPublicUserWithStaff(userRow);
+        let insights = await buildAdminUserInsights(enriched.id);
+        if (isAuditorStaff(staff)) insights = redactUserInsights(insights);
+        json(res, 200, {
+          user: { ...enriched, workspaceUsedBytes: getWorkspaceUsedBytes(enriched.id) },
+          ...insights,
+        });
+        return;
+      }
+      const result = await listUsersForAdmin({
+        page: u.searchParams.get('page') || 1,
+        pageSize: u.searchParams.get('pageSize') || 20,
+        q: u.searchParams.get('q') || '',
+        status: u.searchParams.get('status') || '',
+        staffRoleId: u.searchParams.get('staffRoleId') || '',
+        quotaWarnPct: u.searchParams.get('quotaWarnPct') || '',
+      });
+      const enriched = await Promise.all(
+        result.users.map(async (userRow) => {
+          const withStaff = await enrichPublicUserWithStaff(userRow);
+          return { ...withStaff, workspaceUsedBytes: getWorkspaceUsedBytes(userRow.id) };
+        })
+      );
+      json(res, 200, { users: enriched, total: result.total, page: result.page, pageSize: result.pageSize });
+      return;
+    }
+
+    if (path === '/api/admin/users/export' && req.method === 'GET') {
+      const staff = await requirePermission(req, res, PERMISSIONS.USERS_READ);
+      if (!staff) return;
+      const u = new URL(req.url || '/', 'http://local');
+      try {
+        const query = parseAdminUsersExportQuery(u.searchParams);
+        const { csv, rowCount, total, truncated } = await buildUsersCsv(query);
+        await createAuditLog({
+          actorUserId: staff.user.id,
+          actorIdentifier: staff.user.username,
+          action: 'admin.users_export',
+          meta: { rowCount, total, truncated, q: query.q || '', status: query.status || '' },
+          ip: getClientIp(req),
+          userAgent: req.headers['user-agent'],
+        });
+        const filename = `users-${new Date().toISOString().slice(0, 10)}.csv`;
+        res.writeHead(200, {
+          'Content-Type': 'text/csv; charset=utf-8',
+          'Content-Disposition': `attachment; filename="${filename}"`,
+          'X-Users-Export-Rows': String(rowCount),
+          'X-Users-Export-Total': String(total),
+          'X-Users-Export-Truncated': truncated ? '1' : '0',
+        });
+        res.end(csv, 'utf8');
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        json(res, 500, { error: message });
+      }
+      return;
+    }
+
+    if (path.startsWith('/api/admin/users/') && req.method === 'GET') {
+      const staff = await requirePermission(req, res, PERMISSIONS.USERS_READ);
+      if (!staff) return;
+      const rest = path.slice('/api/admin/users/'.length);
+      const segments = rest.split('/').filter(Boolean);
+      const targetId = decodeURIComponent(segments[0] || '');
+      if (!targetId || segments.length !== 1 || targetId.includes('..')) {
+        json(res, 404, { error: 'Not found' });
+        return;
+      }
+      const userRow = await findUserById(targetId);
+      if (!userRow) {
+        json(res, 404, { error: '用户不存在' });
+        return;
+      }
+      const enriched = await enrichPublicUserWithStaff(userRow);
+      let insights = await buildAdminUserInsights(enriched.id);
+      if (isAuditorStaff(staff)) insights = redactUserInsights(insights);
+      json(res, 200, {
+        user: { ...enriched, workspaceUsedBytes: getWorkspaceUsedBytes(enriched.id) },
+        ...insights,
+      });
+      return;
+    }
+
+    if (path === '/api/admin/capability-presets' && req.method === 'GET') {
+      const staff = await requirePermission(req, res, PERMISSIONS.PRESETS_PUBLISH);
+      if (!staff) return;
+      try {
+        json(res, 200, await getAdminCapabilityPresetsPayload());
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        json(res, 500, { error: message });
+      }
+      return;
+    }
+
+    if (path === '/api/admin/audit-logs/meta' && req.method === 'GET') {
+      const staff = await requirePermission(req, res, PERMISSIONS.AUDIT_READ);
+      if (!staff) return;
+      json(res, 200, {
+        retention: getAuditLogRetentionMeta(),
+        redactedExportDefault: isAuditorStaff(staff),
+      });
+      return;
+    }
+
+    if (path === '/api/admin/audit-logs/export' && req.method === 'GET') {
+      const staff = await requirePermission(req, res, PERMISSIONS.AUDIT_READ);
+      if (!staff) return;
+      const u = new URL(req.url || '/', 'http://local');
+      const redact = isAuditorStaff(staff);
+      try {
+        const query = parseAdminAuditQuery(u.searchParams);
+        const { csv, rowCount, total, truncated } = await buildAuditLogsCsv(query, {
+          actionLabel: auditActionLabel,
+          redact,
+        });
+        const filename = `audit-logs-${new Date().toISOString().slice(0, 10)}${redact ? '-redacted' : ''}.csv`;
+        res.writeHead(200, {
+          'Content-Type': 'text/csv; charset=utf-8',
+          'Content-Disposition': `attachment; filename="${filename}"`,
+          'X-Audit-Export-Rows': String(rowCount),
+          'X-Audit-Export-Total': String(total),
+          'X-Audit-Export-Truncated': truncated ? '1' : '0',
+          'X-Audit-Export-Redacted': redact ? '1' : '0',
+        });
+        res.end(csv, 'utf8');
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        json(res, 500, { error: message });
+      }
+      return;
+    }
+
     if (path === '/api/admin/audit-logs' && req.method === 'GET') {
-      const user = await requireAdmin(req, res);
+      const staff = await requirePermission(req, res, PERMISSIONS.AUDIT_READ);
+      if (!staff) return;
+      const u = new URL(req.url || '/', 'http://local');
+      const cursor = u.searchParams.get('cursor') || '';
+      const result = await listAuditLogs({
+        limit: u.searchParams.get('limit') || 200,
+        offset: cursor ? 0 : u.searchParams.get('offset') || 0,
+        action: u.searchParams.get('action') || '',
+        actor: u.searchParams.get('actor') || '',
+        targetUserId: u.searchParams.get('targetUserId') || '',
+        from: u.searchParams.get('from') || '',
+        to: u.searchParams.get('to') || '',
+        category: u.searchParams.get('category') || '',
+        excludeActions: u.searchParams.get('excludeActions') || '',
+        cursor,
+      });
+      const redacted = isAuditorStaff(staff);
+      if (redacted) {
+        result.logs = redactAuditLogs(result.logs);
+        result.redacted = true;
+      }
+      json(res, 200, result);
+      return;
+    }
+
+    if (path === '/api/admin/task-events' && req.method === 'GET') {
+      const staff = await requirePermission(req, res, PERMISSIONS.AUDIT_READ);
+      if (!staff) return;
+      const u = new URL(req.url || '/', 'http://local');
+      const query = parseAdminTaskEventsQuery(u.searchParams);
+      const result = await listAdminTaskExecutionEvents(query);
+      const redacted = isAuditorStaff(staff);
+      if (redacted) {
+        result.events = redactTaskEvents(result.events);
+        result.redacted = true;
+      }
+      json(res, 200, result);
+      return;
+    }
+
+    if (path === '/api/workflow/task-events' && req.method === 'POST') {
+      const user = await requireAuth(req, res);
       if (!user) return;
-      const limit = Number(((req.url || '').split('?')[1] || '').match(/(?:^|&)limit=(\d+)/)?.[1] || '200');
-      json(res, 200, { logs: await listAuditLogs(limit) });
+      const rateKey = `workflow-task-events:${user.id}`;
+      if (isRateLimited(rateKey, 120)) {
+        json(res, 429, { error: '上报过于频繁，请稍后再试' });
+        return;
+      }
+      const body = await readBody(req, { maxBytes: 256 * 1024 });
+      const events = Array.isArray(body?.events) ? body.events : [];
+      const result = await insertWorkflowTaskEvents(user.id, events);
+      json(res, 200, { ok: true, ...result });
       return;
     }
 
     if (path === '/api/admin/companion-artifacts' && req.method === 'GET') {
-      const user = await requireAdmin(req, res);
-      if (!user) return;
+      const staff = await requirePermission(req, res, PERMISSIONS.COMPANION_READ);
+      if (!staff) return;
       json(res, 200, { artifacts: await listCompanionArtifacts() });
       return;
     }
 
     if (path === '/api/admin/companion-artifacts/upload-url' && req.method === 'POST') {
-      const user = await requireAdmin(req, res);
-      if (!user) return;
+      const staff = await requirePermission(req, res, PERMISSIONS.COMPANION_WRITE);
+      if (!staff) return;
+      const user = staff.user;
       if (!isR2Configured()) {
         json(res, 503, { error: 'R2 未配置' });
         return;
@@ -897,8 +1357,9 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (path === '/api/admin/companion-artifacts' && req.method === 'POST') {
-      const user = await requireAdmin(req, res);
-      if (!user) return;
+      const staff = await requirePermission(req, res, PERMISSIONS.COMPANION_WRITE);
+      if (!staff) return;
+      const user = staff.user;
       if (!isR2Configured()) {
         json(res, 503, { error: 'R2 未配置' });
         return;
@@ -938,8 +1399,9 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (path.startsWith('/api/admin/companion-artifacts/') && req.method === 'DELETE') {
-      const user = await requireAdmin(req, res);
-      if (!user) return;
+      const staff = await requirePermission(req, res, PERMISSIONS.COMPANION_DELETE);
+      if (!staff) return;
+      const user = staff.user;
       const rest = path.slice('/api/admin/companion-artifacts/'.length).split('/')[0];
       const id = decodeURIComponent(rest || '');
       if (!id) {
@@ -986,16 +1448,17 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (path === '/api/admin/gemini-fairness-config' && req.method === 'GET') {
-      const user = await requireAdmin(req, res);
-      if (!user) return;
-      const config = await readGeminiFairnessConfigFromDisk();
-      json(res, 200, { config, path: GEMINI_FAIRNESS_CONFIG_PATH });
+      const staff = await requirePermission(req, res, PERMISSIONS.GEMINI_FAIRNESS_READ);
+      if (!staff) return;
+      const [config, meta] = await Promise.all([readGeminiFairnessConfig(), getGeminiFairnessConfigMeta()]);
+      json(res, 200, { config, ...meta });
       return;
     }
 
     if (path === '/api/admin/gemini-fairness-config' && req.method === 'PUT') {
-      const user = await requireAdmin(req, res);
-      if (!user) return;
+      const staff = await requirePermission(req, res, PERMISSIONS.GEMINI_FAIRNESS_WRITE);
+      if (!staff) return;
+      const user = staff.user;
       let body;
       try {
         body = await readBody(req);
@@ -1009,22 +1472,32 @@ const server = http.createServer(async (req, res) => {
         json(res, 400, { error: norm.error || '无效配置' });
         return;
       }
+      const strictKeys = Object.keys(norm.config).filter((k) => GEMINI_FAIRNESS_STRICT_CONFIG_KEYS.has(k));
+      if (strictKeys.length && !hasPermission(staff.permissions, PERMISSIONS.GEMINI_FAIRNESS_STRICT)) {
+        json(res, 403, { error: '权限不足：限流高危项' });
+        return;
+      }
       try {
-        const existing = await readGeminiFairnessConfigFromDisk();
+        const existing = await readGeminiFairnessConfig();
         const merged = { ...existing };
         for (const [k, v] of Object.entries(norm.config)) {
           merged[k] = v;
         }
-        await writeGeminiFairnessConfigToDisk(merged);
+        const saved = await writeGeminiFairnessConfig(merged, { updatedByUserId: user.id });
         await createAuditLog({
           actorUserId: user.id,
           actorIdentifier: user.username,
           action: 'admin.gemini_fairness_config_put',
-          meta: { keysUpdated: Object.keys(norm.config), path: GEMINI_FAIRNESS_CONFIG_PATH },
+          meta: {
+            before: existing,
+            after: saved.config,
+            keysUpdated: Object.keys(norm.config),
+            storage: saved.meta,
+          },
           ip: getClientIp(req),
           userAgent: req.headers['user-agent'],
         });
-        json(res, 200, { ok: true, config: merged, path: GEMINI_FAIRNESS_CONFIG_PATH });
+        json(res, 200, { ok: true, config: saved.config, ...saved.meta });
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
         json(res, 500, { error: message });
@@ -1033,19 +1506,26 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (path === '/api/admin/gemini-fairness-config' && req.method === 'DELETE') {
-      const user = await requireAdmin(req, res);
-      if (!user) return;
+      const staff = await requirePermission(req, res, PERMISSIONS.GEMINI_FAIRNESS_WRITE);
+      if (!staff) return;
+      const user = staff.user;
       try {
-        await writeGeminiFairnessConfigToDisk({});
+        const existing = await readGeminiFairnessConfig();
+        const strictKeys = Object.keys(existing || {}).filter((k) => GEMINI_FAIRNESS_STRICT_CONFIG_KEYS.has(k));
+        if (strictKeys.length && !hasPermission(staff.permissions, PERMISSIONS.GEMINI_FAIRNESS_STRICT)) {
+          json(res, 403, { error: '权限不足：清空配置含限流高危项' });
+          return;
+        }
+        const saved = await clearGeminiFairnessConfig({ updatedByUserId: user.id });
         await createAuditLog({
           actorUserId: user.id,
           actorIdentifier: user.username,
           action: 'admin.gemini_fairness_config_delete',
-          meta: { path: GEMINI_FAIRNESS_CONFIG_PATH },
+          meta: { before: existing, after: saved.config, storage: saved.meta },
           ip: getClientIp(req),
           userAgent: req.headers['user-agent'],
         });
-        json(res, 200, { ok: true, config: {}, path: GEMINI_FAIRNESS_CONFIG_PATH });
+        json(res, 200, { ok: true, config: saved.config, ...saved.meta });
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
         json(res, 500, { error: message });
@@ -1054,8 +1534,9 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (path.startsWith('/api/admin/users/') && req.method === 'PATCH') {
-      const user = await requireAdmin(req, res);
-      if (!user) return;
+      const staff = await requireStaff(req, res);
+      if (!staff) return;
+      const actor = staff.user;
       const rest = path.slice('/api/admin/users/'.length);
       const targetId = decodeURIComponent(rest.split('/')[0] || '');
       if (!targetId || targetId.includes('..')) {
@@ -1066,35 +1547,96 @@ const server = http.createServer(async (req, res) => {
         json(res, 400, { error: '请使用 POST 同步用量' });
         return;
       }
-      const body = await readBody(req);
-      const role = body.role != null ? String(body.role) : undefined;
-      const status = body.status != null ? String(body.status) : undefined;
-      const workspaceQuotaBytes = body.workspaceQuotaBytes != null ? body.workspaceQuotaBytes : undefined;
-      if (role == null && status == null && workspaceQuotaBytes == null) {
-        json(res, 400, { error: '至少提供 role、status 或 workspaceQuotaBytes' });
+      const before = await findUserById(targetId);
+      if (!before) {
+        json(res, 404, { error: '用户不存在' });
         return;
       }
-      const next = await updateUserById(targetId, { role, status, workspaceQuotaBytes });
+      const body = await readBody(req);
+      const role = body.role != null ? String(body.role) : undefined;
+      const staffRoleId =
+        body.staffRoleId !== undefined
+          ? body.staffRoleId === null || body.staffRoleId === ''
+            ? null
+            : String(body.staffRoleId)
+          : undefined;
+      const status = body.status != null ? String(body.status) : undefined;
+      const workspaceQuotaBytes = body.workspaceQuotaBytes != null ? body.workspaceQuotaBytes : undefined;
+      if (role == null && staffRoleId === undefined && status == null && workspaceQuotaBytes == null) {
+        json(res, 400, { error: '至少提供 role、staffRoleId、status 或 workspaceQuotaBytes' });
+        return;
+      }
+      if (role != null || staffRoleId !== undefined) {
+        if (!hasPermission(staff.permissions, PERMISSIONS.USERS_ROLE_WRITE)) {
+          json(res, 403, { error: '权限不足' });
+          return;
+        }
+      }
+      if (status != null || workspaceQuotaBytes != null) {
+        if (!hasPermission(staff.permissions, PERMISSIONS.USERS_WRITE)) {
+          json(res, 403, { error: '权限不足' });
+          return;
+        }
+      }
+      if (status === 'disabled' && before.staffRoleId) {
+        const targetStaffRole = await getRoleById(before.staffRoleId);
+        if (
+          targetStaffRole?.slug === 'super' &&
+          !hasPermission(staff.permissions, PERMISSIONS.USERS_ROLE_WRITE)
+        ) {
+          json(res, 403, { error: '权限不足：不能禁用超级管理员' });
+          return;
+        }
+      }
+      const patch = { role, status, workspaceQuotaBytes };
+      if (staffRoleId !== undefined) patch.staffRoleId = staffRoleId;
+      let next;
+      try {
+        next = await updateUserById(targetId, patch);
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        if (message.includes('最后一个超级管理员')) {
+          json(res, 403, { error: message });
+          return;
+        }
+        json(res, 400, { error: message });
+        return;
+      }
       if (!next) {
         json(res, 404, { error: '用户不存在' });
         return;
       }
+      const enriched = await enrichPublicUserWithStaff(next);
       await createAuditLog({
-        actorUserId: user.id,
-        actorIdentifier: user.username,
+        actorUserId: actor.id,
+        actorIdentifier: actor.username,
         action: 'admin.user_update',
-        targetUserId: next.id,
-        meta: { role: next.role, status: next.status, workspaceQuotaBytes: next.workspaceQuotaBytes },
+        targetUserId: enriched.id,
+        meta: {
+          before: {
+            role: before.role,
+            status: before.status,
+            staffRoleId: before.staffRoleId ?? null,
+            workspaceQuotaBytes: before.workspaceQuotaBytes,
+          },
+          after: {
+            role: enriched.role,
+            status: enriched.status,
+            staffRoleId: enriched.staffRoleId ?? null,
+            workspaceQuotaBytes: enriched.workspaceQuotaBytes,
+          },
+        },
         ip: getClientIp(req),
         userAgent: req.headers['user-agent'],
       });
-      json(res, 200, { user: { ...next, workspaceUsedBytes: getWorkspaceUsedBytes(next.id) } });
+      json(res, 200, { user: { ...enriched, workspaceUsedBytes: getWorkspaceUsedBytes(enriched.id) } });
       return;
     }
 
     if (path.startsWith('/api/admin/users/') && req.method === 'POST') {
-      const user = await requireAdmin(req, res);
-      if (!user) return;
+      const staff = await requirePermission(req, res, PERMISSIONS.USERS_RECONCILE);
+      if (!staff) return;
+      const actor = staff.user;
       const suffix = path.slice('/api/admin/users/'.length);
       const m = suffix.match(/^([^/]+)\/workspace-usage\/reconcile\/?$/);
       if (!m) {
@@ -1117,8 +1659,8 @@ const server = http.createServer(async (req, res) => {
       try {
         const { usedBytes, scannedKeys } = await runWorkspaceUsageReconcileForUser(targetId, { forceEmptyReset });
         await createAuditLog({
-          actorUserId: user.id,
-          actorIdentifier: user.username,
+          actorUserId: actor.id,
+          actorIdentifier: actor.username,
           action: 'admin.workspace_usage_reconcile',
           targetUserId: targetId,
           meta: { usedBytes, scannedKeys, forceEmptyReset },
@@ -1136,8 +1678,9 @@ const server = http.createServer(async (req, res) => {
 
     if (path.startsWith('/api/r2')) {
       if (path === '/api/r2/capability-store/publish' && req.method === 'POST') {
-        const admin = await requireAdmin(req, res);
-        if (!admin) return;
+        const staff = await requirePermission(req, res, PERMISSIONS.PRESETS_PUBLISH);
+        if (!staff) return;
+        const admin = staff.user;
         if (!isR2Configured()) {
           json(res, 503, { error: 'R2 未配置，无法发布能力预设' });
           return;

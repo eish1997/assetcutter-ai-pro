@@ -15,14 +15,20 @@ export type AuthUser = {
   workspaceQuotaBytes?: number;
   /** 当前已用字节（登录/me 与管理员列表会带上） */
   workspaceUsedBytes?: number;
+  staffRoleId?: string | null;
+  staffRoleSlug?: string | null;
+  staffRoleDisplayName?: string | null;
 };
 
 type AuthResponse = { user: AuthUser };
 
-export async function registerByEmail(username: string, email: string, password: string) {
+export async function registerByEmail(username: string, email: string, password: string, opts?: { staffInvite?: string }) {
+  const body: Record<string, string> = { username, email, password };
+  const invite = String(opts?.staffInvite || '').trim();
+  if (invite) body.staffInvite = invite;
   return requestJson<AuthResponse>(apiUrl('/api/auth/register'), {
     method: 'POST',
-    body: JSON.stringify({ username, email, password }),
+    body: JSON.stringify(body),
   });
 }
 

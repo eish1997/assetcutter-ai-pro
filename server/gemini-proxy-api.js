@@ -30,6 +30,7 @@ import {
   fairnessSyncLeave,
   getDiskOverrideInt,
 } from './gemini-proxy-fairness.js';
+import { initGeminiFairnessConfigLoader, resolveGeminiFairnessConfigSource } from './gemini-fairness-config-store.js';
 
 /** 监听端口：优先专用变量，避免与 .env.local 里给 ai3d 等用的通用 `PORT` 冲突 */
 const PORT =
@@ -1100,11 +1101,17 @@ const server = http.createServer(async (req, res) => {
   });
 });
 
-server.listen(PORT, BIND_HOST, () => {
+server.listen(PORT, BIND_HOST, async () => {
+  try {
+    await initGeminiFairnessConfigLoader();
+  } catch (e) {
+    console.warn('[gemini-proxy-api] fairness config loader init failed:', e instanceof Error ? e.message : String(e));
+  }
   console.log(`[gemini-proxy-api] http://${BIND_HOST}:${PORT}`);
   console.log(
     `[gemini-proxy-api] GEMINI_FAIRNESS_ENABLED=${isFairnessEnabled() ? 'true' : 'false'} (see docs/Gemini代理-公平排队与每用户限流.md)`
   );
+  console.log(`[gemini-proxy-api] GEMINI_FAIRNESS_CONFIG_SOURCE=${resolveGeminiFairnessConfigSource()}`);
   const vp = vertexProjectId();
   const vOk = isVertexConfigured();
   console.log(`[gemini-proxy-api] Vertex project: ${vp || '(unset)'}  configured=${vOk}  location=${vOk ? vertexLocation() : '—'}`);

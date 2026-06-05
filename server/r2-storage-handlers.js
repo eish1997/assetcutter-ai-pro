@@ -188,6 +188,16 @@ async function getJsonObjectOrDefault(s3, objectKey, fallbackValue) {
   }
 }
 
+/** 管理端读取能力商店 catalog（R2 JSON 数组） */
+export async function readCapabilityStoreCatalog() {
+  if (!isR2Configured()) return [];
+  const s3 = getS3();
+  if (!s3) return [];
+  const catalogObjectKey = R2_CAPABILITY_STORE_CATALOG_KEY();
+  const existing = await getJsonObjectOrDefault(s3, catalogObjectKey, []);
+  return Array.isArray(existing) ? existing : [];
+}
+
 function parsePositiveInt(value, fallback) {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) return fallback;

@@ -9,6 +9,9 @@ import {
   type CompanionArtifactRecord,
 } from '../../services/companionArtifactsClient';
 import { HttpRequestError } from '../../services/httpClient';
+import { PERMISSIONS } from '../../services/adminPermissions';
+import { blockIfRolePreview } from '../../services/adminRolePreview';
+import { useAdminStaff } from './AdminStaffContext';
 
 async function sha256Hex(buf: ArrayBuffer): Promise<string> {
   const hash = await crypto.subtle.digest('SHA-256', buf);
@@ -21,6 +24,9 @@ async function sha512Hex(buf: ArrayBuffer): Promise<string> {
 }
 
 const AdminCompanionArtifactsPanel: React.FC = () => {
+  const { can, isRolePreview } = useAdminStaff();
+  const canWrite = can(PERMISSIONS.COMPANION_WRITE);
+  const canDelete = can(PERMISSIONS.COMPANION_DELETE);
   const [rows, setRows] = useState<CompanionArtifactRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -33,6 +39,12 @@ const AdminCompanionArtifactsPanel: React.FC = () => {
   const [label, setLabel] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [blockMapFile, setBlockMapFile] = useState<File | null>(null);
+  const [listChannel, setListChannel] = useState<'all' | 'stable' | 'beta'>('all');
+
+  const filteredRows = React.useMemo(() => {
+    if (listChannel === 'all') return rows;
+    return rows.filter((r) => (r.channel || 'stable') === listChannel);
+  }, [rows, listChannel]);
 
   const PLATFORM_OPTIONS = [
     { value: 'win32', label: 'win32（Windows）' },
@@ -69,6 +81,7 @@ const AdminCompanionArtifactsPanel: React.FC = () => {
   }, [reload]);
 
   const onUpload = async () => {
+    if (blockIfRolePreview(isRolePreview)) return;
     if (!file) {
       setErr('请选择文件');
       return;
@@ -143,6 +156,7 @@ const AdminCompanionArtifactsPanel: React.FC = () => {
   };
 
   const onDelete = async (id: string) => {
+    if (blockIfRolePreview(isRolePreview)) return;
     if (!window.confirm('确定删除该条发行记录？将同时尝试删除 R2 上对应对象；若 R2 删除失败则整条操作回滚。')) return;
     setBusy(true);
     setErr(null);
@@ -171,6 +185,7 @@ const AdminCompanionArtifactsPanel: React.FC = () => {
         <div className="rounded-xl border border-red-500/40 bg-red-950/30 px-3 py-2 text-[11px] text-red-200">{err}</div>
       ) : null}
 
+      {canWrite ? (
       <div className="rounded-xl border border-[#2e2e32] bg-[#121214] p-4 space-y-3">
         <h3 className="text-[10px] font-black uppercase tracking-[0.15em] text-blue-300">登记新版本</h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -283,10 +298,31 @@ const AdminCompanionArtifactsPanel: React.FC = () => {
           <code className="text-gray-500">.blockmap</code> 以启用安装包差分更新（体积更小）。
         </p>
       </div>
+      ) : (
+        <p className="text-[11px] text-gray-500">当前角色仅可查看已登记版本。</p>
+      )}
 
       <div className="rounded-xl border border-[#2e2e32] overflow-hidden">
-        <div className="px-4 py-2 border-b border-[#2e2e32] bg-[#16161a] flex justify-between items-center">
-          <span className="text-[10px] font-black uppercase tracking-[0.15em] text-gray-400">已登记</span>
+        <div className="px-4 py-2 border-b border-[#2e2e32] bg-[#16161a] flex flex-wrap justify-between items-center gap-2">
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-black uppercase tracking-[0.15em] text-gray-400">已登记</span>
+            <div className="flex gap-1">
+              {(['all', 'stable', 'beta'] as const).map((ch) => (
+                <button
+                  key={ch}
+                  type="button"
+                  onClick={() => setListChannel(ch)}
+                  className={`px-2 py-0.5 rounded text-[10px] ${
+                    listChannel === ch
+                      ? 'bg-[#2e2e32] text-gray-100'
+                      : 'text-gray-500 hover:text-gray-300'
+                  }`}
+                >
+                  {ch === 'all' ? '全部' : ch}
+                </button>
+              ))}
+            </div>
+          </div>
           <button
             type="button"
             onClick={() => void reload()}
@@ -297,7 +333,7 @@ const AdminCompanionArtifactsPanel: React.FC = () => {
         </div>
         {loading ? (
           <div className="p-6 text-[11px] text-gray-500">加载中…</div>
-        ) : rows.length === 0 ? (
+        ) : filteredRows.length === 0 ? (
           <div className="p-6 text-[11px] text-gray-500">暂无记录。需已配置 R2。</div>
         ) : (
           <table className="w-full text-left text-[11px]">
@@ -306,22 +342,25 @@ const AdminCompanionArtifactsPanel: React.FC = () => {
                 <th className="px-3 py-2">版本</th>
                 <th className="px-3 py-2">类型</th>
                 <th className="px-3 py-2">平台</th>
+                <th className="px-3 py-2">渠道</th>
                 <th className="px-3 py-2">文件</th>
                 <th className="px-3 py-2">时间</th>
                 <th className="px-3 py-2 w-20" />
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => (
+              {filteredRows.map((r) => (
                 <tr key={r.id} className="border-b border-[#2e2e32]/80">
                   <td className="px-3 py-2 text-gray-200 font-mono">{r.semver}</td>
                   <td className="px-3 py-2 text-gray-400">{r.kind}</td>
                   <td className="px-3 py-2 text-gray-400">{r.platform}</td>
+                  <td className="px-3 py-2 text-gray-400">{r.channel || 'stable'}</td>
                   <td className="px-3 py-2 text-gray-300 truncate max-w-[200px]" title={r.fileName}>
                     {r.fileName}
                   </td>
                   <td className="px-3 py-2 text-gray-500 whitespace-nowrap">{r.publishedAt.slice(0, 19)}</td>
                   <td className="px-3 py-2">
+                    {canDelete ? (
                     <button
                       type="button"
                       disabled={busy}
@@ -330,6 +369,9 @@ const AdminCompanionArtifactsPanel: React.FC = () => {
                     >
                       删除
                     </button>
+                    ) : (
+                      <span className="text-gray-600">—</span>
+                    )}
                   </td>
                 </tr>
               ))}

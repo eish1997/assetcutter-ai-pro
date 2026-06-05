@@ -68,7 +68,7 @@ import {
   isVgpBlockingDiscardForDisplayKey,
   pruneVgpAfterDiscard,
 } from '../services/vgp/vgpStore';
-import { appendWorkflowAuditEvent, appendWorkflowRunTaskFailureAudit, hydrateWorkflowAuditRingSessionFromIdbOrLocalIfEmpty, WORKFLOW_AUDIT_CODES } from '../services/workflowAuditEvents';
+import { appendWorkflowAuditEvent, appendWorkflowRunTaskFailureAudit, appendWorkflowRunTaskSuccessAudit, hydrateWorkflowAuditRingSessionFromIdbOrLocalIfEmpty, WORKFLOW_AUDIT_CODES } from '../services/workflowAuditEvents';
 import { setWorkflowMirrorPreferenceScope } from '../services/workflowMirrorPreferenceScope';
 import { appendWorkflowOverlayCloseSnapshot, supersedeWorkflowOverlaySnapshotsForAsset, WORKFLOW_OVERLAY_PERIODIC_SNAPSHOT_MS, hydrateWorkflowOverlayRingSessionFromIdbOrLocalIfEmpty } from '../services/workflowOverlaySnapshots';
 import type { WorkflowOverlaySnapshotBucket } from '../services/workflowOverlaySnapshots';
@@ -2868,6 +2868,12 @@ ${lineSvg}
         task: WorkflowPendingTask,
         batchGroup?: { key: string; expected: number }
       ) => {
+        const markTaskCompleted = (t: WorkflowPendingTask, opts?: { auditSuccess?: boolean }) => {
+          if (opts?.auditSuccess !== false && !cancelledTaskIdsRef.current.has(t.id)) {
+            appendWorkflowRunTaskSuccessAudit({ task: t });
+          }
+          setCompletedTaskIds((prev) => new Set(prev).add(t.id));
+        };
         if (cancelledTaskIdsRef.current.has(task.id)) {
           return;
         }
@@ -3002,11 +3008,7 @@ ${lineSvg}
               });
 
               onLog?.('info', `${logBatch} ${taskLabel} 完成（${cropped.length} 张入组）`);
-              setCompletedTaskIds((prev) => {
-                const next = new Set(prev);
-                next.add(task.id);
-                return next;
-              });
+              markTaskCompleted(task);
             }
           } else {
             onLog?.('info', `${logBatch} ${taskLabel} 执行中…`);
@@ -3094,11 +3096,7 @@ ${lineSvg}
                   })
                 );
               });
-              setCompletedTaskIds((prev) => {
-                const next = new Set(prev);
-                next.add(task.id);
-                return next;
-              });
+              markTaskCompleted(task);
             } else {
               const delegatedGenerate3D =
                 !result &&
@@ -3184,11 +3182,7 @@ ${lineSvg}
                   scheduleCompanionPersistResult(task.assetId, lastKey, result);
                 }
               }
-              setCompletedTaskIds((prev) => {
-                const next = new Set(prev);
-                next.add(task.id);
-                return next;
-              });
+              markTaskCompleted(task);
             }
           }
         } catch (e) {

@@ -2,11 +2,15 @@
  * Gemini 代理公平排队 / 每用户限流（内存态，单副本有效）。
  * 规格：docs/Gemini代理-公平排队与每用户限流.md
  *
- * 可选：`server/data/gemini-fairness-config.json`（或 `GEMINI_FAIRNESS_CONFIG_PATH`）覆盖数值型环境变量，约每 3s 重读。
+ * 持久化：Postgres（R3，推荐）或磁盘 JSON；约每 3s 重读。见 `gemini-fairness-config-store.js`。
  */
 import crypto from 'crypto';
-import fs from 'fs';
-import path from 'path';
+import {
+  geminiFairnessDiskPath,
+  getGeminiFairnessConfigCacheSnapshot,
+  resolveGeminiFairnessConfigSource,
+  touchGeminiFairnessConfigCacheIfStale,
+} from './gemini-fairness-config-store.js';
 
 const FALSEY = new Set(['', '0', 'false', 'no', 'off']);
 
@@ -17,39 +21,20 @@ function envBool(name, defaultTrue = false) {
   return v === 'true' || v === '1' || v === 'yes' || v === 'on';
 }
 
-const DISK_CONFIG_PATH = String(process.env.GEMINI_FAIRNESS_CONFIG_PATH || '').trim()
-  ? path.resolve(String(process.env.GEMINI_FAIRNESS_CONFIG_PATH || '').trim())
-  : path.resolve(process.cwd(), 'server/data/gemini-fairness-config.json');
-
-let diskCache = {};
-let diskLoadAt = 0;
-
-function loadDiskConfigThrottled() {
-  const now = Date.now();
-  if (now - diskLoadAt < 3000) return;
-  diskLoadAt = now;
-  try {
-    if (!fs.existsSync(DISK_CONFIG_PATH)) {
-      diskCache = {};
-      return;
-    }
-    const raw = fs.readFileSync(DISK_CONFIG_PATH, 'utf8');
-    const j = JSON.parse(raw);
-    diskCache = typeof j === 'object' && j && !Array.isArray(j) ? j : {};
-  } catch {
-    diskCache = {};
-  }
+function persistedConfigSnapshot() {
+  touchGeminiFairnessConfigCacheIfStale();
+  if (resolveGeminiFairnessConfigSource() === 'env_only') return {};
+  return getGeminiFairnessConfigCacheSnapshot();
 }
 
 /**
- * 数值：磁盘 JSON 优先，其次 process.env[name]，最后 fallback，并 clamp。
- * 供 `gemini-proxy-api` 读取 `GEMINI_ASYNC_PROXY_MAX_CONCURRENT` 等同路径。
+ * 数值：持久化配置优先，其次 process.env[name]，最后 fallback，并 clamp。
  */
 export function getDiskOverrideInt(name, fallback, min, max) {
-  loadDiskConfigThrottled();
-  const fromDisk = diskCache[name];
+  const cache = persistedConfigSnapshot();
+  const fromPersisted = cache[name];
   const fromEnv = process.env[name];
-  const raw = fromDisk != null && fromDisk !== '' ? fromDisk : fromEnv;
+  const raw = fromPersisted != null && fromPersisted !== '' ? fromPersisted : fromEnv;
   const n = Number(raw);
   const base = Number.isFinite(n) ? Math.floor(n) : fallback;
   return Math.min(max, Math.max(min, base));
@@ -437,19 +422,23 @@ export function fairnessOnJobEvicted(jobId) {
 }
 
 export function fairnessHealthSnapshot() {
+  const configSource = resolveGeminiFairnessConfigSource();
   if (!isFairnessEnabled()) {
-    return { enabled: false, diskConfigPath: DISK_CONFIG_PATH };
+    return { enabled: false, configSource, diskConfigPath: geminiFairnessDiskPath() };
   }
   let globalQueuedApprox = 0;
   for (const s of keyState.values()) globalQueuedApprox += s.queue.length + s.running;
-  loadDiskConfigThrottled();
+  touchGeminiFairnessConfigCacheIfStale();
+  const cache = getGeminiFairnessConfigCacheSnapshot();
+  const persistedKeys = Object.keys(cache).filter((k) => !k.startsWith('_'));
   return {
     enabled: true,
     globalQueuedApprox,
     keysWithQueued: [...keyState.entries()].filter(([, s]) => s.queue.length > 0).length,
     ringKeys: ringKeys.length,
-    diskConfigPath: DISK_CONFIG_PATH,
-    diskKeysLoaded: Object.keys(diskCache).length,
+    configSource,
+    diskConfigPath: configSource === 'disk' ? geminiFairnessDiskPath() : null,
+    persistedKeysLoaded: persistedKeys.length,
   };
 }
 

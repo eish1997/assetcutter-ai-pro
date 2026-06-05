@@ -1,9 +1,19 @@
 import React from 'react';
 import { useAuth } from './AuthContext';
 
+function readStaffInviteFromUrl(): string {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    return String(params.get('staffInvite') || '').trim();
+  } catch {
+    return '';
+  }
+}
+
 const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, loading, login, register } = useAuth();
-  const [mode, setMode] = React.useState<'login' | 'register'>('login');
+  const initialInvite = React.useMemo(() => readStaffInviteFromUrl(), []);
+  const [mode, setMode] = React.useState<'login' | 'register'>(initialInvite ? 'register' : 'login');
   const [username, setUsername] = React.useState('');
   const [identifier, setIdentifier] = React.useState('');
   const [email, setEmail] = React.useState('');
@@ -17,7 +27,7 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     setSubmitting(true);
     try {
       if (mode === 'login') await login(identifier, password);
-      else await register(username, email, password);
+      else await register(username, email, password, initialInvite ? { staffInvite: initialInvite } : undefined);
     } catch (err) {
       setError(err instanceof Error ? err.message : '操作失败');
     } finally {
@@ -28,13 +38,23 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   if (loading) {
     return <div className="min-h-screen bg-[#050505] flex items-center justify-center text-[11px] text-gray-400">鉴权初始化中…</div>;
   }
-  if (user) return <>{children}</>;
+  if (user) {
+    if (initialInvite && typeof window !== 'undefined' && window.location.search.includes('staffInvite')) {
+      window.history.replaceState({}, '', window.location.pathname || '/');
+    }
+    return <>{children}</>;
+  }
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-[#050505] p-4">
       <div className="w-full max-w-sm rounded-2xl border border-[#2e2e32] bg-[#16161a] p-6 shadow-xl">
         <h1 className="text-center text-[14px] font-black uppercase text-gray-300 mb-1">用户系统</h1>
-        <p className="text-center text-[11px] text-gray-500 mb-4">{mode === 'login' ? '用户名/邮箱登录' : '用户名+邮箱注册'}</p>
+        <p className="text-center text-[11px] text-gray-500 mb-4">
+          {mode === 'login' ? '用户名/邮箱登录' : initialInvite ? '后台成员邀请注册' : '用户名+邮箱注册'}
+        </p>
+        {initialInvite && mode === 'register' ? (
+          <p className="mb-3 text-[10px] text-center text-blue-300/90">已识别成员邀请链接，注册后将自动分配后台角色</p>
+        ) : null}
         <form onSubmit={submit} className="space-y-3">
           {mode === 'login' ? (
             <input
@@ -86,13 +106,18 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
             {submitting ? '提交中…' : mode === 'login' ? '登录' : '注册'}
           </button>
         </form>
-        <button type="button" onClick={() => setMode((m) => (m === 'login' ? 'register' : 'login'))} className="mt-3 w-full text-[11px] text-gray-400 hover:text-gray-200 cursor-pointer rounded-lg py-2 outline-none focus-visible:ring-2 focus-visible:ring-[#3b82f6] focus-visible:ring-offset-2 focus-visible:ring-offset-[#050505] transition-colors duration-200">
-          {mode === 'login' ? '没有账号？去注册' : '已有账号？去登录'}
-        </button>
+        {!initialInvite ? (
+          <button type="button" onClick={() => setMode((m) => (m === 'login' ? 'register' : 'login'))} className="mt-3 w-full text-[11px] text-gray-400 hover:text-gray-200 cursor-pointer rounded-lg py-2 outline-none focus-visible:ring-2 focus-visible:ring-[#3b82f6] focus-visible:ring-offset-2 focus-visible:ring-offset-[#050505] transition-colors duration-200">
+            {mode === 'login' ? '没有账号？去注册' : '已有账号？去登录'}
+          </button>
+        ) : mode === 'register' ? (
+          <button type="button" onClick={() => setMode('login')} className="mt-3 w-full text-[11px] text-gray-400 hover:text-gray-200 cursor-pointer rounded-lg py-2">
+            已有账号？去登录
+          </button>
+        ) : null}
       </div>
     </div>
   );
 };
 
 export default AuthGate;
-

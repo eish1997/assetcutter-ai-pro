@@ -1,4 +1,5 @@
 import { upsertAdminUser } from '../server/auth-store.js';
+import { forceSeedAdminSuperRole } from '../server/admin-roles-store.js';
 
 const email = String(process.env.AUTH_ADMIN_EMAIL || '').trim().toLowerCase();
 const username = String(process.env.AUTH_ADMIN_USERNAME || '').trim().toLowerCase();
@@ -12,7 +13,8 @@ if (!email || !password) {
 async function main() {
   if (username) process.env.AUTH_ADMIN_USERNAME = username;
   const user = await upsertAdminUser({ email, password });
-  console.log(`[seed-admin] ok: ${user.username}/${user.email} (${user.role})`);
+  await forceSeedAdminSuperRole(user.id);
+  console.log(`[seed-admin] ok: ${user.username}/${user.email} (super)`);
 }
 
 main().catch((error) => {

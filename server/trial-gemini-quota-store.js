@@ -51,3 +51,19 @@ export async function consumeTrialGeminiSlotForUser(userId, dailyLimit) {
   await saveRaw(data);
   return { ok: true, used: next, limit, remaining: limit - next };
 }
+
+/**
+ * @param {string} userId
+ * @param {number} dailyLimit
+ */
+export async function getTrialGeminiUsageForUser(userId, dailyLimit) {
+  const uid = String(userId || '').trim();
+  const limit = Math.max(1, Math.min(500, Math.floor(Number(dailyLimit) || 60)));
+  const day = utcDay();
+  if (!uid) return { day, used: 0, limit, remaining: limit };
+  const data = await loadRaw();
+  const users = data.users || {};
+  const u = typeof users[uid] === 'object' && users[uid] ? users[uid] : {};
+  const used = typeof u[day] === 'number' && Number.isFinite(u[day]) ? Math.max(0, Math.floor(u[day])) : 0;
+  return { day, used, limit, remaining: Math.max(0, limit - used) };
+}

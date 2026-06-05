@@ -2,7 +2,9 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import pg from 'pg';
-import { DEFAULT_WORKSPACE_QUOTA_BYTES } from './workspace-storage-usage.js';
+import { DEFAULT_WORKSPACE_QUOTA_BYTES, getWorkspaceUsedBytes } from './workspace-storage-usage.js';
+import { auditLogMatchesCategory, auditCategorySql, normalizeAuditCategory, parseExcludeActions } from './admin-audit-category.js';
+import { decodeAuditCursor, encodeAuditCursor, rowBeforeCursor } from './admin-audit-cursor.js';
 
 const DB_DIR = path.resolve(process.cwd(), 'server', 'data');
 const DB_FILE = path.join(DB_DIR, 'auth-db.json');
@@ -176,6 +178,7 @@ function publicUser(user) {
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
     workspaceQuotaBytes: getWorkspaceQuotaBytesForUser(user),
+    staffRoleId: user.staffRoleId || null,
   };
 }
 
@@ -206,6 +209,7 @@ function mapUserRow(row) {
     row.workspace_quota_bytes != null && row.workspace_quota_bytes !== ''
       ? Number(row.workspace_quota_bytes)
       : undefined;
+  const staffRaw = row.staff_role_id;
   return {
     id: row.id,
     username: row.username,
@@ -217,6 +221,7 @@ function mapUserRow(row) {
     updatedAt: new Date(row.updated_at).toISOString(),
     workspaceQuotaBytes:
       typeof wqb === 'number' && Number.isFinite(wqb) && wqb >= 1_000_000 ? Math.floor(wqb) : undefined,
+    staffRoleId: staffRaw != null && staffRaw !== '' ? String(staffRaw) : null,
   };
 }
 
@@ -326,6 +331,49 @@ export async function findUserById(id) {
   return db.users.find((u) => u.id === id) || null;
 }
 
+export async function listUsersForAdmin(options = {}) {
+  const pageRaw = Number(options.page);
+  const pageSizeRaw = Number(options.pageSize);
+  const page = Number.isFinite(pageRaw) && pageRaw >= 1 ? Math.floor(pageRaw) : 1;
+  const maxPageSize = options.forExport ? 5000 : 100;
+  const defaultPageSize = options.forExport ? 5000 : 20;
+  const pageSize = Number.isFinite(pageSizeRaw) && pageSizeRaw >= 1
+    ? Math.min(maxPageSize, Math.floor(pageSizeRaw))
+    : defaultPageSize;
+  const q = String(options.q || '').trim().toLowerCase();
+  const status = options.status ? String(options.status) : '';
+  const staffRoleId = options.staffRoleId ? String(options.staffRoleId) : '';
+  let quotaWarnPct = Number(options.quotaWarnPct || 0);
+  if (Number.isFinite(quotaWarnPct) && quotaWarnPct > 1) quotaWarnPct /= 100;
+
+  let rows = await listUsers();
+  if (q) {
+    rows = rows.filter(
+      (u) => u.username.toLowerCase().includes(q) || u.email.toLowerCase().includes(q)
+    );
+  }
+  if (status === 'active' || status === 'disabled') {
+    rows = rows.filter((u) => u.status === status);
+  }
+  if (staffRoleId === '__none__') {
+    rows = rows.filter((u) => !u.staffRoleId);
+  } else if (staffRoleId) {
+    rows = rows.filter((u) => u.staffRoleId === staffRoleId);
+  }
+  if (Number.isFinite(quotaWarnPct) && quotaWarnPct > 0) {
+    rows = rows.filter((u) => {
+      const used = getWorkspaceUsedBytes(u.id);
+      const quota = u.workspaceQuotaBytes || DEFAULT_WORKSPACE_QUOTA_BYTES;
+      return quota > 0 && used / quota >= quotaWarnPct;
+    });
+  }
+
+  const total = rows.length;
+  const start = (page - 1) * pageSize;
+  const items = rows.slice(start, start + pageSize);
+  return { users: items, total, page, pageSize };
+}
+
 export async function listUsers() {
   if (USE_POSTGRES) {
     await ensurePostgres();
@@ -341,50 +389,104 @@ export async function listUsers() {
 }
 
 export async function updateUserById(id, patch) {
+  const { assertCanChangeStaffAssignment, getRoleIdBySlug, getRoleById } = await import('./admin-roles-store.js');
+
+  const hasStaffPatch = patch?.staffRoleId !== undefined;
+  const hasLegacyRolePatch = patch?.role != null;
+  const hasStatusPatch = patch?.status != null;
+  const hasQuotaPatch = patch?.workspaceQuotaBytes != null;
+
+  let nextStaffRoleId;
+  let nextRole;
+  let nextStatus;
+
   if (USE_POSTGRES) {
     await ensurePostgres();
     const p = getPool();
-    const exists = await p.query('SELECT id, role, status FROM users WHERE id = $1 LIMIT 1', [id]);
+    const exists = await p.query('SELECT id, role, status, staff_role_id FROM users WHERE id = $1 LIMIT 1', [id]);
     if (!exists.rows[0]) return null;
-    const nextRole = patch?.role != null ? safeRole(patch.role) : exists.rows[0].role;
-    const nextStatus = patch?.status != null ? safeStatus(patch.status) : exists.rows[0].status;
-    const isDemotingLastAdmin =
-      exists.rows[0].role === 'admin' &&
-      exists.rows[0].status === 'active' &&
-      (nextRole !== 'admin' || nextStatus !== 'active');
-    if (isDemotingLastAdmin) {
-      const cnt = await p.query(`SELECT COUNT(*)::int AS c FROM users WHERE role = 'admin' AND status = 'active'`);
-      const activeAdminCount = Number(cnt.rows[0]?.c || 0);
-      if (activeAdminCount <= 1) {
-        throw new Error('不能降级或禁用最后一个管理员');
+    const cur = exists.rows[0];
+    nextRole = cur.role;
+    nextStatus = cur.status;
+    nextStaffRoleId = cur.staff_role_id || null;
+
+    if (hasStaffPatch) {
+      nextStaffRoleId = patch.staffRoleId === null || patch.staffRoleId === '' ? null : String(patch.staffRoleId);
+      if (nextStaffRoleId) {
+        const roleRow = await getRoleById(nextStaffRoleId);
+        if (!roleRow) throw new Error('无效的后台角色');
+        nextRole = 'admin';
+      } else {
+        nextRole = 'user';
+      }
+    } else if (hasLegacyRolePatch) {
+      nextRole = safeRole(patch.role);
+      if (nextRole === 'user') {
+        nextStaffRoleId = null;
+      } else {
+        nextStaffRoleId = await getRoleIdBySlug('admin');
+        if (!nextStaffRoleId) throw new Error('后台角色未初始化');
       }
     }
-    await p.query('UPDATE users SET role = $2, status = $3, updated_at = NOW() WHERE id = $1', [id, nextRole, nextStatus]);
-    if (patch?.workspaceQuotaBytes != null) {
+
+    if (hasStatusPatch) nextStatus = safeStatus(patch.status);
+
+    await assertCanChangeStaffAssignment({
+      targetUserId: id,
+      nextStaffRoleId,
+      nextStatus: hasStatusPatch ? nextStatus : undefined,
+    });
+
+    await p.query(
+      'UPDATE users SET role = $2, status = $3, staff_role_id = $4, updated_at = NOW() WHERE id = $1',
+      [id, nextRole, nextStatus, nextStaffRoleId]
+    );
+    if (hasQuotaPatch) {
       const n = validateWorkspaceQuotaBytesInput(patch.workspaceQuotaBytes);
       await p.query('UPDATE users SET workspace_quota_bytes = $2, updated_at = NOW() WHERE id = $1', [id, n]);
     }
     const out = await p.query('SELECT * FROM users WHERE id = $1 LIMIT 1', [id]);
     return out.rows[0] ? publicUser(mapUserRow(out.rows[0])) : null;
   }
+
   const db = readDb();
   const target = db.users.find((u) => u.id === id);
   if (!target) return null;
-  const nextRole = patch?.role != null ? safeRole(patch.role) : target.role;
-  const nextStatus = patch?.status != null ? safeStatus(patch.status) : target.status;
-  const isDemotingLastAdmin =
-    target.role === 'admin' &&
-    target.status === 'active' &&
-    (nextRole !== 'admin' || nextStatus !== 'active');
-  if (isDemotingLastAdmin) {
-    const activeAdminCount = db.users.filter((u) => u.role === 'admin' && u.status === 'active').length;
-    if (activeAdminCount <= 1) {
-      throw new Error('不能降级或禁用最后一个管理员');
+  nextRole = target.role;
+  nextStatus = target.status;
+  nextStaffRoleId = target.staffRoleId || null;
+
+  if (hasStaffPatch) {
+    nextStaffRoleId = patch.staffRoleId === null || patch.staffRoleId === '' ? null : String(patch.staffRoleId);
+    if (nextStaffRoleId) {
+      const roleRow = await getRoleById(nextStaffRoleId);
+      if (!roleRow) throw new Error('无效的后台角色');
+      nextRole = 'admin';
+    } else {
+      nextRole = 'user';
+    }
+  } else if (hasLegacyRolePatch) {
+    nextRole = safeRole(patch.role);
+    if (nextRole === 'user') {
+      nextStaffRoleId = null;
+    } else {
+      nextStaffRoleId = await getRoleIdBySlug('admin');
+      if (!nextStaffRoleId) throw new Error('后台角色未初始化');
     }
   }
-  if (patch?.role != null) target.role = safeRole(patch.role);
-  if (patch?.status != null) target.status = safeStatus(patch.status);
-  if (patch?.workspaceQuotaBytes != null) {
+
+  if (hasStatusPatch) nextStatus = safeStatus(patch.status);
+
+  await assertCanChangeStaffAssignment({
+    targetUserId: id,
+    nextStaffRoleId,
+    nextStatus: hasStatusPatch ? nextStatus : undefined,
+  });
+
+  target.role = nextRole;
+  target.status = nextStatus;
+  target.staffRoleId = nextStaffRoleId;
+  if (hasQuotaPatch) {
     target.workspaceQuotaBytes = validateWorkspaceQuotaBytesInput(patch.workspaceQuotaBytes);
   }
   target.updatedAt = nowIso();
@@ -413,7 +515,11 @@ export async function upsertAdminUser({ email, password }) {
         [id, adminUsername, createPasswordHash(password)]
       );
       const out = await p.query('SELECT * FROM users WHERE id = $1 LIMIT 1', [id]);
-      return publicUser(mapUserRow(out.rows[0]));
+      const user = publicUser(mapUserRow(out.rows[0]));
+      const { assignSeedAdminSuperRole } = await import('./admin-roles-store.js');
+      await assignSeedAdminSuperRole(user.id);
+      const refreshed = await p.query('SELECT * FROM users WHERE id = $1 LIMIT 1', [id]);
+      return publicUser(mapUserRow(refreshed.rows[0]));
     }
     const user = {
       id: crypto.randomUUID(),
@@ -430,7 +536,10 @@ export async function upsertAdminUser({ email, password }) {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
       [user.id, user.username, user.email, user.passwordHash, user.role, user.status, user.createdAt, user.updatedAt]
     );
-    return publicUser(user);
+    const { assignSeedAdminSuperRole } = await import('./admin-roles-store.js');
+    await assignSeedAdminSuperRole(user.id);
+    const inserted = await p.query('SELECT * FROM users WHERE id = $1 LIMIT 1', [user.id]);
+    return publicUser(mapUserRow(inserted.rows[0]));
   }
 
   const db = readDb();
@@ -444,6 +553,8 @@ export async function upsertAdminUser({ email, password }) {
     existed.passwordHash = createPasswordHash(password);
     existed.updatedAt = nowIso();
     writeDb(db);
+    const { assignSeedAdminSuperRole } = await import('./admin-roles-store.js');
+    await assignSeedAdminSuperRole(existed.id);
     return publicUser(existed);
   }
   const user = {
@@ -458,7 +569,10 @@ export async function upsertAdminUser({ email, password }) {
   };
   db.users.push(user);
   writeDb(db);
-  return publicUser(user);
+  const { assignSeedAdminSuperRole } = await import('./admin-roles-store.js');
+  await assignSeedAdminSuperRole(user.id);
+  const saved = db.users.find((u) => u.id === user.id);
+  return publicUser(saved || user);
 }
 
 function buildSession(userId, token, maxAgeMs, userAgent, ip) {
@@ -560,7 +674,7 @@ export async function getSessionWithUser(token) {
     const tokenHash = hashToken(token);
     const res = await p.query(
       `SELECT s.*, u.id AS u_id, u.username, u.email, u.role, u.status, u.created_at AS u_created_at, u.updated_at AS u_updated_at,
-              u.workspace_quota_bytes AS u_workspace_quota_bytes
+              u.workspace_quota_bytes AS u_workspace_quota_bytes, u.staff_role_id AS u_staff_role_id
        FROM sessions s
        JOIN users u ON u.id = s.user_id
        WHERE s.token_hash = $1
@@ -582,6 +696,7 @@ export async function getSessionWithUser(token) {
       updatedAt: new Date(row.u_updated_at).toISOString(),
       workspaceQuotaBytes:
         row.u_workspace_quota_bytes != null ? Number(row.u_workspace_quota_bytes) : undefined,
+      staffRoleId: row.u_staff_role_id != null && row.u_staff_role_id !== '' ? String(row.u_staff_role_id) : null,
     };
     if (rawUser.status !== 'active') return null;
     return {
@@ -634,43 +749,211 @@ export async function createAuditLog({ actorUserId = null, actorIdentifier = '',
   writeDb(db);
 }
 
-export async function listAuditLogs(limit = 200) {
-  const max = Math.max(1, Math.min(1000, Number(limit || 200)));
+export async function countAuditLogsSince({ action, actionPrefix, sinceIso }) {
+  const act = String(action || '').trim();
+  const prefix = String(actionPrefix || '').trim();
+  const sinceMs = sinceIso ? new Date(sinceIso).getTime() : NaN;
+  if (!Number.isFinite(sinceMs) || (!act && !prefix)) return 0;
+  const since = new Date(sinceMs).toISOString();
+  if (USE_POSTGRES) {
+    await ensurePostgres();
+    if (prefix) {
+      const res = await getPool().query(
+        `SELECT COUNT(*)::int AS c FROM audit_logs WHERE action LIKE $1 AND created_at >= $2`,
+        [`${prefix}%`, since]
+      );
+      return Number(res.rows[0]?.c || 0);
+    }
+    const res = await getPool().query(
+      `SELECT COUNT(*)::int AS c FROM audit_logs WHERE action = $1 AND created_at >= $2`,
+      [act, since]
+    );
+    return Number(res.rows[0]?.c || 0);
+  }
+  const db = readDb();
+  return (db.auditLogs || []).filter((r) => {
+    if (new Date(r.createdAt).getTime() < sinceMs) return false;
+    if (prefix) return String(r.action || '').startsWith(prefix);
+    return r.action === act;
+  }).length;
+}
+
+export async function listAuditLogs(arg = 200) {
+  const opts = typeof arg === 'number' ? { limit: arg } : arg || {};
+  const max = Math.max(1, Math.min(1000, Number(opts.limit || 200)));
+  const offset = Math.max(0, Number(opts.offset || 0));
+  const action = opts.action ? String(opts.action).trim() : '';
+  const actor = opts.actor ? String(opts.actor).trim().toLowerCase() : '';
+  const targetUserId = opts.targetUserId ? String(opts.targetUserId).trim() : '';
+  const category = normalizeAuditCategory(opts.category);
+  const excludeActions = parseExcludeActions(opts.excludeActions);
+  const cursorRaw = opts.cursor ? String(opts.cursor).trim() : '';
+  const cursor = cursorRaw ? decodeAuditCursor(cursorRaw) : null;
+  const useCursor = Boolean(cursor);
+  const fromMs = opts.from ? new Date(opts.from).getTime() : NaN;
+  const toMs = opts.to ? new Date(opts.to).getTime() : NaN;
+
+  function matchRow(r) {
+    if (action && r.action !== action) return false;
+    if (excludeActions.length && excludeActions.includes(r.action)) return false;
+    if (!auditLogMatchesCategory(r.action, category)) return false;
+    if (actor && !String(r.actorIdentifier || '').toLowerCase().includes(actor)) return false;
+    if (targetUserId && r.targetUserId !== targetUserId) return false;
+    const t = new Date(r.createdAt).getTime();
+    if (Number.isFinite(fromMs) && t < fromMs) return false;
+    if (Number.isFinite(toMs) && t > toMs) return false;
+    if (useCursor && !rowBeforeCursor(r, cursor)) return false;
+    return true;
+  }
+
+  function safeParseMeta(raw) {
+    if (raw == null) return null;
+    if (typeof raw === 'object') return raw;
+    try {
+      return JSON.parse(String(raw));
+    } catch {
+      return null;
+    }
+  }
+
+  function mapLogRow(r) {
+    return {
+      id: r.id,
+      actorUserId: r.actorUserId ?? r.actor_user_id ?? null,
+      actorIdentifier: r.actorIdentifier ?? r.actor_identifier ?? '',
+      action: r.action,
+      targetUserId: r.targetUserId ?? r.target_user_id ?? null,
+      meta: r.meta ?? safeParseMeta(r.meta_json ?? r.metaJson),
+      ip: r.ip ?? '',
+      userAgent: r.userAgent ?? r.user_agent ?? '',
+      createdAt: r.createdAt ?? new Date(r.created_at).toISOString(),
+    };
+  }
+
+  function withNextCursor(logs) {
+    const nextCursor = logs.length >= max ? encodeAuditCursor(logs[logs.length - 1]) : null;
+    return { logs, total, limit: max, offset: useCursor ? undefined : offset, nextCursor };
+  }
+
   if (USE_POSTGRES) {
     await ensurePostgres();
     const p = getPool();
-    const res = await p.query('SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT $1', [max]);
-    return res.rows.map((r) => ({
-      id: r.id,
-      actorUserId: r.actor_user_id,
-      actorIdentifier: r.actor_identifier,
-      action: r.action,
-      targetUserId: r.target_user_id,
-      meta: r.meta_json ? JSON.parse(r.meta_json) : null,
-      ip: r.ip,
-      userAgent: r.user_agent,
-      createdAt: new Date(r.created_at).toISOString(),
-    }));
+    const clauses = [];
+    const params = [];
+    let i = 1;
+    if (action) {
+      clauses.push(`action = $${i++}`);
+      params.push(action);
+    }
+    const catSql = auditCategorySql(category, i);
+    if (catSql) {
+      clauses.push(catSql.sql);
+      params.push(...catSql.params);
+      i += catSql.params.length;
+    }
+    if (excludeActions.length) {
+      clauses.push(`action NOT IN (${excludeActions.map(() => `$${i++}`).join(', ')})`);
+      params.push(...excludeActions);
+    }
+    if (actor) {
+      clauses.push(`LOWER(actor_identifier) LIKE $${i++}`);
+      params.push(`%${actor}%`);
+    }
+    if (targetUserId) {
+      clauses.push(`target_user_id = $${i++}`);
+      params.push(targetUserId);
+    }
+    if (Number.isFinite(fromMs)) {
+      clauses.push(`created_at >= $${i++}`);
+      params.push(new Date(fromMs).toISOString());
+    }
+    if (Number.isFinite(toMs)) {
+      clauses.push(`created_at <= $${i++}`);
+      params.push(new Date(toMs).toISOString());
+    }
+    if (cursor) {
+      clauses.push(`(created_at, id) < ($${i++}::timestamptz, $${i++})`);
+      params.push(new Date(cursor.createdAt).toISOString(), cursor.id);
+    }
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    const countRes = await p.query(`SELECT COUNT(*)::int AS c FROM audit_logs ${where}`, params);
+    const total = Number(countRes.rows[0]?.c || 0);
+    if (useCursor) {
+      params.push(max);
+      const res = await p.query(
+        `SELECT * FROM audit_logs ${where} ORDER BY created_at DESC, id DESC LIMIT $${i++}`,
+        params
+      );
+      const logs = res.rows.map((r) => mapLogRow(r));
+      return withNextCursor(logs);
+    }
+    params.push(max, offset);
+    const res = await p.query(
+      `SELECT * FROM audit_logs ${where} ORDER BY created_at DESC, id DESC LIMIT $${i++} OFFSET $${i++}`,
+      params
+    );
+    const logs = res.rows.map((r) => mapLogRow(r));
+    return { logs, total, limit: max, offset, nextCursor: null };
   }
   const db = readDb();
-  return db.auditLogs
+  let rows = (db.auditLogs || [])
     .slice()
+    .sort((a, b) => {
+      const dt = new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      if (dt !== 0) return dt;
+      return String(b.id).localeCompare(String(a.id));
+    })
+    .map((r) => mapLogRow(r));
+  rows = rows.filter(matchRow);
+  const total = rows.length;
+  const logs = useCursor ? rows.slice(0, max) : rows.slice(offset, offset + max);
+  if (useCursor) return withNextCursor(logs);
+  return { logs, total, limit: max, offset, nextCursor: null };
+}
+
+/** 管理端：用户会话列表（不含 token） */
+export async function listSessionsForUser(userId, options = {}) {
+  const uid = String(userId || '').trim();
+  if (!uid) return [];
+  const max = Math.max(1, Math.min(50, Number(options.limit || 20)));
+  const now = Date.now();
+  const mapPublic = (s) => ({
+    id: s.id,
+    createdAt: s.createdAt,
+    expiresAt: s.expiresAt,
+    revokedAt: s.revokedAt,
+    ip: s.ip || '',
+    userAgent: s.userAgent || '',
+    active: !s.revokedAt && new Date(s.expiresAt).getTime() > now,
+  });
+
+  if (USE_POSTGRES) {
+    await ensurePostgres();
+    const p = getPool();
+    const res = await p.query(
+      `SELECT * FROM sessions WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2`,
+      [uid, max]
+    );
+    return res.rows.map((row) => mapPublic(mapSessionRow(row)));
+  }
+  const db = readDb();
+  return (db.sessions || [])
+    .filter((s) => s.userId === uid)
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
     .slice(0, max)
-    .map((r) => ({
-      id: r.id,
-      actorUserId: r.actorUserId,
-      actorIdentifier: r.actorIdentifier,
-      action: r.action,
-      targetUserId: r.targetUserId,
-      meta: r.metaJson ? JSON.parse(r.metaJson) : null,
-      ip: r.ip,
-      userAgent: r.userAgent,
-      createdAt: r.createdAt,
-    }));
+    .map(mapPublic);
 }
 
 export async function initAuthStore() {
   await ensurePostgres();
+  const { ensureAdminRbac } = await import('./admin-roles-store.js');
+  await ensureAdminRbac();
+  const { ensureGeminiFairnessConfigStore } = await import('./gemini-fairness-config-store.js');
+  await ensureGeminiFairnessConfigStore();
+  const { ensureWorkflowTaskEventsStore } = await import('./workflow-task-events-store.js');
+  await ensureWorkflowTaskEventsStore();
 }
+
+/** @internal RBAC JSON/Postgres helpers */
+export { readDb, writeDb, USE_POSTGRES, getPool, ensurePostgres };
 

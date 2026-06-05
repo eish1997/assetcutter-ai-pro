@@ -2,6 +2,7 @@ import type { WorkflowPendingTask } from '../types';
 import { readLocalJson, readSessionJson, scopedStorageKey, writeLocalJson, writeSessionJson } from './clientPersist';
 import { getWorkflowMirrorPreferenceScope } from './workflowMirrorPreferenceScope';
 import { idbLoadBundleJson, idbSaveBundleJson } from './workspaceBundleIdb';
+import { syncWorkflowTaskEventToServer } from './workflowTaskEventsSync';
 
 /** 与 `readWorkflowAuditRing` 同源；测试或排障后可清空 */
 export const WORKFLOW_AUDIT_SESSION_KEY = 'ac_workflow_audit_ring_v1';
@@ -66,6 +67,8 @@ export const WORKFLOW_AUDIT_CODES = {
   RUN_TASK_CAPABILITY_EXCEPTION: 'RUN_TASK_CAPABILITY_EXCEPTION',
   RUN_TASK_FALLBACK_UNKNOWN: 'RUN_TASK_FALLBACK_UNKNOWN',
   RUN_TASK_BRANCH_CUT_NO_MODULE: 'RUN_TASK_BRANCH_CUT_NO_MODULE',
+  /** 队列任务执行成功 */
+  RUN_TASK_SUCCESS: 'RUN_TASK_SUCCESS',
   /** §6：用户从工作流大图下载当前预览图（按需审计） */
   EXPORT_IMAGE: 'EXPORT_IMAGE',
   /** 大图下载文字预览为 .txt */
@@ -130,6 +133,7 @@ export function appendWorkflowAuditEvent(
   writeSessionJson(WORKFLOW_AUDIT_SESSION_KEY, { events });
   writeLocalJson(workflowAuditLocalStorageKey(), { events });
   persistAuditRingToIdb(events);
+  syncWorkflowTaskEventToServer(ev);
   return ev;
 }
 
@@ -188,6 +192,26 @@ export function appendWorkflowRunTaskFailureAudit(params: {
     taskId: params.task.id,
     displayKey: params.task.inputSourceDisplayKey,
     message: msg,
+    detail: {
+      actionType: params.task.actionType,
+      ...params.detail,
+    },
+  });
+}
+
+/** 队列任务执行成功（与失败审计对称，便于管理端查看执行记录） */
+export function appendWorkflowRunTaskSuccessAudit(params: {
+  task: Pick<WorkflowPendingTask, 'id' | 'assetId' | 'actionType' | 'displayStepLabel' | 'inputSourceDisplayKey'>;
+  detail?: Record<string, unknown>;
+}): WorkflowAuditEvent {
+  const label = params.task.displayStepLabel || params.task.actionType;
+  return appendWorkflowAuditEvent({
+    level: 'info',
+    code: WORKFLOW_AUDIT_CODES.RUN_TASK_SUCCESS,
+    assetId: params.task.assetId,
+    taskId: params.task.id,
+    displayKey: params.task.inputSourceDisplayKey,
+    message: `[${label}] 执行完成`,
     detail: {
       actionType: params.task.actionType,
       ...params.detail,
