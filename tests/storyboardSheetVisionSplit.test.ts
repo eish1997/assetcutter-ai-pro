@@ -57,6 +57,7 @@ describe('storyboardSheetVisionSplit', () => {
     const scoped = filterStoryboardRowsByExpectedShots(rows, ['01', '02']);
     expect(scoped.map((item) => item.id)).toEqual(['r1', 'r2']);
     expect(isStoryboardShotNoInExpectedScope('03', ['01', '02'])).toBe(false);
+    expect(isStoryboardShotNoInExpectedScope('03', [])).toBe(true);
   });
 
   it('storyboardShotNosMatch treats numeric shot numbers with different padding as equal', () => {

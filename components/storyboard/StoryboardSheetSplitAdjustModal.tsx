@@ -12,6 +12,13 @@ import {
 } from './storyboardTableUi';
 import AppIcon from '../ui/AppIcon';
 
+function isEditableKeyboardTarget(target: EventTarget | null): boolean {
+  if (!target || !(target instanceof HTMLElement)) return false;
+  const tag = target.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+  return target.isContentEditable;
+}
+
 type ImageMetrics = {
   offsetX: number;
   offsetY: number;
@@ -176,6 +183,7 @@ export default function StoryboardSheetSplitAdjustModal({
         onClose();
       }
       if ((event.key === 'Delete' || event.key === 'Backspace') && selectedId) {
+        if (isEditableKeyboardTarget(event.target)) return;
         event.preventDefault();
         setBoxes((prev) => prev.filter((box) => box.id !== selectedId));
         setSelectedId(null);

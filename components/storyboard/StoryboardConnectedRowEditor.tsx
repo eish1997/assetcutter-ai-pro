@@ -62,7 +62,7 @@ function StoryboardConnectedRowEditorInner({
       onRemove={() => ctx.removeRow(row.id)}
       onPickImage={() => ctx.openFileForRow(row.id)}
       onClearImage={() => ctx.clearRowImage(row.id)}
-      onPreviewImage={ctx.previewImage}
+      onPreviewImage={() => ctx.previewRowFrame(row)}
       onImageDrop={(e) => ctx.assignFrameImageFromDrop(row.id, e)}
       onImagePaste={(e) => ctx.assignFrameImageFromPaste(row.id, e)}
       parseBusy={parseBusy}

@@ -440,6 +440,7 @@ export function isStoryboardShotNoInExpectedScope(
 ): boolean {
   const normalized = String(shotNo || '').trim();
   if (!normalized) return false;
+  if (!expectedShotNos.length) return true;
   return expectedShotNos.some((shot) => storyboardShotNosMatch(shot, normalized));
 }
 

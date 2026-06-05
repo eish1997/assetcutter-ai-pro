@@ -212,14 +212,14 @@ export function applyStoryboardFrameCompanionHydrateResults(
   hydrated: Array<{ task: StoryboardFrameCompanionHydrateTask; objectUrl: string }>
 ): WorkflowAsset[] {
   if (!hydrated.length) return assets;
-  const byAsset = new Map<string, Map<string, string>>();
+  const byAsset = new Map<string, Map<string, { objectUrl: string; companionKey: string }>>();
   for (const { task, objectUrl } of hydrated) {
     let rowMap = byAsset.get(task.assetId);
     if (!rowMap) {
       rowMap = new Map();
       byAsset.set(task.assetId, rowMap);
     }
-    rowMap.set(task.rowId, objectUrl);
+    rowMap.set(task.rowId, { objectUrl, companionKey: task.companionKey });
   }
 
   return assets.map((asset) => {
@@ -232,10 +232,12 @@ export function applyStoryboardFrameCompanionHydrateResults(
       storyboardTable: {
         ...asset.storyboardTable,
         rows: asset.storyboardTable.rows.map((row) => {
-          const objectUrl = rowMap.get(row.id);
-          if (!objectUrl) return row;
+          const hit = rowMap.get(row.id);
+          if (!hit) return row;
+          const currentKey = String(row.frameImageCompanionKey || '').trim();
+          if (!currentKey || currentKey !== hit.companionKey) return row;
           revokeStoryboardFrameBlobUrl(String(row.frameImage || '').trim());
-          return { ...row, frameImage: objectUrl };
+          return { ...row, frameImage: hit.objectUrl };
         }),
       },
     });
@@ -247,7 +249,10 @@ export function applyStoryboardFrameHistoryCompanionHydrateResults(
   hydrated: Array<{ task: StoryboardFrameHistoryCompanionHydrateTask; objectUrl: string }>
 ): WorkflowAsset[] {
   if (!hydrated.length) return assets;
-  const byAsset = new Map<string, Map<string, Map<string, string>>>();
+  const byAsset = new Map<
+    string,
+    Map<string, Map<string, { objectUrl: string; companionKey: string }>>
+  >();
   for (const { task, objectUrl } of hydrated) {
     let rowMap = byAsset.get(task.assetId);
     if (!rowMap) {
@@ -259,7 +264,7 @@ export function applyStoryboardFrameHistoryCompanionHydrateResults(
       versionMap = new Map();
       rowMap.set(task.rowId, versionMap);
     }
-    versionMap.set(task.versionId, objectUrl);
+    versionMap.set(task.versionId, { objectUrl, companionKey: task.companionKey });
   }
 
   return assets.map((asset) => {
@@ -277,10 +282,12 @@ export function applyStoryboardFrameHistoryCompanionHydrateResults(
           return {
             ...row,
             frameImageHistory: row.frameImageHistory.map((item) => {
-              const objectUrl = versionMap.get(item.id);
-              if (!objectUrl) return item;
+              const hit = versionMap.get(item.id);
+              if (!hit) return item;
+              const currentKey = String(item.frameImageCompanionKey || '').trim();
+              if (!currentKey || currentKey !== hit.companionKey) return item;
               revokeStoryboardFrameBlobUrl(String(item.frameImage || '').trim());
-              return { ...item, frameImage: objectUrl };
+              return { ...item, frameImage: hit.objectUrl };
             }),
           };
         }),

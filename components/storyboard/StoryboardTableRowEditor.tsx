@@ -57,7 +57,7 @@ type Props = {
   onRemove: () => void;
   onPickImage: () => void;
   onClearImage: () => void;
-  onPreviewImage: (src: string) => void;
+  onPreviewImage: () => void;
   onImageDrop: (e: React.DragEvent) => void;
   onImagePaste: (e: React.ClipboardEvent) => void;
   onParseRow?: () => void;
@@ -330,10 +330,14 @@ export default function StoryboardTableRowEditor({
               }`}
               onDragOver={(e) => {
                 if (fieldsReadOnly) return;
-                e.preventDefault();
+                if (e.dataTransfer.types.includes('Files')) {
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = 'copy';
+                }
               }}
               onDrop={(e) => {
                 if (fieldsReadOnly) return;
+                e.preventDefault();
                 onImageDrop(e);
               }}
               onPaste={(e) => {
@@ -342,7 +346,12 @@ export default function StoryboardTableRowEditor({
               }}
             >
               {img ? (
-                <button type="button" className="block h-full w-full" onClick={() => onPreviewImage(img)}>
+                <button
+                  type="button"
+                  title={fieldsReadOnly ? '放大预览' : '预览与裁切'}
+                  className="block h-full w-full"
+                  onClick={onPreviewImage}
+                >
                   <img
                     src={img}
                     alt=""
@@ -357,7 +366,7 @@ export default function StoryboardTableRowEditor({
                   onClick={onPickImage}
                   className="flex h-full w-full flex-col items-center justify-center gap-1 bg-black/25 text-[10px] text-gray-500 transition-colors hover:text-white/90 disabled:cursor-not-allowed"
                 >
-                  {imageBusy ? '处理中…' : '点击或拖入图片'}
+                  {imageBusy ? '处理中…' : '点击或拖入（裁切）'}
                 </button>
               )}
               {imageBusy ? (

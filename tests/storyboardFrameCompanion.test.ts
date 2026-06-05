@@ -91,4 +91,29 @@ describe('storyboardFrameCompanion', () => {
     expect(next[0]?.storyboardTable?.rows[0]?.frameImage).toBe('blob:fresh-1');
     expect(next[0]?.storyboardTable?.rows[1]?.frameImage).toBe('blob:fresh-2');
   });
+
+  it('applyStoryboardFrameCompanionHydrateResults skips rows cleared before hydrate completes', () => {
+    const asset = storyboardAsset([
+      createStoryboardTableRow({ id: 'r1', shotNo: '01', frameImageCompanionKey: 'ck-1' }, 0),
+    ]);
+    const cleared = storyboardAsset([
+      createStoryboardTableRow({ id: 'r1', shotNo: '01' }, 0),
+    ]);
+    const next = applyStoryboardFrameCompanionHydrateResults(
+      [cleared],
+      [
+        {
+          task: {
+            assetId: 'asset-1',
+            rowId: 'r1',
+            companionKey: 'ck-1',
+            prevImg: '',
+          },
+          objectUrl: 'blob:fresh-1',
+        },
+      ]
+    );
+    expect(next[0]?.storyboardTable?.rows[0]?.frameImage).toBeUndefined();
+    expect(asset.storyboardTable?.rows[0]?.frameImageCompanionKey).toBe('ck-1');
+  });
 });

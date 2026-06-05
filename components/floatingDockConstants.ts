@@ -1,6 +1,6 @@
 /**
- * 右下角悬浮操作列：自底向上堆叠（助手 → 日志），面板统一锚在 FAB 列顶上方。
- * 尺寸与 `SiteAssistant` / App 全局日志钮一致：`w-12 h-12`（48px）。
+ * 右下角悬浮操作：运行日志 FAB + 弹出面板。
+ * 尺寸：`w-12 h-12`（48px）。
  */
 
 export const RIGHT_DOCK_INSET_PX = 24;
@@ -8,21 +8,26 @@ export const RIGHT_DOCK_FAB_SIZE_PX = 48;
 export const RIGHT_DOCK_FAB_GAP_PX = 8;
 export const RIGHT_DOCK_PANEL_GAP_PX = 12;
 
-/** 自底向上第 1 个：网站助手 */
-export const RIGHT_DOCK_ASSISTANT_BOTTOM = 'bottom-6';
-/** 自底向上第 2 个：运行日志 = inset + 助手钮 + gap */
-export const RIGHT_DOCK_LOG_BOTTOM = 'bottom-[5rem]';
+/** 运行日志 FAB（右下角唯一悬浮钮） */
+export const RIGHT_DOCK_LOG_BOTTOM = 'bottom-6';
 
-/** 历史：工作流 dock 曾贴底 `bottom-36`，现已改为视口右侧垂直居中 */
-export const RIGHT_DOCK_WORKFLOW_BOTTOM = 'bottom-36';
+/** 须高于分镜全屏/切分框 (2400)、大图预览 (2000–2700)、能力集全屏 (10000)；须 Portal 到 document.body */
+export const RIGHT_DOCK_LOG_Z_INDEX = 10100;
+export const RIGHT_DOCK_LOG_PANEL_Z_INDEX = 10099;
 
 export const RIGHT_DOCK_RIGHT = 'right-6';
 
-/** 弹出面板下沿：紧贴 FAB 列顶（两钮 + 间距）之上 */
-export const RIGHT_DOCK_PANEL_BOTTOM = 'bottom-[8.75rem]';
+/** 弹出面板下沿：紧贴日志 FAB 顶之上（inset + FAB + gap） */
+export const RIGHT_DOCK_PANEL_BOTTOM = 'bottom-[5.25rem]';
 
 /** @deprecated 使用 {@link RIGHT_DOCK_PANEL_BOTTOM} */
 export const RIGHT_DOCK_LOG_PANEL_BOTTOM = RIGHT_DOCK_PANEL_BOTTOM;
+
+/** @deprecated 网站助手已移除 */
+export const RIGHT_DOCK_ASSISTANT_BOTTOM = RIGHT_DOCK_LOG_BOTTOM;
+
+/** 历史：工作流 dock 曾贴底 `bottom-36`，现已改为视口右侧垂直居中 */
+export const RIGHT_DOCK_WORKFLOW_BOTTOM = 'bottom-36';
 
 /** 工作流 dock 胶囊可视高度（与 `h-12` 一致） */
 export const WORKFLOW_DOCK_CHIP_HEIGHT_PX = 48;

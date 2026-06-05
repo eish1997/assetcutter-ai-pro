@@ -48,7 +48,7 @@ type Props = {
   readOnly?: boolean;
   onSelectRow: (rowId: string, modifiers?: StoryboardCanvasSelectModifiers) => void;
   onMarqueeSelect: (rowIds: string[], additive: boolean) => void;
-  onPreviewImage?: (src: string) => void;
+  onPreviewRowFrame?: (row: StoryboardTableRow) => void;
   onSelectFrameRoleMark?: (rowId: string, markId: string | null) => void;
   onAddFrameRoleMark?: (
     rowId: string,
@@ -66,6 +66,7 @@ type Props = {
   filterMatchedRowIds?: ReadonlySet<string> | null;
   filterFlashRowId?: string | null;
   roleReplaceEligibleRowIds?: ReadonlySet<string> | null;
+  onAssignImagesFromDrop?: (rowId: string, e: React.DragEvent) => void;
 };
 
 export default function StoryboardEditCanvasGrid({
@@ -80,7 +81,7 @@ export default function StoryboardEditCanvasGrid({
   readOnly = false,
   onSelectRow,
   onMarqueeSelect,
-  onPreviewImage,
+  onPreviewRowFrame,
   onSelectFrameRoleMark,
   onAddFrameRoleMark,
   onUpdateFrameRoleMark,
@@ -90,6 +91,7 @@ export default function StoryboardEditCanvasGrid({
   filterMatchedRowIds = null,
   filterFlashRowId = null,
   roleReplaceEligibleRowIds = null,
+  onAssignImagesFromDrop,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const frameRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -314,6 +316,17 @@ export default function StoryboardEditCanvasGrid({
                   historyHighlight ? 'ring-2 ring-inset ring-amber-400/50' : ''
                 }`}
                 onContextMenu={(event) => openAddMenu(event, row)}
+                onDragOver={(event) => {
+                  if (readOnly || !onAssignImagesFromDrop || rowPassed) return;
+                  if (event.dataTransfer.types.includes('Files')) {
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = 'copy';
+                  }
+                }}
+                onDrop={(event) => {
+                  if (readOnly || !onAssignImagesFromDrop || rowPassed) return;
+                  onAssignImagesFromDrop(row.id, event);
+                }}
               >
                 {img ? (
                   <img
@@ -353,14 +366,14 @@ export default function StoryboardEditCanvasGrid({
                     处理中…
                   </div>
                 ) : null}
-                {img && onPreviewImage ? (
+                {img && onPreviewRowFrame ? (
                   <button
                     type="button"
                     title="放大"
                     onPointerDown={(event) => event.stopPropagation()}
                     onClick={(event) => {
                       event.stopPropagation();
-                      onPreviewImage(img);
+                      onPreviewRowFrame(row);
                     }}
                     className="absolute bottom-1 right-1 z-10 rounded bg-black/65 px-1.5 py-0.5 text-[8px] text-gray-200 hover:bg-black/80"
                   >

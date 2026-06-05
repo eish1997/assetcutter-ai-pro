@@ -9,6 +9,7 @@ vi.mock('../services/workflowBundleSanitize', () => ({
 
 import {
   countWorkflowBundleAssetsInJson,
+  extractStoryboardAssetsFromRawJson,
   mergePreservingStoryboardTableAssets,
   mergeRestoredStoryboardAssetsIntoList,
   parseWorkflowBundleJson,
@@ -62,6 +63,33 @@ describe('workspaceProjectStore bundle safety', () => {
         { existingAssetCount: 3 }
       )
     ).toBe(false);
+  });
+
+  it('extractStoryboardAssetsFromRawJson keeps storyboard cards only', () => {
+    const raw = JSON.stringify({
+      assets: [
+        { id: 'img-1', original: 'x' },
+        { id: 'sb-1', assetKind: 'storyboard_table', storyboardTable: { rows: [] } },
+      ],
+      pending: [],
+    });
+    expect(extractStoryboardAssetsFromRawJson(raw).map((a) => a.id)).toEqual(['sb-1']);
+  });
+
+  it('mergePreservingStoryboardTableAssets restores from idb-era guard snapshot', () => {
+    const guardOnly = [
+      {
+        id: 'sb-1',
+        assetKind: 'storyboard_table',
+        storyboardTable: { rows: [{ id: 'r1', index: 0, shotText: 'a' }] },
+      },
+    ] as WorkflowAsset[];
+    const incoming = {
+      assets: [{ id: 'img-1', original: 'x' } as WorkflowAsset],
+      pending: [],
+    };
+    const merged = mergePreservingStoryboardTableAssets(incoming, guardOnly);
+    expect(merged.bundle.assets.map((a) => a.id)).toEqual(['img-1', 'sb-1']);
   });
 
   it('mergePreservingStoryboardTableAssets restores missing storyboard cards', () => {

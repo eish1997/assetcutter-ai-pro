@@ -23,7 +23,7 @@ export type StoryboardRowInteractionValue = {
   runRedraw: (rowId: string) => void;
   runParse: (rowId: string) => void;
   runOptimize: (rowId: string) => void;
-  previewImage: (src: string) => void;
+  previewRowFrame: (row: StoryboardTableRow) => void;
   redrawDisabledReason: (row: StoryboardTableRow) => string | undefined;
 };
 

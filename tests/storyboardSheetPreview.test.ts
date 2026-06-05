@@ -7,12 +7,14 @@ import {
   expandStoryboardShotNoRange,
   formatSheetPreviewShotLabel,
   isStoryboardSheetPreviewSplittable,
+  mergeLiveStoryboardSheetPreviewSplitState,
   mergeStoryboardSheetPreviews,
   parseSheetPreviewShotRange,
   prependStoryboardSheetPreview,
   readStoryboardSheetPreviews,
   removeStoryboardSheetPreview,
   resolveSheetTaskRows,
+  shotNosFromSheetSplitBoxes,
   storyboardSheetPreviewListCompanionKey,
   writeStoryboardSheetPreviews,
 } from '../services/storyboardSheetPreview';
@@ -280,6 +282,16 @@ describe('storyboardSheetPreview', () => {
     expect(
       isStoryboardSheetPreviewSplittable({
         ...done,
+        id: 'p-upload',
+        source: 'uploaded',
+        shotNos: [],
+        rowIds: [],
+        splitDetectStatus: 'detecting',
+      })
+    ).toBe(true);
+    expect(
+      isStoryboardSheetPreviewSplittable({
+        ...done,
         id: 'p4',
         imageDataUrl: '',
         imageCompanionKey: undefined,
@@ -302,6 +314,37 @@ describe('storyboardSheetPreview', () => {
       ok: true,
       shotNos: ['001', '002', '003', '004'],
     });
+  });
+
+  it('derives shot numbers from cached split draft boxes', () => {
+    expect(
+      shotNosFromSheetSplitBoxes([
+        { id: 'b1', label: '002', xmin: 0, ymin: 0, xmax: 100, ymax: 100 },
+        { id: 'b2', label: '003', xmin: 100, ymin: 0, xmax: 200, ymax: 100 },
+        { id: 'b3', label: '002', xmin: 200, ymin: 0, xmax: 300, ymax: 100 },
+      ])
+    ).toEqual(['002', '003']);
+  });
+
+  it('mergeLiveStoryboardSheetPreviewSplitState keeps detect results during image save', () => {
+    const draft = createSheetPreviewItem({
+      imageDataUrl: 'data:image/png;base64,abc',
+      label: '上传拼图',
+      source: 'uploaded',
+      shotNos: [],
+      splitDetectStatus: 'detecting',
+    });
+    const live = {
+      ...draft,
+      shotNos: ['001', '002'],
+      label: '上传拼图 · 001–002',
+      splitDetectStatus: 'ready' as const,
+      splitDraftBoxes: [{ id: 'b1', label: '001', xmin: 0, ymin: 0, xmax: 100, ymax: 100 }],
+    };
+    const merged = mergeLiveStoryboardSheetPreviewSplitState(draft, live);
+    expect(merged.shotNos).toEqual(['001', '002']);
+    expect(merged.splitDetectStatus).toBe('ready');
+    expect(merged.splitDraftBoxes).toHaveLength(1);
   });
 
   it('creates missing rows for preview shot numbers', () => {

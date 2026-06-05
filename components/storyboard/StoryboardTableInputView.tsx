@@ -2,7 +2,6 @@ import React, {
   forwardRef,
   useCallback,
   useImperativeHandle,
-  useMemo,
   useRef,
   useState,
 } from 'react';
@@ -15,11 +14,12 @@ import StoryboardTableBulkInput, {
 import StoryboardTableSheetGen, {
   type StoryboardTableSheetGenHandle,
 } from './StoryboardTableSheetGen';
+import type { StoryboardSheetGenBatchRequest } from '../../services/storyboardTableSheetGen';
 import StoryboardRoleAssetStrip from './StoryboardRoleAssetStrip';
 import StoryboardSheetPreviewStrip from './StoryboardSheetPreviewStrip';
-import StoryboardSheetUploadModal from './StoryboardSheetUploadModal';
 import { readStoryboardFrameFromFile } from './storyboardFrameImage';
 import type { StoryboardSheetPreviewItem } from '../../services/storyboardSheetPreview';
+import { collectStoryboardFrameImageFiles } from '../../services/storyboardTableFrameImport';
 import { resolveStoryboardSceneAssetDisplaySrc } from '../../services/storyboardSceneAssets';
 import {
   STORYBOARD_INPUT_MAIN,
@@ -70,24 +70,7 @@ type Props = {
   sheetSplitProgress?: { done: number; total: number } | null;
   splittableSheetCount?: number;
   onPreviewSheetImage?: (preview: StoryboardSheetPreviewItem) => void;
-  onUploadSheetPreview?: (
-    dataUrl: string,
-    payload: {
-      shotFrom: string;
-      shotTo: string;
-      layoutCols?: number;
-      layoutRows?: number;
-    }
-  ) => void | Promise<void>;
-  onUpdateSheetPreviewShotRange?: (
-    previewId: string,
-    payload: {
-      shotFrom: string;
-      shotTo: string;
-      layoutCols?: number;
-      layoutRows?: number;
-    }
-  ) => void | Promise<void>;
+  onUploadSheetPreview?: (dataUrl: string) => void | Promise<void>;
   onApplySheetPreview?: (previewId: string) => Promise<SplitSheetPreviewResult>;
   onRegenerateSheetPreview?: (previewId: string) => Promise<void>;
   onActivateSheetPreviewVersion?: (previewId: string, versionId: string) => Promise<void>;
@@ -101,12 +84,14 @@ type Props = {
   onRemoveRoleAsset: (id: string) => void;
   onRenameRoleAsset: (id: string, name: string) => void;
   onAssignRoleAssetImage: (id: string, file: File) => void;
+  onAssignRoleAssetImages?: (startAssetId: string | null, files: File[]) => void | Promise<void>;
   onClearRoleAssetImage: (id: string) => void;
   onPreviewRoleAssetImage?: (src: string) => void;
   onAddSceneAsset: () => void;
   onRemoveSceneAsset: (id: string) => void;
   onRenameSceneAsset: (id: string, name: string) => void;
   onAssignSceneAssetImage: (id: string, file: File) => void;
+  onAssignSceneAssetImages?: (startAssetId: string | null, files: File[]) => void | Promise<void>;
   onClearSceneAssetImage: (id: string) => void;
   onPreviewSceneAssetImage?: (src: string) => void;
 };
@@ -141,7 +126,6 @@ const StoryboardTableInputView = forwardRef<StoryboardTableInputViewHandle, Prop
       splittableSheetCount = 0,
       onPreviewSheetImage,
       onUploadSheetPreview,
-      onUpdateSheetPreviewShotRange,
       onApplySheetPreview,
       onRegenerateSheetPreview,
       onActivateSheetPreviewVersion,
@@ -155,12 +139,14 @@ const StoryboardTableInputView = forwardRef<StoryboardTableInputViewHandle, Prop
       onRemoveRoleAsset,
       onRenameRoleAsset,
       onAssignRoleAssetImage,
+      onAssignRoleAssetImages,
       onClearRoleAssetImage,
       onPreviewRoleAssetImage,
       onAddSceneAsset,
       onRemoveSceneAsset,
       onRenameSceneAsset,
       onAssignSceneAssetImage,
+      onAssignSceneAssetImages,
       onClearSceneAssetImage,
       onPreviewSceneAssetImage,
     },
@@ -169,8 +155,6 @@ const StoryboardTableInputView = forwardRef<StoryboardTableInputViewHandle, Prop
     const [draftTick, setDraftTick] = useState(0);
     const [parseBusy, setParseBusy] = useState(false);
     const [completionGuide, setCompletionGuide] = useState<InputCompletionGuide | null>(null);
-    const [uploadDraft, setUploadDraft] = useState<{ dataUrl: string } | null>(null);
-    const [editPreviewId, setEditPreviewId] = useState<string | null>(null);
     const bulkInputRef = useRef<StoryboardTableBulkInputHandle>(null);
     const sheetGenRef = useRef<StoryboardTableSheetGenHandle>(null);
 
@@ -184,30 +168,6 @@ const StoryboardTableInputView = forwardRef<StoryboardTableInputViewHandle, Prop
     const actionBusy = parseBusy || sheetGenBusy || sheetSplitBatchBusy;
     const stripBusy = sheetGenBusy || sheetSplitBatchBusy;
     const stripProgress = sheetSplitBatchBusy ? sheetSplitProgress : sheetGenProgress;
-
-    const defaultShotFrom = useMemo(() => {
-      const unlocked = rows.filter((row) => !row.locked);
-      const first = unlocked.find((row) => row.shotNo?.trim()) ?? unlocked[0];
-      return first?.shotNo?.trim() || '001';
-    }, [rows]);
-
-    const defaultShotTo = useMemo(() => {
-      const unlocked = rows.filter((row) => !row.locked);
-      const last = [...unlocked].reverse().find((row) => row.shotNo?.trim()) ?? unlocked[unlocked.length - 1];
-      return last?.shotNo?.trim() || defaultShotFrom;
-    }, [defaultShotFrom, rows]);
-
-    const editingPreview = useMemo(
-      () => sheetPreviews.find((preview) => preview.id === editPreviewId) ?? null,
-      [editPreviewId, sheetPreviews]
-    );
-
-    const modalDefaultFrom = editingPreview?.shotNos[0] ?? defaultShotFrom;
-    const modalDefaultTo =
-      editingPreview?.shotNos[editingPreview.shotNos.length - 1] ?? defaultShotTo;
-    const modalDefaultLayoutCols = editingPreview?.layoutCols;
-    const modalDefaultLayoutRows = editingPreview?.layoutRows;
-    const modalPreviewSrc = uploadDraft?.dataUrl ?? editingPreview?.imageDataUrl ?? null;
 
     const showSplitGuide = useCallback((result: SplitSheetPreviewResult) => {
       if (result && result.matchedCount > 0) {
@@ -226,6 +186,33 @@ const StoryboardTableInputView = forwardRef<StoryboardTableInputViewHandle, Prop
         showSplitGuide(await onApplySheetPreview?.(previewId));
       },
       [onApplySheetPreview, showSplitGuide]
+    );
+
+    const handleSheetUploadFiles = useCallback(
+      (files: File[]) => {
+        const imageFiles = collectStoryboardFrameImageFiles(files);
+        if (!imageFiles.length || !onUploadSheetPreview) return;
+
+        void (async () => {
+          let ok = 0;
+          let failed = 0;
+          for (const file of imageFiles) {
+            try {
+              const dataUrl = await readStoryboardFrameFromFile(file);
+              await onUploadSheetPreview(dataUrl);
+              ok += 1;
+            } catch {
+              failed += 1;
+            }
+          }
+          if (ok > 0 && failed > 0) {
+            onNotify?.('warn', `已加入 ${ok} 张拼图，${failed} 张失败`);
+          } else if (failed > 0) {
+            onNotify?.('warn', '拼图上传失败');
+          }
+        })();
+      },
+      [onNotify, onUploadSheetPreview]
     );
 
     const guideMessage =
@@ -333,23 +320,7 @@ const StoryboardTableInputView = forwardRef<StoryboardTableInputViewHandle, Prop
               progressLabel={sheetSplitBatchBusy ? '切分中' : '生成中'}
               readOnly={readOnly}
               onPreview={(preview) => onPreviewSheetImage?.(preview)}
-              onUpload={
-                onUploadSheetPreview
-                  ? (file) => {
-                      void readStoryboardFrameFromFile(file)
-                        .then((dataUrl) => setUploadDraft({ dataUrl }))
-                        .catch((error) =>
-                          onNotify?.(
-                            'warn',
-                            error instanceof Error ? error.message : '上传失败'
-                          )
-                        );
-                    }
-                  : undefined
-              }
-              onEditShotRange={
-                onUpdateSheetPreviewShotRange ? (previewId) => setEditPreviewId(previewId) : undefined
-              }
+              onUpload={onUploadSheetPreview ? handleSheetUploadFiles : undefined}
               onApplySheet={(previewId) => void handleApplySheet(previewId)}
               onRegenerateSheet={(previewId) => void onRegenerateSheetPreview?.(previewId)}
               onSelectSheetVersion={(previewId, versionId) =>
@@ -360,7 +331,10 @@ const StoryboardTableInputView = forwardRef<StoryboardTableInputViewHandle, Prop
               onCancelGenTask={onCancelSheetGenTask}
             />
 
-            <div className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-3">
+            <div
+              className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-3"
+              data-no-global-image-drop
+            >
               <div className="mb-2 flex items-center justify-between gap-2">
                 <span className="text-[10px] font-semibold text-gray-300">角色资产</span>
                 <span className="text-[9px] text-gray-500">{roleAssets.length} 个</span>
@@ -373,12 +347,16 @@ const StoryboardTableInputView = forwardRef<StoryboardTableInputViewHandle, Prop
                 onRemove={onRemoveRoleAsset}
                 onRename={onRenameRoleAsset}
                 onAssignImage={onAssignRoleAssetImage}
+                onAssignImages={onAssignRoleAssetImages}
                 onClearImage={onClearRoleAssetImage}
                 onPreviewImage={onPreviewRoleAssetImage}
               />
             </div>
 
-            <div className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-3">
+            <div
+              className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-3"
+              data-no-global-image-drop
+            >
               <div className="mb-2 flex items-center justify-between gap-2">
                 <span className="text-[10px] font-semibold text-gray-300">场景资产</span>
                 <span className="text-[9px] text-gray-500">{sceneAssets.length} 个</span>
@@ -395,6 +373,7 @@ const StoryboardTableInputView = forwardRef<StoryboardTableInputViewHandle, Prop
                 onRemove={onRemoveSceneAsset}
                 onRename={onRenameSceneAsset}
                 onAssignImage={onAssignSceneAssetImage}
+                onAssignImages={onAssignSceneAssetImages}
                 onClearImage={onClearSceneAssetImage}
                 onPreviewImage={onPreviewSceneAssetImage}
               />
@@ -418,36 +397,6 @@ const StoryboardTableInputView = forwardRef<StoryboardTableInputViewHandle, Prop
             />
           </div>
         </div>
-
-        <StoryboardSheetUploadModal
-          open={Boolean(uploadDraft || editingPreview)}
-          previewSrc={modalPreviewSrc}
-          defaultFrom={modalDefaultFrom}
-          defaultTo={modalDefaultTo}
-          defaultLayoutCols={modalDefaultLayoutCols}
-          defaultLayoutRows={modalDefaultLayoutRows}
-          title={editingPreview ? '修改镜号范围' : '上传拼图'}
-          confirmLabel={editingPreview ? '保存' : '加入预览'}
-          onClose={() => {
-            setUploadDraft(null);
-            setEditPreviewId(null);
-          }}
-          onConfirm={(payload) => {
-            if (uploadDraft) {
-              void Promise.resolve(onUploadSheetPreview?.(uploadDraft.dataUrl, payload)).finally(() => {
-                setUploadDraft(null);
-              });
-              return;
-            }
-            if (editPreviewId) {
-              void Promise.resolve(
-                onUpdateSheetPreviewShotRange?.(editPreviewId, payload)
-              ).finally(() => {
-                setEditPreviewId(null);
-              });
-            }
-          }}
-        />
       </div>
     );
   }

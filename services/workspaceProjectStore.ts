@@ -79,6 +79,8 @@ function migrateWorkflowBundleSchema(bundle: WorkflowProjectBundle): WorkflowPro
 }
 
 const bundleMemoryCache = new Map<string, WorkflowProjectBundle>();
+/** IDB 落盘后 localStorage 常为空；从原始 JSON 提取的分镜表快照，供保存/加载补回 */
+const storyboardPersistGuardByKey = new Map<string, WorkflowAsset[]>();
 const migrationNoticesQueue: string[] = [];
 const migrationNoticesSeen = new Set<string>();
 /** 最近一次 loadWorkflowBundle 是否降级（解析/规范化失败），供 App 避免空包覆盖落盘 */
@@ -105,6 +107,74 @@ export type SaveWorkflowBundleOptions = {
   /** 用户在本会话显式删除的分镜表资产 id，保存时允许从 bundle 中移除 */
   explicitlyRemovedStoryboardIds?: ReadonlySet<string>;
 };
+
+/** 从持久化 JSON 提取分镜表资产（不跑 sanitize，避免规范化失败丢卡） */
+export function extractStoryboardAssetsFromRawJson(raw: string): WorkflowAsset[] {
+  try {
+    const data = JSON.parse(raw) as Partial<WorkflowProjectBundle>;
+    if (!Array.isArray(data.assets)) return [];
+    return data.assets.filter((a) => isWorkflowStoryboardTableAsset(a as WorkflowAsset)) as WorkflowAsset[];
+  } catch {
+    return [];
+  }
+}
+
+function rememberStoryboardPersistGuardFromRaw(key: string, raw: string): void {
+  const extracted = extractStoryboardAssetsFromRawJson(raw);
+  if (!extracted.length) return;
+  const byId = new Map<string, WorkflowAsset>();
+  for (const asset of storyboardPersistGuardByKey.get(key) ?? []) {
+    const id = String(asset.id || '').trim();
+    if (id) byId.set(id, asset);
+  }
+  for (const asset of extracted) {
+    const id = String(asset.id || '').trim();
+    if (!id) continue;
+    byId.set(id, JSON.parse(JSON.stringify(asset)) as WorkflowAsset);
+  }
+  storyboardPersistGuardByKey.set(key, [...byId.values()]);
+}
+
+function syncStoryboardPersistGuardFromAssets(
+  key: string,
+  assets: WorkflowAsset[],
+  explicitlyRemoved?: ReadonlySet<string>
+): void {
+  const byId = new Map<string, WorkflowAsset>();
+  for (const asset of storyboardPersistGuardByKey.get(key) ?? []) {
+    const id = String(asset.id || '').trim();
+    if (!id || explicitlyRemoved?.has(id)) continue;
+    byId.set(id, asset);
+  }
+  for (const asset of assets) {
+    if (!isWorkflowStoryboardTableAsset(asset)) continue;
+    const id = String(asset.id || '').trim();
+    if (!id || explicitlyRemoved?.has(id)) continue;
+    byId.set(id, JSON.parse(JSON.stringify(asset)) as WorkflowAsset);
+  }
+  if (byId.size) storyboardPersistGuardByKey.set(key, [...byId.values()]);
+  else storyboardPersistGuardByKey.delete(key);
+}
+
+function resolveStoryboardAssetsForPersistGuard(
+  key: string,
+  cached: WorkflowProjectBundle | undefined
+): WorkflowAsset[] {
+  const byId = new Map<string, WorkflowAsset>();
+  const add = (assets: WorkflowAsset[]) => {
+    for (const asset of assets) {
+      if (!isWorkflowStoryboardTableAsset(asset)) continue;
+      const id = String(asset.id || '').trim();
+      if (!id) continue;
+      byId.set(id, asset);
+    }
+  };
+  add(storyboardPersistGuardByKey.get(key) ?? []);
+  add(cached?.assets ?? []);
+  const raw = readLocalString(key);
+  if (raw) add(extractStoryboardAssetsFromRawJson(raw));
+  return [...byId.values()];
+}
 
 export function listStoryboardTableAssetIds(assets: WorkflowAsset[]): string[] {
   const out: string[] = [];
@@ -188,17 +258,21 @@ export function shouldBlockEmptyWorkflowBundlePersist(
 }
 
 function loadBundleIntoMemoryCache(key: string, raw: string): WorkflowProjectBundle {
+  rememberStoryboardPersistGuardFromRaw(key, raw);
+  let bundle: WorkflowProjectBundle;
   try {
-    const bundle = prepareWorkflowBundleAfterLoad(parseBundleJson(raw));
-    bundleMemoryCache.set(key, cloneBundle(bundle));
-    return bundle;
+    bundle = prepareWorkflowBundleAfterLoad(parseBundleJson(raw));
   } catch (e) {
     console.warn('[workspace] bundle load failed, raw recover', key, e);
     lastWorkflowBundleLoadDegraded = true;
-    const recovered = recoverWorkflowBundleFromRawJson(raw);
-    bundleMemoryCache.set(key, cloneBundle(recovered));
-    return recovered;
+    bundle = recoverWorkflowBundleFromRawJson(raw);
   }
+  const { bundle: merged } = mergePreservingStoryboardTableAssets(
+    bundle,
+    storyboardPersistGuardByKey.get(key) ?? []
+  );
+  bundleMemoryCache.set(key, cloneBundle(merged));
+  return merged;
 }
 
 function parseBundleJson(raw: string): WorkflowProjectBundle {
@@ -481,31 +555,7 @@ function resolveExistingAssetsForPersistGuard(
   key: string,
   cached: WorkflowProjectBundle | undefined
 ): WorkflowAsset[] {
-  const fromCache = cached?.assets ?? [];
-  const raw = readLocalString(key);
-  if (!raw) return fromCache;
-  let fromRaw: WorkflowAsset[] = [];
-  try {
-    const data = JSON.parse(raw) as Partial<WorkflowProjectBundle>;
-    fromRaw = Array.isArray(data.assets) ? data.assets : [];
-  } catch {
-    return fromCache;
-  }
-  if (!fromRaw.length) return fromCache;
-  if (!fromCache.length) return fromRaw;
-
-  const merged = [...fromCache];
-  const seen = new Set(
-    fromCache.map((a) => String(a.id || '').trim()).filter(Boolean)
-  );
-  for (const asset of fromRaw) {
-    if (!isWorkflowStoryboardTableAsset(asset)) continue;
-    const id = String(asset.id || '').trim();
-    if (!id || seen.has(id)) continue;
-    seen.add(id);
-    merged.push(asset);
-  }
-  return merged;
+  return resolveStoryboardAssetsForPersistGuard(key, cached);
 }
 
 /** 将 save 阶段补回的分镜表合并进当前 assets 列表（去重） */
@@ -560,6 +610,7 @@ export function saveWorkflowBundle(
     }
   }
   bundleMemoryCache.set(key, snapshot);
+  syncStoryboardPersistGuardFromAssets(key, snapshot.assets, opts?.explicitlyRemovedStoryboardIds);
   const payload = JSON.stringify(stripWorkflowBundleForIdbPersist(snapshot));
   schedulePersistToIdb(key, payload, opts);
   return { saved: true, restoredStoryboardAssets };
@@ -650,6 +701,7 @@ export function trySaveWorkflowBundle(
 export function removeWorkflowBundle(projectId: string, persistUserId: WorkspacePersistUserId = null): void {
   const key = workflowBundleStorageKey(projectId, persistUserId);
   bundleMemoryCache.delete(key);
+  storyboardPersistGuardByKey.delete(key);
   pendingIdbPayloadByKey.delete(key);
   cancelledIdbBundleKeys.add(key);
   removeLocalKey(key);

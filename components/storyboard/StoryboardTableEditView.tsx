@@ -601,7 +601,7 @@ export default function StoryboardTableEditView({
                 readOnly={readOnly || interaction.readOnly}
                 onSelectRow={handleCanvasSelectRow}
                 onMarqueeSelect={handleMarqueeSelect}
-                onPreviewImage={interaction.previewImage}
+                onPreviewRowFrame={interaction.previewRowFrame}
                 onSelectFrameRoleMark={(_, markId) => setSelectedFrameRoleMarkId(markId)}
                 onAddFrameRoleMark={onAddFrameRoleMark}
                 onUpdateFrameRoleMark={onUpdateFrameRoleMark}
@@ -616,6 +616,11 @@ export default function StoryboardTableEditView({
                 filterMatchedRowIds={filterMatchedRowIds}
                 filterFlashRowId={outlineFlashRowId}
                 roleReplaceEligibleRowIds={roleReplaceEligibleRowIds}
+                onAssignImagesFromDrop={
+                  readOnly || interaction.readOnly
+                    ? undefined
+                    : interaction.assignFrameImageFromDrop
+                }
               />
               {footerAddRow ? <div className="mt-2">{footerAddRow}</div> : null}
             </div>

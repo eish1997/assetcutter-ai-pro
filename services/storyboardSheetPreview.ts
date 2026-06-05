@@ -15,11 +15,15 @@ import {
   saveStoryboardSheetPreviewBlob,
   storyboardSheetPreviewBlobIdbKey,
 } from './storyboardSheetPreviewBlobIdb';
-import type { StoryboardTableRow } from '../types';
+import type { BoundingBox, StoryboardTableRow } from '../types';
 import { createStoryboardTableRow } from './storyboardTableAsset';
 import type { StoryboardSheetPreviewImageVersion } from './storyboardSheetPreviewHistory';
 import { cleanupSheetPreviewHistoryAssets, normalizeSheetPreviewImageHistory } from './storyboardSheetPreviewHistory';
-import { storyboardShotNosMatch } from './storyboardSheetVisionSplit';
+import {
+  clampStoryboardSheetSplitBox,
+  storyboardShotNosMatch,
+  visionLabelToShotNo,
+} from './storyboardSheetVisionSplit';
 import {
   STORYBOARD_NUMERIC_SHOT_NO_WIDTH,
   formatStoryboardNumericShotNo,
@@ -38,6 +42,11 @@ export type StoryboardSheetPreviewGenStatus =
   | 'done'
   | 'failed'
   | 'cancelled';
+
+export type StoryboardSheetPreviewSplitDetectStatus =
+  | 'detecting'
+  | 'ready'
+  | 'failed';
 
 export type StoryboardSheetPreviewItem = {
   id: string;
@@ -60,6 +69,11 @@ export type StoryboardSheetPreviewItem = {
   layoutCols?: number;
   /** 上传拼图可选：切分网格行数 */
   layoutRows?: number;
+  /** 上传拼图：预识别/手动调整后的切分框（点击切分时直接复用） */
+  splitDraftBoxes?: BoundingBox[];
+  /** 上传拼图：后台切分框识别状态 */
+  splitDetectStatus?: StoryboardSheetPreviewSplitDetectStatus;
+  splitDetectError?: string;
 };
 
 export type StoryboardSheetPreviewPersistImageKind = 'companion' | 'idb' | 'inline' | 'memory';
@@ -80,6 +94,33 @@ function previewStorageKey(assetId: string): string {
 
 export function storyboardSheetPreviewCompanionResultKey(previewId: string): string {
   return `storyboard-sheet-preview-${previewId}`;
+}
+
+function normalizeSheetSplitDraftBoxes(raw: unknown): BoundingBox[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const boxes = raw
+    .map((item) => {
+      if (!item || typeof item !== 'object') return null;
+      const box = item as Partial<BoundingBox>;
+      if (
+        typeof box.xmin !== 'number' ||
+        typeof box.ymin !== 'number' ||
+        typeof box.xmax !== 'number' ||
+        typeof box.ymax !== 'number'
+      ) {
+        return null;
+      }
+      return clampStoryboardSheetSplitBox({
+        id: typeof box.id === 'string' ? box.id : '',
+        label: typeof box.label === 'string' ? box.label : '',
+        xmin: box.xmin,
+        ymin: box.ymin,
+        xmax: box.xmax,
+        ymax: box.ymax,
+      });
+    })
+    .filter((box): box is BoundingBox => Boolean(box));
+  return boxes.length ? boxes : undefined;
 }
 
 function normalizePreviewItem(raw: unknown): StoryboardSheetPreviewItem | null {
@@ -121,7 +162,29 @@ function normalizePreviewItem(raw: unknown): StoryboardSheetPreviewItem | null {
       typeof item.layoutRows === 'number' && item.layoutRows > 0
         ? Math.round(item.layoutRows)
         : undefined,
+    splitDraftBoxes: normalizeSheetSplitDraftBoxes(item.splitDraftBoxes),
+    splitDetectStatus:
+      item.splitDetectStatus === 'detecting' ||
+      item.splitDetectStatus === 'ready' ||
+      item.splitDetectStatus === 'failed'
+        ? item.splitDetectStatus
+        : undefined,
+    splitDetectError: typeof item.splitDetectError === 'string' ? item.splitDetectError : undefined,
   };
+}
+
+export function shotNosFromSheetSplitBoxes(boxes: BoundingBox[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const box of boxes) {
+    const shotNo = visionLabelToShotNo(box.label);
+    if (!shotNo) continue;
+    const key = shotNo.toUpperCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(shotNo);
+  }
+  return result;
 }
 
 function hasSheetPreviewDisplayImage(item: StoryboardSheetPreviewItem): boolean {
@@ -665,6 +728,32 @@ export function buildSheetPreviewLabel(base: string, shotNos: string[]): string 
   return shotLabel ? `${base} · ${shotLabel}` : base;
 }
 
+/** 后台识别完成后再落盘图片时，保留内存里已更新的切分框/镜号 */
+export function mergeLiveStoryboardSheetPreviewSplitState(
+  draft: StoryboardSheetPreviewItem,
+  live?: StoryboardSheetPreviewItem | null
+): StoryboardSheetPreviewItem {
+  if (!live || live.id !== draft.id) return draft;
+  const liveHasBoxes = (live.splitDraftBoxes?.length ?? 0) > 0;
+  const liveDetectDone =
+    live.splitDetectStatus === 'ready' || live.splitDetectStatus === 'failed';
+  if (!liveHasBoxes && !liveDetectDone && !live.shotNos.length) return draft;
+  return {
+    ...draft,
+    shotNos: live.shotNos.length ? live.shotNos : draft.shotNos,
+    label:
+      live.shotNos.length && live.label !== draft.label && live.label.trim()
+        ? live.label
+        : draft.label,
+    splitDraftBoxes: liveHasBoxes ? live.splitDraftBoxes : draft.splitDraftBoxes,
+    splitDetectStatus: live.splitDetectStatus ?? draft.splitDetectStatus,
+    splitDetectError: live.splitDetectError ?? draft.splitDetectError,
+    matchedCount:
+      typeof live.matchedCount === 'number' ? live.matchedCount : draft.matchedCount,
+    rowIds: (live.rowIds?.length ?? 0) ? live.rowIds! : draft.rowIds,
+  };
+}
+
 export function ensureStoryboardRowsForShotNos(
   tableRows: StoryboardTableRow[],
   shotNos: string[]
@@ -727,9 +816,9 @@ export function isStoryboardSheetPreviewSplittable(item: StoryboardSheetPreviewI
     return false;
   }
   if (!hasSheetPreviewDisplayImage(item)) return false;
+  if (item.source === 'uploaded') return true;
   const shotTotal = item.shotNos.length || item.rowIds.length;
-  if (!shotTotal) return false;
-  return true;
+  return shotTotal > 0;
 }
 
 export function listSplittableStoryboardSheetPreviews(

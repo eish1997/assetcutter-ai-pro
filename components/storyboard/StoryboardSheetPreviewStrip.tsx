@@ -1,6 +1,7 @@
 import React, { useRef } from 'react';
 import type { StoryboardSheetPreviewItem } from '../../services/storyboardSheetPreview';
 import { formatSheetPreviewShotLabel } from '../../services/storyboardSheetPreview';
+import { collectStoryboardFrameImageFiles } from '../../services/storyboardTableFrameImport';
 import AppIcon from '../ui/AppIcon';
 import StoryboardSheetPreviewVersionMenu from './StoryboardSheetPreviewVersionMenu';
 import { STORYBOARD_GAP_TIGHT } from './storyboardTableUi';
@@ -14,8 +15,7 @@ type Props = {
   progressLabel?: string;
   readOnly?: boolean;
   onPreview: (preview: StoryboardSheetPreviewItem) => void;
-  onUpload?: (file: File) => void;
-  onEditShotRange?: (previewId: string) => void;
+  onUpload?: (files: File[]) => void;
   onApplySheet?: (previewId: string) => void;
   onRegenerateSheet?: (previewId: string) => void;
   onSelectSheetVersion?: (previewId: string, versionId: string) => void;
@@ -50,7 +50,6 @@ export default function StoryboardSheetPreviewStrip({
   readOnly = false,
   onPreview,
   onUpload,
-  onEditShotRange,
   onApplySheet,
   onRegenerateSheet,
   onSelectSheetVersion,
@@ -61,10 +60,28 @@ export default function StoryboardSheetPreviewStrip({
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const onFilePicked = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
+    const files = collectStoryboardFrameImageFiles(event.target.files);
     event.target.value = '';
-    if (!file || !onUpload) return;
-    onUpload(file);
+    if (!files.length || !onUpload) return;
+    onUpload(files);
+  };
+
+  const onDropFiles = (event: React.DragEvent) => {
+    if (readOnly || busy || !onUpload) return;
+    const files = collectStoryboardFrameImageFiles(event.dataTransfer);
+    if (!files.length) return;
+    event.preventDefault();
+    event.stopPropagation();
+    onUpload(files);
+  };
+
+  const onDragOverFiles = (event: React.DragEvent) => {
+    if (readOnly || busy || !onUpload) return;
+    if (event.dataTransfer.types.includes('Files')) {
+      event.preventDefault();
+      event.stopPropagation();
+      event.dataTransfer.dropEffect = 'copy';
+    }
   };
 
   const pendingCount = sheetPreviews.filter((item) => item.genStatus === 'pending').length;
@@ -72,7 +89,12 @@ export default function StoryboardSheetPreviewStrip({
     progress && progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
 
   return (
-    <div className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-3">
+    <div
+      className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-3"
+      data-no-global-image-drop
+      onDragOver={onDragOverFiles}
+      onDrop={onDropFiles}
+    >
       <div className="mb-2 flex items-center justify-between gap-2">
         <span className="text-[10px] font-semibold text-gray-300">生成拼图</span>
         <span className="text-[9px] text-gray-500">
@@ -115,6 +137,7 @@ export default function StoryboardSheetPreviewStrip({
         ref={fileInputRef}
         type="file"
         accept="image/*"
+        multiple
         className="hidden"
         onChange={onFilePicked}
       />
@@ -134,6 +157,10 @@ export default function StoryboardSheetPreviewStrip({
           const cancelled = preview.genStatus === 'cancelled';
           const hasImage = previewHasImage(preview);
           const canPreview = hasImage && !generating && !failed && !cancelled;
+          const splitDetecting =
+            preview.source === 'uploaded' && preview.splitDetectStatus === 'detecting';
+          const splitDetectFailed =
+            preview.source === 'uploaded' && preview.splitDetectStatus === 'failed';
 
           return (
             <div key={preview.id} className={SHEET_PREVIEW_COL}>
@@ -203,6 +230,19 @@ export default function StoryboardSheetPreviewStrip({
                 {cardBusy ? (
                   <div className="absolute inset-0 flex items-center justify-center bg-black/50 text-[9px] text-gray-200">
                     {regenBusy ? '重生成…' : '切分中…'}
+                  </div>
+                ) : null}
+                {splitDetecting && !cardBusy ? (
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/45 text-[9px] text-gray-200">
+                    识别中…
+                  </div>
+                ) : null}
+                {splitDetectFailed && !cardBusy && !splitDetecting ? (
+                  <div
+                    className="absolute inset-0 flex items-center justify-center bg-amber-500/10 px-1 text-center text-[8px] text-amber-200/90"
+                    title={preview.splitDetectError || '识别失败，可点切分手动框选'}
+                  >
+                    识别失败
                   </div>
                 ) : null}
                 {shotLabel ? (
@@ -288,17 +328,6 @@ export default function StoryboardSheetPreviewStrip({
               >
                 {preview.label}
               </span>
-              {!readOnly && onEditShotRange && preview.source === 'uploaded' ? (
-                <button
-                  type="button"
-                    disabled={busy || cardBusy}
-                    onClick={() => onEditShotRange(preview.id)}
-                  className="truncate text-center text-[8px] text-gray-600 transition-colors hover:text-gray-300"
-                  title="修改镜号范围"
-                >
-                  修改镜号
-                </button>
-              ) : null}
             </div>
           );
         })}
@@ -315,7 +344,7 @@ export default function StoryboardSheetPreviewStrip({
             className={`${SHEET_PREVIEW_SLOT} flex-col gap-1 border-white/[0.12] bg-white/[0.02] text-gray-500 transition-colors hover:border-white/25 hover:bg-white/[0.04] hover:text-gray-300 disabled:cursor-not-allowed disabled:opacity-40`}
           >
             <AppIcon name="image" className="h-3.5 w-3.5 opacity-70" />
-            <span>上传</span>
+            <span>上传/拖入</span>
           </button>
         ) : null}
       </div>

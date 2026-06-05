@@ -1,4 +1,5 @@
 import React, { useRef } from 'react';
+import { collectStoryboardFrameImageFiles } from '../../services/storyboardTableFrameImport';
 import { resolveStoryboardRoleAssetDisplaySrc } from '../../services/storyboardRoleAssets';
 import AppIcon from '../ui/AppIcon';
 import {
@@ -18,9 +19,18 @@ type Props = {
   onRemove: (id: string) => void;
   onRename: (id: string, name: string) => void;
   onAssignImage: (id: string, file: File) => void;
+  onAssignImages?: (startAssetId: string | null, files: File[]) => void;
   onClearImage: (id: string) => void;
   onPreviewImage?: (src: string) => void;
 };
+
+function allowImageDrop(event: React.DragEvent) {
+  if (event.dataTransfer.types.includes('Files')) {
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = 'copy';
+  }
+}
 
 export default function StoryboardRoleAssetStrip({
   assets,
@@ -34,6 +44,7 @@ export default function StoryboardRoleAssetStrip({
   onRemove,
   onRename,
   onAssignImage,
+  onAssignImages,
   onClearImage,
   onPreviewImage,
 }: Props) {
@@ -47,20 +58,51 @@ export default function StoryboardRoleAssetStrip({
   };
 
   const onFilePicked = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
+    const files = collectStoryboardFrameImageFiles(event.target.files);
     event.target.value = '';
     const id = pendingIdRef.current;
     pendingIdRef.current = null;
-    if (!file || !id) return;
-    onAssignImage(id, file);
+    if (!files.length || !id) return;
+    if (files.length === 1) {
+      onAssignImage(id, files[0]!);
+      return;
+    }
+    if (onAssignImages) {
+      onAssignImages(id, files);
+      return;
+    }
+    onAssignImage(id, files[0]!);
+  };
+
+  const handleDrop = (startAssetId: string | null, event: React.DragEvent) => {
+    if (readOnly || busyId) return;
+    const files = collectStoryboardFrameImageFiles(event.dataTransfer);
+    if (!files.length) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (files.length === 1 && startAssetId) {
+      onAssignImage(startAssetId, files[0]!);
+      return;
+    }
+    if (onAssignImages) {
+      onAssignImages(startAssetId, files);
+      return;
+    }
+    if (startAssetId) onAssignImage(startAssetId, files[0]!);
   };
 
   return (
-    <div className="min-w-0">
+    <div
+      className="min-w-0"
+      data-no-global-image-drop
+      onDragOver={readOnly ? undefined : allowImageDrop}
+      onDrop={readOnly ? undefined : (event) => handleDrop(null, event)}
+    >
       <input
         ref={fileInputRef}
         type="file"
         accept="image/*"
+        multiple
         className="hidden"
         onChange={onFilePicked}
       />
@@ -70,7 +112,11 @@ export default function StoryboardRoleAssetStrip({
           const busy = busyId === asset.id;
           return (
             <div key={asset.id} className="flex w-[4.75rem] shrink-0 flex-col gap-1">
-              <div className="group relative aspect-square w-full overflow-hidden rounded-xl ring-1 ring-white/[0.08]">
+              <div
+                className="group relative aspect-square w-full overflow-hidden rounded-xl ring-1 ring-white/[0.08]"
+                onDragOver={readOnly || busy ? undefined : allowImageDrop}
+                onDrop={readOnly || busy ? undefined : (event) => handleDrop(asset.id, event)}
+              >
                 {img ? (
                   <button
                     type="button"
@@ -93,7 +139,7 @@ export default function StoryboardRoleAssetStrip({
                     className="flex h-full w-full flex-col items-center justify-center gap-0.5 bg-white/[0.03] text-[9px] text-gray-500 transition-colors hover:bg-white/[0.06] hover:text-gray-300 disabled:cursor-not-allowed"
                   >
                     <AppIcon name="image" className="h-3.5 w-3.5 opacity-70" />
-                    {busy ? '处理中…' : '添加图片'}
+                    {busy ? '处理中…' : '点击或拖入'}
                   </button>
                 )}
                 {busy ? (

@@ -45,6 +45,7 @@ import {
   STORYBOARD_EDIT_FEEDBACK_REDRAW_UNDERSTAND_KEY,
   STORYBOARD_EDIT_REDRAW_MODEL_KEY,
   type StoryboardRowRedrawInvokeOptions,
+  resolveStoryboardRowFrameDataUrl,
 } from '../../services/storyboardTableRedraw';
 import { canPatchStoryboardPassedRow, storyboardRowIsPassed } from './storyboardRowDisplay';
 import { createStoryboardRoleAsset } from '../../services/storyboardRoleAssets';
@@ -60,6 +61,7 @@ import {
   clearStoryboardNamedAssetImageFields,
   persistStoryboardNamedAssetImage,
 } from '../../services/storyboardNamedAssetImage';
+import { planStoryboardNamedAssetImportAssignments } from '../../services/storyboardNamedAssetImport';
 import {
   executeStoryboardRoleReplaceCollageBatch,
   listStoryboardRoleReplaceEligibleRows,
@@ -80,6 +82,7 @@ import {
 } from '../../services/storyboardTableSheetGen';
 import {
   buildLayoutSheetGridBoxes,
+  clampStoryboardSheetSplitBox,
   detectStoryboardSheetPanels,
   splitStoryboardSheetByVision,
   splitStoryboardSheetFromBoxes,
@@ -93,19 +96,19 @@ import {
   createSheetGenPlaceholderItems,
   cleanupStoryboardSheetPreviewAssets,
   ensureStoryboardRowsForShotNos,
-  formatSheetPreviewShotLabel,
   hydrateStoryboardSheetPreviews,
   isStoryboardSheetPreviewSplittable,
   listSplittableStoryboardSheetPreviews,
   loadStoryboardSheetPreviewsStored,
+  mergeLiveStoryboardSheetPreviewSplitState,
   mergeStoryboardSheetPreviews,
-  parseSheetPreviewShotRange,
   prependStoryboardSheetPreview,
   prepareStoryboardSheetPreviewForSave,
   readStoryboardSheetPreviews,
   removeStoryboardSheetPreview,
   resolveSheetTaskRows,
   resolveStoryboardSheetPreviewDataUrl,
+  shotNosFromSheetSplitBoxes,
   updateStoryboardSheetPreview,
   upsertStoryboardSheetPreview,
   writeStoryboardSheetPreviewsToCompanion,
@@ -183,6 +186,10 @@ import {
   readStoryboardFrameFromFile,
 } from './storyboardFrameImage';
 import {
+  collectStoryboardFrameImageFiles,
+  planStoryboardFrameImportAssignments,
+} from '../../services/storyboardTableFrameImport';
+import {
   clearStoryboardRowFrameWithHistory,
   replaceStoryboardRowFrame,
   restoreStoryboardRowFrameVersion,
@@ -200,6 +207,11 @@ import StoryboardTableEditView, {
   type StoryboardTableEditViewHandle,
 } from './StoryboardTableEditView';
 import StoryboardSheetSplitAdjustModal from './StoryboardSheetSplitAdjustModal';
+import StoryboardFrameCropModal, {
+  type StoryboardFrameCropNorm,
+  isNearlyFullCropNorm,
+} from './StoryboardFrameCropModal';
+import { cropDataUrlByViewportNorm } from '../../services/panoViewportCapture';
 import type { StoryboardRowInteractionValue } from './StoryboardRowInteractionContext';
 import StoryboardTableGridPreview from './StoryboardTableGridPreview';
 import StoryboardTableVideoPreview from './StoryboardTableVideoPreview';
@@ -396,6 +408,9 @@ export default function StoryboardTablePanel({
     getStoryboardSheetSplitSession(asset.id)?.batchBusy ?? false
   );
   const sheetPreviewSaveChainRef = useRef(Promise.resolve());
+  const sheetSplitDetectJobsRef = useRef(new Map<string, Promise<BoundingBox[]>>());
+  const sheetSplitDetectQueueRef = useRef<Array<{ previewId: string; dataUrl: string }>>([]);
+  const sheetSplitDetectDrainingRef = useRef(false);
   const sheetGenControllerRef = useRef<StoryboardSheetGenBatchController | null>(null);
   const sheetGenPlaceholderIdsRef = useRef<Map<number, string>>(new Map());
   const [sheetSplitBusyId, setSheetSplitBusyId] = useState<string | null>(
@@ -419,6 +434,13 @@ export default function StoryboardTablePanel({
     applying: boolean;
     initialSelectedId?: string | null;
   } | null>(null);
+  const [frameCropDraft, setFrameCropDraft] = useState<{
+    current: { rowId: string; imageSrc: string; shotNo?: string };
+    rest: Array<{ rowId: string; imageSrc: string; shotNo?: string }>;
+    applying: boolean;
+    mode?: 'import' | 'recrop';
+    initialCropNorm?: StoryboardFrameCropNorm | null;
+  } | null>(null);
   const [frameCollageSplitCtx, setFrameCollageSplitCtx] = useState<{
     previewId: string;
     sheetImage: string;
@@ -428,9 +450,11 @@ export default function StoryboardTablePanel({
     sheetLabel: string;
   } | null>(null);
 
+  const panelMountedRef = useRef(true);
   const syncSheetSplitSession = useCallback(
     (patch: Partial<StoryboardSheetSplitSessionState>) => {
       const next = patchStoryboardSheetSplitSession(asset.id, patch);
+      if (!panelMountedRef.current) return next;
       sheetSplitBatchBusyRef.current = next.batchBusy;
       setSheetSplitBatchBusy(next.batchBusy);
       setSheetSplitProgress(next.progress);
@@ -639,13 +663,29 @@ export default function StoryboardTablePanel({
   }, [asset.id, commitSheetPreviews, companionBaseUrl, companionProjectId]);
 
   useEffect(() => {
+    panelMountedRef.current = true;
+    // 上次在未确认切分框时离开面板时，全局 session 会残留 busy，挂载时丢弃
+    clearStoryboardSheetSplitSessionBusy(asset.id);
+    setSheetSplitBusyId(null);
+    setSheetSplitBatchBusy(false);
+    setSheetSplitProgress(null);
+    sheetSplitBatchBusyRef.current = false;
+
     const unsubscribe = subscribeStoryboardSheetSplitSession(asset.id, (session) => {
+      if (!panelMountedRef.current) return;
       sheetSplitBatchBusyRef.current = session.batchBusy;
       setSheetSplitBatchBusy(session.batchBusy);
       setSheetSplitProgress(session.progress);
       setSheetSplitBusyId(session.busyPreviewId);
     });
-    return unsubscribe;
+
+    return () => {
+      panelMountedRef.current = false;
+      splitAdjustResolverRef.current?.(null);
+      splitAdjustResolverRef.current = null;
+      clearStoryboardSheetSplitSessionBusy(asset.id);
+      unsubscribe();
+    };
   }, [asset.id]);
 
   useEffect(() => {
@@ -1354,6 +1394,68 @@ export default function StoryboardTablePanel({
     [asset.id, companionBaseUrl, companionProjectId, onNotify, patchSceneAssets, readOnly]
   );
 
+  const assignRoleAssetImages = useCallback(
+    async (startAssetId: string | null, files: File[]) => {
+      if (readOnly) return;
+      const imageFiles = collectStoryboardFrameImageFiles(files);
+      if (!imageFiles.length) return;
+      const assets = table.roleAssets ?? [];
+      const { assignments, skippedFilled, unusedFiles } = planStoryboardNamedAssetImportAssignments(
+        assets,
+        startAssetId,
+        imageFiles.length,
+        { overwriteStart: Boolean(startAssetId) }
+      );
+      if (!assignments.length) {
+        onNotify?.(
+          'warn',
+          skippedFilled > 0 ? '角色槽位均已配图，请先清除或拖到指定角色上覆盖' : '请先添加角色'
+        );
+        return;
+      }
+      for (const { assetId, fileIndex } of assignments) {
+        await assignRoleAssetImage(assetId, imageFiles[fileIndex]!);
+      }
+      if (assignments.length > 0) {
+        const parts = [`已为 ${assignments.length} 个角色配图`];
+        if (unusedFiles > 0) parts.push(`${unusedFiles} 张未使用`);
+        onNotify?.('info', parts.join('，'));
+      }
+    },
+    [assignRoleAssetImage, onNotify, readOnly, table.roleAssets]
+  );
+
+  const assignSceneAssetImages = useCallback(
+    async (startAssetId: string | null, files: File[]) => {
+      if (readOnly) return;
+      const imageFiles = collectStoryboardFrameImageFiles(files);
+      if (!imageFiles.length) return;
+      const assets = table.sceneAssets ?? [];
+      const { assignments, skippedFilled, unusedFiles } = planStoryboardNamedAssetImportAssignments(
+        assets,
+        startAssetId,
+        imageFiles.length,
+        { overwriteStart: Boolean(startAssetId) }
+      );
+      if (!assignments.length) {
+        onNotify?.(
+          'warn',
+          skippedFilled > 0 ? '场景槽位均已配图，请先清除或拖到指定场景上覆盖' : '请先添加场景'
+        );
+        return;
+      }
+      for (const { assetId, fileIndex } of assignments) {
+        await assignSceneAssetImage(assetId, imageFiles[fileIndex]!);
+      }
+      if (assignments.length > 0) {
+        const parts = [`已为 ${assignments.length} 个场景配图`];
+        if (unusedFiles > 0) parts.push(`${unusedFiles} 张未使用`);
+        onNotify?.('info', parts.join('，'));
+      }
+    },
+    [assignSceneAssetImage, onNotify, readOnly, table.sceneAssets]
+  );
+
   const clearSceneAssetImage = useCallback(
     (id: string) => {
       if (readOnly) return;
@@ -1632,7 +1734,9 @@ export default function StoryboardTablePanel({
     ) =>
       new Promise<BoundingBox[] | null>((resolve) => {
         splitAdjustResolverRef.current = resolve;
-        setSplitAdjustDraft({ ...draft, detecting: true, applying: false });
+        const hasInitialBoxes = draft.boxes.length > 0;
+        setSplitAdjustDraft({ ...draft, detecting: !hasInitialBoxes, applying: false });
+        if (hasInitialBoxes) return;
         void detectBoxes()
           .then((boxes) => {
             setSplitAdjustDraft((prev) =>
@@ -1693,6 +1797,50 @@ export default function StoryboardTablePanel({
     [promptSheetSplitBoxAdjust, table.rows]
   );
 
+  const beginFrameRecropFromRow = useCallback(
+    async (rowId: string) => {
+      if (frameCropDraft) return;
+      const row = table.rows.find((r) => r.id === rowId);
+      if (!row || !storyboardRowHasFrameRef(row)) return;
+      if (readOnly || storyboardRowIsPassed(row)) {
+        const src = resolveStoryboardRowFrameDisplaySrc(row);
+        if (src) openStoryboardLightbox(src);
+        return;
+      }
+
+      let imageSrc = resolveStoryboardRowFrameDisplaySrc(row);
+      if (!imageSrc) {
+        onNotify?.('warn', '分镜图仍在加载，请稍后再试');
+        return;
+      }
+      if (!/^data:/i.test(imageSrc) && !/^blob:/i.test(imageSrc)) {
+        const resolved = await resolveStoryboardRowFrameDataUrl(
+          row,
+          companionBaseUrl,
+          companionProjectId
+        );
+        if (!resolved.ok) {
+          onNotify?.('warn', resolved.error || '分镜图加载失败');
+          return;
+        }
+        imageSrc = resolved.dataUrl;
+      }
+
+      setFrameCropDraft({
+        current: {
+          rowId,
+          imageSrc,
+          shotNo: row.shotNo?.trim() || undefined,
+        },
+        rest: [],
+        applying: false,
+        mode: 'recrop',
+        initialCropNorm: { x: 0, y: 0, w: 1, h: 1 },
+      });
+    },
+    [companionBaseUrl, companionProjectId, frameCropDraft, onNotify, openStoryboardLightbox, readOnly, table.rows]
+  );
+
   const previewRowFrame = useCallback(
     (row: StoryboardTableRow) => {
       const ctx = frameCollageSplitCtx;
@@ -1739,16 +1887,15 @@ export default function StoryboardTablePanel({
         })();
         return;
       }
-      const src = resolveStoryboardRowFrameDisplaySrc(row);
-      if (src) openStoryboardLightbox(src);
+      void beginFrameRecropFromRow(row.id);
     },
     [
       asset.id,
+      beginFrameRecropFromRow,
       companionBaseUrl,
       companionProjectId,
       frameCollageSplitCtx,
       onNotify,
-      openStoryboardLightbox,
       patchRow,
       promptFeedbackCollageSplitAdjust,
       table.rows,
@@ -1777,11 +1924,13 @@ export default function StoryboardTablePanel({
           companionBaseUrl,
           companionProjectId,
         });
+        const live = sheetPreviewsRef.current.find((item) => item.id === prepared.preview.id);
+        const preview = mergeLiveStoryboardSheetPreviewSplitState(prepared.preview, live);
 
         commitSheetPreviews((prev) => {
           const result = existing
-            ? upsertStoryboardSheetPreview(asset.id, prepared.preview, prev)
-            : prependStoryboardSheetPreview(asset.id, prepared.preview, prev);
+            ? upsertStoryboardSheetPreview(asset.id, preview, prev)
+            : prependStoryboardSheetPreview(asset.id, preview, prev);
           if (!result.persisted) {
             if (prepared.persistedImage === 'companion' || prepared.persistedImage === 'idb') {
               onNotify?.('warn', '拼图元数据写入失败，图片已落盘但刷新后可能无法恢复列表');
@@ -1794,7 +1943,7 @@ export default function StoryboardTablePanel({
           void syncSheetPreviewListToCompanion(result.items);
           return result.items;
         });
-        return prepared.preview;
+        return preview;
       };
 
       const next = sheetPreviewSaveChainRef.current.then(run, run);
@@ -1816,28 +1965,176 @@ export default function StoryboardTablePanel({
     [commitSheetPreviews]
   );
 
+  const persistSheetPreviewPatch = useCallback(
+    (previewId: string, patch: Partial<StoryboardSheetPreviewItem>) => {
+      commitSheetPreviews((prev) => {
+        const updateResult = updateStoryboardSheetPreview(asset.id, previewId, patch, prev);
+        void syncSheetPreviewListToCompanion(updateResult.items);
+        return updateResult.items;
+      });
+    },
+    [asset.id, commitSheetPreviews, syncSheetPreviewListToCompanion]
+  );
+
+  const runSheetPreviewSplitDetect = useCallback(
+    (previewId: string, dataUrl: string): Promise<BoundingBox[]> => {
+      const existing = sheetSplitDetectJobsRef.current.get(previewId);
+      if (existing) return existing;
+
+      const job = (async () => {
+        patchSheetPreviewInMemory(previewId, {
+          splitDetectStatus: 'detecting',
+          splitDetectError: undefined,
+        });
+        try {
+          let normalized = dataUrl;
+          try {
+            normalized = await compressStoryboardFrameDataUrl(dataUrl);
+          } catch {
+            /* keep raw */
+          }
+          const rawBoxes = await detectStoryboardSheetPanels(
+            normalized,
+            [],
+            capabilityTextModel,
+            { timeoutMs: WORKFLOW_CUT_DETECT_TIMEOUT_MS }
+          );
+          const boxes = rawBoxes.map((box) => clampStoryboardSheetSplitBox(box));
+          const shotNos = shotNosFromSheetSplitBoxes(boxes);
+          const current = sheetPreviewsRef.current.find((preview) => preview.id === previewId);
+          if (!current) return boxes;
+
+          setSplitAdjustDraft((prev) =>
+            prev?.previewId === previewId && prev.detecting
+              ? { ...prev, boxes, detecting: false }
+              : prev
+          );
+
+          const patch: Partial<StoryboardSheetPreviewItem> = {
+            label: shotNos.length
+              ? buildSheetPreviewLabel('上传拼图', shotNos)
+              : current.label,
+            shotNos,
+            splitDraftBoxes: boxes,
+            splitDetectStatus: boxes.length ? 'ready' : 'failed',
+            splitDetectError: boxes.length ? undefined : '未识别到分镜格，切分时可手动框选',
+          };
+          persistSheetPreviewPatch(previewId, patch);
+          return boxes;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : '识别切分框失败';
+          persistSheetPreviewPatch(previewId, {
+            splitDetectStatus: 'failed',
+            splitDetectError: message,
+          });
+          setSplitAdjustDraft((prev) =>
+            prev?.previewId === previewId && prev.detecting
+              ? { ...prev, detecting: false }
+              : prev
+          );
+          throw error;
+        } finally {
+          sheetSplitDetectJobsRef.current.delete(previewId);
+        }
+      })();
+
+      sheetSplitDetectJobsRef.current.set(previewId, job);
+      return job;
+    },
+    [
+      asset.id,
+      capabilityTextModel,
+      persistSheetPreviewPatch,
+      patchSheetPreviewInMemory,
+    ]
+  );
+
+  const drainSheetPreviewSplitDetectQueue = useCallback(async () => {
+    if (sheetSplitDetectDrainingRef.current) return;
+    sheetSplitDetectDrainingRef.current = true;
+    try {
+      for (;;) {
+        const next = sheetSplitDetectQueueRef.current.shift();
+        if (!next) break;
+        if (sheetSplitDetectJobsRef.current.has(next.previewId)) {
+          await sheetSplitDetectJobsRef.current.get(next.previewId)!.catch(() => undefined);
+          continue;
+        }
+        try {
+          await runSheetPreviewSplitDetect(next.previewId, next.dataUrl);
+        } catch {
+          /* failed state persisted in runSheetPreviewSplitDetect */
+        }
+      }
+    } finally {
+      sheetSplitDetectDrainingRef.current = false;
+      if (sheetSplitDetectQueueRef.current.length) {
+        void drainSheetPreviewSplitDetectQueue();
+      }
+    }
+  }, [runSheetPreviewSplitDetect]);
+
+  const enqueueSheetPreviewSplitDetect = useCallback(
+    (previewId: string, dataUrl: string) => {
+      const alreadyQueued = sheetSplitDetectQueueRef.current.some(
+        (item) => item.previewId === previewId
+      );
+      if (alreadyQueued || sheetSplitDetectJobsRef.current.has(previewId)) return;
+      sheetSplitDetectQueueRef.current.push({ previewId, dataUrl });
+      void drainSheetPreviewSplitDetectQueue();
+    },
+    [drainSheetPreviewSplitDetectQueue]
+  );
+
+  /** 刷新/中断后 metadata 仍为 detecting 但内存无任务时，自动续跑识别 */
+  const resumePendingSheetPreviewSplitDetects = useCallback(async () => {
+    const pending = sheetPreviewsRef.current.filter(
+      (item) =>
+        item.source === 'uploaded' &&
+        item.splitDetectStatus === 'detecting' &&
+        !(item.splitDraftBoxes?.length ?? 0)
+    );
+    for (const item of pending) {
+      if (
+        sheetSplitDetectJobsRef.current.has(item.id) ||
+        sheetSplitDetectQueueRef.current.some((q) => q.previewId === item.id)
+      ) {
+        continue;
+      }
+      const resolved = await resolveStoryboardSheetPreviewDataUrl(
+        item,
+        asset.id,
+        companionBaseUrl,
+        companionProjectId
+      );
+      if (!resolved.ok) {
+        persistSheetPreviewPatch(item.id, {
+          splitDetectStatus: 'failed',
+          splitDetectError: resolved.error || '拼图图片不可用',
+        });
+        continue;
+      }
+      enqueueSheetPreviewSplitDetect(item.id, resolved.dataUrl);
+    }
+  }, [
+    asset.id,
+    companionBaseUrl,
+    companionProjectId,
+    enqueueSheetPreviewSplitDetect,
+    persistSheetPreviewPatch,
+  ]);
+
+  useEffect(() => {
+    if (sheetGenBusy) return;
+    void resumePendingSheetPreviewSplitDetects();
+  }, [sheetGenBusy, sheetPreviews, resumePendingSheetPreviewSplitDetects]);
+
   const splitSheetPreviewById = useCallback(
     async (
       previewId: string
     ): Promise<{ matchedCount: number; warn?: string; label: string } | null> => {
-      const item = sheetPreviewsRef.current.find((preview) => preview.id === previewId);
+      let item = sheetPreviewsRef.current.find((preview) => preview.id === previewId);
       if (!item) return null;
-
-      let workingRows = table.rows;
-      if (item.shotNos.length) {
-        const ensured = ensureStoryboardRowsForShotNos(workingRows, item.shotNos);
-        if (ensured.createdIds.length) {
-          patchTable(() => reindexStoryboardRows(ensured.nextTableRows), {
-            fieldCatalog: table.fieldCatalog,
-          });
-          workingRows = ensured.nextTableRows;
-        }
-      }
-
-      const taskRows = resolveSheetTaskRows(workingRows, item.rowIds, item.shotNos);
-      if (!taskRows.length) {
-        return { matchedCount: 0, warn: '找不到对应镜头，请检查镜号范围', label: item.label };
-      }
 
       const resolved = await resolveStoryboardSheetPreviewDataUrl(
         item,
@@ -1849,11 +2146,6 @@ export default function StoryboardTablePanel({
         return { matchedCount: 0, warn: resolved.error, label: item.label };
       }
 
-      const layoutGrid =
-        item.layoutCols != null && item.layoutRows != null
-          ? { cols: item.layoutCols, rows: item.layoutRows }
-          : undefined;
-
       let normalized = resolved.dataUrl;
       try {
         normalized = await compressStoryboardFrameDataUrl(resolved.dataUrl);
@@ -1861,37 +2153,96 @@ export default function StoryboardTablePanel({
         /* keep raw */
       }
 
+      if (item.source === 'uploaded' && item.splitDetectStatus === 'detecting') {
+        const detectJob = sheetSplitDetectJobsRef.current.get(previewId);
+        if (detectJob) {
+          void detectJob.catch(() => undefined);
+        } else {
+          enqueueSheetPreviewSplitDetect(previewId, normalized);
+        }
+      }
+
+      item = sheetPreviewsRef.current.find((preview) => preview.id === previewId) ?? item;
+      const cachedBoxes = (item.splitDraftBoxes ?? []).map((box) =>
+        clampStoryboardSheetSplitBox(box)
+      );
+      const shotNosFromBoxes = shotNosFromSheetSplitBoxes(cachedBoxes);
+      const effectiveShotNos = item.shotNos.length ? item.shotNos : shotNosFromBoxes;
+
+      let workingRows = table.rows;
+      if (effectiveShotNos.length) {
+        const ensured = ensureStoryboardRowsForShotNos(workingRows, effectiveShotNos);
+        if (ensured.createdIds.length) {
+          patchTable(() => reindexStoryboardRows(ensured.nextTableRows), {
+            fieldCatalog: table.fieldCatalog,
+          });
+          workingRows = ensured.nextTableRows;
+        }
+      }
+
+      let taskRows = resolveSheetTaskRows(workingRows, item.rowIds, effectiveShotNos);
+      if (!taskRows.length) {
+        taskRows = workingRows;
+      }
+
+      const layoutGrid =
+        item.layoutCols != null && item.layoutRows != null
+          ? { cols: item.layoutCols, rows: item.layoutRows }
+          : undefined;
+
       try {
         const adjustedBoxes = await promptSheetSplitBoxAdjust(
           {
             previewId,
             imageSrc: normalized,
-            boxes: [],
-            expectedShotNos: item.shotNos,
+            boxes: cachedBoxes,
+            expectedShotNos: effectiveShotNos,
             sheetLabel: item.label,
           },
           async () => {
+            if (cachedBoxes.length) return cachedBoxes;
+            const pending = sheetSplitDetectJobsRef.current.get(previewId);
+            if (pending) {
+              try {
+                return (await pending).map((box) => clampStoryboardSheetSplitBox(box));
+              } catch {
+                return [];
+              }
+            }
+            if (item.source === 'uploaded') {
+              try {
+                return (await runSheetPreviewSplitDetect(previewId, normalized)).map((box) =>
+                  clampStoryboardSheetSplitBox(box)
+                );
+              } catch {
+                return [];
+              }
+            }
             let boxes = await detectStoryboardSheetPanels(
               normalized,
-              item.shotNos,
+              effectiveShotNos,
               capabilityTextModel,
               { timeoutMs: WORKFLOW_CUT_DETECT_TIMEOUT_MS }
             );
             if (!boxes.length && layoutGrid) {
               boxes = buildLayoutSheetGridBoxes(
                 layoutGrid,
-                Math.max(taskRows.length, item.shotNos.length || 1)
+                Math.max(taskRows.length, effectiveShotNos.length || 1)
               );
             }
-            return boxes;
+            return boxes.map((box) => clampStoryboardSheetSplitBox(box));
           }
         );
         if (!adjustedBoxes) {
           return null;
         }
 
+        const splitExpectedShotNos = effectiveShotNos.length
+          ? effectiveShotNos
+          : shotNosFromSheetSplitBoxes(adjustedBoxes);
+
         const split = await splitStoryboardSheetFromBoxes(normalized, taskRows, adjustedBoxes, {
-          expectedShotNos: item.shotNos,
+          expectedShotNos: splitExpectedShotNos,
           autoCreateRows: true,
           allowGridFallback: false,
           layoutGrid,
@@ -1902,11 +2253,21 @@ export default function StoryboardTablePanel({
           table.fieldCatalog,
           workingRows
         );
-        const nextRowIds = taskRows.map((row) => row.id);
+        const nextRowIds = split.matches.map((match) => match.rowId);
+        const nextShotNos = splitExpectedShotNos.length
+          ? splitExpectedShotNos
+          : shotNosFromSheetSplitBoxes(adjustedBoxes);
         const updateResult = updateStoryboardSheetPreview(
           asset.id,
           previewId,
-          { matchedCount, rowIds: nextRowIds },
+          {
+            matchedCount,
+            rowIds: nextRowIds,
+            shotNos: nextShotNos,
+            splitDraftBoxes: adjustedBoxes.map((box) => clampStoryboardSheetSplitBox(box)),
+            splitDetectStatus: 'ready',
+            splitDetectError: undefined,
+          },
           sheetPreviewsRef.current
         );
         commitSheetPreviews(() => updateResult.items);
@@ -1925,6 +2286,8 @@ export default function StoryboardTablePanel({
       companionProjectId,
       patchTable,
       promptSheetSplitBoxAdjust,
+      enqueueSheetPreviewSplitDetect,
+      runSheetPreviewSplitDetect,
       syncSheetPreviewListToCompanion,
       table.fieldCatalog,
       table.rows,
@@ -2193,79 +2556,44 @@ export default function StoryboardTablePanel({
   );
 
   const uploadSheetPreview = useCallback(
-    async (
-      dataUrl: string,
-      payload: {
-        shotFrom: string;
-        shotTo: string;
-        layoutCols?: number;
-        layoutRows?: number;
-      }
-    ) => {
-      const parsed = parseSheetPreviewShotRange(payload.shotFrom, payload.shotTo);
-      if (!parsed.ok) {
-        onNotify?.('warn', parsed.error);
-        return;
-      }
-      const ensured = ensureStoryboardRowsForShotNos(table.rows, parsed.shotNos);
-      if (ensured.createdIds.length) {
-        patchTable(() => reindexStoryboardRows(ensured.nextTableRows), {
-          fieldCatalog: table.fieldCatalog,
-        });
-      }
-      await saveSheetPreviewItem({
+    (dataUrl: string) => {
+      const draft = createSheetPreviewItem({
         imageDataUrl: dataUrl,
-        label: buildSheetPreviewLabel('上传拼图', parsed.shotNos),
+        label: '上传拼图',
         source: 'uploaded',
         genStatus: 'done',
-        rowIds: ensured.rows.map((row) => row.id),
-        shotNos: parsed.shotNos,
-        layoutCols: payload.layoutCols,
-        layoutRows: payload.layoutRows,
-      });
-      onNotify?.(
-        'info',
-        `拼图已加入预览（${formatSheetPreviewShotLabel(parsed.shotNos)}），可点「切分」写入镜头`
-      );
-    },
-    [onNotify, patchTable, saveSheetPreviewItem, table.fieldCatalog, table.rows]
-  );
-
-  const updateSheetPreviewShotRange = useCallback(
-    async (
-      previewId: string,
-      payload: {
-        shotFrom: string;
-        shotTo: string;
-        layoutCols?: number;
-        layoutRows?: number;
-      }
-    ) => {
-      const parsed = parseSheetPreviewShotRange(payload.shotFrom, payload.shotTo);
-      if (!parsed.ok) {
-        onNotify?.('warn', parsed.error);
-        return;
-      }
-      const item = sheetPreviewsRef.current.find((preview) => preview.id === previewId);
-      if (!item || item.source !== 'uploaded') return;
-
-      await saveSheetPreviewItem({
-        id: previewId,
-        imageDataUrl: item.imageDataUrl,
-        imageCompanionKey: item.imageCompanionKey,
-        imageIdbKey: item.imageIdbKey,
-        label: buildSheetPreviewLabel('上传拼图', parsed.shotNos),
-        source: 'uploaded',
-        genStatus: item.genStatus,
         rowIds: [],
-        shotNos: parsed.shotNos,
-        matchedCount: 0,
-        layoutCols: payload.layoutCols,
-        layoutRows: payload.layoutRows,
+        shotNos: [],
+        splitDetectStatus: 'detecting',
       });
-      onNotify?.('info', `镜号范围已更新为 ${formatSheetPreviewShotLabel(parsed.shotNos)}`);
+
+      commitSheetPreviews((prev) => {
+        const result = prependStoryboardSheetPreview(asset.id, draft, prev);
+        void syncSheetPreviewListToCompanion(result.items);
+        return result.items;
+      });
+
+      onNotify?.('info', '拼图已加入预览，正在后台识别切分框…');
+      enqueueSheetPreviewSplitDetect(draft.id, dataUrl);
+      void saveSheetPreviewItem({
+        id: draft.id,
+        imageDataUrl: dataUrl,
+        label: draft.label,
+        source: 'uploaded',
+        genStatus: 'done',
+        rowIds: [],
+        shotNos: [],
+        splitDetectStatus: 'detecting',
+      });
     },
-    [onNotify, saveSheetPreviewItem]
+    [
+      asset.id,
+      commitSheetPreviews,
+      onNotify,
+      enqueueSheetPreviewSplitDetect,
+      saveSheetPreviewItem,
+      syncSheetPreviewListToCompanion,
+    ]
   );
 
   const removeSheetPreview = useCallback(
@@ -2384,40 +2712,25 @@ export default function StoryboardTablePanel({
     fileInputRef.current?.click();
   };
 
-  const onFilePicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = '';
-    const rowId = pendingRowIdRef.current;
-    pendingRowIdRef.current = null;
-    if (!file || !rowId) return;
-    await assignFrameImage(rowId, file);
-  };
-
-  const assignFrameImage = useCallback(
-    async (rowId: string, file: File | null, clipboard?: DataTransfer | null) => {
+  const applyCroppedFrameToRow = useCallback(
+    async (rowId: string, dataUrl: string) => {
+      const row = table.rows.find((r) => r.id === rowId);
+      if (!row) return;
+      if (storyboardRowIsPassed(row)) {
+        onNotify?.('warn', '该镜头已通过，请先取消通过');
+        return;
+      }
       setImageBusyRowId(rowId);
       try {
-        let dataUrl: string | null = null;
-        if (file) dataUrl = await readStoryboardFrameFromFile(file);
-        else dataUrl = await readStoryboardFrameFromClipboard(clipboard ?? null);
-        if (!dataUrl) return;
-        const row = table.rows.find((r) => r.id === rowId);
-        if (!row) return;
-        if (storyboardRowIsPassed(row)) {
-          onNotify?.('warn', '该镜头已通过，请先取消通过');
-          return;
-        }
         const patch = await replaceStoryboardRowFrame({
           row,
           dataUrl,
           assetId: asset.id,
           companionBaseUrl,
           companionProjectId,
-          source: file ? 'upload' : 'paste',
+          source: 'upload',
         });
         patchRow(rowId, patch);
-      } catch (err) {
-        onNotify?.('warn', err instanceof Error ? err.message : '图片处理失败');
       } finally {
         setImageBusyRowId(null);
       }
@@ -2425,6 +2738,215 @@ export default function StoryboardTablePanel({
     [asset.id, companionBaseUrl, companionProjectId, onNotify, patchRow, table.rows]
   );
 
+  const openFrameCropQueue = useCallback(
+    (
+      queue: Array<{ rowId: string; imageSrc: string; shotNo?: string }>,
+      options?: { unusedFiles?: number }
+    ) => {
+      if (!queue.length) return;
+      const [current, ...rest] = queue;
+      setFrameCropDraft({ current: current!, rest, applying: false, mode: 'import' });
+      if (options?.unusedFiles && options.unusedFiles > 0) {
+        onNotify?.('info', `${options.unusedFiles} 张图片超出可配图镜头数，已忽略`);
+      }
+    },
+    [onNotify]
+  );
+
+  const beginFrameCropFromDataUrl = useCallback(
+    (rowId: string, dataUrl: string) => {
+      if (readOnly) return;
+      const row = table.rows.find((r) => r.id === rowId);
+      if (row && storyboardRowIsPassed(row)) {
+        onNotify?.('warn', '该镜头已通过，请先取消通过');
+        return;
+      }
+      openFrameCropQueue([
+        { rowId, imageSrc: dataUrl, shotNo: row?.shotNo?.trim() || undefined },
+      ]);
+    },
+    [onNotify, openFrameCropQueue, readOnly, table.rows]
+  );
+
+  const beginFrameCropFromFiles = useCallback(
+    async (startRowId: string, files: File[]) => {
+      if (readOnly) return;
+      const imageFiles = collectStoryboardFrameImageFiles(files);
+      if (!imageFiles.length) return;
+
+      const { assignments, skippedLocked, unusedFiles } = planStoryboardFrameImportAssignments(
+        table.rows,
+        startRowId,
+        imageFiles.length
+      );
+      if (!assignments.length) {
+        onNotify?.(
+          'warn',
+          skippedLocked > 0 ? '可配图的镜头均已通过，请先取消通过' : '没有可配图的镜头'
+        );
+        return;
+      }
+
+      const queue: Array<{ rowId: string; imageSrc: string; shotNo?: string }> = [];
+      for (const { rowId, fileIndex } of assignments) {
+        try {
+          const dataUrl = await readStoryboardFrameFromFile(imageFiles[fileIndex]!);
+          const row = table.rows.find((r) => r.id === rowId);
+          queue.push({ rowId, imageSrc: dataUrl, shotNo: row?.shotNo?.trim() || undefined });
+        } catch (err) {
+          onNotify?.('warn', err instanceof Error ? err.message : '图片读取失败');
+        }
+      }
+      if (!queue.length) return;
+      openFrameCropQueue(queue, { unusedFiles });
+    },
+    [onNotify, openFrameCropQueue, readOnly, table.rows]
+  );
+
+  const onFilePicked = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const files = collectStoryboardFrameImageFiles(e.target.files);
+      e.target.value = '';
+      const rowId = pendingRowIdRef.current;
+      pendingRowIdRef.current = null;
+      if (!files.length || !rowId) return;
+      await beginFrameCropFromFiles(rowId, files);
+    },
+    [beginFrameCropFromFiles]
+  );
+
+  const closeFrameCrop = useCallback(() => {
+    setFrameCropDraft(null);
+  }, []);
+
+  const confirmFrameCrop = useCallback(
+    async (cropNorm: StoryboardFrameCropNorm) => {
+      const draft = frameCropDraft;
+      if (!draft || draft.applying) return;
+      if (draft.mode === 'recrop' && isNearlyFullCropNorm(cropNorm)) {
+        setFrameCropDraft(null);
+        return;
+      }
+      setFrameCropDraft({ ...draft, applying: true });
+      try {
+        const cropped = await cropDataUrlByViewportNorm(draft.current.imageSrc, cropNorm);
+        if (!cropped) {
+          onNotify?.('warn', '裁切失败');
+          setFrameCropDraft((prev) => (prev ? { ...prev, applying: false } : null));
+          return;
+        }
+        const compressed = await compressStoryboardFrameDataUrl(cropped);
+        await applyCroppedFrameToRow(draft.current.rowId, compressed);
+        if (draft.rest.length) {
+          const [next, ...remaining] = draft.rest;
+          setFrameCropDraft({
+            current: next!,
+            rest: remaining,
+            applying: false,
+            mode: draft.mode,
+            initialCropNorm: draft.mode === 'recrop' ? draft.initialCropNorm : undefined,
+          });
+        } else {
+          setFrameCropDraft(null);
+          onNotify?.('info', draft.mode === 'recrop' ? '已更新裁切' : '已配图');
+        }
+      } catch (err) {
+        onNotify?.('warn', err instanceof Error ? err.message : '裁切失败');
+        setFrameCropDraft((prev) => (prev ? { ...prev, applying: false } : null));
+      }
+    },
+    [applyCroppedFrameToRow, frameCropDraft, onNotify]
+  );
+
+  const useFullFrameCropImage = useCallback(async () => {
+    const draft = frameCropDraft;
+    if (!draft || draft.applying) return;
+    if (draft.mode === 'recrop') {
+      setFrameCropDraft(null);
+      return;
+    }
+    setFrameCropDraft({ ...draft, applying: true });
+    try {
+      await applyCroppedFrameToRow(draft.current.rowId, draft.current.imageSrc);
+      if (draft.rest.length) {
+        const [next, ...remaining] = draft.rest;
+        setFrameCropDraft({
+          current: next!,
+          rest: remaining,
+          applying: false,
+          mode: draft.mode,
+          initialCropNorm: undefined,
+        });
+      } else {
+        setFrameCropDraft(null);
+        onNotify?.('info', '已配图');
+      }
+    } catch (err) {
+      onNotify?.('warn', err instanceof Error ? err.message : '配图失败');
+      setFrameCropDraft((prev) => (prev ? { ...prev, applying: false } : null));
+    }
+  }, [applyCroppedFrameToRow, frameCropDraft, onNotify]);
+
+  const assignFrameImageFromPaste = useCallback(
+    async (rowId: string, e: React.ClipboardEvent) => {
+      const files = collectStoryboardFrameImageFiles(e.clipboardData);
+      if (files.length) {
+        e.preventDefault();
+        await beginFrameCropFromFiles(rowId, files);
+        return;
+      }
+      const file = e.clipboardData.files?.[0];
+      if (file) {
+        e.preventDefault();
+        await beginFrameCropFromFiles(rowId, [file]);
+        return;
+      }
+      try {
+        const dataUrl = await readStoryboardFrameFromClipboard(e.clipboardData ?? null);
+        if (!dataUrl) return;
+        e.preventDefault();
+        beginFrameCropFromDataUrl(rowId, dataUrl);
+      } catch (err) {
+        onNotify?.('warn', err instanceof Error ? err.message : '图片处理失败');
+      }
+    },
+    [beginFrameCropFromDataUrl, beginFrameCropFromFiles, onNotify]
+  );
+
+  const clearRowImage = useCallback(
+    async (rowId: string) => {
+      const row = table.rows.find((r) => r.id === rowId);
+      if (!row) return;
+      if (storyboardRowIsPassed(row)) {
+        onNotify?.('warn', '该镜头已通过，请先取消通过');
+        return;
+      }
+      const prevImg = String(row.frameImage || '').trim();
+      if (/^blob:/i.test(prevImg)) {
+        try {
+          URL.revokeObjectURL(prevImg);
+        } catch {
+          /* ignore */
+        }
+      }
+      patchRow(rowId, {
+        frameImage: undefined,
+        frameImageObjectKey: undefined,
+        frameImageCompanionKey: undefined,
+      });
+      try {
+        const patch = await clearStoryboardRowFrameWithHistory(row, {
+          assetId: asset.id,
+          companionBaseUrl,
+          companionProjectId,
+        });
+        patchRow(rowId, { frameImageHistory: patch.frameImageHistory });
+      } catch (err) {
+        onNotify?.('warn', err instanceof Error ? err.message : '清除分镜图失败');
+      }
+    },
+    [asset.id, companionBaseUrl, companionProjectId, onNotify, patchRow, table.rows]
+  );
   const restoreFrameVersion = useCallback(
     async (rowId: string, versionId: string) => {
       if (readOnly) return;
@@ -2454,24 +2976,6 @@ export default function StoryboardTablePanel({
       }
     },
     [asset.id, companionBaseUrl, companionProjectId, onNotify, patchRow, readOnly, table.rows]
-  );
-
-  const clearRowImage = useCallback(
-    async (rowId: string) => {
-      const row = table.rows.find((r) => r.id === rowId);
-      if (!row) return;
-      if (storyboardRowIsPassed(row)) {
-        onNotify?.('warn', '该镜头已通过，请先取消通过');
-        return;
-      }
-      const patch = await clearStoryboardRowFrameWithHistory(row, {
-        assetId: asset.id,
-        companionBaseUrl,
-        companionProjectId,
-      });
-      patchRow(rowId, patch);
-    },
-    [asset.id, companionBaseUrl, companionProjectId, onNotify, patchRow, table.rows]
   );
 
   const runRedraw = useCallback(
@@ -3341,23 +3845,25 @@ export default function StoryboardTablePanel({
       restoreFrameVersion: (rowId, versionId) => {
         void restoreFrameVersion(rowId, versionId);
       },
-      assignFrameImageFromDrop: (rowId, e) =>
-        void assignFrameImage(rowId, e.dataTransfer.files?.[0] ?? null, e.dataTransfer),
+      assignFrameImageFromDrop: (rowId, e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const files = collectStoryboardFrameImageFiles(e.dataTransfer);
+        if (!files.length) return;
+        void beginFrameCropFromFiles(rowId, files);
+      },
       assignFrameImageFromPaste: (rowId, e) => {
-        const file = e.clipboardData.files?.[0];
-        if (file) {
-          e.preventDefault();
-          void assignFrameImage(rowId, file, e.clipboardData);
-        }
+        void assignFrameImageFromPaste(rowId, e);
       },
       runRedraw,
       runParse,
       runOptimize,
-      previewImage: previewRowFrame,
+      previewRowFrame,
       redrawDisabledReason: redrawRowDisabledReason,
     };
   }, [
-    assignFrameImage,
+    assignFrameImageFromPaste,
+    beginFrameCropFromFiles,
     clearRowImage,
     restoreFrameVersion,
     moveRow,
@@ -3394,8 +3900,9 @@ export default function StoryboardTablePanel({
       aria-modal
       aria-label={readOnly ? '分镜表（只读）' : '分镜表'}
       data-ac-block-workflow-marquee
+      data-no-global-image-drop
     >
-      <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={onFilePicked} />
+      <input ref={fileInputRef} type="file" accept="image/*" multiple className="hidden" onChange={onFilePicked} />
 
       <header className={`shrink-0 border-b border-white/[0.04] ${STORYBOARD_PAD_PANEL} pb-2`}>
         <div className={`flex items-center ${STORYBOARD_PAD_HEADER_INNER}`}>
@@ -3754,7 +4261,6 @@ export default function StoryboardTablePanel({
           splittableSheetCount={sheetPreviews.filter(isStoryboardSheetPreviewSplittable).length}
           onPreviewSheetImage={openSheetPreviewLightbox}
           onUploadSheetPreview={uploadSheetPreview}
-          onUpdateSheetPreviewShotRange={updateSheetPreviewShotRange}
           onApplySheetPreview={applySheetPreview}
           onRegenerateSheetPreview={regenerateSheetPreview}
           onActivateSheetPreviewVersion={activateSheetPreviewVersion}
@@ -3768,12 +4274,14 @@ export default function StoryboardTablePanel({
           onRemoveRoleAsset={removeRoleAsset}
           onRenameRoleAsset={renameRoleAsset}
           onAssignRoleAssetImage={assignRoleAssetImage}
+          onAssignRoleAssetImages={assignRoleAssetImages}
           onClearRoleAssetImage={clearRoleAssetImage}
           onPreviewRoleAssetImage={openStoryboardLightbox}
           onAddSceneAsset={addSceneAsset}
           onRemoveSceneAsset={removeSceneAsset}
           onRenameSceneAsset={renameSceneAsset}
           onAssignSceneAssetImage={assignSceneAssetImage}
+          onAssignSceneAssetImages={assignSceneAssetImages}
           onClearSceneAssetImage={clearSceneAssetImage}
           onPreviewSceneAssetImage={openStoryboardLightbox}
         />
@@ -3897,6 +4405,29 @@ export default function StoryboardTablePanel({
             </button>
           }
           shellZIndexClassName={STORYBOARD_LIGHTBOX_Z}
+        />
+      ) : null}
+      {frameCropDraft ? (
+        <StoryboardFrameCropModal
+          key={`${frameCropDraft.current.rowId}:${frameCropDraft.current.imageSrc}`}
+          open
+          busy={frameCropDraft.applying}
+          imageSrc={frameCropDraft.current.imageSrc}
+          shotLabel={
+            frameCropDraft.current.shotNo
+              ? `镜 ${frameCropDraft.current.shotNo}`
+              : undefined
+          }
+          queueHint={
+            frameCropDraft.rest.length > 0
+              ? `还有 ${frameCropDraft.rest.length} 张待裁切`
+              : undefined
+          }
+          headerTitle={frameCropDraft.mode === 'recrop' ? '预览与裁切' : undefined}
+          initialCropNorm={frameCropDraft.initialCropNorm ?? null}
+          onClose={closeFrameCrop}
+          onConfirm={(crop) => void confirmFrameCrop(crop)}
+          onUseFullImage={() => void useFullFrameCropImage()}
         />
       ) : null}
       {splitAdjustDraft ? (

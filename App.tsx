@@ -1,5 +1,6 @@
 
 import React, { Suspense, useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import {
   processTexture,
   DEFAULT_PROMPTS,
@@ -44,7 +45,13 @@ import { useUserUiPrefs } from './hooks/useUserUiPrefs';
 import Waves from './components/ui/Waves';
 import AppIcon from './components/ui/AppIcon';
 import GeminiFairnessFloatingNotice from './components/GeminiFairnessFloatingNotice';
-import { RIGHT_DOCK_LOG_BOTTOM, RIGHT_DOCK_PANEL_BOTTOM, RIGHT_DOCK_RIGHT } from './components/floatingDockConstants';
+import {
+  RIGHT_DOCK_LOG_BOTTOM,
+  RIGHT_DOCK_LOG_PANEL_Z_INDEX,
+  RIGHT_DOCK_LOG_Z_INDEX,
+  RIGHT_DOCK_PANEL_BOTTOM,
+  RIGHT_DOCK_RIGHT,
+} from './components/floatingDockConstants';
 import { ProgressivePreviewImage } from './components/ProgressivePreviewImage';
 import { DialogSessionRowBackdrop } from './components/DialogSessionRowBackdrop';
 import { SiteImage } from './components/SiteImage';
@@ -316,7 +323,6 @@ const WorkflowComposerOverlay = React.lazy(() => import('./components/WorkflowCo
 const PromptArenaSection = React.lazy(() => import('./components/PromptArenaSection'));
 const SeamRepairSection = React.lazy(() => import('./components/SeamRepairSection'));
 const GenerateTextureSection = React.lazy(() => import('./components/GenerateTextureSection'));
-const SiteAssistant = React.lazy(() => import('./components/SiteAssistant'));
 const SettingsSection = React.lazy(() => import('./components/SettingsSection'));
 const RequireRole = React.lazy(() => import('./components/auth/RequireRole'));
 const AdminLayout = React.lazy(() => import('./components/admin/AdminLayout.js'));
@@ -853,6 +859,8 @@ const MainApp: React.FC = () => {
   const workflowSessionHadNonEmptyAssetsRef = useRef(false);
   /** 本会话用户显式删除的分镜表资产 id，保存时允许从 bundle 移除 */
   const explicitlyRemovedStoryboardIdsRef = useRef<Set<string>>(new Set());
+  /** 当前项目 bundle 已从 IDB/本地读完并写入 React，避免首屏 autosave 用空/缺表状态覆盖 */
+  const workflowProjectLoadCompleteRef = useRef(false);
 
   const workflowBundleSaveOpts = useCallback(
     () => ({
@@ -1229,7 +1237,6 @@ const MainApp: React.FC = () => {
   const [pickerCallback, setPickerCallback] = useState<(items: LibraryItem[]) => void>(() => {});
   const [globalLogs, setGlobalLogs] = useState<Array<{ id: string; time: number; module: string; level: 'info' | 'warn' | 'error'; message: string; detail?: string }>>([]);
   const [globalLogOpen, setGlobalLogOpen] = useState(false);
-  const [siteAssistantOpen, setSiteAssistantOpen] = useState(false);
   const [globalLogCopiedId, setGlobalLogCopiedId] = useState<string | null>(null);
   const [tripoRecoveryContext, setTripoRecoveryContext] = useState<{
     presetId: string;
@@ -1309,7 +1316,7 @@ const MainApp: React.FC = () => {
     void (async () => {
       const pid = activeWorkspaceProjectIdRef.current;
       const scope = userIdRef.current ?? null;
-      if (pid && workspaceLocalIdbHydrateReadyRef.current) {
+      if (pid && workspaceLocalIdbHydrateReadyRef.current && workflowProjectLoadCompleteRef.current) {
         trySaveWorkflowBundle(
           pid,
           {
@@ -1577,7 +1584,9 @@ const MainApp: React.FC = () => {
   }, [workflowAssets]);
 
   useEffect(() => {
-    if (!activeWorkspaceProjectId || !workspaceLocalIdbHydrateReady) return;
+    if (!activeWorkspaceProjectId || !workspaceLocalIdbHydrateReady || !workflowProjectLoadCompleteRef.current) {
+      return;
+    }
     if (skipEmptyWorkflowAutosaveOnceRef.current && workflowAssets.length === 0) {
       skipEmptyWorkflowAutosaveOnceRef.current = false;
       return;
@@ -1685,6 +1694,7 @@ const MainApp: React.FC = () => {
 
   const loadWorkspaceProjectInternal = useCallback(
     (id: string) => {
+      workflowProjectLoadCompleteRef.current = false;
       const scope = userIdRef.current ?? null;
       const doLoad = () => {
         const local = loadWorkflowBundle(id, scope);
@@ -1702,6 +1712,7 @@ const MainApp: React.FC = () => {
         setLastOpenedWorkspaceProjectId(id, scope);
         setWorkflowAssets(local.assets);
         setWorkflowPending(local.pending);
+        workflowProjectLoadCompleteRef.current = true;
 
         const uidMerge = userIdRef.current;
         const unameMerge = usernameRef.current;
@@ -4783,55 +4794,44 @@ const MainApp: React.FC = () => {
         </div>
       </div>
 
-      <Suspense fallback={null}>
-        <SiteAssistant
-          tasks={tasks}
-          onRemoveTask={(id) => setTasks((p) => p.filter((t) => t.id !== id))}
-          open={siteAssistantOpen}
-          onOpenChange={(next) => {
-            setSiteAssistantOpen(next);
-            if (next) setGlobalLogOpen(false);
-          }}
-        />
-      </Suspense>
+      {/* 全局日志：Portal 到 body，避免被 #root isolate 层挡住全屏分镜/大图预览 */}
+      {typeof document !== 'undefined'
+        ? createPortal(
+            <>
+              <div
+                className={`fixed ${RIGHT_DOCK_LOG_BOTTOM} ${RIGHT_DOCK_RIGHT} flex items-center justify-center`}
+                style={{ zIndex: RIGHT_DOCK_LOG_Z_INDEX }}
+              >
+                <button
+                  type="button"
+                  onClick={() => setGlobalLogOpen((v) => !v)}
+                  className={`relative w-12 h-12 rounded-full shadow-lg flex items-center justify-center transition-all outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 motion-reduce:transition-none ${
+                    globalLogOpen
+                      ? 'bg-[#1a3354] ring-2 ring-blue-500/45 text-blue-200'
+                      : 'bg-[#16161a] ring-1 ring-white/[0.1] text-gray-200 hover:bg-[#1f1f24] hover:ring-blue-500/35'
+                  }`}
+                  title={globalLogOpen ? '关闭日志' : '打开日志'}
+                  aria-label={globalLogOpen ? '关闭日志' : '打开日志'}
+                >
+                  <svg viewBox="0 0 20 20" className="w-5 h-5" fill="none" aria-hidden>
+                    <rect x="4" y="3.5" width="12" height="13" rx="1.8" stroke="currentColor" strokeWidth="1.5" />
+                    <path d="M7 7h6M7 10h6M7 13h4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+                  </svg>
+                  {globalLogs.length > 0 ? (
+                    <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-blue-600 text-white text-[9px] leading-[18px] text-center border border-[#0f0f10]">
+                      {Math.min(globalLogs.length, 99)}
+                    </span>
+                  ) : null}
+                </button>
+              </div>
 
-      {/* 全局日志：悬浮图标（位于网页助手上方）+ 可开关面板 */}
-      <div className={`fixed ${RIGHT_DOCK_LOG_BOTTOM} ${RIGHT_DOCK_RIGHT} z-[2001] flex items-center justify-center`}>
-        <button
-          type="button"
-          onClick={() => {
-            setGlobalLogOpen((v) => {
-              const next = !v;
-              if (next) setSiteAssistantOpen(false);
-              return next;
-            });
-          }}
-          className={`relative w-12 h-12 rounded-full shadow-lg flex items-center justify-center transition-all outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 motion-reduce:transition-none ${
-            globalLogOpen
-              ? 'bg-[#1a3354] ring-2 ring-blue-500/45 text-blue-200'
-              : 'bg-[#16161a] ring-1 ring-white/[0.1] text-gray-200 hover:bg-[#1f1f24] hover:ring-blue-500/35'
-          }`}
-          title={globalLogOpen ? '关闭日志' : '打开日志'}
-          aria-label={globalLogOpen ? '关闭日志' : '打开日志'}
-        >
-          <svg viewBox="0 0 20 20" className="w-5 h-5" fill="none" aria-hidden>
-            <rect x="4" y="3.5" width="12" height="13" rx="1.8" stroke="currentColor" strokeWidth="1.5" />
-            <path d="M7 7h6M7 10h6M7 13h4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-          </svg>
-          {globalLogs.length > 0 ? (
-            <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-blue-600 text-white text-[9px] leading-[18px] text-center border border-[#0f0f10]">
-              {Math.min(globalLogs.length, 99)}
-            </span>
-          ) : null}
-        </button>
-      </div>
-
-      {globalLogOpen && (
-        <div
-          className={`fixed ${RIGHT_DOCK_PANEL_BOTTOM} ${RIGHT_DOCK_RIGHT} z-[2000] w-[min(420px,calc(100vw-3rem))] max-h-[min(56vh,420px)] rounded-2xl bg-[#0f0f0f] ring-1 ring-white/[0.1] shadow-2xl overflow-hidden motion-reduce:shadow-none`}
-          role="dialog"
-          aria-label="全局日志"
-        >
+              {globalLogOpen ? (
+                <div
+                  className={`fixed ${RIGHT_DOCK_PANEL_BOTTOM} ${RIGHT_DOCK_RIGHT} w-[min(420px,calc(100vw-3rem))] max-h-[min(56vh,420px)] rounded-2xl bg-[#0f0f0f] ring-1 ring-white/[0.1] shadow-2xl overflow-hidden motion-reduce:shadow-none`}
+                  style={{ zIndex: RIGHT_DOCK_LOG_PANEL_Z_INDEX }}
+                  role="dialog"
+                  aria-label="全局日志"
+                >
           <div className="px-4 py-3 border-b border-white/[0.06] bg-[#141416] flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <span className="text-[11px] font-black uppercase tracking-wider text-white">运行日志</span>
@@ -4973,8 +4973,12 @@ const MainApp: React.FC = () => {
               </div>
             )}
           </div>
-        </div>
-      )}
+                </div>
+              ) : null}
+            </>,
+            document.body
+          )
+        : null}
 
       {workspaceTrashDialog?.open && (
         <div

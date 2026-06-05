@@ -4544,6 +4544,7 @@ ${lineSvg}
   const isGlobalUploadBlockedTarget = useCallback((target: EventTarget | null) => {
     const el = target instanceof Element ? target : null;
     if (!el) return false;
+    if (el.closest('[data-ac-block-workflow-marquee]')) return true;
     if (isWorkflowEditableTarget(el)) return true;
     // Do not hijack drag/drop on explicit interactive controls or icon buttons.
     if (el.closest('button, a, label, [role="button"], [role="menuitem"], [data-no-global-image-drop]')) return true;
@@ -4553,6 +4554,7 @@ ${lineSvg}
   useEffect(() => {
     const onWindowPaste = (e: ClipboardEvent) => {
       if (showArchived) return;
+      if (typeof document !== 'undefined' && document.querySelector('[data-ac-block-workflow-marquee]')) return;
       /** 仅让出真正的可编辑区；不要用 isGlobalUploadBlockedTarget(e.target)，否则焦点在顶部 Tab 等按钮上时，在列表里粘贴会被误拦截 */
       const active = document.activeElement;
       if (active && isWorkflowEditableTarget(active)) return;
