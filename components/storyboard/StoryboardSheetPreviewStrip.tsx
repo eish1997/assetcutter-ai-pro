@@ -32,6 +32,13 @@ function previewHasImage(preview: StoryboardSheetPreviewItem): boolean {
   return Boolean(String(preview.imageDataUrl || '').trim());
 }
 
+function isGeneratedTaskTerminal(preview: StoryboardSheetPreviewItem): boolean {
+  return (
+    preview.source === 'generated' &&
+    (preview.genStatus === 'failed' || preview.genStatus === 'cancelled')
+  );
+}
+
 /** 拼图多为横向 contact sheet，需完整显示；每行 5 张均分宽度 */
 const SHEET_PREVIEW_CARD =
   'relative h-[4.25rem] w-full min-w-0 overflow-hidden rounded-lg ring-1 ring-white/[0.08]';
@@ -243,6 +250,38 @@ export default function StoryboardSheetPreviewStrip({
                     title={preview.splitDetectError || '识别失败，可点切分手动框选'}
                   >
                     识别失败
+                  </div>
+                ) : null}
+                {!readOnly && isGeneratedTaskTerminal(preview) ? (
+                  <div className="absolute inset-x-0.5 bottom-4 flex items-center justify-center gap-1">
+                    {onRegenerateSheet ? (
+                      <button
+                        type="button"
+                        aria-label="重新生成"
+                        disabled={busy || cardBusy}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onRegenerateSheet(preview.id);
+                        }}
+                        className="rounded-md bg-black/70 px-1.5 py-0.5 text-[8px] text-gray-100 transition-colors hover:bg-black/85 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        重试
+                      </button>
+                    ) : null}
+                    {onDeleteSheet ? (
+                      <button
+                        type="button"
+                        aria-label="删除任务"
+                        disabled={busy || cardBusy}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onDeleteSheet(preview.id);
+                        }}
+                        className="rounded-md bg-black/70 px-1.5 py-0.5 text-[8px] text-gray-100 transition-colors hover:bg-black/85 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        删除
+                      </button>
+                    ) : null}
                   </div>
                 ) : null}
                 {shotLabel ? (

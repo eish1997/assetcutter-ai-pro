@@ -2600,7 +2600,12 @@ export default function StoryboardTablePanel({
     (previewId: string) => {
       if (readOnly) return;
       const item = sheetPreviewsRef.current.find((preview) => preview.id === previewId);
-      if (!item || item.source !== 'uploaded') return;
+      if (!item) return;
+      const canRemoveUploaded = item.source === 'uploaded';
+      const canRemoveFailedGenerated =
+        item.source === 'generated' &&
+        (item.genStatus === 'failed' || item.genStatus === 'cancelled');
+      if (!canRemoveUploaded && !canRemoveFailedGenerated) return;
 
       const { items, persisted, removed } = removeStoryboardSheetPreview(
         asset.id,
