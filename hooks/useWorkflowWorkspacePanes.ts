@@ -19,8 +19,8 @@ export type UseWorkflowWorkspacePanesArgs = {
   registerPaneWheelHandler?: (handler: ((e: ReactWheelEvent) => void) | null) => void;
   listPaneWidth: number;
   sidebarWidth: number;
-  /** 与框选协调：空格平移开始时清除 */
-  marqueeStartRef: RefObject<boolean>;
+  /** 为 false 时不响应空格框选（非工作区画布、无资产列表等） */
+  enableSpaceMarquee?: boolean;
 };
 
 export function useWorkflowWorkspacePanes({
@@ -28,7 +28,7 @@ export function useWorkflowWorkspacePanes({
   registerPaneWheelHandler,
   listPaneWidth,
   sidebarWidth,
-  marqueeStartRef,
+  enableSpaceMarquee = false,
 }: UseWorkflowWorkspacePanesArgs) {
   const [workspacePane, setWorkspacePane] = useState<number>(1);
   const workspacePaneRef = useRef<number>(1);
@@ -38,9 +38,7 @@ export function useWorkflowWorkspacePanes({
   const workspaceSwipeStartOffsetPx = useRef(0);
   const workspaceRafRef = useRef<number | null>(null);
   const workspaceNextPaneRef = useRef<number>(2);
-  const [spacePanEnabled, setSpacePanEnabled] = useState(false);
-  const [spacePanDragging, setSpacePanDragging] = useState(false);
-  const suppressClickAfterPanRef = useRef(false);
+  const [spaceMarqueeEnabled, setSpaceMarqueeEnabled] = useState(false);
 
   const setWorkspacePaneRaf = useCallback((next: number) => {
     const clamped = Math.max(0, Math.min(2, next));
@@ -105,7 +103,7 @@ export function useWorkflowWorkspacePanes({
     [listPaneWidth, sidebarWidth]
   );
 
-  /** 与 paneToOffsetPx 互逆（连续 offset → 连续 pane），供空格拖拽跟手 */
+  /** 与 paneToOffsetPx 互逆（连续 offset → 连续 pane），供触摸横滑跟手 */
   const offsetPxToPane = useCallback(
     (offset: number) => {
       const W = sidebarWidth;
@@ -161,82 +159,39 @@ export function useWorkflowWorkspacePanes({
   }, [workspacePane, workspaceOffsetPx, workspaceSnapping, workspaceTrackRef]);
 
   useEffect(() => {
-    if (!spacePanEnabled) return;
-    const onMouseDown = (e: MouseEvent) => {
-      if (e.button !== 0) return;
-      const t = e.target as Element | null;
-      if (t?.closest('[data-ac-block-workflow-marquee]')) return;
-      if (isWorkflowEditableTarget(e.target)) return;
-      marqueeStartRef.current = false;
-      e.preventDefault();
-      e.stopPropagation();
-      const startX = e.clientX;
-      const startOffset = paneToOffsetPx(workspacePane);
-      let panStarted = false;
-      const onMove = (ev: MouseEvent) => {
-        const dx = ev.clientX - startX;
-        if (!panStarted) {
-          if (Math.abs(dx) < 2) return;
-          panStarted = true;
-          suppressClickAfterPanRef.current = true;
-          setSpacePanDragging(true);
-        }
-        ev.preventDefault();
-        const nextOffset = startOffset - dx;
-        const next = offsetPxToPane(nextOffset);
-        applyWorkspacePaneImmediate(next);
-      };
-      const onUp = () => {
-        snapWorkspacePaneToNode();
-        if (panStarted) setSpacePanDragging(false);
-        window.removeEventListener('mousemove', onMove, true);
-      };
-      window.addEventListener('mousemove', onMove, true);
-      window.addEventListener('mouseup', onUp, { once: true, capture: true });
-    };
-    window.addEventListener('mousedown', onMouseDown, true);
-    return () => {
-      window.removeEventListener('mousedown', onMouseDown, true);
-      setSpacePanDragging(false);
-    };
-  }, [
-    spacePanEnabled,
-    workspacePane,
-    paneToOffsetPx,
-    offsetPxToPane,
-    applyWorkspacePaneImmediate,
-    snapWorkspacePaneToNode,
-    marqueeStartRef,
-  ]);
+    if (!enableSpaceMarquee) {
+      setSpaceMarqueeEnabled(false);
+    }
+  }, [enableSpaceMarquee]);
 
   useEffect(() => {
     if (typeof document === 'undefined') return;
-    if (spacePanEnabled) {
-      document.body.style.cursor = spacePanDragging ? 'grabbing' : 'grab';
+    if (spaceMarqueeEnabled && enableSpaceMarquee) {
+      document.body.style.cursor = 'crosshair';
     } else {
       document.body.style.cursor = '';
     }
     return () => {
       document.body.style.cursor = '';
     };
-  }, [spacePanEnabled, spacePanDragging]);
+  }, [spaceMarqueeEnabled, enableSpaceMarquee]);
 
   useEffect(() => {
+    if (!enableSpaceMarquee) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.code !== 'Space') return;
       if (isWorkflowEditableTarget(e.target)) return;
       if (typeof document !== 'undefined' && document.querySelector('[data-ac-block-workflow-marquee]')) return;
+      if (typeof document !== 'undefined' && !document.querySelector('[data-workflow-asset-list]')) return;
       e.preventDefault();
-      setSpacePanEnabled(true);
+      setSpaceMarqueeEnabled(true);
     };
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.code !== 'Space') return;
-      setSpacePanEnabled(false);
-      setSpacePanDragging(false);
+      setSpaceMarqueeEnabled(false);
     };
     const onBlur = () => {
-      setSpacePanEnabled(false);
-      setSpacePanDragging(false);
+      setSpaceMarqueeEnabled(false);
     };
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
@@ -246,7 +201,7 @@ export function useWorkflowWorkspacePanes({
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
     };
-  }, []);
+  }, [enableSpaceMarquee]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -306,9 +261,7 @@ export function useWorkflowWorkspacePanes({
     workspaceOffsetPx,
     workspaceSwipeTouchX,
     workspaceSwipeStartOffsetPx,
-    spacePanEnabled,
-    spacePanDragging,
-    suppressClickAfterPanRef,
+    spaceMarqueeEnabled,
     workspaceViewportTouchHandlers,
   };
 }

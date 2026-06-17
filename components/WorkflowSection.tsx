@@ -314,6 +314,7 @@ import {
 } from './workflow/workflowCardAspect';
 import { groupCapabilityPresetsByCategory } from './workflow/workflowCapabilityGroups';
 import { WorkflowSidebarColumn, type WorkflowSidebarFavoriteEntry } from './workflow/WorkflowSidebarColumn';
+import WorkflowSpaceMarqueeChrome from './workflow/WorkflowSpaceMarqueeChrome';
 import WorkspaceQuickComposeBar, {
   type WorkspaceQuickComposeComposeMode,
   type WorkspaceQuickComposePromptCard,
@@ -1121,6 +1122,7 @@ const WorkflowSection: React.FC<{
   /** 大纲：有 id 表示该组折叠子项；默认全展开 */
   const [outlineCollapsedIds, setOutlineCollapsedIds] = useState<Set<string>>(() => new Set());
   const centerScrollRef = useRef<HTMLDivElement>(null);
+  const listPaneRef = useRef<HTMLDivElement>(null);
   const presetScrollRef = useRef<HTMLDivElement>(null);
   const [workspaceViewportWidth, setWorkspaceViewportWidth] = useState(0);
   const handleCenterWheelDuringDrag = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
@@ -1329,31 +1331,30 @@ const WorkflowSection: React.FC<{
   const listPaneWidth = Math.max(320, paneWidth - sidebarWidth);
   const presetPaneWidth = listPaneWidth;
   const trackTotalWidth = listPaneWidth + sidebarWidth + presetPaneWidth + sidebarWidth;
+  const assetListMarqueeActive = quickComposeShellActive && !showArchived;
   const marqueeStartRef = useRef(false);
   const {
     workspacePane,
     setWorkspacePane: _setWorkspacePane,
     snapWorkspacePaneToNode,
     handlePaneWheel,
-    spacePanEnabled,
-    spacePanDragging,
-    suppressClickAfterPanRef,
+    spaceMarqueeEnabled,
     workspaceViewportTouchHandlers,
   } = useWorkflowWorkspacePanes({
     workspaceTrackRef,
     registerPaneWheelHandler,
     listPaneWidth,
     sidebarWidth,
-    marqueeStartRef,
+    enableSpaceMarquee: assetListMarqueeActive,
   });
   /** 供 document wheel capture 读取：按住空格时不拦截滚轮，以便滚动资产列表 */
-  const spacePanEnabledRef = useRef(false);
+  const spaceMarqueeEnabledRef = useRef(false);
   useLayoutEffect(() => {
-    spacePanEnabledRef.current = spacePanEnabled;
-  }, [spacePanEnabled]);
-  /** 按住空格时：在卡片上滚轮改为滚动资产列表（不依赖浏览器默认滚动穿透） */
-  const applyWheelToAssetListWhileSpacePan = useCallback((e: React.WheelEvent) => {
-    if (!spacePanEnabled) return;
+    spaceMarqueeEnabledRef.current = spaceMarqueeEnabled;
+  }, [spaceMarqueeEnabled]);
+  /** 按住空格框选时：在卡片上滚轮改为滚动资产列表（不依赖浏览器默认滚动穿透） */
+  const applyWheelToAssetListWhileSpaceMarquee = useCallback((e: React.WheelEvent) => {
+    if (!spaceMarqueeEnabled) return;
     const list = centerScrollRef.current;
     if (!list) return;
     const dy = normalizeWheelDeltaY(e);
@@ -1361,7 +1362,7 @@ const WorkflowSection: React.FC<{
     e.preventDefault();
     e.stopPropagation();
     list.scrollTop += dy;
-  }, [spacePanEnabled]);
+  }, [spaceMarqueeEnabled]);
   /** 从功能区「词」进入能力页：横向滑到能力列并滚动到对应预设卡片 */
   const jumpToCapabilityPreset = useCallback((preset: CustomAppModule) => {
     const mode: 'presets' | 'image_process' = isImageProcessPreset(preset) ? 'image_process' : 'presets';
@@ -1420,11 +1421,12 @@ const WorkflowSection: React.FC<{
   const {
     marqueeActive,
     marqueeOverlayElRef,
-    marqueePaneRef,
+    handleSpaceMarqueePointerDown,
   } = useWorkflowMarquee({
     registerMarqueeStartHandler,
     showArchived,
     workspacePane,
+    spaceMarqueeEnabled,
     marqueeStartRef,
     cardRefs,
     pendingRef,
@@ -6198,7 +6200,7 @@ ${lineSvg}
     const handler = (e: WheelEvent) => {
       const el = e.target instanceof Element ? e.target : null;
       if (el?.closest('[data-prevent-wheel-scroll]')) {
-        if (spacePanEnabledRef.current) return;
+        if (spaceMarqueeEnabledRef.current) return;
         e.preventDefault();
       }
     };
@@ -9126,6 +9128,13 @@ ${lineSvg}
 
   return (
     <>
+    <WorkflowSpaceMarqueeChrome
+      active={spaceMarqueeEnabled && assetListMarqueeActive}
+      listPaneRef={listPaneRef}
+      workspacePane={workspacePane}
+      onPointerDown={handleSpaceMarqueePointerDown}
+      onWheel={applyWheelToAssetListWhileSpaceMarquee}
+    />
     <div className="flex h-full min-h-0 flex-col gap-2">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
       <div className={`flex flex-col items-stretch gap-1.5 shrink-0 ${WORKFLOW_EDGE_GUTTER}`}>
@@ -9251,13 +9260,7 @@ ${lineSvg}
       <div className="flex-1 min-h-0 flex flex-col overflow-hidden min-w-0">
         <div
           ref={workspaceViewportRef}
-          className={`flex-1 min-h-0 overflow-hidden ${spacePanEnabled ? (spacePanDragging ? 'cursor-grabbing' : 'cursor-grab') : ''}`}
-          onClickCapture={(e) => {
-            if (!suppressClickAfterPanRef.current) return;
-            suppressClickAfterPanRef.current = false;
-            e.preventDefault();
-            e.stopPropagation();
-          }}
+          className="flex-1 min-h-0 overflow-hidden"
           {...workspaceViewportTouchHandlers}
         >
           <div
@@ -9350,7 +9353,12 @@ ${lineSvg}
           />
         </div>
         </div>
-        <div className="min-w-0 min-h-0 h-full flex flex-col shrink-0" style={{ width: `${listPaneWidth}px` }}>
+        <div
+          ref={listPaneRef}
+          data-workflow-asset-list
+          className="relative min-w-0 min-h-0 h-full flex flex-col shrink-0"
+          style={{ width: `${listPaneWidth}px` }}
+        >
         <div
           ref={centerScrollRef}
           className="flex-1 min-w-0 min-h-0 overflow-y-auto no-scrollbar flex flex-col gap-3 rounded-xl transition-colors"
@@ -9664,8 +9672,8 @@ ${lineSvg}
                                     ? { 'data-prevent-wheel-scroll': '' }
                                     : {})}
                                   onWheel={(e) => {
-                                    if (spacePanEnabled) {
-                                      applyWheelToAssetListWhileSpacePan(e);
+                                    if (spaceMarqueeEnabled) {
+                                      applyWheelToAssetListWhileSpaceMarquee(e);
                                       return;
                                     }
                                     if (isBusyGroupItem) return;
@@ -10349,8 +10357,8 @@ ${lineSvg}
                           ? { 'data-prevent-wheel-scroll': '' }
                           : {})}
                         onWheel={(e) => {
-                          if (spacePanEnabled) {
-                            applyWheelToAssetListWhileSpacePan(e);
+                          if (spaceMarqueeEnabled) {
+                            applyWheelToAssetListWhileSpaceMarquee(e);
                             return;
                           }
                           if (isBusy) return;
@@ -10557,7 +10565,7 @@ ${lineSvg}
         </div>
 
         {/* 全局框选矩形：根级 / 组内均可见，仅进行中视图展示 */}
-        {marqueeActive && (marqueePaneRef.current === 0 || !showArchived) && typeof document !== 'undefined' &&
+        {marqueeActive && !showArchived && typeof document !== 'undefined' &&
           createPortal(
             <div
               ref={marqueeOverlayElRef}
