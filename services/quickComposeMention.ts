@@ -7,7 +7,7 @@ export type QuickComposeMention =
   | { id: string; kind: 'asset'; assetId: string; label: string; previewSrc?: string }
   | { id: string; kind: 'current_view'; label: typeof QUICK_COMPOSE_CURRENT_VIEW_LABEL; previewSrc?: string };
 
-/** 拖入输入区、待点击激活为 @ 的资产（仅来自拖放） */
+/** 拖入输入区、按顺序送模的参考图（无需 @） */
 export type QuickComposeDropSlot = {
   assetId: string;
   /** 列表/芯片展示用缩略图 */
@@ -64,6 +64,27 @@ export function draftFromSegments(segments: QuickComposeSegment[]): string {
     .trim();
 }
 
+/** 夹在两个 @ 之间的 text 段：仅作前一图的短说明，不进入 userPrompt */
+function isInterstitialHintTextSegment(segments: QuickComposeSegment[], textIndex: number): boolean {
+  const seg = segments[textIndex];
+  if (!seg || seg.type !== 'text') return false;
+  const prev = textIndex > 0 ? segments[textIndex - 1] : null;
+  const next = textIndex < segments.length - 1 ? segments[textIndex + 1] : null;
+  return prev?.type === 'mention' && next?.type === 'mention';
+}
+
+/** 用户自然语言：排除已写入 referenceContextBlock 的「夹心」短说明 */
+export function userPromptFromSegments(segments: QuickComposeSegment[]): string {
+  const parts: string[] = [];
+  for (let i = 0; i < segments.length; i += 1) {
+    const s = segments[i]!;
+    if (s.type !== 'text' || isInterstitialHintTextSegment(segments, i)) continue;
+    const t = s.value.trim();
+    if (t) parts.push(t);
+  }
+  return parts.join(' ').replace(/\s+/g, ' ').trim();
+}
+
 export function normalizeQuickComposeSegments(segments: QuickComposeSegment[]): QuickComposeSegment[] {
   const out: QuickComposeSegment[] = [];
   for (const s of segments) {
@@ -81,13 +102,34 @@ export function normalizeQuickComposeSegments(segments: QuickComposeSegment[]): 
   return out;
 }
 
+/** 快捷栏 @ 图片序号（1-based，与 API 送图顺序一致） */
+export function quickComposeImageMentionLabel(ordinal: number): string {
+  return `图${Math.max(1, Math.floor(ordinal))}`;
+}
+
+function isQuickComposeImageMentionKind(m: QuickComposeMention): boolean {
+  return m.kind === 'current_view' || m.kind === 'asset';
+}
+
+/** 按 segments 从左到右为 @ 图片重排 图1、图2…（拖拽/删除后同步） */
+export function renumberQuickComposeImageMentionLabels(segments: QuickComposeSegment[]): QuickComposeSegment[] {
+  let n = 0;
+  return segments.map((s) => {
+    if (s.type !== 'mention' || !isQuickComposeImageMentionKind(s.mention)) return s;
+    n += 1;
+    const label = quickComposeImageMentionLabel(n);
+    if (s.mention.label === label) return s;
+    return { ...s, mention: { ...s.mention, label } };
+  });
+}
+
 /** 保证首尾可输入；mention 两侧保留空 text 段以便继续打字 */
 export function ensureQuickComposeEditableBoundaries(segments: QuickComposeSegment[]): QuickComposeSegment[] {
   let segs = normalizeQuickComposeSegments(segments);
   if (segs.length === 0) return [newQuickComposeTextSegment('')];
   if (segs[0]!.type === 'mention') segs = [newQuickComposeTextSegment(''), ...segs];
   if (segs[segs.length - 1]!.type === 'mention') segs = [...segs, newQuickComposeTextSegment('')];
-  return segs;
+  return renumberQuickComposeImageMentionLabels(segs);
 }
 
 export function insertMentionInSegments(
@@ -185,11 +227,19 @@ export function updateTextSegmentValue(
   return segments.map((s) => (s.id === segmentId && s.type === 'text' ? { ...s, value } : s));
 }
 
+export type QuickComposeDropZone = 'main' | 'reference';
+
 export type ResolveQuickComposeRefsInput = {
   /** 优先：按段顺序解析参考图与提示词 */
   segments?: QuickComposeSegment[];
   draft?: string;
   mentions?: QuickComposeMention[];
+  /** @deprecated 请用 mainDropSlots + referenceDropSlots */
+  dropSlots?: QuickComposeDropSlot[];
+  /** 主图区：每张单独一条任务 */
+  mainDropSlots?: QuickComposeDropSlot[];
+  /** 参考图区：每条主图任务共用 */
+  referenceDropSlots?: QuickComposeDropSlot[];
   assets: WorkflowAsset[];
   getAssetDisplayImage: (asset: WorkflowAsset) => string;
   maxRefs: number;
@@ -206,6 +256,167 @@ export type ResolveQuickComposeRefsResult = {
   warnings: string[];
 };
 
+/** 快捷栏 / 队列：第一张为主图，其余为参考（顺序与拖入或 @ 出现一致） */
+export function splitPrimaryAndReferenceImageUrls(urls: string[]): {
+  primary: string;
+  references: string[];
+} {
+  const list = urls.map((s) => String(s || '').trim()).filter(Boolean);
+  if (list.length === 0) return { primary: '', references: [] };
+  return { primary: list[0]!, references: list.slice(1) };
+}
+
+/** 生图 API：主图在前，参考图在后（去重，兼容旧任务 inputImages 含主图） */
+export function mergePrimaryAndReferenceImageUrls(primary: string, references: string[]): string[] {
+  const out: string[] = [];
+  const p = String(primary || '').trim();
+  if (p) out.push(p);
+  for (const raw of references) {
+    const s = String(raw || '').trim();
+    if (!s || out.includes(s)) continue;
+    out.push(s);
+  }
+  return out;
+}
+
+/** 与 API inline 顺序一致：图1 = 第 1 张 parts，图2 = 第 2 张…（1-based，无「图 0」） */
+function quickComposeImageContextLine(
+  imageIndex: number,
+  hint: string,
+  kind: QuickComposeMention['kind']
+): string {
+  const numLabel = quickComposeImageMentionLabel(imageIndex + 1);
+  if (imageIndex === 0) {
+    return `【${numLabel}（待编辑主图）】${hint ? `说明：${hint}` : '按此图为基础编辑。'}`;
+  }
+  const defaultHint = kind === 'current_view' ? '以提交时截取的画面为准。' : '见画面。';
+  return `【${numLabel}】${hint ? `说明：${hint}` : defaultHint}`;
+}
+
+/** 按拖入顺序为待送模图片生成【图1】【图2】说明块 */
+export function buildImageReferenceContextBlock(imageCount: number): string {
+  const lines: string[] = [];
+  for (let i = 0; i < imageCount; i += 1) {
+    lines.push(quickComposeImageContextLine(i, '', 'asset'));
+  }
+  return lines.join('\n');
+}
+
+/** 拖入区 UI：主图区统一显示图1（每张主图在各自任务中均为图1） */
+export function quickComposeMainDropSlotLabel(_ordinal?: number): string {
+  return quickComposeImageMentionLabel(1);
+}
+
+/** 拖入区 UI：参考图区从图2起按顺序编号 */
+export function quickComposeReferenceDropSlotLabel(ordinal: number): string {
+  return quickComposeImageMentionLabel(Math.max(2, Math.floor(ordinal) + 1));
+}
+
+/** 拖入区序号（兼容旧单队列） */
+export function renumberQuickComposeDropSlotLabels(slots: QuickComposeDropSlot[]): QuickComposeDropSlot[] {
+  return slots.map((s, i) => ({
+    ...s,
+    label: quickComposeImageMentionLabel(i + 1),
+  }));
+}
+
+export function renumberQuickComposeMainDropSlotLabels(slots: QuickComposeDropSlot[]): QuickComposeDropSlot[] {
+  const label = quickComposeMainDropSlotLabel();
+  return slots.map((s) => ({
+    ...s,
+    label,
+  }));
+}
+
+export function renumberQuickComposeReferenceDropSlotLabels(slots: QuickComposeDropSlot[]): QuickComposeDropSlot[] {
+  return slots.map((s, i) => ({
+    ...s,
+    label: quickComposeReferenceDropSlotLabel(i + 1),
+  }));
+}
+
+function urlsFromDropSlots(
+  slots: QuickComposeDropSlot[],
+  assets: WorkflowAsset[],
+  getAssetDisplayImage: (asset: WorkflowAsset) => string,
+  warnings: string[],
+  emptyLabel: string
+): string[] {
+  const refs: string[] = [];
+  const assetById = new Map(assets.map((a) => [a.id, a]));
+  for (const slot of slots) {
+    const asset = assetById.get(slot.assetId);
+    const img = (asset ? getAssetDisplayImage(asset) : slot.previewSrc).trim();
+    if (!img) {
+      warnings.push(`${emptyLabel}「${slot.label}」无可用图片，已跳过`);
+      continue;
+    }
+    if (!refs.includes(img)) refs.push(img);
+  }
+  return refs;
+}
+
+export type QuickComposeImageQueuesResult = {
+  mainUrls: string[];
+  referenceUrls: string[];
+  warnings: string[];
+};
+
+/** 主图区 + 参考图区 → 送模 URL 列表（不拼 prompt） */
+export function resolveQuickComposeImageQueues(
+  input: Pick<
+    ResolveQuickComposeRefsInput,
+    'mainDropSlots' | 'referenceDropSlots' | 'dropSlots' | 'assets' | 'getAssetDisplayImage' | 'maxRefs'
+  >
+): QuickComposeImageQueuesResult {
+  const warnings: string[] = [];
+  const mainSlots = input.mainDropSlots ?? [];
+  const refSlots = input.referenceDropSlots ?? [];
+  let mainUrls = urlsFromDropSlots(mainSlots, input.assets, input.getAssetDisplayImage, warnings, '主图');
+  let referenceUrls = urlsFromDropSlots(refSlots, input.assets, input.getAssetDisplayImage, warnings, '参考图');
+
+  if (mainUrls.length === 0 && refSlots.length === 0 && (input.dropSlots?.length ?? 0) > 0) {
+    mainUrls = urlsFromDropSlots(input.dropSlots ?? [], input.assets, input.getAssetDisplayImage, warnings, '图片');
+    referenceUrls = [];
+  }
+
+  const maxRef = Math.max(1, input.maxRefs);
+  const refCap = Math.max(0, maxRef - 1);
+  if (referenceUrls.length > refCap) {
+    warnings.push(`参考图超过上限（每条任务最多 ${refCap} 张），已截断`);
+    referenceUrls = referenceUrls.slice(0, refCap);
+  }
+
+  return { mainUrls, referenceUrls, warnings };
+}
+
+/** 单条任务：主图=图1，参考区=图2…，拼 preset + 说明块 + 用户正文 */
+export function buildQuickComposeTaskPromptOverride(
+  userPrompt: string,
+  mainImageUrl: string,
+  referenceImageUrls: string[],
+  maxRefs: number,
+  presetInstruction?: string
+): { primary: string; references: string[]; promptOverride: string } {
+  const merged = mergePrimaryAndReferenceImageUrls(
+    mainImageUrl,
+    referenceImageUrls.slice(0, Math.max(0, maxRefs - 1))
+  ).slice(0, maxRefs);
+  if (merged.length === 0) {
+    const promptOverride = buildQuickComposePromptOverride(userPrompt, '', presetInstruction);
+    return { primary: '', references: [], promptOverride };
+  }
+  const primary = merged[0]!;
+  const references = merged.slice(1);
+  const referenceContextBlock = buildImageReferenceContextBlock(merged.length);
+  const promptOverride = buildQuickComposePromptOverride(
+    userPrompt,
+    referenceContextBlock,
+    presetInstruction
+  );
+  return { primary, references, promptOverride };
+}
+
 export function workflowAssetMentionLabel(asset: WorkflowAsset): string {
   const title = (asset.textTitle || '').trim();
   if (title) return title.length > 28 ? `${title.slice(0, 28)}…` : title;
@@ -214,12 +425,39 @@ export function workflowAssetMentionLabel(asset: WorkflowAsset): string {
   return `图·${asset.id.slice(0, 8)}`;
 }
 
-/** @ 候选：仅来自已拖入输入区的资产 + 可选「当前画面」 */
+/** @ 候选：主图区 + 参考图区合并为 图1、图2… */
+export function mergeQuickComposeDropSlotsForMentions(
+  mainDropSlots: QuickComposeDropSlot[],
+  referenceDropSlots: QuickComposeDropSlot[]
+): QuickComposeDropSlot[] {
+  const out: QuickComposeDropSlot[] = [];
+  for (let i = 0; i < mainDropSlots.length; i += 1) {
+    out.push({ ...mainDropSlots[i]!, label: quickComposeImageMentionLabel(1) });
+  }
+  for (let i = 0; i < referenceDropSlots.length; i += 1) {
+    out.push({
+      ...referenceDropSlots[i]!,
+      label: quickComposeImageMentionLabel(i + 2),
+    });
+  }
+  return out;
+}
+
+/** @ 候选：已拖入主/参考区的资产 + 可选「当前画面」 */
 export function listDropSlotMentionCandidates(
   dropSlots: QuickComposeDropSlot[],
   mentions: QuickComposeMention[],
-  options?: { includeCurrentView?: boolean; currentViewPreviewSrc?: string }
+  options?: {
+    includeCurrentView?: boolean;
+    currentViewPreviewSrc?: string;
+    mainDropSlots?: QuickComposeDropSlot[];
+    referenceDropSlots?: QuickComposeDropSlot[];
+  }
 ): QuickComposeMentionCandidate[] {
+  const slots =
+    (options?.mainDropSlots?.length ?? 0) > 0 || (options?.referenceDropSlots?.length ?? 0) > 0
+      ? mergeQuickComposeDropSlotsForMentions(options?.mainDropSlots ?? [], options?.referenceDropSlots ?? [])
+      : dropSlots;
   const mentionedIds = new Set(
     mentions.filter((m): m is Extract<QuickComposeMention, { kind: 'asset' }> => m.kind === 'asset').map((m) => m.assetId)
   );
@@ -231,7 +469,7 @@ export function listDropSlotMentionCandidates(
       previewSrc: options.currentViewPreviewSrc,
     });
   }
-  for (const s of dropSlots) {
+  for (const s of slots) {
     if (mentionedIds.has(s.assetId)) continue;
     out.push({
       kind: 'asset',
@@ -270,24 +508,27 @@ export function createQuickComposeMention(
 ): QuickComposeMention | null {
   if (candidate.kind === 'current_view') {
     if (existing.some((m) => m.kind === 'current_view')) return null;
+    const ordinal =
+      existing.filter((m) => isQuickComposeImageMentionKind(m)).length + 1;
     return {
       id: `cv-${Date.now()}`,
       kind: 'current_view',
-      label: QUICK_COMPOSE_CURRENT_VIEW_LABEL,
+      label: quickComposeImageMentionLabel(ordinal),
       previewSrc: candidate.previewSrc,
     };
   }
   const assetId = (candidate.assetId || '').trim();
   if (!assetId) return null;
   if (existing.some((m) => m.kind === 'asset' && m.assetId === assetId)) return null;
-  let label = candidate.label.trim() || `图·${assetId.slice(0, 8)}`;
-  const labelsUsed = new Set(existing.map((m) => m.label));
-  if (labelsUsed.has(label)) {
-    let n = 2;
-    while (labelsUsed.has(`${label} (${n})`)) n += 1;
-    label = `${label} (${n})`;
-  }
-  return { id: `a-${assetId}-${Date.now()}`, kind: 'asset', assetId, label, previewSrc: candidate.previewSrc };
+  const ordinal =
+    existing.filter((m) => isQuickComposeImageMentionKind(m)).length + 1;
+  return {
+    id: `a-${assetId}-${Date.now()}`,
+    kind: 'asset',
+    assetId,
+    label: quickComposeImageMentionLabel(ordinal),
+    previewSrc: candidate.previewSrc,
+  };
 }
 
 /** 在 draft 中插入 `@label `（光标处或末尾） */
@@ -335,16 +576,35 @@ function segmentHintForMention(draft: string, mention: QuickComposeMention, all:
   const match = re.exec(draft);
   if (!match) return '';
   let start = match.index + match[0].length;
-  let end = draft.length;
+  let end: number | null = null;
   for (const other of all) {
     if (other.id === mention.id) continue;
     const oRe = new RegExp(`@${escapeRegExp(other.label)}`);
     const oMatch = oRe.exec(draft.slice(start));
     if (oMatch && oMatch.index >= 0) {
-      end = Math.min(end, start + oMatch.index);
+      const candidate = start + oMatch.index;
+      if (end === null || candidate < end) end = candidate;
     }
   }
+  /** 最后一个 @ 之后的正文属于 userPrompt，不再写入「说明」 */
+  if (end === null) return '';
   return draft.slice(start, end).replace(/^\s+/, '').replace(/\s+$/, '');
+}
+
+function userPromptFromDraft(draft: string, mentions: QuickComposeMention[]): string {
+  const ordered = orderMentionsForResolve(draft, mentions);
+  let out = draft;
+  for (const m of ordered) {
+    const hint = segmentHintForMention(out, m, ordered);
+    if (hint) {
+      out = out.replace(
+        new RegExp(`@${escapeRegExp(m.label)}\\s+${escapeRegExp(hint)}`),
+        `@${m.label} `
+      );
+    }
+    out = out.replace(new RegExp(`@${escapeRegExp(m.label)}\\s*`, 'g'), ' ');
+  }
+  return out.replace(/\s+/g, ' ').trim();
 }
 
 export function stripMentionTokensFromDraft(draft: string, mentions: QuickComposeMention[]): string {
@@ -358,8 +618,11 @@ export function stripMentionTokensFromDraft(draft: string, mentions: QuickCompos
 function hintAfterMentionInSegments(segments: QuickComposeSegment[], mentionIndex: number): string {
   for (let j = mentionIndex + 1; j < segments.length; j += 1) {
     const s = segments[j]!;
-    if (s.type === 'text') return s.value.trim();
     if (s.type === 'mention') break;
+    if (s.type === 'text') {
+      if (isInterstitialHintTextSegment(segments, j)) return s.value.trim();
+      break;
+    }
   }
   return '';
 }
@@ -373,6 +636,7 @@ function resolveQuickComposeFromSegments(
   const refs: string[] = [];
   const refLines: string[] = [];
   const assetById = new Map(input.assets.map((a) => [a.id, a]));
+  let imageContextIndex = 0;
 
   for (let si = 0; si < segments.length; si += 1) {
     const seg = segments[si]!;
@@ -389,8 +653,13 @@ function resolveQuickComposeFromSegments(
       }
       if (!refs.includes(url)) refs.push(url);
       refLines.push(
-        `【参考图 ${i + 1}：${m.label}】${hint ? `说明：${hint}` : '以提交时截取的画面为准。'}`
+        quickComposeImageContextLine(
+          imageContextIndex,
+          hint ? hint : imageContextIndex === 0 ? '' : '以提交时截取的画面为准。',
+          m.kind
+        )
       );
+      imageContextIndex += 1;
       continue;
     }
     const asset = assetById.get(m.assetId);
@@ -413,7 +682,8 @@ function resolveQuickComposeFromSegments(
       continue;
     }
     if (!refs.includes(img)) refs.push(img);
-    refLines.push(`【参考图 ${i + 1}：${m.label}】${hint ? `说明：${hint}` : '见画面。'}`);
+    refLines.push(quickComposeImageContextLine(imageContextIndex, hint, m.kind));
+    imageContextIndex += 1;
   }
 
   const capped = refs.slice(0, Math.max(0, input.maxRefs));
@@ -421,16 +691,50 @@ function resolveQuickComposeFromSegments(
     warnings.push(`参考图超过上限（${input.maxRefs} 张），已截断`);
   }
 
-  const userPrompt = draftFromSegments(segments);
+  const userPrompt = userPromptFromSegments(segments);
   const referenceContextBlock = refLines.length > 0 ? refLines.join('\n') : '';
 
   return { refs: capped, userPrompt, referenceContextBlock, warnings };
 }
 
 export function resolveQuickComposeReferences(input: ResolveQuickComposeRefsInput): ResolveQuickComposeRefsResult {
-  if (input.segments && input.segments.length > 0) {
-    return resolveQuickComposeFromSegments(input.segments, input);
+  const segmentResult =
+    input.segments && input.segments.length > 0
+      ? resolveQuickComposeFromSegments(input.segments, input)
+      : resolveQuickComposeReferencesFromDraft(input);
+
+  const hasSplitQueues =
+    (input.mainDropSlots?.length ?? 0) > 0 || (input.referenceDropSlots?.length ?? 0) > 0;
+  if (hasSplitQueues) {
+    return {
+      refs: [],
+      userPrompt: segmentResult.userPrompt,
+      referenceContextBlock: '',
+      warnings: segmentResult.warnings,
+    };
   }
+
+  const legacySlots = input.dropSlots ?? [];
+  if (legacySlots.length > 0) {
+    const queues = resolveQuickComposeImageQueues(input);
+    const refs = mergePrimaryAndReferenceImageUrls(
+      queues.mainUrls[0] ?? '',
+      [...queues.mainUrls.slice(1), ...queues.referenceUrls]
+    ).slice(0, input.maxRefs);
+    return {
+      refs,
+      userPrompt: segmentResult.userPrompt,
+      referenceContextBlock: buildImageReferenceContextBlock(refs.length),
+      warnings: [...segmentResult.warnings, ...queues.warnings],
+    };
+  }
+
+  return segmentResult;
+}
+
+function resolveQuickComposeReferencesFromDraft(
+  input: ResolveQuickComposeRefsInput
+): ResolveQuickComposeRefsResult {
   const draft = input.draft ?? '';
   const mentions = input.mentions ?? [];
   const warnings: string[] = [];
@@ -438,6 +742,7 @@ export function resolveQuickComposeReferences(input: ResolveQuickComposeRefsInpu
   const refs: string[] = [];
   const refLines: string[] = [];
   const assetById = new Map(input.assets.map((a) => [a.id, a]));
+  let imageContextIndex = 0;
 
   for (let i = 0; i < ordered.length; i += 1) {
     const m = ordered[i]!;
@@ -450,8 +755,13 @@ export function resolveQuickComposeReferences(input: ResolveQuickComposeRefsInpu
       }
       if (!refs.includes(url)) refs.push(url);
       refLines.push(
-        `【参考图 ${i + 1}：${m.label}】${hint ? `说明：${hint}` : '以提交时截取的画面为准。'}`
+        quickComposeImageContextLine(
+          imageContextIndex,
+          hint ? hint : imageContextIndex === 0 ? '' : '以提交时截取的画面为准。',
+          m.kind
+        )
       );
+      imageContextIndex += 1;
       continue;
     }
     const asset = assetById.get(m.assetId);
@@ -474,7 +784,8 @@ export function resolveQuickComposeReferences(input: ResolveQuickComposeRefsInpu
       continue;
     }
     if (!refs.includes(img)) refs.push(img);
-    refLines.push(`【参考图 ${i + 1}：${m.label}】${hint ? `说明：${hint}` : '见画面。'}`);
+    refLines.push(quickComposeImageContextLine(imageContextIndex, hint, m.kind));
+    imageContextIndex += 1;
   }
 
   const capped = refs.slice(0, Math.max(0, input.maxRefs));
@@ -482,7 +793,7 @@ export function resolveQuickComposeReferences(input: ResolveQuickComposeRefsInpu
     warnings.push(`参考图超过上限（${input.maxRefs} 张），已截断`);
   }
 
-  const userPrompt = stripMentionTokensFromDraft(draft, mentions);
+  const userPrompt = userPromptFromDraft(draft, mentions);
   const referenceContextBlock = refLines.length > 0 ? refLines.join('\n') : '';
 
   return { refs: capped, userPrompt, referenceContextBlock, warnings };

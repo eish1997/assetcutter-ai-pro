@@ -45,6 +45,7 @@ import { useUserUiPrefs } from './hooks/useUserUiPrefs';
 import Waves from './components/ui/Waves';
 import AppIcon from './components/ui/AppIcon';
 import GeminiFairnessFloatingNotice from './components/GeminiFairnessFloatingNotice';
+import DownloadSavedFloatingNotice from './components/DownloadSavedFloatingNotice';
 import {
   AC_GEMINI_QUEUE_HINT_EVENT,
   AC_GEMINI_QUEUE_PROGRESS_EVENT,
@@ -7020,6 +7021,7 @@ const App: React.FC = () => {
     return (
       <>
         <GeminiFairnessFloatingNotice />
+        <DownloadSavedFloatingNotice />
         <Suspense fallback={<div className="min-h-screen bg-[#050505] flex items-center justify-center text-[11px] text-gray-500">加载中…</div>}>
           <AdminStaffProvider>
             <AdminRolePreviewBridge>
@@ -7033,6 +7035,7 @@ const App: React.FC = () => {
   return (
     <>
       <GeminiFairnessFloatingNotice />
+      <DownloadSavedFloatingNotice />
       <MainApp />
     </>
   );

@@ -4,6 +4,7 @@ import type {
   CapabilitySetNode,
   CapabilitySetEdge,
 } from '../types';
+import { mergePrimaryAndReferenceImageUrls } from './quickComposeMention';
 import { maxReferenceImagesForImageModel } from '../types';
 import {
   resolveImageModelRegistryId,
@@ -956,12 +957,10 @@ export async function executeCapability(
       };
     }
 
-    const rawList: string[] =
-      opts?.inputImages && opts.inputImages.length > 0
-        ? opts.inputImages.filter((s) => hasUsableImageBase64(s))
-        : primaryOk
-          ? [inputImageBase64]
-          : [];
+    const rawList = mergePrimaryAndReferenceImageUrls(
+      primaryOk ? inputImageBase64 : '',
+      extras
+    );
     const maxRef = maxReferenceImagesForImageModel(
       preset.imageModelRegistryId ?? preset.imageGear
     );

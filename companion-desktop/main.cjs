@@ -1586,6 +1586,24 @@ function announceTrayDownloadSaved(savePath, noticeTitle) {
   });
 }
 
+function shouldAnnounceTrayDownloadBalloon() {
+  try {
+    if (!mainWindow || mainWindow.isDestroyed()) return true;
+    if (!mainWindow.isVisible() || mainWindow.isMinimized()) return true;
+    if (!mainWindow.isFocused()) return true;
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+function announceDownloadSaved(savePath, noticeTitle) {
+  announceWebDownloadSaved(savePath, noticeTitle);
+  if (shouldAnnounceTrayDownloadBalloon()) {
+    announceTrayDownloadSaved(savePath, noticeTitle);
+  }
+}
+
 function announceWebDownloadSaved(savePath, noticeTitle) {
   notifyWorkbenchDownloadSaved({
     path: savePath,
@@ -1651,7 +1669,7 @@ async function writeWorkbenchDownloadFile(bytes, filename, opts) {
   if (!root) return { ok: false, canceled: true };
   const savePath = uniqueDownloadPath(root, filename);
   await fsp.writeFile(savePath, bytes);
-  announceTrayDownloadSaved(savePath, (opts && opts.noticeTitle) || '下载已完成');
+  announceDownloadSaved(savePath, (opts && opts.noticeTitle) || '下载已完成');
   return { ok: true, path: savePath, filename: path.basename(savePath) };
 }
 
@@ -1674,8 +1692,7 @@ function bindWorkbenchDownloadHandler(wc) {
     item.once('done', (_doneEvent, state) => {
       if (state === 'completed' && savePath) {
         companionLog('log', '[companion-desktop] workbench download completed:', savePath);
-        announceTrayDownloadSaved(savePath, '下载已完成');
-        announceWebDownloadSaved(savePath, '下载已完成');
+        announceDownloadSaved(savePath, '下载已完成');
       } else if (state !== 'cancelled') {
         companionLog('warn', '[companion-desktop] workbench download ended:', state);
       }

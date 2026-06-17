@@ -318,15 +318,20 @@ import WorkspaceQuickComposeBar, {
   type WorkspaceQuickComposeComposeMode,
   type WorkspaceQuickComposePromptCard,
 } from './WorkspaceQuickComposeBar';
-import type { QuickComposeDropSlot, QuickComposeMention, QuickComposeSegment } from '../services/quickComposeMention';
+import type { QuickComposeDropSlot, QuickComposeDropZone, QuickComposeMention, QuickComposeSegment } from '../services/quickComposeMention';
 import {
   buildQuickComposePromptOverride,
+  buildQuickComposeTaskPromptOverride,
   draftFromSegments,
   ensureQuickComposeEditableBoundaries,
   listDropSlotMentionCandidates,
   mentionsFromSegments,
   newQuickComposeTextSegment,
+  renumberQuickComposeMainDropSlotLabels,
+  renumberQuickComposeReferenceDropSlotLabels,
+  resolveQuickComposeImageQueues,
   resolveQuickComposeReferences,
+  splitPrimaryAndReferenceImageUrls,
   stripCurrentViewFromQuickComposeSegments,
   workflowAssetMentionLabel,
 } from '../services/quickComposeMention';
@@ -1033,7 +1038,16 @@ const WorkflowSection: React.FC<{
   const [sidebarLinkHoverPresetIds, setSidebarLinkHoverPresetIds] = useState<string[] | null>(null);
   /** 从功能区/能力列拖入文本框的预设提示词，以卡片展示并与输入框文案合并入队 */
   const [quickComposePromptCards, setQuickComposePromptCards] = useState<WorkspaceQuickComposePromptCard[]>([]);
-  const [quickComposeDropSlots, setQuickComposeDropSlots] = useState<QuickComposeDropSlot[]>([]);
+  const [quickComposeMainDropSlots, setQuickComposeMainDropSlots] = useState<QuickComposeDropSlot[]>([]);
+  const [quickComposeReferenceDropSlots, setQuickComposeReferenceDropSlots] = useState<QuickComposeDropSlot[]>([]);
+  const quickComposeMainDropSlotsRef = useRef<QuickComposeDropSlot[]>([]);
+  const quickComposeReferenceDropSlotsRef = useRef<QuickComposeDropSlot[]>([]);
+  useEffect(() => {
+    quickComposeMainDropSlotsRef.current = quickComposeMainDropSlots;
+  }, [quickComposeMainDropSlots]);
+  useEffect(() => {
+    quickComposeReferenceDropSlotsRef.current = quickComposeReferenceDropSlots;
+  }, [quickComposeReferenceDropSlots]);
   /** 无拖入预设卡片时：文 / 图 / 3D 独立快捷逻辑（不读侧栏「上次预设」） */
   const [quickComposeMode, setQuickComposeMode] = useState<WorkspaceQuickComposeComposeMode>('image');
   /** 快捷栏生成设置（覆盖入队任务的档位/比例/尺寸；张数见 normalizeWorkflowGenerateCount） */
@@ -2405,11 +2419,7 @@ ${lineSvg}
         /** 客户端合成 = 当前预览所见（含标注烘焙等），作为图生图输入，后续仍走 `executeCapability` */
         resolvedInputImage = s;
         if (box.inputImagesForExecute && box.inputImagesForExecute.length > 0) {
-          resolvedInputImagesForExecute =
-            box.inputImagesForExecute.length >= 2 ? box.inputImagesForExecute : undefined;
-          if (resolvedInputImagesForExecute?.length) {
-            resolvedInputImage = resolvedInputImagesForExecute[0]!;
-          }
+          resolvedInputImagesForExecute = box.inputImagesForExecute;
         }
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : safeUnknownToString(err);
@@ -2452,14 +2462,16 @@ ${lineSvg}
       if (nextSlots.front) resolvedInputImage = nextSlots.front;
     }
 
-    if (task.inputImages && task.inputImages.length > 0) {
+    if (!task.lightboxAwaitClientResult && !task.tripoMultiviewImages) {
       const companionProjectId = String(workspaceProjectChrome?.activeProjectId || '').trim();
       const companionBaseUrl = String(getCompanionLocalBaseUrl() || '').trim();
       const assetForInput = assetsRef.current.find((a) => a.id === task.assetId) ?? null;
-      const out: string[] = [];
-      for (const raw of task.inputImages) {
+      const resolveInputImageUrl = async (
+        raw: string,
+        inputIndex?: number
+      ): Promise<string | false | null> => {
         const trimmed = String(raw || '').trim();
-        if (!trimmed) continue;
+        if (!trimmed) return null;
         const resolvedImg = await resolveCapabilityInputImageForExecute({
           inputImage: trimmed,
           asset: assetForInput,
@@ -2473,39 +2485,28 @@ ${lineSvg}
           onLog?.('warn', msg);
           setAssetError(task.assetId, msg);
           auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_INPUT_IMAGE_RESOLVE, 'warn', msg, {
-            inputIndex: task.inputImages!.indexOf(raw),
+            ...(typeof inputIndex === 'number' ? { inputIndex } : {}),
           });
-          return { image: null };
+          return false;
         }
-        out.push(resolvedImg.dataUrl);
+        return resolvedImg.dataUrl;
+      };
+
+      const primaryRaw = String(resolvedInputImage || inputImage || '').trim();
+      if (primaryRaw) {
+        const primaryResolved = await resolveInputImageUrl(primaryRaw);
+        if (primaryResolved === false) return { image: null };
+        if (primaryResolved) resolvedInputImage = primaryResolved;
       }
-      if (out.length > 0) {
-        resolvedInputImage = out[0]!;
-        resolvedInputImagesForExecute = out.length >= 2 ? out : undefined;
+
+      const refsRaw = task.inputImages ?? [];
+      const resolvedRefs: string[] = [];
+      for (let ri = 0; ri < refsRaw.length; ri += 1) {
+        const refResolved = await resolveInputImageUrl(refsRaw[ri]!, ri);
+        if (refResolved === false) return { image: null };
+        if (refResolved) resolvedRefs.push(refResolved);
       }
-    } else {
-      const inputTrimmed = String(resolvedInputImage).trim();
-      if (inputTrimmed) {
-        const companionProjectId = String(workspaceProjectChrome?.activeProjectId || '').trim();
-        const companionBaseUrl = String(getCompanionLocalBaseUrl() || '').trim();
-        const assetForInput = assetsRef.current.find((a) => a.id === task.assetId) ?? null;
-        const resolvedImg = await resolveCapabilityInputImageForExecute({
-          inputImage: inputTrimmed,
-          asset: assetForInput,
-          sourceDisplayKey: task.inputSourceDisplayKey,
-          companionBaseUrl,
-          companionProjectId,
-        });
-        if (resolvedImg.ok === false) {
-          const al = getTaskLogLabel(task);
-          const msg = `[${al}] ${resolvedImg.error}`;
-          onLog?.('warn', msg);
-          setAssetError(task.assetId, msg);
-          auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_INPUT_IMAGE_RESOLVE, 'warn', msg);
-          return { image: null };
-        }
-        resolvedInputImage = resolvedImg.dataUrl;
-      }
+      resolvedInputImagesForExecute = resolvedRefs.length > 0 ? resolvedRefs : undefined;
     }
 
     const module = getModule(actionType);
@@ -3380,22 +3381,38 @@ ${lineSvg}
   };
 
   const submitQuickCompose = useCallback((invoke?: QuickComposeSubmitInvokeOptions) => {
+    const maxRefs = getQuickComposeMaxRefs();
     const resolved = resolveQuickComposeReferences({
       segments: quickComposeSegmentsRef.current,
+      mainDropSlots: quickComposeMainDropSlotsRef.current,
+      referenceDropSlots: quickComposeReferenceDropSlotsRef.current,
       assets: assetsRef.current,
       getAssetDisplayImage,
-      maxRefs: getQuickComposeMaxRefs(),
+      maxRefs,
     });
-    for (const w of resolved.warnings) {
+    const queues = resolveQuickComposeImageQueues({
+      mainDropSlots: quickComposeMainDropSlotsRef.current,
+      referenceDropSlots: quickComposeReferenceDropSlotsRef.current,
+      assets: assetsRef.current,
+      getAssetDisplayImage,
+      maxRefs,
+    });
+    for (const w of [...resolved.warnings, ...queues.warnings]) {
       onLog?.('warn', `底部快捷栏：${w}`);
     }
-    const promptText = buildQuickComposePromptOverride(resolved.userPrompt, resolved.referenceContextBlock);
+    const userPrompt = resolved.userPrompt;
+    const overrideImgs = invoke?.overrideImageDataUrls?.filter((s) => String(s).trim()) ?? [];
+    let mainUrls = overrideImgs.length > 0 ? overrideImgs : queues.mainUrls;
+    let referenceUrls = overrideImgs.length > 0 ? [] : queues.referenceUrls;
+    if (mainUrls.length === 0 && referenceUrls.length === 0 && resolved.refs.length > 0) {
+      mainUrls = [resolved.refs[0]!];
+      referenceUrls = resolved.refs.slice(1);
+    }
+    const imgsAll = [...mainUrls, ...referenceUrls].filter((s) => String(s).trim());
+    const promptText = buildQuickComposePromptOverride(userPrompt, resolved.referenceContextBlock);
     const userText = (
       invoke?.overrideUserText !== undefined ? invoke.overrideUserText.trim() : promptText
     ).trim();
-    const imgsAll = (
-      invoke?.overrideImageDataUrls !== undefined ? invoke.overrideImageDataUrls : resolved.refs
-    ).filter((s) => String(s).trim());
     const composeMode =
       invoke?.preferImagePipelineWhenImagesAttached && imgsAll.length > 0 && quickComposeMode === 'text'
         ? 'image'
@@ -3454,7 +3471,9 @@ ${lineSvg}
 
       let totalPlanned = 0;
       for (const { mod: m } of cardRows) {
-        totalPlanned += quickComposeCountForMod(m);
+        const countN = quickComposeCountForMod(m);
+        const mains = mainUrls.length > 0 ? mainUrls.length : 1;
+        totalPlanned += mains * countN;
       }
       if (
         totalPlanned > WORKFLOW_GROUP_GENERATE_CONFIRM_THRESHOLD &&
@@ -3469,60 +3488,16 @@ ${lineSvg}
 
       for (const { card, mod: m } of cardRows) {
         const ins = String(card.instruction ?? '').trim();
-        const pieceText = [ins, userText].filter(Boolean).join('\n\n').trim();
         const maxRef = maxReferenceImagesForImageModel(m.imageModelRegistryId ?? m.imageGear);
-        const imgs = imgsAll.slice(0, maxRef);
         const countN = quickComposeCountForMod(m);
         const taskOverrides = buildQuickComposeGenOverrides(m);
 
-        if (!pieceText && imgs.length === 0) {
-          onLog?.('warn', `底部快捷栏：跳过「${m.label}」（无提示词且无参考图）`);
-          continue;
-        }
-
-        if (imgs.length > 0) {
-          const first = imgs[0]!;
-          const probe = attachInitialVgpToNewAsset({
-            id: '__qc_probe__',
-            original: first,
-            displayKey: 'original',
-            results: {},
-            resultOrder: [],
-            archived: false,
-            hiddenInGrid: true,
-            createdAt: Date.now(),
-          });
-          if (!workflowAssetAllowedForCapabilityDrop(probe, m)) {
-            onLog?.('warn', `底部快捷栏：跳过「${m.label}」（参考图与该能力不匹配）`);
+        if (mainUrls.length === 0) {
+          const pieceText = buildQuickComposePromptOverride(userPrompt, '', ins);
+          if (!pieceText && referenceUrls.length === 0) {
+            onLog?.('warn', `底部快捷栏：跳过「${m.label}」（无提示词且无参考图）`);
             continue;
           }
-          for (let i = 0; i < countN; i += 1) {
-            const newId = uuid();
-            newAssets.push(
-              attachInitialVgpToNewAsset({
-                id: newId,
-                original: first,
-                displayKey: 'original',
-                results: {},
-                resultOrder: [],
-                archived: false,
-                hiddenInGrid: true,
-                createdAt: Date.now(),
-              })
-            );
-            newTasks.push({
-              id: uuid(),
-              assetId: newId,
-              actionType: m.id,
-              inputImage: first,
-              addedAt: Date.now(),
-              inputSourceDisplayKey: 'original',
-              ...(imgs.length >= 2 ? { inputImages: imgs } : {}),
-              ...(pieceText ? { promptOverride: pieceText } : {}),
-              ...taskOverrides,
-            });
-          }
-        } else {
           if (!workflowPresetAcceptsTextCardDrag(m)) {
             onLog?.('warn', `底部快捷栏：跳过「${m.label}」（纯文字模式不支持）`);
             continue;
@@ -3551,6 +3526,61 @@ ${lineSvg}
             const task = buildPendingTaskFromAssetSnapshot(asset, newId, m.id, taskOverrides);
             if (task) newTasks.push(task);
           }
+          continue;
+        }
+
+        for (const mainUrl of mainUrls) {
+          const built = buildQuickComposeTaskPromptOverride(userPrompt, mainUrl, referenceUrls, maxRef, ins);
+          const { primary, references, promptOverride } = built;
+          if (!primary) {
+            onLog?.('warn', `底部快捷栏：跳过「${m.label}」（主图无可用图片）`);
+            continue;
+          }
+          if (!promptOverride && references.length === 0) {
+            onLog?.('warn', `底部快捷栏：跳过「${m.label}」（无提示词且无参考图）`);
+            continue;
+          }
+
+          const probe = attachInitialVgpToNewAsset({
+            id: '__qc_probe__',
+            original: primary,
+            displayKey: 'original',
+            results: {},
+            resultOrder: [],
+            archived: false,
+            hiddenInGrid: true,
+            createdAt: Date.now(),
+          });
+          if (!workflowAssetAllowedForCapabilityDrop(probe, m)) {
+            onLog?.('warn', `底部快捷栏：跳过「${m.label}」（参考图与该能力不匹配）`);
+            continue;
+          }
+          for (let i = 0; i < countN; i += 1) {
+            const newId = uuid();
+            newAssets.push(
+              attachInitialVgpToNewAsset({
+                id: newId,
+                original: primary,
+                displayKey: 'original',
+                results: {},
+                resultOrder: [],
+                archived: false,
+                hiddenInGrid: true,
+                createdAt: Date.now(),
+              })
+            );
+            newTasks.push({
+              id: uuid(),
+              assetId: newId,
+              actionType: m.id,
+              inputImage: primary,
+              addedAt: Date.now(),
+              inputSourceDisplayKey: 'original',
+              ...(references.length > 0 ? { inputImages: references } : {}),
+              ...(promptOverride ? { promptOverride } : {}),
+              ...taskOverrides,
+            });
+          }
         }
       }
 
@@ -3566,7 +3596,8 @@ ${lineSvg}
       }
       if (!invoke?.preserveBottomBarDraft) {
         setQuickComposeSegmentsTracked([newQuickComposeTextSegment('')]);
-        setQuickComposeDropSlots([]);
+        setQuickComposeMainDropSlots([]);
+        setQuickComposeReferenceDropSlots([]);
       }
       setQuickComposePromptCards([]);
       onLog?.('info', `底部快捷栏：已加入 ${newTasks.length} 条执行队列`);
@@ -3590,7 +3621,8 @@ ${lineSvg}
       }
       if (!invoke?.preserveBottomBarDraft) {
         setQuickComposeSegmentsTracked([newQuickComposeTextSegment('')]);
-        setQuickComposeDropSlots([]);
+        setQuickComposeMainDropSlots([]);
+        setQuickComposeReferenceDropSlots([]);
       }
       setQuickComposePromptCards([]);
       onLog?.('info', '底部快捷栏：已加入执行队列');
@@ -3733,8 +3765,17 @@ ${lineSvg}
     }
 
     const maxRef = maxReferenceImagesForImageModel(plainImgMod.imageModelRegistryId ?? plainImgMod.imageGear);
-    const imgs = imgsAll.slice(0, maxRef);
-    const first = imgs[0]!;
+    const plainMainUrls = mainUrls.length > 0 ? mainUrls : [imgsAll[0]!];
+    const plainRefUrls = mainUrls.length > 0 ? referenceUrls : imgsAll.slice(1);
+    const totalPlainPlanned = plainMainUrls.length * countN;
+    if (
+      totalPlainPlanned > WORKFLOW_GROUP_GENERATE_CONFIRM_THRESHOLD &&
+      typeof window !== 'undefined' &&
+      !window.confirm(`当前将创建 ${totalPlainPlanned} 条队列任务，是否继续？`)
+    ) {
+      return;
+    }
+
     const reuseId = invoke?.reuseAssetId?.trim();
     if (reuseId) {
       const exist = assetsRef.current.find((a) => a.id === reuseId);
@@ -3742,17 +3783,19 @@ ${lineSvg}
         onLog?.('warn', '底部快捷栏：无法将任务挂到指定资产');
         return;
       }
+      const built = buildQuickComposeTaskPromptOverride(userPrompt, plainMainUrls[0]!, plainRefUrls, maxRef);
+      const { primary, references, promptOverride } = built;
       const newTasks: WorkflowPendingTask[] = [];
       for (let i = 0; i < countN; i += 1) {
         newTasks.push({
           id: uuid(),
           assetId: reuseId,
           actionType: QUICK_COMPOSE_PLAIN_I2I_ACTION_ID,
-          inputImage: first,
+          inputImage: primary || plainMainUrls[0]!,
           addedAt: Date.now(),
           inputSourceDisplayKey: exist.displayKey,
-          ...(imgs.length >= 2 ? { inputImages: imgs } : {}),
-          ...(plainText ? { promptOverride: plainText } : {}),
+          ...(references.length > 0 ? { inputImages: references } : {}),
+          ...(promptOverride || plainText ? { promptOverride: promptOverride || plainText } : {}),
           ...taskOverrides,
           logContext: plainLog,
         });
@@ -3764,7 +3807,8 @@ ${lineSvg}
       }
       if (!invoke?.preserveBottomBarDraft) {
         setQuickComposeSegmentsTracked([newQuickComposeTextSegment('')]);
-        setQuickComposeDropSlots([]);
+        setQuickComposeMainDropSlots([]);
+        setQuickComposeReferenceDropSlots([]);
       }
       setQuickComposePromptCards([]);
       onLog?.('info', '底部快捷栏：已加入执行队列');
@@ -3772,32 +3816,37 @@ ${lineSvg}
     }
     const newAssets: WorkflowAsset[] = [];
     const newTasks: WorkflowPendingTask[] = [];
-    for (let i = 0; i < countN; i += 1) {
-      const newId = uuid();
-      newAssets.push(
-        attachInitialVgpToNewAsset({
-          id: newId,
-          original: first,
-          displayKey: 'original',
-          results: {},
-          resultOrder: [],
-          archived: false,
-          hiddenInGrid: true,
-          createdAt: Date.now(),
-        })
-      );
-      newTasks.push({
-        id: uuid(),
-        assetId: newId,
-        actionType: QUICK_COMPOSE_PLAIN_I2I_ACTION_ID,
-        inputImage: first,
-        addedAt: Date.now(),
-        inputSourceDisplayKey: 'original',
-        ...(imgs.length >= 2 ? { inputImages: imgs } : {}),
-        ...(plainText ? { promptOverride: plainText } : {}),
-        ...taskOverrides,
-        logContext: plainLog,
-      });
+    for (const mainUrl of plainMainUrls) {
+      const built = buildQuickComposeTaskPromptOverride(userPrompt, mainUrl, plainRefUrls, maxRef);
+      const { primary, references, promptOverride } = built;
+      if (!primary) continue;
+      for (let i = 0; i < countN; i += 1) {
+        const newId = uuid();
+        newAssets.push(
+          attachInitialVgpToNewAsset({
+            id: newId,
+            original: primary,
+            displayKey: 'original',
+            results: {},
+            resultOrder: [],
+            archived: false,
+            hiddenInGrid: true,
+            createdAt: Date.now(),
+          })
+        );
+        newTasks.push({
+          id: uuid(),
+          assetId: newId,
+          actionType: QUICK_COMPOSE_PLAIN_I2I_ACTION_ID,
+          inputImage: primary,
+          addedAt: Date.now(),
+          inputSourceDisplayKey: 'original',
+          ...(references.length > 0 ? { inputImages: references } : {}),
+          ...(promptOverride || plainText ? { promptOverride: promptOverride || plainText } : {}),
+          ...taskOverrides,
+          logContext: plainLog,
+        });
+      }
     }
     runPlainBatch(newAssets, newTasks);
   }, [
@@ -3846,22 +3895,33 @@ ${lineSvg}
     const segmentsSnap = [...quickComposeSegmentsRef.current];
     const partialResolved = resolveQuickComposeReferences({
       segments: segmentsSnap,
+      referenceDropSlots: quickComposeReferenceDropSlotsRef.current,
       assets: assetsRef.current,
       getAssetDisplayImage,
       maxRefs: getQuickComposeMaxRefs(),
     });
-    for (const w of partialResolved.warnings) {
+    const refQueues = resolveQuickComposeImageQueues({
+      referenceDropSlots: quickComposeReferenceDropSlotsRef.current,
+      assets: assetsRef.current,
+      getAssetDisplayImage,
+      maxRefs: getQuickComposeMaxRefs(),
+    });
+    for (const w of [...partialResolved.warnings, ...refQueues.warnings]) {
       onLog?.('warn', `大图预览：${w}`);
     }
-    const promptOverride = buildQuickComposePromptOverride(
+    const builtPrompt = buildQuickComposeTaskPromptOverride(
       partialResolved.userPrompt,
-      partialResolved.referenceContextBlock
+      src,
+      refQueues.referenceUrls,
+      getQuickComposeMaxRefs()
     );
+    const promptOverride = builtPrompt.promptOverride;
     const hasCurrentView = segmentsSnap.some((s) => s.type === 'mention' && s.mention.kind === 'current_view');
+    const hasAttachedRefs = refQueues.referenceUrls.length > 0 || partialResolved.refs.length > 0;
 
     if (
       !hasCurrentView &&
-      partialResolved.refs.length > 0 &&
+      hasAttachedRefs &&
       !needsPanoLocalCapture &&
       !localEditSnapshot
     ) {
@@ -3887,7 +3947,8 @@ ${lineSvg}
       setLightboxQuickComposeAnchor(null);
       setLightboxQuickComposeLayoutNonce((n) => n + 1);
       setQuickComposeSegmentsTracked([newQuickComposeTextSegment('')]);
-      setQuickComposeDropSlots([]);
+      setQuickComposeMainDropSlots([]);
+      setQuickComposeReferenceDropSlots([]);
       setQuickComposePromptCards([]);
       setAssets((prev) =>
         prev.map((a) => {
@@ -4140,18 +4201,28 @@ ${lineSvg}
         }
         const fullResolved = resolveQuickComposeReferences({
           segments: segmentsSnap,
+          referenceDropSlots: quickComposeReferenceDropSlotsRef.current,
           assets: assetsRef.current,
           getAssetDisplayImage,
           maxRefs: getQuickComposeMaxRefs(),
           currentViewDataUrl: composite,
         });
-        const refsForExecute = fullResolved.refs.length > 0 ? fullResolved.refs : [composite];
+        const captureRefQueues = resolveQuickComposeImageQueues({
+          referenceDropSlots: quickComposeReferenceDropSlotsRef.current,
+          assets: assetsRef.current,
+          getAssetDisplayImage,
+          maxRefs: getQuickComposeMaxRefs(),
+        });
+        const extraRefs = [
+          ...captureRefQueues.referenceUrls,
+          ...fullResolved.refs.filter((r) => r !== composite),
+        ].filter((r, i, arr) => arr.indexOf(r) === i);
         const box = lightboxClientImageDeferredRef.current.get(taskId);
         if (box) {
           if (inpaintMerged) box.skipCapabilityExecute = true;
-          box.inputImagesForExecute = refsForExecute.length >= 2 ? refsForExecute : undefined;
+          box.inputImagesForExecute = extraRefs.length > 0 ? extraRefs : undefined;
         }
-        resolveClient(refsForExecute[0] ?? composite);
+        resolveClient(composite);
       } catch (e) {
         rejectClient(e);
       }
@@ -6918,49 +6989,151 @@ ${lineSvg}
 
   const quickComposeMentionCandidates = useMemo(
     () =>
-      listDropSlotMentionCandidates(quickComposeDropSlots, quickComposeMentions, {
+      listDropSlotMentionCandidates([], quickComposeMentions, {
         includeCurrentView: Boolean(lightboxAssetId),
         currentViewPreviewSrc: lightboxCurrentViewPreviewSrc || undefined,
+        mainDropSlots: quickComposeMainDropSlots,
+        referenceDropSlots: quickComposeReferenceDropSlots,
       }),
-    [quickComposeDropSlots, quickComposeMentions, lightboxAssetId, lightboxCurrentViewPreviewSrc]
+    [
+      quickComposeMainDropSlots,
+      quickComposeReferenceDropSlots,
+      quickComposeMentions,
+      lightboxAssetId,
+      lightboxCurrentViewPreviewSrc,
+    ]
   );
 
   const appendQuickComposeDropSlotsForAssetIds = useCallback(
-    (assetIds: string[]) => {
-      let added = 0;
-      setQuickComposeDropSlots((prev) => {
-        const next = [...prev];
-        for (const id of assetIds) {
-          const a = assetsRef.current.find((x) => x.id === id);
-          if (!a || isGroupAsset(a) || !assetLightboxRasterEligible(a)) continue;
-          const previewSrc = getAssetDisplayImage(a).trim();
-          if (!previewSrc) continue;
-          if (next.some((s) => s.assetId === id)) continue;
-          next.push({
-            assetId: id,
-            previewSrc,
-            label: workflowAssetMentionLabel(a),
-          });
-          added += 1;
-        }
-        return next;
-      });
-      if (added > 0) {
-        onLog?.('info', `底部快捷栏：已拖入 ${added} 张参考图（点击 @ 引用，拖出待 @ 区可移除）`);
-      } else if (assetIds.length > 0) {
-        onLog?.('warn', '底部快捷栏：拖入项无可用预览图');
+    (assetIds: string[], zone: QuickComposeDropZone = 'main') => {
+      const setter = zone === 'reference' ? setQuickComposeReferenceDropSlots : setQuickComposeMainDropSlots;
+      const otherSetter =
+        zone === 'reference' ? setQuickComposeMainDropSlots : setQuickComposeReferenceDropSlots;
+      const renumber =
+        zone === 'reference' ? renumberQuickComposeReferenceDropSlotLabels : renumberQuickComposeMainDropSlotLabels;
+      const renumberOther =
+        zone === 'reference' ? renumberQuickComposeMainDropSlotLabels : renumberQuickComposeReferenceDropSlotLabels;
+
+      const targetSlots =
+        zone === 'reference' ? quickComposeReferenceDropSlotsRef.current : quickComposeMainDropSlotsRef.current;
+      const otherSlots =
+        zone === 'reference' ? quickComposeMainDropSlotsRef.current : quickComposeReferenceDropSlotsRef.current;
+
+      const toAdd: QuickComposeDropSlot[] = [];
+      const removeFromOther: string[] = [];
+
+      for (const rawId of assetIds) {
+        const id = rawId.trim();
+        if (!id) continue;
+        const a = assetsRef.current.find((x) => x.id === id);
+        if (!a || isGroupAsset(a) || !assetLightboxRasterEligible(a)) continue;
+        const previewSrc = getAssetDisplayImage(a).trim();
+        if (!previewSrc) continue;
+        if (targetSlots.some((s) => s.assetId === id)) continue;
+        if (otherSlots.some((s) => s.assetId === id)) removeFromOther.push(id);
+        toAdd.push({
+          assetId: id,
+          previewSrc,
+          label: workflowAssetMentionLabel(a),
+        });
       }
+
+      if (toAdd.length === 0) {
+        if (assetIds.length > 0) {
+          onLog?.('warn', '底部快捷栏：拖入项无可用预览图');
+        }
+        return;
+      }
+
+      if (removeFromOther.length > 0) {
+        const removeSet = new Set(removeFromOther);
+        otherSetter((prev) => renumberOther(prev.filter((s) => !removeSet.has(s.assetId))));
+      }
+      setter((prev) => {
+        const existing = new Set(prev.map((s) => s.assetId));
+        const next = [...prev];
+        for (const slot of toAdd) {
+          if (existing.has(slot.assetId)) continue;
+          next.push(slot);
+        }
+        return renumber(next);
+      });
+
+      const zoneLabel = zone === 'reference' ? '参考图' : '主图';
+      const parts: string[] = [`已加入 ${toAdd.length} 张${zoneLabel}`];
+      if (removeFromOther.length > 0) parts.push(`${removeFromOther.length} 张已从另一区移入`);
+      onLog?.('info', `底部快捷栏：${parts.join('，')}（按拖入顺序送模，拖出虚线区可移除）`);
     },
     [getAssetDisplayImage, onLog]
   );
 
-  const removeQuickComposeDropSlot = useCallback(
-    (assetId: string) => {
+  const removeQuickComposeMainDropSlot = useCallback((assetId: string) => {
+    const id = assetId.trim();
+    if (!id) return;
+    setQuickComposeMainDropSlots((prev) => {
+      if (!prev.some((s) => s.assetId === id)) return prev;
+      return renumberQuickComposeMainDropSlotLabels(prev.filter((s) => s.assetId !== id));
+    });
+  }, []);
+
+  const removeQuickComposeReferenceDropSlot = useCallback((assetId: string) => {
+    const id = assetId.trim();
+    if (!id) return;
+    setQuickComposeReferenceDropSlots((prev) => {
+      if (!prev.some((s) => s.assetId === id)) return prev;
+      return renumberQuickComposeReferenceDropSlotLabels(prev.filter((s) => s.assetId !== id));
+    });
+  }, []);
+
+  const moveQuickComposeDropSlot = useCallback((assetId: string, toZone: QuickComposeDropZone) => {
+    const id = assetId.trim();
+    if (!id) return;
+    const fromMain = quickComposeMainDropSlotsRef.current.find((s) => s.assetId === id);
+    const fromRef = quickComposeReferenceDropSlotsRef.current.find((s) => s.assetId === id);
+    const slot = fromMain ?? fromRef;
+    if (!slot) return;
+    const fromZone: QuickComposeDropZone = fromMain ? 'main' : 'reference';
+    if (fromZone === toZone) return;
+
+    if (fromZone === 'main') {
+      setQuickComposeMainDropSlots((prev) =>
+        renumberQuickComposeMainDropSlotLabels(prev.filter((s) => s.assetId !== id))
+      );
+      setQuickComposeReferenceDropSlots((prev) =>
+        renumberQuickComposeReferenceDropSlotLabels([
+          ...prev.filter((s) => s.assetId !== id),
+          slot,
+        ])
+      );
+    } else {
+      setQuickComposeReferenceDropSlots((prev) =>
+        renumberQuickComposeReferenceDropSlotLabels(prev.filter((s) => s.assetId !== id))
+      );
+      setQuickComposeMainDropSlots((prev) =>
+        renumberQuickComposeMainDropSlotLabels([...prev.filter((s) => s.assetId !== id), slot])
+      );
+    }
+  }, []);
+
+  const reorderQuickComposeDropSlot = useCallback(
+    (assetId: string, zone: QuickComposeDropZone, toIndex: number) => {
       const id = assetId.trim();
       if (!id) return;
-      setQuickComposeDropSlots((prev) => {
-        if (!prev.some((s) => s.assetId === id)) return prev;
-        return prev.filter((s) => s.assetId !== id);
+      const setter =
+        zone === 'reference' ? setQuickComposeReferenceDropSlots : setQuickComposeMainDropSlots;
+      const renumber =
+        zone === 'reference'
+          ? renumberQuickComposeReferenceDropSlotLabels
+          : renumberQuickComposeMainDropSlotLabels;
+      setter((prev) => {
+        const from = prev.findIndex((s) => s.assetId === id);
+        if (from < 0) return prev;
+        const target = Math.max(0, Math.min(prev.length - 1, toIndex));
+        if (from === target) return prev;
+        const next = [...prev];
+        const [item] = next.splice(from, 1);
+        next.splice(target, 0, item!);
+        return renumber(next);
       });
     },
     []
@@ -7708,9 +7881,9 @@ ${lineSvg}
     toggleLightboxSamArm,
   ]);
 
-  /** 大纲 / 画布拖入底部快捷栏：加入待 @ 缩略图区（点击后再引用） */
+  /** 大纲 / 画布拖入底部快捷栏：加入主图区或参考图区 */
   const handleQuickComposeWorkflowDrop = useCallback(
-    (e: React.DragEvent) => {
+    (e: React.DragEvent, zone: QuickComposeDropZone = 'main') => {
       const sources = resolveCapabilityDropDragSources(
         draggingAssetIds,
         draggingGroupItems,
@@ -7756,7 +7929,7 @@ ${lineSvg}
         onLog?.('warn', '底部快捷栏：拖入资产无可用项');
         return;
       }
-      appendQuickComposeDropSlotsForAssetIds(assetIds);
+      appendQuickComposeDropSlotsForAssetIds(assetIds, zone);
     },
     [
       draggingAssetIds,
@@ -11123,8 +11296,13 @@ ${lineSvg}
             segments={quickComposeSegments}
             onSegmentsChange={setQuickComposeSegmentsTracked}
             mentionCandidates={quickComposeMentionCandidates}
-            dropSlots={quickComposeDropSlots}
-            onRemoveDropSlot={removeQuickComposeDropSlot}
+            mainDropSlots={quickComposeMainDropSlots}
+            referenceDropSlots={quickComposeReferenceDropSlots}
+            onRemoveMainDropSlot={removeQuickComposeMainDropSlot}
+            onRemoveReferenceDropSlot={removeQuickComposeReferenceDropSlot}
+            onMoveDropSlot={moveQuickComposeDropSlot}
+            onReorderDropSlot={reorderQuickComposeDropSlot}
+            hideMainDropZone
             maxMentions={quickComposeMaxReferenceImages}
             onSubmit={() => void submitLightboxQuickCompose()}
             showGenImageSettings={quickComposeShowGenImageSettings}
@@ -11776,8 +11954,12 @@ ${lineSvg}
             segments={quickComposeSegments}
             onSegmentsChange={setQuickComposeSegmentsTracked}
             mentionCandidates={quickComposeMentionCandidates}
-            dropSlots={quickComposeDropSlots}
-            onRemoveDropSlot={removeQuickComposeDropSlot}
+            mainDropSlots={quickComposeMainDropSlots}
+            referenceDropSlots={quickComposeReferenceDropSlots}
+            onRemoveMainDropSlot={removeQuickComposeMainDropSlot}
+            onRemoveReferenceDropSlot={removeQuickComposeReferenceDropSlot}
+            onMoveDropSlot={moveQuickComposeDropSlot}
+            onReorderDropSlot={reorderQuickComposeDropSlot}
             maxMentions={quickComposeMaxReferenceImages}
             onSubmit={submitQuickCompose}
             showGenImageSettings={quickComposeShowGenImageSettings}

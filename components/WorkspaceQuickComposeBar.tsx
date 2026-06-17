@@ -25,10 +25,11 @@ import QuickComposeMentionField, {
 } from './workflow/QuickComposeMentionField';
 import type {
   QuickComposeDropSlot,
+  QuickComposeDropZone,
   QuickComposeMentionCandidate,
   QuickComposeSegment,
 } from '../services/quickComposeMention';
-import { mentionsFromSegments, newQuickComposeTextSegment } from '../services/quickComposeMention';
+import { mentionsFromSegments, mergeQuickComposeDropSlotsForMentions, newQuickComposeTextSegment } from '../services/quickComposeMention';
 
 export type WorkspaceQuickComposeGenSettings = {
   imageModelRegistryId: string;
@@ -79,9 +80,16 @@ export type WorkspaceQuickComposeBarProps = {
   segments: QuickComposeSegment[];
   onSegmentsChange: (next: QuickComposeSegment[]) => void;
   mentionCandidates: QuickComposeMentionCandidate[];
-  /** 拖入输入区、待点击 @ 的缩略图 */
-  dropSlots: QuickComposeDropSlot[];
-  onRemoveDropSlot: (assetId: string) => void;
+  /** 主图区（每张主图 = 一条任务的图1） */
+  mainDropSlots: QuickComposeDropSlot[];
+  /** 参考图区（所有主图任务共用，图2、图3…） */
+  referenceDropSlots: QuickComposeDropSlot[];
+  onRemoveMainDropSlot: (assetId: string) => void;
+  onRemoveReferenceDropSlot: (assetId: string) => void;
+  /** 托盘内拖动：在主图区 / 参考图区之间换区 */
+  onMoveDropSlot?: (assetId: string, toZone: QuickComposeDropZone) => void;
+  /** 同区内拖动调整顺序 */
+  onReorderDropSlot?: (assetId: string, zone: QuickComposeDropZone, toIndex: number) => void;
   /** 参考图（@ 引用）数量上限 */
   maxMentions: number;
   onSubmit: () => void;
@@ -94,8 +102,10 @@ export type WorkspaceQuickComposeBarProps = {
   allowBatchCount: boolean;
   /** 拖入「文本框」区域时：切换快捷能力并追加预设提示词卡片（功能区/能力列 MIME） */
   onComposeInputCapabilityDrop?: (presetId: string) => void;
-  /** 拖入工作区资产（大纲/画布 `DT_AC_WORKFLOW_EXPORT` + 与能力区一致的拖拽 state） */
-  onComposeInputWorkflowDrop?: (e: React.DragEvent) => void;
+  /** 拖入工作区资产；zone 区分主图区 / 参考图区 */
+  onComposeInputWorkflowDrop?: (e: React.DragEvent, zone: QuickComposeDropZone) => void;
+  /** 仅 lightbox：隐藏主图区（当前画面即主图） */
+  hideMainDropZone?: boolean;
   promptCards: WorkspaceQuickComposePromptCard[];
   onRemovePromptCard: (key: string) => void;
 };
@@ -158,8 +168,12 @@ export default function WorkspaceQuickComposeBar({
   segments,
   onSegmentsChange,
   mentionCandidates,
-  dropSlots,
-  onRemoveDropSlot,
+  mainDropSlots,
+  referenceDropSlots,
+  onRemoveMainDropSlot,
+  onRemoveReferenceDropSlot,
+  onMoveDropSlot,
+  onReorderDropSlot,
   maxMentions,
   onSubmit,
   genSettings,
@@ -168,19 +182,12 @@ export default function WorkspaceQuickComposeBar({
   allowBatchCount,
   onComposeInputCapabilityDrop,
   onComposeInputWorkflowDrop,
+  hideMainDropZone = false,
   promptCards,
   onRemovePromptCard,
 }: WorkspaceQuickComposeBarProps) {
   const mentions = useMemo(() => mentionsFromSegments(segments), [segments]);
   const mentionFieldRef = useRef<QuickComposeMentionFieldHandle | null>(null);
-  const mentionedAssetIds = useMemo(
-    () => new Set(mentions.filter((m) => m.kind === 'asset').map((m) => m.assetId)),
-    [mentions]
-  );
-  const pendingDropSlots = useMemo(
-    () => dropSlots.filter((s) => !mentionedAssetIds.has(s.assetId)),
-    [dropSlots, mentionedAssetIds]
-  );
   const barRef = useRef<HTMLDivElement>(null);
   const dragOffsetRef = useRef<{ x: number; y: number } | null>(null);
   const settingsTriggerRef = useRef<HTMLButtonElement>(null);
@@ -318,7 +325,7 @@ export default function WorkspaceQuickComposeBar({
   );
 
   const handleComposeInputDrop = useCallback(
-    (e: React.DragEvent) => {
+    (e: React.DragEvent, zone: QuickComposeDropZone = 'main') => {
       if (onComposeInputCapabilityDrop && dragHasCapabilityPreset(e)) {
         e.preventDefault();
         e.stopPropagation();
@@ -329,7 +336,7 @@ export default function WorkspaceQuickComposeBar({
       if (onComposeInputWorkflowDrop && dragHasWorkflowExport(e)) {
         e.preventDefault();
         e.stopPropagation();
-        onComposeInputWorkflowDrop(e);
+        onComposeInputWorkflowDrop(e, zone);
       }
     },
     [
@@ -340,6 +347,91 @@ export default function WorkspaceQuickComposeBar({
       readDroppedCapabilityPresetId,
     ]
   );
+
+  const handleMainZoneDragOver = useCallback(
+    (e: React.DragEvent) => {
+      const allowCap = Boolean(onComposeInputCapabilityDrop) && dragHasCapabilityPreset(e);
+      const allowWf = Boolean(onComposeInputWorkflowDrop) && dragHasWorkflowExport(e);
+      if (!allowCap && !allowWf) return;
+      e.preventDefault();
+      e.stopPropagation();
+      try {
+        e.dataTransfer.dropEffect = 'copy';
+      } catch {
+        /* ignore */
+      }
+    },
+    [dragHasCapabilityPreset, dragHasWorkflowExport, onComposeInputCapabilityDrop, onComposeInputWorkflowDrop]
+  );
+
+  const handlePresetOnlyDrop = useCallback(
+    (e: React.DragEvent) => {
+      if (!onComposeInputCapabilityDrop || !dragHasCapabilityPreset(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const id = readDroppedCapabilityPresetId(e.dataTransfer);
+      if (id) onComposeInputCapabilityDrop(id);
+    },
+    [dragHasCapabilityPreset, onComposeInputCapabilityDrop, readDroppedCapabilityPresetId]
+  );
+
+  const bindQuickComposeDropZone = useCallback(
+    (zone: QuickComposeDropZone) => ({
+      onDragOver: isLightbox
+        ? undefined
+        : (e: React.DragEvent) => {
+            e.stopPropagation();
+            handleMainZoneDragOver(e);
+          },
+      onDrop: isLightbox
+        ? undefined
+        : (e: React.DragEvent) => {
+            e.stopPropagation();
+            handleComposeInputDrop(e, zone);
+          },
+    }),
+    [handleComposeInputDrop, handleMainZoneDragOver, isLightbox]
+  );
+
+  const handleDropSlotClick = useCallback(
+    (slot: QuickComposeDropSlot) => {
+      mentionFieldRef.current?.stashCaretBeforeBlur();
+      const merged = mergeQuickComposeDropSlotsForMentions(mainDropSlots, referenceDropSlots);
+      const mergedSlot = merged.find((s) => s.assetId === slot.assetId);
+      const fromCandidates = mentionCandidates.find(
+        (c): c is Extract<QuickComposeMentionCandidate, { kind: 'asset' }> =>
+          c.kind === 'asset' && c.assetId === slot.assetId
+      );
+      const candidate: QuickComposeMentionCandidate = fromCandidates ?? {
+        kind: 'asset',
+        assetId: slot.assetId,
+        label: mergedSlot?.label ?? slot.label,
+        previewSrc: slot.previewSrc,
+      };
+      mentionFieldRef.current?.insertMentionCandidate(candidate);
+    },
+    [mainDropSlots, referenceDropSlots, mentionCandidates]
+  );
+
+  /** 仅在有拖入图片时展示主图/参考图两区（无图时不占位） */
+  const showSplitDropZones =
+    mainDropSlots.length > 0 || referenceDropSlots.length > 0;
+
+  const hasMainDropSlots = mainDropSlots.length > 0;
+  const hasReferenceDropSlots = referenceDropSlots.length > 0;
+  /** 参考区有图时需保留主区作跨区拖放目标；主区有图时保留参考区作空拖入位 */
+  const showMainDropColumn = !hideMainDropZone && (hasMainDropSlots || hasReferenceDropSlots);
+  const showReferenceDropColumn = hasReferenceDropSlots || (!hideMainDropZone && hasMainDropSlots);
+  /** 双列布局时始终显示分割线（含仅一侧有图、另一侧为空拖入位） */
+  const showZoneDivider =
+    !hideMainDropZone && showMainDropColumn && showReferenceDropColumn;
+  const splitDropZoneGridCols = hideMainDropZone
+    ? 'grid-cols-1'
+    : showZoneDivider
+      ? 'grid-cols-[auto_2px_auto]'
+      : 'grid-cols-1';
+
+  const hasDropZones = showSplitDropZones || promptCards.length > 0;
 
   useEffect(() => {
     if (!visible) {
@@ -525,19 +617,58 @@ export default function WorkspaceQuickComposeBar({
 
   useEffect(() => {
     if (!visible) return;
+
+    const RESIZE_RESET_DEBOUNCE_MS = 400;
+    const RESIZE_RESET_MIN_DELTA_PX = 16;
+
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    let lastCommittedVw = window.innerWidth;
+    let lastCommittedVh = window.innerHeight;
+
     const scheduleClamp = () => {
       requestAnimationFrame(() => clampPositionToViewport());
     };
-    window.addEventListener('resize', scheduleClamp);
+
+    const scheduleResetToDefaultOnResize = () => {
+      if (dragOffsetRef.current !== null) return;
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      if (
+        Math.abs(vw - lastCommittedVw) < RESIZE_RESET_MIN_DELTA_PX &&
+        Math.abs(vh - lastCommittedVh) < RESIZE_RESET_MIN_DELTA_PX
+      ) {
+        return;
+      }
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        debounceTimer = null;
+        lastCommittedVw = window.innerWidth;
+        lastCommittedVh = window.innerHeight;
+        if (placement === 'lightbox' && lightboxAnchorRef.current) {
+          applyLightboxBarToAnchor();
+        } else {
+          resetToDefaultPosition();
+        }
+      }, RESIZE_RESET_DEBOUNCE_MS);
+    };
+
+    window.addEventListener('resize', scheduleResetToDefaultOnResize);
     const vv = typeof window !== 'undefined' && window.visualViewport;
     vv?.addEventListener('resize', scheduleClamp);
     vv?.addEventListener('scroll', scheduleClamp);
     return () => {
-      window.removeEventListener('resize', scheduleClamp);
+      if (debounceTimer) clearTimeout(debounceTimer);
+      window.removeEventListener('resize', scheduleResetToDefaultOnResize);
       vv?.removeEventListener('resize', scheduleClamp);
       vv?.removeEventListener('scroll', scheduleClamp);
     };
-  }, [visible, clampPositionToViewport]);
+  }, [
+    visible,
+    placement,
+    clampPositionToViewport,
+    resetToDefaultPosition,
+    applyLightboxBarToAnchor,
+  ]);
 
   const imageSizeOptions = useMemo(
     () => imageSizeSelectOptionsForRegistryModel(genSettings.imageModelRegistryId),
@@ -888,67 +1019,126 @@ export default function WorkspaceQuickComposeBar({
         onWheel={isLightbox ? (e) => e.stopPropagation() : undefined}
         {...(isLightbox ? ({ 'data-image-preview-no-wheel': '' } as const) : {})}
       >
-        {/* 预设卡片绝对定位在药丸上方，不参与文档流，避免添加/移除卡片时输入条上下跳动 */}
+        {/* 预设卡片 / 主图·参考图区：叠在药丸上方；主图与参考图左右并排 */}
         <div className="relative min-w-0 overflow-visible">
-          {promptCards.length > 0 ? (
+          {hasDropZones ? (
             <div
-              className="pointer-events-auto absolute bottom-full left-0 right-0 z-[1] mb-2 flex flex-wrap items-center gap-2 px-0.5"
-              onDragOver={isLightbox ? undefined : handleComposeInputDragOver}
-              onDrop={isLightbox ? undefined : handleComposeInputDrop}
+              className="pointer-events-auto absolute bottom-full left-0 right-0 z-[1] mb-2 flex flex-col items-center gap-2 px-0.5"
+              onDragOver={
+                isLightbox || showSplitDropZones ? undefined : handleMainZoneDragOver
+              }
+              onDrop={isLightbox ? undefined : showSplitDropZones ? handlePresetOnlyDrop : (e) => handleComposeInputDrop(e, 'main')}
             >
-              {promptCards.map((c) => (
-                <div
-                  key={c.key}
-                  className={`group inline-flex max-w-[min(18rem,calc(100vw-3rem))] min-w-0 shrink-0 items-center gap-1.5 px-2.5 py-1.5 ${WORKFLOW_QUICK_COMPOSE_BAR_SHELL}`}
-                  title={c.instruction.trim() ? c.instruction : c.label}
-                >
-                  <span className="min-w-0 truncate text-[13px] text-gray-100">{c.label}</span>
-                  <button
-                    type="button"
-                    onClick={() => onRemovePromptCard(c.key)}
-                    className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-gray-400 outline-none transition-colors hover:bg-white/[0.08] hover:text-white focus-visible:ring-2 focus-visible:ring-blue-500/50"
-                    aria-label={`移除 ${c.label}`}
-                  >
-                    <svg
-                      viewBox="0 0 24 24"
-                      className="h-3.5 w-3.5"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2.2"
-                      strokeLinecap="round"
-                      aria-hidden
+              {promptCards.length > 0 ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  {promptCards.map((c) => (
+                    <div
+                      key={c.key}
+                      className={`group inline-flex max-w-[min(18rem,calc(100vw-3rem))] min-w-0 shrink-0 items-center gap-1.5 px-2.5 py-1.5 ${WORKFLOW_QUICK_COMPOSE_BAR_SHELL}`}
+                      title={c.instruction.trim() ? c.instruction : c.label}
                     >
-                      <path d="M18 6 6 18M6 6l12 12" />
-                    </svg>
-                  </button>
+                      <span className="min-w-0 truncate text-[13px] text-gray-100">{c.label}</span>
+                      <button
+                        type="button"
+                        onClick={() => onRemovePromptCard(c.key)}
+                        className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-gray-400 outline-none transition-colors hover:bg-white/[0.08] hover:text-white focus-visible:ring-2 focus-visible:ring-blue-500/50"
+                        aria-label={`移除 ${c.label}`}
+                      >
+                        <svg
+                          viewBox="0 0 24 24"
+                          className="h-3.5 w-3.5"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2.2"
+                          strokeLinecap="round"
+                          aria-hidden
+                        >
+                          <path d="M18 6 6 18M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          ) : null}
+              ) : null}
 
-          {pendingDropSlots.length > 0 ? (
-            <div
-              className="pointer-events-auto absolute bottom-full left-0 right-0 z-[1] mb-2"
-              onDragOver={isLightbox ? undefined : handleComposeInputDragOver}
-              onDrop={isLightbox ? undefined : handleComposeInputDrop}
-            >
-              <QuickComposeDropTray
-                slots={pendingDropSlots}
-                disabled={disabled}
-                atMentionLimit={mentions.length >= maxMentions}
-                onActivate={(assetId) => {
-                  const slot = dropSlots.find((s) => s.assetId === assetId);
-                  if (!slot) return;
-                  mentionFieldRef.current?.insertMentionCandidate({
-                    kind: 'asset',
-                    assetId: slot.assetId,
-                    label: slot.label,
-                    previewSrc: slot.previewSrc,
-                  });
-                }}
-                onRemoveSlot={onRemoveDropSlot}
-                onStashCaret={() => mentionFieldRef.current?.stashCaretBeforeBlur()}
-              />
+              {showSplitDropZones ? (
+                <div className={`grid gap-x-0 gap-y-1 px-0.5 py-1 ${splitDropZoneGridCols}`}>
+                  {showMainDropColumn ? (
+                    hasMainDropSlots ? (
+                      <span className="justify-self-center px-1.5 text-[9px] font-semibold text-gray-500">
+                        主图（待修改）
+                      </span>
+                    ) : (
+                      <div className="px-1.5" aria-hidden />
+                    )
+                  ) : null}
+                  {showZoneDivider ? <div className="pointer-events-none" aria-hidden /> : null}
+                  {showReferenceDropColumn ? (
+                    <span className="justify-self-center px-1.5 text-[9px] font-semibold text-gray-500">
+                      参考图
+                    </span>
+                  ) : null}
+
+                  {showMainDropColumn ? (
+                    <div
+                      data-quick-compose-drop-zone="main"
+                      className="inline-flex w-fit max-w-full shrink-0 justify-self-center px-1.5"
+                      {...bindQuickComposeDropZone('main')}
+                    >
+                      <QuickComposeDropTray
+                        zone="main"
+                        slots={mainDropSlots}
+                        disabled={disabled}
+                        onRemoveSlot={onRemoveMainDropSlot}
+                        onReorderSlot={
+                          onReorderDropSlot
+                            ? (assetId, toIndex) => onReorderDropSlot(assetId, 'main', toIndex)
+                            : undefined
+                        }
+                        onMoveSlotToZone={
+                          onMoveDropSlot ? (assetId) => onMoveDropSlot(assetId, 'reference') : undefined
+                        }
+                        onSlotClick={handleDropSlotClick}
+                        onStashCaret={() => mentionFieldRef.current?.stashCaretBeforeBlur()}
+                        emptyHint="拖入主图"
+                      />
+                    </div>
+                  ) : null}
+                  {showZoneDivider ? (
+                    <div
+                      className="pointer-events-none mx-0.5 w-[2px] self-stretch justify-self-center rounded-full bg-white/35 shadow-[0_0_6px_rgba(255,255,255,0.12)]"
+                      aria-hidden
+                    />
+                  ) : null}
+                  {showReferenceDropColumn ? (
+                    <div
+                      data-quick-compose-drop-zone="reference"
+                      className="inline-flex w-fit max-w-full shrink-0 justify-self-center px-1.5"
+                      {...bindQuickComposeDropZone('reference')}
+                    >
+                      <QuickComposeDropTray
+                        zone="reference"
+                        slots={referenceDropSlots}
+                        disabled={disabled}
+                        onRemoveSlot={onRemoveReferenceDropSlot}
+                        onReorderSlot={
+                          onReorderDropSlot
+                            ? (assetId, toIndex) => onReorderDropSlot(assetId, 'reference', toIndex)
+                            : undefined
+                        }
+                        onMoveSlotToZone={
+                          onMoveDropSlot && showMainDropColumn
+                            ? (assetId) => onMoveDropSlot(assetId, 'main')
+                            : undefined
+                        }
+                        onSlotClick={handleDropSlotClick}
+                        onStashCaret={() => mentionFieldRef.current?.stashCaretBeforeBlur()}
+                        emptyHint="拖入参考图"
+                      />
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
           ) : null}
 
@@ -971,7 +1161,7 @@ export default function WorkspaceQuickComposeBar({
                   ariaLabel={isLightbox ? '大图预览快捷生成描述' : '快捷生成描述'}
                   onSubmit={onSubmit}
                   onDragOver={handleComposeInputDragOver}
-                  onDrop={handleComposeInputDrop}
+                  onDrop={(e) => handleComposeInputDrop(e, 'main')}
                 />
                 <button
                   type="button"
@@ -1096,7 +1286,7 @@ export default function WorkspaceQuickComposeBar({
                 ariaLabel={isLightbox ? '大图预览快捷生成描述' : '快捷生成描述'}
                 onSubmit={onSubmit}
                 onDragOver={handleComposeInputDragOver}
-                onDrop={handleComposeInputDrop}
+                onDrop={(e) => handleComposeInputDrop(e, 'main')}
               />
 
               <button

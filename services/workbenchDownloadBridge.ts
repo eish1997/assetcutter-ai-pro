@@ -1,4 +1,5 @@
 import { ensureDownloadFilenameExtension } from './downloadFilename';
+import { dispatchWorkbenchDownloadNotice } from './workbenchDownloadNotice';
 
 type WorkbenchDownloadBridge = {
   saveBlob?: (payload: {
@@ -31,61 +32,7 @@ function registerWorkbenchDownloadListener(): void {
 }
 
 export function showDownloadNotice(level: 'info' | 'warn', title: string, detail?: string): void {
-  if (typeof document === 'undefined') return;
-  try {
-    const rootId = 'assetcutter-download-notices';
-    let root = document.getElementById(rootId);
-    if (!root) {
-      root = document.createElement('div');
-      root.id = rootId;
-      root.style.cssText = [
-        'position:fixed',
-        'right:18px',
-        'bottom:18px',
-        'z-index:2147483647',
-        'display:flex',
-        'flex-direction:column',
-        'gap:8px',
-        'max-width:min(420px,calc(100vw - 36px))',
-        'pointer-events:none',
-      ].join(';');
-      document.body.appendChild(root);
-    }
-    const el = document.createElement('div');
-    const border = level === 'warn' ? 'rgba(245,158,11,.55)' : 'rgba(96,165,250,.55)';
-    const color = level === 'warn' ? '#fbbf24' : '#93c5fd';
-    el.style.cssText = [
-      'pointer-events:auto',
-      'border-radius:12px',
-      `border:1px solid ${border}`,
-      'background:rgba(15,15,18,.94)',
-      'box-shadow:0 18px 44px rgba(0,0,0,.42)',
-      'color:#e5e7eb',
-      'padding:10px 12px',
-      'font:12px/1.45 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
-      'backdrop-filter:blur(12px)',
-      'white-space:normal',
-      'word-break:break-word',
-    ].join(';');
-    const safeTitle = String(title || '').replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' })[c] || c);
-    const safeDetail = String(detail || '').replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' })[c] || c);
-    el.innerHTML = `<div style="font-weight:800;color:${color};margin-bottom:2px">${safeTitle}</div>${
-      safeDetail ? `<div style="font-size:11px;color:#9ca3af">${safeDetail}</div>` : ''
-    }`;
-    root.appendChild(el);
-    window.setTimeout(() => {
-      try {
-        el.style.transition = 'opacity .18s ease, transform .18s ease';
-        el.style.opacity = '0';
-        el.style.transform = 'translateY(6px)';
-        window.setTimeout(() => el.remove(), 220);
-      } catch {
-        /* ignore */
-      }
-    }, 6200);
-  } catch {
-    /* ignore */
-  }
+  dispatchWorkbenchDownloadNotice({ level, title, detail });
 }
 
 function sanitizeDownloadFilename(name: string): string {
@@ -155,14 +102,12 @@ export async function tryWorkbenchBlobDownload(
     });
     if (r?.canceled) return { ok: false, canceled: true };
     if (r?.ok) {
-      const result = {
+      return {
         ok: true as const,
         mode: 'workbench' as const,
         filename: r.filename || sanitizeDownloadFilename(resolvedFilename),
         path: r.path,
       };
-      showDownloadNotice('info', options?.noticeTitle || '下载已完成', result.path || result.filename);
-      return result;
     }
     console.warn('[workbenchDownloadBridge] save failed', r?.error || 'unknown error');
   } catch (e) {

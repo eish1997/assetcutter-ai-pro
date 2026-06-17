@@ -777,13 +777,16 @@ const QuickComposeMentionField = forwardRef<QuickComposeMentionFieldHandle, Quic
                 tabIndex={0}
                 onPointerDown={(e) => startMentionPointerDrag(m.id, e)}
                 onKeyDown={(e) => onMentionKeyDown(m.id, e)}
-                className={`relative inline-flex max-h-7 shrink-0 touch-none select-none align-middle rounded-md ring-1 ring-white/[0.14] outline-none focus-visible:ring-2 focus-visible:ring-sky-500/50 ${
+                className={`relative inline-flex max-h-7 shrink-0 touch-none select-none align-middle items-center gap-0.5 rounded-md pl-0.5 pr-1 ring-1 ring-white/[0.14] outline-none focus-visible:ring-2 focus-visible:ring-sky-500/50 ${
                   isDragging ? 'z-10 cursor-grabbing opacity-40' : 'cursor-grab'
                 }`}
                 style={{ touchAction: 'none' }}
-                title={`${m.kind === 'current_view' ? '当前画面（提交时截取）' : m.label} — 按住拖动到目标位置`}
+                title={`${m.label}${m.kind === 'current_view' ? '（提交时截取当前画面）' : ''} — 按住拖动到目标位置`}
               >
-                <MentionThumb src={m.previewSrc} alt={m.label} />
+                <MentionThumb src={m.previewSrc} alt={m.label} size={24} />
+                <span className="pr-0.5 text-[10px] font-bold tabular-nums leading-none text-gray-200">
+                  {m.label}
+                </span>
                 <button
                   type="button"
                   disabled={disabled}

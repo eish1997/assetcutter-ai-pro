@@ -63,6 +63,10 @@ export const WORKFLOW_IMAGE_PREVIEW_RAIL =
 export const WORKFLOW_QUICK_COMPOSE_BAR_SHELL =
   'rounded-xl border border-white/10 bg-[#0f0f12] shadow-xl ring-1 ring-white/[0.05]';
 
+/** 快捷栏拖入区图片块：与输入条同实色底，略小圆角 */
+export const WORKFLOW_QUICK_COMPOSE_DROP_SLOT_SHELL =
+  'rounded-lg border border-white/10 bg-[#0f0f12] shadow-md ring-1 ring-white/[0.05]';
+
 /**
  * 与 `ImageAnnotationLightboxToolbar` 主栏 `ToolShell`（非 dense，h7×w7）同系。
  * 全屏预览右上角模式切换等图标按钮使用，勿与含文字 padding 的 `TITLE_ROW_BTN_*` 混用。
