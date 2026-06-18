@@ -1,12 +1,9 @@
 import {
-  useState,
   useRef,
   useCallback,
   useEffect,
-  useLayoutEffect,
   type RefObject,
   type MouseEvent as ReactMouseEvent,
-  type PointerEvent as ReactPointerEvent,
   type Dispatch,
   type SetStateAction,
 } from 'react';
@@ -83,6 +80,16 @@ function applyMarqueeSelection(
   }
 }
 
+function hideMarqueeRect(el: SVGRectElement | null) {
+  if (!el) return;
+  el.setAttribute('visibility', 'hidden');
+}
+
+function showMarqueeRect(el: SVGRectElement | null) {
+  if (!el) return;
+  el.setAttribute('visibility', 'visible');
+}
+
 export function useWorkflowMarquee({
   registerMarqueeStartHandler,
   showArchived,
@@ -95,14 +102,15 @@ export function useWorkflowMarquee({
   setSelectedAssetIds,
   setSelectedGroupItemKeys,
 }: UseWorkflowMarqueeArgs) {
-  const [marqueeActive, setMarqueeActive] = useState(false);
   const marqueeDataRef = useRef({ startX: 0, startY: 0, endX: 0, endY: 0 });
-  const marqueeOverlayElRef = useRef<HTMLDivElement | null>(null);
+  const marqueeOverlayElRef = useRef<SVGRectElement | null>(null);
   const marqueePaneRef = useRef(0);
   const dragCleanupRef = useRef<(() => void) | null>(null);
   const captureElRef = useRef<HTMLElement | null>(null);
   const capturePointerIdRef = useRef<number | null>(null);
+  const marqueeOverlayRafRef = useRef<number | null>(null);
 
+  /** 仅改 SVG 几何属性，无半透明填充，不触发布局 */
   const updateMarqueeOverlayDom = useCallback(() => {
     const d = marqueeDataRef.current;
     const el = marqueeOverlayElRef.current;
@@ -111,11 +119,31 @@ export function useWorkflowMarquee({
     const top = Math.min(d.startY, d.endY);
     const width = Math.max(0, Math.abs(d.endX - d.startX));
     const height = Math.max(0, Math.abs(d.endY - d.startY));
-    el.style.left = `${left}px`;
-    el.style.top = `${top}px`;
-    el.style.width = `${width}px`;
-    el.style.height = `${height}px`;
+    el.setAttribute('x', String(left));
+    el.setAttribute('y', String(top));
+    el.setAttribute('width', String(width));
+    el.setAttribute('height', String(height));
   }, []);
+
+  const cancelMarqueeOverlayDomUpdate = useCallback(() => {
+    if (marqueeOverlayRafRef.current != null && typeof window !== 'undefined') {
+      window.cancelAnimationFrame(marqueeOverlayRafRef.current);
+      marqueeOverlayRafRef.current = null;
+    }
+  }, []);
+
+  /** pointermove 可远高于刷新率；合并到 rAF，避免 4K 下绘制排队导致选区滞后 */
+  const scheduleMarqueeOverlayDomUpdate = useCallback(() => {
+    if (typeof window === 'undefined') {
+      updateMarqueeOverlayDom();
+      return;
+    }
+    if (marqueeOverlayRafRef.current != null) return;
+    marqueeOverlayRafRef.current = window.requestAnimationFrame(() => {
+      marqueeOverlayRafRef.current = null;
+      updateMarqueeOverlayDom();
+    });
+  }, [updateMarqueeOverlayDom]);
 
   const releasePointerCapture = useCallback(() => {
     const el = captureElRef.current;
@@ -135,10 +163,12 @@ export function useWorkflowMarquee({
     (clientX: number, clientY: number, altKey: boolean) => {
       dragCleanupRef.current?.();
       dragCleanupRef.current = null;
+      cancelMarqueeOverlayDomUpdate();
       releasePointerCapture();
 
       marqueeDataRef.current.endX = clientX;
       marqueeDataRef.current.endY = clientY;
+      updateMarqueeOverlayDom();
 
       const d = marqueeDataRef.current;
       const left = Math.min(d.startX, d.endX);
@@ -148,8 +178,7 @@ export function useWorkflowMarquee({
       const isClick = width < MARQUEE_CLICK_SLOP && height < MARQUEE_CLICK_SLOP;
       const inGroup = !!groupFilterIdRef.current;
 
-      marqueeOverlayElRef.current?.style.setProperty('visibility', 'hidden');
-      setMarqueeActive(false);
+      hideMarqueeRect(marqueeOverlayElRef.current);
       marqueeStartRef.current = false;
 
       if (isClick) {
@@ -174,6 +203,7 @@ export function useWorkflowMarquee({
       });
     },
     [
+      cancelMarqueeOverlayDomUpdate,
       cardRefs,
       groupFilterIdRef,
       marqueeStartRef,
@@ -181,6 +211,7 @@ export function useWorkflowMarquee({
       releasePointerCapture,
       setSelectedAssetIds,
       setSelectedGroupItemKeys,
+      updateMarqueeOverlayDom,
     ]
   );
 
@@ -203,8 +234,7 @@ export function useWorkflowMarquee({
         endX: clientX,
         endY: clientY,
       };
-      marqueeOverlayElRef.current?.style.removeProperty('visibility');
-      setMarqueeActive(true);
+      showMarqueeRect(marqueeOverlayElRef.current);
       updateMarqueeOverlayDom();
 
       if (capture) {
@@ -220,7 +250,7 @@ export function useWorkflowMarquee({
       const onPointerMove = (e: PointerEvent) => {
         marqueeDataRef.current.endX = e.clientX;
         marqueeDataRef.current.endY = e.clientY;
-        updateMarqueeOverlayDom();
+        scheduleMarqueeOverlayDomUpdate();
       };
 
       const onPointerUp = (e: PointerEvent) => {
@@ -228,25 +258,35 @@ export function useWorkflowMarquee({
         endMarqueeDrag(e.clientX, e.clientY, e.altKey);
       };
 
-      window.addEventListener('pointermove', onPointerMove);
+      window.addEventListener('pointermove', onPointerMove, { passive: true });
       window.addEventListener('pointerup', onPointerUp);
       window.addEventListener('pointercancel', onPointerUp);
       dragCleanupRef.current = () => {
+        cancelMarqueeOverlayDomUpdate();
         window.removeEventListener('pointermove', onPointerMove);
         window.removeEventListener('pointerup', onPointerUp);
         window.removeEventListener('pointercancel', onPointerUp);
       };
     },
-    [endMarqueeDrag, marqueeStartRef, releasePointerCapture, updateMarqueeOverlayDom]
+    [
+      cancelMarqueeOverlayDomUpdate,
+      endMarqueeDrag,
+      marqueeStartRef,
+      releasePointerCapture,
+      scheduleMarqueeOverlayDomUpdate,
+      updateMarqueeOverlayDom,
+    ]
   );
 
   useEffect(
     () => () => {
       dragCleanupRef.current?.();
       dragCleanupRef.current = null;
+      cancelMarqueeOverlayDomUpdate();
       releasePointerCapture();
+      hideMarqueeRect(marqueeOverlayElRef.current);
     },
-    [releasePointerCapture]
+    [cancelMarqueeOverlayDomUpdate, releasePointerCapture]
   );
 
   const handleMarqueeMouseDown = useCallback(
@@ -272,30 +312,21 @@ export function useWorkflowMarquee({
     return () => registerMarqueeStartHandler(null);
   }, [registerMarqueeStartHandler, handleMarqueeMouseDown]);
 
-  const handleSpaceMarqueePointerDown = useCallback(
-    (e: ReactPointerEvent<HTMLDivElement>) => {
-      if (e.button !== 0) return;
+  const beginSpaceMarqueePointerDrag = useCallback(
+    (clientX: number, clientY: number, pointerId: number, captureEl: HTMLElement) => {
       if (showArchived) return;
-      e.preventDefault();
-      e.stopPropagation();
-      startMarqueeDrag(e.clientX, e.clientY, Math.round(workspacePane), {
-        el: e.currentTarget,
-        pointerId: e.pointerId,
+      startMarqueeDrag(clientX, clientY, Math.round(workspacePane), {
+        el: captureEl,
+        pointerId,
       });
     },
     [showArchived, startMarqueeDrag, workspacePane]
   );
 
-  useLayoutEffect(() => {
-    if (!marqueeActive) return;
-    updateMarqueeOverlayDom();
-  }, [marqueeActive, updateMarqueeOverlayDom]);
-
   return {
-    marqueeActive,
     marqueeDataRef,
     marqueeOverlayElRef,
     marqueePaneRef,
-    handleSpaceMarqueePointerDown,
+    beginSpaceMarqueePointerDrag,
   };
 }

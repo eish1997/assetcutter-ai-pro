@@ -91,8 +91,12 @@ export const WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER = 'mx-0.5 h-5 w-px shrink-0 bg-
 export const WORKFLOW_LIGHTBOX_BOTTOM_RAIL =
   'flex flex-wrap items-center justify-center gap-1 rounded-xl border border-white/10 bg-[#0f0f12]/95 px-1.5 py-1 shadow-xl backdrop-blur-[2px] ring-1 ring-white/[0.05]';
 
-/** 大图预览右侧详情列占位（与 `WorkflowSection` 侧栏 `w-[min(24rem,30vw)]` 一致） */
+/** 大图预览右侧详情列宽度（与 `WorkflowLightboxDetailEdgePanel` 展开宽一致） */
+export const WORKFLOW_LIGHTBOX_RIGHT_PANEL_WIDTH_CLASS = 'w-[min(24rem,30vw)]';
+/** @deprecated 详情列默认贴边折叠；保留供仍须静态占位的布局演算 */
 export const WORKFLOW_LIGHTBOX_RIGHT_PANEL_INSET = 'min(24rem, 30vw)';
+/** 贴边折叠态图标条宽度（Tailwind w-9 = 2.25rem） */
+export const WORKFLOW_LIGHTBOX_RIGHT_PANEL_TAB_INSET = '2.25rem';
 
 /** 大图预览左侧 VGP 步骤节点图占位（与 `WorkflowStepNodeGraphOverlay` 最大宽度 22rem 对齐） */
 export const WORKFLOW_LIGHTBOX_VGP_GRAPH_LEFT_INSET = 'min(22rem, 28vw)';

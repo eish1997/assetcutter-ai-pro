@@ -287,7 +287,6 @@ import {
   WORKFLOW_CHROME_BTN_NEUTRAL,
   WORKFLOW_TOPBAR_ICON_BTN,
   WORKFLOW_LIGHTBOX_BOTTOM_RAIL,
-  WORKFLOW_LIGHTBOX_RIGHT_PANEL_INSET,
   WORKFLOW_LIGHTBOX_VGP_GRAPH_LEFT_INSET,
   WORKFLOW_IMAGE_PREVIEW_RAIL,
   WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER,
@@ -315,6 +314,12 @@ import {
 import { groupCapabilityPresetsByCategory } from './workflow/workflowCapabilityGroups';
 import { WorkflowSidebarColumn, type WorkflowSidebarFavoriteEntry } from './workflow/WorkflowSidebarColumn';
 import WorkflowSpaceMarqueeChrome from './workflow/WorkflowSpaceMarqueeChrome';
+import WorkflowMarqueeOverlay from './workflow/WorkflowMarqueeOverlay';
+import WorkflowLightboxDetailEdgePanel from './workflow/WorkflowLightboxDetailEdgePanel';
+import {
+  createSmoothWheelScrollController,
+  type SmoothWheelScrollController,
+} from './workflow/workflowSmoothWheelScroll';
 import WorkspaceQuickComposeBar, {
   type WorkspaceQuickComposeComposeMode,
   type WorkspaceQuickComposePromptCard,
@@ -737,6 +742,10 @@ const WorkflowSection: React.FC<{
   const textLightboxCenterRef = useRef<WorkflowTextLightboxCenterHandle | null>(null);
   const [lightboxMetaText, setLightboxMetaText] = useState<string>('');
   const [lightboxPointerRgb, setLightboxPointerRgb] = useState<{ r: number; g: number; b: number } | null>(null);
+  const [lightboxUiHidden, setLightboxUiHidden] = useState(false);
+  const handleLightboxUiHiddenChange = useCallback((hidden: boolean) => {
+    setLightboxUiHidden(hidden);
+  }, []);
   /** 大图本机 SAM：十字准星点选 */
   const [lightboxSamPickArmed, setLightboxSamPickArmed] = useState(false);
   /** 本机下拉展开中：Esc 先交给工具条关菜单，避免与「菜单内武装」同步冲突 */
@@ -978,7 +987,10 @@ const WorkflowSection: React.FC<{
   }, []);
 
   useEffect(() => {
-    if (!lightboxAssetId) setLightboxQuickComposeAnchor(null);
+    if (!lightboxAssetId) {
+      setLightboxUiHidden(false);
+      setLightboxQuickComposeAnchor(null);
+    }
   }, [lightboxAssetId]);
 
   const [archivedDetailAssetId, setArchivedDetailAssetId] = useState<string | null>(null);
@@ -1337,6 +1349,7 @@ const WorkflowSection: React.FC<{
     workspacePane,
     setWorkspacePane: _setWorkspacePane,
     snapWorkspacePaneToNode,
+    workspaceSnapping,
     handlePaneWheel,
     spaceMarqueeEnabled,
     workspaceViewportTouchHandlers,
@@ -1352,16 +1365,23 @@ const WorkflowSection: React.FC<{
   useLayoutEffect(() => {
     spaceMarqueeEnabledRef.current = spaceMarqueeEnabled;
   }, [spaceMarqueeEnabled]);
-  /** 按住空格框选时：在卡片上滚轮改为滚动资产列表（不依赖浏览器默认滚动穿透） */
+  /** 暗区滚轮：平滑转发到资产列表；列表区内走原生滚动（见 WorkflowSpaceMarqueeChrome） */
+  const spaceMarqueeWheelScrollRef = useRef<SmoothWheelScrollController | null>(null);
+  if (!spaceMarqueeWheelScrollRef.current) {
+    spaceMarqueeWheelScrollRef.current = createSmoothWheelScrollController(() => centerScrollRef.current);
+  }
+  useEffect(() => {
+    if (!spaceMarqueeEnabled) {
+      spaceMarqueeWheelScrollRef.current?.cancel();
+    }
+  }, [spaceMarqueeEnabled]);
   const applyWheelToAssetListWhileSpaceMarquee = useCallback((e: React.WheelEvent) => {
     if (!spaceMarqueeEnabled) return;
-    const list = centerScrollRef.current;
-    if (!list) return;
     const dy = normalizeWheelDeltaY(e);
     if (!Number.isFinite(dy) || Math.abs(dy) < 0.1) return;
     e.preventDefault();
     e.stopPropagation();
-    list.scrollTop += dy;
+    spaceMarqueeWheelScrollRef.current?.pushDelta(dy);
   }, [spaceMarqueeEnabled]);
   /** 从功能区「词」进入能力页：横向滑到能力列并滚动到对应预设卡片 */
   const jumpToCapabilityPreset = useCallback((preset: CustomAppModule) => {
@@ -1419,9 +1439,8 @@ const WorkflowSection: React.FC<{
     []
   );
   const {
-    marqueeActive,
     marqueeOverlayElRef,
-    handleSpaceMarqueePointerDown,
+    beginSpaceMarqueePointerDrag,
   } = useWorkflowMarquee({
     registerMarqueeStartHandler,
     showArchived,
@@ -9132,9 +9151,12 @@ ${lineSvg}
       active={spaceMarqueeEnabled && assetListMarqueeActive}
       listPaneRef={listPaneRef}
       workspacePane={workspacePane}
-      onPointerDown={handleSpaceMarqueePointerDown}
-      onWheel={applyWheelToAssetListWhileSpaceMarquee}
+      onMarqueePointerDown={beginSpaceMarqueePointerDrag}
+      onDimWheel={applyWheelToAssetListWhileSpaceMarquee}
     />
+    {!showArchived && assetListMarqueeActive ? (
+      <WorkflowMarqueeOverlay rectRef={marqueeOverlayElRef} />
+    ) : null}
     <div className="flex h-full min-h-0 flex-col gap-2">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
       <div className={`flex flex-col items-stretch gap-1.5 shrink-0 ${WORKFLOW_EDGE_GUTTER}`}>
@@ -9265,7 +9287,7 @@ ${lineSvg}
         >
           <div
             ref={workspaceTrackRef}
-            className="flex h-full will-change-transform motion-reduce:transition-none"
+            className={`flex h-full motion-reduce:transition-none${workspaceSnapping ? ' will-change-transform' : ''}`}
             style={{ width: `${trackTotalWidth}px` }}
           >
         {/* 从左到右：能力预设 | 功能区 | 工作区 | 大纲（前两列锁在同一 flex 行内，避免被压成上下叠） */}
@@ -9572,7 +9594,7 @@ ${lineSvg}
                                       : childIsGroup
                                       ? 'border-0 ring-2 ring-blue-400/45'
                                       : WORKFLOW_CARD_SURFACE_IDLE
-                                  } ${childSetRunAccentClass} transition-transform duration-150 ease-out will-change-transform ${motionClass}`}
+                                  } ${childSetRunAccentClass} ${bounce !== 'idle' ? 'will-change-transform ' : ''}transition-transform duration-150 ease-out ${motionClass}`}
                                   draggable={!isBusyGroupItem}
                                   onDragStart={() => {
                                     if (isBusyGroupItem) return;
@@ -9672,10 +9694,7 @@ ${lineSvg}
                                     ? { 'data-prevent-wheel-scroll': '' }
                                     : {})}
                                   onWheel={(e) => {
-                                    if (spaceMarqueeEnabled) {
-                                      applyWheelToAssetListWhileSpaceMarquee(e);
-                                      return;
-                                    }
+                                    if (spaceMarqueeEnabled) return;
                                     if (isBusyGroupItem) return;
                                     e.preventDefault();
                                     e.stopPropagation();
@@ -10200,7 +10219,7 @@ ${lineSvg}
                             : isGroupCard
                             ? 'border-0 ring-2 ring-blue-400/45'
                             : WORKFLOW_CARD_SURFACE_IDLE
-                        } ${setRunAccentClass} ${busyClass} transition-transform duration-150 ease-out will-change-transform ${motionClass}`}
+                        } ${setRunAccentClass} ${busyClass} ${bounce !== 'idle' ? 'will-change-transform ' : ''}transition-transform duration-150 ease-out ${motionClass}`}
                         draggable={!showArchived && !isBusy}
                         onDragStart={(e) => {
                           if (showArchived || isBusy) return;
@@ -10357,10 +10376,7 @@ ${lineSvg}
                           ? { 'data-prevent-wheel-scroll': '' }
                           : {})}
                         onWheel={(e) => {
-                          if (spaceMarqueeEnabled) {
-                            applyWheelToAssetListWhileSpaceMarquee(e);
-                            return;
-                          }
+                          if (spaceMarqueeEnabled) return;
                           if (isBusy) return;
                           e.preventDefault();
                           e.stopPropagation();
@@ -10564,16 +10580,6 @@ ${lineSvg}
           )}
         </div>
 
-        {/* 全局框选矩形：根级 / 组内均可见，仅进行中视图展示 */}
-        {marqueeActive && !showArchived && typeof document !== 'undefined' &&
-          createPortal(
-            <div
-              ref={marqueeOverlayElRef}
-              className="fixed pointer-events-none z-[150] rounded-[3px] border-2 border-solid border-[#4570b0] bg-[#121a28]/50 shadow-[inset_0_0_0_1px_rgba(69,112,176,0.2)]"
-              style={{ left: 0, top: 0, width: 0, height: 0 }}
-            />,
-            document.body
-          )}
         </div>
         <div
           data-workflow-outline
@@ -10688,11 +10694,8 @@ ${lineSvg}
           onPreviewLayoutChange={
             lightboxRasterChrome ? handleLightboxPreviewLayoutChange : undefined
           }
-          contentRightInset={
-            lightboxTextAssetOnTextChannel && !lightboxShowsImage
-              ? WORKFLOW_LIGHTBOX_RIGHT_PANEL_INSET
-              : '0px'
-          }
+          onUiHiddenChange={handleLightboxUiHiddenChange}
+          contentRightInset="0px"
           contentLeftInset={
             lightboxTextAssetOnTextChannel && !lightboxShowsImage && lightboxStepSideChrome
               ? WORKFLOW_LIGHTBOX_VGP_GRAPH_LEFT_INSET
@@ -10844,22 +10847,15 @@ ${lineSvg}
           }
         >
           <>
-          <div
-            className="absolute right-4 z-[9] flex w-[min(24rem,30vw)] max-h-[72vh] min-h-0 flex-col gap-2"
-            style={{ top: 'max(3.5rem, env(safe-area-inset-top, 0px))' }}
-          >
-            <div
-              ref={lightboxHeightfieldToolbarHostRef}
-              className={
-                lightboxRasterChrome && lightboxPreviewLayout === 'heightfield'
-                  ? `${WORKFLOW_IMAGE_PREVIEW_RAIL.replace('inline-flex', 'flex')} w-full min-w-0 shrink-0 flex-wrap pointer-events-auto`
-                  : 'hidden'
-              }
-              role="region"
-              aria-label="高度 3D 控件"
-              onClick={(e) => e.stopPropagation()}
-            />
-            {lightboxShowTripo3DToolbar ? (
+          <WorkflowLightboxDetailEdgePanel
+            heightfieldToolbarHostRef={lightboxHeightfieldToolbarHostRef}
+            heightfieldToolbarHostClassName={
+              lightboxRasterChrome && lightboxPreviewLayout === 'heightfield'
+                ? `${WORKFLOW_IMAGE_PREVIEW_RAIL.replace('inline-flex', 'flex')} w-full min-w-0 shrink-0 flex-wrap pointer-events-auto`
+                : 'hidden'
+            }
+            headerSlot={
+              lightboxShowTripo3DToolbar ? (
               <div
                 className={`${WORKFLOW_LIGHTBOX_BOTTOM_RAIL} w-full min-w-0 shrink-0 flex-wrap justify-start pointer-events-auto`}
                 role="toolbar"
@@ -10961,12 +10957,9 @@ ${lineSvg}
                   </button>
                 ))}
               </div>
-            ) : null}
-            <div
-              className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain rounded-2xl border border-white/10 bg-[#141418] shadow-xl ring-1 ring-black/40 [scrollbar-width:thin]"
-              data-image-preview-no-wheel
-              data-image-preview-scroll
-            >
+              ) : null
+            }
+          >
               {lightboxMetaText ? (
                 <div className="px-3 pt-3 pb-2 border-b border-white/10 text-[8px] text-gray-400">
                   {lightboxMetaText}
@@ -11074,8 +11067,7 @@ ${lineSvg}
                 executionElapsedSeconds={lightboxActiveExecution?.elapsedSeconds ?? null}
                 executionStepLabel={lightboxActiveExecution?.stepLabel ?? null}
               />
-          </div>
-          </div>
+          </WorkflowLightboxDetailEdgePanel>
           {!lightboxRasterChrome ||
           (lightboxModelUrls.length > 0 && !lightboxModelDownloadsOnRight) ? (
           <div
@@ -11159,7 +11151,7 @@ ${lineSvg}
         </ImagePreviewOverlay>
       )}
 
-      {lightboxAsset && !showArchived && lightboxStepSideChrome ? (
+      {lightboxAsset && !showArchived && lightboxStepSideChrome && !lightboxUiHidden ? (
         <React.Fragment key={lightboxAsset.id}>
           <WorkflowStepNodeGraphOverlay
             asset={lightboxAsset}
@@ -11173,6 +11165,7 @@ ${lineSvg}
       {lightboxAsset &&
         !showArchived &&
         lightboxRasterChrome &&
+        !lightboxUiHidden &&
         typeof document !== 'undefined' &&
         createPortal(
           <div className="pointer-events-none fixed inset-0 z-[2400]">
@@ -11290,6 +11283,7 @@ ${lineSvg}
       {lightboxAsset &&
         !showArchived &&
         lightboxRasterChrome &&
+        !lightboxUiHidden &&
         typeof document !== 'undefined' &&
         createPortal(
           <WorkspaceQuickComposeBar

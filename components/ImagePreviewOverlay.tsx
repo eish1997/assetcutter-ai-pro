@@ -211,6 +211,8 @@ export type ImagePreviewOverlayProps = {
   onFlatImagePixelSample?: (rgb: { r: number; g: number; b: number } | null) => void;
   /** 平面 / 全景 / 高度 3D / 3D 模型 切换时通知父级（用于大图标注按模式分桶） */
   onPreviewLayoutChange?: (layout: ImagePreviewLayoutMode) => void;
+  /** Tab 隐藏/显示界面时通知父级（用于同步隐藏工作流侧栏、标注条等） */
+  onUiHiddenChange?: (hidden: boolean) => void;
   /**
    * 注册「截取当前预览画面」能力：全景用 `panoViewerRef`；高度 3D / 模型 3D 用宿主内 WebGL canvas。
    * 卸载时传 `null`。
@@ -308,6 +310,7 @@ export function ImagePreviewOverlay({
   canvasAdjustControl,
   onFlatImagePixelSample,
   onPreviewLayoutChange,
+  onUiHiddenChange,
   onWebPreviewCaptureApiChange,
   suppressFlatImageInteraction = false,
   imageResizeWriteBack = null,
@@ -693,6 +696,16 @@ export function ImagePreviewOverlay({
     setSplitStretchWriteBackPopOpen(false);
     setResizeWriteBackPopOpen(false);
   }, [open, resetKey, setPreviewLayoutAndNotify]);
+
+  useEffect(() => {
+    onUiHiddenChange?.(uiHidden);
+  }, [uiHidden, onUiHiddenChange]);
+
+  useEffect(() => {
+    if (!uiHidden) return;
+    setSplitStretchWriteBackPopOpen(false);
+    setResizeWriteBackPopOpen(false);
+  }, [uiHidden]);
 
   useLayoutEffect(() => {
     if (!splitStretchUiOk || !splitStretchEnabled) {
@@ -1314,7 +1327,7 @@ export function ImagePreviewOverlay({
                     onLoad={handleImgLoadGeneral}
                     ref={imgRef}
                   />
-                  {flatImageOverlay ? (
+                  {flatImageOverlay && !uiHidden ? (
                     // eslint-disable-next-line react-hooks/refs -- 将 ref 对象传入子 render 回调；不在此读取 .current
                     flatImageOverlay({
                       imgRef,
@@ -1454,7 +1467,7 @@ export function ImagePreviewOverlay({
                     : handleImgMouseDown
                 }
               />
-              {splitStretchUiOk && splitStretchEnabled ? (
+              {splitStretchUiOk && splitStretchEnabled && !uiHidden ? (
                 <ImagePreviewSplitStretchOverlay
                   imgRef={imgRef}
                   active
@@ -1462,7 +1475,7 @@ export function ImagePreviewOverlay({
                   exportStateRef={splitStretchExportRef}
                 />
               ) : null}
-              {flatImageOverlay ? (
+              {flatImageOverlay && !uiHidden ? (
                 // eslint-disable-next-line react-hooks/refs -- 将 ref 对象传入子 render 回调；不在此读取 .current
                 flatImageOverlay({
                   imgRef,
@@ -1651,18 +1664,9 @@ export function ImagePreviewOverlay({
         </div>
         ) : null}
 
-        {uiHidden ? (
-          <div
-            className="pointer-events-none absolute left-1/2 top-4 z-20 -translate-x-1/2 rounded-lg bg-black/55 px-3 py-1.5 text-[10px] font-semibold text-gray-300 ring-1 ring-white/10"
-            aria-live="polite"
-          >
-            界面已隐藏 · 按 Tab 恢复
-          </div>
-        ) : null}
-
         {!uiHidden ? children : null}
 
-        {resizeWriteBackUiOk && resizeWriteBackPopOpen && imageResizeWriteBack ? (
+        {!uiHidden && resizeWriteBackUiOk && resizeWriteBackPopOpen && imageResizeWriteBack ? (
           <ImagePreviewWorkflowResizePopover
             open
             onClose={() => setResizeWriteBackPopOpen(false)}
@@ -1672,7 +1676,8 @@ export function ImagePreviewOverlay({
             onCommit={imageResizeWriteBack.onCommit}
           />
         ) : null}
-        {splitStretchUiOk &&
+        {!uiHidden &&
+        splitStretchUiOk &&
         splitStretchWriteBackPopOpen &&
         imageResizeWriteBack &&
         splitStretchEnabled ? (
