@@ -1,5 +1,5 @@
 import type { AuthUser } from './authClient';
-import { apiUrl } from './apiBase';
+import { apiUrl, r2ApiUrl } from './apiBase';
 import { HttpRequestError, requestJson } from './httpClient';
 
 type UsersResponse = { users: AuthUser[]; total?: number; page?: number; pageSize?: number };
@@ -175,6 +175,101 @@ export async function fetchAdminCapabilityPresets() {
   return requestJson<AdminCapabilityPresetsResponse>(apiUrl('/api/admin/capability-presets'), {
     cache: 'no-store',
   });
+}
+
+export type CapabilityPresetBackup = {
+  format: string;
+  version: number;
+  exportedAt: string;
+  catalogObjectKey: string;
+  catalog: CapabilityPresetCatalogItem[];
+  presets: Record<string, unknown[]>;
+};
+
+export type CapabilityPresetImportMode = 'overwrite' | 'merge';
+
+export type CapabilityPresetImportPreview = {
+  mode: CapabilityPresetImportMode;
+  added: string[];
+  updated: string[];
+  removed: string[];
+  unchanged: string[];
+  conflicts: Array<{
+    id: string;
+    onlineVersion: string;
+    backupVersion: string;
+    winner: 'backup' | 'online';
+  }>;
+  willWriteCount: number;
+  willDeleteCount: number;
+  finalCatalogCount: number;
+};
+
+export function extractPresetIdFromCatalogItem(item: CapabilityPresetCatalogItem): string {
+  const catalogId = String(item.id || '').trim();
+  if (catalogId.startsWith('preset_')) return catalogId.slice('preset_'.length);
+  const url = String(item.url || '').trim();
+  const m = url.match(/^\.\/presets\/([^/.]+)\.json$/i);
+  if (m?.[1]) return m[1];
+  return catalogId.replace(/^preset_/, '');
+}
+
+export async function downloadAdminCapabilityPresetsBackup() {
+  const res = await fetch(apiUrl('/api/admin/capability-presets/export'), { credentials: 'include' });
+  if (!res.ok) {
+    let message = `HTTP ${res.status}`;
+    try {
+      const body = (await res.json()) as { error?: string };
+      if (body?.error) message = body.error;
+    } catch {
+      /* non-json */
+    }
+    throw new Error(message);
+  }
+  const blob = await res.blob();
+  const cd = res.headers.get('Content-Disposition') || '';
+  const match = cd.match(/filename="([^"]+)"/);
+  const filename = match?.[1] || `capability-presets-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = objectUrl;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(objectUrl);
+  return { filename };
+}
+
+export async function previewAdminCapabilityPresetsImport(
+  backup: CapabilityPresetBackup,
+  mode: CapabilityPresetImportMode
+) {
+  return requestJson<{ ok: boolean; preview: CapabilityPresetImportPreview }>(
+    apiUrl('/api/admin/capability-presets/import/preview'),
+    {
+      method: 'POST',
+      body: JSON.stringify({ backup, mode }),
+    }
+  );
+}
+
+export async function importAdminCapabilityPresets(backup: CapabilityPresetBackup, mode: CapabilityPresetImportMode) {
+  return requestJson<{
+    ok: boolean;
+    mode: CapabilityPresetImportMode;
+    finalCatalogCount: number;
+    writtenCount: number;
+    deletedCount: number;
+  }>(apiUrl('/api/admin/capability-presets/import'), {
+    method: 'POST',
+    body: JSON.stringify({ backup, mode }),
+  });
+}
+
+export async function deleteAdminCapabilityPreset(presetId: string) {
+  return requestJson<{ ok: boolean; presetId: string; deletedKeys: string[] }>(
+    r2ApiUrl(`/capability-store/delete?presetId=${encodeURIComponent(presetId)}`),
+    { method: 'DELETE' }
+  );
 }
 
 export async function updateAdminUser(

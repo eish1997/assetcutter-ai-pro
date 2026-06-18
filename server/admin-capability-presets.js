@@ -1,5 +1,11 @@
 import { listAuditLogs } from './auth-store.js';
-import { isR2Configured, readCapabilityStoreCatalog } from './r2-storage-handlers.js';
+import {
+  exportCapabilityStoreBackup,
+  importCapabilityStoreBackup,
+  isR2Configured,
+  readCapabilityStoreCatalog,
+} from './r2-storage-handlers.js';
+import { buildImportPreview } from './capability-preset-admin-import.js';
 
 export async function getAdminCapabilityPresetsPayload() {
   const configured = isR2Configured();
@@ -20,4 +26,20 @@ export async function getAdminCapabilityPresetsPayload() {
     catalog,
     recentPublishes,
   };
+}
+
+export async function exportAdminCapabilityPresetsBackup() {
+  if (!isR2Configured()) throw new Error('R2 未配置');
+  return exportCapabilityStoreBackup();
+}
+
+export async function previewAdminCapabilityPresetsImport(backup, mode) {
+  if (!isR2Configured()) throw new Error('R2 未配置');
+  const onlineCatalog = await readCapabilityStoreCatalog();
+  return buildImportPreview(onlineCatalog, backup, mode);
+}
+
+export async function runAdminCapabilityPresetsImport(adminUserId, backup, mode) {
+  if (!isR2Configured()) throw new Error('R2 未配置');
+  return importCapabilityStoreBackup(adminUserId, backup, mode);
 }

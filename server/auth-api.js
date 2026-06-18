@@ -27,7 +27,7 @@ import { enrichPublicUserWithStaff, getRoleById, listRolesWithPermissions, creat
 import { buildAdminDashboard } from './admin-dashboard.js';
 import { MATRIX_COLUMNS, auditActionLabel } from './admin-matrix.js';
 import { buildAuditLogsCsv, parseAdminAuditQuery } from './admin-audit-export.js';
-import { getAdminCapabilityPresetsPayload } from './admin-capability-presets.js';
+import { getAdminCapabilityPresetsPayload, exportAdminCapabilityPresetsBackup, previewAdminCapabilityPresetsImport, runAdminCapabilityPresetsImport } from './admin-capability-presets.js';
 import { buildAdminUserInsights } from './admin-user-insights.js';
 import { buildUsersCsv, parseAdminUsersExportQuery } from './admin-users-export.js';
 import {
@@ -59,6 +59,7 @@ import {
   presignGetByKey,
   presignPutCompanionDistribution,
   publishCapabilityPresetToR2Catalog,
+  deleteCapabilityPresetFromR2Catalog,
   runWorkspaceUsageReconcileForUser,
   deleteR2ObjectByKey,
   COMPANION_DISTRIBUTION_PREFIX,
@@ -1257,6 +1258,100 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (path === '/api/admin/capability-presets/export' && req.method === 'GET') {
+      const staff = await requirePermission(req, res, PERMISSIONS.PRESETS_PUBLISH);
+      if (!staff) return;
+      if (!isR2Configured()) {
+        json(res, 503, { error: 'R2 未配置，无法导出能力预设' });
+        return;
+      }
+      try {
+        const backup = await exportAdminCapabilityPresetsBackup();
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        const filename = `capability-presets-backup-${stamp}.json`;
+        res.writeHead(200, {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Content-Disposition': `attachment; filename="${filename}"`,
+        });
+        res.end(JSON.stringify(backup, null, 2), 'utf8');
+        await createAuditLog({
+          actorUserId: staff.user.id,
+          actorIdentifier: staff.user.username,
+          action: 'admin.capability_preset_export',
+          meta: { catalogCount: Array.isArray(backup.catalog) ? backup.catalog.length : 0 },
+          ip: getClientIp(req),
+          userAgent: req.headers['user-agent'],
+        });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        json(res, 500, { error: message });
+      }
+      return;
+    }
+
+    if (path === '/api/admin/capability-presets/import/preview' && req.method === 'POST') {
+      const staff = await requirePermission(req, res, PERMISSIONS.PRESETS_PUBLISH);
+      if (!staff) return;
+      if (!isR2Configured()) {
+        json(res, 503, { error: 'R2 未配置，无法预览导入' });
+        return;
+      }
+      const body = await readBody(req, { maxBytes: CAPABILITY_PUBLISH_ADMIN_BODY_BYTES });
+      const backup = body && typeof body === 'object' ? body.backup : null;
+      const mode = body && typeof body === 'object' ? body.mode : '';
+      if (!backup || typeof backup !== 'object') {
+        json(res, 400, { error: '缺少 backup' });
+        return;
+      }
+      try {
+        json(res, 200, { ok: true, preview: await previewAdminCapabilityPresetsImport(backup, mode) });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        json(res, 400, { error: message });
+      }
+      return;
+    }
+
+    if (path === '/api/admin/capability-presets/import' && req.method === 'POST') {
+      const staff = await requirePermission(req, res, PERMISSIONS.PRESETS_PUBLISH);
+      if (!staff) return;
+      if (!isR2Configured()) {
+        json(res, 503, { error: 'R2 未配置，无法导入恢复' });
+        return;
+      }
+      const body = await readBody(req, { maxBytes: CAPABILITY_PUBLISH_ADMIN_BODY_BYTES });
+      const backup = body && typeof body === 'object' ? body.backup : null;
+      const mode = body && typeof body === 'object' ? body.mode : '';
+      if (!backup || typeof backup !== 'object') {
+        json(res, 400, { error: '缺少 backup' });
+        return;
+      }
+      const normalizedMode = String(mode || '').trim();
+      if (normalizedMode !== 'overwrite' && normalizedMode !== 'merge') {
+        json(res, 400, { error: 'mode 无效' });
+        return;
+      }
+      try {
+        const result = await runAdminCapabilityPresetsImport(staff.user.id, backup, normalizedMode);
+        await createAuditLog({
+          actorUserId: staff.user.id,
+          actorIdentifier: staff.user.username,
+          action:
+            normalizedMode === 'overwrite'
+              ? 'admin.capability_preset_import_overwrite'
+              : 'admin.capability_preset_import_merge',
+          meta: result,
+          ip: getClientIp(req),
+          userAgent: req.headers['user-agent'],
+        });
+        json(res, 200, { ok: true, ...result });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        json(res, 400, { error: message });
+      }
+      return;
+    }
+
     if (path === '/api/admin/audit-logs/meta' && req.method === 'GET') {
       const staff = await requirePermission(req, res, PERMISSIONS.AUDIT_READ);
       if (!staff) return;
@@ -1741,6 +1836,36 @@ const server = http.createServer(async (req, res) => {
             actorIdentifier: admin.username,
             action: 'admin.capability_preset_publish',
             meta: { presetId: String((preset).id || ''), ...result },
+            ip: getClientIp(req),
+            userAgent: req.headers['user-agent'],
+          });
+          json(res, 200, { ok: true, ...result });
+        } catch (e) {
+          const message = e instanceof Error ? e.message : String(e);
+          json(res, 400, { error: message });
+        }
+        return;
+      }
+      if (path === '/api/r2/capability-store/delete' && req.method === 'DELETE') {
+        const staff = await requirePermission(req, res, PERMISSIONS.PRESETS_PUBLISH);
+        if (!staff) return;
+        if (!isR2Configured()) {
+          json(res, 503, { error: 'R2 未配置，无法删除能力预设' });
+          return;
+        }
+        const u = new URL(req.url || '/', 'http://local');
+        const presetId = String(u.searchParams.get('presetId') || '').trim();
+        if (!presetId) {
+          json(res, 400, { error: '缺少 presetId' });
+          return;
+        }
+        try {
+          const result = await deleteCapabilityPresetFromR2Catalog(presetId);
+          await createAuditLog({
+            actorUserId: staff.user.id,
+            actorIdentifier: staff.user.username,
+            action: 'admin.capability_preset_delete',
+            meta: result,
             ip: getClientIp(req),
             userAgent: req.headers['user-agent'],
           });

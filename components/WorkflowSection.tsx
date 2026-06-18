@@ -344,6 +344,8 @@ import {
 import { buildWorkflowComposerSeedFromTwoPresets } from './workflow/buildWorkflowComposerSeed';
 import type { CapabilityAssetCandidate } from './CapabilitySetCanvas';
 import { BUILTIN_IMAGE_PROCESS_IDS } from '../services/capabilityPresetStore';
+import { useStoreCatalog } from '../services/storeCatalogHook';
+import { buildCloudPresetIdSet } from '../services/capabilityPresetCloudOrigin';
 import {
   formatWorkflowModelPreviewLimitLabel,
   revokeWorkflowModelBlobUrlsAfterAssetRemoved,
@@ -723,6 +725,8 @@ const WorkflowSection: React.FC<{
       .map(({ p }) => p);
   }, [capabilityPresets]);
   const actionModules: CustomAppModule[] = presets;
+  const { remotePresetItems } = useStoreCatalog({});
+  const cloudPresetIds = useMemo(() => buildCloudPresetIdSet(remotePresetItems), [remotePresetItems]);
   const textAssetActionModules = useMemo(
     () => actionModules.filter((mod) => workflowPresetAcceptsTextCardDrag(mod)),
     [actionModules]
@@ -9371,6 +9375,7 @@ ${lineSvg}
             onComposeCapabilities={handleComposeCapabilities}
             linkedComposeSearchQuery={quickComposeDraft}
             onLinkHoverPresetIds={setSidebarLinkHoverPresetIds}
+            cloudPresetIds={cloudPresetIds}
             onWorkflowFeatureClick={handleWorkflowFeatureClick}
           />
         </div>

@@ -20,6 +20,7 @@ import {
 import { readLocalJson, writeLocalJson } from '../services/clientPersist';
 import { getCapabilityEngine, isImageProcessPreset } from '../services/capabilityExecutor';
 import { useStoreCatalog, markStoreCatalogAutoSyncDone, shouldRunStoreCatalogAutoSync } from '../services/storeCatalogHook';
+import { buildCloudPresetIdSet, isCloudCapabilityPreset } from '../services/capabilityPresetCloudOrigin';
 import { publishPresetToUserR2Catalog } from '../services/capabilityPresetR2Publish';
 import { resolveCapabilityPreviewSrc } from '../services/capabilityPreviewUrl';
 import { mergeCardAspectFromIntrinsic } from './workflow/workflowCardAspect';
@@ -49,6 +50,7 @@ import {
 import { DT_AC_CAPABILITY_FROM_EDITOR } from '../services/workflowDragPipeline';
 import WorkflowComposerOverlay from './WorkflowComposerOverlay';
 import { CapabilityPreviewImg } from './CapabilityPreviewImg';
+import CapabilityCloudBadge from './ui/CapabilityCloudBadge';
 import { ImagePreviewOverlay } from './ImagePreviewOverlay';
 import { CustomDropdown, DROPDOWN_TRIGGER_COMPACT } from './ui/CustomDropdown';
 import { CapabilityPresetTagsEditor } from './ui/CapabilityPresetTagsEditor';
@@ -314,6 +316,7 @@ const CapabilityPresetSection: React.FC<{
     packContentsLoading,
     remotePresetItems,
   } = useStoreCatalog({ onPresetsApplied: (next) => onUpdate(next), onLog });
+  const cloudPresetIds = useMemo(() => buildCloudPresetIdSet(remotePresetItems), [remotePresetItems]);
   const triggerRemoteRefreshSync = useCallback(async () => {
     try {
       await refreshCatalog({ force: true, logSuccess: false });
@@ -2065,6 +2068,7 @@ const CapabilityPresetSection: React.FC<{
                 const dimPresetBySidebar =
                   !isDraggingThis &&
                   Boolean(sidebarLinkHoverPresetIdSet && !sidebarLinkHoverPresetIdSet.has(p.id));
+                const showCloudBadge = isCloudCapabilityPreset(p.id, cloudPresetIds);
                 return (
                   <button
                     key={p.id}
@@ -2112,7 +2116,7 @@ const CapabilityPresetSection: React.FC<{
                       if (!getGeneratedPreviewThumbSrc(p) || !getOriginalPreviewThumbSrc(p)) return;
                       setPreviewSplitRatio((prev) => ({ ...prev, [p.id]: 0.5 }));
                     }}
-                    className={`inline-block align-top mb-3 w-full break-inside-avoid rounded-2xl border bg-[#16161a] overflow-hidden text-left transition-[colors,opacity,filter] duration-150 group ${
+                    className={`relative inline-block align-top mb-3 w-full break-inside-avoid rounded-2xl border bg-[#16161a] overflow-hidden text-left transition-[colors,opacity,filter] duration-150 group ${
                       locatePulsePresetId === p.id ? 'ac-capability-preset-locate ring-2 ring-blue-400/70 border-blue-400/50' : ''
                     } ${
                       draggingPresetId === p.id
@@ -2122,6 +2126,7 @@ const CapabilityPresetSection: React.FC<{
                           : 'ring-1 ring-white/[0.08] hover:ring-blue-400/40 border-transparent'
                     }`}
                   >
+                    {showCloudBadge ? <CapabilityCloudBadge className="absolute top-1.5 right-1.5 z-[3]" /> : null}
                     {isTextToTextPreset ? (
                       <div className="p-2.5 min-h-[4.5rem] flex flex-col justify-between gap-1.5">
                         <div className="text-[10px] font-black text-white break-words line-clamp-2 leading-tight">{p.label}</div>

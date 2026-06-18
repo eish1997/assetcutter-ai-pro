@@ -2,6 +2,11 @@ import { S3Client, ListObjectsV2Command, DeleteObjectCommand, HeadObjectCommand,
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { findUserById, getWorkspaceQuotaBytesForUser } from './auth-store.js';
 import {
+  CAPABILITY_PRESET_BACKUP_FORMAT,
+  buildImportPlan,
+  extractPresetIdFromCatalogItem,
+} from './capability-preset-admin-import.js';
+import {
   getTrackedBytesForKey,
   getWorkspaceUsedBytes,
   isBillableWorkspaceImageKey,
@@ -724,26 +729,47 @@ async function handleCapabilityStoreObject(req, res, objectKey, s3) {
   res.end(bin);
 }
 
-export async function publishCapabilityPresetToR2Catalog(adminUserId, preset) {
-  const uid = String(adminUserId || '').trim();
-  if (!uid) throw new Error('管理员身份无效');
+const CAPABILITY_PRESET_PREVIEW_FIELDS = [
+  'previewImage',
+  'previewOriginalImage',
+  'previewGeneratedImage',
+  'previewOriginalThumbImage',
+  'previewGeneratedThumbImage',
+];
+
+function resolveCatalogRelativeObjectKey(relPath) {
+  const root = catalogRootPrefix() || 'public/capability-store/';
+  const rel = String(relPath || '')
+    .trim()
+    .replace(/^\.\//, '');
+  if (!rel || rel.includes('..')) throw new Error('catalog 相对路径非法');
+  return `${root}${rel}`;
+}
+
+function collectPreviewObjectKeysFromPreset(preset, root = catalogRootPrefix() || 'public/capability-store/') {
+  const keys = new Set();
+  if (!preset || typeof preset !== 'object') return [];
+  for (const fieldName of CAPABILITY_PRESET_PREVIEW_FIELDS) {
+    const raw = preset[fieldName];
+    if (typeof raw !== 'string') continue;
+    const text = raw.trim();
+    if (!text.startsWith('./')) continue;
+    keys.add(`${root}${text.slice(2)}`);
+  }
+  return Array.from(keys);
+}
+
+async function preparePresetForR2Pack(s3, preset) {
   const p = preset && typeof preset === 'object' ? preset : null;
   if (!p) throw new Error('preset 无效');
   const pid = String(p.id || '').trim();
   const label = String(p.label || '').trim();
   if (!pid || !label) throw new Error('preset 缺少 id 或 label');
-  const s3 = getS3();
-  if (!s3) throw new Error('R2 未配置');
-  const now = Date.now();
   const root = catalogRootPrefix() || 'public/capability-store/';
-  const catalogObjectKey = R2_CAPABILITY_STORE_CATALOG_KEY();
-  const packObjectKey = `${root}presets/${pid}.json`;
-
   const presetForPack = { ...p };
   const rawPreviewText = typeof presetForPack.previewImage === 'string' ? presetForPack.previewImage.trim() : '';
   const rawGeneratedText =
     typeof presetForPack.previewGeneratedImage === 'string' ? presetForPack.previewGeneratedImage.trim() : '';
-  // 若兼容字段与生成图字段是同一张 data URL，避免重复上传两份
   if (rawPreviewText && rawGeneratedText && rawPreviewText === rawGeneratedText && rawPreviewText.startsWith('data:')) {
     delete presetForPack.previewImage;
   }
@@ -762,11 +788,7 @@ export async function publishCapabilityPresetToR2Catalog(adminUserId, preset) {
       // ignore malformed url
     }
   };
-  normalizePreviewFieldRef('previewImage');
-  normalizePreviewFieldRef('previewOriginalImage');
-  normalizePreviewFieldRef('previewGeneratedImage');
-  normalizePreviewFieldRef('previewOriginalThumbImage');
-  normalizePreviewFieldRef('previewGeneratedThumbImage');
+  for (const fieldName of CAPABILITY_PRESET_PREVIEW_FIELDS) normalizePreviewFieldRef(fieldName);
   const uploadPreviewField = async (fieldName, suffix = '') => {
     const raw = presetForPack[fieldName];
     if (typeof raw !== 'string') return;
@@ -799,20 +821,25 @@ export async function publishCapabilityPresetToR2Catalog(adminUserId, preset) {
   if (!presetForPack.previewImage && typeof presetForPack.previewGeneratedImage === 'string') {
     presetForPack.previewImage = presetForPack.previewGeneratedImage;
   }
+  return { pid, label, presetForPack, root };
+}
 
-  const packBody = JSON.stringify([presetForPack], null, 2);
-  await s3.send(
-    new PutObjectCommand({
-      Bucket: R2_BUCKET(),
-      Key: packObjectKey,
-      Body: Buffer.from(packBody, 'utf8'),
-      ContentType: 'application/json; charset=utf-8',
-    })
-  );
-
-  const existing = await getJsonObjectOrDefault(s3, catalogObjectKey, []);
-  const currentCatalog = Array.isArray(existing) ? existing : [];
-  const nextItem = {
+function buildDefaultCatalogItemFromPreset(presetForPack, catalogItemOverride) {
+  const pid = String(presetForPack.id || '').trim();
+  const label = String(presetForPack.label || '').trim();
+  const now = Date.now();
+  if (catalogItemOverride && typeof catalogItemOverride === 'object') {
+    return {
+      ...catalogItemOverride,
+      id: String(catalogItemOverride.id || `preset_${pid}`).trim() || `preset_${pid}`,
+      type: catalogItemOverride.type || 'capability_presets',
+      url: `./presets/${pid}.json`,
+      ...(typeof presetForPack.previewImage === 'string' && presetForPack.previewImage.trim().startsWith('./')
+        ? { previewUrl: presetForPack.previewImage }
+        : {}),
+    };
+  }
+  return {
     id: `preset_${pid}`,
     type: 'capability_presets',
     name: label || pid,
@@ -825,12 +852,27 @@ export async function publishCapabilityPresetToR2Catalog(adminUserId, preset) {
       ? { previewUrl: presetForPack.previewImage }
       : {}),
   };
-  const filtered = currentCatalog.filter((x) => {
-    if (!x || typeof x !== 'object') return false;
-    const id = String(x.id || '').trim();
-    return id !== nextItem.id;
-  });
-  const nextCatalog = [nextItem, ...filtered];
+}
+
+async function writePresetPackToR2(s3, presetForPack) {
+  const pid = String(presetForPack.id || '').trim();
+  const root = catalogRootPrefix() || 'public/capability-store/';
+  const packObjectKey = `${root}presets/${pid}.json`;
+  const packBody = JSON.stringify([presetForPack], null, 2);
+  await s3.send(
+    new PutObjectCommand({
+      Bucket: R2_BUCKET(),
+      Key: packObjectKey,
+      Body: Buffer.from(packBody, 'utf8'),
+      ContentType: 'application/json; charset=utf-8',
+    })
+  );
+  return { packObjectKey };
+}
+
+async function writeCapabilityStoreCatalog(s3, catalogArray) {
+  const catalogObjectKey = R2_CAPABILITY_STORE_CATALOG_KEY();
+  const nextCatalog = Array.isArray(catalogArray) ? catalogArray : [];
   await s3.send(
     new PutObjectCommand({
       Bucket: R2_BUCKET(),
@@ -839,7 +881,160 @@ export async function publishCapabilityPresetToR2Catalog(adminUserId, preset) {
       ContentType: 'application/json; charset=utf-8',
     })
   );
-  return { catalogObjectKey, packObjectKey };
+  return { catalogObjectKey, count: nextCatalog.length };
+}
+
+async function readPresetPackForCatalogItem(s3, item) {
+  const url = String(item?.url || '').trim();
+  if (!url) return null;
+  const objectKey = resolveCatalogRelativeObjectKey(url);
+  const data = await getJsonObjectOrDefault(s3, objectKey, null);
+  if (!Array.isArray(data)) return null;
+  return data;
+}
+
+export async function publishCapabilityPresetToR2Catalog(adminUserId, preset) {
+  const uid = String(adminUserId || '').trim();
+  if (!uid) throw new Error('管理员身份无效');
+  const s3 = getS3();
+  if (!s3) throw new Error('R2 未配置');
+  const { pid, presetForPack } = await preparePresetForR2Pack(s3, preset);
+  const { packObjectKey } = await writePresetPackToR2(s3, presetForPack);
+  const catalogObjectKey = R2_CAPABILITY_STORE_CATALOG_KEY();
+  const existing = await getJsonObjectOrDefault(s3, catalogObjectKey, []);
+  const currentCatalog = Array.isArray(existing) ? existing : [];
+  const nextItem = buildDefaultCatalogItemFromPreset(presetForPack);
+  const filtered = currentCatalog.filter((x) => {
+    if (!x || typeof x !== 'object') return false;
+    const id = String(x.id || '').trim();
+    return id !== nextItem.id;
+  });
+  const nextCatalog = [nextItem, ...filtered];
+  await writeCapabilityStoreCatalog(s3, nextCatalog);
+  return { catalogObjectKey, packObjectKey, presetId: pid };
+}
+
+export async function deleteCapabilityPresetFromR2Catalog(presetId, options = {}) {
+  const pid = String(presetId || '').trim();
+  if (!pid) throw new Error('presetId 无效');
+  const s3 = getS3();
+  if (!s3) throw new Error('R2 未配置');
+  const root = catalogRootPrefix() || 'public/capability-store/';
+  const catalogObjectKey = R2_CAPABILITY_STORE_CATALOG_KEY();
+  const catalogId = `preset_${pid}`;
+  const existing = await getJsonObjectOrDefault(s3, catalogObjectKey, []);
+  const currentCatalog = Array.isArray(existing) ? existing : [];
+  const targetItem = currentCatalog.find((x) => {
+    if (!x || typeof x !== 'object') return false;
+    if (String(x.id || '').trim() === catalogId) return true;
+    return extractPresetIdFromCatalogItem(x) === pid;
+  });
+  const deletedKeys = [];
+  let presetForDelete = null;
+  try {
+    const pack = targetItem ? await readPresetPackForCatalogItem(s3, targetItem) : null;
+    presetForDelete = Array.isArray(pack) ? pack[0] : null;
+  } catch {
+    presetForDelete = null;
+  }
+  if (!presetForDelete) {
+    try {
+      const fallback = await getJsonObjectOrDefault(s3, `${root}presets/${pid}.json`, null);
+      presetForDelete = Array.isArray(fallback) ? fallback[0] : null;
+    } catch {
+      presetForDelete = null;
+    }
+  }
+  for (const key of collectPreviewObjectKeysFromPreset(presetForDelete, root)) {
+    await deleteR2ObjectByKey(key);
+    deletedKeys.push(key);
+  }
+  const packObjectKey = `${root}presets/${pid}.json`;
+  try {
+    await deleteR2ObjectByKey(packObjectKey);
+    deletedKeys.push(packObjectKey);
+  } catch {
+    // pack may already be missing
+  }
+  if (targetItem?.previewUrl && String(targetItem.previewUrl).trim().startsWith('./')) {
+    const previewKey = resolveCatalogRelativeObjectKey(targetItem.previewUrl);
+    if (!deletedKeys.includes(previewKey)) {
+      try {
+        await deleteR2ObjectByKey(previewKey);
+        deletedKeys.push(previewKey);
+      } catch {
+        // ignore missing preview
+      }
+    }
+  }
+  if (!options.skipCatalogWrite) {
+    const nextCatalog = currentCatalog.filter((x) => {
+      if (!x || typeof x !== 'object') return false;
+      if (String(x.id || '').trim() === catalogId) return false;
+      return extractPresetIdFromCatalogItem(x) !== pid;
+    });
+    await writeCapabilityStoreCatalog(s3, nextCatalog);
+  }
+  return { presetId: pid, catalogObjectKey, deletedKeys, removedFromCatalog: !!targetItem };
+}
+
+export async function exportCapabilityStoreBackup() {
+  const s3 = getS3();
+  if (!s3) throw new Error('R2 未配置');
+  const catalog = await readCapabilityStoreCatalog();
+  const presets = {};
+  const missingPresetIds = [];
+  for (const item of catalog) {
+    const pid = extractPresetIdFromCatalogItem(item);
+    if (!pid) {
+      missingPresetIds.push(String(item?.id || '(unknown)'));
+      continue;
+    }
+    const pack = await readPresetPackForCatalogItem(s3, item);
+    if (pack) presets[pid] = pack;
+    else missingPresetIds.push(pid);
+  }
+  if (missingPresetIds.length > 0) {
+    throw new Error(`备份不完整：以下 catalog 项缺少 preset 包：${missingPresetIds.join(', ')}`);
+  }
+  return {
+    format: CAPABILITY_PRESET_BACKUP_FORMAT,
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    catalogObjectKey: R2_CAPABILITY_STORE_CATALOG_KEY(),
+    catalog,
+    presets,
+  };
+}
+
+export async function importCapabilityStoreBackup(adminUserId, backup, mode) {
+  const uid = String(adminUserId || '').trim();
+  if (!uid) throw new Error('管理员身份无效');
+  const s3 = getS3();
+  if (!s3) throw new Error('R2 未配置');
+  const onlineCatalog = await readCapabilityStoreCatalog();
+  const plan = buildImportPlan(onlineCatalog, backup, mode);
+  // 先写入/更新 preset 包，再更新 catalog，最后删除孤儿对象，避免中途失败导致「包已删 catalog 仍在」
+  for (const row of plan.presetsToWrite) {
+    const { presetForPack } = await preparePresetForR2Pack(s3, row.preset);
+    await writePresetPackToR2(s3, presetForPack);
+  }
+  const { catalogObjectKey, count } = await writeCapabilityStoreCatalog(s3, plan.catalog);
+  for (const pid of plan.presetIdsToDelete) {
+    await deleteCapabilityPresetFromR2Catalog(pid, { skipCatalogWrite: true });
+  }
+  return {
+    mode: plan.mode,
+    catalogObjectKey,
+    finalCatalogCount: count,
+    added: plan.added,
+    updated: plan.updated,
+    removed: plan.removed,
+    unchanged: plan.unchanged,
+    conflicts: plan.conflicts,
+    writtenCount: plan.presetsToWrite.length,
+    deletedCount: plan.presetIdsToDelete.length,
+  };
 }
 
 /** inject.embedded：挂在 auth 同源；inject.resolveSessionUserId：直接解析会话，避免再请求 AUTH_ME_URL */

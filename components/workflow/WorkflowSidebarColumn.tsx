@@ -18,7 +18,9 @@ import { useEffectiveImageModelRows } from '../../hooks/useEffectiveImageGearRow
 import { useEffectiveTextModelRows } from '../../hooks/useEffectiveTextModelRows';
 import type { CustomAppModule, CapabilitySet, WorkflowAsset } from '../../types';
 import { capabilityUsesGenImageEngine } from '../../services/capabilityExecutor';
+import { isCloudCapabilityPreset, matchesCapabilitySidebarOriginFilter, type CapabilitySidebarOriginFilter } from '../../services/capabilityPresetCloudOrigin';
 import { CustomDropdown } from '../ui/CustomDropdown';
+import CapabilityCloudBadge from '../ui/CapabilityCloudBadge';
 import {
   DT_AC_CAPABILITY_ACTION,
   DT_AC_CAPABILITY_ACTION_SOURCE,
@@ -336,6 +338,8 @@ export type WorkflowSidebarColumnProps = {
    * `null` 表示不压暗。
    */
   onLinkHoverPresetIds?: (presetIds: string[] | null) => void;
+  /** 来自能力商店 catalog 的预设 id，用于云端角标 */
+  cloudPresetIds?: ReadonlySet<string>;
   /** 工作流组占位功能（如分镜流程）点击 */
   onWorkflowFeatureClick?: (featureId: string) => void;
 };
@@ -396,6 +400,7 @@ export function WorkflowSidebarColumn({
   onComposeCapabilities,
   linkedComposeSearchQuery = '',
   onLinkHoverPresetIds,
+  cloudPresetIds,
   onWorkflowFeatureClick,
 }: WorkflowSidebarColumnProps) {
   const { rows: effectiveModelRows } = useEffectiveImageModelRows();
@@ -434,6 +439,13 @@ export function WorkflowSidebarColumn({
   const sidebarLocateFlashClass = useCallback(
     (actionId: string) => (jumpFlashActionId === actionId ? ' ac-workflow-capability-jump-flash' : ''),
     [jumpFlashActionId]
+  );
+  const renderCloudBadge = useCallback(
+    (presetId: string) =>
+      isCloudCapabilityPreset(presetId, cloudPresetIds) ? (
+        <CapabilityCloudBadge className="absolute top-0.5 right-0.5 z-[2]" />
+      ) : null,
+    [cloudPresetIds]
   );
   const onLocatePresetDoubleClick = useCallback(
     (mod: CustomAppModule, e: React.MouseEvent) => {
@@ -615,6 +627,7 @@ export function WorkflowSidebarColumn({
   }, [favoriteEntries.length]);
   const showFavoritesDropBody = favoriteEntries.length > 0 || favoritesBodyExpanded;
   const [sidebarCapabilitySearch, setSidebarCapabilitySearch] = useState('');
+  const [selectedOriginFilter, setSelectedOriginFilter] = useState<CapabilitySidebarOriginFilter | null>(null);
   const [selectedPresetTag, setSelectedPresetTag] = useState<string | null>(null);
   const linkedTrim = (typeof linkedComposeSearchQuery === 'string' ? linkedComposeSearchQuery : '').trim();
   const sidebarTrim = sidebarCapabilitySearch.trim();
@@ -645,19 +658,29 @@ export function WorkflowSidebarColumn({
     },
     [capabilitySearchKeywords]
   );
-  const presetMatchesTag = useCallback(
+  const presetMatchesFilter = useCallback(
     (mod: CustomAppModule) => {
-      if (!selectedPresetTag) return true;
-      return capabilityPresetHasTag(mod, selectedPresetTag);
+      if (selectedOriginFilter) {
+        return matchesCapabilitySidebarOriginFilter(mod.id, selectedOriginFilter, cloudPresetIds);
+      }
+      if (selectedPresetTag) return capabilityPresetHasTag(mod, selectedPresetTag);
+      return true;
     },
-    [selectedPresetTag]
+    [selectedOriginFilter, selectedPresetTag, cloudPresetIds]
   );
-  const favoriteMatchesTag = useCallback(
+  const favoriteMatchesFilter = useCallback(
     (entry: WorkflowSidebarFavoriteEntry) => {
-      if (!selectedPresetTag) return true;
-      return entry.kind === 'module' && capabilityPresetHasTag(entry.mod, selectedPresetTag);
+      if (selectedOriginFilter) {
+        return (
+          entry.kind === 'module' &&
+          !!entry.mod &&
+          matchesCapabilitySidebarOriginFilter(entry.mod.id, selectedOriginFilter, cloudPresetIds)
+        );
+      }
+      if (selectedPresetTag) return entry.kind === 'module' && capabilityPresetHasTag(entry.mod, selectedPresetTag);
+      return true;
     },
-    [selectedPresetTag]
+    [selectedOriginFilter, selectedPresetTag, cloudPresetIds]
   );
   const presetSidebarTags = useMemo(() => collectCapabilityPresetTags(visiblePresets), [visiblePresets]);
   useEffect(() => {
@@ -666,22 +689,22 @@ export function WorkflowSidebarColumn({
     }
   }, [selectedPresetTag, presetSidebarTags]);
   const tagScopedVisiblePresets = useMemo(
-    () => visiblePresets.filter(presetMatchesTag),
-    [visiblePresets, presetMatchesTag]
+    () => visiblePresets.filter(presetMatchesFilter),
+    [visiblePresets, presetMatchesFilter]
   );
   const tagScopedVisibleByCategory = useMemo(
     () =>
       visibleByCategory
         .map(({ category, list }) => ({
           category,
-          list: list.filter(presetMatchesTag),
+          list: list.filter(presetMatchesFilter),
         }))
         .filter((g) => g.list.length > 0),
-    [visibleByCategory, presetMatchesTag]
+    [visibleByCategory, presetMatchesFilter]
   );
   const tagScopedFavoriteEntries = useMemo(
-    () => favoriteEntries.filter(favoriteMatchesTag),
-    [favoriteEntries, favoriteMatchesTag]
+    () => favoriteEntries.filter(favoriteMatchesFilter),
+    [favoriteEntries, favoriteMatchesFilter]
   );
   const filteredVisiblePresets = useMemo(
     () => tagScopedVisiblePresets.filter(moduleMatchesSearch),
@@ -721,6 +744,7 @@ export function WorkflowSidebarColumn({
   );
   /** 有检索词但无一命中时，列表回退为「全部」，避免空白（标签筛选不参与回退） */
   const sidebarSearchFallbackAll =
+    !selectedOriginFilter &&
     !selectedPresetTag &&
     capabilitySearchKeywords.length > 0 &&
     (visiblePresets.length > 0 || visibleCapabilitySets.length > 0 || favoriteEntries.length > 0) &&
@@ -732,7 +756,7 @@ export function WorkflowSidebarColumn({
   const displayVisibleByCategory = sidebarSearchFallbackAll ? visibleByCategory : filteredVisibleByCategory;
   const displayVisiblePresets = sidebarSearchFallbackAll ? visiblePresets : filteredVisiblePresets;
   const displayCapabilitySets =
-    selectedPresetTag ? [] : sidebarSearchFallbackAll ? visibleCapabilitySets : filteredVisibleCapabilitySets;
+    selectedOriginFilter || selectedPresetTag ? [] : sidebarSearchFallbackAll ? visibleCapabilitySets : filteredVisibleCapabilitySets;
   const hasPresetEditorDragging = useCallback(() => {
     if (typeof window === 'undefined') return false;
     try {
@@ -1343,35 +1367,67 @@ export function WorkflowSidebarColumn({
         {linkedComposeActive ? (
           <p className="mt-0.5 text-[8px] text-gray-600 leading-tight">与底部快捷栏输入联动筛选；清空底部输入后恢复仅按上方搜索。</p>
         ) : null}
-        {presetSidebarTags.length > 0 ? (
-          <div className="mt-1.5 flex flex-wrap gap-1">
+        <div className="mt-1.5 flex flex-wrap gap-1">
+          <button
+            type="button"
+            onClick={() => {
+              setSelectedOriginFilter(null);
+              setSelectedPresetTag(null);
+            }}
+            className={`px-2 py-0.5 rounded-md text-[8px] font-black uppercase border transition-colors ${
+              selectedOriginFilter == null && selectedPresetTag == null
+                ? 'border-blue-500/60 bg-blue-950/35 text-blue-200'
+                : 'border-white/[0.08] bg-white/[0.03] text-gray-400 hover:bg-white/[0.06] hover:text-gray-300'
+            }`}
+          >
+            全部
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setSelectedOriginFilter('cloud');
+              setSelectedPresetTag(null);
+            }}
+            className={`px-2 py-0.5 rounded-md text-[8px] font-black border transition-colors ${
+              selectedOriginFilter === 'cloud'
+                ? 'border-sky-500/45 bg-sky-950/30 text-sky-200/90'
+                : 'border-white/[0.08] bg-white/[0.03] text-gray-400 hover:bg-white/[0.06] hover:text-gray-300'
+            }`}
+          >
+            云端
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setSelectedOriginFilter('mine');
+              setSelectedPresetTag(null);
+            }}
+            className={`px-2 py-0.5 rounded-md text-[8px] font-black border transition-colors ${
+              selectedOriginFilter === 'mine'
+                ? 'border-blue-500/60 bg-blue-950/35 text-blue-200'
+                : 'border-white/[0.08] bg-white/[0.03] text-gray-400 hover:bg-white/[0.06] hover:text-gray-300'
+            }`}
+          >
+            我的
+          </button>
+          {presetSidebarTags.map((tag) => (
             <button
+              key={tag}
               type="button"
-              onClick={() => setSelectedPresetTag(null)}
-              className={`px-2 py-0.5 rounded-md text-[8px] font-black uppercase border transition-colors ${
-                selectedPresetTag == null
+              onClick={() => {
+                setSelectedOriginFilter(null);
+                setSelectedPresetTag((prev) => (prev === tag ? null : tag));
+              }}
+              className={`px-2 py-0.5 rounded-md text-[8px] font-black border transition-colors ${
+                selectedPresetTag === tag
                   ? 'border-blue-500/60 bg-blue-950/35 text-blue-200'
-                  : 'border-white/[0.08] bg-white/[0.03] text-gray-400 hover:bg-white/[0.06] hover:text-gray-300'
+                  : 'border-[#314767] bg-[#182235] text-blue-200/90 hover:border-blue-400/45'
               }`}
             >
-              全部
+              {tag}
             </button>
-            {presetSidebarTags.map((tag) => (
-              <button
-                key={tag}
-                type="button"
-                onClick={() => setSelectedPresetTag((prev) => (prev === tag ? null : tag))}
-                className={`px-2 py-0.5 rounded-md text-[8px] font-black border transition-colors ${
-                  selectedPresetTag === tag
-                    ? 'border-blue-500/60 bg-blue-950/35 text-blue-200'
-                    : 'border-[#314767] bg-[#182235] text-blue-200/90 hover:border-blue-400/45'
-                }`}
-              >
-                {tag}
-              </button>
-            ))}
-          </div>
-        ) : null}
+          ))}
+        </div>
       </div>
       </div>
           {favoriteEntries.length > 0 || visiblePresets.length > 0 ? (
@@ -1748,7 +1804,7 @@ export function WorkflowSidebarColumn({
                         <div
                           key={`fav-${entry.id}`}
                           data-capability-hover-id={entry.kind === 'module' ? entry.mod?.id : undefined}
-                          className={`rounded-xl border min-h-[52px] h-auto flex overflow-hidden transition-all duration-150${
+                          className={`relative rounded-xl border min-h-[52px] h-auto flex overflow-hidden transition-all duration-150${
                             sidebarLocateFlashClass(entry.id)
                           } ${
                             hasTweakSlot ? 'col-span-2' : 'col-span-1'
@@ -1813,6 +1869,7 @@ export function WorkflowSidebarColumn({
                             setFavoriteDropActive(false);
                           }}
                         >
+                          {entry.kind === 'module' && entry.mod ? renderCloudBadge(entry.mod.id) : null}
                           <div
                             className={`flex-1 px-1.5 py-1 flex flex-col items-center justify-center text-center min-w-0 transition-colors cursor-default ${
                               entry.kind === 'module' && entry.mod && capabilityUsesGenImageEngine(entry.mod)
@@ -2270,7 +2327,7 @@ export function WorkflowSidebarColumn({
                       <div
                         key={mod.id}
                         data-capability-hover-id={mod.id}
-                        className={`rounded-xl border min-h-[60px] h-auto flex overflow-hidden transition-all duration-150${sidebarLocateFlashClass(
+                        className={`relative rounded-xl border min-h-[60px] h-auto flex overflow-hidden transition-all duration-150${sidebarLocateFlashClass(
                           mod.id
                         )} ${
                           dragOverAction === mod.id
@@ -2321,6 +2378,7 @@ export function WorkflowSidebarColumn({
                           setFavoriteDropActive(false);
                         }}
                       >
+                        {renderCloudBadge(mod.id)}
                         <div
                           className={`flex-1 p-3 flex flex-col items-center justify-center text-center min-w-0 transition-colors cursor-default ${
                             capabilityUsesGenImageEngine(mod) ? `border-r ${getSidebarCapabilityTone(mod.category).dividerBorderClass}` : ''
@@ -2443,7 +2501,7 @@ export function WorkflowSidebarColumn({
                 <div
                   key={mod.id}
                   data-capability-hover-id={mod.id}
-                  className={`rounded-xl border min-h-[60px] h-auto flex overflow-hidden transition-all duration-150${sidebarLocateFlashClass(
+                  className={`relative rounded-xl border min-h-[60px] h-auto flex overflow-hidden transition-all duration-150${sidebarLocateFlashClass(
                     mod.id
                   )} ${
                     dragOverAction === mod.id
@@ -2494,6 +2552,7 @@ export function WorkflowSidebarColumn({
                     setFavoriteDropActive(false);
                   }}
                 >
+                  {renderCloudBadge(mod.id)}
                   <div
                     className={`flex-1 p-3 flex flex-col items-center justify-center text-center min-w-0 transition-colors cursor-default ${
                       capabilityUsesGenImageEngine(mod) ? `border-r ${getSidebarCapabilityTone(mod.category).dividerBorderClass}` : ''
