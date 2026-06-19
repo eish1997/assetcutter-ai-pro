@@ -16,6 +16,16 @@ import {
   getVectorengineBaseUrl,
 } from "./settingsStore";
 import { consumeTrialGeminiSlotBeforeProxyOrThrow } from "./trialGeminiQuota";
+import { recordUsageEvent } from "./recordUsageEvent";
+import { extractUsageMetadataFromProxyResult } from "../shared/extractUsageMetadata.js";
+import {
+  DEFAULT_PRICE_CATALOG,
+  buildGeminiProxyUsageDrafts,
+  estimateUsageCostUsd,
+  findPriceCatalogEntry,
+} from "./usageCost";
+import { resolveBillingSkuForGeminiModel, resolveProviderForGeminiPath } from "./usageBillingSku";
+import type { UsageGeminiMetadata } from "../shared/usageBilling";
 import { getGeminiFairnessRequestHeaders } from "./geminiFairnessBridge";
 import { tryParseGeminiProxyFairnessRejected, throwFairnessRejected } from "./geminiProxyFairnessError";
 import {
@@ -509,12 +519,57 @@ function emitGeminiAsyncDoneNoQueueHint(jobId: string, tracker: GeminiAsyncPollT
   });
 }
 
+function isLikelyImageModel(modelOrRegistryId: string): boolean {
+  const m = String(modelOrRegistryId || "").toLowerCase();
+  return m.includes("image") || m.includes("flash-image") || m.includes("pro-image");
+}
+
+function recordGeminiProxyUsage(args: {
+  jobId: string;
+  model: string;
+  registryId?: string;
+  useVertex?: boolean;
+  usageMetadata?: UsageGeminiMetadata | null;
+  proxyResult?: unknown;
+  jobKind?: string;
+}): void {
+  const registryId = (args.registryId || args.model || "").trim();
+  const role = isLikelyImageModel(registryId) ? "image" : "text";
+  const usageMetadata =
+    args.usageMetadata ?? extractUsageMetadataFromProxyResult(args.proxyResult) ?? null;
+  const billingSku = resolveBillingSkuForGeminiModel(registryId, role);
+  const entry = findPriceCatalogEntry(DEFAULT_PRICE_CATALOG, billingSku);
+  const provider = resolveProviderForGeminiPath(args.useVertex);
+  const drafts = buildGeminiProxyUsageDrafts({ usageMetadata, role });
+
+  for (const draft of drafts) {
+    const costUsdEst = estimateUsageCostUsd(entry, draft.meter);
+    recordUsageEvent({
+      idempotencyKey: `gemini-async:${args.jobId}${draft.idempotencySuffix}`,
+      provider,
+      billingSku,
+      meterKind: draft.meter.meterKind,
+      quantityIn: draft.meter.quantityIn,
+      quantityOut: draft.meter.quantityOut,
+      quantity: draft.meter.quantity,
+      unit: draft.meter.unit,
+      registryId,
+      jobKind: args.jobKind,
+      costUsdEst,
+      costConfidence: draft.meter.costConfidence,
+      requestId: args.jobId,
+      status: "succeeded",
+      meta: Object.keys(draft.meta).length ? draft.meta : undefined,
+    });
+  }
+}
+
 async function bulkProxyGenerateContentAsync(args: {
   model: string;
   contents: unknown;
   config?: Record<string, unknown>;
   registryId?: string;
-}): Promise<{ text?: string; candidates?: unknown[] }> {
+}): Promise<{ text?: string; candidates?: unknown[]; usageMetadata?: UsageGeminiMetadata | null }> {
   const config = (args.config || {}) as Record<string, unknown>;
   const abortSignal = config.abortSignal as AbortSignal | undefined;
   const safeConfig = { ...config };
@@ -602,6 +657,17 @@ async function bulkProxyGenerateContentAsync(args: {
     }
     if (j.status === "completed" && j.result != null) {
       emitGeminiAsyncDoneNoQueueHint(jobId, tracker);
+      const imageRole = isLikelyImageModel(bindingRegistryId);
+      const useVertex = bulkUsesVertexBackend(bindingRegistryId, imageRole ? "image" : "text");
+      recordGeminiProxyUsage({
+        jobId,
+        model: args.model,
+        registryId: bindingRegistryId,
+        useVertex,
+        proxyResult: j.result,
+        usageMetadata: (j.result as { usageMetadata?: UsageGeminiMetadata })?.usageMetadata,
+        jobKind: imageRole ? "workflow_image" : "workflow_chat",
+      });
       return j.result;
     }
     if (j.status === "failed") {
@@ -681,6 +747,27 @@ async function bulkProxyGenerateContentBatchAsync(args: {
     if (j.status === "completed") {
       const items = Array.isArray(j.result?.items) ? j.result!.items! : [];
       emitGeminiAsyncDoneNoQueueHint(jobId, tracker);
+      items.forEach((it, idx) => {
+        const row = it as {
+          ok?: boolean;
+          result?: { text?: string; candidates?: unknown[]; usageMetadata?: UsageGeminiMetadata };
+          error?: string;
+        };
+        if (row?.ok !== true || !row.result) return;
+        const bindingRegistryId = String(args.items[idx]?.model || "").trim();
+        if (!bindingRegistryId) return;
+        const imageRole = isLikelyImageModel(bindingRegistryId);
+        const useVertex = bulkUsesVertexBackend(bindingRegistryId, imageRole ? "image" : "text");
+        recordGeminiProxyUsage({
+          jobId: `${jobId}:${idx}`,
+          model: args.items[idx]!.model,
+          registryId: bindingRegistryId,
+          useVertex,
+          proxyResult: row.result,
+          usageMetadata: row.result.usageMetadata,
+          jobKind: imageRole ? "workflow_image" : "workflow_chat",
+        });
+      });
       return items.map((it) => {
         const row = it as { ok?: boolean; result?: { text?: string; candidates?: unknown[] }; error?: string };
         return {

@@ -32,6 +32,7 @@ import {
   getDiskOverrideInt,
 } from './gemini-proxy-fairness.js';
 import { initGeminiFairnessConfigLoader, resolveGeminiFairnessConfigSource } from './gemini-fairness-config-store.js';
+import { extractUsageMetadata } from './gemini-proxy-usage.js';
 
 /** 监听端口：优先专用变量，避免与 .env.local 里给 ai3d 等用的通用 `PORT` 冲突 */
 const PORT =
@@ -265,7 +266,8 @@ async function proxyVertexGenerateContent(model, contents, config) {
   });
   const text = typeof response.text === 'string' ? response.text : '';
   const candidates = response.candidates || response.response?.candidates || [];
-  return { text, candidates };
+  const usageMetadata = extractUsageMetadata(response);
+  return { text, candidates, usageMetadata };
 }
 
 function isGeminiNetworkError(detail) {
@@ -432,7 +434,12 @@ async function proxyViaToapis(model, contents, config) {
     throw new Error('ToAPIs Chat 响应不是合法 JSON');
   }
   const text = parsed?.choices?.[0]?.message?.content || '';
-  return { text: String(text), candidates: [{ content: { parts: [{ text: String(text) }] } }] };
+  const usageMetadata = extractUsageMetadata(parsed);
+  return {
+    text: String(text),
+    candidates: [{ content: { parts: [{ text: String(text) }] } }],
+    usageMetadata,
+  };
 }
 
 const GEMINI_API_KEYS_RAW = (process.env.GEMINI_API_KEYS || '').trim();
@@ -514,7 +521,8 @@ async function proxyGenerateContent(model, contents, config) {
     });
     const text = typeof response.text === 'string' ? response.text : '';
     const candidates = response.candidates || response.response?.candidates || [];
-    return { text, candidates };
+    const usageMetadata = extractUsageMetadata(response);
+    return { text, candidates, usageMetadata };
   } catch (e) {
     const detail = formatErrorDetail(e);
     if (isGeminiNetworkError(detail)) {

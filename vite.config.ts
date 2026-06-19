@@ -211,6 +211,16 @@ export default defineConfig(({ mode }) => {
             target: 'http://127.0.0.1:9100',
             changeOrigin: true,
           },
+          /** 用户用量记账（Phase 0/1）：summary / events / export */
+          '/api/usage': {
+            target: 'http://127.0.0.1:9100',
+            changeOrigin: true,
+          },
+          /** 工作流任务执行上报（管理端任务执行页） */
+          '/api/workflow': {
+            target: 'http://127.0.0.1:9100',
+            changeOrigin: true,
+          },
           '/seam-repair-api': {
             target: 'http://127.0.0.1:8008',
             changeOrigin: true,

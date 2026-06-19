@@ -436,6 +436,77 @@ export async function fetchTaskExecutionEvents(query: TaskEventsQuery = {}) {
   return requestJson<TaskEventsResponse>(apiUrl(`/api/admin/task-events?${params.toString()}`));
 }
 
+export type UsageEventRow = {
+  id: string;
+  idempotencyKey: string;
+  userId: string;
+  username?: string;
+  provider: string;
+  registryId?: string | null;
+  billingSku: string;
+  meterKind: string;
+  quantityIn?: number | null;
+  quantityOut?: number | null;
+  quantity: number;
+  unit: string;
+  costUsdEst?: number | null;
+  costConfidence: string;
+  status: string;
+  upstreamTaskId?: string | null;
+  requestId?: string | null;
+  jobKind?: string | null;
+  projectId?: string | null;
+  workflowStepId?: string | null;
+  createdAt: string;
+  meta?: Record<string, unknown> | null;
+};
+
+export type UsageEventsQuery = {
+  limit?: number;
+  userId?: string;
+  billingSku?: string;
+  provider?: string;
+  from?: string;
+  to?: string;
+  cursor?: string;
+};
+
+type UsageEventsResponse = {
+  events: UsageEventRow[];
+  total?: number;
+  limit?: number;
+  nextCursor?: string | null;
+};
+
+export type UsageSummaryResponse = {
+  eventCount: number;
+  totalQuantity: number;
+  totalCostUsdEst: number;
+  bySku: Array<{ billingSku: string; count: number; quantity: number; costUsdEst: number }>;
+};
+
+export async function fetchUsageEvents(query: UsageEventsQuery = {}) {
+  const params = new URLSearchParams();
+  if (query.limit != null) params.set('limit', String(query.limit));
+  if (query.userId) params.set('userId', query.userId);
+  if (query.billingSku) params.set('billingSku', query.billingSku);
+  if (query.provider) params.set('provider', query.provider);
+  if (query.from) params.set('from', query.from);
+  if (query.to) params.set('to', query.to);
+  if (query.cursor) params.set('cursor', query.cursor);
+  return requestJson<UsageEventsResponse>(apiUrl(`/api/admin/usage-events?${params.toString()}`));
+}
+
+export async function fetchUsageSummary(query: Omit<UsageEventsQuery, 'limit' | 'cursor'> = {}) {
+  const params = new URLSearchParams();
+  if (query.userId) params.set('userId', query.userId);
+  if (query.billingSku) params.set('billingSku', query.billingSku);
+  if (query.provider) params.set('provider', query.provider);
+  if (query.from) params.set('from', query.from);
+  if (query.to) params.set('to', query.to);
+  return requestJson<UsageSummaryResponse>(apiUrl(`/api/admin/usage-summary?${params.toString()}`));
+}
+
 export type AdminSystemStatusPayload = {
   generatedAt: string;
   services: {

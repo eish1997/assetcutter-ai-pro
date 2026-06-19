@@ -107,6 +107,16 @@ import {
 import { createBridgeRelay } from './bridge-relay.js';
 import { consumeTrialGeminiSlotForUser } from './trial-gemini-quota-store.js';
 import {
+  insertUsageEvents,
+  listUsageEventsForAdmin,
+  listUsageEventsForUser,
+  summarizeUsageForAdmin,
+  summarizeUsageForUser,
+  formatUsageEventsCsv,
+  decodeUsageCursor,
+  isUsageBillingEnabled,
+} from './usage-billing-store.js';
+import {
   clearGeminiFairnessConfig,
   getGeminiFairnessConfigMeta,
   normalizeGeminiFairnessConfig,
@@ -407,6 +417,7 @@ function assertCsrf(req, res) {
   if (pathOnly.startsWith('/api/tripo')) return true;
   if (pathOnly === '/api/auth/trial-gemini/consume') return true;
   if (pathOnly === '/api/workflow/task-events') return true;
+  if (pathOnly === '/api/usage/events') return true;
   if (pathOnly.startsWith('/api/debug/client-log')) return true;
   if (pathOnly.startsWith('/api/admin')) {
     const origin = String(req.headers.origin || '');
@@ -1431,6 +1442,41 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (path === '/api/admin/usage-events' && req.method === 'GET') {
+      const staff = await requirePermission(req, res, PERMISSIONS.USAGE_READ);
+      if (!staff) return;
+      const u = new URL(req.url || '/', 'http://local');
+      const cursorRaw = u.searchParams.get('cursor') || '';
+      const query = {
+        limit: u.searchParams.get('limit') || 50,
+        userId: u.searchParams.get('userId') || '',
+        billingSku: u.searchParams.get('billingSku') || '',
+        provider: u.searchParams.get('provider') || '',
+        from: u.searchParams.get('from') || '',
+        to: u.searchParams.get('to') || '',
+        cursor: decodeUsageCursor(cursorRaw),
+      };
+      const result = await listUsageEventsForAdmin(query);
+      json(res, 200, result);
+      return;
+    }
+
+    if (path === '/api/admin/usage-summary' && req.method === 'GET') {
+      const staff = await requirePermission(req, res, PERMISSIONS.USAGE_READ);
+      if (!staff) return;
+      const u = new URL(req.url || '/', 'http://local');
+      const query = {
+        userId: u.searchParams.get('userId') || '',
+        billingSku: u.searchParams.get('billingSku') || '',
+        provider: u.searchParams.get('provider') || '',
+        from: u.searchParams.get('from') || '',
+        to: u.searchParams.get('to') || '',
+      };
+      const summary = await summarizeUsageForAdmin(query);
+      json(res, 200, summary);
+      return;
+    }
+
     if (path === '/api/workflow/task-events' && req.method === 'POST') {
       const user = await requireAuth(req, res);
       if (!user) return;
@@ -1443,6 +1489,76 @@ const server = http.createServer(async (req, res) => {
       const events = Array.isArray(body?.events) ? body.events : [];
       const result = await insertWorkflowTaskEvents(user.id, events);
       json(res, 200, { ok: true, ...result });
+      return;
+    }
+
+    if (path === '/api/usage/events' && req.method === 'POST') {
+      const user = await requireAuth(req, res);
+      if (!user) return;
+      if (!isUsageBillingEnabled()) {
+        json(res, 200, { ok: true, inserted: 0, skipped: 0, disabled: true });
+        return;
+      }
+      const rateKey = `usage-events:${user.id}`;
+      if (isRateLimited(rateKey, 240)) {
+        json(res, 429, { error: '用量上报过于频繁，请稍后再试' });
+        return;
+      }
+      const body = await readBody(req, { maxBytes: 128 * 1024 });
+      const events = Array.isArray(body?.events) ? body.events : body?.event ? [body.event] : [];
+      const result = await insertUsageEvents(user.id, events);
+      json(res, 200, { ok: true, ...result });
+      return;
+    }
+
+    if (path === '/api/usage/summary' && req.method === 'GET') {
+      const user = await requireAuth(req, res);
+      if (!user) return;
+      const u = new URL(req.url || '/', 'http://local');
+      const summary = await summarizeUsageForUser(user.id, {
+        from: u.searchParams.get('from') || '',
+        to: u.searchParams.get('to') || '',
+        projectId: u.searchParams.get('projectId') || '',
+      });
+      json(res, 200, summary);
+      return;
+    }
+
+    if (path === '/api/usage/events/list' && req.method === 'GET') {
+      const user = await requireAuth(req, res);
+      if (!user) return;
+      const u = new URL(req.url || '/', 'http://local');
+      const cursorRaw = u.searchParams.get('cursor') || '';
+      const result = await listUsageEventsForUser(user.id, {
+        limit: u.searchParams.get('limit') || 50,
+        billingSku: u.searchParams.get('billingSku') || '',
+        provider: u.searchParams.get('provider') || '',
+        projectId: u.searchParams.get('projectId') || '',
+        workflowStepId: u.searchParams.get('workflowStepId') || '',
+        from: u.searchParams.get('from') || '',
+        to: u.searchParams.get('to') || '',
+        cursor: decodeUsageCursor(cursorRaw),
+      });
+      json(res, 200, result);
+      return;
+    }
+
+    if (path === '/api/usage/events/export' && req.method === 'GET') {
+      const user = await requireAuth(req, res);
+      if (!user) return;
+      const u = new URL(req.url || '/', 'http://local');
+      const { events } = await listUsageEventsForUser(user.id, {
+        limit: 2000,
+        from: u.searchParams.get('from') || '',
+        to: u.searchParams.get('to') || '',
+        projectId: u.searchParams.get('projectId') || '',
+      });
+      const csv = formatUsageEventsCsv(events);
+      res.writeHead(200, {
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': 'attachment; filename="usage-events.csv"',
+      });
+      res.end(csv);
       return;
     }
 

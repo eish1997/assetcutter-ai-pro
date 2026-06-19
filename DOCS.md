@@ -267,6 +267,7 @@ assetcutter-ai-pro/
 - **ToAPIs 独有模型名映射**：仍在 `services/toapisAdapter.ts`（须在 resolve 之后应用，避免双重映射）；详见该文件头部注释。
 - **运营策略（可选）**：构建变量 `VITE_MODEL_OPS_CONFIG_URL` 指向可 CORS 访问的 JSON（字段见 `public/model-ops.example.json`），用于禁用部分生图档位；合并逻辑在 `services/modelRegistry/merge.ts`，观测日志前缀 `**[model-registry]`**；运维操作与回滚见 `**docs/model-ops-runbook.md`**。
 - 总体规划：`docs/多模型可运营改造计划.md`；能力矩阵草稿：`docs/spec/model-capability-matrix.md`。
+- **用量与商业化计费**（规划）：`docs/用量计费商业化开发清单.md`（计量 → 计价 → 套餐 → 支付 → 对账；`billingSku` 与 `usage_events` 数据模型）。
 - **宪章与拣货路径**：原则见 `docs/架构宪章-店仓菜单.md` §2；与现状对照、闸门表、Mermaid 依赖图与 PR 自检清单见 `docs/多模型可运营改造计划.md` **§1.4**；节点/边/货物大类的键值索引见 `services/workflowAiPickIndex.ts`；`**WorkflowSection.runTask`** 分支判定见 `services/workflowRunTaskBranch.ts`（新增或变更用户可达 AI 调用链时请同步更新）。
 - **阶段 0 书面模版**（registryId 策略、盘点表、矩阵勾选）：`docs/spec/phase0-model-inventory-template.md`。
 

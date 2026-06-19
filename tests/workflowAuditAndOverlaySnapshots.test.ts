@@ -105,6 +105,13 @@ describe('workflowAuditEvents', () => {
     expect(e.taskId).toBe('tid');
     expect(e.code).toBe(WORKFLOW_AUDIT_CODES.RUN_TASK_CAPABILITY_REJECTED);
     expect(e.detail?.actionType).toBe('cap_x');
+    expect(e.detail?.retryable).toBe(true);
+    expect(e.detail?.retrySnapshot).toMatchObject({
+      v: 1,
+      assetId: 'aid',
+      actionType: 'cap_x',
+      sourceTaskId: 'tid',
+    });
   });
 
   it('records EXPORT_IMAGE info audit', () => {

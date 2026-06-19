@@ -35,6 +35,13 @@ import {
 } from "./workflowVideoBridge";
 import { GeminiProxyFairnessRejectedError } from "./geminiProxyFairnessError";
 import { dispatchUnifiedAiSoftNotice, clipUnifiedAiNoticeMessage } from "./unifiedAiSoftNotice";
+import { recordUsageEvent } from "./recordUsageEvent";
+import {
+  DEFAULT_PRICE_CATALOG,
+  estimateUsageCostUsd,
+  findPriceCatalogEntry,
+} from "./usageCost";
+import { resolveBillingSkuForWorkflowVideo } from "./usageBillingSku";
 
 /** 统一「活儿」标识（日志/可观测；与 `WorkflowAiJobKind` 同义保留别名） */
 export type UnifiedAiJobKind =
@@ -266,7 +273,29 @@ export function isWorkflowVideoAvailable(): boolean {
 export async function workflowGenerateVideo(input: WorkflowVideoJobInput): Promise<WorkflowVideoJobResult> {
   return traceUnifiedAiCall(
     "workflow_generate_video",
-    () => requestWorkflowVideoFromEnv(input),
+    async () => {
+      const result = await requestWorkflowVideoFromEnv(input);
+      const billingSku = resolveBillingSkuForWorkflowVideo();
+      const priceEntry = findPriceCatalogEntry(DEFAULT_PRICE_CATALOG, billingSku);
+      const requestId =
+        (result as { jobId?: string; taskId?: string }).jobId ||
+        (result as { jobId?: string; taskId?: string }).taskId ||
+        `video-${Date.now()}`;
+      recordUsageEvent({
+        idempotencyKey: `workflow-video:${requestId}`,
+        provider: 'workflow-video',
+        billingSku,
+        meterKind: 'task',
+        quantity: 1,
+        unit: 'task',
+        requestId: String(requestId),
+        jobKind: 'workflow_generate_video',
+        costUsdEst: estimateUsageCostUsd(priceEntry, { meterKind: 'task', quantity: 1 }),
+        costConfidence: 'estimated',
+        status: 'succeeded',
+      });
+      return result;
+    },
     () => ({
       promptLen: String((input.prompt || "").length),
       refImageCount: String(input.referenceImages?.length ?? 0),

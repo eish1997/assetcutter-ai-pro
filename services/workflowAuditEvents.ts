@@ -1,4 +1,5 @@
 import type { WorkflowPendingTask } from '../types';
+import { buildRetrySnapshotFromTask, isTaskRetryable } from './workflowTaskRetry';
 import { readLocalJson, readSessionJson, scopedStorageKey, writeLocalJson, writeSessionJson } from './clientPersist';
 import { getWorkflowMirrorPreferenceScope } from './workflowMirrorPreferenceScope';
 import { idbLoadBundleJson, idbSaveBundleJson } from './workspaceBundleIdb';
@@ -67,6 +68,10 @@ export const WORKFLOW_AUDIT_CODES = {
   RUN_TASK_CAPABILITY_EXCEPTION: 'RUN_TASK_CAPABILITY_EXCEPTION',
   RUN_TASK_FALLBACK_UNKNOWN: 'RUN_TASK_FALLBACK_UNKNOWN',
   RUN_TASK_BRANCH_CUT_NO_MODULE: 'RUN_TASK_BRANCH_CUT_NO_MODULE',
+  /** 队列 processTask 外层异常 */
+  RUN_TASK_PROCESS_EXCEPTION: 'RUN_TASK_PROCESS_EXCEPTION',
+  /** 用户从运行日志触发重试 */
+  RUN_TASK_RETRY: 'RUN_TASK_RETRY',
   /** 队列任务执行成功 */
   RUN_TASK_SUCCESS: 'RUN_TASK_SUCCESS',
   /** §6：用户从工作流大图下载当前预览图（按需审计） */
@@ -185,6 +190,8 @@ export function appendWorkflowRunTaskFailureAudit(params: {
     params.message.length > MAX_AUDIT_MESSAGE_LEN
       ? `${params.message.slice(0, MAX_AUDIT_MESSAGE_LEN)}…`
       : params.message;
+  const retryable = isTaskRetryable(params.task);
+  const retrySnapshot = retryable ? buildRetrySnapshotFromTask(params.task) : null;
   return appendWorkflowAuditEvent({
     level: params.level,
     code: params.code,
@@ -194,6 +201,8 @@ export function appendWorkflowRunTaskFailureAudit(params: {
     message: msg,
     detail: {
       actionType: params.task.actionType,
+      retryable: !!retrySnapshot,
+      ...(retrySnapshot ? { retrySnapshot } : {}),
       ...params.detail,
     },
   });

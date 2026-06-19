@@ -12,7 +12,7 @@ const DB_FILE = path.join(DB_DIR, 'auth-db.json');
 const DAY_MS = 24 * 60 * 60 * 1000;
 const { Pool } = pg;
 const DATABASE_URL = String(process.env.DATABASE_URL || '').trim();
-const USE_POSTGRES = Boolean(DATABASE_URL);
+let USE_POSTGRES = Boolean(DATABASE_URL);
 let pool = null;
 let pgReady = false;
 
@@ -946,7 +946,17 @@ export async function listSessionsForUser(userId, options = {}) {
 }
 
 export async function initAuthStore() {
-  await ensurePostgres();
+  if (USE_POSTGRES) {
+    try {
+      await ensurePostgres();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.warn(`[auth-store] Postgres 不可用（${msg}），回退 auth-db.json`);
+      USE_POSTGRES = false;
+      pool = null;
+      pgReady = false;
+    }
+  }
   const { ensureAdminRbac } = await import('./admin-roles-store.js');
   await ensureAdminRbac();
   const { ensureGeminiFairnessConfigStore } = await import('./gemini-fairness-config-store.js');

@@ -53,6 +53,12 @@ export const MATRIX_COLUMNS = [
     permissions: [PERMISSIONS.TASK_EVENTS_READ],
   },
   {
+    id: 'usage',
+    label: 'AI 用量',
+    kind: 'toggle',
+    permissions: [PERMISSIONS.USAGE_READ],
+  },
+  {
     id: 'companion',
     label: '伴侣发行',
     kind: 'rw',

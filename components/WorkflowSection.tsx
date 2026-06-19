@@ -69,7 +69,22 @@ import {
   isVgpBlockingDiscardForDisplayKey,
   pruneVgpAfterDiscard,
 } from '../services/vgp/vgpStore';
-import { appendWorkflowAuditEvent, appendWorkflowRunTaskFailureAudit, appendWorkflowRunTaskSuccessAudit, hydrateWorkflowAuditRingSessionFromIdbOrLocalIfEmpty, WORKFLOW_AUDIT_CODES } from '../services/workflowAuditEvents';
+import {
+  appendWorkflowAuditEvent,
+  appendWorkflowRunTaskFailureAudit,
+  appendWorkflowRunTaskSuccessAudit,
+  hydrateWorkflowAuditRingSessionFromIdbOrLocalIfEmpty,
+  readWorkflowAuditRing,
+  WORKFLOW_AUDIT_CODES,
+} from '../services/workflowAuditEvents';
+import { clearUsageRecordContext, setUsageRecordContext } from '../services/usageRecordContext';
+import {
+  AC_WORKFLOW_RETRY_TASK_EVENT,
+  buildPendingTaskFromRetrySnapshot,
+  parseRetrySnapshotFromAuditDetail,
+  type WorkflowRunLogMeta,
+  validateRetrySnapshot,
+} from '../services/workflowTaskRetry';
 import { setWorkflowMirrorPreferenceScope } from '../services/workflowMirrorPreferenceScope';
 import { appendWorkflowOverlayCloseSnapshot, supersedeWorkflowOverlaySnapshotsForAsset, WORKFLOW_OVERLAY_PERIODIC_SNAPSHOT_MS, hydrateWorkflowOverlayRingSessionFromIdbOrLocalIfEmpty } from '../services/workflowOverlaySnapshots';
 import type { WorkflowOverlaySnapshotBucket } from '../services/workflowOverlaySnapshots';
@@ -402,6 +417,39 @@ function workflowModelItemLooksLikeModel(it: DataTransferItem): boolean {
   return false;
 }
 
+type WorkflowOnLog = (
+  level: 'info' | 'warn' | 'error',
+  message: string,
+  detail?: string,
+  meta?: WorkflowRunLogMeta
+) => void;
+
+function emitWorkflowTaskFailure(
+  onLog: WorkflowOnLog | undefined,
+  task: WorkflowPendingTask,
+  args: {
+    code: string;
+    level: 'warn' | 'error';
+    message: string;
+    detail?: Record<string, unknown>;
+    logDetail?: string;
+  }
+) {
+  const ev = appendWorkflowRunTaskFailureAudit({
+    task,
+    code: args.code,
+    level: args.level,
+    message: args.message,
+    detail: args.detail,
+  });
+  onLog?.(
+    args.level,
+    args.message,
+    args.logDetail ?? (args.detail?.error != null ? String(args.detail.error) : undefined),
+    { auditEventId: ev.id, retryable: Boolean(ev.detail?.retryable) }
+  );
+}
+
 const WorkflowComposerOverlay = lazy(() => import('./WorkflowComposerOverlay'));
 
 type WorkflowPendingTaskOptions = {
@@ -605,7 +653,7 @@ const WorkflowSection: React.FC<{
   onStoryboardTableAssetRemoved?: (assetId: string) => void;
   pending: WorkflowPendingTask[];
   onPendingChange: (value: React.SetStateAction<WorkflowPendingTask[]>) => void;
-  onLog?: (level: 'info' | 'warn' | 'error', message: string, detail?: string) => void;
+  onLog?: WorkflowOnLog;
   /** 拖图到「生成3D」能力时调用，不进入执行队列，直接提交 3D 任务 */
   onAddGenerate3DJob?: (
     preset: CustomAppModule,
@@ -2405,9 +2453,22 @@ ${lineSvg}
     videoMime?: string;
     vgpSteps?: VgpGenStepCapture[];
   }> => {
+    setUsageRecordContext({
+      projectId: workspaceProjectChrome?.activeProjectId?.trim() || undefined,
+      workflowStepId: String(task.actionType || '').trim() || undefined,
+      assetId: task.assetId,
+      taskId: task.id,
+    });
+    try {
     const { actionType, inputImage, inputText } = task;
-    const auditRunFail = (code: string, level: 'warn' | 'error', message: string, detail?: Record<string, unknown>) => {
-      appendWorkflowRunTaskFailureAudit({ task, code, level, message, detail });
+    const auditRunFail = (
+      code: string,
+      level: 'warn' | 'error',
+      message: string,
+      detail?: Record<string, unknown>,
+      logDetail?: string
+    ) => {
+      emitWorkflowTaskFailure(onLog, task, { code, level, message, detail, logDetail });
     };
     const prefetched = String(task.clientPrefetchedImageResult || '').trim();
     if (prefetched) {
@@ -2422,7 +2483,6 @@ ${lineSvg}
       const box = lightboxClientImageDeferredRef.current.get(task.id);
       if (!box) {
         const msg = `[${getTaskLogLabel(task)}] 大图提交状态异常（请重试）`;
-        onLog?.('warn', msg);
         setAssetError(task.assetId, msg);
         auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_LIGHTBOX_DEFERRED_MISSING, 'warn', msg);
         return { image: null };
@@ -2432,7 +2492,6 @@ ${lineSvg}
         const s = String(img ?? '').trim();
         if (!s) {
           const msg = `[${getTaskLogLabel(task)}] 未能取得大图预览合成底图（请重试）`;
-          onLog?.('warn', msg);
           setAssetError(task.assetId, msg);
           auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_LIGHTBOX_COMPOSITE_EMPTY, 'warn', msg);
           return { image: null };
@@ -2449,7 +2508,6 @@ ${lineSvg}
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : safeUnknownToString(err);
         const full = `[${getTaskLogLabel(task)}] ${msg}`;
-        onLog?.('warn', full);
         setAssetError(task.assetId, full);
         auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_LIGHTBOX_COMPOSITE_EXCEPTION, 'warn', full, {
           error: msg,
@@ -2476,7 +2534,6 @@ ${lineSvg}
         });
         if (resolvedImg.ok === false) {
           const msg = `[${getTaskLogLabel(task)}] ${slot.label}图：${resolvedImg.error}`;
-          onLog?.('warn', msg);
           setAssetError(task.assetId, msg);
           auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_INPUT_IMAGE_RESOLVE, 'warn', msg, { slot: slot.key });
           return { image: null };
@@ -2507,7 +2564,6 @@ ${lineSvg}
         if (resolvedImg.ok === false) {
           const al = getTaskLogLabel(task);
           const msg = `[${al}] ${resolvedImg.error}`;
-          onLog?.('warn', msg);
           setAssetError(task.assetId, msg);
           auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_INPUT_IMAGE_RESOLVE, 'warn', msg, {
             ...(typeof inputIndex === 'number' ? { inputIndex } : {}),
@@ -2543,7 +2599,6 @@ ${lineSvg}
         const set = getSet(actionType.slice(SET_ACTION_PREFIX.length));
         if (!set) {
           const msg = `[${getActionLabel(actionType)}] 能力集合不存在`;
-          onLog?.('warn', msg);
           setAssetError(task.assetId, msg);
           auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_CAPABILITY_SET_NOT_FOUND, 'warn', msg);
           return { image: null };
@@ -2592,7 +2647,6 @@ ${lineSvg}
             });
             if (result.ok === false) {
               const msg = `[${getActionLabel(actionType)}] ${result.error}`;
-              onLog?.('warn', msg);
               setAssetError(task.assetId, msg);
               auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_CAPABILITY_SET_REJECTED, 'warn', msg, {
                 error: result.error,
@@ -2612,9 +2666,8 @@ ${lineSvg}
           } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : safeUnknownToString(err);
             const full = `[${getActionLabel(actionType)}] 能力集合执行异常：${msg}`;
-            onLog?.('error', full, msg);
             setAssetError(task.assetId, full);
-            auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_CAPABILITY_SET_EXCEPTION, 'error', full, { error: msg });
+            auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_CAPABILITY_SET_EXCEPTION, 'error', full, { error: msg }, msg);
             return { image: null };
           }
         } finally {
@@ -2630,14 +2683,12 @@ ${lineSvg}
         }
         if (!onAddGenerate3DJob) {
           const msg = '未配置 3D 执行器，无法提交生成3D任务';
-          onLog?.('warn', msg);
           setAssetError(task.assetId, msg);
           auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_GENERATE3D_NOT_CONFIGURED, 'warn', msg);
           return { image: null };
         }
         if (!resolvedInputImage?.trim()) {
           const msg = '生成3D 需要图片输入';
-          onLog?.('warn', msg);
           setAssetError(task.assetId, msg);
           auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_GENERATE3D_NO_INPUT, 'warn', msg);
           return { image: null };
@@ -2671,9 +2722,8 @@ ${lineSvg}
         } catch (err) {
           const msg = err instanceof Error ? err.message : safeUnknownToString(err);
           const full = `[${getTaskLogLabel(task)}] ${msg}`;
-          onLog?.('error', full);
           setAssetError(task.assetId, full);
-          auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_GENERATE3D_EXCEPTION, 'error', full, { error: msg });
+          auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_GENERATE3D_EXCEPTION, 'error', full, { error: msg }, msg);
         }
         return { image: null };
       }
@@ -2733,7 +2783,6 @@ ${lineSvg}
           );
           if (out.ok === false) {
             const msg = `[${actionLabel}] ${out.error}`;
-            onLog?.('warn', msg);
             setAssetError(task.assetId, msg);
             auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_CAPABILITY_REJECTED, 'warn', msg, { error: out.error });
             return { image: null };
@@ -2749,15 +2798,13 @@ ${lineSvg}
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : safeUnknownToString(err);
           const full = `[${actionLabel}] 失败：${msg}`;
-          onLog?.('error', full, msg);
           setAssetError(task.assetId, full);
-          auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_CAPABILITY_EXCEPTION, 'error', full, { error: msg });
+          auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_CAPABILITY_EXCEPTION, 'error', full, { error: msg }, msg);
           return { image: null };
         }
       }
       case 'branch_cut_image': {
         const m = `[${actionLabel}] 切割任务应由队列专用路径执行，请重试或刷新页面`;
-        onLog?.('warn', m);
         setAssetError(task.assetId, m);
         auditRunFail(WORKFLOW_AUDIT_CODES.RUN_TASK_BRANCH_CUT_NO_MODULE, 'warn', m, { actionType });
         return { image: null };
@@ -2776,6 +2823,9 @@ ${lineSvg}
         });
         return { image: null };
       }
+    }
+    } finally {
+      clearUsageRecordContext();
     }
   }, [
     actionModules,
@@ -2925,9 +2975,14 @@ ${lineSvg}
               task.inputImage || assetsRef.current.find((a) => a.id === task.assetId)?.original;
             if (!inputImage || typeof inputImage !== 'string') {
               const msg = `[${taskLabel}] 找不到输入图片，已跳过此任务`;
-              onLog?.('warn', msg);
               setAssetError(task.assetId, msg);
+              emitWorkflowTaskFailure(onLog, task, {
+                code: WORKFLOW_AUDIT_CODES.RUN_TASK_INPUT_IMAGE_RESOLVE,
+                level: 'warn',
+                message: msg,
+              });
               setCompletedTaskIds((prev) => { const next = new Set(prev); next.add(task.id); return next; });
+              return;
             } else {
               const assetForInput = assetsRef.current.find((a) => a.id === task.assetId) ?? null;
               const inputTrimmed = String(inputImage).trim();
@@ -2940,8 +2995,12 @@ ${lineSvg}
               });
               if (resolvedImg.ok === false) {
                 const msg = `[${taskLabel}] ${resolvedImg.error}`;
-                onLog?.('warn', msg);
                 setAssetError(task.assetId, msg);
+                emitWorkflowTaskFailure(onLog, task, {
+                  code: WORKFLOW_AUDIT_CODES.RUN_TASK_INPUT_IMAGE_RESOLVE,
+                  level: 'warn',
+                  message: msg,
+                });
                 setCompletedTaskIds((prev) => {
                   const next = new Set(prev);
                   next.add(task.id);
@@ -2982,11 +3041,16 @@ ${lineSvg}
               }
               if (cropped.length === 0) {
                 const msg = `[${taskLabel}] 未能生成裁剪图（请检查图片格式或重试）`;
-                onLog?.('warn', msg);
                 setAssetError(task.assetId, msg);
-              } else {
-                setAssetError(task.assetId, null);
+                emitWorkflowTaskFailure(onLog, task, {
+                  code: WORKFLOW_AUDIT_CODES.RUN_TASK_PROCESS_EXCEPTION,
+                  level: 'warn',
+                  message: msg,
+                });
+                markTaskCompleted(task, { auditSuccess: false });
+                return;
               }
+              setAssetError(task.assetId, null);
               setAssets((prev) => {
                 const taskAsset = prev.find((x) => x.id === task.assetId);
                 if (!taskAsset) return prev;
@@ -3224,8 +3288,15 @@ ${lineSvg}
         } catch (e) {
           const msg = e instanceof Error ? e.message : safeUnknownToString(e);
           const label = getTaskLogLabel(task);
-          onLog?.('error', `${logBatch} ${label} 失败：${msg}`);
+          const full = `${logBatch} ${label} 失败：${msg}`;
           setAssetError(task.assetId, msg);
+          emitWorkflowTaskFailure(onLog, task, {
+            code: WORKFLOW_AUDIT_CODES.RUN_TASK_PROCESS_EXCEPTION,
+            level: 'error',
+            message: full,
+            detail: { error: msg },
+            logDetail: msg,
+          });
           setCompletedTaskIds((prev) => new Set(prev).add(task.id));
         } finally {
           setActiveTaskIds((prev) => {
@@ -3303,6 +3374,74 @@ ${lineSvg}
       workspaceProjectChrome?.activeProjectId,
     ]
   );
+
+  const retryTaskFromSnapshot = useCallback(
+    (auditEventId: string) => {
+      const id = String(auditEventId || '').trim();
+      if (!id) {
+        onLog?.('warn', '重试失败：缺少审计事件 id');
+        return;
+      }
+      const ev = readWorkflowAuditRing().find((e) => e.id === id);
+      if (!ev) {
+        onLog?.('warn', '重试失败：找不到对应失败记录（可能已过期）');
+        return;
+      }
+      const snapshot = parseRetrySnapshotFromAuditDetail(ev.detail);
+      if (!snapshot) {
+        onLog?.('warn', '重试失败：该记录不可重试或快照已失效');
+        return;
+      }
+      const assetExists = assetsRef.current.some((a) => a.id === snapshot.assetId);
+      const moduleExists = (() => {
+        if (snapshot.actionType === 'cut_image') return true;
+        if (snapshot.actionType.startsWith(SET_ACTION_PREFIX)) {
+          return !!getSet(snapshot.actionType.slice(SET_ACTION_PREFIX.length));
+        }
+        const mod = getModule(snapshot.actionType);
+        return !!mod && !mod.disabled;
+      })();
+      const validationError = validateRetrySnapshot({ snapshot, assetExists, moduleExists });
+      if (validationError) {
+        onLog?.('warn', `重试失败：${validationError}`);
+        return;
+      }
+      const task = buildPendingTaskFromRetrySnapshot(snapshot);
+      appendWorkflowAuditEvent({
+        level: 'info',
+        code: WORKFLOW_AUDIT_CODES.RUN_TASK_RETRY,
+        assetId: snapshot.assetId,
+        taskId: task.id,
+        displayKey: snapshot.inputSourceDisplayKey,
+        message: `[${getTaskLogLabel(task)}] 从运行日志重试`,
+        detail: {
+          sourceAuditEventId: id,
+          sourceTaskId: snapshot.sourceTaskId,
+          actionType: snapshot.actionType,
+        },
+      });
+      const nextPending = [task, ...pendingRef.current];
+      setPending(nextPending);
+      const label = getTaskLogLabel(task);
+      if (executing) {
+        onLog?.('info', `[${label}] 已加入重试队列（当前批次完成后执行）`);
+      } else {
+        onLog?.('info', `[${label}] 已加入重试队列`);
+        void executePending(nextPending);
+      }
+    },
+    [executing, executePending, getModule, getSet, getTaskLogLabel, onLog]
+  );
+
+  useEffect(() => {
+    const onRetry = (ev: Event) => {
+      const auditEventId = String((ev as CustomEvent<{ auditEventId?: string }>).detail?.auditEventId || '').trim();
+      if (!auditEventId) return;
+      retryTaskFromSnapshot(auditEventId);
+    };
+    window.addEventListener(AC_WORKFLOW_RETRY_TASK_EVENT, onRetry);
+    return () => window.removeEventListener(AC_WORKFLOW_RETRY_TASK_EVENT, onRetry);
+  }, [retryTaskFromSnapshot]);
 
   /** 能力块拖到资产卡：以该卡为唯一输入立即执行（插队），不单独停留在待执行列表 */
   const runCapabilityOnAssetCardImmediate = useCallback(
@@ -6786,12 +6925,11 @@ ${lineSvg}
     (
       assetIds: string[],
       generateCount: number,
-      opts?: { allowTextAssetsForExpansion?: boolean; allowTextAssetsForGrouping?: boolean }
+      opts?: { allowTextAssetsForExpansion?: boolean }
     ): { rootIds: string[]; cloneTaskSeeds: Array<{ sourceAsset: WorkflowAsset; targetAssetId: string }> } => {
       if (generateCount <= 1) return { rootIds: assetIds, cloneTaskSeeds: [] };
       type ClonePlan = { sourceId: string; cloneId: string; sourceAsset: WorkflowAsset };
       const clonePlans: ClonePlan[] = [];
-      const groupPlans: string[][] = [];
       const rootIds: string[] = [];
       const cloneTaskSeeds: Array<{ sourceAsset: WorkflowAsset; targetAssetId: string }> = [];
       for (const id of assetIds) {
@@ -6801,14 +6939,11 @@ ${lineSvg}
           continue;
         }
         rootIds.push(id);
-        const idsForGroup = [id];
         for (let i = 1; i < generateCount; i += 1) {
           const cloneId = uuid();
           clonePlans.push({ sourceId: id, cloneId, sourceAsset: source });
           cloneTaskSeeds.push({ sourceAsset: source, targetAssetId: cloneId });
-          idsForGroup.push(cloneId);
         }
-        if (idsForGroup.length > 1) groupPlans.push(idsForGroup);
       }
       if (clonePlans.length === 0) return { rootIds, cloneTaskSeeds };
       setAssets((prev) => {
@@ -6820,6 +6955,9 @@ ${lineSvg}
             ...src,
             id: plan.cloneId,
             parentAssetId: undefined,
+            groupId: undefined,
+            groupLabel: undefined,
+            groupOrder: undefined,
             archived: false,
             hiddenInGrid: false,
             createdAt: Date.now(),
@@ -6828,21 +6966,11 @@ ${lineSvg}
           const o = String(clone.original || '').trim();
           if (o) queueMicrotask(() => scheduleCompanionPersistOriginalAny(plan.cloneId, o));
         }
-        for (const ids of groupPlans) {
-          const r = insertManualGroupForAssetIds(next, ids, {
-            allowTextAssets: opts?.allowTextAssetsForGrouping === true,
-          });
-          next = r.next;
-          if (r.createdGroup) {
-            const cg = r.createdGroup;
-            queueMicrotask(() => scheduleCompanionPersistOriginalAny(cg.id, cg.coverImage));
-          }
-        }
         return next;
       });
       return { rootIds, cloneTaskSeeds };
     },
-    [assets, setAssets, insertManualGroupForAssetIds, scheduleCompanionPersistOriginalAny]
+    [assets, setAssets, scheduleCompanionPersistOriginalAny]
   );
 
   /** 将资产添加到组的 assetIds 中 */
@@ -8387,7 +8515,6 @@ ${lineSvg}
             generateCount > 1
               ? expandRootAssetsForGenerateCount(effectiveIds, generateCount, {
                   allowTextAssetsForExpansion: allowTextAssetsForGenerateCount,
-                  allowTextAssetsForGrouping: allowTextAssetsForGenerateCount,
                 })
               : { rootIds: effectiveIds, cloneTaskSeeds: [] as Array<{ sourceAsset: WorkflowAsset; targetAssetId: string }> };
           const rootTasks: WorkflowPendingTask[] = [];
@@ -11809,7 +11936,6 @@ ${lineSvg}
             };
             const tasks: WorkflowPendingTask[] = [];
             const clonePlans: Array<{ sourceId: string; cloneId: string }> = [];
-            const groupPlans: string[][] = [];
             for (const t of promptTweakModal.targets) {
               if ('assetId' in t) {
                 tasks.push({
@@ -11841,11 +11967,9 @@ ${lineSvg}
                 if (generateCount > 1 && t.sourceGroupAssetId == null) {
                   const sourceAsset = assets.find((a) => a.id === t.assetId);
                   if (sourceAsset && !sourceAsset.parentAssetId) {
-                    const idsForGroup = [t.assetId];
                     for (let i = 1; i < generateCount; i += 1) {
                       const cloneId = uuid();
                       clonePlans.push({ sourceId: t.assetId, cloneId });
-                      idsForGroup.push(cloneId);
                       tasks.push({
                         id: uuid(),
                         assetId: cloneId,
@@ -11872,7 +11996,6 @@ ${lineSvg}
                         ...(t.inputText != null && t.inputText.trim() !== '' ? { inputText: t.inputText.trim() } : {}),
                       });
                     }
-                    if (idsForGroup.length > 1) groupPlans.push(idsForGroup);
                   }
                 }
               } else {
@@ -11912,6 +12035,9 @@ ${lineSvg}
                     ...src,
                     id: plan.cloneId,
                     parentAssetId: undefined,
+                    groupId: undefined,
+                    groupLabel: undefined,
+                    groupOrder: undefined,
                     archived: false,
                     hiddenInGrid: false,
                     createdAt: Date.now(),
@@ -11919,19 +12045,6 @@ ${lineSvg}
                   next.push(clone);
                   const o = String(clone.original || '').trim();
                   if (o) queueMicrotask(() => scheduleCompanionPersistOriginalAny(plan.cloneId, o));
-                }
-                const allowTextAssetsForGenerateCount =
-                  promptTweakModal.preset.category === 'text_to_text' ||
-                  promptTweakModal.preset.category === 'text_to_image';
-                for (const ids of groupPlans) {
-                  const r = insertManualGroupForAssetIds(next, ids, {
-                    allowTextAssets: allowTextAssetsForGenerateCount,
-                  });
-                  next = r.next;
-                  if (r.createdGroup) {
-                    const cg = r.createdGroup;
-                    queueMicrotask(() => scheduleCompanionPersistOriginalAny(cg.id, cg.coverImage));
-                  }
                 }
                 return next;
               });

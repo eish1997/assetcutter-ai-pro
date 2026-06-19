@@ -12,6 +12,7 @@ export const PERMISSIONS = Object.freeze({
   USERS_RECONCILE: 'users.reconcile',
   AUDIT_READ: 'audit.read',
   TASK_EVENTS_READ: 'task_events.read',
+  USAGE_READ: 'usage.read',
   SYSTEM_STATUS_READ: 'system_status.read',
   COMPANION_READ: 'companion.read',
   COMPANION_WRITE: 'companion.write',
@@ -50,6 +51,7 @@ export const DEFAULT_ROLE_PERMISSIONS = Object.freeze({
     PERMISSIONS.USERS_RECONCILE,
     PERMISSIONS.AUDIT_READ,
     PERMISSIONS.TASK_EVENTS_READ,
+    PERMISSIONS.USAGE_READ,
     PERMISSIONS.SYSTEM_STATUS_READ,
     PERMISSIONS.COMPANION_READ,
     PERMISSIONS.COMPANION_WRITE,
@@ -61,6 +63,7 @@ export const DEFAULT_ROLE_PERMISSIONS = Object.freeze({
     PERMISSIONS.USERS_READ,
     PERMISSIONS.AUDIT_READ,
     PERMISSIONS.TASK_EVENTS_READ,
+    PERMISSIONS.USAGE_READ,
   ],
 });
 

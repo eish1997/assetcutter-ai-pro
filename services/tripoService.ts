@@ -1,5 +1,12 @@
 import { prepareImageDataUrlForTripoUpload } from './tripoUploadImagePrep';
 import { apiUrl } from './apiBase';
+import { recordUsageEvent } from './recordUsageEvent';
+import {
+  DEFAULT_PRICE_CATALOG,
+  estimateUsageCostUsd,
+  findPriceCatalogEntry,
+} from './usageCost';
+import { resolveBillingSkuForTripoTask } from './usageBillingSku';
 
 export type TripoTaskType = 'text_to_model' | 'image_to_model' | 'multiview_to_model';
 export type TripoMultiviewKey = 'front' | 'back' | 'left' | 'right';
@@ -331,6 +338,21 @@ export async function createTripoTask(input: TripoCreateTaskInput): Promise<stri
     ).trim() ||
     String(data.id || '').trim();
   if (!taskId) throw new Error('Tripo 返回中缺少 task_id');
+  const billingSku = resolveBillingSkuForTripoTask(input.type);
+  const priceEntry = findPriceCatalogEntry(DEFAULT_PRICE_CATALOG, billingSku);
+  recordUsageEvent({
+    idempotencyKey: `tripo-task:${taskId}`,
+    provider: 'tripo',
+    billingSku,
+    meterKind: 'task',
+    quantity: 1,
+    unit: 'task',
+    upstreamTaskId: taskId,
+    costUsdEst: estimateUsageCostUsd(priceEntry, { meterKind: 'task', quantity: 1 }),
+    costConfidence: 'estimated',
+    status: 'succeeded',
+    meta: { taskType: input.type, modelVersion: input.modelVersion || null },
+  });
   return taskId;
 }
 

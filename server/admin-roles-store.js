@@ -193,6 +193,7 @@ async function migrateLegacyStaffUsers(roleIds) {
 async function migrateSidebarPermissionKeys() {
   const rules = [
     { ifHas: 'audit.read', add: 'task_events.read' },
+    { ifHas: 'audit.read', add: 'usage.read' },
     { ifHas: 'dashboard.read', add: 'system_status.read' },
   ];
   if (USE_POSTGRES) {

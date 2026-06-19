@@ -57,6 +57,10 @@ import {
   type AcGeminiQueueProgressDetail,
   type AcGeminiQueueRetryWaitDetail,
 } from './services/geminiQueueProgress';
+import { AC_WORKFLOW_RETRY_TASK_EVENT } from './services/workflowTaskRetry';
+import { shouldShowTripoRecoveryBanner, type GlobalLogEntry } from './services/globalLogFilter';
+import { GlobalLogFilterBar } from './components/globalLog/GlobalLogFilterBar';
+import { useGlobalLogFilter } from './hooks/useGlobalLogFilter';
 import {
   RIGHT_DOCK_LOG_BOTTOM,
   RIGHT_DOCK_LOG_PANEL_Z_INDEX,
@@ -347,6 +351,7 @@ const AdminUsersPanel = React.lazy(() => import('./components/admin/AdminUsersPa
 const AdminUserDetailPanel = React.lazy(() => import('./components/admin/AdminUserDetailPanel'));
 const AdminAuditLogsPanel = React.lazy(() => import('./components/admin/AdminAuditLogsPanel'));
 const AdminTaskEventsPanel = React.lazy(() => import('./components/admin/AdminTaskEventsPanel'));
+const AdminUsagePanel = React.lazy(() => import('./components/admin/AdminUsagePanel'));
 const AdminCapabilityPresetsPanel = React.lazy(() => import('./components/admin/AdminCapabilityPresetsPanel'));
 const AdminSystemStatusPanel = React.lazy(() => import('./components/admin/AdminSystemStatusPanel'));
 const AdminStaffInvitesPanel = React.lazy(() => import('./components/admin/AdminStaffInvitesPanel'));
@@ -535,6 +540,8 @@ const AdminAppShell: React.FC = () => {
             <AdminAuditLogsPanel />
           ) : pathname === '/admin/task-events' ? (
             <AdminTaskEventsPanel />
+          ) : pathname === '/admin/usage' ? (
+            <AdminUsagePanel />
           ) : pathname === '/admin/capability-presets' ? (
             <AdminCapabilityPresetsPanel />
           ) : pathname === '/admin/system-status' ? (
@@ -780,6 +787,7 @@ const MainApp: React.FC = () => {
   const userUiPrefs = useUserUiPrefs();
 
   const [mode, setMode] = useState<AppMode>(AppMode.WORKFLOW);
+  const [settingsScrollTarget, setSettingsScrollTarget] = useState<string | null>(null);
   useEffect(() => {
     if (!DIALOG_PAGE_ENABLED && mode === AppMode.DIALOG) {
       setMode(AppMode.WORKFLOW);
@@ -1261,6 +1269,9 @@ const MainApp: React.FC = () => {
   const [step, setStep] = useState<AppStep>(AppStep.T_PATTERN);
   const [tasks, setTasks] = useState<AppTask[]>([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const clearSettingsScrollTarget = useCallback(() => {
+    setSettingsScrollTarget(null);
+  }, []);
   /** 侧栏「实验性功能」分组：展开侧栏时默认折叠；进入实验性模块时自动展开 */
   const [experimentalNavExpanded, setExperimentalNavExpanded] = useState(false);
 
@@ -1281,8 +1292,23 @@ const MainApp: React.FC = () => {
   const [pickerFilter, setPickerFilter] = useState<AssetCategory | undefined>();
   const [pickerMultiSelect, setPickerMultiSelect] = useState(false);
   const [pickerCallback, setPickerCallback] = useState<(items: LibraryItem[]) => void>(() => {});
-  const [globalLogs, setGlobalLogs] = useState<Array<{ id: string; time: number; module: string; level: 'info' | 'warn' | 'error'; message: string; detail?: string }>>([]);
+  const [globalLogs, setGlobalLogs] = useState<GlobalLogEntry[]>([]);
+  const globalLogPreferenceScope = user?.id ?? null;
+  const {
+    filter: globalLogFilter,
+    patchFilter: patchGlobalLogFilter,
+    resetFilter: resetGlobalLogFilter,
+    filteredLogs: filteredGlobalLogs,
+    moduleCounts: globalLogModuleCounts,
+    isFilterDefault: isGlobalLogFilterDefault,
+  } = useGlobalLogFilter(globalLogs, globalLogPreferenceScope);
   const [globalLogOpen, setGlobalLogOpen] = useState(false);
+  const globalLogOpenRef = useRef(globalLogOpen);
+  useEffect(() => {
+    globalLogOpenRef.current = globalLogOpen;
+  }, [globalLogOpen]);
+  const [globalLogUnreadImportant, setGlobalLogUnreadImportant] = useState(0);
+  const [globalLogUnreadHasError, setGlobalLogUnreadHasError] = useState(false);
   const [globalLogCopiedId, setGlobalLogCopiedId] = useState<string | null>(null);
   const [tripoRecoveryContext, setTripoRecoveryContext] = useState<{
     presetId: string;
@@ -1293,11 +1319,47 @@ const MainApp: React.FC = () => {
     lastError: string;
   } | null>(null);
   const [tripoRecoveryActionRunning, setTripoRecoveryActionRunning] = useState<'resume' | 'new' | null>(null);
-  const addGlobalLog = useCallback((module: string, level: 'info' | 'warn' | 'error', message: string, detail?: string) => {
-    const now = Date.now();
-    setGlobalLogs(prev => [...prev.slice(-199), { id: Math.random().toString(36).slice(2, 11), time: now, module, level, message, detail }]);
-    void reportClientDebugLog({ time: now, module, level, message, ...(detail ? { detail } : {}) });
-  }, []);
+  const addGlobalLog = useCallback(
+    (
+      module: string,
+      level: 'info' | 'warn' | 'error',
+      message: string,
+      detail?: string,
+      meta?: { auditEventId?: string; retryable?: boolean }
+    ) => {
+      const now = Date.now();
+      setGlobalLogs((prev) => [
+        ...prev.slice(-199),
+        {
+          id: Math.random().toString(36).slice(2, 11),
+          time: now,
+          module,
+          level,
+          message,
+          ...(detail ? { detail } : {}),
+          ...(meta?.auditEventId ? { auditEventId: meta.auditEventId } : {}),
+          ...(meta?.retryable ? { retryable: true } : {}),
+        },
+      ]);
+      void reportClientDebugLog({ time: now, module, level, message, ...(detail ? { detail } : {}) });
+      if ((level === 'warn' || level === 'error') && !globalLogOpenRef.current) {
+        setGlobalLogUnreadImportant((n) => Math.min(n + 1, 99));
+        if (level === 'error') setGlobalLogUnreadHasError(true);
+      }
+    },
+    []
+  );
+
+  useEffect(() => {
+    if (!globalLogOpen) return;
+    setGlobalLogUnreadImportant(0);
+    setGlobalLogUnreadHasError(false);
+  }, [globalLogOpen]);
+
+  const showTripoRecoveryInLogPanel = useMemo(
+    () => shouldShowTripoRecoveryBanner(globalLogFilter, tripoRecoveryContext?.lastError),
+    [globalLogFilter, tripoRecoveryContext?.lastError]
+  );
 
   useEffect(() => {
     const onQueueProgress = (ev: Event) => {
@@ -4882,16 +4944,32 @@ const MainApp: React.FC = () => {
                       ? 'bg-[#1a3354] ring-2 ring-blue-500/45 text-blue-200'
                       : 'bg-[#16161a] ring-1 ring-white/[0.1] text-gray-200 hover:bg-[#1f1f24] hover:ring-blue-500/35'
                   }`}
-                  title={globalLogOpen ? '关闭日志' : '打开日志'}
-                  aria-label={globalLogOpen ? '关闭日志' : '打开日志'}
+                  title={
+                    globalLogOpen
+                      ? '关闭日志'
+                      : globalLogUnreadImportant > 0
+                        ? `打开日志（${globalLogUnreadImportant} 条未读警告/错误）`
+                        : '打开日志'
+                  }
+                  aria-label={
+                    globalLogOpen
+                      ? '关闭日志'
+                      : globalLogUnreadImportant > 0
+                        ? `打开日志，${globalLogUnreadImportant} 条未读警告或错误`
+                        : '打开日志'
+                  }
                 >
                   <svg viewBox="0 0 20 20" className="w-5 h-5" fill="none" aria-hidden>
                     <rect x="4" y="3.5" width="12" height="13" rx="1.8" stroke="currentColor" strokeWidth="1.5" />
                     <path d="M7 7h6M7 10h6M7 13h4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
                   </svg>
-                  {globalLogs.length > 0 ? (
-                    <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-blue-600 text-white text-[9px] leading-[18px] text-center border border-[#0f0f10]">
-                      {Math.min(globalLogs.length, 99)}
+                  {globalLogUnreadImportant > 0 ? (
+                    <span
+                      className={`absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full text-white text-[9px] leading-[18px] text-center border border-[#0f0f10] ${
+                        globalLogUnreadHasError ? 'bg-red-600' : 'bg-amber-600'
+                      }`}
+                    >
+                      {globalLogUnreadImportant > 99 ? '99+' : globalLogUnreadImportant}
                     </span>
                   ) : null}
                 </button>
@@ -4899,20 +4977,23 @@ const MainApp: React.FC = () => {
 
               {globalLogOpen ? (
                 <div
-                  className={`fixed ${RIGHT_DOCK_PANEL_BOTTOM} ${RIGHT_DOCK_RIGHT} w-[min(420px,calc(100vw-3rem))] max-h-[min(56vh,420px)] rounded-2xl bg-[#0f0f0f] ring-1 ring-white/[0.1] shadow-2xl overflow-hidden motion-reduce:shadow-none`}
+                  className={`fixed ${RIGHT_DOCK_PANEL_BOTTOM} ${RIGHT_DOCK_RIGHT} flex flex-col w-[min(420px,calc(100vw-3rem))] max-h-[min(64vh,500px)] rounded-2xl bg-[#0f0f0f] ring-1 ring-white/[0.1] shadow-2xl overflow-hidden motion-reduce:shadow-none`}
                   style={{ zIndex: RIGHT_DOCK_LOG_PANEL_Z_INDEX }}
                   role="dialog"
                   aria-label="全局日志"
                 >
-          <div className="px-4 py-3 border-b border-white/[0.06] bg-[#141416] flex items-center justify-between gap-3">
+          <div className="shrink-0 px-4 py-3 border-b border-white/[0.06] bg-[#141416] flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <span className="text-[11px] font-black uppercase tracking-wider text-white">运行日志</span>
-              <span className="text-[10px] text-gray-500">最近 {globalLogs.length} 条</span>
             </div>
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => setGlobalLogs([])}
+                onClick={() => {
+                  setGlobalLogs([]);
+                  setGlobalLogUnreadImportant(0);
+                  setGlobalLogUnreadHasError(false);
+                }}
                 className="px-2.5 py-1.5 rounded-lg border border-white/10 bg-white/5 text-[10px] text-gray-300 hover:bg-white/10 transition-colors"
               >
                 清空
@@ -4928,8 +5009,8 @@ const MainApp: React.FC = () => {
             </div>
           </div>
 
-          <div className="p-3 overflow-y-auto max-h-[min(48vh,340px)] no-scrollbar">
-            {tripoRecoveryContext ? (
+          <div className="flex-1 min-h-0 overflow-y-auto p-3 no-scrollbar">
+            {showTripoRecoveryInLogPanel && tripoRecoveryContext ? (
               <div className="mb-2 rounded-xl border border-amber-500/30 bg-amber-900/15 px-3 py-2">
                 <div className="text-[10px] font-black uppercase text-amber-200">Tripo 失败恢复</div>
                 <div className="mt-1 text-[10px] text-amber-100/90 leading-relaxed break-all">
@@ -4995,34 +5076,56 @@ const MainApp: React.FC = () => {
               <div className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-6 text-center text-[11px] text-gray-500">
                 暂无日志
               </div>
+            ) : filteredGlobalLogs.length === 0 ? (
+              <div className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-6 text-center text-[11px] text-gray-500">
+                无匹配日志，试试放宽筛选或点「重置筛选」
+              </div>
             ) : (
               <div className="space-y-2">
-                {[...globalLogs].reverse().map((log) => (
-                  <button
+                {[...filteredGlobalLogs].reverse().map((log) => (
+                  <div
                     key={log.id}
-                    type="button"
-                    onClick={async () => {
-                      const line = `[${new Date(log.time).toLocaleString()}] [${log.level.toUpperCase()}] [${log.module}] ${log.message}${log.detail ? `\n${log.detail}` : ''}`;
-                      try {
-                        await navigator.clipboard.writeText(line);
-                        setGlobalLogCopiedId(log.id);
-                        window.setTimeout(() => {
-                          setGlobalLogCopiedId((prev) => (prev === log.id ? null : prev));
-                        }, 1200);
-                      } catch {
-                        /* ignore clipboard permission issues */
-                      }
-                    }}
-                    className="w-full text-left rounded-xl ring-1 ring-white/[0.06] bg-[#141416] px-3 py-2.5 hover:bg-[#1a1a20] transition-colors"
-                    title="点击复制日志"
-                    aria-label="点击复制日志"
+                    className="rounded-xl ring-1 ring-white/[0.06] bg-[#141416] px-3 py-2.5"
                   >
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-[10px] text-gray-400">{new Date(log.time).toLocaleTimeString()}</span>
                       <div className="flex items-center gap-1.5">
-                        {globalLogCopiedId === log.id ? (
-                          <span className="text-[9px] text-emerald-300">已复制</span>
+                        {log.retryable &&
+                        log.auditEventId &&
+                        (log.level === 'warn' || log.level === 'error') ? (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              window.dispatchEvent(
+                                new CustomEvent(AC_WORKFLOW_RETRY_TASK_EVENT, {
+                                  detail: { auditEventId: log.auditEventId },
+                                })
+                              );
+                            }}
+                            className="text-[9px] px-1.5 py-0.5 rounded border border-emerald-500/40 bg-emerald-900/20 text-emerald-200 hover:bg-emerald-900/35 transition-colors"
+                          >
+                            重试
+                          </button>
                         ) : null}
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const line = `[${new Date(log.time).toLocaleString()}] [${log.level.toUpperCase()}] [${log.module}] ${log.message}${log.detail ? `\n${log.detail}` : ''}`;
+                            try {
+                              await navigator.clipboard.writeText(line);
+                              setGlobalLogCopiedId(log.id);
+                              window.setTimeout(() => {
+                                setGlobalLogCopiedId((prev) => (prev === log.id ? null : prev));
+                              }, 1200);
+                            } catch {
+                              /* ignore clipboard permission issues */
+                            }
+                          }}
+                          className="text-[9px] px-1.5 py-0.5 rounded border border-white/10 bg-white/5 text-gray-300 hover:bg-white/10 transition-colors"
+                        >
+                          {globalLogCopiedId === log.id ? '已复制' : '复制'}
+                        </button>
                         <span
                           className={`text-[10px] px-1.5 py-0.5 rounded border ${
                             log.level === 'error'
@@ -5040,11 +5143,21 @@ const MainApp: React.FC = () => {
                     {log.detail ? (
                       <div className="mt-1 text-[10px] text-gray-400 leading-relaxed break-all">{log.detail}</div>
                     ) : null}
-                  </button>
+                  </div>
                 ))}
               </div>
             )}
           </div>
+
+          <GlobalLogFilterBar
+            filter={globalLogFilter}
+            moduleCounts={globalLogModuleCounts}
+            filteredCount={filteredGlobalLogs.length}
+            totalCount={globalLogs.length}
+            showReset={!isGlobalLogFilterDefault}
+            onChange={patchGlobalLogFilter}
+            onReset={resetGlobalLogFilter}
+          />
                 </div>
               ) : null}
             </>,
@@ -5142,6 +5255,8 @@ const MainApp: React.FC = () => {
                   onAiInvocationSurfaceChange={() => setAiInvocationStatusRev((n) => n + 1)}
                   aiSettingsSyncRev={aiInvocationStatusRev}
                   activeWorkspaceProjectId={activeWorkspaceProjectId}
+                  scrollToSectionId={settingsScrollTarget}
+                  onScrollToSectionDone={clearSettingsScrollTarget}
                   preferenceScope={user?.id ?? null}
                   modelText={config.modelText}
                   onModelTextChange={handleModelTextChange}
@@ -5150,7 +5265,7 @@ const MainApp: React.FC = () => {
             )}
             {mode === AppMode.TEXTURE && <TextureEngineSection />}
 
-            {(activeWorkspaceProjectId || mode === AppMode.WORKFLOW) && (
+            {(activeWorkspaceProjectId || mode === AppMode.WORKFLOW) && mode === AppMode.WORKFLOW && (
               <div
                 className={
                   mode !== AppMode.WORKFLOW
@@ -5192,7 +5307,9 @@ const MainApp: React.FC = () => {
                       }}
                       pending={workflowPending}
                       onPendingChange={setWorkflowPending}
-                      onLog={(level, message, detail) => addGlobalLog('工作区', level, message, detail)}
+                      onLog={(level, message, detail, meta) =>
+                        addGlobalLog('工作区', level, message, detail, meta)
+                      }
                       onAddGenerate3DJob={handleAddGenerate3DJobFromWorkflow}
                       preferenceScope={user?.id ?? null}
                       onboardingKey={`${user?.id ?? 'guest'}:${activeWorkspaceProjectId}`}
