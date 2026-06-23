@@ -15,6 +15,7 @@ import {
 } from '../../services/auditLogTimeRange';
 import { CustomDropdown } from '../ui/CustomDropdown';
 import UsageEventsGroupedTable from '../usage/UsageEventsGroupedTable';
+import ObservabilityTraceDrawer from './ObservabilityTraceDrawer';
 import { fmtUsageSummaryCost } from '../../services/usageApi';
 
 const PAGE_SIZE = 50;
@@ -75,6 +76,7 @@ const AdminUsagePanel: React.FC = () => {
   const [nextCursor, setNextCursor] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState('');
+  const [traceTaskId, setTraceTaskId] = React.useState<string | null>(null);
 
   const load = React.useCallback(async () => {
     if (!canRead) return;
@@ -198,6 +200,10 @@ const AdminUsagePanel: React.FC = () => {
             showUser
             showProvider
             showConfidence
+            traceTaskHref={(taskId) =>
+              taskId ? `/admin/task-events?taskId=${encodeURIComponent(taskId)}` : null
+            }
+            onOpenTrace={(taskId) => setTraceTaskId(taskId)}
             emptyMessage="暂无用量记录。请登录后执行工作流 AI 任务（走代理或 Tripo 建任务）。"
           />
         </div>
@@ -213,6 +219,8 @@ const AdminUsagePanel: React.FC = () => {
           </div>
         ) : null}
       </div>
+
+      <ObservabilityTraceDrawer correlationId={traceTaskId} onClose={() => setTraceTaskId(null)} />
     </div>
   );
 };

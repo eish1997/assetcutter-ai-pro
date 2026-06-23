@@ -1,11 +1,7 @@
 import { prepareImageDataUrlForTripoUpload } from './tripoUploadImagePrep';
 import { apiUrl } from './apiBase';
-import { recordUsageEvent } from './recordUsageEvent';
-import {
-  DEFAULT_PRICE_CATALOG,
-  estimateUsageCostUsd,
-  findPriceCatalogEntry,
-} from './usageCost';
+import { emitMeteredUsage } from './observability/metering/pipeline';
+import { meterReadingFromTask } from './observability/metering/adapters/task';
 import { resolveBillingSkuForTripoTask } from './usageBillingSku';
 
 export type TripoTaskType = 'text_to_model' | 'image_to_model' | 'multiview_to_model';
@@ -338,20 +334,14 @@ export async function createTripoTask(input: TripoCreateTaskInput): Promise<stri
     ).trim() ||
     String(data.id || '').trim();
   if (!taskId) throw new Error('Tripo 返回中缺少 task_id');
-  const billingSku = resolveBillingSkuForTripoTask(input.type);
-  const priceEntry = findPriceCatalogEntry(DEFAULT_PRICE_CATALOG, billingSku);
-  recordUsageEvent({
-    idempotencyKey: `tripo-task:${taskId}`,
-    provider: 'tripo',
-    billingSku,
-    meterKind: 'task',
-    quantity: 1,
-    unit: 'task',
+  emitMeteredUsage({
+    reading: meterReadingFromTask({ provider: 'tripo', modality: '3d' }),
+    registryId: 'tripo',
+    billingSku: resolveBillingSkuForTripoTask(input.type),
+    idempotencyPrefix: `tripo-task:${taskId}`,
+    requestId: taskId,
     upstreamTaskId: taskId,
-    costUsdEst: estimateUsageCostUsd(priceEntry, { meterKind: 'task', quantity: 1 }),
-    costConfidence: 'estimated',
-    status: 'succeeded',
-    meta: { taskType: input.type, modelVersion: input.modelVersion || null },
+    extraMeta: { taskType: input.type, modelVersion: input.modelVersion || null },
   });
   return taskId;
 }

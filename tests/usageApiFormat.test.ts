@@ -34,6 +34,18 @@ function ev(partial: Partial<UsageEventRow> & Pick<UsageEventRow, 'billingSku' |
 }
 
 describe('usageApi formatters', () => {
+  it('recomputes 4K image output estimate from catalog', () => {
+    const row = ev({
+      billingSku: 'image.gemini.pro',
+      meterKind: 'token',
+      unit: 'token',
+      quantityOut: 2000,
+      costUsdEst: null,
+      meta: { usagePart: 'output', outputKind: 'token' },
+    });
+    expect(computeReferenceCostUsd(row)).toBeCloseTo(0.24, 5);
+  });
+
   it('shows unread token hint when metadata missing', () => {
     expect(fmtUsageQuantity(ev({ billingSku: 'llm.gemini.flash', meterKind: 'token', unit: 'token' }))).toBe(
       '未回传'
@@ -177,6 +189,18 @@ describe('usageApi formatters', () => {
       costUsdEst: null,
     });
     expect(fmtUsageEstimateCell(row)).toBe('自备 Key');
+  });
+
+  it('prefers catalog recompute for composite rows with stale stored cost', () => {
+    const row = ev({
+      billingSku: 'image.gemini.pro',
+      meterKind: 'token',
+      unit: 'token',
+      quantityOut: 2000,
+      costUsdEst: 0.024,
+      meta: { usagePart: 'output', outputKind: 'token' },
+    });
+    expect(fmtUsageEstimateCell(row)).toBe('$0.2400');
   });
 
   it('aggregates group estimate', () => {

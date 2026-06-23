@@ -5,6 +5,28 @@
  */
 
 import { getTencentCreds } from './settingsStore';
+import { emitMeteredUsage } from './observability/metering/pipeline';
+import { meterReadingFromTask } from './observability/metering/adapters/task';
+import { resolveBillingSkuForTencent3dTask } from './usageBillingSku';
+
+function emitTencent3dTaskMetered(
+  jobId: string,
+  module: 'pro' | 'rapid',
+  extraMeta?: Record<string, unknown>
+): void {
+  const id = String(jobId || '').trim();
+  if (!id) return;
+  emitMeteredUsage({
+    reading: meterReadingFromTask({ provider: 'tencent-hunyuan', modality: '3d' }),
+    registryId: module === 'rapid' ? 'tencent-hunyuan-3d-rapid' : 'tencent-hunyuan-3d-pro',
+    billingSku: resolveBillingSkuForTencent3dTask(module),
+    idempotencyPrefix: `tencent-3d:${id}`,
+    requestId: id,
+    upstreamTaskId: id,
+    jobKind: 'workflow_generate_3d',
+    extraMeta,
+  });
+}
 
 export interface TencentCredentials {
   secretId: string;
@@ -341,6 +363,10 @@ export async function submitHunyuanTo3DProJob(
   }
   const jobId = res.JobId as string;
   if (!jobId) throw new Error('未返回 JobId');
+  emitTencent3dTaskMetered(jobId, 'pro', {
+    model: input.model ?? null,
+    generateType: input.generateType ?? null,
+  });
   return jobId;
 }
 
@@ -459,6 +485,7 @@ export async function submitHunyuanTo3DRapidJob(
   if (res._isError) throw new Error(`[TencentError] ${res.code}: ${res.message}`);
   const jobId = res.JobId as string;
   if (!jobId) throw new Error('未返回 JobId');
+  emitTencent3dTaskMetered(jobId, 'rapid');
   return jobId;
 }
 

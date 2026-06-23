@@ -39,7 +39,10 @@ export type PriceCatalogEntry = {
   billingSku: string;
   meterKind: UsageMeterKind;
   inputPer1m?: number;
+  /** 文本/推理类输出 token 单价（USD / 1M） */
   outputPer1m?: number;
+  /** 生图 SKU 的图像输出 token 单价（USD / 1M）；缺省回退 outputPer1m */
+  imageOutputPer1m?: number;
   perUnit?: number;
   vendorSkuRef?: string;
   displayName?: string;

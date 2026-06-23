@@ -238,6 +238,21 @@ export function groupUsageEventsByTask(events: UsageEventRow[]): UsageTaskGroup[
   return groups.sort((a, b) => new Date(b.latestAt).getTime() - new Date(a.latestAt).getTime());
 }
 
+export function resolveUsageEventCostUsd(
+  ev: Pick<
+    UsageEventRow,
+    'billingSku' | 'meterKind' | 'quantityIn' | 'quantityOut' | 'quantity' | 'costUsdEst' | 'meta'
+  >
+): number | null {
+  const meta = ev.meta as { usagePart?: string } | null | undefined;
+  const ref = computeReferenceCostUsd(ev);
+  if (meta?.usagePart && ref != null && ref > 0) return ref;
+  if (ev.costUsdEst != null && Number.isFinite(ev.costUsdEst) && ev.costUsdEst > 0) {
+    return ev.costUsdEst;
+  }
+  return ref;
+}
+
 export function fmtUsageGroupEstimate(events: UsageEventRow[]): string {
   let sum = 0;
   let hasPriced = false;
@@ -245,10 +260,7 @@ export function fmtUsageGroupEstimate(events: UsageEventRow[]): string {
   for (const ev of events) {
     if (isUsageEventByok(ev)) continue;
     byokOnly = false;
-    const priced =
-      ev.costUsdEst != null && Number.isFinite(ev.costUsdEst) && ev.costUsdEst > 0
-        ? ev.costUsdEst
-        : computeReferenceCostUsd(ev);
+    const priced = resolveUsageEventCostUsd(ev);
     if (priced != null && priced > 0) {
       sum += priced;
       hasPriced = true;
@@ -268,24 +280,29 @@ export function isUsageEventByok(ev: Pick<UsageEventRow, 'meta' | 'idempotencyKe
 }
 
 export function computeReferenceCostUsd(
-  ev: Pick<UsageEventRow, 'billingSku' | 'meterKind' | 'quantityIn' | 'quantityOut' | 'quantity'>
+  ev: Pick<
+    UsageEventRow,
+    'billingSku' | 'meterKind' | 'quantityIn' | 'quantityOut' | 'quantity' | 'meta'
+  >
 ): number | null {
   const entry = findPriceCatalogEntry(DEFAULT_PRICE_CATALOG, ev.billingSku);
+  const meta = ev.meta as { usagePart?: string; outputKind?: string } | null | undefined;
   return estimateUsageCostUsd(entry, {
     meterKind: ev.meterKind as UsageMeterKind,
     quantityIn: ev.quantityIn,
     quantityOut: ev.quantityOut,
     quantity: ev.quantity,
+    imageOutputTokens:
+      meta?.usagePart === 'output' &&
+      ev.meterKind === 'token' &&
+      (meta?.outputKind === 'token' || meta?.outputKind === 'image'),
   });
 }
 
 export function fmtUsageEstimateCell(ev: UsageEventRow): string {
   if (isUsageEventByok(ev)) return '自备 Key';
-  if (ev.costUsdEst != null && Number.isFinite(ev.costUsdEst) && ev.costUsdEst > 0) {
-    return fmtUsageCostUsd(ev.costUsdEst);
-  }
-  const ref = computeReferenceCostUsd(ev);
-  if (ref != null && ref > 0) return fmtUsageCostUsd(ref);
+  const priced = resolveUsageEventCostUsd(ev);
+  if (priced != null && priced > 0) return fmtUsageCostUsd(priced);
   if (ev.costUsdEst === 0) return '$0';
   return '—';
 }

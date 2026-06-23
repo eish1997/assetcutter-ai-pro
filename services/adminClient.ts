@@ -413,6 +413,7 @@ export type TaskEventsQuery = {
   to?: string;
   level?: '' | 'info' | 'warn' | 'error';
   code?: string;
+  taskId?: string;
   cursor?: string;
 };
 
@@ -432,6 +433,7 @@ export async function fetchTaskExecutionEvents(query: TaskEventsQuery = {}) {
   if (query.to) params.set('to', query.to);
   if (query.level) params.set('level', query.level);
   if (query.code) params.set('code', query.code);
+  if (query.taskId) params.set('taskId', query.taskId);
   if (query.cursor) params.set('cursor', query.cursor);
   return requestJson<TaskEventsResponse>(apiUrl(`/api/admin/task-events?${params.toString()}`));
 }
@@ -457,6 +459,7 @@ export type UsageEventRow = {
   jobKind?: string | null;
   projectId?: string | null;
   workflowStepId?: string | null;
+  auditLogId?: string | null;
   createdAt: string;
   meta?: Record<string, unknown> | null;
 };
@@ -505,6 +508,30 @@ export async function fetchUsageSummary(query: Omit<UsageEventsQuery, 'limit' | 
   if (query.from) params.set('from', query.from);
   if (query.to) params.set('to', query.to);
   return requestJson<UsageSummaryResponse>(apiUrl(`/api/admin/usage-summary?${params.toString()}`));
+}
+
+export type ObservabilityTraceResponse = {
+  correlationId: string;
+  usage: {
+    events: UsageEventRow[];
+    total: number;
+    eventCount: number;
+    totalCostUsdEst: number;
+  };
+  taskEvents: {
+    events: TaskExecutionEvent[];
+    total: number;
+  };
+  redacted?: boolean;
+};
+
+export async function fetchObservabilityTrace(correlationId: string, limit = 100) {
+  const params = new URLSearchParams();
+  params.set('correlationId', correlationId);
+  params.set('limit', String(limit));
+  return requestJson<ObservabilityTraceResponse>(
+    apiUrl(`/api/admin/observability/trace?${params.toString()}`)
+  );
 }
 
 export type AdminSystemStatusPayload = {

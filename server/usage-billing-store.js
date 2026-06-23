@@ -41,11 +41,16 @@ function normalizeEventInput(userId, raw) {
 
   let costUsdEst = raw?.costUsdEst ?? raw?.cost_usd_est;
   if (costUsdEst === undefined && raw?.meta?.byok !== true) {
+    const meta = raw?.meta && typeof raw.meta === 'object' && !Array.isArray(raw.meta) ? raw.meta : null;
     costUsdEst = estimateCostFromCatalog(billingSku, {
       quantityIn,
       quantityOut,
       quantity,
       meterKind,
+      imageOutputTokens:
+        meta?.usagePart === 'output' &&
+        meterKind === 'token' &&
+        (meta?.outputKind === 'token' || meta?.outputKind === 'image'),
     });
   }
   if (raw?.meta?.byok === true) costUsdEst = null;
@@ -265,6 +270,16 @@ function usernameForUserId(db, userId) {
   return u?.username ? String(u.username) : '';
 }
 
+function usageEventMatchesCorrelationId(row, correlationId) {
+  const cid = String(correlationId || '').trim();
+  if (!cid) return true;
+  if (String(row.upstreamTaskId || '') === cid) return true;
+  if (String(row.requestId || '') === cid) return true;
+  const meta = row.meta;
+  if (meta && typeof meta === 'object' && String(meta.taskId || '') === cid) return true;
+  return false;
+}
+
 function buildUsageListQuery(query = {}) {
   const userFilter = String(query.userId || '').trim();
   const strictUserId = Boolean(query.strictUserId);
@@ -272,6 +287,7 @@ function buildUsageListQuery(query = {}) {
   const provider = String(query.provider || '').trim();
   const projectId = String(query.projectId || '').trim();
   const workflowStepId = String(query.workflowStepId || '').trim();
+  const correlationId = String(query.correlationId || '').trim();
   const fromIso = query.from ? new Date(query.from).toISOString() : '';
   const toIso = query.to ? new Date(query.to).toISOString() : '';
   const cursor = query.cursor || null;
@@ -295,6 +311,13 @@ function buildUsageListQuery(query = {}) {
   if (workflowStepId) {
     clauses.push(`e.workflow_step_id = $${i++}`);
     params.push(workflowStepId);
+  }
+  if (correlationId) {
+    clauses.push(
+      `(e.upstream_task_id = $${i} OR e.request_id = $${i} OR (e.meta_json IS NOT NULL AND e.meta_json::jsonb->>'taskId' = $${i}))`
+    );
+    params.push(correlationId);
+    i += 1;
   }
   if (billingSku) {
     clauses.push(`e.billing_sku = $${i++}`);
@@ -339,6 +362,12 @@ export function decodeUsageCursor(raw) {
   }
 }
 
+export async function listUsageEventsByCorrelationId(correlationId, query = {}) {
+  const cid = String(correlationId || '').trim();
+  if (!cid) return { events: [], total: 0, limit: 0, nextCursor: null };
+  return listUsageEventsForAdmin({ ...query, correlationId: cid, limit: query.limit ?? 100 });
+}
+
 export async function listUsageEventsForAdmin(query = {}) {
   const max = Math.min(100, Math.max(1, Number.parseInt(String(query.limit ?? '50'), 10) || 50));
 
@@ -372,6 +401,7 @@ export async function listUsageEventsForAdmin(query = {}) {
   const provider = String(query.provider || '').trim();
   const projectId = String(query.projectId || '').trim();
   const workflowStepId = String(query.workflowStepId || '').trim();
+  const correlationId = String(query.correlationId || '').trim();
   const fromMs = query.from ? new Date(query.from).getTime() : NaN;
   const toMs = query.to ? new Date(query.to).getTime() : NaN;
   const cursor = query.cursor || null;
@@ -395,6 +425,7 @@ export async function listUsageEventsForAdmin(query = {}) {
     }
     if (projectId && String(r.projectId || '') !== projectId) return false;
     if (workflowStepId && String(r.workflowStepId || '') !== workflowStepId) return false;
+    if (correlationId && !usageEventMatchesCorrelationId(r, correlationId)) return false;
     if (billingSku && r.billingSku !== billingSku) return false;
     if (provider && r.provider !== provider) return false;
     const ts = new Date(r.createdAt).getTime();

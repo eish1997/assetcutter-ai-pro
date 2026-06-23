@@ -68,6 +68,7 @@ import {
   RIGHT_DOCK_PANEL_BOTTOM,
   RIGHT_DOCK_RIGHT,
 } from './components/floatingDockConstants';
+import { isWorkflowEditableTarget } from './components/workflow/workflowDomUtils';
 import { ProgressivePreviewImage } from './components/ProgressivePreviewImage';
 import { DialogSessionRowBackdrop } from './components/DialogSessionRowBackdrop';
 import { SiteImage } from './components/SiteImage';
@@ -1355,6 +1356,21 @@ const MainApp: React.FC = () => {
     setGlobalLogUnreadImportant(0);
     setGlobalLogUnreadHasError(false);
   }, [globalLogOpen]);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'c' && e.key !== 'C') return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (isWorkflowEditableTarget(e.target)) return;
+      if (!globalLogOpenRef.current && document.documentElement.hasAttribute('data-ac-lightbox-raster-shortcuts')) {
+        return;
+      }
+      e.preventDefault();
+      setGlobalLogOpen((v) => !v);
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, []);
 
   const showTripoRecoveryInLogPanel = useMemo(
     () => shouldShowTripoRecoveryBanner(globalLogFilter, tripoRecoveryContext?.lastError),
@@ -4946,17 +4962,17 @@ const MainApp: React.FC = () => {
                   }`}
                   title={
                     globalLogOpen
-                      ? '关闭日志'
+                      ? '关闭日志（C）'
                       : globalLogUnreadImportant > 0
-                        ? `打开日志（${globalLogUnreadImportant} 条未读警告/错误）`
-                        : '打开日志'
+                        ? `打开日志（${globalLogUnreadImportant} 条未读警告/错误，快捷键 C）`
+                        : '打开日志（C）'
                   }
                   aria-label={
                     globalLogOpen
-                      ? '关闭日志'
+                      ? '关闭日志，快捷键 C'
                       : globalLogUnreadImportant > 0
-                        ? `打开日志，${globalLogUnreadImportant} 条未读警告或错误`
-                        : '打开日志'
+                        ? `打开日志，${globalLogUnreadImportant} 条未读警告或错误，快捷键 C`
+                        : '打开日志，快捷键 C'
                   }
                 >
                   <svg viewBox="0 0 20 20" className="w-5 h-5" fill="none" aria-hidden>

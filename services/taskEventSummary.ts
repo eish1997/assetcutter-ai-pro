@@ -9,6 +9,7 @@ export const TASK_EVENT_LEVEL_OPTIONS = [
 
 const CODE_LABELS: Record<string, string> = {
   RUN_TASK_SUCCESS: '任务成功',
+  RUN_TASK_EXECUTE: '开始执行',
   RUN_TASK_LIGHTBOX_DEFERRED_MISSING: '大图状态异常',
   RUN_TASK_LIGHTBOX_COMPOSITE_EMPTY: '大图合成空',
   RUN_TASK_LIGHTBOX_COMPOSITE_EXCEPTION: '大图合成异常',

@@ -16,15 +16,18 @@ import {
   getVectorengineBaseUrl,
 } from "./settingsStore";
 import { consumeTrialGeminiSlotBeforeProxyOrThrow } from "./trialGeminiQuota";
-import { recordUsageEvent } from "./recordUsageEvent";
-import { extractUsageMetadataFromProxyResult } from "../shared/extractUsageMetadata.js";
+import { emitMeteredUsage } from "./observability/metering/pipeline";
+import { meterReadingFromGeminiProxy } from "./observability/metering/adapters/gemini";
 import {
-  DEFAULT_PRICE_CATALOG,
-  buildGeminiProxyUsageDrafts,
-  estimateUsageCostUsd,
-  findPriceCatalogEntry,
-} from "./usageCost";
-import { resolveBillingSkuForGeminiModel, resolveProviderForGeminiPath } from "./usageBillingSku";
+  wrapGeminiClientWithChannelMetering,
+  stripMeteringConfigKeys,
+  resolveMeteringRegistryId,
+  type GeminiClientLike as MeteredGeminiClientLike,
+} from "./observability/metering/emitGeminiChannel";
+import {
+  isLikelyImageRegistryId,
+  resolveProviderForGeminiPath,
+} from "./observability/metering/resolveBillingSku";
 import type { UsageGeminiMetadata } from "../shared/usageBilling";
 import { getGeminiFairnessRequestHeaders } from "./geminiFairnessBridge";
 import { tryParseGeminiProxyFairnessRejected, throwFairnessRejected } from "./geminiProxyFairnessError";
@@ -519,12 +522,7 @@ function emitGeminiAsyncDoneNoQueueHint(jobId: string, tracker: GeminiAsyncPollT
   });
 }
 
-function isLikelyImageModel(modelOrRegistryId: string): boolean {
-  const m = String(modelOrRegistryId || "").toLowerCase();
-  return m.includes("image") || m.includes("flash-image") || m.includes("pro-image");
-}
-
-function recordGeminiProxyUsage(args: {
+function emitGeminiProxyMeteredUsage(args: {
   jobId: string;
   model: string;
   registryId?: string;
@@ -534,34 +532,19 @@ function recordGeminiProxyUsage(args: {
   jobKind?: string;
 }): void {
   const registryId = (args.registryId || args.model || "").trim();
-  const role = isLikelyImageModel(registryId) ? "image" : "text";
-  const usageMetadata =
-    args.usageMetadata ?? extractUsageMetadataFromProxyResult(args.proxyResult) ?? null;
-  const billingSku = resolveBillingSkuForGeminiModel(registryId, role);
-  const entry = findPriceCatalogEntry(DEFAULT_PRICE_CATALOG, billingSku);
-  const provider = resolveProviderForGeminiPath(args.useVertex);
-  const drafts = buildGeminiProxyUsageDrafts({ usageMetadata, role });
-
-  for (const draft of drafts) {
-    const costUsdEst = estimateUsageCostUsd(entry, draft.meter);
-    recordUsageEvent({
-      idempotencyKey: `gemini-async:${args.jobId}${draft.idempotencySuffix}`,
-      provider,
-      billingSku,
-      meterKind: draft.meter.meterKind,
-      quantityIn: draft.meter.quantityIn,
-      quantityOut: draft.meter.quantityOut,
-      quantity: draft.meter.quantity,
-      unit: draft.meter.unit,
+  if (!registryId) return;
+  emitMeteredUsage({
+    reading: meterReadingFromGeminiProxy({
       registryId,
-      jobKind: args.jobKind,
-      costUsdEst,
-      costConfidence: draft.meter.costConfidence,
-      requestId: args.jobId,
-      status: "succeeded",
-      meta: Object.keys(draft.meta).length ? draft.meta : undefined,
-    });
-  }
+      provider: resolveProviderForGeminiPath(args.useVertex),
+      usageMetadata: args.usageMetadata,
+      proxyResult: args.proxyResult,
+    }),
+    registryId,
+    idempotencyPrefix: `gemini-async:${args.jobId}`,
+    requestId: args.jobId,
+    jobKind: args.jobKind,
+  });
 }
 
 async function bulkProxyGenerateContentAsync(args: {
@@ -572,7 +555,7 @@ async function bulkProxyGenerateContentAsync(args: {
 }): Promise<{ text?: string; candidates?: unknown[]; usageMetadata?: UsageGeminiMetadata | null }> {
   const config = (args.config || {}) as Record<string, unknown>;
   const abortSignal = config.abortSignal as AbortSignal | undefined;
-  const safeConfig = { ...config };
+  const safeConfig = { ...(stripMeteringConfigKeys(config) || {}) };
   delete (safeConfig as { abortSignal?: AbortSignal }).abortSignal;
   const httpTimeout =
     Number((safeConfig.httpOptions as Record<string, unknown> | undefined)?.timeout) ||
@@ -583,7 +566,7 @@ async function bulkProxyGenerateContentAsync(args: {
   await consumeTrialGeminiSlotBeforeProxyOrThrow();
   await ensureGeminiProxySessionHint();
 
-  const bindingRegistryId = (args.registryId || args.model || "").trim();
+  const bindingRegistryId = resolveMeteringRegistryId({ model: args.model, config }) || (args.registryId || args.model || "").trim();
   const aiBackendExtra = bulkUsesVertexBackend(bindingRegistryId, "image")
     ? { aiBackend: "vertex" as const }
     : {};
@@ -657,9 +640,9 @@ async function bulkProxyGenerateContentAsync(args: {
     }
     if (j.status === "completed" && j.result != null) {
       emitGeminiAsyncDoneNoQueueHint(jobId, tracker);
-      const imageRole = isLikelyImageModel(bindingRegistryId);
+      const imageRole = isLikelyImageRegistryId(bindingRegistryId);
       const useVertex = bulkUsesVertexBackend(bindingRegistryId, imageRole ? "image" : "text");
-      recordGeminiProxyUsage({
+      emitGeminiProxyMeteredUsage({
         jobId,
         model: args.model,
         registryId: bindingRegistryId,
@@ -756,9 +739,9 @@ async function bulkProxyGenerateContentBatchAsync(args: {
         if (row?.ok !== true || !row.result) return;
         const bindingRegistryId = String(args.items[idx]?.model || "").trim();
         if (!bindingRegistryId) return;
-        const imageRole = isLikelyImageModel(bindingRegistryId);
+        const imageRole = isLikelyImageRegistryId(bindingRegistryId);
         const useVertex = bulkUsesVertexBackend(bindingRegistryId, imageRole ? "image" : "text");
-        recordGeminiProxyUsage({
+        emitGeminiProxyMeteredUsage({
           jobId: `${jobId}:${idx}`,
           model: args.items[idx]!.model,
           registryId: bindingRegistryId,
@@ -947,6 +930,30 @@ type GeminiClientLike = {
   };
 };
 
+function withStrippedClientConfig(client: GeminiClientLike): GeminiClientLike {
+  return {
+    models: {
+      async generateContent(args) {
+        return client.models.generateContent({
+          ...args,
+          config: stripMeteringConfigKeys(args.config),
+        });
+      },
+      ...(client.models.generateContentStream
+        ? {
+            async *generateContentStream(args) {
+              const stream = client.models.generateContentStream!({
+                ...args,
+                config: stripMeteringConfigKeys(args.config),
+              });
+              yield* stream;
+            },
+          }
+        : {}),
+    },
+  };
+}
+
 function createBulkProxyGeminiClient(): GeminiClientLike {
   return {
     models: {
@@ -954,7 +961,7 @@ function createBulkProxyGeminiClient(): GeminiClientLike {
         return bulkProxyGenerateContentAsync({
           model: args.model,
           contents: args.contents,
-          config: (args.config || {}) as Record<string, unknown>,
+          config: stripMeteringConfigKeys((args.config || {}) as Record<string, unknown>) || {},
         });
       },
     },
@@ -977,28 +984,34 @@ function getClientForChannel(channel: ChannelId): GeminiClientLike {
       if (!apiKey?.trim()) {
         throw new Error("使用 Gemini AI Studio 需先在设置中填写 Gemini API Key。");
       }
-      return new GoogleGenAI({ apiKey }) as unknown as GeminiClientLike;
+      return withStrippedClientConfig(new GoogleGenAI({ apiKey }) as unknown as GeminiClientLike);
     }
     case "toapis-gemini": {
       const k = getToapisApiKey();
       if (!k?.trim()) {
         throw new Error("ToAPIs Gemini 路径需先在设置中填写 ToAPIs API Key。");
       }
-      return createToapisGeminiClient(getToapisBaseUrl(), k) as unknown as GeminiClientLike;
+      return wrapGeminiClientWithChannelMetering(
+        createToapisGeminiClient(getToapisBaseUrl(), k) as unknown as MeteredGeminiClientLike,
+        "toapis"
+      );
     }
     case "toapis-openai": {
       const k = getToapisApiKey();
       if (!k?.trim()) {
         throw new Error("ToAPIs OpenAI 路径需先在设置中填写 ToAPIs API Key。");
       }
-      return createOpenAiGeminiClient(getToapisBaseUrl(), k) as unknown as GeminiClientLike;
+      return createOpenAiGeminiClient(getToapisBaseUrl(), k, { meteringProvider: "toapis" }) as unknown as GeminiClientLike;
     }
     case "vectorengine": {
       const k = getVectorengineApiKey();
       if (!k?.trim()) {
         throw new Error("VectorEngine 通道需先在设置中填写 API Key。");
       }
-      return createVectorengineGeminiClient(getVectorengineBaseUrl(), k) as unknown as GeminiClientLike;
+      return wrapGeminiClientWithChannelMetering(
+        createVectorengineGeminiClient(getVectorengineBaseUrl(), k) as unknown as MeteredGeminiClientLike,
+        "vectorengine"
+      );
     }
     case "openai-official": {
       const k = getOpenaiApiKey();
@@ -1025,7 +1038,7 @@ function getAIForImageModel(registryId: string): GeminiClientLike {
   }
   const apiKey = getUserApiKey();
   if (apiKey) {
-    return new GoogleGenAI({ apiKey }) as unknown as GeminiClientLike;
+    return withStrippedClientConfig(new GoogleGenAI({ apiKey }) as unknown as GeminiClientLike);
   }
   if (geminiImageBulkProxyConfigured()) {
     return createBulkProxyGeminiClient();
@@ -1247,13 +1260,20 @@ function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
 }
 
-function buildGeminiConfig<T extends Record<string, unknown>>(config: T, signal: AbortSignal, timeoutMs: number): T {
+function buildGeminiConfig<T extends Record<string, unknown>>(
+  config: T,
+  signal: AbortSignal,
+  timeoutMs: number,
+  meteringRegistryId?: string
+): T {
   const nextHttpOptions = {
     ...((config.httpOptions as Record<string, unknown> | undefined) ?? {}),
     timeout: timeoutMs,
   };
+  const registryId = (meteringRegistryId || '').trim();
   return {
     ...config,
+    ...(registryId ? { __meteringRegistryId: registryId } : {}),
     abortSignal: signal,
     httpOptions: nextHttpOptions,
   };
@@ -1857,7 +1877,7 @@ export async function detectObjectsInImage(base64Image: string, model = DEFAULT_
             required: ["id", "label", "box_2d"]
           }
         }
-      }, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)
+      }, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS, model)
     });
     const results = parseBoundingBoxJsonArrayFromModelText(response.text || "");
     return results.map((r) => {
@@ -1898,7 +1918,7 @@ export async function describeImageSubject(
           ],
         },
       ],
-      config: buildGeminiConfig({}, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)
+      config: buildGeminiConfig({}, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS, model)
     });
     const raw = (response.text || '').trim();
     if (!raw) throw new Error('Empty subject description');
@@ -1930,7 +1950,7 @@ export async function processTexture(base64Image, type: 'pattern' | 'tileable' |
           ],
         },
       ],
-      config: buildGeminiConfig({}, signal, timeoutMs)
+      config: buildGeminiConfig({}, signal, timeoutMs, model)
     });
 
     for (const part of response.candidates?.[0]?.content?.parts || []) {
@@ -1967,7 +1987,7 @@ export async function understandImageEditIntent(
       async (signal) => {
         const ai =
           strategy === "browser_google"
-            ? (new GoogleGenAI({ apiKey: getUserApiKey()! }) as unknown as GeminiClientLike)
+            ? withStrippedClientConfig(new GoogleGenAI({ apiKey: getUserApiKey()! }) as unknown as GeminiClientLike)
             : getAI();
         const systemPrompt = customPrompt || DEFAULT_PROMPTS.dialog_understand;
         const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [
@@ -1985,7 +2005,7 @@ export async function understandImageEditIntent(
         const response = await ai.models.generateContent({
           model: resolvedModel,
           contents: [{ role: 'user' as const, parts }],
-          config: buildGeminiConfig({ systemInstruction: systemPrompt }, signal, timeoutForThisRun),
+          config: buildGeminiConfig({ systemInstruction: systemPrompt }, signal, timeoutForThisRun, model),
         });
         const text = response.text?.trim();
         if (!text) throw new Error("Empty understanding response");
@@ -2082,7 +2102,7 @@ export async function dialogGenerateImage(
     const payload = {
       model: resolvedImageModel,
       contents: [{ role: 'user' as const, parts }],
-      config: buildGeminiConfig(config, signal, timeoutMs),
+      config: buildGeminiConfig(config, signal, timeoutMs, model),
     };
     const response = useBulkImageQueue
       ? await enqueueImageBatchGenerateContent({
@@ -2158,7 +2178,7 @@ export async function dialogGenerateImages(
     const response = await ai.models.generateContent({
       model: resolvedImageModel,
       contents: [{ role: 'user' as const, parts }],
-      config: buildGeminiConfig(config, signal, timeoutMs)
+      config: buildGeminiConfig(config, signal, timeoutMs, model)
     });
     const out = collectInlineImagesFromGeminiResponse(response);
     if (out.length === 0) {
@@ -2217,7 +2237,7 @@ export async function dialogGenerateImageMulti(
     const response = await ai.models.generateContent({
       model: resolvedImageModel,
       contents: [{ role: 'user' as const, parts }],
-      config: buildGeminiConfig(config, signal, timeoutMs)
+      config: buildGeminiConfig(config, signal, timeoutMs, model)
     });
     const images = collectInlineImagesFromGeminiResponse(response);
     if (images.length > 0) {
@@ -2261,7 +2281,7 @@ export async function generateSessionTitle(
     const response = await ai.models.generateContent({
       model: resolvedModel,
       contents: [{ role: 'user' as const, parts }],
-      config: buildGeminiConfig({}, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)
+      config: buildGeminiConfig({}, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS, model)
     });
     const out = response.text?.trim();
     if (!out) throw new Error('Empty title response');
@@ -2302,7 +2322,7 @@ export async function getDialogTextResponse(
     const response = await ai.models.generateContent({
       model: resolvedModel,
       contents: payload,
-      config: buildGeminiConfig(genConfig, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)
+      config: buildGeminiConfig(genConfig, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS, model)
     });
     const text = response.text?.trim();
     if (text == null) throw new Error('Empty text response');
@@ -2332,7 +2352,7 @@ export async function getSiteAssistantResponse(
     const response = await ai.models.generateContent({
       model: resolvedModel,
       contents,
-      config: buildGeminiConfig({ systemInstruction: SITE_ASSISTANT_SYSTEM }, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)
+      config: buildGeminiConfig({ systemInstruction: SITE_ASSISTANT_SYSTEM }, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS, model)
     });
     const text = response.text?.trim();
     if (text == null) throw new Error('助手未返回内容');
@@ -2364,7 +2384,7 @@ export async function getSiteAssistantResponseStream(
     const stream = await ai.models.generateContentStream({
       model: resolvedModel,
       contents,
-      config: buildGeminiConfig({ systemInstruction: SITE_ASSISTANT_SYSTEM }, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)
+      config: buildGeminiConfig({ systemInstruction: SITE_ASSISTANT_SYSTEM }, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS, model)
     });
     let full = '';
     for await (const chunk of stream) {
@@ -2409,7 +2429,7 @@ export async function generateArenaABPrompts(
           ],
         },
       ],
-      config: buildGeminiConfig({ responseMimeType: 'application/json' }, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)
+      config: buildGeminiConfig({ responseMimeType: 'application/json' }, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS, model)
     });
     const text = response.text?.trim();
     if (!text) throw new Error('Empty arena A/B response');
@@ -2473,7 +2493,7 @@ export async function optimizeLoserPrompt(
           parts: [{ text: sysOpt }, { text: userText }],
         },
       ],
-      config: buildGeminiConfig({ responseMimeType: 'application/json' }, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)
+      config: buildGeminiConfig({ responseMimeType: 'application/json' }, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS, model)
     });
     const text = response.text?.trim();
     if (!text) throw new Error('Empty optimize loser response');
@@ -2520,7 +2540,7 @@ export async function generateArenaPrompts(
           ],
         },
       ],
-      config: buildGeminiConfig({ responseMimeType: 'application/json' }, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)
+      config: buildGeminiConfig({ responseMimeType: 'application/json' }, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS, model)
     });
     const text = response.text?.trim();
     if (!text) throw new Error('Empty arena N response');
@@ -2574,7 +2594,7 @@ export async function generateNewChallenger(
           parts: [{ text: sysNc }, { text: userText }],
         },
       ],
-      config: buildGeminiConfig({ responseMimeType: 'application/json' }, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)
+      config: buildGeminiConfig({ responseMimeType: 'application/json' }, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS, model)
     });
     const text = response.text?.trim();
     if (!text) throw new Error('Empty new challenger response');
@@ -2613,7 +2633,7 @@ export async function parsePromptStructured(
           ],
         },
       ],
-      config: buildGeminiConfig({ responseMimeType: 'application/json' }, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)
+      config: buildGeminiConfig({ responseMimeType: 'application/json' }, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS, model)
     });
     const text = response.text?.trim();
     if (!text) throw new Error('Empty parse structured response');
@@ -2658,7 +2678,7 @@ export async function translateToChinese(
           ],
         },
       ],
-      config: buildGeminiConfig({}, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS)
+      config: buildGeminiConfig({}, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS, model)
     });
     const out = response.text?.trim();
     if (!out) throw new Error('Empty translation response');
@@ -2730,7 +2750,7 @@ Output ONLY the image.`;
       contents: [{ role: 'user' as const, parts }],
       config: buildGeminiConfig({
         imageConfig: { aspectRatio: '1:1' }
-      }, signal, timeoutMs)
+      }, signal, timeoutMs, modelId)
     });
 
     for (const part of response.candidates?.[0]?.content?.parts ?? []) {

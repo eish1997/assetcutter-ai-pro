@@ -77,7 +77,7 @@ import {
   readWorkflowAuditRing,
   WORKFLOW_AUDIT_CODES,
 } from '../services/workflowAuditEvents';
-import { clearUsageRecordContext, setUsageRecordContext } from '../services/usageRecordContext';
+import { clearCorrelationContext, setCorrelationContext } from '../services/observability/correlationContext';
 import {
   AC_WORKFLOW_RETRY_TASK_EVENT,
   buildPendingTaskFromRetrySnapshot,
@@ -2453,11 +2453,21 @@ ${lineSvg}
     videoMime?: string;
     vgpSteps?: VgpGenStepCapture[];
   }> => {
-    setUsageRecordContext({
-      projectId: workspaceProjectChrome?.activeProjectId?.trim() || undefined,
-      workflowStepId: String(task.actionType || '').trim() || undefined,
+    const runAudit = appendWorkflowAuditEvent({
+      level: 'info',
+      code: WORKFLOW_AUDIT_CODES.RUN_TASK_EXECUTE,
       assetId: task.assetId,
       taskId: task.id,
+      displayKey: task.inputSourceDisplayKey,
+      message: `[${getTaskLogLabel(task)}] 开始执行`,
+      detail: { actionType: task.actionType },
+    });
+    setCorrelationContext({
+      projectId: workspaceProjectChrome?.activeProjectId?.trim() || undefined,
+      actionType: String(task.actionType || '').trim() || undefined,
+      assetId: task.assetId,
+      correlationId: task.id,
+      auditEventId: runAudit.id,
     });
     try {
     const { actionType, inputImage, inputText } = task;
@@ -2825,7 +2835,7 @@ ${lineSvg}
       }
     }
     } finally {
-      clearUsageRecordContext();
+      clearCorrelationContext();
     }
   }, [
     actionModules,
@@ -7988,6 +7998,12 @@ ${lineSvg}
     },
     [lightboxAnnotationPrefsKey]
   );
+
+  useEffect(() => {
+    if (!lightboxAssetId || !lightboxRasterChrome) return;
+    document.documentElement.setAttribute('data-ac-lightbox-raster-shortcuts', '');
+    return () => document.documentElement.removeAttribute('data-ac-lightbox-raster-shortcuts');
+  }, [lightboxAssetId, lightboxRasterChrome]);
 
   useEffect(() => {
     if (!lightboxAssetId || !lightboxRasterChrome) return;

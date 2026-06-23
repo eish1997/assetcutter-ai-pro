@@ -21,6 +21,16 @@ import {
 import { coerceImageModelRegistryId } from "./modelRegistry/imageModels";
 import { SUPPORTED_IMAGE_SIZES } from "../types";
 import { WORKFLOW_IMAGE_GEN_PROMPT_OFFICIAL_MAX_CHARS } from "./workflowTextLimits";
+import { emitOpenAiMeteredUsage } from "./observability/metering/emitOpenAi";
+import {
+  OPENAI_STREAM_USAGE_KEY,
+  resolveMeteringRegistryId,
+} from "./observability/metering/emitGeminiChannel";
+import {
+  meterReadingFromOpenAiChat,
+  meterReadingFromOpenAiImage,
+  newOpenAiRequestId,
+} from "./observability/metering/adapters/openai";
 
 export function normalizeOpenAiBaseUrl(raw: string): string {
   const s = (raw || "").trim().replace(/\/+$/, "");
@@ -392,6 +402,7 @@ async function openAiChatGenerateContent(args: {
   contents: unknown;
   config?: Record<string, unknown>;
   signal?: AbortSignal;
+  meteringProvider?: string;
 }): Promise<{ text?: string; candidates?: unknown[] }> {
   const cfg = args.config || {};
   const systemInstruction = typeof cfg.systemInstruction === "string" ? cfg.systemInstruction : undefined;
@@ -428,6 +439,25 @@ async function openAiChatGenerateContent(args: {
   const parsed = parseOpenAiChatCompletionsBody(raw);
   const content = parsed.choices?.[0]?.message?.content;
   const text = typeof content === "string" ? content : content != null ? String(content) : "";
+  let parsedFull: unknown = null;
+  try {
+    parsedFull = JSON.parse(raw);
+  } catch {
+    parsedFull = null;
+  }
+  const requestId = newOpenAiRequestId();
+  const provider = args.meteringProvider || "openai-official";
+  const registryId = resolveMeteringRegistryId({ model: args.model, config: cfg });
+  emitOpenAiMeteredUsage({
+    registryId,
+    reading: meterReadingFromOpenAiChat({
+      registryId,
+      provider,
+      raw: parsedFull,
+    }),
+    requestId,
+    jobKind: "workflow_chat",
+  });
   return buildGeminiLikeTextResponse(text);
 }
 
@@ -467,6 +497,7 @@ async function openAiImageGenerateContent(args: {
   contents: unknown;
   config?: Record<string, unknown>;
   signal?: AbortSignal;
+  meteringProvider?: string;
 }): Promise<{ text?: string; candidates?: unknown[] }> {
   const cfg = args.config || {};
   const systemInstruction = typeof cfg.systemInstruction === "string" ? cfg.systemInstruction : "";
@@ -516,11 +547,30 @@ async function openAiImageGenerateContent(args: {
       )
     );
   }
+  const requestId = newOpenAiRequestId();
+  const provider = args.meteringProvider || "openai-official";
+  const registryId = resolveMeteringRegistryId({ model: args.model, config: args.config });
+  emitOpenAiMeteredUsage({
+    registryId,
+    reading: meterReadingFromOpenAiImage({
+      registryId,
+      provider,
+      raw: json,
+      generatedImage: true,
+    }),
+    requestId,
+    jobKind: "workflow_image",
+  });
   return officialOpenAiImageJsonToGeminiShape(json, signal);
 }
 
-export function createOpenAiGeminiClient(baseUrl: string, apiKey: string): GeminiClientLike {
+export function createOpenAiGeminiClient(
+  baseUrl: string,
+  apiKey: string,
+  options?: { meteringProvider?: string }
+): GeminiClientLike {
   const base = normalizeOpenAiBaseUrl(baseUrl);
+  const meteringProvider = options?.meteringProvider;
   return {
     models: {
       async generateContent(args) {
@@ -534,6 +584,7 @@ export function createOpenAiGeminiClient(baseUrl: string, apiKey: string): Gemin
             contents: args.contents,
             config: cfg,
             signal,
+            meteringProvider,
           });
         }
         return openAiChatGenerateContent({
@@ -543,6 +594,7 @@ export function createOpenAiGeminiClient(baseUrl: string, apiKey: string): Gemin
           contents: args.contents,
           config: cfg,
           signal,
+          meteringProvider,
         });
       },
       async *generateContentStream(args) {
@@ -555,6 +607,7 @@ export function createOpenAiGeminiClient(baseUrl: string, apiKey: string): Gemin
             contents: args.contents,
             config: cfg,
             signal: cfg.abortSignal as AbortSignal | undefined,
+            meteringProvider,
           });
           return;
         }
@@ -567,6 +620,9 @@ export function createOpenAiGeminiClient(baseUrl: string, apiKey: string): Gemin
           if (signal.aborted) throw new Error("请求已取消");
           signal.addEventListener("abort", () => ac.abort(), { once: true });
         }
+        const registryId = resolveMeteringRegistryId({ model: args.model, config: cfg });
+        const requestId = newOpenAiRequestId();
+        const provider = meteringProvider || "openai-official";
         const res = await fetch(`${base}/chat/completions`, {
           method: "POST",
           headers: {
@@ -577,6 +633,7 @@ export function createOpenAiGeminiClient(baseUrl: string, apiKey: string): Gemin
             model: mappedModel,
             messages,
             stream: true,
+            stream_options: { include_usage: true },
           }),
           signal: ac.signal,
         });
@@ -594,6 +651,8 @@ export function createOpenAiGeminiClient(baseUrl: string, apiKey: string): Gemin
         if (!reader) throw new Error("无法读取流式响应");
         const dec = new TextDecoder();
         let buf = "";
+        let streamUsage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | null =
+          null;
         for (;;) {
           const { done, value } = await reader.read();
           if (done) break;
@@ -606,13 +665,35 @@ export function createOpenAiGeminiClient(baseUrl: string, apiKey: string): Gemin
             const payload = s.slice(5).trim();
             if (payload === "[DONE]") continue;
             try {
-              const j = JSON.parse(payload) as { choices?: Array<{ delta?: { content?: string } }> };
+              const j = JSON.parse(payload) as {
+                choices?: Array<{ delta?: { content?: string } }>;
+                usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+              };
+              if (j.usage && typeof j.usage === "object") streamUsage = j.usage;
               const delta = j.choices?.[0]?.delta?.content;
-              if (delta) yield { text: delta };
+              if (delta) {
+                yield streamUsage
+                  ? { text: delta, [OPENAI_STREAM_USAGE_KEY]: streamUsage }
+                  : { text: delta };
+              } else if (streamUsage) {
+                yield { [OPENAI_STREAM_USAGE_KEY]: streamUsage };
+              }
             } catch {
               /* skip */
             }
           }
+        }
+        if (streamUsage) {
+          emitOpenAiMeteredUsage({
+            registryId,
+            reading: meterReadingFromOpenAiChat({
+              registryId,
+              provider,
+              raw: { usage: streamUsage },
+            }),
+            requestId,
+            jobKind: "workflow_chat",
+          });
         }
       },
     },

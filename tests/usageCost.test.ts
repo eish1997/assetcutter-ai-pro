@@ -69,6 +69,16 @@ describe('usageCost', () => {
     expect(drafts[1]!.meta).toMatchObject({ usagePart: 'output', outputKind: 'token' });
   });
 
+  it('estimates image output token cost at imageOutputPer1m', () => {
+    const entry = findPriceCatalogEntry(DEFAULT_PRICE_CATALOG, 'image.gemini.pro');
+    const cost = estimateUsageCostUsd(entry, {
+      meterKind: 'token',
+      quantityOut: 2_000,
+      imageOutputTokens: true,
+    });
+    expect(cost).toBeCloseTo(0.24, 5);
+  });
+
   it('estimates image input token cost from image sku token rates', () => {
     const entry = findPriceCatalogEntry(DEFAULT_PRICE_CATALOG, 'image.gemini.flash');
     const cost = estimateUsageCostUsd(entry, {

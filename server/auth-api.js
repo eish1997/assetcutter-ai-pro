@@ -52,6 +52,10 @@ import {
   parseAdminTaskEventsQuery,
   redactTaskEvents,
 } from './admin-task-events.js';
+import {
+  fetchObservabilityTraceByCorrelationId,
+  parseObservabilityTraceQuery,
+} from './admin-observability-trace.js';
 import { insertWorkflowTaskEvents } from './workflow-task-events-store.js';
 import {
   handleR2StorageRequest,
@@ -1442,6 +1446,26 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (path === '/api/admin/observability/trace' && req.method === 'GET') {
+      const staff = await requirePermission(req, res, PERMISSIONS.USAGE_READ);
+      if (!staff) return;
+      const u = new URL(req.url || '/', 'http://local');
+      const query = parseObservabilityTraceQuery(u.searchParams);
+      const correlationId = String(query.correlationId || '').trim();
+      if (!correlationId) {
+        json(res, 400, { error: '缺少 correlationId 或 taskId' });
+        return;
+      }
+      const trace = await fetchObservabilityTraceByCorrelationId(correlationId, query);
+      const redacted = isAuditorStaff(staff);
+      if (redacted) {
+        trace.taskEvents.events = redactTaskEvents(trace.taskEvents.events);
+        trace.redacted = true;
+      }
+      json(res, 200, trace);
+      return;
+    }
+
     if (path === '/api/admin/usage-events' && req.method === 'GET') {
       const staff = await requirePermission(req, res, PERMISSIONS.USAGE_READ);
       if (!staff) return;
@@ -1512,10 +1536,11 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (path === '/api/usage/summary' && req.method === 'GET') {
-      const user = await requireAuth(req, res);
-      if (!user) return;
+      const staff = await requirePermission(req, res, PERMISSIONS.USAGE_READ);
+      if (!staff) return;
       const u = new URL(req.url || '/', 'http://local');
-      const summary = await summarizeUsageForUser(user.id, {
+      const targetUserId = u.searchParams.get('userId') || staff.user.id;
+      const summary = await summarizeUsageForUser(targetUserId, {
         from: u.searchParams.get('from') || '',
         to: u.searchParams.get('to') || '',
         projectId: u.searchParams.get('projectId') || '',
@@ -1525,11 +1550,12 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (path === '/api/usage/events/list' && req.method === 'GET') {
-      const user = await requireAuth(req, res);
-      if (!user) return;
+      const staff = await requirePermission(req, res, PERMISSIONS.USAGE_READ);
+      if (!staff) return;
       const u = new URL(req.url || '/', 'http://local');
       const cursorRaw = u.searchParams.get('cursor') || '';
-      const result = await listUsageEventsForUser(user.id, {
+      const targetUserId = u.searchParams.get('userId') || staff.user.id;
+      const result = await listUsageEventsForUser(targetUserId, {
         limit: u.searchParams.get('limit') || 50,
         billingSku: u.searchParams.get('billingSku') || '',
         provider: u.searchParams.get('provider') || '',
@@ -1544,10 +1570,11 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (path === '/api/usage/events/export' && req.method === 'GET') {
-      const user = await requireAuth(req, res);
-      if (!user) return;
+      const staff = await requirePermission(req, res, PERMISSIONS.USAGE_READ);
+      if (!staff) return;
       const u = new URL(req.url || '/', 'http://local');
-      const { events } = await listUsageEventsForUser(user.id, {
+      const targetUserId = u.searchParams.get('userId') || staff.user.id;
+      const { events } = await listUsageEventsForUser(targetUserId, {
         limit: 2000,
         from: u.searchParams.get('from') || '',
         to: u.searchParams.get('to') || '',

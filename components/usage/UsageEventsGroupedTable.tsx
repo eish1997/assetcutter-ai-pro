@@ -15,6 +15,10 @@ type UsageEventsGroupedTableProps = {
   showUser?: boolean;
   showProvider?: boolean;
   showConfidence?: boolean;
+  /** 管理端：任务 ID → 任务执行页深链 */
+  traceTaskHref?: (taskId: string) => string | null;
+  /** 管理端：打开 Trace 侧栏 */
+  onOpenTrace?: (taskId: string) => void;
 };
 
 function shortId(id: string, max = 10): string {
@@ -31,6 +35,8 @@ const UsageEventsGroupedTable: React.FC<UsageEventsGroupedTableProps> = ({
   showUser = false,
   showProvider = false,
   showConfidence = false,
+  traceTaskHref,
+  onOpenTrace,
 }) => {
   const groups = React.useMemo(() => groupUsageEventsByTask(events), [events]);
   const colCount = 5 + (showUser ? 1 : 0) + (showProvider ? 1 : 0);
@@ -76,6 +82,29 @@ const UsageEventsGroupedTable: React.FC<UsageEventsGroupedTableProps> = ({
                   </p>
                   {multi ? (
                     <p className="text-[9px] text-amber-500/80 mt-0.5">{fmtUsageGroupEstimate(group.events)}</p>
+                  ) : null}
+                  {traceTaskHref && group.displayTaskId && group.displayTaskId !== '—' ? (
+                    <div className="flex flex-wrap gap-2 mt-1">
+                      {onOpenTrace ? (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onOpenTrace(group.displayTaskId);
+                          }}
+                          className="text-[9px] text-blue-400/90 hover:text-blue-300"
+                        >
+                          Trace
+                        </button>
+                      ) : null}
+                      <a
+                        href={traceTaskHref(group.displayTaskId) || '#'}
+                        className="text-[9px] text-emerald-400/90 hover:text-emerald-300"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        执行记录 →
+                      </a>
+                    </div>
                   ) : null}
                 </td>
               ) : null}

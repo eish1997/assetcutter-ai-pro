@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, Suspense, lazy } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { SidebarAccountAvatar } from './SidebarAccountAvatar';
 import { useUserUiPrefs } from '../hooks/useUserUiPrefs';
 import {
@@ -68,14 +68,9 @@ import {
   type FlatLocalInpaintCompositeStrategy,
 } from '../services/lightboxFlatLocalInpaintPrefs';
 
-import LazySectionFallback from './ui/LazySectionFallback';
-
-const LazyUsageSettingsPanel = lazy(() => import('./usage/UsageSettingsPanel'));
-
 const SETTINGS_NAV: { id: string; label: string }[] = [
   { id: 'settings-user', label: '用户' },
   { id: 'settings-storage', label: '数据与存储' },
-  { id: 'settings-usage', label: 'AI 用量' },
   { id: 'settings-companion', label: '本地伴侣' },
   { id: 'settings-api', label: 'API' },
 ];
@@ -129,7 +124,7 @@ const SettingsSection: React.FC<{
   aiSettingsSyncRev?: number;
   /** 当前打开的工作区项目 id；写入宿主包计算任务元数据便于排查（伴侣侧可不消费） */
   activeWorkspaceProjectId?: string | null;
-  /** 从侧栏用量卡片跳转时滚动到对应区块 */
+  /** 从侧栏跳转时滚动到对应区块 */
   scrollToSectionId?: string | null;
   onScrollToSectionDone?: () => void;
   /** 与 `WorkflowSection` 一致，用于全景贴回偏好键隔离 */
@@ -1631,10 +1626,6 @@ const SettingsSection: React.FC<{
                 </details>
               </div>
             </section>
-
-            <Suspense fallback={<LazySectionFallback label="AI 用量" />}>
-              <LazyUsageSettingsPanel userId={currentUser?.id ?? null} activeProjectId={activeWorkspaceProjectId} />
-            </Suspense>
 
             <section id="settings-api" className="scroll-mt-4 rounded-2xl border border-[#2e2e32] bg-[#121214] p-6">
               <h2 className="text-xs font-black uppercase tracking-wider text-blue-400/90 mb-4">API</h2>

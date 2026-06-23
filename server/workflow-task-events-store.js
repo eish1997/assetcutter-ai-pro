@@ -172,6 +172,7 @@ function buildPostgresTaskEventListQuery(query = {}) {
   const userFilter = String(query.userId || '').trim();
   const level = String(query.level || '').trim();
   const code = String(query.code || '').trim();
+  const taskId = String(query.taskId || '').trim();
   const fromMs = query.from ? new Date(query.from).getTime() : NaN;
   const toMs = query.to ? new Date(query.to).getTime() : NaN;
   const cursor = query.cursor || null;
@@ -191,6 +192,10 @@ function buildPostgresTaskEventListQuery(query = {}) {
     clauses.push(`e.code ILIKE $${i++}`);
     params.push(`%${code}%`);
   }
+  if (taskId) {
+    clauses.push(`e.task_id = $${i++}`);
+    params.push(taskId);
+  }
   if (Number.isFinite(fromMs)) {
     clauses.push(`e.ts >= $${i++}`);
     params.push(Math.floor(fromMs));
@@ -208,11 +213,18 @@ function buildPostgresTaskEventListQuery(query = {}) {
   return { fromSql, params, nextParamIndex: i };
 }
 
+export async function listWorkflowTaskEventsByTaskId(taskId, query = {}) {
+  const tid = String(taskId || '').trim();
+  if (!tid) return { events: [], total: 0, limit: 0, nextCursor: null };
+  return listWorkflowTaskEventsForAdmin({ ...query, taskId: tid, limit: query.limit ?? 100 });
+}
+
 export async function listWorkflowTaskEventsForAdmin(query = {}) {
   const max = Math.min(100, Math.max(1, Number.parseInt(String(query.limit ?? '50'), 10) || 50));
   const userFilter = String(query.userId || '').trim();
   const level = String(query.level || '').trim();
   const code = String(query.code || '').trim();
+  const taskId = String(query.taskId || '').trim();
   const fromMs = query.from ? new Date(query.from).getTime() : NaN;
   const toMs = query.to ? new Date(query.to).getTime() : NaN;
   const cursor = query.cursor || null;
@@ -255,6 +267,7 @@ export async function listWorkflowTaskEventsForAdmin(query = {}) {
     }
     if (level && r.level !== level) return false;
     if (code && !String(r.code).toLowerCase().includes(code.toLowerCase())) return false;
+    if (taskId && String(r.taskId || '') !== taskId) return false;
     if (Number.isFinite(fromMs) && r.tsMs < fromMs) return false;
     if (Number.isFinite(toMs) && r.tsMs > toMs) return false;
     if (cursor?.tsMs != null && cursor?.id) {

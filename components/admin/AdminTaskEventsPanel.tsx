@@ -15,6 +15,7 @@ import {
   type AuditTimePreset,
 } from '../../services/auditLogTimeRange';
 import { CustomDropdown } from '../ui/CustomDropdown';
+import ObservabilityTraceDrawer from './ObservabilityTraceDrawer';
 
 const PAGE_SIZE = 50;
 
@@ -25,6 +26,7 @@ type TaskFilters = {
   userId: string;
   level: '' | 'info' | 'warn' | 'error';
   code: string;
+  taskId: string;
 };
 
 function defaultFilters(): TaskFilters {
@@ -36,6 +38,7 @@ function defaultFilters(): TaskFilters {
     userId: '',
     level: '',
     code: '',
+    taskId: '',
   };
 }
 
@@ -43,6 +46,12 @@ function readUserIdFromUrl(): string {
   if (typeof window === 'undefined') return '';
   const params = new URLSearchParams(window.location.search);
   return params.get('userId')?.trim() || params.get('targetUserId')?.trim() || '';
+}
+
+function readTaskIdFromUrl(): string {
+  if (typeof window === 'undefined') return '';
+  const params = new URLSearchParams(window.location.search);
+  return params.get('taskId')?.trim() || params.get('correlationId')?.trim() || '';
 }
 
 function filtersToQuery(filters: TaskFilters, cursor?: string) {
@@ -54,6 +63,7 @@ function filtersToQuery(filters: TaskFilters, cursor?: string) {
     to: to || undefined,
     level: filters.level || undefined,
     code: filters.code.trim() || undefined,
+    taskId: filters.taskId.trim() || undefined,
     cursor,
   };
 }
@@ -62,7 +72,8 @@ const TaskEventDetailDrawer: React.FC<{
   event: TaskExecutionEvent | null;
   redacted?: boolean;
   onClose: () => void;
-}> = ({ event, redacted, onClose }) => {
+  onOpenTrace?: (taskId: string) => void;
+}> = ({ event, redacted, onClose, onOpenTrace }) => {
   if (!event) return null;
   return (
     <div className="fixed inset-0 z-[120] flex justify-end">
@@ -102,6 +113,15 @@ const TaskEventDetailDrawer: React.FC<{
             <div>
               <dt className="text-gray-500">任务 ID</dt>
               <dd className="text-gray-400 font-mono text-[10px] break-all">{event.taskId}</dd>
+              {onOpenTrace ? (
+                <button
+                  type="button"
+                  onClick={() => onOpenTrace(event.taskId!)}
+                  className="mt-1 text-[9px] text-blue-400/90 hover:text-blue-300"
+                >
+                  查看 Trace
+                </button>
+              ) : null}
             </div>
           ) : null}
           {!redacted && event.assetId ? (
@@ -127,7 +147,8 @@ const AdminTaskEventsPanel: React.FC = () => {
   const [draft, setDraft] = React.useState<TaskFilters>(() => {
     const base = defaultFilters();
     const userId = readUserIdFromUrl();
-    return userId ? { ...base, userId } : base;
+    const taskId = readTaskIdFromUrl();
+    return { ...base, ...(userId ? { userId } : {}), ...(taskId ? { taskId } : {}) };
   });
   const [applied, setApplied] = React.useState(draft);
   const [events, setEvents] = React.useState<TaskExecutionEvent[]>([]);
@@ -139,6 +160,7 @@ const AdminTaskEventsPanel: React.FC = () => {
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState('');
   const [selected, setSelected] = React.useState<TaskExecutionEvent | null>(null);
+  const [traceTaskId, setTraceTaskId] = React.useState<string | null>(null);
 
   const load = React.useCallback(async () => {
     setLoading(true);
@@ -306,6 +328,13 @@ const AdminTaskEventsPanel: React.FC = () => {
             onChange={(e) => setDraft((p) => ({ ...p, code: e.target.value }))}
             className="rounded-xl border border-[#343438] bg-[#1c1c22] px-3 py-2 text-[11px] text-white outline-none focus:border-[#3b82f6]"
           />
+          <input
+            type="text"
+            placeholder="任务 ID（correlationId）"
+            value={draft.taskId}
+            onChange={(e) => setDraft((p) => ({ ...p, taskId: e.target.value }))}
+            className="rounded-xl border border-[#343438] bg-[#1c1c22] px-3 py-2 text-[11px] text-white outline-none focus:border-[#3b82f6] font-mono"
+          />
         </div>
 
         <button
@@ -375,7 +404,16 @@ const AdminTaskEventsPanel: React.FC = () => {
         </div>
       )}
 
-      <TaskEventDetailDrawer event={selected} redacted={redactedView} onClose={() => setSelected(null)} />
+      <TaskEventDetailDrawer
+        event={selected}
+        redacted={redactedView}
+        onClose={() => setSelected(null)}
+        onOpenTrace={(taskId) => {
+          setSelected(null);
+          setTraceTaskId(taskId);
+        }}
+      />
+      <ObservabilityTraceDrawer correlationId={traceTaskId} onClose={() => setTraceTaskId(null)} />
     </div>
   );
 };

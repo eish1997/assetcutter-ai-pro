@@ -44,6 +44,8 @@
  *    - 生图响应若含 `data[0].b64_json` / `url`，与 ToAPIs 相同解析；否则再轮询 `id`。
  */
 
+import { OPENAI_STREAM_USAGE_KEY } from './observability/metering/emitGeminiChannel';
+
 const IMAGE_POLL_MS = 3000;
 const IMAGE_MAX_WAIT_MS = 600_000;
 /** ToAPIs 图像生成接口对 prompt 的长度限制（见各模型文档；过长时用 clampToapisImagePrompt 优先保留用户指令） */
@@ -775,6 +777,7 @@ export function createToapisGeminiClient(
             model: mappedModel,
             messages,
             stream: true,
+            stream_options: { include_usage: true },
           }),
           signal: ac.signal,
         });
@@ -794,6 +797,8 @@ export function createToapisGeminiClient(
         if (!reader) throw new Error('无法读取流式响应');
         const dec = new TextDecoder();
         let buf = '';
+        let streamUsage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | null =
+          null;
         for (;;) {
           const { done, value } = await reader.read();
           if (done) break;
@@ -806,9 +811,19 @@ export function createToapisGeminiClient(
             const payload = s.slice(5).trim();
             if (payload === '[DONE]') continue;
             try {
-              const j = JSON.parse(payload) as { choices?: Array<{ delta?: { content?: string } }> };
+              const j = JSON.parse(payload) as {
+                choices?: Array<{ delta?: { content?: string } }>;
+                usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+              };
+              if (j.usage && typeof j.usage === 'object') streamUsage = j.usage;
               const delta = j.choices?.[0]?.delta?.content;
-              if (delta) yield { text: delta };
+              if (delta) {
+                yield streamUsage
+                  ? { text: delta, [OPENAI_STREAM_USAGE_KEY]: streamUsage }
+                  : { text: delta };
+              } else if (streamUsage) {
+                yield { [OPENAI_STREAM_USAGE_KEY]: streamUsage };
+              }
             } catch {
               // skip bad chunk
             }

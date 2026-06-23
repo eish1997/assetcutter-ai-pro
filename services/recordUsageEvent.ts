@@ -1,7 +1,7 @@
 import type { UsageEventInput } from '../shared/usageBilling';
 import { apiUrl } from './apiBase';
 import { requestJson } from './httpClient';
-import { peekUsageRecordContext } from './usageRecordContext';
+import { peekCorrelationContext } from './observability/correlationContext';
 
 function logUsageSyncFailure(err: unknown): void {
   try {
@@ -25,15 +25,18 @@ function withByokMeta(input: UsageEventInput): UsageEventInput {
 }
 
 function mergeContext(input: UsageEventInput): UsageEventInput {
-  const ctx = peekUsageRecordContext();
+  const ctx = peekCorrelationContext();
+  const auditLogId = input.auditLogId ?? ctx.auditEventId;
   return {
     ...input,
     projectId: input.projectId ?? ctx.projectId,
-    workflowStepId: input.workflowStepId ?? ctx.workflowStepId,
+    workflowStepId: input.workflowStepId ?? ctx.actionType,
+    auditLogId,
     meta: {
       ...(input.meta || {}),
       ...(ctx.assetId ? { assetId: ctx.assetId } : {}),
-      ...(ctx.taskId ? { taskId: ctx.taskId } : {}),
+      ...(ctx.correlationId ? { taskId: ctx.correlationId } : {}),
+      ...(auditLogId ? { auditEventId: auditLogId } : {}),
     },
   };
 }

@@ -43,6 +43,7 @@ export function parseAdminTaskEventsQuery(searchParams) {
     to: searchParams.get('to') || '',
     level: searchParams.get('level') || '',
     code: searchParams.get('code') || '',
+    taskId: searchParams.get('taskId') || searchParams.get('correlationId') || '',
     cursor: searchParams.get('cursor') || '',
   };
 }

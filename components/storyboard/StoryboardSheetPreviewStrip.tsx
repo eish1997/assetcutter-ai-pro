@@ -39,6 +39,11 @@ function isGeneratedTaskTerminal(preview: StoryboardSheetPreviewItem): boolean {
   );
 }
 
+function canShowSheetCornerDelete(preview: StoryboardSheetPreviewItem): boolean {
+  if (isPreviewGenerating(preview) || isGeneratedTaskTerminal(preview)) return false;
+  return preview.source === 'uploaded' || preview.source === 'generated';
+}
+
 /** 拼图多为横向 contact sheet，需完整显示；每行 5 张均分宽度 */
 const SHEET_PREVIEW_CARD =
   'relative h-[4.25rem] w-full min-w-0 overflow-hidden rounded-lg ring-1 ring-white/[0.08]';
@@ -346,7 +351,7 @@ export default function StoryboardSheetPreviewStrip({
                     <AppIcon name="close" className="h-3 w-3" />
                   </button>
                 ) : null}
-                {!readOnly && onDeleteSheet && preview.source === 'uploaded' ? (
+                {!readOnly && onDeleteSheet && canShowSheetCornerDelete(preview) ? (
                   <button
                     type="button"
                     aria-label="删除拼图"

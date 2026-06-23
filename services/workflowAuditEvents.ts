@@ -70,6 +70,8 @@ export const WORKFLOW_AUDIT_CODES = {
   RUN_TASK_BRANCH_CUT_NO_MODULE: 'RUN_TASK_BRANCH_CUT_NO_MODULE',
   /** 队列 processTask 外层异常 */
   RUN_TASK_PROCESS_EXCEPTION: 'RUN_TASK_PROCESS_EXCEPTION',
+  /** `runTask` 开始执行（关联用量 audit_log_id） */
+  RUN_TASK_EXECUTE: 'RUN_TASK_EXECUTE',
   /** 用户从运行日志触发重试 */
   RUN_TASK_RETRY: 'RUN_TASK_RETRY',
   /** 队列任务执行成功 */
