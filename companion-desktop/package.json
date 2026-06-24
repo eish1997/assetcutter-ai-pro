@@ -1,7 +1,7 @@
 {
   "name": "@assetcutter/companion-desktop",
   "private": true,
-  "version": "0.1.9",
+  "version": "0.2.1",
   "author": "AssetCutter Team",
   "description": "本地伴侣桌面壳：托盘、设置内配对、启动 local-companion",
   "main": "main.cjs",
