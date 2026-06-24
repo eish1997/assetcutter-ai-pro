@@ -1,7 +1,7 @@
 import { apiUrl } from './apiBase';
 import { requestJson } from './httpClient';
 
-export type CompanionArtifactKind = 'desktop_shell' | 'host_plugin_bundle';
+export type CompanionArtifactKind = 'desktop_shell' | 'host_plugin_bundle' | 'shell_tool_bundle';
 
 export type CompanionArtifactSummary = {
   id: string;
@@ -21,7 +21,7 @@ export type CompanionArtifactSummary = {
   label: string;
   publishedAt: string;
   /**
-   * 仅 kind=host_plugin_bundle 且服务端配置 COMPANION_DIST_PUBLIC_HTTP_BASE 时有值；
+   * kind 为 host_plugin_bundle / shell_tool_bundle 且服务端配置 COMPANION_DIST_PUBLIC_HTTP_BASE 时有值；
    * 直链 https，供桌面壳调伴侣 install-from-url（下载主机可能需在伴侣侧 COMPANION_HOST_BUNDLE_TRUST_HOSTS 白名单）。
    */
   publicInstallUrl?: string;

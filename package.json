@@ -21,6 +21,8 @@
     "dev:companion-sam-stack": "node scripts/dev-companion-sam-stack.mjs",
     "pack:sam-local-bundle": "node scripts/pack-sam-local-host-bundle.mjs",
     "smoke:host-bundle-catalog": "node scripts/smoke-host-bundle-catalog.mjs",
+    "validate:shell-tools": "npx --yes -p tsx tsx scripts/validate-shell-tools.ts",
+    "pack:shell-tool": "npx --yes -p tsx tsx scripts/pack-shell-tool.mjs",
     "restart:local-stack": "powershell -NoProfile -ExecutionPolicy Bypass -File \"scripts/restart-local-stack.ps1\"",
     "restart:local-companion": "powershell -NoProfile -ExecutionPolicy Bypass -File \"scripts/restart-local-companion.ps1\"",
     "dev:all": "concurrently -n main,seam,auth -c blue,green,magenta \"npm run dev\" \"npm run dev:seam-backend\" \"npm run dev:auth-backend\"",

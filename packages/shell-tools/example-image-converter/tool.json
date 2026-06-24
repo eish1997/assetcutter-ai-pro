@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "image-format-converter",
+  "name": "图片格式转换",
+  "description": "为指定文件夹内图片批量转换格式（示例小工具包）",
+  "semver": "1.0.0",
+  "icon": "assets/icon.png",
+  "launch": {
+    "kind": "shell_module",
+    "module": "module/panel.json"
+  },
+  "run": {
+    "command": ["node", "scripts/convert.mjs"],
+    "cwd": ".",
+    "paramsMode": "env",
+    "timeoutMs": 600000
+  },
+  "permissions": ["path.pick", "tool.run"],
+  "tags": ["图片", "格式转换", "示例"],
+  "minCompanionSemver": "0.1.0"
+}

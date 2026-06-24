@@ -90,6 +90,8 @@ let companion = null;
 let tray = null;
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
+/** @type {Map<string, BrowserWindow>} */
+const shellToolWindows = new Map();
 /** @type {import('electron').BrowserView | null} */
 let workbenchBrowserView = null;
 /** 避免给同一 BrowserView 重复注册 `did-finish-load` */
@@ -529,6 +531,13 @@ function semverRemoteGreater(remote, local) {
     if (a < b) return false;
   }
   return false;
+}
+
+async function fetchShellToolCatalogFromSite() {
+  const r = await fetchHostBundleCatalogFromSite();
+  if (!r.ok) return r;
+  const artifacts = (r.artifacts || []).filter((a) => a && a.kind === 'shell_tool_bundle');
+  return { ok: true, artifacts };
 }
 
 async function fetchHostBundleCatalogFromSite() {
@@ -1280,6 +1289,16 @@ async function startLocalCompanion() {
   applyDesktopSamLocalSpawnEnv(env);
   applyDesktopRembgPythonToEnv(env);
   applyDesktopPaddleOcrToEnv(env);
+  try {
+    if (!app.isPackaged) {
+      const exampleDir = path.resolve(__dirname, '..', 'packages', 'shell-tools', 'example-image-converter');
+      if (fs.existsSync(path.join(exampleDir, 'tool.json'))) {
+        env.COMPANION_SHELL_TOOL_EXAMPLE_DIR = exampleDir;
+      }
+    }
+  } catch {
+    /* ignore */
+  }
 
   /** 父进程/系统环境若带 `COMPANION_HTTP_PORT=0`（常为 Relay 子进程约定），子进程会按「关闭 HTTP」立即 exit(1) */
   if (String(env.COMPANION_HTTP_PORT ?? '').trim() === '0') {
@@ -1876,6 +1895,64 @@ function openMainWindow() {
   void mainWindow.loadFile(shellHtml);
 }
 
+function openShellToolWindow(toolIdRaw) {
+  const toolId = String(toolIdRaw || '').trim();
+  if (!/^[a-z][a-z0-9-]{1,63}$/.test(toolId)) {
+    return { ok: false, error: 'invalid_tool_id' };
+  }
+
+  const existing = shellToolWindows.get(toolId);
+  if (existing && !existing.isDestroyed()) {
+    if (existing.isMinimized()) existing.restore();
+    existing.show();
+    existing.focus();
+    return { ok: true, reused: true, toolId };
+  }
+
+  const win = new BrowserWindow({
+    width: 420,
+    height: 540,
+    minWidth: 360,
+    minHeight: 400,
+    frame: false,
+    autoHideMenuBar: true,
+    backgroundColor: '#0c0c0e',
+    show: false,
+    title: '工具',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload-tool-window.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+
+  shellToolWindows.set(toolId, win);
+  win.on('closed', () => {
+    if (shellToolWindows.get(toolId) === win) shellToolWindows.delete(toolId);
+  });
+
+  const html = path.join(__dirname, 'shell', 'tool-window.html');
+  void win.loadFile(html, { query: { toolId } });
+  win.once('ready-to-show', () => {
+    if (!win.isDestroyed()) win.show();
+  });
+  return { ok: true, toolId };
+}
+
+function closeShellToolWindow(toolIdRaw) {
+  const toolId = String(toolIdRaw || '').trim();
+  if (!/^[a-z][a-z0-9-]{1,63}$/.test(toolId)) {
+    return { ok: false, error: 'invalid_tool_id' };
+  }
+  const existing = shellToolWindows.get(toolId);
+  if (existing && !existing.isDestroyed()) {
+    existing.close();
+    return { ok: true, closed: true, toolId };
+  }
+  return { ok: true, closed: false, toolId };
+}
+
 function buildTray() {
   tray = new Tray(createTrayIcon());
   updateTrayTooltip();
@@ -2119,8 +2196,82 @@ if (!gotLock) {
     return { ok: true };
   });
 
+  ipcMain.handle('shell-open-tool-window', async (_e, toolId) => {
+    try {
+      return openShellToolWindow(toolId);
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  });
+
+  ipcMain.handle('shell-close-tool-window', async (_e, toolId) => {
+    try {
+      return closeShellToolWindow(toolId);
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  });
+
+  ipcMain.handle('shell-builtin-example-available', () => {
+    try {
+      const exampleDir = path.resolve(__dirname, '..', 'packages', 'shell-tools', 'example-image-converter');
+      const toolJsonPath = path.join(exampleDir, 'tool.json');
+      if (!fs.existsSync(toolJsonPath)) {
+        return { ok: true, available: false };
+      }
+      const tool = JSON.parse(fs.readFileSync(toolJsonPath, 'utf8'));
+      return {
+        ok: true,
+        available: true,
+        toolId: String(tool.id || '').trim(),
+        name: String(tool.name || '').trim(),
+        description: String(tool.description || '').trim(),
+        semver: String(tool.semver || '').trim(),
+        tags: Array.isArray(tool.tags) ? tool.tags : [],
+      };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e), available: false };
+    }
+  });
+
+  ipcMain.handle('shell-tool-window-minimize', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (win && !win.isDestroyed()) {
+      win.minimize();
+      return { ok: true };
+    }
+    return { ok: false, error: 'window_not_found' };
+  });
+
+  ipcMain.handle('shell-tool-window-close', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (win && !win.isDestroyed()) {
+      win.close();
+      return { ok: true };
+    }
+    return { ok: false, error: 'window_not_found' };
+  });
+
+  ipcMain.handle('shell-tool-window-toggle-pin', (event, pinned) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win || win.isDestroyed()) return { ok: false, error: 'window_not_found' };
+    const on = Boolean(pinned);
+    win.setAlwaysOnTop(on, 'screen-saver');
+    if (process.platform === 'darwin') {
+      win.setVisibleOnAllWorkspaces(on, { visibleOnFullScreen: true });
+    }
+    return { ok: true, pinned: win.isAlwaysOnTop() };
+  });
+
+  ipcMain.handle('shell-tool-window-get-pin', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win || win.isDestroyed()) return { ok: false, error: 'window_not_found' };
+    return { ok: true, pinned: win.isAlwaysOnTop() };
+  });
+
   ipcMain.handle('shell-set-view', async (_e, view) => {
-    const v = view === 'workbench' || view === 'settings' || view === 'home' ? view : 'home';
+    const v =
+      view === 'workbench' || view === 'settings' || view === 'home' || view === 'tools' ? view : 'home';
     shellMainProcessActiveView = v;
     if (!mainWindow || mainWindow.isDestroyed()) return { ok: true, view: v };
     if (v === 'workbench') {
@@ -2227,6 +2378,27 @@ if (!gotLock) {
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e), artifacts: [] };
     }
+  });
+
+  ipcMain.handle('shell-fetch-shell-tool-catalog', async () => {
+    try {
+      return await fetchShellToolCatalogFromSite();
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e), artifacts: [] };
+    }
+  });
+
+  ipcMain.handle('shell-pick-path', async (event, opts) => {
+    const pick = opts && opts.pick === 'file' ? 'file' : 'directory';
+    const win = BrowserWindow.fromWebContents(event.sender) || mainWindow;
+    const properties =
+      pick === 'file' ? ['openFile'] : ['openDirectory', 'createDirectory'];
+    const r = await dialog.showOpenDialog(win || undefined, {
+      title: pick === 'file' ? '选择文件' : '选择文件夹',
+      properties,
+    });
+    if (r.canceled || !r.filePaths[0]) return { ok: false, canceled: true };
+    return { ok: true, path: r.filePaths[0] };
   });
 
   ipcMain.handle('shell-sam-local-desktop-state', () => {

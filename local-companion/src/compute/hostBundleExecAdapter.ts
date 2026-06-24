@@ -3,15 +3,13 @@
  * 命令行仅来自磁盘上的 run.json，请求体只能指定 inputs.dirName（host-bundles 下目录名）。
  */
 
-import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import { readHostBundleRunSpecSync } from '../hostBundleRunSpec.js';
+import { mergeProcessEnv, runSpawnWithTimeout } from '../subprocessRun.js';
 import { ensureRepositoryRoot } from '../repositoryVolume.js';
 
 export const HOST_BUNDLE_ADAPTER_ID = 'host_bundle@v0.1.0';
-
-const CAP_OUT = 64 * 1024;
 
 function bundlesRoot(): string {
   return join(ensureRepositoryRoot(), 'host-bundles');
@@ -59,81 +57,6 @@ function resolveWorkDir(bundlePath: string, cwdRel: string | undefined): { ok: s
     return { error: 'cwd 超出 extracted 根目录' };
   }
   return { ok: resolved };
-}
-
-function mergeEnv(base: NodeJS.ProcessEnv, extra?: Record<string, string>): NodeJS.ProcessEnv {
-  if (!extra || Object.keys(extra).length === 0) return { ...base };
-  return { ...base, ...extra };
-}
-
-function appendCap(buf: string, chunk: string): string {
-  const next = buf + chunk;
-  if (next.length <= CAP_OUT) return next;
-  return `${next.slice(0, CAP_OUT)}\n…[truncated ${next.length - CAP_OUT} chars]`;
-}
-
-function runSpawn(
-  command: string[],
-  cwd: string,
-  env: NodeJS.ProcessEnv,
-  timeoutMs: number,
-): Promise<{ exitCode: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }> {
-  return new Promise((resolveP, rejectP) => {
-    let child: ChildProcess;
-    try {
-      child = spawn(command[0]!, command.slice(1), {
-        cwd,
-        env,
-        windowsHide: true,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-    } catch (e) {
-      rejectP(e instanceof Error ? e : new Error(String(e)));
-      return;
-    }
-
-    const out = child.stdout;
-    const err = child.stderr;
-    if (!out || !err) {
-      rejectP(new Error('stdio pipe 不可用'));
-      return;
-    }
-
-    let stdout = '';
-    let stderr = '';
-    out.setEncoding('utf8');
-    err.setEncoding('utf8');
-    out.on('data', (c: string) => {
-      stdout = appendCap(stdout, c);
-    });
-    err.on('data', (c: string) => {
-      stderr = appendCap(stderr, c);
-    });
-
-    const timer = setTimeout(() => {
-      try {
-        child.kill('SIGTERM');
-      } catch {
-        /* ignore */
-      }
-      setTimeout(() => {
-        try {
-          child.kill('SIGKILL');
-        } catch {
-          /* ignore */
-        }
-      }, 2000).unref?.();
-    }, timeoutMs);
-
-    child.on('error', (err) => {
-      clearTimeout(timer);
-      rejectP(err);
-    });
-    child.on('close', (code, signal) => {
-      clearTimeout(timer);
-      resolveP({ exitCode: code, signal, stdout, stderr });
-    });
-  });
 }
 
 export async function runHostBundlePhase(input: {
@@ -184,8 +107,8 @@ export async function runHostBundlePhase(input: {
   }
 
   try {
-    const env = mergeEnv(process.env, block.env);
-    const out = await runSpawn(cmd, wd.ok, env, execTimeoutMs());
+    const env = mergeProcessEnv(process.env, block.env);
+    const out = await runSpawnWithTimeout(cmd, wd.ok, env, execTimeoutMs());
     return {
       ok: {
         bundleDir: dirName,

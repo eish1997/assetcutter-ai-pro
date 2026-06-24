@@ -23,7 +23,7 @@ const { Pool } = pg;
 let companionPool = null;
 let companionPgReady = false;
 
-/** @typedef {{ id: string, kind: 'desktop_shell' | 'host_plugin_bundle', semver: string, channel: string, platform: string, fileName: string, r2Key: string, sha256: string, bytes: number, notes: string, label: string, publishedAt: string, createdByUserId: string }} CompanionArtifactV1 */
+/** @typedef {{ id: string, kind: 'desktop_shell' | 'host_plugin_bundle' | 'shell_tool_bundle', semver: string, channel: string, platform: string, fileName: string, r2Key: string, sha256: string, bytes: number, notes: string, label: string, publishedAt: string, createdByUserId: string }} CompanionArtifactV1 */
 
 function getCompanionPool() {
   if (!USE_COMPANION_PG) return null;
@@ -169,8 +169,8 @@ export async function addCompanionArtifact(input) {
     publishedAt: new Date().toISOString(),
     createdByUserId: String(input.createdByUserId || ''),
   };
-  if (!rec.kind || !['desktop_shell', 'host_plugin_bundle'].includes(rec.kind)) {
-    throw new Error('kind 须为 desktop_shell 或 host_plugin_bundle');
+  if (!rec.kind || !['desktop_shell', 'host_plugin_bundle', 'shell_tool_bundle'].includes(rec.kind)) {
+    throw new Error('kind 须为 desktop_shell、host_plugin_bundle 或 shell_tool_bundle');
   }
   if (!rec.semver) throw new Error('semver 不能为空');
   if (!rec.platform) throw new Error('platform 不能为空');

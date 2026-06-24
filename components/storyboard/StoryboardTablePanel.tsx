@@ -81,9 +81,10 @@ import {
   type StoryboardSheetGenBatchRequest,
 } from '../../services/storyboardTableSheetGen';
 import {
-  buildLayoutSheetGridBoxes,
   clampStoryboardSheetSplitBox,
   detectStoryboardSheetPanels,
+  isCollapsedStoryboardSheetVisionDetect,
+  isUsableStoryboardSheetSplitDraftBoxes,
   splitStoryboardSheetByVision,
   splitStoryboardSheetFromBoxes,
   type StoryboardSheetVisionSplitResult,
@@ -96,8 +97,10 @@ import {
   createSheetGenPlaceholderItems,
   cleanupStoryboardSheetPreviewAssets,
   ensureStoryboardRowsForShotNos,
+  hasStoryboardSheetPreviewSplitCache,
   hydrateStoryboardSheetPreviews,
   isStoryboardSheetPreviewSplittable,
+  isStoryboardSheetSplitDetectPending,
   listSplittableStoryboardSheetPreviews,
   loadStoryboardSheetPreviewsStored,
   mergeLiveStoryboardSheetPreviewSplitState,
@@ -1978,6 +1981,22 @@ export default function StoryboardTablePanel({
     [asset.id, commitSheetPreviews, syncSheetPreviewListToCompanion]
   );
 
+  const resolveSheetPreviewSplitDraftBoxes = useCallback(
+    async (previewId: string): Promise<BoundingBox[]> => {
+      const pending = sheetSplitDetectJobsRef.current.get(previewId);
+      if (pending) {
+        try {
+          await pending;
+        } catch {
+          /* failed state persisted in runSheetPreviewSplitDetect */
+        }
+      }
+      const item = sheetPreviewsRef.current.find((preview) => preview.id === previewId);
+      return (item?.splitDraftBoxes ?? []).map((box) => clampStoryboardSheetSplitBox(box));
+    },
+    []
+  );
+
   const runSheetPreviewSplitDetect = useCallback(
     (previewId: string, dataUrl: string): Promise<BoundingBox[]> => {
       const existing = sheetSplitDetectJobsRef.current.get(previewId);
@@ -1989,22 +2008,37 @@ export default function StoryboardTablePanel({
           splitDetectError: undefined,
         });
         try {
+          const current = sheetPreviewsRef.current.find((preview) => preview.id === previewId);
+          const expectedShotNos =
+            current?.shotNos?.map((shot) => shot.trim()).filter(Boolean) ?? [];
+          const layoutGrid =
+            current?.layoutCols != null && current?.layoutRows != null
+              ? { cols: current.layoutCols, rows: current.layoutRows }
+              : undefined;
+          const rawBoxes = await detectStoryboardSheetPanels(
+            dataUrl,
+            expectedShotNos,
+            capabilityTextModel,
+            {
+              timeoutMs: WORKFLOW_CUT_DETECT_TIMEOUT_MS,
+              storyboardAssetId: asset.id,
+              layoutGrid,
+            }
+          );
+          const boxes = rawBoxes.map((box) => clampStoryboardSheetSplitBox(box));
+          const collapsed = isCollapsedStoryboardSheetVisionDetect(boxes);
+          const detectedShotNos = shotNosFromSheetSplitBoxes(boxes);
+          if (!current) return boxes;
+
           let normalized = dataUrl;
           try {
             normalized = await compressStoryboardFrameDataUrl(dataUrl);
           } catch {
             /* keep raw */
           }
-          const rawBoxes = await detectStoryboardSheetPanels(
-            normalized,
-            [],
-            capabilityTextModel,
-            { timeoutMs: WORKFLOW_CUT_DETECT_TIMEOUT_MS, storyboardAssetId: asset.id }
-          );
-          const boxes = rawBoxes.map((box) => clampStoryboardSheetSplitBox(box));
-          const shotNos = shotNosFromSheetSplitBoxes(boxes);
-          const current = sheetPreviewsRef.current.find((preview) => preview.id === previewId);
-          if (!current) return boxes;
+          if (normalized !== dataUrl) {
+            patchSheetPreviewInMemory(previewId, { imageDataUrl: normalized });
+          }
 
           setSplitAdjustDraft((prev) =>
             prev?.previewId === previewId && prev.detecting
@@ -2012,14 +2046,22 @@ export default function StoryboardTablePanel({
               : prev
           );
 
+          const nextShotNos = current.shotNos.length ? current.shotNos : detectedShotNos;
+          const labelStem =
+            current.label.split(' · ')[0]?.trim() ||
+            (current.source === 'uploaded' ? '上传拼图' : '拼图');
           const patch: Partial<StoryboardSheetPreviewItem> = {
-            label: shotNos.length
-              ? buildSheetPreviewLabel('上传拼图', shotNos)
+            shotNos: nextShotNos,
+            label: nextShotNos.length
+              ? buildSheetPreviewLabel(labelStem, nextShotNos)
               : current.label,
-            shotNos,
-            splitDraftBoxes: boxes,
-            splitDetectStatus: boxes.length ? 'ready' : 'failed',
-            splitDetectError: boxes.length ? undefined : '未识别到分镜格，切分时可手动框选',
+            splitDraftBoxes: collapsed ? undefined : boxes,
+            splitDetectStatus: boxes.length && !collapsed ? 'ready' : 'failed',
+            splitDetectError: collapsed
+              ? '只识别到整图，请删除预览重新上传，或在拼图信息中填写列×行（如 5×4）'
+              : boxes.length
+                ? undefined
+                : '未识别到分镜格，切分时可手动框选',
           };
           persistSheetPreviewPatch(previewId, patch);
           return boxes;
@@ -2088,14 +2130,27 @@ export default function StoryboardTablePanel({
     [drainSheetPreviewSplitDetectQueue]
   );
 
+  const scheduleSheetPreviewSplitDetect = useCallback(
+    (previewId: string, dataUrl: string) => {
+      const item = sheetPreviewsRef.current.find((preview) => preview.id === previewId);
+      if (item && hasStoryboardSheetPreviewSplitCache(item)) return;
+      if (!item || item.splitDetectStatus !== 'detecting') {
+        persistSheetPreviewPatch(previewId, {
+          splitDetectStatus: 'detecting',
+          splitDetectError: undefined,
+          ...(item && !hasStoryboardSheetPreviewSplitCache(item)
+            ? { splitDraftBoxes: undefined }
+            : {}),
+        });
+      }
+      enqueueSheetPreviewSplitDetect(previewId, dataUrl);
+    },
+    [enqueueSheetPreviewSplitDetect, persistSheetPreviewPatch]
+  );
+
   /** 刷新/中断后 metadata 仍为 detecting 但内存无任务时，自动续跑识别 */
   const resumePendingSheetPreviewSplitDetects = useCallback(async () => {
-    const pending = sheetPreviewsRef.current.filter(
-      (item) =>
-        item.source === 'uploaded' &&
-        item.splitDetectStatus === 'detecting' &&
-        !(item.splitDraftBoxes?.length ?? 0)
-    );
+    const pending = sheetPreviewsRef.current.filter(isStoryboardSheetSplitDetectPending);
     for (const item of pending) {
       if (
         sheetSplitDetectJobsRef.current.has(item.id) ||
@@ -2155,19 +2210,17 @@ export default function StoryboardTablePanel({
         /* keep raw */
       }
 
-      if (item.source === 'uploaded' && item.splitDetectStatus === 'detecting') {
-        const detectJob = sheetSplitDetectJobsRef.current.get(previewId);
-        if (detectJob) {
-          void detectJob.catch(() => undefined);
-        } else {
-          enqueueSheetPreviewSplitDetect(previewId, normalized);
-        }
-      }
-
       item = sheetPreviewsRef.current.find((preview) => preview.id === previewId) ?? item;
-      const cachedBoxes = (item.splitDraftBoxes ?? []).map((box) =>
-        clampStoryboardSheetSplitBox(box)
-      );
+      let cachedBoxes = await resolveSheetPreviewSplitDraftBoxes(previewId);
+      item = sheetPreviewsRef.current.find((preview) => preview.id === previewId) ?? item;
+      if (!isUsableStoryboardSheetSplitDraftBoxes(cachedBoxes)) {
+        try {
+          cachedBoxes = await runSheetPreviewSplitDetect(previewId, resolved.dataUrl);
+        } catch {
+          cachedBoxes = [];
+        }
+        item = sheetPreviewsRef.current.find((preview) => preview.id === previewId) ?? item;
+      }
       const shotNosFromBoxes = shotNosFromSheetSplitBoxes(cachedBoxes);
       const effectiveShotNos = item.shotNos.length ? item.shotNos : shotNosFromBoxes;
 
@@ -2184,7 +2237,11 @@ export default function StoryboardTablePanel({
 
       let taskRows = resolveSheetTaskRows(workingRows, item.rowIds, effectiveShotNos);
       if (!taskRows.length) {
-        taskRows = workingRows;
+        if (item.rowIds.length || effectiveShotNos.length) {
+          taskRows = workingRows;
+        } else {
+          taskRows = [];
+        }
       }
 
       const layoutGrid =
@@ -2192,8 +2249,11 @@ export default function StoryboardTablePanel({
           ? { cols: item.layoutCols, rows: item.layoutRows }
           : undefined;
 
-      try {
-        const adjustedBoxes = await promptSheetSplitBoxAdjust(
+      let adjustedBoxes: BoundingBox[] | null;
+      if (hasStoryboardSheetPreviewSplitCache(item)) {
+        adjustedBoxes = cachedBoxes;
+      } else {
+        adjustedBoxes = await promptSheetSplitBoxAdjust(
           {
             previewId,
             imageSrc: normalized,
@@ -2202,39 +2262,13 @@ export default function StoryboardTablePanel({
             sheetLabel: item.label,
           },
           async () => {
-            if (cachedBoxes.length) return cachedBoxes;
-            const pending = sheetSplitDetectJobsRef.current.get(previewId);
-            if (pending) {
-              try {
-                return (await pending).map((box) => clampStoryboardSheetSplitBox(box));
-              } catch {
-                return [];
-              }
-            }
-            if (item.source === 'uploaded') {
-              try {
-                return (await runSheetPreviewSplitDetect(previewId, normalized)).map((box) =>
-                  clampStoryboardSheetSplitBox(box)
-                );
-              } catch {
-                return [];
-              }
-            }
-            let boxes = await detectStoryboardSheetPanels(
-              normalized,
-              effectiveShotNos,
-              capabilityTextModel,
-              { timeoutMs: WORKFLOW_CUT_DETECT_TIMEOUT_MS, storyboardAssetId: asset.id }
-            );
-            if (!boxes.length && layoutGrid) {
-              boxes = buildLayoutSheetGridBoxes(
-                layoutGrid,
-                Math.max(taskRows.length, effectiveShotNos.length || 1)
-              );
-            }
-            return boxes.map((box) => clampStoryboardSheetSplitBox(box));
+            const boxes = await resolveSheetPreviewSplitDraftBoxes(previewId);
+            return boxes;
           }
         );
+      }
+
+      try {
         if (!adjustedBoxes) {
           return null;
         }
@@ -2282,13 +2316,12 @@ export default function StoryboardTablePanel({
     [
       applySheetVisionSplitResult,
       asset.id,
-      capabilityTextModel,
       commitSheetPreviews,
       companionBaseUrl,
       companionProjectId,
       patchTable,
       promptSheetSplitBoxAdjust,
-      enqueueSheetPreviewSplitDetect,
+      resolveSheetPreviewSplitDraftBoxes,
       runSheetPreviewSplitDetect,
       syncSheetPreviewListToCompanion,
       table.fieldCatalog,
@@ -2576,7 +2609,7 @@ export default function StoryboardTablePanel({
       });
 
       onNotify?.('info', '拼图已加入预览，正在后台识别切分框…');
-      enqueueSheetPreviewSplitDetect(draft.id, dataUrl);
+      scheduleSheetPreviewSplitDetect(draft.id, dataUrl);
       void saveSheetPreviewItem({
         id: draft.id,
         imageDataUrl: dataUrl,
@@ -2592,7 +2625,7 @@ export default function StoryboardTablePanel({
       asset.id,
       commitSheetPreviews,
       onNotify,
-      enqueueSheetPreviewSplitDetect,
+      scheduleSheetPreviewSplitDetect,
       saveSheetPreviewItem,
       syncSheetPreviewListToCompanion,
     ]
@@ -3546,7 +3579,9 @@ export default function StoryboardTablePanel({
               chunkIndex: result.chunkIndex,
               genStatus: 'done',
               matchedCount: 0,
+              splitDetectStatus: 'detecting',
             });
+            scheduleSheetPreviewSplitDetect(previewId, sheetImage);
           },
         });
 
@@ -3594,6 +3629,7 @@ export default function StoryboardTablePanel({
       patchTable,
       redrawPresets,
       rehydrateSheetPreviews,
+      scheduleSheetPreviewSplitDetect,
       saveSheetPreviewItem,
       table.rows,
     ]

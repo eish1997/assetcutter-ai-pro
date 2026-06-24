@@ -13,18 +13,39 @@ function defaultShellSiteUrl() {
   }
 }
 
-const IPC_MS = 15000;
+const IPC_MS_DEFAULT = 15000;
+const IPC_MS_MAX = 600000;
 
 function timedInvoke(channel, ...args) {
+  let timeoutMs = IPC_MS_DEFAULT;
+  const last = args[args.length - 1];
+  if (typeof last === 'number' && Number.isFinite(last)) {
+    timeoutMs = Math.min(Math.max(Math.floor(last), 1000), IPC_MS_MAX);
+    args = args.slice(0, -1);
+  }
   return Promise.race([
     ipcRenderer.invoke(channel, ...args),
-    new Promise((_, rej) => setTimeout(() => rej(new Error('IPC 超时（' + IPC_MS + 'ms）')), IPC_MS)),
+    new Promise((_, rej) =>
+      setTimeout(() => rej(new Error('IPC 超时（' + timeoutMs + 'ms）')), timeoutMs),
+    ),
   ]);
 }
 
+function apiTimeoutMs(opts) {
+  const o = opts && typeof opts === 'object' ? opts : {};
+  const n = Number(o.timeoutMs);
+  return Number.isFinite(n) ? Math.min(Math.max(Math.floor(n), 1000), IPC_MS_MAX) : IPC_MS_DEFAULT;
+}
+
 contextBridge.exposeInMainWorld('companionShell', {
-  api: (method, pathname, body, opts) => timedInvoke('companion-api', method, pathname, body, opts || {}),
+  api: (method, pathname, body, opts) =>
+    timedInvoke('companion-api', method, pathname, body, opts || {}, apiTimeoutMs(opts)),
   fetchHostBundleCatalog: () => timedInvoke('shell-fetch-host-bundle-catalog'),
+  fetchShellToolCatalog: () => timedInvoke('shell-fetch-shell-tool-catalog'),
+  pickPath: (opts) => timedInvoke('shell-pick-path', opts || {}),
+  openToolWindow: (toolId) => timedInvoke('shell-open-tool-window', toolId),
+  closeToolWindow: (toolId) => timedInvoke('shell-close-tool-window', toolId),
+  builtinExampleAvailable: () => timedInvoke('shell-builtin-example-available'),
   samLocalDesktopState: () => timedInvoke('shell-sam-local-desktop-state'),
   samLocalBootstrapRun: () => timedInvoke('shell-sam-local-bootstrap-run'),
   rembgDesktopState: () => timedInvoke('shell-rembg-desktop-state'),

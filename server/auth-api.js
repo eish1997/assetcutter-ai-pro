@@ -82,12 +82,16 @@ import {
   writeCompanionElectronUpdaterYamlResponse,
 } from './companion-electron-feed.js';
 
-/** 公开摘要；host_plugin_bundle 在配置 COMPANION_DIST_PUBLIC_HTTP_BASE 时附带直链（供桌面壳调用伴侣 install-from-url，免登录预签名） */
+/** 公开摘要；host_plugin_bundle / shell_tool_bundle 在配置 COMPANION_DIST_PUBLIC_HTTP_BASE 时附带直链（供桌面壳调用伴侣 install-from-url，免登录预签名） */
 function companionArtifactToPublicClient(rec) {
   const s = toPublicSummary(rec);
   if (!s) return null;
   const publicBase = companionDistPublicHttpBase();
-  if (publicBase && rec.kind === 'host_plugin_bundle' && rec.r2Key) {
+  if (
+    publicBase &&
+    (rec.kind === 'host_plugin_bundle' || rec.kind === 'shell_tool_bundle') &&
+    rec.r2Key
+  ) {
     const u = publicFileUrlForR2Key(rec.r2Key, publicBase);
     if (u) s.publicInstallUrl = u;
   }

@@ -175,7 +175,7 @@ const AdminCompanionArtifactsPanel: React.FC = () => {
       <div>
         <h2 className="text-[12px] font-black uppercase tracking-[0.2em] text-gray-300">本地伴侣发行</h2>
         <p className="text-[11px] text-gray-500 mt-2 leading-relaxed">
-          上传<strong className="text-gray-400">桌面壳安装包</strong>或<strong className="text-gray-400">扩展包（host_plugin_bundle）</strong>到 R2，并登记元数据。用户在工作区左下角「伴侣」旁可下载桌面壳（需登录）。
+          上传<strong className="text-gray-400">桌面壳安装包</strong>、<strong className="text-gray-400">扩展包（host_plugin_bundle）</strong>或<strong className="text-gray-400">小工具包（shell_tool_bundle）</strong>到 R2，并登记元数据。用户在工作区左下角「伴侣」旁可下载桌面壳（需登录）。
           扩展包与网站工作流默认使用的<strong className="text-gray-400">本机引擎</strong>不是同一路径；与{' '}
           <code className="text-[10px] text-gray-400">/v1/capabilities</code> 里列出的核心模块也不同名，请勿混用。
         </p>
@@ -197,12 +197,13 @@ const AdminCompanionArtifactsPanel: React.FC = () => {
                 onChange={(v) => {
                   const nk = v as CompanionArtifactKind;
                   setKind(nk);
-                  if (nk === 'host_plugin_bundle') setPlatform('universal');
+                  if (nk === 'host_plugin_bundle' || nk === 'shell_tool_bundle') setPlatform('universal');
                   else if (platform === 'universal' || platform === 'all') setPlatform('win32');
                 }}
                 options={[
                   { value: 'desktop_shell', label: 'desktop_shell（Electron 安装包/便携）' },
                   { value: 'host_plugin_bundle', label: '扩展包 host_plugin_bundle（ZIP，可选）' },
+                  { value: 'shell_tool_bundle', label: '小工具包 shell_tool_bundle（ZIP）' },
                 ]}
                 triggerClassName="w-full bg-[#0a0a0b] border border-[#2e2e32] rounded-lg px-3 py-2 text-[11px] text-left text-gray-200 flex items-center justify-between outline-none focus:border-blue-500 hover:bg-[#121214] transition-colors"
               />

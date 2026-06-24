@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://assetcutter.local/schemas/tool.schema.json",
+  "title": "ShellToolSpecV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "name", "description", "semver", "launch", "permissions"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{1,63}$"
+    },
+    "name": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "description": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "semver": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "icon": { "type": "string", "maxLength": 256 },
+    "launch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "module"],
+      "properties": {
+        "kind": { "const": "shell_module" },
+        "module": { "type": "string", "minLength": 1, "maxLength": 256 }
+      }
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command"],
+      "properties": {
+        "command": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "cwd": { "type": "string", "maxLength": 256 },
+        "paramsMode": { "enum": ["env"] },
+        "timeoutMs": { "type": "integer", "minimum": 1000, "maximum": 3600000 }
+      }
+    },
+    "permissions": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "enum": ["path.pick", "tool.run"]
+      }
+    },
+    "minCompanionSemver": { "type": "string", "maxLength": 64 },
+    "tags": {
+      "type": "array",
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 32 }
+    },
+    "requires": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "localEngines": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 64 }
+        }
+      }
+    }
+  }
+}

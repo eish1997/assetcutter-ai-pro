@@ -21,6 +21,8 @@ import type { StoryboardSheetPreviewImageVersion } from './storyboardSheetPrevie
 import { cleanupSheetPreviewHistoryAssets, normalizeSheetPreviewImageHistory } from './storyboardSheetPreviewHistory';
 import {
   clampStoryboardSheetSplitBox,
+  isCollapsedStoryboardSheetVisionDetect,
+  isUsableStoryboardSheetSplitDraftBoxes,
   storyboardShotNosMatch,
   visionLabelToShotNo,
 } from './storyboardSheetVisionSplit';
@@ -244,6 +246,8 @@ export function pickRicherStoryboardSheetPreviewItem(
       imageHistory: [...byId.values()].sort((a, b) => b.createdAt - a.createdAt),
     };
   }
+  base = mergeLiveStoryboardSheetPreviewSplitState(base, prev);
+  base = mergeLiveStoryboardSheetPreviewSplitState(base, next);
   return base;
 }
 
@@ -500,12 +504,15 @@ export function applyHydratedSheetPreviewImages(
   return items.map((item) => {
     const fresh = byId.get(item.id);
     if (!fresh?.imageDataUrl) return item;
-    return {
-      ...item,
-      imageDataUrl: fresh.imageDataUrl,
-      imageCompanionKey: fresh.imageCompanionKey ?? item.imageCompanionKey,
-      imageIdbKey: fresh.imageIdbKey ?? item.imageIdbKey,
-    };
+    return mergeLiveStoryboardSheetPreviewSplitState(
+      {
+        ...item,
+        imageDataUrl: fresh.imageDataUrl,
+        imageCompanionKey: fresh.imageCompanionKey ?? item.imageCompanionKey,
+        imageIdbKey: fresh.imageIdbKey ?? item.imageIdbKey,
+      },
+      item
+    );
   });
 }
 
@@ -737,7 +744,15 @@ export function mergeLiveStoryboardSheetPreviewSplitState(
   const liveHasBoxes = (live.splitDraftBoxes?.length ?? 0) > 0;
   const liveDetectDone =
     live.splitDetectStatus === 'ready' || live.splitDetectStatus === 'failed';
+  const draftDetectDone =
+    draft.splitDetectStatus === 'ready' || draft.splitDetectStatus === 'failed';
   if (!liveHasBoxes && !liveDetectDone && !live.shotNos.length) return draft;
+  const splitDetectStatus =
+    liveDetectDone && !draftDetectDone
+      ? live.splitDetectStatus
+      : draftDetectDone && !liveDetectDone
+        ? draft.splitDetectStatus
+        : live.splitDetectStatus ?? draft.splitDetectStatus;
   return {
     ...draft,
     shotNos: live.shotNos.length ? live.shotNos : draft.shotNos,
@@ -746,12 +761,27 @@ export function mergeLiveStoryboardSheetPreviewSplitState(
         ? live.label
         : draft.label,
     splitDraftBoxes: liveHasBoxes ? live.splitDraftBoxes : draft.splitDraftBoxes,
-    splitDetectStatus: live.splitDetectStatus ?? draft.splitDetectStatus,
+    splitDetectStatus,
     splitDetectError: live.splitDetectError ?? draft.splitDetectError,
     matchedCount:
       typeof live.matchedCount === 'number' ? live.matchedCount : draft.matchedCount,
     rowIds: (live.rowIds?.length ?? 0) ? live.rowIds! : draft.rowIds,
   };
+}
+
+export function hasStoryboardSheetPreviewSplitCache(item: StoryboardSheetPreviewItem): boolean {
+  return (
+    item.splitDetectStatus === 'ready' &&
+    isUsableStoryboardSheetSplitDraftBoxes(item.splitDraftBoxes)
+  );
+}
+
+export function isStoryboardSheetSplitDetectPending(item: StoryboardSheetPreviewItem): boolean {
+  return (
+    item.splitDetectStatus === 'detecting' &&
+    !(item.splitDraftBoxes?.length ?? 0) &&
+    hasSheetPreviewDisplayImage(item)
+  );
 }
 
 export function ensureStoryboardRowsForShotNos(
@@ -815,10 +845,7 @@ export function isStoryboardSheetPreviewSplittable(item: StoryboardSheetPreviewI
   ) {
     return false;
   }
-  if (!hasSheetPreviewDisplayImage(item)) return false;
-  if (item.source === 'uploaded') return true;
-  const shotTotal = item.shotNos.length || item.rowIds.length;
-  return shotTotal > 0;
+  return hasSheetPreviewDisplayImage(item);
 }
 
 export function listSplittableStoryboardSheetPreviews(

@@ -169,10 +169,10 @@ export default function StoryboardSheetPreviewStrip({
           const cancelled = preview.genStatus === 'cancelled';
           const hasImage = previewHasImage(preview);
           const canPreview = hasImage && !generating && !failed && !cancelled;
-          const splitDetecting =
-            preview.source === 'uploaded' && preview.splitDetectStatus === 'detecting';
-          const splitDetectFailed =
-            preview.source === 'uploaded' && preview.splitDetectStatus === 'failed';
+          const splitDetecting = preview.splitDetectStatus === 'detecting';
+          const splitDetectFailed = preview.splitDetectStatus === 'failed';
+          const splitBoxCount = preview.splitDraftBoxes?.length ?? 0;
+          const splitDetectReady = preview.splitDetectStatus === 'ready' && splitBoxCount > 0;
 
           return (
             <div key={preview.id} className={SHEET_PREVIEW_COL}>
@@ -243,6 +243,14 @@ export default function StoryboardSheetPreviewStrip({
                   <div className="absolute inset-0 flex items-center justify-center bg-black/50 text-[9px] text-gray-200">
                     {regenBusy ? '重生成…' : '切分中…'}
                   </div>
+                ) : null}
+                {splitDetectReady && !cardBusy ? (
+                  <span
+                    className="absolute left-1.5 top-1.5 z-10 rounded bg-emerald-500/20 px-1.5 py-0.5 text-[9px] text-emerald-200"
+                    title={`已识别 ${splitBoxCount} 个分镜格`}
+                  >
+                    {splitBoxCount} 格
+                  </span>
                 ) : null}
                 {splitDetecting && !cardBusy ? (
                   <div className="absolute inset-0 flex items-center justify-center bg-black/45 text-[9px] text-gray-200">

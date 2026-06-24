@@ -2,6 +2,9 @@
 
 const STORYBOARD_FRAME_MAX_BYTES = 2 * 1024 * 1024;
 
+/** 分镜拼图视觉识别：线性缩小倍数（仅送模用；box 为 0–1000 归一化，裁切仍用原图） */
+export const STORYBOARD_SHEET_VISION_DETECT_DIVISOR = 5;
+
 function loadImageFromDataUrl(dataUrl: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -38,6 +41,35 @@ async function compressDataUrlToJpegMaxBytes(dataUrl: string, maxBytes: number):
     out = canvas.toDataURL('image/jpeg', quality);
   }
   return out;
+}
+
+/**
+ * 将分镜拼图缩小后送视觉模型（默认 1/5 边长），减轻超时与上传体积。
+ * 识别框为相对坐标 0–1000，与像素尺寸无关，后续 `cropBoxes` 仍应对完整原图。
+ */
+export async function scaleStoryboardSheetForVisionDetect(dataUrl: string): Promise<string> {
+  const raw = String(dataUrl || '').trim();
+  if (!raw || typeof document === 'undefined') return raw;
+  const divisor = STORYBOARD_SHEET_VISION_DETECT_DIVISOR;
+  if (!Number.isFinite(divisor) || divisor <= 1) return raw;
+  try {
+    const img = await loadImageFromDataUrl(raw);
+    const w = img.naturalWidth || img.width;
+    const h = img.naturalHeight || img.height;
+    if (!w || !h) return raw;
+    const nw = Math.max(1, Math.round(w / divisor));
+    const nh = Math.max(1, Math.round(h / divisor));
+    if (nw >= w && nh >= h) return raw;
+    const canvas = document.createElement('canvas');
+    canvas.width = nw;
+    canvas.height = nh;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return raw;
+    ctx.drawImage(img, 0, 0, nw, nh);
+    return canvas.toDataURL('image/jpeg', 0.88);
+  } catch {
+    return raw;
+  }
 }
 
 /** 将已有 data URL 压到工作区可存大小（与读文件路径一致） */

@@ -3,9 +3,10 @@ import { createStoryboardTableRow } from './storyboardTableAsset';
 import { normalizeStoryboardShotNoInput } from './storyboardTableParse';
 import { computeStoryboardMosaicGrid } from './storyboardFrameStripMerge';
 import { cropBoxes, trimImageDataUrlContentBounds } from './imageCrop';
+import { scaleStoryboardSheetForVisionDetect } from '../components/storyboard/storyboardFrameImage';
 import { detectObjectsInImage } from './unifiedAiGateway';
 import { DEFAULT_MODEL_TEXT } from './modelRegistry/constants';
-import { auditStoryboardTaskOutcome } from './storyboardTaskAuditEvents';
+import { detectAutoGrid } from './gridDetector';
 
 export const STORYBOARD_SHEET_VISION_TIMEOUT_MS = 90_000;
 
@@ -54,11 +55,93 @@ export function normalizeShotNoToken(raw: string): string {
 export function extractShotNoToken(raw: string): string {
   const text = String(raw || '').trim();
   if (!text) return '';
-  const explicit = text.match(/\b(?:SC\d+[_-]?)?S?\d{2,4}\b/i);
+  const explicit = text.match(/\b(?:SC\d+[_-]?SH?\d+)\b/i);
   if (explicit?.[0]) return normalizeShotNoToken(explicit[0]);
-  const leadingDigits = text.match(/^(\d{1,4})/);
+  const sStyle = text.match(/\bS\d{2,4}\b/i);
+  if (sStyle?.[0]) return normalizeShotNoToken(sStyle[0]);
+  const leadingDigits = text.match(/^#?(\d{1,4})\b/);
   if (leadingDigits?.[1]) return normalizeShotNoToken(leadingDigits[1]);
+  const explicit2 = text.match(/\b(?:SC\d+[_-]?)?S?\d{2,4}\b/i);
+  if (explicit2?.[0]) return normalizeShotNoToken(explicit2[0]);
   return normalizeShotNoToken(text);
+}
+
+const SHOT_NO_METADATA_HINT =
+  /景别|构图|角度|运镜|时长|秒|fps|帧|对白|旁白|台词|备注|镜头运动|转场|音效|音乐|Wide|Medium|Close|Long|Full|ECU|CU|MS|LS|MCU|特写|近景|中景|远景|全景|俯|仰|平|跟|摇|移|推拉/i;
+
+/** 从格内混合文字（位置不固定）推断镜号 */
+export function inferShotNoFromMixedText(raw: string): string {
+  const text = String(raw || '').trim();
+  if (!text) return '';
+
+  const compact = text.replace(/\s+/g, ' ');
+  const headerShot = compact.match(/^(\d{1,4})\s*\|/);
+  if (headerShot?.[1]) return normalizeStoryboardShotNoInput(headerShot[1]);
+
+  if (compact.length <= 16 && !SHOT_NO_METADATA_HINT.test(compact)) {
+    const direct = extractShotNoToken(compact);
+    if (direct) return normalizeStoryboardShotNoInput(direct);
+  }
+
+  for (const match of compact.matchAll(
+    /(?:镜号|镜头号|镜头|Shot|SHOT|SCENE|Scene|#)\s*[：:#\-]?\s*([A-Za-z0-9_\-]+)/gi
+  )) {
+    const token = extractShotNoToken(match[1] || '');
+    if (token) return normalizeStoryboardShotNoInput(token);
+  }
+
+  const scMatch = compact.match(/\bSC\d+[_-]?SH?\d+\b/i);
+  if (scMatch?.[0]) return normalizeStoryboardShotNoInput(scMatch[0]);
+
+  const parts = compact.split(/[|/,，、;；]+/).flatMap((part) => part.trim().split(/\s+/));
+  const candidates: { token: string; score: number }[] = [];
+  for (const part of parts.map((p) => p.trim()).filter(Boolean)) {
+    if (SHOT_NO_METADATA_HINT.test(part)) continue;
+    if (/^\d+\s*s$/i.test(part)) continue;
+    const token = extractShotNoToken(part);
+    if (!token) continue;
+    let score = 20;
+    if (/^SC\d/i.test(token)) score = 95;
+    else if (/^S\d{2,4}$/i.test(token)) score = 90;
+    else if (/^\d{3,4}$/.test(token)) score = 85;
+    else if (/^\d{2}$/.test(token)) score = 75;
+    else if (/^\d$/.test(token)) score = 35;
+    candidates.push({ token, score });
+  }
+
+  if (!candidates.length) {
+    for (const match of compact.matchAll(/\b(\d{2,4})\b/g)) {
+      const token = match[1];
+      if (!token) continue;
+      const ctx = compact.slice(
+        Math.max(0, (match.index ?? 0) - 6),
+        Math.min(compact.length, (match.index ?? 0) + token.length + 6)
+      );
+      if (SHOT_NO_METADATA_HINT.test(ctx)) continue;
+      candidates.push({ token, score: 55 });
+    }
+  }
+
+  candidates.sort((a, b) => b.score - a.score);
+  const best = candidates[0];
+  return best ? normalizeStoryboardShotNoInput(best.token) : '';
+}
+
+export function sortStoryboardSheetBoxesReadingOrder(boxes: BoundingBox[]): BoundingBox[] {
+  return [...boxes].sort((a, b) => {
+    const rowA = Math.round(a.ymin / 80);
+    const rowB = Math.round(b.ymin / 80);
+    if (rowA !== rowB) return rowA - rowB;
+    return a.xmin - b.xmin;
+  });
+}
+
+function enrichVisionDetectBoxLabels(boxes: BoundingBox[]): BoundingBox[] {
+  return sortStoryboardSheetBoxesReadingOrder(boxes).map((box, index) => {
+    const inferred = inferShotNoFromMixedText(box.label);
+    const label = inferred || box.label.trim() || `#${index + 1}`;
+    return { ...box, label };
+  });
 }
 
 /** 镜号是否指向同一镜头（含 131 与 0131 等数值等价） */
@@ -82,32 +165,41 @@ export function storyboardShotNosMatch(a: string, b: string): boolean {
 export function buildStoryboardSheetVisionPrompt(expectedShotNos: string[]): string {
   const expected = [...new Set(expectedShotNos.map((shot) => shot.trim()).filter(Boolean))];
   const expectedLine = expected.length
-    ? `本图应包含下列镜号（label 必须与格内印刷镜号一致）：${expected.join('、')}。`
-    : '';
+    ? `本图可能包含下列镜号（若格内文字与之一致，label 须与之相同）：${expected.join('、')}。`
+    : `本图镜号未知：须先逐格阅读全部文字，再从每格文字中自行推断镜号（位置不固定）。`;
 
   return `你是分镜表拼图切分助手。输入是一张包含多个分镜格的故事板拼图页（contact sheet 或手绘分镜页）。
 
-任务分两步理解每一格：
-1. 读取镜号：从该格内可读位置读取镜号（顶部元数据条、左上角/右上角角标如 002/010、SC01_SH001 等），写入 label；
-2. 框选画面：box_2d 只框住该格的「草图/插画」主体区域，用于回填分镜图。
+【最重要】若图中有多个分镜格（常见为带黑色/灰色网格线的规整宫格，如 3×3、4×5、5×4 等），必须为每一格各输出一个 box_2d，严禁把整张拼图当作一个框返回。
+
+规整网格分镜表（漫画/影视分镜条）识别要点：
+- 先数清列数×行数，再沿网格线逐格输出（从左到右、从上到下）；
+- 每格通常含：顶部镜号条（如「121 | 4s」——镜号在竖线左侧）、中间草图、底部动作/对白文字；
+- box_2d 框住该格整格区域（含顶部镜号条与底部文字），不要跨格合并；
+- label 读取顶部镜号条中的镜号（如 121），不要写时长（4s）或对白内容。
+
+任务分三步处理每一格：
+1. 读字：扫描该格内全部可见文字（角标、顶部/底部元数据条、左右侧栏、叠在画面上的水印等，位置不固定）；
+2. 猜镜号：从读到的文字中推断「镜号/镜头号」（排除景别、角度、运镜、时长、对白、旁白、备注等字段名及其取值；纯数字 002、S030、SC01_SH001、Shot 3 等均可）；
+3. 框画面：box_2d 框住该格区域（规整网格时框整格；不规则页可只框草图主体）。
 
 box_2d 必须排除（不要框进）：
-- 顶部/底部元数据与说明文字条（景别、角度、运镜、时长、对白、旁白等）；
-- 左右两侧的纯文字栏（若有）；
 - 相邻分镜格的内容（严禁跨格合并）；
-- 标注箭头、运动线等辅助线若在外围可略去，但不得裁到下一格。
+- 不规则手绘页：可排除顶部/底部纯文字条，只框中间草图。
 
-box_2d 应紧贴草图外轮廓，略留 1–2% 边距；每格单独一框，宽高比例应接近该格真实画面（禁止输出极窄竖条或极扁横条）。
+box_2d 应紧贴该格外轮廓，略留 1–2% 边距；每格单独一框（禁止输出极窄竖条或极扁横条）。
 
 常见版式：
-- 竖格：上文字 / 中画面 / 下文字 → 只框中间画面；
+- 规整宫格：黑色网格线分隔，每格一个框（优先识别此类）；
+- 竖格：上文字 / 中画面 / 下文字 → 只框中间画面或整格；
 - 横格：左文字 / 右草图 → 只框右侧草图；
-- 不规则手绘页：按黑色/白色分隔线识别独立分镜格，每格一个框。
+- 不规则手绘页：按分隔线识别独立分镜格，每格一个框。
 
-label 规则：
-- 读取每格镜号文字（如 002、S030、SC01_SH001），原样写入 label；
-- 不要编造镜号；看不清的格可跳过；
-- 同一镜号只保留一个框（取画面最完整的一格）。
+label 规则（重要）：
+- 写入你从该格文字中推断出的镜号；优先短而明确的编号（如 121、002、S030、SC01_SH001）；
+- 若只能读到混合文本，label 可写最像镜号的片段，或写整段短文字供程序解析；
+- 看不清镜号时不要跳过该格：仍输出 box_2d，label 可留空；
+- 不要编造与画面无关的镜号；同一镜号只保留一个框（取画面最完整的一格）。
 
 ${expectedLine}
 
@@ -197,7 +289,11 @@ export function matchVisionBoxToRow(
   box: BoundingBox,
   rows: StoryboardTableRow[]
 ): StoryboardTableRow | null {
-  const labelCandidates = [box.label, extractShotNoToken(box.label)].filter(Boolean);
+  const labelCandidates = [
+    box.label,
+    inferShotNoFromMixedText(box.label),
+    extractShotNoToken(box.label),
+  ].filter(Boolean);
   if (!labelCandidates.length) return null;
 
   let best: StoryboardTableRow | null = null;
@@ -229,9 +325,14 @@ export function matchVisionBoxToRow(
 }
 
 function dedupeBoxesByLabel(boxes: BoundingBox[]): BoundingBox[] {
+  const enriched = enrichVisionDetectBoxLabels(boxes);
   const byLabel = new Map<string, BoundingBox>();
-  for (const box of boxes) {
-    const key = extractShotNoToken(box.label) || box.label.trim();
+  for (const box of enriched) {
+    const key =
+      extractShotNoToken(box.label) ||
+      inferShotNoFromMixedText(box.label) ||
+      box.label.trim() ||
+      box.id;
     if (!key) continue;
     const prev = byLabel.get(key);
     if (!prev) {
@@ -242,7 +343,7 @@ function dedupeBoxesByLabel(boxes: BoundingBox[]): BoundingBox[] {
     const nextArea = (box.xmax - box.xmin) * (box.ymax - box.ymin);
     if (nextArea > prevArea) byLabel.set(key, box);
   }
-  return [...byLabel.values()];
+  return sortStoryboardSheetBoxesReadingOrder([...byLabel.values()]);
 }
 
 export function newStoryboardSheetSplitBoxId(): string {
@@ -304,44 +405,59 @@ export async function splitStoryboardSheetFromBoxes(
   const unmatchedLabels: string[] = [];
   let warn: string | undefined;
 
+  const orderedBoxes = sortStoryboardSheetBoxesReadingOrder(boxes);
   const crops = await trimVisionSplitCrops(
     await cropBoxes(
       dataUrl,
-      boxes,
-      boxes.map((_, index) => index),
+      orderedBoxes,
+      orderedBoxes.map((_, index) => index),
       4
     )
   );
 
-  for (let i = 0; i < boxes.length; i += 1) {
-    const box = boxes[i]!;
-    const image = crops[i];
-    let row = matchVisionBoxToRow(
-      box,
-      workingRows.filter((item) => !usedRowIds.has(item.id))
-    );
+  const resolveRowForBox = (
+    box: BoundingBox,
+    positionIndex: number
+  ): StoryboardTableRow | null => {
+    const availableRows = workingRows.filter((item) => !usedRowIds.has(item.id));
+    let row = matchVisionBoxToRow(box, availableRows);
+    if (row) return row;
 
-    if (!row && options?.autoCreateRows) {
-      const shotNo = visionLabelToShotNo(box.label);
-      if (shotNo) {
-        row =
-          workingRows.find(
-            (item) =>
-              !usedRowIds.has(item.id) &&
-              item.shotNo?.trim() &&
-              storyboardShotNosMatch(item.shotNo, shotNo)
-          ) ?? null;
-      }
-      if (
-        !row &&
-        shotNo &&
-        isStoryboardShotNoInExpectedScope(shotNo, expectedShotNos)
-      ) {
+    const shotNo = visionLabelToShotNo(box.label);
+    if (options?.autoCreateRows && shotNo) {
+      row =
+        availableRows.find(
+          (item) => item.shotNo?.trim() && storyboardShotNosMatch(item.shotNo, shotNo)
+        ) ?? null;
+      if (!row && isStoryboardShotNoInExpectedScope(shotNo, expectedShotNos)) {
         row = createStoryboardTableRow({ shotNo }, workingRows.length);
         workingRows.push(row);
         createdRows.push(row);
       }
+      if (row) return row;
     }
+
+    if (!expectedShotNos.length) {
+      if (positionIndex < availableRows.length) {
+        return availableRows[positionIndex]!;
+      }
+      if (options?.autoCreateRows) {
+        const seqShot =
+          shotNo || String(positionIndex + 1).padStart(3, '0');
+        row = createStoryboardTableRow({ shotNo: seqShot }, workingRows.length);
+        workingRows.push(row);
+        createdRows.push(row);
+        return row;
+      }
+    }
+
+    return null;
+  };
+
+  for (let i = 0; i < orderedBoxes.length; i += 1) {
+    const box = orderedBoxes[i]!;
+    const image = crops[i];
+    const row = resolveRowForBox(box, i);
 
     if (!row || usedRowIds.has(row.id) || !image) {
       unmatchedLabels.push(box.label || box.id);
@@ -358,7 +474,9 @@ export async function splitStoryboardSheetFromBoxes(
   }
 
   if (!matches.length) {
-    warn = '已识别分镜格，但镜号与表内镜头无法匹配';
+    warn = expectedShotNos.length
+      ? '已识别分镜格，但镜号与表内镜头无法匹配'
+      : '已识别分镜格，但未能回填镜头（可手动调整切分框）';
   } else if (unmatchedLabels.length) {
     warn = `${unmatchedLabels.length} 个识别格未能匹配镜号：${unmatchedLabels.slice(0, 4).join('、')}`;
   }
@@ -396,23 +514,324 @@ export async function splitStoryboardSheetFromBoxes(
   };
 }
 
+function boxArea(box: BoundingBox): number {
+  return Math.max(0, box.xmax - box.xmin) * Math.max(0, box.ymax - box.ymin);
+}
+
+/** 视觉模型是否把整张拼图收成一两个大框 */
+export function isCollapsedStoryboardSheetVisionDetect(boxes: BoundingBox[]): boolean {
+  if (!boxes.length) return true;
+  const sorted = [...boxes].sort((a, b) => boxArea(b) - boxArea(a));
+  const largest = boxArea(sorted[0]!);
+  const totalArea = 1_000_000;
+  if (boxes.length === 1 && largest > totalArea * 0.45) return true;
+  if (boxes.length <= 2 && largest > totalArea * 0.55) return true;
+  if (boxes.length <= 3 && largest > totalArea * 0.65) return true;
+  return false;
+}
+
+export type StoryboardSheetVisionDetectOptions = {
+  timeoutMs?: number;
+  customPrompt?: string;
+  storyboardAssetId?: string;
+  layoutGrid?: StoryboardSheetLayoutGrid;
+};
+
+type SheetImageGray = {
+  gray: Uint8Array;
+  width: number;
+  height: number;
+};
+
+function loadSheetImageForGrid(src: string): Promise<SheetImageGray | null> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      const width = img.naturalWidth || img.width;
+      const height = img.naturalHeight || img.height;
+      if (!width || !height) {
+        resolve(null);
+        return;
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        resolve(null);
+        return;
+      }
+      ctx.drawImage(img, 0, 0);
+      const pixels = ctx.getImageData(0, 0, width, height).data;
+      const gray = new Uint8Array(width * height);
+      for (let i = 0; i < width * height; i += 1) {
+        const idx = i * 4;
+        gray[i] =
+          (pixels[idx]! * 299 + pixels[idx + 1]! * 587 + pixels[idx + 2]! * 114) / 1000;
+      }
+      resolve({ gray, width, height });
+    };
+    img.onerror = () => resolve(null);
+    img.src = src;
+  });
+}
+
+function lineDarknessScore(
+  gray: Uint8Array,
+  width: number,
+  height: number,
+  axis: 'v' | 'h',
+  positionPx: number,
+  thickness = 3
+): number {
+  let dark = 0;
+  let total = 0;
+  if (axis === 'v') {
+    for (let dy = -thickness; dy <= thickness; dy += 1) {
+      const x = Math.min(width - 1, Math.max(0, positionPx + dy));
+      for (let y = 0; y < height; y += 1) {
+        if (gray[y * width + x]! < 100) dark += 1;
+        total += 1;
+      }
+    }
+  } else {
+    for (let dx = -thickness; dx <= thickness; dx += 1) {
+      const y = Math.min(height - 1, Math.max(0, positionPx + dx));
+      for (let x = 0; x < width; x += 1) {
+        if (gray[y * width + x]! < 100) dark += 1;
+        total += 1;
+      }
+    }
+  }
+  return total > 0 ? dark / total : 0;
+}
+
+export function scoreStoryboardSheetUniformGridLayout(
+  img: SheetImageGray,
+  cols: number,
+  rows: number
+): number {
+  if (cols < 2 || rows < 2) return 0;
+  let score = 0;
+  let count = 0;
+  for (let c = 1; c < cols; c += 1) {
+    const x = Math.round((c * img.width) / cols);
+    score += lineDarknessScore(img.gray, img.width, img.height, 'v', x);
+    count += 1;
+  }
+  for (let r = 1; r < rows; r += 1) {
+    const y = Math.round((r * img.height) / rows);
+    score += lineDarknessScore(img.gray, img.width, img.height, 'h', y);
+    count += 1;
+  }
+  return count > 0 ? score / count : 0;
+}
+
+export function pickStoryboardSheetUniformGridLayout(
+  img: SheetImageGray,
+  opts?: { minScore?: number }
+): { cols: number; rows: number; score: number } | null {
+  let best: { cols: number; rows: number; score: number } | null = null;
+  for (let cols = 2; cols <= 8; cols += 1) {
+    for (let rows = 2; rows <= 8; rows += 1) {
+      const cells = cols * rows;
+      if (cells < 4 || cells > 40) continue;
+      const score = scoreStoryboardSheetUniformGridLayout(img, cols, rows);
+      if (!best || score > best.score) {
+        best = { cols, rows, score };
+      }
+    }
+  }
+  if (!best) return null;
+  const minScore = opts?.minScore ?? 0.04;
+  if (best.score < minScore) return null;
+  return best;
+}
+
+export function pickStoryboardSheetLayoutByAspect(
+  width: number,
+  height: number
+): StoryboardSheetLayoutGrid {
+  const aspect = width / Math.max(height, 1);
+  let best: { cols: number; rows: number; score: number } | null = null;
+  for (let cols = 2; cols <= 8; cols += 1) {
+    for (let rows = 2; rows <= 8; rows += 1) {
+      const cells = cols * rows;
+      if (cells < 4 || cells > 40) continue;
+      const gridAspect = cols / rows;
+      const score = 1 / (1 + Math.abs(aspect - gridAspect));
+      if (!best || score > best.score) {
+        best = { cols, rows, score };
+      }
+    }
+  }
+  return best ? { cols: best.cols, rows: best.rows } : { cols: 4, rows: 4 };
+}
+
+export async function detectStoryboardSheetGridByUniformFit(
+  src: string,
+  layoutGrid?: StoryboardSheetLayoutGrid
+): Promise<BoundingBox[]> {
+  if (layoutGrid) {
+    const cols = Math.max(1, Math.min(12, Math.round(layoutGrid.cols)));
+    const rows = Math.max(1, Math.min(12, Math.round(layoutGrid.rows)));
+    return buildLayoutSheetGridBoxes({ cols, rows }, cols * rows);
+  }
+
+  const img = await loadSheetImageForGrid(src);
+  if (!img) return [];
+  const best = pickStoryboardSheetUniformGridLayout(img);
+  if (best) {
+    return buildLayoutSheetGridBoxes({ cols: best.cols, rows: best.rows }, best.cols * best.rows);
+  }
+  const aspectLayout = pickStoryboardSheetLayoutByAspect(img.width, img.height);
+  return buildLayoutSheetGridBoxes(aspectLayout, aspectLayout.cols * aspectLayout.rows);
+}
+
+export function isUsableStoryboardSheetSplitDraftBoxes(boxes: BoundingBox[] | undefined): boolean {
+  const list = boxes ?? [];
+  if (!list.length) return false;
+  return !isCollapsedStoryboardSheetVisionDetect(list);
+}
+
+function pickBestStoryboardSheetDetectCandidates(candidates: BoundingBox[][]): BoundingBox[] {
+  const ranked = candidates
+    .map((boxes) => boxes.filter((box) => boxArea(box) > 20 * 20))
+    .filter((boxes) => boxes.length > 0)
+    .sort((a, b) => {
+      const aCollapsed = isCollapsedStoryboardSheetVisionDetect(a);
+      const bCollapsed = isCollapsedStoryboardSheetVisionDetect(b);
+      if (aCollapsed !== bCollapsed) return aCollapsed ? 1 : -1;
+      return b.length - a.length;
+    });
+  return ranked[0] ?? [];
+}
+
+export function buildStoryboardSheetGridShotLabelPrompt(
+  cellCount: number,
+  layout: StoryboardSheetLayoutGrid
+): string {
+  return `这是一张规整网格分镜拼图，共 ${cellCount} 格（${layout.cols} 列 × ${layout.rows} 行，从左到右、从上到下）。
+
+请只读取每格顶部镜号条中的镜号（常见格式「121 | 4s」，取竖线左侧数字；不要时长、对白、动作描述）。
+
+为每一格各返回一个 JSON 对象：label=镜号字符串，box_2d 可粗略框住该格顶部镜号条即可。
+必须返回 ${cellCount} 项，顺序与阅读顺序一致。`;
+}
+
+async function detectStoryboardSheetPanelsByGrid(dataUrl: string): Promise<BoundingBox[]> {
+  try {
+    const boxes = await detectAutoGrid(dataUrl, { mode: 'auto', config: {} });
+    return boxes.filter((box) => boxArea(box) > 20 * 20);
+  } catch {
+    return [];
+  }
+}
+
+function mergeGridBoxesWithVisionLabels(
+  gridBoxes: BoundingBox[],
+  labelBoxes: BoundingBox[]
+): BoundingBox[] {
+  const sortedGrid = sortStoryboardSheetBoxesReadingOrder(gridBoxes);
+  const sortedLabels = sortStoryboardSheetBoxesReadingOrder(labelBoxes);
+  if (!sortedLabels.length) return sortedGrid;
+  return sortedGrid.map((box, index) => {
+    const labelBox = sortedLabels[index];
+    const label = labelBox?.label?.trim() || box.label;
+    return { ...box, label };
+  });
+}
+
+function finalizeStoryboardSheetDetectBoxes(boxes: BoundingBox[]): BoundingBox[] {
+  const deduped = dedupeBoxesByLabel(boxes);
+  const quality = filterVisionBoxesByQuality(deduped);
+  const mapped = mapStoryboardBoxesToVisualCrop(quality.length ? quality : deduped);
+  return mapped;
+}
+
 export async function detectStoryboardSheetPanels(
   dataUrl: string,
   expectedShotNos: string[],
   textModel = DEFAULT_MODEL_TEXT,
-  options?: { timeoutMs?: number; customPrompt?: string; storyboardAssetId?: string }
+  options?: StoryboardSheetVisionDetectOptions
 ): Promise<BoundingBox[]> {
   const prompt =
     options?.customPrompt?.trim() ||
     buildStoryboardSheetVisionPrompt(expectedShotNos);
   const assetId = String(options?.storyboardAssetId || '').trim();
+  const timeoutMs = options?.timeoutMs ?? STORYBOARD_SHEET_VISION_TIMEOUT_MS;
+  let detectMethod = 'vision';
+  let visionDetectScaled = false;
+
   try {
-    const boxes = await detectObjectsInImage(dataUrl, textModel, prompt, {
-      timeoutMs: options?.timeoutMs ?? STORYBOARD_SHEET_VISION_TIMEOUT_MS,
-    });
-    const deduped = dedupeBoxesByLabel(boxes);
-    const quality = filterVisionBoxesByQuality(deduped);
-    const mapped = mapStoryboardBoxesToVisualCrop(quality.length ? quality : deduped);
+    const [uniformGridBoxes, autoGridBoxes, visionInput] = await Promise.all([
+      detectStoryboardSheetGridByUniformFit(dataUrl, options?.layoutGrid),
+      detectStoryboardSheetPanelsByGrid(dataUrl),
+      scaleStoryboardSheetForVisionDetect(dataUrl),
+    ]);
+    visionDetectScaled = visionInput !== dataUrl;
+
+    let visionBoxes: BoundingBox[] = [];
+    try {
+      visionBoxes = await detectObjectsInImage(visionInput, textModel, prompt, { timeoutMs });
+    } catch {
+      visionBoxes = [];
+    }
+
+    const visionFinal = finalizeStoryboardSheetDetectBoxes(visionBoxes);
+    const candidates = [uniformGridBoxes, autoGridBoxes, visionFinal];
+    let boxes = pickBestStoryboardSheetDetectCandidates(candidates);
+
+    if (isCollapsedStoryboardSheetVisionDetect(boxes) && uniformGridBoxes.length > 1) {
+      boxes = uniformGridBoxes;
+      detectMethod = options?.layoutGrid ? 'layout_grid' : 'uniform_fit';
+    } else if (isCollapsedStoryboardSheetVisionDetect(boxes) && autoGridBoxes.length > 1) {
+      boxes = autoGridBoxes;
+      detectMethod = 'auto_grid';
+    } else if (boxes === uniformGridBoxes && uniformGridBoxes.length > 1) {
+      detectMethod = options?.layoutGrid ? 'layout_grid' : 'uniform_fit';
+    } else if (boxes === autoGridBoxes && autoGridBoxes.length > 1) {
+      detectMethod = 'auto_grid';
+    } else if (isCollapsedStoryboardSheetVisionDetect(boxes)) {
+      const img = await loadSheetImageForGrid(dataUrl);
+      if (img) {
+        const aspectLayout = pickStoryboardSheetLayoutByAspect(img.width, img.height);
+        const aspectBoxes = buildLayoutSheetGridBoxes(
+          aspectLayout,
+          aspectLayout.cols * aspectLayout.rows
+        );
+        if (aspectBoxes.length > 1) {
+          boxes = aspectBoxes;
+          detectMethod = 'aspect_grid';
+        }
+      }
+    }
+
+    if (
+      boxes.length > 1 &&
+      (detectMethod !== 'vision' || isCollapsedStoryboardSheetVisionDetect(visionFinal))
+    ) {
+      try {
+        const layout =
+          options?.layoutGrid ?? computeStoryboardMosaicGrid(boxes.length);
+        const labelPrompt = buildStoryboardSheetGridShotLabelPrompt(boxes.length, layout);
+        const labelBoxes = await detectObjectsInImage(visionInput, textModel, labelPrompt, {
+          timeoutMs,
+        });
+        boxes = finalizeStoryboardSheetDetectBoxes(
+          mergeGridBoxesWithVisionLabels(boxes, labelBoxes)
+        );
+      } catch {
+        boxes = finalizeStoryboardSheetDetectBoxes(boxes);
+      }
+    } else if (!isUsableStoryboardSheetSplitDraftBoxes(boxes) && uniformGridBoxes.length > 1) {
+      boxes = finalizeStoryboardSheetDetectBoxes(uniformGridBoxes);
+      detectMethod = options?.layoutGrid ? 'layout_grid' : 'uniform_fit';
+    } else {
+      boxes = finalizeStoryboardSheetDetectBoxes(boxes);
+    }
+
     if (assetId) {
       auditStoryboardTaskOutcome({
         kind: 'llm',
@@ -420,14 +839,20 @@ export async function detectStoryboardSheetPanels(
         assetId,
         operation: 'vision_detect',
         message:
-          mapped.length > 0
-            ? `分镜表 · 视觉识别 ${mapped.length} 个分镜格`
+          boxes.length > 0
+            ? `分镜表 · 识别 ${boxes.length} 个分镜格（${detectMethod}）`
             : '分镜表 · 视觉识别未找到分镜格',
-        level: mapped.length > 0 ? 'info' : 'warn',
-        detail: { expectedShots: expectedShotNos.length, boxCount: mapped.length },
+        level: boxes.length > 0 ? 'info' : 'warn',
+        detail: {
+          expectedShots: expectedShotNos.length,
+          boxCount: boxes.length,
+          visionDetectScaled,
+          detectMethod,
+          collapsed: isCollapsedStoryboardSheetVisionDetect(boxes),
+        },
       });
     }
-    return mapped;
+    return boxes;
   } catch (error) {
     if (assetId) {
       auditStoryboardTaskOutcome({
@@ -446,6 +871,8 @@ export async function detectStoryboardSheetPanels(
 export function visionLabelToShotNo(label: string): string {
   const text = String(label || '').trim();
   if (!text) return '';
+  const inferred = inferShotNoFromMixedText(text);
+  if (inferred) return inferred;
   const stripped = text.replace(/^(镜头号|镜号)\s*[：:]\s*/i, '').trim();
   return normalizeStoryboardShotNoInput(stripped || extractShotNoToken(text));
 }
@@ -640,7 +1067,7 @@ export async function splitStoryboardSheetByVision(
     return {
       matches: [],
       unmatchedLabels: [],
-      warn: '视觉识别未找到分镜格，请检查拼图是否含清晰镜号与分隔线，或填写行列布局后重切',
+      warn: '视觉识别未找到分镜格，请检查拼图分隔线是否清晰，或填写行列布局后重切',
     };
   }
 

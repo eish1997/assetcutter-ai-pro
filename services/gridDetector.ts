@@ -351,10 +351,14 @@ export async function detectAutoGrid(src: string, config: AutoCutConfig = {}): P
     return merged;
   };
 
+  // 边缘检测返回 0–1000 归一化坐标，需转回像素再与颜色跳变结果合并
+  const v2Px = v2.map((line) => (line / 1000) * canvas.width);
+  const h2Px = h2.map((line) => (line / 1000) * canvas.height);
+
   // 合并垂直线（容差为图片宽度的1%）
   const tolerance = canvas.width * 0.01;
-  const verticalLines = mergeLines([...v1, ...v2], tolerance);
-  const horizontalLines = mergeLines([...h1, ...h2], tolerance);
+  const verticalLines = mergeLines([...v1, ...v2Px], tolerance);
+  const horizontalLines = mergeLines([...h1, ...h2Px], tolerance);
 
   // 如果检测不到明显的分割线，尝试均匀分割
   if (verticalLines.length === 0 && horizontalLines.length === 0) {

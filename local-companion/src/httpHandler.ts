@@ -41,6 +41,16 @@ import {
 } from './accessGate.js';
 import { getPairingSessionSummary, revokePairingSession } from './pairingSession.js';
 import { installHostPluginBundleFromUrl, listInstalledHostPluginBundles } from './hostPluginBundles.js';
+import {
+  getShellToolDetail,
+  installShellToolBundleFromUrl,
+  installExampleShellTool,
+  listInstalledShellTools,
+  resolveExampleShellToolSourceDir,
+  uninstallShellTool,
+} from './shellToolBundles.js';
+import { runShellTool } from './shellToolRun.js';
+import { validateShellToolPackageDir } from './shellToolSpec.js';
 import { probeSamSegmentBackendHealth } from './compute/samSegmentAdapter.js';
 import { probeRembgPythonHealth } from './compute/rembgAdapter.js';
 import { probePaddleOcrBackendHealth } from './compute/paddleOcrAdapter.js';
@@ -341,6 +351,180 @@ export async function handleRequest(
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         sendJson(res, 400, { error: msg, code: 'HOST_BUNDLE_INSTALL_FAILED' }, origin);
+      }
+      return;
+    }
+
+    const mShellToolRun = path.match(/^\/v1\/shell-tools\/([a-z][a-z0-9-]{1,63})\/run$/);
+    if (mShellToolRun && method === 'POST') {
+      const toolId = mShellToolRun[1]!;
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json' }, origin);
+          return;
+        }
+      }
+      const actionId = typeof body.actionId === 'string' ? body.actionId : undefined;
+      const params = body.params;
+      const result = await runShellTool({ toolId, actionId, params });
+      if (!result.ok) {
+        const code =
+          result.error === 'tool_not_found'
+            ? 404
+            : result.error === 'permission_denied'
+              ? 403
+              : result.error === 'run_timeout'
+                ? 504
+                : result.error === 'run_not_configured' || result.error === 'invalid_params'
+                  ? 422
+                  : 400;
+        sendJson(res, code, { error: result.error }, origin);
+        return;
+      }
+      sendJson(
+        res,
+        200,
+        {
+          ok: result.exitCode === 0,
+          exitCode: result.exitCode,
+          signal: result.signal,
+          stdout: result.stdout,
+          stderr: result.stderr,
+        },
+        origin,
+      );
+      return;
+    }
+
+    const mShellToolId = path.match(/^\/v1\/shell-tools\/([a-z][a-z0-9-]{1,63})$/);
+    if (mShellToolId && method === 'GET') {
+      const detail = await getShellToolDetail(mShellToolId[1]!);
+      if (!detail) {
+        sendJson(res, 404, { error: 'tool_not_found' }, origin);
+        return;
+      }
+      sendJson(
+        res,
+        200,
+        {
+          tool: detail.tool,
+          panel: detail.panel,
+          permissions: detail.permissions,
+          installedAt: detail.installedAt,
+        },
+        origin,
+      );
+      return;
+    }
+
+    if (mShellToolId && method === 'DELETE') {
+      const ok = await uninstallShellTool(mShellToolId[1]!);
+      if (!ok) {
+        sendJson(res, 404, { error: 'tool_not_found' }, origin);
+        return;
+      }
+      sendJson(res, 200, { ok: true }, origin);
+      return;
+    }
+
+    if (path === '/v1/shell-tools' && method === 'GET') {
+      const tools = await listInstalledShellTools();
+      sendJson(res, 200, { tools }, origin);
+      return;
+    }
+
+    if (path === '/v1/shell-tools/example-available' && method === 'GET') {
+      const dir = resolveExampleShellToolSourceDir();
+      if (!dir) {
+        sendJson(res, 200, { available: false }, origin);
+        return;
+      }
+      const validation = validateShellToolPackageDir(dir);
+      if (!validation.ok) {
+        sendJson(res, 200, { available: false }, origin);
+        return;
+      }
+      sendJson(
+        res,
+        200,
+        {
+          available: true,
+          toolId: validation.tool.id,
+          name: validation.tool.name,
+          description: validation.tool.description,
+          semver: validation.tool.semver,
+          tags: validation.tool.tags ?? [],
+        },
+        origin,
+      );
+      return;
+    }
+
+    if (path === '/v1/shell-tools/install-example' && method === 'POST') {
+      try {
+        const result = await installExampleShellTool();
+        sendJson(res, 200, { ok: true, toolId: result.toolId, manifest: result.manifest }, origin);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        const error =
+          msg === 'example_tool_unavailable'
+            ? 'example_tool_unavailable'
+            : msg.includes('install_staging_failed')
+              ? 'install_staging_failed'
+              : msg.includes('tool_invalid_manifest')
+                ? 'tool_invalid_manifest'
+                : 'install_failed';
+        const code = error === 'install_staging_failed' ? 500 : error === 'example_tool_unavailable' ? 404 : 400;
+        sendJson(res, code, { error, message: msg }, origin);
+      }
+      return;
+    }
+
+    if (path === '/v1/shell-tools/install-from-url' && method === 'POST') {
+      const raw = await readRequestBodyRaw(req);
+      let body: Record<string, unknown> = {};
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          sendJson(res, 400, { error: 'invalid_json' }, origin);
+          return;
+        }
+      }
+      try {
+        const url = typeof body.url === 'string' ? body.url.trim() : '';
+        const semver = typeof body.semver === 'string' ? body.semver.trim() : '';
+        const sha256 = typeof body.sha256 === 'string' ? body.sha256.trim() : '';
+        const bytes = body.bytes;
+        const label = typeof body.label === 'string' ? body.label : '';
+        if (!url || !semver || !sha256) {
+          sendJson(res, 400, { error: 'invalid_params', message: '缺少 url / semver / sha256' }, origin);
+          return;
+        }
+        const result = await installShellToolBundleFromUrl({
+          url,
+          semver,
+          sha256Expected: sha256,
+          bytesExpected: typeof bytes === 'number' ? bytes : Number(bytes),
+          label,
+        });
+        sendJson(res, 200, { ok: true, toolId: result.toolId, manifest: result.manifest }, origin);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        const error =
+          msg.includes('SHA256') || msg.includes('字节')
+            ? 'install_checksum_mismatch'
+            : msg.includes('install_staging_failed')
+              ? 'install_staging_failed'
+              : msg.includes('tool_invalid_manifest')
+                ? 'tool_invalid_manifest'
+                : 'install_failed';
+        const code = error === 'install_staging_failed' ? 500 : 400;
+        sendJson(res, code, { error, message: msg }, origin);
       }
       return;
     }

@@ -25,6 +25,11 @@ import {
   normalizeCompanionBaseUrl,
 } from '../services/companionLocalPrefs';
 import { installLatestHostPluginBundleToCompanion } from '../services/hostPluginBundleClient';
+import { installLatestShellToolBundleToCompanion } from '../services/shellToolBundleClient';
+import {
+  listCompanionShellTools,
+  type CompanionShellToolSummaryV1,
+} from '../services/companionClient/shellTools';
 import {
   createCompanionJobEventStream,
   listCompanionProjects,
@@ -210,6 +215,10 @@ const SettingsSection: React.FC<{
   const [hostBundleSelectedDir, setHostBundleSelectedDir] = useState('');
   const [hostBundleExecBusy, setHostBundleExecBusy] = useState(false);
   const [hostBundleExecHint, setHostBundleExecHint] = useState('');
+  const [shellToolBusy, setShellToolBusy] = useState(false);
+  const [shellToolHint, setShellToolHint] = useState('');
+  const [shellToolListBusy, setShellToolListBusy] = useState(false);
+  const [shellToolRows, setShellToolRows] = useState<CompanionShellToolSummaryV1[]>([]);
   const [debugLogPersistEnabled, setDebugLogPersistEnabledState] = useState(false);
   const [panoInpaintShrinkToBase, setPanoInpaintShrinkToBase] = useState(false);
   const [flatInpaintComposite, setFlatInpaintComposite] = useState<FlatLocalInpaintCompositeStrategy>('fit_dest');
@@ -646,6 +655,46 @@ const SettingsSection: React.FC<{
       setHostBundleHint(e instanceof Error ? e.message : String(e));
     } finally {
       setHostBundleBusy(false);
+    }
+  };
+
+  const handleRefreshShellTools = async () => {
+    const base = normalizeCompanionBaseUrl(companionBaseDraft);
+    setShellToolListBusy(true);
+    setShellToolHint('');
+    try {
+      const r = await listCompanionShellTools(base);
+      if (r.ok === false) {
+        setShellToolHint(`拉取已安装小工具失败：${r.error}${r.status != null ? `（HTTP ${r.status}）` : ''}`);
+        setShellToolRows([]);
+        return;
+      }
+      const rows = Array.isArray(r.data.tools) ? r.data.tools : [];
+      setShellToolRows(rows);
+      setShellToolHint(rows.length ? `已刷新：${rows.length} 个小工具（主入口在桌面壳「工具」页）` : '暂无已安装小工具');
+    } catch (e) {
+      setShellToolRows([]);
+      setShellToolHint(e instanceof Error ? e.message : String(e));
+    } finally {
+      setShellToolListBusy(false);
+    }
+  };
+
+  const handleInstallShellTool = async () => {
+    setShellToolBusy(true);
+    setShellToolHint('');
+    try {
+      const { toolId, semver, installUrlSource } = await installLatestShellToolBundleToCompanion();
+      const via =
+        installUrlSource === 'public' ? '（经公网直链）' : '（经登录预签名下载）';
+      setShellToolHint(
+        `已安装小工具 ${toolId || '—'} v${semver}。${via} 日常请在桌面壳「工具」页打开。`,
+      );
+      void handleRefreshShellTools();
+    } catch (e) {
+      setShellToolHint(e instanceof Error ? e.message : String(e));
+    } finally {
+      setShellToolBusy(false);
     }
   };
 
@@ -1460,6 +1509,46 @@ const SettingsSection: React.FC<{
                         <p className="text-[10px] text-gray-400 whitespace-pre-wrap break-words">{hostBundleExecHint}</p>
                       ) : null}
                     </div>
+                  </div>
+                </details>
+                <details className="rounded-lg border border-dashed border-[#3f3f46] bg-[#16161a]/80 p-3 space-y-2">
+                  <summary className="cursor-pointer text-[10px] font-bold text-gray-300">小工具包（管理员/可选）</summary>
+                  <div className="mt-3 space-y-2">
+                    <p className="text-[10px] text-gray-500 leading-relaxed">
+                      桌面壳<strong className="text-gray-400">「工具」</strong>页为主入口；此处供管理员从发行目录安装最新
+                      <code className="text-gray-400"> shell_tool_bundle </code>
+                      （需已登录或公网直链）。
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void handleInstallShellTool()}
+                        disabled={shellToolBusy}
+                        className="px-4 py-2 rounded-xl bg-[#1e3a5f] hover:bg-[#264f7a] border border-[#3b82f6]/40 text-[10px] font-bold text-blue-100 transition-colors disabled:opacity-60"
+                      >
+                        {shellToolBusy ? '安装中…' : '安装最新小工具包'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleRefreshShellTools()}
+                        disabled={shellToolListBusy || shellToolBusy}
+                        className="px-3 py-1.5 rounded-lg bg-[#26262c] hover:bg-[#383842] border border-[#2e2e32] text-[10px] font-bold text-gray-200 transition-colors disabled:opacity-60"
+                      >
+                        {shellToolListBusy ? '刷新中…' : '刷新已安装列表'}
+                      </button>
+                    </div>
+                    {shellToolHint ? (
+                      <p className="text-[10px] text-gray-400 whitespace-pre-wrap break-words">{shellToolHint}</p>
+                    ) : null}
+                    {shellToolRows.length > 0 ? (
+                      <ul className="text-[10px] text-gray-500 space-y-1">
+                        {shellToolRows.map((t) => (
+                          <li key={t.id} className="mono">
+                            {t.name || t.id} · {t.id} · v{t.semver}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
                   </div>
                 </details>
                 <details className="rounded-lg border border-[#2e2e32] bg-[#16161a] group">

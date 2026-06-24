@@ -7,9 +7,12 @@ import {
   expandStoryboardShotNoRange,
   formatSheetPreviewShotLabel,
   isStoryboardSheetPreviewSplittable,
+  hasStoryboardSheetPreviewSplitCache,
+  isStoryboardSheetSplitDetectPending,
   mergeLiveStoryboardSheetPreviewSplitState,
   mergeStoryboardSheetPreviews,
   parseSheetPreviewShotRange,
+  pickRicherStoryboardSheetPreviewItem,
   prependStoryboardSheetPreview,
   readStoryboardSheetPreviews,
   removeStoryboardSheetPreview,
@@ -428,6 +431,46 @@ describe('storyboardSheetPreview', () => {
     writeSpy.mockRestore();
   });
 
+  it('pickRicherStoryboardSheetPreviewItem keeps split draft boxes from local detect', () => {
+    const local = createSheetPreviewItem({
+      id: 'p-upload',
+      imageDataUrl: 'data:image/png;base64,abc',
+      label: '上传拼图 · 01–03',
+      source: 'uploaded',
+      rowIds: [],
+      shotNos: ['01', '02', '03'],
+      genStatus: 'done',
+      splitDetectStatus: 'ready',
+      splitDraftBoxes: [
+        { id: 'b1', label: '01', xmin: 10, ymin: 10, xmax: 100, ymax: 200 },
+      ],
+    });
+    const companion = {
+      ...local,
+      imageCompanionKey: 'companion-key',
+      imageDataUrl: '',
+      splitDraftBoxes: undefined,
+      splitDetectStatus: 'detecting' as const,
+    };
+    const merged = pickRicherStoryboardSheetPreviewItem(local, companion);
+    expect(merged.splitDraftBoxes).toEqual(local.splitDraftBoxes);
+    expect(merged.splitDetectStatus).toBe('ready');
+    expect(merged.shotNos).toEqual(['01', '02', '03']);
+  });
+
+  it('isStoryboardSheetPreviewSplittable allows generated sheets without shot numbers', () => {
+    const generated = createSheetPreviewItem({
+      id: 'p-gen',
+      imageDataUrl: 'data:image/png;base64,x',
+      label: '任务 1',
+      source: 'generated',
+      rowIds: [],
+      shotNos: [],
+      genStatus: 'done',
+    });
+    expect(isStoryboardSheetPreviewSplittable(generated)).toBe(true);
+  });
+
   it('applyHydratedSheetPreviewImages overlays fresh display urls', async () => {
     const { applyHydratedSheetPreviewImages } = await import('../services/storyboardSheetPreview');
     const stale = createSheetPreviewItem({
@@ -445,5 +488,53 @@ describe('storyboardSheetPreview', () => {
     };
     const merged = applyHydratedSheetPreviewImages([stale], [fresh]);
     expect(merged[0]?.imageDataUrl).toBe('blob:http://localhost/fresh');
+  });
+
+  it('hasStoryboardSheetPreviewSplitCache requires ready status and boxes', () => {
+    const withBoxes = createSheetPreviewItem({
+      id: 'p1',
+      imageDataUrl: 'data:image/png;base64,x',
+      label: '拼图',
+      source: 'generated',
+      rowIds: [],
+      shotNos: ['01'],
+      genStatus: 'done',
+      splitDetectStatus: 'ready',
+      splitDraftBoxes: [{ id: 'b1', label: '01', xmin: 0, ymin: 0, xmax: 100, ymax: 100 }],
+    });
+    expect(hasStoryboardSheetPreviewSplitCache(withBoxes)).toBe(true);
+
+    const collapsedWhole = {
+      ...withBoxes,
+      splitDraftBoxes: [{ id: 'w', label: 'all', xmin: 20, ymin: 20, xmax: 980, ymax: 980 }],
+    };
+    expect(hasStoryboardSheetPreviewSplitCache(collapsedWhole)).toBe(false);
+
+    const detecting = { ...withBoxes, splitDetectStatus: 'detecting' as const };
+    expect(hasStoryboardSheetPreviewSplitCache(detecting)).toBe(false);
+
+    const empty = { ...withBoxes, splitDraftBoxes: [] };
+    expect(hasStoryboardSheetPreviewSplitCache(empty)).toBe(false);
+  });
+
+  it('isStoryboardSheetSplitDetectPending covers generated and uploaded sources', () => {
+    const pending = createSheetPreviewItem({
+      id: 'p2',
+      imageDataUrl: 'data:image/png;base64,x',
+      label: '任务 1',
+      source: 'generated',
+      rowIds: ['r1'],
+      shotNos: ['01'],
+      genStatus: 'done',
+      splitDetectStatus: 'detecting',
+    });
+    expect(isStoryboardSheetSplitDetectPending(pending)).toBe(true);
+
+    const ready = {
+      ...pending,
+      splitDetectStatus: 'ready' as const,
+      splitDraftBoxes: [{ id: 'b1', label: '01', xmin: 0, ymin: 0, xmax: 100, ymax: 100 }],
+    };
+    expect(isStoryboardSheetSplitDetectPending(ready)).toBe(false);
   });
 });

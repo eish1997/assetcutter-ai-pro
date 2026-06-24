@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'none';" />
+  <title>工具</title>
+  <style>
+    :root {
+      --bg: #0c0c0e;
+      --border: #2e2e32;
+      --text: #e4e4e7;
+      --muted: #71717a;
+      --accent: #3b82f6;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; overflow: hidden; }
+    body {
+      font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 13px;
+      display: flex;
+      flex-direction: column;
+      padding-top: 30px;
+    }
+    .app-titlebar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 30px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 0 0 12px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      background: rgba(10, 10, 12, 0.88);
+      backdrop-filter: blur(16px);
+      z-index: 150;
+      -webkit-app-region: drag;
+      user-select: none;
+    }
+    .titlebar-title {
+      flex: 1;
+      min-width: 0;
+      font-size: 11px;
+      font-weight: 600;
+      color: rgba(228, 228, 231, 0.85);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      padding-right: 8px;
+    }
+    .titlebar-actions {
+      display: flex;
+      align-items: center;
+      -webkit-app-region: no-drag;
+    }
+    .titlebar-pin {
+      width: 36px;
+      height: 30px;
+      border: none;
+      background: transparent;
+      color: rgba(228, 228, 231, 0.65);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .titlebar-pin:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
+    .titlebar-pin.pinned { color: #86efac; }
+    .traffic {
+      width: 46px;
+      height: 30px;
+      border: none;
+      background: transparent;
+      color: rgba(228, 228, 231, 0.72);
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .traffic:hover { background: rgba(255, 255, 255, 0.1); color: #fff; }
+    .traffic.close:hover { background: #e81123; color: #fff; }
+    .tool-body {
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+      padding: 14px 16px 16px;
+    }
+    .tool-head {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+    .tool-head h1 { margin: 0; font-size: 16px; flex: 1; }
+    .tool-version { font-size: 10px; color: var(--muted); font-family: ui-monospace, monospace; }
+    .btn {
+      padding: 8px 12px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #1a1a1f;
+      color: var(--text);
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .btn:hover { background: #222228; }
+    .btn-primary { background: #1e3a5f; border-color: rgba(59, 130, 246, 0.45); color: #dbeafe; }
+    .btn-primary:hover { background: #264f7a; }
+    .btn-row { display: flex; flex-wrap: wrap; gap: 8px; }
+    .shell-tool-field { margin-bottom: 12px; }
+    .shell-tool-label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 6px; }
+    .shell-tool-control { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .shell-tool-input {
+      flex: 1 1 160px;
+      min-width: 0;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #0a0a0c;
+      color: var(--text);
+      font-size: 12px;
+    }
+    .shell-tool-dd { position: relative; flex: 1 1 160px; min-width: 140px; }
+    .shell-tool-dd-trigger {
+      width: 100%;
+      text-align: left;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #0f0f0f;
+      color: var(--text);
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .shell-tool-dd-list {
+      display: none;
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: calc(100% + 4px);
+      z-index: 200;
+      background: #0f0f0f;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+      max-height: 200px;
+      overflow: auto;
+    }
+    .shell-tool-dd.open .shell-tool-dd-list { display: block; }
+    .shell-tool-dd-item {
+      display: block;
+      width: 100%;
+      text-align: left;
+      padding: 8px 10px;
+      border: none;
+      background: transparent;
+      color: var(--text);
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .shell-tool-dd-item:hover { background: rgba(59, 130, 246, 0.15); }
+    #toolModuleLog {
+      margin-top: 12px;
+      max-height: 180px;
+      overflow: auto;
+      padding: 10px;
+      font-size: 10px;
+      line-height: 1.4;
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: rgba(0, 0, 0, 0.35);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-family: ui-monospace, monospace;
+    }
+    .hidden { display: none !important; }
+    .tool-load-error { color: #fca5a5; font-size: 12px; line-height: 1.5; }
+  </style>
+</head>
+<body>
+  <header class="app-titlebar">
+    <div class="titlebar-title" id="titlebarToolName">工具</div>
+    <div class="titlebar-actions">
+      <button type="button" class="titlebar-pin" id="btnToolPin" aria-label="置顶" title="置顶" aria-pressed="false">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <path d="M12 17v5M9 3h6l1 7h4l-7 8-7-8h4l1-7z" />
+        </svg>
+      </button>
+      <button type="button" class="traffic minimize" id="btnToolMin" aria-label="最小化" title="最小化">─</button>
+      <button type="button" class="traffic close" id="btnToolClose" aria-label="关闭" title="关闭">×</button>
+    </div>
+  </header>
+  <main class="tool-body">
+    <div class="tool-head">
+      <h1 id="toolModuleTitle">加载中…</h1>
+      <span id="toolModuleVersion" class="tool-version"></span>
+    </div>
+    <div id="toolLoadError" class="tool-load-error hidden"></div>
+    <div id="toolModuleBody"></div>
+    <div id="toolModuleActions" style="margin-top:14px;"></div>
+    <pre id="toolModuleLog" class="hidden"></pre>
+  </main>
+  <script src="tools-module.js"></script>
+  <script src="tool-window.js"></script>
+</body>
+</html>

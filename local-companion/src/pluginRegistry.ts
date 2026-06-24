@@ -19,6 +19,7 @@ import { getSeamRepairApiUrl, SEAM_ADAPTER_ID } from './compute/seamRepairAdapte
 import { getSamSegmentApiUrl, SAM_SEGMENT_ADAPTER_ID } from './compute/samSegmentAdapter.js';
 import { getPairingSessionSummary } from './pairingSession.js';
 import { countHostPluginBundlesSync, listHostBundlePluginSummariesSync } from './hostPluginBundles.js';
+import { countShellToolsSync } from './shellToolBundles.js';
 import {
   buildRuntimeLocalEnginesStatus,
   type RuntimeLocalEngineStatusV1,
@@ -247,6 +248,7 @@ export type RuntimeStatusV1 = {
   uptimeSec: number;
   /** 已落盘的宿主插件包（host-bundles 各子目录 manifest.json）数量 */
   hostPluginBundles?: { installedCount: number };
+  shellTools?: { installedCount: number };
   /** 本机能力一条主结论（网站 / 桌面壳；见 docs/本地伴侣-本机能力用户体验与产品化路线图.md） */
   localCapabilityUi: LocalCapabilityUiV1;
   /** 伴侣代探测 SamLocal `GET /health`（回环 URL）；用于随启未挂接但服务实际可用等场景 */
@@ -345,6 +347,7 @@ export function buildRuntimeStatus(httpPort: number): RuntimeStatusV1 {
     access: getAccessPublicSummary(),
     uptimeSec: Math.floor((Date.now() - startedAt) / 1000),
     hostPluginBundles: { installedCount: countHostPluginBundlesSync() },
+    shellTools: { installedCount: countShellToolsSync() },
     localCapabilityUi: buildLocalCapabilityUi(relay, samLocal),
   };
 }
