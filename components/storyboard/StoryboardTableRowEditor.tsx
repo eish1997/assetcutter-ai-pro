@@ -1,8 +1,6 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import type { StoryboardParseFieldDef, StoryboardTableRow } from '../../types';
+import React, { useEffect, useState } from 'react';
+import type { StoryboardTableRow } from '../../types';
 import {
-  rowHasStructuredFieldValues,
-  resolveStoryboardParseInput,
   normalizeStoryboardShotNoInput,
   parseDurationSecFromParsedValue,
 } from '../../services/storyboardTableParse';
@@ -46,7 +44,6 @@ type Props = {
   row: StoryboardTableRow;
   index: number;
   rowCount: number;
-  fieldCatalog: StoryboardParseFieldDef[];
   active: boolean;
   readOnly: boolean;
   imageBusy: boolean;
@@ -60,11 +57,6 @@ type Props = {
   onPreviewImage: () => void;
   onImageDrop: (e: React.DragEvent) => void;
   onImagePaste: (e: React.ClipboardEvent) => void;
-  onParseRow?: () => void;
-  parseBusy?: boolean;
-  onOptimizeRow?: () => void;
-  optimizeBusy?: boolean;
-  optimizeDisabledReason?: string;
   redrawBusy?: boolean;
   redrawDisabled?: boolean;
   redrawDisabledReason?: string;
@@ -83,7 +75,6 @@ export default function StoryboardTableRowEditor({
   row,
   index,
   rowCount,
-  fieldCatalog,
   active,
   readOnly,
   imageBusy,
@@ -97,11 +88,6 @@ export default function StoryboardTableRowEditor({
   onPreviewImage,
   onImageDrop,
   onImagePaste,
-  onParseRow,
-  parseBusy = false,
-  onOptimizeRow,
-  optimizeBusy = false,
-  optimizeDisabledReason,
   redrawBusy = false,
   redrawDisabled = false,
   redrawDisabledReason,
@@ -127,53 +113,6 @@ export default function StoryboardTableRowEditor({
 
   const durationInputValue =
     durationDraft ?? (row.durationSec != null ? String(row.durationSec) : '');
-
-  const patchField = (fieldId: string, value: string) => {
-    onPatch({ shotFields: { ...row.shotFields, [fieldId]: value } });
-  };
-
-  const parseInput = useMemo(
-    () => resolveStoryboardParseInput(row, fieldCatalog),
-    [row, fieldCatalog]
-  );
-  const parseHardDisabled = fieldsReadOnly || parseBusy;
-  const parseNeedsInput = !parseInput.trim();
-  const optimizeDisabled =
-    fieldsReadOnly ||
-    optimizeBusy ||
-    fieldCatalog.length === 0 ||
-    !rowHasStructuredFieldValues(fieldCatalog, row) ||
-    parseBusy;
-
-  const renderField = (def: StoryboardParseFieldDef) => {
-    const value = row.shotFields[def.id] ?? '';
-    const isMultiline = def.kind === 'multiline';
-    return (
-      <label key={def.id} className="block">
-        <span className={STORYBOARD_LABEL}>{def.label}</span>
-        {isMultiline ? (
-          <textarea
-            value={value}
-            readOnly={fieldsReadOnly}
-            onChange={(e) => patchField(def.id, e.target.value)}
-            onMouseDown={stopInputFocusBubble}
-            onFocus={stopInputFocusBubble}
-            rows={textareaRowsForText(value, 2)}
-            className={`${STORYBOARD_FIELD_INPUT} resize-y leading-relaxed`}
-          />
-        ) : (
-          <input
-            value={value}
-            readOnly={fieldsReadOnly}
-            onChange={(e) => patchField(def.id, e.target.value)}
-            onMouseDown={stopInputFocusBubble}
-            onFocus={stopInputFocusBubble}
-            className={STORYBOARD_FIELD_INPUT}
-          />
-        )}
-      </label>
-    );
-  };
 
   return (
     <article
@@ -208,48 +147,6 @@ export default function StoryboardTableRowEditor({
               </button>
             ) : (
               <>
-            {onParseRow ? (
-              <button
-                type="button"
-                title={
-                  passed
-                    ? '已通过'
-                    : parseNeedsInput
-                      ? '请先填写原文或结构化字段'
-                      : '结构化解析'
-                }
-                aria-label={parseBusy ? '解析中' : '解析本镜'}
-                disabled={parseHardDisabled}
-                onClick={onParseRow}
-                className={`${STORYBOARD_ROW_ICON_BTN} ${
-                  parseBusy
-                    ? 'bg-white/[0.12] text-gray-200 ring-1 ring-white/15'
-                    : parseHardDisabled || parseNeedsInput
-                      ? 'text-gray-600'
-                      : 'text-gray-300 hover:bg-white/[0.08] hover:text-white'
-                }`}
-              >
-                <AppIcon name="edit" className={`h-3.5 w-3.5 ${parseBusy ? 'animate-pulse' : ''}`} />
-              </button>
-            ) : null}
-            {onOptimizeRow ? (
-              <button
-                type="button"
-                title={optimizeDisabledReason || (passed ? '已通过' : '结构化优化')}
-                aria-label={optimizeBusy ? '优化中' : '优化本镜'}
-                disabled={optimizeDisabled}
-                onClick={onOptimizeRow}
-                className={`${STORYBOARD_ROW_ICON_BTN} ${
-                  optimizeBusy
-                    ? 'bg-amber-600/25 text-amber-200 ring-1 ring-amber-400/30'
-                    : optimizeDisabled
-                      ? 'text-gray-600'
-                      : 'text-amber-300 hover:bg-amber-500/15 hover:text-amber-100'
-                }`}
-              >
-                <AppIcon name="star" className={`h-3.5 w-3.5 ${optimizeBusy ? 'animate-pulse' : ''}`} />
-              </button>
-            ) : null}
             {onRedraw ? (
               <button
                 type="button"
@@ -257,7 +154,7 @@ export default function StoryboardTableRowEditor({
                   redrawDisabledReason ||
                   (storyboardRowHasFrameRef(row)
                     ? '拼图改图：按修改反馈改图（保持画风）'
-                    : '根据画面字段文生图重绘')
+                    : '根据原文文生图重绘')
                 }
                 aria-label={redrawBusy ? '生成中' : '重绘'}
                 disabled={redrawDisabled || redrawBusy}
@@ -523,26 +420,9 @@ export default function StoryboardTableRowEditor({
                   onFocus={stopInputFocusBubble}
                   rows={textareaRowsForText(row.shotRaw ?? '', 2)}
                   className={`${STORYBOARD_FIELD_INPUT} resize-y leading-relaxed`}
-                  placeholder="粘贴或输入分镜原文，然后点解析…"
+                  placeholder="该镜头的完整原文"
                 />
               </label>
-
-              {fieldCatalog.length > 0 ? (
-                <div className={`${STORYBOARD_GAP_INNER} flex flex-col`}>
-                  {fieldCatalog.map(renderField)}
-                </div>
-              ) : (
-                <p className="text-[10px] text-gray-600">
-                  填写原文后点「解析」，字段将在此显示。
-                </p>
-              )}
-
-              <div className="rounded-xl ring-1 ring-white/[0.05]">
-                <span className={`${STORYBOARD_LABEL} px-3 pt-2`}>编译预览</span>
-                <pre className="whitespace-pre-wrap break-words px-3 pb-3 pt-1 text-[10px] leading-relaxed text-gray-500">
-                  {(row.shotText || '').trim() || '（解析或编辑字段后自动生成）'}
-                </pre>
-              </div>
             </>
           )}
       </div>

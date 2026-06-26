@@ -11,16 +11,17 @@ import {
 } from './storyboardTableParse';
 
 export type InsertShotPreviewTile =
-  | { kind: 'ellipsis' }
+  | { kind: 'wrapGap' }
   | { kind: 'more'; label: string }
   | { kind: 'unchanged'; shotNo: string }
   | { kind: 'new'; shotNo: string }
   | { kind: 'shifted'; fromShotNo: string; toShotNo: string };
 
 export type InsertShotPreviewStrip = {
-  tiles: InsertShotPreviewTile[];
-  ellipsisBefore: boolean;
-  ellipsisAfter: boolean;
+  leftTiles: InsertShotPreviewTile[];
+  rightTiles: InsertShotPreviewTile[];
+  insertShotNo: string;
+  insertShotNoEnd: string;
 };
 
 export type PlanInsertShotSuccess = {
@@ -51,9 +52,8 @@ export type PlanInsertShotFailure = {
 
 export type PlanInsertShotResult = PlanInsertShotSuccess | PlanInsertShotFailure;
 
-const PREVIEW_RADIUS = 3;
+const PREVIEW_SIDE_COUNT = 6;
 const MAX_INSERT_COUNT = 50;
-const PREVIEW_MAX_NEW_TILES = 6;
 
 export function parseNumericStoryboardShotNo(shotNo: string | undefined | null): number | null {
   const normalized = normalizeStoryboardShotNoInput(String(shotNo ?? ''));
@@ -75,6 +75,107 @@ export function computeDefaultInsertShotNo(rows: StoryboardTableRow[]): string {
     if (n != null && n > max) max = n;
   }
   return formatStoryboardNumericShotNo(String(max + 1));
+}
+
+/** 插入预览拖拽可选镜号范围（含末尾追加位 max+1） */
+export function computeInsertShotPickerRange(rows: StoryboardTableRow[]): { min: number; max: number } {
+  let maxBefore = 0;
+  for (const row of rows) {
+    const n = parseNumericStoryboardShotNo(row.shotNo);
+    if (n != null && n > maxBefore) maxBefore = n;
+  }
+  return { min: 1, max: Math.max(1, maxBefore + 1) };
+}
+
+export function clampInsertShotNumeric(value: number, rows: StoryboardTableRow[]): number {
+  const { min, max } = computeInsertShotPickerRange(rows);
+  if (!Number.isFinite(value)) return max;
+  return Math.min(max, Math.max(min, Math.floor(value)));
+}
+
+/** 插入镜号拖拽：在 [min,max] 区间头尾循环 */
+export function wrapInsertShotPickerNumeric(value: number, min: number, max: number): number {
+  const span = max - min + 1;
+  if (span <= 0) return min;
+  const offset = Math.floor(value) - min;
+  return min + ((((offset % span) + span) % span));
+}
+
+function collectSortedNumericShots(rows: StoryboardTableRow[]): number[] {
+  const values = new Set<number>();
+  for (const row of rows) {
+    const n = parseNumericStoryboardShotNo(row.shotNo);
+    if (n != null) values.add(n);
+  }
+  return [...values].sort((a, b) => a - b);
+}
+
+function formatInsertShotNo(n: number): string {
+  return formatStoryboardNumericShotNo(String(n));
+}
+
+function buildLeftContextTiles(
+  maxN: number,
+  insertNumeric: number,
+  sideCount: number
+): InsertShotPreviewTile[] {
+  const tiles: InsertShotPreviewTile[] = [];
+  if (maxN <= 0) return tiles;
+
+  for (let step = 1; step <= sideCount; step += 1) {
+    if (insertNumeric === 1) {
+      if (step === 1) {
+        tiles.unshift({ kind: 'wrapGap' });
+        continue;
+      }
+      const shotNo = maxN - (step - 2);
+      if (shotNo >= 1) tiles.unshift({ kind: 'unchanged', shotNo: formatInsertShotNo(shotNo) });
+      continue;
+    }
+
+    const shotNo = insertNumeric - step;
+    if (shotNo >= 1) {
+      tiles.unshift({ kind: 'unchanged', shotNo: formatInsertShotNo(shotNo) });
+      continue;
+    }
+
+    const wrapped = maxN + shotNo;
+    if (wrapped >= 1 && wrapped <= maxN) {
+      tiles.unshift({ kind: 'unchanged', shotNo: formatInsertShotNo(wrapped) });
+    }
+  }
+
+  return tiles;
+}
+
+function buildRightContextTiles(
+  maxN: number,
+  insertNumeric: number,
+  insertCount: number,
+  sideCount: number
+): InsertShotPreviewTile[] {
+  const tiles: InsertShotPreviewTile[] = [];
+  const appendNumeric = Math.max(1, maxN + 1);
+
+  if (insertNumeric >= appendNumeric) {
+    tiles.push({ kind: 'wrapGap' });
+    for (let n = 1; n <= maxN && tiles.length <= sideCount; n += 1) {
+      tiles.push({ kind: 'unchanged', shotNo: formatInsertShotNo(n) });
+    }
+    return tiles.slice(0, sideCount + 1);
+  }
+
+  for (let offset = 0; offset < sideCount; offset += 1) {
+    const n = insertNumeric + offset;
+    if (n > maxN) break;
+    tiles.push({
+      kind: 'shifted',
+      fromShotNo: formatInsertShotNo(n),
+      toShotNo: formatInsertShotNo(n + insertCount),
+    });
+  }
+
+  return tiles;
 }
 
 /** 在大纲指定镜头前插入时，预填起始镜号 */
@@ -119,77 +220,39 @@ function formatShotNoRange(start: string, end: string): string {
   return start === end ? start : `${start}–${end}`;
 }
 
+/** 插入预览/说明用镜号范围（单镜返回起始镜号） */
+export function formatInsertShotPreviewRange(insertNumeric: number, insertCount = 1): string {
+  const start = formatInsertShotNo(insertNumeric);
+  const end = formatInsertShotNo(insertNumeric + normalizeInsertShotCount(insertCount) - 1);
+  return formatShotNoRange(start, end);
+}
+
 export function buildInsertShotPreviewStrip(
   rows: StoryboardTableRow[],
   insertNumeric: number,
   insertCount = 1,
-  radius = PREVIEW_RADIUS
+  sideCount = PREVIEW_SIDE_COUNT
 ): InsertShotPreviewStrip {
-  const shiftDelta = insertCount;
-  const numericBefore: number[] = [];
-  const numericAtOrAfter: number[] = [];
-  for (const row of rows) {
-    const n = parseNumericStoryboardShotNo(row.shotNo);
-    if (n == null) continue;
-    if (n < insertNumeric) numericBefore.push(n);
-    else numericAtOrAfter.push(n);
-  }
-  numericBefore.sort((a, b) => a - b);
-  numericAtOrAfter.sort((a, b) => a - b);
+  const nums = collectSortedNumericShots(rows);
+  const maxN = nums.length ? nums[nums.length - 1]! : 0;
+  const insertShotNo = formatInsertShotNo(insertNumeric);
+  const insertShotNoEnd = formatInsertShotNo(insertNumeric + normalizeInsertShotCount(insertCount) - 1);
 
-  const beforeWindow = numericBefore.filter((n) => n >= insertNumeric - radius - 1);
-  const ellipsisBefore = beforeWindow.length > 0 && beforeWindow[0]! > (numericBefore[0] ?? beforeWindow[0]!);
-
-  const shiftedWindow = numericAtOrAfter.filter((n) => n < insertNumeric + radius);
-  const ellipsisAfter =
-    numericAtOrAfter.length > 0 &&
-    (shiftedWindow.length < numericAtOrAfter.length ||
-      numericAtOrAfter[numericAtOrAfter.length - 1]! > insertNumeric + radius - 1);
-
-  const tiles: InsertShotPreviewTile[] = [];
-  if (ellipsisBefore) tiles.push({ kind: 'ellipsis' });
-
-  for (const n of beforeWindow) {
-    tiles.push({ kind: 'unchanged', shotNo: formatStoryboardNumericShotNo(String(n)) });
-  }
-
-  const newNumbers = Array.from({ length: insertCount }, (_, i) => insertNumeric + i);
-  const visibleNew = newNumbers.slice(0, PREVIEW_MAX_NEW_TILES);
-  for (const n of visibleNew) {
-    tiles.push({ kind: 'new', shotNo: formatStoryboardNumericShotNo(String(n)) });
-  }
-  if (insertCount > PREVIEW_MAX_NEW_TILES) {
-    tiles.push({ kind: 'more', label: `+${insertCount - PREVIEW_MAX_NEW_TILES} 镜` });
-  }
-
-  for (const n of shiftedWindow) {
-    tiles.push({
-      kind: 'shifted',
-      fromShotNo: formatStoryboardNumericShotNo(String(n)),
-      toShotNo: formatStoryboardNumericShotNo(String(n + shiftDelta)),
-    });
-  }
-
-  if (ellipsisAfter) tiles.push({ kind: 'ellipsis' });
-
-  if (!tiles.some((tile) => tile.kind !== 'ellipsis' && tile.kind !== 'more') && insertNumeric === 1 && rows.length === 0) {
-    const emptyNew = Array.from({ length: insertCount }, (_, i) => ({
-      kind: 'new' as const,
-      shotNo: formatStoryboardNumericShotNo(String(i + 1)),
-    }));
+  if (maxN === 0 && insertNumeric === 1) {
     return {
-      tiles: emptyNew.length > PREVIEW_MAX_NEW_TILES
-        ? [
-            ...emptyNew.slice(0, PREVIEW_MAX_NEW_TILES),
-            { kind: 'more', label: `+${insertCount - PREVIEW_MAX_NEW_TILES} 镜` },
-          ]
-        : emptyNew,
-      ellipsisBefore: false,
-      ellipsisAfter: false,
+      leftTiles: [{ kind: 'wrapGap' }],
+      rightTiles: [],
+      insertShotNo,
+      insertShotNoEnd,
     };
   }
 
-  return { tiles, ellipsisBefore, ellipsisAfter };
+  return {
+    leftTiles: buildLeftContextTiles(maxN, insertNumeric, sideCount),
+    rightTiles: buildRightContextTiles(maxN, insertNumeric, insertCount, sideCount),
+    insertShotNo,
+    insertShotNoEnd,
+  };
 }
 
 function buildInsertShotSummary(

@@ -8,7 +8,18 @@ import {
   type StoryboardBulkTextMode,
 } from './storyboardTableBulkImport';
 
-const BULK_AI_JSON_OPTIONS = { responseMimeType: 'application/json' as const };
+/**
+ * 分镜 bulk LLM 走站点 gemini-async 代理（排队 + 轮询），默认 45s 客户端超时会误杀长输出任务。
+ * 与 `GEMINI_ASYNC_CLIENT_MAX_POLL_MS`（300s）对齐上限。
+ */
+export const STORYBOARD_BULK_LLM_TIMEOUT_MS = 300_000;
+
+export const STORYBOARD_BULK_LLM_REQUEST_OPTIONS = {
+  responseMimeType: 'application/json' as const,
+  timeoutMs: STORYBOARD_BULK_LLM_TIMEOUT_MS,
+  requestPhase: '分镜批量',
+  retries: 1,
+};
 
 export const DEFAULT_STORYBOARD_BULK_NORMALIZE_INSTRUCTION = `你是分镜表导入预处理助手。用户会粘贴任意格式的文本。
 
@@ -78,7 +89,7 @@ export async function normalizeStoryboardBulkWithAi(
   text: string,
   preset: CustomAppModule,
   ctx: CapabilityExecuteContext,
-  options?: { instruction?: string; mode?: StoryboardBulkTextMode }
+  options?: { instruction?: string; mode?: StoryboardBulkTextMode; maxChars?: number }
 ): Promise<StoryboardBulkAiNormalizeResult> {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -87,7 +98,8 @@ export async function normalizeStoryboardBulkWithAi(
 
   const sys =
     (options?.instruction || '').trim() || DEFAULT_STORYBOARD_BULK_NORMALIZE_INSTRUCTION;
-  const body = `${sys}\n\n---\n\n${trimmed.slice(0, 12000)}`;
+  const maxChars = options?.maxChars ?? 12000;
+  const body = `${sys}\n\n---\n\n${trimmed.slice(0, maxChars)}`;
   const label = preset.label || preset.id;
   ctx.onLog?.('info', `分镜表 · ${label} · AI 判定与规范化中…`);
 
@@ -97,7 +109,7 @@ export async function normalizeStoryboardBulkWithAi(
     raw = await workflowChat(
       [{ role: 'user', parts: [{ text: body }] }],
       resolveTextModelForPreset(preset, ctx),
-      BULK_AI_JSON_OPTIONS
+      STORYBOARD_BULK_LLM_REQUEST_OPTIONS
     );
   } catch (err) {
     if (assetId) {

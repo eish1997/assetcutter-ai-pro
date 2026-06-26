@@ -7,6 +7,7 @@ import { ensureShotCharacterFieldOnRow, isShotCharacterFieldLabel, shouldRetainS
 import { preserveStoryboardRowFrameFields } from './storyboardTableAsset';
 import { resolveTextModelForPreset, type CapabilityExecuteContext } from './capabilityExecutor';
 import { runStoryboardLlmAudited } from './storyboardTaskAuditEvents';
+import { STORYBOARD_BULK_LLM_REQUEST_OPTIONS } from './storyboardTableBulkAiDetect';
 import { workflowChat } from './unifiedAiGateway';
 
 export const STORYBOARD_PARSE_PRESET_KEY = 'ac_storyboard_parse_preset_v1';
@@ -18,8 +19,6 @@ export const STORYBOARD_OPTIMIZE_ALLOW_DIALOGUE_KEY = 'ac_storyboard_optimize_al
 export const STORYBOARD_PARSE_BATCH_CONCURRENCY = 2;
 export const STORYBOARD_PARSE_MAX_FIELDS = 16;
 export const STORYBOARD_CATALOG_SOFT_WARN = 12;
-
-const STORYBOARD_LLM_JSON_OPTIONS = { responseMimeType: 'application/json' as const };
 
 const EXCLUDE_REDRAW_LABEL = /对白|台词|音效|备注|音乐|旁白/;
 
@@ -369,6 +368,13 @@ export function inferRedrawInclude(label: string, explicit?: boolean): boolean {
   return !EXCLUDE_REDRAW_LABEL.test(label.trim());
 }
 
+export function inferFieldKind(label: string, value: string): 'text' | 'multiline' {
+  if (/画面|内容|描述|动作|备注|建议|设计/.test(label) && value.length > 48) {
+    return 'multiline';
+  }
+  return 'text';
+}
+
 export function slugifyFieldLabel(label: string): string {
   const trimmed = label.trim().toLowerCase();
   const slug = trimmed
@@ -380,9 +386,14 @@ export function slugifyFieldLabel(label: string): string {
 
 export function resolveFieldId(catalog: StoryboardParseFieldDef[], label: string): string {
   const normalized = label.trim();
-  const existing = catalog.find((f) => f.label.trim() === normalized);
+  const canonical = canonicalStoryboardImportFieldLabel(normalized);
+  const existing =
+    catalog.find((f) => f.label.trim() === normalized) ??
+    (canonical
+      ? catalog.find((f) => canonicalStoryboardImportFieldLabel(f.label) === canonical)
+      : undefined);
   if (existing) return existing.id;
-  const base = slugifyFieldLabel(normalized);
+  const base = slugifyFieldLabel(canonical || normalized);
   if (!catalog.some((f) => f.id === base)) return base;
   let i = 2;
   while (catalog.some((f) => f.id === `${base}_${i}`)) i += 1;
@@ -649,7 +660,7 @@ export function mergeParseFieldsIntoCatalog(
   const next = [...catalog];
   let maxOrder = next.reduce((m, f) => Math.max(m, f.order), -1);
   for (const item of parsed) {
-    const label = item.label.trim();
+    const label = canonicalStoryboardImportFieldLabel(item.label.trim());
     if (!label) continue;
     if (isSystemParseFieldLabel(label)) continue;
     const id = resolveFieldId(next, label);
@@ -734,7 +745,7 @@ export async function parseStoryboardTextWithPreset(
       const raw = await workflowChat(
         [{ role: 'user', parts: [{ text: body }] }],
         resolveTextModelForPreset(preset, ctx),
-        STORYBOARD_LLM_JSON_OPTIONS
+        STORYBOARD_BULK_LLM_REQUEST_OPTIONS
       );
       const out = normalizeParseModelOutput(raw);
       ctx.onLog?.('info', `分镜表 · 结构化解析完成（${out.fields.length} 个字段）`);
@@ -774,7 +785,7 @@ export async function parseStoryboardBulkStructuredWithPreset(
       const raw = await workflowChat(
         [{ role: 'user', parts: [{ text: body }] }],
         resolveTextModelForPreset(preset, ctx),
-        STORYBOARD_LLM_JSON_OPTIONS
+        STORYBOARD_BULK_LLM_REQUEST_OPTIONS
       );
       const out = normalizeBulkParseModelOutput(raw);
       ctx.onLog?.('info', `分镜表 · 批量结构化解析完成（${out.rows.length} 镜）`);
@@ -1060,7 +1071,7 @@ export async function optimizeStoryboardTextWithPreset(
       const raw = await workflowChat(
         [{ role: 'user', parts: [{ text: body }] }],
         resolveTextModelForPreset(preset, ctx),
-        STORYBOARD_LLM_JSON_OPTIONS
+        STORYBOARD_BULK_LLM_REQUEST_OPTIONS
       );
       const out = normalizeOptimizeModelOutput(raw, catalog);
       ctx.onLog?.('info', `分镜表 · 结构化优化完成（${out.fields.length} 个字段）`);
@@ -1095,4 +1106,109 @@ export function shotFieldsShallowEqual(a: Record<string, string>, b: Record<stri
     if (a[key] !== b[key]) return false;
   }
   return true;
+}
+
+const STORYBOARD_LEGACY_FIELD_LABEL_TO_STANDARD: Record<string, string> = {
+  '画面描述、角色表演与3D流体特效': '画面',
+  '3D虚拟机位运镜与构图描述': '运镜',
+  '台词同步': '对白',
+  画面内容: '画面',
+  画面描述: '画面',
+};
+
+/** 导入/编辑页标准字段名（与解析页 8 列对齐） */
+export function canonicalStoryboardImportFieldLabel(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return '';
+  const legacy = STORYBOARD_LEGACY_FIELD_LABEL_TO_STANDARD[trimmed];
+  if (legacy) return legacy;
+  if (/^画面描述|^画面内容|^画面$/.test(trimmed)) return '画面';
+  if (/^3D虚拟|运镜与构图|虚拟机位/.test(trimmed) || /运镜|机位|构图描述/.test(trimmed)) {
+    return '运镜';
+  }
+  if (/^对白$|^台词/.test(trimmed)) return '对白';
+  if (/^景别$|^景$/.test(trimmed)) return '景别';
+  if (/^焦距|^焦段/.test(trimmed)) return '焦距';
+  if (/^音效$|^声音$|^音乐$|^拟音/.test(trimmed)) return '备注';
+  if (/^备注$|^说明$|^注释$/.test(trimmed)) return '备注';
+  return trimmed;
+}
+
+export function canonicalizeStoryboardImportFields(
+  fields: StoryboardParseFieldItem[]
+): StoryboardParseFieldItem[] {
+  const merged = new Map<string, StoryboardParseFieldItem>();
+  for (const field of fields) {
+    const label = canonicalStoryboardImportFieldLabel(field.label);
+    if (!label || isSystemParseFieldLabel(label)) continue;
+    const existing = merged.get(label);
+    if (existing) {
+      existing.value = `${existing.value}\n${field.value}`.trim();
+      existing.kind = inferFieldKind(label, existing.value);
+    } else {
+      merged.set(label, {
+        ...field,
+        label,
+        kind: inferFieldKind(label, field.value),
+        redrawInclude: inferRedrawInclude(label, field.redrawInclude),
+      });
+    }
+  }
+  return [...merged.values()];
+}
+
+/** 合并 catalog 中同义列（长标签 → 标准短标签），并迁移行内 shotFields */
+export function mergeStoryboardCatalogToStandardFieldLabels(
+  catalog: StoryboardParseFieldDef[],
+  rows: StoryboardTableRow[]
+): { catalog: StoryboardParseFieldDef[]; rows: StoryboardTableRow[] } {
+  if (!catalog.length) return { catalog, rows };
+
+  const systemDefs = catalog.filter((def) => isSystemParseFieldLabel(def.label));
+  const dynamicDefs = catalog.filter((def) => !isSystemParseFieldLabel(def.label));
+  const groups = new Map<string, StoryboardParseFieldDef[]>();
+
+  for (const def of dynamicDefs) {
+    const key = canonicalStoryboardImportFieldLabel(def.label);
+    groups.set(key, [...(groups.get(key) ?? []), def]);
+  }
+
+  const idRemap = new Map<string, string>();
+  const mergedDynamic: StoryboardParseFieldDef[] = [];
+
+  for (const [canonicalKey, group] of groups) {
+    const winner =
+      group.find((def) => def.label.trim() === canonicalKey) ??
+      group.find((def) => !STORYBOARD_LEGACY_FIELD_LABEL_TO_STANDARD[def.label.trim()]) ??
+      group[0]!;
+    for (const def of group) {
+      if (def.id !== winner.id) idRemap.set(def.id, winner.id);
+    }
+    mergedDynamic.push({
+      ...winner,
+      label: canonicalKey,
+      kind: group.some((def) => def.kind === 'multiline') ? 'multiline' : winner.kind,
+    });
+  }
+
+  mergedDynamic.sort((a, b) => a.order - b.order);
+  const nextCatalog = [...systemDefs, ...mergedDynamic.map((def, index) => ({ ...def, order: index }))];
+
+  const nextRows = rows.map((row) => {
+    let shotFields = { ...(row.shotFields || {}) };
+    for (const [fromId, toId] of idRemap) {
+      const fromVal = String(shotFields[fromId] ?? '').trim();
+      if (!fromVal) {
+        delete shotFields[fromId];
+        continue;
+      }
+      const toVal = String(shotFields[toId] ?? '').trim();
+      shotFields[toId] = toVal && toVal !== fromVal ? `${toVal}\n${fromVal}`.trim() : fromVal;
+      delete shotFields[fromId];
+    }
+    shotFields = purgeSystemFieldValuesFromShotFields(nextCatalog, shotFields);
+    return applyShotFieldsPatch(row, nextCatalog, shotFields);
+  });
+
+  return { catalog: nextCatalog, rows: nextRows };
 }

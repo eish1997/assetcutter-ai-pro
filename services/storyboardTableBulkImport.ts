@@ -17,6 +17,9 @@ import {
   compareStoryboardShotNos,
   purgeSystemFieldValuesFromShotFields,
   resolveFieldId,
+  canonicalStoryboardImportFieldLabel,
+  canonicalizeStoryboardImportFields,
+  mergeStoryboardCatalogToStandardFieldLabels,
   type StoryboardParseFieldItem,
 } from './storyboardTableParse';
 import { ensureShotCharacterFieldOnRow, isShotCharacterFieldLabel } from './storyboardShotCharacters';
@@ -142,7 +145,7 @@ const META_ROW_RE =
 const TAGGED_FIELD_RE = /【([^】]+)】/g;
 
 const FREEFORM_SHOT_META_RE =
-  /^(\d{1,3})((?:大)?(?:远景|全景|中景|近景|特写|大特写|微距))\s*(\d+(?:\.\d+)?)\s*(?:[秒sS]|帧)?/i;
+  /^(\d{1,3})\s*((?:大)?(?:远景|全景|中景|近景|特写|大特写|微距))\s*(\d+(?:\.\d+)?)\s*(?:[秒sS]|帧)?/i;
 
 function isPlaceholderValue(value: string): boolean {
   const t = value.trim();
@@ -209,7 +212,13 @@ function inferColumnLabelFromSamples(samples: string[]): string {
   if (values.some((value) => CAMERA_MOVE_RE.test(value) || /运镜|摇镜|推轨/.test(value))) return '运镜';
   if (values.some((value) => value.length > 40)) return '画面内容';
   if (values.some((value) => /光影|灯光|照明|色调|氛围/.test(value))) return '光影设计';
-  if (values.some((value) => /服化|服装|化妆|道具|造型/.test(value))) return '服化道建议';
+  if (values.some((value) => /服化|服装|化妆|造型/.test(value))) return '服化道建议';
+  if (values.some((value) => /角色|人物|演员|出镜/.test(value))) return '角色';
+  if (values.some((value) => /道具|陈设|摆景/.test(value))) return '道具';
+  if (values.some((value) => /特效|VFX|流体|粒子/.test(value))) return '特效';
+  if (values.some((value) => /^\d+\s*mm$/i.test(value.trim()) || /^\d+mm$/i.test(value.trim()))) {
+    return '焦距';
+  }
   if (values.some((value) => /备注|说明|注释/.test(value))) return '备注';
   return '';
 }
@@ -372,34 +381,86 @@ export function extractShotMetaFromFreeformLine(text: string): {
   };
 }
 
-/** 将【标签】映射到表字段 label */
+/** 解析页 / 自由分镜块：从「001 大远景 4.5s 【标签】…」构建导入行 */
+export function buildImportRowFromFreeformShotBlock(
+  shotNo: string,
+  text: string
+): StoryboardBulkImportRow {
+  const normalizedSource = normalizeFreeformSourceLine(text.trim());
+  const taggedFields = parseTaggedStoryboardFields(normalizedSource);
+  const freeformMeta = extractShotMetaFromFreeformLine(normalizedSource);
+
+  let durationSec: number | null | undefined = freeformMeta.durationSec;
+  for (const field of taggedFields) {
+    if (isSystemDurationLabel(field.label) || field.label === '时长') {
+      const parsed = parseDurationSecFromParsedValue(field.value);
+      if (parsed != null) durationSec = parsed;
+    }
+  }
+
+  const durationMatch = normalizedSource.match(/(?:时长|时间)\s*[：:]\s*([^\n【]+)/);
+  if (durationMatch && durationSec == null) {
+    durationSec = parseDurationSecFromParsedValue(durationMatch[1]!.trim());
+  }
+
+  if (durationSec == null) {
+    const firstLine = normalizedSource.split(/\r?\n/)[0] ?? '';
+    const inlineDur = firstLine.match(/(\d+(?:\.\d+)?)\s*(?:[秒sS]|帧)\b/);
+    if (inlineDur) durationSec = parseDurationSecFromParsedValue(inlineDur[0]!);
+  }
+
+  const fields: StoryboardParseFieldItem[] = taggedFields.filter(
+    (field) => !mapStoryboardTagLabelToParsePageFixed(field.label)
+  );
+
+  if (freeformMeta.scale) {
+    fields.push({
+      label: '景别',
+      value: freeformMeta.scale,
+      kind: 'text',
+      redrawInclude: true,
+    });
+  }
+
+  return {
+    shotNo: freeformMeta.shotNo || shotNo,
+    durationSec: durationSec ?? null,
+    shotRaw: text.trim(),
+    fields: canonicalizeStoryboardImportFields(fields),
+  };
+}
+
+function mapStoryboardTagLabelToParsePageFixed(mappedLabel: string): boolean {
+  const fixedLabels = ['镜头号', '时长', '景别', '焦距', '画面', '运镜', '对白', '备注'];
+  return fixedLabels.includes(mappedLabel);
+}
+
+/** 将【标签】映射到标准表字段 label */
 export function mapStoryboardTagLabel(raw: string): string {
   const label = raw.trim();
-  if (/^画面描述/.test(label) || /^画面内容/.test(label) || /^画面$/.test(label)) {
-    return '画面描述、角色表演与3D流体特效';
+  if (!label) return '画面';
+  if (/^画面描述|^画面内容|^画面$/.test(label) || /表演|流体|特效|视觉|内容/.test(label)) {
+    return '画面';
   }
-  if (/运镜|机位|构图|虚拟机位|切入|跟随|推拉|摇移|跟拍|环绕|升格|降格|相机|镜头运动/.test(label)) {
-    return '3D虚拟机位运镜与构图描述';
+  if (
+    /运镜|机位|构图|虚拟机位|切入|跟随|推拉|摇移|跟拍|环绕|升格|降格|相机|镜头运动|视差|缓推|平移|跟移|Z轴|z轴|垂直推|横移|甩镜|手持|稳定器|航拍|低机位|高机位|变焦|抽离|形变/.test(
+      label
+    ) ||
+    /(?:推|拉|摇|移|跟|升|降|旋|甩)(?:镜|拍|移|拉|进|出)?/.test(label)
+  ) {
+    return '运镜';
   }
-  if (/音效|声音|音乐/.test(label)) {
-    return '音效';
+  if (/音效|声音|音乐|拟音/.test(label)) return '备注';
+  if (/对白|台词/.test(label)) return '对白';
+  if (/景别|^景$/.test(label)) return '景别';
+  if (/^(镜头内角色|出镜角色|镜头角色|本镜角色)$/.test(label)) return '角色';
+  if (/时长|时间|帧/.test(label)) return '时长';
+  if (/焦距|焦段/.test(label)) return '焦距';
+  if (/备注|说明|注释/.test(label)) return '备注';
+  if (/阴影|轴线|广角|拉升|微距|淡出|延时|分流|飞跃|后拉|长镜|高潮|交接|反应|特写/.test(label)) {
+    return '运镜';
   }
-  if (/对白|台词/.test(label)) {
-    return '台词同步';
-  }
-  if (/景别/.test(label)) {
-    return '景别';
-  }
-  if (/^(镜头内角色|出镜角色|镜头角色|本镜角色)$/.test(label)) {
-    return '镜头内角色';
-  }
-  if (/时长|时间|帧/.test(label)) {
-    return '时长';
-  }
-  if (/阴影|轴线|广角|拉升|微距|淡出|延时|分流|飞跃|平移|形变|大片|高潮|跟拍|交接|反应|特写|形变|长镜|后拉/.test(label)) {
-    return '3D虚拟机位运镜与构图描述';
-  }
-  return '画面描述、角色表演与3D流体特效';
+  return canonicalStoryboardImportFieldLabel(label) || '画面';
 }
 
 /** 解析行内【标签】段落 */
@@ -421,16 +482,19 @@ export function parseTaggedStoryboardFields(text: string): StoryboardParseFieldI
     const current = indices[index]!;
     const nextTagIndex = index + 1 < indices.length ? text.indexOf('【', current.valueStart) : text.length;
     const valueEnd = nextTagIndex >= current.valueStart ? nextTagIndex : text.length;
-    const value = text.slice(current.valueStart, valueEnd).replace(/^[。，、；;:\s]+/, '').trim();
-    if (!value) continue;
-
+    let value = text.slice(current.valueStart, valueEnd).replace(/^[。，、；;:\s]+/, '').trim();
     const mappedLabel = mapStoryboardTagLabel(current.label);
+    if (!value) {
+      if (mappedLabel === '运镜') {
+        value = current.label;
+      } else {
+        continue;
+      }
+    }
+
     let fieldValue = value;
-    if (
-      mappedLabel !== current.label &&
-      mappedLabel === '3D虚拟机位运镜与构图描述'
-    ) {
-      fieldValue = value ? `【${current.label}】${value}` : `【${current.label}】`;
+    if (mappedLabel === '运镜' && !value.includes(current.label)) {
+      fieldValue = `${current.label}${value ? ` ${value}` : ''}`.trim();
     }
 
     const existingField = fields.find((field) => field.label === mappedLabel);
@@ -448,7 +512,7 @@ export function parseTaggedStoryboardFields(text: string): StoryboardParseFieldI
     });
   }
 
-  return fields;
+  return canonicalizeStoryboardImportFields(fields);
 }
 
 function resolveImportFieldLabel(
@@ -459,29 +523,28 @@ function resolveImportFieldLabel(
     .filter((field) => !isSystemParseFieldLabel(field.label))
     .map((field) => field.label.trim());
   const trimmed = rawLabel.trim();
-  if (!trimmed || !labels.length) return null;
+  if (!trimmed) return null;
+
+  const canonical = canonicalStoryboardImportFieldLabel(trimmed);
   if (labels.includes(trimmed)) return trimmed;
+  if (labels.includes(canonical)) return canonical;
+
+  for (const label of labels) {
+    if (canonicalStoryboardImportFieldLabel(label) === canonical) return label;
+  }
 
   const mapped = mapStoryboardTagLabel(trimmed);
+  const mappedCanonical = canonicalStoryboardImportFieldLabel(mapped);
   if (labels.includes(mapped)) return mapped;
+  if (labels.includes(mappedCanonical)) return mappedCanonical;
+  for (const label of labels) {
+    if (canonicalStoryboardImportFieldLabel(label) === mappedCanonical) return label;
+  }
 
-  if (/台词|对白/.test(trimmed) && labels.includes('台词同步')) return '台词同步';
-  if (/运镜|机位|构图|虚拟机位/.test(trimmed) && labels.includes('3D虚拟机位运镜与构图描述')) {
-    return '3D虚拟机位运镜与构图描述';
-  }
-  if (/画面/.test(trimmed) && labels.includes('画面描述、角色表演与3D流体特效')) {
-    return '画面描述、角色表演与3D流体特效';
-  }
-  if (/音效|声音|音乐/.test(trimmed) && labels.includes('音效')) return '音效';
-  if (/景别/.test(trimmed) && labels.includes('景别')) return '景别';
+  if (/音效|声音|音乐/.test(trimmed) && labels.includes('备注')) return '备注';
   if (isShotCharacterFieldLabel(trimmed) && labels.includes('镜头内角色')) return '镜头内角色';
 
-  if (labels.includes('3D虚拟机位运镜与构图描述') && mapped === '3D虚拟机位运镜与构图描述') {
-    return mapped;
-  }
-  if (labels.includes('画面描述、角色表演与3D流体特效') && mapped === '画面描述、角色表演与3D流体特效') {
-    return mapped;
-  }
+  if (!labels.length) return canonical;
   return null;
 }
 
@@ -598,7 +661,7 @@ function mapCellsToImportRow(
     }
 
     fields.push({
-      label,
+      label: canonicalStoryboardImportFieldLabel(label),
       value,
       kind: inferFieldKind(label, value),
       redrawInclude: inferRedrawInclude(label),
@@ -642,7 +705,7 @@ function mapCellsToImportRow(
       shotNo,
       durationSec: durationSec ?? null,
       shotRaw: sourceText.trim(),
-      fields: mergedFields,
+      fields: canonicalizeStoryboardImportFields(mergedFields),
     };
   }
 
@@ -652,7 +715,7 @@ function mapCellsToImportRow(
     shotNo,
     durationSec: durationSec ?? null,
     shotRaw: sourceText.trim(),
-    fields,
+    fields: canonicalizeStoryboardImportFields(fields),
   };
 }
 
@@ -827,7 +890,10 @@ function importRowToTableRow(
   options?: { preserveCatalog?: boolean }
 ): { catalog: StoryboardParseFieldDef[]; row: StoryboardTableRow } {
   const preserveCatalog = Boolean(options?.preserveCatalog && catalog.length);
-  const fields = preserveCatalog ? alignImportFieldsToCatalog(catalog, item.fields) : item.fields;
+  const normalizedFields = canonicalizeStoryboardImportFields(item.fields);
+  const fields = preserveCatalog
+    ? alignImportFieldsToCatalog(catalog, normalizedFields)
+    : normalizedFields;
   let nextCatalog = preserveCatalog ? catalog : mergeParseFieldsIntoCatalog(catalog, fields);
   const shotFields = buildShotFieldsFromImport(nextCatalog, fields, baseFields);
 
@@ -857,7 +923,9 @@ export function applyStoryboardBulkImport(
   imports: StoryboardBulkImportRow[],
   mode: 'replace' | 'append'
 ): { catalog: StoryboardParseFieldDef[]; rows: StoryboardTableRow[]; touchedRowIds: string[] } {
-  let nextCatalog = [...catalog];
+  const normalized = mergeStoryboardCatalogToStandardFieldLabels(catalog, existingRows);
+  let nextCatalog = [...normalized.catalog];
+  const baseRows = normalized.rows;
   const touchedRowIds: string[] = [];
 
   if (mode === 'replace') {
@@ -868,7 +936,7 @@ export function applyStoryboardBulkImport(
       const result = importRowToTableRow(item, nextCatalog, importedRows.length);
       nextCatalog = result.catalog;
       const frameSource = resolveFrameSourceForStoryboardImport(
-        existingRows,
+        baseRows,
         item.shotNo || '',
         importIndex,
         usedFrameRowIds
@@ -880,16 +948,17 @@ export function applyStoryboardBulkImport(
       touchedRowIds.push(result.row.id);
     }
     const rows = importedRows.map((row, index) => ({ ...row, index }));
-    return { catalog: nextCatalog, rows, touchedRowIds };
+    const merged = mergeStoryboardCatalogToStandardFieldLabels(nextCatalog, rows);
+    return { catalog: merged.catalog, rows: merged.rows, touchedRowIds };
   }
 
   const rowByShotKey = new Map<string, StoryboardTableRow>();
-  for (const row of existingRows) {
+  for (const row of baseRows) {
     const key = normalizeStoryboardShotNoKey(row.shotNo || '');
     if (key) rowByShotKey.set(key, row);
   }
 
-  const mergedRows: StoryboardTableRow[] = existingRows.map((row) => ({ ...row }));
+  const mergedRows: StoryboardTableRow[] = baseRows.map((row) => ({ ...row }));
 
   const findRowIndexByShotKey = (shotNo: string) => findExistingRowIndexForImport(mergedRows, shotNo);
 
@@ -902,7 +971,7 @@ export function applyStoryboardBulkImport(
     return mergedRows.length;
   };
 
-  const preserveCatalog = catalog.length > 0;
+  const preserveCatalog = nextCatalog.length > 0;
   const usedFrameRowIds = new Set<string>();
 
   for (let importIndex = 0; importIndex < imports.length; importIndex += 1) {
@@ -989,6 +1058,12 @@ export function applyStoryboardBulkImport(
   }
 
   const rows = mergedRows.map((row, index) => ({ ...row, index }));
-
-  return { catalog: nextCatalog, rows, touchedRowIds };
+  const merged = mergeStoryboardCatalogToStandardFieldLabels(nextCatalog, rows);
+  return { catalog: merged.catalog, rows: merged.rows, touchedRowIds };
 }
+
+export {
+  canonicalStoryboardImportFieldLabel,
+  canonicalizeStoryboardImportFields,
+  mergeStoryboardCatalogToStandardFieldLabels,
+} from './storyboardTableParse';

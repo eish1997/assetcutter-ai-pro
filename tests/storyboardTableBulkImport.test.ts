@@ -5,8 +5,10 @@ import {
   rowHasStoryboardBulkImportBaseline,
   applyStoryboardBulkImport,
   buildDuplicateStoryboardShotGroups,
+  canonicalStoryboardImportFieldLabel,
   detectStoryboardBulkDelimiter,
   findStoryboardShotCollisionLines,
+  mergeStoryboardCatalogToStandardFieldLabels,
   parseStoryboardBulkText,
   resolveStoryboardBulkLineCharRange,
   splitStoryboardBulkSourceLines,
@@ -28,7 +30,7 @@ describe('storyboardTableBulkImport', () => {
     expect(parsed.rows[0]?.shotNo).toBe('SC01_SH001');
     expect(parsed.rows[0]?.durationSec).toBe(3);
     expect(parsed.rows[2]?.fields.some((field) => field.label === '服化道建议')).toBe(true);
-    expect(parsed.rows[2]?.fields.find((field) => field.label === '画面内容')?.value).toContain(
+    expect(parsed.rows[2]?.fields.find((field) => field.label === '画面')?.value).toContain(
       '办公室内景'
     );
   });
@@ -40,6 +42,17 @@ A01\t远景\t2s\t城市夜景`;
     expect(parsed.rows).toHaveLength(1);
     expect(parsed.rows[0]?.shotNo).toBe('A01');
     expect(parsed.rows[0]?.durationSec).toBe(2);
+  });
+
+  it('parses canonical 8-column pipe row with tagged cell values into standard fields', () => {
+    const text = `镜头号 | 时长 | 景别 | 焦距 | 画面 | 运镜 | 对白 | 备注
+113 | 3.0s | 特写 | - | 【画面描述】强压怒火。祝由广济闭上双眼 | 【空间抽离变焦】相机直盯广济 | 祝由广济：“你最好给我一个合理的解释。” | -`;
+    const parsed = parseStoryboardBulkText(text, 'pipe');
+    expect(parsed.rows).toHaveLength(1);
+    expect(parsed.rows[0]?.shotNo).toBe('113');
+    expect(parsed.rows[0]?.fields.find((f) => f.label === '画面')?.value).toContain('强压怒火');
+    expect(parsed.rows[0]?.fields.find((f) => f.label === '运镜')?.value).toContain('相机直盯广济');
+    expect(parsed.rows[0]?.fields.find((f) => f.label === '对白')?.value).toContain('合理的解释');
   });
 
   it('applies import into storyboard rows and catalog', () => {
@@ -69,7 +82,7 @@ A01\t远景\t2s\t城市夜景`;
     const { rows } = applyStoryboardBulkImport(catalog, initialRows, second.rows, 'append');
     expect(rows).toHaveLength(3);
     expect(rows[0]?.id).toBe(initialRows[0]?.id);
-    expect(rows[0]?.shotFields[catalog.find((field) => field.label === '画面内容')!.id]).toBe('新画面');
+    expect(rows[0]?.shotFields[catalog.find((field) => field.label === '画面')!.id]).toBe('新画面');
     expect(rows.map((row) => row.shotNo)).toEqual(['001', '002', '003']);
     expect(rows[1]?.shotNo).toBe('002');
   });
@@ -81,7 +94,7 @@ A01\t远景\t2s\t城市夜景`;
     expect(parsed.errors).toHaveLength(0);
     expect(parsed.rows).toHaveLength(1);
     expect(parsed.rows[0]?.durationSec).toBe(1);
-    expect(parsed.rows[0]?.fields.find((field) => field.label === '音效')?.value).toContain('-10dB');
+    expect(parsed.rows[0]?.fields.find((field) => field.label === '备注')?.value).toContain('-10dB');
   });
 
   it('infers columns when pasted without header row', () => {
@@ -99,7 +112,7 @@ A01\t远景\t2s\t城市夜景`;
 01 | 远景 | 城市夜景`;
     const parsed = parseStoryboardBulkText(text, 'pipe');
     expect(parsed.rows).toHaveLength(1);
-    expect(parsed.rows[0]?.fields.some((field) => field.label === '景' && field.value === '远景')).toBe(true);
+    expect(parsed.rows[0]?.fields.some((field) => field.label === '景别' && field.value === '远景')).toBe(true);
   });
 
   it('skips act titles and meta rows when shot column is present', () => {
@@ -193,11 +206,9 @@ A01\t远景\t2s\t城市夜景`;
     expect(parsed.rows[0]?.durationSec).toBe(3.5);
     expect(parsed.rows[0]?.shotRaw).toContain('131中景 3.5s');
     expect(
-      parsed.rows[0]?.fields.find((field) => field.label === '3D虚拟机位运镜与构图描述')?.value
+      parsed.rows[0]?.fields.find((field) => field.label === '运镜')?.value
     ).toContain('对角线切入');
-    expect(
-      parsed.rows[0]?.fields.find((field) => field.label === '画面描述、角色表演与3D流体特效')?.value
-    ).toBe('杀气复苏。');
+    expect(parsed.rows[0]?.fields.find((field) => field.label === '画面')?.value).toBe('杀气复苏。');
   });
 
   it('append merge does not grow field catalog with random tags', () => {
@@ -234,9 +245,11 @@ A01\t远景\t2s\t城市夜景`;
       'append'
     );
     expect(nextCatalog).toHaveLength(4);
-    expect(nextCatalog.map((field) => field.label)).toEqual(catalog.map((field) => field.label));
-    expect(rows[0]?.shotFields.f_cam).toContain('动态阴影平移');
-    expect(rows[0]?.shotFields.f_visual).toBe('新画面');
+    expect(nextCatalog.map((field) => field.label)).toEqual(['景别', '运镜', '画面', '对白']);
+    const cameraId = nextCatalog.find((field) => field.label === '运镜')!.id;
+    const visualId = nextCatalog.find((field) => field.label === '画面')!.id;
+    expect(rows[0]?.shotFields[cameraId]).toContain('动态阴影平移');
+    expect(rows[0]?.shotFields[visualId]).toBe('新画面');
   });
 
   it('rowHasStoryboardBulkImportBaseline treats frame-only rows as existing content', () => {
@@ -364,5 +377,75 @@ SC01 | 新描述`,
     expect(rows).toHaveLength(1);
     expect(rows[0]?.frameImage).toBe('data:image/png;base64,split');
     expect(rows[0]?.shotRaw).toContain('SC01');
+  });
+
+  it('merges legacy catalog labels to parse-page short labels on import', () => {
+    expect(canonicalStoryboardImportFieldLabel('3D虚拟机位运镜与构图描述')).toBe('运镜');
+    expect(canonicalStoryboardImportFieldLabel('画面描述、角色表演与3D流体特效')).toBe('画面');
+
+    const legacyCatalog: StoryboardParseFieldDef[] = [
+      {
+        id: 'f_visual_long',
+        label: '画面描述、角色表演与3D流体特效',
+        order: 0,
+        kind: 'multiline',
+        redrawInclude: true,
+      },
+      {
+        id: 'f_camera_long',
+        label: '3D虚拟机位运镜与构图描述',
+        order: 1,
+        kind: 'multiline',
+        redrawInclude: true,
+      },
+      { id: 'f_camera_short', label: '运镜', order: 2, kind: 'text', redrawInclude: true },
+      { id: 'f_scale', label: '景别', order: 3, kind: 'text', redrawInclude: true },
+      { id: 'f_dialogue', label: '对白', order: 4, kind: 'text', redrawInclude: false },
+    ];
+    const existingRow = createStoryboardTableRow(
+      {
+        shotNo: '049',
+        durationSec: 1.5,
+        shotFields: {
+          f_visual_long: '旧画面',
+          f_camera_long: '旧运镜',
+        },
+      },
+      0
+    );
+
+    const incoming = parseStoryboardBulkText(
+      `镜头号 | 时长 | 景别 | 焦距 | 画面 | 运镜 | 对白
+049 | 1.5s | 近景 | - | 新画面 | 推镜 | 无`,
+      'pipe'
+    );
+
+    const { catalog, rows } = applyStoryboardBulkImport(
+      legacyCatalog,
+      [existingRow],
+      incoming.rows,
+      'append'
+    );
+
+    expect(catalog.some((def) => def.label === '3D虚拟机位运镜与构图描述')).toBe(false);
+    expect(catalog.some((def) => def.label === '画面描述、角色表演与3D流体特效')).toBe(false);
+    expect(catalog.filter((def) => def.label === '运镜')).toHaveLength(1);
+    expect(catalog.filter((def) => def.label === '画面')).toHaveLength(1);
+
+    const visualId = catalog.find((def) => def.label === '画面')!.id;
+    const cameraId = catalog.find((def) => def.label === '运镜')!.id;
+    const scaleId = catalog.find((def) => def.label === '景别')!.id;
+    const dialogueId = catalog.find((def) => def.label === '对白')!.id;
+
+    expect(rows[0]?.shotFields[visualId]).toBe('新画面');
+    expect(rows[0]?.shotFields[cameraId]).toBe('推镜');
+    expect(rows[0]?.shotFields[scaleId]).toBe('近景');
+    expect(rows[0]?.shotFields[dialogueId]).toBe('无');
+
+    const mergedOnly = mergeStoryboardCatalogToStandardFieldLabels(legacyCatalog, [existingRow]);
+    expect(mergedOnly.catalog.filter((def) => def.label === '运镜')).toHaveLength(1);
+    expect(mergedOnly.rows[0]?.shotFields[mergedOnly.catalog.find((d) => d.label === '运镜')!.id]).toContain(
+      '旧运镜'
+    );
   });
 });

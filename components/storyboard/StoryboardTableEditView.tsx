@@ -73,9 +73,6 @@ type Props = {
   feedbackRedrawHistory?: StoryboardFeedbackRedrawBatchRecord[];
   selectedFeedbackHistoryId?: string | null;
   onSelectFeedbackHistory?: (id: string | null) => void;
-  parseBusyRowId: string | null;
-  parseAllBusy?: boolean;
-  optimizeBusyRowId?: string | null;
   interaction: StoryboardRowInteractionValue;
   onActiveRowIdChange: (rowId: string) => void;
   onPatchRows?: (rowIds: string[], patch: Partial<StoryboardTableRow>) => void;
@@ -128,9 +125,6 @@ export default function StoryboardTableEditView({
   feedbackRedrawHistory = [],
   selectedFeedbackHistoryId = null,
   onSelectFeedbackHistory,
-  parseBusyRowId,
-  parseAllBusy = false,
-  optimizeBusyRowId = null,
   interaction,
   onActiveRowIdChange,
   onPatchRows,
@@ -780,12 +774,9 @@ export default function StoryboardTableEditView({
                   domId={storyboardRowDomId(activeRow.id)}
                   row={activeRow}
                   index={activeRowIndex}
-                  fieldCatalog={interaction.fieldCatalog}
                   active
                   imageBusy={imageBusyRowId === activeRow.id}
                   redrawBusy={redrawBusyRowId === activeRow.id}
-                  parseBusy={parseBusyRowId === activeRow.id || parseAllBusy}
-                  optimizeBusy={optimizeBusyRowId === activeRow.id}
                   redrawDisabled={redrawDisabled}
                   redrawDisabledReason={redrawReason}
                   editDisplayMode={editDisplayMode}

@@ -257,13 +257,6 @@ import {
 } from '../services/storyboardTableRedraw';
 import { storyboardRowHasFrameRef } from '../services/storyboardFrameImageUrl';
 import {
-  listStoryboardParsePresets,
-  pickDefaultStoryboardParsePresetId,
-  listStoryboardOptimizePresets,
-  pickDefaultStoryboardOptimizePresetId,
-  STORYBOARD_PARSE_PRESET_KEY,
-} from '../services/storyboardTableParse';
-import {
   WORKFLOW_TEXT_CONFIRM_CHARS,
   WORKFLOW_TEXT_WARN_CHARS,
   maxWorkflowPendingInputTextChars,
@@ -1520,19 +1513,12 @@ const WorkflowSection: React.FC<{
   const addWorkflowStoryboardTableAsset = useCallback(
     (title?: string): string => {
       const id = uuid();
-      const defaultParseId = readLocalJson(
-        STORYBOARD_PARSE_PRESET_KEY,
-        pickDefaultStoryboardParsePresetId(capabilityPresets),
-        (v) => (typeof v === 'string' ? v : null)
-      );
-      const newAsset = attachInitialVgpToNewAsset(
-        createEmptyStoryboardTableAsset(id, title, defaultParseId)
-      );
+      const newAsset = attachInitialVgpToNewAsset(createEmptyStoryboardTableAsset(id, title));
       setAssets((prev) => [...prev, newAsset]);
       onLog?.('info', '已新建分镜表');
       return id;
     },
-    [capabilityPresets, onLog, setAssets]
+    [onLog, setAssets]
   );
 
   const openStoryboardTablePanel = useCallback((assetId: string) => {
@@ -1575,16 +1561,6 @@ const WorkflowSection: React.FC<{
 
   const storyboardRedrawPresets = useMemo(
     () => listStoryboardRedrawPresets(capabilityPresets),
-    [capabilityPresets]
-  );
-
-  const storyboardParsePresets = useMemo(
-    () => listStoryboardParsePresets(capabilityPresets),
-    [capabilityPresets]
-  );
-
-  const storyboardOptimizePresets = useMemo(
-    () => listStoryboardOptimizePresets(capabilityPresets),
     [capabilityPresets]
   );
 
@@ -10763,10 +10739,6 @@ ${lineSvg}
           redrawPresets={storyboardRedrawPresets}
           defaultRedrawPresetId={pickDefaultStoryboardRedrawPresetId(capabilityPresets)}
           redrawPresetStorageKey={STORYBOARD_REDRAW_PRESET_KEY}
-          parsePresets={storyboardParsePresets}
-          defaultParsePresetId={pickDefaultStoryboardParsePresetId(capabilityPresets)}
-          optimizePresets={storyboardOptimizePresets}
-          defaultOptimizePresetId={pickDefaultStoryboardOptimizePresetId(capabilityPresets)}
           capabilityTextModel={capabilityTextModel}
           readOnly={Boolean(storyboardPanelAsset.archived)}
           onRedrawRow={

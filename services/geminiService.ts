@@ -2298,7 +2298,7 @@ export async function getDialogTextResponse(
 ): Promise<string> {
   const resolvedModel = resolveUpstreamTextModelId(model);
   return callWithRetry(async (signal) => {
-    const ai = getAI();
+    const ai = getClientForTask(model, 'text');
     /**
      * 单轮仅 user：用显式 `[{ role:'user', parts }]`，避免仅 `{ parts }` 时部分网关误解析并报
      * “valid stable user model” 等；多轮对话仍用完整 role 数组。

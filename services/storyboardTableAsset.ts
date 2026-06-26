@@ -4,6 +4,7 @@ import {
   applyShotFieldsPatch,
   compileShotText,
   compareStoryboardShotNos,
+  mergeStoryboardCatalogToStandardFieldLabels,
   normalizeFieldCatalog,
   normalizeShotFieldsRecord,
   formatStoryboardNumericShotNo,
@@ -234,15 +235,16 @@ export function normalizeStoryboardTableDoc(raw: unknown): StoryboardTableDoc {
     doc.title !== undefined && doc.title !== null ? String(doc.title) : undefined;
   const roleAssets = normalizeStoryboardRoleAssets(doc.roleAssets);
   const sceneAssets = normalizeStoryboardSceneAssets(doc.sceneAssets);
+  const standardized = mergeStoryboardCatalogToStandardFieldLabels(fieldCatalog, rows);
   return {
     ...(title !== undefined ? { title } : {}),
     timelineLayerCount: layerCount,
-    fieldCatalog,
+    fieldCatalog: standardized.catalog,
     ...(parsePresetId ? { parsePresetId } : {}),
     ...(optimizePresetId ? { optimizePresetId } : {}),
     ...(roleAssets.length ? { roleAssets } : {}),
     ...(sceneAssets.length ? { sceneAssets } : {}),
-    rows,
+    rows: standardized.rows,
   };
 }
 

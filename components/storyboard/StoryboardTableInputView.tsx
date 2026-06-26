@@ -6,7 +6,6 @@ import React, {
   useState,
 } from 'react';
 import type { CustomAppModule, StoryboardParseFieldDef, StoryboardRoleAsset, StoryboardSceneAsset, StoryboardTableRow } from '../../types';
-import type { CapabilityExecuteContext } from '../../services/capabilityExecutor';
 import { storyboardInputRowDomId } from './storyboardTableDom';
 import StoryboardTableBulkInput, {
   type StoryboardTableBulkInputHandle,
@@ -48,8 +47,6 @@ type Props = {
   roleAssetBusyId?: string | null;
   sceneAssets: StoryboardSceneAsset[];
   sceneAssetBusyId?: string | null;
-  parsePreset?: CustomAppModule | null;
-  parseCtx?: CapabilityExecuteContext;
   readOnly?: boolean;
   onImportRows: (result: {
     catalog: StoryboardParseFieldDef[];
@@ -106,8 +103,6 @@ const StoryboardTableInputView = forwardRef<StoryboardTableInputViewHandle, Prop
       roleAssetBusyId = null,
       sceneAssets,
       sceneAssetBusyId = null,
-      parsePreset,
-      parseCtx,
       readOnly = false,
       onImportRows,
       redrawPresets,
@@ -265,8 +260,6 @@ const StoryboardTableInputView = forwardRef<StoryboardTableInputViewHandle, Prop
               assetId={assetId}
               rows={rows}
               fieldCatalog={fieldCatalog}
-              parsePreset={parsePreset}
-              parseCtx={parseCtx}
               readOnly={readOnly}
               onImport={onImportRows}
               onDraftChange={() => setDraftTick((tick) => tick + 1)}
@@ -280,17 +273,6 @@ const StoryboardTableInputView = forwardRef<StoryboardTableInputViewHandle, Prop
             />
 
             <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-center">
-              <button
-                type="button"
-                disabled={readOnly || actionBusy}
-                onClick={() => {
-                  setCompletionGuide(null);
-                  void bulkInputRef.current?.parseAndFill();
-                }}
-                className={`${STORYBOARD_TOOL_BTN_PRIMARY} h-9 flex-1 px-4 text-[11px] sm:min-w-[6.5rem] sm:max-w-[10rem] sm:flex-none`}
-              >
-                {parseBusy ? '解析中…' : '解析'}
-              </button>
               <button
                 type="button"
                 disabled={readOnly || actionBusy || !redrawPresets.length}

@@ -10,6 +10,7 @@ export type StoryboardBulkDraft = {
   pipeText: string;
   tsvText: string;
   imageDataUrl?: string;
+  canonicalText?: string;
 };
 
 export function storyboardBulkDraftStorageKey(assetId: string): string {

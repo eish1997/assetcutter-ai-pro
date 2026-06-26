@@ -2,12 +2,17 @@ import { describe, expect, it } from 'vitest';
 import type { StoryboardTableRow } from '../types';
 import {
   computeDefaultInsertShotNo,
+  computeInsertShotPickerRange,
   computeInsertShotNoAfterRow,
   computeInsertShotNoBeforeRow,
   normalizeInsertShotCount,
   parseNumericStoryboardShotNo,
   planInsertShotWithShift,
   planInsertShotsWithShift,
+  clampInsertShotNumeric,
+  buildInsertShotPreviewStrip,
+  formatInsertShotPreviewRange,
+  wrapInsertShotPickerNumeric,
 } from '../services/storyboardInsertShot';
 
 function row(shotNo: string, overrides: Partial<StoryboardTableRow> = {}): StoryboardTableRow {
@@ -127,5 +132,39 @@ describe('storyboardInsertShot', () => {
   it('parseNumericStoryboardShotNo normalizes padded values', () => {
     expect(parseNumericStoryboardShotNo('050')).toBe(50);
     expect(parseNumericStoryboardShotNo('SC01')).toBeNull();
+  });
+
+  it('computeInsertShotPickerRange includes append slot after max shot', () => {
+    const rows = [row('010'), row('011'), row('012')];
+    expect(computeInsertShotPickerRange(rows)).toEqual({ min: 1, max: 13 });
+    expect(computeInsertShotPickerRange([])).toEqual({ min: 1, max: 1 });
+    expect(clampInsertShotNumeric(99, rows)).toBe(13);
+    expect(clampInsertShotNumeric(0, rows)).toBe(1);
+  });
+
+  it('wrapInsertShotPickerNumeric cycles at range ends', () => {
+    expect(wrapInsertShotPickerNumeric(0, 1, 13)).toBe(13);
+    expect(wrapInsertShotPickerNumeric(14, 1, 13)).toBe(1);
+    expect(wrapInsertShotPickerNumeric(7, 1, 13)).toBe(7);
+  });
+
+  it('buildInsertShotPreviewStrip uses wrap gap at head and tail', () => {
+    const rows = Array.from({ length: 5 }, (_, i) => row(String(i + 1).padStart(3, '0')));
+    const atHead = buildInsertShotPreviewStrip(rows, 1, 1);
+    // wrapGap 紧邻插入槽（数组末尾）；左侧渐隐方向为末镜→首镜
+    expect(atHead.leftTiles.at(-1)).toEqual({ kind: 'wrapGap' });
+    expect(atHead.leftTiles.at(-2)).toEqual({ kind: 'unchanged', shotNo: '005' });
+
+    const atTail = buildInsertShotPreviewStrip(rows, 6, 1);
+    expect(atTail.rightTiles[0]).toEqual({ kind: 'wrapGap' });
+    expect(atTail.rightTiles[1]).toEqual({ kind: 'unchanged', shotNo: '001' });
+  });
+
+  it('buildInsertShotPreviewStrip exposes insert shot range', () => {
+    const rows = Array.from({ length: 10 }, (_, i) => row(String(i + 1).padStart(3, '0')));
+    const preview = buildInsertShotPreviewStrip(rows, 50, 3);
+    expect(preview.insertShotNo).toBe('050');
+    expect(preview.insertShotNoEnd).toBe('052');
+    expect(formatInsertShotPreviewRange(50, 3)).toBe('050–052');
   });
 });

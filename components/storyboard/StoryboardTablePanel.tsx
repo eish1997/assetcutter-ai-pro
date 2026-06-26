@@ -142,20 +142,7 @@ import {
 import { WORKFLOW_CUT_DETECT_TIMEOUT_MS } from '../workflow/workflowConstants';
 import {
   applyShotFieldsPatch,
-  listStoryboardParsePresets,
-  listStoryboardOptimizePresets,
-  parseStoryboardRowWithPreset,
-  parseStoryboardRowsBatch,
-  optimizeStoryboardRowWithPreset,
-  pickDefaultStoryboardParsePresetId,
-  pickDefaultStoryboardOptimizePresetId,
-  getBuiltinStoryboardParsePreset,
-  getBuiltinStoryboardOptimizePreset,
-  maybeWarnLargeFieldCatalog,
   normalizeStoryboardShotNoInput,
-  resolveStoryboardParseInput,
-  STORYBOARD_PARSE_PRESET_KEY,
-  STORYBOARD_OPTIMIZE_PRESET_KEY,
 } from '../../services/storyboardTableParse';
 import { readLocalJson, writeLocalJson } from '../../services/clientPersist';
 import {
@@ -254,10 +241,6 @@ type Props = {
   redrawPresets?: CustomAppModule[];
   defaultRedrawPresetId?: string;
   redrawPresetStorageKey?: string;
-  parsePresets?: CustomAppModule[];
-  defaultParsePresetId?: string;
-  optimizePresets?: CustomAppModule[];
-  defaultOptimizePresetId?: string;
   capabilityTextModel?: string;
   onRedrawRow?: (
     rowId: string,
@@ -288,10 +271,6 @@ export default function StoryboardTablePanel({
   redrawPresets = [],
   defaultRedrawPresetId = '',
   redrawPresetStorageKey = 'ac_storyboard_redraw_preset_v1',
-  parsePresets = [],
-  defaultParsePresetId = '',
-  optimizePresets = [],
-  defaultOptimizePresetId = '',
   capabilityTextModel = '',
   onRedrawRow,
   onPatchAsset,
@@ -299,14 +278,6 @@ export default function StoryboardTablePanel({
   companionProjectId = '',
 }: Props) {
   const table = useMemo(() => normalizeStoryboardTableDoc(asset.storyboardTable), [asset.storyboardTable]);
-  const effectiveParsePresets = useMemo(
-    () => (parsePresets.length > 0 ? parsePresets : listStoryboardParsePresets([])),
-    [parsePresets]
-  );
-  const effectiveOptimizePresets = useMemo(
-    () => (optimizePresets.length > 0 ? optimizePresets : listStoryboardOptimizePresets([])),
-    [optimizePresets]
-  );
   const stats = useMemo(() => computeStoryboardTableStats(table), [table]);
   const storyboardExportTask = useStoryboardVideoExportTask();
   const isExportRunning = storyboardExportTask?.status === 'running';
@@ -474,9 +445,6 @@ export default function StoryboardTablePanel({
     },
     [asset.id]
   );
-  const [parseBusyRowId, setParseBusyRowId] = useState<string | null>(null);
-  const [parseAllBusy, setParseAllBusy] = useState(false);
-  const [optimizeBusyRowId, setOptimizeBusyRowId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pendingRowIdRef = useRef<string | null>(null);
   const closeBtnRef = useRef<HTMLButtonElement>(null);
@@ -1011,93 +979,6 @@ export default function StoryboardTablePanel({
       writeLocalJson(redrawPresetStorageKey, presetId);
     },
     [redrawPresetStorageKey]
-  );
-
-  const effectiveParsePresetId = useMemo(() => {
-    const fromTable = table.parsePresetId?.trim();
-    if (fromTable && effectiveParsePresets.some((p) => p.id === fromTable)) return fromTable;
-    const stored = readLocalJson(STORYBOARD_PARSE_PRESET_KEY, defaultParsePresetId, (v) =>
-      typeof v === 'string' ? v : null
-    );
-    if (stored && effectiveParsePresets.some((p) => p.id === stored)) return stored;
-    const picked = pickDefaultStoryboardParsePresetId(effectiveParsePresets);
-    if (picked) return picked;
-    if (defaultParsePresetId && effectiveParsePresets.some((p) => p.id === defaultParsePresetId)) {
-      return defaultParsePresetId;
-    }
-    return effectiveParsePresets[0]?.id ?? '';
-  }, [defaultParsePresetId, effectiveParsePresets, table.parsePresetId]);
-
-  const effectiveOptimizePresetId = useMemo(() => {
-    const fromTable = table.optimizePresetId?.trim();
-    if (fromTable && effectiveOptimizePresets.some((p) => p.id === fromTable)) return fromTable;
-    const stored = readLocalJson(STORYBOARD_OPTIMIZE_PRESET_KEY, defaultOptimizePresetId, (v) =>
-      typeof v === 'string' ? v : null
-    );
-    if (stored && effectiveOptimizePresets.some((p) => p.id === stored)) return stored;
-    const picked = pickDefaultStoryboardOptimizePresetId(effectiveOptimizePresets);
-    if (picked) return picked;
-    if (defaultOptimizePresetId && effectiveOptimizePresets.some((p) => p.id === defaultOptimizePresetId)) {
-      return defaultOptimizePresetId;
-    }
-    return effectiveOptimizePresets[0]?.id ?? '';
-  }, [defaultOptimizePresetId, effectiveOptimizePresets, table.optimizePresetId]);
-
-  const parsePresetOptions = useMemo(
-    () => effectiveParsePresets.map((p) => ({ value: p.id, label: p.label || p.id })),
-    [effectiveParsePresets]
-  );
-
-  const activeParsePreset = useMemo(() => {
-    if (effectiveParsePresetId) {
-      const matched = effectiveParsePresets.find((preset) => preset.id === effectiveParsePresetId);
-      if (matched) return matched;
-    }
-    return effectiveParsePresets[0] ?? getBuiltinStoryboardParsePreset();
-  }, [effectiveParsePresetId, effectiveParsePresets]);
-
-  const optimizePresetOptions = useMemo(
-    () => effectiveOptimizePresets.map((p) => ({ value: p.id, label: p.label || p.id })),
-    [effectiveOptimizePresets]
-  );
-
-  const setParsePresetId = useCallback(
-    (presetId: string) => {
-      writeLocalJson(STORYBOARD_PARSE_PRESET_KEY, presetId);
-      onPatchAsset((cur) => {
-        const doc = normalizeStoryboardTableDoc(cur.storyboardTable);
-        const titleRaw = readStoryboardTableTitleRaw(cur);
-        return {
-          ...cur,
-          textTitle: titleRaw,
-          storyboardTable: { ...doc, title: titleRaw, parsePresetId: presetId },
-        };
-      });
-    },
-    [onPatchAsset]
-  );
-
-  const setOptimizePresetId = useCallback(
-    (presetId: string) => {
-      writeLocalJson(STORYBOARD_OPTIMIZE_PRESET_KEY, presetId);
-      onPatchAsset((cur) => {
-        const doc = normalizeStoryboardTableDoc(cur.storyboardTable);
-        const titleRaw = readStoryboardTableTitleRaw(cur);
-        return {
-          ...cur,
-          textTitle: titleRaw,
-          storyboardTable: { ...doc, title: titleRaw, optimizePresetId: presetId },
-        };
-      });
-    },
-    [onPatchAsset]
-  );
-
-  const notifyCatalogSize = useCallback(
-    (catalog: StoryboardParseFieldDef[]) => {
-      maybeWarnLargeFieldCatalog(catalog, (msg) => onNotify?.('info', msg));
-    },
-    [onNotify]
   );
 
   const parseCtx = useMemo(
@@ -3696,171 +3577,6 @@ export default function StoryboardTablePanel({
     ]
   );
 
-  const resolveParsePreset = useCallback(() => {
-    if (!effectiveParsePresetId) return null;
-    return (
-      effectiveParsePresets.find((p) => p.id === effectiveParsePresetId) ??
-      getBuiltinStoryboardParsePreset()
-    );
-  }, [effectiveParsePresetId, effectiveParsePresets]);
-
-  const resolveOptimizePreset = useCallback(() => {
-    if (!effectiveOptimizePresetId) return null;
-    return (
-      effectiveOptimizePresets.find((p) => p.id === effectiveOptimizePresetId) ??
-      getBuiltinStoryboardOptimizePreset()
-    );
-  }, [effectiveOptimizePresetId, effectiveOptimizePresets]);
-
-  const runParse = useCallback(
-    async (rowId: string) => {
-      const preset = resolveParsePreset();
-      if (!preset) {
-        onNotify?.('warn', '请选择结构化解析预设');
-        return;
-      }
-      const row = table.rows.find((r) => r.id === rowId);
-      if (!row) return;
-      if (row.locked) {
-        onNotify?.('warn', '该镜头已通过');
-        return;
-      }
-      if (!(resolveStoryboardParseInput(row, table.fieldCatalog) || '').trim()) {
-        onNotify?.('warn', '请先填写原文或结构化字段');
-        return;
-      }
-      setParseBusyRowId(rowId);
-      try {
-        const merged = await parseStoryboardRowWithPreset(
-          row,
-          table.fieldCatalog,
-          preset,
-          parseCtx
-        );
-        patchTable(
-          (rows) => rows.map((r) => (r.id === rowId ? merged.row : r)),
-          { fieldCatalog: merged.catalog }
-        );
-        notifyCatalogSize(merged.catalog);
-        const filledCount = Object.values(merged.row.shotFields ?? {}).filter((value) =>
-          String(value ?? '').trim()
-        ).length;
-        const shotLabel = merged.row.shotNo?.trim() || row.shotNo?.trim();
-        const shotSuffix = shotLabel ? `（镜 ${shotLabel}）` : '';
-        onNotify?.(
-          filledCount > 0 ? 'info' : 'warn',
-          filledCount > 0
-            ? `解析完成：已填入 ${filledCount} 个字段${shotSuffix}`
-            : `解析完成，但未识别到有效字段${shotSuffix}`
-        );
-      } catch (e) {
-        onNotify?.('warn', e instanceof Error ? e.message : '解析失败');
-      } finally {
-        setParseBusyRowId(null);
-      }
-    },
-    [
-      onNotify,
-      parseCtx,
-      patchTable,
-      resolveParsePreset,
-      table.fieldCatalog,
-      table.rows,
-      notifyCatalogSize,
-    ]
-  );
-
-  const runOptimize = useCallback(
-    async (rowId: string) => {
-      const preset = resolveOptimizePreset();
-      if (!preset) {
-        onNotify?.('warn', '请选择结构化优化预设');
-        return;
-      }
-      const row = table.rows.find((r) => r.id === rowId);
-      if (!row) return;
-      if (row.locked) {
-        onNotify?.('warn', '该镜头已通过');
-        return;
-      }
-      if (!table.fieldCatalog.length) {
-        onNotify?.('warn', '请先解析出结构化字段');
-        return;
-      }
-      setOptimizeBusyRowId(rowId);
-      try {
-        const nextRow = await optimizeStoryboardRowWithPreset(
-          row,
-          table.fieldCatalog,
-          preset,
-          parseCtx
-        );
-        patchRow(rowId, { shotFields: nextRow.shotFields });
-      } catch (e) {
-        onNotify?.('warn', e instanceof Error ? e.message : '优化失败');
-      } finally {
-        setOptimizeBusyRowId(null);
-      }
-    },
-    [
-      onNotify,
-      parseCtx,
-      patchRow,
-      resolveOptimizePreset,
-      table.fieldCatalog,
-      table.rows,
-    ]
-  );
-
-  const runParseAll = useCallback(async () => {
-    const preset = resolveParsePreset();
-    if (!preset) {
-      onNotify?.('warn', '请选择结构化解析预设');
-      return;
-    }
-    const eligible = table.rows.filter(
-      (r) => !r.locked && (resolveStoryboardParseInput(r, table.fieldCatalog) || '').trim()
-    );
-    if (!eligible.length) {
-      onNotify?.('warn', '没有可解析的镜头（需原文/结构化内容且未通过）');
-      return;
-    }
-    if (!window.confirm(`解析全表 ${eligible.length} 镜？将调用文字模型。`)) return;
-    setParseAllBusy(true);
-    try {
-      const batch = await parseStoryboardRowsBatch(
-        table.rows,
-        table.fieldCatalog,
-        preset,
-        parseCtx,
-        {
-          shouldSkip: (r) =>
-            r.locked || !(resolveStoryboardParseInput(r, table.fieldCatalog) || '').trim(),
-        }
-      );
-      patchTable(() => batch.rows, { fieldCatalog: batch.catalog });
-      notifyCatalogSize(batch.catalog);
-      const ok = batch.results.filter((r) => r.ok).length;
-      const fail = batch.results.length - ok;
-      onNotify?.(
-        fail > 0 ? 'warn' : 'info',
-        fail > 0 ? `解析完成：成功 ${ok}，失败 ${fail}` : `解析完成：${ok} 镜`
-      );
-    } catch (e) {
-      onNotify?.('warn', e instanceof Error ? e.message : '批量解析失败');
-    } finally {
-      setParseAllBusy(false);
-    }
-  }, [
-    onNotify,
-    parseCtx,
-    patchTable,
-    resolveParsePreset,
-    table.fieldCatalog,
-    table.rows,
-    notifyCatalogSize,
-  ]);
-
   const reorderLayerRows = useCallback(
     (layer: number, fromIndex: number, toIndex: number) => {
       patchTable((rows) => reorderStoryboardRowsInLayer(rows, layer, fromIndex, toIndex));
@@ -3933,8 +3649,6 @@ export default function StoryboardTablePanel({
       timelineLayerCount,
       fieldCatalog: table.fieldCatalog,
       hasRedrawHandler: Boolean(onRedrawRow),
-      hasParseHandler: true,
-      hasOptimizeHandler: true,
       focusRow: setActiveRowId,
       patchRow,
       commitRowShotNo,
@@ -3958,8 +3672,6 @@ export default function StoryboardTablePanel({
         void assignFrameImageFromPaste(rowId, e);
       },
       runRedraw,
-      runParse,
-      runOptimize,
       previewRowFrame,
       redrawDisabledReason: redrawRowDisabledReason,
     };
@@ -3976,8 +3688,6 @@ export default function StoryboardTablePanel({
     readOnly,
     redrawRowDisabledReason,
     removeRow,
-    runOptimize,
-    runParse,
     runRedraw,
     previewRowFrame,
     table.fieldCatalog,
@@ -4097,18 +3807,6 @@ export default function StoryboardTablePanel({
 
         {isInputView && !readOnly ? (
           <div className={`mt-2 flex flex-wrap items-center ${STORYBOARD_GAP_TIGHT} pl-11`}>
-            {parsePresetOptions.length > 0 ? (
-              <div className="flex min-w-[10rem] max-w-xs items-center gap-1.5">
-                <span className="shrink-0 text-[10px] text-gray-500">结构化解析</span>
-                <CustomDropdown
-                  value={effectiveParsePresetId}
-                  options={parsePresetOptions}
-                  onChange={setParsePresetId}
-                  triggerClassName="h-8 min-w-[8rem] flex-1 rounded-lg bg-white/[0.04] px-2.5 text-[10px] text-gray-200 ring-1 ring-white/[0.07] hover:bg-white/[0.07]"
-                  portalZIndex={STORYBOARD_PANEL_DROPDOWN_Z}
-                />
-              </div>
-            ) : null}
             <button type="button" onClick={() => openInsertShotModal()} className={STORYBOARD_TOOL_BTN_PRIMARY}>
               添加镜头
             </button>
@@ -4124,30 +3822,6 @@ export default function StoryboardTablePanel({
 
         {isEditView && !readOnly ? (
           <div className={`mt-2 flex flex-wrap items-center ${STORYBOARD_GAP_TIGHT} pl-11`}>
-            {parsePresetOptions.length > 0 ? (
-              <div className="flex min-w-[10rem] max-w-xs items-center gap-1.5">
-                <span className="shrink-0 text-[10px] text-gray-500">结构化解析</span>
-                <CustomDropdown
-                  value={effectiveParsePresetId}
-                  options={parsePresetOptions}
-                  onChange={setParsePresetId}
-                  triggerClassName="h-8 min-w-[8rem] flex-1 rounded-lg bg-white/[0.04] px-2.5 text-[10px] text-gray-200 ring-1 ring-white/[0.07] hover:bg-white/[0.07]"
-                  portalZIndex={STORYBOARD_PANEL_DROPDOWN_Z}
-                />
-              </div>
-            ) : null}
-            {optimizePresetOptions.length > 0 ? (
-              <div className="flex min-w-[10rem] max-w-xs items-center gap-1.5">
-                <span className="shrink-0 text-[10px] text-gray-500">结构化优化</span>
-                <CustomDropdown
-                  value={effectiveOptimizePresetId}
-                  options={optimizePresetOptions}
-                  onChange={setOptimizePresetId}
-                  triggerClassName="h-8 min-w-[8rem] flex-1 rounded-lg bg-white/[0.04] px-2.5 text-[10px] text-gray-200 ring-1 ring-white/[0.07] hover:bg-white/[0.07]"
-                  portalZIndex={STORYBOARD_PANEL_DROPDOWN_Z}
-                />
-              </div>
-            ) : null}
             {editRedrawModelOptions.length > 0 && redrawPresets.length > 0 ? (
               <div className="flex min-w-[10rem] max-w-xs items-center gap-1.5">
                 <span className="shrink-0 text-[10px] text-gray-500">重绘模型</span>
@@ -4279,8 +3953,6 @@ export default function StoryboardTablePanel({
           roleAssetBusyId={roleAssetBusyId}
           sceneAssets={table.sceneAssets ?? []}
           sceneAssetBusyId={sceneAssetBusyId}
-          parsePreset={activeParsePreset}
-          parseCtx={parseCtx}
           readOnly={readOnly}
           onImportRows={importInputRows}
           redrawPresets={redrawPresets}
@@ -4378,9 +4050,6 @@ export default function StoryboardTablePanel({
           feedbackRedrawHistory={feedbackRedrawHistory}
           selectedFeedbackHistoryId={selectedFeedbackHistoryId}
           onSelectFeedbackHistory={onSelectFeedbackHistory}
-          parseBusyRowId={parseBusyRowId}
-          parseAllBusy={parseAllBusy}
-          optimizeBusyRowId={optimizeBusyRowId}
           interaction={rowInteraction}
           onActiveRowIdChange={setActiveRowId}
           onPatchRows={patchRows}

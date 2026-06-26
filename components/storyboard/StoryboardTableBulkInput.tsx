@@ -19,31 +19,31 @@ import {
 } from '../../services/storyboardTableInput';
 import {
   applyStoryboardBulkImport,
-  parseStoryboardBulkText,
+  buildDuplicateStoryboardShotGroups,
   resolveStoryboardBulkLineCharRange,
   rowHasStoryboardBulkImportBaseline,
   scrollTextareaToCharRange,
-  type StoryboardBulkParseLineError,
   type StoryboardBulkParseResult,
 } from '../../services/storyboardTableBulkImport';
 import { storyboardRowHasFrameRef } from '../../services/storyboardFrameImageUrl';
 import {
-  normalizeStoryboardBulkWithAi,
-  parseStoryboardBulkTextWithAiFallback,
-} from '../../services/storyboardTableBulkAiDetect';
-import type { CapabilityExecuteContext } from '../../services/capabilityExecutor';
-import {
-  mergeBulkStructuredParseIntoTable,
-  parseStoryboardBulkStructuredWithPreset,
-  parseStoryboardRowsBatch,
-  rowHasStructuredFieldValues,
-  STORYBOARD_BULK_PARSE_MAX_CHARS,
-} from '../../services/storyboardTableParse';
+  parseStoryboardRawShotsFromText,
+  STORYBOARD_PARSE_PAGE_NO_SHOT_HINT,
+  type StoryboardRawShotParseSuccess,
+} from '../../services/storyboardParsePageCore';
 import { importStoryboardTextFromCompanionFile } from '../../services/storyboardCompanionOcrImport';
-import type { CustomAppModule, StoryboardParseFieldDef, StoryboardTableRow } from '../../types';
+import type { StoryboardParseFieldDef, StoryboardTableRow } from '../../types';
 import { STORYBOARD_FIELD_INPUT, STORYBOARD_TOOL_BTN_NEUTRAL, STORYBOARD_TOOL_BTN_PRIMARY } from './storyboardTableUi';
 
 export type StoryboardTableBulkInputHandle = {
+  /** @deprecated 解析页已改为规则识别，保留兼容 */
+  convertFormat: () => Promise<boolean>;
+  importToTable: () => Promise<void>;
+  /** @deprecated 等同 importToTable */
+  parseFields: () => Promise<boolean>;
+  /** @deprecated 始终 false */
+  generateCanonical: () => boolean;
+  /** @deprecated 等同 importToTable */
   parseAndFill: () => Promise<void>;
 };
 
@@ -51,8 +51,6 @@ type Props = {
   assetId: string;
   rows: StoryboardTableRow[];
   fieldCatalog: StoryboardParseFieldDef[];
-  parsePreset?: CustomAppModule | null;
-  parseCtx?: CapabilityExecuteContext;
   readOnly?: boolean;
   onImport: (result: { catalog: StoryboardParseFieldDef[]; rows: StoryboardTableRow[] }) => void;
   onDraftChange?: () => void;
@@ -147,12 +145,24 @@ function focusBulkLineByNo(
   scrollTextareaToCharRange(textarea, range.charStart, range.charEnd);
 }
 
-function focusBulkLineError(
-  textarea: HTMLTextAreaElement | null,
-  text: string,
-  entry: StoryboardBulkParseLineError
-): void {
-  focusBulkLineByNo(textarea, text, entry.lineNo);
+function buildPendingFromRawParse(raw: StoryboardRawShotParseSuccess): PendingBulkImport {
+  const duplicateShotGroups = buildDuplicateStoryboardShotGroups(
+    raw.importRows.map((row, index) => ({
+      lineNo: raw.previews.filter((preview) => preview.ready)[index]?.lineStart ?? index + 1,
+      shotNo: row.shotNo || '',
+      preview: (row.shotRaw || '').slice(0, 48),
+    }))
+  );
+  return {
+    headers: [],
+    rows: raw.importRows,
+    errors: raw.skippedMissingDuration
+      ? [`${raw.skippedMissingDuration} 镜未识别到时长，已跳过`]
+      : [],
+    lineErrors: [],
+    duplicateShotNos: raw.duplicateShotNos,
+    duplicateShotGroups,
+  };
 }
 
 function BulkLocateButton({
@@ -182,7 +192,7 @@ function defaultDraft(): StoryboardBulkDraft {
   return defaultStoryboardBulkDraft();
 }
 
-const PIPE_PLACEHOLDER = `粘贴分镜脚本（可重复粘贴完整脚本）。解析后按镜号合并：同镜号更新，新镜号按顺序插入。`;
+const PIPE_PLACEHOLDER = `粘贴分镜原文。按行首镜号自动切块，识别镜号与时长后可创建镜头；每镜仅保留该段原文，不拆字段。`;
 
 const StoryboardTableBulkInput = forwardRef<StoryboardTableBulkInputHandle, Props>(
   function StoryboardTableBulkInput(
@@ -190,8 +200,6 @@ const StoryboardTableBulkInput = forwardRef<StoryboardTableBulkInputHandle, Prop
       assetId,
       rows,
       fieldCatalog,
-      parsePreset = null,
-      parseCtx,
       readOnly = false,
       onImport,
       onDraftChange,
@@ -206,9 +214,6 @@ const StoryboardTableBulkInput = forwardRef<StoryboardTableBulkInputHandle, Prop
     const [pipeText, setPipeText] = useState('');
     const [importBusy, setImportBusy] = useState(false);
     const [ocrImportBusy, setOcrImportBusy] = useState(false);
-    const [aiBusy, setAiBusy] = useState(false);
-    const [normalizedByAi, setNormalizedByAi] = useState(false);
-    const [aiRejectReason, setAiRejectReason] = useState<string | null>(null);
     const [pendingImport, setPendingImport] = useState<PendingBulkImport | null>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const ocrFileInputRef = useRef<HTMLInputElement>(null);
@@ -221,8 +226,6 @@ const StoryboardTableBulkInput = forwardRef<StoryboardTableBulkInputHandle, Prop
     useEffect(() => {
       const draft = readLocalJson(draftStorageKey(assetId), defaultDraft());
       setPipeText(draft.pipeText);
-      setNormalizedByAi(false);
-      setAiRejectReason(null);
     }, [assetId]);
 
     const persistDraft = useCallback(
@@ -233,6 +236,7 @@ const StoryboardTableBulkInput = forwardRef<StoryboardTableBulkInputHandle, Prop
           pipeText: patch.pipeText ?? current.pipeText,
           tsvText: patch.tsvText ?? current.tsvText,
           imageDataUrl: patch.imageDataUrl !== undefined ? patch.imageDataUrl : current.imageDataUrl,
+          canonicalText: patch.canonicalText !== undefined ? patch.canonicalText : current.canonicalText,
         };
         writeLocalJson(draftStorageKey(assetId), next);
         onDraftChange?.();
@@ -240,217 +244,69 @@ const StoryboardTableBulkInput = forwardRef<StoryboardTableBulkInputHandle, Prop
       [assetId, onDraftChange]
     );
 
-    const preview = useMemo(() => {
-      if (!pipeText.trim()) return null;
-      return parseStoryboardBulkText(pipeText, 'pipe');
-    }, [pipeText]);
+    const rawParse = useMemo(() => parseStoryboardRawShotsFromText(pipeText), [pipeText]);
+
+    const readyShotCount = rawParse.ok ? rawParse.importRows.length : 0;
+    const totalShotCount = rawParse.ok ? rawParse.previews.length : 0;
+    const missingDurationPreviews = rawParse.ok
+      ? rawParse.previews.filter((preview) => !preview.ready)
+      : [];
 
     const handleTextChange = (value: string) => {
       setPipeText(value);
-      setNormalizedByAi(false);
-      setAiRejectReason(null);
       persistDraft({ pipeText: value });
     };
 
-    const canUseAi = Boolean(parsePreset && parseCtx);
+    const busy = importBusy || ocrImportBusy || Boolean(pendingImport);
+
     const canUseCompanionOcr = Boolean(companionProjectId.trim());
-    const busy = importBusy || aiBusy || ocrImportBusy || Boolean(pendingImport);
 
     useEffect(() => {
       onBusyChange?.(busy);
     }, [busy, onBusyChange]);
 
-    const runAiNormalize = useCallback(async (): Promise<StoryboardBulkParseResult | null> => {
-      if (!pipeText.trim()) return null;
-      if (!parsePreset || !parseCtx) {
-        onNotify?.('warn', '未配置解析预设，无法使用 AI 识别');
-        return null;
-      }
-      setAiBusy(true);
-      try {
-        const result = await normalizeStoryboardBulkWithAi(pipeText, parsePreset, parseCtx);
-        if (!result.isStoryboard) {
-          setAiRejectReason(result.reason);
-          setNormalizedByAi(false);
-          onNotify?.('warn', result.reason);
-          return null;
-        }
-        setAiRejectReason(null);
-        setNormalizedByAi(true);
-        setPipeText(result.normalizedText);
-        persistDraft({ pipeText: result.normalizedText });
-        onNotify?.('info', `已规范化为 ${result.parsed.rows.length} 镜`);
-        return result.parsed;
-      } catch (e) {
-        const message = e instanceof Error ? e.message : String(e);
-        setAiRejectReason(message);
-        onNotify?.('error', message);
-        return null;
-      } finally {
-        setAiBusy(false);
-      }
-    }, [onNotify, parseCtx, parsePreset, persistDraft, pipeText]);
-
-    const resolveParsedForImport = useCallback(async (): Promise<
-      (StoryboardBulkParseResult & { source?: 'local' | 'ai' }) | null
-    > => {
-      if (preview?.rows.length) {
-        return { ...preview, source: normalizedByAi ? 'ai' : 'local' };
-      }
-      if (!parsePreset || !parseCtx) return preview;
-      setAiBusy(true);
-      try {
-        const result = await parseStoryboardBulkTextWithAiFallback(pipeText, 'pipe', parsePreset, parseCtx);
-        if (result.source === 'ai') {
-          setNormalizedByAi(true);
-          setAiRejectReason(null);
-          setPipeText(result.normalizedText);
-          persistDraft({ pipeText: result.normalizedText });
-        }
-        return result;
-      } catch (e) {
-        const message = e instanceof Error ? e.message : String(e);
-        setAiRejectReason(message);
-        onNotify?.('warn', message);
-        return null;
-      } finally {
-        setAiBusy(false);
-      }
-    }, [parseCtx, parsePreset, persistDraft, pipeText, preview, normalizedByAi, onNotify]);
-
     const commitImport = useCallback(
       async (parsed: PendingBulkImport, mode: 'replace' | 'append') => {
         const replace = mode === 'replace';
         const latestRows = rowsRef.current;
-        let result = applyStoryboardBulkImport(
-          fieldCatalog,
+        const result = applyStoryboardBulkImport(
+          replace ? [] : fieldCatalog,
           latestRows,
           parsed.rows,
           replace ? 'replace' : 'append'
         );
 
-        let structuredOk = 0;
-        let structuredFail = 0;
-        let structuredSkipped = 0;
-        if (parsePreset && parseCtx && result.touchedRowIds.length) {
-          const touched = new Set(result.touchedRowIds);
-          const needsLlm = result.rows.filter(
-            (row) =>
-              touched.has(row.id) &&
-              (row.shotRaw || '').trim() &&
-              !rowHasStructuredFieldValues(result.catalog, row)
-          );
-          structuredSkipped = result.rows.filter(
-            (row) => touched.has(row.id) && rowHasStructuredFieldValues(result.catalog, row)
-          ).length;
-          if (needsLlm.length) {
-            const strictCatalog = !replace && fieldCatalog.length > 0;
-            const bulkSource = pipeText.trim();
-            onNotify?.(
-              'info',
-              bulkSource.length <= STORYBOARD_BULK_PARSE_MAX_CHARS
-                ? `结构化解析中（${needsLlm.length} 镜，单次请求）…`
-                : `结构化解析中（${needsLlm.length} 镜，文本较长分批处理）…`
-            );
-            try {
-              if (bulkSource.length <= STORYBOARD_BULK_PARSE_MAX_CHARS) {
-                const bulkParsed = await parseStoryboardBulkStructuredWithPreset(
-                  bulkSource,
-                  parsePreset,
-                  parseCtx,
-                  {
-                    fieldCatalog: result.catalog,
-                    strictCatalog,
-                  }
-                );
-                const merged = mergeBulkStructuredParseIntoTable(
-                  result.rows,
-                  result.catalog,
-                  bulkParsed,
-                  {
-                    targetRowIds: touched,
-                    preserveCatalog: strictCatalog,
-                    skipIfHasStructuredFields: true,
-                  }
-                );
-                result = {
-                  ...result,
-                  catalog: merged.catalog,
-                  rows: merged.rows,
-                };
-                structuredOk = merged.results.filter((item) => item.ok).length;
-                structuredFail = merged.results.filter((item) => !item.ok).length;
-              } else {
-                const batch = await parseStoryboardRowsBatch(
-                  result.rows,
-                  result.catalog,
-                  parsePreset,
-                  parseCtx,
-                  {
-                    shouldSkip: (row) =>
-                      !touched.has(row.id) ||
-                      !(row.shotRaw || '').trim() ||
-                      rowHasStructuredFieldValues(result.catalog, row),
-                    strictCatalog,
-                  }
-                );
-                result = {
-                  ...result,
-                  catalog: batch.catalog,
-                  rows: batch.rows,
-                };
-                structuredOk = batch.results.filter((item) => item.ok).length;
-                structuredFail = batch.results.filter((item) => !item.ok).length;
-              }
-            } catch (error) {
-              const message = error instanceof Error ? error.message : String(error);
-              onNotify?.('warn', `结构化解析未完成：${message}`);
-            }
-          }
-        }
-
         onImport({ catalog: result.catalog, rows: result.rows });
         const detail = { rowCount: parsed.rows.length, appended: !replace };
-        const sourceHint = parsed.source === 'ai' ? '（AI）' : '';
         const warnParts: string[] = [];
         if (parsed.errors[0]) warnParts.push(parsed.errors[0]);
         if (parsed.duplicateShotNos.length) {
           warnParts.push(`重复镜号：${parsed.duplicateShotNos.join('、')}`);
         }
-        if (structuredFail) warnParts.push(`${structuredFail} 镜结构化解析失败`);
-        if (!parsePreset || !parseCtx) {
-          warnParts.push('未配置解析预设，仅写入原文与规则字段');
-        }
         onNotify?.(
           parsed.duplicateShotNos.length || warnParts.length ? 'warn' : 'info',
-          `已填充 ${parsed.rows.length} 镜${sourceHint}${replace ? '' : '（按镜号合并）'}${structuredOk ? `，AI 结构化 ${structuredOk} 镜` : ''}${structuredSkipped && !structuredOk ? `，${structuredSkipped} 镜规则解析` : ''}${warnParts.length ? `；${warnParts.join('；')}` : ''}`
+          `已创建 ${parsed.rows.length} 镜${replace ? '' : '（按镜号合并）'}${warnParts.length ? `；${warnParts.join('；')}` : ''}`
         );
         queueMicrotask(() => onParseComplete?.(detail));
       },
-      [fieldCatalog, onImport, onNotify, onParseComplete, parseCtx, parsePreset, pipeText]
+      [fieldCatalog, onImport, onNotify, onParseComplete]
     );
 
-    const parseAndFill = useCallback(async () => {
+    const createShots = useCallback(async () => {
       if (readOnly || busy) return;
-      if (!pipeText.trim()) {
-        onNotify?.('warn', '请先输入分镜文本');
+      if (!rawParse.ok) {
+        onNotify?.('warn', rawParse.message);
+        return;
+      }
+      if (!rawParse.importRows.length) {
+        onNotify?.('warn', '请先识别到镜号与时长');
         return;
       }
 
+      const pending = buildPendingFromRawParse(rawParse);
+
       setImportBusy(true);
       try {
-        let parsed = await resolveParsedForImport();
-        if (!parsed?.rows.length && canUseAi) {
-          const aiParsed = await runAiNormalize();
-          if (aiParsed?.rows.length) {
-            parsed = { ...aiParsed, source: 'ai' };
-          }
-        }
-        if (!parsed?.rows.length) {
-          onNotify?.('warn', parsed?.errors[0] || aiRejectReason || '未解析到有效镜头');
-          return;
-        }
-
         const latestRows = rowsRef.current;
         const hasTextBaseline = latestRows.some(
           (row) =>
@@ -461,33 +317,23 @@ const StoryboardTableBulkInput = forwardRef<StoryboardTableBulkInputHandle, Prop
         const hasExisting = latestRows.some(rowHasStoryboardBulkImportBaseline);
 
         if (hasTextBaseline) {
-          setPendingImport(parsed);
+          setPendingImport(pending);
           return;
         }
         if (hasFrameBaseline && latestRows.length > 0) {
-          await commitImport(parsed, 'append');
+          await commitImport(pending, 'append');
           return;
         }
         if (hasExisting) {
-          setPendingImport(parsed);
+          setPendingImport(pending);
           return;
         }
 
-        await commitImport(parsed, 'replace');
+        await commitImport(pending, 'replace');
       } finally {
         setImportBusy(false);
       }
-    }, [
-      aiRejectReason,
-      busy,
-      canUseAi,
-      commitImport,
-      onNotify,
-      readOnly,
-      resolveParsedForImport,
-      runAiNormalize,
-      pipeText,
-    ]);
+    }, [busy, commitImport, onNotify, rawParse, readOnly]);
 
     const confirmPendingImport = useCallback(
       (mode: 'replace' | 'append') => {
@@ -502,7 +348,17 @@ const StoryboardTableBulkInput = forwardRef<StoryboardTableBulkInputHandle, Prop
       [commitImport, importBusy, pendingImport]
     );
 
-    useImperativeHandle(ref, () => ({ parseAndFill }), [parseAndFill]);
+    useImperativeHandle(
+      ref,
+      () => ({
+        convertFormat: async () => readyShotCount > 0,
+        importToTable: createShots,
+        parseFields: async () => readyShotCount > 0,
+        generateCanonical: () => false,
+        parseAndFill: createShots,
+      }),
+      [createShots, readyShotCount]
+    );
 
     const handleOcrFilePicked = useCallback(
       async (file: File | null) => {
@@ -525,14 +381,12 @@ const StoryboardTableBulkInput = forwardRef<StoryboardTableBulkInputHandle, Prop
             return;
           }
           setPipeText(res.text);
-          setNormalizedByAi(false);
-          setAiRejectReason(null);
           persistDraft({ pipeText: res.text });
           onNotify?.(
             'info',
             res.source === 'pdf'
-              ? 'PDF 已转为文本，请点击「解析」写入分镜表'
-              : `图片 OCR 完成（${res.blockCount ?? 0} 段），请点击「解析」写入分镜表`,
+              ? 'PDF 已转为文本，请确认镜号与时长后点击「创建镜头」'
+              : `图片 OCR 完成（${res.blockCount ?? 0} 段），请确认镜号与时长后点击「创建镜头」`,
           );
         } finally {
           setOcrImportBusy(false);
@@ -541,16 +395,22 @@ const StoryboardTableBulkInput = forwardRef<StoryboardTableBulkInputHandle, Prop
       [companionBaseUrl, companionProjectId, ocrImportBusy, onNotify, persistDraft, readOnly],
     );
 
-    const statusHint = preview?.rows.length
-      ? `已识别 ${preview.rows.length} 镜${normalizedByAi ? ' · AI' : ''}${
-          preview.duplicateShotNos.length
-            ? ` · 重复 ${preview.duplicateShotNos.join('、')}`
-            : ''
-        }`
-      : null;
+    const statusHint = !pipeText.trim()
+      ? null
+      : !rawParse.ok
+        ? STORYBOARD_PARSE_PAGE_NO_SHOT_HINT
+        : readyShotCount
+          ? `识别 ${totalShotCount} 镜 · 可创建 ${readyShotCount} 镜${
+              missingDurationPreviews.length ? ` · ${missingDurationPreviews.length} 镜缺时长` : ''
+            }`
+          : totalShotCount
+            ? `识别 ${totalShotCount} 镜 · 请先补全时长`
+            : null;
 
-    const hasBulkIssues = Boolean(
-      preview?.duplicateShotGroups.length || preview?.lineErrors.length || preview?.errors[0]
+    const hasIssues = Boolean(
+      (rawParse.ok && rawParse.duplicateShotNos.length) ||
+        missingDurationPreviews.length ||
+        (!rawParse.ok && pipeText.trim())
     );
 
     return (
@@ -601,46 +461,34 @@ const StoryboardTableBulkInput = forwardRef<StoryboardTableBulkInputHandle, Prop
           ) : null}
         </div>
 
-        {aiRejectReason ? (
-          <p className="-mt-2 text-[10px] text-amber-300/90">{aiRejectReason}</p>
-        ) : hasBulkIssues ? (
-          <div className="-mt-2 space-y-1 text-[10px] text-amber-300/90">
-            {preview?.duplicateShotGroups.slice(0, BULK_ISSUE_PREVIEW_LIMIT).map((group) => (
-              <p key={group.shotNo}>
-                重复镜号 {group.shotNo}：
-                {group.lines.map((line, index) => (
-                  <span key={`${group.shotNo}-${line.lineNo}`}>
-                    {index > 0 ? ' · ' : ' '}
-                    第 {line.lineNo} 行
-                    <BulkLocateButton
-                      readOnly={readOnly}
-                      onClick={() => focusBulkLineByNo(textareaRef.current, pipeText, line.lineNo)}
-                    />
-                  </span>
-                ))}
-              </p>
-            ))}
-            {preview && preview.duplicateShotGroups.length > BULK_ISSUE_PREVIEW_LIMIT ? (
-              <p>另有 {preview.duplicateShotGroups.length - BULK_ISSUE_PREVIEW_LIMIT} 组重复镜号</p>
-            ) : null}
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+          <button
+            type="button"
+            disabled={readOnly || busy || !readyShotCount}
+            onClick={() => void createShots()}
+            className={`${STORYBOARD_TOOL_BTN_PRIMARY} h-8 flex-1 px-3 text-[10px] sm:max-w-[9rem] sm:flex-none`}
+          >
+            {importBusy ? '创建中…' : `创建镜头${readyShotCount ? ` (${readyShotCount})` : ''}`}
+          </button>
+        </div>
 
-            {preview?.lineErrors.slice(0, BULK_ISSUE_PREVIEW_LIMIT).map((entry) => (
-              <p key={`${entry.lineNo}-${entry.charStart}`}>
-                第 {entry.lineNo} 行{entry.message}（空白行不计）：「{entry.preview}」
+        {hasIssues ? (
+          <div className="-mt-2 space-y-1 text-[10px] text-amber-300/90">
+            {!rawParse.ok && pipeText.trim() ? <p>{rawParse.message}</p> : null}
+            {rawParse.ok && rawParse.duplicateShotNos.length ? (
+              <p>重复镜号：{rawParse.duplicateShotNos.join('、')}</p>
+            ) : null}
+            {missingDurationPreviews.slice(0, BULK_ISSUE_PREVIEW_LIMIT).map((preview) => (
+              <p key={`${preview.lineStart}-${preview.shotNo}`}>
+                镜 {preview.shotNo} 缺少时长（第 {preview.lineStart} 行起）
                 <BulkLocateButton
                   readOnly={readOnly}
-                  onClick={() => focusBulkLineError(textareaRef.current, pipeText, entry)}
+                  onClick={() => focusBulkLineByNo(textareaRef.current, pipeText, preview.lineStart)}
                 />
               </p>
             ))}
-            {preview && preview.lineErrors.length > BULK_ISSUE_PREVIEW_LIMIT ? (
-              <p>另有 {preview.lineErrors.length - BULK_ISSUE_PREVIEW_LIMIT} 行无效</p>
-            ) : null}
-
-            {!preview?.duplicateShotGroups.length &&
-            !preview?.lineErrors.length &&
-            preview?.errors[0] ? (
-              <p>{preview.errors[0]}</p>
+            {missingDurationPreviews.length > BULK_ISSUE_PREVIEW_LIMIT ? (
+              <p>另有 {missingDurationPreviews.length - BULK_ISSUE_PREVIEW_LIMIT} 镜缺少时长</p>
             ) : null}
           </div>
         ) : null}

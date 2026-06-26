@@ -3,10 +3,11 @@ import { createPortal } from 'react-dom';
 import type { StoryboardTableRow } from '../../types';
 import {
   computeDefaultInsertShotNo,
+  computeInsertShotPickerRange,
   normalizeInsertShotCount,
   planInsertShotsWithShift,
 } from '../../services/storyboardInsertShot';
-import { normalizeStoryboardShotNoInput } from '../../services/storyboardTableParse';
+import { normalizeStoryboardShotNoInput, formatStoryboardNumericShotNo } from '../../services/storyboardTableParse';
 import {
   STORYBOARD_FIELD_INPUT,
   STORYBOARD_LABEL,
@@ -25,15 +26,6 @@ type Props = {
   onConfirm: (payload: { newRows: StoryboardTableRow[]; nextRows: StoryboardTableRow[] }) => void;
 };
 
-function useDebouncedValue<T>(value: T, delayMs: number): T {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebounced(value), delayMs);
-    return () => window.clearTimeout(timer);
-  }, [value, delayMs]);
-  return debounced;
-}
-
 export default function StoryboardInsertShotModal({
   open,
   rows,
@@ -45,8 +37,6 @@ export default function StoryboardInsertShotModal({
   const defaultShotNo = useMemo(() => computeDefaultInsertShotNo(rows), [rows]);
   const [shotNoInput, setShotNoInput] = useState(defaultShotNo);
   const [insertCountInput, setInsertCountInput] = useState('1');
-  const debouncedShotNo = useDebouncedValue(shotNoInput, 150);
-  const debouncedCount = useDebouncedValue(insertCountInput, 150);
   const backdropPointerDownRef = useRef(false);
 
   useEffect(() => {
@@ -56,16 +46,13 @@ export default function StoryboardInsertShotModal({
     setInsertCountInput('1');
   }, [defaultShotNo, initialShotNo, open]);
 
-  const insertCount = useMemo(() => normalizeInsertShotCount(debouncedCount), [debouncedCount]);
+  const insertCount = useMemo(() => normalizeInsertShotCount(insertCountInput), [insertCountInput]);
+  const pickerRange = useMemo(() => computeInsertShotPickerRange(rows), [rows]);
 
   const plan = useMemo(
-    () => planInsertShotsWithShift(rows, debouncedShotNo, insertCount),
-    [debouncedShotNo, insertCount, rows]
+    () => planInsertShotsWithShift(rows, shotNoInput, insertCount),
+    [insertCount, rows, shotNoInput]
   );
-
-  const previewKey = plan.ok
-    ? `${plan.insertShotNo}-${plan.insertCount}-${plan.affectedCount}`
-    : `${debouncedShotNo}-${insertCount}`;
 
   const handleConfirm = useCallback(() => {
     if (!plan.ok || busy) return;
@@ -103,7 +90,6 @@ export default function StoryboardInsertShotModal({
 
   if (!open || typeof document === 'undefined') return null;
 
-  const summaryText = plan.ok ? plan.summary : plan.message;
   const hasNonNumericRows = rows.some((row) => {
     const trimmed = String(row.shotNo ?? '').trim();
     if (!trimmed) return false;
@@ -113,16 +99,6 @@ export default function StoryboardInsertShotModal({
 
   return createPortal(
     <>
-      <style>{`
-        @keyframes storyboardInsertShotIn {
-          from { opacity: 0; transform: translateX(-12px); }
-          to { opacity: 1; transform: translateX(0); }
-        }
-        @keyframes storyboardInsertShotShift {
-          from { opacity: 0.55; transform: translateX(8px); }
-          to { opacity: 1; transform: translateX(0); }
-        }
-      `}</style>
       <div
         className="fixed inset-0 z-[2175] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
         onMouseDown={(event) => {
@@ -141,7 +117,7 @@ export default function StoryboardInsertShotModal({
           role="dialog"
           aria-modal="true"
           aria-labelledby="storyboard-insert-shot-title"
-          aria-describedby="storyboard-insert-shot-summary"
+          {...(!plan.ok ? { 'aria-describedby': 'storyboard-insert-shot-summary' } : {})}
         >
           <div className="flex items-center justify-between border-b border-white/[0.08] px-4 py-3">
             <h2 id="storyboard-insert-shot-title" className="text-sm font-semibold text-white">
@@ -201,19 +177,27 @@ export default function StoryboardInsertShotModal({
             </div>
 
             <StoryboardInsertShotPreview
+              rows={rows}
+              insertCount={insertCount}
               preview={plan.ok ? plan.preview : null}
-              animateKey={previewKey}
+              insertNumeric={plan.ok ? plan.insertNumeric : null}
+              pickerMin={pickerRange.min}
+              pickerMax={pickerRange.max}
+              disabled={busy}
+              onInsertNumericChange={(numeric) =>
+                setShotNoInput(formatStoryboardNumericShotNo(String(numeric)))
+              }
             />
 
-            <p
-              id="storyboard-insert-shot-summary"
-              aria-live="polite"
-              className={`text-[11px] leading-relaxed ${
-                plan.ok ? 'text-gray-400' : 'text-amber-200/90'
-              }`}
-            >
-              {summaryText}
-            </p>
+            {!plan.ok ? (
+              <p
+                id="storyboard-insert-shot-summary"
+                aria-live="polite"
+                className="text-[11px] leading-relaxed text-amber-200/90"
+              >
+                {plan.message}
+              </p>
+            ) : null}
 
             {hasNonNumericRows ? (
               <p className="text-[10px] leading-relaxed text-gray-600">
