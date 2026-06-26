@@ -29,7 +29,6 @@ export {
 } from './storyboardFeedbackCollageSplit';
 import {
   chunkStoryboardRowsByCount,
-  normalizeShotsPerSheet,
   type StoryboardSheetGenTask,
 } from './storyboardTableSheetGen';
 import {
@@ -46,7 +45,13 @@ import {
 
 export const STORYBOARD_EDIT_FEEDBACK_COLLAGE_LIMIT_KEY = 'ac_storyboard_edit_feedback_collage_limit_v1';
 export const STORYBOARD_FEEDBACK_COLLAGE_LIMIT_DEFAULT = 9;
-export const STORYBOARD_FEEDBACK_COLLAGE_LIMIT_OPTIONS = [4, 6, 9, 12, 16] as const;
+export const STORYBOARD_FEEDBACK_COLLAGE_LIMIT_MAX = 48;
+export const STORYBOARD_FEEDBACK_COLLAGE_LIMIT_OPTIONS = [4, 6, 9, 12, 16, 20] as const;
+export const STORYBOARD_FEEDBACK_COLLAGE_LIMIT_CUSTOM_OPTION = '__custom__';
+
+export function isStoryboardFeedbackCollageLimitPreset(value: number): boolean {
+  return (STORYBOARD_FEEDBACK_COLLAGE_LIMIT_OPTIONS as readonly number[]).includes(value);
+}
 
 export type StoryboardFeedbackRedrawBatchRecord = {
   id: string;
@@ -63,19 +68,10 @@ export type StoryboardFeedbackRedrawBatchRecord = {
 export function normalizeFeedbackCollageLimit(value: unknown): number {
   const n = Number(value);
   if (!Number.isFinite(n)) return STORYBOARD_FEEDBACK_COLLAGE_LIMIT_DEFAULT;
-  const rounded = normalizeShotsPerSheet(n, STORYBOARD_FEEDBACK_COLLAGE_LIMIT_DEFAULT);
-  const options = STORYBOARD_FEEDBACK_COLLAGE_LIMIT_OPTIONS as readonly number[];
-  if (options.includes(rounded as (typeof options)[number])) return rounded;
-  let best = options[0]!;
-  let bestDist = Math.abs(rounded - best);
-  for (const opt of options) {
-    const dist = Math.abs(rounded - opt);
-    if (dist < bestDist) {
-      best = opt;
-      bestDist = dist;
-    }
-  }
-  return best;
+  return Math.min(
+    STORYBOARD_FEEDBACK_COLLAGE_LIMIT_MAX,
+    Math.max(1, Math.round(n))
+  );
 }
 
 export function compileFeedbackSheetShotPanelMeta(row: StoryboardTableRow): SheetCellTextMeta {

@@ -13,7 +13,12 @@ import {
 import {
   STORYBOARD_OUTLINE_ROW_ESTIMATE_PX,
 } from '../../services/storyboardVirtualScroll';
-import { normalizeFeedbackCollageLimit } from '../../services/storyboardFeedbackSheetRedraw';
+import {
+  isStoryboardFeedbackCollageLimitPreset,
+  normalizeFeedbackCollageLimit,
+  STORYBOARD_FEEDBACK_COLLAGE_LIMIT_CUSTOM_OPTION,
+  STORYBOARD_FEEDBACK_COLLAGE_LIMIT_MAX,
+} from '../../services/storyboardFeedbackSheetRedraw';
 import { rowHasSheetGenPrompt } from '../../services/storyboardTableSheetGen';
 import { useStoryboardVirtualList } from '../../hooks/useStoryboardVirtualList';
 import StoryboardConnectedRowEditor from './StoryboardConnectedRowEditor';
@@ -186,14 +191,44 @@ export default function StoryboardTableEditView({
     const hasPreview = record.rowIds.some((rowId) => record.rowImages?.[rowId]);
     return hasPreview ? record.rowImages : null;
   }, [feedbackRedrawHistory, selectedFeedbackHistoryId]);
+  const normalizedCollageLimit = normalizeFeedbackCollageLimit(feedbackCollageLimit);
+  const [forceCustomCollageLimit, setForceCustomCollageLimit] = useState(
+    () => !isStoryboardFeedbackCollageLimitPreset(normalizedCollageLimit)
+  );
+  const [customCollageLimitDraft, setCustomCollageLimitDraft] = useState(() =>
+    String(normalizedCollageLimit)
+  );
+  const showCustomCollageLimitInput =
+    forceCustomCollageLimit || !isStoryboardFeedbackCollageLimitPreset(normalizedCollageLimit);
   const collageLimitOptions = useMemo(
-    () =>
-      STORYBOARD_FEEDBACK_COLLAGE_LIMIT_OPTIONS.map((n) => ({
+    () => [
+      ...STORYBOARD_FEEDBACK_COLLAGE_LIMIT_OPTIONS.map((n) => ({
         value: String(n),
         label: `${n} 镜/张`,
       })),
+      { value: STORYBOARD_FEEDBACK_COLLAGE_LIMIT_CUSTOM_OPTION, label: '自定义' },
+    ],
     []
   );
+  const collageLimitTriggerClassName =
+    '!h-[1.625rem] !min-w-[5rem] !rounded-md !border-0 !bg-transparent !px-2 !text-[10px] !shadow-none !ring-0 hover:!bg-white/[0.06]';
+
+  useEffect(() => {
+    const next = normalizeFeedbackCollageLimit(feedbackCollageLimit);
+    setCustomCollageLimitDraft(String(next));
+    if (isStoryboardFeedbackCollageLimitPreset(next)) {
+      setForceCustomCollageLimit(false);
+    }
+  }, [feedbackCollageLimit]);
+
+  const commitCustomCollageLimit = useCallback(() => {
+    const next = normalizeFeedbackCollageLimit(customCollageLimitDraft);
+    setCustomCollageLimitDraft(String(next));
+    onFeedbackCollageLimitChange?.(next);
+    if (isStoryboardFeedbackCollageLimitPreset(next)) {
+      setForceCustomCollageLimit(false);
+    }
+  }, [customCollageLimitDraft, onFeedbackCollageLimitChange]);
   const [editDisplayMode, setEditDisplayMode] = useState<StoryboardEditDisplayMode>(() =>
     readLocalJson(STORYBOARD_EDIT_DISPLAY_MODE_KEY, 'full', (v) =>
       v === 'full' || v === 'feedback' ? v : null
@@ -664,16 +699,52 @@ export default function StoryboardTableEditView({
                 {showCanvasBatchTools ? (
                   <div className="flex flex-wrap items-center gap-1.5">
                       <div className={`${STORYBOARD_VIEW_TOGGLE} shrink-0`}>
-                        <CustomDropdown
-                          value={String(normalizeFeedbackCollageLimit(feedbackCollageLimit))}
-                          options={collageLimitOptions}
-                          disabled={collageBatchBusy}
-                          onChange={(value) => onFeedbackCollageLimitChange?.(Number(value))}
-                          triggerClassName="!h-[1.625rem] !min-w-[5rem] !rounded-md !border-0 !bg-transparent !px-2 !text-[10px] !shadow-none !ring-0 hover:!bg-white/[0.06]"
-                          triggerAriaLabel="每批拼图镜头上限"
-                          portalZIndex={STORYBOARD_EDIT_DROPDOWN_Z}
-                          listMinWidth={96}
-                        />
+                        {showCustomCollageLimitInput ? (
+                          <input
+                            type="number"
+                            min={1}
+                            max={STORYBOARD_FEEDBACK_COLLAGE_LIMIT_MAX}
+                            value={customCollageLimitDraft}
+                            autoFocus={forceCustomCollageLimit}
+                            disabled={collageBatchBusy}
+                            onChange={(event) => setCustomCollageLimitDraft(event.target.value)}
+                            onBlur={commitCustomCollageLimit}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter') {
+                                event.preventDefault();
+                                commitCustomCollageLimit();
+                              }
+                              if (event.key === 'Escape') {
+                                event.preventDefault();
+                                const restored = normalizeFeedbackCollageLimit(feedbackCollageLimit);
+                                setCustomCollageLimitDraft(String(restored));
+                                setForceCustomCollageLimit(
+                                  !isStoryboardFeedbackCollageLimitPreset(restored)
+                                );
+                              }
+                            }}
+                            className={`${collageLimitTriggerClassName} w-[5rem] bg-transparent text-gray-200 outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none`}
+                            aria-label={`自定义每批拼图镜头数，最多 ${STORYBOARD_FEEDBACK_COLLAGE_LIMIT_MAX} 镜`}
+                          />
+                        ) : (
+                          <CustomDropdown
+                            value={String(normalizedCollageLimit)}
+                            options={collageLimitOptions}
+                            disabled={collageBatchBusy}
+                            onChange={(value) => {
+                              if (value === STORYBOARD_FEEDBACK_COLLAGE_LIMIT_CUSTOM_OPTION) {
+                                setForceCustomCollageLimit(true);
+                                return;
+                              }
+                              setForceCustomCollageLimit(false);
+                              onFeedbackCollageLimitChange?.(Number(value));
+                            }}
+                            triggerClassName={collageLimitTriggerClassName}
+                            triggerAriaLabel="每批拼图镜头上限"
+                            portalZIndex={STORYBOARD_EDIT_DROPDOWN_Z}
+                            listMinWidth={96}
+                          />
+                        )}
                         <label
                           className={`inline-flex shrink-0 cursor-pointer items-center gap-1 border-l border-white/[0.08] px-2 text-[10px] ${
                             feedbackRedrawUnderstand ? 'text-gray-200' : 'text-gray-500'

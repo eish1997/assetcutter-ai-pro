@@ -23,9 +23,13 @@ function mockRow(overrides: Partial<StoryboardTableRow> = {}): StoryboardTableRo
 }
 
 describe('storyboardFeedbackSheetRedraw', () => {
-  it('normalizes collage limit with default 9', () => {
+  it('normalizes collage limit with default 9 and custom max 48', () => {
     expect(normalizeFeedbackCollageLimit(undefined)).toBe(9);
     expect(normalizeFeedbackCollageLimit(12)).toBe(12);
+    expect(normalizeFeedbackCollageLimit(20)).toBe(20);
+    expect(normalizeFeedbackCollageLimit(24)).toBe(24);
+    expect(normalizeFeedbackCollageLimit(99)).toBe(48);
+    expect(normalizeFeedbackCollageLimit(0)).toBe(1);
   });
 
   it('plans tasks by collage limit', () => {
