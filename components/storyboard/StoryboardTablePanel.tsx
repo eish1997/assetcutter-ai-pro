@@ -3,16 +3,15 @@ import { createPortal } from 'react-dom';
 import type { BoundingBox, CustomAppModule, StoryboardParseFieldDef, StoryboardRoleAsset, StoryboardSceneAsset, StoryboardTableRow, WorkflowAsset } from '../../types';
 import {
   applyAutoShotNumbers,
+  applySequentialShotNumbers,
   computeStoryboardTableStats,
-  createStoryboardTableRow,
-  duplicateStoryboardRow,
   normalizeStoryboardTableDoc,
   readStoryboardTableTitleRaw,
   reindexStoryboardRows,
   resolveStoryboardTableTitle,
   sortStoryboardRowsByShotNo,
 } from '../../services/storyboardTableAsset';
-import { reorderStoryboardRowsInLayer, collapseStoryboardTimelineTopLayer, clampStoryboardTimelineLayerCount } from '../../services/storyboardVideoTimeline';
+import { reorderStoryboardRows, reorderStoryboardRowsInLayer, collapseStoryboardTimelineTopLayer, clampStoryboardTimelineLayerCount } from '../../services/storyboardVideoTimeline';
 import {
   executeStoryboardFeedbackSheetRedraw,
   formatStoryboardFeedbackBatchLabel,
@@ -22,6 +21,7 @@ import {
   STORYBOARD_EDIT_FEEDBACK_COLLAGE_LIMIT_KEY,
   STORYBOARD_FEEDBACK_COLLAGE_LIMIT_DEFAULT,
   feedbackCollageLayoutToBoxes,
+  feedbackCollageLayoutToManualAdjustBoxes,
   splitStoryboardFeedbackCollageWithBoxes,
   type FeedbackCollageLayout,
   type StoryboardFeedbackRedrawBatchRecord,
@@ -153,11 +153,9 @@ import {
   getBuiltinStoryboardOptimizePreset,
   maybeWarnLargeFieldCatalog,
   normalizeStoryboardShotNoInput,
-  rowHasStructuredFieldValues,
   resolveStoryboardParseInput,
   STORYBOARD_PARSE_PRESET_KEY,
   STORYBOARD_OPTIMIZE_PRESET_KEY,
-  STORYBOARD_OPTIMIZE_ALLOW_DIALOGUE_KEY,
 } from '../../services/storyboardTableParse';
 import { readLocalJson, writeLocalJson } from '../../services/clientPersist';
 import {
@@ -214,6 +212,11 @@ import StoryboardFrameCropModal, {
   type StoryboardFrameCropNorm,
   isNearlyFullCropNorm,
 } from './StoryboardFrameCropModal';
+import StoryboardInsertShotModal from './StoryboardInsertShotModal';
+import {
+  computeInsertShotNoAfterRow,
+  computeInsertShotNoBeforeRow,
+} from '../../services/storyboardInsertShot';
 import { cropDataUrlByViewportNorm } from '../../services/panoViewportCapture';
 import type { StoryboardRowInteractionValue } from './StoryboardRowInteractionContext';
 import StoryboardTableGridPreview from './StoryboardTableGridPreview';
@@ -231,7 +234,6 @@ import {
   STORYBOARD_PAD_PANEL,
   STORYBOARD_PAD_TOOLBAR,
   STORYBOARD_STAT_CHIP,
-  STORYBOARD_TOOL_BTN_GHOST,
   STORYBOARD_TOOL_BTN_NEUTRAL,
   STORYBOARD_TOOL_BTN_PRIMARY,
   STORYBOARD_VIEW_TOGGLE,
@@ -361,6 +363,10 @@ export default function StoryboardTablePanel({
     total: number;
   } | null>(null);
   const [redrawBusyRowId, setRedrawBusyRowId] = useState<string | null>(null);
+  const [collageProcessing, setCollageProcessing] = useState<{
+    kind: 'feedback' | 'roleReplace';
+    rowIds: string[];
+  } | null>(null);
   const [feedbackRedrawUnderstand, setFeedbackRedrawUnderstand] = useState(() =>
     readLocalJson(STORYBOARD_EDIT_FEEDBACK_REDRAW_UNDERSTAND_KEY, true, (v) =>
       typeof v === 'boolean' ? v : null
@@ -452,6 +458,8 @@ export default function StoryboardTablePanel({
     rowIds: string[];
     sheetLabel: string;
   } | null>(null);
+  const [insertShotModalOpen, setInsertShotModalOpen] = useState(false);
+  const [insertShotInitialNo, setInsertShotInitialNo] = useState<string | null>(null);
 
   const panelMountedRef = useRef(true);
   const syncSheetSplitSession = useCallback(
@@ -469,9 +477,6 @@ export default function StoryboardTablePanel({
   const [parseBusyRowId, setParseBusyRowId] = useState<string | null>(null);
   const [parseAllBusy, setParseAllBusy] = useState(false);
   const [optimizeBusyRowId, setOptimizeBusyRowId] = useState<string | null>(null);
-  const [allowOptimizeDialogue, setAllowOptimizeDialogue] = useState(() =>
-    readLocalJson(STORYBOARD_OPTIMIZE_ALLOW_DIALOGUE_KEY, false, (v) => (typeof v === 'boolean' ? v : null))
-  );
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pendingRowIdRef = useRef<string | null>(null);
   const closeBtnRef = useRef<HTMLButtonElement>(null);
@@ -1088,14 +1093,6 @@ export default function StoryboardTablePanel({
     [onPatchAsset]
   );
 
-  const toggleAllowOptimizeDialogue = useCallback(() => {
-    setAllowOptimizeDialogue((prev) => {
-      const next = !prev;
-      writeLocalJson(STORYBOARD_OPTIMIZE_ALLOW_DIALOGUE_KEY, next);
-      return next;
-    });
-  }, []);
-
   const notifyCatalogSize = useCallback(
     (catalog: StoryboardParseFieldDef[]) => {
       maybeWarnLargeFieldCatalog(catalog, (msg) => onNotify?.('info', msg));
@@ -1134,8 +1131,13 @@ export default function StoryboardTablePanel({
   }, []);
 
   useEffect(() => {
+    const escBlockedByOverlay =
+      Boolean(lightboxSrc) ||
+      Boolean(frameCropDraft) ||
+      Boolean(splitAdjustDraft) ||
+      insertShotModalOpen;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !lightboxSrc) {
+      if (e.key === 'Escape' && !escBlockedByOverlay) {
         e.preventDefault();
         e.stopPropagation();
         onCloseRef.current();
@@ -1143,7 +1145,7 @@ export default function StoryboardTablePanel({
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [lightboxSrc]);
+  }, [frameCropDraft, insertShotModalOpen, lightboxSrc, splitAdjustDraft]);
 
   const patchTable = useCallback(
     (
@@ -1214,13 +1216,22 @@ export default function StoryboardTablePanel({
         const doc = cur.storyboardTable;
         if (!doc?.rows?.length) return cur;
         const titleRaw = readStoryboardTableTitleRaw(cur);
-        const rows = sortStoryboardRowsByShotNo(
-          doc.rows.map((r) => {
-            if (r.id !== rowId) return r;
-            if (storyboardRowIsPassed(r)) return r;
-            return { ...r, shotNo: shotNo || undefined };
-          })
-        );
+        let rows = doc.rows.map((r) => {
+          if (r.id !== rowId) return r;
+          if (storyboardRowIsPassed(r)) return r;
+          return { ...r, shotNo: shotNo || undefined };
+        });
+        if (shotNo) {
+          const targetNum = Number(shotNo);
+          if (Number.isFinite(targetNum) && targetNum >= 1) {
+            const fromIdx = rows.findIndex((r) => r.id === rowId);
+            const toIdx = Math.min(rows.length - 1, Math.max(0, targetNum - 1));
+            if (fromIdx >= 0 && fromIdx !== toIdx) {
+              rows = reorderStoryboardRows(rows, fromIdx, toIdx);
+            }
+          }
+        }
+        rows = applySequentialShotNumbers(rows);
         return {
           ...cur,
           textTitle: titleRaw,
@@ -1786,7 +1797,7 @@ export default function StoryboardTablePanel({
       const expectedShotNos = args.rowIds
         .map((id) => table.rows.find((r) => r.id === id)?.shotNo?.trim())
         .filter((s): s is string => Boolean(s));
-      const initialBoxes = feedbackCollageLayoutToBoxes(args.layout);
+      const initialBoxes = feedbackCollageLayoutToManualAdjustBoxes(args.layout);
       return promptSheetSplitBoxAdjust(
         {
           previewId: args.previewId,
@@ -2681,23 +2692,55 @@ export default function StoryboardTablePanel({
     ]
   );
 
-  const addRow = () => {
-    const row = createStoryboardTableRow({ shotNo: '' }, 0);
-    patchTable((rows) => sortStoryboardRowsByShotNo([row, ...rows]));
-    navigateToRow(row.id);
-  };
+  const openInsertShotModal = useCallback(
+    (initialShotNo?: string) => {
+      if (readOnly) {
+        onNotify?.('warn', '只读模式无法添加镜头');
+        return;
+      }
+      setInsertShotInitialNo(initialShotNo?.trim() || null);
+      setInsertShotModalOpen(true);
+    },
+    [onNotify, readOnly]
+  );
 
-  const duplicateRow = (rowId: string) => {
-    const i = table.rows.findIndex((r) => r.id === rowId);
-    if (i < 0) return;
-    const copy = duplicateStoryboardRow(table.rows[i]!, table.rows.length);
-    patchTable((rows) => {
-      const next = [...rows];
-      next.splice(i + 1, 0, copy);
-      return next;
-    });
-    navigateToRow(copy.id);
-  };
+  const closeInsertShotModal = useCallback(() => {
+    setInsertShotModalOpen(false);
+    setInsertShotInitialNo(null);
+  }, []);
+
+  const handleOutlineInsertShotBefore = useCallback(
+    (rowIndex: number) => {
+      openInsertShotModal(computeInsertShotNoBeforeRow(table.rows, rowIndex));
+    },
+    [openInsertShotModal, table.rows]
+  );
+
+  const handleOutlineInsertShotAfter = useCallback(
+    (rowIndex: number) => {
+      openInsertShotModal(computeInsertShotNoAfterRow(table.rows, rowIndex));
+    },
+    [openInsertShotModal, table.rows]
+  );
+
+  const confirmInsertShot = useCallback(
+    (payload: { newRows: StoryboardTableRow[]; nextRows: StoryboardTableRow[] }) => {
+      const first = payload.newRows[0];
+      const last = payload.newRows[payload.newRows.length - 1];
+      const shotLabel =
+        payload.newRows.length === 1
+          ? first?.shotNo?.trim() || '新镜头'
+          : `${first?.shotNo ?? ''}–${last?.shotNo ?? ''}`;
+      patchTable(() => payload.nextRows);
+      closeInsertShotModal();
+      if (first) navigateToRow(first.id);
+      onNotify?.(
+        'info',
+        payload.newRows.length === 1 ? `已插入镜头 ${shotLabel}` : `已插入 ${payload.newRows.length} 镜（${shotLabel}）`
+      );
+    },
+    [closeInsertShotModal, navigateToRow, onNotify, patchTable]
+  );
 
   const removeRows = useCallback(
     (rowIds: string[]): boolean => {
@@ -2714,7 +2757,7 @@ export default function StoryboardTablePanel({
           ? '删除该镜头行？'
           : `删除选中的 ${ids.length} 镜？`;
       if (!window.confirm(message)) return false;
-      patchTable((rows) => rows.filter((row) => !ids.includes(row.id)));
+      patchTable((rows) => applySequentialShotNumbers(rows.filter((row) => !ids.includes(row.id))));
       if (activeRowId && ids.includes(activeRowId)) setActiveRowId(null);
       return true;
     },
@@ -2726,22 +2769,26 @@ export default function StoryboardTablePanel({
   };
 
   const moveRow = (rowId: string, dir: -1 | 1) => {
-    const row = table.rows.find((r) => r.id === rowId);
-    if (row && storyboardRowIsPassed(row)) {
-      onNotify?.('warn', '该镜头已通过，请先取消通过');
-      return;
-    }
     patchTable((rows) => {
       const i = rows.findIndex((r) => r.id === rowId);
       if (i < 0) return rows;
       const j = i + dir;
       if (j < 0 || j >= rows.length) return rows;
-      const next = [...rows];
-      const [item] = next.splice(i, 1);
-      next.splice(j, 0, item);
-      return next;
+      const next = reorderStoryboardRows(rows, i, j);
+      return applySequentialShotNumbers(next);
     });
   };
+
+  const reorderOutlineRows = useCallback(
+    (fromIndex: number, toIndex: number) => {
+      if (readOnly) return;
+      patchTable((rows) => {
+        const reordered = reorderStoryboardRows(rows, fromIndex, toIndex);
+        return applySequentialShotNumbers(reordered);
+      });
+    },
+    [patchTable, readOnly]
+  );
 
   const openFileForRow = (rowId: string) => {
     const row = table.rows.find((r) => r.id === rowId);
@@ -3053,6 +3100,9 @@ export default function StoryboardTablePanel({
         return;
       }
       setRedrawBusyRowId(rowId);
+      if (useCollage) {
+        setCollageProcessing({ kind: 'feedback', rowIds: [rowId] });
+      }
       try {
         await onRedrawRow(
           rowId,
@@ -3068,6 +3118,9 @@ export default function StoryboardTablePanel({
         onNotify?.('warn', e instanceof Error ? e.message : '重绘失败');
       } finally {
         setRedrawBusyRowId(null);
+        if (useCollage) {
+          setCollageProcessing(null);
+        }
       }
     },
     [
@@ -3126,6 +3179,10 @@ export default function StoryboardTablePanel({
     onSelectFeedbackHistory(batchId);
     setFeedbackBatchBusy(true);
     setFeedbackBatchProgress({ done: 0, total: tasks.length });
+    setCollageProcessing({
+      kind: 'feedback',
+      rowIds: tasks[0]?.rowIds ?? eligible.map((row) => row.id),
+    });
 
     let okTasks = 0;
     let failTasks = 0;
@@ -3135,7 +3192,7 @@ export default function StoryboardTablePanel({
 
     try {
       for (const task of tasks) {
-        setRedrawBusyRowId(task.rowIds[0] ?? null);
+        setCollageProcessing({ kind: 'feedback', rowIds: task.rowIds });
         try {
           const outcome = await executeStoryboardFeedbackSheetRedraw({
             preset,
@@ -3264,7 +3321,7 @@ export default function StoryboardTablePanel({
         clearEditFeedbackForRows([...feedbackClearedRowIds]);
       }
     } finally {
-      setRedrawBusyRowId(null);
+      setCollageProcessing(null);
       setFeedbackBatchBusy(false);
       setFeedbackBatchProgress(null);
     }
@@ -3322,6 +3379,10 @@ export default function StoryboardTablePanel({
 
     setRoleReplaceBatchBusy(true);
     setRoleReplaceBatchProgress({ done: 0, total: tasks.length });
+    setCollageProcessing({
+      kind: 'roleReplace',
+      rowIds: tasks[0]?.rowIds ?? eligible.map((row) => row.id),
+    });
 
     let okTasks = 0;
     let failTasks = 0;
@@ -3329,7 +3390,7 @@ export default function StoryboardTablePanel({
 
     try {
       for (const task of tasks) {
-        setRedrawBusyRowId(task.rowIds[0] ?? null);
+        setCollageProcessing({ kind: 'roleReplace', rowIds: task.rowIds });
         try {
           const outcome = await executeStoryboardRoleReplaceCollageBatch({
             preset,
@@ -3426,7 +3487,7 @@ export default function StoryboardTablePanel({
         onNotify?.('warn', `拼图替换 ${okTasks} 张完成，但未能自动切分回填，请检查镜号`);
       }
     } finally {
-      setRedrawBusyRowId(null);
+      setCollageProcessing(null);
       setRoleReplaceBatchBusy(false);
       setRoleReplaceBatchProgress(null);
     }
@@ -3732,8 +3793,7 @@ export default function StoryboardTablePanel({
           row,
           table.fieldCatalog,
           preset,
-          parseCtx,
-          { allowDialogueEdit: allowOptimizeDialogue }
+          parseCtx
         );
         patchRow(rowId, { shotFields: nextRow.shotFields });
       } catch (e) {
@@ -3743,7 +3803,6 @@ export default function StoryboardTablePanel({
       }
     },
     [
-      allowOptimizeDialogue,
       onNotify,
       parseCtx,
       patchRow,
@@ -3876,7 +3935,6 @@ export default function StoryboardTablePanel({
       hasRedrawHandler: Boolean(onRedrawRow),
       hasParseHandler: true,
       hasOptimizeHandler: true,
-      allowOptimizeDialogue,
       focusRow: setActiveRowId,
       patchRow,
       commitRowShotNo,
@@ -3922,7 +3980,6 @@ export default function StoryboardTablePanel({
     runParse,
     runRedraw,
     previewRowFrame,
-    allowOptimizeDialogue,
     table.fieldCatalog,
     table.rows.length,
     timelineLayerCount,
@@ -3931,10 +3988,6 @@ export default function StoryboardTablePanel({
   const activeRow = useMemo(
     () => (activeRowId ? table.rows.find((r) => r.id === activeRowId) : undefined),
     [activeRowId, table.rows]
-  );
-  const activeRowCanOptimize = useMemo(
-    () => Boolean(activeRow && rowHasStructuredFieldValues(table.fieldCatalog, activeRow)),
-    [activeRow, table.fieldCatalog]
   );
 
   const panel = (
@@ -4056,16 +4109,8 @@ export default function StoryboardTablePanel({
                 />
               </div>
             ) : null}
-            <button type="button" onClick={addRow} className={STORYBOARD_TOOL_BTN_PRIMARY}>
+            <button type="button" onClick={() => openInsertShotModal()} className={STORYBOARD_TOOL_BTN_PRIMARY}>
               添加镜头
-            </button>
-            <button
-              type="button"
-              disabled={parseBusyRowId != null || parseAllBusy}
-              onClick={() => void runParseAll()}
-              className={STORYBOARD_TOOL_BTN_NEUTRAL}
-            >
-              {parseAllBusy ? '批量解析中…' : '解析全表'}
             </button>
             <button
               type="button"
@@ -4139,51 +4184,9 @@ export default function StoryboardTablePanel({
                 />
               </div>
             ) : null}
-            <button type="button" onClick={addRow} className={STORYBOARD_TOOL_BTN_PRIMARY}>
+            <button type="button" onClick={() => openInsertShotModal()} className={STORYBOARD_TOOL_BTN_PRIMARY}>
               添加镜头
             </button>
-            {activeRowId ? (
-              <button
-                type="button"
-                disabled={parseBusyRowId != null || parseAllBusy}
-                onClick={() => void runParse(activeRowId)}
-                className={STORYBOARD_TOOL_BTN_NEUTRAL}
-              >
-                {parseBusyRowId === activeRowId ? '解析中…' : '解析本镜'}
-              </button>
-            ) : null}
-            <button
-              type="button"
-              disabled={parseBusyRowId != null || parseAllBusy}
-              onClick={() => void runParseAll()}
-              className={STORYBOARD_TOOL_BTN_NEUTRAL}
-            >
-              {parseAllBusy ? '批量解析中…' : '解析全表'}
-            </button>
-            {activeRowId ? (
-              <button
-                type="button"
-                disabled={
-                  optimizeBusyRowId != null ||
-                  parseBusyRowId != null ||
-                  parseAllBusy ||
-                  !activeRowCanOptimize
-                }
-                onClick={() => void runOptimize(activeRowId)}
-                className={STORYBOARD_TOOL_BTN_NEUTRAL}
-              >
-                {optimizeBusyRowId === activeRowId ? '优化中…' : '优化本镜'}
-              </button>
-            ) : null}
-            <label className="inline-flex cursor-pointer items-center gap-1.5 text-[10px] text-gray-500">
-              <input
-                type="checkbox"
-                checked={allowOptimizeDialogue}
-                onChange={toggleAllowOptimizeDialogue}
-                className="h-3.5 w-3.5 rounded border-white/20 bg-white/5 text-white/80"
-              />
-              可改对白
-            </label>
             <button
               type="button"
               onClick={() => patchTable((rows) => applyAutoShotNumbers(rows))}
@@ -4191,15 +4194,6 @@ export default function StoryboardTablePanel({
             >
               自动镜头号
             </button>
-            {activeRowId ? (
-              <button
-                type="button"
-                onClick={() => duplicateRow(activeRowId)}
-                className={STORYBOARD_TOOL_BTN_GHOST}
-              >
-                复制当前镜
-              </button>
-            ) : null}
           </div>
         ) : null}
 
@@ -4370,6 +4364,7 @@ export default function StoryboardTablePanel({
           roleAssets={table.roleAssets ?? []}
           activeRowId={activeRowId}
           imageBusyRowId={imageBusyRowId}
+          collageProcessing={collageProcessing}
           redrawBusyRowId={redrawBusyRowId}
           feedbackBatchBusy={feedbackBatchBusy}
           feedbackBatchProgress={feedbackBatchProgress}
@@ -4390,6 +4385,9 @@ export default function StoryboardTablePanel({
           onActiveRowIdChange={setActiveRowId}
           onPatchRows={patchRows}
           onRemoveRows={!readOnly ? removeRows : undefined}
+          onReorderRows={!readOnly ? reorderOutlineRows : undefined}
+          onInsertShotBefore={!readOnly ? handleOutlineInsertShotBefore : undefined}
+          onInsertShotAfter={!readOnly ? handleOutlineInsertShotAfter : undefined}
           onAddFrameRoleMark={!readOnly ? addFrameRoleMark : undefined}
           onUpdateFrameRoleMark={!readOnly ? updateFrameRoleMark : undefined}
           onRemoveFrameRoleMark={!readOnly ? removeFrameRoleMark : undefined}
@@ -4404,7 +4402,11 @@ export default function StoryboardTablePanel({
           editScrollRef={editViewRef}
           footerAddRow={
             !readOnly ? (
-              <button type="button" onClick={addRow} className={STORYBOARD_ADD_ROW_DASHED}>
+              <button
+                type="button"
+                onClick={() => openInsertShotModal()}
+                className={STORYBOARD_ADD_ROW_DASHED}
+              >
                 <span className="text-base leading-none text-white/60">+</span>
                 添加镜头
               </button>
@@ -4488,6 +4490,13 @@ export default function StoryboardTablePanel({
           onConfirm={confirmSheetSplitBoxAdjust}
         />
       ) : null}
+      <StoryboardInsertShotModal
+        open={insertShotModalOpen}
+        rows={table.rows}
+        initialShotNo={insertShotInitialNo}
+        onClose={closeInsertShotModal}
+        onConfirm={confirmInsertShot}
+      />
     </>
   );
 }

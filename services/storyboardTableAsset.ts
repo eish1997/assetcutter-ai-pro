@@ -529,3 +529,28 @@ export function applyAutoShotNumbers(rows: StoryboardTableRow[]): StoryboardTabl
     return { ...r, shotNo };
   });
 }
+
+/** 按数组物理顺序重编 001、002…，消除镜号重复与乱序 */
+export function applySequentialShotNumbers(rows: StoryboardTableRow[]): StoryboardTableRow[] {
+  return reindexStoryboardRows(
+    rows.map((r, i) => ({
+      ...r,
+      shotNo: formatStoryboardShotNo(i),
+    }))
+  );
+}
+
+/** 大纲拖拽松手位置：overIndex 行上/下半区 → 插入索引 */
+export function computeStoryboardOutlineDropIndex(
+  draggingIndex: number,
+  overIndex: number,
+  clientY: number,
+  overRect: Pick<DOMRect, 'top' | 'height'>,
+  rowCount: number
+): number {
+  if (rowCount <= 1) return 0;
+  const after = clientY >= overRect.top + overRect.height / 2;
+  let to = after ? overIndex + 1 : overIndex;
+  if (draggingIndex < to) to -= 1;
+  return Math.max(0, Math.min(rowCount - 1, to));
+}

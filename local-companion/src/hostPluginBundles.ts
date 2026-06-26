@@ -63,6 +63,7 @@ export async function installHostPluginBundleFromUrl(input: {
     sha256Expected: input.sha256Expected,
     bytesExpected: input.bytesExpected,
     destPath: finalPath,
+    allowCatalogInstallHost: true,
   });
 
   let bundleFormat: 'zip' | 'bin' = 'bin';

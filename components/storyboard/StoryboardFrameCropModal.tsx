@@ -312,6 +312,7 @@ export default function StoryboardFrameCropModal({
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || busy) return;
       event.preventDefault();
+      event.stopImmediatePropagation();
       onClose();
     };
     window.addEventListener('keydown', onKey, true);

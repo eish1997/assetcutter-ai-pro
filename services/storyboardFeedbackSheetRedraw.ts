@@ -24,6 +24,7 @@ export {
   splitStoryboardFeedbackCollageByLayout,
   splitStoryboardFeedbackCollageWithBoxes,
   feedbackCollageLayoutToBoxes,
+  feedbackCollageLayoutToManualAdjustBoxes,
   pixelRectToNormBox,
 } from './storyboardFeedbackCollageSplit';
 import {

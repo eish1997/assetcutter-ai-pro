@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyAutoShotNumbers,
+  applySequentialShotNumbers,
+  computeStoryboardOutlineDropIndex,
   computeStoryboardTableStats,
   createEmptyStoryboardTableAsset,
   createStoryboardTableRow,
@@ -177,5 +179,23 @@ describe('storyboardTableAsset', () => {
     for (const id of copyRowIds) {
       expect(rowIds).not.toContain(id);
     }
+  });
+
+  it('applySequentialShotNumbers renumbers rows in physical order', () => {
+    const rows = [
+      createStoryboardTableRow({ shotNo: '010' }, 0),
+      createStoryboardTableRow({ shotNo: '010' }, 1),
+      createStoryboardTableRow({ shotNo: '003' }, 2),
+    ];
+    const next = applySequentialShotNumbers(rows);
+    expect(next.map((row) => row.shotNo)).toEqual(['001', '002', '003']);
+    expect(next.map((row) => row.index)).toEqual([0, 1, 2]);
+  });
+
+  it('computeStoryboardOutlineDropIndex maps hover half to insert index', () => {
+    const rect = { top: 100, height: 20 };
+    expect(computeStoryboardOutlineDropIndex(1, 3, 105, rect, 5)).toBe(2);
+    expect(computeStoryboardOutlineDropIndex(1, 3, 115, rect, 5)).toBe(3);
+    expect(computeStoryboardOutlineDropIndex(3, 1, 105, rect, 5)).toBe(1);
   });
 });

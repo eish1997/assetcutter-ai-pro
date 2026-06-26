@@ -163,6 +163,7 @@ export async function installShellToolBundleFromUrl(input: {
       sha256Expected: input.sha256Expected,
       bytesExpected: input.bytesExpected,
       destPath: bundlePath,
+      allowCatalogInstallHost: true,
     });
 
     let bundleFormat: 'zip' | 'bin' = 'bin';

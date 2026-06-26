@@ -9,7 +9,6 @@ export type StoryboardRowInteractionValue = {
   hasRedrawHandler: boolean;
   hasParseHandler: boolean;
   hasOptimizeHandler: boolean;
-  allowOptimizeDialogue: boolean;
   focusRow: (rowId: string) => void;
   patchRow: (rowId: string, patch: Partial<StoryboardTableRow>) => void;
   commitRowShotNo: (rowId: string, raw: string) => void;

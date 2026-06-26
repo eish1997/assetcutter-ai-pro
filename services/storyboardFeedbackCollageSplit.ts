@@ -3,6 +3,7 @@ import { cropBoxes, trimImageDataUrlContentBounds } from './imageCrop';
 export { trimImageDataUrlContentBounds } from './imageCrop';
 import {
   shrinkStoryboardPanelBoxToVisualCore,
+  clampStoryboardSheetSplitBox,
   type StoryboardSheetVisionSplitResult,
 } from './storyboardSheetVisionSplit';
 
@@ -58,6 +59,15 @@ export function feedbackCollageLayoutToBoxes(layout: FeedbackCollageLayout): Bou
   }));
 }
 
+/** 手动调整弹窗初始框：与 layout 记录的分镜图区域一致，不再二次内缩 */
+export function feedbackCollageLayoutToManualAdjustBoxes(layout: FeedbackCollageLayout): BoundingBox[] {
+  return layout.cells.map((cell) => ({
+    ...clampStoryboardSheetSplitBox(cell.imageBox),
+    id: cell.rowId,
+    label: cell.shotNo,
+  }));
+}
+
 /** 手动调整后的裁切框（按 layout.cells 顺序与 rowId 对齐） */
 export async function splitStoryboardFeedbackCollageWithBoxes(
   dataUrl: string,
@@ -74,21 +84,25 @@ export async function splitStoryboardFeedbackCollageWithBoxes(
     const picked = boxById.get(cell.rowId) ?? boxes[index];
     const base = picked && 'xmin' in picked ? picked : cell.imageBox;
     return {
-      ...refineFeedbackCollageCropBox(base),
+      ...clampStoryboardSheetSplitBox(base),
       id: cell.rowId,
       label: cell.shotNo,
     };
   });
 
-  return splitStoryboardFeedbackCollageWithOrderedBoxes(dataUrl, layout, ordered, rows);
+  return splitStoryboardFeedbackCollageWithOrderedBoxes(dataUrl, layout, ordered, rows, {
+    trimResults: false,
+  });
 }
 
 async function splitStoryboardFeedbackCollageWithOrderedBoxes(
   dataUrl: string,
   layout: FeedbackCollageLayout,
   boxes: BoundingBox[],
-  rows: StoryboardTableRow[]
+  rows: StoryboardTableRow[],
+  options?: { trimResults?: boolean }
 ): Promise<StoryboardSheetVisionSplitResult> {
+  const trimResults = options?.trimResults !== false;
   const rowById = new Map(rows.map((row) => [row.id, row]));
 
   const crops = await cropBoxes(
@@ -110,7 +124,7 @@ async function splitStoryboardFeedbackCollageWithOrderedBoxes(
       unmatchedLabels.push(cell.shotNo);
       continue;
     }
-    const image = await trimImageDataUrlContentBounds(raw);
+    const image = trimResults ? await trimImageDataUrlContentBounds(raw) : raw;
     usedRowIds.add(row.id);
     matches.push({
       rowId: row.id,

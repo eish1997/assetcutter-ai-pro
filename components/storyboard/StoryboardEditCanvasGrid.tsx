@@ -11,6 +11,7 @@ import StoryboardFrameRoleContextMenu, {
   type StoryboardFrameRoleMenuMode,
 } from './StoryboardFrameRoleContextMenu';
 import StoryboardFrameRoleMarkChip from './StoryboardFrameRoleMarkChip';
+import WorkflowPixelBusyOverlay from '../WorkflowPixelBusyOverlay';
 import { storyboardCanvasTileDomId } from './storyboardTableDom';
 import { useStoryboardCanvasMarqueeSelect } from '../../hooks/useStoryboardCanvasMarqueeSelect';
 import {
@@ -19,6 +20,10 @@ import {
   STORYBOARD_ROW_HISTORY_HIGHLIGHT,
   STORYBOARD_ROW_IDLE,
   STORYBOARD_ROW_SHELL,
+  storyboardCollageProcessingBadgeClass,
+  storyboardCollageProcessingDetail,
+  storyboardCollageProcessingLabel,
+  type StoryboardCollageProcessingKind,
 } from './storyboardTableUi';
 
 export type StoryboardCanvasSelectModifiers = {
@@ -41,6 +46,8 @@ type Props = {
   activeRowId: string | null;
   selectedRowIds: ReadonlySet<string>;
   imageBusyRowId?: string | null;
+  collageProcessingRowIds?: ReadonlySet<string>;
+  collageProcessingKind?: StoryboardCollageProcessingKind | null;
   highlightedRowIds?: ReadonlySet<string> | null;
   previewRowImages?: Readonly<Record<string, string>> | null;
   roleAssets?: StoryboardRoleAsset[];
@@ -74,6 +81,8 @@ export default function StoryboardEditCanvasGrid({
   activeRowId,
   selectedRowIds,
   imageBusyRowId = null,
+  collageProcessingRowIds,
+  collageProcessingKind = null,
   highlightedRowIds = null,
   previewRowImages = null,
   roleAssets = [],
@@ -230,7 +239,7 @@ export default function StoryboardEditCanvasGrid({
     <>
       <div
         ref={containerRef}
-        className={`relative touch-none select-none ${STORYBOARD_EDIT_CANVAS_GRID}`}
+        className={`relative touch-none select-none ${STORYBOARD_EDIT_CANVAS_GRID} p-1`}
         onPointerDown={onContainerPointerDown}
       >
         {marqueeStyle ? (
@@ -245,6 +254,8 @@ export default function StoryboardEditCanvasGrid({
           const img = previewImg || resolveStoryboardRowFrameDisplaySrc(row);
           const label = storyboardRowOutlineTitle(row, index);
           const busy = imageBusyRowId === row.id;
+          const collageProcessing =
+            collageProcessingKind != null && (collageProcessingRowIds?.has(row.id) ?? false);
           const hasFeedback = storyboardRowHasEditFeedback(row);
           const historyHighlight = highlightedRowIds?.has(row.id) ?? false;
           const roleMarks = row.frameRoleMarks ?? [];
@@ -288,7 +299,7 @@ export default function StoryboardEditCanvasGrid({
                   onSelectRow(row.id);
                 }
               }}
-              className={`${STORYBOARD_ROW_SHELL} flex min-w-0 cursor-pointer flex-col overflow-hidden text-left transition ${
+              className={`${STORYBOARD_ROW_SHELL} relative flex min-w-0 cursor-pointer flex-col text-left transition ${
                 filterActive && !filterMatch ? 'opacity-55 hover:opacity-80' : ''
               } ${filterFlash ? 'ring-2 ring-amber-400/55' : ''} ${shellTone}`}
             >
@@ -300,8 +311,14 @@ export default function StoryboardEditCanvasGrid({
                   ) : null}
                 </span>
                 <span className="flex shrink-0 items-center gap-1">
-                  {hasFeedback ? (
-                    <StoryboardEditFeedbackMark row={row} label="反馈中..." />
+                  {collageProcessing && collageProcessingKind ? (
+                    <span
+                      className={`inline-flex shrink-0 items-center rounded px-1 py-px text-[8px] font-semibold ring-1 ${storyboardCollageProcessingBadgeClass(collageProcessingKind)}`}
+                    >
+                      {storyboardCollageProcessingLabel(collageProcessingKind)}
+                    </span>
+                  ) : hasFeedback ? (
+                    <StoryboardEditFeedbackMark row={row} label="反馈" />
                   ) : null}
                   {row.locked ? (
                     <span className="shrink-0 text-[8px] text-gray-500">已通过</span>
@@ -312,7 +329,7 @@ export default function StoryboardEditCanvasGrid({
                 ref={(el) => {
                   frameRefs.current[row.id] = el;
                 }}
-                className={`relative aspect-[4/3] w-full bg-black/40 ${
+                className={`relative aspect-[4/3] w-full overflow-hidden rounded-b-2xl bg-black/40 ${
                   historyHighlight ? 'ring-2 ring-inset ring-amber-400/50' : ''
                 }`}
                 onContextMenu={(event) => openAddMenu(event, row)}
@@ -332,7 +349,7 @@ export default function StoryboardEditCanvasGrid({
                   <img
                     src={img}
                     alt=""
-                    className="pointer-events-none h-full w-full object-cover"
+                    className="pointer-events-none h-full w-full object-contain bg-black/25"
                     draggable={false}
                   />
                 ) : (
@@ -365,6 +382,22 @@ export default function StoryboardEditCanvasGrid({
                   <div className="absolute inset-0 flex items-center justify-center bg-black/50 text-[9px] text-gray-200">
                     处理中…
                   </div>
+                ) : null}
+                {collageProcessing && collageProcessingKind ? (
+                  <>
+                    <div
+                      className="absolute inset-0 z-[9] bg-transparent"
+                      onClick={(event) => event.stopPropagation()}
+                      onPointerDown={(event) => event.stopPropagation()}
+                      aria-hidden
+                    />
+                    <WorkflowPixelBusyOverlay
+                      executing
+                      accentExecuting
+                      progressDetail={storyboardCollageProcessingDetail(collageProcessingKind)}
+                      backdropImageSrc={img || null}
+                    />
+                  </>
                 ) : null}
                 {img && onPreviewRowFrame ? (
                   <button

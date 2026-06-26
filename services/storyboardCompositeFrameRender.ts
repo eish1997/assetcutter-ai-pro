@@ -90,6 +90,45 @@ function drawPlaceholder(
   ctx.textBaseline = 'alphabetic';
 }
 
+/** object-contain：在 bounds 内完整显示整张图（与编辑页详情面板一致） */
+export function measureImageContainedDrawRect(
+  img: Pick<HTMLImageElement, 'width' | 'height'>,
+  bounds: { x: number; y: number; w: number; h: number }
+): { x: number; y: number; w: number; h: number } {
+  const iw = img.width;
+  const ih = img.height;
+  if (!iw || !ih || bounds.w <= 0 || bounds.h <= 0) {
+    return { ...bounds };
+  }
+  const imageRatio = iw / ih;
+  const boundsRatio = bounds.w / bounds.h;
+  let dw: number;
+  let dh: number;
+  if (imageRatio > boundsRatio) {
+    dw = bounds.w;
+    dh = bounds.w / imageRatio;
+  } else {
+    dh = bounds.h;
+    dw = bounds.h * imageRatio;
+  }
+  return {
+    x: bounds.x + (bounds.w - dw) / 2,
+    y: bounds.y + (bounds.h - dh) / 2,
+    w: dw,
+    h: dh,
+  };
+}
+
+function drawImageContained(
+  ctx: CanvasRenderingContext2D,
+  img: HTMLImageElement,
+  bounds: { x: number; y: number; w: number; h: number }
+): { x: number; y: number; w: number; h: number } {
+  const rect = measureImageContainedDrawRect(img, bounds);
+  ctx.drawImage(img, rect.x, rect.y, rect.w, rect.h);
+  return rect;
+}
+
 /** 以宽为准完整显示，不裁切上下 */
 function drawImageNaturalWidth(
   ctx: CanvasRenderingContext2D,
@@ -366,11 +405,7 @@ export async function measureFeedbackCollageImageDrawRect(
   if (!img?.width || !img.height) {
     return { ...visualRect, h: placeholderH };
   }
-  const drawnH = Math.min(
-    visualRect.h,
-    Math.max(1, Math.round(visualRect.w / (img.width / img.height)))
-  );
-  return { x: visualRect.x, y: visualRect.y, w: visualRect.w, h: drawnH };
+  return measureImageContainedDrawRect(img, visualRect);
 }
 
 /** 反馈改图拼图：仅镜号 + 插画，不在图内写入修改反馈等文字 */
@@ -391,7 +426,7 @@ export async function drawFeedbackCollageImageOnlyCell(
   if (src) {
     const img = await loadFrameImage(src);
     if (img) {
-      drawImageNaturalWidth(ctx, img, visualRect.x, visualRect.y, visualRect.w);
+      drawImageContained(ctx, img, visualRect);
     } else {
       drawPlaceholder(ctx, visualRect.x, visualRect.y, visualRect.w, visualRect.h, shotNo);
     }

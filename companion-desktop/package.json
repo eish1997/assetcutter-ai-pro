@@ -34,6 +34,7 @@
       "companion-auto-update.cjs",
       "build-constants.json",
       "preload-shell.cjs",
+      "preload-tool-window.cjs",
       "preload-workbench.cjs",
       "companion-sandbox-paths.cjs",
       "shell/**/*",

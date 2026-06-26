@@ -516,6 +516,38 @@ function resolveAuthApiOriginForCompanionApi() {
   }
 }
 
+/** 发行 catalog 的 publicInstallUrl 常走 auth-api /api/r2 代理，须把该主机注入伴侣子进程白名单 */
+function applyCompanionBundleDownloadTrustEnv(env) {
+  const authOrigin = resolveAuthApiOriginForCompanionApi();
+  if (authOrigin) {
+    env.COMPANION_AUTH_API_ORIGIN = authOrigin;
+  }
+  const hosts = new Set();
+  const existing = String(env.COMPANION_HOST_BUNDLE_TRUST_HOSTS || '').trim();
+  if (existing) {
+    for (const part of existing.split(',')) {
+      const h = part.trim().toLowerCase();
+      if (h) hosts.add(h);
+    }
+  }
+  if (authOrigin) {
+    try {
+      hosts.add(new URL(authOrigin).hostname.toLowerCase());
+    } catch {
+      /* ignore */
+    }
+  }
+  try {
+    const site = String(readShellSettings().siteUrl || '').trim();
+    if (site) hosts.add(new URL(site).hostname.toLowerCase());
+  } catch {
+    /* ignore */
+  }
+  if (hosts.size > 0) {
+    env.COMPANION_HOST_BUNDLE_TRUST_HOSTS = [...hosts].join(',');
+  }
+}
+
 function semverRemoteGreater(remote, local) {
   const pa = String(remote)
     .split('.')
@@ -1289,6 +1321,7 @@ async function startLocalCompanion() {
   applyDesktopSamLocalSpawnEnv(env);
   applyDesktopRembgPythonToEnv(env);
   applyDesktopPaddleOcrToEnv(env);
+  applyCompanionBundleDownloadTrustEnv(env);
   try {
     if (!app.isPackaged) {
       const exampleDir = path.resolve(__dirname, '..', 'packages', 'shell-tools', 'example-image-converter');

@@ -6,8 +6,44 @@ import { Readable } from 'node:stream';
 import { finished } from 'node:stream/promises';
 import yauzl from 'yauzl';
 
+function hostMatchesTrustEntry(hostname: string, entry: string): boolean {
+  const h = hostname.toLowerCase();
+  const a = entry.toLowerCase();
+  if (a === h) return true;
+  if (a.startsWith('*.')) {
+    const suffix = a.slice(1);
+    return h.endsWith(suffix) || h === a.slice(2);
+  }
+  return false;
+}
+
+/** R2 域 + 显式白名单 + auth-api / 发行公网基址主机名（catalog publicInstallUrl 常走 /api/r2 代理） */
+export function extraBundleTrustHosts(): string[] {
+  const hosts = new Set<string>();
+  const raw = process.env.COMPANION_HOST_BUNDLE_TRUST_HOSTS?.trim();
+  if (raw) {
+    for (const part of raw.split(',')) {
+      const h = part.trim().toLowerCase();
+      if (h) hosts.add(h);
+    }
+  }
+  for (const envKey of ['COMPANION_AUTH_API_ORIGIN', 'COMPANION_DIST_PUBLIC_HTTP_BASE'] as const) {
+    const v = process.env[envKey]?.trim();
+    if (!v) continue;
+    try {
+      hosts.add(new URL(v).hostname.toLowerCase());
+    } catch {
+      /* ignore */
+    }
+  }
+  return [...hosts];
+}
+
 /** 禁止 SSRF：仅 https，且主机名在 R2 常见域或显式白名单内 */
-export function assertBundleFetchUrlAllowed(urlStr: string): URL {
+export function assertBundleFetchUrlAllowed(
+  urlStr: string,
+  opts?: { allowCatalogInstallHost?: boolean },
+): URL {
   let u: URL;
   try {
     u = new URL(urlStr);
@@ -17,13 +53,11 @@ export function assertBundleFetchUrlAllowed(urlStr: string): URL {
   if (u.protocol !== 'https:') throw new Error('仅允许 https URL');
   const h = u.hostname.toLowerCase();
   if (h === 'localhost' || h === '127.0.0.1' || h === '::1') throw new Error('禁止本机回环地址');
+  if (opts?.allowCatalogInstallHost) return u;
   if (h.endsWith('.r2.cloudflarestorage.com')) return u;
   if (h.endsWith('.r2.dev')) return u;
-  const raw = process.env.COMPANION_HOST_BUNDLE_TRUST_HOSTS?.trim();
-  if (raw) {
-    const allow = raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
-    if (allow.some((a) => a === h || (a.startsWith('*.') && h.endsWith(a.slice(1))))) return u;
-  }
+  const allow = extraBundleTrustHosts();
+  if (allow.some((a) => hostMatchesTrustEntry(h, a))) return u;
   throw new Error(
     'URL 主机未在白名单：须为 *.r2.cloudflarestorage.com / *.r2.dev，或在环境变量 COMPANION_HOST_BUNDLE_TRUST_HOSTS 中追加（逗号分隔）',
   );
@@ -136,8 +170,12 @@ export async function downloadBundleToFile(input: {
   sha256Expected: string;
   bytesExpected: number;
   destPath: string;
+  /** 发行目录 install-from-url：已登记 sha256/bytes，允许 catalog publicInstallUrl 主机 */
+  allowCatalogInstallHost?: boolean;
 }): Promise<DownloadBundleResult> {
-  const u = assertBundleFetchUrlAllowed(input.url);
+  const u = assertBundleFetchUrlAllowed(input.url, {
+    allowCatalogInstallHost: Boolean(input.allowCatalogInstallHost),
+  });
   const sha256Expected = String(input.sha256Expected || '')
     .trim()
     .toLowerCase();

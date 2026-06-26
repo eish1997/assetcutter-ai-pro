@@ -71,6 +71,26 @@ export const STORYBOARD_ROW_ACTIVE_HISTORY_HIGHLIGHT =
 export const STORYBOARD_ROW_CANVAS_MULTI_SELECTED =
   'border-teal-400/70 bg-teal-500/[0.07] ring-2 ring-teal-400/55 shadow-[0_0_0_1px_rgba(45,212,191,0.35)]';
 
+export type StoryboardCollageProcessingKind = 'feedback' | 'roleReplace';
+
+export function storyboardCollageProcessingLabel(kind: StoryboardCollageProcessingKind): string {
+  return kind === 'feedback' ? '改图中…' : '替换中…';
+}
+
+export function storyboardCollageProcessingDetail(kind: StoryboardCollageProcessingKind): string {
+  return kind === 'feedback' ? '拼图改图中…' : '角色替换中…';
+}
+
+export function storyboardCollageProcessingStatusTone(kind: StoryboardCollageProcessingKind): string {
+  return kind === 'feedback' ? 'text-sky-300/85' : 'text-violet-300/85';
+}
+
+export function storyboardCollageProcessingBadgeClass(kind: StoryboardCollageProcessingKind): string {
+  return kind === 'feedback'
+    ? 'text-sky-200/95 ring-sky-400/40 bg-sky-500/15'
+    : 'text-violet-200/95 ring-violet-400/40 bg-violet-500/15';
+}
+
 export const STORYBOARD_TOOL_BTN =
   'inline-flex h-7 items-center justify-center rounded-lg px-2.5 text-[10px] font-semibold transition-colors outline-none focus-visible:ring-2 focus-visible:ring-white/25';
 
