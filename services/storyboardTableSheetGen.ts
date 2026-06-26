@@ -1,6 +1,5 @@
 import type { CustomAppModule, StoryboardParseFieldDef, StoryboardTableRow } from '../types';
 import { applyStoryboardBulkImport, parseStoryboardBulkText, type StoryboardBulkTextMode } from './storyboardTableBulkImport';
-import { buildStoryboardRowPromptText } from './storyboardTableRedraw';
 import { compileRedrawPrompt } from './storyboardTableParse';
 import {
   capabilityUsesGenImageEngine,
@@ -28,14 +27,21 @@ export type StoryboardSheetGenPromptStats = {
   officialApiMax: number;
 };
 
-/** 直发提示词时，与生图模型收到的正文一致（预设 instruction + 编译正文） */
+/** 直发提示词时，与生图模型收到的正文一致（镜头正文优先，预设画风置后） */
 export function buildStoryboardSheetGenMergedSendPrompt(
   compiledPrompt: string,
   preset: CustomAppModule
 ): string {
   const compiled = String(compiledPrompt ?? '').trim();
   const presetText = (preset.instruction || '').trim();
-  return presetText ? `${presetText}\n\n${compiled}` : compiled;
+  if (!presetText) return compiled;
+  return `${compiled}\n\n【画风/执行要求】\n${presetText}`;
+}
+
+/** 拼图生图一律直发，避免「理解」把多镜正文压成泛化描述 */
+export function resolveStoryboardSheetGenDirectPreset(preset: CustomAppModule): CustomAppModule {
+  if (preset.skipUnderstand === true) return preset;
+  return { ...preset, skipUnderstand: true };
 }
 
 export type StoryboardSheetGenBatchPreview = {
@@ -65,7 +71,7 @@ export function buildStoryboardSheetGenBatchPreviews(args: {
     const validation = validateStoryboardSheetGenPromptLength(compiledPrompt, args.preset, {}, {
       shotCount: task.rows.length,
     });
-    const directSend = args.preset.skipUnderstand === true;
+    const directSend = resolveStoryboardSheetGenDirectPreset(args.preset).skipUnderstand === true;
     return {
       chunkIndex: task.chunkIndex,
       shotCount: task.rows.length,
@@ -224,7 +230,9 @@ export function rowHasSheetGenPrompt(
   row: StoryboardTableRow,
   catalog: StoryboardParseFieldDef[]
 ): boolean {
-  return Boolean(buildStoryboardRowPromptText(row, catalog).trim());
+  if (normalizeSheetInlineText(row.shotRaw || '')) return true;
+  if (normalizeSheetInlineText(row.shotText || '')) return true;
+  return Boolean(compileSheetShotCompactBlock(row, catalog).trim());
 }
 
 export function resolveSheetGenSourceRows(
@@ -310,6 +318,9 @@ export function buildStoryboardSheetLayoutPrompt(shotCount: number): string {
     '1. 顶栏：单行小字，镜号 | 景别 | 角度 | 运镜 | 时长（与下方镜头数据一致，字号小、行距紧）',
     '2. 中间：分镜草图/插画（主体，尽量占满中段，不要四周大留白）',
     '3. 底栏：画面描述一行；对白一行（无对白写「对白：-」），小字、最多两行，不要留空黑条',
+    '禁止只画空白格、占位框或纯文字条而无插画；每一格中段必须有与该镜「画面」描述一致的可识别主体/场景。',
+    '各格插图必须严格对应下列各镜的独立描述，禁止所有格子重复同一构图、同一剧情瞬间或同一背景套路。',
+    '禁止忽略下列镜头文字自行编造无关剧情、人物或场景；每一格必须与对应镜号下的「画面」一致。',
     '镜号必须与下列各镜一致；按行列顺序从左到右、从上到下排列。',
   ].join('\n');
 }
@@ -449,6 +460,10 @@ export function compileSheetShotPanelCompactLayout(
   if (!description) {
     const shotText = normalizeSheetInlineText(row.shotText || '');
     if (shotText) description = shotText;
+    else {
+      const shotRaw = normalizeSheetInlineText(row.shotRaw || '');
+      if (shotRaw) description = shotRaw;
+    }
   }
 
   return {
@@ -487,10 +502,43 @@ export function compileSheetShotPanelFieldLines(
 
   if (!lines.length) {
     const shotText = (row.shotText || '').trim();
+    const shotRaw = (row.shotRaw || '').trim();
     if (shotText) lines.push({ label: '原文', value: shotText });
+    else if (shotRaw) lines.push({ label: '原文', value: shotRaw });
   }
 
   return lines;
+}
+
+function resolveSheetGenVisualLine(
+  row: StoryboardTableRow,
+  catalog: StoryboardParseFieldDef[],
+  structuredVisual: string,
+  compactDescription: string
+): string {
+  const shotRaw = compactSheetPanelMetaLine(row.shotRaw || '');
+  const shotText = compactSheetPanelMetaLine(row.shotText || '');
+  const rawPrimary = shotRaw || shotText;
+  let visual = compactSheetPanelMetaLine(structuredVisual);
+
+  if (rawPrimary) {
+    if (!visual || rawPrimary.length >= visual.length) {
+      visual = rawPrimary;
+    }
+  }
+
+  if (!visual) {
+    const fromCompact = compactSheetPanelMetaLine(compactDescription);
+    if (fromCompact) visual = fromCompact;
+  }
+
+  const shotNo = (row.shotNo || '').trim();
+  if (!visual && shotNo) {
+    const fallback = compileRedrawPrompt(row, catalog).trim();
+    if (fallback) visual = fallback.replace(/\n+/g, ' ');
+  }
+
+  return visual.replace(/\s+/g, ' ').trim();
 }
 
 /** 单镜紧凑字段块（供拼图生图，避免冗长换行撑高格子） */
@@ -517,14 +565,16 @@ export function compileSheetShotPanelMeta(
     }
   }
 
-  if (!visual && fieldLines.length <= 1 && shotNo) {
-    const fallback = compileRedrawPrompt(row, catalog).trim();
-    if (fallback) visual = fallback.replace(/\n+/g, ' ');
+  if (!visual) {
+    const fromCompact = compactSheetPanelMetaLine(compactLayout.description);
+    if (fromCompact) visual = fromCompact;
   }
+
+  visual = resolveSheetGenVisualLine(row, catalog, visual, compactLayout.description);
 
   return {
     headerLine: compactLayout.headerLine || shotNo,
-    visualLine: visual.replace(/\s+/g, ' '),
+    visualLine: visual,
     dialogueLine:
       dialogue && !isSheetPlaceholder(dialogue) ? dialogue.replace(/\s+/g, ' ') : '-',
     fieldLines,
@@ -543,7 +593,12 @@ export function compileSheetShotCompactBlock(
   const meta = compileSheetShotPanelMeta(row, catalog);
   const lines: string[] = [];
   if (meta.headerLine) lines.push(`顶栏：${meta.headerLine}`);
-  if (meta.visualLine) lines.push(`画面：${compactSheetPanelMetaLine(meta.visualLine)}`);
+  if (meta.compactLayout.metaLine) {
+    lines.push(`元信息：${compactSheetPanelMetaLine(meta.compactLayout.metaLine)}`);
+  }
+  const visualBody =
+    meta.visualLine || compactSheetPanelMetaLine(meta.compactLayout.description);
+  if (visualBody) lines.push(`画面：${visualBody}`);
   lines.push(
     `对白：${
       meta.dialogueLine === '-'
@@ -597,7 +652,8 @@ export type StoryboardSheetGenArgs = {
 export async function executeStoryboardSheetGen(
   args: StoryboardSheetGenArgs
 ): Promise<{ ok: true; image: string } | { ok: false; error: string }> {
-  const { preset, rows, fieldCatalog, ctx, promptExtra, referenceImageDataUrl, forceTextToImage } = args;
+  const { preset: rawPreset, rows, fieldCatalog, ctx, promptExtra, referenceImageDataUrl, forceTextToImage } = args;
+  const preset = resolveStoryboardSheetGenDirectPreset(rawPreset);
 
   if (getCapabilityEngine(preset) !== 'gen_image') {
     return { ok: false, error: '请选择文生图或图生图类能力' };
@@ -617,14 +673,14 @@ export async function executeStoryboardSheetGen(
   const { stats } = lengthCheck;
   ctx.onLog?.(
     'info',
-    `分镜表 · 批 ${args.chunkIndex != null ? args.chunkIndex + 1 : 1} · ${rows.length} 镜 · 送模约 ${stats.mergedChars} 字（正文 ${stats.compiledChars} + 预设 ${stats.presetChars}，上限 ${stats.sendLimit}）`,
+    `分镜表 · 批 ${args.chunkIndex != null ? args.chunkIndex + 1 : 1} · ${rows.length} 镜 · 送模约 ${stats.mergedChars} 字（正文 ${stats.compiledChars} + 预设 ${stats.presetChars}，上限 ${stats.sendLimit}）· 直发送模`,
     undefined
   );
 
-  if (preset.skipUnderstand !== true) {
+  if (rawPreset.skipUnderstand !== true) {
     ctx.onLog?.(
       'info',
-      `分镜表 · ${preset.label || preset.id} · 预设已启用「理解」：将按能力预设改写提示词后再生图`,
+      `分镜表 · ${rawPreset.label || rawPreset.id} · 拼图生图已强制直发（忽略预设「理解」以免改写多镜正文）`,
       undefined
     );
   }

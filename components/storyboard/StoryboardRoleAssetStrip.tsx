@@ -1,5 +1,9 @@
 import React, { useRef } from 'react';
 import { collectStoryboardFrameImageFiles } from '../../services/storyboardTableFrameImport';
+import {
+  collectStoryboardFrameImageInputs,
+  storyboardFrameImageDropAllowed,
+} from '../../services/storyboardFrameDrag';
 import { resolveStoryboardRoleAssetDisplaySrc } from '../../services/storyboardRoleAssets';
 import AppIcon from '../ui/AppIcon';
 import {
@@ -25,11 +29,10 @@ type Props = {
 };
 
 function allowImageDrop(event: React.DragEvent) {
-  if (event.dataTransfer.types.includes('Files')) {
-    event.preventDefault();
-    event.stopPropagation();
-    event.dataTransfer.dropEffect = 'copy';
-  }
+  if (!storyboardFrameImageDropAllowed(event.dataTransfer)) return;
+  event.preventDefault();
+  event.stopPropagation();
+  event.dataTransfer.dropEffect = 'copy';
 }
 
 export default function StoryboardRoleAssetStrip({
@@ -76,19 +79,22 @@ export default function StoryboardRoleAssetStrip({
 
   const handleDrop = (startAssetId: string | null, event: React.DragEvent) => {
     if (readOnly || busyId) return;
-    const files = collectStoryboardFrameImageFiles(event.dataTransfer);
-    if (!files.length) return;
+    if (!storyboardFrameImageDropAllowed(event.dataTransfer)) return;
     event.preventDefault();
     event.stopPropagation();
-    if (files.length === 1 && startAssetId) {
-      onAssignImage(startAssetId, files[0]!);
-      return;
-    }
-    if (onAssignImages) {
-      onAssignImages(startAssetId, files);
-      return;
-    }
-    if (startAssetId) onAssignImage(startAssetId, files[0]!);
+    void (async () => {
+      const files = await collectStoryboardFrameImageInputs(event.dataTransfer);
+      if (!files.length) return;
+      if (files.length === 1 && startAssetId) {
+        onAssignImage(startAssetId, files[0]!);
+        return;
+      }
+      if (onAssignImages) {
+        onAssignImages(startAssetId, files);
+        return;
+      }
+      if (startAssetId) onAssignImage(startAssetId, files[0]!);
+    })();
   };
 
   return (

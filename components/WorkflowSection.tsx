@@ -231,15 +231,19 @@ import { compressStoryboardFrameDataUrl } from './storyboard/storyboardFrameImag
 import {
   applyStoryboardFrameCompanionHydrateResults,
   applyStoryboardFrameHistoryCompanionHydrateResults,
+  applyStoryboardGeneratedImageHistoryCompanionHydrateResults,
   applyStoryboardNamedAssetCompanionHydrateResults,
   buildStoryboardFrameCompanionHydrateKey,
   buildStoryboardFrameHistoryCompanionHydrateKey,
+  buildStoryboardGeneratedImageHistoryCompanionHydrateKey,
   buildStoryboardNamedAssetCompanionHydrateKey,
   hydrateStoryboardFrameCompanionTasks,
   hydrateStoryboardFrameHistoryCompanionTasks,
+  hydrateStoryboardGeneratedImageHistoryCompanionTasks,
   hydrateStoryboardNamedAssetCompanionTasks,
   listStoryboardFrameCompanionHydrateTasks,
   listStoryboardFrameHistoryCompanionHydrateTasks,
+  listStoryboardGeneratedImageHistoryCompanionHydrateTasks,
   listStoryboardNamedAssetCompanionHydrateTasks,
   revokeStoryboardFrameCompanionHydrateUrls,
 } from '../services/storyboardFrameCompanion';
@@ -1859,6 +1863,11 @@ const WorkflowSection: React.FC<{
     [assets]
   );
 
+  const companionStoryboardGeneratedImageHistoryHydrateKey = useMemo(
+    () => buildStoryboardGeneratedImageHistoryCompanionHydrateKey(assets),
+    [assets]
+  );
+
   const companionStoryboardNamedAssetHydrateKey = useMemo(
     () => buildStoryboardNamedAssetCompanionHydrateKey(assets),
     [assets]
@@ -2037,6 +2046,42 @@ const WorkflowSection: React.FC<{
       cancelled = true;
     };
   }, [companionStoryboardFrameHistoryHydrateKey, workspaceProjectChrome?.activeProjectId, setAssets]);
+
+  useEffect(() => {
+    const projectId = String(workspaceProjectChrome?.activeProjectId || '').trim();
+    const base = String(getCompanionLocalBaseUrl() || '').trim();
+    if (!companionStoryboardGeneratedImageHistoryHydrateKey || !projectId || !base) return;
+    let cancelled = false;
+    void (async () => {
+      const tasks = listStoryboardGeneratedImageHistoryCompanionHydrateTasks(assetsRef.current);
+      const { hydrated, failures } = await hydrateStoryboardGeneratedImageHistoryCompanionTasks(
+        tasks,
+        base,
+        projectId
+      );
+      if (cancelled) {
+        revokeStoryboardFrameCompanionHydrateUrls(hydrated);
+        return;
+      }
+      for (const failure of failures) {
+        const task = failure.task;
+        onLogRef.current?.(
+          'warn',
+          '生图历史伴侣恢复失败',
+          `${task.assetId}/${'recordId' in task ? task.recordId : ''}: ${failure.error}`
+        );
+      }
+      if (!hydrated.length) return;
+      setAssets((prev) => applyStoryboardGeneratedImageHistoryCompanionHydrateResults(prev, hydrated));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    companionStoryboardGeneratedImageHistoryHydrateKey,
+    workspaceProjectChrome?.activeProjectId,
+    setAssets,
+  ]);
 
   useEffect(() => {
     const projectId = String(workspaceProjectChrome?.activeProjectId || '').trim();

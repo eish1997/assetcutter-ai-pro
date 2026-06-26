@@ -470,6 +470,24 @@ export function stripWorkflowBundleForIdbPersist(bundle: WorkflowProjectBundle):
         }
         return nextRow;
       });
+      const genHistory = a.storyboardTable.generatedImageHistory;
+      if (genHistory?.length) {
+        let touchedGen = false;
+        const nextGenHistory = genHistory.map((record) => {
+          const hck = String(record.frameImageCompanionKey || '').trim();
+          if (!hck) return record;
+          const cur = String(record.frameImage || '').trim();
+          if (cur && shouldStripResultUrlForPersist(cur)) {
+            touchedGen = true;
+            return { ...record, frameImage: '' };
+          }
+          return record;
+        });
+        if (touchedGen) {
+          touchedSb = true;
+          a.storyboardTable = { ...a.storyboardTable, generatedImageHistory: nextGenHistory };
+        }
+      }
       const stripNamedAssetInline = <T extends StoryboardNamedAssetImageFields>(
         items: T[] | undefined
       ): T[] | undefined => {

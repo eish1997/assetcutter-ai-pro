@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi, afterEach } from "vitest";
 import {
   aspectRatioToGptImage15Size,
   aspectRatioToGptImage2Pixels,
@@ -13,22 +13,44 @@ import {
   imageSizeDropdownOptionsForRegistryModel,
   imageSizeSelectOptionsForRegistryModel,
   isGptImage2Model,
+  isOpenAiOfficialBaseUrl,
   isValidGptImage2Size,
   mapOpenAiChatModel,
   mapOpenAiImageModel,
   normalizeOpenAiBaseUrl,
   parseGptImage2SizeString,
   resolveGptImageSize,
+  resolveOpenAiBaseUrl,
 } from "../services/openaiAdapter";
 import { geminiContentsToOpenAiMessages } from "../services/toapisAdapter";
 import { coerceImageModelRegistryId } from "../services/modelRegistry/imageModels";
 import { SUPPORTED_ASPECT_RATIOS } from "../types";
 
 describe("openaiAdapter", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
   it("normalizeOpenAiBaseUrl appends /v1", () => {
     expect(normalizeOpenAiBaseUrl("")).toBe("https://api.openai.com/v1");
     expect(normalizeOpenAiBaseUrl("https://api.openai.com")).toBe("https://api.openai.com/v1");
     expect(normalizeOpenAiBaseUrl("https://example.com/v1/")).toBe("https://example.com/v1");
+  });
+
+  it("isOpenAiOfficialBaseUrl detects api.openai.com only", () => {
+    expect(isOpenAiOfficialBaseUrl("")).toBe(true);
+    expect(isOpenAiOfficialBaseUrl("https://api.openai.com")).toBe(true);
+    expect(isOpenAiOfficialBaseUrl("https://toapis.com/v1")).toBe(false);
+  });
+
+  it("resolveOpenAiBaseUrl uses __openai proxy in dev for official host", () => {
+    vi.stubEnv("DEV", true);
+    vi.stubEnv("VITE_OPENAI_DIRECT", "");
+    vi.stubEnv("VITE_OPENAI_PROXY", "");
+    vi.stubGlobal("window", { location: { origin: "http://localhost:3000" } });
+    expect(resolveOpenAiBaseUrl("")).toBe("http://localhost:3000/__openai/v1");
+    expect(resolveOpenAiBaseUrl("https://toapis.com/v1")).toBe("https://toapis.com/v1");
   });
 
   it("mapOpenAiChatModel passthrough gpt/o prefixes", () => {

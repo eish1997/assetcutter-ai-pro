@@ -3,6 +3,7 @@ import type { IncomingMessage } from 'http';
 import type { Plugin } from 'vite';
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
+import { HttpsProxyAgent } from 'https-proxy-agent';
 import { collectRemoteBulkOriginsFromEnv } from './services/geminiBulkForwardDevOrigins';
 
 const HOP_BY_HOP_REQ = new Set([
@@ -35,6 +36,30 @@ async function readRequestBodyBuffer(req: IncomingMessage): Promise<Buffer> {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
   return chunks.length ? Buffer.concat(chunks) : Buffer.alloc(0);
+}
+
+/** 本地 Vite 反代出站（OpenAI / VectorEngine 等）：读 OPENAI_PROXY → HTTPS_PROXY → HTTP_PROXY → TRIPO_PROXY */
+function resolveDevOutboundProxyUrl(
+  ...sources: Array<Record<string, string | undefined> | NodeJS.ProcessEnv>
+): string {
+  const keys = ['OPENAI_PROXY', 'HTTPS_PROXY', 'HTTP_PROXY', 'TRIPO_PROXY'] as const;
+  for (const src of sources) {
+    for (const key of keys) {
+      const value = String(src[key] ?? '').trim();
+      if (value) return value;
+    }
+  }
+  return '';
+}
+
+function openAiUpstreamProxyErrorMessage(outboundProxyUrl: string): string {
+  if (outboundProxyUrl) {
+    return `无法连接 OpenAI 上游（经出站代理 ${outboundProxyUrl} → api.openai.com）。请确认代理已启动且可访问 OpenAI。`;
+  }
+  return (
+    '无法连接 OpenAI 上游（已代理到 api.openai.com）。若本机需翻墙，请在 .env.local 配置 ' +
+    'OPENAI_PROXY=http://127.0.0.1:7890（或 HTTPS_PROXY / 已有 TRIPO_PROXY），保存后重启 npm run dev。'
+  );
 }
 
 /** 开发服务器将 `/__ac-bulk-forward/{i}/...` 转发到 `origins[i]`，与 `services/geminiBulkForwardDevOrigins.ts` 白名单一致 */
@@ -157,6 +182,8 @@ export default defineConfig(({ mode }) => {
       ...fromFile,
       ...process.env,
     } as Record<string, string | undefined>);
+    const outboundProxyUrl = resolveDevOutboundProxyUrl(process.env, fromFile);
+    const outboundProxyAgent = outboundProxyUrl ? new HttpsProxyAgent(outboundProxyUrl) : undefined;
     return {
       root: path.resolve(__dirname),
       server: {
@@ -232,6 +259,29 @@ export default defineConfig(({ mode }) => {
             changeOrigin: true,
             secure: true,
             rewrite: (path) => path.replace(/^\/__vectorengine/, '') || '/',
+            agent: outboundProxyAgent,
+          },
+          /** OpenAI 官方：开发环境绕过浏览器 CORS（直连 api.openai.com 会 Failed to fetch） */
+          '/__openai': {
+            target: 'https://api.openai.com',
+            changeOrigin: true,
+            secure: true,
+            rewrite: (path) => path.replace(/^\/__openai/, '') || '/',
+            agent: outboundProxyAgent,
+            configure(proxy) {
+              proxy.on('error', (err, _req, res) => {
+                const msg = openAiUpstreamProxyErrorMessage(outboundProxyUrl);
+                if (res && typeof res.writeHead === 'function' && !res.headersSent) {
+                  res.writeHead(503, { 'Content-Type': 'application/json; charset=utf-8' });
+                  res.end(
+                    JSON.stringify({
+                      error: msg,
+                      detail: err instanceof Error ? err.message : String(err),
+                    })
+                  );
+                }
+              });
+            },
           },
           /** Gemini 异步代理：与前端同源，避免浏览器跨端口访问 localhost:9002 触发 CORS */
           '/proxy/gemini': {

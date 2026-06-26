@@ -1846,6 +1846,121 @@ function parseBoundingBoxJsonArrayFromModelText(raw: string): unknown[] {
   }
 }
 
+function parseJsonObjectFromModelText(raw: string): Record<string, unknown> {
+  const t = (raw || "").trim();
+  if (!t) return {};
+  let s = t;
+  const fenced = s.match(/```(?:json)?\s*\r?\n?([\s\S]*?)\r?\n?```/i);
+  if (fenced) {
+    s = fenced[1].trim();
+  } else if (/^```(?:json)?/i.test(s)) {
+    s = s
+      .replace(/^```(?:json)?\s*\r?\n?/i, "")
+      .replace(/\r?\n?```\s*$/i, "")
+      .trim();
+  }
+  const tryObject = (json: string): Record<string, unknown> => {
+    const parsed = JSON.parse(json) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  };
+  try {
+    return tryObject(s);
+  } catch {
+    const i = s.indexOf("{");
+    const j = s.lastIndexOf("}");
+    if (i >= 0 && j > i) {
+      try {
+        return tryObject(s.slice(i, j + 1));
+      } catch {
+        /* fall through */
+      }
+    }
+    throw new Error("模型返回无法解析为 JSON 对象");
+  }
+}
+
+export type StoryboardSheetStructureAnalysisRaw = {
+  shotCount: number;
+  cols: number;
+  rows: number;
+  shotNos: string[];
+  emptyCellCount: number;
+};
+
+export function buildStoryboardSheetStructureAnalysisPrompt(): string {
+  return `你是分镜表拼图结构分析助手。请阅读整张分镜拼图页，只输出 JSON 对象（不要 markdown、不要解释）。
+
+请回答：
+1. shotCount：有效分镜格数量（有插画/草图内容的格；空白占位格、打叉格不算）；
+2. cols / rows：规整网格的列数与行数（如 4 行 4 列填 rows=4, cols=4）；
+3. shotNos：每个有效分镜格的镜号，按从左到右、从上到下顺序（从格顶栏读取，如「1 | 全景 | 4s」→ "001"；数字镜号统一三位）；
+4. emptyCellCount：网格中空白/占位格数量。
+
+注意：
+- 不要重复计数顶栏缩略图条（若存在）；
+- shotNos 长度必须等于 shotCount；
+- cols * rows 应 ≥ shotCount + emptyCellCount。`;
+}
+
+/** 视觉模型先分析分镜拼图结构（镜数、行列、镜号），供后续切分框定位 */
+export async function analyzeStoryboardSheetStructureInImage(
+  base64Image: string,
+  model = DEFAULT_MODEL_TEXT,
+  options?: GeminiRequestOptions
+): Promise<StoryboardSheetStructureAnalysisRaw | null> {
+  return callWithRetry(async (signal) => {
+    const ai = getAI();
+    const prompt = buildStoryboardSheetStructureAnalysisPrompt();
+    const resolvedModel = resolveUpstreamTextModelId(model);
+    const response = await ai.models.generateContent({
+      model: resolvedModel,
+      contents: [
+        {
+          role: 'user' as const,
+          parts: [
+            { text: prompt },
+            { inlineData: { mimeType: 'image/jpeg', data: base64Image.split(',')[1] || base64Image } },
+          ],
+        },
+      ],
+      config: buildGeminiConfig({
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            shotCount: { type: Type.NUMBER },
+            cols: { type: Type.NUMBER },
+            rows: { type: Type.NUMBER },
+            shotNos: { type: Type.ARRAY, items: { type: Type.STRING } },
+            emptyCellCount: { type: Type.NUMBER },
+          },
+          required: ["shotCount", "cols", "rows", "shotNos", "emptyCellCount"],
+        },
+      }, signal, options?.timeoutMs ?? GEMINI_REQUEST_TIMEOUT_MS, model),
+    });
+    const obj = parseJsonObjectFromModelText(response.text || "");
+    const shotCount = Number(obj.shotCount);
+    const cols = Number(obj.cols);
+    const rows = Number(obj.rows);
+    const emptyCellCount = Number(obj.emptyCellCount);
+    const shotNos = Array.isArray(obj.shotNos)
+      ? obj.shotNos.map((item) => String(item ?? '').trim()).filter(Boolean)
+      : [];
+    if (!Number.isFinite(shotCount) || !Number.isFinite(cols) || !Number.isFinite(rows)) {
+      return null;
+    }
+    return {
+      shotCount: Math.round(shotCount),
+      cols: Math.round(cols),
+      rows: Math.round(rows),
+      shotNos,
+      emptyCellCount: Number.isFinite(emptyCellCount) ? Math.max(0, Math.round(emptyCellCount)) : 0,
+    };
+  }, options).catch(() => null);
+}
+
 /** 单图物体检测，返回边界框（归一化 0-1000） */
 export async function detectObjectsInImage(base64Image: string, model = DEFAULT_MODEL_TEXT, customPrompt?: string, options?: GeminiRequestOptions) {
   return callWithRetry(async (signal) => {

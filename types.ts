@@ -543,6 +543,17 @@ export type StoryboardSceneAsset = {
   imageObjectKey?: string;
 };
 
+export type StoryboardGeneratedImageRecord = {
+  id: string;
+  rowId: string;
+  shotNo?: string;
+  createdAt: number;
+  source: StoryboardFrameVersionSource;
+  frameImage?: string;
+  frameImageObjectKey?: string;
+  frameImageCompanionKey?: string;
+};
+
 export type StoryboardTableDoc = {
   /** 表标题；缺省用 textTitle */
   title?: string;
@@ -559,6 +570,8 @@ export type StoryboardTableDoc = {
   roleAssets?: StoryboardRoleAsset[];
   /** 解析页场景参考资产 */
   sceneAssets?: StoryboardSceneAsset[];
+  /** 编辑页生图历史（独立于镜头 frameImageHistory 条数限制，云同步） */
+  generatedImageHistory?: StoryboardGeneratedImageRecord[];
 };
 
 /** 单个资产：原始图 + 各类型结果图，当前展示版本，是否已归档；归档后可按生成顺序拼流程图 */

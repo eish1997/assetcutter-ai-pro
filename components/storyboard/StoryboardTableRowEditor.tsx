@@ -13,6 +13,7 @@ import {
   storyboardFrameHistorySignature,
   storyboardFrameVersionLabel,
 } from '../../services/storyboardFrameHistory';
+import { storyboardFrameImageDropAllowed } from '../../services/storyboardFrameDrag';
 import AppIcon from '../ui/AppIcon';
 import { CustomDropdown } from '../ui/CustomDropdown';
 import { storyboardRowOutlineTitle, storyboardRowHasEditFeedback, storyboardRowIsPassed } from './storyboardRowDisplay';
@@ -227,10 +228,9 @@ export default function StoryboardTableRowEditor({
               }`}
               onDragOver={(e) => {
                 if (fieldsReadOnly) return;
-                if (e.dataTransfer.types.includes('Files')) {
-                  e.preventDefault();
-                  e.dataTransfer.dropEffect = 'copy';
-                }
+                if (!storyboardFrameImageDropAllowed(e.dataTransfer)) return;
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'copy';
               }}
               onDrop={(e) => {
                 if (fieldsReadOnly) return;

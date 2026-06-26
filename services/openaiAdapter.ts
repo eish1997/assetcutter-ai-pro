@@ -39,6 +39,53 @@ export function normalizeOpenAiBaseUrl(raw: string): string {
   return `${s.replace(/\/$/, "")}/v1`;
 }
 
+/** 是否为 OpenAI 官方 API 根（空配置默认也算） */
+export function isOpenAiOfficialBaseUrl(raw: string): boolean {
+  try {
+    const normalized = normalizeOpenAiBaseUrl(raw);
+    return new URL(normalized).hostname.toLowerCase() === "api.openai.com";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 解析实际请求的 OpenAI Base URL（须含 /v1）。
+ * - 浏览器直连 api.openai.com 会触发 CORS，表现为 Failed to fetch。
+ * - 开发环境（Vite）对官方地址默认走同源 `/__openai/v1`，由 vite.config 反代到 api.openai.com。
+ * - 可选 `VITE_OPENAI_PROXY`：显式指定代理根（生产可配 Nginx 同源路径）。
+ * - 可选 `VITE_OPENAI_DIRECT=true`：开发时仍直连设置页地址（验证中转是否已放行 CORS）。
+ * - 非官方 host（如 ToAPIs）不做 __openai 改写。
+ */
+export function resolveOpenAiBaseUrl(userStored: string): string {
+  const env =
+    typeof import.meta !== "undefined"
+      ? (import.meta as { env?: Record<string, string | boolean> }).env
+      : undefined;
+  const proxyFromEnv = String(env?.VITE_OPENAI_PROXY || "").trim();
+  if (proxyFromEnv) {
+    if (proxyFromEnv.startsWith("/")) {
+      if (typeof window !== "undefined" && window.location?.origin) {
+        return `${window.location.origin.replace(/\/+$/, "")}${proxyFromEnv}`.replace(/\/+$/, "");
+      }
+      return proxyFromEnv.replace(/\/+$/, "");
+    }
+    return normalizeOpenAiBaseUrl(proxyFromEnv);
+  }
+  const direct = env?.VITE_OPENAI_DIRECT === "true" || env?.VITE_OPENAI_DIRECT === true;
+  const normalized = normalizeOpenAiBaseUrl(userStored);
+  if (
+    env?.DEV &&
+    !direct &&
+    isOpenAiOfficialBaseUrl(userStored) &&
+    typeof window !== "undefined" &&
+    window.location?.origin
+  ) {
+    return `${window.location.origin.replace(/\/+$/, "")}/__openai/v1`;
+  }
+  return normalized;
+}
+
 /** 站内或上游 id → OpenAI Chat 模型（已是 `gpt-*` / `o*` 则原样） */
 export function mapOpenAiChatModel(model: string): string {
   const m = (model || "").trim();
@@ -569,7 +616,7 @@ export function createOpenAiGeminiClient(
   apiKey: string,
   options?: { meteringProvider?: string }
 ): GeminiClientLike {
-  const base = normalizeOpenAiBaseUrl(baseUrl);
+  const base = resolveOpenAiBaseUrl(baseUrl);
   const meteringProvider = options?.meteringProvider;
   return {
     models: {

@@ -6,6 +6,16 @@ import {
   newStoryboardSheetSplitBoxId,
 } from '../../services/storyboardSheetVisionSplit';
 import {
+  alignStoryboardSplitAdjustColLeft,
+  alignStoryboardSplitAdjustColRight,
+  alignStoryboardSplitAdjustRowBottom,
+  alignStoryboardSplitAdjustRowTop,
+  colBoundsFromBoxes,
+  findStoryboardSplitAdjustColForBox,
+  findStoryboardSplitAdjustRowForBox,
+  rowBoundsFromBoxes,
+} from '../../services/storyboardSheetSplitAdjustRows';
+import {
   STORYBOARD_FIELD_INPUT,
   STORYBOARD_TOOL_BTN_NEUTRAL,
   STORYBOARD_TOOL_BTN_PRIMARY,
@@ -30,6 +40,7 @@ type Props = {
   open: boolean;
   busy?: boolean;
   detecting?: boolean;
+  detectStatus?: string;
   imageSrc: string;
   boxes: BoundingBox[];
   expectedShotNos?: string[];
@@ -96,6 +107,7 @@ export default function StoryboardSheetSplitAdjustModal({
   open,
   busy = false,
   detecting = false,
+  detectStatus,
   imageSrc,
   boxes: initialBoxes,
   expectedShotNos = [],
@@ -118,6 +130,10 @@ export default function StoryboardSheetSplitAdjustModal({
   const dragRef = useRef<
     | { kind: 'move'; id: string; startX: number; startY: number; origin: BoundingBox }
     | { kind: 'resize'; id: string; origin: BoundingBox }
+    | { kind: 'row-top'; rowIds: string[]; originTop: number; startY: number }
+    | { kind: 'row-bottom'; rowIds: string[]; originBottom: number; startY: number }
+    | { kind: 'col-left'; colIds: string[]; originLeft: number; startX: number }
+    | { kind: 'col-right'; colIds: string[]; originRight: number; startX: number }
     | { kind: 'draw'; x1: number; y1: number }
     | null
   >(null);
@@ -198,6 +214,50 @@ export default function StoryboardSheetSplitAdjustModal({
     [boxes, selectedId]
   );
 
+  const selectedRowBoxes = useMemo(
+    () => findStoryboardSplitAdjustRowForBox(boxes, selectedId),
+    [boxes, selectedId]
+  );
+
+  const selectedRowBounds = useMemo(
+    () => rowBoundsFromBoxes(selectedRowBoxes),
+    [selectedRowBoxes]
+  );
+
+  const selectedColBoxes = useMemo(
+    () => findStoryboardSplitAdjustColForBox(boxes, selectedId),
+    [boxes, selectedId]
+  );
+
+  const selectedColBounds = useMemo(
+    () => colBoundsFromBoxes(selectedColBoxes),
+    [selectedColBoxes]
+  );
+
+  const alignSelectedRowTopToBox = useCallback(() => {
+    if (!selectedBox || selectedRowBoxes.length === 0) return;
+    const rowIds = selectedRowBoxes.map((box) => box.id);
+    setBoxes((prev) => alignStoryboardSplitAdjustRowTop(prev, rowIds, selectedBox.ymin));
+  }, [selectedBox, selectedRowBoxes]);
+
+  const alignSelectedRowBottomToBox = useCallback(() => {
+    if (!selectedBox || selectedRowBoxes.length === 0) return;
+    const rowIds = selectedRowBoxes.map((box) => box.id);
+    setBoxes((prev) => alignStoryboardSplitAdjustRowBottom(prev, rowIds, selectedBox.ymax));
+  }, [selectedBox, selectedRowBoxes]);
+
+  const alignSelectedColLeftToBox = useCallback(() => {
+    if (!selectedBox || selectedColBoxes.length === 0) return;
+    const colIds = selectedColBoxes.map((box) => box.id);
+    setBoxes((prev) => alignStoryboardSplitAdjustColLeft(prev, colIds, selectedBox.xmin));
+  }, [selectedBox, selectedColBoxes]);
+
+  const alignSelectedColRightToBox = useCallback(() => {
+    if (!selectedBox || selectedColBoxes.length === 0) return;
+    const colIds = selectedColBoxes.map((box) => box.id);
+    setBoxes((prev) => alignStoryboardSplitAdjustColRight(prev, colIds, selectedBox.xmax));
+  }, [selectedBox, selectedColBoxes]);
+
   const updateBox = useCallback((id: string, patch: Partial<BoundingBox>) => {
     setBoxes((prev) =>
       prev.map((box) => (box.id === id ? clampStoryboardSheetSplitBox({ ...box, ...patch }) : box))
@@ -252,6 +312,78 @@ export default function StoryboardSheetSplitAdjustModal({
     [busy, detecting, drawMode, pointerToNorm]
   );
 
+  const onPointerDownRowTop = useCallback(
+    (event: React.PointerEvent) => {
+      if (busy || detecting || !selectedRowBounds || selectedRowBoxes.length === 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+      const norm = pointerToNorm(event.clientX, event.clientY);
+      if (!norm) return;
+      dragRef.current = {
+        kind: 'row-top',
+        rowIds: selectedRowBoxes.map((box) => box.id),
+        originTop: selectedRowBounds.ymin,
+        startY: norm.y,
+      };
+    },
+    [busy, detecting, pointerToNorm, selectedRowBounds, selectedRowBoxes]
+  );
+
+  const onPointerDownRowBottom = useCallback(
+    (event: React.PointerEvent) => {
+      if (busy || detecting || !selectedRowBounds || selectedRowBoxes.length === 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+      const norm = pointerToNorm(event.clientX, event.clientY);
+      if (!norm) return;
+      dragRef.current = {
+        kind: 'row-bottom',
+        rowIds: selectedRowBoxes.map((box) => box.id),
+        originBottom: selectedRowBounds.ymax,
+        startY: norm.y,
+      };
+    },
+    [busy, detecting, pointerToNorm, selectedRowBounds, selectedRowBoxes]
+  );
+
+  const onPointerDownColLeft = useCallback(
+    (event: React.PointerEvent) => {
+      if (busy || detecting || !selectedColBounds || selectedColBoxes.length === 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+      const norm = pointerToNorm(event.clientX, event.clientY);
+      if (!norm) return;
+      dragRef.current = {
+        kind: 'col-left',
+        colIds: selectedColBoxes.map((box) => box.id),
+        originLeft: selectedColBounds.xmin,
+        startX: norm.x,
+      };
+    },
+    [busy, detecting, pointerToNorm, selectedColBounds, selectedColBoxes]
+  );
+
+  const onPointerDownColRight = useCallback(
+    (event: React.PointerEvent) => {
+      if (busy || detecting || !selectedColBounds || selectedColBoxes.length === 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+      const norm = pointerToNorm(event.clientX, event.clientY);
+      if (!norm) return;
+      dragRef.current = {
+        kind: 'col-right',
+        colIds: selectedColBoxes.map((box) => box.id),
+        originRight: selectedColBounds.xmax,
+        startX: norm.x,
+      };
+    },
+    [busy, detecting, pointerToNorm, selectedColBounds, selectedColBoxes]
+  );
+
   const onPointerDownResize = useCallback(
     (event: React.PointerEvent, box: BoundingBox) => {
       if (busy || detecting) return;
@@ -299,6 +431,30 @@ export default function StoryboardSheetSplitAdjustModal({
           xmax: Math.max(drag.origin.xmin + 24, norm.x),
           ymax: Math.max(drag.origin.ymin + 24, norm.y),
         });
+        return;
+      }
+
+      if (drag.kind === 'row-top') {
+        const newTop = clamp01k(drag.originTop + (norm.y - drag.startY));
+        setBoxes((prev) => alignStoryboardSplitAdjustRowTop(prev, drag.rowIds, newTop));
+        return;
+      }
+
+      if (drag.kind === 'row-bottom') {
+        const newBottom = clamp01k(drag.originBottom + (norm.y - drag.startY));
+        setBoxes((prev) => alignStoryboardSplitAdjustRowBottom(prev, drag.rowIds, newBottom));
+        return;
+      }
+
+      if (drag.kind === 'col-left') {
+        const newLeft = clamp01k(drag.originLeft + (norm.x - drag.startX));
+        setBoxes((prev) => alignStoryboardSplitAdjustColLeft(prev, drag.colIds, newLeft));
+        return;
+      }
+
+      if (drag.kind === 'col-right') {
+        const newRight = clamp01k(drag.originRight + (norm.x - drag.startX));
+        setBoxes((prev) => alignStoryboardSplitAdjustColRight(prev, drag.colIds, newRight));
       }
     },
     [pointerToNorm, updateBox]
@@ -362,7 +518,7 @@ export default function StoryboardSheetSplitAdjustModal({
             <div className="text-sm font-semibold text-white">调整切分框</div>
             <div className="truncate text-[10px] text-gray-500">
               {sheetLabel ? `${sheetLabel} · ` : ''}
-              拖动框移动，右下角缩放；可增删框并修改镜号 label，确认后再切割
+              拖动框移动；琥珀横线整行调上下界，紫色竖线整列调左右界
             </div>
           </div>
           <button
@@ -395,8 +551,9 @@ export default function StoryboardSheetSplitAdjustModal({
             />
 
             {detecting ? (
-              <div className="absolute inset-0 flex items-center justify-center bg-black/40 text-sm text-gray-200">
-                识别分镜格中…
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/40 text-sm text-gray-200">
+                <div className="h-5 w-5 animate-spin rounded-full border-2 border-white/20 border-t-emerald-400" />
+                <span>{detectStatus || '识别分镜格中…'}</span>
               </div>
             ) : null}
 
@@ -427,6 +584,72 @@ export default function StoryboardSheetSplitAdjustModal({
                   </div>
                 );
               })}
+
+            {metrics && selectedRowBounds && selectedRowBoxes.length > 0 && !detecting && !busy ? (
+              <>
+                <div
+                  className="absolute z-20 border-t-2 border-amber-400/90"
+                  style={{
+                    left: metrics.offsetX + (selectedRowBounds.xmin / 1000) * metrics.displayW,
+                    top: metrics.offsetY + (selectedRowBounds.ymin / 1000) * metrics.displayH - 1,
+                    width: ((selectedRowBounds.xmax - selectedRowBounds.xmin) / 1000) * metrics.displayW,
+                  }}
+                >
+                  <div
+                    className="absolute left-1/2 top-0 h-4 w-20 -translate-x-1/2 -translate-y-1/2 cursor-ns-resize rounded-full bg-amber-400/90 shadow"
+                    title="拖动统一调整本行上边界"
+                    onPointerDown={onPointerDownRowTop}
+                  />
+                </div>
+                <div
+                  className="absolute z-20 border-b-2 border-amber-400/90"
+                  style={{
+                    left: metrics.offsetX + (selectedRowBounds.xmin / 1000) * metrics.displayW,
+                    top: metrics.offsetY + (selectedRowBounds.ymax / 1000) * metrics.displayH - 1,
+                    width: ((selectedRowBounds.xmax - selectedRowBounds.xmin) / 1000) * metrics.displayW,
+                  }}
+                >
+                  <div
+                    className="absolute left-1/2 top-0 h-4 w-20 -translate-x-1/2 -translate-y-1/2 cursor-ns-resize rounded-full bg-amber-400/90 shadow"
+                    title="拖动统一调整本行下边界"
+                    onPointerDown={onPointerDownRowBottom}
+                  />
+                </div>
+              </>
+            ) : null}
+
+            {metrics && selectedColBounds && selectedColBoxes.length > 0 && !detecting && !busy ? (
+              <>
+                <div
+                  className="absolute z-20 border-l-2 border-violet-400/90"
+                  style={{
+                    left: metrics.offsetX + (selectedColBounds.xmin / 1000) * metrics.displayW - 1,
+                    top: metrics.offsetY + (selectedColBounds.ymin / 1000) * metrics.displayH,
+                    height: ((selectedColBounds.ymax - selectedColBounds.ymin) / 1000) * metrics.displayH,
+                  }}
+                >
+                  <div
+                    className="absolute left-0 top-1/2 h-20 w-4 -translate-x-1/2 -translate-y-1/2 cursor-ew-resize rounded-full bg-violet-400/90 shadow"
+                    title="拖动统一调整本列左边界"
+                    onPointerDown={onPointerDownColLeft}
+                  />
+                </div>
+                <div
+                  className="absolute z-20 border-r-2 border-violet-400/90"
+                  style={{
+                    left: metrics.offsetX + (selectedColBounds.xmax / 1000) * metrics.displayW - 1,
+                    top: metrics.offsetY + (selectedColBounds.ymin / 1000) * metrics.displayH,
+                    height: ((selectedColBounds.ymax - selectedColBounds.ymin) / 1000) * metrics.displayH,
+                  }}
+                >
+                  <div
+                    className="absolute left-0 top-1/2 h-20 w-4 -translate-x-1/2 -translate-y-1/2 cursor-ew-resize rounded-full bg-violet-400/90 shadow"
+                    title="拖动统一调整本列右边界"
+                    onPointerDown={onPointerDownColRight}
+                  />
+                </div>
+              </>
+            ) : null}
 
             {draftStyle ? (
               <div
@@ -477,6 +700,58 @@ export default function StoryboardSheetSplitAdjustModal({
                   <p className="text-[9px] leading-relaxed text-gray-600">
                     label 用于匹配表内镜号；框顺序不影响切割，以 label 为准。
                   </p>
+                  {selectedRowBoxes.length > 1 ? (
+                    <div className="space-y-1.5 border-t border-white/[0.06] pt-2">
+                      <div className="text-[10px] font-medium text-gray-400">
+                        本行 ({selectedRowBoxes.length} 框)
+                      </div>
+                      <button
+                        type="button"
+                        disabled={busy || detecting}
+                        onClick={alignSelectedRowTopToBox}
+                        className={`${STORYBOARD_TOOL_BTN_NEUTRAL} h-7 w-full px-2 text-[10px]`}
+                      >
+                        上边界对齐到当前框
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy || detecting}
+                        onClick={alignSelectedRowBottomToBox}
+                        className={`${STORYBOARD_TOOL_BTN_NEUTRAL} h-7 w-full px-2 text-[10px]`}
+                      >
+                        下边界对齐到当前框
+                      </button>
+                      <p className="text-[9px] leading-relaxed text-gray-600">
+                        拖画布琥珀横线整行调上/下边界。
+                      </p>
+                    </div>
+                  ) : null}
+                  {selectedColBoxes.length > 1 ? (
+                    <div className="space-y-1.5 border-t border-white/[0.06] pt-2">
+                      <div className="text-[10px] font-medium text-gray-400">
+                        本列 ({selectedColBoxes.length} 框)
+                      </div>
+                      <button
+                        type="button"
+                        disabled={busy || detecting}
+                        onClick={alignSelectedColLeftToBox}
+                        className={`${STORYBOARD_TOOL_BTN_NEUTRAL} h-7 w-full px-2 text-[10px]`}
+                      >
+                        左边界对齐到当前框
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy || detecting}
+                        onClick={alignSelectedColRightToBox}
+                        className={`${STORYBOARD_TOOL_BTN_NEUTRAL} h-7 w-full px-2 text-[10px]`}
+                      >
+                        右边界对齐到当前框
+                      </button>
+                      <p className="text-[9px] leading-relaxed text-gray-600">
+                        拖画布紫色竖线整列调左/右边界。
+                      </p>
+                    </div>
+                  ) : null}
                 </div>
               ) : (
                 <p className="text-[10px] text-gray-600">点击框选中后可改镜号，或拖动画布添加新框。</p>

@@ -12,6 +12,7 @@ import {
   planStoryboardSheetGenTasks,
   resolveSheetGenSourceRows,
   resolveStoryboardSheetGridDimensions,
+  rowHasSheetGenPrompt,
   sheetGenTaskCount,
   validateStoryboardSheetGenPromptLength,
 } from '../services/storyboardTableSheetGen';
@@ -94,7 +95,7 @@ describe('storyboardTableSheetGen', () => {
     expect(stats.mergedChars).toBeGreaterThan(stats.compiledChars);
   });
 
-  it('buildStoryboardSheetGenMergedSendPrompt merges preset and compiled body', () => {
+  it('buildStoryboardSheetGenMergedSendPrompt puts shot body before preset style', () => {
     const compiled = compileSheetRedrawPrompt(
       [row({ shotFields: { f_visual: '测试' } })],
       catalog
@@ -103,8 +104,9 @@ describe('storyboardTableSheetGen', () => {
       ...directPreset,
       instruction: '手绘风格',
     });
-    expect(merged.startsWith('手绘风格')).toBe(true);
-    expect(merged).toContain(compiled);
+    expect(merged.startsWith(compiled)).toBe(true);
+    expect(merged).toContain('【画风/执行要求】');
+    expect(merged).toContain('手绘风格');
   });
 
   it('buildStoryboardSheetGenBatchPreviews returns per-chunk send preview', () => {
@@ -122,6 +124,41 @@ describe('storyboardTableSheetGen', () => {
     expect(previews[0]?.directSend).toBe(true);
     expect(previews[0]?.mergedImagePrompt).toContain('画面0');
     expect(previews[1]?.shotCount).toBe(1);
+  });
+
+  it('compileSheetRedrawPrompt includes shotRaw when structured fields empty', () => {
+    const rows = [
+      row({
+        shotNo: '003',
+        shotRaw: '大远景，叶不凡站在天台边缘，风吹衣角',
+        shotFields: {},
+        shotText: '',
+      }),
+    ];
+    const prompt = compileSheetRedrawPrompt(rows, catalog);
+    expect(prompt).toContain('叶不凡站在天台边缘');
+  });
+
+  it('compileSheetRedrawPrompt prefers shotRaw over shorter stale visual field', () => {
+    const rows = [
+      row({
+        shotNo: '005',
+        shotRaw: '中景，会议室里三人争执，桌上散落文件，窗外暴雨',
+        shotFields: { f_visual: '室内对话' },
+      }),
+    ];
+    const prompt = compileSheetRedrawPrompt(rows, catalog);
+    expect(prompt).toContain('会议室里三人争执');
+    expect(prompt).not.toContain('画面：室内对话');
+  });
+
+  it('rowHasSheetGenPrompt accepts shotRaw without structured redraw fields', () => {
+    expect(
+      rowHasSheetGenPrompt(
+        row({ shotRaw: '远景，城门外的队列', shotFields: {} }),
+        catalog
+      )
+    ).toBe(true);
   });
 
   it('resolves compact grid dimensions', () => {

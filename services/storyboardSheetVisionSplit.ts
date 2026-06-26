@@ -2,11 +2,12 @@ import type { BoundingBox, StoryboardTableRow } from '../types';
 import { createStoryboardTableRow } from './storyboardTableAsset';
 import { normalizeStoryboardShotNoInput } from './storyboardTableParse';
 import { computeStoryboardMosaicGrid } from './storyboardFrameStripMerge';
-import { cropBoxes, trimImageDataUrlContentBounds } from './imageCrop';
+import { cropBoxes, refineStoryboardNormBoxesToIllustrationBounds, trimImageDataUrlContentBounds } from './imageCrop';
 import { scaleStoryboardSheetForVisionDetect } from '../components/storyboard/storyboardFrameImage';
-import { detectObjectsInImage } from './unifiedAiGateway';
+import { detectObjectsInImage, analyzeStoryboardSheetStructureInImage } from './unifiedAiGateway';
 import { DEFAULT_MODEL_TEXT } from './modelRegistry/constants';
-import { detectAutoGrid } from './gridDetector';
+import { detectAutoGrid, detectStoryboardGridBoxesForLayout } from './gridDetector';
+import { auditStoryboardTaskOutcome } from './storyboardTaskAuditEvents';
 
 export const STORYBOARD_SHEET_VISION_TIMEOUT_MS = 90_000;
 
@@ -24,8 +25,12 @@ export type StoryboardSheetVisionSplitOptions = {
   allowGridFallback?: boolean;
   /** 指定列行时，网格回填按此布局从左到右、从上到下对应镜号顺序 */
   layoutGrid?: StoryboardSheetLayoutGrid;
+  /** false = 切分后不做内容裁白边（拼图生图推荐，避免空格子被裁成异常小图） */
+  trimSplitCrops?: boolean;
   /** 分镜表资产 id：视觉识别任务审计上报管理端 */
   storyboardAssetId?: string;
+  /** 框数与镜头数不一致时，按阅读顺序配前 N 对（拖入切分） */
+  sequentialLayoutMatch?: boolean;
 };
 
 export type StoryboardSheetVisionMatch = {
@@ -162,30 +167,56 @@ export function storyboardShotNosMatch(a: string, b: string): boolean {
   return tokenA.includes(tokenB) || tokenB.includes(tokenA);
 }
 
-export function buildStoryboardSheetVisionPrompt(expectedShotNos: string[]): string {
+export type StoryboardSheetStructureAnalysis = {
+  shotCount: number;
+  cols: number;
+  rows: number;
+  shotNos: string[];
+  emptyCellCount: number;
+};
+
+export function buildStoryboardSheetVisionPrompt(
+  expectedShotNos: string[],
+  structure?: StoryboardSheetStructureAnalysis
+): string {
   const expected = [...new Set(expectedShotNos.map((shot) => shot.trim()).filter(Boolean))];
+  const structureLine = structure
+    ? `已确认：${structure.rows} 行 × ${structure.cols} 列网格，共 ${structure.shotCount} 个有效分镜格${
+        structure.emptyCellCount > 0 ? `（另有 ${structure.emptyCellCount} 个空白占位格勿框）` : ''
+      }。镜号顺序：${structure.shotNos.join('、')}。必须且只能输出 ${structure.shotCount} 个 box_2d。`
+    : '';
+  const expectedCountLine =
+    expected.length > 0
+      ? `本拼图共 ${expected.length} 个分镜格，必须且只能输出 ${expected.length} 个 box_2d（每格一个，禁止把顶栏小字、时长、对白单独成框）。`
+      : structure
+        ? ''
+        : '';
   const expectedLine = expected.length
     ? `本图可能包含下列镜号（若格内文字与之一致，label 须与之相同）：${expected.join('、')}。`
     : `本图镜号未知：须先逐格阅读全部文字，再从每格文字中自行推断镜号（位置不固定）。`;
 
   return `你是分镜表拼图切分助手。输入是一张包含多个分镜格的故事板拼图页（contact sheet 或手绘分镜页）。
 
+${structureLine}
+
+${expectedCountLine}
+
 【最重要】若图中有多个分镜格（常见为带黑色/灰色网格线的规整宫格，如 3×3、4×5、5×4 等），必须为每一格各输出一个 box_2d，严禁把整张拼图当作一个框返回。
 
 规整网格分镜表（漫画/影视分镜条）识别要点：
-- 先数清列数×行数，再沿网格线逐格输出（从左到右、从上到下）；
-- 每格通常含：顶部镜号条（如「121 | 4s」——镜号在竖线左侧）、中间草图、底部动作/对白文字；
-- box_2d 框住该格整格区域（含顶部镜号条与底部文字），不要跨格合并；
-- label 读取顶部镜号条中的镜号（如 121），不要写时长（4s）或对白内容。
+- 先数清列数×行数，再沿网格线逐格定位；
+- 每格通常含：顶部镜号条、中间插画/草图、底部动作/对白文字；
+- box_2d 必须只框中间插画/草图主体，严禁包含顶部镜号条与底部文字条；
+- label 仍读取顶部镜号条中的镜号（如 121），不要写时长（4s）或对白内容。
 
 任务分三步处理每一格：
-1. 读字：扫描该格内全部可见文字（角标、顶部/底部元数据条、左右侧栏、叠在画面上的水印等，位置不固定）；
-2. 猜镜号：从读到的文字中推断「镜号/镜头号」（排除景别、角度、运镜、时长、对白、旁白、备注等字段名及其取值；纯数字 002、S030、SC01_SH001、Shot 3 等均可）；
-3. 框画面：box_2d 框住该格区域（规整网格时框整格；不规则页可只框草图主体）。
+1. 读字：扫描该格内全部可见文字，推断镜号（位置不固定）；
+2. 猜镜号：从文字中推断镜号（排除景别、角度、运镜、时长、对白等）；
+3. 框画面：box_2d 只框该格中间插画/草图，上下文字区必须排除在外。
 
 box_2d 必须排除（不要框进）：
 - 相邻分镜格的内容（严禁跨格合并）；
-- 不规则手绘页：可排除顶部/底部纯文字条，只框中间草图。
+- 顶部镜号/元数据条、底部对白/动作/备注等纯文字区（各格高度不固定，按实际画面边界识别，禁止按固定比例裁切）。
 
 box_2d 应紧贴该格外轮廓，略留 1–2% 边距；每格单独一框（禁止输出极窄竖条或极扁横条）。
 
@@ -399,13 +430,40 @@ export async function splitStoryboardSheetFromBoxes(
   }
 
   const workingRows = filterStoryboardRowsByExpectedShots([...rows], expectedShotNos);
+  const orderedBoxes = sortStoryboardSheetBoxesReadingOrder(boxes).map((box) =>
+    clampStoryboardSheetSplitBox(box)
+  );
+  if (!orderedBoxes.length) {
+    return {
+      matches: [],
+      unmatchedLabels: [],
+      warn: '未提供切分框，请至少框选一个分镜格',
+    };
+  }
+
+  /** 已知 layoutGrid 且框数与镜头数一致（或允许顺序部分匹配）：按阅读顺序一一对应 */
+  if (options?.layoutGrid && workingRows.length > 0) {
+    const pairCount = Math.min(orderedBoxes.length, workingRows.length);
+    if (
+      pairCount > 0 &&
+      (orderedBoxes.length === workingRows.length || options.sequentialLayoutMatch)
+    ) {
+      return splitStoryboardSheetByGridBoxes(
+        dataUrl,
+        workingRows.slice(0, pairCount),
+        orderedBoxes.slice(0, pairCount),
+        orderedBoxes.length === workingRows.length ? '布局顺序切分' : '布局顺序切分（部分镜）',
+        { trimCrops: options.trimSplitCrops !== false }
+      );
+    }
+  }
+
   const createdRows: StoryboardTableRow[] = [];
   const usedRowIds = new Set<string>();
   const matches: StoryboardSheetVisionMatch[] = [];
   const unmatchedLabels: string[] = [];
   let warn: string | undefined;
 
-  const orderedBoxes = sortStoryboardSheetBoxesReadingOrder(boxes);
   const crops = await trimVisionSplitCrops(
     await cropBoxes(
       dataUrl,
@@ -530,11 +588,36 @@ export function isCollapsedStoryboardSheetVisionDetect(boxes: BoundingBox[]): bo
   return false;
 }
 
+export type StoryboardSheetGridBounds = {
+  xmin: number;
+  ymin: number;
+  xmax: number;
+  ymax: number;
+};
+
+export type StoryboardSheetPanelEstimate = {
+  panelCount: number;
+  layoutGrid: StoryboardSheetLayoutGrid;
+  method: string;
+  contentBounds?: StoryboardSheetGridBounds;
+  structureAnalysis?: StoryboardSheetStructureAnalysis;
+};
+
 export type StoryboardSheetVisionDetectOptions = {
   timeoutMs?: number;
   customPrompt?: string;
   storyboardAssetId?: string;
   layoutGrid?: StoryboardSheetLayoutGrid;
+  /** 已知 layoutGrid 时跳过 Gemini，仅均匀网格 + 像素收窄插画区（拖入/生图切分推荐） */
+  skipVisionDetect?: boolean;
+  /** 图内分镜格数（拖入切分：以图为准，可与选中镜数不同） */
+  panelCount?: number;
+  /** 主内容区（跳过顶栏缩略图条等） */
+  contentBounds?: StoryboardSheetGridBounds;
+  /** 视觉结构预分析（镜数/行列/镜号），优先于像素估格 */
+  structureAnalysis?: StoryboardSheetStructureAnalysis;
+  /** 识别过程状态文案（弹窗内分阶段展示） */
+  onDetectStatus?: (message: string) => void;
 };
 
 type SheetImageGray = {
@@ -628,25 +711,154 @@ export function scoreStoryboardSheetUniformGridLayout(
   return count > 0 ? score / count : 0;
 }
 
+const STORYBOARD_SHEET_MIN_PANEL_AREA = 10_000;
+
+/** 顶栏缩略图条：大量小格挤在画面上部 */
+export function isLikelyHeaderStripNoise(boxes: BoundingBox[]): boolean {
+  if (boxes.length < 10) return false;
+  const areas = boxes.map((box) => boxArea(box)).sort((a, b) => a - b);
+  const median = areas[Math.floor(areas.length / 2)]!;
+  if (median > 18_000) return false;
+  const avgY =
+    boxes.reduce((sum, box) => sum + (box.ymin + box.ymax) / 2, 0) / boxes.length;
+  if (avgY > 420) return false;
+  const inTopBand = boxes.filter((box) => box.ymax < 480).length;
+  return inTopBand / boxes.length >= 0.55;
+}
+
+/** 主内容区边界：大格聚簇区域，或跳过顶栏后的默认区 */
+export function inferStoryboardSheetMainContentBounds(
+  boxes: BoundingBox[]
+): StoryboardSheetGridBounds | null {
+  const large = boxes.filter((box) => boxArea(box) >= STORYBOARD_SHEET_MIN_PANEL_AREA);
+  if (large.length >= 2) {
+    const pad = 6;
+    return {
+      xmin: Math.max(0, Math.min(...large.map((b) => b.xmin)) - pad),
+      ymin: Math.max(0, Math.min(...large.map((b) => b.ymin)) - pad),
+      xmax: Math.min(1000, Math.max(...large.map((b) => b.xmax)) + pad),
+      ymax: Math.min(1000, Math.max(...large.map((b) => b.ymax)) + pad),
+    };
+  }
+  if (isLikelyHeaderStripNoise(boxes)) {
+    return { xmin: 0, ymin: 220, xmax: 1000, ymax: 995 };
+  }
+  return null;
+}
+
 export function pickStoryboardSheetUniformGridLayout(
   img: SheetImageGray,
-  opts?: { minScore?: number }
+  opts?: { minScore?: number; hintCount?: number; contentBounds?: StoryboardSheetGridBounds }
 ): { cols: number; rows: number; score: number } | null {
-  let best: { cols: number; rows: number; score: number } | null = null;
+  const bounds = opts?.contentBounds;
+  const regionH =
+    bounds && bounds.ymax > bounds.ymin
+      ? ((bounds.ymax - bounds.ymin) / 1000) * img.height
+      : img.height;
+  const regionW =
+    bounds && bounds.xmax > bounds.xmin
+      ? ((bounds.xmax - bounds.xmin) / 1000) * img.width
+      : img.width;
+
+  const ranked: { cols: number; rows: number; score: number; cells: number }[] = [];
   for (let cols = 2; cols <= 8; cols += 1) {
     for (let rows = 2; rows <= 8; rows += 1) {
       const cells = cols * rows;
       if (cells < 4 || cells > 40) continue;
+      const cellH = regionH / rows;
+      const cellW = regionW / cols;
+      if (cellH < img.height * 0.055 || cellW < img.width * 0.07) continue;
       const score = scoreStoryboardSheetUniformGridLayout(img, cols, rows);
-      if (!best || score > best.score) {
-        best = { cols, rows, score };
-      }
+      ranked.push({ cols, rows, score, cells });
     }
   }
-  if (!best) return null;
+  if (!ranked.length) return null;
+  ranked.sort((a, b) => b.score - a.score);
+  const topScore = ranked[0]!.score;
   const minScore = opts?.minScore ?? 0.04;
-  if (best.score < minScore) return null;
-  return best;
+  if (topScore < minScore) return null;
+  const threshold = topScore * 0.72;
+  let viable = ranked.filter((item) => item.score >= threshold);
+  if (!viable.length) viable = ranked.slice(0, 5);
+
+  const hint = opts?.hintCount && opts.hintCount > 1 ? opts.hintCount : undefined;
+  if (hint) {
+    viable.sort((a, b) => {
+      const diffA = Math.abs(a.cells - hint);
+      const diffB = Math.abs(b.cells - hint);
+      if (diffA !== diffB) return diffA - diffB;
+      return b.score - a.score;
+    });
+  } else {
+    viable.sort((a, b) => {
+      const scoreDiff = b.score - a.score;
+      if (Math.abs(scoreDiff) > topScore * 0.08) return scoreDiff;
+      return a.cells - b.cells;
+    });
+  }
+  const pick = viable[0] ?? ranked[0]!;
+  return { cols: pick.cols, rows: pick.rows, score: pick.score };
+}
+
+/** 去掉 auto grid 误检：四宫格大块、顶栏缩略图小格 */
+export function filterStoryboardAutoGridToPanelCells(boxes: BoundingBox[]): BoundingBox[] {
+  if (boxes.length <= 4) return sortStoryboardSheetBoxesReadingOrder(boxes);
+  const withArea = boxes
+    .map((box) => ({ box, area: boxArea(box) }))
+    .filter((item) => item.area > 20 * 20)
+    .sort((a, b) => a.area - b.area);
+  if (withArea.length <= 4) {
+    return sortStoryboardSheetBoxesReadingOrder(withArea.map((item) => item.box));
+  }
+
+  let filtered = withArea;
+  let maxGap = 0;
+  let splitIdx = 0;
+  for (let i = 1; i < withArea.length; i += 1) {
+    const gap = withArea[i]!.area / Math.max(1, withArea[i - 1]!.area);
+    if (gap > maxGap && gap > 2.4) {
+      maxGap = gap;
+      splitIdx = i;
+    }
+  }
+  if (maxGap > 2.4 && splitIdx > 0) {
+    const smallCluster = withArea.slice(0, splitIdx);
+    const largeCluster = withArea.slice(splitIdx);
+    if (largeCluster.length <= 6 && smallCluster.length >= largeCluster.length * 2) {
+      filtered = smallCluster;
+    } else if (smallCluster.length <= 6 && largeCluster.length >= smallCluster.length * 2) {
+      filtered = largeCluster;
+    } else {
+      const smallMedian = smallCluster[Math.floor(smallCluster.length / 2)]!.area;
+      const largeMedian = largeCluster[Math.floor(largeCluster.length / 2)]!.area;
+      filtered = largeMedian > smallMedian * 1.8 ? largeCluster : smallCluster;
+    }
+  } else {
+    const median = withArea[Math.floor(withArea.length / 2)]!.area;
+    const minArea = Math.max(STORYBOARD_SHEET_MIN_PANEL_AREA * 0.35, median * 0.28);
+    const maxArea = median * 2.8;
+    const band = withArea.filter((item) => item.area >= minArea && item.area <= maxArea);
+    if (band.length >= 4) filtered = band;
+  }
+
+  if (filtered.length >= 4) {
+    return sortStoryboardSheetBoxesReadingOrder(filtered.map((item) => item.box));
+  }
+  return sortStoryboardSheetBoxesReadingOrder(withArea.map((item) => item.box));
+}
+
+export function resolveStoryboardSheetLayoutGridForPanelCount(
+  panelCount: number,
+  preferred?: StoryboardSheetLayoutGrid
+): StoryboardSheetLayoutGrid {
+  if (
+    preferred &&
+    preferred.cols * preferred.rows >= panelCount &&
+    Math.abs(preferred.cols * preferred.rows - panelCount) <= 2
+  ) {
+    return preferred;
+  }
+  return suggestStoryboardSheetLayoutGrid(panelCount);
 }
 
 export function pickStoryboardSheetLayoutByAspect(
@@ -671,12 +883,16 @@ export function pickStoryboardSheetLayoutByAspect(
 
 export async function detectStoryboardSheetGridByUniformFit(
   src: string,
-  layoutGrid?: StoryboardSheetLayoutGrid
+  layoutGrid?: StoryboardSheetLayoutGrid,
+  cellCountHint?: number
 ): Promise<BoundingBox[]> {
   if (layoutGrid) {
     const cols = Math.max(1, Math.min(12, Math.round(layoutGrid.cols)));
     const rows = Math.max(1, Math.min(12, Math.round(layoutGrid.rows)));
-    return buildLayoutSheetGridBoxes({ cols, rows }, cols * rows);
+    const maxCells = cols * rows;
+    const cellCount =
+      cellCountHint && cellCountHint > 0 ? Math.min(maxCells, cellCountHint) : maxCells;
+    return buildLayoutSheetGridBoxes({ cols, rows }, cellCount);
   }
 
   const img = await loadSheetImageForGrid(src);
@@ -695,17 +911,55 @@ export function isUsableStoryboardSheetSplitDraftBoxes(boxes: BoundingBox[] | un
   return !isCollapsedStoryboardSheetVisionDetect(list);
 }
 
-function pickBestStoryboardSheetDetectCandidates(candidates: BoundingBox[][]): BoundingBox[] {
+function scoreStoryboardSheetDetectCandidate(
+  boxes: BoundingBox[],
+  expectedCellCount?: number,
+  structure?: StoryboardSheetStructureAnalysis
+): number {
+  if (!boxes.length) return -1_000_000;
+  if (isCollapsedStoryboardSheetVisionDetect(boxes)) return -100_000;
+  const count = boxes.length;
+  const areas = boxes.map((box) => boxArea(box)).sort((a, b) => a - b);
+  const median = areas[Math.floor(areas.length / 2)] ?? 0;
+  let score = 0;
+  if (median < 8_000) score -= 40_000;
+  else if (median >= STORYBOARD_SHEET_MIN_PANEL_AREA) score += 8_000;
+
+  if (structure && count === structure.shotCount) score += 5_000;
+
+  if (expectedCellCount && expectedCellCount > 0) {
+    const diff = Math.abs(count - expectedCellCount);
+    score += 10_000 - diff * 900;
+    if (count > expectedCellCount * 2) score -= 50_000;
+    if (count > expectedCellCount + 5) score -= 20_000;
+    return score;
+  }
+  return score + count * 100;
+}
+
+function pickBestStoryboardSheetDetectCandidates(
+  candidates: BoundingBox[][],
+  expectedCellCount?: number,
+  structure?: StoryboardSheetStructureAnalysis
+): BoundingBox[] {
   const ranked = candidates
     .map((boxes) => boxes.filter((box) => boxArea(box) > 20 * 20))
     .filter((boxes) => boxes.length > 0)
-    .sort((a, b) => {
-      const aCollapsed = isCollapsedStoryboardSheetVisionDetect(a);
-      const bCollapsed = isCollapsedStoryboardSheetVisionDetect(b);
-      if (aCollapsed !== bCollapsed) return aCollapsed ? 1 : -1;
-      return b.length - a.length;
-    });
+    .sort(
+      (a, b) =>
+        scoreStoryboardSheetDetectCandidate(b, expectedCellCount, structure) -
+        scoreStoryboardSheetDetectCandidate(a, expectedCellCount, structure)
+    );
   return ranked[0] ?? [];
+}
+
+/** @internal exported for unit tests */
+export function pickStoryboardSheetDetectCandidatesForExpectedCount(
+  candidates: BoundingBox[][],
+  expectedCellCount: number,
+  structure?: StoryboardSheetStructureAnalysis
+): BoundingBox[] {
+  return pickBestStoryboardSheetDetectCandidates(candidates, expectedCellCount, structure);
 }
 
 export function buildStoryboardSheetGridShotLabelPrompt(
@@ -743,11 +997,231 @@ function mergeGridBoxesWithVisionLabels(
   });
 }
 
-function finalizeStoryboardSheetDetectBoxes(boxes: BoundingBox[]): BoundingBox[] {
+function finalizeStoryboardSheetDetectBoxes(
+  boxes: BoundingBox[],
+  opts?: { skipVisualCrop?: boolean }
+): BoundingBox[] {
   const deduped = dedupeBoxesByLabel(boxes);
   const quality = filterVisionBoxesByQuality(deduped);
-  const mapped = mapStoryboardBoxesToVisualCrop(quality.length ? quality : deduped);
-  return mapped;
+  const base = quality.length ? quality : deduped;
+  if (opts?.skipVisualCrop !== false) return base;
+  return mapStoryboardBoxesToVisualCrop(base);
+}
+
+/** 整格框按像素内容收窄至插画区（用于网格识别后的二次精修） */
+export async function refineStoryboardSheetDetectBoxesToIllustration(
+  dataUrl: string,
+  boxes: BoundingBox[]
+): Promise<BoundingBox[]> {
+  return refineStoryboardNormBoxesToIllustrationBounds(dataUrl, boxes);
+}
+
+/** @internal exported for unit tests */
+export function finalizeStoryboardSheetDetectBoxesForTest(
+  boxes: BoundingBox[],
+  opts?: { skipVisualCrop?: boolean }
+): BoundingBox[] {
+  return finalizeStoryboardSheetDetectBoxes(boxes, opts);
+}
+
+export function normalizeStoryboardSheetStructureAnalysis(
+  raw: {
+    shotCount: number;
+    cols: number;
+    rows: number;
+    shotNos: string[];
+    emptyCellCount: number;
+  } | null | undefined
+): StoryboardSheetStructureAnalysis | null {
+  if (!raw) return null;
+  const cols = Math.max(1, Math.min(12, Math.round(raw.cols)));
+  const rows = Math.max(1, Math.min(12, Math.round(raw.rows)));
+  let shotNos = raw.shotNos
+    .map((shot) => normalizeStoryboardShotNoInput(String(shot || '')))
+    .filter(Boolean);
+  let shotCount = Math.max(1, Math.min(40, Math.round(raw.shotCount)));
+  if (shotNos.length > shotCount) shotNos = shotNos.slice(0, shotCount);
+  if (shotNos.length >= Math.max(1, shotCount - 2)) {
+    shotCount = Math.max(shotCount, shotNos.length);
+    if (shotNos.length > shotCount) shotNos = shotNos.slice(0, shotCount);
+  }
+  if (cols * rows < shotCount) return null;
+  if (shotNos.length < 1) {
+    shotNos = Array.from({ length: shotCount }, (_, index) =>
+      String(index + 1).padStart(3, '0')
+    );
+  }
+  return {
+    shotCount,
+    cols,
+    rows,
+    shotNos,
+    emptyCellCount: Math.max(0, Math.round(raw.emptyCellCount || 0)),
+  };
+}
+
+export function buildStoryboardSheetStructureLayoutBoxes(
+  structure: StoryboardSheetStructureAnalysis,
+  contentBounds?: StoryboardSheetGridBounds
+): BoundingBox[] {
+  return labelStoryboardLayoutGridBoxes(
+    buildLayoutSheetGridBoxes(
+      { cols: structure.cols, rows: structure.rows },
+      structure.shotCount,
+      contentBounds
+    ),
+    structure.shotNos.slice(0, structure.shotCount)
+  );
+}
+
+/** 结构已知时，过滤 auto grid 里顶栏小格/误检碎框 */
+export function filterAutoGridBoxesForStructureLayout(
+  boxes: BoundingBox[],
+  structure: StoryboardSheetStructureAnalysis
+): BoundingBox[] {
+  const expectedCellArea = (1000 / structure.cols) * (1000 / structure.rows);
+  const minArea = expectedCellArea * 0.32;
+  const maxArea = expectedCellArea * 2.8;
+  return sortStoryboardSheetBoxesReadingOrder(
+    boxes.filter((box) => {
+      const area = boxArea(box);
+      return area >= minArea && area <= maxArea;
+    })
+  );
+}
+
+/** 结构分析已知行列/镜数时，仅用算法定位（格线 > 过滤 auto grid > 均匀网格） */
+export async function resolveStoryboardSheetBoxesFromStructure(
+  dataUrl: string,
+  structure: StoryboardSheetStructureAnalysis,
+  autoGridBoxes: BoundingBox[],
+  expectedShotNos: string[]
+): Promise<{ boxes: BoundingBox[]; method: string }> {
+  const labels = structure.shotNos.slice(0, structure.shotCount);
+  const labelBoxes = (source: BoundingBox[]) =>
+    labelStoryboardLayoutGridBoxes(
+      sortStoryboardSheetBoxesReadingOrder(source).slice(0, structure.shotCount),
+      expectedShotNos.length >= structure.shotCount ? expectedShotNos : labels
+    );
+
+  const lineBoxes = await detectStoryboardGridBoxesForLayout(
+    dataUrl,
+    { cols: structure.cols, rows: structure.rows },
+    structure.shotCount
+  );
+  if (lineBoxes.length >= structure.shotCount) {
+    return { boxes: labelBoxes(lineBoxes), method: 'line_grid+structure' };
+  }
+
+  const filteredAuto = filterAutoGridBoxesForStructureLayout(autoGridBoxes, structure);
+  const gridCells = structure.cols * structure.rows;
+  if (
+    filteredAuto.length >= structure.shotCount &&
+    (filteredAuto.length >= gridCells - structure.emptyCellCount ||
+      filteredAuto.length === structure.shotCount)
+  ) {
+    return { boxes: labelBoxes(filteredAuto), method: 'auto_grid+structure' };
+  }
+
+  return {
+    boxes: buildStoryboardSheetStructureLayoutBoxes(structure),
+    method: 'uniform_grid+structure',
+  };
+}
+
+async function analyzeStoryboardSheetStructureForEstimate(
+  dataUrl: string,
+  textModel: string,
+  timeoutMs: number,
+  onStatus?: (message: string) => void
+): Promise<StoryboardSheetStructureAnalysis | null> {
+  try {
+    onStatus?.('正在识别分镜结构…');
+    const visionInput = await scaleStoryboardSheetForVisionDetect(dataUrl);
+    const raw = await analyzeStoryboardSheetStructureInImage(visionInput, textModel, { timeoutMs });
+    return normalizeStoryboardSheetStructureAnalysis(raw);
+  } catch {
+    return null;
+  }
+}
+
+export async function estimateStoryboardSheetPanelCountFromImage(
+  dataUrl: string,
+  opts?: { hintCount?: number; textModel?: string; timeoutMs?: number; onDetectStatus?: (message: string) => void }
+): Promise<StoryboardSheetPanelEstimate> {
+  const hint =
+    opts?.hintCount && opts.hintCount > 0 ? Math.min(40, Math.round(opts.hintCount)) : undefined;
+  const timeoutMs = opts?.timeoutMs ?? STORYBOARD_SHEET_VISION_TIMEOUT_MS;
+  const textModel = opts?.textModel ?? DEFAULT_MODEL_TEXT;
+  const onStatus = opts?.onDetectStatus;
+
+  const [structureAnalysis, rawAutoBoxes] = await Promise.all([
+    analyzeStoryboardSheetStructureForEstimate(dataUrl, textModel, timeoutMs, onStatus),
+    detectStoryboardSheetPanelsByGrid(dataUrl)
+      .then((boxes) => boxes.filter((box) => boxArea(box) > 20 * 20))
+      .catch(() => [] as BoundingBox[]),
+  ]);
+  const contentBounds = inferStoryboardSheetMainContentBounds(rawAutoBoxes) ?? undefined;
+
+  if (structureAnalysis) {
+    return {
+      panelCount: structureAnalysis.shotCount,
+      layoutGrid: { cols: structureAnalysis.cols, rows: structureAnalysis.rows },
+      method: 'vision_structure',
+      contentBounds: undefined,
+      structureAnalysis,
+    };
+  }
+
+  const panelCells = filterStoryboardAutoGridToPanelCells(rawAutoBoxes);
+  const autoCount = panelCells.length;
+
+  if (autoCount >= 4) {
+    return {
+      panelCount: autoCount,
+      layoutGrid: resolveStoryboardSheetLayoutGridForPanelCount(autoCount),
+      method: 'auto_grid',
+      contentBounds,
+    };
+  }
+
+  const img = await loadSheetImageForGrid(dataUrl);
+  const uniform = img
+    ? pickStoryboardSheetUniformGridLayout(img, { hintCount: hint, contentBounds })
+    : null;
+  if (uniform && uniform.score >= 0.04) {
+    return {
+      panelCount: uniform.cols * uniform.rows,
+      layoutGrid: { cols: uniform.cols, rows: uniform.rows },
+      method: 'uniform_grid',
+      contentBounds,
+    };
+  }
+
+  if (autoCount >= 1) {
+    return {
+      panelCount: autoCount,
+      layoutGrid: resolveStoryboardSheetLayoutGridForPanelCount(autoCount),
+      method: 'auto_grid_sparse',
+      contentBounds,
+    };
+  }
+
+  if (hint && hint >= 2) {
+    return {
+      panelCount: hint,
+      layoutGrid: resolveStoryboardSheetLayoutGridForPanelCount(hint, uniform ?? undefined),
+      method: 'hint_fallback',
+      contentBounds,
+    };
+  }
+
+  return {
+    panelCount: 1,
+    layoutGrid: { cols: 1, rows: 1 },
+    method: 'fallback_single',
+    contentBounds,
+  };
 }
 
 export async function detectStoryboardSheetPanels(
@@ -756,21 +1230,127 @@ export async function detectStoryboardSheetPanels(
   textModel = DEFAULT_MODEL_TEXT,
   options?: StoryboardSheetVisionDetectOptions
 ): Promise<BoundingBox[]> {
+  const structure = options?.structureAnalysis;
   const prompt =
     options?.customPrompt?.trim() ||
-    buildStoryboardSheetVisionPrompt(expectedShotNos);
+    buildStoryboardSheetVisionPrompt(expectedShotNos, structure);
   const assetId = String(options?.storyboardAssetId || '').trim();
   const timeoutMs = options?.timeoutMs ?? STORYBOARD_SHEET_VISION_TIMEOUT_MS;
+  const expectedCellCount =
+    structure?.shotCount ??
+    (options?.panelCount && options.panelCount > 0
+      ? options.panelCount
+      : expectedShotNos.length > 0
+        ? expectedShotNos.length
+        : options?.layoutGrid
+          ? options.layoutGrid.cols * options.layoutGrid.rows
+          : undefined);
   let detectMethod = 'vision';
   let visionDetectScaled = false;
 
+  /** 结构已由 Gemini 分析完毕：仅用格线/像素算法生成框，不再调视觉框选 */
+  if (structure && structure.shotCount > 1) {
+    detectMethod = 'structure_algo';
+    try {
+      options?.onDetectStatus?.('正在定位分镜格…');
+      const autoGridBoxes = await detectStoryboardSheetPanelsByGrid(dataUrl);
+      const resolved = await resolveStoryboardSheetBoxesFromStructure(
+        dataUrl,
+        structure,
+        autoGridBoxes,
+        expectedShotNos
+      );
+      let boxes = resolved.boxes;
+      detectMethod = resolved.method;
+      options?.onDetectStatus?.('正在整理切分框…');
+      try {
+        boxes = await refineStoryboardNormBoxesToIllustrationBounds(dataUrl, boxes);
+      } catch {
+        /* keep grid boxes */
+      }
+      if (assetId) {
+        auditStoryboardTaskOutcome({
+          kind: 'llm',
+          ok: true,
+          assetId,
+          operation: 'vision_detect',
+          message: `分镜表 · 识别 ${boxes.length} 个分镜格（${detectMethod}）`,
+          level: 'info',
+          detail: {
+            expectedShots: expectedShotNos.length,
+            boxCount: boxes.length,
+            visionDetectScaled: false,
+            detectMethod,
+            collapsed: isCollapsedStoryboardSheetVisionDetect(boxes),
+          },
+        });
+      }
+      return boxes;
+    } catch (error) {
+      if (assetId) {
+        auditStoryboardTaskOutcome({
+          kind: 'llm',
+          ok: false,
+          assetId,
+          operation: 'vision_detect',
+          message: `分镜表 · 结构切分失败：${error instanceof Error ? error.message : String(error)}`,
+          level: 'error',
+        });
+      }
+      throw error;
+    }
+  }
+
+  if (
+    options?.skipVisionDetect &&
+    options.layoutGrid &&
+    expectedCellCount &&
+    expectedCellCount > 1
+  ) {
+    detectMethod = 'layout_grid_fast';
+    let boxes = buildStoryboardSheetLayoutGridDetectBoxes(
+      options.layoutGrid,
+      expectedCellCount,
+      expectedShotNos,
+      options.contentBounds
+    );
+    try {
+      boxes = await refineStoryboardNormBoxesToIllustrationBounds(dataUrl, boxes);
+    } catch {
+      /* keep grid boxes */
+    }
+    if (assetId) {
+      auditStoryboardTaskOutcome({
+        kind: 'llm',
+        ok: true,
+        assetId,
+        operation: 'vision_detect',
+        message: `分镜表 · 识别 ${boxes.length} 个分镜格（${detectMethod}）`,
+        level: 'info',
+        detail: {
+          expectedShots: expectedShotNos.length,
+          boxCount: boxes.length,
+          visionDetectScaled: false,
+          detectMethod,
+          collapsed: false,
+        },
+      });
+    }
+    return boxes;
+  }
+
   try {
+    options?.onDetectStatus?.('正在定位分镜格…');
     const [uniformGridBoxes, autoGridBoxes, visionInput] = await Promise.all([
-      detectStoryboardSheetGridByUniformFit(dataUrl, options?.layoutGrid),
+      detectStoryboardSheetGridByUniformFit(dataUrl, options?.layoutGrid, expectedCellCount),
       detectStoryboardSheetPanelsByGrid(dataUrl),
       scaleStoryboardSheetForVisionDetect(dataUrl),
     ]);
     visionDetectScaled = visionInput !== dataUrl;
+
+    const filteredAutoGrid = filterStoryboardAutoGridToPanelCells(autoGridBoxes);
+    const autoCandidates =
+      filteredAutoGrid.length >= 4 ? filteredAutoGrid : autoGridBoxes.filter((box) => boxArea(box) > 20 * 20);
 
     let visionBoxes: BoundingBox[] = [];
     try {
@@ -779,31 +1359,53 @@ export async function detectStoryboardSheetPanels(
       visionBoxes = [];
     }
 
-    const visionFinal = finalizeStoryboardSheetDetectBoxes(visionBoxes);
-    const candidates = [uniformGridBoxes, autoGridBoxes, visionFinal];
-    let boxes = pickBestStoryboardSheetDetectCandidates(candidates);
+    const visionFinal = finalizeStoryboardSheetDetectBoxes(visionBoxes, { skipVisualCrop: true });
+    let boxes: BoundingBox[] = [];
+    let detectMethod = 'vision';
 
-    if (isCollapsedStoryboardSheetVisionDetect(boxes) && uniformGridBoxes.length > 1) {
-      boxes = uniformGridBoxes;
-      detectMethod = options?.layoutGrid ? 'layout_grid' : 'uniform_fit';
-    } else if (isCollapsedStoryboardSheetVisionDetect(boxes) && autoGridBoxes.length > 1) {
-      boxes = autoGridBoxes;
-      detectMethod = 'auto_grid';
-    } else if (boxes === uniformGridBoxes && uniformGridBoxes.length > 1) {
-      detectMethod = options?.layoutGrid ? 'layout_grid' : 'uniform_fit';
-    } else if (boxes === autoGridBoxes && autoGridBoxes.length > 1) {
-      detectMethod = 'auto_grid';
-    } else if (isCollapsedStoryboardSheetVisionDetect(boxes)) {
-      const img = await loadSheetImageForGrid(dataUrl);
-      if (img) {
-        const aspectLayout = pickStoryboardSheetLayoutByAspect(img.width, img.height);
-        const aspectBoxes = buildLayoutSheetGridBoxes(
-          aspectLayout,
-          aspectLayout.cols * aspectLayout.rows
-        );
-        if (aspectBoxes.length > 1) {
-          boxes = aspectBoxes;
-          detectMethod = 'aspect_grid';
+    if (structure) {
+      const resolved = await resolveStoryboardSheetBoxesFromStructure(
+        dataUrl,
+        structure,
+        autoGridBoxes,
+        visionFinal,
+        expectedShotNos
+      );
+      boxes = resolved.boxes;
+      detectMethod = resolved.method;
+    } else {
+      const structureLayoutBoxes: BoundingBox[] = [];
+      const candidates = [autoCandidates, visionFinal, uniformGridBoxes];
+      boxes = pickBestStoryboardSheetDetectCandidates(candidates, expectedCellCount, structure);
+      if (boxes === autoCandidates && autoCandidates.length > 1) detectMethod = 'auto_grid';
+      else if (boxes === uniformGridBoxes && uniformGridBoxes.length > 1) {
+        detectMethod = options?.layoutGrid ? 'layout_grid' : 'uniform_fit';
+      } else if (boxes === visionFinal && visionFinal.length > 1) detectMethod = 'vision';
+    }
+
+    if (!structure) {
+      if (isCollapsedStoryboardSheetVisionDetect(boxes) && uniformGridBoxes.length > 1) {
+        boxes = uniformGridBoxes;
+        detectMethod = options?.layoutGrid ? 'layout_grid' : 'uniform_fit';
+      } else if (isCollapsedStoryboardSheetVisionDetect(boxes) && autoCandidates.length > 1) {
+        boxes = autoCandidates;
+        detectMethod = 'auto_grid';
+      } else if (boxes === uniformGridBoxes && uniformGridBoxes.length > 1) {
+        detectMethod = options?.layoutGrid ? 'layout_grid' : 'uniform_fit';
+      } else if (boxes === autoGridBoxes && autoGridBoxes.length > 1) {
+        detectMethod = 'auto_grid';
+      } else if (isCollapsedStoryboardSheetVisionDetect(boxes)) {
+        const img = await loadSheetImageForGrid(dataUrl);
+        if (img) {
+          const aspectLayout = pickStoryboardSheetLayoutByAspect(img.width, img.height);
+          const aspectBoxes = buildLayoutSheetGridBoxes(
+            aspectLayout,
+            aspectLayout.cols * aspectLayout.rows
+          );
+          if (aspectBoxes.length > 1) {
+            boxes = aspectBoxes;
+            detectMethod = 'aspect_grid';
+          }
         }
       }
     }
@@ -812,24 +1414,79 @@ export async function detectStoryboardSheetPanels(
       boxes.length > 1 &&
       (detectMethod !== 'vision' || isCollapsedStoryboardSheetVisionDetect(visionFinal))
     ) {
-      try {
-        const layout =
-          options?.layoutGrid ?? computeStoryboardMosaicGrid(boxes.length);
-        const labelPrompt = buildStoryboardSheetGridShotLabelPrompt(boxes.length, layout);
-        const labelBoxes = await detectObjectsInImage(visionInput, textModel, labelPrompt, {
-          timeoutMs,
-        });
+      const skipVisualCrop = true;
+      const labelCellCount = expectedCellCount ?? boxes.length;
+      if (storyboardSheetDetectHasExpectedLabels(expectedShotNos, labelCellCount)) {
         boxes = finalizeStoryboardSheetDetectBoxes(
-          mergeGridBoxesWithVisionLabels(boxes, labelBoxes)
+          labelStoryboardLayoutGridBoxes(boxes.slice(0, labelCellCount), expectedShotNos),
+          { skipVisualCrop }
         );
-      } catch {
-        boxes = finalizeStoryboardSheetDetectBoxes(boxes);
+      } else {
+        try {
+          const layout =
+            options?.layoutGrid ??
+            (expectedCellCount
+              ? computeStoryboardMosaicGrid(expectedCellCount)
+              : computeStoryboardMosaicGrid(boxes.length));
+          const labelPrompt = buildStoryboardSheetGridShotLabelPrompt(labelCellCount, layout);
+          const labelBoxes = await detectObjectsInImage(visionInput, textModel, labelPrompt, {
+            timeoutMs,
+          });
+          boxes = finalizeStoryboardSheetDetectBoxes(
+            mergeGridBoxesWithVisionLabels(boxes.slice(0, labelCellCount), labelBoxes),
+            { skipVisualCrop }
+          );
+        } catch {
+          boxes = finalizeStoryboardSheetDetectBoxes(
+            expectedCellCount ? boxes.slice(0, expectedCellCount) : boxes,
+            { skipVisualCrop }
+          );
+        }
       }
     } else if (!isUsableStoryboardSheetSplitDraftBoxes(boxes) && uniformGridBoxes.length > 1) {
-      boxes = finalizeStoryboardSheetDetectBoxes(uniformGridBoxes);
       detectMethod = options?.layoutGrid ? 'layout_grid' : 'uniform_fit';
+      boxes = finalizeStoryboardSheetDetectBoxes(
+        expectedCellCount
+          ? uniformGridBoxes.slice(0, expectedCellCount)
+          : uniformGridBoxes,
+        { skipVisualCrop: true }
+      );
     } else {
-      boxes = finalizeStoryboardSheetDetectBoxes(boxes);
+      boxes = finalizeStoryboardSheetDetectBoxes(
+        expectedCellCount && boxes.length > expectedCellCount
+          ? boxes.slice(0, expectedCellCount)
+          : boxes,
+        { skipVisualCrop: true }
+      );
+    }
+
+    if (
+      expectedCellCount &&
+      boxes.length > expectedCellCount &&
+      autoCandidates.length >= expectedCellCount &&
+      scoreStoryboardSheetDetectCandidate(autoCandidates, expectedCellCount) >=
+        scoreStoryboardSheetDetectCandidate(boxes, expectedCellCount) - 2000
+    ) {
+      boxes = sortStoryboardSheetBoxesReadingOrder(autoCandidates).slice(0, expectedCellCount);
+      detectMethod = 'auto_grid';
+    } else if (expectedCellCount && boxes.length > expectedCellCount) {
+      boxes = sortStoryboardSheetBoxesReadingOrder(boxes).slice(0, expectedCellCount);
+    } else if (
+      expectedCellCount &&
+      boxes.length < expectedCellCount &&
+      autoCandidates.length >= expectedCellCount
+    ) {
+      boxes = sortStoryboardSheetBoxesReadingOrder(autoCandidates).slice(0, expectedCellCount);
+      detectMethod = 'auto_grid';
+    }
+
+    if (boxes.length > 0) {
+      options?.onDetectStatus?.('正在整理切分框…');
+      try {
+        boxes = await refineStoryboardNormBoxesToIllustrationBounds(dataUrl, boxes);
+      } catch {
+        /* keep boxes */
+      }
     }
 
     if (assetId) {
@@ -936,15 +1593,51 @@ export function parseStoryboardSheetLayoutGrid(
   return { ok: true, layout: { cols, rows } };
 }
 
+export function buildStoryboardSheetLayoutGridDetectBoxes(
+  layoutGrid: StoryboardSheetLayoutGrid,
+  cellCount: number,
+  expectedShotNos: string[],
+  contentBounds?: StoryboardSheetGridBounds
+): BoundingBox[] {
+  return labelStoryboardLayoutGridBoxes(
+    buildLayoutSheetGridBoxes(layoutGrid, cellCount, contentBounds),
+    expectedShotNos
+  );
+}
+
+function storyboardSheetDetectHasExpectedLabels(
+  expectedShotNos: string[],
+  cellCount: number
+): boolean {
+  return expectedShotNos.map((shot) => shot.trim()).filter(Boolean).length >= cellCount;
+}
+
+export async function detectStoryboardSheetPanelsFromKnownLayout(
+  dataUrl: string,
+  expectedShotNos: string[],
+  layoutGrid: StoryboardSheetLayoutGrid,
+  cellCount: number
+): Promise<BoundingBox[]> {
+  const boxes = buildStoryboardSheetLayoutGridDetectBoxes(layoutGrid, cellCount, expectedShotNos);
+  return refineStoryboardNormBoxesToIllustrationBounds(dataUrl, boxes);
+}
+
 export function buildLayoutSheetGridBoxes(
   layout: StoryboardSheetLayoutGrid,
-  cellCount: number
+  cellCount: number,
+  contentBounds?: StoryboardSheetGridBounds
 ): BoundingBox[] {
   const cols = Math.max(1, Math.min(12, Math.round(layout.cols)));
   const gridRows = Math.max(1, Math.min(12, Math.round(layout.rows)));
   const margin = 4;
-  const cellW = 1000 / cols;
-  const cellH = 1000 / gridRows;
+  const x0 = contentBounds?.xmin ?? 0;
+  const y0 = contentBounds?.ymin ?? 0;
+  const x1 = contentBounds?.xmax ?? 1000;
+  const y1 = contentBounds?.ymax ?? 1000;
+  const spanW = Math.max(1, x1 - x0);
+  const spanH = Math.max(1, y1 - y0);
+  const cellW = spanW / cols;
+  const cellH = spanH / gridRows;
   const boxes: BoundingBox[] = [];
   for (let index = 0; index < cellCount; index += 1) {
     const col = index % cols;
@@ -953,13 +1646,24 @@ export function buildLayoutSheetGridBoxes(
     boxes.push({
       id: `grid-${index}`,
       label: String(index + 1),
-      xmin: Math.max(0, Math.round(col * cellW + margin)),
-      ymin: Math.max(0, Math.round(rowIdx * cellH + margin)),
-      xmax: Math.min(1000, Math.round((col + 1) * cellW - margin)),
-      ymax: Math.min(1000, Math.round((rowIdx + 1) * cellH - margin)),
+      xmin: Math.max(0, Math.round(x0 + col * cellW + margin)),
+      ymin: Math.max(0, Math.round(y0 + rowIdx * cellH + margin)),
+      xmax: Math.min(1000, Math.round(x0 + (col + 1) * cellW - margin)),
+      ymax: Math.min(1000, Math.round(y0 + (rowIdx + 1) * cellH - margin)),
     });
   }
   return boxes;
+}
+
+/** 布局网格切分框按镜号顺序打 label，避免 1/2/3 与 001/002 匹配失败 */
+export function labelStoryboardLayoutGridBoxes(
+  boxes: BoundingBox[],
+  expectedShotNos: string[]
+): BoundingBox[] {
+  return boxes.map((box, index) => ({
+    ...box,
+    label: expectedShotNos[index]?.trim() || box.label,
+  }));
 }
 
 export function buildUniformSheetGridBoxes(cellCount: number): BoundingBox[] {
@@ -978,18 +1682,19 @@ async function splitStoryboardSheetByGridBoxes(
   dataUrl: string,
   rows: StoryboardTableRow[],
   boxes: BoundingBox[],
-  warnPrefix: string
+  warnPrefix: string,
+  opts?: { trimCrops?: boolean }
 ): Promise<StoryboardSheetVisionSplitResult> {
   if (!rows.length) return { matches: [], unmatchedLabels: [] };
 
-  const crops = await trimVisionSplitCrops(
-    await cropBoxes(
-      dataUrl,
-      boxes,
-      boxes.map((_, index) => index),
-      2
-    )
+  const rawCrops = await cropBoxes(
+    dataUrl,
+    boxes,
+    boxes.map((_, index) => index),
+    2
   );
+  const crops =
+    opts?.trimCrops === false ? rawCrops : await trimVisionSplitCrops(rawCrops);
 
   const matches: StoryboardSheetVisionMatch[] = [];
   const unmatchedLabels: string[] = [];

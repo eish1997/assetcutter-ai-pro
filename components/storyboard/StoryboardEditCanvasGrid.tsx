@@ -14,6 +14,7 @@ import StoryboardFrameRoleMarkChip from './StoryboardFrameRoleMarkChip';
 import WorkflowPixelBusyOverlay from '../WorkflowPixelBusyOverlay';
 import { storyboardCanvasTileDomId } from './storyboardTableDom';
 import { useStoryboardCanvasMarqueeSelect } from '../../hooks/useStoryboardCanvasMarqueeSelect';
+import { storyboardFrameImageDropAllowed } from '../../services/storyboardFrameDrag';
 import {
   STORYBOARD_EDIT_CANVAS_GRID,
   STORYBOARD_ROW_CANVAS_MULTI_SELECTED,
@@ -23,6 +24,7 @@ import {
   storyboardCollageProcessingBadgeClass,
   storyboardCollageProcessingDetail,
   storyboardCollageProcessingLabel,
+  storyboardCollageQueuedBadgeClass,
   type StoryboardCollageProcessingKind,
 } from './storyboardTableUi';
 
@@ -47,6 +49,7 @@ type Props = {
   selectedRowIds: ReadonlySet<string>;
   imageBusyRowId?: string | null;
   collageProcessingRowIds?: ReadonlySet<string>;
+  collageProcessingQueuedRowIds?: ReadonlySet<string>;
   collageProcessingKind?: StoryboardCollageProcessingKind | null;
   highlightedRowIds?: ReadonlySet<string> | null;
   previewRowImages?: Readonly<Record<string, string>> | null;
@@ -82,6 +85,7 @@ export default function StoryboardEditCanvasGrid({
   selectedRowIds,
   imageBusyRowId = null,
   collageProcessingRowIds,
+  collageProcessingQueuedRowIds,
   collageProcessingKind = null,
   highlightedRowIds = null,
   previewRowImages = null,
@@ -256,6 +260,10 @@ export default function StoryboardEditCanvasGrid({
           const busy = imageBusyRowId === row.id;
           const collageProcessing =
             collageProcessingKind != null && (collageProcessingRowIds?.has(row.id) ?? false);
+          const collageQueued =
+            collageProcessingKind != null &&
+            !collageProcessing &&
+            (collageProcessingQueuedRowIds?.has(row.id) ?? false);
           const hasFeedback = storyboardRowHasEditFeedback(row);
           const historyHighlight = highlightedRowIds?.has(row.id) ?? false;
           const roleMarks = row.frameRoleMarks ?? [];
@@ -317,6 +325,12 @@ export default function StoryboardEditCanvasGrid({
                     >
                       {storyboardCollageProcessingLabel(collageProcessingKind)}
                     </span>
+                  ) : collageQueued && collageProcessingKind ? (
+                    <span
+                      className={`inline-flex shrink-0 items-center rounded px-1 py-px text-[8px] font-semibold ring-1 ${storyboardCollageQueuedBadgeClass(collageProcessingKind)}`}
+                    >
+                      等待中
+                    </span>
                   ) : hasFeedback ? (
                     <StoryboardEditFeedbackMark row={row} label="反馈" />
                   ) : null}
@@ -335,13 +349,14 @@ export default function StoryboardEditCanvasGrid({
                 onContextMenu={(event) => openAddMenu(event, row)}
                 onDragOver={(event) => {
                   if (readOnly || !onAssignImagesFromDrop || rowPassed) return;
-                  if (event.dataTransfer.types.includes('Files')) {
-                    event.preventDefault();
-                    event.dataTransfer.dropEffect = 'copy';
-                  }
+                  if (!storyboardFrameImageDropAllowed(event.dataTransfer)) return;
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = 'copy';
                 }}
                 onDrop={(event) => {
                   if (readOnly || !onAssignImagesFromDrop || rowPassed) return;
+                  event.preventDefault();
+                  event.stopPropagation();
                   onAssignImagesFromDrop(row.id, event);
                 }}
               >
@@ -398,6 +413,10 @@ export default function StoryboardEditCanvasGrid({
                       backdropImageSrc={img || null}
                     />
                   </>
+                ) : collageQueued && collageProcessingKind ? (
+                  <div className="absolute inset-0 z-[8] flex items-center justify-center bg-black/45 text-[9px] font-medium text-gray-300">
+                    等待中
+                  </div>
                 ) : null}
                 {img && onPreviewRowFrame ? (
                   <button

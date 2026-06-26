@@ -141,10 +141,24 @@ export function useStoryboardVirtualList(
       const el = scrollRef.current;
       if (!el || index < 0 || index >= rowIds.length) return;
       const top = storyboardScrollOffsetForIndex(index, offsets);
-      el.scrollTo({ top, behavior });
+      const height = rowHeightAt(index);
+      const viewTop = el.scrollTop;
+      const viewBottom = viewTop + el.clientHeight;
+      const rowBottom = top + height;
+      let nextTop: number | null = null;
+      if (top < viewTop) {
+        nextTop = top;
+      } else if (rowBottom > viewBottom) {
+        nextTop = rowBottom - el.clientHeight;
+      }
+      if (nextTop == null) {
+        if (behavior === 'auto') readViewport();
+        return;
+      }
+      el.scrollTo({ top: Math.max(0, nextTop), behavior });
       if (behavior === 'auto') readViewport();
     },
-    [offsets, readViewport, rowIds.length]
+    [offsets, readViewport, rowHeightAt, rowIds.length]
   );
 
   const activeIndexFromScroll = useCallback(() => {

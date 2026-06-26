@@ -71,24 +71,44 @@ export const STORYBOARD_ROW_ACTIVE_HISTORY_HIGHLIGHT =
 export const STORYBOARD_ROW_CANVAS_MULTI_SELECTED =
   'border-teal-400/70 bg-teal-500/[0.07] ring-2 ring-teal-400/55 shadow-[0_0_0_1px_rgba(45,212,191,0.35)]';
 
-export type StoryboardCollageProcessingKind = 'feedback' | 'roleReplace';
+export type StoryboardCollageProcessingKind = 'feedback' | 'roleReplace' | 'sheetGen';
 
 export function storyboardCollageProcessingLabel(kind: StoryboardCollageProcessingKind): string {
-  return kind === 'feedback' ? '改图中…' : '替换中…';
+  if (kind === 'feedback') return '改图中…';
+  if (kind === 'roleReplace') return '替换中…';
+  return '生图中…';
 }
 
 export function storyboardCollageProcessingDetail(kind: StoryboardCollageProcessingKind): string {
-  return kind === 'feedback' ? '拼图改图中…' : '角色替换中…';
+  if (kind === 'feedback') return '拼图改图中…';
+  if (kind === 'roleReplace') return '角色替换中…';
+  return '分镜生图中…';
 }
 
 export function storyboardCollageProcessingStatusTone(kind: StoryboardCollageProcessingKind): string {
-  return kind === 'feedback' ? 'text-sky-300/85' : 'text-violet-300/85';
+  if (kind === 'feedback') return 'text-sky-300/85';
+  if (kind === 'roleReplace') return 'text-violet-300/85';
+  return 'text-emerald-300/85';
 }
 
 export function storyboardCollageProcessingBadgeClass(kind: StoryboardCollageProcessingKind): string {
-  return kind === 'feedback'
-    ? 'text-sky-200/95 ring-sky-400/40 bg-sky-500/15'
-    : 'text-violet-200/95 ring-violet-400/40 bg-violet-500/15';
+  if (kind === 'feedback') {
+    return 'text-sky-200/95 ring-sky-400/40 bg-sky-500/15';
+  }
+  if (kind === 'roleReplace') {
+    return 'text-violet-200/95 ring-violet-400/40 bg-violet-500/15';
+  }
+  return 'text-emerald-200/95 ring-emerald-400/40 bg-emerald-500/15';
+}
+
+export function storyboardCollageQueuedBadgeClass(kind: StoryboardCollageProcessingKind): string {
+  if (kind === 'feedback') {
+    return 'text-sky-200/80 ring-sky-400/25 bg-sky-500/10';
+  }
+  if (kind === 'roleReplace') {
+    return 'text-violet-200/80 ring-violet-400/25 bg-violet-500/10';
+  }
+  return 'text-emerald-200/80 ring-emerald-400/25 bg-emerald-500/10';
 }
 
 export const STORYBOARD_TOOL_BTN =

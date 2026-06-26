@@ -1,6 +1,8 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { StoryboardParseFieldDef, StoryboardTableRow } from '../../types';
 import type { UseStoryboardVirtualListResult } from '../../hooks/useStoryboardVirtualList';
+import { readLocalJson, writeLocalJson } from '../../services/clientPersist';
+import type { StoryboardGeneratedAssetItem } from '../../services/storyboardGeneratedAssets';
 import {
   storyboardRowHasFrameRef,
   resolveStoryboardRowFrameDisplaySrc,
@@ -24,6 +26,7 @@ import {
 import StoryboardEditFeedbackMark from './StoryboardEditFeedbackMark';
 import WorkflowPixelBusyOverlay from '../WorkflowPixelBusyOverlay';
 import StoryboardOutlineContextMenu from './StoryboardOutlineContextMenu';
+import StoryboardOutlineGenHistoryGrid from './StoryboardOutlineGenHistoryGrid';
 import type { StoryboardCanvasSelectModifiers } from './StoryboardEditCanvasGrid';
 import {
   STORYBOARD_COLUMN_HEAD,
@@ -34,16 +37,32 @@ import {
   STORYBOARD_ROW_CANVAS_MULTI_SELECTED,
   STORYBOARD_SIDE_DOCK,
   STORYBOARD_SIDE_RAIL,
+  STORYBOARD_VIEW_TOGGLE,
+  STORYBOARD_VIEW_TOGGLE_ACTIVE,
+  STORYBOARD_VIEW_TOGGLE_BTN,
+  STORYBOARD_VIEW_TOGGLE_IDLE,
   storyboardCollageProcessingBadgeClass,
   storyboardCollageProcessingDetail,
   storyboardCollageProcessingLabel,
+  storyboardCollageQueuedBadgeClass,
   type StoryboardCollageProcessingKind,
 } from './storyboardTableUi';
 
 const OUTLINE_DRAG_MIME = 'application/x-ac-storyboard-outline-row';
 
+export type StoryboardOutlineSidePanel = 'outline' | 'genHistory';
+
+function outlineSidePanelStorageKey(assetId: string): string {
+  return `ac_storyboard_outline_side_panel_v1:${assetId}`;
+}
+
 type Props = {
+  assetId: string;
   rows: StoryboardTableRow[];
+  generatedImageAssets?: StoryboardGeneratedAssetItem[];
+  onPreviewGeneratedImage?: (src: string) => void;
+  onGenHistoryPanelVisible?: () => void;
+  onGeneratedImageHistoryLoadError?: () => void;
   fieldCatalog?: StoryboardParseFieldDef[];
   activeRowId: string | null;
   selectedRowIds?: ReadonlySet<string>;
@@ -57,6 +76,7 @@ type Props = {
   filterPill?: StoryboardEditCanvasFilterPill;
   outlineFlashRowId?: string | null;
   collageProcessingRowIds?: ReadonlySet<string>;
+  collageProcessingQueuedRowIds?: ReadonlySet<string>;
   collageProcessingKind?: StoryboardCollageProcessingKind | null;
 };
 
@@ -80,6 +100,7 @@ function OutlineRowButton({
   filterAccentClass = '',
   flash = false,
   collageProcessing = false,
+  collageQueued = false,
   collageProcessingKind = null,
 }: {
   row: StoryboardTableRow;
@@ -101,6 +122,7 @@ function OutlineRowButton({
   filterAccentClass?: string;
   flash?: boolean;
   collageProcessing?: boolean;
+  collageQueued?: boolean;
   collageProcessingKind?: StoryboardCollageProcessingKind | null;
 }) {
   const dragStartedRef = useRef(false);
@@ -215,6 +237,10 @@ function OutlineRowButton({
               progressDetail={storyboardCollageProcessingDetail(collageProcessingKind)}
               className="rounded-md"
             />
+          ) : collageQueued && collageProcessingKind ? (
+            <div className="absolute inset-0 flex items-center justify-center rounded-md bg-black/50 text-[7px] font-medium text-gray-300">
+              等待
+            </div>
           ) : null}
         </span>
         <span className="min-w-0 flex-1 leading-tight">
@@ -228,6 +254,12 @@ function OutlineRowButton({
                 className={`shrink-0 rounded px-1 py-px text-[7px] font-semibold ring-1 ${storyboardCollageProcessingBadgeClass(collageProcessingKind)}`}
               >
                 {storyboardCollageProcessingLabel(collageProcessingKind)}
+              </span>
+            ) : collageQueued && collageProcessingKind ? (
+              <span
+                className={`shrink-0 rounded px-1 py-px text-[7px] font-semibold ring-1 ${storyboardCollageQueuedBadgeClass(collageProcessingKind)}`}
+              >
+                等待中
               </span>
             ) : (
               <StoryboardEditFeedbackMark row={row} />
@@ -247,7 +279,12 @@ function OutlineRowButton({
 }
 
 export default function StoryboardTableOutlineSidebar({
+  assetId,
   rows,
+  generatedImageAssets = [],
+  onPreviewGeneratedImage,
+  onGenHistoryPanelVisible,
+  onGeneratedImageHistoryLoadError,
   fieldCatalog = [],
   activeRowId,
   selectedRowIds,
@@ -261,8 +298,24 @@ export default function StoryboardTableOutlineSidebar({
   filterPill = 'all',
   outlineFlashRowId = null,
   collageProcessingRowIds,
+  collageProcessingQueuedRowIds,
   collageProcessingKind = null,
 }: Props) {
+  const [sidePanel, setSidePanel] = useState<StoryboardOutlineSidePanel>(() =>
+    readLocalJson(outlineSidePanelStorageKey(assetId), 'outline', (value) =>
+      value === 'outline' || value === 'genHistory' ? value : null
+    )
+  );
+
+  useEffect(() => {
+    writeLocalJson(outlineSidePanelStorageKey(assetId), sidePanel);
+  }, [assetId, sidePanel]);
+
+  useEffect(() => {
+    if (sidePanel !== 'genHistory') return;
+    onGenHistoryPanelVisible?.();
+  }, [onGenHistoryPanelVisible, sidePanel]);
+
   const virtualize = virtualList?.virtualize ?? false;
   const range = virtualList?.range;
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
@@ -374,6 +427,10 @@ export default function StoryboardTableOutlineSidebar({
       flash: outlineFlashRowId === row.id,
       collageProcessing:
         collageProcessingKind != null && (collageProcessingRowIds?.has(row.id) ?? false),
+      collageQueued:
+        collageProcessingKind != null &&
+        !(collageProcessingRowIds?.has(row.id) ?? false) &&
+        (collageProcessingQueuedRowIds?.has(row.id) ?? false),
       collageProcessingKind,
     };
   };
@@ -408,27 +465,76 @@ export default function StoryboardTableOutlineSidebar({
     <>
       <aside className={`${STORYBOARD_SIDE_RAIL} w-full min-w-0`}>
       <div className={`${STORYBOARD_SIDE_DOCK} flex h-full min-h-0 flex-col`}>
-        <div className="shrink-0 border-b border-white/[0.06] px-2 py-1">
+        <div className="shrink-0 space-y-1.5 border-b border-white/[0.06] px-2 py-1">
+          <div className={STORYBOARD_VIEW_TOGGLE} role="group" aria-label="大纲侧栏视图">
+            <button
+              type="button"
+              className={`${STORYBOARD_VIEW_TOGGLE_BTN} ${
+                sidePanel === 'outline' ? STORYBOARD_VIEW_TOGGLE_ACTIVE : STORYBOARD_VIEW_TOGGLE_IDLE
+              }`}
+              aria-pressed={sidePanel === 'outline'}
+              onClick={() => setSidePanel('outline')}
+            >
+              镜头
+            </button>
+            <button
+              type="button"
+              className={`${STORYBOARD_VIEW_TOGGLE_BTN} ${
+                sidePanel === 'genHistory' ? STORYBOARD_VIEW_TOGGLE_ACTIVE : STORYBOARD_VIEW_TOGGLE_IDLE
+              }`}
+              aria-pressed={sidePanel === 'genHistory'}
+              onClick={() => setSidePanel('genHistory')}
+            >
+              生图历史
+              {generatedImageAssets.length > 0 ? (
+                <span className="ml-1 tabular-nums text-gray-500">{generatedImageAssets.length}</span>
+              ) : null}
+            </button>
+          </div>
           <p className={`${STORYBOARD_COLUMN_HEAD} !mb-0 text-[9px]`}>
-            大纲 <span className="font-normal text-gray-600">· {rows.length}</span>
+            {sidePanel === 'outline' ? (
+              <>
+                大纲 <span className="font-normal text-gray-600">· {rows.length}</span>
+              </>
+            ) : (
+              <>
+                生图历史{' '}
+                <span className="font-normal text-gray-600">· {generatedImageAssets.length}</span>
+              </>
+            )}
           </p>
+          {sidePanel === 'genHistory' ? (
+            <p className="text-[8px] leading-snug text-gray-600">拖到分镜图/角色参考等图片输入区</p>
+          ) : null}
         </div>
         <nav
           ref={virtualList?.scrollRef}
-          onScroll={virtualize ? virtualList?.handleScroll : undefined}
+          onScroll={sidePanel === 'outline' && virtualize ? virtualList?.handleScroll : undefined}
           onDragOver={(event) => {
-            if (readOnly || dragFromRef.current == null) return;
+            if (sidePanel !== 'outline' || readOnly || dragFromRef.current == null) return;
             event.preventDefault();
             event.dataTransfer.dropEffect = 'move';
           }}
           onDrop={(event) => {
+            if (sidePanel !== 'outline') return;
             event.preventDefault();
             handleDrop();
           }}
           className={`${STORYBOARD_BODY_SCROLL} p-0.5`}
-          aria-label="分镜大纲"
+          aria-label={sidePanel === 'outline' ? '分镜大纲' : '生图历史'}
         >
-          {listBody}
+          <div className={sidePanel === 'genHistory' ? '' : 'hidden'}>
+            <StoryboardOutlineGenHistoryGrid
+              assets={generatedImageAssets}
+              onPreview={
+                onPreviewGeneratedImage
+                  ? (src, label) => onPreviewGeneratedImage(src)
+                  : undefined
+              }
+              onImageLoadError={onGeneratedImageHistoryLoadError}
+            />
+          </div>
+          <div className={sidePanel === 'outline' ? '' : 'hidden'}>{listBody}</div>
         </nav>
       </div>
     </aside>

@@ -147,6 +147,8 @@ export {
   dialogGenerateImageMulti,
   generateArenaABPrompts,
   describeImageSubject,
+  analyzeStoryboardSheetStructureInImage,
+  buildStoryboardSheetStructureAnalysisPrompt,
   withGeminiRequestControl,
 } from "./geminiService";
 

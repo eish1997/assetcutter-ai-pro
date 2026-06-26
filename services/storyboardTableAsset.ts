@@ -14,6 +14,10 @@ import {
 } from './storyboardTableParse';
 import { normalizeStoryboardFrameHistory } from './storyboardFrameHistory';
 import {
+  backfillStoryboardGeneratedImageHistory,
+  normalizeStoryboardGeneratedImageHistory,
+} from './storyboardGeneratedAssets';
+import {
   clampStoryboardRowTimelineLayer,
   resolveStoryboardTimelineLayerCount,
 } from './storyboardVideoTimeline';
@@ -236,6 +240,10 @@ export function normalizeStoryboardTableDoc(raw: unknown): StoryboardTableDoc {
   const roleAssets = normalizeStoryboardRoleAssets(doc.roleAssets);
   const sceneAssets = normalizeStoryboardSceneAssets(doc.sceneAssets);
   const standardized = mergeStoryboardCatalogToStandardFieldLabels(fieldCatalog, rows);
+  const generatedImageHistory = backfillStoryboardGeneratedImageHistory(
+    normalizeStoryboardGeneratedImageHistory(doc.generatedImageHistory),
+    rows
+  );
   return {
     ...(title !== undefined ? { title } : {}),
     timelineLayerCount: layerCount,
@@ -244,6 +252,7 @@ export function normalizeStoryboardTableDoc(raw: unknown): StoryboardTableDoc {
     ...(optimizePresetId ? { optimizePresetId } : {}),
     ...(roleAssets.length ? { roleAssets } : {}),
     ...(sceneAssets.length ? { sceneAssets } : {}),
+    ...(generatedImageHistory.length ? { generatedImageHistory } : {}),
     rows: standardized.rows,
   };
 }

@@ -395,6 +395,105 @@ export async function detectAutoGrid(src: string, config: AutoCutConfig = {}): P
   return boxesFromLines(verticalLines, horizontalLines, scale);
 }
 
+/** 已知列行时，将均匀分割线吸附到检测到的格线（忽略顶栏多余细线） */
+export function snapGridBoundariesToDetectedLines(
+  segments: number,
+  detectedLinesNorm: number[]
+): number[] {
+  if (segments < 1) return [0, 1000];
+  const step = 1000 / segments;
+  const tol = Math.max(12, step * 0.08);
+  const internals = detectedLinesNorm.filter((v) => v > 4 && v < 996);
+  const boundaries = [0];
+  for (let i = 1; i < segments; i += 1) {
+    const ideal = step * i;
+    const nearby = internals.filter((line) => Math.abs(line - ideal) <= tol);
+    if (nearby.length) {
+      boundaries.push(
+        Math.round(nearby.reduce((best, line) =>
+          Math.abs(line - ideal) < Math.abs(best - ideal) ? line : best
+        ))
+      );
+    } else {
+      boundaries.push(Math.round(ideal));
+    }
+  }
+  boundaries.push(1000);
+  return boundaries;
+}
+
+/** 按已知列行，从检测到的分割线生成切分框（比均匀网格更贴格线） */
+function pickGridBoundariesNorm(detectedLinesNorm: number[], segments: number): number[] {
+  return snapGridBoundariesToDetectedLines(segments, detectedLinesNorm);
+}
+
+export async function detectStoryboardGridBoxesForLayout(
+  src: string,
+  layout: { cols: number; rows: number },
+  cellCount: number
+): Promise<BoundingBox[]> {
+  const cols = Math.max(1, Math.min(12, Math.round(layout.cols)));
+  const rows = Math.max(1, Math.min(12, Math.round(layout.rows)));
+  const count = Math.max(1, Math.min(cellCount, cols * rows));
+  const img = await loadImage(src);
+  const canvas = document.createElement('canvas');
+  canvas.width = img.naturalWidth;
+  canvas.height = img.naturalHeight;
+  const ctx = canvas.getContext('2d')!;
+  ctx.drawImage(img, 0, 0);
+  const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+  const scale = 1000 / canvas.width;
+
+  const { verticalLines: v1, horizontalLines: h1 } = detectGapByColorJump(
+    pixels,
+    canvas.width,
+    canvas.height,
+    {}
+  );
+  const { verticalLines: v2, horizontalLines: h2 } = detectLinesByEdgeDetection(
+    pixels,
+    canvas.width,
+    canvas.height
+  );
+  const mergeLines = (lines: number[], tolerance: number): number[] => {
+    if (lines.length === 0) return [];
+    const sorted = [...lines].sort((a, b) => a - b);
+    const merged: number[] = [sorted[0]!];
+    for (let i = 1; i < sorted.length; i += 1) {
+      if (sorted[i]! - merged[merged.length - 1]! > tolerance) merged.push(sorted[i]!);
+    }
+    return merged;
+  };
+  const tolerance = canvas.width * 0.01;
+  const v2Px = v2.map((line) => (line / 1000) * canvas.width);
+  const h2Px = h2.map((line) => (line / 1000) * canvas.height);
+  const verticalPx = mergeLines([...v1, ...v2Px], tolerance);
+  const horizontalPx = mergeLines([...h1, ...h2Px], tolerance);
+  const vNorm = verticalPx.map((line) => Math.round(line * scale));
+  const hNorm = horizontalPx.map((line) => Math.round((line / canvas.height) * 1000));
+
+  const vBoundaries = pickGridBoundariesNorm(vNorm, cols);
+  const hBoundaries = pickGridBoundariesNorm(hNorm, rows);
+  const margin = 3;
+  const boxes: BoundingBox[] = [];
+  let index = 0;
+  for (let r = 0; r < rows; r += 1) {
+    for (let c = 0; c < cols; c += 1) {
+      if (index >= count) break;
+      boxes.push({
+        id: `line-grid-${index}`,
+        label: String(index + 1),
+        xmin: Math.max(0, vBoundaries[c]! + margin),
+        ymin: Math.max(0, hBoundaries[r]! + margin),
+        xmax: Math.min(1000, vBoundaries[c + 1]! - margin),
+        ymax: Math.min(1000, hBoundaries[r + 1]! - margin),
+      });
+      index += 1;
+    }
+  }
+  return boxes;
+}
+
 /**
  * 检测宫格 - 根据配置选择方法
  */

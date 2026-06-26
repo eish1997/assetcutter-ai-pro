@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import type { StoryboardRoleAsset, StoryboardTableRow } from '../../types';
+import type { StoryboardGeneratedAssetItem } from '../../services/storyboardGeneratedAssets';
 import { readLocalJson, writeLocalJson } from '../../services/clientPersist';
 import {
   STORYBOARD_EDIT_CANVAS_FILTER_KEY,
@@ -13,6 +14,7 @@ import {
   STORYBOARD_OUTLINE_ROW_ESTIMATE_PX,
 } from '../../services/storyboardVirtualScroll';
 import { normalizeFeedbackCollageLimit } from '../../services/storyboardFeedbackSheetRedraw';
+import { rowHasSheetGenPrompt } from '../../services/storyboardTableSheetGen';
 import { useStoryboardVirtualList } from '../../hooks/useStoryboardVirtualList';
 import StoryboardConnectedRowEditor from './StoryboardConnectedRowEditor';
 import StoryboardEditCanvasGrid, {
@@ -55,12 +57,21 @@ export type StoryboardTableEditViewHandle = {
 };
 
 type Props = {
+  assetId: string;
   rows: StoryboardTableRow[];
+  generatedImageAssets?: StoryboardGeneratedAssetItem[];
+  onPreviewGeneratedImage?: (src: string) => void;
+  onGenHistoryPanelVisible?: () => void;
+  onGeneratedImageHistoryLoadError?: () => void;
   roleAssets?: StoryboardRoleAsset[];
   activeRowId: string | null;
   imageBusyRowId: string | null;
   redrawBusyRowId: string | null;
-  collageProcessing?: { kind: StoryboardCollageProcessingKind; rowIds: string[] } | null;
+  collageProcessing?: {
+    kind: StoryboardCollageProcessingKind;
+    rowIds: string[];
+    queuedRowIds?: string[];
+  } | null;
   feedbackBatchBusy?: boolean;
   feedbackBatchProgress?: { done: number; total: number } | null;
   feedbackRedrawEligibleCount?: number;
@@ -100,6 +111,9 @@ type Props = {
   roleReplaceBatchBusy?: boolean;
   roleReplaceBatchProgress?: { done: number; total: number } | null;
   onRoleReplaceBatch?: () => void;
+  selectedSheetGenBatchBusy?: boolean;
+  selectedSheetGenBatchProgress?: { done: number; total: number } | null;
+  onSelectedSheetGen?: (rowIds: string[]) => void;
   readOnly?: boolean;
   redrawRowDisabledReason: (row: StoryboardTableRow) => string | undefined;
   footerAddRow?: React.ReactNode;
@@ -107,7 +121,12 @@ type Props = {
 };
 
 export default function StoryboardTableEditView({
+  assetId,
   rows,
+  generatedImageAssets = [],
+  onPreviewGeneratedImage,
+  onGenHistoryPanelVisible,
+  onGeneratedImageHistoryLoadError,
   roleAssets = [],
   activeRowId,
   imageBusyRowId,
@@ -141,6 +160,9 @@ export default function StoryboardTableEditView({
   roleReplaceBatchBusy = false,
   roleReplaceBatchProgress = null,
   onRoleReplaceBatch,
+  selectedSheetGenBatchBusy = false,
+  selectedSheetGenBatchProgress = null,
+  onSelectedSheetGen,
   readOnly = false,
   redrawRowDisabledReason,
   footerAddRow,
@@ -410,6 +432,32 @@ export default function StoryboardTableEditView({
     [canvasSelectedRowIds]
   );
 
+  const selectedSheetGenEligibleCount = useMemo(() => {
+    if (!canvasSelectedRowIds.size) return 0;
+    return rows.filter(
+      (row) =>
+        canvasSelectedRowIds.has(row.id) &&
+        !row.locked &&
+        rowHasSheetGenPrompt(row, interaction.fieldCatalog)
+    ).length;
+  }, [canvasSelectedRowIds, interaction.fieldCatalog, rows]);
+
+  const collageBatchBusy =
+    feedbackBatchBusy || roleReplaceBatchBusy || selectedSheetGenBatchBusy;
+
+  const canvasInteraction = useMemo(() => {
+    if (readOnly || interaction.readOnly) return interaction;
+    return {
+      ...interaction,
+      assignFrameImageFromDrop: (rowId: string, e: React.DragEvent) => {
+        const selectedRowIds = canvasSelectedRowIds.has(rowId)
+          ? rows.filter((row) => canvasSelectedRowIds.has(row.id)).map((row) => row.id)
+          : undefined;
+        interaction.assignFrameImageFromDrop(rowId, e, selectedRowIds);
+      },
+    };
+  }, [canvasSelectedRowIds, interaction, readOnly, rows]);
+
   const batchLock = useCallback(
     (locked: boolean) => {
       if (!selectedRowIdList.length || !onPatchRows) return;
@@ -481,14 +529,6 @@ export default function StoryboardTableEditView({
     [filterMatchedRowIds, flashOutlineRow, outlineVirtual, rows]
   );
 
-  const handleOutlineSelectWithScroll = useCallback(
-    (rowId: string, modifiers?: StoryboardCanvasSelectModifiers) => {
-      handleOutlineSelect(rowId, modifiers);
-      scrollToRow(rowId, 'smooth');
-    },
-    [handleOutlineSelect, scrollToRow]
-  );
-
   useImperativeHandle(editScrollRef, () => ({ scrollToRow }), [scrollToRow]);
 
   useEffect(() => {
@@ -501,6 +541,10 @@ export default function StoryboardTableEditView({
     () => new Set(collageProcessing?.rowIds ?? []),
     [collageProcessing]
   );
+  const collageProcessingQueuedRowIds = useMemo(
+    () => new Set(collageProcessing?.queuedRowIds ?? []),
+    [collageProcessing]
+  );
   const collageProcessingKind = collageProcessing?.kind ?? null;
 
   const canvasStatLabel =
@@ -508,7 +552,9 @@ export default function StoryboardTableEditView({
       ? `共 ${rows.length} 镜`
       : `命中 ${filterMatchCount} / ${rows.length} 镜`;
 
-  const showCanvasBatchTools = Boolean(onFeedbackBatchRedraw || onRoleReplaceBatch);
+  const showCanvasBatchTools = Boolean(
+    onFeedbackBatchRedraw || onRoleReplaceBatch || onSelectedSheetGen
+  );
 
   const redrawReason = activeRow ? redrawRowDisabledReason(activeRow) : undefined;
   const redrawDisabled =
@@ -516,18 +562,24 @@ export default function StoryboardTableEditView({
     Boolean(redrawReason) ||
     redrawBusyRowId != null ||
     feedbackBatchBusy ||
-    roleReplaceBatchBusy;
+    roleReplaceBatchBusy ||
+    selectedSheetGenBatchBusy;
 
   return (
-    <StoryboardRowInteractionProvider value={interaction}>
+    <StoryboardRowInteractionProvider value={canvasInteraction}>
       <div className={`${STORYBOARD_GRID_ROOT} ${STORYBOARD_PAD_PANEL} overflow-x-auto pt-1`}>
         <StoryboardTableOutlineSidebar
+          assetId={assetId}
           rows={rows}
+          generatedImageAssets={generatedImageAssets}
+          onPreviewGeneratedImage={onPreviewGeneratedImage}
+          onGenHistoryPanelVisible={onGenHistoryPanelVisible}
+          onGeneratedImageHistoryLoadError={onGeneratedImageHistoryLoadError}
           fieldCatalog={interaction.fieldCatalog}
           activeRowId={activeRowId}
           selectedRowIds={canvasSelectedRowIds}
           readOnly={readOnly || interaction.readOnly}
-          onSelect={handleOutlineSelectWithScroll}
+          onSelect={handleOutlineSelect}
           onReorder={onReorderRows}
           onInsertShotBefore={onInsertShotBefore}
           onInsertShotAfter={onInsertShotAfter}
@@ -536,6 +588,7 @@ export default function StoryboardTableEditView({
           filterPill={canvasFilterPill}
           outlineFlashRowId={outlineFlashRowId}
           collageProcessingRowIds={collageProcessingRowIds}
+          collageProcessingQueuedRowIds={collageProcessingQueuedRowIds}
           collageProcessingKind={collageProcessingKind}
         />
 
@@ -569,14 +622,27 @@ export default function StoryboardTableEditView({
                 <p
                   className={`mt-2 rounded-lg border border-white/[0.06] bg-white/[0.03] px-2 py-1 text-[9px] leading-snug ${storyboardCollageProcessingStatusTone(collageProcessingKind)}`}
                 >
-                  {collageProcessingKind === 'feedback' ? '拼图改图' : '角色替换'}进行中 · 正在修改{' '}
-                  {collageProcessingRowIds.size} 镜
+                  {collageProcessingKind === 'feedback'
+                    ? '拼图改图'
+                    : collageProcessingKind === 'roleReplace'
+                      ? '角色替换'
+                      : '分镜生图'}
+                  进行中 · 正在修改 {collageProcessingRowIds.size} 镜
                   {feedbackBatchProgress && collageProcessingKind === 'feedback'
                     ? `（${feedbackBatchProgress.done}/${feedbackBatchProgress.total} 批）`
                     : null}
                   {roleReplaceBatchProgress && collageProcessingKind === 'roleReplace'
                     ? `（${roleReplaceBatchProgress.done}/${roleReplaceBatchProgress.total} 批）`
                     : null}
+                  {selectedSheetGenBatchProgress && collageProcessingKind === 'sheetGen'
+                    ? `（${selectedSheetGenBatchProgress.done}/${selectedSheetGenBatchProgress.total} 批）`
+                    : null}
+                </p>
+              ) : null}
+
+              {collageProcessingKind && collageProcessingQueuedRowIds.size > 0 ? (
+                <p className="mt-2 rounded-lg border border-white/[0.06] bg-white/[0.02] px-2 py-1 text-[9px] leading-snug text-gray-400">
+                  等待中 · {collageProcessingQueuedRowIds.size} 镜排队
                 </p>
               ) : null}
 
@@ -601,7 +667,7 @@ export default function StoryboardTableEditView({
                         <CustomDropdown
                           value={String(normalizeFeedbackCollageLimit(feedbackCollageLimit))}
                           options={collageLimitOptions}
-                          disabled={roleReplaceBatchBusy || feedbackBatchBusy}
+                          disabled={collageBatchBusy}
                           onChange={(value) => onFeedbackCollageLimitChange?.(Number(value))}
                           triggerClassName="!h-[1.625rem] !min-w-[5rem] !rounded-md !border-0 !bg-transparent !px-2 !text-[10px] !shadow-none !ring-0 hover:!bg-white/[0.06]"
                           triggerAriaLabel="每批拼图镜头上限"
@@ -618,7 +684,7 @@ export default function StoryboardTableEditView({
                             type="checkbox"
                             checked={feedbackRedrawUnderstand}
                             onChange={() => onToggleFeedbackRedrawUnderstand?.()}
-                            disabled={roleReplaceBatchBusy || feedbackBatchBusy}
+                            disabled={collageBatchBusy}
                             className="h-3.5 w-3.5 rounded border-white/20 bg-white/5 text-white/80"
                           />
                           理解
@@ -629,8 +695,7 @@ export default function StoryboardTableEditView({
                           type="button"
                           title={`拼图改图：每 ${feedbackCollageLimit} 镜拼一张，按修改反馈改图并切分回填${feedbackBatchTitleSuffix}`}
                           disabled={
-                            feedbackBatchBusy ||
-                            roleReplaceBatchBusy ||
+                            collageBatchBusy ||
                             feedbackRedrawEligibleCount <= 0 ||
                             redrawBusyRowId != null
                           }
@@ -649,8 +714,7 @@ export default function StoryboardTableEditView({
                           type="button"
                           title={`拼图替换：每 ${feedbackCollageLimit} 镜拼一张，参考图 1=拼图 2+=角色资产，改完后切分回填${roleReplaceBatchTitleSuffix}`}
                           disabled={
-                            roleReplaceBatchBusy ||
-                            feedbackBatchBusy ||
+                            collageBatchBusy ||
                             roleReplaceEligibleCount <= 0 ||
                             redrawBusyRowId != null
                           }
@@ -664,6 +728,30 @@ export default function StoryboardTableEditView({
                             : `替换角色${roleReplaceEligibleCount > 0 ? ` (${roleReplaceEligibleCount})` : ''}`}
                         </button>
                       ) : null}
+                      {onSelectedSheetGen ? (
+                        <button
+                          type="button"
+                          title={`生成分镜图：按所选镜头原文拼图文生图，每 ${feedbackCollageLimit} 镜一批，生成后切分回填`}
+                          disabled={
+                            collageBatchBusy ||
+                            canvasSelectedRowIds.size <= 0 ||
+                            selectedSheetGenEligibleCount <= 0 ||
+                            redrawBusyRowId != null
+                          }
+                          onClick={() => onSelectedSheetGen(selectedRowIdList)}
+                          className={`${STORYBOARD_TOOL_BTN_PRIMARY} shrink-0 !h-7 !px-2.5 ${
+                            selectedSheetGenBatchBusy ? 'opacity-80' : ''
+                          }`}
+                        >
+                          {selectedSheetGenBatchBusy && selectedSheetGenBatchProgress
+                            ? `生图中 ${selectedSheetGenBatchProgress.done}/${selectedSheetGenBatchProgress.total}`
+                            : `生成分镜图${
+                                selectedSheetGenEligibleCount > 0
+                                  ? ` (${selectedSheetGenEligibleCount})`
+                                  : ''
+                              }`}
+                        </button>
+                      ) : null}
                     </div>
                 ) : null}
               </div>
@@ -675,6 +763,7 @@ export default function StoryboardTableEditView({
                 selectedRowIds={canvasSelectedRowIds}
                 imageBusyRowId={imageBusyRowId}
                 collageProcessingRowIds={collageProcessingRowIds}
+                collageProcessingQueuedRowIds={collageProcessingQueuedRowIds}
                 collageProcessingKind={collageProcessingKind}
                 highlightedRowIds={highlightedRowIds}
                 previewRowImages={previewRowImages}
@@ -699,9 +788,9 @@ export default function StoryboardTableEditView({
                 filterFlashRowId={outlineFlashRowId}
                 roleReplaceEligibleRowIds={roleReplaceEligibleRowIds}
                 onAssignImagesFromDrop={
-                  readOnly || interaction.readOnly
+                  readOnly || canvasInteraction.readOnly
                     ? undefined
-                    : interaction.assignFrameImageFromDrop
+                    : canvasInteraction.assignFrameImageFromDrop
                 }
               />
               {footerAddRow ? <div className="mt-2">{footerAddRow}</div> : null}
@@ -717,7 +806,7 @@ export default function StoryboardTableEditView({
                     type="button"
                     title="清除全表所有镜头的修改反馈"
                     disabled={
-                      feedbackBatchBusy || roleReplaceBatchBusy || redrawBusyRowId != null
+                      collageBatchBusy || redrawBusyRowId != null
                     }
                     onClick={onClearAllFeedback}
                     className={`${STORYBOARD_TOOL_BTN_NEUTRAL} shrink-0 !px-2.5`}

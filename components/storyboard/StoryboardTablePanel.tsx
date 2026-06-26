@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { BoundingBox, CustomAppModule, StoryboardParseFieldDef, StoryboardRoleAsset, StoryboardSceneAsset, StoryboardTableRow, WorkflowAsset } from '../../types';
+import type { BoundingBox, CustomAppModule, StoryboardGeneratedImageRecord, StoryboardParseFieldDef, StoryboardRoleAsset, StoryboardSceneAsset, StoryboardTableRow, WorkflowAsset } from '../../types';
 import {
   applyAutoShotNumbers,
   applySequentialShotNumbers,
   computeStoryboardTableStats,
   normalizeStoryboardTableDoc,
+  normalizeStoryboardTableOnAsset,
   readStoryboardTableTitleRaw,
   reindexStoryboardRows,
   resolveStoryboardTableTitle,
@@ -76,6 +77,8 @@ import {
   executeStoryboardSheetGenBatch,
   planStoryboardSheetGenTasks,
   probeStoryboardSheetGenCompanionReady,
+  resolveStoryboardSheetGridDimensions,
+  rowHasSheetGenPrompt,
   storyboardSheetGenCompanionProbeMessage,
   StoryboardSheetGenBatchController,
   type StoryboardSheetGenBatchRequest,
@@ -83,10 +86,13 @@ import {
 import {
   clampStoryboardSheetSplitBox,
   detectStoryboardSheetPanels,
+  estimateStoryboardSheetPanelCountFromImage,
   isCollapsedStoryboardSheetVisionDetect,
   isUsableStoryboardSheetSplitDraftBoxes,
+  refineStoryboardSheetDetectBoxesToIllustration,
   splitStoryboardSheetByVision,
   splitStoryboardSheetFromBoxes,
+  type StoryboardSheetLayoutGrid,
   type StoryboardSheetVisionSplitResult,
 } from '../../services/storyboardSheetVisionSplit';
 import {
@@ -121,6 +127,15 @@ import {
   activateSheetPreviewHistoryVersion,
   replaceSheetPreviewActiveImage,
 } from '../../services/storyboardSheetPreviewHistory';
+import {
+  clearStoryboardCollageBatchSession,
+  getStoryboardCollageBatchSession,
+  isStoryboardCollageBatchSessionBusy,
+  patchStoryboardCollageBatchSession,
+  queuedStoryboardCollageRowIdsFromTasks,
+  subscribeStoryboardCollageBatchSession,
+  type StoryboardCollageBatchSessionState,
+} from '../../services/storyboardCollageBatchSession';
 import {
   clearStoryboardSheetGenSessionBusy,
   findStoryboardSheetGenSessionPreview,
@@ -174,9 +189,32 @@ import {
   readStoryboardFrameFromFile,
 } from './storyboardFrameImage';
 import {
+  buildStoryboardFrameDropSplitFallbackBoxes,
   collectStoryboardFrameImageFiles,
+  normalizeStoryboardFrameDropSplitBoxes,
+  planStoryboardFrameDropSplitScope,
+  planStoryboardFrameImportAssignmentForTargetRow,
   planStoryboardFrameImportAssignments,
+  resolveStoryboardFrameDropSplitTaskRows,
+  shouldStoryboardFrameDropUseSheetSplit,
 } from '../../services/storyboardTableFrameImport';
+import { collectStoryboardFrameImageInputForDrop } from '../../services/storyboardFrameDrag';
+import {
+  appendStoryboardGeneratedImageHistoryBatch,
+  backfillStoryboardGeneratedImageHistory,
+  collectStoryboardGeneratedImageRecordsFromPatches,
+  listStoryboardGeneratedImageAssets,
+  normalizeStoryboardGeneratedImageHistory,
+} from '../../services/storyboardGeneratedAssets';
+import {
+  applyStoryboardFrameHistoryCompanionHydrateResults,
+  applyStoryboardGeneratedImageHistoryCompanionHydrateResults,
+  hydrateStoryboardFrameHistoryCompanionTasks,
+  hydrateStoryboardGeneratedImageHistoryCompanionTasks,
+  listStoryboardFrameHistoryCompanionHydrateTasks,
+  listStoryboardGeneratedImageHistoryCompanionHydrateTasks,
+  revokeStoryboardFrameCompanionHydrateUrls,
+} from '../../services/storyboardFrameCompanion';
 import {
   clearStoryboardRowFrameWithHistory,
   replaceStoryboardRowFrame,
@@ -279,6 +317,73 @@ export default function StoryboardTablePanel({
 }: Props) {
   const table = useMemo(() => normalizeStoryboardTableDoc(asset.storyboardTable), [asset.storyboardTable]);
   const stats = useMemo(() => computeStoryboardTableStats(table), [table]);
+  const generatedImageAssets = useMemo(
+    () =>
+      listStoryboardGeneratedImageAssets(
+        table.rows,
+        table.generatedImageHistory
+      ),
+    [table.generatedImageHistory, table.rows]
+  );
+  const [genHistoryHydrateSeq, setGenHistoryHydrateSeq] = useState(0);
+  const genHistoryHydrateDebounceRef = useRef(0);
+  const requestGeneratedImageHistoryHydrate = useCallback(() => {
+    const now = Date.now();
+    if (now - genHistoryHydrateDebounceRef.current < 800) return;
+    genHistoryHydrateDebounceRef.current = now;
+    setGenHistoryHydrateSeq((seq) => seq + 1);
+  }, []);
+
+  useEffect(() => {
+    if (!genHistoryHydrateSeq) return;
+    const base = String(companionBaseUrl || '').trim();
+    const pid = String(companionProjectId || '').trim();
+    if (!base || !pid) return;
+    let cancelled = false;
+    void (async () => {
+      const snapshot = normalizeStoryboardTableOnAsset(asset);
+      const genTasks = listStoryboardGeneratedImageHistoryCompanionHydrateTasks([snapshot]);
+      const historyTasks = listStoryboardFrameHistoryCompanionHydrateTasks([snapshot]);
+      const [genResult, historyResult] = await Promise.all([
+        hydrateStoryboardGeneratedImageHistoryCompanionTasks(genTasks, base, pid),
+        hydrateStoryboardFrameHistoryCompanionTasks(historyTasks, base, pid),
+      ]);
+      if (cancelled) {
+        revokeStoryboardFrameCompanionHydrateUrls([
+          ...genResult.hydrated,
+          ...historyResult.hydrated,
+        ]);
+        return;
+      }
+      if (!genResult.hydrated.length && !historyResult.hydrated.length) return;
+      onPatchAsset((cur) => {
+        if (cur.id !== asset.id) return cur;
+        let next = cur;
+        if (historyResult.hydrated.length) {
+          next =
+            applyStoryboardFrameHistoryCompanionHydrateResults([next], historyResult.hydrated)[0] ??
+            next;
+        }
+        if (genResult.hydrated.length) {
+          next =
+            applyStoryboardGeneratedImageHistoryCompanionHydrateResults(
+              [next],
+              genResult.hydrated
+            )[0] ?? next;
+        }
+        return next;
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    asset,
+    companionBaseUrl,
+    companionProjectId,
+    genHistoryHydrateSeq,
+    onPatchAsset,
+  ]);
   const storyboardExportTask = useStoryboardVideoExportTask();
   const isExportRunning = storyboardExportTask?.status === 'running';
   const isThisAssetExporting =
@@ -328,16 +433,17 @@ export default function StoryboardTablePanel({
   const [imageBusyRowId, setImageBusyRowId] = useState<string | null>(null);
   const [roleAssetBusyId, setRoleAssetBusyId] = useState<string | null>(null);
   const [sceneAssetBusyId, setSceneAssetBusyId] = useState<string | null>(null);
-  const [roleReplaceBatchBusy, setRoleReplaceBatchBusy] = useState(false);
-  const [roleReplaceBatchProgress, setRoleReplaceBatchProgress] = useState<{
-    done: number;
-    total: number;
-  } | null>(null);
+  const [collageBatchSession, setCollageBatchSession] = useState<StoryboardCollageBatchSessionState>(
+    () =>
+      getStoryboardCollageBatchSession(asset.id) ?? {
+        busy: false,
+        kind: null,
+        rowIds: [],
+        queuedRowIds: [],
+        progress: null,
+      }
+  );
   const [redrawBusyRowId, setRedrawBusyRowId] = useState<string | null>(null);
-  const [collageProcessing, setCollageProcessing] = useState<{
-    kind: 'feedback' | 'roleReplace';
-    rowIds: string[];
-  } | null>(null);
   const [feedbackRedrawUnderstand, setFeedbackRedrawUnderstand] = useState(() =>
     readLocalJson(STORYBOARD_EDIT_FEEDBACK_REDRAW_UNDERSTAND_KEY, true, (v) =>
       typeof v === 'boolean' ? v : null
@@ -351,11 +457,6 @@ export default function StoryboardTablePanel({
       return next;
     });
   }, []);
-  const [feedbackBatchBusy, setFeedbackBatchBusy] = useState(false);
-  const [feedbackBatchProgress, setFeedbackBatchProgress] = useState<{
-    done: number;
-    total: number;
-  } | null>(null);
   const [feedbackRedrawHistory, setFeedbackRedrawHistory] = useState<
     StoryboardFeedbackRedrawBatchRecord[]
   >(() => readStoryboardFeedbackRedrawHistory(asset.id));
@@ -377,13 +478,17 @@ export default function StoryboardTablePanel({
     setFeedbackCollageLimit(normalized);
     writeLocalJson(STORYBOARD_EDIT_FEEDBACK_COLLAGE_LIMIT_KEY, normalized);
   }, []);
-  const [sheetGenBusy, setSheetGenBusy] = useState(false);
+  const [sheetGenBusy, setSheetGenBusy] = useState(() => isStoryboardSheetGenSessionBusy(asset.id));
   const [sheetGenProgress, setSheetGenProgress] = useState<{ done: number; total: number } | null>(
-    null
+    () => getStoryboardSheetGenSession(asset.id)?.progress ?? null
   );
-  const [sheetPreviews, setSheetPreviews] = useState<StoryboardSheetPreviewItem[]>([]);
-  const sheetPreviewsRef = useRef<StoryboardSheetPreviewItem[]>([]);
-  const sheetGenBusyRef = useRef(false);
+  const [sheetPreviews, setSheetPreviews] = useState<StoryboardSheetPreviewItem[]>(
+    () => getStoryboardSheetGenSession(asset.id)?.previews ?? []
+  );
+  const sheetPreviewsRef = useRef<StoryboardSheetPreviewItem[]>(
+    getStoryboardSheetGenSession(asset.id)?.previews ?? []
+  );
+  const sheetGenBusyRef = useRef(isStoryboardSheetGenSessionBusy(asset.id));
   const sheetSplitBatchBusyRef = useRef(
     getStoryboardSheetSplitSession(asset.id)?.batchBusy ?? false
   );
@@ -391,8 +496,12 @@ export default function StoryboardTablePanel({
   const sheetSplitDetectJobsRef = useRef(new Map<string, Promise<BoundingBox[]>>());
   const sheetSplitDetectQueueRef = useRef<Array<{ previewId: string; dataUrl: string }>>([]);
   const sheetSplitDetectDrainingRef = useRef(false);
-  const sheetGenControllerRef = useRef<StoryboardSheetGenBatchController | null>(null);
-  const sheetGenPlaceholderIdsRef = useRef<Map<number, string>>(new Map());
+  const sheetGenControllerRef = useRef<StoryboardSheetGenBatchController | null>(
+    getStoryboardSheetGenSession(asset.id)?.controller ?? null
+  );
+  const sheetGenPlaceholderIdsRef = useRef<Map<number, string>>(
+    new Map(getStoryboardSheetGenSession(asset.id)?.placeholderIdByChunk ?? [])
+  );
   const [sheetSplitBusyId, setSheetSplitBusyId] = useState<string | null>(
     () => getStoryboardSheetSplitSession(asset.id)?.busyPreviewId ?? null
   );
@@ -404,7 +513,7 @@ export default function StoryboardTablePanel({
     () => getStoryboardSheetSplitSession(asset.id)?.progress ?? null
   );
   const splitAdjustResolverRef = useRef<((boxes: BoundingBox[] | null) => void) | null>(null);
-  const [splitAdjustDraft, setSplitAdjustDraft] = useState<{
+  type StoryboardSheetSplitAdjustDraft = {
     previewId: string;
     imageSrc: string;
     boxes: BoundingBox[];
@@ -412,8 +521,14 @@ export default function StoryboardTablePanel({
     sheetLabel: string;
     detecting: boolean;
     applying: boolean;
+    detectStatus?: string;
     initialSelectedId?: string | null;
-  } | null>(null);
+  };
+  type StoryboardSheetSplitAdjustDetectApi = {
+    setStatus: (message: string) => void;
+    patchDraft: (patch: Partial<Pick<StoryboardSheetSplitAdjustDraft, 'expectedShotNos' | 'sheetLabel'>>) => void;
+  };
+  const [splitAdjustDraft, setSplitAdjustDraft] = useState<StoryboardSheetSplitAdjustDraft | null>(null);
   const [frameCropDraft, setFrameCropDraft] = useState<{
     current: { rowId: string; imageSrc: string; shotNo?: string };
     rest: Array<{ rowId: string; imageSrc: string; shotNo?: string }>;
@@ -445,6 +560,35 @@ export default function StoryboardTablePanel({
     },
     [asset.id]
   );
+  const syncCollageBatchSession = useCallback(
+    (patch: Partial<StoryboardCollageBatchSessionState>) => {
+      const next = patchStoryboardCollageBatchSession(asset.id, patch);
+      if (panelMountedRef.current) {
+        setCollageBatchSession(next);
+      }
+      return next;
+    },
+    [asset.id]
+  );
+  const collageProcessing = useMemo(() => {
+    if (!collageBatchSession.busy || !collageBatchSession.kind) return null;
+    return {
+      kind: collageBatchSession.kind,
+      rowIds: collageBatchSession.rowIds,
+      queuedRowIds: collageBatchSession.queuedRowIds,
+    };
+  }, [collageBatchSession]);
+  const feedbackBatchBusy =
+    collageBatchSession.busy && collageBatchSession.kind === 'feedback';
+  const feedbackBatchProgress = feedbackBatchBusy ? collageBatchSession.progress : null;
+  const roleReplaceBatchBusy =
+    collageBatchSession.busy && collageBatchSession.kind === 'roleReplace';
+  const roleReplaceBatchProgress = roleReplaceBatchBusy ? collageBatchSession.progress : null;
+  const selectedSheetGenBatchBusy =
+    collageBatchSession.busy && collageBatchSession.kind === 'sheetGen';
+  const selectedSheetGenBatchProgress = selectedSheetGenBatchBusy
+    ? collageBatchSession.progress
+    : null;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pendingRowIdRef = useRef<string | null>(null);
   const closeBtnRef = useRef<HTMLButtonElement>(null);
@@ -640,14 +784,12 @@ export default function StoryboardTablePanel({
 
   useEffect(() => {
     panelMountedRef.current = true;
-    // 上次在未确认切分框时离开面板时，全局 session 会残留 busy，挂载时丢弃
-    clearStoryboardSheetSplitSessionBusy(asset.id);
-    setSheetSplitBusyId(null);
-    setSheetSplitBatchBusy(false);
-    setSheetSplitProgress(null);
-    sheetSplitBatchBusyRef.current = false;
+    const splitSession = getStoryboardSheetSplitSession(asset.id);
+    if (splitSession?.busy && !splitSession.batchBusy) {
+      patchStoryboardSheetSplitSession(asset.id, { busy: false, busyPreviewId: null });
+    }
 
-    const unsubscribe = subscribeStoryboardSheetSplitSession(asset.id, (session) => {
+    const unsubscribeSplit = subscribeStoryboardSheetSplitSession(asset.id, (session) => {
       if (!panelMountedRef.current) return;
       sheetSplitBatchBusyRef.current = session.batchBusy;
       setSheetSplitBatchBusy(session.batchBusy);
@@ -655,12 +797,18 @@ export default function StoryboardTablePanel({
       setSheetSplitBusyId(session.busyPreviewId);
     });
 
+    const unsubscribeCollage = subscribeStoryboardCollageBatchSession(asset.id, (session) => {
+      if (panelMountedRef.current) {
+        setCollageBatchSession(session);
+      }
+    });
+
     return () => {
       panelMountedRef.current = false;
       splitAdjustResolverRef.current?.(null);
       splitAdjustResolverRef.current = null;
-      clearStoryboardSheetSplitSessionBusy(asset.id);
-      unsubscribe();
+      unsubscribeSplit();
+      unsubscribeCollage();
     };
   }, [asset.id]);
 
@@ -1028,10 +1176,31 @@ export default function StoryboardTablePanel({
     return () => window.removeEventListener('keydown', onKey, true);
   }, [frameCropDraft, insertShotModalOpen, lightboxSrc, splitAdjustDraft]);
 
+  useEffect(() => {
+    const persisted = normalizeStoryboardGeneratedImageHistory(
+      asset.storyboardTable?.generatedImageHistory
+    );
+    const backfilled = backfillStoryboardGeneratedImageHistory(persisted, table.rows);
+    if (backfilled.length <= persisted.length) return;
+    onPatchAsset((cur) => {
+      const doc = normalizeStoryboardTableDoc(cur.storyboardTable);
+      return {
+        ...cur,
+        storyboardTable: {
+          ...doc,
+          generatedImageHistory: backfilled,
+        },
+      };
+    });
+  }, [asset.id, asset.storyboardTable?.generatedImageHistory, onPatchAsset, table.rows]);
+
   const patchTable = useCallback(
     (
       mutate: (rows: StoryboardTableRow[]) => StoryboardTableRow[],
-      options?: { fieldCatalog?: StoryboardParseFieldDef[] }
+      options?: {
+        fieldCatalog?: StoryboardParseFieldDef[];
+        generatedImageRecords?: StoryboardGeneratedImageRecord[];
+      }
     ) => {
       onPatchAsset((cur) => {
         const doc = normalizeStoryboardTableDoc(cur.storyboardTable);
@@ -1040,6 +1209,12 @@ export default function StoryboardTablePanel({
         const nextRows = reindexStoryboardRows(mutate([...doc.rows])).map((r) =>
           applyShotFieldsPatch(r, catalog, r.shotFields)
         );
+        const generatedImageHistory = options?.generatedImageRecords?.length
+          ? appendStoryboardGeneratedImageHistoryBatch(
+              doc.generatedImageHistory,
+              options.generatedImageRecords
+            )
+          : doc.generatedImageHistory;
         return {
           ...cur,
           textTitle: titleRaw,
@@ -1048,6 +1223,7 @@ export default function StoryboardTablePanel({
             title: titleRaw,
             fieldCatalog: catalog,
             rows: nextRows,
+            ...(generatedImageHistory?.length ? { generatedImageHistory } : {}),
           },
         };
       });
@@ -1544,6 +1720,10 @@ export default function StoryboardTablePanel({
         (row) => !lookupRows.some((item) => item.id === row.id)
       );
       if (rowPatches.size > 0 || createdRowsToAdd.length > 0) {
+        const generatedImageRecords = collectStoryboardGeneratedImageRecordsFromPatches(
+          [...lookupRows, ...createdRowsToAdd],
+          rowPatches
+        );
         patchTable(
           (rows) => {
             const existing = new Set(rows.map((row) => row.id));
@@ -1559,7 +1739,7 @@ export default function StoryboardTablePanel({
               rowPatches.has(row.id) ? { ...row, ...rowPatches.get(row.id) } : row
             );
           },
-          { fieldCatalog }
+          { fieldCatalog, generatedImageRecords }
         );
       }
 
@@ -1626,23 +1806,44 @@ export default function StoryboardTablePanel({
 
   const promptSheetSplitBoxAdjust = useCallback(
     (
-      draft: Omit<NonNullable<typeof splitAdjustDraft>, 'detecting' | 'applying'>,
-      detectBoxes: () => Promise<BoundingBox[]>
+      draft: Omit<StoryboardSheetSplitAdjustDraft, 'detecting' | 'applying' | 'detectStatus'>,
+      detectBoxes: (api: StoryboardSheetSplitAdjustDetectApi) => Promise<BoundingBox[]>
     ) =>
       new Promise<BoundingBox[] | null>((resolve) => {
         splitAdjustResolverRef.current = resolve;
         const hasInitialBoxes = draft.boxes.length > 0;
-        setSplitAdjustDraft({ ...draft, detecting: !hasInitialBoxes, applying: false });
+        setSplitAdjustDraft({
+          ...draft,
+          detecting: !hasInitialBoxes,
+          applying: false,
+          detectStatus: hasInitialBoxes ? undefined : '正在识别分镜结构…',
+        });
         if (hasInitialBoxes) return;
-        void detectBoxes()
+        const api: StoryboardSheetSplitAdjustDetectApi = {
+          setStatus: (message) => {
+            setSplitAdjustDraft((prev) =>
+              prev?.previewId === draft.previewId ? { ...prev, detectStatus: message } : prev
+            );
+          },
+          patchDraft: (patch) => {
+            setSplitAdjustDraft((prev) =>
+              prev?.previewId === draft.previewId ? { ...prev, ...patch } : prev
+            );
+          },
+        };
+        void detectBoxes(api)
           .then((boxes) => {
             setSplitAdjustDraft((prev) =>
-              prev?.previewId === draft.previewId ? { ...prev, boxes, detecting: false } : prev
+              prev?.previewId === draft.previewId
+                ? { ...prev, boxes, detecting: false, detectStatus: undefined }
+                : prev
             );
           })
           .catch((error) => {
             setSplitAdjustDraft((prev) =>
-              prev?.previewId === draft.previewId ? { ...prev, detecting: false } : prev
+              prev?.previewId === draft.previewId
+                ? { ...prev, detecting: false, detectStatus: undefined }
+                : prev
             );
             onNotify?.(
               'warn',
@@ -1688,7 +1889,7 @@ export default function StoryboardTablePanel({
           sheetLabel: args.sheetLabel,
           initialSelectedId: args.focusRowId ?? null,
         },
-        async () => initialBoxes
+        async (_api) => initialBoxes
       );
     },
     [promptSheetSplitBoxAdjust, table.rows]
@@ -1915,6 +2116,7 @@ export default function StoryboardTablePanel({
               timeoutMs: WORKFLOW_CUT_DETECT_TIMEOUT_MS,
               storyboardAssetId: asset.id,
               layoutGrid,
+              skipVisionDetect: Boolean(layoutGrid),
             }
           );
           const boxes = rawBoxes.map((box) => clampStoryboardSheetSplitBox(box));
@@ -2153,7 +2355,7 @@ export default function StoryboardTablePanel({
             expectedShotNos: effectiveShotNos,
             sheetLabel: item.label,
           },
-          async () => {
+          async (_api) => {
             const boxes = await resolveSheetPreviewSplitDraftBoxes(previewId);
             return boxes;
           }
@@ -2772,6 +2974,189 @@ export default function StoryboardTablePanel({
     [onNotify, openFrameCropQueue, readOnly, table.rows]
   );
 
+  const beginFrameCropForDropTarget = useCallback(
+    async (targetRowId: string, file: File) => {
+      if (readOnly) return;
+      const { assignment, skippedLocked } = planStoryboardFrameImportAssignmentForTargetRow(
+        table.rows,
+        targetRowId
+      );
+      if (!assignment) {
+        onNotify?.(
+          'warn',
+          skippedLocked ? '该镜头已通过，请先取消通过' : '目标镜头不存在'
+        );
+        return;
+      }
+      try {
+        const dataUrl = await readStoryboardFrameFromFile(file);
+        const row = table.rows.find((entry) => entry.id === targetRowId);
+        openFrameCropQueue([
+          {
+            rowId: targetRowId,
+            imageSrc: dataUrl,
+            shotNo: row?.shotNo?.trim() || undefined,
+          },
+        ]);
+      } catch (err) {
+        onNotify?.('warn', err instanceof Error ? err.message : '图片读取失败');
+      }
+    },
+    [onNotify, openFrameCropQueue, readOnly, table.rows]
+  );
+
+  const beginFrameSheetSplitFromDrop = useCallback(
+    async (selectedRowIds: string[], file: File) => {
+      if (readOnly) return;
+      if (
+        frameCropDraft ||
+        splitAdjustDraft ||
+        isStoryboardCollageBatchSessionBusy(asset.id)
+      ) {
+        onNotify?.('warn', '请等待当前任务完成');
+        return;
+      }
+
+      const taskRows = resolveStoryboardFrameDropSplitTaskRows(table.rows, selectedRowIds);
+      if (!taskRows.length) {
+        onNotify?.('warn', '所选镜头均已通过，请先取消通过');
+        return;
+      }
+
+      const skippedLocked = selectedRowIds.length - taskRows.length;
+      if (skippedLocked > 0) {
+        onNotify?.('info', `已跳过 ${skippedLocked} 个已通过镜头，切分 ${taskRows.length} 镜`);
+      }
+
+      let sheetImage = await readStoryboardFrameFromFile(file);
+      try {
+        sheetImage = await compressStoryboardFrameDataUrl(sheetImage);
+      } catch {
+        /* keep raw */
+      }
+
+      const previewId = `drop-split-${Date.now()}`;
+      let dropSplitContext: {
+        assignRows: StoryboardTableRow[];
+        layoutGrid: StoryboardSheetLayoutGrid;
+        expectedShotNos: string[];
+      } | null = null;
+      try {
+        const adjusted = await promptSheetSplitBoxAdjust(
+          {
+            previewId,
+            imageSrc: sheetImage,
+            boxes: [],
+            expectedShotNos: [],
+            sheetLabel: `拖入配图 · 选 ${taskRows.length} 镜 · 识别中…`,
+          },
+          async (api) => {
+            const imageEstimate = await estimateStoryboardSheetPanelCountFromImage(sheetImage, {
+              hintCount: taskRows.length,
+              textModel: capabilityTextModel,
+              timeoutMs: WORKFLOW_CUT_DETECT_TIMEOUT_MS,
+              onDetectStatus: api.setStatus,
+            });
+            const splitPlan = planStoryboardFrameDropSplitScope(
+              taskRows,
+              imageEstimate.panelCount,
+              imageEstimate.layoutGrid
+            );
+            if (splitPlan.mismatchMessage) {
+              onNotify?.('info', splitPlan.mismatchMessage);
+            }
+            const { assignRows, panelCount, layoutGrid, expectedShotNos } = splitPlan;
+            dropSplitContext = { assignRows, layoutGrid, expectedShotNos };
+            const contentBounds = imageEstimate.contentBounds;
+            api.patchDraft({
+              expectedShotNos,
+              sheetLabel: `拖入配图 · 图 ${panelCount} 格 / 选 ${splitPlan.selectionCount} 镜`,
+            });
+            try {
+              const rawBoxes = await detectStoryboardSheetPanels(
+                sheetImage,
+                expectedShotNos,
+                capabilityTextModel,
+                {
+                  timeoutMs: WORKFLOW_CUT_DETECT_TIMEOUT_MS,
+                  storyboardAssetId: asset.id,
+                  layoutGrid,
+                  panelCount,
+                  contentBounds,
+                  structureAnalysis: imageEstimate.structureAnalysis,
+                  onDetectStatus: api.setStatus,
+                }
+              );
+              return normalizeStoryboardFrameDropSplitBoxes(rawBoxes, panelCount, assignRows);
+            } catch (error) {
+              onNotify?.(
+                'warn',
+                error instanceof Error ? error.message : '识别切分框失败，已生成默认网格，可手动调整'
+              );
+              return refineStoryboardSheetDetectBoxesToIllustration(
+                sheetImage,
+                buildStoryboardFrameDropSplitFallbackBoxes(panelCount, assignRows)
+              );
+            }
+          }
+        );
+        if (!adjusted || !dropSplitContext) return;
+
+        const { assignRows, layoutGrid, expectedShotNos } = dropSplitContext;
+        try {
+          const split = await splitStoryboardSheetFromBoxes(
+            sheetImage,
+            assignRows,
+            adjusted,
+            {
+              expectedShotNos,
+              autoCreateRows: false,
+              allowGridFallback: false,
+              layoutGrid,
+              trimSplitCrops: false,
+              sequentialLayoutMatch: true,
+            }
+          );
+          const { matchedCount, warn } = await applySheetVisionSplitResult(
+            split,
+            assignRows,
+            table.fieldCatalog,
+            table.rows
+          );
+          if (warn) {
+            onNotify?.('warn', warn);
+          } else if (matchedCount > 0) {
+            onNotify?.('info', `已切分回填 ${matchedCount} 镜`);
+          } else {
+            onNotify?.('warn', '未能切分回填，请检查切分框与镜号');
+          }
+        } catch (splitError) {
+          onNotify?.(
+            'warn',
+            splitError instanceof Error ? splitError.message : '切分回填失败'
+          );
+        } finally {
+          setSplitAdjustDraft(null);
+        }
+      } catch (err) {
+        onNotify?.('warn', err instanceof Error ? err.message : '图片读取失败');
+        setSplitAdjustDraft(null);
+      }
+    },
+    [
+      applySheetVisionSplitResult,
+      asset.id,
+      capabilityTextModel,
+      frameCropDraft,
+      onNotify,
+      promptSheetSplitBoxAdjust,
+      readOnly,
+      splitAdjustDraft,
+      table.fieldCatalog,
+      table.rows,
+    ]
+  );
+
   const onFilePicked = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
       const files = collectStoryboardFrameImageFiles(e.target.files);
@@ -2982,7 +3367,13 @@ export default function StoryboardTablePanel({
       }
       setRedrawBusyRowId(rowId);
       if (useCollage) {
-        setCollageProcessing({ kind: 'feedback', rowIds: [rowId] });
+        syncCollageBatchSession({
+          busy: true,
+          kind: 'feedback',
+          rowIds: [rowId],
+          queuedRowIds: [],
+          progress: null,
+        });
       }
       try {
         await onRedrawRow(
@@ -3000,17 +3391,19 @@ export default function StoryboardTablePanel({
       } finally {
         setRedrawBusyRowId(null);
         if (useCollage) {
-          setCollageProcessing(null);
+          clearStoryboardCollageBatchSession(asset.id);
         }
       }
     },
     [
       activeFeedbackCollagePreset,
+      asset.id,
       effectiveEditRedrawModelId,
       effectiveFeedbackCollageModelId,
       effectiveFeedbackCollagePresetId,
       onNotify,
       onRedrawRow,
+      syncCollageBatchSession,
       table.fieldCatalog,
       table.rows,
     ]
@@ -3058,11 +3451,12 @@ export default function StoryboardTablePanel({
     };
     commitFeedbackRedrawHistory((prev) => [batchRecord, ...prev].slice(0, 24));
     onSelectFeedbackHistory(batchId);
-    setFeedbackBatchBusy(true);
-    setFeedbackBatchProgress({ done: 0, total: tasks.length });
-    setCollageProcessing({
+    syncCollageBatchSession({
+      busy: true,
       kind: 'feedback',
       rowIds: tasks[0]?.rowIds ?? eligible.map((row) => row.id),
+      queuedRowIds: queuedStoryboardCollageRowIdsFromTasks(tasks, 0),
+      progress: { done: 0, total: tasks.length },
     });
 
     let okTasks = 0;
@@ -3072,8 +3466,14 @@ export default function StoryboardTablePanel({
     const feedbackClearedRowIds = new Set<string>();
 
     try {
-      for (const task of tasks) {
-        setCollageProcessing({ kind: 'feedback', rowIds: task.rowIds });
+      for (let taskIndex = 0; taskIndex < tasks.length; taskIndex++) {
+        const task = tasks[taskIndex]!;
+        syncCollageBatchSession({
+          kind: 'feedback',
+          rowIds: task.rowIds,
+          queuedRowIds: queuedStoryboardCollageRowIdsFromTasks(tasks, taskIndex),
+          progress: { done: okTasks + failTasks, total: tasks.length },
+        });
         try {
           const outcome = await executeStoryboardFeedbackSheetRedraw({
             preset,
@@ -3160,7 +3560,9 @@ export default function StoryboardTablePanel({
           );
           setSplitAdjustDraft(null);
         } finally {
-          setFeedbackBatchProgress({ done: okTasks + failTasks, total: tasks.length });
+          syncCollageBatchSession({
+            progress: { done: okTasks + failTasks, total: tasks.length },
+          });
           commitFeedbackRedrawHistory((prev) =>
             prev.map((item) =>
               item.id === batchId
@@ -3202,12 +3604,11 @@ export default function StoryboardTablePanel({
         clearEditFeedbackForRows([...feedbackClearedRowIds]);
       }
     } finally {
-      setCollageProcessing(null);
-      setFeedbackBatchBusy(false);
-      setFeedbackBatchProgress(null);
+      clearStoryboardCollageBatchSession(asset.id);
     }
   }, [
     activeFeedbackCollagePreset,
+    asset.id,
     clearEditFeedbackForRows,
     commitSheetVisionSplit,
     commitFeedbackRedrawHistory,
@@ -3222,6 +3623,7 @@ export default function StoryboardTablePanel({
     promptFeedbackCollageSplitAdjust,
     table.fieldCatalog,
     table.rows,
+    syncCollageBatchSession,
   ]);
 
   const runRoleReplaceBatch = useCallback(async () => {
@@ -3258,11 +3660,12 @@ export default function StoryboardTablePanel({
       return;
     }
 
-    setRoleReplaceBatchBusy(true);
-    setRoleReplaceBatchProgress({ done: 0, total: tasks.length });
-    setCollageProcessing({
+    syncCollageBatchSession({
+      busy: true,
       kind: 'roleReplace',
       rowIds: tasks[0]?.rowIds ?? eligible.map((row) => row.id),
+      queuedRowIds: queuedStoryboardCollageRowIdsFromTasks(tasks, 0),
+      progress: { done: 0, total: tasks.length },
     });
 
     let okTasks = 0;
@@ -3270,8 +3673,14 @@ export default function StoryboardTablePanel({
     let totalMatched = 0;
 
     try {
-      for (const task of tasks) {
-        setCollageProcessing({ kind: 'roleReplace', rowIds: task.rowIds });
+      for (let taskIndex = 0; taskIndex < tasks.length; taskIndex++) {
+        const task = tasks[taskIndex]!;
+        syncCollageBatchSession({
+          kind: 'roleReplace',
+          rowIds: task.rowIds,
+          queuedRowIds: queuedStoryboardCollageRowIdsFromTasks(tasks, taskIndex),
+          progress: { done: okTasks + failTasks, total: tasks.length },
+        });
         try {
           const outcome = await executeStoryboardRoleReplaceCollageBatch({
             preset,
@@ -3353,7 +3762,9 @@ export default function StoryboardTablePanel({
           );
           setSplitAdjustDraft(null);
         } finally {
-          setRoleReplaceBatchProgress({ done: okTasks + failTasks, total: tasks.length });
+          syncCollageBatchSession({
+            progress: { done: okTasks + failTasks, total: tasks.length },
+          });
         }
       }
 
@@ -3368,12 +3779,11 @@ export default function StoryboardTablePanel({
         onNotify?.('warn', `拼图替换 ${okTasks} 张完成，但未能自动切分回填，请检查镜号`);
       }
     } finally {
-      setCollageProcessing(null);
-      setRoleReplaceBatchBusy(false);
-      setRoleReplaceBatchProgress(null);
+      clearStoryboardCollageBatchSession(asset.id);
     }
   }, [
     activeFeedbackCollagePreset,
+    asset.id,
     commitSheetVisionSplit,
     companionBaseUrl,
     companionProjectId,
@@ -3384,10 +3794,236 @@ export default function StoryboardTablePanel({
     parseCtx,
     promptFeedbackCollageSplitAdjust,
     readOnly,
+    syncCollageBatchSession,
     table.fieldCatalog,
     table.roleAssets,
     table.rows,
   ]);
+
+  const runSelectedSheetGen = useCallback(
+    async (selectedRowIds: string[]) => {
+      if (readOnly) return;
+      if (selectedSheetGenBatchBusy || sheetGenBusy || isStoryboardCollageBatchSessionBusy(asset.id)) {
+        onNotify?.('warn', '已有分镜生图任务进行中，请稍候');
+        return;
+      }
+
+      const probe = await probeStoryboardSheetGenCompanionReady(
+        companionBaseUrl,
+        companionProjectId
+      );
+      if (!probe.ok) {
+        onNotify?.('warn', storyboardSheetGenCompanionProbeMessage(probe.reason));
+        return;
+      }
+
+      const preset = redrawPresets.find((entry) => entry.id === effectiveRedrawPresetId);
+      if (!preset) {
+        onNotify?.(
+          'warn',
+          redrawPresets.length ? '请先在编辑页选择生图能力' : '请先在功能区启用文生图/图生图能力'
+        );
+        return;
+      }
+
+      const idSet = new Set(selectedRowIds);
+      const eligible = table.rows.filter(
+        (row) =>
+          idSet.has(row.id) &&
+          !row.locked &&
+          rowHasSheetGenPrompt(row, table.fieldCatalog)
+      );
+      if (!eligible.length) {
+        onNotify?.('warn', '所选镜头中没有可生图的（需有镜头原文/画面描述且未锁定）');
+        return;
+      }
+
+      const tasks = planStoryboardSheetGenTasks(eligible, feedbackCollageLimit);
+      if (!tasks.length) {
+        onNotify?.('warn', '没有可执行的分镜生图任务');
+        return;
+      }
+
+      if (
+        !window.confirm(
+          `为所选 ${eligible.length} 镜生成分镜拼图？（每批最多 ${feedbackCollageLimit} 镜 · ${tasks.length} 张拼图）`
+        )
+      ) {
+        return;
+      }
+
+      syncCollageBatchSession({
+        busy: true,
+        kind: 'sheetGen',
+        rowIds: tasks[0]?.rowIds ?? eligible.map((row) => row.id),
+        queuedRowIds: queuedStoryboardCollageRowIdsFromTasks(tasks, 0),
+        progress: { done: 0, total: tasks.length },
+      });
+
+      let okTasks = 0;
+      let failTasks = 0;
+      let totalMatched = 0;
+
+      try {
+        for (let taskIndex = 0; taskIndex < tasks.length; taskIndex++) {
+          const task = tasks[taskIndex]!;
+          syncCollageBatchSession({
+            kind: 'sheetGen',
+            rowIds: task.rowIds,
+            queuedRowIds: queuedStoryboardCollageRowIdsFromTasks(tasks, taskIndex),
+            progress: { done: okTasks + failTasks, total: tasks.length },
+          });
+          try {
+            const outcome = await executeStoryboardSheetGen({
+              preset,
+              rows: task.rows,
+              fieldCatalog: table.fieldCatalog,
+              ctx: parseCtx,
+              forceTextToImage: preset.category === 'image_to_image',
+              chunkIndex: task.chunkIndex,
+            });
+            if (!outcome.ok) {
+              failTasks += 1;
+              onNotify?.('warn', `分镜生图 ${task.chunkIndex + 1} 失败：${outcome.error}`);
+              continue;
+            }
+
+            let sheetImage = outcome.image;
+            try {
+              sheetImage = await compressStoryboardFrameDataUrl(sheetImage);
+            } catch {
+              /* keep raw */
+            }
+
+            const previewId = `edit-sheet-gen-${task.chunkIndex}-${Date.now()}`;
+            const layoutGrid = resolveStoryboardSheetGridDimensions(task.rows.length);
+            const expectedShotNos = task.rows
+              .map((row) => row.shotNo?.trim())
+              .filter((shotNo): shotNo is string => Boolean(shotNo));
+
+            let boxes: BoundingBox[] = [];
+            try {
+              const rawBoxes = await detectStoryboardSheetPanels(
+                sheetImage,
+                expectedShotNos,
+                capabilityTextModel,
+                {
+                  timeoutMs: WORKFLOW_CUT_DETECT_TIMEOUT_MS,
+                  storyboardAssetId: asset.id,
+                  layoutGrid,
+                  skipVisionDetect: true,
+                }
+              );
+              boxes = rawBoxes.map((box) => clampStoryboardSheetSplitBox(box));
+              if (isCollapsedStoryboardSheetVisionDetect(boxes)) {
+                boxes = [];
+              }
+            } catch (error) {
+              onNotify?.(
+                'warn',
+                error instanceof Error ? error.message : '识别切分框失败，可手动框选后确认'
+              );
+            }
+
+            const adjusted = await promptSheetSplitBoxAdjust(
+              {
+                previewId,
+                imageSrc: sheetImage,
+                boxes,
+                expectedShotNos,
+                sheetLabel: `分镜生图 ${task.chunkIndex + 1}`,
+              },
+              async (_api) => boxes
+            );
+            if (!adjusted) {
+              failTasks += 1;
+              onNotify?.('warn', `分镜生图 ${task.chunkIndex + 1}：已取消裁切确认`);
+              continue;
+            }
+
+            try {
+              const split = await splitStoryboardSheetFromBoxes(
+                sheetImage,
+                task.rows,
+                adjusted,
+                {
+                  expectedShotNos,
+                  autoCreateRows: false,
+                  allowGridFallback: false,
+                  layoutGrid,
+                  trimSplitCrops: false,
+                }
+              );
+              const { matchedCount, warn } = await applySheetVisionSplitResult(
+                split,
+                task.rows,
+                table.fieldCatalog,
+                table.rows
+              );
+              totalMatched += matchedCount;
+              okTasks += 1;
+              if (warn) {
+                onNotify?.('warn', `分镜生图 ${task.chunkIndex + 1}：${warn}`);
+              }
+            } catch (splitError) {
+              failTasks += 1;
+              onNotify?.(
+                'warn',
+                splitError instanceof Error
+                  ? splitError.message
+                  : `分镜生图 ${task.chunkIndex + 1} 切分回填失败`
+              );
+            } finally {
+              setSplitAdjustDraft(null);
+            }
+          } catch (error) {
+            failTasks += 1;
+            onNotify?.(
+              'warn',
+              error instanceof Error ? error.message : `分镜生图 ${task.chunkIndex + 1} 失败`
+            );
+            setSplitAdjustDraft(null);
+          } finally {
+            syncCollageBatchSession({
+              progress: { done: okTasks + failTasks, total: tasks.length },
+            });
+          }
+        }
+
+        if (failTasks > 0) {
+          onNotify?.(
+            'warn',
+            `分镜生图完成：成功 ${okTasks} 张，失败 ${failTasks} 张；已切分回填 ${totalMatched} 镜`
+          );
+        } else if (totalMatched > 0) {
+          onNotify?.('info', `分镜生图完成：${okTasks} 张拼图，已切分回填 ${totalMatched} 镜`);
+        } else {
+          onNotify?.('warn', `分镜生图 ${okTasks} 张完成，但未能自动切分回填，请检查镜号`);
+        }
+      } finally {
+        clearStoryboardCollageBatchSession(asset.id);
+      }
+    },
+    [
+      applySheetVisionSplitResult,
+      asset.id,
+      capabilityTextModel,
+      companionBaseUrl,
+      companionProjectId,
+      effectiveRedrawPresetId,
+      feedbackCollageLimit,
+      onNotify,
+      parseCtx,
+      promptSheetSplitBoxAdjust,
+      readOnly,
+      redrawPresets,
+      selectedSheetGenBatchBusy,
+      sheetGenBusy,
+      syncCollageBatchSession,
+      table.fieldCatalog,
+      table.rows,
+    ]
+  );
 
   const runSheetGen = useCallback(
     async (request: StoryboardSheetGenBatchRequest) => {
@@ -3661,12 +4297,18 @@ export default function StoryboardTablePanel({
       restoreFrameVersion: (rowId, versionId) => {
         void restoreFrameVersion(rowId, versionId);
       },
-      assignFrameImageFromDrop: (rowId, e) => {
+      assignFrameImageFromDrop: (rowId, e, selectedRowIds) => {
         e.preventDefault();
         e.stopPropagation();
-        const files = collectStoryboardFrameImageFiles(e.dataTransfer);
-        if (!files.length) return;
-        void beginFrameCropFromFiles(rowId, files);
+        void (async () => {
+          const file = await collectStoryboardFrameImageInputForDrop(e.dataTransfer);
+          if (!file) return;
+          if (shouldStoryboardFrameDropUseSheetSplit(rowId, selectedRowIds)) {
+            void beginFrameSheetSplitFromDrop(selectedRowIds!, file);
+            return;
+          }
+          void beginFrameCropForDropTarget(rowId, file);
+        })();
       },
       assignFrameImageFromPaste: (rowId, e) => {
         void assignFrameImageFromPaste(rowId, e);
@@ -3677,6 +4319,8 @@ export default function StoryboardTablePanel({
     };
   }, [
     assignFrameImageFromPaste,
+    beginFrameCropForDropTarget,
+    beginFrameSheetSplitFromDrop,
     beginFrameCropFromFiles,
     clearRowImage,
     restoreFrameVersion,
@@ -3733,7 +4377,7 @@ export default function StoryboardTablePanel({
               }`}
               aria-pressed={isInputView}
             >
-              解析
+              输入
             </button>
             <button
               type="button"
@@ -3785,15 +4429,17 @@ export default function StoryboardTablePanel({
             placeholder="未命名分镜表"
           />
 
-          <div className={`hidden shrink-0 items-center sm:flex ${STORYBOARD_GAP_TIGHT}`}>
-            <span className={STORYBOARD_STAT_CHIP}>{stats.rowCount} 镜</span>
-            <span className={STORYBOARD_STAT_CHIP}>{stats.withImageCount} 配图</span>
-            <span className={STORYBOARD_STAT_CHIP}>
-              {formatDurationLabel(stats.totalDurationSec, stats.hasGaps)}
-            </span>
-            {stats.lockedCount > 0 ? (
-              <span className={STORYBOARD_STAT_CHIP}>{stats.lockedCount} 已通过</span>
-            ) : null}
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+            <div className={`hidden shrink-0 items-center sm:flex ${STORYBOARD_GAP_TIGHT}`}>
+              <span className={STORYBOARD_STAT_CHIP}>{stats.rowCount} 镜</span>
+              <span className={STORYBOARD_STAT_CHIP}>{stats.withImageCount} 配图</span>
+              <span className={STORYBOARD_STAT_CHIP}>
+                {formatDurationLabel(stats.totalDurationSec, stats.hasGaps)}
+              </span>
+              {stats.lockedCount > 0 ? (
+                <span className={STORYBOARD_STAT_CHIP}>{stats.lockedCount} 已通过</span>
+              ) : null}
+            </div>
           </div>
         </div>
 
@@ -3822,6 +4468,18 @@ export default function StoryboardTablePanel({
 
         {isEditView && !readOnly ? (
           <div className={`mt-2 flex flex-wrap items-center ${STORYBOARD_GAP_TIGHT} pl-11`}>
+            {redrawPresetOptions.length > 0 ? (
+              <div className="flex min-w-[10rem] max-w-xs items-center gap-1.5">
+                <span className="shrink-0 text-[10px] text-gray-500">生图能力</span>
+                <CustomDropdown
+                  value={effectiveRedrawPresetId}
+                  options={redrawPresetOptions}
+                  onChange={setRedrawPresetIdPersisted}
+                  triggerClassName="h-8 min-w-[8rem] flex-1 rounded-lg bg-white/[0.04] px-2.5 text-[10px] text-gray-200 ring-1 ring-white/[0.07] hover:bg-white/[0.07]"
+                  portalZIndex={STORYBOARD_PANEL_DROPDOWN_Z}
+                />
+              </div>
+            ) : null}
             {editRedrawModelOptions.length > 0 && redrawPresets.length > 0 ? (
               <div className="flex min-w-[10rem] max-w-xs items-center gap-1.5">
                 <span className="shrink-0 text-[10px] text-gray-500">重绘模型</span>
@@ -3955,29 +4613,8 @@ export default function StoryboardTablePanel({
           sceneAssetBusyId={sceneAssetBusyId}
           readOnly={readOnly}
           onImportRows={importInputRows}
-          redrawPresets={redrawPresets}
-          redrawPresetId={effectiveRedrawPresetId}
-          sheetGenBusy={sheetGenBusy}
-          sheetGenProgress={sheetGenProgress}
-          onRedrawPresetChange={setRedrawPresetIdPersisted}
-          onSheetGenRun={runSheetGen}
           companionBaseUrl={companionBaseUrl}
           companionProjectId={companionProjectId}
-          sheetPreviews={sheetPreviews}
-          sheetSplitBusyId={sheetSplitBusyId}
-          sheetRegenBusyId={sheetRegenBusyId}
-          sheetSplitBatchBusy={sheetSplitBatchBusy}
-          sheetSplitProgress={sheetSplitProgress}
-          splittableSheetCount={sheetPreviews.filter(isStoryboardSheetPreviewSplittable).length}
-          onPreviewSheetImage={openSheetPreviewLightbox}
-          onUploadSheetPreview={uploadSheetPreview}
-          onApplySheetPreview={applySheetPreview}
-          onRegenerateSheetPreview={regenerateSheetPreview}
-          onActivateSheetPreviewVersion={activateSheetPreviewVersion}
-          onBatchSplitSheetPreviews={batchSplitSheetPreviews}
-          onDeleteSheetPreview={removeSheetPreview}
-          onCancelSheetGen={cancelSheetGen}
-          onCancelSheetGenTask={cancelSheetGenTask}
           onGoToEdit={() => setPanelViewMode('edit')}
           onNotify={onNotify}
           onAddRoleAsset={addRoleAsset}
@@ -4032,7 +4669,12 @@ export default function StoryboardTablePanel({
       ) : (
         <StoryboardTableEditView
           key={asset.id}
+          assetId={asset.id}
           rows={table.rows}
+          generatedImageAssets={generatedImageAssets}
+          onPreviewGeneratedImage={(src) => openStoryboardLightbox(src)}
+          onGenHistoryPanelVisible={requestGeneratedImageHistoryHydrate}
+          onGeneratedImageHistoryLoadError={requestGeneratedImageHistoryHydrate}
           roleAssets={table.roleAssets ?? []}
           activeRowId={activeRowId}
           imageBusyRowId={imageBusyRowId}
@@ -4066,6 +4708,11 @@ export default function StoryboardTablePanel({
           roleReplaceBatchBusy={roleReplaceBatchBusy}
           roleReplaceBatchProgress={roleReplaceBatchProgress}
           onRoleReplaceBatch={!readOnly ? () => void runRoleReplaceBatch() : undefined}
+          selectedSheetGenBatchBusy={selectedSheetGenBatchBusy}
+          selectedSheetGenBatchProgress={selectedSheetGenBatchProgress}
+          onSelectedSheetGen={
+            !readOnly ? (rowIds) => void runSelectedSheetGen(rowIds) : undefined
+          }
           readOnly={readOnly}
           redrawRowDisabledReason={redrawRowDisabledReason}
           editScrollRef={editViewRef}
@@ -4150,6 +4797,7 @@ export default function StoryboardTablePanel({
           open
           busy={splitAdjustDraft.applying}
           detecting={splitAdjustDraft.detecting}
+          detectStatus={splitAdjustDraft.detectStatus}
           imageSrc={splitAdjustDraft.imageSrc}
           boxes={splitAdjustDraft.boxes}
           expectedShotNos={splitAdjustDraft.expectedShotNos}

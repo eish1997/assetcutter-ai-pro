@@ -53,10 +53,20 @@ export type StoryboardFrameHistoryCompanionHydrateTask = {
   prevImg: string;
 };
 
+export type StoryboardGeneratedImageHistoryCompanionHydrateTask = {
+  assetId: string;
+  recordId: string;
+  companionKey: string;
+  prevImg: string;
+};
+
 export type StoryboardFrameCompanionHydrateFailure = {
-  task: StoryboardFrameCompanionHydrateTask | StoryboardFrameHistoryCompanionHydrateTask;
+  task:
+    | StoryboardFrameCompanionHydrateTask
+    | StoryboardFrameHistoryCompanionHydrateTask
+    | StoryboardGeneratedImageHistoryCompanionHydrateTask;
   error: string;
-  kind: 'frame' | 'history';
+  kind: 'frame' | 'history' | 'generated_history';
 };
 
 export function listStoryboardFrameCompanionHydrateTasks(
@@ -109,9 +119,58 @@ export function buildStoryboardFrameCompanionHydrateKey(assets: WorkflowAsset[])
     .join('|');
 }
 
+export function storyboardCompanionHydrateSlotSignature(
+  prevImg: string,
+  companionKey: string
+): string {
+  const u = String(prevImg || '').trim();
+  const ck = String(companionKey || '').trim();
+  if (!ck) return '';
+  if (!u) return 'empty';
+  if (/^blob:/i.test(u)) return u;
+  if (/^data:/i.test(u)) return `data:${u.length}`;
+  if (companionRasterSlotNeedsHydrate(u, ck)) return 'need';
+  return `ok:${u.slice(0, 64)}`;
+}
+
 export function buildStoryboardFrameHistoryCompanionHydrateKey(assets: WorkflowAsset[]): string {
   return listStoryboardFrameHistoryCompanionHydrateTasks(assets)
-    .map((task) => `${task.assetId}:${task.rowId}:${task.versionId}:${task.companionKey}`)
+    .map(
+      (task) =>
+        `${task.assetId}:${task.rowId}:${task.versionId}:${task.companionKey}:${storyboardCompanionHydrateSlotSignature(task.prevImg, task.companionKey)}`
+    )
+    .sort()
+    .join('|');
+}
+
+export function listStoryboardGeneratedImageHistoryCompanionHydrateTasks(
+  assets: WorkflowAsset[]
+): StoryboardGeneratedImageHistoryCompanionHydrateTask[] {
+  const tasks: StoryboardGeneratedImageHistoryCompanionHydrateTask[] = [];
+  for (const asset of assets) {
+    if (!isWorkflowStoryboardTableAsset(asset)) continue;
+    for (const record of asset.storyboardTable?.generatedImageHistory ?? []) {
+      const companionKey = String(record.frameImageCompanionKey || '').trim();
+      if (!companionKey) continue;
+      tasks.push({
+        assetId: asset.id,
+        recordId: record.id,
+        companionKey,
+        prevImg: String(record.frameImage || '').trim(),
+      });
+    }
+  }
+  return tasks;
+}
+
+export function buildStoryboardGeneratedImageHistoryCompanionHydrateKey(
+  assets: WorkflowAsset[]
+): string {
+  return listStoryboardGeneratedImageHistoryCompanionHydrateTasks(assets)
+    .map(
+      (task) =>
+        `${task.assetId}:${task.recordId}:${task.companionKey}:${storyboardCompanionHydrateSlotSignature(task.prevImg, task.companionKey)}`
+    )
     .sort()
     .join('|');
 }
@@ -198,6 +257,50 @@ export async function hydrateStoryboardFrameHistoryCompanionTasks(
   return { hydrated, failures };
 }
 
+export async function hydrateStoryboardGeneratedImageHistoryCompanionTasks(
+  tasks: StoryboardGeneratedImageHistoryCompanionHydrateTask[],
+  companionBaseUrl: string,
+  companionProjectId: string,
+  options?: { concurrency?: number }
+): Promise<{
+  hydrated: Array<{ task: StoryboardGeneratedImageHistoryCompanionHydrateTask; objectUrl: string }>;
+  failures: StoryboardFrameCompanionHydrateFailure[];
+}> {
+  const base = String(companionBaseUrl || '').trim();
+  const pid = String(companionProjectId || '').trim();
+  const concurrency = options?.concurrency ?? STORYBOARD_FRAME_COMPANION_HYDRATE_CONCURRENCY;
+  const eligible: StoryboardGeneratedImageHistoryCompanionHydrateTask[] = [];
+  for (const task of tasks) {
+    if (await shouldKeepExistingCompanionRasterUrl(task.prevImg, task.companionKey)) continue;
+    eligible.push(task);
+  }
+  if (!eligible.length || !base || !pid) {
+    return { hydrated: [], failures: [] };
+  }
+
+  const outcomes = await mapLimit(eligible, concurrency, async (task) => {
+    const got = await fetchWorkflowOriginalFromCompanionAsObjectUrl(base, pid, task.companionKey);
+    if (got.ok === false) {
+      return { task, error: got.error } as const;
+    }
+    return { task, objectUrl: got.objectUrl } as const;
+  });
+
+  const hydrated: Array<{
+    task: StoryboardGeneratedImageHistoryCompanionHydrateTask;
+    objectUrl: string;
+  }> = [];
+  const failures: StoryboardFrameCompanionHydrateFailure[] = [];
+  for (const outcome of outcomes) {
+    if ('objectUrl' in outcome) {
+      hydrated.push(outcome);
+    } else {
+      failures.push({ ...outcome, kind: 'generated_history' });
+    }
+  }
+  return { hydrated, failures };
+}
+
 function revokeStoryboardFrameBlobUrl(url: string): void {
   if (!/^blob:/i.test(String(url || '').trim())) return;
   try {
@@ -272,10 +375,27 @@ export function applyStoryboardFrameHistoryCompanionHydrateResults(
     if (!rowMap || !isWorkflowStoryboardTableAsset(asset) || !asset.storyboardTable?.rows) {
       return asset;
     }
+    const hydratedByRecordId = new Map<string, { objectUrl: string; companionKey: string }>();
+    for (const rowVersions of rowMap.values()) {
+      for (const [versionId, hit] of rowVersions) {
+        hydratedByRecordId.set(versionId, hit);
+      }
+    }
+    const nextGeneratedImageHistory = asset.storyboardTable.generatedImageHistory?.map((record) => {
+      const hit = hydratedByRecordId.get(record.id);
+      if (!hit) return record;
+      const currentKey = String(record.frameImageCompanionKey || '').trim();
+      if (!currentKey || currentKey !== hit.companionKey) return record;
+      revokeStoryboardFrameBlobUrl(String(record.frameImage || '').trim());
+      return { ...record, frameImage: hit.objectUrl };
+    });
     return normalizeStoryboardTableOnAsset({
       ...asset,
       storyboardTable: {
         ...asset.storyboardTable,
+        ...(nextGeneratedImageHistory
+          ? { generatedImageHistory: nextGeneratedImageHistory }
+          : {}),
         rows: asset.storyboardTable.rows.map((row) => {
           const versionMap = rowMap.get(row.id);
           if (!versionMap || !row.frameImageHistory?.length) return row;
@@ -290,6 +410,47 @@ export function applyStoryboardFrameHistoryCompanionHydrateResults(
               return { ...item, frameImage: hit.objectUrl };
             }),
           };
+        }),
+      },
+    });
+  });
+}
+
+export function applyStoryboardGeneratedImageHistoryCompanionHydrateResults(
+  assets: WorkflowAsset[],
+  hydrated: Array<{ task: StoryboardGeneratedImageHistoryCompanionHydrateTask; objectUrl: string }>
+): WorkflowAsset[] {
+  if (!hydrated.length) return assets;
+  const byAsset = new Map<string, Map<string, { objectUrl: string; companionKey: string }>>();
+  for (const { task, objectUrl } of hydrated) {
+    let recordMap = byAsset.get(task.assetId);
+    if (!recordMap) {
+      recordMap = new Map();
+      byAsset.set(task.assetId, recordMap);
+    }
+    recordMap.set(task.recordId, { objectUrl, companionKey: task.companionKey });
+  }
+
+  return assets.map((asset) => {
+    const recordMap = byAsset.get(asset.id);
+    if (
+      !recordMap ||
+      !isWorkflowStoryboardTableAsset(asset) ||
+      !asset.storyboardTable?.generatedImageHistory?.length
+    ) {
+      return asset;
+    }
+    return normalizeStoryboardTableOnAsset({
+      ...asset,
+      storyboardTable: {
+        ...asset.storyboardTable,
+        generatedImageHistory: asset.storyboardTable.generatedImageHistory.map((record) => {
+          const hit = recordMap.get(record.id);
+          if (!hit) return record;
+          const currentKey = String(record.frameImageCompanionKey || '').trim();
+          if (!currentKey || currentKey !== hit.companionKey) return record;
+          revokeStoryboardFrameBlobUrl(String(record.frameImage || '').trim());
+          return { ...record, frameImage: hit.objectUrl };
         }),
       },
     });

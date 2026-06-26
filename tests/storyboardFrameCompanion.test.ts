@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyStoryboardFrameCompanionHydrateResults,
+  applyStoryboardGeneratedImageHistoryCompanionHydrateResults,
   buildStoryboardFrameCompanionHydrateKey,
+  buildStoryboardGeneratedImageHistoryCompanionHydrateKey,
   listStoryboardFrameCompanionHydrateTasks,
+  listStoryboardGeneratedImageHistoryCompanionHydrateTasks,
   storyboardFrameCompanionResultKey,
   storyboardRowNeedsCompanionFrameHydrate,
 } from '../services/storyboardFrameCompanion';
@@ -115,5 +118,66 @@ describe('storyboardFrameCompanion', () => {
     );
     expect(next[0]?.storyboardTable?.rows[0]?.frameImage).toBeUndefined();
     expect(asset.storyboardTable?.rows[0]?.frameImageCompanionKey).toBe('ck-1');
+  });
+
+  it('lists generated image history hydrate tasks', () => {
+    const asset = storyboardAsset([
+      createStoryboardTableRow({ id: 'r1', shotNo: '01' }, 0),
+    ]);
+    asset.storyboardTable = {
+      ...asset.storyboardTable!,
+      generatedImageHistory: [
+        {
+          id: 'gen-1',
+          rowId: 'r1',
+          createdAt: 100,
+          source: 'sheet_split',
+          frameImageCompanionKey: 'ck-gen-1',
+        },
+      ],
+    };
+    expect(listStoryboardGeneratedImageHistoryCompanionHydrateTasks([asset])).toEqual([
+      {
+        assetId: 'asset-1',
+        recordId: 'gen-1',
+        companionKey: 'ck-gen-1',
+        prevImg: '',
+      },
+    ]);
+    expect(buildStoryboardGeneratedImageHistoryCompanionHydrateKey([asset])).toBe(
+      'asset-1:gen-1:ck-gen-1:empty'
+    );
+  });
+
+  it('applyStoryboardGeneratedImageHistoryCompanionHydrateResults patches generated history', () => {
+    const asset = storyboardAsset([createStoryboardTableRow({ id: 'r1', shotNo: '01' }, 0)]);
+    asset.storyboardTable = {
+      ...asset.storyboardTable!,
+      generatedImageHistory: [
+        {
+          id: 'gen-1',
+          rowId: 'r1',
+          createdAt: 100,
+          source: 'redraw',
+          frameImage: 'blob:dead',
+          frameImageCompanionKey: 'ck-gen-1',
+        },
+      ],
+    };
+    const next = applyStoryboardGeneratedImageHistoryCompanionHydrateResults(
+      [asset],
+      [
+        {
+          task: {
+            assetId: 'asset-1',
+            recordId: 'gen-1',
+            companionKey: 'ck-gen-1',
+            prevImg: 'blob:dead',
+          },
+          objectUrl: 'blob:fresh-gen',
+        },
+      ]
+    );
+    expect(next[0]?.storyboardTable?.generatedImageHistory?.[0]?.frameImage).toBe('blob:fresh-gen');
   });
 });
