@@ -29,6 +29,8 @@ import { loadRecords, addRecord as addGenerationRecord, updateScore as updateGen
 import { loadSnippets } from './services/snippetStore';
 import { AppStep, AppMode, LibraryItem, SystemConfig, AppTask, AssetCategory, DialogMessage, DialogSession, DialogTempItem, DIALOG_ASPECT_RATIO_OPTIONS, SUPPORTED_IMAGE_SIZES, type GenerationRecord, type CustomAppModule, type CapabilitySet, type WorkflowAsset, type WorkflowPendingTask, type ArenaCurrentStep, type ArenaStepEntry, type ArenaTimelineBlock } from './types';
 import { runCapabilityTest } from './services/capabilityTestRunner';
+import { executeCapability } from './services/capabilityExecutor';
+import { initAgentWorkbenchBridge } from './services/agentWorkbenchBridge';
 import { loadCapabilityPresets, saveCapabilityPresets, CAPABILITY_PRESETS_KEY } from './services/capabilityPresetStore';
 import { loadCapabilitySets, saveCapabilitySets, CAPABILITY_SETS_KEY } from './services/capabilitySetStore';
 import { useWorkflowMainScrollCapture, type WorkflowCapabilityGutterDropConfig } from './hooks/useWorkflowMainScrollCapture';
@@ -2159,6 +2161,56 @@ const MainApp: React.FC = () => {
     },
     [loadWorkspaceProjectInternal, markWorkspaceLocalIdbHydrateReady, refreshAuthUser]
   );
+
+  useEffect(() => {
+    initAgentWorkbenchBridge({
+      getContext: async () => ({
+        authenticated: Boolean(user?.id),
+        userId: user?.id ?? null,
+        activeProjectId: activeWorkspaceProjectId,
+        activeProjectName:
+          workspaceProjects.find((p) => p.id === activeWorkspaceProjectId)?.name ?? null,
+        projects: workspaceProjects.map((p) => ({ id: p.id, name: p.name })),
+        capabilityPresets: capabilityPresets.map((p) => ({
+          id: p.id,
+          name: p.label || p.id,
+          category: p.category,
+        })),
+      }),
+      openProject: async (projectId) => {
+        const id = String(projectId || '').trim();
+        if (!id) return { ok: false, error: 'missing projectId' };
+        try {
+          await openWorkspaceProject(id);
+          return { ok: true, projectId: id };
+        } catch (e) {
+          return { ok: false, error: e instanceof Error ? e.message : String(e) };
+        }
+      },
+      runCapability: async ({ presetId, projectId, inputText }) => {
+        const pid = String(presetId || '').trim();
+        if (!pid) return { ok: false, error: 'missing presetId' };
+        const preset = capabilityPresets.find((p) => p.id === pid);
+        if (!preset) return { ok: false, error: 'preset_not_found' };
+        const targetProjectId = projectId ? String(projectId) : activeWorkspaceProjectId;
+        if (targetProjectId && targetProjectId !== activeWorkspaceProjectId) {
+          await openWorkspaceProject(targetProjectId);
+        }
+        const result = await executeCapability(
+          preset,
+          '',
+          { companionProjectId: targetProjectId || 'default' },
+          { inputText }
+        );
+        return {
+          ok: result.ok,
+          kind: result.kind,
+          error: result.error,
+          durationMs: result.durationMs,
+        };
+      },
+    });
+  }, [user?.id, activeWorkspaceProjectId, workspaceProjects, capabilityPresets, openWorkspaceProject]);
 
   const backToWorkspaceProjectShell = useCallback(
     async (opts?: { skipQuotaBackConfirm?: boolean }) => {

@@ -133,4 +133,45 @@ contextBridge.exposeInMainWorld('companionShell', {
   platform: process.platform,
   /** 与 main.cjs `defaultShellSiteUrl` 一致，供壳首帧与「打开网站」回退 */
   defaultSiteUrl: defaultShellSiteUrl(),
+  defaultScriptHubUrl: (() => {
+    try {
+      return app.isPackaged ? 'https://scripts.adrazzo.com/' : 'http://localhost:5174/';
+    } catch {
+      return 'http://localhost:5174/';
+    }
+  })(),
+  setCopilotLayout: (layout) => timedInvoke('shell-set-copilot-layout', layout || {}),
+  getCopilotLayout: () => timedInvoke('shell-get-copilot-layout'),
+  onShellViewSync: (handler) => {
+    if (typeof handler !== 'function') return;
+    ipcRenderer.on('shell-sync-view', (_evt, payload) => {
+      try {
+        handler(payload);
+      } catch {
+        /* ignore */
+      }
+    });
+  },
+  agentSession: {
+    listMessages: (sessionId) => timedInvoke('agent-session-list-messages', sessionId),
+    send: (text) => timedInvoke('agent-session-send', text, 600000),
+    abort: () => timedInvoke('agent-session-abort'),
+    confirm: (confirmId, approved) => timedInvoke('agent-session-confirm', confirmId, approved),
+    probeBrain: () => timedInvoke('agent-session-probe-brain'),
+    probeAllBrains: () => timedInvoke('agent-probe-all-brains', 60000),
+    loadSettings: () => timedInvoke('agent-settings-load'),
+    saveSettings: (patch) => timedInvoke('agent-settings-save', patch || {}),
+    regenerateMcpToken: () => timedInvoke('agent-mcp-regenerate-token'),
+    mcpStatus: () => timedInvoke('agent-mcp-status'),
+    onEvent: (handler) => {
+      if (typeof handler !== 'function') return;
+      ipcRenderer.on('agent-session:event', (_evt, payload) => {
+        try {
+          handler(payload);
+        } catch {
+          /* ignore */
+        }
+      });
+    },
+  },
 });

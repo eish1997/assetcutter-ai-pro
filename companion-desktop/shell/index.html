@@ -7,6 +7,7 @@
   <title>本地伴侣</title>
   <style>
     :root {
+      --copilot-width: 360px;
       --bg: #0c0c0e;
       --panel: #121214;
       --border: #2e2e32;
@@ -347,6 +348,233 @@
       display: flex;
       flex-direction: column;
       position: relative;
+    }
+    aside.shell-copilot {
+      flex: 0 0 var(--copilot-width, 360px);
+      width: var(--copilot-width, 360px);
+      min-width: var(--copilot-width, 360px);
+      display: flex;
+      flex-direction: column;
+      border-left: 1px solid var(--border);
+      background: #0f0f11;
+      z-index: 110;
+      transition: flex-basis 0.18s ease, width 0.18s ease, min-width 0.18s ease;
+    }
+    body.shell-copilot-collapsed aside.shell-copilot {
+      flex: 0 0 48px;
+      width: 48px;
+      min-width: 48px;
+    }
+    body.shell-copilot-collapsed .copilot-body,
+    body.shell-copilot-collapsed .copilot-footer {
+      display: none;
+    }
+    body.shell-copilot-collapsed .copilot-head-title {
+      display: none;
+    }
+    .copilot-head {
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--border);
+      min-height: 40px;
+    }
+    .copilot-head-title {
+      flex: 1 1 auto;
+      font-size: 11px;
+      font-weight: 600;
+      color: rgba(228, 228, 231, 0.85);
+    }
+    .copilot-brain {
+      font-size: 9px;
+      color: var(--muted);
+      font-family: ui-monospace, monospace;
+    }
+    .copilot-toggle {
+      width: 28px;
+      height: 28px;
+      border: none;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .copilot-toggle:hover {
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text);
+    }
+    .copilot-body {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow: auto;
+      padding: 10px;
+    }
+    .copilot-messages {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .copilot-msg {
+      padding: 8px 10px;
+      border-radius: 10px;
+      font-size: 12px;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .copilot-msg-user {
+      align-self: flex-end;
+      max-width: 92%;
+      background: rgba(37, 99, 235, 0.22);
+      border: 1px solid rgba(59, 130, 246, 0.35);
+    }
+    .copilot-msg-assistant {
+      align-self: flex-start;
+      max-width: 96%;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+    }
+    .copilot-msg-tool,
+    .copilot-msg-tool-call {
+      align-self: stretch;
+      font-size: 10px;
+      font-family: ui-monospace, monospace;
+      color: #a1a1aa;
+      background: rgba(0, 0, 0, 0.25);
+      border: 1px dashed rgba(148, 163, 184, 0.25);
+    }
+    .copilot-footer {
+      flex: 0 0 auto;
+      padding: 8px 10px 10px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .copilot-status {
+      font-size: 10px;
+      color: var(--muted);
+      min-height: 14px;
+    }
+    .copilot-input-row {
+      display: flex;
+      gap: 6px;
+      align-items: flex-end;
+    }
+    .copilot-input {
+      flex: 1 1 auto;
+      min-height: 34px;
+      max-height: 120px;
+      resize: vertical;
+      padding: 8px 10px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: #0a0a0b;
+      color: var(--text);
+      font-size: 12px;
+      font-family: inherit;
+    }
+    .copilot-send,
+    .copilot-abort {
+      flex: 0 0 auto;
+      padding: 8px 10px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: #18181b;
+      color: #dbeafe;
+      font-size: 10px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .copilot-send {
+      border-color: #2563eb;
+      background: #1d4ed8;
+    }
+    .copilot-send:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .copilot-abort:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+    .copilot-confirm-card {
+      margin: 8px 0;
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: 1px solid rgba(251, 191, 36, 0.35);
+      background: rgba(251, 191, 36, 0.08);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .copilot-confirm-title {
+      font-weight: 600;
+      margin-bottom: 6px;
+      color: #fbbf24;
+    }
+    .copilot-confirm-args {
+      font-family: ui-monospace, monospace;
+      font-size: 11px;
+      white-space: pre-wrap;
+      word-break: break-all;
+      margin-bottom: 8px;
+      color: rgba(255, 255, 255, 0.75);
+    }
+    .copilot-confirm-actions {
+      display: flex;
+      gap: 8px;
+    }
+    .copilot-confirm-approve,
+    .copilot-confirm-reject {
+      flex: 1;
+      padding: 6px 8px;
+      border-radius: 6px;
+      border: none;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .copilot-confirm-approve {
+      background: rgba(34, 197, 94, 0.25);
+      color: #86efac;
+    }
+    .copilot-confirm-reject {
+      background: rgba(239, 68, 68, 0.2);
+      color: #fca5a5;
+    }
+    .shell-brain-picker {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin: 6px 0 10px;
+    }
+    .shell-brain-option {
+      padding: 4px 10px;
+      border-radius: 6px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(255, 255, 255, 0.04);
+      color: rgba(255, 255, 255, 0.75);
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .shell-brain-option.is-active {
+      border-color: rgba(96, 165, 250, 0.55);
+      background: rgba(59, 130, 246, 0.18);
+      color: #bfdbfe;
+    }
+    #inpMcpConfig {
+      width: 100%;
+      box-sizing: border-box;
+      margin-top: 4px;
+      padding: 8px;
+      border-radius: 6px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(0, 0, 0, 0.25);
+      color: rgba(255, 255, 255, 0.8);
+      font-size: 11px;
+      resize: vertical;
     }
     .ico { font-size: 18px; line-height: 1; }
     table { width: 100%; border-collapse: collapse; font-size: 11px; }
@@ -798,6 +1026,21 @@
           <path d="M2.5 9h19M8 22h8" />
         </svg>
       </button>
+      <button type="button" role="tab" data-view="scripts" aria-selected="false" aria-label="脚本" title="Script Hub">
+        <svg
+          class="sidebar-nav-icon"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.75"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <polyline points="16 18 22 12 16 6" />
+          <polyline points="8 6 2 12 8 18" />
+        </svg>
+      </button>
       <button type="button" role="tab" data-view="tools" aria-selected="false" aria-label="工具" title="工具">
         <svg
           class="sidebar-nav-icon"
@@ -1046,6 +1289,20 @@
   <div id="view-settings" class="view hidden">
     <h1>设置</h1>
     <div class="set-section">
+      <h3 title="Script Hub 内嵌地址">Script Hub 地址</h3>
+      <label for="inpScriptHubUrl" title="第五导航「脚本」内嵌的 Script Hub 根地址">地址</label>
+      <input
+        type="url"
+        id="inpScriptHubUrl"
+        placeholder="http://localhost:5174/"
+        autocomplete="off"
+        title="Script Hub 根地址"
+      />
+      <div class="btn-row">
+        <button type="button" class="btn btn-primary" id="btnSaveScriptHub">保存</button>
+      </div>
+    </div>
+    <div class="set-section">
       <h3 title="工作台内嵌主站用，填以 https:// 开头的根地址">主站地址</h3>
       <label for="inpSiteUrl" title="工作台内嵌主站用，填以 https:// 开头的根地址">地址</label>
       <input
@@ -1083,9 +1340,26 @@
       <p id="pairingHint" class="mono set-feedback" hidden></p>
     </div>
     <div class="set-section">
-      <h3
-        title="留空使用系统默认目录。应用或恢复默认时可选择迁移数据（会短暂停止伴侣）或仅切换配置。"
-      >
+      <h3 title="允许外部 Agent（Hermes/Codex）通过 MCP 调用同一套 ac.* 身体工具">外部 Agent（MCP）</h3>
+      <label class="pair-label-gap">
+        <input type="checkbox" id="inpMcpEnabled" title="默认关闭；开启后本机 127.0.0.1 监听 JSON-RPC" />
+        允许 MCP 控制本平台
+      </label>
+      <label class="pair-label-gap" title="内置 Copilot 默认大脑">Copilot 默认大脑</label>
+      <div class="shell-brain-picker" id="shellBrainPicker" role="listbox" aria-label="Copilot 默认大脑"></div>
+      <p id="agentMcpStatus" class="mono set-feedback"></p>
+      <label for="inpMcpToken" class="pair-label-gap" title="Bearer Token；请勿泄露">MCP Token</label>
+      <input type="text" id="inpMcpToken" readonly placeholder="开启 MCP 后生成" autocomplete="off" />
+      <label for="inpMcpConfig" class="pair-label-gap" title="可复制到 Hermes / Claude Desktop MCP 配置">MCP 客户端配置片段</label>
+      <textarea id="inpMcpConfig" class="mono" rows="6" readonly placeholder="开启 MCP 后显示 JSON 配置"></textarea>
+      <div class="btn-row">
+        <button type="button" class="btn btn-primary" id="btnSaveAgentSettings">保存 Agent 设置</button>
+        <button type="button" class="btn" id="btnRegenerateMcpToken" title="重新生成 MCP Token">重新生成 Token</button>
+      </div>
+      <p id="agentSettingsHint" class="mono set-feedback" hidden></p>
+    </div>
+    <div class="set-section">
+      <h3 title="留空使用系统默认目录。应用或恢复默认时可选择迁移数据（会短暂停止伴侣）或仅切换配置。">
         本机存储
       </h3>
       <label
@@ -1154,10 +1428,28 @@
         <button type="button" class="btn" id="btnOpenMgmt" title="在系统浏览器打开本机管理页">浏览器管理页</button>
       </div>
     </div>
-  </div>
-  </div>
+    </div>
+    </div>
+    <aside class="shell-copilot" id="shell-copilot" aria-label="Copilot">
+      <div class="copilot-head">
+        <button type="button" class="copilot-toggle" id="copilot-toggle" aria-expanded="true" title="收起 Copilot">◀</button>
+        <div class="copilot-head-title">Copilot <span class="copilot-brain" id="copilot-brain-label">stub</span></div>
+      </div>
+      <div class="copilot-body">
+        <div class="copilot-messages" id="copilot-messages"></div>
+      </div>
+      <div class="copilot-footer">
+        <div class="copilot-status" id="copilot-status"></div>
+        <div class="copilot-input-row">
+          <textarea class="copilot-input" id="copilot-input" rows="2" placeholder="试试：打开脚本页 / 伴侣状态"></textarea>
+          <button type="button" class="copilot-send" id="copilot-send">发送</button>
+          <button type="button" class="copilot-abort" id="copilot-abort">停止</button>
+        </div>
+      </div>
+    </aside>
   </div>
 
+  <script src="copilot-panel.js"></script>
   <script src="tools-module.js"></script>
   <script src="tools-page.js"></script>
   <script>
@@ -1197,6 +1489,11 @@
         typeof shell.defaultSiteUrl === 'string' && shell.defaultSiteUrl.trim()
           ? shell.defaultSiteUrl.trim()
           : 'http://localhost:3000';
+
+      const defaultScriptHubUrl =
+        typeof shell.defaultScriptHubUrl === 'string' && shell.defaultScriptHubUrl.trim()
+          ? shell.defaultScriptHubUrl.trim()
+          : 'http://localhost:5174/';
 
       const views = { home: $('view-home'), tools: $('view-tools'), settings: $('view-settings') };
       let activeView = 'home';
@@ -1409,16 +1706,23 @@
         }
       }
 
-      async function applyShellView(v) {
+      async function applyShellView(v, opts) {
+        const syncOnly = Boolean(opts && opts.syncOnly);
         const viewKey =
-          v === 'workbench' || v === 'settings' || v === 'home' || v === 'tools' ? v : 'home';
+          v === 'workbench' ||
+          v === 'scripts' ||
+          v === 'settings' ||
+          v === 'home' ||
+          v === 'tools'
+            ? v
+            : 'home';
         activeView = viewKey;
         document.querySelectorAll('nav.shell-sidebar button[role="tab"]').forEach((b) => {
           const on = b.getAttribute('data-view') === viewKey;
           b.classList.toggle('active', on);
           b.setAttribute('aria-selected', on ? 'true' : 'false');
         });
-        if (viewKey === 'workbench') {
+        if (viewKey === 'workbench' || viewKey === 'scripts') {
           views.home.classList.add('hidden');
           views.tools.classList.add('hidden');
           views.settings.classList.add('hidden');
@@ -1427,22 +1731,25 @@
             views[k].classList.toggle('hidden', k !== viewKey);
           });
         }
-        if (typeof shell.setShellView === 'function') {
+        if (!syncOnly && typeof shell.setShellView === 'function') {
           try {
             const r = await shell.setShellView(viewKey);
-            if (viewKey === 'workbench' && r && !r.ok) {
+            if ((viewKey === 'workbench' || viewKey === 'scripts') && r && !r.ok) {
+              const label = viewKey === 'workbench' ? '工作台' : '脚本页';
               const msg =
                 r.error === 'invalid_site_url'
                   ? '请先在「设置」填写以 http(s):// 开头的主站地址。'
-                  : r.error || '未知错误';
-              window.alert('工作台无法加载：' + msg);
-              await applyShellView('home');
+                  : r.error === 'invalid_script_hub_url'
+                    ? '请先在「设置」填写 Script Hub 地址。'
+                    : r.error || '未知错误';
+              window.alert(label + '无法加载：' + msg);
+              await applyShellView(r.view || 'home', { syncOnly: true });
               return;
             }
           } catch (e) {
-            if (viewKey === 'workbench') {
-              window.alert('工作台异常：' + (e && e.message ? e.message : String(e)));
-              await applyShellView('home');
+            if (viewKey === 'workbench' || viewKey === 'scripts') {
+              window.alert('页面异常：' + (e && e.message ? e.message : String(e)));
+              await applyShellView('home', { syncOnly: true });
             }
           }
         }
@@ -1460,8 +1767,11 @@
         if (viewKey === 'settings') {
           void refreshVolumeEffectiveHint();
           void loadPairingFields();
+          void loadAgentSettingsUi();
         }
       }
+
+      window.__acApplyShellViewFromMain = applyShellView;
 
       function focusSamLocalSetupSection() {
         void (async () => {
@@ -1667,15 +1977,19 @@
         });
       }
 
-      let settingsCache = { siteUrl: defaultSiteUrl, volumeRoot: '', downloadDir: '' };
+      let settingsCache = { siteUrl: defaultSiteUrl, scriptHubUrl: defaultScriptHubUrl, volumeRoot: '', downloadDir: '' };
       let pluginListSignature = '';
       let pluginLoading = false;
       async function loadSettingsUi() {
         const s = await shell.loadSettings();
         if (s && typeof s.siteUrl === 'string' && s.siteUrl.trim()) settingsCache.siteUrl = s.siteUrl.trim();
+        if (s && typeof s.scriptHubUrl === 'string' && s.scriptHubUrl.trim()) {
+          settingsCache.scriptHubUrl = s.scriptHubUrl.trim();
+        }
         settingsCache.volumeRoot = s && typeof s.volumeRoot === 'string' ? s.volumeRoot.trim() : '';
         settingsCache.downloadDir = s && typeof s.downloadDir === 'string' ? s.downloadDir.trim() : '';
         $('inpSiteUrl').value = settingsCache.siteUrl;
+        if ($('inpScriptHubUrl')) $('inpScriptHubUrl').value = settingsCache.scriptHubUrl;
         $('inpVolumeRoot').value = settingsCache.volumeRoot;
         $('inpDownloadDir').value = settingsCache.downloadDir;
         refreshDownloadDirHint();
@@ -1878,6 +2192,17 @@
         }
       });
 
+      const btnSaveScriptHub = $('btnSaveScriptHub');
+      if (btnSaveScriptHub) {
+        btnSaveScriptHub.addEventListener('click', async () => {
+          const u = $('inpScriptHubUrl').value.trim();
+          const res = await shell.saveSettings({ scriptHubUrl: u });
+          if (res && res.ok) {
+            settingsCache.scriptHubUrl = u || settingsCache.scriptHubUrl;
+          }
+        });
+      }
+
       function refreshDownloadDirHint() {
         const v = settingsCache.downloadDir || $('inpDownloadDir').value.trim();
         if (v) {
@@ -2062,6 +2387,125 @@
         }
       });
 
+      let agentSettingsCache = { mcpEnabled: false, defaultBrainId: 'hermes', mcpToken: null, mcpPort: 19120 };
+      let agentBrainCatalog = [];
+
+      function renderBrainPicker(activeId) {
+        const host = $('shellBrainPicker');
+        if (!host) return;
+        host.innerHTML = '';
+        const list = agentBrainCatalog.length
+          ? agentBrainCatalog
+          : [{ id: 'hermes' }, { id: 'stub' }, { id: 'openai_compat' }, { id: 'claude_code' }, { id: 'codex' }];
+        for (const b of list) {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'shell-brain-option' + (b.id === activeId ? ' is-active' : '');
+          btn.textContent = b.displayName ? b.id + ' · ' + b.displayName : b.id;
+          btn.dataset.brainId = b.id;
+          btn.addEventListener('click', () => {
+            for (const el of host.querySelectorAll('.shell-brain-option')) {
+              el.classList.toggle('is-active', el.dataset.brainId === b.id);
+            }
+            agentSettingsCache.defaultBrainId = b.id;
+          });
+          host.appendChild(btn);
+        }
+      }
+
+      async function loadAgentSettingsUi() {
+        const agent = shell.agentSession;
+        if (!agent || typeof agent.loadSettings !== 'function') return;
+        try {
+          const r = await agent.loadSettings();
+          if (!r || !r.ok) return;
+          agentSettingsCache = { ...(r.settings || {}) };
+          agentBrainCatalog = Array.isArray(r.brains) ? r.brains : [];
+          if ($('inpMcpEnabled')) $('inpMcpEnabled').checked = Boolean(r.settings && r.settings.mcpEnabled);
+          renderBrainPicker(
+            (r.settings && r.settings.defaultBrainId) || (r.activeBrainId || 'hermes'),
+          );
+          if ($('inpMcpToken')) {
+            $('inpMcpToken').value = r.settings && r.settings.mcpToken ? String(r.settings.mcpToken) : '';
+          }
+          if ($('inpMcpConfig') && r.mcpConfig) {
+            $('inpMcpConfig').value = JSON.stringify(r.mcpConfig, null, 2);
+          }
+          const st = $('agentMcpStatus');
+          if (st && r.mcp) {
+            st.textContent = r.mcp.running
+              ? `MCP 运行中 http://127.0.0.1:${r.mcp.port}/mcp`
+              : r.mcp.enabled
+                ? 'MCP 已启用但未运行'
+                : 'MCP 已关闭';
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+
+      if ($('btnSaveAgentSettings')) {
+        $('btnSaveAgentSettings').addEventListener('click', async () => {
+          const agent = shell.agentSession;
+          const hintEl = $('agentSettingsHint');
+          if (!agent || typeof agent.saveSettings !== 'function') return;
+          const btn = $('btnSaveAgentSettings');
+          btn.disabled = true;
+          setSetFeedback(hintEl, '保存中…');
+          try {
+            const patch = {
+              mcpEnabled: Boolean($('inpMcpEnabled') && $('inpMcpEnabled').checked),
+              defaultBrainId: agentSettingsCache.defaultBrainId || 'hermes',
+            };
+            const r = await agent.saveSettings(patch);
+            if (r && r.ok) {
+              agentSettingsCache = { ...(r.settings || {}) };
+              renderBrainPicker(r.settings && r.settings.defaultBrainId);
+              if ($('inpMcpToken') && r.settings && r.settings.mcpToken) {
+                $('inpMcpToken').value = String(r.settings.mcpToken);
+              }
+              if ($('inpMcpConfig') && r.mcpConfig) {
+                $('inpMcpConfig').value = JSON.stringify(r.mcpConfig, null, 2);
+              }
+              if ($('agentMcpStatus') && r.mcp) {
+                $('agentMcpStatus').textContent = r.mcp.running
+                  ? `MCP 运行中 http://127.0.0.1:${r.mcp.port}/mcp`
+                  : r.mcp.enabled
+                    ? 'MCP 已启用但未运行'
+                    : 'MCP 已关闭';
+              }
+              setSetFeedback(hintEl, 'Agent 设置已保存');
+            } else {
+              setSetFeedback(hintEl, '保存失败：' + ((r && r.error) || '未知错误'));
+            }
+          } catch (e) {
+            setSetFeedback(hintEl, e && e.message ? e.message : String(e));
+          } finally {
+            btn.disabled = false;
+          }
+        });
+      }
+
+      if ($('btnRegenerateMcpToken')) {
+        $('btnRegenerateMcpToken').addEventListener('click', async () => {
+          const agent = shell.agentSession;
+          const hintEl = $('agentSettingsHint');
+          if (!agent || typeof agent.regenerateMcpToken !== 'function') return;
+          try {
+            const r = await agent.regenerateMcpToken();
+            if (r && r.ok && r.settings && r.settings.mcpToken && $('inpMcpToken')) {
+              $('inpMcpToken').value = String(r.settings.mcpToken);
+              if ($('inpMcpConfig') && r.mcpConfig) {
+                $('inpMcpConfig').value = JSON.stringify(r.mcpConfig, null, 2);
+              }
+              setSetFeedback(hintEl, 'Token 已重新生成');
+            }
+          } catch (e) {
+            setSetFeedback(hintEl, e && e.message ? e.message : String(e));
+          }
+        });
+      }
+
       async function refreshHome() {
         await refreshTray();
         void refreshSamLocalWinPanel();
@@ -2104,6 +2548,7 @@
           ]);
         } catch {
           $('inpSiteUrl').value = settingsCache.siteUrl;
+          if ($('inpScriptHubUrl')) $('inpScriptHubUrl').value = settingsCache.scriptHubUrl;
           $('inpVolumeRoot').value = settingsCache.volumeRoot;
           $('inpDownloadDir').value = settingsCache.downloadDir;
         }

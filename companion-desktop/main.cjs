@@ -20,6 +20,15 @@ const { spawn, execSync } = require('child_process');
 const { randomBytes } = require('node:crypto');
 const companionSandboxPaths = require('./companion-sandbox-paths.cjs');
 const { createCompanionAutoUpdate } = require('./companion-auto-update.cjs');
+const { computeEmbeddedBrowserBounds, detachBrowserViews } = require('./embedded-browser-manager.cjs');
+const { createAgentStore } = require('./agent-store.cjs');
+const { createAgentBodyHost } = require('./agent-body-host.cjs');
+const { createAgentSessionService } = require('./agent-session/index.cjs');
+const { createAgentPolicy } = require('./agent-policy.cjs');
+const { createAgentWorkbenchClient } = require('./agent-workbench-client.cjs');
+const { createAgentScriptHubClient } = require('./agent-script-hub-client.cjs');
+const { createBrainAdapter, listBrainCatalog } = require('./brain-adapters/index.cjs');
+const { createAgentBodyMcpServer } = require('./agent-body-mcp.cjs');
 
 /** 打包壳无控制台时 stdout/stderr 可能 EPIPE；避免 uncaughtException 弹窗 */
 function ignoreStreamEpipe(stream) {
@@ -75,12 +84,22 @@ const DEFAULT_HTTP_PORT = 18765;
 /** 开发：`npm start`；安装包：未保存过主站时的「打开网站」默认 */
 const DEFAULT_SHELL_SITE_DEV = 'http://localhost:3000';
 const DEFAULT_SHELL_SITE_PACKAGED = 'https://assetcutter-ai-pro.vercel.app/';
+const DEFAULT_SCRIPT_HUB_DEV = 'http://localhost:5174/';
+const DEFAULT_SCRIPT_HUB_PACKAGED = 'https://scripts.adrazzo.com/';
 
 function defaultShellSiteUrl() {
   try {
     return app.isPackaged ? DEFAULT_SHELL_SITE_PACKAGED : DEFAULT_SHELL_SITE_DEV;
   } catch {
     return DEFAULT_SHELL_SITE_DEV;
+  }
+}
+
+function defaultScriptHubUrl() {
+  try {
+    return app.isPackaged ? DEFAULT_SCRIPT_HUB_PACKAGED : DEFAULT_SCRIPT_HUB_DEV;
+  } catch {
+    return DEFAULT_SCRIPT_HUB_DEV;
   }
 }
 
@@ -94,17 +113,25 @@ let mainWindow = null;
 const shellToolWindows = new Map();
 /** @type {import('electron').BrowserView | null} */
 let workbenchBrowserView = null;
+/** @type {import('electron').BrowserView | null} */
+let scriptsBrowserView = null;
 /** 避免给同一 BrowserView 重复注册 `did-finish-load` */
 const workbenchPairingInjectHooked = new WeakSet();
 /** 避免给同一 BrowserView 重复注册下载接管 */
 const workbenchDownloadHooked = new WeakSet();
-/** @type {'home' | 'workbench' | 'settings'} */
+/** @type {'home' | 'workbench' | 'scripts' | 'tools' | 'settings'} */
 let shellMainProcessActiveView = 'home';
 
 /** 与 `shell/index.html` 侧栏展开宽度一致；收起时为 0（由渲染进程 IPC 同步） */
 const SHELL_SIDEBAR_WIDTH_EXPANDED = 56;
 /** @type {number} */
 let shellWorkbenchSidebarInsetPx = SHELL_SIDEBAR_WIDTH_EXPANDED;
+const SHELL_COPILOT_WIDTH_DEFAULT = 360;
+const SHELL_COPILOT_WIDTH_COLLAPSED = 48;
+/** @type {boolean} */
+let shellCopilotCollapsed = false;
+/** @type {number} */
+let shellCopilotWidthPx = SHELL_COPILOT_WIDTH_DEFAULT;
 const SHELL_TITLEBAR_HEIGHT = 30;
 /** 与 `shell/index.html` 一致：工作台顶栏已移除，BrowserView 从标题栏下缘起算 */
 const SHELL_WORKBENCH_TOOLBAR_HEIGHT = 0;
@@ -120,6 +147,22 @@ let statusPollTimer = null;
 let lastStatusAlertKey = null;
 /** @type {boolean} */
 let isQuitting = false;
+/** @type {ReturnType<createAgentStore> | null} */
+let agentStore = null;
+/** @type {ReturnType<createAgentBodyHost> | null} */
+let agentBodyHost = null;
+/** @type {ReturnType<createAgentSessionService> | null} */
+let agentSessionService = null;
+/** @type {ReturnType<createAgentPolicy> | null} */
+let agentPolicy = null;
+/** @type {ReturnType<createAgentBodyMcpServer> | null} */
+let agentMcpServer = null;
+/** @type {import('./agent-types.d.ts').AgentBrainPort | null} */
+let agentBrainInstance = null;
+/** @type {string | null} */
+let agentBrainInstanceId = null;
+/** @type {Map<string, { resolve: (v: boolean) => void; timer: NodeJS.Timeout }>} */
+const agentConfirmWaiters = new Map();
 
 function broadcastShellUpdaterState(state) {
   const payload = state && typeof state === 'object' ? state : { phase: 'idle', version: null, percent: 0 };
@@ -168,7 +211,13 @@ function readShellSettings() {
   try {
     const p = shellSettingsPath();
     if (!fs.existsSync(p)) {
-      return { siteUrl: fallbackSite, authApiOrigin: '', volumeRoot: '', downloadDir: '' };
+      return {
+        siteUrl: fallbackSite,
+        authApiOrigin: '',
+        volumeRoot: '',
+        downloadDir: '',
+        scriptHubUrl: defaultScriptHubUrl(),
+      };
     }
     const j = JSON.parse(fs.readFileSync(p, 'utf8'));
     const siteUrl =
@@ -177,9 +226,19 @@ function readShellSettings() {
       typeof j.authApiOrigin === 'string' ? j.authApiOrigin.trim().replace(/\/+$/, '') : '';
     const volumeRoot = typeof j.volumeRoot === 'string' ? j.volumeRoot.trim() : '';
     const downloadDir = typeof j.downloadDir === 'string' ? j.downloadDir.trim() : '';
-    return { siteUrl, authApiOrigin, volumeRoot, downloadDir };
+    const scriptHubUrl =
+      typeof j.scriptHubUrl === 'string' && j.scriptHubUrl.trim()
+        ? j.scriptHubUrl.trim()
+        : defaultScriptHubUrl();
+    return { siteUrl, authApiOrigin, volumeRoot, downloadDir, scriptHubUrl };
   } catch {
-    return { siteUrl: fallbackSite, authApiOrigin: '', volumeRoot: '', downloadDir: '' };
+    return {
+      siteUrl: fallbackSite,
+      authApiOrigin: '',
+      volumeRoot: '',
+      downloadDir: '',
+      scriptHubUrl: defaultScriptHubUrl(),
+    };
   }
 }
 
@@ -212,9 +271,295 @@ function saveShellSettings(patch) {
     cur.downloadDir = d;
     workbenchDownloadDirPromptState = 'pending';
   }
+  if (patch && typeof patch.scriptHubUrl === 'string') {
+    const t = patch.scriptHubUrl.trim();
+    cur.scriptHubUrl = t || defaultScriptHubUrl();
+  }
   fs.mkdirSync(path.dirname(shellSettingsPath()), { recursive: true });
   fs.writeFileSync(shellSettingsPath(), `${JSON.stringify(cur, null, 2)}\n`, 'utf8');
   return cur;
+}
+
+function getAgentStoreRoot() {
+  const sandboxRoot = companionSandboxPaths.getCompanionSandboxRoot();
+  if (sandboxRoot) return path.join(sandboxRoot, 'agent-store');
+  return path.join(app.getPath('userData'), 'agent-store');
+}
+
+function getCopilotEffectiveWidthPx() {
+  return shellCopilotCollapsed ? SHELL_COPILOT_WIDTH_COLLAPSED : shellCopilotWidthPx;
+}
+
+function notifyShellViewSync(view) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try {
+      mainWindow.webContents.send('shell-sync-view', { view });
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+function broadcastAgentSessionEvent(payload) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try {
+      mainWindow.webContents.send('agent-session:event', payload || {});
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+function cancelAllAgentConfirms() {
+  for (const [, w] of agentConfirmWaiters) {
+    clearTimeout(w.timer);
+    w.resolve({ approved: false, reason: 'cancelled' });
+  }
+  agentConfirmWaiters.clear();
+}
+
+function waitForAgentConfirm(confirmId, meta) {
+  const id = String(confirmId || '').trim();
+  const timeoutMs =
+    meta && Number.isFinite(Number(meta.timeoutMs))
+      ? Math.min(600000, Math.max(5000, Number(meta.timeoutMs)))
+      : 120000;
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      agentConfirmWaiters.delete(id);
+      resolve({ approved: false, reason: 'timeout' });
+    }, timeoutMs);
+    agentConfirmWaiters.set(id, { resolve, timer });
+  });
+}
+
+function resolveAgentConfirm(confirmId, approved) {
+  const id = String(confirmId || '').trim();
+  const w = agentConfirmWaiters.get(id);
+  if (!w) return { ok: false, error: 'unknown_confirm' };
+  clearTimeout(w.timer);
+  agentConfirmWaiters.delete(id);
+  w.resolve({ approved: Boolean(approved), reason: approved ? 'approved' : 'rejected' });
+  return { ok: true };
+}
+
+async function invokeWorkbenchBridge(method, args) {
+  if (!workbenchBrowserView || workbenchBrowserView.webContents.isDestroyed()) {
+    throw new Error('workbench_unavailable');
+  }
+  const wc = workbenchBrowserView.webContents;
+  const payload = JSON.stringify({
+    method: String(method || ''),
+    args: args && typeof args === 'object' ? args : {},
+  });
+  const js = `(async () => {
+    if (!window.__acAgentWorkbench) return { __bridgeMissing: true };
+    return window.__acAgentWorkbench.dispatch(${payload});
+  })()`;
+  const deadline = Date.now() + 20000;
+  let lastErr = 'bridge_not_registered';
+  while (Date.now() < deadline) {
+    try {
+      const result = await wc.executeJavaScript(js);
+      if (result && result.__bridgeMissing) {
+        await new Promise((r) => setTimeout(r, 350));
+        continue;
+      }
+      return result;
+    } catch (e) {
+      lastErr = e instanceof Error ? e.message : String(e);
+      await new Promise((r) => setTimeout(r, 350));
+    }
+  }
+  throw new Error(lastErr);
+}
+
+async function agentRunShellTool(toolId) {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return { ok: false, error: 'no_shell_window' };
+  }
+  try {
+    return await mainWindow.webContents.executeJavaScript(
+      `window.companionShell.openToolWindow(${JSON.stringify(String(toolId || ''))})`,
+    );
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+async function agentRunShellBootstrap(engine, opts) {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return { ok: false, error: 'no_shell_window' };
+  }
+  const eng = String(engine || '').trim();
+  try {
+    if (eng === 'sam_local') {
+      return await mainWindow.webContents.executeJavaScript('window.companionShell.samLocalBootstrapRun()');
+    }
+    if (eng === 'rembg') {
+      return await mainWindow.webContents.executeJavaScript('window.companionShell.rembgBootstrapRun()');
+    }
+    if (eng === 'paddleocr') {
+      const o = opts && typeof opts === 'object' ? opts : {};
+      return await mainWindow.webContents.executeJavaScript(
+        `window.companionShell.paddleOcrBootstrapRun(${JSON.stringify(o)})`,
+      );
+    }
+    return { ok: false, error: 'unknown_engine' };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** @type {Promise<void> | null} */
+let agentBrainInitPromise = null;
+
+function resolveAgentBrain() {
+  if (!agentStore) return createBrainAdapter('stub');
+  if (agentBrainInstance) return agentBrainInstance;
+  agentBrainInstance = createBrainAdapter('stub', { store: agentStore });
+  agentBrainInstanceId = 'stub';
+  return agentBrainInstance;
+}
+
+async function ensureAgentBrainReady() {
+  if (!agentStore) {
+    resolveAgentBrain();
+    return;
+  }
+  if (!agentBrainInitPromise) {
+    agentBrainInitPromise = (async () => {
+      const settings = agentStore.readSettings();
+      const preferred = String(settings.defaultBrainId || 'stub').trim() || 'stub';
+      if (preferred === 'stub') {
+        agentBrainInstance = createBrainAdapter('stub', { store: agentStore });
+        agentBrainInstanceId = 'stub';
+        agentStore.writeBrainMeta('stub', { displayName: 'Stub', lastProbeOk: true });
+        return;
+      }
+      const candidate = createBrainAdapter(preferred, { store: agentStore });
+      try {
+        const probe = await candidate.probe();
+        agentStore.writeBrainMeta(preferred, {
+          displayName: candidate.displayName,
+          lastProbeOk: Boolean(probe.ok),
+          lastProbeDetail: probe.detail || null,
+          lastProbeAt: new Date().toISOString(),
+        });
+        if (probe.ok) {
+          agentBrainInstance = candidate;
+          agentBrainInstanceId = preferred;
+          return;
+        }
+        companionLog(
+          'warn',
+          `[agent] brain ${preferred} unavailable (${probe.detail || 'probe failed'}), fallback stub`,
+        );
+      } catch (e) {
+        companionLog(
+          'warn',
+          `[agent] brain ${preferred} probe error:`,
+          e instanceof Error ? e.message : String(e),
+        );
+      }
+      agentBrainInstance = createBrainAdapter('stub', { store: agentStore });
+      agentBrainInstanceId = 'stub';
+    })();
+  }
+  await agentBrainInitPromise;
+  if (!agentBrainInstance) resolveAgentBrain();
+}
+
+function resetAgentBrainCache() {
+  agentBrainInitPromise = null;
+  agentBrainInstance = null;
+  agentBrainInstanceId = null;
+}
+
+function normalizeScriptHubUrl(raw) {
+  const t = String(raw || '').trim();
+  if (!t) return defaultScriptHubUrl();
+  if (!/^https?:\/\//i.test(t)) return '';
+  try {
+    return new URL(t).href;
+  } catch {
+    return '';
+  }
+}
+
+function getScriptHubAllowedOrigins() {
+  const href = normalizeScriptHubUrl(readShellSettings().scriptHubUrl);
+  const origins = new Set(['http://localhost:5174', 'http://127.0.0.1:5174']);
+  if (href) {
+    try {
+      origins.add(new URL(href).origin);
+    } catch {
+      /* ignore */
+    }
+  }
+  return origins;
+}
+
+function detachAllEmbeddedBrowserViews() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  detachBrowserViews(mainWindow, [workbenchBrowserView, scriptsBrowserView]);
+}
+
+function normalizeShellViewName(view) {
+  return view === 'workbench' ||
+    view === 'settings' ||
+    view === 'home' ||
+    view === 'tools' ||
+    view === 'scripts'
+    ? view
+    : 'home';
+}
+
+async function restoreEmbeddedViewForShellState(view) {
+  const v = normalizeShellViewName(view);
+  if (v === 'workbench') {
+    return attachWorkbenchBrowserView();
+  }
+  if (v === 'scripts') {
+    return attachScriptsBrowserView();
+  }
+  detachAllEmbeddedBrowserViews();
+  return { ok: true };
+}
+
+/**
+ * 切换主进程壳视图；嵌入页 attach 失败时回滚到 prev 并恢复 BrowserView。
+ * @param {string} nextView
+ * @param {{ notifyRenderer?: boolean }} [opts]
+ */
+async function transitionMainProcessShellView(nextView, opts) {
+  const notifyRenderer = Boolean(opts && opts.notifyRenderer);
+  const v = normalizeShellViewName(nextView);
+  const prev = shellMainProcessActiveView;
+  shellMainProcessActiveView = v;
+
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    if (notifyRenderer) notifyShellViewSync(v);
+    return { ok: true, view: v };
+  }
+
+  let r = { ok: true };
+  if (v === 'workbench') {
+    r = await attachWorkbenchBrowserView();
+  } else if (v === 'scripts') {
+    r = await attachScriptsBrowserView();
+  } else {
+    detachAllEmbeddedBrowserViews();
+  }
+
+  if (!r.ok) {
+    shellMainProcessActiveView = prev;
+    await restoreEmbeddedViewForShellState(prev);
+    return { ok: false, error: r.error, view: prev };
+  }
+
+  if (notifyRenderer) notifyShellViewSync(v);
+  return { ok: true, view: v };
 }
 
 /** 创建沙盒子目录（幂等）；与 `companion-sandbox-paths.cjs` 布局一致 */
@@ -668,7 +1013,12 @@ function companionApiRequest(method, pathname, body, opts) {
   const timeoutMs = Number.isFinite(timeoutRaw)
     ? Math.min(Math.max(Math.floor(timeoutRaw), 1000), 600000)
     : 15000;
+  const signal = optObj.signal;
   return new Promise((resolve, reject) => {
+    if (signal && signal.aborted) {
+      resolve({ ok: false, error: 'aborted', text: 'aborted' });
+      return;
+    }
     const headers = {};
     if (token) headers.Authorization = `Bearer ${token}`;
     if (bodyStr && m !== 'GET' && m !== 'HEAD') {
@@ -699,10 +1049,26 @@ function companionApiRequest(method, pathname, body, opts) {
         });
       },
     );
+    const onAbort = () => {
+      req.destroy();
+      resolve({ ok: false, error: 'aborted', text: 'aborted' });
+    };
+    if (signal) {
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
     req.on('timeout', () => {
       req.destroy(new Error('timeout'));
     });
-    req.on('error', reject);
+    req.on('error', (err) => {
+      if (signal && signal.aborted) {
+        resolve({ ok: false, error: 'aborted', text: 'aborted' });
+        return;
+      }
+      reject(err);
+    });
+    req.on('close', () => {
+      if (signal) signal.removeEventListener('abort', onAbort);
+    });
     if (bodyStr && m !== 'GET' && m !== 'HEAD') req.write(bodyStr);
     req.end();
   });
@@ -1550,24 +1916,27 @@ function getWorkbenchAllowedOrigin() {
   }
 }
 
+function layoutShellChrome() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const bounds = computeEmbeddedBrowserBounds(mainWindow.getContentBounds(), {
+    sidebarInsetPx: shellWorkbenchSidebarInsetPx,
+    titlebarHeightPx: SHELL_TITLEBAR_HEIGHT,
+    toolbarHeightPx: SHELL_WORKBENCH_TOOLBAR_HEIGHT,
+    copilotEffectiveWidthPx: getCopilotEffectiveWidthPx(),
+  });
+  if (shellMainProcessActiveView === 'workbench' && workbenchBrowserView) {
+    workbenchBrowserView.setBounds(bounds);
+  } else if (shellMainProcessActiveView === 'scripts' && scriptsBrowserView) {
+    scriptsBrowserView.setBounds(bounds);
+  }
+}
+
 function layoutWorkbenchBrowserView() {
-  if (!mainWindow || mainWindow.isDestroyed() || !workbenchBrowserView) return;
-  if (shellMainProcessActiveView !== 'workbench') return;
-  const b = mainWindow.getContentBounds();
-  const x = shellWorkbenchSidebarInsetPx;
-  const y = SHELL_TITLEBAR_HEIGHT + SHELL_WORKBENCH_TOOLBAR_HEIGHT;
-  const w = Math.max(120, b.width - shellWorkbenchSidebarInsetPx);
-  const h = Math.max(120, b.height - y);
-  workbenchBrowserView.setBounds({ x, y, width: w, height: h });
+  layoutShellChrome();
 }
 
 function detachWorkbenchBrowserView() {
-  if (!mainWindow || mainWindow.isDestroyed() || !workbenchBrowserView) return;
-  try {
-    mainWindow.removeBrowserView(workbenchBrowserView);
-  } catch (e) {
-    console.warn('[companion-desktop] removeBrowserView', e);
-  }
+  detachAllEmbeddedBrowserViews();
 }
 
 function sanitizeDownloadFilename(name) {
@@ -1835,12 +2204,13 @@ async function attachWorkbenchBrowserView() {
     console.warn('[companion-desktop] workbench auto-pair prepare:', e instanceof Error ? e.message : e);
   }
 
+  detachAllEmbeddedBrowserViews();
   const view = ensureWorkbenchBrowserView();
   const wc = view.webContents;
 
   const alreadyAttached = mainWindow.getBrowserViews().indexOf(view) >= 0;
   if (!alreadyAttached) mainWindow.addBrowserView(view);
-  layoutWorkbenchBrowserView();
+  layoutShellChrome();
 
   let needLoad = true;
   try {
@@ -1870,9 +2240,186 @@ async function attachWorkbenchBrowserView() {
   return { ok: true };
 }
 
+function ensureScriptsBrowserView() {
+  if (scriptsBrowserView) return scriptsBrowserView;
+
+  const view = new BrowserView({
+    webPreferences: {
+      partition: 'persist:assetcutter-script-hub',
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+
+  const wc = view.webContents;
+  try {
+    wc.setUserAgent(workbenchChromeLikeUserAgent());
+  } catch (e) {
+    console.warn('[companion-desktop] scripts setUserAgent', e);
+  }
+
+  wc.setWindowOpenHandler(({ url }) => {
+    void shell.openExternal(url);
+    return { action: 'deny' };
+  });
+
+  wc.on('will-navigate', (event, url) => {
+    if (/^(blob|data):/i.test(String(url || ''))) {
+      event.preventDefault();
+      return;
+    }
+    let origin;
+    try {
+      origin = new URL(url).origin;
+    } catch {
+      event.preventDefault();
+      return;
+    }
+    if (!getScriptHubAllowedOrigins().has(origin)) {
+      event.preventDefault();
+      void shell.openExternal(url);
+    }
+  });
+
+  scriptsBrowserView = view;
+  return view;
+}
+
+async function attachScriptsBrowserView() {
+  if (!mainWindow || mainWindow.isDestroyed()) return { ok: false, error: 'no_window' };
+  const target = normalizeScriptHubUrl(readShellSettings().scriptHubUrl);
+  if (!target) return { ok: false, error: 'invalid_script_hub_url' };
+
+  detachAllEmbeddedBrowserViews();
+  const view = ensureScriptsBrowserView();
+  const wc = view.webContents;
+
+  if (mainWindow.getBrowserViews().indexOf(view) < 0) mainWindow.addBrowserView(view);
+  layoutShellChrome();
+
+  let needLoad = true;
+  try {
+    const cur = wc.getURL();
+    if (cur && cur !== 'about:blank' && /^https?:\/\//i.test(cur)) {
+      needLoad = new URL(cur).href !== new URL(target).href;
+    }
+  } catch {
+    needLoad = true;
+  }
+
+  if (needLoad) {
+    try {
+      await wc.loadURL(target);
+    } catch (e) {
+      detachAllEmbeddedBrowserViews();
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  return { ok: true };
+}
+
+async function navigateShellFromAgent(view) {
+  return transitionMainProcessShellView(view, { notifyRenderer: true });
+}
+
+async function getAgentShellStateSummary() {
+  const port = readHttpPort();
+  const alive = await probeCompanionHealth();
+  const brainProbe = agentSessionService ? await agentSessionService.probeBrain() : { ok: false };
+  return {
+    shellView: shellMainProcessActiveView,
+    companion: {
+      connected: alive,
+      port,
+      note: companionStatusNote,
+      lastError: companionLastError,
+      capabilityUi: companionTrayCapabilityUi,
+    },
+    brain: {
+      id: agentSessionService ? agentSessionService.getBrainId() : 'stub',
+      probe: brainProbe,
+    },
+    copilot: {
+      collapsed: shellCopilotCollapsed,
+      widthPx: shellCopilotWidthPx,
+      effectiveWidthPx: getCopilotEffectiveWidthPx(),
+    },
+  };
+}
+
+function initAgentPlatform() {
+  agentStore = createAgentStore({ getRoot: getAgentStoreRoot });
+  agentStore.ensureLayout();
+  const agentSettings = agentStore.readSettings();
+  shellCopilotCollapsed = Boolean(agentSettings.copilotCollapsed);
+  shellCopilotWidthPx = Number.isFinite(Number(agentSettings.copilotWidth))
+    ? Math.min(640, Math.max(240, Number(agentSettings.copilotWidth)))
+    : SHELL_COPILOT_WIDTH_DEFAULT;
+
+  agentPolicy = createAgentPolicy({
+    getPolicyPath: () => path.join(getAgentStoreRoot(), 'policy.json'),
+  });
+  agentPolicy.readPolicy();
+
+  const workbenchClient = createAgentWorkbenchClient({
+    getSiteUrl: () => readShellSettings().siteUrl,
+    normalizeSiteUrl: normalizeWorkbenchSiteUrl,
+    invokeBridge: invokeWorkbenchBridge,
+    navigateShell: navigateShellFromAgent,
+  });
+
+  const scriptHubClient = createAgentScriptHubClient({
+    getScriptHubUrl: () => readShellSettings().scriptHubUrl,
+    normalizeScriptHubUrl,
+    navigateShell: navigateShellFromAgent,
+  });
+
+  agentBodyHost = createAgentBodyHost({
+    getShellView: () => shellMainProcessActiveView,
+    navigateShell: navigateShellFromAgent,
+    companionApiRequest,
+    getStateSummary: getAgentShellStateSummary,
+    workbenchClient,
+    scriptHubClient,
+    runShellTool: agentRunShellTool,
+    runShellBootstrap: agentRunShellBootstrap,
+    getSkillsRoot: () => agentStore.skillsDir(),
+    getMemoryRoot: () => agentStore.memoryDir(),
+  });
+
+  agentSessionService = createAgentSessionService({
+    store: agentStore,
+    bodyHost: agentBodyHost,
+    getShellView: () => shellMainProcessActiveView,
+    getBrain: () => resolveAgentBrain(),
+    ensureBrainReady: ensureAgentBrainReady,
+    gateTool: (tool) => agentPolicy.gateTool(tool),
+    waitForConfirm: waitForAgentConfirm,
+    cancelPendingConfirms: cancelAllAgentConfirms,
+    onEvent: broadcastAgentSessionEvent,
+  });
+
+  agentMcpServer = createAgentBodyMcpServer({
+    readSettings: () => agentStore.readSettings(),
+    writeSettings: (patch) => agentStore.writeSettings(patch),
+    bodyHost: agentBodyHost,
+    gateTool: (tool) => agentPolicy.gateTool(tool),
+    readPolicy: () => agentPolicy.readPolicy(),
+    appendAudit: (entry) => agentStore.appendAudit(entry),
+    getShellView: () => shellMainProcessActiveView,
+    getSkillsRoot: () => agentStore.skillsDir(),
+    log: companionLog.bind(null, 'log'),
+  });
+
+  void ensureAgentBrainReady();
+  void agentMcpServer.syncFromSettings();
+}
+
 function bindMainWindowWorkbenchLayoutHandlers() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  const relayout = () => layoutWorkbenchBrowserView();
+  const relayout = () => layoutShellChrome();
   mainWindow.on('resize', relayout);
   mainWindow.on('move', relayout);
   mainWindow.on('maximize', relayout);
@@ -1888,9 +2435,9 @@ function openMainWindow() {
   }
 
   mainWindow = new BrowserWindow({
-    width: 400,
-    height: 560,
-    minWidth: 360,
+    width: 1120,
+    height: 720,
+    minWidth: 720,
     minHeight: 480,
     frame: false,
     autoHideMenuBar: true,
@@ -1912,6 +2459,7 @@ function openMainWindow() {
 
   mainWindow.on('closed', () => {
     workbenchBrowserView = null;
+    scriptsBrowserView = null;
     shellMainProcessActiveView = 'home';
     mainWindow = null;
   });
@@ -2302,18 +2850,7 @@ if (!gotLock) {
     return { ok: true, pinned: win.isAlwaysOnTop() };
   });
 
-  ipcMain.handle('shell-set-view', async (_e, view) => {
-    const v =
-      view === 'workbench' || view === 'settings' || view === 'home' || view === 'tools' ? view : 'home';
-    shellMainProcessActiveView = v;
-    if (!mainWindow || mainWindow.isDestroyed()) return { ok: true, view: v };
-    if (v === 'workbench') {
-      const r = await attachWorkbenchBrowserView();
-      return { ...r, view: v };
-    }
-    detachWorkbenchBrowserView();
-    return { ok: true, view: v };
-  });
+  ipcMain.handle('shell-set-view', async (_e, view) => transitionMainProcessShellView(view));
 
   ipcMain.handle('shell-sidebar-context-menu-popup', (event) => {
     if (!mainWindow || mainWindow.isDestroyed()) return { ok: false, error: 'no_window' };
@@ -2362,8 +2899,142 @@ if (!gotLock) {
       ? Math.max(0, Math.min(Math.round(n), SHELL_SIDEBAR_WIDTH_EXPANDED))
       : SHELL_SIDEBAR_WIDTH_EXPANDED;
     shellWorkbenchSidebarInsetPx = inset;
-    layoutWorkbenchBrowserView();
+    layoutShellChrome();
     return { ok: true, inset };
+  });
+
+  ipcMain.handle('shell-set-copilot-layout', (_e, layout) => {
+    const col = Boolean(layout && layout.collapsed);
+    shellCopilotCollapsed = col;
+    const w = Number(layout && layout.widthPx);
+    if (Number.isFinite(w) && w >= 240 && w <= 640) {
+      shellCopilotWidthPx = Math.round(w);
+    }
+    if (agentStore) {
+      agentStore.writeSettings({
+        copilotCollapsed: shellCopilotCollapsed,
+        copilotWidth: shellCopilotWidthPx,
+      });
+    }
+    layoutShellChrome();
+    return {
+      ok: true,
+      collapsed: shellCopilotCollapsed,
+      widthPx: shellCopilotWidthPx,
+      effectiveWidthPx: getCopilotEffectiveWidthPx(),
+    };
+  });
+
+  ipcMain.handle('shell-get-copilot-layout', () => ({
+    ok: true,
+    collapsed: shellCopilotCollapsed,
+    widthPx: shellCopilotWidthPx,
+    effectiveWidthPx: getCopilotEffectiveWidthPx(),
+  }));
+
+  ipcMain.handle('agent-session-list-messages', (_e, sessionId) => {
+    if (!agentSessionService) return { ok: false, error: 'agent_not_ready' };
+    return { ok: true, messages: agentSessionService.listMessages(sessionId) };
+  });
+
+  ipcMain.handle('agent-session-send', async (_e, text) => {
+    if (!agentSessionService) return { ok: false, error: 'agent_not_ready' };
+    return agentSessionService.sendUserMessage(text);
+  });
+
+  ipcMain.handle('agent-session-abort', () => {
+    if (!agentSessionService) return { ok: false, error: 'agent_not_ready' };
+    return agentSessionService.abortTurn();
+  });
+
+  ipcMain.handle('agent-session-probe-brain', async () => {
+    if (!agentSessionService) return { ok: false, error: 'agent_not_ready' };
+    const probe = await agentSessionService.probeBrain();
+    return { ok: true, brainId: agentSessionService.getBrainId(), probe };
+  });
+
+  ipcMain.handle('agent-session-confirm', (_e, confirmId, approved) => {
+    return resolveAgentConfirm(confirmId, approved);
+  });
+
+  ipcMain.handle('agent-settings-load', () => {
+    if (!agentStore) return { ok: false, error: 'agent_not_ready' };
+    const settings = agentStore.readSettings();
+    const mcp = agentMcpServer ? agentMcpServer.status() : { enabled: false, running: false };
+    const mcpConfig = agentMcpServer ? agentMcpServer.buildMcpClientConfig() : null;
+    return {
+      ok: true,
+      settings,
+      mcp,
+      mcpConfig,
+      brains: listBrainCatalog(),
+      brainMetas: agentStore.listBrainMetas(),
+      activeBrainId: agentSessionService ? agentSessionService.getBrainId() : 'stub',
+    };
+  });
+
+  ipcMain.handle('agent-settings-save', async (_e, patch) => {
+    if (!agentStore) return { ok: false, error: 'agent_not_ready' };
+    const prev = agentStore.readSettings();
+    const next = agentStore.writeSettings(patch && typeof patch === 'object' ? patch : {});
+    if (prev.defaultBrainId !== next.defaultBrainId) {
+      resetAgentBrainCache();
+      await ensureAgentBrainReady();
+    }
+    if (agentMcpServer) {
+      await agentMcpServer.syncFromSettings();
+    }
+    return {
+      ok: true,
+      settings: next,
+      mcp: agentMcpServer ? agentMcpServer.status() : null,
+      mcpConfig: agentMcpServer ? agentMcpServer.buildMcpClientConfig() : null,
+      activeBrainId: agentSessionService ? agentSessionService.getBrainId() : 'stub',
+    };
+  });
+
+  ipcMain.handle('agent-mcp-regenerate-token', async () => {
+    if (!agentMcpServer || !agentStore) return { ok: false, error: 'agent_not_ready' };
+    const r = agentMcpServer.regenerateToken();
+    if (agentStore.readSettings().mcpEnabled) {
+      await agentMcpServer.syncFromSettings();
+    }
+    return { ok: true, ...r, settings: agentStore.readSettings(), mcp: agentMcpServer.status() };
+  });
+
+  ipcMain.handle('agent-mcp-status', () => {
+    if (!agentMcpServer) return { ok: false, error: 'agent_not_ready' };
+    return {
+      ok: true,
+      mcp: agentMcpServer.status(),
+      mcpConfig: agentMcpServer.buildMcpClientConfig(),
+    };
+  });
+
+  ipcMain.handle('agent-probe-all-brains', async () => {
+    if (!agentStore) return { ok: false, error: 'agent_not_ready' };
+    const catalog = listBrainCatalog();
+    const out = [];
+    for (const b of catalog) {
+      const adapter = createBrainAdapter(b.id, { store: agentStore });
+      try {
+        const probe = await adapter.probe();
+        const meta = agentStore.writeBrainMeta(b.id, {
+          displayName: b.displayName,
+          lastProbeOk: Boolean(probe.ok),
+          lastProbeDetail: probe.detail || null,
+          lastProbeAt: new Date().toISOString(),
+        });
+        out.push({ id: b.id, displayName: b.displayName, probe, meta });
+      } catch (e) {
+        out.push({
+          id: b.id,
+          displayName: b.displayName,
+          probe: { ok: false, detail: e instanceof Error ? e.message : String(e) },
+        });
+      }
+    }
+    return { ok: true, brains: out, activeBrainId: agentSessionService ? agentSessionService.getBrainId() : 'stub' };
   });
 
   ipcMain.handle('shell-workbench-reload', () => {
@@ -2776,6 +3447,7 @@ if (!gotLock) {
 
   app.whenReady().then(() => {
     ensureCompanionSandboxLayout();
+    initAgentPlatform();
     registerCompanionProtocol();
     if (process.platform === 'darwin' && app.dock) {
       app.dock.hide();

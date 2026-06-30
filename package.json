@@ -21,6 +21,8 @@
     "dev:companion-sam-stack": "node scripts/dev-companion-sam-stack.mjs",
     "pack:sam-local-bundle": "node scripts/pack-sam-local-host-bundle.mjs",
     "smoke:host-bundle-catalog": "node scripts/smoke-host-bundle-catalog.mjs",
+    "smoke:agent-p1": "node scripts/agent-p1-smoke.mjs",
+    "dev:hermes-gateway": "node hermes-bootstrap/dev-gateway.mjs",
     "validate:shell-tools": "npx --yes -p tsx tsx scripts/validate-shell-tools.ts",
     "pack:shell-tool": "npx --yes -p tsx tsx scripts/pack-shell-tool.mjs",
     "restart:local-stack": "powershell -NoProfile -ExecutionPolicy Bypass -File \"scripts/restart-local-stack.ps1\"",

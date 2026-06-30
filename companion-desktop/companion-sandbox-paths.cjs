@@ -98,9 +98,16 @@ function sandboxDefaultVolumeDir() {
   return path.join(root, 'volume');
 }
 
+function getAgentStoreRoot() {
+  const root = getCompanionSandboxRoot();
+  if (!root) return '';
+  return path.join(root, 'agent-store');
+}
+
 module.exports = {
   getCompanionSandboxRoot,
   getDesktopShellUserDataPath,
+  getAgentStoreRoot,
   sandboxRuntimesRoot,
   sandboxModelsRembgDir,
   sandboxCachePipDir,

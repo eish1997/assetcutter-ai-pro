@@ -104,6 +104,7 @@ async function respondCompanionElectronUpdaterYaml(res, { kind, platform, channe
 }
 
 import { getWorkspaceUsedBytes } from './workspace-storage-usage.js';
+import { handleAgentWorkbenchRoutes } from './agent-workbench-api.js';
 import {
   API_JSON_BODY_MAX_BYTES,
   BRIDGE_SEND_MESSAGE_MAX_BODY_BYTES,
@@ -426,6 +427,8 @@ function assertCsrf(req, res) {
   if (pathOnly === '/api/auth/trial-gemini/consume') return true;
   if (pathOnly === '/api/workflow/task-events') return true;
   if (pathOnly === '/api/usage/events') return true;
+  /** 伴侣 Agent：partition Cookie 无法带 X-CSRF-Token，由 requireAgentAuth + 会话 Cookie 约束 */
+  if (pathOnly.startsWith('/api/agent/workbench')) return true;
   if (pathOnly.startsWith('/api/debug/client-log')) return true;
   if (pathOnly.startsWith('/api/admin')) {
     const origin = String(req.headers.origin || '');
@@ -490,6 +493,33 @@ async function requireAuth(req, res) {
   if (!row) {
     res.setHeader('Set-Cookie', clearSessionCookie());
     json(res, 401, { error: '会话已过期，请重新登录' });
+    return null;
+  }
+  if (row.shouldRotate) {
+    const nextToken = makeSessionToken();
+    await rotateSession({
+      oldToken: token,
+      newToken: nextToken,
+      maxAgeMs: SESSION_TTL_MS,
+      userAgent: req.headers['user-agent'],
+      ip: getClientIp(req),
+    });
+    res.setHeader('Set-Cookie', serializeSessionCookie(nextToken, SESSION_TTL_MS));
+  }
+  return row.user;
+}
+
+/** P1 Agent API：401 带 AGENT_AUTH_REQUIRED，便于伴侣 Copilot 引导登录 */
+async function requireAgentAuth(req, res) {
+  const token = parseCookie(req)[COOKIE_NAME];
+  if (!token) {
+    json(res, 401, { error: '未登录', code: 'AGENT_AUTH_REQUIRED' });
+    return null;
+  }
+  const row = await getSessionWithUser(token);
+  if (!row) {
+    res.setHeader('Set-Cookie', clearSessionCookie());
+    json(res, 401, { error: '会话已过期，请重新登录', code: 'AGENT_AUTH_REQUIRED' });
     return null;
   }
   if (row.shouldRotate) {
@@ -2215,6 +2245,17 @@ const server = http.createServer(async (req, res) => {
           ...(detail.code ? { code: detail.code } : {}),
         });
       }
+      return;
+    }
+
+    if (
+      await handleAgentWorkbenchRoutes(req, res, path, {
+        requireAuth: requireAgentAuth,
+        json,
+        readBody,
+        getWorkspaceUsedBytes,
+      })
+    ) {
       return;
     }
 
