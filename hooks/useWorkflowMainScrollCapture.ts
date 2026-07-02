@@ -1,5 +1,7 @@
 import { useCallback, useRef, type MouseEvent as ReactMouseEvent, type WheelEvent as ReactWheelEvent, type DragEvent as ReactDragEvent } from 'react';
 import { DT_AC_CAPABILITY_ACTION, DT_AC_CAPABILITY_ACTION_SOURCE } from '../services/workflowDragPipeline';
+import { isPointerInAnyWorkflowColumn, scrollWorkflowColumnAtPointer } from '../services/workflowColumnScroll';
+import { isClientPointInWorkflowFunctionSidebarWheelGuard, isWheelTargetInWorkflowFunctionSidebarGuard } from '../services/workflowFunctionSidebarLayout';
 
 export type WorkflowCapabilityGutterDropConfig = {
   enabled: boolean;
@@ -74,21 +76,17 @@ export function useWorkflowMainScrollCapture(
         return;
       }
       if (target?.closest('[data-ac-block-workflow-marquee]')) return;
-      /** 大纲区由 registerWorkflowAssetListWheel 内处理（空白时滚动资产列） */
-      if (target?.closest('[data-workflow-sidebar], [data-workflow-preset], [data-workflow-card]')) {
+
+      if (
+        isWheelTargetInWorkflowFunctionSidebarGuard(e.target) ||
+        isClientPointInWorkflowFunctionSidebarWheelGuard(e.clientX, e.clientY, e.target) ||
+        isPointerInAnyWorkflowColumn(e.clientX, e.clientY)
+      ) {
+        if (scrollWorkflowColumnAtPointer(e.nativeEvent)) return;
         return;
       }
-      const content = workflowMainContentRef.current;
-      if (content) {
-        const r = content.getBoundingClientRect();
-        if (e.clientX >= r.left && e.clientX <= r.right) {
-          void workflowAssetListWheelRef.current?.(e, 'inner');
-          return;
-        }
-        if (workflowAssetListWheelRef.current?.(e, 'gutter')) return;
-      } else if (target?.closest('.max-w-6xl')) {
-        return;
-      }
+
+      if (workflowAssetListWheelRef.current?.(e, 'gutter')) return;
       e.preventDefault();
       workflowPaneWheelRef.current?.(e);
     },

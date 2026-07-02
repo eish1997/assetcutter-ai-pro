@@ -4,6 +4,10 @@
 
 /* 项目其余全局样式在 index.html 内联，此处仅接入构建期 Tailwind */
 
+.workflow-scroll-port {
+  overscroll-behavior-y: contain;
+}
+
 /* —— 工作流全屏 ↔ 右下角 Dock：收起 / 展开动效（WorkflowComposerOverlay） —— */
 .ac-workflow-dock-backdrop {
   opacity: 1;
@@ -133,4 +137,81 @@
 
 .ac-workflow-capability-jump-flash {
   animation: ac-workflow-capability-jump-flash 0.72s cubic-bezier(0.34, 1.15, 0.45, 1) both;
+}
+
+/* 工作流列表：拖放插入 / 成组提示（data-drop-intent on [data-workflow-drop-host]） */
+[data-workflow-drop-host] {
+  position: relative;
+}
+
+/* 插入提示统一画在卡片缝隙正中：before/after 仅表示相对哪张卡，物理上是同一缝 */
+[data-workflow-drop-host][data-drop-intent='insert']::before {
+  content: '';
+  position: absolute;
+  top: 10%;
+  bottom: 10%;
+  width: 2px;
+  border-radius: 9999px;
+  background: linear-gradient(180deg, transparent, rgba(56, 189, 248, 0.95), transparent);
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.4);
+  pointer-events: none;
+  z-index: 24;
+}
+
+[data-workflow-drop-host][data-drop-intent='insert'][data-drop-insert-edge='before']::before {
+  left: calc(var(--wf-card-gap, 8px) * -0.5);
+  transform: translateX(-50%);
+}
+
+[data-workflow-drop-host][data-drop-intent='insert'][data-drop-insert-edge='after']::before {
+  right: calc(var(--wf-card-gap, 8px) * -0.5);
+  transform: translateX(50%);
+}
+
+[data-workflow-drop-host][data-drop-intent='insert']::after {
+  content: '插入';
+  position: absolute;
+  top: 50%;
+  padding: 1px 6px;
+  border-radius: 9999px;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: rgba(224, 242, 254, 0.95);
+  background: rgba(14, 116, 144, 0.35);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  pointer-events: none;
+  z-index: 25;
+}
+
+[data-workflow-drop-host][data-drop-intent='insert'][data-drop-insert-edge='before']::after {
+  left: calc(var(--wf-card-gap, 8px) * -0.5);
+  transform: translate(-50%, -50%);
+}
+
+[data-workflow-drop-host][data-drop-intent='insert'][data-drop-insert-edge='after']::after {
+  right: calc(var(--wf-card-gap, 8px) * -0.5);
+  transform: translate(50%, -50%);
+}
+
+[data-workflow-drop-host][data-drop-intent='group'] {
+  box-shadow: inset 0 0 0 2px rgba(167, 139, 250, 0.55);
+}
+
+[data-workflow-drop-host][data-drop-intent='group']::after {
+  content: '成组';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  padding: 2px 9px;
+  border-radius: 9999px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: rgba(237, 233, 254, 0.96);
+  background: rgba(91, 33, 182, 0.42);
+  border: 1px solid rgba(167, 139, 250, 0.4);
+  pointer-events: none;
+  z-index: 25;
 }

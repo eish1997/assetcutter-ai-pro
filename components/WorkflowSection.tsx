@@ -7,10 +7,13 @@ import React, {
   useLayoutEffect,
   Suspense,
   lazy,
+  startTransition,
 } from 'react';
 import { useWorkflowWorkspacePanes } from '../hooks/useWorkflowWorkspacePanes';
 import { useWorkflowMarquee } from '../hooks/useWorkflowMarquee';
-import { useWorkflowAssetExecutionElapsed } from '../hooks/useWorkflowAssetExecutionElapsed';
+import { useWorkflowExecutionStartedAt } from '../hooks/useWorkflowAssetExecutionElapsed';
+import { useWorkflowJustifiedLayout } from '../hooks/useWorkflowJustifiedLayout';
+import { useWorkflowLightboxBoot } from '../hooks/useWorkflowLightboxBoot';
 import { createPortal, flushSync } from 'react-dom';
 import {
   CloudDownload,
@@ -196,11 +199,28 @@ import {
   DT_AC_CAPABILITY_FROM_EDITOR,
   DT_AC_WORKFLOW_EXPORT,
   parseAcWorkflowExportDragSources,
+  parseWorkflowAssetIdsFromClipboardData,
   parseWorkflowDragSource,
   resolveCapabilityDropDragSources,
   workflowDragSourceAllowsSidebarOps,
   type WorkflowDragSource,
 } from '../services/workflowDragPipeline';
+import {
+  clearWorkflowCardDragDropSession,
+  readWorkflowCardDragDropSession,
+  updateWorkflowCardDragOver,
+  workflowCardDragLeave,
+} from '../services/workflowCardDragUi';
+import { captureWorkflowListScrollSnapshot, pickWorkflowCardPlaceholderSrc } from '../services/workflowListPaneSnapshot';
+import { WorkflowLightboxInstantShell } from './workflow/WorkflowLightboxInstantShell';
+import { prefetchWorkflowLightboxImage } from '../services/workflowLightboxPrefetch';
+import {
+  WORKFLOW_OUTLINE_SIDEBAR_WIDTH_PX,
+  resolveWorkflowFunctionSidebarLayout,
+} from '../services/workflowFunctionSidebarLayout';
+import { applyRootWorkflowAssetReorder } from '../services/workflowRootAssetReorder';
+import { reorderManualGroupItemIndexes } from '../services/workflowGroupItemReorder';
+import { copyWorkflowAssetIdToClipboard, copyWorkflowAssetOriginalImageToClipboard } from '../services/workflowAssetClipboard';
 import { WORKFLOW_CUT_DETECT_TIMEOUT_MS } from './workflow/workflowConstants';
 import WorkflowTextLightboxCenter, {
   type WorkflowTextLightboxCenterHandle,
@@ -226,6 +246,19 @@ import {
 } from '../services/storyboardTableAsset';
 import StoryboardTablePanel from './storyboard/StoryboardTablePanel';
 import StoryboardTableGridCard from './storyboard/StoryboardTableGridCard';
+import AssetSetPanel from './asset-set/AssetSetPanel';
+import AssetSetGridCard from './asset-set/AssetSetGridCard';
+import {
+  createAssetSetAsset,
+  isWorkflowAssetSetAsset,
+  normalizeAssetSetOnAsset,
+} from '../services/assetSet/assetSetAsset';
+import {
+  applyAssetSetCompanionHydrateResults,
+  buildAssetSetCompanionHydrateKey,
+  hydrateAssetSetCompanionTasks,
+  listAssetSetCompanionHydrateTasks,
+} from '../services/assetSet/assetSetCompanion';
 import { useStoryboardVideoExportTask } from './storyboard/useStoryboardVideoExport';
 import { compressStoryboardFrameDataUrl } from './storyboard/storyboardFrameImage';
 import {
@@ -294,12 +327,18 @@ import {
   TITLE_ROW_QUEUE_CHIP,
   TITLE_ROW_DROPDOWN_TRIGGER,
   WORKFLOW_CARD_SURFACE_IDLE,
+  WORKFLOW_CARD_SHELL_PAD,
+  WORKFLOW_CARD_SHELL_SELECTED,
+  WORKFLOW_CARD_SHELL_IDLE,
+  WORKFLOW_CARD_INNER_RADIUS,
+  WORKFLOW_GROUP_CARD_FACE_CLASS,
   WORKFLOW_META_PILL,
   WORKFLOW_EDGE_GUTTER,
   WORKFLOW_CHROME_BTN_NEUTRAL,
   WORKFLOW_TOPBAR_ICON_BTN,
   WORKFLOW_LIGHTBOX_BOTTOM_RAIL,
   WORKFLOW_LIGHTBOX_VGP_GRAPH_LEFT_INSET,
+  WORKFLOW_LIGHTBOX_ASSET_THUMB_STRIP_INSET,
   WORKFLOW_IMAGE_PREVIEW_RAIL,
   WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER,
   WORKFLOW_CARD_DISMISS_ICON_BTN,
@@ -321,13 +360,25 @@ import {
   nextGridCardAspectRatioFromIntrinsic,
   persistWorkflowCardAspects,
   readSessionWorkflowCardAspects,
+  resolveWorkflowCanvasCardAspect,
   resolveWorkflowGridCardAspect,
 } from './workflow/workflowCardAspect';
+import {
+  WORKFLOW_ASSET_GRID_GAP_PX,
+  workflowJustifiedTargetRowHeight,
+} from '../services/workflowJustifiedLayout';
+import {
+  resolveWorkflowAssetStepBadge,
+} from '../services/workflowAssetStepCount';
 import { groupCapabilityPresetsByCategory } from './workflow/workflowCapabilityGroups';
 import { WorkflowSidebarColumn, type WorkflowSidebarFavoriteEntry } from './workflow/WorkflowSidebarColumn';
 import WorkflowSpaceMarqueeChrome from './workflow/WorkflowSpaceMarqueeChrome';
 import WorkflowMarqueeOverlay from './workflow/WorkflowMarqueeOverlay';
 import WorkflowLightboxDetailEdgePanel from './workflow/WorkflowLightboxDetailEdgePanel';
+import WorkflowLightboxAssetThumbStrip from './workflow/WorkflowLightboxAssetThumbStrip';
+import WorkflowAssetContextMenu from './workflow/WorkflowAssetContextMenu';
+import WorkflowAssetStepCountBadge from './workflow/WorkflowAssetStepCountBadge';
+import WorkflowGroupCardStackPreviews from './workflow/WorkflowGroupCardStackPreviews';
 import {
   createSmoothWheelScrollController,
   type SmoothWheelScrollController,
@@ -778,11 +829,38 @@ const WorkflowSection: React.FC<{
   );
   const byCategory = useMemo(() => groupCapabilityPresetsByCategory(presets), [presets]);
   const [columnCount, setColumnCount] = useState(4);
+  const justifiedTargetRowHeight = useMemo(
+    () => workflowJustifiedTargetRowHeight(columnCount),
+    [columnCount]
+  );
   const showArchived = false;
   const [archiveHint, setArchiveHint] = useState<{ assetId: string; ts: number } | null>(null);
   const [refiningTagKeys, setRefiningTagKeys] = useState<Set<string>>(new Set());
   const [lightboxAssetId, setLightboxAssetId] = useState<string | null>(null);
+  /** 打开大图前截取的列表视口静态图，作预览背景（列表卸载后仍可见） */
+  const [lightboxListBackdropUrl, setLightboxListBackdropUrl] = useState<string | null>(null);
+  /** flushSync 即时壳（与重型 ImagePreviewOverlay 解耦） */
+  const [lightboxInstantShellAssetId, setLightboxInstantShellAssetId] = useState<string | null>(null);
+  /** 延后挂载完整预览层，避免与 instant shell 同帧 reconcile */
+  const [lightboxOverlayMounted, setLightboxOverlayMounted] = useState(false);
+  const [lightboxPlaceholderImageSrc, setLightboxPlaceholderImageSrc] = useState<string | null>(null);
+  const {
+    phase: lightboxBootPhase,
+    beginOpen: beginLightboxBoot,
+    reset: resetLightboxBoot,
+    notifyPrimaryImageReady: notifyLightboxPrimaryReady,
+    isChromeReady: lightboxChromeReady,
+  } = useWorkflowLightboxBoot();
+  const lightboxPrefetchTimerRef = useRef<number | null>(null);
+  /** 取消进行中的分帧开大图（用户快速关闭时） */
+  const lightboxOpenGenRef = useRef(0);
+  const [workflowAssetContextMenu, setWorkflowAssetContextMenu] = useState<{
+    assetId: string;
+    x: number;
+    y: number;
+  } | null>(null);
   const [storyboardPanelAssetId, setStoryboardPanelAssetId] = useState<string | null>(null);
+  const [assetSetPanelAssetId, setAssetSetPanelAssetId] = useState<string | null>(null);
   const lightboxAssetIdRef = useRef<string | null>(null);
   lightboxAssetIdRef.current = lightboxAssetId;
   const [lightboxTripoPullBusy, setLightboxTripoPullBusy] = useState(false);
@@ -791,6 +869,31 @@ const WorkflowSection: React.FC<{
   const textLightboxCenterRef = useRef<WorkflowTextLightboxCenterHandle | null>(null);
   const [lightboxMetaText, setLightboxMetaText] = useState<string>('');
   const [lightboxPointerRgb, setLightboxPointerRgb] = useState<{ r: number; g: number; b: number } | null>(null);
+  const lightboxPointerRgbPendingRef = useRef<{ r: number; g: number; b: number } | null>(null);
+  const lightboxPointerRgbFrameRef = useRef<number | null>(null);
+  const handleLightboxPointerRgbSample = useCallback((rgb: { r: number; g: number; b: number } | null) => {
+    lightboxPointerRgbPendingRef.current = rgb;
+    if (lightboxPointerRgbFrameRef.current != null) return;
+    lightboxPointerRgbFrameRef.current = window.requestAnimationFrame(() => {
+      lightboxPointerRgbFrameRef.current = null;
+      const next = lightboxPointerRgbPendingRef.current;
+      setLightboxPointerRgb((prev) => {
+        if (next == null && prev == null) return prev;
+        if (next != null && prev != null && next.r === prev.r && next.g === prev.g && next.b === prev.b) {
+          return prev;
+        }
+        return next;
+      });
+    });
+  }, []);
+  useEffect(
+    () => () => {
+      if (lightboxPointerRgbFrameRef.current != null) {
+        window.cancelAnimationFrame(lightboxPointerRgbFrameRef.current);
+      }
+    },
+    []
+  );
   const [lightboxUiHidden, setLightboxUiHidden] = useState(false);
   const handleLightboxUiHiddenChange = useCallback((hidden: boolean) => {
     setLightboxUiHidden(hidden);
@@ -1055,7 +1158,9 @@ const WorkflowSection: React.FC<{
   /** 批处理已开始后用户从卡片取消「排队中」项：worker 仍会从本地 queue shift，此处跳过执行 */
   const cancelledTaskIdsRef = useRef<Set<string>>(new Set());
   const [draggingAssetIds, setDraggingAssetIds] = useState<string[] | null>(null);
-  const [dragOverAction, setDragOverAction] = useState<string | null>(null);
+  const draggingAssetIdsRef = useRef<string[] | null>(null);
+  /** 侧栏拖拽态样式：同步置位，避免 rAF 延迟 state 导致拖放中不重绘 */
+  const [workflowAssetDragActive, setWorkflowAssetDragActive] = useState(false);
   /** 功能块拖拽 id（仅 ref，不用 state：dragover 首帧时 setState 尚未提交会导致未 preventDefault、drop 失败） */
   const draggingActionIdRef = useRef<string | null>(null);
   const updateDraggingActionId = useCallback((id: string | null) => {
@@ -1104,6 +1209,9 @@ const WorkflowSection: React.FC<{
   const [quickComposeReferenceDropSlots, setQuickComposeReferenceDropSlots] = useState<QuickComposeDropSlot[]>([]);
   const quickComposeMainDropSlotsRef = useRef<QuickComposeDropSlot[]>([]);
   const quickComposeReferenceDropSlotsRef = useRef<QuickComposeDropSlot[]>([]);
+  const appendQuickComposeDropSlotsForAssetIdsRef = useRef<
+    (assetIds: string[], zone: QuickComposeDropZone) => void
+  >(() => {});
   useEffect(() => {
     quickComposeMainDropSlotsRef.current = quickComposeMainDropSlots;
   }, [quickComposeMainDropSlots]);
@@ -1161,6 +1269,28 @@ const WorkflowSection: React.FC<{
   groupFilterIdRef.current = groupFilterId;
   const [groupStringLightboxIndex, setGroupStringLightboxIndex] = useState<number | null>(null);
   const [draggingGroupItems, setDraggingGroupItems] = useState<{ groupAssetId: string; itemIndexes: number[] } | null>(null);
+  const draggingGroupItemsRef = useRef<{ groupAssetId: string; itemIndexes: number[] } | null>(null);
+  const syncDraggingAssetIds = useCallback((ids: string[] | null) => {
+    draggingAssetIdsRef.current = ids?.length ? ids : null;
+    if (ids?.length) setWorkflowAssetDragActive(true);
+    requestAnimationFrame(() => setDraggingAssetIds(ids?.length ? ids : null));
+  }, []);
+  const syncDraggingGroupItems = useCallback(
+    (payload: { groupAssetId: string; itemIndexes: number[] } | null) => {
+      draggingGroupItemsRef.current = payload?.itemIndexes?.length ? payload : null;
+      if (payload?.itemIndexes?.length) setWorkflowAssetDragActive(true);
+      requestAnimationFrame(() => setDraggingGroupItems(payload?.itemIndexes?.length ? payload : null));
+    },
+    []
+  );
+  const clearWorkflowDragSession = useCallback(() => {
+    draggingAssetIdsRef.current = null;
+    draggingGroupItemsRef.current = null;
+    setWorkflowAssetDragActive(false);
+    setDraggingAssetIds(null);
+    setDraggingGroupItems(null);
+    clearWorkflowCardDragDropSession();
+  }, []);
   const [selectedAssetIds, setSelectedAssetIds] = useState<Set<string>>(new Set());
   const [selectedGroupItemKeys, setSelectedGroupItemKeys] = useState<Set<string>>(new Set());
   const [capabilityPresetViewMode, setCapabilityPresetViewMode] = useState<'presets' | 'image_process' | 'sets'>('presets');
@@ -1177,6 +1307,7 @@ const WorkflowSection: React.FC<{
   const [thumbHotKeys, setThumbHotKeys] = useState<Set<string>>(() => new Set());
   const thumbOnboardingRef = useRef<string | null>(null);
   const gridRef = useRef<HTMLDivElement>(null);
+  const groupGridRef = useRef<HTMLDivElement>(null);
   const workspaceViewportRef = useRef<HTMLDivElement>(null);
   const workspaceTrackRef = useRef<HTMLDivElement>(null);
   const outlineScrollRef = useRef<HTMLDivElement>(null);
@@ -1196,8 +1327,8 @@ const WorkflowSection: React.FC<{
       }
     })();
     const isDragging =
-      Boolean(draggingAssetIds?.length) ||
-      Boolean(draggingGroupItems?.itemIndexes?.length) ||
+      Boolean(draggingAssetIdsRef.current?.length) ||
+      Boolean(draggingGroupItemsRef.current?.itemIndexes?.length) ||
       Boolean(draggingActionIdRef.current) ||
       hasPresetDrag;
     if (!isDragging) return;
@@ -1206,7 +1337,7 @@ const WorkflowSection: React.FC<{
     e.preventDefault();
     e.stopPropagation();
     (e.currentTarget as HTMLDivElement).scrollTop += dy;
-  }, [draggingAssetIds, draggingGroupItems]);
+  }, []);
   useEffect(() => {
     const el = centerScrollRef.current;
     if (!el) return;
@@ -1222,8 +1353,8 @@ const WorkflowSection: React.FC<{
         }
       })();
       const isDragging =
-        Boolean(draggingAssetIds?.length) ||
-        Boolean(draggingGroupItems?.itemIndexes?.length) ||
+        Boolean(draggingAssetIdsRef.current?.length) ||
+        Boolean(draggingGroupItemsRef.current?.itemIndexes?.length) ||
         Boolean(draggingActionIdRef.current) ||
         hasPresetDrag;
       if (!isDragging) return;
@@ -1240,28 +1371,32 @@ const WorkflowSection: React.FC<{
     return () => {
       el.removeEventListener('wheel', onWheelNative);
     };
-  }, [draggingAssetIds, draggingGroupItems]);
+  }, []);
 
   const handleWorkflowMainAssetListWheel = useCallback(
-    (e: React.WheelEvent, origin: 'inner' | 'gutter'): boolean => {
+    (e: React.WheelEvent, origin: 'inner' | 'gutter') => {
       if (isWorkflowEditableTarget(e.target)) return false;
       const t = e.target as Element | null;
       if (t?.closest('[data-prevent-wheel-scroll]')) return false;
       if (t?.closest('[data-ac-dropdown-overlay], [data-ac-dropdown-list]')) return false;
       if (t?.closest('[role="dialog"]')) return false;
+      if (
+        t?.closest('[data-workflow-sidebar]') ||
+        t?.closest('[data-workflow-function-sidebar]') ||
+        t?.closest('[data-workflow-preset]')
+      ) {
+        return false;
+      }
       const list = centerScrollRef.current;
       if (!list) return false;
-      const dy = normalizeWheelDeltaY(e as React.WheelEvent<HTMLElement>);
+      const dy = normalizeWheelDeltaY(e);
       if (!Number.isFinite(dy) || Math.abs(dy) < 0.1) return false;
-
       const listCol = list.parentElement;
       const listColRect = listCol?.getBoundingClientRect();
       if (!listColRect) return false;
-
       const outlineEl = outlineScrollRef.current;
       const listCanUp = list.scrollTop > 0;
       const listCanDown = list.scrollTop + list.clientHeight < list.scrollHeight - 1;
-
       if (origin === 'gutter') {
         const y = e.clientY;
         if (y < listColRect.top || y > listColRect.bottom) return false;
@@ -1271,11 +1406,6 @@ const WorkflowSection: React.FC<{
         list.scrollTop += dy;
         return true;
       }
-
-      if (t?.closest('[data-workflow-sidebar]') || t?.closest('[data-workflow-preset]')) {
-        return false;
-      }
-
       if (t?.closest('[data-workflow-outline]')) {
         if (!outlineEl) return false;
         const oUp = outlineEl.scrollTop > 0;
@@ -1286,12 +1416,9 @@ const WorkflowSection: React.FC<{
         list.scrollTop += dy;
         return true;
       }
-
       if (t && list.contains(t)) {
-        if ((dy < 0 && listCanUp) || (dy > 0 && listCanDown)) return false;
         return false;
       }
-
       const px = e.clientX;
       const py = e.clientY;
       if (px < listColRect.left || px > listColRect.right || py < listColRect.top || py > listColRect.bottom) {
@@ -1386,14 +1513,22 @@ const WorkflowSection: React.FC<{
     const ro = new ResizeObserver(update);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [setAssets]);
-  const sidebarWidth = 320;
+  }, []);
+  const functionSidebarLayout = useMemo(
+    () => resolveWorkflowFunctionSidebarLayout(workspaceViewportWidth),
+    [workspaceViewportWidth]
+  );
+  const functionSidebarWidth = functionSidebarLayout.functionSidebarWidthPx;
+  const showFunctionSidebar = functionSidebarLayout.mode !== 'hidden';
+  const outlineSidebarWidth = WORKFLOW_OUTLINE_SIDEBAR_WIDTH_PX;
   const paneWidth = Math.max(320, workspaceViewportWidth || 0);
-  const listPaneWidth = Math.max(320, paneWidth - sidebarWidth);
+  const listPaneWidth = Math.max(320, paneWidth - functionSidebarWidth);
   const presetPaneWidth = listPaneWidth;
-  const trackTotalWidth = listPaneWidth + sidebarWidth + presetPaneWidth + sidebarWidth;
+  const trackTotalWidth =
+    listPaneWidth + functionSidebarWidth + presetPaneWidth + outlineSidebarWidth;
   const assetListMarqueeActive = quickComposeShellActive && !showArchived;
   const marqueeStartRef = useRef(false);
+  const prevShowFunctionSidebarRef = useRef(showFunctionSidebar);
   const {
     workspacePane,
     setWorkspacePane: _setWorkspacePane,
@@ -1406,9 +1541,22 @@ const WorkflowSection: React.FC<{
     workspaceTrackRef,
     registerPaneWheelHandler,
     listPaneWidth,
-    sidebarWidth,
+    sidebarWidth: functionSidebarWidth,
     enableSpaceMarquee: assetListMarqueeActive,
   });
+  useEffect(() => {
+    const prev = prevShowFunctionSidebarRef.current;
+    prevShowFunctionSidebarRef.current = showFunctionSidebar;
+    if (!showFunctionSidebar) {
+      if (Math.round(workspacePane) === 1) {
+        snapWorkspacePaneToNode(0);
+      }
+      return;
+    }
+    if (!prev && Math.round(workspacePane) === 0) {
+      snapWorkspacePaneToNode(1);
+    }
+  }, [showFunctionSidebar, workspacePane, snapWorkspacePaneToNode]);
   /** 供 document wheel capture 读取：按住空格时不拦截滚轮，以便滚动资产列表 */
   const spaceMarqueeEnabledRef = useRef(false);
   useLayoutEffect(() => {
@@ -1525,10 +1673,43 @@ const WorkflowSection: React.FC<{
     [onLog, setAssets]
   );
 
+  const addWorkflowAssetSetAsset = useCallback(
+    (title?: string): string => {
+      const id = uuid();
+      const newAsset = attachInitialVgpToNewAsset(createAssetSetAsset(id, { title }));
+      setAssets((prev) => [...prev, newAsset]);
+      onLog?.('info', '已新建资产集');
+      return id;
+    },
+    [onLog, setAssets]
+  );
+
   const openStoryboardTablePanel = useCallback((assetId: string) => {
     setStoryboardPanelAssetId(assetId);
+    setAssetSetPanelAssetId(null);
+    setLightboxInstantShellAssetId(null);
+    setLightboxOverlayMounted(false);
     setLightboxAssetId(null);
+    setLightboxListBackdropUrl(null);
+    setLightboxPlaceholderImageSrc(null);
+    resetLightboxBoot();
     setLightboxSourceSlot(null);
+  }, [resetLightboxBoot]);
+
+  const openAssetSetPanel = useCallback((assetId: string) => {
+    setAssetSetPanelAssetId(assetId);
+    setStoryboardPanelAssetId(null);
+    setLightboxInstantShellAssetId(null);
+    setLightboxOverlayMounted(false);
+    setLightboxAssetId(null);
+    setLightboxListBackdropUrl(null);
+    setLightboxPlaceholderImageSrc(null);
+    resetLightboxBoot();
+    setLightboxSourceSlot(null);
+  }, [resetLightboxBoot]);
+
+  const closeAssetSetPanel = useCallback(() => {
+    setAssetSetPanelAssetId(null);
   }, []);
 
   const closeStoryboardTablePanel = useCallback(() => {
@@ -1549,6 +1730,58 @@ const WorkflowSection: React.FC<{
         return prev.map((x) =>
           x.id === id ? normalizeStoryboardTableOnAsset(next) : x
         );
+      });
+    },
+    [setAssets]
+  );
+
+  const openWorkflowLightbox = useCallback(
+    (
+      assetId: string,
+      sourceSlot?: { sourceGroupAssetId: string; sourceItemIndex: number } | null
+    ) => {
+      const scrollEl = centerScrollRef.current;
+      const placeholder = scrollEl ? pickWorkflowCardPlaceholderSrc(scrollEl, assetId) : null;
+      const openGen = ++lightboxOpenGenRef.current;
+
+      flushSync(() => {
+        setLightboxInstantShellAssetId(assetId);
+        setLightboxPlaceholderImageSrc(placeholder);
+        setLightboxOverlayMounted(false);
+        setLightboxSourceSlot(sourceSlot ?? null);
+        setLightboxListBackdropUrl(null);
+      });
+
+      window.requestAnimationFrame(() => {
+        if (lightboxOpenGenRef.current !== openGen) return;
+        const el = centerScrollRef.current;
+        const backdrop = el ? captureWorkflowListScrollSnapshot(el) : null;
+        if (backdrop) setLightboxListBackdropUrl(backdrop);
+        setLightboxAssetId(assetId);
+        beginLightboxBoot();
+        window.requestAnimationFrame(() => {
+          if (lightboxOpenGenRef.current !== openGen) return;
+          startTransition(() => {
+            setLightboxOverlayMounted(true);
+          });
+        });
+      });
+    },
+    [beginLightboxBoot]
+  );
+
+  const handleAssetSetAssetPatch = useCallback(
+    (
+      assetId: string,
+      patch: Partial<WorkflowAsset> | ((prev: WorkflowAsset) => WorkflowAsset)
+    ) => {
+      const id = String(assetId || '').trim();
+      if (!id) return;
+      setAssets((prev) => {
+        const cur = prev.find((x) => x.id === id);
+        if (!cur || !isWorkflowAssetSetAsset(cur)) return prev;
+        const next = typeof patch === 'function' ? patch(cur) : { ...cur, ...patch };
+        return prev.map((x) => (x.id === id ? normalizeAssetSetOnAsset(next) : x));
       });
     },
     [setAssets]
@@ -1716,8 +1949,6 @@ const WorkflowSection: React.FC<{
     [setSelectedRootAssetIds]
   );
 
-  const [dragOverAssetId, setDragOverAssetId] = useState<string | null>(null);
-  const [dragOverGroupItemKey, setDragOverGroupItemKey] = useState<string | null>(null);
   const [assetErrors, setAssetErrors] = useState<Map<string, string>>(new Map());
   const [groupPreviewIndexById, setGroupPreviewIndexById] = useState<Record<string, number>>({});
   const [groupBounceStateById, setGroupBounceStateById] = useState<Record<string, 'idle' | 'up' | 'down'>>({});
@@ -1822,6 +2053,21 @@ const WorkflowSection: React.FC<{
     return asWorkflowImageString(fromResults) || orig;
   }, []);
 
+  const scheduleWorkflowLightboxPrefetch = useCallback((asset: WorkflowAsset) => {
+    if (isWorkflowStoryboardTableAsset(asset) || isWorkflowAssetSetAsset(asset)) return;
+    const src = getAssetDisplayImage(asset).trim();
+    if (!src) return;
+    if (lightboxPrefetchTimerRef.current != null) {
+      window.clearTimeout(lightboxPrefetchTimerRef.current);
+    }
+    lightboxPrefetchTimerRef.current = window.setTimeout(() => {
+      lightboxPrefetchTimerRef.current = null;
+      prefetchWorkflowLightboxImage(src);
+      const orig = asWorkflowImageString(asset.original).trim();
+      if (orig && orig !== src) prefetchWorkflowLightboxImage(orig);
+    }, 200);
+  }, [getAssetDisplayImage]);
+
   const assetLightboxRasterEligible = useCallback(
     (a: WorkflowAsset | null | undefined): boolean => {
       if (!a || isGroupAsset(a) || isWorkflowStoryboardTableAsset(a)) return false;
@@ -1870,6 +2116,11 @@ const WorkflowSection: React.FC<{
 
   const companionStoryboardNamedAssetHydrateKey = useMemo(
     () => buildStoryboardNamedAssetCompanionHydrateKey(assets),
+    [assets]
+  );
+
+  const companionAssetSetHydrateKey = useMemo(
+    () => buildAssetSetCompanionHydrateKey(assets),
     [assets]
   );
 
@@ -2114,6 +2365,34 @@ const WorkflowSection: React.FC<{
       cancelled = true;
     };
   }, [companionStoryboardNamedAssetHydrateKey, workspaceProjectChrome?.activeProjectId, setAssets]);
+
+  useEffect(() => {
+    const projectId = String(workspaceProjectChrome?.activeProjectId || '').trim();
+    const base = String(getCompanionLocalBaseUrl() || '').trim();
+    if (!companionAssetSetHydrateKey || !projectId || !base) return;
+    let cancelled = false;
+    void (async () => {
+      const tasks = listAssetSetCompanionHydrateTasks(assetsRef.current);
+      const { hydrated, failures } = await hydrateAssetSetCompanionTasks(tasks, base, projectId);
+      if (cancelled) {
+        revokeStoryboardFrameCompanionHydrateUrls(hydrated);
+        return;
+      }
+      for (const failure of failures) {
+        const task = failure.task;
+        onLogRef.current?.(
+          'warn',
+          '资产集图片伴侣恢复失败',
+          `${task.assetId}/${task.slot.kind}: ${failure.error}`
+        );
+      }
+      if (!hydrated.length) return;
+      setAssets((prev) => applyAssetSetCompanionHydrateResults(prev, hydrated));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [companionAssetSetHydrateKey, workspaceProjectChrome?.activeProjectId, setAssets]);
 
   useEffect(() => {
     const projectId = String(workspaceProjectChrome?.activeProjectId || '').trim();
@@ -4824,6 +5103,17 @@ ${lineSvg}
   useEffect(() => {
     const onWindowPaste = (e: ClipboardEvent) => {
       if (showArchived) return;
+
+      const pastedAssetIds = parseWorkflowAssetIdsFromClipboardData(e.clipboardData);
+      if (pastedAssetIds.length > 0) {
+        const active = document.activeElement;
+        if (active?.closest('[data-workflow-quick-compose-bar]')) return;
+        e.preventDefault();
+        const zone: QuickComposeDropZone = lightboxAssetIdRef.current ? 'reference' : 'main';
+        appendQuickComposeDropSlotsForAssetIdsRef.current(pastedAssetIds, zone);
+        return;
+      }
+
       if (typeof document !== 'undefined' && document.querySelector('[data-ac-block-workflow-marquee]')) return;
       /** 仅让出真正的可编辑区；不要用 isGlobalUploadBlockedTarget(e.target)，否则焦点在顶部 Tab 等按钮上时，在列表里粘贴会被误拦截 */
       const active = document.activeElement;
@@ -5156,12 +5446,29 @@ ${lineSvg}
     return busy;
   }, [pending, executingQueue, completedTaskIds]);
 
+  const pendingAssetIds = useMemo(() => new Set(pending.map((t) => t.assetId)), [pending]);
+
+  const assetsById = useMemo(() => {
+    const map = new Map<string, WorkflowAsset>();
+    for (const a of assets) map.set(a.id, a);
+    return map;
+  }, [assets]);
+
+  const rootExecutingTaskByAssetId = useMemo(() => {
+    const map = new Map<string, WorkflowPendingTask>();
+    if (!executingQueue) return map;
+    for (const t of executingQueue.tasks) {
+      if (!completedTaskIds.has(t.id)) map.set(t.assetId, t);
+    }
+    return map;
+  }, [executingQueue, completedTaskIds]);
+
   const executingQueueDoneCount = useMemo(() => {
     if (!executingQueue) return 0;
     return executingQueue.tasks.reduce((n, t) => n + (completedTaskIds.has(t.id) ? 1 : 0), 0);
   }, [executingQueue, completedTaskIds]);
 
-  const executionElapsedByAssetId = useWorkflowAssetExecutionElapsed(executingQueue, activeTaskIds);
+  const executionStartedAtByAssetId = useWorkflowExecutionStartedAt(executingQueue, activeTaskIds);
 
   const resolveActiveExecutionForAsset = useCallback(
     (assetId: string) => {
@@ -5170,11 +5477,11 @@ ${lineSvg}
       if (!task) return null;
       const mod = getModule(task.actionType);
       return {
-        elapsedSeconds: executionElapsedByAssetId.get(assetId) ?? 0,
+        startedAt: executionStartedAtByAssetId.get(assetId) ?? null,
         stepLabel: (mod?.label || task.actionType).trim(),
       };
     },
-    [executingQueue, activeTaskIds, executionElapsedByAssetId, getModule]
+    [executingQueue, activeTaskIds, executionStartedAtByAssetId, getModule]
   );
 
   const lightboxActiveExecution = useMemo(() => {
@@ -5183,8 +5490,14 @@ ${lineSvg}
   }, [lightboxAssetId, resolveActiveExecutionForAsset]);
 
   const lightboxAsset = lightboxAssetId ? assets.find((a) => a.id === lightboxAssetId) : null;
+  const showLightboxInstantShell = Boolean(
+    lightboxInstantShellAssetId && !(lightboxOverlayMounted && lightboxBootPhase)
+  );
   const storyboardPanelAsset = storyboardPanelAssetId
     ? assets.find((a) => a.id === storyboardPanelAssetId && isWorkflowStoryboardTableAsset(a))
+    : null;
+  const assetSetPanelAsset = assetSetPanelAssetId
+    ? assets.find((a) => a.id === assetSetPanelAssetId && isWorkflowAssetSetAsset(a))
     : null;
   const storyboardExportTask = useStoryboardVideoExportTask();
   const storyboardExportRunning = storyboardExportTask?.status === 'running';
@@ -5198,6 +5511,11 @@ ${lineSvg}
       setStoryboardPanelAssetId(null);
     }
   }, [storyboardPanelAsset, storyboardPanelAssetId]);
+  useEffect(() => {
+    if (assetSetPanelAssetId && !assetSetPanelAsset) {
+      setAssetSetPanelAssetId(null);
+    }
+  }, [assetSetPanelAsset, assetSetPanelAssetId]);
   const lightboxShowsImage = Boolean(lightboxAsset && getAssetDisplayImage(lightboxAsset).trim());
   /** 文字资产当前版本按文本通道展示（非 results 中的位图版本） */
   const lightboxTextAssetOnTextChannel = Boolean(
@@ -5205,6 +5523,19 @@ ${lineSvg}
       isWorkflowTextAsset(lightboxAsset) &&
       workflowAssetCurrentDisplayIsTextChannel(lightboxAsset)
   );
+
+  useEffect(() => {
+    if (lightboxBootPhase !== 't1') return;
+    if (lightboxTextAssetOnTextChannel && !lightboxShowsImage) {
+      notifyLightboxPrimaryReady();
+    }
+  }, [
+    lightboxBootPhase,
+    lightboxTextAssetOnTextChannel,
+    lightboxShowsImage,
+    notifyLightboxPrimaryReady,
+  ]);
+
   /** 大图按位图预览：工具条、标注、快捷输入、SAM 等完整图片 chrome */
   const lightboxRasterChrome = Boolean(lightboxAsset && assetLightboxRasterEligible(lightboxAsset));
   /** 右侧步骤时间线 / 左侧 VGP 缩略图树（含文字源资产） */
@@ -5793,6 +6124,68 @@ ${lineSvg}
     setLightboxSourceSlot(null);
   }, []);
 
+  const handleLightboxStripSelect = useCallback((assetId: string) => {
+    setLightboxSourceSlot(null);
+    const scrollEl = centerScrollRef.current;
+    setLightboxPlaceholderImageSrc(
+      scrollEl ? pickWorkflowCardPlaceholderSrc(scrollEl, assetId) : null
+    );
+    setLightboxAssetId(assetId);
+  }, []);
+
+  const getWorkflowAssetOriginalCopySrc = useCallback((asset: WorkflowAsset): string => {
+    const orig = asWorkflowImageString(asset.original).trim();
+    return orig ? workflowSafeImgSrc(orig) : '';
+  }, []);
+
+  const canWorkflowAssetCopyImage = useCallback(
+    (asset: WorkflowAsset) => Boolean(getWorkflowAssetOriginalCopySrc(asset)),
+    [getWorkflowAssetOriginalCopySrc]
+  );
+
+  const canWorkflowAssetAddToComposeInput = useCallback(
+    (asset: WorkflowAsset) => {
+      if (isGroupAsset(asset) || !assetLightboxRasterEligible(asset)) return false;
+      return Boolean(getAssetDisplayImage(asset).trim());
+    },
+    [getAssetDisplayImage]
+  );
+
+  const openWorkflowAssetContextMenu = useCallback((asset: WorkflowAsset, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setWorkflowAssetContextMenu({ assetId: asset.id, x: e.clientX, y: e.clientY });
+  }, []);
+
+  const handleWorkflowAssetCopyImage = useCallback(
+    async (asset: WorkflowAsset) => {
+      const imageSrc = getWorkflowAssetOriginalCopySrc(asset);
+      if (!imageSrc) {
+        onLog?.('warn', '该资产无可用原图，无法复制');
+        return;
+      }
+      const outcome = await copyWorkflowAssetOriginalImageToClipboard({ imageSrc });
+      if (outcome === 'ok') {
+        onLog?.('info', '已复制原图，可粘贴到任意位置');
+        return;
+      }
+      onLog?.('warn', '复制失败（请检查浏览器剪贴板权限）');
+    },
+    [getWorkflowAssetOriginalCopySrc, onLog]
+  );
+
+  const handleWorkflowAssetCopyId = useCallback(
+    async (asset: WorkflowAsset) => {
+      const outcome = await copyWorkflowAssetIdToClipboard({ assetId: asset.id });
+      if (outcome === 'ok') {
+        onLog?.('info', '已复制资产 ID；粘贴到输入栏即可引用（不会新建卡片）');
+        return;
+      }
+      onLog?.('warn', '复制 ID 失败（请检查浏览器剪贴板权限）');
+    },
+    [onLog]
+  );
+
   /** 大图预览：普通滚轮在本资产内切换 displayKey */
   const handleLightboxWheelCycleDisplay = useCallback((deltaSteps: number) => {
     setAssets((prev) => {
@@ -5884,8 +6277,14 @@ ${lineSvg}
         });
       }
       if (opts.flush) flushLightboxOverlayToAsset();
+      lightboxOpenGenRef.current += 1;
       setQuickComposeSegmentsTracked((prev) => stripCurrentViewFromQuickComposeSegments(prev));
+      setLightboxInstantShellAssetId(null);
+      setLightboxOverlayMounted(false);
       setLightboxAssetId(null);
+      setLightboxListBackdropUrl(null);
+      setLightboxPlaceholderImageSrc(null);
+      resetLightboxBoot();
       setLightboxSourceSlot(null);
       setLightboxRembgPreview(null);
       setLightboxRembgInstallModalOpen(false);
@@ -5893,7 +6292,7 @@ ${lineSvg}
       lightboxOverlayDirtyCloseDialogOpenRef.current = false;
       lightboxDirtyClosePersistedRef.current = null;
     },
-    [flushLightboxOverlayToAsset, setQuickComposeSegmentsTracked]
+    [flushLightboxOverlayToAsset, resetLightboxBoot, setQuickComposeSegmentsTracked]
   );
 
   const cancelLightboxOverlayDirtyCloseDialog = useCallback(() => {
@@ -6534,12 +6933,20 @@ ${lineSvg}
       return next;
     });
     setPending((prev) => prev.filter((t) => t.assetId !== assetId));
-    if (lightboxAssetId === assetId) setLightboxAssetId(null);
+    if (lightboxAssetId === assetId) {
+      setLightboxInstantShellAssetId(null);
+      setLightboxOverlayMounted(false);
+      setLightboxAssetId(null);
+      setLightboxListBackdropUrl(null);
+      setLightboxPlaceholderImageSrc(null);
+      resetLightboxBoot();
+    }
     if (archivedDetailAssetId === assetId) setArchivedDetailAssetId(null);
+    if (assetSetPanelAssetId === assetId) setAssetSetPanelAssetId(null);
     if (storyboardPanelAssetId === assetId) setStoryboardPanelAssetId(null);
     // 如果删除的是当前查看的组，清除组筛选
     if (groupFilterId === assetId) setGroupFilterId(null);
-  }, [lightboxAssetId, archivedDetailAssetId, groupFilterId, storyboardPanelAssetId, onStoryboardTableAssetRemoved, setAssets, setPending]);
+  }, [lightboxAssetId, archivedDetailAssetId, groupFilterId, storyboardPanelAssetId, assetSetPanelAssetId, onStoryboardTableAssetRemoved, resetLightboxBoot, setAssets, setPending]);
 
   const archivedDetailAsset = archivedDetailAssetId ? assets.find((a) => a.id === archivedDetailAssetId) : null;
 
@@ -6618,6 +7025,87 @@ ${lineSvg}
     if (!currentGroupAsset || !showAllInGroup) return null;
     return flattenGroupImages(currentGroupAsset);
   }, [currentGroupAsset, showAllInGroup, flattenGroupImages]);
+
+  const rootCanvasLayoutItems = useMemo(
+    () =>
+      rootCanvasAssets.map((a) => {
+        const textDisplay = getAssetDisplayText(a);
+        const hasTextPayload =
+          !!textDisplay ||
+          !!(a.textTitle || '').trim() ||
+          Object.values(a.textResults || {}).some((v) => String(v || '').trim() !== '');
+        const hasDisplayImage = getAssetDisplayImage(a).trim() !== '';
+        return {
+          id: a.id,
+          aspectRatio: resolveWorkflowCanvasCardAspect(a, cardAspectByAssetId, {
+            hasDisplayImage,
+            hasTextPayload,
+          }),
+        };
+      }),
+    [rootCanvasAssets, cardAspectByAssetId, getAssetDisplayText, getAssetDisplayImage]
+  );
+
+  const rootJustifiedLayout = useWorkflowJustifiedLayout(rootCanvasLayoutItems, gridRef, {
+    gap: WORKFLOW_ASSET_GRID_GAP_PX,
+    targetRowHeight: justifiedTargetRowHeight,
+    remeasureKey: lightboxAssetId ?? 'list',
+  });
+
+  const groupCanvasLayoutItems = useMemo(() => {
+    if (!groupFilterId || !currentGroupAsset) return [];
+    if (showAllImages?.length) {
+      return showAllImages.map((_flat, idx) => {
+        const gallKey = `gall:${currentGroupAsset.id}:${idx}`;
+        return {
+          id: gallKey,
+          aspectRatio: resolveWorkflowGridCardAspect(undefined, cardAspectByAssetId, gallKey, 1),
+        };
+      });
+    }
+    return currentGroupItems.map((item, idx) => {
+      const groupKey = `${currentGroupAsset.id}::${idx}`;
+      const isAssetRef = typeof item === 'object' && item && 'assetId' in item;
+      const childAsset = isAssetRef
+        ? assets.find((x) => x.id === (item as { assetId: string }).assetId) ?? null
+        : null;
+      if (childAsset) {
+        const childTextDisplay = getAssetDisplayText(childAsset);
+        const hasChildTextPayload =
+          !!childTextDisplay ||
+          !!(childAsset.textTitle || '').trim() ||
+          Object.values(childAsset.textResults || {}).some((v) => String(v || '').trim() !== '');
+        const hasChildDisplayImage = getAssetDisplayImage(childAsset).trim() !== '';
+        return {
+          id: groupKey,
+          aspectRatio: resolveWorkflowCanvasCardAspect(childAsset, cardAspectByAssetId, {
+            hasDisplayImage: hasChildDisplayImage,
+            hasTextPayload: hasChildTextPayload,
+            syntheticKey: groupKey,
+          }),
+        };
+      }
+      return {
+        id: groupKey,
+        aspectRatio: resolveWorkflowGridCardAspect(undefined, cardAspectByAssetId, groupKey, 1),
+      };
+    });
+  }, [
+    groupFilterId,
+    currentGroupAsset,
+    showAllImages,
+    currentGroupItems,
+    assets,
+    cardAspectByAssetId,
+    getAssetDisplayText,
+    getAssetDisplayImage,
+  ]);
+
+  const groupJustifiedLayout = useWorkflowJustifiedLayout(groupCanvasLayoutItems, groupGridRef, {
+    gap: WORKFLOW_ASSET_GRID_GAP_PX,
+    targetRowHeight: justifiedTargetRowHeight,
+    remeasureKey: lightboxAssetId ?? 'list',
+  });
 
   const mergeThumbUnlockKeys = useCallback((prev: Set<string>, keys: Iterable<string>) => {
     const next = new Set(prev);
@@ -6716,25 +7204,60 @@ ${lineSvg}
     showAllImages?.length,
     showArchived,
     showAllInGroup,
+    lightboxAssetId,
   ]);
 
   useEffect(() => {
     const root = centerScrollRef.current;
     if (!root) return;
     let cancelled = false;
+    let hotRaf = 0;
+    const pendingHotAdd = new Set<string>();
+    const pendingHotRemove = new Set<string>();
+
+    const flushHot = () => {
+      hotRaf = 0;
+      if (!pendingHotAdd.size && !pendingHotRemove.size) return;
+      const add = [...pendingHotAdd];
+      const remove = [...pendingHotRemove];
+      pendingHotAdd.clear();
+      pendingHotRemove.clear();
+      setThumbHotKeys((prev) => {
+        let changed = false;
+        const next = new Set(prev);
+        for (const k of add) {
+          if (!next.has(k)) {
+            next.add(k);
+            changed = true;
+          }
+        }
+        for (const k of remove) {
+          if (next.has(k)) {
+            next.delete(k);
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
+    };
+
     const io = new IntersectionObserver(
       (entries) => {
         if (cancelled) return;
-        setThumbHotKeys((prev) => {
-          const next = new Set(prev);
-          for (const en of entries) {
-            const k = (en.target as HTMLElement).getAttribute('data-workflow-thumb-key');
-            if (!k) continue;
-            if (en.isIntersecting) next.add(k);
-            else next.delete(k);
+        for (const en of entries) {
+          const k = (en.target as HTMLElement).getAttribute('data-workflow-thumb-key');
+          if (!k) continue;
+          if (en.isIntersecting) {
+            pendingHotRemove.delete(k);
+            pendingHotAdd.add(k);
+          } else {
+            pendingHotAdd.delete(k);
+            pendingHotRemove.add(k);
           }
-          return next;
-        });
+        }
+        if (!hotRaf) {
+          hotRaf = window.requestAnimationFrame(flushHot);
+        }
       },
       { root, rootMargin: '0px', threshold: 0.05 }
     );
@@ -6745,6 +7268,7 @@ ${lineSvg}
     const raf = window.requestAnimationFrame(() => window.requestAnimationFrame(run));
     return () => {
       cancelled = true;
+      if (hotRaf) window.cancelAnimationFrame(hotRaf);
       window.cancelAnimationFrame(raf);
       io.disconnect();
     };
@@ -6757,6 +7281,7 @@ ${lineSvg}
     showAllImages?.length,
     showArchived,
     showAllInGroup,
+    lightboxAssetId,
   ]);
 
   /** 面包屑项，包含父级 ID 用于返回导航 */
@@ -7045,6 +7570,249 @@ ${lineSvg}
     [assets, insertManualGroupForAssetIds, scheduleCompanionPersistOriginalAny, setAssets, setSelectedAssetIds]
   );
 
+  const handleWorkflowAssetDropHostDragOver = useCallback(
+    (
+      e: React.DragEvent<HTMLElement>,
+      targetKey: string,
+      opts: { allowGroup: boolean; isBusy: boolean }
+    ) => {
+      if (opts.isBusy) return;
+      const hasInternalDrag =
+        !!draggingAssetIdsRef.current?.length ||
+        !!draggingGroupItemsRef.current?.itemIndexes?.length;
+      let hasExport = false;
+      try {
+        hasExport = Array.from(e.dataTransfer.types).includes(DT_AC_WORKFLOW_EXPORT);
+      } catch {
+        hasExport = false;
+      }
+      if (!hasInternalDrag && !hasExport) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      updateWorkflowCardDragOver(e.currentTarget, targetKey, e.clientX, e.clientY, {
+        allowGroup: opts.allowGroup,
+      });
+    },
+    []
+  );
+
+  const handleRootCanvasAssetShellDrop = useCallback(
+    (e: React.DragEvent<HTMLElement>, targetAsset: WorkflowAsset) => {
+      e.preventDefault();
+      const session = readWorkflowCardDragDropSession();
+      workflowCardDragLeave(e.currentTarget, targetAsset.id);
+      if (busyAssetIds.has(targetAsset.id)) {
+        clearWorkflowDragSession();
+        return;
+      }
+      const fromState = parseWorkflowDragSource(
+        draggingAssetIdsRef.current,
+        draggingGroupItemsRef.current
+      );
+      const sources = fromState ? [fromState] : parseAcWorkflowExportDragSources(e.dataTransfer);
+      const finish = () => clearWorkflowDragSession();
+      if (sources.length !== 1) {
+        finish();
+        return;
+      }
+      const src = sources[0]!;
+      const targetId = targetAsset.id;
+
+      if (
+        session?.targetKey === targetId &&
+        session.intent !== 'group' &&
+        src.kind === 'root'
+      ) {
+        const dragIds = Array.from(new Set(src.assetIds)).filter((id) => id !== targetId);
+        if (dragIds.length > 0) {
+          setAssets((prev) =>
+            applyRootWorkflowAssetReorder(
+              prev,
+              dragIds,
+              targetId,
+              session.intent === 'insert-before' ? 'before' : 'after'
+            )
+          );
+        }
+        finish();
+        return;
+      }
+
+      if (
+        session?.targetKey === targetId &&
+        session.intent === 'group' &&
+        src.kind === 'root'
+      ) {
+        const dragIds = Array.from(new Set(src.assetIds.filter((id) => id !== targetId))).filter((id) => {
+          const ast = assets.find((x) => x.id === id);
+          return ast != null && !isWorkflowTextAsset(ast);
+        });
+        if (dragIds.length > 0) {
+          if (isGroupAsset(targetAsset)) {
+            setAssets((prev) => mergeAssetIdsIntoGroupCardAssets(prev, targetId, dragIds));
+          } else {
+            const members = Array.from(new Set([...dragIds, targetId]));
+            if (members.length > 1) createGroupFromAssets(members);
+          }
+        }
+        finish();
+        return;
+      }
+
+      if (isWorkflowTextAsset(targetAsset)) {
+        finish();
+        return;
+      }
+
+      const { groupAssetId, itemIndexes } = src;
+      if (groupAssetId === targetId) {
+        finish();
+        return;
+      }
+      setAssets((prev) => {
+        const { nextAssets, assetIds } = ensureGroupItemsAsAssets(prev, groupAssetId, itemIndexes);
+        if (assetIds.length === 0) return prev;
+        const afterRemove = removeGroupItems(nextAssets, groupAssetId, itemIndexes);
+        const groupRemoved = !afterRemove.some((x) => x.id === groupAssetId);
+        if (groupRemoved) {
+          queueMicrotask(() => setGroupFilterId(null));
+        }
+        const targetInPrev = afterRemove.find((x) => x.id === targetId);
+        const targetHasGroup = !!targetInPrev && isGroupAsset(targetInPrev);
+        if (targetHasGroup) {
+          return mergeAssetIdsIntoGroupCardAssets(afterRemove, targetId, assetIds);
+        }
+        const r = insertManualGroupForAssetIds(afterRemove, [...assetIds, targetId]);
+        if (r.createdGroup) {
+          const cg = r.createdGroup;
+          queueMicrotask(() => scheduleCompanionPersistOriginalAny(cg.id, cg.coverImage));
+        }
+        return r.next;
+      });
+      finish();
+    },
+    [
+      assets,
+      busyAssetIds,
+      clearWorkflowDragSession,
+      createGroupFromAssets,
+      insertManualGroupForAssetIds,
+      mergeAssetIdsIntoGroupCardAssets,
+      scheduleCompanionPersistOriginalAny,
+      setAssets,
+      setGroupFilterId,
+    ]
+  );
+
+  const handleGroupItemShellDrop = useCallback(
+    (
+      e: React.DragEvent<HTMLElement>,
+      groupKey: string,
+      itemIndex: number,
+      childAsset: WorkflowAsset
+    ) => {
+      e.preventDefault();
+      const session = readWorkflowCardDragDropSession();
+      workflowCardDragLeave(e.currentTarget, groupKey);
+      if (!currentGroupAsset) {
+        clearWorkflowDragSession();
+        return;
+      }
+      if (!showArchived && ingestWorkflowFilesFromDataTransfer(e.dataTransfer)) {
+        clearWorkflowDragSession();
+        return;
+      }
+      const dragGroup = draggingGroupItemsRef.current;
+      if (
+        session?.targetKey === groupKey &&
+        session.intent !== 'group' &&
+        dragGroup?.itemIndexes?.length &&
+        dragGroup.groupAssetId === currentGroupAsset.id
+      ) {
+        setAssets((prev) =>
+          reorderManualGroupItemIndexes(
+            prev,
+            dragGroup.groupAssetId,
+            dragGroup.itemIndexes,
+            itemIndex,
+            session.intent === 'insert-before' ? 'before' : 'after'
+          )
+        );
+        setSelectedGroupItemKeys(new Set());
+        clearWorkflowDragSession();
+        return;
+      }
+
+      if (!dragGroup?.itemIndexes?.length) {
+        clearWorkflowDragSession();
+        return;
+      }
+      const targetIdx = itemIndex;
+      const allIndexes = [...new Set([...dragGroup.itemIndexes, targetIdx])].sort((a, b) => a - b);
+      if (allIndexes.length < 2) {
+        clearWorkflowDragSession();
+        return;
+      }
+      const groupAssetId = currentGroupAsset.id;
+      const { nextAssets, assetIds } = ensureGroupItemsAsAssets(assets, groupAssetId, allIndexes);
+      if (assetIds.length === 0) {
+        clearWorkflowDragSession();
+        return;
+      }
+      const firstAsset = nextAssets.find((x) => x.id === assetIds[0]);
+      const coverImage = firstAsset ? getAssetDisplayImage(firstAsset, nextAssets) : '';
+      const newGroupId = uuid();
+      let updated = nextAssets.map((a) =>
+        assetIds.includes(a.id) ? { ...a, groupId: newGroupId } : a
+      );
+      const groupIdx = updated.findIndex((a) => a.id === groupAssetId);
+      if (groupIdx !== -1) {
+        const g = updated[groupIdx];
+        if (isGroupAsset(g)) {
+          const items = [...(g.assetIds ?? [])];
+          const sorted = allIndexes.filter((i) => i >= 0 && i < items.length).sort((a, b) => a - b);
+          const keep: string[] = [];
+          items.forEach((it, i) => {
+            if (!sorted.includes(i)) keep.push(it);
+          });
+          const insertPos = sorted.length ? sorted[0] : keep.length;
+          keep.splice(insertPos, 0, newGroupId);
+          updated = updated.map((a, i) => (i === groupIdx ? { ...a, assetIds: keep } : a));
+        }
+      }
+      const usedLabels = new Set<string>(
+        updated.map((a) => a.groupLabel).filter((x): x is string => !!x)
+      );
+      const newGroup: WorkflowAsset = attachInitialVgpToNewAsset({
+        id: newGroupId,
+        isGroup: true,
+        original: coverImage,
+        displayKey: 'original',
+        results: {},
+        resultOrder: [],
+        assetIds,
+        groupId: groupAssetId,
+        groupKind: 'manual',
+        groupLabel: getRandomGroupCodeName(usedLabels),
+        archived: false,
+        hiddenInGrid: false,
+        createdAt: Date.now(),
+      });
+      setAssets([...updated, newGroup]);
+      setSelectedGroupItemKeys(new Set());
+      clearWorkflowDragSession();
+    },
+    [
+      assets,
+      clearWorkflowDragSession,
+      currentGroupAsset,
+      getAssetDisplayImage,
+      setAssets,
+      setSelectedGroupItemKeys,
+      showArchived,
+    ]
+  );
+
   /** 从组的 assetIds 创建嵌套组 */
   const createNestedGroupFromGroupItem = useCallback(
     (groupAssetId: string, itemIndex: number) => {
@@ -7249,6 +8017,22 @@ ${lineSvg}
       onLog?.('info', `底部快捷栏：${parts.join('，')}（按拖入顺序送模，拖出虚线区可移除）`);
     },
     [getAssetDisplayImage, onLog]
+  );
+  appendQuickComposeDropSlotsForAssetIdsRef.current = appendQuickComposeDropSlotsForAssetIds;
+
+  const handleQuickComposePasteAssetRefs = useCallback(
+    (assetIds: string[], zone: QuickComposeDropZone = 'main') => {
+      appendQuickComposeDropSlotsForAssetIds(assetIds, zone);
+    },
+    [appendQuickComposeDropSlotsForAssetIds]
+  );
+
+  const handleWorkflowAssetAddToComposeInput = useCallback(
+    (asset: WorkflowAsset) => {
+      const zone: QuickComposeDropZone = lightboxAssetIdRef.current ? 'reference' : 'main';
+      appendQuickComposeDropSlotsForAssetIds([asset.id], zone);
+    },
+    [appendQuickComposeDropSlotsForAssetIds]
   );
 
   const removeQuickComposeMainDropSlot = useCallback((assetId: string) => {
@@ -8989,7 +9773,7 @@ ${lineSvg}
                     onClick={() => setColumnCount((n) => Math.max(2, n - 1))}
                     disabled={columnCount <= 2}
                     className={TITLE_ROW_STEPPER_BTN}
-                    aria-label="减少列数"
+                    aria-label="减少每行列数"
                   >
                     −
                   </button>
@@ -8999,7 +9783,7 @@ ${lineSvg}
                     onClick={() => setColumnCount((n) => Math.min(6, n + 1))}
                     disabled={columnCount >= 6}
                     className={TITLE_ROW_STEPPER_BTN}
-                    aria-label="增加列数"
+                    aria-label="增加每行列数"
                   >
                     +
                   </button>
@@ -9022,6 +9806,19 @@ ${lineSvg}
                   title="新建分镜表并打开编辑"
                 >
                   新建分镜表
+                </button>
+              )}
+              {!showArchived && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const id = addWorkflowAssetSetAsset();
+                    openAssetSetPanel(id);
+                  }}
+                  className={TITLE_ROW_BTN_NEUTRAL}
+                  title="新建资产集并打开拆解面板"
+                >
+                  新建资产集
                 </button>
               )}
               {!showArchived && (inGroupView || visibleAssets.length > 0) && (
@@ -9066,7 +9863,9 @@ ${lineSvg}
             </>
           ),
         },
-        {
+        ...(showFunctionSidebar
+          ? [
+              {
           title: '功能区',
           desc: '基础能力与复合能力',
           actions: (
@@ -9115,9 +9914,12 @@ ${lineSvg}
               )}
             </div>
           ),
-        },
+              } as const,
+            ]
+          : []),
       ];
       if (activePaneNode === 0) return [workspaceAndFunctionCols[0]!, outlineWorkflowTopBarColumn];
+      if (!showFunctionSidebar) return [workspaceAndFunctionCols[0]!];
       return [workspaceAndFunctionCols[1]!, workspaceAndFunctionCols[0]!];
     }
     /** 能力 + 功能区同屏：顶栏不重复「功能区 / 一键执行」（一键执行仅在「功能区 + 工作区」档显示） */
@@ -9307,6 +10109,7 @@ ${lineSvg}
     storyboardExportTitle,
     addWorkflowStoryboardTableAsset,
     openStoryboardTablePanel,
+    showFunctionSidebar,
   ]);
   const sidebarOpsAllowed = workflowDragSourceAllowsSidebarOps(
     parseWorkflowDragSource(draggingAssetIds, draggingGroupItems),
@@ -9455,17 +10258,18 @@ ${lineSvg}
         >
           <div
             ref={workspaceTrackRef}
-            className={`flex h-full motion-reduce:transition-none${workspaceSnapping ? ' will-change-transform' : ''}`}
+            className={`flex h-full min-h-0 items-stretch overflow-hidden motion-reduce:transition-none${workspaceSnapping ? ' will-change-transform' : ''}`}
             style={{ width: `${trackTotalWidth}px` }}
           >
         {/* 从左到右：能力预设 | 功能区 | 工作区 | 大纲（前两列锁在同一 flex 行内，避免被压成上下叠） */}
         <div
-          className="flex h-full min-h-0 shrink-0 flex-row flex-nowrap"
-          style={{ width: `${presetPaneWidth + sidebarWidth}px` }}
+          className="flex h-full min-h-0 max-h-full shrink-0 flex-row flex-nowrap self-stretch overflow-hidden"
+          style={{ width: `${presetPaneWidth + functionSidebarWidth}px` }}
         >
         <div
           className={`h-full min-h-0 shrink-0 flex flex-col overflow-hidden border-r border-white/[0.05] pl-3 pr-0`}
           style={{ width: `${presetPaneWidth}px` }}
+          data-workflow-preset-column
         >
           {capabilityPresetPanel ? (
             <div
@@ -9484,16 +10288,24 @@ ${lineSvg}
             </div>
           )}
         </div>
-        <div className="h-full min-h-0 shrink-0 flex flex-col" style={{ width: `${sidebarWidth}px`, minWidth: `${sidebarWidth}px` }}>
+        {showFunctionSidebar ? (
+        <div
+          className="flex h-full min-h-0 max-h-full self-stretch min-w-0 flex-col overflow-hidden"
+          style={{ width: `${functionSidebarWidth}px`, minWidth: `${functionSidebarWidth}px` }}
+          data-workflow-function-sidebar
+        >
+          <div className="flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden">
           <WorkflowSidebarColumn
             actionModules={actionModules}
             capabilitySets={capabilitySets}
-            dragOverAction={dragOverAction}
-            setDragOverAction={setDragOverAction}
             draggingAssetIds={draggingAssetIds}
-            setDraggingAssetIds={setDraggingAssetIds}
+            draggingAssetIdsRef={draggingAssetIdsRef}
+            syncDraggingAssetIds={syncDraggingAssetIds}
             draggingGroupItems={draggingGroupItems}
-            setDraggingGroupItems={setDraggingGroupItems}
+            draggingGroupItemsRef={draggingGroupItemsRef}
+            syncDraggingGroupItems={syncDraggingGroupItems}
+            workflowAssetDragActive={workflowAssetDragActive}
+            clearWorkflowDragSession={clearWorkflowDragSession}
             createGroupFromAssets={createGroupFromAssets}
             createNestedGroupFromGroupItem={createNestedGroupFromGroupItem}
             ensureGroupItemsAsAssets={ensureGroupItemsAsAssets}
@@ -9542,17 +10354,30 @@ ${lineSvg}
             cloudPresetIds={cloudPresetIds}
             onWorkflowFeatureClick={handleWorkflowFeatureClick}
           />
+          </div>
         </div>
+        ) : null}
         </div>
         <div
           ref={listPaneRef}
           data-workflow-asset-list
-          className="relative min-w-0 min-h-0 h-full flex flex-col shrink-0"
+          className="relative min-w-0 min-h-0 h-full max-h-full self-stretch flex flex-col shrink-0 overflow-hidden"
           style={{ width: `${listPaneWidth}px` }}
         >
+        {lightboxAssetId && lightboxListBackdropUrl ? (
+          <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden" aria-hidden>
+            <img
+              src={lightboxListBackdropUrl}
+              alt=""
+              draggable={false}
+              className="h-full w-full object-cover object-top select-none"
+            />
+          </div>
+        ) : null}
         <div
           ref={centerScrollRef}
-          className="flex-1 min-w-0 min-h-0 overflow-y-auto no-scrollbar flex flex-col gap-3 rounded-xl transition-colors"
+          data-workflow-scroll-port="asset"
+          className="workflow-scroll-port flex h-0 flex-1 min-w-0 min-h-0 overflow-y-auto overscroll-y-contain no-scrollbar flex flex-col gap-3 rounded-xl transition-colors"
           onWheelCapture={handleCenterWheelDuringDrag}
           onDragOver={(e) => {
             autoScrollContainerOnDrag(e.currentTarget as HTMLElement, e.clientY);
@@ -9561,6 +10386,8 @@ ${lineSvg}
           }}
           tabIndex={0}
         >
+          {!lightboxAssetId ? (
+          <>
           {groupFilterId ? (
             <>
               <div className={`flex items-center gap-2 shrink-0 ${WORKFLOW_EDGE_GUTTER}`}>
@@ -9600,10 +10427,13 @@ ${lineSvg}
                 )}
               </div>
               <div
-                className={`gap-4 flex-1 pt-4 ${WORKFLOW_EDGE_GUTTER}`}
+                ref={groupGridRef}
+                className={`relative pt-4 w-full ${WORKFLOW_EDGE_GUTTER} ${
+                  groupJustifiedLayout.ready ? '' : 'opacity-0'
+                }`}
                 style={{
-                  columnCount: showAllInGroup ? Math.max(2, columnCount) : columnCount,
-                  columnFill: 'balance' as const,
+                  height: groupJustifiedLayout.ready ? groupJustifiedLayout.totalHeight : undefined,
+                  ['--wf-card-gap' as string]: `${WORKFLOW_ASSET_GRID_GAP_PX}px`,
                 }}
               >
                 {!currentGroupAsset ? (
@@ -9612,19 +10442,25 @@ ${lineSvg}
                   ? showAllImages.map((flat, idx) => {
                       const img = flat.src;
                       const gallKey = `gall:${currentGroupAsset?.id ?? 'x'}:${idx}`;
+                      const layoutBox = groupJustifiedLayout.boxById.get(gallKey);
                       return (
                         <div
                           key={idx}
                           data-workflow-card
                           data-workflow-thumb-key={gallKey}
-                          className={`break-inside-avoid mb-4 rounded-2xl overflow-hidden bg-[#141416] flex justify-center ${WORKFLOW_CARD_SURFACE_IDLE}`}
+                          className={`absolute min-w-0 rounded-2xl overflow-hidden bg-[#141416] flex justify-center ${WORKFLOW_CARD_SURFACE_IDLE}`}
+                          style={
+                            layoutBox
+                              ? {
+                                  left: layoutBox.left,
+                                  top: layoutBox.top,
+                                  width: layoutBox.width,
+                                  height: layoutBox.height,
+                                }
+                              : undefined
+                          }
                         >
-                          <div
-                            className="relative w-full bg-[#141416] flex justify-center"
-                            style={{
-                              aspectRatio: `${resolveWorkflowGridCardAspect(undefined, cardAspectByAssetId, gallKey, 1)}`,
-                            }}
-                          >
+                          <div className="relative w-full h-full bg-[#141416] flex justify-center">
                             <WorkflowGridImage
                               fullSrc={img}
                               cacheKey={gallKey}
@@ -9656,6 +10492,7 @@ ${lineSvg}
                             ? item
                             : currentGroupAsset?.original ?? '';
                       const groupKey = currentGroupAsset ? `${currentGroupAsset.id}::${idx}` : `${idx}`;
+                      const layoutBox = groupJustifiedLayout.boxById.get(groupKey);
                       const taskMatchesGroupSlot = (t: WorkflowPendingTask) =>
                         t.sourceGroupAssetId === currentGroupAsset?.id && t.sourceItemIndex === idx;
                       const taskMatchesCurrentItem = (t: WorkflowPendingTask) =>
@@ -9693,13 +10530,31 @@ ${lineSvg}
                         const childIsGroup = isGroupAsset(childAsset);
                         const childGroupLen = childIsGroup ? (childAsset.assetIds?.length ?? 0) : 0;
                         return (
-                          <div key={idx} className="break-inside-avoid mb-6 relative" data-workflow-thumb-key={groupKey}>
-                            {childIsGroup && childGroupLen > 0 && (
-                              <>
-                                <div className="absolute inset-0 rounded-2xl bg-[#16161a] border border-[#3b6fb8] translate-x-[16px] translate-y-[16px] -rotate-3 opacity-70 shadow-xl shadow-[#000000] pointer-events-none" />
-                                <div className="absolute inset-0 rounded-2xl bg-[#1a1a1e] border border-[#6090d0] translate-x-[8px] translate-y-[8px] rotate-1 opacity-90 shadow-xl shadow-[#000000] pointer-events-none" />
-                              </>
-                            )}
+                          <div
+                            key={idx}
+                            className="absolute min-w-0"
+                            data-workflow-thumb-key={groupKey}
+                            style={
+                              layoutBox
+                                ? {
+                                    left: layoutBox.left,
+                                    top: layoutBox.top,
+                                    width: layoutBox.width,
+                                    height: layoutBox.height,
+                                  }
+                                : undefined
+                            }
+                          >
+                            <div className="relative h-full w-full min-h-0">
+                            {childIsGroup && childGroupLen > 1 ? (
+                              <WorkflowGroupCardStackPreviews
+                                groupAsset={childAsset}
+                                allAssets={assets}
+                                getDisplayImage={getAssetDisplayImage}
+                                deferThumbnail={!thumbUnlockKeys.has(groupKey)}
+                                thumbDecodePriority={thumbHotKeys.has(groupKey) ? 'high' : 'low'}
+                              />
+                            ) : null}
                             {(() => {
                               const bounce = groupBounceStateById[childAsset.id] ?? 'idle';
                               const motionClass =
@@ -9747,7 +10602,33 @@ ${lineSvg}
                                 showChildSetRunProgress && !selectedGroupItemKeys.has(groupKey)
                                   ? 'ring-2 ring-blue-500/35 shadow-[0_0_22px_rgba(59,130,246,0.14)]'
                                   : '';
+                              const childStepBadge = resolveWorkflowAssetStepBadge(childAsset, assets, {
+                                groupPreviewIndex: groupPreviewIndexById[childAsset.id],
+                              });
                               return (
+                                <div
+                                  data-workflow-drop-host
+                                  className={`min-w-0 h-full ${WORKFLOW_CARD_SHELL_PAD} ${
+                                    selectedGroupItemKeys.has(groupKey)
+                                      ? WORKFLOW_CARD_SHELL_SELECTED
+                                      : WORKFLOW_CARD_SHELL_IDLE
+                                  }`}
+                                  data-workflow-thumb-key={groupKey}
+                                  onDragOver={(e) => {
+                                    handleWorkflowAssetDropHostDragOver(e, groupKey, {
+                                      allowGroup: !isWorkflowTextAsset(childAsset),
+                                      isBusy: isBusyGroupItem,
+                                    });
+                                  }}
+                                  onDragLeave={(e) => {
+                                    const rel = e.relatedTarget as Node | null;
+                                    if (rel && e.currentTarget.contains(rel)) return;
+                                    workflowCardDragLeave(e.currentTarget, groupKey);
+                                  }}
+                                  onDrop={(e) => {
+                                    handleGroupItemShellDrop(e, groupKey, idx, childAsset);
+                                  }}
+                                >
                                 <div
                                   data-workflow-card
                                   ref={(el) => {
@@ -9755,14 +10636,10 @@ ${lineSvg}
                                     if (el) cardRefs.current.set(groupKey, el);
                                     else cardRefs.current.delete(groupKey);
                                   }}
-                                  className={`group relative rounded-2xl overflow-hidden bg-[#16161a] ${
-                                    selectedGroupItemKeys.has(groupKey)
-                                      ? 'border-0 ring-2 ring-blue-500/50'
-                                      : dragOverGroupItemKey === groupKey
-                                      ? 'border-0 ring-2 ring-blue-500/50'
-                                      : childIsGroup
-                                      ? 'border-0 ring-2 ring-blue-400/45'
-                                      : WORKFLOW_CARD_SURFACE_IDLE
+                                  className={`group relative z-[1] ${childIsGroup ? WORKFLOW_GROUP_CARD_FACE_CLASS : 'h-full w-full'} ${WORKFLOW_CARD_INNER_RADIUS} overflow-hidden bg-[#16161a] ${
+                                    childIsGroup
+                                      ? 'border-0 data-[drag-over=1]:ring-2 data-[drag-over=1]:ring-inset data-[drag-over=1]:ring-blue-400/65'
+                                      : `${WORKFLOW_CARD_SURFACE_IDLE} data-[drag-over=1]:ring-blue-500/55`
                                   } ${childSetRunAccentClass} ${bounce !== 'idle' ? 'will-change-transform ' : ''}transition-transform duration-150 ease-out ${motionClass}`}
                                   draggable={!isBusyGroupItem}
                                   onDragStart={() => {
@@ -9776,88 +10653,28 @@ ${lineSvg}
                                       .map((k) => Number(String(k).split('::')[1]))
                                       .filter((n) => !Number.isNaN(n));
                                     if (itemIndexes.length === 0) return;
-                                    setDraggingGroupItems({ groupAssetId: currentGroupAsset.id, itemIndexes });
+                                    draggingGroupItemsRef.current = { groupAssetId: currentGroupAsset.id, itemIndexes };
+                                    syncDraggingGroupItems({ groupAssetId: currentGroupAsset.id, itemIndexes });
                                   }}
                                   onDragEnd={() => {
-                                    setDraggingGroupItems(null);
-                                    setDragOverAction(null);
-                                    setDragOverGroupItemKey(null);
+                                    clearWorkflowDragSession();
                                   }}
                                   onDragOver={(e) => {
-                                    if (!draggingGroupItems?.itemIndexes?.length || currentGroupAsset?.id !== draggingGroupItems.groupAssetId) return;
+                                    const dragGroup = draggingGroupItemsRef.current;
+                                    if (!dragGroup?.itemIndexes?.length || currentGroupAsset?.id !== dragGroup.groupAssetId) return;
                                     e.preventDefault();
-                                    if (!draggingGroupItems.itemIndexes.includes(idx)) setDragOverGroupItemKey(groupKey);
+                                    e.stopPropagation();
+                                    if (!dragGroup.itemIndexes.includes(idx)) {
+                                      e.currentTarget.setAttribute('data-drag-over', '1');
+                                    }
                                   }}
-                                  onDragLeave={() => {
-                                    if (dragOverGroupItemKey === groupKey) setDragOverGroupItemKey(null);
+                                  onDragLeave={(e) => {
+                                    const rel = e.relatedTarget as Node | null;
+                                    if (rel && e.currentTarget.contains(rel)) return;
+                                    e.currentTarget.removeAttribute('data-drag-over');
                                   }}
                                   onDrop={(e) => {
-                                    e.preventDefault();
-                                    setDragOverGroupItemKey(null);
-                                    if (!showArchived && ingestWorkflowFilesFromDataTransfer(e.dataTransfer)) {
-                                      setDraggingGroupItems(null);
-                                      return;
-                                    }
-                                    if (!draggingGroupItems?.itemIndexes?.length || !currentGroupAsset) {
-                                      setDraggingGroupItems(null);
-                                      return;
-                                    }
-                                    const targetIdx = idx;
-                                    const allIndexes = [...new Set([...draggingGroupItems.itemIndexes, targetIdx])].sort((a, b) => a - b);
-                                    if (allIndexes.length < 2) {
-                                      setDraggingGroupItems(null);
-                                      return;
-                                    }
-                                    const groupAssetId = currentGroupAsset.id;
-                                    const { nextAssets, assetIds } = ensureGroupItemsAsAssets(assets, groupAssetId, allIndexes);
-                                    if (assetIds.length === 0) {
-                                      setDraggingGroupItems(null);
-                                      return;
-                                    }
-                                    const firstAsset = nextAssets.find((x) => x.id === assetIds[0]);
-                                    const coverImage = firstAsset ? getAssetDisplayImage(firstAsset, nextAssets) : '';
-                                    const newGroupId = uuid();
-                                    let updated = nextAssets.map((a) =>
-                                      assetIds.includes(a.id) ? { ...a, groupId: newGroupId } : a
-                                    );
-                                    const groupIdx = updated.findIndex((a) => a.id === groupAssetId);
-                                    if (groupIdx !== -1) {
-                                      const g = updated[groupIdx];
-                                      if (isGroupAsset(g)) {
-                                        const items = [...(g.assetIds ?? [])];
-                                        const sorted = allIndexes.filter((i) => i >= 0 && i < items.length).sort((a, b) => a - b);
-                                        const keep: string[] = [];
-                                        items.forEach((it, i) => {
-                                          if (!sorted.includes(i)) keep.push(it);
-                                        });
-                                        const insertPos = sorted.length ? sorted[0] : keep.length;
-                                        keep.splice(insertPos, 0, newGroupId);
-                                        updated = updated.map((a, i) =>
-                                          i === groupIdx ? { ...a, assetIds: keep } : a
-                                        );
-                                      }
-                                    }
-                                    const usedLabels = new Set<string>(
-                                      updated.map((a) => a.groupLabel).filter((x): x is string => !!x)
-                                    );
-                                    const newGroup: WorkflowAsset = attachInitialVgpToNewAsset({
-                                      id: newGroupId,
-                                      isGroup: true,
-                                      original: coverImage,
-                                      displayKey: 'original',
-                                      results: {},
-                                      resultOrder: [],
-                                      assetIds,
-                                      groupId: groupAssetId, // 继承父组的 groupId，使其成为嵌套组
-                                      groupKind: 'manual',
-                                      groupLabel: getRandomGroupCodeName(usedLabels),
-                                      archived: false,
-                                      hiddenInGrid: false,
-                                      createdAt: Date.now(),
-                                    });
-                                    setAssets([...updated, newGroup]);
-                                    setSelectedGroupItemKeys(new Set());
-                                    setDraggingGroupItems(null);
+                                    e.currentTarget.removeAttribute('data-drag-over');
                                   }}
                                   {...((getDisplayKeysForAsset(childAsset).length > 1 || (childAsset.assetIds?.length ?? 0) > 1)
                                     ? { 'data-prevent-wheel-scroll': '' }
@@ -9887,28 +10704,35 @@ ${lineSvg}
                                   }}
                                 >
                                   <div
-                                    className="relative cursor-pointer"
+                                    className="relative h-full w-full cursor-pointer"
+                                    onContextMenu={(e) => {
+                                      if (showArchived) return;
+                                      if (
+                                        isGroupAsset(childAsset) ||
+                                        isWorkflowStoryboardTableAsset(childAsset) ||
+                                        isWorkflowAssetSetAsset(childAsset) ||
+                                        (!hasChildDisplayImage && isWorkflowTextAsset(childAsset))
+                                      ) {
+                                        return;
+                                      }
+                                      openWorkflowAssetContextMenu(childAsset, e);
+                                    }}
                                     onClick={() => {
                                       // 使用 isGroupAsset 兼容新旧结构
                                       if (isGroupAsset(childAsset)) {
                                         setGroupFilterId(childAsset.id);
                                       } else if (currentGroupAsset) {
-                                        setLightboxSourceSlot({
+                                        openWorkflowLightbox(childAsset.id, {
                                           sourceGroupAssetId: currentGroupAsset.id,
                                           sourceItemIndex: idx,
                                         });
-                                        setLightboxAssetId(childAsset.id);
                                       } else {
-                                        setLightboxSourceSlot(null);
-                                        setLightboxAssetId(childAsset.id);
+                                        openWorkflowLightbox(childAsset.id);
                                       }
                                     }}
                                   >
                                     {!hasChildDisplayImage && isWorkflowTextAsset(childAsset) ? (
-                                      <div
-                                        className="relative w-full bg-[#141416] flex flex-col justify-start p-3 text-left"
-                                        style={{ aspectRatio: `${3 / 4}`, minHeight: '10rem' }}
-                                      >
+                                      <div className="relative w-full h-full bg-[#141416] flex flex-col justify-start p-3 text-left">
                                         {childAsset.textTitle?.trim() ? (
                                           <p className="text-[11px] font-bold text-gray-100 line-clamp-2 mb-1.5">
                                             {childAsset.textTitle.trim()}
@@ -9923,17 +10747,7 @@ ${lineSvg}
                                         </p>
                                       </div>
                                     ) : (
-                                      <div
-                                        className="relative w-full bg-[#141416] flex justify-center"
-                                        style={{
-                                          aspectRatio: `${resolveWorkflowGridCardAspect(
-                                            childAsset,
-                                            cardAspectByAssetId,
-                                            groupKey,
-                                            1
-                                          )}`,
-                                        }}
-                                      >
+                                      <div className="relative w-full h-full bg-[#141416] flex justify-center">
                                         <WorkflowGridImage
                                           fullSrc={childGridPreviewSrcEffective}
                                           cacheKey={childGridCacheKeyEffective}
@@ -9998,9 +10812,9 @@ ${lineSvg}
                                           accentExecuting={showChildSetRunProgress}
                                           progressDetail={showChildSetRunProgress ? childSetRunUi?.progressLine : null}
                                           backdropImageSrc={showChildSetRunProgress ? childSetRunUi?.latestImage : null}
-                                          elapsedSeconds={
+                                          executionStartedAt={
                                             isExecutingCurrentItem
-                                              ? resolveActiveExecutionForAsset(childAsset.id)?.elapsedSeconds ?? null
+                                              ? executionStartedAtByAssetId.get(childAsset.id) ?? null
                                               : null
                                           }
                                         />
@@ -10032,9 +10846,15 @@ ${lineSvg}
                                         执行出错
                                       </span>
                                     )}
-                                    {isGroupAsset(childAsset) && (childAsset.assetIds?.length ?? 0) > 0 ? (
-                                      <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg text-[8px] font-black bg-[#1d4ed8]">
-                                        {(childAsset.groupLabel ?? '组')} {childAsset.assetIds?.length}
+                                    {childStepBadge ? (
+                                      <WorkflowAssetStepCountBadge
+                                        current={childStepBadge.current}
+                                        total={childStepBadge.total}
+                                      />
+                                    ) : null}
+                                    {isGroupAsset(childAsset) ? (
+                                      <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg text-[8px] font-black bg-[#1d4ed8] text-white">
+                                        {childAsset.groupLabel ?? '组'}
                                       </span>
                                     ) : hasChildTextPayload && !isWorkflowStoryboardTableAsset(childAsset) ? (
                                       <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg text-[8px] font-black bg-[#1d4ed8] text-white">
@@ -10071,8 +10891,10 @@ ${lineSvg}
                                     </div>
                                   )}
                                 </div>
+                                </div>
                               );
                             })()}
+                            </div>
                           </div>
                         );
                       }
@@ -10080,18 +10902,51 @@ ${lineSvg}
                       return (
                         <div
                           key={idx}
-                          data-workflow-card
+                          data-workflow-drop-host
+                          className={`absolute min-w-0 ${WORKFLOW_CARD_SHELL_PAD} ${
+                            selectedGroupItemKeys.has(groupKey)
+                              ? WORKFLOW_CARD_SHELL_SELECTED
+                              : WORKFLOW_CARD_SHELL_IDLE
+                          }`}
                           data-workflow-thumb-key={groupKey}
+                          style={
+                            layoutBox
+                              ? {
+                                  left: layoutBox.left,
+                                  top: layoutBox.top,
+                                  width: layoutBox.width,
+                                  height: layoutBox.height,
+                                }
+                              : undefined
+                          }
+                          onDragOver={(e) => {
+                            handleWorkflowAssetDropHostDragOver(e, groupKey, {
+                              allowGroup: !!(isAssetRef && childAsset && !isWorkflowTextAsset(childAsset)),
+                              isBusy: isBusyGroupItem,
+                            });
+                          }}
+                          onDragLeave={(e) => {
+                            const rel = e.relatedTarget as Node | null;
+                            if (rel && e.currentTarget.contains(rel)) return;
+                            workflowCardDragLeave(e.currentTarget, groupKey);
+                          }}
+                          onDrop={(e) => {
+                            handleGroupItemShellDrop(
+                              e,
+                              groupKey,
+                              idx,
+                              childAsset ?? ({ id: groupKey } as WorkflowAsset)
+                            );
+                          }}
+                        >
+                        <div
+                          data-workflow-card
                           ref={(el) => {
                             if (!currentGroupAsset) return;
                             if (el) cardRefs.current.set(groupKey, el);
                             else cardRefs.current.delete(groupKey);
                           }}
-                          className={`break-inside-avoid mb-4 group relative rounded-2xl overflow-hidden bg-[#16161a] ${
-                            selectedGroupItemKeys.has(groupKey)
-                              ? 'border-0 ring-2 ring-blue-500/50'
-                              : WORKFLOW_CARD_SURFACE_IDLE
-                          }`}
+                          className={`group relative h-full w-full ${WORKFLOW_CARD_INNER_RADIUS} overflow-hidden bg-[#16161a] ${WORKFLOW_CARD_SURFACE_IDLE}`}
                           draggable={!isBusyGroupItem}
                           onDragStart={() => {
                             if (isBusyGroupItem) return;
@@ -10104,25 +10959,29 @@ ${lineSvg}
                               .map((k) => Number(String(k).split('::')[1]))
                               .filter((n) => !Number.isNaN(n));
                             if (itemIndexes.length === 0) return;
-                            setDraggingGroupItems({ groupAssetId: currentGroupAsset.id, itemIndexes });
+                            draggingGroupItemsRef.current = { groupAssetId: currentGroupAsset.id, itemIndexes };
+                            syncDraggingGroupItems({ groupAssetId: currentGroupAsset.id, itemIndexes });
                           }}
                           onDragEnd={() => {
-                            setDraggingGroupItems(null);
-                            setDragOverAction(null);
+                            clearWorkflowDragSession();
                           }}
                         >
-                          <div className="relative cursor-pointer" onClick={() => setGroupStringLightboxIndex(idx)}>
-                            <div
-                              className="relative w-full bg-[#141416] flex justify-center"
-                              style={{
-                                aspectRatio: `${resolveWorkflowGridCardAspect(
-                                  isAssetRef ? childAsset ?? undefined : undefined,
-                                  cardAspectByAssetId,
-                                  groupKey,
-                                  1
-                                )}`,
-                              }}
-                            >
+                          <div
+                            className="relative h-full w-full cursor-pointer"
+                            onContextMenu={(e) => {
+                              if (showArchived || !isAssetRef || !childAsset) return;
+                              if (
+                                isGroupAsset(childAsset) ||
+                                isWorkflowStoryboardTableAsset(childAsset) ||
+                                isWorkflowAssetSetAsset(childAsset)
+                              ) {
+                                return;
+                              }
+                              openWorkflowAssetContextMenu(childAsset, e);
+                            }}
+                            onClick={() => setGroupStringLightboxIndex(idx)}
+                          >
+                            <div className="relative w-full h-full bg-[#141416] flex justify-center">
                               <WorkflowGridImage
                                 fullSrc={img}
                                 cacheKey={`gstr:${currentGroupAsset?.id ?? 'x'}:${idx}`}
@@ -10226,6 +11085,7 @@ ${lineSvg}
                           </div>
                           {/* 组内纯图片项不再保留底部留白 */}
                         </div>
+                        </div>
                       );
                     })}
               </div>
@@ -10257,7 +11117,7 @@ ${lineSvg}
               )}
             </>
           ) : rootCanvasAssets.length === 0 ? (
-            <div className="mx-auto flex max-w-md flex-1 min-h-0 flex-col items-center justify-center px-6 py-12">
+            <div className="mx-auto flex min-h-[min(70vh,560px)] max-w-md flex-col items-center justify-center px-6 py-12">
               <div className="flex w-full flex-col items-center rounded-2xl bg-white/[0.03] px-8 py-10 text-center ring-1 ring-white/[0.07]">
                 <AppIcon name="camera" className="mb-3 h-11 w-11 text-gray-500" />
                 <p className="text-[11px] font-black uppercase tracking-wide text-gray-300">画布为空</p>
@@ -10274,14 +11134,27 @@ ${lineSvg}
                 >
                   新建分镜表
                 </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const id = addWorkflowAssetSetAsset();
+                    openAssetSetPanel(id);
+                  }}
+                  className="mt-2 rounded-xl border border-cyan-500/35 bg-cyan-500/10 px-4 py-2 text-[10px] font-bold text-cyan-200 hover:bg-cyan-500/20"
+                >
+                  新建资产集
+                </button>
               </div>
             </div>
           ) : (
-            <div className={`flex-1 min-h-0 min-w-0 py-6 ${WORKFLOW_EDGE_GUTTER}`}>
+            <div className={`min-h-0 min-w-0 py-6 ${WORKFLOW_EDGE_GUTTER}`}>
               <div
                 ref={gridRef}
-                className="gap-4 relative"
-                style={{ columnCount, columnFill: 'balance' as const }}
+                className={`relative w-full ${rootJustifiedLayout.ready ? '' : 'opacity-0'}`}
+                style={{
+                  height: rootJustifiedLayout.ready ? rootJustifiedLayout.totalHeight : undefined,
+                  ['--wf-card-gap' as string]: `${WORKFLOW_ASSET_GRID_GAP_PX}px`,
+                }}
               >
                 {rootCanvasAssets.map((a) => {
                   const textDisplay = getAssetDisplayText(a);
@@ -10291,23 +11164,15 @@ ${lineSvg}
                     Object.values(a.textResults || {}).some((v) => String(v || '').trim() !== '');
                   const baseDisplayImage = getAssetDisplayImage(a);
                   const hasDisplayImage = baseDisplayImage.trim() !== '';
-                  /** 无图时仍用已持久化的 `gridCardAspectRatio` 占位（资源未 hydrate 时不至于先方后横跳） */
-                  const cardAspect = isWorkflowStoryboardTableAsset(a)
-                    ? 4 / 3
-                    : hasDisplayImage
-                      ? resolveWorkflowGridCardAspect(a, cardAspectByAssetId, undefined, 1)
-                      : isWorkflowTextAsset(a) && hasTextPayload
-                        ? 3 / 4
-                        : resolveWorkflowGridCardAspect(a, cardAspectByAssetId, undefined, 1);
                   const isBusy = busyAssetIds.has(a.id);
-                  const isPendingOnly =
-                    pending.some((t) => t.assetId === a.id) && !executingQueue;
-                  const taskForRootSlot =
-                    executingQueue?.tasks.find((t) => t.assetId === a.id && !completedTaskIds.has(t.id)) ?? null;
+                  const isPendingOnly = pendingAssetIds.has(a.id) && !executingQueue;
+                  const taskForRootSlot = rootExecutingTaskByAssetId.get(a.id) ?? null;
                   const isExecutingCurrent =
                     !!taskForRootSlot && activeTaskIds.has(taskForRootSlot.id);
                   /** 批处理进行中时新拖入的任务只进 pending，不在本批 executingQueue.tasks，仍会 busy +「排队中」，须单独给 × */
-                  const pendingTaskForRootAsset = pending.find((t) => t.assetId === a.id) ?? null;
+                  const pendingTaskForRootAsset = pendingAssetIds.has(a.id)
+                    ? pending.find((t) => t.assetId === a.id) ?? null
+                    : null;
                   const rootBatchQueuedCancelId =
                     taskForRootSlot && !activeTaskIds.has(taskForRootSlot.id) ? taskForRootSlot.id : null;
                   const rootPendingDuringBatchCancelId =
@@ -10338,7 +11203,7 @@ ${lineSvg}
                     : isGroupCard
                     ? (() => {
                         const childId = a.assetIds?.[gSafe] ?? a.assetIds?.[0];
-                        const child = childId ? assets.find((x) => x.id === childId) : null;
+                        const child = childId ? assetsById.get(childId) : null;
                         return child ? getAssetDisplayImage(child) : baseDisplayImage;
                       })()
                     : baseDisplayImage;
@@ -10363,14 +11228,53 @@ ${lineSvg}
                     showSetRunProgress && !selectedAssetIds.has(a.id)
                       ? 'ring-2 ring-blue-500/35 shadow-[0_0_22px_rgba(59,130,246,0.14)]'
                       : '';
+                  const layoutBox = rootJustifiedLayout.boxById.get(a.id);
+                  const stepBadge = resolveWorkflowAssetStepBadge(a, assets, {
+                    groupPreviewIndex: groupPreviewIndexById[a.id],
+                  });
 
                   return (
-                    <div key={a.id} className="break-inside-avoid mb-6 relative" data-workflow-thumb-key={a.id}>
-                      {isGroupCard ? (
-                        <>
-                          <div className="absolute inset-0 rounded-2xl bg-[#16161a] border border-[#3b6fb8] translate-x-[16px] translate-y-[16px] -rotate-3 opacity-70 shadow-xl shadow-[#000000] pointer-events-none" />
-                          <div className="absolute inset-0 rounded-2xl bg-[#1a1a1e] border border-[#6090d0] translate-x-[8px] translate-y-[8px] rotate-1 opacity-90 shadow-xl shadow-[#000000] pointer-events-none" />
-                        </>
+                    <div
+                      key={a.id}
+                      data-workflow-drop-host
+                      className={`absolute min-w-0 ${WORKFLOW_CARD_SHELL_PAD} ${
+                        selectedAssetIds.has(a.id) ? WORKFLOW_CARD_SHELL_SELECTED : WORKFLOW_CARD_SHELL_IDLE
+                      }`}
+                      data-workflow-thumb-key={a.id}
+                      style={
+                        layoutBox
+                          ? {
+                              left: layoutBox.left,
+                              top: layoutBox.top,
+                              width: layoutBox.width,
+                              height: layoutBox.height,
+                            }
+                          : undefined
+                      }
+                      onDragOver={(e) => {
+                        handleWorkflowAssetDropHostDragOver(e, a.id, {
+                          allowGroup: !isWorkflowTextAsset(a),
+                          isBusy,
+                        });
+                      }}
+                      onDragLeave={(e) => {
+                        const rel = e.relatedTarget as Node | null;
+                        if (rel && e.currentTarget.contains(rel)) return;
+                        workflowCardDragLeave(e.currentTarget, a.id);
+                      }}
+                      onDrop={(e) => {
+                        handleRootCanvasAssetShellDrop(e, a);
+                      }}
+                    >
+                      <div className="relative h-full w-full min-h-0">
+                      {isGroupCard && gLen > 1 ? (
+                        <WorkflowGroupCardStackPreviews
+                          groupAsset={a}
+                          allAssets={assets}
+                          getDisplayImage={getAssetDisplayImage}
+                          deferThumbnail={!thumbUnlockKeys.has(a.id)}
+                          thumbDecodePriority={thumbHotKeys.has(a.id) ? 'high' : 'low'}
+                        />
                       ) : null}
                       <div
                         data-workflow-card
@@ -10378,16 +11282,10 @@ ${lineSvg}
                           if (el) cardRefs.current.set(a.id, el);
                           else cardRefs.current.delete(a.id);
                         }}
-                        className={`group relative rounded-2xl overflow-hidden bg-[#16161a] ${
-                          selectedAssetIds.has(a.id)
-                            ? 'border-0 ring-2 ring-blue-500/50'
-                            : dragOverAssetId === a.id
-                            ? isGroupCard
-                              ? 'border-0 ring-2 ring-blue-400/60'
-                              : 'border-0 ring-2 ring-blue-500/50'
-                            : isGroupCard
-                            ? 'border-0 ring-2 ring-blue-400/45'
-                            : WORKFLOW_CARD_SURFACE_IDLE
+                        className={`group relative z-[1] ${isGroupCard ? WORKFLOW_GROUP_CARD_FACE_CLASS : 'h-full w-full'} ${WORKFLOW_CARD_INNER_RADIUS} overflow-hidden bg-[#16161a] ${
+                          isGroupCard
+                            ? 'border-0 data-[drag-over=1]:ring-2 data-[drag-over=1]:ring-inset data-[drag-over=1]:ring-blue-400/65'
+                            : `${WORKFLOW_CARD_SURFACE_IDLE} data-[drag-over=1]:ring-blue-500/55`
                         } ${setRunAccentClass} ${busyClass} ${bounce !== 'idle' ? 'will-change-transform ' : ''}transition-transform duration-150 ease-out ${motionClass}`}
                         draggable={!showArchived && !isBusy}
                         onDragStart={(e) => {
@@ -10396,7 +11294,8 @@ ${lineSvg}
                             selectedAssetIds.has(a.id) && selectedAssetIds.size > 0
                               ? Array.from(selectedAssetIds)
                               : [a.id];
-                          setDraggingAssetIds(ids);
+                          draggingAssetIdsRef.current = ids;
+                          syncDraggingAssetIds(ids);
                           try {
                             const payload: AcWorkflowExportPayload = { mode: 'roots', assetIds: ids };
                             e.dataTransfer.setData(DT_AC_WORKFLOW_EXPORT, JSON.stringify(payload));
@@ -10406,9 +11305,7 @@ ${lineSvg}
                           }
                         }}
                         onDragEnd={() => {
-                          setDraggingAssetIds(null);
-                          setDragOverAction(null);
-                          setDragOverAssetId(null);
+                          clearWorkflowDragSession();
                         }}
                         onDragOver={(e) => {
                           if (isBusy) return;
@@ -10423,32 +11320,19 @@ ${lineSvg}
                             types.includes(DT_AC_CAPABILITY_FROM_EDITOR)
                           ) {
                             e.preventDefault();
+                            e.stopPropagation();
                             e.dataTransfer.dropEffect = 'copy';
-                            setDragOverAssetId(a.id);
-                            return;
-                          }
-                          if (draggingAssetIds?.length || draggingGroupItems?.itemIndexes?.length) {
-                            e.preventDefault();
-                            setDragOverAssetId(a.id);
-                            return;
-                          }
-                          try {
-                            if (types.includes(DT_AC_WORKFLOW_EXPORT)) {
-                              e.preventDefault();
-                              setDragOverAssetId(a.id);
-                            }
-                          } catch {
-                            /* ignore */
+                            e.currentTarget.setAttribute('data-drag-over', '1');
                           }
                         }}
                         onDragLeave={(e) => {
-                          e.preventDefault();
-                          if (dragOverAssetId === a.id) setDragOverAssetId(null);
+                          const rel = e.relatedTarget as Node | null;
+                          if (rel && e.currentTarget.contains(rel)) return;
+                          e.currentTarget.removeAttribute('data-drag-over');
                         }}
                         onDrop={(e) => {
-                          e.preventDefault();
+                          e.currentTarget.removeAttribute('data-drag-over');
                           if (isBusy) {
-                            setDragOverAssetId(null);
                             return;
                           }
                           let capTypes: string[] = [];
@@ -10461,11 +11345,11 @@ ${lineSvg}
                             capTypes.includes(DT_AC_CAPABILITY_ACTION) ||
                             capTypes.includes(DT_AC_CAPABILITY_FROM_EDITOR);
                           if (isCapabilityDrop) {
+                            e.preventDefault();
+                            e.stopPropagation();
                             const capId = readCapabilityDragActionId(e.dataTransfer);
                             const capSource = readCapabilityDragSource(e.dataTransfer);
-                            setDragOverAssetId(null);
-                            setDraggingAssetIds(null);
-                            setDraggingGroupItems(null);
+                            clearWorkflowDragSession();
                             updateDraggingActionId(null);
                             if (capId) {
                               runCapabilityOnAssetCardImmediate(a, capId);
@@ -10476,70 +11360,10 @@ ${lineSvg}
                             return;
                           }
                           if (ingestWorkflowFilesFromDataTransfer(e.dataTransfer)) {
-                            setDragOverAssetId(null);
-                            setDraggingAssetIds(null);
-                            setDraggingGroupItems(null);
-                            return;
+                            e.preventDefault();
+                            e.stopPropagation();
+                            clearWorkflowDragSession();
                           }
-                          const fromState = parseWorkflowDragSource(draggingAssetIds, draggingGroupItems);
-                          const sources = fromState ? [fromState] : parseAcWorkflowExportDragSources(e.dataTransfer);
-                          const finish = () => {
-                            setDragOverAssetId(null);
-                            setDraggingAssetIds(null);
-                            setDraggingGroupItems(null);
-                          };
-                          if (sources.length !== 1) {
-                            finish();
-                            return;
-                          }
-                          const src = sources[0]!;
-                          if (isWorkflowTextAsset(a)) {
-                            finish();
-                            return;
-                          }
-                          const targetId = a.id;
-                          if (src.kind === 'root') {
-                            const dragIds = Array.from(new Set(src.assetIds.filter((id) => id !== targetId))).filter((id) => {
-                              const ast = assets.find((x) => x.id === id);
-                              return ast != null && !isWorkflowTextAsset(ast);
-                            });
-                            if (dragIds.length > 0) {
-                              if (isGroupAsset(a)) {
-                                setAssets((prev) => mergeAssetIdsIntoGroupCardAssets(prev, targetId, dragIds));
-                              } else {
-                                const members = Array.from(new Set([...dragIds, targetId]));
-                                if (members.length > 1) createGroupFromAssets(members);
-                              }
-                            }
-                            finish();
-                            return;
-                          }
-                          const { groupAssetId, itemIndexes } = src;
-                          if (groupAssetId === targetId) {
-                            finish();
-                            return;
-                          }
-                          setAssets((prev) => {
-                            const { nextAssets, assetIds } = ensureGroupItemsAsAssets(prev, groupAssetId, itemIndexes);
-                            if (assetIds.length === 0) return prev;
-                            const afterRemove = removeGroupItems(nextAssets, groupAssetId, itemIndexes);
-                            const groupRemoved = !afterRemove.some((x) => x.id === groupAssetId);
-                            if (groupRemoved) {
-                              queueMicrotask(() => setGroupFilterId(null));
-                            }
-                            const targetInPrev = afterRemove.find((x) => x.id === targetId);
-                            const targetHasGroup = !!targetInPrev && isGroupAsset(targetInPrev);
-                            if (targetHasGroup) {
-                              return mergeAssetIdsIntoGroupCardAssets(afterRemove, targetId, assetIds);
-                            }
-                            const r = insertManualGroupForAssetIds(afterRemove, [...assetIds, targetId]);
-                            if (r.createdGroup) {
-                              const cg = r.createdGroup;
-                              queueMicrotask(() => scheduleCompanionPersistOriginalAny(cg.id, cg.coverImage));
-                            }
-                            return r.next;
-                          });
-                          finish();
                         }}
                         {...((!isBusy && !showArchived && (getDisplayKeysForAsset(a).length > 1 || gLen > 1))
                           ? { 'data-prevent-wheel-scroll': '' }
@@ -10571,7 +11395,29 @@ ${lineSvg}
                         }}
                       >
                         <div
-                          className="relative cursor-pointer"
+                          className="relative h-full w-full cursor-pointer"
+                          onMouseEnter={() => {
+                            if (showArchived || isGroupCard) return;
+                            if (isWorkflowStoryboardTableAsset(a) || isWorkflowAssetSetAsset(a)) return;
+                            scheduleWorkflowLightboxPrefetch(a);
+                          }}
+                          onContextMenu={(e) => {
+                            if (showArchived) return;
+                            let target: WorkflowAsset | null = a;
+                            if (isGroupCard) {
+                              const childId = a.assetIds?.[gSafe] ?? a.assetIds?.[0];
+                              target = childId ? assets.find((x) => x.id === childId) ?? null : null;
+                            }
+                            if (
+                              !target ||
+                              isWorkflowStoryboardTableAsset(target) ||
+                              isWorkflowAssetSetAsset(target) ||
+                              (!hasDisplayImage && isWorkflowTextAsset(target))
+                            ) {
+                              return;
+                            }
+                            openWorkflowAssetContextMenu(target, e);
+                          }}
                           onClick={() => {
                             if (showArchived) {
                               setArchivedDetailAssetId(a.id);
@@ -10579,19 +11425,23 @@ ${lineSvg}
                               setGroupFilterId(a.id);
                             } else if (isWorkflowStoryboardTableAsset(a)) {
                               openStoryboardTablePanel(a.id);
+                            } else if (isWorkflowAssetSetAsset(a)) {
+                              openAssetSetPanel(a.id);
                             } else {
-                              setLightboxSourceSlot(null);
-                              setLightboxAssetId(a.id);
+                              openWorkflowLightbox(a.id);
                             }
                           }}
                         >
                           {isWorkflowStoryboardTableAsset(a) ? (
-                            <StoryboardTableGridCard asset={a} />
+                            <div className="h-full w-full">
+                              <StoryboardTableGridCard asset={a} />
+                            </div>
+                          ) : isWorkflowAssetSetAsset(a) ? (
+                            <div className="h-full w-full">
+                              <AssetSetGridCard asset={a} />
+                            </div>
                           ) : !hasDisplayImage && isWorkflowTextAsset(a) ? (
-                            <div
-                              className="relative w-full bg-[#141416] flex flex-col justify-start p-3 text-left"
-                              style={{ aspectRatio: `${3 / 4}`, minHeight: '10rem' }}
-                            >
+                            <div className="relative w-full h-full bg-[#141416] flex flex-col justify-start p-3 text-left">
                               {a.textTitle?.trim() ? (
                                 <p className="text-[11px] font-bold text-gray-100 line-clamp-2 mb-1.5">
                                   {a.textTitle.trim()}
@@ -10606,7 +11456,7 @@ ${lineSvg}
                               </p>
                             </div>
                           ) : (
-                            <div className="relative w-full bg-[#141416] flex justify-center" style={{ aspectRatio: `${cardAspect}` }}>
+                            <div className="relative w-full h-full bg-[#141416] flex justify-center">
                               <WorkflowGridImage
                                 fullSrc={gridPreviewSrcEffective}
                                 cacheKey={gridPreviewCacheKeyEffective}
@@ -10666,9 +11516,9 @@ ${lineSvg}
                                 accentExecuting={showSetRunProgress}
                                 progressDetail={showSetRunProgress ? setRunUi?.progressLine : null}
                                 backdropImageSrc={showSetRunProgress ? setRunUi?.latestImage : null}
-                                elapsedSeconds={
+                                executionStartedAt={
                                   isExecutingCurrent
-                                    ? resolveActiveExecutionForAsset(a.id)?.elapsedSeconds ?? null
+                                    ? executionStartedAtByAssetId.get(a.id) ?? null
                                     : null
                                 }
                               />
@@ -10700,9 +11550,15 @@ ${lineSvg}
                               执行出错
                             </span>
                           )}
-                          {isGroupAsset(a) && (a.assetIds?.length ?? 0) > 0 ? (
-                            <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg text-[8px] font-black bg-[#1d4ed8]">
-                              {(a.groupLabel ?? '组')} {a.assetIds?.length}
+                          {stepBadge ? (
+                            <WorkflowAssetStepCountBadge
+                              current={stepBadge.current}
+                              total={stepBadge.total}
+                            />
+                          ) : null}
+                          {isGroupAsset(a) ? (
+                            <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg text-[8px] font-black bg-[#1d4ed8] text-white">
+                              {a.groupLabel ?? '组'}
                             </span>
                           ) : hasTextPayload && !isWorkflowTextAsset(a) && !isWorkflowStoryboardTableAsset(a) ? (
                             <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg text-[8px] font-black bg-[#1d4ed8] text-white">
@@ -10741,23 +11597,27 @@ ${lineSvg}
                           </div>
                         )}
                       </div>
+                      </div>
                     </div>
                   );
                 })}
               </div>
             </div>
           )}
+          </>
+          ) : null}
         </div>
 
         </div>
         <div
           data-workflow-outline
-          className="h-full min-h-0 shrink-0 flex flex-col pr-3 min-w-0"
-          style={{ width: `${sidebarWidth}px` }}
+          className="h-full min-h-0 max-h-full shrink-0 flex flex-col overflow-hidden pr-3 min-w-0"
+          style={{ width: `${outlineSidebarWidth}px` }}
         >
           <div
             ref={outlineScrollRef}
-            className="flex-1 min-h-0 overflow-x-auto overflow-y-auto [scrollbar-width:thin] flex flex-col gap-0.5 px-3 pt-2 pb-2"
+            data-workflow-scroll-port="outline"
+            className="workflow-scroll-port flex h-0 flex-1 min-w-0 min-h-0 overflow-y-auto overscroll-y-contain no-scrollbar flex flex-col gap-0.5 px-3 pt-2 pb-2"
           >
             {visibleAssets.length === 0 ? (
               <div className="my-3 flex flex-col items-center rounded-xl bg-white/[0.03] px-4 py-6 text-center ring-1 ring-white/[0.06]">
@@ -10766,9 +11626,9 @@ ${lineSvg}
                   导入图片或使用能力生成后，根资产将按层级显示在此
                 </p>
               </div>
-            ) : (
+            ) : !lightboxAssetId ? (
               outlineTreeRows
-            )}
+            ) : null}
           </div>
         </div>
         </div>
@@ -10798,11 +11658,38 @@ ${lineSvg}
         />
       )}
 
+      {assetSetPanelAsset && !showArchived && (
+        <AssetSetPanel
+          asset={assetSetPanelAsset}
+          capabilityPresets={capabilityPresets}
+          onClose={closeAssetSetPanel}
+          onNotify={(level, message) => onLog?.(level, message)}
+          readOnly={Boolean(assetSetPanelAsset.archived)}
+          onPatchAsset={(patch) => handleAssetSetAssetPatch(assetSetPanelAsset.id, patch)}
+          companionBaseUrl={String(getCompanionLocalBaseUrl() || '')}
+          companionProjectId={String(workspaceProjectChrome?.activeProjectId || '')}
+        />
+      )}
+
+      {showLightboxInstantShell && lightboxInstantShellAssetId ? (
+        <WorkflowLightboxInstantShell
+          open
+          focusKey={lightboxInstantShellAssetId}
+          placeholderSrc={lightboxPlaceholderImageSrc}
+          backdropImageSrc={lightboxListBackdropUrl}
+          onClose={handleLightboxClose}
+        />
+      ) : null}
+
       {/* 进行中：大图弹窗；外壳统一为 ImagePreviewOverlay，当前版本为纯文本时仅中央为文字编辑区 */}
-      {lightboxAsset && !showArchived && (
+      {lightboxOverlayMounted && lightboxAssetId && lightboxBootPhase && lightboxAsset && !showArchived && (
         <ImagePreviewOverlay
           open
           resetKey={lightboxAsset.id}
+          bootPhase={lightboxBootPhase}
+          onPrimaryImageReady={notifyLightboxPrimaryReady}
+          backdropImageSrc={lightboxListBackdropUrl}
+          placeholderImageSrc={lightboxPlaceholderImageSrc}
           suppressFlatImageInteraction={
             Boolean(
               lightboxRasterChrome &&
@@ -10852,17 +11739,24 @@ ${lineSvg}
           onWheelInnerNavigate={handleLightboxWheelCycleDisplay}
           innerLayoutStableKey={lightboxShowsImage ? lightboxAsset.id : undefined}
           onFlatImagePixelSample={
-            lightboxRasterChrome && lightboxModelUrls.length === 0
-              ? setLightboxPointerRgb
+            lightboxChromeReady &&
+            lightboxRasterChrome &&
+            lightboxModelUrls.length === 0
+              ? handleLightboxPointerRgbSample
               : undefined
           }
           onPreviewLayoutChange={
             lightboxRasterChrome ? handleLightboxPreviewLayoutChange : undefined
           }
           onUiHiddenChange={handleLightboxUiHiddenChange}
-          contentRightInset="0px"
+          contentRightInset={
+            lightboxChromeReady ? WORKFLOW_LIGHTBOX_ASSET_THUMB_STRIP_INSET : '0px'
+          }
           contentLeftInset={
-            lightboxTextAssetOnTextChannel && !lightboxShowsImage && lightboxStepSideChrome
+            lightboxChromeReady &&
+            lightboxTextAssetOnTextChannel &&
+            !lightboxShowsImage &&
+            lightboxStepSideChrome
               ? WORKFLOW_LIGHTBOX_VGP_GRAPH_LEFT_INSET
               : '0px'
           }
@@ -10877,15 +11771,19 @@ ${lineSvg}
           }
           panoViewerRef={lightboxPanoViewerRef}
           onWebPreviewCaptureApiChange={
-            lightboxRasterChrome ? onLightboxWebPreviewCaptureApiChange : undefined
+            lightboxChromeReady && lightboxRasterChrome
+              ? onLightboxWebPreviewCaptureApiChange
+              : undefined
           }
           heightfieldToolbarHostRef={lightboxHeightfieldToolbarHostRef}
-          canvasAdjustControl={lightboxCanvasAdjustControl}
+          canvasAdjustControl={lightboxChromeReady ? lightboxCanvasAdjustControl : null}
           imageResizeWriteBack={
-            lightboxRasterChrome ? { onCommit: handleLightboxImageResizeWriteBack } : null
+            lightboxChromeReady && lightboxRasterChrome
+              ? { onCommit: handleLightboxImageResizeWriteBack }
+              : null
           }
           flatImageOverlay={
-            lightboxRasterChrome
+            lightboxChromeReady && lightboxRasterChrome
               ? ({ imgRef, panoOverlayContainerRef, panoProjectionRef, panoViewerBindEpoch }) => (
                   <ImageFlatAnnotationOverlay
                     imgRef={imgRef}
@@ -10924,6 +11822,7 @@ ${lineSvg}
               : undefined
           }
           topRightExtra={
+            lightboxChromeReady ? (
             <>
               <button
                 type="button"
@@ -11009,10 +11908,25 @@ ${lineSvg}
                 );
               })()}
             </>
+            ) : undefined
           }
         >
+          {lightboxChromeReady ? (
           <>
+          <WorkflowLightboxAssetThumbStrip
+            assets={lightboxList}
+            activeAssetId={lightboxAsset.id}
+            onSelectAsset={handleLightboxStripSelect}
+            getPreviewSrc={getLightboxPreviewImageSrc}
+            canCopyImage={canWorkflowAssetCopyImage}
+            onCopyImage={handleWorkflowAssetCopyImage}
+            onCopyId={handleWorkflowAssetCopyId}
+            onAddToComposeInput={handleWorkflowAssetAddToComposeInput}
+            canAddToComposeInput={canWorkflowAssetAddToComposeInput}
+            getMediaVariant={(asset) => (workflowResultUsesVideoPreview(asset) ? 'video' : 'image')}
+          />
           <WorkflowLightboxDetailEdgePanel
+            edgeRightClassName="right-14"
             heightfieldToolbarHostRef={lightboxHeightfieldToolbarHostRef}
             heightfieldToolbarHostClassName={
               lightboxRasterChrome && lightboxPreviewLayout === 'heightfield'
@@ -11229,7 +12143,7 @@ ${lineSvg}
                 pullTripoBusy={lightboxTripoPullBusy}
                 pullTencentBusy={lightboxTencentPullBusy}
                 executionActive={lightboxActiveExecution != null}
-                executionElapsedSeconds={lightboxActiveExecution?.elapsedSeconds ?? null}
+                executionStartedAt={lightboxActiveExecution?.startedAt ?? null}
                 executionStepLabel={lightboxActiveExecution?.stepLabel ?? null}
               />
           </WorkflowLightboxDetailEdgePanel>
@@ -11313,10 +12227,15 @@ ${lineSvg}
           </div>
           ) : null}
           </>
+          ) : null}
         </ImagePreviewOverlay>
       )}
 
-      {lightboxAsset && !showArchived && lightboxStepSideChrome && !lightboxUiHidden ? (
+      {lightboxAsset &&
+        !showArchived &&
+        lightboxChromeReady &&
+        lightboxStepSideChrome &&
+        !lightboxUiHidden ? (
         <React.Fragment key={lightboxAsset.id}>
           <WorkflowStepNodeGraphOverlay
             asset={lightboxAsset}
@@ -11329,6 +12248,7 @@ ${lineSvg}
 
       {lightboxAsset &&
         !showArchived &&
+        lightboxChromeReady &&
         lightboxRasterChrome &&
         !lightboxUiHidden &&
         typeof document !== 'undefined' &&
@@ -11470,11 +12390,13 @@ ${lineSvg}
             onMoveDropSlot={moveQuickComposeDropSlot}
             onReorderDropSlot={reorderQuickComposeDropSlot}
             hideMainDropZone
+            pasteAssetRefZone="reference"
             maxMentions={quickComposeMaxReferenceImages}
             onSubmit={() => void submitLightboxQuickCompose()}
             showGenImageSettings={quickComposeShowGenImageSettings}
             showGenTextSettings={quickComposeShowGenTextSettings}
             allowBatchCount={quickComposeAllowBatchCount}
+            onPasteAssetRefs={handleQuickComposePasteAssetRefs}
             promptCards={[]}
             onRemovePromptCard={() => {}}
             genSettings={{
@@ -11776,7 +12698,11 @@ ${lineSvg}
                       const incomingTargets = raw || draggedSlot
                         ? []
                         : collectPromptTargetsForModule(
-                            resolveCapabilityDropDragSources(draggingAssetIds, draggingGroupItems, e.dataTransfer),
+                            resolveCapabilityDropDragSources(
+                              draggingAssetIdsRef.current,
+                              draggingGroupItemsRef.current,
+                              e.dataTransfer
+                            ),
                             tripoMultiviewModal.preset
                           )
                             .filter((t) => promptTweakTargetImage(t).trim() !== '');
@@ -12084,13 +13010,11 @@ ${lineSvg}
             }
             if (tasks.length > 0) addTasksToPending(tasks);
             setPromptTweakModal(null);
-            setDraggingAssetIds(null);
-            setDraggingGroupItems(null);
+            clearWorkflowDragSession();
           }}
           onCancel={() => {
             setPromptTweakModal(null);
-            setDraggingAssetIds(null);
-            setDraggingGroupItems(null);
+            clearWorkflowDragSession();
           }}
         />
       )}
@@ -12120,6 +13044,7 @@ ${lineSvg}
             allowBatchCount={quickComposeAllowBatchCount}
             onComposeInputCapabilityDrop={onQuickComposeInputCapabilityDrop}
             onComposeInputWorkflowDrop={handleQuickComposeWorkflowDrop}
+            onPasteAssetRefs={handleQuickComposePasteAssetRefs}
             promptCards={quickComposePromptCards}
             onRemovePromptCard={(key) =>
               setQuickComposePromptCards((prev) => prev.filter((c) => c.key !== key))
@@ -12141,6 +13066,32 @@ ${lineSvg}
           />,
           document.body
         )
+      : null}
+    {workflowAssetContextMenu && typeof document !== 'undefined'
+      ? (() => {
+          const menuAsset = assets.find((x) => x.id === workflowAssetContextMenu.assetId);
+          if (!menuAsset) return null;
+          return createPortal(
+            <WorkflowAssetContextMenu
+              open
+              x={workflowAssetContextMenu.x}
+              y={workflowAssetContextMenu.y}
+              canCopyImage={canWorkflowAssetCopyImage(menuAsset)}
+              onCopyImage={() => {
+                void handleWorkflowAssetCopyImage(menuAsset);
+              }}
+              onCopyId={() => {
+                void handleWorkflowAssetCopyId(menuAsset);
+              }}
+              canAddToComposeInput={canWorkflowAssetAddToComposeInput(menuAsset)}
+              onAddToComposeInput={() => {
+                handleWorkflowAssetAddToComposeInput(menuAsset);
+              }}
+              onClose={() => setWorkflowAssetContextMenu(null)}
+            />,
+            document.body
+          );
+        })()
       : null}
     </>
   );
