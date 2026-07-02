@@ -543,6 +543,79 @@ export type StoryboardSceneAsset = {
   imageObjectKey?: string;
 };
 
+export type AssetSetCategory = 'scene' | 'character' | 'prop';
+
+export type AssetSetSourceSlotKind = 'original' | 'styled' | 'multiview' | 'custom';
+
+export type AssetSetSourceAsset = {
+  id: string;
+  name: string;
+  slotKind?: AssetSetSourceSlotKind;
+  image?: string;
+  imageCompanionKey?: string;
+  imageObjectKey?: string;
+};
+
+export type AssetSetComponentViewRole =
+  | 'perspective'
+  | 'front'
+  | 'back'
+  | 'left'
+  | 'right'
+  | string;
+
+export type AssetSetComponentView = {
+  id: string;
+  role: AssetSetComponentViewRole;
+  image?: string;
+  imageCompanionKey?: string;
+  imageObjectKey?: string;
+};
+
+export type AssetSetComponentModel3d = {
+  status: 'idle' | 'queued' | 'running' | 'done' | 'failed';
+  jobId?: string;
+  provider?: string;
+  error?: string;
+  files?: string[];
+  fileCompanionKeys?: string[];
+  previewUrl?: string;
+  updatedAt?: number;
+};
+
+export type AssetSetComponent = {
+  id: string;
+  index: number;
+  name?: string;
+  cropSource: 'styled';
+  cropRegion: BoundingBox;
+  cropPreview?: string;
+  cropPreviewCompanionKey?: string;
+  cropPreviewObjectKey?: string;
+  multiviewSheet?: string;
+  multiviewSheetCompanionKey?: string;
+  multiviewSheetObjectKey?: string;
+  views: AssetSetComponentView[];
+  model3d?: AssetSetComponentModel3d;
+  locked?: boolean;
+};
+
+export type AssetSetPanelPrefs = {
+  stylePresetId?: string;
+  assetMultiviewPresetId?: string;
+  componentSheetPresetId?: string;
+  single3dPresetId?: string;
+  multi3dPresetId?: string;
+};
+
+export type AssetSetDoc = {
+  title?: string;
+  category: AssetSetCategory;
+  sourceAssets: AssetSetSourceAsset[];
+  components: AssetSetComponent[];
+  panelPrefs?: AssetSetPanelPrefs;
+};
+
 export type StoryboardGeneratedImageRecord = {
   id: string;
   rowId: string;
@@ -581,10 +654,13 @@ export type WorkflowAsset = {
    * 资产形态：缺省视为 `image`，兼容旧数据。
    * `text`：工作区文字卡片（无位图执行能力，不进入图像能力队列）。
    * `storyboard_table`：分镜表容器，镜头行存于 `storyboardTable`。
+   * `asset_set`：资产集容器，拆解数据存于 `assetSet`。
    */
-  assetKind?: 'image' | 'text' | 'storyboard_table';
+  assetKind?: 'image' | 'text' | 'storyboard_table' | 'asset_set';
   /** 分镜表行数据（仅 `assetKind === 'storyboard_table'`） */
   storyboardTable?: StoryboardTableDoc;
+  /** 资产集文档（仅 `assetKind === 'asset_set'`） */
+  assetSet?: AssetSetDoc;
   /** 是否为组：true=组卡片，false/undefined=普通资产卡片 */
   isGroup?: boolean;
   /** 组内关联的资产 ID 列表（组卡片时使用）；筛选时根据此字段显示直接成员 */

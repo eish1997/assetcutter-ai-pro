@@ -5,6 +5,7 @@ import { normalizeCompanionBaseUrl } from './companionLocalPrefs';
 import { mapSiteR2PathToFetchUrl, resolveCapabilityPreviewSrc } from './capabilityPreviewUrl';
 import { isWorkflowTextAsset } from './workflowTextAsset';
 import { isWorkflowStoryboardTableAsset } from './storyboardTableAsset';
+import { isWorkflowAssetSetAsset } from './assetSet/assetSetAsset';
 import type { StoryboardNamedAssetImageFields } from './storyboardNamedAssetImage';
 import { workflowModelSlotMayNeedCompanionHydrate, isWorkflowModelUrlReadable } from './workflowModelBlob';
 
@@ -520,6 +521,69 @@ export function stripWorkflowBundleForIdbPersist(bundle: WorkflowProjectBundle):
       }
       if (touchedSb) {
         a.storyboardTable = { ...a.storyboardTable, rows };
+      }
+    }
+    if (isWorkflowAssetSetAsset(a) && a.assetSet) {
+      let touchedAs = false;
+      const stripNamedInline = <T extends StoryboardNamedAssetImageFields>(
+        items: T[] | undefined
+      ): T[] | undefined => {
+        if (!items?.length) return items;
+        let touchedNamed = false;
+        const nextItems = items.map((item) => {
+          const ck = String(item.imageCompanionKey || '').trim();
+          if (!ck) return item;
+          const cur = String(item.image || '').trim();
+          if (cur && shouldStripResultUrlForPersist(cur)) {
+            touchedNamed = true;
+            return { ...item, image: '' };
+          }
+          return item;
+        });
+        return touchedNamed ? nextItems : items;
+      };
+      const nextSourceAssets = stripNamedInline(a.assetSet.sourceAssets);
+      if (nextSourceAssets !== a.assetSet.sourceAssets) {
+        touchedAs = true;
+        a.assetSet = { ...a.assetSet, sourceAssets: nextSourceAssets ?? [] };
+      }
+      const nextComponents = (a.assetSet.components ?? []).map((component) => {
+        let next = component;
+        const cropKey = String(component.cropPreviewCompanionKey || '').trim();
+        if (cropKey) {
+          const cur = String(component.cropPreview || '').trim();
+          if (cur && shouldStripResultUrlForPersist(cur)) {
+            touchedAs = true;
+            next = { ...next, cropPreview: '' };
+          }
+        }
+        const sheetKey = String(component.multiviewSheetCompanionKey || '').trim();
+        if (sheetKey) {
+          const cur = String(component.multiviewSheet || '').trim();
+          if (cur && shouldStripResultUrlForPersist(cur)) {
+            touchedAs = true;
+            next = { ...next, multiviewSheet: '' };
+          }
+        }
+        let touchedViews = false;
+        const nextViews = (next.views ?? []).map((view) => {
+          const viewKey = String(view.imageCompanionKey || '').trim();
+          if (!viewKey) return view;
+          const cur = String(view.image || '').trim();
+          if (cur && shouldStripResultUrlForPersist(cur)) {
+            touchedViews = true;
+            return { ...view, image: '' };
+          }
+          return view;
+        });
+        if (touchedViews) {
+          touchedAs = true;
+          next = { ...next, views: nextViews };
+        }
+        return next;
+      });
+      if (touchedAs) {
+        a.assetSet = { ...a.assetSet, components: nextComponents };
       }
     }
   }

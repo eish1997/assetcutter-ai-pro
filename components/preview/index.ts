@@ -14,3 +14,4 @@ export type { PreviewShellProps } from './PreviewShell';
 export { getLazyImagePreviewViewer, registerImagePreviewLoader } from './registry';
 export type { LazyImagePreviewViewerProps, Model3DDisplayMode } from './registry';
 export { PreviewViewerFallback } from './PreviewSuspenseFallback';
+export { PreviewImageLoadingState } from './PreviewImageLoadingState';

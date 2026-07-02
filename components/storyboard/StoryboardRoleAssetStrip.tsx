@@ -26,6 +26,7 @@ type Props = {
   onAssignImages?: (startAssetId: string | null, files: File[]) => void;
   onClearImage: (id: string) => void;
   onPreviewImage?: (src: string) => void;
+  onAssetImageClick?: (asset: { id: string; name: string; image?: string }) => boolean;
 };
 
 function allowImageDrop(event: React.DragEvent) {
@@ -50,6 +51,7 @@ export default function StoryboardRoleAssetStrip({
   onAssignImages,
   onClearImage,
   onPreviewImage,
+  onAssetImageClick,
 }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pendingIdRef = useRef<string | null>(null);
@@ -127,7 +129,11 @@ export default function StoryboardRoleAssetStrip({
                   <button
                     type="button"
                     className="block h-full w-full"
-                    onClick={() => (onPreviewImage ? onPreviewImage(img) : openPicker(asset.id))}
+                    onClick={() => {
+                      if (onAssetImageClick?.(asset)) return;
+                      if (onPreviewImage) onPreviewImage(img);
+                      else openPicker(asset.id);
+                    }}
                     disabled={readOnly || busy}
                   >
                     <img

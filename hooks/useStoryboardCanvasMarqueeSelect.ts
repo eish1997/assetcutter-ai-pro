@@ -117,6 +117,8 @@ export function useStoryboardCanvasMarqueeSelect({
     }
   }, [containerRef]);
 
+  const marqueeRafRef = useRef(0);
+
   useEffect(() => {
     if (disabled) return;
 
@@ -135,9 +137,15 @@ export function useStoryboardCanvasMarqueeSelect({
 
       if (session.dragging) {
         e.preventDefault();
-        setMarqueeRect(
-          normalizeMarqueeRect(session.startX, session.startY, session.endX, session.endY)
-        );
+        if (marqueeRafRef.current) return;
+        marqueeRafRef.current = window.requestAnimationFrame(() => {
+          marqueeRafRef.current = 0;
+          const live = sessionRef.current;
+          if (!live?.dragging) return;
+          setMarqueeRect(
+            normalizeMarqueeRect(live.startX, live.startY, live.endX, live.endY)
+          );
+        });
       }
     };
 
@@ -151,6 +159,10 @@ export function useStoryboardCanvasMarqueeSelect({
     window.addEventListener('pointerup', onWindowPointerUp);
     window.addEventListener('pointercancel', onWindowPointerUp);
     return () => {
+      if (marqueeRafRef.current) {
+        window.cancelAnimationFrame(marqueeRafRef.current);
+        marqueeRafRef.current = 0;
+      }
       window.removeEventListener('pointermove', onWindowPointerMove);
       window.removeEventListener('pointerup', onWindowPointerUp);
       window.removeEventListener('pointercancel', onWindowPointerUp);

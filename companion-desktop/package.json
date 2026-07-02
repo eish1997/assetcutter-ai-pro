@@ -46,6 +46,10 @@
       "agent-workbench-client.cjs",
       "agent-script-hub-client.cjs",
       "agent-body-mcp.cjs",
+      "hermes-official-host.cjs",
+      "hermes-cli-resolve.cjs",
+      "hermes-gateway-host.cjs",
+      "companion-connect.cjs",
       "agent-skills.cjs",
       "agent-memory.cjs",
       "agent-types.d.ts",
@@ -85,6 +89,16 @@
         "from": "paddleocr-bootstrap",
         "to": "paddleocr-bootstrap",
         "filter": ["**/*"]
+      },
+      {
+        "from": "../hermes-bootstrap",
+        "to": "hermes-bootstrap",
+        "filter": ["dev-gateway.mjs"]
+      },
+      {
+        "from": "hermes-bootstrap",
+        "to": "hermes-bootstrap",
+        "filter": ["hermes-bootstrap.cjs"]
       },
       {
         "from": "../local-companion/paddleocr-service",

@@ -31,12 +31,54 @@ function readBody(req) {
   });
 }
 
+function lastMessage(messages) {
+  const list = Array.isArray(messages) ? messages : [];
+  return list.length ? list[list.length - 1] : null;
+}
+
 function lastUserText(messages) {
   const list = Array.isArray(messages) ? messages : [];
   for (let i = list.length - 1; i >= 0; i--) {
     if (list[i]?.role === 'user') return String(list[i].content || '');
   }
   return '';
+}
+
+function formatToolFollowUp(toolMsg) {
+  if (!toolMsg || toolMsg.role !== 'tool') return '已完成。\n';
+  const name = toolMsg.name || '';
+  const raw = String(toolMsg.content || '').trim();
+  if (name === 'ac.shell.get_state' || name === 'ac.companion.runtime_status') {
+    return raw ? `${raw}\n` : '已完成。\n';
+  }
+  if (name === 'ac.shell.navigate') {
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.navigated) {
+        return `已切换到 ${parsed.navigated} 页。\n`;
+      }
+    } catch {
+      /* fall through */
+    }
+  }
+  try {
+    const err = JSON.parse(raw);
+    if (err && err.message) {
+      return `工具 ${name} 失败：${err.message}\n`;
+    }
+  } catch {
+    /* ignore */
+  }
+  if (raw && raw.length < 500) return `${raw}\n`;
+  return '已完成。\n';
+}
+
+function shouldPickToolCalls(messages) {
+  const last = lastMessage(messages);
+  if (!last) return true;
+  // 工具已执行完毕：只回文本收尾，避免 Session 循环再次触发同一 navigate（MAX_TOOL_STEPS=8）
+  if (last.role === 'tool') return false;
+  return true;
 }
 
 function pickToolCalls(text) {
@@ -59,8 +101,43 @@ function sseWrite(res, obj) {
 
 async function handleChatCompletions(req, res, body) {
   const stream = Boolean(body.stream);
-  const userText = lastUserText(body.messages);
-  const toolCalls = pickToolCalls(userText);
+  const messages = body.messages || [];
+  const last = lastMessage(messages);
+
+  if (last && last.role === 'tool') {
+    const followUp = formatToolFollowUp(last);
+    if (!stream) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          id: `chatcmpl_${randomUUID()}`,
+          object: 'chat.completion',
+          choices: [{ index: 0, message: { role: 'assistant', content: followUp }, finish_reason: 'stop' }],
+        }),
+      );
+      return;
+    }
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    });
+    const chunkId = `chatcmpl_${randomUUID()}`;
+    sseWrite(res, {
+      id: chunkId,
+      choices: [{ index: 0, delta: { content: followUp }, finish_reason: null }],
+    });
+    sseWrite(res, {
+      id: chunkId,
+      choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+    });
+    res.write('data: [DONE]\n\n');
+    res.end();
+    return;
+  }
+
+  const userText = lastUserText(messages);
+  const toolCalls = shouldPickToolCalls(messages) ? pickToolCalls(userText) : [];
 
   if (!stream) {
     if (toolCalls.length) {

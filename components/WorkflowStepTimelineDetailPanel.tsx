@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import type { WorkflowAsset } from '../types';
+import { useExecutionElapsedSeconds } from '../hooks/useExecutionElapsedSeconds';
 import type { ImageVersion, PromptArtifact, VgpAssetExtension } from '../types/vgp';
 import {
   DEFAULT_WORKFLOW_STEP_TIMELINE_ORDER,
@@ -99,8 +100,10 @@ export type WorkflowStepTimelineDetailPanelProps = {
   pullTencentBusy?: boolean;
   /** 大图预览时：该资产当前有队列任务正在执行 */
   executionActive?: boolean;
-  /** 当前执行任务的已运行秒数 */
+  /** 当前执行任务的已运行秒数（legacy；优先用 executionStartedAt） */
   executionElapsedSeconds?: number | null;
+  /** 当前执行任务开始时间戳；组件内本地 tick */
+  executionStartedAt?: number | null;
   /** 当前执行中的能力/步骤展示名 */
   executionStepLabel?: string | null;
 };
@@ -118,8 +121,12 @@ export const WorkflowStepTimelineDetailPanel: React.FC<WorkflowStepTimelineDetai
   pullTencentBusy = false,
   executionActive = false,
   executionElapsedSeconds = null,
+  executionStartedAt = null,
   executionStepLabel = null,
 }) => {
+  const localElapsed = useExecutionElapsedSeconds(executionStartedAt, Boolean(executionActive));
+  const displayElapsed =
+    executionStartedAt != null ? localElapsed : executionElapsedSeconds;
   const [promptExpanded, setPromptExpanded] = useState(false);
   const [presetInstrExpanded, setPresetInstrExpanded] = useState(false);
   const order = timelineOrderProp ?? DEFAULT_WORKFLOW_STEP_TIMELINE_ORDER;
@@ -265,7 +272,7 @@ export const WorkflowStepTimelineDetailPanel: React.FC<WorkflowStepTimelineDetai
           <p className="text-[10px] text-gray-100 leading-snug">
             已运行{' '}
             <span className="font-mono tabular-nums text-blue-200">
-              {Math.max(0, Math.floor(executionElapsedSeconds ?? 0))}
+              {Math.max(0, Math.floor(displayElapsed ?? 0))}
             </span>{' '}
             秒
           </p>

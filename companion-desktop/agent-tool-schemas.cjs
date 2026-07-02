@@ -76,7 +76,7 @@ const P1_TOOL_SCHEMAS = [
   },
   {
     name: 'ac.script_hub.list_scripts',
-    description: '列出 Script Hub 脚本库（需 scripts 域已登录）',
+    description: '列出 ScriptHub Tool Bridge 平台工具（GET /tool-bridge/tools）',
     risk: 'safe',
     surfaces: ['script_hub'],
     inputSchema: {
@@ -89,32 +89,54 @@ const P1_TOOL_SCHEMAS = [
   },
   {
     name: 'ac.script_hub.run_script',
-    description: '创建 Script Hub Run 并在本机伴侣排队执行（如 Maya）',
+    description: '调用 ScriptHub Tool Bridge 执行平台工具（POST /tool-bridge/calls）',
     risk: 'confirm',
     surfaces: ['script_hub'],
     inputSchema: {
       type: 'object',
       properties: {
+        toolName: { type: 'string' },
+        input: { type: 'object' },
+        conversationId: { type: 'string' },
+        traceId: { type: 'string' },
+        idempotencyKey: { type: 'string' },
         scriptId: { type: 'string' },
         revisionId: { type: 'string' },
-        targetType: { type: 'string', enum: ['maya', 'unreal'] },
+        targetType: { type: 'string' },
         params: { type: 'object' },
       },
-      required: ['scriptId', 'revisionId', 'targetType'],
       additionalProperties: false,
     },
   },
   {
     name: 'ac.script_hub.get_run',
-    description: '查询 Script Hub Run 状态',
+    description: '查询 ScriptHub ToolCall 状态（GET /tool-bridge/calls/:id）',
     risk: 'safe',
     surfaces: ['script_hub'],
     inputSchema: {
       type: 'object',
       properties: {
+        toolCallId: { type: 'string' },
         runId: { type: 'string' },
       },
-      required: ['runId'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'ac.script_hub.export_maya_selection',
+    description:
+      'Maya 当前选择导出 FBX 全链路（Tool Bridge scriptHub.maya.export_selection_fbx + Connector）',
+    risk: 'confirm',
+    surfaces: ['script_hub'],
+    inputSchema: {
+      type: 'object',
+      properties: {
+        outputPath: { type: 'string' },
+        output_path: { type: 'string' },
+        overwrite: { type: 'boolean' },
+        conversationId: { type: 'string' },
+        traceId: { type: 'string' },
+      },
       additionalProperties: false,
     },
   },

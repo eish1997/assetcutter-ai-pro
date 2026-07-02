@@ -20,6 +20,8 @@ export type PreviewShellProps = {
   zIndexClassName?: string;
   /** 遮罩底色与模糊（默认与大图预览一致） */
   backdropTintClassName?: string;
+  /** 遮罩下的静态底图（如工作流列表卸载前的截图） */
+  backdropImageSrc?: string | null;
 };
 
 /**
@@ -34,6 +36,7 @@ export const PreviewShell = forwardRef<HTMLDivElement, PreviewShellProps>(functi
     children,
     zIndexClassName = 'z-[2000]',
     backdropTintClassName = 'bg-black/72 backdrop-blur-sm',
+    backdropImageSrc,
   },
   ref
 ) {
@@ -85,6 +88,7 @@ export const PreviewShell = forwardRef<HTMLDivElement, PreviewShellProps>(functi
   useEffect(() => {
     if (!open) return;
     const blockContextMenu = (e: MouseEvent) => {
+      if (e.target instanceof Element && e.target.closest('[data-ac-allow-context-menu]')) return;
       e.preventDefault();
       e.stopPropagation();
     };
@@ -100,7 +104,7 @@ export const PreviewShell = forwardRef<HTMLDivElement, PreviewShellProps>(functi
       tabIndex={-1}
       role="dialog"
       aria-modal
-      className={`fixed inset-0 ${zIndexClassName} ${backdropTintClassName} animate-in fade-in outline-none`}
+      className={`fixed inset-0 ${zIndexClassName} animate-in fade-in outline-none`}
       data-ac-esc-sink
       data-ac-block-workflow-marquee
       onKeyDownCapture={(e) => {
@@ -111,14 +115,25 @@ export const PreviewShell = forwardRef<HTMLDivElement, PreviewShellProps>(functi
       }}
       onClick={onClose}
       onContextMenuCapture={(e) => {
+        if (e.target instanceof Element && e.target.closest('[data-ac-allow-context-menu]')) return;
         e.preventDefault();
         e.stopPropagation();
       }}
     >
+      {backdropImageSrc ? (
+        <img
+          src={backdropImageSrc}
+          alt=""
+          draggable={false}
+          className="pointer-events-none absolute inset-0 h-full w-full select-none object-cover object-top"
+        />
+      ) : null}
+      <div className={`pointer-events-none absolute inset-0 ${backdropTintClassName}`} aria-hidden />
       <div
-        className="relative w-full h-full overflow-hidden"
+        className="relative h-full w-full overflow-hidden"
         onClick={(e) => e.stopPropagation()}
         onContextMenuCapture={(e) => {
+          if (e.target instanceof Element && e.target.closest('[data-ac-allow-context-menu]')) return;
           e.preventDefault();
           e.stopPropagation();
         }}

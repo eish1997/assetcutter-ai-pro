@@ -459,6 +459,85 @@
       color: var(--muted);
       min-height: 14px;
     }
+    .copilot-onboard {
+      padding: 12px;
+      border-radius: 12px;
+      background: rgba(37, 99, 235, 0.08);
+      border: 1px solid rgba(59, 130, 246, 0.25);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .copilot-onboard-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: rgba(228, 228, 231, 0.92);
+    }
+    .copilot-onboard-desc {
+      font-size: 11px;
+      line-height: 1.45;
+      color: var(--muted);
+    }
+    .copilot-onboard-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .copilot-onboard-btn {
+      padding: 6px 10px;
+      border-radius: 8px;
+      border: 1px solid rgba(59, 130, 246, 0.35);
+      background: rgba(37, 99, 235, 0.18);
+      color: #dbeafe;
+      font-size: 11px;
+      cursor: pointer;
+    }
+    .copilot-onboard-btn:hover {
+      background: rgba(37, 99, 235, 0.28);
+    }
+    .copilot-examples {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      padding: 0 10px 6px;
+    }
+    .copilot-example-chip {
+      padding: 4px 8px;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--muted);
+      font-size: 10px;
+      cursor: pointer;
+    }
+    .copilot-example-chip:hover {
+      color: var(--text);
+      border-color: rgba(255, 255, 255, 0.18);
+    }
+    .hermes-status-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 0 0 10px;
+    }
+    .hermes-status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      background: #71717a;
+    }
+    .hermes-status-dot.is-ok {
+      background: #22c55e;
+      box-shadow: 0 0 6px rgba(34, 197, 94, 0.55);
+    }
+    .hermes-status-dot.is-bad {
+      background: #ef4444;
+      box-shadow: 0 0 6px rgba(239, 68, 68, 0.45);
+    }
+    .hermes-status-dot.is-warn {
+      background: #eab308;
+    }
     .copilot-input-row {
       display: flex;
       gap: 6px;
@@ -1294,12 +1373,37 @@
       <input
         type="url"
         id="inpScriptHubUrl"
-        placeholder="http://localhost:5174/"
+        placeholder="http://localhost:5173/"
         autocomplete="off"
         title="Script Hub 根地址"
       />
       <div class="btn-row">
         <button type="button" class="btn btn-primary" id="btnSaveScriptHub">保存</button>
+      </div>
+    </div>
+    <div class="set-section">
+      <h3 title="Copilot ac.script_hub.* 调用的 Tool Bridge API">Script Hub API（Tool Bridge）</h3>
+      <label for="inpScriptHubApiUrl" title="与网页分离；开发默认 http://localhost:8787/">API 地址</label>
+      <input
+        type="url"
+        id="inpScriptHubApiUrl"
+        placeholder="http://localhost:8787/"
+        autocomplete="off"
+        title="Tool Bridge 根地址"
+      />
+      <div class="btn-row">
+        <button type="button" class="btn btn-primary" id="btnSaveScriptHubApi">保存 API</button>
+      </div>
+      <label for="inpScriptHubApiToken" class="pair-label-gap" title="与 SCRIPTHUB_TOOL_BRIDGE_TOKEN 一致；本地留空">API Token（可选）</label>
+      <input
+        type="password"
+        id="inpScriptHubApiToken"
+        placeholder="Tool Bridge Bearer Token"
+        autocomplete="off"
+        title="设置后 Copilot 请求带 Authorization: Bearer"
+      />
+      <div class="btn-row">
+        <button type="button" class="btn btn-primary" id="btnSaveScriptHubApiToken">保存 Token</button>
       </div>
     </div>
     <div class="set-section">
@@ -1338,6 +1442,41 @@
         <button type="button" class="btn btn-primary" id="btnSavePairing">保存配对</button>
       </div>
       <p id="pairingHint" class="mono set-feedback" hidden></p>
+    </div>
+    <div class="set-section" id="hermesBrainSetupSection">
+      <h3 title="Copilot 对话所需的 Hermes Gateway（OpenAI 兼容）">AI 大脑（Hermes）</h3>
+      <div class="hermes-status-row">
+        <span class="hermes-status-dot" id="hermesStatusDot" aria-hidden="true"></span>
+        <span id="hermesStatusText" class="mono set-feedback" style="margin: 0">检测中…</span>
+      </div>
+      <label for="inpHermesGatewayUrl" title="OpenAI 兼容 Gateway 根路径，含 /v1">Gateway URL</label>
+      <input
+        type="text"
+        id="inpHermesGatewayUrl"
+        placeholder="http://127.0.0.1:8642/v1"
+        autocomplete="off"
+        class="mono"
+      />
+      <label for="inpHermesApiKey" class="pair-label-gap" title="Bearer Token（官方 Hermes 为 API_SERVER_KEY）">API Key</label>
+      <input type="password" id="inpHermesApiKey" placeholder="安装后自动写入" autocomplete="off" class="mono" />
+      <label class="pair-label-gap">
+        <input type="checkbox" id="inpHermesDevStub" title="仅开发联调：使用 dev-gateway.mjs (:19119)" />
+        使用开发联调桩（:19119，非官方 Hermes）
+      </label>
+      <div class="btn-row">
+        <button type="button" class="btn btn-primary" id="btnHermesOneClickSetup">一键安装并启动 Hermes</button>
+        <button type="button" class="btn" id="btnHermesInstallOnly">仅安装 Hermes 官方版</button>
+        <button type="button" class="btn" id="btnHermesConnectExisting" title="自动探测本机已有 Hermes Gateway 并写入 MCP 配置">连接已有 Hermes</button>
+        <button type="button" class="btn" id="btnHermesProbe">探测连接</button>
+        <button type="button" class="btn" id="btnSaveHermesSettings">保存</button>
+      </div>
+      <pre
+        id="hermesBootstrapLogArea"
+        class="mono storage-hint"
+        style="display: none; margin: 8px 0 0; max-height: 160px; overflow: auto; white-space: pre-wrap"
+      ></pre>
+      <p id="hermesConnectExportHint" class="storage-hint" style="display: none; margin: 8px 0 0; font-size: 10px; line-height: 1.45"></p>
+      <p id="hermesSettingsHint" class="mono set-feedback" hidden></p>
     </div>
     <div class="set-section">
       <h3 title="允许外部 Agent（Hermes/Codex）通过 MCP 调用同一套 ac.* 身体工具">外部 Agent（MCP）</h3>
@@ -1436,6 +1575,7 @@
         <div class="copilot-head-title">Copilot <span class="copilot-brain" id="copilot-brain-label">stub</span></div>
       </div>
       <div class="copilot-body">
+        <div class="copilot-examples" id="copilot-examples" hidden></div>
         <div class="copilot-messages" id="copilot-messages"></div>
       </div>
       <div class="copilot-footer">
@@ -1493,7 +1633,12 @@
       const defaultScriptHubUrl =
         typeof shell.defaultScriptHubUrl === 'string' && shell.defaultScriptHubUrl.trim()
           ? shell.defaultScriptHubUrl.trim()
-          : 'http://localhost:5174/';
+          : 'http://localhost:5173/';
+
+      const defaultScriptHubApiUrl =
+        typeof shell.defaultScriptHubApiUrl === 'string' && shell.defaultScriptHubApiUrl.trim()
+          ? shell.defaultScriptHubApiUrl.trim()
+          : 'http://localhost:8787/';
 
       const views = { home: $('view-home'), tools: $('view-tools'), settings: $('view-settings') };
       let activeView = 'home';
@@ -1768,6 +1913,7 @@
           void refreshVolumeEffectiveHint();
           void loadPairingFields();
           void loadAgentSettingsUi();
+          void loadHermesSettingsUi();
         }
       }
 
@@ -1977,7 +2123,14 @@
         });
       }
 
-      let settingsCache = { siteUrl: defaultSiteUrl, scriptHubUrl: defaultScriptHubUrl, volumeRoot: '', downloadDir: '' };
+      let settingsCache = {
+        siteUrl: defaultSiteUrl,
+        scriptHubUrl: defaultScriptHubUrl,
+        scriptHubApiUrl: defaultScriptHubApiUrl,
+        scriptHubApiToken: '',
+        volumeRoot: '',
+        downloadDir: '',
+      };
       let pluginListSignature = '';
       let pluginLoading = false;
       async function loadSettingsUi() {
@@ -1986,10 +2139,18 @@
         if (s && typeof s.scriptHubUrl === 'string' && s.scriptHubUrl.trim()) {
           settingsCache.scriptHubUrl = s.scriptHubUrl.trim();
         }
+        if (s && typeof s.scriptHubApiUrl === 'string' && s.scriptHubApiUrl.trim()) {
+          settingsCache.scriptHubApiUrl = s.scriptHubApiUrl.trim();
+        }
+        if (s && typeof s.scriptHubApiToken === 'string') {
+          settingsCache.scriptHubApiToken = s.scriptHubApiToken.trim();
+        }
         settingsCache.volumeRoot = s && typeof s.volumeRoot === 'string' ? s.volumeRoot.trim() : '';
         settingsCache.downloadDir = s && typeof s.downloadDir === 'string' ? s.downloadDir.trim() : '';
         $('inpSiteUrl').value = settingsCache.siteUrl;
         if ($('inpScriptHubUrl')) $('inpScriptHubUrl').value = settingsCache.scriptHubUrl;
+        if ($('inpScriptHubApiUrl')) $('inpScriptHubApiUrl').value = settingsCache.scriptHubApiUrl;
+        if ($('inpScriptHubApiToken')) $('inpScriptHubApiToken').value = settingsCache.scriptHubApiToken;
         $('inpVolumeRoot').value = settingsCache.volumeRoot;
         $('inpDownloadDir').value = settingsCache.downloadDir;
         refreshDownloadDirHint();
@@ -2203,6 +2364,28 @@
         });
       }
 
+      const btnSaveScriptHubApi = $('btnSaveScriptHubApi');
+      if (btnSaveScriptHubApi) {
+        btnSaveScriptHubApi.addEventListener('click', async () => {
+          const u = $('inpScriptHubApiUrl').value.trim();
+          const res = await shell.saveSettings({ scriptHubApiUrl: u });
+          if (res && res.ok) {
+            settingsCache.scriptHubApiUrl = u || settingsCache.scriptHubApiUrl;
+          }
+        });
+      }
+
+      const btnSaveScriptHubApiToken = $('btnSaveScriptHubApiToken');
+      if (btnSaveScriptHubApiToken) {
+        btnSaveScriptHubApiToken.addEventListener('click', async () => {
+          const t = $('inpScriptHubApiToken').value.trim();
+          const res = await shell.saveSettings({ scriptHubApiToken: t });
+          if (res && res.ok) {
+            settingsCache.scriptHubApiToken = t;
+          }
+        });
+      }
+
       function refreshDownloadDirHint() {
         const v = settingsCache.downloadDir || $('inpDownloadDir').value.trim();
         if (v) {
@@ -2390,6 +2573,273 @@
       let agentSettingsCache = { mcpEnabled: false, defaultBrainId: 'hermes', mcpToken: null, mcpPort: 19120 };
       let agentBrainCatalog = [];
 
+      function applyHermesStatusUi(hermesGateway, activeBrainId) {
+        const dot = $('hermesStatusDot');
+        const text = $('hermesStatusText');
+        if (!dot || !text) return;
+        dot.classList.remove('is-ok', 'is-bad', 'is-warn');
+        const probeOk = hermesGateway && hermesGateway.probe && hermesGateway.probe.ok;
+        const brainOk = activeBrainId === 'hermes' && probeOk;
+        if (brainOk) {
+          dot.classList.add('is-ok');
+          const kind = hermesGateway && hermesGateway.kind === 'dev' ? '开发桩' : '官方 Hermes';
+          text.textContent = kind + ' Gateway 就绪 · Copilot 可用';
+        } else if (probeOk) {
+          dot.classList.add('is-warn');
+          text.textContent = 'Gateway 可达，但 Copilot 大脑为 ' + (activeBrainId || 'stub');
+        } else if (hermesGateway && hermesGateway.running) {
+          dot.classList.add('is-warn');
+          text.textContent = 'Gateway 启动中… ' + ((hermesGateway.probe && hermesGateway.probe.detail) || '');
+        } else {
+          dot.classList.add('is-bad');
+          const detail = (hermesGateway && hermesGateway.probe && hermesGateway.probe.detail) || '未连接';
+          text.textContent = 'Gateway 未就绪：' + detail;
+        }
+      }
+
+      async function loadHermesSettingsUi() {
+        const agent = shell.agentSession;
+        if (!agent || typeof agent.hermesGatewayState !== 'function') return;
+        try {
+          const r = await agent.hermesGatewayState();
+          if (!r || !r.ok) return;
+          const s = r.settings || {};
+          if ($('inpHermesGatewayUrl')) $('inpHermesGatewayUrl').value = s.hermesGatewayUrl || '';
+          if ($('inpHermesApiKey')) $('inpHermesApiKey').value = s.hermesApiKey || '';
+          if ($('inpHermesDevStub')) {
+            $('inpHermesDevStub').checked = s.hermesGatewayKind === 'dev';
+          }
+          if (typeof shell.hermesDesktopState === 'function') {
+            const hd = await shell.hermesDesktopState();
+            if (hd && hd.ok && !hd.installed && $('hermesStatusText')) {
+              /* keep probe text from applyHermesStatusUi */
+            }
+          }
+          applyHermesStatusUi(r.hermesGateway, r.activeBrainId);
+        } catch {
+          /* ignore */
+        }
+      }
+
+      let hermesBootstrapBusy = false;
+
+      function appendHermesBootstrapLog(payload) {
+        const logEl = $('hermesBootstrapLogArea');
+        if (!logEl || !payload) return;
+        logEl.style.display = 'block';
+        let msg = '';
+        if (payload.type === 'phase') {
+          msg = '\n▶ ' + (payload.msg || '');
+        } else if (payload.type === 'bootstrap-finished') {
+          const ok = payload.ok !== false && payload.msg !== 'fail';
+          msg = ok ? '\n✓ 安装配置完成' : '\n✗ 安装失败';
+        } else if (typeof payload.msg === 'string') {
+          msg = payload.msg;
+        } else if (payload.msg != null) {
+          msg = typeof payload.msg === 'object' ? JSON.stringify(payload.msg) : String(payload.msg);
+        }
+        if (msg) logEl.textContent += msg + '\n';
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+
+      if (typeof shell.onHermesBootstrapLog === 'function') {
+        shell.onHermesBootstrapLog((payload) => appendHermesBootstrapLog(payload));
+      }
+
+      async function runHermesInstallOnly() {
+        const hintEl = $('hermesSettingsHint');
+        const btn = $('btnHermesInstallOnly');
+        if (!shell || typeof shell.hermesBootstrapRun !== 'function') return;
+        if (hermesBootstrapBusy) return;
+        hermesBootstrapBusy = true;
+        if (btn) btn.disabled = true;
+        const logEl = $('hermesBootstrapLogArea');
+        if (logEl) {
+          logEl.style.display = 'block';
+          logEl.textContent = '';
+        }
+        setSetFeedback(hintEl, '正在安装 Hermes 官方版（可能需要数分钟）…');
+        try {
+          const r = await shell.hermesBootstrapRun();
+          if (r && r.ok) {
+            setSetFeedback(hintEl, 'Hermes 安装完成，可点击「一键安装并启动」');
+            void loadHermesSettingsUi();
+          } else {
+            setSetFeedback(hintEl, '安装失败：' + ((r && r.error) || '未知错误'));
+          }
+        } catch (e) {
+          setSetFeedback(hintEl, e && e.message ? e.message : String(e));
+        } finally {
+          hermesBootstrapBusy = false;
+          if (btn) btn.disabled = false;
+        }
+      }
+
+      if ($('btnHermesInstallOnly')) {
+        $('btnHermesInstallOnly').addEventListener('click', () => void runHermesInstallOnly());
+      }
+
+      if ($('btnHermesOneClickSetup')) {
+        $('btnHermesOneClickSetup').addEventListener('click', async () => {
+          const agent = shell.agentSession;
+          const hintEl = $('hermesSettingsHint');
+          const btn = $('btnHermesOneClickSetup');
+          if (!agent || typeof agent.hermesGatewaySetup !== 'function') return;
+          btn.disabled = true;
+          const logEl = $('hermesBootstrapLogArea');
+          if (logEl) {
+            logEl.style.display = 'block';
+            logEl.textContent = '';
+          }
+          setSetFeedback(hintEl, '正在安装/启动 Hermes 官方 Gateway（首次可能较久）…');
+          try {
+            const r = await agent.hermesGatewaySetup({
+              useDevStub: Boolean($('inpHermesDevStub') && $('inpHermesDevStub').checked),
+            });
+            if (r && r.ok) {
+              if ($('inpHermesGatewayUrl') && r.settings) {
+                $('inpHermesGatewayUrl').value = r.settings.hermesGatewayUrl || '';
+                $('inpHermesApiKey').value = r.settings.hermesApiKey || '';
+                if ($('inpHermesDevStub')) $('inpHermesDevStub').checked = r.settings.hermesGatewayKind === 'dev';
+              }
+              applyHermesStatusUi(r.hermesGateway, r.activeBrainId);
+              setSetFeedback(
+                hintEl,
+                r.settings && r.settings.hermesGatewayKind === 'dev'
+                  ? '开发桩已就绪'
+                  : 'Hermes 官方 Gateway 已就绪（若无法对话请运行 hermes model 配置模型）',
+              );
+              void loadAgentSettingsUi();
+              if (typeof window.__acCopilotRefreshOnboarding === 'function') {
+                window.__acCopilotRefreshOnboarding();
+              }
+            } else {
+              applyHermesStatusUi(r && r.hermesGateway, r && r.activeBrainId);
+              setSetFeedback(hintEl, '配置失败：' + ((r && r.error) || '未知错误'));
+            }
+          } catch (e) {
+            setSetFeedback(hintEl, e && e.message ? e.message : String(e));
+          } finally {
+            btn.disabled = false;
+          }
+        });
+      }
+
+      if ($('btnHermesConnectExisting')) {
+        $('btnHermesConnectExisting').addEventListener('click', async () => {
+          const agent = shell.agentSession;
+          const hintEl = $('hermesSettingsHint');
+          const exportHint = $('hermesConnectExportHint');
+          const btn = $('btnHermesConnectExisting');
+          if (!agent || typeof agent.companionConnect !== 'function') return;
+          btn.disabled = true;
+          setSetFeedback(hintEl, '正在探测并连接已有 Hermes…');
+          try {
+            const gatewayUrl = $('inpHermesGatewayUrl') ? $('inpHermesGatewayUrl').value.trim() : '';
+            const apiKey = $('inpHermesApiKey') ? $('inpHermesApiKey').value.trim() : '';
+            const r = await agent.companionConnect({
+              mode: 'all',
+              detect: true,
+              writeMcp: true,
+              gatewayUrl: gatewayUrl || undefined,
+              apiKey: apiKey || undefined,
+            });
+            if (r && r.ok) {
+              if ($('inpHermesGatewayUrl') && r.settings) {
+                $('inpHermesGatewayUrl').value = r.settings.hermesGatewayUrl || '';
+                $('inpHermesApiKey').value = r.settings.hermesApiKey || '';
+                if ($('inpHermesDevStub')) $('inpHermesDevStub').checked = r.settings.hermesGatewayKind === 'dev';
+              }
+              applyHermesStatusUi(r.hermesGateway, r.activeBrainId);
+              if ($('inpMcpEnabled')) $('inpMcpEnabled').checked = Boolean(r.settings && r.settings.mcpEnabled);
+              if ($('inpMcpToken') && r.settings && r.settings.mcpToken) {
+                $('inpMcpToken').value = String(r.settings.mcpToken);
+              }
+              if ($('inpMcpConfig') && r.mcpConfig) {
+                $('inpMcpConfig').value = JSON.stringify(r.mcpConfig, null, 2);
+              }
+              setSetFeedback(hintEl, r.message || '已连接已有 Hermes');
+              if (exportHint && r.exported) {
+                exportHint.style.display = 'block';
+                exportHint.textContent =
+                  '导出：' +
+                  (r.exported.bundlePath || '') +
+                  (r.mcpWrite && r.mcpWrite.written && r.mcpWrite.written.length
+                    ? ' · MCP 已写入 ' + r.mcpWrite.written.join(', ')
+                    : '');
+              }
+              void loadAgentSettingsUi();
+              if (typeof window.__acCopilotRefreshOnboarding === 'function') {
+                window.__acCopilotRefreshOnboarding();
+              }
+            } else {
+              applyHermesStatusUi(r && r.hermesGateway, r && r.activeBrainId);
+              setSetFeedback(hintEl, '连接失败：' + ((r && r.error) || '未检测到 Gateway'));
+            }
+          } catch (e) {
+            setSetFeedback(hintEl, e && e.message ? e.message : String(e));
+          } finally {
+            btn.disabled = false;
+          }
+        });
+      }
+
+      if ($('btnHermesProbe')) {
+        $('btnHermesProbe').addEventListener('click', async () => {
+          const agent = shell.agentSession;
+          const hintEl = $('hermesSettingsHint');
+          if (!agent || typeof agent.hermesGatewayProbe !== 'function') return;
+          setSetFeedback(hintEl, '探测中…');
+          try {
+            const r = await agent.hermesGatewayProbe();
+            if (r && r.ok && r.probe) {
+              applyHermesStatusUi(r.hermesGateway, null);
+              setSetFeedback(hintEl, r.probe.ok ? '连接正常' : '连接失败：' + (r.probe.detail || ''));
+            }
+          } catch (e) {
+            setSetFeedback(hintEl, e && e.message ? e.message : String(e));
+          }
+        });
+      }
+
+      if ($('btnSaveHermesSettings')) {
+        $('btnSaveHermesSettings').addEventListener('click', async () => {
+          const agent = shell.agentSession;
+          const hintEl = $('hermesSettingsHint');
+          if (!agent || typeof agent.saveSettings !== 'function') return;
+          const btn = $('btnSaveHermesSettings');
+          btn.disabled = true;
+          setSetFeedback(hintEl, '保存中…');
+          try {
+            const useDev = Boolean($('inpHermesDevStub') && $('inpHermesDevStub').checked);
+            const patch = {
+              hermesGatewayUrl: $('inpHermesGatewayUrl') ? $('inpHermesGatewayUrl').value.trim() : '',
+              hermesApiKey: $('inpHermesApiKey') ? $('inpHermesApiKey').value.trim() : '',
+              hermesManagedGateway: true,
+              hermesGatewayKind: useDev ? 'dev' : 'official',
+              hermesModel: useDev ? 'default' : 'hermes-agent',
+              defaultBrainId: 'hermes',
+              brainSetupCompleted: true,
+            };
+            const r = await agent.saveSettings(patch);
+            if (r && r.ok) {
+              applyHermesStatusUi(r.hermesGateway, r.activeBrainId);
+              setSetFeedback(hintEl, 'Hermes 设置已保存');
+              void loadAgentSettingsUi();
+              if (typeof window.__acCopilotRefreshOnboarding === 'function') {
+                window.__acCopilotRefreshOnboarding();
+              }
+            } else {
+              setSetFeedback(hintEl, '保存失败');
+            }
+          } catch (e) {
+            setSetFeedback(hintEl, e && e.message ? e.message : String(e));
+          } finally {
+            btn.disabled = false;
+          }
+        });
+      }
+
       function renderBrainPicker(activeId) {
         const host = $('shellBrainPicker');
         if (!host) return;
@@ -2439,6 +2889,7 @@
                 ? 'MCP 已启用但未运行'
                 : 'MCP 已关闭';
           }
+          applyHermesStatusUi(r.hermesGateway, r.activeBrainId);
         } catch {
           /* ignore */
         }
@@ -2549,6 +3000,8 @@
         } catch {
           $('inpSiteUrl').value = settingsCache.siteUrl;
           if ($('inpScriptHubUrl')) $('inpScriptHubUrl').value = settingsCache.scriptHubUrl;
+          if ($('inpScriptHubApiUrl')) $('inpScriptHubApiUrl').value = settingsCache.scriptHubApiUrl;
+          if ($('inpScriptHubApiToken')) $('inpScriptHubApiToken').value = settingsCache.scriptHubApiToken;
           $('inpVolumeRoot').value = settingsCache.volumeRoot;
           $('inpDownloadDir').value = settingsCache.downloadDir;
         }

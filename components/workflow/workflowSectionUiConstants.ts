@@ -33,8 +33,21 @@ export const TITLE_ROW_QUEUE_CHIP = `${TOP_CTRL_H} flex items-center gap-1.5 rou
 
 export const TITLE_ROW_DROPDOWN_TRIGGER = `${TOP_CTRL_H} min-w-[4.75rem] px-2 inline-flex items-center justify-center rounded-md bg-white/[0.05] ring-1 ring-white/[0.06] text-[8px] font-black text-gray-200 hover:bg-white/[0.09] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/45`;
 
-/** 画布 / 仓库卡片默认外沿（非选中、非组强调）；与选中态同为 ring-2，避免切换时 1px 级布局跳动 */
-export const WORKFLOW_CARD_SURFACE_IDLE = 'ring-2 ring-white/[0.06] border-0';
+/** 画布 / 仓库卡片默认外沿（非选中、非组强调） */
+export const WORKFLOW_CARD_SURFACE_IDLE = 'ring-1 ring-inset ring-white/[0.08] border-0';
+
+/** 选中壳：外层 padding 填白，比 ring/box-shadow 更清晰、圆角无锯齿 */
+export const WORKFLOW_CARD_SHELL_PAD = 'rounded-2xl p-0.5';
+export const WORKFLOW_CARD_SHELL_SELECTED = 'bg-white';
+export const WORKFLOW_CARD_SHELL_IDLE = 'bg-transparent';
+
+/** 卡片内层圆角（与 `rounded-2xl` + `p-0.5` 配套，16px − 2px） */
+export const WORKFLOW_CARD_INNER_RADIUS = 'rounded-[14px]';
+
+/** 组卡片右下角堆叠预览预留空间（px）；主图与堆叠层尺寸须扣减此值以免选中壳包不全 */
+export const WORKFLOW_GROUP_STACK_BLEED_PX = 14;
+export const WORKFLOW_GROUP_CARD_FACE_CLASS =
+  'h-[calc(100%-14px)] w-[calc(100%-14px)] max-h-full max-w-full';
 
 /** 小标签 pill（版本数等） */
 export const WORKFLOW_META_PILL =
@@ -97,6 +110,10 @@ export const WORKFLOW_LIGHTBOX_RIGHT_PANEL_WIDTH_CLASS = 'w-[min(24rem,30vw)]';
 export const WORKFLOW_LIGHTBOX_RIGHT_PANEL_INSET = 'min(24rem, 30vw)';
 /** 贴边折叠态图标条宽度（Tailwind w-9 = 2.25rem） */
 export const WORKFLOW_LIGHTBOX_RIGHT_PANEL_TAB_INSET = '2.25rem';
+
+/** 大图预览右侧资产缩略图导航条（Tailwind w-14 = 3.5rem） */
+export const WORKFLOW_LIGHTBOX_ASSET_THUMB_STRIP_WIDTH_CLASS = 'w-14';
+export const WORKFLOW_LIGHTBOX_ASSET_THUMB_STRIP_INSET = '3.5rem';
 
 /** 大图预览左侧 VGP 步骤节点图占位（与 `WorkflowStepNodeGraphOverlay` 最大宽度 22rem 对齐） */
 export const WORKFLOW_LIGHTBOX_VGP_GRAPH_LEFT_INSET = 'min(22rem, 28vw)';

@@ -9,6 +9,7 @@ import React, {
   useState,
 } from 'react';
 import { createPortal } from 'react-dom';
+import { layoutAnchoredFloatingMenu, type AnchorRect } from '../../services/floatingMenuPosition';
 import type { QuickComposeMentionCandidate, QuickComposeSegment } from '../../services/quickComposeMention';
 import {
   createQuickComposeMention,
@@ -37,6 +38,8 @@ export type QuickComposeMentionFieldProps = {
   disabled?: boolean;
   multiline?: boolean;
   rows?: number;
+  /** 展开态由父级按视口预算传入，避免撑出页面 */
+  multilineMaxHeightPx?: number;
   ariaLabel: string;
   onSubmit?: () => void;
   onDragOver?: (e: React.DragEvent) => void;
@@ -99,6 +102,26 @@ function pickDefaultActive(segments: QuickComposeSegment[]): ActiveCaret | null 
   return null;
 }
 
+/** leading-7 ≈ 28px */
+const MULTILINE_LINE_PX = 28;
+
+function defaultMultilineMaxHeightPx(fillRemaining: boolean): number {
+  if (typeof window === 'undefined') return fillRemaining ? 320 : 160;
+  return fillRemaining ? Math.max(160, Math.floor(window.innerHeight * 0.42)) : 160;
+}
+
+function syncMultilineTextareaHeight(
+  el: HTMLTextAreaElement,
+  opts: { minRows: number; maxHeightPx: number }
+): void {
+  el.style.height = '0px';
+  const minH = opts.minRows * MULTILINE_LINE_PX;
+  const scrollH = el.scrollHeight;
+  const h = Math.min(Math.max(minH, scrollH), opts.maxHeightPx);
+  el.style.height = `${h}px`;
+  el.style.overflowY = scrollH > opts.maxHeightPx ? 'auto' : 'hidden';
+}
+
 function AutoWidthTextInput({
   segmentId,
   value,
@@ -107,6 +130,7 @@ function AutoWidthTextInput({
   disabled,
   ariaLabel,
   fillRemaining = false,
+  multilineMaxHeightPx: multilineMaxHeightPxProp,
   inputRefs,
   onChange,
   onKeyDown,
@@ -121,6 +145,7 @@ function AutoWidthTextInput({
   ariaLabel: string;
   /** 末段文本占满行内剩余宽度，便于点击空白区聚焦 */
   fillRemaining?: boolean;
+  multilineMaxHeightPx?: number;
   inputRefs: React.MutableRefObject<Map<string, HTMLInputElement | HTMLTextAreaElement>>;
   onChange: (value: string, el: HTMLInputElement | HTMLTextAreaElement) => void;
   onKeyDown: (e: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => void;
@@ -132,6 +157,7 @@ function AutoWidthTextInput({
   const isEmpty = value.length === 0;
 
   useLayoutEffect(() => {
+    if (multiline) return;
     const input = inputRef.current;
     const mirror = mirrorRef.current;
     if (!input || !mirror) return;
@@ -148,7 +174,27 @@ function AutoWidthTextInput({
     const w = Math.ceil(mirror.getBoundingClientRect().width) + 2;
     input.style.width = `${w}px`;
     input.style.minWidth = '0';
-  }, [fillRemaining, value, isEmpty, segmentId]);
+  }, [multiline, fillRemaining, value, isEmpty, segmentId]);
+
+  useLayoutEffect(() => {
+    if (!multiline) return;
+    const textarea = inputRef.current;
+    if (!(textarea instanceof HTMLTextAreaElement)) return;
+
+    const sync = () => {
+      const maxHeightPx =
+        multilineMaxHeightPxProp ??
+        defaultMultilineMaxHeightPx(fillRemaining);
+      syncMultilineTextareaHeight(textarea, {
+        minRows: rows,
+        maxHeightPx,
+      });
+    };
+    sync();
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(sync) : null;
+    ro?.observe(textarea);
+    return () => ro?.disconnect();
+  }, [fillRemaining, multiline, multilineMaxHeightPxProp, rows, value, segmentId]);
 
   const scheduleCaretSync = (el: HTMLInputElement | HTMLTextAreaElement) => {
     onCaretSync(el);
@@ -162,10 +208,16 @@ function AutoWidthTextInput({
   };
 
   const textCls =
-    'm-0 inline-block max-w-full border-0 bg-transparent p-0 align-middle text-[13px] leading-7 text-gray-100 outline-none disabled:opacity-45';
-  const inputCls = fillRemaining ? `${textCls} w-full min-w-[4rem]` : textCls;
+    'm-0 max-w-full border-0 bg-transparent p-0 text-[13px] leading-7 text-gray-100 outline-none disabled:opacity-45';
+  const inputCls = fillRemaining
+    ? multiline
+      ? `${textCls} block w-full min-w-0 align-top`
+      : `${textCls} inline-block w-full min-w-[4rem] align-middle`
+    : `${textCls} inline-block align-middle`;
   const wrapperCls = fillRemaining
-    ? 'relative inline-flex min-w-[4rem] flex-1 max-w-full align-middle'
+    ? multiline
+      ? 'relative flex w-full min-w-0 flex-[1_1_100%] basis-full'
+      : 'relative inline-flex min-w-[4rem] flex-1 max-w-full align-middle'
     : 'relative inline-block w-fit max-w-full align-middle';
 
   const mirror = (
@@ -203,7 +255,6 @@ function AutoWidthTextInput({
   };
 
   if (multiline) {
-    const lineRows = Math.min(rows, Math.max(1, value.split('\n').length));
     return (
       <span className={wrapperCls}>
         {fillRemaining ? null : mirror}
@@ -211,10 +262,10 @@ function AutoWidthTextInput({
           ref={registerRef as React.Ref<HTMLTextAreaElement>}
           value={value}
           disabled={disabled}
-          rows={lineRows}
+          rows={rows}
           onChange={(e) => onChange(e.target.value, e.target)}
           onKeyDown={onKeyDown}
-          className={`${inputCls} resize-none overflow-visible`}
+          className={`${inputCls} resize-none`}
           style={fillRemaining ? undefined : { width: isEmpty ? 1 : undefined }}
           aria-label={ariaLabel}
           {...inputEventHandlers}
@@ -253,6 +304,7 @@ const QuickComposeMentionField = forwardRef<QuickComposeMentionFieldHandle, Quic
       disabled = false,
       multiline = false,
       rows = 5,
+      multilineMaxHeightPx,
       ariaLabel,
       onSubmit,
       onDragOver,
@@ -270,9 +322,16 @@ const QuickComposeMentionField = forwardRef<QuickComposeMentionFieldHandle, Quic
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerQuery, setPickerQuery] = useState('');
   const [pickerIndex, setPickerIndex] = useState(0);
-  const [pickerAnchor, setPickerAnchor] = useState<{ left: number; top: number; width: number } | null>(
+  const [pickerAnchorRect, setPickerAnchorRect] = useState<(AnchorRect & { width: number }) | null>(
     null
   );
+  const [pickerLayout, setPickerLayout] = useState<{
+    left: number;
+    top: number;
+    width: number;
+    maxHeight: number;
+  } | null>(null);
+  const pickerRef = useRef<HTMLDivElement>(null);
   const [mentionPointerDragId, setMentionPointerDragId] = useState<string | null>(null);
   const [dropCaret, setDropCaret] = useState<DropCaretPreview | null>(null);
   const mentionDragListenersRef = useRef<(() => void) | null>(null);
@@ -300,7 +359,8 @@ const QuickComposeMentionField = forwardRef<QuickComposeMentionFieldHandle, Quic
     setPickerOpen(false);
     setPickerQuery('');
     setPickerIndex(0);
-    setPickerAnchor(null);
+    setPickerAnchorRect(null);
+    setPickerLayout(null);
   }, []);
 
   const syncActiveFromEl = useCallback((segmentId: string, el: HTMLInputElement | HTMLTextAreaElement) => {
@@ -332,8 +392,29 @@ const QuickComposeMentionField = forwardRef<QuickComposeMentionFieldHandle, Quic
 
   const positionPicker = useCallback((el: HTMLElement) => {
     const rect = el.getBoundingClientRect();
-    setPickerAnchor({ left: rect.left, top: rect.bottom + 4, width: Math.min(300, Math.max(200, rect.width)) });
+    setPickerAnchorRect({
+      left: rect.left,
+      top: rect.top,
+      right: rect.right,
+      bottom: rect.bottom,
+      width: rect.width,
+    });
   }, []);
+
+  const recomputePickerLayout = useCallback(() => {
+    const anchor = pickerAnchorRect;
+    const el = pickerRef.current;
+    if (!anchor || !el) return;
+    const width = Math.min(300, Math.max(200, anchor.width));
+    setPickerLayout(
+      layoutAnchoredFloatingMenu({
+        anchor,
+        menuWidth: width,
+        naturalMenuHeight: el.scrollHeight,
+        preferredMaxHeight: 208,
+      })
+    );
+  }, [pickerAnchorRect]);
 
   const updatePickerFromText = useCallback(
     (segmentId: string, text: string, offset: number, el: HTMLElement) => {
@@ -683,6 +764,21 @@ const QuickComposeMentionField = forwardRef<QuickComposeMentionFieldHandle, Quic
     return () => document.removeEventListener('mousedown', onDoc, true);
   }, [closePicker, pickerOpen]);
 
+  useLayoutEffect(() => {
+    if (!pickerOpen || !pickerAnchorRect) {
+      setPickerLayout(null);
+      return;
+    }
+    recomputePickerLayout();
+  }, [pickerOpen, pickerAnchorRect, filtered.length, recomputePickerLayout]);
+
+  useEffect(() => {
+    if (!pickerOpen) return;
+    const onResize = () => recomputePickerLayout();
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [pickerOpen, recomputePickerLayout]);
+
   useEffect(() => {
     const focus = focusAfterIdRef.current;
     if (!focus) return;
@@ -694,13 +790,33 @@ const QuickComposeMentionField = forwardRef<QuickComposeMentionFieldHandle, Quic
     });
   }, [segments]);
 
+  const pickerWidth = pickerAnchorRect
+    ? Math.min(300, Math.max(200, pickerAnchorRect.width))
+    : 200;
+  const pickerStyle =
+    pickerLayout ??
+    (pickerAnchorRect
+      ? {
+          left: pickerAnchorRect.left,
+          top: pickerAnchorRect.bottom + 4,
+          width: pickerWidth,
+          maxHeight: 208,
+        }
+      : null);
+
   const picker =
-    pickerOpen && pickerAnchor && typeof document !== 'undefined'
+    pickerOpen && pickerAnchorRect && pickerStyle && typeof document !== 'undefined'
       ? createPortal(
           <div
+            ref={pickerRef}
             id="qc-mention-picker-root"
-            className="fixed z-[2700] max-h-52 overflow-y-auto rounded-lg border border-white/10 bg-[#121216] py-1 shadow-xl ring-1 ring-black/40"
-            style={{ left: pickerAnchor.left, top: pickerAnchor.top, width: pickerAnchor.width }}
+            className="fixed z-[2700] overflow-y-auto rounded-lg border border-white/10 bg-[#121216] py-1 shadow-xl ring-1 ring-black/40"
+            style={{
+              left: pickerStyle.left,
+              top: pickerStyle.top,
+              width: pickerStyle.width,
+              maxHeight: pickerStyle.maxHeight,
+            }}
             role="listbox"
           >
             {filtered.length === 0 ? (
@@ -753,8 +869,8 @@ const QuickComposeMentionField = forwardRef<QuickComposeMentionFieldHandle, Quic
     <div className="relative min-w-0 flex-1" onDragOver={onDragOver} onDrop={onDrop}>
       <div
         ref={rowRef}
-        className={`flex w-full flex-wrap items-center gap-x-0.5 gap-y-1 py-0.5 ${
-          multiline ? 'min-h-[5.5rem] content-start' : 'min-h-[2rem]'
+        className={`flex w-full gap-x-0.5 gap-y-1 py-0.5 ${
+          multiline ? 'min-h-[7rem] flex-wrap items-start content-start' : 'min-h-[2rem] flex-wrap items-center'
         } ${mentionPointerDragId ? 'select-none' : ''}`}
         role="group"
         aria-label={ariaLabel}
@@ -814,7 +930,9 @@ const QuickComposeMentionField = forwardRef<QuickComposeMentionFieldHandle, Quic
               data-qc-seg-id={seg.id}
               className={
                 fillRemaining
-                  ? 'inline-flex min-w-0 flex-1 max-w-full align-middle'
+                  ? multiline
+                    ? 'inline-flex w-full min-w-full flex-[1_1_100%] basis-full max-w-full align-top'
+                    : 'inline-flex min-w-0 flex-1 max-w-full align-middle'
                   : 'inline w-fit max-w-full align-middle'
               }
             >
@@ -823,6 +941,7 @@ const QuickComposeMentionField = forwardRef<QuickComposeMentionFieldHandle, Quic
                 value={seg.value}
                 multiline={multiline}
                 rows={rows}
+                multilineMaxHeightPx={multilineMaxHeightPx}
                 disabled={disabled}
                 ariaLabel={ariaLabel}
                 fillRemaining={fillRemaining}

@@ -5,7 +5,7 @@ const path = require('path');
 const { randomUUID } = require('node:crypto');
 
 const SCHEMA_VERSION = 1;
-const BODY_TOOLS_VERSION = 2;
+const BODY_TOOLS_VERSION = 4;
 const DEFAULT_SESSION_ID = 'default';
 
 function ensureDir(p) {
@@ -109,6 +109,12 @@ function createAgentStore(deps) {
       mcpEnabled: false,
       mcpPort: 19120,
       mcpToken: null,
+      hermesGatewayUrl: 'http://127.0.0.1:8642/v1',
+      hermesApiKey: '',
+      hermesModel: 'hermes-agent',
+      hermesManagedGateway: true,
+      hermesGatewayKind: 'official',
+      brainSetupCompleted: false,
     };
     try {
       const j = JSON.parse(fs.readFileSync(settingsPath(), 'utf8'));
@@ -124,6 +130,19 @@ function createAgentStore(deps) {
           ? Math.min(65535, Math.max(1024, Number(j.mcpPort)))
           : defaults.mcpPort,
         mcpToken: j.mcpToken != null ? String(j.mcpToken) : null,
+        hermesGatewayUrl:
+          j.hermesGatewayUrl != null
+            ? String(j.hermesGatewayUrl).trim().replace(/\/$/, '') || defaults.hermesGatewayUrl
+            : defaults.hermesGatewayUrl,
+        hermesApiKey: j.hermesApiKey != null ? String(j.hermesApiKey).trim() : defaults.hermesApiKey,
+        hermesModel: j.hermesModel != null ? String(j.hermesModel).trim() : defaults.hermesModel,
+        hermesManagedGateway:
+          j.hermesManagedGateway != null ? Boolean(j.hermesManagedGateway) : defaults.hermesManagedGateway,
+        hermesGatewayKind:
+          j.hermesGatewayKind === 'dev' || j.hermesGatewayKind === 'official'
+            ? j.hermesGatewayKind
+            : defaults.hermesGatewayKind,
+        brainSetupCompleted: j.brainSetupCompleted != null ? Boolean(j.brainSetupCompleted) : defaults.brainSetupCompleted,
       };
     } catch {
       return { ...defaults };
@@ -132,7 +151,29 @@ function createAgentStore(deps) {
 
   function writeSettings(patch) {
     const cur = readSettings();
-    const next = { ...cur, ...patch };
+    const raw = patch && typeof patch === 'object' ? patch : {};
+    const normalized = { ...raw };
+    if (raw.hermesGatewayUrl != null) {
+      const u = String(raw.hermesGatewayUrl).trim().replace(/\/$/, '');
+      normalized.hermesGatewayUrl = u || cur.hermesGatewayUrl;
+    }
+    if (raw.hermesApiKey != null) {
+      normalized.hermesApiKey = String(raw.hermesApiKey).trim();
+    }
+    if (raw.hermesModel != null) {
+      normalized.hermesModel = String(raw.hermesModel).trim();
+    }
+    if (raw.hermesManagedGateway != null) {
+      normalized.hermesManagedGateway = Boolean(raw.hermesManagedGateway);
+    }
+    if (raw.hermesGatewayKind != null) {
+      const k = String(raw.hermesGatewayKind).trim();
+      if (k === 'dev' || k === 'official') normalized.hermesGatewayKind = k;
+    }
+    if (raw.brainSetupCompleted != null) {
+      normalized.brainSetupCompleted = Boolean(raw.brainSetupCompleted);
+    }
+    const next = { ...cur, ...normalized };
     fs.writeFileSync(settingsPath(), `${JSON.stringify(next, null, 2)}\n`, 'utf8');
     return next;
   }

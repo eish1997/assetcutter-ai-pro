@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from 'react';
+import { useExecutionElapsedSeconds } from '../hooks/useExecutionElapsedSeconds';
 
 /**
  * 工作流卡片「执行 / 排队」遮罩：与 [React Bits Pixel Card](https://reactbits.dev/components/pixel-card)
@@ -127,8 +128,10 @@ const WorkflowPixelBusyOverlay: React.FC<{
    * 主标题缩小；阶段说明不叠在栅格内（悬停遮罩可看 `title`），避免小卡片大字截断。
    */
   density?: 'default' | 'compact';
-  /** 当前任务已运行秒数（仅 executing 时展示） */
+  /** 当前任务已运行秒数（仅 executing 时展示；与 executionStartedAt 二选一） */
   elapsedSeconds?: number | null;
+  /** 任务开始时间戳；组件内本地 tick，避免父级每秒重绘 */
+  executionStartedAt?: number | null;
   className?: string;
 }> = ({
   executing,
@@ -136,9 +139,13 @@ const WorkflowPixelBusyOverlay: React.FC<{
   progressDetail,
   backdropImageSrc,
   density = 'default',
-  elapsedSeconds = null,
+  elapsedSeconds: elapsedSecondsProp = null,
+  executionStartedAt = null,
   className = '',
 }) => {
+  const localElapsed = useExecutionElapsedSeconds(executionStartedAt, executing);
+  const elapsedSeconds =
+    executionStartedAt != null ? localElapsed : elapsedSecondsProp;
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const pixelsRef = useRef<Pixel[]>([]);

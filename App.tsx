@@ -25,6 +25,7 @@ import { coerceTextModelRegistryId } from './services/modelRegistry/textModels';
 import { useEffectiveImageModelRows } from './hooks/useEffectiveImageGearRows';
 import { DEFAULT_IMAGE_MODEL_REGISTRY_ID } from './services/modelRegistry/imageModels';
 import { imageSizeSelectOptionsForRegistryModel } from './services/openaiAdapter';
+import { shouldOpenAnchoredMenuUp } from './services/floatingMenuPosition';
 import { loadRecords, addRecord as addGenerationRecord, updateScore as updateGenerationScore } from './services/recordStore';
 import { loadSnippets } from './services/snippetStore';
 import { AppStep, AppMode, LibraryItem, SystemConfig, AppTask, AssetCategory, DialogMessage, DialogSession, DialogTempItem, DIALOG_ASPECT_RATIO_OPTIONS, SUPPORTED_IMAGE_SIZES, type GenerationRecord, type CustomAppModule, type CapabilitySet, type WorkflowAsset, type WorkflowPendingTask, type ArenaCurrentStep, type ArenaStepEntry, type ArenaTimelineBlock } from './types';
@@ -336,7 +337,6 @@ function pickAssetsById(localAssets: WorkflowAsset[], ids: string[]): WorkflowAs
 /** 对话大图预览全景模式：与工作区 ImagePreviewOverlay 同 registry chunk */
 const LazyDialogTempEquirectViewer = getLazyImagePreviewViewer('image.equirect');
 
-const WorkflowSection = React.lazy(() => import('./components/WorkflowSection'));
 const CapabilityPresetSection = React.lazy(() => import('./components/CapabilityPresetSection'));
 const WorkflowComposerOverlay = React.lazy(() => import('./components/WorkflowComposerOverlay'));
 const PromptArenaSection = React.lazy(() => import('./components/PromptArenaSection'));
@@ -788,6 +788,11 @@ const DIALOG_PAGE_ENABLED = false;
 const MainApp: React.FC = () => {
   const { user, logout, loading: authLoading, refresh: refreshAuthUser } = useAuth();
   const userUiPrefs = useUserUiPrefs();
+  const [workflowSectionLoadAttempt, setWorkflowSectionLoadAttempt] = useState(0);
+  const WorkflowSection = useMemo(
+    () => React.lazy(() => import('./components/workflow/workflowSectionLazy')),
+    [workflowSectionLoadAttempt],
+  );
 
   const [mode, setMode] = useState<AppMode>(AppMode.WORKFLOW);
   const [settingsScrollTarget, setSettingsScrollTarget] = useState<string | null>(null);
@@ -3242,6 +3247,8 @@ const MainApp: React.FC = () => {
   useEffect(() => subscribeDialogBridgePrefs(() => setDialogBridgePrefsState(getDialogBridgePrefs())), []);
   const [atSuggestionsOpen, setAtSuggestionsOpen] = useState(false);
   const [atSuggestionsCursor, setAtSuggestionsCursor] = useState(0);
+  const [atSuggestionsOpenUp, setAtSuggestionsOpenUp] = useState(true);
+  const atSuggestionsMenuRef = useRef<HTMLDivElement>(null);
   const dialogInputRef = useRef<HTMLTextAreaElement>(null);
   const dialogInputWrapperRef = useRef<HTMLDivElement>(null);
   const [dialogInputScrollOverflow, setDialogInputScrollOverflow] = useState(false);
@@ -3393,6 +3400,37 @@ const MainApp: React.FC = () => {
     document.addEventListener('mousedown', onMouseDown);
     return () => document.removeEventListener('mousedown', onMouseDown);
   }, [atSuggestionsOpen]);
+
+  const recomputeAtSuggestionsPlacement = useCallback(() => {
+    const wrapper = dialogInputWrapperRef.current;
+    const menu = atSuggestionsMenuRef.current;
+    if (!wrapper || !menu) return;
+    const wrapRect = wrapper.getBoundingClientRect();
+    setAtSuggestionsOpenUp(
+      shouldOpenAnchoredMenuUp({
+        anchorTop: wrapRect.top,
+        anchorBottom: wrapRect.bottom,
+        menuHeight: menu.offsetHeight,
+      })
+    );
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!atSuggestionsOpen) return;
+    recomputeAtSuggestionsPlacement();
+  }, [
+    atSuggestionsOpen,
+    dialogInputImages.length,
+    dialogTempFiltered.length,
+    recomputeAtSuggestionsPlacement,
+  ]);
+
+  useEffect(() => {
+    if (!atSuggestionsOpen) return;
+    const onResize = () => recomputeAtSuggestionsPlacement();
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [atSuggestionsOpen, recomputeAtSuggestionsPlacement]);
 
   useEffect(() => {
     const completed = tasks.filter(t => t.status === 'SUCCESS' || t.status === 'FAILED');
@@ -5361,8 +5399,11 @@ const MainApp: React.FC = () => {
                   onOpenWorkspaceUploadFailureDetail={requestOpenWorkspaceUploadFailureDetail}
                   workspaceUploadingProjectId={workspaceUploadingProjectId}
                   onOpenWorkspaceTrash={() => void openWorkspaceTrashDialog()}
+                  onWorkflowSectionLoadRetry={() => setWorkflowSectionLoadAttempt((n) => n + 1)}
+                  workflowSectionSuspenseKey={workflowSectionLoadAttempt}
                   renderWorkflowSection={() => (
                     <WorkflowSection
+                      key={workflowSectionLoadAttempt}
                       quickComposeShellActive={mode === AppMode.WORKFLOW}
                       textModelRegistryId={config.modelText}
                       capabilityPresets={capabilityPresets}
@@ -6227,7 +6268,12 @@ const MainApp: React.FC = () => {
                         className={`flex-1 min-w-0 min-h-12 max-h-[min(40vh,280px)] resize-none border-0 bg-transparent py-[14px] pr-4 text-[11px] leading-5 outline-none ring-0 focus:ring-0 transition-colors placeholder:text-gray-600 rounded-r-xl ${dialogInputScrollOverflow ? 'overflow-y-auto' : 'overflow-y-hidden'}`}
                       />
                       {atSuggestionsOpen && (dialogInputImages.length > 0 || dialogTempFiltered.length > 0) && (
-                        <div className="absolute left-0 right-0 bottom-full mb-1 z-[5000] rounded-xl ring-1 ring-white/[0.06] bg-[#0f0f0f] shadow-xl py-1 max-h-[min(50vh,240px)] overflow-y-auto">
+                        <div
+                          ref={atSuggestionsMenuRef}
+                          className={`absolute left-0 right-0 z-[5000] rounded-xl ring-1 ring-white/[0.06] bg-[#0f0f0f] shadow-xl py-1 max-h-[min(50vh,240px)] overflow-y-auto ${
+                            atSuggestionsOpenUp ? 'bottom-full mb-1' : 'top-full mt-1'
+                          }`}
+                        >
                           {dialogInputImages.length > 0 && (
                             <div className="px-2 py-1 text-[8px] font-black text-gray-500 uppercase">输入框图片</div>
                           )}

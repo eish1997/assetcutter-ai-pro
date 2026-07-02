@@ -14,6 +14,7 @@ const { createAgentStore } = require('../companion-desktop/agent-store.cjs');
 const { createAgentSessionService } = require('../companion-desktop/agent-session/index.cjs');
 const { createAgentBodyHost, ALL_TOOL_SCHEMAS } = require('../companion-desktop/agent-body-host.cjs');
 const { createAgentPolicy } = require('../companion-desktop/agent-policy.cjs');
+const { createAgentScriptHubClient } = require('../companion-desktop/agent-script-hub-client.cjs');
 
 const results = [];
 
@@ -74,6 +75,59 @@ function httpGet(url, headers = {}) {
     req.on('error', (e) => resolve({ status: 0, text: e.message, json: null }));
     req.end();
   });
+}
+
+function httpPost(url, body, headers = {}) {
+  return new Promise((resolve) => {
+    const u = new URL(url);
+    const payload = JSON.stringify(body);
+    const req = http.request(
+      {
+        hostname: u.hostname,
+        port: u.port,
+        path: u.pathname + u.search,
+        method: 'POST',
+        timeout: 8000,
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(payload),
+          ...headers,
+        },
+      },
+      (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => {
+          const text = Buffer.concat(chunks).toString('utf8');
+          let json = null;
+          try {
+            json = JSON.parse(text);
+          } catch {
+            /* ignore */
+          }
+          resolve({ status: res.statusCode, text, json });
+        });
+      },
+    );
+    req.on('timeout', () => {
+      req.destroy();
+      resolve({ status: 0, text: 'timeout', json: null });
+    });
+    req.on('error', (e) => resolve({ status: 0, text: e.message, json: null }));
+    req.write(payload);
+    req.end();
+  });
+}
+
+async function nodeFetchImpl(url, init = {}) {
+  const method = init.method || 'GET';
+  if (method === 'POST') {
+    const body = init.body ? JSON.parse(String(init.body)) : {};
+    const r = await httpPost(url, body, init.headers || {});
+    return { ok: r.status >= 200 && r.status < 300, status: r.status, json: r.json, text: r.text };
+  }
+  const r = await httpGet(url, init.headers || {});
+  return { ok: r.status >= 200 && r.status < 300, status: r.status, json: r.json, text: r.text };
 }
 
 async function mcpRpc(port, token, method, params = {}) {
@@ -281,18 +335,18 @@ async function main() {
     ['local-companion', 18765],
     ['auth-api', 9100],
     ['vite', 3000],
-    ['script-hub-api', 9101],
+    ['script-hub-tool-bridge', 8787],
     ['agent-mcp', 19120],
   ];
   for (const [name, port] of ports) {
     const open = await probePort(port);
     if (open) pass(`port.${name}`, String(port));
-    else if (name === 'script-hub-api') skip(`port.${name}`, '9101 未起（Docker/Postgres）');
+    else if (name === 'script-hub-tool-bridge') skip(`port.${name}`, '在 ScriptHub 目录执行 npm run tool-bridge:server');
     else fail(`port.${name}`, `${port} 不可达`);
   }
 
   console.log('\n[2] 工具注册');
-  if (ALL_TOOL_SCHEMAS.length === 16) pass('tools.count', '16 ac.*');
+  if (ALL_TOOL_SCHEMAS.length === 17) pass('tools.count', '17 ac.*');
   else fail('tools.count', String(ALL_TOOL_SCHEMAS.length));
 
   console.log('\n[3] 主站 Agent API（未登录）');
@@ -313,7 +367,7 @@ async function main() {
     const port = settings.mcpPort || 19120;
     const list = await mcpRpc(port, settings.mcpToken, 'tools/list');
     const toolCount = list?.result?.tools?.length;
-    if (toolCount === 16) pass('mcp.tools-list', '16 tools');
+    if (toolCount === 17) pass('mcp.tools-list', '17 tools');
     else fail('mcp.tools-list', String(toolCount));
 
     const state = await mcpRpc(port, settings.mcpToken, 'tools/call', {
@@ -351,6 +405,60 @@ async function main() {
     pass('live.messages-jsonl', `${lines.length} lines`);
   } else {
     skip('live.messages-jsonl', '尚无 Copilot 对话记录');
+  }
+
+  console.log('\n[8] Script Hub Tool Bridge');
+  const tbHealth = await httpGet('http://127.0.0.1:8787/health');
+  if (tbHealth.status === 200 && tbHealth.json?.ok) pass('scripthub.tool-bridge.health', '200');
+  else skip('scripthub.tool-bridge.health', '8787 未启动或 /health 异常');
+
+  const tbTools = await httpGet('http://127.0.0.1:8787/tool-bridge/tools');
+  if (tbTools.status === 200 && Array.isArray(tbTools.json?.data) && tbTools.json.data.length >= 1) {
+    pass('scripthub.tool-bridge.tools', `${tbTools.json.data.length} tools`);
+  } else if (tbHealth.status !== 200) {
+    skip('scripthub.tool-bridge.tools', 'Tool Bridge 未运行');
+  } else {
+    fail('scripthub.tool-bridge.tools', `status=${tbTools.status}`);
+  }
+
+  console.log('\n[9] ac.script_hub.* 工具（BodyHost + Tool Bridge）');
+  if (tbHealth.status !== 200) {
+    skip('tool.script_hub.list', 'Tool Bridge 未运行');
+    skip('tool.script_hub.run', 'Tool Bridge 未运行');
+  } else {
+    const scriptHubClient = createAgentScriptHubClient({
+      getScriptHubApiUrl: () => 'http://localhost:8787/',
+      normalizeScriptHubApiUrl: (raw) => {
+        const t = String(raw || '').trim();
+        try {
+          return new URL(t).href;
+        } catch {
+          return '';
+        }
+      },
+      navigateShell: async () => ({ ok: true }),
+      fetchImpl: nodeFetchImpl,
+    });
+    const listRes = await scriptHubClient.listScripts({ limit: 10 });
+    if (listRes.ok && listRes.structured?.count >= 1) pass('tool.script_hub.list', `${listRes.structured.count} tools`);
+    else fail('tool.script_hub.list', listRes.error?.message || 'list failed');
+
+    const runRes = await scriptHubClient.runScript({
+      toolName: 'scriptHub.task.create',
+      input: {
+        capability_id: 'smoke.maya.export',
+        output_path: '/tmp/smoke-export.fbx',
+        overwrite: false,
+      },
+    });
+    if (runRes.ok && runRes.structured?.tool_call_id) {
+      pass('tool.script_hub.run', runRes.structured.tool_call_id);
+      const getRes = await scriptHubClient.getRun({ toolCallId: runRes.structured.tool_call_id });
+      if (getRes.ok && getRes.structured?.tool_call_id) pass('tool.script_hub.get', getRes.structured.status || 'ok');
+      else fail('tool.script_hub.get', getRes.error?.message || 'get failed');
+    } else {
+      fail('tool.script_hub.run', runRes.error?.message || 'run failed');
+    }
   }
 
   const failed = results.filter((r) => r.status === 'FAIL');

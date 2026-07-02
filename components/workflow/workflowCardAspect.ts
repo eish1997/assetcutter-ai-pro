@@ -1,5 +1,7 @@
 import type { WorkflowAsset } from '../../types';
 import { readSessionJson, writeSessionJson } from '../../services/clientPersist';
+import { isWorkflowStoryboardTableAsset } from '../../services/storyboardTableAsset';
+import { isWorkflowTextAsset } from '../../services/workflowTextAsset';
 
 /** 历史全局键；新逻辑按项目 id 分桶，避免多项目互相污染导致进项目时比例错乱 */
 const WORKFLOW_CARD_ASPECT_SESSION_KEY_LEGACY = 'ac:workflowCardAspect';
@@ -85,4 +87,24 @@ export function resolveWorkflowGridCardAspect(
     if (typeof m === 'number' && Number.isFinite(m) && m > 0) return m;
   }
   return fallback;
+}
+
+/** 工作区画布卡片占位宽高比（分镜表 / 文本 / 图片 / 合成 key） */
+export function resolveWorkflowCanvasCardAspect(
+  asset: WorkflowAsset | null | undefined,
+  aspectMap: Record<string, number>,
+  opts: {
+    hasDisplayImage?: boolean;
+    hasTextPayload?: boolean;
+    syntheticKey?: string;
+    fallback?: number;
+  } = {}
+): number {
+  const fallback = opts.fallback ?? 1;
+  if (asset && isWorkflowStoryboardTableAsset(asset)) return 4 / 3;
+  if (opts.hasDisplayImage) {
+    return resolveWorkflowGridCardAspect(asset, aspectMap, opts.syntheticKey, fallback);
+  }
+  if (asset && isWorkflowTextAsset(asset) && opts.hasTextPayload) return 3 / 4;
+  return resolveWorkflowGridCardAspect(asset, aspectMap, opts.syntheticKey, fallback);
 }

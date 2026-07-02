@@ -48,6 +48,8 @@ contextBridge.exposeInMainWorld('companionShell', {
   builtinExampleAvailable: () => timedInvoke('shell-builtin-example-available'),
   samLocalDesktopState: () => timedInvoke('shell-sam-local-desktop-state'),
   samLocalBootstrapRun: () => timedInvoke('shell-sam-local-bootstrap-run'),
+  hermesDesktopState: () => timedInvoke('shell-hermes-desktop-state'),
+  hermesBootstrapRun: () => timedInvoke('shell-hermes-bootstrap-run', 1200000),
   rembgDesktopState: () => timedInvoke('shell-rembg-desktop-state'),
   rembgBootstrapRun: () => timedInvoke('shell-rembg-bootstrap-run'),
   paddleOcrDesktopState: () => timedInvoke('shell-paddleocr-desktop-state'),
@@ -100,6 +102,16 @@ contextBridge.exposeInMainWorld('companionShell', {
       }
     });
   },
+  onHermesBootstrapLog: (handler) => {
+    if (typeof handler !== 'function') return;
+    ipcRenderer.on('hermes-bootstrap-log', (_evt, payload) => {
+      try {
+        handler(payload);
+      } catch {
+        /* ignore */
+      }
+    });
+  },
   onRembgBootstrapLog: (handler) => {
     if (typeof handler !== 'function') return;
     ipcRenderer.on('rembg-bootstrap-log', (_evt, payload) => {
@@ -135,9 +147,16 @@ contextBridge.exposeInMainWorld('companionShell', {
   defaultSiteUrl: defaultShellSiteUrl(),
   defaultScriptHubUrl: (() => {
     try {
-      return app.isPackaged ? 'https://scripts.adrazzo.com/' : 'http://localhost:5174/';
+      return app.isPackaged ? 'https://scripts.adrazzo.com/' : 'http://localhost:5173/';
     } catch {
-      return 'http://localhost:5174/';
+      return 'http://localhost:5173/';
+    }
+  })(),
+  defaultScriptHubApiUrl: (() => {
+    try {
+      return 'http://localhost:8787/';
+    } catch {
+      return 'http://localhost:8787/';
     }
   })(),
   setCopilotLayout: (layout) => timedInvoke('shell-set-copilot-layout', layout || {}),
@@ -147,6 +166,26 @@ contextBridge.exposeInMainWorld('companionShell', {
     ipcRenderer.on('shell-sync-view', (_evt, payload) => {
       try {
         handler(payload);
+      } catch {
+        /* ignore */
+      }
+    });
+  },
+  onCopilotOnboardingFocus: (handler) => {
+    if (typeof handler !== 'function') return;
+    ipcRenderer.on('shell-focus-copilot-onboarding', () => {
+      try {
+        handler();
+      } catch {
+        /* ignore */
+      }
+    });
+  },
+  onCopilotRefreshOnboarding: (handler) => {
+    if (typeof handler !== 'function') return;
+    ipcRenderer.on('shell-copilot-refresh-onboarding', () => {
+      try {
+        handler();
       } catch {
         /* ignore */
       }
@@ -163,6 +202,11 @@ contextBridge.exposeInMainWorld('companionShell', {
     saveSettings: (patch) => timedInvoke('agent-settings-save', patch || {}),
     regenerateMcpToken: () => timedInvoke('agent-mcp-regenerate-token'),
     mcpStatus: () => timedInvoke('agent-mcp-status'),
+    hermesGatewayState: () => timedInvoke('agent-hermes-gateway-state'),
+    hermesGatewayProbe: () => timedInvoke('agent-hermes-gateway-probe'),
+    hermesGatewaySetup: (options) => timedInvoke('agent-hermes-gateway-setup', options || {}, 1200000),
+    hermesGatewayStop: () => timedInvoke('agent-hermes-gateway-stop'),
+    companionConnect: (options) => timedInvoke('agent-companion-connect', options || {}, 120000),
     onEvent: (handler) => {
       if (typeof handler !== 'function') return;
       ipcRenderer.on('agent-session:event', (_evt, payload) => {

@@ -22,6 +22,10 @@ export type WorkflowModeShellProps = {
   onOpenWorkspaceUploadFailureDetail?: (id: string) => void;
   workspaceUploadingProjectId?: string | null;
   onOpenWorkspaceTrash?: () => void;
+  /** 工作流 chunk 懒加载失败后重建 React.lazy */
+  onWorkflowSectionLoadRetry?: () => void;
+  /** 与 lazy 重试计数同步，强制 Suspense 重置 */
+  workflowSectionSuspenseKey?: number;
   /** 仅在已选项目时调用，避免未进入画布就实例化懒加载的 WorkflowSection */
   renderWorkflowSection: () => React.ReactNode;
 };
@@ -44,6 +48,8 @@ const WorkflowModeShell: React.FC<WorkflowModeShellProps> = ({
   onOpenWorkspaceUploadFailureDetail,
   workspaceUploadingProjectId,
   onOpenWorkspaceTrash,
+  onWorkflowSectionLoadRetry,
+  workflowSectionSuspenseKey = 0,
   renderWorkflowSection,
 }) => (
   <div className={activeWorkspaceProjectId ? 'relative flex h-full min-h-0 w-full flex-col' : 'relative w-full'}>
@@ -98,9 +104,14 @@ const WorkflowModeShell: React.FC<WorkflowModeShellProps> = ({
         </>
       )}
       {activeWorkspaceProjectId && (
-        <WorkflowErrorBoundary>
+        <WorkflowErrorBoundary onRetry={onWorkflowSectionLoadRetry}>
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            <Suspense fallback={<LazySectionFallback label="工作区" />}>{renderWorkflowSection()}</Suspense>
+            <Suspense
+              key={workflowSectionSuspenseKey}
+              fallback={<LazySectionFallback label="工作区" />}
+            >
+              {renderWorkflowSection()}
+            </Suspense>
           </div>
         </WorkflowErrorBoundary>
       )}

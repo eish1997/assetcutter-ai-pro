@@ -30,6 +30,12 @@ import type {
   QuickComposeSegment,
 } from '../services/quickComposeMention';
 import { mentionsFromSegments, mergeQuickComposeDropSlotsForMentions, newQuickComposeTextSegment } from '../services/quickComposeMention';
+import { parseWorkflowAssetIdsFromClipboardData } from '../services/workflowDragPipeline';
+import {
+  clampQuickComposeBarPosition,
+  computeQuickComposeExpandedTextMaxHeight,
+  QUICK_COMPOSE_VIEW_MARGIN,
+} from '../services/quickComposeBarViewport';
 
 export type WorkspaceQuickComposeGenSettings = {
   imageModelRegistryId: string;
@@ -104,6 +110,10 @@ export type WorkspaceQuickComposeBarProps = {
   onComposeInputCapabilityDrop?: (presetId: string) => void;
   /** 拖入工作区资产；zone 区分主图区 / 参考图区 */
   onComposeInputWorkflowDrop?: (e: React.DragEvent, zone: QuickComposeDropZone) => void;
+  /** 粘贴自缩略图/列表「复制 ID」的资产引用（不新建卡片） */
+  onPasteAssetRefs?: (assetIds: string[], zone: QuickComposeDropZone) => void;
+  /** 粘贴引用默认落入的拖入区；大图预览为 reference（当前图固定主图） */
+  pasteAssetRefZone?: QuickComposeDropZone;
   /** 仅 lightbox：隐藏主图区（当前画面即主图） */
   hideMainDropZone?: boolean;
   promptCards: WorkspaceQuickComposePromptCard[];
@@ -124,33 +134,18 @@ const QUICK_COMPOSE_PILL_TRIGGER =
 const QUICK_COMPOSE_MODE_CHIP_BASE =
   `inline-flex ${QUICK_COMPOSE_CTRL_H} min-h-6 max-h-6 shrink-0 items-center justify-center rounded-md px-1.5 text-[9px] font-bold leading-none transition-colors box-border`;
 
-const VIEW_MARGIN = 8;
+const VIEW_MARGIN = QUICK_COMPOSE_VIEW_MARGIN;
 /** 快捷条默认贴底：底边距视口底约 28px（与旧逻辑 top≈vh−92、高≈64 一致：92−64=28） */
 const QUICK_COMPOSE_BAR_BOTTOM_GAP = 28;
 
-/** 将 fixed 定位的 left/top 限制在当前视口内（随窗口缩放更新） */
+/** 将 fixed 定位的 left/top 限制在当前视口内（含上方浮层 overhang） */
 function clampBarToViewport(
   pos: { left: number; top: number },
   barEl: HTMLElement | null,
   vw: number,
   vh: number
 ): { left: number; top: number } {
-  let w: number;
-  let h: number;
-  if (barEl) {
-    const r = barEl.getBoundingClientRect();
-    w = r.width;
-    h = r.height;
-  } else {
-    w = Math.min(704, Math.max(280, vw - 24));
-    h = 64;
-  }
-  const maxLeft = Math.max(VIEW_MARGIN, vw - w - VIEW_MARGIN);
-  const maxTop = Math.max(VIEW_MARGIN, vh - h - VIEW_MARGIN);
-  return {
-    left: Math.max(VIEW_MARGIN, Math.min(maxLeft, pos.left)),
-    top: Math.max(VIEW_MARGIN, Math.min(maxTop, pos.top)),
-  };
+  return clampQuickComposeBarPosition(pos, barEl, vw, vh, VIEW_MARGIN);
 }
 
 /**
@@ -182,6 +177,8 @@ export default function WorkspaceQuickComposeBar({
   allowBatchCount,
   onComposeInputCapabilityDrop,
   onComposeInputWorkflowDrop,
+  onPasteAssetRefs,
+  pasteAssetRefZone = 'main',
   hideMainDropZone = false,
   promptCards,
   onRemovePromptCard,
@@ -196,12 +193,15 @@ export default function WorkspaceQuickComposeBar({
   const expandAnchorBottomRef = useRef<number | null>(null);
   /** 收起前记录底边，用于变矮时固定底边、向上收合（与展开对称） */
   const collapseAnchorBottomRef = useRef<number | null>(null);
+  /** 展开期间固定底边，输入增高时向上延伸且不超出视口 */
+  const expandedBarBottomRef = useRef<number | null>(null);
   const prevInputExpandedRef = useRef(false);
   const [dragging, setDragging] = useState(false);
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   /** 展开：输入区变高、整条变窄，便于编辑长文案 */
   const [inputExpanded, setInputExpanded] = useState(false);
+  const [composeTextMaxHeightPx, setComposeTextMaxHeightPx] = useState<number | undefined>(undefined);
   const [panelPos, setPanelPos] = useState<{
     /** 与触发药丸水平居中对齐：样式 left + translateX(-50%) */
     anchorX: number;
@@ -393,6 +393,21 @@ export default function WorkspaceQuickComposeBar({
     [handleComposeInputDrop, handleMainZoneDragOver, isLightbox]
   );
 
+  const pasteRefZone: QuickComposeDropZone =
+    pasteAssetRefZone ?? (hideMainDropZone ? 'reference' : 'main');
+
+  const handlePasteAssetRefs = useCallback(
+    (e: React.ClipboardEvent, zone: QuickComposeDropZone = pasteRefZone) => {
+      if (!onPasteAssetRefs) return;
+      const assetIds = parseWorkflowAssetIdsFromClipboardData(e.clipboardData);
+      if (assetIds.length === 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      onPasteAssetRefs(assetIds, zone);
+    },
+    [onPasteAssetRefs, pasteRefZone]
+  );
+
   const handleDropSlotClick = useCallback(
     (slot: QuickComposeDropSlot) => {
       mentionFieldRef.current?.stashCaretBeforeBlur();
@@ -413,15 +428,16 @@ export default function WorkspaceQuickComposeBar({
     [mainDropSlots, referenceDropSlots, mentionCandidates]
   );
 
-  /** 仅在有拖入图片时展示主图/参考图两区（无图时不占位） */
+  /** 仅在有拖入图片时展示主图/参考图两区；大图模式始终展示参考图区（当前图固定为主图） */
   const showSplitDropZones =
-    mainDropSlots.length > 0 || referenceDropSlots.length > 0;
+    hideMainDropZone || mainDropSlots.length > 0 || referenceDropSlots.length > 0;
 
   const hasMainDropSlots = mainDropSlots.length > 0;
   const hasReferenceDropSlots = referenceDropSlots.length > 0;
   /** 参考区有图时需保留主区作跨区拖放目标；主区有图时保留参考区作空拖入位 */
   const showMainDropColumn = !hideMainDropZone && (hasMainDropSlots || hasReferenceDropSlots);
-  const showReferenceDropColumn = hasReferenceDropSlots || (!hideMainDropZone && hasMainDropSlots);
+  const showReferenceDropColumn =
+    hideMainDropZone || hasReferenceDropSlots || (!hideMainDropZone && hasMainDropSlots);
   /** 双列布局时始终显示分割线（含仅一侧有图、另一侧为空拖入位） */
   const showZoneDivider =
     !hideMainDropZone && showMainDropColumn && showReferenceDropColumn;
@@ -486,6 +502,62 @@ export default function WorkspaceQuickComposeBar({
     return () => ro.disconnect();
   }, [visible, placement, lightboxAnchorClient, applyLightboxBarToAnchor]);
 
+  const clampPositionToViewport = useCallback(() => {
+    setPosition((prev) => {
+      if (!prev) return prev;
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      return clampBarToViewport(prev, barRef.current, vw, vh);
+    });
+  }, []);
+
+  const syncExpandedBarViewport = useCallback(() => {
+    const el = barRef.current;
+    if (!el || !inputExpanded) {
+      setComposeTextMaxHeightPx(undefined);
+      return;
+    }
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const rect = el.getBoundingClientRect();
+    const maxBottom = vh - VIEW_MARGIN;
+
+    if (placement === 'lightbox') {
+      setComposeTextMaxHeightPx(
+        computeQuickComposeExpandedTextMaxHeight(el, {
+          anchorBottom: Math.min(rect.bottom, maxBottom),
+        })
+      );
+      if (lightboxAnchorRef.current) {
+        applyLightboxBarToAnchor();
+      } else {
+        clampPositionToViewport();
+      }
+      return;
+    }
+
+    if (expandedBarBottomRef.current == null) {
+      expandedBarBottomRef.current = Math.min(rect.bottom, maxBottom);
+    }
+    const bottom = Math.min(expandedBarBottomRef.current, maxBottom);
+    const h = rect.height;
+    const nextTop = bottom - h;
+
+    setComposeTextMaxHeightPx(
+      computeQuickComposeExpandedTextMaxHeight(el, { anchorBottom: bottom })
+    );
+
+    setPosition((prev) => {
+      if (!prev) return prev;
+      const clamped = clampBarToViewport({ left: prev.left, top: nextTop }, el, vw, vh);
+      expandedBarBottomRef.current = Math.min(clamped.top + h, maxBottom);
+      if (Math.abs(clamped.top - prev.top) < 0.5 && Math.abs(clamped.left - prev.left) < 0.5) {
+        return prev;
+      }
+      return clamped;
+    });
+  }, [inputExpanded, placement, applyLightboxBarToAnchor, clampPositionToViewport]);
+
   useEffect(() => {
     if (!dragging) return;
     const onMove = (e: PointerEvent) => {
@@ -502,6 +574,10 @@ export default function WorkspaceQuickComposeBar({
     const onUp = () => {
       dragOffsetRef.current = null;
       setDragging(false);
+      if (inputExpanded && barRef.current) {
+        expandedBarBottomRef.current = barRef.current.getBoundingClientRect().bottom;
+        syncExpandedBarViewport();
+      }
     };
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
@@ -509,7 +585,7 @@ export default function WorkspaceQuickComposeBar({
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
     };
-  }, [dragging]);
+  }, [dragging, inputExpanded, syncExpandedBarViewport]);
 
   useLayoutEffect(() => {
     if (!settingsOpen || typeof window === 'undefined') return;
@@ -568,15 +644,6 @@ export default function WorkspaceQuickComposeBar({
     return () => window.removeEventListener('mousedown', onDown, true);
   }, [settingsOpen]);
 
-  const clampPositionToViewport = useCallback(() => {
-    setPosition((prev) => {
-      if (!prev) return prev;
-      const vw = window.innerWidth;
-      const vh = window.innerHeight;
-      return clampBarToViewport(prev, barRef.current, vw, vh);
-    });
-  }, []);
-
   useLayoutEffect(() => {
     if (!visible) return;
     const el = barRef.current;
@@ -589,16 +656,20 @@ export default function WorkspaceQuickComposeBar({
     if (inputExpanded && !wasExpanded) {
       const bottom = expandAnchorBottomRef.current;
       expandAnchorBottomRef.current = null;
+      if (bottom != null) expandedBarBottomRef.current = bottom;
       setPosition((prev) => {
         if (bottom == null || prev == null) return prev;
         const h = el.getBoundingClientRect().height;
         const nextTop = bottom - h;
         return clampBarToViewport({ left: prev.left, top: nextTop }, el, vw, vh);
       });
+      requestAnimationFrame(() => syncExpandedBarViewport());
       return;
     }
 
     if (!inputExpanded && wasExpanded) {
+      expandedBarBottomRef.current = null;
+      setComposeTextMaxHeightPx(undefined);
       const bottom = collapseAnchorBottomRef.current;
       collapseAnchorBottomRef.current = null;
       if (bottom != null) {
@@ -613,7 +684,25 @@ export default function WorkspaceQuickComposeBar({
     }
 
     clampPositionToViewport();
-  }, [inputExpanded, visible, clampPositionToViewport]);
+  }, [inputExpanded, visible, clampPositionToViewport, syncExpandedBarViewport]);
+
+  useLayoutEffect(() => {
+    if (!visible || !inputExpanded) return;
+    const el = barRef.current;
+    if (!el) return;
+    syncExpandedBarViewport();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => syncExpandedBarViewport());
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [visible, inputExpanded, syncExpandedBarViewport, segments]);
+
+  useEffect(() => {
+    if (!visible || !inputExpanded) return;
+    const onResize = () => syncExpandedBarViewport();
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [visible, inputExpanded, syncExpandedBarViewport]);
 
   useEffect(() => {
     if (!visible) return;
@@ -1009,6 +1098,7 @@ export default function WorkspaceQuickComposeBar({
     <>
       <div
         ref={barRef}
+        data-workflow-quick-compose-bar
         className={`pointer-events-auto fixed max-w-[96vw] px-2 ${
           inputExpanded
             ? 'w-[min(28rem,calc(100vw-1.5rem))]'
@@ -1017,6 +1107,7 @@ export default function WorkspaceQuickComposeBar({
         style={barPositionStyle}
         onClick={isLightbox ? (e) => e.stopPropagation() : undefined}
         onWheel={isLightbox ? (e) => e.stopPropagation() : undefined}
+        onPasteCapture={(e) => handlePasteAssetRefs(e, pasteRefZone)}
         {...(isLightbox ? ({ 'data-image-preview-no-wheel': '' } as const) : {})}
       >
         {/* 预设卡片 / 主图·参考图区：叠在药丸上方；主图与参考图左右并排 */}
@@ -1024,6 +1115,7 @@ export default function WorkspaceQuickComposeBar({
           {hasDropZones ? (
             <div
               className="pointer-events-auto absolute bottom-full left-0 right-0 z-[1] mb-2 flex flex-col items-center gap-2 px-0.5"
+              data-quick-compose-above
               onDragOver={
                 isLightbox || showSplitDropZones ? undefined : handleMainZoneDragOver
               }
@@ -1075,7 +1167,7 @@ export default function WorkspaceQuickComposeBar({
                   {showZoneDivider ? <div className="pointer-events-none" aria-hidden /> : null}
                   {showReferenceDropColumn ? (
                     <span className="justify-self-center px-1.5 text-[9px] font-semibold text-gray-500">
-                      参考图
+                      {hideMainDropZone ? '参考图（当前图为主图）' : '参考图'}
                     </span>
                   ) : null}
 
@@ -1133,7 +1225,9 @@ export default function WorkspaceQuickComposeBar({
                         }
                         onSlotClick={handleDropSlotClick}
                         onStashCaret={() => mentionFieldRef.current?.stashCaretBeforeBlur()}
-                        emptyHint="拖入参考图"
+                        emptyHint={
+                          hideMainDropZone ? '粘贴或 @ 引用其它资产' : '拖入参考图'
+                        }
                       />
                     </div>
                   ) : null}
@@ -1144,10 +1238,10 @@ export default function WorkspaceQuickComposeBar({
 
           {inputExpanded ? (
             <div
-              className={`flex flex-col gap-2 px-2 py-2 ${WORKFLOW_QUICK_COMPOSE_BAR_SHELL}`}
+              className={`flex max-h-[calc(100dvh-16px)] flex-col gap-2 overflow-hidden px-2 py-2 ${WORKFLOW_QUICK_COMPOSE_BAR_SHELL}`}
               role="search"
             >
-              <div className="flex min-w-0 items-start gap-1.5">
+              <div className="flex min-h-0 min-w-0 flex-1 items-stretch gap-1.5">
                 <QuickComposeMentionField
                   ref={mentionFieldRef}
                   segments={segments}
@@ -1157,7 +1251,8 @@ export default function WorkspaceQuickComposeBar({
                   placeholder={placeholder}
                   disabled={disabled}
                   multiline
-                  rows={5}
+                  rows={8}
+                  multilineMaxHeightPx={composeTextMaxHeightPx}
                   ariaLabel={isLightbox ? '大图预览快捷生成描述' : '快捷生成描述'}
                   onSubmit={onSubmit}
                   onDragOver={handleComposeInputDragOver}

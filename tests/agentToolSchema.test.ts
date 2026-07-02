@@ -50,11 +50,11 @@ describe('agent P0 tool schemas', () => {
 });
 
 describe('agent P1 tool schemas', () => {
-  it('registers nine P1 tools', () => {
-    expect(P1_TOOL_SCHEMAS).toHaveLength(9);
+  it('registers ten P1 tools', () => {
+    expect(P1_TOOL_SCHEMAS).toHaveLength(10);
   });
 
   it('ALL_TOOL_SCHEMAS combines P0 P1 P2', () => {
-    expect(ALL_TOOL_SCHEMAS).toHaveLength(16);
+    expect(ALL_TOOL_SCHEMAS).toHaveLength(17);
   });
 });

@@ -3,6 +3,7 @@ import {
   getLazyImagePreviewViewer,
   PreviewShell,
   PreviewViewerFallback,
+  PreviewImageLoadingState,
   previewPolicyForMode,
   type ImagePreviewCanvasAdjustControl,
   type ImagePreviewLayoutMode,
@@ -16,6 +17,11 @@ import {
 } from '../services/imagePreviewPointerGeometry';
 import { Box, Contrast, Globe2, GripHorizontal, Image as ImageIcon, Mountain, Save, Scaling, X } from 'lucide-react';
 import { readLocalString, writeLocalString } from '../services/clientPersist';
+import {
+  isWorkflowLightboxBootAtLeast,
+  WORKFLOW_LIGHTBOX_BOOT_RANK,
+  type WorkflowLightboxBootPhase,
+} from '../hooks/useWorkflowLightboxBoot';
 import { CustomDropdown } from './ui/CustomDropdown';
 import {
   IMAGE_LIGHTBOX_TOOL_ICON_BTN_IDLE,
@@ -31,6 +37,20 @@ import type { WorkflowLightboxImageWriteBackPayload } from '../services/imagePre
 
 const NO_WHEEL = '[data-image-preview-no-wheel]';
 const SCROLL = '[data-image-preview-scroll]';
+/** 大图右侧缩略图条：滚轮仅滚动列表，不切换主预览 */
+const LIGHTBOX_THUMB_STRIP_SCROLL = '[data-lightbox-asset-thumb-strip-scroll]';
+
+function wheelEventDeltaY(e: WheelEvent): number {
+  let dy = e.deltaY;
+  const dx = e.deltaX;
+  if (Math.abs(dx) > Math.abs(dy)) dy = dx;
+  if (e.deltaMode === 1) dy *= 16;
+  if (e.deltaMode === 2) dy *= 120;
+  if (!dy && typeof (e as unknown as { wheelDelta?: number }).wheelDelta === 'number') {
+    dy = -(e as unknown as { wheelDelta: number }).wheelDelta / 3;
+  }
+  return dy;
+}
 
 /** 与 `ImageAnnotationLightboxToolbar` 主栏图标同阶 */
 const PV_MODE_IC = { size: 17, strokeWidth: 1.75, className: 'shrink-0' as const };
@@ -52,6 +72,14 @@ const LIGHTBOX_BACKDROP_CLASS: Record<ImageLightboxBackdropId, string> = {
   black: 'bg-black',
   gray50: 'bg-[#808080]',
   white: 'bg-white',
+};
+
+/** 工作流列表卸载后的静态底图仍可见时，遮罩需半透明 */
+const LIGHTBOX_BACKDROP_OVER_LIST_CLASS: Record<ImageLightboxBackdropId, string> = {
+  frosted: 'bg-black/58 backdrop-blur-md',
+  black: 'bg-black/45',
+  gray50: 'bg-[#808080]/55',
+  white: 'bg-white/55',
 };
 
 const LIGHTBOX_BACKDROP_OPTIONS: Array<{
@@ -187,6 +215,14 @@ export type ImagePreviewOverlayProps = {
    * 传给 PreviewShell 的全屏层 z-index（Tailwind 类）。嵌套在更高 z 的全屏壳内（如工作流编排 `z-[2100]`）时必须高于父层，否则预览会显示在父层背后。
    */
   shellZIndexClassName?: string;
+  /** 遮罩下的静态底图（如工作流列表卸载前的截图） */
+  backdropImageSrc?: string | null;
+  /** 主图解码前的占位（如网格缩略图），配合壳层先开 */
+  placeholderImageSrc?: string | null;
+  /** 工作流分阶段启动：T0 仅壳+关闭，T2 完整工具条，T3 侧栏/标注 */
+  bootPhase?: WorkflowLightboxBootPhase;
+  /** 主图首帧 decode 完成（进入 T2） */
+  onPrimaryImageReady?: () => void;
   /** 右上角「平面/全景/关闭」左侧：额外控件（如工作流下载、丢弃版本） */
   topRightExtra?: React.ReactNode;
   children?: React.ReactNode;
@@ -302,6 +338,10 @@ export function ImagePreviewOverlay({
   contentRightInset = '0px',
   contentLeftInset = '0px',
   shellZIndexClassName,
+  backdropImageSrc,
+  placeholderImageSrc,
+  bootPhase = 't3',
+  onPrimaryImageReady,
   topRightExtra,
   children,
   flatImageOverlay,
@@ -359,6 +399,7 @@ export function ImagePreviewOverlay({
     canvasAdjustControl?.setResizeWriteBackPopOpen ?? setInternalResizeWriteBackPopOpen;
   const splitStretchExportRef = useRef<ImagePreviewSplitStretchExportState | null>(null);
   const [lockedDominant, setLockedDominant] = useState<{ axis: 'width' | 'height'; size: number } | null>(null);
+  const [primaryImageReady, setPrimaryImageReady] = useState(false);
   const imgRef = useRef<HTMLImageElement | null>(null);
   const internalPanoViewerRef = useRef<PanoramaViewportProjection | null>(null);
   const panoViewerRef = panoViewerRefProp ?? internalPanoViewerRef;
@@ -675,6 +716,25 @@ export function ImagePreviewOverlay({
     [flatNavigateCanvasOk]
   );
 
+  useLayoutEffect(() => {
+    setPrimaryImageReady(false);
+    if (!open || centerSlot || !imageSrc?.trim()) return;
+    const im = imgRef.current;
+    if (im?.complete && im.naturalWidth > 0 && im.naturalHeight > 0) {
+      setPrimaryImageReady(true);
+    }
+  }, [open, centerSlot, imageSrc, resetKey]);
+
+  useLayoutEffect(() => {
+    if (!open || !centerSlot) return;
+    onPrimaryImageReady?.();
+  }, [open, centerSlot, resetKey, onPrimaryImageReady]);
+
+  useEffect(() => {
+    if (!open || !primaryImageReady || centerSlot) return;
+    onPrimaryImageReady?.();
+  }, [open, primaryImageReady, centerSlot, onPrimaryImageReady]);
+
   useEffect(() => {
     if (!open) return;
     setPreviewLayoutAndNotify('flat');
@@ -965,6 +1025,18 @@ export function ImagePreviewOverlay({
 
       const t = e.target;
       if (!shiftAssetNav && t instanceof Element) {
+        const thumbStrip = t.closest(LIGHTBOX_THUMB_STRIP_SCROLL) as HTMLElement | null;
+        if (thumbStrip) {
+          e.preventDefault();
+          e.stopPropagation();
+          const dy = wheelEventDeltaY(e);
+          if (Math.abs(dy) >= 0.25 && thumbStrip.scrollHeight > thumbStrip.clientHeight + 1) {
+            thumbStrip.scrollTop += dy;
+          }
+          return;
+        }
+      }
+      if (!shiftAssetNav && t instanceof Element) {
         const scrollEl = t.closest(SCROLL) as HTMLElement | null;
         if (scrollEl && scrollEl.scrollHeight > scrollEl.clientHeight + 1) {
           const st = scrollEl.scrollTop;
@@ -1002,14 +1074,7 @@ export function ImagePreviewOverlay({
         }
       }
       e.preventDefault();
-      let dy = e.deltaY;
-      const dx = e.deltaX;
-      if (Math.abs(dx) > Math.abs(dy)) dy = dx;
-      if (e.deltaMode === 1) dy *= 16;
-      if (e.deltaMode === 2) dy *= 120;
-      if (!dy && typeof (e as unknown as { wheelDelta?: number }).wheelDelta === 'number') {
-        dy = -(e as unknown as { wheelDelta: number }).wheelDelta / 3;
-      }
+      const dy = wheelEventDeltaY(e);
       if (Math.abs(dy) < 0.25) return;
       const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
       const QUICK_STEP_THRESH = 4;
@@ -1232,6 +1297,7 @@ export function ImagePreviewOverlay({
     const nw = im.naturalWidth;
     const nh = im.naturalHeight;
     if (!nw || !nh) return;
+    setPrimaryImageReady(true);
     if (!innerLayoutStableKey) return;
     const next = lockByOriginalDominantAxis(nw, nh);
     setLockedDominant((prev) => prev ?? next);
@@ -1243,13 +1309,37 @@ export function ImagePreviewOverlay({
       const nw = im.naturalWidth;
       const nh = im.naturalHeight;
       if (!nw || !nh) return;
+      setPrimaryImageReady(true);
       handleImgLoad(e);
     },
     [handleImgLoad]
   );
 
   const hasImage = Boolean(imageSrc && imageSrc.trim());
-  if (!open || (!hasImage && !centerSlot)) return null;
+  const showPrimaryImageLoading = Boolean(open && hasImage && !centerSlot && !primaryImageReady);
+  const flatImageVisibleClass = primaryImageReady
+    ? 'opacity-100 transition-opacity duration-200 ease-out'
+    : 'opacity-0 pointer-events-none';
+  if (!open) return null;
+  if (!hasImage && !centerSlot) {
+    return (
+      <PreviewShell
+        open={open}
+        onClose={onClose}
+        focusKey={resetKey}
+        zIndexClassName={shellZIndexClassName ?? 'z-[2000]'}
+        backdropTintClassName={
+          backdropImageSrc
+            ? LIGHTBOX_BACKDROP_OVER_LIST_CLASS[lightboxBackdropId]
+            : LIGHTBOX_BACKDROP_CLASS[lightboxBackdropId]
+        }
+        backdropImageSrc={backdropImageSrc}
+      >
+        <PreviewImageLoadingState placeholderSrc={placeholderImageSrc} label="预览加载中…" />
+        {children}
+      </PreviewShell>
+    );
+  }
 
   const useFrameLock = Boolean(!centerSlot && innerLayoutStableKey && lockedDominant);
   const shellStyle: React.CSSProperties = {
@@ -1275,6 +1365,11 @@ export function ImagePreviewOverlay({
   };
 
   const showModeCycleHint = Boolean(!centerSlot && (enablePanoramaMode || hasModel3DMode || hasHeightfieldMode));
+  const bootRank = WORKFLOW_LIGHTBOX_BOOT_RANK[bootPhase];
+  const showToolbarExtended = bootRank >= WORKFLOW_LIGHTBOX_BOOT_RANK.t2;
+  const showToolbarHeavyChrome = bootRank >= WORKFLOW_LIGHTBOX_BOOT_RANK.t3;
+  const flatPrimaryImgRevealClass =
+    panoAnnotationBridge || splitStretchEnabled ? '' : flatImageVisibleClass;
 
   return (
     <PreviewShell
@@ -1282,8 +1377,16 @@ export function ImagePreviewOverlay({
       onClose={onClose}
       focusKey={resetKey}
       zIndexClassName={shellZIndexClassName ?? 'z-[2000]'}
-      backdropTintClassName={LIGHTBOX_BACKDROP_CLASS[lightboxBackdropId]}
+      backdropTintClassName={
+        backdropImageSrc
+          ? LIGHTBOX_BACKDROP_OVER_LIST_CLASS[lightboxBackdropId]
+          : LIGHTBOX_BACKDROP_CLASS[lightboxBackdropId]
+      }
+      backdropImageSrc={backdropImageSrc}
     >
+        {showPrimaryImageLoading ? (
+          <PreviewImageLoadingState placeholderSrc={placeholderImageSrc} />
+        ) : null}
         {!centerSlot &&
         enablePanoramaMode &&
         previewLayout === 'pano' &&
@@ -1415,7 +1518,7 @@ export function ImagePreviewOverlay({
                 src={imageSrc!}
                 className={
                   useFrameLock
-                    ? `block max-h-full max-w-full object-contain rounded-xl select-none ${
+                    ? `block max-h-full max-w-full object-contain rounded-xl select-none ${flatPrimaryImgRevealClass} ${
                         panoAnnotationBridge
                           ? 'pointer-events-none cursor-default opacity-0'
                           : splitStretchEnabled
@@ -1426,7 +1529,7 @@ export function ImagePreviewOverlay({
                                 ? 'cursor-grab active:cursor-grabbing'
                                 : 'cursor-zoom-in'
                       }`
-                    : `block max-h-[88vh] max-w-[92vw] object-contain rounded-xl select-none ${
+                    : `block max-h-[88vh] max-w-[92vw] object-contain rounded-xl select-none ${flatPrimaryImgRevealClass} ${
                         panoAnnotationBridge
                           ? 'pointer-events-none cursor-default opacity-0'
                           : splitStretchEnabled
@@ -1599,7 +1702,7 @@ export function ImagePreviewOverlay({
           className="absolute right-4 z-10 flex max-w-[calc(100vw-2rem)] flex-row flex-wrap items-start justify-end gap-2"
           style={{ top: 'max(0.5rem, env(safe-area-inset-top, 0px))' }}
         >
-          {heightfieldLayoutActive && !heightfieldToolbarHostRef ? (
+          {showToolbarHeavyChrome && heightfieldLayoutActive && !heightfieldToolbarHostRef ? (
             <div
               ref={heightfieldToolbarSlotRef}
               className={`${WORKFLOW_IMAGE_PREVIEW_RAIL} max-w-[min(78vw,38rem)] min-w-0 shrink`}
@@ -1614,43 +1717,47 @@ export function ImagePreviewOverlay({
             role="toolbar"
             aria-label="预览工具"
           >
-            {topRightExtra ? (
+            {showToolbarExtended && topRightExtra ? (
               <>
                 <div className="inline-flex items-center gap-1">{topRightExtra}</div>
                 <div className={WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER} aria-hidden />
               </>
             ) : null}
-            {modeSwitchRail ? (
+            {showToolbarExtended && modeSwitchRail ? (
               <>
                 {modeSwitchRail}
                 <div className={WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER} aria-hidden />
               </>
             ) : null}
-            <CustomDropdown
-              value={lightboxBackdropId}
-              onChange={(v) => {
-                const next = parseImageLightboxBackdrop(v);
-                setLightboxBackdropId(next);
-                writeLocalString(LIGHTBOX_BACKDROP_STORAGE_KEY, next);
-              }}
-              options={LIGHTBOX_BACKDROP_OPTIONS}
-              listDensity="compact"
-              listClassName="border border-white/[0.12] bg-[#0c0c10]/75 backdrop-blur-xl shadow-[0_12px_36px_rgba(0,0,0,0.5)] ring-1 ring-inset ring-white/[0.06]"
-              renderListItem={(opt) => (
-                <LightboxBackdropSwatch id={parseImageLightboxBackdrop(opt.value)} />
-              )}
-              triggerAriaLabel="切换画板颜色"
-              triggerClassName={IMAGE_LIGHTBOX_TOOL_ICON_BTN_IDLE}
-              renderTrigger={() => <Contrast {...PV_MODE_IC} aria-hidden />}
-              portalZIndex={{ backdrop: 2700, list: 2701 }}
-            />
-            {!canvasAdjustControl && (splitStretchUiOk || resizeWriteBackUiOk) ? (
+            {showToolbarExtended ? (
+              <CustomDropdown
+                value={lightboxBackdropId}
+                onChange={(v) => {
+                  const next = parseImageLightboxBackdrop(v);
+                  setLightboxBackdropId(next);
+                  writeLocalString(LIGHTBOX_BACKDROP_STORAGE_KEY, next);
+                }}
+                options={LIGHTBOX_BACKDROP_OPTIONS}
+                listDensity="compact"
+                listClassName="border border-white/[0.12] bg-[#0c0c10]/75 backdrop-blur-xl shadow-[0_12px_36px_rgba(0,0,0,0.5)] ring-1 ring-inset ring-white/[0.06]"
+                renderListItem={(opt) => (
+                  <LightboxBackdropSwatch id={parseImageLightboxBackdrop(opt.value)} />
+                )}
+                triggerAriaLabel="切换画板颜色"
+                triggerClassName={IMAGE_LIGHTBOX_TOOL_ICON_BTN_IDLE}
+                renderTrigger={() => <Contrast {...PV_MODE_IC} aria-hidden />}
+                portalZIndex={{ backdrop: 2700, list: 2701 }}
+              />
+            ) : null}
+            {showToolbarExtended && !canvasAdjustControl && (splitStretchUiOk || resizeWriteBackUiOk) ? (
               <>
                 <div className={WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER} aria-hidden />
                 {splitResizeToolbarInner}
               </>
             ) : null}
-            <div className={WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER} aria-hidden />
+            {showToolbarExtended ? (
+              <div className={WORKFLOW_IMAGE_PREVIEW_RAIL_DIVIDER} aria-hidden />
+            ) : null}
             <button
               type="button"
               onClick={onClose}

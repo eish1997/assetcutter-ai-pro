@@ -39,9 +39,9 @@ describe('agent P2 memory', () => {
 });
 
 describe('agent P2 tool schemas', () => {
-  it('registers four P2 tools totaling 16 ac.*', () => {
+  it('registers four P2 tools totaling 17 ac.*', () => {
     expect(P2_TOOL_SCHEMAS).toHaveLength(4);
-    expect(ALL_TOOL_SCHEMAS).toHaveLength(16);
+    expect(ALL_TOOL_SCHEMAS).toHaveLength(17);
   });
 });
 

@@ -29,6 +29,9 @@ const { createAgentWorkbenchClient } = require('./agent-workbench-client.cjs');
 const { createAgentScriptHubClient } = require('./agent-script-hub-client.cjs');
 const { createBrainAdapter, listBrainCatalog } = require('./brain-adapters/index.cjs');
 const { createAgentBodyMcpServer } = require('./agent-body-mcp.cjs');
+const hermesGatewayHost = require('./hermes-gateway-host.cjs');
+const hermesOfficialHost = require('./hermes-official-host.cjs');
+const companionConnect = require('./companion-connect.cjs');
 
 /** 打包壳无控制台时 stdout/stderr 可能 EPIPE；避免 uncaughtException 弹窗 */
 function ignoreStreamEpipe(stream) {
@@ -84,8 +87,28 @@ const DEFAULT_HTTP_PORT = 18765;
 /** 开发：`npm start`；安装包：未保存过主站时的「打开网站」默认 */
 const DEFAULT_SHELL_SITE_DEV = 'http://localhost:3000';
 const DEFAULT_SHELL_SITE_PACKAGED = 'https://assetcutter-ai-pro.vercel.app/';
-const DEFAULT_SCRIPT_HUB_DEV = 'http://localhost:5174/';
+const DEFAULT_SCRIPT_HUB_DEV = 'http://localhost:5173/';
+const DEFAULT_SCRIPT_HUB_API_DEV = 'http://localhost:8787/';
 const DEFAULT_SCRIPT_HUB_PACKAGED = 'https://scripts.adrazzo.com/';
+const LEGACY_SCRIPT_HUB_DEV = 'http://localhost:5174/';
+
+function migrateScriptHubUrl(url) {
+  const u = String(url || '').trim();
+  if (!u) return defaultScriptHubUrl();
+  try {
+    const parsed = new URL(u);
+    const host = parsed.hostname;
+    if ((host === 'localhost' || host === '127.0.0.1') && parsed.port === '5174') {
+      return DEFAULT_SCRIPT_HUB_DEV;
+    }
+  } catch {
+    /* ignore */
+  }
+  if (u === LEGACY_SCRIPT_HUB_DEV || u === 'http://127.0.0.1:5174/') {
+    return DEFAULT_SCRIPT_HUB_DEV;
+  }
+  return u;
+}
 
 function defaultShellSiteUrl() {
   try {
@@ -100,6 +123,15 @@ function defaultScriptHubUrl() {
     return app.isPackaged ? DEFAULT_SCRIPT_HUB_PACKAGED : DEFAULT_SCRIPT_HUB_DEV;
   } catch {
     return DEFAULT_SCRIPT_HUB_DEV;
+  }
+}
+
+function defaultScriptHubApiUrl() {
+  // Tool Bridge 为本机服务（:8787），与 Script Hub SPA 域名无关；打包版亦默认连本机 Bridge
+  try {
+    return DEFAULT_SCRIPT_HUB_API_DEV;
+  } catch {
+    return DEFAULT_SCRIPT_HUB_API_DEV;
   }
 }
 
@@ -193,13 +225,32 @@ let samBootstrapChild = null;
 let rembgBootstrapChild = null;
 /** @type {import('child_process').ChildProcess | null} */
 let paddleOcrBootstrapChild = null;
+/** @type {import('child_process').ChildProcess | null} */
+let hermesBootstrapChild = null;
 
 function anyDesktopBootstrapChildRunning() {
   const sam = samBootstrapChild && samBootstrapChild.exitCode === null && !samBootstrapChild.killed;
   const rem = rembgBootstrapChild && rembgBootstrapChild.exitCode === null && !rembgBootstrapChild.killed;
   const ocr =
     paddleOcrBootstrapChild && paddleOcrBootstrapChild.exitCode === null && !paddleOcrBootstrapChild.killed;
-  return Boolean(sam || rem || ocr);
+  const hermes =
+    hermesBootstrapChild && hermesBootstrapChild.exitCode === null && !hermesBootstrapChild.killed;
+  return Boolean(sam || rem || ocr || hermes);
+}
+
+function getHermesUserRoot() {
+  return path.join(app.getPath('userData'), 'hermes-runtime');
+}
+
+function hermesBootstrapScriptPath() {
+  try {
+    if (app.isPackaged) {
+      return path.join(process.resourcesPath, 'hermes-bootstrap', 'hermes-bootstrap.cjs');
+    }
+  } catch {
+    /* ignore */
+  }
+  return path.join(__dirname, 'hermes-bootstrap', 'hermes-bootstrap.cjs');
 }
 
 function shellSettingsPath() {
@@ -217,6 +268,8 @@ function readShellSettings() {
         volumeRoot: '',
         downloadDir: '',
         scriptHubUrl: defaultScriptHubUrl(),
+        scriptHubApiUrl: defaultScriptHubApiUrl(),
+        scriptHubApiToken: '',
       };
     }
     const j = JSON.parse(fs.readFileSync(p, 'utf8'));
@@ -226,11 +279,35 @@ function readShellSettings() {
       typeof j.authApiOrigin === 'string' ? j.authApiOrigin.trim().replace(/\/+$/, '') : '';
     const volumeRoot = typeof j.volumeRoot === 'string' ? j.volumeRoot.trim() : '';
     const downloadDir = typeof j.downloadDir === 'string' ? j.downloadDir.trim() : '';
-    const scriptHubUrl =
+    const rawScriptHub =
       typeof j.scriptHubUrl === 'string' && j.scriptHubUrl.trim()
         ? j.scriptHubUrl.trim()
         : defaultScriptHubUrl();
-    return { siteUrl, authApiOrigin, volumeRoot, downloadDir, scriptHubUrl };
+    const scriptHubUrl = migrateScriptHubUrl(rawScriptHub);
+    const rawScriptHubApi =
+      typeof j.scriptHubApiUrl === 'string' && j.scriptHubApiUrl.trim()
+        ? j.scriptHubApiUrl.trim()
+        : defaultScriptHubApiUrl();
+    const scriptHubApiUrl = normalizeScriptHubApiUrl(rawScriptHubApi) || defaultScriptHubApiUrl();
+    const scriptHubApiToken =
+      typeof j.scriptHubApiToken === 'string' ? j.scriptHubApiToken.trim() : '';
+    let settingsDirty = false;
+    if (scriptHubUrl !== rawScriptHub) {
+      j.scriptHubUrl = scriptHubUrl;
+      settingsDirty = true;
+    }
+    if (scriptHubApiUrl !== rawScriptHubApi) {
+      j.scriptHubApiUrl = scriptHubApiUrl;
+      settingsDirty = true;
+    }
+    if (settingsDirty) {
+      try {
+        fs.writeFileSync(p, `${JSON.stringify(j, null, 2)}\n`, 'utf8');
+      } catch {
+        /* ignore */
+      }
+    }
+    return { siteUrl, authApiOrigin, volumeRoot, downloadDir, scriptHubUrl, scriptHubApiUrl, scriptHubApiToken };
   } catch {
     return {
       siteUrl: fallbackSite,
@@ -238,6 +315,8 @@ function readShellSettings() {
       volumeRoot: '',
       downloadDir: '',
       scriptHubUrl: defaultScriptHubUrl(),
+      scriptHubApiUrl: defaultScriptHubApiUrl(),
+      scriptHubApiToken: '',
     };
   }
 }
@@ -274,6 +353,13 @@ function saveShellSettings(patch) {
   if (patch && typeof patch.scriptHubUrl === 'string') {
     const t = patch.scriptHubUrl.trim();
     cur.scriptHubUrl = t || defaultScriptHubUrl();
+  }
+  if (patch && typeof patch.scriptHubApiUrl === 'string') {
+    const t = patch.scriptHubApiUrl.trim();
+    cur.scriptHubApiUrl = normalizeScriptHubApiUrl(t) || defaultScriptHubApiUrl();
+  }
+  if (patch && typeof patch.scriptHubApiToken === 'string') {
+    cur.scriptHubApiToken = patch.scriptHubApiToken.trim();
   }
   fs.mkdirSync(path.dirname(shellSettingsPath()), { recursive: true });
   fs.writeFileSync(shellSettingsPath(), `${JSON.stringify(cur, null, 2)}\n`, 'utf8');
@@ -476,6 +562,155 @@ function resetAgentBrainCache() {
   agentBrainInstanceId = null;
 }
 
+function hermesSettingsChanged(prev, next) {
+  if (!prev || !next) return false;
+  return (
+    prev.hermesGatewayUrl !== next.hermesGatewayUrl ||
+    prev.hermesApiKey !== next.hermesApiKey ||
+    prev.hermesModel !== next.hermesModel ||
+    prev.hermesManagedGateway !== next.hermesManagedGateway ||
+    prev.hermesGatewayKind !== next.hermesGatewayKind
+  );
+}
+
+async function buildHermesGatewayStatus(settings) {
+  const state = hermesOfficialHost.getState(settings, getHermesUserRoot());
+  const apiKey = state.apiKey === '<unset>' ? '' : state.apiKey;
+  const probe = await hermesGatewayHost.probeGateway(state.gatewayUrl, apiKey);
+  return { ...state, probe };
+}
+
+async function bootstrapHermesGatewayIfNeeded() {
+  if (!agentStore) return;
+  const settings = agentStore.readSettings();
+  if (String(settings.defaultBrainId || '') !== 'hermes') return;
+  if (!settings.hermesManagedGateway) return;
+  const state = hermesOfficialHost.getState(settings, getHermesUserRoot());
+  const apiKey = state.apiKey === '<unset>' ? '' : state.apiKey;
+  const probe = await hermesGatewayHost.probeGateway(state.gatewayUrl, apiKey);
+  if (probe.ok) return;
+  const start = await hermesOfficialHost.startManagedGateway(settings, getHermesUserRoot());
+  if (!start.ok) {
+    if (start.needsBootstrap) return;
+    companionLog('warn', '[hermes] auto-start failed:', start.error || 'unknown');
+    return;
+  }
+  if (start.started || start.alreadyRunning || start.external) {
+    const ready = await hermesOfficialHost.waitForOfficialReady(state.gatewayUrl, apiKey, 120000);
+    if (ready.ok) {
+      agentStore.writeSettings({ brainSetupCompleted: true });
+      resetAgentBrainCache();
+      await ensureAgentBrainReady();
+      notifyCopilotRefreshOnboarding();
+    }
+  }
+}
+
+function runHermesBootstrapChild(sendLog) {
+  return new Promise((resolve) => {
+    const scriptPath = hermesBootstrapScriptPath();
+    if (!fs.existsSync(scriptPath)) {
+      resolve({ ok: false, error: '缺少 hermes-bootstrap 脚本' });
+      return;
+    }
+    const userRoot = getHermesUserRoot();
+    const st = hermesOfficialHost.readHermesRuntimeState(userRoot);
+    hermesBootstrapChild = spawn(process.execPath, [scriptPath], {
+      env: {
+        ...process.env,
+        ELECTRON_RUN_AS_NODE: '1',
+        AC_HERMES_USER_ROOT: userRoot,
+        ...(st && st.apiKey ? { AC_HERMES_API_KEY: st.apiKey } : {}),
+      },
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let outCarry = '';
+    let errCarry = '';
+    const feedLines = (carry, chunk) => {
+      const s = carry + String(chunk);
+      const parts = s.split(/\r?\n/);
+      const rest = parts.pop() || '';
+      for (const line of parts) {
+        const t = line.trim();
+        if (!t) continue;
+        try {
+          sendLog(JSON.parse(t));
+        } catch {
+          sendLog({ type: 'log', msg: t });
+        }
+      }
+      return rest;
+    };
+    const flushCarry = (carry) => {
+      const t = String(carry || '').trim();
+      if (!t) return;
+      try {
+        sendLog(JSON.parse(t));
+      } catch {
+        sendLog({ type: 'log', msg: t });
+      }
+    };
+    hermesBootstrapChild.stdout.on('data', (b) => {
+      outCarry = feedLines(outCarry, b);
+    });
+    hermesBootstrapChild.stderr.on('data', (b) => {
+      errCarry = feedLines(errCarry, b);
+    });
+    hermesBootstrapChild.on('error', (err) => {
+      hermesBootstrapChild = null;
+      sendLog({ type: 'error', msg: err.message });
+      resolve({ ok: false, error: err.message });
+    });
+    hermesBootstrapChild.on('close', (code) => {
+      flushCarry(outCarry);
+      flushCarry(errCarry);
+      hermesBootstrapChild = null;
+      const ok = code === 0;
+      sendLog({ type: 'bootstrap-finished', ok, exitCode: code });
+      resolve(ok ? { ok: true } : { ok: false, error: `安装失败 exit=${code}` });
+    });
+  });
+}
+
+function notifyCopilotRefreshOnboarding() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  try {
+    mainWindow.webContents.send('shell-copilot-refresh-onboarding');
+  } catch {
+    /* ignore */
+  }
+}
+
+function createCompanionConnectContext() {
+  return {
+    readAgentSettings: () => agentStore.readSettings(),
+    writeAgentSettings: (patch) => agentStore.writeSettings(patch),
+    readShellSettings: () => readShellSettings(),
+    writeShellSettings: (patch) => saveShellSettings(patch),
+    buildMcpClientConfig: () => (agentMcpServer ? agentMcpServer.buildMcpClientConfig() : null),
+    syncMcp: async () => {
+      if (agentMcpServer) await agentMcpServer.syncFromSettings();
+    },
+    getExportRoot: () => path.join(getAgentStoreRoot(), 'connect-exports'),
+    getHermesRuntime: () => hermesOfficialHost.readHermesRuntimeState(getHermesUserRoot()),
+  };
+}
+
+function maybeFocusCopilotOnboarding() {
+  if (!agentStore || !mainWindow || mainWindow.isDestroyed()) return;
+  const settings = agentStore.readSettings();
+  if (settings.brainSetupCompleted) return;
+  shellCopilotCollapsed = false;
+  agentStore.writeSettings({ copilotCollapsed: false });
+  layoutShellChrome();
+  try {
+    mainWindow.webContents.send('shell-focus-copilot-onboarding');
+  } catch {
+    /* ignore */
+  }
+}
+
 function normalizeScriptHubUrl(raw) {
   const t = String(raw || '').trim();
   if (!t) return defaultScriptHubUrl();
@@ -487,9 +722,27 @@ function normalizeScriptHubUrl(raw) {
   }
 }
 
+function normalizeScriptHubApiUrl(raw) {
+  const t = String(raw || '').trim();
+  if (!t) return defaultScriptHubApiUrl();
+  if (!/^https?:\/\//i.test(t)) return '';
+  try {
+    return new URL(t).href;
+  } catch {
+    return '';
+  }
+}
+
 function getScriptHubAllowedOrigins() {
   const href = normalizeScriptHubUrl(readShellSettings().scriptHubUrl);
-  const origins = new Set(['http://localhost:5174', 'http://127.0.0.1:5174']);
+  const origins = new Set([
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+    'http://localhost:5174',
+    'http://127.0.0.1:5174',
+    'http://localhost:8787',
+    'http://127.0.0.1:8787',
+  ]);
   if (href) {
     try {
       origins.add(new URL(href).origin);
@@ -2371,8 +2624,9 @@ function initAgentPlatform() {
   });
 
   const scriptHubClient = createAgentScriptHubClient({
-    getScriptHubUrl: () => readShellSettings().scriptHubUrl,
-    normalizeScriptHubUrl,
+    getScriptHubApiUrl: () => readShellSettings().scriptHubApiUrl,
+    getScriptHubApiToken: () => readShellSettings().scriptHubApiToken,
+    normalizeScriptHubApiUrl,
     navigateShell: navigateShellFromAgent,
   });
 
@@ -2415,6 +2669,7 @@ function initAgentPlatform() {
 
   void ensureAgentBrainReady();
   void agentMcpServer.syncFromSettings();
+  void bootstrapHermesGatewayIfNeeded();
 }
 
 function bindMainWindowWorkbenchLayoutHandlers() {
@@ -2470,6 +2725,7 @@ function openMainWindow() {
     if (companionUpdater.getUpdaterUiState) {
       broadcastShellUpdaterState(companionUpdater.getUpdaterUiState());
     }
+    setTimeout(() => maybeFocusCopilotOnboarding(), 120);
   });
 
   const shellHtml = path.join(__dirname, 'shell', 'index.html');
@@ -2957,16 +3213,18 @@ if (!gotLock) {
     return resolveAgentConfirm(confirmId, approved);
   });
 
-  ipcMain.handle('agent-settings-load', () => {
+  ipcMain.handle('agent-settings-load', async () => {
     if (!agentStore) return { ok: false, error: 'agent_not_ready' };
     const settings = agentStore.readSettings();
     const mcp = agentMcpServer ? agentMcpServer.status() : { enabled: false, running: false };
     const mcpConfig = agentMcpServer ? agentMcpServer.buildMcpClientConfig() : null;
+    const hermesGateway = await buildHermesGatewayStatus(settings);
     return {
       ok: true,
       settings,
       mcp,
       mcpConfig,
+      hermesGateway,
       brains: listBrainCatalog(),
       brainMetas: agentStore.listBrainMetas(),
       activeBrainId: agentSessionService ? agentSessionService.getBrainId() : 'stub',
@@ -2977,18 +3235,20 @@ if (!gotLock) {
     if (!agentStore) return { ok: false, error: 'agent_not_ready' };
     const prev = agentStore.readSettings();
     const next = agentStore.writeSettings(patch && typeof patch === 'object' ? patch : {});
-    if (prev.defaultBrainId !== next.defaultBrainId) {
+    if (prev.defaultBrainId !== next.defaultBrainId || hermesSettingsChanged(prev, next)) {
       resetAgentBrainCache();
       await ensureAgentBrainReady();
     }
     if (agentMcpServer) {
       await agentMcpServer.syncFromSettings();
     }
+    const hermesGateway = await buildHermesGatewayStatus(next);
     return {
       ok: true,
       settings: next,
       mcp: agentMcpServer ? agentMcpServer.status() : null,
       mcpConfig: agentMcpServer ? agentMcpServer.buildMcpClientConfig() : null,
+      hermesGateway,
       activeBrainId: agentSessionService ? agentSessionService.getBrainId() : 'stub',
     };
   });
@@ -3008,6 +3268,182 @@ if (!gotLock) {
       ok: true,
       mcp: agentMcpServer.status(),
       mcpConfig: agentMcpServer.buildMcpClientConfig(),
+    };
+  });
+
+  ipcMain.handle('agent-hermes-gateway-state', async () => {
+    if (!agentStore) return { ok: false, error: 'agent_not_ready' };
+    const settings = agentStore.readSettings();
+    const hermesGateway = await buildHermesGatewayStatus(settings);
+    return {
+      ok: true,
+      settings,
+      hermesGateway,
+      activeBrainId: agentSessionService ? agentSessionService.getBrainId() : 'stub',
+    };
+  });
+
+  ipcMain.handle('agent-hermes-gateway-probe', async () => {
+    if (!agentStore) return { ok: false, error: 'agent_not_ready' };
+    const settings = agentStore.readSettings();
+    const hermesGateway = await buildHermesGatewayStatus(settings);
+    return { ok: true, probe: hermesGateway.probe, hermesGateway };
+  });
+
+  ipcMain.handle('agent-hermes-gateway-setup', async (event, options) => {
+    if (!agentStore) return { ok: false, error: 'agent_not_ready' };
+    const opts = options && typeof options === 'object' ? options : {};
+    const useDevStub = Boolean(opts.useDevStub);
+
+    if (useDevStub) {
+      const defaults = {
+        hermesGatewayKind: 'dev',
+        hermesGatewayUrl: hermesGatewayHost.DEFAULT_BASE,
+        hermesApiKey: 'hermes-local',
+        hermesModel: 'default',
+        hermesManagedGateway: true,
+        defaultBrainId: 'hermes',
+        mcpEnabled: true,
+      };
+      const next = agentStore.writeSettings(defaults);
+      hermesOfficialHost.stopOfficialGateway();
+      const start = await hermesGatewayHost.startManagedGateway(next);
+      if (!start.ok) {
+        return { ok: false, error: start.error || '启动开发桩失败', settings: next };
+      }
+      const { gatewayUrl, apiKey } = hermesGatewayHost.getState(next);
+      const probe =
+        start.probe && start.probe.ok ? start.probe : await hermesGatewayHost.waitForGatewayReady(gatewayUrl, apiKey, 15000);
+      if (probe.ok) agentStore.writeSettings({ brainSetupCompleted: true });
+      resetAgentBrainCache();
+      await ensureAgentBrainReady();
+      const hermesGateway = await buildHermesGatewayStatus(agentStore.readSettings());
+      if (probe.ok) notifyCopilotRefreshOnboarding();
+      return {
+        ok: Boolean(probe.ok),
+        probe,
+        settings: agentStore.readSettings(),
+        hermesGateway,
+        activeBrainId: agentSessionService ? agentSessionService.getBrainId() : 'stub',
+        started: Boolean(start.started),
+        external: Boolean(start.external),
+        error: probe.ok ? null : probe.detail || '开发桩未就绪',
+      };
+    }
+
+    const userRoot = getHermesUserRoot();
+    let runtime = hermesOfficialHost.readHermesRuntimeState(userRoot);
+    const win = BrowserWindow.fromWebContents(event.sender) || mainWindow;
+    const sendLog = (payload) => {
+      try {
+        if (win && !win.isDestroyed()) win.webContents.send('hermes-bootstrap-log', payload);
+      } catch {
+        /* ignore */
+      }
+    };
+
+    if (!runtime || !runtime.hermesCli) {
+      if (process.platform !== 'win32') {
+        return { ok: false, error: '请先在本机安装 Hermes Agent，再使用「连接已有 Hermes」' };
+      }
+      if (anyDesktopBootstrapChildRunning()) {
+        return { ok: false, error: '正在安装中，请稍候' };
+      }
+      sendLog({ type: 'phase', msg: '开始安装 Hermes 官方版…' });
+      const boot = await runHermesBootstrapChild(sendLog);
+      if (!boot.ok) {
+        return { ok: false, error: boot.error || 'Hermes 安装失败' };
+      }
+      runtime = hermesOfficialHost.readHermesRuntimeState(userRoot);
+    }
+
+    const gatewayUrl = (runtime && runtime.gatewayUrl) || hermesOfficialHost.DEFAULT_OFFICIAL_BASE;
+    const apiKey = (runtime && runtime.apiKey) || '';
+    const defaults = {
+      hermesGatewayKind: 'official',
+      hermesGatewayUrl: gatewayUrl,
+      hermesApiKey: apiKey,
+      hermesModel: 'hermes-agent',
+      hermesManagedGateway: true,
+      defaultBrainId: 'hermes',
+      mcpEnabled: true,
+    };
+    const next = agentStore.writeSettings(defaults);
+    if (!next.mcpToken || String(next.mcpToken).length < 16) {
+      agentMcpServer?.ensureMcpToken(next);
+    }
+    if (agentMcpServer) await agentMcpServer.syncFromSettings();
+
+    const start = await hermesOfficialHost.startManagedGateway(next, userRoot, sendLog);
+    if (!start.ok) {
+      return { ok: false, error: start.error || '启动 Hermes Gateway 失败', settings: next, needsBootstrap: start.needsBootstrap };
+    }
+    if (start.apiKey && start.apiKey !== next.hermesApiKey) {
+      agentStore.writeSettings({ hermesApiKey: start.apiKey });
+    }
+    const state = hermesOfficialHost.getState(agentStore.readSettings(), userRoot);
+    const probeKeys = hermesOfficialHost.collectProbeApiKeys(
+      hermesOfficialHost.resolveGatewayConfig(agentStore.readSettings(), userRoot),
+      userRoot,
+    );
+    const probe =
+      start.probe && start.probe.ok
+        ? start.probe
+        : await hermesOfficialHost.waitForOfficialReady(state.gatewayUrl, state.apiKey, 120000, probeKeys);
+    if (probe.ok) {
+      agentStore.writeSettings({ brainSetupCompleted: true });
+    }
+    resetAgentBrainCache();
+    await ensureAgentBrainReady();
+    const hermesGateway = await buildHermesGatewayStatus(agentStore.readSettings());
+    const settingsOut = agentStore.readSettings();
+    if (probe.ok) notifyCopilotRefreshOnboarding();
+    return {
+      ok: Boolean(probe.ok),
+      probe,
+      settings: settingsOut,
+      hermesGateway,
+      activeBrainId: agentSessionService ? agentSessionService.getBrainId() : 'stub',
+      started: Boolean(start.started),
+      external: Boolean(start.external),
+      installed: Boolean(runtime && runtime.hermesCli),
+      error: probe.ok ? null : probe.detail || 'Hermes Gateway 未就绪（可运行 hermes model 配置模型）',
+    };
+  });
+
+  ipcMain.handle('agent-hermes-gateway-stop', () => {
+    const r = hermesOfficialHost.stopManagedGateway();
+    return { ok: true, ...r };
+  });
+
+  ipcMain.handle('agent-companion-connect', async (_e, options) => {
+    if (!agentStore) return { ok: false, error: 'agent_not_ready' };
+    const opts = options && typeof options === 'object' ? options : {};
+    const mode = String(opts.mode || 'all').trim().toLowerCase();
+    const ctx = createCompanionConnectContext();
+    let result;
+    if (mode === 'hermes') {
+      result = await companionConnect.connectExistingHermes(ctx, opts);
+    } else if (mode === 'scripthub') {
+      result = await companionConnect.connectScriptHub(ctx, opts);
+    } else {
+      result = await companionConnect.connectAll(ctx, opts);
+    }
+    if (result && result.ok) {
+      resetAgentBrainCache();
+      await ensureAgentBrainReady();
+      if (agentMcpServer) await agentMcpServer.syncFromSettings();
+      notifyCopilotRefreshOnboarding();
+    }
+    const settings = agentStore.readSettings();
+    const hermesGateway = await buildHermesGatewayStatus(settings);
+    return {
+      ...(result || { ok: false, error: 'connect_failed' }),
+      settings,
+      hermesGateway,
+      activeBrainId: agentSessionService ? agentSessionService.getBrainId() : 'stub',
+      mcp: agentMcpServer ? agentMcpServer.status() : null,
+      mcpConfig: agentMcpServer ? agentMcpServer.buildMcpClientConfig() : null,
     };
   });
 
@@ -3103,6 +3539,40 @@ if (!gotLock) {
     });
     if (r.canceled || !r.filePaths[0]) return { ok: false, canceled: true };
     return { ok: true, path: r.filePaths[0] };
+  });
+
+  ipcMain.handle('shell-hermes-desktop-state', () => {
+    const userRoot = getHermesUserRoot();
+    const runtime = hermesOfficialHost.readHermesRuntimeState(userRoot);
+    const settings = agentStore ? agentStore.readSettings() : null;
+    return {
+      ok: true,
+      platformUnsupported: process.platform !== 'win32',
+      hasBootstrapScript: fs.existsSync(hermesBootstrapScriptPath()),
+      installed: Boolean(runtime && runtime.hermesCli),
+      runtime,
+      hermesCli: hermesOfficialHost.findHermesCli() || null,
+      settings,
+    };
+  });
+
+  ipcMain.handle('shell-hermes-bootstrap-run', async (event) => {
+    if (process.platform !== 'win32') {
+      return { ok: false, error: 'Hermes 壳内安装当前仅支持 Windows' };
+    }
+    if (anyDesktopBootstrapChildRunning()) {
+      return { ok: false, error: '正在安装中，请稍候' };
+    }
+    const win = BrowserWindow.fromWebContents(event.sender) || mainWindow;
+    const sendLog = (payload) => {
+      try {
+        if (win && !win.isDestroyed()) win.webContents.send('hermes-bootstrap-log', payload);
+      } catch {
+        /* ignore */
+      }
+    };
+    const boot = await runHermesBootstrapChild(sendLog);
+    return boot.ok ? { ok: true, started: true } : { ok: false, error: boot.error || '安装失败' };
   });
 
   ipcMain.handle('shell-sam-local-desktop-state', () => {
@@ -3484,6 +3954,7 @@ if (!gotLock) {
 
   app.on('before-quit', () => {
     isQuitting = true;
+    hermesOfficialHost.stopManagedGateway();
     companionUpdater.dispose();
     if (desktopReleaseCheckTimer) {
       clearInterval(desktopReleaseCheckTimer);

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useRef } from 'react';
 import type { WorkflowPendingTask } from '../types';
 
 type ActiveEntry = { taskId: string; startedAt: number };
@@ -28,31 +28,39 @@ function syncActiveEntries(
 }
 
 /**
- * 工作流队列：按资产跟踪「当前正在执行」任务的已运行秒数（每秒刷新）。
- * 同一资产新任务进入 active 时重新计时。
+ * 工作流队列：返回各资产当前 active 任务的开始时间戳（毫秒）。
+ * 不在 hook 内每秒 tick，避免 WorkflowSection 整树重绘；计时 UI 用 `useExecutionElapsedSeconds`。
  */
-export function useWorkflowAssetExecutionElapsed(
+export function useWorkflowExecutionStartedAt(
   executingQueue: { tasks: WorkflowPendingTask[] } | null,
   activeTaskIds: ReadonlySet<string>
 ): ReadonlyMap<string, number> {
   const entriesRef = useRef<Map<string, ActiveEntry>>(new Map());
-  const [tick, setTick] = useState(0);
-
-  useEffect(() => {
-    if (activeTaskIds.size === 0) return;
-    const id = window.setInterval(() => setTick((n) => n + 1), 1000);
-    return () => window.clearInterval(id);
-  }, [activeTaskIds.size]);
 
   return useMemo(() => {
-    const now = Date.now();
-    syncActiveEntries(entriesRef.current, executingQueue, activeTaskIds, now);
+    syncActiveEntries(entriesRef.current, executingQueue, activeTaskIds, Date.now());
     const out = new Map<string, number>();
     entriesRef.current.forEach((entry, assetId) => {
-      out.set(assetId, Math.max(0, Math.floor((now - entry.startedAt) / 1000)));
+      out.set(assetId, entry.startedAt);
     });
     return out;
-  }, [tick, executingQueue, activeTaskIds]);
+  }, [executingQueue, activeTaskIds]);
+}
+
+/** @deprecated 请用 `useWorkflowExecutionStartedAt` + 组件内 `useExecutionElapsedSeconds` */
+export function useWorkflowAssetExecutionElapsed(
+  executingQueue: { tasks: WorkflowPendingTask[] } | null,
+  activeTaskIds: ReadonlySet<string>
+): ReadonlyMap<string, number> {
+  const startedAt = useWorkflowExecutionStartedAt(executingQueue, activeTaskIds);
+  return useMemo(() => {
+    const now = Date.now();
+    const out = new Map<string, number>();
+    startedAt.forEach((ts, assetId) => {
+      out.set(assetId, Math.max(0, Math.floor((now - ts) / 1000)));
+    });
+    return out;
+  }, [startedAt]);
 }
 
 export function formatWorkflowExecutionElapsedLabel(seconds: number): string {

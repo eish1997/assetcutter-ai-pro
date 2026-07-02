@@ -134,3 +134,51 @@ export function migrateLegacyGroupToNewFormat(
 
   return [migratedCover, ...migratedChildren];
 }
+
+function findGroupMemberAsset(
+  allAssets: WorkflowAsset[],
+  assetId: string
+): WorkflowAsset | undefined {
+  return allAssets.find((a) => a.id === assetId);
+}
+
+/** 组内第 N 张（0-based）成员预览图；嵌套组取首个子成员 */
+export function resolveGroupMemberPreviewSrc(
+  groupAsset: WorkflowAsset,
+  memberIndex: number,
+  allAssets: WorkflowAsset[],
+  getDisplayImage: (a: WorkflowAsset) => string
+): string {
+  if (memberIndex < 0) return '';
+  const ids = groupAsset.assetIds;
+  if (ids?.length && memberIndex < ids.length) {
+    const child = findGroupMemberAsset(allAssets, ids[memberIndex]!);
+    if (!child) return '';
+    if (isGroupAsset(child)) {
+      const nestedId = child.assetIds?.[0];
+      const nested = nestedId ? findGroupMemberAsset(allAssets, nestedId) : undefined;
+      return nested ? getDisplayImage(nested) : getDisplayImage(child);
+    }
+    return getDisplayImage(child);
+  }
+  const items = groupAsset.cutImageGroup ?? [];
+  const item = items[memberIndex];
+  if (item == null) return '';
+  if (typeof item === 'string') return item.trim();
+  if (typeof item === 'object' && 'assetId' in item) {
+    const child = findGroupMemberAsset(allAssets, item.assetId);
+    if (!child) return '';
+    if (isGroupAsset(child)) {
+      const nestedId = child.assetIds?.[0];
+      const nested = nestedId ? findGroupMemberAsset(allAssets, nestedId) : undefined;
+      return nested ? getDisplayImage(nested) : getDisplayImage(child);
+    }
+    return getDisplayImage(child);
+  }
+  return '';
+}
+
+export function resolveGroupMemberCount(groupAsset: WorkflowAsset): number {
+  if (groupAsset.assetIds?.length) return groupAsset.assetIds.length;
+  return groupAsset.cutImageGroup?.length ?? 0;
+}

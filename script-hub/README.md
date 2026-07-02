@@ -1,5 +1,11 @@
 # Script Hub（`scripts.adrazzo.com`）
 
+> **⚠️ 已废弃（2026-06-30）**  
+> 本目录与主仓 `server/script-hub-api.js` 等为半成品，**不再维护**。  
+> **真源**：`F:/AI/ScriptHub`（Creative Production Runtime）— 见 [`DEPRECATED.md`](./DEPRECATED.md) 与 `docs/Script-Hub-开发规格.md` 文首说明。
+
+---
+
 独立 Vite 应用，源码在 `**script-hub/**`，与根目录工作台 **分开构建**。
 
 **第一版公网入口（已锁定）**：`https://scripts.adrazzo.com`（独立子域；业务 API 同源 `/api` 反代，见 `docs/Script-Hub-开发规格.md`）。

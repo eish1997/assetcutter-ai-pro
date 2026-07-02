@@ -7,6 +7,8 @@ export type WorkflowLightboxDetailEdgePanelProps = {
   headerSlot?: React.ReactNode;
   heightfieldToolbarHostRef?: React.RefObject<HTMLDivElement | null>;
   heightfieldToolbarHostClassName?: string;
+  /** 距右缘偏移（如资产缩略图条 `right-14`） */
+  edgeRightClassName?: string;
   children: React.ReactNode;
 };
 
@@ -17,13 +19,14 @@ export default function WorkflowLightboxDetailEdgePanel({
   headerSlot,
   heightfieldToolbarHostRef,
   heightfieldToolbarHostClassName = 'hidden',
+  edgeRightClassName = 'right-0',
   children,
 }: WorkflowLightboxDetailEdgePanelProps) {
   const [expanded, setExpanded] = useState(false);
 
   return (
     <div
-      className="absolute right-0 z-[9] flex max-h-[72vh] min-h-0 flex-row-reverse items-stretch"
+      className={`absolute ${edgeRightClassName} z-[9] flex max-h-[72vh] min-h-0 flex-row-reverse items-stretch`}
       style={{ top: 'max(3.5rem, env(safe-area-inset-top, 0px))' }}
       onMouseEnter={() => setExpanded(true)}
       onMouseLeave={() => setExpanded(false)}

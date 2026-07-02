@@ -30,6 +30,22 @@ function forwardRequestHeaders(headers: IncomingMessage['headers']): Headers {
   return h;
 }
 
+/** Vite HMR 偶发 ?t=1782957033.67113 小数后缀，esbuild 会当成 loader 扩展名而 500 */
+function fixViteDecimalTimestampQuery(): Plugin {
+  return {
+    name: 'fix-vite-decimal-timestamp-query',
+    configureServer(server) {
+      server.middlewares.use((req, _res, next) => {
+        const url = req.url;
+        if (url && /\?t=\d+\.\d+/.test(url)) {
+          req.url = url.replace(/(\?t=\d+)\.\d+([^&]*)/, '$1$2');
+        }
+        next();
+      });
+    },
+  };
+}
+
 async function readRequestBodyBuffer(req: IncomingMessage): Promise<Buffer> {
   const chunks: Buffer[] = [];
   for await (const chunk of req) {
@@ -305,7 +321,7 @@ export default defineConfig(({ mode }) => {
           },
         },
       },
-      plugins: [react(), geminiBulkForwardDevPlugin(bulkForwardOrigins)],
+      plugins: [fixViteDecimalTimestampQuery(), react(), geminiBulkForwardDevPlugin(bulkForwardOrigins)],
       define: {
         'process.env.VITE_TENCENT_PROXY': JSON.stringify(env.VITE_TENCENT_PROXY),
         'process.env.VITE_ALLOW_UNSAFE_TENCENT_BROWSER_CREDS': JSON.stringify(env.VITE_ALLOW_UNSAFE_TENCENT_BROWSER_CREDS),

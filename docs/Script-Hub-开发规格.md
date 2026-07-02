@@ -1,5 +1,10 @@
 # Script Hub 开发规格（可执行版）
 
+> **⚠️ 文档与实现已废弃（2026-06-30）**  
+> 主仓 `script-hub/`、`server/script-hub-*` 为 **2026-05 半成品**，产品已改以 **独立仓** 为准。  
+> **真源**：`F:/AI/ScriptHub` — 规格见 `doc/00-Documentation-Index.md`，启动见 `doc/23-Project-Migration-Handoff.md`。  
+> 下文保留作历史参考，**勿再按本文实施新功能**。
+
 **产品代号**：Script Hub  
 **公网入口（第一版已锁定）**：`https://scripts.adrazzo.com`（独立子域 SPA；**不做**主站同域子路径，后续若要做另开版本评估）  
 **目标 DCC（MVP）**：Autodesk Maya、Unreal Engine（Editor Python）  

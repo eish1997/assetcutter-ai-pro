@@ -65,6 +65,50 @@ export function parseAcWorkflowExportDragSources(dataTransfer: DataTransfer | nu
     return [];
   }
   if (!raw?.trim()) return [];
+  return parseAcWorkflowExportPayload(raw);
+}
+
+/** 解析 `application/x-ac-workflow-export` 或同结构 JSON 文本，返回根资产 id 列表 */
+export function parseAcWorkflowExportAssetIds(raw: string): string[] {
+  const sources = parseAcWorkflowExportPayload(raw);
+  const ids: string[] = [];
+  for (const source of sources) {
+    if (source.kind !== 'root') continue;
+    for (const id of source.assetIds) {
+      const t = id.trim();
+      if (t && !ids.includes(t)) ids.push(t);
+    }
+  }
+  return ids;
+}
+
+export function serializeWorkflowAssetClipboardText(assetIds: string[]): string {
+  const uniq = [...new Set(assetIds.map((id) => id.trim()).filter(Boolean))];
+  const payload: AcWorkflowExportPayload = { mode: 'roots', assetIds: uniq };
+  return JSON.stringify(payload);
+}
+
+/** 从剪贴板读取工作区资产引用（优先自定义 MIME，其次 text/plain JSON） */
+export function parseWorkflowAssetIdsFromClipboardData(data: DataTransfer | null | undefined): string[] {
+  if (!data) return [];
+  let raw = '';
+  try {
+    raw = data.getData(DT_AC_WORKFLOW_EXPORT);
+  } catch {
+    raw = '';
+  }
+  if (!raw?.trim()) {
+    try {
+      raw = data.getData('text/plain');
+    } catch {
+      raw = '';
+    }
+  }
+  if (!raw?.trim()) return [];
+  return parseAcWorkflowExportAssetIds(raw);
+}
+
+function parseAcWorkflowExportPayload(raw: string): WorkflowDragSource[] {
   let payload: AcWorkflowExportPayload;
   try {
     payload = JSON.parse(raw) as AcWorkflowExportPayload;

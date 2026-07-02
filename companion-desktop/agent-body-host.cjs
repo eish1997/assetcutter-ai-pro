@@ -235,6 +235,18 @@ function createAgentBodyHost(deps) {
         return out;
       }
 
+      if (name === 'ac.script_hub.export_maya_selection') {
+        if (!deps.scriptHubClient) {
+          return toolUnavailable('script_hub_client');
+        }
+        let aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        const out = await deps.scriptHubClient.exportMayaSelection(safeArgs);
+        aborted = abortIfNeeded(ctx);
+        if (aborted) return aborted;
+        return out;
+      }
+
       if (name === 'ac.companion.compute') {
         const jobBody = {
           type: String(safeArgs.type || '').trim(),

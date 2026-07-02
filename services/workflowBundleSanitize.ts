@@ -1,6 +1,11 @@
 import type { WorkflowAsset, WorkflowPendingTask } from '../types';
 import { isGroupAsset } from './groupHelpers';
 import {
+  isWorkflowAssetSetAsset,
+  normalizeAssetSetOnAsset,
+  upgradeLegacyWorkflowAssetSetAsset,
+} from './assetSet/assetSetAsset';
+import {
   isWorkflowStoryboardTableAsset,
   normalizeStoryboardTableOnAsset,
   upgradeLegacyWorkflowStoryboardTableAsset,
@@ -36,7 +41,18 @@ export function sanitizeWorkflowProjectBundle(
   const validIds = new Set(assets.map((a) => a.id));
 
   const nextAssets = assets.map((a) => {
-    const upgraded = upgradeLegacyWorkflowStoryboardTableAsset(a);
+    const upgradedSet = upgradeLegacyWorkflowAssetSetAsset(a);
+    if (isWorkflowAssetSetAsset(upgradedSet)) {
+      try {
+        return normalizeAssetSetOnAsset(upgradedSet);
+      } catch (e) {
+        console.warn('[workspace] asset_set normalize failed, keeping raw asset', upgradedSet.id, e);
+        return upgradedSet.assetKind === 'asset_set'
+          ? upgradedSet
+          : { ...upgradedSet, assetKind: 'asset_set' as const };
+      }
+    }
+    const upgraded = upgradeLegacyWorkflowStoryboardTableAsset(upgradedSet);
     if (isWorkflowStoryboardTableAsset(upgraded)) {
       try {
         return normalizeStoryboardTableOnAsset(upgraded);

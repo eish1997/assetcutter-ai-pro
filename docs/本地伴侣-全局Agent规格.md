@@ -34,7 +34,7 @@
 | 项 | 决策 |
 |----|------|
 | **全局 UI** | **C：主窗右侧固定 Copilot**（可折叠；不强制使用） |
-| **Script Hub** | **B：第五导航「脚本」+ BrowserView**（`scriptHubUrl`） |
+| **Script Hub** | **B：第五导航「脚本」+ BrowserView**（`scriptHubUrl`）→ **真源独立仓** `F:/AI/ScriptHub`；主仓 `script-hub/` **已废弃**（2026-06-30） |
 | **工作台** | **B：主站 Agent API**（不 CDP 点页面） |
 | **大脑** | 可插拔；**Hermes 推荐默认**（P1 生产）；Copilot 不绑死 |
 | **外部大脑** | **P2：Body MCP**，用户自带 Hermes/Codex 前端也可调平台（§2.4、A-8） |
@@ -146,7 +146,7 @@
 | `companion-desktop` 壳 IPC | 导航、BrowserView、bootstrap | `ac.shell.*` | **否** |
 | `shell_tool_bundle` | 第四页小工具 | `ac.shell_tool.run`（P1） | **否** |
 | `host_plugin_bundle` | 扩展包 compute | `ac.host_bundle.*`（P1） | **否** |
-| Script Hub 云 API | 脚本库与 Run 记录 | `ac.script_hub.*`（P1） | **否**（复用 `/api/runs`） |
+| Script Hub 云 API | 脚本库与 Run 记录 | `ac.script_hub.*`（P1） | **否**（独立仓 Tool Bridge HTTP） |
 | 主站工作区 + 能力预设 | 工作台业务 | `ac.workbench.*` + **新** `/api/agent/workbench/*` | **仅 Agent 薄 API** |
 | Relay / `local-bridge` | 网站 WSS 浏览器中转 | **不经过 ac.***；并行能力 | **否** |
 | 工作流 `capabilityExecutor` | 画布拣货 | Agent **调用相同执行语义**，不嵌入画布 | **否** |
@@ -335,7 +335,7 @@ interface AgentBrainPort {
 | name | risk | 映射资产 |
 |------|------|----------|
 | `ac.workbench.*` | mixed | 主站 Agent API + capabilityExecutor 语义 |
-| `ac.script_hub.*` | mixed | Script Hub `/api/runs` + 伴侣 Maya |
+| `ac.script_hub.*` | mixed | ScriptHub Tool Bridge `/tool-bridge/*`（integration v1） |
 | `ac.companion.compute` | confirm | `/v1/compute/jobs` |
 | `ac.shell_tool.run` | confirm | shell_tool_bundle |
 | `ac.shell.bootstrap` | confirm | 本机引擎 bootstrap |
@@ -404,6 +404,9 @@ Hermes：Gateway `127.0.0.1:19119`；`hermes-bootstrap/`；开工前 **spike** �
 |------|----------------|----------|------------------|
 | **P0** | 右侧 Copilot；口述切页+查状态；脚本第五导航 | `ac.*`×3、agent-store、BodyHost、单槽 BrowserView | Copilot 周活（壳内）；`navigate` 成功率；P0 验收 5 条全过 |
 | **P1** | 口述跑脚本/能力/本机 Job；Hermes 默认大脑 | 全量 P1 `ac.*`、主站 Agent API、audit | 任务完成率；`AGENT_AUTH_REQUIRED` 转化（登录后重试） |
+| **P1-A** | **壳内 Hermes 引导**（新用户不出壳即可聊） | `hermes-gateway-host`、settings 持久化、Copilot 空态 + 设置页状态灯 | 一键配置成功率；Gateway 探测通过率 |
+| **P1-B** | **老用户一条命令连接** | `companion-connect.cjs`、`npm run companion:connect`、壳内「连接已有 Hermes」 | 探测命中率；MCP 导入成功率 |
+| **P1-C** | **发行与新手默认** | 打包 `hermes-bootstrap`、首启 Copilot 引导、`brainSetupCompleted` | 首启完成配置比例 |
 | **P2** | 换大脑不断能力；外部 MCP；skills | 第二 Adapter、Body MCP、memory/skills | 跨脑切换成功率；MCP 调用占比 |
 | **P3** | 多步计划、定时、工作流联动 | plans、调度器 | 长任务完成率 |
 

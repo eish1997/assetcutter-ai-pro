@@ -12,12 +12,17 @@ function createHermesBrainAdapter(deps) {
   const displayName = 'Hermes Gateway';
 
   function hermesConfig() {
+    const fromStore = deps && deps.store && typeof deps.store.readSettings === 'function' ? deps.store.readSettings() : null;
+    const baseFromStore =
+      fromStore && fromStore.hermesGatewayUrl ? String(fromStore.hermesGatewayUrl).trim().replace(/\/$/, '') : '';
+    const keyFromStore = fromStore && fromStore.hermesApiKey != null ? String(fromStore.hermesApiKey).trim() : '';
+    const modelFromStore = fromStore && fromStore.hermesModel != null ? String(fromStore.hermesModel).trim() : '';
     return {
-      baseUrl: String(process.env.COMPANION_AGENT_HERMES_BASE_URL || DEFAULT_HERMES_BASE)
+      baseUrl: String(process.env.COMPANION_AGENT_HERMES_BASE_URL || baseFromStore || DEFAULT_HERMES_BASE)
         .trim()
         .replace(/\/$/, ''),
-      apiKey: String(process.env.COMPANION_AGENT_HERMES_API_KEY || 'hermes-local').trim(),
-      model: String(process.env.COMPANION_AGENT_HERMES_MODEL || 'default').trim(),
+      apiKey: String(process.env.COMPANION_AGENT_HERMES_API_KEY || keyFromStore || 'hermes-local').trim(),
+      model: String(process.env.COMPANION_AGENT_HERMES_MODEL || modelFromStore || 'default').trim(),
     };
   }
 

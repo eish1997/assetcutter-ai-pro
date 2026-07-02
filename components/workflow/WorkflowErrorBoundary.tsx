@@ -9,11 +9,17 @@ function workflowBoundaryNormalizeError(error: unknown): Error {
   }
 }
 
+type Props = {
+  children: React.ReactNode;
+  /** 懒加载失败后重试：重建 lazy 实例并清掉 boundary 错误态 */
+  onRetry?: () => void;
+};
+
 export default class WorkflowErrorBoundary extends React.Component<
-  { children: React.ReactNode },
+  Props,
   { error: Error | null }
 > {
-  declare props: Readonly<{ children: React.ReactNode }>;
+  declare props: Readonly<Props>;
   state = { error: null as Error | null };
 
   static getDerivedStateFromError(error: unknown) {
@@ -36,15 +42,29 @@ export default class WorkflowErrorBoundary extends React.Component<
         <div className="rounded-2xl border border-[#f87171] bg-[#3f1518] p-6 text-red-200 min-h-[200px]">
           <div className="flex items-center justify-between gap-4 mb-3">
             <h3 className="text-[10px] font-black uppercase text-red-400">工作流内报错</h3>
-            <button
-              type="button"
-              onClick={() => {
-                navigator.clipboard.writeText(fullText);
-              }}
-              className="px-3 py-1.5 rounded-lg bg-[#4a1c1c] border border-[#f87171] text-[9px] font-black uppercase text-red-300 hover:bg-[#5a2222] cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-red-400/50 transition-colors duration-200"
-            >
-              复制报错
-            </button>
+            <div className="flex items-center gap-2">
+              {this.props.onRetry ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    this.props.onRetry?.();
+                    this.setState({ error: null });
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-[#4a1c1c] border border-[#f87171] text-[9px] font-black uppercase text-red-300 hover:bg-[#5a2222] cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-red-400/50 transition-colors duration-200"
+                >
+                  重试加载
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard.writeText(fullText);
+                }}
+                className="px-3 py-1.5 rounded-lg bg-[#4a1c1c] border border-[#f87171] text-[9px] font-black uppercase text-red-300 hover:bg-[#5a2222] cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-red-400/50 transition-colors duration-200"
+              >
+                复制报错
+              </button>
+            </div>
           </div>
           <pre className="text-[9px] overflow-auto max-h-[40vh] whitespace-pre-wrap break-words bg-[#141416] p-3 rounded-lg border border-[#b85a5a]">
             {err.message}
